@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import Header from '@/components/layouts/Header'
 import CommentForm from '@/components/features/CommentForm'
+import ReportButton from '@/components/features/ReportButton'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostDetail } from '@/lib/queries/posts'
@@ -36,6 +37,11 @@ export default async function PostDetailPage({
           <h1 className="text-xl font-bold text-content-primary">{post.title}</h1>
           <p className="mt-1 text-xs text-content-muted">{post.author.name ?? '회원'}</p>
           <div className="mt-4 whitespace-pre-wrap text-content-primary">{post.content}</div>
+          {session?.user ? (
+            <div className="mt-4 border-t border-subtle pt-3">
+              <ReportButton postId={post.id} />
+            </div>
+          ) : null}
         </article>
 
         <section className="mt-8">
@@ -57,6 +63,7 @@ export default async function PostDetailPage({
                   <p className="mt-1 whitespace-pre-wrap text-content-primary">
                     {comment.content}
                   </p>
+                  {session?.user ? <ReportButton commentId={comment.id} /> : null}
                 </li>
               ))}
             </ul>

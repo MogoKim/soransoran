@@ -4,6 +4,12 @@ import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
+import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
+import { checkContent } from '@/lib/content-guard'
+
+/** 댓글: 사용자당 5분에 10건 */
+const COMMENT_LIMIT = 10
+const COMMENT_WINDOW_MS = 5 * 60 * 1000
 
 const MIN_COMMENT_LENGTH = 2
 
@@ -30,6 +36,12 @@ export async function createComment(
   if (content.length < MIN_COMMENT_LENGTH) {
     return { error: '댓글을 조금만 더 적어주세요.' }
   }
+
+  const guard = checkContent(content)
+  if (!guard.ok) return { error: guard.reason }
+
+  const limited = checkActionRateLimit('comment', userId, COMMENT_LIMIT, COMMENT_WINDOW_MS)
+  if (!limited.ok) return { error: retryMessage(limited.retryAfterSec) }
 
   const post = await prisma.post.findFirst({
     where: { id: postId, status: 'PUBLISHED' },
