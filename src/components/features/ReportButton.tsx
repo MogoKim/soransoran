@@ -2,7 +2,8 @@
 
 import { useState } from 'react'
 import { useFormState, useFormStatus } from 'react-dom'
-import { createReport, REPORT_REASONS, type ReportActionState } from '@/lib/actions/reports'
+import { createReport, type ReportActionState } from '@/lib/actions/reports'
+import { REPORT_REASONS } from '@/lib/report-reasons'
 
 function SubmitButton() {
   const { pending } = useFormStatus()
