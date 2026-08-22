@@ -56,6 +56,7 @@ const config: Config = {
         },
         content: {
           primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
           muted: 'var(--text-muted)',
         },
         link: 'var(--link)',

@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import IconMenu from '@/components/layouts/IconMenu'
 import EmptyState from '@/components/layouts/EmptyState'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostsByBoard } from '@/lib/queries/posts'
-import { formatRelativeTime, toPreview } from '@/lib/date'
+import PostCard from '@/components/features/PostCard'
 import type { BoardType } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
@@ -43,28 +42,7 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
           <ul className="flex list-none flex-col gap-3 p-0">
             {posts.map((post) => (
               <li key={post.id}>
-                <Link
-                  href={`${board.href}/${post.id}`}
-                  className="flex min-h-[88px] flex-col justify-center gap-1 rounded-lg border border-subtle bg-surface-card p-4 no-underline"
-                >
-                  <p className="line-clamp-2 font-bold text-content-primary">{post.title}</p>
-                  <p className="line-clamp-2 text-sm text-content-muted">
-                    {toPreview(post.content)}
-                  </p>
-                  <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
-                    <span>{post.author.name ?? '회원'}</span>
-                    <span aria-hidden>·</span>
-                    <span>{formatRelativeTime(post.createdAt)}</span>
-                    {post._count.comments > 0 ? (
-                      <>
-                        <span aria-hidden>·</span>
-                        <span className="font-bold text-brand-ink">
-                          댓글 {post._count.comments}
-                        </span>
-                      </>
-                    ) : null}
-                  </p>
-                </Link>
+                <PostCard post={post} boardHref={board.href} />
               </li>
             ))}
           </ul>
