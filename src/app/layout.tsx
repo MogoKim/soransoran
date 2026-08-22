@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next'
+import Footer from '@/components/layouts/Footer'
 import { BRAND, SITE } from '@/lib/brand'
 import './globals.css'
 
@@ -58,7 +59,10 @@ export default function RootLayout({
           href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        <Footer />
+      </body>
     </html>
   )
 }

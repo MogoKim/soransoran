@@ -20,8 +20,12 @@ export const BRAND = {
   ink: '#9a3a31',
   /** 본문 텍스트 — OG 카피 */
   text: '#2f2624',
-  /** 아이콘 글자색 */
+  /** 아이콘 글자색 · CTA 위 글자 */
   onBrand: '#ffffff',
+  /** 주요 액션 — global-error 처럼 CSS 가 없을 수 있는 화면의 인라인 스타일용 */
+  cta: '#b64235',
+  /** 보조 텍스트 — 위와 동일 */
+  muted: '#6f5e59',
 } as const
 
 /** 환경변수가 하나도 없을 때의 최종 기준 URL */
