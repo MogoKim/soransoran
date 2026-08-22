@@ -5,6 +5,7 @@ import PageShell from '@/components/layouts/PageShell'
 import CommentForm from '@/components/features/CommentForm'
 import ReportButton from '@/components/features/ReportButton'
 import DeleteButton from '@/components/features/DeleteButton'
+import CommentItem from '@/components/features/CommentItem'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostDetail } from '@/lib/queries/posts'
@@ -48,8 +49,11 @@ export default async function PostDetailPage({
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 pb-16">
-        <nav className="py-4">
-          <Link href={board.href} className="text-sm text-link">
+        <nav className="py-2">
+          <Link
+            href={board.href}
+            className="inline-flex min-h-[52px] items-center text-sm text-link"
+          >
             ← {board.label}
           </Link>
         </nav>
@@ -57,14 +61,16 @@ export default async function PostDetailPage({
         <article className="rounded-lg border border-subtle bg-surface-card p-5">
           <h1 className="text-xl font-bold text-content-primary">{post.title}</h1>
           <p className="mt-1 text-xs text-content-muted">{post.author.name ?? '회원'}</p>
-          <div className="mt-4 whitespace-pre-wrap text-content-primary">{post.content}</div>
+          <div className="mt-4 whitespace-pre-wrap break-keep leading-[1.85] text-content-primary [overflow-wrap:anywhere]">
+            {post.content}
+          </div>
           {session?.user ? (
-            <div className="mt-4 flex items-center gap-4 border-t border-subtle pt-3">
-              {/* 삭제는 작성자 본인에게만 노출한다. 서버 action 에서도 다시 검증한다. */}
+            <div className="mt-4 flex items-center gap-3 border-t border-subtle pt-3">
               {session.user.id === post.author.id ? (
                 <DeleteButton boardSlug={board.slug} postId={post.id} />
-              ) : null}
-              <ReportButton postId={post.id} />
+              ) : (
+                <ReportButton postId={post.id} />
+              )}
             </div>
           ) : null}
         </article>
@@ -81,26 +87,13 @@ export default async function PostDetailPage({
           ) : (
             <ul className="my-4 flex list-none flex-col gap-3 p-0">
               {comments.map((comment) => (
-                <li key={comment.id} className="rounded-lg bg-surface-card p-4">
-                  <p className="text-xs font-bold text-brand-ink">
-                    {comment.author.name ?? '회원'}
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap text-content-primary">
-                    {comment.content}
-                  </p>
-                  {session?.user ? (
-                    <div className="mt-2 flex items-center gap-4">
-                      {session.user.id === comment.author.id ? (
-                        <DeleteButton
-                          boardSlug={board.slug}
-                          postId={post.id}
-                          commentId={comment.id}
-                        />
-                      ) : null}
-                      <ReportButton commentId={comment.id} />
-                    </div>
-                  ) : null}
-                </li>
+                <CommentItem
+                  key={comment.id}
+                  comment={comment}
+                  boardSlug={board.slug}
+                  postId={post.id}
+                  currentUserId={session?.user?.id}
+                />
               ))}
             </ul>
           )}
@@ -109,7 +102,10 @@ export default async function PostDetailPage({
             <CommentForm postId={post.id} boardSlug={board.slug} />
           ) : (
             <p className="text-sm text-content-muted">
-              <Link href="/login" className="text-link">
+              <Link
+                href="/login"
+                className="inline-flex min-h-[52px] items-center text-link"
+              >
                 로그인
               </Link>
               하면 댓글을 남길 수 있습니다.
