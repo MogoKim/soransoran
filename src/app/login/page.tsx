@@ -1,4 +1,4 @@
-import Header from '@/components/layouts/Header'
+import PageShell from '@/components/layouts/PageShell'
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
 
 export const metadata = { title: '로그인' }
@@ -9,8 +9,7 @@ export default function LoginPage({
   searchParams: { callbackUrl?: string }
 }) {
   return (
-    <>
-      <Header />
+    <PageShell chrome="minimal">
       <main className="mx-auto flex max-w-3xl flex-col items-center px-4 py-16 text-center">
         <h1 className="text-xl font-bold text-content-primary">로그인</h1>
         <p className="mt-2 text-sm text-content-muted">
@@ -20,6 +19,6 @@ export default function LoginPage({
           <KakaoSignInButton callbackUrl={searchParams.callbackUrl ?? '/'} />
         </div>
       </main>
-    </>
+    </PageShell>
   )
 }

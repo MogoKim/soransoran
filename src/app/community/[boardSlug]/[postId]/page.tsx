@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import Header from '@/components/layouts/Header'
+import PageShell from '@/components/layouts/PageShell'
 import CommentForm from '@/components/features/CommentForm'
 import ReportButton from '@/components/features/ReportButton'
 import DeleteButton from '@/components/features/DeleteButton'
@@ -46,8 +46,7 @@ export default async function PostDetailPage({
   const session = await auth()
 
   return (
-    <>
-      <Header />
+    <PageShell>
       <main className="mx-auto max-w-3xl px-4 pb-16">
         <nav className="py-4">
           <Link href={board.href} className="text-sm text-link">
@@ -118,6 +117,6 @@ export default async function PostDetailPage({
           )}
         </section>
       </main>
-    </>
+    </PageShell>
   )
 }

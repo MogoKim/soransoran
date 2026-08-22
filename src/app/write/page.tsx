@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import Header from '@/components/layouts/Header'
+import PageShell from '@/components/layouts/PageShell'
 import PostForm from '@/components/features/PostForm'
 import { auth } from '@/lib/auth'
 
@@ -14,8 +14,7 @@ export default async function WritePage({
   const session = await auth()
 
   return (
-    <>
-      <Header />
+    <PageShell>
       <main className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="mb-6 text-xl font-bold text-content-primary">글쓰기</h1>
 
@@ -33,6 +32,6 @@ export default async function WritePage({
           </div>
         )}
       </main>
-    </>
+    </PageShell>
   )
 }

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import Header from '@/components/layouts/Header'
+import PageShell from '@/components/layouts/PageShell'
 import { SITE } from '@/lib/brand'
 
 export const metadata: Metadata = {
@@ -22,8 +22,7 @@ function Article({ title, children }: { title: string; children: React.ReactNode
 
 export default function PrivacyPage() {
   return (
-    <>
-      <Header />
+    <PageShell>
       <main className="mx-auto max-w-3xl px-4 pb-16">
         <h1 className="pt-8 text-xl font-bold text-content-primary">개인정보처리방침</h1>
         <p className="mt-2 text-sm text-content-muted">시행일: {EFFECTIVE_DATE}</p>
@@ -250,6 +249,6 @@ export default function PrivacyPage() {
           이 개인정보처리방침은 {EFFECTIVE_DATE}부터 시행합니다.
         </p>
       </main>
-    </>
+    </PageShell>
   )
 }

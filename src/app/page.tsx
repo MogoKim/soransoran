@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import Header from '@/components/layouts/Header'
+import PageShell from '@/components/layouts/PageShell'
 import IconMenu from '@/components/layouts/IconMenu'
 import Logo from '@/components/brand/Logo'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
@@ -15,8 +15,7 @@ import { COMMUNITY_BOARDS } from '@/lib/board-registry'
  */
 export default function HomePage() {
   return (
-    <>
-      <Header />
+    <PageShell>
       <IconMenu />
 
       <main className="mx-auto max-w-3xl px-4 pb-24">
@@ -43,14 +42,6 @@ export default function HomePage() {
           ))}
         </section>
       </main>
-
-      {/* FAB — 여기가 "쓰는 곳"임을 보여준다 */}
-      <Link
-        href="/write"
-        className="fixed bottom-6 right-5 inline-flex min-h-[56px] items-center rounded-full bg-cta px-6 font-bold text-cta-text no-underline shadow-lg hover:bg-cta-hover"
-      >
-        ✏️ 글쓰기
-      </Link>
-    </>
+    </PageShell>
   )
 }

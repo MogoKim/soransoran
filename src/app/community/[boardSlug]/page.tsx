@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import Header from '@/components/layouts/Header'
+import PageShell from '@/components/layouts/PageShell'
 import IconMenu from '@/components/layouts/IconMenu'
 import EmptyState from '@/components/layouts/EmptyState'
 import { getBoardBySlug } from '@/lib/board-registry'
@@ -27,8 +27,7 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
   const posts = await getPostsByBoard(board.type as BoardType)
 
   return (
-    <>
-      <Header />
+    <PageShell>
       <IconMenu />
       <main className="mx-auto max-w-3xl px-4 pb-24">
         <h1 className="py-6 text-xl font-bold text-content-primary">{board.label}</h1>
@@ -71,13 +70,6 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
           </ul>
         )}
       </main>
-
-      <Link
-        href={`/write?board=${board.slug}`}
-        className="fixed bottom-6 right-5 inline-flex min-h-[56px] items-center rounded-full bg-cta px-6 font-bold text-cta-text no-underline shadow-lg hover:bg-cta-hover"
-      >
-        ✏️ 글쓰기
-      </Link>
-    </>
+    </PageShell>
   )
 }

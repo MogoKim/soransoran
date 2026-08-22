@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import Header from '@/components/layouts/Header'
+import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import { REPORT_REASONS } from '@/lib/report-reasons'
@@ -34,8 +34,7 @@ export default async function AdminReportsPage() {
 
   if (!ok) {
     return (
-      <>
-        <Header />
+      <PageShell chrome="minimal">
         <main className="mx-auto max-w-3xl px-4 py-16 text-center">
           <h1 className="text-xl font-bold text-content-primary">접근 권한이 없습니다</h1>
           <p className="mt-2 text-sm text-content-muted">운영자만 볼 수 있는 화면입니다.</p>
@@ -43,7 +42,7 @@ export default async function AdminReportsPage() {
             홈으로 가기
           </Link>
         </main>
-      </>
+      </PageShell>
     )
   }
 
@@ -63,8 +62,7 @@ export default async function AdminReportsPage() {
   })
 
   return (
-    <>
-      <Header />
+    <PageShell chrome="minimal">
       <main className="mx-auto max-w-3xl px-4 pb-16">
         <h1 className="pt-8 text-xl font-bold text-content-primary">신고 확인</h1>
         <p className="mt-1 text-sm text-content-muted">
@@ -113,6 +111,6 @@ export default async function AdminReportsPage() {
           </ul>
         )}
       </main>
-    </>
+    </PageShell>
   )
 }
