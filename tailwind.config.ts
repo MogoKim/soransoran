@@ -59,6 +59,11 @@ const config: Config = {
           muted: 'var(--text-muted)',
         },
         link: 'var(--link)',
+        /* 외부 브랜드 (카카오 로그인 버튼 전용) */
+        kakao: {
+          DEFAULT: 'var(--kakao-bg)',
+          text: 'var(--kakao-text)',
+        },
         state: {
           success: 'var(--state-success)',
           warning: 'var(--state-warning)',

@@ -48,6 +48,10 @@ enum ReportStatus {
 model User {
   id            String    @id @default(cuid())
   name          String?
+  // 🔴 카카오 닉네임을 여기에 자동 저장하지 않는다.
+  //    중복 닉네임이면 unique 위반으로 가입 자체가 실패하기 때문이다.
+  //    가입 시에는 name 만 채우고, nickname 은 사용자가 직접 설정할 때만 쓴다.
+  //    (NULL 은 여러 행이 허용되므로 unique 제약을 남겨도 안전하다)
   nickname      String?   @unique
   email         String?   @unique
   emailVerified DateTime?
@@ -93,6 +97,9 @@ model Account {
   @@index([userId])
 }
 
+// 🔴 JWT 전략(session.strategy = 'jwt')에서는 이 테이블을 사용하지 않는다.
+//    PrismaAdapter 가 User·Account 만 저장하고 Session 은 비어 있는 것이 정상이다.
+//    database 전략으로 전환할 때를 대비해 모델만 남겨둔다.
 model Session {
   id           String   @id @default(cuid())
   sessionToken String   @unique
@@ -109,11 +116,14 @@ model Post {
   id        String       @id @default(cuid())
   boardType BoardType
   title     String
-  content   String
+  content   String       @db.Text
   status    PostStatus   @default(PUBLISHED)
   source    AuthorSource @default(USER)
 
   authorId  String
+  // onDelete 를 지정하지 않아 기본 Restrict 다 — 글이 있으면 User 삭제가 막힌다.
+  // 회원 탈퇴/익명화 정책은 private preview 범위 밖이므로 삭제 기능을 만들지 않는다.
+  // 정책 확정 시 SetNull(익명화) 또는 Cascade(삭제) 중 선택한다.
   author    User         @relation(fields: [authorId], references: [id])
 
   viewCount Int          @default(0)
@@ -131,7 +141,7 @@ model Post {
 // ─────────── 댓글 ───────────
 model Comment {
   id        String       @id @default(cuid())
-  content   String
+  content   String       @db.Text
   source    AuthorSource @default(USER)
 
   postId    String
@@ -178,7 +188,7 @@ model Report {
   comment    Comment?     @relation(fields: [commentId], references: [id], onDelete: Cascade)
 
   reason     String
-  detail     String?
+  detail     String?      @db.Text
   status     ReportStatus @default(PENDING)
   createdAt  DateTime     @default(now())
   reviewedAt DateTime?

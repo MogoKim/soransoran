@@ -1,0 +1,87 @@
+import { prisma } from '@/lib/prisma'
+import { auth } from '@/lib/auth'
+import type { BoardType } from '@prisma/client'
+
+/**
+ * 🔴 차단 사용자 필터
+ *
+ * 우나어는 UserBlock 을 저장만 하고 어떤 쿼리도 필터로 쓰지 않는다.
+ * 사용자는 보호받는다고 믿는데 실제로는 아니다 — 미구현보다 나쁘다.
+ * 소란소란은 목록·상세 쿼리 모두에서 처음부터 필터를 적용한다.
+ *
+ * 차단 UI 를 D-day 에 숨기더라도 이 필터는 유지한다.
+ */
+async function getBlockedUserIds(): Promise<string[]> {
+  const session = await auth()
+  const viewerId = session?.user?.id
+  if (!viewerId) return []
+
+  const blocks = await prisma.userBlock.findMany({
+    where: { blockerId: viewerId },
+    select: { blockedUserId: true },
+  })
+  return blocks.map((b) => b.blockedUserId)
+}
+
+const POST_LIST_SELECT = {
+  id: true,
+  title: true,
+  createdAt: true,
+  viewCount: true,
+  author: { select: { id: true, name: true, image: true } },
+  _count: { select: { comments: true, likes: true } },
+} as const
+
+export async function getPostsByBoard(boardType: BoardType, take = 30) {
+  const blockedIds = await getBlockedUserIds()
+
+  return prisma.post.findMany({
+    where: {
+      boardType,
+      status: 'PUBLISHED',
+      ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+    },
+    select: POST_LIST_SELECT,
+    orderBy: { createdAt: 'desc' },
+    take,
+  })
+}
+
+export async function getPostDetail(postId: string) {
+  const blockedIds = await getBlockedUserIds()
+
+  const post = await prisma.post.findFirst({
+    where: {
+      id: postId,
+      status: 'PUBLISHED',
+      ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+    },
+    select: {
+      id: true,
+      boardType: true,
+      title: true,
+      content: true,
+      createdAt: true,
+      viewCount: true,
+      author: { select: { id: true, name: true, image: true } },
+    },
+  })
+  if (!post) return null
+
+  const comments = await prisma.comment.findMany({
+    where: {
+      postId,
+      isDeleted: false,
+      ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+    },
+    select: {
+      id: true,
+      content: true,
+      createdAt: true,
+      author: { select: { id: true, name: true, image: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  })
+
+  return { post, comments }
+}

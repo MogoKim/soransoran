@@ -1,16 +1,37 @@
+import Link from 'next/link'
 import Header from '@/components/layouts/Header'
+import PostForm from '@/components/features/PostForm'
+import { auth } from '@/lib/auth'
 
 export const metadata = { title: '글쓰기' }
+export const dynamic = 'force-dynamic'
 
-export default function WritePage() {
+export default async function WritePage({
+  searchParams,
+}: {
+  searchParams: { board?: string }
+}) {
+  const session = await auth()
+
   return (
     <>
       <Header />
       <main className="mx-auto max-w-3xl px-4 py-8">
-        <h1 className="text-xl font-bold text-content-primary">글쓰기</h1>
-        <p className="mt-3 text-sm text-content-muted">
-          로그인한 회원만 글을 쓸 수 있습니다. 에디터는 DB 연결 후 구현합니다.
-        </p>
+        <h1 className="mb-6 text-xl font-bold text-content-primary">글쓰기</h1>
+
+        {session?.user ? (
+          <PostForm defaultBoardSlug={searchParams.board} />
+        ) : (
+          <div className="flex flex-col gap-3">
+            <p className="text-content-primary">글은 로그인한 회원만 쓸 수 있습니다.</p>
+            <Link
+              href="/login"
+              className="inline-flex min-h-[52px] w-fit items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline"
+            >
+              로그인하기
+            </Link>
+          </div>
+        )}
       </main>
     </>
   )
