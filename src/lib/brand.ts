@@ -6,16 +6,22 @@
  *
  * 🔴 색상 hex 의 정의 위치는 두 곳뿐이다.
  *      1) src/app/globals.css   — 화면에 그려지는 모든 색
- *      2) 이 파일               — metadata / manifest 전용
+ *      2) 이 파일               — metadata · manifest · next/og (CSS 변수 미해석)
  *    컴포넌트에서는 절대 hex 를 쓰지 않는다. semantic token 만 쓴다.
  *
  * 색을 교체할 때는 이 두 파일만 고치면 된다.
  */
 export const BRAND = {
-  /** 브랜드 시그니처 — theme-color */
+  /** 브랜드 시그니처 — theme-color · OG 장식 면 · 아이콘 배경 */
   color: '#ff6f61',
-  /** 페이지 배경 — manifest background_color */
+  /** 페이지 배경 — manifest background_color · OG 배경 */
   background: '#fff8f6',
+  /** 읽는 브랜드색 — OG 워드마크 */
+  ink: '#9a3a31',
+  /** 본문 텍스트 — OG 카피 */
+  text: '#2f2624',
+  /** 아이콘 글자색 */
+  onBrand: '#ffffff',
 } as const
 
 /** 환경변수가 하나도 없을 때의 최종 기준 URL */

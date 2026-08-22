@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import Header from '@/components/layouts/Header'
@@ -8,6 +9,15 @@ import { getPostsByBoard } from '@/lib/queries/posts'
 import type { BoardType } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
+
+export function generateMetadata({ params }: { params: { boardSlug: string } }): Metadata {
+  const board = getBoardBySlug(params.boardSlug)
+  if (!board) return {}
+  return {
+    title: board.label,
+    alternates: { canonical: board.href },
+  }
+}
 
 export default async function BoardPage({ params }: { params: { boardSlug: string } }) {
   const board = getBoardBySlug(params.boardSlug)

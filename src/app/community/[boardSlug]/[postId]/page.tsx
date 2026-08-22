@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import Header from '@/components/layouts/Header'
@@ -8,6 +9,26 @@ import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostDetail } from '@/lib/queries/posts'
 
 export const dynamic = 'force-dynamic'
+
+export async function generateMetadata({
+  params,
+}: {
+  params: { boardSlug: string; postId: string }
+}): Promise<Metadata> {
+  const board = getBoardBySlug(params.boardSlug)
+  const detail = await getPostDetail(params.postId)
+  if (!board || !detail) return {}
+
+  const { post } = detail
+  const description = post.content.replace(/\s+/g, ' ').slice(0, 120)
+
+  return {
+    title: post.title,
+    description,
+    alternates: { canonical: `${board.href}/${post.id}` },
+    openGraph: { title: post.title, description, type: 'article' },
+  }
+}
 
 export default async function PostDetailPage({
   params,

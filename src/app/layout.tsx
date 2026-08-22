@@ -9,6 +9,8 @@ export const metadata: Metadata = {
   },
   description: SITE.description,
   metadataBase: new URL(SITE.url),
+  // canonical — 배포별 vercel.app URL 이 새지 않도록 SITE.url 기준으로 고정한다
+  alternates: { canonical: '/' },
   openGraph: {
     type: 'website',
     locale: 'ko_KR',
