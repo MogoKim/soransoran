@@ -1,0 +1,130 @@
+/* ===================================================
+ * 소란소란 — 글로벌 스타일
+ * Tailwind CSS + CSS Variables 디자인 토큰
+ *
+ * 🔴 이 파일이 색상 hex literal 의 유일한 정의 위치다.
+ *    컴포넌트에서는 semantic token 만 사용한다.
+ *    정본: docs/operations/soransoran-brand-design-spec.md §3-2 · §3-4
+ * =================================================== */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── 브랜드 ──
+       brand 는 브랜드 시그니처다. 비텍스트 전용.
+       흰 글씨 CTA · 본문 텍스트 · 정보 전달 그래픽에 쓰지 않는다 (배경 위 2.60:1). */
+    --brand: #ff6f61;
+    --brand-soft: #ffe8e3;   /* 배지·태그 배경 */
+    --brand-muted: #f2c9c1;  /* 장식 구분선 */
+    --brand-ink: #9a3a31;    /* 읽는 브랜드색 — 배경 위 6.62:1 */
+
+    /* ── CTA — 누르는 것 ──
+       FAB · primary button · empty state button 은 전부 이 하나를 쓴다. */
+    --cta: #b64235;          /* 흰 글씨 5.50:1 */
+    --cta-hover: #96372e;    /* 흰 글씨 7.28:1 */
+    --cta-text: #ffffff;
+
+    /* ── 표면 ── */
+    --surface-page: #fff8f6; /* 웜 아이보리 — 순백보다 눈이 편하다 */
+    --surface-card: #ffffff;
+    --surface-soft: #ffe8e3;
+
+    /* ── 보더 ──
+       subtle 은 장식용(대비 요건 없음), interactive 는 입력·선택 상태(3:1). */
+    --border-subtle: #f2c9c1;
+    --border-interactive: #b87f73; /* 비텍스트 3.32:1 */
+
+    /* ── 텍스트 ── */
+    --text-primary: #2f2624; /* 딥 코코아 — 배경 위 14.06:1 */
+    --text-muted: #6f5e59;   /* 배경 위 5.85:1 */
+    --link: #9a3a31;         /* 배경 위 6.62:1 · 밑줄 필수 */
+    --focus-ring: #96372e;   /* + 흰색 offset 2px */
+
+    /* ── 상태 ──
+       danger 와 cta 는 명도가 거의 같다(1.19). 색만으로 구분하지 않는다.
+       danger 는 fill 버튼을 쓰지 않고 아이콘·문구·확인 모달을 동반한다. */
+    --state-success: #157f3b;
+    --state-warning: #a15c07;
+    --state-danger: #b3261e;
+    --state-info: #1660c4;
+
+    /* ── 모양 ── */
+    --radius: 0.75rem;
+
+    /* ── 글자 크기 3단계 ──
+       선택지: 작게 / 기본 / 크게 · 기본값 "기본"
+       저장키: soran-font-size (단일 키)
+       "작게" 하한은 16px. 그 아래로 내리지 않는다. */
+    --text-body: 1.125rem;    /* 18px — 기본 */
+    --text-caption: 0.9375rem;
+    --text-sm: 1rem;
+    --text-title: 1.25rem;
+    --text-heading: 1.5rem;
+    --text-display: 1.75rem;
+
+    /* ── 폰트 ── */
+    --font-family: 'Pretendard Variable', 'Pretendard',
+      -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+
+  /* 작게 — 하한 16px */
+  :root[data-font-size='SMALL'] {
+    --text-body: 1rem;         /* 16px */
+    --text-caption: 0.875rem;  /* 14px */
+    --text-sm: 0.9375rem;
+    --text-title: 1.125rem;
+    --text-heading: 1.375rem;
+    --text-display: 1.5rem;
+  }
+
+  /* 크게 */
+  :root[data-font-size='LARGE'] {
+    --text-body: 1.25rem;      /* 20px */
+    --text-caption: 1.0625rem;
+    --text-sm: 1.125rem;
+    --text-title: 1.5rem;
+    --text-heading: 1.75rem;
+    --text-display: 2rem;
+  }
+
+  * {
+    border-color: var(--border-subtle);
+  }
+
+  html {
+    font-family: var(--font-family);
+  }
+
+  body {
+    background-color: var(--surface-page);
+    color: var(--text-primary);
+    font-size: var(--text-body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 터치 타겟 — 전역 하한 44px, 인터랙티브 아이콘 버튼은 개별 52px */
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  /* 포커스 — CTA 면 위에서도 보이도록 흰색 offset 을 함께 준다 */
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* 링크는 색만으로 구분하지 않는다 */
+  a:not([class]) {
+    color: var(--link);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}

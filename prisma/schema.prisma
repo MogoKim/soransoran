@@ -1,0 +1,202 @@
+// 소란소란 DB 스키마 초안
+//
+// 🔴 우나어의 schema.prisma(46모델 · 1,547행)를 복사하지 않았다.
+//    D-day 에 필요한 최소 모델만 둔다.
+//
+// 🔴 migration apply 는 이 커밋에서 하지 않는다.
+//    스키마 반영은 창업자 승인 후 별도 절차로 진행한다.
+//    prisma migrate / db push / db seed 는 사용하지 않는다.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────── 게시판 ───────────
+// IA 정본: 갱년기톡 · 자유게시판 = 게시판 / 매거진 = 콘텐츠 영역
+enum BoardType {
+  MENOPAUSE
+  FREE
+  MAGAZINE
+}
+
+enum PostStatus {
+  PUBLISHED
+  HIDDEN
+  DELETED
+}
+
+// 🔴 우나어에는 Comment.source 컬럼이 없어 봇/실회원 판별이
+//    authorId → User.providerId 조인이었다. 소란소란은 처음부터 컬럼으로 둔다.
+enum AuthorSource {
+  USER
+  SYSTEM
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  RESOLVED
+}
+
+// ─────────── 회원 (NextAuth) ───────────
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  nickname      String?   @unique
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  // 카카오 providerId. 실회원 판별 기준이 된다.
+  providerId    String?   @unique
+
+  isAdmin       Boolean   @default(false)
+  isBlocked     Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  posts         Post[]
+  comments      Comment[]
+  likes         Like[]
+  reports       Report[]      @relation("Reporter")
+  blocking      UserBlock[]   @relation("Blocker")
+  blockedBy     UserBlock[]   @relation("Blocked")
+
+  @@index([createdAt])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────── 글 ───────────
+model Post {
+  id        String       @id @default(cuid())
+  boardType BoardType
+  title     String
+  content   String
+  status    PostStatus   @default(PUBLISHED)
+  source    AuthorSource @default(USER)
+
+  authorId  String
+  author    User         @relation(fields: [authorId], references: [id])
+
+  viewCount Int          @default(0)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  comments  Comment[]
+  likes     Like[]
+  reports   Report[]
+
+  @@index([boardType, status, createdAt])
+  @@index([authorId])
+}
+
+// ─────────── 댓글 ───────────
+model Comment {
+  id        String       @id @default(cuid())
+  content   String
+  source    AuthorSource @default(USER)
+
+  postId    String
+  post      Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User         @relation(fields: [authorId], references: [id])
+
+  parentId  String?
+  parent    Comment?     @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[]    @relation("CommentReplies")
+
+  isDeleted Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  reports   Report[]
+
+  @@index([postId, createdAt])
+  @@index([authorId])
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@index([userId])
+}
+
+// ─────────── 보호장치 ───────────
+// D-day 최소 보호장치. 신고는 D-day 필수다.
+model Report {
+  id         String       @id @default(cuid())
+  reporterId String
+  reporter   User         @relation("Reporter", fields: [reporterId], references: [id])
+
+  postId     String?
+  post       Post?        @relation(fields: [postId], references: [id], onDelete: Cascade)
+  commentId  String?
+  comment    Comment?     @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  reason     String
+  detail     String?
+  status     ReportStatus @default(PENDING)
+  createdAt  DateTime     @default(now())
+  reviewedAt DateTime?
+
+  @@index([status, createdAt])
+}
+
+// 🔴 우나어는 UserBlock 을 저장만 하고 어떤 쿼리도 필터로 쓰지 않는다.
+//    소란소란은 목록·상세 쿼리에 필터를 반드시 적용한다.
+//    차단 UI 를 숨기더라도 필터는 처음부터 넣는다.
+model UserBlock {
+  id            String   @id @default(cuid())
+  blockerId     String
+  blocker       User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedUserId String
+  blockedUser   User     @relation("Blocked", fields: [blockedUserId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+
+  @@unique([blockerId, blockedUserId])
+  @@index([blockerId])
+}
