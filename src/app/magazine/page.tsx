@@ -3,7 +3,13 @@ import IconMenu from '@/components/layouts/IconMenu'
 import EmptyState from '@/components/layouts/EmptyState'
 import { getBoardBySlug } from '@/lib/board-registry'
 
-export const metadata = { title: '매거진' }
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: '매거진',
+  // layout 의 canonical:'/' 를 상속하면 홈의 복제로 잡힌다. 개별 경로로 고정한다.
+  alternates: { canonical: '/magazine' },
+}
 
 export default function MagazinePage() {
   const board = getBoardBySlug('magazine')!

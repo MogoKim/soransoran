@@ -3,7 +3,13 @@ import IconMenu from '@/components/layouts/IconMenu'
 import EmptyState from '@/components/layouts/EmptyState'
 import { getBoardBySlug } from '@/lib/board-registry'
 
-export const metadata = { title: '베스트' }
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: '베스트',
+  // layout 의 canonical:'/' 를 상속하면 홈의 복제로 잡힌다. 개별 경로로 고정한다.
+  alternates: { canonical: '/best' },
+}
 
 export default function BestPage() {
   const board = getBoardBySlug('best')!

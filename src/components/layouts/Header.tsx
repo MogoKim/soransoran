@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import Logo from '@/components/brand/Logo'
+import HeaderAuth from '@/components/layouts/HeaderAuth'
 
 /**
  * 헤더
@@ -10,10 +11,11 @@ import Logo from '@/components/brand/Logo'
  */
 export default function Header() {
   return (
-    <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b border-subtle bg-surface-card px-4">
+    <header className="sticky top-0 z-50 flex h-16 items-center justify-between gap-2 border-b border-subtle bg-surface-card px-4">
       <Link href="/" className="flex items-center no-underline" aria-label="소란소란 홈">
         <Logo className="text-2xl" />
       </Link>
+      <HeaderAuth />
     </header>
   )
 }
