@@ -7,15 +7,21 @@ import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
+import {
+  MIN_POST_TITLE_LENGTH,
+  MAX_POST_TITLE_LENGTH,
+  MIN_POST_CONTENT_LENGTH,
+  MAX_POST_CONTENT_LENGTH,
+  POST_TITLE_TOO_SHORT,
+  POST_TITLE_TOO_LONG,
+  POST_CONTENT_TOO_SHORT,
+  POST_CONTENT_TOO_LONG,
+} from '@/lib/post-policy'
 import type { BoardType } from '@prisma/client'
 
 /** 글쓰기: 사용자당 10분에 3건 */
 const POST_LIMIT = 3
 const POST_WINDOW_MS = 10 * 60 * 1000
-
-/** 글쓰기 최소 길이 — 우나어의 "300자 미만 71%" 를 반복하지 않기 위한 하한 */
-const MIN_TITLE_LENGTH = 2
-const MIN_CONTENT_LENGTH = 10
 
 export type ActionState = { error?: string }
 
@@ -41,11 +47,17 @@ export async function createPost(
   if (!board || !board.isCommunity) {
     return { error: '글을 쓸 수 없는 게시판입니다.' }
   }
-  if (title.length < MIN_TITLE_LENGTH) {
-    return { error: '제목을 조금만 더 적어주세요.' }
+  if (title.length < MIN_POST_TITLE_LENGTH) {
+    return { error: POST_TITLE_TOO_SHORT }
   }
-  if (content.length < MIN_CONTENT_LENGTH) {
-    return { error: '내용을 조금만 더 적어주세요.' }
+  if (title.length > MAX_POST_TITLE_LENGTH) {
+    return { error: POST_TITLE_TOO_LONG }
+  }
+  if (content.length < MIN_POST_CONTENT_LENGTH) {
+    return { error: POST_CONTENT_TOO_SHORT }
+  }
+  if (content.length > MAX_POST_CONTENT_LENGTH) {
+    return { error: POST_CONTENT_TOO_LONG }
   }
 
   const titleGuard = checkContent(title, { isTitle: true })
