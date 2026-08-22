@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import Header from '@/components/layouts/Header'
 import CommentForm from '@/components/features/CommentForm'
 import ReportButton from '@/components/features/ReportButton'
+import DeleteButton from '@/components/features/DeleteButton'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostDetail } from '@/lib/queries/posts'
@@ -59,7 +60,11 @@ export default async function PostDetailPage({
           <p className="mt-1 text-xs text-content-muted">{post.author.name ?? '회원'}</p>
           <div className="mt-4 whitespace-pre-wrap text-content-primary">{post.content}</div>
           {session?.user ? (
-            <div className="mt-4 border-t border-subtle pt-3">
+            <div className="mt-4 flex items-center gap-4 border-t border-subtle pt-3">
+              {/* 삭제는 작성자 본인에게만 노출한다. 서버 action 에서도 다시 검증한다. */}
+              {session.user.id === post.author.id ? (
+                <DeleteButton boardSlug={board.slug} postId={post.id} />
+              ) : null}
               <ReportButton postId={post.id} />
             </div>
           ) : null}
@@ -84,7 +89,18 @@ export default async function PostDetailPage({
                   <p className="mt-1 whitespace-pre-wrap text-content-primary">
                     {comment.content}
                   </p>
-                  {session?.user ? <ReportButton commentId={comment.id} /> : null}
+                  {session?.user ? (
+                    <div className="mt-2 flex items-center gap-4">
+                      {session.user.id === comment.author.id ? (
+                        <DeleteButton
+                          boardSlug={board.slug}
+                          postId={post.id}
+                          commentId={comment.id}
+                        />
+                      ) : null}
+                      <ReportButton commentId={comment.id} />
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
