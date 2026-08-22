@@ -1,15 +1,20 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useFormState, useFormStatus } from 'react-dom'
 import { createComment, type CommentActionState } from '@/lib/actions/comments'
+import {
+  COMMENT_PLACEHOLDER,
+  MAX_COMMENT_LENGTH,
+  MIN_COMMENT_LENGTH,
+} from '@/lib/comment-policy'
 
-function SubmitButton() {
+function SubmitButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus()
   return (
     <button
       type="submit"
-      disabled={pending}
+      disabled={disabled || pending}
       className="inline-flex min-h-[52px] shrink-0 items-center rounded-lg bg-cta px-5 font-bold text-cta-text disabled:opacity-60"
     >
       {pending ? '등록 중…' : '등록'}
@@ -25,30 +30,35 @@ export default function CommentForm({
   boardSlug: string
 }) {
   const [state, formAction] = useFormState<CommentActionState, FormData>(createComment, {})
-  const formRef = useRef<HTMLFormElement>(null)
+  const [content, setContent] = useState('')
 
   useEffect(() => {
-    if (!state.error) formRef.current?.reset()
+    if (state.ok) setContent('')
   }, [state])
 
   return (
-    <form ref={formRef} action={formAction} className="flex flex-col gap-2">
+    <form action={formAction} className="flex flex-col gap-2">
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
-      <div className="flex gap-2">
-        <textarea
-          name="content"
-          rows={2}
-          className="flex-1 rounded-lg border border-subtle bg-surface-card p-3"
-          placeholder="댓글을 남겨보세요."
-        />
-        <SubmitButton />
-      </div>
+
       {state.error ? (
         <p role="alert" className="text-sm text-state-danger">
           {state.error}
         </p>
       ) : null}
+
+      <div className="flex gap-2">
+        <textarea
+          name="content"
+          rows={2}
+          maxLength={MAX_COMMENT_LENGTH}
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          className="min-h-[52px] flex-1 rounded-lg border border-subtle bg-surface-card p-3"
+          placeholder={COMMENT_PLACEHOLDER}
+        />
+        <SubmitButton disabled={content.trim().length < MIN_COMMENT_LENGTH} />
+      </div>
     </form>
   )
 }
