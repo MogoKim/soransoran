@@ -6,6 +6,7 @@ import IconMenu from '@/components/layouts/IconMenu'
 import EmptyState from '@/components/layouts/EmptyState'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostsByBoard } from '@/lib/queries/posts'
+import { formatRelativeTime, toPreview } from '@/lib/date'
 import type { BoardType } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
@@ -40,16 +41,29 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
             ctaHref={`/write?board=${board.slug}`}
           />
         ) : (
-          <ul className="flex list-none flex-col gap-2 p-0">
+          <ul className="flex list-none flex-col gap-3 p-0">
             {posts.map((post) => (
               <li key={post.id}>
                 <Link
                   href={`${board.href}/${post.id}`}
-                  className="block rounded-lg border border-subtle bg-surface-card p-4 no-underline"
+                  className="flex min-h-[88px] flex-col justify-center gap-1 rounded-lg border border-subtle bg-surface-card p-4 no-underline"
                 >
-                  <p className="font-bold text-content-primary">{post.title}</p>
-                  <p className="mt-1 text-xs text-content-muted">
-                    {post.author.name ?? '회원'} · 댓글 {post._count.comments}
+                  <p className="line-clamp-2 font-bold text-content-primary">{post.title}</p>
+                  <p className="line-clamp-2 text-sm text-content-muted">
+                    {toPreview(post.content)}
+                  </p>
+                  <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
+                    <span>{post.author.name ?? '회원'}</span>
+                    <span aria-hidden>·</span>
+                    <span>{formatRelativeTime(post.createdAt)}</span>
+                    {post._count.comments > 0 ? (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span className="font-bold text-brand-ink">
+                          댓글 {post._count.comments}
+                        </span>
+                      </>
+                    ) : null}
                   </p>
                 </Link>
               </li>

@@ -26,6 +26,8 @@ async function getBlockedUserIds(): Promise<string[]> {
 const POST_LIST_SELECT = {
   id: true,
   title: true,
+  // 목록 미리보기용. 전체를 실어 나르지 않도록 화면에서 잘라 쓴다.
+  content: true,
   createdAt: true,
   viewCount: true,
   author: { select: { id: true, name: true, image: true } },
