@@ -18,11 +18,60 @@ export const BRAND = {
   background: '#fff8f6',
 } as const
 
+/** 환경변수가 하나도 없을 때의 최종 기준 URL */
+const DEFAULT_SITE_URL = 'https://soransoran.com'
+
+/**
+ * 사이트 기준 URL 해석
+ *
+ * 🔴 `??` 를 쓰면 안 된다. `??` 는 null/undefined 만 fallback 하므로
+ *    빈 문자열("")이나 공백("   ")은 그대로 통과한다.
+ *    Vercel 은 값이 비어 있어도 키를 주입하므로 실제로 ""가 들어오고,
+ *    그 값이 `new URL("")` 에 도달하면 빌드가 다음과 같이 깨진다.
+ *
+ *      TypeError: Invalid URL  input: ''
+ *      Failed to collect page data for /_not-found
+ *
+ * 그래서 아래 순서로 "유효한 절대 URL"이 될 때까지만 채택한다.
+ *   1) NEXT_PUBLIC_APP_URL   — 명시적으로 지정한 값(운영 도메인)
+ *   2) VERCEL_URL 계열       — preview 배포에서 자기 자신의 주소
+ *   3) DEFAULT_SITE_URL      — 최종 fallback
+ *
+ * 반환값은 항상 trailing slash 가 없는 origin 형태다.
+ * (`${SITE.url}${board.href}` 조합에서 `//community` 가 되는 것을 막는다)
+ */
+function normalizeUrl(raw: string | undefined, { assumeHttps = false } = {}): string | null {
+  const value = raw?.trim()
+  if (!value) return null
+
+  const candidate = assumeHttps && !/^https?:\/\//i.test(value) ? `https://${value}` : value
+
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    // origin 만 쓴다 — path/query/trailing slash 를 제거해 조합 시 중복을 막는다
+    return parsed.origin
+  } catch {
+    return null
+  }
+}
+
+function resolveSiteUrl(): string {
+  return (
+    normalizeUrl(process.env.NEXT_PUBLIC_APP_URL) ??
+    // Vercel preview: 호스트만 주므로 https 를 붙여 해석한다
+    normalizeUrl(process.env.NEXT_PUBLIC_VERCEL_URL, { assumeHttps: true }) ??
+    normalizeUrl(process.env.VERCEL_URL, { assumeHttps: true }) ??
+    DEFAULT_SITE_URL
+  )
+}
+
 export const SITE = {
   name: '소란소란',
   title: '소란소란 - 40대 50대 여성을 위한 커뮤니티',
   tagline: '40대 50대 여성이 이야기하는 곳',
   description:
     '갱년기, 몸과 마음, 사는 이야기. 40대 50대 여성이 서로의 이야기를 나누는 곳입니다.',
-  url: process.env.NEXT_PUBLIC_APP_URL ?? 'https://soransoran.com',
+  /** 항상 유효한 절대 URL. trailing slash 없음 */
+  url: resolveSiteUrl(),
 } as const
