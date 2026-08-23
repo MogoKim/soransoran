@@ -260,12 +260,21 @@ Playwright 도입 여부는 6-H 에서 판단한다.
 
 | 파일 | 누가 쓰는가 | 내용 |
 |---|---|---|
-| `brief.md` | **Claude 채팅** | 검색 의도 분석 · h2 구조안 · ChatGPT 에 넘길 최종 원고 지시서 |
-| `article-draft.ts` | **ChatGPT 채팅** | **최종 원고** (소란소란 톤 · AI티 제거된 상태) |
-| `review.ts` | **Claude 채팅** | 요약 5줄 · 위험 문장 5개 · 의료/금전/법률 리스크 · 사실관계 확인 항목 |
-| `image-prompts.md` | **Claude 채팅** | hero 프롬프트 (`imageNeeded: REQUIRED` 일 때만) |
+| `brief.md` | **원고를 쓰지 않는 Claude 세션** | 검색 의도 분석 · h2 구조안 · **마크다운 출력 규칙** · ChatGPT 지시서 |
+| `article-draft.ts` | **ChatGPT 채팅** | **최종 원고** — 마크다운으로 받아 변환기가 형식만 바꾼다 |
+| `review.ts` | **원고를 쓰지 않는 Claude 세션** | 요약 5줄 · 위험 문장 5개 · 의료/금전/법률 리스크 · 사실관계 확인 항목 |
 
-템플릿: `drafts/magazine/_template/review.ts`
+템플릿: `drafts/magazine/_template/brief.md` · `drafts/magazine/_template/review.ts`
+
+**"Claude 채팅"이 아니라 "원고를 쓰지 않는 Claude 세션"이다.**
+§3.0 의 요건은 도구 이름이 아니라 **분리**다 — 원고를 쓴 주체와 위험 문장을 뽑는 주체가
+달라야 한다. 최종 원고는 언제나 ChatGPT 가 쓰므로, brief·review 는 Claude 채팅이 만들든
+Claude Code 가 만들든 분리가 유지된다.
+
+⚠️ **단, Claude Code 는 원고를 쓰지 않는다.** 파일을 고칠 수 있는 유일한 주체라
+작성 권한까지 가지면 "쓴 사람이 곧 커밋하는 사람"이 되어 원칙 4 가 무너진다.
+그래서 ChatGPT 원고는 **blob download 로 파일에 직행**시키고, Claude Code 의 컨텍스트를
+거치지 않게 한다 (제작 전략 §9.2).
 
 **`article-draft.ts` 와 `review.ts` 를 나누는 이유**
 쓴 쪽과 위험 문장을 뽑는 쪽이 같으면, 위험하다고 판단한 문장은 애초에 원고에 없었을 것이다.
@@ -276,6 +285,9 @@ Playwright 도입 여부는 6-H 에서 판단한다.
 검증 항목 하나가 이 규칙을 기계로 강제한다 — `riskSentences` 의 각 문장이
 `article-draft.ts` 본문에 **그대로 존재하는지** 대조하고, 없으면 FAIL 이다
 (원고가 수정됐거나 review 가 낡았다는 뜻).
+
+**hero 프롬프트는 `brief.md` 안에 둔다.** 별도 `image-prompts.md` 를 두지 않는다 —
+같은 사람이 같은 시점에 쓰는 것이라 파일을 나눌 이유가 없다.
 
 **`seo-qa.md` 는 새 글부터 두지 않는다.**
 QA 결과는 `scripts/magazine-qa.mjs` 가 실행 시점에 만들고, 사람이 읽을 형태는 검수 패킷이 맡는다.

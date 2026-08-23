@@ -1,15 +1,20 @@
 /**
  * 검수 데이터 템플릿 — 글마다 drafts/magazine/{slug}/review.ts 로 복사해 채운다.
  *
- * ⚠️ 이 파일은 **Claude 채팅이 작성한다.**
- *    Claude Code 는 이 파일을 새로 쓰지 않는다. 읽어서 검증하고 패킷으로 조립할 뿐이다.
+ * ⚠️ 이 파일은 **원고를 쓰지 않은 Claude 세션이 작성한다.**
+ *    Claude 채팅이든 Claude Code 든 상관없다. 요건은 하나다 —
+ *    **최종 원고를 쓴 주체가 아니어야 한다.** 최종 원고는 언제나 ChatGPT 가 쓴다.
  *    (매거진 전략 §3.0 역할 분리)
  *
  * 왜 원고와 파일을 나누는가
  *    article-draft.ts = ChatGPT 가 쓴 최종 원고
- *    review.ts        = Claude 채팅이 그 원고를 읽고 뽑은 요약·위험 문장
+ *    review.ts        = 그 원고를 읽고 뽑은 요약·위험 문장
  *    쓴 쪽과 뽑은 쪽이 같으면, 위험하다고 판단한 문장은 애초에 원고에 없었을 것이므로
  *    "위험 문장 5개"가 자기 검열의 결과물이 된다. 파일이 갈려야 검수가 실제 검증이 된다.
+ *
+ * ⚠️ Claude Code 가 이 파일을 만들 수는 있다. 그러나 **원고를 쓰면 안 된다.**
+ *    Claude Code 는 파일을 고칠 수 있는 유일한 주체라, 작성 권한까지 가지면
+ *    "쓴 사람이 곧 커밋하는 사람"이 되어 원칙 4(자동 발행 경로 없음)가 무너진다.
  *
  * 패킷 생성기가 거는 검사
  *    riskSentences 의 각 문장이 article-draft.ts 본문에 **그대로** 있어야 한다.
@@ -51,8 +56,11 @@ export type ReviewData = {
   /** YYYY-MM-DD */
   preparedAt: string
 
-  /** 이 검수 데이터를 만든 주체. Claude Code 를 적지 않는다 */
-  preparedBy: 'Claude 채팅'
+  /**
+   * 이 검수 데이터를 만든 주체. **원고 작성자가 아니다.**
+   * 최종 원고 작성자는 언제나 ChatGPT 이고, 여기에는 적지 않는다.
+   */
+  preparedBy: 'Claude 채팅' | 'Claude Code'
 
   /** 특기 사항이 없으면 빈 문자열 */
   notes: string

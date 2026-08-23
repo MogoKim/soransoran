@@ -341,17 +341,40 @@ drafts/magazine/_template/review.ts    복사해서 쓰는 템플릿
 주제 큐(§8)는 **사람이 만들고 사람이 고친다.** 자동화는 그 큐에서 오늘 것을 꺼내 쓸 뿐이다.
 AI 가 주제를 스스로 정하기 시작하면 우나어의 "트렌드 제안 기반 자동 생성"으로 되돌아간다.
 
-### 9.2 KST 시간표 (제안)
+### 9.2 실제 흐름 — 창업자 복붙 0
 
-| 시각 | 단계 | 산출물 |
-|---|---|---|
-| 09:00 | 오늘 주제를 큐에서 읽어 Claude 웹 UI에 초안 요청 | `drafts/{slug}.raw.md` |
-| 10:00 | ChatGPT 웹 UI에서 문장 다듬기 · AI티 제거 | `drafts/{slug}.edited.md` |
-| 10:30 | ChatGPT 이미지 생성 → 내려받기 | `drafts/{slug}/hero.png` |
-| 11:00 | preview QA 실행 (로컬 렌더 + §11 체크) | `drafts/{slug}.qa.json` |
-| 이후 | **창업자 승인 게이트** — 여기서 멈춘다 | — |
+**창업자가 brief 를 ChatGPT 창에 옮겨 붙이지 않는다.** 그 노동을 만들면 하루 1건이 유지되지 않는다.
 
-**창업자가 승인하면** Claude Code가 `articles.ts` 반영 → 검증 → 커밋 → push 승인 요청.
+| # | 단계 | 주체 | 산출물 |
+|---|---|---|---|
+| 1 | 큐에서 오늘 항목 확인 | Claude Code | topic-queue 의 day N |
+| 2 | brief.md · review.ts 파일화 | Claude Code | `drafts/magazine/{slug}/` |
+| 3 | ChatGPT 탭에 brief 투입 | **MCP Playwright** | — |
+| 4 | 응답 완료 대기 (polling) | MCP Playwright | — |
+| 5 | **원고를 blob download 로 회수** | MCP Playwright | `.playwright-mcp/{slug}.md` |
+| 6 | 마크다운 → `article-draft.ts` | `scripts/magazine-md-to-draft.mjs` | `drafts/magazine/{slug}/article-draft.ts` |
+| 7 | hero 이미지 생성·회수 (REQUIRED 만) | MCP Playwright | `public/magazine/{slug}/hero.webp` |
+| 8 | riskSentences ↔ 원고 대조 | `scripts/magazine-packet.mjs` | — |
+| 9 | 자동 QA | `scripts/magazine-qa.mjs` | — |
+| 10 | 검수 패킷 | `scripts/magazine-packet.mjs` | 패킷 1장 |
+| 11 | **승인** | **창업자** ★ | — |
+| 12 | `articles.ts` 반영 → 승인 후 push | Claude Code | — |
+
+**5번이 이 설계의 핵심이다.** 원고를 Claude Code 의 컨텍스트로 읽어와 다시 타이핑하면
+오탈자 교정·문장 다듬기가 끼어들 여지가 구조적으로 열린다.
+blob download 로 파일이 직행하면 **Claude Code 가 원고를 읽지 않고도 제자리에 놓인다.**
+"Claude Code 는 최종 원고를 쓰지 않는다"가 규율이 아니라 **구조로 보장된다.**
+
+**6번도 같은 이유로 규칙을 좁게 잡았다.** 변환기는 표·코드블록·외부 링크·이미지·h1 을
+만나면 **추측해서 고치지 않고 그 줄을 짚어 되돌린다.** 추측하는 순간 원고에 개입한 것이다.
+
+**창업자가 하는 일은 셋뿐이다.**
+
+```
+① ChatGPT 탭을 열어 로그인 상태로 둔다        1회 · 세션이 살아 있는 동안 계속 유효
+② 이미지 인상 판정 "40대 후반으로 보이는가"    글당 약 10초 · REQUIRED 글만
+③ 검수 패킷 승인                              LOW 30초 / MEDIUM 2분 / HIGH 10~15분
+```
 
 ### 9.3 실패 시 동작 (우나어 교훈)
 
@@ -362,12 +385,25 @@ AI 가 주제를 스스로 정하기 시작하면 우나어의 "트렌드 제안
 | QA 실패 | draft 유지 + 실패 항목 기록. **자동 재시도 금지** |
 | 어느 단계든 실패 | **다음 단계로 진행하지 않는다.** 그날은 발행하지 않아도 된다 |
 
-### 9.4 구현 전 확인 사항
+### 9.4 playwright 를 npm 에 설치하지 않는다 (6-H-2 확정)
 
-- `package.json`에 playwright **미설치**. 도입은 6-H에서 판단한다.
-- 세션은 로컬 `storageState`로만 다룬다. **credentials·secret 을 코드·repo에 두지 않는다.**
+도입 여부를 6-H 에서 판단하기로 했던 항목이다. **설치하지 않는 쪽으로 확정했다.**
+MCP Playwright 로 Claude Code 가 대화 턴에서 브라우저를 조작한다.
+
+| | npm 설치 + 러너 스크립트 | **MCP Playwright (채택)** |
+|---|---|---|
+| 새 의존성 | playwright + 브라우저 바이너리 | **0** |
+| 세션 | `storageState` 파일을 로컬에 둬야 함 | **창업자 Chrome 세션 그대로** |
+| CI 유출 | package.json 에 있으면 CI 도 설치 가능 | **구조적으로 불가** — MCP 는 CI 에 없다 |
+| 검증 | 미검증 | **6-H-0.1 · 6-H-1 에서 3회 성공** |
+| §10 "서버·CI·크론 금지" | 규칙으로만 통제 | **물리적으로 보장** |
+
+`storageState` 를 파일로 떨어뜨리지 않는 것도 이 선택의 이득이다 —
+**credentials·secret 을 코드·repo 에 두지 않는다**가 자동으로 지켜진다.
+
 - **창업자 로컬 머신에서만 돈다.** CI·서버·크론에 올리지 않는다.
 - 매거진 전략 §3 "로컬 Playwright 자동화의 조건" 7항을 **전부** 충족해야 실행 가능하다.
+- 실패 시 동작은 §9.3 을 따른다. **재시도하지 않는다.**
 
 ---
 
