@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { SITE } from '@/lib/brand'
+import FontSizeToggle from '@/components/layouts/FontSizeToggle'
 
 /** 하단 영역 — 법무 문서 접근 경로. 터치 타겟 52px 유지 */
 export default function Footer() {
@@ -20,6 +21,9 @@ export default function Footer() {
             개인정보처리방침
           </Link>
         </nav>
+
+        <FontSizeToggle />
+
         <p className="text-xs text-content-muted">
           {SITE.name} · soransoran.community@gmail.com
         </p>
