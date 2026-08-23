@@ -57,10 +57,27 @@ robots.txt
 ### sitemap / canonical
 
 ```
-sitemap    <loc> 8건 · 전부 soransoran.com · vercel.app 0건
-           홈 · 갱년기톡 · 자유게시판 · 매거진 · 베스트 + 글 상세 (동적, force-dynamic)
-canonical  전 주요 경로 개별 지정 · vercel.app 0건
+sitemap    홈 + 커뮤니티 2면 + 공개글 (동적, force-dynamic)
+           전부 soransoran.com · vercel.app 0건
+           매거진 · 베스트는 발행 경로가 없어 제외 (3cbd842)
+           2026-08-23 실측 6건 — 글이 삭제되면 즉시 줄어든다(정상)
+canonical  색인 대상 경로 개별 지정 · vercel.app 0건
 ```
+
+### route별 색인 상태 (2026-08-23 실측 · `3cbd842`)
+
+| route | robots meta | canonical | sitemap |
+|---|---|---|---|
+| `/` | 없음(index) | `/` | ✅ |
+| `/community/menopause` · `free` | 없음(index) | 자기 경로 | ✅ |
+| `/community/*/[postId]` | 없음(index) | 자기 경로 | ✅ (PUBLISHED만) |
+| `/magazine` · `/best` | `noindex, follow` | 자기 경로 유지 | ❌ |
+| `/write` · `/login` | `noindex, nofollow` | 상속(무시됨) | ❌ |
+| `/admin/reports` | `noindex, nofollow` | 상속(무시됨) | ❌ + robots.txt 차단 |
+
+⚠️ `layout.tsx`의 `canonical: '/'`는 **전역 상속**된다.
+색인 대상 페이지는 반드시 자기 경로를 개별 지정한다. 판단 기준은
+[SEO 색인 정책](./2026-08-23-soransoran-seo-index-policy.md) 원칙 4·5.
 
 🔴 **`NEXT_PUBLIC_APP_URL`이 비면 `VERCEL_URL`(배포별 URL)로 폴백**된다. Production에 반드시 설정돼 있어야 한다. (`src/lib/brand.ts` `resolveSiteUrl`)
 
@@ -158,10 +175,11 @@ FAB 인라인 2곳 → FAB 컴포넌트 1곳 (경로별 목적지 자동)
 🟢 색상 hex 리터럴   토큰 파일 외 0건 (npm run check:tokens 가드)
 🟢 any               0건
 🟢 TODO/FIXME        0건
-🟡 CTA 버튼 인라인    7곳 → 공통 Button 후보 (Batch 2)
-🟡 input/textarea     10곳 반복 → 공통 Field 후보 (Batch 2)
+🟢 제출 버튼 중복     ActionButton 으로 통합 (2843f18)
+🟢 textarea 자동확장  useAutoResize 훅으로 통합 (2843f18)
+🟢 색인 표면          route별 robots·canonical 정리 (3cbd842)
 🟡 에러 문구 분산     "로그인이 필요합니다" 5건/4파일 → messages.ts (Batch 3)
-🟡 canonical 미지정   / · /write · /login · /admin/reports (Batch 3)
+🟡 상세 boardSlug     불일치해도 200 — notFound() 처리 필요 (SEO 정책 §8)
 ```
 
 ---
@@ -217,7 +235,7 @@ Upstash 의존성       0개   — rate limit 이 인메모리라 서버리스�
 ```
 src/lib/messages.ts 신설 (에러·안내 문구)
 status:'PUBLISHED' 필터를 쿼리 헬퍼로 (현재 4곳 분산)
-canonical 4곳 추가
+상세 route boardSlug 불일치 시 404 처리 (SEO 정책 §8 · duplicate URL 방지)
 board.type as BoardType 단언 제거
 layout.tsx "scaffold 단계에서는 CDN" 주석 정정 (실제로는 운영 중)
 ```
@@ -235,8 +253,14 @@ Pretendard self-host      현재 CDN · public/fonts/pretendard/README.md 참조
 ### ⏸️ 보류
 
 ```
-Search Console / Naver Search Advisor 등록 — 창업자 판단 대기
+Search Console / Naver Search Advisor 등록
+  게이트: 공개 회원 글 20~30건 (2026-08-23 실측 3건)
+  순서:   네이버 먼저 → 구글 → 2주 색인 관찰
+  근거·해제 절차: docs/operations/2026-08-23-soransoran-seo-index-policy.md §5
 ```
+
+⚠️ 색인 0이면 **재제출이 아니라 원인 조사**다.
+"수집 요청을 많이 하면 회복된다"는 우나어가 실측으로 폐기한 오해다.
 
 ---
 
@@ -294,6 +318,12 @@ route 200        / · /community/menopause · /community/free · /write · /logi
 FAB              홈 /write · 보드 /write?board={slug} · admin·login 0개
 중복 렌더        header 1 · footer 1 · main 1
 robots           Allow:/ · /api/ · /admin/ · 전체차단 0
+색인             / 에 robots meta 없음 (홈 index 유지 — 가장 중요)
+                 /write · /login 에 noindex, nofollow
+                 /magazine · /best 에 noindex, follow + canonical 유지
+                 /community/* · 상세 에 robots meta 없음 · canonical 자기 경로
+sitemap          홈 + 커뮤니티 2면 + 공개글만
+                 /magazine · /best · /write · /login · /admin 0건
 유출             sitemap · canonical 에 vercel.app 0건
 ```
 
@@ -308,6 +338,8 @@ robots           Allow:/ · /api/ · /admin/ · 전체차단 0
 | D-day 운영 기준 | 우나어 repo `docs/operations/m3-new-brand-readiness.md` §13 | 정상/장애 판정 |
 | 작업 지침 | 우나어 repo `docs/operations/soransoran-agent-guidelines.md` | 에이전트 규칙 |
 | 이 저장소 규칙 | `CLAUDE.md` · `AGENTS.md` | 색상·로고·글자크기·금지사항 |
+| **SEO 색인 정책** | `docs/operations/2026-08-23-soransoran-seo-index-policy.md` | 원칙 10개 · route별 정책 · 제출 게이트 · 되돌리기 조건 |
+| 우나어 네이버 색인 붕괴 | 우나어 repo `docs/operations/2026-08-20-naver-survival-representative-index-strategy.md` | 실패 원인 · 폐기된 오해 (읽기 전용) |
 
 ⚠️ 정본 문서 4종은 **우나어 repo에 있다**(main 확정본). 소란소란 repo로 옮기지 않았다.
 
