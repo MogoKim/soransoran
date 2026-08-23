@@ -20,7 +20,8 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const board = getBoardBySlug(params.boardSlug)
   const detail = await getPostDetail(params.postId)
-  if (!board || !detail) return {}
+  // 글이 실제로 속한 게시판이 아니면 canonical 을 만들지 않는다 — 같은 글이 두 URL 로 색인된다.
+  if (!board || !detail || detail.post.boardType !== board.type) return {}
 
   const { post } = detail
   const description = post.content.replace(/\s+/g, ' ').slice(0, 120)
@@ -42,7 +43,7 @@ export default async function PostDetailPage({
   if (!board || !board.isCommunity) notFound()
 
   const detail = await getPostDetail(params.postId)
-  if (!detail) notFound()
+  if (!detail || detail.post.boardType !== board.type) notFound()
 
   const { post, comments } = detail
   const session = await auth()
