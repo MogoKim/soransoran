@@ -4,16 +4,11 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import MagazineBody from '@/components/features/MagazineBody'
-import {
-  getAllMagazineArticles,
-  getMagazineArticleBySlug,
-  getRelatedMagazineArticles,
-} from '@/lib/magazine'
+import { getMagazineArticleBySlug, getRelatedMagazineArticles } from '@/lib/magazine'
 import { MAGAZINE_CLUSTER_LABELS } from '@/content/magazine/types'
 
-export function generateStaticParams() {
-  return getAllMagazineArticles().map((article) => ({ slug: article.slug }))
-}
+// 다른 route 와 같이 동적 렌더한다. 콘텐츠가 TS 데이터라 조회 비용이 없다.
+export const dynamic = 'force-dynamic'
 
 export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
   const article = getMagazineArticleBySlug(params.slug)
