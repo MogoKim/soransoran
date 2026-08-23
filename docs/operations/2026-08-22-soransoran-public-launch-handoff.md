@@ -244,8 +244,13 @@ layout.tsx "scaffold 단계에서는 CDN" 주석 정정 (실제로는 운영 중
 
 ```
 Upstash rate limit 전환   env 2개 등록 후 (UPSTASH_REDIS_REST_URL / TOKEN)
-매거진 발행 경로          magazine 목록 DB 조회 + 상세 route + 관리자 발행
+매거진 발행 경로          전략 확정 완료 (6-B) — 아래 순서로 진행
+  6-B  전략 문서 작성      ✅ docs/operations/2026-08-23-soransoran-magazine-strategy.md
+  6-C  v0 구조 감사        md+frontmatter vs TS 데이터 파일 비교 → 형식 확정
+  6-D  v0 구현             목록 + 상세 route (Git 기반 파일 발행)
+  6-E  첫 글 발행          + /magazine noindex 해제 + sitemap 재포함 (같은 PR)
                           🔴 IA 정본: 매거진에 회원 글쓰기 노출 금지
+                          🔴 DB/admin 발행은 보류 (전환 조건: 전략 문서 §6)
 Pretendard self-host      현재 CDN · public/fonts/pretendard/README.md 참조
 카톡 OG 카드 확인          아직 미검증
 ```
@@ -254,7 +259,7 @@ Pretendard self-host      현재 CDN · public/fonts/pretendard/README.md 참조
 
 ```
 Search Console / Naver Search Advisor 등록
-  게이트: 공개 회원 글 20~30건 (2026-08-23 실측 3건)
+  게이트: 공개 회원 글 + 매거진 글 20~30건 (2026-08-23 실측 3건 · 매거진 0건)
   순서:   네이버 먼저 → 구글 → 2주 색인 관찰
   근거·해제 절차: docs/operations/2026-08-23-soransoran-seo-index-policy.md §5
 ```
@@ -339,6 +344,7 @@ sitemap          홈 + 커뮤니티 2면 + 공개글만
 | 작업 지침 | 우나어 repo `docs/operations/soransoran-agent-guidelines.md` | 에이전트 규칙 |
 | 이 저장소 규칙 | `CLAUDE.md` · `AGENTS.md` | 색상·로고·글자크기·금지사항 |
 | **SEO 색인 정책** | `docs/operations/2026-08-23-soransoran-seo-index-policy.md` | 원칙 10개 · route별 정책 · 제출 게이트 · 되돌리기 조건 |
+| **매거진 전략** | `docs/operations/2026-08-23-soransoran-magazine-strategy.md` | 운영 원칙 10개 · AI 사용 경계 · 주제 클러스터 · 발행 루틴 · v0 전제 |
 | 우나어 네이버 색인 붕괴 | 우나어 repo `docs/operations/2026-08-20-naver-survival-representative-index-strategy.md` | 실패 원인 · 폐기된 오해 (읽기 전용) |
 
 ⚠️ 정본 문서 4종은 **우나어 repo에 있다**(main 확정본). 소란소란 repo로 옮기지 않았다.
