@@ -14,6 +14,18 @@ export function generateMetadata({ params }: { params: { slug: string } }): Meta
   const article = getMagazineArticleBySlug(params.slug)
   if (!article) return {}
 
+  // hero 가 없는 글도 있으므로 이미지 블록은 있을 때만 만든다.
+  const shareImages = article.heroImage
+    ? [
+        {
+          url: article.heroImage.src,
+          width: article.heroImage.width,
+          height: article.heroImage.height,
+          alt: article.heroImage.alt,
+        },
+      ]
+    : undefined
+
   return {
     title: article.title,
     description: article.description,
@@ -22,6 +34,14 @@ export function generateMetadata({ params }: { params: { slug: string } }): Meta
       title: article.title,
       description: article.description,
       type: 'article',
+      publishedTime: article.publishedAt,
+      images: shareImages,
+    },
+    twitter: {
+      card: shareImages ? 'summary_large_image' : 'summary',
+      title: article.title,
+      description: article.description,
+      images: shareImages,
     },
   }
 }
