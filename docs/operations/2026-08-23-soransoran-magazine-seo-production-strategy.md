@@ -177,51 +177,125 @@
 
 ---
 
-## 8. 초반 30일 주제안
+## 8. 30일 주제 큐 (day 1 = 3번째 글)
 
-**형식**: day · type · cluster · title(검색 질문 그대로) · slug · intent · pain · CTA · medical
+> **정본은 `drafts/magazine/topic-queue.ts`** 다. 이 표는 읽기용 요약이다.
+> 둘이 어긋나면 `topic-queue.ts` 를 따른다.
 
-`medical: Y`는 의료 안전 문구 필수(전략 §4.4), `title`은 우나어 L2를 피해 **검색어를 그대로 제목에** 둔다.
+### 8.1 이미 발행된 2건 (큐에 포함하지 않는다)
 
-| day | type | cluster | title | slug | intent | reader pain | CTA board | medical |
-|---|---|---|---|---|---|---|---|---|
-| 1 | series `menopause-basic` #1 | menopause-symptom | 갱년기는 몇 살부터 시작되나요 | menopause-start-age | 질문 | 내가 갱년기인지 모름 | 갱년기톡 | Y |
-| 2 | single | sleep | 갱년기 새벽 3시에 깨는 이유 | menopause-wake-3am | 질문 | 매일 새벽 각성 | 갱년기톡 | Y |
-| 3 | single | money-work | 국민연금 조기수령 60세와 65세 어느 쪽이 유리한가요 | pension-early-vs-normal | 비교 | 언제 받을지 판단 못 함 | 자유게시판 | N |
-| 4 | series `menopause-basic` #2 | menopause-symptom | 갱년기 안면홍조 언제까지 계속되나요 | hot-flash-duration | 질문 | 끝이 안 보임 | 갱년기톡 | Y |
-| 5 | single | emotion | 갱년기 이유 없이 눈물 나는 이유 | menopause-crying | 질문 | 감정 통제 안 됨 | 갱년기톡 | Y |
-| 6 | single | family | 남편이 갱년기를 이해 못 할 때 | husband-understanding | 상황 | 집에서 혼자임 | 자유게시판 | N |
-| 7 | series `menopause-basic` #3 | daily | 갱년기 살찌는 이유와 뱃살 관리 | menopause-belly-fat | 질문 | 안 하던 뱃살 | 갱년기톡 | Y |
-| 8 | single | clinic | 갱년기 증상 무슨 과에 가야 하나요 | menopause-which-clinic | 질문 | 병원 못 고름 | 갱년기톡 | Y |
-| 9 | single | daily | 50대 걷기 운동 하루 몇 분이 적당한가요 | walking-minutes-50s | 계산 | 얼마나 걸어야 할지 | 자유게시판 | Y |
-| 10 | series `menopause-basic` #4 | menopause-symptom | 갱년기 관절 통증 운동해도 되나요 | menopause-joint-pain | 질문 | 아파서 못 움직임 | 갱년기톡 | Y |
-| 11 | single | money-work | 50대 재취업 어떤 일부터 알아봐야 하나요 | rehire-where-to-start | 방법 | 어디부터 볼지 모름 | 자유게시판 | N |
-| 12 | single | sleep | 갱년기 불면증 잠자리 습관 바꾸기 | menopause-sleep-habits | 방법 | 자려고 누워도 못 잠 | 갱년기톡 | Y |
-| 13 | series `menopause-basic` #5 | clinic | 갱년기 호르몬 치료 부작용이 걱정될 때 | hrt-side-effect-worry | 질문 | 치료가 무서움 | 갱년기톡 | Y |
-| 14 | single | relationship | 50대에 친구가 줄어드는 이유 | friends-fewer-50s | 질문 | 만날 사람이 없음 | 자유게시판 | N |
-| 15 | series `sleep-series` #1 | sleep | 나이 들면 잠이 줄어드는 게 정상인가요 | less-sleep-aging | 질문 | 4시간만 자도 깸 | 갱년기톡 | Y |
-| 16 | single | daily | 갱년기 식단 뭘 줄이고 뭘 늘려야 하나요 | menopause-diet-basics | 방법 | 뭘 먹을지 모름 | 갱년기톡 | Y |
-| 17 | single | money-work | 퇴직 후 건강보험료 얼마나 나오나요 | health-insurance-after-retire | 계산 | 고지서 보고 놀람 | 자유게시판 | N |
-| 18 | series `sleep-series` #2 | sleep | 자다가 식은땀으로 깰 때 | night-sweats-waking | 상황 | 잠옷이 젖음 | 갱년기톡 | Y |
-| 19 | single | emotion | 갱년기 우울감 혼자 견디지 않으려면 | menopause-depression-help | 방법 | 말할 데가 없음 | 갱년기톡 | Y |
-| 20 | single | family | 자녀가 독립한 뒤 허전할 때 | empty-nest-feeling | 상황 | 집이 조용함 | 자유게시판 | N |
-| 21 | series `sleep-series` #3 | sleep | 낮잠이 밤잠을 방해할까요 | nap-affects-sleep | 질문 | 낮에 졸림 | 갱년기톡 | Y |
-| 22 | single | clinic | 50대 건강검진 꼭 챙겨야 할 항목 | checkup-items-50s | 방법 | 항목이 너무 많음 | 갱년기톡 | Y |
-| 23 | single | daily | 갱년기 이후 다이어트가 안 되는 이유 | diet-not-working-menopause | 질문 | 예전 방법이 안 통함 | 갱년기톡 | Y |
-| 24 | series `sleep-series` #4 | sleep | 잠 안 올 때 하면 안 되는 것 | what-not-to-do-insomnia | 방법 | 뒤척이다 밤샘 | 갱년기톡 | Y |
-| 25 | single | money-work | 퇴직금 IRP에 넣으면 세금이 얼마나 줄어드나요 | irp-tax-benefit | 계산 | 절세 판단 어려움 | 자유게시판 | N |
-| 26 | single | relationship | 모임에 나가기 싫어질 때 | avoiding-gatherings | 상황 | 사람이 피곤함 | 자유게시판 | N |
-| 27 | series `sleep-series` #5 | sleep | 수면제 없이 잠들기 위해 해본 것들 | sleep-without-pills | 방법 | 약에 의존하기 싫음 | 갱년기톡 | Y |
-| 28 | single | menopause-symptom | 갱년기 심장 두근거림 괜찮은 건가요 | palpitations-menopause | 질문 | 심장병 걱정 | 갱년기톡 | Y |
-| 29 | single | emotion | 갱년기에 기억력이 떨어진 것 같을 때 | memory-decline-menopause | 상황 | 치매 걱정 | 갱년기톡 | Y |
-| 30 | single | family | 부모님 돌봄과 내 갱년기가 겹칠 때 | caregiving-and-menopause | 상황 | 나를 돌볼 틈 없음 | 자유게시판 | Y |
+| slug | 시리즈 | 발행 |
+|---|---|---|
+| `when-does-menopause-start` | `menopause-basic` #1 | 2026-08-23 |
+| `menopause-waking-up-at-3am` | `menopause-basic` #2 | 2026-08-23 |
 
-**31~60일**: 위 비율(§6.2)을 유지하며 `money-work`·`relationship` 시리즈를 각 1개씩 추가한다.
-주제 큐의 코드화는 **6-G**에서 한다.
+⚠️ **`menopause-basic` 의 다음 order 는 3부터다.** 초판 주제안은 2편을 단발·`sleep` 으로
+잡고 있었으나, 실제 발행에서 시리즈 #2 · `menopause-symptom` 으로 확정됐다.
+
+### 8.2 큐 30건
+
+`title` 은 우나어 L2(에세이형 제목)를 피해 **검색어를 그대로** 둔다.
+`risk` 는 매거진 전략 원칙 5 · §5.1 의 검수 깊이를 정한다.
+
+| day | title | slug | cluster | series #order | intent | risk | img |
+|---|---|---|---|---|---|---|---|
+| 1 | 갱년기 안면홍조 언제까지 계속되나요 | `hot-flash-how-long` | menopause-symptom | menopause-basic #3 | 질문 | MED | REQ |
+| 2 | 나이 들면 잠이 줄어드는 게 정상인가요 | `less-sleep-with-age` | sleep | sleep-series #1 | 질문 | MED | REQ |
+| 3 | 국민연금 조기수령 60세와 65세 어느 쪽이 유리한가요 | `pension-early-vs-normal` | money-work | — | 비교 | MED | OPT |
+| 4 | 갱년기 이유 없이 눈물이 날 때 | `menopause-tears` | emotion | — | 상황 | MED | OPT |
+| 5 | 갱년기 이후 살이 잘 안 빠지는 이유 | `weight-harder-after-menopause` | daily | body-change #1 | 질문 | MED | REQ |
+| 6 | 남편이 갱년기를 이해 못 할 때 | `husband-doesnt-understand` | family | — | 상황 | LOW | OPT |
+| 7 | 자다가 식은땀으로 깰 때 | `night-sweats-waking` | sleep | sleep-series #2 | 상황 | MED | OPT |
+| 8 | 갱년기 관절이 아픈데 운동해도 되나요 | `menopause-joint-pain-exercise` | menopause-symptom | menopause-basic #4 | 질문 | MED | OPT |
+| 9 | 50대 재취업 어디부터 알아봐야 하나요 | `rehire-where-to-start` | money-work | — | 방법 | LOW | OPT |
+| **10** | **갱년기 증상 무슨 과에 가야 하나요** | `which-clinic-menopause` | clinic | — | 질문 | **HIGH** | REQ |
+| 11 | 갱년기 피부가 갑자기 건조해질 때 | `dry-skin-menopause` | daily | body-change #2 | 상황 | MED | OPT |
+| 12 | 낮잠이 밤잠을 방해할까요 | `does-nap-affect-sleep` | sleep | sleep-series #3 | 질문 | LOW | OPT |
+| 13 | 50대에 친구가 줄어드는 이유 | `fewer-friends-50s` | relationship | — | 질문 | LOW | REQ |
+| 14 | 뱃살만 늘어나는 것 같을 때 | `belly-fat-menopause` | daily | body-change #3 | 상황 | MED | OPT |
+| 15 | 퇴직 후 건강보험료는 얼마나 나오나요 | `health-insurance-after-retire` | money-work | — | 계산 | MED | OPT |
+| 16 | 요즘 아무것도 하기 싫을 때 | `no-motivation-50s` | emotion | — | 상황 | MED | OPT |
+| 17 | 잠이 안 올 때 하면 안 되는 것 | `what-not-to-do-when-cant-sleep` | sleep | sleep-series #4 | 방법 | MED | OPT |
+| **18** | **50대 건강검진 꼭 챙겨야 할 항목** | `checkup-items-50s` | clinic | — | 방법 | **HIGH** | REQ |
+| 19 | 자녀가 독립한 뒤 집이 조용할 때 | `empty-nest-quiet` | family | — | 상황 | LOW | OPT |
+| 20 | 갱년기에 머리카락이 빠질 때 | `hair-loss-menopause` | menopause-symptom | — | 상황 | MED | OPT |
+| 21 | 50대 걷기 하루 몇 분이 적당할까요 | `walking-minutes-50s` | daily | — | 계산 | LOW | OPT |
+| **22** | **갱년기 심장이 두근거릴 때** | `palpitations-menopause` | menopause-symptom | — | 상황 | **HIGH** | REQ |
+| 23 | 잠자리 습관을 바꿔 본 2주 | `sleep-habit-two-weeks` | sleep | sleep-series #5 | 방법 | LOW | REQ |
+| 24 | 주부로 지내다 다시 일하려면 | `back-to-work-homemaker` | money-work | — | 방법 | LOW | OPT |
+| 25 | 기억력이 떨어진 것 같을 때 | `memory-worry-menopause` | emotion | — | 상황 | MED | OPT |
+| 26 | 모임에 나가기 싫어질 때 | `avoiding-gatherings` | relationship | — | 상황 | LOW | OPT |
+| 27 | 저녁 식사를 바꿔 본 2주 | `dinner-change-two-weeks` | daily | body-change #4 | 방법 | LOW | OPT |
+| **28** | **퇴직금 IRP에 넣으면 세금이 얼마나 줄어드나요** | `irp-tax-benefit` | money-work | — | 계산 | **HIGH** | OPT |
+| 29 | 갱년기가 끝나면 몸은 어떻게 달라지나요 | `after-menopause-body` | menopause-symptom | menopause-basic #5 | 질문 | MED | REQ |
+| 30 | 갱년기에 운동을 다시 시작하며 | `restart-exercise-menopause` | daily | body-change #5 | 방법 | LOW | OPT |
+
+### 8.3 배분 검증
+
+| 축 | §6.2 목표(초반 60일) | 이번 큐 | |
+|---|---|---|---|
+| 갱년기·건강·관리 | 50% | 16건 (53%) | ✅ |
+| 돈·일 | 15% | 5건 (17%) | ✅ |
+| 관계·가족 | 15% | 4건 (13%) | ✅ |
+| 일상·살림 | 10% | 2건 (7%) | 🟡 |
+| 마음·자기 | 10% | 3건 (10%) | ✅ |
+| 시리즈 비율 | 40%(§7.1) | 13건 (43%) | ✅ |
+
+**risk 분포**: LOW 11건(37%) · MEDIUM 15건(50%) · **HIGH 4건(13%)**
+**이미지 REQUIRED**: 9건(30%) — 시리즈 첫 편 · HIGH · 주간 대표글
+
+### 8.4 HIGH 배치 규칙
+
+```
+30일 큐에서 HIGH ≤ 6건
+연속 3일 HIGH 금지
+주당 HIGH ≤ 2건
+```
+
+이번 큐의 HIGH 는 day 10 · 18 · 22 · 28 로 **최소 간격 4일**이다.
+상한을 넘으면 월 1회 큐 승인 단계에서 되돌린다.
+
+### 8.5 알려진 불일치 2건
+
+**① `daily` 가 두 축에 걸친다.** §6.3 매핑은 `daily` 를 "갱년기·건강·관리"에 넣어
+"일상·살림 10%"에 대응하는 클러스터가 없다. 이 큐는 `daily` 를
+건강관리(체중·피부) 3건 + 일상(걷기·식사 루틴) 2건으로 나눠 썼다.
+
+**② "피부"에 해당하는 클러스터가 없다.** 8개 클러스터(전략 §4.1) 어디에도 없어
+`daily` 에 넣었다. 3~4건 이상 쌓이면 클러스터 신설을 검토한다.
+
+### 8.6 31~60일
+
+§6.2 비율을 유지하며 `clinic-visit` 시리즈 5편과 `money-work` 시리즈 1개를 추가한다.
+`clinic-visit` 를 초반 30일에 넣지 않은 이유는 **HIGH 가 5건 몰리기 때문**이다(§8.4).
 
 ---
 
 ## 9. Playwright 로컬 제작 자동화 설계
+
+### 9.0 도구별 역할 — 자동화 전에 먼저 고정한다
+
+역할 분리의 정본은 **매거진 전략 §3.0** 이다. 여기서는 제작 단계별로 어느 도구가 붙는지만 본다.
+
+| 단계 | 주체 | 산출물 |
+|---|---|---|
+| ① 주제 선택 | **창업자** (월 1회 큐 승인) | `drafts/magazine/topic-queue.ts` 의 day N |
+| ② 의도 분석 · 구조 · 리스크 | **Claude 채팅** | 검색 의도 · h2 구조안 · 위험 문장 후보 · **ChatGPT 원고 지시서** |
+| ③ 최종 원고 작성 | **ChatGPT 채팅** | 본문 초안 (소란소란 톤 · AI티 제거된 상태) |
+| ④ hero 이미지 | **ChatGPT 채팅** | 1200×675 webp |
+| ⑤ 파일화 | **Claude Code** | `drafts/magazine/{slug}/article-draft.ts` |
+| ⑥ 자동 QA · 검증 | **Claude Code** | QA 결과 (PASS/FAIL/WARN) |
+| ⑦ 검수 패킷 | **Claude Code** | 요약 5줄 · 위험 문장 5개 · 이미지 · 권장 판단 |
+| ⑧ **승인** | **창업자** ★ | 승인 / 수정 요청 / 폐기 |
+| ⑨ 발행 준비 | **Claude Code** | `articles.ts` 반영 → **창업자 승인 후** push |
+
+**②와 ③을 다른 도구에 두는 것이 핵심이다.**
+같은 도구가 원고도 쓰고 위험 문장도 뽑으면, 위험하다고 판단한 문장은 애초에 안 썼을 것이므로
+검수 자료가 자기 검열의 결과물이 된다. **작성자와 분석자가 달라야 §11 QA 가 실제 검증이 된다.**
+
+**Claude Code 는 ⑤~⑨만 한다.** 원고를 새로 쓰지 않는다.
+파일을 고칠 수 있는 유일한 주체에게 작성 권한까지 주면
+"쓴 사람이 곧 커밋하는 사람"이 되어 원칙 4(자동 발행 경로 없음)가 무너진다.
 
 ### 9.1 무엇을 자동화하고 무엇을 자동화하지 않는가
 
@@ -280,6 +354,9 @@ AI 가 주제를 스스로 정하기 시작하면 우나어의 "트렌드 제안
 ## 10. 기술 안전장치
 
 ```
+🚫 Claude 채팅이 최종 원고 작성     — 원고는 ChatGPT. 분석·지시서까지가 Claude 몫 (§9.0)
+🚫 Claude Code 가 원고 작성        — 받은 것을 형식화·검증만 한다
+🚫 자동 공개                       — 창업자 승인 없이 공개되는 경로를 만들지 않는다
 🚫 자동 commit                     — 사람이 diff 를 본 뒤에만
 🚫 자동 push                       — 창업자 승인 후 Claude Code 가
 🚫 자동 noindex 해제               — 첫 글 발행 PR 에서 사람이 (D6)
@@ -355,7 +432,9 @@ AI 가 주제를 스스로 정하기 시작하면 우나어의 "트렌드 제안
 다만 창업자가 원고를 먼저 쓰겠다면 **6-E 를 앞당겨도 된다** — 6-D 구조가 이미 배포돼 있다.
 
 ⚠️ Search Console / Naver 제출은 계속 보류한다.
-게이트는 **공개 회원 글 + 매거진 글 20~30건**이다(SEO 정책 §5).
+게이트는 **4개 조건 AND** 다(SEO 정책 §5) — sitemap 상세 20건 · **회원 원본 글 10건** ·
+최근 14일 내 회원 글 3건 · 노출면 감사 PASS.
+매거진을 30건 채워도 **조건 B(회원 글 10건)는 열리지 않는다.**
 
 ---
 

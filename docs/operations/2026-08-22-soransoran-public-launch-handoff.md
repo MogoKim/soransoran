@@ -259,12 +259,28 @@ Pretendard self-host      현재 CDN · public/fonts/pretendard/README.md 참조
 카톡 OG 카드 확인          아직 미검증
 ```
 
+### 🤖 매거진 제작 역할 분리 (한 줄 요약)
+
+```
+Claude 채팅  분석·구조·리스크·원고 지시서   (최종 원고를 쓰지 않는다)
+ChatGPT 채팅 최종 원고 · 톤 정리 · hero 이미지
+Claude Code  파일화 · 자동 QA · 검증 · 검수 패킷 · 승인 후 발행 준비
+창업자       월간 큐 승인 · 위험 기반 최종 승인 · HIGH 전문 검수 · 이미지 최종 판단
+자동 공개 · 자동 push · 검색엔진 자동 제출은 계속 금지
+```
+정본: docs/operations/2026-08-23-soransoran-magazine-strategy.md §3.0
+
 ### ⏸️ 보류
 
 ```
 Search Console / Naver Search Advisor 등록
-  게이트: 공개 회원 글 + 매거진 글 20~30건 (2026-08-23 실측 3건 · 매거진 0건)
+  게이트: 4개 조건 AND (SEO 정책 §5)
+    A sitemap 글 상세 URL 20건 이상        실측 5건  (회원 3 + 매거진 2)
+    B 회원 원본 글 10건 이상                실측 3건
+    C 최근 14일 내 회원 글 3건 이상         미확인
+    D robots/canonical/sitemap/vercel.app 감사 PASS
   순서:   네이버 먼저 → 구글 → 2주 색인 관찰
+  주의:   매거진을 늘려도 A만 오르고 B는 오르지 않는다. 두 조건은 별개다
   근거·해제 절차: docs/operations/2026-08-23-soransoran-seo-index-policy.md §5
 ```
 
