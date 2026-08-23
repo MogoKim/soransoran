@@ -39,6 +39,12 @@ export type MagazineBlock =
   | { type: 'callout'; text: string }
   | { type: 'image'; image: MagazineImage }
 
+export type MagazineSeries = {
+  id: string
+  title: string
+  description: string
+}
+
 /** slug 를 뺀 본문 — slug 는 레코드 key 에서 주입된다. */
 export type MagazineArticleBody = {
   title: string
@@ -51,6 +57,10 @@ export type MagazineArticleBody = {
   body: MagazineBlock[]
   /** 건강 글이면 true — 하단 상담 권장 문구가 자동으로 붙는다 */
   medical?: boolean
+  /** 없으면 단발 글 */
+  seriesId?: string
+  /** 시리즈 안에서의 순서. 1 부터 */
+  seriesOrder?: number
 }
 
 export type MagazineArticle = MagazineArticleBody & {
