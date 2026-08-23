@@ -2,21 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useFormState, useFormStatus } from 'react-dom'
+import { useFormState } from 'react-dom'
+import ActionButton from '@/components/ui/ActionButton'
 import { deletePost, deleteComment, type DeleteActionState } from '@/lib/actions/delete'
-
-function ConfirmButton({ label }: { label: string }) {
-  const { pending } = useFormStatus()
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="min-h-[52px] rounded-lg border border-interactive px-5 font-bold text-state-danger disabled:opacity-60"
-    >
-      {pending ? '지우는 중…' : label}
-    </button>
-  )
-}
 
 /**
  * 작성자 본인 삭제 버튼
@@ -76,7 +64,7 @@ export default function DeleteButton({ boardSlug, postId, commentId }: DeleteBut
       ) : null}
 
       <div className="flex gap-2">
-        <ConfirmButton label="지우기" />
+        <ActionButton tone="danger" label="삭제" pendingLabel="삭제 중…" />
         <button
           type="button"
           onClick={() => setOpen(false)}

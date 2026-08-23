@@ -1,22 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { useFormState, useFormStatus } from 'react-dom'
+import { useFormState } from 'react-dom'
+import ActionButton from '@/components/ui/ActionButton'
 import { createReport, type ReportActionState } from '@/lib/actions/reports'
 import { REPORT_REASONS } from '@/lib/report-reasons'
-
-function SubmitButton() {
-  const { pending } = useFormStatus()
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="min-h-[52px] rounded-lg border border-interactive px-5 font-bold text-state-danger disabled:opacity-60"
-    >
-      {pending ? '접수 중…' : '신고하기'}
-    </button>
-  )
-}
 
 /**
  * 신고 버튼
@@ -89,7 +77,7 @@ export default function ReportButton({
       ) : null}
 
       <div className="flex gap-2">
-        <SubmitButton />
+        <ActionButton tone="danger" label="신고" pendingLabel="신고 중…" />
         <button
           type="button"
           onClick={() => setOpen(false)}

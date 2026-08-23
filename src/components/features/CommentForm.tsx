@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useFormState, useFormStatus } from 'react-dom'
+import { useFormState } from 'react-dom'
+import ActionButton from '@/components/ui/ActionButton'
+import { useAutoResize } from '@/lib/use-auto-resize'
 import { createComment, type CommentActionState } from '@/lib/actions/comments'
 import {
   COMMENT_CREATED,
@@ -12,19 +14,6 @@ import {
   MAX_COMMENT_LENGTH,
   MIN_COMMENT_LENGTH,
 } from '@/lib/comment-policy'
-
-function SubmitButton({ disabled }: { disabled: boolean }) {
-  const { pending } = useFormStatus()
-  return (
-    <button
-      type="submit"
-      disabled={disabled || pending}
-      className="inline-flex min-h-[52px] shrink-0 items-center rounded-lg bg-cta px-5 font-bold text-cta-text disabled:opacity-60"
-    >
-      {pending ? '등록 중…' : '등록'}
-    </button>
-  )
-}
 
 export default function CommentForm({
   postId,
@@ -44,12 +33,7 @@ export default function CommentForm({
     setShowSuccess(true)
   }, [state])
 
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, COMMENT_TEXTAREA_MAX_HEIGHT)}px`
-  }, [content])
+  useAutoResize(textareaRef, content, COMMENT_TEXTAREA_MAX_HEIGHT)
 
   const showCounter = content.length >= COMMENT_COUNTER_FROM
 
@@ -82,7 +66,13 @@ export default function CommentForm({
           className="min-h-[52px] flex-1 resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-card p-3"
           placeholder={COMMENT_PLACEHOLDER}
         />
-        <SubmitButton disabled={content.trim().length < MIN_COMMENT_LENGTH} />
+        <ActionButton
+          tone="primary"
+          label="등록"
+          pendingLabel="등록 중…"
+          disabled={content.trim().length < MIN_COMMENT_LENGTH}
+          className="shrink-0"
+        />
       </div>
 
       {showCounter ? (

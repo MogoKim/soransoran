@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useFormState, useFormStatus } from 'react-dom'
+import { useFormState } from 'react-dom'
+import ActionButton from '@/components/ui/ActionButton'
+import { useAutoResize } from '@/lib/use-auto-resize'
 import { createPost, type ActionState } from '@/lib/actions/posts'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import {
@@ -22,19 +24,6 @@ const DRAFT_SAVE_DELAY_MS = 1000
 function resolveBoardSlug(slug: string | undefined): string {
   const found = COMMUNITY_BOARDS.find((b) => b.slug === slug)
   return found ? found.slug : COMMUNITY_BOARDS[0].slug
-}
-
-function SubmitButton({ disabled }: { disabled: boolean }) {
-  const { pending } = useFormStatus()
-  return (
-    <button
-      type="submit"
-      disabled={disabled || pending}
-      className="inline-flex min-h-[52px] items-center justify-center rounded-lg bg-cta px-6 font-bold text-cta-text disabled:opacity-60"
-    >
-      {pending ? '올리는 중…' : '올리기'}
-    </button>
-  )
 }
 
 export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: string }) {
@@ -62,12 +51,7 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    const el = contentRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, POST_TEXTAREA_MAX_HEIGHT)}px`
-  }, [content])
+  useAutoResize(contentRef, content, POST_TEXTAREA_MAX_HEIGHT)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -199,7 +183,13 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
         </p>
       ) : null}
 
-      <SubmitButton disabled={!canSubmit} />
+      <ActionButton
+        tone="primary"
+        label="올리기"
+        pendingLabel="올리는 중…"
+        disabled={!canSubmit}
+        className="justify-center px-6"
+      />
     </form>
   )
 }
