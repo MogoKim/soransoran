@@ -11,3 +11,10 @@ export const POST_TITLE_TOO_SHORT = '제목을 조금만 더 적어주세요.'
 export const POST_TITLE_TOO_LONG = `제목은 ${MAX_POST_TITLE_LENGTH}자까지 쓸 수 있어요.`
 export const POST_CONTENT_TOO_SHORT = '내용을 조금만 더 적어주세요.'
 export const POST_CONTENT_TOO_LONG = `내용은 ${MAX_POST_CONTENT_LENGTH}자까지 쓸 수 있어요.`
+
+/** 본문 입력창 자동 확장 상한(px). 넘으면 내부 스크롤. */
+export const POST_TEXTAREA_MAX_HEIGHT = 360
+
+/** 본문 글자수는 상한이 가까워질 때만 보여준다. */
+export const POST_CONTENT_COUNTER_FROM = 4000
+export const POST_CONTENT_COUNTER_WARN_FROM = 4800

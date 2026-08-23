@@ -9,7 +9,10 @@ import {
   MAX_POST_TITLE_LENGTH,
   MIN_POST_CONTENT_LENGTH,
   MIN_POST_TITLE_LENGTH,
+  POST_CONTENT_COUNTER_FROM,
+  POST_CONTENT_COUNTER_WARN_FROM,
   POST_CONTENT_PLACEHOLDER,
+  POST_TEXTAREA_MAX_HEIGHT,
   POST_TITLE_PLACEHOLDER,
 } from '@/lib/post-policy'
 import { readDraft, removeDraft, saveDraft, type PostDraft } from '@/lib/write-draft'
@@ -44,6 +47,7 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
   // 이벤트 핸들러가 재등록 없이 최신 입력을 읽게 한다.
   const draftRef = useRef<PostDraft>({ boardSlug, title, content })
   draftRef.current = { boardSlug, title, content }
+  const contentRef = useRef<HTMLTextAreaElement>(null)
 
   function applyDraft(draft: PostDraft) {
     setTitle(draft.title.slice(0, MAX_POST_TITLE_LENGTH))
@@ -57,6 +61,13 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
     // 마운트 시 한 번만 복원한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, POST_TEXTAREA_MAX_HEIGHT)}px`
+  }, [content])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -165,15 +176,28 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
       <label className="flex flex-col gap-1">
         <span className="text-sm font-bold text-content-primary">내용</span>
         <textarea
+          ref={contentRef}
           name="content"
-          rows={10}
+          rows={5}
           maxLength={MAX_POST_CONTENT_LENGTH}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          className="rounded-lg border border-subtle bg-surface-card p-3"
+          className="min-h-[140px] resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-card p-3"
           placeholder={POST_CONTENT_PLACEHOLDER}
         />
       </label>
+
+      {content.length >= POST_CONTENT_COUNTER_FROM ? (
+        <p
+          className={`-mt-2 self-end text-xs ${
+            content.length >= POST_CONTENT_COUNTER_WARN_FROM
+              ? 'text-state-warning'
+              : 'text-content-muted'
+          }`}
+        >
+          {content.length}/{MAX_POST_CONTENT_LENGTH}
+        </p>
+      ) : null}
 
       <SubmitButton disabled={!canSubmit} />
     </form>
