@@ -55,6 +55,17 @@
     /* ── 외부 브랜드 (예외) ──
        카카오 로그인 버튼은 카카오 브랜드 가이드가 색을 강제한다.
        소란소란 팔레트가 아니지만, 리터럴이 컴포넌트에 흩어지지 않도록 토큰으로 둔다. */
+    /* ── 메뉴 아이콘 ──
+       비텍스트 UI 요소다. 배경은 옅게, 선은 각 면을 구분할 만큼 진하게 둔다. */
+    --icon-meno-bg: #ffe0da;
+    --icon-meno-stroke: #b64235;
+    --icon-free-bg: #ffeeda;
+    --icon-free-stroke: #a1541b;
+    --icon-magazine-bg: #dee9f7;
+    --icon-magazine-stroke: #1f5aa8;
+    --icon-best-bg: #fdeccc;
+    --icon-best-stroke: #8a5a08;
+
     --kakao-bg: #fee500;
     --kakao-text: #191919;
 

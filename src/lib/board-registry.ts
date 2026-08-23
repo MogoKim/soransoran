@@ -8,6 +8,9 @@
  */
 export type BoardType = 'MENOPAUSE' | 'FREE' | 'MAGAZINE' | 'BEST'
 
+/** 상단 메뉴 아이콘 종류 */
+export type MenuIconName = 'heart' | 'chat' | 'book' | 'star'
+
 export interface BoardMeta {
   type: BoardType
   slug: string
@@ -15,6 +18,12 @@ export interface BoardMeta {
   href: string
   /** 회원이 글을 쓰는 게시판인가 */
   isCommunity: boolean
+  /** 상단 메뉴에 노출하는가 — 준비 중인 면을 내릴 때 여기서만 끈다 */
+  showInMenu: boolean
+  icon: MenuIconName
+  /** 아이콘 색 토큰명. 실제 hex 는 globals.css 에만 있다 */
+  iconBgVar: string
+  iconStrokeVar: string
   /** empty state 문구 (창업자 확정) */
   emptyTitle: string
   emptyBody: string
@@ -27,6 +36,10 @@ export const BOARD_REGISTRY = [
     slug: 'menopause',
     label: '갱년기톡',
     href: '/community/menopause',
+    showInMenu: true,
+    icon: 'heart',
+    iconBgVar: '--icon-meno-bg',
+    iconStrokeVar: '--icon-meno-stroke',
     isCommunity: true,
     emptyTitle: '여기서는 갱년기 이야기를 해도 됩니다',
     emptyBody: '증상도, 기분도, 사소한 것도 괜찮아요.',
@@ -37,6 +50,10 @@ export const BOARD_REGISTRY = [
     slug: 'free',
     label: '자유게시판',
     href: '/community/free',
+    showInMenu: true,
+    icon: 'chat',
+    iconBgVar: '--icon-free-bg',
+    iconStrokeVar: '--icon-free-stroke',
     isCommunity: true,
     emptyTitle: '무슨 이야기든 괜찮습니다',
     emptyBody: '잘 쓰지 않아도 됩니다.',
@@ -47,6 +64,10 @@ export const BOARD_REGISTRY = [
     slug: 'magazine',
     label: '매거진',
     href: '/magazine',
+    showInMenu: true,
+    icon: 'book',
+    iconBgVar: '--icon-magazine-bg',
+    iconStrokeVar: '--icon-magazine-stroke',
     isCommunity: false,
     emptyTitle: '아직 발행된 글이 없습니다',
     emptyBody: '차분히 읽을 만한 글을 준비하고 있습니다.',
@@ -57,6 +78,10 @@ export const BOARD_REGISTRY = [
     slug: 'best',
     label: '베스트',
     href: '/best',
+    showInMenu: true,
+    icon: 'star',
+    iconBgVar: '--icon-best-bg',
+    iconStrokeVar: '--icon-best-stroke',
     isCommunity: false,
     emptyTitle: '아직 모인 글이 없습니다',
     emptyBody: '글과 댓글이 쌓이면 여기에 모입니다.',
@@ -65,6 +90,13 @@ export const BOARD_REGISTRY = [
 ] as const satisfies readonly BoardMeta[]
 
 export const COMMUNITY_BOARDS = BOARD_REGISTRY.filter((b) => b.isCommunity)
+
+export const MENU_BOARDS = BOARD_REGISTRY.filter((b) => b.showInMenu)
+
+/** 커뮤니티 보드 타입 → 메타. 홈처럼 여러 보드 글을 섞어 보여줄 때 쓴다. */
+export function getBoardByType(type: BoardType): BoardMeta | undefined {
+  return BOARD_REGISTRY.find((b) => b.type === type)
+}
 
 export function getBoardBySlug(slug: string): BoardMeta | undefined {
   return BOARD_REGISTRY.find((b) => b.slug === slug)

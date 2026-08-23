@@ -1,5 +1,4 @@
 import PageShell from '@/components/layouts/PageShell'
-import IconMenu from '@/components/layouts/IconMenu'
 import EmptyState from '@/components/layouts/EmptyState'
 import { getBoardBySlug } from '@/lib/board-registry'
 
@@ -15,7 +14,6 @@ export default function BestPage() {
   const board = getBoardBySlug('best')!
   return (
     <PageShell>
-      <IconMenu />
       <main className="mx-auto max-w-3xl px-4">
         <h1 className="py-6 text-xl font-bold text-content-primary">베스트</h1>
         {/* 베스트는 모아보기 영역이다. 글쓰기 진입점을 두지 않는다. */}

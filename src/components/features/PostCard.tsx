@@ -6,6 +6,7 @@ export type PostCardData = {
   title: string
   content: string
   createdAt: Date
+  viewCount: number
   author: { name: string | null }
   _count: { comments: number }
 }
@@ -24,7 +25,7 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
       href={`${boardHref}/${post.id}`}
       className="flex min-h-[88px] flex-col justify-center rounded-lg border border-subtle bg-surface-card p-4 no-underline"
     >
-      <h3 className="m-0 line-clamp-2 text-base font-bold leading-snug text-content-primary">
+      <h3 className="m-0 line-clamp-2 text-lg font-bold leading-snug text-content-primary">
         {post.title}
       </h3>
 
@@ -44,6 +45,8 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
             <span className="font-bold text-brand-ink">댓글 {commentCount}</span>
           </>
         ) : null}
+        <span aria-hidden>·</span>
+        <span>조회 {post.viewCount}</span>
       </div>
     </Link>
   )

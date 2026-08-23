@@ -1,6 +1,9 @@
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
+import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import type { BoardType } from '@prisma/client'
+
+const COMMUNITY_BOARD_TYPES = COMMUNITY_BOARDS.map((b) => b.type) as BoardType[]
 
 /**
  * 🔴 차단 사용자 필터
@@ -44,6 +47,22 @@ export async function getPostsByBoard(boardType: BoardType, take = 30) {
       ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
     },
     select: POST_LIST_SELECT,
+    orderBy: { createdAt: 'desc' },
+    take,
+  })
+}
+
+/** 홈용 — 커뮤니티 보드 전체에서 최신 글을 섞어 가져온다. */
+export async function getRecentPosts(take = 6) {
+  const blockedIds = await getBlockedUserIds()
+
+  return prisma.post.findMany({
+    where: {
+      boardType: { in: COMMUNITY_BOARD_TYPES },
+      status: 'PUBLISHED',
+      ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+    },
+    select: { ...POST_LIST_SELECT, boardType: true },
     orderBy: { createdAt: 'desc' },
     take,
   })

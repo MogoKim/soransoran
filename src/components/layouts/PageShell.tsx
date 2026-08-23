@@ -1,4 +1,5 @@
 import Header from '@/components/layouts/Header'
+import IconMenu from '@/components/layouts/IconMenu'
 import Footer from '@/components/layouts/Footer'
 import FAB from '@/components/layouts/FAB'
 
@@ -22,6 +23,7 @@ export default function PageShell({ children, chrome = 'full' }: PageShellProps)
       </a>
 
       <Header />
+      {isFull ? <IconMenu /> : null}
 
       {/* 페이지가 각자 <main> 을 가지므로 여기서는 래퍼만 둔다.
           FAB 이 마지막 요소를 가리지 않도록 full 일 때만 하단 여백을 준다. */}

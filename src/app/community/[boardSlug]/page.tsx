@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
-import IconMenu from '@/components/layouts/IconMenu'
 import EmptyState from '@/components/layouts/EmptyState'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostsByBoard } from '@/lib/queries/posts'
@@ -27,7 +26,6 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
 
   return (
     <PageShell>
-      <IconMenu />
       <main className="mx-auto max-w-3xl px-4 pb-24">
         <h1 className="py-6 text-xl font-bold text-content-primary">{board.label}</h1>
 

@@ -8,6 +8,7 @@ import DeleteButton from '@/components/features/DeleteButton'
 import CommentItem from '@/components/features/CommentItem'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
+import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail } from '@/lib/queries/posts'
 
 export const dynamic = 'force-dynamic'
@@ -58,14 +59,21 @@ export default async function PostDetailPage({
           </Link>
         </nav>
 
-        <article className="rounded-lg border border-subtle bg-surface-card p-5">
-          <h1 className="text-xl font-bold text-content-primary">{post.title}</h1>
-          <p className="mt-1 text-xs text-content-muted">{post.author.name ?? '회원'}</p>
-          <div className="mt-4 whitespace-pre-wrap break-keep leading-[1.85] text-content-primary [overflow-wrap:anywhere]">
+        <article className="pb-6">
+          <h1 className="text-2xl font-bold leading-snug text-content-primary">{post.title}</h1>
+
+          <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
+            <span className="font-bold text-brand-ink">{post.author.name ?? '회원'}</span>
+            <span aria-hidden>·</span>
+            <span>{formatRelativeTime(post.createdAt)}</span>
+            <span aria-hidden>·</span>
+            <span>조회 {post.viewCount}</span>
+          </p>
+          <div className="mt-5 whitespace-pre-wrap break-keep leading-[1.85] text-content-primary [overflow-wrap:anywhere]">
             {post.content}
           </div>
           {session?.user ? (
-            <div className="mt-4 flex items-center gap-3 border-t border-subtle pt-3">
+            <div className="mt-6 flex items-center gap-3 border-t border-subtle pt-3">
               {session.user.id === post.author.id ? (
                 <DeleteButton boardSlug={board.slug} postId={post.id} />
               ) : (
