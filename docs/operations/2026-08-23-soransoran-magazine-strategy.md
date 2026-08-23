@@ -197,18 +197,28 @@ AI 초안은 초안일 뿐이다. 발행은 "창업자가 읽고 고쳤다"는 �
 3. **이미지가 함께 커밋된다.** 업로드 인프라가 필요 없다.
 4. **되돌리기가 `git revert` 한 번이다.**
 
-### 파일 형식은 6-C 에서 결정한다
+### 파일 형식 — TS 데이터 파일 + 블록 배열 (6-C 확정)
 
-**md + frontmatter 가 유력 후보**이지만 **확정하지 않는다.**
-6-C read-only 감사에서 아래를 비교해 결정한다.
+`src/content/magazine/` 에 **메타데이터 + 본문 블록 배열**을 TypeScript 로 둔다.
 
 ```
-후보 A  md + frontmatter    글쓰기가 쉽다 · 렌더/파서 의존성이 늘어난다
-후보 B  TS 데이터 파일       타입 안전 · 의존성 0 · 본문 작성이 덜 편하다
+types.ts     MagazineArticle · MagazineBlock(p/h2/h3/list/callout/image) · MagazineCluster
+articles.ts  발행된 글 배열
 ```
 
-⚠️ **이 문서에서 package 의존성이나 렌더 라이브러리를 확정하지 않는다.**
-6-C 감사 결과로 정한다.
+**md + frontmatter 를 쓰지 않는다.** 6-C 감사에서 확인한 근거:
+
+1. **의존성 0.** 파서·렌더러·플러그인을 들이지 않는다.
+2. **타입이 SEO 기준을 강제한다.** 이미지 `alt` 는 optional 이 아니라 필수 필드라
+   누락하면 빌드가 막는다. `cluster` 오타·slug 형식도 컴파일 타임에 걸린다.
+3. **sanitize 가 필요 없다.** 우나어는 DB 에 HTML 을 저장해
+   `sanitize-html`(203행) + `dangerouslySetInnerHTML` 이 필요했다.
+   우리가 쓴 글만 싣고 HTML 을 쓰지 않으므로 그 표면 자체가 없다.
+4. **창업자가 TS 를 직접 쓰지 않는다.** 원고는 대화창에서 나오고 repo 반영은 §5 ⑤ 에서
+   Claude Code 가 한다. 창업자는 PR diff 를 검수한다. md 의 작성 편의는 실질 이득이 아니다.
+5. **DB 전환 시 손실이 없다.** 블록 배열은 JSON 컬럼에 그대로 들어간다.
+
+🚫 md/frontmatter · markdown parser · sanitize-html · MDX · `dangerouslySetInnerHTML` 도입 금지.
 
 ### D2 — URL 은 영문 slug (확정)
 

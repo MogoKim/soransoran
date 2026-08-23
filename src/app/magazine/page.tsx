@@ -1,6 +1,8 @@
 import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
+import MagazineCard from '@/components/features/MagazineCard'
 import { getBoardBySlug } from '@/lib/board-registry'
+import { getAllMagazineArticles } from '@/lib/magazine'
 
 import type { Metadata } from 'next'
 
@@ -14,12 +16,25 @@ export const metadata: Metadata = {
 
 export default function MagazinePage() {
   const board = getBoardBySlug('magazine')!
+  const articles = getAllMagazineArticles()
+
   return (
     <PageShell>
-      <main className="mx-auto max-w-3xl px-4">
+      <main className="mx-auto max-w-3xl px-4 pb-16">
         <h1 className="py-6 text-xl font-bold text-content-primary">매거진</h1>
         {/* 매거진에는 글쓰기 버튼을 노출하지 않는다 (IA 정본) */}
-        <EmptyState title={board.emptyTitle} body={board.emptyBody} />
+
+        {articles.length === 0 ? (
+          <EmptyState title={board.emptyTitle} body={board.emptyBody} />
+        ) : (
+          <ul className="flex list-none flex-col gap-3 p-0">
+            {articles.map((article) => (
+              <li key={article.slug}>
+                <MagazineCard article={article} />
+              </li>
+            ))}
+          </ul>
+        )}
       </main>
     </PageShell>
   )
