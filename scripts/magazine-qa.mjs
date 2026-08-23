@@ -13,8 +13,11 @@
  *   node scripts/magazine-qa.mjs                     발행 글 + 전체 draft
  *   node scripts/magazine-qa.mjs --published         발행 글만
  *   node scripts/magazine-qa.mjs --draft <path>      특정 draft 만
+ *   node scripts/magazine-qa.mjs --json              결과를 JSON 으로 (다른 도구가 읽는 용도)
  *
  * 종료 코드: FAIL 1건 이상이면 1, 아니면 0 (WARN 은 0)
+ *
+ * 검사 로직은 runQa() 로 분리돼 있어 다른 스크립트가 import 해서 쓸 수 있다.
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute, basename, dirname } from 'node:path'
@@ -399,40 +402,42 @@ function checkCollisions(published, drafts, queue, report) {
 
 // ── 출력 ───────────────────────────────────────────────────
 
-function printReport(report, checkedCount) {
-  const fails = report.rows.filter((r) => r.level === 'FAIL')
-  const warns = report.rows.filter((r) => r.level === 'WARN')
+function printHuman(result) {
+  console.log('')
+  console.log(
+    `매거진 QA — 발행 ${result.counts.published}건 · draft ${result.counts.drafts}건 · queue ${result.counts.queue}건`,
+  )
+  console.log('')
 
-  for (const row of report.rows) {
+  for (const row of result.rows) {
     const mark = row.level === 'FAIL' ? '✗ FAIL' : '! WARN'
     console.log(`  ${mark}  [${row.id}] ${row.msg}`)
   }
-  if (report.rows.length === 0) console.log('  ✓ 지적 사항 없음')
+  if (result.rows.length === 0) console.log('  ✓ 지적 사항 없음')
 
   console.log('')
-  console.log(`  검사 ${checkedCount}건 · FAIL ${fails.length} · WARN ${warns.length}`)
-  return fails.length
+  console.log(`  검사 ${result.counts.checked}건 · FAIL ${result.fail} · WARN ${result.warn}`)
+  console.log('')
 }
 
 // ── CLI ────────────────────────────────────────────────────
 
-function main() {
-  const args = process.argv.slice(2)
-  const draftFlag = args.indexOf('--draft')
-  const publishedOnly = args.includes('--published')
+/**
+ * 검사를 실행하고 결과 객체를 돌려준다. 출력도 종료도 하지 않는다.
+ * 다른 스크립트(패킷 생성기 등)가 import 해서 쓰는 진입점이다.
+ *
+ * @param {{ draftPath?: string, publishedOnly?: boolean }} options
+ */
+export function runQa(options = {}) {
+  const { draftPath, publishedOnly = false } = options
 
   const published = loadPublished()
   const queue = loadQueue()
   const report = createReport()
 
   let drafts = []
-  if (draftFlag !== -1) {
-    const path = args[draftFlag + 1]
-    if (!path) {
-      console.error('--draft 뒤에 파일 경로가 필요하다')
-      process.exit(2)
-    }
-    drafts = [loadDraft(isAbsolute(path) ? path : join(ROOT, path))]
+  if (draftPath) {
+    drafts = [loadDraft(isAbsolute(draftPath) ? draftPath : join(ROOT, draftPath))]
   } else if (!publishedOnly) {
     drafts = findDraftPaths().map(loadDraft)
   }
@@ -441,17 +446,12 @@ function main() {
   const publishedSlugs = new Set(published.map((a) => a.slug))
   const freshDrafts = drafts.filter((d) => !publishedSlugs.has(d.slug))
 
-  const targets =
-    draftFlag !== -1 ? drafts : publishedOnly ? published : [...published, ...freshDrafts]
-
-  console.log('')
-  console.log(`매거진 QA — 발행 ${published.length}건 · draft ${drafts.length}건 · queue ${queue.length}건`)
-  console.log('')
+  const targets = draftPath ? drafts : publishedOnly ? published : [...published, ...freshDrafts]
 
   for (const article of targets) {
     checkArticle(article, { published }, report)
   }
-  if (draftFlag === -1) {
+  if (!draftPath) {
     checkCollisions(published, drafts, queue, report)
   } else {
     // 단독 검사에서도 "이미 발행된 글의 낡은 draft"는 알려준다.
@@ -462,9 +462,46 @@ function main() {
     }
   }
 
-  const failCount = printReport(report, targets.length)
-  console.log('')
-  process.exit(failCount > 0 ? 1 : 0)
+  const fail = report.rows.filter((r) => r.level === 'FAIL').length
+  const warn = report.rows.filter((r) => r.level === 'WARN').length
+
+  return {
+    ok: fail === 0,
+    fail,
+    warn,
+    counts: {
+      published: published.length,
+      drafts: drafts.length,
+      queue: queue.length,
+      checked: targets.length,
+    },
+    checked: targets.map((a) => a.slug),
+    rows: report.rows,
+  }
 }
 
-main()
+function main() {
+  const args = process.argv.slice(2)
+  const draftFlag = args.indexOf('--draft')
+  const asJson = args.includes('--json')
+
+  let draftPath
+  if (draftFlag !== -1) {
+    draftPath = args[draftFlag + 1]
+    if (!draftPath || draftPath.startsWith('--')) {
+      console.error('--draft 뒤에 파일 경로가 필요하다')
+      process.exit(2)
+    }
+  }
+
+  const result = runQa({ draftPath, publishedOnly: args.includes('--published') })
+
+  // --json 일 때는 JSON 외의 문자를 stdout 에 섞지 않는다.
+  if (asJson) console.log(JSON.stringify(result, null, 2))
+  else printHuman(result)
+
+  process.exit(result.ok ? 0 : 1)
+}
+
+// import 해서 쓸 때는 CLI 를 돌리지 않는다.
+if (process.argv[1] && process.argv[1].endsWith('magazine-qa.mjs')) main()

@@ -297,6 +297,26 @@
 파일을 고칠 수 있는 유일한 주체에게 작성 권한까지 주면
 "쓴 사람이 곧 커밋하는 사람"이 되어 원칙 4(자동 발행 경로 없음)가 무너진다.
 
+### 9.0-1 단계별 산출물 파일
+
+정본 구조는 매거진 전략 §5.0 이다. 도구별로 어떤 파일이 나오는지만 다시 적는다.
+
+```
+drafts/magazine/{slug}/
+  brief.md            Claude 채팅   — 의도 분석 · 구조안 · ChatGPT 원고 지시서
+  article-draft.ts    ChatGPT       — 최종 원고
+  review.ts           Claude 채팅   — 요약 5줄 · 위험 문장 5개 · 리스크 · 확인 항목
+  image-prompts.md    Claude 채팅   — hero 프롬프트 (REQUIRED 일 때만)
+
+drafts/magazine/_template/review.ts    복사해서 쓰는 템플릿
+```
+
+**`seo-qa.md` 는 새 글부터 만들지 않는다.** QA 는 `scripts/magazine-qa.mjs` 가 돌리고,
+사람이 읽는 형태는 검수 패킷이 만든다. 기존 2건은 발행 시점 스냅샷이라 그대로 둔다.
+
+**Claude Code 는 `review.ts` 를 쓰지 않는다.** 읽고 검증하고 조립한다.
+`riskSentences` 가 원고 본문에 그대로 있는지 대조하는 검사로 이 경계를 기계가 지킨다.
+
 ### 9.1 무엇을 자동화하고 무엇을 자동화하지 않는가
 
 ```
@@ -374,6 +394,20 @@ AI 가 주제를 스스로 정하기 시작하면 우나어의 "트렌드 제안
 ---
 
 ## 11. 글 단위 SEO QA
+
+**자동 검사는 `scripts/magazine-qa.mjs` 가 한다.** 아래 체크리스트를 손으로 확인하지 않는다.
+
+```bash
+node scripts/magazine-qa.mjs                    # 발행 글 + draft + 충돌 검사
+node scripts/magazine-qa.mjs --published        # 발행 글만
+node scripts/magazine-qa.mjs --draft <경로>      # 특정 draft
+node scripts/magazine-qa.mjs --json             # 다른 도구가 읽는 JSON 출력
+```
+
+FAIL 이 하나라도 있으면 종료 코드 1이고, 그 글은 **창업자에게 올리지 않는다**(전략 §5).
+`runQa()` 가 export 돼 있어 검수 패킷 생성기가 import 해서 결과를 그대로 쓴다.
+
+아래는 검사 항목의 근거 목록이다. 스크립트와 어긋나면 스크립트가 정본이다.
 
 발행 전 전부 통과해야 한다.
 
