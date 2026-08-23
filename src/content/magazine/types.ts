@@ -38,6 +38,8 @@ export type MagazineBlock =
   | { type: 'list'; items: string[]; ordered?: boolean }
   | { type: 'callout'; text: string }
   | { type: 'image'; image: MagazineImage }
+  /** 본문 마지막에서 커뮤니티로 넘긴다. 내부 경로만 쓴다 */
+  | { type: 'cta'; href: string; label: string; text?: string }
 
 export type MagazineSeries = {
   id: string

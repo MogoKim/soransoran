@@ -1,6 +1,7 @@
 import type { MetadataRoute } from 'next'
 import { SITE } from '@/lib/brand'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
+import { getAllMagazineArticles } from '@/lib/magazine'
 import { prisma } from '@/lib/prisma'
 import type { BoardType } from '@prisma/client'
 
@@ -37,14 +38,27 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const staticEntries: MetadataRoute.Sitemap = [
     { url: SITE.url, lastModified: now, changeFrequency: 'daily', priority: 1 },
-    // 매거진·베스트는 발행 경로가 없어 항상 비어 있다. 빈 페이지를 제출하지 않는다.
     ...COMMUNITY_BOARDS.map((board) => ({
       url: `${SITE.url}${board.href}`,
       lastModified: now,
       changeFrequency: 'daily' as const,
       priority: 0.8,
     })),
+    // 베스트는 모아보기 로직이 없어 계속 제외한다.
+    {
+      url: `${SITE.url}/magazine`,
+      lastModified: now,
+      changeFrequency: 'weekly' as const,
+      priority: 0.7,
+    },
   ]
+
+  const magazineEntries: MetadataRoute.Sitemap = getAllMagazineArticles().map((article) => ({
+    url: `${SITE.url}/magazine/${article.slug}`,
+    lastModified: new Date(article.publishedAt),
+    changeFrequency: 'weekly' as const,
+    priority: 0.6,
+  }))
 
   const posts = await getPublishedPosts()
   const hrefByType = new Map(COMMUNITY_BOARDS.map((b) => [b.type as string, b.href as string]))
@@ -62,5 +76,5 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ]
   })
 
-  return [...staticEntries, ...postEntries]
+  return [...staticEntries, ...magazineEntries, ...postEntries]
 }

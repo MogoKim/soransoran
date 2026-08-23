@@ -1,4 +1,5 @@
 import Image from 'next/image'
+import Link from 'next/link'
 import type { MagazineArticle, MagazineBlock } from '@/content/magazine/types'
 
 /** 커뮤니티 상세 본문과 같은 가독성 기준 */
@@ -29,6 +30,18 @@ function Block({ block }: { block: MagazineBlock }) {
       )
     case 'callout':
       return <p className={`mt-4 rounded-lg bg-surface-soft p-4 ${TEXT_CLASS}`}>{block.text}</p>
+    case 'cta':
+      return (
+        <div className="mt-8 border-t border-subtle pt-6">
+          {block.text ? <p className={TEXT_CLASS}>{block.text}</p> : null}
+          <Link
+            href={block.href}
+            className="mt-3 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline"
+          >
+            {block.label}
+          </Link>
+        </div>
+      )
     case 'image':
       return (
         <Image
