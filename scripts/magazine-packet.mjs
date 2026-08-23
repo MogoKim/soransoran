@@ -37,6 +37,12 @@ const FIXTURE_DIR = join(ROOT, 'scripts/__fixtures__/magazine-packet')
 const HERO_WIDTH = 1200
 const HERO_HEIGHT = 675
 
+/**
+ * review.ts 를 만들 수 있는 주체.
+ * 최종 원고는 언제나 ChatGPT 가 쓴다 — 여기에 ChatGPT 가 들어오면 자기 검열이 된다.
+ */
+const PREPARED_BY_ALLOWED = new Set(['Claude 채팅', 'Claude Code'])
+
 /** 등급별로 패킷에 무엇을 넣는가 (전략 §5.1) */
 const SHOW_RISK_SENTENCES = new Set(['MEDIUM', 'HIGH'])
 const SHOW_FULL_BODY = new Set(['HIGH'])
@@ -156,8 +162,11 @@ function validate(draftDir, article, review, queueItem) {
     errors.push(`review.summary 가 5개가 아닙니다 (현재 ${review.summary?.length ?? 0}개)`)
   }
 
-  if (review.preparedBy !== 'Claude 채팅') {
-    errors.push(`review.preparedBy 가 "Claude 채팅" 이 아닙니다 (현재 "${review.preparedBy}")`)
+  // 요건은 도구 이름이 아니라 분리다 — 최종 원고를 쓴 주체(ChatGPT)가 아니어야 한다.
+  if (!PREPARED_BY_ALLOWED.has(review.preparedBy)) {
+    errors.push(
+      `review.preparedBy 가 허용값이 아닙니다 (현재 "${review.preparedBy}" · 허용 ${[...PREPARED_BY_ALLOWED].join(' | ')})`,
+    )
   }
 
   const riskLevel = queueItem?.riskLevel ?? 'MEDIUM'
@@ -436,8 +445,8 @@ function runFixtures() {
   console.log(`  ${mismatchOk ? '✓' : '✗'} 위험 문장 대조 실패 → FAIL 검출`)
   if (!mismatchOk) failed += 1
 
-  // preparedBy 검증
-  const wrongBy = validate(dir, article, { ...review, preparedBy: 'Claude Code' }, queueItem)
+  // preparedBy 검증 — 원고를 쓴 주체(ChatGPT)가 들어오면 자기 검열이라 FAIL 이어야 한다
+  const wrongBy = validate(dir, article, { ...review, preparedBy: 'ChatGPT' }, queueItem)
   const wrongByOk = wrongBy.some((e) => e.includes('preparedBy'))
   console.log(`  ${wrongByOk ? '✓' : '✗'} preparedBy 위반 → FAIL 검출`)
   if (!wrongByOk) failed += 1

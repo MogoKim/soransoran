@@ -34,8 +34,18 @@ const PUBLIC_DIR = join(ROOT, 'public')
 /** 제품·브랜드 금지어. 대체 표현은 "우리 나이" 계열 */
 const BANNED_WORDS = ['시니어', '어르신', '노인', '실버']
 
-/** 의료 단정 — 진단·효과를 확정하는 표현 (전략 원칙 8) */
-const MEDICAL_ASSERTIONS = ['반드시', '치료됩니다', '낫습니다', '원인입니다', '완치', '효과적입니다']
+/** 의료 단정 — 진단·효과를 확정하는 표현 (전략 원칙 8). 문맥과 무관하게 FAIL */
+const MEDICAL_ASSERTIONS = ['반드시', '치료됩니다', '원인입니다', '완치', '효과적입니다']
+
+/**
+ * "낫습니다" 는 두 뜻이 겹친다 — 병이 낫다(의료 단정) vs ~보다 낫다(비교).
+ * 문맥 없이 잡으면 "~하는 편이 낫습니다" 같은 소란소란 톤의 자연스러운 문장이 걸린다.
+ * 그래서 문장 단위로 보고, 비교 표현일 때만 통과시킨다.
+ *   통과: "…보다 … 낫습니다" · "…편이 낫습니다" · "…쪽이 낫습니다"
+ *   FAIL: "병이 낫습니다" · "치료하면 낫습니다" · "약을 먹으면 낫습니다"
+ */
+const HEAL_WORD = '낫습니다'
+const COMPARISON_PATTERNS = [/편이\s*낫습니다/, /쪽이\s*낫습니다/, /보다[^.!?]*낫습니다/]
 
 /** 약·치료 인접어. 금지 맥락일 수 있어 WARN 으로 사람에게 넘긴다 */
 const TREATMENT_TERMS = ['복용', '처방', '영양제', '호르몬제', '건강기능식품']
@@ -206,6 +216,14 @@ function createReport() {
   }
 }
 
+/** 한국어 문장 단위로 쪼갠다. 마침표·물음표·느낌표와 줄바꿈이 경계다 */
+function splitSentences(text) {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 /** 본문에서 사람이 읽는 텍스트만 모은다 */
 function collectText(body) {
   const parts = []
@@ -233,6 +251,13 @@ function checkArticle(article, context, report) {
   // 2 · 의료 단정
   for (const word of MEDICAL_ASSERTIONS) {
     if (searchable.includes(word)) report.fail(id, `의료 단정 표현 "${word}" (전략 원칙 8)`)
+  }
+
+  // 2-1 · "낫습니다" 는 문장 단위로 본다 (비교 표현은 통과)
+  for (const sentence of splitSentences(searchable)) {
+    if (!sentence.includes(HEAL_WORD)) continue
+    if (COMPARISON_PATTERNS.some((re) => re.test(sentence))) continue
+    report.fail(id, `의료 단정 표현 "${HEAL_WORD}" — "${sentence.trim().slice(0, 50)}"`)
   }
 
   // 3 · 약·치료 인접어
