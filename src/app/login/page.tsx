@@ -1,7 +1,11 @@
+import type { Metadata } from 'next'
 import PageShell from '@/components/layouts/PageShell'
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
 
-export const metadata = { title: '로그인' }
+export const metadata: Metadata = {
+  title: '로그인',
+  robots: { index: false, follow: false },
+}
 
 export default function LoginPage({
   searchParams,

@@ -1,9 +1,14 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
 import PostForm from '@/components/features/PostForm'
 import { auth } from '@/lib/auth'
 
-export const metadata = { title: '글쓰기' }
+export const metadata: Metadata = {
+  title: '글쓰기',
+  // 로그인해야 쓰는 기능 화면이다. 검색 결과에 나올 이유가 없다.
+  robots: { index: false, follow: false },
+}
 export const dynamic = 'force-dynamic'
 
 export default async function WritePage({

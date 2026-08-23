@@ -8,6 +8,8 @@ export const metadata: Metadata = {
   title: '매거진',
   // layout 의 canonical:'/' 를 상속하면 홈의 복제로 잡힌다. 개별 경로로 고정한다.
   alternates: { canonical: '/magazine' },
+  // 발행 경로와 콘텐츠가 아직 없다 — 빈 페이지를 색인시키지 않는다. 단 메뉴 링크는 따라갈 수 있게 둔다.
+  robots: { index: false, follow: true },
 }
 
 export default function MagazinePage() {

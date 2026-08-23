@@ -1,6 +1,6 @@
 import type { MetadataRoute } from 'next'
 import { SITE } from '@/lib/brand'
-import { BOARD_REGISTRY, COMMUNITY_BOARDS } from '@/lib/board-registry'
+import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import { prisma } from '@/lib/prisma'
 import type { BoardType } from '@prisma/client'
 
@@ -37,7 +37,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const staticEntries: MetadataRoute.Sitemap = [
     { url: SITE.url, lastModified: now, changeFrequency: 'daily', priority: 1 },
-    ...BOARD_REGISTRY.map((board) => ({
+    // 매거진·베스트는 발행 경로가 없어 항상 비어 있다. 빈 페이지를 제출하지 않는다.
+    ...COMMUNITY_BOARDS.map((board) => ({
       url: `${SITE.url}${board.href}`,
       lastModified: now,
       changeFrequency: 'daily' as const,
