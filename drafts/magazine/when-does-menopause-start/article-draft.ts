@@ -11,7 +11,7 @@ import type { MagazineArticleBody } from '@/content/magazine/types'
 export const DRAFT: MagazineArticleBody = {
   title: '갱년기는 몇 살부터 시작되나요?',
   description:
-    '요즘 몸이 예전 같지 않다면 갱년기일 수 있습니다. 갱년기가 보통 언제 시작되는지, 폐경과는 어떻게 다른지 차분히 정리했습니다.',
+    '요즘 몸이 예전 같지 않다면 갱년기와 관련이 있을 수 있습니다. 갱년기가 보통 언제 시작되는지, 폐경과는 어떻게 다른지 차분히 정리했습니다.',
   cluster: 'menopause-symptom',
   publishedAt: '2026-08-23',
   medical: true,
@@ -127,7 +127,7 @@ export const DRAFT: MagazineArticleBody = {
     },
     {
       type: 'p',
-      text: '소란소란은 40대 50대 여성이 몸과 마음의 변화를 편하게 나누는 공간입니다. 잘 쓰지 않아도 괜찮고, 짧아도 괜찮습니다. 요즘 겪고 있는 변화를 갱년기톡에 한 줄 남겨 보세요.',
+      text: '소란소란은 4050/5060 여성이 몸과 마음의 변화를 편하게 나누는 공간입니다. 잘 쓰지 않아도 괜찮고, 짧아도 괜찮습니다. 요즘 겪고 있는 변화를 갱년기톡에 한 줄 남겨 보세요.',
     },
   ],
 }
