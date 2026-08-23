@@ -81,31 +81,48 @@ AI 초안은 초안일 뿐이다. 발행은 "창업자가 읽고 고쳤다"는 �
 
 ## 3. AI 사용 경계
 
+> AI 는 **제작 보조자**이지 발행자가 아니다.
+> 경계는 "AI 를 쓰느냐"가 아니라 **"사람 승인 없이 공개될 수 있느냐"** 로 긋는다.
+
 ### 허용
 
 | 항목 | 조건 |
 |---|---|
-| ChatGPT/Claude로 **원고 초안 생성** | 창업자가 직접 대화창에서. 결과는 어디까지나 초안 |
+| ChatGPT/Claude 로 **원고 초안 생성** | 대화창이든 Playwright 자동화든. 결과는 어디까지나 초안 |
 | **구조·제목 후보 브레인스토밍** | 최종 선택은 창업자 |
 | **문장 다듬기·오탈자 교정** | 사실 관계는 창업자가 확인 |
-| **이미지 수동 생성** | ChatGPT 등에서 만들어 내려받아 repo 에 커밋 |
-| **Playwright** | **소란소란 페이지 QA 전용** — 렌더·200·noindex 확인 |
+| **이미지 생성** | ChatGPT 등에서 만들어 내려받아 repo 에 커밋 |
+| **창업자 로컬 PC 의 Playwright 로 Claude/ChatGPT 웹 UI 사용** | 매거진 draft 초안·편집·이미지 생성. 아래 조건을 모두 지킬 때 |
+| **Playwright 로 소란소란 페이지 QA** | 렌더·200·noindex 확인 |
 | Claude Code | 코드 구현·문서 작성 |
+
+**로컬 Playwright 자동화의 조건 (전부 충족해야 허용)**
+
+```
+✅ 창업자 로컬 PC 에서만 실행
+✅ 결과는 drafts/ 에만 저장
+🚫 자동 공개 없음
+🚫 자동 commit 없음
+🚫 자동 push 없음
+🚫 자동 noindex 해제 없음
+🚫 자동 Search Console / Naver 제출 없음
+```
 
 ### 금지
 
 | 항목 | 이유 |
 |---|---|
 | 소란소란 런타임의 **AI API 호출** | 원칙 3 |
-| **자동 발행** (크론·웹훅·에이전트) | 원칙 4 |
-| **ChatGPT/Claude 계정 자동화·브라우저 세션 긁기** | 약관 위반이자 사고 경로 |
-| Gmail·브라우저 세션 스크래핑 | 동일 |
-| **Playwright 로 AI 서비스 조작** | QA 도구를 자동화 도구로 전용하지 않는다 |
+| **자동 발행 경로** (크론·웹훅·에이전트가 공개까지) | 원칙 4 |
+| **서버 · CI · 크론에서 실행** | 로컬 도구를 파이프라인으로 만들지 않는다 |
+| **`src/content/magazine/articles.ts` 자동 변경** | 발행 데이터는 사람이 승인한 뒤에만 바뀐다 |
+| **무검수 PUBLISHED** | 원칙 5 |
+| **credentials · secret 저장** | 세션은 로컬 `storageState` 로만. repo·코드에 두지 않는다 |
+| Gmail 등 **무관한 서비스 세션 스크래핑** | 매거진 제작과 무관한 접근 |
 | **외부글 크롤·요약·재발행** | 원칙 2 · 우나어 F1 |
-| AI 생성물 **무검수 발행** | 원칙 5 |
 
 **현재 상태(2026-08-23)**: `package.json` 에 AI SDK **0건**, playwright **미설치**.
-깨끗한 출발점이다. 이 상태를 유지한다.
+Playwright 도입 여부는 6-H 에서 판단한다.
 
 ---
 
@@ -362,6 +379,7 @@ DB/admin 전환을 검토할 때 다시 꺼낸다.
 | 문서 | 위치 | 내용 |
 |---|---|---|
 | SEO 색인 정책 | `docs/operations/2026-08-23-soransoran-seo-index-policy.md` | **색인 규칙 정본** · 제출 게이트 |
+| **매거진 SEO 제작 운영 전략** | `docs/operations/2026-08-23-soransoran-magazine-seo-production-strategy.md` | 검색 유입 설계 · 365일 주제 비율 · 시리즈 · 30일 주제안 · 제작 자동화 · 안전장치 |
 | 세션 핸드오프 | `docs/operations/2026-08-22-soransoran-public-launch-handoff.md` | 현재 상태 스냅샷 |
 | 우나어 네이버 색인 붕괴 | 우나어 repo `docs/operations/2026-08-20-naver-survival-representative-index-strategy.md` | 실패 원인 (읽기 전용) |
 
@@ -370,11 +388,17 @@ DB/admin 전환을 검토할 때 다시 꺼낸다.
 ## 12. 다음 배치
 
 ```
-6-C  매거진 v0 구조 read-only 감사
-     md + frontmatter vs TS 데이터 파일 비교 → 파일 형식 확정
-6-D  매거진 v0 구현 (목록 + 상세 route)
-6-E  첫 글 발행 + noindex 해제 + sitemap 재포함  ← 같은 PR (D6)
+6-C  v0 구조 감사        ✅ TS 데이터 파일 + 블록 배열 확정
+6-D  v0 구현             ✅ 목록 + 상세 route (9ab299d)
+6-F  제작 운영 전략      ✅ magazine-seo-production-strategy.md
+6-G  topic calendar      주제 큐 + seriesId/order 필드
+6-H  local draft runner  Playwright 초안·이미지 (draft-only)
+6-I  preview QA          글 단위 SEO 체크 자동화
+6-E  첫 글 발행          + noindex 해제 + sitemap 재포함  ← 같은 PR (D6)
 ```
+
+주제 선정·시리즈·제작 순서는
+[매거진 SEO 제작 운영 전략](./2026-08-23-soransoran-magazine-seo-production-strategy.md)을 따른다.
 
 ⚠️ Search Console / Naver 제출은 계속 보류한다.
 게이트는 **공개 회원 글 + 매거진 글 20~30건**이다(SEO 정책 §5).

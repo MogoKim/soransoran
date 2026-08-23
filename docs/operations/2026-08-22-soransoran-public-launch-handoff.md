@@ -244,10 +244,14 @@ layout.tsx "scaffold 단계에서는 CDN" 주석 정정 (실제로는 운영 중
 
 ```
 Upstash rate limit 전환   env 2개 등록 후 (UPSTASH_REDIS_REST_URL / TOKEN)
-매거진 발행 경로          전략 확정 완료 (6-B) — 아래 순서로 진행
-  6-B  전략 문서 작성      ✅ docs/operations/2026-08-23-soransoran-magazine-strategy.md
-  6-C  v0 구조 감사        md+frontmatter vs TS 데이터 파일 비교 → 형식 확정
-  6-D  v0 구현             목록 + 상세 route (Git 기반 파일 발행)
+매거진 발행 경로          구조 배포 완료 (6-D) — 남은 순서
+  6-B  전략 문서           ✅ magazine-strategy.md
+  6-C  v0 구조 감사        ✅ TS 데이터 파일 + 블록 배열 확정
+  6-D  v0 구현             ✅ 목록 + 상세 route (d0516a6 · 9ab299d)
+  6-F  제작 운영 전략      ✅ magazine-seo-production-strategy.md
+  6-G  topic calendar      주제 큐 + seriesId/order 필드
+  6-H  local draft runner  Playwright 초안·이미지 (draft-only · 자동 커밋/푸시 금지)
+  6-I  preview QA          글 단위 SEO 체크 자동화
   6-E  첫 글 발행          + /magazine noindex 해제 + sitemap 재포함 (같은 PR)
                           🔴 IA 정본: 매거진에 회원 글쓰기 노출 금지
                           🔴 DB/admin 발행은 보류 (전환 조건: 전략 문서 §6)
@@ -345,6 +349,7 @@ sitemap          홈 + 커뮤니티 2면 + 공개글만
 | 이 저장소 규칙 | `CLAUDE.md` · `AGENTS.md` | 색상·로고·글자크기·금지사항 |
 | **SEO 색인 정책** | `docs/operations/2026-08-23-soransoran-seo-index-policy.md` | 원칙 10개 · route별 정책 · 제출 게이트 · 되돌리기 조건 |
 | **매거진 전략** | `docs/operations/2026-08-23-soransoran-magazine-strategy.md` | 운영 원칙 10개 · AI 사용 경계 · 주제 클러스터 · 발행 루틴 · v0 전제 |
+| **매거진 SEO 제작 운영** | `docs/operations/2026-08-23-soransoran-magazine-seo-production-strategy.md` | 검색 유입 설계 · 365일 주제 비율 · 시리즈 · 30일 주제안 · 제작 자동화 · 안전장치 |
 | 우나어 네이버 색인 붕괴 | 우나어 repo `docs/operations/2026-08-20-naver-survival-representative-index-strategy.md` | 실패 원인 · 폐기된 오해 (읽기 전용) |
 
 ⚠️ 정본 문서 4종은 **우나어 repo에 있다**(main 확정본). 소란소란 repo로 옮기지 않았다.
