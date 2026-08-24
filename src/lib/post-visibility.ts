@@ -27,6 +27,8 @@ export type PostVisibilityInput = {
   status: 'PUBLISHED' | 'HIDDEN' | 'DELETED'
   isMicroSeed: boolean
   permanentNoindex: boolean
+  /** 승격·추천 write-path 차단 플래그 (C-4). discovery 판정에 반영한다. */
+  indexPromotionBlocked: boolean
   /** 미지정이면 !isMicroSeed 로 폴백한다. M0 에서는 컬럼을 만들지 않는다. */
   discoveryEligible?: boolean | null
 }
@@ -42,6 +44,7 @@ export const POST_VISIBILITY_SELECT = {
   status: true,
   isMicroSeed: true,
   permanentNoindex: true,
+  indexPromotionBlocked: true,
 } as const satisfies Prisma.PostSelect
 
 // ─────────────────────────────────────────────────────────
@@ -100,19 +103,26 @@ export function robotsMetaFor(p: PostVisibilityInput): { index: boolean; follow:
 
 /**
  * best · trending · related · search · topic hub · public API ·
- * notification · activity feed 에 들어가도 되는가.
+ * notification · activity feed · **홈 최신글** 에 들어가도 되는가.
+ *
+ * 🔴 홈 "지금 올라온 이야기" 는 community list 가 아니라 discovery 표면이다.
+ *    특정 게시판을 열어 보는 것과, 서비스가 대표로 골라 첫 화면에 올리는 것은 다르다.
  *
  * 🔴 Micro Seed 는 기본 false. 예외 허용은 정본 TODO-14 확정 사항이다.
+ * 🔴 indexPromotionBlocked 는 승격·추천 write-path 차단이므로 여기서도 막는다 (C-4).
+ *    이게 빠지면 "차단 플래그가 켜졌는데 추천에는 올라가는" 상태가 된다.
  */
 export function isDiscoveryEligible(p: PostVisibilityInput): boolean {
   if (p.status !== 'PUBLISHED') return false
+  if (p.indexPromotionBlocked) return false
   return p.discoveryEligible ?? !p.isMicroSeed
 }
 
-/** best/trending/related/search 등 추천 표면 조회용 where 조각. */
+/** 홈 최신글 · best · trending · related · search 등 추천 표면 조회용 where 조각. */
 export const DISCOVERY_ELIGIBLE_WHERE = {
   status: 'PUBLISHED',
   isMicroSeed: false,
+  indexPromotionBlocked: false,
 } as const satisfies Prisma.PostWhereInput
 
 // ─────────────────────────────────────────────────────────

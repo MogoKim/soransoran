@@ -37,10 +37,28 @@ const REQUIRED = [
   },
   {
     file: 'src/lib/queries/posts.ts',
-    needs: ['COMMUNITY_VISIBLE_WHERE'],
-    why: '커뮤니티 목록·상세는 Micro Seed 가 보여야 하는 표면이다 (§7-A)',
+    needs: ['COMMUNITY_VISIBLE_WHERE', 'DISCOVERY_ELIGIBLE_WHERE'],
+    why: '게시판 목록·상세는 노출(§7-A), 홈 최신글은 discovery 제외(§7-C) 다',
+  },
+  {
+    file: 'src/app/community/[boardSlug]/page.tsx',
+    needs: ['robots'],
+    why: 'board list 는 목록 카드에 Micro Seed 발췌가 실리므로 noindex 다',
   },
 ]
+
+/**
+ * 홈 "지금 올라온 이야기" 는 community list 가 아니라 discovery 표면이다.
+ * 게시판을 열어 보는 것과, 서비스가 대표로 골라 첫 화면에 올리는 것은 다르다.
+ * 홈이 커뮤니티 목록용 쿼리를 쓰면 Micro Seed 가 첫 화면으로 샌다.
+ */
+const HOME = {
+  file: 'src/app/page.tsx',
+  // 홈이 써야 하는 것 — 이름에 Discovery 가 들어간 쿼리 또는 where 조각
+  mustMatch: /Discovery|DISCOVERY_ELIGIBLE_WHERE/,
+  // 홈이 쓰면 안 되는 것 — 커뮤니티 노출용 쿼리
+  mustNotMatch: /getRecentPosts\b|getPostsByBoard\b|COMMUNITY_VISIBLE_WHERE/,
+}
 
 /** 게이트 밖에서 이 토큰을 직접 쓰면 판정이 갈라진다. */
 const FORBIDDEN_DIRECT = [
@@ -104,6 +122,51 @@ if (!existsSync(join(ROOT, GATE))) {
   }
   if (/COMMUNITY_VISIBLE_WHERE[\s\S]{0,200}isMicroSeed/.test(gate)) {
     errors.push('COMMUNITY_VISIBLE_WHERE 가 isMicroSeed 를 필터한다. 커뮤니티에서 숨기면 안 된다.')
+  }
+
+  // 축 3 은 indexPromotionBlocked 를 반드시 반영해야 한다 (C-4).
+  // 빠지면 "차단 플래그가 켜졌는데 추천에는 올라가는" 상태가 된다.
+  const axis3 = gate.slice(
+    gate.indexOf('export function isDiscoveryEligible'),
+    gate.indexOf('export const DISCOVERY_ELIGIBLE_WHERE'),
+  )
+  if (!axis3.includes('indexPromotionBlocked')) {
+    errors.push(
+      'isDiscoveryEligible 이 indexPromotionBlocked 를 보지 않는다. ' +
+        'write-path 차단 플래그가 추천 표면에서 무시된다 (C-4).',
+    )
+  }
+  const whereBlock = gate.slice(gate.indexOf('export const DISCOVERY_ELIGIBLE_WHERE'))
+  const whereBody = whereBlock.slice(0, whereBlock.indexOf('}') + 1)
+  if (!whereBody.includes('indexPromotionBlocked')) {
+    errors.push('DISCOVERY_ELIGIBLE_WHERE 가 indexPromotionBlocked: false 를 포함하지 않는다 (C-4).')
+  }
+  if (!/POST_VISIBILITY_SELECT[\s\S]{0,300}indexPromotionBlocked/.test(gate)) {
+    errors.push(
+      'POST_VISIBILITY_SELECT 가 indexPromotionBlocked 를 select 하지 않는다. ' +
+        '판정 입력이 비어 런타임에서 조용히 false 로 취급된다.',
+    )
+  }
+}
+
+// ── 1-b. 홈 latest 가 discovery 게이트를 쓰는가 ──────────────────
+{
+  const abs = join(ROOT, HOME.file)
+  if (existsSync(abs)) {
+    const code = stripComments(readFileSync(abs, 'utf-8'))
+    if (!HOME.mustMatch.test(code)) {
+      errors.push(
+        `${HOME.file} 가 discovery 게이트를 쓰지 않는다. ` +
+          '홈 최신글은 community list 가 아니라 discovery 표면이다 (§7-C).',
+      )
+    }
+    const leak = code.match(HOME.mustNotMatch)
+    if (leak) {
+      errors.push(
+        `${HOME.file} 가 커뮤니티 노출용 ${leak[0]} 를 쓴다. ` +
+          'Micro Seed 가 첫 화면으로 샌다.',
+      )
+    }
   }
 }
 

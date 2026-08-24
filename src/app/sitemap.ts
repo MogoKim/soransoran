@@ -43,12 +43,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const staticEntries: MetadataRoute.Sitemap = [
     { url: SITE.url, lastModified: now, changeFrequency: 'daily', priority: 1 },
-    ...COMMUNITY_BOARDS.map((board) => ({
-      url: `${SITE.url}${board.href}`,
-      lastModified: now,
-      changeFrequency: 'daily' as const,
-      priority: 0.8,
-    })),
+    // 🔴 커뮤니티 board list 는 Micro Seed 운영기 동안 sitemap 에서 제외한다.
+    //    목록 카드에 Micro Seed 제목·본문 일부가 실리므로, 목록 페이지를 색인시키면
+    //    글 단위 noindex 로도 막지 못하는 발췌 노출이 생긴다.
+    //    board list 페이지 자체도 noindex, follow 다(community/[boardSlug]/page.tsx).
+    //    개별 글은 여전히 아래 postEntries 로 색인 대상에 들어간다 — 유입 경로는 유지된다.
+    //    Micro Seed 분리 렌더가 가능해지면 재검토한다(정본 TODO-17).
     // 베스트는 모아보기 로직이 없어 계속 제외한다.
     {
       url: `${SITE.url}/magazine`,

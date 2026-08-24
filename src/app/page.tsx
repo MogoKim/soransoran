@@ -3,7 +3,7 @@ import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
 import Logo from '@/components/brand/Logo'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
-import { getRecentPosts } from '@/lib/queries/posts'
+import { getRecentDiscoveryPosts } from '@/lib/queries/posts'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic'
  * 🔴 접속자 수 / 실시간 배지 / 게시글 수를 넣지 않는다.
  */
 export default async function HomePage() {
-  const posts = await getRecentPosts(6)
+  const posts = await getRecentDiscoveryPosts(6)
 
   return (
     <PageShell>
