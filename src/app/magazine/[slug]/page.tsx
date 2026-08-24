@@ -5,10 +5,65 @@ import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import MagazineBody from '@/components/features/MagazineBody'
 import { getMagazineArticleBySlug, getRelatedMagazineArticles } from '@/lib/magazine'
-import { MAGAZINE_CLUSTER_LABELS } from '@/content/magazine/types'
+import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
+import { SITE } from '@/lib/brand'
 
 // 다른 route 와 같이 동적 렌더한다. 콘텐츠가 TS 데이터라 조회 비용이 없다.
 export const dynamic = 'force-dynamic'
+
+/**
+ * 구조화 데이터 — 검색엔진이 이 글을 Article 로, 위치를 breadcrumb 로 읽게 한다.
+ *
+ * ⚠️ 공개 관문을 우회하지 않는다.
+ *    이 함수는 getMagazineArticleBySlug() 가 돌려준 글만 받는다.
+ *    그 함수가 예약·차단·미래 글에 undefined 를 주므로, 미공개 글의 구조화 데이터가
+ *    새어 나갈 경로가 없다.
+ */
+function buildStructuredData(article: MagazineArticle) {
+  const url = `${SITE.url}/magazine/${article.slug}`
+
+  // hero 가 없는 글도 있다. 빈 문자열을 넣지 않고 키 자체를 생략한다.
+  const image = article.heroImage
+    ? {
+        image: {
+          '@type': 'ImageObject',
+          url: `${SITE.url}${article.heroImage.src}`,
+          width: article.heroImage.width,
+          height: article.heroImage.height,
+          caption: article.heroImage.alt,
+        },
+      }
+    : {}
+
+  const publisher = { '@type': 'Organization', name: SITE.name, url: SITE.url }
+
+  const articleLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    headline: article.title,
+    description: article.description,
+    datePublished: article.publishedAt,
+    // 수정 이력을 따로 두지 않는다. 두 개의 진실을 만들지 않기 위해서다.
+    dateModified: article.publishedAt,
+    mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+    url,
+    publisher,
+    author: { '@type': 'Organization', name: SITE.name },
+    ...image,
+  }
+
+  const breadcrumbLd = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: '홈', item: SITE.url },
+      { '@type': 'ListItem', position: 2, name: '매거진', item: `${SITE.url}/magazine` },
+      { '@type': 'ListItem', position: 3, name: article.title, item: url },
+    ],
+  }
+
+  return [articleLd, breadcrumbLd]
+}
 
 export function generateMetadata({ params }: { params: { slug: string } }): Metadata {
   const article = getMagazineArticleBySlug(params.slug)
@@ -51,9 +106,19 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
   if (!article) notFound()
 
   const related = getRelatedMagazineArticles(article)
+  const structuredData = buildStructuredData(article)
 
   return (
     <PageShell>
+      {/* 값은 전부 TS 데이터 파일(articles.ts)에서 온다. 사용자 입력이 들어오는 경로가 없다. */}
+      {structuredData.map((data) => (
+        <script
+          key={data['@type']}
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
+        />
+      ))}
+
       <main className="mx-auto max-w-3xl px-4 pb-16">
         <nav className="py-2">
           <Link href="/magazine" className="inline-flex min-h-[52px] items-center text-sm text-link">
