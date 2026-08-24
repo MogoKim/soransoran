@@ -259,6 +259,33 @@ Pretendard self-host      현재 CDN · public/fonts/pretendard/README.md 참조
 카톡 OG 카드 확인          아직 미검증
 ```
 
+### 📰 매거진 현재 상태 (2026-08-24 · 7-A 기준)
+
+```
+공개 매거진 글   5건   menopause-basic #1·#2·#3 · sleep-series #1 · 단발 1
+공개 회원 글     3건
+sitemap         12 URL
+주제 큐         27건 (day 4~30)
+
+운영 정본       docs/operations/2026-08-23-soransoran-magazine-seo-production-strategy.md
+시간 정책       생성 01:00 KST · 공개 10:30 KST
+예약 재고       목표 14일 · 최소 7일 · 최대 21일   ← 아직 미구현 (7-A)
+검수            LOW/MEDIUM 자동 · HIGH 사람 · 창업자는 예외 6가지만
+```
+
+**다음 배치 우선순위**
+
+| 배치 | 내용 | 상태 |
+|---|---|---|
+| **7-A** | publishAt / status 예약 공개 구조 | **다음** |
+| 7-B | JSON-LD Article / BreadcrumbList | 글 5건 = 소급 마지노선 |
+| 7-C | topic-calendar v2 (계절 반영) | 7-A 이후 |
+| 7-D | 01:00 local producer | 7-C 이후 |
+| 7-E | 운영 리포트 | 마지막 |
+
+⚠️ **6-E-7 에서 3건이 한 번에 공개됐다.** 품질 사고는 아니지만
+"제작은 묶음 · 공개는 하루 1건"이 시스템에 없어서 생긴 일이다. 7-A 가 그 해법이다.
+
 ### 🤖 매거진 제작 역할 분리 (한 줄 요약)
 
 ```
