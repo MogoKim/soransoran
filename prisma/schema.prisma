@@ -210,3 +210,23 @@ model UserBlock {
   @@unique([blockerId, blockedUserId])
   @@index([blockerId])
 }
+
+// ─────────── 매거진 CTA 클릭 ───────────
+// 매거진 글이 커뮤니티 행동으로 이어지는지 보는 진단선이다.
+// 🔴 클릭 수 자체는 North Star 가 아니다. North Star 는 회원이 남긴 글·댓글이다.
+//    North Star 가 안 움직일 때 "안 왔는지 / 왔는데 안 눌렀는지" 를 가르는 용도로만 쓴다.
+//
+// 🔴 개인정보를 저장하지 않는다 — userId·IP·User-Agent·Referer 전부 없다.
+//    같은 사람의 중복 클릭은 세지 못하는 채로 둔다.
+//    구분하려면 쿠키를 심어야 하는데, 그 순간 성격이 달라지므로 넣지 않는다.
+//
+// slug 는 Post 가 아니라 파일(src/content/magazine/articles.ts)의 글을 가리키므로 FK 가 아니다.
+model MagazineClick {
+  id        String   @id @default(cuid())
+  slug      String
+  boardSlug String
+  createdAt DateTime @default(now())
+
+  @@index([slug, createdAt])
+  @@index([createdAt])
+}

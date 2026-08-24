@@ -45,6 +45,27 @@ function toKstDate(ms) {
  * 그 경우에도 매거진 지표는 나와야 하므로 전체를 죽이지 않는다.
  * authorId 는 Set 크기 계산에만 쓰고 밖으로 내보내지 않는다.
  */
+/**
+ * CTA 클릭 진단선을 읽는다.
+ *
+ * 🔴 위 Promise.all 에 합치지 않는다.
+ *    MagazineClick 은 마이그레이션이 아직 적용되지 않았을 수 있고,
+ *    테이블이 없으면 쿼리가 던진다. 같은 Promise.all 에 있으면
+ *    그 하나 때문에 North Star·회원 글 지표까지 통째로 null 이 된다.
+ *    여기서 따로 삼켜서, 클릭만 '?' 로 빠지고 나머지는 살아남게 한다.
+ */
+async function readClickMetrics(prisma, since) {
+  try {
+    const [total, last14d] = await Promise.all([
+      prisma.magazineClick.count(),
+      prisma.magazineClick.count({ where: { createdAt: { gte: since } } }),
+    ])
+    return { total, last14d }
+  } catch {
+    return null
+  }
+}
+
 async function readCommunityMetrics(now) {
   let prisma
   try {
@@ -85,6 +106,9 @@ async function readCommunityMetrics(now) {
       }),
     ])
 
+    // 테이블이 없어도 위 지표가 죽지 않도록 별도로 읽는다
+    const clicks = await readClickMetrics(prisma, since)
+
     // authorId 는 여기서 개수로만 환원되고 사라진다
     const uniquePostAuthors = new Set(postAuthors.map((p) => p.authorId)).size
     const uniqueCommentAuthors = new Set(commentAuthors.map((c) => c.authorId)).size
@@ -107,6 +131,7 @@ async function readCommunityMetrics(now) {
       uniqueCommentAuthors,
       uniqueStoryAuthors,
       recentUniqueStoryAuthors14d,
+      clicks,
     }
   } catch {
     return null
@@ -132,6 +157,10 @@ export async function buildDashboard(now = Date.now()) {
         comments14d: db.recentUserComments14d,
       }
     : null
+
+  // 🔴 전환율(클릭 대비 North Star)을 계산하지 않는다.
+  //    지금 분모가 한 자리라 어떤 비율도 노이즈다. 원본 수만 둔다.
+  const ctaClicks = dbAvailable ? db.clicks : null
 
   const members = dbAvailable
     ? {
@@ -184,6 +213,7 @@ export async function buildDashboard(now = Date.now()) {
     kstDate: toKstDate(now),
     dbAvailable,
     northStar,
+    ctaClicks,
     members,
     magazine: {
       live: inventory.counts.live,
@@ -221,7 +251,10 @@ function printHuman(d) {
   console.log(
     `  2. 매거진 공개 ${d.magazine.live}건 · 예약 ${d.magazine.scheduled}건 · 차단 ${d.magazine.blocked}건`,
   )
-  console.log(`  3. North Star 전체 ${n(ns?.total)}회 · 최근 14일 ${n(ns?.last14d)}회`)
+  console.log(
+    `  3. North Star 전체 ${n(ns?.total)}회 · 최근 14일 ${n(ns?.last14d)}회 · ` +
+      `CTA 클릭 14일 ${n(d.ctaClicks?.last14d)}회`,
+  )
   console.log(
     `  4. 회원 원본 글 ${n(g.B.current)}/${g.B.target} · ` +
       `최근 14일 회원 글 ${n(g.C.current)}/${g.C.target} · ` +
