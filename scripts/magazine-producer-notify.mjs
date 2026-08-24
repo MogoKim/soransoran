@@ -20,9 +20,16 @@
  *   그 외 COMPLETED                          → 알림 없음
  *
  * 사용법
- *   node scripts/magazine-producer-notify.mjs --dry-run
+ *   node scripts/magazine-producer-notify.mjs --dry-run          판정만. 발송 0
+ *   node scripts/magazine-producer-notify.mjs --send             실제 Slack 발송
  *   node scripts/magazine-producer-notify.mjs --dry-run --date 2026-08-25
  *   node scripts/magazine-producer-notify.mjs --dry-run --json
+ *
+ * 🔴 --dry-run 도 --send 도 없으면 거부한다.
+ *    "아무 플래그 없이 실행했더니 Slack 이 나갔다"가 생기지 않게 한다.
+ *
+ * 🔴 알릴 것이 없으면 아무것도 보내지 않는다.
+ *    정상 COMPLETED 는 조용하다 — 매일 오는 알림은 곧 읽히지 않는다.
  *
  * 종료 코드: 알림 대상이 있으면 1, 없으면 0 (launchd 연결 시 판단용)
  */
@@ -118,7 +125,8 @@ function loadRun(date) {
 function help() {
   console.log(`producer 결과 판정 → Slack 알림 (dry-run)
 
-  node scripts/magazine-producer-notify.mjs --dry-run
+  node scripts/magazine-producer-notify.mjs --dry-run          판정만. 발송 0
+  node scripts/magazine-producer-notify.mjs --send             실제 Slack 발송
   node scripts/magazine-producer-notify.mjs --dry-run --date YYYY-MM-DD
   node scripts/magazine-producer-notify.mjs --dry-run --json
 
@@ -129,15 +137,18 @@ function help() {
   그 외 COMPLETED                     → 알림 없음
 
 🔴 producer 본체를 수정하지 않는다. run.json 을 읽기만 한다.
-🔴 --dry-run 없이는 실행하지 않는다. 실제 발송은 아직 열려 있지 않다.`)
+🔴 --dry-run 도 --send 도 없으면 거부한다.
+🔴 알릴 것이 없으면 --send 여도 아무것도 보내지 않는다.`)
 }
 
 async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--help') || argv.length === 0) return help()
 
-  if (!argv.includes('--dry-run')) {
-    console.error('  --dry-run 이 필요하다. 실제 발송은 아직 열려 있지 않다.')
+  const wantSend = argv.includes('--send')
+  const dryRun = argv.includes('--dry-run') || !wantSend
+  if (!argv.includes('--dry-run') && !wantSend) {
+    console.error('  --dry-run 또는 --send 가 필요하다.')
     process.exit(2)
   }
 
@@ -163,7 +174,7 @@ async function main() {
     if (!messages.length) {
       console.log('  ✅ 알림 없음 — 알릴 만한 것이 없다')
     } else {
-      console.log(`  [dry-run] 발송하지 않는다. 알림 ${messages.length}건:`)
+      console.log(`  ${dryRun ? '[dry-run] 발송하지 않는다. ' : ''}알림 ${messages.length}건:`)
       for (const m of messages) {
         console.log('  ───────────────────────────────')
         console.log(m.text.split('\n').map((l) => '  ' + l).join('\n'))
@@ -174,8 +185,14 @@ async function main() {
     console.log('')
   }
 
-  // 🔴 dry-run 이므로 send() 를 호출하지 않는다. 실제 연결은 다음 배치.
-  void send
+  // 🔴 알릴 것이 없으면 --send 여도 보내지 않는다. 정상 실행은 조용해야 한다.
+  if (!dryRun && messages.length) {
+    for (const m of messages) {
+      // send() 는 throw 하지 않는다. Slack 이 안 되더라도 여기서 멈추지 않는다.
+      const r = await send(m, { dryRun: false })
+      console.log(`  전송: ${r.sent ? 'ok' : '실패(' + r.reason + ')'}`)
+    }
+  }
 
   process.exit(alerts.length ? 1 : 0)
 }

@@ -3,8 +3,17 @@
 <!--
   매거진 producer — 매일 01:00 KST
 
-  하는 일: 오늘 무엇을 만들지 선정하고 _runs/{date}/ 에 작업 패키지를 놓는다.
+  하는 일: magazine-producer-run.mjs 를 띄운다.
+    ├ magazine-producer-plan.mjs    오늘 무엇을 만들지 선정하고 _runs/{date}/ 에 작업 패키지
+    └ magazine-producer-notify.mjs  알릴 것이 있을 때만 Slack (#소란소란-알림)
   하지 않는 일: 원고 작성 · hero 생성 · articles.ts 등록 · 공개 · commit · push.
+
+  🔴 이 plist 는 secret 을 모른다.
+     webhook 은 notify 가 ~/.config/soransoran/slack.env 에서 직접 읽는다.
+     plist 는 repo 에 커밋되므로 여기에 secret 을 넣으면 git 에 들어간다.
+
+  🔴 정상 실행은 조용하다. 실패·경고만 Slack 으로 간다.
+     매일 오는 알림은 곧 읽히지 않는다.
   (원고 제작은 Claude Code 세션이 이어받는다 — docs/operations/2026-08-25-magazine-continuation-runbook.md)
 
   설치:
@@ -35,7 +44,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/Users/yanadoo/.nvm/versions/node/v24.14.0/bin/node</string>
-    <string>/Users/yanadoo/Documents/soransoran/scripts/magazine-producer-plan.mjs</string>
+    <string>/Users/yanadoo/Documents/soransoran/scripts/magazine-producer-run.mjs</string>
   </array>
 
   <!--
