@@ -1,9 +1,21 @@
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
+import { COMMUNITY_VISIBLE_WHERE, POST_VISIBILITY_SELECT } from '@/lib/post-visibility'
 import type { BoardType } from '@prisma/client'
 
 const COMMUNITY_BOARD_TYPES = COMMUNITY_BOARDS.map((b) => b.type) as BoardType[]
+
+/**
+ * 🟢 Micro Seed 는 여기서 제외하지 않는다.
+ *
+ * 커뮤니티 목록·상세는 Micro Seed 가 "보여야 하는" 표면이다.
+ * 제외 대상은 sitemap · JSON-LD · OG · best · trending · related · search ·
+ * topic hub · public API 이지 커뮤니티 화면이 아니다.
+ * 목록·상세에서 빼면 레인의 목적(커뮤니티 생활감)이 사라진다.
+ *
+ * 정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §2-0 · §4 · §7-A
+ */
 
 /**
  * 🔴 차단 사용자 필터
@@ -44,7 +56,7 @@ export async function getPostsByBoard(boardType: BoardType, take = 30) {
   return prisma.post.findMany({
     where: {
       boardType,
-      status: 'PUBLISHED',
+      ...COMMUNITY_VISIBLE_WHERE,
       ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
     },
     select: POST_LIST_SELECT,
@@ -60,7 +72,7 @@ export async function getRecentPosts(take = 6) {
   return prisma.post.findMany({
     where: {
       boardType: { in: COMMUNITY_BOARD_TYPES },
-      status: 'PUBLISHED',
+      ...COMMUNITY_VISIBLE_WHERE,
       ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
     },
     select: { ...POST_LIST_SELECT, boardType: true },
@@ -75,7 +87,7 @@ export async function getPostDetail(postId: string) {
   const post = await prisma.post.findFirst({
     where: {
       id: postId,
-      status: 'PUBLISHED',
+      ...COMMUNITY_VISIBLE_WHERE,
       ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
     },
     select: {
@@ -86,6 +98,8 @@ export async function getPostDetail(postId: string) {
       createdAt: true,
       viewCount: true,
       author: { select: { id: true, name: true, image: true } },
+      // 상세 metadata 가 robotsMetaFor() 로 noindex 를 판정하는 데 쓴다.
+      ...POST_VISIBILITY_SELECT,
     },
   })
   if (!post) return null
