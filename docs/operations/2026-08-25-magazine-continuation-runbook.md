@@ -236,6 +236,86 @@ G14 자동 commit / push                0
 
 ---
 
+## 9-A. producer 자동 실행 (launchd)
+
+plist 원본: `launchd/com.soransoran.magazine-producer.plist`
+
+```
+매일 01:00 KST → magazine-producer-plan.mjs → _runs/{date}/ 작업 패키지
+```
+
+### 설치 (아직 하지 않았다)
+
+```bash
+mkdir -p ~/Library/Logs/soransoran
+ln -s /Users/yanadoo/Documents/soransoran/launchd/com.soransoran.magazine-producer.plist \
+      ~/Library/LaunchAgents/com.soransoran.magazine-producer.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.soransoran.magazine-producer.plist
+launchctl kickstart -k gui/$(id -u)/com.soransoran.magazine-producer   # 01:00 을 기다리지 않고 검증
+```
+
+### 🔴 nvm 으로 node 를 올리면 plist 가 죽는다
+
+시스템 경로(`/usr/local/bin` · `/opt/homebrew/bin` · `/usr/bin`)에 node 가 **없다.**
+plist 는 nvm 버전 경로를 직접 가리킨다 — 현재 기준 `v24.14.0`.
+
+```bash
+node -v                     # plist 의 버전과 다르면 갱신이 필요하다
+grep -n 'versions/node' launchd/com.soransoran.magazine-producer.plist
+```
+
+갱신할 곳은 **2군데**다.
+
+| 위치 | 값 |
+|---|---|
+| `ProgramArguments[0]` | `/Users/yanadoo/.nvm/versions/node/<버전>/bin/node` |
+| `EnvironmentVariables.PATH` | 같은 `bin` 경로가 맨 앞 |
+
+고친 뒤 재적재한다.
+
+```bash
+plutil -lint launchd/com.soransoran.magazine-producer.plist
+launchctl bootout gui/$(id -u)/com.soransoran.magazine-producer
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.soransoran.magazine-producer.plist
+```
+
+**증상은 조용하다** — producer 가 그냥 안 돈다. 재고가 줄어드는 것으로만 드러난다.
+`~/Library/Logs/soransoran/magazine-producer.log` 를 주기적으로 본다.
+
+### 왜 셸 래퍼를 쓰지 않는가
+
+launchd 의 셸은 `kTCCServiceSystemPolicyDocumentsFolder` 미승인이라 `~/Documents/` 에 접근하지 못한다
+(`Operation not permitted`, exit 126). node 는 TCC 승인돼 있어 직접 실행한다.
+producer 는 순수 node ESM 이라 `npx`·`tsx` 도 필요 없다.
+
+### 왜 KeepAlive 를 넣지 않는가
+
+실패 시 launchd 가 재시도하면 폭주한다. producer 자체도 재시도하지 않는다 —
+죽은 lock 은 `ABORTED` 로 기록만 하고 다음 날을 기다린다. 재고가 하루치 더 줄어 자연히 만회된다.
+
+### worktree 오독 방어
+
+같은 repo 의 worktree 가 둘이다.
+
+```
+/Users/yanadoo/Documents/soransoran      main
+/Users/yanadoo/Documents/soransoran-m0   feat/micro-seed-m0-gates
+```
+
+`WorkingDirectory` 를 한 줄 잘못 적으면 m0 의 `articles.ts` 로 재고를 계산한다.
+그래서 스크립트가 **자기 파일 위치**로 repo 를 잡는다(`import.meta.url`) — 어느 디렉터리에서 실행하든 자기 repo 를 본다.
+`WorkingDirectory` 는 로그·상대경로용으로만 남는다.
+
+확인법:
+
+```bash
+cd /tmp && /Users/yanadoo/.nvm/versions/node/v24.14.0/bin/node \
+  /Users/yanadoo/Documents/soransoran/scripts/magazine-producer-plan.mjs --dry-run
+# 재고·공개·예약 숫자가 repo 안에서 실행한 것과 같아야 한다
+```
+
+---
+
 ## 10. 한 줄 요약
 
 **producer 는 무엇을 만들지 정하고, batch-qa 는 내보내도 되는지 정한다.

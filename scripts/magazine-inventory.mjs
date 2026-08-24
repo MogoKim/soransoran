@@ -12,11 +12,15 @@
  * 종료 코드: 항상 0 (상태 보고이지 판정이 아니다)
  */
 import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { isPublic, resolvePublishAt } from './lib/magazine-gate.mjs'
 
-const ROOT = process.cwd()
+// repo 루트는 이 파일의 위치로 정한다 — 이유는 scripts/lib/magazine-load.mjs 주석 참조.
+// producer 가 calculateInventory() 를 쓰므로 여기도 cwd 에서 벗어나야 효과가 있다.
+const HERE = dirname(fileURLToPath(import.meta.url)) // scripts
+const ROOT = resolve(HERE, '..')
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
 
 /** 재고 정책 — 운영 전략서 §5 */

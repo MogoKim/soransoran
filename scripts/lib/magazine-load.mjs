@@ -8,10 +8,23 @@
  * 🔴 이 파일은 읽기만 한다. 어떤 파일도 쓰지 않는다.
  */
 import { readFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 
-export const ROOT = process.cwd()
+/**
+ * repo 루트는 **이 파일의 위치**로 정한다. process.cwd() 를 쓰지 않는다.
+ *
+ * 🔴 이유: 같은 repo 의 worktree 가 여러 개 있다.
+ *    /Users/yanadoo/Documents/soransoran      main
+ *    /Users/yanadoo/Documents/soransoran-m0   feat/micro-seed-m0-gates
+ *    cwd 기준이면 launchd 의 WorkingDirectory 를 한 줄 잘못 적는 순간
+ *    다른 worktree 의 articles.ts 로 재고를 계산하고 그쪽 큐에서 주제를 뽑는다.
+ *    (우나어 UNAO_WORKDIR 사고와 같은 유형)
+ *    파일 위치 기준이면 어느 디렉터리에서 실행하든 자기 repo 를 본다.
+ */
+const HERE = dirname(fileURLToPath(import.meta.url)) // scripts/lib
+export const ROOT = resolve(HERE, '..', '..')
 export const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
 export const QUEUE_TS = join(ROOT, 'drafts/magazine/topic-queue.ts')
 export const DRAFTS_DIR = join(ROOT, 'drafts/magazine')
