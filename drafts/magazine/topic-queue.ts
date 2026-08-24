@@ -46,59 +46,22 @@ export type TopicQueueItem = {
   notes: string
 }
 
-/** 이미 발행됨 — 큐에 넣지 않는다. menopause-basic 의 다음 order 는 3이다. */
-export const PUBLISHED_SLUGS = ['when-does-menopause-start', 'menopause-waking-up-at-3am'] as const
+/**
+ * 이미 발행됨 — 큐에 넣지 않는다.
+ * 발행하면 큐에서 그 항목을 지우고 여기에 slug 를 옮긴다.
+ * 남겨 두면 자동 QA 가 "queue slug 가 이미 발행됐다"로 FAIL 을 낸다(중복 발행 방지).
+ * day 번호는 재번호하지 않는다 — 큐 안에서만 쓰는 고유번호다.
+ * menopause-basic 의 다음 order 는 5, sleep-series 는 2 다.
+ */
+export const PUBLISHED_SLUGS = [
+  'when-does-menopause-start',
+  'menopause-waking-up-at-3am',
+  'hot-flash-how-long',
+  'less-sleep-with-age',
+  'pension-early-vs-normal',
+] as const
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [
-  {
-    day: 1,
-    title: '갱년기 안면홍조 언제까지 계속되나요',
-    slug: 'hot-flash-how-long',
-    cluster: 'menopause-symptom',
-    seriesId: 'menopause-basic',
-    seriesOrder: 3,
-    searchIntent: '질문',
-    targetReader: '40대 후반~50대 중반',
-    riskLevel: 'MEDIUM',
-    reviewMode: 'RISK_SENTENCES',
-    imageNeeded: 'REQUIRED',
-    ctaTarget: '/community/menopause',
-    internalLinks: ['menopause-waking-up-at-3am', 'when-does-menopause-start'],
-    whyNow: '시리즈 재개. "언제까지"가 이 시기 가장 큰 불안이다',
-    notes: '지속 기간을 숫자로 단정하지 않는다. 사람마다 다르다는 점을 먼저 둔다',
-  },
-  {
-    day: 2,
-    title: '나이 들면 잠이 줄어드는 게 정상인가요',
-    slug: 'less-sleep-with-age',
-    cluster: 'sleep',
-    seriesId: 'sleep-series',
-    seriesOrder: 1,
-    searchIntent: '질문',
-    targetReader: '50대 전반',
-    riskLevel: 'MEDIUM',
-    reviewMode: 'RISK_SENTENCES',
-    imageNeeded: 'REQUIRED',
-    ctaTarget: '/community/menopause',
-    internalLinks: ['menopause-waking-up-at-3am'],
-    whyNow: '새 시리즈 1편. 2편(새벽 3시)에서 자연스럽게 이어진다',
-    notes: '시리즈 첫 편이라 전문 검수 대상이다(전략 §5.2). 이후 4편의 톤을 정한다',
-  },
-  {
-    day: 3,
-    title: '국민연금 조기수령 60세와 65세 어느 쪽이 유리한가요',
-    slug: 'pension-early-vs-normal',
-    cluster: 'money-work',
-    searchIntent: '비교',
-    targetReader: '50대 후반~60대 중반',
-    riskLevel: 'MEDIUM',
-    reviewMode: 'RISK_SENTENCES',
-    imageNeeded: 'OPTIONAL',
-    ctaTarget: '/community/free',
-    internalLinks: [],
-    whyNow: '건강 편중을 초반에 완화한다. 돈·일 축 첫 진입',
-    notes: '제도·수치는 범위로만. 구체 수령액 계산은 HIGH 로 올라간다',
-  },
   {
     day: 4,
     title: '갱년기 이유 없이 눈물이 날 때',

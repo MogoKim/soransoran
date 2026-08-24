@@ -275,8 +275,8 @@ Claude Code  파일화 · 자동 QA · 검증 · 검수 패킷 · 승인 후 발
 ```
 Search Console / Naver Search Advisor 등록
   게이트: 4개 조건 AND (SEO 정책 §5)
-    A sitemap 글 상세 URL 20건 이상        실측 5건  (회원 3 + 매거진 2)
-    B 회원 원본 글 10건 이상                실측 3건
+    A sitemap 글 상세 URL 20건 이상        실측 8건  (회원 3 + 매거진 5)
+    B 회원 원본 글 10건 이상                실측 3건  ← 매거진을 늘려도 오르지 않는다
     C 최근 14일 내 회원 글 3건 이상         미확인
     D robots/canonical/sitemap/vercel.app 감사 PASS
   순서:   네이버 먼저 → 구글 → 2주 색인 관찰
