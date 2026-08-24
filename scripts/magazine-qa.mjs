@@ -23,6 +23,7 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute, basename, dirname } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { isPublic, statusLabel, assertGateInSync } from './lib/magazine-gate.mjs'
 
 const ROOT = process.cwd()
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
@@ -90,27 +91,9 @@ const HERO_WIDTH = 1200
 const HERO_HEIGHT = 675
 
 /**
- * 공개 판정 — src/lib/magazine.ts 의 isPublicMagazineArticle 과 같은 규칙이다.
- * 런타임 코드를 import 하지 않는 이유: 이 스크립트는 TS 를 실행하지 않는다.
- * 규칙이 갈라지지 않게 KST 시각과 조건을 여기 한 곳에만 복제해 둔다.
+ * 공개 판정은 scripts/lib/magazine-gate.mjs 하나만 쓴다.
+ * 그 모듈이 src/lib/magazine.ts 와 어긋나지 않는지도 함께 검사한다 (drift guard).
  */
-const KST_PUBLISH_TIME = 'T10:30:00+09:00'
-
-function resolvePublishAt(article) {
-  return new Date(article.publishAt ?? `${article.publishedAt}${KST_PUBLISH_TIME}`).getTime()
-}
-
-function isPublic(article, now = Date.now()) {
-  if (article.status === 'DRAFT' || article.status === 'BLOCKED') return false
-  return resolvePublishAt(article) <= now
-}
-
-/** 리포트에 붙일 상태 표기 */
-function statusLabel(article) {
-  if (article.status === 'BLOCKED') return 'BLOCKED'
-  if (article.status === 'DRAFT') return 'DRAFT'
-  return isPublic(article) ? 'PUBLIC' : `SCHEDULED ${article.publishAt ?? article.publishedAt}`
-}
 
 // ── TS 데이터 파일에서 리터럴 꺼내기 ────────────────────────
 
@@ -524,6 +507,13 @@ export function runQa(options = {}) {
         report.warn(d.slug, 'draft 이지만 이미 발행됐다 — articles.ts 가 정본이다')
       }
     }
+  }
+
+  // 공개 판정 드리프트 — 어떤 모드에서든 항상 검사한다.
+  // 이게 어긋나면 아래 모든 판정의 전제가 무너진다.
+  const gate = assertGateInSync()
+  for (const why of gate.problems) {
+    report.fail('(공개 판정)', `런타임(src/lib/magazine.ts)과 어긋난다 — ${why}`)
   }
 
   const fail = report.rows.filter((r) => r.level === 'FAIL').length

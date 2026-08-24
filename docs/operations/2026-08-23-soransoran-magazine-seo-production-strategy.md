@@ -127,6 +127,24 @@
 **최대 21일을 두는 이유**: 재고가 너무 많으면 계절·공휴일 주제가 시기를 놓친다.
 9월 초에 만든 추석 글이 10월에 나가면 의미가 없다.
 
+### 재고는 스크립트가 센다 (7-A-4)
+
+```bash
+node scripts/magazine-inventory.mjs          # 사람이 읽는 출력
+node scripts/magazine-inventory.mjs --json   # producer 가 읽는 출력
+```
+
+**01:00 local producer 는 이 결과를 보고 생산 수를 정한다.** 스스로 판단하지 않는다.
+
+```
+inventoryDays  가장 늦은 예약까지 남은 일수 (KST 기준)
+produceCount   위 표대로 계산된 오늘 생산량
+nextPublishAt  다음 공개 예정 시각
+warnings       21일 초과 · 3일 이하일 때
+```
+
+읽기 전용이다 — 파일을 쓰지 않고 네트워크도 쓰지 않는다.
+
 ### PC 가 꺼진 날
 
 ```
@@ -185,7 +203,34 @@ hero 가 REQUIRED 인데 없음
 riskLevel HIGH 인데 창업자 승인 없음
 ```
 
-### 6.4 적용 위치 — 다섯 곳 전부
+### 6.4 공개 판정 드리프트 감지 (7-A-4)
+
+공개 판정 규칙이 **두 곳에 산다.**
+
+```
+src/lib/magazine.ts              런타임 (Next.js 가 실행)
+scripts/lib/magazine-gate.mjs    스크립트 (QA · 재고 계산기가 실행)
+```
+
+스크립트가 TS 를 실행하지 못해 import 할 수 없어서다.
+두 구현이 조용히 갈라지면 **QA 가 "공개"라고 본 글이 런타임에서는 숨겨지거나 그 반대**가 된다.
+아무 에러도 나지 않고 아무도 모른다. 자동화가 하루 여러 번 이 판정을 쓰므로 치명적이다.
+
+**`assertGateInSync()` 가 `magazine.ts` 를 텍스트로 읽어 대조한다.**
+주석이 아니라 실제 코드 문자열·상수·조건을 본다.
+
+```
+KST 기본 공개 시각이 'T10:30:00+09:00' 인가
+DRAFT · BLOCKED 검사가 있고 false 를 돌려주는가
+publishAt 이 없을 때 publishedAt + KST 시각을 쓰는가
+공개 조건이 resolvePublishAt(article) <= now 인가
+관문이 isPublicMagazineArticle 로 filter 하는가
+```
+
+어긋나면 **QA FAIL** 이다. `--published` · `--scheduled` · 전체 실행 어디서든 검사한다.
+⚠️ **판정 규칙을 고칠 때는 양쪽을 같이 고친다.** 한쪽만 고치면 QA 가 막는다.
+
+### 6.5 적용 위치 — 다섯 곳 전부
 
 ```
 /magazine 목록
