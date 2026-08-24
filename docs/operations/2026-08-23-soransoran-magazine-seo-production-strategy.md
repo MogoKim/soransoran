@@ -141,32 +141,48 @@
 
 ## 6. publishAt / status 공개 엔진
 
-### 6.1 필드
+### 6.1 런타임 필드는 둘뿐이다 (7-A-2 확정)
 
-| 필드 | 값 |
-|---|---|
-| `status` | `DRAFT` / `SCHEDULED` / `PUBLISHED` / `BLOCKED` |
-| `publishAt` | 공개 예정 시각 (KST 10:30 기본) |
-| `qaStatus` | `PASSED` / `FAILED` |
-| `riskLevel` | `LOW` / `MEDIUM` / `HIGH` |
+| 필드 | 값 | 없으면 |
+|---|---|---|
+| `status` | `DRAFT` / `SCHEDULED` / `PUBLISHED` / `BLOCKED` | `PUBLISHED` 로 본다 |
+| `publishAt` | ISO 8601 with offset — `2026-08-25T10:30:00+09:00` | `publishedAt` 을 KST 10:30 으로 해석 |
+
+**둘 다 선택 필드다.** 그래서 이미 공개된 글은 한 글자도 고치지 않는다.
+
+**`qaStatus` 와 `riskLevel` 은 런타임 필드로 두지 않는다.**
+
+```
+QA        발행 전 절차다. scripts/magazine-qa.mjs 가 실행 시점에 판정한다
+riskLevel 제작·검수 단계의 값이다. topic queue 에 있고 articles.ts 에는 없다
+HIGH 차단 검수 단계에서 하고, 런타임에서 막아야 하면 status: 'BLOCKED' 로 표현한다
+```
+
+⚠️ **런타임에 `qaStatus` 를 두면 두 개의 진실이 생긴다.**
+스크립트가 판정한 결과와 파일에 적힌 값이 어긋나는 순간 어느 쪽이 맞는지 알 수 없다.
+QA FAIL 인 글은 애초에 `articles.ts` 에 넣지 않는 것이 게이트다.
 
 ### 6.2 공개 조건 — 전부 만족해야 보인다
 
 ```
-qaStatus   === PASSED
-riskLevel  === LOW 또는 MEDIUM
-publishAt  <= now
-status     === SCHEDULED 또는 PUBLISHED
+status !== 'DRAFT' 이고 status !== 'BLOCKED'
+publishAt <= now        (publishAt 이 없으면 publishedAt 의 KST 10:30)
 ```
 
 ### 6.3 숨김 조건 — 하나라도 걸리면 숨긴다
 
 ```
 publishAt 이 미래
-status === BLOCKED
-riskLevel === HIGH        (사람이 열기 전까지)
-qaStatus === FAILED
-imageNeeded === REQUIRED 인데 hero 없음
+status === 'BLOCKED'
+status === 'DRAFT'
+```
+
+발행 전 게이트(아래)를 통과하지 못한 글은 **애초에 `articles.ts` 에 들어오지 않는다.**
+
+```
+자동 QA FAIL
+hero 가 REQUIRED 인데 없음
+riskLevel HIGH 인데 창업자 승인 없음
 ```
 
 ### 6.4 적용 위치 — 다섯 곳 전부
@@ -181,6 +197,16 @@ sitemap                     ← 공개 글만
 
 ⚠️ **한 곳이라도 빠지면 사고다.** 목록에서 숨겼는데 sitemap 에 남으면
 검색엔진이 404 를 크롤하고, 관련글에 남으면 사용자가 404 를 밟는다.
+
+**구현(7-A-2)은 이것을 관문 하나로 강제한다.**
+`src/lib/magazine.ts` 의 `getAllMagazineArticles()` 가 유일한 입구이고,
+`getMagazineArticleBySlug` · `getSeriesArticles` 도 `MAGAZINE_ARTICLES` 를 직접 읽지 않고
+이 관문을 거친다. 상세 페이지는 관문이 `undefined` 를 주면 기존 `notFound()` 가 404 를 낸다.
+
+⚠️ **`/magazine` 은 `force-dynamic` 이어야 한다.**
+지금은 `HeaderAuth` 의 `auth()` 부작용 때문에 우연히 동적이지만,
+인증 구조가 바뀌면 정적이 되어 **예약 공개가 아무 에러 없이 멈춘다.**
+그 우연에 기대지 않도록 지시자를 명시해 뒀다.
 
 ---
 

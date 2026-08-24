@@ -11,7 +11,8 @@
  *
  * 사용법
  *   node scripts/magazine-qa.mjs                     발행 글 + 전체 draft
- *   node scripts/magazine-qa.mjs --published         발행 글만
+ *   node scripts/magazine-qa.mjs --published         지금 공개된 글만
+ *   node scripts/magazine-qa.mjs --scheduled         예약·차단된 글만 (아직 안 나간 글)
  *   node scripts/magazine-qa.mjs --draft <path>      특정 draft 만
  *   node scripts/magazine-qa.mjs --json              결과를 JSON 으로 (다른 도구가 읽는 용도)
  *
@@ -87,6 +88,29 @@ const BODY_MAX = 2500
 
 const HERO_WIDTH = 1200
 const HERO_HEIGHT = 675
+
+/**
+ * 공개 판정 — src/lib/magazine.ts 의 isPublicMagazineArticle 과 같은 규칙이다.
+ * 런타임 코드를 import 하지 않는 이유: 이 스크립트는 TS 를 실행하지 않는다.
+ * 규칙이 갈라지지 않게 KST 시각과 조건을 여기 한 곳에만 복제해 둔다.
+ */
+const KST_PUBLISH_TIME = 'T10:30:00+09:00'
+
+function resolvePublishAt(article) {
+  return new Date(article.publishAt ?? `${article.publishedAt}${KST_PUBLISH_TIME}`).getTime()
+}
+
+function isPublic(article, now = Date.now()) {
+  if (article.status === 'DRAFT' || article.status === 'BLOCKED') return false
+  return resolvePublishAt(article) <= now
+}
+
+/** 리포트에 붙일 상태 표기 */
+function statusLabel(article) {
+  if (article.status === 'BLOCKED') return 'BLOCKED'
+  if (article.status === 'DRAFT') return 'DRAFT'
+  return isPublic(article) ? 'PUBLIC' : `SCHEDULED ${article.publishAt ?? article.publishedAt}`
+}
 
 // ── TS 데이터 파일에서 리터럴 꺼내기 ────────────────────────
 
@@ -238,7 +262,9 @@ function collectText(body) {
 // ── 글 단위 검사 ───────────────────────────────────────────
 
 function checkArticle(article, context, report) {
-  const id = article.slug
+  // 아직 안 나간 글은 리포트에서 구분한다 — 공개분 FAIL 과 섞이면 판단이 흐려진다
+  const label = statusLabel(article)
+  const id = label === 'PUBLIC' ? article.slug : `${article.slug} · ${label}`
   const texts = collectText(article.body)
   const fullText = texts.join('\n')
   const searchable = `${article.title}\n${article.description}\n${fullText}`
@@ -372,7 +398,8 @@ function checkArticle(article, context, report) {
 
   // 10·11 · 발행분과의 제목/description 중복
   for (const other of context.published) {
-    if (other.slug === id) continue
+    // id 에는 상태 표기가 붙으므로 slug 로 비교한다 (자기 자신을 중복으로 잡지 않게)
+    if (other.slug === article.slug) continue
     if (other.title === article.title) report.fail(id, `제목이 발행 글 "${other.slug}" 와 정확히 같다`)
     if (other.description === article.description) {
       report.fail(id, `description 이 발행 글 "${other.slug}" 와 정확히 같다`)
@@ -430,7 +457,8 @@ function checkCollisions(published, drafts, queue, report) {
 function printHuman(result) {
   console.log('')
   console.log(
-    `매거진 QA — 발행 ${result.counts.published}건 · draft ${result.counts.drafts}건 · queue ${result.counts.queue}건`,
+    `매거진 QA — 공개 ${result.counts.live}건 · 예약·차단 ${result.counts.pending}건 · ` +
+      `draft ${result.counts.drafts}건 · queue ${result.counts.queue}건`,
   )
   console.log('')
 
@@ -454,7 +482,7 @@ function printHuman(result) {
  * @param {{ draftPath?: string, publishedOnly?: boolean }} options
  */
 export function runQa(options = {}) {
-  const { draftPath, publishedOnly = false } = options
+  const { draftPath, publishedOnly = false, scheduledOnly = false } = options
 
   const published = loadPublished()
   const queue = loadQueue()
@@ -471,7 +499,18 @@ export function runQa(options = {}) {
   const publishedSlugs = new Set(published.map((a) => a.slug))
   const freshDrafts = drafts.filter((d) => !publishedSlugs.has(d.slug))
 
-  const targets = draftPath ? drafts : publishedOnly ? published : [...published, ...freshDrafts]
+  // articles.ts 안에서 공개분과 미공개분을 가른다.
+  // 미공개분도 검사한다 — 공개 전에 잡는 것이 목적이다.
+  const live = published.filter((a) => isPublic(a))
+  const pending = published.filter((a) => !isPublic(a))
+
+  const targets = draftPath
+    ? drafts
+    : publishedOnly
+      ? live
+      : scheduledOnly
+        ? pending
+        : [...published, ...freshDrafts]
 
   for (const article of targets) {
     checkArticle(article, { published }, report)
@@ -496,6 +535,8 @@ export function runQa(options = {}) {
     warn,
     counts: {
       published: published.length,
+      live: live.length,
+      pending: pending.length,
       drafts: drafts.length,
       queue: queue.length,
       checked: targets.length,
@@ -519,7 +560,11 @@ function main() {
     }
   }
 
-  const result = runQa({ draftPath, publishedOnly: args.includes('--published') })
+  const result = runQa({
+    draftPath,
+    publishedOnly: args.includes('--published'),
+    scheduledOnly: args.includes('--scheduled'),
+  })
 
   // --json 일 때는 JSON 외의 문자를 stdout 에 섞지 않는다.
   if (asJson) console.log(JSON.stringify(result, null, 2))
