@@ -33,3 +33,8 @@ yarn-error.log*
 
 # prisma
 /prisma/*.db
+
+# producer 실행 산출물 — 로컬 진단용이라 추적하지 않는다.
+# 무엇이 발행됐는지는 articles.ts 와 git 이력이 정본이다.
+/drafts/magazine/_runs/*
+!/drafts/magazine/_runs/.gitkeep
