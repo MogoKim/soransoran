@@ -150,6 +150,31 @@ model Post {
   /** 승격·추천 write-path 차단 (정책 9·10 · C-4). */
   indexPromotionBlocked Boolean @default(false)
 
+  // ── M1 Founder Gate 역조회 (정본 §5-2-3) ────────────────
+  // 🔴 이 필드들이 있어야 takedown 이 실행 가능하다 (§6-6).
+  //    "원문 삭제 요청이 왔다 → 어느 글인가" 를 답하는 유일한 경로다.
+  //    우나어 네이버 시정 요청 때 역조회 수단이 없어 실제로 고생했다.
+  //
+  // 🚫 dedupKey 를 여기 두지 않는다. MicroSeedCandidate 에만 둔다.
+  //    sheetCandidateId @unique 가 Post 쪽 중복을 이미 막으므로
+  //    두 곳에 두면 동기화 부채만 생긴다 (§5-2-3).
+  //
+  // 전부 nullable 이다. 회원 글(대다수)에는 채워지지 않는다.
+  /** Sheet 후보 행의 불변 id. 양방향 키의 한쪽이다 (§6-1). */
+  sheetCandidateId String?   @unique
+  /** 82cook · navercafe:{cafeId} */
+  sourceSite       String?
+  /** 원문 URL. takedown 역조회의 1차 키다. */
+  sourceUrl        String?
+  /** 원문 글 id. Post.id 와 혼동하지 않도록 Article 로 명명한다. */
+  sourceArticleId  String?
+  sourceCapturedAt DateTime?
+
+  // 🔴 예약 발행 시각이지 SEO 허용 신호가 아니다.
+  //    3축 판정(post-visibility.ts)에 이 값을 넣지 마라.
+  //    후보의 scheduledPublishAt(창업자 입력)과 이름을 분리한 이유는 §5-2-3.
+  publishAt DateTime?
+
   viewCount Int          @default(0)
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
@@ -162,6 +187,8 @@ model Post {
   @@index([authorId])
   // sitemap 등 색인 대상 조회 — SEARCH_INDEXABLE_WHERE 와 짝이다.
   @@index([status, isMicroSeed, permanentNoindex])
+  // takedown 역조회 — sheetCandidateId(@unique) 와 함께 §6-6 의 성립 조건이다.
+  @@index([sourceUrl])
 }
 
 // ─────────── 댓글 ───────────
@@ -258,4 +285,117 @@ model MagazineClick {
 
   @@index([slug, createdAt])
   @@index([createdAt])
+}
+
+// ─────────── Micro Seed Founder Gate (M1) ───────────
+//
+// 정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §5-2 · §6
+//
+// 🔴 DB 가 진실의 원장이고 Google Sheet 는 미러다 (정책 16 · §5-2-0).
+//    Sheet 단독으로 가지 않는 이유는 하나다 — Sheets API 에는 compare-and-set 이 없어
+//    두 워커가 같은 행을 읽고 둘 다 PROCESSING 을 쓸 수 있다.
+//    즉 Sheet 만으로는 중복 발행을 구조적으로 막을 수 없다.
+//    DB 의 `UPDATE ... WHERE status='PENDING'` 원자성이 1차 방어의 전부다 (§6-10).
+//
+// 이 migration 은 원장만 세운다. 후보 적재 · 발행 코드는 이후 PR 이다.
+
+/// §6-2 상태 기계. 8상태에서 늘리거나 줄이지 않는다.
+/// 🔴 ReportStatus.PENDING(신고)과 이름이 겹치므로 타입 접두를 붙여 구분한다.
+enum MicroSeedCandidateStatus {
+  HOLD       // 기본값. 후보 보관. 알 수 없는 값도 여기로 떨어진다 (C-6)
+  PENDING    // 창업자 발행 승인 — 사람만 설정 가능. 자동 경로를 만들지 않는다
+  PROCESSING // worker 획득. processingStartedAt · processingBy 를 같은 UPDATE 에서 쓴다
+  PUBLISHED  // DB 발행 성공을 확인한 뒤에만. 🔴 비가역
+  FAILED     // 발행 실패. 사유 기록 필수
+  SKIPPED    // 중복 · 이미 발행됨. DB 실측 결과
+  DECLINED   // 창업자 반려. 사유 기록 필수
+  TAKEDOWN   // 삭제/숨김 대상. Post.status = HIDDEN 과 쌍으로 (§6-6)
+}
+
+/// Micro Seed 후보 원장. Sheet 행 1개 = 이 테이블 1행.
+model MicroSeedCandidate {
+  /// = Sheet 의 candidateId. 🔴 불변이며 행 번호를 대신한다.
+  ///    Sheet 정렬·삽입·삭제로 행 번호가 흔들려도 이 값으로 매칭한다 (§6-4).
+  id     String                   @id @default(uuid())
+  status MicroSeedCandidateStatus @default(HOLD)
+
+  // ── 원문 출처 ────────────────────────────────────────
+  sourceSite      String
+  sourceUrl       String
+  sourceArticleId String
+  sourceBoardName String?
+  /// 🟢 정책 3 — 좋은 원문의 1순위 신호. 왜 이 후보가 뽑혔는지의 근거값이다.
+  sourceCommentCount Int      @default(0)
+  sourceCapturedAt   DateTime
+
+  // ── 중복 방어 2차 (§6-10) ────────────────────────────
+  /// sha256(`${sourceSite}::${sourceArticleId}`).
+  /// collector 가 같은 원문을 두 번 담아도 DB 가 거부한다.
+  dedupKey String @unique
+
+  // ── 창업자 입력 (Sheet 편집 칸) ──────────────────────
+  /// 원제 보존. founderTitle 과 비교해야 무엇을 고쳤는지 알 수 있다.
+  originalTitle String
+  /// 실제 발행 제목. 2~120자 (post-policy.ts 와 같은 값, R3)
+  founderTitle  String?
+  /// 🔴 BoardType 에 MAGAZINE·BEST 가 실재하므로 타입만으로는 못 막는다.
+  ///    FREE / MENOPAUSE 화이트리스트는 publisher 코드가 강제한다 (§6-9-D · R2).
+  targetBoardType    BoardType?
+  /// 창업자가 적는 희망 시각(입력). Post.publishAt(결과)과 이름을 분리한다 (§5-2-3).
+  /// 과거 시각이면 즉시 발행하지 않고 HOLD 다 (R5).
+  scheduledPublishAt DateTime?
+
+  // ── worker 상태 ──────────────────────────────────────
+  // 🔴 Sheet 에 두지 않는다. 사람이 만지면 timeout 판정과 재시도 차단이 깨진다 (§6-7-B).
+  /// timeout 판정의 유일한 근거 (§6-3)
+  processingStartedAt DateTime?
+  /// worker/run id — 중복 실행 감지
+  processingBy        String?
+  /// 무한 재시도 차단. 상한 3 초과 시 FAILED 고정 (§6-9-F)
+  attemptCount        Int       @default(0)
+  processedAt         DateTime?
+
+  // ── 결과 · 사유 ──────────────────────────────────────
+  /// 발행 결과. Post.sheetCandidateId 와 짝을 이루는 양방향 키다 (§6-1).
+  createdPostId String? @unique
+  // 🔴 사유 3개를 하나로 합치지 않는다. 성격이 다르고 추적 질문도 다르다.
+  /// 왜 HOLD 인가 (검증 실패 · timeout 복귀 · 예약 경과)
+  holdReason    String?
+  /// 창업자 반려 사유
+  declineReason String?
+  /// 발행 실패 사유
+  failureReason String?
+
+  founderApprovedBy String?
+  founderApprovedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  history MicroSeedCandidateHistory[]
+
+  /// PENDING 픽업 — 예약시각이 지난 승인 후보를 고른다
+  @@index([status, scheduledPublishAt])
+  /// timeout 스캔 — PROCESSING 중 오래된 것을 찾는다 (§6-3)
+  @@index([status, processingStartedAt])
+  /// takedown 역조회 — 원문 URL 로 후보를 찾는다 (§6-6)
+  @@index([sourceUrl])
+}
+
+/// 상태 전이 감사. §6-4 "되돌리기" 방어의 근거다.
+/// 이게 없으면 창업자가 무엇을 언제 왜 바꿨는지 알 수 없다.
+model MicroSeedCandidateHistory {
+  id          String             @id @default(cuid())
+  candidateId String
+  candidate   MicroSeedCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  /// 최초 적재는 from 이 없다
+  fromStatus MicroSeedCandidateStatus?
+  toStatus   MicroSeedCandidateStatus
+  /// 'founder' | 'worker:{id}' | 'validator'
+  by         String
+  reason     String?
+  at         DateTime                  @default(now())
+
+  @@index([candidateId, at])
 }
