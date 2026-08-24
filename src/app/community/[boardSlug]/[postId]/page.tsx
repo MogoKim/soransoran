@@ -10,6 +10,7 @@ import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail } from '@/lib/queries/posts'
+import { isSearchIndexable, robotsMetaFor } from '@/lib/post-visibility'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,13 +25,26 @@ export async function generateMetadata({
   if (!board || !detail || detail.post.boardType !== board.type) return {}
 
   const { post } = detail
-  const description = post.content.replace(/\s+/g, ' ').slice(0, 120)
+  // 🔴 판정은 post-visibility 3축 함수가 유일한 지점이다 (C-2).
+  //    여기서 status/isMicroSeed 를 직접 비교하지 마라.
+  const indexable = isSearchIndexable(post)
+
+  // 🔴 Micro Seed 는 본문을 description·OG 로 흘리지 않는다.
+  //    원문 본문이 메타데이터로 구조화 노출되면 noindex 로도 막지 못한다.
+  const description = indexable
+    ? post.content.replace(/\s+/g, ' ').slice(0, 120)
+    : undefined
 
   return {
     title: post.title,
-    description,
-    alternates: { canonical: `${board.href}/${post.id}` },
-    openGraph: { title: post.title, description, type: 'article' },
+    ...(description ? { description } : {}),
+    // noindex 페이지의 canonical 값은 크롤러가 무시한다. 만들지 않는다.
+    ...(indexable ? { alternates: { canonical: `${board.href}/${post.id}` } } : {}),
+    ...(indexable
+      ? { openGraph: { title: post.title, description, type: 'article' as const } }
+      : {}),
+    // 🔴 접근은 허용하되 색인은 막는다. "접근 가능" 과 "색인 가능" 은 다른 축이다.
+    robots: robotsMetaFor(post),
   }
 }
 

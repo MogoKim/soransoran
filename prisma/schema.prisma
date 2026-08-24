@@ -38,6 +38,18 @@ enum AuthorSource {
   SYSTEM
 }
 
+// 🔴 AuthorSource 를 확장하지 않는다. 두 질문은 다른 축이다.
+//    AuthorSource  = "사람이 썼나"        (USER / SYSTEM)
+//    CommentOrigin = "어느 레인에서 왔나" (MEMBER / PERSONA / MICRO_SEED_VERBATIM)
+//    한 필드가 두 질문에 답하게 하면 분류가 무너진다.
+//    실회원 댓글은 source=USER + commentOrigin=MEMBER 로 그대로 유지된다.
+//    정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §8-6
+enum CommentOrigin {
+  MEMBER              // 실회원이 직접 쓴 댓글
+  PERSONA             // 페르소나가 생성한 댓글
+  MICRO_SEED_VERBATIM // 원문 댓글을 그대로 사용한 Micro Seed 댓글
+}
+
 enum ReportStatus {
   PENDING
   REVIEWED
@@ -126,6 +138,18 @@ model Post {
   // 정책 확정 시 SetNull(익명화) 또는 Cascade(삭제) 중 선택한다.
   author    User         @relation(fields: [authorId], references: [id])
 
+  // ── Micro Seed 게이트 (M0) ─────────────────────────────
+  // 정본 §3 C-1: 생성 시점에 확정되고 일반 운영 경로로는 변경되지 않는다.
+  //   승인된 one-off repair/migration 만 예외이며 감사 로그를 남긴다.
+  // 판정은 src/lib/post-visibility.ts 3축 함수가 유일한 지점이다 (C-2).
+  //   각 파일에서 이 값을 직접 비교하지 마라.
+  /** Micro Seed 레인 발행물인가. 커뮤니티에는 보이되 색인·추천에서는 빠진다. */
+  isMicroSeed           Boolean @default(false)
+  /** 영구 noindex. index 전환은 영구 금지다 (정책 8·10). */
+  permanentNoindex      Boolean @default(false)
+  /** 승격·추천 write-path 차단 (정책 9·10 · C-4). */
+  indexPromotionBlocked Boolean @default(false)
+
   viewCount Int          @default(0)
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
@@ -136,6 +160,8 @@ model Post {
 
   @@index([boardType, status, createdAt])
   @@index([authorId])
+  // sitemap 등 색인 대상 조회 — SEARCH_INDEXABLE_WHERE 와 짝이다.
+  @@index([status, isMicroSeed, permanentNoindex])
 }
 
 // ─────────── 댓글 ───────────
@@ -143,6 +169,9 @@ model Comment {
   id        String       @id @default(cuid())
   content   String       @db.Text
   source    AuthorSource @default(USER)
+  // 🔴 source 와 별개 축이다. source=USER 인 실회원 댓글은 그대로 MEMBER 다.
+  //    정본 §8-6. AuthorSource 확장으로 처리하지 않는다.
+  commentOrigin CommentOrigin @default(MEMBER)
 
   postId    String
   post      Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
