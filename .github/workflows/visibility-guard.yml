@@ -1,0 +1,62 @@
+# Micro Seed 노출 게이트 CI
+#
+# 정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §3 C-2 · §4 · §7
+#
+# 이 워크플로우가 존재하는 이유:
+#   M0 에서 3축 판정(src/lib/post-visibility.ts)을 단일 지점으로 세웠지만,
+#   가드(scripts/check-post-visibility.mjs)가 로컬 실행뿐이면 사람이 잊는 순간 무력해진다.
+#   여러 세션(매거진 트랙 · Micro Seed 트랙)이 병렬로 main 에 들어오는 구조라
+#   "각자 로컬에서 돌렸겠지" 를 전제할 수 없다.
+#
+# main push 에서도 도는 이유:
+#   PR 두 개가 각각 통과해도 합쳐지면 깨지는 semantic conflict 가 있다.
+#   예: A 가 홈 쿼리를 바꾸고 B 가 게이트 함수명을 바꾸면 각 PR 은 녹색이지만 main 은 빨갛다.
+#   merge 후 한 번 더 돌려야 그걸 잡는다.
+name: visibility-guard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 같은 PR 에 연속 push 하면 이전 run 을 취소한다 — 러너 시간 낭비를 막는다.
+concurrency:
+  group: visibility-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Micro Seed 3축 게이트
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # repo 에 engines·.nvmrc 가 없다. Next 14.2 지원 범위의 LTS 로 고정한다.
+          # 버전을 올릴 땐 Vercel 프로젝트 설정과 함께 움직여야 한다.
+          node-version: '20'
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      # 게이트 가드가 먼저다. 순수 파일 파싱이라 Prisma 없이 몇 초면 끝나고,
+      # 이게 이 워크플로우의 본래 목적이므로 실패를 가장 빨리 보여준다.
+      - name: Micro Seed 노출 게이트
+        run: npm run check:visibility
+
+      # typecheck 는 @prisma/client 타입을 필요로 한다.
+      # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
+      - name: Prisma Client 생성
+        run: npx prisma generate
+
+      # 가드는 정규식 기반이라 "심볼이 사라진 것" 은 잡아도
+      # "남은 호출부가 옛 이름을 쓰는 것" 은 못 잡는다.
+      # M0 의 getRecentPosts → getRecentDiscoveryPosts 개명이 정확히 그 사례다.
+      # 둘을 같이 돌려야 회귀 차단이 실제로 닫힌다.
+      - name: 타입 검사
+        run: npm run typecheck
