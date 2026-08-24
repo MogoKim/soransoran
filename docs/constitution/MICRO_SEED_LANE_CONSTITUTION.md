@@ -5,11 +5,33 @@
 > 이후 schema · sitemap · JSON-LD · Google Sheet · 댓글 · 페르소나 · Voice Vault 작업을 하는
 > 구현자는 이 문서를 기준으로 삼는다. 이 문서와 코드가 어긋나면 코드를 고친다.
 
-**문서 버전** v1.0 (소란소란 정본)
-**작성일** 2026-08-24
+**문서 버전** v1.1 (소란소란 정본 · M1-A 계약 반영)
+**작성일** 2026-08-24 · **개정** 2026-08-25 (M0 완료 · M1-A 계약 고정)
 **작성 주체** Codex [3] Voice Engine Master
 **적용 대상** 소란소란 Micro Seed Lane · 댓글 활성화 · Persona OS · Voice Vault
 **전신** 우나어 repo의 초안 v0.3 — 소란소란 코드 실측 기준으로 **재구성**했다. 초안은 참조용으로만 남는다.
+
+### v1.1 개정 요지
+
+M0(게이트)가 main에 반영되고 CI 가드가 붙었다. 그 위에서 **M1 Google Sheet Founder Gate의
+계약을 구현 전에 고정한다.** 이 개정은 §6을 계약 수준까지 구체화하고, M1-A 착수 시점에
+비어 있던 값(작성자 · cap · timeout · 길이 상한)을 전부 채운 것이다.
+
+| 신설·개정 | 내용 |
+|---|---|
+| §0 기준선 | M0·CI 반영 후 실측으로 갱신 |
+| **§5-2** | M1 필수 필드 **확정안**으로 교체 — `MicroSeedCandidate` 모델 + `Post` 역조회 필드 |
+| **§5-2A** 신설 | 🔴 **시스템 User 작성자 정책** — `Post.authorId`가 NOT NULL이라 없으면 발행 자체가 불가 |
+| **§6-7** 신설 | **Sheet 컬럼 17개 정본** + Sheet에 두지 않는 7필드 |
+| **§6-8** 신설 | **검증 규칙 R1~R10** |
+| **§6-9** 신설 | **cap · timeout · attempt 초기값 확정** |
+| §6-5 | cap 계층 표에 초기값 기입 |
+| **§12-3** 신설 | **M1 PR 분할 순서** (PR-A ~ PR-C2) |
+| §11 | Codex[1] 협의 지점 갱신 |
+| §13 | 해소된 TODO 표시 |
+
+> **이 개정은 계약 문서만 바꾼다.** schema · migration · publisher · Sheet API는
+> 이 PR에 포함되지 않는다. 구현은 §12-3의 PR 순서를 따른다.
 
 ---
 
@@ -24,7 +46,7 @@
 | 🟡 | 부분 충족 · 조건부 |
 | 🔴 | 미구현 · 위험 |
 
-### 소란소란 현재 코드 기준선 (2026-08-24 실측)
+### 소란소란 현재 코드 기준선 (2026-08-25 실측 · main `414edca`)
 
 이 문서의 모든 판단은 아래 실측 위에 서 있다.
 
@@ -34,23 +56,43 @@ BoardType      MENOPAUSE(갱년기톡, /community/menopause)
                MAGAZINE(/magazine) · BEST(/best)
 PostStatus     PUBLISHED · HIDDEN · DELETED          ← SEO_ONLY 없음
 AuthorSource   USER · SYSTEM                          ← Post·Comment 양쪽 컬럼
+CommentOrigin  MEMBER · PERSONA · MICRO_SEED_VERBATIM ← M0 에서 신설
 
 없는 것 (그리고 없는 편이 나은 것)
   Post.slug · trendingScore · promotionLevel · hotPromotedAt · publishAt
   topic hub · related posts · search · 공개 posts API · notification · activity feed
-  Google Sheet 연동 · GitHub Actions workflows · Vercel cron
+  Google Sheet 연동 · Vercel cron · GitHub Actions **cron**
 
-있는 것
+M0 로 생긴 것 (main 반영 완료)
+  Post 3필드       isMicroSeed · permanentNoindex · indexPromotionBlocked (전부 DEFAULT false)
+  Comment          commentOrigin (DEFAULT MEMBER)
+  post-visibility  3축 판정 단일 지점 — isCommunityVisible / isSearchIndexable / isDiscoveryEligible
+  sitemap.ts       SEARCH_INDEXABLE_WHERE 적용 · 커뮤니티 board list URL 제외
+  홈 page.tsx      getRecentDiscoveryPosts (discovery 표면)
+  board list       robots: { index:false, follow:true }
+  상세 page.tsx    robotsMetaFor() 로 자동 noindex
+  migrations       0001_init · 0002_magazine_click · 0003_micro_seed_gates
+  CI               .github/workflows/visibility-guard.yml
+                     pull_request + main push 양쪽 실행
+                     npm ci → check:visibility → prisma generate → typecheck
+
+기존과 같은 것 (M0 이 건드리지 않았다)
   robots.ts        SORAN_ALLOW_INDEXING 미설정 시 전 사이트 disallow
-  sitemap.ts       status:'PUBLISHED' + COMMUNITY_BOARDS. /best 의도적 제외
-  best/page.tsx    robots: { index:false, follow:true }
-  JSON-LD          매거진 상세에만 존재. 커뮤니티 상세는 0건
+  best/page.tsx    Prisma 조회 0건. EmptyState 만 렌더 · robots index:false
+  JSON-LD          매거진 상세에만 존재. 커뮤니티 상세는 여전히 0건
   queries/posts.ts UserBlock 필터를 실제로 적용 (우나어는 저장만 했다)
-  migrations       0001_init · 0002_magazine_click
+  Post 생성 경로   src/lib/actions/posts.ts 단 1곳 (회원 글쓰기)
 ```
 
-**이 기준선의 의미**: 제외해야 할 SEO/discovery 표면 15면 중 **현재 존재하는 것은 5면뿐**이다.
-나머지는 아직 만들어지지 않았다. **지금이 게이트를 가장 싸게 심을 수 있는 시점이다.**
+**이 기준선의 의미**: 제외해야 할 SEO/discovery 표면 15면 중 **현재 존재하는 것은 5면뿐**이고,
+그 5면은 M0 에서 **전부 3축 게이트를 통과하도록 바뀌었다.** 나머지 10면은 아직 만들어지지 않았다.
+
+**M1 이 붙을 자리도 좁다.** `prisma.post.create` 가 코드 전체에 1곳뿐이라 write-path 감시가 쉽다.
+우나어는 제외 조각이 49곳/9파일로 흩어진 뒤에야 문제를 알았다.
+
+> ⚠️ **CI 가드의 한계를 알고 시작한다.** `check:visibility` 는 **읽기 경로**만 본다.
+> publisher(쓰기 경로)가 3축 플래그를 빠뜨려도 현재 가드는 잡지 못한다.
+> 그래서 §12-3 에서 **PR-C1(가드 확장)이 PR-C2(publisher)보다 먼저**다.
 
 > ⚠️ **커뮤니티 목록·상세는 제외 대상이 아니다.** Micro Seed는 자유게시판·갱년기톡에
 > **보여야 한다.** 제외 대상은 검색·색인·추천 표면이다. 자세한 구분은 §4·§7.
@@ -118,6 +160,22 @@ Micro Seed의 단일 판정 지표는 **체인 3→4 전환율** — 커뮤니�
 | 13 | **매거진은 Voice Engine 범위 밖**이다 |
 | 14 | **댓글이 핵심이다.** 원문 댓글은 부속물이 아니라 반응 지도와 활성화 패턴의 핵심 자산이다 |
 | 15 | Micro Seed의 목적은 **SEO가 아니라 커뮤니티 생활감/활성화**다 |
+
+#### M1-A 에서 추가 확정 (2026-08-25)
+
+| # | 정책 | 근거 |
+|---|---|---|
+| 16 | 후보는 **DB 원장 + Google Sheet 미러** 구조다. **DB가 진실이고 Sheet는 승인 UI**다 | §5-2-0 |
+| 17 | Micro Seed 작성자는 M1 에서 **시스템 User 1개**다. 페르소나는 M4. **ID가 없으면 발행하지 않는다** | §5-2A |
+| 18 | 3축 플래그는 Sheet·후보 필드로 **두지 않는다.** publisher 코드에서 항상 `true` 로 강제한다 | §6-7-B · §6-9-C |
+| 19 | 원문 **5,000자 초과는 HOLD**. 자동 절단하지 않는다 | §6-9-A |
+| 20 | **`content-guard` 를 적용**하고 걸리면 HOLD | §6-9-B |
+| 21 | `scheduledPublishAt` 이 **과거면 즉시 발행하지 않고 HOLD** | §6-8 R5 |
+| 22 | 본문 `content` 는 **Sheet에 싣지 않는다** | §6-7-B |
+| 23 | M1 은 **자동화 없이 수동 실행**부터 시작한다 | §6-9-F |
+| 24 | **`PUBLISHED` 를 다른 상태로 되돌리는 수동 변경을 거부**한다 | §6-8 R9 |
+
+> 정책 16~24 는 **정책 1~15 를 바꾸지 않는다.** 구현 직전에 비어 있던 값을 채운 것이다.
 
 ### 2-0. 🔴 노출 개념을 오해하지 말 것
 
@@ -441,34 +499,134 @@ Pre-M0에서 필드를 확정하는 이유는, **판정 함수 스펙(§4)과 �
 > `discoveryEligible` (§4-1 optional 입력)은 M0에서는 만들지 않는다.
 > `!isMicroSeed` 폴백으로 충분하며, 예외 허용(TODO-14)이 확정된 뒤에 도입한다.
 
-### 5-2. M1 Google Sheet Founder Gate 필수
+### 5-2. M1 Google Sheet Founder Gate 필수 — **확정안** (2026-08-25)
 
-**Post**
+#### 5-2-0. 🔴 저장 구조 확정 — DB 원장 + Sheet 미러
+
+```
+DB (MicroSeedCandidate)   진실의 원장. 상태 전이·중복 방어·감사가 여기서 일어난다.
+Google Sheet              창업자 승인 UI. DB 의 미러이며 진실이 아니다.
+```
+
+**Sheet 단독 운영은 채택하지 않는다.** 이유는 하나다.
+
+> Google Sheets API 에는 **compare-and-set 이 없다.** 두 워커가 같은 행을 읽고
+> 둘 다 `PROCESSING` 을 쓸 수 있다. **즉 Sheet 만으로는 중복 발행을 구조적으로 막을 수 없다.**
+> DB 의 `UPDATE ... WHERE status='PENDING'` 원자성이 1차 방어의 전부다(§6-10).
+
+**동기화 방향**: DB → Sheet 단방향 미러 + 창업자 편집 칸만 Sheet → DB 반영(§6-7-B).
+
+#### 5-2-1. `MicroSeedCandidate` — 후보 원장
+
+| 필드 | 타입 | 이유 |
+|---|---|---|
+| `id` | `String @id @default(uuid())` | = Sheet `candidateId`. **불변.** 행 번호 의존 금지 |
+| `status` | `MicroSeedCandidateStatus @default(HOLD)` | §6-2 8상태 |
+| `sourceSite` | `String` | `82cook` / `navercafe:{cafeId}` |
+| `sourceUrl` | `String` | 원문 역조회 |
+| `sourceArticleId` | `String` | 원문 글 id |
+| `sourceBoardName` | `String?` | 원문 게시판명 |
+| `sourceCommentCount` | `Int @default(0)` | 🟢 **정책 3 근거값.** 왜 이 후보가 뽑혔는지 사후 추적 |
+| `sourceCapturedAt` | `DateTime` | 수집 시각 |
+| **`dedupKey`** | **`String @unique`** | 🔴 **중복 방어 2차.** `sha256(sourceSite::sourceArticleId)` |
+| `originalTitle` | `String` | 원제 보존 — **무엇을 고쳤는지** 추적 |
+| `founderTitle` | `String?` | 실제 발행 제목 |
+| `targetBoardType` | `BoardType?` | 🔴 코드에서 `FREE`/`MENOPAUSE` 로 좁힌다 |
+| `scheduledPublishAt` | `DateTime?` | 🔴 **`Post.publishAt` 과 이름을 분리한다** (§5-2-3) |
+| `processingStartedAt` | `DateTime?` | **timeout 판정의 유일한 근거** |
+| `processingBy` | `String?` | worker/run id — 중복 실행 감지 |
+| `attemptCount` | `Int @default(0)` | 무한 재시도 차단 |
+| `processedAt` | `DateTime?` | 완료 시각 |
+| `createdPostId` | `String? @unique` | 발행 결과 |
+| `holdReason` / `declineReason` / `failureReason` | `String?` | 🔴 **사유의 성격이 다르므로 3개를 합치지 않는다** |
+| `founderApprovedBy` / `founderApprovedAt` | `String?` / `DateTime?` | 승인 주체·시각 |
+
+**인덱스**: `[status, scheduledPublishAt]`(PENDING 픽업) · `[status, processingStartedAt]`(timeout 스캔) · `[sourceUrl]`(takedown 역조회)
+
+#### 5-2-2. `MicroSeedCandidateHistory` — 상태 전이 감사
 
 | 필드 | 이유 |
 |---|---|
-| `sheetCandidateId String? @unique` | Sheet 역방향 키. **없으면 takedown 절차가 실행 불가** |
-| `sourceSite` | `82cook` / `navercafe:{cafeId}` |
-| `sourceUrl String? @index` | 원문 역조회 |
-| `sourceArticleId` | 원문 글 id |
-| `sourceCapturedAt` | 수집 시각 |
-| `publishAt DateTime?` | 예약 발행 — **매거진과 공유 여부는 TODO-4** |
-| `founderApprovedBy` / `founderApprovedAt` | 승인 주체·시각 |
+| `candidateId` | FK, `onDelete: Cascade` |
+| `fromStatus` / `toStatus` | 전이 |
+| `by` | `founder` / `worker:{id}` / `validator` |
+| `reason` | 사유 |
+| `at` | 시각 |
 
-**Sheet 후보 레코드** (Sheet 컬럼 또는 별도 테이블)
+§6-4 "되돌리기" 방어의 근거다. **이게 없으면 창업자가 무엇을 언제 바꿨는지 알 수 없다.**
+
+#### 5-2-3. `Post` 역조회 필드
 
 | 필드 | 이유 |
 |---|---|
-| `candidateId` | 행 고유 id(불변). **행 번호 의존 금지** |
-| `status` | §6 8상태 |
-| `processingStartedAt` | PROCESSING 진입 시각 — **timeout 판정의 유일한 근거** |
-| `processingBy` | worker/run id — 중복 실행 감지 |
-| `attemptCount` | 무한 재시도 차단 |
-| `scheduledAtKst` | 예약 시각 |
-| `holdReason` / `declineReason` | 사후 추적 |
+| **`sheetCandidateId String? @unique`** | 🔴 Sheet 역방향 키. **없으면 takedown 절차가 실행 불가.** `@unique` 는 중복 방어 3차이자 PROCESSING 복구 시 DB 실측의 전제 |
+| **`sourceUrl String?`** + `@@index` | 🔴 원문 역조회. §6-6 성립 조건 |
+| `sourceSite` / `sourceArticleId` / `sourceCapturedAt` | 출처 추적 |
+| **`publishAt DateTime?`** | **Micro Seed 커뮤니티 노출 시각** |
+
+**🔴 `dedupKey` 는 Post 에 두지 않는다.** 후보 테이블의 `@unique` 로 충분하고,
+`Post.sheetCandidateId @unique` 가 Post 쪽 중복을 이미 막는다.
+두 곳에 두면 동기화 부채만 생긴다.
+
+**🔴 `publishAt` 과 `scheduledPublishAt` 을 같은 이름으로 쓰지 않는다** (TODO-4 결론).
+
+```
+Post.publishAt                    DB DateTime. 발행 결과물의 노출 시각
+MicroSeedCandidate.scheduledPublishAt   창업자가 Sheet 에 적는 희망 시각(입력)
+매거진 article.publishAt          파일 기반 · KST 문자열. 완전히 다른 축
+```
+
+이름을 공유하면 **타입(문자열/DateTime) · TZ · 정책 분기**가 한꺼번에 섞인다.
+매거진은 Codex[1] 도메인이므로 이름 충돌은 협의 비용도 만든다.
 
 > `processingStartedAt` · `processingBy` · `attemptCount` 는 **Post가 아니라 후보 레코드**에 둔다.
 > Post는 발행 결과물이고 후보는 처리 대상이다.
+
+---
+
+### 5-2A. 🔴 시스템 User 작성자 정책 (M1 확정)
+
+**`Post.authorId` 는 NOT NULL 이고 `User` FK 다.** 즉 Micro Seed 글도 작성자 User row 가
+반드시 있어야 한다. **이 결정 없이는 publisher 가 물리적으로 동작할 수 없다.**
+
+```prisma
+authorId String                                          // ← NOT NULL
+author   User @relation(fields: [authorId], references: [id])   // 기본 Restrict
+```
+
+#### 확정
+
+```
+M1 에서는 시스템 User 1개를 사용한다.
+페르소나(30명 deep)는 M4 에서 한다.
+publisher 는 시스템 User ID 가 없으면 발행하지 않는다.   ← 실패이지 폴백이 아니다
+```
+
+| 항목 | 확정 |
+|---|---|
+| 개수 | **1개** |
+| `Post.source` | `SYSTEM` |
+| ID 확보 | 환경변수 등 설정값으로 주입. **코드에 하드코딩하지 않는다** |
+| ID 부재 시 | 🔴 **발행 중단 + `FAILED` + 사유 기록.** 임의 User 로 대체하지 않는다 |
+| 회원 계정 재사용 | 🚫 **금지.** 실회원 이름으로 발행되면 신뢰 문제이자 되돌리기 어렵다 |
+
+#### 왜 폴백을 두지 않는가
+
+작성자 ID 가 없을 때 "아무 관리자 계정으로라도 발행"하면, **누가 썼는지 모르는 글이 커뮤니티에
+남는다.** 나중에 takedown 대상을 고를 때 기준이 사라진다. 발행되지 않는 것이 낫다.
+
+#### 알려진 한계 (M4 전까지)
+
+시스템 User 1개를 쓰면 **같은 작성자의 글이 반복 노출**된다.
+M2 첫 1건에서는 무해하나, **다건 발행을 열기 전에 M4 Persona OS 가 필요하다.**
+이 한계는 §12 마일스톤 순서의 근거이기도 하다.
+
+#### 대안을 채택하지 않은 이유
+
+| 대안 | 기각 사유 |
+|---|---|
+| M4 페르소나를 M1 으로 앞당김 | M1 범위 초과. 게이트보다 페르소나가 먼저 오면 순서가 뒤집힌다 |
+| `authorId` 를 nullable 로 변경 | 🔴 파괴적 스키마 변경. 기존 목록·상세 쿼리와 `author` join 전부에 영향 |
 
 ### 5-3. M3 Comment Activation Engine 필수
 
@@ -574,23 +732,47 @@ DB 발행 성공 → Sheet 갱신 실패 → timeout → HOLD 복귀
 
 ### 6-4. 창업자 실수 방어
 
-| 실수 | 방어 |
-|---|---|
-| 상태값 오타 | **알 수 없는 값 → HOLD** (C-6) |
-| 행 정렬 · 삽입 · 삭제 | **행 번호가 아닌 `candidateId` 로 상태 갱신** |
-| 게시판 오기입 | `board` 컬럼 화이트리스트(`free` / `menopause`)만 허용. 불일치 시 HOLD 유지 |
-| 제목 비움 | 필수 필드 검증 실패 시 HOLD 유지 + 사유 |
-| 되돌리기 | `PUBLISHED` 외 모든 전이는 가역. `statusHistory {from,to,at,by,reason}` 기록 |
+| 실수 | 방어 | 규칙 |
+|---|---|---|
+| 상태값 오타 | **알 수 없는 값 → HOLD** (C-6) | R1 |
+| 게시판 오기입 | `board` 화이트리스트(`free` / `menopause`)만 허용. 불일치 시 HOLD 유지 | R2 |
+| 제목 비움 · 과·소 길이 | 필수 필드 검증 실패 시 HOLD 유지 + 사유 | R3 |
+| 예약 시각 오기입 | 파싱 실패 → HOLD | R4 |
+| **예약 시각을 과거로 입력** | 🔴 **즉시 발행하지 않는다. HOLD** | R5 |
+| 행 정렬 · 삽입 · 삭제 | **행 번호가 아닌 `candidateId` 로 상태 갱신** | R6 |
+| 같은 원문 중복 승인 | `dedupKey` 충돌 → SKIPPED | R7 |
+| 필수 칸 빈 채로 PENDING | HOLD 유지 | R8 |
+| **발행된 것을 되돌림** | 🔴 **`PUBLISHED` → 다른 상태 수동 변경 거부** | R9 |
+| 대량 승인 | cap 초과 시 **전체 거부**(all-or-nothing) | R10 |
+| 되돌리기 일반 | `PUBLISHED` 외 모든 전이는 가역. `MicroSeedCandidateHistory` 기록 | — |
+
+전체 규칙은 §6-8 에 있다.
+
+#### 🔴 R5 — 과거 시각을 즉시 발행으로 해석하지 않는다
+
+`scheduledPublishAt` 이 이미 지난 시각이면 "지금 바로 내보내라"로 읽힐 수 있다.
+**그렇게 해석하지 않는다.** 창업자가 날짜를 잘못 적었을 때(연도 오타·월 착각)
+확인 없이 발행되기 때문이다. 의도한 즉시 발행이라면 **현재 시각 이후로 다시 적으면 된다** —
+한 번 더 손이 가는 쪽이 안전하다.
+
+#### 🔴 R9 — 발행 되돌리기는 이중 발행이다
+
+정본은 "`PUBLISHED` 외 모든 전이는 가역"이라고만 했다. **역방향은 별개다.**
+이미 발행된 후보를 `PENDING` 으로 되돌리면 worker 가 같은 원문을 다시 발행한다.
+`dedupKey` 와 `sheetCandidateId @unique` 가 막아주지만, **validator 단계에서 먼저 거부한다.**
+발행물을 내려야 한다면 `TAKEDOWN` 경로(§6-6)를 쓴다.
 
 ### 6-5. 대량 승인 cap
 
-| 층 | 성격 | 위치 | 변경 |
-|---|---|---|---|
-| **hard cap** | 절대 상한. 어떤 설정으로도 넘지 못함 | **코드 상수** | 코드 변경 + 창업자 승인 |
-| **soft cap** | 일상 운영값 (hard cap 이하) | 설정 | 창업자 조정 가능 |
-| **burst guard** | 1회 실행당 상한 | 코드 상수 | — |
-| **first-run guard** | 최초 발행은 1건만 | 코드 상수 | — |
-| **candidate ingest cap** | Sheet 폭증 방지 | 설정 | 넉넉하게 |
+| 층 | 성격 | 위치 | **M1 초기값** | 변경 |
+|---|---|---|---|---|
+| **hard cap** | 절대 상한. 어떤 설정으로도 넘지 못함 | **코드 상수** | **일 10건** | 코드 변경 + 창업자 승인 |
+| **soft cap** | 일상 운영값 (hard cap 이하) | 설정 | **일 3건** | 창업자 조정 가능 |
+| **burst guard** | 1회 실행당 상한 | 코드 상수 | **1건** | — |
+| **first-run guard** | 최초 발행은 1건만 | 코드 상수 | **1건** | — |
+| **candidate ingest cap** | Sheet 폭증 방지 | 설정 | 넉넉하게 | — |
+
+초기값의 근거와 해제 조건은 §6-9 에 있다.
 
 **승인 원자성**: 다중 승인은 all-or-nothing. 하나라도 문제가 있으면 큐를 건드리지 않는다.
 
@@ -640,7 +822,225 @@ Raw Vault (원문 보관)         이 흐름이 자동으로 건드리지 않는
 
 ---
 
-## 7. 표면별 노출 정책표
+### 6-7. Sheet 컬럼 정본 (M1-A 확정)
+
+Sheet 는 **창업자 승인 UI** 다. 진실의 원장은 DB(`MicroSeedCandidate`)다(§5-2-0).
+
+#### 6-7-A. 컬럼 17개
+
+| # | 컬럼 | 형식 | 편집 주체 | 필수 | 비고 |
+|---|---|---|---|---|---|
+| 1 | `candidateId` | UUID | 🔒 시스템 | ✔ | **불변.** 행 번호 대신 이 값으로만 매칭 |
+| 2 | `status` | enum 8값 | ✏️ **창업자** | ✔ | 알 수 없는 값 → HOLD (C-6 · R1) |
+| 3 | `board` | `free` \| `menopause` | ✏️ **창업자** | ✔ | 🔴 화이트리스트. 불일치 → HOLD (R2) |
+| 4 | `founderTitle` | text | ✏️ **창업자** | ✔ | 실제 발행 제목. **2~120자** (R3) |
+| 5 | `originalTitle` | text | 🔒 시스템 | ✔ | 원제 보존 |
+| 6 | `scheduledPublishAt` | `YYYY-MM-DD HH:mm` **KST** | ✏️ **창업자** | ✔ | 과거면 HOLD (R5) |
+| 7 | `sourceSite` | `82cook` \| `navercafe:{id}` | 🔒 시스템 | ✔ | |
+| 8 | `sourceUrl` | URL | 🔒 시스템 | ✔ | 역조회 키 |
+| 9 | `sourceArticleId` | text | 🔒 시스템 | ✔ | 원문 글 id |
+| 10 | `sourceBoardName` | text | 🔒 시스템 | | 원문 게시판명 |
+| 11 | `sourceCommentCount` | int | 🔒 시스템 | ✔ | 🟢 정책 3 근거값 |
+| 12 | `sourceCapturedAt` | ISO | 🔒 시스템 | ✔ | |
+| 13 | `dedupKey` | text | 🔒 시스템 | ✔ | 중복 방어 (§6-10) |
+| 14 | `holdReason` | text | 🔒 시스템 | | 왜 HOLD 인가 |
+| 15 | `declineReason` | text | ✏️ **창업자** | | 반려 사유 |
+| 16 | `postUrl` | URL | 🔒 시스템 | | 발행 결과 역기록 |
+| 17 | `updatedBySystemAt` | ISO | 🔒 시스템 | | 마지막 미러 시각 |
+
+**창업자가 손대는 칸은 5개뿐이다** — `status` · `board` · `founderTitle` ·
+`scheduledPublishAt` · `declineReason`. 나머지 12개는 읽기 전용이다.
+
+> 편집 칸을 좁히는 것 자체가 방어다. 만질 수 있는 칸이 적을수록 실수할 지점도 적다.
+
+#### 6-7-B. 🔴 Sheet 에 두지 않는 7필드
+
+| 필드 | 두지 않는 이유 |
+|---|---|
+| **`isMicroSeed`** | 🔴 **C-1 불변 계약.** Sheet 에 두면 창업자가 `FALSE` 로 바꿔 레인 자체를 무력화할 수 있다 |
+| **`permanentNoindex`** | 🔴 같은 이유. **정책 8(영구 noindex)이 사람 손 하나로 무너진다** |
+| **`indexPromotionBlocked`** | 🔴 같은 이유. 정책 9·10 |
+| `processingStartedAt` | timeout 판정의 유일한 근거. 사람이 만지면 복구 로직이 깨진다 |
+| `processingBy` | worker 소유권. 사람이 쓸 값이 아니다 |
+| `attemptCount` | 무한 재시도 차단값. 사람이 0으로 되돌리면 차단이 풀린다 |
+| **`content`(본문)** | 5,000자가 한 셀에 들어가면 편집 사고가 난다. 창업자는 제목·게시판·시각만 판단한다 |
+
+**3축 플래그는 publisher 코드에서 항상 `true` 로 강제한다**(§6-9-C).
+Sheet 에도 후보 테이블에도 두지 않는다.
+
+> **우나어 실측 근거**: 알 수 없는 상태값을 PENDING 으로 자가복구하는 구조여서
+> **오타 한 글자가 곧 발행**이었다(C-6). 사람이 만질 수 있는 칸을 늘리는 것은
+> 편의가 아니라 사고 표면을 늘리는 일이다.
+
+---
+
+### 6-8. 검증 규칙 R1~R10
+
+**dry-run validator(PR-A″)와 reader(PR-B)가 공유하는 규칙이다.**
+어느 하나라도 위반하면 **PENDING 으로 넘어가지 않는다.**
+
+| # | 조건 | 처리 |
+|---|---|---|
+| **R1** | `status` 가 8값 밖 (오타 포함) | 🔴 **HOLD 강등** + `holdReason='unknown status'` |
+| **R2** | `board` ∉ {`free`, `menopause`} | 🔴 **HOLD 유지.** `magazine`·`best` 차단 |
+| **R3** | `founderTitle` 길이 < 2 또는 > 120 | HOLD + 사유 |
+| **R4** | `scheduledPublishAt` 파싱 실패 | HOLD + 사유 |
+| **R5** | `scheduledPublishAt` 이 **과거** | 🔴 **HOLD.** 즉시 발행하지 않는다 |
+| **R6** | `candidateId` 중복 또는 공백 | 행 전체 무시 + 경고 로그 |
+| **R7** | `dedupKey` 가 기존 후보와 충돌 | `SKIPPED` 로 표시 |
+| **R8** | `PENDING` 인데 필수 칸이 비었음 | HOLD 유지 |
+| **R9** | `PUBLISHED` → 다른 상태로 수동 변경 | 🔴 **거부.** 비가역(§6-4) |
+| **R10** | 1회 승인 건수 > cap | 🔴 **전체 거부** (all-or-nothing) |
+
+#### 검증 시점과 순서
+
+```
+① Sheet 읽기
+② R6 (candidateId)      — 행 식별이 안 되면 나머지를 볼 수 없다
+③ R1 (status)           — 알 수 없는 값을 먼저 HOLD 로 눌러 둔다
+④ R9 (PUBLISHED 되돌리기) — 비가역 위반을 조기에 거부
+⑤ R2~R5, R8 (필드 검증)
+⑥ R7 (dedup)           — DB 조회가 필요하므로 뒤에 둔다
+⑦ R10 (cap)            — 통과한 건수를 세야 하므로 마지막
+```
+
+**R1 을 앞에 두는 이유**: 오타 상태값을 가진 행이 뒤 규칙을 통과해 PENDING 으로
+읽히는 일을 원천 차단한다.
+
+#### 길이 상한 R3 의 근거
+
+```
+src/lib/post-policy.ts 실측
+  MIN_POST_TITLE_LENGTH = 2      MAX_POST_TITLE_LENGTH = 120
+  MIN_POST_CONTENT_LENGTH = 10   MAX_POST_CONTENT_LENGTH = 5000
+```
+
+**회원 글쓰기와 같은 값을 쓴다.** Micro Seed 만 예외를 두면 두 기준이 갈라진다.
+
+---
+
+### 6-9. 발행 전 게이트 확정값 (M1)
+
+#### 6-9-A. 본문 길이 — 5,000자 초과는 HOLD
+
+```
+원문 content 길이 > MAX_POST_CONTENT_LENGTH(5000)  →  HOLD + 사유
+```
+
+**자동 절단하지 않는다.** 정책 7은 "본문 + 일부 원문 댓글을 **그대로** 사용"이다.
+잘라내면 그대로가 아니다. 편집이 필요하면 사람이 판단할 일이지 publisher 가 할 일이 아니다.
+
+> 상한을 올리는 선택지도 있으나 **회원 글쓰기 UI 에도 영향**을 준다.
+> Micro Seed 때문에 회원 정책을 바꾸지 않는다.
+
+#### 6-9-B. `content-guard` 적용 — 걸리면 HOLD
+
+```
+checkContent(title, { isTitle: true })  실패 → HOLD + 사유
+checkContent(content)                   실패 → HOLD + 사유
+```
+
+`src/lib/content-guard.ts` 는 욕설·성인/불법 광고·대출 스팸·연락처 유도를 막는다.
+**원문 커뮤니티 글에는 이런 표현이 자연스럽게 섞인다.**
+
+**그래도 적용한다.** 발행 주체가 우리이기 때문이다. 우리 도메인에 우리 이름으로 나가는 글은
+우리 기준을 통과해야 한다. 원문이 그랬다는 것은 발행 근거가 되지 않는다.
+
+> 오탐이 나면 그 후보를 버리면 된다. 후보는 다시 모을 수 있지만
+> 발행된 글은 되돌리기 어렵다.
+
+#### 6-9-C. 🔴 3축 플래그 강제 — publisher 코드 상수
+
+```
+Post 생성 시 항상:
+    isMicroSeed           = true
+    permanentNoindex      = true
+    indexPromotionBlocked = true
+```
+
+**Sheet 입력도, 후보 필드도, 설정값도 아니다. 코드 상수다.**
+셋 중 하나라도 조건부로 만들면 그 조건이 언젠가 잘못 평가된다(C-1).
+
+CI 가 이를 강제한다 — §12-3 PR-C1.
+
+#### 6-9-D. 게시판 화이트리스트
+
+```
+허용: BoardType.FREE · BoardType.MENOPAUSE
+금지: BoardType.MAGAZINE · BoardType.BEST
+```
+
+`BoardType` enum 에 `MAGAZINE`·`BEST` 가 실재하므로 **타입만으로는 못 막는다.**
+publisher 의 상수 화이트리스트가 방어선이고, CI 가 이를 검사한다.
+
+> 🔴 매거진 영역에 Micro Seed 가 발행되면 Codex[1] 도메인 침범이자 정책 13 위반이다.
+
+#### 6-9-E. 시스템 작성자
+
+```
+시스템 User ID 부재  →  발행하지 않는다 (FAILED + 사유)
+```
+
+§5-2A 참조. **폴백을 두지 않는다.**
+
+#### 6-9-F. 운영 상수 초기값
+
+| 상수 | 초기값 | 근거 · 해제 조건 |
+|---|---|---|
+| **first-run guard** | **1건** | 최초 발행은 §12-0 완료 조건을 실측해야 한다. 통과 후 해제 |
+| **burst guard** | **1회 실행 1건** | 수동 실행이므로 한 번에 하나면 충분 |
+| **soft daily cap** | **일 3건** | 창업자 조정 가능 |
+| **hard daily cap** | **일 10건** | 🔴 코드 상수. 변경은 코드 수정 + 창업자 승인 |
+| **PROCESSING timeout** | **30분** | 수동 실행 주기 대비 넉넉하게. 짧으면 정상 작업을 timeout 으로 오판한다 |
+| **attemptCount 상한** | **3** | 초과 시 `FAILED` 고정 — 무한 루프 차단 |
+
+**M1 은 자동화 없이 수동 실행부터 시작한다**(확정 정책). cron·workflow 는 붙이지 않는다.
+안정화 후 §12-2 자동화 개방 순서를 따른다.
+
+---
+
+### 6-10. 중복 발행 3중 방어
+
+**중복 발행은 사후 복구가 가장 어려운 사고다.** 글이 이미 회원에게 보였고,
+지우면 그 자체가 이상해진다. 그래서 세 겹으로 막는다.
+
+| 층 | 수단 | 막는 것 |
+|---|---|---|
+| **1차** | `UPDATE ... SET status='PROCESSING' WHERE id=$1 AND status='PENDING'` | **동시 워커 경합** |
+| **2차** | `MicroSeedCandidate.dedupKey @unique` | **같은 원문이 후보로 두 번 적재** |
+| **3차** | `Post.sheetCandidateId @unique` | **같은 후보로 Post 두 개 생성** |
+
+#### 1차 — 원자적 획득
+
+```sql
+UPDATE "MicroSeedCandidate"
+   SET status = 'PROCESSING',
+       "processingStartedAt" = now(),
+       "processingBy" = $workerId
+ WHERE id = $id
+   AND status = 'PENDING'      -- ← compare-and-set. 이 조건이 방어의 전부다
+RETURNING id;
+-- 0행 반환 = 다른 워커가 이미 가져감 → 조용히 건너뛴다 (에러 아님)
+```
+
+`processingStartedAt` 과 `processingBy` 를 **같은 UPDATE 에서** 기록한다.
+나눠 쓰면 그 사이에 죽었을 때 소유자를 알 수 없는 PROCESSING 이 남는다.
+
+#### 2차 — dedupKey
+
+```
+dedupKey = sha256(`${sourceSite}::${sourceArticleId}`)
+```
+
+collector 가 같은 원문을 두 번 담아도 DB 가 거부한다.
+
+#### 3차 — sheetCandidateId
+
+논리가 전부 뚫려도 **DB 제약이 두 번째 Post 생성을 거부**한다.
+takedown 역조회 키와 같은 필드라 비용도 추가되지 않는다.
+
+> **왜 3중인가**: 1차는 코드 실수로 조건을 빠뜨리면 무력하고, 2차는 collector 버그를,
+> 3차는 publisher 버그를 각각 잡는다. **서로 다른 층의 실수를 잡으므로 중복이 아니다.**
 
 > **차단표가 아니라 노출 정책표다.** 표면마다 Micro Seed를 **보여야 하는 곳**과
 > **빼야 하는 곳**이 나뉜다. §4의 3축이 각 행의 판정 기준이다.
@@ -991,6 +1391,30 @@ commentCount · topCommentsCrawledAt · riskFlags
 **핵심**: 범위 분리는 **개념**이고 파일은 **하나**다.
 매거진을 Voice Engine에 넣자는 뜻이 아니라, 공용 표면에 Micro Seed 제외 조건이 빠지면 누수가 생긴다는 뜻이다.
 
+### 11-0. M1 협의 지점 (2026-08-25 실측)
+
+**M0 은 Codex[1] 과 파일 교집합이 0건이었다. M1 은 다르다.**
+
+| # | 파일 | 성격 | 위험 | 처리 |
+|---|---|---|---|---|
+| **1** | 🔴 `prisma/schema.prisma` | 공용 | 동시 수정 시 머지 충돌 | **PR-A′ 를 짧게 열고 빨리 merge.** 그 창 동안 Codex[1] 에 schema 수정 보류 요청 |
+| **2** | 🔴 `prisma/migrations/**` | 번호 선점 | Codex[1] 이 `0002_magazine_click` 을 만든 전례. 다음 매거진 migration 이 `0004` 를 집을 수 있다 | **`0004_micro_seed_candidate` 선점 공지.** 매거진은 `0005` 부터 |
+| **3** | 🔴 `package.json` | 공용 | `googleapis` 의존성 + scripts. M0 때도 같은 파일이었다(줄이 달라 무사) | scripts 는 **`micro-seed:` 접두**로 통일해 충돌면 최소화 |
+| **4** | 🟡 `launchd/` | Codex[1] 점유 | `com.soransoran.magazine-producer.plist` 사용 중 | **M1 은 수동 실행이라 불필요.** 자동화 시 재협의 |
+| **5** | 🟡 `.github/workflows/**` | 창업자 승인 영역 | M1 자동화 시 필요 | **M1 범위 밖.** `visibility-guard.yml` 수정은 PR-C1 에서만 |
+
+#### worktree 격리 운영 (실측 기반)
+
+동시 작업 중 브랜치·미커밋 파일이 섞이는 사고를 막기 위해 **worktree 를 분리한다.**
+
+```
+/Users/yanadoo/Documents/soransoran      Codex[1] 작업본
+/Users/yanadoo/Documents/soransoran-m0   Codex[3] / Voice Engine 작업본
+```
+
+**상대 worktree 에서 브랜치를 만들지 않는다.** untracked 파일은 브랜치를 옮겨도 따라오므로,
+남의 작업본에서 브랜치를 갈아타면 미커밋 파일이 엉뚱한 커밋에 휩쓸린다.
+
 ### 11-1. Codex[3] 이 건드리지 않는 것
 
 ```
@@ -1083,8 +1507,80 @@ read-only inventory → dry-run → HOLD append → founder PENDING → 1건 pub
 
 수집기 · 발행기 · 댓글 엔진 · persona engine은 각각 kill switch를 가진다.
 
-**현재 소란소란에는 GitHub Actions workflows · Vercel cron · Google Sheet 연동이 전부 0개다.**
+**현재 소란소란에는 Vercel cron · Google Sheet 연동이 0개이고, GitHub Actions 는
+`visibility-guard.yml`(CI) 하나뿐 cron 은 0개다.**
 자동화 계층 신설은 M1의 설계 대상이며, **수동 실행부터 시작한다.**
+
+---
+
+### 12-3. M1 PR 분할 순서 (확정)
+
+**한 PR에 schema 와 런타임 코드를 같이 담지 않는다.** M0 에서 배운 것이다 —
+merge 즉시 Vercel 자동 배포이고 `migrate deploy` 는 자동 실행되지 않아,
+컬럼 없이 새 코드가 먼저 나가면 런타임이 깨진다.
+
+| PR | 브랜치 | 내용 | 통과 조건 | Codex[1] |
+|---|---|---|---|---|
+| **PR-A** | `docs/micro-seed-m1-contract` | **문서 전용.** 이 개정판 자체 | 문서 리뷰 | 🟢 없음 |
+| **PR-A′** | `feat/micro-seed-m1-schema` | `schema.prisma` + `migrations/0004_micro_seed_candidate/` — **런타임 코드 0줄** | tsc · build · check:visibility | 🔴 schema · migrations |
+| **PR-A″** | `feat/micro-seed-validator` | dry-run validator (R1~R10). **DB·Sheet 접근 0** | fixture 테스트 | 🔴 package.json |
+| **PR-B** | `feat/micro-seed-reader` | Sheet 클라이언트 **읽기 전용** + 후보 upsert | 실 Sheet 1회 read | 🔴 package.json |
+| **PR-C1** | `ci/micro-seed-write-guard` | **write-path 가드 확장** + negative test | 가드 자체 검증 | 🟢 |
+| **PR-C2** | `feat/micro-seed-publisher` | publisher + 3중 방어 + cap + first-run guard | 🔴 **PR-C1 merge 후에만** | 🟢 |
+
+#### 🔴 PR-A′ 배포 절차 — migration 먼저
+
+```
+1. 창업자가 0004 migration 적용 (Supabase SQL Editor)
+2. information_schema 로 테이블·컬럼·인덱스 검증
+3. PR-A′ merge → Vercel 자동 배포
+4. 배포 후 홈 · 게시판 목록 · 상세 · sitemap 재확인
+```
+
+신규 테이블 + nullable 필드라 **먼저 적용해도 현재 배포본에 영향이 0** 이다.
+`0003` 과 같은 구조다.
+
+> ⚠️ `scripts/apply-migration.mjs` 는 **`0001_init` 전용**이다(경로 하드코딩 +
+> "public 스키마에 테이블이 있으면 중단"). `0004` 에 그대로 쓸 수 없다.
+
+#### 🔴 PR-C1 이 PR-C2 보다 먼저인 이유
+
+**현재 CI 가드는 읽기 경로만 본다.** publisher 가 3축 플래그를 빠뜨려도 잡지 못한다.
+가드를 나중에 붙이면 그 사이에 publisher 가 무방비로 main 에 들어간다.
+**M0 에서 세운 원칙 — 게이트를 먼저 세운다 — 을 M1 에서도 지킨다.**
+
+#### PR-C1 가드 확장 설계
+
+publisher 는 반드시 `isMicroSeed: true` 를 써야 하므로 **현재 `FORBIDDEN_DIRECT` 를
+그대로 두면 CI 를 통과할 수 없다.** 예외를 주되, **역방향 필수 검사를 대신 넣는다.**
+
+```
+① publisher 를 게이트 예외에 추가        (읽기 게이트와 쓰기 경로는 다른 축)
+② 🔴 대신 아래를 강제한다
+   - isMicroSeed: true / permanentNoindex: true / indexPromotionBlocked: true 가 모두 존재
+   - 셋 중 어느 것도 false 로 설정되지 않음
+   - BoardType.MAGAZINE · BEST 가 발행 대상에 없음
+   - src/** 에서 세 필드를 UPDATE 하는 구문 0건 (C-1)
+   - prisma.post.create 는 posts.ts(회원)·publisher.ts(Micro Seed) 두 곳에서만
+```
+
+🔴 **①만 하고 ②를 빼면 가드에 구멍을 뚫는 셈이다.**
+
+#### negative test 의무
+
+가드는 **"실패해야 할 때 실패하는지" 확인 전엔 신뢰할 수 없다.**
+M0 에서 두 번 실증했고, PR-C1 에서도 같은 절차를 밟는다.
+
+```
+① publisher 에서 permanentNoindex 줄 삭제  → 가드 FAIL 확인 → 복구
+② 화이트리스트에 MAGAZINE 추가             → 가드 FAIL 확인 → 복구
+```
+
+#### M1 완료 판정
+
+**M1 은 "발행이 되는가"로 판정하지 않는다.** 발행은 M2 다.
+M1 의 완료 조건은 §12 표대로 **"오타 · 정렬 · 크래시 · 부분실패가 의도치 않은 발행으로
+이어지지 않음"** 이다. 즉 **막히는 것을 확인하는 것이 M1 의 산출물**이다.
 
 ---
 
@@ -1094,10 +1590,10 @@ read-only inventory → dry-run → HOLD append → founder PENDING → 1건 pub
 
 | # | 결정 | 추천안 |
 |---|---|---|
-| **TODO-1** | `prisma/migrations` 다음 번호 배정 | Codex[1]과 합의 후 확정 |
-| **TODO-2** | `commentOrigin` 을 `AuthorSource` 확장으로 갈지 별도 컬럼으로 갈지 | 🟢 **별도 컬럼 추천.** 두 질문은 다른 축이다 (§8-6) |
+| ~~**TODO-1**~~ | ~~`prisma/migrations` 다음 번호 배정~~ | ✅ **해소** — M0 이 `0003_micro_seed_gates` 사용. M1 은 **`0004_micro_seed_candidate` 선점**(§11-0) |
+| ~~**TODO-2**~~ | ~~`commentOrigin` 을 `AuthorSource` 확장으로 갈지~~ | ✅ **해소** — M0 에서 **별도 컬럼**으로 구현 완료 (§8-6) |
 | **TODO-3** | Micro Seed 글의 실회원 댓글을 North Star에 포함하되 `microSeedAssisted` 로 분리할지 | 🟢 **분리 집계 추천** (§8-7) |
-| **TODO-4** | `publishAt` 을 매거진과 공유할지 분리할지 | 🟡 공유가 단순하나 정책 분기가 섞인다. **Codex[1] 협의 필요** |
+| ~~**TODO-4**~~ | ~~`publishAt` 을 매거진과 공유할지 분리할지~~ | ✅ **해소 — 분리 확정.** `Post.publishAt`(DB DateTime) / `MicroSeedCandidate.scheduledPublishAt`(입력) / 매거진 `article.publishAt`(파일·KST 문자열) 은 서로 다른 축이다 (§5-2-3) |
 | **TODO-5** | `trendingScore` 필드를 아예 만들지 않을지 | 🟢 **만들지 않기 추천.** 없으면 지킬 정책도 없다 |
 | **TODO-9** | Voice Vault 보존 정책 확정 (구현은 M5라도) | 🟢 지금 확정 추천. 보존하지 않기로 하면 되돌릴 수 없다 |
 
@@ -1105,11 +1601,13 @@ read-only inventory → dry-run → HOLD append → founder PENDING → 1건 pub
 
 | # | 결정 | 추천안 |
 |---|---|---|
-| **TODO-6** | 원문 댓글 사용 개수 상한 | 초기 **1~3개** |
+| **TODO-6** | 원문 댓글 사용 개수 상한 | 초기 **1~3개** (M3 영역) |
 | **TODO-7** | guest 개념을 지금 넣을지 | 🟡 **나중 추천.** 현재 `Comment.authorId` 필수라 비회원 참여 구조가 없고 Micro Seed와 무관 |
-| **TODO-8** | GitHub Actions workflows를 지금 만들지 | 🟡 **수동부터 추천.** 단 **CI guard(C-2 위반 감지)만은 조기 도입** 검토 |
-| **TODO-10** | PROCESSING timeout 값 | 운영 주기 기준으로 Codex[1]과 확정 |
-| **TODO-11** | 발행 soft cap · candidate ingest cap 초기값 | 운영 중 조정 가능하게 하되 hard cap은 코드 상수 |
+| ~~**TODO-8**~~ | ~~GitHub Actions workflows를 지금 만들지~~ | ✅ **해소** — **CI guard 만 도입 완료**(`visibility-guard.yml`, PR #11). **cron 은 만들지 않았다.** M1 은 수동 실행(§6-9-F) |
+| ~~**TODO-10**~~ | ~~PROCESSING timeout 값~~ | ✅ **해소 — 30분** (§6-9-F) |
+| ~~**TODO-11**~~ | ~~발행 soft cap · candidate ingest cap 초기값~~ | ✅ **해소** — first-run 1 · burst 1 · soft 일 3 · **hard 일 10(코드 상수)** (§6-5 · §6-9-F) |
+| **TODO-19** 신설 | 시스템 User 를 언제 페르소나로 교체할지 | 🟢 **M4.** 다건 발행을 열기 전에 필요 (§5-2A) |
+| **TODO-20** 신설 | `SORAN_ALLOW_INDEXING` 전환 시 Micro Seed 발행물이 이미 있는 경우의 재검증 절차 | 🔴 **전환 전 §7 차단표 전수 재검증**(C-10). TODO-13 과 함께 판단 |
 | **TODO-12** | takedown SLA | 빠른 숨김 우선. 정확한 시간은 별도 |
 | **TODO-13** | `SORAN_ALLOW_INDEXING` 전환 시점 | Codex[1] go 판정. **전환 전 §7 차단표 재검증 필수** (C-10) |
 | **TODO-14** | Micro Seed 끼리 related 내부 노출 허용 여부 | 🟢 **초기에는 금지 추천** |
