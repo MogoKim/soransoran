@@ -20,10 +20,16 @@
  *    여기서 하는 것은 trim 과 빈 값 판정, 그리고 숫자 컬럼 파싱뿐이다.
  *
  * 🔴 시트에 없는 값을 지어내지 않는다
- *    content · previousStatus · contentGuard 세 개는 17열 안에 없다(§ INJECTED_FIELDS).
+ *    content · hasEverPublished · dbDedupKey · contentGuard 네 개는
+ *    17열 안에 없다(§ INJECTED_FIELDS).
  *    주입되지 않으면 undefined 로 두고 진단에 남긴다. 빈 문자열이나 기본값을
- *    채워 넣으면 G-A·G-B·R9 가 "검사했는데 통과" 로 보이게 된다.
+ *    채워 넣으면 G-A·G-B·R9·R11 이 "검사했는데 통과" 로 보이게 된다.
  *    비어 있는 것은 "위반 없음" 이 아니라 "검사하지 않음" 이다.
+ *
+ * 🔴 Sheet 의 dedupKey 를 신뢰하지 않는다 (R11)
+ *    M열은 사람이 고칠 수 있고, 고치면 R7(중복 차단)이 무력해진다.
+ *    reader 는 Sheet 값을 그대로 넘기고 DB 원장값을 dbDedupKey 로 함께 주입해
+ *    validator 가 대조하게 한다. 여기서 조용히 덮어쓰면 위조 흔적이 사라진다.
  */
 
 /** 창업자가 여는 탭. 다른 탭을 읽으면 안 된다 */
@@ -72,14 +78,23 @@ export const VALIDATOR_FIELDS_FROM_SHEET = [
 /**
  * validator 가 읽지만 시트 17열에 **없는** 필드.
  *
- *   content         G-A 가 본다. 시트는 원문 URL 만 갖고 본문을 갖지 않는다
- *   previousStatus  R9 가 본다. 시트는 현재 상태 한 칸뿐이라 직전 값을 모른다
- *   contentGuard    G-B 가 본다. checkContent() 호출 결과여야 한다
+ *   content           G-A 가 본다. 시트는 원문 URL 만 갖고 본문을 갖지 않는다.
+ *                     Raw Vault 의 rawBody 에서 온다 (PR-C0b)
+ *   hasEverPublished  R9 가 본다. 시트는 현재 상태 한 칸뿐이라 발행 이력을 모른다.
+ *                     createdPostId != null OR history 에 toStatus='PUBLISHED' 존재
+ *   dbDedupKey        R11 이 본다. Sheet M열은 사람이 고칠 수 있으므로 원장값과 대조한다.
+ *                     🔴 null(= DB 에 행 없음, 신규 후보)과 undefined(= 조회하지 않음)는
+ *                        다른 뜻이다. null 은 정상이고 undefined 는 검사 누락이다
+ *   contentGuard      G-B 가 본다. checkContent() 호출 결과여야 한다
  *
- * 셋 다 reader 바깥에서 주입되어야 하고, 주입되지 않으면 해당 게이트는
+ * 넷 다 reader 바깥에서 주입되어야 하고, 주입되지 않으면 해당 게이트는
  * 판정을 못 한다. 그 사실을 진단으로 드러내는 것이 이 상수의 존재 이유다.
+ *
+ * 🚫 previousStatus 는 폐기했다 (PR-C0a).
+ *    한 칸만 되돌아봐서 PUBLISHED → TAKEDOWN → PENDING 경유 우회에 샜다.
+ *    hasEverPublished 가 대체한다.
  */
-export const INJECTED_FIELDS = ['content', 'previousStatus', 'contentGuard']
+export const INJECTED_FIELDS = ['content', 'hasEverPublished', 'dbDedupKey', 'contentGuard']
 
 /** 숫자로 정규화하는 컬럼. 나머지는 문자열 그대로 넘긴다 */
 const NUMERIC_COLUMNS = ['sourceCommentCount']
@@ -205,7 +220,7 @@ function normalizeCount(raw, diagnostics, rowNumber, column) {
  *
  * @param row          시트 한 행 (17칸 기준, 짧으면 빈칸 취급)
  * @param rowNumber    시트 행 번호 (1행 헤더이므로 데이터 첫 행이 2)
- * @param injections   { content, previousStatus, contentGuard } — §INJECTED_FIELDS
+ * @param injections   { content, hasEverPublished, dbDedupKey, contentGuard } — §INJECTED_FIELDS
  */
 export function mapRowToCandidate(row, rowNumber, injections = {}) {
   const diagnostics = []
@@ -294,7 +309,7 @@ export function createGoogleSheetSource() {
  * 그건 validator 를 통과할 수도 있어서 가장 위험하다.
  *
  * @param source       SheetSource
- * @param injectionsBy candidateId → { content, previousStatus, contentGuard }
+ * @param injectionsBy candidateId → { content, hasEverPublished, dbDedupKey, contentGuard }
  */
 export async function readCandidates(source, { injectionsBy = {} } = {}) {
   const { headers, rows } = await source.fetchRows()
