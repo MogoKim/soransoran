@@ -23,7 +23,7 @@ M0(게이트)가 main에 반영되고 CI 가드가 붙었다. 그 위에서 **M1
 | **§5-2** | M1 필수 필드 **확정안**으로 교체 — `MicroSeedCandidate` 모델 + `Post` 역조회 필드 |
 | **§5-2A** 신설 | 🔴 **시스템 User 작성자 정책** — `Post.authorId`가 NOT NULL이라 없으면 발행 자체가 불가 |
 | **§6-7** 신설 | **Sheet 컬럼 17개 정본** + Sheet에 두지 않는 7필드 |
-| **§6-8** 신설 | **검증 규칙 R1~R10** |
+| **§6-8** 신설 | **검증 규칙 R1~R11** — R9 는 `hasEverPublished` 기준, R11 은 `dedupKey` 원장 대조 (PR-C0a 반영) |
 | **§6-9** 신설 | **cap · timeout · attempt 초기값 확정** |
 | §6-5 | cap 계층 표에 초기값 기입 |
 | **§12-3** 신설 | **M1 PR 분할 순서** (PR-A ~ PR-C2) |
@@ -173,7 +173,8 @@ Micro Seed의 단일 판정 지표는 **체인 3→4 전환율** — 커뮤니�
 | 21 | `scheduledPublishAt` 이 **과거면 즉시 발행하지 않고 HOLD** | §6-8 R5 |
 | 22 | 본문 `content` 는 **Sheet에 싣지 않는다** | §6-7-B |
 | 23 | M1 은 **자동화 없이 수동 실행**부터 시작한다 | §6-9-F |
-| 24 | **`PUBLISHED` 를 다른 상태로 되돌리는 수동 변경을 거부**한다 | §6-8 R9 |
+| 24 | **발행 이력이 있는 후보를 `TAKEDOWN` 외 상태로 되돌리는 수동 변경을 거부**한다 | §6-8 R9 |
+| 25 | **Sheet 의 `dedupKey` 를 신뢰하지 않는다.** 원장값과 다르면 거부한다 | §6-8 R11 |
 
 > 정책 16~24 는 **정책 1~15 를 바꾸지 않는다.** 구현 직전에 비어 있던 값을 채운 것이다.
 
@@ -742,8 +743,9 @@ DB 발행 성공 → Sheet 갱신 실패 → timeout → HOLD 복귀
 | 행 정렬 · 삽입 · 삭제 | **행 번호가 아닌 `candidateId` 로 상태 갱신** | R6 |
 | 같은 원문 중복 승인 | `dedupKey` 충돌 → SKIPPED | R7 |
 | 필수 칸 빈 채로 PENDING | HOLD 유지 | R8 |
-| **발행된 것을 되돌림** | 🔴 **`PUBLISHED` → 다른 상태 수동 변경 거부** | R9 |
+| **발행된 것을 되돌림** | 🔴 **발행 이력이 있으면 `TAKEDOWN` 외 상태 변경 거부** | R9 |
 | 대량 승인 | cap 초과 시 **전체 거부**(all-or-nothing) | R10 |
+| **`dedupKey` 를 손으로 고침** | 🔴 **원장값과 다르면 거부.** 고치면 R7 이 무력해진다 | R11 |
 | 되돌리기 일반 | `PUBLISHED` 외 모든 전이는 가역. `MicroSeedCandidateHistory` 기록 | — |
 
 전체 규칙은 §6-8 에 있다.
@@ -761,6 +763,10 @@ DB 발행 성공 → Sheet 갱신 실패 → timeout → HOLD 복귀
 이미 발행된 후보를 `PENDING` 으로 되돌리면 worker 가 같은 원문을 다시 발행한다.
 `dedupKey` 와 `sheetCandidateId @unique` 가 막아주지만, **validator 단계에서 먼저 거부한다.**
 발행물을 내려야 한다면 `TAKEDOWN` 경로(§6-6)를 쓴다.
+
+🔴 **판단 근거는 "직전 상태" 가 아니라 "발행 이력"(`hasEverPublished`)이다.**
+직전 상태 한 칸만 보면 `PUBLISHED → TAKEDOWN → PENDING` 경유 우회에 샌다.
+도출식과 `TAKEDOWN` 예외의 근거는 §6-8 에 있다.
 
 ### 6-5. 대량 승인 cap
 
@@ -874,7 +880,7 @@ Sheet 에도 후보 테이블에도 두지 않는다.
 
 ---
 
-### 6-8. 검증 규칙 R1~R10
+### 6-8. 검증 규칙 R1~R11
 
 **dry-run validator(PR-A″)와 reader(PR-B)가 공유하는 규칙이다.**
 어느 하나라도 위반하면 **PENDING 으로 넘어가지 않는다.**
@@ -889,23 +895,73 @@ Sheet 에도 후보 테이블에도 두지 않는다.
 | **R6** | `candidateId` 중복 또는 공백 | 행 전체 무시 + 경고 로그 |
 | **R7** | `dedupKey` 가 기존 후보와 충돌 | `SKIPPED` 로 표시 |
 | **R8** | `PENDING` 인데 필수 칸이 비었음 | HOLD 유지 |
-| **R9** | `PUBLISHED` → 다른 상태로 수동 변경 | 🔴 **거부.** 비가역(§6-4) |
+| **R9** | **발행 이력이 있는데** `PUBLISHED`·`TAKEDOWN` 외 상태로 변경 | 🔴 **거부.** 비가역(§6-4) |
 | **R10** | 1회 승인 건수 > cap | 🔴 **전체 거부** (all-or-nothing) |
+| **R11** | Sheet `dedupKey` ≠ DB `MicroSeedCandidate.dedupKey` | 🔴 **거부.** 원장 불일치(§6-10) |
 
 #### 검증 시점과 순서
 
 ```
 ① Sheet 읽기
 ② R6 (candidateId)      — 행 식별이 안 되면 나머지를 볼 수 없다
-③ R1 (status)           — 알 수 없는 값을 먼저 HOLD 로 눌러 둔다
-④ R9 (PUBLISHED 되돌리기) — 비가역 위반을 조기에 거부
-⑤ R2~R5, R8 (필드 검증)
-⑥ R7 (dedup)           — DB 조회가 필요하므로 뒤에 둔다
-⑦ R10 (cap)            — 통과한 건수를 세야 하므로 마지막
+③ R11 (dedupKey 대조)    — 행이 원장의 그 행이 맞는지 확인한다
+④ R1 (status)           — 알 수 없는 값을 먼저 HOLD 로 눌러 둔다
+⑤ R9 (재발행)            — 비가역 위반을 조기에 거부
+⑥ R2~R5, R8 (필드 검증)
+⑦ R7 (dedup)           — DB 조회가 필요하므로 뒤에 둔다
+⑧ R10 (cap)            — 통과한 건수를 세야 하므로 마지막
 ```
 
 **R1 을 앞에 두는 이유**: 오타 상태값을 가진 행이 뒤 규칙을 통과해 PENDING 으로
 읽히는 일을 원천 차단한다.
+
+**R11 을 R1 보다 앞에 두는 이유**: R11 은 **다른 규칙의 전제**다. `dedupKey` 가 위조된
+행에서는 R7(중복 차단)이 무의미해진다 — 같은 원문이 새 키로 올라오면 중복으로
+보이지 않기 때문이다. 위조를 먼저 말해야 창업자가 "왜 중복이지" 가 아니라
+"왜 키가 다르지" 를 본다.
+
+#### 🔴 R9 의 판단 근거 — "직전 상태" 가 아니라 "발행 이력"
+
+R9 는 `hasEverPublished` 를 본다. **직전 상태 한 칸만 보면 경유 경로에 샌다.**
+
+```
+PUBLISHED → TAKEDOWN → PENDING
+  직전 상태 = TAKEDOWN → 발동하지 않는다  ← 우회 경로
+  발행 이력 = 있음     → 거부한다
+```
+
+```
+hasEverPublished = createdPostId != null
+                   OR  MicroSeedCandidateHistory 에 toStatus='PUBLISHED' 존재
+```
+
+**OR 인 이유**: §5-4 사고 경로(*DB 발행 성공 → Sheet 갱신 실패*)에서 한쪽만 남을 수
+있다. 한쪽만 보면 그 경로에서 R9 가 꺼진다.
+
+**`TAKEDOWN` 은 유일한 예외로 남긴다.** 발행된 글을 내리는 경로까지 막으면
+§6-6 takedown 이 불가능해진다 — 삭제 요청에 답할 수 없다는 뜻이다.
+
+#### 🔴 R11 — Sheet 의 `dedupKey` 를 신뢰하지 않는다
+
+`dedupKey` 는 Sheet **M열**이라 사람이 고칠 수 있다(§6-7). 고치면 같은 원문이 새 키로
+올라와 R7 이 무력해진다. `collector` 가 `sha256(sourceSite::sourceArticleId)` 로 계산해
+넣는 값이므로 **창업자가 손댈 이유가 없다 — 다르면 그 자체가 사고 신호다.**
+
+**Sheet 값을 DB 값으로 조용히 덮어쓰지 않는다.** 덮어쓰면 누가 언제 무엇을 바꿨는지
+사라지고 위조가 "정상 처리" 로 기록된다. 거부하고 사람이 본다.
+
+#### 🔴 주입 필드의 3상태 (`hasEverPublished` · `dbDedupKey` · `content` · `contentGuard`)
+
+이 네 값은 Sheet 17열에 없고 reader/publisher 가 DB 에서 도출해 주입한다.
+**"없음" 을 한 가지로 뭉뚱그리면 게이트가 조용히 꺼진다.**
+
+| 값 | 의미 | 동작 |
+|---|---|---|
+| `undefined` | 조회하지 않음 | **검사하지 않는다.** reader 가 `NOT_INJECTED` 로 알린다 |
+| `null` | DB 에 행이 없다 (신규 후보) | 정상 통과 |
+| 값 | DB 실측값 | 대조한다 |
+
+비어 있는 것은 **"위반 없음" 이 아니라 "검사하지 않음"** 이다.
 
 #### 길이 상한 R3 의 근거
 
@@ -1006,9 +1062,15 @@ publisher 의 상수 화이트리스트가 방어선이고, CI 가 이를 검사
 
 | 층 | 수단 | 막는 것 |
 |---|---|---|
+| **0차** | **R11** — Sheet `dedupKey` 와 원장값 대조 | **2차 방어를 사람이 우회하는 것** |
 | **1차** | `UPDATE ... SET status='PROCESSING' WHERE id=$1 AND status='PENDING'` | **동시 워커 경합** |
 | **2차** | `MicroSeedCandidate.dedupKey @unique` | **같은 원문이 후보로 두 번 적재** |
 | **3차** | `Post.sheetCandidateId @unique` | **같은 후보로 Post 두 개 생성** |
+
+🔴 **0차가 필요한 이유**: 2차 방어는 `dedupKey` 가 원문을 정직하게 가리킬 때만 성립한다.
+`dedupKey` 는 Sheet M열이라 사람이 고칠 수 있고, 고치면 같은 원문이 **다른 키로** 올라와
+UNIQUE 제약에 걸리지 않는다. DB 제약만으로는 이 경로를 막을 수 없다 — 그래서
+validator 단계에서 원장과 대조한다(§6-8 R11).
 
 #### 1차 — 원자적 획득
 
@@ -1524,6 +1586,7 @@ merge 즉시 Vercel 자동 배포이고 `migrate deploy` 는 자동 실행되지
 | **PR-A** | `docs/micro-seed-m1-contract` | **문서 전용.** 이 개정판 자체 | 문서 리뷰 | 🟢 없음 |
 | **PR-A′** | `feat/micro-seed-m1-schema` | `schema.prisma` + `migrations/0004_micro_seed_candidate/` — **런타임 코드 0줄** | tsc · build · check:visibility | 🔴 schema · migrations |
 | **PR-A″** | `feat/micro-seed-validator` | dry-run validator (R1~R10). **DB·Sheet 접근 0** | fixture 테스트 | 🔴 package.json |
+| **PR-C0a** | `feat/micro-seed-r9-r11` | **R9 를 `hasEverPublished` 기준으로 보정 + R11 신설.** 코드 3파일, 스키마·의존성 무변경 | fixture 테스트 | 🟢 없음 |
 | **PR-B** | `feat/micro-seed-reader` | Sheet 클라이언트 **읽기 전용** + 후보 upsert | 실 Sheet 1회 read | 🔴 package.json |
 | **PR-C1** | `ci/micro-seed-write-guard` | **write-path 가드 확장** + negative test | 가드 자체 검증 | 🟢 |
 | **PR-C2** | `feat/micro-seed-publisher` | publisher + 3중 방어 + cap + first-run guard | 🔴 **PR-C1 merge 후에만** | 🟢 |
