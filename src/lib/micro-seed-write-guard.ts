@@ -30,6 +30,24 @@ export const PROCESSING_TIMEOUT_MINUTES = 30
 export const MAX_ATTEMPT_COUNT = 3
 
 /**
+ * 예약 유예창 (§6-2 · 정책 21 · R5).
+ *
+ * 🔴 왜 창이 필요한가 — 정본 세 곳이 달랐다
+ *    §6-2 상태 기계는 "예약시각 경과 → HOLD 복귀" 라 하고,
+ *    schema 의 `@@index([status, scheduledPublishAt])` 주석은 "예약시각이 **지난**
+ *    승인 후보를 고른다" 고 하며, 획득 SQL 에는 예약 조건이 아예 없었다.
+ *
+ *    도래하는 순간 HOLD 로 보내면 발행 창이 0 이라 예약 발행이 성립하지 않는다.
+ *    반대로 조건 없이 집으면 사흘 전 예약도 지금 나가서 "왜 지금?" 이 된다.
+ *    창업자 확정(2026-08-25): **도래 후 30분 안이면 발행, 넘으면 HOLD.**
+ *    셋이 이 해석에서 모두 성립한다 — §6-2 의 "경과" 를 "유예를 넘긴 경과" 로 읽는다.
+ *
+ * 🔴 값을 PROCESSING_TIMEOUT_MINUTES 와 맞췄다. 둘 다 수동 실행 주기가 근거다.
+ *    다만 **별개의 상수로 둔다** — 하나를 바꿀 이유와 다른 하나를 바꿀 이유가 다르다.
+ */
+export const PUBLISH_GRACE_MINUTES = 30
+
+/**
  * §6-9-D 발행 게시판 화이트리스트.
  *
  * 🔴 BoardType enum 에 MAGAZINE 이 실재한다. 타입만으로는 못 막는다 —
@@ -59,6 +77,13 @@ export const PUBLISHABLE_RAW_ORIGINS = ['live'] as const
  *
  * 🔴 processingStartedAt 과 processingBy 를 **같은 UPDATE 에서** 쓴다.
  *    나눠 쓰면 그 사이에 죽었을 때 소유자를 알 수 없는 PROCESSING 이 남는다.
+ *
+ * 🔴 예약 유예창을 **조건에 넣는다** ($3 = now, $4 = now - PUBLISH_GRACE_MINUTES).
+ *    코드에서 창을 판정하고 SQL 에서는 안 보면, 판정과 획득 사이에 시각이 흘러
+ *    창을 벗어난 후보를 집을 수 있다. 같은 UPDATE 안에서 확인해야 원자적이다.
+ *
+ *    시각을 파라미터로 받는 이유: 판정에 쓴 시계와 획득에 쓴 시계를 같게 하기 위해서다.
+ *    (processingStartedAt 의 now() 는 DB 시계지만 둘 다 UTC 라 어긋나지 않는다)
  */
 export const ACQUIRE_CANDIDATE_SQL = `
 UPDATE "MicroSeedCandidate"
@@ -68,6 +93,9 @@ UPDATE "MicroSeedCandidate"
  WHERE id = $1
    AND status = 'PENDING'
    AND "attemptCount" < ${MAX_ATTEMPT_COUNT}
+   AND "scheduledPublishAt" IS NOT NULL
+   AND "scheduledPublishAt" <= $3
+   AND "scheduledPublishAt" >= $4
 RETURNING id;
 `.trim()
 
@@ -104,6 +132,81 @@ export function interpretAcquireResult(rowCount: number): AcquireOutcome {
   }
   // id 는 PK 다. 2행 이상이 바뀌었다면 데이터나 쿼리가 깨진 것이므로 진행하지 않는다.
   return { kind: 'ABORT', reason: `id 는 PK 인데 ${rowCount}행이 반환됐다. 진행하지 않는다` }
+}
+
+// ─────────────────────────────────────────────────────────
+// ①-B 예약 유예창 판정 (§6-2 · 정책 21)
+// ─────────────────────────────────────────────────────────
+
+/** 예약 시각을 실측하지 않고 창을 판정하려 했다는 뜻 */
+export class PublishWindowWithoutScheduleError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PublishWindowWithoutScheduleError'
+  }
+}
+
+export type PublishWindowVerdict =
+  /** 아직 예약 시각이 오지 않았다. 오류가 아니다 — 기다린다 */
+  | { kind: 'TOO_EARLY'; reason: string }
+  /** 창 안이다. 발행 대상 */
+  | { kind: 'IN_WINDOW' }
+  /** 유예를 넘겼다. 발행하지 않고 HOLD 로 되돌린다 */
+  | { kind: 'TOO_LATE'; reason: string }
+  /** 예약 시각 자체가 없다. PENDING 인데 비어 있으면 R8 이 먼저 걸렸어야 한다 */
+  | { kind: 'NOT_SCHEDULED'; reason: string }
+
+/**
+ * 지금 이 후보를 발행해도 되는 시각인가.
+ *
+ * 🔴 `undefined` 는 던진다. select 에서 빠뜨린 것과 "예약이 없다"(null) 는 다른 사건이다.
+ *    미실측을 null 로 뭉뚱그리면 조회 실패가 "예약 없음" 으로 둔갑한다.
+ *
+ * 🔴 여기서 시각을 밀지 않는다. TOO_LATE 는 HOLD 사유일 뿐이며,
+ *    재예약은 사람이 micro-seed:reschedule-live 로 명시 지시한다 (정책 21).
+ *
+ * @param scheduledPublishAt DB 실측값. undefined 면 미실측
+ * @param now                판정 기준 시각. 획득 SQL 에 넘기는 것과 **같은 값**이어야 한다
+ * @param graceMinutes       유예. 기본 PUBLISH_GRACE_MINUTES
+ */
+export function resolvePublishWindow(
+  scheduledPublishAt: Date | null | undefined,
+  now: Date,
+  graceMinutes: number = PUBLISH_GRACE_MINUTES,
+): PublishWindowVerdict {
+  if (scheduledPublishAt === undefined) {
+    throw new PublishWindowWithoutScheduleError(
+      'scheduledPublishAt 을 실측하지 못했다. select 에 포함한 뒤 다시 판정한다.',
+    )
+  }
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
+    throw new PublishWindowWithoutScheduleError(`판정 기준 시각이 올바르지 않다: ${JSON.stringify(now)}`)
+  }
+  if (scheduledPublishAt === null) {
+    return { kind: 'NOT_SCHEDULED', reason: '예약 시각이 없다. 발행하지 않는다 (R8)' }
+  }
+  if (Number.isNaN(scheduledPublishAt.getTime())) {
+    return { kind: 'NOT_SCHEDULED', reason: '예약 시각이 유효한 날짜가 아니다 (R4)' }
+  }
+
+  const scheduled = scheduledPublishAt.getTime()
+  const nowMs = now.getTime()
+  const graceMs = graceMinutes * 60_000
+
+  if (scheduled > nowMs) {
+    const mins = Math.ceil((scheduled - nowMs) / 60_000)
+    return { kind: 'TOO_EARLY', reason: `예약 시각이 아직 오지 않았다 (${mins}분 남음). 기다린다` }
+  }
+  if (scheduled < nowMs - graceMs) {
+    const mins = Math.floor((nowMs - scheduled) / 60_000)
+    return {
+      kind: 'TOO_LATE',
+      reason:
+        `예약 시각이 ${mins}분 지났다 (유예 ${graceMinutes}분 초과). 발행하지 않고 HOLD 로 되돌린다. ` +
+        '재예약은 micro-seed:reschedule-live 로 명시 지시한다',
+    }
+  }
+  return { kind: 'IN_WINDOW' }
 }
 
 // ─────────────────────────────────────────────────────────

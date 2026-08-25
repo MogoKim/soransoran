@@ -24,9 +24,7 @@
  *   npm run micro-seed:reschedule-live -- --candidate=<uuid> --in=20      (지금부터 N분 뒤, 5분 올림)
  */
 import { PrismaClient } from '@prisma/client'
-// @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
 import { SHEET_HEADERS, SHEET_TAB_NAME, SHEET_READONLY_SCOPE, MICRO_SEED_SHEET_ID_ENV, buildSheetRow, updateCandidateRow } from './lib/micro-seed-sheet.mjs'
-// @ts-expect-error
 import { parseKst } from './micro-seed-validate.mjs'
 import { loadEnvLocal, kstString, utcWallClock, roundUpToFiveMinutes } from './lib/micro-seed-time.mjs'
 
