@@ -13,12 +13,18 @@
  *    DB write 없음 · Sheet API 없음 · 네트워크 없음 · 파일 쓰기 없음.
  *    source 는 fixture 뿐이다. 실제 원장 조회는 운영 경로(PR-C2 이후)의 일이다.
  *
- * 🔴 PASS 는 "발행해도 된다" 가 아니다
- *    contentGuard 가 아직 주입되지 않는다(PR-C1 범위 밖). 즉 G-B 는 판정되지 않는다.
- *    비어 있는 것은 "위반 없음" 이 아니라 "검사하지 않음" 이다 — 리포트가 그 사실을 표시한다.
+ * 🔴 이 파일만으로는 G-B 가 판정되지 않는다
+ *    contentGuard 를 만들려면 src/lib/content-guard.ts 를 호출해야 하는데,
+ *    .mjs 는 .ts 를 import 할 수 없다(CI 는 Node 20 이라 타입 스트리핑도 못 쓴다).
+ *    그래서 guardCandidate 를 **주입받는다** — 실제 guard 는 tsx 진입점인
+ *    scripts/micro-seed-plan-guarded.mts 가 넣는다. 여기 fixture 는 배선만 검증한다.
+ *
+ *    주입이 없으면 리포트의 unchecked 에 contentGuard 가 남는다.
+ *    비어 있는 것은 "위반 없음" 이 아니라 "검사하지 않음" 이다.
  *
  * 사용법
- *   node scripts/micro-seed-plan.mjs           fixture 자기검증
+ *   npm run micro-seed:plan                    ← tsx 진입점. 실제 guard 로 검사한다
+ *   node scripts/micro-seed-plan.mjs           배선 fixture 만 (guard 미주입)
  *   node scripts/micro-seed-plan.mjs --json    결과를 JSON 으로
  */
 import { SHEET_HEADERS, INJECTED_FIELDS, readCandidates, createFixtureSource } from './lib/micro-seed-sheet.mjs'
@@ -26,13 +32,13 @@ import { loadInjections, createFixtureCandidateSource, PUBLISHABLE_ORIGINS } fro
 import { validateBatch } from './micro-seed-validate.mjs'
 
 /** 고정 시각 — validator·reader 와 같은 기준 */
-const NOW = new Date('2026-08-25T00:00:00.000Z')
+export const NOW = new Date('2026-08-25T00:00:00.000Z')
 
 const ID_A = 'c0000000-0000-4000-8000-00000000000a'
 const ID_B = 'c0000000-0000-4000-8000-00000000000b'
 
 /** 17칸이 다 찬 정상 Sheet 행 */
-const ROW = [
+export const ROW = [
   ID_A,
   'PENDING',
   'free',
@@ -52,14 +58,14 @@ const ROW = [
   '',
 ]
 
-const row = (over = {}) => {
+export const row = (over = {}) => {
   const r = [...ROW]
   for (const [i, v] of Object.entries(over)) r[Number(i)] = v
   return r
 }
 
 /** 원장 1행 — 정상 후보 */
-const LEDGER = {
+export const LEDGER = {
   id: ID_A,
   dedupKey: 'sha256:base',
   createdPostId: null,
@@ -67,7 +73,7 @@ const LEDGER = {
   hasPublishedHistory: false,
 }
 
-const ledger = (over = {}) => ({ ...LEDGER, ...over })
+export const ledger = (over = {}) => ({ ...LEDGER, ...over })
 
 // ─────────────────────────────────────────────────────────
 // plan
@@ -78,8 +84,12 @@ const ledger = (over = {}) => ({ ...LEDGER, ...over })
  *
  * @param sheetSource      SheetSource (fixture)
  * @param candidateSource  CandidateSource (fixture)
+ * @param guardCandidate   ({ founderTitle, content }) => GuardResult — 선택.
+ *                         🔴 이 파일은 .mjs 라 src/lib/*.ts 를 import 할 수 없다.
+ *                            실제 guard 는 tsx 진입점(micro-seed-plan-guarded.mts)이 주입한다.
+ *                            주지 않으면 contentGuard 는 미주입으로 남고 G-B 는 판정되지 않는다.
  */
-export async function buildPlan({ sheetSource, candidateSource, now = NOW }) {
+export async function buildPlan({ sheetSource, candidateSource, guardCandidate, now = NOW }) {
   // ① Sheet 를 먼저 읽는다. 주입 없이 후보 목록만 얻는다 —
   //    누구를 조회할지 알아야 원장을 볼 수 있기 때문이다.
   const firstPass = await readCandidates(sheetSource)
@@ -91,6 +101,33 @@ export async function buildPlan({ sheetSource, candidateSource, now = NOW }) {
 
   // ② 원장에서 주입값을 도출한다. 조회 실패는 throw 로 올라간다 (삼키지 않는다).
   const { injectionsBy, diagnostics: dbDiagnostics } = await loadInjections(ids, candidateSource)
+
+  // ②-b contentGuard 를 얹는다 (§6-9-B).
+  const guardDiagnostics = []
+  if (guardCandidate) {
+    for (const c of firstPass.candidates) {
+      const inj = injectionsBy[c.candidateId]
+      if (!inj) continue
+
+      // 🔴 본문이 없으면 검사하지 않는다.
+      //    제목만 보고 ok 를 내면 "본문은 안 봤는데 G-B 통과" 가 된다 —
+      //    G-A 가 이미 HOLD 를 내므로 발행되지는 않지만, 판정 기록이 사실과 달라진다.
+      //    검사하지 않았다는 사실을 그대로 남긴다.
+      if (typeof inj.content !== 'string' || !inj.content.trim()) {
+        guardDiagnostics.push({
+          kind: 'GUARD_SKIPPED_NO_CONTENT',
+          candidateId: c.candidateId,
+          message: '본문이 없어 contentGuard 를 검사하지 않는다 (G-B 는 판정하지 않음)',
+        })
+        continue
+      }
+
+      inj.contentGuard = guardCandidate({
+        founderTitle: c.founderTitle,
+        content: inj.content,
+      })
+    }
+  }
 
   // ③ 주입을 얹어 다시 읽는다. reader 가 미주입을 NOT_INJECTED 로 표시한다.
   const second = await readCandidates(sheetSource, { injectionsBy })
@@ -115,7 +152,7 @@ export async function buildPlan({ sheetSource, candidateSource, now = NOW }) {
     batchDecision: batch.batchDecision,
     capViolations: batch.capViolations,
     rows,
-    diagnostics: [...dbDiagnostics, ...second.diagnostics],
+    diagnostics: [...dbDiagnostics, ...guardDiagnostics, ...second.diagnostics],
   }
 }
 
@@ -178,6 +215,48 @@ const FIXTURES = [
     ledger: [ledger({ createdPostId: 'post-1', hasPublishedHistory: true })],
     expect: { decisions: ['PASS'], rules: [], diagnostics: [] },
   },
+  // ── guard 배선 (fake guard) ───────────────────────────
+  // 실제 금칙어 판정은 tsx 진입점이 검증한다. 여기서는 "주입한 결과가
+  // validator 까지 그대로 도달하는가" 만 본다.
+  {
+    name: 'guard 주입 ok:true → G-B 통과',
+    rows: [ROW],
+    ledger: [LEDGER],
+    guard: () => ({ ok: true }),
+    expect: { decisions: ['PASS'], rules: [], diagnostics: [] },
+  },
+  {
+    name: 'guard 주입 ok:false → G-B HOLD',
+    rows: [ROW],
+    ledger: [LEDGER],
+    guard: () => ({ ok: false, reason: '브랜드 금지어가 있습니다' }),
+    expect: { decisions: ['HOLD'], rules: ['G-B'], diagnostics: [] },
+  },
+  {
+    // 🔴 본문이 없으면 제목만 보고 ok 를 내지 않는다.
+    //    "본문은 안 봤는데 G-B 통과" 가 기록에 남으면 안 된다.
+    name: '본문 없으면 guard 를 검사하지 않는다',
+    rows: [ROW],
+    ledger: [ledger({ rawContent: null })],
+    guard: () => ({ ok: true }),
+    expect: {
+      decisions: ['HOLD'],
+      rules: ['G-A'],
+      diagnostics: ['NO_RAW_CONTENT', 'GUARD_SKIPPED_NO_CONTENT'],
+    },
+  },
+  {
+    // legacy 는 content 가 주입되지 않으므로 guard 도 검사되지 않는다.
+    name: 'legacy 원문은 guard 도 검사하지 않는다',
+    rows: [ROW],
+    ledger: [ledger({ rawContent: { origin: 'unao_legacy', rawBody: '우나어 원문' } })],
+    guard: () => ({ ok: true }),
+    expect: {
+      decisions: ['HOLD'],
+      rules: ['G-A'],
+      diagnostics: ['LEGACY_EXCLUDED', 'GUARD_SKIPPED_NO_CONTENT'],
+    },
+  },
 ]
 
 // ─────────────────────────────────────────────────────────
@@ -197,6 +276,7 @@ async function run() {
     const plan = await buildPlan({
       sheetSource: createFixtureSource({ rows: fx.rows }),
       candidateSource: createFixtureCandidateSource(fx.ledger),
+      guardCandidate: fx.guard,
     })
 
     if (!plan.ok) {
@@ -225,7 +305,13 @@ async function run() {
     }
     // 기대하지 않은 DB 진단이 섞이면 그것도 실패다 — 조용한 오작동을 막는다.
     const dbKinds = kinds.filter((k) =>
-      ['NOT_IN_LEDGER', 'NO_RAW_CONTENT', 'LEGACY_EXCLUDED', 'PUBLISH_TRACE_MISMATCH'].includes(k),
+      [
+        'NOT_IN_LEDGER',
+        'NO_RAW_CONTENT',
+        'LEGACY_EXCLUDED',
+        'PUBLISH_TRACE_MISMATCH',
+        'GUARD_SKIPPED_NO_CONTENT',
+      ].includes(k),
     )
     const unexpected = dbKinds.filter((k) => !fx.expect.diagnostics.includes(k))
     if (unexpected.length) {
@@ -260,7 +346,9 @@ async function run() {
     else bad('source 없이 주입하지 않는다', `예상치 못한 오류: ${e.message}`)
   }
 
-  // ── contentGuard 는 PR-C1 에서 주입하지 않는다 ──────────
+  // ── 이 진입점(node .mjs)은 guard 를 직접 주입하지 않는다 ──
+  //    실제 guard 검사는 npm run micro-seed:plan (scripts/micro-seed-plan-guarded.mts)이 맡는다.
+  //    여기서는 guard 없이 돌렸을 때 미주입이 unchecked 로 드러나는지만 본다.
   const plan = await buildPlan({
     sheetSource: createFixtureSource({ rows: [ROW] }),
     candidateSource: createFixtureCandidateSource([LEDGER]),
@@ -305,7 +393,7 @@ if (isMain) {
   console.log(`  Sheet 17열 → 원장 주입 → R1~R11 · G-A · G-B 판정`)
   console.log(`  발행 가능 origin: ${PUBLISHABLE_ORIGINS.join(' · ')} (unao_legacy 는 코드로 배제)`)
   console.log(`  주입 필드: ${INJECTED_FIELDS.join(' · ')}`)
-  console.log('  🔴 contentGuard 는 PR-C1 에서 주입하지 않는다 — PASS 는 "발행 가능" 이 아니다')
+  console.log('  ⚠️ 이 진입점은 guard 를 주입하지 않는다 — 실제 G-B 검사는 npm run micro-seed:plan')
   console.log('  DB write · Sheet API · 네트워크 접근 없음\n')
 
   for (const x of report) {
