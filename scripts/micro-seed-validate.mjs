@@ -2,7 +2,7 @@
 /**
  * Micro Seed Founder Gate — dry-run validator
  *
- * 정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §6-8 (R1~R10) · §6-9 · §6-10
+ * 정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §6-8 (R1~R11) · §6-9 · §6-10
  *
  * 이 스크립트가 답하는 질문은 하나다.
  *
@@ -117,19 +117,27 @@ function violation(rule, decision, message) {
 }
 
 // ─────────────────────────────────────────────────────────
-// 규칙 R1~R10 (§6-8) + 발행 전 게이트 G-A·G-B (§6-9)
+// 규칙 R1~R11 (§6-8) + 발행 전 게이트 G-A·G-B (§6-9)
 // ─────────────────────────────────────────────────────────
 
 /**
  * 검증 순서는 정본 §6-8 을 따른다. 순서에 이유가 있다.
  *
- *   R6 → 행 식별이 안 되면 나머지를 볼 수 없다
- *   R1 → 오타 상태값을 먼저 HOLD 로 눌러 둔다. 이게 뒤로 가면
- *        알 수 없는 값을 가진 행이 다른 규칙을 통과해 PENDING 으로 읽힌다
- *   R9 → 비가역 위반을 조기에 거부
+ *   R6  → 행 식별이 안 되면 나머지를 볼 수 없다
+ *   R11 → 행이 원장의 그 행이 맞는지 확인한다. 이게 뒤로 가면
+ *         위조된 dedupKey 를 가진 행이 R7 을 우회한 채 검증을 통과한다
+ *   R1  → 오타 상태값을 먼저 HOLD 로 눌러 둔다. 이게 뒤로 가면
+ *         알 수 없는 값을 가진 행이 다른 규칙을 통과해 PENDING 으로 읽힌다
+ *   R9  → 비가역 위반을 조기에 거부
  *   R2~R5, R8, G-A, G-B → 필드 검증
- *   R7 → dedup. 기존 후보 집합이 필요하므로 뒤에 둔다
+ *   R7  → dedup. 기존 후보 집합이 필요하므로 뒤에 둔다
  *   R10 → cap. 통과한 건수를 세야 하므로 마지막 (배치 단위, validateBatch)
+ *
+ * 🔴 주입 필드의 3상태를 구분한다 (hasEverPublished · dbDedupKey)
+ *    undefined = 주입하지 않음 → 검사하지 않는다. "위반 없음" 이 아니다
+ *    null      = DB 에 행이 없다 (신규 후보) → 정상
+ *    값        = DB 실측값 → 대조한다
+ *    셋을 뭉뚱그리면 "조회에 실패했는데 통과" 가 된다.
  */
 export function validateCandidate(input, context = {}) {
   const policy = context.policy ?? readPostPolicy()
@@ -152,6 +160,29 @@ export function validateCandidate(input, context = {}) {
     return decide(violations)
   }
 
+  // ── R11. Sheet dedupKey 가 원장과 다름 → 거부 (§6-10) ──────
+  // 🔴 dedupKey 는 Sheet M열이라 사람이 고칠 수 있다. 고치면 R7 이 무력해진다 —
+  //    같은 원문을 새 키로 다시 올리면 중복으로 보이지 않기 때문이다.
+  //    collector 가 sha256(sourceSite::sourceArticleId) 로 계산해 넣은 값이므로
+  //    창업자가 손댈 이유가 없다. 다르면 그 자체가 사고 신호다.
+  //
+  // 🔴 Sheet 값을 DB 값으로 조용히 덮어쓰지 않는다. 덮어쓰면 누가 언제 무엇을
+  //    바꿨는지 사라지고, 위조가 "정상 처리" 로 기록된다. 거부하고 사람이 본다.
+  const sheetDedupKey = typeof input.dedupKey === 'string' ? input.dedupKey.trim() : ''
+  if (input.dbDedupKey !== undefined && input.dbDedupKey !== null) {
+    const dbDedupKey = String(input.dbDedupKey).trim()
+    if (sheetDedupKey !== dbDedupKey) {
+      add(
+        violation(
+          'R11',
+          DECISION.REJECT,
+          `dedupKey 가 원장과 다르다. Sheet: ${JSON.stringify(input.dedupKey)} · DB: ${JSON.stringify(dbDedupKey)}`,
+        ),
+      )
+      return decide(violations)
+    }
+  }
+
   // ── R1. status 가 8값 밖 → HOLD 강등 ──────────────────────
   // 🔴 알 수 없는 값을 PENDING 으로 자가복구하지 않는다 (C-6).
   //    우나어는 그렇게 해서 오타 한 글자가 곧 발행이었다.
@@ -161,19 +192,32 @@ export function validateCandidate(input, context = {}) {
     add(violation('R1', DECISION.HOLD, `알 수 없는 status: ${JSON.stringify(input.status)}`))
   }
 
-  // ── R9. PUBLISHED 되돌리기 → 거부 ────────────────────────
+  // ── R9. 재발행 → 거부 ───────────────────────────────────
   // 이미 발행된 것을 PENDING 으로 되돌리면 worker 가 같은 원문을 다시 발행한다.
   // dedupKey·sheetCandidateId 의 UNIQUE 가 막아주지만 여기서 먼저 거부한다.
   // 내려야 한다면 TAKEDOWN 경로(§6-6)를 쓴다.
-  if (input.previousStatus === 'PUBLISHED' && statusKnown && status !== 'PUBLISHED') {
-    if (status === 'TAKEDOWN') {
-      // 유일하게 허용되는 PUBLISHED 이후 전이다
-    } else {
+  //
+  // 🔴 "직전 상태" 가 아니라 "발행 이력" 을 본다.
+  //    previousStatus 단일 비교는 한 칸만 되돌아봐서 경유 경로에 샌다.
+  //
+  //      PUBLISHED → TAKEDOWN → PENDING
+  //        직전 상태 = TAKEDOWN → 옛 R9 는 발동하지 않는다
+  //        발행 이력 = 있음     → 지금 R9 는 거부한다
+  //
+  //    hasEverPublished 는 reader/publisher 가 DB 에서 도출해 주입한다.
+  //      createdPostId != null  OR  history 에 toStatus='PUBLISHED' 존재
+  //    두 조건을 OR 로 두는 이유는 §5-4 사고 경로(DB 발행 성공 → Sheet 갱신 실패)
+  //    에서 한쪽만 남을 수 있기 때문이다.
+  //
+  // 🔴 TAKEDOWN 은 유일한 예외로 남긴다. 발행된 글을 내리는 경로까지 막으면
+  //    §6-6 takedown 이 불가능해진다 — 그건 법적 요청에 답할 수 없다는 뜻이다.
+  if (input.hasEverPublished === true && statusKnown) {
+    if (status !== 'PUBLISHED' && status !== 'TAKEDOWN') {
       add(
         violation(
           'R9',
           DECISION.REJECT,
-          `PUBLISHED → ${status} 되돌리기는 허용하지 않는다. 내리려면 TAKEDOWN 을 쓴다`,
+          `이미 발행된 이력이 있다. ${status} 로 되돌리는 것은 허용하지 않는다. 내리려면 TAKEDOWN 을 쓴다`,
         ),
       )
       return decide(violations)
@@ -414,7 +458,6 @@ const NOW = new Date('2026-08-25T00:00:00.000Z') // 고정 시각. 테스트가 
 const BASE = {
   candidateId: 'c0000000-0000-4000-8000-000000000000',
   status: 'PENDING',
-  previousStatus: 'HOLD',
   board: 'free',
   founderTitle: '오늘 저녁 뭐 드셨어요',
   originalTitle: '오늘 저녁 뭐 드셨나요?',
@@ -423,11 +466,26 @@ const BASE = {
   sourceUrl: 'https://www.82cook.com/entiz/read.php?num=1',
   sourceArticleId: '1',
   dedupKey: 'sha256:base',
+  /** DB 원장 실측값 (R11). null 이면 신규 후보다 */
+  dbDedupKey: 'sha256:base',
+  /** DB 발행 이력 (R9). previousStatus 를 대체한다 */
+  hasEverPublished: false,
   content: '오늘 저녁은 그냥 김치찌개 끓였어요. 다들 뭐 드셨는지 궁금하네요.',
   contentGuard: { ok: true },
 }
 
-const f = (over) => ({ ...BASE, ...over })
+/**
+ * fixture 헬퍼.
+ *
+ * dbDedupKey 를 명시하지 않으면 Sheet 값과 같다고 본다 (= 위조 없음).
+ * 이렇게 하지 않으면 dedupKey 를 바꾸는 모든 fixture 가 R11 에 걸려
+ * 정작 검증하려던 규칙에 도달하지 못한다.
+ */
+const f = (over) => {
+  const merged = { ...BASE, ...over }
+  if (!('dbDedupKey' in over)) merged.dbDedupKey = merged.dedupKey
+  return merged
+}
 
 /** 각 fixture 는 "무엇이 막혀야 하는가" 를 이름으로 말한다. */
 const FIXTURES = [
@@ -478,12 +536,70 @@ const FIXTURES = [
   },
   {
     name: 'PUBLISHED 에서 PENDING 으로 되돌리려는 후보',
-    input: f({ candidateId: 'c9', status: 'PENDING', previousStatus: 'PUBLISHED', dedupKey: 'k9' }),
+    input: f({ candidateId: 'c9', status: 'PENDING', hasEverPublished: true, dedupKey: 'k9' }),
     expect: { decision: 'REJECT', rules: ['R9'] },
   },
   {
     name: 'PUBLISHED 에서 TAKEDOWN 은 허용',
-    input: f({ candidateId: 'c10', status: 'TAKEDOWN', previousStatus: 'PUBLISHED', dedupKey: 'k10' }),
+    input: f({ candidateId: 'c10', status: 'TAKEDOWN', hasEverPublished: true, dedupKey: 'k10' }),
+    expect: { decision: 'PASS', rules: [] },
+  },
+  {
+    // 🔴 옛 R9(previousStatus 단일 비교)가 새던 경로다.
+    //    직전 상태는 TAKEDOWN 이라 "PUBLISHED 에서 되돌리는 중" 으로 보이지 않는다.
+    //    이 fixture 가 통과(PASS)로 바뀌면 R9 가 다시 한 칸만 보고 있다는 뜻이다.
+    name: 'PUBLISHED → TAKEDOWN → PENDING 우회 시도',
+    input: f({ candidateId: 'c20', status: 'PENDING', hasEverPublished: true, dedupKey: 'k20' }),
+    expect: { decision: 'REJECT', rules: ['R9'] },
+  },
+  {
+    // §5-4 사고 경로: DB 발행 성공 → Sheet 갱신 실패 → history 가 비어 있음.
+    // createdPostId 한쪽만으로도 hasEverPublished 가 서야 한다 (OR 조건).
+    name: 'createdPostId 만 있고 history 가 없는 발행 이력',
+    input: f({ candidateId: 'c21', status: 'PENDING', hasEverPublished: true, dedupKey: 'k21' }),
+    expect: { decision: 'REJECT', rules: ['R9'] },
+  },
+  {
+    // history 만 있고 createdPostId 가 없는 반대 경우도 같은 결론이어야 한다.
+    name: 'history 만 있고 createdPostId 가 없는 발행 이력',
+    input: f({ candidateId: 'c22', status: 'PENDING', hasEverPublished: true, dedupKey: 'k22' }),
+    expect: { decision: 'REJECT', rules: ['R9'] },
+  },
+  {
+    // 🔴 R11 본체 — Sheet M열을 손으로 고쳐 R7 을 우회하려는 시도.
+    name: 'Sheet dedupKey 수동 변경 (원장과 불일치)',
+    input: f({
+      candidateId: 'c23',
+      dedupKey: 'sha256:손으로바꾼값',
+      dbDedupKey: 'sha256:원장값',
+    }),
+    expect: { decision: 'REJECT', rules: ['R11'] },
+  },
+  {
+    // R11 이 R7 보다 앞에 있어야 하는 이유. 위조 + 중복이면 위조를 먼저 말해야
+    // 창업자가 "왜 중복이지" 가 아니라 "왜 키가 다르지" 를 본다.
+    name: 'dedupKey 위조 + 기존 키와 충돌 → R11 이 먼저',
+    input: f({ candidateId: 'c24', dedupKey: 'known-1', dbDedupKey: 'sha256:원장값' }),
+    context: { seenDedupKeys: new Set(['known-1']) },
+    expect: { decision: 'REJECT', rules: ['R11'] },
+  },
+  {
+    // dbDedupKey null = DB 에 아직 행이 없다(신규 후보). 위조가 아니다.
+    name: '신규 후보 (dbDedupKey null) 는 R11 을 통과',
+    input: f({ candidateId: 'c25', dedupKey: 'k25', dbDedupKey: null }),
+    expect: { decision: 'PASS', rules: [] },
+  },
+  {
+    // dbDedupKey undefined = 주입하지 않음 → 검사하지 않는다.
+    // 🔴 통과했다고 "위조가 없다" 는 뜻이 아니다. reader 가 NOT_INJECTED 로 알린다.
+    name: 'dbDedupKey 미주입이면 R11 을 검사하지 않는다',
+    input: f({ candidateId: 'c26', dedupKey: 'k26', dbDedupKey: undefined }),
+    expect: { decision: 'PASS', rules: [] },
+  },
+  {
+    // hasEverPublished 미주입도 같다. R9 는 판정하지 않는다.
+    name: 'hasEverPublished 미주입이면 R9 를 검사하지 않는다',
+    input: f({ candidateId: 'c27', dedupKey: 'k27', hasEverPublished: undefined }),
     expect: { decision: 'PASS', rules: [] },
   },
   {
@@ -571,7 +687,7 @@ function run() {
   const report = []
 
   for (const fx of FIXTURES) {
-    const got = validateCandidate(fx.input, { policy, now: NOW })
+    const got = validateCandidate(fx.input, { ...fx.context, policy, now: NOW })
     const gotRules = rulesOf(got)
     const wantRules = [...fx.expect.rules].sort()
     const ok =
@@ -640,5 +756,5 @@ if (isMain) {
     process.exit(1)
   }
 
-  console.log(`\n✅ fixture ${report.length}건 전부 기대와 일치 — R1~R10 · G-A · G-B 가 설계대로 막는다\n`)
+  console.log(`\n✅ fixture ${report.length}건 전부 기대와 일치 — R1~R11 · G-A · G-B 가 설계대로 막는다\n`)
 }

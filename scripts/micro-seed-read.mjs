@@ -53,10 +53,16 @@ const ROW = [
   '',
 ]
 
-/** 시트에 없는 세 필드 — 주입되어야 게이트가 판정한다 */
+/**
+ * 시트에 없는 네 필드 — 주입되어야 게이트가 판정한다.
+ *
+ * dbDedupKey 는 ROW 의 M열(dedupKey)과 같은 값이다 = 위조 없음.
+ * hasEverPublished 는 false = 발행 이력 없음(신규 후보).
+ */
 const INJECTIONS = {
   content: '오늘 저녁은 그냥 김치찌개 끓였어요. 다들 뭐 드셨는지 궁금하네요.',
-  previousStatus: 'HOLD',
+  hasEverPublished: false,
+  dbDedupKey: 'sha256:base',
   contentGuard: { ok: true },
 }
 
@@ -121,27 +127,65 @@ const HEADER_FIXTURES = [
 
 const MAP_FIXTURES = [
   {
-    name: '주입 3개 모두 있으면 진단 없음',
+    name: '주입 4개 모두 있으면 진단 없음',
     row: ROW,
     injections: INJECTIONS,
     expect: (c, d) => {
       if (d.length) return `진단이 나오면 안 된다: ${d.map((x) => x.column).join(', ')}`
       if (c.content !== INJECTIONS.content) return 'content 주입이 반영되지 않았다'
-      if (c.previousStatus !== 'HOLD') return 'previousStatus 주입이 반영되지 않았다'
+      if (c.hasEverPublished !== false) return 'hasEverPublished 주입이 반영되지 않았다'
+      if (c.dbDedupKey !== 'sha256:base') return 'dbDedupKey 주입이 반영되지 않았다'
       return null
     },
   },
   {
-    name: '주입 없으면 NOT_INJECTED 3건 (조용히 통과 금지)',
+    name: '주입 없으면 NOT_INJECTED 4건 (조용히 통과 금지)',
     row: ROW,
     injections: {},
     expect: (c, d) => {
       const missing = d.filter((x) => x.kind === 'NOT_INJECTED').map((x) => x.column).sort()
       if (missing.join(',') !== [...INJECTED_FIELDS].sort().join(','))
-        return `NOT_INJECTED 가 3건이어야 한다. 받은 값: ${missing.join(', ') || '(없음)'}`
+        return `NOT_INJECTED 가 4건이어야 한다. 받은 값: ${missing.join(', ') || '(없음)'}`
       for (const f of INJECTED_FIELDS) {
         if (f in c) return `${f} 를 지어내면 안 된다 (undefined 로 남아야 한다)`
       }
+      return null
+    },
+  },
+  {
+    // 🔴 false 는 "발행 이력 없음" 이라는 유효한 답이다. 미주입과 다르다.
+    name: 'hasEverPublished=false 는 주입으로 인정된다 (미주입과 구분)',
+    row: ROW,
+    injections: { hasEverPublished: false },
+    expect: (c, d) => {
+      if (c.hasEverPublished !== false) return 'false 가 주입으로 인정되지 않았다'
+      if (d.some((x) => x.kind === 'NOT_INJECTED' && x.column === 'hasEverPublished'))
+        return 'false 를 미주입으로 오판했다'
+      return null
+    },
+  },
+  {
+    // 🔴 null 은 "DB 에 행이 없다(신규 후보)" 라는 유효한 답이다.
+    //    undefined(조회하지 않음)와 뭉뚱그리면 R11 이 조용히 꺼진다.
+    name: 'dbDedupKey=null 은 주입으로 인정된다 (신규 후보)',
+    row: ROW,
+    injections: { dbDedupKey: null },
+    expect: (c, d) => {
+      if (c.dbDedupKey !== null) return 'null 이 주입으로 인정되지 않았다'
+      if (d.some((x) => x.kind === 'NOT_INJECTED' && x.column === 'dbDedupKey'))
+        return 'null 을 미주입으로 오판했다'
+      return null
+    },
+  },
+  {
+    // R11 이 대조할 두 값이 reader 를 지나며 그대로 살아 있어야 한다.
+    // 여기서 reader 가 Sheet 값을 DB 값으로 덮어쓰면 위조가 사라진다.
+    name: 'dedupKey 위조 시 두 값을 모두 보존한다 (덮어쓰지 않는다)',
+    row: r({ 12: 'sha256:손으로바꾼값' }),
+    injections: { ...INJECTIONS, dbDedupKey: 'sha256:원장값' },
+    expect: (c) => {
+      if (c.dedupKey !== 'sha256:손으로바꾼값') return 'Sheet dedupKey 를 덮어썼다'
+      if (c.dbDedupKey !== 'sha256:원장값') return 'DB dedupKey 가 보존되지 않았다'
       return null
     },
   },
@@ -227,6 +271,46 @@ const PIPE_FIXTURES = [
     expectRules: ['G-A'],
   },
   {
+    // 🔴 R11 — Sheet M열을 손으로 고쳐 R7 을 우회하려는 시도가
+    //    reader 를 지나 validator 까지 살아서 도달하는지 본다.
+    name: 'Sheet dedupKey 수동 변경 → R11 REJECT',
+    rows: [r({ 12: 'sha256:손으로바꾼값' })],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000000': { ...INJECTIONS, dbDedupKey: 'sha256:원장값' },
+    },
+    expectDecisions: ['REJECT'],
+    expectRules: ['R11'],
+  },
+  {
+    // 🔴 R9 — PUBLISHED → TAKEDOWN → PENDING 경유 우회.
+    //    옛 R9(previousStatus 단일 비교)라면 직전 상태가 TAKEDOWN 이라 통과했다.
+    name: 'PUBLISHED → TAKEDOWN → PENDING 우회 → R9 REJECT',
+    rows: [ROW],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000000': { ...INJECTIONS, hasEverPublished: true },
+    },
+    expectDecisions: ['REJECT'],
+    expectRules: ['R9'],
+  },
+  {
+    // 발행된 글을 내리는 경로는 열려 있어야 한다 (§6-6 takedown).
+    name: '발행 이력이 있어도 TAKEDOWN 은 통과',
+    rows: [r({ 1: 'TAKEDOWN' })],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000000': { ...INJECTIONS, hasEverPublished: true },
+    },
+    expectDecisions: ['PASS'],
+  },
+  {
+    // 신규 후보 — DB 에 행이 없으니 대조할 원장값도 없다. 위조가 아니다.
+    name: '신규 후보 (dbDedupKey null) → PASS',
+    rows: [ROW],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000000': { ...INJECTIONS, dbDedupKey: null },
+    },
+    expectDecisions: ['PASS'],
+  },
+  {
     name: 'status 소문자 → R1 HOLD',
     rows: [r({ 1: 'pending' })],
     injectionsBy: { 'c0000000-0000-4000-8000-000000000000': INJECTIONS },
@@ -278,7 +362,10 @@ const PIPE_FIXTURES = [
     rows: [ROW, r({ 0: 'c0000000-0000-4000-8000-000000000001', 12: 'sha256:other' })],
     injectionsBy: {
       'c0000000-0000-4000-8000-000000000000': INJECTIONS,
-      'c0000000-0000-4000-8000-000000000001': INJECTIONS,
+      // 🔴 dbDedupKey 는 행마다 그 행의 원장값이어야 한다.
+      //    INJECTIONS 를 그대로 재사용하면 dedupKey 가 다른 행에서 R11 이 걸려
+      //    정작 검증하려던 R10 에 도달하지 못한다.
+      'c0000000-0000-4000-8000-000000000001': { ...INJECTIONS, dbDedupKey: 'sha256:other' },
     },
     expectDecisions: ['REJECT', 'REJECT'],
     expectRules: ['R10'],
