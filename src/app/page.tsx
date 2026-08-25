@@ -3,6 +3,7 @@ import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
 import Logo from '@/components/brand/Logo'
 import MenuIcon from '@/components/icons/MenuIcon'
+import { getBoardBySlug } from '@/lib/board-registry'
 import { getRecentDiscoveryPosts } from '@/lib/queries/posts'
 
 export const dynamic = 'force-dynamic'
@@ -15,6 +16,8 @@ export const dynamic = 'force-dynamic'
  */
 export default async function HomePage() {
   const posts = await getRecentDiscoveryPosts(6)
+  // 섹션 아이콘의 색과 모양은 board-registry 가 정한다. 여기서 토큰명을 직접 쓰지 않는다.
+  const best = getBoardBySlug('best')!
 
   return (
     <PageShell>
@@ -34,11 +37,11 @@ export default async function HomePage() {
                   aria-hidden
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]"
                   style={{
-                    backgroundColor: 'var(--icon-best-bg)',
-                    color: 'var(--icon-best-stroke)',
+                    backgroundColor: `var(${best.iconBgVar})`,
+                    color: `var(${best.iconStrokeVar})`,
                   }}
                 >
-                  <MenuIcon name="star" size={18} />
+                  <MenuIcon name={best.icon} size={18} />
                 </span>
                 지금 뜨는 이야기
               </h2>
