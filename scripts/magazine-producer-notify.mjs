@@ -12,6 +12,8 @@
  *    상태가 남는 곳은 run.json 의 status 뿐이다.
  *
  * 판정 규칙
+ *   선정 > 0 && brief.md 없음                → ERROR    사람이 brief 를 써야 한다
+ *   선정 > 0 && brief 있고 draft.md 없음     → ERROR    회수가 막혔다(ChatGPT 접근)
  *   status === 'ABORTED'                     → ERROR    이전 실행이 죽었다
  *   status === 'PARTIAL'                     → ERROR    도중에 끊겼다
  *   run.json 없음                            → ERROR    01:00 에 안 돌았다
@@ -101,17 +103,39 @@ export function judge({ date, run, runExists }) {
   }
 
   // 선정은 됐는데 원고가 안 만들어진 경우 — 회수 단계가 막혔다는 뜻이다.
-  // 어떤 이유인지는 여기서 모른다. 세는 것만 한다(runner 가 자기 로그에 남긴다).
+  //
+  // 🔴 원인을 둘로 나눈다. 조치가 완전히 다르기 때문이다.
+  //    2026-08-26 첫 무인 실행에서 선정 3건이 전부 brief_missing 이었는데,
+  //    알림은 "ChatGPT 접근 상태를 본다" 로 나갔다. probe 를 돌려도 원인이 안 나온다.
+  //    brief 를 쓰는 것은 사람 몫이고(§13.1), ChatGPT 접근과는 무관한 단계다.
+  //
+  // 판정 기준은 runner 의 fetchSlug 와 같다(magazine-webui-runner.mjs):
+  //    draft.md 있음        → 이미 끝난 건. 여기서 세지 않는다
+  //    brief.md 없음        → brief_missing. 회수를 시도조차 하지 않았다
+  //    brief 는 있는데 없음 → 회수가 시도됐으나 원고를 못 받았다
   if (selected > 0) {
     const missing = (run.selected ?? [])
       .map((x) => (typeof x === 'string' ? x : x?.slug))
       .filter(Boolean)
       .filter((slug) => !existsSync(join(DRAFTS_DIR, slug, 'draft.md')))
-    if (missing.length) {
+
+    const briefMissing = missing.filter((slug) => !existsSync(join(DRAFTS_DIR, slug, 'brief.md')))
+    const fetchFailed = missing.filter((slug) => existsSync(join(DRAFTS_DIR, slug, 'brief.md')))
+
+    if (briefMissing.length) {
+      alerts.push({
+        severity: 'ERROR',
+        title: '매거진 brief 가 아직 없다',
+        reason: `선정 ${selected}건 중 ${briefMissing.length}건에 brief.md 가 없다 — 원고 회수를 시도하지 않았다`,
+        next: `_runs/${date}/selected/{slug}/brief.todo.md 의 TODO 를 채워 drafts/magazine/{slug}/brief.md 로 저장한다`,
+      })
+    }
+
+    if (fetchFailed.length) {
       alerts.push({
         severity: 'ERROR',
         title: '매거진 원고가 만들어지지 않았다',
-        reason: `선정 ${selected}건 중 ${missing.length}건에 draft.md 가 없다`,
+        reason: `brief 는 있는데 ${fetchFailed.length}건에 draft.md 가 없다`,
         next: 'ChatGPT 접근 상태를 본다 — node scripts/magazine-webui-runner.mjs --dry-run --probe',
       })
     }
