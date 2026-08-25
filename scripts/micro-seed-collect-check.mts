@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { roundUpToFiveMinutes, kstString, utcWallClock } from './lib/micro-seed-time.mjs'
 import {
   SOURCE_SITE, BOARD_NAME, DELAY_MS, USER_AGENT, ARTICLE_URL, LIST_URL,
   computeDedupKey, parseRobotsTxt, isPathAllowed, toRobotsPath,
@@ -347,6 +348,94 @@ const bad = (name: string, kind: string, detail: string) => {
   const bad2 = checks.filter((c) => !c.ok)
   if (bad2.length === 0) ok('importer 소스 계약', 'guard', `${checks.length}종 전부`)
   else bad('importer 소스 계약', 'guard', `🔴 ${bad2.map((c) => `${c.name}(${c.detail})`).join(' / ')}`)
+}
+
+// ── ⑮ 예약 제안값 (B-1) ─────────────────────────────────
+//
+//    🔴 제안값이지 확정이 아니다. status 는 HOLD 로 남고 창업자가 Sheet F열에서 고친다.
+//       비워 두면 매 발행마다 reschedule 을 따로 돌려야 하고 그때부터 20분을 기다린다 —
+//       적재 시점에 넣어 두면 그 대기가 절차에 흡수된다.
+{
+  const NOW = new Date('2026-08-26T00:00:00Z') // = 09:00 KST
+  const cases = [
+    { name: '기본 25분 → 5분 올림', min: 25, expectKst: '2026-08-26 09:25' },
+    { name: '+23분 → 09:25 로 올림', min: 23, expectKst: '2026-08-26 09:25' },
+    { name: '+26분 → 09:30 로 올림', min: 26, expectKst: '2026-08-26 09:30' },
+    { name: '--in=40 반영', min: 40, expectKst: '2026-08-26 09:40' },
+    { name: '--in=90 반영', min: 90, expectKst: '2026-08-26 10:30' },
+  ]
+  const wrong = cases.filter(
+    (c) => kstString(roundUpToFiveMinutes(new Date(NOW.getTime() + c.min * 60_000))) !== c.expectKst,
+  )
+  if (wrong.length === 0) {
+    ok('예약 제안 — 5분 올림 · --in 반영', 'policy', `${cases.length}종 전부`)
+  } else {
+    bad('예약 제안 — 5분 올림 · --in 반영', 'policy',
+      `🔴 ${wrong.map((c) => `${c.name} → ${kstString(roundUpToFiveMinutes(new Date(NOW.getTime() + c.min * 60_000)))}`).join(' / ')}`)
+  }
+
+  // 🔴 DB 는 UTC, Sheet 는 KST 다. 같은 순간을 가리켜야 한다 —
+  //    한쪽만 어긋나면 승인과 발행이 다른 시각을 본다.
+  const at = roundUpToFiveMinutes(new Date(NOW.getTime() + 25 * 60_000))
+  const kst = kstString(at)
+  const utc = utcWallClock(at)
+  const sameInstant = new Date(`${utc.replace(' ', 'T')}Z`).getTime() === at.getTime()
+  const kstIsNineHoursAhead =
+    new Date(`${utc.replace(' ', 'T')}Z`).getTime() + 9 * 3600_000 ===
+    new Date(`${kst.replace(' ', 'T')}:00Z`).getTime()
+  if (sameInstant && kstIsNineHoursAhead) {
+    ok('예약 제안 — DB(UTC) 와 Sheet(KST) 가 같은 순간', 'policy', `${kst} KST = ${utc} UTC`)
+  } else {
+    bad('예약 제안 — DB(UTC) 와 Sheet(KST) 가 같은 순간', 'policy', `same=${sameInstant} offset=${kstIsNineHoursAhead}`)
+  }
+}
+
+// ── ⑯ importer 예약 소스 계약 ───────────────────────────
+{
+  const raw = readFileSync(join(HERE, 'micro-seed-import-82cook-live.mts'), 'utf-8')
+  const code = raw.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+  const checks: Array<{ name: string; ok: boolean; detail: string }> = [
+    {
+      name: '기본 25분 · --in 으로 조정',
+      ok: /SCHEDULE_DEFAULT_MINUTES = 25/.test(code) && /startsWith\('--in='\)/.test(code),
+      detail: '제안 간격',
+    },
+    {
+      name: '--no-schedule 이면 비운다',
+      ok: /NO_SCHEDULE = process\.argv\.includes\('--no-schedule'\)/.test(code) &&
+          /NO_SCHEDULE \? null :/.test(code) &&
+          /proposed \? kstString\(proposed\) : ''/.test(code),
+      detail: 'DB null · Sheet 공란',
+    },
+    {
+      name: '5분 올림을 공용 함수로 쓴다',
+      ok: /roundUpToFiveMinutes\(/.test(code) && !/setUTCMinutes|% 5/.test(code),
+      detail: '계산을 다시 적지 않는다 (C-2)',
+    },
+    {
+      name: 'status 는 HOLD 로 남는다',
+      ok: /INITIAL_STATUS = 'HOLD'/.test(code) && !/'PENDING'/.test(code) && !/'PUBLISHED'/.test(code),
+      detail: '예약을 넣어도 승인되지 않는다',
+    },
+    {
+      name: '예약 read-back 을 검증한다',
+      ok: /예약 read-back 불일치/.test(raw) && /dbKst !== sheetKst/.test(code),
+      detail: 'DB(UTC) 와 Sheet(KST) 가 같은 순간인지',
+    },
+    {
+      name: 'status read-back 도 본다',
+      ok: /back\.status !== INITIAL_STATUS/.test(code),
+      detail: '적재 중 상태가 바뀌지 않았는가',
+    },
+    {
+      name: 'Post · publisher 경로가 없다',
+      ok: !/post\.(create|update|delete)/.test(code) && !/publish-live|publish-lib/.test(code),
+      detail: '적재는 발행이 아니다',
+    },
+  ]
+  const bad5 = checks.filter((c) => !c.ok)
+  if (bad5.length === 0) ok('importer 예약 계약', 'guard', `${checks.length}종 전부`)
+  else bad('importer 예약 계약', 'guard', `🔴 ${bad5.map((c) => `${c.name}(${c.detail})`).join(' / ')}`)
 }
 
 // ── 출력 ────────────────────────────────────────────────
