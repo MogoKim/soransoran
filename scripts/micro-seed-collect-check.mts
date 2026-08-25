@@ -228,6 +228,127 @@ const bad = (name: string, kind: string, detail: string) => {
   else bad('상세 제목 파싱', 'parse', String(t))
 }
 
+// ── ⑬ 목록 산출물도 필드가 갖춰진다 (2026-08-26 실측 결함) ──
+//    🔴 목록 저장이 buildCollected 를 거치지 않아 sourceBoardName · sourceCapturedAt 이
+//       빠져 있었다. 상세는 9필드인데 목록은 6필드였고, 목록 파일을 importer 에 넘기면
+//       두 칸이 빈 채로 원장에 들어간다. 정규화 경로를 하나로 두고 여기서 잠근다.
+{
+  const code = readFileSync(join(HERE, 'micro-seed-collect-82cook.mts'), 'utf-8')
+    .split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+  const usesBuilder = /writeJsonl\(listPath, items\.map\(\(i\) => buildCollected\(/.test(code)
+  const noHandRolled = !/writeJsonl\(listPath, items\.map\(\(i\) => \(\{/.test(code)
+  // 실제 산출물 모양도 확인한다 — rawBody 는 빈 문자열이어야 한다
+  const listRow = buildCollected(
+    { sourceArticleId: '1', sourceUrl: ARTICLE_URL('1'), originalTitle: 't', sourceCommentCount: 0 },
+    '', '2026-08-26T00:00:00.000Z',
+  )
+  const has9 = ['sourceSite','sourceUrl','sourceArticleId','sourceBoardName','sourceCommentCount',
+    'originalTitle','rawBody','sourceCapturedAt','dedupKey'].every((k) => k in listRow)
+  const emptyBody = listRow.rawBody === ''
+  if (usesBuilder && noHandRolled && has9 && emptyBody) {
+    ok('목록 산출물도 9필드를 갖춘다', 'guard', 'buildCollected 경로 · rawBody 는 빈 값')
+  } else {
+    bad('목록 산출물도 9필드를 갖춘다', 'guard',
+      `builder=${usesBuilder} noHand=${noHandRolled} fields9=${has9} emptyBody=${emptyBody}`)
+  }
+}
+
+// ── ⑭ importer 소스 계약 ────────────────────────────────
+{
+  const raw = readFileSync(join(HERE, 'micro-seed-import-82cook-live.mts'), 'utf-8')
+  const code = raw.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+
+  const checks: Array<{ name: string; ok: boolean; detail: string }> = [
+    {
+      name: 'dry-run 기본 · --apply + --limit=1 둘 다 필요',
+      ok: /const APPLY = process\.argv\.includes\('--apply'\)/.test(code) &&
+          /if \(!APPLY \|\| LIMIT !== 1\)/.test(code) &&
+          /APPLY && LIMIT === 1/.test(code),
+      detail: '스위치 두 개를 요구한다',
+    },
+    {
+      name: 'JSONL 중복은 dedupKey 로 접는다',
+      ok: /byKey\.set\(row\.dedupKey/.test(code) && /DUPLICATE_IN_JSONL/.test(code),
+      detail: '중복은 오류가 아니라 진단',
+    },
+    {
+      name: 'sourceSite 가 82cook 이 아니면 거부',
+      ok: /row\.sourceSite !== SOURCE_SITE/.test(code),
+      detail: '정본 외 출처를 원장에 들이지 않는다',
+    },
+    {
+      name: 'dedupKey 를 재계산해 대조한다',
+      ok: /computeDedupKey\(row\.sourceSite, id\)/.test(code) && /row\.dedupKey !== expectKey/.test(code),
+      detail: '입력 파일의 값을 믿지 않는다 (§6-10 0차)',
+    },
+    {
+      name: 'rawBody 가 비면 거부 (목록 파일 오투입)',
+      ok: /rawBody\.trim\(\)/.test(code) && /상세 fetch 산출물을 준다/.test(raw),
+      detail: '목록 JSONL 을 잘못 넘겨도 적재되지 않는다',
+    },
+    {
+      name: 'DB · Sheet 중복을 쓰기 전에 확인한다',
+      // 🔴 문자열이 있는지가 아니라 **위치**를 본다.
+      //    ALREADY_IN_DB 는 두 곳(candidate · raw)에 있어서 하나만 지워도
+      //    단순 포함 검사는 통과한다 — 역검증에서 실제로 뚫렸다.
+      //    중복 조회 세 개가 전부 create 보다 **앞**에 있어야 멱등하다.
+      ok: (() => {
+        const write = code.indexOf('$transaction(async (tx)')
+        const cand = code.indexOf('microSeedCandidate.findFirst')
+        const raw = code.indexOf('microSeedRawContent.findFirst')
+        const sheet = code.indexOf('sheetKeys.has(row.dedupKey)')
+        return [cand, raw, sheet].every((i) => i !== -1 && i < write) && write !== -1
+      })(),
+      detail: '조회 3종이 전부 create 앞에 있다',
+    },
+    {
+      name: 'Sheet 는 bootstrap 모드 · append 없음',
+      ok: /mode:\s*'bootstrap'/.test(code) && !/:append\b/.test(code) && !/appendRow/.test(code),
+      detail: '빈 행을 찾아 그 자리에 쓴다',
+    },
+    {
+      name: 'postUrl · updatedBySystemAt 공란 강제',
+      ok: /postUrl:\s*''/.test(code) && /updatedBySystemAt:\s*''/.test(code),
+      detail: '발행 전 흔적을 남기지 않는다',
+    },
+    {
+      name: 'HOLD 로만 적재한다',
+      ok: /INITIAL_STATUS = 'HOLD'/.test(code) &&
+          !/'PENDING'/.test(code) && !/'PUBLISHED'/.test(code),
+      detail: 'PENDING · PUBLISHED 로 가는 경로가 없다',
+    },
+    {
+      name: 'Post 를 만들지 않는다',
+      ok: !/post\.(create|update|delete|upsert)/.test(code) && !/publish-live|publish-lib/.test(code),
+      detail: '발행은 publisher 의 일이다',
+    },
+    {
+      name: 'RawContent origin 은 live 고정',
+      ok: /origin:\s*'live'/.test(code) && !/unao_legacy/.test(code),
+      detail: '§10-1 · 정책 12',
+    },
+    {
+      name: 'board 는 free · FREE 고정',
+      // 🔴 주석의 설명("magazine·best 로 갈 경로를 만들지 않는다")까지 잡으면 안 된다.
+      //    막을 것은 **값으로 쓰이는** 것이다 — 따옴표 안의 리터럴만 본다.
+      ok: /BOARD_SHEET_VALUE = 'free'/.test(code) && /BOARD_TYPE = 'FREE'/.test(code) &&
+          !/'(magazine|MAGAZINE|BEST|best)'/.test(code),
+      detail: '§6-9-D 화이트리스트',
+    },
+    {
+      name: '네이버 세션 · cron 흔적이 없다',
+      // 🔴 scheduledPublishAt 은 Sheet 필드명이다. `schedule` 로 잡으면 오탐이다 —
+      //    막을 것은 크론 배선이지 필드 이름이 아니다.
+      ok: !/NID_AUT|NID_SES|browser_cookie3|storageState|cafe\.naver/.test(code) &&
+          !/\bcron\b/i.test(code) && !/node-cron|setInterval|CronJob/.test(code),
+      detail: '§6-9-F · 개인 자격증명 미사용',
+    },
+  ]
+  const bad2 = checks.filter((c) => !c.ok)
+  if (bad2.length === 0) ok('importer 소스 계약', 'guard', `${checks.length}종 전부`)
+  else bad('importer 소스 계약', 'guard', `🔴 ${bad2.map((c) => `${c.name}(${c.detail})`).join(' / ')}`)
+}
+
 // ── 출력 ────────────────────────────────────────────────
 console.log('\n82cook 수집 레일 — fixture 자기검증')
 console.log(`  sourceSite=${SOURCE_SITE} · 게시판 ${BOARD_NAME} · 지연 ${DELAY_MS}ms`)
