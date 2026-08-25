@@ -569,9 +569,61 @@ node scripts/magazine-webui-runner.mjs --fetch does-nap-affect-sleep
 | ③ | `---` 가 `<hr>` 로, `## ` 가 `<h2>` 로 렌더돼 **원본 표기가 사라진다** | 처음부터 마크다운 코드블록으로 요청하고 `pre code` 회수 |
 | ④ | Cloudflare / 로그인 만료 | **보내기 전에** probe 로 거른다. 재시도하지 않는다 |
 
+### 일괄 회수 — `--fetch-run` (01:00 무인 경로)
+
+```bash
+node scripts/magazine-webui-runner.mjs --fetch-run --dry-run   순회 계획만 (전송 0건)
+node scripts/magazine-webui-runner.mjs --fetch-run [--limit N]
+```
+
+`run.json` 의 selected 를 순회하며 원고를 받는다.
+wrapper 가 producer 다음에 부른다.
+
+```
+01:00 → producer-run
+          ├ producer-plan      오늘 무엇을 만들지 정한다
+          ├ webui-runner --fetch-run   그 선정분의 원고를 받는다
+          └ producer-notify    알릴 것이 있으면 Slack
+```
+
+🔴 **원고까지다.** `register` 도 PR 도 부르지 않는다.
+`articles.ts` 와 `topic-queue.ts` 를 무인으로 고치지 않는다 — 사람이 diff 를 본 뒤에 한다.
+
+🔴 **producer 가 실패하면 건너뛴다.** 선정 결과가 없으면 받을 대상도 없다.
+
+### 실패는 두 갈래다
+
+대응이 완전히 다르기 때문에 나눈다.
+
+| 갈래 | 사유 | 동작 |
+|---|---|---|
+| **전역** | `cloudflare_blocked` · `login_required` · `chrome_not_running` · `browser_missing` · `permission_blocked` · `connect_failed` | **즉시 중단** — 다음 slug 도 어차피 실패한다. 재시도하면 봇 감지만 악화된다 |
+| **개별** | `upload_timeout` · `response_timeout` · `markers_missing` · `attach_failed` · `send_button_missing` · `brief_missing` | **다음 slug 로 계속** — 이 글만의 문제다. 재고 확보가 목적이다 |
+
+종료 코드는 **전역 실패일 때만 1** 이다. 개별 실패는 나머지가 성공했을 수 있다.
+
+### Slack — 정상은 조용하다
+
+`notify` 가 **선정됐는데 `draft.md` 가 없는 건수**를 세어 ERROR 로 알린다.
+어떤 이유인지는 notify 가 모른다 — runner 가 자기 로그에 남긴다.
+
+```
+선정 3건 중 2건에 draft.md 가 없다
+→ ChatGPT 접근 상태를 본다 (--dry-run --probe)
+```
+
+### 🔴 brief 를 쓸 때 — 대조 문장과 금지어를 교차 검사한다
+
+7-D-13-C 에서 실제로 겪은 사고다. brief 의 "절대 쓰지 말 것" 에 `"반드시"` 를 넣어놓고
+같은 brief 의 "반드시 그대로 넣을 문장" 에 `"반드시"` 를 썼다.
+ChatGPT 는 지시대로 넣었고 `batch-qa` 가 BLOCKED 를 냈다.
+
+**대조 문장 5개에 금지어가 들어가지 않았는지 brief 작성 직후에 확인한다.**
+지금은 사람이 봐야 걸린다.
+
 ### 이 단계에서 하지 않는 것
 
-`md-to-draft` · `batch-qa` · `register` · PR 자동 생성 · Slack 발송.
+`md-to-draft` · `batch-qa` · `register` · PR 자동 생성 · Slack 실제 발송.
 
 ---
 

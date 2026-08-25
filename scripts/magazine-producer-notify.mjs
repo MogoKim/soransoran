@@ -43,6 +43,7 @@ import { buildMessage, send, webhookStatus, kstNow } from './lib/slack-notify.mj
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const RUNS_DIR = join(ROOT, 'drafts/magazine/_runs')
+const DRAFTS_DIR = join(ROOT, 'drafts/magazine')
 const LOG_PATH = join(homedir(), 'Library/Logs/soransoran/magazine-producer.log')
 
 const MIN_DAYS = 7
@@ -97,6 +98,23 @@ export function judge({ date, run, runExists }) {
       reason: `재고 ${days}일 (최소 ${MIN_DAYS}일 · 목표 14일)`,
       next: '오늘 작업 패키지로 제작을 진행한다',
     })
+  }
+
+  // 선정은 됐는데 원고가 안 만들어진 경우 — 회수 단계가 막혔다는 뜻이다.
+  // 어떤 이유인지는 여기서 모른다. 세는 것만 한다(runner 가 자기 로그에 남긴다).
+  if (selected > 0) {
+    const missing = (run.selected ?? [])
+      .map((x) => (typeof x === 'string' ? x : x?.slug))
+      .filter(Boolean)
+      .filter((slug) => !existsSync(join(DRAFTS_DIR, slug, 'draft.md')))
+    if (missing.length) {
+      alerts.push({
+        severity: 'ERROR',
+        title: '매거진 원고가 만들어지지 않았다',
+        reason: `선정 ${selected}건 중 ${missing.length}건에 draft.md 가 없다`,
+        next: 'ChatGPT 접근 상태를 본다 — node scripts/magazine-webui-runner.mjs --dry-run --probe',
+      })
+    }
   }
 
   if (selected === 0 && typeof days === 'number' && days < MIN_DAYS) {
