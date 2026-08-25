@@ -9,6 +9,7 @@ import CommentItem from '@/components/features/CommentItem'
 import NextToRead from '@/components/features/NextToRead'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
+import { loginHref } from '@/lib/callback-url'
 import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail, getRecentDiscoveryPosts } from '@/lib/queries/posts'
 import { isSearchIndexable, robotsMetaFor } from '@/lib/post-visibility'
@@ -129,7 +130,7 @@ export default async function PostDetailPage({
           ) : (
             <p className="text-sm text-content-muted">
               <Link
-                href="/login"
+                href={loginHref(`${board.href}/${post.id}`)}
                 className="inline-flex min-h-[52px] items-center text-link"
               >
                 로그인
