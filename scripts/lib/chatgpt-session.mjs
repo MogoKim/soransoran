@@ -24,7 +24,8 @@
  *    Cloudflare challenge URL 의 __cf_chl_rt_tk 는 계정과 연결되고,
  *    로그인 화면 스크린샷에는 계정명이 찍힌다. 불리언 플래그와 상태 코드만 남긴다.
  */
-import { existsSync, lstatSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, lstatSync, mkdirSync, chmodSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -188,17 +189,66 @@ export function classifyPage({ httpStatus, title, signals = {} }) {
  * @param {{ headless?: boolean, timeoutMs?: number }} opts
  *   headless 는 명시적으로 막혀 있다. true 를 주면 실행하지 않고 에러를 던진다.
  */
-export async function probe({ timeoutMs = 45000, composerWaitMs = 20000 } = {}) {
+/**
+ * 전용 Chrome 이 CDP 로 붙을 수 있는 상태가 되도록 보장한다.
+ *
+ * 01:00 무인 실행에서는 사람이 창을 띄워 둘 수 없다. 그래서 wrapper 가 직접 띄운다.
+ *
+ * 🔴 이미 떠 있으면 재사용한다. 두 번 띄우지 않는다.
+ *    같은 프로필로 Chrome 을 또 띄우면 기존 창에 탭만 열리거나 프로필이 잠긴다.
+ *
+ * 🔴 프로필이 CDP 없이 점유돼 있으면 죽이지 않는다.
+ *    사람이 그 창에서 뭔가 하고 있을 수 있다. 상태만 돌려주고 판단은 호출자에게 맡긴다.
+ *
+ * 세션은 디스크에 남으므로 재기동해도 로그인이 유지된다(A 시험에서 확인).
+ * 만료되면 login_required 로 잡히고, 그건 사람만 풀 수 있다.
+ *
+ * @returns {{ ok: boolean, started: boolean, reason?: string }}
+ */
+export async function ensureChrome({ waitMs = 30000, pollMs = 1000 } = {}) {
+  if (await cdpAvailable()) return { ok: true, started: false }
+
+  if (!browserAvailable()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
+
+  // CDP 는 없는데 프로필은 쓰이고 있다 = 포트 없이 띄운 창이 있다.
+  // 죽이면 사람의 작업을 날린다. 알리고 끝낸다.
+  if (profileInUse()) {
+    return { ok: false, started: false, reason: STATUS.CHROME_NOT_RUNNING }
+  }
+
+  if (!existsSync(PROFILE_DIR)) mkdirSync(PROFILE_DIR, { recursive: true })
+  try { chmodSync(PROFILE_DIR, 0o700) } catch { /* 이미 맞으면 그만 */ }
+
+  const child = spawn(CHROME_APP, chromeArgs(), { detached: true, stdio: 'ignore' })
+  child.unref()
+
+  // 포트가 열릴 때까지 기다린다. Chrome 은 뜨는 데 몇 초 걸린다
+  const deadline = Date.now() + waitMs
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, pollMs))
+    if (await cdpAvailable()) return { ok: true, started: true }
+  }
+  return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING }
+}
+
+export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoStart = false } = {}) {
   // launched 가 아니라 connected 다 — 이 코드는 브라우저를 띄우지 않는다
   const out = { connected: false, httpStatus: null, profileExists: profileExists(), via: 'cdp' }
 
   if (!browserAvailable()) {
     return { ...out, status: STATUS.BROWSER_MISSING }
   }
-  // 🔴 여기서 브라우저를 띄우지 않는다. 떠 있는 것에만 붙는다.
-  //    띄우면 Playwright 가 프로필의 주인이 되고, 그 순간 세션 쿠키가 지워진다.
+  // 🔴 Playwright 로 띄우지 않는다. 띄우면 프로필의 주인이 되고 세션 쿠키가 지워진다.
+  //    autoStart 일 때도 일반 Chrome 을 spawn 할 뿐이다(ensureChrome).
   if (!(await cdpAvailable())) {
-    return { ...out, status: STATUS.CHROME_NOT_RUNNING, profileInUse: profileInUse() }
+    if (!autoStart) {
+      return { ...out, status: STATUS.CHROME_NOT_RUNNING, profileInUse: profileInUse() }
+    }
+    const r = await ensureChrome()
+    out.chromeStarted = r.started
+    if (!r.ok) {
+      return { ...out, status: r.reason ?? STATUS.CHROME_NOT_RUNNING, profileInUse: profileInUse() }
+    }
   }
 
   const { chromium } = await import('playwright-core')
