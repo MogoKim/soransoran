@@ -404,6 +404,29 @@ export async function fetchManuscript({ briefPath, outPath, promptText, required
   }
 }
 
+/**
+ * 실패를 두 갈래로 나눈다. 대응이 완전히 다르기 때문이다.
+ *
+ * 전역(fatal) — 다음 slug 도 어차피 실패한다. 재시도하면 봇 감지만 악화된다 → **즉시 중단**
+ * 개별(skip)  — 이 글만의 문제다. 나머지는 만들 수 있다 → **다음 slug 로 계속**
+ *
+ * 재고 확보가 목적이므로 하나가 막혔다고 전부 포기하지 않는다.
+ * 다만 계정이 막힌 상태에서 계속 두드리는 것은 손해만 크다.
+ */
+export const FATAL_REASONS = new Set([
+  STATUS.CLOUDFLARE_BLOCKED,
+  STATUS.LOGIN_REQUIRED,
+  STATUS.CHROME_NOT_RUNNING,
+  STATUS.BROWSER_MISSING,
+  STATUS.PERMISSION_BLOCKED,
+  'connect_failed',
+  'no_context',
+])
+
+export function isFatal(reason) {
+  return FATAL_REASONS.has(reason)
+}
+
 /** 프로필 권한 안내. 쿠키가 든 디렉터리라 다른 사용자가 읽을 수 있으면 안 된다 */
 export const PROFILE_SETUP_GUIDE = `
 전용 Chrome 준비 (창업자)

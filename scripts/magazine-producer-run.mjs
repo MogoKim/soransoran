@@ -3,9 +3,12 @@
  * launchd 진입점 — producer 를 돌리고, 결과를 판정해 필요할 때만 Slack 으로 알린다.
  *
  *   01:00 KST → 이 스크립트
- *                 ├ magazine-webui-runner.mjs       ChatGPT 에 닿는지 먼저 본다 (Chrome 자동 기동)
  *                 ├ magazine-producer-plan.mjs      오늘 무엇을 만들지 정한다
+ *                 ├ magazine-webui-runner.mjs       선정분의 원고를 받아 draft.md 로 저장
  *                 └ magazine-producer-notify.mjs    알릴 것이 있으면 Slack
+ *
+ * 🔴 원고까지다. register 도 PR 도 부르지 않는다.
+ *    articles.ts 와 topic-queue.ts 를 무인으로 고치지 않는다 — 사람이 diff 를 본 뒤에 한다.
  *
  * 🔴 producer 본체를 수정하지 않는다.
  *    검증이 끝난 스크립트다. 여기서 감싸기만 한다.
@@ -50,17 +53,6 @@ const dryRun = process.argv.includes('--dry-run')
 
 line(`매거진 producer 시작${dryRun ? ' (dry-run)' : ''}`)
 
-// ── 0) ChatGPT 접근 확인 (Chrome 자동 기동) ─────────────────
-// 01:00 에는 사람이 창을 띄워 둘 수 없다. CDP 가 없으면 여기서 직접 띄운다.
-// 🔴 실패해도 producer 는 돌린다 — 재고 계산과 선정은 ChatGPT 와 무관하고,
-//    알림이 나가야 창업자가 로그인 만료를 안다.
-const webui = spawnSync(NODE, [WEBUI, '--dry-run', '--probe', '--auto-start'], { cwd: ROOT, stdio: 'inherit' })
-if (webui.error) {
-  line(`ChatGPT 접근 확인 실행 실패 — 계속한다 (${webui.error.code ?? webui.error.name})`)
-} else {
-  line(webui.status === 0 ? 'ChatGPT 접근 정상' : 'ChatGPT 접근 불가 — 원고 단계는 건너뛴다')
-}
-
 // ── 1) producer ────────────────────────────────────────────
 let planCode = 0
 if (dryRun) {
@@ -75,7 +67,24 @@ if (dryRun) {
   line(`producer 종료 코드 ${planCode}`)
 }
 
-// ── 2) notify ──────────────────────────────────────────────
+// ── 2) 원고 회수 ───────────────────────────────────────────
+// producer 가 고른 것들의 원고를 받는다. Chrome 이 없으면 --auto-start 가 띄운다.
+// 🔴 producer 가 실패했으면 건너뛴다 — 선정 결과가 없으면 받을 대상도 없다.
+// 🔴 실패해도 삼킨다. 재고 계산은 이미 끝났고, 알림이 나가야 창업자가 원인을 안다.
+if (dryRun) {
+  line('dry-run — 원고 회수를 실행하지 않는다')
+} else if (planCode !== 0) {
+  line('producer 가 실패해 원고 회수를 건너뛴다')
+} else {
+  const fetchRun = spawnSync(NODE, [WEBUI, '--fetch-run'], { cwd: ROOT, stdio: 'inherit' })
+  if (fetchRun.error) {
+    line(`원고 회수 실행 실패 — 무시한다 (${fetchRun.error.code ?? fetchRun.error.name})`)
+  } else {
+    line(fetchRun.status === 0 ? '원고 회수 완료' : '원고 회수 중단 — 전역 실패 (Slack 이 알린다)')
+  }
+}
+
+// ── 3) notify ──────────────────────────────────────────────
 // producer 가 죽었어도 돌린다 — run.json 이 없으면 notify 가 "실행되지 않았다"로 잡는다.
 const notifyArgs = [NOTIFY, dryRun ? '--dry-run' : '--send']
 const notify = spawnSync(NODE, notifyArgs, { cwd: ROOT, stdio: 'inherit' })
