@@ -539,10 +539,39 @@ Cloudflare challenge URL 의 토큰은 계정과 연결되고, 로그인 화면�
 
 디버깅하려고 스크린샷을 저장하고 싶어지는 자리가 바로 여기다. 하지 않는다.
 
+### 원고 회수 — `--fetch <slug>` (7-D-13-B2)
+
+```bash
+node scripts/magazine-webui-runner.mjs --fetch does-nap-affect-sleep
+```
+
+`brief.md` 를 첨부해 원고를 받고 `drafts/magazine/{slug}/draft.md` 로 저장한다.
+**여기까지다** — `md-to-draft` · `batch-qa` · `register` 는 돌리지 않는다.
+
+```
+1) probe 로 접근 확인 → ok 가 아니면 한 글자도 보내지 않는다
+2) brief 첨부 → 업로드 완료 확인
+3) 전송 버튼 클릭 (Enter 아님)
+4) 완료 대기 — 불리언 판정(길이 · 코드블록 · frontmatter 시작 · [CTA])
+5) pre code 의 textContent 를 그대로 파일에 쓴다
+```
+
+🔴 **이미 `draft.md` 가 있으면 덮어쓰지 않는다.** 재실행이 원고를 날리면 안 된다.
+🔴 **brief 의 "반드시 그대로 넣을 문장" 이 빠지면 저장하지 않는다.** 원고를 고치지 않고 되돌린다.
+🔴 **원고를 읽고 다시 쓰는 경로가 없다.** `page.evaluate` 결과를 그대로 `writeFileSync` 한다.
+
+### 실물로 겪은 실패 4가지 — 처음부터 막는다
+
+| | 증상 | 방어 |
+|---|---|---|
+| ① | 프롬프트의 백틱 3개가 에디터를 코드블록 모드로 만들어 **Enter 가 줄바꿈**이 된다 | 백틱을 쓰지 않고 **전송 버튼 클릭** |
+| ② | 업로드 완료 전 제출하면 **제출이 통째로 무시**된다 | `uploading` 이 사라질 때까지 대기 |
+| ③ | `---` 가 `<hr>` 로, `## ` 가 `<h2>` 로 렌더돼 **원본 표기가 사라진다** | 처음부터 마크다운 코드블록으로 요청하고 `pre code` 회수 |
+| ④ | Cloudflare / 로그인 만료 | **보내기 전에** probe 로 거른다. 재시도하지 않는다 |
+
 ### 이 단계에서 하지 않는 것
 
-brief 첨부 · 메시지 전송 · 응답 대기 · 원고 다운로드 · 파일 쓰기 · Slack 발송.
-**"비활성 플래그"로 막아 둔 것이 아니라 코드가 아예 없다.**
+`md-to-draft` · `batch-qa` · `register` · PR 자동 생성 · Slack 발송.
 
 ---
 
