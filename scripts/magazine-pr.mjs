@@ -69,7 +69,9 @@ export function classify(path) {
  *    앞 공백을 지우면 경로가 한 칸씩 밀린다.
  */
 function changedPaths() {
-  const out = execFileSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8' })
+  // -uall: untracked 를 디렉터리로 뭉치지 않고 파일 단위로 펼친다.
+  // 기본값은 새 디렉터리를 "drafts/magazine/foo/" 한 줄로 요약해 allowlist 가 매치하지 못한다.
+  const out = execFileSync('git', ['status', '--porcelain', '-uall'], { cwd: ROOT, encoding: 'utf8' })
   if (!out.trim()) return []
   return out.split('\n').filter(Boolean).map((l) => {
     const path = l.slice(3).trim()
