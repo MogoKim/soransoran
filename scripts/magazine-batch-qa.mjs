@@ -23,11 +23,22 @@
  *   ⑤ riskSentences 5/5 원고 대조 통과 (MEDIUM/HIGH 필수)
  *   ⑥ imageMode ≠ REQUIRED 또는 hero 존재
  *
+ * 자동화 모드(--strict-auto · --run)에서만 더 보는 것
+ *   ⑦ 본문 길이 하한/상한 — 목차만 오거나 잘린 응답을 잡는다
+ *   ⑧ 거절문 — "죄송하지만" "as an AI" 같은 응답이 그대로 원고가 된 경우
+ *   ⑨ 한국어 비율 — 영어로 답했거나 깨진 응답
+ *   ⑩ forbiddenPatterns 필수 — 없으면 주제별 위험 검사가 통째로 빠진다
+ *
+ * 🔴 ⑦~⑩ 은 왜 자동화 모드에만 붙는가
+ *    사람이 원고를 훑어보던 단계가 사라질 때 생기는 구멍이다.
+ *    세션이 손으로 만든 기존 글은 그 단계를 이미 거쳤으므로 회귀 검사에서는 켜지 않는다.
+ *
  * 사용법
  *   node scripts/magazine-batch-qa.mjs <slug|경로> [...]
  *   node scripts/magazine-batch-qa.mjs --run 2026-08-25   그날 producer 선정분 전체
  *   node scripts/magazine-batch-qa.mjs --all              drafts/magazine 전체
  *   node scripts/magazine-batch-qa.mjs ... --json
+  node scripts/magazine-batch-qa.mjs ... --strict-auto   자동화 검사(⑦~⑩) 강제
  *   node scripts/magazine-batch-qa.mjs --help
  *
  * 종료 코드: BLOCKED 가 하나라도 있으면 1
@@ -39,6 +50,32 @@ import { loadQueue, sliceLiteral, evalLiteral, DRAFTS_DIR, ROOT } from './lib/ma
 import { runQa } from './magazine-qa.mjs'
 
 const AUTO_RISK = new Set(['LOW', 'MEDIUM'])
+
+/**
+ * 본문 길이 — 기존 공개·예약 13건 실측이 1294~2028자다.
+ * 하한을 실측 최소에 붙이면 정상 글이 걸린다. 800 은 "명백히 잘렸다"만 잡는 자리다.
+ * (magazine-qa 의 1200~2500 은 WARN 이고 그대로 둔다. 여기 것은 BLOCKED 다)
+ */
+const AUTO_BODY_MIN = 800
+const AUTO_BODY_MAX = 3000
+
+/** 한국어 비율 — 실측 89.2~95.0%. 60% 면 29%p 여유이고 영어 답변(5~10%)과는 확실히 갈린다 */
+const AUTO_KO_RATIO_MIN = 0.6
+
+/** 응답이 그대로 원고가 된 경우. 사람이 봤다면 즉시 알아챘을 것들이다 */
+const REFUSAL_PATTERNS = [
+  '죄송하지만',
+  '도와드릴 수 없',
+  '답변드릴 수 없',
+  '제공할 수 없습니다',
+  '의료 전문가와 상담',
+  'as an AI',
+  "I can't",
+  'I cannot',
+  "I'm unable",
+  'I apologize',
+  'language model',
+]
 /** 이 등급은 riskSentences 5개가 필수다 (전략 §5.1) */
 const RISK_SENTENCES_REQUIRED = new Set(['MEDIUM', 'HIGH'])
 
@@ -85,13 +122,24 @@ function bodyText(article) {
 
 // ── 판정 ───────────────────────────────────────────────────
 
-export function judge(slug, { dir, queueItem }) {
+export function judge(slug, { dir, queueItem, strictAuto = false }) {
   const reasons = []
   const notes = []
+  /** BLOCKED 사유를 코드로도 남긴다 — 사람은 message 를, 자동화는 code 를 본다 */
+  const blockedBy = []
+  const block = (code, message) => {
+    blockedBy.push({ code, message })
+    reasons.push(message)
+  }
 
   const article = loadDraftBody(dir)
   if (!article) {
-    return { slug, verdict: 'BLOCKED', reasons: ['article-draft.ts 를 읽지 못했다'], notes, checks: {} }
+    return {
+      slug, verdict: 'BLOCKED',
+      reasons: ['article-draft.ts 를 읽지 못했다'],
+      blockedBy: [{ code: 'DRAFT_UNREADABLE', message: 'article-draft.ts 를 읽지 못했다' }],
+      notes, checks: {},
+    }
   }
   const review = loadReview(dir)
 
@@ -106,8 +154,8 @@ export function judge(slug, { dir, queueItem }) {
         '자동 승인 조건 ①riskLevel ②autoEligible 은 검사하지 않았다',
     )
   } else {
-    if (!AUTO_RISK.has(queueItem.riskLevel)) reasons.push(`riskLevel=${queueItem.riskLevel} — 창업자 검수 대상`)
-    if (queueItem.autoEligible !== true) reasons.push('autoEligible=false — 민감 주제')
+    if (!AUTO_RISK.has(queueItem.riskLevel)) block('RISK_LEVEL', `riskLevel=${queueItem.riskLevel} — 창업자 검수 대상`)
+    if (queueItem.autoEligible !== true) block('AUTO_INELIGIBLE', 'autoEligible=false — 민감 주제')
   }
 
   // ③ magazine-qa
@@ -119,12 +167,12 @@ export function judge(slug, { dir, queueItem }) {
     qaFail = qa.fail
     qaWarn = qa.warn
     for (const r of qa.rows) {
-      if (r.level === 'FAIL') reasons.push(`QA FAIL: ${r.msg}`)
+      if (r.level === 'FAIL') block('QA_FAIL', `QA FAIL: ${r.msg}`)
       // 약·치료 인접어는 WARN 이지만 사람 확인 대상으로 따로 모은다
       if (r.level === 'WARN' && /약·치료 인접어/.test(r.msg)) treatmentWarns.push(r.msg)
     }
   } catch (err) {
-    reasons.push(`QA 실행 실패: ${err.message}`)
+    block('QA_ERROR', `QA 실행 실패: ${err.message}`)
   }
 
   // ④ forbiddenPatterns
@@ -135,7 +183,7 @@ export function judge(slug, { dir, queueItem }) {
     for (const p of patterns) {
       if (p && text.includes(p)) patternHits.push(p)
     }
-    for (const p of patternHits) reasons.push(`forbiddenPatterns 위반: "${p}"`)
+    for (const p of patternHits) block('FORBIDDEN_PATTERN', `forbiddenPatterns 위반: "${p}"`)
   } else {
     notes.push('forbiddenPatterns 없음 — 주제별 검사를 건너뛴다 (하위 호환)')
   }
@@ -145,13 +193,13 @@ export function judge(slug, { dir, queueItem }) {
   const sentences = Array.isArray(review?.riskSentences) ? review.riskSentences : null
   let riskMatched = null
   if (needRisk && !sentences) {
-    reasons.push(`${riskLevel} 인데 riskSentences 가 없다 (5개 필수)`)
+    block('RISK_SENTENCES_MISSING', `${riskLevel} 인데 riskSentences 가 없다 (5개 필수)`)
   } else if (sentences) {
-    if (sentences.length !== 5) reasons.push(`riskSentences ${sentences.length}개 — 5개여야 한다`)
+    if (sentences.length !== 5) block('RISK_SENTENCES_COUNT', `riskSentences ${sentences.length}개 — 5개여야 한다`)
     riskMatched = 0
     sentences.forEach((s, i) => {
       if (text.includes(s)) riskMatched += 1
-      else reasons.push(`riskSentences ${i + 1} 이 원고에 없다: "${String(s).slice(0, 34)}…"`)
+      else block('RISK_SENTENCE_ABSENT', `riskSentences ${i + 1} 이 원고에 없다: "${String(s).slice(0, 34)}…"`)
     })
   }
 
@@ -161,13 +209,45 @@ export function judge(slug, { dir, queueItem }) {
   if (imageMode === 'REQUIRED') {
     const src = article.heroImage?.src
     heroOk = Boolean(src) && existsSync(join(ROOT, 'public', src.replace(/^\//, '')))
-    if (!heroOk) reasons.push(`imageMode=REQUIRED 인데 hero 가 없다${src ? ` (public${src})` : ''}`)
+    if (!heroOk) block('HERO_MISSING', `imageMode=REQUIRED 인데 hero 가 없다${src ? ` (public${src})` : ''}`)
+  }
+
+  // ⑦~⑩ 자동화 모드 전용 — 사람이 원고를 훑어보던 단계가 사라질 때 생기는 구멍
+  const koCount = (text.match(/[가-힣]/g) ?? []).length
+  const latinCount = (text.match(/[A-Za-z]/g) ?? []).length
+  const koRatio = koCount + latinCount === 0 ? 0 : koCount / (koCount + latinCount)
+  const refusalHits = REFUSAL_PATTERNS.filter((r) => text.includes(r))
+
+  if (strictAuto) {
+    // ⑦ 길이 — 목차만 왔거나 중간에 잘린 응답
+    if (text.length < AUTO_BODY_MIN) {
+      block('BODY_TOO_SHORT', `본문 ${text.length}자 — ${AUTO_BODY_MIN}자 미만이면 잘린 응답으로 본다`)
+    } else if (text.length > AUTO_BODY_MAX) {
+      block('BODY_TOO_LONG', `본문 ${text.length}자 — ${AUTO_BODY_MAX}자를 넘었다`)
+    }
+
+    // ⑧ 거절문이 그대로 원고가 된 경우
+    for (const r of refusalHits) block('REFUSAL_TEXT', `거절문/정형구가 원고에 있다: "${r}"`)
+
+    // ⑨ 영어로 답했거나 깨진 응답
+    if (koRatio < AUTO_KO_RATIO_MIN) {
+      block('NOT_KOREAN', `한국어 비율 ${(koRatio * 100).toFixed(1)}% — ${AUTO_KO_RATIO_MIN * 100}% 미만`)
+    }
+
+    // ⑩ forbiddenPatterns 필수 — 없으면 주제별 위험 검사가 통째로 빠진다
+    if (!patterns || patterns.length === 0) {
+      block('FORBIDDEN_PATTERNS_ABSENT', 'review.ts 에 forbiddenPatterns 가 없다 — 자동화에서는 필수다')
+    }
+  } else if (!patterns || patterns.length === 0) {
+    notes.push('forbiddenPatterns 없음 — 자동화 모드(--strict-auto)에서는 BLOCKED 다')
   }
 
   return {
     slug,
     verdict: reasons.length ? 'BLOCKED' : 'READY_TO_SCHEDULE',
+    strictAuto,
     reasons,
+    blockedBy,
     notes,
     treatmentWarns,
     checks: {
@@ -181,6 +261,9 @@ export function judge(slug, { dir, queueItem }) {
       riskSentences: sentences ? `${riskMatched}/${sentences.length}` : null,
       imageMode,
       heroOk,
+      bodyLength: text.length,
+      koRatio: Number(koRatio.toFixed(3)),
+      refusalHits,
     },
   }
 }
@@ -255,6 +338,8 @@ function main() {
   if (argv.includes('--help') || argv.length === 0) return help()
 
   const asJson = argv.includes('--json')
+  // --run 은 producer 산출물이다 = 자동화 경로다. 자동으로 엄격해진다
+  const strictAuto = argv.includes('--strict-auto') || argv.includes('--run')
   let slugs = []
   if (argv.includes('--run')) {
     slugs = fromRun(argv[argv.indexOf('--run') + 1])
@@ -274,7 +359,7 @@ function main() {
   const results = slugs.map((arg) => {
     const dir = draftDir(arg)
     const slug = basename(dir)
-    return judge(slug, { dir, queueItem: bySlug.get(slug) })
+    return judge(slug, { dir, queueItem: bySlug.get(slug), strictAuto })
   })
 
   if (asJson) console.log(JSON.stringify({ results }, null, 2))

@@ -103,7 +103,22 @@ forbiddenPatterns: ['손목터널', '건초염', '관절염', '파스', '보조�
 
 ---
 
-## 4. 자동 승인 조건 — 6개 AND
+## 4. 자동 승인 조건 — 6개 AND (+ 자동화 모드 4개)
+
+> `--strict-auto` 또는 `--run` 일 때 ⑦~⑩ 이 더 붙는다.
+> 사람이 원고를 훑어보던 단계가 사라질 때 생기는 구멍이다.
+>
+> | | 조건 | 기준 근거 |
+> |---|---|---|
+> | ⑦ | 본문 800~3000자 | 기존 13건 실측 1294~2028자. 800 은 "명백히 잘렸다"만 잡는 자리 |
+> | ⑧ | 거절문 0건 | "죄송하지만" · "as an AI" 등이 그대로 원고가 된 경우 |
+> | ⑨ | 한국어 비율 ≥ 60% | 실측 89.2~95.0%. 영어 답변은 5% 안팎이라 확실히 갈린다 |
+> | ⑩ | forbiddenPatterns 필수 | 없으면 주제별 위험 검사가 통째로 빠진다 |
+>
+> 기존 글 회귀 검사(일반 모드)에서는 ⑦~⑩ 을 켜지 않는다.
+> 그 글들은 사람이 보는 단계를 이미 거쳤다.
+
+
 
 ```
 ① riskLevel ∈ {LOW, MEDIUM}
@@ -170,7 +185,33 @@ hero 생성은 MCP + **사람 눈**이 필요하다. 6-H-1 에서 나이 인상�
 
 ---
 
-## 7. 예약 등록 (10단계) — 수동을 유지한다
+## 7. 예약 등록 — `magazine-register.mjs` 가 한다 (7-D-11)
+
+> 이 단계는 손으로 하지 않는다. articles.ts 와 topic-queue.ts 를 사람이 직접 고치는 것이
+> 가장 손이 많이 가고 가장 틀리기 쉬운 자리였다.
+
+```bash
+# 먼저 dry-run — 파일을 고치지 않고 무엇이 바뀔지만 본다
+node scripts/magazine-register.mjs --slug <slug> --publish-at 2026-09-02
+
+# 확인했으면 --write
+node scripts/magazine-register.mjs --slug <slug> --publish-at 2026-09-02 --write
+```
+
+스크립트가 막는 것:
+- 이미 articles.ts 에 있는 slug (공개·예약·차단 전부)
+- 같은 KST 날짜에 이미 글이 있으면 — **하루 1건**
+- 10:30 KST 가 아닌 시각
+- `riskLevel=HIGH` · `autoEligible=false`
+- `imageMode=REQUIRED` 인데 hero 없음
+- topic-queue 에서 제거 대상이 1개가 아닐 때
+- articles.ts 에서 삽입 위치를 못 찾을 때 (구조가 바뀐 것이다)
+
+**부분 수정을 하지 않는다.** 두 파일을 메모리에서 다 만든 뒤 한꺼번에 쓴다.
+중간에 실패하면 아무것도 쓰지 않는다 — 한쪽만 바뀐 상태가 가장 고치기 어렵다.
+
+### 아래는 스크립트가 없던 시절의 수동 절차 (참고용)
+
 
 `articles.ts` 는 979행 · 52KB 단일 파일이다. 멀티 세션 환경에서 스크립트가 자동 수정하면 충돌한다.
 TS 객체 리터럴에 코드를 생성해 삽입하는 일이라 가장 깨지기 쉽기도 하다.
@@ -313,6 +354,68 @@ cd /tmp && /Users/yanadoo/.nvm/versions/node/v24.14.0/bin/node \
   /Users/yanadoo/Documents/soransoran/scripts/magazine-producer-plan.mjs --dry-run
 # 재고·공개·예약 숫자가 repo 안에서 실행한 것과 같아야 한다
 ```
+
+---
+
+## 9-B. 날짜를 옮기는 테스트는 `--dry-run` 으로만 한다 🔴
+
+`--now` 로 미래·과거 날짜를 지정하고 **실제로 쓰면**, 그날의 `_runs/{date}/run.json` 이 남는다.
+producer 는 "오늘 run.json 이 있으면 이미 돌았다"고 보고 종료하므로,
+**테스트가 만든 run.json 이 실전 01:00 실행을 막는다.**
+
+실제로 그렇게 됐다 — `_runs/2026-08-25/run.json` 이 테스트 산출물이라
+launchd 01:00 실행이 "이미 COMPLETED" 로 차단됐고, 재고가 줄어드는데도 조용했다.
+
+```bash
+# ✅ 이렇게
+node scripts/magazine-producer-plan.mjs --now 2026-09-16 --dry-run
+
+# 🔴 이러지 마라 — 그 날짜의 실전 실행을 선점한다
+node scripts/magazine-producer-plan.mjs --now 2026-09-16
+```
+
+dry-run 은 아무것도 쓰지 않으므로 몇 번을 돌려도 안전하다.
+
+---
+
+## 9-C. 자동화 목표 구조와 지금 위치
+
+```
+producer ──▶ webui runner ──▶ md-to-draft ──▶ batch-qa ──▶ register ──▶ PR
+  ✅ 7-D-3      🔴 7-D-12         ✅            ✅ 강화      ✅ 7-D-11   ✅ 7-D-11
+```
+
+**7-D-11 은 `package.json` 없이 닫을 수 있는 구간만 닫는 단계다.**
+register · PR · batch-qa 강화가 여기 들어간다.
+
+남은 한 칸은 **webui runner** 다. ChatGPT 웹 UI 를 무인으로 왕복시키려면
+Playwright 가 devDependency 로 들어가야 한다. MCP Playwright 는 Claude Code 세션에만
+붙어 있어 launchd 셸에서 쓸 수 없다.
+
+🔴 **7-D-12 에서 `package.json` / `package-lock.json` 을 건드리기 전에 반드시 Codex[3] 과 재조율한다.**
+같은 파일을 Codex[3] 이 여러 번 변경해 왔다. 조율 없이 만지면 충돌한다.
+
+### merge 는 자동화하지 않는다
+
+PR 생성까지가 자동화의 종점이다. **merge 는 사람이 한다.**
+하루 한 번 PR 하나를 훑는 비용은 작고, 그 자리가 마지막 안전망이다.
+자동화가 사람 눈 없이 넘어갔다면 사고가 났을 상황이 실제로 두 번 있었다 —
+타 세션 파일이 커밋에 섞인 일, 낡은 run.json 이 틀린 알림을 낸 일.
+
+### Slack 알림 원칙
+
+**정상 실행은 조용하다.** 매일 성공 알림을 보내면 사람이 알림을 안 보게 된다.
+
+| 알린다 | 알리지 않는다 |
+|---|---|
+| git dirty (타 세션 작업 중) | 정상 완료 |
+| ChatGPT 로그인 만료 | 재고 충분해서 0건 제작 |
+| 봇 감지 challenge | 예상된 skip |
+| batch-qa BLOCKED | |
+| register 슬롯 충돌 | |
+| PR 생성 실패 | |
+
+Slack 발송이 실패해도 producer 자체는 실패시키지 않는다 — 알림은 곁가지다.
 
 ---
 
