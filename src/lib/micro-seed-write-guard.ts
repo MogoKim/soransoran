@@ -562,6 +562,52 @@ export const SHEET_WRITABLE_COLUMNS = [
 export type SheetWriteVerdict = { ok: true } | { ok: false; reason: string }
 
 /**
+ * 발행 시도의 최종 결과. **DB status 를 바꾸는 모든 경로가 여기에 대응한다.**
+ *
+ * 🔴 성공만 Sheet 에 쓰면 원장이 갈라진다
+ *    TOO_LATE · 재판정 실패 · attempt 소진은 전부 DB status 를 바꾼다.
+ *    그때 Sheet 를 그대로 두면 창업자 화면에는 PENDING 이 남아 "아직 발행 안 됐네" 로 읽히고,
+ *    실제로는 HOLD·FAILED 다. 그 상태에서 재승인하면 §6-3 의 이중 발행 경로로 들어간다.
+ */
+export type PublishOutcome =
+  | { kind: 'PUBLISHED'; postUrl: string; at: Date }
+  | { kind: 'HOLD'; reason: string }
+  | { kind: 'FAILED'; reason: string }
+
+/**
+ * 결과 → Sheet 에 쓸 셀. §6-7-A 허용 열만 나온다.
+ *
+ * 🔴 postUrl · updatedBySystemAt 은 **PUBLISHED 에만** 실린다.
+ *    Post 가 없는데 postUrl 이 있으면 원장이 거짓말을 한다. 실패 경로에서 이 열이
+ *    나오지 않는다는 것을 함수 모양으로 보장하고, fixture 가 그걸 잠근다.
+ *
+ * 🔴 FAILED 도 holdReason 열에 사유를 쓴다
+ *    Sheet 17열에 failureReason 이 없다(§6-7-A). 사유를 버리는 것보다 홀드 사유 칸에
+ *    적어 창업자가 화면에서 이유를 보는 편이 낫다 — DB 에는 failureReason 으로 따로 남는다.
+ */
+export function buildSheetWriteCells(outcome: PublishOutcome): Record<string, string> {
+  switch (outcome.kind) {
+    case 'PUBLISHED':
+      return {
+        status: 'PUBLISHED',
+        postUrl: outcome.postUrl,
+        updatedBySystemAt: kstStamp(outcome.at),
+      }
+    case 'HOLD':
+      return { status: 'HOLD', holdReason: outcome.reason }
+    case 'FAILED':
+      return { status: 'FAILED', holdReason: outcome.reason }
+  }
+}
+
+/** `YYYY-MM-DD HH:mm` (KST). Sheet 가 읽는 형식이며 parseKst 가 되읽을 수 있다 */
+function kstStamp(at: Date): string {
+  const k = new Date(at.getTime() + 9 * 60 * 60 * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${k.getUTCFullYear()}-${p(k.getUTCMonth() + 1)}-${p(k.getUTCDate())} ${p(k.getUTCHours())}:${p(k.getUTCMinutes())}`
+}
+
+/**
  * Sheet 에 쓰려는 열들이 화이트리스트 안에 있는지 본다.
  *
  * 🔴 이 함수는 아무것도 쓰지 않는다. 판정만 한다 —

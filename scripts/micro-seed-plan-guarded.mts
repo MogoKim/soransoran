@@ -51,6 +51,7 @@ import {
   PUBLISH_GRACE_MINUTES,
   resolvePublishWindow,
   PublishWindowWithoutScheduleError,
+  buildSheetWriteCells,
 } from '../src/lib/micro-seed-write-guard'
 import type { AuthorProbe, TimeoutProbe } from '../src/lib/micro-seed-write-guard'
 import { buildPlan, ROW, LEDGER, ledger, row } from './micro-seed-plan.mjs'
@@ -376,6 +377,97 @@ async function run() {
       pass('publisher 소스 계약', `${checks.length}종 전부`)
     } else {
       fail('publisher 소스 계약', `🔴 ${bad2.map((c) => `${c.name}(${c.detail})`).join(' / ')}`)
+    }
+  }
+
+  // ── ⑬-D 결과 → Sheet 셀 (§6-7-A) ──────────────────────
+  //
+  //    🔴 성공만 Sheet 에 쓰면 원장이 갈라진다.
+  //       TOO_LATE · 재판정 실패 · attempt 소진은 전부 DB status 를 바꾸는데,
+  //       Sheet 가 PENDING 으로 남으면 창업자 화면에는 "아직 발행 안 됐네" 로 보이고
+  //       그 상태의 재승인이 §6-3 이 경고한 이중 발행 경로다.
+  {
+    const AT = new Date('2026-08-25T09:40:00Z') // = 18:40 KST
+    const URL = 'https://soransoran.com/community/free/abc123'
+
+    const cases = [
+      {
+        name: 'PUBLISHED → status · postUrl · updatedBySystemAt',
+        cells: buildSheetWriteCells({ kind: 'PUBLISHED', postUrl: URL, at: AT }),
+        want: { status: 'PUBLISHED', postUrl: URL, updatedBySystemAt: '2026-08-25 18:40' },
+      },
+      {
+        name: 'HOLD → status · holdReason (postUrl 없음)',
+        cells: buildSheetWriteCells({ kind: 'HOLD', reason: '예약이 152분 지났다' }),
+        want: { status: 'HOLD', holdReason: '예약이 152분 지났다' },
+      },
+      {
+        name: 'FAILED → status · holdReason (postUrl 없음)',
+        cells: buildSheetWriteCells({ kind: 'FAILED', reason: 'G-B 위반 (시도 3/3)' }),
+        want: { status: 'FAILED', holdReason: 'G-B 위반 (시도 3/3)' },
+      },
+    ]
+    const wrongCells = cases.filter(
+      (c) => JSON.stringify(c.cells) !== JSON.stringify(c.want),
+    )
+    if (wrongCells.length === 0) {
+      pass('결과별 Sheet 셀', `${cases.length}종 전부`)
+    } else {
+      fail(
+        '결과별 Sheet 셀',
+        `🔴 ${wrongCells.map((c) => `${c.name}: ${JSON.stringify(c.cells)}`).join(' / ')}`,
+      )
+    }
+
+    // 🔴 Post 가 없는데 postUrl 이 있으면 원장이 거짓말을 한다.
+    const leaked = cases
+      .filter((c) => c.want.status !== 'PUBLISHED')
+      .filter((c) => 'postUrl' in c.cells || 'updatedBySystemAt' in c.cells)
+    if (leaked.length === 0) {
+      pass('실패 경로에 postUrl 이 실리지 않는다', 'HOLD · FAILED 둘 다 status·holdReason 만')
+    } else {
+      fail('실패 경로에 postUrl 이 실리지 않는다', `🔴 ${leaked.map((c) => c.name).join(' / ')}`)
+    }
+
+    // 나오는 열이 전부 §6-7-A 허용 열인지
+    const badCol = cases.filter((c) => !verifySheetWriteColumns(Object.keys(c.cells)).ok)
+    if (badCol.length === 0) {
+      pass('결과별 셀은 허용 열만 쓴다', SHEET_WRITABLE_COLUMNS.join(' · '))
+    } else {
+      fail('결과별 셀은 허용 열만 쓴다', `🔴 ${badCol.map((c) => c.name).join(' / ')}`)
+    }
+  }
+
+  // ── ⑬-E DB 를 바꾸는 모든 경로가 Sheet 에도 쓴다 ────────
+  //    함수가 존재한다는 것과 모든 경로가 그것을 부른다는 것은 다르다.
+  {
+    const { readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'micro-seed-publish-live.mts'), 'utf-8')
+    const code = src.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+
+    // DB 상태를 바꾸는 헬퍼 호출마다 그 직후에 syncSheet 가 있는지 본다
+    const demoteCalls = [...code.matchAll(/await (demote|demoteAfterAttempt)\(/g)]
+    const everyDemoteFollowedBySync = demoteCalls.every((m) => {
+      const after = code.slice(m.index ?? 0, (m.index ?? 0) + 700)
+      return /syncSheet\(/.test(after)
+    })
+    const successFollowedBySync = /await prisma\.\$transaction[\s\S]{0,1200}?syncSheet\(/.test(code)
+    const collectsDivergence = /divergences\.push\(/.test(code) && /process\.exit\(2\)/.test(code)
+    const noRollback = !/status:\s*'PENDING'/.test(code.replace(/where[\s\S]{0,200}?status:\s*'PENDING'/g, ''))
+
+    const items = [
+      { name: '강등 경로마다 Sheet 역기록', ok: demoteCalls.length >= 2 && everyDemoteFollowedBySync },
+      { name: '성공 경로도 Sheet 역기록', ok: successFollowedBySync },
+      { name: '불일치를 모아 exit 2 로 드러낸다', ok: collectsDivergence },
+      { name: '불일치 시 DB 를 되돌리지 않는다', ok: noRollback },
+    ]
+    const bad3 = items.filter((i) => !i.ok)
+    if (bad3.length === 0) {
+      pass('DB 상태 변경 경로는 전부 Sheet 에 남는다', `${items.length}종 · 강등 호출 ${demoteCalls.length}곳`)
+    } else {
+      fail('DB 상태 변경 경로는 전부 Sheet 에 남는다', `🔴 ${bad3.map((i) => i.name).join(' / ')}`)
     }
   }
 

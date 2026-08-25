@@ -26,6 +26,15 @@
  *    그건 창업자가 재승인할 수 없는 막다른 골목이다.
  *    반대 순서(DB 먼저)의 실패는 timeout 복구가 실측으로 정정할 수 있다 (§6-3).
  *
+ * 🔴 DB status 를 바꾸는 **모든** 경로가 Sheet 에도 같은 상태를 남긴다
+ *    성공만 역기록하면 원장이 갈라진다. TOO_LATE · 재판정 실패 · attempt 소진은
+ *    전부 DB 를 HOLD·FAILED 로 바꾸는데, Sheet 가 PENDING 으로 남아 있으면
+ *    창업자 화면에는 "아직 발행 안 됐네" 로 보인다. 그 상태의 재승인이
+ *    §6-3 이 경고한 이중 발행 경로다.
+ *
+ *    postUrl · updatedBySystemAt 은 **Post 가 실제로 생긴 경우에만** 쓴다.
+ *    무엇을 쓸지는 buildSheetWriteCells 가 결과 종류로 정한다 — 호출부가 고르지 않는다.
+ *
  * 사용법
  *   npm run micro-seed:publish-live -- --dry-run     판정만. DB·Sheet write 0
  *   npm run micro-seed:publish-live -- --limit=1     실제 발행 (기본 1건)
@@ -48,6 +57,9 @@ import {
   resolvePublishableBoard,
   verifyPublishAuthor,
   verifyPublishableOrigin,
+  buildSheetWriteCells,
+  verifySheetWriteColumns,
+  type PublishOutcome,
 } from '../src/lib/micro-seed-write-guard'
 import { SHEET_TAB_NAME, SHEET_HEADERS, updateCandidateRow } from './lib/micro-seed-sheet.mjs'
 import { CAPS } from './micro-seed-validate.mjs'
@@ -65,6 +77,7 @@ const LIMIT = (() => {
 const WORKER_ID = `publish-live:${process.pid}`
 
 type Skipped = { candidateId: string; kind: string; reason: string }
+type Divergence = { candidateId: string; dbStatus: string; sheetStatus: string; reason: string }
 
 /** 발행된 글의 공개 URL. §6-1 — Post.id 는 DB 가 발급하고 Sheet 가 기록한다 */
 function buildPostUrl(boardType: BoardType, postId: string): string {
@@ -90,6 +103,8 @@ async function main() {
 
   const prisma = new PrismaClient()
   const skipped: Skipped[] = []
+  /** DB 는 바뀌었는데 Sheet 반영에 실패한 후보. 사람이 손으로 맞춰야 한다 */
+  const divergences: Divergence[] = []
   let published = 0
   let failed = 0
   try {
@@ -150,7 +165,11 @@ async function main() {
       }
       if (window.kind === 'TOO_LATE' || window.kind === 'NOT_SCHEDULED') {
         // 🔴 시각을 밀지 않는다. HOLD 로 되돌리고 사유를 남긴다.
-        if (!DRY_RUN) await demote(prisma, row.id, 'PENDING', 'HOLD', row.attemptCount, window.reason)
+        //    🔴 Sheet 에도 같은 상태를 쓴다 — DB 만 HOLD 면 창업자 화면은 PENDING 이다.
+        if (!DRY_RUN) {
+          await demote(prisma, row.id, 'PENDING', 'HOLD', window.reason)
+          await syncSheet(row.id, { kind: 'HOLD', reason: window.reason }, 'HOLD', divergences)
+        }
         skipped.push({ candidateId: row.id, kind: window.kind, reason: window.reason })
         continue
       }
@@ -190,8 +209,10 @@ async function main() {
       // ── ⑤ 재판정 — 여기서부터 이 워커가 소유자다 ─────────
       const verdict = await reverify(prisma, row, authorId)
       if (!verdict.ok) {
-        const next = await demoteAfterAttempt(prisma, row.id, row.attemptCount, verdict.reason)
-        skipped.push({ candidateId: row.id, kind: `REVERIFY_${next}`, reason: verdict.reason })
+        const { status: next, detail } = await demoteAfterAttempt(prisma, row.id, row.attemptCount, verdict.reason)
+        // 🔴 실패도 Sheet 에 남긴다. postUrl 은 쓰지 않는다 — Post 가 없다.
+        await syncSheet(row.id, next === 'FAILED' ? { kind: 'FAILED', reason: detail } : { kind: 'HOLD', reason: detail }, next, divergences)
+        skipped.push({ candidateId: row.id, kind: `REVERIFY_${next}`, reason: detail })
         if (next === 'FAILED') failed += 1
         continue
       }
@@ -237,20 +258,13 @@ async function main() {
       //    🔴 여기서 실패해도 후보를 되돌리지 않는다. 글은 이미 나갔다.
       //       되돌리면 창업자가 재승인해 이중 발행이 된다 (§6-3).
       //       Sheet 는 PENDING 으로 남고 timeout 복구가 실측으로 정정한다.
-      try {
-        const write = await updateCandidateRow({
-          mode: 'columns',
-          tab: SHEET_TAB_NAME,
-          rowNumber: await findSheetRow(row.id),
-          cells: { status: 'PUBLISHED', postUrl, updatedBySystemAt: kstString(new Date()) },
-          expectId: row.id,
-        })
-        console.log(`     Sheet ${write.ranges.join(', ')} · read-back ${write.readBackVerified ? '검증됨' : '미검증'}\n`)
-      } catch (e) {
-        console.error(`     ⚠️ Sheet 역기록 실패 (발행은 성공했다): ${e instanceof Error ? e.message : String(e)}`)
-        console.error('        후보를 되돌리지 않는다. Sheet 는 PENDING 으로 남고 timeout 복구가 정정한다.\n')
-        skipped.push({ candidateId: row.id, kind: 'SHEET_WRITE_FAILED', reason: '발행 성공 · Sheet 미반영' })
-      }
+      const ok = await syncSheet(
+        row.id,
+        { kind: 'PUBLISHED', postUrl, at: new Date() },
+        'PUBLISHED',
+        divergences,
+      )
+      if (ok) console.log('')
     }
   } finally {
     await prisma.$disconnect()
@@ -259,8 +273,19 @@ async function main() {
   for (const s of skipped) console.log(`  · ${s.kind}  ${s.candidateId}\n    ${s.reason}`)
   console.log(`\n  발행 ${published}건 · 실패 ${failed}건 · 보류 ${skipped.length}건`)
   if (DRY_RUN) console.log('  🔍 dry-run 이었다. DB·Sheet 에 아무것도 쓰지 않았다.')
+
+  // 🔴 DB 와 Sheet 가 갈라진 후보를 조용히 넘기지 않는다.
+  if (divergences.length) {
+    console.error(`\n  🔴 DB ↔ Sheet 불일치 ${divergences.length}건 — 사람이 Sheet 를 맞춰야 한다`)
+    for (const d of divergences) {
+      console.error(`     · ${d.candidateId}`)
+      console.error(`       DB=${d.dbStatus} · Sheet=${d.sheetStatus}`)
+      console.error(`       ${d.reason}`)
+    }
+    console.error('     DB 가 정본이다. Sheet 의 status 를 위 DB 값으로 맞춘 뒤 다시 확인한다.\n')
+    process.exit(2)
+  }
   console.log('')
-  if (skipped.some((s) => s.kind === 'SHEET_WRITE_FAILED')) process.exit(2)
 }
 
 /** 획득 후 재판정 — origin · board · 본문 · guard · author 를 **다시** 본다 */
@@ -311,13 +336,12 @@ async function reverify(
   return { ok: true, boardType: board.boardType, content }
 }
 
-/** 상태를 되돌리고 이력을 남긴다. attemptCount 는 건드리지 않는다 (시도한 적 없는 강등) */
+/** 상태를 되돌리고 이력을 남긴다. attemptCount 는 건드리지 않는다 — 획득한 적이 없으므로 시도가 아니다 */
 async function demote(
   prisma: PrismaClient,
   candidateId: string,
   from: MicroSeedCandidateStatus,
   to: MicroSeedCandidateStatus,
-  _attemptCount: number,
   reason: string,
 ) {
   await prisma.$transaction(async (tx) => {
@@ -341,7 +365,7 @@ async function demoteAfterAttempt(
   candidateId: string,
   attemptCount: number,
   reason: string,
-): Promise<'HOLD' | 'FAILED'> {
+): Promise<{ status: 'HOLD' | 'FAILED'; detail: string }> {
   const next = attemptCount + 1
   const to: 'HOLD' | 'FAILED' = isAttemptExhausted(next) ? 'FAILED' : 'HOLD'
   const detail = `${reason} (시도 ${next}/3)`
@@ -359,7 +383,58 @@ async function demoteAfterAttempt(
       data: { candidateId, fromStatus: 'PROCESSING', toStatus: to, by: `worker:${WORKER_ID}`, reason: detail },
     })
   })
-  return to
+  return { status: to, detail }
+}
+
+/**
+ * DB 에서 확정된 상태를 Sheet 에 남긴다. **DB 를 바꾼 모든 경로가 이 함수를 부른다.**
+ *
+ * 🔴 무엇을 쓸지 고르지 않는다. buildSheetWriteCells 가 결과 종류로 정한다 —
+ *    호출부가 셀을 조립하면 언젠가 실패 경로에 postUrl 이 섞인다.
+ *
+ * 🔴 실패해도 DB 를 되돌리지 않는다
+ *    되돌리면 창업자가 재승인해 이중 발행이 된다 (§6-3). 대신 **불일치로 기록**하고
+ *    끝에서 명시적으로 출력한다 — 사람이 손으로 맞출 수 있게 무엇이 어긋났는지 남긴다.
+ *
+ * @returns Sheet 반영에 성공했으면 true
+ */
+async function syncSheet(
+  candidateId: string,
+  outcome: PublishOutcome,
+  dbStatus: string,
+  divergences: Divergence[],
+): Promise<boolean> {
+  const cells = buildSheetWriteCells(outcome)
+
+  // §6-7-A 허용 열인지 한 번 더 본다. buildSheetWriteCells 가 지키지만,
+  // 그 함수가 바뀌었을 때 조용히 통과하지 않도록 여기서 확인한다.
+  const columnCheck = verifySheetWriteColumns(Object.keys(cells))
+  if (!columnCheck.ok) {
+    divergences.push({ candidateId, dbStatus, sheetStatus: '(쓰지 않음)', reason: columnCheck.reason })
+    console.error(`     ⚠️ Sheet 열 검증 실패: ${columnCheck.reason}`)
+    return false
+  }
+
+  try {
+    const write = await updateCandidateRow({
+      mode: 'columns',
+      tab: SHEET_TAB_NAME,
+      rowNumber: await findSheetRow(candidateId),
+      cells,
+      expectId: candidateId,
+    })
+    console.log(
+      `     Sheet ${write.ranges.join(', ')} · ${Object.keys(cells).join('·')} · ` +
+        `read-back ${write.readBackVerified ? '검증됨' : '미검증'}`,
+    )
+    return true
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e)
+    divergences.push({ candidateId, dbStatus, sheetStatus: '(반영 실패)', reason })
+    console.error(`     ⚠️ Sheet 역기록 실패 — DB 는 ${dbStatus} 로 확정됐다: ${reason}`)
+    console.error('        DB 를 되돌리지 않는다. 재승인 시 이중 발행이 되기 때문이다 (§6-3).')
+    return false
+  }
 }
 
 /** Sheet 에서 이 후보의 행 번호를 찾는다. 행 번호는 정렬로 흔들리므로 매번 실측한다 (§6-4) */
