@@ -43,6 +43,20 @@ import { createGoogleSheetSource, readCandidates, SHEET_TAB_NAME, MICRO_SEED_SHE
 import { createPrismaCandidateSource, loadInjections, PUBLISHABLE_ORIGINS } from './lib/micro-seed-db.mjs'
 import { validateBatch } from './micro-seed-validate.mjs'
 
+/**
+ * 배치 판정에서 빼는 상태 — **끝난 행**이다.
+ *
+ * 🔴 FAILED 는 여기 없다. 창업자 지시(2026-08-26)가 넷을 지정했고, FAILED 는
+ *    attemptCount 상한 전이면 재시도 여지가 있어 성격이 다르다.
+ *    ⚠️ 다만 FAILED 도 PENDING 이 아니라 발행 게이트를 건너뛰므로 PASS 로 나온다.
+ *       cap 오탐은 validate.mjs 의 R10 수정(발행 대기만 센다)이 막지만,
+ *       리포트에는 FAILED 행이 "PASS" 로 보인다. 표기를 바꿀지는 별도 판단이다.
+ *
+ * 🔴 db.mjs 의 TERMINAL_STATUSES 와 다르다. 그쪽은 retentionUntil 계산용이고
+ *    FAILED 를 포함한다. 목적이 다르므로 이름도 값도 따로 둔다.
+ */
+const TERMINAL_STATUSES_FOR_BATCH: readonly string[] = ['PUBLISHED', 'SKIPPED', 'DECLINED', 'TAKEDOWN']
+
 type Diagnostic = { kind: string; candidateId?: string; rowNumber?: number; column?: string; message: string }
 type HeaderError = { kind: string; column?: string; message: string }
 
@@ -98,6 +112,7 @@ async function main() {
       report({
         tab: SHEET_TAB_NAME,
         candidates: [],
+        excluded: [],
         diagnostics: [],
         cap,
         author: { ...authorProbe, verdict: authorVerdict },
@@ -139,15 +154,34 @@ async function main() {
     // 주입을 얹어 다시 읽는다 — reader 가 미주입을 NOT_INJECTED 로 표시한다.
     const second = await readCandidates(sheetSource, { injectionsBy })
 
+    // ── ⑦-B 끝난 행을 배치에서 뺀다 ───────────────────────
+    //
+    // 🔴 왜 빼는가
+    //    validateCandidate 는 PENDING 이 아닌 행의 발행 게이트를 건너뛴다.
+    //    그래서 이미 발행이 끝난 PUBLISHED 행도 "위반 없음 PASS" 로 나오고,
+    //    R10 cap 이 그것까지 세어 **발행 대기가 1건인데 REJECT** 를 낸다(2026-08-26 실측).
+    //
+    //    R10 자체는 validate.mjs 에서 "발행 대기(PENDING)만 센다" 로 고쳤다.
+    //    여기서 한 번 더 빼는 것은 **판정 대상 자체를 좁혀** 리포트를 읽기 쉽게 하려는 것이다 —
+    //    끝난 행에 대한 PASS/REJECT 는 의미가 없다.
+    //
+    // 🔴 숨기지는 않는다. excluded 로 집계해 "몇 건이 왜 빠졌는지" 를 남긴다.
+    const terminalRows = second.candidates.filter((c: Record<string, unknown>) =>
+      TERMINAL_STATUSES_FOR_BATCH.includes(String(c.status ?? '').trim()),
+    )
+    const activeRows = second.candidates.filter(
+      (c: Record<string, unknown>) => !TERMINAL_STATUSES_FOR_BATCH.includes(String(c.status ?? '').trim()),
+    )
+
     // ── ⑧ 판정 ────────────────────────────────────────────
-    const batch = validateBatch(second.candidates, {
+    const batch = validateBatch(activeRows, {
       isFirstRun: cap.isFirstRun,
       publishedToday: cap.publishedToday,
     })
 
     // ── ⑩ 발행 가능 최종 판정 ─────────────────────────────
     const rows = batch.results.map((r: Record<string, unknown>, i: number) => {
-      const sheetRowNumber = (second.candidates[i]?.sheetRowNumber ?? null) as number | null
+      const sheetRowNumber = (activeRows[i]?.sheetRowNumber ?? null) as number | null
       const unchecked = (second.diagnostics as Diagnostic[])
         .filter((d) => d.kind === 'NOT_INJECTED' && d.rowNumber === sheetRowNumber)
         .map((d) => d.column as string)
@@ -170,6 +204,11 @@ async function main() {
     report({
       tab: SHEET_TAB_NAME,
       candidates: rows,
+      excluded: terminalRows.map((c: Record<string, unknown>) => ({
+        candidateId: String(c.candidateId ?? ''),
+        status: String(c.status ?? ''),
+        sheetRowNumber: (c.sheetRowNumber ?? null) as number | null,
+      })),
       diagnostics: [...(dbDiagnostics as Diagnostic[]), ...guardDiagnostics, ...(second.diagnostics as Diagnostic[])],
       cap,
       author: { ...authorProbe, verdict: authorVerdict },
@@ -181,9 +220,13 @@ async function main() {
   }
 }
 
+type Excluded = { candidateId: string; status: string; sheetRowNumber: number | null }
+
 type Report = {
   tab: string
   candidates: Array<Record<string, unknown>>
+  /** 끝난 행 — 판정 대상에서 뺐지만 숨기지 않는다 */
+  excluded: Excluded[]
   diagnostics: Diagnostic[]
   cap: { isFirstRun: boolean; publishedToday: number }
   author: Record<string, unknown>
@@ -211,6 +254,14 @@ function report(r: Report) {
   // cap
   console.log('\n  cap (§6-9-F)')
   console.log(`    isFirstRun=${r.cap.isFirstRun} · publishedToday=${r.cap.publishedToday}`)
+
+  // 끝난 행 — 판정 대상은 아니지만 몇 건이 왜 빠졌는지는 남긴다
+  if (r.excluded.length) {
+    console.log(`\n  판정 제외 ${r.excluded.length}건 (끝난 행 — cap 에 세지 않는다)`)
+    for (const e of r.excluded) {
+      console.log(`    ⏹️  행 ${e.sheetRowNumber ?? '?'} · ${e.status} · ${e.candidateId}`)
+    }
+  }
 
   // 후보
   console.log(`\n  판정 대상 ${r.candidates.length}건`)
