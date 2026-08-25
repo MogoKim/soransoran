@@ -38,3 +38,6 @@ yarn-error.log*
 # 무엇이 발행됐는지는 articles.ts 와 git 이력이 정본이다.
 /drafts/magazine/_runs/*
 !/drafts/magazine/_runs/.gitkeep
+
+# Micro Seed 수집 산출물 (로컬 전용 — repo 에 추적하지 않는다)
+.microseed-data/

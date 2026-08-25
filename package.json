@@ -20,7 +20,9 @@
     "micro-seed:sync-approval-live": "tsx scripts/micro-seed-sync-approval-live.mts",
     "micro-seed:reschedule-live": "tsx scripts/micro-seed-reschedule-live.mts",
     "micro-seed:publish-live": "tsx scripts/micro-seed-publish-live.mts",
-    "micro-seed:recover-live": "tsx scripts/micro-seed-recover-live.mts"
+    "micro-seed:recover-live": "tsx scripts/micro-seed-recover-live.mts",
+    "micro-seed:collect-82cook": "tsx scripts/micro-seed-collect-82cook.mts",
+    "micro-seed:collect-check": "tsx scripts/micro-seed-collect-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
