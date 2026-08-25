@@ -428,3 +428,179 @@ export function verifyPublishablePlanRow(row: PublishablePlanRow): PublishVerdic
 
   return { ok: true }
 }
+
+// ─────────────────────────────────────────────────────────
+// ⑦ Sheet 쓰기 열 화이트리스트 (§6-7-A)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * publisher 가 Sheet 에 쓸 수 있는 열.
+ *
+ * 🔴 스코프로는 이걸 막을 수 없다.
+ *    Google 은 셀 단위 스코프를 주지 않는다 — write 를 열면 `spreadsheets` 전체다.
+ *    즉 "창업자 칸을 건드리지 마라" 를 강제하는 것은 **코드가 유일한 방어선**이다.
+ *
+ * 🔴 status(2열)는 창업자 편집 칸인데 시스템도 쓴다.
+ *    이 겹침이 §6-3 사고의 무대다 — 시스템이 PUBLISHED 로 바꾸는 동안
+ *    창업자가 같은 칸을 보고 있다. 그래서 허용하되 목록에 명시해 둔다.
+ *
+ * 🚫 board · founderTitle · scheduledPublishAt · declineReason 은 창업자 것이다.
+ *    시스템이 쓰면 창업자가 적은 값이 조용히 사라진다.
+ * 🚫 나머지 시스템 칸(candidateId · source* · dedupKey 등)은 collector 가 적재할 때
+ *    정해지는 값이다. publisher 가 고칠 이유가 없고, 고치면 원장과 갈라진다.
+ */
+export const SHEET_WRITABLE_COLUMNS = [
+  'status',
+  'holdReason',
+  'postUrl',
+  'updatedBySystemAt',
+] as const
+
+export type SheetWriteVerdict = { ok: true } | { ok: false; reason: string }
+
+/**
+ * Sheet 에 쓰려는 열들이 화이트리스트 안에 있는지 본다.
+ *
+ * 🔴 이 함수는 아무것도 쓰지 않는다. 판정만 한다 —
+ *    실제 write 는 PR-C2b 가 하고, 그 앞에 이 게이트를 둔다.
+ *
+ * @param columns 쓰려는 열 이름 목록
+ */
+export function verifySheetWriteColumns(columns: unknown): SheetWriteVerdict {
+  if (!Array.isArray(columns)) {
+    return { ok: false, reason: `쓰려는 열 목록이 배열이 아니다: ${JSON.stringify(columns)}` }
+  }
+  if (columns.length === 0) {
+    return { ok: false, reason: '쓰려는 열이 없다. 빈 write 는 의도를 알 수 없다' }
+  }
+
+  const allowed = new Set<string>(SHEET_WRITABLE_COLUMNS)
+  const rejected: string[] = []
+
+  for (const raw of columns) {
+    const name = typeof raw === 'string' ? raw.trim() : ''
+    if (!name) {
+      rejected.push(JSON.stringify(raw))
+      continue
+    }
+    if (!allowed.has(name)) rejected.push(name)
+  }
+
+  if (rejected.length) {
+    return {
+      ok: false,
+      reason:
+        `Sheet 에 쓸 수 없는 열이다: ${rejected.join(', ')}. ` +
+        `허용: ${SHEET_WRITABLE_COLUMNS.join(' · ')} (§6-7-A)`,
+    }
+  }
+  return { ok: true }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑧ cap 실측 강제 (§6-5 · §6-9-F)
+// ─────────────────────────────────────────────────────────
+
+/** cap 을 실측하지 않고 판정하려 했다는 뜻 */
+export class CapContextNotMeasuredError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CapContextNotMeasuredError'
+  }
+}
+
+export type CapContext = {
+  /** PUBLISHED 인 후보가 아직 0건인가 (DB 실측) */
+  isFirstRun: boolean
+  /** 오늘 PUBLISHED 로 전이한 건수 (DB 실측) */
+  publishedToday: number
+}
+
+/**
+ * validateBatch 에 넘길 cap context 를 검증한다.
+ *
+ * 🔴 validateBatch 는 `context.isFirstRun ?? false` · `context.publishedToday ?? 0` 으로
+ *    받는다. 즉 **안 넘기면 cap 이 조용히 열린다** — first-run 이 아닌 것으로 보이고
+ *    오늘 발행량이 0 으로 보인다. hasPost 미실측과 같은 종류의 사고다.
+ *
+ *    그래서 publisher 는 이 함수를 통과한 값만 넘긴다. 보정하지 않고 던진다.
+ *
+ * @throws CapContextNotMeasuredError 실측되지 않았을 때
+ */
+export function requireCapContext(ctx: unknown): CapContext {
+  if (!ctx || typeof ctx !== 'object') {
+    throw new CapContextNotMeasuredError(
+      'cap context 가 없다. isFirstRun · publishedToday 를 DB 에서 실측해 넘긴다 (§6-9-F).',
+    )
+  }
+
+  const { isFirstRun, publishedToday } = ctx as Partial<CapContext>
+
+  if (typeof isFirstRun !== 'boolean') {
+    throw new CapContextNotMeasuredError(
+      `isFirstRun 을 실측하지 못했다 (${JSON.stringify(isFirstRun)}). ` +
+        'false 로 보정하면 first-run guard 가 조용히 열린다.',
+    )
+  }
+
+  if (!Number.isInteger(publishedToday) || (publishedToday as number) < 0) {
+    throw new CapContextNotMeasuredError(
+      `publishedToday 를 실측하지 못했다 (${JSON.stringify(publishedToday)}). ` +
+        '0 으로 보정하면 daily cap 이 조용히 열린다.',
+    )
+  }
+
+  return { isFirstRun, publishedToday: publishedToday as number }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑨ Post 생성 입구 단일화 (§6-9-C)
+// ─────────────────────────────────────────────────────────
+
+/** 3축 플래그를 직접 만졌다는 뜻. buildMicroSeedPostData 를 거쳐야 한다 */
+export class PostDataBypassError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PostDataBypassError'
+  }
+}
+
+/**
+ * Post 생성 payload 가 buildMicroSeedPostData 를 거쳤는지 확인한다.
+ *
+ * 🔴 buildMicroSeedPostData 가 3축을 강제해도, publisher 가 그 함수를 거치지 않고
+ *    prisma.post.create({ data: {...} }) 를 직접 부르면 우회된다.
+ *    함수가 있다는 것과 그 함수만 쓰인다는 것은 다르다.
+ *
+ *    그래서 create 직전에 이 게이트를 통과시킨다 — 값이 게이트 상수와
+ *    **정확히 일치**하지 않으면 던진다.
+ *
+ * 🔴 3축 값은 post-visibility.ts 의 MICRO_SEED_POST_VISIBILITY_FLAGS 에서만 온다 (C-2).
+ *    여기서 true/false 를 다시 적지 않고 그 상수와 대조한다 —
+ *    숫자를 두 곳에 적으면 언젠가 갈라진다.
+ */
+export function assertMicroSeedPostData(data: unknown): asserts data is ReturnType<typeof buildMicroSeedPostData> {
+  if (!data || typeof data !== 'object') {
+    throw new PostDataBypassError('Post 생성 데이터가 없다. buildMicroSeedPostData 로 만든다.')
+  }
+
+  const d = data as Record<string, unknown>
+  const mismatched: string[] = []
+
+  for (const [key, expected] of Object.entries(MICRO_SEED_POST_VISIBILITY_FLAGS)) {
+    if (d[key] !== expected) mismatched.push(`${key}=${JSON.stringify(d[key])} (기대 ${expected})`)
+  }
+  if (d.source !== MICRO_SEED_POST_FLAGS.source) {
+    mismatched.push(`source=${JSON.stringify(d.source)} (기대 ${MICRO_SEED_POST_FLAGS.source})`)
+  }
+  if (d.status !== MICRO_SEED_POST_FLAGS.status) {
+    mismatched.push(`status=${JSON.stringify(d.status)} (기대 ${MICRO_SEED_POST_FLAGS.status})`)
+  }
+
+  if (mismatched.length) {
+    throw new PostDataBypassError(
+      `Post 생성 데이터가 게이트를 거치지 않았다: ${mismatched.join(' · ')}. ` +
+        'buildMicroSeedPostData() 로만 만든다 (§6-9-C).',
+    )
+  }
+}
