@@ -730,6 +730,61 @@ async function run() {
     }
   }
 
+  // ── 10. write 는 read-back 으로 확인된다 (2026-08-25 실측 사고) ──
+  //
+  //    🔴 왜 이 가드가 있는가
+  //       `totalUpdatedCells: 17` 과 HTTP 200 을 받고도 시트 값이 이전 상태로 남은 일이
+  //       실제로 있었다. 원인은 규명되지 않았다. 원인을 모르는 채 할 수 있는 것은
+  //       **다시 읽어 확인하는 것**이고, 그 확인이 사라지지 않도록 여기서 검사한다.
+  //
+  //       publisher 가 postUrl 을 남기지 못하면 "발행됐는데 원장에 없는" 상태가 되고,
+  //       그건 §6-3 이 이중 발행의 출발점으로 지목한 시나리오다.
+  {
+    const body = extractFunctionBody(sheetLibSrc, 'updateCandidateRow')
+    const readsBack = body && /values:batchGet/.test(body)
+    const throwsOnMismatch = body && /SheetWriteNotPersistedError/.test(body)
+    if (!body) {
+      bad('write 는 read-back 으로 확인된다', 'guard', 'updateCandidateRow 본문을 찾지 못했다')
+    } else if (!readsBack) {
+      bad('write 는 read-back 으로 확인된다', 'guard', '🔴 write 후 다시 읽지 않는다')
+    } else if (!throwsOnMismatch) {
+      bad('write 는 read-back 으로 확인된다', 'guard', '🔴 불일치를 예외로 올리지 않는다 — 조용히 넘어간다')
+    } else {
+      ok('write 는 read-back 으로 확인된다', 'guard', 'batchGet 대조 + SheetWriteNotPersistedError')
+    }
+  }
+
+  // ── 11. 승인 동기화는 Sheet 에 쓰지 않는다 (§5-2 방향) ──
+  //    Sheet → DB 는 창업자 편집 칸을 원장으로 옮기는 **한 방향**이다.
+  //    같은 스크립트가 Sheet 에도 쓰면 사람이 적은 값을 시스템이 덮는 경로가 생긴다.
+  {
+    const syncSrc = readFileSync(join(ROOT, 'scripts/micro-seed-sync-approval-live.mts'), 'utf-8')
+    const code = syncSrc.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+    if (/updateCandidateRow|planSheetWrite|SHEET_WRITE_SCOPE/.test(code)) {
+      bad('승인 동기화는 Sheet 에 쓰지 않는다', 'guard', '🔴 Sheet write 경로를 참조한다')
+    } else if (/prisma\.post\.|\.post\.create|PUBLISHED'/.test(code)) {
+      bad('승인 동기화는 Sheet 에 쓰지 않는다', 'guard', '🔴 Post 생성 또는 PUBLISHED 전환 흔적이 있다')
+    } else {
+      ok('승인 동기화는 Sheet 에 쓰지 않는다', 'guard', 'Sheet 는 읽기만 · Post 생성 없음')
+    }
+  }
+
+  // ── 12. 재예약은 status 를 바꾸지 않는다 (정책 21 · R5) ──
+  //    예약시각을 미는 것과 승인 상태를 바꾸는 것은 다른 결정이다.
+  //    한 스크립트가 둘 다 하면 "시각만 밀려다 승인까지 밀리는" 사고가 난다.
+  {
+    const reSrc = readFileSync(join(ROOT, 'scripts/micro-seed-reschedule-live.mts'), 'utf-8')
+    const code = reSrc.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+    const writesStatus = /data:\s*\{[^}]*status/.test(code) || /status:\s*'(PENDING|PUBLISHED|HOLD|PROCESSING|FAILED)'/.test(code)
+    if (writesStatus) {
+      bad('재예약은 status 를 바꾸지 않는다', 'guard', '🔴 status 를 쓰는 코드가 있다')
+    } else if (!/status:\s*sheetStatus/.test(code)) {
+      bad('재예약은 status 를 바꾸지 않는다', 'guard', 'Sheet 실측 status 를 되쓰지 않는다 — 승인이 풀릴 수 있다')
+    } else {
+      ok('재예약은 status 를 바꾸지 않는다', 'guard', 'Sheet 실측값 유지 · DB 는 scheduledPublishAt 만')
+    }
+  }
+
   // publisher 전용 열이 허용 목록 안에 있는지 — 목록 자체가 흔들리면 위 fixture 가 무의미하다
   const missingPublisherCols = SHEET_PUBLISHER_ONLY_COLUMNS.filter((c) => !SHEET_UPDATABLE_COLUMNS.includes(c))
   if (missingPublisherCols.length) {
