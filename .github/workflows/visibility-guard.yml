@@ -60,3 +60,32 @@ jobs:
       # 둘을 같이 돌려야 회귀 차단이 실제로 닫힌다.
       - name: 타입 검사
         run: npm run typecheck
+
+      # ── Micro Seed Founder Gate fixture ────────────────────────
+      #
+      # 여기까지의 단계는 "노출 게이트가 살아 있는가" 만 본다.
+      # 발행 게이트(R1~R11 · G-A · G-B)가 실제로 막는지는 fixture 가 답한다.
+      #
+      # 🔴 이걸 CI 에 두지 않으면 회귀 차단이 로컬 실행에만 의존한다.
+      #    사람이 잊는 순간 무력해지는 건 check:visibility 와 같은 이유다 —
+      #    여러 세션이 병렬로 main 에 들어오는 구조에서 "각자 돌렸겠지" 는 전제할 수 없다.
+      #
+      # 셋 다 DB · Google Sheet · 네트워크 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      #
+      # 순서에 이유가 있다: validate(규칙 자체) → read(Sheet 매핑) → plan(원장 주입 + guard).
+      # 아래로 갈수록 위를 딛고 서므로 무너진 층을 가장 먼저 보여준다.
+      - name: Micro Seed 검증 규칙 (R1~R11 · G-A · G-B)
+        run: npm run micro-seed:validate
+
+      - name: Micro Seed Sheet reader (17열 · 매핑)
+        run: npm run micro-seed:read
+
+      # plan 은 tsx 로 돈다 — src/lib/micro-seed-guard.ts 를 직접 부르기 위해서다.
+      # .mjs 는 .ts 를 import 할 수 없고, Node 타입 스트리핑은 22.6+ 라 여기(Node 20)선 못 쓴다.
+      - name: Micro Seed 발행 계획 (원장 주입 + contentGuard)
+        run: npm run micro-seed:plan
+
+      # 위 plan 은 실제 guard 를 주입한 경로다. 주입 배선 자체(fake guard)는 별도로 본다 —
+      # guard 없이도 파이프라인이 무너지지 않는지, 미주입이 unchecked 로 드러나는지 확인한다.
+      - name: Micro Seed 주입 배선 (guard 미주입 경로)
+        run: npm run micro-seed:plan-wiring

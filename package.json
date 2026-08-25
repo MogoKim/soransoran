@@ -12,7 +12,8 @@
     "check:visibility": "node scripts/check-post-visibility.mjs",
     "micro-seed:validate": "node scripts/micro-seed-validate.mjs",
     "micro-seed:read": "node scripts/micro-seed-read.mjs",
-    "micro-seed:plan": "node scripts/micro-seed-plan.mjs"
+    "micro-seed:plan": "tsx scripts/micro-seed-plan-guarded.mts",
+    "micro-seed:plan-wiring": "node scripts/micro-seed-plan.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
@@ -40,6 +41,7 @@
     "prisma": "^6.1.0",
     "tailwindcss": "^3.4.17",
     "tailwindcss-animate": "^1.0.7",
+    "tsx": "^4.23.12",
     "typescript": "^5.7.3"
   }
 }
