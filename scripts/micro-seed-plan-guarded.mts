@@ -23,6 +23,12 @@
  */
 import { guardMicroSeedCandidate, checkMicroSeedContent } from '../src/lib/micro-seed-guard'
 import { checkContent, BRAND_BANNED_WORDS } from '../src/lib/content-guard'
+import {
+  MICRO_SEED_AUTHOR_ENV,
+  MicroSeedAuthorMissingError,
+  hasMicroSeedAuthorId,
+  resolveMicroSeedAuthorId,
+} from '../src/lib/micro-seed-author'
 // @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
 import { buildPlan, ROW, LEDGER, ledger, row } from './micro-seed-plan.mjs'
 // @ts-expect-error — 위와 같다.
@@ -118,6 +124,67 @@ async function run() {
       pass('base 위반 사유를 덮어쓰지 않는다', r.reason)
     } else {
       fail('base 위반 사유를 덮어쓰지 않는다', `받은 사유: ${!r.ok ? r.reason : '(통과)'}`)
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 시스템 작성자 (§5-2A · §6-9-E)
+  //
+  // 🔴 순수 함수에 가짜 env 객체를 넘긴다. process.env 를 건드리지 않으므로
+  //    이 검증이 실행 환경의 실제 설정에 영향을 주지 않는다.
+  // ─────────────────────────────────────────────────────────
+
+  // ── ⑧ env 부재 → 던진다 (폴백 없음) ──────────────────────
+  {
+    const cases: Array<[string, Record<string, string | undefined>]> = [
+      ['미설정', {}],
+      ['undefined', { [MICRO_SEED_AUTHOR_ENV]: undefined }],
+      ['빈 문자열', { [MICRO_SEED_AUTHOR_ENV]: '' }],
+      ['공백뿐', { [MICRO_SEED_AUTHOR_ENV]: '   ' }],
+    ]
+    const leaked: string[] = []
+    for (const [label, env] of cases) {
+      try {
+        const got = resolveMicroSeedAuthorId(env)
+        leaked.push(`${label} → "${got}"`)
+      } catch (e) {
+        if (!(e instanceof MicroSeedAuthorMissingError)) leaked.push(`${label} → 다른 오류: ${String(e)}`)
+      }
+    }
+    if (leaked.length === 0) {
+      pass('작성자 ID 부재 시 던진다 (폴백 없음)', '미설정 · undefined · 빈 문자열 · 공백 4종')
+    } else {
+      fail('작성자 ID 부재 시 던진다 (폴백 없음)', `🔴 값이 새어 나왔다: ${leaked.join(' / ')}`)
+    }
+  }
+
+  // ── ⑨ 정상 값은 trim 해서 돌려준다 ──────────────────────
+  {
+    const got = resolveMicroSeedAuthorId({ [MICRO_SEED_AUTHOR_ENV]: '  micro-seed-system  ' })
+    if (got === 'micro-seed-system') pass('작성자 ID 는 trim 해서 돌려준다', got)
+    else fail('작성자 ID 는 trim 해서 돌려준다', `받은 값: "${got}"`)
+  }
+
+  // ── ⑩ 🔴 ID 를 코드에 하드코딩하지 않았는가 (§5-2A) ───────
+  //    env 를 비워도 어떤 값이 나오면 어딘가에 박혀 있다는 뜻이다.
+  {
+    const empty = hasMicroSeedAuthorId({})
+    const filled = hasMicroSeedAuthorId({ [MICRO_SEED_AUTHOR_ENV]: 'x' })
+    if (!empty && filled) pass('ID 를 하드코딩하지 않았다 (env 로만 읽는다)', `${MICRO_SEED_AUTHOR_ENV} 단일 출처`)
+    else fail('ID 를 하드코딩하지 않았다 (env 로만 읽는다)', `빈 env=${empty} · 채운 env=${filled}`)
+  }
+
+  // ── ⑪ 다른 이름의 env 를 읽지 않는가 ────────────────────
+  {
+    const others = {
+      SORAN_ADMIN_EMAILS: 'admin@example.com',
+      MICRO_SEED_AUTHOR_ID: 'wrong-name',
+      SORAN_MICRO_SEED_AUTHOR: 'wrong-name-2',
+    }
+    if (!hasMicroSeedAuthorId(others)) {
+      pass('지정된 env 이름 외에는 읽지 않는다', '유사 이름 3종 무시 확인')
+    } else {
+      fail('지정된 env 이름 외에는 읽지 않는다', '🔴 다른 이름에서 값을 가져왔다')
     }
   }
 
