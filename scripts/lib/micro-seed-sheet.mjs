@@ -564,8 +564,39 @@ export function planSheetWrite({ mode = 'columns', rowNumber, values, cells, tab
         `허용: ${SHEET_UPDATABLE_COLUMNS.join(' · ')} (§6-7-A)`,
     )
   }
+
+  // ── 발행 3종 세트 (§6-1) ─────────────────────────────
+  //
+  // 🔴 이 계약은 첫 발행에서 실패한 뒤 고친 것이다 (2026-08-25).
+  //    예전 규칙은 status='PUBLISHED' write 를 **무조건 거부**했다. publisher 가
+  //    없던 시절 "Post 없이 발행 흔적을 남기지 마라" 를 뜻했는데, publisher 가 실제로
+  //    그 값을 써야 하는 시점이 되자 정당한 write 를 막았다 —
+  //    Post 는 생겼는데 Sheet 는 PENDING 으로 남는 불일치가 실제로 발생했다.
+  //
+  //    막고 싶었던 것은 "PUBLISHED 라는 글자" 가 아니라 **근거 없는 발행 기록**이다.
+  //    그래서 세 값을 한 세트로 묶는다:
+  //
+  //      status='PUBLISHED'  ⟺  postUrl 있음 AND updatedBySystemAt 있음
+  //
+  //    한쪽만 오면 거부한다. postUrl 없는 PUBLISHED 는 "어디에 발행됐는지 모르는 발행" 이고,
+  //    PUBLISHED 없는 postUrl 은 "상태는 그대로인데 링크만 있는" 행이다. 둘 다 원장이 거짓말을 한다.
+  const hasPostUrl = names.includes('postUrl') && String(cells.postUrl ?? '').trim() !== ''
+  const hasStamp = names.includes('updatedBySystemAt') && String(cells.updatedBySystemAt ?? '').trim() !== ''
+
   if (cells.status === 'PUBLISHED') {
-    return fail('status 를 PUBLISHED 로 쓰지 않는다. 발행 결과는 DB 실측 후 publisher 가 기록한다.')
+    if (!hasPostUrl) {
+      return fail('status=PUBLISHED 인데 postUrl 이 없다. 어디에 발행됐는지 모르는 발행 기록은 남기지 않는다 (§6-1)')
+    }
+    if (!hasStamp) {
+      return fail('status=PUBLISHED 인데 updatedBySystemAt 이 없다. 언제 기록됐는지 모르면 추적할 수 없다')
+    }
+  } else if (hasPostUrl || hasStamp) {
+    // 🔴 발행하지 않은 결과(HOLD · FAILED)에 발행 흔적이 붙는 것을 막는다.
+    return fail(
+      `status=${JSON.stringify(cells.status)} 인데 ${[hasPostUrl && 'postUrl', hasStamp && 'updatedBySystemAt']
+        .filter(Boolean)
+        .join(' · ')} 이 실렸다. 발행 흔적은 PUBLISHED 에만 붙는다`,
+    )
   }
 
   const updates = names.map((n) => {
