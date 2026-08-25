@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "check:tokens": "node scripts/check-color-literals.mjs",
     "check:visibility": "node scripts/check-post-visibility.mjs",
-    "micro-seed:validate": "node scripts/micro-seed-validate.mjs"
+    "micro-seed:validate": "node scripts/micro-seed-validate.mjs",
+    "micro-seed:read": "node scripts/micro-seed-read.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
