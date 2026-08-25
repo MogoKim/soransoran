@@ -678,11 +678,65 @@ async function run() {
       expectOk: false,
       expectReason: '쓸 수 없는 열이다',
     },
+    // 🔴 예전 계약("PUBLISHED write 무조건 거부")을 폐기한 자리다.
+    //    첫 발행에서 그 규칙이 publisher 의 정당한 역기록을 막아 Post 는 생겼는데
+    //    Sheet 는 PENDING 으로 남는 불일치가 실제로 발생했다 (2026-08-25).
+    //    막아야 하는 것은 "PUBLISHED 라는 글자" 가 아니라 **근거 없는 발행 기록**이다.
     {
-      name: 'status 를 PUBLISHED 로 쓰지 않는다 (columns)',
+      name: 'PUBLISHED + postUrl + updatedBySystemAt → 통과',
+      input: {
+        mode: 'columns',
+        rowNumber: 2,
+        cells: {
+          status: 'PUBLISHED',
+          postUrl: 'https://soransoran.com/community/free/abc123',
+          updatedBySystemAt: '2026-08-25 21:55',
+        },
+      },
+      expectOk: true,
+      expectRanges: [`${SHEET_TAB_NAME}!B2:B2`, `${SHEET_TAB_NAME}!P2:P2`, `${SHEET_TAB_NAME}!Q2:Q2`],
+    },
+    {
+      name: 'PUBLISHED 만 단독으로 쓰면 거부한다',
       input: { mode: 'columns', rowNumber: 2, cells: { status: 'PUBLISHED' } },
       expectOk: false,
-      expectReason: 'PUBLISHED',
+      expectReason: 'postUrl 이 없다',
+    },
+    {
+      name: 'PUBLISHED + postUrl 인데 updatedBySystemAt 이 없으면 거부한다',
+      input: {
+        mode: 'columns',
+        rowNumber: 2,
+        cells: { status: 'PUBLISHED', postUrl: 'https://soransoran.com/community/free/abc123' },
+      },
+      expectOk: false,
+      expectReason: 'updatedBySystemAt 이 없다',
+    },
+    {
+      name: 'HOLD 에 postUrl 이 실리면 거부한다',
+      input: {
+        mode: 'columns',
+        rowNumber: 2,
+        cells: { status: 'HOLD', holdReason: '예약 초과', postUrl: 'https://soransoran.com/community/free/abc123' },
+      },
+      expectOk: false,
+      expectReason: '발행 흔적은 PUBLISHED 에만',
+    },
+    {
+      name: 'FAILED 에 updatedBySystemAt 이 실리면 거부한다',
+      input: {
+        mode: 'columns',
+        rowNumber: 2,
+        cells: { status: 'FAILED', holdReason: 'G-B 위반', updatedBySystemAt: '2026-08-25 21:55' },
+      },
+      expectOk: false,
+      expectReason: '발행 흔적은 PUBLISHED 에만',
+    },
+    {
+      name: 'HOLD + holdReason 은 통과한다',
+      input: { mode: 'columns', rowNumber: 2, cells: { status: 'HOLD', holdReason: '예약 초과' } },
+      expectOk: true,
+      expectRanges: [`${SHEET_TAB_NAME}!B2:B2`, `${SHEET_TAB_NAME}!N2:N2`],
     },
     {
       name: 'status 를 PUBLISHED 로 쓰지 않는다 (bootstrap)',
