@@ -572,6 +572,128 @@ async function run() {
     }
   }
 
+  // ─────────────────────────────────────────────────────────
+  // live dry-run 안전장치 (PR-B2·C2b 사이)
+  //
+  // 🔴 소스를 문자열로 읽어 검사한다. 실행하지 않는다 —
+  //    "쓰지 않는다" 를 사람이 기억하는 방식으로 두지 않는다.
+  // ─────────────────────────────────────────────────────────
+
+  // ── ㉗ live 경로에 DB write 메서드가 없는가 ──────────────
+  {
+    const { readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const here = dirname(fileURLToPath(import.meta.url))
+
+    const LIVE_FILES = [
+      'lib/micro-seed-db.mjs',
+      'lib/micro-seed-sheet.mjs',
+      'micro-seed-dry-run-live.mts',
+      'micro-seed-inventory.mts',
+    ]
+    // 주석·문자열이 아니라 실제 호출만 본다.
+    const DB_WRITE = /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\s*\(/
+    const RAW_SQL = /\$(executeRaw|queryRaw)/
+    const SHEET_WRITE = /values\.(update|append|batchUpdate)|method:\s*['"](PUT|POST|PATCH)/
+
+    const offenders: string[] = []
+    for (const rel of LIVE_FILES) {
+      let text: string
+      try {
+        text = readFileSync(join(here, rel), 'utf-8')
+      } catch {
+        offenders.push(`${rel} 를 읽지 못했다`)
+        continue
+      }
+      // 주석 줄을 걷어낸다 — 설명에 등장하는 것까지 막으면 문서를 못 쓴다.
+      const code = text
+        .split('\n')
+        .filter((l) => !/^\s*(\*|\/\/|--)/.test(l))
+        .join('\n')
+
+      if (DB_WRITE.test(code)) offenders.push(`${rel}: DB write 메서드`)
+      if (RAW_SQL.test(code)) offenders.push(`${rel}: raw SQL 실행`)
+      if (SHEET_WRITE.test(code)) offenders.push(`${rel}: Sheet write API`)
+    }
+
+    if (offenders.length === 0) {
+      pass('live 경로에 write 호출이 없다', `${LIVE_FILES.length}개 파일 검사`)
+    } else {
+      fail('live 경로에 write 호출이 없다', `🔴 ${offenders.join(' / ')}`)
+    }
+  }
+
+  // ── ㉘ legacy 본문은 조회 단계에서 배제된다 (§10-1) ──────
+  //    rawBody 를 Candidate 조회에 넣지 않고 origin='live' 인 것만 별도로 가져오는지.
+  {
+    const { readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const here = dirname(fileURLToPath(import.meta.url))
+    const dbSrc = readFileSync(join(here, 'lib/micro-seed-db.mjs'), 'utf-8')
+
+    // Candidate 조회의 rawContent select 에 rawBody 가 없어야 한다.
+    const candidateSelect = /rawContent:\s*\{\s*select:\s*\{([^}]*)\}/.exec(dbSrc)?.[1] ?? ''
+    const bodyInCandidateQuery = /rawBody/.test(candidateSelect)
+    // 별도 쿼리에 origin 필터가 있어야 한다.
+    const separateQuery = /microSeedRawContent\.findMany[\s\S]{0,300}origin:/.test(dbSrc)
+
+    if (!bodyInCandidateQuery && separateQuery) {
+      pass('legacy 본문은 조회 단계에서 배제된다', 'Candidate select 에 rawBody 없음 · 별도 쿼리에 origin 필터')
+    } else {
+      fail(
+        'legacy 본문은 조회 단계에서 배제된다',
+        `🔴 candidate select 에 rawBody=${bodyInCandidateQuery} · origin 필터 쿼리=${separateQuery}`,
+      )
+    }
+  }
+
+  // ── ㉙ 작성자 미조회·부재면 발행 가능이 되지 않는다 ───────
+  //    dry-run 은 planVerdict.ok && authorVerdict.ok 로 publishable 을 정한다.
+  {
+    const cleanRow = { decision: 'PASS', rules: [], unchecked: [] }
+    const planOk = verifyPublishablePlanRow(cleanRow)
+
+    const authorCases: Array<[string, AuthorProbe]> = [
+      ['User 없음', { id: 'x', exists: false, providerId: null, isBlocked: false }],
+      ['실회원', { id: 'x', exists: true, providerId: 'kakao-1', isBlocked: false }],
+      ['차단됨', { id: 'x', exists: true, providerId: null, isBlocked: true }],
+      ['providerId 미조회', { id: 'x', exists: true, providerId: undefined, isBlocked: false } as unknown as AuthorProbe],
+      ['isBlocked 미조회', { id: 'x', exists: true, providerId: null, isBlocked: undefined } as unknown as AuthorProbe],
+    ]
+    const leaked: string[] = []
+    for (const [label, probe] of authorCases) {
+      const publishable = planOk.ok && verifyPublishAuthor(probe).ok
+      if (publishable) leaked.push(label)
+    }
+    if (leaked.length === 0) {
+      pass('작성자 문제면 후보가 PASS 여도 발행 불가', `${authorCases.length}종 전부`)
+    } else {
+      fail('작성자 문제면 후보가 PASS 여도 발행 불가', `🔴 발행 가능으로 나왔다: ${leaked.join(', ')}`)
+    }
+  }
+
+  // ── ㉚ cap 미실측이면 판정 자체가 진행되지 않는다 ────────
+  //    dry-run 은 requireCapContext 를 validateBatch 앞에 둔다. 던지면 그 뒤가 없다.
+  {
+    const notMeasured: unknown[] = [undefined, {}, { isFirstRun: true }, { publishedToday: 0 }]
+    const leaked: string[] = []
+    for (const ctx of notMeasured) {
+      try {
+        requireCapContext(ctx)
+        leaked.push(JSON.stringify(ctx))
+      } catch (e) {
+        if (!(e instanceof CapContextNotMeasuredError)) leaked.push(`다른 오류: ${String(e)}`)
+      }
+    }
+    if (leaked.length === 0) {
+      pass('cap 미실측이면 판정 전에 멈춘다', `${notMeasured.length}종 전부 throw`)
+    } else {
+      fail('cap 미실측이면 판정 전에 멈춘다', `🔴 통과했다: ${leaked.join(' / ')}`)
+    }
+  }
+
   return report
 }
 

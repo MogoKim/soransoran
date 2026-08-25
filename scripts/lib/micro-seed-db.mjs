@@ -82,27 +82,107 @@ export async function createPrismaCandidateSource() {
 
   return {
     describe: () => 'prisma (read-only)',
+
+    /**
+     * 후보 원장 조회.
+     *
+     * 🔴 rawBody 를 여기서 가져오지 않는다.
+     *    Candidate 조회에서는 origin 만 보고, 본문은 origin='live' 인 것만 별도 쿼리로 받는다.
+     *    §10-1 은 "후보 쿼리에서 코드로 배제" 하라고 요구한다 — 조회 후 거르는 것과
+     *    애초에 가져오지 않는 것은 다르다. legacy 본문은 이 프로세스의 메모리에
+     *    **들어오지 않는다.**
+     *
+     *    loadInjections 의 PUBLISHABLE_ORIGINS 방어는 그대로 둔다 (이중 방어).
+     */
     async fetchCandidates(ids) {
       if (!ids.length) return []
+
       const rows = await prisma.microSeedCandidate.findMany({
         where: { id: { in: ids } },
         select: {
           id: true,
           dedupKey: true,
           createdPostId: true,
-          rawContent: { select: { origin: true, rawBody: true } },
+          // origin 만. rawBody 는 아래에서 live 인 것만 가져온다.
+          rawContent: { select: { id: true, origin: true } },
           // R9 는 "발행 이력이 있는가" 만 필요하다. 전체 이력을 끌어오지 않는다.
           history: { where: { toStatus: 'PUBLISHED' }, select: { id: true }, take: 1 },
         },
       })
+
+      // 🔴 origin='live' 를 WHERE 에 넣는다. legacy 는 rawBody 가 조회되지 않는다.
+      const liveRawIds = rows
+        .filter((r) => r.rawContent && PUBLISHABLE_ORIGINS.includes(r.rawContent.origin))
+        .map((r) => r.rawContent.id)
+
+      const bodies = liveRawIds.length
+        ? await prisma.microSeedRawContent.findMany({
+            where: { id: { in: liveRawIds }, origin: { in: [...PUBLISHABLE_ORIGINS] } },
+            select: { id: true, rawBody: true },
+          })
+        : []
+      const bodyById = new Map(bodies.map((b) => [b.id, b.rawBody]))
+
       return rows.map((r) => ({
         id: r.id,
         dedupKey: r.dedupKey,
         createdPostId: r.createdPostId,
-        rawContent: r.rawContent,
+        // origin 은 그대로 넘긴다 — loadInjections 가 2차로 판정하고 진단을 남긴다.
+        // legacy 면 rawBody 가 undefined 라 본문이 없다.
+        rawContent: r.rawContent
+          ? { origin: r.rawContent.origin, rawBody: bodyById.get(r.rawContent.id) }
+          : null,
         hasPublishedHistory: r.history.length > 0,
       }))
     },
+
+    /**
+     * 시스템 작성자 실측 (§5-2A · §6-9-E).
+     *
+     * 🔴 providerId 를 반드시 select 한다. 빠뜨리면 undefined 가 되고
+     *    verifyPublishAuthor 가 "실측하지 못했다" 로 중단시킨다 — 그게 맞는 동작이다.
+     */
+    async fetchAuthor(id) {
+      const user = await prisma.user.findUnique({
+        where: { id },
+        select: { id: true, providerId: true, isBlocked: true },
+      })
+      return {
+        id,
+        exists: user !== null,
+        providerId: user ? user.providerId : null,
+        isBlocked: user ? user.isBlocked : false,
+      }
+    },
+
+    /**
+     * cap 실측 (§6-5 · §6-9-F).
+     *
+     * 🔴 안 넘기면 validateBatch 가 `?? false` · `?? 0` 으로 떨어져 cap 이 조용히 열린다.
+     *    그래서 여기서 세고, requireCapContext 가 그 값이 실측된 것인지 확인한다.
+     *
+     * publishedToday 는 History 의 PUBLISHED 전이를 KST 오늘 기준으로 센다 —
+     * 후보 테이블의 status 를 세면 오늘 발행 후 TAKEDOWN 된 건이 빠진다.
+     */
+    async measureCapContext(now = new Date()) {
+      // KST 오늘 0시 = UTC 로 전날 15:00
+      const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000)
+      const startOfKstDay = Date.UTC(
+        kstNow.getUTCFullYear(),
+        kstNow.getUTCMonth(),
+        kstNow.getUTCDate(),
+      ) - 9 * 60 * 60 * 1000
+
+      const [publishedCount, todayCount] = await Promise.all([
+        prisma.microSeedCandidate.count({ where: { status: 'PUBLISHED' } }),
+        prisma.microSeedCandidateHistory.count({
+          where: { toStatus: 'PUBLISHED', at: { gte: new Date(startOfKstDay) } },
+        }),
+      ])
+
+      return { isFirstRun: publishedCount === 0, publishedToday: todayCount }
+    },
+
     async disconnect() {
       await prisma.$disconnect().catch(() => {})
     },
