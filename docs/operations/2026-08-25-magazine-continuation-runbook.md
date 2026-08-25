@@ -627,6 +627,29 @@ ChatGPT 는 지시대로 넣었고 `batch-qa` 가 BLOCKED 를 냈다.
 
 ---
 
+## 9-E. 공개 완료 후의 draft — 정본이 아니다
+
+**공개 완료 후 `articles.ts` 가 정본이며, `brief`/`review` 짝이 없는 초기 draft 잔재는 QA 대상에서 제거한다.**
+
+`magazine-batch-qa` 는 `articles.ts` 가 아니라 `drafts/{slug}/article-draft.ts` 를 읽는다.
+그래서 공개본이 멀쩡해도 낡은 draft 가 남아 있으면 `--all` 이 매번 BLOCKED 를 낸다.
+
+```
+2026-08-23 초기 2건  article-draft.ts · image-prompts.md · publish-plan.md · seo-qa.md
+             → brief 도 review 도 없어 재제작에 쓸 수 없는 고아였다
+             → when-does-menopause-start 는 CTA 0개로 --all 을 매번 오염시켰다
+```
+
+🔴 **QA 에 예외 규칙을 넣지 않는다.** "공개된 글은 검사 제외" 같은 규칙은
+나중에 진짜 문제를 조용히 숨긴다. 잔재를 지우는 쪽이 게이트를 온전히 남긴다.
+
+🔴 **BLOCKED 가 0이어야 새 BLOCKED 가 눈에 띈다.**
+매번 같은 1건이 뜨면 사람이 그 신호를 무시하는 데 익숙해진다.
+
+지운 파일은 git 이력에 남는다 — 필요하면 `git show <commit>:<path>` 로 되살린다.
+
+---
+
 ## 10. 한 줄 요약
 
 **producer 는 무엇을 만들지 정하고, batch-qa 는 내보내도 되는지 정한다.
