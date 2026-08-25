@@ -6,10 +6,11 @@ import CommentForm from '@/components/features/CommentForm'
 import ReportButton from '@/components/features/ReportButton'
 import DeleteButton from '@/components/features/DeleteButton'
 import CommentItem from '@/components/features/CommentItem'
+import NextToRead from '@/components/features/NextToRead'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
-import { getPostDetail } from '@/lib/queries/posts'
+import { getPostDetail, getRecentDiscoveryPosts } from '@/lib/queries/posts'
 import { isSearchIndexable, robotsMetaFor } from '@/lib/post-visibility'
 
 export const dynamic = 'force-dynamic'
@@ -61,6 +62,8 @@ export default async function PostDetailPage({
 
   const { post, comments } = detail
   const session = await auth()
+  // 현재 글이 pool 에 섞여 있을 수 있어 넉넉히 받아 NextToRead 가 걸러낸다.
+  const nextPosts = await getRecentDiscoveryPosts(6)
 
   return (
     <PageShell>
@@ -135,6 +138,8 @@ export default async function PostDetailPage({
             </p>
           )}
         </section>
+
+        <NextToRead posts={nextPosts} currentPostId={post.id} />
       </main>
     </PageShell>
   )
