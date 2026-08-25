@@ -522,6 +522,52 @@ const PIPE_FIXTURES = [
     expectDecisions: ['REJECT', 'REJECT', 'PASS'],
     expectRules: ['R10'],
   },
+  // ── FAILED 보정 (2026-08-26) ────────────────────────────
+  //
+  // 🔴 FAILED 도 PENDING 이 아니라 발행 게이트를 건너뛰어 "위반 없음 PASS" 가 된다.
+  //    cap 오탐은 R10 수정이 막지만, 리포트에 **실패한 글이 PASS 로** 보이는 것은 남았다.
+  //    dry-run-live 가 FAILED 를 판정 제외로 빼고, cap 은 여기서 잠근다.
+  {
+    name: 'R10 — FAILED 는 cap 에 세지 않는다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000050', 1: 'FAILED', 12: 'sha256:f1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000051', 12: 'sha256:f2' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000050': { ...INJECTIONS, dbDedupKey: 'sha256:f1' },
+      'c0000000-0000-4000-8000-000000000051': { ...INJECTIONS, dbDedupKey: 'sha256:f2' },
+    },
+    expectDecisions: ['PASS', 'PASS'],
+  },
+  {
+    name: 'R10 — FAILED 여러 건 + PENDING 1건이면 PENDING 은 통과한다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000060', 1: 'FAILED', 12: 'sha256:g1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000061', 1: 'FAILED', 12: 'sha256:g2' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000062', 12: 'sha256:g3' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000060': { ...INJECTIONS, dbDedupKey: 'sha256:g1' },
+      'c0000000-0000-4000-8000-000000000061': { ...INJECTIONS, dbDedupKey: 'sha256:g2' },
+      'c0000000-0000-4000-8000-000000000062': { ...INJECTIONS, dbDedupKey: 'sha256:g3' },
+    },
+    expectDecisions: ['PASS', 'PASS', 'PASS'],
+  },
+  {
+    name: 'R10 — FAILED 가 섞여도 PENDING 2건은 REJECT 다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000070', 1: 'FAILED', 12: 'sha256:k1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000071', 12: 'sha256:k2' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000072', 12: 'sha256:k3' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000070': { ...INJECTIONS, dbDedupKey: 'sha256:k1' },
+      'c0000000-0000-4000-8000-000000000071': { ...INJECTIONS, dbDedupKey: 'sha256:k2' },
+      'c0000000-0000-4000-8000-000000000072': { ...INJECTIONS, dbDedupKey: 'sha256:k3' },
+    },
+    expectDecisions: ['PASS', 'REJECT', 'REJECT'],
+    expectRules: ['R10'],
+  },
 ]
 
 // ─────────────────────────────────────────────────────────
