@@ -1,8 +1,10 @@
 import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
+import HomeJoinCta from '@/components/features/HomeJoinCta'
 import Logo from '@/components/brand/Logo'
 import MenuIcon from '@/components/icons/MenuIcon'
+import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getRecentDiscoveryPosts } from '@/lib/queries/posts'
 
@@ -16,6 +18,8 @@ export const dynamic = 'force-dynamic'
  */
 export default async function HomePage() {
   const posts = await getRecentDiscoveryPosts(6)
+  // 카드는 비로그인에게만 나간다. JWT 전략이라 auth() 는 쿠키 디코드뿐이다.
+  const session = await auth()
   // 섹션 아이콘의 색과 모양은 board-registry 가 정한다. 여기서 토큰명을 직접 쓰지 않는다.
   const best = getBoardBySlug('best')!
 
@@ -62,6 +66,8 @@ export default async function HomePage() {
             </ol>
           </section>
         ) : null}
+
+        <HomeJoinCta isLoggedIn={Boolean(session?.user)} />
       </main>
     </PageShell>
   )
