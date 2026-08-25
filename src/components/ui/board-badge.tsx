@@ -3,7 +3,8 @@ import type { BoardType } from '@prisma/client'
 
 /**
  * 게시판 배지 — 여러 보드가 섞이는 자리에서 어느 방 글인지 알려준다.
- * 색은 board-registry 의 iconBgVar/iconStrokeVar 를 그대로 쓴다. 배지가 색을 정하지 않는다.
+ * 색은 board-registry 가 정하고 배지는 읽기만 한다.
+ * 글자는 stroke 가 아니라 text 토큰이다 — stroke 를 그대로 쓰면 배경 위 대비가 모자란다.
  */
 export default function BoardBadge({
   boardType,
@@ -20,7 +21,7 @@ export default function BoardBadge({
       className={['rounded-full px-2 py-0.5 font-bold', className].filter(Boolean).join(' ')}
       style={{
         backgroundColor: `var(${board.iconBgVar})`,
-        color: `var(${board.iconStrokeVar})`,
+        color: `var(${board.iconTextVar})`,
       }}
     >
       {board.label}
