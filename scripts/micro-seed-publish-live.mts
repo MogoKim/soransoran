@@ -39,11 +39,9 @@
  *   npm run micro-seed:publish-live -- --dry-run     판정만. DB·Sheet write 0
  *   npm run micro-seed:publish-live -- --limit=1     실제 발행 (기본 1건)
  */
-import { PrismaClient, type BoardType, type MicroSeedCandidateStatus } from '@prisma/client'
+import { PrismaClient, type BoardType } from '@prisma/client'
 import { guardMicroSeedCandidate } from '../src/lib/micro-seed-guard'
 import { getMicroSeedAuthorId } from '../src/lib/micro-seed-author'
-import { getBoardByType } from '../src/lib/board-registry'
-import { SITE } from '../src/lib/brand'
 import { MIN_POST_CONTENT_LENGTH, MAX_POST_CONTENT_LENGTH } from '../src/lib/post-policy'
 import {
   ACQUIRE_CANDIDATE_SQL,
@@ -57,11 +55,9 @@ import {
   resolvePublishableBoard,
   verifyPublishAuthor,
   verifyPublishableOrigin,
-  buildSheetWriteCells,
-  verifySheetWriteColumns,
-  type PublishOutcome,
 } from '../src/lib/micro-seed-write-guard'
-import { SHEET_TAB_NAME, SHEET_HEADERS, updateCandidateRow } from './lib/micro-seed-sheet.mjs'
+// 🔴 publisher 와 recover scanner(R-2)가 **같은** 함수를 쓴다. 복사하지 않는다 (C-2).
+import { buildPostUrl, demote, findSheetRow, syncSheet, type Divergence } from './lib/micro-seed-publish-lib.mjs'
 import { CAPS } from './micro-seed-validate.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 
@@ -77,14 +73,6 @@ const LIMIT = (() => {
 const WORKER_ID = `publish-live:${process.pid}`
 
 type Skipped = { candidateId: string; kind: string; reason: string }
-type Divergence = { candidateId: string; dbStatus: string; sheetStatus: string; reason: string }
-
-/** 발행된 글의 공개 URL. §6-1 — Post.id 는 DB 가 발급하고 Sheet 가 기록한다 */
-function buildPostUrl(boardType: BoardType, postId: string): string {
-  const board = getBoardByType(boardType)
-  if (!board) throw new Error(`board slug 를 찾지 못했다: ${boardType}`)
-  return `${SITE.url}/community/${board.slug}/${postId}`
-}
 
 async function main() {
   await loadEnvLocal()
@@ -167,7 +155,7 @@ async function main() {
         // 🔴 시각을 밀지 않는다. HOLD 로 되돌리고 사유를 남긴다.
         //    🔴 Sheet 에도 같은 상태를 쓴다 — DB 만 HOLD 면 창업자 화면은 PENDING 이다.
         if (!DRY_RUN) {
-          await demote(prisma, row.id, 'PENDING', 'HOLD', window.reason)
+          await demote(prisma, row.id, 'PENDING', 'HOLD', window.reason, WORKER_ID)
           await syncSheet(row.id, { kind: 'HOLD', reason: window.reason }, 'HOLD', divergences)
         }
         skipped.push({ candidateId: row.id, kind: window.kind, reason: window.reason })
@@ -251,20 +239,39 @@ async function main() {
         return post.id
       })
       published += 1
-      const postUrl = buildPostUrl(verdict.boardType, postId)
-      console.log(`  ✅ ${row.id}\n     Post ${postId}\n     ${postUrl}`)
 
       // ── ⑧ Sheet 역기록 — DB 가 먼저 확정된 뒤에만 ────────
       //    🔴 여기서 실패해도 후보를 되돌리지 않는다. 글은 이미 나갔다.
       //       되돌리면 창업자가 재승인해 이중 발행이 된다 (§6-3).
-      //       Sheet 는 PENDING 으로 남고 timeout 복구가 실측으로 정정한다.
-      const ok = await syncSheet(
-        row.id,
-        { kind: 'PUBLISHED', postUrl, at: new Date() },
-        'PUBLISHED',
-        divergences,
-      )
-      if (ok) console.log('')
+      //       Sheet 는 PENDING 으로 남고 recover scanner 가 실측으로 정정한다.
+      //
+      //    🔴 postUrl 생성부터 감싼다 (2026-08-25 감사에서 발견한 갭)
+      //       buildPostUrl 은 던질 수 있는데 예전에는 try 밖에 있었다. 거기서 던지면
+      //       **트랜잭션은 이미 커밋된 뒤**라 DB=PUBLISHED · Sheet=PENDING 인 채로
+      //       exit 1 로 빠져나갔고, divergence 목록에도 로그에도 남지 않았다.
+      //       Post 가 생긴 뒤의 모든 실패는 불일치로 기록돼야 한다.
+      try {
+        const postUrl = buildPostUrl(verdict.boardType, postId)
+        console.log(`  ✅ ${row.id}\n     Post ${postId}\n     ${postUrl}`)
+        const ok = await syncSheet(
+          row.id,
+          { kind: 'PUBLISHED', postUrl, at: new Date() },
+          'PUBLISHED',
+          divergences,
+        )
+        if (ok) console.log('')
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e)
+        divergences.push({
+          candidateId: row.id,
+          dbStatus: 'PUBLISHED',
+          sheetStatus: '(반영 실패)',
+          reason: `Post 는 생성됐다 (post=${postId}) — 이후 처리에서 실패: ${reason}`,
+        })
+        console.error(`  ✅ ${row.id}\n     Post ${postId}`)
+        console.error(`     ⚠️ postUrl 생성/Sheet 역기록 실패: ${reason}`)
+        console.error('        DB 를 되돌리지 않는다. 재승인 시 이중 발행이 되기 때문이다 (§6-3).')
+      }
     }
   } finally {
     await prisma.$disconnect()
@@ -336,25 +343,6 @@ async function reverify(
   return { ok: true, boardType: board.boardType, content }
 }
 
-/** 상태를 되돌리고 이력을 남긴다. attemptCount 는 건드리지 않는다 — 획득한 적이 없으므로 시도가 아니다 */
-async function demote(
-  prisma: PrismaClient,
-  candidateId: string,
-  from: MicroSeedCandidateStatus,
-  to: MicroSeedCandidateStatus,
-  reason: string,
-) {
-  await prisma.$transaction(async (tx) => {
-    await tx.microSeedCandidate.update({
-      where: { id: candidateId },
-      data: { status: to, holdReason: reason },
-    })
-    await tx.microSeedCandidateHistory.create({
-      data: { candidateId, fromStatus: from, toStatus: to, by: `worker:${WORKER_ID}`, reason },
-    })
-  })
-}
-
 /**
  * 획득 후 실패 — attemptCount 를 올리고 HOLD 또는 FAILED 로 보낸다.
  *
@@ -384,67 +372,6 @@ async function demoteAfterAttempt(
     })
   })
   return { status: to, detail }
-}
-
-/**
- * DB 에서 확정된 상태를 Sheet 에 남긴다. **DB 를 바꾼 모든 경로가 이 함수를 부른다.**
- *
- * 🔴 무엇을 쓸지 고르지 않는다. buildSheetWriteCells 가 결과 종류로 정한다 —
- *    호출부가 셀을 조립하면 언젠가 실패 경로에 postUrl 이 섞인다.
- *
- * 🔴 실패해도 DB 를 되돌리지 않는다
- *    되돌리면 창업자가 재승인해 이중 발행이 된다 (§6-3). 대신 **불일치로 기록**하고
- *    끝에서 명시적으로 출력한다 — 사람이 손으로 맞출 수 있게 무엇이 어긋났는지 남긴다.
- *
- * @returns Sheet 반영에 성공했으면 true
- */
-async function syncSheet(
-  candidateId: string,
-  outcome: PublishOutcome,
-  dbStatus: string,
-  divergences: Divergence[],
-): Promise<boolean> {
-  const cells = buildSheetWriteCells(outcome)
-
-  // §6-7-A 허용 열인지 한 번 더 본다. buildSheetWriteCells 가 지키지만,
-  // 그 함수가 바뀌었을 때 조용히 통과하지 않도록 여기서 확인한다.
-  const columnCheck = verifySheetWriteColumns(Object.keys(cells))
-  if (!columnCheck.ok) {
-    divergences.push({ candidateId, dbStatus, sheetStatus: '(쓰지 않음)', reason: columnCheck.reason })
-    console.error(`     ⚠️ Sheet 열 검증 실패: ${columnCheck.reason}`)
-    return false
-  }
-
-  try {
-    const write = await updateCandidateRow({
-      mode: 'columns',
-      tab: SHEET_TAB_NAME,
-      rowNumber: await findSheetRow(candidateId),
-      cells,
-      expectId: candidateId,
-    })
-    console.log(
-      `     Sheet ${write.ranges.join(', ')} · ${Object.keys(cells).join('·')} · ` +
-        `read-back ${write.readBackVerified ? '검증됨' : '미검증'}`,
-    )
-    return true
-  } catch (e) {
-    const reason = e instanceof Error ? e.message : String(e)
-    divergences.push({ candidateId, dbStatus, sheetStatus: '(반영 실패)', reason })
-    console.error(`     ⚠️ Sheet 역기록 실패 — DB 는 ${dbStatus} 로 확정됐다: ${reason}`)
-    console.error('        DB 를 되돌리지 않는다. 재승인 시 이중 발행이 되기 때문이다 (§6-3).')
-    return false
-  }
-}
-
-/** Sheet 에서 이 후보의 행 번호를 찾는다. 행 번호는 정렬로 흔들리므로 매번 실측한다 (§6-4) */
-async function findSheetRow(candidateId: string): Promise<number> {
-  const { createGoogleSheetSource } = await import('./lib/micro-seed-sheet.mjs')
-  const source = await createGoogleSheetSource({ tab: SHEET_TAB_NAME })
-  const { rows } = await source.fetchRows()
-  const idx = (rows as unknown[][]).findIndex((r) => String(r?.[SHEET_HEADERS.indexOf('candidateId')] ?? '').trim() === candidateId)
-  if (idx === -1) throw new Error(`Sheet 에서 후보 행을 찾지 못했다: ${candidateId}`)
-  return idx + 2 // 헤더가 1행, fetchRows 는 헤더를 뺀 배열을 준다
 }
 
 main().catch((e) => {

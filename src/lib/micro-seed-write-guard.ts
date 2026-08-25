@@ -573,6 +573,13 @@ export type PublishOutcome =
   | { kind: 'PUBLISHED'; postUrl: string; at: Date }
   | { kind: 'HOLD'; reason: string }
   | { kind: 'FAILED'; reason: string }
+  /**
+   * 다른 경로로 이미 발행된 원문. **이 후보로는 발행하지 않는다** (§6-10).
+   *
+   * 🔴 postUrl 을 쓰지 않는다. Post 는 존재하지만 **다른 후보**에 연결돼 있다 —
+   *    이 행에 그 링크를 적으면 "이 후보가 저 글을 냈다" 는 거짓이 된다.
+   */
+  | { kind: 'SKIPPED'; reason: string }
 
 /**
  * 결과 → Sheet 에 쓸 셀. §6-7-A 허용 열만 나온다.
@@ -581,7 +588,11 @@ export type PublishOutcome =
  *    Post 가 없는데 postUrl 이 있으면 원장이 거짓말을 한다. 실패 경로에서 이 열이
  *    나오지 않는다는 것을 함수 모양으로 보장하고, fixture 가 그걸 잠근다.
  *
- * 🔴 FAILED 도 holdReason 열에 사유를 쓴다
+ * 🔴 resolveTimeoutRecovery 가 돌려주는 4상태(PUBLISHED · SKIPPED · HOLD · FAILED)를
+ *    **모두** 다룬다. 하나라도 빠지면 그 분기에서 undefined 가 나와 write 가 터진다 —
+ *    recover scanner(R-2)가 SKIPPED 를 만나는 순간이 정확히 그 지점이다.
+ *
+ * 🔴 FAILED · SKIPPED 도 holdReason 열에 사유를 쓴다
  *    Sheet 17열에 failureReason 이 없다(§6-7-A). 사유를 버리는 것보다 홀드 사유 칸에
  *    적어 창업자가 화면에서 이유를 보는 편이 낫다 — DB 에는 failureReason 으로 따로 남는다.
  */
@@ -597,6 +608,9 @@ export function buildSheetWriteCells(outcome: PublishOutcome): Record<string, st
       return { status: 'HOLD', holdReason: outcome.reason }
     case 'FAILED':
       return { status: 'FAILED', holdReason: outcome.reason }
+    case 'SKIPPED':
+      // 🔴 postUrl 없음 — Post 는 다른 후보의 것이다 (§6-10 2·3차 방어).
+      return { status: 'SKIPPED', holdReason: outcome.reason }
   }
 }
 
