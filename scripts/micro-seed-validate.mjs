@@ -376,6 +376,20 @@ export function parseKst(value) {
 }
 
 /**
+ * 이 행이 **이번 배치에서 발행될 후보**인가.
+ *
+ * 🔴 PENDING 만이다. validateCandidate 의 wantsPublish 와 같은 기준을 쓴다 —
+ *    거기서 발행 게이트를 적용하는 조건과 여기서 cap 에 세는 조건이 다르면
+ *    "게이트는 안 봤는데 cap 에는 세어진" 행이 생긴다.
+ *
+ *    HOLD 는 승인 전이고, PUBLISHED · SKIPPED · DECLINED · TAKEDOWN 은 끝난 것이다.
+ *    둘 다 이번에 발행되지 않으므로 cap 을 잡아먹으면 안 된다.
+ */
+function isAwaitingPublish(row) {
+  return typeof row?.status === 'string' && row.status.trim() === 'PENDING'
+}
+
+/**
  * 배치 검증 — R10 cap 은 여기서만 판정할 수 있다.
  *
  * 🔴 승인 원자성: 다중 승인은 all-or-nothing 이다 (§6-5).
@@ -406,7 +420,22 @@ export function validateBatch(rows, context = {}) {
   }
 
   // ── R10. cap (§6-5 · §6-9-F) ────────────────────────────
-  const passing = results.filter((r) => r.decision === DECISION.PASS)
+  //
+  // 🔴 cap 은 "이번에 발행될 건수" 를 제한한다. 그러니 **발행 대기 중인 것**만 센다.
+  //
+  //    예전에는 decision === PASS 만 봤다. 그런데 validateCandidate 는
+  //    `wantsPublish = (status === 'PENDING')` 이라, PENDING 이 아닌 행은
+  //    발행 게이트를 건너뛰고 "위반 없음 PASS" 가 된다 —
+  //    이미 발행이 끝난 PUBLISHED 행도, 승인 전 HOLD 행도 PASS 로 세어졌다.
+  //
+  //    2026-08-26 실측: 첫 발행(PUBLISHED)과 두 번째 후보(PENDING)가 함께 있는 시트에서
+  //    PASS 2건이 되어 burst cap 1건을 넘겼고, all-or-nothing 으로 **둘 다 REJECT** 됐다.
+  //    발행 대기는 1건뿐인데 cap 이 막은 것이다 — 오탐이다.
+  //
+  //    후보가 쌓일수록 이 오탐은 100% 재현된다. 발행된 글은 지워지지 않기 때문이다.
+  const passing = results.filter(
+    (r, i) => r.decision === DECISION.PASS && isAwaitingPublish(rows[i]),
+  )
   const capViolations = []
   const limit = isFirstRun ? CAPS.firstRun : CAPS.burst
   const label = isFirstRun ? 'first-run' : 'burst'
@@ -435,13 +464,17 @@ export function validateBatch(rows, context = {}) {
   }
 
   if (capViolations.length) {
-    // all-or-nothing — 통과했던 것도 전부 막는다
-    for (const r of results) {
-      if (r.decision === DECISION.PASS) {
+    // all-or-nothing — 통과했던 것도 전부 막는다 (§6-5 승인 원자성)
+    //
+    // 🔴 제재 대상도 **발행 대기**뿐이다. cap 이 세는 것과 막는 것이 다르면
+    //    이미 발행이 끝난 행에 REJECT 가 붙는다 — 그건 판정이 아니라 잡음이다.
+    //    (세는 기준은 위 passing 과 같아야 한다)
+    results.forEach((r, i) => {
+      if (r.decision === DECISION.PASS && isAwaitingPublish(rows[i])) {
         r.decision = DECISION.REJECT
         r.violations = [...r.violations, ...capViolations]
       }
-    }
+    })
   }
 
   return {

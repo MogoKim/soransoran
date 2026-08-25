@@ -452,6 +452,122 @@ const PIPE_FIXTURES = [
     expectDecisions: ['REJECT', 'REJECT'],
     expectRules: ['R10'],
   },
+  // ── R10 오탐 회귀 차단 (2026-08-26 실측) ────────────────
+  //
+  // 🔴 무슨 일이 있었나
+  //    validateCandidate 는 `wantsPublish = (status === 'PENDING')` 이라
+  //    PENDING 이 아닌 행은 발행 게이트를 건너뛰고 "위반 없음 PASS" 가 된다.
+  //    R10 이 그 PASS 까지 세는 바람에, 이미 발행이 끝난 PUBLISHED 행과
+  //    발행 대기 PENDING 행이 함께 있으면 PASS 2건 → burst cap 초과 → **둘 다 REJECT** 였다.
+  //    발행 대기는 1건뿐인데 cap 이 막았다.
+  //
+  //    발행된 글은 지워지지 않으므로 후보가 쌓일수록 100% 재현된다.
+  //    R10 을 "발행 대기(PENDING)만 센다" 로 고쳤고, 아래가 그 회귀를 잠근다.
+  {
+    name: 'R10 — PUBLISHED 1건 + PENDING 1건이면 PENDING 은 통과한다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000010', 1: 'PUBLISHED', 12: 'sha256:pub1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000011', 12: 'sha256:pend1' }),
+    ],
+    injectionsBy: {
+      // 🔴 발행 이력이 있는 행이라 hasEverPublished=true 다. PUBLISHED 는 R9 가 허용한다.
+      'c0000000-0000-4000-8000-000000000010': { ...INJECTIONS, dbDedupKey: 'sha256:pub1', hasEverPublished: true },
+      'c0000000-0000-4000-8000-000000000011': { ...INJECTIONS, dbDedupKey: 'sha256:pend1' },
+    },
+    expectDecisions: ['PASS', 'PASS'],
+  },
+  {
+    name: 'R10 — PUBLISHED 3건이 있어도 cap 을 잡아먹지 않는다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000020', 1: 'PUBLISHED', 12: 'sha256:p1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000021', 1: 'PUBLISHED', 12: 'sha256:p2' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000022', 1: 'PUBLISHED', 12: 'sha256:p3' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000023', 12: 'sha256:p4' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000020': { ...INJECTIONS, dbDedupKey: 'sha256:p1', hasEverPublished: true },
+      'c0000000-0000-4000-8000-000000000021': { ...INJECTIONS, dbDedupKey: 'sha256:p2', hasEverPublished: true },
+      'c0000000-0000-4000-8000-000000000022': { ...INJECTIONS, dbDedupKey: 'sha256:p3', hasEverPublished: true },
+      'c0000000-0000-4000-8000-000000000023': { ...INJECTIONS, dbDedupKey: 'sha256:p4' },
+    },
+    expectDecisions: ['PASS', 'PASS', 'PASS', 'PASS'],
+  },
+  {
+    name: 'R10 — HOLD 는 cap 에 세지 않는다 (승인 전이다)',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000030', 1: 'HOLD', 12: 'sha256:h1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000031', 1: 'HOLD', 12: 'sha256:h2' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000032', 12: 'sha256:h3' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000030': { ...INJECTIONS, dbDedupKey: 'sha256:h1' },
+      'c0000000-0000-4000-8000-000000000031': { ...INJECTIONS, dbDedupKey: 'sha256:h2' },
+      'c0000000-0000-4000-8000-000000000032': { ...INJECTIONS, dbDedupKey: 'sha256:h3' },
+    },
+    expectDecisions: ['PASS', 'PASS', 'PASS'],
+  },
+  {
+    name: 'R10 — PENDING 2건은 여전히 REJECT 다 (cap 이 살아 있다)',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000040', 12: 'sha256:q1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000041', 12: 'sha256:q2' }),
+      // 끝난 행이 섞여 있어도 판정이 달라지지 않는다
+      r({ 0: 'c0000000-0000-4000-8000-000000000042', 1: 'PUBLISHED', 12: 'sha256:q3' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000040': { ...INJECTIONS, dbDedupKey: 'sha256:q1' },
+      'c0000000-0000-4000-8000-000000000041': { ...INJECTIONS, dbDedupKey: 'sha256:q2' },
+      'c0000000-0000-4000-8000-000000000042': { ...INJECTIONS, dbDedupKey: 'sha256:q3', hasEverPublished: true },
+    },
+    expectDecisions: ['REJECT', 'REJECT', 'PASS'],
+    expectRules: ['R10'],
+  },
+  // ── FAILED 보정 (2026-08-26) ────────────────────────────
+  //
+  // 🔴 FAILED 도 PENDING 이 아니라 발행 게이트를 건너뛰어 "위반 없음 PASS" 가 된다.
+  //    cap 오탐은 R10 수정이 막지만, 리포트에 **실패한 글이 PASS 로** 보이는 것은 남았다.
+  //    dry-run-live 가 FAILED 를 판정 제외로 빼고, cap 은 여기서 잠근다.
+  {
+    name: 'R10 — FAILED 는 cap 에 세지 않는다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000050', 1: 'FAILED', 12: 'sha256:f1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000051', 12: 'sha256:f2' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000050': { ...INJECTIONS, dbDedupKey: 'sha256:f1' },
+      'c0000000-0000-4000-8000-000000000051': { ...INJECTIONS, dbDedupKey: 'sha256:f2' },
+    },
+    expectDecisions: ['PASS', 'PASS'],
+  },
+  {
+    name: 'R10 — FAILED 여러 건 + PENDING 1건이면 PENDING 은 통과한다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000060', 1: 'FAILED', 12: 'sha256:g1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000061', 1: 'FAILED', 12: 'sha256:g2' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000062', 12: 'sha256:g3' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000060': { ...INJECTIONS, dbDedupKey: 'sha256:g1' },
+      'c0000000-0000-4000-8000-000000000061': { ...INJECTIONS, dbDedupKey: 'sha256:g2' },
+      'c0000000-0000-4000-8000-000000000062': { ...INJECTIONS, dbDedupKey: 'sha256:g3' },
+    },
+    expectDecisions: ['PASS', 'PASS', 'PASS'],
+  },
+  {
+    name: 'R10 — FAILED 가 섞여도 PENDING 2건은 REJECT 다',
+    rows: [
+      r({ 0: 'c0000000-0000-4000-8000-000000000070', 1: 'FAILED', 12: 'sha256:k1' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000071', 12: 'sha256:k2' }),
+      r({ 0: 'c0000000-0000-4000-8000-000000000072', 12: 'sha256:k3' }),
+    ],
+    injectionsBy: {
+      'c0000000-0000-4000-8000-000000000070': { ...INJECTIONS, dbDedupKey: 'sha256:k1' },
+      'c0000000-0000-4000-8000-000000000071': { ...INJECTIONS, dbDedupKey: 'sha256:k2' },
+      'c0000000-0000-4000-8000-000000000072': { ...INJECTIONS, dbDedupKey: 'sha256:k3' },
+    },
+    expectDecisions: ['PASS', 'REJECT', 'REJECT'],
+    expectRules: ['R10'],
+  },
 ]
 
 // ─────────────────────────────────────────────────────────

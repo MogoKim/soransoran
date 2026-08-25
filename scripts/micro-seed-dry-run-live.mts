@@ -43,6 +43,25 @@ import { createGoogleSheetSource, readCandidates, SHEET_TAB_NAME, MICRO_SEED_SHE
 import { createPrismaCandidateSource, loadInjections, PUBLISHABLE_ORIGINS } from './lib/micro-seed-db.mjs'
 import { validateBatch } from './micro-seed-validate.mjs'
 
+/**
+ * 배치 판정에서 빼는 상태 — **이번에 발행될 수 없는 행**이다.
+ *
+ * 🔴 "terminal" 이라고 부르지 않는다. FAILED 는 attempt 상한 전이면 재시도 여지가 있어
+ *    엄밀히 끝난 것이 아니다. 그래도 **지금 발행 대기는 아니므로** 여기 넣는다 —
+ *    기준은 "끝났는가" 가 아니라 "이번에 발행되는가" 다.
+ *
+ * 🔴 FAILED 를 넣은 이유 (2026-08-26 보정)
+ *    PENDING 이 아닌 행은 발행 게이트를 건너뛰어 "위반 없음 PASS" 가 된다.
+ *    cap 오탐은 R10 수정이 막았지만, 리포트에는 **실패한 글이 PASS 로** 보였다.
+ *    판정이 무의미한 행을 통과처럼 보여주면 읽는 사람이 잘못 믿는다.
+ *
+ * 🔴 db.mjs 의 TERMINAL_STATUSES 와 값이 같아졌지만 목적이 다르다.
+ *    그쪽은 retentionUntil 계산용이다. 한쪽이 바뀌어도 다른 쪽이 따라가면 안 되므로 따로 둔다.
+ */
+const NON_AWAITING_STATUSES: readonly string[] = [
+  'PUBLISHED', 'SKIPPED', 'DECLINED', 'TAKEDOWN', 'FAILED',
+]
+
 type Diagnostic = { kind: string; candidateId?: string; rowNumber?: number; column?: string; message: string }
 type HeaderError = { kind: string; column?: string; message: string }
 
@@ -98,6 +117,7 @@ async function main() {
       report({
         tab: SHEET_TAB_NAME,
         candidates: [],
+        excluded: [],
         diagnostics: [],
         cap,
         author: { ...authorProbe, verdict: authorVerdict },
@@ -139,15 +159,34 @@ async function main() {
     // 주입을 얹어 다시 읽는다 — reader 가 미주입을 NOT_INJECTED 로 표시한다.
     const second = await readCandidates(sheetSource, { injectionsBy })
 
+    // ── ⑦-B 발행 대기가 아닌 행을 배치에서 뺀다 ───────────
+    //
+    // 🔴 왜 빼는가
+    //    validateCandidate 는 PENDING 이 아닌 행의 발행 게이트를 건너뛴다.
+    //    그래서 이미 발행이 끝난 PUBLISHED 행도 "위반 없음 PASS" 로 나오고,
+    //    R10 cap 이 그것까지 세어 **발행 대기가 1건인데 REJECT** 를 낸다(2026-08-26 실측).
+    //
+    //    R10 자체는 validate.mjs 에서 "발행 대기(PENDING)만 센다" 로 고쳤다.
+    //    여기서 한 번 더 빼는 것은 **판정 대상 자체를 좁혀** 리포트를 읽기 쉽게 하려는 것이다 —
+    //    발행되지 않을 행에 대한 PASS/REJECT 는 의미가 없고, PASS 로 보이면 오해를 만든다.
+    //
+    // 🔴 숨기지는 않는다. excluded 로 집계해 "몇 건이 왜 빠졌는지" 를 남긴다.
+    const nonAwaitingRows = second.candidates.filter((c: Record<string, unknown>) =>
+      NON_AWAITING_STATUSES.includes(String(c.status ?? '').trim()),
+    )
+    const activeRows = second.candidates.filter(
+      (c: Record<string, unknown>) => !NON_AWAITING_STATUSES.includes(String(c.status ?? '').trim()),
+    )
+
     // ── ⑧ 판정 ────────────────────────────────────────────
-    const batch = validateBatch(second.candidates, {
+    const batch = validateBatch(activeRows, {
       isFirstRun: cap.isFirstRun,
       publishedToday: cap.publishedToday,
     })
 
     // ── ⑩ 발행 가능 최종 판정 ─────────────────────────────
     const rows = batch.results.map((r: Record<string, unknown>, i: number) => {
-      const sheetRowNumber = (second.candidates[i]?.sheetRowNumber ?? null) as number | null
+      const sheetRowNumber = (activeRows[i]?.sheetRowNumber ?? null) as number | null
       const unchecked = (second.diagnostics as Diagnostic[])
         .filter((d) => d.kind === 'NOT_INJECTED' && d.rowNumber === sheetRowNumber)
         .map((d) => d.column as string)
@@ -156,13 +195,22 @@ async function main() {
       const rules = [...new Set((r.violations as Array<{ rule: string }>).map((v) => v.rule))]
       const planVerdict = verifyPublishablePlanRow({ decision, rules, unchecked })
 
+      // 🔴 승인 전(HOLD)은 판정이 통과여도 발행 대상이 아니다.
+      //    HOLD 는 발행 게이트를 건너뛰어 PASS 로 나오는데, 그걸 "발행 가능" 으로
+      //    세면 창업자가 승인하지도 않은 글이 나갈 준비가 된 것처럼 보인다.
+      //    판정 결과(decision)는 그대로 보여주되, publishable 은 분리한다.
+      const status = String(activeRows[i]?.status ?? '').trim()
+      const awaiting = status === 'PENDING'
+
       // 🔴 후보가 통과해도 작성자가 막히면 발행 불가다.
-      const publishable = planVerdict.ok && authorVerdict.ok
-      const blockedBy = !planVerdict.ok
-        ? planVerdict.reason
-        : !authorVerdict.ok
-          ? `작성자: ${authorVerdict.reason}`
-          : null
+      const publishable = awaiting && planVerdict.ok && authorVerdict.ok
+      const blockedBy = !awaiting
+        ? `발행 대기가 아니다 (status=${status || '(빈 값)'}). 승인은 Sheet 에서 사람이 한다`
+        : !planVerdict.ok
+          ? planVerdict.reason
+          : !authorVerdict.ok
+            ? `작성자: ${authorVerdict.reason}`
+            : null
 
       return { candidateId: r.candidateId as string, decision, rules, sheetRowNumber, unchecked, publishable, blockedBy }
     })
@@ -170,6 +218,11 @@ async function main() {
     report({
       tab: SHEET_TAB_NAME,
       candidates: rows,
+      excluded: nonAwaitingRows.map((c: Record<string, unknown>) => ({
+        candidateId: String(c.candidateId ?? ''),
+        status: String(c.status ?? ''),
+        sheetRowNumber: (c.sheetRowNumber ?? null) as number | null,
+      })),
       diagnostics: [...(dbDiagnostics as Diagnostic[]), ...guardDiagnostics, ...(second.diagnostics as Diagnostic[])],
       cap,
       author: { ...authorProbe, verdict: authorVerdict },
@@ -181,9 +234,13 @@ async function main() {
   }
 }
 
+type Excluded = { candidateId: string; status: string; sheetRowNumber: number | null }
+
 type Report = {
   tab: string
   candidates: Array<Record<string, unknown>>
+  /** 발행 대기가 아닌 행 — 판정 대상에서 뺐지만 숨기지 않는다 */
+  excluded: Excluded[]
   diagnostics: Diagnostic[]
   cap: { isFirstRun: boolean; publishedToday: number }
   author: Record<string, unknown>
@@ -212,13 +269,22 @@ function report(r: Report) {
   console.log('\n  cap (§6-9-F)')
   console.log(`    isFirstRun=${r.cap.isFirstRun} · publishedToday=${r.cap.publishedToday}`)
 
+  // 발행 대기가 아닌 행 — 판정 대상은 아니지만 몇 건이 왜 빠졌는지는 남긴다
+  if (r.excluded.length) {
+    console.log(`\n  판정 제외 ${r.excluded.length}건 (발행 대기가 아니다 — cap 에 세지 않는다)`)
+    for (const e of r.excluded) {
+      console.log(`    ⏹️  행 ${e.sheetRowNumber ?? '?'} · ${e.status} · ${e.candidateId}`)
+    }
+  }
+
   // 후보
   console.log(`\n  판정 대상 ${r.candidates.length}건`)
   if (r.candidates.length === 0) {
     console.log('    (시트에 후보가 없다. 오류가 아니다 — 넣을 때까지 판정할 것이 없다)')
   }
   for (const c of r.candidates) {
-    const mark = c.publishable ? '✅' : '⛔'
+    // 🔴 publishable 이 아니면 ✅ 를 쓰지 않는다. 승인 전 후보가 통과처럼 보이면 안 된다.
+    const mark = c.publishable ? '✅' : '⏳'
     const rules = (c.rules as string[]).length ? ` [${(c.rules as string[]).join(', ')}]` : ''
     console.log(`    ${mark} 행 ${c.sheetRowNumber} · ${c.candidateId}`)
     console.log(`       ${c.decision}${rules}`)
