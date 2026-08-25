@@ -39,11 +39,8 @@ import {
   verifyPublishAuthor,
   verifyPublishablePlanRow,
 } from '../src/lib/micro-seed-write-guard'
-// @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
 import { createGoogleSheetSource, readCandidates, SHEET_TAB_NAME, MICRO_SEED_SHEET_ID_ENV } from './lib/micro-seed-sheet.mjs'
-// @ts-expect-error — 위와 같다.
 import { createPrismaCandidateSource, loadInjections, PUBLISHABLE_ORIGINS } from './lib/micro-seed-db.mjs'
-// @ts-expect-error — 위와 같다.
 import { validateBatch } from './micro-seed-validate.mjs'
 
 type Diagnostic = { kind: string; candidateId?: string; rowNumber?: number; column?: string; message: string }
@@ -103,14 +100,17 @@ async function main() {
         candidates: [],
         diagnostics: [],
         cap,
-        author: { id: authorId, ...authorProbe, verdict: authorVerdict },
+        author: { ...authorProbe, verdict: authorVerdict },
         batchDecision: null,
       })
       return
     }
 
     // ── ⑤ 주입 도출 ───────────────────────────────────────
-    const { injectionsBy, diagnostics: dbDiagnostics } = await loadInjections(ids, candidateSource)
+    const { injectionsBy, diagnostics: dbDiagnostics } = (await loadInjections(ids, candidateSource)) as {
+      injectionsBy: Record<string, Record<string, unknown>>
+      diagnostics: Diagnostic[]
+    }
 
     // ── ⑥ guard 직접 호출 ─────────────────────────────────
     //    🔴 plan 을 거치지 않는다. 여기서 진짜 guard 를 부른다.
@@ -172,7 +172,7 @@ async function main() {
       candidates: rows,
       diagnostics: [...(dbDiagnostics as Diagnostic[]), ...guardDiagnostics, ...(second.diagnostics as Diagnostic[])],
       cap,
-      author: { id: authorId, ...authorProbe, verdict: authorVerdict },
+      author: { ...authorProbe, verdict: authorVerdict },
       batchDecision: batch.batchDecision as string,
     })
   } finally {

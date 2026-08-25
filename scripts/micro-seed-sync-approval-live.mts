@@ -31,9 +31,7 @@
 import { PrismaClient } from '@prisma/client'
 import { MIN_POST_TITLE_LENGTH, MAX_POST_TITLE_LENGTH } from '../src/lib/post-policy'
 import { resolvePublishableBoard } from '../src/lib/micro-seed-write-guard'
-// @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
 import { createGoogleSheetSource, readCandidates, SHEET_TAB_NAME } from './lib/micro-seed-sheet.mjs'
-// @ts-expect-error
 import { parseKst } from './micro-seed-validate.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 

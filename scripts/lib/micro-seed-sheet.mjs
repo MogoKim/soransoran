@@ -267,7 +267,14 @@ export function mapRowToCandidate(row, rowNumber, injections = {}) {
  * @typedef {{ describe(): string, fetchRows(): Promise<{headers: unknown[], rows: unknown[][]}> }} SheetSource
  */
 
-/** fixture source — PR-B 의 유일한 source. 네트워크 없음 */
+/**
+ * fixture source — PR-B 의 유일한 source. 네트워크 없음
+ *
+ * 🔴 JSDoc 으로 타입을 적는다. 기본값 `[]` 만 두면 tsc 가 `never[]` 로 좁혀
+ *    호출부가 전부 타입 오류가 된다 (tsconfig.ops.json 도입 시 실측).
+ *
+ * @param {{ headers?: unknown[], rows?: unknown[][] }} [opts]
+ */
 export function createFixtureSource({ headers = SHEET_HEADERS, rows = [] } = {}) {
   return {
     describe: () => 'fixture (네트워크 없음)',
@@ -588,6 +595,14 @@ export function planSheetWrite({ mode = 'columns', rowNumber, values, cells, tab
  * @param values     bootstrap 모드의 17개 값 (buildSheetRow 결과)
  * @param cells      columns 모드의 { 열이름: 값 }
  * @param expectId   그 행에 있어야 할 candidateId
+ */
+/**
+ * 🔴 JSDoc 으로 옵셔널을 명시한다. 구조분해만으로는 tsc 가 전부 required 로 읽어
+ *    bootstrap 호출(cells 없음) · columns 호출(values 없음)이 둘 다 타입 오류가 된다.
+ *
+ * @param {{ mode?: 'bootstrap'|'columns', sheetId?: string, tab?: string,
+ *           rowNumber: number, values?: unknown[], cells?: Record<string, unknown>,
+ *           expectId?: string }} opts
  */
 export async function updateCandidateRow({ mode = 'columns', sheetId, tab, rowNumber, values, cells, expectId }) {
   const id = (sheetId ?? process.env[MICRO_SEED_SHEET_ID_ENV] ?? '').trim()

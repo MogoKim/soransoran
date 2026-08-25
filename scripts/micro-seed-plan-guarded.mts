@@ -48,13 +48,14 @@ import {
   assertMicroSeedPostData,
   requireCapContext,
   verifySheetWriteColumns,
+  PUBLISH_GRACE_MINUTES,
+  resolvePublishWindow,
+  PublishWindowWithoutScheduleError,
+  buildSheetWriteCells,
 } from '../src/lib/micro-seed-write-guard'
 import type { AuthorProbe, TimeoutProbe } from '../src/lib/micro-seed-write-guard'
-// @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
 import { buildPlan, ROW, LEDGER, ledger, row } from './micro-seed-plan.mjs'
-// @ts-expect-error — 위와 같다.
 import { createFixtureSource } from './lib/micro-seed-sheet.mjs'
-// @ts-expect-error — 위와 같다.
 import { createFixtureCandidateSource } from './lib/micro-seed-db.mjs'
 
 type Check = { ok: boolean; name: string; detail: string }
@@ -66,7 +67,7 @@ const fail = (name: string, detail: string) => report.push({ ok: false, name, de
 /** 브랜드 금지어가 든 본문. §6-9-B 는 "원문이 그랬다는 것은 근거가 되지 않는다" 고 한다 */
 const BANNED_BODY = '어르신들도 편하게 드실 수 있는 김치찌개를 끓였어요. 다들 뭐 드셨는지 궁금하네요.'
 
-async function planWith(ledgerRows: unknown[], sheetRows: unknown[] = [ROW]) {
+async function planWith(ledgerRows: unknown[], sheetRows: unknown[][] = [ROW]) {
   return buildPlan({
     sheetSource: createFixtureSource({ rows: sheetRows }),
     candidateSource: createFixtureCandidateSource(ledgerRows),
@@ -248,13 +249,225 @@ async function run() {
     const sameUpdate =
       /"processingStartedAt" = now\(\)/.test(ACQUIRE_CANDIDATE_SQL) &&
       /"processingBy" = /.test(ACQUIRE_CANDIDATE_SQL)
-    if (hasStatus && hasAttempt && sameUpdate) {
-      pass('획득 SQL — compare-and-set + attempt 상한 + 동시 기록', "status='PENDING' · attemptCount<3 · startedAt/By 동시")
+    // 🔴 예약 유예창이 SQL 조건에 있어야 한다.
+    //    코드에서만 판정하면 판정과 획득 사이에 시각이 흘러 창을 벗어난 후보를 집는다.
+    const hasWindow =
+      /"scheduledPublishAt" IS NOT NULL/.test(ACQUIRE_CANDIDATE_SQL) &&
+      /"scheduledPublishAt" <= \$3/.test(ACQUIRE_CANDIDATE_SQL) &&
+      /"scheduledPublishAt" >= \$4/.test(ACQUIRE_CANDIDATE_SQL)
+    if (hasStatus && hasAttempt && sameUpdate && hasWindow) {
+      pass(
+        '획득 SQL — compare-and-set + attempt 상한 + 동시 기록 + 예약창',
+        "status='PENDING' · attemptCount<3 · startedAt/By 동시 · sched 창 조건",
+      )
     } else {
       fail(
-        '획득 SQL — compare-and-set + attempt 상한 + 동시 기록',
-        `status=${hasStatus} attempt=${hasAttempt} sameUpdate=${sameUpdate}`,
+        '획득 SQL — compare-and-set + attempt 상한 + 동시 기록 + 예약창',
+        `status=${hasStatus} attempt=${hasAttempt} sameUpdate=${sameUpdate} window=${hasWindow}`,
       )
+    }
+  }
+
+  // ── ⑬-B 예약 유예창 판정 (§6-2 · 정책 21 — 창업자 확정 2026-08-25) ──
+  //
+  //    정본 세 곳이 달랐던 자리다. 해석을 코드로 고정하고 fixture 로 잠근다:
+  //      sched >  now             TOO_EARLY  아직이다
+  //      now-30m <= sched <= now  IN_WINDOW  발행 대상
+  //      sched <  now-30m         TOO_LATE   HOLD. 시각을 밀지 않는다
+  {
+    const NOW = new Date('2026-08-25T09:00:00Z')
+    const min = (n: number) => new Date(NOW.getTime() + n * 60_000)
+    const cases: Array<{ name: string; at: Date | null; expect: string }> = [
+      { name: '예약이 미래 (+10분) → TOO_EARLY', at: min(10), expect: 'TOO_EARLY' },
+      { name: '예약이 정확히 지금 → IN_WINDOW', at: min(0), expect: 'IN_WINDOW' },
+      { name: `예약이 ${PUBLISH_GRACE_MINUTES - 1}분 전 → IN_WINDOW`, at: min(-(PUBLISH_GRACE_MINUTES - 1)), expect: 'IN_WINDOW' },
+      { name: `예약이 정확히 ${PUBLISH_GRACE_MINUTES}분 전 (경계) → IN_WINDOW`, at: min(-PUBLISH_GRACE_MINUTES), expect: 'IN_WINDOW' },
+      { name: `예약이 ${PUBLISH_GRACE_MINUTES + 1}분 전 → TOO_LATE`, at: min(-(PUBLISH_GRACE_MINUTES + 1)), expect: 'TOO_LATE' },
+      { name: '예약 시각이 null → NOT_SCHEDULED', at: null, expect: 'NOT_SCHEDULED' },
+    ]
+    const wrong = cases.filter((c) => resolvePublishWindow(c.at, NOW).kind !== c.expect)
+    if (wrong.length === 0) {
+      pass('예약 유예창 — 미래 · 창 안 · 창 밖', `${cases.length}종 전부 (유예 ${PUBLISH_GRACE_MINUTES}분)`)
+    } else {
+      fail('예약 유예창 — 미래 · 창 안 · 창 밖', `🔴 ${wrong.map((c) => c.name).join(' / ')}`)
+    }
+
+    // 🔴 미실측(undefined)은 null 과 다르다. 뭉뚱그리면 조회 실패가 "예약 없음" 이 된다.
+    try {
+      resolvePublishWindow(undefined, NOW)
+      fail('예약 시각 미실측이면 던진다', '🔴 통과했다 — select 누락이 조용히 넘어간다')
+    } catch (e) {
+      if (e instanceof PublishWindowWithoutScheduleError) {
+        pass('예약 시각 미실측이면 던진다', 'undefined → throw')
+      } else {
+        fail('예약 시각 미실측이면 던진다', `다른 오류: ${String(e)}`)
+      }
+    }
+  }
+
+  // ── ⑬-C publisher 소스 계약 ────────────────────────────
+  //
+  //    함수가 존재한다는 것과 publisher 가 그것을 부른다는 것은 다르다.
+  //    실행 없이 확인할 수 있는 것은 소스이므로 소스를 본다.
+  {
+    const { readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const pubSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'micro-seed-publish-live.mts'), 'utf-8')
+    const code = pubSrc.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+
+    const checks: Array<{ name: string; ok: boolean; detail: string }> = [
+      {
+        name: 'guard 를 직접 재호출한다',
+        ok: /guardMicroSeedCandidate\(/.test(code),
+        detail: 'plan 결과를 신뢰하지 않는다 (§6-9-B)',
+      },
+      {
+        name: 'Post 생성 직전 assert 한다',
+        ok: /assertMicroSeedPostData\(postData\)/.test(code) &&
+            code.indexOf('assertMicroSeedPostData(postData)') < code.indexOf('tx.post.create'),
+        detail: '3축 우회 차단 (§6-9-C)',
+      },
+      {
+        name: 'Post 생성은 buildMicroSeedPostData 를 거친다',
+        ok: /buildMicroSeedPostData\(/.test(code) && !/tx\.post\.create\(\{\s*data:\s*\{/.test(code),
+        detail: '입구 단일화',
+      },
+      {
+        name: 'PENDING 으로 되돌리는 경로가 없다',
+        ok: !/toStatus:\s*'PENDING'/.test(code) && !/status:\s*'PENDING'\s*[,}]/.test(code.replace(/where[\s\S]{0,200}?status:\s*'PENDING'/g, '')),
+        detail: '사람 승인 없이 다시 집히는 경로 없음 (§5-4 · 정책 14)',
+      },
+      {
+        name: 'History 를 기록한다',
+        ok: /microSeedCandidateHistory\.create/.test(code),
+        detail: 'cap 계산의 입력이자 §6-4 감사 기록',
+      },
+      {
+        name: 'Post·Candidate·History 가 한 트랜잭션이다',
+        ok: /\$transaction\(async \(tx\)/.test(code) &&
+            /tx\.post\.create/.test(code) && /tx\.microSeedCandidate\.update/.test(code) &&
+            /tx\.microSeedCandidateHistory\.create/.test(code),
+        detail: '부분 성공 상태를 만들지 않는다',
+      },
+      {
+        name: 'Sheet 역기록은 DB 확정 뒤에 온다',
+        // 🔴 import 문이 아니라 **호출부** 위치를 본다. import 는 파일 맨 위라
+        //    단순 indexOf 로는 항상 Sheet 가 먼저인 것처럼 보인다.
+        ok: (() => {
+          const tx = code.indexOf('$transaction(async (tx)')
+          const sheet = code.indexOf('await updateCandidateRow(')
+          return tx !== -1 && sheet !== -1 && tx < sheet
+        })(),
+        detail: 'Sheet 먼저면 Post 없는 PUBLISHED 가 생긴다 (§6-3)',
+      },
+      {
+        name: 'Sheet 는 허용 열만 쓴다',
+        ok: /mode:\s*'columns'/.test(code),
+        detail: 'bootstrap 으로 창업자 칸을 덮지 않는다 (§6-7-A)',
+      },
+      {
+        name: '예약 시각을 밀지 않는다',
+        ok: !/scheduledPublishAt:\s*(new Date|target|next)/.test(code),
+        detail: '재예약은 reschedule-live 전용 (정책 21)',
+      },
+    ]
+    const bad2 = checks.filter((c) => !c.ok)
+    if (bad2.length === 0) {
+      pass('publisher 소스 계약', `${checks.length}종 전부`)
+    } else {
+      fail('publisher 소스 계약', `🔴 ${bad2.map((c) => `${c.name}(${c.detail})`).join(' / ')}`)
+    }
+  }
+
+  // ── ⑬-D 결과 → Sheet 셀 (§6-7-A) ──────────────────────
+  //
+  //    🔴 성공만 Sheet 에 쓰면 원장이 갈라진다.
+  //       TOO_LATE · 재판정 실패 · attempt 소진은 전부 DB status 를 바꾸는데,
+  //       Sheet 가 PENDING 으로 남으면 창업자 화면에는 "아직 발행 안 됐네" 로 보이고
+  //       그 상태의 재승인이 §6-3 이 경고한 이중 발행 경로다.
+  {
+    const AT = new Date('2026-08-25T09:40:00Z') // = 18:40 KST
+    const URL = 'https://soransoran.com/community/free/abc123'
+
+    const cases = [
+      {
+        name: 'PUBLISHED → status · postUrl · updatedBySystemAt',
+        cells: buildSheetWriteCells({ kind: 'PUBLISHED', postUrl: URL, at: AT }),
+        want: { status: 'PUBLISHED', postUrl: URL, updatedBySystemAt: '2026-08-25 18:40' },
+      },
+      {
+        name: 'HOLD → status · holdReason (postUrl 없음)',
+        cells: buildSheetWriteCells({ kind: 'HOLD', reason: '예약이 152분 지났다' }),
+        want: { status: 'HOLD', holdReason: '예약이 152분 지났다' },
+      },
+      {
+        name: 'FAILED → status · holdReason (postUrl 없음)',
+        cells: buildSheetWriteCells({ kind: 'FAILED', reason: 'G-B 위반 (시도 3/3)' }),
+        want: { status: 'FAILED', holdReason: 'G-B 위반 (시도 3/3)' },
+      },
+    ]
+    const wrongCells = cases.filter(
+      (c) => JSON.stringify(c.cells) !== JSON.stringify(c.want),
+    )
+    if (wrongCells.length === 0) {
+      pass('결과별 Sheet 셀', `${cases.length}종 전부`)
+    } else {
+      fail(
+        '결과별 Sheet 셀',
+        `🔴 ${wrongCells.map((c) => `${c.name}: ${JSON.stringify(c.cells)}`).join(' / ')}`,
+      )
+    }
+
+    // 🔴 Post 가 없는데 postUrl 이 있으면 원장이 거짓말을 한다.
+    const leaked = cases
+      .filter((c) => c.want.status !== 'PUBLISHED')
+      .filter((c) => 'postUrl' in c.cells || 'updatedBySystemAt' in c.cells)
+    if (leaked.length === 0) {
+      pass('실패 경로에 postUrl 이 실리지 않는다', 'HOLD · FAILED 둘 다 status·holdReason 만')
+    } else {
+      fail('실패 경로에 postUrl 이 실리지 않는다', `🔴 ${leaked.map((c) => c.name).join(' / ')}`)
+    }
+
+    // 나오는 열이 전부 §6-7-A 허용 열인지
+    const badCol = cases.filter((c) => !verifySheetWriteColumns(Object.keys(c.cells)).ok)
+    if (badCol.length === 0) {
+      pass('결과별 셀은 허용 열만 쓴다', SHEET_WRITABLE_COLUMNS.join(' · '))
+    } else {
+      fail('결과별 셀은 허용 열만 쓴다', `🔴 ${badCol.map((c) => c.name).join(' / ')}`)
+    }
+  }
+
+  // ── ⑬-E DB 를 바꾸는 모든 경로가 Sheet 에도 쓴다 ────────
+  //    함수가 존재한다는 것과 모든 경로가 그것을 부른다는 것은 다르다.
+  {
+    const { readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'micro-seed-publish-live.mts'), 'utf-8')
+    const code = src.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+
+    // DB 상태를 바꾸는 헬퍼 호출마다 그 직후에 syncSheet 가 있는지 본다
+    const demoteCalls = [...code.matchAll(/await (demote|demoteAfterAttempt)\(/g)]
+    const everyDemoteFollowedBySync = demoteCalls.every((m) => {
+      const after = code.slice(m.index ?? 0, (m.index ?? 0) + 700)
+      return /syncSheet\(/.test(after)
+    })
+    const successFollowedBySync = /await prisma\.\$transaction[\s\S]{0,1200}?syncSheet\(/.test(code)
+    const collectsDivergence = /divergences\.push\(/.test(code) && /process\.exit\(2\)/.test(code)
+    const noRollback = !/status:\s*'PENDING'/.test(code.replace(/where[\s\S]{0,200}?status:\s*'PENDING'/g, ''))
+
+    const items = [
+      { name: '강등 경로마다 Sheet 역기록', ok: demoteCalls.length >= 2 && everyDemoteFollowedBySync },
+      { name: '성공 경로도 Sheet 역기록', ok: successFollowedBySync },
+      { name: '불일치를 모아 exit 2 로 드러낸다', ok: collectsDivergence },
+      { name: '불일치 시 DB 를 되돌리지 않는다', ok: noRollback },
+    ]
+    const bad3 = items.filter((i) => !i.ok)
+    if (bad3.length === 0) {
+      pass('DB 상태 변경 경로는 전부 Sheet 에 남는다', `${items.length}종 · 강등 호출 ${demoteCalls.length}곳`)
+    } else {
+      fail('DB 상태 변경 경로는 전부 Sheet 에 남는다', `🔴 ${bad3.map((i) => i.name).join(' / ')}`)
     }
   }
 
@@ -335,7 +548,9 @@ async function run() {
     ]
     const leaked = probes
       .map((p) => resolveTimeoutRecovery(p).nextStatus)
-      .filter((s) => s === 'PENDING')
+      // 🔴 타입상 PENDING 이 올 수 없어도 런타임을 확인한다.
+      //    타입은 이 파일의 가정이지 resolveTimeoutRecovery 의 보증이 아니다.
+      .filter((s) => (s as string) === 'PENDING')
     if (leaked.length === 0) pass('timeout 은 PENDING 을 돌려주지 않는다', `${probes.length}종 전부 확인`)
     else fail('timeout 은 PENDING 을 돌려주지 않는다', '🔴 PENDING 반환 — 자동 재발행 경로')
   }

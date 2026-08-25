@@ -40,9 +40,7 @@
  *   npm run micro-seed:inventory
  *   npm run micro-seed:inventory -- --json
  */
-// @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
 import { createGoogleSheetSource, readCandidates, SHEET_HEADERS, SHEET_TAB_NAME, MICRO_SEED_SHEET_ID_ENV, SHEET_READONLY_SCOPE } from './lib/micro-seed-sheet.mjs'
-// @ts-expect-error — 위와 같다.
 import { CANDIDATE_STATUSES } from './micro-seed-validate.mjs'
 
 /**
