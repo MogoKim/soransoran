@@ -18,8 +18,10 @@ export default async function HomePage() {
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-3xl px-4 pb-24">
-        <section className="py-5 text-center">
+      {/* 섹션마다 흰 블록을 두고 그 사이로 페이지 바탕이 비치게 한다.
+          바탕색을 화면 전체에 그대로 두면 어디까지가 한 덩어리인지 읽히지 않는다. */}
+      <main className="mx-auto flex max-w-3xl flex-col gap-2 pb-24">
+        <section className="bg-surface-card px-4 py-6 text-center sm:rounded-lg">
           <Logo className="text-3xl" />
           <p className="mt-2 text-sm text-content-muted">
             40대 50대 여성이 갱년기와 사는 이야기를 나누는 곳
@@ -27,7 +29,7 @@ export default async function HomePage() {
         </section>
 
         {posts.length > 0 ? (
-          <section>
+          <section className="bg-surface-card px-4 py-5 sm:rounded-lg">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-content-primary">지금 올라온 이야기</h2>
               <Link
@@ -48,7 +50,8 @@ export default async function HomePage() {
           </section>
         ) : null}
 
-        <section className="mt-8 flex flex-col gap-3">
+        {/* 게시판은 카드가 이미 흰색이다. 섹션까지 흰색으로 덮으면 카드가 묻힌다 */}
+        <section className="mt-4 flex flex-col gap-3 px-4">
           {COMMUNITY_BOARDS.map((board) => (
             <Link
               key={board.type}
