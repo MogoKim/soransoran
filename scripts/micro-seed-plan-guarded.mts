@@ -42,6 +42,12 @@ import {
   verifyPublishAuthor,
   verifyPublishablePlanRow,
   verifyPublishableOrigin,
+  SHEET_WRITABLE_COLUMNS,
+  CapContextNotMeasuredError,
+  PostDataBypassError,
+  assertMicroSeedPostData,
+  requireCapContext,
+  verifySheetWriteColumns,
 } from '../src/lib/micro-seed-write-guard'
 import type { AuthorProbe, TimeoutProbe } from '../src/lib/micro-seed-write-guard'
 // @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
@@ -431,6 +437,127 @@ async function run() {
     const empty = verifyPublishableOrigin('')
     if (live.ok && !legacy.ok && !empty.ok) pass('origin 은 live 만 허용', legacy.ok ? '' : legacy.reason)
     else fail('origin 은 live 만 허용', `live=${live.ok} legacy=${legacy.ok} empty=${empty.ok}`)
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // write 직전 가드 (PR-C2a-2)
+  //
+  // 🔴 실제 write 는 없다. 판정만 검증한다.
+  // ─────────────────────────────────────────────────────────
+
+  // ── ㉔ Sheet 쓰기 열 화이트리스트 (§6-7-A) ──────────────
+  {
+    const allowed = verifySheetWriteColumns([...SHEET_WRITABLE_COLUMNS])
+    const founderCol = verifySheetWriteColumns(['status', 'board'])
+    const systemCol = verifySheetWriteColumns(['dedupKey'])
+    const title = verifySheetWriteColumns(['founderTitle'])
+    const empty = verifySheetWriteColumns([])
+    const notArray = verifySheetWriteColumns('status')
+
+    if (!allowed.ok) fail('허용 4열은 통과', allowed.reason)
+    else pass('허용 4열은 통과', SHEET_WRITABLE_COLUMNS.join(' · '))
+
+    // 🔴 창업자 칸을 시스템이 쓰면 창업자가 적은 값이 조용히 사라진다.
+    if (founderCol.ok) fail('창업자 칸(board) write 거부', '🔴 통과했다')
+    else pass('창업자 칸(board) write 거부', founderCol.reason)
+
+    if (title.ok) fail('창업자 칸(founderTitle) write 거부', '🔴 통과했다')
+    else pass('창업자 칸(founderTitle) write 거부', title.reason)
+
+    // collector 가 적재한 값이다. publisher 가 고치면 원장과 갈라진다.
+    if (systemCol.ok) fail('collector 칸(dedupKey) write 거부', '🔴 통과했다')
+    else pass('collector 칸(dedupKey) write 거부', systemCol.reason)
+
+    if (empty.ok) fail('빈 write 거부', '🔴 통과했다')
+    else pass('빈 write 거부', empty.reason)
+
+    if (notArray.ok) fail('배열 아닌 입력 거부', '🔴 통과했다')
+    else pass('배열 아닌 입력 거부', notArray.reason)
+  }
+
+  // ── ㉕ cap 실측 강제 (§6-9-F) ───────────────────────────
+  //    validateBatch 는 `?? false` · `?? 0` 으로 받는다.
+  //    안 넘기면 first-run guard 와 daily cap 이 조용히 열린다.
+  {
+    const okCtx = requireCapContext({ isFirstRun: true, publishedToday: 0 })
+    if (okCtx.isFirstRun === true && okCtx.publishedToday === 0) {
+      pass('실측된 cap context 는 통과', 'isFirstRun=true · publishedToday=0')
+    } else {
+      fail('실측된 cap context 는 통과', JSON.stringify(okCtx))
+    }
+
+    const bad: Array<[string, unknown]> = [
+      ['context 없음', undefined],
+      ['isFirstRun undefined', { publishedToday: 0 }],
+      ['isFirstRun null', { isFirstRun: null, publishedToday: 0 }],
+      ['isFirstRun 문자열', { isFirstRun: 'true', publishedToday: 0 }],
+      ['publishedToday undefined', { isFirstRun: false }],
+      ['publishedToday null', { isFirstRun: false, publishedToday: null }],
+      ['publishedToday NaN', { isFirstRun: false, publishedToday: Number.NaN }],
+      ['publishedToday 음수', { isFirstRun: false, publishedToday: -1 }],
+      ['publishedToday 문자열', { isFirstRun: false, publishedToday: '3' }],
+    ]
+    const leaked: string[] = []
+    for (const [label, ctx] of bad) {
+      try {
+        const got = requireCapContext(ctx)
+        leaked.push(`${label} → ${JSON.stringify(got)}`)
+      } catch (e) {
+        if (!(e instanceof CapContextNotMeasuredError)) leaked.push(`${label} → 다른 오류: ${String(e)}`)
+      }
+    }
+    if (leaked.length === 0) {
+      pass('cap 미실측 → throw (보정 금지)', `${bad.length}종 전부`)
+    } else {
+      fail('cap 미실측 → throw (보정 금지)', `🔴 보정되어 통과했다: ${leaked.join(' / ')}`)
+    }
+  }
+
+  // ── ㉖ Post 생성 입구 단일화 (§6-9-C) ───────────────────
+  //    함수가 있다는 것과 그 함수만 쓰인다는 것은 다르다.
+  {
+    const good = buildMicroSeedPostData({
+      boardType: 'FREE',
+      title: '오늘 저녁 뭐 드셨어요',
+      content: '김치찌개 끓였어요.',
+      authorId: 'micro-seed-system',
+      sheetCandidateId: 'c1',
+      sourceSite: '82cook',
+      sourceUrl: 'https://example.com/1',
+      sourceArticleId: '1',
+      sourceCapturedAt: new Date('2026-08-24T00:00:00.000Z'),
+    })
+    try {
+      assertMicroSeedPostData(good)
+      pass('buildMicroSeedPostData 산출물은 통과', '3축 · source · status 일치')
+    } catch (e) {
+      fail('buildMicroSeedPostData 산출물은 통과', String(e))
+    }
+
+    // 🔴 게이트를 거치지 않고 직접 만든 payload — 우회 시도
+    const bypasses: Array<[string, Record<string, unknown>]> = [
+      ['3축 없음 (raw create)', { boardType: 'FREE', title: 't', content: 'c', authorId: 'a' }],
+      ['isMicroSeed=false', { ...good, isMicroSeed: false }],
+      ['permanentNoindex=false', { ...good, permanentNoindex: false }],
+      ['indexPromotionBlocked=false', { ...good, indexPromotionBlocked: false }],
+      ['source=USER', { ...good, source: 'USER' }],
+      ['status=HIDDEN', { ...good, status: 'HIDDEN' }],
+      ['null', null as unknown as Record<string, unknown>],
+    ]
+    const passed: string[] = []
+    for (const [label, data] of bypasses) {
+      try {
+        assertMicroSeedPostData(data)
+        passed.push(label)
+      } catch (e) {
+        if (!(e instanceof PostDataBypassError)) passed.push(`${label}(다른 오류: ${String(e)})`)
+      }
+    }
+    if (passed.length === 0) {
+      pass('게이트 우회 payload 는 전부 거부', `${bypasses.length}종`)
+    } else {
+      fail('게이트 우회 payload 는 전부 거부', `🔴 통과했다: ${passed.join(', ')}`)
+    }
   }
 
   // ── ㉓ unchecked 가 있으면 발행 불가 ────────────────────
