@@ -9,7 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "check:tokens": "node scripts/check-color-literals.mjs",
-    "check:visibility": "node scripts/check-post-visibility.mjs"
+    "check:visibility": "node scripts/check-post-visibility.mjs",
+    "micro-seed:validate": "node scripts/micro-seed-validate.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
