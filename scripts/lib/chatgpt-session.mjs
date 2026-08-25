@@ -25,7 +25,7 @@
  *    로그인 화면 스크린샷에는 계정명이 찍힌다. 불리언 플래그와 상태 코드만 남긴다.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, chmodSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, chmodSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -303,6 +303,105 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
   }
 
   return out
+}
+
+/**
+ * brief 를 ChatGPT 에 넘기고 마크다운 원고를 받아 파일로 저장한다.
+ *
+ * 🔴 원고를 이 프로세스가 "읽고 다시 쓰는" 경로가 없다.
+ *    page.evaluate 가 돌려준 문자열을 그대로 writeFileSync 한다.
+ *    사람도 다른 모델도 중간에서 원고를 손대지 않는다 — 전략 §13.1 의 역할 분리다.
+ *
+ * 실물로 겪은 실패 4가지를 처음부터 막는다.
+ *   ① 프롬프트에 백틱 3개를 넣으면 에디터가 코드블록 모드로 들어가 Enter 가 줄바꿈이 된다
+ *      → 백틱을 쓰지 않고, Enter 대신 전송 버튼을 클릭한다
+ *   ② 업로드가 끝나기 전에 제출하면 제출이 통째로 무시된다
+ *      → uploading 이 사라지고 파일명이 보일 때까지 기다린다
+ *   ③ ChatGPT 가 --- 를 <hr> 로, ## 를 <h2> 로 렌더해 원본 표기가 사라진다
+ *      → 처음부터 마크다운 코드블록으로 달라고 요청하고, pre code 의 textContent 를 회수한다
+ *   ④ Cloudflare / 로그인 만료
+ *      → 보내기 전에 probe 로 걸러낸다. 여기서는 재시도하지 않는다
+ *
+ * @returns {{ ok: boolean, reason?: string, length?: number, sent: boolean }}
+ */
+export async function fetchManuscript({ briefPath, outPath, promptText, requiredMarkers = [], timeoutMs = 300000 }) {
+  if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
+
+  const { chromium } = await import('playwright-core')
+  let browser = null
+  let sent = false
+
+  try {
+    browser = await chromium.connectOverCDP(CDP_URL, { timeout: 15000 })
+    const ctx = browser.contexts()[0]
+    if (!ctx) return { ok: false, reason: 'no_context', sent }
+
+    // 새 대화로 시작한다 — 앞 원고의 톤이 다음 글에 섞이지 않게
+    const page = await ctx.newPage()
+    await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded', timeout: 60000 })
+    await page.waitForSelector('#prompt-textarea', { timeout: 60000 })
+
+    // ── 첨부 ──
+    const inputs = await page.locator('input[type=file]').all()
+    let attached = false
+    for (const input of inputs) {
+      try { await input.setInputFiles(briefPath); attached = true; break } catch { /* 다음 input */ }
+    }
+    if (!attached) { await page.close(); return { ok: false, reason: 'attach_failed', sent } }
+
+    // ② 업로드 완료를 기다린다. 이걸 안 하면 제출이 통째로 무시된다
+    try {
+      await page.waitForFunction(() => {
+        const t = document.body.innerText || ''
+        return t.includes('brief') && !/업로드 중|Uploading/i.test(t)
+      }, null, { timeout: 60000 })
+    } catch { await page.close(); return { ok: false, reason: 'upload_timeout', sent } }
+
+    // ── 전송 ──
+    await page.locator('#prompt-textarea').click()
+    await page.keyboard.insertText(promptText) // ① 백틱 없음
+    await page.waitForTimeout(600)
+
+    // ① Enter 를 쓰지 않는다
+    const sendBtn = page.locator('[data-testid="send-button"], button[aria-label*="보내기"], button[aria-label*="Send"]').first()
+    try { await sendBtn.click({ timeout: 15000 }) }
+    catch { await page.close(); return { ok: false, reason: 'send_button_missing', sent } }
+    sent = true
+
+    // ── 완료 대기 ──
+    // 판정은 텍스트가 아니라 불리언이다 — 길이 · 코드블록 · frontmatter 시작 · [CTA]
+    try {
+      await page.waitForFunction(() => {
+        if (document.querySelector('[data-testid="stop-button"]')) return false
+        const codes = [...document.querySelectorAll('pre code')]
+        if (!codes.length) return false
+        const t = codes[codes.length - 1].textContent || ''
+        return t.length > 900 && t.includes('[CTA]') && t.trimStart().startsWith('---')
+      }, null, { timeout: timeoutMs, polling: 3000 })
+    } catch {
+      await page.close()
+      return { ok: false, reason: 'response_timeout', sent }
+    }
+
+    // ③ pre code 의 textContent — 렌더된 <hr>/<h2> 가 아니라 원본 표기가 그대로 있다
+    const text = await page.evaluate(() => {
+      const codes = [...document.querySelectorAll('pre code')]
+      return codes[codes.length - 1].textContent || ''
+    })
+    await page.close()
+
+    // 지정 문장이 빠졌으면 저장하지 않는다 — 원고를 고치지 않고 되돌린다
+    const missing = requiredMarkers.filter((m) => !text.includes(m))
+    if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length, length: text.length, sent }
+
+    // 🔴 여기서 처음이자 마지막으로 원고가 디스크에 닿는다. 문자열을 손대지 않는다
+    writeFileSync(outPath, text)
+    return { ok: true, length: text.length, sent }
+  } catch (err) {
+    return { ok: false, reason: 'connect_failed', errorName: err?.name ?? 'Error', sent }
+  } finally {
+    try { await browser?.close() } catch { /* 연결만 끊는다 */ }
+  }
 }
 
 /** 프로필 권한 안내. 쿠키가 든 디렉터리라 다른 사용자가 읽을 수 있으면 안 된다 */

@@ -30,7 +30,7 @@ import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import {
-  probe, browserAvailable, profileExists, profileInUse, cdpAvailable,
+  probe, fetchManuscript, browserAvailable, profileExists, profileInUse, cdpAvailable,
   chromeArgs, CHROME_APP, CDP_PORT,
   STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE,
 } from './lib/chatgpt-session.mjs'
@@ -84,9 +84,10 @@ function help() {
   node scripts/magazine-webui-runner.mjs --dry-run --probe --auto-start
                                                              CDP 없으면 Chrome 을 직접 띄운다 (무인용)
   node scripts/magazine-webui-runner.mjs --login             전용 Chrome 을 띄운다 (닫지 말 것)
+  node scripts/magazine-webui-runner.mjs --fetch <slug>      brief 를 넘겨 원고를 받아 draft.md 로 저장
   node scripts/magazine-webui-runner.mjs --dry-run --json
 
-🔴 원고를 만들지 않는다. 첨부·전송·다운로드 코드가 아직 없다.
+🔴 --fetch 는 draft.md 까지만 만든다. md-to-draft·batch-qa·register 는 돌리지 않는다.
 🔴 headed 로만 돈다 — headless 는 Cloudflare 가 막는다.
 🔴 Slack 을 보내지 않는다. 알림 등급만 계산해 반환한다.
 🔴 --login 은 Playwright 가 아니라 일반 Chrome 을 CDP 포트로 띄운다.
@@ -147,10 +148,93 @@ async function login() {
   console.log('')
 }
 
+/**
+ * 한 건의 원고를 받아 draft.md 로 저장한다.
+ *
+ * 🔴 보내기 전에 probe 로 거른다. ok 가 아니면 한 글자도 보내지 않는다 —
+ *    Cloudflare 나 로그인 만료 상태에서 보내면 봇 감지만 악화된다.
+ * 🔴 이미 draft.md 가 있으면 덮어쓰지 않는다. 재실행이 원고를 날리면 안 된다.
+ */
+async function fetchOne(slug) {
+  const dir = join(DRAFTS_DIR, slug)
+  const briefPath = join(dir, 'brief.md')
+  const outPath = join(dir, 'draft.md')
+
+  if (!existsSync(briefPath)) {
+    console.error(`  ⛔ brief.md 가 없다: drafts/magazine/${slug}/`)
+    process.exit(1)
+  }
+  if (existsSync(outPath)) {
+    console.log('')
+    console.log(`  이미 draft.md 가 있다 — 덮어쓰지 않는다: drafts/magazine/${slug}/`)
+    console.log('')
+    process.exit(0)
+  }
+
+  console.log('')
+  console.log(`  원고 요청 — ${slug}`)
+  console.log('  1) 접근 확인')
+  const p = await probe({ autoStart: true })
+  console.log(`     status ${p.status}`)
+  if (p.status !== STATUS.OK) {
+    console.error('')
+    console.error(`  ⛔ ${MESSAGE[p.status] ?? MESSAGE[STATUS.UNKNOWN]}`)
+    console.error('     한 글자도 보내지 않았다.')
+    console.error('')
+    process.exit(1)
+  }
+
+  // brief 의 "반드시 그대로 넣을 문장" 을 대조 기준으로 뽑는다.
+  // 코드블록 안에 번호로 나열돼 있다
+  const brief = readFileSync(briefPath, 'utf8')
+  const markerBlock = brief.split('## 반드시 그대로 넣을 문장')[1]
+  const markers = markerBlock
+    ? [...markerBlock.matchAll(/^\d+\.\s+(.+)$/gm)].map((m) => m[1].trim()).slice(0, 5)
+    : []
+
+  console.log(`  2) 전송 (대조 문장 ${markers.length}개)`)
+  const prompt = [
+    '첨부한 brief.md 의 지시를 그대로 따라 최종 원고를 작성하세요.',
+    '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
+    '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
+    'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+  ].join(' ')
+
+  const r = await fetchManuscript({ briefPath, outPath, promptText: prompt, requiredMarkers: markers })
+
+  console.log(`  3) 결과: ${r.ok ? '✅ 저장' : '⛔ ' + r.reason}`)
+  console.log(`     전송 ${r.sent ? '1건' : '0건'}${r.length ? ` · 본문 ${r.length}자` : ''}`)
+  if (!r.ok) {
+    if (r.missingCount) console.error(`     지정 문장 ${r.missingCount}개 누락 — 저장하지 않았다`)
+    console.error('')
+    process.exit(1)
+  }
+
+  // 저장된 것을 기계 검사만 한다. 내용을 출력하지 않는다
+  const saved = readFileSync(outPath, 'utf8')
+  console.log('')
+  console.log(`     drafts/magazine/${slug}/draft.md`)
+  console.log(`     길이 ${saved.length}자 · frontmatter ${saved.trimStart().startsWith('---') ? '✅' : '🔴'}` +
+    ` · h2 ${(saved.match(/^## /gm) ?? []).length}개 · CTA ${(saved.match(/\[CTA\]/g) ?? []).length}개`)
+  console.log(`     금지 표기: 표 ${saved.includes('|---') ? '🔴' : '0'} · http ${/https?:\/\//.test(saved) ? '🔴' : '0'}` +
+    ` · 굵게 ${/\*\*/.test(saved) ? '🔴' : '0'} · 번호목록 ${/^\d+\. /m.test(saved) ? '🔴' : '0'}`)
+  console.log('')
+  console.log('  🔴 md-to-draft · batch-qa · register 는 실행하지 않았다.')
+  console.log('')
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--help') || argv.length === 0) return help()
   if (argv.includes('--login')) return await login()
+  if (argv.includes('--fetch')) {
+    const slug = argv[argv.indexOf('--fetch') + 1]
+    if (!slug || slug.startsWith('--')) {
+      console.error('  --fetch <slug> 가 필요하다')
+      process.exit(2)
+    }
+    return await fetchOne(slug)
+  }
 
   const dryRun = argv.includes('--dry-run')
   if (!dryRun) {
