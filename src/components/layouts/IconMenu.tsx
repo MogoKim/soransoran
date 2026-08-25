@@ -13,6 +13,9 @@ function isActive(pathname: string, href: string): boolean {
 /**
  * 상단 메뉴 행 — 하단 탭바를 쓰지 않는다.
  * 노출 대상은 board-registry 의 showInMenu 가 정한다.
+ *
+ * 색은 board-registry 가 정하고 이 파일은 읽기만 한다.
+ * 보드가 늘어도 여기에 조건문이 붙지 않아야 한다.
  */
 export default function IconMenu() {
   const pathname = usePathname()
@@ -27,28 +30,36 @@ export default function IconMenu() {
               <Link
                 href={board.href}
                 aria-current={active ? 'page' : undefined}
-                className={`flex min-h-[72px] min-w-[64px] flex-col items-center justify-center gap-1 border-b-2 px-1 pt-1 no-underline ${
-                  active ? 'border-cta' : 'border-transparent'
-                }`}
+                className="relative flex min-h-[72px] min-w-[64px] flex-col items-center justify-center gap-1 px-1 pb-1.5 pt-1 no-underline"
               >
                 <span
-                  className={`flex h-11 w-11 items-center justify-center rounded-2xl ${
-                    active ? 'ring-2 ring-cta' : ''
-                  }`}
+                  className="flex items-center justify-center rounded-2xl"
                   style={{
+                    width: 'var(--icon-box)',
+                    height: 'var(--icon-box)',
                     backgroundColor: `var(${board.iconBgVar})`,
                     color: `var(${board.iconStrokeVar})`,
+                    ...(active
+                      ? { outline: `2px solid var(${board.iconStrokeVar})`, outlineOffset: '1px' }
+                      : {}),
                   }}
                 >
                   <MenuIcon name={board.icon} />
                 </span>
                 <span
-                  className={`text-xs ${
-                    active ? 'font-bold text-content-primary' : 'text-content-muted'
-                  }`}
+                  className={`text-xs ${active ? 'font-bold' : 'text-content-muted'}`}
+                  style={active ? { color: `var(${board.iconTextVar})` } : undefined}
                 >
                   {board.label}
                 </span>
+                {/* 활성 표시는 그 보드의 색으로 한다 — 전 메뉴가 같은 브랜드색이면 어디 있는지가 흐려진다 */}
+                {active ? (
+                  <span
+                    aria-hidden
+                    className="absolute bottom-0 h-0.5 w-6 rounded-full"
+                    style={{ backgroundColor: `var(${board.iconStrokeVar})` }}
+                  />
+                ) : null}
               </Link>
             </li>
           )

@@ -21,9 +21,11 @@ export interface BoardMeta {
   /** 상단 메뉴에 노출하는가 — 준비 중인 면을 내릴 때 여기서만 끈다 */
   showInMenu: boolean
   icon: MenuIconName
-  /** 아이콘 색 토큰명. 실제 hex 는 globals.css 에만 있다 */
+  /** 보드 색 토큰명. 실제 hex 는 globals.css 에만 있다 */
   iconBgVar: string
   iconStrokeVar: string
+  /** 글자용. stroke 를 그대로 글자에 쓰면 배경 위 대비가 모자란다 */
+  iconTextVar: string
   /** empty state 문구 (창업자 확정) */
   emptyTitle: string
   emptyBody: string
@@ -40,6 +42,7 @@ export const BOARD_REGISTRY = [
     icon: 'heart',
     iconBgVar: '--icon-meno-bg',
     iconStrokeVar: '--icon-meno-stroke',
+    iconTextVar: '--icon-meno-text',
     isCommunity: true,
     emptyTitle: '여기서는 갱년기 이야기를 해도 됩니다',
     emptyBody: '증상도, 기분도, 사소한 것도 괜찮아요.',
@@ -54,6 +57,7 @@ export const BOARD_REGISTRY = [
     icon: 'chat',
     iconBgVar: '--icon-free-bg',
     iconStrokeVar: '--icon-free-stroke',
+    iconTextVar: '--icon-free-text',
     isCommunity: true,
     emptyTitle: '무슨 이야기든 괜찮습니다',
     emptyBody: '잘 쓰지 않아도 됩니다.',
@@ -68,6 +72,7 @@ export const BOARD_REGISTRY = [
     icon: 'book',
     iconBgVar: '--icon-magazine-bg',
     iconStrokeVar: '--icon-magazine-stroke',
+    iconTextVar: '--icon-magazine-text',
     isCommunity: false,
     emptyTitle: '아직 발행된 글이 없습니다',
     emptyBody: '차분히 읽을 만한 글을 준비하고 있습니다.',
@@ -82,6 +87,7 @@ export const BOARD_REGISTRY = [
     icon: 'star',
     iconBgVar: '--icon-best-bg',
     iconStrokeVar: '--icon-best-stroke',
+    iconTextVar: '--icon-best-text',
     isCommunity: false,
     emptyTitle: '아직 모인 글이 없습니다',
     emptyBody: '글과 댓글이 쌓이면 여기에 모입니다.',
