@@ -328,6 +328,18 @@ model MicroSeedCandidate {
   sourceCommentCount Int      @default(0)
   sourceCapturedAt   DateTime
 
+  // ── 원문 본문 참조 (M2) ──────────────────────────────
+  /// 발행에 쓸 원문 제목·본문·댓글은 MicroSeedRawContent 에 있다.
+  ///
+  /// 🔴 명시 FK 로 잇는다. dedupKey 조인에 의존하지 않는다 —
+  ///    dedupKey 는 Sheet M열이라 사람이 고칠 수 있고(§6-8 R11),
+  ///    사람이 만질 수 있는 값에 참조 무결성을 걸면 안 된다.
+  ///
+  /// nullable 인 이유: 후보가 먼저 적재되고 본문이 나중에 붙는 순서를 허용한다.
+  /// 🔴 본문 없이 발행되지는 않는다 — G-A 가 content 빈 값을 HOLD 로 막는다.
+  rawContentId String?              @unique
+  rawContent   MicroSeedRawContent? @relation(fields: [rawContentId], references: [id], onDelete: SetNull)
+
   // ── 중복 방어 2차 (§6-10) ────────────────────────────
   /// sha256(`${sourceSite}::${sourceArticleId}`).
   /// collector 가 같은 원문을 두 번 담아도 DB 가 거부한다.
@@ -398,4 +410,106 @@ model MicroSeedCandidateHistory {
   at         DateTime                  @default(now())
 
   @@index([candidateId, at])
+}
+
+// ─────────────────────────────────────────────────────────
+// 원문 보관 — M2 발행에 필요한 최소본
+// ─────────────────────────────────────────────────────────
+//
+// 정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §10-3 · §10-5 · §11-2
+//
+// 🔴 이것은 M5 Voice Vault 가 아니다
+//    §12 마일스톤에서 Raw / Derived / Publishing Input 3계층 자산화는 M5 다.
+//    여기는 M2("본문 발행 · 원문 그대로 사용")가 당장 필요로 하는 것만 담는다.
+//    Derived Vault · Publishing Input · persona/voice 학습 자산 필드를 넣지 않는다.
+//
+// 🔴 왜 Sheet 가 아니라 DB 인가
+//    Sheet 17열에 content 열을 추가하지 않는다(§6-7-B 정책 22). 5,000자 본문이
+//    셀에 들어가면 창업자가 승인 화면에서 스크롤만 하게 된다.
+//
+// 🔴 왜 발행 시점 재수집이 아닌가
+//    원문은 삭제된다("펑"). 승인 시점에 있던 글이 발행 시점에 없을 수 있고,
+//    그때는 무엇을 발행하려 했는지조차 남지 않는다. 수집 시점에 담아 둔다.
+//
+// 🚫 §5-5 "넣으면 과한 것" 을 지킨다
+//    sourceAuthorHash · sourceBoardCategory 는 Voice Vault(M5) 영역이라 넣지 않는다.
+
+/// §10-3 · §10-5. 우나어 legacy 는 직접 발행 소스가 아니다 (정책 12).
+enum MicroSeedRawOrigin {
+  /// 82cook · 네이버 카페 등 live source. Micro Seed 발행 가능
+  live
+  /// 우나어 legacy. 🔴 학습·분석 자산이며 **직접 발행 금지**.
+  /// §10-1 은 "문서 규칙으로만 두지 않고 후보 쿼리에서 코드로 배제" 하라고 요구한다.
+  /// publisher 는 origin='unao_legacy' 를 조회 단계에서 제외해야 한다.
+  unao_legacy
+}
+
+/// 원문 1건 = 이 테이블 1행. MicroSeedCandidate 와 1:1 이다.
+model MicroSeedRawContent {
+  id     String             @id @default(uuid())
+  /// 🔴 기본값을 live 로 두지 않는다. 적재 주체가 명시하게 한다 —
+  ///    legacy 를 실수로 live 로 넣으면 정책 12 가 조용히 뚫린다.
+  origin MicroSeedRawOrigin
+
+  // ── 출처 ─────────────────────────────────────────────
+  sourceSite       String
+  sourceUrl        String
+  sourceArticleId  String
+  sourceCapturedAt DateTime
+
+  // ── 원문 ─────────────────────────────────────────────
+  rawTitle String
+  /// 5,000자 상한은 발행 게이트(G-A)가 본다. 저장은 원형 그대로 한다 —
+  /// 자르면 "그대로 사용"(정책 7)이 아니게 되고 되돌릴 수도 없다.
+  rawBody  String @db.Text
+
+  /// 원문 댓글 원형. **M2 는 댓글을 발행하지 않는다** — 댓글 활성화는 M3 다.
+  ///
+  /// 🔴 지금 JSON 인 이유
+  ///    M3 스펙(반응 지도 · 댓글 유형 분포 · 인용 적합성 라벨)이 아직 없다.
+  ///    모르는 스펙으로 컬럼을 정하면 M3 에서 다시 바꿔야 한다.
+  ///    그렇다고 수집을 미루면 원문이 삭제됐을 때 영영 못 가져온다.
+  ///    → 원형만 담아 두고, 구조는 M3 에서 정한다.
+  ///
+  /// 🔴 M3 에서 별도 테이블로 승격해야 한다
+  ///    §M3 완료 조건이 "댓글 출처 역추적 가능" 이고 §11-2 는 삭제 요청 시
+  ///    **댓글 단위** 역조회를 요구한다. JSON 으로는 댓글 하나만 내릴 수 없다.
+  ///    승격 전까지 이 컬럼의 댓글을 발행에 쓰지 않는다.
+  ///
+  /// 형태: [{ id?, contentHash?, body, at? }] — §10-3 은 "개별 id 또는 contentHash" 를 요구한다.
+  rawComments Json?
+
+  // ── 원문 생존 · 보존 ─────────────────────────────────
+  /// 🔴 §10-3 이 "이것이 중요하다" 고 명시한 필드.
+  ///    우나어는 발행 직전 게이트로만 사후 대응했고 **이미 저장된 원문의 삭제는
+  ///    감지하지 못했다.** 감지 스캐너는 이후 PR 이며 여기서는 자리만 둔다.
+  deletedDetectedAt DateTime?
+
+  /// 보존 만료 예정 시각.
+  ///
+  /// 🔴 자동 삭제를 구현하지 않는다. 이 필드는 "언제까지 두기로 했는가" 의 기록이다.
+  ///    파기는 §6-6 이 요구하는 대로 사람이 판단해 별도 절차로 밟는다.
+  ///
+  /// 기본 정책: 후보가 터미널 상태(PUBLISHED · DECLINED · SKIPPED · FAILED · TAKEDOWN)에
+  ///           들어간 뒤 **90일**. 그 시점에 값을 채운다.
+  /// active 후보(HOLD · PENDING · PROCESSING)는 **null 이다** — 아직 만료를 셀 수 없다.
+  ///
+  /// ⚠️ 정본 TODO-9(Voice Vault 보존 정책)는 아직 미확정이다. 확정되면 이 기본값을 갱신한다.
+  retentionUntil DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  candidate MicroSeedCandidate?
+
+  /// collector 중복 적재 차단.
+  /// 🔴 dedupKey 문자열이 아니라 이 테이블 자신의 필드로 잠근다 —
+  ///    dedupKey 는 Sheet 를 거치며 사람 손을 탈 수 있다 (§6-8 R11).
+  @@unique([sourceSite, sourceArticleId])
+  /// §10-1 legacy 배제 쿼리 — publisher 가 origin='unao_legacy' 를 걸러낸다
+  @@index([origin])
+  /// §11-2 takedown 역조회 — 원문 URL 로 찾는다
+  @@index([sourceUrl])
+  /// 원문 삭제 감지 스캔 — 아직 확인하지 않은 것을 고른다
+  @@index([deletedDetectedAt])
 }
