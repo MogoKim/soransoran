@@ -30,7 +30,7 @@ export default function FAB() {
     <Link
       href={writeHref}
       aria-label="글쓰기"
-      className="fixed bottom-6 right-5 z-40 inline-flex min-h-[56px] items-center rounded-full bg-cta px-6 font-bold text-cta-text no-underline shadow-lg hover:bg-cta-hover"
+      className="fixed bottom-6 right-5 z-40 inline-flex min-h-[56px] items-center gap-1 rounded-full bg-cta px-6 font-bold text-cta-text no-underline shadow-lg hover:bg-cta-hover"
     >
       <span aria-hidden className="mr-1 text-xl leading-none">+</span>
       글쓰기
