@@ -419,6 +419,92 @@ Slack 발송이 실패해도 producer 자체는 실패시키지 않는다 — �
 
 ---
 
+## 9-D. ChatGPT web UI runner (7-D-12)
+
+`scripts/magazine-webui-runner.mjs` · `scripts/lib/chatgpt-session.mjs`
+
+```bash
+node scripts/magazine-webui-runner.mjs --dry-run           대상만 본다 (브라우저 안 띄움)
+node scripts/magazine-webui-runner.mjs --dry-run --probe   ChatGPT 접근 상태까지
+node scripts/magazine-webui-runner.mjs --login             로그인용 창 (사람이 1회)
+```
+
+### 🔴 headed 로만 돈다 — headless 는 쓸 수 없다
+
+7-D-12 권한 시험에서 5개 조합을 돌린 결과다.
+
+| 조합 | HTTP | |
+|---|---|---|
+| 익명 · headless · 번들 chromium | – | 실행 실패 (요구 브라우저 번호 불일치) |
+| 익명 · headless · 시스템 Chrome | **403** | Cloudflare |
+| 익명 · headless · chromium-1217 | **403** | Cloudflare |
+| 전용 프로필 · headless · 시스템 Chrome | **403** | Cloudflare |
+| **전용 프로필 · headed · 시스템 Chrome** | **200** | ✅ 통과 |
+
+**결정 변수는 headless 여부다. 프로필 유무는 무관하다.**
+우회(stealth·UA 위조)는 하지 않는다 — 탐지 회피이고 계정 정지를 감수할 이유가 없다.
+
+권한 정책이 스크립트 경로를 막지는 않았다. 4/5 조합에서 브라우저가 정상 실행됐다.
+
+### 왜 시스템 Chrome 인가
+
+번들 chromium 은 Playwright 버전이 오르면 요구 브라우저 번호가 바뀌어 **경로가 조용히 죽는다.**
+실제로 npx 캐시의 1.63.0-alpha 가 `chromium-1237` 을 요구했는데 로컬엔 1208·1217 뿐이었다.
+
+시스템 Chrome(`channel: 'chrome'`)은 경로가 고정이라 그 사고가 없다.
+그래서 `playwright` 가 아니라 **`playwright-core`** 만 넣는다 — 브라우저를 받지 않으므로 설치가 가볍다.
+
+### 전용 프로필 — 창업자 1회 로그인
+
+```
+~/Library/Application Support/soransoran-chatgpt/   (chmod 700)
+```
+
+repo 밖이다. 쿠키는 Chrome 이 OS 키체인으로 암호화해 여기 둔다.
+
+```bash
+mkdir -p "$HOME/Library/Application Support/soransoran-chatgpt"
+chmod 700 "$HOME/Library/Application Support/soransoran-chatgpt"
+node scripts/magazine-webui-runner.mjs --login    # 로그인 후 창을 닫는다
+```
+
+🔴 **무인으로 로그인할 방법은 없고, 있어서도 안 된다.**
+🔴 MCP 프로필(`mcp-chrome-*`)을 재사용하지 않는다 — MCP 가 언제든 새로 만들거나 지운다.
+
+### 🔴 01:00 에 맥이 깨어 있어야 한다
+
+headed 라 GUI 세션이 필요하다. 맥이 잠들면 창이 뜨지 않고 실패한다.
+창은 `--window-position=-2400,-2400` 으로 화면 밖에 두므로 보이지는 않는다.
+
+### 접근 상태 6가지와 Slack 조건
+
+| 상태 | 뜻 | Slack | 재시도 |
+|---|---|---|---|
+| `ok` | 정상 | **보내지 않는다** | – |
+| `login_required` | 로그인 만료 | BLOCKED | ❌ 사람이 해야 한다 |
+| `cloudflare_blocked` | 봇 감지 | BLOCKED | ❌ 재시도하면 악화된다 |
+| `browser_missing` | Chrome 없음/경로 변경 | ERROR | ❌ |
+| `permission_blocked` | 실행이 막힘 | ERROR | ❌ |
+| `unknown` | 판정 실패 (UI 변경 의심) | ERROR | ❌ |
+
+**정상 실행은 조용하다.** 매일 오는 알림은 아무도 보지 않는다.
+
+### 🔴 아무것도 저장하지 않는다
+
+스크린샷 · DOM 덤프 · HTML 본문 · URL · 쿠키 · 토큰 — 전부 남기지 않는다.
+Cloudflare challenge URL 의 `__cf_chl_rt_tk` 는 계정과 연결되고,
+로그인 화면 스크린샷에는 계정명이 찍힌다. **불리언 플래그와 상태 코드만** 남긴다.
+
+디버깅하려고 스크린샷을 저장하고 싶어지는 자리가 바로 여기다. 하지 않는다.
+
+### 이 단계에서 하지 않는 것
+
+brief 첨부 · 메시지 전송 · 응답 대기 · 원고 다운로드 · 파일 쓰기 · Slack 발송.
+
+**"비활성 플래그"로 막아 둔 것이 아니라 코드가 아예 없다.** 실수로 켜질 경로를 두지 않았다.
+
+---
+
 ## 10. 한 줄 요약
 
 **producer 는 무엇을 만들지 정하고, batch-qa 는 내보내도 되는지 정한다.
