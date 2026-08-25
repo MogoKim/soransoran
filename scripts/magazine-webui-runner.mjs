@@ -25,11 +25,13 @@
  *
  * 종료 코드: 접근 불가면 1, 아니면 0
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import {
-  probe, browserAvailable, profileExists,
+  probe, browserAvailable, profileExists, profileInUse, cdpAvailable,
+  chromeArgs, CHROME_APP, CDP_PORT,
   STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE,
 } from './lib/chatgpt-session.mjs'
 
@@ -79,36 +81,74 @@ function help() {
 
   node scripts/magazine-webui-runner.mjs --dry-run           대상만 보여준다
   node scripts/magazine-webui-runner.mjs --dry-run --probe   ChatGPT 접근 상태까지
-  node scripts/magazine-webui-runner.mjs --login             로그인용 창 (사람이 1회)
+  node scripts/magazine-webui-runner.mjs --login             전용 Chrome 을 띄운다 (닫지 말 것)
   node scripts/magazine-webui-runner.mjs --dry-run --json
 
 🔴 원고를 만들지 않는다. 첨부·전송·다운로드 코드가 아직 없다.
 🔴 headed 로만 돈다 — headless 는 Cloudflare 가 막는다.
-🔴 Slack 을 보내지 않는다. 알림 등급만 계산해 반환한다.`)
+🔴 Slack 을 보내지 않는다. 알림 등급만 계산해 반환한다.
+🔴 --login 은 Playwright 가 아니라 일반 Chrome 을 CDP 포트로 띄운다.
+🔴 그 창을 닫지 마라 — probe 는 떠 있는 Chrome 에 붙기만 한다.
+   Playwright 가 프로필을 직접 열면 세션 쿠키가 지워진다(실측 42개 → 8개).`)
 }
 
+/**
+ * 전용 Chrome 을 띄운다 — **Playwright 를 쓰지 않는다.**
+ *
+ * 🔴 Playwright 가 프로필을 직접 열면 세션 쿠키가 지워진다.
+ *    키체인(Chrome Safe Storage) 접근이 막혀 암호화 쿠키를 무효로 보고 정리한다.
+ *    실측: 로그인 직후 42개 → probe 1회 후 8개.
+ *    그래서 브라우저는 평범한 Chrome 으로 띄우고, probe 는 CDP 로 **붙기만** 한다.
+ *
+ * 🔴 이 창을 닫지 않는다. 닫으면 probe 가 붙을 대상이 없다.
+ * 🔴 --no-sandbox 도 --enable-automation 도 넘기지 않는다.
+ * 🔴 프로필을 복사하지 않는다. 창업자의 평소 Chrome 프로필은 건드리지 않는다.
+ */
 async function login() {
   if (!browserAvailable()) {
     console.error(`  ⛔ ${MESSAGE[STATUS.BROWSER_MISSING]}`)
     process.exit(1)
   }
-  const { chromium } = await import('playwright-core')
+  if (await cdpAvailable()) {
+    console.log('')
+    console.log(`  이미 전용 Chrome 이 CDP 포트 ${CDP_PORT} 로 떠 있습니다.`)
+    console.log('  그 창에서 로그인하면 됩니다. 새로 띄우지 않습니다.')
+    console.log('')
+    return
+  }
+  if (profileInUse()) {
+    console.error('')
+    console.error('  ⛔ 전용 Chrome 이 CDP 포트 없이 떠 있습니다.')
+    console.error('     그 창을 닫고 다시 --login 을 실행해야 probe 가 붙을 수 있습니다.')
+    console.error('')
+    process.exit(1)
+  }
+
+  // 쿠키가 들어갈 자리라 권한을 좁혀 둔다
+  if (!profileExists()) mkdirSync(PROFILE_DIR, { recursive: true })
+  try { chmodSync(PROFILE_DIR, 0o700) } catch { /* 이미 맞으면 그만 */ }
+
   console.log('')
-  console.log('  로그인용 창을 엽니다. ChatGPT 에 로그인한 뒤 창을 닫으세요.')
+  console.log(`  전용 Chrome 을 띄웁니다 (일반 Chrome · CDP 포트 ${CDP_PORT}).`)
   console.log(`  프로필: ${PROFILE_DIR}`)
   console.log('')
-  const ctx = await chromium.launchPersistentContext(PROFILE_DIR, { headless: false, channel: 'chrome' })
-  const page = ctx.pages()[0] ?? (await ctx.newPage())
-  await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded' })
-  // 사람이 닫을 때까지 기다린다
-  await new Promise((resolve) => ctx.on('close', resolve))
-  console.log('  창이 닫혔습니다. --dry-run --probe 로 상태를 확인하세요.')
+  console.log('  1. ChatGPT 에 로그인하세요')
+  console.log('  2. "나만의 Chrome 만들기" 팝업이 뜨면 "계정 없이 Chrome 사용" 을 누르세요')
+  console.log('  3. 🔴 창을 닫지 마세요 — probe 가 이 창에 붙습니다')
+  console.log('  4. node scripts/magazine-webui-runner.mjs --dry-run --probe')
+  console.log('')
+
+  const child = spawn(CHROME_APP, chromeArgs(), { detached: true, stdio: 'ignore' })
+  child.unref()
+
+  console.log('  창을 띄웠습니다. 이 명령은 여기서 끝납니다.')
+  console.log('')
 }
 
 async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--help') || argv.length === 0) return help()
-  if (argv.includes('--login')) return login()
+  if (argv.includes('--login')) return await login()
 
   const dryRun = argv.includes('--dry-run')
   if (!dryRun) {
@@ -128,11 +168,15 @@ async function main() {
     const r = await probe()
     access = {
       status: r.status,
-      severity: SEVERITY[r.status] ?? 'ERROR',
+      // SEVERITY[ok] 는 null 이다 — ?? 로 fallback 하면 정상인데 ERROR 가 된다.
+      // 모르는 상태만 ERROR 로 올린다
+      severity: r.status in SEVERITY ? SEVERITY[r.status] : 'ERROR',
       message: MESSAGE[r.status] ?? MESSAGE[STATUS.UNKNOWN],
-      launched: r.launched,
+      connected: r.connected,
       httpStatus: r.httpStatus,
       profileExists: r.profileExists,
+      // 판정 근거를 남긴다 — 전부 불리언이라 계정 정보가 실리지 않는다
+      signals: r.signals ?? null,
     }
   }
 
@@ -171,11 +215,19 @@ async function main() {
       const icon = access.status === STATUS.OK ? '✅' : '⛔'
       console.log(`  ChatGPT 접근: ${icon} ${access.status}`)
       console.log(`    ${access.message}`)
-      console.log(`    브라우저 실행 ${access.launched ? '✅' : '🔴'} · HTTP ${access.httpStatus ?? '-'} · 프로필 ${access.profileExists ? '있음' : '없음'}`)
+      console.log(`    CDP 연결 ${access.connected ? '✅' : '🔴'} · HTTP ${access.httpStatus ?? '-'} · 프로필 ${access.profileExists ? '있음' : '없음'}`)
+      if (access.signals) {
+        const on = Object.entries(access.signals).filter(([, v]) => v).map(([k]) => k)
+        console.log(`    화면 신호: ${on.length ? on.join(' · ') : '없음 (판정 근거가 하나도 잡히지 않았다)'}`)
+      }
       if (access.severity) {
         console.log(`    Slack 등급 ${access.severity} (이번 단계에서는 보내지 않는다)`)
       }
-      if (access.status === STATUS.LOGIN_REQUIRED || !access.profileExists) {
+      if (access.status === STATUS.CHROME_NOT_RUNNING) {
+        console.log('')
+        console.log('    node scripts/magazine-webui-runner.mjs --login 으로 먼저 띄워라.')
+        console.log('    그 창을 닫지 않아야 probe 가 붙을 수 있다.')
+      } else if (access.status === STATUS.LOGIN_REQUIRED || !access.profileExists) {
         console.log('')
         console.log(PROFILE_SETUP_GUIDE.split('\n').map((l) => `    ${l}`).join('\n'))
       }
