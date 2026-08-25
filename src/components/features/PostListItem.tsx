@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { formatRelativeTime } from '@/lib/date'
+import BoardBadge from '@/components/ui/board-badge'
 import { getBoardByType } from '@/lib/board-registry'
 import type { BoardType } from '@prisma/client'
 
@@ -40,15 +41,7 @@ export default function PostListItem({
           {post.title}
         </span>
         <span className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
-          <span
-            className="rounded-full px-2 py-0.5 font-bold"
-            style={{
-              backgroundColor: `var(${board.iconBgVar})`,
-              color: `var(${board.iconStrokeVar})`,
-            }}
-          >
-            {board.label}
-          </span>
+          <BoardBadge boardType={post.boardType} />
           <span>댓글 {post._count.comments}</span>
           <span aria-hidden>·</span>
           <span>조회 {post.viewCount}</span>
