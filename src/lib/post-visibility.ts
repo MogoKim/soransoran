@@ -139,3 +139,29 @@ export function violatesVisibilityInvariant(p: PostVisibilityInput): boolean {
   if (isDiscoveryEligible(p) && !community) return true
   return false
 }
+
+// ─────────────────────────────────────────────────────────
+// write-path — Micro Seed Post 를 만들 때 박는 값 (§6-9-C)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Micro Seed Post 생성 시 3축 필드의 **고정값**.
+ *
+ * 🔴 Sheet 입력도, 후보 필드도, 설정값도 아니다. 코드 상수다 (§6-9-C).
+ *    셋 중 하나라도 조건부로 만들면 그 조건이 언젠가 잘못 평가된다 (C-1).
+ *
+ * 🔴 이 상수가 여기 있는 이유
+ *    위 함수들이 "이 Post 가 보이는가" 를 읽는다면 이건 "새 Post 에 무엇을 박는가" 다.
+ *    읽기와 쓰기가 다른 파일에 있으면 두 값이 갈라진다 — 판정은 noindex 인데
+ *    생성은 index 로 만드는 상태가 조용히 생긴다.
+ *    C-2 가 3축을 이 파일 하나로 모은 이유가 그것이고, write 쪽도 예외가 아니다.
+ *
+ * 🚫 source(AuthorSource) 를 여기 넣지 않는다.
+ *    "내부 공급인가" 와 "보이는가" 는 다른 축이다(파일 상단 주석). 판정 축이 섞이면
+ *    한 필드가 두 질문에 답하려다 실패한다. 작성자 축은 write-guard 가 다룬다.
+ */
+export const MICRO_SEED_POST_VISIBILITY_FLAGS = {
+  isMicroSeed: true,
+  permanentNoindex: true,
+  indexPromotionBlocked: true,
+} as const

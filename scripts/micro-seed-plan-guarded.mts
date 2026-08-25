@@ -29,6 +29,21 @@ import {
   hasMicroSeedAuthorId,
   resolveMicroSeedAuthorId,
 } from '../src/lib/micro-seed-author'
+import {
+  ACQUIRE_CANDIDATE_SQL,
+  MAX_ATTEMPT_COUNT,
+  MICRO_SEED_POST_FLAGS,
+  TimeoutRecoveryWithoutProbeError,
+  buildMicroSeedPostData,
+  interpretAcquireResult,
+  isAttemptExhausted,
+  resolvePublishableBoard,
+  resolveTimeoutRecovery,
+  verifyPublishAuthor,
+  verifyPublishablePlanRow,
+  verifyPublishableOrigin,
+} from '../src/lib/micro-seed-write-guard'
+import type { AuthorProbe, TimeoutProbe } from '../src/lib/micro-seed-write-guard'
 // @ts-expect-error — .mjs 에는 타입 선언이 없다. 런타임 계약은 fixture 가 지킨다.
 import { buildPlan, ROW, LEDGER, ledger, row } from './micro-seed-plan.mjs'
 // @ts-expect-error — 위와 같다.
@@ -185,6 +200,248 @@ async function run() {
       pass('지정된 env 이름 외에는 읽지 않는다', '유사 이름 3종 무시 확인')
     } else {
       fail('지정된 env 이름 외에는 읽지 않는다', '🔴 다른 이름에서 값을 가져왔다')
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // write-path 가드 (§6-3 · §6-9-C · §6-9-E · §6-10)
+  //
+  // 🔴 전부 순수 판정이다. DB 접속 · Sheet API · write 가 없다.
+  //    실측값은 인자로 넘긴다 — 조회했는지를 사람이 기억하는 방식으로 두지 않는다.
+  // ─────────────────────────────────────────────────────────
+
+  // ── ⑫ 원자적 획득 결과 해석 (§6-10 1차) ─────────────────
+  {
+    const one = interpretAcquireResult(1)
+    const zero = interpretAcquireResult(0)
+    const many = interpretAcquireResult(2)
+    const bad = interpretAcquireResult(-1)
+
+    if (one.kind !== 'ACQUIRED') fail('acquire 1행 → 진행', `받은 값: ${one.kind}`)
+    else pass('acquire 1행 → 진행', 'ACQUIRED')
+
+    // 🔴 0행을 "다른 워커가 가져감" 으로 단정하지 않는다.
+    //    WHERE 조건이 셋이라(id · status · attemptCount) 이유가 여럿이다.
+    if (zero.kind !== 'NOT_ACQUIRED_NEEDS_RECLASSIFY') {
+      fail('acquire 0행 → 이유 미확정 (재조회 필요)', `받은 값: ${zero.kind}`)
+    } else {
+      pass('acquire 0행 → 이유 미확정 (재조회 필요)', 'NOT_ACQUIRED_NEEDS_RECLASSIFY')
+    }
+
+    if (many.kind !== 'ABORT') fail('acquire 2행 이상 → 중단', `받은 값: ${many.kind}`)
+    else pass('acquire 2행 이상 → 중단', 'ABORT (id 는 PK 다)')
+
+    if (bad.kind !== 'ABORT') fail('acquire 비정상 행 수 → 중단', `받은 값: ${bad.kind}`)
+    else pass('acquire 비정상 행 수 → 중단', 'ABORT')
+  }
+
+  // ── ⑬ 획득 SQL 에 attemptCount 상한이 들어 있는가 ────────
+  {
+    const hasStatus = /AND status = 'PENDING'/.test(ACQUIRE_CANDIDATE_SQL)
+    const hasAttempt = new RegExp(`"attemptCount" < ${MAX_ATTEMPT_COUNT}`).test(ACQUIRE_CANDIDATE_SQL)
+    const sameUpdate =
+      /"processingStartedAt" = now\(\)/.test(ACQUIRE_CANDIDATE_SQL) &&
+      /"processingBy" = /.test(ACQUIRE_CANDIDATE_SQL)
+    if (hasStatus && hasAttempt && sameUpdate) {
+      pass('획득 SQL — compare-and-set + attempt 상한 + 동시 기록', "status='PENDING' · attemptCount<3 · startedAt/By 동시")
+    } else {
+      fail(
+        '획득 SQL — compare-and-set + attempt 상한 + 동시 기록',
+        `status=${hasStatus} attempt=${hasAttempt} sameUpdate=${sameUpdate}`,
+      )
+    }
+  }
+
+  // ── ⑭ timeout: 실측 없이 복구하면 던진다 (§6-3) ──────────
+  {
+    try {
+      resolveTimeoutRecovery({ hasPost: undefined, attemptCount: 0 })
+      fail('timeout 실측 없음 → throw', '🔴 조용히 복구했다 — 이중 발행 경로가 열린다')
+    } catch (e) {
+      if (e instanceof TimeoutRecoveryWithoutProbeError) pass('timeout 실측 없음 → throw', 'TimeoutRecoveryWithoutProbeError')
+      else fail('timeout 실측 없음 → throw', `예상치 못한 오류: ${String(e)}`)
+    }
+  }
+
+  // ── ⑭-b 🔴 attemptCount 실측 누락도 던진다 ──────────────
+  //    0 으로 보정하면 select 누락이 "아직 0 회" 로 둔갑해 상한이 영원히 오지 않는다.
+  {
+    const cases: Array<[string, unknown]> = [
+      ['undefined', undefined],
+      ['NaN', Number.NaN],
+      ['문자열', '2'],
+      ['음수', -1],
+    ]
+    const leaked: string[] = []
+    for (const [label, value] of cases) {
+      try {
+        const r = resolveTimeoutRecovery({ hasPost: false, attemptCount: value } as unknown as TimeoutProbe)
+        leaked.push(`${label} → ${r.nextStatus}`)
+      } catch (e) {
+        if (!(e instanceof TimeoutRecoveryWithoutProbeError)) leaked.push(`${label} → 다른 오류: ${String(e)}`)
+      }
+    }
+    if (leaked.length === 0) pass('attemptCount 미실측 → throw', 'undefined · NaN · 문자열 · 음수 4종')
+    else fail('attemptCount 미실측 → throw', `🔴 복구가 진행됐다: ${leaked.join(' / ')}`)
+  }
+
+  // ── ⑮ timeout + Post 존재 → PUBLISHED 또는 SKIPPED ──────
+  {
+    const linked = resolveTimeoutRecovery({ hasPost: true, postLinkedToCandidate: true, attemptCount: 1 })
+    const other = resolveTimeoutRecovery({ hasPost: true, postLinkedToCandidate: false, attemptCount: 1 })
+    if (linked.nextStatus === 'PUBLISHED' && other.nextStatus === 'SKIPPED') {
+      pass('timeout + Post 존재 → PUBLISHED / SKIPPED', '연결됨=PUBLISHED · 다른 경로=SKIPPED')
+    } else {
+      fail('timeout + Post 존재 → PUBLISHED / SKIPPED', `${linked.nextStatus} / ${other.nextStatus}`)
+    }
+  }
+
+  // ── ⑯ timeout + Post 부재 + attempt < 3 → HOLD + attempt+1 ──
+  {
+    const r = resolveTimeoutRecovery({ hasPost: false, attemptCount: 0 })
+    if (r.nextStatus === 'HOLD' && r.nextAttemptCount === 1) {
+      pass('timeout + Post 부재 + attempt<3 → HOLD + attempt+1', `HOLD · ${r.nextAttemptCount}/${MAX_ATTEMPT_COUNT}`)
+    } else {
+      fail('timeout + Post 부재 + attempt<3 → HOLD + attempt+1', `${r.nextStatus} · ${r.nextAttemptCount}`)
+    }
+  }
+
+  // ── ⑰ timeout + Post 부재 + attempt >= 상한 → FAILED ─────
+  {
+    const r = resolveTimeoutRecovery({ hasPost: false, attemptCount: MAX_ATTEMPT_COUNT - 1 })
+    const exhausted = isAttemptExhausted(MAX_ATTEMPT_COUNT)
+    if (r.nextStatus === 'FAILED' && exhausted) {
+      pass('timeout + Post 부재 + attempt 상한 → FAILED 고정', `FAILED · ${r.nextAttemptCount}/${MAX_ATTEMPT_COUNT}`)
+    } else {
+      fail('timeout + Post 부재 + attempt 상한 → FAILED 고정', `${r.nextStatus} · exhausted=${exhausted}`)
+    }
+  }
+
+  // ── ⑱ 🔴 timeout 은 절대 PENDING 을 돌려주지 않는다 ──────
+  //    PENDING 이면 worker 가 사람 승인 없이 다시 집는다 = 자동 재발행 (§5-4 · 정책 14).
+  {
+    const probes = [
+      { hasPost: true, postLinkedToCandidate: true, attemptCount: 0 },
+      { hasPost: true, postLinkedToCandidate: false, attemptCount: 0 },
+      { hasPost: false, attemptCount: 0 },
+      { hasPost: false, attemptCount: 1 },
+      { hasPost: false, attemptCount: MAX_ATTEMPT_COUNT },
+    ]
+    const leaked = probes
+      .map((p) => resolveTimeoutRecovery(p).nextStatus)
+      .filter((s) => s === 'PENDING')
+    if (leaked.length === 0) pass('timeout 은 PENDING 을 돌려주지 않는다', `${probes.length}종 전부 확인`)
+    else fail('timeout 은 PENDING 을 돌려주지 않는다', '🔴 PENDING 반환 — 자동 재발행 경로')
+  }
+
+  // ── ⑲ 작성자 검증 3종 (§5-2A · §6-9-E) ─────────────────
+  {
+    const base = { id: 'micro-seed-system', exists: true, providerId: null, isBlocked: false }
+    const okCase = verifyPublishAuthor(base)
+    const missing = verifyPublishAuthor({ ...base, exists: false })
+    const realMember = verifyPublishAuthor({ ...base, providerId: 'kakao-12345' })
+    const blocked = verifyPublishAuthor({ ...base, isBlocked: true })
+    const emptyId = verifyPublishAuthor({ ...base, id: '   ' })
+
+    if (!okCase.ok) fail('정상 시스템 작성자 → 통과', okCase.reason)
+    else pass('정상 시스템 작성자 → 통과', 'providerId=null · isBlocked=false')
+
+    if (missing.ok) fail('작성자 User 없음 → 중단', '🔴 통과했다')
+    else pass('작성자 User 없음 → 중단', missing.reason)
+
+    if (realMember.ok) fail('작성자가 실회원(providerId 존재) → 중단', '🔴 실회원 이름으로 발행된다')
+    else pass('작성자가 실회원(providerId 존재) → 중단', realMember.reason)
+
+    if (blocked.ok) fail('작성자 isBlocked=true → 중단', '🔴 통과했다')
+    else pass('작성자 isBlocked=true → 중단', blocked.reason)
+
+    if (emptyId.ok) fail('작성자 ID 공백 → 중단', '🔴 통과했다')
+    else pass('작성자 ID 공백 → 중단', emptyId.reason)
+  }
+
+  // ── ⑲-b 🔴 실측 누락을 통과시키지 않는다 ────────────────
+  //    publisher 가 select 에서 빠뜨린 필드는 undefined 로 온다.
+  //    "문제 없음" 으로 읽으면 조회하지 않은 채 발행하게 된다.
+  {
+    const base = { id: 'micro-seed-system', exists: true, providerId: null, isBlocked: false }
+    const noProviderId = verifyPublishAuthor({ ...base, providerId: undefined } as unknown as AuthorProbe)
+    const noBlocked = verifyPublishAuthor({ ...base, isBlocked: undefined } as unknown as AuthorProbe)
+    const noExists = verifyPublishAuthor({ ...base, exists: undefined } as unknown as AuthorProbe)
+
+    if (noProviderId.ok) fail('providerId 미실측 → 중단', '🔴 조회하지 않았는데 통과했다')
+    else pass('providerId 미실측 → 중단', noProviderId.reason)
+
+    if (noBlocked.ok) fail('isBlocked 미실측 → 중단', '🔴 조회하지 않았는데 통과했다')
+    else pass('isBlocked 미실측 → 중단', noBlocked.reason)
+
+    if (noExists.ok) fail('exists 미실측 → 중단', '🔴 조회하지 않았는데 통과했다')
+    else pass('exists 미실측 → 중단', noExists.reason)
+  }
+
+  // ── ⑳ 3축 플래그는 입력과 무관하게 true (§6-9-C) ────────
+  {
+    const data = buildMicroSeedPostData({
+      boardType: 'FREE',
+      title: '오늘 저녁 뭐 드셨어요',
+      content: '김치찌개 끓였어요.',
+      authorId: 'micro-seed-system',
+      sheetCandidateId: 'c1',
+      sourceSite: '82cook',
+      sourceUrl: 'https://example.com/1',
+      sourceArticleId: '1',
+      sourceCapturedAt: new Date('2026-08-24T00:00:00.000Z'),
+      // 🔴 뒤집으려는 시도. 상수가 이겨야 한다.
+      isMicroSeed: false,
+      permanentNoindex: false,
+      indexPromotionBlocked: false,
+      source: 'USER',
+      status: 'HIDDEN',
+    })
+    const forced =
+      data.isMicroSeed === true &&
+      data.permanentNoindex === true &&
+      data.indexPromotionBlocked === true &&
+      data.source === MICRO_SEED_POST_FLAGS.source
+    if (forced) pass('3축 플래그는 입력으로 뒤집을 수 없다', 'isMicroSeed · permanentNoindex · indexPromotionBlocked = true · source=SYSTEM')
+    else fail('3축 플래그는 입력으로 뒤집을 수 없다', `🔴 ${JSON.stringify({ m: data.isMicroSeed, n: data.permanentNoindex, i: data.indexPromotionBlocked, s: data.source })}`)
+
+    // 🔴 status 도 상수다. HIDDEN 으로 만들면 커뮤니티 목록에 안 보여
+    //    레인의 목적이 사라진다 (§4 축 1 · §12-0).
+    if (data.status === 'PUBLISHED') pass('status 는 입력으로 뒤집을 수 없다 (PUBLISHED 고정)', `입력 HIDDEN → ${data.status}`)
+    else fail('status 는 입력으로 뒤집을 수 없다 (PUBLISHED 고정)', `🔴 ${data.status}`)
+  }
+
+  // ── ㉑ board 화이트리스트 (§6-9-D) ──────────────────────
+  {
+    const free = resolvePublishableBoard('free')
+    const meno = resolvePublishableBoard('menopause')
+    const magazine = resolvePublishableBoard('magazine')
+    const best = resolvePublishableBoard('best')
+    const empty = resolvePublishableBoard('')
+    const okBoth = free.ok && free.boardType === 'FREE' && meno.ok && meno.boardType === 'MENOPAUSE'
+    const rejected = !magazine.ok && !best.ok && !empty.ok
+    if (okBoth && rejected) pass('board 는 FREE · MENOPAUSE 만 허용', 'magazine · best · 빈값 거부')
+    else fail('board 는 FREE · MENOPAUSE 만 허용', `free=${free.ok} meno=${meno.ok} magazine=${magazine.ok} best=${best.ok}`)
+  }
+
+  // ── ㉒ origin 은 live 만 (§10-1 · 정책 12) ───────────────
+  {
+    const live = verifyPublishableOrigin('live')
+    const legacy = verifyPublishableOrigin('unao_legacy')
+    const empty = verifyPublishableOrigin('')
+    if (live.ok && !legacy.ok && !empty.ok) pass('origin 은 live 만 허용', legacy.ok ? '' : legacy.reason)
+    else fail('origin 은 live 만 허용', `live=${live.ok} legacy=${legacy.ok} empty=${empty.ok}`)
+  }
+
+  // ── ㉓ unchecked 가 있으면 발행 불가 ────────────────────
+  {
+    const clean = verifyPublishablePlanRow({ decision: 'PASS', unchecked: [] })
+    const dirty = verifyPublishablePlanRow({ decision: 'PASS', unchecked: ['contentGuard'] })
+    const notPass = verifyPublishablePlanRow({ decision: 'HOLD', rules: ['G-A'], unchecked: [] })
+    if (clean.ok && !dirty.ok && !notPass.ok) {
+      pass('unchecked 1건이라도 있으면 발행 불가', dirty.ok ? '' : dirty.reason)
+    } else {
+      fail('unchecked 1건이라도 있으면 발행 불가', `clean=${clean.ok} dirty=${dirty.ok} notPass=${notPass.ok}`)
     }
   }
 
