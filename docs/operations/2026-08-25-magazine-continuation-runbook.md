@@ -604,13 +604,25 @@ wrapper 가 producer 다음에 부른다.
 
 ### Slack — 정상은 조용하다
 
-`notify` 가 **선정됐는데 `draft.md` 가 없는 건수**를 세어 ERROR 로 알린다.
-어떤 이유인지는 notify 가 모른다 — runner 가 자기 로그에 남긴다.
+`notify` 가 **선정됐는데 `draft.md` 가 없는 건**을 ERROR 로 알린다.
+🔴 **원인을 둘로 나눠서 알린다.** 조치가 완전히 다르기 때문이다.
+
+| 상태 | 알림 | 조치 |
+|---|---|---|
+| `brief.md` 없음 | 매거진 brief 가 아직 없다 | `brief.todo.md` 를 채워 `brief.md` 로 저장 |
+| brief 는 있는데 `draft.md` 없음 | 매거진 원고가 만들어지지 않았다 | ChatGPT 접근 상태 확인 (`--dry-run --probe`) |
 
 ```
-선정 3건 중 2건에 draft.md 가 없다
-→ ChatGPT 접근 상태를 본다 (--dry-run --probe)
+선정 3건 중 3건에 brief.md 가 없다 — 원고 회수를 시도하지 않았다
+→ _runs/{date}/selected/{slug}/brief.todo.md 의 TODO 를 채워 drafts/magazine/{slug}/brief.md 로 저장한다
 ```
+
+판정 기준은 runner 의 `fetchSlug` 와 같다 — `draft_exists` → `brief_missing` → fetch.
+
+> **2026-08-26 첫 무인 실행에서 이 구분이 없어 잘못 안내했다.**
+> 선정 3건이 전부 `brief_missing` 이었는데 알림은 "ChatGPT 접근 상태를 본다" 로 나갔다.
+> probe 를 돌려도 원인이 나오지 않는다 — brief 는 사람이 쓰는 것이고(§13.1)
+> ChatGPT 접근과 무관한 단계다. 7-D-14A 에서 정정했다.
 
 ### 🔴 brief 를 쓸 때 — 대조 문장과 금지어를 교차 검사한다
 
