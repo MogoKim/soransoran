@@ -7,6 +7,7 @@ import ReportButton from '@/components/features/ReportButton'
 import DeleteButton from '@/components/features/DeleteButton'
 import CommentItem from '@/components/features/CommentItem'
 import NextToRead from '@/components/features/NextToRead'
+import WriteCta from '@/components/features/WriteCta'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { loginHref } from '@/lib/callback-url'
@@ -141,6 +142,8 @@ export default async function PostDetailPage({
         </section>
 
         <NextToRead posts={nextPosts} currentPostId={post.id} />
+
+        <WriteCta boardSlug={board.slug} isLoggedIn={Boolean(session?.user)} />
       </main>
     </PageShell>
   )
