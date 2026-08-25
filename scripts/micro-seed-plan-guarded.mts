@@ -354,16 +354,26 @@ async function run() {
         name: 'Sheet 역기록은 DB 확정 뒤에 온다',
         // 🔴 import 문이 아니라 **호출부** 위치를 본다. import 는 파일 맨 위라
         //    단순 indexOf 로는 항상 Sheet 가 먼저인 것처럼 보인다.
+        //    Sheet write 는 이제 lib 의 syncSheet 를 거친다.
+        //    🔴 첫 syncSheet 호출은 TOO_LATE 강등 경로다(트랜잭션보다 앞). 그걸 보면 안 된다.
+        //       **트랜잭션 이후 구간**에 syncSheet 가 있는지를 본다.
         ok: (() => {
           const tx = code.indexOf('$transaction(async (tx)')
-          const sheet = code.indexOf('await updateCandidateRow(')
-          return tx !== -1 && sheet !== -1 && tx < sheet
+          return tx !== -1 && code.slice(tx).includes('await syncSheet(')
         })(),
         detail: 'Sheet 먼저면 Post 없는 PUBLISHED 가 생긴다 (§6-3)',
       },
       {
-        name: 'Sheet 는 허용 열만 쓴다',
-        ok: /mode:\s*'columns'/.test(code),
+        // 공용 lib 이 columns 모드만 쓰는지 본다 — publisher 는 syncSheet 를 부를 뿐이다.
+        name: 'Sheet 는 허용 열만 쓴다 (lib)',
+        ok: (() => {
+          const lib = readFileSync(
+            join(dirname(fileURLToPath(import.meta.url)), 'lib/micro-seed-publish-lib.mts'),
+            'utf-8',
+          )
+          const libCode = lib.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+          return /mode:\s*'columns'/.test(libCode) && !/mode:\s*'bootstrap'/.test(libCode)
+        })(),
         detail: 'bootstrap 으로 창업자 칸을 덮지 않는다 (§6-7-A)',
       },
       {
@@ -406,6 +416,13 @@ async function run() {
         cells: buildSheetWriteCells({ kind: 'FAILED', reason: 'G-B 위반 (시도 3/3)' }),
         want: { status: 'FAILED', holdReason: 'G-B 위반 (시도 3/3)' },
       },
+      {
+        // 🔴 resolveTimeoutRecovery 가 돌려주는 4번째 상태.
+        //    빠져 있으면 recover scanner 가 이 분기에서 undefined 를 쓴다.
+        name: 'SKIPPED → status · holdReason (postUrl 없음)',
+        cells: buildSheetWriteCells({ kind: 'SKIPPED', reason: '다른 경로로 이미 발행된 원문이다' }),
+        want: { status: 'SKIPPED', holdReason: '다른 경로로 이미 발행된 원문이다' },
+      },
     ]
     const wrongCells = cases.filter(
       (c) => JSON.stringify(c.cells) !== JSON.stringify(c.want),
@@ -438,6 +455,32 @@ async function run() {
     }
   }
 
+  // ── ⑬-D2 timeout 복구 4상태를 Sheet 셀이 전부 다룬다 ──
+  //    resolveTimeoutRecovery 의 반환 타입과 buildSheetWriteCells 의 분기가 갈라지면
+  //    그 상태를 만나는 순간 undefined 가 write 로 흘러간다.
+  {
+    const probes: Array<{ hasPost: boolean; postLinkedToCandidate?: boolean; attemptCount: number }> = [
+      { hasPost: true, postLinkedToCandidate: true, attemptCount: 0 },   // → PUBLISHED
+      { hasPost: true, postLinkedToCandidate: false, attemptCount: 0 },  // → SKIPPED
+      { hasPost: false, attemptCount: 0 },                                // → HOLD
+      { hasPost: false, attemptCount: MAX_ATTEMPT_COUNT - 1 },            // → FAILED
+    ]
+    const statuses = probes.map((p) => resolveTimeoutRecovery(p).nextStatus)
+    const uncovered = statuses.filter((st) => {
+      const outcome =
+        st === 'PUBLISHED'
+          ? ({ kind: 'PUBLISHED', postUrl: 'https://x/1', at: new Date('2026-08-25T00:00:00Z') } as const)
+          : ({ kind: st, reason: 'r' } as const)
+      const cells = buildSheetWriteCells(outcome as Parameters<typeof buildSheetWriteCells>[0])
+      return !cells || typeof cells.status !== 'string'
+    })
+    if (uncovered.length === 0) {
+      pass('timeout 4상태를 Sheet 셀이 전부 다룬다', statuses.join(' · '))
+    } else {
+      fail('timeout 4상태를 Sheet 셀이 전부 다룬다', `🔴 미처리: ${uncovered.join(', ')}`)
+    }
+  }
+
   // ── ⑬-E DB 를 바꾸는 모든 경로가 Sheet 에도 쓴다 ────────
   //    함수가 존재한다는 것과 모든 경로가 그것을 부른다는 것은 다르다.
   {
@@ -457,11 +500,29 @@ async function run() {
     const collectsDivergence = /divergences\.push\(/.test(code) && /process\.exit\(2\)/.test(code)
     const noRollback = !/status:\s*'PENDING'/.test(code.replace(/where[\s\S]{0,200}?status:\s*'PENDING'/g, ''))
 
+    // 🔴 Post 생성 뒤의 실패가 전부 divergence 로 잡히는가 (2026-08-25 갭)
+    //    buildPostUrl 은 던질 수 있다. 트랜잭션 커밋 **뒤**에 있으므로 그 호출이
+    //    try 밖에 있으면 DB=PUBLISHED · Sheet=PENDING 이 조용히 사라진다.
+    const txIdx = code.indexOf('$transaction(async (tx)')
+    const afterTx = txIdx === -1 ? '' : code.slice(txIdx)
+    const postUrlGuarded = (() => {
+      const call = afterTx.indexOf('buildPostUrl(')
+      const tryIdx = afterTx.indexOf('try {')
+      return call !== -1 && tryIdx !== -1 && tryIdx < call
+    })()
+
     const items = [
       { name: '강등 경로마다 Sheet 역기록', ok: demoteCalls.length >= 2 && everyDemoteFollowedBySync },
       { name: '성공 경로도 Sheet 역기록', ok: successFollowedBySync },
       { name: '불일치를 모아 exit 2 로 드러낸다', ok: collectsDivergence },
       { name: '불일치 시 DB 를 되돌리지 않는다', ok: noRollback },
+      { name: 'Post 생성 뒤 buildPostUrl 이 try 안에 있다', ok: postUrlGuarded },
+      // 🔴 공용 함수를 복사해 쓰지 않는다 (C-2). 복제하면 두 곳이 갈라진다.
+      {
+        name: '공용 함수를 lib 에서 가져온다',
+        ok: /from '\.\/lib\/micro-seed-publish-lib\.mjs'/.test(code) &&
+            !/^\s*(async )?function (buildPostUrl|syncSheet|findSheetRow|demote)\s*\(/m.test(code),
+      },
     ]
     const bad3 = items.filter((i) => !i.ok)
     if (bad3.length === 0) {
