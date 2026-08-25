@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import Logo from '@/components/brand/Logo'
 import HeaderAuth from '@/components/layouts/HeaderAuth'
+import FontSizeToggle from '@/components/layouts/FontSizeToggle'
 
 /**
  * 헤더
@@ -15,7 +16,10 @@ export default function Header() {
       <Link href="/" className="flex items-center no-underline" aria-label="소란소란 홈">
         <Logo className="text-2xl" />
       </Link>
-      <HeaderAuth />
+      <div className="flex items-center gap-1">
+        <FontSizeToggle variant="header" />
+        <HeaderAuth />
+      </div>
     </header>
   )
 }

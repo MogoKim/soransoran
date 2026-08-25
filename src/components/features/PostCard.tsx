@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import StatIcon from '@/components/icons/StatIcon'
 import { formatRelativeTime, toPreview } from '@/lib/date'
 
 export type PostCardData = {
@@ -23,30 +24,31 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
   return (
     <Link
       href={`${boardHref}/${post.id}`}
-      className="flex min-h-[88px] flex-col justify-center rounded-lg border border-subtle bg-surface-card p-4 no-underline"
+      className="block border-b border-subtle py-[18px] no-underline last:border-b-0"
     >
-      <h3 className="m-0 line-clamp-2 text-lg font-bold leading-snug text-content-primary">
+      <h3 className="m-0 line-clamp-2 font-bold leading-[1.4] text-content-primary">
         {post.title}
       </h3>
 
       {preview ? (
-        <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-content-secondary">
+        <p className="m-0 mt-1.5 line-clamp-2 text-sm leading-[1.6] text-content-secondary">
           {preview}
         </p>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
+      <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-content-muted">
         <span>{post.author.name ?? '회원'}</span>
         <span aria-hidden>·</span>
         <span>{formatRelativeTime(post.createdAt)}</span>
-        {commentCount > 0 ? (
-          <>
-            <span aria-hidden>·</span>
-            <span className="font-bold text-brand-ink">댓글 {commentCount}</span>
-          </>
-        ) : null}
-        <span aria-hidden>·</span>
-        <span>조회 {post.viewCount}</span>
+      </div>
+
+      <div className="mt-1.5 flex items-center gap-4 text-xs text-content-muted">
+        <span className="flex items-center gap-1">
+          <StatIcon name="comment" /> {commentCount}
+        </span>
+        <span className="flex items-center gap-1">
+          <StatIcon name="eye" /> {post.viewCount}
+        </span>
       </div>
     </Link>
   )

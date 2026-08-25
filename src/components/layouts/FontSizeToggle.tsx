@@ -31,7 +31,8 @@ function persist(value: FontSize) {
   }
 }
 
-export default function FontSizeToggle() {
+/** header = 상단 아이콘 버튼 하나로 순환 · panel = 세 개를 늘어놓는 기본형 */
+export default function FontSizeToggle({ variant = 'panel' }: { variant?: 'panel' | 'header' }) {
   const [current, setCurrent] = useState<FontSize>('NORMAL')
 
   // 첫 페인트는 layout.tsx 의 인라인 스크립트가 이미 끝냈다. 여기서는 그 결과를 읽기만 한다.
@@ -45,6 +46,21 @@ export default function FontSizeToggle() {
     else root.setAttribute('data-font-size', value)
     persist(value)
     setCurrent(value)
+  }
+
+  if (variant === 'header') {
+    const next = OPTIONS[(OPTIONS.indexOf(current) + 1) % OPTIONS.length]
+    return (
+      <button
+        type="button"
+        onClick={() => apply(next)}
+        aria-label={`글씨 크기 — 지금 ${FONT_SIZE_LABELS[current]}, 누르면 ${FONT_SIZE_LABELS[next]}`}
+        className="inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-xl text-content-muted"
+      >
+        <span className="text-lg font-bold leading-none">가</span>
+        <span className="text-xs leading-none">+</span>
+      </button>
+    )
   }
 
   return (

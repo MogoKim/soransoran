@@ -2,7 +2,7 @@ import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
 import Logo from '@/components/brand/Logo'
-import { COMMUNITY_BOARDS } from '@/lib/board-registry'
+import MenuIcon from '@/components/icons/MenuIcon'
 import { getRecentDiscoveryPosts } from '@/lib/queries/posts'
 
 export const dynamic = 'force-dynamic'
@@ -18,10 +18,8 @@ export default async function HomePage() {
 
   return (
     <PageShell>
-      {/* 섹션마다 흰 블록을 두고 그 사이로 페이지 바탕이 비치게 한다.
-          바탕색을 화면 전체에 그대로 두면 어디까지가 한 덩어리인지 읽히지 않는다. */}
-      <main className="mx-auto flex max-w-3xl flex-col gap-2 pb-24">
-        <section className="bg-surface-card px-4 py-6 text-center sm:rounded-lg">
+      <main className="mx-auto max-w-3xl bg-surface-card pb-24">
+        <section className="px-4 py-6 text-center">
           <Logo className="text-3xl" />
           <p className="mt-2 text-sm text-content-muted">
             40대 50대 여성이 갱년기와 사는 이야기를 나누는 곳
@@ -29,40 +27,38 @@ export default async function HomePage() {
         </section>
 
         {posts.length > 0 ? (
-          <section className="bg-surface-card px-4 py-5 sm:rounded-lg">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-content-primary">지금 올라온 이야기</h2>
+          <section className="border-t-4 border-surface-page px-4 py-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="flex items-center gap-2 text-lg font-bold text-content-primary">
+                <span
+                  aria-hidden
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]"
+                  style={{
+                    backgroundColor: 'var(--icon-best-bg)',
+                    color: 'var(--icon-best-stroke)',
+                  }}
+                >
+                  <MenuIcon name="star" size={18} />
+                </span>
+                지금 뜨는 이야기
+              </h2>
               <Link
-                href={COMMUNITY_BOARDS[0].href}
-                className="inline-flex min-h-[52px] items-center text-sm text-link"
+                href="/best"
+                className="inline-flex min-h-[52px] shrink-0 items-center text-sm text-link"
               >
                 더보기 →
               </Link>
             </div>
 
-            <ul className="mt-1 flex list-none flex-col p-0">
+            <ol className="m-0 flex list-none flex-col p-0">
               {posts.map((post, index) => (
                 <li key={post.id}>
                   <PostListItem post={post} rank={index + 1} />
                 </li>
               ))}
-            </ul>
+            </ol>
           </section>
         ) : null}
-
-        {/* 게시판은 카드가 이미 흰색이다. 섹션까지 흰색으로 덮으면 카드가 묻힌다 */}
-        <section className="mt-4 flex flex-col gap-3 px-4">
-          {COMMUNITY_BOARDS.map((board) => (
-            <Link
-              key={board.type}
-              href={board.href}
-              className="flex min-h-[64px] items-center justify-between rounded-lg border border-subtle bg-surface-card px-5 py-4 no-underline"
-            >
-              <span className="font-bold text-content-primary">{board.label}</span>
-              <span className="text-sm text-content-muted">바로가기 →</span>
-            </Link>
-          ))}
-        </section>
       </main>
     </PageShell>
   )

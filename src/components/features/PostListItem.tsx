@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { formatRelativeTime } from '@/lib/date'
 import BoardBadge from '@/components/ui/board-badge'
+import StatIcon from '@/components/icons/StatIcon'
 import { getBoardByType } from '@/lib/board-registry'
 import type { BoardType } from '@prisma/client'
 
@@ -13,10 +14,7 @@ export type PostListItemData = {
   _count: { comments: number }
 }
 
-/**
- * 홈용 한 줄 항목 — 목록 카드(PostCard)보다 밀도가 높다.
- * 첫 화면에 글이 여러 개 보이는 것이 목적이라 미리보기를 싣지 않는다.
- */
+/** 홈 리스트 한 줄 — 순위 · 제목 · 보드 배지 · 통계. 미리보기는 싣지 않는다. */
 export default function PostListItem({
   post,
   rank,
@@ -30,22 +28,24 @@ export default function PostListItem({
   return (
     <Link
       href={`${board.href}/${post.id}`}
-      className="flex min-h-[64px] items-start gap-3 border-b border-subtle py-3 no-underline last:border-b-0"
+      className="flex min-h-[52px] items-start gap-3 border-b border-subtle py-3.5 no-underline last:border-b-0"
     >
-      <span className="w-6 shrink-0 text-center text-lg font-bold italic text-brand-ink">
+      <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
         {rank}
       </span>
 
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="line-clamp-2 font-bold leading-snug text-content-primary">
+      <span className="flex min-w-0 flex-col gap-1.5">
+        <span className="line-clamp-2 font-medium leading-[1.5] text-content-primary">
           {post.title}
         </span>
-        <span className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
+        <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-content-muted">
           <BoardBadge boardType={post.boardType} />
-          <span>댓글 {post._count.comments}</span>
-          <span aria-hidden>·</span>
-          <span>조회 {post.viewCount}</span>
-          <span aria-hidden>·</span>
+          <span className="flex items-center gap-1">
+            <StatIcon name="comment" /> {post._count.comments}
+          </span>
+          <span className="flex items-center gap-1">
+            <StatIcon name="eye" /> {post.viewCount}
+          </span>
           <span>{formatRelativeTime(post.createdAt)}</span>
         </span>
       </span>
