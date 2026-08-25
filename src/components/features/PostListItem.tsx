@@ -28,14 +28,14 @@ export default function PostListItem({
   return (
     <Link
       href={`${board.href}/${post.id}`}
-      className="flex min-h-[52px] items-start gap-3 border-b border-subtle py-3.5 no-underline last:border-b-0"
+      className="flex min-h-[52px] items-start gap-3 border-b border-subtle py-3.5 no-underline transition-colors last:border-b-0 hover:bg-surface-page"
     >
       <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
         {rank}
       </span>
 
       <span className="flex min-w-0 flex-col gap-1.5">
-        <span className="line-clamp-2 font-medium leading-[1.5] text-content-primary">
+        <span className="line-clamp-2 break-keep font-medium leading-[1.5] text-content-primary">
           {post.title}
         </span>
         <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-content-muted">

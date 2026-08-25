@@ -51,7 +51,7 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
             ctaHref={`/write?board=${board.slug}`}
           />
         ) : (
-          <ul className="flex list-none flex-col gap-3 p-0">
+          <ul className="flex list-none flex-col p-0">
             {posts.map((post) => (
               <li key={post.id}>
                 <PostCard post={post} boardHref={board.href} />

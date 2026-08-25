@@ -24,9 +24,9 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
   return (
     <Link
       href={`${boardHref}/${post.id}`}
-      className="block border-b border-subtle py-[18px] no-underline last:border-b-0"
+      className="block border-b border-subtle py-[18px] no-underline transition-colors last:border-b-0 hover:bg-surface-page"
     >
-      <h3 className="m-0 line-clamp-2 font-bold leading-[1.4] text-content-primary">
+      <h3 className="m-0 line-clamp-2 break-keep font-bold leading-[1.4] text-content-primary">
         {post.title}
       </h3>
 
