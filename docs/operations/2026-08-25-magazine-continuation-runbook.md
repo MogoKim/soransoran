@@ -419,89 +419,105 @@ Slack 발송이 실패해도 producer 자체는 실패시키지 않는다 — �
 
 ---
 
-## 9-D. ChatGPT web UI runner (7-D-12)
+## 9-D. ChatGPT web UI runner (7-D-12 · 7-D-13-A)
 
 `scripts/magazine-webui-runner.mjs` · `scripts/lib/chatgpt-session.mjs`
 
 ```bash
-node scripts/magazine-webui-runner.mjs --dry-run           대상만 본다 (브라우저 안 띄움)
-node scripts/magazine-webui-runner.mjs --dry-run --probe   ChatGPT 접근 상태까지
-node scripts/magazine-webui-runner.mjs --login             로그인용 창 (사람이 1회)
+node scripts/magazine-webui-runner.mjs --login             전용 Chrome 을 띄운다 (닫지 말 것)
+node scripts/magazine-webui-runner.mjs --dry-run           대상만 본다
+node scripts/magazine-webui-runner.mjs --dry-run --probe   ChatGPT 접근 상태
 ```
 
-### 🔴 headed 로만 돈다 — headless 는 쓸 수 없다
+### 운영 경로 — 사람이 띄운 Chrome 에 붙는다
 
-7-D-12 권한 시험에서 5개 조합을 돌린 결과다.
+```
+--login  →  일반 Chrome + --remote-debugging-port=9333   (사람이 로그인, 창을 열어 둔다)
+probe    →  connectOverCDP 로 그 Chrome 에 붙기만 한다
+```
+
+**Playwright 는 브라우저를 띄우지도 닫지도 않는다.** 프로필의 주인은 끝까지 그 Chrome 이다.
+
+### 🔴 금지된 경로 — Playwright 가 프로필을 직접 여는 것
+
+`launchPersistentContext` 로 전용 프로필을 열면 **ChatGPT 세션 쿠키가 지워진다.**
+Chrome 이 키체인(Chrome Safe Storage)에 접근하지 못해, 읽을 수 없는 암호화 쿠키를
+무효로 보고 정리하기 때문이다.
+
+```
+실측  로그인 직후 chatgpt/openai 쿠키 42개  →  probe 1회 후 8개 (34개 소실)
+      CDP 전환 후                      8개  →  probe 1회 후 8개 (감소 0)
+```
+
+다시 시도하지 마라. 몇 번을 로그인해도 같다.
+
+시도했다가 접은 것들(같은 벽에 부딪힌다): `chromiumSandbox: true` · `ignoreDefaultArgs` ·
+번들 chromium · headless. **stealth · UA 위조 · 쿠키 추출/복사는 애초에 하지 않는다.**
+
+### 창업자 1회 준비
+
+```bash
+node scripts/magazine-webui-runner.mjs --login
+```
+
+1. 일반 Chrome 창이 열린다 (자동화 표식 없음 · CDP 포트 9333)
+2. ChatGPT 에 로그인한다
+3. ⚠️ **"나만의 Chrome 만들기" 팝업이 뜨면 "계정 없이 Chrome 사용"** 을 누른다 —
+   안 그러면 Chrome 이 프로필을 미확정으로 두고 종료 시 세션 쿠키를 버린다
+4. 🔴 **창을 닫지 않는다** — probe 가 이 창에 붙는다
+
+프로필: `~/Library/Application Support/soransoran-chatgpt` (chmod 700 · repo 밖)
+평소 Chrome 프로필과 완전히 분리돼 있고, 복사하지도 직접 쓰지도 않는다.
+
+### 🔴 headless 를 쓸 수 없다
 
 | 조합 | HTTP | |
 |---|---|---|
-| 익명 · headless · 번들 chromium | – | 실행 실패 (요구 브라우저 번호 불일치) |
-| 익명 · headless · 시스템 Chrome | **403** | Cloudflare |
-| 익명 · headless · chromium-1217 | **403** | Cloudflare |
-| 전용 프로필 · headless · 시스템 Chrome | **403** | Cloudflare |
-| **전용 프로필 · headed · 시스템 Chrome** | **200** | ✅ 통과 |
+| headless (프로필 유무 무관) | **403** | Cloudflare |
+| **headed** | **200** | ✅ 통과 |
 
-**결정 변수는 headless 여부다. 프로필 유무는 무관하다.**
-우회(stealth·UA 위조)는 하지 않는다 — 탐지 회피이고 계정 정지를 감수할 이유가 없다.
+01:00 무인 실행에도 GUI 세션이 필요하다. **맥이 잠들면 실패한다.**
 
-권한 정책이 스크립트 경로를 막지는 않았다. 4/5 조합에서 브라우저가 정상 실행됐다.
-
-### 왜 시스템 Chrome 인가
-
-번들 chromium 은 Playwright 버전이 오르면 요구 브라우저 번호가 바뀌어 **경로가 조용히 죽는다.**
-실제로 npx 캐시의 1.63.0-alpha 가 `chromium-1237` 을 요구했는데 로컬엔 1208·1217 뿐이었다.
-
-시스템 Chrome(`channel: 'chrome'`)은 경로가 고정이라 그 사고가 없다.
-그래서 `playwright` 가 아니라 **`playwright-core`** 만 넣는다 — 브라우저를 받지 않으므로 설치가 가볍다.
-
-### 전용 프로필 — 창업자 1회 로그인
-
-```
-~/Library/Application Support/soransoran-chatgpt/   (chmod 700)
-```
-
-repo 밖이다. 쿠키는 Chrome 이 OS 키체인으로 암호화해 여기 둔다.
-
-```bash
-mkdir -p "$HOME/Library/Application Support/soransoran-chatgpt"
-chmod 700 "$HOME/Library/Application Support/soransoran-chatgpt"
-node scripts/magazine-webui-runner.mjs --login    # 로그인 후 창을 닫는다
-```
-
-🔴 **무인으로 로그인할 방법은 없고, 있어서도 안 된다.**
-🔴 MCP 프로필(`mcp-chrome-*`)을 재사용하지 않는다 — MCP 가 언제든 새로 만들거나 지운다.
-
-### 🔴 01:00 에 맥이 깨어 있어야 한다
-
-headed 라 GUI 세션이 필요하다. 맥이 잠들면 창이 뜨지 않고 실패한다.
-창은 `--window-position=-2400,-2400` 으로 화면 밖에 두므로 보이지는 않는다.
-
-### 접근 상태 6가지와 Slack 조건
+### 접근 상태와 Slack 조건
 
 | 상태 | 뜻 | Slack | 재시도 |
 |---|---|---|---|
 | `ok` | 정상 | **보내지 않는다** | – |
+| `chrome_not_running` | 전용 Chrome 이 안 떠 있음 | BLOCKED | ❌ `--login` 으로 띄운다 |
 | `login_required` | 로그인 만료 | BLOCKED | ❌ 사람이 해야 한다 |
 | `cloudflare_blocked` | 봇 감지 | BLOCKED | ❌ 재시도하면 악화된다 |
-| `browser_missing` | Chrome 없음/경로 변경 | ERROR | ❌ |
-| `permission_blocked` | 실행이 막힘 | ERROR | ❌ |
-| `unknown` | 판정 실패 (UI 변경 의심) | ERROR | ❌ |
+| `browser_missing` · `permission_blocked` · `unknown` | – | ERROR | ❌ |
 
 **정상 실행은 조용하다.** 매일 오는 알림은 아무도 보지 않는다.
 
+### probe 판정은 신호를 조합한다
+
+`#prompt-textarea` **하나만 보면 오진한다.** SPA 라 composer 가 늦게 뜨고,
+selector 가 바뀌면 로그인 상태인데도 `login_required` 로 떨어진다.
+
+```
+로그인됨   promptTextarea · editableBox · plusButton · historyItem · accountButton
+로그아웃   loginBtn · signupBtn · welcomeText · landingTitle
+```
+
+`landingTitle` 은 로그아웃 랜딩의 title 에 마케팅 문구가 붙는 것을 본다.
+로그인 상태의 title 은 그냥 `ChatGPT` 다.
+
+composer 는 최대 20초 기다린다. 어느 쪽 신호도 없으면 `login_required` 가 아니라 **`unknown`** 이다 —
+못 읽은 것과 로그아웃된 것은 다르고, 대응도 다르다.
+
 ### 🔴 아무것도 저장하지 않는다
 
-스크린샷 · DOM 덤프 · HTML 본문 · URL · 쿠키 · 토큰 — 전부 남기지 않는다.
-Cloudflare challenge URL 의 `__cf_chl_rt_tk` 는 계정과 연결되고,
-로그인 화면 스크린샷에는 계정명이 찍힌다. **불리언 플래그와 상태 코드만** 남긴다.
+스크린샷 · DOM 덤프 · HTML 본문 · URL · 쿠키 · 토큰 — 전부.
+Cloudflare challenge URL 의 토큰은 계정과 연결되고, 로그인 화면에는 계정명이 찍힌다.
+**불리언 플래그와 상태 코드만** 남긴다.
 
 디버깅하려고 스크린샷을 저장하고 싶어지는 자리가 바로 여기다. 하지 않는다.
 
 ### 이 단계에서 하지 않는 것
 
 brief 첨부 · 메시지 전송 · 응답 대기 · 원고 다운로드 · 파일 쓰기 · Slack 발송.
-
-**"비활성 플래그"로 막아 둔 것이 아니라 코드가 아예 없다.** 실수로 켜질 경로를 두지 않았다.
+**"비활성 플래그"로 막아 둔 것이 아니라 코드가 아예 없다.**
 
 ---
 
