@@ -3,6 +3,7 @@
  * launchd 진입점 — producer 를 돌리고, 결과를 판정해 필요할 때만 Slack 으로 알린다.
  *
  *   01:00 KST → 이 스크립트
+ *                 ├ magazine-webui-runner.mjs       ChatGPT 에 닿는지 먼저 본다 (Chrome 자동 기동)
  *                 ├ magazine-producer-plan.mjs      오늘 무엇을 만들지 정한다
  *                 └ magazine-producer-notify.mjs    알릴 것이 있으면 Slack
  *
@@ -33,6 +34,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const NODE = process.execPath // 지금 이 프로세스를 띄운 node. plist 와 경로가 어긋날 수 없다
 
+const WEBUI = join(ROOT, 'scripts/magazine-webui-runner.mjs')
 const PLAN = join(ROOT, 'scripts/magazine-producer-plan.mjs')
 const NOTIFY = join(ROOT, 'scripts/magazine-producer-notify.mjs')
 
@@ -47,6 +49,17 @@ function line(msg) {
 const dryRun = process.argv.includes('--dry-run')
 
 line(`매거진 producer 시작${dryRun ? ' (dry-run)' : ''}`)
+
+// ── 0) ChatGPT 접근 확인 (Chrome 자동 기동) ─────────────────
+// 01:00 에는 사람이 창을 띄워 둘 수 없다. CDP 가 없으면 여기서 직접 띄운다.
+// 🔴 실패해도 producer 는 돌린다 — 재고 계산과 선정은 ChatGPT 와 무관하고,
+//    알림이 나가야 창업자가 로그인 만료를 안다.
+const webui = spawnSync(NODE, [WEBUI, '--dry-run', '--probe', '--auto-start'], { cwd: ROOT, stdio: 'inherit' })
+if (webui.error) {
+  line(`ChatGPT 접근 확인 실행 실패 — 계속한다 (${webui.error.code ?? webui.error.name})`)
+} else {
+  line(webui.status === 0 ? 'ChatGPT 접근 정상' : 'ChatGPT 접근 불가 — 원고 단계는 건너뛴다')
+}
 
 // ── 1) producer ────────────────────────────────────────────
 let planCode = 0

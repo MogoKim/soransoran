@@ -469,6 +469,31 @@ node scripts/magazine-webui-runner.mjs --login
 프로필: `~/Library/Application Support/soransoran-chatgpt` (chmod 700 · repo 밖)
 평소 Chrome 프로필과 완전히 분리돼 있고, 복사하지도 직접 쓰지도 않는다.
 
+### 01:00 무인 실행 — Chrome 을 wrapper 가 띄운다 (7-D-13-B1)
+
+사람이 새벽에 창을 띄워 둘 수 없다. `magazine-producer-run.mjs` 가 먼저 접근을 확인한다.
+
+```
+01:00 launchd → magazine-producer-run.mjs
+                  ├ magazine-webui-runner.mjs --dry-run --probe --auto-start
+                  │    CDP 있으면 재사용 · 없으면 일반 Chrome 을 띄우고 최대 30초 대기
+                  ├ magazine-producer-plan.mjs
+                  └ magazine-producer-notify.mjs
+```
+
+**세션은 재기동해도 유지된다.** 3회 연속 종료 → 자동 기동 → probe 를 돌려 확인했다.
+
+```
+쿠키 추이  41 → 39 → 39 → 39 → 39   (첫 2개는 만료분 정리, 이후 안정)
+status     3회 모두 ok
+```
+
+🔴 **이미 떠 있으면 두 번 띄우지 않는다.** 같은 프로필로 또 띄우면 프로필이 잠긴다.
+🔴 **CDP 없이 프로필이 점유돼 있으면 죽이지 않는다.** 사람이 그 창을 쓰고 있을 수 있다 —
+   `chrome_not_running` 으로 알리고 판단은 사람에게 맡긴다.
+🔴 **ChatGPT 접근이 실패해도 producer 는 돈다.** 재고 계산과 선정은 ChatGPT 와 무관하고,
+   알림이 나가야 창업자가 로그인 만료를 안다.
+
 ### 🔴 headless 를 쓸 수 없다
 
 | 조합 | HTTP | |

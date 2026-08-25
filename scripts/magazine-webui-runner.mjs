@@ -81,6 +81,8 @@ function help() {
 
   node scripts/magazine-webui-runner.mjs --dry-run           대상만 보여준다
   node scripts/magazine-webui-runner.mjs --dry-run --probe   ChatGPT 접근 상태까지
+  node scripts/magazine-webui-runner.mjs --dry-run --probe --auto-start
+                                                             CDP 없으면 Chrome 을 직접 띄운다 (무인용)
   node scripts/magazine-webui-runner.mjs --login             전용 Chrome 을 띄운다 (닫지 말 것)
   node scripts/magazine-webui-runner.mjs --dry-run --json
 
@@ -157,6 +159,8 @@ async function main() {
   }
 
   const wantProbe = argv.includes('--probe')
+  // 무인 실행용 — CDP 가 없으면 일반 Chrome 을 직접 띄우고 기다린다
+  const autoStart = argv.includes('--auto-start')
   const asJson = argv.includes('--json')
   const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : todayKst()
 
@@ -165,7 +169,7 @@ async function main() {
 
   let access = { status: null, severity: null, message: null }
   if (wantProbe) {
-    const r = await probe()
+    const r = await probe({ autoStart })
     access = {
       status: r.status,
       // SEVERITY[ok] 는 null 이다 — ?? 로 fallback 하면 정상인데 ERROR 가 된다.
@@ -177,6 +181,7 @@ async function main() {
       profileExists: r.profileExists,
       // 판정 근거를 남긴다 — 전부 불리언이라 계정 정보가 실리지 않는다
       signals: r.signals ?? null,
+      chromeStarted: r.chromeStarted ?? false,
     }
   }
 
@@ -215,7 +220,7 @@ async function main() {
       const icon = access.status === STATUS.OK ? '✅' : '⛔'
       console.log(`  ChatGPT 접근: ${icon} ${access.status}`)
       console.log(`    ${access.message}`)
-      console.log(`    CDP 연결 ${access.connected ? '✅' : '🔴'} · HTTP ${access.httpStatus ?? '-'} · 프로필 ${access.profileExists ? '있음' : '없음'}`)
+      console.log(`    CDP 연결 ${access.connected ? '✅' : '🔴'} · HTTP ${access.httpStatus ?? '-'} · 프로필 ${access.profileExists ? '있음' : '없음'}${access.chromeStarted ? ' · Chrome 자동 기동' : ''}`)
       if (access.signals) {
         const on = Object.entries(access.signals).filter(([, v]) => v).map(([k]) => k)
         console.log(`    화면 신호: ${on.length ? on.join(' · ') : '없음 (판정 근거가 하나도 잡히지 않았다)'}`)
