@@ -36,7 +36,7 @@ import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
   ARTICLE_URL, BOARD_NAME, BOARD_NO, DELAY_MS, LIST_URL, ROBOTS_URL, SOURCE_SITE, USER_AGENT,
-  buildCollected, computeDedupKey, extractArticleBodyHtml, htmlToText, isPathAllowed,
+  buildCollected, extractArticleBodyHtml, htmlToText, isPathAllowed,
   parseArticleTitle, parseListHtml, parseRobotsTxt, toRobotsPath,
   type CollectedCandidate, type ListItem, type RobotsRules,
 } from './lib/micro-seed-82cook.mjs'
@@ -126,7 +126,14 @@ async function main() {
   }
   if (items.length) {
     const listPath = OUT.replace(/\.jsonl$/, '.list.jsonl')
-    writeJsonl(listPath, items.map((i) => ({ ...i, sourceSite: SOURCE_SITE, dedupKey: computeDedupKey(SOURCE_SITE, i.sourceArticleId) })))
+    // 🔴 목록도 buildCollected 를 거친다 (2026-08-26 실측 결함).
+    //    예전에는 여기서 객체를 직접 만들어 sourceBoardName · sourceCapturedAt 이 빠졌다.
+    //    상세 산출물은 9필드인데 목록은 6필드라, 목록을 importer 에 넘기면 두 칸이 빈다.
+    //    정규화 경로를 하나로 두면 같은 종류의 누락이 다시 생기지 않는다 (C-2).
+    //
+    //    rawBody 는 **빈 문자열**이다 — 목록은 본문을 읽지 않는다.
+    //    importer 는 rawBody 가 빈 행을 거부하므로 목록 파일이 잘못 들어와도 적재되지 않는다.
+    writeJsonl(listPath, items.map((i) => buildCollected(i, '', now.toISOString())))
     console.log(`  → ${listPath} (${items.length}건)\n`)
     const top = [...items].sort((a, b) => b.sourceCommentCount - a.sourceCommentCount).slice(0, 10)
     console.log('  댓글 많은 순 상위 10건 (상세는 --fetch 로 골라서 연다):')

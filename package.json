@@ -22,7 +22,8 @@
     "micro-seed:publish-live": "tsx scripts/micro-seed-publish-live.mts",
     "micro-seed:recover-live": "tsx scripts/micro-seed-recover-live.mts",
     "micro-seed:collect-82cook": "tsx scripts/micro-seed-collect-82cook.mts",
-    "micro-seed:collect-check": "tsx scripts/micro-seed-collect-check.mts"
+    "micro-seed:collect-check": "tsx scripts/micro-seed-collect-check.mts",
+    "micro-seed:import-82cook": "tsx scripts/micro-seed-import-82cook-live.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
