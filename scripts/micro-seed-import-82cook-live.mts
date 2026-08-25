@@ -35,7 +35,7 @@ import { SOURCE_SITE, computeDedupKey, type CollectedCandidate } from './lib/mic
 import {
   SHEET_HEADERS, SHEET_TAB_NAME, buildSheetRow, createGoogleSheetSource, updateCandidateRow,
 } from './lib/micro-seed-sheet.mjs'
-import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
+import { loadEnvLocal, kstString, roundUpToFiveMinutes, utcWallClock } from './lib/micro-seed-time.mjs'
 
 const APPLY = process.argv.includes('--apply')
 const arg = (n: string) => {
@@ -50,6 +50,29 @@ const LIMIT = LIMIT_RAW === undefined ? null : Number(LIMIT_RAW)
 /** 🔴 board 는 free 고정 (§6-9-D 화이트리스트). magazine·best 로 갈 경로를 만들지 않는다 */
 const BOARD_SHEET_VALUE = 'free'
 const BOARD_TYPE = 'FREE' as const
+
+/**
+ * 예약 **제안값** 기본 간격 (분).
+ *
+ * 🔴 확정이 아니라 제안이다. scheduledPublishAt 은 창업자 편집 칸이고(§6-7-A),
+ *    시스템이 정할 값이 아니다. 다만 **비워 두면 매 발행마다 reschedule 을 따로 돌려야 하고
+ *    그때부터 20분을 기다린다** — 적재 시점에 값을 넣어 두면 그 대기가 절차에 흡수된다.
+ *
+ *    창업자는 Sheet F열에서 언제든 고칠 수 있고, micro-seed:reschedule-live 로도 밀 수 있다.
+ *
+ * 🔴 25분인 이유: 승인(Sheet PENDING) → sync-approval → publish dry-run 까지가
+ *    보통 몇 분이고, publisher 유예창이 도래 후 30분이다. 25분이면 승인을 마치고
+ *    창이 열린 뒤 여유 있게 발행할 수 있다.
+ */
+const SCHEDULE_DEFAULT_MINUTES = 25
+const NO_SCHEDULE = process.argv.includes('--no-schedule')
+const SCHEDULE_MINUTES = (() => {
+  const hit = process.argv.find((a) => a.startsWith('--in='))
+  if (!hit) return SCHEDULE_DEFAULT_MINUTES
+  const n = Number(hit.slice(5))
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`--in 은 양수 분이어야 한다: ${hit}`)
+  return n
+})()
 /** 🔴 적재는 HOLD 로만 한다. 승인은 사람이 Sheet 에서 (§6-7-A) */
 const INITIAL_STATUS = 'HOLD' as const
 
@@ -63,6 +86,15 @@ async function main() {
   console.log('\nMicro Seed importer — 82cook')
   console.log(`  입력 ${INPUT} · ${kstString(now)} KST`)
   console.log(`  적재 규칙: RawContent origin=live · Candidate ${INITIAL_STATUS} · board=${BOARD_SHEET_VALUE}(${BOARD_TYPE}) · postUrl/updatedBySystemAt 공란`)
+
+  // 🔴 예약은 **제안값**이다. status 는 HOLD 이고 창업자가 F열에서 고칠 수 있다.
+  const proposed = NO_SCHEDULE ? null : roundUpToFiveMinutes(new Date(now.getTime() + SCHEDULE_MINUTES * 60_000))
+  if (proposed) {
+    console.log(`  예약 제안: ${kstString(proposed)} KST (= ${utcWallClock(proposed)} UTC) · 지금 +${SCHEDULE_MINUTES}분, 5분 올림`)
+    console.log('             ⚠️ 제안값이다. status 는 HOLD 이고 창업자가 Sheet F열에서 수정할 수 있다')
+  } else {
+    console.log('  예약 제안: 없음 (--no-schedule) — 창업자가 Sheet F열에 직접 적는다')
+  }
   console.log(
     APPLY && LIMIT === 1
       ? '  🔴 --apply --limit=1 : 실제로 적재한다\n'
@@ -216,8 +248,9 @@ async function main() {
         board: BOARD_SHEET_VALUE,
         founderTitle,
         originalTitle: row.originalTitle,
-        // 🔴 예약 시각은 비운다. 창업자가 Sheet 에서 정한다 (§6-7-A 편집 칸).
-        scheduledPublishAt: '',
+        // 🔴 제안값이다 (§6-7-A 편집 칸 — 창업자가 고칠 수 있다).
+        //    --no-schedule 이면 비운다.
+        scheduledPublishAt: proposed ? kstString(proposed) : '',
         sourceSite: row.sourceSite,
         sourceUrl: row.sourceUrl,
         sourceArticleId: id,
@@ -236,6 +269,11 @@ async function main() {
         console.log(`     candidate=${candidateId}`)
         console.log(`     raw=${rawContentId} · origin=live · ${rawBody.length}자`)
         console.log(`     Sheet 행 ${nextRowNumber} · status=${INITIAL_STATUS} · board=${BOARD_SHEET_VALUE}`)
+        console.log(
+          proposed
+            ? `     예약 제안 ${kstString(proposed)} KST (= ${utcWallClock(proposed)} UTC) · F열에 들어간다`
+            : '     예약 없음 (--no-schedule)',
+        )
         imported += 1
         continue
       }
@@ -269,6 +307,8 @@ async function main() {
             originalTitle: row.originalTitle,
             founderTitle,
             targetBoardType: BOARD_TYPE,
+            // 🔴 제안값. Prisma 가 UTC 로 저장하고 Sheet 에는 같은 순간을 KST 로 적는다.
+            scheduledPublishAt: proposed,
           },
         })
       })
@@ -279,6 +319,31 @@ async function main() {
         mode: 'bootstrap', tab: SHEET_TAB_NAME, rowNumber: nextRowNumber, values: sheetValues, expectId: candidateId,
       })
       console.log(`     Sheet ${write.ranges.join(', ')} · ${write.updatedCells}셀 · read-back ${write.readBackVerified ? '검증됨' : '미검증'}`)
+
+      // ── ⑥ 예약·상태 read-back — DB 와 Sheet 가 같은 순간인지 본다 ──
+      //
+      // 🔴 updateCandidateRow 의 read-back 은 "쓴 값이 시트에 있는가" 만 본다.
+      //    DB 와 **같은 순간**인지는 별개다 — KST 문자열과 UTC timestamp 를 각각 쓰므로
+      //    한쪽만 어긋나도 승인·발행이 다른 시각을 보게 된다.
+      const back = await prisma.microSeedCandidate.findUniqueOrThrow({
+        where: { id: candidateId },
+        select: { status: true, scheduledPublishAt: true },
+      })
+      const dbKst = back.scheduledPublishAt ? kstString(back.scheduledPublishAt) : ''
+      const sheetKst = sheetValues[SHEET_HEADERS.indexOf('scheduledPublishAt')] as string
+      if (dbKst !== sheetKst) {
+        throw new Error(
+          `예약 read-back 불일치: DB=${dbKst || '(비어 있음)'} · Sheet=${sheetKst || '(비어 있음)'}. ` +
+            'DB 가 정본이다. Sheet F열을 맞춘 뒤 다시 확인한다',
+        )
+      }
+      if (back.status !== INITIAL_STATUS) {
+        throw new Error(`status read-back 불일치: ${back.status} (기대 ${INITIAL_STATUS})`)
+      }
+      console.log(
+        `     read-back ✅ status=${back.status} · 예약 ${dbKst || '(비어 있음)'} KST` +
+          `${back.scheduledPublishAt ? ` (= ${utcWallClock(back.scheduledPublishAt)} UTC)` : ''} · DB=Sheet 일치`,
+      )
       nextRowNumber += 1
       sheetKeys.add(row.dedupKey)
       sheetIds.add(candidateId)
