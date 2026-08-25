@@ -19,7 +19,8 @@
     "micro-seed:dry-run-live": "tsx scripts/micro-seed-dry-run-live.mts",
     "micro-seed:sync-approval-live": "tsx scripts/micro-seed-sync-approval-live.mts",
     "micro-seed:reschedule-live": "tsx scripts/micro-seed-reschedule-live.mts",
-    "micro-seed:publish-live": "tsx scripts/micro-seed-publish-live.mts"
+    "micro-seed:publish-live": "tsx scripts/micro-seed-publish-live.mts",
+    "micro-seed:recover-live": "tsx scripts/micro-seed-recover-live.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

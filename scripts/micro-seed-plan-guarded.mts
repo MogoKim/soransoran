@@ -481,6 +481,89 @@ async function run() {
     }
   }
 
+  // ── ⑬-D3 recover scanner 소스 계약 (R-2) ──────────────
+  //
+  //    복구 장치는 사람이 안 보는 사이에 상태를 바꾼다. 그래서 계약을 소스에서 잠근다.
+  {
+    const { readFileSync } = await import('node:fs')
+    const { join, dirname } = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const here = dirname(fileURLToPath(import.meta.url))
+    const raw = readFileSync(join(here, 'micro-seed-recover-live.mts'), 'utf-8')
+    const code = raw.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+
+    const checks: Array<{ name: string; ok: boolean; detail: string }> = [
+      {
+        // 🔴 발행은 비가역이다 (§6-4 · R9). 복구 장치가 건드릴 수 있으면 비가역이 아니다.
+        name: 'PUBLISHED 를 조회에서 배제한다',
+        ok: /EXCLUDED_STATUSES\s*=\s*\['PUBLISHED'\]/.test(code) &&
+            /status:\s*\{\s*notIn:\s*\[\.\.\.EXCLUDED_STATUSES\]/.test(code),
+        detail: 'where 절에 notIn 으로 배제',
+      },
+      {
+        name: 'PUBLISHED 배제를 조회 뒤 한 번 더 확인한다',
+        ok: /EXCLUDED_STATUSES as readonly string\[\]\)\.includes\(r\.status\)/.test(code),
+        detail: '쿼리만 믿지 않는다 — where 절이 바뀌어도 걸러진다',
+      },
+      {
+        name: 'dry-run 이 기본이다',
+        ok: /const APPLY = process\.argv\.includes\('--apply'\)/.test(code) &&
+            !/const APPLY = !process\.argv/.test(code),
+        detail: '--apply 명시가 있을 때만 바꾼다',
+      },
+      {
+        name: 'APPLY 가 아니면 write 가 없다',
+        ok: /if \(APPLY && \(verdict\.kind === 'TIMEOUT' \|\| verdict\.kind === 'SHEET_BEHIND'\)\)/.test(code),
+        detail: '적용 블록이 APPLY 로 잠겨 있다',
+      },
+      {
+        name: 'PENDING 으로 되돌리는 경로가 없다',
+        ok: !/toStatus:\s*'PENDING'/.test(code) && !/status:\s*'PENDING'/.test(code),
+        detail: '사람 승인 없이 다시 집히는 경로 없음 (§5-4 · 정책 14)',
+      },
+      {
+        name: 'timeout 판정은 resolveTimeoutRecovery 를 쓴다',
+        ok: /resolveTimeoutRecovery\(probe\)/.test(code) && !/nextStatus\s*=\s*'/.test(code),
+        detail: '분기를 다시 적지 않는다 (C-2)',
+      },
+      {
+        name: 'Sheet 셀은 buildSheetWriteCells 만 만든다',
+        ok: !/cells:\s*\{/.test(code) && /syncSheet\(/.test(code),
+        detail: '호출부가 셀을 조립하지 않는다',
+      },
+      {
+        name: 'Sheet 는 한 번만 읽는다',
+        ok: /await source\.fetchRows\(\)/.test(code) &&
+            (code.match(/createGoogleSheetSource\(/g) ?? []).length === 1,
+        detail: '전수 대조는 탭을 한 번만 읽어야 한다',
+      },
+      {
+        name: 'Post 를 만들거나 고치지 않는다',
+        ok: !/post\.(create|update|delete|upsert)/.test(code),
+        detail: '복구는 원장을 맞추는 일이지 발행이 아니다',
+      },
+      {
+        name: 'Sheet 뒤처짐 복구는 History 를 남기지 않는다',
+        ok: (() => {
+          const i = code.indexOf("verdict.kind === 'TIMEOUT'")
+          const j = code.indexOf('applied = await syncSheet(')
+          if (i === -1 || j === -1) return false
+          // History 생성은 TIMEOUT 블록 안에만 있어야 한다
+          const between = code.slice(i, j)
+          const after = code.slice(j)
+          return /microSeedCandidateHistory\.create/.test(between) && !/microSeedCandidateHistory\.create/.test(after)
+        })(),
+        detail: '상태 전이가 없는데 이력을 남기면 cap 집계가 오염된다',
+      },
+    ]
+    const bad4 = checks.filter((c) => !c.ok)
+    if (bad4.length === 0) {
+      pass('recover scanner 소스 계약', `${checks.length}종 전부`)
+    } else {
+      fail('recover scanner 소스 계약', `🔴 ${bad4.map((c) => `${c.name}(${c.detail})`).join(' / ')}`)
+    }
+  }
+
   // ── ⑬-E DB 를 바꾸는 모든 경로가 Sheet 에도 쓴다 ────────
   //    함수가 존재한다는 것과 모든 경로가 그것을 부른다는 것은 다르다.
   {
