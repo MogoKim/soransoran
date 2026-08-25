@@ -422,3 +422,202 @@ export async function readCandidates(source, { injectionsBy = {} } = {}) {
 
   return { ok: true, headerErrors: [], candidates, diagnostics, skippedBlankRows }
 }
+
+// ─────────────────────────────────────────────────────────
+// writer (§6-7-A · §12-2)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 쓰기 스코프. read 경로(createGoogleSheetSource)는 여전히 readonly 를 쓴다.
+ *
+ *    §12-2 는 read-only inventory 를 자동화 개방의 첫 칸으로 두고, "write 스코프를
+ *    미리 얻어 두면 잘못 부르면 쓰이는 경로가 생긴다" 고 못박는다. 그 원칙을
+ *    스코프를 아예 갖지 않는 방식으로 지킬 수 있었던 것은 쓸 일이 없을 때까지였다.
+ *
+ *    이제 쓴다. 그래서 원칙을 **구조**로 옮긴다:
+ *      · read 경로는 readonly 토큰만 받는다 — write 토큰을 손에 쥔 적이 없다
+ *      · write 토큰을 받는 함수는 updateCandidateRow **하나뿐**이다
+ *      · 그 함수는 append 를 제공하지 않고, 쓸 수 있는 열이 정해져 있다
+ *    셋 다 micro-seed-read.mjs 의 가드가 **소스를 읽어** 검사한다. 주석이 아니라 검사다.
+ *
+ *    ⚠️ 전제: SA 가 대상 시트의 **편집자**여야 한다. 뷰어면 토큰이 있어도 403 이다.
+ */
+export const SHEET_WRITE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
+
+/**
+ * 시스템이 갱신할 수 있는 열 (§6-7-A).
+ *
+ * 🔴 이 목록은 src/lib/micro-seed-write-guard.ts 의 SHEET_WRITABLE_COLUMNS 와 **같아야 한다**.
+ *    .mjs 는 .ts 를 import 할 수 없어 상수를 공유하지 못한다. 그래서 복제하되
+ *    micro-seed-read.mjs 가드가 두 파일을 읽어 **불일치를 실패로 만든다** —
+ *    갈라지면 "한쪽은 통과, 한쪽은 차단" 이 되는데 그게 가장 늦게 발견된다.
+ *
+ * 창업자 입력 칸(founderTitle · board · scheduledPublishAt 등)은 여기 없다.
+ * 시스템이 사람의 입력을 덮어쓰면 무엇이 사람의 판단이었는지 알 수 없게 된다.
+ */
+export const SHEET_UPDATABLE_COLUMNS = ['status', 'holdReason', 'postUrl', 'updatedBySystemAt']
+
+/**
+ * publisher 만 쓰는 열. 발행 전에는 **비어 있어야 한다**.
+ * 발행하지 않은 후보에 발행 흔적이 있으면 원장이 거짓이 된다 (§6-1).
+ */
+export const SHEET_PUBLISHER_ONLY_COLUMNS = ['postUrl', 'updatedBySystemAt']
+
+/** write 모드. bootstrap = 첫 행 완성(A:Q 17열) · columns = 허용 열만 갱신 */
+export const SHEET_WRITE_MODES = ['bootstrap', 'columns']
+
+/** 0-based 열 인덱스 → 시트 열 문자 (0 → A). 17열이라 한 글자로 충분하다. */
+export function columnLetter(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= SHEET_HEADERS.length) {
+    throw new Error(`열 인덱스가 범위를 벗어난다: ${index}`)
+  }
+  return String.fromCharCode(65 + index)
+}
+
+/**
+ * DB 후보 1건을 정본 17열 순서의 Sheet 행으로 만든다.
+ *
+ * 🔴 SHEET_HEADERS 순서를 그대로 따른다. 손으로 배열을 적지 않는다 —
+ *    열이 하나 밀리면 값이 통째로 어긋난 채 validator 를 통과할 수 있다.
+ *
+ * @param row  헤더명과 같은 키를 갖는 객체
+ */
+export function buildSheetRow(row) {
+  return SHEET_HEADERS.map((h) => {
+    const v = row[h]
+    if (v === undefined || v === null) return ''
+    return typeof v === 'string' ? v : String(v)
+  })
+}
+
+/**
+ * write 인자를 검사한다. **네트워크를 타기 전에** 판정한다 —
+ * 그래야 fixture 가 네트워크 없이 이 계약을 검증할 수 있다.
+ *
+ * @returns { ok: true, range, values } | { ok: false, reason }
+ */
+export function planSheetWrite({ mode = 'columns', rowNumber, values, cells, tab } = {}) {
+  const fail = (reason) => ({ ok: false, reason })
+
+  if (!SHEET_WRITE_MODES.includes(mode)) {
+    return fail(`알 수 없는 write mode: ${JSON.stringify(mode)}. 허용: ${SHEET_WRITE_MODES.join(' · ')}`)
+  }
+  // 🔴 1행은 헤더다. 헤더를 덮어쓰면 이후 모든 매핑이 어긋난다.
+  if (!Number.isInteger(rowNumber) || rowNumber < 2) {
+    return fail(`rowNumber 가 올바르지 않다 (${JSON.stringify(rowNumber)}). 1행은 헤더다.`)
+  }
+
+  const tabName = (tab ?? SHEET_TAB_NAME).trim() || SHEET_TAB_NAME
+  const lastCol = columnLetter(SHEET_HEADERS.length - 1)
+
+  if (mode === 'bootstrap') {
+    if (!Array.isArray(values) || values.length !== SHEET_HEADERS.length) {
+      return fail(`bootstrap 은 ${SHEET_HEADERS.length}개 값이 필요하다 (받은 값: ${values?.length}).`)
+    }
+    // 🔴 발행 흔적을 미리 남기지 않는다 (§6-1)
+    for (const col of SHEET_PUBLISHER_ONLY_COLUMNS) {
+      const v = values[SHEET_HEADERS.indexOf(col)]
+      if (v !== '' && v != null) {
+        return fail(`${col} 은 publisher 전에는 비어 있어야 한다 (받은 값: ${JSON.stringify(v)}).`)
+      }
+    }
+    const statusValue = values[SHEET_HEADERS.indexOf('status')]
+    if (statusValue === 'PUBLISHED') {
+      return fail('status 를 PUBLISHED 로 쓰지 않는다. 발행 결과는 DB 실측 후 publisher 가 기록한다.')
+    }
+    return { ok: true, updates: [{ range: `${tabName}!A${rowNumber}:${lastCol}${rowNumber}`, values: [values] }] }
+  }
+
+  // mode === 'columns'
+  if (!cells || typeof cells !== 'object' || Array.isArray(cells)) {
+    return fail('columns 모드는 { 열이름: 값 } 객체가 필요하다.')
+  }
+  const names = Object.keys(cells)
+  if (names.length === 0) return fail('쓰려는 열이 없다. 빈 write 는 의도를 알 수 없다.')
+
+  const allowed = new Set(SHEET_UPDATABLE_COLUMNS)
+  const rejected = names.filter((n) => !allowed.has(n))
+  if (rejected.length) {
+    return fail(
+      `Sheet 에 쓸 수 없는 열이다: ${rejected.join(', ')}. ` +
+        `허용: ${SHEET_UPDATABLE_COLUMNS.join(' · ')} (§6-7-A)`,
+    )
+  }
+  if (cells.status === 'PUBLISHED') {
+    return fail('status 를 PUBLISHED 로 쓰지 않는다. 발행 결과는 DB 실측 후 publisher 가 기록한다.')
+  }
+
+  const updates = names.map((n) => {
+    const col = columnLetter(SHEET_HEADERS.indexOf(n))
+    const v = cells[n]
+    return { range: `${tabName}!${col}${rowNumber}:${col}${rowNumber}`, values: [[v == null ? '' : String(v)]] }
+  })
+  return { ok: true, updates }
+}
+
+/**
+ * 시트의 한 행을 **덮어쓴다**. append 하지 않는다.
+ *
+ * 🔴 append 를 제공하지 않는 이유
+ *    같은 candidateId 가 두 행이 되면 R6(행 식별)이 깨지고, 어느 행이 정본인지
+ *    사람도 코드도 알 수 없게 된다. 행 번호를 받아 그 자리만 갱신한다.
+ *
+ * 🔴 쓰기 전에 그 행의 A열을 확인한다
+ *    행 번호는 정렬·삽입으로 흔들릴 수 있다. 기대한 candidateId 가 아니면 **쓰지 않고 멈춘다** —
+ *    남의 행을 덮어쓰는 것이 빈 행에 쓰는 것보다 훨씬 수습하기 어렵다.
+ *    빈 A열은 허용한다(부분 입력된 행을 완성하는 bootstrap 경로).
+ *
+ * 🔴 write 토큰을 받는 유일한 함수다. 늘리지 않는다 — micro-seed-read.mjs 가드가 센다.
+ *
+ * @param mode       'bootstrap'(A:Q 17열 완성) | 'columns'(허용 열만)
+ * @param rowNumber  1-based. 헤더가 1행이므로 첫 후보는 2
+ * @param values     bootstrap 모드의 17개 값 (buildSheetRow 결과)
+ * @param cells      columns 모드의 { 열이름: 값 }
+ * @param expectId   그 행에 있어야 할 candidateId
+ */
+export async function updateCandidateRow({ mode = 'columns', sheetId, tab, rowNumber, values, cells, expectId }) {
+  const id = (sheetId ?? process.env[MICRO_SEED_SHEET_ID_ENV] ?? '').trim()
+  if (!id) throw new Error(`${MICRO_SEED_SHEET_ID_ENV} 가 설정되지 않았다.`)
+
+  const tabName = (tab ?? SHEET_TAB_NAME).trim() || SHEET_TAB_NAME
+  const plan = planSheetWrite({ mode, rowNumber, values, cells, tab: tabName })
+  if (!plan.ok) throw new Error(plan.reason)
+
+  const { GoogleAuth } = await import('google-auth-library')
+  const auth = new GoogleAuth({ scopes: [SHEET_WRITE_SCOPE] })
+  const client = await auth.getClient()
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}`
+
+  // ① 대상 행 확인 — 기대한 행이 맞는지 본다
+  const idCell = `${tabName}!A${rowNumber}:A${rowNumber}`
+  const check = await client.request({
+    url: `${base}/values/${encodeURIComponent(idCell)}?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`,
+    method: 'GET',
+  })
+  const existingId = String(check?.data?.values?.[0]?.[0] ?? '').trim()
+  if (existingId && expectId && existingId !== expectId) {
+    throw new Error(
+      `행 ${rowNumber} 의 candidateId 가 다르다 (시트: "${existingId}" / 기대: "${expectId}"). 덮어쓰지 않는다.`,
+    )
+  }
+  if (!existingId && mode === 'columns') {
+    throw new Error(`행 ${rowNumber} 이 비어 있다. columns 모드는 기존 행만 갱신한다.`)
+  }
+
+  // ② 덮어쓰기. RAW 로 보낸다 — USER_ENTERED 는 시트가 값을 해석해
+  //    날짜 문자열을 날짜 셀로, 긴 숫자를 지수 표기로 바꿔 버린다.
+  const res = await client.request({
+    url: `${base}/values:batchUpdate`,
+    method: 'POST',
+    data: { valueInputOption: 'RAW', data: plan.updates.map((u) => ({ ...u, majorDimension: 'ROWS' })) },
+  })
+
+  return {
+    mode,
+    ranges: plan.updates.map((u) => u.range),
+    updatedRows: res?.data?.totalUpdatedRows ?? 0,
+    updatedColumns: res?.data?.totalUpdatedColumns ?? 0,
+    updatedCells: res?.data?.totalUpdatedCells ?? 0,
+    previousId: existingId || null,
+  }
+}

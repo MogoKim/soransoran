@@ -579,23 +579,62 @@ async function run() {
   //    "쓰지 않는다" 를 사람이 기억하는 방식으로 두지 않는다.
   // ─────────────────────────────────────────────────────────
 
-  // ── ㉗ live 경로에 DB write 메서드가 없는가 ──────────────
+  // ── ㉗ live 판정 경로가 write 를 쥐지 않는가 ──────────────
   {
     const { readFileSync } = await import('node:fs')
     const { join, dirname } = await import('node:path')
     const { fileURLToPath } = await import('node:url')
     const here = dirname(fileURLToPath(import.meta.url))
 
+    // 🔴 Sheet lib 은 이제 write 함수를 **품는다** (PR-C2b 선행 · updateCandidateRow).
+    //    그래서 "이 파일에 write 호출이 없다" 로는 더 이상 검사할 수 없다.
+    //    지켜야 할 것은 파일의 순결이 아니라 **live 판정 경로가 쓰지 않는다** 이므로
+    //    검사를 둘로 나눈다:
+    //      · SHEET_LIB     — write 호출이 updateCandidateRow 본문 **안에만** 있는가
+    //      · 나머지 live 파일 — write 호출이 아예 없는가 + write 함수를 손에 쥐지 않는가
+    const SHEET_LIB = 'lib/micro-seed-sheet.mjs'
     const LIVE_FILES = [
       'lib/micro-seed-db.mjs',
-      'lib/micro-seed-sheet.mjs',
+      SHEET_LIB,
       'micro-seed-dry-run-live.mts',
       'micro-seed-inventory.mts',
     ]
     // 주석·문자열이 아니라 실제 호출만 본다.
     const DB_WRITE = /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\s*\(/
     const RAW_SQL = /\$(executeRaw|queryRaw)/
-    const SHEET_WRITE = /values\.(update|append|batchUpdate)|method:\s*['"](PUT|POST|PATCH)/
+    const SHEET_WRITE = /values\.(update|append|batchUpdate)|values:batchUpdate|:append\b|method:\s*['"](PUT|POST|PATCH)/
+    // live 판정 스크립트가 write 함수를 import 하면 한 줄만 더 쓰면 쓰이게 된다.
+    const WRITE_FN = /\b(updateCandidateRow|planSheetWrite|SHEET_WRITE_SCOPE)\b/
+
+    /** `export (async) function name(...)` 의 본문을 중괄호 균형으로 잘라낸다.
+     *  파라미터 괄호를 먼저 닫는다 — 구조분해 파라미터의 `{` 를 본문으로 읽으면 안 된다. */
+    const fnBody = (src: string, name: string): string | null => {
+      const m = src.match(new RegExp(`export\\s+(?:async\\s+)?function\\s+${name}\\s*\\(`))
+      if (!m || m.index === undefined) return null
+      const open = src.indexOf('(', m.index)
+      if (open === -1) return null
+      let pd = 0
+      let close = -1
+      for (let j = open; j < src.length; j += 1) {
+        if (src[j] === '(') pd += 1
+        else if (src[j] === ')') {
+          pd -= 1
+          if (pd === 0) { close = j; break }
+        }
+      }
+      if (close === -1) return null
+      const start = src.indexOf('{', close)
+      if (start === -1) return null
+      let depth = 0
+      for (let j = start; j < src.length; j += 1) {
+        if (src[j] === '{') depth += 1
+        else if (src[j] === '}') {
+          depth -= 1
+          if (depth === 0) return src.slice(start, j + 1)
+        }
+      }
+      return null
+    }
 
     const offenders: string[] = []
     for (const rel of LIVE_FILES) {
@@ -614,13 +653,28 @@ async function run() {
 
       if (DB_WRITE.test(code)) offenders.push(`${rel}: DB write 메서드`)
       if (RAW_SQL.test(code)) offenders.push(`${rel}: raw SQL 실행`)
-      if (SHEET_WRITE.test(code)) offenders.push(`${rel}: Sheet write API`)
+
+      if (rel === SHEET_LIB) {
+        // write 호출은 허용하되, updateCandidateRow 밖에 있으면 안 된다.
+        const body = fnBody(code, 'updateCandidateRow')
+        if (!body) {
+          offenders.push(`${rel}: updateCandidateRow 본문을 찾지 못했다`)
+        } else {
+          const outside = code.replace(body, '')
+          if (SHEET_WRITE.test(outside)) {
+            offenders.push(`${rel}: Sheet write API 가 updateCandidateRow 밖에 있다`)
+          }
+        }
+      } else {
+        if (SHEET_WRITE.test(code)) offenders.push(`${rel}: Sheet write API`)
+        if (WRITE_FN.test(code)) offenders.push(`${rel}: write 함수/스코프를 참조한다`)
+      }
     }
 
     if (offenders.length === 0) {
-      pass('live 경로에 write 호출이 없다', `${LIVE_FILES.length}개 파일 검사`)
+      pass('live 판정 경로가 write 를 쥐지 않는다', `${LIVE_FILES.length}개 파일 검사`)
     } else {
-      fail('live 경로에 write 호출이 없다', `🔴 ${offenders.join(' / ')}`)
+      fail('live 판정 경로가 write 를 쥐지 않는다', `🔴 ${offenders.join(' / ')}`)
     }
   }
 
