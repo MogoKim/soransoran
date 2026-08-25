@@ -15,7 +15,9 @@
     "micro-seed:plan": "tsx scripts/micro-seed-plan-guarded.mts",
     "micro-seed:plan-wiring": "node scripts/micro-seed-plan.mjs",
     "micro-seed:inventory": "tsx scripts/micro-seed-inventory.mts",
-    "micro-seed:dry-run-live": "tsx scripts/micro-seed-dry-run-live.mts"
+    "micro-seed:dry-run-live": "tsx scripts/micro-seed-dry-run-live.mts",
+    "micro-seed:sync-approval-live": "tsx scripts/micro-seed-sync-approval-live.mts",
+    "micro-seed:reschedule-live": "tsx scripts/micro-seed-reschedule-live.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

@@ -352,7 +352,9 @@ function decide(violations) {
  * `YYYY-MM-DD HH:mm` (KST) 또는 ISO 문자열을 Date 로 바꾼다.
  * 형식이 아니면 null 이다 — 관대하게 넘기지 않는다.
  */
-function parseKst(value) {
+// 🔴 export 한다 — sync-approval · reschedule 이 같은 파싱을 쓰기 위해서다.
+//    Sheet 시각 해석이 두 벌이 되면 "validator 는 통과인데 동기화는 다른 시각" 이 된다 (C-2).
+export function parseKst(value) {
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
   if (typeof value !== 'string') return null
   const s = value.trim()

@@ -445,6 +445,20 @@ export async function readCandidates(source, { injectionsBy = {} } = {}) {
 export const SHEET_WRITE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
 
 /**
+ * write 는 성공 응답을 받았는데 값이 반영되지 않았다.
+ *
+ * 🔴 부르는 쪽은 이걸 "썼다" 로 처리하면 안 된다. publisher 라면 후보를 FAILED 로 떨어뜨리고
+ *    사유를 남긴다 — 조용히 넘어가면 원장과 실제가 갈라진 채로 진행된다.
+ */
+export class SheetWriteNotPersistedError extends Error {
+  constructor(message, mismatches) {
+    super(message)
+    this.name = 'SheetWriteNotPersistedError'
+    this.mismatches = mismatches
+  }
+}
+
+/**
  * 시스템이 갱신할 수 있는 열 (§6-7-A).
  *
  * 🔴 이 목록은 src/lib/micro-seed-write-guard.ts 의 SHEET_WRITABLE_COLUMNS 와 **같아야 한다**.
@@ -612,6 +626,47 @@ export async function updateCandidateRow({ mode = 'columns', sheetId, tab, rowNu
     data: { valueInputOption: 'RAW', data: plan.updates.map((u) => ({ ...u, majorDimension: 'ROWS' })) },
   })
 
+  // ③ 🔴 read-back 검증 — API 응답을 성공 근거로 쓰지 않는다
+  //
+  //    2026-08-25 실측 사고: `totalUpdatedCells: 17` 과 HTTP 200 을 받고도
+  //    시트 값이 이전 상태로 남아 있었다. 응답만 보고 "썼다" 고 보고했고,
+  //    창업자가 화면에서 옛 값을 보고서야 드러났다. 원인은 규명되지 않았다.
+  //
+  //    원인을 모르는 채로 할 수 있는 것은 **다시 읽어 확인하는 것**이다.
+  //    publisher 가 postUrl 을 남기지 못하면 "발행됐는데 원장에 없는" 상태가 되고,
+  //    그건 §6-3 이 이중 발행의 출발점으로 지목한 바로 그 시나리오다.
+  const verify = await client.request({
+    url:
+      `${base}/values:batchGet?` +
+      plan.updates.map((u) => `ranges=${encodeURIComponent(u.range)}`).join('&') +
+      `&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`,
+    method: 'GET',
+  })
+  const got = verify?.data?.valueRanges ?? []
+  const mismatches = []
+  plan.updates.forEach((u, i) => {
+    const wantRow = u.values[0] ?? []
+    const gotRow = got[i]?.values?.[0] ?? []
+    wantRow.forEach((want, j) => {
+      // 시트는 뒤쪽 빈 칸을 응답에서 생략한다. 빈 값끼리는 같은 것으로 본다.
+      const g = gotRow[j]
+      const wantStr = want === null || want === undefined ? '' : String(want)
+      const gotStr = g === null || g === undefined ? '' : String(g)
+      if (wantStr !== gotStr) {
+        mismatches.push({ range: u.range, index: j, want: wantStr, got: gotStr })
+      }
+    })
+  })
+  if (mismatches.length) {
+    const detail = mismatches
+      .map((m) => `${m.range}[${m.index}] want="${m.want}" got="${m.got}"`)
+      .join(' / ')
+    throw new SheetWriteNotPersistedError(
+      `Sheet write 가 반영되지 않았다 (API 는 성공을 보고했다): ${detail}`,
+      mismatches,
+    )
+  }
+
   return {
     mode,
     ranges: plan.updates.map((u) => u.range),
@@ -619,5 +674,7 @@ export async function updateCandidateRow({ mode = 'columns', sheetId, tab, rowNu
     updatedColumns: res?.data?.totalUpdatedColumns ?? 0,
     updatedCells: res?.data?.totalUpdatedCells ?? 0,
     previousId: existingId || null,
+    readBackVerified: true,
+    readBackCells: plan.updates.reduce((n, u) => n + (u.values[0]?.length ?? 0), 0),
   }
 }
