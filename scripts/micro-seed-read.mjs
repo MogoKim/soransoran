@@ -26,6 +26,8 @@ import {
   readCandidates,
   createFixtureSource,
   createGoogleSheetSource,
+  MICRO_SEED_SHEET_ID_ENV,
+  SHEET_READONLY_SCOPE,
 } from './lib/micro-seed-sheet.mjs'
 import { validateBatch } from './micro-seed-validate.mjs'
 
@@ -447,13 +449,27 @@ async function run() {
     ok(fx.name, 'pipe', `${decisions.join(', ')} [${rules.join(', ') || '위반 없음'}]`)
   }
 
-  // ── 4. auth adapter 는 PR-B 에서 막혀 있어야 한다 ──
+  // ── 4. live source 는 sheetId 없이 만들어지지 않는다 ──
+  //    어떤 시트를 읽는지 모르는 채로 진행하면 엉뚱한 시트를 읽고도 알 수 없다.
+  //    🔴 이 fixture 는 네트워크를 타지 않는다 — sheetId 검증이 auth·fetch 보다 먼저다.
   try {
-    createGoogleSheetSource()
-    bad('Google Sheet source 는 PR-B 에서 막혀 있다', 'guard', '호출이 성공했다 — PR-B 는 live read 를 하지 않는다')
+    await createGoogleSheetSource({ sheetId: '   ' })
+    bad('live source 는 sheetId 없이 만들지 않는다', 'guard', '호출이 성공했다')
   } catch (e) {
-    if (String(e.message).includes('PR-B2')) ok('Google Sheet source 는 PR-B 에서 막혀 있다', 'guard', 'PR-B2 TODO')
-    else bad('Google Sheet source 는 PR-B 에서 막혀 있다', 'guard', `예상치 못한 오류: ${e.message}`)
+    if (String(e.message).includes(MICRO_SEED_SHEET_ID_ENV)) {
+      ok('live source 는 sheetId 없이 만들지 않는다', 'guard', `${MICRO_SEED_SHEET_ID_ENV} 요구`)
+    } else {
+      bad('live source 는 sheetId 없이 만들지 않는다', 'guard', `예상치 못한 오류: ${e.message}`)
+    }
+  }
+
+  // ── 5. 읽기 전용 스코프만 쓴다 (§12-2) ──
+  //    write 스코프를 미리 얻어 두면 "잘못 부르면 쓰이는" 경로가 생긴다.
+  //    쓸 수 없는 토큰이면 실수해도 쓰이지 않는다.
+  if (SHEET_READONLY_SCOPE.endsWith('/spreadsheets.readonly')) {
+    ok('Sheet 스코프는 readonly 뿐이다', 'guard', SHEET_READONLY_SCOPE)
+  } else {
+    bad('Sheet 스코프는 readonly 뿐이다', 'guard', `🔴 write 가능 스코프다: ${SHEET_READONLY_SCOPE}`)
   }
 
   return { report, failures }
@@ -471,7 +487,7 @@ if (isMain) {
   console.log('\nMicro Seed Sheet reader — fixture 자기검증')
   console.log(`  탭: ${SHEET_TAB_NAME} · 컬럼 ${SHEET_HEADERS.length}개`)
   console.log(`  주입 필드(시트에 없음): ${INJECTED_FIELDS.join(' · ')}`)
-  console.log('  Google Sheet API · DB · 네트워크 접근 없음\n')
+  console.log('  이 fixture 는 Google Sheet API · DB · 네트워크를 타지 않는다\n')
 
   const label = { header: '[헤더]  ', map: '[매핑]  ', pipe: '[연결]  ', guard: '[가드]  ' }
   for (const x of report) {

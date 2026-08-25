@@ -13,7 +13,8 @@
     "micro-seed:validate": "node scripts/micro-seed-validate.mjs",
     "micro-seed:read": "node scripts/micro-seed-read.mjs",
     "micro-seed:plan": "tsx scripts/micro-seed-plan-guarded.mts",
-    "micro-seed:plan-wiring": "node scripts/micro-seed-plan.mjs"
+    "micro-seed:plan-wiring": "node scripts/micro-seed-plan.mjs",
+    "micro-seed:inventory": "tsx scripts/micro-seed-inventory.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
@@ -35,6 +36,7 @@
     "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.35",
+    "google-auth-library": "^11.0.2",
     "pg": "^8.23.0",
     "playwright-core": "^1.62.1",
     "postcss": "^8.4.49",

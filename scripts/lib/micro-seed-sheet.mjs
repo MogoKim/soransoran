@@ -8,10 +8,13 @@
  *
  *   "Google Sheet 의 한 행을 validateCandidate() 가 받는 객체로 어떻게 바꾸는가?"
  *
- * 🔴 이 파일은 Google Sheet 에 접속하지 않는다
- *    네트워크 없음 · DB 없음 · 파일 쓰기 없음 · 인증 없음.
+ * 🔴 변환 로직은 Sheet 에 접속하지 않는다
+ *    mapRowToCandidate · validateHeaders · readCandidates 는 네트워크 · DB · 파일 쓰기가 없다.
  *    입력은 이미 읽혀 있는 2차원 배열이고 출력은 후보 객체다.
- *    실제 fetch 는 PR-B2 의 auth adapter 가 맡는다 (createGoogleSheetSource).
+ *
+ *    네트워크를 타는 곳은 createGoogleSheetSource 하나뿐이고, 그것도 **읽기 전용**이다.
+ *    fixture 경로(createFixtureSource)는 auth 패키지를 로드조차 하지 않는다 —
+ *    동적 import 로 분리해 두었다.
  *
  * 🔴 자가복구하지 않는다
  *    'pending' → 'PENDING', 'FREE' → 'free' 같은 교정을 여기서 하면
@@ -274,27 +277,100 @@ export function createFixtureSource({ headers = SHEET_HEADERS, rows = [] } = {})
   }
 }
 
+/** Sheet ID 를 담는 환경변수. 이 이름 외에는 읽지 않는다 */
+export const MICRO_SEED_SHEET_ID_ENV = 'SORAN_MICRO_SEED_SHEET_ID'
+
 /**
- * Google Sheet source — PR-B2 에서 구현한다.
+ * 🔴 읽기 전용 스코프. 이것 하나만 쓴다.
  *
- * TODO(PR-B2): Workload Identity Federation 기반 인증.
- *   조직 정책 iam.disableServiceAccountKeyCreation 으로 SA JSON key 를 만들 수 없다.
- *   키 파일이 아니라 GitHub Actions OIDC → WIF → micro-seed-reader SA 임퍼소네이션으로 간다.
- *
- *     - GoogleAuth({ scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] })
- *       ADC 를 자동 인식하므로 키 파싱 코드가 필요 없다
- *     - 로컬:  gcloud auth application-default login
- *     - CI  :  google-github-actions/auth@v2 (permissions: id-token: write 필요)
- *
- *   🔴 우나어 GOOGLE_SERVICE_ACCOUNT_JSON 을 가져다 쓰지 않는다.
- *      그 키는 auth/indexing(write) 을 포함한 광역 권한이고 소란소란은 독립 권한으로 간다.
- *   🔴 PR-B 범위에서 Sheet write 는 없다. 읽기 전용 스코프만 쓴다.
+ *    §12-2 자동화 개방 순서가 read-only inventory 를 첫 칸으로 둔다.
+ *    write 스코프를 미리 얻어 두면 "잘못 부르면 쓰이는" 경로가 생긴다 —
+ *    쓸 수 없는 토큰이면 실수해도 쓰이지 않는다.
+ *    상태 역기록(postUrl · updatedBySystemAt)은 PR-C2b 에서 스코프와 함께 올린다.
  */
-export function createGoogleSheetSource() {
-  throw new Error(
-    'createGoogleSheetSource 는 PR-B2 에서 구현한다. ' +
-      'PR-B 는 fixture 전용이며 Google Sheet 에 접속하지 않는다.',
-  )
+export const SHEET_READONLY_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly'
+
+/**
+ * Google Sheet source — 실제 read.
+ *
+ * 🔴 인증은 ADC(Application Default Credentials) + 서비스 계정 임퍼소네이션이다.
+ *    키 파일을 만들지 않는다 — 조직 정책 iam.disableServiceAccountKeyCreation 이
+ *    SA JSON key 를 막고 있고, ADC 는 애초에 키 파일을 쓰지 않는다.
+ *
+ *      로컬:
+ *        gcloud auth application-default login \
+ *          --impersonate-service-account=micro-seed-reader@project-8687edda-dc1b-4c7d-95a.iam.gserviceaccount.com
+ *
+ *      CI  :  M1 은 workflow 를 붙이지 않는다 (§6-9-F · §12-2).
+ *             자동화를 열 때 WIF(google-github-actions/auth@v2)를 붙인다 — M2 이후다.
+ *
+ * 🔴 왜 사용자 계정 ADC 가 아니라 임퍼소네이션인가
+ *    `--scopes=...spreadsheets.readonly` 로 사용자 동의를 받으려 하면 Google 이
+ *    **"차단된 앱"** 으로 막는다(OAuth 앱 검증 정책). 우회할 수단이 없다.
+ *
+ *    임퍼소네이션은 그 벽을 피해 간다 — 사용자에게는 Sheets 스코프를 요청하지 않고
+ *    cloud-platform 만으로 SA 토큰을 발급받으며, **Sheets 스코프는 그 SA 토큰이 갖는다.**
+ *
+ *    아래 scopes 가 실제로 적용되는 것도 임퍼소네이션이라서다.
+ *    google-auth-library 는 `this.scopes || json.scopes || defaultScopes` 순으로
+ *    targetScopes 를 정한다(googleauth.js). 사용자 계정 ADC 는 코드 스코프를 무시하지만
+ *    impersonated ADC 는 코드 스코프를 쓴다.
+ *
+ *    전제: 로그인 계정에 그 SA 에 대한 roles/iam.serviceAccountTokenCreator 가 있어야 한다.
+ *    🔴 프로젝트 IAM 이 아니라 **그 SA 의 [권한] 탭**에 부여한다 — 프로젝트에 걸면
+ *       그 프로젝트의 모든 SA 를 가장할 수 있게 된다.
+ *
+ * 🔴 우나어 GOOGLE_SERVICE_ACCOUNT_JSON 을 가져다 쓰지 않는다.
+ *    그 키는 auth/indexing(write)을 포함한 광역 권한이고 소란소란은 독립 권한으로 간다.
+ *
+ * 🔴 googleapis 를 쓰지 않는다.
+ *    필요한 API 는 spreadsheets.values.get 하나뿐이다. 대형 패키지를 들이는 대신
+ *    google-auth-library 로 토큰만 받아 REST 를 부른다 — 공용 파일(package-lock)의
+ *    접촉면을 줄이는 편이 멀티 세션 환경에서 안전하다.
+ *
+ * @param sheetId  생략하면 SORAN_MICRO_SEED_SHEET_ID 를 읽는다
+ * @param tab      생략하면 micro_seed_candidates
+ * @param range    생략하면 탭 전체 (A:Q 는 강제하지 않는다 — 열 개수 검증은 validateHeaders 가 한다)
+ */
+export async function createGoogleSheetSource({ sheetId, tab, range } = {}) {
+  const id = (sheetId ?? process.env[MICRO_SEED_SHEET_ID_ENV] ?? '').trim()
+  if (!id) {
+    throw new Error(
+      `${MICRO_SEED_SHEET_ID_ENV} 가 설정되지 않았다. 어떤 시트를 읽을지 모르는 채로 진행하지 않는다.`,
+    )
+  }
+
+  const tabName = (tab ?? SHEET_TAB_NAME).trim() || SHEET_TAB_NAME
+
+  // google-auth-library 는 동적 import 로 가져온다. fixture 경로(createFixtureSource)는
+  // 이 모듈을 import 해도 auth 패키지를 로드하지 않는다 — 테스트가 네트워크 라이브러리에
+  // 의존하지 않게 하려는 것이다.
+  const { GoogleAuth } = await import('google-auth-library')
+  const auth = new GoogleAuth({ scopes: [SHEET_READONLY_SCOPE] })
+
+  return {
+    describe: () => `google sheets (read-only) · ${tabName}`,
+    async fetchRows() {
+      const client = await auth.getClient()
+      const target = range ? `${tabName}!${range}` : tabName
+      const url =
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}` +
+        `/values/${encodeURIComponent(target)}` +
+        // 서식이 적용된 셀도 원본 문자열로 받는다. 로케일에 따라 날짜가 달리 보이는 것을 막는다.
+        `?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`
+
+      const res = await client.request({ url, method: 'GET' })
+      const values = res?.data?.values ?? []
+
+      // 🔴 빈 시트를 조용히 통과시키지 않는다. 헤더가 없으면 무엇을 읽었는지 모른다.
+      if (!values.length) {
+        throw new Error(`시트가 비어 있다 (${tabName}). 헤더 행이 없으면 열 매핑을 확인할 수 없다.`)
+      }
+
+      const [headers, ...rows] = values
+      return { headers, rows }
+    },
+  }
 }
 
 // ─────────────────────────────────────────────────────────
