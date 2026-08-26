@@ -605,7 +605,9 @@ model VoiceSource {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  judgments VoiceJudgment[]
+  judgments      VoiceJudgment[]
+  derived        VoiceDerived[]
+  commentSignals VoiceCommentSignal[]
 
   /// 🔴 같은 원천을 두 번 등록하지 않는다. FK 가 없으므로 이것이 유일한 방어다.
   @@unique([origin, sourceRef])
@@ -627,11 +629,116 @@ model VoiceJudgment {
   decidedAt DateTime @default(now())
 
   /// 판단 시점의 VoiceDerived id.
-  /// 🔴 VE-M2 전까지 VoiceDerived 가 없으므로 FK 없이 String? 으로만 둔다.
+  /// 🔴 VoiceDerived 가 생긴 뒤에도 FK 를 걸지 않는다 —
+  ///    판단은 그때 본 Derived 를 가리켜야 하는데, Derived 는 규칙이 바뀌면
+  ///    새 행으로 다시 계산된다. FK 로 묶으면 과거 판단이 흔들린다.
   ///    "사람이 무엇을 보고 그렇게 정했는가" 가 없으면 정답지가 반쪽이다 —
   ///    Q-1 규칙은 이미 두 번 바뀌었다(PR #72 → #75).
   derivedIdAtDecision String?
 
   @@index([voiceSourceId, decidedAt])
   @@index([decision, decidedAt])
+}
+
+/// 규칙으로 뽑은 문체 신호 (VE-M2).
+/// 🔴 이 테이블에 원문 · 댓글 · 닉네임이 없다. 신호만 있다.
+///    정본: docs/operations/2026-08-26-voice-derived-m2-design.md
+model VoiceDerived {
+  id            String      @id @default(uuid())
+  voiceSourceId String
+  voiceSource   VoiceSource @relation(fields: [voiceSourceId], references: [id], onDelete: Cascade)
+
+  /// 어느 규칙으로 매겼는가. 🔴 Q-1 규칙은 이미 두 번 바뀌었다(PR #72 → #75).
+  /// 버전이 없으면 "이 값이 어느 규칙의 산출물인가" 를 나중에 알 수 없다.
+  ruleVersion String
+  /// 'rule' | 'llm' — 🔴 규칙 산출물과 LLM 산출물을 섞지 않는다.
+  /// VE-M2 는 전부 'rule' 이고 LLM 비용이 0이다.
+  method String @default("rule")
+
+  /// 🔴 model · promptVersion 은 nullable 이 아니라 빈 문자열 기본값이다.
+  ///    Postgres 에서 NULL 은 서로 같지 않아, 이 둘이 NULL 이면
+  ///    아래 @@unique 가 중복을 전혀 막지 못한다 — 같은 행이 무한히 쌓인다.
+  ///    VE-M2(rule)에서는 둘 다 '' 이고, VE-M3(llm)에서 실제 값이 들어간다.
+  model         String @default("")
+  promptVersion String @default("")
+
+  // ── VE-M2 신호 6종 — 전부 원문에서 규칙으로 센다 ──
+  //    🔴 Json 인 이유: 구조가 아직 열려 있다. 스칼라로 굳히면
+  //       신호를 다듬을 때마다 migration 이 필요해진다.
+
+  /// 오타 · 자판 인접 오류 · 반복 입력
+  typingArtifacts Json?
+  /// `..` `~~` `ㅠㅠ` `^^` · 물음표 / 느낌표 개수
+  punctuationHabit Json?
+  /// 어절 길이 분포 · 띄어쓰기 편차 · 구어체 붙여쓰기
+  spacingVariance Json?
+  /// 문단 길이 · 줄바꿈 간격 · 문장 중간 개행
+  mobileInputTrace Json?
+  /// 🔴 단순 사전이 아니라 다섯 갈래다 (m2-design §3-5):
+  ///    sourceSpecific         원출처 호칭 — 82님들 · 우갱님들 · 레테님들 · 은오님들 → 치환 대상
+  ///    soransoranRegister     소란소란 내부어 — 소란님들 · 소란소란님들 → 치환 결과
+  ///    targetDescriptorRisk   타겟 설명어 — 우리 또래분들 · 50대 여성분들 · 중년 여성분들 ·
+  ///                           같은 세대 분들 → 🔴 **생성 금지 신호**. 좋은 치환어가 아니다
+  ///    genericCommunityPhrase 일반 커뮤니티 표현 → 학습하고 살린다
+  ///    preserveStructure      질문 · 공동체 호출 구조를 살릴지 여부
+  communityRegister Json?
+  /// 🔴 위 요소가 나타나는 **빈도**. 이 값이 없으면 나중에 남발한다.
+  ///    나머지는 "무엇이 있는가" 이고 이 축만이 "얼마나 있어야 자연스러운가" 를 답한다.
+  artifactFrequency Json?
+
+  // 🔴 naturalnessScore · voiceRetention · originalityDelta · overSanitizedRisk ·
+  //    overMimicryRisk · expressionRisk · sequenceSimilarityRisk 는 **여기 없다**.
+  //    전부 "소란소란이 쓴 글 ↔ 원문" 의 비교 축이라 생성물이 있어야 계산된다.
+  //    빈 컬럼으로 미리 만들어 두지도 않는다 — 있으면 채우고 싶어지고,
+  //    채우면 의미 없는 숫자가 정답지에 남는다. VE-M3 에서 만든다.
+
+  derivedAt DateTime @default(now())
+
+  /// 🔴 같은 원천 · 같은 규칙 · 같은 방법 · 같은 모델 · 같은 프롬프트면 한 행이다.
+  ///    model · promptVersion 이 빠지면 Haiku 산출물과 Sonnet 산출물이 같은 키를 다투고,
+  ///    프롬프트를 고쳐도 캐시가 깨지지 않는다.
+  @@unique([voiceSourceId, ruleVersion, method, model, promptVersion])
+  @@index([voiceSourceId, derivedAt])
+  @@index([ruleVersion, method])
+}
+
+/// 댓글 반응 신호 (VE-M2).
+/// 🔴 이름이 `Source` 가 아니라 `Signal` 인 이유는 **댓글 본문을 저장하지 않기 때문**이다.
+///    본문이 필요한 순간마다 우나어 DB 를 다시 읽는다(UNAO_READONLY_DATABASE_URL).
+model VoiceCommentSignal {
+  id            String      @id @default(uuid())
+  voiceSourceId String
+  voiceSource   VoiceSource @relation(fields: [voiceSourceId], references: [id], onDelete: Cascade)
+
+  /// topComments 배열에서의 순서 (= commentIndex).
+  /// 🔴 댓글에 날짜가 없어 이것이 유일한 순서 정보다.
+  ordinal Int
+
+  /// 🔴 닉네임 원문이 아니다. 동일인 추적만 가능한 단방향 해시 —
+  ///    VoiceSource.authorHash 와 같은 방식이다.
+  authorHash String?
+
+  /// 댓글 본문이 아니라 "그때 그 댓글이었다" 의 증거
+  contentHash   String?
+  contentLength Int
+
+  likeCount  Int @default(0)
+  replyCount Int @default(0)
+
+  /// 🔴 199자 이상 댓글이 약 4.0% 다. 모르고 학습하면
+  ///    "우리 또래는 200자에서 말을 끊는다" 는 거짓 패턴을 배운다.
+  truncated Boolean @default(false)
+
+  /// 규칙 기반 라벨 — 공감 · 질문 · 반박 · 경험공유 · 정보제공
+  /// 🔴 String 인 이유: 분류 체계가 아직 굳지 않았다. 굳으면 enum 으로 올린다.
+  reactionType String?
+  /// 원문의 어느 지점에 반응했는가.
+  /// ⚠️ 댓글에 인용 정보가 없어 **대부분 null 이 되는 것이 정상**이다.
+  anchorHint Json?
+
+  capturedAt DateTime
+
+  @@unique([voiceSourceId, ordinal])
+  @@index([voiceSourceId, likeCount])
+  @@index([reactionType])
 }
