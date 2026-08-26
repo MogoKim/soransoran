@@ -51,6 +51,19 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: FONT_SIZE_SCRIPT }} />
         {/* Pretendard — scaffold 단계에서는 CDN.
             self-host 전환 절차는 public/fonts/pretendard/README.md 참조. */}
+        {/*
+          🔴 stylesheet 는 렌더를 막는다. 그 앞에 연결을 미리 열어 둔다.
+             실측(2026-08-26): 같은 CSS 를 5회 받았는데 41ms ~ 383ms 로 9배 갈렸고,
+             느린 회차의 비용은 거의 전부 connect(139ms) + tls(275ms) 였다.
+             파일이 큰 게 아니라 새 도메인에 붙는 값이다.
+             preconnect 가 그 왕복을 HTML 파싱과 겹쳐 숨긴다.
+
+             crossOrigin 을 붙인다 — 폰트는 CORS 로 받으므로,
+             빼면 연결이 재사용되지 않고 두 번 열린다.
+             dns-prefetch 는 preconnect 를 지원하지 않는 구형 브라우저용 폴백이다.
+        */}
+        <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="" />
+        <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
         {/* eslint-disable-next-line @next/next/no-page-custom-font */}
         <link
           rel="stylesheet"
