@@ -21,6 +21,8 @@
     "micro-seed:approve-live": "tsx scripts/micro-seed-approve-live.mts",
     "micro-seed:approve-check": "tsx scripts/micro-seed-approve-check.mts",
     "voice:unao-readonly-check": "tsx scripts/voice-unao-readonly-check.mts",
+    "voice:unao-import": "tsx scripts/voice-unao-import-live.mts",
+    "voice:unao-import-check": "tsx scripts/voice-unao-import-check.mts",
     "micro-seed:reschedule-live": "tsx scripts/micro-seed-reschedule-live.mts",
     "micro-seed:publish-live": "tsx scripts/micro-seed-publish-live.mts",
     "micro-seed:recover-live": "tsx scripts/micro-seed-recover-live.mts",

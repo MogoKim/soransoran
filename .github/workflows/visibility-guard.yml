@@ -131,3 +131,17 @@ jobs:
       # 네트워크 · DB 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
       - name: Voice 우나어 커넥터 (read-only · 원문 미복제)
         run: npm run voice:unao-readonly-check
+
+      # VoiceSource 적재 경로의 계약.
+      #
+      # 🔴 두 회귀가 조용하다:
+      #    · 원문이 소란소란 DB 로 넘어오는 것 — 33,031건 본문과 154,872개 댓글이
+      #      한 줄 추가로 따라온다. 코드는 돌고 테스트는 통과한다.
+      #    · usedAt 을 approved 로 쓰는 것 — 6,494건이 "사람이 승인했다" 는
+      #      거짓 정답지가 되고, Voice Engine 은 그것을 학습한다.
+      #
+      #    그리고 배치로 번지면 되돌리기 어렵다. 이번 단계는 --limit=1 뿐이다.
+      #
+      # 네트워크 · DB 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Voice 적재 경로 (원문 미저장 · 1건 게이트)
+        run: npm run voice:unao-import-check
