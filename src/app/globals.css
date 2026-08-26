@@ -28,14 +28,14 @@
     --cta-text: #ffffff;
 
     /* ── 표면 ── */
-    --surface-page: #f9fafb; /* 카드(흰색)와 갈리는 최소한의 바탕 */
+    --surface-page: #fff8f6; /* 웜 아이보리 — 정본 §3-2. 순백보다 눈이 편하다 */
     --surface-card: #ffffff;
     --surface-soft: #ffe8e3;
 
     /* ── 보더 ──
        subtle 은 장식용(대비 요건 없음), interactive 는 입력·선택 상태(3:1). */
-    --border-subtle: #e5e7eb;  /* 구분선은 중성이다. 브랜드색은 CTA 에만 쓴다 */
-    --border-interactive: #8e949e; /* 비텍스트 3.05:1 */
+    --border-subtle: #f2c9c1;  /* 장식 구분선 — brand-muted 와 같은 값. 대비 요건 없음 */
+    --border-interactive: #b87f73; /* 웜 배경 위 비텍스트 3.17:1 */
 
     /* ── 텍스트 ── */
     --text-primary: #2f2624;   /* 배경 위 14.06:1 · 제목 */
