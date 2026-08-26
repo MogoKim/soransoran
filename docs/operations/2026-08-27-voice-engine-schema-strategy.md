@@ -3,8 +3,10 @@
 > **이 문서의 역할**: `VoiceSource` / `VoiceDerived` / `VoiceJudgment` / `VoiceCommentSignal`
 > 4구조를 **구현 전 문서 정본**으로 확정한다.
 >
-> 🔴 **`schema.prisma` 는 아직 수정하지 않는다.** migration 0 · runtime 0 · LLM 0.
-> 아래 Prisma 블록은 **설계 초안**이며 실제 파일에 들어가 있지 않다.
+> 🔴 **2026-08-27 갱신 — VE-M1 반영됨.**
+> `VoiceSource` · `VoiceJudgment` 는 **`schema.prisma` 와 migration `0006` 에 들어갔다**(§6-1).
+> `VoiceDerived` · `VoiceCommentSignal` 은 여전히 **설계 초안**이며 실제 파일에 없다.
+> 어느 쪽이든 **DB 에는 적용되지 않았다** — runtime 0 · LLM 0.
 >
 > 작성 2026-08-27 · 근거 우나어 심층 데이터 감사 (read-only 실측)
 > 상위 문서 [VE-0 계약](./2026-08-27-voice-engine-v0-contract.md) ·
@@ -48,7 +50,9 @@ capturedAt     수집 시점
 
 ## 2. Prisma 설계 초안
 
-> 🔴 **아래는 문서일 뿐이다.** `schema.prisma` 에 넣지 않았고 migration 도 만들지 않았다.
+> **§2-1 `VoiceSource` · §2-3 `VoiceJudgment`** → ✅ VE-M1 로 `schema.prisma` 에 반영됨
+> (`decision` 은 enum 으로 확정 — §6-1 참조). **DB 적용은 아직이다.**
+> **§2-2 `VoiceDerived` · §2-4 `VoiceCommentSignal`** → 🔴 여전히 문서일 뿐이다.
 
 ### 2-1. `VoiceSource` — 원천 참조
 
