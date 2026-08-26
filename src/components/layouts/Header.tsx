@@ -14,7 +14,7 @@ export default function Header() {
   return (
     <header className="sticky top-0 z-50 flex h-16 items-center justify-between gap-2 border-b border-subtle bg-surface-card px-4">
       <Link href="/" className="flex items-center no-underline" aria-label="소란소란 홈">
-        <Logo className="text-2xl" />
+        <Logo tone="brand" className="text-2xl" />
       </Link>
       <div className="flex items-center gap-1">
         <FontSizeToggle variant="header" />
