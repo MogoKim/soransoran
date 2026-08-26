@@ -9,11 +9,28 @@ import { auth } from '@/lib/auth'
 import { getBoardBySlug, type BoardMeta } from '@/lib/board-registry'
 import { getRecentDiscoveryPosts } from '@/lib/queries/posts'
 import { getAllMagazineArticles } from '@/lib/magazine'
+import type { MagazineArticle } from '@/content/magazine/types'
 
 export const dynamic = 'force-dynamic'
 
 /** 홈에 싣는 매거진 글 수. 더 실으면 가입 카드가 화면 밖으로 밀린다. */
 const HOME_MAGAZINE_COUNT = 3
+
+/**
+ * 홈에 실을 글을 고른다 — 그림 있는 글이 먼저, 모자라면 최신 순으로 채운다.
+ *
+ * 🔴 목록(/magazine)의 최신순은 건드리지 않는다. 여기서만 앞뒤를 바꾼다.
+ *    홈은 지나가는 사람을 붙드는 자리라 그림이 한 장도 없으면 지나쳐 버린다.
+ *    목록은 찾아 들어온 사람이 보는 곳이라 최신순이 맞다.
+ *
+ * 두 갈래로 나눠 이어 붙인다. 한 배열을 정렬로 뒤집으면 그림 없는 글끼리의
+ * 최신 순서가 정렬 안정성에 기대게 된다.
+ */
+function pickForHome(articles: MagazineArticle[], count: number): MagazineArticle[] {
+  const withImage = articles.filter((a) => a.heroImage)
+  const withoutImage = articles.filter((a) => !a.heroImage)
+  return [...withImage, ...withoutImage].slice(0, count)
+}
 
 /**
  * 섹션 머리 — 아이콘 배지 · 제목 · 더보기.
@@ -69,7 +86,7 @@ export default async function HomePage() {
   const posts = await getRecentDiscoveryPosts(6)
   // 카드는 비로그인에게만 나간다. JWT 전략이라 auth() 는 쿠키 디코드뿐이다.
   const session = await auth()
-  const articles = getAllMagazineArticles().slice(0, HOME_MAGAZINE_COUNT)
+  const articles = pickForHome(getAllMagazineArticles(), HOME_MAGAZINE_COUNT)
   const best = getBoardBySlug('best')!
   const magazine = getBoardBySlug('magazine')!
 

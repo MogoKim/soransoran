@@ -1,6 +1,6 @@
 import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
-import MagazineCard from '@/components/features/MagazineCard'
+import MagazineList from '@/components/features/MagazineList'
 import ListHeader from '@/components/ui/list-header'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getAllMagazineArticles } from '@/lib/magazine'
@@ -34,13 +34,7 @@ export default function MagazinePage() {
         {articles.length === 0 ? (
           <EmptyState title={board.emptyTitle} body={board.emptyBody} />
         ) : (
-          <ul className="flex list-none flex-col gap-3 p-0">
-            {articles.map((article) => (
-              <li key={article.slug}>
-                <MagazineCard article={article} />
-              </li>
-            ))}
-          </ul>
+          <MagazineList articles={articles} />
         )}
       </main>
     </PageShell>
