@@ -315,9 +315,13 @@ cacheKey = sha256(contentHash + ruleVersion + method + model + promptVersion)
 ## 6. 단계 경계
 
 ```
-VE-M2  규칙 신호 8종            LLM 0 · 비용 0     ← 이번 설계
+VE-M2  규칙 신호 8종            LLM 0 · 비용 0     ✅ 2026-08-27 전량 완료
 VE-M3  품질·위험 7종 + 생성물    LLM 도입 · 첫 비용
 ```
+
+> ✅ **VE-M2 완료.** `VoiceDerived` 9,674 · `VoiceCommentSignal` 59,252 · LLM 비용 0원.
+> 최종 수치 · 단계별 기록 · 원문 유출 전수 대조 결과는
+> [VE-M2 완료 기록](./2026-08-27-voice-m2-completion.md)에 있다.
 
 | | VE-M2 | VE-M3 |
 |---|---|---|
