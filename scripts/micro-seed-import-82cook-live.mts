@@ -60,11 +60,23 @@ const BOARD_TYPE = 'FREE' as const
  *
  *    창업자는 Sheet F열에서 언제든 고칠 수 있고, micro-seed:reschedule-live 로도 밀 수 있다.
  *
- * 🔴 25분인 이유: 승인(Sheet PENDING) → sync-approval → publish dry-run 까지가
- *    보통 몇 분이고, publisher 유예창이 도래 후 30분이다. 25분이면 승인을 마치고
- *    창이 열린 뒤 여유 있게 발행할 수 있다.
+ * 🔴 8분인 이유 — 세 번째 발행 실측(2026-08-26)이 근거다
+ *
+ *    처음엔 25분으로 잡았다. "승인 → sync-approval → publish dry-run 까지 보통 몇 분" 이라는
+ *    가정이었는데, **실측은 80초였다.** 그 결과 발행까지 28분을 기다려야 했고,
+ *    reschedule --in=5 로 당겨서야 실제 대기가 4분이 됐다(총 소요 10분 53초).
+ *
+ *    기본값이 실제 소요보다 크면 매번 reschedule 을 한 번 더 돌리게 된다 —
+ *    그 명령을 없애려고 만든 값이 다시 그 명령을 부르는 셈이다.
+ *
+ *    8분은 승인 80초에 여유를 6배 이상 준 값이다. 유예창이 도래 후 30분이라
+ *    조금 늦어져도 창을 놓치지 않는다.
+ *
+ * 🔴 창업자가 직접 천천히 승인할 때는 --in=30 을 쓴다.
+ *    이 값은 **Claude 대행 운영 기준**이다. 사람이 Sheet 를 열어 읽고 판단하는 흐름이면
+ *    8분은 짧다 — 그때는 명시적으로 늘린다.
  */
-const SCHEDULE_DEFAULT_MINUTES = 25
+const SCHEDULE_DEFAULT_MINUTES = 8
 const NO_SCHEDULE = process.argv.includes('--no-schedule')
 const SCHEDULE_MINUTES = (() => {
   const hit = process.argv.find((a) => a.startsWith('--in='))

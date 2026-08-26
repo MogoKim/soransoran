@@ -358,9 +358,10 @@ const bad = (name: string, kind: string, detail: string) => {
 {
   const NOW = new Date('2026-08-26T00:00:00Z') // = 09:00 KST
   const cases = [
-    { name: '기본 25분 → 5분 올림', min: 25, expectKst: '2026-08-26 09:25' },
-    { name: '+23분 → 09:25 로 올림', min: 23, expectKst: '2026-08-26 09:25' },
-    { name: '+26분 → 09:30 로 올림', min: 26, expectKst: '2026-08-26 09:30' },
+    { name: '기본 8분 → 09:10 으로 올림', min: 8, expectKst: '2026-08-26 09:10' },
+    { name: '+6분 → 09:10 으로 올림', min: 6, expectKst: '2026-08-26 09:10' },
+    { name: '+11분 → 09:15 로 올림', min: 11, expectKst: '2026-08-26 09:15' },
+    { name: '--in=30 반영 (창업자 직접 승인용)', min: 30, expectKst: '2026-08-26 09:30' },
     { name: '--in=40 반영', min: 40, expectKst: '2026-08-26 09:40' },
     { name: '--in=90 반영', min: 90, expectKst: '2026-08-26 10:30' },
   ]
@@ -376,7 +377,7 @@ const bad = (name: string, kind: string, detail: string) => {
 
   // 🔴 DB 는 UTC, Sheet 는 KST 다. 같은 순간을 가리켜야 한다 —
   //    한쪽만 어긋나면 승인과 발행이 다른 시각을 본다.
-  const at = roundUpToFiveMinutes(new Date(NOW.getTime() + 25 * 60_000))
+  const at = roundUpToFiveMinutes(new Date(NOW.getTime() + 8 * 60_000))
   const kst = kstString(at)
   const utc = utcWallClock(at)
   const sameInstant = new Date(`${utc.replace(' ', 'T')}Z`).getTime() === at.getTime()
@@ -396,9 +397,11 @@ const bad = (name: string, kind: string, detail: string) => {
   const code = raw.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [
     {
-      name: '기본 25분 · --in 으로 조정',
-      ok: /SCHEDULE_DEFAULT_MINUTES = 25/.test(code) && /startsWith\('--in='\)/.test(code),
-      detail: '제안 간격',
+      // 🔴 값을 fixture 에 박는다. 실측 근거로 정한 값이라 조용히 바뀌면 안 된다
+      //    (2026-08-26: 승인 80초 실측 → 25분은 과했다).
+      name: '기본 8분 · --in 으로 조정',
+      ok: /SCHEDULE_DEFAULT_MINUTES = 8\b/.test(code) && /startsWith\('--in='\)/.test(code),
+      detail: '제안 간격 (창업자 직접 승인은 --in=30)',
     },
     {
       name: '--no-schedule 이면 비운다',
