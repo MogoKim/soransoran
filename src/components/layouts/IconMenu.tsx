@@ -22,7 +22,11 @@ export default function IconMenu() {
 
   return (
     <nav aria-label="주요 메뉴" className="border-b border-subtle bg-surface-card">
-      <ul className="mx-auto flex max-w-3xl list-none justify-around gap-1 overflow-x-auto p-0 px-2">
+      {/* 🔴 스크롤바를 숨긴다.
+          "크게" 단계에서는 아이콘 64px + 라벨 20px 라 네 항목 합이 360px 이 되어
+          320px 화면(iPhone SE)에서 실제로 가로 스크롤이 생긴다.
+          그때 스크롤바가 라벨 위에 겹쳐 글자를 가린다. 스크롤은 남기고 막대만 숨긴다. */}
+      <ul className="mx-auto flex max-w-3xl list-none justify-around gap-1.5 overflow-x-auto p-0 px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {MENU_BOARDS.map((board) => {
           const active = isActive(pathname, board.href)
           return (
@@ -30,7 +34,7 @@ export default function IconMenu() {
               <Link
                 href={board.href}
                 aria-current={active ? 'page' : undefined}
-                className="relative flex min-h-[72px] min-w-[64px] flex-col items-center justify-center gap-1 px-1 pb-1.5 pt-1 no-underline"
+                className="relative flex min-h-[72px] min-w-[64px] shrink-0 flex-col items-center justify-center gap-1.5 px-1 pb-1.5 pt-1 no-underline"
               >
                 <span
                   className="flex items-center justify-center rounded-2xl"
@@ -47,7 +51,7 @@ export default function IconMenu() {
                   <MenuIcon name={board.icon} />
                 </span>
                 <span
-                  className={`text-xs ${active ? 'font-bold' : 'text-content-muted'}`}
+                  className={`break-keep text-center text-xs leading-tight ${active ? 'font-bold' : 'text-content-muted'}`}
                   style={active ? { color: `var(${board.iconTextVar})` } : undefined}
                 >
                   {board.label}
