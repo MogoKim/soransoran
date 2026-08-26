@@ -214,7 +214,16 @@ Voice Engine v0 의 산출. **전부 Derived Vault 자산이며 그 자체로 �
 | `founderTitle` 제안 | 🟡 **창업자 편집칸 제안값.** 사람이 덮어쓸 수 있어 안전한 첫 출력 |
 | `rewriteDirection` | 🔴 **방향만.** 완성된 본문이 아니다 (§4-1) |
 | `originalityNotes` | 무엇을 바꿔야 소란소란 것이 되는가 |
-| `commentReactionMap` | 댓글이 붙은 포인트 지도 — **댓글 원문 확보 후에만 (VE-4)** |
+| `commentReactionMap` | 댓글이 붙은 포인트 지도 — **댓글 원문 확보 후에만** |
+
+**품질 · 위험 축 (2026-08-27 추가)** — 상세: [`voice-engine-style-strategy.md`](./2026-08-27-voice-engine-style-strategy.md)
+
+| 축 | 방향 |
+|---|---|
+| `naturalnessScore` · `voiceRetention` · `originalityDelta` | 🟢 높을수록 좋다 |
+| `overSanitizedRisk` (과교정) · `overMimicryRisk` (과모방) | 🔴 **서로 반대 방향** — 함께 봐야 한다 |
+| `sequenceSimilarityRisk` · `expressionRisk` | 🔴 복제 위험 |
+| `typingArtifacts` · `punctuationHabit` · `spacingVariance` · `mobileInputTrace` · `communityRegister` | 🟢 **Voice 자산** (노이즈 아님) |
 
 ### 4-1. `rewriteDirection` 은 본문이 아니다
 
@@ -265,7 +274,25 @@ v0 는 사람을 건너뛰지 않는다.
 반응 포인트  원문과 댓글에서 사람들이 실제로 걸린 지점
 ```
 
-### 5-3. 판정 방법
+### 5-3. 🔴 반대 방향의 위험도 있다 (2026-08-27 추가)
+
+**AI 티를 줄이는 것은 모든 문장을 매끈하게 고치는 것이 아니다.**
+**과도한 교정 · 과도한 요약 · 너무 반듯한 구조 · 교과서 같은 공감 문구가 곧 AI 티다.**
+
+```
+overSanitizedRisk ↑                    overMimicryRisk ↑
+   매끈하게 다림질                          오타를 흩뿌림
+        ↖                                    ↗
+                   자연스러운 지점
+```
+
+한쪽만 보면 반대편으로 넘어간다. 그리고 **오타 · 띄어쓰기 · 문장부호 습관 ·
+모바일 입력 흔적은 지울 노이즈가 아니라 Voice 자산**이다 —
+다만 **낮은 빈도로만** 반영한다(`artifactFrequency`).
+
+상세: [`voice-engine-style-strategy.md`](./2026-08-27-voice-engine-style-strategy.md) §3 · §4
+
+### 5-4. 판정 방법
 
 **사람이 읽고 판정한다.** v0 에 자동 판정기를 만들지 않는다 —
 "AI 티" 를 기계가 재는 순간 그 지표에 최적화된 또 다른 AI 티가 나온다.
