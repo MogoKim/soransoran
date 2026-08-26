@@ -2,15 +2,16 @@ import Link from 'next/link'
 import { SITE } from '@/lib/brand'
 import FontSizeToggle from '@/components/layouts/FontSizeToggle'
 
-/** 문의·FAQ 가 붙어도 이 배열에 한 줄만 늘어난다.
+/** FAQ 가 붙어도 이 배열에 한 줄만 늘어난다.
  *  emphasis 는 개인정보처리방침을 다른 링크와 구분해 표시하기 위한 것이다. */
 const LINKS: { href: string; label: string; emphasis?: boolean }[] = [
   { href: '/terms', label: '이용약관' },
   { href: '/privacy', label: '개인정보처리방침', emphasis: true },
   { href: '/rules', label: '커뮤니티 규칙' },
+  { href: '/contact', label: '문의' },
 ]
 
-/** 하단 영역 — 약관·규칙 접근 경로. 터치 타겟 52px 유지 */
+/** 하단 영역 — 약관·규칙·문의 접근 경로. 터치 타겟 52px 유지 */
 export default function Footer() {
   return (
     <footer className="mt-16 border-t border-subtle bg-surface-card">
