@@ -2,9 +2,15 @@
 /**
  * auto-brief — brief.todo.md 의 TODO 6개를 채워 brief 후보를 만든다
  *
- * 🔴 기본이 dry-run 이다. 이 스크립트는 **아무 파일도 쓰지 않는다.**
- *    stdout 으로 생성 결과와 게이트 판정만 보여준다.
- *    정본 승격(drafts/magazine/{slug}/)은 이 PR 범위가 아니다.
+ * 🔴 기본이 dry-run 이다. --write 를 명시하지 않으면 아무 파일도 쓰지 않는다.
+ *
+ * 🔴 --write 의 안전장치 (전부 코드다. 순서를 지킨다)
+ *    ① verifyBrief() 가 G1~G6 를 전부 통과해야 쓴다. 판정 전에는 한 글자도 안 쓴다
+ *    ② HIGH 는 생성 자체를 하지 않는다 (큐가 창업자 검수 대상으로 표시한 등급)
+ *    ③ brief.md 나 review.ts 가 이미 있으면 **덮어쓰지 않고 건너뛴다**
+ *       사람이 쓴 지시서를 기계가 지우는 일은 없어야 한다
+ *    ④ 쓴 뒤 디스크에서 다시 읽어 검증한다. 통과 못 하면 실패로 보고한다
+ *    ⑤ 한 건이 실패해도 나머지는 계속한다. 재고 확보가 목적이다
  *
  * 🔴 왜 ChatGPT 가 아니라 claude 인가 (§13.1)
  *    "원고를 쓰지 않는 Claude" → 지시서 · ChatGPT → 원고. 이 분리가 §13.1 이다.
@@ -26,7 +32,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DRAFTS_DIR, loadArticles, loadQueue } from './lib/magazine-load.mjs'
 import {
@@ -118,9 +124,9 @@ brief 의 "글 구조" 에 무엇을 이 글에서 다루지 않는지 명시한
 
 ${todoText}
 
-# 출력 형식
+# 출력 형식 — 🔴 이것만은 반드시 지킨다
 
-설명 없이 아래 두 블록만 낸다.
+응답 전체는 아래 두 마커로만 나뉜다. 마커는 **줄 맨 앞에 단독으로** 놓는다.
 
 ${BRIEF_MARK}
 (brief.md 전문. 위 작업 패키지의 "공통 규칙" 을 그대로 포함하고 TODO 를 채운 것)
@@ -128,6 +134,18 @@ ${REVIEW_MARK}
 (review.ts 전문. \`import type { ReviewData } from '../_template/review'\` 로 시작하고
  \`export const REVIEW: ReviewData = { ... }\` 를 내보낸다.
  slug 는 '${slug}' 다. preparedBy 는 'Claude Code' 다.)
+
+🔴 마커 규칙 — 어기면 결과가 통째로 버려진다
+
+- 첫 줄이 \`${BRIEF_MARK}\` 다. 그 앞에 인사·설명·요약·"알겠습니다" 를 쓰지 않는다.
+- \`${REVIEW_MARK}\` 는 정확히 한 번, 줄 단독으로 놓는다.
+- 마커를 코드펜스(\`\`\`) 로 감싸지 않는다. 응답 전체를 코드펜스로 감싸지도 않는다.
+- 마커 뒤에 맺음말을 붙이지 않는다. review.ts 의 마지막 \`}\` 로 응답이 끝난다.
+
+🔴 길어질 것 같으면 **내용을 줄인다. 마커를 생략하지 않는다.**
+  h2 설명을 짧게 쓰고 예시를 덜 들어도 된다.
+  두 마커가 다 있는 짧은 brief 는 쓸 수 있지만,
+  마커가 빠진 긴 brief 는 파싱 단계에서 버려져 아무 값도 남지 않는다.
 `
 }
 
@@ -197,6 +215,37 @@ function parseReview(reviewText) {
 }
 
 // ─────────────────────────────────────────────────────────
+// 쓰기 — 게이트를 통과한 뒤에만 부른다
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 이미 있는 산출물을 찾는다. 하나라도 있으면 쓰지 않는다.
+ *
+ * 🔴 덮어쓰기를 하지 않는 이유
+ *    brief.md 는 사람이 손으로 쓴 것일 수 있다. review.ts 도 마찬가지다.
+ *    기계가 그것을 지우면 되돌릴 방법이 없다. 있으면 비켜간다.
+ */
+function existingArtifacts(dir) {
+  return ['brief.md', 'review.ts'].filter((n) => existsSync(join(dir, n)))
+}
+
+/**
+ * brief.md · review.ts 를 쓴다. **verifyBrief 가 통과한 뒤에만 불린다.**
+ * 쓴 뒤 디스크에서 다시 읽어 한 번 더 검증한다 — 쓰는 도중 깨졌을 수 있다.
+ */
+function writeArtifacts({ dir, briefText, reviewText, queueItem }) {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'brief.md'), briefText.endsWith('\n') ? briefText : briefText + '\n', 'utf8')
+  writeFileSync(join(dir, 'review.ts'), reviewText.endsWith('\n') ? reviewText : reviewText + '\n', 'utf8')
+
+  // 되읽어 검증. 여기서 실패하면 파일은 남지만 결과는 실패로 보고한다 —
+  // 조용히 성공으로 넘기면 fetch 가 깨진 brief 를 ChatGPT 에 보낸다.
+  const backBrief = readFileSync(join(dir, 'brief.md'), 'utf8')
+  const backReview = parseReview(readFileSync(join(dir, 'review.ts'), 'utf8'))
+  return verifyBrief({ briefText: backBrief, review: backReview, queueItem })
+}
+
+// ─────────────────────────────────────────────────────────
 
 function help() {
   console.log(`auto-brief (dry-run 전용 — 파일을 쓰지 않는다)
@@ -206,8 +255,9 @@ function help() {
   node scripts/magazine-brief-auto.mjs --run YYYY-MM-DD --prompt-only
   ... --json  --model <alias>
 
-🔴 이 스크립트는 정본(drafts/magazine/{slug}/)을 만들지 않는다.
-   생성 결과와 게이트 판정을 stdout 으로만 보여준다.`)
+🔴 --write 가 없으면 아무 파일도 쓰지 않는다.
+🔴 --write 여도 G1~G6 를 통과한 건만 쓴다.
+🔴 brief.md 나 review.ts 가 이미 있으면 덮어쓰지 않고 건너뛴다.`)
 }
 
 async function main() {
@@ -231,6 +281,9 @@ async function main() {
   // 쓰기 모드가 생기기 전까지 이 플래그는 의미를 바꾸지 않는다.
   const asJson = argv.includes('--json')
   const model = arg('--model')
+  const write = argv.includes('--write')
+  // 격리 디렉터리로 돌릴 수 있어야 --write 를 실제 정본 밖에서 검증할 수 있다
+  const outDir = arg('--out-dir') ?? DRAFTS_DIR
 
   assertQaWordsInSync()
 
@@ -259,6 +312,14 @@ async function main() {
       continue
     }
 
+    // 🔴 이미 있으면 손대지 않는다. 생성도 하지 않는다 — 어차피 쓸 수 없으니 호출도 낭비다.
+    const targetDir = join(outDir, slug)
+    const existing = existingArtifacts(targetDir)
+    if (write && existing.length) {
+      reports.push({ slug, status: 'SKIP_EXISTS', detail: `이미 있다: ${existing.join(', ')} — 덮어쓰지 않는다` })
+      continue
+    }
+
     const prompt = buildPrompt({
       slug,
       todoText: readFileSync(todoPath, 'utf8'),
@@ -271,29 +332,72 @@ async function main() {
       continue
     }
 
-    const called = callClaude(prompt, { model })
-    if (!called.ok) {
-      reports.push({ slug, status: 'GEN_FAILED', detail: called.reason })
+    // 🔴 한 번 더 시도한다.
+    //    실측 성공률이 회차마다 1/3 ~ 3/3 으로 흔들린다. 형식 이탈·섹션 누락이
+    //    대부분이고 같은 프롬프트로 다시 받으면 붙는다. 무인 실행에서 한 번 흔들렸다고
+    //    그날 그 slug 의 brief 가 통째로 없어지면 안 된다.
+    //    2회로 묶는다 — 더 늘리면 실패를 성공할 때까지 갈아 넣는 구조가 된다.
+    const MAX_ATTEMPTS = 2
+    let attempt = 0
+    let split = null
+    let review = null
+    let verdict = null
+    let lastReason = ''
+
+    while (attempt < MAX_ATTEMPTS) {
+      attempt++
+      const called = callClaude(prompt, { model })
+      if (!called.ok) {
+        lastReason = called.reason
+        continue
+      }
+      const parts = splitOutput(called.text)
+      if (!parts.ok) {
+        lastReason = parts.reason
+        continue
+      }
+      const rv = parseReview(parts.reviewText)
+      if (!rv) {
+        lastReason = 'review.ts 에서 REVIEW 객체를 읽지 못했다'
+        continue
+      }
+      const v = verifyBrief({ briefText: parts.briefText, review: rv, queueItem })
+      split = parts
+      review = rv
+      verdict = v
+      if (v.ok) break
+      lastReason = v.results.filter((r) => !r.ok).map((r) => `${r.gate} ${r.detail}`).join(' · ')
+    }
+
+    if (!split || !review || !verdict) {
+      reports.push({ slug, status: 'GEN_FAILED', detail: `${MAX_ATTEMPTS}회 시도 실패 — ${lastReason}`, attempts: attempt })
       continue
     }
 
-    const split = splitOutput(called.text)
-    if (!split.ok) {
-      reports.push({ slug, status: 'GEN_FAILED', detail: split.reason })
+    const { ok, results } = verdict
+
+    // 🔴 게이트가 먼저다. 통과하지 못하면 --write 여도 쓰지 않는다.
+    if (!ok) {
+      reports.push({ slug, status: 'GATE_FAILED', results, attempts: attempt, briefText: split.briefText, reviewText: split.reviewText })
       continue
     }
 
-    const review = parseReview(split.reviewText)
-    if (!review) {
-      reports.push({ slug, status: 'GEN_FAILED', detail: 'review.ts 에서 REVIEW 객체를 읽지 못했다' })
+    if (!write) {
+      reports.push({ slug, status: 'PASS', results, briefText: split.briefText, reviewText: split.reviewText })
       continue
     }
 
-    const { ok, results } = verifyBrief({ briefText: split.briefText, review, queueItem })
+    const back = writeArtifacts({
+      dir: targetDir,
+      briefText: split.briefText,
+      reviewText: split.reviewText,
+      queueItem,
+    })
     reports.push({
       slug,
-      status: ok ? 'PASS' : 'GATE_FAILED',
-      results,
+      status: back.ok ? 'WRITTEN' : 'WRITE_VERIFY_FAILED',
+      results: back.results,
+      writtenTo: targetDir,
       briefText: split.briefText,
       reviewText: split.reviewText,
     })
@@ -303,10 +407,18 @@ async function main() {
     console.log(JSON.stringify({ date, total: reports.length, reports }, null, 2))
   } else {
     console.log('')
-    console.log(`  auto-brief dry-run — ${date}  (파일을 쓰지 않는다)`)
+    console.log(
+      `  auto-brief — ${date}  ` +
+        (write ? `(--write · 게이트 통과분만 ${outDir} 에 쓴다)` : '(dry-run · 파일을 쓰지 않는다)'),
+    )
     console.log('')
     for (const r of reports) {
-      const mark = r.status === 'PASS' ? '✅' : r.status === 'HOLD' ? '⏸' : '🔴'
+      const mark =
+        r.status === 'PASS' || r.status === 'WRITTEN'
+          ? '✅'
+          : r.status === 'HOLD' || r.status === 'SKIP_EXISTS'
+            ? '⏸'
+            : '🔴'
       console.log(`  ${mark} ${r.slug}  ${r.status}${r.detail ? ` — ${r.detail}` : ''}`)
       for (const g of r.results ?? []) {
         console.log(`       ${g.ok ? '·' : '🔴'} ${g.gate}  ${g.detail}`)
@@ -315,14 +427,22 @@ async function main() {
       if (r.briefText) {
         console.log(`       brief ${r.briefText.length}자 · review ${r.reviewText.length}자`)
       }
+      if (r.attempts > 1) console.log(`       시도 ${r.attempts}회`)
+      if (r.writtenTo) console.log(`       썼다: ${r.writtenTo}`)
       console.log('')
     }
-    const pass = reports.filter((r) => r.status === 'PASS').length
-    console.log(`  PASS ${pass} / ${reports.length}`)
+    const pass = reports.filter((r) => r.status === 'PASS' || r.status === 'WRITTEN').length
+    const written = reports.filter((r) => r.status === 'WRITTEN').length
+    const skipped = reports.filter((r) => r.status === 'SKIP_EXISTS' || r.status === 'HOLD').length
+    console.log(`  통과 ${pass} / ${reports.length}` + (write ? ` · 쓴 것 ${written} · 건너뜀 ${skipped}` : ''))
     console.log('')
   }
 
-  process.exit(reports.some((r) => r.status === 'GATE_FAILED' || r.status === 'GEN_FAILED') ? 1 : 0)
+  // 실패가 하나라도 있으면 1. SKIP_EXISTS · HOLD 는 실패가 아니다 — 의도된 비켜감이다.
+  const failed = reports.some((r) =>
+    ['GATE_FAILED', 'GEN_FAILED', 'WRITE_VERIFY_FAILED', 'NO_TODO'].includes(r.status),
+  )
+  process.exit(failed ? 1 : 0)
 }
 
 main()

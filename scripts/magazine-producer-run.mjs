@@ -4,6 +4,7 @@
  *
  *   01:00 KST → 이 스크립트
  *                 ├ magazine-producer-plan.mjs      오늘 무엇을 만들지 정한다
+ *                 ├ magazine-brief-auto.mjs         선정분의 brief.md · review.ts 를 만든다
  *                 ├ magazine-webui-runner.mjs       선정분의 원고를 받아 draft.md 로 저장
  *                 └ magazine-producer-notify.mjs    알릴 것이 있으면 Slack
  *
@@ -24,7 +25,7 @@
  *    이 파일도, plist 도 secret 을 모른다.
  *
  * 사용법
- *   node scripts/magazine-producer-run.mjs            producer 실행 + 알림
+ *   node scripts/magazine-producer-run.mjs            producer + brief 생성 + 원고 회수 + 알림
  *   node scripts/magazine-producer-run.mjs --dry-run  producer 실행 없이 판정만 (발송 0)
  *
  * 종료 코드: producer 의 종료 코드를 그대로 넘긴다 (launchd last exit code 가 의미를 갖도록)
@@ -38,6 +39,7 @@ const ROOT = resolve(HERE, '..')
 const NODE = process.execPath // 지금 이 프로세스를 띄운 node. plist 와 경로가 어긋날 수 없다
 
 const WEBUI = join(ROOT, 'scripts/magazine-webui-runner.mjs')
+const BRIEF_AUTO = join(ROOT, 'scripts/magazine-brief-auto.mjs')
 const PLAN = join(ROOT, 'scripts/magazine-producer-plan.mjs')
 const NOTIFY = join(ROOT, 'scripts/magazine-producer-notify.mjs')
 
@@ -47,6 +49,11 @@ function stamp() {
 
 function line(msg) {
   console.log(`[${stamp()}] ${msg}`)
+}
+
+/** auto-brief 가 읽을 _runs 디렉터리 이름. producer 가 만든 것과 같은 KST 날짜다 */
+function kstDate() {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 
 const dryRun = process.argv.includes('--dry-run')
@@ -67,7 +74,32 @@ if (dryRun) {
   line(`producer 종료 코드 ${planCode}`)
 }
 
-// ── 2) 원고 회수 ───────────────────────────────────────────
+// ── 2) brief 생성 ──────────────────────────────────────────
+// 🔴 fetch 앞이다. brief.md 가 없으면 회수기가 brief_missing 으로 건너뛴다 —
+//    2026-08-26 첫 무인 실행이 선정 3건 전부 그렇게 멈췄다.
+//
+// 🔴 실패해도 삼킨다. 게이트를 통과한 건만 파일이 되고, 나머지는 그대로 없는 상태다.
+//    회수기가 알아서 건너뛰고 notify 가 brief_missing 으로 알린다.
+//    여기서 멈추면 이미 brief 가 있던 slug 의 원고까지 못 받는다.
+//
+// 🔴 --write 를 여기서 준다. 기본은 dry-run 이라 명시하지 않으면 아무것도 쓰지 않는다.
+if (dryRun) {
+  line('dry-run — brief 생성을 실행하지 않는다')
+} else if (planCode !== 0) {
+  line('producer 가 실패해 brief 생성을 건너뛴다')
+} else {
+  const briefAuto = spawnSync(NODE, [BRIEF_AUTO, '--run', kstDate(), '--write'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  })
+  if (briefAuto.error) {
+    line(`brief 생성 실행 실패 — 무시한다 (${briefAuto.error.code ?? briefAuto.error.name})`)
+  } else {
+    line(briefAuto.status === 0 ? 'brief 생성 완료' : 'brief 생성에 실패한 건이 있다 (Slack 이 알린다)')
+  }
+}
+
+// ── 3) 원고 회수 ───────────────────────────────────────────
 // producer 가 고른 것들의 원고를 받는다. Chrome 이 없으면 --auto-start 가 띄운다.
 // 🔴 producer 가 실패했으면 건너뛴다 — 선정 결과가 없으면 받을 대상도 없다.
 // 🔴 실패해도 삼킨다. 재고 계산은 이미 끝났고, 알림이 나가야 창업자가 원인을 안다.
@@ -84,7 +116,7 @@ if (dryRun) {
   }
 }
 
-// ── 3) notify ──────────────────────────────────────────────
+// ── 4) notify ──────────────────────────────────────────────
 // producer 가 죽었어도 돌린다 — run.json 이 없으면 notify 가 "실행되지 않았다"로 잡는다.
 const notifyArgs = [NOTIFY, dryRun ? '--dry-run' : '--send']
 const notify = spawnSync(NODE, notifyArgs, { cwd: ROOT, stdio: 'inherit' })
