@@ -123,6 +123,19 @@
 | 🔴 원문 댓글을 그대로 외부 노출 | **금지** |
 | 🔴 원문 본문을 그대로 외부 노출 | **금지** (Micro Seed noindex 예외만) |
 
+### 3-2-A. 🔴 1차 전략 — 참조하되 복제하지 않는다 (2026-08-27 확정)
+
+```
+우나어 DB  ──read-only──▶  분석  ──▶  소란소란 DB
+(원문·댓글 원본)                      (Derived 자산만)
+```
+
+**우나어 `content` · `topComments[].content` · `author` 닉네임을
+소란소란 DB 에 대량 복제하지 않는다.** 필요하면 나중에 샘플 · 캐시 단위로만 제한 이관을 검토한다.
+
+🔔 **runtime 전제**: 소란소란 `.env.local` 에 **`UNAO_READONLY_DATABASE_URL`** 이 필요하다.
+읽기 전용 role 이어야 한다 — 사고가 규칙이 아니라 **구조로** 막힌다.
+
 ### 3-3. provenance 는 항상 보존한다
 
 `postUrl`(유일키) · `cafeId` · `cafeName` · `author` · `postedAt` · `crawledAt` 이 전부 남아 있다.
@@ -183,6 +196,15 @@ LLM 내부 분석과 말투 · 패턴 추출 목적으로 사용하는 것은 �
 ---
 
 ## 6. 향후 구조 후보 (🔴 문서상 후보일 뿐 — 구현하지 않는다)
+
+> ✅ **2026-08-27 확정.** 아래 후보는 심층 감사를 거쳐 정본이 됐다.
+> **정본**: [`2026-08-27-voice-engine-schema-strategy.md`](./2026-08-27-voice-engine-schema-strategy.md)
+> 이 절은 그 정본의 요약이며, 상세(필드 · 매핑 · PR 분할 · PASS 기준)는 그쪽을 본다.
+> 🔴 여전히 `schema.prisma` 는 수정하지 않았다.
+>
+> 감사에서 바뀐 것 둘:
+> · `VoiceCommentSource` → **`VoiceCommentSignal`** — 댓글 본문을 저장하지 않으므로 이름이 맞지 않았다
+> · `usedAt` → **`referenced`** — Post 연결이 13건뿐이라 `approved` 가 아니다
 
 ### 6-1. `VoiceSource` — source-neutral 원천 참조
 
