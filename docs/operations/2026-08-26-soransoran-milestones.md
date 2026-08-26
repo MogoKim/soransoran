@@ -63,9 +63,34 @@ recover divergence   0
 
 ---
 
-## 2. 운영 마일스톤 M1~M7
+## 2. 운영 마일스톤 M1~M10
+
+> 🔴 **2026-08-27 개정.** 초판은 M1~M7 이었다. S-0/L-0 감사에서 우나어에
+> **원문 33,031건 · 댓글 원문 154,872개**가 이미 있음을 실측해, Voice Engine 을
+> 한 덩어리(구 M4)로 두던 것을 **자산화 → 데이터셋 → 분석기 → LLM** 으로 쪼갰다.
+> 근거: [`2026-08-27-voice-engine-legacy-data-strategy.md`](./2026-08-27-voice-engine-legacy-data-strategy.md)
+
+| M | 이름 | 상태 |
+|---|---|---|
+| **M1** | Micro Seed 운영 레일 | ✅ **완료** (발행 4건 · divergence 0) |
+| **M2** | Source Quality Engine (Q-1) | ✅ **1차 완료** (fixture 31건 CI) |
+| **M3** | Founder Gate (approve-live) | ✅ **1차 완료** (fixture 14건 CI) |
+| **M4** | Voice Engine Contract | 🟡 VE-0 완료 · **legacy 반영 완료** |
+| **M5** | **Legacy Data Vault** | 🔜 **다음 핵심** — 우나어 33,031 / 154,872 |
+| **M6** | Derived Voice Dataset | 대기 |
+| **M7** | Offline Voice Analyzer | LLM 전 단계 |
+| **M8** | LLM Voice Engine v0 | 데이터 구조 · 샘플 확보 후 |
+| **M9** | Original Content Lane | Derived 기반 index 콘텐츠 |
+| **M10** | Comment / Conversation Engine | 댓글 원문 자산화 후 |
+
+**구 번호 대응**: 구 M4(Voice Engine v0) → **M4~M8** · 구 M5(Comment) → **M10** ·
+구 M6(Multi-source) → M5 에 흡수(우나어가 두 번째 source 다) · 구 M7(Semi-auto) → 유지되나 후순위.
 
 > 🔴 이 번호는 **운영 마일스톤**이다. 헌법 §12 의 마일스톤 번호와 **다르다** — §3 매핑 참조.
+
+---
+
+### (아래는 초판 M1~M7 서술 — 내용은 유효하며 위 표로 재배치했다)
 
 ### M1 — Micro Seed Operating Rail ✅ **완료 · 운영 검증됨**
 
@@ -174,12 +199,17 @@ fixture 5종(read 65 · plan 58 · validate 29 · plan-wiring 17 · collect-chec
 
 ## 4. 우선순위
 
-| 순위 | 작업 | 근거 |
-|---|---|---|
-| **1** | **Q-1 품질 플래그** (M2 v0) | 선별이 현재 유일한 사람 병목. 정치·실명 24% |
-| 2 | 승인 전용 명령 (M3 일부) | 원격 승인이 필요해지면 |
-| 3 | Voice Engine 설계 감사 (M4) | Derived Vault 구조를 먼저 정해야 M5 가 선다 |
-| — | 네이버 카페 (M6) | **정책 판단이 먼저** — 기술은 준비돼 있다 |
+> 🔴 **2026-08-27 개정.** 1·2 는 완료됐다.
+
+| 순위 | 작업 | 상태 | 근거 |
+|---|---|---|---|
+| ~~1~~ | Q-1 품질 플래그 (M2) | ✅ 완료 | PR #72 · #75 |
+| ~~2~~ | 승인 전용 명령 (M3) | ✅ 완료 | PR #78 |
+| **1** | **우나어 심층 데이터 감사** (M5) | 🔜 | 33,031건 구조를 알아야 그릇을 만든다 |
+| **2** | **Voice 자산 schema 확정** (M5) | 대기 | 감사 후. **Micro Seed 5건 기준 설계 금지** |
+| 3 | 창업자 판단 저장 (M6) | 대기 | 지금도 매 세션 사라진다 |
+| 4 | 댓글 자산화 (M10 선행) | 대기 | 154,872개 |
+| — | row6 발행 | ⏸️ KST 8/27 | 별도 운영 트랙 |
 
 ---
 
