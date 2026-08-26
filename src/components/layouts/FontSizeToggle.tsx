@@ -58,7 +58,7 @@ export default function FontSizeToggle({ variant = 'panel' }: { variant?: 'panel
           aria-label="글씨 크기 조절"
           aria-expanded={open}
           aria-haspopup="true"
-          className={`flex h-[52px] w-[52px] items-center justify-center rounded-xl ${
+          className={`flex h-[52px] w-[52px] items-center justify-center rounded-xl transition duration-150 hover:bg-surface-soft active:scale-95 ${
             open ? 'bg-surface-soft text-brand-ink' : 'text-content-muted'
           }`}
         >
@@ -90,7 +90,7 @@ export default function FontSizeToggle({ variant = 'panel' }: { variant?: 'panel
                       apply(value)
                       setOpen(false)
                     }}
-                    className={`flex min-h-[52px] w-full items-center gap-3 rounded-xl px-3 text-left ${
+                    className={`flex min-h-[52px] w-full items-center gap-3 rounded-xl px-3 text-left transition duration-150 hover:bg-surface-soft active:scale-[0.98] ${
                       selected ? 'bg-surface-soft font-bold text-brand-ink' : 'text-content-muted'
                     }`}
                   >
@@ -125,7 +125,7 @@ export default function FontSizeToggle({ variant = 'panel' }: { variant?: 'panel
             aria-checked={selected}
             aria-label={`글씨 ${FONT_SIZE_LABELS[value]}`}
             onClick={() => apply(value)}
-            className={`inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-lg border ${
+            className={`inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-lg border transition duration-150 hover:bg-surface-soft active:scale-95 ${
               selected
                 ? 'border-interactive bg-surface-soft font-bold text-content-primary'
                 : 'border-subtle text-content-muted'

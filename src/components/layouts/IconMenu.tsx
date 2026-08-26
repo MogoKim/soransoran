@@ -34,7 +34,7 @@ export default function IconMenu() {
               <Link
                 href={board.href}
                 aria-current={active ? 'page' : undefined}
-                className="relative flex min-h-[72px] min-w-[64px] shrink-0 flex-col items-center justify-center gap-1.5 px-1 pb-1.5 pt-1 no-underline"
+                className="relative flex min-h-[72px] min-w-[64px] shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl px-1 pb-1.5 pt-1 no-underline transition duration-150 hover:bg-surface-page active:scale-95"
               >
                 <span
                   className="flex items-center justify-center rounded-2xl"
