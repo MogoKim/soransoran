@@ -16,7 +16,10 @@
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { USED_AT_DECISION, FORBIDDEN_VOICE_SOURCE_COLUMNS, toSourceRow } from './lib/voice-unao-readonly.mjs'
+import {
+  USED_AT_DECISION, FORBIDDEN_VOICE_SOURCE_COLUMNS, toSourceRow,
+  MAX_BATCH_SIZE, DEFAULT_BATCH_SIZE,
+} from './lib/voice-unao-readonly.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const IMPORTER = join(HERE, 'voice-unao-import-live.mts')
@@ -28,7 +31,11 @@ const bad = (name: string, kind: string, detail: string) => {
   failures.push(`${name} — ${detail}`)
 }
 
+const BATCH = join(HERE, 'voice-unao-batch-live.mts')
 const rawSrc = readFileSync(IMPORTER, 'utf-8')
+const rawBatch = readFileSync(BATCH, 'utf-8')
+/** 배치 스크립트의 실행 코드 (주석 제외) */
+const batchCode = rawBatch.split('\n').filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join('\n')
 /** 🔴 `/**` 로 시작하는 한 줄 JSDoc 도 걷어낸다 — 설명을 위반으로 읽으면 안 된다 */
 const code = rawSrc.split('\n').filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join('\n')
 
@@ -223,6 +230,110 @@ function createDataBlock(): string {
   if (/\bfetch\s*\(|axios/.test(code)) offenders.push('외부 네트워크')
   if (offenders.length) bad('범위 밖을 건드리지 않는다', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('범위 밖을 건드리지 않는다', 'guard', 'Derived · CommentSignal · LLM · fetch 0')
+}
+
+// ══════════════════════════════════════════════════════════
+// VE-R3 배치 적재 계약
+//
+// 🔴 배치는 1건 적재와 위험의 크기가 다르다. 9,674건은 되돌리기 어렵다.
+// ══════════════════════════════════════════════════════════
+
+// ── ⑪ 배치도 원문을 쓰지 않는다 ─────────────────────────
+{
+  const offenders: string[] = []
+  const i = batchCode.indexOf('voiceSource.create(')
+  const block = i === -1 ? '' : batchCode.slice(i, batchCode.indexOf('select:', i))
+  if (!block) offenders.push('배치에 voiceSource.create 가 없다')
+  for (const f of FORBIDDEN_VOICE_SOURCE_COLUMNS) {
+    if (new RegExp(`\\b${f}\\s*:`).test(block)) offenders.push(`배치 create data 에 ${f}`)
+  }
+  if (/:\s*raw(Row)?\.content\b/.test(block)) offenders.push('배치 create data 에 본문')
+  if (offenders.length) bad('배치도 원문을 쓰지 않는다', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('배치도 원문을 쓰지 않는다', 'guard', 'create data 에 본문 컬럼 0')
+}
+
+// ── ⑫ --apply 는 --limit 을 요구한다 ────────────────────
+//    🔴 "전부 넣기" 를 한 번에 할 수 없게 한다.
+{
+  const offenders: string[] = []
+  if (!/if \(APPLY && LIMIT === null\)/.test(batchCode)) offenders.push('--limit 없는 apply 를 막지 않는다')
+  if (!/--apply 는 --limit 을 요구한다/.test(rawBatch)) offenders.push('거부 사유 안내 없음')
+  // write 가 APPLY 분기 안에 있는가
+  const gate = batchCode.indexOf('if (!APPLY) {')
+  const write = batchCode.indexOf('voiceSource.create(')
+  if (gate === -1 || write < gate) offenders.push('write 가 APPLY 게이트 앞에 있다')
+  // 배치 크기 상한이 있는가 — --batch=100000 으로 본문을 통째로 끌어오지 못하게
+  if (!/MAX_BATCH_SIZE/.test(batchCode)) offenders.push('배치 크기 상한 없음')
+  if (offenders.length) bad('--apply 는 --limit 을 요구한다', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else bad === bad && ok('--apply 는 --limit 을 요구한다', 'guard', `상한 ${MAX_BATCH_SIZE} · 기본 ${DEFAULT_BATCH_SIZE}`)
+}
+
+// ── ⑬ 중단 후 재개된다 ──────────────────────────────────
+//    🔴 상태 파일 없이 UNIQUE(origin, sourceRef) 와 id 커서만으로 성립한다.
+{
+  const offenders: string[] = []
+  // 🔴 구현 세부(findUnique)가 아니라 **계약**을 본다.
+  //    배치는 왕복을 줄이려 findMany + in 으로 묶는다 — 그것도 중복 조회다.
+  //    API 이름으로 잠그면 정당한 최적화가 막힌다. (실제로 막혔다)
+  const lookupsExisting = /voiceSource\.(findUnique|findMany)\(/.test(batchCode)
+  const usesOriginAndRef = /origin:\s*'unao_cafe'|origin_sourceRef/.test(batchCode)
+    && /sourceRef/.test(batchCode)
+  if (!lookupsExisting) offenders.push('중복 조회 없음')
+  if (!usesOriginAndRef) offenders.push('origin + sourceRef 로 조회하지 않는다')
+  if (!/skipped \+= 1/.test(batchCode)) offenders.push('SKIP 집계 없음')
+  // 조회 결과로 실제 건너뛰는가
+  if (!/existingRefs\.has\(|if \(existing\)/.test(batchCode)) offenders.push('조회 결과로 건너뛰지 않는다')
+  // 커서가 id 오름차순인가 — 순서가 흔들리면 재개가 깨진다
+  const lib = readFileSync(join(HERE, 'lib/voice-unao-readonly.mts'), 'utf-8')
+  if (!/ORDER BY id ASC/.test(lib)) offenders.push('커서가 id ASC 가 아니다')
+  if (!/id > \$1/.test(lib)) offenders.push('커서 조건(id > $1) 없음')
+  // 조회가 create 앞인가
+  const lookupAt = Math.min(
+    ...[batchCode.indexOf('voiceSource.findUnique('), batchCode.indexOf('voiceSource.findMany(')]
+      .filter((i) => i !== -1),
+  )
+  const createAt = batchCode.indexOf('voiceSource.create(')
+  if (!Number.isFinite(lookupAt) || createAt === -1 || lookupAt > createAt) {
+    offenders.push('중복 조회가 create 뒤')
+  }
+  if (offenders.length) bad('중단 후 재개된다', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('중단 후 재개된다', 'guard', 'id ASC 커서 + UNIQUE SKIP · 상태 파일 없음')
+}
+
+// ── ⑭ 고품질 조건이 코드에 있다 ─────────────────────────
+//    🔴 전체 33,031건이 아니라 9,674건이 대상이다.
+{
+  const lib = readFileSync(join(HERE, 'lib/voice-unao-readonly.mts'), 'utf-8')
+  const has = [
+    ['isUsable', /"isUsable"\s*=\s*true/],
+    ['ageSignal 50s/60s', /"ageSignal"\s+IN\s+\('50s','60s'\)/],
+    ['150자+', /length\(content\)\s*>=\s*150/],
+    ['aiAnalyzed', /"aiAnalyzed"\s*=\s*true/],
+    ['댓글 有', /jsonb_array_length\("topComments"::jsonb\)\s*>\s*0/],
+  ] as const
+  const missing = has.filter(([, re]) => !re.test(lib)).map(([n]) => n)
+  // referenced 는 usedAt 이 있을 때만.
+  // 🔴 문자열이 "어딘가에" 있는지가 아니라 **judgment 생성부 바로 앞**에 있는지를 본다.
+  //    다른 자리(집계 카운터)에 같은 조건이 있어서, 생성부 조건을 지워도 통과했다.
+  //    (역검증에서 실제로 뚫렸다)
+  const refOnly = (() => {
+    const at = batchCode.indexOf('voiceJudgment.create(')
+    if (at === -1) return false
+    const before = batchCode.slice(Math.max(0, at - 200), at)
+    return /if \(row\.referencedAt\)\s*\{/.test(before)
+  })()
+  // 🔴 where(읽기) 와 data(쓰기) 를 구분한다.
+  //    `count({ where: { decision: 'approved' } })` 는 approved 가 생겼는지 **확인하는 방어**다.
+  //    그걸 위반으로 읽으면 방어 코드를 못 쓴다. (실제로 잡혔다)
+  const writeApprove = /data:\s*\{[\s\S]{0,200}?decision:\s*['"]approved['"]/.test(batchCode)
+  const guardsApprove = /decision:\s*['"]approved['"]/.test(batchCode) && /approved > 0/.test(batchCode)
+  const noAutoApprove = !writeApprove && guardsApprove
+  if (!missing.length && refOnly && noAutoApprove) {
+    ok('고품질 조건 5종 · referenced 조건부', 'policy', '9,674건 대상 · approved 쓰기 0 · 사후 방어 있음')
+  } else {
+    bad('고품질 조건 5종 · referenced 조건부', 'policy',
+      `missing=${missing.join(',')} refOnly=${refOnly} writeApprove=${writeApprove} guards=${guardsApprove}`)
+  }
 }
 
 // ── 출력 ────────────────────────────────────────────────

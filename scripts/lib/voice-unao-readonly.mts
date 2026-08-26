@@ -159,6 +159,27 @@ export const LEGACY_LABEL_KEYS = [
 export const LEGACY_LABEL_VERSION = 'unao-psych-analyzer-v2'
 
 /**
+ * 🔴 고품질 코퍼스 조건 (VE-R3) — 실측 9,674건.
+ *
+ *    전체 33,031 → isUsable 25,970 → ageSignal 50s/60s 19,593
+ *    → 150자+ 11,535 → aiAnalyzed 11,522 → 댓글 有 **9,674**
+ *
+ *    전체를 넣지 않는 이유: ageSignal 70s+ 와 광고성 글이 섞여 있고
+ *    VoiceDerived 계산 대상이 3.4배로 늘어난다.
+ *
+ * 🔴 이것은 SQL 문이 아니라 **WHERE 조각**이다. READ_QUERIES 에 넣지 않는다 —
+ *    그 상수는 "전부 SELECT 로 시작한다" 를 fixture 가 검사하는 자리이고,
+ *    조각을 섞으면 그 검사가 무의미해진다. (실제로 fixture 가 잡았다)
+ */
+export const HIGH_QUALITY_WHERE = `
+       "isUsable" = true
+       AND "ageSignal" IN ('50s','60s')
+       AND length(content) >= 150
+       AND "aiAnalyzed" = true
+       AND jsonb_typeof("topComments"::jsonb) = 'array'
+       AND jsonb_array_length("topComments"::jsonb) > 0`
+
+/**
  * 🔴 이 커넥터가 만드는 유일한 SQL 들. 전부 SELECT 다.
  *
  * fixture 가 이 상수를 읽어 SELECT 로만 시작하는지 검사한다.
@@ -187,6 +208,40 @@ export const READ_QUERIES = {
      ORDER BY "commentCount" DESC
      LIMIT 1`,
 } as const
+
+/** 배치 조회 — 🔴 `SELECT` 다. 커서는 id 오름차순으로 고정한다(재개 가능) */
+export function buildBatchQuery(afterId: string | null, batchSize: number): { text: string; values: unknown[] } {
+  const cursor = afterId ? 'AND id > $1' : ''
+  return {
+    text: `
+      SELECT id, "cafeId", "boardName", "postUrl", author, "postedAt", "crawledAt",
+             content, "commentCount", "topComments", "usedAt",
+             "desireCategory", "desireType", "psychInsight", "urgencyLevel",
+             "communitySignal", "ageSignal", "emotionTags", "viralType",
+             "conflictTrigger", "betrayalFactor", "emotionalPeak", "commentSplit",
+             "qualityScore", "killerScore"
+        FROM "CafePost"
+       WHERE ${HIGH_QUALITY_WHERE}
+         ${cursor}
+       ORDER BY id ASC
+       LIMIT ${Math.max(1, Math.min(batchSize, MAX_BATCH_SIZE))}`,
+    values: afterId ? [afterId] : [],
+  }
+}
+
+/** 고품질 대상 총 건수 — dry-run 보고용 */
+export const COUNT_HIGH_QUALITY = `SELECT COUNT(*)::int AS n FROM "CafePost" WHERE ${HIGH_QUALITY_WHERE}`
+/** usedAt 이 있는 것 — referenced 예정 수 */
+export const COUNT_HIGH_QUALITY_REFERENCED =
+  `SELECT COUNT(*)::int AS n FROM "CafePost" WHERE ${HIGH_QUALITY_WHERE} AND "usedAt" IS NOT NULL`
+
+/**
+ * 한 번에 읽는 최대 건수.
+ * 🔴 상한을 두는 이유: --batch=100000 같은 값으로 33,031건을 한 번에 끌어오면
+ *    메모리에 본문 전체가 올라온다. 본문은 해시 계산 직후 버려야 한다.
+ */
+export const MAX_BATCH_SIZE = 500
+export const DEFAULT_BATCH_SIZE = 100
 
 /** CafePost 한 행 → VoiceSource 후보. 🔴 본문을 옮기지 않고 해시만 남긴다 */
 export function toSourceRow(raw: Record<string, unknown>, authorSalt: string): UnaoSourceRow {
