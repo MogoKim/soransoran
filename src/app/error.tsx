@@ -22,7 +22,7 @@ export default function Error({ reset }: { error: Error; reset: () => void }) {
         <button
           type="button"
           onClick={reset}
-          className="inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text border border-cta-edge transition duration-150 hover:border-cta-hover hover:brightness-95 active:scale-95"
+          className="inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text transition duration-150 hover:brightness-95 active:scale-95"
         >
           다시 시도
         </button>

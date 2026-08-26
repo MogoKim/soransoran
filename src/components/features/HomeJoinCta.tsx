@@ -31,7 +31,7 @@ export default function HomeJoinCta({ isLoggedIn }: { isLoggedIn: boolean }) {
 
         <Link
           href={loginHref('/')}
-          className="mt-4 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline border border-cta-edge transition duration-150 hover:border-cta-hover hover:brightness-95 active:scale-95"
+          className="mt-4 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
         >
           카카오로 시작하기
         </Link>

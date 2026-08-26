@@ -40,7 +40,7 @@ export default function WriteCta({
 
       <Link
         href={href}
-        className="mt-4 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline border border-cta-edge transition duration-150 hover:border-cta-hover hover:brightness-95 active:scale-95"
+        className="mt-4 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
       >
         이야기 남기기
       </Link>
