@@ -49,16 +49,28 @@ export type QualityFlag =
   | 'shortTitle'
   | 'titleTruncated'
   | 'targetLikely'
+  // 제목 · 본문 어디서든 — 있는 텍스트만 본다
+  | 'medicalOrAdLikely'
+  | 'quotedOrMediaLikely'
   // 상세 단계 — 본문을 읽어야 판정한다
   | 'shortBody'
   | 'linkHeavyBody'
   | 'imageLikelyBody'
   | 'personalExperienceLikely'
   | 'practicalConcernLikely'
+  | 'publicFigureMention'
 
-/** 본문을 읽어야만 판정할 수 있는 플래그. 목록 단계에서는 **매기지 않는다** */
+/**
+ * 본문을 읽어야만 판정할 수 있는 플래그. 목록 단계에서는 **매기지 않는다**.
+ *
+ * 🔴 `medicalOrAdLikely` · `quotedOrMediaLikely` 는 여기 없다.
+ *    둘은 제목에서도 드러나기 때문이다 — `눈썹거상은 얼마정도 할까요?` 는 제목만으로 충분하고
+ *    `인간극장에 나왔던…` 도 그렇다. **있는 텍스트만 보는 것**은 억지 계산이 아니다.
+ *    반대로 `publicFigureMention` 은 본문 전용이다. 제목 쪽은 politicalOrPublicFigure 가 맡는다.
+ */
 export const DETAIL_ONLY_FLAGS: readonly QualityFlag[] = [
   'shortBody', 'linkHeavyBody', 'imageLikelyBody', 'personalExperienceLikely', 'practicalConcernLikely',
+  'publicFigureMention',
 ]
 
 export type QualityStage = 'list' | 'detail'
@@ -156,15 +168,71 @@ const CLICKBAIT = /(충격|경악|소름|대박|헉|실화|레알|미쳤|경악|
  * ⚠️ `딸` 은 `딸기` 를 데려온다 — lookahead 로 막는다.
  */
 const TARGET_LIFE =
-  /(세안|피부|화장품|갱년기|남편|시댁|친정|딸(?!기)|아들|손주|며느리|사위|살림|요리|반찬|김치|장보기|청소|건강|병원|치과|무릎|허리|보험|연금|노후|이삿짐|전세금|전셋집|퇴직|알바|학원|등록금|졸업|결혼|추천해|어디가|하나요|할까요|괜찮을까|좋은가요)/g
+  /(세안|피부|화장품|갱년기|남편|시댁|친정|딸(?!기)|아들|손주|며느리|사위|살림|요리|반찬|김치|장보기|청소|건강검진|건강|약국|약값|영양제|비타민|관절|병원|치과|무릎|허리|보험|연금|노후|이삿짐|전세금|전셋집|퇴직|알바|학원|등록금|졸업|결혼|추천해|어디가|하나요|할까요|괜찮을까|좋은가요)/g
 
-/** 1인칭 경험 서술 — 남의 이야기 전달이 아니라 본인이 겪은 것 */
+/**
+ * 1인칭 경험 서술 — 남의 이야기 전달이 아니라 본인이 겪은 것.
+ *
+ * ⚠️ `제가` 는 **어절 앞에서만** 1인칭이다.
+ *    `영양제가` · `문제가` · `형제가` 안에도 `제가` 가 들어 있다(fixture ㉙ 가 잡았다).
+ *    한국어에는 단어 경계(\b)가 없으므로 앞 글자가 한글이 아닐 때만 센다.
+ *    `저는` · `저희` 도 같은 이유로 함께 막는다.
+ */
 const PERSONAL_EXPERIENCE =
-  /(제가|저는|저희|우리집|우리 집|했어요|였어요|봤어요|같아요|싶어요|해왔어요|다녀온|다녀왔|지났어요|겪었|당했)/g
+  /((?<![가-힣])(제가|저는|저희)|우리집|우리 집|했어요|였어요|봤어요|같아요|싶어요|해왔어요|다녀온|다녀왔|지났어요|겪었|당했)/g
 
 /** 건강 · 돈 · 가족 · 일상의 실제 고민 */
 const PRACTICAL_CONCERN =
   /(증상|이물감|통증|아프|아파|병원|치과|약을|보험|연금|대출|월세|전세금|학원|등록금|취업|퇴직|알바|살림|반찬|청소|이사하|전과|진로|수술|검사받)/g
+
+// ─────────────────────────────────────────────────────────
+// 본문 위험 신호 (Q-1 보강)
+//
+// 🔴 이 셋도 **거부하지 않는다.** 4232047 이 계기다 —
+//    제목만으로는 깨끗해 보여 score 75 로 상위권이었는데,
+//    본문 첫 줄이 "장영란이 눈썹거상했다면서요" 였고 피부과와 가격 문의가 이어졌다.
+//    사람이 본문을 읽어야만 걸러졌다. 그 판단을 플래그로 앞당긴다.
+// ─────────────────────────────────────────────────────────
+
+/** 의료 시설 */
+const MEDICAL_FACILITY =
+  /(성형외과|피부과|정형외과|산부인과|안과|이비인후과|한의원|치과|클리닉|의원|병원)/g
+
+/** 시술 · 수술 이름 */
+const MEDICAL_PROCEDURE =
+  /(거상|리프팅|보톡스|필러|임플란트|레이저|시술|성형|쌍꺼풀|지방흡입|스케일링|교정|주사|수술)/g
+
+/** 가격을 묻거나 밝히는 표현 */
+const PRICE_ASK = /(얼마|비용|가격|견적|시술비|수술비|\d[\d,]*\s*만원)/g
+
+/**
+ * 상업 유도. 🔴 이건 **단독으로도** 신호다 — 가격 질문 없이도 광고에 가깝다.
+ */
+const COMMERCIAL_PROMO = /(할인|쿠폰|공구|협찬|프로모션|이벤트\s*참여|구매\s*링크|주문\s*링크|체험단)/g
+
+/**
+ * 전언 · 인용 · 방송 소재.
+ *
+ * 🔴 personalExperienceLikely 와 **분리해서** 표시한다.
+ *    "장영란이 …했다면서요" 도 "저는 …싶어요" 도 한 글에 같이 나온다.
+ *    남 이야기로 시작해 내 고민으로 이어지는 글은 흔하다 — 어느 한쪽으로 뭉개면 판단이 흐려진다.
+ *
+ * ⚠️ `더라구요` 는 넣지 않는다. "가봤더니 좋더라구요" 처럼 본인 경험에도 쓰여 오탐이 난다.
+ *    대신 **명시적으로 경험이 아니라고 말하는 표현**만 넣는다.
+ */
+const QUOTED_MEDIA =
+  /(라면서요|다면서요|라던데|다던데|나왔다던데|나왔던|나왔다는|기사에|뉴스에|방송에|인간극장|유튜브에서|카더라|들은\s*얘기|들었는데|가보진\s*않|안\s*가봤|해보진\s*않|본\s*적은\s*없)/g
+
+/**
+ * 공인 이름 사전 — 🔴 **불완전하다.**
+ *
+ * 이름 단독(`장영란` · `박수홍` · `유시민`)은 사전 없이 정규식으로 잡을 수 없다.
+ * 실측에서 실제로 나온 이름만 넣는다. 여기 없는 이름은 **못 잡는다** —
+ * 그래서 이 플래그가 비어 있다고 "실명이 없다"로 읽으면 안 된다.
+ * 근본 해결은 M4(Voice Engine) 영역이고, 여기서는 반복 등장하는 것만 앞당겨 잡는다.
+ */
+const KNOWN_PUBLIC_FIGURES =
+  /(장영란|박수홍|유시민|이재명|이준석|김민석|인요한|조성은|채연|헬마우스)/g
 
 /** 정규식 전역 매칭 결과를 중복 없이 모은다 */
 function collect(re: RegExp, text: string): string[] {
@@ -229,7 +297,8 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
   const hanja = collect(HANJA_NAME, title)
   const nameTitle = collect(NAME_WITH_TITLE, title)
   const titleName = collect(TITLE_THEN_NAME, title)
-  const publicFigure = [...politics, ...hanja, ...nameTitle, ...titleName]
+  const knownFigure = collect(KNOWN_PUBLIC_FIGURES, title)
+  const publicFigure = [...politics, ...hanja, ...nameTitle, ...titleName, ...knownFigure]
   if (publicFigure.length) {
     flags.push('politicalOrPublicFigure')
     note('politicalOrPublicFigure', publicFigure)
@@ -248,6 +317,30 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
   if (target.length) {
     flags.push('targetLikely')
     note('targetLikely', target)
+  }
+
+  // ── 제목 + 본문 공통 ────────────────────────────────
+  //    있는 텍스트만 본다. 목록 단계에서는 제목뿐이고, 그것이 억지 계산은 아니다.
+  const both = `${title}\n${body}`
+
+  // 🔴 시설·시술만으로는 붙이지 않는다.
+  //    `턱관절치과 다녀온후…` 는 실제로 발행한 좋은 후보였다 — 그런 글까지 위험으로 칠하면
+  //    플래그가 소음이 되고, 소음이 되면 사람이 안 본다.
+  //    가격을 묻는 순간 성격이 달라진다(4232047). 상업 유도는 그 자체로 신호다.
+  const facility = collect(MEDICAL_FACILITY, both)
+  const procedure = collect(MEDICAL_PROCEDURE, both)
+  const price = collect(PRICE_ASK, both)
+  const promo = collect(COMMERCIAL_PROMO, both)
+  const medicalWithPrice = (facility.length > 0 || procedure.length > 0) && price.length > 0
+  if (medicalWithPrice || promo.length) {
+    flags.push('medicalOrAdLikely')
+    note('medicalOrAdLikely', [...facility, ...procedure, ...price, ...promo].slice(0, 6))
+  }
+
+  const quoted = collect(QUOTED_MEDIA, both)
+  if (quoted.length) {
+    flags.push('quotedOrMediaLikely')
+    note('quotedOrMediaLikely', quoted.slice(0, 6))
   }
 
   // ── 댓글수 ──────────────────────────────────────────
@@ -276,6 +369,18 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
     if (practical.length) {
       flags.push('practicalConcernLikely')
       note('practicalConcernLikely', practical.slice(0, 6))
+    }
+
+    // 🔴 제목이 깨끗해도 본문에 사람 이름이 있다 — 4232047 이 그랬다.
+    //    politicalOrPublicFigure 는 제목만 본다. 본문 쪽은 여기서 따로 센다.
+    const bodyFigure = [
+      ...collect(POLITICS, body), ...collect(HANJA_NAME, body),
+      ...collect(NAME_WITH_TITLE, body), ...collect(TITLE_THEN_NAME, body),
+      ...collect(KNOWN_PUBLIC_FIGURES, body),
+    ]
+    if (bodyFigure.length) {
+      flags.push('publicFigureMention')
+      note('publicFigureMention', [...new Set(bodyFigure)].slice(0, 6))
     }
   }
 
@@ -306,6 +411,11 @@ export function selectionScore(a: QualityAssessment): number {
   else if (!a.flags.includes('lowEngagement')) score += 8
 
   if (a.flags.includes('politicalOrPublicFigure')) score -= 45
+  // 🔴 제목이 깨끗해도 본문에 이름이 나오면 성격이 달라진다 (4232047)
+  if (a.flags.includes('publicFigureMention')) score -= 30
+  if (a.flags.includes('medicalOrAdLikely')) score -= 25
+  // 남 이야기는 우리 회원의 경험담이 아니다. 버리지는 않되 뒤로 민다
+  if (a.flags.includes('quotedOrMediaLikely')) score -= 10
   if (a.flags.includes('clickbaitTitle')) score -= 10
   if (a.flags.includes('shortTitle')) score -= 10
   if (a.flags.includes('shortBody')) score -= 15

@@ -21,6 +21,12 @@ import {
   DETAIL_ONLY_FLAGS, HIGH_ENGAGEMENT_MIN, SHORT_BODY_MAX, LINK_HEAVY_RATIO, SHORT_TITLE_MAX,
 } from './lib/micro-seed-quality.mjs'
 
+// 실측에서 가져온 본문 조각. 원문 전체가 아니라 판정에 필요한 최소만 둔다.
+const BODY_4232047 = '장영란이 눈썹거상했다면서요\n\n저는 눈썹과 눈 사이는 먼 편인데 쌍꺼풀이 풀려서 시술 알아보는 중이에요. 피부과에서 얼마쯤 하는지 궁금해요'
+const BODY_4232041 = '가보진 않았는데 창고형 약국이 있더라구요\n\n거기서 파는 약이나 영양제가 저렴한지 궁금해요'
+const BODY_4232060 = '작년 연말에 결혼한 딸부부..\n\n둘이 쿵짝이 잘 맞아서 즐거운 건 알겠는데 저희 앞에서도 너무 해맑아서 가끔 당황스러워요. 사위가 착하긴 한데 어른 앞에서는 조금 조심했으면 싶기도 하고'
+const BODY_4231985 = '제가 요며칠 계속 글썼던 사람입니다\n\n목구멍 이물감이 심해서 치과에 다녀왔어요. 턱관절 때문이라는데 증상이 나아지질 않네요'
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -483,14 +489,18 @@ const bad = (name: string, kind: string, detail: string) => {
   const list = assessCandidate({ originalTitle: '물로만 세안 3개월이 지났어요.', sourceCommentCount: 6, rawBody: '' })
   const detail = assessCandidate({ originalTitle: '물로만 세안 3개월이 지났어요.', sourceCommentCount: 6, rawBody: '짧은 본문' })
   const listClean = !list.flags.some((f) => (DETAIL_ONLY_FLAGS as readonly string[]).includes(f))
+  // 🔴 본문에 이름이 있어도 목록 단계에서는 붙지 않아야 한다 — 본문을 읽지 않았기 때문이다
+  const listNoFigure = !assessCandidate({
+    originalTitle: '눈썹거상은 얼마정도 할까요?', sourceCommentCount: 7, rawBody: '',
+  }).flags.includes('publicFigureMention')
   const stageOk = list.stage === 'list' && detail.stage === 'detail'
   const bodyZero = list.signals.bodyLength === 0
   const detailFlagged = detail.flags.includes('shortBody')
-  if (listClean && stageOk && bodyZero && detailFlagged) {
+  if (listClean && listNoFigure && stageOk && bodyZero && detailFlagged) {
     ok('목록 단계는 본문 플래그를 매기지 않는다', 'policy', `list=${list.flags.join(',')} · stage 구분 O`)
   } else {
     bad('목록 단계는 본문 플래그를 매기지 않는다', 'policy',
-      `clean=${listClean} stage=${stageOk} bodyZero=${bodyZero} detail=${detailFlagged}`)
+      `clean=${listClean} figure=${listNoFigure} stage=${stageOk} bodyZero=${bodyZero} detail=${detailFlagged}`)
   }
 }
 
@@ -692,6 +702,127 @@ const bad = (name: string, kind: string, detail: string) => {
   } else {
     bad('상세 제목이 목록 제목을 이긴다', 'guard',
       `prefer=${prefersDetail} noOld=${noOldShape} parse=${parses} flag=${truncFlag}`)
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// Q-1 보강 — 본문 위험 신호
+//
+// 🔴 계기: 4232047. 제목(`눈썹거상은 얼마정도 할까요?`)만 보면 깨끗해서 score 75 로
+//    상위권이었는데, 본문 첫 줄이 "장영란이 눈썹거상했다면서요" 였고 피부과와 가격 문의가
+//    이어졌다. **사람이 본문을 읽어야만 걸러졌다.** 그 판단을 플래그로 앞당긴다.
+//    여전히 거부하지 않는다 — 순서만 바꾼다.
+// ══════════════════════════════════════════════════════════
+
+// ── ㉖ 4232047 유형 — 본문 실명 · 의료 · 가격 ───────────
+{
+  const a = assessCandidate({ originalTitle: '눈썹거상은 얼마정도 할까요?', sourceCommentCount: 7, rawBody: BODY_4232047 })
+  const missing: string[] = []
+  for (const f of ['medicalOrAdLikely', 'publicFigureMention', 'quotedOrMediaLikely']) {
+    if (!a.flags.includes(f as never)) missing.push(f)
+  }
+  // 근거가 남아야 사람이 검증할 수 있다
+  const namedReason = a.signals.matched.publicFigureMention?.includes('장영란') ?? false
+  const medReason = (a.signals.matched.medicalOrAdLikely ?? []).some((x) => x === '피부과' || x === '얼마')
+  // 🔴 여전히 후보로 남는다. 점수만 내려간다
+  const kept = a.flags.length > 0 && selectionScore(a) < 40
+  if (!missing.length && namedReason && medReason && kept) {
+    ok('본문 위험 3종 — 4232047 유형', 'policy', `${selectionScore(a)}점 · ${JSON.stringify(a.signals.matched.publicFigureMention)}`)
+  } else {
+    bad('본문 위험 3종 — 4232047 유형', 'policy',
+      `missing=${missing.join(',')} name=${namedReason} med=${medReason} kept=${kept}`)
+  }
+}
+
+// ── ㉗ 좋은 후보에는 위험 플래그가 붙지 않는다 ──────────
+//    🔴 이쪽이 더 중요하다. 위험 플래그가 좋은 글에도 붙으면 소음이 되고,
+//       소음이 되면 사람이 플래그를 안 본다 — 그 순간 이 엔진은 없는 것과 같다.
+//
+//    BODY_4231985 는 **실제로 발행한 글**이다(턱관절치과 경험담).
+//    시설 어휘(`치과`)가 있지만 가격을 묻지 않는다. 그래서 medicalOrAdLikely 가 붙으면 안 된다.
+{
+  const good = assessCandidate({ originalTitle: '저도 작년에 사위 봤는데 많이 해맑아요', sourceCommentCount: 10, rawBody: BODY_4232060 })
+  const published = assessCandidate({
+    originalTitle: '턱관절치과 다녀온후..저 망한 게 맞는것 같아요 82님들 도와주..',
+    sourceCommentCount: 5, rawBody: BODY_4231985,
+  })
+  const RISKY = ['medicalOrAdLikely', 'publicFigureMention', 'quotedOrMediaLikely']
+  const goodClean = !good.flags.some((f) => RISKY.includes(f))
+  const publishedClean = !published.flags.some((f) => RISKY.includes(f))
+  const goodStrong = good.flags.includes('targetLikely') && good.flags.includes('personalExperienceLikely')
+  const goodRanksHigher = selectionScore(good) > selectionScore(
+    assessCandidate({ originalTitle: '눈썹거상은 얼마정도 할까요?', sourceCommentCount: 7, rawBody: BODY_4232047 }),
+  )
+  if (goodClean && publishedClean && goodStrong && goodRanksHigher) {
+    ok('좋은 후보에는 위험 플래그가 안 붙는다', 'policy',
+      `4232060=${selectionScore(good)}점 · 발행분(치과)도 깨끗`)
+  } else {
+    bad('좋은 후보에는 위험 플래그가 안 붙는다', 'policy',
+      `good=${goodClean} published=${publishedClean} strong=${goodStrong} rank=${goodRanksHigher}`)
+  }
+}
+
+// ── ㉘ medicalOrAdLikely 는 조합을 요구한다 ─────────────
+//    시설·시술 어휘만으로 붙이면 "무릎 수술 후기" 같은 진짜 생활 고민까지 위험으로 칠한다.
+//    가격을 묻는 순간 성격이 달라진다. 상업 유도는 그 자체로 신호다.
+{
+  const at = (t: string, b: string) => assessCandidate({ originalTitle: t, sourceCommentCount: 3, rawBody: b })
+  const facilityOnly = !at('치과 다녀왔어요', '치과에서 스케일링 받고 왔어요. 증상이 나아졌으면 좋겠네요').flags.includes('medicalOrAdLikely')
+  const withPrice = at('치과 스케일링', '치과에서 스케일링 얼마인가요?').flags.includes('medicalOrAdLikely')
+  const promoAlone = at('영양제 공구해요', '이번에 공구 진행합니다. 참여하실 분 계신가요').flags.includes('medicalOrAdLikely')
+  const priceAlone = !at('장 볼 때 얼마나 쓰세요', '요즘 장보면 얼마나 나오세요? 반찬값이 부담이에요').flags.includes('medicalOrAdLikely')
+  if (facilityOnly && withPrice && promoAlone && priceAlone) {
+    ok('medicalOrAdLikely 는 조합을 요구한다', 'policy', '시설만 ✕ · 시설+가격 ○ · 상업유도 단독 ○ · 가격만 ✕')
+  } else {
+    bad('medicalOrAdLikely 는 조합을 요구한다', 'policy',
+      `시설만=${facilityOnly} 시설+가격=${withPrice} 유도단독=${promoAlone} 가격만=${priceAlone}`)
+  }
+}
+
+// ── ㉙ 4232041 유형 — targetLikely 어휘 보강 ────────────
+//    보강 전에는 `약국` 이 어휘에 없어 5점으로 하위권이었다. 사람이 보면 명백한 우리 또래 소재다.
+{
+  const a = assessCandidate({ originalTitle: '창고형 약국에서파는 약', sourceCommentCount: 7, rawBody: BODY_4232041 })
+  const hasTarget = a.flags.includes('targetLikely')
+  const reason = (a.signals.matched.targetLikely ?? []).includes('약국')
+  // 전언체("가보진 않았는데")는 경험담과 분리해 표시된다
+  const quoted = a.flags.includes('quotedOrMediaLikely')
+  const notPersonal = !a.flags.includes('personalExperienceLikely')
+  // 새 어휘가 실제로 들어갔는지 (오탐 방지: 낱말 단위로 확인)
+  const vocab = ['약국', '약값', '영양제', '비타민', '건강검진', '관절'].every((w) =>
+    assessCandidate({ originalTitle: `${w} 이야기입니다`, sourceCommentCount: 1, rawBody: '' }).flags.includes('targetLikely'))
+  // 🔴 `영양제가` 안의 `제가` 를 1인칭으로 읽으면 안 된다 — 이 fixture 가 실제로 잡아낸 결함이다.
+  //    `문제가` · `형제가` 도 같은 함정이다. 한국어에는 단어 경계가 없다.
+  const noSubstring = ['영양제가 비싸요', '문제가 생겼어요', '형제가 많아요'].every((b) =>
+    !assessCandidate({ originalTitle: '약국 이야기', sourceCommentCount: 1, rawBody: b })
+      .flags.includes('personalExperienceLikely'))
+  // 어절 앞의 `제가` 는 정상적으로 잡혀야 한다 (과잉 차단 방지)
+  const stillWorks = assessCandidate({ originalTitle: '약국 이야기', sourceCommentCount: 1, rawBody: '제가 어제 다녀왔습니다' })
+    .flags.includes('personalExperienceLikely')
+  if (hasTarget && reason && quoted && notPersonal && vocab && noSubstring && stillWorks) {
+    ok('targetLikely 어휘 보강 — 4232041 유형', 'policy',
+      `${selectionScore(a)}점 · 약국·약값·영양제·비타민·건강검진·관절 · 영양제가≠제가`)
+  } else {
+    bad('targetLikely 어휘 보강 — 4232041 유형', 'policy',
+      `target=${hasTarget} reason=${reason} quoted=${quoted} notPersonal=${notPersonal} vocab=${vocab} sub=${noSubstring} works=${stillWorks}`)
+  }
+}
+
+// ── ㉚ 전언과 경험은 한 글에 같이 온다 ─────────────────
+//    🔴 어느 한쪽으로 뭉개면 판단이 흐려진다.
+//       4232047 은 "장영란이 …했다면서요"(전언)로 시작해 "저는 …싶어요"(경험)로 이어진다.
+//       둘 다 표시해야 사람이 "남 얘기로 시작하지만 본인 고민이구나" 를 알 수 있다.
+{
+  const a = assessCandidate({ originalTitle: '눈썹거상은 얼마정도 할까요?', sourceCommentCount: 7, rawBody: BODY_4232047 })
+  const bothShown = a.flags.includes('quotedOrMediaLikely') && a.flags.includes('personalExperienceLikely')
+  // `더라구요` 는 본인 경험에도 쓰인다 — 전언으로 읽으면 오탐이다
+  const noFalsePositive = !assessCandidate({
+    originalTitle: '어제 다녀왔어요', sourceCommentCount: 2, rawBody: '가봤더니 사람이 많더라구요. 저는 다음에 또 가려구요',
+  }).flags.includes('quotedOrMediaLikely')
+  if (bothShown && noFalsePositive) {
+    ok('전언과 경험은 분리해 표시한다', 'policy', '둘 다 표시 · `더라구요` 는 전언 아님')
+  } else {
+    bad('전언과 경험은 분리해 표시한다', 'policy', `both=${bothShown} noFP=${noFalsePositive}`)
   }
 }
 
