@@ -285,8 +285,16 @@ mobileInputTrace        모바일 입력 흔적
 communityRegister       커뮤니티 어투
 ```
 
-> `informalSpacing` · `artifactFrequency` 는 위 축의 하위 지표로 둘지
-> 독립 필드로 둘지 schema 설계에서 정한다.
+> ✅ **2026-08-27 확정.** 위 13종은 **`VoiceDerived` 필드로 반영**됐다.
+> 정본: [`2026-08-27-voice-engine-schema-strategy.md`](./2026-08-27-voice-engine-schema-strategy.md) §2-2
+>
+> · 품질 · 위험 7종은 `Int?` 스칼라 — 비교 · 정렬이 필요하다
+> · 문체 · 입력 5종은 `Json?` — 구조가 열려 있어야 한다
+> · **`artifactFrequency` 는 독립 필드**로 뒀다. "무엇이 있는가" 와
+>   "얼마나 있어야 자연스러운가" 는 다른 질문이고, 후자가 남발을 막는 유일한 축이다
+> · `informalSpacing` 은 `spacingVariance` 의 하위 지표로 접었다
+>
+> 🔴 `schema.prisma` 는 여전히 수정하지 않았다.
 
 ### 8-3. 반응 축
 

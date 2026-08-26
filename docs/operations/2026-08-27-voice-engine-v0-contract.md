@@ -424,6 +424,15 @@ Q-1 이 이미 잡는 것과 아직 못 잡는 것을 나눠 적는다.
 | **VE-7** | Original Content / index 레인 실험 | VE-4 · VE-6 | 별도 정책 |
 
 **VE-A 를 신설한 이유**: 감사 없이 schema 를 정하면 두 번 만든다.
+
+> ✅ **2026-08-27 — VE-A · VE-B 완료.** 우나어 심층 감사를 마쳤고
+> `VoiceSource` · `VoiceDerived` · `VoiceJudgment` · `VoiceCommentSignal` 4구조를
+> **문서 정본으로 확정**했다.
+> 정본: [`2026-08-27-voice-engine-schema-strategy.md`](./2026-08-27-voice-engine-schema-strategy.md)
+>
+> 1차 전략은 **우나어 DB read-only 참조 + 소란소란 DB 에는 Derived 자산만 저장**이다.
+> 🔔 다음 blocker 는 **`UNAO_READONLY_DATABASE_URL` 발급**(창업자 액션)이다.
+> 🔴 `schema.prisma` 는 아직 수정하지 않았다 — migration-only PR 과 runtime PR 을 나눈다.
 **VE-1 을 VE-2 보다 앞에 둔 이유**: 산출물을 저장할 곳이 없으면 transform 결과가 매번 사라진다.
 
 운영 마일스톤(M1~M10)과의 대응은
