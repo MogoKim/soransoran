@@ -38,7 +38,10 @@ export default function CommentForm({
   const showCounter = content.length >= COMMENT_COUNTER_FROM
 
   return (
-    <form action={formAction} className="flex flex-col gap-2">
+    <form
+      action={formAction}
+      className="flex flex-col gap-2 rounded-2xl border border-subtle bg-surface-card p-4"
+    >
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
 
@@ -52,7 +55,8 @@ export default function CommentForm({
         </p>
       ) : null}
 
-      <div className="flex items-start gap-2">
+      {/* items-end — 입력창이 길어져도 등록 버튼은 손가락 가까운 아래에 남는다 */}
+      <div className="flex items-end gap-2">
         <textarea
           ref={textareaRef}
           name="content"
@@ -63,7 +67,7 @@ export default function CommentForm({
             setContent(e.target.value)
             setShowSuccess(false)
           }}
-          className="min-h-[52px] flex-1 resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-card p-3"
+          className="min-h-[52px] flex-1 resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-page p-3 leading-[1.7]"
           placeholder={COMMENT_PLACEHOLDER}
         />
         <ActionButton
@@ -71,7 +75,7 @@ export default function CommentForm({
           label="등록"
           pendingLabel="등록 중…"
           disabled={content.trim().length < MIN_COMMENT_LENGTH}
-          className="shrink-0"
+          className="min-w-[76px] shrink-0 whitespace-nowrap"
         />
       </div>
 
