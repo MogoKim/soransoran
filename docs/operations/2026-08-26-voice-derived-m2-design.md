@@ -331,7 +331,17 @@ VE-M3  품질·위험 7종 + 생성물    LLM 도입 · 첫 비용
 | 테이블 | `schema.prisma` | DB 실물 |
 |---|---|---|
 | `VoiceSource` · `VoiceJudgment` | ✅ 있다 | ✅ 있다 (migration `0006`) |
-| **`VoiceDerived` · `VoiceCommentSignal`** | 🔴 **없다** | 🔴 **없다** |
+| **`VoiceDerived` · `VoiceCommentSignal`** | ✅ **있다** (VE-M2-1) | ⏳ **적용 대기** (migration `0007`) |
+
+> **2026-08-26 갱신 — VE-M2-1 반영됨.**
+> `schema.prisma` 와 `prisma/migrations/0007_voice_derived_comment_signal/migration.sql` 에 들어갔다.
+> **DB 적용은 아직이다** — 창업자가 Supabase SQL Editor 에서 수동으로 적용한다
+> (`/prisma-guide`: pg 모듈 직접 SQL + `information_schema` 검증. `prisma migrate`·`db push` 미사용).
+> 적용 전까지 두 테이블은 **DB에 없고**, 신호 계산 코드(VE-M2-2)도 아직 없다.
+>
+> 🔴 `model`·`promptVersion` 은 **NULL 이 아니라 빈 문자열 기본값**이다.
+> Postgres 에서 NULL 은 서로 같지 않아, 둘이 NULL 이면 `@@unique` 가 중복을 전혀 막지 못한다.
+> VE-M2(rule)에서는 둘 다 `''` 이고 VE-M3(llm)에서 실제 값이 들어간다.
 
 VE-M2 신호를 저장할 **그릇이 아직 없다.** 따라서 구현은 두 단계로 쪼갠다.
 
