@@ -50,10 +50,6 @@ const config: Config = {
           card: 'var(--surface-card)',
           soft: 'var(--surface-soft)',
         },
-        border: {
-          subtle: 'var(--border-subtle)',
-          interactive: 'var(--border-interactive)',
-        },
         content: {
           primary: 'var(--text-primary)',
           secondary: 'var(--text-secondary)',
@@ -71,6 +67,23 @@ const config: Config = {
           danger: 'var(--state-danger)',
           info: 'var(--state-info)',
         },
+      },
+      /**
+       * 🔴 보더 색은 colors 가 아니라 borderColor 에 둔다.
+       *
+       * colors.border.{subtle,interactive} 로 두면 색 이름이 'border-subtle' 이 되고
+       * 실제 유틸리티는 border-border-subtle 이 된다. 컴포넌트는 border-subtle 을
+       * 쓰므로 무효 클래스가 되어 빌드 CSS 에 아무 규칙도 생기지 않았다.
+       * (colors.surface.page 는 최상위라 border-surface-page 가 정상 생성된 것과 대조된다)
+       *
+       * 그동안 테두리 색은 globals.css 의 전역 *{border-color:var(--border-subtle)} 이
+       * 대신 주고 있었다. subtle 은 값이 같아 눈에 띄지 않았지만,
+       * interactive 는 정의만 되고 어디에도 적용되지 않았다 —
+       * 테두리로 존재를 알려야 하는 버튼이 장식 구분선 색을 쓰고 있었다.
+       */
+      borderColor: {
+        subtle: 'var(--border-subtle)',
+        interactive: 'var(--border-interactive)',
       },
       borderRadius: {
         lg: 'var(--radius)',
