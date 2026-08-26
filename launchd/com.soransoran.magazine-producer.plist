@@ -27,6 +27,10 @@
      현재 기준: v24.14.0
      시스템 경로(/usr/local/bin · /opt/homebrew/bin · /usr/bin)에는 node 가 없다.
 
+  🔴 claude 도 같은 함정이다. launchd 는 셸 프로필을 읽지 않으므로
+     ~/.local/bin 을 PATH 에 직접 적어야 한다. 빠지면 auto-brief 가
+     spawn 단계에서 ENOENT 로 죽는다 (2026-08-27 01:00 · GEN_FAILED 3건).
+
   🔴 ProgramArguments[0] 에 셸(/bin/bash 등)을 쓰지 않는다.
      launchd 의 셸은 kTCCServiceSystemPolicyDocumentsFolder 미승인이라
      ~/Documents/ 에 접근하지 못한다 (Operation not permitted, exit 126).
@@ -56,13 +60,17 @@
   <key>WorkingDirectory</key>
   <string>/Users/yanadoo/Documents/soransoran</string>
 
-  <!-- 01:00 KST. 시스템 timezone 이 Asia/Seoul 이라 그대로 KST 다 -->
+  <!--
+    🔴 09:30 은 임시다. 사람이 깨어 있는 시간에 무인 실행을 눈으로 확인하려고 옮겼다.
+       한 회차가 사람 손 없이 끝나는 것을 확인하면 00:10 KST 로 되돌린다.
+    시스템 timezone 이 Asia/Seoul 이라 그대로 KST 다.
+  -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>1</integer>
+    <integer>9</integer>
     <key>Minute</key>
-    <integer>0</integer>
+    <integer>30</integer>
   </dict>
 
   <!-- 등록하는 순간 돌지 않는다. 검증은 launchctl kickstart 로 한다 -->
@@ -78,7 +86,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/Users/yanadoo/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>/Users/yanadoo/.local/bin:/Users/yanadoo/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>HOME</key>
     <string>/Users/yanadoo</string>
   </dict>
