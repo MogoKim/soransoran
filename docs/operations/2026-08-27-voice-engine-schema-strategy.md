@@ -163,6 +163,13 @@ model VoiceDerived {
 }
 ```
 
+> 🔴 **2026-08-26 갱신 — VE-M2 설계에서 범위가 갈렸다.**
+> 위 필드 중 **품질·위험 7종**(`naturalnessScore`~`sequenceSimilarityRisk`)은
+> 원문만으로 계산할 수 없다(비교 대상인 생성물이 없다). **VE-M3로 이동한다.**
+> 규칙으로 계산 가능한 문체·입력 흔적 6종이 VE-M2 범위다.
+> 정본: [VE-M2 VoiceDerived 설계](./2026-08-26-voice-derived-m2-design.md)
+> `@@unique`의 cache key 결함(모델·프롬프트 버전 누락)도 같은 문서 §5에 있다.
+
 🔴 **원문 문장을 저장하지 않는다.** 위 필드 중 어디에도 본문·댓글 텍스트가 들어가지 않는다.
 `rewriteDirection` 만 문자열이고, 그것은 **원문이 아니라 우리가 쓴 방향 메모**다.
 

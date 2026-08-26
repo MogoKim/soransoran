@@ -295,6 +295,13 @@ communityRegister       커뮤니티 어투
 > · `informalSpacing` 은 `spacingVariance` 의 하위 지표로 접었다
 >
 > 🔴 `schema.prisma` 는 여전히 수정하지 않았다.
+>
+> 🔴 **2026-08-26 추가 — 13종은 계산 시점이 둘로 갈린다.**
+> 문체·입력 흔적 6종은 원문에서 규칙으로 계산되고(VE-M2 · 비용 0),
+> 품질·위험 7종은 **생성물이 있어야** 계산된다(VE-M3 · 첫 LLM 비용).
+> `communityRegister` 는 출처 식별 호칭(우갱님들 · 레테님들 · 82님들)을
+> **일반 어투와 분리해** 다룬다 — 지우는 게 아니라 우리 맥락으로 바꾼다.
+> 정본: [VE-M2 VoiceDerived 설계](./2026-08-26-voice-derived-m2-design.md) §3
 
 ### 8-3. 반응 축
 
