@@ -116,3 +116,18 @@ jobs:
       # 네트워크 · DB · Sheet 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
       - name: Micro Seed 승인 레일 (approve-live · 단일 후보)
         run: npm run micro-seed:approve-check
+
+      # 우나어 legacy read-only 커넥터의 계약.
+      #
+      # 🔴 우나어는 우리 **운영 DB** 다. 커넥터가 write SQL 을 만들 수 있으면
+      #    role 권한(SELECT only)과 read-only 트랜잭션이 뚫리는 날 막을 것이 없다.
+      #    그리고 원문 컬럼이 하나라도 VoiceSource 에 생기면
+      #    "참조하되 복제하지 않는다" 는 1차 전략 전체가 무너진다 —
+      #    33,031건 본문과 154,872개 댓글이 소란소란 DB 로 넘어온다.
+      #
+      #    두 회귀 모두 **조용하다**: 코드는 돌고 테스트는 통과하며
+      #    문제는 데이터가 쌓인 뒤에야 드러난다. CI 가 대신 봐야 한다.
+      #
+      # 네트워크 · DB 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Voice 우나어 커넥터 (read-only · 원문 미복제)
+        run: npm run voice:unao-readonly-check
