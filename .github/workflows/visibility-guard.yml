@@ -150,3 +150,8 @@ jobs:
       #    중복 SKIP 이 무너지면 재실행이 중복을 쌓는다.
       - name: Voice 적재 경로 (원문 미저장 · 배치 게이트)
         run: npm run voice:unao-import-check
+
+      # 🔴 신규 저장 경로다. 기존 fixture 는 VoiceDerived · VoiceCommentSignal 을 모른다 —
+      #    원문 · 댓글 · 닉네임 미저장과 "타겟 설명어 부활" 회귀를 여기서만 잡는다.
+      - name: Voice 규칙 신호 (원문 미저장 · 비용 0원 · 타겟 설명어 금지)
+        run: npm run voice:derive-check
