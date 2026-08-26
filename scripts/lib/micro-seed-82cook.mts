@@ -12,6 +12,7 @@
  *    우리는 정직한 식별자로 공개 페이지만 읽는다.
  */
 import { createHash } from 'node:crypto'
+import { assessCandidate, type QualityAssessment } from './micro-seed-quality.mjs'
 
 /**
  * 🔴 sourceSite 정본. 헌법 §5-2-1 · §6-7-A 가 `82cook` 으로 정했고
@@ -217,7 +218,13 @@ export function parseArticleTitle(html: string): string | null {
   return t || null
 }
 
-/** 수집 1건의 산출물 — Micro Seed 스키마와 같은 이름을 쓴다 */
+/**
+ * 수집 1건의 산출물 — 앞 9필드는 Micro Seed 스키마와 같은 이름을 쓴다.
+ *
+ * 🔴 뒤 2필드(qualityFlags · qualitySignals)는 **선별 보조 정보**다.
+ *    importer 는 이 둘을 읽지 않는다(필드를 골라 읽는 구조다).
+ *    DB 원장에도 Sheet 17열에도 들어가지 않는다 — 사람이 고르는 것을 돕는 데서 끝난다.
+ */
 export type CollectedCandidate = {
   sourceSite: string
   sourceUrl: string
@@ -228,10 +235,25 @@ export type CollectedCandidate = {
   rawBody: string
   sourceCapturedAt: string
   dedupKey: string
+  /** 선별 보조 플래그. 🔴 거부 근거가 아니다 */
+  qualityFlags: QualityAssessment['flags']
+  /** 플래그가 붙은 근거. 사람이 검증할 수 있어야 한다 */
+  qualitySignals: QualityAssessment['signals'] & { stage: QualityAssessment['stage'] }
 }
 
-/** 목록 항목 + 상세 본문 → 산출물. 순수 함수 (capturedAt 을 인자로 받는다) */
+/**
+ * 목록 항목 + 상세 본문 → 산출물. 순수 함수 (capturedAt 을 인자로 받는다)
+ *
+ * 🔴 품질 판정을 **여기 안에서** 한다. 호출부에서 감싸지 않는다 —
+ *    목록 경로와 상세 경로가 같은 정규화 지점을 지나야 한 쪽만 빠지는 일이 없다.
+ *    rawBody 가 빈 목록 단계에서는 assessCandidate 가 본문 플래그를 매기지 않는다.
+ */
 export function buildCollected(item: ListItem, rawBody: string, capturedAtIso: string): CollectedCandidate {
+  const quality = assessCandidate({
+    originalTitle: item.originalTitle,
+    sourceCommentCount: item.sourceCommentCount,
+    rawBody,
+  })
   return {
     sourceSite: SOURCE_SITE,
     sourceUrl: item.sourceUrl,
@@ -242,5 +264,7 @@ export function buildCollected(item: ListItem, rawBody: string, capturedAtIso: s
     rawBody,
     sourceCapturedAt: capturedAtIso,
     dedupKey: computeDedupKey(SOURCE_SITE, item.sourceArticleId),
+    qualityFlags: quality.flags,
+    qualitySignals: { ...quality.signals, stage: quality.stage },
   }
 }

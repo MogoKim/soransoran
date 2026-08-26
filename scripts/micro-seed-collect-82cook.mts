@@ -19,6 +19,11 @@
  *    htmlToText 가 <img> 를 흔적 없이 지운다. URL 조차 남기지 않는다 —
  *    이미지 포함 원문 재발행은 롤백 사고 이력이 있는 금지 사항이다.
  *
+ * 🔴 품질 플래그는 **거부하지 않는다** (Q-1)
+ *    산출물에 qualityFlags 가 붙지만 그것으로 후보를 버리지 않는다.
+ *    정치성 · 실명 · 낮은 댓글수 · 낚시성 제목 · 짧은 본문은 플래그로만 보여준다 —
+ *    조용히 버려진 글은 아무도 모른다. 거부는 rawBody 가 빈 글 하나뿐이다.
+ *
  * 안전장치
  *   dry-run 기본   --live 가 없으면 네트워크를 타지 않는다. 계획만 출력한다
  *   kill switch    SORAN_82COOK_COLLECT_ENABLED=true 가 아니면 --live 가 무시된다
@@ -40,6 +45,7 @@ import {
   parseArticleTitle, parseListHtml, parseRobotsTxt, toRobotsPath,
   type CollectedCandidate, type ListItem, type RobotsRules,
 } from './lib/micro-seed-82cook.mjs'
+import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 
 const KILL_SWITCH = 'SORAN_82COOK_COLLECT_ENABLED'
@@ -65,6 +71,75 @@ async function get(url: string): Promise<string> {
 function writeJsonl(path: string, rows: object[]) {
   mkdirSync(dirname(path), { recursive: true })
   for (const r of rows) appendFileSync(path, `${JSON.stringify(r)}\n`, 'utf-8')
+}
+
+// ─────────────────────────────────────────────────────────
+// 선별 보조 출력 (Q-1)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 플래그는 사람이 읽고 판단하라고 있는 것이다.
+ *    기호를 쓰되 뜻을 같이 적는다 — 나중에 이 출력만 보고도 근거를 알 수 있어야 한다.
+ */
+const FLAG_LABEL: Record<string, string> = {
+  targetLikely: '🎯우리또래',
+  personalExperienceLikely: '🗣경험담',
+  practicalConcernLikely: '🧩생활고민',
+  highEngagement: '💬반응많음',
+  lowEngagement: '🕓반응없음',
+  politicalOrPublicFigure: '🟠정치·실명',
+  clickbaitTitle: '🎣낚시성',
+  shortTitle: '✂️짧은제목',
+  titleTruncated: '✂️제목잘림',
+  shortBody: '📄짧은본문',
+  linkHeavyBody: '🔗링크위주',
+  imageLikelyBody: '🖼이미지의존',
+}
+
+function describeFlags(flags: readonly string[]): string {
+  if (!flags.length) return '(플래그 없음)'
+  return flags.map((f) => FLAG_LABEL[f] ?? f).join(' ')
+}
+
+/**
+ * 목록을 **선별 점수 순**으로 세운다.
+ *
+ * 🔴 예전에는 댓글 많은 순이었다. 그 정렬의 1순위가 `제주도관광 망하겠어요`(댓글 9) 였는데
+ *    상세까지 열고 **발행하지 않은 글**이다 — 본문 62자에 URL 이 65% 였다.
+ *    댓글수는 좋은 후보의 신호 중 하나일 뿐 순서를 정할 근거는 못 된다.
+ *
+ * 🔴 점수가 낮다고 버리지 않는다. 전부 파일에 저장돼 있고 여기서는 순서만 바꾼다.
+ */
+function printSelectionTable(rows: CollectedCandidate[]) {
+  const scored = rows
+    .map((r) => ({
+      row: r,
+      score: selectionScore({
+        stage: r.qualitySignals.stage,
+        flags: r.qualityFlags,
+        signals: r.qualitySignals,
+      } as QualityAssessment),
+    }))
+    .sort((a, b) => b.score - a.score || b.row.sourceCommentCount - a.row.sourceCommentCount)
+
+  const top = scored.slice(0, 10)
+  console.log('  선별 점수 순 상위 10건 (상세는 --fetch 로 골라서 연다):')
+  console.log('  🔴 점수는 순서일 뿐이다. 낮다고 버려진 것이 아니라 전부 파일에 있다.\n')
+  for (const { row, score } of top) {
+    console.log(
+      `     ${String(score).padStart(4)}  댓글${String(row.sourceCommentCount).padStart(3)}  ` +
+        `${row.sourceArticleId}  ${row.originalTitle.slice(0, 34)}`,
+    )
+    console.log(`           ${describeFlags(row.qualityFlags)}`)
+  }
+
+  const flagged = rows.filter((r) => r.qualityFlags.includes('politicalOrPublicFigure')).length
+  const target = rows.filter(
+    (r) => r.qualityFlags.includes('targetLikely') && !r.qualityFlags.includes('politicalOrPublicFigure'),
+  ).length
+  console.log('')
+  console.log(`  전체 ${rows.length}건 · 🎯우리또래(정치·실명 제외) ${target}건 · 🟠정치·실명 ${flagged}건`)
+  console.log('  🔴 정치·실명은 걸러진 것이 아니라 표시만 했다. 고르는 것은 사람이 한다.\n')
 }
 
 async function main() {
@@ -133,12 +208,10 @@ async function main() {
     //
     //    rawBody 는 **빈 문자열**이다 — 목록은 본문을 읽지 않는다.
     //    importer 는 rawBody 가 빈 행을 거부하므로 목록 파일이 잘못 들어와도 적재되지 않는다.
-    writeJsonl(listPath, items.map((i) => buildCollected(i, '', now.toISOString())))
-    console.log(`  → ${listPath} (${items.length}건)\n`)
-    const top = [...items].sort((a, b) => b.sourceCommentCount - a.sourceCommentCount).slice(0, 10)
-    console.log('  댓글 많은 순 상위 10건 (상세는 --fetch 로 골라서 연다):')
-    for (const t of top) console.log(`     ${String(t.sourceCommentCount).padStart(3)}  ${t.sourceArticleId}  ${t.originalTitle.slice(0, 40)}`)
-    console.log('')
+    const rows = items.map((i) => buildCollected(i, '', now.toISOString()))
+    writeJsonl(listPath, rows)
+    console.log(`  → ${listPath} (${rows.length}건)\n`)
+    printSelectionTable(rows)
   }
 
   // ── ② 지정 상세 ──────────────────────────────────────
@@ -169,22 +242,37 @@ async function main() {
       console.error(`  ⚠️ ${id} — 본문이 비었다(이미지만 있는 글일 수 있다). 건너뛴다`)
       continue
     }
+    // 🔴 상세 제목을 목록 제목보다 **우선**한다 (2026-08-26 실측 결함).
+    //    목록 제목은 37자에서 잘린다 — 실측 25건 중 5건(20%)이 `..` · `…` · `&q` 로 끝났다.
+    //    importer 는 originalTitle 을 founderTitle 초기값으로 그대로 쓰므로,
+    //    잘린 제목이 그대로 발행된다. 상세를 여는 순간 온전한 제목을 얻을 수 있는데
+    //    그것을 버리고 있었다.
+    //    ⚠️ 이미 발행된 글은 소급 수정하지 않는다 — 발행은 비가역이다(§6-4).
     const detailTitle = parseArticleTitle(html)
-    const base = known.get(id) ?? {
-      sourceArticleId: id,
-      sourceUrl: ARTICLE_URL(id),
-      originalTitle: detailTitle ?? '',
-      sourceCommentCount: 0,
-    }
+    const listed = known.get(id)
+    const base: ListItem = listed
+      ? { ...listed, originalTitle: detailTitle ?? listed.originalTitle }
+      : {
+          sourceArticleId: id,
+          sourceUrl: ARTICLE_URL(id),
+          originalTitle: detailTitle ?? '',
+          sourceCommentCount: 0,
+        }
     if (!base.originalTitle) {
       console.error(`  ⚠️ ${id} — 제목을 얻지 못했다. 건너뛴다`)
       continue
     }
-    if (!known.has(id)) {
+    if (!listed) {
       console.log(`  ℹ️ ${id} — 목록 정보가 없어 sourceCommentCount=0 으로 둔다 (상세에서 세지 않는다)`)
+    } else if (detailTitle && detailTitle !== listed.originalTitle) {
+      console.log(`  ✏️ ${id} — 상세 제목으로 교체 (목록 제목이 잘려 있었다)`)
+      console.log(`       목록: ${listed.originalTitle}`)
+      console.log(`       상세: ${detailTitle}`)
     }
-    collected.push(buildCollected(base, rawBody, now.toISOString()))
+    const row = buildCollected(base, rawBody, now.toISOString())
+    collected.push(row)
     console.log(`  ✅ ${id} · ${rawBody.length}자 · 댓글 ${base.sourceCommentCount} · ${base.originalTitle.slice(0, 30)}`)
+    console.log(`       ${describeFlags(row.qualityFlags)}`)
   }
 
   if (collected.length) {
