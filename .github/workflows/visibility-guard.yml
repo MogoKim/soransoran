@@ -101,3 +101,18 @@ jobs:
       # 네트워크 · DB · Sheet 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
       - name: Micro Seed 수집 레일 (82cook · 품질 플래그)
         run: npm run micro-seed:collect-check
+
+      # 승인 레일(approve-live · sync-approval)의 계약.
+      #
+      # 🔴 approve-live 는 DB 와 Sheet 의 승인 상태를 바꾸는 **운영 명령**이다.
+      #    발행 직전 단계를 여는 문이라 여기서 잘못되면 그 다음이 전부 잘못된다.
+      #
+      #    특히 두 검사가 CI 밖에 있으면 안 된다:
+      #      · 단일 candidate 만 승격하는가 — Sheet 전체 승격 경로가 섞여 들어오면
+      #        명령은 성공하고 엉뚱한 후보가 발행 대기로 올라간다. 아무도 모른다.
+      #      · publisher 를 부르지 않는가 — 승인과 발행 사이에 사람이 서야 한다는
+      #        경계가 코드 한 줄로 사라질 수 있다.
+      #
+      # 네트워크 · DB · Sheet 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed 승인 레일 (approve-live · 단일 후보)
+        run: npm run micro-seed:approve-check

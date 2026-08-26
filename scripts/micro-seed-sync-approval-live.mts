@@ -24,16 +24,21 @@
  *    예약이 미래. 하나라도 어긋나면 status 를 올리지 않는다.
  *    올리는 것은 되돌리기 쉽지만, 올린 뒤 발행되면 되돌리기 어렵다.
  *
+ * 🔴 승격 판정은 lib/micro-seed-approve-lib.mts 에 있다
+ *    approve-live 가 같은 판정을 써야 한다. 이 파일이 Sheet 전체를 훑는 경로이고
+ *    approve-live 가 단일 후보 경로다 — 판정이 갈라지면 두 경로가 다른 답을 낸다.
+ *
  * 사용법
  *   npm run micro-seed:sync-approval-live
  *   npm run micro-seed:sync-approval-live -- --dry-run    (판정만, DB write 없음)
  */
 import { PrismaClient } from '@prisma/client'
-import { MIN_POST_TITLE_LENGTH, MAX_POST_TITLE_LENGTH } from '../src/lib/post-policy'
-import { resolvePublishableBoard } from '../src/lib/micro-seed-write-guard'
 import { createGoogleSheetSource, readCandidates, SHEET_TAB_NAME } from './lib/micro-seed-sheet.mjs'
 import { parseKst } from './micro-seed-validate.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
+// 🔴 승격 판정은 approve-live 와 **같은 lib** 을 쓴다 (C-2).
+//    갈라지면 "한쪽은 승격, 한쪽은 보류" 가 되는데 그게 가장 늦게 발견된다.
+import { evaluatePromotion } from './lib/micro-seed-approve-lib.mjs'
 
 const DRY_RUN = process.argv.includes('--dry-run')
 
@@ -105,87 +110,24 @@ async function main() {
         continue
       }
 
-      // ── 차단 조건 (승격 불가) ─────────────────────────────
-      //    편집 칸 반영보다 먼저 본다 — 신뢰할 수 없는 행은 값도 받지 않는다.
-      let blocked: string | null = null
-
-      // R11 (§6-10 0차): Sheet dedupKey 가 원장과 다르면 그 행은 다른 원문을 가리킬 수 있다
-      const sheetDedup = String(row.dedupKey ?? '').trim()
-      if (sheetDedup !== db.dedupKey) {
-        blocked = `dedupKey 가 원장과 다르다 (R11). Sheet="${sheetDedup}" 원장="${db.dedupKey}"`
-      }
-      // R9 (§6-4): 발행 이력이 있으면 승인 경로로 되돌리지 않는다
-      else if (db.createdPostId) {
-        blocked = `이미 발행된 후보다 (createdPostId=${db.createdPostId}). 승인 경로로 되돌리지 않는다 (R9)`
-      }
-
-      // ── 편집 칸 검증 (§6-7-A 5칸 중 status 제외 4칸) ──────
-      const data: Record<string, unknown> = {}
-      const fieldsUpdated: string[] = []
-      const fieldIssues: string[] = []
-
-      // founderTitle — R3 와 같은 기준(post-policy)을 쓴다
-      const founderTitle = typeof row.founderTitle === 'string' ? row.founderTitle.trim() : ''
-      if (!founderTitle) {
-        fieldIssues.push('founderTitle 이 비었다 (R3)')
-      } else if (founderTitle.length < MIN_POST_TITLE_LENGTH || founderTitle.length > MAX_POST_TITLE_LENGTH) {
-        fieldIssues.push(`founderTitle 길이가 범위 밖이다 (${founderTitle.length}자, R3)`)
-      } else if (founderTitle !== db.founderTitle) {
-        data.founderTitle = founderTitle
-        fieldsUpdated.push('founderTitle')
-      }
-
-      // board → targetBoardType — 화이트리스트 밖은 매핑 자체가 없다 (§6-9-D · R2)
-      const boardVerdict = resolvePublishableBoard(row.board)
-      if (!boardVerdict.ok) {
-        fieldIssues.push(`board: ${boardVerdict.reason} (R2)`)
-      } else if (boardVerdict.boardType !== db.targetBoardType) {
-        data.targetBoardType = boardVerdict.boardType
-        fieldsUpdated.push('targetBoardType')
-      }
-
-      // scheduledPublishAt — 파싱(R4) 과 과거 여부(R5) 는 다른 사건이다
-      const parsed = parseKst(row.scheduledPublishAt)
-      let scheduleIsPast = false
-      if (!parsed) {
-        fieldIssues.push(`scheduledPublishAt 형식이 아니다: "${String(row.scheduledPublishAt ?? '')}" (R4)`)
-      } else {
-        if (parsed.getTime() !== (db.scheduledPublishAt?.getTime() ?? NaN)) {
-          data.scheduledPublishAt = parsed
-          fieldsUpdated.push('scheduledPublishAt')
-        }
-        // 🔴 과거여도 값 자체는 반영한다. 창업자가 적은 것이 원장의 사실이다.
-        //    다만 그 상태로 PENDING 승격은 하지 않는다.
-        if (parsed <= now) scheduleIsPast = true
-      }
-
-      // declineReason — 자유 문자열. 비면 null 로 되돌린다
-      const declineReason = typeof row.declineReason === 'string' ? row.declineReason.trim() : ''
-      const nextDecline = declineReason || null
-      if (nextDecline !== db.declineReason) {
-        data.declineReason = nextDecline
-        fieldsUpdated.push('declineReason')
-      }
-
-      // ── status 승격 판정 ─────────────────────────────────
-      if (!blocked) {
-        if (db.status !== 'HOLD') {
-          blocked = `DB status 가 HOLD 가 아니다 (${db.status}). 승격 대상이 아니다`
-        } else if (fieldIssues.length) {
-          blocked = `편집 칸이 유효하지 않다 — ${fieldIssues.join(' / ')}`
-        } else if (scheduleIsPast) {
-          // 🔴 여기서 시각을 밀지 않는다 (정책 21 · R5).
-          blocked =
-            `scheduledPublishAt 이 과거다 (${kstString(parsed as Date)} KST < ${kstString(now)} KST). ` +
-            'PENDING 으로 올리지 않는다. 재예약은 micro-seed:reschedule-live 로 명시 지시한다'
-        }
-      }
-
-      const promote = !blocked
-      if (promote) {
-        data.status = 'PENDING'
-        fieldsUpdated.push('status')
-      }
+      // ── 승격 판정 — approve-live 와 같은 lib 을 쓴다 (C-2) ──
+      const verdict = evaluatePromotion({
+        mode: 'sync',
+        candidateId,
+        sheet: {
+          status: row.status,
+          dedupKey: row.dedupKey,
+          founderTitle: row.founderTitle,
+          board: row.board,
+          scheduledPublishAt: row.scheduledPublishAt,
+          declineReason: row.declineReason,
+        },
+        db,
+        now,
+        parseKst,
+        kstString,
+      })
+      const { data, fieldsUpdated, promote, blockedBy: blocked } = verdict
 
       if (Object.keys(data).length > 0 && !DRY_RUN) {
         await prisma.microSeedCandidate.update({ where: { id: candidateId }, data })

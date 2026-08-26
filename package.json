@@ -18,6 +18,8 @@
     "micro-seed:inventory": "tsx scripts/micro-seed-inventory.mts",
     "micro-seed:dry-run-live": "tsx scripts/micro-seed-dry-run-live.mts",
     "micro-seed:sync-approval-live": "tsx scripts/micro-seed-sync-approval-live.mts",
+    "micro-seed:approve-live": "tsx scripts/micro-seed-approve-live.mts",
+    "micro-seed:approve-check": "tsx scripts/micro-seed-approve-check.mts",
     "micro-seed:reschedule-live": "tsx scripts/micro-seed-reschedule-live.mts",
     "micro-seed:publish-live": "tsx scripts/micro-seed-publish-live.mts",
     "micro-seed:recover-live": "tsx scripts/micro-seed-recover-live.mts",
