@@ -109,9 +109,12 @@ export default async function PostDetailPage({
           </h2>
 
           {comments.length === 0 ? (
-            <p className="py-6 text-sm text-content-muted">
-              첫 댓글을 남겨보세요. 짧아도 괜찮습니다.
-            </p>
+            <div className="py-8 text-center">
+              <p className="font-bold text-content-primary">아직 댓글이 없어요</p>
+              <p className="mt-1 text-sm leading-relaxed text-content-muted">
+                짧아도 괜찮습니다. 첫 마디를 남겨보세요.
+              </p>
+            </div>
           ) : (
             <ul className="my-4 flex list-none flex-col gap-3 p-0">
               {comments.map((comment) => (
@@ -129,15 +132,23 @@ export default async function PostDetailPage({
           {session?.user ? (
             <CommentForm postId={post.id} boardSlug={board.slug} />
           ) : (
-            <p className="text-sm text-content-muted">
+            /* 🔴 코랄 fill 을 쓰지 않는다. 아래 WriteCta 와 FAB 이 이미 코랄이라
+                  같은 화면에 주 버튼이 셋이 되면 어느 것도 주가 아니게 된다.
+                  여기는 보더로 자기를 알리는 자리다 (--border-interactive). */
+            <div className="rounded-2xl border border-subtle bg-surface-card p-5 text-center">
+              <p className="break-keep leading-relaxed text-content-primary">
+                이 글을 읽고 든 생각을 한 줄로 남겨주세요.
+              </p>
               <Link
                 href={loginHref(`${board.href}/${post.id}`)}
-                className="inline-flex min-h-[52px] items-center text-link"
+                className="mt-4 inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-6 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
               >
-                로그인
+                로그인하고 댓글 쓰기
               </Link>
-              하면 댓글을 남길 수 있습니다.
-            </p>
+              <p className="mt-2 text-xs leading-relaxed text-content-muted">
+                로그인하면 읽던 글로 다시 돌아옵니다.
+              </p>
+            </div>
           )}
         </section>
 

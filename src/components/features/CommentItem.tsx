@@ -38,7 +38,8 @@ export default function CommentItem({
       </p>
 
       {currentUserId ? (
-        <div className="mt-1 flex items-center gap-3">
+        // 오른쪽 끝으로 민다 — 본문 왼쪽 아래에 두면 읽는 줄 바로 밑이라 잘못 눌린다
+        <div className="mt-2 flex justify-end">
           {isOwn ? (
             <DeleteButton boardSlug={boardSlug} postId={postId} commentId={comment.id} />
           ) : (

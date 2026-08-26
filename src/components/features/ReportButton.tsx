@@ -32,7 +32,7 @@ export default function ReportButton({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] items-center px-2 text-sm text-content-muted underline"
+        className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
       >
         신고
       </button>
