@@ -94,6 +94,10 @@ const FLAG_LABEL: Record<string, string> = {
   shortBody: '📄짧은본문',
   linkHeavyBody: '🔗링크위주',
   imageLikelyBody: '🖼이미지의존',
+  // Q-1 보강 — 본문 위험 신호. 🔴 표시일 뿐 거부가 아니다
+  medicalOrAdLikely: '🏥의료·광고성',
+  quotedOrMediaLikely: '📰전언·방송',
+  publicFigureMention: '🟠본문실명',
 }
 
 function describeFlags(flags: readonly string[]): string {
