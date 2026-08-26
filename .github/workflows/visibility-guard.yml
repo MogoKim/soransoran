@@ -89,3 +89,15 @@ jobs:
       # guard 없이도 파이프라인이 무너지지 않는지, 미주입이 unchecked 로 드러나는지 확인한다.
       - name: Micro Seed 주입 배선 (guard 미주입 경로)
         run: npm run micro-seed:plan-wiring
+
+      # 수집 레일(82cook collector · 품질 플래그)의 계약.
+      #
+      # 🔴 이 fixture 가 CI 밖에 있으면 로컬 실행에만 의존한다 — 위 넷을 CI 에 둔 것과 같은 이유다.
+      #    특히 "자동 거부가 늘지 않았다" 검사가 여기 있다. 품질 플래그는 **선별 보조**이지
+      #    거부 엔진이 아닌데, 그 경계는 코드 한 줄이면 무너진다(플래그로 continue 하면 끝이다).
+      #    거부로 조용히 버려진 후보는 아무도 세지 않으므로 사람 눈에 띄지 않는다.
+      #    막아야 할 회귀가 눈에 안 보이는 종류라 CI 가 대신 봐야 한다.
+      #
+      # 네트워크 · DB · Sheet 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed 수집 레일 (82cook · 품질 플래그)
+        run: npm run micro-seed:collect-check
