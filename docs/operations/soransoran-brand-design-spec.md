@@ -84,9 +84,16 @@
 
 | 토큰 | 값 | 역할 |
 |---|---|---|
-| `--cta` | `#B64235` | §3-1-A 기존 안정 조합 / §3-1-B 테두리·pressed |
-| `--cta-hover` | `#96372E` | hover · pressed 심화 |
-| `--cta-text` | `#FFFFFF` | `--cta` fill 위 글자 |
+| `--cta` | fill 스위치 | §3-1-A 에서는 `#B64235`, §3-1-B 전환 후에는 `var(--brand)` |
+| `--cta-text` | 글자 스위치 | §3-1-A 에서는 `#FFFFFF`, §3-1-B 전환 후에는 `var(--text-primary)` |
+| **`--cta-edge`** | **`#B64235`** | **코랄 CTA/FAB fill 의 경계선 · pressed/depth 보조.** 바탕 위 **5.24:1** · 카드 위 **5.50:1** |
+| `--cta-hover` | `#96372E` | hover 시 테두리 · pressed 심화. 바탕 위 6.94:1 |
+
+🔴 **`--cta` 와 `--cta-text` 는 값이 아니라 스위치다.**
+이 두 줄만 갈아끼우면 CTA 전체가 §3-1-A ↔ §3-1-B 사이를 오간다. 컴포넌트는 고치지 않는다(§10 rollback).
+
+🔴 **`#B64235` 는 `--cta-edge` 로 분리해 보존한다.**
+`--cta` 가 스위치가 되면서 그 값을 담을 자리가 필요했다. 새로 만든 색이 아니라 **자리를 옮긴 기존 값**이다.
 
 ### 2-3. 표면 · 보더 · 텍스트
 
@@ -222,12 +229,12 @@ hover   --cta-hover  #96372E     7.28 : 1   ✅
 
 코랄 면은 밝은 바탕에서 스스로 갈리지 않는다. **테두리가 경계를 대신한다.**
 
-| 테두리 | vs 바탕 | |
-|---|---:|---|
-| **`--cta` `#B64235`** | **5.24** | ✅ **권장** |
-| `--cta-hover` `#96372E` | 6.94 | ✅ |
-| `--brand-ink` `#9A3A31` | 6.62 | ✅ |
-| `--border-interactive` `#B87F73` | 3.17 | 🟡 경계 |
+| 테두리 | vs 바탕 | vs 카드 | |
+|---|---:|---:|---|
+| **`--cta-edge` `#B64235`** | **5.24** | **5.50** | ✅ **권장** |
+| `--cta-hover` `#96372E` | 6.94 | 7.28 | ✅ hover 시 |
+| `--brand-ink` `#9A3A31` | 6.62 | 6.95 | ✅ |
+| `--border-interactive` `#B87F73` | 3.17 | 3.32 | 🟡 경계 |
 
 ### 조건 4 — 🟡 눌림은 색이 아니라 크기가 1차 신호다
 
@@ -245,24 +252,41 @@ hover   --cta-hover  #96372E     7.28 : 1   ✅
 ### 권장 조합 정리
 
 ```
-fill      --brand         #FF6F61
-text      --text-primary  #2F2624      5.41 : 1   ✅
-border    --cta           #B64235      바탕 대비 5.24 : 1
-pressed   --cta           #B64235      + active:scale-95 (1차 신호)
-hover     어두워지는 방향                밝아지면 대비가 더 떨어진다
-shadow    --shadow-brand               유지
+fill      --cta       → var(--brand)         #FF6F61
+text      --cta-text  → var(--text-primary)  #2F2624   5.41 : 1   ✅
+border    --cta-edge                         #B64235   바탕 5.24 : 1 · 카드 5.50 : 1
+hover     테두리 --cta-hover + fill 밝기 낮춤   #96372E   바탕 6.94 : 1
+pressed   active:scale-95 (1차 신호)          색은 쓰지 않는다 — 이유는 아래
+shadow    --shadow-brand                     유지
 ```
 
-### 🔴 `--cta` 의 역할 재정의
+🔴 **hover 로 fill 배경만 어둡게 할 수 없다.**
+```
+#B64235 + 먹색 글씨   2.68 : 1     요건 4.5 — FAIL
+#96372E + 먹색 글씨   2.02 : 1     요건 4.5 — FAIL
+```
+먹색 글씨가 배경에 묻힌다. **fill 은 밝기로 낮추고, 어두워지는 신호는 테두리가 맡는다.**
+밝기는 −5% 까지다 — `−10%` 는 먹색 글씨가 4.44:1 로 요건에 미달한다.
 
-전환하면 `#B64235` 는 **메인 액션 색이 아니라 코랄의 테두리와 눌린 상태**가 된다.
+**pressed 에도 색을 쓰지 않는다.** 같은 이유로 `#B64235` 배경 + 먹색은 2.68:1 이다.
+
+### 🔴 `--cta` 의 역할 재정의 — `#B64235` 는 `--cta-edge` 로 분리된다
+
+전환 전에는 `--cta` 가 값(`#B64235`)이자 메인 액션 색이었다.
+전환 후에는 **둘이 갈라진다.**
 
 ```
---cta        #B64235   테두리 · pressed · 흰 글씨가 필요한 좁은 자리
---cta-hover  #96372E   pressed 심화 · focus ring (이미 같은 값)
+--cta        스위치     var(--brand)  ← fill. 되돌리면 #B64235
+--cta-text   스위치     var(--text-primary)  ← 글자. 되돌리면 #FFFFFF
+--cta-edge   #B64235   코랄 면의 경계 · pressed/depth 보조   ← 기존 값이 여기로 옮겨왔다
+--cta-hover  #96372E   hover 시 테두리 · pressed 심화 (focus-ring 과 같은 값)
 ```
 
-**"depth / accessibility 보조 토큰"** 으로 읽어야 한다.
+**`#B64235` 는 더 이상 "메인 액션 색"이 아니다.**
+코랄 면이 밝은 바탕에서 스스로 갈리지 않으므로(2.60:1) **그 경계를 만들어 주는 색**이고,
+깊이와 접근성을 담당하는 **"depth / accessibility 보조 토큰"** 이다.
+
+🟢 **새로 발명한 색이 아니다.** 전환 전 `--cta` 가 갖고 있던 값을 자리만 옮겨 보존한 것이다.
 
 ### 🔴 전환은 전부 함께 한다
 
@@ -542,13 +566,21 @@ src/lib/queries/posts.ts  ·  src/lib/post-visibility.ts  ·  src/app/sitemap.ts
 npm run typecheck · lint · check:visibility · check:tokens · build   전부 exit 0
 git diff --check
 
-새 hex 추가 0건 — --text-primary · --cta 를 그대로 쓴다
-빌드 CSS 에 새 규칙이 실제로 생겼는지 확인 (§8-2 교훈)
+새 hex 추가 0건 — --text-primary · --cta-edge(기존 #B64235) 를 그대로 쓴다
+
+🔴 빌드 CSS 에 새 규칙이 실제로 생겼는지 확인한다 (§8-2 교훈)
+  .border-cta-edge{border-color:var(--cta-edge)}     ← 신설 토큰. 없으면 테두리가 안 그려진다
+  .bg-cta{background-color:var(--cta)}
+  .text-cta-text{color:var(--cta-text)}
+  .hover\:border-cta-hover · .hover\:brightness-95
+  :root 의 --cta-edge 정의
+  🔴 tailwind.config.ts 에 cta.edge 를 넣었는지 — 넣지 않으면 border-cta-edge 는 무효 클래스다
 
 대비 실측
-  코랄 fill + --text-primary        5.41 : 1   ✅
-  테두리 --cta vs 바탕               5.24 : 1   ✅
-  흰 글씨가 남아 있지 않은지          🔴 0건이어야 한다
+  코랄 fill + --text-primary          5.41 : 1   ✅
+  테두리 --cta-edge vs 바탕 / 카드     5.24 / 5.50 : 1   ✅
+  hover 밝기 −5% fill + 먹색 글씨      4.88 : 1   ✅  (−10% 는 4.44 로 미달)
+  흰 글씨가 남아 있지 않은지            🔴 0건이어야 한다
 
 화면        홈 · 커뮤니티 목록 2종 · 매거진 · 베스트 · 상세 · 글쓰기 · 로그인   전부 200
 FAB 노출     홈 · 커뮤니티 2면 = 1건 / 나머지 = 0건

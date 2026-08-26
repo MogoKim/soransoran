@@ -22,10 +22,20 @@
     --brand-ink: #9a3a31;    /* 읽는 브랜드색 — 배경 위 6.62:1 */
 
     /* ── CTA — 누르는 것 ──
-       FAB · primary button · empty state button 은 전부 이 하나를 쓴다. */
-    --cta: #b64235;          /* 흰 글씨 5.50:1 */
-    --cta-hover: #96372e;    /* 흰 글씨 7.28:1 */
-    --cta-text: #ffffff;
+       FAB · primary button · empty state button 은 전부 이 하나를 쓴다.
+       정본 §3-1-B 코랄 전환.
+
+       🔴 rollback 은 아래 두 줄이다.
+          --cta: #b64235 · --cta-text: #ffffff 로 되돌리면
+          컴포넌트를 한 곳도 고치지 않고 8곳이 동시에 복귀한다.
+
+       🔴 hover 로 fill 배경만 어둡게 할 수 없다.
+          #b64235 + 먹색 2.68:1 · #96372e + 먹색 2.02:1 — 글자가 배경에 묻힌다.
+          fill 은 brightness 로 낮추고, 어두워지는 신호는 테두리가 맡는다. */
+    --cta: var(--brand);              /* 코랄 fill — 먹색 글씨 5.41:1 */
+    --cta-text: var(--text-primary);  /* 먹색 — 흰 글씨는 2.73:1 이라 못 쓴다 */
+    --cta-edge: #b64235;              /* 코랄 면의 경계 — 바탕 위 5.24:1 (면 단독은 2.60) */
+    --cta-hover: #96372e;             /* hover 시 테두리 — 바탕 위 6.94:1 */
 
     /* ── 표면 ── */
     --surface-page: #fff8f6; /* 웜 아이보리 — 정본 §3-2. 순백보다 눈이 편하다 */

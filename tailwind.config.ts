@@ -43,6 +43,7 @@ const config: Config = {
         cta: {
           DEFAULT: 'var(--cta)',
           hover: 'var(--cta-hover)',
+          edge: 'var(--cta-edge)',
           text: 'var(--cta-text)',
         },
         surface: {
