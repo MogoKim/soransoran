@@ -1509,46 +1509,63 @@ commentCount · topCommentsCrawledAt · riskFlags
 
 ## 12. 마일스톤
 
-| 마일스톤 | 목적 | 산출물 | 완료 조건 | Codex[1] 충돌 |
-|---|---|---|---|---|
-| **Pre-M0 Safety Contract** | 구현 전 합의 · **필드 확정** | 이 문서 · §13 결정 · Codex[1] 조율 · Post 3필드 이름/타입 확정 | 계약 승인. **코드 0줄 · schema 0 · migration 0** | 🟢 없음 |
-| **M0 Schema & Gate Foundation** | 게이트를 먼저 세운다 | Post 3필드 **구현** · 3축 판정 함수(`isCommunityVisible`/`isSearchIndexable`/`isDiscoveryEligible`) · 현존 표면 적용 · CI guard | Micro Seed 0건 상태에서 **기존 표면 회귀 0** | 🔴 schema · migrations |
-| **M1 Google Sheet Founder Gate** | 사람 승인 게이트 | 8상태 기계 · ID 양방향 · timeout 복구 · cap 계층 · `publishAt` | 오타 · 정렬 · 크래시 · 부분실패가 의도치 않은 발행으로 이어지지 않음 | 🟡 `publishAt` |
-| **M2 Micro Seed MVP** | 첫 발행 | 본문 발행 · 원문 그대로 사용 · 창업자 승인 · surface check · 첫 1건 제한 | **§12-0 완료 조건** 참조 | 🟢 |
-| **M3 Comment Activation Engine** | 댓글 활성화 | `commentOrigin` · 출처 5필드 · 원문 댓글 1~3개 · 반응 지도 | 댓글 출처 **역추적 가능** | 🟡 JSON-LD |
-| **M4 Persona OS** | 30명 deep | Persona · PersonaMemory · VoiceVariation | 같은 페르소나의 **연속성 성립** | 🟢 |
-| **M5 Voice Vault** | 자산화 | Raw / Derived / Publishing Input 3계층 | 우나어 legacy 학습 자산화 | 🟢 |
-| **M6 Voice Engine LLM** | 재창작 | 후보 좁힌 뒤 제한 사용 · 비용 hard stop | 비용 상한 내 동작 | 🟢 |
-| **M7 Scale / Cost / QA Automation** | 확장 | cap 상향 · 자동 QA · 비용 원장 | — | 🟡 배포 |
+| 마일스톤 | 상태 | 목적 | 산출물 | 완료 조건 | Codex[1] 충돌 |
+|---|---|---|---|---|---|
+| **Pre-M0 Safety Contract** | ✅ 완료 | 구현 전 합의 · **필드 확정** | 이 문서 · §13 결정 · Codex[1] 조율 · Post 3필드 이름/타입 확정 | 계약 승인. **코드 0줄 · schema 0 · migration 0** | 🟢 없음 |
+| **M0 Schema & Gate Foundation** | ✅ 완료 | 게이트를 먼저 세운다 | Post 3필드 **구현** · 3축 판정 함수(`isCommunityVisible`/`isSearchIndexable`/`isDiscoveryEligible`) · 현존 표면 적용 · CI guard | Micro Seed 0건 상태에서 **기존 표면 회귀 0** | 🔴 schema · migrations |
+| **M1 Google Sheet Founder Gate** | ✅ 완료 | 사람 승인 게이트 | 8상태 기계 · ID 양방향 · timeout 복구 · cap 계층 · `publishAt` | 오타 · 정렬 · 크래시 · 부분실패가 의도치 않은 발행으로 이어지지 않음 | 🟡 `publishAt` |
+| **M2 Micro Seed MVP** | ✅ **완료** (§12-0) | 첫 발행 | 본문 발행 · 원문 그대로 사용 · 창업자 승인 · surface check · 첫 1건 제한 | **§12-0 완료 조건** 참조 | 🟢 |
+| **M3 Comment Activation Engine** | ⬜ 미착수 | 댓글 활성화 | `commentOrigin` · 출처 5필드 · 원문 댓글 1~3개 · 반응 지도 | 댓글 출처 **역추적 가능** | 🟡 JSON-LD |
+| **M4 Persona OS** | ⬜ 미착수 | 30명 deep | Persona · PersonaMemory · VoiceVariation | 같은 페르소나의 **연속성 성립** | 🟢 |
+| **M5 Voice Vault** | 🟡 최소본만 | 자산화 | Raw / Derived / Publishing Input 3계층 | 우나어 legacy 학습 자산화 | 🟢 |
+| **M6 Voice Engine LLM** | ⬜ 미착수 | 재창작 | 후보 좁힌 뒤 제한 사용 · 비용 hard stop | 비용 상한 내 동작 | 🟢 |
+| **M7 Scale / Cost / QA Automation** | ⬜ 미착수 | 확장 | cap 상향 · 자동 QA · 비용 원장 | — | 🟡 배포 |
+
+> 🔴 **번호 주의 — 이 표의 M1~M7 은 Micro Seed 레인 내부 구현 순서다.**
+> 운영 마일스톤(`docs/operations/2026-08-26-soransoran-milestones.md`)의 M1~M7 과 **번호가 다르다.**
+> 예: 여기 M3(Comment)는 운영 M5, 여기 M6(Voice Engine)은 운영 M4 다.
+> 인용할 때는 반드시 `헌법 M3` 처럼 출처를 붙인다. 매핑 표는 그 문서 §3 에 있다.
+>
+> **상태 갱신 기준일: 2026-08-26.** 상태는 실측을 따라간다 —
+> 이 표와 코드·DB·Sheet 가 어긋나면 실측을 믿고 이 표를 고친다.
 
 ### 12-0. M2 Micro Seed MVP 완료 조건 (상세)
 
 발행 1건으로 아래를 **전부 실측**해야 완료다.
 
+**실측 결과 (2026-08-26 · 발행 4건 기준)** — `[x]` 확인 · `[ ]` **미확인** · `[-]` 표면 미도입
+
 ```
 🟢 노출되어야 한다
-   [ ] 자유게시판 또는 갱년기톡 목록에 정상 노출
-   [ ] 커뮤니티 상세 페이지 접근 시 HTTP 200 · 본문 정상 렌더
-   [ ] 로그인 회원이 댓글을 달 수 있다
+   [x] 자유게시판 또는 갱년기톡 목록에 정상 노출        · /community/free 목록에 4건
+   [x] 커뮤니티 상세 페이지 접근 시 HTTP 200 · 본문 정상 렌더
+   [ ] 로그인 회원이 댓글을 달 수 있다                   · 🔴 실 로그인 테스트 미실시
 
 🔴 노출되지 않아야 한다
-   [ ] sitemap.xml 에 해당 URL 없음
-   [ ] JSON-LD 미생성 (HTML 소스에 application/ld+json 0건)
-   [ ] OG image 미생성 또는 generic
-   [ ] search 결과 0건            (표면 도입 시)
-   [ ] best · trending 미포함      (표면 도입 시)
-   [ ] topic hub 미포함            (표면 도입 시)
-   [ ] related posts 미포함        (표면 도입 시)
-   [ ] 공개 API 응답 미포함        (표면 도입 시)
-   [ ] notification · activity feed 미발생 (표면 도입 시)
+   [x] sitemap.xml 에 해당 URL 없음                      · 11 URL 중 Micro Seed 0건
+   [x] JSON-LD 미생성 (application/ld+json 0건)
+   [x] OG image 미생성 또는 generic                      · /opengraph-image (글별 생성 없음)
+   [-] search 결과 0건            · /search 404 — 표면 미도입
+   [x] best 미포함                · /best 200 · 목록 비어 있음
+       ⚠️ 게이트가 막은 것인지 집계 조건 미달인지는 **미분리**
+   [-] trending 미포함            · /trending 404 — 표면 미도입
+   [-] topic hub 미포함           · 표면 미도입
+   [-] related posts 미포함       · 표면 미도입
+   [-] 공개 API 응답 미포함       · 표면 미도입
+   [-] notification · activity feed 미발생 · 표면 미도입
 
 🔴 메타데이터
-   [ ] 상세 페이지 meta robots = noindex (nofollow 여부는 TODO-18)
+   [x] 상세 페이지 meta robots = noindex (nofollow 여부는 TODO-18)
+       · 실측값 `noindex, follow`
 
 🔴 감사
-   [ ] surface check 결과가 기록됨 (C-9)
-   [ ] sheetCandidateId ↔ Post 양방향 조회 성공
+   [ ] surface check 결과가 기록됨 (C-9)                  · 🔴 기록 경로 미구현
+   [x] sheetCandidateId ↔ Post 양방향 조회 성공          · recover scanner divergence 0
 ```
+
+> 🔴 **`[-]` 는 "위반 없음"이 아니라 "검사할 표면이 아직 없다"는 뜻이다.**
+> 해당 표면을 도입하는 PR 은 도입과 **같은 PR 에서** 이 칸을 `[x]` 로 바꿔야 한다.
+> 남은 `[ ]` 2건(회원 댓글 · surface check 기록)은 운영 마일스톤 M3·M5 로 넘긴다.
 
 **"전 표면 미노출"이 완료 조건이 아니다.** 커뮤니티에서 보이는 것이 절반이고,
 검색·추천에서 안 보이는 것이 나머지 절반이다.
@@ -1569,9 +1586,21 @@ read-only inventory → dry-run → HOLD append → founder PENDING → 1건 pub
 
 수집기 · 발행기 · 댓글 엔진 · persona engine은 각각 kill switch를 가진다.
 
-**현재 소란소란에는 Vercel cron · Google Sheet 연동이 0개이고, GitHub Actions 는
-`visibility-guard.yml`(CI) 하나뿐 cron 은 0개다.**
-자동화 계층 신설은 M1의 설계 대상이며, **수동 실행부터 시작한다.**
+**진행 상태 (2026-08-26 실측)**
+
+```
+read-only inventory  ✅ 열림   PR #34  micro-seed:read:live
+dry-run              ✅ 열림   PR #38  micro-seed:dry-run:live
+HOLD append          ✅ 열림   PR #42  updateCandidateRow (write scope 분리)
+founder PENDING      ✅ 열림   PR #47  Sheet → DB 승인 동기화
+1건 publish          ✅ 열림   PR #48  burst cap 1 · 유예창 30분
+limited publish      🟡 진행   softDaily 3 / hardDaily 10 아래 4건 발행
+```
+
+**Google Sheet 연동은 열렸다** — read(readonly scope) · write(`updateCandidateRow` 한 지점).
+**cron 은 여전히 0개다.** GitHub Actions 는 `visibility-guard.yml`(CI) 하나뿐이고
+`schedule:` 0건, Vercel cron 0건이다.
+자동화 계층 신설은 여전히 **미착수**이며, **수동 실행부터 시작한다** — 이 원칙은 유지된다.
 
 ---
 
@@ -1644,6 +1673,54 @@ M0 에서 두 번 실증했고, PR-C1 에서도 같은 절차를 밟는다.
 **M1 은 "발행이 되는가"로 판정하지 않는다.** 발행은 M2 다.
 M1 의 완료 조건은 §12 표대로 **"오타 · 정렬 · 크래시 · 부분실패가 의도치 않은 발행으로
 이어지지 않음"** 이다. 즉 **막히는 것을 확인하는 것이 M1 의 산출물**이다.
+
+---
+
+### 12-4. 실제 PR 이력 (2026-08-26 실측)
+
+**§12-3 의 7개 분할표는 계획이었고, 실제로는 더 잘게 쪼개졌다.**
+게이트를 먼저 세우고 코드를 나중에 붙이는 순서(§12-1 · PR-C1 → PR-C2)는 지켜졌다.
+
+| 계획 | 실제 PR | 내용 |
+|---|---|---|
+| — | **#6** | 이 헌법 정본 |
+| — | **#8** | M0 Schema & Gate Foundation |
+| — | **#11** | CI `visibility-guard` |
+| PR-A | **#13** | M1 Founder Gate 계약 문서 |
+| PR-A′ | **#14** | 후보 원장 schema (migration 0004) |
+| PR-A″ | **#16** | dry-run validator (R1~R10) |
+| PR-B | **#19** | Sheet reader — 17열 · 행 매핑 |
+| PR-C0a | **#21** | R9 `hasEverPublished` 보정 + R11 |
+| — | **#23** | `MicroSeedRawContent` schema |
+| — | **#24** | DB 주입 dry-run planner |
+| — | **#26** | `content-guard` 강제 (G-B) |
+| — | **#27** | 시스템 작성자 env 필수화 |
+| PR-C1 | **#30** | write-path 가드 |
+| — | **#34** | Sheet live reader (read-only inventory) |
+| PR-C2 | **#36** | publisher prewrite 가드 강화 |
+| — | **#38** | live dry-run |
+| — | **#42** | Sheet write helper (`updateCandidateRow`) |
+| — | **#47** | Sheet → DB 승인 동기화 |
+| **PR-C2 본체** | **#48** | publisher + 유예창 + 원자적 획득 |
+
+**M2(첫 발행) 이후 수선 · 확장**
+
+| PR | 내용 | 계기 |
+|---|---|---|
+| **#52** | publisher 가 증거와 함께 `PUBLISHED` 를 쓸 수 있게 | 🔴 가드가 publisher 를 막았다 |
+| **#54** | publish lib 추출 + `postUrl` 공백 차단 | C-2 단일 지점 |
+| **#56** | recover scanner (timeout · divergence) | PROCESSING 좌초 대비 |
+| **#58** | 82cook 후보 수집 (write 0) | 자동 수집 레일 |
+| **#59** | 82cook importer | |
+| **#61** | R10 cap 을 PENDING 만 세도록 | 🔴 dry-run 오탐 |
+| **#62** | import 시 `scheduledPublishAt` 제안 | 수동 계산 제거 |
+| **#64** | 제안 기본값 25분 → 8분 | 실측 14초 대비 과보수 |
+| **#67** | M1 운영 runbook | |
+
+> 🔴 **#52 가 남긴 교훈**: `status='PUBLISHED'` 쓰기를 무조건 막는 가드는
+> **publisher 가 없던 동안에만 옳았다.** fixture 가 그 잘못된 계약을 잠갔고,
+> 첫 발행에서 Sheet 역기록이 거부됐다.
+> **가드에는 "무엇을 막는가" 뿐 아니라 "언제까지 옳은가" 를 함께 적는다.**
 
 ---
 
