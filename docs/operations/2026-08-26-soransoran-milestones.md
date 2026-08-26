@@ -76,12 +76,17 @@ recover divergence   0
 | **M2** | Source Quality Engine (Q-1) | ✅ **1차 완료** (fixture 31건 CI) |
 | **M3** | Founder Gate (approve-live) | ✅ **1차 완료** (fixture 14건 CI) |
 | **M4** | Voice Engine Contract | 🟡 VE-0 완료 · **legacy 반영 완료** |
-| **M5** | **Legacy Data Vault** | 🔜 **다음 핵심** — 우나어 33,031 / 154,872 |
-| **M6** | Derived Voice Dataset | 대기 |
-| **M7** | Offline Voice Analyzer | LLM 전 단계 |
-| **M8** | LLM Voice Engine v0 | 데이터 구조 · 샘플 확보 후 |
-| **M9** | Original Content Lane | Derived 기반 index 콘텐츠 |
-| **M10** | Comment / Conversation Engine | 댓글 원문 자산화 후 |
+| **M5** | **Legacy Data Vault** | 🔜 **다음 핵심** — 우나어 원문 33,031 · 댓글 154,872 자산화 |
+| **M6** | Derived Voice Dataset | 원문 · 댓글을 **직접 복제하지 않고** 말투 · 감정 · 반응 신호로 변환 |
+| **M7** | Offline Voice Analyzer | **AI vs human 차이** · 자연스러움 · 복제 위험 · **과교정 위험** 분석 |
+| **M8** | LLM Voice Engine v0 | 충분한 구조와 샘플 이후 **제한적으로** |
+| **M9** | Original Content Lane | Derived 기반 오리지널 콘텐츠 |
+| **M10** | Comment / Conversation Engine | **댓글 말투와 반응 구조** 기반 |
+
+> 🔴 **M7 이 M8 앞에 있는 이유**: AI 글과 사람 글의 차이를 **먼저 규칙으로 재 보고**,
+> 그 기준이 선 다음에 LLM 을 붙인다. 기준 없이 LLM 을 부르면
+> 무엇이 좋아졌는지 판정할 방법이 없다.
+> 판정 축: [`2026-08-27-voice-engine-style-strategy.md`](./2026-08-27-voice-engine-style-strategy.md) §3
 
 **구 번호 대응**: 구 M4(Voice Engine v0) → **M4~M8** · 구 M5(Comment) → **M10** ·
 구 M6(Multi-source) → M5 에 흡수(우나어가 두 번째 source 다) · 구 M7(Semi-auto) → 유지되나 후순위.
