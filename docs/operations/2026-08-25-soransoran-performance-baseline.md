@@ -100,14 +100,69 @@ React `cache()` 미적용이라 실제 쿼리도 2회다. 중복 자체는 여�
 또한 `src/lib/queries/posts.ts`는 **수정 금지 파일**이라 별도 승인이 필요하다.
 → **지금 착수할 이유 없음. 백로그 유지.**
 
-### 다음 성능 후보
+### 🔴 정적 페이지 `revalidate` — **후보에서 내린다** (2026-08-26 감사로 정정)
 
-| 후보 | 대상 | 기대 | 위험 |
-|---|---|---|---|
-| 정적 페이지 `revalidate` | `/magazine`, `/magazine/[slug]`, `/login`, `/privacy`, `/terms` — **DB·개인화 미사용 페이지만** | 95ms → CDN HIT 시 더 감소 | 낮음 |
-| Pretendard self-host | `layout.tsx`의 `cdn.jsdelivr.net` 동기 stylesheet 제거 | **FCP** 개선 (TTFB 아님) | 낮음. 절차는 `public/fonts/pretendard/README.md`에 문서화됨 |
+> **이 문서가 처음에 적었던 후보가 틀렸다.**
+> `/magazine`, `/magazine/[slug]`, `/login`, `/privacy`, `/terms` 를
+> "DB·개인화 미사용 페이지" 로 보고 `revalidate` 후보로 올렸는데,
+> 전수 감사 결과 **다섯 곳 모두 불가하거나 효과가 0** 이다.
+> 조건("DB·개인화 미사용") 자체는 옳았지만 **`HeaderAuth` 가 모든 페이지를
+> 개인화 페이지로 만든다**는 사실이 빠져 있었다.
 
-두 후보 모두 P0 대비 효과가 작다. **체감 개선은 이미 P0에서 대부분 확보됐다.**
+#### 왜 `revalidate` 를 붙여도 정적이 되지 않는가
+
+```
+PageShell  →  Header  →  HeaderAuth  →  await auth()
+```
+
+**모든 페이지가 `PageShell` 을 쓴다.** `HeaderAuth` 가 서버에서 `auth()`(쿠키 접근)를
+호출하므로 Next 가 그 하위 전 라우트를 dynamic 으로 강등한다.
+
+`npm run build` 실측이 이를 증명한다 — `force-dynamic` 이 **없는**
+`/best` · `/login` · `/privacy` · `/terms` 까지 전부 `ƒ` 다.
+
+```
+ƒ /          ƒ /best      ƒ /login     ƒ /privacy   ƒ /terms
+ƒ /magazine  ƒ /magazine/[slug]        ƒ /community/[boardSlug]  …
+○ static : 0개
+```
+
+즉 **`export const revalidate = N` 을 추가해도 `auth()` 가 그것을 무효화한다.**
+캐시는 생기지 않고 코드만 는다.
+
+#### 페이지별 판정 (2026-08-26 실측)
+
+| 페이지 | 판정 | 사유 |
+|---|---|---|
+| `/community/[boardSlug]` | 🔴 **절대 금지** | `getBlockedUserIds` 가 viewer별 차단 목록으로 결과를 필터링. 캐시하면 A가 차단한 글이 B에게 노출된다 (§6) |
+| `/community/[boardSlug]/[postId]` | 🔴 **절대 금지** | 위와 동일 + `auth()` 직접 호출로 삭제/신고 버튼이 갈린다 |
+| `/` (홈) | 🔴 **금지** | `getRecentDiscoveryPosts` 가 차단 필터를 쓰고, `HomeJoinCta` 가 로그인 여부로 HTML 자체를 다르게 낸다 |
+| `/magazine` | 🔴 **금지** | `publishAt` **예약 공개 판정이 요청 시점에 일어나야 한다.** 코드 주석이 이미 경고한다 — "정적이 되면 예약 공개가 조용히 멈춘다" |
+| `/magazine/[slug]` | 🔴 **금지** | 동일 |
+| `/login` | 🟡 **구조적 불가** | `searchParams.callbackUrl` 을 읽는다 → dynamic 이 강제된다 |
+| `/best` | 🟡 **무의미** | 모아보기 로직·데이터가 없는 의도적 빈 페이지(`noindex, follow`). 캐시할 내용이 없다 |
+| `/privacy` · `/terms` | 🟡 **성격은 맞으나 효과 0** | DB·auth·searchParams 전부 0 인 순수 문서. 그러나 `HeaderAuth` 때문에 이미 `ƒ` 이고, `revalidate` 를 붙여도 그대로다 |
+
+#### 결론 — **지금 자를 수 있는 안전한 `revalidate` 1차 PR 후보는 없다**
+
+가정해서 `/privacy`·`/terms` 가 정적이 된다 해도 91~262ms → 30~50ms 인데,
+둘 다 거의 방문되지 않는 약관 페이지라 체감 기여가 사실상 없다.
+
+**시점 문제가 아니라 효과가 없어서 하지 않는다.** 붙이면 착시만 남는다.
+
+### 다음 성능 후보 (2026-08-26 정정)
+
+| 순위 | 후보 | 대상 | 기대 | 위험 |
+|---|---|---|---|---|
+| **1** | **Pretendard self-host 2단계** | `public/fonts/pretendard/` 에 woff2 + **OFL 라이선스**, `layout.tsx` href 로컬화 | 외부 도메인 연결 편차(41~383ms 실측) 제거 · FCP | 낮~중. 시각 확인 필수. 절차는 `public/fonts/pretendard/README.md` |
+| **2** | **`HeaderAuth` 경계 재설계 감사** | 로그인 표시만 분리해 정적화 길을 여는 것이 가능한지 | 정적화의 **전제 조건** | 🔴 큼. 로그인 UX 전체를 건드린다. **별도 감사 먼저** |
+| **3** | `revalidate` 재검토 | — | — | **2번이 정리된 뒤에만 의미가 있다** |
+
+> 🔴 **2번은 원칙 판단이 먼저다.** `HeaderAuth` 주석이 "SessionProvider 를 두지 않고
+> 서버에서 auth() 로 세션을 읽는다. 클라이언트 세션 훅을 쓰지 않는 현재 구조와 일관된다"
+> 를 명시적 설계로 적어 뒀다. 이걸 바꾸는 것은 성능 튜닝이 아니라 아키텍처 변경이다.
+
+P0(리전) 이후 **체감 개선은 이미 대부분 확보됐다.** 남은 후보는 전부 P0 대비 작다.
 
 ---
 
