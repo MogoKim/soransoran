@@ -31,7 +31,7 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 import {
   UNAO_READONLY_URL_ENV, READ_QUERIES, USED_AT_DECISION,
   COUNT_HIGH_QUALITY, COUNT_HIGH_QUALITY_REFERENCED, DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE,
-  buildBatchQuery, loadUnaoReadonlyUrl, maskConnectionString, toSourceRow,
+  buildBatchQuery, loadUnaoReadonlyUrl, maskConnectionString, toSourceRow, LEAK_RUN_MIN,
 } from './lib/voice-unao-readonly.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -78,7 +78,8 @@ async function main() {
       ? `  🔴 --apply : 최대 ${LIMIT}건을 실제로 적재한다`
       : '  🔍 dry-run — 판정만 한다. DB write 0 (반영은 --apply --limit=N)',
   )
-  console.log('  🔴 원문 · 댓글 본문 · 닉네임을 저장하지 않는다\n')
+  console.log('  🔴 원문 · 댓글 본문 · 닉네임을 저장하지 않는다')
+  console.log(`  🔴 라벨이 원문과 ${LEAK_RUN_MIN}자+ 연속 일치하면 그 키만 버린다 (VE-R3.1)\n`)
 
   const unao = new pg.Client({ connectionString: unaoUrl, ssl: { rejectUnauthorized: false } })
   await unao.connect()
@@ -88,6 +89,9 @@ async function main() {
   let created = 0
   let skipped = 0
   let referencedPlanned = 0
+  /** 🔴 원문을 물고 온 라벨이 몇 건에서 몇 개나 걸러졌는가 (VE-R3.1). 키 이름만 센다 */
+  let rowsWithDroppedLabels = 0
+  const droppedKeyCounts = new Map<string, number>()
   let cursor: string | null = null
 
   try {
@@ -132,6 +136,11 @@ async function main() {
         }
 
         if (row.referencedAt) referencedPlanned += 1
+        // 🔴 dry-run 에서도 센다 — 늘리기 전에 "얼마나 걸러지는가" 를 눈으로 봐야 한다
+        if (row.droppedLabelKeys.length > 0) {
+          rowsWithDroppedLabels += 1
+          for (const k of row.droppedLabelKeys) droppedKeyCounts.set(k, (droppedKeyCounts.get(k) ?? 0) + 1)
+        }
 
         if (!APPLY) {
           created += 1 // dry-run 에서는 "신규 예정" 을 센다
@@ -184,6 +193,16 @@ async function main() {
     console.log(`     ${APPLY ? '적재' : '신규 예정'}   ${created}건`)
     console.log(`     중복 SKIP   ${skipped}건`)
     console.log(`     referenced  ${referencedPlanned}건 (decision=${USED_AT_DECISION})`)
+    // 🔴 라벨 누출 가드 결과 — 키 이름과 건수만. 걸러진 값(원문 조각)은 찍지 않는다
+    if (rowsWithDroppedLabels > 0) {
+      const detail = [...droppedKeyCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `${k}=${n}`)
+        .join(' · ')
+      console.log(`     라벨 drop   ${rowsWithDroppedLabels}건에서 ${detail} (원문 ${LEAK_RUN_MIN}자+ 연속 일치)`)
+    } else {
+      console.log(`     라벨 drop   0건 (원문 ${LEAK_RUN_MIN}자+ 연속 일치 없음)`)
+    }
     console.log(`     마지막 커서 ${cursor ?? '(없음)'}`)
 
     if (!APPLY) {

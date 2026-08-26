@@ -23,6 +23,7 @@
     "voice:unao-readonly-check": "tsx scripts/voice-unao-readonly-check.mts",
     "voice:unao-import": "tsx scripts/voice-unao-import-live.mts",
     "voice:unao-import-check": "tsx scripts/voice-unao-import-check.mts",
+    "voice:label-sanitize": "tsx scripts/voice-legacy-label-sanitize.mts",
     "voice:unao-batch": "tsx scripts/voice-unao-batch-live.mts",
     "micro-seed:reschedule-live": "tsx scripts/micro-seed-reschedule-live.mts",
     "micro-seed:publish-live": "tsx scripts/micro-seed-publish-live.mts",
