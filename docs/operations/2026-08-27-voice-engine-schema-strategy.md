@@ -350,11 +350,24 @@ Voice 작업이 우나어 운영 DB 를 건드릴 가능성 자체가 사라진�
 
 ### 6-1. migration-only (런타임 0줄)
 
-| PR | 내용 |
-|---|---|
-| **VE-M1** | `VoiceSource` + `VoiceJudgment` |
-| **VE-M2** | `VoiceDerived` |
-| **VE-M3** | `VoiceCommentSignal` (154,872행 예상 — 인덱스 먼저) |
+| PR | 내용 | 상태 |
+|---|---|---|
+| **VE-M1** | `VoiceSource` + `VoiceJudgment` | 🟡 **schema·migration 작성 완료 · DB 미적용** |
+| **VE-M2** | `VoiceDerived` | 대기 |
+| **VE-M3** | `VoiceCommentSignal` (154,872행 예상 — 인덱스 먼저) | 대기 |
+
+#### VE-M1 적용 상태 (2026-08-27)
+
+```
+schema.prisma                                    ✅ 모델 2 + enum 1 추가 (기존 변경 0줄)
+prisma/migrations/0006_voice_source_judgment/    ✅ 작성 완료
+DB 적용                                          🔴 미적용 — 창업자 승인 대기
+```
+
+🔴 **`decision` 은 `String` 이 아니라 enum `VoiceJudgmentDecision` 으로 확정했다.**
+이 5값은 학습 정답지의 라벨이고, 오타 하나가 조용히 데이터를 오염시킨다.
+반면 `origin` 은 `String` 으로 뒀다 — M6 multi-source 확장에서 값이 늘어나는데
+그때마다 migration 을 요구하면 source 추가가 schema 작업이 된다.
 
 > 🔴 **`/prisma-guide` 절차**: pg 모듈 직접 SQL + `information_schema` 검증.
 > `prisma migrate` · `db push` **금지**. 창업자 수동 적용이 선행된다.
