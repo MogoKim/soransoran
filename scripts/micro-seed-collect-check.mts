@@ -16,6 +16,10 @@ import {
   computeDedupKey, parseRobotsTxt, isPathAllowed, toRobotsPath,
   parseListHtml, extractArticleBodyHtml, htmlToText, parseArticleTitle, buildCollected,
 } from './lib/micro-seed-82cook.mjs'
+import {
+  assessCandidate, selectionScore, stripTruncationTail, linkCharRatioOf,
+  DETAIL_ONLY_FLAGS, HIGH_ENGAGEMENT_MIN, SHORT_BODY_MAX, LINK_HEAVY_RATIO, SHORT_TITLE_MAX,
+} from './lib/micro-seed-quality.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
@@ -209,16 +213,20 @@ const bad = (name: string, kind: string, detail: string) => {
 {
   const item = { sourceArticleId: '4231986', sourceUrl: ARTICLE_URL('4231986'), originalTitle: '제목', sourceCommentCount: 34 }
   const c = buildCollected(item, '본문', '2026-08-26T00:00:00.000Z')
+  // 🔴 앞 9필드는 Micro Seed 원장 이름 그대로다. 뒤 2필드는 선별 보조이며
+  //    importer 가 읽지 않는다 — 원장에도 Sheet 17열에도 들어가지 않는다 (Q-1).
   const want = ['sourceSite', 'sourceUrl', 'sourceArticleId', 'sourceBoardName', 'sourceCommentCount',
-    'originalTitle', 'rawBody', 'sourceCapturedAt', 'dedupKey']
+    'originalTitle', 'rawBody', 'sourceCapturedAt', 'dedupKey', 'qualityFlags', 'qualitySignals']
   const missing = want.filter((k) => !(k in c))
   const siteOk = c.sourceSite === '82cook'
   const boardOk = c.sourceBoardName === BOARD_NAME
   const keyOk = c.dedupKey === computeDedupKey('82cook', '4231986')
-  if (!missing.length && siteOk && boardOk && keyOk) {
-    ok('산출물 스키마 — 9필드 · Micro Seed 이름', 'parse', want.join(' · '))
+  const flagsArray = Array.isArray(c.qualityFlags)
+  if (!missing.length && siteOk && boardOk && keyOk && flagsArray) {
+    ok('산출물 스키마 — 11필드 · Micro Seed 이름', 'parse', want.join(' · '))
   } else {
-    bad('산출물 스키마 — 9필드 · Micro Seed 이름', 'parse', `missing=${missing.join(',')} site=${siteOk} board=${boardOk} key=${keyOk}`)
+    bad('산출물 스키마 — 11필드 · Micro Seed 이름', 'parse',
+      `missing=${missing.join(',')} site=${siteOk} board=${boardOk} key=${keyOk} flags=${flagsArray}`)
   }
 }
 
@@ -236,21 +244,25 @@ const bad = (name: string, kind: string, detail: string) => {
 {
   const code = readFileSync(join(HERE, 'micro-seed-collect-82cook.mts'), 'utf-8')
     .split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
-  const usesBuilder = /writeJsonl\(listPath, items\.map\(\(i\) => buildCollected\(/.test(code)
+  // 목록 저장이 buildCollected 산출물(rows)을 그대로 넘기는지 본다.
+  // 손으로 만든 객체 리터럴을 넘기면 필드가 빠진다 — 그것이 원래 결함이었다.
+  const usesBuilder = /const rows = items\.map\(\(i\) => buildCollected\(/.test(code)
+  const writesRows = /writeJsonl\(listPath, rows\)/.test(code)
   const noHandRolled = !/writeJsonl\(listPath, items\.map\(\(i\) => \(\{/.test(code)
   // 실제 산출물 모양도 확인한다 — rawBody 는 빈 문자열이어야 한다
   const listRow = buildCollected(
     { sourceArticleId: '1', sourceUrl: ARTICLE_URL('1'), originalTitle: 't', sourceCommentCount: 0 },
     '', '2026-08-26T00:00:00.000Z',
   )
-  const has9 = ['sourceSite','sourceUrl','sourceArticleId','sourceBoardName','sourceCommentCount',
-    'originalTitle','rawBody','sourceCapturedAt','dedupKey'].every((k) => k in listRow)
+  const has11 = ['sourceSite','sourceUrl','sourceArticleId','sourceBoardName','sourceCommentCount',
+    'originalTitle','rawBody','sourceCapturedAt','dedupKey','qualityFlags','qualitySignals']
+    .every((k) => k in listRow)
   const emptyBody = listRow.rawBody === ''
-  if (usesBuilder && noHandRolled && has9 && emptyBody) {
-    ok('목록 산출물도 9필드를 갖춘다', 'guard', 'buildCollected 경로 · rawBody 는 빈 값')
+  if (usesBuilder && writesRows && noHandRolled && has11 && emptyBody) {
+    ok('목록 산출물도 11필드를 갖춘다', 'guard', 'buildCollected 경로 · rawBody 는 빈 값')
   } else {
-    bad('목록 산출물도 9필드를 갖춘다', 'guard',
-      `builder=${usesBuilder} noHand=${noHandRolled} fields9=${has9} emptyBody=${emptyBody}`)
+    bad('목록 산출물도 11필드를 갖춘다', 'guard',
+      `builder=${usesBuilder} rows=${writesRows} noHand=${noHandRolled} fields11=${has11} emptyBody=${emptyBody}`)
   }
 }
 
@@ -439,6 +451,248 @@ const bad = (name: string, kind: string, detail: string) => {
   const bad5 = checks.filter((c) => !c.ok)
   if (bad5.length === 0) ok('importer 예약 계약', 'guard', `${checks.length}종 전부`)
   else bad('importer 예약 계약', 'guard', `🔴 ${bad5.map((c) => `${c.name}(${c.detail})`).join(' / ')}`)
+}
+
+// ══════════════════════════════════════════════════════════
+// Q-1 품질 플래그 (M2 Source Quality Engine v0)
+//
+// 🔴 여기서 잠그는 것은 "플래그가 잘 붙는가" 가 아니라
+//    **"선별 보조 엔진이 거부 엔진으로 변질되지 않았는가"** 다.
+//    창업자가 명시적으로 금지한 방향이 바로 그것이다.
+// ══════════════════════════════════════════════════════════
+
+// ── ⑰ 룰 엔진에 네트워크 · LLM · 난수가 없다 ────────────
+//    🔴 비용을 만들지 않는 것이 Q-1 의 전제다. LLM 판단은 M4 의 일이다.
+{
+  const code = readFileSync(join(HERE, 'lib/micro-seed-quality.mts'), 'utf-8')
+    .split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+  const offenders: string[] = []
+  if (/\bfetch\s*\(|axios|node-fetch|https?:\/\//.test(code)) offenders.push('네트워크')
+  if (/openai|anthropic|claude|gpt-|LLM|embedding/i.test(code)) offenders.push('LLM')
+  if (/Math\.random|Date\.now|new Date\(/.test(code)) offenders.push('비결정성')
+  if (/@prisma\/client|PrismaClient|prisma\./.test(code)) offenders.push('prisma')
+  if (/googleapis|spreadsheets/.test(code)) offenders.push('Sheet')
+  if (offenders.length) bad('룰 엔진 — 네트워크 · LLM · 난수 0', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('룰 엔진 — 네트워크 · LLM · 난수 0', 'guard', '순수 함수 · 같은 입력이면 같은 결과')
+}
+
+// ── ⑱ 목록 단계는 본문 플래그를 매기지 않는다 ───────────
+//    🔴 "본문이 짧다" 와 "본문을 읽지 않았다" 는 다른 것이다.
+//       목록에서 shortBody 를 붙이면 읽지도 않은 글을 짧다고 표시하게 된다.
+{
+  const list = assessCandidate({ originalTitle: '물로만 세안 3개월이 지났어요.', sourceCommentCount: 6, rawBody: '' })
+  const detail = assessCandidate({ originalTitle: '물로만 세안 3개월이 지났어요.', sourceCommentCount: 6, rawBody: '짧은 본문' })
+  const listClean = !list.flags.some((f) => (DETAIL_ONLY_FLAGS as readonly string[]).includes(f))
+  const stageOk = list.stage === 'list' && detail.stage === 'detail'
+  const bodyZero = list.signals.bodyLength === 0
+  const detailFlagged = detail.flags.includes('shortBody')
+  if (listClean && stageOk && bodyZero && detailFlagged) {
+    ok('목록 단계는 본문 플래그를 매기지 않는다', 'policy', `list=${list.flags.join(',')} · stage 구분 O`)
+  } else {
+    bad('목록 단계는 본문 플래그를 매기지 않는다', 'policy',
+      `clean=${listClean} stage=${stageOk} bodyZero=${bodyZero} detail=${detailFlagged}`)
+  }
+}
+
+// ── ⑲ 임계값 경계 (1차값) ───────────────────────────────
+//    🔴 이 값들은 실측 표본이 목록 25건 · 상세 4건뿐인 **1차값**이다.
+//       후보 50건이 누적되면 재조정한다. 경계에서 흔들리지 않는지만 여기서 잠근다.
+{
+  const at = (comment: number, body: string, title = '우리 딸 학원 이야기') =>
+    assessCandidate({ originalTitle: title, sourceCommentCount: comment, rawBody: body })
+  const filler = '가'.repeat(400)
+  const engageOff = !at(HIGH_ENGAGEMENT_MIN - 1, filler).flags.includes('highEngagement')
+  const engageOn = at(HIGH_ENGAGEMENT_MIN, filler).flags.includes('highEngagement')
+  const bodyOn = at(3, '가'.repeat(SHORT_BODY_MAX - 1)).flags.includes('shortBody')
+  const bodyOff = !at(3, '가'.repeat(SHORT_BODY_MAX)).flags.includes('shortBody')
+  const shortT = assessCandidate({ originalTitle: '가'.repeat(SHORT_TITLE_MAX - 1), sourceCommentCount: 1, rawBody: '' })
+  const longT = assessCandidate({ originalTitle: '가'.repeat(SHORT_TITLE_MAX), sourceCommentCount: 1, rawBody: '' })
+  const titleOk = shortT.flags.includes('shortTitle') && !longT.flags.includes('shortTitle')
+  // 링크 비중 — URL 40자 / 전체 100자 = 40% 는 걸리고, 400자 중 40자 = 10% 는 안 걸린다
+  const url = `https://example.com/${'a'.repeat(20)}`
+  const heavy = at(3, `${url}${'가'.repeat(100 - url.length)}`).flags.includes('linkHeavyBody')
+  const light = !at(3, `${url}${'가'.repeat(400 - url.length)}`).flags.includes('linkHeavyBody')
+  const ratioOk = Math.abs(linkCharRatioOf(`${url}${'가'.repeat(100 - url.length)}`) - 0.4) < 0.001
+
+  // 🔴 위 검사들은 상수를 **참조**한다 — 상수를 바꾸면 검사도 같이 움직여 아무것도 못 잡는다.
+  //    (역검증에서 실제로 뚫렸다: SHORT_BODY_MAX 를 150→50 으로 바꿔도 통과했다)
+  //    그래서 1차값 자체를 리터럴로 못박는다. 재조정할 때 이 줄도 같이 고치게 되고,
+  //    그 diff 가 "임계값을 언제 왜 바꿨는지" 의 기록이 된다.
+  const literals =
+    HIGH_ENGAGEMENT_MIN === 5 && SHORT_BODY_MAX === 150 && LINK_HEAVY_RATIO === 0.3 && SHORT_TITLE_MAX === 8
+  if (engageOff && engageOn && bodyOn && bodyOff && titleOk && heavy && light && ratioOk && literals) {
+    ok('임계값 경계 — 1차값', 'policy',
+      `댓글 ${HIGH_ENGAGEMENT_MIN} · 본문 ${SHORT_BODY_MAX} · 링크 ${LINK_HEAVY_RATIO} · 제목 ${SHORT_TITLE_MAX} (후보 50건 뒤 재조정)`)
+  } else {
+    bad('임계값 경계 — 1차값', 'policy',
+      `engage=${engageOff && engageOn} body=${bodyOn && bodyOff} title=${titleOk} link=${heavy && light} ratio=${ratioOk} 1차값=${literals}`)
+  }
+}
+
+// ── ⑳ 오탐 3종 회귀 (실측) ──────────────────────────────
+//    🔴 한국어에는 단어 경계(\b)가 없다. 부분 문자열이 오탐을 만든다.
+//       아래 셋은 전부 **실제 82cook 목록에서 나온** 오탐이다. 다시 생기면 여기서 잡는다.
+{
+  const offenders: string[] = []
+
+  // (1) `전세계` 안의 `전세` 를 생활 어휘로 읽었다
+  const a = assessCandidate({ originalTitle: '전세계 슈퍼쳇 1위. 유시민작가의 간곡한부탁', sourceCommentCount: 6, rawBody: '' })
+  if (a.flags.includes('targetLikely')) offenders.push('전세계→전세')
+  if (!a.flags.includes('politicalOrPublicFigure')) offenders.push('유시민작가 미탐지')
+
+  // (2) 목록 제목 말줄임(`…`)을 낚시성으로 읽었다
+  const b = assessCandidate({ originalTitle: '초등 저학년 교육 시간 확대?…', sourceCommentCount: 1, rawBody: '' })
+  if (b.flags.includes('clickbaitTitle')) offenders.push('말줄임→낚시')
+  if (!b.flags.includes('titleTruncated')) offenders.push('말줄임 미표시')
+
+  // (3) `교회 목사` 의 `교회` 를 사람 이름으로 읽었다
+  const c = assessCandidate({ originalTitle: '진짜 교회 목사 자녀들은 유학을 왜그리들 가는지', sourceCommentCount: 0, rawBody: '' })
+  if (c.flags.includes('politicalOrPublicFigure')) offenders.push('교회 목사→실명')
+
+  // (4) 실제 발행된 글의 잘린 꼬리(`도와주..`)를 낚시성으로 읽었다
+  const d = assessCandidate({
+    originalTitle: '턱관절치과 다녀온후..저 망한 게 맞는것 같아요 82님들 도와주..',
+    sourceCommentCount: 5, rawBody: '',
+  })
+  if (d.flags.includes('clickbaitTitle')) offenders.push('발행글→낚시')
+
+  // 겹친 꼬리(`넘어서길&q..`)를 끝까지 벗기는가
+  const stem = stripTruncationTail('李대통령, 민주 지도부에 "서로 작은 차이 넘어서길&q..')
+  if (!stem.truncated || /&q$|\.\.$/.test(stem.stem)) offenders.push('겹친 꼬리 미제거')
+
+  if (offenders.length) bad('오탐 3종 회귀 — 실측', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('오탐 3종 회귀 — 실측', 'policy', '전세계 · 말줄임 · 교회 목사 · 겹친 꼬리')
+}
+
+// ── ㉑ 실측 재현 — 창업자가 고른 3건이 위로 온다 ─────────
+//    🔴 이것이 Q-1 의 존재 이유다. 룰이 사람의 판단을 재현하지 못하면 쓸모가 없다.
+//
+//    예전 정렬(댓글 많은 순)의 1순위는 `제주도관광 망하겠어요`(댓글 9) 였다.
+//    상세까지 열고 **발행하지 않은 글**이다 — 본문 62자에 URL 이 65% 였다.
+{
+  // 실측 목록에서 가져온 6건. 앞 3건이 실제로 발행됐다.
+  const sample = [
+    { t: '물로만 세안 3개월이 지났어요.', c: 6, published: true },
+    { t: '턱관절치과 다녀온후..저 망한 게 맞는것 같아요 82님들 도와주..', c: 5, published: true },
+    { t: '항공과 승무원 학원', c: 4, published: true },
+    { t: '제주도관광 망하겠어요', c: 9, published: false },
+    { t: '李대통령, 민주 지도부에 "서로 작은 차이 넘어서길&q..', c: 8, published: false },
+    { t: '유시민 \'李 저격\'에 친명계 폭발 ..친명계 "개가 짖..', c: 0, published: false },
+  ]
+  const ranked = sample
+    .map((x) => ({ ...x, score: selectionScore(assessCandidate({ originalTitle: x.t, sourceCommentCount: x.c, rawBody: '' })) }))
+    .sort((a, b) => b.score - a.score)
+  const top3 = ranked.slice(0, 3)
+  const allPublished = top3.every((x) => x.published)
+  // 댓글수 1위(제주도관광 9건)가 1등이 아니어야 한다 — 그것이 예전 정렬의 실패다
+  const notCommentOnly = ranked[0].t !== '제주도관광 망하겠어요'
+  // 정치·실명은 아래로 내려간다 (버리는 것이 아니라 순서만 뒤로)
+  const politicsLast = ranked.slice(-2).every((x) => /李|유시민/.test(x.t))
+  const allKept = ranked.length === sample.length
+  if (allPublished && notCommentOnly && politicsLast && allKept) {
+    ok('실측 재현 — 발행 3건이 상위 3', 'policy', top3.map((x) => `${x.score}:${x.t.slice(0, 10)}`).join(' · '))
+  } else {
+    bad('실측 재현 — 발행 3건이 상위 3', 'policy',
+      `top3발행=${allPublished} 댓글1위아님=${notCommentOnly} 정치하위=${politicsLast} 전량유지=${allKept}`)
+  }
+}
+
+// ── ㉒ 자동 거부가 늘지 않았다 ──────────────────────────
+//    🔴 창업자가 명시적으로 금지한 방향이다.
+//       정치성 · 실명 · 낮은 댓글수 · 낚시성 제목 · 짧은 본문은 **거부하지 않는다**.
+{
+  const code = readFileSync(join(HERE, 'micro-seed-collect-82cook.mts'), 'utf-8')
+    .split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+  const offenders: string[] = []
+  // 품질 플래그가 흐름을 끊는 자리에 쓰이면 안 된다
+  if (/qualityFlags[^\n]{0,80}(continue|return|process\.exit|filter)/.test(code)) offenders.push('flags 로 흐름 차단')
+  if (/(continue|return)[^\n]{0,40}qualityFlags/.test(code)) offenders.push('flags 로 흐름 차단(역방향)')
+  if (/selectionScore[^\n]{0,80}(continue|filter\()/.test(code)) offenders.push('점수로 걸러냄')
+  // 거부 경로는 예전 그대로 3곳뿐이다 (본문 HTML 없음 · 본문 빈 값 · 제목 없음)
+  const continues = (code.match(/\bcontinue\b/g) ?? []).length
+  if (continues > 3) offenders.push(`거부 경로 ${continues}곳 (기존 3곳)`)
+  // 룰 엔진 자체가 거부를 표현하지 않는다
+  const quality = readFileSync(join(HERE, 'lib/micro-seed-quality.mts'), 'utf-8')
+  if (/\breject\b|\bdecline\b|\bblock\b|\bdrop\b/i.test(quality.replace(/^\s*[*/].*$/gm, ''))) {
+    offenders.push('룰 엔진에 거부 어휘')
+  }
+  if (offenders.length) bad('자동 거부가 늘지 않았다', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('자동 거부가 늘지 않았다', 'guard', `거부 경로 ${continues}곳 · 플래그는 순서만 바꾼다`)
+}
+
+// ── ㉓ 플래그가 붙어도 산출물은 온전하다 ─────────────────
+//    🔴 최악의 후보(정치 · 실명 · 낚시 · 짧은 제목 · 링크 본문)도 버려지지 않는다.
+{
+  const worst = buildCollected(
+    { sourceArticleId: '999', sourceUrl: ARTICLE_URL('999'), originalTitle: '李의원 충격!!', sourceCommentCount: 0 },
+    'https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 짧음',
+    '2026-08-26T00:00:00.000Z',
+  )
+  const core = ['sourceSite','sourceUrl','sourceArticleId','sourceBoardName','sourceCommentCount',
+    'originalTitle','rawBody','sourceCapturedAt','dedupKey'].every((k) => k in worst)
+  const bodyKept = worst.rawBody.length > 0
+  const titleKept = worst.originalTitle === '李의원 충격!!'
+  const keyOk = worst.dedupKey === computeDedupKey('82cook', '999')
+  const manyFlags = worst.qualityFlags.length >= 4
+  const negative = selectionScore({ stage: 'detail', flags: worst.qualityFlags, signals: worst.qualitySignals }) < 0
+  if (core && bodyKept && titleKept && keyOk && manyFlags && negative) {
+    ok('플래그가 붙어도 산출물은 온전하다', 'guard', `${worst.qualityFlags.length}개 플래그 · 9필드 유지 · 점수만 음수`)
+  } else {
+    bad('플래그가 붙어도 산출물은 온전하다', 'guard',
+      `core=${core} body=${bodyKept} title=${titleKept} key=${keyOk} flags=${manyFlags} score=${negative}`)
+  }
+}
+
+// ── ㉔ 플래그마다 근거가 남는다 ─────────────────────────
+//    🔴 "왜 이 플래그가 붙었는가" 를 사람이 검증할 수 없으면 룰을 고칠 수 없다.
+{
+  const a = assessCandidate({
+    originalTitle: '유시민작가님 60프로만 말한거라고 하던데',
+    sourceCommentCount: 0, rawBody: '',
+  })
+  const b = assessCandidate({
+    originalTitle: '우리 딸 학원 문제로 병원까지 다녀왔어요',
+    sourceCommentCount: 6,
+    rawBody: '제가 요며칠 증상이 심해서 치과에 다녀왔어요. 목구멍 이물감이 계속됩니다.',
+  })
+  const hasReason = (x: typeof a, flag: string) => (x.signals.matched[flag]?.length ?? 0) > 0
+  const okA = hasReason(a, 'politicalOrPublicFigure')
+  const okB = hasReason(b, 'targetLikely') && hasReason(b, 'personalExperienceLikely') && hasReason(b, 'practicalConcernLikely')
+  // 근거 없이 붙는 플래그가 없어야 한다 (근거를 남기는 종류에 한해)
+  const reasoned = ['politicalOrPublicFigure', 'clickbaitTitle', 'targetLikely',
+    'personalExperienceLikely', 'practicalConcernLikely', 'titleTruncated']
+  const orphan = [a, b].flatMap((x) => x.flags.filter((f) => reasoned.includes(f) && !hasReason(x, f)))
+  if (okA && okB && !orphan.length) {
+    ok('플래그마다 근거가 남는다', 'policy', `${JSON.stringify(a.signals.matched.politicalOrPublicFigure)}`)
+  } else {
+    bad('플래그마다 근거가 남는다', 'policy', `a=${okA} b=${okB} orphan=${orphan.join(',')}`)
+  }
+}
+
+// ── ㉕ 상세 제목이 목록 제목을 이긴다 ───────────────────
+//    🔴 목록 제목은 37자에서 잘린다 — 실측 25건 중 5건(20%).
+//       importer 가 originalTitle 을 founderTitle 초기값으로 그대로 쓰므로
+//       잘린 제목이 그대로 발행된다. 실제로 그렇게 발행된 글이 있다.
+//    ⚠️ 이미 발행된 글은 소급 수정하지 않는다 (§6-4 발행은 비가역).
+{
+  const code = readFileSync(join(HERE, 'micro-seed-collect-82cook.mts'), 'utf-8')
+    .split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n')
+  // 목록 정보가 있어도 상세 제목으로 덮어쓰는 형태인지 본다
+  const prefersDetail = /originalTitle:\s*detailTitle\s*\?\?\s*listed\.originalTitle/.test(code)
+  // 예전 형태(목록이 있으면 상세를 버림)가 남아 있으면 안 된다
+  const noOldShape = !/const base = known\.get\(id\) \?\?/.test(code)
+  const parses = /parseArticleTitle\(html\)/.test(code)
+  // 잘린 제목은 플래그로도 드러난다
+  const truncFlag = assessCandidate({
+    originalTitle: '트레이더스 럭스나인 메모리폼 토퍼 핫앤쿨 제품 온라인으로 안파나..',
+    sourceCommentCount: 0, rawBody: '',
+  }).flags.includes('titleTruncated')
+  if (prefersDetail && noOldShape && parses && truncFlag) {
+    ok('상세 제목이 목록 제목을 이긴다', 'guard', '잘린 제목이 원장으로 넘어가지 않는다')
+  } else {
+    bad('상세 제목이 목록 제목을 이긴다', 'guard',
+      `prefer=${prefersDetail} noOld=${noOldShape} parse=${parses} flag=${truncFlag}`)
+  }
 }
 
 // ── 출력 ────────────────────────────────────────────────
