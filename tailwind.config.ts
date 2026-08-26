@@ -85,6 +85,11 @@ const config: Config = {
         subtle: 'var(--border-subtle)',
         interactive: 'var(--border-interactive)',
       },
+      /* 🔴 그림자 색도 토큰 밖으로 새지 않게 둔다.
+         컴포넌트에 rgba 를 직접 쓰면 색을 바꿀 때 찾아다녀야 한다. */
+      boxShadow: {
+        kakao: 'var(--shadow-kakao)',
+      },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
