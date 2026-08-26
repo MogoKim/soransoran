@@ -116,9 +116,14 @@ export type UnaoSourceRow = {
   contentHash: string | null
   contentLength: number | null
   commentCount: number | null
-  /** 우나어가 이미 매긴 라벨. 재계산 비용 0 */
+  /** 우나어가 이미 매긴 라벨. 재계산 비용 0 — 🔴 원문을 물고 온 키는 걸러진 뒤다 */
   legacyLabels: Record<string, unknown> | null
   legacyLabelVersion: string | null
+  /**
+   * 원문 누출로 버려진 라벨 **키 이름**. 🔴 값은 담기지 않는다.
+   * VoiceSource 컬럼이 아니라 보고용이다 — 무엇이 걸러졌는지 사람이 보라고 남긴다.
+   */
+  droppedLabelKeys: string[]
   /** 🔴 usedAt 이 있으면 referenced 판단이 따라온다. approved 가 아니다 */
   referencedAt: Date | null
 }
@@ -130,6 +135,8 @@ export type UnaoSourceSummary = {
   commentCount: number | null
   topCommentsCount: number
   hasLegacyLabels: boolean
+  /** 🔴 원문 누출로 버려진 라벨 키 이름 (값 아님) */
+  droppedLabelKeys: string[]
   referenced: boolean
 }
 
@@ -140,6 +147,7 @@ export function summarize(row: UnaoSourceRow, topCommentsCount: number): UnaoSou
     commentCount: row.commentCount,
     topCommentsCount,
     hasLegacyLabels: row.legacyLabels !== null && Object.keys(row.legacyLabels).length > 0,
+    droppedLabelKeys: row.droppedLabelKeys,
     referenced: row.referencedAt !== null,
   }
 }
@@ -157,6 +165,140 @@ export const LEGACY_LABEL_KEYS = [
 ] as const
 
 export const LEGACY_LABEL_VERSION = 'unao-psych-analyzer-v2'
+
+/**
+ * 🔴 legacyLabels 경유 원문 누출 가드 (VE-R3.1)
+ *
+ * 100건 적재 검증에서 실제로 나온 문제다.
+ * VoiceSource 는 `content` 를 저장하지 않는데, **라벨을 통해 원문이 새어 들어왔다** —
+ * 우나어 psych 분석이 만든 `emotionalPeak` 39자 중 30자가 본문과 그대로 일치했다
+ * (111건 중 1건, 원문 617자의 4.9%).
+ *
+ * 우리가 본문을 옮기지 않아도 **우나어가 만든 파생물이 본문을 물고 온다.**
+ * 9,674건으로 늘리면 같은 비율로 수십 건이 쌓인다. 그래서 변환 시점에 끊는다.
+ *
+ * 🔴 키 이름 목록으로 잡지 않는다
+ *    아래 KNOWN 목록은 **문서용**이고 판정 기준이 아니다.
+ *    이름으로 잡으면 (a) 우나어가 새 라벨을 추가할 때 놓치고
+ *    (b) `commentSplit` 처럼 이름만 원문스러운 숫자형을 잘못 버린다.
+ *    실제로 이 프로젝트에서 `commentSplit` 은 `comments` 로 두 번 오인됐다.
+ *    판정은 **값의 타입과 길이**로 한다 — 20자 이상 문자열만 검사 대상이다.
+ *    숫자 · 불리언 · 짧은 분류값(`ageSignal` 3자 · `desireCategory` 9자)은 자동으로 빠진다.
+ */
+export const KNOWN_FREE_TEXT_LABEL_KEYS = [
+  'psychInsight', 'emotionalPeak', 'betrayalFactor', 'conflictTrigger',
+] as const
+
+/**
+ * 몇 자가 연속으로 겹치면 "원문을 물고 왔다" 로 보는가.
+ *
+ * 🔴 20자다. 한국어 20자면 한 문장에 가깝다 — 우연히 겹칠 길이가 아니다.
+ *    실측 사례는 30자였고, 정상 라벨은 분석자가 쓴 요약이라
+ *    본문과 20자씩 연속으로 겹치지 않는다(179개 중 178개가 그랬다).
+ */
+export const LEAK_RUN_MIN = 20
+
+/** 공백 차이로 검사를 피해 가지 못하게 한다 */
+function normalizeForLeak(text: string): string {
+  return text.replace(/\s+/g, '')
+}
+
+/**
+ * `value` 안에 `haystack` 과 `minRun` 자 이상 **연속으로** 겹치는 구간이 있는가.
+ *
+ * 🔴 부분 일치가 아니라 연속 일치를 본다.
+ *    낱말이 겹치는 것은 당연하다 — 같은 글을 요약했으니까.
+ *    문제는 문장이 통째로 넘어오는 경우다.
+ */
+export function hasLeakingRun(value: string, haystack: string, minRun = LEAK_RUN_MIN): boolean {
+  const v = normalizeForLeak(value)
+  const h = normalizeForLeak(haystack)
+  if (v.length < minRun || h.length < minRun) return false
+  for (let i = 0; i + minRun <= v.length; i += 1) {
+    if (h.includes(v.slice(i, i + minRun))) return true
+  }
+  return false
+}
+
+/**
+ * 이 값이 원문성 검사 대상인가.
+ *
+ * 🔴 타입으로 가른다. 이름을 보지 않는다.
+ *    - 20자 이상 문자열        → 검사한다 (자유서술 라벨)
+ *    - 20자 이상 문자열의 배열 → 원소를 검사한다
+ *    - 그 밖(숫자 · 불리언 · 짧은 문자열) → 검사하지 않는다
+ */
+export function isFreeTextLabelValue(value: unknown, minRun = LEAK_RUN_MIN): boolean {
+  if (typeof value === 'string') return normalizeForLeak(value).length >= minRun
+  if (Array.isArray(value)) return value.some((v) => isFreeTextLabelValue(v, minRun))
+  return false
+}
+
+/** 검사 대상 값이 원문 · 댓글을 물고 왔는가 */
+function labelValueLeaks(value: unknown, haystack: string, minRun: number): boolean {
+  if (typeof value === 'string') return hasLeakingRun(value, haystack, minRun)
+  if (Array.isArray(value)) return value.some((v) => labelValueLeaks(v, haystack, minRun))
+  return false
+}
+
+export type SanitizedLabels = {
+  labels: Record<string, unknown> | null
+  /** 🔴 버려진 **키 이름**만 남긴다. 버려진 값(= 원문 조각)은 어디에도 남기지 않는다 */
+  dropped: string[]
+}
+
+/**
+ * 원문을 물고 온 라벨만 골라 버린다.
+ *
+ * 🔴 **키 단위로 버린다.** legacyLabels 전체를 버리지 않는다 —
+ *    한 키가 오염됐다고 `ageSignal` · `qualityScore` 까지 잃으면
+ *    우나어가 이미 계산해 둔 자산(재계산 비용 0)이 통째로 사라진다.
+ *    실측에서도 오염은 179개 값 중 1개였다.
+ *
+ * 🔴 버린 값은 반환하지 않는다. `dropped` 는 키 이름뿐이다 —
+ *    "무엇이 새었는지" 를 보고하려다 그 원문 조각을 로그로 흘리면 본말이 뒤집힌다.
+ */
+export function sanitizeLegacyLabels(
+  labels: Record<string, unknown> | null,
+  sourceTexts: readonly string[],
+  minRun = LEAK_RUN_MIN,
+): SanitizedLabels {
+  if (!labels || Object.keys(labels).length === 0) return { labels: null, dropped: [] }
+  const haystack = sourceTexts.filter((t) => typeof t === 'string' && t.length > 0).join('\n')
+  if (!haystack) return { labels, dropped: [] }
+
+  const kept: Record<string, unknown> = {}
+  const dropped: string[] = []
+  for (const [key, value] of Object.entries(labels)) {
+    if (isFreeTextLabelValue(value, minRun) && labelValueLeaks(value, haystack, minRun)) {
+      dropped.push(key)
+      continue
+    }
+    kept[key] = value
+  }
+  return { labels: Object.keys(kept).length ? kept : null, dropped }
+}
+
+/**
+ * `topComments` 를 검사용 문자열로 편다.
+ *
+ * 🔴 반환값은 **가드 안에서만 쓰고 버린다.** 저장하지도 로그로 찍지도 않는다.
+ *    댓글 인용을 잡으려면 댓글 원문을 봐야 한다 —
+ *    그래서 이 함수의 결과가 어디로 가는지가 중요하다(`toSourceRow` 안에서 끝난다).
+ */
+export function topCommentsToText(raw: unknown): string {
+  if (!Array.isArray(raw)) return ''
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item === 'string') { out.push(item); continue }
+    if (item && typeof item === 'object') {
+      for (const v of Object.values(item as Record<string, unknown>)) {
+        if (typeof v === 'string') out.push(v)
+      }
+    }
+  }
+  return out.join('\n')
+}
 
 /**
  * 🔴 고품질 코퍼스 조건 (VE-R3) — 실측 9,674건.
@@ -251,6 +393,12 @@ export function toSourceRow(raw: Record<string, unknown>, authorSalt: string): U
   for (const k of LEGACY_LABEL_KEYS) {
     if (raw[k] !== undefined && raw[k] !== null) labels[k] = raw[k]
   }
+  // 🔴 라벨이 원문 · 댓글을 물고 왔는지 여기서 끊는다 (VE-R3.1).
+  //    본문과 댓글 원문은 이 검사에만 쓰이고 아래 반환값에는 들어가지 않는다.
+  const { labels: safeLabels, dropped } = sanitizeLegacyLabels(
+    Object.keys(labels).length ? labels : null,
+    [content, topCommentsToText(raw.topComments)],
+  )
   return {
     origin: 'unao_cafe',
     sourceRef: String(raw.id ?? ''),
@@ -263,8 +411,9 @@ export function toSourceRow(raw: Record<string, unknown>, authorSalt: string): U
     contentHash: content ? contentHashOf(content) : null,
     contentLength: content ? content.length : null,
     commentCount: typeof raw.commentCount === 'number' ? raw.commentCount : null,
-    legacyLabels: Object.keys(labels).length ? labels : null,
-    legacyLabelVersion: Object.keys(labels).length ? LEGACY_LABEL_VERSION : null,
+    legacyLabels: safeLabels,
+    legacyLabelVersion: safeLabels ? LEGACY_LABEL_VERSION : null,
+    droppedLabelKeys: dropped,
     referencedAt: raw.usedAt instanceof Date ? raw.usedAt : null,
   }
 }

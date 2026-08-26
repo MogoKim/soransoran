@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import {
   USED_AT_DECISION, FORBIDDEN_VOICE_SOURCE_COLUMNS, toSourceRow,
   MAX_BATCH_SIZE, DEFAULT_BATCH_SIZE,
+  LEAK_RUN_MIN, LEGACY_LABEL_VERSION, hasLeakingRun, isFreeTextLabelValue,
 } from './lib/voice-unao-readonly.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -334,6 +335,161 @@ function createDataBlock(): string {
     bad('고품질 조건 5종 · referenced 조건부', 'policy',
       `missing=${missing.join(',')} refOnly=${refOnly} writeApprove=${writeApprove} guards=${guardsApprove}`)
   }
+}
+
+// ══════════════════════════════════════════════════════════
+// VE-R3.1 — legacyLabels 경유 원문 누출
+//
+// 🔴 우리가 본문을 옮기지 않아도 **우나어가 만든 파생물이 본문을 물고 온다.**
+//    100건 검증에서 실제로 나왔다: emotionalPeak 39자 중 30자가 본문과 연속 일치.
+// ══════════════════════════════════════════════════════════
+
+/** 검사용 원문 — 라벨이 여기서 문장을 떠 오는 상황을 만든다 */
+const LEAK_BODY =
+  '작년 가을에 시어머니가 갑자기 쓰러지셔서 병원에 모시고 다녔는데 그때 남편이 한 말이 아직도 잊히지 않습니다. ' +
+  '형제들은 아무도 나서지 않았고 결국 저 혼자 병간호를 떠맡았어요.'
+/** 본문에서 그대로 떠 온 30자 — 실측 사례와 같은 길이다 */
+const LEAK_QUOTE = '형제들은 아무도 나서지 않았고 결국 저 혼자 병간호를 떠맡았어요'
+/** 분석자가 쓴 요약. 낱말은 겹쳐도 문장이 통째로 겹치지는 않는다 */
+const CLEAN_INSIGHT = '병간호 부담이 며느리에게 쏠린 구조에 대한 체념과 분노가 교차한다'
+
+function leakRow(labels: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  return toSourceRow({
+    id: 'leak-1', cafeId: 'wgang', boardName: '자유게시판', postUrl: 'https://cafe.naver.com/x/9',
+    author: '아무개', content: LEAK_BODY, commentCount: 7,
+    crawledAt: new Date('2026-08-01T00:00:00Z'), postedAt: new Date('2021-01-01T00:00:00Z'),
+    ...labels, ...extra,
+  }, 'salt-x')
+}
+
+// ── ⑮ 본문을 물고 온 자유서술 라벨은 버려진다 ───────────
+{
+  const row = leakRow({ emotionalPeak: LEAK_QUOTE, psychInsight: CLEAN_INSIGHT, ageSignal: '50s' })
+  const keys = Object.keys(row.legacyLabels ?? {})
+  const offenders: string[] = []
+  if (keys.includes('emotionalPeak')) offenders.push('본문 30자 인용이 남았다')
+  if (!row.droppedLabelKeys.includes('emotionalPeak')) offenders.push('drop 보고가 없다')
+  if (JSON.stringify(row).includes(LEAK_QUOTE)) offenders.push('반환값에 원문 조각이 남았다')
+  if (offenders.length) bad(`본문 ${LEAK_RUN_MIN}자+ 인용 라벨 drop`, 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok(`본문 ${LEAK_RUN_MIN}자+ 인용 라벨 drop`, 'policy', `emotionalPeak 제거 · 남은 라벨 ${keys.length}종`)
+}
+
+// ── ⑯ 댓글을 물고 와도 버려진다 ─────────────────────────
+//    🔴 본문만 보면 절반만 막는 것이다. topComments 도 원문이다.
+{
+  const commentQuote = '저도 똑같은 일을 겪어서 그 마음이 어떤지 너무 잘 알겠습니다'
+  const row = toSourceRow({
+    id: 'leak-2', cafeId: 'wgang', postUrl: 'u', author: 'a',
+    content: '짧은 본문이라 여기엔 없다.', commentCount: 3,
+    crawledAt: new Date('2026-08-01T00:00:00Z'),
+    topComments: [{ author: 'x', content: commentQuote }],
+    betrayalFactor: commentQuote, qualityScore: 7,
+  }, 'salt-x')
+  const keys = Object.keys(row.legacyLabels ?? {})
+  const offenders: string[] = []
+  if (keys.includes('betrayalFactor')) offenders.push('댓글 인용이 남았다')
+  if (!row.droppedLabelKeys.includes('betrayalFactor')) offenders.push('drop 보고가 없다')
+  if (JSON.stringify(row).includes(commentQuote)) offenders.push('반환값에 댓글 원문이 남았다')
+  if (!keys.includes('qualityScore')) offenders.push('무관한 라벨까지 잃었다')
+  if (offenders.length) bad('댓글 인용 라벨도 drop', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('댓글 인용 라벨도 drop', 'policy', 'topComments 대조 · qualityScore 보존')
+}
+
+// ── ⑰ 전체가 아니라 문제 key 만 버린다 ──────────────────
+//    🔴 한 키가 오염됐다고 우나어가 계산해 둔 자산을 통째로 잃으면 안 된다.
+//       실측에서도 오염은 179개 값 중 1개였다.
+{
+  const row = leakRow({
+    emotionalPeak: LEAK_QUOTE, psychInsight: CLEAN_INSIGHT,
+    ageSignal: '50s', desireCategory: 'FAMILY', qualityScore: 8, killerScore: 6,
+    emotionTags: ['분노', '체념'], commentSplit: 3,
+  })
+  const keys = Object.keys(row.legacyLabels ?? {})
+  const survivors = ['psychInsight', 'ageSignal', 'desireCategory', 'qualityScore', 'killerScore', 'emotionTags', 'commentSplit']
+  const lost = survivors.filter((k) => !keys.includes(k))
+  const offenders: string[] = []
+  if (row.legacyLabels === null) offenders.push('legacyLabels 를 통째로 버렸다')
+  if (lost.length) offenders.push(`무관한 라벨 손실: ${lost.join(',')}`)
+  if (row.droppedLabelKeys.length !== 1) offenders.push(`drop 이 ${row.droppedLabelKeys.length}개 (1개여야 한다)`)
+  if (row.legacyLabelVersion !== LEGACY_LABEL_VERSION) offenders.push('버전이 사라졌다')
+  if (offenders.length) bad('key 단위 drop (전체 삭제 아님)', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('key 단위 drop (전체 삭제 아님)', 'policy', `8종 중 1종만 제거 · ${keys.length}종 보존`)
+}
+
+// ── ⑱ 숫자형 · 분류형은 검사하지 않는다 ─────────────────
+//    🔴 `commentSplit` 은 **숫자 0~8** 이다. 이름에 comment 가 있다고 버리면
+//       정당한 자산을 잃는다. 이 프로젝트에서 실제로 두 번 오인된 이름이다.
+{
+  const offenders: string[] = []
+  if (isFreeTextLabelValue(3)) offenders.push('숫자를 자유서술로 판정')
+  if (isFreeTextLabelValue(true)) offenders.push('불리언을 자유서술로 판정')
+  if (isFreeTextLabelValue('50s')) offenders.push('ageSignal 을 자유서술로 판정')
+  if (isFreeTextLabelValue('FAMILY')) offenders.push('desireCategory 를 자유서술로 판정')
+  if (isFreeTextLabelValue(['분노', '체념'])) offenders.push('짧은 태그 배열을 자유서술로 판정')
+  if (!isFreeTextLabelValue(LEAK_QUOTE)) offenders.push('30자 문장을 자유서술로 보지 않았다')
+  // 숫자 라벨의 값이 본문에 들어 있어도 살아남아야 한다
+  const row = toSourceRow({
+    id: 'n-1', cafeId: 'w', postUrl: 'u', author: 'a',
+    content: '숫자 3 이 본문에 있다.'.repeat(20), crawledAt: new Date('2026-08-01T00:00:00Z'),
+    commentSplit: 3, urgencyLevel: 4, ageSignal: '50s',
+  }, 's')
+  const keys = Object.keys(row.legacyLabels ?? {})
+  for (const k of ['commentSplit', 'urgencyLevel', 'ageSignal']) {
+    if (!keys.includes(k)) offenders.push(`${k} 가 버려졌다`)
+  }
+  if (offenders.length) bad('숫자 · 분류형은 검사 제외', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('숫자 · 분류형은 검사 제외', 'guard', 'commentSplit(number) · ageSignal · 짧은 태그 보존')
+}
+
+// ── ⑲ 경계 — 19자는 남고 20자는 버린다 ──────────────────
+//    🔴 임계값을 **리터럴로 못박는다.** 상수를 참조해 상대 비교만 하면
+//       LEAK_RUN_MIN 을 5 로 바꿔도 fixture 가 통과한다(같은 함정에 이미 걸린 적이 있다).
+{
+  const base = '가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허'
+  const body = `앞말 ${base} 뒷말`
+  const under = base.slice(0, 19)
+  const over = base.slice(0, 20)
+  const offenders: string[] = []
+  if (hasLeakingRun(under, body)) offenders.push('19자에서 이미 걸린다')
+  if (!hasLeakingRun(over, body)) offenders.push('20자를 놓친다')
+  if (LEAK_RUN_MIN !== 20) offenders.push(`LEAK_RUN_MIN 이 ${LEAK_RUN_MIN} (1차값은 20)`)
+  // 공백을 넣어 피해 가지 못한다
+  if (!hasLeakingRun(over.split('').join(' '), body)) offenders.push('공백을 끼우면 빠져나간다')
+  if (offenders.length) bad('경계 19 / 20자 · 공백 우회', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('경계 19 / 20자 · 공백 우회', 'guard', '19자 통과 · 20자 차단 · 공백 정규화')
+}
+
+// ── ⑳ 정화 스크립트는 dry-run 이 기본이고 범위를 넘지 않는다 ──
+{
+  const SAN = join(HERE, 'voice-legacy-label-sanitize.mts')
+  const sanRaw = readFileSync(SAN, 'utf-8')
+  const sanCode = sanRaw.split('\n').filter((l) => !/^\s*(\/\*|\*|\/\/)/.test(l)).join('\n')
+  const offenders: string[] = []
+  if (!/const APPLY = process\.argv\.includes\('--apply'\)/.test(sanCode)) offenders.push('--apply 게이트 없음')
+  // update 는 APPLY 뒤에 있어야 한다
+  const at = sanCode.indexOf('voiceSource.update(')
+  if (at === -1) offenders.push('update 를 찾지 못했다')
+  else if (!/if \(!APPLY\) continue/.test(sanCode.slice(Math.max(0, at - 200), at))) {
+    offenders.push('update 앞에 APPLY 게이트가 없다')
+  }
+  // 🔴 Micro Seed 원장과 Sheet 를 건드리지 않는다
+  for (const t of ['microSeedCandidate', 'microSeedRawContent', 'microSeedCandidateHistory', 'planSheetWrite', 'appendRow']) {
+    if (new RegExp(`\\b${t}\\b`).test(sanCode)) offenders.push(`Micro Seed 접근: ${t}`)
+  }
+  // 🔴 legacyLabels 외의 컬럼을 쓰지 않는다
+  const dataAt = sanCode.indexOf('data: {', at === -1 ? 0 : at)
+  const dataBlock = dataAt === -1 ? '' : sanCode.slice(dataAt, dataAt + 300)
+  for (const f of FORBIDDEN_VOICE_SOURCE_COLUMNS) {
+    if (new RegExp(`\\b${f}\\s*:`).test(dataBlock)) offenders.push(`update data 에 ${f}`)
+  }
+  for (const f of ['contentHash', 'authorHash', 'sourceRef', 'origin']) {
+    if (new RegExp(`\\b${f}\\s*:`).test(dataBlock)) offenders.push(`update data 에 ${f} (건드리면 안 된다)`)
+  }
+  if (/\bdelete\s*\(|deleteMany/.test(sanCode)) offenders.push('행 삭제 경로')
+  if (/openai|anthropic|claude|gpt-/i.test(sanCode)) offenders.push('LLM 참조')
+  if (/\bfetch\s*\(|axios/.test(sanCode)) offenders.push('외부 네트워크')
+  if (offenders.length) bad('정화 스크립트 dry-run 기본 · 범위 고정', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('정화 스크립트 dry-run 기본 · 범위 고정', 'guard', 'APPLY 게이트 · legacyLabels 만 update · 삭제 0 · Micro Seed 0')
 }
 
 // ── 출력 ────────────────────────────────────────────────
