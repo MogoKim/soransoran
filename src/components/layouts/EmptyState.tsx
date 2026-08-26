@@ -23,7 +23,7 @@ export default function EmptyState({ title, body, ctaLabel, ctaHref }: EmptyStat
       {ctaLabel && ctaHref ? (
         <Link
           href={ctaHref}
-          className="mt-3 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline border border-cta-edge transition duration-150 hover:border-cta-hover hover:brightness-95 active:scale-95"
+          className="mt-3 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
         >
           {ctaLabel}
         </Link>
