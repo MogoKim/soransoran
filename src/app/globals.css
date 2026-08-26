@@ -73,8 +73,10 @@
     --icon-best-stroke: #c4453b;
     --icon-best-text: #ad372f;
 
-    /* 아이콘 박스 크기 — 글자 크기 토글을 따라간다 */
-    --icon-box: 2.75rem;
+    /* 아이콘 박스 크기 — 글자 크기 토글을 따라간다.
+       기본 48px 은 우나어 기준선이다. 44px 이었을 때 상단 메뉴 아이콘이
+       라벨보다 작아 보여 어디를 누르는지가 흐렸다. */
+    --icon-box: 3rem;          /* 48px — 기본 */
 
     --kakao-bg: #fee500;
     --kakao-text: #191919;
@@ -100,6 +102,7 @@
 
   /* 작게 — 하한 16px */
   :root[data-font-size='SMALL'] {
+    --icon-box: 2.75rem;       /* 44px — 적지 않으면 기본 48px 을 물려받는다 */
     --text-body: 1rem;         /* 16px */
     --text-caption: 0.875rem;  /* 14px */
     --text-sm: 0.9375rem;
