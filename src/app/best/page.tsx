@@ -1,5 +1,6 @@
 import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
+import ListHeader from '@/components/ui/list-header'
 import { getBoardBySlug } from '@/lib/board-registry'
 
 import type { Metadata } from 'next'
@@ -17,7 +18,7 @@ export default function BestPage() {
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4">
-        <h1 className="py-6 text-xl font-bold text-content-primary">베스트</h1>
+        <ListHeader board={board} />
         {/* 베스트는 모아보기 영역이다. 글쓰기 진입점을 두지 않는다. */}
         <EmptyState title={board.emptyTitle} body={board.emptyBody} />
       </main>

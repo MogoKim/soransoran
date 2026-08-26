@@ -1,6 +1,7 @@
 import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
 import MagazineCard from '@/components/features/MagazineCard'
+import ListHeader from '@/components/ui/list-header'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getAllMagazineArticles } from '@/lib/magazine'
 
@@ -27,7 +28,7 @@ export default function MagazinePage() {
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 pb-16">
-        <h1 className="py-6 text-xl font-bold text-content-primary">매거진</h1>
+        <ListHeader board={board} />
         {/* 매거진에는 글쓰기 버튼을 노출하지 않는다 (IA 정본) */}
 
         {articles.length === 0 ? (

@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
+import ListHeader from '@/components/ui/list-header'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostsByBoard } from '@/lib/queries/posts'
 import PostCard from '@/components/features/PostCard'
@@ -41,7 +42,7 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 pb-24">
-        <h1 className="py-6 text-xl font-bold text-content-primary">{board.label}</h1>
+        <ListHeader board={board} />
 
         {posts.length === 0 ? (
           <EmptyState
