@@ -22,13 +22,13 @@ export default function Error({ reset }: { error: Error; reset: () => void }) {
         <button
           type="button"
           onClick={reset}
-          className="inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text hover:bg-cta-hover"
+          className="inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text transition duration-150 hover:bg-cta-hover active:scale-95"
         >
           다시 시도
         </button>
         <Link
           href="/"
-          className="inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-6 font-bold text-brand-ink no-underline"
+          className="inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-6 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
         >
           홈으로
         </Link>

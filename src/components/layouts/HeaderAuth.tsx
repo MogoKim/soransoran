@@ -20,7 +20,7 @@ export default async function HeaderAuth() {
     return (
       <Link
         href="/login"
-        className="inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-4 text-sm font-bold text-brand-ink no-underline"
+        className="inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-4 text-sm font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
       >
         로그인
       </Link>
@@ -35,7 +35,7 @@ export default async function HeaderAuth() {
       {isAdmin ? (
         <Link
           href="/admin/reports"
-          className="inline-flex min-h-[52px] items-center rounded-lg px-3 text-sm font-bold text-brand-ink no-underline"
+          className="inline-flex min-h-[52px] items-center rounded-lg px-3 text-sm font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
         >
           신고 확인
         </Link>

@@ -28,7 +28,7 @@ export default function PostListItem({
   return (
     <Link
       href={`${board.href}/${post.id}`}
-      className="flex min-h-[52px] items-start gap-3 border-b border-subtle py-3.5 no-underline transition-colors last:border-b-0 hover:bg-surface-page"
+      className="flex min-h-[52px] items-start gap-3 border-b border-subtle py-3.5 no-underline transition-colors duration-150 last:border-b-0 hover:bg-surface-page active:bg-surface-soft"
     >
       <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
         {rank}
