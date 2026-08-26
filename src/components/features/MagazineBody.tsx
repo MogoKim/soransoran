@@ -54,7 +54,7 @@ function Block({ block, articleSlug }: { block: MagazineBlock; articleSlug: stri
           {block.text ? <p className={TEXT_CLASS}>{block.text}</p> : null}
           <Link
             href={ctaHref(articleSlug, block.href)}
-            className="mt-3 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline"
+            className="mt-3 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline border border-cta-edge transition duration-150 hover:border-cta-hover hover:brightness-95 active:scale-95"
           >
             {block.label}
           </Link>

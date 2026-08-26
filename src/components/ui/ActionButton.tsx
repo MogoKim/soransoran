@@ -7,7 +7,8 @@ export type ActionButtonTone = 'primary' | 'danger'
 
 /** 색과 tone 은 여기서만 정한다 — className 으로 덮이지 않도록 마지막에 병합한다. */
 const TONE_CLASS: Record<ActionButtonTone, string> = {
-  primary: 'inline-flex items-center bg-cta font-bold text-cta-text enabled:hover:bg-cta-hover',
+  primary:
+    'inline-flex items-center border border-cta-edge bg-cta font-bold text-cta-text enabled:hover:border-cta-hover enabled:hover:brightness-95',
   danger: 'border border-interactive font-bold text-state-danger enabled:hover:bg-surface-soft',
 }
 

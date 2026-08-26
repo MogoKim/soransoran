@@ -17,7 +17,7 @@ export default function PageShell({ children, chrome = 'full' }: PageShellProps)
     <>
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded-lg focus:bg-cta focus:px-4 focus:py-2 focus:font-bold focus:text-cta-text"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded-lg focus:border focus:border-cta-edge focus:bg-cta focus:px-4 focus:py-2 focus:font-bold focus:text-cta-text"
       >
         본문으로 건너뛰기
       </a>
