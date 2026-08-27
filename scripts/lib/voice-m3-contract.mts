@@ -84,6 +84,16 @@ export const M3_MODEL_CANDIDATES = {
     source: 'https://platform.openai.com/pricing',
     checkedAt: '2026-08-27',
   },
+  'gpt-5-mini': {
+    // 🔴 중간 후보. 1차 30건 결과에서 haiku 가 경계 사례(뉴스 · 광고) 판별에서
+    //    앞섰지만 비용이 nano 의 4.3배였다. 그 사이를 메울 후보로 추가한다.
+    //    입력 5배 · 출력 5배(vs nano) / 입력 1/4 · 출력 2/5(vs haiku).
+    apiModelId: 'gpt-5-mini',
+    inputPerMTok: 0.25,
+    outputPerMTok: 2.0,
+    source: 'https://platform.openai.com/pricing',
+    checkedAt: '2026-08-27',
+  },
   'claude-haiku-4.5': {
     // 🔴 내부 라벨(`claude-haiku-4.5`)은 Anthropic 에 없는 이름이다.
     //    이것을 body.model 에 넣어 30건 실행이 HTTP_404 로 전멸했다(비용 0원).
@@ -279,13 +289,23 @@ export const M3_OUTPUT_TOKEN_POLICY = {
       '1000 에서 5/5 잘림(실측). 산출물 450 + 추론 예산 약 3,550. ' +
       '30건 최악값 120K tok = $0.048 로 dollarCap 대비 1% 미만이다',
   },
+  'gpt-5-mini': {
+    maxOutputTokens: 4000,
+    reasoning: true,
+    estimatedOutputTokens: 4000,
+    rationale:
+      '⚠️ **미실측이다.** 같은 reasoning 계열인 gpt-5-nano 의 실측(1000 에서 5/5 잘림 · ' +
+      '추론 1,664~3,328 tok)을 준용해 우선 4,000 을 쓴다. ' +
+      '실제 추론량은 실행 진단(finish · reasoning · out/상한)으로 확인한다',
+  },
   'claude-haiku-4.5': {
     maxOutputTokens: 1500,
     reasoning: false,
     estimatedOutputTokens: 700,
     rationale:
       'extended thinking 을 켜지 않으므로 상한이 곧 JSON 크기다. ' +
-      '450 산출물에 여유 3배. 출력 단가가 nano 의 12.5배라 상한을 넓게 두지 않는다',
+      '450 산출물에 여유 3배. 출력 단가가 nano 의 12.5배라 상한을 넓게 두지 않는다. ' +
+      '30건 실측 결과 실제 출력은 292~421 tok 로 상한의 28% 이하였다',
   },
 } as const satisfies Record<string, OutputTokenPolicy>
 

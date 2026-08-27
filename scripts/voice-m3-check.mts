@@ -28,7 +28,7 @@ import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/v
 import {
   selectStratifiedSample, validateSample, SAMPLE_AXES, type SampleCandidate,
 } from './lib/voice-m3-sample.mjs'
-import { keyStatus, ANTHROPIC_JSON_PREFILL } from './lib/voice-m3-provider.mjs'
+import { keyStatus, ANTHROPIC_JSON_PREFILL, PROVIDER_KEY_ENV } from './lib/voice-m3-provider.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-m3-dry-run.mts')
@@ -725,14 +725,30 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   // cap 은 그대로여야 한다 — 상한을 올렸다고 예산을 올리지 않는다
   if (M3_CAPS.tokenCap !== 500_000) offenders.push(`tokenCap 이 ${M3_CAPS.tokenCap}`)
   if (M3_CAPS.dollarCap !== 5) offenders.push(`dollarCap 이 ${M3_CAPS.dollarCap}`)
-  // 🔴 상한을 올려도 itemLimit 이 tokenCap 안에 들어와야 한다
-  const worstPerItem = 1745 + nano.maxOutputTokens
-  if (worstPerItem * M3_CAPS.itemLimit > M3_CAPS.tokenCap) {
-    offenders.push(`itemLimit ${M3_CAPS.itemLimit} × 최악 ${worstPerItem} tok 이 tokenCap 을 넘는다`)
+  // 🔴 상한을 올려도 itemLimit 이 tokenCap 안에 들어와야 한다.
+  //    **후보 전원을 본다** — 모델이 늘 때마다 한 모델만 검사하면 새 모델이 cap 을 깬다.
+  //    입력 1,745 tok 은 30건 실측 평균이다.
+  const INPUT_PER_ITEM = 1745
+  let worstOfAll = 0
+  for (const label of Object.keys(M3_MODEL_CANDIDATES)) {
+    let pol
+    try { pol = outputTokenPolicyFor(label) } catch { offenders.push(`${label} 에 출력 토큰 정책이 없다`); continue }
+    const worst = INPUT_PER_ITEM + pol.maxOutputTokens
+    worstOfAll = Math.max(worstOfAll, worst)
+    if (worst * M3_CAPS.itemLimit > M3_CAPS.tokenCap) {
+      offenders.push(`${label}: itemLimit ${M3_CAPS.itemLimit} × 최악 ${worst} tok 이 tokenCap 을 넘는다`)
+    }
+    // 🔴 30건 1회 실행이 dollarCap 안에서 도는가 — 최악값 기준
+    let pr
+    try { pr = pricingFor(label) } catch { offenders.push(`${label} 의 단가가 없다`); continue }
+    const cost30 = (30 * INPUT_PER_ITEM) / 1e6 * pr.inputPerMTok
+      + (30 * pol.estimatedOutputTokens) / 1e6 * pr.outputPerMTok
+    if (cost30 > M3_CAPS.dollarCap) offenders.push(`${label}: 30건 최악 $${cost30.toFixed(4)} 이 dollarCap 초과`)
   }
   if (offenders.length) bad('출력 상한 부족 · 잘린 JSON 감지', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('출력 상한 부족 · 잘린 JSON 감지', 'guard',
-    `nano ${nano.maxOutputTokens} tok(reasoning) · 5종 분류 정확 · cap 불변 · 최악 ${worstPerItem}×${M3_CAPS.itemLimit} < ${M3_CAPS.tokenCap}`)
+    `nano ${nano.maxOutputTokens} tok(reasoning) · 5종 분류 정확 · cap 불변 · ` +
+    `후보 ${Object.keys(M3_MODEL_CANDIDATES).length}종 최악 ${worstOfAll}×${M3_CAPS.itemLimit} < ${M3_CAPS.tokenCap}`)
 }
 
 // ── ㉕ 실패한 캐시가 재실행을 막지 않는다 ───────────────
@@ -1026,6 +1042,99 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('Anthropic prefill · 프롬프트 불변', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('Anthropic prefill · 프롬프트 불변', 'guard',
     `prefill="${ANTHROPIC_JSON_PREFILL}" Anthropic 만 · 응답 재조립 · promptVersion ${M3_PROMPT_VERSION} · 문구 sha ${INSTRUCTION_SHA} · 파서 관대화 0`)
+}
+
+// ── ㉛ gpt-5-mini 후보 · provider 분기 정합 ─────────────
+//    🔴 1차 30건에서 haiku 가 경계 사례 판별에 앞섰지만 비용이 nano 의 4.3배였다.
+//       중간 후보를 넣는다. 후보가 늘수록 **표 세 개가 어긋날 위험**이 커진다 —
+//       단가 · 출력 정책 · provider key/엔드포인트가 각각 다른 곳에 있다.
+{
+  const offenders: string[] = []
+  const LABELS = Object.keys(M3_MODEL_CANDIDATES)
+
+  // ① gpt-5-mini 가 후보에 있고 값이 맞는가
+  const mini = (M3_MODEL_CANDIDATES as Record<string, {
+    apiModelId?: string; inputPerMTok?: number; outputPerMTok?: number
+    source?: string; checkedAt?: string
+  }>)['gpt-5-mini']
+  if (!mini) offenders.push('gpt-5-mini 가 후보에 없다')
+  else {
+    if (mini.apiModelId !== 'gpt-5-mini') offenders.push(`gpt-5-mini apiModelId 가 ${mini.apiModelId}`)
+    if (mini.inputPerMTok !== 0.25) offenders.push(`gpt-5-mini 입력 단가가 ${mini.inputPerMTok}`)
+    if (mini.outputPerMTok !== 2.0) offenders.push(`gpt-5-mini 출력 단가가 ${mini.outputPerMTok}`)
+  }
+
+  // ② 🔴 후보 전원이 단가 출처 · 확인일 · apiModelId 를 갖는다
+  for (const label of LABELS) {
+    const c = (M3_MODEL_CANDIDATES as Record<string, Record<string, unknown>>)[label]
+    for (const f of ['apiModelId', 'source', 'checkedAt']) {
+      if (typeof c[f] !== 'string' || String(c[f]).trim() === '') offenders.push(`${label} 에 ${f} 없음`)
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(c.checkedAt ?? ''))) offenders.push(`${label} checkedAt 형식이 아니다`)
+    if (!String(c.source ?? '').startsWith('https://')) offenders.push(`${label} source 가 URL 이 아니다`)
+  }
+
+  // ③ 🔴 세 표가 같은 모델 집합을 덮는가.
+  //    후보에만 있고 key/엔드포인트에 없으면 **호출 순간 undefined 로 터진다.**
+  const keyEnv = Object.keys(PROVIDER_KEY_ENV)
+  const endpointLabels = [...providerCode.matchAll(/^\s*'([^']+)':\s*'https:\/\/[^']+'/gm)].map((m) => m[1])
+  for (const label of LABELS) {
+    if (!keyEnv.includes(label)) offenders.push(`${label} 이 PROVIDER_KEY_ENV 에 없다`)
+    if (!endpointLabels.includes(label)) offenders.push(`${label} 이 ENDPOINT 에 없다`)
+    let ok2 = true
+    try { outputTokenPolicyFor(label) } catch { ok2 = false }
+    if (!ok2) offenders.push(`${label} 이 M3_OUTPUT_TOKEN_POLICY 에 없다`)
+  }
+  for (const k of keyEnv) if (!LABELS.includes(k)) offenders.push(`PROVIDER_KEY_ENV 에만 있는 모델: ${k}`)
+
+  // ④ 🔴 gpt-5-mini 는 OpenAI 분기로 가야 한다
+  if (PROVIDER_KEY_ENV['gpt-5-mini' as keyof typeof PROVIDER_KEY_ENV] !== 'OPENAI_API_KEY') {
+    offenders.push('gpt-5-mini 가 OPENAI_API_KEY 를 쓰지 않는다')
+  }
+  // 엔드포인트 대조 — provider 파일에서 라벨별 URL 을 직접 읽는다
+  const urlOf = (label: string): string =>
+    new RegExp(`'${label.replace('.', '\\.')}':\\s*'(https://[^']+)'`).exec(providerCode)?.[1] ?? ''
+  if (!urlOf('gpt-5-mini').includes('api.openai.com')) offenders.push('gpt-5-mini 엔드포인트가 OpenAI 가 아니다')
+  if (!urlOf('gpt-5-nano').includes('api.openai.com')) offenders.push('gpt-5-nano 엔드포인트가 바뀌었다')
+  if (!urlOf('claude-haiku-4.5').includes('api.anthropic.com')) offenders.push('haiku 엔드포인트가 바뀌었다')
+
+  // ⑤ 🔴 `isAnthropic` 판정이 엔드포인트와 어긋나지 않는가.
+  //    판정은 문자열 하나(`req.model === '...'`)에 의존한다. 후보가 늘수록
+  //    "anthropic 엔드포인트인데 OpenAI 분기로 가는" 모델이 생길 위험이 커진다.
+  const antLabel = /isAnthropic = req\.model === '([^']+)'/.exec(providerCode)?.[1] ?? ''
+  if (antLabel === '') offenders.push('isAnthropic 판정을 찾지 못했다')
+  else {
+    const byEndpoint = LABELS.filter((l) => urlOf(l).includes('api.anthropic.com'))
+    if (byEndpoint.length !== 1 || byEndpoint[0] !== antLabel) {
+      offenders.push(
+        `isAnthropic 판정('${antLabel}')과 anthropic 엔드포인트 모델(${byEndpoint.join(',') || '없음'})이 다르다`,
+      )
+    }
+  }
+
+  // ⑥ cacheKey 는 내부 라벨 — 세 모델이 서로 다른 키를 낸다
+  const base = {
+    origin: 'unao_cafe', sourceRef: 'abc', contentHash: null,
+    ruleVersion: 'r1', taskVersion: M3_TASK_VERSION,
+    promptVersion: M3_PROMPT_VERSION, outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
+  }
+  const keys = LABELS.map((l) => buildCacheKey({ ...base, model: l }))
+  if (new Set(keys).size !== LABELS.length) offenders.push('모델이 달라도 같은 cacheKey 가 나온다')
+  // 🔴 apiModelId 로는 키를 만들지 않는다 — mini 는 라벨과 값이 같아 이 검사가 무의미하므로 haiku 로 본다
+  if (buildCacheKey({ ...base, model: 'claude-haiku-4.5' }) === buildCacheKey({ ...base, model: apiModelIdFor('claude-haiku-4.5') })) {
+    offenders.push('라벨과 apiModelId 가 같은 키를 낸다')
+  }
+
+  // ⑦ 🔴 API key 는 이름만 다룬다 — 새 모델에서도 값이 새지 않는다
+  const st = keyStatus('gpt-5-mini')
+  if (st.envName !== 'OPENAI_API_KEY') offenders.push(`gpt-5-mini keyStatus envName 이 ${st.envName}`)
+  if (Object.keys(st).some((k) => !['envName', 'present'].includes(k))) offenders.push('keyStatus 가 값을 노출한다')
+  if (typeof st.present !== 'boolean') offenders.push('present 가 boolean 이 아니다')
+
+  if (offenders.length) bad('gpt-5-mini 후보 · provider 분기', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('gpt-5-mini 후보 · provider 분기', 'guard',
+    `후보 ${LABELS.length}종(${LABELS.join(' · ')}) · 단가·정책·key·엔드포인트 전부 정합 · ` +
+    `mini→OpenAI $${mini?.inputPerMTok}/$${mini?.outputPerMTok} · cacheKey ${new Set(keys).size}/${LABELS.length} 고유`)
 }
 
 // ── 출력 ────────────────────────────────────────────────
