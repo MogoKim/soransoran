@@ -41,8 +41,11 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-3xl px-4 pb-24">
-        <ListHeader board={board} />
+      {/* 제목을 감춘 만큼 위 여백을 직접 준다 — 메뉴에 목록이 바로 붙지 않게 한다 */}
+      <main className="mx-auto max-w-3xl px-4 pb-24 pt-4">
+        {/* 상단 아이콘 메뉴가 이미 어느 방인지 말하고 있어 제목을 눈에서만 감춘다.
+            <h1> 텍스트는 남는다 (매거진·베스트는 그대로 보인다). */}
+        <ListHeader board={board} visuallyHidden />
 
         {posts.length === 0 ? (
           <EmptyState
@@ -52,14 +55,19 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
             ctaHref={`/write?board=${board.slug}`}
           />
         ) : (
-          /* 🔴 목록은 바탕 위에 직접 놓지 않는다.
-                글이 바탕에 바로 앉으면 어디까지가 한 건인지가 구분선 하나에만 걸린다.
-                흰 면 위에 올려야 "목록 한 덩어리" 로 읽히고, 그 위에서 hover 도 보인다.
+          /* 🔴 흰 면은 유지하되, 떠 있는 카드가 아니라 바닥에 깔린 지면으로 둔다.
+                둥근 모서리와 사방 테두리가 있으면 목록이 화면 위에 얹힌 위젯처럼 보인다.
+                게시판은 위젯이 아니라 계속 이어지는 지면이라, 가로로 꽉 채우고
+                위아래 선으로만 시작과 끝을 알린다.
 
-                가로 여백은 이 목록이 아니라 행(PostCard)이 가진다 —
-                여기에 px 를 주면 hover 면이 카드 안쪽으로 들어가 눌리는 폭과 어긋난다.
-                FAB 자리는 <main> 의 pb-24 가 이미 확보한다. */
-          <ul className="flex list-none flex-col overflow-hidden rounded-2xl border border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
+             🔴 흰 면 자체는 없애지 않는다.
+                바탕 위에 행을 직접 놓으면 hover 색이 바탕색과 같아져 아무 일도 일어나지 않고
+                (globals.css 표면 규칙) 구분선 대비도 함께 떨어진다.
+
+             -mx-4 는 <main> 의 가로 여백을 되돌려 지면을 화면 끝까지 잇는다.
+             글자 위치는 그대로다 — 가로 여백은 행(PostCard)이 자기 px-4 로 가진다.
+             FAB 자리는 <main> 의 pb-24 가 이미 확보한다. */
+          <ul className="-mx-4 flex list-none flex-col border-y border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
             {posts.map((post) => (
               <li key={post.id}>
                 <PostCard post={post} boardHref={board.href} />

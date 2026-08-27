@@ -15,7 +15,31 @@ import type { BoardMeta } from '@/lib/board-registry'
  * 아이콘 배지는 홈 "지금 뜨는 이야기" 와 같은 모양이다.
  * 목록에 들어왔을 때 어느 방인지가 색으로 먼저 보인다.
  */
-export default function ListHeader({ board }: { board: BoardMeta }) {
+type ListHeaderProps = {
+  board: BoardMeta
+  /**
+   * 제목을 눈에서만 감춘다 (기본 false).
+   *
+   * 🔴 감추는 것이지 지우는 것이 아니다.
+   *    <h1> 과 그 텍스트는 그대로 남아 문서 구조와 스크린리더 낭독이 유지된다.
+   *
+   * 🔴 왜 필요한가 — 게시판 목록에서만 제목이 중복이다.
+   *    상단 아이콘 메뉴가 이미 어느 방인지 색·라벨·활성 표시로 말하고 있는데,
+   *    바로 아래에 같은 이름을 다시 크게 쓰면 첫 글이 그만큼 아래로 밀린다.
+   *    매거진·베스트는 메뉴에서 들어오지 않는 경로도 있어 제목을 그대로 둔다.
+   *
+   * 🔴 전역으로 감추지 않는 이유가 이것이다.
+   *    이 컴포넌트를 세 화면이 같이 쓰므로, 감출지는 부르는 쪽이 정한다.
+   */
+  visuallyHidden?: boolean
+}
+
+export default function ListHeader({ board, visuallyHidden = false }: ListHeaderProps) {
+  // 아이콘 배지는 장식이라 감출 때는 아예 그리지 않는다 — 보이지 않는 곳에 색을 두지 않는다.
+  if (visuallyHidden) {
+    return <h1 className="sr-only">{board.label}</h1>
+  }
+
   return (
     <h1 className="flex items-center gap-2 py-6 text-xl font-bold text-content-primary">
       <span
