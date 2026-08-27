@@ -1384,19 +1384,24 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   const offenders: string[] = []
 
   // ① 종결 코드 목록
-  if (M3_TERMINAL_SKIP_CODES.length !== 1 || M3_TERMINAL_SKIP_CODES[0] !== 'SOURCE_LEAK') {
-    offenders.push(`종결 코드가 ${JSON.stringify(M3_TERMINAL_SKIP_CODES)}`)
+  // 🔴 종결 코드는 **모델 출력 문제 두 가지뿐**이다. 늘어나면 고칠 수 있는 것을 버리게 된다
+  const WANT = ['SOURCE_LEAK', 'FORBIDDEN_ADDRESS']
+  if (M3_TERMINAL_SKIP_CODES.length !== WANT.length
+      || !WANT.every((c) => (M3_TERMINAL_SKIP_CODES as readonly string[]).includes(c))) {
+    offenders.push(`종결 코드가 ${JSON.stringify(M3_TERMINAL_SKIP_CODES)} (${WANT.join(',')} 이어야)`)
   }
-  if (!isTerminalSkip('SOURCE_LEAK')) offenders.push('SOURCE_LEAK 을 종결로 보지 않는다')
+  for (const t of WANT) if (!isTerminalSkip(t)) offenders.push(`${t} 을 종결로 보지 않는다`)
   // 🔴 고치면 달라지는 실패는 종결이 아니다
   for (const retryable of ['JSON_PARSE', 'HTTP_429', 'HTTP_500', 'TIMEOUT', 'NETWORK', 'NO_FINISH_REASON']) {
     if (isTerminalSkip(retryable)) offenders.push(`🔴 ${retryable} 을 종결로 본다 — 고칠 수 있는 것을 버린다`)
   }
   if (isTerminalSkip(null)) offenders.push('errorCode 가 null 인데 종결로 본다')
-  // ⚠️ FORBIDDEN_ADDRESS 는 아직 판단하지 않았다. 임의로 종결에 넣지 않는다
-  if (isTerminalSkip('FORBIDDEN_ADDRESS')) {
-    offenders.push('FORBIDDEN_ADDRESS 를 실측 없이 종결로 분류했다')
+  // 🔴 저장 차단은 그대로다 — 종결로 본다는 것이 "통과시킨다" 는 뜻이 아니다
+  if (!/forbidden\.length > 0[\s\S]{0,200}skipped/.test(runCode)) {
+    offenders.push('금지 호칭 검출 시 skipped 처리가 사라졌다')
   }
+  if (!/errorCode = 'FORBIDDEN_ADDRESS'/.test(runCode)) offenders.push('FORBIDDEN_ADDRESS 코드 부여가 사라졌다')
+  if (!/M3_FORBIDDEN_ADDRESS_TERMS\.filter/.test(runCode)) offenders.push('금지 호칭 대조가 사라졌다')
 
   // ② 🔴 full 이 SOURCE_LEAK skipped 를 **제외**하는가
   //    (제외하지 않으면 같은 글을 매 batch 다시 부른다)

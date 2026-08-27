@@ -192,11 +192,12 @@ output         null           ← DB 저장 유출 0건
 | 실패 | 원인 | 재시도 | 전량 대상 |
 |---|---|---|---|
 | **`SOURCE_LEAK`** | **모델이 원문을 옮겨 적었다.** 우리가 고칠 것이 없다 | ❌ **종결** | 제외 |
+| **`FORBIDDEN_ADDRESS`** | **모델이 금지 호칭을 만들어냈다.** 프롬프트는 이미 막고 있다 | ❌ **종결** | 제외 |
 | `JSON_PARSE` | 출력 형식 — 프롬프트 · prefill 로 고친다 | ✅ | 포함 |
 | `HTTP_*` · `TIMEOUT` · `NETWORK` | 설정 · 일시 장애 | ✅ | 포함 |
 | `NO_FINISH_REASON` | provider 응답 이상 | ✅ | 포함 |
 
-코드 상수: `M3_TERMINAL_SKIP_CODES = ['SOURCE_LEAK']` · 판정 `isTerminalSkip()`
+코드 상수: `M3_TERMINAL_SKIP_CODES = ['SOURCE_LEAK', 'FORBIDDEN_ADDRESS']` · 판정 `isTerminalSkip()`
 
 #### 🔴 가드는 하나도 완화하지 않았다
 
@@ -209,18 +210,33 @@ output         null           ← DB 저장 유출 0건
 - 🔴 임계값을 호출부에서 **넘기지 않는다** — fixture 가 `assertNoSourceLeak` 의 세 번째 인자를 검사한다
   (역검증에서 `assertNoSourceLeak(text, sources, 999)` 로 실제로 뚫렸고, 그래서 인자 개수를 보도록 고쳤다)
 
-#### ⚠️ `FORBIDDEN_ADDRESS` 는 아직 종결이 아니다
+#### ✅ `FORBIDDEN_ADDRESS` 도 종결이다 (2026-08-27 추가)
 
-성격은 같아 보이지만(모델 출력 문제 · 재시도해도 같을 가능성) **한 건도 나오지 않았다.**
-실측 없이 종결로 분류하면 고칠 수 있는 것을 버리게 된다. 나오면 그때 판단한다.
-fixture 가 이것을 임의로 종결에 넣는 변경을 막는다.
+초판에는 **일부러 넣지 않았다** — 성격은 같아 보였지만 한 건도 나오지 않았고,
+실측 없이 분류하면 고칠 수 있는 것을 버리게 되기 때문이다.
+**전량 5번째 batch 에서 1건이 나왔다.**
 
-#### 발생률과 전량 영향
+```
+sourceRef      cmpy8jmka000csr2yq62ejr0j
+status         skipped
+errorMessage   출력에 생성 금지 호칭 1종이 있어 저장하지 않았다
+               · finish=end_turn · out=266/1500 · chars=361
+output         null           ← 저장 차단 확인
+토큰           2,423+266 · $0.0038
+원문           navercafe:wgang · 본문 235자 · 댓글 6개
+```
 
-149건 중 1건(**0.67%**). 이 비율이 유지되면 남은 9,214건에서 약 **62건**이 종결 skip 될 것으로 보인다.
-그 경우 최종 `succeeded` 는 약 9,382건, `processed` 는 9,444건이 된다.
+모델이 **타겟 설명어를 스스로 만들어냈고** 저장 전 검사가 잡았다.
+🔴 **우리가 고칠 것이 없다.** 프롬프트는 이미 금지어를 명시하고 있고(계약 §C),
+그것을 어긴 것은 모델이다. 입력도 프롬프트도 그대로면 다시 불러도 같은 답이 나온다.
 
-⚠️ 표본이 1건이라 비율 추정의 신뢰구간이 매우 넓다. **batch 마다 실측한다.**
+🔴 **종결로 본다는 것이 "통과시킨다" 는 뜻이 아니다.** 금지 호칭 대조는 그대로이고,
+걸린 출력은 여전히 저장되지 않는다. 달라지는 것은 **"다시 부를 것인가" 하나뿐**이다.
+fixture 가 저장 차단이 살아 있는지 함께 검사한다.
+
+**발생률**: 532건 중 2건(**0.38%**) — `SOURCE_LEAK` 1 + `FORBIDDEN_ADDRESS` 1.
+이 비율이면 남은 8,912건에서 약 **34건**이 종결 skip 될 것으로 보인다.
+⚠️ 표본이 2건이라 신뢰구간이 매우 넓다.
 
 ### 같은 원문을 두 번 부르지 않는지
 
@@ -434,6 +450,86 @@ export 는 파일로 나가 우리 통제 밖에 놓이므로 한 번 더 본다
 | 4 | **전량 189 batch 진행** | 🔴 미승인 — 예산 $54.84 대비 실측 67% |
 | 5 | **§10 export 도구 작성** | 🔴 미승인 — 전량 완료 후 |
 | 6 | 글 **생성** 모델 실험 | 🔴 미착수 — 이 문서와 무관 |
+
+---
+
+## 11-1. 🔴 `running` 으로 남은 `VoiceM3Run` 정리 (제안 · 미실행)
+
+### 원인
+
+`VoiceM3Run 07aba64a-5747-4241-a2a5-46aec337a8c2` 가 `status='running'` 으로 남아 있다.
+
+```
+status        running
+startedAt     2026-08-27T12:03:56.674Z
+completedAt   null            ← update 가 실행되지 않았다
+counters      att=0 succ=0 fail=0 skip=0 hit=0 miss=0
+CostEvent     2건 · $0.0085 · 연결 캐시 2건 (둘 다 succeeded)
+```
+
+**batch 루프를 외부에서 강제 종료(`TaskStop`)했기 때문이다.**
+`voice-m3-run` 은 건별 처리가 끝난 **뒤에** `voiceM3Run.update` 로 counters 를 기록한다.
+프로세스가 그 지점에 닿기 전에 죽으면 Run 레코드는 시작 상태로 남는다.
+counters 는 메모리 변수이므로 0 으로 남고, **실제 처리량은 `VoiceM3CostEvent` 에 남아 있다.**
+
+🔴 **데이터 손상이 아니다.** 캐시는 건별로 `upsert` 되므로 그 2건은 정상 저장됐고,
+`succeeded` 이므로 다음 전량 실행에서 자동으로 제외된다. 재호출도 중복 과금도 없다.
+남은 것은 **통계 레코드 하나의 상태값**뿐이다.
+
+### `CostEvent` 로 역산한 값
+
+| 필드 | 값 | 근거 |
+|---|---|---|
+| `status` | `cancelled` | 실패가 아니라 외부 종료다. `VoiceM3RunStatus` 에 이미 있는 값 |
+| `completedAt` | `2026-08-27T12:04:05.265Z` | 마지막 `CostEvent.occurredAt` |
+| `attempted` | 2 | `eventType='call'` 이벤트 수 |
+| `succeeded` | 2 | 연결된 캐시 중 `status='succeeded'` |
+| `failed` · `skipped` | 0 · 0 | 없음 |
+| `cacheHit` · `cacheMiss` | 0 · 2 | `cache_hit` 이벤트 0 · `call` 2 |
+| `inputTokens` | 5,232 | `call` 이벤트 합 |
+| `outputTokens` | 644 | `call` 이벤트 합 |
+| `totalTokens` | 5,876 | |
+| `estimatedCostUsd` | 0.0085 | 전체 이벤트 합 |
+
+### 정리 SQL (🔴 제안일 뿐 · 실행하지 않았다)
+
+```sql
+-- 🔴 실행 전 반드시 확인:
+--    ① 이 id 가 맞는가  ② 다른 세션이 돌고 있지 않은가(진짜 running 을 죽이면 안 된다)
+--    ③ CostEvent 역산값이 위 표와 같은가
+UPDATE "VoiceM3Run"
+SET status             = 'cancelled',
+    "completedAt"      = '2026-08-27T12:04:05.265Z',
+    attempted          = 2,
+    succeeded          = 2,
+    failed             = 0,
+    skipped            = 0,
+    "cacheHit"         = 0,
+    "cacheMiss"        = 2,
+    "inputTokens"      = 5232,
+    "outputTokens"     = 644,
+    "totalTokens"      = 5876,
+    "estimatedCostUsd" = 0.0085,
+    "errorSummary"     = '외부 종료(TaskStop)로 update 미도달 — CostEvent 로 역산해 정리'
+WHERE id = '07aba64a-5747-4241-a2a5-46aec337a8c2'
+  AND status = 'running';   -- 🔴 이미 정리됐으면 아무 행도 바꾸지 않는다
+```
+
+⚠️ 이 프로젝트는 `prisma migrate` 를 쓰지 않는다. DB 반영은 `/prisma-guide` 절차
+(pg 모듈 직접 SQL + `information_schema` 검증)를 따르며 **창업자 승인 사항**이다.
+
+### 정리하지 않아도 되는가
+
+**된다.** 이 레코드는 실행을 막지 않고 비용에도 영향이 없다.
+다만 전량이 끝난 뒤 `VoiceM3Run` 을 세어 보고할 때
+`running` 하나가 섞여 있으면 "아직 도는 중인가" 로 읽힌다 — 그때 혼동이 생긴다.
+**전량 종료 전 한 번 정리하는 것을 권한다.**
+
+### 재발 방지
+
+batch 루프를 강제 종료하지 않는다. 멈춰야 하면 **현재 batch 가 끝난 뒤** 다음 batch 를 시작하지 않는 방식으로 멈춘다.
+`voice-m3-run` 자체에 중간 저장을 넣는 방법도 있으나, DB write 를 늘리는 변경이라
+**지금은 하지 않는다** — 손상이 아니라 통계값 문제이기 때문이다.
 
 ---
 

@@ -206,20 +206,26 @@ export const M3_ANALYSIS_MODEL = 'claude-haiku-4.5'
  * | 실패 | 원인 | 재시도 |
  * |---|---|---|
  * | `SOURCE_LEAK` | **모델이 원문을 옮겨 적었다.** 우리가 고칠 것이 없다 | ❌ 종결 |
+ * | `FORBIDDEN_ADDRESS` | **모델이 금지 호칭을 만들어냈다.** 프롬프트는 이미 막고 있다 | ❌ 종결 |
  * | `JSON_PARSE` · `HTTP_*` · `TIMEOUT` · `NETWORK` · `NO_FINISH_REASON` | 설정 · 코드 · 일시 장애 — **고치면 달라진다** | ✅ 재시도 |
  *
  * 🔴 **가드를 완화해서 통과시키는 것이 아니다.** 20자 대조는 그대로이고,
  *    걸린 출력은 여전히 저장되지 않는다(`output = null`). 달라지는 것은
  *    **"다시 부를 것인가" 하나뿐**이다.
  *
- * ⚠️ `FORBIDDEN_ADDRESS` 는 **일부러 넣지 않았다.** 성격은 같아 보이지만
- *    (모델 출력 문제 · 재시도해도 같을 가능성) 아직 한 건도 나오지 않았고,
- *    실측 없이 종결로 분류하면 고칠 수 있는 것을 버리게 된다.
- *    나오면 그때 판단한다.
+ * ✅ `FORBIDDEN_ADDRESS` 도 종결이다 (2026-08-27 추가).
+ *    초판에는 **일부러 넣지 않았다** — 성격은 같아 보였지만 한 건도 나오지 않았고,
+ *    실측 없이 분류하면 고칠 수 있는 것을 버리게 되기 때문이다.
+ *    전량 5번째 batch 에서 1건이 나왔다(`cmpy8jmka000csr2yq62ejr0j`).
+ *
+ *    모델이 **타겟 설명어를 스스로 만들어냈고** 저장 전 검사가 잡았다(output = null).
+ *    `SOURCE_LEAK` 과 같은 성격이다 — 입력도 프롬프트도 그대로면 출력도 대체로 같다.
+ *    🔴 우리가 고칠 것은 없다. 프롬프트는 이미 금지어를 명시하고 있고(§C),
+ *    그것을 어긴 것은 모델이다. 다시 불러도 같은 답이 나온다.
  *
  * 정본: docs/operations/2026-08-27-voice-m3-full-scale-plan.md §4-1
  */
-export const M3_TERMINAL_SKIP_CODES = ['SOURCE_LEAK'] as const
+export const M3_TERMINAL_SKIP_CODES = ['SOURCE_LEAK', 'FORBIDDEN_ADDRESS'] as const
 
 /** 이 실패는 다시 불러도 답이 달라지지 않는가 */
 export function isTerminalSkip(errorCode: string | null): boolean {
