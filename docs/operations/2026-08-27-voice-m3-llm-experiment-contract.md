@@ -432,6 +432,15 @@ VE-M3가 성공해도 아래는 열리지 않는다.
 
 **VE-M3-3 이전까지는 비용이 0원이다.** 그전에 멈추면 아무것도 잃지 않는다.
 
+> ✅ **2026-08-27 — VE-M3-1 반영됨.**
+> `VoiceM3Run` · `VoiceM3Cache` · `VoiceM3CostEvent` 가 `schema.prisma` 와
+> `prisma/migrations/0008_voice_m3_cache_cost/migration.sql` 에 들어갔다.
+> **DB 적용은 아직이다** — 창업자가 Supabase SQL Editor 에서 수동 적용한다
+> (`/prisma-guide`: pg 모듈 직접 SQL + `information_schema` 검증).
+> §D 의 cacheKey 8요소는 `VoiceM3Cache.cacheKey` UNIQUE 로 구현됐고,
+> `model`·`promptVersion`·`outputSchemaVersion` 은 **NOT NULL** 이다.
+> 🔴 LLM client · 실험 실행은 여전히 없다(VE-M3-2 · M3-3).
+
 ### 착수 전 창업자 결정 사항
 
 1. **모델 선택** (§F) — 후보와 기준만 정했다. 확정은 승인 사항
