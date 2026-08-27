@@ -104,7 +104,10 @@ export default async function HomePage() {
           <section className="border-t-4 border-surface-page px-4 py-5">
             <SectionHeading board={best} title="지금 뜨는 이야기" moreHref="/best" />
 
-            <ol className="m-0 flex list-none flex-col p-0">
+            {/* -mx-4 로 섹션 여백을 되돌린다 — 행이 자기 px-4 를 가지므로
+                그대로 두면 32px 이 되고, hover 면도 안쪽으로 눌린다.
+                구분선은 항목 사이에만 긋는다(마지막 예외를 둘 필요가 없다). */}
+            <ol className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
               {posts.map((post, index) => (
                 <li key={post.id}>
                   <PostListItem post={post} rank={index + 1} />

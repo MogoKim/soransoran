@@ -79,7 +79,11 @@ export default async function PostDetailPage({
           </Link>
         </nav>
 
-        <article className="pb-6">
+        {/* 🔴 본문도 흰 면 위에 올린다.
+            바탕이 중립 회색이 된 뒤, 상세만 바탕 위에 글자를 직접 두면
+            서비스에서 가장 오래 읽는 화면이 유일하게 "종이 없는 화면" 이 된다.
+            목록·매거진 카드와 같은 면을 써서 읽는 자리를 분명히 한다. */}
+        <article className="rounded-2xl border border-subtle bg-surface-card px-4 py-5 sm:px-6 sm:py-6">
           <h1 className="text-2xl font-bold leading-snug text-content-primary">{post.title}</h1>
 
           <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">

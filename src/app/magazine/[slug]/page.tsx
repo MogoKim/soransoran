@@ -126,7 +126,8 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
           </Link>
         </nav>
 
-        <article className="pb-6">
+        {/* 커뮤니티 상세와 같은 면 규칙이다 — 오래 읽는 화면은 흰 면 위에 둔다 */}
+        <article className="rounded-2xl border border-subtle bg-surface-card px-4 py-5 sm:px-6 sm:py-6">
           <h1 className="text-2xl font-bold leading-snug text-content-primary">{article.title}</h1>
 
           <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">

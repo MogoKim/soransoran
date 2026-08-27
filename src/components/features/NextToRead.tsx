@@ -15,9 +15,9 @@ const TAKE = 3
  *    쿼리에 제외 인자를 더하지 않고 넉넉히 받아 걸러낸다. 쿼리를 고치면
  *    홈까지 같이 바뀌고, 이 화면 하나 때문에 공용 쿼리를 건드리게 된다.
  *
- * 우나어는 같은 자리에 점수화 추천(scoreRelatedV2)과 추천 사유 라벨을 둔다.
- * 소란소란에는 추천 엔진도 이벤트 트래킹도 없으므로 그 표기를 흉내내지 않는다 —
- * 근거 없는 "왜 추천했는지"는 만들지 않는다. 최신 글을 그대로 잇는다.
+ * 🔴 추천 사유 라벨("같은 주제" 류)을 붙이지 않는다.
+ *    소란소란에는 추천 엔진도 이벤트 트래킹도 없다. 근거가 없는데 이유를 적으면
+ *    그 말이 거짓이 된다. 최신 글을 그대로 잇고, 그 사실만 제목으로 말한다.
  */
 export default function NextToRead({
   posts,
@@ -34,7 +34,11 @@ export default function NextToRead({
     <section className="mt-10 border-t border-subtle pt-6">
       <h2 className="text-lg font-bold text-content-primary">이어서 읽어보세요</h2>
 
-      <ol className="m-0 mt-2 flex list-none flex-col p-0">
+      {/* 🔴 흰 카드 위에 올린다.
+          상세 <main> 은 바탕(회색)이라 여기에 행을 직접 놓으면
+          hover 색이 바탕색과 같아져 아무 일도 일어나지 않는다 (globals.css 표면 규칙).
+          가로 여백은 행이 자기 px-4 로 가진다. */}
+      <ol className="m-0 mt-2 flex list-none flex-col overflow-hidden rounded-2xl border border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
         {next.map((post, index) => (
           <li key={post.id}>
             <PostListItem post={post} rank={index + 1} />
