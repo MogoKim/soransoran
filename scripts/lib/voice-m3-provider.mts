@@ -25,6 +25,7 @@ import { isMaxTokensReached, apiModelIdFor } from './voice-m3-contract.mjs'
 /** provider 별 key 환경변수. 🔴 값이 아니라 이름이다 */
 export const PROVIDER_KEY_ENV = {
   'gpt-5-nano': 'OPENAI_API_KEY',
+  'gpt-5-mini': 'OPENAI_API_KEY',
   'claude-haiku-4.5': 'ANTHROPIC_API_KEY',
 } as const
 
@@ -33,6 +34,7 @@ export type ProviderModel = keyof typeof PROVIDER_KEY_ENV
 /** provider 엔드포인트. 🔴 호출은 아래 함수 안에서만 일어난다 */
 const ENDPOINT = {
   'gpt-5-nano': 'https://api.openai.com/v1/chat/completions',
+  'gpt-5-mini': 'https://api.openai.com/v1/chat/completions',
   'claude-haiku-4.5': 'https://api.anthropic.com/v1/messages',
 } as const
 
