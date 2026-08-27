@@ -119,8 +119,8 @@ async function main(): Promise<void> {
   }
   if (MODEL) {
     const k = keyStatus(MODEL)
-    // 🔴 key 값이 아니라 존재 여부와 앞 4자만
-    console.log(`  ${k.envName}: ${k.present ? `존재 ${k.hint}` : '🔴 없음'}`)
+    // 🔴 존재 여부만. 값 · prefix · 길이 어느 것도 찍지 않는다
+    console.log(`  ${k.envName}: ${k.present ? 'OK' : '없음'}`)
   }
   console.log(
     willCallProvider
