@@ -35,11 +35,11 @@ export default function MagazineCard({ article }: { article: MagazineArticle }) 
       ) : null}
 
       <span className="flex min-w-0 flex-col justify-center gap-1.5">
-        <span className="inline-flex w-fit items-center rounded-full bg-surface-soft px-2 py-0.5 text-xs font-bold text-brand-ink">
+        <span className="inline-flex w-fit items-center rounded-full bg-surface-soft px-2 py-0.5 text-xs font-medium text-brand-ink">
           {MAGAZINE_CLUSTER_LABELS[article.cluster]}
         </span>
 
-        <span className="line-clamp-2 break-keep font-bold leading-[1.4] text-content-primary sm:text-lg">
+        <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.4] text-content-primary">
           {article.title}
         </span>
 
