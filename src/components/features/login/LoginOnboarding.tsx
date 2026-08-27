@@ -179,6 +179,27 @@ export default function LoginOnboarding({
             로그인하면 보던 화면으로 돌아와요.
           </p>
         ) : null}
+
+        {/* 🔴 버튼을 누르기 전에 무엇을 주게 되는지 먼저 보여준다.
+              카카오 동의 화면에서 처음 알게 되면 그 자리에서 그만두는 사람이 생긴다.
+              문구는 개인정보처리방침 2항의 표와 같은 내용을 줄여 적은 것이다 —
+              둘이 어긋나면 방침 쪽이 정본이다. */}
+        <p className="mt-2 break-keep text-center text-xs leading-[1.6] text-content-muted">
+          여성을 위한 커뮤니티라 가입 자격 확인을 위해 성별과 출생연도를, 본인 확인을 위해
+          전화번호를 카카오에서 확인해요. 광고를 보내는 데는 쓰지 않아요.
+        </p>
+
+        <p className="mt-2 break-keep text-center text-xs leading-[1.6] text-content-muted">
+          시작하시면{' '}
+          <Link href="/terms" className="text-link underline underline-offset-2">
+            이용약관
+          </Link>
+          과{' '}
+          <Link href="/privacy" className="text-link underline underline-offset-2">
+            개인정보처리방침
+          </Link>
+          에 동의하는 것으로 봅니다.
+        </p>
       </div>
     </div>
   )
