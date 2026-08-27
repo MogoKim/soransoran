@@ -155,3 +155,8 @@ jobs:
       #    원문 · 댓글 · 닉네임 미저장과 "타겟 설명어 부활" 회귀를 여기서만 잡는다.
       - name: Voice 규칙 신호 (원문 미저장 · 비용 0원 · 타겟 설명어 금지)
         run: npm run voice:derive-check
+
+      # 🔴 VE-M3 부터는 실수가 돈이다. LLM SDK import 한 줄 · fetch 한 줄이 곧 비용이다 —
+      #    기존 fixture 는 M3 경로를 모르므로 여기서만 잡힌다.
+      - name: Voice M3 dry-run (LLM 0 · 네트워크 0 · 단가 미확정 보존)
+        run: npm run voice:m3-check
