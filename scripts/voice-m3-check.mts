@@ -21,11 +21,18 @@ import {
   buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak, pricingFor,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
+import {
+  selectStratifiedSample, validateSample, SAMPLE_AXES, type SampleCandidate,
+} from './lib/voice-m3-sample.mjs'
+import { keyStatus } from './lib/voice-m3-provider.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-m3-dry-run.mts')
 const CONTRACT_LIB = join(HERE, 'lib/voice-m3-contract.mts')
 const PROMPT_LIB = join(HERE, 'lib/voice-m3-prompt.mts')
+const SAMPLE_LIB = join(HERE, 'lib/voice-m3-sample.mts')
+const PROVIDER_LIB = join(HERE, 'lib/voice-m3-provider.mts')
+const RUN = join(HERE, 'voice-m3-run.mts')
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -42,6 +49,9 @@ const stripComments = (raw: string): string =>
 const liveCode = stripComments(readFileSync(LIVE, 'utf-8'))
 const contractCode = stripComments(readFileSync(CONTRACT_LIB, 'utf-8'))
 const promptCode = stripComments(readFileSync(PROMPT_LIB, 'utf-8'))
+const sampleCode = stripComments(readFileSync(SAMPLE_LIB, 'utf-8'))
+const providerCode = stripComments(readFileSync(PROVIDER_LIB, 'utf-8'))
+const runCode = stripComments(readFileSync(RUN, 'utf-8'))
 const ALL: Array<[string, string]> = [
   ['dry-run', liveCode], ['contract lib', contractCode], ['prompt lib', promptCode],
 ]
@@ -420,10 +430,229 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
     `30 → 100 → 300 · 축 ${M3_STRATA_AXES.length}종 · 한 실행 ${M3_CAPS.itemLimit}건(tokenCap 상한 ${maxPerRun}) · $${runCost.toFixed(3)}/실행`)
 }
 
+
+// ══════════════════════════════════════════════════════════
+// VE-M3-3 실행 경로 — 🔴 여기부터 돈이 나갈 수 있다
+//
+// 🔴 ① 의 기준이 바뀌었다. 실행 경로가 생겼으므로 provider 호출을
+//    **허용 파일 안에서만** 인정한다. 그 밖은 여전히 0 이어야 한다.
+// ══════════════════════════════════════════════════════════
+
+// ── ⑰ provider 호출은 허용 파일에만 있다 ───────────────
+{
+  const offenders: string[] = []
+  // 허용: provider adapter · run(게이트 뒤). 금지: dry-run · check · lib 나머지
+  //
+  // 🔴 **이 fixture 자신은 대상에서 뺀다.**
+  //    검사 패턴을 문자열로 들고 있기 때문에, 자기 자신을 훑으면
+  //    `indexOf('await fetch(')` 같은 줄이 위반으로 읽힌다 — 실제로 세 번 걸렸다.
+  //    검사기가 자기 검사 문구에 걸리면 그 가드는 쓸 수 없다.
+  //    대신 아래에서 **SDK import 만** 따로 본다. import 는 문자열로 쓸 일이 없다.
+  const FORBIDDEN_FILES: Array<[string, string]> = [
+    ['dry-run', liveCode], ['contract lib', contractCode], ['prompt lib', promptCode],
+    ['sample lib', sampleCode],
+  ]
+  for (const [label, code] of FORBIDDEN_FILES) {
+    // 🔴 **실제 호출 형태만** 본다.
+    //    `\bfetch\s*\(` 같은 넓은 패턴을 쓰면 이 fixture 안의 검사 정규식 자체가 걸린다
+    //    (실제로 걸렸다). 가드가 자기 자신을 위반으로 읽으면 쓸 수 없다.
+    if (/(await|return|=)\s+fetch\s*\(/.test(code)) offenders.push(`${label} 에 fetch 호출`)
+    if (/from\s+['"](openai|@anthropic-ai\/[^'"]*)['"]/.test(code)) offenders.push(`${label} 에 SDK import`)
+    if (/['"]https:\/\/api\.(openai|anthropic)\.com/.test(code)) offenders.push(`${label} 에 엔드포인트`)
+  }
+  // 🔴 adapter 는 fetch 를 가져도 되지만 **top-level 에서 부르면 안 된다**.
+  //    import 만으로 돈이 나가는 구조를 막는 검사다.
+  //
+  //    🔴 선언과 호출을 구분한다. `export async function callProvider(` 는 들여쓰기가 0이지만
+  //       호출이 아니라 정의다 — 이걸 잡으면 정당한 코드를 막는다(실제로 한 번 걸렸다).
+  //       실행문만 본다: 들여쓰기 0에서 await/void 로 시작하거나 곧바로 호출하는 줄.
+  const topLevel = providerCode.split('\n').filter((l) =>
+    /^(await\s+)?(fetch|callProvider)\s*\(/.test(l) || /^void\s+(fetch|callProvider)\s*\(/.test(l))
+  if (topLevel.length > 0) offenders.push('provider adapter 가 top-level 에서 호출한다')
+  // 🔴 호출은 반드시 함수 안에 있어야 한다 — adapter 에 fetch 가 있되 선언 뒤여야 한다
+  const fnAt = providerCode.indexOf('export async function callProvider')
+  const fetchAt = providerCode.indexOf('await fetch(')
+  if (fnAt === -1) offenders.push('callProvider 선언을 찾지 못했다')
+  else if (fetchAt !== -1 && fetchAt < fnAt) offenders.push('fetch 가 함수 선언보다 앞에 있다')
+  // 🔴 이 fixture 자신에도 SDK import 는 없어야 한다 — import 는 리터럴로 쓸 일이 없어 안전하다
+  const selfRaw = readFileSync(join(HERE, 'voice-m3-check.mts'), 'utf-8')
+  if (/^import .*from\s+['"](openai|@anthropic-ai\/)/m.test(selfRaw)) offenders.push('check 에 SDK import')
+
+  // adapter 밖에서 callProvider 를 부르는 곳은 run 하나뿐이어야 한다
+  const callers = [['dry-run', liveCode], ['contract', contractCode], ['prompt', promptCode], ['sample', sampleCode]] as const
+  for (const [label, code] of callers) {
+    // 실제 호출 형태만 — import 나 문자열 언급을 위반으로 읽지 않는다
+    if (/(await|return|=)\s+callProvider\s*\(/.test(code)) offenders.push(`${label} 이 callProvider 를 부른다`)
+  }
+  if (offenders.length) bad('provider 호출은 허용 파일에만', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('provider 호출은 허용 파일에만', 'guard', 'adapter+run 만 · top-level 호출 0 · 나머지 파일 fetch 0')
+}
+
+// ── ⑱ API key 를 로그에 흘리지 않는다 ──────────────────
+{
+  const offenders: string[] = []
+  const ENVS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY']
+  for (const [label, code] of [['run', runCode], ['provider', providerCode]] as const) {
+    for (const l of code.split('\n').filter((x) => /console\.(log|error)/.test(x))) {
+      for (const e of ENVS) if (l.includes(e) && !l.includes('envName')) offenders.push(`${label} 로그에 ${e}`)
+      if (/\$\{[^}]*\bkey\b[^}]*\}/.test(l) && !/keyStatus|envName|hint/.test(l)) offenders.push(`${label} 로그에 key 변수`)
+    }
+  }
+  // keyStatus 는 값을 반환하지 않아야 한다
+  const st = keyStatus('gpt-5-nano')
+  if (Object.keys(st).some((k) => !['envName', 'present', 'hint'].includes(k))) {
+    offenders.push('keyStatus 가 값을 노출한다')
+  }
+  if (st.hint.length > 8) offenders.push(`hint 가 ${st.hint.length}자 — 너무 길다`)
+  if (!/present: raw\.trim\(\)\.length > 0/.test(providerCode)) offenders.push('존재 여부를 boolean 으로 다루지 않는다')
+  // 🔴 **정적으로도 본다.** key 가 없는 환경에서는 위 런타임 검사가 통과해 버린다 —
+  //    hint 가 '' 라 길이 검사에 걸리지 않기 때문이다(역검증에서 실제로 뚫렸다).
+  //    hint 는 반드시 잘라 쓴 값이어야 한다.
+  if (!/hint:\s*raw\.trim\(\)\.length > 0 \? `\$\{raw\.slice\(0, 4\)\}/.test(providerCode)) {
+    offenders.push('hint 가 key 를 잘라 쓰지 않는다')
+  }
+  if (/hint:\s*raw\s*[,}]/.test(providerCode)) offenders.push('hint 가 key 전체다')
+  if (offenders.length) bad('API key 로그 유출 0', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('API key 로그 유출 0', 'guard', `boolean + 앞 4자 힌트만 (${st.hint})`)
+}
+
+// ── ⑲ 유료 게이트 — 하나라도 없으면 호출 불가 ───────────
+//    🔴 이 저장소에서 처음으로 돈이 나갈 수 있는 자리다.
+{
+  const offenders: string[] = []
+  if (!/function paidCallGate/.test(runCode)) offenders.push('게이트 함수 없음')
+  // 🔴 **게이트 함수 본문**을 잘라내 그 안을 본다.
+  //    파일 어딘가에 '--apply' 문자열이 있는 것으로는 부족하다 —
+  //    argv 파싱만 남고 게이트 조건이 사라져도 통과해 버린다(역검증에서 실제로 뚫렸다).
+  const gateStart = runCode.indexOf('function paidCallGate')
+  const gateEnd = runCode.indexOf('\nasync function main', gateStart)
+  const gateBody = gateStart === -1 ? '' : runCode.slice(gateStart, gateEnd === -1 ? gateStart + 2000 : gateEnd)
+  if (!/blocked\.push[\s\S]{0,80}--apply/.test(gateBody)) offenders.push('게이트가 --apply 를 막지 않는다')
+  if (!/blocked\.push[\s\S]{0,80}--confirm-paid-call/.test(gateBody)) offenders.push('게이트가 --confirm-paid-call 을 막지 않는다')
+  if (!/!APPLY/.test(gateBody)) offenders.push('게이트에 APPLY 조건 없음')
+  if (!/!CONFIRM_PAID/.test(gateBody)) offenders.push('게이트에 CONFIRM_PAID 조건 없음')
+  // 🔴 --model · --stage 도 **차단 목록에 실제로 올리는지**를 본다.
+  //    gateBody 어딘가에 'model' 이 있는 것으론 부족하다 — pricingFor(model) 같은
+  //    다른 쓰임이 검사를 대신 통과시킨다(역검증에서 실제로 뚫렸다).
+  if (!/blocked\.push[\s\S]{0,60}--model/.test(gateBody)) offenders.push('게이트가 --model 을 막지 않는다')
+  if (!/blocked\.push[\s\S]{0,60}--stage/.test(gateBody)) offenders.push('게이트가 --stage 를 막지 않는다')
+  if (!/!model/.test(gateBody)) offenders.push('게이트에 model 조건 없음')
+  if (!/!stage/.test(gateBody)) offenders.push('게이트에 stage 조건 없음')
+  for (const cond of ['itemLimit', 'dollarCap', 'tokenCap', 'pricingFor', 'keyStatus']) {
+    if (!gateBody.includes(cond)) offenders.push(`게이트에 ${cond} 검사 없음`)
+  }
+  // 🔴 게이트 실패 시 **아무것도 하지 않고** 멈춰야 한다
+  if (!/willCallProvider && !gate\.ok[\s\S]{0,300}process\.exit\(1\)/.test(runCode)) {
+    offenders.push('게이트 실패 시 즉시 중단하지 않는다')
+  }
+  // 🔴 callProvider 는 willCallProvider 분기 뒤에만 있어야 한다
+  const dryReturn = runCode.indexOf('if (!willCallProvider)')
+  const firstCall = runCode.indexOf('callProvider({')
+  if (dryReturn === -1 || firstCall === -1 || firstCall < dryReturn) {
+    offenders.push('dry-run 분기보다 앞에서 provider 를 부른다')
+  }
+  if (offenders.length) bad('유료 게이트 9중', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('유료 게이트 9중', 'guard', 'apply+confirm+model+stage+limit+dollar+token+단가+key · 실패 시 즉시 중단')
+}
+
+// ── ⑳ 저장 전 원문 유출 대조가 실행 경로에 있다 ─────────
+{
+  const offenders: string[] = []
+  if (!/assertNoSourceLeak\(/.test(runCode)) offenders.push('run 에 유출 대조가 없다')
+  // 🔴 대조가 **저장보다 앞**에 있어야 한다
+  const leakAt = runCode.indexOf('assertNoSourceLeak(')
+  const saveAt = runCode.indexOf('voiceM3Cache.create(')
+  if (leakAt === -1 || saveAt === -1 || leakAt > saveAt) offenders.push('유출 대조가 저장 뒤에 있다')
+  // 걸리면 저장하지 않고 skipped
+  if (!/leak\.leaked[\s\S]{0,200}skipped/.test(runCode)) offenders.push('유출 시 skipped 처리가 없다')
+  // 🔴 금지 호칭도 저장 전에 막는다
+  if (!/M3_FORBIDDEN_ADDRESS_TERMS[\s\S]{0,300}skipped/.test(runCode)) {
+    offenders.push('금지 호칭이 출력에 있어도 저장한다')
+  }
+  if (offenders.length) bad('저장 전 유출 · 금지어 차단', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('저장 전 유출 · 금지어 차단', 'policy', '대조 → 금지어 → 저장 순서 · 걸리면 skipped')
+}
+
+// ── ㉑ 표본은 deterministic 하고 두 모델이 같다 ──────────
+{
+  const offenders: string[] = []
+  // 난수가 없어야 한다
+  if (/Math\.random|crypto\.randomUUID/.test(sampleCode)) offenders.push('표본 선정에 난수')
+  // 같은 입력 → 같은 표본
+  const mk = (i: number): SampleCandidate => ({
+    id: `id-${String(i).padStart(4, '0')}`, sourceRef: `ref-${i}`,
+    sourceSite: i % 3 === 0 ? 'navercafe:wgang' : 'navercafe:dlxogns01',
+    contentLength: 150 + (i * 37) % 1500, commentCount: i % 30,
+    legacyLabels: { urgencyLevel: i % 5, communitySignal: ['question', 'complaint', 'confession'][i % 3],
+      emotionTags: i % 2 === 0 ? ['ANGRY'] : ['HOPEFUL'], desireType: i % 4 === 0 ? 'big_desire' : 'need' },
+    sourceSpecificCount: i % 11 === 0 ? 1 : 0,
+    targetDescriptorCount: i % 53 === 0 ? 1 : 0,
+    referenced: i % 3 === 0,
+    commentSignalTotal: i % 12, otherReactionCount: i % 12, truncatedCount: i % 7 === 0 ? 1 : 0,
+  })
+  const pool = Array.from({ length: 300 }, (_, i) => mk(i))
+  const a = selectStratifiedSample(pool, 30)
+  const b = selectStratifiedSample(pool, 30)
+  // 🔴 입력 순서를 섞어도 같은 결과여야 한다 — id 정렬에만 기대기 때문이다
+  const shuffled = [...pool].reverse()
+  const c = selectStratifiedSample(shuffled, 30)
+  const idsA = a.rows.map((r) => r.id).join(',')
+  if (idsA !== b.rows.map((r) => r.id).join(',')) offenders.push('같은 입력이 다른 표본을 낸다')
+  if (idsA !== c.rows.map((r) => r.id).join(',')) offenders.push('입력 순서가 결과를 바꾼다')
+  if (a.rows.length !== 30) offenders.push(`표본이 ${a.rows.length}건`)
+  // 🔴 두 모델이 같은 표본을 쓴다 — 표본 선정에 model 이 들어가지 않는다
+  if (/model/i.test(sampleCode.replace(/SampleCandidate|SampleRow|SampleAxis/g, ''))) {
+    offenders.push('표본 선정이 model 을 참조한다')
+  }
+  // 3000자는 제외된다
+  const withTrunc = [...pool, { ...mk(999), contentLength: 3000 }]
+  if (selectStratifiedSample(withTrunc, 30).rows.some((r) => r.contentLength === 3000)) {
+    offenders.push('3000자 잘린 글이 표본에 들어갔다')
+  }
+  if (offenders.length) bad('표본 deterministic · 모델 무관', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('표본 deterministic · 모델 무관', 'policy', '난수 0 · 재실행 동일 · 입력순서 무관 · 3000자 제외')
+}
+
+// ── ㉒ 층화 축이 계약과 같다 ────────────────────────────
+{
+  const offenders: string[] = []
+  for (const must of ['shortBody', 'longBody', 'manyComments', 'fewComments',
+    'strongEmotion', 'calmTone', 'question', 'complaint', 'experience',
+    'sourceSpecificAddress', 'targetDescriptorRisk', 'highOtherReaction',
+    'referenced', 'notReferenced', 'truncatedComment']) {
+    if (!(SAMPLE_AXES as readonly string[]).includes(must)) offenders.push(`축 ${must} 누락`)
+  }
+  if (SAMPLE_AXES.length !== 15) offenders.push(`축이 ${SAMPLE_AXES.length}개 (15개여야 한다)`)
+  // validateSample 이 빈 축을 잡는가
+  const empty = validateSample({ rows: [], coverage: {}, missingAxes: [...SAMPLE_AXES], siteSpread: {} }, 30)
+  if (empty.ok) offenders.push('빈 축을 통과시킨다')
+  if (offenders.length) bad('층화 축 15종', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('층화 축 15종', 'policy', `${SAMPLE_AXES.length}축 · 빈 축이면 거부`)
+}
+
+// ── ㉓ dry-run 은 DB 에 쓰지 않는다 ─────────────────────
+{
+  const offenders: string[] = []
+  // 🔴 write 는 전부 dry-run 분기 **뒤**에 있어야 한다
+  const dryReturn = runCode.indexOf('if (!willCallProvider)')
+  for (const w of ['voiceM3Run.create(', 'voiceM3Cache.create(', 'voiceM3CostEvent.create(', 'voiceM3Run.update(']) {
+    const at = runCode.indexOf(w)
+    if (at === -1) { offenders.push(`${w} 를 찾지 못했다`); continue }
+    if (at < dryReturn) offenders.push(`${w} 가 dry-run 분기보다 앞에 있다`)
+  }
+  // Micro Seed 접점 0
+  for (const t of ['microSeedCandidate', 'microSeedRawContent', 'planSheetWrite', 'micro-seed-sheet']) {
+    if (runCode.includes(t)) offenders.push(`Micro Seed 접점: ${t}`)
+  }
+  if (offenders.length) bad('dry-run DB write 0 · Micro Seed 0', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('dry-run DB write 0 · Micro Seed 0', 'guard', 'write 4종 전부 게이트 뒤 · Micro Seed 접점 0')
+}
+
 // ── 출력 ────────────────────────────────────────────────
 console.log('\nVE-M3-2 dry-run — fixture 자기검증')
 console.log('  이 fixture 는 네트워크 · DB · LLM 을 타지 않는다')
-console.log('  🔴 검사하는 것은 "payload 가 잘 만들어지는가" 가 아니라 "돈이 나갈 경로가 생겼는가" 다\n')
+console.log('  🔴 검사하는 것은 "payload 가 잘 만들어지는가" 가 아니라 "돈이 나갈 경로가 생겼는가" 다')
+console.log('  🔴 VE-M3-3 부터 provider 호출은 adapter · run 두 파일에만 허용된다\n')
 const label: Record<string, string> = { policy: '[정책]  ', guard: '[가드]  ' }
 for (const r of report) console.log(`  ${r.ok ? '✅' : '❌'} ${label[r.kind] ?? ''} ${r.name.padEnd(32)} → ${r.detail}`)
 if (failures.length) {

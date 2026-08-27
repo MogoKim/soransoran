@@ -158,5 +158,7 @@ jobs:
 
       # 🔴 VE-M3 부터는 실수가 돈이다. LLM SDK import 한 줄 · fetch 한 줄이 곧 비용이다 —
       #    기존 fixture 는 M3 경로를 모르므로 여기서만 잡힌다.
-      - name: Voice M3 dry-run (LLM 0 · 네트워크 0 · 단가 미확정 보존)
+      # 🔴 VE-M3-3 부터 provider 호출 경로가 생겼다. 허용 파일은 adapter · run 둘뿐이고
+      #    유료 게이트 9중 · 저장 전 원문 대조 · API key 로그 유출 0 을 여기서 잡는다.
+      - name: Voice M3 (유료 게이트 · 원문 유출 · key 유출 · 층화 표본)
         run: npm run voice:m3-check
