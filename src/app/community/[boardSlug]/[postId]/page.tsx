@@ -99,7 +99,17 @@ export default async function PostDetailPage({
           {session?.user ? (
             <div className="mt-6 flex items-center gap-3 border-t border-subtle pt-3">
               {session.user.id === post.author.id ? (
-                <DeleteButton boardSlug={board.slug} postId={post.id} />
+                <>
+                  {/* 🔴 코랄 fill 을 쓰지 않는다. 여기는 글을 읽는 화면이고
+                        수정·삭제는 필요할 때만 찾는 손잡이다. 삭제와 같은 무게로 둔다. */}
+                  <Link
+                    href={`${board.href}/${post.id}/edit`}
+                    className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
+                  >
+                    수정
+                  </Link>
+                  <DeleteButton boardSlug={board.slug} postId={post.id} />
+                </>
               ) : (
                 <ReportButton postId={post.id} />
               )}
