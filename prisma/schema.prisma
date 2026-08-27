@@ -74,6 +74,29 @@ model User {
 
   isAdmin       Boolean   @default(false)
   isBlocked     Boolean   @default(false)
+
+  // 카카오 동의 항목. 아직 받지 않는다 — 그릇만 세운다.
+  //
+  // 🔴 전부 nullable 이다. 이미 가입한 회원이 있어 NOT NULL 은 적용 자체가 실패한다.
+  //    "필수" 는 컬럼 제약이 아니라 가입 게이트가 정한다.
+  //
+  // 🔴 birthyear 는 문자열이다. 숫자로 바꾸지 않는다 —
+  //    카카오가 주는 값은 "1975" 같은 문자열이고, Number("0000") 은 0 이 되어
+  //    조용히 저장된다. 연산할 일이 생기면 그때 읽는 쪽에서 판단한다.
+  //
+  // 🔴 phoneNumber 에 @unique 를 걸지 않는다. 가족이 한 번호를 함께 쓰는 경우가 있고,
+  //    unique 는 그 사람의 가입을 이유도 없이 막는다.
+  gender             String?
+  birthyear          String?
+  phoneNumber        String?
+  /// 성별·출생연도·전화번호를 받은 시각
+  profileConsentAt   DateTime?
+  /// 광고성 정보 수신 동의 시각. 전화번호 수집 동의와는 다른 축이다 —
+  /// 번호를 받았다는 사실은 발송 근거가 되지 않는다.
+  marketingConsentAt DateTime?
+  /// 첫 로그인 온보딩(닉네임·약관)을 마쳤는가. 기존 회원은 false 로 시작해 한 번 거친다.
+  isOnboarded        Boolean   @default(false)
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -85,8 +108,32 @@ model User {
   reports       Report[]      @relation("Reporter")
   blocking      UserBlock[]   @relation("Blocker")
   blockedBy     UserBlock[]   @relation("Blocked")
+  agreements    Agreement[]
 
   @@index([createdAt])
+}
+
+/// 동의 이력. 무엇에 언제 동의했는지 남긴다.
+///
+/// 🔴 User 의 플래그만으로는 "언제 어느 판본에 동의했는가" 를 답할 수 없다.
+///    약관이 바뀌면 다시 받아야 하고, 그때 필요한 것이 version 이다.
+///
+/// 🔴 type 은 문자열이다. enum 으로 두면 항목이 하나 늘 때마다 migration 이 필요하다.
+///    쓰는 값: 'TERMS_OF_SERVICE' | 'PRIVACY_POLICY' | 'MARKETING'
+model Agreement {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  version   String
+  agreedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 같은 판본에 두 번 동의한 것으로 기록되지 않는다. 재동의는 upsert 로 agreedAt 만 갱신한다.
+  @@unique([userId, type, version])
+  @@index([userId])
+  @@index([type])
 }
 
 model Account {
