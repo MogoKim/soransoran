@@ -17,6 +17,18 @@ import { SORANSORAN_REGISTER_TERMS, TARGET_DESCRIPTOR_TERMS } from './voice-styl
 //    두 곳에 각각 적으면 한쪽만 바뀌는 날이 온다.
 import { LEAK_RUN_MIN } from './voice-unao-readonly.mjs'
 
+// ── 모델 단가 (계약 §E) ──────────────────────────────────
+
+export type ModelPricing = {
+  /** 입력 100만 토큰당 USD */
+  inputPerMTok: number
+  /** 출력 100만 토큰당 USD */
+  outputPerMTok: number
+  /** 🔴 어디서 언제 확인했는가. 없으면 이 단가를 쓰지 않는다 */
+  source: string
+  checkedAt: string
+}
+
 // ── 버전 상수 ─────────────────────────────────────────────
 
 /** VE-M3 작업 정의 버전. 판단 대상 · 입력 구성이 바뀌면 올린다 */
@@ -25,6 +37,94 @@ export const M3_TASK_VERSION = 'voice-m3-task-v1'
 export const M3_PROMPT_VERSION = 'voice-m3-prompt-v1'
 /** 출력 스키마 버전. 필드가 바뀌면 파싱 결과가 달라지므로 올린다 */
 export const M3_OUTPUT_SCHEMA_VERSION = 'voice-m3-output-v1'
+
+/**
+ * 후보 모델의 공식 단가. 🔴 **출처와 확인일이 없으면 여기 넣지 않는다.**
+ *
+ * 계약 §E 가 요구한 형식이다. 확인되지 않은 단가로 만든 금액은
+ * "확인된 비용" 처럼 읽힌다 — 이전에 실제로 그런 일이 있었다.
+ *
+ * ⚠️ 가격은 바뀐다. **실행 직전 한 번 더 대조한다.**
+ *
+ * 🔴 모델 선택은 이 표로 하지 않는다. 20건 실험 결과를 사람이 읽고 정한다
+ *    (정본: docs/operations/2026-08-27-voice-m3-model-selection-criteria.md).
+ *    입력 20배 · 출력 12.5배 차이지만, 20건 실험 총액은 $0.077 로 둘 다 사실상 공짜다.
+ *    격차가 드러나는 곳은 전량 확대 시점이고 그때 차이는 약 34달러다.
+ */
+export const M3_MODEL_CANDIDATES = {
+  'gpt-5-nano': {
+    inputPerMTok: 0.05,
+    outputPerMTok: 0.40,
+    source: 'https://platform.openai.com/pricing',
+    checkedAt: '2026-08-27',
+  },
+  'claude-haiku-4.5': {
+    inputPerMTok: 1.0,
+    outputPerMTok: 5.0,
+    source: 'https://claude.com/pricing',
+    checkedAt: '2026-08-27',
+  },
+} as const satisfies Record<string, ModelPricing>
+
+export type M3ModelName = keyof typeof M3_MODEL_CANDIDATES
+
+/**
+ * 🔴 모델 비교는 **단계형**이다. 한 번에 끝내지 않는다.
+ *
+ * 초판은 10건 1회 비교였다. 그것으로는 모델 품질을 가릴 수 없다 —
+ * 같은 모델도 글에 따라 흔들리고, 10건이면 그 흔들림과 모델 차이가 섞인다.
+ *
+ * 🔴 단계마다 **멈출 수 있다.** 1차에서 한쪽이 명확히 탈락하면 거기서 끝난다.
+ *    끝까지 가야 하는 계획은 계획이 아니라 예산 소진이다.
+ *
+ * 🔴 각 단계는 `itemLimit`(50) 안에서 **실행을 쪼개서** 돈다.
+ *    2차 100건 = 50×2회 · 3차 300건 = 50×6회. tokenCap 이 한 실행 91건을 넘지 못하게 한다.
+ *
+ * 정본: docs/operations/2026-08-27-voice-m3-model-selection-criteria.md §2
+ */
+export const M3_EXPERIMENT_STAGES = {
+  /** 1차 — 같은 30건 표본을 두 모델에 각각. 층화 샘플이며 무작위가 아니다 */
+  stage1PerModel: 30,
+  /** 2차 — 1차에서 차이가 애매할 때만. 100건씩 두 모델 */
+  stage2PerModel: 100,
+  /** 3차 — 우세한 한 모델만 300건 단일 검증 */
+  stage3Single: 300,
+} as const
+
+/** 1차 실험 건수(모델당). 이전 이름 호환 겸 가장 자주 쓰이는 값 */
+export const M3_EXPERIMENT_PER_MODEL = M3_EXPERIMENT_STAGES.stage1PerModel
+
+/**
+ * 1차 30건 표본이 반드시 덮어야 할 축.
+ *
+ * 🔴 무작위로 뽑으면 안 된다. `other` 81% · 짧은 본문 45.7% 라는 분포 탓에
+ *    무작위 30건은 "비슷한 글 30개" 가 된다 — 모델 차이가 드러날 자리가 없다.
+ */
+export const M3_STRATA_AXES = [
+  'shortBody', 'longBody',
+  'manyComments', 'fewComments',
+  'strongEmotion', 'calmTone',
+  'question', 'complaint', 'experience',
+  'sourceSpecificAddress',
+  'targetDescriptorRisk',
+  'highOtherReaction',
+  'referenced', 'notReferenced',
+] as const
+
+/** 단가를 꺼낸다. 🔴 등록되지 않은 모델은 던진다 — 금액을 지어내지 않는다 */
+export function pricingFor(model: string): ModelPricing {
+  const found = (M3_MODEL_CANDIDATES as Record<string, ModelPricing>)[model]
+  if (!found) {
+    throw new Error(
+      `단가가 등록되지 않은 모델이다: ${model}
+` +
+        `  후보: ${Object.keys(M3_MODEL_CANDIDATES).join(' · ')}
+` +
+        '  공식 단가를 출처 · 확인일과 함께 M3_MODEL_CANDIDATES 에 넣은 뒤 쓴다(계약 §E).',
+    )
+  }
+  return found
+}
 
 /**
  * 🔴 모델은 아직 확정되지 않았다 — **그런데도 빈 문자열이 아니라 placeholder 다.**
@@ -44,8 +144,17 @@ export const M3_MODEL_UNDETERMINED = 'undetermined'
 // ── cap (계약 §E) ────────────────────────────────────────
 
 export const M3_CAPS = {
-  /** 대표성이 아니라 **사람이 전량을 눈으로 읽을 수 있는 크기** */
-  itemLimit: 10,
+  /**
+   * 한 실행이 처리할 수 있는 최대 건수.
+   *
+   * 🔴 10 에서 50 으로 올렸다(2026-08-27). 10건 1회 비교로는 모델 품질을 가릴 수 없다 —
+   *    같은 모델도 글에 따라 흔들리는데, 10건이면 그 흔들림과 모델 차이가 구분되지 않는다.
+   *
+   * 🔴 50 인 이유는 **tokenCap 이 정한다.** 1건당 약 5,468 tok(실측)이라
+   *    500K / 5,468 ≈ 91건이 한 실행의 물리적 상한이다. 그 아래에서 나누기 좋은 수가 50 이다.
+   *    100건 · 300건 단계는 **실행을 쪼개서** 돈다(50×2 · 50×6).
+   */
+  itemLimit: 50,
   /** 🔴 건수 cap 만으로는 못 막는다. 3,000자 글이 몰리면 같은 건수에 토큰이 3배다 */
   tokenCap: 500_000,
   /** 사람이 감당 가능한 상한 */
@@ -190,16 +299,6 @@ export type CostEstimate = {
   costStatus: 'unavailable_no_official_price' | 'estimated'
   /** 단가를 확인했다면 출처와 날짜 */
   priceSource: string | null
-}
-
-export type ModelPricing = {
-  /** 입력 100만 토큰당 USD */
-  inputPerMTok: number
-  /** 출력 100만 토큰당 USD */
-  outputPerMTok: number
-  /** 🔴 어디서 언제 확인했는가. 없으면 이 단가를 쓰지 않는다 */
-  source: string
-  checkedAt: string
 }
 
 /**

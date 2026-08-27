@@ -29,7 +29,8 @@ import { toCommentSignals, summarizeCommentSignals } from './lib/voice-comment-s
 import { buildPromptPayload, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 import {
   M3_TASK_VERSION, M3_PROMPT_VERSION, M3_OUTPUT_SCHEMA_VERSION, M3_MODEL_UNDETERMINED,
-  M3_CAPS, M3_SIGNAL_KEYS, buildCacheKey, estimateCost, checkCaps,
+  M3_CAPS, M3_SIGNAL_KEYS, M3_MODEL_CANDIDATES, M3_EXPERIMENT_PER_MODEL,
+  buildCacheKey, estimateCost, checkCaps, pricingFor,
 } from './lib/voice-m3-contract.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -49,6 +50,12 @@ const arg = (n: string): string | undefined => {
 }
 const LIMIT_RAW = arg('limit')
 const LIMIT = LIMIT_RAW === undefined ? M3_CAPS.itemLimit : Number(LIMIT_RAW)
+/**
+ * 🔴 모델을 고르는 옵션이 아니다. **단가를 붙여 금액을 보기 위한 것**이다.
+ *    주지 않으면 model=undetermined 로 남고 금액은 산출되지 않는다.
+ *    실제 모델 선택은 20건 실험 뒤 사람이 한다(model-selection-criteria).
+ */
+const MODEL_RAW = arg('model')
 
 const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
 const DEFAULT_SALT = 'soransoran-voice-v1'
@@ -65,9 +72,14 @@ async function main(): Promise<void> {
   if (LIMIT > M3_CAPS.itemLimit) {
     throw new Error(
       `--limit 이 itemLimit 을 넘는다: ${LIMIT} > ${M3_CAPS.itemLimit}\n` +
-        '  10건인 이유는 대표성이 아니라 사람이 전량을 눈으로 읽을 수 있는 크기이기 때문이다(계약 §G).',
+        '  itemLimit 은 tokenCap 이 정한다 — 1건당 약 5,468 tok 이라 한 실행 상한이 91건이다.\n' +
+        '  2차 100건 · 3차 300건은 실행을 쪼개서 돈다(50×2 · 50×6).',
     )
   }
+
+  // 🔴 등록되지 않은 모델이면 여기서 던진다 — 금액을 지어내지 않는다
+  const pricing = MODEL_RAW ? pricingFor(MODEL_RAW) : undefined
+  const modelForKey = MODEL_RAW ?? M3_MODEL_UNDETERMINED
 
   const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
   const unaoUrl = loadUnaoReadonlyUrl()
@@ -75,7 +87,14 @@ async function main(): Promise<void> {
   console.log('\nVoice — VE-M3 dry-run (payload · cap 계산)')
   console.log(`  우나어 읽기: ${maskConnectionString(unaoUrl)}`)
   console.log(`  taskVersion=${M3_TASK_VERSION} · promptVersion=${M3_PROMPT_VERSION} · outputSchemaVersion=${M3_OUTPUT_SCHEMA_VERSION}`)
-  console.log(`  model=${M3_MODEL_UNDETERMINED}  🔴 미확정 — 10건 실험 전 창업자 승인 사항(계약 §F)`)
+  if (pricing) {
+    console.log(`  model=${modelForKey} · 단가 $${pricing.inputPerMTok}/$${pricing.outputPerMTok} per MTok`)
+    console.log(`         출처 ${pricing.source} (확인 ${pricing.checkedAt})`)
+    console.log('         🔴 단가를 붙여 금액을 보는 것뿐이다. 모델 선택은 20건 실험 뒤 사람이 한다')
+  } else {
+    console.log(`  model=${M3_MODEL_UNDETERMINED}  🔴 미확정 — --model=<이름> 을 주면 금액이 나온다`)
+    console.log(`         후보: ${Object.keys(M3_MODEL_CANDIDATES).join(' · ')} (1차 실험은 모델당 ${M3_EXPERIMENT_PER_MODEL}건)`)
+  }
   console.log(`  limit=${LIMIT} / itemLimit ${M3_CAPS.itemLimit}`)
   console.log('  🔴 LLM 호출 0 · 네트워크 0 · DB write 0 — 이 단계의 비용은 0원이다')
   console.log('  🔴 원문 전문을 로그로 찍지 않는다. 길이 · 해시 · 개수만 보고한다\n')
@@ -161,7 +180,7 @@ async function main(): Promise<void> {
           contentHash: src.contentHash,
           ruleVersion: derived?.ruleVersion ?? 'none',
           taskVersion: M3_TASK_VERSION,
-          model: M3_MODEL_UNDETERMINED,
+          model: modelForKey,
           promptVersion: M3_PROMPT_VERSION,
           outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
         }),
@@ -171,8 +190,8 @@ async function main(): Promise<void> {
     }
 
     const itemCount = sources.length - missing
-    // 🔴 단가를 넘기지 않는다 → estimatedCostUsd 가 null 로 온다
-    const cost = estimateCost(totalPayloadChars, itemCount)
+    // 🔴 단가가 없으면 estimatedCostUsd 가 null 로 온다. 0 이 아니다
+    const cost = estimateCost(totalPayloadChars, itemCount, pricing)
     const caps = checkCaps(cost, itemCount)
 
     console.log('\n  cap · 비용 추정')
@@ -183,6 +202,7 @@ async function main(): Promise<void> {
     console.log(`     합계 토큰(추정)  ${cost.estimatedTotalTokens.toLocaleString()}`)
     console.log(`     예상 비용        ${cost.estimatedCostUsd === null ? '🔴 산출 불가 (공식 단가 미확정)' : `$${cost.estimatedCostUsd}`}`)
     console.log(`     costStatus      ${cost.costStatus}`)
+    if (cost.priceSource) console.log(`     단가 출처        ${cost.priceSource}`)
     console.log(`     dollarCap       $${M3_CAPS.dollarCap} · itemLimit ${M3_CAPS.itemLimit} · maxRetry ${M3_CAPS.maxRetry}(cap 포함)`)
 
     console.log('\n  cap 판정')

@@ -17,7 +17,8 @@ import {
   M3_TASK_VERSION, M3_PROMPT_VERSION, M3_OUTPUT_SCHEMA_VERSION, M3_MODEL_UNDETERMINED,
   M3_CAPS, M3_SIGNAL_KEYS, M3_OUTPUT_SCHEMA, CACHE_KEY_PARTS,
   M3_ALLOWED_ADDRESS_TERMS, M3_FORBIDDEN_ADDRESS_TERMS, M3_LEAK_RUN_MIN,
-  buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak,
+  M3_MODEL_CANDIDATES, M3_EXPERIMENT_PER_MODEL, M3_EXPERIMENT_STAGES, M3_STRATA_AXES,
+  buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak, pricingFor,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 
@@ -243,7 +244,7 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
 {
   const offenders: string[] = []
   const want: Array<[string, number]> = [
-    ['itemLimit', 10], ['tokenCap', 500_000], ['dollarCap', 5],
+    ['itemLimit', 50], ['tokenCap', 500_000], ['dollarCap', 5],
     ['softDaily', 200], ['hardDaily', 1_000], ['timeoutSec', 30],
     ['maxRetry', 3], ['consecutiveFailureStop', 5],
   ]
@@ -252,7 +253,7 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
     if (actual !== v) offenders.push(`${k}=${actual} (계약값 ${v})`)
   }
   if (offenders.length) bad('cap 값이 계약과 같다', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('cap 값이 계약과 같다', 'guard', 'item 10 · token 500K · $5 · retry 3(cap 포함) · 연속실패 5')
+  else ok('cap 값이 계약과 같다', 'guard', 'item 50 · token 500K · $5 · retry 3(cap 포함) · 연속실패 5')
 }
 
 // ── ⑪ 타겟 설명어가 생성 후보로 올라가지 않는다 ─────────
@@ -340,12 +341,83 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (M3_TASK_VERSION !== 'voice-m3-task-v1') offenders.push(`taskVersion=${M3_TASK_VERSION}`)
   if (M3_PROMPT_VERSION !== 'voice-m3-prompt-v1') offenders.push(`promptVersion=${M3_PROMPT_VERSION}`)
   if (M3_OUTPUT_SCHEMA_VERSION !== 'voice-m3-output-v1') offenders.push(`outputSchemaVersion=${M3_OUTPUT_SCHEMA_VERSION}`)
-  // 🔴 모델을 확정하지 않았다
-  if (/claude-|gpt-4|gpt-5|gemini-|haiku|sonnet|opus/i.test(contractCode)) {
-    offenders.push('contract lib 에 특정 모델명이 박혔다')
+  // 🔴 모델을 **확정**하지 않았다.
+  //    후보 표에 모델명이 있는 것은 정당하다 — 20건 실험 대상이기 때문이다.
+  //    막아야 하는 것은 "하나를 골라 기본값으로 박는" 일이다.
+  if (M3_MODEL_UNDETERMINED !== 'undetermined') offenders.push('placeholder 가 바뀌었다')
+  const candidateNames = Object.keys(M3_MODEL_CANDIDATES)
+  if (candidateNames.includes(M3_MODEL_UNDETERMINED)) offenders.push('placeholder 가 실제 모델명이다')
+  // 기본 모델을 정해 두면 실험 없이 선택된 것과 같다
+  if (/const\s+DEFAULT_MODEL|model\s*=\s*['"](gpt-|claude-)/.test(contractCode + liveCode)) {
+    offenders.push('기본 모델이 코드에 박혔다')
   }
   if (offenders.length) bad('버전 고정 · 모델 미확정', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('버전 고정 · 모델 미확정', 'guard', `task/prompt/schema v1 · model='${M3_MODEL_UNDETERMINED}'`)
+  else ok('버전 고정 · 모델 미확정', 'guard', `task/prompt/schema v1 · placeholder='${M3_MODEL_UNDETERMINED}' · 기본 모델 없음`)
+}
+
+// ── ⑮ 단가는 출처 · 확인일 없이 등록되지 않는다 ─────────
+//    🔴 확인되지 않은 단가로 만든 금액은 "확인된 비용" 처럼 읽힌다.
+{
+  const offenders: string[] = []
+  const names = Object.keys(M3_MODEL_CANDIDATES)
+  if (names.length < 2) offenders.push(`후보가 ${names.length}개 — 비교하려면 2개 이상이어야 한다`)
+  for (const [name, p] of Object.entries(M3_MODEL_CANDIDATES)) {
+    if (!p.source || !/^https?:\/\//.test(p.source)) offenders.push(`${name}: 출처 URL 없음`)
+    if (!p.checkedAt || !/^\d{4}-\d{2}-\d{2}$/.test(p.checkedAt)) offenders.push(`${name}: 확인일 형식`)
+    if (!(p.inputPerMTok > 0) || !(p.outputPerMTok > 0)) offenders.push(`${name}: 단가가 0 이하`)
+  }
+  // 🔴 등록되지 않은 모델은 금액을 지어내지 않고 던진다
+  let threw = false
+  try { pricingFor('made-up-model') } catch { threw = true }
+  if (!threw) offenders.push('미등록 모델인데 단가를 반환했다')
+  // 단가를 넘기면 금액이 나오고 출처가 따라온다
+  const withPrice = estimateCost(10_000, 10, pricingFor(names[0]))
+  if (withPrice.estimatedCostUsd === null) offenders.push('등록 단가인데 금액이 null')
+  if (!withPrice.priceSource?.includes('http')) offenders.push('금액에 출처가 따라오지 않는다')
+  if (offenders.length) bad('단가에 출처 · 확인일 필수', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('단가에 출처 · 확인일 필수', 'policy', `후보 ${names.length}종 · 전부 출처+날짜 · 미등록은 거부`)
+}
+
+// ── ⑯ 단계형 실험 · 층화 축 · cap 정합성 ────────────────
+//    🔴 10건 1회로는 모델 품질을 가릴 수 없다. 단계마다 멈출 수 있어야 한다.
+{
+  const offenders: string[] = []
+  const S = M3_EXPERIMENT_STAGES
+  // 🔴 리터럴로 못박는다 — 상수를 참조해 상대 비교만 하면 값을 바꿔도 통과한다
+  if (S.stage1PerModel !== 30) offenders.push(`1차가 ${S.stage1PerModel}건 (30건이어야 한다)`)
+  if (S.stage2PerModel !== 100) offenders.push(`2차가 ${S.stage2PerModel}건 (100건이어야 한다)`)
+  if (S.stage3Single !== 300) offenders.push(`3차가 ${S.stage3Single}건 (300건이어야 한다)`)
+  if (M3_EXPERIMENT_PER_MODEL !== S.stage1PerModel) offenders.push('1차 건수 별칭이 어긋난다')
+
+  // 🔴 1차는 한 실행에 들어가야 한다
+  if (S.stage1PerModel > M3_CAPS.itemLimit) offenders.push('1차가 itemLimit 초과 — 한 실행에 못 담는다')
+
+  // 🔴 tokenCap 이 실질 제약이다. 1건당 실측 5,468 tok 기준 한 실행 상한을 넘지 않아야 한다
+  const PER_ITEM_TOKENS = 5_468
+  const maxPerRun = Math.floor(M3_CAPS.tokenCap / PER_ITEM_TOKENS)
+  if (M3_CAPS.itemLimit > maxPerRun) {
+    offenders.push(`itemLimit ${M3_CAPS.itemLimit} 이 tokenCap 상한 ${maxPerRun}건을 넘는다`)
+  }
+  // 2차 · 3차는 쪼개야 도는 크기여야 한다 (한 실행에 안 들어가는 것이 정상)
+  if (S.stage2PerModel <= M3_CAPS.itemLimit) offenders.push('2차가 한 실행에 들어간다 — 단계 구분이 무의미하다')
+
+  // 🔴 dollarCap 안에서 도는가 (haiku 기준, 가장 비싼 쪽)
+  const haiku = pricingFor('claude-haiku-4.5')
+  const runCost = (M3_CAPS.itemLimit * 5_018) / 1e6 * haiku.inputPerMTok
+    + (M3_CAPS.itemLimit * 450) / 1e6 * haiku.outputPerMTok
+  if (runCost > M3_CAPS.dollarCap) offenders.push(`한 실행이 dollarCap 초과: $${runCost.toFixed(4)}`)
+
+  // 층화 축
+  if (M3_STRATA_AXES.length < 12) offenders.push(`층화 축이 ${M3_STRATA_AXES.length}개 — 너무 적다`)
+  for (const must of ['shortBody', 'longBody', 'manyComments', 'fewComments',
+    'strongEmotion', 'calmTone', 'question', 'complaint', 'experience',
+    'sourceSpecificAddress', 'targetDescriptorRisk', 'highOtherReaction',
+    'referenced', 'notReferenced']) {
+    if (!(M3_STRATA_AXES as readonly string[]).includes(must)) offenders.push(`층화 축 ${must} 누락`)
+  }
+  if (offenders.length) bad('단계형 실험 · 층화 축 · cap 정합', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('단계형 실험 · 층화 축 · cap 정합', 'policy',
+    `30 → 100 → 300 · 축 ${M3_STRATA_AXES.length}종 · 한 실행 ${M3_CAPS.itemLimit}건(tokenCap 상한 ${maxPerRun}) · $${runCost.toFixed(3)}/실행`)
 }
 
 // ── 출력 ────────────────────────────────────────────────
