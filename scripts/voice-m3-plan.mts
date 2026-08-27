@@ -21,7 +21,7 @@
 import { PrismaClient } from '@prisma/client'
 import {
   M3_ANALYSIS_MODEL, M3_CAPS, M3_TASK_VERSION, M3_PROMPT_VERSION, M3_OUTPUT_SCHEMA_VERSION,
-  pricingFor, outputTokenPolicyFor,
+  M3_TERMINAL_SKIP_CODES, pricingFor, outputTokenPolicyFor,
 } from './lib/voice-m3-contract.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -83,8 +83,14 @@ async function main(): Promise<void> {
       by: ['status'], where: { model }, _count: true,
     })
     const reusable = cached.find((c) => c.status === 'succeeded')?._count ?? 0
-    const retryable = cached.filter((c) => c.status !== 'succeeded').reduce((a, c) => a + c._count, 0)
-    const fresh = eligible - reusable - retryable
+    // 🔴 종결 skip 은 재시도 대상이 아니다. 다시 불러도 같은 출력이 나와 또 걸린다 —
+    //    "처리 완료" 로 세지 않으면 189 batch 내내 같은 글에 돈을 쓴다(계약 §4-1)
+    const terminalSkipped = await prisma.voiceM3Cache.count({
+      where: { model, status: 'skipped', errorCode: { in: [...M3_TERMINAL_SKIP_CODES] } },
+    })
+    const processed = reusable + terminalSkipped
+    const retryable = cached.reduce((a, c) => a + c._count, 0) - processed
+    const fresh = eligible - processed - retryable
     const toCall = fresh + retryable
 
     console.log('  ① 전량 대상')
@@ -92,15 +98,24 @@ async function main(): Promise<void> {
     console.log(`     🔴 수집 상한 잘림 제외       ${truncated.toLocaleString()}건 (3,000자에서 끊긴 글)`)
     console.log(`     ── 분석 대상                ${eligible.toLocaleString()}건`)
     console.log(`     ✅ 재사용 (succeeded)        ${reusable.toLocaleString()}건 — 부르지 않는다`)
-    console.log(`     🔁 재시도 (failed·skipped)   ${retryable.toLocaleString()}건`)
+    console.log(`     ⛔ 종결 skip (${M3_TERMINAL_SKIP_CODES.join(',')})   ${terminalSkipped.toLocaleString()}건 — 다시 불러도 같다`)
+    console.log(`     🔁 재시도 (failed 등)        ${retryable.toLocaleString()}건 — 고치면 달라진다`)
     console.log(`     🆕 신규                      ${fresh.toLocaleString()}건`)
     console.log(`     ── 실제 호출 대상            ${toCall.toLocaleString()}건`)
 
     // ── ② 토큰 · 비용 추정 (실측 환산) ─────────────────
     //    🔴 이미 성공한 건은 제외하고 센다 — 재사용분에 돈을 계상하면 예산이 부풀려진다
+    // 🔴 "처리 완료" = succeeded + 종결 skip. 둘 다 다시 부르지 않는다
     const doneRefs = new Set(
       (await prisma.voiceM3Cache.findMany({
-        where: { model, status: 'succeeded' }, select: { sourceRef: true },
+        where: {
+          model,
+          OR: [
+            { status: 'succeeded' },
+            { status: 'skipped', errorCode: { in: [...M3_TERMINAL_SKIP_CODES] } },
+          ],
+        },
+        select: { sourceRef: true },
       })).map((c) => c.sourceRef),
     )
     type Row = { sourceRef: string; contentLength: number | null; commentCount: number | null }
@@ -176,7 +191,7 @@ async function main(): Promise<void> {
     console.log('\n  ⑤ cache 정합')
     console.log(`     cacheKey 8요소 · model=${model}(내부 라벨) · task=${M3_TASK_VERSION} · prompt=${M3_PROMPT_VERSION} · schema=${M3_OUTPUT_SCHEMA_VERSION}`)
     console.log(`     같은 sourceRef 중복 캐시   ${dupRefs.length}건 ${dupRefs.length === 0 ? '✅ (한 원문 한 번)' : '🔴'}`)
-    console.log(`     재사용 대상 ${reusable}건은 호출 계산에서 제외됐다`)
+    console.log(`     처리 완료 ${processed}건(성공 ${reusable} + 종결 skip ${terminalSkipped})은 호출 계산에서 제외됐다`)
 
     // ── ⑥ 🔴 실행 경로 점검 ───────────────────────────
     console.log('\n  ⑥ 실행 경로')
