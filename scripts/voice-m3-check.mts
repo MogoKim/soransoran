@@ -22,7 +22,7 @@ import {
   buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak, pricingFor,
   ESTIMATED_OUTPUT_TOKENS_PER_ITEM, outputTokenPolicyFor,
   classifyJsonFailure, isMaxTokensReached, formatDiagnostics,
-  apiModelIdFor,
+  apiModelIdFor, M3_ANALYSIS_MODEL,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 import {
@@ -1135,6 +1135,58 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   else ok('gpt-5-mini 후보 · provider 분기', 'guard',
     `후보 ${LABELS.length}종(${LABELS.join(' · ')}) · 단가·정책·key·엔드포인트 전부 정합 · ` +
     `mini→OpenAI $${mini?.inputPerMTok}/$${mini?.outputPerMTok} · cacheKey ${new Set(keys).size}/${LABELS.length} 고유`)
+}
+
+// ── ㉜ 분석 모델 확정 — 기록이지 기본값이 아니다 ────────
+//    🔴 2026-08-27: 30건 3-way 비교 후 claude-haiku-4.5 로 확정했다.
+//       확정을 **기본값으로 바꾸면 유료 게이트가 하나 사라진다** — 그것을 막는다.
+{
+  const offenders: string[] = []
+
+  // ① 확정값
+  if (M3_ANALYSIS_MODEL !== 'claude-haiku-4.5') offenders.push(`분석 모델이 ${M3_ANALYSIS_MODEL}`)
+  // ② 확정 모델은 후보 · 단가 · 출력 정책 · key 를 전부 갖춰야 한다
+  if (!(M3_ANALYSIS_MODEL in M3_MODEL_CANDIDATES)) offenders.push('확정 모델이 후보에 없다')
+  for (const [fn, label] of [
+    [(): unknown => pricingFor(M3_ANALYSIS_MODEL), '단가'],
+    [(): unknown => outputTokenPolicyFor(M3_ANALYSIS_MODEL), '출력 정책'],
+    [(): unknown => apiModelIdFor(M3_ANALYSIS_MODEL), 'apiModelId'],
+  ] as Array<[() => unknown, string]>) {
+    try { fn() } catch { offenders.push(`확정 모델에 ${label} 가 없다`) }
+  }
+  if (keyStatus(M3_ANALYSIS_MODEL).envName !== 'ANTHROPIC_API_KEY') {
+    offenders.push('확정 모델의 key 환경변수가 다르다')
+  }
+
+  // ③ 🔴 **기본값으로 쓰이지 않는다.** 폴백이 생기면 `--model` 게이트가 무력해진다
+  for (const [pat, why] of [
+    [/MODEL \?\? M3_ANALYSIS_MODEL/, 'MODEL 폴백'],
+    [/M3_ANALYSIS_MODEL[\s\S]{0,40}\?\?/, 'ANALYSIS_MODEL 을 기본값으로'],
+    [/model\s*=\s*M3_ANALYSIS_MODEL/, 'model 에 직접 대입'],
+    [/arg\('model'\)\s*\?\?/, '--model 에 기본값'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(runCode)) offenders.push(`run 에 ${why} — 유료 게이트가 사라진다`)
+  }
+  // run 은 확정 모델을 아예 참조하지 않아야 한다
+  if (/M3_ANALYSIS_MODEL/.test(runCode)) offenders.push('run 이 확정 모델 상수를 참조한다')
+  // 🔴 게이트는 여전히 --model 을 요구한다
+  const gs = runCode.indexOf('function paidCallGate')
+  const ge = runCode.indexOf('\nasync function main', gs)
+  const gate = gs === -1 ? '' : runCode.slice(gs, ge === -1 ? gs + 2000 : ge)
+  if (!/blocked\.push[\s\S]{0,60}--model/.test(gate)) offenders.push('게이트가 --model 을 여전히 막지 않는다')
+
+  // ④ 🔴 분석 모델과 생성 모델을 섞지 않는다 — 이름과 주석이 그것을 말해야 한다
+  const contractRaw = readFileSync(CONTRACT_LIB, 'utf-8')
+  const at = contractRaw.indexOf('export const M3_ANALYSIS_MODEL')
+  const doc = at === -1 ? '' : contractRaw.slice(Math.max(0, at - 1800), at)
+  if (!/분석|판정/.test(doc)) offenders.push('확정 상수에 "분석 · 판정 전용" 설명이 없다')
+  if (!/생성|별도 실험/.test(doc)) offenders.push('생성 모델은 별도라는 경계 설명이 없다')
+  // 생성 모델을 이 상수로 정한 흔적이 없어야 한다
+  if (/GENERATION_MODEL|WRITER_MODEL/.test(contractRaw)) offenders.push('생성 모델 상수가 섞였다')
+
+  if (offenders.length) bad('분석 모델 확정 · 기본값 아님', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('분석 모델 확정 · 기본값 아님', 'policy',
+    `${M3_ANALYSIS_MODEL} 확정 · 후보·단가·정책·key 정합 · run 참조 0 · --model 게이트 유지`)
 }
 
 // ── 출력 ────────────────────────────────────────────────
