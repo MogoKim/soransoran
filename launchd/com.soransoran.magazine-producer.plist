@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  매거진 producer — 매일 01:00 KST
+  매거진 producer — 매일 00:10 KST
 
   하는 일: magazine-producer-run.mjs 를 띄운다.
     ├ magazine-producer-plan.mjs    오늘 무엇을 만들지 선정하고 _runs/{date}/ 에 작업 패키지
@@ -61,16 +61,24 @@
   <string>/Users/yanadoo/Documents/soransoran</string>
 
   <!--
-    🔴 12:30 은 임시다. 예약 발행이 실제로 열리는지 오늘 한 번 보려고 옮겼다.
-       한 회차가 사람 손 없이 끝나고 예약 공개까지 확인되면 00:10 KST 로 되돌린다.
+    00:10 KST 로 정착한다. 검증은 끝났다 —
+      2026-08-27 09:30 회차: brief → 원고 회수 → 이미지 → QA → 등록까지 사람 손 없이 exit 0
+      2026-08-27 12:30 회차: 같은 날 두 번째 발화가 멱등 가드에 걸려 즉시 exit 0
+      같은 날 12:20 예약 공개가 재배포 없이 열림
+
+    🔴 자정 직후로 두는 이유는 날짜 경계다.
+       producer 는 자기가 뜬 날짜로 _runs/{date}/ 를 잡는다.
+       23시대에 두면 자정을 넘기는 회차의 날짜가 갈라진다.
+    🔴 00:00 정각을 피한다. 자정에 도는 다른 작업들과 겹치면
+       느려질 뿐이고, 10분은 그 밖으로 나가기에 충분하다.
     시스템 timezone 이 Asia/Seoul 이라 그대로 KST 다.
   -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>12</integer>
+    <integer>0</integer>
     <key>Minute</key>
-    <integer>30</integer>
+    <integer>10</integer>
   </dict>
 
   <!-- 등록하는 순간 돌지 않는다. 검증은 launchctl kickstart 로 한다 -->
