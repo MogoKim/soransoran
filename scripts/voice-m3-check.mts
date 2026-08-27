@@ -17,7 +17,8 @@ import {
   M3_TASK_VERSION, M3_PROMPT_VERSION, M3_OUTPUT_SCHEMA_VERSION, M3_MODEL_UNDETERMINED,
   M3_CAPS, M3_SIGNAL_KEYS, M3_OUTPUT_SCHEMA, CACHE_KEY_PARTS,
   M3_ALLOWED_ADDRESS_TERMS, M3_FORBIDDEN_ADDRESS_TERMS, M3_LEAK_RUN_MIN,
-  buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak,
+  M3_MODEL_CANDIDATES, M3_EXPERIMENT_PER_MODEL,
+  buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak, pricingFor,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 
@@ -340,12 +341,44 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (M3_TASK_VERSION !== 'voice-m3-task-v1') offenders.push(`taskVersion=${M3_TASK_VERSION}`)
   if (M3_PROMPT_VERSION !== 'voice-m3-prompt-v1') offenders.push(`promptVersion=${M3_PROMPT_VERSION}`)
   if (M3_OUTPUT_SCHEMA_VERSION !== 'voice-m3-output-v1') offenders.push(`outputSchemaVersion=${M3_OUTPUT_SCHEMA_VERSION}`)
-  // 🔴 모델을 확정하지 않았다
-  if (/claude-|gpt-4|gpt-5|gemini-|haiku|sonnet|opus/i.test(contractCode)) {
-    offenders.push('contract lib 에 특정 모델명이 박혔다')
+  // 🔴 모델을 **확정**하지 않았다.
+  //    후보 표에 모델명이 있는 것은 정당하다 — 20건 실험 대상이기 때문이다.
+  //    막아야 하는 것은 "하나를 골라 기본값으로 박는" 일이다.
+  if (M3_MODEL_UNDETERMINED !== 'undetermined') offenders.push('placeholder 가 바뀌었다')
+  const candidateNames = Object.keys(M3_MODEL_CANDIDATES)
+  if (candidateNames.includes(M3_MODEL_UNDETERMINED)) offenders.push('placeholder 가 실제 모델명이다')
+  // 기본 모델을 정해 두면 실험 없이 선택된 것과 같다
+  if (/const\s+DEFAULT_MODEL|model\s*=\s*['"](gpt-|claude-)/.test(contractCode + liveCode)) {
+    offenders.push('기본 모델이 코드에 박혔다')
   }
   if (offenders.length) bad('버전 고정 · 모델 미확정', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('버전 고정 · 모델 미확정', 'guard', `task/prompt/schema v1 · model='${M3_MODEL_UNDETERMINED}'`)
+  else ok('버전 고정 · 모델 미확정', 'guard', `task/prompt/schema v1 · placeholder='${M3_MODEL_UNDETERMINED}' · 기본 모델 없음`)
+}
+
+// ── ⑮ 단가는 출처 · 확인일 없이 등록되지 않는다 ─────────
+//    🔴 확인되지 않은 단가로 만든 금액은 "확인된 비용" 처럼 읽힌다.
+{
+  const offenders: string[] = []
+  const names = Object.keys(M3_MODEL_CANDIDATES)
+  if (names.length < 2) offenders.push(`후보가 ${names.length}개 — 비교하려면 2개 이상이어야 한다`)
+  for (const [name, p] of Object.entries(M3_MODEL_CANDIDATES)) {
+    if (!p.source || !/^https?:\/\//.test(p.source)) offenders.push(`${name}: 출처 URL 없음`)
+    if (!p.checkedAt || !/^\d{4}-\d{2}-\d{2}$/.test(p.checkedAt)) offenders.push(`${name}: 확인일 형식`)
+    if (!(p.inputPerMTok > 0) || !(p.outputPerMTok > 0)) offenders.push(`${name}: 단가가 0 이하`)
+  }
+  // 🔴 등록되지 않은 모델은 금액을 지어내지 않고 던진다
+  let threw = false
+  try { pricingFor('made-up-model') } catch { threw = true }
+  if (!threw) offenders.push('미등록 모델인데 단가를 반환했다')
+  // 단가를 넘기면 금액이 나오고 출처가 따라온다
+  const withPrice = estimateCost(10_000, 10, pricingFor(names[0]))
+  if (withPrice.estimatedCostUsd === null) offenders.push('등록 단가인데 금액이 null')
+  if (!withPrice.priceSource?.includes('http')) offenders.push('금액에 출처가 따라오지 않는다')
+  if (M3_EXPERIMENT_PER_MODEL !== 10) offenders.push(`모델당 실험 건수가 ${M3_EXPERIMENT_PER_MODEL} (10이어야 한다)`)
+  // 🔴 모델당 10건이므로 itemLimit 을 넘지 않는다
+  if (M3_EXPERIMENT_PER_MODEL > M3_CAPS.itemLimit) offenders.push('모델당 건수가 itemLimit 초과')
+  if (offenders.length) bad('단가에 출처 · 확인일 필수', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('단가에 출처 · 확인일 필수', 'policy', `후보 ${names.length}종 · 전부 출처+날짜 · 미등록은 거부 · 모델당 ${M3_EXPERIMENT_PER_MODEL}건`)
 }
 
 // ── 출력 ────────────────────────────────────────────────

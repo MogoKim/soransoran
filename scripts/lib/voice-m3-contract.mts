@@ -17,6 +17,18 @@ import { SORANSORAN_REGISTER_TERMS, TARGET_DESCRIPTOR_TERMS } from './voice-styl
 //    두 곳에 각각 적으면 한쪽만 바뀌는 날이 온다.
 import { LEAK_RUN_MIN } from './voice-unao-readonly.mjs'
 
+// ── 모델 단가 (계약 §E) ──────────────────────────────────
+
+export type ModelPricing = {
+  /** 입력 100만 토큰당 USD */
+  inputPerMTok: number
+  /** 출력 100만 토큰당 USD */
+  outputPerMTok: number
+  /** 🔴 어디서 언제 확인했는가. 없으면 이 단가를 쓰지 않는다 */
+  source: string
+  checkedAt: string
+}
+
 // ── 버전 상수 ─────────────────────────────────────────────
 
 /** VE-M3 작업 정의 버전. 판단 대상 · 입력 구성이 바뀌면 올린다 */
@@ -25,6 +37,60 @@ export const M3_TASK_VERSION = 'voice-m3-task-v1'
 export const M3_PROMPT_VERSION = 'voice-m3-prompt-v1'
 /** 출력 스키마 버전. 필드가 바뀌면 파싱 결과가 달라지므로 올린다 */
 export const M3_OUTPUT_SCHEMA_VERSION = 'voice-m3-output-v1'
+
+/**
+ * 후보 모델의 공식 단가. 🔴 **출처와 확인일이 없으면 여기 넣지 않는다.**
+ *
+ * 계약 §E 가 요구한 형식이다. 확인되지 않은 단가로 만든 금액은
+ * "확인된 비용" 처럼 읽힌다 — 이전에 실제로 그런 일이 있었다.
+ *
+ * ⚠️ 가격은 바뀐다. **실행 직전 한 번 더 대조한다.**
+ *
+ * 🔴 모델 선택은 이 표로 하지 않는다. 20건 실험 결과를 사람이 읽고 정한다
+ *    (정본: docs/operations/2026-08-27-voice-m3-model-selection-criteria.md).
+ *    입력 20배 · 출력 12.5배 차이지만, 20건 실험 총액은 $0.077 로 둘 다 사실상 공짜다.
+ *    격차가 드러나는 곳은 전량 확대 시점이고 그때 차이는 약 34달러다.
+ */
+export const M3_MODEL_CANDIDATES = {
+  'gpt-5-nano': {
+    inputPerMTok: 0.05,
+    outputPerMTok: 0.40,
+    source: 'https://platform.openai.com/pricing',
+    checkedAt: '2026-08-27',
+  },
+  'claude-haiku-4.5': {
+    inputPerMTok: 1.0,
+    outputPerMTok: 5.0,
+    source: 'https://claude.com/pricing',
+    checkedAt: '2026-08-27',
+  },
+} as const satisfies Record<string, ModelPricing>
+
+export type M3ModelName = keyof typeof M3_MODEL_CANDIDATES
+
+/**
+ * 🔴 첫 실험은 **총 20건** — 같은 표본 10건을 두 모델에 각각 넣는다.
+ *    표본이 다르면 모델 차이인지 글 차이인지 알 수 없다.
+ *
+ * 🔴 `itemLimit` 10 을 넘지 않는다. **모델당 10건씩 두 번 실행**이고
+ *    cap 은 실행 단위로 걸린다. 한 실행에서 20건을 처리하지 않는다.
+ */
+export const M3_EXPERIMENT_PER_MODEL = 10
+
+/** 단가를 꺼낸다. 🔴 등록되지 않은 모델은 던진다 — 금액을 지어내지 않는다 */
+export function pricingFor(model: string): ModelPricing {
+  const found = (M3_MODEL_CANDIDATES as Record<string, ModelPricing>)[model]
+  if (!found) {
+    throw new Error(
+      `단가가 등록되지 않은 모델이다: ${model}
+` +
+        `  후보: ${Object.keys(M3_MODEL_CANDIDATES).join(' · ')}
+` +
+        '  공식 단가를 출처 · 확인일과 함께 M3_MODEL_CANDIDATES 에 넣은 뒤 쓴다(계약 §E).',
+    )
+  }
+  return found
+}
 
 /**
  * 🔴 모델은 아직 확정되지 않았다 — **그런데도 빈 문자열이 아니라 placeholder 다.**
@@ -190,16 +256,6 @@ export type CostEstimate = {
   costStatus: 'unavailable_no_official_price' | 'estimated'
   /** 단가를 확인했다면 출처와 날짜 */
   priceSource: string | null
-}
-
-export type ModelPricing = {
-  /** 입력 100만 토큰당 USD */
-  inputPerMTok: number
-  /** 출력 100만 토큰당 USD */
-  outputPerMTok: number
-  /** 🔴 어디서 언제 확인했는가. 없으면 이 단가를 쓰지 않는다 */
-  source: string
-  checkedAt: string
 }
 
 /**
