@@ -37,6 +37,7 @@ const PROMPT_LIB = join(HERE, 'lib/voice-m3-prompt.mts')
 const SAMPLE_LIB = join(HERE, 'lib/voice-m3-sample.mts')
 const PROVIDER_LIB = join(HERE, 'lib/voice-m3-provider.mts')
 const RUN = join(HERE, 'voice-m3-run.mts')
+const PLAN = join(HERE, 'voice-m3-plan.mts')
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -56,6 +57,7 @@ const promptCode = stripComments(readFileSync(PROMPT_LIB, 'utf-8'))
 const sampleCode = stripComments(readFileSync(SAMPLE_LIB, 'utf-8'))
 const providerCode = stripComments(readFileSync(PROVIDER_LIB, 'utf-8'))
 const runCode = stripComments(readFileSync(RUN, 'utf-8'))
+const planCode = stripComments(readFileSync(PLAN, 'utf-8'))
 const ALL: Array<[string, string]> = [
   ['dry-run', liveCode], ['contract lib', contractCode], ['prompt lib', promptCode],
 ]
@@ -455,6 +457,8 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   const FORBIDDEN_FILES: Array<[string, string]> = [
     ['dry-run', liveCode], ['contract lib', contractCode], ['prompt lib', promptCode],
     ['sample lib', sampleCode],
+    // 🔴 전량 계획 리포트도 provider 를 부르지 않는다 (VE-M3-5)
+    ['plan', planCode],
   ]
   for (const [label, code] of FORBIDDEN_FILES) {
     // 🔴 **실제 호출 형태만** 본다.
@@ -483,7 +487,7 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (/^import .*from\s+['"](openai|@anthropic-ai\/)/m.test(selfRaw)) offenders.push('check 에 SDK import')
 
   // adapter 밖에서 callProvider 를 부르는 곳은 run 하나뿐이어야 한다
-  const callers = [['dry-run', liveCode], ['contract', contractCode], ['prompt', promptCode], ['sample', sampleCode]] as const
+  const callers = [['dry-run', liveCode], ['contract', contractCode], ['prompt', promptCode], ['sample', sampleCode], ['plan', planCode]] as const
   for (const [label, code] of callers) {
     // 실제 호출 형태만 — import 나 문자열 언급을 위반으로 읽지 않는다
     if (/(await|return|=)\s+callProvider\s*\(/.test(code)) offenders.push(`${label} 이 callProvider 를 부른다`)
@@ -1187,6 +1191,86 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('분석 모델 확정 · 기본값 아님', 'policy', `🔴 ${offenders.join(' / ')}`)
   else ok('분석 모델 확정 · 기본값 아님', 'policy',
     `${M3_ANALYSIS_MODEL} 확정 · 후보·단가·정책·key 정합 · run 참조 0 · --model 게이트 유지`)
+}
+
+// ── ㉝ 전량 계획 리포트는 유료 경로가 없다 (VE-M3-5) ────
+//    🔴 전량은 193회의 실행이다. 계획을 세우는 명령에 유료 경로가 섞이면
+//       "계획만 볼 생각" 이 9,644건 호출로 바뀔 수 있다. 플래그 자체를 없앤다.
+{
+  const offenders: string[] = []
+
+  // ① 🔴 유료 플래그를 **받지 않는다**. "무시한다" 가 아니라 코드에 없다
+  for (const [pat, why] of [
+    [/--apply/, '--apply 를 다룬다'],
+    [/--confirm-paid-call/, '--confirm-paid-call 을 다룬다'],
+    [/callProvider/, 'provider 를 부른다'],
+    [/voice-m3-provider/, 'provider 를 import 한다'],
+    [/(await|return|=)\s+fetch\s*\(/, 'fetch 호출'],
+    [/keyStatus|API_KEY/, 'API key 를 다룬다'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(planCode)) offenders.push(`plan 이 ${why}`)
+  }
+
+  // ② 🔴 DB write 0 — 계획은 읽기만 한다
+  for (const m of ['voiceM3Run', 'voiceM3Cache', 'voiceM3CostEvent', 'voiceSource', 'voiceDerived',
+    'voiceCommentSignal', 'voiceJudgment', 'microSeedCandidate', 'microSeedRawContent']) {
+    for (const op of ['create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany']) {
+      if (new RegExp(`${m}\\.${op}\\s*\\(`).test(planCode)) offenders.push(`plan 이 ${m}.${op}`)
+    }
+  }
+  if (/\$executeRaw|\$queryRaw/.test(planCode)) offenders.push('plan 에 raw SQL')
+  // Sheet · 크롤링 접점 0
+  for (const t of ['micro-seed-sheet', 'planSheetWrite', 'appendRow', 'publishLive']) {
+    if (planCode.includes(t)) offenders.push(`plan 에 ${t}`)
+  }
+
+  // ③ 🔴 원문을 읽지 않는다 — 계획에 필요한 것은 길이와 개수뿐이다
+  for (const [pat, why] of [
+    [/\bcontent\s*:\s*true/, 'content 를 select 한다'],
+    [/topComments/, '댓글 원문을 다룬다'],
+    [/CafePost/, '우나어 원문 테이블을 조회한다'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(planCode)) offenders.push(`plan 이 ${why}`)
+  }
+
+  // ④ 확정 모델을 쓰되 실행하지는 않는다
+  if (!/M3_ANALYSIS_MODEL/.test(planCode)) offenders.push('plan 이 확정 모델을 참조하지 않는다')
+  if (!/pricingFor|outputTokenPolicyFor/.test(planCode)) offenders.push('plan 이 단가 · 출력 정책을 쓰지 않는다')
+
+  // ⑤ 🔴 cap 판정은 **최악값**으로 한다 — 실측 평균으로 하면 cap 이 늦게 걸린다.
+  //    🔴 파일 어딘가에 `policy.maxOutputTokens` 가 있는 것으로는 부족하다 —
+  //       시나리오 표에도 같은 이름이 쓰이므로 batch 계산이 실측 평균으로 바뀌어도 통과한다
+  //       (역검증에서 실제로 뚫렸다). **batch 루프 본문**을 잘라 그 안을 본다.
+  const bs = planCode.indexOf('for (let i = 0; i < pending.length; i += BATCH)')
+  const be = planCode.indexOf('const overCap', bs)
+  const batchBody = bs === -1 ? '' : planCode.slice(bs, be === -1 ? bs + 900 : be)
+  if (bs === -1) offenders.push('batch 분할 루프를 찾지 못했다')
+  else {
+    if (!/policy\.maxOutputTokens/.test(batchBody)) offenders.push('batch cap 판정에 출력 상한을 쓰지 않는다')
+    // 🔴 `[^;]*` 는 줄바꿈을 넘어 다음 줄의 같은 상수까지 먹는다 — 정상 코드를 오탐했다.
+    //    같은 줄로 제한한다.
+    if (/bout\s*=\s*[^;\n]*MEASURED_OUTPUT_PER_ITEM/.test(batchBody)) {
+      offenders.push('🔴 batch cap 판정이 실측 평균이다 — cap 이 늦게 걸린다')
+    }
+  }
+  if (!/M3_CAPS\.tokenCap/.test(planCode)) offenders.push('plan 이 tokenCap 을 검사하지 않는다')
+  if (!/M3_CAPS\.dollarCap/.test(planCode)) offenders.push('plan 이 dollarCap 을 검사하지 않는다')
+  // batch 는 itemLimit 을 넘을 수 없다
+  if (!/BATCH > M3_CAPS\.itemLimit/.test(planCode)) offenders.push('batch 가 itemLimit 을 넘을 수 있다')
+
+  // ⑥ 🔴 전량 실행 경로가 아직 없다는 사실을 리포트가 말해야 한다.
+  //    말하지 않으면 "계획이 나왔으니 돌리면 되겠다" 로 읽힌다
+  if (!/전량을 돌 수 없다|selectStratifiedSample/.test(planCode)) {
+    offenders.push('plan 이 실행 경로 부재를 경고하지 않는다')
+  }
+  // run 은 여전히 층화 표본이다 — 경고가 사실인지 대조한다
+  if (!/selectStratifiedSample\(candidates, LIMIT\)/.test(runCode)) {
+    offenders.push('run 의 표본 선정이 바뀌었다 — plan 의 경고를 갱신해야 한다')
+  }
+
+  if (offenders.length) bad('전량 계획 리포트 유료 경로 0', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('전량 계획 리포트 유료 경로 0', 'guard',
+    'apply · confirm · provider · fetch · key 0 · DB write 0 · 원문 조회 0 · cap 최악값 판정 · 실행경로 부재 경고')
 }
 
 // ── 출력 ────────────────────────────────────────────────
