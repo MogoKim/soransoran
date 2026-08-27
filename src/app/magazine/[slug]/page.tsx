@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import MagazineBody from '@/components/features/MagazineBody'
 import { getMagazineArticleBySlug, getRelatedMagazineArticles } from '@/lib/magazine'
+import { formatMagazinePublishedDate } from '@/lib/magazine-date'
 import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
 import { SITE } from '@/lib/brand'
 
@@ -137,7 +138,7 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
             <span aria-hidden>·</span>
             <span>소란소란 편집팀</span>
             <span aria-hidden>·</span>
-            <span>{article.publishedAt}</span>
+            <span>{formatMagazinePublishedDate(article.publishedAt)}</span>
           </p>
 
           {article.heroImage ? (
