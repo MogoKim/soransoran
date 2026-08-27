@@ -608,6 +608,7 @@ model VoiceSource {
   judgments      VoiceJudgment[]
   derived        VoiceDerived[]
   commentSignals VoiceCommentSignal[]
+  m3Cache        VoiceM3Cache[]
 
   /// 🔴 같은 원천을 두 번 등록하지 않는다. FK 가 없으므로 이것이 유일한 방어다.
   @@unique([origin, sourceRef])
@@ -741,4 +742,185 @@ model VoiceCommentSignal {
   @@unique([voiceSourceId, ordinal])
   @@index([voiceSourceId, likeCount])
   @@index([reactionType])
+}
+
+// ══════════════════════════════════════════════════════════
+// VE-M3 — LLM 실험 저장 구조 (VE-M3-1)
+//
+// 정본: docs/operations/2026-08-27-voice-m3-llm-experiment-contract.md
+//
+// 🔴 이 세 테이블의 존재 이유는 **돈이 새는 것을 막는 것**이다.
+//    VE-M2 까지는 비용이 0원이라 실수해도 시간만 잃었다. VE-M3 부터는 다르다.
+//      · VoiceM3Cache      같은 원문을 두 번 부르지 않는다
+//      · VoiceM3CostEvent  호출 한 번마다 얼마 썼는지 남긴다
+//      · VoiceM3Run        실행 단위로 cap 을 걸고 멈춘다
+//
+// 🔴 원문 · 댓글 · 닉네임 컬럼이 없다. VE-M2 와 같은 원칙이다.
+//    원문은 우나어 DB 에 남고 필요할 때마다 read-only 로 읽는다.
+// ══════════════════════════════════════════════════════════
+
+/// 실행 상태. 🔴 String 이 아니라 enum 인 이유:
+/// 이 값으로 "멈춰야 하는가" 를 판정한다. 오타 하나가 cap 을 무력화한다.
+enum VoiceM3RunStatus {
+  planned
+  running
+  completed
+  failed
+  cancelled
+}
+
+/// 캐시 항목의 상태. 실패도 남긴다 — 재시도할지 건너뛸지를 이 값으로 정한다.
+enum VoiceM3CacheStatus {
+  succeeded
+  failed
+  skipped
+}
+
+/// 비용이 발생한 사건의 종류
+enum VoiceM3CostEventType {
+  call
+  retry
+  cache_hit
+  estimate
+}
+
+/// LLM 실행 단위. 🔴 cap 이 걸리는 자리다.
+model VoiceM3Run {
+  id     String           @id @default(uuid())
+  status VoiceM3RunStatus @default(planned)
+
+  /// 🔴 아래 넷은 cacheKey 구성 요소이기도 하다. 하나라도 바뀌면 다른 실행이다.
+  ///    NULL 을 허용하지 않는다 — Postgres 에서 NULL 은 서로 같지 않아
+  ///    UNIQUE 가 중복을 막지 못한다 (VoiceDerived 에서 같은 결정을 했다).
+  taskVersion         String
+  model               String
+  promptVersion       String
+  outputSchemaVersion String
+
+  // ── cap — 실행 전에 정하고 실행 중에 넘으면 멈춘다 ──
+  /// 🔴 건수 cap 만으로는 못 막는다. 3,000자 글이 몰리면 같은 건수에 토큰이 3배다
+  itemLimit  Int
+  tokenCap   Int
+  /// 달러는 소수점이 중요하다. Float 로 두면 반올림이 누적된다
+  dollarCap  Decimal @db.Decimal(10, 4)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  // ── counters ──
+  attempted Int @default(0)
+  succeeded Int @default(0)
+  failed    Int @default(0)
+  skipped   Int @default(0)
+  cacheHit  Int @default(0)
+  cacheMiss Int @default(0)
+
+  // ── cost ──
+  inputTokens      Int     @default(0)
+  outputTokens     Int     @default(0)
+  totalTokens      Int     @default(0)
+  estimatedCostUsd Decimal @default(0) @db.Decimal(10, 4)
+
+  /// 🔴 실패 이유를 버리지 않는다. 무엇이 막았는지가 다음 실행의 입력이다.
+  ///    원문이 아니라 **사유 요약**만 담는다.
+  errorSummary String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  costEvents VoiceM3CostEvent[]
+
+  @@index([status, createdAt])
+  @@index([taskVersion, model, promptVersion])
+}
+
+/// LLM 산출물 캐시. 🔴 **같은 원문을 두 번 부르지 않는다** — 이 테이블의 존재 이유다.
+model VoiceM3Cache {
+  id String @id @default(uuid())
+
+  /// 🔴 중복 호출 방지의 핵심.
+  ///    sha256(origin + sourceRef + contentHash + ruleVersion
+  ///           + taskVersion + model + promptVersion + outputSchemaVersion)
+  ///    구성 요소를 개별 컬럼으로도 두는 이유: 나중에 "어느 프롬프트 결과만" 을
+  ///    골라내야 하는데, 해시만 있으면 역산할 수 없다.
+  cacheKey String @unique
+
+  voiceSourceId String
+  voiceSource   VoiceSource @relation(fields: [voiceSourceId], references: [id], onDelete: Cascade)
+
+  // ── cacheKey 구성 요소 ──
+  origin    String
+  sourceRef String
+  /// 🔴 원문이 수정되면 키가 달라져 자동으로 무효화된다
+  contentHash String?
+  /// 입력이 된 VoiceDerived 의 규칙 버전
+  ruleVersion String
+
+  /// 🔴 아래 넷은 NOT NULL 이다. NULL 이면 cacheKey 재구성이 불가능하고,
+  ///    "어느 모델의 결과인가" 를 알 수 없어 캐시가 무의미해진다.
+  taskVersion         String
+  model               String
+  promptVersion       String
+  outputSchemaVersion String
+
+  /// 'llm' 고정. 🔴 VoiceDerived.method='rule' 과 섞이지 않게 하는 표식이다
+  method String @default("llm")
+
+  status VoiceM3CacheStatus @default(succeeded)
+
+  /// LLM 산출물. 🔴 **원문 문장이 들어가면 안 된다.**
+  ///    저장 전에 우나어 원문과 20자 연속 대조를 통과해야 한다
+  ///    (계약 §H). legacyLabels 경유 유출 전례가 있다(VE-R3.1).
+  output Json?
+
+  inputTokens      Int     @default(0)
+  outputTokens     Int     @default(0)
+  totalTokens      Int     @default(0)
+  estimatedCostUsd Decimal @default(0) @db.Decimal(10, 4)
+
+  generatedAt DateTime @default(now())
+
+  /// 실패도 남긴다 — 같은 실패를 반복하지 않기 위해서다
+  errorCode    String?
+  errorMessage String? @db.Text
+
+  costEvents VoiceM3CostEvent[]
+
+  @@index([voiceSourceId, generatedAt])
+  @@index([origin, sourceRef])
+  @@index([model, promptVersion, taskVersion])
+  @@index([status, generatedAt])
+}
+
+/// 호출 한 번마다의 비용. 🔴 **retry 도 여기 남는다** —
+/// cap 밖에 두면 실패가 많을수록 비용이 커지는 구조가 된다(계약 §E).
+model VoiceM3CostEvent {
+  id String @id @default(uuid())
+
+  runId String
+  run   VoiceM3Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  /// 🔴 optional 이다. cap 초과로 **호출조차 못 한 사건**도 기록해야 하는데,
+  ///    그때는 캐시 행이 없다.
+  cacheId String?
+  cache   VoiceM3Cache? @relation(fields: [cacheId], references: [id], onDelete: SetNull)
+
+  eventType VoiceM3CostEventType
+  model     String
+
+  inputTokens      Int     @default(0)
+  outputTokens     Int     @default(0)
+  totalTokens      Int     @default(0)
+  estimatedCostUsd Decimal @default(0) @db.Decimal(10, 4)
+
+  /// 0 = 최초 시도. 1 이상이면 재시도다
+  retryAttempt Int @default(0)
+  /// 사유 요약. 🔴 원문을 넣지 않는다
+  reason String? @db.Text
+
+  occurredAt DateTime @default(now())
+
+  @@index([runId, occurredAt])
+  @@index([cacheId])
+  @@index([eventType, occurredAt])
 }

@@ -437,3 +437,33 @@ VE-R7      비용 상한 · 캐시 적중 시 재호출 0
 | 6 | 광고성 글 필터 | `isUsable=true` 에 성형외과 광고가 섞여 있다 |
 
 **1번이 모든 runtime PR 의 선행 조건이다.**
+
+---
+
+## VE-M3 저장 구조 (2026-08-27 추가)
+
+> 정본: [VE-M3 LLM 실험 계약](./2026-08-27-voice-m3-llm-experiment-contract.md) §D · §E
+> migration `0008_voice_m3_cache_cost` · **DB 적용 대기**
+
+VE-M3 는 **처음으로 돈이 나가는 단계**다. 그래서 세 테이블의 존재 이유가 전부 비용 통제다.
+
+| 테이블 | 존재 이유 |
+|---|---|
+| `VoiceM3Cache` | **같은 원문을 두 번 부르지 않는다.** `cacheKey` UNIQUE 가 유일한 방어다 |
+| `VoiceM3CostEvent` | **호출 한 번마다 얼마 썼는지 남긴다.** 🔴 retry 도 여기 남는다 |
+| `VoiceM3Run` | **실행 단위로 cap 을 걸고 넘으면 멈춘다** (itemLimit · tokenCap · dollarCap) |
+
+```
+cacheKey = sha256(origin + sourceRef + contentHash + ruleVersion
+                  + taskVersion + model + promptVersion + outputSchemaVersion)
+```
+
+🔴 `model` · `promptVersion` · `outputSchemaVersion` 은 **NOT NULL** 이다.
+Postgres 에서 NULL 은 서로 같지 않아, 이 값들이 NULL 이면 UNIQUE 가 중복을 전혀 막지 못한다.
+`VoiceDerived` 에서 같은 결정을 했다.
+
+🔴 **원문 · 댓글 · 닉네임 컬럼이 없다.** `VoiceM3Cache.output` 은 LLM 산출물이지만
+저장 전에 우나어 원문과 20자 연속 대조를 통과해야 한다(계약 §H).
+
+🔴 `VoiceM3CostEvent.cacheId` 의 삭제 정책만 `SET NULL` 이다 —
+**캐시를 지워도 "얼마 썼는지" 는 남아야** 지출 추적이 끊기지 않는다.
