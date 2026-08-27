@@ -69,13 +69,47 @@ export const M3_MODEL_CANDIDATES = {
 export type M3ModelName = keyof typeof M3_MODEL_CANDIDATES
 
 /**
- * 🔴 첫 실험은 **총 20건** — 같은 표본 10건을 두 모델에 각각 넣는다.
- *    표본이 다르면 모델 차이인지 글 차이인지 알 수 없다.
+ * 🔴 모델 비교는 **단계형**이다. 한 번에 끝내지 않는다.
  *
- * 🔴 `itemLimit` 10 을 넘지 않는다. **모델당 10건씩 두 번 실행**이고
- *    cap 은 실행 단위로 걸린다. 한 실행에서 20건을 처리하지 않는다.
+ * 초판은 10건 1회 비교였다. 그것으로는 모델 품질을 가릴 수 없다 —
+ * 같은 모델도 글에 따라 흔들리고, 10건이면 그 흔들림과 모델 차이가 섞인다.
+ *
+ * 🔴 단계마다 **멈출 수 있다.** 1차에서 한쪽이 명확히 탈락하면 거기서 끝난다.
+ *    끝까지 가야 하는 계획은 계획이 아니라 예산 소진이다.
+ *
+ * 🔴 각 단계는 `itemLimit`(50) 안에서 **실행을 쪼개서** 돈다.
+ *    2차 100건 = 50×2회 · 3차 300건 = 50×6회. tokenCap 이 한 실행 91건을 넘지 못하게 한다.
+ *
+ * 정본: docs/operations/2026-08-27-voice-m3-model-selection-criteria.md §2
  */
-export const M3_EXPERIMENT_PER_MODEL = 10
+export const M3_EXPERIMENT_STAGES = {
+  /** 1차 — 같은 30건 표본을 두 모델에 각각. 층화 샘플이며 무작위가 아니다 */
+  stage1PerModel: 30,
+  /** 2차 — 1차에서 차이가 애매할 때만. 100건씩 두 모델 */
+  stage2PerModel: 100,
+  /** 3차 — 우세한 한 모델만 300건 단일 검증 */
+  stage3Single: 300,
+} as const
+
+/** 1차 실험 건수(모델당). 이전 이름 호환 겸 가장 자주 쓰이는 값 */
+export const M3_EXPERIMENT_PER_MODEL = M3_EXPERIMENT_STAGES.stage1PerModel
+
+/**
+ * 1차 30건 표본이 반드시 덮어야 할 축.
+ *
+ * 🔴 무작위로 뽑으면 안 된다. `other` 81% · 짧은 본문 45.7% 라는 분포 탓에
+ *    무작위 30건은 "비슷한 글 30개" 가 된다 — 모델 차이가 드러날 자리가 없다.
+ */
+export const M3_STRATA_AXES = [
+  'shortBody', 'longBody',
+  'manyComments', 'fewComments',
+  'strongEmotion', 'calmTone',
+  'question', 'complaint', 'experience',
+  'sourceSpecificAddress',
+  'targetDescriptorRisk',
+  'highOtherReaction',
+  'referenced', 'notReferenced',
+] as const
 
 /** 단가를 꺼낸다. 🔴 등록되지 않은 모델은 던진다 — 금액을 지어내지 않는다 */
 export function pricingFor(model: string): ModelPricing {
@@ -110,8 +144,17 @@ export const M3_MODEL_UNDETERMINED = 'undetermined'
 // ── cap (계약 §E) ────────────────────────────────────────
 
 export const M3_CAPS = {
-  /** 대표성이 아니라 **사람이 전량을 눈으로 읽을 수 있는 크기** */
-  itemLimit: 10,
+  /**
+   * 한 실행이 처리할 수 있는 최대 건수.
+   *
+   * 🔴 10 에서 50 으로 올렸다(2026-08-27). 10건 1회 비교로는 모델 품질을 가릴 수 없다 —
+   *    같은 모델도 글에 따라 흔들리는데, 10건이면 그 흔들림과 모델 차이가 구분되지 않는다.
+   *
+   * 🔴 50 인 이유는 **tokenCap 이 정한다.** 1건당 약 5,468 tok(실측)이라
+   *    500K / 5,468 ≈ 91건이 한 실행의 물리적 상한이다. 그 아래에서 나누기 좋은 수가 50 이다.
+   *    100건 · 300건 단계는 **실행을 쪼개서** 돈다(50×2 · 50×6).
+   */
+  itemLimit: 50,
   /** 🔴 건수 cap 만으로는 못 막는다. 3,000자 글이 몰리면 같은 건수에 토큰이 3배다 */
   tokenCap: 500_000,
   /** 사람이 감당 가능한 상한 */

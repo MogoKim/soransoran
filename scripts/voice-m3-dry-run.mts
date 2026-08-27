@@ -72,7 +72,8 @@ async function main(): Promise<void> {
   if (LIMIT > M3_CAPS.itemLimit) {
     throw new Error(
       `--limit 이 itemLimit 을 넘는다: ${LIMIT} > ${M3_CAPS.itemLimit}\n` +
-        '  10건인 이유는 대표성이 아니라 사람이 전량을 눈으로 읽을 수 있는 크기이기 때문이다(계약 §G).',
+        '  itemLimit 은 tokenCap 이 정한다 — 1건당 약 5,468 tok 이라 한 실행 상한이 91건이다.\n' +
+        '  2차 100건 · 3차 300건은 실행을 쪼개서 돈다(50×2 · 50×6).',
     )
   }
 
@@ -92,7 +93,7 @@ async function main(): Promise<void> {
     console.log('         🔴 단가를 붙여 금액을 보는 것뿐이다. 모델 선택은 20건 실험 뒤 사람이 한다')
   } else {
     console.log(`  model=${M3_MODEL_UNDETERMINED}  🔴 미확정 — --model=<이름> 을 주면 금액이 나온다`)
-    console.log(`         후보: ${Object.keys(M3_MODEL_CANDIDATES).join(' · ')} (실험은 모델당 ${M3_EXPERIMENT_PER_MODEL}건)`)
+    console.log(`         후보: ${Object.keys(M3_MODEL_CANDIDATES).join(' · ')} (1차 실험은 모델당 ${M3_EXPERIMENT_PER_MODEL}건)`)
   }
   console.log(`  limit=${LIMIT} / itemLimit ${M3_CAPS.itemLimit}`)
   console.log('  🔴 LLM 호출 0 · 네트워크 0 · DB write 0 — 이 단계의 비용은 0원이다')
