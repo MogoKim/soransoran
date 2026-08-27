@@ -21,6 +21,7 @@ import {
   buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak, pricingFor,
   ESTIMATED_OUTPUT_TOKENS_PER_ITEM, outputTokenPolicyFor,
   classifyJsonFailure, isMaxTokensReached, formatDiagnostics,
+  apiModelIdFor,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 import {
@@ -862,6 +863,91 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (!/JSON\.parse\(response\.rawText\)/.test(runCode)) offenders.push('산출물을 파싱하지 않고 저장한다')
   if (offenders.length) bad('LLM 응답 전문 저장 0', 'policy', `🔴 ${offenders.join(' / ')}`)
   else ok('LLM 응답 전문 저장 0', 'policy', `진단 ${built.length}B 에 본문 0 · 길이만 · rawText 저장 경로 0`)
+}
+
+// ── ㉙ 내부 라벨을 provider 에 보내지 않는다 ─────────────
+//    🔴 2026-08-27: `claude-haiku-4.5` 를 그대로 body.model 에 넣어
+//       Haiku 30건이 HTTP_404 로 전멸했다(비용 0원). 품질 실패가 아니라 매핑 실패다.
+{
+  const offenders: string[] = []
+
+  // ① 후보 전원이 apiModelId 를 갖는다 — 값이 같은 모델도 예외 없다
+  for (const [label, c] of Object.entries(M3_MODEL_CANDIDATES as Record<string, { apiModelId?: string }>)) {
+    if (typeof c.apiModelId !== 'string' || c.apiModelId.trim() === '') {
+      offenders.push(`${label} 에 apiModelId 없음`)
+    }
+  }
+  // ② 확인된 공식 ID 와 일치하는가
+  //    🔴 조회를 try 로 감싼다. apiModelId 가 없으면 `apiModelIdFor` 가 던지는데,
+  //       그대로 두면 fixture 가 **스택만 남기고 죽어** 무엇이 틀렸는지 읽히지 않는다.
+  //       역검증에서 실제로 그렇게 됐다 — 막긴 했지만 이유를 말하지 못했다.
+  const idOf = (label: string): string | null => {
+    try { return apiModelIdFor(label) } catch { return null }
+  }
+  const haikuId = idOf('claude-haiku-4.5')
+  const nanoId = idOf('gpt-5-nano')
+  if (haikuId === null) offenders.push('haiku 의 apiModelId 를 꺼내지 못한다')
+  else {
+    if (haikuId !== 'claude-haiku-4-5-20251001') offenders.push(`haiku apiModelId 가 ${haikuId}`)
+    // 🔴 내부 라벨이 그대로 API ID 인 것은 nano 의 우연이다. haiku 는 달라야 한다
+    if (haikuId === 'claude-haiku-4.5') offenders.push('haiku 의 내부 라벨과 apiModelId 가 같다 — 404 를 부른 그 상태다')
+  }
+  if (nanoId === null) offenders.push('nano 의 apiModelId 를 꺼내지 못한다 (명시적 분리가 빠졌다)')
+  else if (nanoId !== 'gpt-5-nano') offenders.push(`nano apiModelId 가 ${nanoId}`)
+  // ③ 미등록 모델은 던진다
+  for (const bad of ['gpt-4o', '', M3_MODEL_UNDETERMINED]) {
+    let threw = false
+    try { apiModelIdFor(bad) } catch { threw = true }
+    if (!threw) offenders.push(`미등록 모델 "${bad}" 을 통과시킨다`)
+  }
+
+  // ④ 🔴 provider 가 **`req.model` 을 body 에 직접 넣지 않는다**
+  const bodyStart = providerCode.indexOf('const body = isAnthropic')
+  const bodyEnd = providerCode.indexOf('const res = await fetch', bodyStart)
+  const bodyBlock = bodyStart === -1 ? '' : providerCode.slice(bodyStart, bodyEnd === -1 ? bodyStart + 900 : bodyEnd)
+  if (bodyStart === -1) offenders.push('provider 의 body 조립부를 찾지 못했다')
+  if (/model:\s*req\.model\b/.test(bodyBlock)) offenders.push('🔴 body.model 에 내부 라벨(req.model)을 직접 넣는다')
+  // 두 provider 분기 **양쪽 모두** apiModelId 여야 한다
+  const viaApi = (bodyBlock.match(/model:\s*apiModelId\b/g) ?? []).length
+  if (viaApi < 2) offenders.push(`body.model 이 apiModelId 를 쓰는 곳이 ${viaApi}곳 (Anthropic·OpenAI 둘 다여야 한다)`)
+  if (!/const apiModelId = apiModelIdFor\(req\.model\)/.test(providerCode)) {
+    offenders.push('provider 가 apiModelIdFor 로 변환하지 않는다')
+  }
+  // 변환이 body 조립보다 앞이어야 한다
+  const convAt = providerCode.indexOf('apiModelIdFor(req.model)')
+  if (convAt === -1 || (bodyStart !== -1 && convAt > bodyStart)) {
+    offenders.push('apiModelId 변환이 body 조립보다 뒤에 있다')
+  }
+
+  // ⑤ 🔴 cacheKey 는 **내부 라벨** 기준이다. apiModelId 가 아니다
+  if (/apiModelId/.test(runCode)) offenders.push('run 이 apiModelId 를 다룬다 — provider 전용이어야 한다')
+  const ckAt = runCode.indexOf('buildCacheKey({')
+  const ckBlock = ckAt === -1 ? '' : runCode.slice(ckAt, ckAt + 400)
+  if (ckAt === -1) offenders.push('run 에서 buildCacheKey 호출을 찾지 못했다')
+  if (!/model: modelForKey/.test(ckBlock)) offenders.push('cacheKey 가 내부 라벨(modelForKey)을 쓰지 않는다')
+  if (/apiModelId/.test(ckBlock)) offenders.push('🔴 cacheKey 에 apiModelId 가 들어간다')
+  // 라벨과 apiModelId 는 서로 다른 키를 낸다 — 섞이면 실험 비교가 무너진다
+  const base = {
+    origin: 'unao_cafe', sourceRef: 'abc', contentHash: null,
+    ruleVersion: 'r1', taskVersion: M3_TASK_VERSION,
+    promptVersion: M3_PROMPT_VERSION, outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
+  }
+  const kLabel = buildCacheKey({ ...base, model: 'claude-haiku-4.5' })
+  const kApi = buildCacheKey({ ...base, model: 'claude-haiku-4-5-20251001' })
+  if (kLabel === kApi) offenders.push('라벨과 apiModelId 가 같은 cacheKey 를 낸다')
+  // 🔴 기존 nano 캐시 키가 흔들리면 안 된다 — 30건 기준선이 무효가 된다
+  const kNanoLabel = buildCacheKey({ ...base, model: 'gpt-5-nano' })
+  if (kNanoLabel === kLabel) offenders.push('모델이 달라도 같은 키가 나온다')
+
+  // ⑥ 단가 조회는 여전히 **내부 라벨**로 한다
+  if (pricingFor('claude-haiku-4.5').inputPerMTok !== 1.0) offenders.push('라벨로 단가를 못 찾는다')
+
+  if (offenders.length) bad('내부 라벨 ≠ provider 모델 ID', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else {
+    ok('내부 라벨 ≠ provider 모델 ID', 'guard',
+      `후보 ${Object.keys(M3_MODEL_CANDIDATES).length}종 전부 apiModelId · body 양쪽 apiModelId 경유 · ` +
+      `haiku→${apiModelIdFor('claude-haiku-4.5')} · cacheKey 는 라벨 유지`)
+  }
 }
 
 // ── 출력 ────────────────────────────────────────────────

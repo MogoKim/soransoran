@@ -18,7 +18,9 @@
 
 // 🔴 상한 도달 판정은 계약에 있다. 여기서 다시 쓰지 않는다 —
 //    두 곳에 각각 적으면 한쪽만 바뀌는 날이 온다(20자 임계값에서 같은 결정을 했다).
-import { isMaxTokensReached } from './voice-m3-contract.mjs'
+// 🔴 provider 에 보낼 **실제 모델 ID** 도 계약에서 가져온다.
+//    내부 라벨을 그대로 body.model 에 넣어 Haiku 30건이 HTTP_404 로 전멸했다(2026-08-27).
+import { isMaxTokensReached, apiModelIdFor } from './voice-m3-contract.mjs'
 
 /** provider 별 key 환경변수. 🔴 값이 아니라 이름이다 */
 export const PROVIDER_KEY_ENV = {
@@ -140,15 +142,19 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
           'content-type': 'application/json',
           authorization: `Bearer ${key}`,
         }
+    // 🔴 **`req.model` 을 그대로 넣지 않는다.** 그것은 우리가 붙인 내부 라벨이고,
+    //    provider 가 아는 이름이 아니다. `claude-haiku-4.5` 를 그대로 보냈다가
+    //    30건이 전부 HTTP_404 로 돌아왔다(2026-08-27, 비용 0원).
+    const apiModelId = apiModelIdFor(req.model)
     const body = isAnthropic
       ? {
-          model: req.model,
+          model: apiModelId,
           max_tokens: req.maxOutputTokens,
           system: req.systemPrompt,
           messages: [{ role: 'user', content: req.userPayload }],
         }
       : {
-          model: req.model,
+          model: apiModelId,
           max_completion_tokens: req.maxOutputTokens,
           messages: [
             { role: 'system', content: req.systemPrompt },
