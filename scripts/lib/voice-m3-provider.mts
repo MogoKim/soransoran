@@ -31,21 +31,24 @@ const ENDPOINT = {
 } as const
 
 /**
- * key 가 있는가. 🔴 **값을 반환하지 않는다.**
- *    있는지 없는지와, 사람이 "그 키가 맞나" 를 알아볼 최소한의 힌트만 준다.
+ * key 가 있는가. 🔴 **값을 한 조각도 반환하지 않는다.**
+ *
+ * 초판은 `sk-a…` 같은 앞 4자 힌트를 돌려줬다. 그것도 값의 일부다 —
+ * prefix 만으로 어느 provider 의 어떤 종류 키인지가 드러나고,
+ * 로그는 우리가 통제하지 못하는 곳(터미널 기록 · CI · 화면 공유)에 남는다.
+ *
+ * 🔴 반환은 **환경변수 이름과 boolean 뿐**이다.
+ *    길이도 주지 않는다. 길이는 키 종류를 좁히는 단서가 된다.
  */
 export function keyStatus(model: string): {
   envName: string
   present: boolean
-  /** `sk-a…` 형태. 🔴 앞 4자뿐이고 나머지는 어디에도 남지 않는다 */
-  hint: string
 } {
   const envName = (PROVIDER_KEY_ENV as Record<string, string>)[model] ?? ''
   const raw = envName ? (process.env[envName] ?? '') : ''
   return {
     envName,
     present: raw.trim().length > 0,
-    hint: raw.trim().length > 0 ? `${raw.slice(0, 4)}…` : '(없음)',
   }
 }
 

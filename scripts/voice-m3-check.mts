@@ -495,25 +495,45 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   for (const [label, code] of [['run', runCode], ['provider', providerCode]] as const) {
     for (const l of code.split('\n').filter((x) => /console\.(log|error)/.test(x))) {
       for (const e of ENVS) if (l.includes(e) && !l.includes('envName')) offenders.push(`${label} 로그에 ${e}`)
-      if (/\$\{[^}]*\bkey\b[^}]*\}/.test(l) && !/keyStatus|envName|hint/.test(l)) offenders.push(`${label} 로그에 key 변수`)
+      if (/\$\{[^}]*\bkey\b[^}]*\}/.test(l) && !/keyStatus|envName/.test(l)) offenders.push(`${label} 로그에 key 변수`)
     }
   }
-  // keyStatus 는 값을 반환하지 않아야 한다
+
+  // 🔴 keyStatus 는 **envName 과 boolean 만** 돌려준다.
+  //    초판은 `sk-a…` 앞 4자를 힌트로 줬는데 그것도 값의 일부다 —
+  //    prefix 만으로 provider 와 키 종류가 드러나고, 로그는 우리가 통제하지 못한다.
   const st = keyStatus('gpt-5-nano')
-  if (Object.keys(st).some((k) => !['envName', 'present', 'hint'].includes(k))) {
-    offenders.push('keyStatus 가 값을 노출한다')
+  const allowed = ['envName', 'present']
+  const extra = Object.keys(st).filter((k) => !allowed.includes(k))
+  if (extra.length > 0) offenders.push(`keyStatus 가 ${extra.join(',')} 를 노출한다`)
+  if (typeof (st as Record<string, unknown>).present !== 'boolean') {
+    offenders.push('present 가 boolean 이 아니다')
   }
-  if (st.hint.length > 8) offenders.push(`hint 가 ${st.hint.length}자 — 너무 길다`)
+  // 🔴 값을 잘라 쓰는 코드가 **아예 없어야** 한다. 길이도 주지 않는다
+  for (const [pat, why] of [
+    [/hint\s*[:=]/, 'hint 필드'],
+    [/preview\s*[:=]/, 'preview 필드'],
+    [/raw\.slice\(/, 'key 를 잘라 쓴다'],
+    [/raw\.substring\(|raw\.substr\(/, 'key 를 잘라 쓴다'],
+    [/\.length\s*\}/, 'key 길이를 문자열에 넣는다'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(providerCode)) offenders.push(`provider 에 ${why}`)
+  }
   if (!/present: raw\.trim\(\)\.length > 0/.test(providerCode)) offenders.push('존재 여부를 boolean 으로 다루지 않는다')
-  // 🔴 **정적으로도 본다.** key 가 없는 환경에서는 위 런타임 검사가 통과해 버린다 —
-  //    hint 가 '' 라 길이 검사에 걸리지 않기 때문이다(역검증에서 실제로 뚫렸다).
-  //    hint 는 반드시 잘라 쓴 값이어야 한다.
-  if (!/hint:\s*raw\.trim\(\)\.length > 0 \? `\$\{raw\.slice\(0, 4\)\}/.test(providerCode)) {
-    offenders.push('hint 가 key 를 잘라 쓰지 않는다')
+
+  // 🔴 로그 문구에 key prefix 가 나오면 안 된다
+  for (const [label, code] of [['run', runCode], ['provider', providerCode]] as const) {
+    for (const l of code.split('\n').filter((x) => /console\.(log|error)/.test(x))) {
+      if (/sk-proj|sk-ant|['"`]sk-/.test(l)) offenders.push(`${label} 로그에 key prefix`)
+      if (/k\.hint|status\.hint|\.hint\b/.test(l)) offenders.push(`${label} 로그에 hint`)
+    }
   }
-  if (/hint:\s*raw\s*[,}]/.test(providerCode)) offenders.push('hint 가 key 전체다')
-  if (offenders.length) bad('API key 로그 유출 0', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('API key 로그 유출 0', 'guard', `boolean + 앞 4자 힌트만 (${st.hint})`)
+  // 🔴 존재 표기는 OK/없음 만 — 값이 섞일 자리가 없다
+  if (!/k\.present \? 'OK' : '없음'/.test(runCode)) {
+    offenders.push("존재 표기가 OK/없음 형태가 아니다")
+  }
+  if (offenders.length) bad('API key 유출 0 (힌트·길이 포함)', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('API key 유출 0 (힌트·길이 포함)', 'guard', `envName+boolean 만 · slice 0 · prefix 0 · OK/없음 표기`)
 }
 
 // ── ⑲ 유료 게이트 — 하나라도 없으면 호출 불가 ───────────
