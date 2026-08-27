@@ -5,11 +5,12 @@
  * 정본: docs/operations/2026-08-27-voice-m3-model-selection-criteria.md
  *       docs/operations/2026-08-27-voice-m3-llm-experiment-contract.md
  *
- * 🔴 dry-run 이 기본이다. 유료 호출은 게이트 9개를 전부 통과해야 한다.
+ * 🔴 dry-run 이 기본이다. 유료 호출은 게이트 10개를 전부 통과해야 한다.
  *    이 저장소에서 처음으로 **돈이 나갈 수 있는 명령**이다.
  *
- * 🔴 캐시가 있으면 부르지 않는다
- *    cacheKey 8요소가 같으면 재호출하지 않는다. 캐시 미스 하나가 돈이다.
+ * 🔴 **성공한** 캐시가 있으면 부르지 않는다
+ *    cacheKey 8요소가 같고 status='succeeded' 면 재호출하지 않는다. 캐시 미스 하나가 돈이다.
+ *    반대로 **실패한 캐시는 다시 부른다** — 실패는 답이 아니라 시도의 기록이다(2026-08-27).
  *
  * 🔴 저장 전에 원문 유출을 대조한다
  *    LLM 출력에 원문 · 댓글이 20자 이상 연속으로 있으면 **저장하지 않고 skipped 처리**한다.
@@ -32,6 +33,8 @@ import {
   M3_CAPS, M3_EXPERIMENT_STAGES, M3_MODEL_CANDIDATES,
   buildCacheKey, estimateCost, checkCaps, pricingFor, assertNoSourceLeak,
   M3_FORBIDDEN_ADDRESS_TERMS,
+  maxOutputTokensFor, outputTokenEstimateFor, outputTokenPolicyFor,
+  classifyJsonFailure, formatDiagnostics, type JsonFailureKind,
 } from './lib/voice-m3-contract.mjs'
 import {
   selectStratifiedSample, validateSample, formatSampleRow, SAMPLE_AXES,
@@ -72,6 +75,9 @@ function paidCallGate(model: string | undefined, stage: string | undefined, limi
   if (M3_CAPS.tokenCap > 500_000) blocked.push(`tokenCap ${M3_CAPS.tokenCap} 이 상한 500000 초과`)
   if (model) {
     try { pricingFor(model) } catch { blocked.push(`${model} 의 공식 단가가 없다`) }
+    // 🔴 출력 상한이 등록되지 않은 모델은 부르지 않는다.
+    //    1,000 사고(2026-08-27)가 이름만 바꿔 되풀이되는 것을 막는 자리다.
+    try { maxOutputTokensFor(model) } catch { blocked.push(`${model} 의 출력 토큰 정책이 없다`) }
     if (!keyStatus(model).present) blocked.push(`${keyStatus(model).envName} 가 없다`)
   }
   return { ok: blocked.length === 0, blocked }
@@ -108,6 +114,8 @@ async function main(): Promise<void> {
   }
 
   const pricing = MODEL ? pricingFor(MODEL) : undefined
+  // 🔴 상한은 모델이 정한다. 하드코딩 1,000 이 1차 실행을 통째로 태웠다(2026-08-27)
+  const tokenPolicy = MODEL ? outputTokenPolicyFor(MODEL) : undefined
   const modelForKey = MODEL ?? 'undetermined'
   const unaoUrl = loadUnaoReadonlyUrl()
 
@@ -116,6 +124,14 @@ async function main(): Promise<void> {
   console.log(`  stage=${STAGE ?? '(미지정)'} · model=${modelForKey} · limit=${LIMIT}`)
   if (pricing) {
     console.log(`  단가 $${pricing.inputPerMTok}/$${pricing.outputPerMTok} per MTok · 출처 ${pricing.source} (${pricing.checkedAt})`)
+  }
+  if (tokenPolicy) {
+    console.log(
+      `  출력 상한 ${tokenPolicy.maxOutputTokens} tok` +
+        ` · reasoning ${tokenPolicy.reasoning ? '포함' : '없음'}` +
+        ` · 추정 ${tokenPolicy.estimatedOutputTokens} tok/건`,
+    )
+    console.log(`     근거: ${tokenPolicy.rationale}`)
   }
   if (MODEL) {
     const k = keyStatus(MODEL)
@@ -264,13 +280,25 @@ async function main(): Promise<void> {
     }
 
     const uniqueKeys = new Set(prepared.map((p) => p.cacheKey))
-    const cost = estimateCost(totalChars, prepared.length, pricing)
+    // 🔴 출력 추정을 모델에서 가져온다. reasoning 토큰도 출력으로 과금되므로
+    //    reasoning 모델은 상한 그대로를 최악값으로 잡는다(계약 §E 보정 2026-08-27)
+    const outPerItem = MODEL ? outputTokenEstimateFor(MODEL) : undefined
+    const cost = estimateCost(totalChars, prepared.length, pricing, outPerItem)
     const caps = checkCaps(cost, prepared.length)
+
+    // 🔴 이미 성공한 캐시는 부르지 않는다. **실패한 캐시는 다시 부른다**
+    const existing = await prisma.voiceM3Cache.findMany({
+      where: { cacheKey: { in: prepared.map((p) => p.cacheKey) } },
+      select: { cacheKey: true, status: true },
+    })
+    const reusable = existing.filter((c) => c.status === 'succeeded').length
+    const retryable = existing.length - reusable
 
     console.log('\n  cacheKey · 비용')
     console.log(`     cacheKey 고유    ${uniqueKeys.size}/${prepared.length} ${uniqueKeys.size === prepared.length ? '(1건 1키)' : '🔴 중복'}`)
+    console.log(`     기존 캐시        재사용 ${reusable}건(succeeded) · 재시도 ${retryable}건(failed·skipped) · 신규 ${prepared.length - existing.length}건`)
     console.log(`     입력 토큰(추정)   ${cost.estimatedInputTokens.toLocaleString()} / tokenCap ${M3_CAPS.tokenCap.toLocaleString()}`)
-    console.log(`     출력 토큰(추정)   ${cost.estimatedOutputTokens.toLocaleString()}`)
+    console.log(`     출력 토큰(추정)   ${cost.estimatedOutputTokens.toLocaleString()}${outPerItem ? ` (${outPerItem}/건)` : ''}`)
     console.log(`     합계 토큰(추정)   ${cost.estimatedTotalTokens.toLocaleString()}`)
     console.log(`     예상 비용         ${cost.estimatedCostUsd === null ? '🔴 산출 불가 (공식 단가 미확정)' : `$${cost.estimatedCostUsd}`} / dollarCap $${M3_CAPS.dollarCap}`)
     console.log(`     cap 판정          ${caps.ok ? '✅ 통과' : '🔴 ' + caps.violations.join(' / ')}`)
@@ -304,15 +332,23 @@ async function main(): Promise<void> {
     console.log(`\n  VoiceM3Run ${run.id} 시작\n`)
 
     const instruction = buildInstruction()
+    // 🔴 하드코딩 1,000 이 1차 실행 5건을 전부 잘랐다. 이제 모델이 정한다
+    const maxOut = maxOutputTokensFor(MODEL as string)
     let attempted = 0, succeeded = 0, failed = 0, skipped = 0, cacheHit = 0, cacheMiss = 0
     let inTok = 0, outTok = 0, spent = 0, consecutiveFail = 0
+    /** 실패 사유 분포. 🔴 Run.errorSummary 에 남긴다 — 사유를 버리지 않는다 */
+    const failureKinds = new Map<string, number>()
 
     for (const item of prepared) {
-      // 🔴 캐시가 있으면 부르지 않는다
+      // 🔴 **성공한 캐시만** 재사용한다.
+      //    초판은 행이 존재하기만 하면 cache hit 으로 셌다. 그래서 2026-08-27
+      //    1차 실행에서 남은 실패 5건이 재실행을 영구히 막는 상태가 됐다 —
+      //    고쳐도 같은 cacheKey 라 다시 부를 수 없고, 실패가 성공처럼 재사용된다.
+      //    실패는 "이 조합을 시도했다" 는 기록이지 "답을 얻었다" 가 아니다.
       const cached = await prisma.voiceM3Cache.findUnique({
-        where: { cacheKey: item.cacheKey }, select: { id: true },
+        where: { cacheKey: item.cacheKey }, select: { id: true, status: true },
       })
-      if (cached) {
+      if (cached && cached.status === 'succeeded') {
         cacheHit += 1
         await prisma.voiceM3CostEvent.create({
           data: { runId: run.id, cacheId: cached.id, eventType: 'cache_hit', model: modelForKey },
@@ -320,6 +356,14 @@ async function main(): Promise<void> {
         continue
       }
       cacheMiss += 1
+      // 🔴 이전에 실패한 호출이 몇 번 있었는가. 이번 호출의 retryAttempt 는 그 뒤를 잇는다 —
+      //    0 부터 다시 세면 "몇 번이나 태웠는가" 를 비용 원장에서 알 수 없다.
+      const priorCalls = cached
+        ? await prisma.voiceM3CostEvent.count({ where: { cacheId: cached.id, eventType: 'call' } })
+        : 0
+      if (cached) {
+        console.log(`     ${item.row.sourceRef} · 이전 ${cached.status} 캐시 재시도 (지금까지 호출 ${priorCalls}회)`)
+      }
 
       // 🔴 cap 을 매 건 다시 본다. retry 비용까지 여기 반영된다
       if (spent >= M3_CAPS.dollarCap) {
@@ -339,7 +383,7 @@ async function main(): Promise<void> {
         model: MODEL as 'gpt-5-nano' | 'claude-haiku-4.5',
         systemPrompt: instruction,
         userPayload: item.payloadText,
-        maxOutputTokens: 1000,
+        maxOutputTokens: maxOut,
         timeoutMs: M3_CAPS.timeoutSec * 1000,
       })
       attempted += 1
@@ -349,14 +393,15 @@ async function main(): Promise<void> {
         retry += 1
         await prisma.voiceM3CostEvent.create({
           data: {
-            runId: run.id, eventType: 'retry', model: modelForKey, retryAttempt: retry,
+            runId: run.id, eventType: 'retry', model: modelForKey,
+            retryAttempt: priorCalls + retry,
             reason: response.errorCode ?? 'unknown',
           },
         })
         response = await callProvider({
           model: MODEL as 'gpt-5-nano' | 'claude-haiku-4.5',
           systemPrompt: instruction, userPayload: item.payloadText,
-          maxOutputTokens: 1000, timeoutMs: M3_CAPS.timeoutSec * 1000,
+          maxOutputTokens: maxOut, timeoutMs: M3_CAPS.timeoutSec * 1000,
         })
       }
 
@@ -371,8 +416,9 @@ async function main(): Promise<void> {
       // 🔴 저장 전 원문 유출 대조. 걸리면 저장하지 않고 skipped
       let status: 'succeeded' | 'failed' | 'skipped' = response.ok ? 'succeeded' : 'failed'
       let errorCode = response.errorCode
-      let errorMessage = response.errorMessage
+      let baseMessage = response.errorMessage
       let output: Prisma.InputJsonValue | undefined
+      let jsonFailure: JsonFailureKind | null = null
 
       if (response.ok) {
         const leak = assertNoSourceLeak(response.rawText, item.sourceTexts)
@@ -380,36 +426,65 @@ async function main(): Promise<void> {
         if (leak.leaked) {
           status = 'skipped'
           errorCode = 'SOURCE_LEAK'
-          errorMessage = '출력에 원문 20자 이상 연속 일치가 있어 저장하지 않았다'
+          baseMessage = '출력에 원문 20자 이상 연속 일치가 있어 저장하지 않았다'
         } else if (forbidden.length > 0) {
           status = 'skipped'
           errorCode = 'FORBIDDEN_ADDRESS'
-          errorMessage = `출력에 생성 금지 호칭 ${forbidden.length}종이 있어 저장하지 않았다`
+          baseMessage = `출력에 생성 금지 호칭 ${forbidden.length}종이 있어 저장하지 않았다`
         } else {
           try {
             output = JSON.parse(response.rawText) as Prisma.InputJsonValue
           } catch {
             status = 'failed'
             errorCode = 'JSON_PARSE'
-            errorMessage = 'JSON 파싱 실패'
+            // 🔴 "JSON 파싱 실패" 한 줄만 남긴 것이 1차 실행의 진단 공백이었다.
+            //    **모양**을 분류해 남긴다 — 내용이 아니라 모양이다
+            jsonFailure = classifyJsonFailure(response.rawText)
+            baseMessage = null
           }
         }
       }
 
-      const cache = await prisma.voiceM3Cache.create({
-        data: {
-          cacheKey: item.cacheKey, voiceSourceId: item.row.id,
-          origin: 'unao_cafe', sourceRef: item.row.sourceRef,
-          ruleVersion: ruleVersionById.get(item.row.id) ?? 'none',
-          taskVersion: M3_TASK_VERSION, model: modelForKey,
-          promptVersion: M3_PROMPT_VERSION, outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
-          status,
-          output: status === 'succeeded' ? output : undefined,
-          inputTokens: response.inputTokens, outputTokens: response.outputTokens,
-          totalTokens: response.inputTokens + response.outputTokens,
-          estimatedCostUsd: new Prisma.Decimal(callCost.toFixed(4)),
-          errorCode, errorMessage,
-        },
+      // 🔴 진단은 수치와 분류값뿐이다. 입력 타입에 응답 본문이 들어갈 자리가 없다
+      const diagnostics = formatDiagnostics({
+        finishReason: response.finishReason,
+        outputTokens: response.outputTokens,
+        maxOutputTokens: maxOut,
+        reasoningTokens: response.reasoningTokens,
+        responseChars: response.responseChars,
+        jsonFailure,
+        maxTokensReached: response.maxTokensReached,
+      })
+      const errorMessage = status === 'succeeded'
+        ? null
+        : [baseMessage, diagnostics].filter(Boolean).join(' · ')
+      if (status !== 'succeeded') {
+        const kind = jsonFailure ? `${errorCode}:${jsonFailure}` : (errorCode ?? 'unknown')
+        failureKinds.set(kind, (failureKinds.get(kind) ?? 0) + 1)
+      }
+
+      const cacheFields = {
+        voiceSourceId: item.row.id,
+        origin: 'unao_cafe', sourceRef: item.row.sourceRef,
+        ruleVersion: ruleVersionById.get(item.row.id) ?? 'none',
+        taskVersion: M3_TASK_VERSION, model: modelForKey,
+        promptVersion: M3_PROMPT_VERSION, outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
+        status,
+        // 🔴 성공했을 때만 산출물을 넣는다. 실패면 명시적으로 비운다 —
+        //    undefined 로 두면 update 경로에서 이전 값이 남는다
+        output: status === 'succeeded' && output !== undefined ? output : Prisma.DbNull,
+        inputTokens: response.inputTokens, outputTokens: response.outputTokens,
+        totalTokens: response.inputTokens + response.outputTokens,
+        estimatedCostUsd: new Prisma.Decimal(callCost.toFixed(4)),
+        errorCode, errorMessage,
+      }
+      // 🔴 create 가 아니라 upsert 다. cacheKey 는 UNIQUE 이므로
+      //    실패 캐시를 다시 부른 뒤 create 하면 P2002 로 터진다 —
+      //    "실패는 재시도 가능해야 한다" 는 요구가 여기까지 이어진다
+      const cache = await prisma.voiceM3Cache.upsert({
+        where: { cacheKey: item.cacheKey },
+        create: { cacheKey: item.cacheKey, ...cacheFields },
+        update: { ...cacheFields, generatedAt: new Date() },
         select: { id: true },
       })
       await prisma.voiceM3CostEvent.create({
@@ -418,7 +493,10 @@ async function main(): Promise<void> {
           inputTokens: response.inputTokens, outputTokens: response.outputTokens,
           totalTokens: response.inputTokens + response.outputTokens,
           estimatedCostUsd: new Prisma.Decimal(callCost.toFixed(4)),
-          retryAttempt: retry, reason: errorCode,
+          // 🔴 이전 실행의 호출 횟수를 이어받는다. 0 부터 다시 세면
+          //    한 건에 몇 번 돈을 썼는지 비용 원장에서 알 수 없다
+          retryAttempt: priorCalls + retry,
+          reason: errorCode,
         },
       })
 
@@ -426,7 +504,11 @@ async function main(): Promise<void> {
       else if (status === 'skipped') { skipped += 1; consecutiveFail = 0 }
       else { failed += 1; consecutiveFail += 1 }
       // 🔴 원문이 아니라 상태와 수치만 찍는다
-      console.log(`     ${item.row.sourceRef} → ${status}${errorCode ? ` (${errorCode})` : ''} · ${response.inputTokens}+${response.outputTokens} tok · $${callCost.toFixed(5)}`)
+      console.log(
+        `     ${item.row.sourceRef} → ${status}${errorCode ? ` (${errorCode})` : ''}` +
+          ` · ${response.inputTokens}+${response.outputTokens} tok · $${callCost.toFixed(5)}` +
+          `\n        ${diagnostics}`,
+      )
     }
 
     await prisma.voiceM3Run.update({
@@ -437,6 +519,10 @@ async function main(): Promise<void> {
         attempted, succeeded, failed, skipped, cacheHit, cacheMiss,
         inputTokens: inTok, outputTokens: outTok, totalTokens: inTok + outTok,
         estimatedCostUsd: new Prisma.Decimal(spent.toFixed(4)),
+        // 🔴 실패 사유를 버리지 않는다. 다음 실행의 입력이다
+        errorSummary: failureKinds.size === 0
+          ? null
+          : [...failureKinds.entries()].map(([k, v]) => `${k}=${v}`).join(' · '),
       },
     })
 
@@ -444,6 +530,9 @@ async function main(): Promise<void> {
     console.log(`     시도 ${attempted} · 성공 ${succeeded} · 실패 ${failed} · skip ${skipped}`)
     console.log(`     cache hit ${cacheHit} · miss ${cacheMiss}`)
     console.log(`     토큰 ${inTok.toLocaleString()}+${outTok.toLocaleString()} · 실제 비용 $${spent.toFixed(4)} / cap $${M3_CAPS.dollarCap}`)
+    if (failureKinds.size > 0) {
+      console.log(`     실패 사유       ${[...failureKinds.entries()].map(([k, v]) => `${k}=${v}`).join(' · ')}`)
+    }
     console.log('\n  🔴 다음은 사람이 읽는다. 점수로 발행을 자동화하지 않는다.\n')
   } finally {
     await unao.end()

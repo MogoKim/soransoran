@@ -19,6 +19,8 @@ import {
   M3_ALLOWED_ADDRESS_TERMS, M3_FORBIDDEN_ADDRESS_TERMS, M3_LEAK_RUN_MIN,
   M3_MODEL_CANDIDATES, M3_EXPERIMENT_PER_MODEL, M3_EXPERIMENT_STAGES, M3_STRATA_AXES,
   buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak, pricingFor,
+  ESTIMATED_OUTPUT_TOKENS_PER_ITEM, outputTokenPolicyFor,
+  classifyJsonFailure, isMaxTokensReached, formatDiagnostics,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 import {
@@ -558,7 +560,9 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (!/blocked\.push[\s\S]{0,60}--stage/.test(gateBody)) offenders.push('게이트가 --stage 를 막지 않는다')
   if (!/!model/.test(gateBody)) offenders.push('게이트에 model 조건 없음')
   if (!/!stage/.test(gateBody)) offenders.push('게이트에 stage 조건 없음')
-  for (const cond of ['itemLimit', 'dollarCap', 'tokenCap', 'pricingFor', 'keyStatus']) {
+  // 🔴 maxOutputTokensFor 는 2026-08-27 에 추가됐다.
+  //    출력 상한이 등록되지 않은 모델을 부르면 1,000 사고가 이름만 바꿔 되풀이된다
+  for (const cond of ['itemLimit', 'dollarCap', 'tokenCap', 'pricingFor', 'keyStatus', 'maxOutputTokensFor']) {
     if (!gateBody.includes(cond)) offenders.push(`게이트에 ${cond} 검사 없음`)
   }
   // 🔴 게이트 실패 시 **아무것도 하지 않고** 멈춰야 한다
@@ -571,8 +575,8 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (dryReturn === -1 || firstCall === -1 || firstCall < dryReturn) {
     offenders.push('dry-run 분기보다 앞에서 provider 를 부른다')
   }
-  if (offenders.length) bad('유료 게이트 9중', 'guard', `🔴 ${offenders.join(' / ')}`)
-  else ok('유료 게이트 9중', 'guard', 'apply+confirm+model+stage+limit+dollar+token+단가+key · 실패 시 즉시 중단')
+  if (offenders.length) bad('유료 게이트 10중', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('유료 게이트 10중', 'guard', 'apply+confirm+model+stage+limit+dollar+token+단가+출력상한+key · 실패 시 즉시 중단')
 }
 
 // ── ⑳ 저장 전 원문 유출 대조가 실행 경로에 있다 ─────────
@@ -581,7 +585,8 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (!/assertNoSourceLeak\(/.test(runCode)) offenders.push('run 에 유출 대조가 없다')
   // 🔴 대조가 **저장보다 앞**에 있어야 한다
   const leakAt = runCode.indexOf('assertNoSourceLeak(')
-  const saveAt = runCode.indexOf('voiceM3Cache.create(')
+  // 🔴 저장은 upsert 다(2026-08-27). 실패 캐시를 다시 부른 뒤 create 하면 UNIQUE 로 터진다
+  const saveAt = runCode.indexOf('voiceM3Cache.upsert(')
   if (leakAt === -1 || saveAt === -1 || leakAt > saveAt) offenders.push('유출 대조가 저장 뒤에 있다')
   // 걸리면 저장하지 않고 skipped
   if (!/leak\.leaked[\s\S]{0,200}skipped/.test(runCode)) offenders.push('유출 시 skipped 처리가 없다')
@@ -655,7 +660,7 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   const offenders: string[] = []
   // 🔴 write 는 전부 dry-run 분기 **뒤**에 있어야 한다
   const dryReturn = runCode.indexOf('if (!willCallProvider)')
-  for (const w of ['voiceM3Run.create(', 'voiceM3Cache.create(', 'voiceM3CostEvent.create(', 'voiceM3Run.update(']) {
+  for (const w of ['voiceM3Run.create(', 'voiceM3Cache.upsert(', 'voiceM3CostEvent.create(', 'voiceM3Run.update(']) {
     const at = runCode.indexOf(w)
     if (at === -1) { offenders.push(`${w} 를 찾지 못했다`); continue }
     if (at < dryReturn) offenders.push(`${w} 가 dry-run 분기보다 앞에 있다`)
@@ -666,6 +671,197 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   }
   if (offenders.length) bad('dry-run DB write 0 · Micro Seed 0', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('dry-run DB write 0 · Micro Seed 0', 'guard', 'write 4종 전부 게이트 뒤 · Micro Seed 접점 0')
+}
+
+// ══════════════════════════════════════════════════════════
+// 2026-08-27 1차 실행 실패 보정 — 🔴 여기 다섯은 사고가 만든 fixture 다
+//
+//   gpt-5-nano 30건 중 5건 전부 JSON_PARSE 실패. 출력 토큰이 5건 모두 **정확히 1000**.
+//   원인은 모델 품질이 아니라 우리 쪽 하드코딩 상한이었고,
+//   그것을 확정하지 못한 이유는 진단을 저장하지 않았기 때문이다.
+//   같은 두 결함이 다시 들어오지 못하게 막는다.
+// ══════════════════════════════════════════════════════════
+
+// ── ㉔ 출력 상한 부족으로 잘린 JSON 을 잡는다 ───────────
+{
+  const offenders: string[] = []
+  // 🔴 하드코딩 1000 이 다시 들어오면 안 된다
+  if (/maxOutputTokens:\s*1000\b/.test(runCode)) offenders.push('run 에 maxOutputTokens 1000 하드코딩')
+  if (!/maxOutputTokens:\s*maxOut\b/.test(runCode)) offenders.push('run 이 모델별 상한을 쓰지 않는다')
+  if (!/maxOutputTokensFor\(/.test(runCode)) offenders.push('run 이 maxOutputTokensFor 를 부르지 않는다')
+
+  // 🔴 reasoning 모델은 상한이 산출물(450)보다 충분히 커야 한다
+  const nano = outputTokenPolicyFor('gpt-5-nano')
+  if (!nano.reasoning) offenders.push('gpt-5-nano 가 reasoning 모델로 등록되지 않았다')
+  if (nano.maxOutputTokens <= 1000) offenders.push(`gpt-5-nano 상한이 ${nano.maxOutputTokens} — 실패한 값 이하다`)
+  if (nano.maxOutputTokens - ESTIMATED_OUTPUT_TOKENS_PER_ITEM < 1000) {
+    offenders.push('추론 예산이 1,000 tok 미만이다')
+  }
+  // 🔴 reasoning 토큰도 출력으로 과금된다. 추정이 상한을 따라가야 정직하다
+  if (nano.estimatedOutputTokens < nano.maxOutputTokens) {
+    offenders.push('reasoning 모델인데 비용 추정이 상한보다 작다 (과소추정)')
+  }
+
+  // 🔴 잘린 모양을 실제로 구분하는가
+  const cases: Array<[string, string]> = [
+    ['', 'empty'],
+    ['{"naturalnessScore": 70, "voiceRet', 'truncated'],
+    ['```json\n{"a":1}\n```', 'fenced'],
+    ['죄송합니다. 답변할 수 없습니다.', 'not_json'],
+    ['{"a": 1,}', 'invalid'],
+  ]
+  for (const [text, want] of cases) {
+    const got = classifyJsonFailure(text)
+    if (got !== want) offenders.push(`classifyJsonFailure("${want}") 가 ${got}`)
+  }
+  // 🔴 종료 사유가 없어도 토큰 대조로 잡아야 한다 — 1차 실행이 정확히 그 상황이었다
+  if (!isMaxTokensReached('', 1000, 1000)) offenders.push('토큰 대조로 상한 도달을 잡지 못한다')
+  if (!isMaxTokensReached('length', 10, 4000)) offenders.push('finish=length 를 상한 도달로 보지 않는다')
+  if (!isMaxTokensReached('max_tokens', 10, 4000)) offenders.push('Anthropic max_tokens 를 놓친다')
+  if (isMaxTokensReached('stop', 500, 4000)) offenders.push('정상 종료를 상한 도달로 오판한다')
+
+  // cap 은 그대로여야 한다 — 상한을 올렸다고 예산을 올리지 않는다
+  if (M3_CAPS.tokenCap !== 500_000) offenders.push(`tokenCap 이 ${M3_CAPS.tokenCap}`)
+  if (M3_CAPS.dollarCap !== 5) offenders.push(`dollarCap 이 ${M3_CAPS.dollarCap}`)
+  // 🔴 상한을 올려도 itemLimit 이 tokenCap 안에 들어와야 한다
+  const worstPerItem = 1745 + nano.maxOutputTokens
+  if (worstPerItem * M3_CAPS.itemLimit > M3_CAPS.tokenCap) {
+    offenders.push(`itemLimit ${M3_CAPS.itemLimit} × 최악 ${worstPerItem} tok 이 tokenCap 을 넘는다`)
+  }
+  if (offenders.length) bad('출력 상한 부족 · 잘린 JSON 감지', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('출력 상한 부족 · 잘린 JSON 감지', 'guard',
+    `nano ${nano.maxOutputTokens} tok(reasoning) · 5종 분류 정확 · cap 불변 · 최악 ${worstPerItem}×${M3_CAPS.itemLimit} < ${M3_CAPS.tokenCap}`)
+}
+
+// ── ㉕ 실패한 캐시가 재실행을 막지 않는다 ───────────────
+{
+  const offenders: string[] = []
+  // 🔴 cache hit 판정에 status 조건이 있어야 한다
+  if (!/cached && cached\.status === 'succeeded'/.test(runCode)) {
+    offenders.push('cache hit 판정이 status 를 보지 않는다')
+  }
+  if (!/status:\s*true/.test(runCode)) offenders.push('캐시 조회가 status 를 읽지 않는다')
+  // 🔴 저장이 upsert 여야 한다. create 면 재시도가 UNIQUE 로 터진다
+  if (/voiceM3Cache\.create\(/.test(runCode)) offenders.push('run 이 아직 create 로 저장한다 (재시도 시 P2002)')
+  if (!/voiceM3Cache\.upsert\(/.test(runCode)) offenders.push('run 이 upsert 로 저장하지 않는다')
+  if (!/where:\s*\{\s*cacheKey: item\.cacheKey\s*\}/.test(runCode)) offenders.push('upsert 가 cacheKey 로 찾지 않는다')
+  // 🔴 재시도 비용이 retryAttempt 로 이어져야 한다 — 0 부터 다시 세면 안 된다
+  if (!/priorCalls\s*\+\s*retry/.test(runCode)) offenders.push('retryAttempt 가 이전 호출 수를 잇지 않는다')
+  if (!/eventType:\s*'call'/.test(runCode)) offenders.push("이전 call 이벤트를 세지 않는다")
+  if (!/voiceM3CostEvent\.count\(/.test(runCode)) offenders.push('이전 호출 횟수를 조회하지 않는다')
+  // 🔴 실패 재시도 시 이전 산출물이 남으면 안 된다
+  if (!/Prisma\.DbNull/.test(runCode)) offenders.push('실패 시 output 을 명시적으로 비우지 않는다')
+  if (offenders.length) bad('failed 캐시는 재시도 가능', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('failed 캐시는 재시도 가능', 'guard', 'succeeded 만 hit · upsert 저장 · retryAttempt 누적 · output 초기화')
+}
+
+// ── ㉖ succeeded 캐시만 cache hit 으로 센다 ─────────────
+{
+  const offenders: string[] = []
+  // 🔴 cacheHit 증가가 succeeded 분기 안에만 있어야 한다
+  const hitAt = runCode.indexOf('cacheHit += 1')
+  const guardAt = runCode.indexOf("cached.status === 'succeeded'")
+  if (hitAt === -1) offenders.push('cacheHit 증가를 찾지 못했다')
+  else if (guardAt === -1 || guardAt > hitAt) offenders.push('cacheHit 증가가 status 조건보다 앞에 있다')
+  // 🔴 cache_hit 이벤트도 succeeded 일 때만
+  const evAt = runCode.indexOf("eventType: 'cache_hit'")
+  if (evAt === -1) offenders.push('cache_hit 이벤트가 없다')
+  else if (guardAt === -1 || guardAt > evAt) offenders.push('cache_hit 이벤트가 status 조건 밖에 있다')
+  // 🔴 실패 캐시는 miss 로 세어 다시 부른다
+  const missAt = runCode.indexOf('cacheMiss += 1')
+  if (missAt === -1 || missAt < hitAt) offenders.push('실패 캐시가 miss 로 이어지지 않는다')
+  // 🔴 dry-run 요약도 재사용 가능 건수만 재사용이라고 말해야 한다
+  if (!/status === 'succeeded'\)\.length/.test(runCode)) {
+    offenders.push('dry-run 요약이 succeeded 만 재사용으로 세지 않는다')
+  }
+  // 캐시 상태 3종이 스키마와 같은가
+  for (const s of ['succeeded', 'failed', 'skipped']) {
+    if (!runCode.includes(`'${s}'`)) offenders.push(`캐시 상태 ${s} 를 다루지 않는다`)
+  }
+  if (offenders.length) bad('succeeded 캐시만 재사용', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('succeeded 캐시만 재사용', 'policy', 'hit·cache_hit 이벤트 모두 succeeded 분기 안 · 실패는 miss')
+}
+
+// ── ㉗ 종료 사유가 없으면 실패로 처리한다 ───────────────
+{
+  const offenders: string[] = []
+  // 🔴 provider 가 두 provider 의 종료 사유를 각각 읽어야 한다
+  if (!/finish_reason/.test(providerCode)) offenders.push('OpenAI finish_reason 을 읽지 않는다')
+  if (!/stop_reason/.test(providerCode)) offenders.push('Anthropic stop_reason 을 읽지 않는다')
+  // 🔴 비어 있으면 성공으로 세지 않는다
+  if (!/NO_FINISH_REASON/.test(providerCode)) offenders.push('종료 사유 부재를 실패로 다루지 않는다')
+  if (!/finishReason\.trim\(\) === ''[\s\S]{0,200}NO_FINISH_REASON/.test(providerCode)) {
+    offenders.push('종료 사유가 비어도 성공으로 반환한다')
+  }
+  // 🔴 실패로 처리하되 토큰은 실어 보내야 한다 — 이미 청구된 비용이다
+  if (!/NO_FINISH_REASON[\s\S]{0,300}inputTokens, outputTokens/.test(providerCode)) {
+    offenders.push('종료 사유 부재 시 토큰을 버린다 (cap 계상이 어긋난다)')
+  }
+  // 🔴 reasoning 토큰은 0 이 아니라 null 로 구분한다
+  if (!/reasoningTokens/.test(providerCode)) offenders.push('reasoning 토큰을 읽지 않는다')
+  if (!/completion_tokens_details/.test(providerCode)) offenders.push('OpenAI reasoning 토큰 경로가 없다')
+  // 🔴 run 이 진단을 실제로 저장해야 한다
+  if (!/formatDiagnostics\(/.test(runCode)) offenders.push('run 이 진단을 만들지 않는다')
+  if (!/finishReason: response\.finishReason/.test(runCode)) offenders.push('진단에 종료 사유가 없다')
+  if (!/errorMessage/.test(runCode)) offenders.push('진단을 저장하지 않는다')
+  // 진단 문자열에 필수 항목이 다 들어가는가
+  const diag = formatDiagnostics({
+    finishReason: 'length', outputTokens: 1000, maxOutputTokens: 1000,
+    reasoningTokens: 1000, responseChars: 0, jsonFailure: 'empty', maxTokensReached: true,
+  })
+  for (const must of ['json=empty', 'finish=length', 'out=1000/1000', 'reasoning=1000', 'chars=0', 'maxTokens 도달']) {
+    if (!diag.includes(must)) offenders.push(`진단에 ${must} 없음`)
+  }
+  // 종료 사유가 비어도 문자열이 깨지지 않아야 한다
+  if (!formatDiagnostics({
+    finishReason: '', outputTokens: 0, maxOutputTokens: 4000,
+    reasoningTokens: null, responseChars: 0, jsonFailure: null, maxTokensReached: false,
+  }).includes('finish=(없음)')) offenders.push('빈 종료 사유 표기가 없다')
+  if (offenders.length) bad('종료 사유 없으면 실패', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('종료 사유 없으면 실패', 'guard', `finish_reason+stop_reason · 부재 시 NO_FINISH_REASON · 진단 "${diag}"`)
+}
+
+// ── ㉘ LLM 응답 전문을 저장하지 않는다 ──────────────────
+{
+  const offenders: string[] = []
+  // 🔴 진단에 응답 본문이 들어갈 자리가 없어야 한다.
+  //    입력 타입이 수치와 열거값뿐이라 실수로도 넣을 수 없는 구조인지 실제로 확인한다
+  const secret = '어제 병원 다녀왔는데요 검사 결과가 애매하다고 하네요'
+  const built = formatDiagnostics({
+    finishReason: 'length', outputTokens: 1000, maxOutputTokens: 4000,
+    reasoningTokens: 950, responseChars: secret.length, jsonFailure: 'truncated',
+    maxTokensReached: true,
+  })
+  if (built.includes(secret)) offenders.push('진단에 응답 본문이 섞인다')
+  if (built.includes('병원')) offenders.push('진단에 원문 조각이 섞인다')
+  // 길이는 남기되 내용은 남기지 않는다
+  if (!built.includes(`chars=${secret.length}`)) offenders.push('응답 길이를 남기지 않는다')
+
+  // 🔴 rawText 를 저장 필드에 그대로 넣는 코드가 없어야 한다
+  for (const [pat, why] of [
+    [/errorMessage:\s*response\.rawText/, 'errorMessage 에 응답 전문'],
+    [/errorMessage:\s*[^,\n]*rawText/, 'errorMessage 에 rawText 가 섞인다'],
+    [/output:\s*response\.rawText/, 'output 에 응답 전문'],
+    [/reason:\s*[^,\n]*rawText/, 'CostEvent.reason 에 rawText'],
+    [/errorSummary:\s*[^,\n]*rawText/, 'Run.errorSummary 에 rawText'],
+    [/rawText\.slice\(/, '응답을 잘라 저장한다'],
+    [/rawText\.substring\(/, '응답을 잘라 저장한다'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(runCode)) offenders.push(why)
+  }
+  // 🔴 응답을 로그로 찍지도 않는다
+  for (const l of runCode.split('\n').filter((x) => /console\.(log|error)/.test(x))) {
+    if (/\$\{[^}]*rawText[^}]*\}/.test(l)) offenders.push('로그에 응답 전문')
+    if (/\$\{[^}]*\boutput\b[^}]*\}/.test(l)) offenders.push('로그에 산출물')
+  }
+  // 🔴 provider 도 응답 본문을 errorMessage 에 담지 않는다
+  for (const l of providerCode.split('\n')) {
+    if (/errorMessage:\s*[^,\n]*\b(text|body|json)\b/.test(l)) offenders.push('provider 가 응답을 사유에 담는다')
+  }
+  // 🔴 저장되는 산출물은 파싱된 JSON 이지 원문 문자열이 아니다
+  if (!/JSON\.parse\(response\.rawText\)/.test(runCode)) offenders.push('산출물을 파싱하지 않고 저장한다')
+  if (offenders.length) bad('LLM 응답 전문 저장 0', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('LLM 응답 전문 저장 0', 'policy', `진단 ${built.length}B 에 본문 0 · 길이만 · rawText 저장 경로 0`)
 }
 
 // ── 출력 ────────────────────────────────────────────────
