@@ -17,13 +17,8 @@ import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazin
 /**
  * 'YYYY-MM-DD' → '2026. 8. 27.' 표시용 변환.
  *
- * 🔴 Date 로 파싱하지 않는다.
- *    'YYYY-MM-DD' 는 UTC 자정으로 해석돼, 서버 타임존에 따라 하루가 밀린다.
- *    보여주기만 하는 값이라 문자열을 그대로 쪼개는 편이 안전하고 결과도 같다.
- *
- * 🔴 형식이 정확히 맞을 때만 바꾼다.
- *    split('-') 만으로 자르면 'YYYY-MM-DDT10:30:00+09:00' 같은 값에서
- *    일(day) 자리가 NaN 이 되어 화면에 그대로 나간다. 원문을 보여주는 편이 낫다.
+ * Date 로 파싱하지 않는다 — 'YYYY-MM-DD' 는 UTC 자정으로 읽혀 타임존에 따라 하루가 밀린다.
+ * 형식이 정확히 맞을 때만 바꾸고 아니면 원문을 낸다 — 느슨하게 자르면 일(day)이 NaN 이 된다.
  */
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
 
@@ -34,6 +29,7 @@ function formatPublishedDate(publishedAt: string): string {
   const [, year, month, day] = matched
   return `${year}. ${Number(month)}. ${Number(day)}.`
 }
+
 export default function MagazineCard({ article }: { article: MagazineArticle }) {
   const image = article.heroImage
 
@@ -67,8 +63,7 @@ export default function MagazineCard({ article }: { article: MagazineArticle }) 
           {article.description}
         </span>
 
-        {/* 상세 화면의 메타 표기와 같은 구성이다 — 목록에서 상세로 넘어가도 같은 정보가 같은 순서로 보인다.
-            가운뎃점은 장식이라 낭독하지 않는다. */}
+        {/* 가운뎃점은 장식이라 낭독하지 않는다. */}
         <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-content-muted">
           소란소란 편집팀
           <span aria-hidden>·</span>
