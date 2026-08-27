@@ -25,6 +25,7 @@
     "voice:unao-import-check": "tsx scripts/voice-unao-import-check.mts",
     "voice:derive": "tsx scripts/voice-derive-live.mts",
     "voice:derive-check": "tsx scripts/voice-derive-check.mts",
+    "voice:m3-run": "tsx scripts/voice-m3-run.mts",
     "voice:m3-dry-run": "tsx scripts/voice-m3-dry-run.mts",
     "voice:m3-check": "tsx scripts/voice-m3-check.mts",
     "voice:label-sanitize": "tsx scripts/voice-legacy-label-sanitize.mts",
