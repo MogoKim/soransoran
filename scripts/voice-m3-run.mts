@@ -15,6 +15,10 @@
  * 🔴 저장 전에 원문 유출을 대조한다
  *    LLM 출력에 원문 · 댓글이 20자 이상 연속으로 있으면 **저장하지 않고 skipped 처리**한다.
  *
+ * 🔴 두 가지 모드가 있다 (`--mode`, 기본 `sample`)
+ *    `sample` : 층화 표본. 모델 비교용. **매 실행 같은 N건**
+ *    `full`   : 이미 성공한 건 제외 + id 오름차순 다음 N건. 전량 확대용
+ *
  * 사용법
  *   npm run voice:m3-run -- --stage=stage1 --model=gpt-5-nano --limit=30
  *     → dry-run. 표본 · 토큰 · 비용 · cap 판정만. API 0 · DB write 0
@@ -38,6 +42,7 @@ import {
 } from './lib/voice-m3-contract.mjs'
 import {
   selectStratifiedSample, validateSample, formatSampleRow, SAMPLE_AXES,
+  selectFullModeBatch, describeRows,
   type SampleCandidate,
 } from './lib/voice-m3-sample.mjs'
 import { keyStatus, callProvider } from './lib/voice-m3-provider.mjs'
@@ -53,6 +58,14 @@ const CONFIRM_PAID = argv.includes('--confirm-paid-call')
 const STAGE = arg('stage')
 const MODEL = arg('model')
 const LIMIT_RAW = arg('limit')
+/**
+ * 🔴 **기본은 `sample` 이다.** `full` 이 기본이면 실험용 명령 하나가
+ *    전량 경로로 새어 나간다 — 기본값은 늘 좁은 쪽이어야 한다.
+ *
+ * - `sample` : 층화 표본. 모델 비교 · 실험용. 매 실행 같은 N건
+ * - `full`   : 이미 성공한 건 제외 + id 오름차순 다음 N건. 전량 확대용
+ */
+const MODE = arg('mode') ?? 'sample'
 
 const STAGE_SIZE: Record<string, number> = {
   stage1: M3_EXPERIMENT_STAGES.stage1PerModel,
@@ -86,6 +99,9 @@ function paidCallGate(model: string | undefined, stage: string | undefined, limi
 async function main(): Promise<void> {
   await loadEnvLocal()
 
+  if (!['sample', 'full'].includes(MODE)) {
+    throw new Error(`--mode 는 sample · full 중 하나여야 한다: ${MODE}`)
+  }
   if (STAGE && !STAGE_SIZE[STAGE]) {
     throw new Error(`--stage 는 ${Object.keys(STAGE_SIZE).join(' · ')} 중 하나여야 한다: ${STAGE}`)
   }
@@ -204,10 +220,37 @@ async function main(): Promise<void> {
       }
     }
 
-    const sample = selectStratifiedSample(candidates, LIMIT)
-    const check = validateSample(sample, LIMIT)
+    // 🔴 전량(`full`)과 실험(`sample`)은 **다른 질문에 답한다.**
+    //    sample: "축을 고르게 덮는 N건은 무엇인가" — 매 실행 같은 답
+    //    full  : "아직 답을 못 얻은 것 중 다음 N건은 무엇인가" — 실행마다 다른 답
+    let sample: { rows: ReturnType<typeof selectStratifiedSample>['rows'] } & Omit<ReturnType<typeof selectStratifiedSample>, 'rows'>
+    let fullInfo: { remaining: number; excluded: number } | null = null
+    if (MODE === 'full') {
+      // 🔴 **성공한 것만** 제외한다. failed · skipped 는 남아서 재시도된다
+      const doneRefs = new Set(
+        (await prisma.voiceM3Cache.findMany({
+          where: { model: modelForKey, status: 'succeeded' }, select: { sourceRef: true },
+        })).map((c) => c.sourceRef),
+      )
+      const picked = selectFullModeBatch(candidates, doneRefs, LIMIT)
+      sample = { rows: picked.rows, ...describeRows(picked.rows) }
+      fullInfo = { remaining: picked.remaining, excluded: picked.excluded }
+    } else {
+      sample = selectStratifiedSample(candidates, LIMIT)
+    }
+    // 🔴 축 커버리지 검사는 **층화 표본에만** 적용한다.
+    //    전량 batch 는 축을 채우려 고르지 않으므로 빈 축이 정상이다
+    const check = MODE === 'full' ? { ok: true, problems: [] } : validateSample(sample, LIMIT)
 
-    console.log(`  표본 ${sample.rows.length}건 (후보 ${candidates.length}건에서 층화 선정 · 난수 없음)`)
+    if (fullInfo) {
+      console.log(`  🔁 전량 모드 (mode=full · ${modelForKey})`)
+      console.log(`     전체 후보          ${candidates.length.toLocaleString()}건`)
+      console.log(`     수집 상한 잘림 제외  ${fullInfo.excluded.toLocaleString()}건 (3,000자에서 끊긴 글 — 흐름 판정이 오염된다)`)
+      console.log(`     ✅ 이미 성공(제외)   ${(candidates.length - fullInfo.excluded - fullInfo.remaining).toLocaleString()}건`)
+      console.log(`     🔁 남은 대상        ${fullInfo.remaining.toLocaleString()}건`)
+      console.log(`     이번 batch         ${sample.rows.length}건 · 남은 batch 약 ${Math.ceil(fullInfo.remaining / LIMIT)}회\n`)
+    }
+    console.log(`  표본 ${sample.rows.length}건 (${MODE === 'full' ? `남은 ${fullInfo?.remaining.toLocaleString()}건 중 id 오름차순 앞에서` : `후보 ${candidates.length}건에서 층화 선정`} · 난수 없음)`)
     for (const [i, r] of sample.rows.entries()) console.log(formatSampleRow(r, i))
 
     console.log('\n  축 커버리지')

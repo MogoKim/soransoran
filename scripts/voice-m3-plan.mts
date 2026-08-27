@@ -46,6 +46,12 @@ const CHARS_PER_COMMENT = 60
 /** 출력 토큰 — haiku 30건 실측 평균. 상한 1,500 의 22% 였다 */
 const MEASURED_OUTPUT_PER_ITEM = 333
 
+/**
+ * 🔴 수집 상한. 이 길이로 끝난 글은 **3,000자에서 잘린 것**이다.
+ *    층화 표본 · 전량 모드가 똑같이 제외하며, 계획도 같은 기준을 쓴다.
+ */
+const TRUNCATED_LENGTH = 3000
+
 async function main(): Promise<void> {
   await loadEnvLocal()
 
@@ -68,16 +74,23 @@ async function main(): Promise<void> {
   try {
     // ── ① 전량 대상 산정 ───────────────────────────────
     const total = await prisma.voiceSource.count()
+    // 🔴 수집 상한(3,000자)에서 잘린 글은 제외한다. 끝이 끊겨 흐름 · 구조 판정이 오염된다 —
+    //    층화 표본(`isExcluded`)과 전량 모드(`selectFullModeBatch`)가 똑같이 제외하므로
+    //    계획도 같은 모집단을 봐야 한다. 한쪽만 다르면 batch 경계가 어긋난다.
+    const truncated = await prisma.voiceSource.count({ where: { contentLength: TRUNCATED_LENGTH } })
+    const eligible = total - truncated
     const cached = await prisma.voiceM3Cache.groupBy({
       by: ['status'], where: { model }, _count: true,
     })
     const reusable = cached.find((c) => c.status === 'succeeded')?._count ?? 0
     const retryable = cached.filter((c) => c.status !== 'succeeded').reduce((a, c) => a + c._count, 0)
-    const fresh = total - reusable - retryable
+    const fresh = eligible - reusable - retryable
     const toCall = fresh + retryable
 
     console.log('  ① 전량 대상')
     console.log(`     VoiceSource 전체            ${total.toLocaleString()}건`)
+    console.log(`     🔴 수집 상한 잘림 제외       ${truncated.toLocaleString()}건 (3,000자에서 끊긴 글)`)
+    console.log(`     ── 분석 대상                ${eligible.toLocaleString()}건`)
     console.log(`     ✅ 재사용 (succeeded)        ${reusable.toLocaleString()}건 — 부르지 않는다`)
     console.log(`     🔁 재시도 (failed·skipped)   ${retryable.toLocaleString()}건`)
     console.log(`     🆕 신규                      ${fresh.toLocaleString()}건`)
@@ -100,7 +113,9 @@ async function main(): Promise<void> {
       if (b.length === 0) break
       rows.push(...b)
     }
-    const pending = rows.filter((r) => !doneRefs.has(r.sourceRef))
+    const pending = rows
+      .filter((r) => r.contentLength !== TRUNCATED_LENGTH)
+      .filter((r) => !doneRefs.has(r.sourceRef))
     const inTokOf = (r: Row): number =>
       Math.round(((r.contentLength ?? 0) + (r.commentCount ?? 0) * CHARS_PER_COMMENT) * INPUT_TOK_PER_UNIT)
     const inToks = pending.map(inTokOf)
@@ -129,7 +144,7 @@ async function main(): Promise<void> {
 
     // ── ④ batch 분할 계획 ─────────────────────────────
     //    🔴 id 오름차순으로 자른다. 실행 순서가 재현 가능해야 재개할 수 있다.
-    console.log(`\n  ④ batch 분할 (batch=${BATCH} · id 오름차순)`)
+    console.log(`\n  ④ batch 분할 (batch=${BATCH} · id 오름차순 · 잘린 글과 성공분 제외 후)`)
     const batches: Array<{ idx: number; n: number; inTok: number; totTok: number; usd: number }> = []
     for (let i = 0; i < pending.length; i += BATCH) {
       const slice = pending.slice(i, i + BATCH)
@@ -165,11 +180,13 @@ async function main(): Promise<void> {
 
     // ── ⑥ 🔴 실행 경로 점검 ───────────────────────────
     console.log('\n  ⑥ 실행 경로')
-    console.log('     🔴 **현재 voice-m3-run 은 전량을 돌 수 없다.**')
-    console.log('        층화 표본(selectStratifiedSample)이 매 실행 같은 상위 N건을 고른다 —')
-    console.log('        캐시로 건너뛰어도 **다음 batch 로 넘어가지 않는다.**')
-    console.log('        전량 실행에는 "이미 성공한 건 제외 + id 순 다음 N건" 경로가 필요하다.')
-    console.log('        그 변경은 이 PR 범위 밖이며 별도 승인 사항이다(정본 §6).')
+    console.log('     ✅ voice-m3-run --mode=full 이 전량 경로다 (VE-M3-5)')
+    console.log('        selectStratifiedSample(매 실행 같은 N건)이 아니라')
+    console.log('        "succeeded 제외 + id 오름차순 다음 N건" 으로 고른다.')
+    console.log('        🔴 기본값은 여전히 --mode=sample 이다 — 전량은 명시해야 들어간다.')
+    console.log('        🔴 유료 게이트 10중 · cap 3종 · 저장 전 유출 대조는 그대로다.')
+    console.log(`        실행: npm run voice:m3-run -- --stage=stage1 --model=${model} --limit=${BATCH} --mode=full \\`)
+    console.log('                 --apply --confirm-paid-call     ← 🔴 창업자 승인 후')
 
     console.log('\n  🔍 읽기만 했다. LLM 호출 0 · DB write 0 · 비용 0원\n')
   } finally {

@@ -26,7 +26,7 @@ import {
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 import {
-  selectStratifiedSample, validateSample, SAMPLE_AXES, type SampleCandidate,
+  selectStratifiedSample, validateSample, SAMPLE_AXES, selectFullModeBatch, type SampleCandidate,
 } from './lib/voice-m3-sample.mjs'
 import { keyStatus, ANTHROPIC_JSON_PREFILL, PROVIDER_KEY_ENV } from './lib/voice-m3-provider.mjs'
 
@@ -1199,10 +1199,21 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
 {
   const offenders: string[] = []
 
-  // ① 🔴 유료 플래그를 **받지 않는다**. "무시한다" 가 아니라 코드에 없다
+  // ① 🔴 유료 플래그를 **받지 않는다**. "무시한다" 가 아니라 파싱 코드가 없다.
+  //
+  //    🔴 **console.log 줄은 대상에서 뺀다.** plan 은 "승인 후 이렇게 실행한다" 를
+  //       안내해야 하고, 그 문구에는 플래그 이름이 들어간다 — 안내를 위반으로 읽으면
+  //       가드가 정당한 코드를 막는다(실제로 걸렸다). 검사할 것은 **argv 파싱**이다.
+  const planLogic = planCode.split('\n').filter((l) => !/console\.(log|error)/.test(l)).join('\n')
   for (const [pat, why] of [
-    [/--apply/, '--apply 를 다룬다'],
-    [/--confirm-paid-call/, '--confirm-paid-call 을 다룬다'],
+    [/argv\.includes\(\s*'--apply'/, '--apply 를 파싱한다'],
+    [/argv\.includes\(\s*'--confirm-paid-call'/, '--confirm-paid-call 을 파싱한다'],
+    [/\bAPPLY\b|\bCONFIRM_PAID\b/, '유료 플래그 변수를 둔다'],
+    [/arg\('(apply|confirm-paid-call)'\)/, '유료 플래그를 arg 로 읽는다'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(planLogic)) offenders.push(`plan 이 ${why}`)
+  }
+  for (const [pat, why] of [
     [/callProvider/, 'provider 를 부른다'],
     [/voice-m3-provider/, 'provider 를 import 한다'],
     [/(await|return|=)\s+fetch\s*\(/, 'fetch 호출'],
@@ -1271,6 +1282,90 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('전량 계획 리포트 유료 경로 0', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('전량 계획 리포트 유료 경로 0', 'guard',
     'apply · confirm · provider · fetch · key 0 · DB write 0 · 원문 조회 0 · cap 최악값 판정 · 실행경로 부재 경고')
+}
+
+// ── ㉞ 전량 모드(--mode=full) — 좁은 기본값 · 게이트 유지 ─
+//    🔴 전량 경로가 생기면 실험용 명령이 전량으로 새어 나갈 수 있다.
+//       기본값을 좁게 두고, 게이트를 하나도 완화하지 않았는지 검사한다.
+{
+  const offenders: string[] = []
+
+  // ① 🔴 기본값은 sample 이다 — full 이 기본이면 명령 하나가 전량으로 샌다
+  if (!/const MODE = arg\('mode'\) \?\? 'sample'/.test(runCode)) {
+    offenders.push('--mode 기본값이 sample 이 아니다')
+  }
+  if (!/\['sample', 'full'\]\.includes\(MODE\)/.test(runCode)) offenders.push('--mode 값 검증이 없다')
+
+  // ② 🔴 full 은 **succeeded 만** 제외한다. failed · skipped 는 재시도로 남아야 한다
+  const fs = runCode.indexOf("if (MODE === 'full')")
+  const fe = runCode.indexOf('} else {', fs)
+  const fullBlock = fs === -1 ? '' : runCode.slice(fs, fe === -1 ? fs + 900 : fe)
+  if (fs === -1) offenders.push('full 분기를 찾지 못했다')
+  else {
+    if (!/status: 'succeeded'/.test(fullBlock)) offenders.push('full 이 succeeded 로 좁히지 않는다')
+    for (const bad of ["'failed'", "'skipped'", 'not:']) {
+      if (fullBlock.includes(bad)) offenders.push(`full 제외 조건에 ${bad} 가 섞였다 — 재시도 대상이 사라진다`)
+    }
+    if (!/selectFullModeBatch/.test(fullBlock)) offenders.push('full 이 전용 선정 함수를 쓰지 않는다')
+  }
+
+  // ③ 🔴 유료 게이트는 full 에서도 그대로다
+  const gs = runCode.indexOf('function paidCallGate')
+  const ge = runCode.indexOf('\nasync function main', gs)
+  const gate = gs === -1 ? '' : runCode.slice(gs, ge === -1 ? gs + 2000 : ge)
+  for (const must of ['--apply', '--confirm-paid-call', '--model', '--stage', 'itemLimit', 'dollarCap', 'tokenCap', 'pricingFor', 'maxOutputTokensFor', 'keyStatus']) {
+    if (!gate.includes(must)) offenders.push(`게이트에서 ${must} 가 사라졌다`)
+  }
+  // 게이트가 mode 로 우회되지 않는다
+  if (/MODE\s*===\s*'full'/.test(gate)) offenders.push('🔴 게이트가 mode 를 본다 — 전량이 게이트를 우회할 수 있다')
+  // cap 상수 불변
+  if (M3_CAPS.itemLimit !== 50 || M3_CAPS.tokenCap !== 500_000 || M3_CAPS.dollarCap !== 5) {
+    offenders.push(`cap 이 바뀌었다: item ${M3_CAPS.itemLimit} · token ${M3_CAPS.tokenCap} · dollar ${M3_CAPS.dollarCap}`)
+  }
+  // 🔴 확정 모델 폴백은 여전히 없다
+  if (/M3_ANALYSIS_MODEL/.test(runCode)) offenders.push('run 이 확정 모델을 참조한다 — --model 게이트가 무력해진다')
+
+  // ④ 🔴 잘린 글 제외 기준이 두 경로에서 같은가
+  if (!/isExcluded/.test(sampleCode)) offenders.push('sample lib 에 isExcluded 가 없다')
+  if (!/const usable = candidates\.filter\(\(c\) => !isExcluded\(c\)\)/.test(sampleCode)) {
+    offenders.push('full 선정이 잘린 글을 제외하지 않는다 — 층화와 모집단이 달라진다')
+  }
+  if (!/TRUNCATED_LENGTH/.test(planCode)) offenders.push('plan 이 잘린 글을 제외하지 않는다 — batch 경계가 어긋난다')
+
+  // ⑤ 동작 검증 — 실제로 돌려 본다
+  const mk = (i: number, len: number): SampleCandidate => ({
+    id: `id-${String(i).padStart(4, '0')}`, sourceRef: `ref-${i}`, sourceSite: 'navercafe:wgang',
+    contentLength: len, commentCount: i % 20, legacyLabels: {},
+    sourceSpecificCount: 0, targetDescriptorCount: 0, referenced: false,
+    commentSignalTotal: 0, otherReactionCount: 0, truncatedCount: 0,
+  })
+  const pool = [
+    ...Array.from({ length: 100 }, (_, i) => mk(i, 500)),
+    ...Array.from({ length: 5 }, (_, i) => mk(1000 + i, 3000)), // 🔴 잘린 글
+  ]
+  const done = new Set(['ref-0', 'ref-1', 'ref-2'])
+  const b1 = selectFullModeBatch(pool, done, 10)
+  if (b1.excluded !== 5) offenders.push(`잘린 글 제외가 ${b1.excluded}건 (5건이어야)`)
+  if (b1.remaining !== 97) offenders.push(`남은 대상이 ${b1.remaining}건 (100-3=97 이어야)`)
+  if (b1.rows.length !== 10) offenders.push(`batch 가 ${b1.rows.length}건`)
+  if (b1.rows.some((r) => done.has(r.sourceRef))) offenders.push('🔴 이미 성공한 건이 batch 에 들어갔다')
+  if (b1.rows.some((r) => r.contentLength === 3000)) offenders.push('🔴 잘린 글이 batch 에 들어갔다')
+  // id 오름차순 · 재현 가능
+  const ids = b1.rows.map((r) => r.id)
+  if (ids.join() !== [...ids].sort().join()) offenders.push('batch 가 id 오름차순이 아니다')
+  if (selectFullModeBatch([...pool].reverse(), done, 10).rows.map((r) => r.id).join() !== ids.join()) {
+    offenders.push('입력 순서가 batch 를 바꾼다 — 재개가 불가능해진다')
+  }
+  // 다음 batch 는 겹치지 않는다
+  const b2 = selectFullModeBatch(pool, new Set([...done, ...b1.rows.map((r) => r.sourceRef)]), 10)
+  if (b2.rows.some((r) => b1.rows.some((x) => x.sourceRef === r.sourceRef))) {
+    offenders.push('🔴 다음 batch 가 이전 batch 와 겹친다')
+  }
+  if (b2.remaining !== 87) offenders.push(`두 번째 batch 의 남은 수가 ${b2.remaining} (87 이어야)`)
+
+  if (offenders.length) bad('전량 모드 · 좁은 기본값 · 게이트 유지', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('전량 모드 · 좁은 기본값 · 게이트 유지', 'guard',
+    'mode 기본 sample · succeeded 만 제외 · 잘린 글 제외 일치 · id 오름차순 재현 · batch 무겹침 · 게이트 10중 불변')
 }
 
 // ── 출력 ────────────────────────────────────────────────

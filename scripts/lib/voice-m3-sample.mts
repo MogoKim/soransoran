@@ -177,6 +177,53 @@ export function selectStratifiedSample(
 }
 
 /**
+ * 🔴 **전량 모드 선정** (VE-M3-5).
+ *
+ * 층화 표본은 **매 실행 같은 상위 N건**을 고른다 — 모델 비교에는 그게 맞지만
+ * 전량에는 쓸 수 없다. 193회를 돌려도 같은 50건을 반복하고 2회차부터 전부 cache hit 이 된다.
+ *
+ * 전량은 다른 질문에 답해야 한다: **아직 답을 못 얻은 것 중 다음 N건은 무엇인가.**
+ *
+ * 🔴 `doneRefs` 는 **성공한 것만** 담는다. `failed` · `skipped` 는 여기 들어오지 않으며
+ *    그래서 자연히 재시도 대상으로 남는다(계약 §D).
+ *
+ * 🔴 **id 오름차순 고정.** 순서가 흔들리면 batch 경계가 매번 달라지고,
+ *    전량 계획이 검증한 `tokenCap` 판정이 무효가 된다. 재개도 불가능해진다.
+ *
+ * 🔴 수집 상한(3,000자)에서 잘린 글은 **여기서도 제외한다.** 끝이 잘린 글은
+ *    흐름 · 구조 판정이 오염된다 — 층화 표본이 제외한 것과 같은 이유이며,
+ *    한쪽만 제외하면 두 경로가 서로 다른 모집단을 보게 된다.
+ */
+export function selectFullModeBatch(
+  candidates: readonly SampleCandidate[],
+  doneRefs: ReadonlySet<string>,
+  size: number,
+): { rows: SampleRow[]; remaining: number; excluded: number } {
+  const usable = candidates.filter((c) => !isExcluded(c))
+  const pending = usable
+    .filter((c) => !doneRefs.has(c.sourceRef))
+    .slice()
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const rows = pending.slice(0, size).map((c) => ({ ...c, axes: axesOf(c) }))
+  return {
+    rows,
+    remaining: pending.length,
+    excluded: candidates.length - usable.length,
+  }
+}
+
+/** 전량 batch 의 커버리지 · 분산을 층화와 같은 모양으로 낸다 (보고용) */
+export function describeRows(rows: readonly SampleRow[]): Omit<SelectResult, 'rows'> {
+  const coverage: Record<string, number> = {}
+  for (const a of SAMPLE_AXES) coverage[a] = rows.filter((r) => r.axes.includes(a)).length
+  const siteSpread: Record<string, number> = {}
+  for (const r of rows) siteSpread[r.sourceSite] = (siteSpread[r.sourceSite] ?? 0) + 1
+  // 🔴 전량 batch 는 축을 채우려 고르지 않는다. 빈 축이 있어도 정상이다 —
+  //    그래서 missingAxes 를 "문제" 로 보고하지 않고 사실만 담는다.
+  return { coverage, missingAxes: SAMPLE_AXES.filter((a) => coverage[a] === 0), siteSpread }
+}
+
+/**
  * 표본을 사람이 읽을 한 줄로.
  * 🔴 본문 · 댓글이 들어갈 자리가 없다 — id · 수치 · 축 태그뿐이다.
  */
