@@ -37,6 +37,9 @@ function pickForHome(articles: MagazineArticle[], count: number): MagazineArticl
  *
  * 🔴 색과 아이콘은 board-registry 가 정한다. 여기서 토큰명을 직접 쓰지 않는다.
  *    두 섹션이 각자 배지를 그리면 한쪽만 고쳐지는 날이 온다.
+ *
+ * 🔴 갈 곳이 없으면 더보기를 그리지 않는다.
+ *    눌렀는데 빈 화면이 나오는 링크는 없느니만 못하다.
  */
 function SectionHeading({
   board,
@@ -45,7 +48,7 @@ function SectionHeading({
 }: {
   board: BoardMeta
   title: string
-  moreHref: string
+  moreHref?: string
 }) {
   return (
     <div className="mb-3 flex items-center justify-between">
@@ -62,12 +65,14 @@ function SectionHeading({
         </span>
         {title}
       </h2>
-      <Link
-        href={moreHref}
-        className="inline-flex min-h-[52px] shrink-0 items-center text-sm text-link"
-      >
-        더보기 →
-      </Link>
+      {moreHref ? (
+        <Link
+          href={moreHref}
+          className="inline-flex min-h-[52px] shrink-0 items-center text-sm text-link"
+        >
+          더보기 →
+        </Link>
+      ) : null}
     </div>
   )
 }
@@ -79,8 +84,11 @@ function SectionHeading({
  * 🔴 접속자 수 / 실시간 배지 / 게시글 수를 넣지 않는다.
  *
  * 커뮤니티 글이 위, 매거진이 아래다. 참여가 먼저이고 읽을거리가 그다음이다.
- * 매거진 띠만 웜 아이보리를 깔아 흰 카드가 살아나게 한다 — 흰 바탕에 흰 카드는
- * 보더 한 줄로만 구분돼 목록으로 읽히지 않는다.
+ *
+ * 🔴 홈에 면을 따로 깔지 않는다.
+ *    글 목록·매거진과 같은 바탕 위에 그대로 얹는다. 홈만 흰 판을 두면
+ *    같은 서비스의 다른 화면으로 넘어갈 때마다 바닥색이 바뀐다.
+ *    섹션은 머리글과 여백이 가르고, 줄 사이는 선 하나가 가른다.
  */
 export default async function HomePage() {
   const posts = await getRecentDiscoveryPosts(6)
@@ -92,7 +100,7 @@ export default async function HomePage() {
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-3xl bg-surface-card pb-24">
+      <main className="mx-auto max-w-3xl pb-24">
         <section className="px-4 py-6 text-center">
           <Logo className="text-3xl" />
           <p className="mt-2 text-sm text-content-muted">
@@ -101,8 +109,9 @@ export default async function HomePage() {
         </section>
 
         {posts.length > 0 ? (
-          <section className="border-t-4 border-surface-page px-4 py-5">
-            <SectionHeading board={best} title="지금 뜨는 이야기" moreHref="/best" />
+          <section className="px-4 py-5">
+            {/* 모아보기 화면이 아직 비어 있어 더보기를 두지 않는다. 채워지면 그때 잇는다. */}
+            <SectionHeading board={best} title="지금 뜨는 이야기" />
 
             {/* -mx-4 로 섹션 여백을 되돌린다 — 행이 자기 px-4 를 가지므로
                 그대로 두면 32px 이 되고, hover 면도 안쪽으로 눌린다.
@@ -110,7 +119,13 @@ export default async function HomePage() {
             <ol className="m-0 -mx-4 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
               {posts.map((post, index) => (
                 <li key={post.id}>
-                  <PostListItem post={post} rank={index + 1} />
+                  <PostListItem
+                    post={post}
+                    rank={index + 1}
+                    surface="page"
+                    emphasis
+                    hideEmptyStats
+                  />
                 </li>
               ))}
             </ol>
@@ -118,7 +133,7 @@ export default async function HomePage() {
         ) : null}
 
         {articles.length > 0 ? (
-          <section className="bg-surface-page px-4 py-6">
+          <section className="px-4 py-6">
             <SectionHeading board={magazine} title="읽어볼 이야기" moreHref="/magazine" />
 
             <ul className="flex list-none flex-col gap-3 p-0">
