@@ -153,6 +153,10 @@ export const M3_CAPS = {
    * 🔴 50 인 이유는 **tokenCap 이 정한다.** 1건당 약 5,468 tok(실측)이라
    *    500K / 5,468 ≈ 91건이 한 실행의 물리적 상한이다. 그 아래에서 나누기 좋은 수가 50 이다.
    *    100건 · 300건 단계는 **실행을 쪼개서** 돈다(50×2 · 50×6).
+   *
+   *    ⚠️ 2026-08-27 재계산: 출력 상한을 4,000 으로 올려도(gpt-5-nano)
+   *       1건 최악값이 입력 1,745 + 출력 4,000 = 5,745 tok 이라 500K / 5,745 ≈ 87건이다.
+   *       **50 은 여전히 안전하다.** tokenCap · dollarCap 은 바꾸지 않았다.
    */
   itemLimit: 50,
   /** 🔴 건수 cap 만으로는 못 막는다. 3,000자 글이 몰리면 같은 건수에 토큰이 3배다 */
@@ -176,6 +180,164 @@ export const M3_CAPS = {
 export const TOKENS_PER_CHAR = 1.3
 /** 출력 JSON 한 건의 대략 크기. 7종 스칼라 + 근거 메모 기준 */
 export const ESTIMATED_OUTPUT_TOKENS_PER_ITEM = 450
+
+// ── 출력 토큰 상한 (2026-08-27 1차 실험 실패에서 나왔다) ──
+
+/**
+ * 🔴 **1,000 은 틀린 값이었다.**
+ *
+ * 2026-08-27 gpt-5-nano 1차 실행에서 5건 전부 `JSON_PARSE` 로 실패했다.
+ * 5건의 출력 토큰이 **정확히 1000** 이었다 — 우연이 아니라 상한에 걸려 잘린 것이다.
+ *
+ * 원인: gpt-5-nano 는 reasoning 계열이라 **reasoning 토큰이 `max_completion_tokens`
+ * 에 포함된다.** 1,000 을 추론이 다 쓰고 JSON 본문이 나오기 전에 끊겼다.
+ * 산출물(7종 스칼라 + notes)은 450 토큰 정도인데, 그 앞에 추론 예산이 필요했다.
+ *
+ * 🔴 그래서 값을 **모델별로** 둔다. 한 숫자로 두면 둘 중 하나는 항상 틀린다 —
+ *    reasoning 모델은 추론 예산이 필요하고, 아닌 모델은 그만큼이 낭비다.
+ *
+ * 🔴 `estimatedOutputTokens` 를 따로 두는 이유
+ *    reasoning 토큰도 **출력으로 과금된다.** 그러니 reasoning 모델의 비용 추정은
+ *    "JSON 크기 450" 이 아니라 **상한 그대로**를 최악값으로 잡아야 정직하다.
+ *    1차 실행에서 450 으로 추정한 비용이 실제 청구와 어긋난 지점이 정확히 여기다.
+ */
+export type OutputTokenPolicy = {
+  /** provider 에 보낼 상한 (OpenAI `max_completion_tokens` · Anthropic `max_tokens`) */
+  maxOutputTokens: number
+  /** reasoning 토큰이 상한에 포함되는가 */
+  reasoning: boolean
+  /** 비용 추정에 쓸 1건당 출력 토큰. reasoning 모델은 최악값(=상한) */
+  estimatedOutputTokens: number
+  /** 왜 이 값인가 */
+  rationale: string
+}
+
+export const M3_OUTPUT_TOKEN_POLICY = {
+  'gpt-5-nano': {
+    maxOutputTokens: 4000,
+    reasoning: true,
+    estimatedOutputTokens: 4000,
+    rationale:
+      '1000 에서 5/5 잘림(실측). 산출물 450 + 추론 예산 약 3,550. ' +
+      '30건 최악값 120K tok = $0.048 로 dollarCap 대비 1% 미만이다',
+  },
+  'claude-haiku-4.5': {
+    maxOutputTokens: 1500,
+    reasoning: false,
+    estimatedOutputTokens: 700,
+    rationale:
+      'extended thinking 을 켜지 않으므로 상한이 곧 JSON 크기다. ' +
+      '450 산출물에 여유 3배. 출력 단가가 nano 의 12.5배라 상한을 넓게 두지 않는다',
+  },
+} as const satisfies Record<string, OutputTokenPolicy>
+
+/**
+ * 모델의 출력 토큰 정책. 🔴 등록되지 않은 모델은 던진다 —
+ * `pricingFor` 와 같은 이유다. 모르는 모델에 임의의 상한을 씌우면
+ * 1,000 사고가 이름만 바꿔 되풀이된다.
+ */
+export function outputTokenPolicyFor(model: string): OutputTokenPolicy {
+  const found = (M3_OUTPUT_TOKEN_POLICY as Record<string, OutputTokenPolicy>)[model]
+  if (!found) {
+    throw new Error(
+      `출력 토큰 정책이 등록되지 않은 모델이다: ${model}\n` +
+        `  후보: ${Object.keys(M3_OUTPUT_TOKEN_POLICY).join(' · ')}\n` +
+        '  reasoning 포함 여부를 확인한 뒤 M3_OUTPUT_TOKEN_POLICY 에 넣고 쓴다.',
+    )
+  }
+  return found
+}
+
+/** provider 에 보낼 상한 */
+export function maxOutputTokensFor(model: string): number {
+  return outputTokenPolicyFor(model).maxOutputTokens
+}
+
+/** 비용 추정에 쓸 1건당 출력 토큰 */
+export function outputTokenEstimateFor(model: string): number {
+  return outputTokenPolicyFor(model).estimatedOutputTokens
+}
+
+// ── 실패 진단 (2026-08-27) ───────────────────────────────
+
+/**
+ * 🔴 **"JSON 파싱 실패" 만 남긴 것이 이번 사고의 두 번째 결함이다.**
+ *
+ * 1차 실행은 5건 전부 실패했는데, 저장된 사유가 `'JSON 파싱 실패'` 한 줄뿐이라
+ * **왜 실패했는지 확정할 수 없었다.** 출력 토큰이 1000 이라는 정황만으로
+ * 원인을 추정해야 했다. 유료 호출을 한 번 더 태우기 전에 알았어야 할 것을
+ * 코드가 버린 것이다.
+ *
+ * 🔴 그래서 남기되, **수치와 분류값만** 남긴다.
+ *    응답 전문 · 원문 · 댓글 · 닉네임은 여기 들어오지 않는다(계약 §H).
+ */
+export type JsonFailureKind = 'empty' | 'fenced' | 'not_json' | 'truncated' | 'invalid'
+
+/**
+ * 파싱에 실패한 응답이 **어떤 모양이었는가**. 🔴 내용이 아니라 모양만 본다.
+ *
+ * - `empty`      → 빈 응답. reasoning 이 상한을 다 쓴 전형적 모습이다
+ * - `truncated`  → `{` 로 시작했는데 `}` 로 끝나지 않았다. **상한에 잘린 것**
+ * - `fenced`     → 코드 울타리를 붙였다. 프롬프트로 고칠 문제다
+ * - `not_json`   → JSON 이 아닌 문장으로 답했다
+ * - `invalid`    → 모양은 맞는데 문법이 깨졌다
+ */
+export function classifyJsonFailure(text: string): JsonFailureKind {
+  const t = text.trim()
+  if (t.length === 0) return 'empty'
+  if (t.startsWith('```')) return 'fenced'
+  if (!t.startsWith('{') && !t.startsWith('[')) return 'not_json'
+  const closer = t.startsWith('{') ? '}' : ']'
+  if (!t.endsWith(closer)) return 'truncated'
+  return 'invalid'
+}
+
+/**
+ * 상한에 닿았는가.
+ *
+ * 🔴 종료 사유만 믿지 않는다. provider 마다 이름이 다르고(`length` · `max_tokens`),
+ *    앞으로 또 다른 이름이 나올 수 있다. **토큰 수 대조를 함께 본다** —
+ *    1차 실행에서 실제로 결정적 단서였던 것이 그쪽이다.
+ */
+export function isMaxTokensReached(
+  finishReason: string, outputTokens: number, maxOutputTokens: number,
+): boolean {
+  const f = finishReason.trim().toLowerCase()
+  if (f === 'length' || f === 'max_tokens') return true
+  return maxOutputTokens > 0 && outputTokens >= maxOutputTokens
+}
+
+/** 저장 · 로그에 남길 진단. 🔴 전부 수치 아니면 분류값이다 */
+export type M3Diagnostics = {
+  /** provider 종료 사유. OpenAI `finish_reason` · Anthropic `stop_reason` */
+  finishReason: string
+  outputTokens: number
+  maxOutputTokens: number
+  /** reasoning 모델만. 없으면 null */
+  reasoningTokens: number | null
+  /** 🔴 응답 **길이**만. 응답 자체는 담지 않는다 */
+  responseChars: number
+  jsonFailure: JsonFailureKind | null
+  maxTokensReached: boolean
+}
+
+/**
+ * 진단을 한 줄로.
+ *
+ * 🔴 이 함수가 만드는 문자열에는 **응답 본문이 들어갈 자리가 없다.**
+ *    입력 타입 자체가 수치와 열거값뿐이라 실수로도 원문을 넣을 수 없다 —
+ *    문자열을 조립하다 `rawText` 를 끼워 넣는 사고를 타입으로 막은 것이다.
+ */
+export function formatDiagnostics(d: M3Diagnostics): string {
+  return [
+    d.jsonFailure ? `json=${d.jsonFailure}` : null,
+    `finish=${d.finishReason.trim() === '' ? '(없음)' : d.finishReason.trim()}`,
+    `out=${d.outputTokens}/${d.maxOutputTokens}`,
+    d.reasoningTokens === null ? null : `reasoning=${d.reasoningTokens}`,
+    `chars=${d.responseChars}`,
+    d.maxTokensReached ? '🔴maxTokens 도달' : null,
+  ].filter((x): x is string => x !== null).join(' · ')
+}
 
 // ── 출력 스키마 (계약 §B) ────────────────────────────────
 
@@ -306,12 +468,19 @@ export type CostEstimate = {
  *
  * 🔴 `pricing` 이 없으면 `estimatedCostUsd = null` 이다. 0 이 아니다 —
  *    0 은 "공짜" 로 읽히고 null 은 "모른다" 로 읽힌다. 둘은 다르다.
+ *
+ * 🔴 `outputTokensPerItem` 은 **모델이 정한다**(2026-08-27).
+ *    기본값 450 은 "JSON 산출물 크기" 인데, reasoning 모델은 추론 토큰도
+ *    출력으로 과금돼 실제 청구가 그보다 훨씬 크다. 1차 실행에서 450 으로
+ *    추정한 값이 실제와 어긋난 지점이 여기다 — 호출부가
+ *    `outputTokenEstimateFor(model)` 을 넘겨 최악값으로 잡는다.
  */
 export function estimateCost(
   inputChars: number, itemCount: number, pricing?: ModelPricing,
+  outputTokensPerItem: number = ESTIMATED_OUTPUT_TOKENS_PER_ITEM,
 ): CostEstimate {
   const estimatedInputTokens = Math.round(inputChars * TOKENS_PER_CHAR)
-  const estimatedOutputTokens = itemCount * ESTIMATED_OUTPUT_TOKENS_PER_ITEM
+  const estimatedOutputTokens = itemCount * outputTokensPerItem
   const estimatedTotalTokens = estimatedInputTokens + estimatedOutputTokens
   if (!pricing) {
     return {

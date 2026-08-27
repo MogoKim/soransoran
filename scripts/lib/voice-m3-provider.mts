@@ -16,6 +16,10 @@
  *    존재 여부(boolean)와 앞 4자만 다룬다. 값은 어디에도 남기지 않는다.
  */
 
+// 🔴 상한 도달 판정은 계약에 있다. 여기서 다시 쓰지 않는다 —
+//    두 곳에 각각 적으면 한쪽만 바뀌는 날이 온다(20자 임계값에서 같은 결정을 했다).
+import { isMaxTokensReached } from './voice-m3-contract.mjs'
+
 /** provider 별 key 환경변수. 🔴 값이 아니라 이름이다 */
 export const PROVIDER_KEY_ENV = {
   'gpt-5-nano': 'OPENAI_API_KEY',
@@ -66,9 +70,43 @@ export type LlmResponse = {
   rawText: string
   inputTokens: number
   outputTokens: number
+  /**
+   * 🔴 종료 사유. OpenAI `finish_reason` · Anthropic `stop_reason`.
+   *
+   * 1차 실행이 이 값을 안 받아서 "왜 잘렸는가" 를 확정하지 못했다.
+   * 이제 **비어 있으면 실패로 처리한다** — 잘림 여부를 판정할 수 없는 응답을
+   * 성공으로 세면 같은 사고가 조용히 반복된다.
+   */
+  finishReason: string
+  /** reasoning 모델만. 없으면 null. 🔴 이 값이 상한을 먹은 범인이었다 */
+  reasoningTokens: number | null
+  /** 🔴 응답 **길이**만. 응답 자체는 여기 담기지 않는다 */
+  responseChars: number
+  /** 상한에 닿았는가. 종료 사유 + 토큰 대조 둘 다 본다 */
+  maxTokensReached: boolean
   errorCode: string | null
   /** 🔴 사유 요약만. 응답 본문을 그대로 담지 않는다 */
   errorMessage: string | null
+}
+
+/** 실패 응답을 만든다. 🔴 진단 필드를 빠뜨리지 않기 위한 한 자리 */
+function failure(
+  errorCode: string, errorMessage: string,
+  partial?: Partial<Pick<LlmResponse, 'inputTokens' | 'outputTokens' | 'finishReason'
+    | 'reasoningTokens' | 'responseChars' | 'maxTokensReached'>>,
+): LlmResponse {
+  return {
+    ok: false, rawText: '',
+    inputTokens: 0, outputTokens: 0,
+    finishReason: '', reasoningTokens: null, responseChars: 0, maxTokensReached: false,
+    ...partial,
+    errorCode, errorMessage,
+  }
+}
+
+/** usage 에서 숫자만 안전하게 꺼낸다 */
+function num(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
 
 /**
@@ -83,11 +121,7 @@ export type LlmResponse = {
 export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
   const status = keyStatus(req.model)
   if (!status.present) {
-    return {
-      ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
-      errorCode: 'NO_API_KEY',
-      errorMessage: `${status.envName} 가 없다`,
-    }
+    return failure('NO_API_KEY', `${status.envName} 가 없다`)
   }
   const url = ENDPOINT[req.model]
   const controller = new AbortController()
@@ -131,38 +165,60 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
 
     if (!res.ok) {
       // 🔴 응답 본문을 그대로 담지 않는다. 상태 코드와 짧은 사유만
-      return {
-        ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
-        errorCode: `HTTP_${res.status}`,
-        errorMessage: `provider 가 ${res.status} 로 응답했다`,
-      }
+      return failure(`HTTP_${res.status}`, `provider 가 ${res.status} 로 응답했다`)
     }
 
     const json = (await res.json()) as Record<string, unknown>
-    const usage = (json.usage ?? {}) as Record<string, number>
+    const usage = (json.usage ?? {}) as Record<string, unknown>
+    const choice = (json.choices as Array<{
+      message?: { content?: string }
+      finish_reason?: string
+    }> | undefined)?.[0]
     const text = isAnthropic
       ? String(((json.content as Array<{ text?: string }> | undefined)?.[0]?.text) ?? '')
-      : String(
-          ((json.choices as Array<{ message?: { content?: string } }> | undefined)?.[0]
-            ?.message?.content) ?? '',
-        )
+      : String(choice?.message?.content ?? '')
+
+    const inputTokens = num(usage.input_tokens) || num(usage.prompt_tokens)
+    const outputTokens = num(usage.output_tokens) || num(usage.completion_tokens)
+    // 🔴 reasoning 토큰. OpenAI 는 completion_tokens_details 안에 준다.
+    //    Anthropic 은 thinking 을 켜지 않았으므로 null 이다 — 0 이 아니다.
+    //    0 이면 "추론을 안 썼다", null 이면 "알 수 없다" 로 읽힌다. 둘은 다르다.
+    const details = (usage.completion_tokens_details ?? null) as Record<string, unknown> | null
+    const reasoningTokens = isAnthropic || details === null
+      ? null
+      : num(details.reasoning_tokens)
+    const finishReason = isAnthropic
+      ? String(json.stop_reason ?? '')
+      : String(choice?.finish_reason ?? '')
+    const maxTokensReached = isMaxTokensReached(finishReason, outputTokens, req.maxOutputTokens)
+
+    // 🔴 종료 사유가 없으면 성공으로 세지 않는다.
+    //    "잘렸는지 알 수 없는 응답" 을 통과시킨 것이 1차 실행의 진단 공백이었다.
+    //    토큰은 이미 청구됐으므로 수치는 그대로 실어 보낸다 — cap 계상이 어긋나면 안 된다.
+    if (finishReason.trim() === '') {
+      return failure('NO_FINISH_REASON', 'provider 응답에 종료 사유가 없다 — 잘림 여부를 판정할 수 없다', {
+        inputTokens, outputTokens, reasoningTokens,
+        responseChars: text.length, maxTokensReached,
+      })
+    }
 
     return {
       ok: true,
       rawText: text,
-      inputTokens: usage.input_tokens ?? usage.prompt_tokens ?? 0,
-      outputTokens: usage.output_tokens ?? usage.completion_tokens ?? 0,
+      inputTokens, outputTokens,
+      finishReason, reasoningTokens,
+      responseChars: text.length,
+      maxTokensReached,
       errorCode: null,
       errorMessage: null,
     }
   } catch (e: unknown) {
     const aborted = e instanceof Error && e.name === 'AbortError'
-    return {
-      ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
-      errorCode: aborted ? 'TIMEOUT' : 'NETWORK',
-      // 🔴 예외 메시지에 payload 가 섞일 수 있어 유형만 남긴다
-      errorMessage: aborted ? `${req.timeoutMs}ms 안에 응답이 없었다` : '네트워크 오류',
-    }
+    // 🔴 예외 메시지에 payload 가 섞일 수 있어 유형만 남긴다
+    return failure(
+      aborted ? 'TIMEOUT' : 'NETWORK',
+      aborted ? `${req.timeoutMs}ms 안에 응답이 없었다` : '네트워크 오류',
+    )
   } finally {
     clearTimeout(timer)
   }
