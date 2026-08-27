@@ -8,7 +8,18 @@ export const metadata: Metadata = {
   alternates: { canonical: '/privacy' },
 }
 
-const EFFECTIVE_DATE = '2026년 8월 22일'
+/**
+ * 🔴 항목·목적이 바뀌면 이 날짜도 함께 바꾼다.
+ *
+ * 12항에 "중요한 변경은 최소 7일 전에 알린다" 고 스스로 적어 두었다.
+ * 이 개정은 그 유예 없이 바로 시행한다 — 알릴 상대가 아직 없기 때문이다.
+ * 성별·출생연도·전화번호를 실제로 받는 기능은 배포 전이고,
+ * 이 문서는 카카오 동의항목 심사에 앞서 먼저 적어 두는 것이다.
+ *
+ * 🔴 회원이 생긴 뒤의 개정은 이 예외를 따라가지 않는다.
+ *    그때는 공지가 먼저고, 공지일로부터 7일 뒤가 시행일이다.
+ */
+const EFFECTIVE_DATE = '2026년 8월 27일'
 const CONTACT = 'soransoran.community@gmail.com'
 
 function Article({ title, children }: { title: string; children: React.ReactNode }) {
@@ -40,14 +51,91 @@ export default function PrivacyPage() {
           <p>3. 신고 접수 및 처리, 부정 이용 방지</p>
           <p>4. 서비스 오류 확인 및 안정적인 운영</p>
           <p>5. 문의에 대한 회신</p>
+          <p>6. 커뮤니티 가입 자격 확인 및 서비스 대상 연령대 확인</p>
+          <p>7. 회원 본인 확인과 중복·부정 가입 방지</p>
         </Article>
 
         <Article title="2. 처리하는 개인정보 항목">
           <p className="font-bold">가. 카카오 로그인 시 제공받는 정보</p>
-          <p>· 카카오 계정 식별자</p>
-          <p>· 프로필 이름(닉네임)</p>
-          <p>· 이메일 (카카오에서 제공되고 이용자가 동의한 경우에 한함)</p>
-          <p>· 프로필 이미지 (제공되는 경우)</p>
+          <p>
+            아래 항목은 카카오 로그인 동의 화면에서 이용자가 동의한 범위에서 제공받습니다. 필수
+            항목에 동의하지 않으시면 회원가입과 서비스 이용이 어렵습니다.
+          </p>
+
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full min-w-[520px] border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th className="border-b border-subtle py-2 pr-3 text-left font-bold text-content-primary">
+                    항목
+                  </th>
+                  <th className="border-b border-subtle py-2 pr-3 text-left font-bold text-content-primary">
+                    구분
+                  </th>
+                  <th className="border-b border-subtle py-2 text-left font-bold text-content-primary">
+                    수집·이용 목적
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="align-top text-content-primary">
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3">카카오 계정 식별자</td>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">필수</td>
+                  <td className="border-b border-subtle py-2">회원 식별 및 로그인 유지</td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3">프로필 이름(닉네임)</td>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">필수</td>
+                  <td className="border-b border-subtle py-2">
+                    게시글·댓글 작성자 표시
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3">이메일</td>
+                  <td className="border-b border-subtle py-2 pr-3">선택</td>
+                  <td className="border-b border-subtle py-2">
+                    계정 관련 안내 및 문의 회신. 카카오 계정에 이메일이 없거나 동의하지 않으신
+                    경우에는 제공받지 않으며, 서비스 이용에 제한이 없습니다
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3">성별</td>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">필수</td>
+                  <td className="border-b border-subtle py-2">
+                    여성을 위한 커뮤니티라는 서비스 성격에 따른 가입 자격 확인
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3">출생연도</td>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">필수</td>
+                  <td className="border-b border-subtle py-2">
+                    서비스 대상 연령대 확인 및 커뮤니티 운영 기준 적용
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border-b border-subtle py-2 pr-3">전화번호</td>
+                  <td className="border-b border-subtle py-2 pr-3 font-bold">필수</td>
+                  <td className="border-b border-subtle py-2">
+                    회원 본인 확인, 중복·부정 가입 방지, 신고·분쟁 처리 시 필요한 연락
+                  </td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-3">프로필 이미지</td>
+                  <td className="py-2 pr-3">선택</td>
+                  <td className="py-2">
+                    회원 프로필 표시. 동의하지 않으셔도 서비스 이용에 제한이 없습니다
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p className="mt-3 text-sm text-content-muted">
+            전화번호는 위에 적은 목적으로만 사용하며, 광고나 홍보 정보를 보내는 데 쓰지 않습니다.
+            광고성 정보를 받아 보시려면 별도의 수신 동의가 필요하며, 서비스는 현재 그 동의를 받고
+            있지 않습니다.
+          </p>
+
           <p className="mt-2 font-bold">나. 서비스 이용 과정에서 생성·수집되는 정보</p>
           <p>· 이용자가 작성한 게시글, 댓글, 신고 내용</p>
           <p>· 접속 로그, IP 주소, 브라우저 정보(User-Agent), 접속 일시</p>
@@ -66,7 +154,11 @@ export default function PrivacyPage() {
             경우, 해당 목적에 필요한 범위에서 일정 기간 보관할 수 있습니다.
           </p>
           <p>
-            3. 이용자가 작성한 게시글과 댓글의 처리 방식은 6항(개인정보의 파기 절차 및 방법)에서
+            3. 성별, 출생연도, 전화번호는 회원 자격과 본인 확인을 위한 정보이므로 회원 자격이
+            유지되는 동안 보관하며, 탈퇴 시 다른 계정 정보와 함께 파기합니다.
+          </p>
+          <p>
+            4. 이용자가 작성한 게시글과 댓글의 처리 방식은 6항(개인정보의 파기 절차 및 방법)에서
             정한 바에 따릅니다.
           </p>
         </Article>
@@ -153,8 +245,8 @@ export default function PrivacyPage() {
                     게시글·댓글·신고 내용
                   </td>
                   <td className="border-b border-subtle py-2">
-                    카카오 계정 식별자, 이름(닉네임), 이메일(제공되는 경우), 프로필 이미지(제공되는
-                    경우), 게시글, 댓글, 신고 내용
+                    카카오 계정 식별자, 이름(닉네임), 이메일(제공되는 경우), 성별, 출생연도,
+                    전화번호, 프로필 이미지(동의한 경우), 게시글, 댓글, 신고 내용
                   </td>
                 </tr>
                 <tr>
