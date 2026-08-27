@@ -64,6 +64,7 @@ export function chromeArgs() {
  *   browser_missing    Chrome 이 없거나 경로가 바뀌었다
  *   permission_blocked 브라우저 실행이 정책에 막혔다
  *   chrome_not_running 전용 Chrome 이 안 떠 있다. CDP 로 붙을 대상이 없다
+ *   protocol_error     붙기는 했는데 CDP 명령이 거부됐다. Chrome 은 살아 있다
  *   unknown            위 어디도 아니다. UI 가 바뀌었을 수 있다
  */
 export const STATUS = {
@@ -73,6 +74,7 @@ export const STATUS = {
   BROWSER_MISSING: 'browser_missing',
   PERMISSION_BLOCKED: 'permission_blocked',
   CHROME_NOT_RUNNING: 'chrome_not_running',
+  PROTOCOL_ERROR: 'protocol_error',
   UNKNOWN: 'unknown',
 }
 
@@ -84,6 +86,7 @@ export const SEVERITY = {
   [STATUS.BROWSER_MISSING]: 'ERROR',
   [STATUS.PERMISSION_BLOCKED]: 'ERROR',
   [STATUS.CHROME_NOT_RUNNING]: 'BLOCKED',
+  [STATUS.PROTOCOL_ERROR]: 'ERROR',
   [STATUS.UNKNOWN]: 'ERROR',
 }
 
@@ -95,6 +98,7 @@ export const MESSAGE = {
   [STATUS.BROWSER_MISSING]: 'Chrome 을 찾지 못했다',
   [STATUS.PERMISSION_BLOCKED]: '브라우저 실행이 막혔다',
   [STATUS.CHROME_NOT_RUNNING]: '전용 Chrome 이 떠 있지 않다 — --login 으로 띄워 두어야 한다',
+  [STATUS.PROTOCOL_ERROR]: 'Chrome 에 붙었지만 CDP 명령이 거부됐다 — 로그의 원문을 본다',
   [STATUS.UNKNOWN]: 'ChatGPT 화면을 판정하지 못했다 — UI 가 바뀌었을 수 있다',
 }
 
@@ -134,11 +138,80 @@ export function profileInUse() {
   return false
 }
 
-/** CDP 연결 실패를 상태로 바꾼다. 원문을 그대로 흘리지 않는다 */
+/**
+ * 열려 있는 page 타겟 수. 탭을 하나도 안 세면 0 이다.
+ *
+ * 🔴 창을 다 닫아도 Chrome 프로세스와 CDP 포트는 남는다.
+ *    그래서 cdpAvailable() 은 true 인데 붙을 페이지가 없는 상태가 생긴다.
+ */
+export async function pageTargetCount(timeoutMs = 2000) {
+  const ac = new AbortController()
+  const t = setTimeout(() => ac.abort(), timeoutMs)
+  try {
+    const res = await fetch(`${CDP_URL}/json/list`, { signal: ac.signal })
+    if (!res.ok) return 0
+    const targets = await res.json()
+    return targets.filter((x) => x.type === 'page').length
+  } catch {
+    return 0
+  } finally {
+    clearTimeout(t)
+  }
+}
+
+/**
+ * 붙기 전에 탭이 하나는 있게 한다.
+ *
+ * 🔴 탭이 0 개면 connectOverCDP 가 브라우저 레벨 설정 단계에서 죽는다.
+ *    실측 에러: Protocol error (Browser.setDownloadBehavior):
+ *              Browser context management is not supported.
+ *    탭을 하나 열어 두면 같은 Chrome, 같은 포트에서 그대로 붙는다.
+ *
+ * 🔴 Chrome 을 재시작하지 않는다. CDP 의 HTTP 엔드포인트로 탭만 연다.
+ *    Playwright 로 열면 프로필의 주인이 바뀌어 세션 쿠키가 지워진다(맨 위 §).
+ */
+export async function ensurePageTarget(timeoutMs = 10000) {
+  if ((await pageTargetCount()) > 0) return { ok: true, opened: false }
+
+  const ac = new AbortController()
+  const t = setTimeout(() => ac.abort(), timeoutMs)
+  try {
+    const res = await fetch(`${CDP_URL}/json/new?${CHATGPT_URL}`, { method: 'PUT', signal: ac.signal })
+    if (!res.ok) return { ok: false, opened: false }
+  } catch {
+    return { ok: false, opened: false }
+  } finally {
+    clearTimeout(t)
+  }
+
+  // 탭이 목록에 뜰 때까지 잠깐 기다린다. 바로 조회하면 아직 0 일 수 있다
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 300))
+    if ((await pageTargetCount()) > 0) return { ok: true, opened: true }
+  }
+  return { ok: false, opened: true }
+}
+
+/**
+ * CDP 연결 실패를 상태로 바꾼다.
+ *
+ * 🔴 'connect' 를 부분 문자열로 잡지 않는다.
+ *    Playwright 의 에러는 `browserType.connectOverCDP: ...` 로 시작한다.
+ *    메서드 이름에 connect 가 들어 있어, 넓게 잡으면 **무슨 이유로 실패하든**
+ *    "Chrome 이 안 떠 있다" 로 둔갑한다. 실제로 그 오분류 때문에
+ *    살아 있는 Chrome 을 세 회차 동안 죽은 것으로 보고했다 (2026-08-27).
+ *
+ * 소켓이 실제로 안 붙은 경우만 chrome_not_running 이다.
+ * 붙었는데 명령이 거부된 것은 protocol_error 로 따로 둔다 — 대응이 다르다.
+ */
 function classifyConnectError(err) {
   const m = String(err?.message ?? '').toLowerCase()
-  if (m.includes('econnrefused') || m.includes('connect')) return STATUS.CHROME_NOT_RUNNING
+  if (/econnrefused|econnreset|socket hang up|connection (refused|closed)|timeout \d+ms exceeded/.test(m)) {
+    return STATUS.CHROME_NOT_RUNNING
+  }
   if (m.includes('permission') || m.includes('eacces') || m.includes('denied')) return STATUS.PERMISSION_BLOCKED
+  if (m.includes('protocol error')) return STATUS.PROTOCOL_ERROR
   return STATUS.UNKNOWN
 }
 
@@ -251,6 +324,12 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
     }
   }
 
+  // 🔴 붙기 전에 탭이 하나는 있어야 한다. 0 개면 connectOverCDP 가
+  //    Browser.setDownloadBehavior 에서 죽는다 (ensurePageTarget 주석 참조)
+  const tab = await ensurePageTarget()
+  out.tabOpened = tab.opened
+  if (!tab.ok) return { ...out, status: STATUS.CHROME_NOT_RUNNING }
+
   const { chromium } = await import('playwright-core')
   let browser = null
 
@@ -297,6 +376,9 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
   } catch (err) {
     out.status = out.connected ? STATUS.UNKNOWN : classifyConnectError(err)
     out.errorName = err?.name ?? 'Error'
+    // 🔴 원문 앞머리를 남긴다. 상태 코드만 남기면 무엇이 거부됐는지 영영 모른다.
+    //    Protocol error 문구에는 URL·계정·쿠키가 실리지 않는다 — 첫 줄만 자른다.
+    out.errorDetail = String(err?.message ?? '').split('\n')[0].slice(0, 200)
   } finally {
     // 🔴 close() 가 아니라 disconnect 다. 사람이 띄운 Chrome 을 죽이지 않는다
     try { await browser?.close() } catch { /* 연결만 끊는다 */ }
@@ -326,6 +408,10 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
  */
 export async function fetchManuscript({ briefPath, outPath, promptText, requiredMarkers = [], timeoutMs = 300000 }) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
+
+  // probe 와 같은 이유로 탭을 먼저 확보한다 — 여기만 빠뜨리면 회수 단계에서 같은 실패가 난다
+  const tab = await ensurePageTarget()
+  if (!tab.ok) return { ok: false, reason: STATUS.CHROME_NOT_RUNNING, sent: false }
 
   const { chromium } = await import('playwright-core')
   let browser = null

@@ -214,6 +214,8 @@ async function fetchOne(slug) {
   if (p.status !== STATUS.OK) {
     console.error('')
     console.error(`  ⛔ ${MESSAGE[p.status] ?? MESSAGE[STATUS.UNKNOWN]}`)
+    // 상태 코드만 찍으면 무엇이 거부됐는지 로그에 남지 않는다
+    if (p.errorDetail) console.error(`     ${p.errorDetail}`)
     console.error('     한 글자도 보내지 않았다.')
     console.error('')
     process.exit(1)
@@ -299,6 +301,7 @@ async function fetchBatch({ date, dryRun, limit }) {
     if (p.status !== STATUS.OK) {
       console.log('')
       console.log(`  ⛔ ${MESSAGE[p.status] ?? MESSAGE[STATUS.UNKNOWN]} — 한 글자도 보내지 않았다`)
+      if (p.errorDetail) console.log(`     ${p.errorDetail}`)
       console.log('')
       return { planned, results: [{ slug: '-', status: 'failed', reason: p.status, sent: false }], sentTotal: 0, fatal: p.status }
     }
