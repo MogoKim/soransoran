@@ -29,6 +29,29 @@ export type ModelPricing = {
   checkedAt: string
 }
 
+/**
+ * 🔴 **내부 라벨과 provider API 모델 ID 는 다른 것이다** (2026-08-27).
+ *
+ * 초판은 둘을 구분하지 않고 내부 키(`M3_MODEL_CANDIDATES` 의 키)를 그대로
+ * API 요청 `body.model` 에 넣었다. `gpt-5-nano` 는 우연히 OpenAI 의 실제 모델 ID 와
+ * 같아서 통했고, **`claude-haiku-4.5` 는 Anthropic 에 없는 이름이라 5건 전부 HTTP_404** 였다.
+ *
+ * 우연히 맞는 것은 설계가 아니다. 그래서 **둘을 항상 명시적으로 분리**한다 —
+ * 값이 같은 `gpt-5-nano` 도 예외로 두지 않는다. 예외를 두면 다음 모델에서 또 헷갈린다.
+ *
+ * | | 쓰이는 곳 |
+ * |---|---|
+ * | 내부 라벨 (키) | `cacheKey` · `VoiceM3Run.model` · 보고 · 사람이 읽는 모든 곳 |
+ * | `apiModelId` | 🔴 **provider 요청 `body.model` 전용** |
+ *
+ * 🔴 `cacheKey` 는 내부 라벨을 유지한다. provider 가 모델 ID 를 개정해도
+ *    (`-20251001` 같은 날짜 접미사가 바뀌어도) 실험 비교의 축은 흔들리면 안 된다.
+ */
+export type ModelCandidate = ModelPricing & {
+  /** 🔴 provider API 의 `model` 필드에 들어갈 값. 내부 라벨과 다를 수 있다 */
+  apiModelId: string
+}
+
 // ── 버전 상수 ─────────────────────────────────────────────
 
 /** VE-M3 작업 정의 버전. 판단 대상 · 입력 구성이 바뀌면 올린다 */
@@ -53,20 +76,55 @@ export const M3_OUTPUT_SCHEMA_VERSION = 'voice-m3-output-v1'
  */
 export const M3_MODEL_CANDIDATES = {
   'gpt-5-nano': {
+    // 🔴 내부 라벨과 값이 같지만 **그래도 적는다.** 우연한 일치에 기대면
+    //    다음 모델에서 같은 404 를 다시 만난다(2026-08-27 Haiku 사례).
+    apiModelId: 'gpt-5-nano',
     inputPerMTok: 0.05,
     outputPerMTok: 0.40,
     source: 'https://platform.openai.com/pricing',
     checkedAt: '2026-08-27',
   },
   'claude-haiku-4.5': {
+    // 🔴 내부 라벨(`claude-haiku-4.5`)은 Anthropic 에 없는 이름이다.
+    //    이것을 body.model 에 넣어 30건 실행이 HTTP_404 로 전멸했다(비용 0원).
+    apiModelId: 'claude-haiku-4-5-20251001',
     inputPerMTok: 1.0,
     outputPerMTok: 5.0,
     source: 'https://claude.com/pricing',
     checkedAt: '2026-08-27',
   },
-} as const satisfies Record<string, ModelPricing>
+} as const satisfies Record<string, ModelCandidate>
 
 export type M3ModelName = keyof typeof M3_MODEL_CANDIDATES
+
+/**
+ * provider 요청에 넣을 실제 모델 ID.
+ *
+ * 🔴 등록되지 않은 모델은 던진다 — `pricingFor` · `outputTokenPolicyFor` 와 같은 이유다.
+ *    모르는 모델에 내부 라벨을 그대로 태우는 순간 404 가 재발한다.
+ *
+ * 🔴 이 값은 **provider 호출 전용**이다. `cacheKey` 에 넣지 않는다.
+ */
+export function apiModelIdFor(model: string): string {
+  const found = (M3_MODEL_CANDIDATES as Record<string, ModelCandidate>)[model]
+  if (!found) {
+    throw new Error(
+      `provider 모델 ID 가 등록되지 않은 모델이다: ${model}\n` +
+        `  후보: ${Object.keys(M3_MODEL_CANDIDATES).join(' · ')}\n` +
+        '  공식 API 모델 ID 를 확인해 M3_MODEL_CANDIDATES 의 apiModelId 에 넣은 뒤 쓴다.',
+    )
+  }
+  // 🔴 `undefined.trim()` 으로 죽지 않는다. 죽으면 스택만 남고 **이유가 안 읽힌다** —
+  //    가드는 막는 것만으로 부족하고 무엇이 잘못됐는지 말해야 한다.
+  if (typeof found.apiModelId !== 'string' || found.apiModelId.trim() === '') {
+    throw new Error(
+      `${model} 의 apiModelId 가 비어 있다 — provider 가 404 로 답한다.\n` +
+        '  M3_MODEL_CANDIDATES 의 모든 항목은 apiModelId 를 명시해야 한다.\n' +
+        '  내부 라벨과 값이 같더라도 생략하지 않는다(2026-08-27 Haiku 404).',
+    )
+  }
+  return found.apiModelId
+}
 
 /**
  * 🔴 모델 비교는 **단계형**이다. 한 번에 끝내지 않는다.
