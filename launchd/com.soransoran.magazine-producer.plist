@@ -61,14 +61,14 @@
   <string>/Users/yanadoo/Documents/soransoran</string>
 
   <!--
-    🔴 09:30 은 임시다. 사람이 깨어 있는 시간에 무인 실행을 눈으로 확인하려고 옮겼다.
-       한 회차가 사람 손 없이 끝나는 것을 확인하면 00:10 KST 로 되돌린다.
+    🔴 12:30 은 임시다. 예약 발행이 실제로 열리는지 오늘 한 번 보려고 옮겼다.
+       한 회차가 사람 손 없이 끝나고 예약 공개까지 확인되면 00:10 KST 로 되돌린다.
     시스템 timezone 이 Asia/Seoul 이라 그대로 KST 다.
   -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>9</integer>
+    <integer>12</integer>
     <key>Minute</key>
     <integer>30</integer>
   </dict>

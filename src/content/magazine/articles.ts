@@ -2263,9 +2263,9 @@ const MAGAZINE_ARTICLE_RECORD = {
     description:
       '어느 날 조용해진 단톡방을 보며 친구가 줄었다는 생각이 들 때, 50대의 관계가 달라지는 이유와 지금 남은 관계를 바라보는 방법을 이야기합니다.',
     cluster: 'relationship',
-    publishedAt: '2026-09-08',
+    publishedAt: '2026-08-27',
       status: 'SCHEDULED',
-      publishAt: '2026-09-08T10:30:00+09:00',
+      publishAt: '2026-08-27T12:20:00+09:00',
 
     heroImage: {
       src: '/magazine/fewer-friends-50s/hero.jpg',
