@@ -21,7 +21,20 @@ export default function IconMenu() {
   const pathname = usePathname()
 
   return (
-    <nav aria-label="주요 메뉴" className="border-b border-subtle bg-surface-card">
+    /* 🔴 헤더와 함께 고정된다.
+          이전에는 헤더만 sticky 라 스크롤을 조금만 내려도 게시판 네 칸이 화면 밖으로
+          사라졌다. 목록을 읽다가 다른 방으로 건너가려면 맨 위까지 되올라가야 했다 —
+          이 서비스에서 방 사이 이동은 부가 기능이 아니라 주 동선이다.
+
+          top-16 = 헤더 h-16(64px). 헤더 높이를 바꾸면 이 값도 같이 바꾼다.
+
+          🔴 z 는 헤더(z-50)보다 낮아야 한다.
+             헤더 안의 글자크기 팝오버가 헤더 아래로 펼쳐지는데,
+             메뉴가 헤더와 같거나 높으면 그 팝오버를 덮는다. */
+    <nav
+      aria-label="주요 메뉴"
+      className="sticky top-16 z-40 border-b border-subtle bg-surface-card"
+    >
       {/* 🔴 스크롤바를 숨긴다.
           "크게" 단계에서는 아이콘 64px + 라벨 20px 라 네 항목 합이 360px 이 되어
           320px 화면(iPhone SE)에서 실제로 가로 스크롤이 생긴다.

@@ -17,7 +17,7 @@ export default function BestPage() {
   const board = getBoardBySlug('best')!
   return (
     <PageShell>
-      <main className="mx-auto max-w-3xl px-4">
+      <main className="mx-auto max-w-3xl px-4 pb-16">
         <ListHeader board={board} />
         {/* 베스트는 모아보기 영역이다. 글쓰기 진입점을 두지 않는다. */}
         <EmptyState title={board.emptyTitle} body={board.emptyBody} />

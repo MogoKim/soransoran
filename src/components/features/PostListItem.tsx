@@ -26,9 +26,12 @@ export default function PostListItem({
   if (!board) return null
 
   return (
+    /* 🔴 구분선을 여기서 긋지 않는다 — PostCard 와 같은 이유다.
+          `last:border-b-0` 은 <a> 가 <li> 의 유일한 자식이라 항상 참이었고,
+          그래서 선이 한 줄도 그려지지 않았다. 목록이 `[&>li+li]` 로 사이에만 긋는다. */
     <Link
       href={`${board.href}/${post.id}`}
-      className="flex min-h-[52px] items-start gap-3 border-b border-subtle py-3.5 no-underline transition-colors duration-150 last:border-b-0 hover:bg-surface-page active:bg-surface-soft"
+      className="flex min-h-[52px] items-start gap-3 px-4 py-3.5 no-underline transition-colors duration-150 hover:bg-surface-page active:bg-surface-soft"
     >
       <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
         {rank}

@@ -52,7 +52,14 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
             ctaHref={`/write?board=${board.slug}`}
           />
         ) : (
-          <ul className="flex list-none flex-col p-0">
+          /* 🔴 목록은 바탕 위에 직접 놓지 않는다.
+                글이 바탕에 바로 앉으면 어디까지가 한 건인지가 구분선 하나에만 걸린다.
+                흰 면 위에 올려야 "목록 한 덩어리" 로 읽히고, 그 위에서 hover 도 보인다.
+
+                가로 여백은 이 목록이 아니라 행(PostCard)이 가진다 —
+                여기에 px 를 주면 hover 면이 카드 안쪽으로 들어가 눌리는 폭과 어긋난다.
+                FAB 자리는 <main> 의 pb-24 가 이미 확보한다. */
+          <ul className="flex list-none flex-col overflow-hidden rounded-2xl border border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
             {posts.map((post) => (
               <li key={post.id}>
                 <PostCard post={post} boardHref={board.href} />

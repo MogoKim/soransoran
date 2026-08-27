@@ -29,7 +29,10 @@ export default function WriteCta({
   const href = isLoggedIn ? writePath : loginHref(writePath)
 
   return (
-    <section className="mt-10 rounded-lg bg-surface-page px-5 py-6 text-center">
+    /* 🔴 바탕이 중립이 된 뒤로 bg-surface-page 는 이 블록을 보이지 않게 만든다
+          (바탕 위 바탕색). 흰 면 + 보더로 자기 자리를 갖게 한다.
+          HomeJoinCta 는 여전히 bg-surface-soft 다 — 성격이 다른 블록을 같은 옷으로 두지 않는다. */
+    <section className="mt-10 rounded-lg border border-subtle bg-surface-card px-5 py-6 text-center">
       <p className="m-0 font-bold text-content-primary">당신의 이야기도 궁금합니다</p>
 
       {isLoggedIn ? null : (
