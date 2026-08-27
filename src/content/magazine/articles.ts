@@ -513,7 +513,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     cluster: 'money-work',
     publishedAt: '2026-08-24',
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/pension-early-vs-normal/hero.jpg',
+      alt: '창가 식탁에 앉아 서류와 계산기를 앞에 두고 생각에 잠긴 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -548,6 +553,16 @@ const MAGAZINE_ARTICLE_RECORD = {
         type: 'p',
         text: '그래서 단순히 "총액으로 누가 더 많이 받느냐"만으로 결정하기는 어렵습니다. 지금 소득 공백을 견딜 수 있는지 역시 실제 생활에서는 아주 큰 기준이 됩니다.',
       },
+      {
+        type: 'image',
+        image: {
+          src: '/magazine/pension-early-vs-normal/body-1.jpg',
+          alt: '탁자에 마주 앉아 공책에 적어 가며 이야기를 나누는 두 사람',
+          width: 1200,
+          height: 675,
+        },
+      },
+
       {
         type: 'h2',
         text: '어느 쪽이 유리한지는 무엇으로 갈리나요',
@@ -623,7 +638,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       publishAt: '2026-08-25T10:30:00+09:00',
     medical: true,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/after-holiday-body-ache/hero.jpg',
+      alt: '거실 소파에 기대어 한 손으로 어깨를 짚고 쉬는 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -668,6 +688,16 @@ const MAGAZINE_ARTICLE_RECORD = {
         type: 'p',
         text: '어디가 먼저 힘든지는 사람마다 다릅니다. 같은 일을 해도 평소 생활 습관이나 그날의 컨디션에 따라 느끼는 피로는 다를 수 있습니다.',
       },
+      {
+        type: 'image',
+        image: {
+          src: '/magazine/after-holiday-body-ache/body-1.jpg',
+          alt: '소파에 다리를 뻗고 기대어 눈을 감고 쉬는 여성',
+          width: 1200,
+          height: 675,
+        },
+      },
+
       {
         type: 'h2',
         text: '나이 탓만은 아닙니다',
@@ -746,7 +776,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       status: 'SCHEDULED',
       publishAt: '2026-08-26T10:30:00+09:00',
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/holiday-family-remarks/hero.jpg',
+      alt: '저녁 부엌 식탁에 혼자 앉아 두 손으로 찻잔을 감싸 쥔 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -791,6 +826,16 @@ const MAGAZINE_ARTICLE_RECORD = {
         type: 'p',
         text: '듣는 사람에게는 그 말 하나에 설명하고 싶지 않은 사정이 붙어 있을 수 있습니다. 그래서 남들은 별말 아니라고 해도 나에게는 쉽게 지나가지 않을 때가 있습니다.',
       },
+      {
+        type: 'image',
+        image: {
+          src: '/magazine/holiday-family-remarks/body-1.jpg',
+          alt: '창가에 서서 창밖을 바라보며 숨을 고르는 여성',
+          width: 1200,
+          height: 675,
+        },
+      },
+
       {
         type: 'h2',
         text: '되받아치지 못한 게 잘못은 아닙니다',
@@ -862,7 +907,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       publishAt: '2026-08-27T10:30:00+09:00',
     medical: true,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/holiday-cooking-wrist-pain/hero.jpg',
+      alt: '부엌에서 요리를 멈추고 한 손으로 반대쪽 손목을 감싸 쥔 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -907,6 +957,16 @@ const MAGAZINE_ARTICLE_RECORD = {
         type: 'p',
         text: '어떤 동작이 더 힘든지는 사람마다 다릅니다. 평소 손을 많이 쓰는지, 어느 손을 주로 사용하는지, 음식 준비를 얼마나 오래 하는지에 따라서도 느끼는 부담은 달라질 수 있습니다.',
       },
+      {
+        type: 'image',
+        image: {
+          src: '/magazine/holiday-cooking-wrist-pain/body-1.jpg',
+          alt: '탁자 앞에서 손목을 가볍게 펴는 두 손과 옆에 접어 둔 수건',
+          width: 1200,
+          height: 675,
+        },
+      },
+
       {
         type: 'h2',
         text: '요즘 더 오래 가는 것 같다면',
