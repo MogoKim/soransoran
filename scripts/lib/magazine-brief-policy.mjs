@@ -133,6 +133,67 @@ export const GATES = {
   G4: 'forbiddenPatterns 가 비어 있지 않다',
   G5: 'riskLevel 을 알 수 있고 HIGH 가 아니다 (HIGH 는 창업자 검수 → HOLD)',
   G6: '큐가 위험하다고 한 주제는 review.risk 도 위험하고, 확인 권고 문장이 있다',
+  G7: 'review.ts 가 ReviewData 스키마를 만족한다 (필수 필드 · 스키마 외 필드 0)',
+}
+
+/**
+ * ReviewData 스키마.
+ *
+ * 🔴 정본은 drafts/magazine/_template/review.ts 의 타입이다.
+ *    여기 목록이 그것과 어긋나면 auto-brief 는 통과시키는데 tsc 는 막는다 —
+ *    실제로 그 상태로 2026-08-27 회차 산출물 3건이 빌드를 깨뜨렸다.
+ *    타입을 고치면 이 목록도 같이 고친다.
+ */
+const REVIEW_REQUIRED = ['slug', 'summary', 'risk', 'factsToVerify', 'preparedAt', 'preparedBy', 'notes']
+const REVIEW_OPTIONAL = ['riskSentences', 'forbiddenPatterns']
+
+/**
+ * review 객체가 ReviewData 로 쓸 수 있는 모양인가.
+ *
+ * 🔴 빈 배열·빈 문자열을 통과시키지 않는다. 형식만 맞추면 tsc 는 지나가지만
+ *    창업자가 볼 것이 없는 review 가 남는다 — 검수 데이터의 존재 이유가 사라진다.
+ */
+export function verifyReviewShape(review) {
+  const problems = []
+  if (!review || typeof review !== 'object') return ['review 객체를 읽지 못했다']
+
+  for (const key of REVIEW_REQUIRED) {
+    if (!(key in review)) problems.push(`필수 필드가 없다: ${key}`)
+  }
+
+  const known = new Set([...REVIEW_REQUIRED, ...REVIEW_OPTIONAL])
+  for (const key of Object.keys(review)) {
+    if (!known.has(key)) problems.push(`스키마에 없는 필드다: ${key}`)
+  }
+
+  if ('summary' in review) {
+    const v = review.summary
+    if (!Array.isArray(v) || v.length !== RISK_SENTENCE_COUNT) {
+      problems.push(`summary 는 ${RISK_SENTENCE_COUNT}줄이어야 한다 (지금 ${Array.isArray(v) ? v.length : typeof v})`)
+    } else if (v.some((x) => typeof x !== 'string' || !x.trim())) {
+      problems.push('summary 에 빈 줄이 있다')
+    }
+  }
+
+  if ('factsToVerify' in review) {
+    const v = review.factsToVerify
+    if (!Array.isArray(v) || v.length === 0) problems.push('factsToVerify 가 비어 있다')
+    else if (v.some((x) => typeof x !== 'string' || !x.trim())) problems.push('factsToVerify 에 빈 항목이 있다')
+  }
+
+  if ('preparedAt' in review && !/^\d{4}-\d{2}-\d{2}$/.test(String(review.preparedAt ?? ''))) {
+    problems.push(`preparedAt 이 YYYY-MM-DD 가 아니다: ${review.preparedAt}`)
+  }
+
+  if ('preparedBy' in review && !['Claude 채팅', 'Claude Code'].includes(review.preparedBy)) {
+    problems.push(`preparedBy 가 허용 값이 아니다: ${review.preparedBy}`)
+  }
+
+  if ('notes' in review && (typeof review.notes !== 'string' || !review.notes.trim())) {
+    problems.push('notes 가 비어 있다')
+  }
+
+  return problems
 }
 
 /** brief.md 본문에서 "반드시 그대로 넣을 문장" 5개를 뽑는다. runner 와 같은 방식이다 */
@@ -160,6 +221,10 @@ function hasSection(briefText, name) {
 export function verifyBrief({ briefText, review, queueItem }) {
   const results = []
   const add = (gate, ok, detail) => results.push({ gate, ok, detail })
+
+  // G7 — 스키마부터 본다. 여기서 걸리면 파일로 써도 tsc 가 막는다
+  const shapeProblems = verifyReviewShape(review)
+  add('G7', shapeProblems.length === 0, shapeProblems.length ? shapeProblems.join(' · ') : 'ReviewData 스키마 만족')
 
   const text = String(briefText ?? '')
   const markers = extractMarkers(text)

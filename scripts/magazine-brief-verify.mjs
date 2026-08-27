@@ -90,9 +90,15 @@ const OK_SENTENCES = [
 ]
 
 const OK_REVIEW = {
+  slug: 'ok-slug',
+  summary: ['한 줄', '두 줄', '세 줄', '네 줄', '다섯 줄'],
   riskSentences: OK_SENTENCES,
   risk: { medical: 'MEDIUM', money: 'NONE', legal: 'NONE' },
+  factsToVerify: ['이 판단에 동의하는가'],
   forbiddenPatterns: ['아토피', '건선'],
+  preparedAt: '2026-08-27',
+  preparedBy: 'Claude Code',
+  notes: '자기검사용 fixture',
 }
 
 /** [이름, 기대 실패 게이트(null=통과), brief, review, queueItem] */
@@ -121,6 +127,13 @@ function selfTestCases() {
       { ...OK_REVIEW, riskSentences: OK_SENTENCES.map((s, i) => (i === 0 ? '어르신마다 다릅니다.' : s)) }, q],
 
     ['forbiddenPatterns 가 빈 배열', 'G4', OK_BRIEF, { ...OK_REVIEW, forbiddenPatterns: [] }, q],
+
+    // 🔴 2026-08-27 재현: 스키마를 어긴 review 가 게이트를 통과해 build 를 깨뜨렸다
+    ['summary 가 없다', 'G7', OK_BRIEF, { ...OK_REVIEW, summary: undefined }, q],
+    ['factsToVerify 가 비어 있다', 'G7', OK_BRIEF, { ...OK_REVIEW, factsToVerify: [] }, q],
+    ['notes 가 비어 있다', 'G7', OK_BRIEF, { ...OK_REVIEW, notes: '  ' }, q],
+    ['preparedAt 형식이 다르다', 'G7', OK_BRIEF, { ...OK_REVIEW, preparedAt: '2026/08/27' }, q],
+    ['스키마에 없는 필드가 있다', 'G7', OK_BRIEF, { ...OK_REVIEW, reviewMode: 'RISK_SENTENCES' }, q],
     ['forbiddenPatterns 자체가 없음', 'G4', OK_BRIEF, { ...OK_REVIEW, forbiddenPatterns: undefined }, q],
 
     ['HIGH 는 auto-brief HOLD', 'G5', OK_BRIEF, OK_REVIEW, { riskLevel: 'HIGH' }],

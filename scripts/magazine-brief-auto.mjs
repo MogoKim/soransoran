@@ -70,6 +70,8 @@ function siblingArticles(cluster, articles) {
 }
 
 function buildPrompt({ slug, todoText, queueItem, articles }) {
+  // preparedAt 은 모델이 지어내면 틀린다. 실행 시각(KST)을 프롬프트에 박아 넣는다
+  const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const cluster = queueItem?.cluster ?? '-'
   const siblings = siblingArticles(cluster, articles)
 
@@ -132,8 +134,24 @@ ${BRIEF_MARK}
 (brief.md 전문. 위 작업 패키지의 "공통 규칙" 을 그대로 포함하고 TODO 를 채운 것)
 ${REVIEW_MARK}
 (review.ts 전문. \`import type { ReviewData } from '../_template/review'\` 로 시작하고
- \`export const REVIEW: ReviewData = { ... }\` 를 내보낸다.
- slug 는 '${slug}' 다. preparedBy 는 'Claude Code' 다.)
+ \`export const REVIEW: ReviewData = { ... }\` 를 내보낸다.)
+
+🔴 review.ts 는 아래 **일곱 필드를 전부** 넣는다. 하나라도 빠지면 타입이 맞지 않아 버려진다.
+
+  slug            '${slug}'
+  summary         본문 순서대로 ${RISK_SENTENCE_COUNT}줄. 창업자가 30초 안에 글을 파악하는 요약이다.
+                  h2 흐름을 그대로 따라가며 각 줄에 무엇을 말하는지 적는다.
+  riskSentences   위에서 정한 ${RISK_SENTENCE_COUNT}문장을 토씨 하나 다르지 않게
+  risk            { medical, money, legal } 각각 NONE | LOW | MEDIUM | HIGH
+  factsToVerify   창업자가 눈으로 확인해야 할 것 3~5개. "이 판단에 동의하는가" 형태로 적는다.
+                  예: 진단명을 하나도 쓰지 않은 판단에 동의하는가
+  forbiddenPatterns  위 규칙대로. 비울 수 없다.
+  preparedAt      '${today}'  ← 이 날짜를 그대로 쓴다. 다른 날짜를 지어내지 않는다.
+  preparedBy      'Claude Code'
+  notes           이 글을 검수할 때 특히 볼 것을 한두 문장으로. 비울 수 없다.
+
+🔴 위 목록에 **없는 필드를 넣지 않는다.** riskLevel · reviewMode 같은 것을 만들어 넣으면
+   타입이 맞지 않아 결과가 통째로 버려진다. 등급은 risk 안에만 있다.
 
 🔴 마커 규칙 — 어기면 결과가 통째로 버려진다
 
