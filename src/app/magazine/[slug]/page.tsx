@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import MagazineBody from '@/components/features/MagazineBody'
+import RelatedMagazineList from '@/components/features/RelatedMagazineList'
 import { getMagazineArticleBySlug, getRelatedMagazineArticles } from '@/lib/magazine'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
 import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
@@ -157,23 +158,7 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
           </div>
         </article>
 
-        {related.length > 0 ? (
-          <section className="mt-8 border-t border-subtle pt-6">
-            <h2 className="text-lg font-bold text-content-primary">함께 읽어보세요</h2>
-            <ul className="mt-3 flex list-none flex-col gap-2 p-0">
-              {related.map((item) => (
-                <li key={item.slug}>
-                  <Link
-                    href={`/magazine/${item.slug}`}
-                    className="flex min-h-[52px] items-center text-content-primary no-underline"
-                  >
-                    {item.title}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+        <RelatedMagazineList articles={related} />
       </main>
     </PageShell>
   )
