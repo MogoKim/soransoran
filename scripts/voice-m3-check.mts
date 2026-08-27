@@ -11,6 +11,7 @@
  *    LLM import 한 줄 · fetch 한 줄이 곧 비용이다.
  */
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -27,7 +28,7 @@ import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/v
 import {
   selectStratifiedSample, validateSample, SAMPLE_AXES, type SampleCandidate,
 } from './lib/voice-m3-sample.mjs'
-import { keyStatus } from './lib/voice-m3-provider.mjs'
+import { keyStatus, ANTHROPIC_JSON_PREFILL } from './lib/voice-m3-provider.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-m3-dry-run.mts')
@@ -948,6 +949,83 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
       `후보 ${Object.keys(M3_MODEL_CANDIDATES).length}종 전부 apiModelId · body 양쪽 apiModelId 경유 · ` +
       `haiku→${apiModelIdFor('claude-haiku-4.5')} · cacheKey 는 라벨 유지`)
   }
+}
+
+// ── ㉚ Anthropic assistant prefill · 프롬프트 불변 ───────
+//    🔴 2026-08-27: Haiku 응답이 ```json 울타리에 감싸여 5건 전부 버려졌다.
+//       응답은 정상이었고(finish=end_turn · 잘림 0) 판정 내용도 있었다 —
+//       품질 실패가 아니라 출력 형식 문제다. prefill 로 구조적으로 막는다.
+{
+  const offenders: string[] = []
+
+  // ① prefill 값 자체
+  if (ANTHROPIC_JSON_PREFILL !== '{') offenders.push(`prefill 이 "${ANTHROPIC_JSON_PREFILL}"`)
+  // 🔴 Anthropic 은 뒤쪽 공백이 붙은 prefill 을 400 으로 거부한다
+  if (ANTHROPIC_JSON_PREFILL !== ANTHROPIC_JSON_PREFILL.trimEnd()) {
+    offenders.push('prefill 끝에 공백이 있다 — Anthropic 이 400 으로 거부한다')
+  }
+
+  // ② 🔴 Anthropic 요청에만 assistant prefill 이 붙는다
+  const bodyStart = providerCode.indexOf('const body = isAnthropic')
+  const bodyEnd = providerCode.indexOf('const res = await fetch', bodyStart)
+  const bodyBlock = bodyStart === -1 ? '' : providerCode.slice(bodyStart, bodyEnd === -1 ? bodyStart + 1200 : bodyEnd)
+  if (bodyStart === -1) offenders.push('provider 의 body 조립부를 찾지 못했다')
+  // Anthropic 분기(max_tokens)와 OpenAI 분기(max_completion_tokens)를 갈라서 본다
+  const antAt = bodyBlock.indexOf('max_tokens:')
+  const oaiAt = bodyBlock.indexOf('max_completion_tokens:')
+  if (antAt === -1 || oaiAt === -1 || antAt > oaiAt) offenders.push('두 provider 분기를 구분하지 못했다')
+  else {
+    const ant = bodyBlock.slice(antAt, oaiAt)
+    const oai = bodyBlock.slice(oaiAt)
+    if (!/role:\s*'assistant'/.test(ant)) offenders.push('Anthropic 요청에 assistant prefill 이 없다')
+    if (!/content:\s*ANTHROPIC_JSON_PREFILL/.test(ant)) offenders.push('prefill 이 상수를 쓰지 않는다')
+    // 🔴 OpenAI 쪽에는 붙지 않아야 한다 — nano 기준선을 흔들면 안 된다
+    if (/role:\s*'assistant'/.test(oai)) offenders.push('🔴 OpenAI 요청에 불필요한 assistant prefill 이 있다')
+    // user 메시지가 prefill 보다 앞이어야 한다
+    const uAt = ant.indexOf("role: 'user'")
+    const aAt = ant.indexOf("role: 'assistant'")
+    if (uAt === -1 || aAt === -1 || uAt > aAt) offenders.push('prefill 이 user 메시지보다 앞에 있다')
+  }
+
+  // ③ 🔴 prefill 을 쓰면 응답에 여는 `{` 가 없다 — 다시 붙여야 한다
+  if (!/ANTHROPIC_JSON_PREFILL \+ continuation/.test(providerCode)) {
+    offenders.push('응답에 prefill 을 재조립하지 않는다 — 이번엔 not_json 으로 전멸한다')
+  }
+  // 재조립은 유출 대조 대상인 rawText 로 이어져야 한다
+  if (!/rawText: text\b/.test(providerCode)) offenders.push('재조립된 text 가 rawText 로 가지 않는다')
+
+  // ④ 🔴 프롬프트는 바뀌지 않았다
+  if (M3_PROMPT_VERSION !== 'voice-m3-prompt-v1') {
+    offenders.push(`M3_PROMPT_VERSION 이 ${M3_PROMPT_VERSION} — nano 30건 기준선이 무효가 된다`)
+  }
+  // 버전만 보면 부족하다. **문구가 바뀌고 버전이 그대로면 더 위험하다** —
+  // 같은 cacheKey 에 다른 프롬프트 결과가 섞인다. 문구 자체를 해시로 잠근다.
+  const INSTRUCTION_SHA = '3afd99f33925e9a5'
+  const got = createHash('sha256').update(buildInstruction(), 'utf8').digest('hex').slice(0, 16)
+  if (got !== INSTRUCTION_SHA) {
+    offenders.push(
+      `프롬프트 문구가 바뀌었다 (sha ${got} ≠ ${INSTRUCTION_SHA}) — ` +
+      'M3_PROMPT_VERSION 과 이 해시를 함께 올려야 한다',
+    )
+  }
+
+  // ⑤ 🔴 파서를 관대하게 만들지 않았다
+  if (classifyJsonFailure('```json\n{"a":1}\n```') !== 'fenced') offenders.push('fenced 를 분류하지 못한다')
+  for (const [pat, why] of [
+    [/replace\([^)]*```/, '울타리를 문자열 치환으로 벗긴다'],
+    [/```json/, '울타리 리터럴을 다룬다'],
+    [/stripFence|unfence|stripCodeBlock/i, '울타리 제거 함수'],
+    [/trim\(\)\.replace\(/, '응답을 다듬어 파싱한다'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(runCode)) offenders.push(`run 에 ${why}`)
+    if (pat.test(providerCode)) offenders.push(`provider 에 ${why}`)
+  }
+  // 파싱은 여전히 원문 그대로여야 한다
+  if (!/JSON\.parse\(response\.rawText\)/.test(runCode)) offenders.push('rawText 를 그대로 파싱하지 않는다')
+
+  if (offenders.length) bad('Anthropic prefill · 프롬프트 불변', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('Anthropic prefill · 프롬프트 불변', 'guard',
+    `prefill="${ANTHROPIC_JSON_PREFILL}" Anthropic 만 · 응답 재조립 · promptVersion ${M3_PROMPT_VERSION} · 문구 sha ${INSTRUCTION_SHA} · 파서 관대화 0`)
 }
 
 // ── 출력 ────────────────────────────────────────────────

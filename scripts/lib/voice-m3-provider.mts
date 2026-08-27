@@ -37,6 +37,29 @@ const ENDPOINT = {
 } as const
 
 /**
+ * 🔴 **Anthropic 전용 assistant prefill** (2026-08-27).
+ *
+ * Haiku 30건 재실행이 `JSON_PARSE:fenced` 5건으로 중단됐다.
+ * 응답은 정상 도착했고(`finish=end_turn`, 잘림 없음) 판정 내용도 들어 있었는데,
+ * 모델이 그것을 ```json 코드 울타리로 감싸 보냈다. 우리 파서는 `{` 로 시작하는
+ * 문자열만 받으므로 통째로 버려졌다 — **Haiku 품질 실패가 아니라 출력 형식 문제**다.
+ *
+ * 🔴 왜 prefill 인가
+ *    응답 첫 글자를 우리가 정해 주면 모델은 **그 뒤를 이어 쓴다.** `{` 로 시작한
+ *    문장에 울타리를 덧댈 자리가 없다 — 프롬프트로 부탁하는 것과 달리
+ *    **구조적으로 불가능**해진다.
+ *
+ * 🔴 프롬프트를 바꾸지 않는 이유
+ *    문구를 고치면 `M3_PROMPT_VERSION` 을 올려야 하고, 그러면 cacheKey 가 달라져
+ *    **gpt-5-nano 30건 기준선이 통째로 무효**가 된다($0.056 재소진).
+ *    prefill 은 요청 조립 방식일 뿐 프롬프트가 아니라서 그 대가를 치르지 않는다.
+ *
+ * ⚠️ 값에 **뒤쪽 공백을 넣지 않는다.** Anthropic 은 trailing whitespace 가 있는
+ *    assistant prefill 을 400 으로 거부한다.
+ */
+export const ANTHROPIC_JSON_PREFILL = '{'
+
+/**
  * key 가 있는가. 🔴 **값을 한 조각도 반환하지 않는다.**
  *
  * 초판은 `sk-a…` 같은 앞 4자 힌트를 돌려줬다. 그것도 값의 일부다 —
@@ -151,7 +174,14 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
           model: apiModelId,
           max_tokens: req.maxOutputTokens,
           system: req.systemPrompt,
-          messages: [{ role: 'user', content: req.userPayload }],
+          messages: [
+            { role: 'user', content: req.userPayload },
+            // 🔴 assistant prefill — 모델이 `{` 뒤를 이어 쓴다.
+            //    ```json 울타리가 나올 자리를 없앤다(2026-08-27 fenced 5건).
+            //    OpenAI 쪽에는 붙이지 않는다 — nano 는 순수 JSON 을 잘 반환했고,
+            //    불필요한 prefill 은 기준선을 흔들 뿐이다.
+            { role: 'assistant', content: ANTHROPIC_JSON_PREFILL },
+          ],
         }
       : {
           model: apiModelId,
@@ -180,9 +210,16 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
       message?: { content?: string }
       finish_reason?: string
     }> | undefined)?.[0]
-    const text = isAnthropic
+    // 🔴 prefill 을 쓰면 응답에 **여는 `{` 가 들어 있지 않다.**
+    //    모델은 우리가 준 첫 글자 뒤부터 이어 쓰기 때문이다.
+    //    다시 앞에 붙여야 완전한 JSON 이 된다 — 빠뜨리면 이번엔 `not_json` 으로 전멸한다.
+    //    유출 대조 · 금지어 검사도 이 재조립된 문자열을 본다.
+    const continuation = isAnthropic
       ? String(((json.content as Array<{ text?: string }> | undefined)?.[0]?.text) ?? '')
       : String(choice?.message?.content ?? '')
+    const text = isAnthropic && continuation !== ''
+      ? ANTHROPIC_JSON_PREFILL + continuation
+      : continuation
 
     const inputTokens = num(usage.input_tokens) || num(usage.prompt_tokens)
     const outputTokens = num(usage.output_tokens) || num(usage.completion_tokens)
