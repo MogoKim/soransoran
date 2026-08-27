@@ -41,8 +41,9 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
 
   return (
     <PageShell>
-      {/* 제목을 감춘 자리라 위 여백은 숨 쉴 틈만큼만 둔다 */}
-      <main className="mx-auto max-w-3xl px-4 pb-24 pt-2">
+      {/* 제목을 감춘 자리라 위 여백은 숨 쉴 틈만큼만 둔다.
+          아래 여백은 pb-16 이면 충분하다 — FAB 자리는 PageShell 이 따로 확보한다. */}
+      <main className="mx-auto max-w-3xl px-4 pb-16 pt-2">
         {/* 상단 메뉴가 이미 어느 방인지 말한다. 눈에서만 감추고 <h1> 텍스트는 남긴다
             (매거진·베스트는 기본값 그대로 보인다). */}
         <ListHeader board={board} visuallyHidden />
@@ -55,11 +56,11 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
             ctaHref={`/write?board=${board.slug}`}
           />
         ) : (
-          /* 떠 있는 카드가 아니라 바닥에 깔린 지면으로 둔다 — 라운드·사방 테두리는 위젯으로 읽힌다.
-             흰 면 자체는 없애지 않는다: 바탕 위에 행을 직접 놓으면 hover 색이 바탕색과 같아져
-             아무 일도 일어나지 않는다 (globals.css 표면 규칙).
-             -mx-4 는 <main> 의 가로 여백을 되돌린다 — 글자 위치는 행의 px-4 가 유지한다. */
-          <ul className="-mx-4 flex list-none flex-col border-y border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
+          /* 🔴 목록에 면을 주지 않는다.
+                흰 면 + 위아래 선 + 화면 끝까지 닿는 폭이 겹치면 목록이 "표" 로 읽힌다.
+                글은 바탕 위에 그대로 얹고, 사이를 가르는 선만 남긴다.
+                행 hover 는 PostCard 가 흰색으로 떠오르게 처리한다 (정본 §7). */
+          <ul className="flex flex-col [&>li+li]:border-t [&>li+li]:border-subtle">
             {posts.map((post) => (
               <li key={post.id}>
                 <PostCard post={post} boardHref={board.href} />
