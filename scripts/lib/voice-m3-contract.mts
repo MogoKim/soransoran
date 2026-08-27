@@ -191,6 +191,42 @@ export const M3_EXPERIMENT_PER_MODEL = M3_EXPERIMENT_STAGES.stage1PerModel
 export const M3_ANALYSIS_MODEL = 'claude-haiku-4.5'
 
 /**
+ * 🔴 **다시 불러도 답이 달라지지 않는 실패** (2026-08-27).
+ *
+ * 전량 3번째 batch 에서 `SOURCE_LEAK` 1건이 나왔다. 모델 출력에 원문이 20자 이상
+ * 연속으로 들어 있어 저장 전 가드가 잡았고, 저장하지 않고 `skipped` 로 남겼다.
+ * **가드는 설계대로 작동했다** — DB 저장 유출은 0건이다.
+ *
+ * 문제는 그다음이다. `skipped` 는 재시도 대상이므로 전량 모드가 **다음 실행에서
+ * 같은 글을 다시 부른다.** 그런데 입력이 같고 프롬프트가 같으면 출력도 대체로 같다 —
+ * 다시 걸리고, 다시 부르고, **189 batch 를 도는 내내 매번 돈만 쓴다.**
+ *
+ * 🔴 그래서 **원인이 우리 쪽에 없는 실패**는 종결로 본다.
+ *
+ * | 실패 | 원인 | 재시도 |
+ * |---|---|---|
+ * | `SOURCE_LEAK` | **모델이 원문을 옮겨 적었다.** 우리가 고칠 것이 없다 | ❌ 종결 |
+ * | `JSON_PARSE` · `HTTP_*` · `TIMEOUT` · `NETWORK` · `NO_FINISH_REASON` | 설정 · 코드 · 일시 장애 — **고치면 달라진다** | ✅ 재시도 |
+ *
+ * 🔴 **가드를 완화해서 통과시키는 것이 아니다.** 20자 대조는 그대로이고,
+ *    걸린 출력은 여전히 저장되지 않는다(`output = null`). 달라지는 것은
+ *    **"다시 부를 것인가" 하나뿐**이다.
+ *
+ * ⚠️ `FORBIDDEN_ADDRESS` 는 **일부러 넣지 않았다.** 성격은 같아 보이지만
+ *    (모델 출력 문제 · 재시도해도 같을 가능성) 아직 한 건도 나오지 않았고,
+ *    실측 없이 종결로 분류하면 고칠 수 있는 것을 버리게 된다.
+ *    나오면 그때 판단한다.
+ *
+ * 정본: docs/operations/2026-08-27-voice-m3-full-scale-plan.md §4-1
+ */
+export const M3_TERMINAL_SKIP_CODES = ['SOURCE_LEAK'] as const
+
+/** 이 실패는 다시 불러도 답이 달라지지 않는가 */
+export function isTerminalSkip(errorCode: string | null): boolean {
+  return errorCode !== null && (M3_TERMINAL_SKIP_CODES as readonly string[]).includes(errorCode)
+}
+
+/**
  * 1차 30건 표본이 반드시 덮어야 할 축.
  *
  * 🔴 무작위로 뽑으면 안 된다. `other` 81% · 짧은 본문 45.7% 라는 분포 탓에

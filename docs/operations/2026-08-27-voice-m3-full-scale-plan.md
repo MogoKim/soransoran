@@ -165,6 +165,63 @@ haiku 30건에서 출력은 292~421 로 안정적이었지만, 전량에는 더 
 - 저장은 `upsert` 다. 재시도 시 `create` 는 `cacheKey` UNIQUE 로 터진다
 - 재시도 비용은 `VoiceM3CostEvent.retryAttempt` 에 **이전 호출 수를 이어서** 기록한다
 
+### 4-1. 🔴 `SOURCE_LEAK` 은 종결이다 (2026-08-27 보강)
+
+전량 3번째 batch 에서 **`SOURCE_LEAK` 1건**이 나왔다(`cmsy8aqrw0000gb2yjbkwd3fo`).
+모델 출력에 원문이 20자 이상 연속으로 들어 있어 저장 전 가드가 잡았다.
+
+```
+status         skipped        ← 저장되지 않았다
+errorMessage   출력에 원문 20자 이상 연속 일치가 있어 저장하지 않았다
+               · finish=end_turn · out=341/1500 · chars=431
+output         null           ← DB 저장 유출 0건
+토큰           5,249+341 · $0.007   ← 호출은 됐으므로 과금됨
+```
+
+**가드는 설계대로 작동했다.** 문제는 그다음이다 — `skipped` 는 재시도 대상이므로
+전량 모드가 **다음 실행에서 같은 글을 다시 부른다.** 입력이 같고 프롬프트가 같으면
+출력도 대체로 같다. 다시 걸리고, 다시 부르고, **185 batch 를 도는 내내 매번 돈만 쓴다.**
+
+#### 처리 완료의 정의
+
+> 🔴 **`processed` = `succeeded` + `SOURCE_LEAK` terminal skipped**
+>
+> 전량 완료 기준은 `processed` 가 분석 대상(9,444건)과 같아지는 시점이다.
+> `succeeded` 만으로는 영원히 도달하지 못한다 — `SOURCE_LEAK` 건은 성공할 수 없기 때문이다.
+
+| 실패 | 원인 | 재시도 | 전량 대상 |
+|---|---|---|---|
+| **`SOURCE_LEAK`** | **모델이 원문을 옮겨 적었다.** 우리가 고칠 것이 없다 | ❌ **종결** | 제외 |
+| `JSON_PARSE` | 출력 형식 — 프롬프트 · prefill 로 고친다 | ✅ | 포함 |
+| `HTTP_*` · `TIMEOUT` · `NETWORK` | 설정 · 일시 장애 | ✅ | 포함 |
+| `NO_FINISH_REASON` | provider 응답 이상 | ✅ | 포함 |
+
+코드 상수: `M3_TERMINAL_SKIP_CODES = ['SOURCE_LEAK']` · 판정 `isTerminalSkip()`
+
+#### 🔴 가드는 하나도 완화하지 않았다
+
+바뀐 것은 **"다시 부를 것인가" 하나뿐**이다.
+
+- 20자 연속 대조(`M3_LEAK_RUN_MIN = 20`) **그대로**
+- 걸린 출력은 여전히 **저장하지 않는다**(`output = null`)
+- 🔴 원문 조각을 **잘라서 저장하지 않는다**
+- 🔴 파서를 **관대하게 만들지 않는다**
+- 🔴 임계값을 호출부에서 **넘기지 않는다** — fixture 가 `assertNoSourceLeak` 의 세 번째 인자를 검사한다
+  (역검증에서 `assertNoSourceLeak(text, sources, 999)` 로 실제로 뚫렸고, 그래서 인자 개수를 보도록 고쳤다)
+
+#### ⚠️ `FORBIDDEN_ADDRESS` 는 아직 종결이 아니다
+
+성격은 같아 보이지만(모델 출력 문제 · 재시도해도 같을 가능성) **한 건도 나오지 않았다.**
+실측 없이 종결로 분류하면 고칠 수 있는 것을 버리게 된다. 나오면 그때 판단한다.
+fixture 가 이것을 임의로 종결에 넣는 변경을 막는다.
+
+#### 발생률과 전량 영향
+
+149건 중 1건(**0.67%**). 이 비율이 유지되면 남은 9,214건에서 약 **62건**이 종결 skip 될 것으로 보인다.
+그 경우 최종 `succeeded` 는 약 9,382건, `processed` 는 9,444건이 된다.
+
+⚠️ 표본이 1건이라 비율 추정의 신뢰구간이 매우 넓다. **batch 마다 실측한다.**
+
 ### 같은 원문을 두 번 부르지 않는지
 
 `voice:m3-plan` 이 `sourceRef` 별 캐시 중복을 센다. 현재 **0건**이다.
@@ -182,7 +239,7 @@ batch 재실행 시에는 `cache hit` 수가 그 batch 의 건수와 같아야 �
 | `HTTP_5xx` (503 제외) | **재시도 0** | ❌ | provider 장애. batch 를 멈추고 기다린다 |
 | `NO_FINISH_REASON` | **재시도 0** | ❌ | 잘림 여부를 판정할 수 없는 응답은 성공으로 세지 않는다 |
 | `JSON_PARSE` | **저장 후 다음 batch 에서 재시도** | 🔁 | `json=` 유형(`empty`·`truncated`·`fenced`·`not_json`·`invalid`)이 진단에 남는다 |
-| `SOURCE_LEAK` | **저장하지 않고 `skipped`** | 🔁 | 🔴 출력에 원문 20자 이상 연속 일치 |
+| `SOURCE_LEAK` | **저장하지 않고 `skipped`** | ❌ **종결**(§4-1) | 🔴 출력에 원문 20자 이상 연속 일치 |
 | `FORBIDDEN_ADDRESS` | **저장하지 않고 `skipped`** | 🔁 | 🔴 출력에 타겟 설명어 |
 | **연속 실패 5회** | 🔴 **batch 전체 중단** | — | `M3_CAPS.consecutiveFailureStop` |
 | `tokenCap` 도달 | 🔴 **즉시 중단** | — | |
@@ -221,12 +278,13 @@ batch 재실행 시에는 `cache hit` 수가 그 batch 의 건수와 같아야 �
 ```
 전체 후보 9,674
  → 수집 상한 잘림 제외        −230   (3,000자에서 끊긴 글)
- → 이미 succeeded 제외        −30
- = 남은 대상 9,414  →  id 오름차순 앞에서 N건
+ → 처리 완료 제외             −N     (succeeded + SOURCE_LEAK skipped · §4-1)
+ = 남은 대상  →  id 오름차순 앞에서 N건
 ```
 
-- 🔴 **`succeeded` 만 제외한다.** `failed` · `skipped` 는 제외 목록에 들어가지 않으므로
-  자연히 재시도 대상으로 남는다(§4)
+- 🔴 **`processed` 만 제외한다** = `succeeded` + `SOURCE_LEAK` skipped.
+  `failed`(JSON_PARSE · HTTP · TIMEOUT …)는 제외 목록에 들어가지 않으므로
+  자연히 재시도 대상으로 남는다(§4 · §4-1)
 - 🔴 **id 오름차순 고정.** 순서가 흔들리면 batch 경계가 매번 달라져 §2 의 cap 판정이 무효가 되고
   재개도 불가능해진다. 입력 순서를 뒤집어도 같은 batch 가 나온다(fixture 가 검사)
 - 🔴 **축 커버리지 검사는 `sample` 에만 적용한다.** 전량 batch 는 축을 채우려 고르지 않으므로
@@ -250,7 +308,7 @@ batch 재실행 시에는 `cache hit` 수가 그 batch 의 건수와 같아야 �
 | `VoiceM3Run` | 7 | 7 + 189 = **196** |
 | `VoiceM3Cache` | 90 | 60(nano·mini) + **9,444**(haiku) = **9,504** |
 | `VoiceM3CostEvent` | 108 | 108 + 9,414(call) + retry = **약 9,522+** |
-| haiku `succeeded` | 30 | **9,444** ← `VoiceSource` − 잘린 230건 |
+| haiku `processed` | 30 | **9,444** = succeeded + SOURCE_LEAK skipped (§4-1) |
 
 ### 매 batch 검증 (§5 통과 후)
 
@@ -262,7 +320,8 @@ batch 재실행 시에는 `cache hit` 수가 그 batch 의 건수와 같아야 �
 
 ### 전량 완료 후 전수 검증
 
-- haiku `succeeded` count **= 9,444** (`VoiceSource` 9,674 − 수집 상한 잘림 230)
+- 🔴 **`processed` = `succeeded` + `SOURCE_LEAK` skipped = 9,444** (`VoiceSource` 9,674 − 잘림 230)
+  `succeeded` 단독으로는 도달하지 못한다 — `SOURCE_LEAK` 건은 성공할 수 없다(§4-1)
 - `failed` · `skipped` count 와 사유별 분포
 - 7종 점수 누락 **0** · 0~100 범위 위반 **0**
 - 🔴 **저장된 output 전량을 우나어 원문 · 댓글과 20자 연속 재대조** (§8)

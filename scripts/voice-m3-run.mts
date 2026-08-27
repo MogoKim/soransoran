@@ -36,7 +36,7 @@ import {
   M3_TASK_VERSION, M3_PROMPT_VERSION, M3_OUTPUT_SCHEMA_VERSION,
   M3_CAPS, M3_EXPERIMENT_STAGES, M3_MODEL_CANDIDATES,
   buildCacheKey, estimateCost, checkCaps, pricingFor, assertNoSourceLeak,
-  M3_FORBIDDEN_ADDRESS_TERMS,
+  M3_FORBIDDEN_ADDRESS_TERMS, M3_TERMINAL_SKIP_CODES,
   maxOutputTokensFor, outputTokenEstimateFor, outputTokenPolicyFor,
   classifyJsonFailure, formatDiagnostics, type JsonFailureKind,
 } from './lib/voice-m3-contract.mjs'
@@ -224,17 +224,30 @@ async function main(): Promise<void> {
     //    sample: "축을 고르게 덮는 N건은 무엇인가" — 매 실행 같은 답
     //    full  : "아직 답을 못 얻은 것 중 다음 N건은 무엇인가" — 실행마다 다른 답
     let sample: { rows: ReturnType<typeof selectStratifiedSample>['rows'] } & Omit<ReturnType<typeof selectStratifiedSample>, 'rows'>
-    let fullInfo: { remaining: number; excluded: number } | null = null
+    let fullInfo: { remaining: number; excluded: number; terminalSkips: number } | null = null
     if (MODE === 'full') {
-      // 🔴 **성공한 것만** 제외한다. failed · skipped 는 남아서 재시도된다
-      const doneRefs = new Set(
-        (await prisma.voiceM3Cache.findMany({
-          where: { model: modelForKey, status: 'succeeded' }, select: { sourceRef: true },
-        })).map((c) => c.sourceRef),
-      )
+      // 🔴 **처리가 끝난 것**을 제외한다. 두 가지다:
+      //    ① succeeded — 답을 얻었다
+      //    ② SOURCE_LEAK skipped — 모델이 원문을 옮겨 적었고 우리가 고칠 것이 없다.
+      //       다시 불러도 같은 출력이 나와 또 걸린다 — 189 batch 내내 돈만 쓴다
+      //
+      //    🔴 `failed`(JSON_PARSE · HTTP · TIMEOUT …)는 **여기 들어오지 않는다.**
+      //       그쪽은 고치면 달라지므로 재시도 대상으로 남아야 한다.
+      const processed = await prisma.voiceM3Cache.findMany({
+        where: {
+          model: modelForKey,
+          OR: [
+            { status: 'succeeded' },
+            { status: 'skipped', errorCode: { in: [...M3_TERMINAL_SKIP_CODES] } },
+          ],
+        },
+        select: { sourceRef: true, status: true, errorCode: true },
+      })
+      const terminalSkips = processed.filter((c) => c.status !== 'succeeded').length
+      const doneRefs = new Set(processed.map((c) => c.sourceRef))
       const picked = selectFullModeBatch(candidates, doneRefs, LIMIT)
       sample = { rows: picked.rows, ...describeRows(picked.rows) }
-      fullInfo = { remaining: picked.remaining, excluded: picked.excluded }
+      fullInfo = { remaining: picked.remaining, excluded: picked.excluded, terminalSkips }
     } else {
       sample = selectStratifiedSample(candidates, LIMIT)
     }
@@ -246,8 +259,9 @@ async function main(): Promise<void> {
       console.log(`  🔁 전량 모드 (mode=full · ${modelForKey})`)
       console.log(`     전체 후보          ${candidates.length.toLocaleString()}건`)
       console.log(`     수집 상한 잘림 제외  ${fullInfo.excluded.toLocaleString()}건 (3,000자에서 끊긴 글 — 흐름 판정이 오염된다)`)
-      console.log(`     ✅ 이미 성공(제외)   ${(candidates.length - fullInfo.excluded - fullInfo.remaining).toLocaleString()}건`)
-      console.log(`     🔁 남은 대상        ${fullInfo.remaining.toLocaleString()}건`)
+      const processedTotal = candidates.length - fullInfo.excluded - fullInfo.remaining
+      console.log(`     ✅ 처리 완료(제외)   ${processedTotal.toLocaleString()}건 = 성공 ${(processedTotal - fullInfo.terminalSkips).toLocaleString()} + 종결 skip ${fullInfo.terminalSkips.toLocaleString()}(${M3_TERMINAL_SKIP_CODES.join(',')})`)
+      console.log(`     🔁 남은 대상        ${fullInfo.remaining.toLocaleString()}건 (JSON_PARSE · HTTP 등 재시도 대상 포함)`)
       console.log(`     이번 batch         ${sample.rows.length}건 · 남은 batch 약 ${Math.ceil(fullInfo.remaining / LIMIT)}회\n`)
     }
     console.log(`  표본 ${sample.rows.length}건 (${MODE === 'full' ? `남은 ${fullInfo?.remaining.toLocaleString()}건 중 id 오름차순 앞에서` : `후보 ${candidates.length}건에서 층화 선정`} · 난수 없음)`)

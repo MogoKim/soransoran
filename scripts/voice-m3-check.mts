@@ -22,7 +22,7 @@ import {
   buildCacheKey, estimateCost, checkCaps, validateAddressCandidates, assertNoSourceLeak, pricingFor,
   ESTIMATED_OUTPUT_TOKENS_PER_ITEM, outputTokenPolicyFor,
   classifyJsonFailure, isMaxTokensReached, formatDiagnostics,
-  apiModelIdFor, M3_ANALYSIS_MODEL,
+  apiModelIdFor, M3_ANALYSIS_MODEL, M3_TERMINAL_SKIP_CODES, isTerminalSkip,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 import {
@@ -1303,8 +1303,15 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (fs === -1) offenders.push('full 분기를 찾지 못했다')
   else {
     if (!/status: 'succeeded'/.test(fullBlock)) offenders.push('full 이 succeeded 로 좁히지 않는다')
-    for (const bad of ["'failed'", "'skipped'", 'not:']) {
-      if (fullBlock.includes(bad)) offenders.push(`full 제외 조건에 ${bad} 가 섞였다 — 재시도 대상이 사라진다`)
+    // 🔴 `failed` 는 **절대** 제외 대상이 아니다. JSON_PARSE · HTTP · TIMEOUT 은
+    //    고치면 달라지므로 재시도로 남아야 한다
+    if (/status: 'failed'/.test(fullBlock)) offenders.push("full 제외 조건에 'failed' 가 섞였다 — 재시도 대상이 사라진다")
+    if (/not:/.test(fullBlock)) offenders.push('full 제외 조건에 부정 필터가 섞였다 — 무엇이 빠지는지 알 수 없다')
+    // 🔴 `skipped` 는 **종결 코드와 함께일 때만** 허용한다(2026-08-27).
+    //    조건 없이 skipped 를 통째로 제외하면 FORBIDDEN_ADDRESS 처럼
+    //    아직 판단하지 않은 실패까지 조용히 버려진다
+    if (/status: 'skipped'/.test(fullBlock) && !/M3_TERMINAL_SKIP_CODES/.test(fullBlock)) {
+      offenders.push("full 이 skipped 를 종결 코드 조건 없이 제외한다")
     }
     if (!/selectFullModeBatch/.test(fullBlock)) offenders.push('full 이 전용 선정 함수를 쓰지 않는다')
   }
@@ -1366,6 +1373,86 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('전량 모드 · 좁은 기본값 · 게이트 유지', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('전량 모드 · 좁은 기본값 · 게이트 유지', 'guard',
     'mode 기본 sample · succeeded 만 제외 · 잘린 글 제외 일치 · id 오름차순 재현 · batch 무겹침 · 게이트 10중 불변')
+}
+
+// ── ㉟ SOURCE_LEAK 은 종결 · 나머지 실패는 재시도 ────────
+//    🔴 2026-08-27 전량 3번째 batch 에서 SOURCE_LEAK 1건이 나왔다.
+//       가드는 정상 작동해 저장을 막았지만(output null), skipped 는 재시도 대상이라
+//       **189 batch 내내 같은 글을 다시 부르며 돈만 쓴다.**
+//       원인이 우리 쪽에 없는 실패는 종결로 본다 — 가드를 푸는 것이 아니다.
+{
+  const offenders: string[] = []
+
+  // ① 종결 코드 목록
+  if (M3_TERMINAL_SKIP_CODES.length !== 1 || M3_TERMINAL_SKIP_CODES[0] !== 'SOURCE_LEAK') {
+    offenders.push(`종결 코드가 ${JSON.stringify(M3_TERMINAL_SKIP_CODES)}`)
+  }
+  if (!isTerminalSkip('SOURCE_LEAK')) offenders.push('SOURCE_LEAK 을 종결로 보지 않는다')
+  // 🔴 고치면 달라지는 실패는 종결이 아니다
+  for (const retryable of ['JSON_PARSE', 'HTTP_429', 'HTTP_500', 'TIMEOUT', 'NETWORK', 'NO_FINISH_REASON']) {
+    if (isTerminalSkip(retryable)) offenders.push(`🔴 ${retryable} 을 종결로 본다 — 고칠 수 있는 것을 버린다`)
+  }
+  if (isTerminalSkip(null)) offenders.push('errorCode 가 null 인데 종결로 본다')
+  // ⚠️ FORBIDDEN_ADDRESS 는 아직 판단하지 않았다. 임의로 종결에 넣지 않는다
+  if (isTerminalSkip('FORBIDDEN_ADDRESS')) {
+    offenders.push('FORBIDDEN_ADDRESS 를 실측 없이 종결로 분류했다')
+  }
+
+  // ② 🔴 full 이 SOURCE_LEAK skipped 를 **제외**하는가
+  //    (제외하지 않으면 같은 글을 매 batch 다시 부른다)
+  const fs2 = runCode.indexOf("if (MODE === 'full')")
+  const fe2 = runCode.indexOf('} else {', fs2)
+  const fullBlock2 = fs2 === -1 ? '' : runCode.slice(fs2, fe2 === -1 ? fs2 + 1400 : fe2)
+  if (fs2 === -1) offenders.push('full 분기를 찾지 못했다')
+  else {
+    if (!/M3_TERMINAL_SKIP_CODES/.test(fullBlock2)) {
+      offenders.push('🔴 full 이 종결 skip 을 제외하지 않는다 — 같은 글을 매 batch 다시 부른다')
+    }
+    if (!/status: 'skipped'/.test(fullBlock2)) offenders.push('full 제외 조건에 skipped 가 없다')
+    if (!/OR:/.test(fullBlock2)) offenders.push('full 제외가 두 조건(succeeded · 종결 skip)을 합치지 않는다')
+    // 🔴 failed 는 여전히 남아야 한다
+    if (/status: 'failed'/.test(fullBlock2)) {
+      offenders.push('🔴 full 이 failed 까지 제외한다 — JSON_PARSE · HTTP 가 재시도되지 않는다')
+    }
+    // errorCode 조건 없이 skipped 를 통째로 빼면 안 된다
+    if (/status: 'skipped'\s*\}/.test(fullBlock2)) {
+      offenders.push('skipped 를 errorCode 조건 없이 제외한다')
+    }
+  }
+
+  // ③ 🔴 가드는 완화되지 않았다 — SOURCE_LEAK 은 여전히 저장을 막는다
+  if (!/leak\.leaked[\s\S]{0,200}skipped/.test(runCode)) offenders.push('유출 시 skipped 처리가 사라졌다')
+  if (!/errorCode = 'SOURCE_LEAK'/.test(runCode)) offenders.push('SOURCE_LEAK 코드 부여가 사라졌다')
+  // output 은 계속 null
+  if (!/status === 'succeeded' && output !== undefined \? output : Prisma\.DbNull/.test(runCode)) {
+    offenders.push('🔴 실패 · skip 에도 output 이 저장될 수 있다')
+  }
+  // 20자 임계값 불변
+  if (M3_LEAK_RUN_MIN !== 20) offenders.push(`유출 임계값이 ${M3_LEAK_RUN_MIN} 자로 바뀌었다`)
+  // 🔴 원문 조각을 잘라 저장하거나 파서를 관대하게 만들지 않았다
+  for (const [pat, why] of [
+    [/leak[\s\S]{0,60}slice\(/, '유출 부분을 잘라 저장한다'],
+    [/rawText\.replace\(/, '응답을 치환해 통과시킨다'],
+    // 🔴 `minRun:` 형태만 보면 **위치 인자를 놓친다.**
+    //    `assertNoSourceLeak(text, sources, 999)` 로 임계값을 밀어 올릴 수 있고,
+    //    역검증에서 실제로 뚫렸다. 인자 개수를 본다 — 세 번째 인자는 minRun 이다.
+    [/assertNoSourceLeak\([^()]*,[^()]*,/, '유출 임계값을 호출부에서 넘긴다'],
+    [/minRun\s*[:=]\s*(?!M3_LEAK_RUN_MIN)\d+/, '유출 임계값을 호출부에서 바꾼다'],
+  ] as Array<[RegExp, string]>) {
+    if (pat.test(runCode)) offenders.push(`run 이 ${why}`)
+  }
+  // 대조는 저장보다 앞
+  const la = runCode.indexOf('assertNoSourceLeak('), sa = runCode.indexOf('voiceM3Cache.upsert(')
+  if (la === -1 || sa === -1 || la > sa) offenders.push('유출 대조가 저장 뒤로 밀렸다')
+
+  // ④ plan · 문서가 같은 정의를 쓰는가
+  if (!/M3_TERMINAL_SKIP_CODES|SOURCE_LEAK/.test(planCode)) {
+    offenders.push('plan 이 종결 skip 을 대상 산정에서 다루지 않는다')
+  }
+
+  if (offenders.length) bad('SOURCE_LEAK 종결 · 나머지는 재시도', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('SOURCE_LEAK 종결 · 나머지는 재시도', 'policy',
+    `종결 ${M3_TERMINAL_SKIP_CODES.join(',')} 만 · failed 재시도 유지 · 20자 가드 불변 · output null 유지`)
 }
 
 // ── 출력 ────────────────────────────────────────────────
