@@ -1,12 +1,13 @@
 import type { Metadata } from 'next'
+import { redirect } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
 import PostForm from '@/components/features/PostForm'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
-import KakaoStartNotice from '@/components/features/KakaoStartNotice'
 import { toInternalPath } from '@/lib/callback-url'
+import { prisma } from '@/lib/prisma'
 
 export const metadata: Metadata = {
   title: '글쓰기',
@@ -36,6 +37,38 @@ export default async function WritePage({
   const targetBoard = board ? getBoardBySlug(board) : undefined
   const boardLabel = targetBoard?.isCommunity ? targetBoard.label : null
 
+  /**
+   * 🔴 가입을 안 끝낸 사람에게 폼을 그리지 않는다.
+   *    저장은 createPost 가 막지만, 그건 다 쓰고 누른 뒤의 일이다.
+   *    들어온 순간 보내는 편이 쓴 것을 잃지 않는다.
+   *
+   * 🔴 isOnboarded 만 본다 — 서버 액션 guard 와 같은 규칙이다.
+   *    여기서 다른 기준으로 판정하면 화면은 보내는데 저장은 통과하는
+   *    (또는 그 반대의) 상태가 생긴다.
+   *
+   * 🔴 돌아올 곳에 board 를 함께 싣는다.
+   *    쓰다 만 글은 게시판별 키로 저장되므로, board 가 빠지면 가입을 마치고
+   *    돌아와도 그 글이 복원되지 않는다.
+   *
+   * 🔴 비로그인은 여기 오지 않는다. 그쪽은 아래 카카오 CTA 가 그대로 맡는다.
+   *
+   * 🔴 회원을 못 찾은 것과 가입을 안 끝낸 것을 구분한다.
+   *    User 행이 없으면 온보딩으로 보내도 거기서 할 수 있는 일이 없다 —
+   *    다시 로그인할 일이지 가입을 마칠 일이 아니다. 그런 사람을 온보딩에
+   *    세우면 아무것도 안 되는 화면을 오가게 된다.
+   *    폼을 그대로 두고 createPost 가 "회원 정보를 찾을 수 없습니다" 로 안내한다.
+   */
+  if (session?.user) {
+    const member = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { isOnboarded: true },
+    })
+    if (member && !member.isOnboarded) {
+      const back = toInternalPath(writePath) ?? '/write'
+      redirect(`/onboarding?callbackUrl=${encodeURIComponent(back)}`)
+    }
+  }
+
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 py-8">
@@ -48,11 +81,8 @@ export default async function WritePage({
             title={boardLabel ? `${boardLabel}에 이야기를 남겨보세요` : '이야기를 남겨보세요'}
             body="카카오로 시작하면 바로 이어서 쓸 수 있어요. 짧게 써도 괜찮습니다."
             action={
-              <>
-                {/* callbackUrl 은 내부 경로만 넘긴다. */}
-                <KakaoSignInButton callbackUrl={toInternalPath(writePath) ?? '/'} />
-                <KakaoStartNotice />
-              </>
+              /* callbackUrl 은 내부 경로만 넘긴다. */
+              <KakaoSignInButton callbackUrl={toInternalPath(writePath) ?? '/'} />
             }
           />
         )}
