@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { createComment, type CommentActionState } from '@/lib/actions/comments'
+import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import {
   COMMENT_CREATED,
   COMMENT_COUNTER_FROM,
@@ -22,6 +24,7 @@ export default function CommentForm({
   postId: string
   boardSlug: string
 }) {
+  const pathname = usePathname()
   const [state, formAction] = useFormState<CommentActionState, FormData>(createComment, {})
   const [content, setContent] = useState('')
   const [showSuccess, setShowSuccess] = useState(false)
@@ -46,9 +49,13 @@ export default function CommentForm({
       <input type="hidden" name="boardSlug" value={boardSlug} />
 
       {state.error ? (
-        <p role="alert" className="text-sm text-state-danger">
-          {state.error}
-        </p>
+        state.needsOnboarding ? (
+          <OnboardingNotice message={state.error} callbackUrl={pathname} />
+        ) : (
+          <p role="alert" className="text-sm text-state-danger">
+            {state.error}
+          </p>
+        )
       ) : showSuccess ? (
         <p role="status" className="text-sm text-state-success">
           {COMMENT_CREATED}
