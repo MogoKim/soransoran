@@ -42,7 +42,7 @@ function Card({ article }: { article: MagazineArticle }) {
       className="flex h-full flex-col overflow-hidden rounded-lg border border-subtle bg-surface-card no-underline transition-colors duration-150 hover:bg-surface-page active:bg-surface-soft"
     >
       {image ? (
-        <span className="relative block aspect-[4/3] w-full shrink-0 bg-surface-soft">
+        <span className="relative block aspect-video w-full shrink-0 bg-surface-soft">
           <Image
             src={image.src}
             alt={image.alt}
