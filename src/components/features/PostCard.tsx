@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import StatIcon from '@/components/icons/StatIcon'
 import { formatRelativeTime, toPreview } from '@/lib/date'
+import { displayName } from '@/lib/display-name'
 
 export type PostCardData = {
   id: string
@@ -8,7 +9,7 @@ export type PostCardData = {
   content: string
   createdAt: Date
   viewCount: number
-  author: { name: string | null }
+  author: { name: string | null; nickname: string | null }
   _count: { comments: number }
 }
 
@@ -50,7 +51,7 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
           작성자·시간을 한 span 으로 묶어, 줄이 바뀌어도 "누가"와 "언제"가 갈라지지 않게 한다. */}
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-content-muted">
         <span className="flex items-center gap-1.5">
-          {post.author.name ?? '회원'}
+          {displayName(post.author)}
           <span aria-hidden>·</span>
           {formatRelativeTime(post.createdAt)}
         </span>
