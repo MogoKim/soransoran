@@ -51,8 +51,11 @@ function SectionHeading({
   moreHref?: string
 }) {
   return (
-    <div className="mb-3 flex items-center justify-between">
-      <h2 className="flex items-center gap-2 text-lg font-bold text-content-primary">
+    <div
+      /* 더보기 유무와 관계없이 홈 섹션 머리 높이를 맞춘다. */
+      className="mb-3 flex min-h-[52px] items-center justify-between"
+    >
+      <h2 className="flex items-center gap-2 text-xl font-bold text-content-primary">
         <span
           aria-hidden
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]"
