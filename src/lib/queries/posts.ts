@@ -6,6 +6,7 @@ import {
   DISCOVERY_ELIGIBLE_WHERE,
   POST_VISIBILITY_SELECT,
 } from '@/lib/post-visibility'
+import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
 import { pickHomePopular } from '@/lib/popularity'
 import type { BoardType } from '@prisma/client'
 
@@ -55,6 +56,21 @@ const POST_LIST_SELECT = {
   _count: { select: { comments: { where: { isDeleted: false } }, likes: true } },
 } as const
 
+/**
+ * 🔴 첫 가입 인사는 이 목록에 넣지 않는다.
+ *    새로 온 사람의 인사는 홈에서 환영으로 보여줄 글이지, 게시판을 열어
+ *    이야기를 읽으러 온 사람에게 내밀 글이 아니다. 매일 몇 건씩 쌓이면
+ *    자유게시판 첫 화면이 인사말로 덮인다.
+ *
+ *    빼는 축이 3축 게이트가 아니라 category 인 이유는, 이것이 노출 정책이 아니라
+ *    "어떤 종류의 글인가" 의 문제이기 때문이다. 색인·추천에서 빠지는 것은
+ *    3축이 따로 담당한다 (post-visibility.ts).
+ *
+ * 🔴 AND 로 묶는다.
+ *    EXCLUDE_GREETING 은 OR 키를 가진다. 지금 이 where 에는 OR 가 없어 펼쳐도
+ *    되지만, 나중에 누가 OR 를 하나 더하는 순간 키가 덮여 조용히 사라진다.
+ *    AND 는 그 일이 일어나지 않는다.
+ */
 export async function getPostsByBoard(boardType: BoardType, take = 30) {
   const blockedIds = await getBlockedUserIds()
 
@@ -63,6 +79,7 @@ export async function getPostsByBoard(boardType: BoardType, take = 30) {
       boardType,
       ...COMMUNITY_VISIBLE_WHERE,
       ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+      AND: [EXCLUDE_GREETING],
     },
     select: POST_LIST_SELECT,
     orderBy: { createdAt: 'desc' },
