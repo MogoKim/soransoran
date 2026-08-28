@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
-import MagazineCard from '@/components/features/MagazineCard'
+import HomeMagazineRail from '@/components/features/HomeMagazineRail'
 import HomeJoinCta from '@/components/features/HomeJoinCta'
 import Logo from '@/components/brand/Logo'
 import MenuIcon from '@/components/icons/MenuIcon'
@@ -139,13 +139,7 @@ export default async function HomePage() {
           <section className="px-4 py-6">
             <SectionHeading board={magazine} title="읽어볼 이야기" moreHref="/magazine" />
 
-            <ul className="flex list-none flex-col gap-3 p-0">
-              {articles.map((article) => (
-                <li key={article.slug}>
-                  <MagazineCard article={article} />
-                </li>
-              ))}
-            </ul>
+            <HomeMagazineRail articles={articles} />
           </section>
         ) : null}
 
