@@ -122,8 +122,7 @@ export default async function HomePage() {
 
         {posts.length > 0 ? (
           <section className="px-4 py-5">
-            {/* 모아보기 화면이 아직 비어 있어 더보기를 두지 않는다. 채워지면 그때 잇는다. */}
-            <SectionHeading board={best} title="지금 뜨는 이야기" />
+            <SectionHeading board={best} title="지금 뜨는 이야기" moreHref="/best" />
 
             {/* -mx-4 로 섹션 여백을 되돌린다 — 행이 자기 px-4 를 가지므로
                 그대로 두면 32px 이 되고, hover 면도 안쪽으로 눌린다.
