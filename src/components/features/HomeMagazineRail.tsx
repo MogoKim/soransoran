@@ -8,8 +8,8 @@ import { formatMagazinePublishedDate } from '@/lib/magazine-date'
  * 목록 카드(MagazineCard)는 /magazine 목록을 지키려고 쓰지 않는다.
  */
 
-/** 한 장이 화면 안에 온전히 들어오는 너비 — 옆 장이 살짝 보여 밀 수 있다는 신호가 된다 */
-const CARD_WIDTH = 'w-[82vw] max-w-[340px]'
+/** 한 장이 화면 안에 온전히 들어오는 너비 — 옆 장이 보이게 해 레일임을 알린다 */
+const CARD_WIDTH = 'w-[72vw] max-w-[340px]'
 
 export default function HomeMagazineRail({ articles }: { articles: MagazineArticle[] }) {
   if (articles.length === 0) return null
