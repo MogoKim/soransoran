@@ -10,7 +10,7 @@ export const NICKNAME_MIN = 2
 export const NICKNAME_MAX = 10
 
 /** 한글·영문·숫자만. 공백과 특수문자는 받지 않는다 */
-const NICKNAME_PATTERN = /^[가-힣a-zA-Z0-9]+$/
+export const NICKNAME_PATTERN = /^[가-힣a-zA-Z0-9]+$/
 
 /**
  * 쓸 수 없는 이름.
@@ -18,7 +18,7 @@ const NICKNAME_PATTERN = /^[가-힣a-zA-Z0-9]+$/
  * 🔴 운영자를 사칭하는 이름을 막는다. 커뮤니티에서 이름은 신뢰의 첫 단서다.
  *    서비스 이름 자체도 막는다 — 공식 계정으로 오인된다.
  */
-const BANNED = ['운영자', '관리자', '어드민', '관리인', 'admin', '소란소란'] as const
+export const BANNED = ['운영자', '관리자', '어드민', '관리인', 'admin', '소란소란'] as const
 
 export const NICKNAME_PLACEHOLDER = '예: 봄볕드는창가'
 export const NICKNAME_RULE_HINT = `한글·영문·숫자 ${NICKNAME_MIN}~${NICKNAME_MAX}자. 나중에 바꾸실 수 있어요.`
