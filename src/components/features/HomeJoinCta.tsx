@@ -1,5 +1,4 @@
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
-import KakaoStartNotice from '@/components/features/KakaoStartNotice'
 
 /**
  * 홈 참여 유도 카드 — 비로그인에게만 보인다.
@@ -33,7 +32,6 @@ export default function HomeJoinCta({ isLoggedIn }: { isLoggedIn: boolean }) {
 
         <div className="mt-4 flex flex-col items-center">
           <KakaoSignInButton callbackUrl="/" />
-          <KakaoStartNotice />
         </div>
       </div>
     </section>
