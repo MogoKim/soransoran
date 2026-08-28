@@ -7,7 +7,7 @@ import Logo from '@/components/brand/Logo'
 import MenuIcon from '@/components/icons/MenuIcon'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug, type BoardMeta } from '@/lib/board-registry'
-import { getRecentDiscoveryPosts } from '@/lib/queries/posts'
+import { getPopularDiscoveryPosts } from '@/lib/queries/posts'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import type { MagazineArticle } from '@/content/magazine/types'
 
@@ -15,6 +15,9 @@ export const dynamic = 'force-dynamic'
 
 /** 홈에 싣는 매거진 글 수. 더 실으면 가입 카드가 화면 밖으로 밀린다. */
 const HOME_MAGAZINE_COUNT = 3
+
+/** 홈 인기글 최대 노출 수. 후보가 모자라면 있는 만큼만 나간다. */
+const HOME_POPULAR_COUNT = 20
 
 /**
  * 홈에 실을 글을 고른다 — 그림 있는 글이 먼저, 모자라면 최신 순으로 채운다.
@@ -94,7 +97,7 @@ function SectionHeading({
  *    섹션은 머리글과 여백이 가르고, 줄 사이는 선 하나가 가른다.
  */
 export default async function HomePage() {
-  const posts = await getRecentDiscoveryPosts(6)
+  const posts = await getPopularDiscoveryPosts(HOME_POPULAR_COUNT)
   // 카드는 비로그인에게만 나간다. JWT 전략이라 auth() 는 쿠키 디코드뿐이다.
   const session = await auth()
   const articles = pickForHome(getAllMagazineArticles(), HOME_MAGAZINE_COUNT)

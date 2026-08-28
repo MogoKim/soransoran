@@ -6,6 +6,7 @@ import {
   DISCOVERY_ELIGIBLE_WHERE,
   POST_VISIBILITY_SELECT,
 } from '@/lib/post-visibility'
+import { pickHomePopular } from '@/lib/popularity'
 import type { BoardType } from '@prisma/client'
 
 const COMMUNITY_BOARD_TYPES = COMMUNITY_BOARDS.map((b) => b.type) as BoardType[]
@@ -91,6 +92,49 @@ export async function getRecentDiscoveryPosts(take = 6) {
     select: { ...POST_LIST_SELECT, boardType: true },
     orderBy: { createdAt: 'desc' },
     take,
+  })
+}
+
+/** 게시판 하나에서 점수 계산에 넣을 후보를 몇 건까지 가져올지. */
+const HOME_POPULAR_CANDIDATES_PER_BOARD = 60
+
+/** 총 노출에서 갱년기톡에 보장하는 최소 자리. 후보가 모자라면 있는 만큼만 채운다. */
+const HOME_POPULAR_MIN_MENOPAUSE = 7
+
+/**
+ * 홈 "지금 뜨는 이야기" 용 — 댓글과 시간 감쇠로 점수를 매겨 고른다.
+ *
+ * getRecentDiscoveryPosts 와 짝이다. 둘 다 discovery 표면이고 고르는 기준만 다르다 —
+ * 상세 하단 이어읽기는 최신순, 홈 인기글은 점수순이라 함수를 나눈다.
+ *
+ * 게시판별로 따로 가져오는 이유는 배분 때문이다. 한 번에 가져오면 자유게시판이
+ * 상위를 채웠을 때 갱년기톡 후보가 애초에 손에 들어오지 않는다.
+ *
+ * 점수와 배분은 popularity.ts 가 맡는다 — 여기는 조회만 한다.
+ */
+export async function getPopularDiscoveryPosts(take = 20) {
+  const blockedIds = await getBlockedUserIds()
+
+  const candidatesFor = (boardType: BoardType) =>
+    prisma.post.findMany({
+      where: {
+        boardType,
+        ...DISCOVERY_ELIGIBLE_WHERE,
+        ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+      },
+      select: { ...POST_LIST_SELECT, boardType: true },
+      orderBy: { createdAt: 'desc' },
+      take: HOME_POPULAR_CANDIDATES_PER_BOARD,
+    })
+
+  const [menopause, free] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
+
+  return pickHomePopular({
+    menopause,
+    free,
+    take,
+    minMenopause: HOME_POPULAR_MIN_MENOPAUSE,
+    now: new Date(),
   })
 }
 
