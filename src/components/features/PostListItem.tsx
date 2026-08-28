@@ -61,27 +61,19 @@ export default function PostListItem({
         surface === 'page' ? 'hover:bg-surface-card' : 'hover:bg-surface-page',
       )}
     >
-      {/* 강조 행에서는 순번을 보조 정보로 낮춘다. 제목보다 숫자가 먼저 읽히지 않게 하기 위한 홈 전용 위계다.
-          줄간격은 두 갈래에 각각 적는다 — 공통 자리에 두면 글자 크기와 충돌로 보고 지워진다. */}
-      <span
-        className={cn(
-          'w-8 shrink-0 text-center',
-          emphasis
-            ? 'text-sm font-medium leading-none text-content-muted'
-            : 'text-[22px] font-bold italic leading-none text-brand-ink',
-        )}
-      >
+      {/* 순번이 목록의 리듬을 만든다 — 굵기와 기울임은 여기 한 곳에만 둔다. */}
+      <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
         {rank}
       </span>
 
       <span className="flex min-w-0 flex-col gap-1.5">
         <span
-          /* 줄간격을 두 갈래에 각각 적는다 — 공통 자리에 두면 tailwind-merge 가
-             뒤따르는 text-lg 와 충돌로 보고 지운다(글자 크기가 줄간격도 정하므로).
-             그러면 강조한 줄만 줄간격이 달라진다. */
+          /* 강조 행은 크기만 키우고 굵기는 순번에 양보한다 — 한 줄에서 굵은 것은 하나면 된다.
+             줄간격은 두 갈래에 각각 적는다 — 공통 자리에 두면 뒤따르는 글자 크기와
+             충돌로 보고 지워진다. */
           className={cn(
-            'line-clamp-2 break-keep text-content-primary',
-            emphasis ? 'text-lg font-bold leading-[1.5]' : 'font-medium leading-[1.5]',
+            'line-clamp-2 break-keep font-medium text-content-primary',
+            emphasis ? 'text-lg leading-[1.5]' : 'leading-[1.5]',
           )}
         >
           {post.title}
