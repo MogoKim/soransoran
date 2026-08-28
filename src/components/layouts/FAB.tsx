@@ -53,7 +53,9 @@ function resolveWriteHref(pathname: string): string | null {
 export default function FAB() {
   const pathname = usePathname()
   const writeHref = resolveWriteHref(pathname)
-  const [collapsed, setCollapsed] = useState(false)
+  // 원형으로 들어온다 — 펼친 폭이 첫 화면에서 목록 글을 가장 많이 가렸다.
+  // 접힘/펼침 판정은 아래 스크롤 처리가 그대로 이어받는다.
+  const [collapsed, setCollapsed] = useState(true)
 
   const active = writeHref !== null
 
