@@ -97,6 +97,18 @@ model User {
   /// 첫 로그인 온보딩(닉네임·약관)을 마쳤는가. 기존 회원은 false 로 시작해 한 번 거친다.
   isOnboarded        Boolean   @default(false)
 
+  /// 첫 가입 인사를 남긴 시각. 최초 1회만 기록된다.
+  ///
+  /// 🔴 이 값이 있으면 첫 인사 위젯을 다시 띄우지 않는다.
+  ///    글을 지워도 남아야 하므로 Post 가 아니라 여기에 둔다.
+  firstGreetingAt     DateTime?
+  /// 첫 가입 인사 글의 id.
+  ///
+  /// 🔴 FK 를 걸지 않는다.
+  ///    이 값의 목적은 "이미 인사를 했다" 를 기억하는 것이다. FK + Cascade 면
+  ///    글을 지운 순간 이력도 사라져 위젯이 다시 뜬다 — 막으려던 일이 그것이다.
+  firstGreetingPostId String?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -178,6 +190,18 @@ model Post {
   content   String       @db.Text
   status    PostStatus   @default(PUBLISHED)
   source    AuthorSource @default(USER)
+
+  /// 콘텐츠 종류. 일반 글은 null 이고, 첫 가입 인사만 '가입인사' 다.
+  ///
+  /// 🔴 노출 여부를 뜻하는 축이 아니다.
+  ///    "검색에 넣을까 · 추천에 올릴까" 는 아래 3축 플래그가 답한다.
+  ///    한 컬럼이 두 질문에 답하게 두면 언젠가 한쪽이 틀린다.
+  ///
+  /// 🔴 null 을 잃지 않도록 거른다.
+  ///    `category != '가입인사'` 단독 비교는 Postgres 3-value logic 상
+  ///    null 행을 함께 제외해 일반 글이 통째로 사라진다.
+  ///    greeting-policy.ts 의 EXCLUDE_GREETING 을 쓴다.
+  category  String?
 
   authorId  String
   // onDelete 를 지정하지 않아 기본 Restrict 다 — 글이 있으면 User 삭제가 막힌다.

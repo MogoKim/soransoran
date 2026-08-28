@@ -165,3 +165,30 @@ export const MICRO_SEED_POST_VISIBILITY_FLAGS = {
   permanentNoindex: true,
   indexPromotionBlocked: true,
 } as const
+
+/**
+ * 첫 가입 인사 Post 생성 시 3축 필드의 **고정값**.
+ *
+ * 🔴 왜 이 파일에 있나
+ *    가드(scripts/check-post-visibility.mjs)는 이 파일 밖에서 3축 토큰을 쓰는 것을
+ *    전부 위반으로 잡는다 (C-2). 3축 값을 박는 자리는 언제나 여기다 —
+ *    greeting 쪽 파일에 리터럴로 적으면 판정이 두 곳으로 갈라지고, 그것이
+ *    이 게이트가 막으려는 바로 그 상태다.
+ *
+ * 🔴 isMicroSeed 는 false 다.
+ *    첫 인사는 회원이 직접 쓴 글이지 Micro Seed 레인 발행물이 아니다.
+ *    여기에 true 를 넣으면 두 레인의 통계·takedown·정책이 뒤섞인다.
+ *
+ * 🔴 나머지 둘은 true 다.
+ *    검색에 넣을 글이 아니고(내부 환대 콘텐츠), 추천·모아보기에 올릴 글도 아니다.
+ *    그 결과 상세는 접근 가능하되 noindex 이고, 홈 discovery 와 sitemap 에서 빠진다.
+ *
+ * 🔴 "자유게시판 목록에서 숨긴다" 는 여기 없다.
+ *    그건 노출 축이 아니라 콘텐츠 종류의 문제라 Post.category 가 답한다
+ *    (greeting-policy.ts 의 EXCLUDE_GREETING). 축을 섞지 않는다.
+ */
+export const GREETING_POST_VISIBILITY_FLAGS = {
+  isMicroSeed: false,
+  permanentNoindex: true,
+  indexPromotionBlocked: true,
+} as const
