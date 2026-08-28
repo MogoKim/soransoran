@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { SITE } from '@/lib/brand'
 import FontSizeToggle from '@/components/layouts/FontSizeToggle'
+import { cn } from '@/lib/utils'
 
 /** 화면이 늘어도 이 배열에 한 줄만 늘어난다.
  *  emphasis 는 개인정보처리방침을 다른 링크와 구분해 표시하기 위한 것이다. */
@@ -31,11 +32,24 @@ const BUSINESS = {
   addressDetail: '302동 912호(월계동, 사슴아파트)',
 } as const
 
-/** 하단 영역 — 약관·규칙·문의·사업자 정보. 터치 타겟 52px 유지 */
-export default function Footer() {
+/**
+ * 하단 영역 — 약관·규칙·문의·사업자 정보. 터치 타겟 52px 유지
+ *
+ * 🔴 떠 있는 글쓰기 버튼이 마지막 줄을 가린다.
+ *    이 영역은 본문 래퍼 밖이라 거기 걸린 아래 여백이 여기까지 오지 않는다.
+ *    실제로 화면을 끝까지 내리면 면책 문구 위에 버튼이 그대로 겹쳤다.
+ *    버튼이 뜨는 화면에서만 좁은 화면 아래를 버튼 높이 넘게 벌린다.
+ *    넓은 화면은 버튼이 글 옆 여백에 놓이므로 원래 여백으로 돌아간다.
+ */
+export default function Footer({ avoidFloatingAction = false }: { avoidFloatingAction?: boolean }) {
   return (
     <footer className="mt-16 border-t border-subtle bg-surface-card">
-      <div className="mx-auto flex max-w-3xl flex-col gap-2 px-4 py-8">
+      <div
+        className={cn(
+          'mx-auto flex max-w-3xl flex-col gap-2 px-4 pt-8',
+          avoidFloatingAction ? 'pb-28 lg:pb-8' : 'pb-8',
+        )}
+      >
         <nav className="flex flex-wrap items-center gap-x-4">
           {LINKS.map((link) => (
             <Link

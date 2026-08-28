@@ -99,8 +99,8 @@ export default async function HomePage() {
   const magazine = getBoardBySlug('magazine')!
 
   return (
-    <PageShell>
-      <main className="mx-auto max-w-3xl pb-24">
+    <PageShell showWriteFab>
+      <main className="mx-auto max-w-3xl pb-16">
         <section className="px-4 py-6 text-center">
           <Logo className="text-3xl" />
           <p className="mt-2 text-sm text-content-muted">

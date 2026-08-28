@@ -3,15 +3,33 @@ import IconMenu from '@/components/layouts/IconMenu'
 import Footer from '@/components/layouts/Footer'
 import FAB from '@/components/layouts/FAB'
 
-/** full = FAB 노출(기본) · minimal = FAB 없음(관리자·로그인 등) */
+/**
+ * full = 헤더·게시판 메뉴 있음(기본) · minimal = 없음(관리자 등)
+ *
+ * 🔴 글쓰기 버튼은 화면이 스스로 밝힌다.
+ *    버튼이 뜨는 곳은 홈과 게시판 목록뿐인데, 그 판정은 FAB 안에서
+ *    현재 경로를 보고 내린다. 이 껍데기는 서버에서 그려지므로 경로를 모른다.
+ *    그래서 예전에는 full 이기만 하면 아래 여백 72px 을 깔았고,
+ *    버튼이 없는 화면(매거진·상세·약관 등 12곳)에서 그 자리가 그냥 비어 있었다.
+ *
+ *    경로를 여기서 다시 읽지 않는다 — 두 곳이 각자 판정하면 언젠가 어긋난다.
+ *    버튼을 띄우는 화면이 showWriteFab 으로 말하고, 그 한 마디가
+ *    여백 · 버튼 · 아래 영역 보호까지 함께 정한다.
+ */
 type PageShellProps = {
   children: React.ReactNode
   chrome?: 'full' | 'minimal'
+  showWriteFab?: boolean
 }
 
 /** Header / 본문 / FAB / Footer 를 한 곳에서 조립한다. */
-export default function PageShell({ children, chrome = 'full' }: PageShellProps) {
+export default function PageShell({
+  children,
+  chrome = 'full',
+  showWriteFab = false,
+}: PageShellProps) {
   const isFull = chrome === 'full'
+  const hasWriteFab = isFull && showWriteFab
 
   return (
     <>
@@ -43,14 +61,17 @@ export default function PageShell({ children, chrome = 'full' }: PageShellProps)
       {isFull ? <IconMenu /> : null}
 
       {/* 페이지가 각자 <main> 을 가지므로 여기서는 래퍼만 둔다.
-          FAB 이 마지막 요소를 가리지 않도록 full 일 때만 하단 여백을 준다. */}
-      <div id="main-content" className={isFull ? 'pb-[72px] lg:pb-0' : undefined}>
+          FAB 이 마지막 요소를 가리지 않도록 버튼이 뜨는 화면에만 하단 여백을 준다.
+          넓은 화면에서는 글이 가운데로 모여 버튼이 그 옆 여백에 놓이므로 되돌린다. */}
+      <div id="main-content" className={hasWriteFab ? 'pb-[72px] lg:pb-0' : undefined}>
         {children}
       </div>
 
-      {isFull ? <FAB /> : null}
+      {hasWriteFab ? <FAB /> : null}
 
-      <Footer />
+      {/* 이 여백은 위 <div> 밖이라 그 보호를 받지 못한다 — 아래 끝까지 내리면
+          버튼이 마지막 줄 위에 그대로 떠 있었다. 그래서 따로 알린다. */}
+      <Footer avoidFloatingAction={hasWriteFab} />
     </>
   )
 }
