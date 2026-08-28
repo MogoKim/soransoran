@@ -1,4 +1,5 @@
 import { formatRelativeTime } from '@/lib/date'
+import { displayName } from '@/lib/display-name'
 import CommentEditor from '@/components/features/CommentEditor'
 import ReportButton from '@/components/features/ReportButton'
 
@@ -6,7 +7,7 @@ export type CommentItemData = {
   id: string
   content: string
   createdAt: Date
-  author: { id: string; name: string | null }
+  author: { id: string; name: string | null; nickname: string | null }
 }
 
 type CommentItemProps = {
@@ -37,7 +38,7 @@ export default function CommentItem({
   return (
     <li className="rounded-lg bg-surface-card p-4">
       <div className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
-        <span className="font-bold text-brand-ink">{comment.author.name ?? '회원'}</span>
+        <span className="font-bold text-brand-ink">{displayName(comment.author)}</span>
         <span aria-hidden>·</span>
         <span>{formatRelativeTime(comment.createdAt)}</span>
       </div>

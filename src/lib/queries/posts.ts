@@ -49,7 +49,7 @@ const POST_LIST_SELECT = {
   content: true,
   createdAt: true,
   viewCount: true,
-  author: { select: { id: true, name: true, image: true } },
+  author: { select: { id: true, name: true, nickname: true, image: true } },
   // 삭제된 댓글은 세지 않는다 — 목록의 숫자와 상세에 보이는 개수가 어긋나면 안 된다.
   _count: { select: { comments: { where: { isDeleted: false } }, likes: true } },
 } as const
@@ -110,7 +110,7 @@ export async function getPostDetail(postId: string) {
       content: true,
       createdAt: true,
       viewCount: true,
-      author: { select: { id: true, name: true, image: true } },
+      author: { select: { id: true, name: true, nickname: true, image: true } },
       // 상세 metadata 가 robotsMetaFor() 로 noindex 를 판정하는 데 쓴다.
       ...POST_VISIBILITY_SELECT,
     },
@@ -127,7 +127,7 @@ export async function getPostDetail(postId: string) {
       id: true,
       content: true,
       createdAt: true,
-      author: { select: { id: true, name: true, image: true } },
+      author: { select: { id: true, name: true, nickname: true, image: true } },
     },
     orderBy: { createdAt: 'asc' },
   })

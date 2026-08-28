@@ -14,6 +14,7 @@ import { loginHref } from '@/lib/callback-url'
 import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail, getRecentDiscoveryPosts } from '@/lib/queries/posts'
 import { isSearchIndexable, robotsMetaFor } from '@/lib/post-visibility'
+import { displayName } from '@/lib/display-name'
 
 export const dynamic = 'force-dynamic'
 
@@ -87,7 +88,7 @@ export default async function PostDetailPage({
           <h1 className="text-2xl font-bold leading-snug text-content-primary">{post.title}</h1>
 
           <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
-            <span className="font-bold text-brand-ink">{post.author.name ?? '회원'}</span>
+            <span className="font-bold text-brand-ink">{displayName(post.author)}</span>
             <span aria-hidden>·</span>
             <span>{formatRelativeTime(post.createdAt)}</span>
             <span aria-hidden>·</span>
