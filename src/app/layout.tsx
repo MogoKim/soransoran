@@ -48,6 +48,10 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <head>
+        <meta
+          name="naver-site-verification"
+          content="5fb6a5b550994c0658f1dd81543e86f5a211ce29"
+        />
         <script dangerouslySetInnerHTML={{ __html: FONT_SIZE_SCRIPT }} />
         {/* Pretendard — scaffold 단계에서는 CDN.
             self-host 전환 절차는 public/fonts/pretendard/README.md 참조. */}
