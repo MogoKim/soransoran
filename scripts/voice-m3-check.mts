@@ -23,6 +23,7 @@ import {
   ESTIMATED_OUTPUT_TOKENS_PER_ITEM, outputTokenPolicyFor,
   classifyJsonFailure, isMaxTokensReached, formatDiagnostics,
   apiModelIdFor, M3_ANALYSIS_MODEL, M3_TERMINAL_SKIP_CODES, isTerminalSkip,
+  M3_RETRYABLE_ERROR_CODES, isRetryable,
 } from './lib/voice-m3-contract.mjs'
 import { buildPromptPayload, buildInstruction, formatSummaryLine } from './lib/voice-m3-prompt.mjs'
 import {
@@ -1458,6 +1459,61 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('SOURCE_LEAK 종결 · 나머지는 재시도', 'policy', `🔴 ${offenders.join(' / ')}`)
   else ok('SOURCE_LEAK 종결 · 나머지는 재시도', 'policy',
     `종결 ${M3_TERMINAL_SKIP_CODES.join(',')} 만 · failed 재시도 유지 · 20자 가드 불변 · output null 유지`)
+}
+
+// ── ㊱ HTTP_529 는 재시도 · 종결은 그대로 ────────────────
+//    🔴 2026-08-28: 503 은 재시도하면서 529 만 빠져 있어 batch 가 불필요하게 멈췄다.
+//       둘 다 "서버가 지금 바쁘다" 는 같은 말이다. 실측 3,927건 중 3건 · 토큰 0 · 과금 0.
+{
+  const offenders: string[] = []
+
+  // ① 재시도 목록 — 다섯 종 정확히
+  const WANT = ['HTTP_429', 'HTTP_503', 'HTTP_529', 'TIMEOUT', 'NETWORK']
+  if (M3_RETRYABLE_ERROR_CODES.length !== WANT.length
+      || !WANT.every((c) => (M3_RETRYABLE_ERROR_CODES as readonly string[]).includes(c))) {
+    offenders.push(`재시도 목록이 ${JSON.stringify(M3_RETRYABLE_ERROR_CODES)} (${WANT.join(',')} 이어야)`)
+  }
+  for (const c of WANT) if (!isRetryable(c)) offenders.push(`${c} 를 재시도하지 않는다`)
+  // 🔴 529 는 이번에 추가한 것이므로 따로 못 박는다
+  if (!isRetryable('HTTP_529')) offenders.push('🔴 HTTP_529 를 재시도하지 않는다 — batch 가 불필요하게 멈춘다')
+  if (isRetryable(null)) offenders.push('errorCode 가 null 인데 재시도로 본다')
+
+  // ② 🔴 종결 · 모델 출력 문제는 batch 안에서 재시도하지 않는다
+  for (const c of ['SOURCE_LEAK', 'FORBIDDEN_ADDRESS']) {
+    if (isRetryable(c)) offenders.push(`🔴 ${c} 를 batch 안에서 재시도한다 — 종결이어야 한다`)
+    if (!isTerminalSkip(c)) offenders.push(`${c} 종결 정책이 깨졌다`)
+  }
+  for (const c of ['JSON_PARSE', 'NO_FINISH_REASON']) {
+    if (isRetryable(c)) offenders.push(`🔴 ${c} 를 batch 안에서 즉시 재시도한다 — 다음 batch 캐시 재시도여야 한다`)
+    if (isTerminalSkip(c)) offenders.push(`${c} 를 종결로 본다 — 고칠 수 있는 것을 버린다`)
+  }
+  // 두 목록이 겹치면 안 된다
+  for (const c of M3_RETRYABLE_ERROR_CODES) {
+    if ((M3_TERMINAL_SKIP_CODES as readonly string[]).includes(c)) offenders.push(`${c} 가 재시도와 종결 양쪽에 있다`)
+  }
+
+  // ③ run 이 상수를 쓰는가 — 인라인 배열이 남아 있으면 두 곳이 어긋난다
+  if (!/isRetryable\(response\.errorCode\)/.test(runCode)) offenders.push('run 이 isRetryable 을 쓰지 않는다')
+  if (/\['HTTP_429'[^\]]*\]\.includes/.test(runCode)) offenders.push('run 에 인라인 재시도 배열이 남아 있다')
+  // 재시도는 cap 안에서만
+  if (!/retry < M3_CAPS\.maxRetry/.test(runCode)) offenders.push('재시도가 maxRetry cap 밖으로 나갔다')
+  // 재시도도 CostEvent 에 남는다
+  if (!/eventType: 'retry'/.test(runCode)) offenders.push('재시도를 CostEvent 에 남기지 않는다')
+  if (!/retryAttempt: priorCalls \+ retry/.test(runCode)) offenders.push('retryAttempt 누적이 깨졌다')
+
+  // ④ 🔴 다른 정책은 하나도 건드리지 않았다
+  if (M3_LEAK_RUN_MIN !== 20) offenders.push(`유출 임계값이 ${M3_LEAK_RUN_MIN}`)
+  if (!/assertNoSourceLeak\(/.test(runCode)) offenders.push('유출 대조가 사라졌다')
+  if (/assertNoSourceLeak\([^()]*,[^()]*,/.test(runCode)) offenders.push('유출 임계값을 호출부에서 넘긴다')
+  if (!/M3_FORBIDDEN_ADDRESS_TERMS\.filter/.test(runCode)) offenders.push('금지 호칭 대조가 사라졌다')
+  if (!/status === 'succeeded' && output !== undefined \? output : Prisma\.DbNull/.test(runCode)) {
+    offenders.push('실패 · skip 에도 output 이 저장될 수 있다')
+  }
+  if (!/k\.present \? 'OK' : '없음'/.test(runCode)) offenders.push('API key 로그 정책이 바뀌었다')
+
+  if (offenders.length) bad('HTTP_529 재시도 · 종결 불변', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('HTTP_529 재시도 · 종결 불변', 'guard',
+    `재시도 ${M3_RETRYABLE_ERROR_CODES.length}종(529 포함) · 종결 ${M3_TERMINAL_SKIP_CODES.length}종 · 겹침 0 · JSON_PARSE 는 캐시 재시도 · 가드 불변`)
 }
 
 // ── 출력 ────────────────────────────────────────────────

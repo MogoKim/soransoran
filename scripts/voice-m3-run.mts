@@ -36,7 +36,7 @@ import {
   M3_TASK_VERSION, M3_PROMPT_VERSION, M3_OUTPUT_SCHEMA_VERSION,
   M3_CAPS, M3_EXPERIMENT_STAGES, M3_MODEL_CANDIDATES,
   buildCacheKey, estimateCost, checkCaps, pricingFor, assertNoSourceLeak,
-  M3_FORBIDDEN_ADDRESS_TERMS, M3_TERMINAL_SKIP_CODES,
+  M3_FORBIDDEN_ADDRESS_TERMS, M3_TERMINAL_SKIP_CODES, isRetryable,
   maxOutputTokensFor, outputTokenEstimateFor, outputTokenPolicyFor,
   classifyJsonFailure, formatDiagnostics, type JsonFailureKind,
 } from './lib/voice-m3-contract.mjs'
@@ -446,7 +446,7 @@ async function main(): Promise<void> {
       attempted += 1
       let retry = 0
       // 🔴 재시도도 비용이다. CostEvent 에 남기고 cap 에 계상한다
-      while (!response.ok && retry < M3_CAPS.maxRetry && ['HTTP_429', 'HTTP_503', 'TIMEOUT', 'NETWORK'].includes(response.errorCode ?? '')) {
+      while (!response.ok && retry < M3_CAPS.maxRetry && isRetryable(response.errorCode)) {
         retry += 1
         await prisma.voiceM3CostEvent.create({
           data: {

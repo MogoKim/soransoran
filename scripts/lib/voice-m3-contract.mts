@@ -227,6 +227,41 @@ export const M3_ANALYSIS_MODEL = 'claude-haiku-4.5'
  */
 export const M3_TERMINAL_SKIP_CODES = ['SOURCE_LEAK', 'FORBIDDEN_ADDRESS'] as const
 
+/**
+ * 🔴 **같은 batch 안에서 백오프 재시도할 오류** (2026-08-28).
+ *
+ * 종결(`M3_TERMINAL_SKIP_CODES`)의 반대편이다. 이쪽은 **잠시 뒤에 다시 부르면 달라진다** —
+ * provider 가 바쁘거나 네트워크가 흔들렸을 뿐 요청 자체는 멀쩡하다.
+ *
+ * | 코드 | 뜻 |
+ * |---|---|
+ * | `HTTP_429` | rate limit — 잠시 뒤 통과한다 |
+ * | `HTTP_503` | service unavailable — 일시적 |
+ * | **`HTTP_529`** | **Anthropic overloaded — 503 과 같은 계열의 일시적 과부하** |
+ * | `TIMEOUT` | 30초 안에 응답이 없었다 |
+ * | `NETWORK` | 연결 자체가 흔들렸다 |
+ *
+ * 🔴 `HTTP_529` 가 빠져 있던 것이 실제 결함이었다(2026-08-28).
+ *    503 은 재시도하면서 529 만 빼 둘 이유가 없다 — 둘 다 "서버가 지금 바쁘다" 는 같은 말이다.
+ *    그 탓에 batch 가 불필요하게 멈췄다. 실측: 3,927건 중 3건(0.08%), 모두 **토큰 0 · 과금 0**.
+ *
+ * 🔴 여기 없는 것은 batch 안에서 다시 부르지 않는다.
+ *    - `SOURCE_LEAK` · `FORBIDDEN_ADDRESS` → **종결**. 다시 불러도 같다
+ *    - `JSON_PARSE` · `NO_FINISH_REASON` → `failed` 로 남아 **다음 batch 에서** 캐시 재시도된다.
+ *      같은 batch 안에서 바로 다시 부르지 않는 이유: 모델 출력 문제라 즉시 재호출이
+ *      같은 답을 낼 가능성이 높고, 그러면 retry 예산만 태운다
+ *
+ * 🔴 재시도도 비용이다. `M3_CAPS.maxRetry`(3) 안에서만 돌고 `VoiceM3CostEvent` 에 남는다.
+ *
+ * 정본: docs/operations/2026-08-27-voice-m3-full-scale-plan.md §5
+ */
+export const M3_RETRYABLE_ERROR_CODES = ['HTTP_429', 'HTTP_503', 'HTTP_529', 'TIMEOUT', 'NETWORK'] as const
+
+/** 같은 batch 안에서 다시 불러 볼 오류인가 */
+export function isRetryable(errorCode: string | null): boolean {
+  return errorCode !== null && (M3_RETRYABLE_ERROR_CODES as readonly string[]).includes(errorCode)
+}
+
 /** 이 실패는 다시 불러도 답이 달라지지 않는가 */
 export function isTerminalSkip(errorCode: string | null): boolean {
   return errorCode !== null && (M3_TERMINAL_SKIP_CODES as readonly string[]).includes(errorCode)
