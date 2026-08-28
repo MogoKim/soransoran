@@ -44,6 +44,7 @@ async function getBlockedUserIds(): Promise<string[]> {
   return blocks.map((b) => b.blockedUserId)
 }
 
+/** 게시판 목록(PostCard)용. 미리보기와 작성자를 그리므로 content·author 가 필요하다. */
 const POST_LIST_SELECT = {
   id: true,
   title: true,
@@ -54,6 +55,23 @@ const POST_LIST_SELECT = {
   author: { select: { id: true, name: true, nickname: true, image: true } },
   // 삭제된 댓글은 세지 않는다 — 목록의 숫자와 상세에 보이는 개수가 어긋나면 안 된다.
   _count: { select: { comments: { where: { isDeleted: false } }, likes: true } },
+} as const
+
+/**
+ * PostListItem 이 그리는 한 줄에 필요한 만큼만. 홈 인기글 · 베스트 · 이어읽기가 쓴다.
+ *
+ * 이 줄은 미리보기도 작성자도 그리지 않는다. 게시판 목록용 select 를 그대로 쓰면
+ * 본문과 작성자를 후보 수만큼 읽어 전부 버리게 된다.
+ *
+ * 댓글 수는 화면 표시와 인기 점수가 함께 쓰므로 뺄 수 없다.
+ */
+const POST_LIST_ITEM_SELECT = {
+  id: true,
+  title: true,
+  boardType: true,
+  createdAt: true,
+  viewCount: true,
+  _count: { select: { comments: { where: { isDeleted: false } } } },
 } as const
 
 /**
@@ -106,7 +124,7 @@ export async function getRecentDiscoveryPosts(take = 6) {
       ...DISCOVERY_ELIGIBLE_WHERE,
       ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
     },
-    select: { ...POST_LIST_SELECT, boardType: true },
+    select: POST_LIST_ITEM_SELECT,
     orderBy: { createdAt: 'desc' },
     take,
   })
@@ -139,7 +157,7 @@ export async function getPopularDiscoveryPosts(take = 20) {
         ...DISCOVERY_ELIGIBLE_WHERE,
         ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
       },
-      select: { ...POST_LIST_SELECT, boardType: true },
+      select: POST_LIST_ITEM_SELECT,
       orderBy: { createdAt: 'desc' },
       take: HOME_POPULAR_CANDIDATES_PER_BOARD,
     })
