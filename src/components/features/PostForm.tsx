@@ -18,6 +18,7 @@ import {
   POST_TITLE_PLACEHOLDER,
 } from '@/lib/post-policy'
 import { readDraft, removeDraft, saveDraft, type PostDraft } from '@/lib/write-draft'
+import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 
 const DRAFT_SAVE_DELAY_MS = 1000
 
@@ -108,9 +109,13 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
       className="flex flex-col gap-4"
     >
       {state.error ? (
-        <p role="alert" className="text-sm text-state-danger">
-          {state.error}
-        </p>
+        state.needsOnboarding ? (
+          <OnboardingNotice message={state.error} callbackUrl={`/write?board=${boardSlug}`} />
+        ) : (
+          <p role="alert" className="text-sm text-state-danger">
+            {state.error}
+          </p>
+        )
       ) : null}
 
       {restored ? (

@@ -2,10 +2,12 @@
 
 import { useRef, useState } from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
+import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import {
   MAX_POST_CONTENT_LENGTH,
   MAX_POST_TITLE_LENGTH,
@@ -41,6 +43,7 @@ export default function PostEditForm({
   initialContent: string
   cancelHref: string
 }) {
+  const pathname = usePathname()
   const [state, formAction] = useFormState<ActionState, FormData>(updatePost, {})
   const [title, setTitle] = useState(initialTitle)
   const [content, setContent] = useState(initialContent)
@@ -58,9 +61,13 @@ export default function PostEditForm({
       <input type="hidden" name="boardSlug" value={boardSlug} />
 
       {state.error ? (
-        <p role="alert" className="text-sm text-state-danger">
-          {state.error}
-        </p>
+        state.needsOnboarding ? (
+          <OnboardingNotice message={state.error} callbackUrl={pathname} />
+        ) : (
+          <p role="alert" className="text-sm text-state-danger">
+            {state.error}
+          </p>
+        )
       ) : null}
 
       <label className="flex flex-col gap-1">

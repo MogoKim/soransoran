@@ -4,6 +4,7 @@ import PostEditForm from '@/components/features/PostEditForm'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { loginHref } from '@/lib/callback-url'
+import { prisma } from '@/lib/prisma'
 import { getPostDetail } from '@/lib/queries/posts'
 
 export const dynamic = 'force-dynamic'
@@ -41,6 +42,23 @@ export default async function PostEditPage({
   // 로그인하고 오면 고치던 화면으로 그대로 돌아온다
   if (!session?.user) redirect(loginHref(editHref))
   if (session.user.id !== post.author.id) notFound()
+
+  /**
+   * 🔴 가입을 안 끝낸 사람에게 폼을 그리지 않는다.
+   *    저장은 updatePost 가 막지만, 그건 다 고치고 누른 뒤의 일이다.
+   *    들어온 순간 보내는 편이 고쳐 쓴 것을 잃지 않는다.
+   *
+   * 🔴 isOnboarded 만 본다 — 서버 액션의 guard 와 같은 규칙이다.
+   *    여기서 다른 기준으로 판정하면 화면은 보내는데 저장은 통과하는
+   *    (또는 그 반대의) 상태가 생긴다.
+   */
+  const member = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { isOnboarded: true },
+  })
+  if (!member?.isOnboarded) {
+    redirect(`/onboarding?callbackUrl=${encodeURIComponent(editHref)}`)
+  }
 
   return (
     <PageShell>

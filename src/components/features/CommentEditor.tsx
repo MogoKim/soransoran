@@ -1,11 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import DeleteButton from '@/components/features/DeleteButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { updateComment, type CommentActionState } from '@/lib/actions/comments'
+import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import {
   COMMENT_TEXTAREA_MAX_HEIGHT,
   MAX_COMMENT_LENGTH,
@@ -38,6 +40,7 @@ export default function CommentEditor({
   initialContent: string
   children: React.ReactNode
 }) {
+  const pathname = usePathname()
   const [state, formAction] = useFormState<CommentActionState, FormData>(updateComment, {})
   const [editing, setEditing] = useState(false)
   const [content, setContent] = useState(initialContent)
@@ -76,9 +79,13 @@ export default function CommentEditor({
       <input type="hidden" name="boardSlug" value={boardSlug} />
 
       {state.error ? (
-        <p role="alert" className="text-sm text-state-danger">
-          {state.error}
-        </p>
+        state.needsOnboarding ? (
+          <OnboardingNotice message={state.error} callbackUrl={pathname} />
+        ) : (
+          <p role="alert" className="text-sm text-state-danger">
+            {state.error}
+          </p>
+        )
       ) : null}
 
       <textarea
