@@ -40,7 +40,7 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
   const posts = await getPostsByBoard(board.type as BoardType)
 
   return (
-    <PageShell>
+    <PageShell showWriteFab>
       {/* 제목을 감춘 자리라 위 여백은 숨 쉴 틈만큼만 둔다.
           아래 여백은 pb-16 이면 충분하다 — FAB 자리는 PageShell 이 따로 확보한다. */}
       <main className="mx-auto max-w-3xl px-4 pb-16 pt-2">

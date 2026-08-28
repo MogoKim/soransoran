@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { SITE } from '@/lib/brand'
 import FontSizeToggle from '@/components/layouts/FontSizeToggle'
+import { cn } from '@/lib/utils'
 
 /** 화면이 늘어도 이 배열에 한 줄만 늘어난다.
  *  emphasis 는 개인정보처리방침을 다른 링크와 구분해 표시하기 위한 것이다. */
@@ -31,11 +32,21 @@ const BUSINESS = {
   addressDetail: '302동 912호(월계동, 사슴아파트)',
 } as const
 
-/** 하단 영역 — 약관·규칙·문의·사업자 정보. 터치 타겟 52px 유지 */
-export default function Footer() {
+/**
+ * 하단 영역 — 약관·규칙·문의·사업자 정보. 터치 타겟 52px 유지
+ *
+ * avoidFloatingAction 은 FAB 이 있는 화면에서만 모바일 하단 여백을 늘려
+ * 마지막 문구가 가리는 것을 막는다. 넓은 화면은 원래 여백으로 돌아간다.
+ */
+export default function Footer({ avoidFloatingAction = false }: { avoidFloatingAction?: boolean }) {
   return (
     <footer className="mt-16 border-t border-subtle bg-surface-card">
-      <div className="mx-auto flex max-w-3xl flex-col gap-2 px-4 py-8">
+      <div
+        className={cn(
+          'mx-auto flex max-w-3xl flex-col gap-2 px-4 pt-8',
+          avoidFloatingAction ? 'pb-28 lg:pb-8' : 'pb-8',
+        )}
+      >
         <nav className="flex flex-wrap items-center gap-x-4">
           {LINKS.map((link) => (
             <Link
