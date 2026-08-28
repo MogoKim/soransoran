@@ -28,7 +28,8 @@ export default function MagazinePage() {
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 pb-16">
-        <ListHeader board={board} />
+        {/* 상단 메뉴가 이미 어느 화면인지 말한다. 제목은 눈에서만 감추고 문서 구조는 남긴다. */}
+        <ListHeader board={board} visuallyHidden />
         {/* 매거진에는 글쓰기 버튼을 노출하지 않는다 (IA 정본) */}
 
         {articles.length === 0 ? (
