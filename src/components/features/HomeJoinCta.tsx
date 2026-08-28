@@ -1,5 +1,5 @@
-import Link from 'next/link'
-import { loginHref } from '@/lib/callback-url'
+import KakaoSignInButton from '@/components/features/KakaoSignInButton'
+import KakaoStartNotice from '@/components/features/KakaoStartNotice'
 
 /**
  * 홈 참여 유도 카드 — 비로그인에게만 보인다.
@@ -15,6 +15,8 @@ import { loginHref } from '@/lib/callback-url'
  *
  * 상세 CTA(WriteCta) 는 중성 배경이고 이 카드는 bg-surface-soft 다.
  * 둘이 같은 화면에 있지는 않지만, 성격이 다른 블록을 같은 옷으로 두지 않는다.
+ *
+ * 시작 CTA는 중간 화면 없이 카카오 인증을 연다. 가입 판정은 인증 뒤 서버가 처리한다.
  */
 export default function HomeJoinCta({ isLoggedIn }: { isLoggedIn: boolean }) {
   if (isLoggedIn) return null
@@ -29,12 +31,10 @@ export default function HomeJoinCta({ isLoggedIn }: { isLoggedIn: boolean }) {
           카카오로 시작하면 글과 댓글을 남길 수 있어요
         </p>
 
-        <Link
-          href={loginHref('/')}
-          className="mt-4 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
-        >
-          카카오로 시작하기
-        </Link>
+        <div className="mt-4 flex flex-col items-center">
+          <KakaoSignInButton callbackUrl="/" />
+          <KakaoStartNotice />
+        </div>
       </div>
     </section>
   )

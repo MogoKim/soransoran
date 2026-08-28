@@ -25,10 +25,8 @@ const SHAPE: Record<Variant, string> = {
   onboarding: 'min-h-[60px] rounded-xl px-4 py-2 shadow-kakao',
 }
 
-const LABEL: Record<Variant, string> = {
-  default: '카카오로 시작하기',
-  onboarding: '카카오로 3초 만에 시작하기',
-}
+/** 시작 CTA는 같은 라벨을 쓴다. */
+const LABEL = '카카오로 3초 만에 시작하기'
 
 export default function KakaoSignInButton({
   callbackUrl = '/',
@@ -51,7 +49,7 @@ export default function KakaoSignInButton({
           />
         </svg>
       ) : null}
-      <span className="min-w-0">{LABEL[variant]}</span>
+      <span className="min-w-0">{LABEL}</span>
     </button>
   )
 }

@@ -22,9 +22,11 @@ type EmptyStateProps = {
   body?: string
   ctaLabel?: string
   ctaHref?: string
+  /** 링크가 아니라 그 자리에서 무언가를 실행하는 버튼을 놓을 때 쓴다. */
+  action?: React.ReactNode
 }
 
-export default function EmptyState({ title, body, ctaLabel, ctaHref }: EmptyStateProps) {
+export default function EmptyState({ title, body, ctaLabel, ctaHref, action }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-2xl border border-subtle bg-surface-card px-6 py-14 text-center">
       <p className="text-lg font-bold text-content-primary">{title}</p>
@@ -37,6 +39,7 @@ export default function EmptyState({ title, body, ctaLabel, ctaHref }: EmptyStat
           {ctaLabel}
         </Link>
       ) : null}
+      {action ? <div className="mt-3 flex w-full flex-col items-center">{action}</div> : null}
     </div>
   )
 }

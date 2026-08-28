@@ -4,7 +4,9 @@ import EmptyState from '@/components/layouts/EmptyState'
 import PostForm from '@/components/features/PostForm'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
-import { loginHref } from '@/lib/callback-url'
+import KakaoSignInButton from '@/components/features/KakaoSignInButton'
+import KakaoStartNotice from '@/components/features/KakaoStartNotice'
+import { toInternalPath } from '@/lib/callback-url'
 
 export const metadata: Metadata = {
   title: '글쓰기',
@@ -45,8 +47,13 @@ export default async function WritePage({
           <EmptyState
             title={boardLabel ? `${boardLabel}에 이야기를 남겨보세요` : '이야기를 남겨보세요'}
             body="카카오로 시작하면 바로 이어서 쓸 수 있어요. 짧게 써도 괜찮습니다."
-            ctaLabel="카카오로 시작하기"
-            ctaHref={loginHref(writePath)}
+            action={
+              <>
+                {/* callbackUrl 은 내부 경로만 넘긴다. */}
+                <KakaoSignInButton callbackUrl={toInternalPath(writePath) ?? '/'} />
+                <KakaoStartNotice />
+              </>
+            }
           />
         )}
       </main>
