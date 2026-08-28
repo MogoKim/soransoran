@@ -3,11 +3,13 @@ import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
 import HomeMagazineRail from '@/components/features/HomeMagazineRail'
 import HomeJoinCta from '@/components/features/HomeJoinCta'
+import FirstGreetingWidget from '@/components/features/greeting/first-greeting-widget'
 import Logo from '@/components/brand/Logo'
 import MenuIcon from '@/components/icons/MenuIcon'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug, type BoardMeta } from '@/lib/board-registry'
 import { getPopularDiscoveryPosts } from '@/lib/queries/posts'
+import { shouldShowFirstGreeting } from '@/lib/queries/greeting'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import type { MagazineArticle } from '@/content/magazine/types'
 
@@ -100,6 +102,8 @@ export default async function HomePage() {
   const posts = await getPopularDiscoveryPosts(HOME_POPULAR_COUNT)
   // 카드는 비로그인에게만 나간다. JWT 전략이라 auth() 는 쿠키 디코드뿐이다.
   const session = await auth()
+  // 막 온 사람에게만 첫 인사를 권한다. 판정은 queries/greeting 이 한다.
+  const showFirstGreeting = await shouldShowFirstGreeting(session?.user?.id)
   const articles = pickForHome(getAllMagazineArticles(), HOME_MAGAZINE_COUNT)
   const best = getBoardBySlug('best')!
   const magazine = getBoardBySlug('magazine')!
@@ -113,6 +117,8 @@ export default async function HomePage() {
             40대 50대 여성이 갱년기와 사는 이야기를 나누는 곳
           </p>
         </section>
+
+        {showFirstGreeting ? <FirstGreetingWidget /> : null}
 
         {posts.length > 0 ? (
           <section className="px-4 py-5">
