@@ -61,7 +61,16 @@ export default function PostListItem({
         surface === 'page' ? 'hover:bg-surface-card' : 'hover:bg-surface-page',
       )}
     >
-      <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
+      {/* 강조 행에서는 순번을 보조 정보로 낮춘다. 제목보다 숫자가 먼저 읽히지 않게 하기 위한 홈 전용 위계다.
+          줄간격은 두 갈래에 각각 적는다 — 공통 자리에 두면 글자 크기와 충돌로 보고 지워진다. */}
+      <span
+        className={cn(
+          'w-8 shrink-0 text-center',
+          emphasis
+            ? 'text-sm font-medium leading-none text-content-muted'
+            : 'text-[22px] font-bold italic leading-none text-brand-ink',
+        )}
+      >
         {rank}
       </span>
 
@@ -78,7 +87,7 @@ export default function PostListItem({
           {post.title}
         </span>
         <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-content-muted">
-          <BoardBadge boardType={post.boardType} />
+          <BoardBadge boardType={post.boardType} quiet={emphasis} />
           {showComments ? (
             <span className="flex items-center gap-1">
               <StatIcon name="comment" /> {post._count.comments}
