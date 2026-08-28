@@ -1,0 +1,51 @@
+import { prisma } from '@/lib/prisma'
+
+/**
+ * 온보딩을 마치기 전에는 쓰지 못하게 막는다.
+ *
+ * 🔴 저장을 막는 것이 이 파일의 일이다. 안내하는 것은 화면의 일이다.
+ *    버튼을 감추거나 화면에서 돌려보내는 것은 친절이지 방어가 아니다 —
+ *    서버 액션은 주소만 알면 누구나 부를 수 있다. 그래서 여기서 막는다.
+ *
+ * 🔴 isOnboarded 를 세션에 싣지 않는다.
+ *    JWT 는 최대 30일을 산다. 방금 가입을 마친 사람이 그동안 계속
+ *    "아직 안 끝났다" 로 읽히면, 고친 뒤에도 증상이 남는다.
+ *    온보딩 완료는 평생 한 번뿐이라 캐싱으로 얻을 것이 가장 작고,
+ *    틀렸을 때 잃는 것이 가장 크다. 매번 DB 에서 읽는다.
+ *    (그리고 세션에 실으려면 auth.config.ts 를 건드려야 하는데,
+ *     그 파일은 손대는 순간 로그인 전체가 흔들린 전력이 있다)
+ *
+ * 🔴 id 로만 찾는다. 닉네임이 있는지, 동의가 몇 행인지로 다시 판정하지 않는다.
+ *    isOnboarded 가 온보딩 완료의 유일한 진실이다 (actions/onboarding.ts 와 같은 규칙).
+ *    판정이 두 곳이 되면 언젠가 서로 다른 답을 낸다.
+ */
+
+/** 회원은 맞는데 아직 가입을 안 끝낸 경우 */
+export const ONBOARDING_REQUIRED = '가입을 마치면 글과 댓글을 남기실 수 있어요.'
+
+/** 세션의 id 로 User 를 못 찾은 경우. 기존 액션들이 쓰던 문구를 그대로 쓴다 */
+export const MEMBER_NOT_FOUND = '회원 정보를 찾을 수 없습니다. 다시 로그인해 주세요.'
+
+/**
+ * 막아야 하면 사유를, 통과면 null 을 준다.
+ *
+ * 🔴 needsOnboarding 은 통과 실패 중에서도 "가입만 마치면 되는" 경우에만 켠다.
+ *    회원을 못 찾은 것은 다시 로그인할 일이라 온보딩으로 보내면 안 된다.
+ *    화면(O3-B)이 이 값으로 온보딩 안내를 띄울지 정한다.
+ */
+export type OnboardingBlock = {
+  error: string
+  needsOnboarding?: true
+}
+
+export async function requireOnboarded(userId: string): Promise<OnboardingBlock | null> {
+  const member = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { isOnboarded: true },
+  })
+
+  if (!member) return { error: MEMBER_NOT_FOUND }
+  if (!member.isOnboarded) return { error: ONBOARDING_REQUIRED, needsOnboarding: true }
+
+  return null
+}

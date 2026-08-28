@@ -6,6 +6,7 @@ import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
+import { requireOnboarded } from '@/lib/onboarding-guard'
 import {
   MIN_COMMENT_LENGTH,
   MAX_COMMENT_LENGTH,
@@ -17,7 +18,12 @@ import {
 const COMMENT_LIMIT = 10
 const COMMENT_WINDOW_MS = 5 * 60 * 1000
 
-export type CommentActionState = { error?: string; ok?: true }
+/**
+ * 🔴 needsOnboarding 은 optional 이다.
+ *    지금 화면들은 error 만 읽는다. 필수로 두면 기존 반환 경로가 전부 깨진다.
+ *    O3-B 에서 화면이 이 값으로 온보딩 안내를 띄울지 정한다.
+ */
+export type CommentActionState = { error?: string; ok?: true; needsOnboarding?: true }
 
 /**
  * 댓글 작성
@@ -32,6 +38,10 @@ export async function createComment(
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: '로그인이 필요합니다.' }
+
+  // 🔴 저장 전에 막는다. 여기서 통과해야 아래 어떤 write 도 일어나지 않는다.
+  const blocked = await requireOnboarded(userId)
+  if (blocked) return blocked
 
   const postId = String(formData.get('postId') ?? '')
   const boardSlug = String(formData.get('boardSlug') ?? '')
@@ -84,6 +94,10 @@ export async function updateComment(
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: '로그인이 필요합니다.' }
+
+  // 🔴 저장 전에 막는다. 여기서 통과해야 아래 어떤 write 도 일어나지 않는다.
+  const blocked = await requireOnboarded(userId)
+  if (blocked) return blocked
 
   const commentId = String(formData.get('commentId') ?? '')
   const postId = String(formData.get('postId') ?? '')

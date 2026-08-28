@@ -7,6 +7,7 @@ import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
+import { requireOnboarded } from '@/lib/onboarding-guard'
 import {
   MIN_POST_TITLE_LENGTH,
   MAX_POST_TITLE_LENGTH,
@@ -23,7 +24,12 @@ import type { BoardType } from '@prisma/client'
 const POST_LIMIT = 3
 const POST_WINDOW_MS = 10 * 60 * 1000
 
-export type ActionState = { error?: string }
+/**
+ * 🔴 needsOnboarding 은 optional 이다.
+ *    지금 화면들은 error 만 읽는다. 필수로 두면 기존 반환 경로가 전부 깨진다.
+ *    O3-B 에서 화면이 이 값으로 온보딩 안내를 띄울지 정한다.
+ */
+export type ActionState = { error?: string; needsOnboarding?: true }
 
 /**
  * 글 생성
@@ -38,6 +44,10 @@ export async function createPost(
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: '로그인이 필요합니다.' }
+
+  // 🔴 저장 전에 막는다. 여기서 통과해야 아래 어떤 write 도 일어나지 않는다.
+  const blocked = await requireOnboarded(userId)
+  if (blocked) return blocked
 
   const boardSlug = String(formData.get('boardSlug') ?? '')
   const title = String(formData.get('title') ?? '').trim()
@@ -67,10 +77,6 @@ export async function createPost(
 
   const limited = checkActionRateLimit('post', userId, POST_LIMIT, POST_WINDOW_MS)
   if (!limited.ok) return { error: retryMessage(limited.retryAfterSec) }
-
-  // User row 존재 확인 — Adapter 가 만들었어야 한다
-  const exists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
-  if (!exists) return { error: '회원 정보를 찾을 수 없습니다. 다시 로그인해 주세요.' }
 
   const post = await prisma.post.create({
     data: {
@@ -112,6 +118,10 @@ export async function updatePost(
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: '로그인이 필요합니다.' }
+
+  // 🔴 저장 전에 막는다. 여기서 통과해야 아래 어떤 write 도 일어나지 않는다.
+  const blocked = await requireOnboarded(userId)
+  if (blocked) return blocked
 
   const postId = String(formData.get('postId') ?? '')
   const boardSlug = String(formData.get('boardSlug') ?? '')

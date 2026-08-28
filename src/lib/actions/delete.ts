@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
+import { requireOnboarded } from '@/lib/onboarding-guard'
 
 /**
  * 작성자 본인 삭제
@@ -26,6 +27,12 @@ export type DeleteActionState = {
    * 충돌하므로(리다이렉트가 예외로 던져진다), 경로만 돌려주고 이동은 client 에서 한다.
    */
   redirectTo?: string
+  /**
+   * 🔴 optional 이다. 지금 화면들은 error 만 읽는다 —
+   *    필수로 두면 기존 반환 경로가 전부 깨진다.
+   *    O3-B 에서 화면이 이 값으로 온보딩 안내를 띄울지 정한다.
+   */
+  needsOnboarding?: true
 }
 
 export async function deletePost(
@@ -35,6 +42,10 @@ export async function deletePost(
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: '로그인이 필요합니다.' }
+
+  // 🔴 저장 전에 막는다. 여기서 통과해야 아래 어떤 write 도 일어나지 않는다.
+  const blocked = await requireOnboarded(userId)
+  if (blocked) return blocked
 
   const postId = String(formData.get('postId') ?? '')
   const boardSlug = String(formData.get('boardSlug') ?? '')
@@ -72,6 +83,10 @@ export async function deleteComment(
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: '로그인이 필요합니다.' }
+
+  // 🔴 저장 전에 막는다. 여기서 통과해야 아래 어떤 write 도 일어나지 않는다.
+  const blocked = await requireOnboarded(userId)
+  if (blocked) return blocked
 
   const commentId = String(formData.get('commentId') ?? '')
   const postId = String(formData.get('postId') ?? '')
