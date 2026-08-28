@@ -249,10 +249,10 @@ batch 재실행 시에는 `cache hit` 수가 그 batch 의 건수와 같아야 �
 
 | 유형 | 처리 | 재시도 | 비고 |
 |---|---|---|---|
-| `HTTP_429` · `HTTP_503` | 지수 백오프 | **최대 3회** | retry 도 cap 에 계상 |
+| `HTTP_429` · `HTTP_503` · **`HTTP_529`** | 지수 백오프 | **최대 3회** | retry 도 cap 에 계상 |
 | `TIMEOUT` · `NETWORK` | 지수 백오프 | **최대 3회** | 30초 timeout |
 | `HTTP_4xx` (429 제외) | **재시도 0** | ❌ | 요청 자체가 잘못됐다. 코드를 고쳐야 한다 |
-| `HTTP_5xx` (503 제외) | **재시도 0** | ❌ | provider 장애. batch 를 멈추고 기다린다 |
+| `HTTP_5xx` (503 · 529 제외) | **재시도 0** | ❌ | provider 장애. batch 를 멈추고 기다린다 |
 | `NO_FINISH_REASON` | **재시도 0** | ❌ | 잘림 여부를 판정할 수 없는 응답은 성공으로 세지 않는다 |
 | `JSON_PARSE` | **저장 후 다음 batch 에서 재시도** | 🔁 | `json=` 유형(`empty`·`truncated`·`fenced`·`not_json`·`invalid`)이 진단에 남는다 |
 | `SOURCE_LEAK` | **저장하지 않고 `skipped`** | ❌ **종결**(§4-1) | 🔴 출력에 원문 20자 이상 연속 일치 |
@@ -260,6 +260,39 @@ batch 재실행 시에는 `cache hit` 수가 그 batch 의 건수와 같아야 �
 | **연속 실패 5회** | 🔴 **batch 전체 중단** | — | `M3_CAPS.consecutiveFailureStop` |
 | `tokenCap` 도달 | 🔴 **즉시 중단** | — | |
 | `dollarCap` 도달 | 🔴 **즉시 중단** | — | |
+
+### 5-1. ✅ `HTTP_529` 는 재시도한다 (2026-08-28 보강)
+
+**사고**: 전량 batch 35 · 40 에서 `HTTP_529` 가 나와 batch 가 멈췄다.
+`HTTP_529` 는 **Anthropic overloaded** — 서버가 지금 바쁘다는 뜻이고, 우리 요청은 멀쩡하다.
+토큰 **0** · 과금 **$0.0000** 이었다.
+
+🔴 **`HTTP_503` 은 재시도하면서 `HTTP_529` 만 빼 둔 것이 결함이었다.**
+둘 다 "서버가 지금 바쁘다" 는 같은 말인데 한쪽만 재시도했다.
+그 탓에 batch 가 불필요하게 멈추고 매번 승인을 받아야 했다.
+
+**실측**: 3,927건 중 3건(**0.08%**). 첫 1건은 다음 batch 캐시 재시도에서 **성공**했다 —
+재현되지 않는 일시적 오류라는 증거다.
+
+**보강**: 재시도 목록을 상수로 옮기고 `HTTP_529` 를 넣었다.
+
+```ts
+export const M3_RETRYABLE_ERROR_CODES = ['HTTP_429', 'HTTP_503', 'HTTP_529', 'TIMEOUT', 'NETWORK']
+```
+
+이제 **같은 batch 안에서 백오프 재시도**한다(최대 3회 · cap 에 계상 · `CostEvent` 에 기록).
+그 안에서 풀리면 batch 가 멈추지 않는다.
+
+🔴 **재시도와 종결은 서로 겹치지 않는다.** fixture 가 두 목록의 교집합이 비었는지 검사한다.
+
+| 처리 | 코드 | 이유 |
+|---|---|---|
+| **batch 내 재시도** | `HTTP_429` · `HTTP_503` · `HTTP_529` · `TIMEOUT` · `NETWORK` | 잠시 뒤 다시 부르면 달라진다 |
+| **다음 batch 캐시 재시도** | `JSON_PARSE` · `NO_FINISH_REASON` | 모델 출력 문제 — 즉시 재호출은 같은 답을 낼 가능성이 높아 retry 예산만 태운다 |
+| **종결** | `SOURCE_LEAK` · `FORBIDDEN_ADDRESS` | 다시 불러도 같다(§4-1) |
+
+🔴 **다른 정책은 하나도 건드리지 않았다.** 20자 유출 대조 · 금지 호칭 차단 · `output = null` ·
+raw output 저장 금지 · API key 로그 정책 전부 그대로이며, fixture 가 그것을 함께 검사한다.
 
 ### 🔴 실패한 batch 가 다음 batch 로 번지지 않게
 
