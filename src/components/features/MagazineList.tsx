@@ -45,10 +45,12 @@ export default function MagazineList({ articles }: { articles: MagazineArticle[]
                 type="button"
                 aria-pressed={active}
                 onClick={() => setCluster(key)}
-                className={`inline-flex min-h-[52px] shrink-0 items-center whitespace-nowrap rounded-full border px-4 text-sm transition duration-150 active:scale-[0.98] ${
+                /* 테두리를 두르지 않는다 — 칩이 줄지어 서면 선이 격자로 읽힌다.
+                   바탕이 회색이라 흰 면만으로 칩 모양이 선다. hover 도 바탕과 겹치지 않게 띄운다. */
+                className={`inline-flex min-h-[52px] shrink-0 items-center whitespace-nowrap rounded-full px-4 text-sm transition duration-150 active:scale-[0.98] ${
                   active
-                    ? 'border-interactive bg-surface-soft font-bold text-brand-ink'
-                    : 'border-subtle bg-surface-card text-content-muted hover:bg-surface-page'
+                    ? 'bg-surface-soft font-bold text-brand-ink'
+                    : 'bg-surface-card font-medium text-content-primary hover:bg-surface-soft'
                 }`}
               >
                 {key === ALL ? '전체' : MAGAZINE_CLUSTER_LABELS[key]}
