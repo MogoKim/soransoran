@@ -74,6 +74,8 @@ export default function OnboardingForm({ destination }: { destination: string })
 
   const [submitError, setSubmitError] = useState('')
   const [isPending, startTransition] = useTransition()
+  /** '다음' 을 누른 뒤 중복을 보는 동안. 실시간 확인(status) 과는 다른 축이다 */
+  const [checkingNext, setCheckingNext] = useState(false)
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 한글은 조합이 끝나야 글자가 된다. 조합 중에는 묻지 않는다 */
@@ -161,6 +163,60 @@ export default function OnboardingForm({ destination }: { destination: string })
   const requiredDone = AGREEMENTS.filter((item) => isRequired(item.key)).every(
     (item) => agreed[item.key],
   )
+
+  /**
+   * 1단계 → 2단계.
+   *
+   * 🔴 실시간 중복 확인을 기다리지 않는다.
+   *    그 확인은 미리 알려주는 편의이지 방어가 아니다 — 저장 직전에
+   *    completeOnboarding 이 다시 보고, 확인과 저장 사이에 누가 이름을
+   *    가져갔는지도 거기서만 알 수 있다. 편의 장치를 문으로 쓰면
+   *    한글을 다 치고도 조합이 끝나기를, 서버가 답하기를 기다리게 된다.
+   *
+   * 🔴 이미 valid 로 답이 와 있으면 다시 묻지 않는다.
+   *    같은 값을 두 번 확인할 이유가 없고, 그만큼 사람이 더 기다린다.
+   *
+   * 🔴 눌린 뒤 값이 바뀌었으면 그 답을 버린다.
+   *    느린 응답이 도착하는 사이 사용자가 이름을 고쳤을 수 있다.
+   */
+  function handleNext() {
+    if (checkingNext) return
+
+    const value = nickname.trim()
+    const formatError = validateNicknameFormat(value)
+    if (formatError) {
+      setStatus('error')
+      setMessage(formatError)
+      return
+    }
+
+    if (status === 'valid') {
+      setStep(2)
+      return
+    }
+
+    setCheckingNext(true)
+    const seq = ++requestRef.current
+
+    void checkNickname(value)
+      .then((result) => {
+        if (seq !== requestRef.current) return
+        if (result.available) {
+          setStatus('valid')
+          setMessage(NICKNAME_AVAILABLE)
+          setStep(2)
+          return
+        }
+        setStatus('error')
+        setMessage(result.error ?? NICKNAME_TAKEN)
+      })
+      .catch(() => {
+        if (seq !== requestRef.current) return
+        setStatus('error')
+        setMessage('이름을 확인하지 못했어요. 잠시 뒤 다시 눌러주세요.')
+      })
+      .finally(() => setCheckingNext(false))
+  }
 
   function toggleAll() {
     const next = !allChecked
@@ -280,11 +336,17 @@ export default function OnboardingForm({ destination }: { destination: string })
         {step === 1 ? (
           <button
             type="button"
-            onClick={() => setStep(2)}
-            disabled={status !== 'valid'}
+            onClick={handleNext}
+            /**
+             * 🔴 형식만 본다. 서버 응답을 문으로 쓰지 않는다.
+             *    한글은 조합이 끝나야 글자가 되고 확인은 서버를 한 번 다녀온다 —
+             *    둘을 다 기다리게 하면 다 쓰고도 버튼이 닫혀 있다.
+             *    중복은 눌렀을 때 보고, 저장 직전에 한 번 더 본다.
+             */
+            disabled={validateNicknameFormat(nickname.trim()) !== null || checkingNext}
             className={CTA_CLASS}
           >
-            다음
+            {checkingNext ? '확인하는 중…' : '다음'}
           </button>
         ) : (
           <div className="flex flex-col gap-2">
