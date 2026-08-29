@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
  * 로고 교체가 사실상 불가능한 상태다.
  *
  * 색상 정본 (soransoran-brand-design-spec.md §3-1 · §9)
- *   기본값 ink  = --brand-ink (#9A3A31) · 배경 위 6.62:1 — 판독성 안전
+ *   기본값 ink  = --brand-ink (브랜드 원색)
  *   brand       = --brand (#FF6F61) · 배경 위 2.60:1 — 로고 예외로만 성립
  *                 weight 900 + 충분한 크기/여백 + 실기기 판독성 확인을 통과해야 쓴다
  *
