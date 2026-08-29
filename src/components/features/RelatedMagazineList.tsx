@@ -25,10 +25,10 @@ export default function RelatedMagazineList({ articles }: { articles: MagazineAr
           <li key={article.slug}>
             <Link
               href={`/magazine/${article.slug}`}
-              className="flex min-h-[72px] items-center gap-3 py-3 no-underline transition-colors duration-150 hover:bg-surface-card active:bg-surface-soft"
+              className="group flex min-h-[72px] items-center gap-3 py-3 no-underline"
             >
               <span className="flex min-w-0 flex-col gap-1">
-                <span className="line-clamp-2 break-keep font-bold leading-[1.4] text-content-primary">
+                <span className="line-clamp-2 break-keep font-bold leading-[1.4] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
                   {article.title}
                 </span>
                 <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-content-muted">

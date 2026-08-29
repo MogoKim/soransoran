@@ -20,7 +20,7 @@ export default function MagazineCard({ article }: { article: MagazineArticle }) 
   return (
     <Link
       href={`/magazine/${article.slug}`}
-      className="flex items-start gap-3 rounded-lg border border-subtle bg-surface-card p-3 no-underline transition-colors duration-150 hover:bg-surface-page active:bg-surface-soft sm:gap-4 sm:p-4"
+      className="group flex items-start gap-3 rounded-lg border border-subtle bg-surface-card p-3 no-underline sm:gap-4 sm:p-4"
     >
       {image ? (
         <span className="relative aspect-[4/3] w-28 shrink-0 overflow-hidden rounded-lg bg-surface-soft sm:w-40">
@@ -39,7 +39,7 @@ export default function MagazineCard({ article }: { article: MagazineArticle }) 
           {MAGAZINE_CLUSTER_LABELS[article.cluster]}
         </span>
 
-        <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.4] text-content-primary">
+        <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.4] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
           {article.title}
         </span>
 

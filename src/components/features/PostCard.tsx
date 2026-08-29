@@ -26,16 +26,14 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
     /* 구분선은 목록이 `[&>li+li]` 로 긋는다. 이 <a> 는 <li> 의 유일한 자식이라
        `last:` 가 항상 참이 되어, 여기 두면 선이 한 줄도 그려지지 않는다.
 
-       🔴 hover 는 바탕 위에서 흰색으로 떠오른다.
-          목록에 면이 없으므로 surface-page 를 쓰면 바탕색과 같아져 아무 일도 일어나지 않는다.
-          방향만 반대일 뿐 대비는 같다 (정본 §7).
+       🔴 hover 는 면을 만들지 않는다 — 제목만 브랜드색으로 반응한다.
 
        가로 여백은 <main> 의 px-4 가 준다 — 여기서 또 주면 글자가 안쪽으로 밀린다. */
     <Link
       href={`${boardHref}/${post.id}`}
-      className="block py-3 no-underline transition-colors duration-150 hover:bg-surface-card active:bg-surface-soft"
+      className="group block py-3 no-underline"
     >
-      <h3 className="line-clamp-2 break-keep text-lg font-bold leading-[1.35] text-content-primary">
+      <h3 className="line-clamp-2 break-keep text-lg font-bold leading-[1.35] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
         {post.title}
       </h3>
 

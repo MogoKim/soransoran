@@ -39,7 +39,7 @@ function Card({ article }: { article: MagazineArticle }) {
   return (
     <Link
       href={`/magazine/${article.slug}`}
-      className="flex h-full flex-col overflow-hidden rounded-lg border border-subtle bg-surface-card no-underline transition-colors duration-150 hover:bg-surface-page active:bg-surface-soft"
+      className="group flex h-full flex-col overflow-hidden rounded-lg border border-subtle bg-surface-card no-underline"
     >
       {image ? (
         <span className="relative block aspect-video w-full shrink-0 bg-surface-soft">
@@ -58,7 +58,7 @@ function Card({ article }: { article: MagazineArticle }) {
           {MAGAZINE_CLUSTER_LABELS[article.cluster]}
         </span>
 
-        <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.4] text-content-primary">
+        <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.4] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
           {article.title}
         </span>
 

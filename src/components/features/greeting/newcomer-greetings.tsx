@@ -51,7 +51,7 @@ export default function NewcomerGreetings({ greetings }: { greetings: NewcomerGr
           <li key={g.id}>
             <Link
               href={g.href}
-              className="group block min-h-[52px] rounded-lg py-3.5 no-underline transition-colors duration-150 hover:bg-surface-page"
+              className="group block min-h-[52px] rounded-lg py-3.5 no-underline"
             >
               {/**
                * 🔴 이름과 "님이 인사를 남겼어요" 를 나란히 두되 접히게 한다.
@@ -70,7 +70,7 @@ export default function NewcomerGreetings({ greetings }: { greetings: NewcomerGr
                *    나머지는 눌러서 본다.
                */}
               {g.content ? (
-                <p className="m-0 line-clamp-2 break-keep font-medium leading-[1.5] text-content-primary transition-colors duration-150 group-hover:text-brand-ink">
+                <p className="m-0 line-clamp-2 break-keep font-medium leading-[1.5] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
                   {g.content}
                 </p>
               ) : null}
