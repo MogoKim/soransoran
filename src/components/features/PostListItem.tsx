@@ -22,11 +22,11 @@ export type PostListItemData = {
  *    그래서 세 갈래를 prop 으로 열되 **기본값은 지금 화면 그대로**다.
  *    기본값을 바꾸면 넘기지 않은 쪽이 조용히 같이 변한다.
  *
- * 🔴 surface 는 이 줄이 놓이는 면을 말한다.
- *    hover 는 바탕과 반대 방향으로 떠올라야 보인다 — 같은 색을 얹으면 아무 일도 없다.
- *    card = 흰 면 위(이어읽기) → 회색으로 눌린다.
- *    page = 바탕 위(홈)       → 흰색으로 떠오른다.
- *    방향만 반대고 대비는 같다.
+ * 🔴 hover 는 면을 만들지 않는다. 제목만 브랜드색으로 반응한다.
+ *    목록에 면이 없는데 가리킬 때만 네모가 생기면, 그 네모가 글보다 먼저 읽힌다.
+ *
+ * 🔴 surface 는 이 줄이 놓이는 면을 말한다. 지금은 모양을 정하지 않는다 —
+ *    hover 가 면을 쓰지 않게 되어 대비를 뒤집을 일이 없어졌다.
  *
  * 🔴 hideEmptyStats 는 0 을 감출 뿐 숫자를 만들지 않는다.
  *    0 이 아닌 값은 언제나 그대로 나간다.
@@ -56,10 +56,8 @@ export default function PostListItem({
           그래서 선이 한 줄도 그려지지 않았다. 목록이 `[&>li+li]` 로 사이에만 긋는다. */
     <Link
       href={`${board.href}/${post.id}`}
-      className={cn(
-        'flex min-h-[52px] items-start gap-3 px-4 py-3.5 no-underline transition-colors duration-150 active:bg-surface-soft',
-        surface === 'page' ? 'hover:bg-surface-card' : 'hover:bg-surface-page',
-      )}
+      data-surface={surface}
+      className="group flex min-h-[52px] items-start gap-3 px-4 py-3.5 no-underline"
     >
       {/* 순번이 목록의 리듬을 만든다 — 굵기와 기울임은 여기 한 곳에만 둔다. */}
       <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
@@ -73,6 +71,7 @@ export default function PostListItem({
              충돌로 보고 지워진다. */
           className={cn(
             'line-clamp-2 break-keep font-medium text-content-primary',
+            'transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink',
             emphasis ? 'text-lg leading-[1.5]' : 'leading-[1.5]',
           )}
         >
