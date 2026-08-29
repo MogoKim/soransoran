@@ -52,9 +52,10 @@ const POST_LIST_SELECT = {
   content: true,
   createdAt: true,
   viewCount: true,
-  author: { select: { id: true, name: true, nickname: true, image: true } },
+  // displayName 이 nickname → name 순으로 읽는다. 목록은 그 둘만 있으면 된다.
+  author: { select: { name: true, nickname: true } },
   // 삭제된 댓글은 세지 않는다 — 목록의 숫자와 상세에 보이는 개수가 어긋나면 안 된다.
-  _count: { select: { comments: { where: { isDeleted: false } }, likes: true } },
+  _count: { select: { comments: { where: { isDeleted: false } } } },
 } as const
 
 /**
