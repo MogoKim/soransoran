@@ -27,7 +27,8 @@ export default function MagazinePage() {
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-3xl px-4 pb-16">
+      {/* 제목이 sr-only 라 메뉴와 필터가 맞붙는다. 게시판과 같은 pt-3 으로 맞춘다. */}
+      <main className="mx-auto max-w-3xl px-4 pb-16 pt-3">
         {/* 상단 메뉴가 이미 어느 화면인지 말한다. 제목은 눈에서만 감추고 문서 구조는 남긴다. */}
         <ListHeader board={board} visuallyHidden />
         {/* 매거진에는 글쓰기 버튼을 노출하지 않는다 (IA 정본) */}

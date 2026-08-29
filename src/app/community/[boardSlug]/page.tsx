@@ -63,9 +63,9 @@ export default async function BoardPage({
 
   return (
     <PageShell showWriteFab>
-      {/* 제목을 감춘 자리라 위 여백은 숨 쉴 틈만큼만 둔다.
+      {/* 제목을 감춘 자리라 메뉴와 목록이 맞붙는다. 위 여백은 이 pt 가 혼자 만든다.
           아래 여백은 pb-16 이면 충분하다 — FAB 자리는 PageShell 이 따로 확보한다. */}
-      <main className="mx-auto max-w-3xl px-4 pb-16 pt-2">
+      <main className="mx-auto max-w-3xl px-4 pb-16 pt-3">
         {/* 상단 메뉴가 이미 어느 방인지 말한다. 눈에서만 감추고 <h1> 텍스트는 남긴다
             (매거진·베스트는 기본값 그대로 보인다). */}
         <ListHeader board={board} visuallyHidden />
