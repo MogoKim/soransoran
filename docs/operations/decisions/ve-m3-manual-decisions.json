@@ -1,0 +1,1390 @@
+{
+  "schema": "ve-m3-manual/v1",
+  "note": "창업자 수동 판정을 정규화한 정책 데이터. 🔴 memo · verdict 원문 · 원문/댓글/sourceUrl 은 담지 않는다.",
+  "sources": [
+    "representative-20",
+    "v40-r2-25",
+    "speaker-b1"
+  ],
+  "priority": "speaker-b1 > v40-r2-25 > representative-20 (나중 판정 우선)",
+  "totalDecisions": 183,
+  "byClass": {
+    "excluded_manual": 15,
+    "speakerFemaleOnly": 89,
+    "humanVoiceApproved": 63,
+    "held": 11,
+    "male": 5
+  },
+  "conflicts": [],
+  "items": [
+    {
+      "sourceRef": "cmpmmuz4w000fkd2ystnkogc6",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmpq7my63001cs62yqv1n6qtt",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmpqofv8o000n262y7k4h1div",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmpt3rzwl0000ds2yo3a0jts1",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmptjo4mh0016sy2ypgdlvyqd",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmpusrj80000o0s2yhvqrxeiz",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmpuzn08w000jwa2ym42jdeyj",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmpuzrrmi0011wa2yyu9dwbpl",
+      "class": "held",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmpvxlf020005rf2yqvev02yp",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmpwagd700000ld2yaue8nvk1",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmpwt7jyp000sim2y7ag1brdx",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmpx8lvne000qwm2y0nc4p8te",
+      "class": "held",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmpxchoxz000r6s2yr6z8eb17",
+      "class": "excluded_manual",
+      "reasonCodes": [
+        "MEDIA_CENTRIC"
+      ],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmpy1691x0007j52yqx8sqtfy",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmq2iv1ar000n1d2yv589tzbw",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmq4sk9ri000ens2yv2pk31gy",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmq5wyvao000k3e2y52txstx9",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmq7nziya000ebq2yjdxff7lo",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmq93h8uu000auu2ycb4ye5k6",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmq9hlqy8000b1e2yylrwsgdu",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmq9o2rbq0006g32yqskhnuas",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqawyqin00096m2yl73mq75i",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqb3bche000big2y0d9k0ysq",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqbms1nk000npu2yr9p84ci2",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqelwppm000e3s2y5ap1kixd",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqfeaa380014zs2y1827hmdh",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqfeacm6001bzs2ypfgveia5",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqg1id01000uh52yjxs81wgp",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqg1id93000vh52yie2nx5hs",
+      "class": "held",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmqg1idhu000wh52ysr0ci656",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmqgo27y2000g672y4fiwcgjz",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqiw4kj6000duk2yd8zkyccm",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqjijypq000cwg2yy9e5rky5",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqjiwvrv000cos2yf7vut176",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmqk3i8om000pgr2y9e63b36f",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqk7fanl000pqp2y78p38nsw",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqljw12t000pc72yevbxffry",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqlqyl4u000bdz2yo8zb3mmx",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqmiwbvd000gi12y2hfu24q4",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqmj6df1000ti12yfagqid5j",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqn42evj0005xn2yanpu5d3r",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqncztl6000fu82yx663r65s",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqodguym0001562y9innkczs",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmqpdvf180007lw2y7tmv5x2j",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqq89kcl000cw02ynzp8yo4l",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqqedsyp00045c2ylll1252h",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqrtmga30007z32yg8s5m2ey",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqsqs9kr0006gd2ylvhvlpt9",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqsr2o87000ngd2y6kw0seli",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqstss210001oo2y8h11of88",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqt99m1x000l9d2yjrk8hugl",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqu3p12g000dv22ycbpmdrm8",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqux418m000ibt2yct34tz7e",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqwm9u6b00062i2yw0l29e7k",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqxs1snx000n652yjhsq1um9",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmqxyekl60009dy2y52fq4vwo",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqyvc7680002mx2yf8rdkm5s",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqyvd3ck0003mx2y34uzwff8",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmqz43laq000wz82y6ccl37qg",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmqzz0hti0001wx2y6ws8o2le",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr01c8ce0009vz2yeyn0u8lu",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr0eg81e000owf2ytoblu7nt",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [
+        "AGE_MISMATCH"
+      ],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr0myk9q000c6z2yive7sxom",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr1egzjq0003hw2yxrnvq91h",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr1h6ikj0010x22yi5gsaww4",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr2tv98s0001d02yt4z2xktg",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr2u93vk000ph02yeyysryc5",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr4iq47s000nu72ym1hjhq57",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr4iq94q0012u72y25xjpcuz",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr4pi7q5000gru2yw0elwfgr",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr7165nf000ujt2ysm7mgkou",
+      "class": "male",
+      "reasonCodes": [],
+      "source": "speaker-b1",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmr76s48e000hnc2yum5h4sx9",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr7dj7xm0018vz2ye37d8qf2",
+      "class": "male",
+      "reasonCodes": [],
+      "source": "speaker-b1",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmr7jx4h7000wwq2y9xnh5h57",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr7s3o3u0008tz2y6n3zqh0f",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr7z2xtf0011a12yvec1x34x",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmr8jitxw0003572y13pp58db",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr8t2sqk000ctd2y0ijgzr67",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmr8t32300016td2yl366k8iw",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmr8tizxl0004cl2y02w0zouf",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmr9ut2jj000gps2yr19q8w5c",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmrbnakvt000a582yv87bdvr1",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmrcwe2320005ri2yhfiqqiz2",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmrdi0q4y000jjg2y0g4fldih",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmrgco39e000do22yf5ot0s7t",
+      "class": "excluded_manual",
+      "reasonCodes": [
+        "AMBIGUOUS"
+      ],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmrgypa330014mq2yyg8yc0jp",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmrh2kf340010112ynwm43usi",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmrhjq4yu000lgb2yh9nxqh4i",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmrhyihc20008tb2ysd2h930a",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmrl91o87000gsv2y8j47skew",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmrnhux9m000af62yesw22ngl",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmrpjbv3n000dfu2y6fbr5vba",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmrrs78oo0008s22ynut03uzk",
+      "class": "male",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmrv8vqnn0008kd2yb0i6qj4h",
+      "class": "excluded_manual",
+      "reasonCodes": [
+        "MIMICRY_RISK"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmrws9lwl0008bi2y0dbld9ax",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmrwsgqd8000zbi2yurr287hj",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmrxi3nrk000zmx2y77yq3nm2",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmry41xt90009zs2y2kwcia9h",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmry7p1od00057u2ygkpi9rdc",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmryc9yu7000qqg2y47ckk6m4",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmryozldk000f652yeeqrulzx",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmrz419ss0006432yvb9eilko",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmrz4l0950016432ycfm1gpfg",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms0yseqh000iv52y3pb9zdh2",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms17b7q1001av12yosljyuiw",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms2msnjx000jgz2y4sxhrqky",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms30v4ox0009r82y6fi57ml1",
+      "class": "male",
+      "reasonCodes": [],
+      "source": "speaker-b1",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cms3e1g6r00070n2y18c0bjiv",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms41ms600007d12y2ehqft5o",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms482fvj00033p2yeolwjnd9",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms4b4w1g0005wn2y6f8urhtv",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cms5h3prm000c3u2yx34mnlqz",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms5nzqj90004fn2ysbkmuuuj",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms6s9b2u0005072yzdn0unu7",
+      "class": "held",
+      "reasonCodes": [
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms79bnve0000ow2yfecn6xem",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms7h9x920003bp2y5b9smh3w",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms7hxp8v00091x2yfeavmuqs",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms7ibj9w0001n82y4af9bt7m",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms8xcat50005ke2yes690mpz",
+      "class": "held",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "representative-20",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cms8xxlwo000bbi2yz7mzbg6u",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms93oaqx00007v2yblvldhgv",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cms9j6hg80006sn2y6ick8o5b",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cms9rw8ld0005ax2yzqkmmi5t",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsad0k90000wnv2yr6z68sxb",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsadefpi0006jt2yaxpbmmqd",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [
+        "AGE_MISMATCH"
+      ],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsayk1co0001m92yzto17c7c",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsbsdkc3000i502yq19s9t4d",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsbypot3000cjb2ynjautwau",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsbyxq7p000rjb2y108qfd2a",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsbz0id9001djb2ykt4u1uk2",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsd7wh7o000pav2yzuk8r8ff",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsf95t4p000fxd2y88d263hx",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsfh28e90005lb2y6gg1cagx",
+      "class": "held",
+      "reasonCodes": [],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsfny34l000vwz2yc6sxokvm",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsg2iiy40000c02yxwfgipr0",
+      "class": "excluded_manual",
+      "reasonCodes": [
+        "CONTAMINATED"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmsg2qcoz000nc02yia1fsof2",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsgsijx2000lcs2y0hezkr2o",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsi40b0y0009r02y4yfxvjew",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsiigp150001an2yfzfhaqhi",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsk4kg8b0011972y9hki3b91",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmskd5lb9000gg92yuewxtmj0",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmskyk6al0000jb2y45jhjrb6",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmskyp8ql0009jb2y23bvabq2",
+      "class": "held",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmskyxco8000wjb2ypqvazt1b",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmsl2j3xn0002q52y6s1z4zgx",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsl2j4ll0005q52y8xcgltmb",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsljohkm0006yv2yr5mz5nve",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmslshliu000cpe2y5i24didk",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmslz07vj000pu02ybnkkj2ci",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsmzf44u000kw22ya8ejmjhc",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmso2678d0004622y63mrn63c",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [
+        "AGE_MISMATCH"
+      ],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsp8wagh0002nd2ysqwdzt39",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsphcwns0002hb2ykf4hr32x",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmspu7df8000i9j2ya03ikf5h",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "GOOD_ENGAGEMENT",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsq91gq30003v62ygbx86ra9",
+      "class": "held",
+      "reasonCodes": [],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmss45qyn000zsn2yx17wzuw1",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmssipd88000foj2yqjen4tz9",
+      "class": "held",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmssj7491001koj2yxh8qc4at",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmst3wg8x0005yv2yq5oy44yb",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsud7bo0000y1u2ys12uinhz",
+      "class": "excluded_manual",
+      "reasonCodes": [],
+      "source": "representative-20"
+    },
+    {
+      "sourceRef": "cmsv2osri00011h2ye2mnfijj",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmsvdewog00007b2ygzbaku6d",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [
+        "AGE_MISMATCH"
+      ],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsvjrzov00045d2yep8excft",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmsvz560o0011z12yigmozqsr",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmswmm6ba000ndv2yq3y86k5b",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmswzhl9v000lya2yza2ey0jt",
+      "class": "male",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmsxtj24g0001w42yqo5z03rs",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmszd814d000idh2ye2h0wcng",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmszhc5w9000adm2yvd9r1kpx",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmszov9a3000oba2yj3e680jb",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmszqsx7t00028t2yi0v3gwf6",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmszu1h2q0003we2ysw2h42jc",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmt03ew1300080v2y0kg179en",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmt0x28zb000y4g2yasaxmgrq",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmt13h2pj0016rw2ys7896q45",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmt19ht8c00002y2y102k1h1z",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmt1ow7m7000x2y2yb3cuwcdm",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmt247eq0000l4m2ybd8jsew8",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmt27sroy0003xr2ywv95ej38",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    },
+    {
+      "sourceRef": "cmt2c7ph9000d532ygzlxotb7",
+      "class": "held",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmt2x5sym0003yp2y89ap0vdk",
+      "class": "speakerFemaleOnly",
+      "reasonCodes": [],
+      "source": "speaker-b1"
+    },
+    {
+      "sourceRef": "cmt2xvnf1000p3a2yjw1gqjd7",
+      "class": "held",
+      "reasonCodes": [
+        "SPEAKER_MALE"
+      ],
+      "source": "v40-r2-25",
+      "speakerHint": "male"
+    },
+    {
+      "sourceRef": "cmt3yd6yz000ff22yw6if53j9",
+      "class": "humanVoiceApproved",
+      "reasonCodes": [
+        "EMOTION_OK",
+        "PRIVATE_ASSET",
+        "TONE_FIT"
+      ],
+      "source": "v40-r2-25"
+    }
+  ]
+}
