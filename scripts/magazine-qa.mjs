@@ -399,9 +399,9 @@ function checkArticle(article, context, report) {
   const titleForm = checkTitleForm(article.title)
   if (titleForm.level === 'FAIL') report.fail(id, titleForm.reason)
 
-  // 21 · 진료 권고 문장 (M-AUTO-2 · D4-A) — WARN 이다. 발행분 1건이 걸려 FAIL 로 두지 않는다
+  // 21 · 진료 권고 문장 (M-AUTO-2 · D4-A) — §4.4 의 필수 조건이라 FAIL 이다
   const care = checkCareAdvice(fullText, article.medical)
-  if (care.level === 'WARN') report.warn(id, care.reason)
+  if (care.level === 'FAIL') report.fail(id, care.reason)
 }
 
 // ── 집합 단위 검사 ─────────────────────────────────────────

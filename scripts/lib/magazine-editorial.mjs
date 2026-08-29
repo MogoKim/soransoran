@@ -169,9 +169,18 @@ export function checkTitleForm(title) {
  *    palpitations-menopause · dizziness-menopause 초안이 나온 뒤에 별도 규칙으로 만든다.
  *    ⚠️ 데이터 없이 임계를 지어내지 않는다 — D3 를 폐기한 것과 같은 이유다.
  *
- * 🔴 WARN 이다. FAIL 이 아니다.
- *    이미 발행된 less-sleep-with-age 에 이 문장이 없다. FAIL 로 두면 나간 글이
- *    QA 실패 상태가 된다. 그 글을 보강한 뒤에 승격한다.
+ * 🔴 FAIL 이다. 선택 항목이 아니라 **필수 조건**이다.
+ *    §4.4 는 건강 글에 이 문장을 "둔다" 고 하지 "두면 좋다" 고 하지 않는다.
+ *    병원으로 가야 할 사람을 집에 머물게 하는 것이 이 검사가 막는 일이다.
+ *
+ *    처음에는 WARN 이었다. 이미 나간 글 두 건이 걸려 FAIL 로 두면 발행분이
+ *    QA 실패 상태가 됐기 때문이다. 그 둘을 먼저 정리하고 승격했다.
+ *      health-insurance-after-retire  medical: true 가 과했다 — 플래그를 뺐다
+ *      less-sleep-with-age            진짜 누락이었다 — callout 에 주체를 넣었다
+ *    지금 medical: true 18건 전부 이 문장을 갖췄다. 승격해도 회귀가 없다.
+ *
+ *    ⚠️ 순서가 중요했다. 게이트를 먼저 올리고 글을 고치면 그동안 발행분이
+ *       FAIL 로 남는다. **오탐과 진짜 누락을 먼저 정리한 뒤 올린다.**
  */
 
 /** 누구에게 가라는 것인가 */
@@ -196,17 +205,19 @@ function hasCareSentence(text) {
 /**
  * @param {string} bodyText 본문 텍스트
  * @param {boolean} medical article.medical
- * @returns {{ level: 'WARN'|null, sentence: string|null, reason: string|null }}
+ * @returns {{ level: 'FAIL'|null, sentence: string|null, reason: string|null }}
  */
 export function checkCareAdvice(bodyText, medical) {
   if (!medical) return { level: null, sentence: null, reason: null }
   const sentence = hasCareSentence(bodyText)
   if (sentence) return { level: null, sentence, reason: null }
   return {
-    level: 'WARN',
+    level: 'FAIL',
     sentence: null,
     reason:
-      'medical: true 인데 본문에 진료 권고 문장이 없다 — 하단 고정 문구만으로는 부족하다. ' +
-      '"증상이 오래가거나 심하면 병원에서 확인해 보세요" 를 증상 설명 직후에 둔다 (전략 §4.4)',
+      'medical: true 인데 본문에 진료 권고 문장이 없다 — 전략 §4.4 의 필수 조건이다. ' +
+      '하단 고정 문구는 자동으로 붙지만 그것만으로는 부족하다. ' +
+      '"증상이 오래가거나 심하면 병원에서 확인해 보세요" 처럼 ' +
+      '누구에게 가라는 주체를 한 문장 안에 넣어 증상 설명 직후에 둔다',
   }
 }
