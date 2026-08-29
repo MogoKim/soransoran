@@ -4,12 +4,13 @@ import PostListItem from '@/components/features/PostListItem'
 import HomeMagazineRail from '@/components/features/HomeMagazineRail'
 import HomeJoinCta from '@/components/features/HomeJoinCta'
 import FirstGreetingWidget from '@/components/features/greeting/first-greeting-widget'
+import NewcomerGreetings from '@/components/features/greeting/newcomer-greetings'
 import Logo from '@/components/brand/Logo'
 import MenuIcon from '@/components/icons/MenuIcon'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug, type BoardMeta } from '@/lib/board-registry'
 import { getPopularDiscoveryPosts } from '@/lib/queries/posts'
-import { shouldShowFirstGreeting } from '@/lib/queries/greeting'
+import { getRecentGreetings, shouldShowFirstGreeting } from '@/lib/queries/greeting'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import type { MagazineArticle } from '@/content/magazine/types'
 
@@ -104,6 +105,8 @@ export default async function HomePage() {
   const session = await auth()
   // 막 온 사람에게만 첫 인사를 권한다. 판정은 queries/greeting 이 한다.
   const showFirstGreeting = await shouldShowFirstGreeting(session?.user?.id)
+  // 인사는 목록에도 인기글에도 안 나온다. 여기가 유일한 창구다.
+  const greetings = await getRecentGreetings()
   const articles = pickForHome(getAllMagazineArticles(), HOME_MAGAZINE_COUNT)
   const best = getBoardBySlug('best')!
   const magazine = getBoardBySlug('magazine')!
@@ -142,6 +145,8 @@ export default async function HomePage() {
             </ol>
           </section>
         ) : null}
+
+        {greetings.length > 0 ? <NewcomerGreetings greetings={greetings} /> : null}
 
         {articles.length > 0 ? (
           <section className="px-4 py-6">

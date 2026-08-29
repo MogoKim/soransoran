@@ -1,5 +1,11 @@
 import { prisma } from '@/lib/prisma'
-import { FIRST_GREETING_WINDOW_MS } from '@/lib/greeting-policy'
+import { getBoardByType } from '@/lib/board-registry'
+import {
+  FIRST_GREETING_BOARD_TYPE,
+  FIRST_GREETING_WINDOW_MS,
+  GREETING_CATEGORY,
+} from '@/lib/greeting-policy'
+import { displayName } from '@/lib/display-name'
 
 /**
  * 첫 인사 위젯을 보여줄 사람인가.
@@ -36,4 +42,60 @@ export async function shouldShowFirstGreeting(userId: string | undefined): Promi
    *    "처음 오셨군요" 가 우리가 그를 기억하지 못한다는 말이 된다.
    */
   return Date.now() - member.createdAt.getTime() < FIRST_GREETING_WINDOW_MS
+}
+
+/** 홈에 거는 인사 수. 더 실으면 인사 목록이 홈의 주인공이 된다 */
+const RECENT_GREETING_TAKE = 6
+
+export type NewcomerGreeting = {
+  id: string
+  name: string
+  content: string
+  href: string
+}
+
+/**
+ * 홈에 보여줄 최근 인사.
+ *
+ * 🔴 category 로 찾는다. User.firstGreetingPostId 를 되짚지 않는다.
+ *    화면이 보여주는 것은 사람이 아니라 글이다 — 글이 지워지면 목록에서도
+ *    사라져야 하는데, id 를 되짚는 경로는 글이 없어져도 id 가 남아
+ *    빈 곳을 가리키는 줄을 만든다. status 조건 하나로 끝나는 쪽을 쓴다.
+ *
+ * 🔴 여기는 EXCLUDE_GREETING 을 쓰지 않는다.
+ *    그 조각은 "일반 목록에서 인사를 뺀다" 는 뜻이고, 이 쿼리는 정확히
+ *    그 반대 — 인사만 모은다. 같은 파일에 두어 두 방향이 한눈에 보이게 한다.
+ *
+ * 🔴 차단 사용자 필터가 없다.
+ *    그 판정은 queries/posts.ts 안에만 있고 export 되지 않는다.
+ *    지금 범위에서 그 파일을 건드리지 않기로 해 여기서는 걸지 못한다 —
+ *    인사는 5~200 자 한 줄이라 위험이 작지만, 차단 UI 를 여는 날
+ *    이 목록도 같이 걸러야 한다.
+ */
+export async function getRecentGreetings(
+  take = RECENT_GREETING_TAKE,
+): Promise<NewcomerGreeting[]> {
+  const board = getBoardByType(FIRST_GREETING_BOARD_TYPE)
+  if (!board) return []
+
+  const rows = await prisma.post.findMany({
+    where: {
+      category: GREETING_CATEGORY,
+      status: 'PUBLISHED',
+    },
+    select: {
+      id: true,
+      content: true,
+      author: { select: { nickname: true, name: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+    take,
+  })
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: displayName(row.author),
+    content: row.content,
+    href: `${board.href}/${row.id}`,
+  }))
 }
