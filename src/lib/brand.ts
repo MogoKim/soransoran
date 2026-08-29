@@ -17,7 +17,7 @@ export const BRAND = {
   /** 페이지 배경 — manifest background_color · OG 배경 */
   background: '#fff8f6',
   /** 읽는 브랜드색 — OG 워드마크 */
-  ink: '#9a3a31',
+  ink: '#ff6f61',
   /** 본문 텍스트 — OG 카피 */
   text: '#2f2624',
   /** 아이콘 글자색 · CTA 위 글자 */
