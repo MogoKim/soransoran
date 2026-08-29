@@ -486,6 +486,29 @@ North Star 가 오르고 있는가?
 오탈자 교정·문장 다듬기가 끼어들 여지가 열린다. blob download 로 파일이 직행하면
 **Claude Code 가 원고를 읽지 않고도 제자리에 놓인다.**
 
+**10번이 지나면 `drafts/{slug}/` 는 제작 당시의 사본이다.** 정본은
+`src/content/magazine/articles.ts` 다. 정본을 나중에 고쳐도 draft 사본은
+**자동으로 따라가지 않는다.**
+
+🔴 **이미 발행·예약된 slug 의 draft 를 보고 품질을 판정하지 않는다.**
+사본에는 등록 시점의 내용이 그대로 남아 있어 정본과 갈라질 수 있다.
+실제로 갈라진 적이 있다.
+
+```
+health-insurance-after-retire   정본에서 medical 플래그를 뺐다   draft 사본에는 medical: true 가 남았다
+less-sleep-with-age             정본 callout 에 진료 주체를 넣었다   draft 사본에는 옛 문장이 남았다
+```
+
+`magazine-qa.mjs` 가 `freshDrafts` 필터로 **이미 `articles.ts` 에 있는 slug 의 draft 를
+검사에서 빼는 이유가 이것이다.** 두 번 검사하면 정본과 사본 중 어느 쪽이 맞는지
+알 수 없게 된다. 대신 `draft "..." 는 이미 발행됐다 — articles.ts 가 정본이다` 로 알린다.
+
+⚠️ **사본 동기화나 삭제는 별도 정책 변경이다. 지금 기준에서는 하지 않는다.**
+`article-draft.ts` 를 가진 draft 23건이 전부 이미 발행된 상태이므로 2건 청소가
+아니라 23건 전체에 적용될 결정이고, 지우면 `magazine-batch-qa.mjs --all` 의
+회귀 검사 대상이 사라진다. 운영 영향은 없다 — QA FAIL 0 이고 `magazine-register.mjs`
+가 `이미 articles.ts 에 있다` 로 재등록을 막는다.
+
 ### 13.3 playwright 를 npm 에 설치하지 않는다 (6-H-2 확정)
 
 MCP Playwright 로 Claude Code 가 대화 턴에서 브라우저를 조작한다.
