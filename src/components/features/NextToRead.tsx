@@ -34,9 +34,7 @@ export default function NextToRead({
     <section className="mt-10 border-t border-subtle pt-6">
       <h2 className="text-lg font-bold text-content-primary">이어서 읽어보세요</h2>
 
-      {/* 🔴 흰 카드 위에 올린다.
-          상세 <main> 은 바탕(회색)이라 여기에 행을 직접 놓으면
-          hover 색이 바탕색과 같아져 아무 일도 일어나지 않는다 (globals.css 표면 규칙).
+      {/* 흰 카드 위에 올려 본문과 갈라 보이게 한다. hover 는 면을 쓰지 않는다.
           가로 여백은 행이 자기 px-4 로 가진다. */}
       <ol className="m-0 mt-2 flex list-none flex-col overflow-hidden rounded-2xl border border-subtle bg-surface-card p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
         {next.map((post, index) => (
