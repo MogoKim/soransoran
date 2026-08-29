@@ -42,6 +42,7 @@ import {
 } from './lib/voice-m3-contract.mjs'
 import { loadUnaoReadonlyUrl, topCommentsToText } from './lib/voice-unao-readonly.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { toCsv } from './lib/voice-m3-csv.mjs'
 
 const argv = process.argv
 const has = (n: string): boolean => argv.includes(`--${n}`)
@@ -87,14 +88,6 @@ type SkippedRow = Record<(typeof SKIPPED_COLUMNS)[number], string | number | boo
 
 // ── CSV · 통계 헬퍼 ─────────────────────────────────────
 
-/** 🔴 notes 에는 쉼표 · 줄바꿈 · 따옴표가 들어온다. RFC4180 으로 감싼다 */
-const csvCell = (v: unknown): string => {
-  const s = v === null || v === undefined ? '' : String(v)
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
-const toCsv = (headers: readonly string[], rows: Array<Record<string, unknown>>): string =>
-  BOM + [headers.join(','), ...rows.map((r) => headers.map((h) => csvCell(r[h])).join(','))].join('\n') + '\n'
-
 const pct = (sorted: readonly number[], p: number): number =>
   sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))]
 
@@ -124,8 +117,23 @@ async function main(): Promise<void> {
   const prisma = new PrismaClient()
   try {
     // ── 1. 대상 조회 (읽기만) ────────────────────────────
+    /**
+     * 🔴 model 만으로 거르면 안 된다.
+     *    같은 `claude-haiku-4.5` 로 taskVersion · promptVersion · outputSchemaVersion 이
+     *    다른 분석이 나중에 쌓이면 **서로 다른 실행의 결과가 한 CSV 에 섞인다.**
+     *    섞인 줄 모르고 평균을 내면 그 수는 아무것도 뜻하지 않는다.
+     *
+     *    cacheKey 8요소 중 이 넷이 "어느 분석인가" 를 가른다(계약 §D).
+     *    method='llm' 도 함께 건다 — VoiceDerived 의 method='rule' 과 섞이지 않게 하는 표식이다.
+     */
     const cache = await prisma.voiceM3Cache.findMany({
-      where: { model: M3_ANALYSIS_MODEL },
+      where: {
+        model: M3_ANALYSIS_MODEL,
+        taskVersion: M3_TASK_VERSION,
+        promptVersion: M3_PROMPT_VERSION,
+        outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
+        method: 'llm',
+      },
       select: {
         sourceRef: true, status: true, errorCode: true, output: true,
         inputTokens: true, outputTokens: true, totalTokens: true, estimatedCostUsd: true,
@@ -234,11 +242,23 @@ async function main(): Promise<void> {
     /**
      * 🔴 총비용은 **CostEvent 합계**다. Cache 합계가 아니다.
      *    Cache 는 건별 최종 1행만 남지만 CostEvent 는 재시도 호출까지 기록한다.
-     *    Cache 로 세면 실제 지출보다 적게 나온다(실측 차 $0.1678 = 재시도분).
-     *    "얼마 썼나" 를 묻는 자리에 적게 나오는 수를 두면 안 된다.
+     *    Cache 로 세면 실제 지출보다 적게 나온다. "얼마 썼나" 를 묻는 자리에
+     *    적게 나오는 수를 두면 안 된다.
+     *
+     * 🔴 여기서도 model 만으로 거르지 않는다.
+     *    CostEvent 자체에는 버전 필드가 없다 — 버전은 **Run 이 들고 있다**.
+     *    relation 으로 같은 조건을 태워야 §1 의 대상과 같은 실행의 비용이 나온다.
      */
     const spent = await prisma.voiceM3CostEvent.aggregate({
-      where: { model: M3_ANALYSIS_MODEL }, _sum: { estimatedCostUsd: true },
+      where: {
+        model: M3_ANALYSIS_MODEL,
+        run: {
+          taskVersion: M3_TASK_VERSION,
+          promptVersion: M3_PROMPT_VERSION,
+          outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
+        },
+      },
+      _sum: { estimatedCostUsd: true },
     })
     const totalCost = Number(spent._sum.estimatedCostUsd ?? 0)
     const storedCost = signalRows.reduce((a, r) => a + Number(r.costUsd), 0)
@@ -255,8 +275,8 @@ async function main(): Promise<void> {
 
     write('report.md', report)
     if (!reportOnly) {
-      write('signals.csv', toCsv(SIGNAL_COLUMNS, signalRows))
-      write('skipped.csv', toCsv(SKIPPED_COLUMNS, skippedRows))
+      write('signals.csv', toCsv(SIGNAL_COLUMNS, signalRows, BOM))
+      write('skipped.csv', toCsv(SKIPPED_COLUMNS, skippedRows, BOM))
       // 🔴 JSONL 은 BOM 없이 — 기계가 읽는다
       write('signals.jsonl', signalRows.map((r) => JSON.stringify(r)).join('\n') + '\n')
     }
@@ -285,7 +305,16 @@ async function main(): Promise<void> {
       columns: { signals: [...SIGNAL_COLUMNS], skipped: [...SKIPPED_COLUMNS] },
       sha256: Object.fromEntries(Object.entries(files).map(([n, p]) => [n, sha256Of(p)])),
     }
-    writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf-8')
+    /**
+     * 🔴 manifest 도 금지 문자열 검사를 받는다.
+     *    sha256 을 만들려면 다른 파일이 먼저 쓰여야 해서 `files` 밖에서 쓰지만,
+     *    **검사 대상에서까지 빠지면 안 된다** — manifest 는 columns 배열을 담고 있어
+     *    화이트리스트가 무너지면 여기에 먼저 드러난다.
+     *    자기 자신의 sha 는 넣지 않는다(자기 참조라 계산이 성립하지 않는다).
+     */
+    const manifestPath = join(outDir, 'manifest.json')
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8')
+    files['manifest.json'] = manifestPath
 
     // ── 6. 🔴 생성 후 금지 문자열 재검사 (PASS 6) ────────
     const offenders: string[] = []
@@ -304,7 +333,7 @@ async function main(): Promise<void> {
     }
 
     console.log(`\n  생성 위치 tmp/voice-m3-export/${stamp}/`)
-    for (const n of [...Object.keys(files), 'manifest.json']) console.log(`     ${n}`)
+    for (const n of Object.keys(files)) console.log(`     ${n}`)
     console.log(`\n  signals ${signalRows.length}행 · skipped ${skippedRows.length}행 · 금지 컬럼 0건`)
     console.log('\n  🔴 다음은 사람이 읽는다. 점수로 발행을 자동화하지 않는다.\n')
   } finally {

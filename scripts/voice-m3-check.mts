@@ -30,6 +30,7 @@ import {
   selectStratifiedSample, validateSample, SAMPLE_AXES, selectFullModeBatch, type SampleCandidate,
 } from './lib/voice-m3-sample.mjs'
 import { keyStatus, ANTHROPIC_JSON_PREFILL, PROVIDER_KEY_ENV } from './lib/voice-m3-provider.mjs'
+import { neutralizeFormula, csvCell } from './lib/voice-m3-csv.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-m3-dry-run.mts')
@@ -1613,7 +1614,11 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (!/^tmp\/$/m.test(gitignore)) offenders.push('🔴 .gitignore 에 tmp/ 가 없다 — export 산출물이 커밋된다')
   // CSV 는 BOM, JSONL 은 BOM 없음 (설계 §8-④ 확정)
   if (!/const BOM = /.test(exportCode)) offenders.push('BOM 상수가 없다')
-  if (!/BOM \+ \[headers\.join/.test(exportCode)) offenders.push('CSV 에 BOM 이 붙지 않는다')
+  // 🔴 CSV 만 BOM — 직렬화는 lib 에 있고 BOM 은 호출부가 넘긴다
+  const csvSrc = stripComments(readFileSync(join(HERE, 'lib/voice-m3-csv.mts'), 'utf-8'))
+  if (!/return bom\s*\+ \[headers\.join/.test(csvSrc)) offenders.push('CSV 에 BOM 이 붙지 않는다')
+  if (!/toCsv\(SIGNAL_COLUMNS, signalRows, BOM\)/.test(exportCode)) offenders.push('signals.csv 에 BOM 을 넘기지 않는다')
+  if (!/toCsv\(SKIPPED_COLUMNS, skippedRows, BOM\)/.test(exportCode)) offenders.push('skipped.csv 에 BOM 을 넘기지 않는다')
   if (/write\('signals\.jsonl', BOM/.test(exportCode)) offenders.push('🔴 JSONL 에 BOM 이 붙는다')
   if (/JSON\.stringify\(manifest[\s\S]{0,40}BOM/.test(exportCode)) offenders.push('🔴 manifest 에 BOM 이 붙는다')
   // manifest 에 sha256 이 남는가
@@ -1624,6 +1629,104 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('export 산출물 격리', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('export 산출물 격리', 'guard',
     'tmp/voice-m3-export/ 하위 · .gitignore 커버 · CSV BOM · JSONL/manifest BOM 없음 · sha256 · 생성 후 재검사')
+}
+
+// ── ㊵ export 대상은 exact version 으로 좁힌다 ───────────
+//    🔴 model 만으로 거르면 같은 haiku 의 **다른 분석**이 한 CSV 에 섞인다.
+//       섞인 줄 모르고 평균을 내면 그 수는 아무것도 뜻하지 않는다.
+{
+  const offenders: string[] = []
+
+  // Cache 조회 where 절 추출 — 버전 4종 + method 가 전부 있어야 한다
+  const cacheWhere = /voiceM3Cache\.findMany\(\{\s*where:\s*\{([\s\S]*?)\}/.exec(exportCode)?.[1] ?? ''
+  if (cacheWhere === '') offenders.push('Cache 조회 where 절을 찾을 수 없다')
+  for (const [field, constant] of [
+    ['model', 'M3_ANALYSIS_MODEL'], ['taskVersion', 'M3_TASK_VERSION'],
+    ['promptVersion', 'M3_PROMPT_VERSION'], ['outputSchemaVersion', 'M3_OUTPUT_SCHEMA_VERSION'],
+  ]) {
+    if (!new RegExp(`${field}:\\s*${constant}`).test(cacheWhere)) offenders.push(`🔴 Cache where 에 ${field} 없음`)
+  }
+  if (!/method:\s*'llm'/.test(cacheWhere)) offenders.push('Cache where 에 method 없음')
+
+  // CostEvent 집계도 같은 실행만 — 버전은 Run 이 들고 있으므로 relation 을 타야 한다
+  const evWhere = /voiceM3CostEvent\.aggregate\(\{\s*where:\s*\{([\s\S]*?)\n      \},/.exec(exportCode)?.[1] ?? ''
+  if (evWhere === '') offenders.push('CostEvent 집계 where 절을 찾을 수 없다')
+  if (!/run:\s*\{/.test(evWhere)) offenders.push('🔴 CostEvent 가 Run relation 을 타지 않는다 — model-only 집계')
+  for (const [field, constant] of [
+    ['taskVersion', 'M3_TASK_VERSION'], ['promptVersion', 'M3_PROMPT_VERSION'],
+    ['outputSchemaVersion', 'M3_OUTPUT_SCHEMA_VERSION'],
+  ]) {
+    if (!new RegExp(`${field}:\\s*${constant}`).test(evWhere)) offenders.push(`🔴 CostEvent run 에 ${field} 없음`)
+  }
+
+  if (offenders.length) bad('export 대상 exact version', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('export 대상 exact version', 'guard',
+    `Cache where = model+task+prompt+schema+method · CostEvent 는 run relation 경유 · 다른 버전 혼입 0`)
+}
+
+// ── ㊶ CSV formula injection 중립화 ─────────────────────
+//    🔴 notes 는 LLM 출력이다. 우리가 쓴 문장이 아닌 것을 사람이 Excel 로 연다.
+//       `=` `+` `-` `@` 로 시작하면 수식으로 실행된다.
+{
+  const offenders: string[] = []
+
+  const csvLib = stripComments(readFileSync(join(HERE, 'lib/voice-m3-csv.mts'), 'utf-8'))
+  if (!/neutralizeFormula/.test(csvLib)) offenders.push('🔴 formula 중립화 함수가 없다')
+  if (!/toCsv/.test(exportCode)) offenders.push('export 가 toCsv 를 쓰지 않는다')
+  // 🔴 검사 대상 로직이 실행 진입점과 같은 파일에 있으면 fixture 가 작업을 일으킨다
+  if (/main\(\)/.test(csvLib)) offenders.push('🔴 csv lib 에 실행 진입점이 있다')
+  if (!/const s = neutralizeFormula\(raw\)/.test(csvLib)) offenders.push('csvCell 이 중립화를 거치지 않는다')
+  // RFC4180 quoting 이 살아 있어야 한다
+  if (!/s\.replace\(\/"\/g, '""'\)/.test(csvLib)) offenders.push('🔴 RFC4180 quoting 이 사라졌다')
+  // 숫자는 중립화 대상이 아니다 — 음수가 텍스트로 변질되면 정렬 · 합계가 깨진다
+  if (!/typeof v === 'number' \|\| typeof v === 'boolean'/.test(csvLib)) {
+    offenders.push('숫자 · 불리언을 중립화에서 빼지 않는다')
+  }
+
+  // 🔴 실제로 막는지 — 위험 입력을 넣어 본다
+  const cases: Array<[string, boolean]> = [
+    ['=HYPERLINK("http://evil","click")', true],
+    ['+cmd|\' /C calc\'!A0', true],
+    ['-1+2', true],
+    ['@SUM(1+1)', true],
+    ['  =SUM(A1)', true],        // 선행 공백으로 회피 시도
+    ['\t=1+1', true],            // 탭 회피 시도
+    ['자연스러운 문장이다', false],
+    ['평점 85점 = 높음', false],  // 중간의 = 는 안전
+    ['', false],
+  ]
+  for (const [input, shouldNeutralize] of cases) {
+    const out = neutralizeFormula(input)
+    const did = out.startsWith("'") && out !== input
+    if (did !== shouldNeutralize) {
+      offenders.push(`🔴 "${input.slice(0, 12)}" → ${did ? '중립화됨' : '통과'} (기대 ${shouldNeutralize ? '중립화' : '통과'})`)
+    }
+    // 🔴 원본을 바꾸지 않는다 — 앞에 덧대기만 한다
+    if (did && out.slice(1) !== input) offenders.push(`🔴 "${input.slice(0, 12)}" 원본이 변형됐다`)
+  }
+
+  if (offenders.length) bad('CSV formula injection 방어', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('CSV formula injection 방어', 'guard',
+    `= + - @ · 선행 공백 · 탭 전부 중립화 · 원본 불변 · 숫자 제외 · RFC4180 유지 · 케이스 ${cases.length}종`)
+}
+
+// ── ㊷ manifest 도 금지 문자열 검사를 받는다 ─────────────
+//    🔴 manifest 는 columns 배열을 담는다. 화이트리스트가 무너지면 여기 먼저 드러난다.
+{
+  const offenders: string[] = []
+
+  if (!/files\['manifest\.json'\] = manifestPath/.test(exportCode)) {
+    offenders.push('🔴 manifest 가 금지 문자열 검사 대상(files)에 들어가지 않는다')
+  }
+  // 검사 루프보다 먼저 등록돼야 한다
+  const reg = exportCode.indexOf("files['manifest.json'] = manifestPath")
+  const scan = exportCode.indexOf('for (const [name, p] of Object.entries(files))')
+  if (reg >= 0 && scan >= 0 && reg > scan) offenders.push('🔴 manifest 등록이 검사 루프보다 뒤에 있다')
+  if (!/FORBIDDEN_EXPORT_KEYS/.test(exportCode)) offenders.push('금지 키 목록이 없다')
+
+  if (offenders.length) bad('manifest 금지 문자열 검사', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('manifest 금지 문자열 검사', 'guard',
+    'manifest 도 files 에 등록돼 post-write scan 대상 · 등록이 검사보다 앞')
 }
 
 // ── 출력 ────────────────────────────────────────────────

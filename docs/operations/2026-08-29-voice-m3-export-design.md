@@ -168,9 +168,66 @@ remonterrace skip  5 / 2,334건 = 0.21%
 그래서 Cache 로 세면 **실제 지출보다 적게 나온다.**
 "얼마 썼나" 를 묻는 자리에 적게 나오는 수를 두면 안 되므로 CostEvent 를 정본으로 쓴다.
 
-**모델 필터 주의** — `where: { model: 'claude-haiku-4.5' }` 로 거른다.
-전 모델 합계는 $42.1465 이고 차액 $0.1326 은 모델 비교 실험(gpt-5-nano 30건 · gpt-5-mini 30건)이다.
-이 리포트는 haiku 전량 분석이므로 **haiku 비용만** 센다.
+**🔴 필터는 model-only 가 아니라 exact version 이다.**
+
+`model` 만으로 거르면 같은 `claude-haiku-4.5` 로 `taskVersion` · `promptVersion` ·
+`outputSchemaVersion` 이 다른 분석이 나중에 쌓였을 때 **서로 다른 실행의 결과가 한 CSV 에 섞인다.**
+섞인 줄 모르고 평균을 내면 그 수는 아무것도 뜻하지 않는다.
+
+```ts
+// Cache — cacheKey 8요소 중 "어느 분석인가" 를 가르는 넷 + method
+where: {
+  model: M3_ANALYSIS_MODEL,
+  taskVersion: M3_TASK_VERSION,
+  promptVersion: M3_PROMPT_VERSION,
+  outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
+  method: 'llm',            // VoiceDerived 의 method='rule' 과 섞이지 않게
+}
+
+// CostEvent — 🔴 자체에는 버전 필드가 없다. 버전은 Run 이 들고 있다
+where: {
+  model: M3_ANALYSIS_MODEL,
+  run: {
+    taskVersion: M3_TASK_VERSION,
+    promptVersion: M3_PROMPT_VERSION,
+    outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
+  },
+}
+```
+
+이 필터로 거른 결과가 haiku 전량 분석분이다.
+전 모델 합계는 $42.1465 이고 차액은 모델 비교 실험(gpt-5-nano 30건 · gpt-5-mini 30건)이다.
+
+---
+
+## §4-2 🔴 CSV formula injection 방어
+
+`signals.csv` · `skipped.csv` 는 사람이 Excel · Google Sheets 로 연다.
+그리고 `notes` 는 **LLM 출력이다** — 우리가 쓴 문장이 아니다.
+
+셀이 `=` `+` `-` `@` 로 시작하면 스프레드시트가 **수식으로 실행한다.**
+`=HYPERLINK("http://evil","click")` 한 줄이면 클릭 유도가 되고,
+구형 Excel 의 DDE(`+cmd|...`)는 외부 명령까지 닿는다.
+
+### 판정 기준
+
+- **`trim()` 한 값**으로 본다 — ` =SUM(A1)` 처럼 선행 공백 · 탭으로 회피하는 것을 막는다
+- 탭 · CR · LF 로 시작하는 것도 위험 문자로 본다
+- **원본을 바꾸지 않는다.** 앞에 작은따옴표만 덧댄다.
+  Excel 은 이것을 "텍스트로 읽으라" 는 표식으로 쓰고 셀에는 보이지 않는다.
+  trim 해서 저장하면 원문 데이터가 바뀐다 — 우리는 **표시만** 중립화한다
+- **숫자 · 불리언은 중립화하지 않는다.** 음수 `-1` 이 `'-1` 이 되면 정렬 · 합계가 깨진다.
+  수식 위험은 문자열에서만 온다
+- RFC4180 quoting 은 그대로다. **중립화가 먼저, quoting 이 나중.**
+
+### 🔴 직렬화 로직을 lib 으로 분리한 이유
+
+처음엔 `csvCell` 을 `voice-m3-export.mts` 안에 뒀다.
+fixture 가 그것을 import 하자 **모듈 로드 시점에 `main()` 이 실행돼 실제 export 가 돌아갔다.**
+
+검증하려고 부른 것이 작업을 일으키면 안 된다.
+`scripts/lib/voice-m3-csv.mts` 로 분리했고, 이 파일에는 side effect 가 없다.
+fixture 는 실제 함수를 호출해 위험 입력 9종을 통과시켜 본다.
 
 ---
 
@@ -218,6 +275,9 @@ npm run voice:m3-export -- --report-only  # report.md 만 재생성
 | **㊲ export 유료 · write 경로 0** | provider import · LLM 호출 · 유료 플래그 · prisma write · 금지 컬럼 · select 금지 필드 |
 | **㊳ export 유출 가드 · 중단** | 20자 대조 존재 · **임계값 호출부 전달 금지** · 금지 호칭 대조 · **가드가 파일 쓰기보다 앞** · exit 1 · skip output null |
 | **㊴ export 산출물 격리** | `tmp/` 하위 · `.gitignore` 커버 · CSV BOM · JSONL/manifest BOM 없음 · sha256 · 생성 후 재검사 |
+| **㊵ export 대상 exact version** | Cache where 에 model+task+prompt+schema+method · CostEvent 는 Run relation 경유 |
+| **㊶ CSV formula injection 방어** | `=` `+` `-` `@` · 선행 공백 · 탭 중립화 · 원본 불변 · 숫자 제외 · RFC4180 유지 · **위험 입력 9종 실제 호출** |
+| **㊷ manifest 금지 문자열 검사** | manifest 도 `files` 에 등록돼 post-write scan 대상 · 등록이 검사 루프보다 앞 |
 
 ### 🔴 역검증에서 잡은 가드 결함
 
@@ -258,8 +318,9 @@ fixture 를 만든 뒤 **일부러 위반을 주입해** 실제로 잡는지 확
 | 파일 | 변경 |
 |---|---|
 | `scripts/voice-m3-export.mts` | 신규 |
+| `scripts/lib/voice-m3-csv.mts` | 신규 — CSV 직렬화(side effect 0) |
 | `package.json` | `voice:m3-export` 1줄 |
-| `scripts/voice-m3-check.mts` | fixture ㊲㊳㊴ 추가 (36 → 39건) |
+| `scripts/voice-m3-check.mts` | fixture ㊲㊳㊴㊵㊶㊷ 추가 (36 → 42건) |
 | `docs/operations/2026-08-29-voice-m3-export-design.md` | 신규 (이 문서) |
 
 **변경하지 않은 것** — `voice-m3-contract.mts`(상수 재사용만) · `voice-m3-run.mts` ·
