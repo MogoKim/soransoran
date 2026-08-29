@@ -31,6 +31,8 @@ import {
 } from './lib/voice-m3-sample.mjs'
 import { keyStatus, ANTHROPIC_JSON_PREFILL, PROVIDER_KEY_ENV } from './lib/voice-m3-provider.mjs'
 import { neutralizeFormula, csvCell } from './lib/voice-m3-csv.mjs'
+import { stripCafeNotice, hasCafeNotice, stripWithLength, NOT_STRIPPED_EMOJI } from './lib/voice-notice-strip.mjs'
+import { parseTopComments, commentBodiesForLearning, topCommentsToText } from './lib/voice-unao-readonly.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-m3-dry-run.mts')
@@ -41,6 +43,9 @@ const PROVIDER_LIB = join(HERE, 'lib/voice-m3-provider.mts')
 const RUN = join(HERE, 'voice-m3-run.mts')
 const PLAN = join(HERE, 'voice-m3-plan.mts')
 const EXPORT = join(HERE, 'voice-m3-export.mts')
+const SELECT = join(HERE, 'voice-m3-select-learning.mts')
+const NOTICE_LIB = join(HERE, 'lib/voice-notice-strip.mts')
+const UNAO_LIB = join(HERE, 'lib/voice-unao-readonly.mts')
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -62,6 +67,9 @@ const providerCode = stripComments(readFileSync(PROVIDER_LIB, 'utf-8'))
 const runCode = stripComments(readFileSync(RUN, 'utf-8'))
 const planCode = stripComments(readFileSync(PLAN, 'utf-8'))
 const exportCode = stripComments(readFileSync(EXPORT, 'utf-8'))
+const selectCode = stripComments(readFileSync(SELECT, 'utf-8'))
+const noticeLibCode = stripComments(readFileSync(NOTICE_LIB, 'utf-8'))
+const unaoLibRaw = readFileSync(UNAO_LIB, 'utf-8')
 const ALL: Array<[string, string]> = [
   ['dry-run', liveCode], ['contract lib', contractCode], ['prompt lib', promptCode],
 ]
@@ -1727,6 +1735,145 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('manifest 금지 문자열 검사', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('manifest 금지 문자열 검사', 'guard',
     'manifest 도 files 에 등록돼 post-write scan 대상 · 등록이 검사보다 앞')
+}
+
+// ── ㊸ 학습 추출은 author 를 쓰지 않는다 ─────────────────
+//    🔴 닉네임을 문체로 배우면 안 된다. author 를 **읽는 경로 자체가 없어야** 한다.
+{
+  const offenders: string[] = []
+
+  // commentBodiesForLearning 본문에 author 참조가 없어야 한다
+  const fn = /export function commentBodiesForLearning[\s\S]*?\n}/.exec(unaoLibRaw)?.[0] ?? ''
+  if (fn === '') offenders.push('commentBodiesForLearning 를 찾을 수 없다')
+  if (/\bauthor\b/.test(fn)) offenders.push('🔴 학습 추출 함수가 author 를 참조한다')
+
+  // select 스크립트가 author 를 쓰지 않는가 (금지 키 목록 · 주석 제외)
+  const body = selectCode.replace(/FORBIDDEN_OUTPUT_KEYS = \[[\s\S]*?\] as const/, '')
+  if (/\.author\b|\['author'\]|"author"\s*:/.test(body)) offenders.push('🔴 select 가 author 를 읽는다')
+  if (!/commentBodiesForLearning/.test(selectCode)) offenders.push('select 가 학습용 추출 함수를 쓰지 않는다')
+
+  // 🔴 실제 동작 — author 는 결과에 없어야 한다
+  const sample = [{ author: '초록장미', content: '공감해요 저도 그랬어요', replies: [{ author: '하늘', content: '맞아요' }], likeCount: 0 }]
+  const bodies = commentBodiesForLearning(sample)
+  if (bodies.join('|').includes('초록장미')) offenders.push('🔴 학습 추출 결과에 닉네임이 섞였다')
+  if (!bodies.join('|').includes('공감해요')) offenders.push('댓글 본문이 빠졌다')
+  if (bodies.length !== 1) offenders.push(`본문 개수가 ${bodies.length} (replies 는 1차 보류여야 한다)`)
+  const parsed = parseTopComments(sample)
+  if (parsed[0]?.author !== '초록장미') offenders.push('parseTopComments 가 author 를 분리 보관하지 않는다')
+  if (parsed[0]?.replies.length !== 1) offenders.push('parseTopComments 가 replies 를 보관하지 않는다')
+
+  if (offenders.length) bad('학습 추출은 author 미사용', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('학습 추출은 author 미사용', 'guard',
+    'commentBodiesForLearning author 참조 0 · content 만 반환 · replies 1차 보류 · parseTopComments 는 분리 보관')
+}
+
+// ── ㊹ 유출 대조는 topCommentsToText 그대로 넓게 유지 ────
+//    🔴 여기서 author 를 빼면 **유출 대조 범위가 좁아진다**(실측 8.8% 감소).
+//       학습에서 빼는 것과 유출 검사에서 빼는 것은 정반대 방향이다.
+{
+  const offenders: string[] = []
+
+  const fn = /export function topCommentsToText[\s\S]*?\n}/.exec(unaoLibRaw)?.[0] ?? ''
+  if (fn === '') offenders.push('topCommentsToText 를 찾을 수 없다')
+  // 모든 문자열 값을 이어붙이는 구조가 유지돼야 한다
+  if (!/Object\.values\(item as Record<string, unknown>\)/.test(fn)) {
+    offenders.push('🔴 topCommentsToText 가 전체 값 순회를 멈췄다 — 대조 범위가 좁아진다')
+  }
+  if (/e\.content|\.content\b/.test(fn)) offenders.push('🔴 topCommentsToText 가 content 만 보도록 바뀌었다')
+
+  // 🔴 실제 동작 — 닉네임까지 대조 문자열에 들어가야 한다
+  const sample = [{ author: '초록장미', content: '공감해요', replies: [], likeCount: 0 }]
+  const text = topCommentsToText(sample)
+  if (!text.includes('초록장미')) offenders.push('🔴 유출 대조 문자열에서 닉네임이 빠졌다')
+  if (!text.includes('공감해요')) offenders.push('유출 대조 문자열에서 본문이 빠졌다')
+  // run · export 가 여전히 이 함수를 쓰는가
+  if (!/topCommentsToText/.test(runCode)) offenders.push('run 이 유출 대조에서 topCommentsToText 를 쓰지 않는다')
+  if (!/topCommentsToText/.test(exportCode)) offenders.push('export 가 유출 대조에서 topCommentsToText 를 쓰지 않는다')
+
+  if (offenders.length) bad('유출 대조는 넓게 유지', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('유출 대조는 넓게 유지', 'guard',
+    'topCommentsToText 전체 값 순회 유지 · 닉네임 포함 · run · export 양쪽에서 사용')
+}
+
+// ── ㊺ 공지 정규식이 본문을 삼키지 않는다 ────────────────
+//    🔴 상한이 없으면 하트가 둘 이상인 글에서 **본문 전체가 사라진다.**
+{
+  const offenders: string[] = []
+
+  if (!/\{0,60\}/.test(noticeLibCode)) offenders.push('🔴 공지 정규식에 길이 상한이 없다')
+  if (/💗\[\^💗\]\*/.test(noticeLibCode)) offenders.push('🔴 상한 없는 탐욕 매칭이다')
+
+  // 🔴 실제 동작 — 공지만 지우고 본문은 남는가
+  const notice = '💗서로 배려하는 마음으로 예쁜 글 부탁드려요💗'
+  const body = '어제 병원 다녀왔는데 너무 힘들었어요 ㅠㅠ'
+  const stripped = stripCafeNotice(`${notice}\n${body}\n${notice}`)
+  if (stripped !== body) offenders.push(`🔴 앞뒤 공지 제거 결과가 본문과 다르다 (${stripped.length}자)`)
+  if (!hasCafeNotice(`${notice}${body}`)) offenders.push('hasCafeNotice 가 공지를 못 찾는다')
+
+  // 🔴 본문 삼킴 — 하트가 떨어져 있고 사이가 60자를 넘으면 지우면 안 된다
+  const longMid = `💗${'가'.repeat(200)}💗`
+  if (stripCafeNotice(longMid) === '') offenders.push('🔴 60자 넘는 구간까지 삼켰다')
+  // 하트 사이가 짧으면 지운다
+  if (stripCafeNotice(`앞${notice}뒤`) !== '앞뒤') offenders.push('짧은 공지 블록을 못 지운다')
+
+  if (offenders.length) bad('공지 정규식 본문 미삼킴', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('공지 정규식 본문 미삼킴', 'guard',
+    '{0,60} 상한 유지 · 앞뒤 공지 제거 후 본문 보존 · 60자 초과 구간 미삼킴')
+}
+
+// ── ㊻ 기타 이모지는 제거하지 않는다 ─────────────────────
+//    🔴 ♡ ★ ✅ 블록 104건 중 85% 가 공지인지 강조인지 판정 불가였다.
+//       지우면 얻는 것은 없고(학습 후보 영향 3건) **회원 말투를 손상한다.**
+{
+  const offenders: string[] = []
+
+  for (const e of NOT_STRIPPED_EMOJI) {
+    const t = `${e}오늘 너무 좋았어요${e} 정말 행복한 하루`
+    if (stripCafeNotice(t) !== t) offenders.push(`🔴 ${e} 블록이 제거됐다`)
+  }
+  // 정규식에 💗 외 이모지가 들어가지 않았는가
+  const re = /const CAFE_NOTICE = \/([^/]+)\//.exec(noticeLibCode)?.[1] ?? ''
+  if (re === '') offenders.push('공지 정규식을 찾을 수 없다')
+  for (const e of NOT_STRIPPED_EMOJI) {
+    if (re.includes(e)) offenders.push(`🔴 정규식에 ${e} 가 들어갔다`)
+  }
+  // select 가 다른 이모지를 지우지 않는가
+  if (/replace\(\/[♡♥★☆✅✔✨➡☞♣]/.test(selectCode)) offenders.push('🔴 select 가 기타 이모지를 지운다')
+
+  if (offenders.length) bad('기타 이모지 미제거', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('기타 이모지 미제거', 'guard',
+    `${NOT_STRIPPED_EMOJI.length}종 전부 보존 · 정규식은 💗 만 · select 에 추가 제거 0`)
+}
+
+// ── ㊼ 제거 후 0자면 오염, 300자 미만이면 voice 탈락 ─────
+{
+  const offenders: string[] = []
+
+  // 🔴 실제 동작 — 공지만 있던 글은 0자가 된다
+  const onlyNotice = stripWithLength('💗서로 배려하는 마음으로 예쁜 글 부탁드려요💗')
+  if (onlyNotice.cleanedLength !== 0) offenders.push(`🔴 공지만 있는 글이 0자가 아니다 (${onlyNotice.cleanedLength})`)
+  if (!onlyNotice.hadNotice) offenders.push('hadNotice 플래그가 서지 않았다')
+  const withBody = stripWithLength(`💗공지💗${'가'.repeat(400)}`)
+  if (withBody.cleanedLength !== 400) offenders.push(`🔴 본문 길이가 틀렸다 (${withBody.cleanedLength})`)
+
+  // select 가 두 분기를 갖고 있는가
+  if (!/excluded_contaminated/.test(selectCode)) offenders.push('오염 bucket 이 없다')
+  // 🔴 판정은 classify() 안에서만 본다 — 통계 라인의 originalLength 는 판정이 아니다
+  const classifyFn = /function classify\([\s\S]*?\n}/.exec(selectCode)?.[0] ?? ''
+  if (classifyFn === '') offenders.push('classify 를 찾을 수 없다')
+  // 🔴 0자 → 오염 제외는 **판정부에서** 일어나야 한다. 통계 라인의 같은 표현에 속으면 안 된다
+  if (!/cleanedLength === 0/.test(classifyFn)) offenders.push('🔴 classify 에 0자 → 오염 제외 분기가 없다')
+  if (!/cleanedLength >= 300/.test(classifyFn)) offenders.push('🔴 voice 300자 하한이 cleanedLength 기준이 아니다')
+  if (!/cleanedLength >= 200/.test(classifyFn)) offenders.push('story 200자 하한이 cleanedLength 기준이 아니다')
+  // 🔴 원본 길이로 판정하면 공지 제거가 무의미해진다
+  if (/bodyLength >= |originalLength >= /.test(classifyFn)) offenders.push('🔴 원본 길이로 판정한다')
+  // needsHumanSpeakerReview 가 자동 확정을 대신하는가
+  if (!/needsHumanSpeakerReview/.test(selectCode)) offenders.push('🔴 화자 확인 플래그가 없다')
+  if (/isMaleSpeaker|maleSpeaker\s*[:=]/.test(selectCode)) offenders.push('🔴 남성 화자를 자동 확정한다 — 판정 불가한 축이다')
+
+  if (offenders.length) bad('공지 제거 후 분기', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('공지 제거 후 분기', 'guard',
+    '0자 → 오염 제외 · 300자 미만 → voice 탈락 · 판정은 cleanedLength 기준 · 화자는 자동 확정 0')
 }
 
 // ── 출력 ────────────────────────────────────────────────
