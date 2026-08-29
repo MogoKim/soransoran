@@ -10,7 +10,7 @@
  *    VE-M2 까지는 실수해도 시간만 잃었다. 여기서부터는 다르다.
  *    LLM import 한 줄 · fetch 한 줄이 곧 비용이다.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,6 +33,10 @@ import { keyStatus, ANTHROPIC_JSON_PREFILL, PROVIDER_KEY_ENV } from './lib/voice
 import { neutralizeFormula, csvCell } from './lib/voice-m3-csv.mjs'
 import { stripCafeNotice, hasCafeNotice, stripWithLength, NOT_STRIPPED_EMOJI } from './lib/voice-notice-strip.mjs'
 import { parseTopComments, commentBodiesForLearning, topCommentsToText } from './lib/voice-unao-readonly.mjs'
+import {
+  classifyDecision, toReasonCodes, normalizeDecisions, hasMaleHint,
+  MANUAL_CLASSES, REASON_CODE_MAP, FORBIDDEN_DECISION_FIELDS, ALLOWED_DECISION_FIELDS,
+} from './lib/voice-m3-manual.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-m3-dry-run.mts')
@@ -44,6 +48,8 @@ const RUN = join(HERE, 'voice-m3-run.mts')
 const PLAN = join(HERE, 'voice-m3-plan.mts')
 const EXPORT = join(HERE, 'voice-m3-export.mts')
 const SELECT = join(HERE, 'voice-m3-select-learning.mts')
+const MANUAL_LIB = join(HERE, 'lib/voice-m3-manual.mts')
+const DECISIONS_JSON = join(HERE, '..', 'docs', 'operations', 'decisions', 've-m3-manual-decisions.json')
 const NOTICE_LIB = join(HERE, 'lib/voice-notice-strip.mts')
 const UNAO_LIB = join(HERE, 'lib/voice-unao-readonly.mts')
 
@@ -68,6 +74,7 @@ const runCode = stripComments(readFileSync(RUN, 'utf-8'))
 const planCode = stripComments(readFileSync(PLAN, 'utf-8'))
 const exportCode = stripComments(readFileSync(EXPORT, 'utf-8'))
 const selectCode = stripComments(readFileSync(SELECT, 'utf-8'))
+const manualLibCode = stripComments(readFileSync(MANUAL_LIB, 'utf-8'))
 const noticeLibCode = stripComments(readFileSync(NOTICE_LIB, 'utf-8'))
 const unaoLibRaw = readFileSync(UNAO_LIB, 'utf-8')
 const ALL: Array<[string, string]> = [
@@ -1888,12 +1895,216 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   // 🔴 원본 길이로 판정하면 공지 제거가 무의미해진다
   if (/bodyLength >= |originalLength >= /.test(classifyFn)) offenders.push('🔴 원본 길이로 판정한다')
   // needsHumanSpeakerReview 가 자동 확정을 대신하는가
-  if (!/needsHumanSpeakerReview/.test(selectCode)) offenders.push('🔴 화자 확인 플래그가 없다')
+  // 🔴 화자는 자동 확정하지 않는다. 사람 판정(speakerVerified)으로만 true 가 된다
+  if (!/speakerVerified/.test(selectCode)) offenders.push('🔴 화자 확인 플래그가 없다')
   if (/isMaleSpeaker|maleSpeaker\s*[:=]/.test(selectCode)) offenders.push('🔴 남성 화자를 자동 확정한다 — 판정 불가한 축이다')
 
   if (offenders.length) bad('공지 제거 후 분기', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('공지 제거 후 분기', 'guard',
     '0자 → 오염 제외 · 300자 미만 → voice 탈락 · 판정은 cleanedLength 기준 · 화자는 자동 확정 0')
+}
+
+// ── ⓳ 사람 판정의 목적을 나눈다 ─────────────────────────
+//    🔴 "학습 O" 와 "여성 화자" 는 같은 말이 아니다.
+//       전자는 말투까지 승인한 것이고, 후자는 화자 성별만 확인한 것이다.
+//       뭉치면 **화자만 확인한 글을 말투 승인으로 착각한다.**
+{
+  const offenders: string[] = []
+
+  for (const c of ['humanVoiceApproved', 'speakerFemaleOnly']) {
+    if (!(MANUAL_CLASSES as readonly string[]).includes(c)) offenders.push(`🔴 class ${c} 가 없다`)
+  }
+  // 🔴 실제 분류 — 두 판정이 다른 class 로 나와야 한다
+  const hv = classifyDecision({ sourceRef: 'a', verdict: 'voice/style 학습 O' })
+  const hv2 = classifyDecision({ sourceRef: 'a', verdict: '학습 O' })
+  const sf = classifyDecision({ sourceRef: 'b', verdict: '여성 화자' })
+  if (hv !== 'humanVoiceApproved') offenders.push(`"voice/style 학습 O" → ${hv}`)
+  if (hv2 !== 'humanVoiceApproved') offenders.push(`"학습 O" → ${hv2}`)
+  if (sf !== 'speakerFemaleOnly') offenders.push(`"여성 화자" → ${sf}`)
+  if (hv === sf) offenders.push('🔴 두 판정이 같은 class 로 합쳐졌다')
+  // 우선순위 — 제외 · 보류가 화자 판정보다 앞선다
+  if (classifyDecision({ sourceRef: 'c', verdict: '제외' }) !== 'excluded_manual') offenders.push('제외 분류 실패')
+  if (classifyDecision({ sourceRef: 'd', verdict: '리뷰 보류' }) !== 'held') offenders.push('보류 분류 실패')
+  if (classifyDecision({ sourceRef: 'e', verdict: '불명확' }) !== 'held') offenders.push('불명확 분류 실패')
+  // 🔴 남성 단서는 verdict 뿐 아니라 reason 배열에서도 읽는다
+  if (classifyDecision({ sourceRef: 'f', verdict: '학습 O', reasons: ['남성 화자'] }) !== 'male') {
+    offenders.push('🔴 reason 의 남성 단서를 놓친다')
+  }
+  if (!hasMaleHint({ sourceRef: 'g', flags: ['남성 화자'] })) offenders.push('flags 의 남성 단서를 놓친다')
+  // 🔴 보류가 남성보다 앞서되, 단서는 보존된다
+  const heldMale = { sourceRef: 'h', verdict: '리뷰 보류', reasons: ['남성 화자'] }
+  if (classifyDecision(heldMale) !== 'held') offenders.push('보류+남성이 held 가 아니다')
+  if (!hasMaleHint(heldMale)) offenders.push('🔴 held 에서 남성 단서가 사라진다')
+
+  if (offenders.length) bad('사람 판정 목적 분리', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('사람 판정 목적 분리', 'policy',
+    `class ${MANUAL_CLASSES.length}종 · 말투승인 ≠ 화자확인 · 제외>보류>남성>말투 순서 · reason 남성단서 포착 · held 도 speakerHint 보존`)
+}
+
+// ── ⓴ manual override 가 자동 bucket 보다 우선한다 ──────
+{
+  const offenders: string[] = []
+
+  // 🔴 반환 타입 선언에도 `}` 가 있어 `\n}` 로 자르면 끊긴다. 다음 함수 앞까지 잘라 쓴다
+  const cut = (from: string, to: string): string => {
+    const i = selectCode.indexOf(from)
+    if (i < 0) return ''
+    const j = selectCode.indexOf(to, i)
+    return selectCode.slice(i, j > i ? j : selectCode.length)
+  }
+  const fn = cut('function applyManualOverride(', 'function usableForVoice(')
+  if (fn === '') offenders.push('applyManualOverride 를 찾을 수 없다')
+  // 🔴 순서 — excluded 가 held 보다, held 가 male 보다 앞에 있어야 한다
+  const iEx = fn.indexOf("case 'excluded_manual'")
+  const iHeld = fn.indexOf("case 'held'")
+  const iMale = fn.indexOf("case 'male'")
+  const iHv = fn.indexOf("case 'humanVoiceApproved'")
+  const iSf = fn.indexOf("case 'speakerFemaleOnly'")
+  if (iEx < 0 || iHeld < 0 || iMale < 0 || iHv < 0 || iSf < 0) offenders.push('override 분기가 빠졌다')
+  else {
+    if (!(iEx < iHeld)) offenders.push('🔴 excluded 가 held 보다 뒤에 있다')
+    if (!(iHeld < iMale)) offenders.push('🔴 held 가 male 보다 뒤에 있다')
+    if (!(iMale < iHv)) offenders.push('🔴 male 이 humanVoiceApproved 보다 뒤에 있다')
+  }
+  // 🔴 speakerFemaleOnly 가 자동 story 를 gold 로 올리면 안 된다
+  const sfBlock = iSf >= 0 ? fn.slice(iSf, iHv > iSf ? iHv : fn.length) : ''
+  if (/story_topic'\s*\)\s*return[^\n]*voice_gold/.test(sfBlock)) {
+    offenders.push('🔴 speakerFemaleOnly + 자동 story 가 voice_gold 로 올라간다')
+  }
+  // 🔴 mimicry override 는 humanVoiceApproved 에서만
+  const hvBlock = iHv >= 0 ? fn.slice(iHv, iSf > iHv ? iSf : fn.length) : ''
+  if (!/mimicry_review'[\s\S]{0,120}mimicryOverridden: true/.test(hvBlock)) {
+    offenders.push('humanVoiceApproved 의 mimicry override 가 없다')
+  }
+  if (/mimicryOverridden: true/.test(sfBlock)) offenders.push('🔴 speakerFemaleOnly 에서 mimicry override 를 한다')
+  // 🔴 humanVoiceApproved + 자동 story 는 gold 로 올리지 않고 story 유지
+  if (!/humanApprovedButAutoStory: true/.test(hvBlock)) {
+    offenders.push('🔴 humanVoiceApproved + 자동 story 를 별도 집계하지 않는다')
+  }
+
+  if (offenders.length) bad('manual override 우선순위', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('manual override 우선순위', 'policy',
+    'excluded > held > male/storyOnly > humanVoiceApproved > speakerFemaleOnly > 자동 · mimicry override 는 말투승인만 · 화자확인은 story 를 gold 로 올리지 않는다')
+}
+
+// ── ㉑ 학습 후보에서 빠져야 할 것이 빠졌는가 ──────────────
+{
+  const offenders: string[] = []
+  const ci = selectCode.indexOf('function applyManualOverride(')
+  const cj = selectCode.indexOf('function usableForVoice(', ci)
+  const fn = ci >= 0 ? selectCode.slice(ci, cj > ci ? cj : selectCode.length) : ''
+
+  /**
+   * male · excluded · held 가 voice 계열로 갈 수 있는 경로가 없어야 한다.
+   * 🔴 `case 'male':` 은 `case 'storyOnly':` 로 **fall-through** 한다.
+   *    다음 `case` 까지만 자르면 빈 구간이 잡혀 위반을 놓친다 — return 이 나올 때까지 읽는다.
+   */
+  const caseBlock = (cls: string): string => {
+    const i = fn.indexOf(`case '${cls}'`)
+    if (i < 0) return ''
+    // fall-through 를 지나 첫 return 문까지 포함한다
+    const r = fn.indexOf('return', i)
+    if (r < 0) return fn.slice(i)
+    const end = fn.indexOf('\n', r)
+    return fn.slice(i, end > r ? end : fn.length)
+  }
+  for (const [cls, forbidden] of [['male', 'voice_gold'], ['male', 'voice_silver'],
+    ['storyOnly', 'voice_'], ['excluded_manual', 'voice_'], ['held', 'voice_']] as const) {
+    const block = caseBlock(cls)
+    if (block === '') { offenders.push(`${cls} 분기 없음`); continue }
+    if (block.includes(forbidden)) offenders.push(`🔴 ${cls} 가 ${forbidden} 로 갈 수 있다`)
+    if (block.includes('story_topic') && cls !== 'male' && cls !== 'storyOnly') {
+      offenders.push(`🔴 ${cls} 가 story 로 갈 수 있다`)
+    }
+    if (/speakerVerified: true/.test(block) && (cls === 'excluded_manual' || cls === 'held')) {
+      offenders.push(`🔴 ${cls} 가 speakerVerified 를 부여한다`)
+    }
+  }
+  // usableForVoice 는 gold · silver 만
+  const ui = selectCode.indexOf('function usableForVoice(')
+  const uj = selectCode.indexOf('async function main(', ui)
+  const uf = ui >= 0 ? selectCode.slice(ui, uj > ui ? uj : selectCode.length) : ''
+  if (!/voice_gold'\s*\|\|\s*b === 'voice_silver'/.test(uf)) offenders.push('🔴 usableForVoice 가 gold·silver 외를 포함한다')
+  for (const b of ['story_topic', 'held', 'excluded_manual']) {
+    if (new RegExp(`b === '${b}'`).test(uf)) offenders.push(`🔴 usableForVoice 에 ${b} 가 있다`)
+  }
+
+  if (offenders.length) bad('학습 후보 제외 경로', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('학습 후보 제외 경로', 'guard',
+    'male → story 만 · excluded_manual · held 는 voice·story 어디에도 가지 않는다 · usableForVoice 는 gold·silver 만')
+}
+
+// ── ㉒ speakerVerified 를 위조하지 않는다 ────────────────
+{
+  const offenders: string[] = []
+  const si = selectCode.indexOf('function applyManualOverride(')
+  const sj = selectCode.indexOf('function usableForVoice(', si)
+  const fn = si >= 0 ? selectCode.slice(si, sj > si ? sj : selectCode.length) : ''
+
+  // 판정이 없으면(m === undefined) speakerVerified 는 항상 false 여야 한다
+  const noManual = /if \(m === undefined\) \{[\s\S]*?\n  \}/.exec(fn)?.[0] ?? ''
+  if (noManual === '') offenders.push('판정 없음 분기를 찾을 수 없다')
+  if (/speakerVerified: true/.test(noManual)) offenders.push('🔴 판정 없이 speakerVerified 를 true 로 만든다')
+  // base 기본값이 false 인가
+  if (!/speakerVerified: false/.test(fn)) offenders.push('speakerVerified 기본값이 false 가 아니다')
+  // silver 는 판정 없음 경로에서만 나온다
+  const silverAt = [...fn.matchAll(/bucket: 'voice_silver'/g)].length
+  if (silverAt === 0) offenders.push('voice_silver 경로가 없다')
+  // 산출 컬럼에 있는가
+  if (!/'speakerVerified'/.test(selectCode)) offenders.push('speakerVerified 컬럼이 없다')
+  if (/needsHumanSpeakerReview/.test(selectCode)) offenders.push('🔴 옛 플래그 needsHumanSpeakerReview 가 남아 있다')
+
+  if (offenders.length) bad('speakerVerified 위조 차단', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('speakerVerified 위조 차단', 'guard',
+    '판정 없으면 항상 false · 기본값 false · silver 는 미확인 경로 · 옛 플래그 제거됨')
+}
+
+// ── ㉓ memo · verdict 원문은 커밋되지 않는다 ─────────────
+//    🔴 창업자 자유문에는 민감 표현 · 원문 조각이 섞일 수 있다.
+{
+  const offenders: string[] = []
+
+  // reasonCode 정규화가 원문을 반환하지 않는가
+  const codes = toReasonCodes({ sourceRef: 'x', reasons: ['남성 화자', '알 수 없는 자유문 근거'] })
+  if (codes.includes('남성 화자')) offenders.push('🔴 원본 문자열을 그대로 반환한다')
+  if (!codes.includes('SPEAKER_MALE')) offenders.push('매핑된 코드가 없다')
+  if (!codes.includes('OTHER')) offenders.push('매핑 없는 근거를 OTHER 로 접지 않는다')
+  // 정규화 결과에 memo 가 없어야 한다
+  const { decisions } = normalizeDecisions([{ name: 't', items: [
+    { sourceRef: 'r1', verdict: '여성 화자', flags: ['연령대 불일치'], memo: '민감할 수 있는 자유문' },
+  ] }])
+  const d = decisions.get('r1')
+  if (d === undefined) offenders.push('정규화 결과가 없다')
+  else {
+    const keys = Object.keys(d)
+    for (const k of FORBIDDEN_DECISION_FIELDS) {
+      if (keys.includes(k)) offenders.push(`🔴 정규화 결과에 ${k} 가 있다`)
+    }
+    for (const k of keys) {
+      if (!(ALLOWED_DECISION_FIELDS as readonly string[]).includes(k)) offenders.push(`🔴 허용 외 필드 ${k}`)
+    }
+  }
+  // 🔴 커밋된 판정 파일 실물 검사
+  if (existsSync(DECISIONS_JSON)) {
+    const raw = readFileSync(DECISIONS_JSON, 'utf-8')
+    for (const k of FORBIDDEN_DECISION_FIELDS) {
+      if (new RegExp(`"${k}"`).test(raw)) offenders.push(`🔴 커밋 파일에 ${k} 필드`)
+    }
+    const parsed = JSON.parse(raw) as { items: Array<Record<string, unknown>> }
+    for (const it of parsed.items) {
+      for (const k of Object.keys(it)) {
+        if (!(ALLOWED_DECISION_FIELDS as readonly string[]).includes(k)) { offenders.push(`🔴 커밋 파일 허용 외 필드 ${k}`); break }
+      }
+    }
+  } else offenders.push('커밋 판정 파일이 없다')
+  // 산출물 금지 키에 memo · verdict 가 있는가
+  for (const k of ['memo', 'verdict']) {
+    if (!new RegExp(`'${k}'`).test(selectCode)) offenders.push(`산출물 금지 키에 ${k} 가 없다`)
+  }
+
+  if (offenders.length) bad('memo · verdict 커밋 차단', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('memo · verdict 커밋 차단', 'guard',
+    `reasonCode ${Object.keys(REASON_CODE_MAP).length}종 정규화 · 매핑 없으면 OTHER · 허용 필드 ${ALLOWED_DECISION_FIELDS.length}개만 · 커밋 파일 실물 검사`)
 }
 
 // ── 출력 ────────────────────────────────────────────────

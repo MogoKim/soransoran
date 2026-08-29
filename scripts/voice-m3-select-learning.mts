@@ -33,7 +33,7 @@
 import { PrismaClient } from '@prisma/client'
 import pg from 'pg'
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -43,6 +43,9 @@ import { commentBodiesForLearning } from './lib/voice-unao-readonly.mjs'
 import { stripWithLength } from './lib/voice-notice-strip.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { toCsv } from './lib/voice-m3-csv.mjs'
+import {
+  normalizeDecisions, type NormalizedDecision, type RawDecisionItem,
+} from './lib/voice-m3-manual.mjs'
 
 const argv = process.argv
 const has = (n: string): boolean => argv.includes(`--${n}`)
@@ -51,6 +54,8 @@ const ELIGIBLE = 9444
 const BOM = '﻿'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const OUT_ROOT = join(HERE, '..', 'tmp', 'voice-m3-learning')
+/** 🔴 정규화된 수동 판정 — 커밋 대상. sourceRef · class · reasonCodes · source · speakerHint 만 담긴다 */
+const DECISIONS = join(HERE, '..', 'docs', 'operations', 'decisions', 've-m3-manual-decisions.json')
 
 /**
  * 🔴 산출물 컬럼 화이트리스트 — 여기 없는 것은 나가지 않는다.
@@ -62,12 +67,17 @@ const COLUMNS = [
   'originalLength', 'cleanedLength', 'hadCafeNotice',
   'commentCount', 'commentBodyCount', 'replyCount',
   ...M3_SIGNAL_KEYS,
-  'needsHumanSpeakerReview', 'hasIdentifyingDetail', 'isPrivateTopic', 'expRecovered',
+  'hasIdentifyingDetail', 'isPrivateTopic', 'expRecovered',
+  // 🔴 신규 — 사람 판정을 코드로 남긴다
+  'speakerVerified', 'manualOverride', 'manualClass', 'reasonCodes', 'usableForVoice',
+  'mimicryOverridden', 'speakerHint',
 ] as const
 
 export const FORBIDDEN_OUTPUT_KEYS = [
   'sourceUrl', 'content', 'topComments', 'author', 'errorMessage',
   'cacheKey', 'contentHash', 'legacyLabels', 'authorHash', 'title', 'notes',
+  // 🔴 창업자 자유문 · 원본 판정 문자열 — 커밋 · 산출물 어디에도 나가지 않는다
+  'memo', 'verdict',
 ] as const
 
 // ── 판정 규칙 (notes 기반 — 모델이 남긴 판단 메모를 읽는다) ──
@@ -88,6 +98,10 @@ type Row = {
 }
 
 const BUCKETS = ['voice_style', 'story_topic', 'privacy_review', 'mimicry_review', 'excluded_contaminated', 'excluded_quality', 'neutral'] as const
+/** 사람 판정을 반영한 최종 bucket */
+const FINAL_BUCKETS = ['voice_gold', 'voice_silver', 'story_topic', 'held', 'excluded_manual',
+  'mimicry_review', 'privacy_review', 'excluded_contaminated', 'excluded_quality', 'neutral'] as const
+type FinalBucket = (typeof FINAL_BUCKETS)[number]
 type Bucket = (typeof BUCKETS)[number]
 
 function classify(r: Row): { bucket: Bucket; expRecovered: boolean } {
@@ -114,6 +128,67 @@ function classify(r: Row): { bucket: Bucket; expRecovered: boolean } {
   return { bucket: 'neutral', expRecovered: false }
 }
 
+/**
+ * 🔴 수동 판정을 자동 bucket 위에 얹는다. **순서가 곧 정책이다.**
+ *
+ *   1) excluded_manual  사람이 제외 → 자동 점수가 좋아도 모든 학습에서 뺀다
+ *   2) held             불명확 · 보류 → 학습 후보 아님. 🔴 남성 단서는 speakerHint 로 보존
+ *   3) male · storyOnly → story_topic. 말투는 쓰지 않고 사건 구조만
+ *   4) humanVoiceApproved  사람이 **말투까지** 승인
+ *        자동 voice/privacy → voice_gold
+ *        자동 mimicry      → voice_gold + mimicryOverridden (사람이 원문을 봤으므로 점수보다 우선)
+ *        자동 story        → 🔴 story 유지. 무조건 gold 로 올리지 않는다 — 자동 기준으로는
+ *                            말투 문턱을 못 넘은 글이다. 별도 집계해서 보고한다
+ *   5) speakerFemaleOnly   **화자 성별만** 확인. 말투 품질 승인이 아니다
+ *        자동 voice/privacy → voice_gold (speakerVerified)
+ *        자동 story        → story 유지 + speakerVerified
+ *        자동 excluded/review → 🔴 자동 유지. 여성이라는 이유로 품질 · 오염 판정을 덮지 않는다
+ *   6) 판정 없음 → 자동 bucket 그대로 (voice_style 은 voice_silver 로 이름만 바뀐다)
+ */
+/** 🔴 `voice_style` · `privacy_review` 는 최종 bucket 에 없다. 사람 확인 여부로 갈린다 */
+function toFinal(auto: Bucket): FinalBucket {
+  return auto === 'voice_style' ? 'voice_silver' : auto
+}
+
+function applyManualOverride(auto: Bucket, m: NormalizedDecision | undefined): {
+  bucket: FinalBucket; speakerVerified: boolean; manualOverride: boolean
+  mimicryOverridden: boolean; humanApprovedButAutoStory: boolean
+} {
+  const base = { speakerVerified: false, manualOverride: false, mimicryOverridden: false, humanApprovedButAutoStory: false }
+  if (m === undefined) {
+    // 자동만 — voice_style 은 사람 미확인이므로 silver 다
+    if (auto === 'voice_style' || auto === 'privacy_review') return { ...base, bucket: 'voice_silver' }
+    return { ...base, bucket: toFinal(auto) }
+  }
+  const on = { ...base, manualOverride: true }
+  switch (m.class) {
+    case 'excluded_manual':
+      return { ...on, bucket: 'excluded_manual' }
+    case 'held':
+      return { ...on, bucket: 'held' }
+    case 'male':
+    case 'storyOnly':
+      return { ...on, bucket: 'story_topic' }
+    case 'humanVoiceApproved':
+      if (auto === 'voice_style' || auto === 'privacy_review') return { ...on, bucket: 'voice_gold', speakerVerified: true }
+      if (auto === 'mimicry_review') return { ...on, bucket: 'voice_gold', speakerVerified: true, mimicryOverridden: true }
+      if (auto === 'story_topic') return { ...on, bucket: 'story_topic', speakerVerified: true, humanApprovedButAutoStory: true }
+      return { ...on, bucket: toFinal(auto), speakerVerified: true }
+    case 'speakerFemaleOnly':
+      if (auto === 'voice_style' || auto === 'privacy_review') return { ...on, bucket: 'voice_gold', speakerVerified: true }
+      if (auto === 'story_topic') return { ...on, bucket: 'story_topic', speakerVerified: true }
+      // 🔴 오염 · 품질 · 모방 판정은 여성이라는 이유로 덮지 않는다
+      return { ...on, bucket: toFinal(auto), speakerVerified: true }
+    default:
+      return { ...on, bucket: toFinal(auto) }
+  }
+}
+
+/** 🔴 말투 학습에 쓸 수 있는가 — story · held · excluded 는 사건 구조만 쓴다 */
+function usableForVoice(b: FinalBucket): boolean {
+  return b === 'voice_gold' || b === 'voice_silver'
+}
+
 async function main(): Promise<void> {
   await loadEnvLocal()
   const write = has('write')
@@ -121,6 +196,18 @@ async function main(): Promise<void> {
   console.log(`  모델 ${M3_ANALYSIS_MODEL} · task ${M3_TASK_VERSION} · prompt ${M3_PROMPT_VERSION}`)
   console.log('  🔴 유료 경로 0 · DB write 0 · provider import 0')
   console.log(`  모드 ${write ? '--write (tmp/voice-m3-learning/ 에 산출)' : '집계만 (파일 생성 0)'}\n`)
+
+  // ── 0. 수동 판정 로드 — 🔴 정규화된 파일만 읽는다(memo 없음) ──
+  let decisions = new Map<string, NormalizedDecision>()
+  if (existsSync(DECISIONS)) {
+    const raw = JSON.parse(readFileSync(DECISIONS, 'utf-8')) as { items: NormalizedDecision[] }
+    decisions = new Map(raw.items.map((d) => [d.sourceRef, d]))
+    const byClass = new Map<string, number>()
+    for (const d of decisions.values()) byClass.set(d.class, (byClass.get(d.class) ?? 0) + 1)
+    console.log(`  수동 판정 ${decisions.size}건 · ${[...byClass].map(([k, v]) => `${k} ${v}`).join(' · ')}`)
+  } else {
+    console.log('  ⚠️ 수동 판정 파일 없음 — 자동 분류만 적용한다')
+  }
 
   const prisma = new PrismaClient()
   try {
@@ -185,34 +272,51 @@ async function main(): Promise<void> {
 
     // ── 3. 분류 ─────────────────────────────────
     const out = rows.map((r) => {
-      const { bucket, expRecovered } = classify(r)
-      const female = FEMALE.test(r.notes)
+      const { bucket: autoBucket, expRecovered } = classify(r)
+      const m = decisions.get(r.sourceRef)
+      const ov = applyManualOverride(autoBucket, m)
       return {
-        sourceRef: r.sourceRef, sourceSite: r.sourceSite, bucket,
+        sourceRef: r.sourceRef, sourceSite: r.sourceSite, bucket: ov.bucket,
         originalLength: r.originalLength, cleanedLength: r.cleanedLength, hadCafeNotice: r.hadCafeNotice,
         commentCount: r.commentCount, commentBodyCount: r.commentBodyCount, replyCount: r.replyCount,
         ...Object.fromEntries(M3_SIGNAL_KEYS.map((k) => [k, r.scores[k]])),
-        // 🔴 voice/style 계열만 사람이 화자를 확인해야 한다. 자동 판정은 불가능하다
-        needsHumanSpeakerReview: (bucket === 'voice_style' || bucket === 'privacy_review') && !female,
         hasIdentifyingDetail: IDENT.test(r.notes),
         isPrivateTopic: TOPIC.test(r.notes),
         expRecovered,
+        // 🔴 사람이 확인한 것과 자동 통과를 구분한다
+        speakerVerified: ov.speakerVerified,
+        manualOverride: ov.manualOverride,
+        manualClass: m?.class ?? '',
+        reasonCodes: (m?.reasonCodes ?? []).join('|'),
+        usableForVoice: usableForVoice(ov.bucket),
+        mimicryOverridden: ov.mimicryOverridden,
+        // 🔴 held 로 흡수돼도 "남성이었다" 를 잃지 않는다
+        speakerHint: m?.speakerHint ?? '',
+        _autoBucket: autoBucket,
+        _humanApprovedButAutoStory: ov.humanApprovedButAutoStory,
       }
     })
 
-    const tally = (b: Bucket): number => out.filter((r) => r.bucket === b).length
-    console.log('\n  ── bucket ──')
-    for (const b of BUCKETS) {
+    const tally = (b: FinalBucket): number => out.filter((r) => r.bucket === b).length
+    console.log('\n  ── 최종 bucket (사람 판정 반영) ──')
+    for (const b of FINAL_BUCKETS) {
       const n = tally(b)
-      if (n > 0) console.log(`     ${b.padEnd(22)} ${String(n).padStart(5)}건 (${(n / out.length * 100).toFixed(2)}%)`)
+      if (n > 0) console.log(`     ${b.padEnd(24)} ${String(n).padStart(5)}건 (${(n / out.length * 100).toFixed(2)}%)`)
     }
-    const voice = out.filter((r) => r.bucket === 'voice_style')
+    const gold = out.filter((r) => r.bucket === 'voice_gold')
+    const silver = out.filter((r) => r.bucket === 'voice_silver')
     const story = out.filter((r) => r.bucket === 'story_topic')
-    const speakerReview = out.filter((r) => r.needsHumanSpeakerReview).length
+    const held = out.filter((r) => r.bucket === 'held')
+    const exm = out.filter((r) => r.bucket === 'excluded_manual')
     const dropped = rows.filter((r) => r.hadCafeNotice && r.originalLength >= 300 && r.cleanedLength < 300).length
+    console.log('\n  ── 수동 override ──')
+    const ovCount = out.filter((r) => r.manualOverride).length
+    console.log(`     적용 ${ovCount}건 · gold ${gold.length}(사람 확인) · silver ${silver.length}(자동)`)
+    console.log(`     🔴 humanVoiceApproved 인데 자동 story → story 유지 ${out.filter((r) => r._humanApprovedButAutoStory).length}건`)
+    console.log(`     mimicry override ${out.filter((r) => r.mimicryOverridden).length}건 · held 중 남성 단서 ${held.filter((r) => r.speakerHint === 'male').length}건`)
+    console.log(`     말투 학습 가능(usableForVoice) ${out.filter((r) => r.usableForVoice).length}건`)
     console.log('\n  ── 전처리 · 플래그 ──')
     console.log(`     카페 공지 포함 ${noticeCount}건 · 제거로 300자 미만 탈락 ${dropped}건 · 0자 ${rows.filter((r) => r.cleanedLength === 0).length}건`)
-    console.log(`     🔴 화자 확인 필요 ${speakerReview}건 (voice/style + privacy)`)
     console.log(`     exp 36+ 회수분 ${out.filter((r) => r.expRecovered).length}건`)
     console.log(`     식별 디테일 ${out.filter((r) => r.hasIdentifyingDetail).length}건 · 사적 소재 ${out.filter((r) => r.isPrivateTopic).length}건`)
     console.log(`     댓글 본문 ${out.reduce((a, r) => a + r.commentBodyCount, 0).toLocaleString()}개 · 대댓글 ${out.reduce((a, r) => a + r.replyCount, 0).toLocaleString()}개(1차 보류)`)
@@ -227,32 +331,46 @@ async function main(): Promise<void> {
     const dir = join(OUT_ROOT, stamp)
     mkdirSync(dir, { recursive: true })
     const files: Record<string, string> = {}
+    /** 🔴 COLUMNS 화이트리스트만 내보낸다 — `_` 로 시작하는 내부 필드는 산출물에 없다 */
+    const pickCols = (r: typeof out[number]): Record<string, unknown> =>
+      Object.fromEntries(COLUMNS.map((c) => [c, (r as unknown as Record<string, unknown>)[c]]))
     const emit = (name: string, rowsOut: typeof out): void => {
+      const picked = rowsOut.map(pickCols)
       const csv = join(dir, `${name}.csv`)
-      writeFileSync(csv, toCsv(COLUMNS, rowsOut as unknown as Array<Record<string, unknown>>, BOM), 'utf-8')
+      writeFileSync(csv, toCsv(COLUMNS, picked, BOM), 'utf-8')
       files[`${name}.csv`] = csv
       const jsonl = join(dir, `${name}.jsonl`)
-      writeFileSync(jsonl, rowsOut.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf-8')
+      writeFileSync(jsonl, picked.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf-8')
       files[`${name}.jsonl`] = jsonl
     }
-    emit('voice-style-candidates', voice)
-    emit('story-topic-candidates', story)
-    emit('review', out.filter((r) => r.bucket === 'privacy_review' || r.bucket === 'mimicry_review'))
-    emit('excluded', out.filter((r) => r.bucket === 'excluded_contaminated' || r.bucket === 'excluded_quality'))
+    emit('voice-gold', gold)
+    emit('voice-silver', silver)
+    emit('story-topic', story)
+    emit('held', held)
+    emit('excluded-manual', exm)
 
     const manifest = {
       generatedAt: new Date().toISOString(),
       model: M3_ANALYSIS_MODEL, taskVersion: M3_TASK_VERSION,
       promptVersion: M3_PROMPT_VERSION, outputSchemaVersion: M3_OUTPUT_SCHEMA_VERSION,
       population: { eligible: ELIGIBLE, analyzed: out.length },
-      buckets: Object.fromEntries(BUCKETS.map((b) => [b, tally(b)])),
+      buckets: Object.fromEntries(FINAL_BUCKETS.map((b) => [b, tally(b)])),
+      manualOverride: {
+        applied: ovCount, decisionsLoaded: decisions.size,
+        gold: gold.length, silver: silver.length, story: story.length,
+        held: held.length, excludedManual: exm.length,
+        humanApprovedButAutoStory: out.filter((r) => r._humanApprovedButAutoStory).length,
+        mimicryOverridden: out.filter((r) => r.mimicryOverridden).length,
+        heldWithMaleHint: held.filter((r) => r.speakerHint === 'male').length,
+        usableForVoice: out.filter((r) => r.usableForVoice).length,
+      },
       preprocessing: {
         cafeNoticeStripped: noticeCount, droppedUnder300: dropped,
         zeroAfterStrip: rows.filter((r) => r.cleanedLength === 0).length,
         otherEmojiStripped: 0,
       },
       flags: {
-        needsHumanSpeakerReview: speakerReview,
+        speakerVerified: out.filter((r) => r.speakerVerified).length,
         expRecovered: out.filter((r) => r.expRecovered).length,
         hasIdentifyingDetail: out.filter((r) => r.hasIdentifyingDetail).length,
         isPrivateTopic: out.filter((r) => r.isPrivateTopic).length,
