@@ -24,6 +24,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute, basename, dirname } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { isPublic, statusLabel, assertGateInSync } from './lib/magazine-gate.mjs'
+import { checkFirstPerson, checkTitleForm } from './lib/magazine-editorial.mjs'
 
 const ROOT = process.cwd()
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
@@ -388,6 +389,15 @@ function checkArticle(article, context, report) {
       report.fail(id, `description 이 발행 글 "${other.slug}" 와 정확히 같다`)
     }
   }
+  // 19 · 1인칭 화자 (M-AUTO-2 · D1)
+  //     제목·description 은 넣지 않는다 — 화자는 본문에서 드러난다
+  const firstPerson = checkFirstPerson(fullText)
+  if (firstPerson.level === 'FAIL') report.fail(id, firstPerson.reason)
+  else if (firstPerson.level === 'WARN') report.warn(id, firstPerson.reason)
+
+  // 20 · 제목 형태 (M-AUTO-2 · D2)
+  const titleForm = checkTitleForm(article.title)
+  if (titleForm.level === 'FAIL') report.fail(id, titleForm.reason)
 }
 
 // ── 집합 단위 검사 ─────────────────────────────────────────
