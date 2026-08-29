@@ -25,6 +25,10 @@
  *    review(HIGH, reviewCount). 예산이 갈려 있어 HIGH 가 LOW·MEDIUM 을 밀어내지 않는다.
  *    자동 등록·자동 공개는 magazine-register.mjs 의 AUTO_RISK 가 그대로 막는다.
  *
+ *    ⚠️ 이 수동 게이트는 최종 상태가 아니다. 최종 목표는 고강도 자동 검수가
+ *       PASS/FAIL/UNKNOWN 을 내고, PASS 면 HIGH 도 자동 등록되는 것이다.
+ *       UNKNOWN 만 창업자가 본다 — 제작 전략 §13.7.
+ *
  * 사용법
  *   node scripts/magazine-producer-plan.mjs              실행 (파일 생성)
  *   node scripts/magazine-producer-plan.mjs --dry-run    선정만 하고 아무것도 쓰지 않는다
@@ -52,6 +56,9 @@ function produceCountFor(inventoryDays) {
 
 /**
  * HIGH 는 하루 1건까지만 만든다.
+ *
+ * 🔴 이 값은 **사람이 읽는 동안만 유효한 상한**이다. 자동 고강도 검수가 붙으면
+ *    검수 시간이 상한을 정하지 않으므로 다시 계산해야 한다 (제작 전략 §13.7).
  *
  * 전략 §5.1 이 HIGH 검수를 **본문 전문 10~15분**으로 잡았다. 하루 2건이면
  * 검수만 30분이고, 밀리기 시작하면 창업자가 전문을 읽지 않게 된다 —
@@ -88,8 +95,9 @@ function kstDate(ms) {
  * 🔴 HIGH 를 skip 하지 않는 이유 (전략 §5.1)
  *    HIGH 의 정의는 "만들지 않는다" 가 아니라 "창업자가 본문 전문을 읽는다" 이다.
  *    초안을 만들지 않으면 읽을 것이 없어 큐가 그 자리에서 영구히 막힌다.
- *    자동화되는 것은 **초안까지**이고, 등록은 magazine-register.mjs 의
- *    AUTO_RISK(LOW·MEDIUM) 가 그대로 막는다.
+ *    지금 자동화된 것은 **초안까지**이고, 등록은 magazine-register.mjs 의
+ *    AUTO_RISK(LOW·MEDIUM) 가 막는다. 이 선은 최종이 아니라 자동 고강도 검수가
+ *    붙기 전까지의 임시 위치다 — 제작 전략 §13.7.
  */
 export function selectItems({ queue, articles, today, produceCount, reviewCount = 0, draftExists }) {
   const skipped = []
@@ -212,15 +220,23 @@ const TODO = (what) => '<!-- TODO(세션): ' + what + ' -->'
  *
  * 이 문구가 파일에 남아 있어야 세션·창업자 어느 쪽이 열어도 등급을 안다.
  * run.json 의 needsFullReview 만으로는 파일을 직접 연 사람이 알 수 없다.
+ *
+ * 🔴 "사람이 읽는다" 를 최종 상태로 적지 않는다 (제작 전략 §13.7).
+ *    사람이 게이트에 서 있는 것은 자동 고강도 검수가 아직 없기 때문이지
+ *    HIGH 가 영원히 손으로 검수할 등급이어서가 아니다. 표지가 그렇게 읽히면
+ *    임시 게이트가 영구 운영으로 굳는다.
  */
 function fullReviewBanner(item) {
   if (item.riskLevel !== 'HIGH') return ''
-  return `> 🔴 **창업자 전문 검수 필요 (riskLevel: HIGH)**
+  return `> 🔴 **현재 임시 수동 검수 게이트 (riskLevel: HIGH)**
 >
-> 이 주제는 초안까지만 자동으로 만든다. 전략 §5.1 이 HIGH 검수를 **본문 전문**으로
-> 정했고, §5.2 는 등급과 무관하게 전문 검수를 강제하는 조건까지 두었다.
-> \`magazine-register.mjs\` 가 HIGH 자동 등록을 막으므로 이 글은 창업자가
-> 본문을 읽고 승인하기 전에는 \`articles.ts\` 로 넘어가지 않는다.
+> 이 주제는 지금 초안까지만 자동으로 만든다. 창업자가 본문 전문을 읽고 승인하기
+> 전에는 \`magazine-register.mjs\` 가 \`articles.ts\` 등록을 막는다.
+>
+> **최종 목표는 고강도 자동 검수를 통과하면 자동 등록하는 것이다** (제작 전략 §13.7).
+> 지금 사람이 서 있는 이유는 등급이 HIGH 라서가 아니라 자동 검수가 아직
+> 사실관계·배치·톤을 판정하지 못해서다. 이 게이트는 M-AUTO-3(PASS/FAIL/UNKNOWN
+> 리포트) 이후 유형 단위로 열린다.
 >
 > 큐가 지정한 금지선: ${item.notes}
 
@@ -420,7 +436,8 @@ brief.md / review.ts 정본을 만들지 않는다 — _runs 에 작업 패키�
   auto    LOW·MEDIUM · autoEligible=true      하루 produceCount 건
   review  HIGH                                 하루 reviewCount 건 (초안까지만)
 
-HIGH 는 초안을 만들되 창업자가 본문 전문을 읽기 전에는 등록되지 않는다.
+HIGH 는 초안을 만들되, 지금은 창업자가 본문 전문을 읽기 전에는 등록되지 않는다.
+이 수동 게이트는 임시다 — 최종 목표는 고강도 자동 검수 PASS 시 자동 등록(제작 전략 §13.7).
 등록 차단은 magazine-register.mjs 의 AUTO_RISK 가 한다 — 여기서 풀지 않는다.`)
 }
 
@@ -508,7 +525,10 @@ function main() {
       day: i.day, slug: i.slug, title: i.title,
       contentType: i.contentType, riskLevel: i.riskLevel,
       publishWindow: i.publishWindow ?? null,
-      /** true 면 창업자가 본문 전문을 읽기 전까지 등록되지 않는다 */
+      /**
+       * true 면 지금은 창업자가 본문 전문을 읽기 전까지 등록되지 않는다.
+       * 임시 수동 게이트다 — 최종 목표는 고강도 자동 검수 PASS 시 자동 등록(§13.7).
+       */
       needsFullReview: i.riskLevel === 'HIGH',
       packageWritten: false,
     })),
@@ -563,7 +583,7 @@ function report(run) {
   } else {
     for (const s of run.selected) {
       const win = s.publishWindow ? ` · 창 ${s.publishWindow.after}~${s.publishWindow.before}` : ''
-      const gate = s.needsFullReview ? ' · 🔴 창업자 전문 검수 필요 (자동 등록 안 됨)' : ''
+      const gate = s.needsFullReview ? ' · 🔴 현재 임시 수동 검수 게이트 (자동 등록 대기)' : ''
       L.push(`- day ${s.day} \`${s.slug}\` — ${s.title}`)
       L.push(`  ${s.contentType} · ${s.riskLevel}${win}${s.packageWritten ? '' : ' · 패키지 미생성'}${gate}`)
     }
@@ -571,9 +591,13 @@ function report(run) {
   if (highs) {
     L.push('')
     L.push(
-      `> HIGH ${highs}건은 초안까지만 만든다. 창업자가 본문 전문을 읽고 승인하기 전에는`,
+      `> HIGH ${highs}건은 지금 초안까지만 만든다. 창업자가 본문 전문을 읽고 승인하기`,
     )
-    L.push('> `magazine-register.mjs` 가 `articles.ts` 등록을 막는다.')
+    L.push('> 전에는 `magazine-register.mjs` 가 `articles.ts` 등록을 막는다.')
+    L.push('>')
+    L.push('> 이것은 최종 상태가 아니다. **최종 목표는 고강도 자동 검수 PASS 시 자동 등록**이고,')
+    L.push('> 지금 사람이 서 있는 이유는 자동 검수가 사실관계·배치·톤을 아직 판정하지')
+    L.push('> 못해서다 — 제작 전략 §13.7.')
   }
   L.push('')
   L.push('## 제외 (상위 12건)')
