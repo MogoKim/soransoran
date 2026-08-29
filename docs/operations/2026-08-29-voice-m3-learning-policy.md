@@ -151,11 +151,28 @@ fixture 가 커밋 파일 실물을 열어 `memo` · `verdict` · `sourceUrl` ·
 
 ## §7 다음 단계
 
+> 🔴 **후속 결정: [Persona Network 전략](2026-08-29-persona-network-strategy.md)**
+> 이 문서가 정한 bucket 을 **무엇에 쓸 것인지**는 그쪽에서 확정했다.
+> 요지 — 단순 댓글봇이 아니라 **외부 화제를 재맥락화하는 Persona Network** 다.
+> Persona Pool 은 **20~30명 규모로 설계**하고 초기 활성만 소수로 제한한다.
+
 ```
-1) Persona Bot 설계 — gold 135 를 기준 문체로, silver 1,065 를 보강으로
-2) story_topic 1,304 의 시점 일반화 규칙 설계
-3) privacy_review 25 의 식별 디테일 일반화
-4) 산출물에서 문제가 보이면 → gold 만 재학습 또는 VE-M4 화자 지표
+1) Persona Network 전략 고정          ← 완료
+2) Persona Architecture 설계 (Identity · Memory)
+3) 🔴 Safety / Originality Gate 설계   생성기보다 먼저
+4) Persona Pool 20~30명 설계
+5) Trend ingestion 설계
+6) story_topic 1,304 의 시점 일반화 규칙
+7) privacy_review 25 의 식별 디테일 일반화
 ```
+
+### bucket 이 어디에 쓰이는가
+
+| bucket | Persona Network 에서의 용도 |
+|---|---|
+| voice_gold 135 | 기준 말투 · few-shot 예시 · `voiceAnchors` |
+| voice_silver 1,065 | 말투 다양성 · 어휘 분포 참고 (🔴 few-shot 예시 아님) |
+| story_topic 1,304 | 사건 구조 · **댓글 반응 구조** |
+| held · excluded_manual · mimicry_review | 🔴 학습 금지 또는 보류 |
 
 🔴 **점수로 학습을 자동화하지 않는다.** 이 문서의 bucket 은 후보이지 확정이 아니다.
