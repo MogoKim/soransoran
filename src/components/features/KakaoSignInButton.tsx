@@ -1,6 +1,7 @@
 'use client'
 
 import { signIn } from 'next-auth/react'
+import { onboardingHref } from '@/lib/callback-url'
 
 /**
  * 카카오 로그인 버튼
@@ -15,6 +16,12 @@ import { signIn } from 'next-auth/react'
  * 🔴 variant 는 생김새만 바꾼다.
  *    signIn 호출과 callbackUrl 전달은 어느 쪽이든 같은 한 줄이다 —
  *    모양 때문에 인증 경로가 갈라지면 한쪽만 고쳐지는 날이 온다.
+ *
+ * 🔴 로그인 뒤 목적지를 여기서 한 번 감싼다.
+ *    시작 CTA 는 전부 이 버튼 하나를 지난다. 감싸는 자리를 여기 두면
+ *    홈·글쓰기·상세 어디서 시작하든 같은 길로 간다 — 화면마다 각자
+ *    감싸면 한 곳을 빠뜨리는 날이 오고, 그 입구로 들어온 사람만
+ *    가입을 마치지 않은 채 서비스에 남는다.
  */
 
 /** default = 화면 안에 놓이는 기본형 · onboarding = 로그인 화면 하단 고정 CTA */
@@ -38,7 +45,7 @@ export default function KakaoSignInButton({
   return (
     <button
       type="button"
-      onClick={() => signIn('kakao', { callbackUrl })}
+      onClick={() => signIn('kakao', { callbackUrl: onboardingHref(callbackUrl) })}
       className={`inline-flex w-full flex-wrap items-center justify-center gap-2 break-keep bg-kakao text-center font-bold leading-tight text-kakao-text transition duration-150 hover:brightness-95 active:scale-95 ${SHAPE[variant]}`}
     >
       {variant === 'onboarding' ? (

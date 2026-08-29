@@ -50,3 +50,39 @@ export function loginHref(callbackPath: unknown): string {
   if (!safe) return '/login'
   return `/login?callbackUrl=${encodeURIComponent(safe)}`
 }
+
+/** 가입을 마치는 화면. 로그인 뒤 모두가 한 번 지난다 */
+const ONBOARDING_PATH = '/onboarding'
+
+/** 쿼리를 떼고 온보딩 화면인지 본다 */
+function isOnboardingPath(path: string): boolean {
+  const pathname = path.split('?')[0]
+  return pathname === ONBOARDING_PATH || pathname === `${ONBOARDING_PATH}/`
+}
+
+/**
+ * 로그인 뒤 돌아올 곳을 온보딩으로 한 번 감싼다.
+ *
+ * 🔴 신규와 기존을 여기서 가르지 않는다.
+ *    누가 처음인지는 로그인 시점에 알 수 없고, 알아내려면 인증 설정에
+ *    손을 대야 한다 — 그 파일은 건드리는 순간 로그인 전체가 흔들린 전력이 있다.
+ *    그래서 모두를 온보딩으로 보내고, 이미 마친 사람은 그 화면이
+ *    isOnboarded 를 보고 곧바로 돌려보낸다 (app/onboarding/page.tsx).
+ *    기존 회원에게는 스쳐 지나가는 한 번의 리다이렉트로 끝난다.
+ *
+ * 🔴 가려던 곳을 잃지 않는다.
+ *    '/write?board=free' 로 가려던 사람은 가입을 마친 뒤 그 자리로 돌아온다.
+ *    이 값을 버리면 로그인 한 번에 하려던 일이 사라진다.
+ *
+ * 🔴 두 겹으로 감싸지 않는다.
+ *    이미 온보딩을 가리키는 값이 들어오면 그대로 둔다. 겹쳐 감으면
+ *    가입을 마치고 또 가입 화면으로 가는 고리가 생긴다.
+ *
+ * 🔴 거를 수 없는 값은 홈으로 바꾼다.
+ *    open redirect 판정은 toInternalPath 하나가 한다 — 여기서 다시 짜지 않는다.
+ */
+export function onboardingHref(callbackPath: unknown): string {
+  const safe = toInternalPath(callbackPath)
+  if (safe && isOnboardingPath(safe)) return safe
+  return `${ONBOARDING_PATH}?callbackUrl=${encodeURIComponent(safe ?? '/')}`
+}
