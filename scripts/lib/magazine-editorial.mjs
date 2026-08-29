@@ -147,3 +147,66 @@ export function checkTitleForm(title) {
       `상황형(~때·~이유·~것) 으로 쓴다. 검색해서 들어오는 글이다`,
   }
 }
+
+// ── D4-A · 진료 권고 문장 ──────────────────────────────────
+
+/**
+ * 건강 글에 병원으로 보내는 문장이 있는가 (전략 §4.4).
+ *
+ * §4.4 는 두 자리를 요구한다.
+ *   본문 안   증상을 설명한 직후 — "증상이 오래가거나 심하면 병원에서 확인해 보세요"
+ *   하단 고정 medical: true 면 MagazineBody 가 자동으로 붙인다
+ * 자동으로 붙는 하단은 검사할 것이 없다. **본문 안 문장**만 본다.
+ *
+ * 🔴 배치는 검사하지 않는다 (D4-B 보류).
+ *    M-AUTO-2 설계 초안은 "위험 신호가 앞쪽 h2 에 있어야 한다" 였다. 실측이 반대였다 —
+ *    등록 18건의 권고 위치비가 중앙 0.6 이고 최빈도 0.6 이다. 앞쪽 절반을 임계로 걸면
+ *    15건이 걸린다. §4.4 도 "앞쪽" 이 아니라 **"증상 설명 직후"** 라고만 한다.
+ *    증상 설명이 2~3번째 h2 니까 0.6 이 정상이다.
+ *
+ *    다만 **응급 위험 신호**(흉통·호흡곤란·실신)는 다르다. 이탈 전에 읽혀야 하므로
+ *    앞쪽이어야 한다. 그런데 그런 글이 코퍼스에 **0건**이라 임계를 실측으로 정할 수 없다.
+ *    palpitations-menopause · dizziness-menopause 초안이 나온 뒤에 별도 규칙으로 만든다.
+ *    ⚠️ 데이터 없이 임계를 지어내지 않는다 — D3 를 폐기한 것과 같은 이유다.
+ *
+ * 🔴 WARN 이다. FAIL 이 아니다.
+ *    이미 발행된 less-sleep-with-age 에 이 문장이 없다. FAIL 로 두면 나간 글이
+ *    QA 실패 상태가 된다. 그 글을 보강한 뒤에 승격한다.
+ */
+
+/** 누구에게 가라는 것인가 */
+const CARE_SUBJECTS = ['병원', '진료', '의료진', '전문가', '전문의', '의사', '진찰', '검사']
+
+/** 가서 무엇을 하라는 것인가 */
+const CARE_VERBS = ['상담', '확인', '받아', '가보', '가 보', '권합니다', '권해', '물어', '이야기해']
+
+/**
+ * 주체와 동사가 **같은 문장 안**에 있어야 한다.
+ * 글 전체에 "병원" 과 "확인" 이 흩어져 있는 것은 권고가 아니다 —
+ * "병원에 갈 정도는 아닙니다" 와 "혼자 확인해 보세요" 가 따로 있는 글도 통과해버린다.
+ */
+function hasCareSentence(text) {
+  for (const sentence of String(text ?? '').split(/(?<=[.!?])\s+|\n/)) {
+    if (!CARE_SUBJECTS.some((s) => sentence.includes(s))) continue
+    if (CARE_VERBS.some((v) => sentence.includes(v))) return sentence.trim()
+  }
+  return null
+}
+
+/**
+ * @param {string} bodyText 본문 텍스트
+ * @param {boolean} medical article.medical
+ * @returns {{ level: 'WARN'|null, sentence: string|null, reason: string|null }}
+ */
+export function checkCareAdvice(bodyText, medical) {
+  if (!medical) return { level: null, sentence: null, reason: null }
+  const sentence = hasCareSentence(bodyText)
+  if (sentence) return { level: null, sentence, reason: null }
+  return {
+    level: 'WARN',
+    sentence: null,
+    reason:
+      'medical: true 인데 본문에 진료 권고 문장이 없다 — 하단 고정 문구만으로는 부족하다. ' +
+      '"증상이 오래가거나 심하면 병원에서 확인해 보세요" 를 증상 설명 직후에 둔다 (전략 §4.4)',
+  }
+}
