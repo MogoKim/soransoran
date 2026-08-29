@@ -36,7 +36,9 @@ export default function CommentItem({
   )
 
   return (
-    <li className="rounded-lg bg-surface-card p-4">
+    /* 🔴 댓글은 바탕 위에 직접 놓인다 — 흰 면과 바탕이 1.05:1 이라 면만으로는 카드가 서지 않는다.
+          그래서 선으로 세운다. 매거진의 쉬는 칩과 같은 이유다. */
+    <li className="rounded-lg border border-subtle bg-surface-card p-4">
       <div className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
         <span className="font-bold text-brand-ink">{displayName(comment.author)}</span>
         <span aria-hidden>·</span>

@@ -77,7 +77,7 @@ function SectionHeading({
       {moreHref ? (
         <Link
           href={moreHref}
-          className="inline-flex min-h-[52px] shrink-0 items-center text-sm text-link"
+          className="inline-flex min-h-[52px] shrink-0 items-center text-sm font-medium text-link"
         >
           더보기 →
         </Link>

@@ -45,12 +45,13 @@ export default function MagazineList({ articles }: { articles: MagazineArticle[]
                 type="button"
                 aria-pressed={active}
                 onClick={() => setCluster(key)}
-                /* 테두리를 두르지 않는다 — 칩이 줄지어 서면 선이 격자로 읽힌다.
-                   바탕이 회색이라 흰 면만으로 칩 모양이 선다. hover 도 바탕과 겹치지 않게 띄운다. */
+                /* 🔴 바탕이 밝아지면서 흰 면만으로는 칩 모양이 서지 않는다 — 바탕과 1.04:1 이다.
+                   그래서 쉬는 칩에만 실선을 준다. 한 줄로 늘어선 알약이라 격자로는 읽히지 않는다.
+                   고른 칩은 면으로 서니 선을 얹지 않는다 — 선과 면을 겹쳐 두 번 강조하지 않는다. */
                 className={`inline-flex min-h-[52px] shrink-0 items-center whitespace-nowrap rounded-full px-4 text-sm transition duration-150 active:scale-[0.98] ${
                   active
                     ? 'bg-surface-soft font-bold text-brand-ink'
-                    : 'bg-surface-card font-medium text-content-primary hover:bg-surface-soft'
+                    : 'border border-subtle bg-surface-card font-medium text-content-primary hover:bg-surface-soft'
                 }`}
               >
                 {key === ALL ? '전체' : MAGAZINE_CLUSTER_LABELS[key]}
