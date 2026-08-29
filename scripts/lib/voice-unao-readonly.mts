@@ -332,11 +332,26 @@ export function parseTopComments(raw: unknown): ParsedComment[] {
 }
 
 /**
- * 🔴 학습에 넣을 댓글 본문만 뽑는다. author 는 **한 번도 읽지 않는다.**
- *    fixture 가 이 함수 본문에 `author` 참조가 없는지 검사한다.
+ * 학습에 넣을 댓글 본문만 뽑는다.
+ *
+ * 🔴 **`parseTopComments()` 를 부르지 않는다.** 그쪽은 author · replies 를 파싱하므로,
+ *    결과에서 빼더라도 **닉네임이 메모리에 물질화된다.**
+ *    "학습 경로는 author 를 읽지 않는다" 를 결과가 아니라 **접근 수준에서** 지키려면
+ *    raw 에서 `content` 키 하나만 직접 읽어야 한다.
+ *
+ * 🔴 읽지 않는 것 — `author` · `replies`(1차 보류 정책) · `likeCount`(전부 0이라 무의미).
+ *    fixture 가 이 함수 본문에 그 이름들이 등장하는지, parseTopComments 를 부르는지 검사한다.
  */
 export function commentBodiesForLearning(raw: unknown): string[] {
-  return parseTopComments(raw).map((c) => c.content).filter((t) => t.trim() !== '')
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue
+    // 🔴 content 키 하나만 읽는다
+    const body = (item as Record<string, unknown>).content
+    if (typeof body === 'string' && body.trim() !== '') out.push(body)
+  }
+  return out
 }
 
 export function topCommentsToText(raw: unknown): string {

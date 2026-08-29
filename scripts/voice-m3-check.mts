@@ -1742,10 +1742,20 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
 {
   const offenders: string[] = []
 
-  // commentBodiesForLearning 본문에 author 참조가 없어야 한다
-  const fn = /export function commentBodiesForLearning[\s\S]*?\n}/.exec(unaoLibRaw)?.[0] ?? ''
-  if (fn === '') offenders.push('commentBodiesForLearning 를 찾을 수 없다')
-  if (/\bauthor\b/.test(fn)) offenders.push('🔴 학습 추출 함수가 author 를 참조한다')
+  // 🔴 함수 **본문**만 본다 — 주석의 설명을 위반으로 읽으면 안 된다
+  const fnRaw = /export function commentBodiesForLearning[\s\S]*?\n}/.exec(unaoLibRaw)?.[0] ?? ''
+  const fn = stripComments(fnRaw)
+  if (fnRaw === '') offenders.push('commentBodiesForLearning 를 찾을 수 없다')
+  /**
+   * 🔴 parseTopComments 를 부르면 author · replies 가 **메모리에 물질화된다.**
+   *    결과에서 빼는 것으로는 부족하다 — 접근 자체를 막아야 한다.
+   */
+  if (/parseTopComments\(/.test(fn)) offenders.push('🔴 학습 추출이 parseTopComments 를 부른다 — author 가 물질화된다')
+  for (const key of ['author', 'likeCount', 'replies']) {
+    if (new RegExp(`\\b${key}\\b`).test(fn)) offenders.push(`🔴 학습 추출 함수가 ${key} 를 참조한다`)
+  }
+  // content 키만 읽는가
+  if (!/\.content\b|\['content'\]|\bcontent\b/.test(fn)) offenders.push('학습 추출이 content 를 읽지 않는다')
 
   // select 스크립트가 author 를 쓰지 않는가 (금지 키 목록 · 주석 제외)
   const body = selectCode.replace(/FORBIDDEN_OUTPUT_KEYS = \[[\s\S]*?\] as const/, '')
@@ -1753,18 +1763,28 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (!/commentBodiesForLearning/.test(selectCode)) offenders.push('select 가 학습용 추출 함수를 쓰지 않는다')
 
   // 🔴 실제 동작 — author 는 결과에 없어야 한다
-  const sample = [{ author: '초록장미', content: '공감해요 저도 그랬어요', replies: [{ author: '하늘', content: '맞아요' }], likeCount: 0 }]
+  const sample = [
+    { author: '초록장미', content: '공감해요 저도 그랬어요', replies: [{ author: '하늘', content: '대댓글본문' }], likeCount: 0 },
+    { author: '빈댓글', content: '   ', replies: [], likeCount: 0 },
+  ]
   const bodies = commentBodiesForLearning(sample)
-  if (bodies.join('|').includes('초록장미')) offenders.push('🔴 학습 추출 결과에 닉네임이 섞였다')
-  if (!bodies.join('|').includes('공감해요')) offenders.push('댓글 본문이 빠졌다')
-  if (bodies.length !== 1) offenders.push(`본문 개수가 ${bodies.length} (replies 는 1차 보류여야 한다)`)
+  const joined = bodies.join('|')
+  if (joined.includes('초록장미') || joined.includes('하늘') || joined.includes('빈댓글')) {
+    offenders.push('🔴 학습 추출 결과에 닉네임이 섞였다')
+  }
+  if (joined.includes('대댓글본문')) offenders.push('🔴 replies.content 가 학습 추출에 들어갔다 — 1차 보류 정책 위반')
+  if (!joined.includes('공감해요')) offenders.push('댓글 본문이 빠졌다')
+  if (bodies.length !== 1) offenders.push(`본문 개수가 ${bodies.length} — 빈 문자열 제거 · replies 보류가 깨졌다`)
+  // 배열이 아니거나 항목이 객체가 아니어도 죽지 않는가
+  if (commentBodiesForLearning(null).length !== 0) offenders.push('null 입력 처리가 없다')
+  if (commentBodiesForLearning(['문자열항목']).length !== 0) offenders.push('문자열 항목을 본문으로 오인한다')
   const parsed = parseTopComments(sample)
   if (parsed[0]?.author !== '초록장미') offenders.push('parseTopComments 가 author 를 분리 보관하지 않는다')
   if (parsed[0]?.replies.length !== 1) offenders.push('parseTopComments 가 replies 를 보관하지 않는다')
 
   if (offenders.length) bad('학습 추출은 author 미사용', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('학습 추출은 author 미사용', 'guard',
-    'commentBodiesForLearning author 참조 0 · content 만 반환 · replies 1차 보류 · parseTopComments 는 분리 보관')
+    'parseTopComments 미호출 · author · replies · likeCount 참조 0 · content 키만 직접 읽음 · 빈값 제거 · parseTopComments 는 표시용으로 유지')
 }
 
 // ── ㊹ 유출 대조는 topCommentsToText 그대로 넓게 유지 ────
