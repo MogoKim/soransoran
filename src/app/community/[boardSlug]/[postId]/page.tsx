@@ -7,6 +7,7 @@ import ReportButton from '@/components/features/ReportButton'
 import DeleteButton from '@/components/features/DeleteButton'
 import CommentItem from '@/components/features/CommentItem'
 import NextToRead from '@/components/features/NextToRead'
+import PostViewBeacon from '@/components/features/PostViewBeacon'
 import WriteCta from '@/components/features/WriteCta'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
@@ -70,6 +71,9 @@ export default async function PostDetailPage({
 
   return (
     <PageShell>
+      {/* 화면이 실제로 열린 뒤에만 조회를 알린다. 아무것도 그리지 않는다. */}
+      <PostViewBeacon postId={post.id} />
+
       <main className="mx-auto max-w-3xl px-4 pb-16">
         <nav className="py-2">
           <Link
