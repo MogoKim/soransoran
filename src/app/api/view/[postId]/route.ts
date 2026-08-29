@@ -1,3 +1,4 @@
+import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { COMMUNITY_VISIBLE_WHERE } from '@/lib/post-visibility'
@@ -13,12 +14,23 @@ import { COMMUNITY_VISIBLE_WHERE } from '@/lib/post-visibility'
  *    서버 렌더 중에 세면 프리페치와 크롤러가 그대로 조회수가 되고,
  *    무엇보다 그 화면을 다시는 캐시할 수 없게 된다.
  *
+ * 중복은 두 겹으로 막는다.
+ *   탭 안  sessionStorage — 새로고침·뒤로가기 (PostViewBeacon)
+ *   브라우저 쿠키 30분   — 새 탭·창을 다시 열어도 같은 창 안에서는 한 번 (여기)
+ *   정확한 1인 1조회가 목표가 아니다. 짧은 시간의 반복을 줄이는 것이 목표다.
+ *
  * SEO
  *   robots.ts 가 이미 '/api/' 를 Disallow 한다 — robots 수정 0줄
  *   sitemap.ts 는 화이트리스트라 라우트를 만들어도 들어가지 않는다 — sitemap 수정 0줄
  *   아래에서 x-robots-tag: noindex 를 직접 붙인다
  */
 export const dynamic = 'force-dynamic'
+
+/** 저장키 관례는 soran-font-size 와 맞춘다. 값에는 아무 정보도 담지 않는다. */
+const viewedCookie = (postId: string) => `soran-viewed-${postId}`
+
+/** 같은 브라우저가 이 안에 다시 열면 세지 않는다. */
+const VIEW_WINDOW_SECONDS = 30 * 60
 
 /** 세었든 걸렀든 클라이언트에게는 같은 응답을 준다. 화면이 이 결과를 읽지 않는다. */
 function done() {
@@ -46,7 +58,24 @@ function shouldSkip(request: Request): boolean {
   return false
 }
 
+/**
+ * https 로 들어온 요청에만 Secure 를 건다.
+ *
+ * NODE_ENV 로 판정하지 않는다 — 로컬에서 프로덕션 빌드를 돌릴 때도 production 이라,
+ * http 인 그 환경에서 브라우저가 쿠키를 통째로 버린다.
+ */
+function isSecureRequest(request: Request): boolean {
+  if (request.headers.get('x-forwarded-proto') === 'https') return true
+  try {
+    return new URL(request.url).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 export async function POST(request: Request, { params }: { params: { postId: string } }) {
+  if (shouldSkip(request)) return done()
+
   const postId = params.postId?.trim()
   if (!postId) {
     const res = NextResponse.json({ error: 'postId required' }, { status: 400 })
@@ -54,7 +83,9 @@ export async function POST(request: Request, { params }: { params: { postId: str
     return res
   }
 
-  if (shouldSkip(request)) return done()
+  const name = viewedCookie(postId)
+  // 창이 열려 있으면 DB 를 건드리지 않는다.
+  if (cookies().get(name)) return done()
 
   /**
    * 🔴 기록 실패가 읽기를 막으면 안 된다.
@@ -72,5 +103,20 @@ export async function POST(request: Request, { params }: { params: { postId: str
     // 삼킨다. 실패가 잦으면 계기판의 0 이 그걸 드러낸다.
   }
 
-  return done()
+  const res = done()
+  /**
+   * 고친 행이 0 건이어도 창을 연다.
+   * 없는 글에만 쿠키가 안 붙으면, 쿠키 유무가 글의 존재 여부를 알려 주는 신호가 된다.
+   */
+  res.cookies.set({
+    name,
+    value: '1',
+    maxAge: VIEW_WINDOW_SECONDS,
+    // 이 라우트만 읽는 쿠키다. 경로를 좁혀 두면 홈·목록·이미지 요청 헤더에 실리지 않는다.
+    path: `/api/view/${postId}`,
+    sameSite: 'lax',
+    httpOnly: true,
+    secure: isSecureRequest(request),
+  })
+  return res
 }
