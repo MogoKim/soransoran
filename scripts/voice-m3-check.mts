@@ -30,6 +30,7 @@ import {
   selectStratifiedSample, validateSample, SAMPLE_AXES, selectFullModeBatch, type SampleCandidate,
 } from './lib/voice-m3-sample.mjs'
 import { keyStatus, ANTHROPIC_JSON_PREFILL, PROVIDER_KEY_ENV } from './lib/voice-m3-provider.mjs'
+import { neutralizeFormula, csvCell } from './lib/voice-m3-csv.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIVE = join(HERE, 'voice-m3-dry-run.mts')
@@ -39,6 +40,7 @@ const SAMPLE_LIB = join(HERE, 'lib/voice-m3-sample.mts')
 const PROVIDER_LIB = join(HERE, 'lib/voice-m3-provider.mts')
 const RUN = join(HERE, 'voice-m3-run.mts')
 const PLAN = join(HERE, 'voice-m3-plan.mts')
+const EXPORT = join(HERE, 'voice-m3-export.mts')
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -59,6 +61,7 @@ const sampleCode = stripComments(readFileSync(SAMPLE_LIB, 'utf-8'))
 const providerCode = stripComments(readFileSync(PROVIDER_LIB, 'utf-8'))
 const runCode = stripComments(readFileSync(RUN, 'utf-8'))
 const planCode = stripComments(readFileSync(PLAN, 'utf-8'))
+const exportCode = stripComments(readFileSync(EXPORT, 'utf-8'))
 const ALL: Array<[string, string]> = [
   ['dry-run', liveCode], ['contract lib', contractCode], ['prompt lib', promptCode],
 ]
@@ -1514,6 +1517,216 @@ const SAMPLE_COMMENTS = ['저도 작년에 똑같이 겪었어요. 큰 병원으
   if (offenders.length) bad('HTTP_529 재시도 · 종결 불변', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('HTTP_529 재시도 · 종결 불변', 'guard',
     `재시도 ${M3_RETRYABLE_ERROR_CODES.length}종(529 포함) · 종결 ${M3_TERMINAL_SKIP_CODES.length}종 · 겹침 0 · JSON_PARSE 는 캐시 재시도 · 가드 불변`)
+}
+
+// ── ㊲ export 에 유료 · write 경로가 없다 ────────────────
+//    🔴 export 는 "읽어서 파일로 쓴다" 가 전부다. 그 밖의 능력이 생기면 안 된다.
+{
+  const offenders: string[] = []
+
+  // provider · LLM · 유료 플래그 — 존재 자체가 위반이다
+  if (/voice-m3-provider/.test(exportCode)) offenders.push('🔴 provider 를 import 한다')
+  if (/callProvider|anthropic|openai|api\.anthropic|api\.openai/i.test(exportCode)) offenders.push('🔴 LLM 호출 흔적')
+  for (const flag of ['apply', 'confirm-paid-call']) {
+    if (new RegExp(`includes\\(['\`]--${flag}|--${flag}=`).test(exportCode)) offenders.push(`🔴 ${flag} 플래그를 받는다`)
+  }
+  // 🔴 DB write — 메서드 호출만 잡는다(문자열 · 주석 아님)
+  for (const m of ['create', 'createMany', 'update', 'updateMany', 'upsert', 'delete', 'deleteMany', 'executeRaw']) {
+    if (new RegExp(`prisma\\.[A-Za-z0-9_]+\\.${m}\\(`).test(exportCode)) offenders.push(`🔴 prisma ${m} 호출`)
+  }
+  // 우나어 DB 는 유출 재검사에만 — 쓰기 SQL 이 있으면 안 된다
+  if (/unao\.query\(\s*['"`]\s*(INSERT|UPDATE|DELETE)/i.test(exportCode)) offenders.push('🔴 우나어 DB 에 쓰기 SQL')
+
+  // 컬럼 화이트리스트에 금지 컬럼이 섞였는가
+  const cols = /const SIGNAL_COLUMNS = \[([\s\S]*?)\] as const/.exec(exportCode)?.[1] ?? ''
+  const skCols = /const SKIPPED_COLUMNS = \[([\s\S]*?)\] as const/.exec(exportCode)?.[1] ?? ''
+  if (cols === '' || skCols === '') offenders.push('컬럼 화이트리스트를 찾을 수 없다')
+  for (const key of ['sourceUrl', 'content', 'topComments', 'errorMessage', 'cacheKey', 'contentHash', 'legacyLabels', 'authorHash', 'title']) {
+    if (new RegExp(`['"\`]${key}['"\`]`).test(cols)) offenders.push(`🔴 signals 컬럼에 ${key}`)
+    if (new RegExp(`['"\`]${key}['"\`]`).test(skCols)) offenders.push(`🔴 skipped 컬럼에 ${key}`)
+  }
+  // select 절에도 금지 컬럼이 없어야 한다
+  for (const key of ['sourceUrl', 'errorMessage', 'legacyLabels', 'authorHash']) {
+    if (new RegExp(`${key}:\\s*true`).test(exportCode)) offenders.push(`🔴 select 에 ${key}: true`)
+  }
+
+  if (offenders.length) bad('export 유료 · write 경로 0', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('export 유료 · write 경로 0', 'guard',
+    'provider import 0 · LLM 0 · 유료 플래그 0 · prisma write 0 · 금지 컬럼 0')
+}
+
+// ── ㊳ export 는 유출 검사를 통과해야만 파일을 쓴다 ──────
+//    🔴 "검사한다" 가 아니라 **"걸리면 안 쓴다"** 를 검사한다.
+//       위반 행만 빼고 내보내면 통과한 export 라는 잘못된 신뢰가 생긴다.
+{
+  const offenders: string[] = []
+
+  if (M3_LEAK_RUN_MIN !== 20) offenders.push(`유출 임계값이 ${M3_LEAK_RUN_MIN}`)
+  if (!/assertNoSourceLeak\(/.test(exportCode)) offenders.push('유출 대조가 없다')
+  /**
+   * 🔴 임계값을 호출부에서 넘기면 완화할 수 있다 — 인자 3개 금지.
+   *    run 은 `assertNoSourceLeak(a, b)` 라 정규식으로 됐지만 export 는 인자 안에
+   *    `String(...)` · `topCommentsToText(...)` 가 들어간다. `[^()]*` 는 거기서 끊긴다.
+   *    **괄호 깊이를 세서 최상위 콤마만 센다.**
+   */
+  const topLevelArgCount = (code: string, at: number): number => {
+    let depth = 0
+    let commas = 0
+    for (let i = at; i < code.length; i += 1) {
+      const ch = code[i]
+      if (ch === '(' || ch === '[' || ch === '{') depth += 1
+      else if (ch === ')' || ch === ']' || ch === '}') {
+        depth -= 1
+        if (depth === 0) break
+      } else if (ch === ',' && depth === 1) commas += 1
+    }
+    return commas + 1
+  }
+  for (let i = exportCode.indexOf('assertNoSourceLeak('); i >= 0; i = exportCode.indexOf('assertNoSourceLeak(', i + 1)) {
+    const args = topLevelArgCount(exportCode, i + 'assertNoSourceLeak'.length)
+    if (args > 2) offenders.push(`유출 임계값을 호출부에서 넘긴다 (인자 ${args}개)`)
+  }
+  if (!/M3_FORBIDDEN_ADDRESS_TERMS\.some/.test(exportCode)) offenders.push('금지 호칭 대조가 없다')
+
+  // 🔴 위반 시 파일을 쓰지 않고 빠져나가는가 — writeFileSync 보다 먼저 return 이 있어야 한다
+  const guardAt = exportCode.search(/if \(leaked\.length > 0 \|\| forbidden\.length > 0\)/)
+  const firstWrite = exportCode.search(/writeFileSync\(/)
+  if (guardAt < 0) offenders.push('유출 시 중단 분기가 없다')
+  else if (firstWrite >= 0 && guardAt > firstWrite) offenders.push('🔴 파일을 먼저 쓰고 나중에 검사한다')
+  if (!/process\.exitCode = 1[\s\S]{0,80}return/.test(exportCode.slice(Math.max(0, guardAt)))) {
+    offenders.push('유출 시 exit 1 로 끝내지 않는다')
+  }
+  // terminal skip 은 output null 이어야 한다
+  if (!/skipWithOutput/.test(exportCode)) offenders.push('terminal skip output null 검사가 없다')
+
+  if (offenders.length) bad('export 유출 가드 · 중단', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('export 유출 가드 · 중단', 'guard',
+    `${M3_LEAK_RUN_MIN}자 전수 대조 · 금지 호칭 대조 · 1건이라도 걸리면 파일 생성 0 · skip output null 검사`)
+}
+
+// ── ㊴ export 산출물은 tmp/ 밖으로 나가지 않는다 ─────────
+{
+  const offenders: string[] = []
+
+  if (!/join\(HERE, '\.\.', 'tmp', 'voice-m3-export'\)/.test(exportCode)) offenders.push('출력 경로가 tmp/ 하위가 아니다')
+  // 🔴 .gitignore 가 tmp/ 를 덮고 있어야 산출물이 커밋되지 않는다
+  const gitignore = readFileSync(join(HERE, '..', '.gitignore'), 'utf-8')
+  if (!/^tmp\/$/m.test(gitignore)) offenders.push('🔴 .gitignore 에 tmp/ 가 없다 — export 산출물이 커밋된다')
+  // CSV 는 BOM, JSONL 은 BOM 없음 (설계 §8-④ 확정)
+  if (!/const BOM = /.test(exportCode)) offenders.push('BOM 상수가 없다')
+  // 🔴 CSV 만 BOM — 직렬화는 lib 에 있고 BOM 은 호출부가 넘긴다
+  const csvSrc = stripComments(readFileSync(join(HERE, 'lib/voice-m3-csv.mts'), 'utf-8'))
+  if (!/return bom\s*\+ \[headers\.join/.test(csvSrc)) offenders.push('CSV 에 BOM 이 붙지 않는다')
+  if (!/toCsv\(SIGNAL_COLUMNS, signalRows, BOM\)/.test(exportCode)) offenders.push('signals.csv 에 BOM 을 넘기지 않는다')
+  if (!/toCsv\(SKIPPED_COLUMNS, skippedRows, BOM\)/.test(exportCode)) offenders.push('skipped.csv 에 BOM 을 넘기지 않는다')
+  if (/write\('signals\.jsonl', BOM/.test(exportCode)) offenders.push('🔴 JSONL 에 BOM 이 붙는다')
+  if (/JSON\.stringify\(manifest[\s\S]{0,40}BOM/.test(exportCode)) offenders.push('🔴 manifest 에 BOM 이 붙는다')
+  // manifest 에 sha256 이 남는가
+  if (!/sha256:/.test(exportCode)) offenders.push('manifest 에 sha256 이 없다')
+  // 생성 후 금지 문자열 재검사가 있는가
+  if (!/FORBIDDEN_EXPORT_KEYS/.test(exportCode)) offenders.push('생성 후 금지 컬럼 재검사가 없다')
+
+  if (offenders.length) bad('export 산출물 격리', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('export 산출물 격리', 'guard',
+    'tmp/voice-m3-export/ 하위 · .gitignore 커버 · CSV BOM · JSONL/manifest BOM 없음 · sha256 · 생성 후 재검사')
+}
+
+// ── ㊵ export 대상은 exact version 으로 좁힌다 ───────────
+//    🔴 model 만으로 거르면 같은 haiku 의 **다른 분석**이 한 CSV 에 섞인다.
+//       섞인 줄 모르고 평균을 내면 그 수는 아무것도 뜻하지 않는다.
+{
+  const offenders: string[] = []
+
+  // Cache 조회 where 절 추출 — 버전 4종 + method 가 전부 있어야 한다
+  const cacheWhere = /voiceM3Cache\.findMany\(\{\s*where:\s*\{([\s\S]*?)\}/.exec(exportCode)?.[1] ?? ''
+  if (cacheWhere === '') offenders.push('Cache 조회 where 절을 찾을 수 없다')
+  for (const [field, constant] of [
+    ['model', 'M3_ANALYSIS_MODEL'], ['taskVersion', 'M3_TASK_VERSION'],
+    ['promptVersion', 'M3_PROMPT_VERSION'], ['outputSchemaVersion', 'M3_OUTPUT_SCHEMA_VERSION'],
+  ]) {
+    if (!new RegExp(`${field}:\\s*${constant}`).test(cacheWhere)) offenders.push(`🔴 Cache where 에 ${field} 없음`)
+  }
+  if (!/method:\s*'llm'/.test(cacheWhere)) offenders.push('Cache where 에 method 없음')
+
+  // CostEvent 집계도 같은 실행만 — 버전은 Run 이 들고 있으므로 relation 을 타야 한다
+  const evWhere = /voiceM3CostEvent\.aggregate\(\{\s*where:\s*\{([\s\S]*?)\n      \},/.exec(exportCode)?.[1] ?? ''
+  if (evWhere === '') offenders.push('CostEvent 집계 where 절을 찾을 수 없다')
+  if (!/run:\s*\{/.test(evWhere)) offenders.push('🔴 CostEvent 가 Run relation 을 타지 않는다 — model-only 집계')
+  for (const [field, constant] of [
+    ['taskVersion', 'M3_TASK_VERSION'], ['promptVersion', 'M3_PROMPT_VERSION'],
+    ['outputSchemaVersion', 'M3_OUTPUT_SCHEMA_VERSION'],
+  ]) {
+    if (!new RegExp(`${field}:\\s*${constant}`).test(evWhere)) offenders.push(`🔴 CostEvent run 에 ${field} 없음`)
+  }
+
+  if (offenders.length) bad('export 대상 exact version', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('export 대상 exact version', 'guard',
+    `Cache where = model+task+prompt+schema+method · CostEvent 는 run relation 경유 · 다른 버전 혼입 0`)
+}
+
+// ── ㊶ CSV formula injection 중립화 ─────────────────────
+//    🔴 notes 는 LLM 출력이다. 우리가 쓴 문장이 아닌 것을 사람이 Excel 로 연다.
+//       `=` `+` `-` `@` 로 시작하면 수식으로 실행된다.
+{
+  const offenders: string[] = []
+
+  const csvLib = stripComments(readFileSync(join(HERE, 'lib/voice-m3-csv.mts'), 'utf-8'))
+  if (!/neutralizeFormula/.test(csvLib)) offenders.push('🔴 formula 중립화 함수가 없다')
+  if (!/toCsv/.test(exportCode)) offenders.push('export 가 toCsv 를 쓰지 않는다')
+  // 🔴 검사 대상 로직이 실행 진입점과 같은 파일에 있으면 fixture 가 작업을 일으킨다
+  if (/main\(\)/.test(csvLib)) offenders.push('🔴 csv lib 에 실행 진입점이 있다')
+  if (!/const s = neutralizeFormula\(raw\)/.test(csvLib)) offenders.push('csvCell 이 중립화를 거치지 않는다')
+  // RFC4180 quoting 이 살아 있어야 한다
+  if (!/s\.replace\(\/"\/g, '""'\)/.test(csvLib)) offenders.push('🔴 RFC4180 quoting 이 사라졌다')
+  // 숫자는 중립화 대상이 아니다 — 음수가 텍스트로 변질되면 정렬 · 합계가 깨진다
+  if (!/typeof v === 'number' \|\| typeof v === 'boolean'/.test(csvLib)) {
+    offenders.push('숫자 · 불리언을 중립화에서 빼지 않는다')
+  }
+
+  // 🔴 실제로 막는지 — 위험 입력을 넣어 본다
+  const cases: Array<[string, boolean]> = [
+    ['=HYPERLINK("http://evil","click")', true],
+    ['+cmd|\' /C calc\'!A0', true],
+    ['-1+2', true],
+    ['@SUM(1+1)', true],
+    ['  =SUM(A1)', true],        // 선행 공백으로 회피 시도
+    ['\t=1+1', true],            // 탭 회피 시도
+    ['자연스러운 문장이다', false],
+    ['평점 85점 = 높음', false],  // 중간의 = 는 안전
+    ['', false],
+  ]
+  for (const [input, shouldNeutralize] of cases) {
+    const out = neutralizeFormula(input)
+    const did = out.startsWith("'") && out !== input
+    if (did !== shouldNeutralize) {
+      offenders.push(`🔴 "${input.slice(0, 12)}" → ${did ? '중립화됨' : '통과'} (기대 ${shouldNeutralize ? '중립화' : '통과'})`)
+    }
+    // 🔴 원본을 바꾸지 않는다 — 앞에 덧대기만 한다
+    if (did && out.slice(1) !== input) offenders.push(`🔴 "${input.slice(0, 12)}" 원본이 변형됐다`)
+  }
+
+  if (offenders.length) bad('CSV formula injection 방어', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('CSV formula injection 방어', 'guard',
+    `= + - @ · 선행 공백 · 탭 전부 중립화 · 원본 불변 · 숫자 제외 · RFC4180 유지 · 케이스 ${cases.length}종`)
+}
+
+// ── ㊷ manifest 도 금지 문자열 검사를 받는다 ─────────────
+//    🔴 manifest 는 columns 배열을 담는다. 화이트리스트가 무너지면 여기 먼저 드러난다.
+{
+  const offenders: string[] = []
+
+  if (!/files\['manifest\.json'\] = manifestPath/.test(exportCode)) {
+    offenders.push('🔴 manifest 가 금지 문자열 검사 대상(files)에 들어가지 않는다')
+  }
+  // 검사 루프보다 먼저 등록돼야 한다
+  const reg = exportCode.indexOf("files['manifest.json'] = manifestPath")
+  const scan = exportCode.indexOf('for (const [name, p] of Object.entries(files))')
+  if (reg >= 0 && scan >= 0 && reg > scan) offenders.push('🔴 manifest 등록이 검사 루프보다 뒤에 있다')
+  if (!/FORBIDDEN_EXPORT_KEYS/.test(exportCode)) offenders.push('금지 키 목록이 없다')
+
+  if (offenders.length) bad('manifest 금지 문자열 검사', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('manifest 금지 문자열 검사', 'guard',
+    'manifest 도 files 에 등록돼 post-write scan 대상 · 등록이 검사보다 앞')
 }
 
 // ── 출력 ────────────────────────────────────────────────
