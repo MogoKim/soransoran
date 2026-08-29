@@ -2200,7 +2200,6 @@ const MAGAZINE_ARTICLE_RECORD = {
     publishedAt: '2026-09-07',
       status: 'SCHEDULED',
       publishAt: '2026-09-07T10:30:00+09:00',
-    medical: true,
 
     // heroImage 는 이미지 회수 후 채운다
 
