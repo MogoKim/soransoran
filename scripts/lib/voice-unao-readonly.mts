@@ -286,6 +286,74 @@ export function sanitizeLegacyLabels(
  *    댓글 인용을 잡으려면 댓글 원문을 봐야 한다 —
  *    그래서 이 함수의 결과가 어디로 가는지가 중요하다(`toSourceRow` 안에서 끝난다).
  */
+/**
+ * 댓글을 **필드별로 분리해서** 돌려준다 — 학습 추출 · 리뷰 표시 전용.
+ *
+ * 🔴 `topCommentsToText()` 와 용도가 다르다. 그쪽을 고치지 않고 이 함수를 새로 둔 이유:
+ *    - `topCommentsToText()` 는 **유출 대조용**이다. 객체의 모든 문자열을 이어붙여
+ *      대조 범위를 넓게 잡는다. author 가 섞여도 무해하고 **오히려 안전하다**
+ *      (실측: author 포함 시 대조 문자열이 8.8% 넓어진다 — 유출을 놓칠 위험이 준다).
+ *    - 반면 **학습 추출**에서 author 가 섞이면 닉네임을 문체로 배운다.
+ *      리뷰 화면이 `topCommentsToText()` 를 그대로 쓰는 바람에 닉네임이 댓글처럼 보였다.
+ *      함수의 결함이 아니라 **용도를 잘못 재사용한 것**이었다.
+ *
+ * 🔴 구조는 실측으로 확인했다 (댓글 항목 154,872개 전수)
+ *    author · content · replies · likeCount 네 키가 **100% 존재**하고 빈값이 없다.
+ *    author 길이 중앙 5자(닉네임) · content 길이 중앙 36자(본문).
+ *    likeCount 는 **전부 0** 이라 쓸 수 없다(수집되지 않았다).
+ *    replies 는 author · content 만 가진 같은 구조다.
+ */
+export type ParsedComment = {
+  /** 🔴 닉네임. **학습에 쓰지 않는다.** 리뷰 화면에서만 분리 표시한다 */
+  author: string
+  /** 댓글 본문. 반응 · 정서 참고 대상 */
+  content: string
+  /** 대댓글. 🔴 1차 voice/style 학습에서는 보류한다 */
+  replies: Array<{ author: string; content: string }>
+}
+
+export function parseTopComments(raw: unknown): ParsedComment[] {
+  if (!Array.isArray(raw)) return []
+  const out: ParsedComment[] = []
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue
+    const o = item as Record<string, unknown>
+    const replies: Array<{ author: string; content: string }> = []
+    if (Array.isArray(o.replies)) {
+      for (const r of o.replies) {
+        if (r === null || typeof r !== 'object') continue
+        const ro = r as Record<string, unknown>
+        replies.push({ author: String(ro.author ?? ''), content: String(ro.content ?? '') })
+      }
+    }
+    out.push({ author: String(o.author ?? ''), content: String(o.content ?? ''), replies })
+  }
+  return out
+}
+
+/**
+ * 학습에 넣을 댓글 본문만 뽑는다.
+ *
+ * 🔴 **`parseTopComments()` 를 부르지 않는다.** 그쪽은 author · replies 를 파싱하므로,
+ *    결과에서 빼더라도 **닉네임이 메모리에 물질화된다.**
+ *    "학습 경로는 author 를 읽지 않는다" 를 결과가 아니라 **접근 수준에서** 지키려면
+ *    raw 에서 `content` 키 하나만 직접 읽어야 한다.
+ *
+ * 🔴 읽지 않는 것 — `author` · `replies`(1차 보류 정책) · `likeCount`(전부 0이라 무의미).
+ *    fixture 가 이 함수 본문에 그 이름들이 등장하는지, parseTopComments 를 부르는지 검사한다.
+ */
+export function commentBodiesForLearning(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue
+    // 🔴 content 키 하나만 읽는다
+    const body = (item as Record<string, unknown>).content
+    if (typeof body === 'string' && body.trim() !== '') out.push(body)
+  }
+  return out
+}
+
 export function topCommentsToText(raw: unknown): string {
   if (!Array.isArray(raw)) return ''
   const out: string[] = []
