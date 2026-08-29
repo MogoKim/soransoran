@@ -18,6 +18,13 @@
  *    대신 _runs/{date}/selected/{slug}/*.todo.md 에 초안 재료만 놓는다.
  *    정본은 세션이 TODO 를 채운 뒤에 만든다.
  *
+ * 🔴 HIGH 도 초안까지는 만든다 (전략 §5.1)
+ *    HIGH 의 정의는 "만들지 않는다" 가 아니라 "창업자가 본문 전문을 읽는다" 이다.
+ *    초안을 만들지 않으면 검수할 것이 없어 큐가 그 자리에서 멈춘다.
+ *    그래서 레인을 둘로 나눈다 — auto(LOW·MEDIUM, produceCount) 와
+ *    review(HIGH, reviewCount). 예산이 갈려 있어 HIGH 가 LOW·MEDIUM 을 밀어내지 않는다.
+ *    자동 등록·자동 공개는 magazine-register.mjs 의 AUTO_RISK 가 그대로 막는다.
+ *
  * 사용법
  *   node scripts/magazine-producer-plan.mjs              실행 (파일 생성)
  *   node scripts/magazine-producer-plan.mjs --dry-run    선정만 하고 아무것도 쓰지 않는다
@@ -43,6 +50,20 @@ function produceCountFor(inventoryDays) {
   return 5
 }
 
+/**
+ * HIGH 는 하루 1건까지만 만든다.
+ *
+ * 전략 §5.1 이 HIGH 검수를 **본문 전문 10~15분**으로 잡았다. 하루 2건이면
+ * 검수만 30분이고, 밀리기 시작하면 창업자가 전문을 읽지 않게 된다 —
+ * 그 순간 HIGH 등급은 이름만 남는다.
+ *
+ * 재고가 목표(14일) 이상이면 0 이다. HIGH 라고 재고 정책을 비켜가지 않는다 —
+ * 만들 이유가 없을 때 검수 대기만 쌓으면 그것도 병목이다.
+ */
+function reviewCountFor(produceCount) {
+  return produceCount > 0 ? 1 : 0
+}
+
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000
 function kstDate(ms) {
   return new Date(ms + KST_OFFSET_MS).toISOString().slice(0, 10)
@@ -53,8 +74,24 @@ function kstDate(ms) {
 /**
  * 오늘 만들 항목을 고른다.
  * 제외 사유를 전건 기록한다 — "producer 가 일을 안 한다" 와 "뽑을 게 없다" 는 다르다.
+ *
+ * 🔴 레인이 둘이다.
+ *
+ *    auto    LOW·MEDIUM 이면서 autoEligible=true. produceCount 만큼 뽑는다.
+ *    review  riskLevel=HIGH. reviewCount 만큼 따로 뽑는다.
+ *
+ *    HIGH 를 auto 레인에 섞지 않는 이유는 예산 때문이다. 큐 정렬이 day 순이라
+ *    HIGH 가 앞자리(day 10·18·22)를 차지하면 produceCount 를 다 먹고
+ *    LOW·MEDIUM 이 밀려난다 — 고치려던 병목이 옆으로 옮겨갈 뿐이다.
+ *    auto 레인을 **먼저** 기존 로직 그대로 돌리고 review 레인을 뒤에 붙인다.
+ *
+ * 🔴 HIGH 를 skip 하지 않는 이유 (전략 §5.1)
+ *    HIGH 의 정의는 "만들지 않는다" 가 아니라 "창업자가 본문 전문을 읽는다" 이다.
+ *    초안을 만들지 않으면 읽을 것이 없어 큐가 그 자리에서 영구히 막힌다.
+ *    자동화되는 것은 **초안까지**이고, 등록은 magazine-register.mjs 의
+ *    AUTO_RISK(LOW·MEDIUM) 가 그대로 막는다.
  */
-export function selectItems({ queue, articles, today, produceCount, draftExists }) {
+export function selectItems({ queue, articles, today, produceCount, reviewCount = 0, draftExists }) {
   const skipped = []
   const skip = (item, reason) => skipped.push({ day: item.day, slug: item.slug, reason })
 
@@ -69,9 +106,14 @@ export function selectItems({ queue, articles, today, produceCount, draftExists 
   }
 
   const eligible = []
+  const reviewEligible = []
   for (const item of queue) {
-    if (!item.autoEligible) {
-      skip(item, item.riskLevel === 'HIGH' ? 'HIGH — 창업자 검수 대상' : 'autoEligible=false — 민감 주제')
+    // HIGH 는 autoEligible 과 무관하게 review 레인으로 간다.
+    // 반대로 HIGH 가 아니면서 autoEligible=false 인 항목(민감 주제)은 예전처럼 뺀다 —
+    // 그쪽은 "초안이 없어서" 막힌 게 아니라 주제 자체를 사람이 정해야 하는 자리다.
+    const needsFullReview = item.riskLevel === 'HIGH'
+    if (!item.autoEligible && !needsFullReview) {
+      skip(item, 'autoEligible=false — 민감 주제')
       continue
     }
     if (takenSlugs.has(item.slug)) {
@@ -94,7 +136,7 @@ export function selectItems({ queue, articles, today, produceCount, draftExists 
         continue
       }
     }
-    eligible.push(item)
+    ;(needsFullReview ? reviewEligible : eligible).push(item)
   }
 
   // 정렬 — SEASONAL 은 마감이 가까운 순. day 는 큐 고유번호일 뿐 우선순위가 아니다.
@@ -102,7 +144,7 @@ export function selectItems({ queue, articles, today, produceCount, draftExists 
     i.publishWindow
       ? Math.round((new Date(i.publishWindow.before + 'T00:00:00+09:00') - new Date(today + 'T00:00:00+09:00')) / 86400000)
       : Number.POSITIVE_INFINITY
-  eligible.sort((a, b) => {
+  const byUrgency = (a, b) => {
     const sa = a.contentType === 'SEASONAL' ? 0 : 1
     const sb = b.contentType === 'SEASONAL' ? 0 : 1
     if (sa !== sb) return sa - sb
@@ -111,7 +153,9 @@ export function selectItems({ queue, articles, today, produceCount, draftExists 
       if (d !== 0) return d
     }
     return a.day - b.day
-  })
+  }
+  eligible.sort(byUrgency)
+  reviewEligible.sort(byUrgency)
 
   // 같은 시리즈는 하루 1건. 5편을 3편보다 먼저 만들면 시리즈가 깨진다.
   const selected = []
@@ -128,10 +172,33 @@ export function selectItems({ queue, articles, today, produceCount, draftExists 
     if (item.seriesId) seriesUsed.add(item.seriesId)
     selected.push(item)
   }
-  return { selected, skipped }
+
+  // review 레인은 auto 레인이 끝난 뒤에 붙는다. 순서를 바꾸면 seriesUsed 를
+  // HIGH 가 먼저 선점해 LOW·MEDIUM 이 밀린다 — auto 레인 결과가 달라진다.
+  const review = []
+  for (const item of reviewEligible) {
+    if (review.length >= reviewCount) {
+      skip(item, 'HIGH 는 하루 ' + reviewCount + '건까지 — 다음 회차로 넘긴다')
+      continue
+    }
+    if (item.seriesId && seriesUsed.has(item.seriesId)) {
+      skip(item, item.seriesId + ' 는 오늘 이미 1건 선정됐다')
+      continue
+    }
+    if (item.seriesId) seriesUsed.add(item.seriesId)
+    review.push(item)
+  }
+  return { selected, review, skipped }
 }
 
 // ── 작업 패키지 ────────────────────────────────────────────
+
+/** 전략 §5.1 의 "목표 소요". FULL_REVIEW 는 본문 전문을 읽는 시간이다 */
+const REVIEW_BUDGET = {
+  SUMMARY_ONLY: '30초',
+  RISK_SENTENCES: '2분',
+  FULL_REVIEW: '10~15분',
+}
 
 const BOARD_LABEL = {
   '/community/menopause': '갱년기톡에 이야기 남기기',
@@ -141,6 +208,26 @@ const BOARD_LABEL = {
 const TODO = (what) => '<!-- TODO(세션): ' + what + ' -->'
 
 /**
+ * HIGH 패키지 머리에 붙는 표지.
+ *
+ * 이 문구가 파일에 남아 있어야 세션·창업자 어느 쪽이 열어도 등급을 안다.
+ * run.json 의 needsFullReview 만으로는 파일을 직접 연 사람이 알 수 없다.
+ */
+function fullReviewBanner(item) {
+  if (item.riskLevel !== 'HIGH') return ''
+  return `> 🔴 **창업자 전문 검수 필요 (riskLevel: HIGH)**
+>
+> 이 주제는 초안까지만 자동으로 만든다. 전략 §5.1 이 HIGH 검수를 **본문 전문**으로
+> 정했고, §5.2 는 등급과 무관하게 전문 검수를 강제하는 조건까지 두었다.
+> \`magazine-register.mjs\` 가 HIGH 자동 등록을 막으므로 이 글은 창업자가
+> 본문을 읽고 승인하기 전에는 \`articles.ts\` 로 넘어가지 않는다.
+>
+> 큐가 지정한 금지선: ${item.notes}
+
+`
+}
+
+/**
  * ChatGPT 에 바로 넣을 수 있는 완성 brief 가 아니다.
  * 고정 규칙과 큐에서 나온 사실만 채우고, 해석이 필요한 자리는 TODO 로 비운다.
  */
@@ -148,7 +235,7 @@ function briefTodo(item) {
   const label = BOARD_LABEL[item.ctaBoard] ?? '이야기 남기기'
   return `# [작업 패키지] 원고 지시서 초안 — ${item.title}
 
-> ⚠️ **이것은 완성된 brief 가 아니다.** ChatGPT 에 그대로 넣지 마라.
+${fullReviewBanner(item)}> ⚠️ **이것은 완성된 brief 가 아니다.** ChatGPT 에 그대로 넣지 마라.
 > producer 가 고정 규칙과 큐 사실만 채운 초안이다.
 > 아래 TODO 를 세션이 채운 뒤 \`drafts/magazine/${item.slug}/brief.md\` 로 옮긴다.
 > producer 는 원고도, 구조도, 위험 문장도 만들지 않는다 (전략 §13.1).
@@ -267,7 +354,7 @@ function reviewTodo(item) {
   const money = item.cluster === 'money-work'
   return `# [작업 패키지] 검수 데이터 초안 — ${item.title}
 
-> ⚠️ **이것은 review.ts 가 아니다.** 패킷 생성 대상이 아니다.
+${fullReviewBanner(item)}> ⚠️ **이것은 review.ts 가 아니다.** 패킷 생성 대상이 아니다.
 > 세션이 TODO 를 채운 뒤 \`drafts/magazine/${item.slug}/review.ts\` 로 만든다.
 > riskSentences 는 **원고가 나온 뒤 실제 본문과 대조해 확정**한다.
 
@@ -294,7 +381,7 @@ ${TODO('원고가 무엇을 어떤 순서로 다루는지 5줄. 원고를 받은
 ${TODO('brief 의 "반드시 그대로 넣을 문장 5개" 와 동일해야 한다. 원고 본문과 문자열이 정확히 일치해야 packet 이 통과한다')}
 
 ### factsToVerify
-${TODO('창업자가 ' + (item.reviewMode === 'SUMMARY_ONLY' ? '30초' : '2분') + ' 안에 판단할 확인 항목 4~5개')}
+${TODO('창업자가 ' + REVIEW_BUDGET[item.reviewMode] + ' 안에 판단할 확인 항목 4~5개')}
 
 ### notes
 ${TODO('이 글에서 특히 볼 지점. 시리즈 톤 일관성, 계절 창 등')}
@@ -327,7 +414,14 @@ function help() {
   node scripts/magazine-producer-plan.mjs --now <ISO>  기준 시각 고정 (테스트)
 
 이 스크립트는 원고를 쓰지 않는다. LLM 을 호출하지 않는다.
-brief.md / review.ts 정본을 만들지 않는다 — _runs 에 작업 패키지만 놓는다.`)
+brief.md / review.ts 정본을 만들지 않는다 — _runs 에 작업 패키지만 놓는다.
+
+레인이 둘이다.
+  auto    LOW·MEDIUM · autoEligible=true      하루 produceCount 건
+  review  HIGH                                 하루 reviewCount 건 (초안까지만)
+
+HIGH 는 초안을 만들되 창업자가 본문 전문을 읽기 전에는 등록되지 않는다.
+등록 차단은 magazine-register.mjs 의 AUTO_RISK 가 한다 — 여기서 풀지 않는다.`)
 }
 
 function main() {
@@ -387,8 +481,18 @@ function main() {
   const inventory = calculateInventory(now)
   const produceCount = produceCountFor(inventory.inventoryDays)
 
+  const reviewCount = reviewCountFor(produceCount)
+
   const draftExists = (slug) => existsSync(join(DRAFTS_DIR, slug))
-  const { selected, skipped } = selectItems({ queue, articles, today, produceCount, draftExists })
+  const { selected, review, skipped } = selectItems({
+    queue, articles, today, produceCount, reviewCount, draftExists,
+  })
+
+  // 패키지 생성·run.json 은 두 레인을 한 목록으로 다룬다.
+  // 하류(notify · webui-runner · batch-qa)가 run.selected 와 _runs/{date}/selected/
+  // 하나만 보기 때문이다. 등급은 needsFullReview 로 구분한다 —
+  // 디렉터리를 나누면 HIGH 초안이 기존 도구에 아예 안 보여 병목이 그대로 남는다.
+  const all = [...selected, ...review]
 
   const run = {
     date: today,
@@ -398,11 +502,14 @@ function main() {
     dryRun,
     inventoryDays: inventory.inventoryDays,
     produceCount,
+    reviewCount,
     counts: inventory.counts,
-    selected: selected.map((i) => ({
+    selected: all.map((i) => ({
       day: i.day, slug: i.slug, title: i.title,
       contentType: i.contentType, riskLevel: i.riskLevel,
       publishWindow: i.publishWindow ?? null,
+      /** true 면 창업자가 본문 전문을 읽기 전까지 등록되지 않는다 */
+      needsFullReview: i.riskLevel === 'HIGH',
       packageWritten: false,
     })),
     skipped,
@@ -412,7 +519,7 @@ function main() {
   if (!dryRun) {
     mkdirSync(runDir, { recursive: true })
     writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: run.startedAt }) + '\n')
-    for (const item of selected) {
+    for (const item of all) {
       const dir = join(runDir, 'selected', item.slug)
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, 'brief.todo.md'), briefTodo(item))
@@ -438,7 +545,11 @@ function report(run) {
   const L = []
   L.push(`# producer 준비 리포트 — ${run.date}${run.dryRun ? ' (dry-run)' : ''}`)
   L.push('')
-  L.push(`재고 ${run.inventoryDays}일 · 오늘 생산 ${run.produceCount}건 · 선정 ${run.selected.length}건`)
+  const highs = run.selected.filter((s) => s.needsFullReview).length
+  L.push(
+    `재고 ${run.inventoryDays}일 · 오늘 생산 ${run.produceCount}건` +
+      ` · HIGH ${run.reviewCount ?? 0}건 · 선정 ${run.selected.length}건`,
+  )
   L.push(`매거진 공개 ${run.counts.live} · 예약 ${run.counts.scheduled} · 차단 ${run.counts.blocked}`)
   L.push('')
   if (run.produceCount === 0) {
@@ -452,9 +563,17 @@ function report(run) {
   } else {
     for (const s of run.selected) {
       const win = s.publishWindow ? ` · 창 ${s.publishWindow.after}~${s.publishWindow.before}` : ''
+      const gate = s.needsFullReview ? ' · 🔴 창업자 전문 검수 필요 (자동 등록 안 됨)' : ''
       L.push(`- day ${s.day} \`${s.slug}\` — ${s.title}`)
-      L.push(`  ${s.contentType} · ${s.riskLevel}${win}${s.packageWritten ? '' : ' · 패키지 미생성'}`)
+      L.push(`  ${s.contentType} · ${s.riskLevel}${win}${s.packageWritten ? '' : ' · 패키지 미생성'}${gate}`)
     }
+  }
+  if (highs) {
+    L.push('')
+    L.push(
+      `> HIGH ${highs}건은 초안까지만 만든다. 창업자가 본문 전문을 읽고 승인하기 전에는`,
+    )
+    L.push('> `magazine-register.mjs` 가 `articles.ts` 등록을 막는다.')
   }
   L.push('')
   L.push('## 제외 (상위 12건)')

@@ -529,6 +529,49 @@ credentials·secret 을 코드·repo 에 두지 않는다가 자동으로 지켜
 **LOW/MEDIUM 자동 공개는 "무검수 발행"이 아니다.**
 자동 QA 18항목을 통과하고, 위험 문장이 원고와 대조되고, 캘린더가 사람 승인을 받은 뒤의 공개다.
 
+### 13.6 producer 의 두 레인 — HIGH 는 초안까지 만든다
+
+§13.5 가 막는 것은 **자동 공개**이지 초안 생성이 아니다. 매거진 전략 §5.1 도
+HIGH 를 "만들지 않는다"가 아니라 **"창업자가 본문 전문을 10~15분 읽는다"** 로 정의했다.
+
+그런데 `magazine-producer-plan.mjs` 는 한동안 `autoEligible=false` 인 항목을
+선정 이전에 걸러냈고, HIGH 는 전부 `autoEligible=false` 였다. 결과는 이랬다.
+
+```
+HIGH → 초안 없음 → 검수할 원고 없음 → 큐가 그 자리에서 멈춤
+```
+
+큐 앞자리(day 10 · 18 · 22)가 HIGH 라 뒤 항목까지 함께 밀렸다.
+**등급 정책이 아니라 파이프라인이 만든 병목이다.** 그래서 레인을 둘로 나눈다.
+
+| 레인 | 대상 | 하루 상한 | 어디까지 자동인가 |
+|---|---|---|---|
+| **auto** | LOW · MEDIUM 이면서 `autoEligible=true` | `produceCount` (재고에 따라 0·3·5) | 초안 → QA → **등록·공개까지** |
+| **review** | `riskLevel: HIGH` (`autoEligible` 무관) | `reviewCount` = 1 (재고가 목표 이상이면 0) | **초안까지.** 등록은 창업자 승인 뒤 |
+
+**auto 레인을 먼저 채우고 review 레인을 뒤에 붙인다.** 순서를 바꾸면 day 번호가 앞선
+HIGH 가 `produceCount` 와 시리즈 슬롯을 선점해 LOW·MEDIUM 이 밀린다 —
+병목이 사라지는 게 아니라 옆으로 옮겨간다.
+
+**HIGH 하루 1건**인 이유는 검수 시간이다. 전문 검수가 10~15분이라 2건이면 30분이고,
+밀리기 시작하면 창업자가 전문을 읽지 않게 된다. 그 순간 HIGH 등급은 이름만 남는다.
+
+**멈추는 자리는 등록이다.** `magazine-register.mjs` 의 `AUTO_RISK = {LOW, MEDIUM}` 이
+HIGH 를 `BLOCKED` 로 돌려보낸다. 이 차단은 producer 쪽에서 풀 수 없다.
+
+```
+riskLevel=HIGH — 창업자 검수 대상
+autoEligible=false — 민감 주제
+```
+
+**`autoEligible=false` 이면서 HIGH 가 아닌 항목은 예전처럼 제외한다.**
+그쪽(`clinic-or-wait` · `menopause-supplements-talk`)은 초안이 없어서 막힌 게 아니라
+주제를 다룰지 자체를 사람이 정해야 하는 자리다.
+
+작업 패키지에는 표지가 남는다 — `run.json` 의 `needsFullReview: true`,
+`brief.todo.md` · `review.todo.md` 머리의 **"🔴 창업자 전문 검수 필요"** 블록,
+리포트 선정 줄의 `🔴 창업자 전문 검수 필요 (자동 등록 안 됨)`.
+
 ---
 
 ## 14. 시리즈와 내부링크
