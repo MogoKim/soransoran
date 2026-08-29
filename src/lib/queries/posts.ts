@@ -76,6 +76,29 @@ const POST_LIST_ITEM_SELECT = {
 } as const
 
 /**
+ * 게시판 목록 정렬.
+ *
+ * 🔴 조회수는 여기까지다.
+ *    사람이 스스로 고른 정렬과, 서비스가 대표로 골라 첫 화면에 내미는 순서는 다른 문제다.
+ *    비정규화 카운터(조회수)는 표시와 이 정렬에만 쓰고 승격·추천 점수의 입력에서는 뺀다.
+ *    홈 인기글·베스트가 쓰는 popularity.ts 는 조회수를 모른다 (정본 C-4).
+ */
+export const BOARD_SORTS = ['latest', 'views'] as const
+
+export type BoardSort = (typeof BOARD_SORTS)[number]
+
+/**
+ * 주소창의 sort 값을 정렬로 바꾼다.
+ *
+ * 🔴 모르는 값은 막지 않고 최신순으로 돌린다.
+ *    주소를 손으로 고쳤다고 목록이 비거나 404 가 되면, 고장 난 것으로 보인다.
+ *    기본값이 최신순이므로 되돌아갈 곳이 언제나 있다.
+ */
+export function parseBoardSort(value: string | undefined): BoardSort {
+  return BOARD_SORTS.includes(value as BoardSort) ? (value as BoardSort) : 'latest'
+}
+
+/**
  * 🔴 첫 가입 인사는 이 목록에 넣지 않는다.
  *    새로 온 사람의 인사는 홈에서 환영으로 보여줄 글이지, 게시판을 열어
  *    이야기를 읽으러 온 사람에게 내밀 글이 아니다. 매일 몇 건씩 쌓이면
@@ -90,7 +113,11 @@ const POST_LIST_ITEM_SELECT = {
  *    되지만, 나중에 누가 OR 를 하나 더하는 순간 키가 덮여 조용히 사라진다.
  *    AND 는 그 일이 일어나지 않는다.
  */
-export async function getPostsByBoard(boardType: BoardType, take = 30) {
+export async function getPostsByBoard(
+  boardType: BoardType,
+  sort: BoardSort = 'latest',
+  take = 30,
+) {
   const blockedIds = await getBlockedUserIds()
 
   return prisma.post.findMany({
@@ -101,7 +128,13 @@ export async function getPostsByBoard(boardType: BoardType, take = 30) {
       AND: [EXCLUDE_GREETING],
     },
     select: POST_LIST_SELECT,
-    orderBy: { createdAt: 'desc' },
+    /* 조회순에도 최신순을 보조로 둔다.
+       조회수가 같은 글이 여럿이면 순서가 정해지지 않아, 같은 화면을 다시 열 때마다
+       자리가 바뀌어 보인다. 지금처럼 조회수가 한 자릿수일 때 특히 그렇다. */
+    orderBy:
+      sort === 'views'
+        ? [{ viewCount: 'desc' }, { createdAt: 'desc' }]
+        : { createdAt: 'desc' },
     take,
   })
 }

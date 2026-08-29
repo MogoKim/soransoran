@@ -1,10 +1,11 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import EmptyState from '@/components/layouts/EmptyState'
 import ListHeader from '@/components/ui/list-header'
 import { getBoardBySlug } from '@/lib/board-registry'
-import { getPostsByBoard } from '@/lib/queries/posts'
+import { getPostsByBoard, parseBoardSort } from '@/lib/queries/posts'
 import PostCard from '@/components/features/PostCard'
 import type { BoardType } from '@prisma/client'
 
@@ -33,11 +34,32 @@ export function generateMetadata({ params }: { params: { boardSlug: string } }):
   }
 }
 
-export default async function BoardPage({ params }: { params: { boardSlug: string } }) {
+/**
+ * 정렬 탭.
+ *
+ * 🔴 두 개로 끝낸다. 공감순·댓글순·인기순은 넣지 않는다 —
+ *    고를 것이 늘수록 고르지 않게 되고, 목록의 기본 순서가 무엇인지 흐려진다.
+ *
+ * 🔴 최신순은 쿼리 없는 맨 주소로 돌아간다.
+ *    기본값이 주소에 남지 않아야 링크를 주고받을 때 같은 화면이 열린다.
+ */
+const SORT_TABS = [
+  { key: 'latest', label: '최신순' },
+  { key: 'views', label: '조회순' },
+] as const
+
+export default async function BoardPage({
+  params,
+  searchParams,
+}: {
+  params: { boardSlug: string }
+  searchParams: { sort?: string }
+}) {
   const board = getBoardBySlug(params.boardSlug)
   if (!board || !board.isCommunity) notFound()
 
-  const posts = await getPostsByBoard(board.type as BoardType)
+  const sort = parseBoardSort(searchParams.sort)
+  const posts = await getPostsByBoard(board.type as BoardType, sort)
 
   return (
     <PageShell showWriteFab>
@@ -47,6 +69,35 @@ export default async function BoardPage({ params }: { params: { boardSlug: strin
         {/* 상단 메뉴가 이미 어느 방인지 말한다. 눈에서만 감추고 <h1> 텍스트는 남긴다
             (매거진·베스트는 기본값 그대로 보인다). */}
         <ListHeader board={board} visuallyHidden />
+
+        {/* 🔴 글이 없으면 탭도 없다. 정렬할 것이 없는데 고르게 하면 눌러도 아무 일이 없다.
+               제목이 sr-only 라, 글이 있을 때는 이 줄이 화면의 첫 줄이 된다.
+               -mr-3 은 마지막 탭의 좌우 여백을 되돌린다 — 그래야 '조회순' 의 오른쪽 끝이
+               아래 글 카드의 글자 끝과 같은 선에 선다. */}
+        {posts.length > 0 ? (
+          <nav aria-label="정렬" className="-mr-3 flex items-center justify-end">
+            {SORT_TABS.map((tab) => {
+              const active = tab.key === sort
+              return (
+                <Link
+                  key={tab.key}
+                  href={tab.key === 'latest' ? board.href : `${board.href}?sort=${tab.key}`}
+                  aria-current={active ? 'page' : undefined}
+                  /* 밑줄은 border-b-2 로 항상 자리를 차지한다. 비활성일 때 투명하게 두면
+                     고를 때마다 글자가 위아래로 흔들리지 않는다.
+                     brand 는 글자로는 대비가 모자라 밑줄로만 쓴다 (globals.css §브랜드). */
+                  className={`inline-flex min-h-[52px] shrink-0 items-center whitespace-nowrap border-b-2 px-3 text-sm no-underline transition-colors duration-150 ${
+                    active
+                      ? 'border-brand font-bold text-content-primary'
+                      : 'border-transparent text-content-muted hover:text-content-primary'
+                  }`}
+                >
+                  {tab.label}
+                </Link>
+              )
+            })}
+          </nav>
+        ) : null}
 
         {posts.length === 0 ? (
           <EmptyState
