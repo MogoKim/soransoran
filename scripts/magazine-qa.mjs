@@ -24,7 +24,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute, basename, dirname } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { isPublic, statusLabel, assertGateInSync } from './lib/magazine-gate.mjs'
-import { checkFirstPerson, checkTitleForm } from './lib/magazine-editorial.mjs'
+import { checkFirstPerson, checkTitleForm, checkCareAdvice } from './lib/magazine-editorial.mjs'
 
 const ROOT = process.cwd()
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
@@ -398,6 +398,10 @@ function checkArticle(article, context, report) {
   // 20 · 제목 형태 (M-AUTO-2 · D2)
   const titleForm = checkTitleForm(article.title)
   if (titleForm.level === 'FAIL') report.fail(id, titleForm.reason)
+
+  // 21 · 진료 권고 문장 (M-AUTO-2 · D4-A) — WARN 이다. 발행분 1건이 걸려 FAIL 로 두지 않는다
+  const care = checkCareAdvice(fullText, article.medical)
+  if (care.level === 'WARN') report.warn(id, care.reason)
 }
 
 // ── 집합 단위 검사 ─────────────────────────────────────────
