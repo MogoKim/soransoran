@@ -110,7 +110,7 @@ export default async function BoardPage({
           /* 🔴 목록에 면을 주지 않는다.
                 흰 면 + 위아래 선 + 화면 끝까지 닿는 폭이 겹치면 목록이 "표" 로 읽힌다.
                 글은 바탕 위에 그대로 얹고, 사이를 가르는 선만 남긴다.
-                행 hover 는 PostCard 가 흰색으로 떠오르게 처리한다 (정본 §7). */
+                행 hover 는 PostCard 가 제목색으로 처리한다 — 면을 만들지 않는다. */
           <ul className="flex flex-col [&>li+li]:border-t [&>li+li]:border-subtle">
             {posts.map((post) => (
               <li key={post.id}>
