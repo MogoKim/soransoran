@@ -94,23 +94,6 @@ export type TopicQueueItem = {
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [
   {
-    day: 10,
-    slug: 'which-clinic-menopause',
-    title: '갱년기 증상 무슨 과에 가야 하나요',
-    contentType: 'EVERGREEN',
-    intent: '질문',
-    cluster: 'clinic',
-    target: '40대 후반~60대',
-    riskLevel: 'HIGH',
-    reviewMode: 'FULL_REVIEW',
-    imageMode: 'REQUIRED',
-    autoEligible: false,
-    ctaBoard: '/community/menopause',
-    internalLinks: ['when-does-menopause-start', 'hot-flash-how-long'],
-    whyNow: '검색량 최상위. clinic 클러스터 첫 진입',
-    notes: 'HIGH — 과 선택은 정보 제공까지만. "가야 한다/안 가도 된다"를 판단해 주지 않는다',
-  },
-  {
     day: 18,
     slug: 'checkup-items-50s',
     title: '50대 건강검진 꼭 챙겨야 할 항목',
