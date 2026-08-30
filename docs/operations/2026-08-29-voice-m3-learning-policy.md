@@ -146,6 +146,26 @@ fixture 가 커밋 파일 실물을 열어 `memo` · `verdict` · `sourceUrl` ·
 | 댓글 `content` 만 사용 | 🟢 `author` 접근 0 · `replies` 1차 보류 · `likeCount` 미사용 |
 | 💗 카페 공지 제거 · 기타 이모지 미제거 | 🟢 502건 제거 · 300자 미만 탈락 25건 |
 | 유출 대조는 `author` 포함해 넓게 | 🟢 `topCommentsToText()` 불변 |
+| 호칭 상수는 **4갈래** — 뭉치지 않는다 | 🟢 아래 표 참조. Gate ⑤ · ⑨ 가 이 갈래를 그대로 쓴다 |
+
+### 🔴 호칭 상수 4갈래 (실측)
+
+Gate 설계 과정에서 확인됐다. **문서가 오래 "2갈래" 로 적어 왔으나 실제는 4갈래 + 1이다.**
+
+| 갈래 | 위치 | 방향 | 개수 | 쓰는 관문 |
+|---|---|---|---|---|
+| `SOURCE_SPECIFIC_TERMS` | `voice-style-signals.mts` | 🔴 치환 대상 — 출처 흔적 | 8 (site 매핑) | ⑨ |
+| `SORANSORAN_REGISTER_TERMS` | 같음 | ✅ 치환 결과 — 허용 기준선 | 4 | ⑤ ⑨ |
+| `TARGET_DESCRIPTOR_TERMS` | 같음 | 🔴 생성 금지 — 타겟 설명어 | 15 | ⑤ |
+| `BRAND_BANNED_WORDS` | `src/lib/content-guard.ts` | 🔴 생성 금지 — 브랜드 금지어 | 4 | ⑤ |
+| `GENERIC_COMMUNITY_TERMS` | `voice-style-signals.mts` | 🟢 **살린다** — 일반 표현 | 11 | (해당 없음) |
+
+🔴 **`M3_FORBIDDEN_ADDRESS_TERMS` 에 시니어 · 어르신 · 노인 · 실버는 없다.**
+그 넷은 `BRAND_BANNED_WORDS` 다. ⑤ 는 두 갈래를 함께 봐야 한다.
+
+🟢 **`GENERIC_COMMUNITY_TERMS` 는 학습에서 살리는 갈래다.**
+`여기 계신 분들` · `저만 그런가요` · `다들 어떠세요` 는 출처를 드러내지 않으면서
+커뮤니티의 온기를 만든다 — 지우는 대상이 아니다.
 
 ---
 
@@ -161,6 +181,7 @@ fixture 가 커밋 파일 실물을 열어 `memo` · `verdict` · `sourceUrl` ·
 2) Persona Architecture 설계          ← 완료 → 2026-08-30-persona-architecture-design.md
 3) 🔴 Safety / Originality Gate 설계   ✅ 완료 → 2026-08-30-persona-safety-originality-gate-design.md
    (voice_gold/silver/story 2,504건을 **고유 표현 희귀도 기준 코퍼스**로 재사용한다)
+   ✅ 9관문 확정 · ⑤ 상수 두 갈래 정정 · ⑨ 는 SOURCE_SPECIFIC_TERMS 확장으로 정정
 4) M3 반응 지도 최소 설계
 5) Persona Pool 20~30명 설계
 6) Trend ingestion 설계
