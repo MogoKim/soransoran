@@ -760,7 +760,7 @@ Pool 차원에서 거는 장치다. [M3 §4-7](2026-08-30-m3-reaction-map-design
 | 어드민에서 전 항목 관리 | 🟢 카드의 identity · voice · mood · memory · rhythm · noGo 가 그대로 관리 대상 |
 | `status` 전환 (`draft`/`active`/`paused`/`retired`) | 🟢 §7 활성 정책이 입력 |
 | 생성 · 승인 · 수정 · 폐기 이력 | 🔴 전건 기록 — 어드민 요건 |
-| Gate 통과 = 승인 대기열 | 🟢 발행이 아니다. 전건 승인 유지 |
+| Gate 통과의 의미 | 🟢 1단계 승인 대기열 · 2~3단계 발행 가능 후보 ([전략 §4-1](2026-08-29-persona-network-strategy.md)) |
 
 ### 🔴 외부 비공개와 "실제 회원인 척하는 장치" 는 다르다
 
@@ -798,7 +798,7 @@ Pool 차원에서 거는 장치다. [M3 §4-7](2026-08-30-m3-reaction-map-design
 🔴 Prisma schema 작성 · migration · seed 파일 생성
 🔴 실제 persona 데이터 DB 삽입
 🔴 생성 프롬프트 작성 · 댓글 생성 · 글 생성 실험
-🔴 자동 발행 경로
+🔴 자동 발행 경로 구현   ← 이번 단계 한정. 정책상으로는 최종 목표(전략 §4-0)
 🔴 displayName 확정 배정
 🔴 Persona Bot 구현
 ```
@@ -813,7 +813,7 @@ Pool 차원에서 거는 장치다. [M3 §4-7](2026-08-30-m3-reaction-map-design
 1) 🔴 결정 ① ② ④ 확정            Pool 을 DB 로 옮기기 전 선행
 2) Persona DB 모델 설계 검토       Architecture §14 후보 기준
 3) 후보 생성 도구 (comment)        🔴 Gate 통과분만 대기열로
-4) 운영자 승인 UI + AI 티 태그
+4) 🔴 어드민 자동화 관제실 + AI 티 태그
 5) silenceRate · seedReuseRate 기본값 실측 후 확정
 6) Metrics Loop
 ```

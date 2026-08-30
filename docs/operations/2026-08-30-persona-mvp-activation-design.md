@@ -368,7 +368,7 @@ Pool 설계 §8-4 의 *"익명화가 아니라 삭제"* 를 실행 가능하게 
 🔴 seed 파일 생성
 🔴 댓글 · 글 생성 실험
 🔴 LLM / API 호출
-🔴 자동 발행
+🔴 자동 발행 구현   ← 이번 단계 한정. 정책상으로는 최종 목표(전략 §4-0)
 🔴 코드 수정 · DB write
 ```
 
@@ -381,7 +381,7 @@ Pool 설계 §8-4 의 *"익명화가 아니라 삭제"* 를 실행 가능하게 
 ```
 🔴 Prisma schema 작성 · migration · seed 파일 생성
 🔴 실제 persona 데이터 DB 삽입 · displayName 배정
-🔴 Persona Bot 생성 · 글/댓글 생성 실험 · 자동 발행
+🔴 Persona Bot 생성 · 글/댓글 생성 실험 · 자동 발행 구현   ← 이번 단계 한정
 🔴 코드 수정 · DB write · LLM/API 호출
 ```
 
@@ -410,7 +410,7 @@ Pool 설계 §8-4 의 *"익명화가 아니라 삭제"* 를 실행 가능하게 
 2) Gate ⑥ 닉네임 중복 검사 설계 → displayName 작명
 3) Persona DB 모델 확정 (§6 · §6-7)
 4) 후보 생성 도구 (comment)   🔴 Gate 통과분만 대기열로
-5) 운영자 승인 UI + AI 티 태그
+5) 🔴 어드민 자동화 관제실 + AI 티 태그   status · cap · kill switch · 감사 로그
 6) silenceRate · seedReuseRate 기본값 실측 후 확정
 ```
 
