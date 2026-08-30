@@ -1088,6 +1088,91 @@ M-AUTO-4      유형 단위 · 자동 등록 · 기계가 판정   ← 아직 �
 같은 수준이고, B안보다 눈에 띈다는 점만 낫다. **출력·JSON 에 `approvalMode: 'manual-high'` 와
 문구를 남기는 이유가 이것이다** — 나중에 로그만 보고도 사람이 켠 것인지 알 수 있어야 한다.
 
+### 13.10 hero 자동화 1차 — `magazine-hero-runner.mjs` (2026-08-30)
+
+§13.7 의 11단계 중 **7번(이미지)** 이 유일하게 코드 경로가 없었다. `imageMode: REQUIRED` 글은
+hero 가 없으면 batch-qa 가 `HERO_MISSING` 으로 막고, 그때마다 사람이 이미지를 만들고 변환하고
+저장하고 `heroImage` 4필드를 손으로 적었다.
+
+#### 무엇을 만들었나
+
+```
+node scripts/magazine-hero-runner.mjs --slug <slug> --alt "…여성" --write
+```
+
+```
+생성   ChatGPT 대화(CDP) 로 이미지 요청 → PNG 회수
+변환   Chrome canvas 로 1200×675 webp
+저장   public/magazine/<slug>/hero.webp
+검증   webp 헤더를 읽어 1200×675 확인 — 아니면 **파일을 되돌린다**
+주입   article-draft.ts 의 heroImage 자리에 4필드
+```
+
+판정 로직은 `scripts/lib/magazine-hero.mjs` 에 순수 함수로 분리했다. 그래야 실패
+케이스(hero 이미 있음 · alt 없음 · OPTIONAL · 자리 없음)를 **이미지 생성 없이** 테스트할 수 있다.
+
+#### 🔴 등록 게이트를 열지 않는다
+
+hero 가 생겨도 `riskLevel=HIGH` · `autoEligible=false` 는 그대로 막는다.
+hero 는 batch-qa 의 **⑥번 조건 하나**일 뿐이다. `which-clinic-menopause` 가 그 증거다 —
+hero 를 만든 뒤에도 BLOCKED 사유가 3개에서 2개로 줄었을 뿐 READY 가 되지 않았고,
+등록은 `--founder-approved`(§13.9)로 사람이 열어야 했다.
+
+```
+🚫 AUTO_RISK · brief G5 · batch-qa · register   변경 0줄
+```
+
+#### REQUIRED / OPTIONAL 처리 기준
+
+```
+REQUIRED   자동 생성 대상. 큐 35건 중 3건
+OPTIONAL   만들지 않는다. --allow-optional 을 사람이 붙여야 한다. 32건
+```
+
+OPTIONAL 을 자동으로 만들면 **매일 32장을 쌓아 두고 아무도 보지 않는다.** hero 없이 공개한
+선례가 이미 여러 건 있고(등록 30건 중 hero 보유 17건), OPTIONAL 은 그 이름대로 선택이다.
+
+#### Chrome 으로 webp 를 만드는 이유 — 실측이다
+
+```
+cwebp        없음
+ImageMagick  없음
+sharp · vips 없음
+PIL          없음
+ffmpeg       있으나 libwebp 인코더가 빠져 있다 (Unknown encoder 'libwebp')
+sips         있으나 webp 출력을 못 한다
+Chrome       ✅ canvas.toDataURL('image/webp') 로 리사이즈와 인코딩을 한 번에
+```
+
+**이 환경에서 webp 를 만들 수 있는 수단은 Chrome 뿐이다.** 어차피 이미지 회수 때문에 CDP 로
+붙어 있으니 같은 연결을 재사용한다. 새 의존성을 깔지 않는다.
+
+#### 실측으로 잡은 함정
+
+```
+① 이미지 URL 호스트   chatgpt.com/backend-api/estuary/content 다.
+                     `oaiusercontent` 로만 거르면 못 찾는다 — 6분을 흘려보냈다.
+                     naturalWidth > 600 으로 거르는 편이 호스트 변화에 강하다.
+② 나이 명시           그냥 "Korean woman" 으로 두면 20~30 대가 나온다.
+                     "late 40s to early 50s" 를 프롬프트에 박는다.
+③ 반쯤 남기기 금지     검증에 실패하면 파일을 되돌린다. 선언과 실제 크기가 다르면
+                     magazine-qa 가 FAIL 을 내므로 어중간하게 남기면 안 된다.
+```
+
+#### alt 규칙
+
+등록 17건이 전부 **"{장소·행동} 여성"** 형태다. 10~120자이고 `여성` 으로 끝나야 통과한다.
+자동 생성하지 않고 **사람이 `--alt` 로 준다** — 화면에 실제로 무엇이 있는지는 이미지를 본
+사람만 안다. 프롬프트와 결과가 어긋날 수 있으므로 alt 를 프롬프트에서 파생시키지 않는다.
+
+#### 남은 것 (M-AUTO-5 2차)
+
+```
+나이·상황 적합 판정      생성된 이미지가 40~60 대로 보이는지 기계가 보지 못한다 → LLM judge
+producer 연동            회차에서 REQUIRED 를 만나면 자동으로 부르는 자리
+재시도                   한 번 실패하면 사람이 다시 부른다
+```
+
 #### 이 절을 읽고 하지 말아야 할 것
 
 ```
