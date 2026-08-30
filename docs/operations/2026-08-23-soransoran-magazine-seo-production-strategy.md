@@ -1261,6 +1261,26 @@ SEO 검색 의도 충족      원고가 그 검색어에 실제로 답하는지
 이 셋은 창업자가 `factsToVerify` 로 손수 적었던 항목과 **정확히 겹친다**(§13.9 등록 당시 ①②⑥).
 사람이 적던 것을 기계가 찾아낸다는 뜻이다.
 
+#### 등록 전 draft 를 읽는 경로 — 리뷰에서 잡힌 결함
+
+첫 구현이 `runQa()` 의 반환값에서 article 을 꺼내려 했다. **`runQa()` 반환에는 `targets` 가 없다** —
+`ok · fail · warn · counts · checked · rows` 뿐이다.
+
+```
+등록분    articles.ts 경로를 타서 정상 동작    ← 그래서 드러나지 않았다
+미등록    article 객체를 못 얻어 리포트 실패
+```
+
+**repo 에 미등록 draft 가 0건**이라(28건 전부 등록됨) 테스트에서도 안 걸렸다.
+그런데 **등록 전 HIGH 원고를 보는 것이 M-AUTO-3 의 존재 이유**다. 그 경로가 진짜 경로다.
+
+고친 방식은 `batch-qa` · `register` 가 이미 쓰는 것과 같다 — `lib/magazine-load.mjs` 의
+`sliceLiteral` + `evalLiteral`. 파서를 새로 쓰지 않았다.
+
+`--path <article-draft.ts>` 도 함께 넣었다. 미등록 draft 가 0건이라 fixture
+(`scripts/__fixtures__/magazine-packet/high/`)로 검증해야 했고, 큐 밖 원고를 보는 데도 쓴다.
+회귀 테스트가 이 경로를 고정한다.
+
 #### M-AUTO-4 로 넘어가려면
 
 ```

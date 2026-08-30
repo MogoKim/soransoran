@@ -12,7 +12,32 @@
  */
 
 import { loadArticles } from './lib/magazine-load.mjs'
+import { execFileSync } from 'node:child_process'
+import { join } from 'node:path'
+import { ROOT } from './lib/magazine-load.mjs'
 import { collectUnknowns, decide, autoRegisterable, VERDICT, CLUSTER_CROWDED } from './lib/magazine-judge.mjs'
+
+/** 등록 전 draft 를 흉내 낼 유일한 자료 — 미등록 draft 가 repo 에 0건이다 */
+const FIXTURE = join(ROOT, 'scripts/__fixtures__/magazine-packet/high/article-draft.ts')
+
+/**
+ * 리포트를 JSON 으로 받는다.
+ * 🔴 FAIL 이면 종료 코드가 1 이라 execFileSync 가 던진다. 그건 실패가 아니라 판정이다 —
+ *    stdout 을 회수해서 그대로 쓴다.
+ */
+function runReport(args) {
+  try {
+    return JSON.parse(
+      execFileSync(process.execPath, [join(ROOT, 'scripts/magazine-judge-report.mjs'), ...args, '--json'], {
+        encoding: 'utf8',
+        cwd: ROOT,
+      }),
+    )
+  } catch (err) {
+    if (err.stdout) return JSON.parse(err.stdout)
+    throw err
+  }
+}
 
 let failed = 0
 let passed = 0
@@ -115,6 +140,40 @@ console.log('\n══════ 소재 중복 임계')
   expect(`${CLUSTER_CROWDED - 1}건이면 묻지 않는다`, ids(collectUnknowns({ article: base, bodyText: 'x', published: few })).includes('J-소재중복'), false)
   expect(`${CLUSTER_CROWDED}건이면 묻는다`, ids(collectUnknowns({ article: base, bodyText: 'x', published: many })).includes('J-소재중복'), true)
   expect('첫 글이면 J-톤기준선', ids(collectUnknowns({ article: base, bodyText: 'x', published: [] })).includes('J-톤기준선'), true)
+}
+
+console.log('\n══════ 등록 전 draft 를 실제로 읽는가 (loadTarget 결함 회귀)')
+{
+  // 🔴 runQa() 반환에는 targets 가 없다. 한때 qa.targets?.[0] 을 기대했고,
+  //    미등록 draft 가 0건이라 드러나지 않았다. 등록 전 HIGH 원고를 보는 것이
+  //    M-AUTO-3 의 핵심이므로 이 경로를 fixture 로 고정한다.
+  const r = runReport(['--path', FIXTURE])
+  expect('draft-only 리포트가 만들어진다', Boolean(r.slug), true)
+  expect('  출처가 article-draft.ts', r.source, 'article-draft.ts')
+  expect('  error 가 없다', r.error === undefined, true)
+  expect('  article 을 읽었다 (cluster)', r.cluster, 'clinic')
+  expect('  deterministic 6종이 돈다', r.deterministic.length, 6)
+  expect('  verdict 가 셋 중 하나다', [VERDICT.PASS, VERDICT.FAIL, VERDICT.UNKNOWN].includes(r.verdict), true)
+}
+
+console.log('\n══════ 없는 slug 는 명확한 에러')
+{
+  const r = runReport(['--slug', 'no-such-slug-xyz'])
+  expect('error 를 낸다', Boolean(r.error), true)
+  expect('  메시지에 slug 가 있다', r.error.includes('no-such-slug-xyz'), true)
+}
+
+console.log('\n══════ --all-high 는 에러 없이 끝난다')
+{
+  let ok = true
+  try {
+    execFileSync(process.execPath, [join(ROOT, 'scripts/magazine-judge-report.mjs'), '--all-high', '--json'], {
+      encoding: 'utf8', cwd: ROOT,
+    })
+  } catch {
+    ok = false
+  }
+  expect('--all-high 종료 코드 0', ok, true)
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL`)

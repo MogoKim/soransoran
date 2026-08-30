@@ -21,14 +21,15 @@
  * 사용법
  *   node scripts/magazine-judge-report.mjs --slug <slug>
  *   node scripts/magazine-judge-report.mjs --slug <slug> --json
+ *   node scripts/magazine-judge-report.mjs --path <article-draft.ts 경로>
  *   node scripts/magazine-judge-report.mjs --all-high      큐의 HIGH 중 패킷이 있는 것
  *
  * 종료 코드: FAIL 이면 1, 아니면 0 (UNKNOWN 은 0 — 실패가 아니라 대기다)
  */
 
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import { loadArticles, loadQueue, DRAFTS_DIR } from './lib/magazine-load.mjs'
+import { existsSync, readFileSync } from 'node:fs'
+import { join, basename, dirname, isAbsolute } from 'node:path'
+import { loadArticles, loadQueue, sliceLiteral, evalLiteral, DRAFTS_DIR, ROOT } from './lib/magazine-load.mjs'
 import { runQa } from './magazine-qa.mjs'
 import { collectUnknowns, decide, autoRegisterable, VERDICT } from './lib/magazine-judge.mjs'
 import {
@@ -46,28 +47,61 @@ function bodyTextOf(article) {
   return out.join('\n')
 }
 
-/** 등록분이면 articles.ts, 아니면 draft 를 본다. 정본이 우선이다 */
-function loadTarget(slug) {
-  const published = loadArticles()
-  const found = published.find((a) => a.slug === slug)
-  if (found) return { article: found, source: 'articles.ts', draftPath: null }
+/**
+ * article-draft.ts 를 article 객체로 읽는다.
+ *
+ * 🔴 `runQa()` 의 반환값에서 꺼내지 않는다. 반환 키는 ok·fail·warn·counts·checked·rows 뿐이고
+ *    **targets 는 없다.** 처음에 `qa.targets?.[0]` 을 기대했는데, 등록분은 articles.ts 경로를
+ *    타서 드러나지 않았을 뿐이다(미등록 draft 가 0건이었다). 등록 전 HIGH 원고를 보는 것이
+ *    M-AUTO-3 의 핵심이라 이 경로가 진짜 경로다.
+ *
+ * 🔴 파서를 새로 쓰지 않는다. batch-qa · register 가 쓰는 것과 같은
+ *    `sliceLiteral` + `evalLiteral` 을 lib 에서 가져온다.
+ *
+ * draft 에는 slug 필드가 없다 — 디렉터리명이 slug 다.
+ */
+function loadDraftArticle(pathOrSlug) {
+  const file = pathOrSlug.endsWith('.ts')
+    ? (isAbsolute(pathOrSlug) ? pathOrSlug : join(ROOT, pathOrSlug))
+    : join(DRAFTS_DIR, pathOrSlug, 'article-draft.ts')
+  if (!existsSync(file)) return null
 
-  const draftPath = join(DRAFTS_DIR, slug, 'article-draft.ts')
-  if (!existsSync(draftPath)) return null
-  const qa = runQa({ draftPath })
-  const article = qa.targets?.[0] ?? null
-  return article ? { article, source: 'article-draft.ts', draftPath } : null
+  const src = readFileSync(file, 'utf8')
+  const anchor = src.indexOf('export const DRAFT')
+  if (anchor === -1) return null
+  const literal = sliceLiteral(src, src.indexOf('=', anchor), '{', '}')
+  if (!literal) return null
+
+  const slug = basename(dirname(file))
+  return { slug, ...evalLiteral(literal, `${slug}/article-draft.ts`), __path: file }
 }
 
-function judge(slug) {
+/** 등록분이면 articles.ts, 아니면 draft 를 본다. 정본이 우선이다 */
+function loadTarget(pathOrSlug) {
+  const isPath = pathOrSlug.endsWith('.ts')
+
+  if (!isPath) {
+    const found = loadArticles().find((a) => a.slug === pathOrSlug)
+    if (found) return { article: found, source: 'articles.ts', draftPath: null }
+  }
+
+  const article = loadDraftArticle(pathOrSlug)
+  if (!article) return null
+  return { article, source: 'article-draft.ts', draftPath: article.__path }
+}
+
+function judge(pathOrSlug) {
   const published = loadArticles()
   const queue = loadQueue()
-  const queueItem = queue.find((i) => i.slug === slug) ?? null
 
-  const target = loadTarget(slug)
-  if (!target) return { slug, error: `article-draft.ts 도 articles.ts 도 없다: ${slug}` }
+  const target = loadTarget(pathOrSlug)
+  if (!target) {
+    return { slug: pathOrSlug, error: `article-draft.ts 도 articles.ts 도 없다: ${pathOrSlug}` }
+  }
 
   const { article, source, draftPath } = target
+  const slug = article.slug
+  const queueItem = queue.find((i) => i.slug === slug) ?? null
   const bodyText = bodyTextOf(article)
 
   const qa = draftPath ? runQa({ draftPath }) : runQa()
@@ -149,7 +183,11 @@ function help() {
 
   node scripts/magazine-judge-report.mjs --slug <slug>
   node scripts/magazine-judge-report.mjs --slug <slug> --json
+  node scripts/magazine-judge-report.mjs --path <article-draft.ts 경로>
   node scripts/magazine-judge-report.mjs --all-high
+
+  --slug   등록분이면 articles.ts, 아니면 drafts/magazine/<slug>/article-draft.ts
+  --path   article-draft.ts 를 직접 가리킨다 (fixture · 큐 밖 원고)
 
   PASS      기계가 "기준을 만족한다" 고 말할 수 있다   → 자동 등록 후보
   FAIL      기계가 "기준을 어겼다" 고 말할 수 있다     → 자동 보류
@@ -173,12 +211,14 @@ function main() {
       .filter((s) => existsSync(join(DRAFTS_DIR, s, 'article-draft.ts')))
     if (slugs.length === 0) console.log('\n  큐의 HIGH 중 article-draft.ts 가 있는 글이 없다\n')
   } else {
-    const i = argv.indexOf('--slug')
-    if (i === -1 || !argv[i + 1]) {
-      console.error('  --slug 가 필요하다')
+    const s = argv.indexOf('--slug')
+    const pth = argv.indexOf('--path')
+    if (s !== -1 && argv[s + 1]) slugs = [argv[s + 1]]
+    else if (pth !== -1 && argv[pth + 1]) slugs = [argv[pth + 1]]
+    else {
+      console.error('  --slug 또는 --path 가 필요하다')
       process.exit(2)
     }
-    slugs = [argv[i + 1]]
   }
 
   const results = slugs.map(judge)
