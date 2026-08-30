@@ -257,9 +257,20 @@ Mood State · Activity Rhythm 과 직접 연결된다.
   최근 N건의 시작 문장 패턴      같은 hookType 반복
   말끝 분포                     같은 ending 반복
   이모티콘 패턴                 빈도 · 위치
+  구조화 나열 / 마크다운 말투     🔴 "추천드립니다" · 먼저/다음으로/마지막으로
+                                불릿 · 번호 · 마크다운 · 과도한 존댓말 일관성
   상위 빈출 n-gram 점유율        🔴 헌법 §9-7 역지표
 
 🔴 우나어에는 이 지표가 없어 225명의 실효 다양성을 아무도 몰랐다.
+```
+
+🔴 **"AI 말투"를 별도 관문으로 두지 않는다.** 구조화 나열 · 마크다운 말투는 **⑧의 축 하나**다.
+문제의 뿌리가 같기 때문이다 — *고정된 한 가지 말투가 반복되어 사람이 쓴 글로 읽히지 않는 것*.
+따로 세면 관문 수만 늘고, 실패 로그에서 원인이 두 곳으로 갈라진다.
+
+```
+🟢 오히려 필요한 것
+  오타 · 불규칙 띄어쓰기 · 줄바꿈 습관 · "ㅋㅋ" · "..." 같은 구어 표지
 ```
 
 ### ⑨ Source Community Marker — 외부 커뮤니티 흔적
@@ -479,14 +490,14 @@ crisis_hold 상태로 기록
 
 | 관문 | 실패 시 기본 상태 |
 |---|---|
-| ① 20자 유출 | `regenerate` |
-| ② 고유 표현 | 희귀도 높음 `regenerate` · 중간 `review` |
+| ① 20자 연속 유출 | `regenerate` |
+| ② 고유 표현 / 특이 조어 복제 | 희귀도 높음 `regenerate` · 중간 `review` |
 | ③ 식별 디테일 | 2개 `review` · 3개+ `regenerate` |
-| ④ 문장 순서 | 3개 `review` · 4개+ `regenerate` |
-| ⑤ 금지 호칭 | `regenerate` |
-| ⑥ 닉네임 | `regenerate` |
-| ⑦ Persona 모순 | `regenerate` |
-| ⑧ 지문 중복 | `regenerate` (다른 variation) |
+| ④ 원문 문장 순서 / 구조 과복제 | 3개 `review` · 4개+ `regenerate` |
+| ⑤ 금지 호칭 / 브랜드 금칙어 | `regenerate` |
+| ⑥ 닉네임 / author 재사용 | `regenerate` |
+| ⑦ Persona Consistency | `regenerate` |
+| ⑧ Voice Fingerprint / 반복 패턴 | `regenerate` (다른 variation) · 구조화 나열/마크다운 말투 포함 |
 | ⑨ Source Community Marker | `regenerate` · 애매하면 `review` · 🔴 source 가 카페 운영/공지/광고면 `reject` |
 | 위기 신호 | 🔴 `crisis_hold` |
 
