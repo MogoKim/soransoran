@@ -28,6 +28,7 @@
     "voice:m3-run": "tsx scripts/voice-m3-run.mts",
     "voice:m3-dry-run": "tsx scripts/voice-m3-dry-run.mts",
     "voice:m3-check": "tsx scripts/voice-m3-check.mts",
+    "persona:gate-check": "tsx scripts/persona-gate-check.mts",
     "voice:m3-plan": "tsx scripts/voice-m3-plan.mts",
     "voice:m3-export": "tsx scripts/voice-m3-export.mts",
     "voice:m3-select-learning": "tsx scripts/voice-m3-select-learning.mts",
