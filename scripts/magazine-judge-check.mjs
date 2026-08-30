@@ -132,6 +132,53 @@ console.log('\n══════ 트리거 — 조건이 맞을 때만 묻는�
   expect('"동안과" 는 진료과가 아니다', ids(boundary).includes('J-과역할'), false)
 }
 
+console.log('\n══════ J-제도서술 — M-AUTO-4 ①단계 관찰에서 나온 트리거')
+{
+  const base = { cluster: 'clinic', title: 'x', slug: 'x', medical: true }
+
+  // bone-density-test-when 의 실문장. 이 글이 PASS·UNKNOWN 0 으로 나온 것이 이 트리거를 만들었다
+  const claimed = collectUnknowns({
+    article: base,
+    bodyText: '국가건강검진에 골밀도 검사가 포함되는 대상이 정해져 있습니다. 사람마다 다릅니다.',
+    published: [{ slug: 'a', cluster: 'clinic', title: 't' }],
+  })
+  expect('제도를 단정하면 발동', ids(claimed).includes('J-제도서술'), true)
+
+  // health-insurance-after-retire 의 실문장 — 확인 경로로 넘기므로 물을 것이 없다
+  const routed = collectUnknowns({
+    article: { ...base, cluster: 'money-work', medical: false },
+    bodyText:
+      '퇴직 직후 국민건강보험공단에 본인이 신청할 수 있는 대상인지, 언제까지 신청해야 하는지부터 확인해두는 것이 좋습니다.',
+    published: [{ slug: 'a', cluster: 'money-work', title: 't' }],
+  })
+  expect('확인 경로로 넘기면 묻지 않는다', ids(routed).includes('J-제도서술'), false)
+
+  // 🔴 후보에 있었지만 실측에서 전부 오탐이던 일반어
+  for (const [label, text] of [
+    ['"지원" — 취업 맥락', '지금 지원하려는 일과 연결되는 경험이 있는지 살펴볼 수 있습니다.'],
+    ['"급여" — 연봉 맥락', '예전 연봉과 지금 시작하는 자리의 급여를 나란히 두고 비교하지 마세요.'],
+    ['"급여명세서"', '퇴직 전 급여명세서에서 보던 건강보험료와 고지서의 금액은 다릅니다.'],
+  ]) {
+    const r = collectUnknowns({
+      article: { ...base, cluster: 'money-work', medical: false },
+      bodyText: text,
+      published: [{ slug: 'a', cluster: 'money-work', title: 't' }],
+    })
+    expect(`${label} 는 묻지 않는다`, ids(r).includes('J-제도서술'), false)
+  }
+}
+
+console.log('\n══════ 등록 30건 소음 — J-제도서술 추가 후에도 그대로인가')
+{
+  const counts = published.map((a) => collectUnknowns({ article: a, bodyText: bodyOf(a), published }).length)
+  const inst = published.filter((a) =>
+    collectUnknowns({ article: a, bodyText: bodyOf(a), published }).some((u) => u.id === 'J-제도서술'),
+  ).length
+  expect('J-제도서술 오탐 0건', inst, 0)
+  expect('최대 3건 유지', Math.max(...counts) <= 3, true)
+  expect('평균 2건 이하 유지', counts.reduce((s, n) => s + n, 0) / counts.length <= 2, true)
+}
+
 console.log('\n══════ 소재 중복 임계')
 {
   const base = { cluster: 'daily', title: 'x', slug: 'x', medical: false }
