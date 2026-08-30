@@ -4,8 +4,7 @@
  *
  * 정본: docs/operations/2026-08-30-persona-safety-originality-gate-design.md
  *
- * 이번 단계는 **⑤ 금지 호칭 / 브랜드 금칙어**만 다룬다.
- * ⑨ Source Community Marker 는 다음 PR 이다.
+ * 다루는 관문 — **⑤ 금지 호칭 / 브랜드 금칙어** · **⑨ Source Community Marker**
  *
  * 🔴 이 fixture 가 검사하는 것은 "잘 잡는가" 가 아니라 **"선을 넘지 않는가"** 다:
  *      ① 두 갈래를 **둘 다** 보는가 — 갈래 2 가 빠지면 "어르신" 이 통과한다
@@ -25,14 +24,18 @@ import { fileURLToPath } from 'node:url'
 import {
   checkForbiddenAddress, FORBIDDEN_ADDRESS_LANES,
 } from './lib/persona-gate-forbidden-address.mjs'
+import { checkSourceMarker } from './lib/persona-gate-source-marker.mjs'
 import {
   computeCommunityRegister,
   TARGET_DESCRIPTOR_TERMS, SORANSORAN_REGISTER_TERMS, GENERIC_COMMUNITY_TERMS,
+  SOURCE_SPECIFIC_TERMS, SOURCE_CONTEXT_TERMS, CAFE_COMMUNITY_CUES, CAFE_SHOP_CUES,
 } from './lib/voice-style-signals.mjs'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const GATE_LIB = join(HERE, 'lib/persona-gate-forbidden-address.mts')
+const MARKER_LIB = join(HERE, 'lib/persona-gate-source-marker.mts')
+const SIGNALS_LIB = join(HERE, 'lib/voice-style-signals.mts')
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -48,6 +51,8 @@ const stripComments = (raw: string): string =>
 
 const gateRaw = readFileSync(GATE_LIB, 'utf-8')
 const gateCode = stripComments(gateRaw)
+const markerCode = stripComments(readFileSync(MARKER_LIB, 'utf-8'))
+const signalsCode = stripComments(readFileSync(SIGNALS_LIB, 'utf-8'))
 
 // ── ① 갈래 1 — 타겟 설명어 15개를 전부 잡는다 ─────────────
 {
@@ -234,8 +239,244 @@ const gateCode = stripComments(gateRaw)
   else ok('생성 파이프라인 미연결', 'guard', '순수 판정부 · 호출부 0')
 }
 
+// ══════ ⑨ Source Community Marker ══════════════════════
+
+// ── ⑪ 출처 호칭 8개를 전부 잡는다 ────────────────────────
+{
+  const offenders: string[] = []
+  for (const { term, site } of SOURCE_SPECIFIC_TERMS) {
+    const v = checkSourceMarker(`${term} 이거 어떻게 하세요?`)
+    if (v.status !== 'regenerate') offenders.push(`${term} 이 ${v.status}`)
+    const hit = v.hits.find((h) => h.kind === 'site' && h.term === term)
+    if (!hit) offenders.push(`${term} 미검출`)
+    else if (hit.kind === 'site' && hit.site !== site) offenders.push(`${term} 의 site 가 ${hit.site}`)
+  }
+  if (offenders.length) bad('⑨ 출처 호칭 전건 차단', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ 출처 호칭 전건 차단', 'policy', `${SOURCE_SPECIFIC_TERMS.length}종 전부 regenerate · site 매핑 일치`)
+}
+
+// ── ⑫ 포함 관계는 1건으로만 집계한다 ─────────────────────
+//    🔴 '82님들' 이 '82님' 으로도 잡히면 두 건이 된다.
+//       '우리 카페에서는' 이 '우리 카페' 로도 잡히면 tier 판정까지 흔들린다.
+{
+  const offenders: string[] = []
+  const dup = checkSourceMarker('82님들 안녕하세요')
+  if (dup.hits.length !== 1) offenders.push(`82님들 이 ${dup.hits.length}건으로 중복 검출`)
+
+  const ctx = checkSourceMarker('우리 카페에서는 다들 그렇게 해요')
+  const ctxHits = ctx.hits.filter((h) => h.kind === 'context')
+  if (ctxHits.length !== 1) offenders.push(`우리 카페에서는 이 ${ctxHits.length}건으로 중복 검출`)
+  if (ctxHits[0]?.kind === 'context' && ctxHits[0].tier !== 'strong') {
+    offenders.push(`우리 카페에서는 의 tier 가 ${ctxHits[0].tier}`)
+  }
+  // 🔴 이중 계수되면 '우리 카페'(ambiguous) 가 섞여 cafeSense 가 켜진다
+  if (ctx.cafeSense !== 'none') offenders.push(`strong 단독인데 cafeSense=${ctx.cafeSense}`)
+
+  const member = checkSourceMarker('카페 회원님들 반가워요')
+  if (member.hits.length !== 1) offenders.push(`카페 회원님들 이 ${member.hits.length}건으로 중복 검출`)
+
+  // 🔴 동작 검사만으로는 부족하다.
+  //    SOURCE_CONTEXT_TERMS 가 지금은 우연히 긴 것부터 선언돼 있어
+  //    정렬을 빼도 결과가 같다. 짧은 항목이 앞에 추가되는 날 중복 검출이 시작된다.
+  //    ⑤ 판정부와 같은 이유로 소스에서도 확인한다.
+  if (!/\[\.\.\.SOURCE_CONTEXT_TERMS\]\.sort\(\(a, b\) => b\.term\.length - a\.term\.length\)/.test(signalsCode)) {
+    offenders.push('🔴 맥락 스캔의 긴 것 우선 정렬이 사라졌다')
+  }
+  if (!/\[\.\.\.SOURCE_SPECIFIC_TERMS\]\.sort\(\(a, b\) => b\.term\.length - a\.term\.length\)/.test(signalsCode)) {
+    offenders.push('🔴 출처 호칭 스캔의 긴 것 우선 정렬이 사라졌다')
+  }
+
+  if (offenders.length) bad('⑨ 중복 검출 방지', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ 중복 검출 방지', 'guard', '출처 호칭 · 맥락 포함 관계 각 1건')
+}
+
+// ── ⑬ Tier A strong 4개는 단독으로 차단한다 ─────────────
+{
+  const offenders: string[] = []
+  const strongTerms = SOURCE_CONTEXT_TERMS.filter((t) => t.tier === 'strong')
+  for (const { term } of strongTerms) {
+    const v = checkSourceMarker(`${term} 확인해 주세요`)
+    if (v.status !== 'regenerate') offenders.push(`${term} 이 ${v.status}`)
+    if (!v.hits.some((h) => h.kind === 'context' && h.term === term)) offenders.push(`${term} 미검출`)
+  }
+  if (offenders.length) bad('⑨ Tier A 는 단독 차단', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ Tier A 는 단독 차단', 'policy', `strong ${strongTerms.length}종 전부 regenerate`)
+}
+
+// ── ⑭ Tier B ambiguous — 단서가 판정을 가른다 ────────────
+//    🔴 '카페' 는 커피숍이기도 하다. 단독 regenerate 로 두면 정상 글이 폐기된다.
+{
+  const offenders: string[] = []
+  const ambiguousTerms = SOURCE_CONTEXT_TERMS.filter((t) => t.tier === 'ambiguous')
+  for (const { term } of ambiguousTerms) {
+    // ① 커뮤니티 단서 → regenerate
+    const comm = checkSourceMarker(`${term} 게시판에 올린 글 보셨어요?`)
+    if (comm.status !== 'regenerate') offenders.push(`${term}+커뮤니티단서 가 ${comm.status}`)
+    if (comm.cafeSense !== 'community') offenders.push(`${term}+커뮤니티단서 cafeSense=${comm.cafeSense}`)
+
+    // ② 커피숍 단서 → 🟢 pass
+    const shop = checkSourceMarker(`${term} 커피가 진짜 맛있더라고요`)
+    if (shop.status !== 'pass') offenders.push(`🔴 ${term}+커피숍단서 가 ${shop.status} (정상 글이 죽는다)`)
+    if (shop.cafeSense !== 'shop') offenders.push(`${term}+커피숍단서 cafeSense=${shop.cafeSense}`)
+
+    // ③ 단독 → review
+    const alone = checkSourceMarker(`${term} 생각이 나네요`)
+    if (alone.status !== 'review') offenders.push(`${term} 단독이 ${alone.status}`)
+    if (alone.cafeSense !== 'unknown') offenders.push(`${term} 단독 cafeSense=${alone.cafeSense}`)
+
+    // ④ 양쪽 단서 → review (사람이 본다)
+    const both = checkSourceMarker(`${term} 커피 마시면서 게시판 봤어요`)
+    if (both.status !== 'review') offenders.push(`${term}+양쪽단서 가 ${both.status}`)
+    if (both.cafeSense !== 'unknown') offenders.push(`${term}+양쪽단서 cafeSense=${both.cafeSense}`)
+  }
+  if (offenders.length) bad('⑨ Tier B 는 단서로 가른다', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ Tier B 는 단서로 가른다', 'policy',
+    `ambiguous ${ambiguousTerms.length}종 × 4경우 · 커피숍 ${CAFE_SHOP_CUES.length} · 커뮤니티 ${CAFE_COMMUNITY_CUES.length}`)
+}
+
+// ── ⑮ ⑨ 가 살려야 할 것을 죽이지 않는다 ──────────────────
+{
+  const offenders: string[] = []
+  for (const term of GENERIC_COMMUNITY_TERMS) {
+    const v = checkSourceMarker(`${term} 요즘 어떻게 지내세요?`)
+    if (v.status !== 'pass') offenders.push(`generic ${term} 이 ${v.status} (${v.reason})`)
+  }
+  for (const term of SORANSORAN_REGISTER_TERMS) {
+    const v = checkSourceMarker(`${term} 오늘 하루 어떠셨어요?`)
+    if (v.status !== 'pass') offenders.push(`register ${term} 이 ${v.status} (${v.reason})`)
+    if (v.hits.length > 0) offenders.push(`🔴 ${term} 이 출처 흔적으로 잡혔다`)
+  }
+  if (offenders.length) bad('⑨ 살릴 것은 살린다', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ 살릴 것은 살린다', 'policy',
+    `generic ${GENERIC_COMMUNITY_TERMS.length}종 · register ${SORANSORAN_REGISTER_TERMS.length}종 전부 pass`)
+}
+
+// ── ⑯ sourceSite 로 검사 범위를 좁히지 않는다 ────────────
+//    🔴 wgang 에서 온 글에 '레테님들' 이 나올 수 있다.
+{
+  const offenders: string[] = []
+  for (const { term } of SOURCE_SPECIFIC_TERMS) {
+    // sourceSite 미지정
+    const none = checkSourceMarker(`${term} 안녕하세요`)
+    if (none.status !== 'regenerate') offenders.push(`sourceSite 없이 ${term} 이 ${none.status}`)
+    // 🔴 전혀 다른 sourceSite 를 줘도 결과가 같아야 한다
+    const other = checkSourceMarker(`${term} 안녕하세요`, { sourceSite: 'navercafe:masanmam' })
+    if (other.status !== 'regenerate') offenders.push(`다른 site 지정 시 ${term} 이 ${other.status}`)
+    if (other.hits.length !== none.hits.length) offenders.push(`${term} 이 site 지정에 따라 hit 수가 달라졌다`)
+    if (other.sourceSite !== 'navercafe:masanmam') offenders.push('sourceSite 가 로그에 남지 않았다')
+  }
+  // 🔴 판정부가 sourceSite 로 필터링하는 코드를 갖고 있으면 안 된다
+  if (/\.filter\([^)]*sourceSite/.test(markerCode)) offenders.push('🔴 sourceSite 로 필터링한다')
+  if (/site\s*===\s*opts\.sourceSite|opts\.sourceSite\s*===\s*/.test(markerCode)) {
+    offenders.push('🔴 sourceSite 로 검사 범위를 좁힌다')
+  }
+  if (offenders.length) bad('⑨ sourceSite 는 로그용일 뿐', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ sourceSite 는 로그용일 뿐', 'guard', `${SOURCE_SPECIFIC_TERMS.length}종 · site 지정 무관하게 전건 스캔`)
+}
+
+// ── ⑰ 경계 — ⑤ 와 ⑨ 는 서로의 일을 하지 않는다 ──────────
+{
+  const offenders: string[] = []
+
+  // ⑤ 영역 — ⑨ 는 통과시켜야 한다
+  for (const term of ['우리 또래분들', '어르신']) {
+    const nine = checkSourceMarker(`${term} 어떻게 지내세요?`)
+    if (nine.status !== 'pass') offenders.push(`🔴 ⑨ 가 ⑤ 영역 '${term}' 을 잡았다 (${nine.reason})`)
+    if (nine.hits.length > 0) offenders.push(`🔴 '${term}' 이 출처 흔적으로 분류됐다`)
+    const five = checkForbiddenAddress(`${term} 어떻게 지내세요?`)
+    if (five.status !== 'regenerate') offenders.push(`⑤ 가 '${term}' 을 놓쳤다`)
+  }
+
+  // ⑨ 영역 — ⑤ 는 통과시켜야 한다
+  for (const term of ['레테님들', '우갱님들']) {
+    const nine = checkSourceMarker(`${term} 반가워요`)
+    if (nine.status !== 'regenerate') offenders.push(`⑨ 가 '${term}' 을 놓쳤다`)
+    const five = checkForbiddenAddress(`${term} 반가워요`)
+    if (five.status !== 'pass') offenders.push(`🔴 ⑤ 가 ⑨ 영역 '${term}' 을 잡았다 (${five.reason})`)
+  }
+
+  // 🔴 ⑨ 판정부가 ⑤ 상수를 가져다 쓰면 두 관문이 섞인 것이다
+  if (/TARGET_DESCRIPTOR_TERMS|BRAND_BANNED_WORDS|content-guard/.test(markerCode)) {
+    offenders.push('🔴 ⑨ 판정부가 ⑤ 상수를 참조한다')
+  }
+  // 🔴 ⑤ 판정부도 ⑨ 상수를 가져다 쓰면 안 된다
+  if (/SOURCE_SPECIFIC_TERMS|SOURCE_CONTEXT_TERMS/.test(gateCode)) {
+    offenders.push('🔴 ⑤ 판정부가 ⑨ 상수를 참조한다')
+  }
+
+  if (offenders.length) bad('⑤ 와 ⑨ 는 서로의 일을 안 한다', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑤ 와 ⑨ 는 서로의 일을 안 한다', 'policy', '타겟·브랜드는 ⑤ · 출처 호칭은 ⑨ · 상수 교차 참조 0')
+}
+
+// ── ⑱ reject — 출처가 카페 운영/공지/광고 문맥 ───────────
+{
+  const offenders: string[] = []
+  const rej = checkSourceMarker('레테님들 등업 신청하세요', { sourceIsCafeOperational: true })
+  if (rej.status !== 'reject') offenders.push(`운영 문맥인데 ${rej.status}`)
+  // 🔴 marker 가 없으면 reject 하지 않는다 — 플래그만으로 후보를 버리지 않는다
+  const clean = checkSourceMarker('오늘 날씨가 좋네요', { sourceIsCafeOperational: true })
+  if (clean.status !== 'pass') offenders.push(`marker 0 인데 ${clean.status}`)
+  if (offenders.length) bad('⑨ 운영 문맥은 reject', 'policy', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ 운영 문맥은 reject', 'policy', 'marker 있을 때만 reject · 없으면 pass')
+}
+
+// ── ⑲ ⑨ 판정부가 선을 넘지 않는다 ────────────────────────
+{
+  const offenders: string[] = []
+  const forbidden: Array<[RegExp, string]> = [
+    [/@prisma\/client|PrismaClient|from 'pg'/, 'DB 클라이언트'],
+    [/anthropic|openai|fetch\(|axios|undici/i, 'LLM · 네트워크'],
+    [/readFileSync|writeFileSync|node:fs/, '파일 IO'],
+    [/process\.env/, '환경변수'],
+  ]
+  for (const [re, label] of forbidden) {
+    if (re.test(markerCode)) offenders.push(`${label} 경로가 들어왔다`)
+  }
+  // 생성 파이프라인 연결 금지
+  if (/\.create\(\{|\.update\(\{|\.upsert\(/.test(markerCode)) offenders.push('레코드 생성/수정 경로가 있다')
+
+  // 🔴 로그에 원문을 담지 않는다 — hits[].term 은 전부 상수 목록 안에 있어야 한다
+  const known = new Set<string>([
+    ...SOURCE_SPECIFIC_TERMS.map((s) => s.term),
+    ...SOURCE_CONTEXT_TERMS.map((c) => c.term),
+  ])
+  const leak = checkSourceMarker('레테님들 우리 카페 게시판에 ○○병원 후기 올렸어요')
+  for (const h of leak.hits) {
+    if (!known.has(h.term)) offenders.push(`🔴 hits 에 상수 밖 문자열: 길이 ${h.term.length}`)
+  }
+  if (leak.reason.includes('병원') || leak.reason.includes('후기')) {
+    offenders.push('🔴 reason 에 원문 조각이 담겼다')
+  }
+  if (offenders.length) bad('⑨ 판정부가 선을 넘지 않는다', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑨ 판정부가 선을 넘지 않는다', 'guard', 'DB · LLM · 파일 IO · env 0 · hits/reason 정결')
+}
+
+// ── ⑳ VE-M2 계약 — 기존 5개 필드를 건드리지 않았다 ───────
+//    🔴 voice-derive-check.mts 가 이 구조를 검사한다. 바꾸면 학습 파이프라인이 깨진다.
+{
+  const offenders: string[] = []
+  const r = computeCommunityRegister('82님들 우리 또래분들 여기 계신 분들 소란님들 어떠세요?')
+  for (const key of ['sourceSpecific', 'soransoranRegister', 'targetDescriptorRisk',
+    'genericCommunityPhrase', 'preserveStructure'] as const) {
+    if (!(key in r)) offenders.push(`기존 필드 ${key} 가 사라졌다`)
+  }
+  for (const key of ['sourceContextRisk', 'cafeSense'] as const) {
+    if (!(key in r)) offenders.push(`신규 필드 ${key} 가 없다`)
+  }
+  // 기존 갈래가 여전히 각자 일한다
+  // 🔴 필드가 통째로 사라져도 **크래시가 아니라 실패로** 보고해야 한다.
+  //    크래시는 exit 1 이라 CI 는 막지만, 어느 계약이 깨졌는지 리포트에 남지 않는다.
+  if (!Array.isArray(r.sourceSpecific) || !r.sourceSpecific.some((s) => s.term === '82님들')) offenders.push('sourceSpecific 회귀')
+  if (!Array.isArray(r.targetDescriptorRisk) || !r.targetDescriptorRisk.includes('우리 또래분들')) offenders.push('targetDescriptorRisk 회귀')
+  if (!Array.isArray(r.soransoranRegister) || !r.soransoranRegister.includes('소란님들')) offenders.push('soransoranRegister 회귀')
+  if (!Array.isArray(r.genericCommunityPhrase) || r.genericCommunityPhrase.length === 0) offenders.push('genericCommunityPhrase 회귀')
+  if (!Array.isArray(r.sourceContextRisk)) offenders.push('sourceContextRisk 가 배열이 아니다')
+  if (offenders.length) bad('VE-M2 계약 유지 · 필드 추가만', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('VE-M2 계약 유지 · 필드 추가만', 'guard', '기존 5 유지 · 신규 2 추가 · 갈래 회귀 0')
+}
+
 // ── 출력 ────────────────────────────────────────────────
-console.log('\nPersona Safety Gate ⑤ — 금지 호칭 / 브랜드 금칙어 fixture')
+console.log('\nPersona Safety Gate ⑤ · ⑨ — 금지 호칭 / 출처 흔적 fixture')
 console.log('  이 fixture 는 네트워크 · DB · LLM 을 타지 않는다')
 console.log('  🔴 검사하는 것은 "잘 잡는가" 가 아니라 "선을 넘지 않는가" 다\n')
 const label: Record<string, string> = { policy: '[정책]  ', guard: '[가드]  ' }
@@ -246,4 +487,4 @@ if (failures.length) {
   console.error('')
   process.exit(1)
 }
-console.log(`\n✅ fixture ${report.length}건 전부 기대와 일치 — ⑤ 가 두 갈래를 보고 ⑨ 와 섞이지 않는다\n`)
+console.log(`\n✅ fixture ${report.length}건 전부 기대와 일치 — ⑤ 는 두 갈래를 보고 ⑨ 는 출처 흔적만 본다\n`)

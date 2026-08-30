@@ -67,6 +67,48 @@ export const GENERIC_COMMUNITY_TERMS = [
   '다들', '혹시', '조언 부탁', '경험 있으신', '어떻게 하세요', '있으세요',
 ] as const
 
+/**
+ * 출처 맥락 표현 — 🔴 **site 키가 없다.** 어느 출처에서 왔든 걸린다.
+ *
+ * `SOURCE_SPECIFIC_TERMS` 가 "누구를 불렀나"(82님들)를 본다면
+ * 이쪽은 **"어디서 썼나"**(우리 카페)를 본다. 출처명을 몰라도 출처가 드러난다.
+ *
+ * 🔴 tier 를 나누는 이유 — **'카페' 는 커피숍이기도 하다.**
+ *    "이 카페 커피가 맛있더라고요" 는 완전히 정상적인 우리 글이다.
+ *    40~60대 여성 커뮤니티에서 커피숍 이야기는 흔하고,
+ *    이걸 무조건 regenerate 로 두면 정상 생성물이 계속 폐기된다.
+ *    재생성해도 소재가 같으면 또 걸려 3회 후 폐기된다.
+ */
+export const SOURCE_CONTEXT_TERMS = [
+  // 🔴 strong — 커뮤니티 문맥에서만 성립한다. 단독으로 차단
+  { term: '카페 회원님들', tier: 'strong' },
+  { term: '우리 카페에서는', tier: 'strong' },
+  { term: '카페 공지', tier: 'strong' },
+  { term: '등업', tier: 'strong' },
+  // 🟡 ambiguous — 커피숍 의미와 겹친다. 단서를 함께 봐야 한다
+  { term: '카페 회원', tier: 'ambiguous' },
+  { term: '우리 카페', tier: 'ambiguous' },
+  { term: '여기 카페', tier: 'ambiguous' },
+  { term: '이 카페', tier: 'ambiguous' },
+] as const
+
+/** ambiguous 를 **커뮤니티** 의미로 확정시키는 단서 */
+export const CAFE_COMMUNITY_CUES = [
+  '게시판', '눈팅', '가입', '등업', '공지', '댓글', '회원님', '카페글', '카페에 올린',
+] as const
+
+/** ambiguous 를 **커피숍** 의미로 되돌리는 단서 — 🟢 있으면 살린다 */
+export const CAFE_SHOP_CUES = [
+  '커피', '원두', '아메리카노', '라떼', '디저트', '케이크', '사장님', '알바', '테이블', '자리',
+] as const
+
+/** '카페' 가 어느 의미로 쓰였는지 */
+export type CafeSense =
+  | 'community'   // 커뮤니티 — 출처 흔적이다
+  | 'shop'        // 커피숍 — 🟢 정상 소재다
+  | 'unknown'     // 단서가 없거나 양쪽 다 있다 — 사람이 본다
+  | 'none'        // ambiguous 항목 자체가 없다
+
 /** 공동체에 말을 거는 구조 */
 export type AddressPattern =
   | 'collective_question'   // 여럿에게 묻는다
@@ -126,6 +168,13 @@ export type CommunityRegister = {
   genericCommunityPhrase: string[]
   /** 질문 · 공동체 호출 구조를 살릴지 여부 */
   preserveStructure: AddressPattern
+  /**
+   * 🔴 출처 맥락 — site 키가 없어 위 갈래에 담을 수 없다.
+   *    위 5개 필드는 VE-M2 계약이라 건드리지 않고 **추가만** 한다.
+   */
+  sourceContextRisk: Array<{ term: string; tier: 'strong' | 'ambiguous'; count: number }>
+  /** ambiguous 항목이 커뮤니티인지 커피숍인지 — 판정 근거. 운영자가 review 를 볼 때 필요하다 */
+  cafeSense: CafeSense
 }
 
 export type ArtifactFrequency = {
@@ -260,6 +309,26 @@ export function computeCommunityRegister(text: string): CommunityRegister {
   const genericCommunityPhrase = GENERIC_COMMUNITY_TERMS
     .filter((t) => countTerm(text, t) > 0)
 
+  // 🔴 '우리 카페' 가 '우리 카페에서는' 으로도 잡히면 두 건이 된다 — 위 갈래와 같은 규칙
+  const sourceContextRisk: Array<{ term: string; tier: 'strong' | 'ambiguous'; count: number }> = []
+  const seenContext: string[] = []
+  for (const { term, tier } of [...SOURCE_CONTEXT_TERMS].sort((a, b) => b.term.length - a.term.length)) {
+    if (seenContext.some((s) => s.includes(term))) continue
+    const count = countTerm(text, term)
+    if (count > 0) { sourceContextRisk.push({ term, tier, count }); seenContext.push(term) }
+  }
+
+  // 🔴 ambiguous 가 없으면 판정할 것도 없다. strong 은 단서와 무관하게 확정이다
+  const hasAmbiguous = sourceContextRisk.some((r) => r.tier === 'ambiguous')
+  const communityCue = CAFE_COMMUNITY_CUES.some((c) => countTerm(text, c) > 0)
+  const shopCue = CAFE_SHOP_CUES.some((c) => countTerm(text, c) > 0)
+  let cafeSense: CafeSense = 'none'
+  if (hasAmbiguous) {
+    if (communityCue && !shopCue) cafeSense = 'community'
+    else if (shopCue && !communityCue) cafeSense = 'shop'
+    else cafeSense = 'unknown'   // 단서가 없거나 양쪽 다 있으면 사람이 본다
+  }
+
   const hasAddress = sourceSpecific.length > 0 || soransoranRegister.length > 0
   return {
     sourceSpecific,
@@ -267,6 +336,8 @@ export function computeCommunityRegister(text: string): CommunityRegister {
     targetDescriptorRisk,
     genericCommunityPhrase: [...genericCommunityPhrase],
     preserveStructure: detectAddressPattern(text, hasAddress),
+    sourceContextRisk,
+    cafeSense,
   }
 }
 
