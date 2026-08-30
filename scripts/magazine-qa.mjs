@@ -95,8 +95,8 @@ const H2_MAX = 6
 const BODY_MIN = 1200
 const BODY_MAX = 2500
 
-const HERO_WIDTH = 1200
-const HERO_HEIGHT = 675
+export const HERO_WIDTH = 1200
+export const HERO_HEIGHT = 675
 
 /**
  * 공개 판정은 scripts/lib/magazine-gate.mjs 하나만 쓴다.
@@ -201,7 +201,7 @@ function loadQueue() {
 // ── webp 크기 ──────────────────────────────────────────────
 
 /** RIFF/WEBP 헤더에서 크기를 읽는다. 알 수 없으면 null */
-function readWebpSize(path) {
+export function readWebpSize(path) {
   const buf = readFileSync(path)
   if (buf.length < 30) return null
   if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WEBP') return null

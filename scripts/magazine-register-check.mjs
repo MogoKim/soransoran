@@ -12,6 +12,7 @@
  */
 
 import { plan } from './magazine-register.mjs'
+import { loadQueue } from './lib/magazine-load.mjs'
 
 let failed = 0
 let passed = 0
@@ -26,10 +27,26 @@ function expect(label, actual, want) {
 /** reasons 에 그 사유가 들어 있는가 */
 const has = (p, frag) => p.reasons.some((r) => r.includes(frag))
 
-console.log('\n══════ 플래그 없음 — 지금과 100% 같아야')
+/**
+ * 🔴 **등록되면 큐에서 빠진다.** 특정 slug 가 "큐에 있는 HIGH" 로 남아 있을 거라고
+ *    가정하면 그 글을 등록한 날 테스트가 깨진다 — 실제로 `which-clinic-menopause` 를
+ *    등록한 뒤 5건이 깨졌다.
+ *
+ *    그래서 slug 를 박지 않고 **큐에서 HIGH 를 골라 쓴다.** 그리고 verdict 가 아니라
+ *    **사유 문자열의 유무**를 본다. 큐의 HIGH 는 대개 draft 가 아직 없어서 어차피
+ *    BLOCKED 인데, 이 테스트가 확인할 것은 "그 두 줄이 사라지는가" 하나다.
+ */
+const highInQueue = loadQueue().find((i) => i.riskLevel === 'HIGH' && i.autoEligible !== true)
+if (!highInQueue) {
+  console.log('  🔴 큐에 HIGH 항목이 없다 — 이 테스트를 돌릴 수 없다')
+  process.exit(1)
+}
+const HIGH_SLUG = highInQueue.slug
+
+console.log(`\n══════ 플래그 없음 — 지금과 100% 같아야  (${HIGH_SLUG})`)
 {
-  const p = plan({ slug: 'which-clinic-menopause', publishAtInput: '2026-09-17' })
-  expect('HIGH 는 BLOCKED', p.verdict, 'BLOCKED')
+  const p = plan({ slug: HIGH_SLUG, publishAtInput: '2027-01-05' })
+  expect('BLOCKED', p.verdict, 'BLOCKED')
   expect('riskLevel 사유가 있다', has(p, 'riskLevel=HIGH'), true)
   expect('autoEligible 사유가 있다', has(p, 'autoEligible=false'), true)
   expect('checks.founderApproved 는 false', p.checks.founderApproved, false)
@@ -38,13 +55,13 @@ console.log('\n══════ 플래그 없음 — 지금과 100% 같아야'
 
 console.log('\n══════ 플래그 있음 — 두 줄만 완화')
 {
-  const p = plan({ slug: 'which-clinic-menopause', publishAtInput: '2026-09-17', founderApproved: true })
-  expect('READY', p.verdict, 'READY')
-  expect('reasons 0건', p.reasons.length, 0)
+  const p = plan({ slug: HIGH_SLUG, publishAtInput: '2027-01-05', founderApproved: true })
   expect('riskLevel 사유가 사라졌다', has(p, 'riskLevel=HIGH'), false)
   expect('autoEligible 사유가 사라졌다', has(p, 'autoEligible=false'), false)
   expect('checks.approvalMode', p.checks.approvalMode, 'manual-high')
   expect('notes 에 승인 흔적이 남는다', p.notes.some((n) => n.includes('창업자 승인으로 통과')), true)
+  // 나머지 검사는 그대로 돈다 — 이 항목은 draft 가 없어 여전히 BLOCKED 다
+  expect('다른 사유는 살아 있다', has(p, 'article-draft.ts 가 없다'), true)
 }
 
 console.log('\n══════ 플래그가 있어도 막아야 하는 것')
