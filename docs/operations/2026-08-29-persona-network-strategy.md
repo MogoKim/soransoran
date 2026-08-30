@@ -425,14 +425,22 @@ User 4명 · Post 23건 · Comment 6개
 
 ```
 1) 전략 문서 PR                    ← 이 문서
-2) Persona Architecture 설계        Identity · Memory 스키마 설계 (구현 아님)
+2) Persona Architecture 설계        ✅ 완료 → 아래 링크
 3) 🔴 Safety / Originality Gate 설계  생성기보다 먼저 만든다
-4) Persona Pool 설계               20~30명 정체성 초안
-5) Trend ingestion 설계            외부 화제 수집 · 화제성 판정
-6) Post / Comment 후보 생성 도구      운영자 승인 대기열까지
-7) 운영자 승인 UI
-8) Metrics Loop
+4) M3 반응 지도 최소 설계            §5 Comment Distributor 의 입력
+5) Persona Pool 설계               20~30명 정체성 초안
+6) Trend ingestion 설계            외부 화제 수집 · 화제성 판정
+7) Post / Comment 후보 생성 도구      운영자 승인 대기열까지
+8) 운영자 승인 UI
+9) Metrics Loop
 ```
+
+> 🔴 **후속 설계: [Persona Architecture 설계](2026-08-30-persona-architecture-design.md)**
+> 이 전략을 **어떤 구조로 만들 것인가**를 정했다.
+> 핵심 보강 — **페르소나는 고정 말투 1개를 가지면 안 된다.**
+> Identity(고정) · Voice Core(기본 말투) · Voice Variations(5~8개 변주) ·
+> Mood State(오늘의 컨디션) · Relationship Memory · Activity Rhythm · No-Go 의 **7층 구조**.
+> 원칙은 **"정체성은 일관, 표현은 변주"** 다.
 
 🔴 **3) Safety Gate 를 생성기보다 먼저 만든다.**
 VE-M3 에서 배운 것이 이것이다 — 가드를 나중에 붙이면 이미 나간 것을 되돌릴 수 없다.
