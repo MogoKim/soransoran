@@ -6,6 +6,7 @@ import CommentForm from '@/components/features/CommentForm'
 import DeleteButton from '@/components/features/DeleteButton'
 import CommentItem from '@/components/features/CommentItem'
 import NextToRead from '@/components/features/NextToRead'
+import { getPostLikeState } from '@/lib/queries/post-like'
 import PostActionBar from '@/components/features/PostActionBar'
 import PostViewBeacon from '@/components/features/PostViewBeacon'
 import WriteCta from '@/components/features/WriteCta'
@@ -67,7 +68,11 @@ export default async function PostDetailPage({
   const { post, comments } = detail
   const session = await auth()
   // 현재 글이 pool 에 섞여 있을 수 있어 넉넉히 받아 NextToRead 가 걸러낸다.
-  const nextPosts = await getRecentDiscoveryPosts(6)
+  // 공감 상태는 getPostDetail 을 넓히지 않고 따로 읽는다 — 그 select 는 목록과 함께 쓴다.
+  const [nextPosts, likeState] = await Promise.all([
+    getRecentDiscoveryPosts(6),
+    getPostLikeState(post.id, session?.user?.id),
+  ])
 
   return (
     <PageShell>
@@ -124,6 +129,8 @@ export default async function PostDetailPage({
           title={post.title}
           currentPath={`${board.href}/${post.id}`}
           isLoggedIn={Boolean(session?.user)}
+          likeCount={likeState.likeCount}
+          isLiked={likeState.isLiked}
         />
 
         <section className="mt-8">
