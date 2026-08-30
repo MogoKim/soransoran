@@ -40,6 +40,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node
 import { join } from 'node:path'
 import { loadArticles, loadQueue, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import { calculateInventory } from './magazine-inventory.mjs'
+import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 
@@ -310,7 +311,7 @@ ${TODO('이 주제에서 특히 위험한 표현·진단명·제품군을 적는
 title: ${item.title}
 description: (90~120자. 직접 쓴 요약)
 cluster: ${item.cluster}
-medical: ${item.riskLevel === 'LOW' ? 'false' : 'true'}
+medical: ${medicalForCluster(item.cluster)}
 ${item.seriesId ? `seriesId: ${item.seriesId}\nseriesOrder: ${item.seriesOrder}\n` : ''}---
 
 첫 문단입니다. 한 문단은 2~3문장으로 씁니다.
@@ -362,11 +363,41 @@ ${item.seriesId ? `seriesId: ${item.seriesId}\nseriesOrder: ${item.seriesOrder}\
 }
 
 /**
+ * 이 글이 `medical: true` 로 나가야 하는가.
+ *
+ * 🔴 **riskLevel 로 정하지 않는다. cluster 로 정한다.** 두 값은 다른 축이다.
+ *      riskLevel  자동 등록을 열어도 되는가 (운영 위험)
+ *      medical    의료 안내문과 의료 QA 를 걸어야 하는가 (내용 성격)
+ *
+ *    한동안 `riskLevel === 'LOW' ? false : true` 였다. 결함이 양방향으로 났다.
+ *      누락  LOW + menopause-symptom 이 medical:false 로 생성된다 → QA 가 FAIL 을 낸다
+ *            (`hardest-part-of-menopause` day 41 · `moment-body-changed` day 63)
+ *      과잉  money-work 가 MEDIUM/HIGH 라는 이유로 medical:true 가 된다
+ *            (`irp-tax-benefit` · `year-end-tax-medical` 등 4건)
+ *    과잉은 실제로 터졌다 — `health-insurance-after-retire` 가 medical:true 로 나갔고
+ *    PR #193 에서 걷어냈다. 세제 글에 진료 권고를 요구하는 것은 맞지 않는다.
+ *
+ * 집합은 `magazine-qa.mjs` 에서 가져온다. **정의를 두 벌로 두지 않는다** —
+ * 갈라지면 producer 가 만든 frontmatter 를 QA 가 거부하는 상태가 다시 생긴다.
+ *
+ * SUGGESTED(daily·emotion)를 true 로 두는 근거는 등록분 실측이다.
+ * 해당 cluster 8건이 **전부** medical:true 다. 기본을 false 로 두면 매번 WARN 이 뜨고
+ * 세션이 매번 손으로 올리게 된다.
+ *
+ * 그 외(money-work·relationship·family)는 false 다. 등록분에서 money-work 0/4 ·
+ * relationship 0/3 이고, family 는 1/3 이라 다수를 따른다. 필요하면 세션이 올린다 —
+ * **기본값을 넓게 잡는 쪽이 위험하다.**
+ */
+function medicalForCluster(cluster) {
+  return MEDICAL_REQUIRED.has(cluster) || MEDICAL_SUGGESTED.has(cluster)
+}
+
+/**
  * review.ts 가 아니다. 패킷 생성 대상이 아니다.
  * 위험도 골격만 정리하고 판단이 필요한 자리는 비운다.
  */
 function reviewTodo(item) {
-  const medical = item.cluster === 'menopause-symptom' || item.cluster === 'clinic'
+  const medical = medicalForCluster(item.cluster)
   const money = item.cluster === 'money-work'
   return `# [작업 패키지] 검수 데이터 초안 — ${item.title}
 

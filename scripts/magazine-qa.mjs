@@ -75,9 +75,9 @@ const MEANINGLESS_ALT = ['이미지', '사진', 'image', 'photo', '썸네일']
 const ALLOWED_BLOCK_TYPES = new Set(['p', 'h2', 'h3', 'list', 'callout', 'image', 'cta'])
 
 /** medical: true 가 없으면 FAIL — 핵심 건강 클러스터 */
-const MEDICAL_REQUIRED = new Set(['menopause-symptom', 'sleep', 'clinic'])
+export const MEDICAL_REQUIRED = new Set(['menopause-symptom', 'sleep', 'clinic'])
 /** 경계 클러스터 — 없으면 WARN */
-const MEDICAL_SUGGESTED = new Set(['daily', 'emotion'])
+export const MEDICAL_SUGGESTED = new Set(['daily', 'emotion'])
 
 /**
  * description 길이 기준이 둘인 이유
