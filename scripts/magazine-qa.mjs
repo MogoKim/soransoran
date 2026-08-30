@@ -24,7 +24,14 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute, basename, dirname } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { isPublic, statusLabel, assertGateInSync } from './lib/magazine-gate.mjs'
-import { checkFirstPerson, checkTitleForm, checkCareAdvice } from './lib/magazine-editorial.mjs'
+import {
+  checkFirstPerson,
+  checkTitleForm,
+  checkCareAdvice,
+  checkDepartmentDirective,
+  checkTreatmentDirective,
+  checkCostClaim,
+} from './lib/magazine-editorial.mjs'
 
 const ROOT = process.cwd()
 const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
@@ -402,6 +409,19 @@ function checkArticle(article, context, report) {
   // 21 · 진료 권고 문장 (M-AUTO-2 · D4-A) — §4.4 의 필수 조건이라 FAIL 이다
   const care = checkCareAdvice(fullText, article.medical)
   if (care.level === 'FAIL') report.fail(id, care.reason)
+
+  // 22 · 진료과 단정 (M-AUTO-2 · D5)
+  //      과를 말하는 것은 정보다. 독자 대신 고르는 것이 판단이다
+  const department = checkDepartmentDirective(fullText)
+  if (department.level === 'FAIL') report.fail(id, department.reason)
+
+  // 23 · 치료 권유·만류 (M-AUTO-2 · D7)
+  const treatment = checkTreatmentDirective(fullText)
+  if (treatment.level === 'FAIL') report.fail(id, treatment.reason)
+
+  // 24 · 비용 단정 (M-AUTO-2 · D8) — clinic·medical 에만 건다. 돈 글에서 금액은 정보다
+  const cost = checkCostClaim(fullText, article)
+  if (cost.level === 'FAIL') report.fail(id, cost.reason)
 }
 
 // ── 집합 단위 검사 ─────────────────────────────────────────
