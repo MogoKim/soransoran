@@ -158,13 +158,18 @@ fixture 가 커밋 파일 실물을 열어 `memo` · `verdict` · `sourceUrl` ·
 
 ```
 1) Persona Network 전략 고정          ← 완료
-2) Persona Architecture 설계 (Identity · Memory)
+2) Persona Architecture 설계          ← 완료 → 2026-08-30-persona-architecture-design.md
 3) 🔴 Safety / Originality Gate 설계   생성기보다 먼저
-4) Persona Pool 20~30명 설계
-5) Trend ingestion 설계
-6) story_topic 1,304 의 시점 일반화 규칙
-7) privacy_review 25 의 식별 디테일 일반화
+4) M3 반응 지도 최소 설계
+5) Persona Pool 20~30명 설계
+6) Trend ingestion 설계
+7) story_topic 1,304 의 시점 일반화 규칙
+8) privacy_review 25 의 식별 디테일 일반화
 ```
+
+> 🔴 **[Persona Architecture 설계](2026-08-30-persona-architecture-design.md) §11 이 이 문서의 bucket 을 실제로 어떻게 쓰는지 정한다.**
+> voice_gold 는 few-shot anchor · voice_silver 는 **통계적 참고만**(few-shot 금지) ·
+> story_topic 은 **사건 구조만**(말투 few-shot 금지).
 
 ### bucket 이 어디에 쓰이는가
 
