@@ -426,7 +426,7 @@ User 4명 · Post 23건 · Comment 6개
 ```
 1) 전략 문서 PR                    ← 이 문서
 2) Persona Architecture 설계        ✅ 완료 → 아래 링크
-3) 🔴 Safety / Originality Gate 설계  생성기보다 먼저 만든다
+3) 🔴 Safety / Originality Gate 설계  ✅ 완료 → 2026-08-30-persona-safety-originality-gate-design.md
 4) M3 반응 지도 최소 설계            §5 Comment Distributor 의 입력
 5) Persona Pool 설계               20~30명 정체성 초안
 6) Trend ingestion 설계            외부 화제 수집 · 화제성 판정

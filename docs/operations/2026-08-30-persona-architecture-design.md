@@ -468,6 +468,10 @@ PersonaActivityRhythm
 
 ## §12 Safety / Originality Gate
 
+> 🔴 **상세 설계: [Safety / Originality Gate 설계](2026-08-30-persona-safety-originality-gate-design.md)**
+> 9관문의 검사 대상 · 실패 기준 · 조치 · 재사용 자산 · Gate 결과 상태(pass/review/regenerate/reject/crisis_hold) ·
+> 재생성 정책 · 로그 스키마 후보를 그쪽에서 확정했다.
+
 🔴 **생성기보다 먼저 설계한다.**
 VE-M3 에서 배운 것 — **가드를 나중에 붙이면 이미 나간 것을 되돌릴 수 없다.**
 
@@ -483,6 +487,7 @@ VE-M3 에서 배운 것 — **가드를 나중에 붙이면 이미 나간 것을
 | 6 | **페르소나 정체성 모순** | SelfMemory · Identity 충돌 | 신규 |
 | 7 | **n-gram 중복** | 🔴 최근 생성물과 문장 지문 중복 | 헌법 §9-7 |
 | 8 | **AI 말투** | "추천드립니다" · 구조화 나열 · 불릿 · 마크다운 | 신규 |
+| 9 | 🔴 **Source Community Marker** | 외부 커뮤니티명 · 카페 내부 호칭 · "우리 카페" 잔존 | 신규 (marker dictionary) |
 
 ### 🔴 위기 신호 — 별도 경로
 
@@ -532,7 +537,7 @@ VE-M3 에서 배운 것 — **가드를 나중에 붙이면 이미 나간 것을
 ```
 생성물          제목 · 본문 · 반응 유형
 페르소나        누가 · 왜 매칭됐는지 (매칭 점수) · 어떤 variation · 오늘 mood
-Safety Gate     8관문 결과 · 재생성 횟수
+Safety Gate     9관문 결과 · 재생성 횟수
 자기 검증        신호 5종 (gold 평균 대비)
 소스            topicTags · storyRefs · 🔴 원문 링크는 운영자만
 ```
@@ -629,7 +634,7 @@ Persona.userId     @unique → User   🔴 Post.authorId NOT NULL 제약 때문�
        스키마 + 20~30명 정의 (사람이 작성) · 🔴 TS 상수 배열 금지
 
 2단계  🔴 Safety / Originality Gate
-       8관문 + 위기 신호 경로 + fixture + 역검증
+       9관문 + 위기 신호 경로 + fixture + 역검증
        🔴 생성기 없이 가드만. 막을 수 없으면 만들지 않는다
 
 3단계  M3 반응 지도 최소 설계
@@ -662,7 +667,7 @@ Persona.userId     @unique → User   🔴 Post.authorId NOT NULL 제약 때문�
 ```
 1) Persona Architecture 문서 PR        ← 이 문서
 2) 🔴 공개 · 신뢰 정책 결정             창업자 결정. 나머지 설계 방향을 좌우한다
-3) Safety / Originality Gate 설계      생성기보다 먼저
+3) Safety / Originality Gate 설계      ✅ 완료 → 2026-08-30-persona-safety-originality-gate-design.md
 4) M3 반응 지도 최소 설계               §10-2 의 입력
 5) Persona Pool 20~30명 설계
 6) 후보 생성 도구
