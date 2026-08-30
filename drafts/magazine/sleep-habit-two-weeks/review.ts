@@ -29,7 +29,9 @@ export const REVIEW: ReviewData = {
     'sleep 시리즈 1~4편이 이미 말한 방법(이불·조명·화면·카페인·기록)을 다시 설명하지 않고 "이미 해본 것" 으로만 스쳤는가',
   ],
   forbiddenPatterns: [
-    '제가',
+    // '제가' 는 넣지 않는다. batch-qa 가 단순 includes 로 보기 때문에
+    // "숙제가 되기도" · "문제가 있다" 처럼 어절 안 부분 문자열이 전부 걸린다.
+    // 1인칭 화자는 D1(checkFirstPerson)이 어절 경계로 이미 잡는다.
     '저는',
     '저도',
     '저희',
