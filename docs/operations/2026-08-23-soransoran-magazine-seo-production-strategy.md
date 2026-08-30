@@ -1010,6 +1010,84 @@ node scripts/magazine-editorial-check.mjs     39 PASS · 0 FAIL
 
 **검사를 늘리는 것과 게이트를 여는 것은 다른 일이다.** 게이트는 M-AUTO-4 에서 유형 단위로 연다.
 
+### 13.9 창업자 승인 HIGH 등록 — `--founder-approved` (2026-08-30)
+
+`which-clinic-menopause` 가 원고·hero·QA·전문 검수를 모두 끝냈는데 **등록할 방법이 없었다.**
+`riskLevel=HIGH` · `autoEligible=false` 라 register 가 막고, 그 차단을 푸는 옵션이 없었다.
+
+#### 감사 결과 — 기존 경로는 없다
+
+```
+magazine-register.mjs:141-142   AUTO_RISK(LOW·MEDIUM) 밖이면 BLOCKED. CLI 플래그는
+                                --slug · --publish-at · --write · --json 뿐
+magazine-batch-qa.mjs:157-158   같은 두 조건으로 block
+magazine-packet.mjs             "승인하지 않는다" 명시 — 자료를 모아 보여줄 뿐
+ReviewData 타입                  승인 필드 0개
+```
+
+`MagazineStatus.BLOCKED` 가 *"사람이 열기 전까지 언제나 숨김 (HIGH 등급 대기 포함)"* 으로
+정의돼 있어 흔적은 있으나, **register 가 BLOCKED 레코드를 만들어 주지 않아 죽은 경로**다.
+게다가 우리가 원하는 것은 숨김이 아니라 공개 예약이라 목적에도 맞지 않는다.
+
+> ⚠️ 감사 중 발견한 비대칭 — 두 스크립트 모두 이 검사가 `if (queueItem)` 안에 있다.
+> **큐에서 빠지면 batch-qa 는 HIGH 도 READY 를 낸다.** register 는 큐에 없으면 BLOCKED 라
+> 실제 등록은 막히지만, **"batch-qa READY" 를 등록 가능 신호로 읽으면 안 된다.**
+
+#### 세 안을 놓고 C 를 골랐다
+
+**A안 — 수동 등록 커밋** 🟡
+register 가 하는 일(`publishedAt` 주입 · `status: 'SCHEDULED'` · 들여쓰기 · ANCHOR 삽입 ·
+큐 블록 제거)을 손으로 재현해야 한다. **`publishedAt` 을 손으로 채워 register 가 BLOCKED 를
+낸 사고가 실제로 있었다.** 슬롯·hero·publishWindow·중복 검사도 통째로 건너뛴다. 1회성이라
+남은 HIGH 8건에서 같은 판단을 매번 다시 해야 한다.
+
+**B안 — `review.ts` 에 `founderApproved`** 🔴 **반대**
+`review.ts` 는 **Claude Code 가 쓰는 파일**이다. 승인 플래그를 여기 두면 검수 데이터를
+적으면서 같은 파일에 승인까지 적을 수 있다. 템플릿이 이미 이 위험을 경고한다 —
+*"작성 권한까지 가지면 '쓴 사람이 곧 커밋하는 사람'이 되어 원칙 4가 무너진다."*
+**승인을 파일에 두면 자동화가 조용히 켤 자리가 된다.** 게이트로서 가장 약한 형태다.
+
+**C안 — register 에 명시 옵션** ✅ **채택**
+
+```
+node scripts/magazine-register.mjs --slug <slug> --publish-at <날짜> --founder-approved --write
+```
+
+```
+① 승인이 파일이 아니라 명령에 있다     B안의 자기 승인 경로가 생기지 않는다
+② 나머지 검사가 전부 살아 있다        hero·슬롯·publishWindow·중복·큐 존재·publishedAt 주입
+③ --write 와 같은 명시적 opt-in       이 repo 가 이미 쓰는 패턴이다
+④ AUTO_RISK 를 넓히지 않는다          자동 경로는 LOW/MEDIUM 그대로
+⑤ 재사용 가능                        남은 HIGH 8건에 같은 절차가 적용된다
+```
+
+**완화하는 것은 두 줄뿐이다** — `riskLevel` 과 `autoEligible`. 그 외에는 아무것도 건드리지 않는다.
+
+#### M-AUTO-4 와의 층 구분 — 충돌하지 않는다
+
+```
+M-AUTO-4      유형 단위 · 자동 등록 · 기계가 판정   ← 아직 열지 않았다
+--founder-approved   글 단위 · 수동 등록 · 사람이 판정   ← 지금 여는 것
+```
+
+§13.7 이 말하는 과도기 — *"창업자가 보는 것은 UNKNOWN 뿐"* — 에서 **그 UNKNOWN 을
+통과시킬 손잡이가 없어서 생긴 공백**을 메운다. 자동화를 앞당기는 것이 아니라,
+사람이 이미 내린 판단을 반영할 자리를 만드는 것이다.
+
+#### 이 옵션이 열지 않는 것
+
+```
+🚫 AUTO_RISK            LOW·MEDIUM 그대로. 상수 변경 0줄
+🚫 brief G5             HIGH 는 여전히 HOLD
+🚫 batch-qa HIGH 차단    변경 0줄
+🚫 register 자동 경로     플래그 없으면 지금과 100% 동일
+```
+
+⚠️ **한계를 적어 둔다.** `.claude/settings.json` 훅은 register 를 막지 않는다. 이 플래그는
+**규칙으로만 통제**되며 세션이 임의로 붙이지 않는다는 전제에 의존한다. A안(파일 직접 수정)도
+같은 수준이고, B안보다 눈에 띈다는 점만 낫다. **출력·JSON 에 `approvalMode: 'manual-high'` 와
+문구를 남기는 이유가 이것이다** — 나중에 로그만 보고도 사람이 켠 것인지 알 수 있어야 한다.
+
 #### 이 절을 읽고 하지 말아야 할 것
 
 ```
