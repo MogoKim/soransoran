@@ -59,18 +59,21 @@ export default function PostListItem({
       data-surface={surface}
       className="group flex min-h-[52px] items-start gap-3 px-4 py-3.5 no-underline"
     >
-      {/* 순번이 목록의 리듬을 만든다 — 굵기와 기울임은 여기 한 곳에만 둔다. */}
-      <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
+      {/* 순번은 순서를 알려줄 뿐 주 정보가 아니다 — 리듬은 만들되 제목을 이기지는 않는다.
+          기울임은 여기 한 곳에만 둔다. */}
+      <span className="w-8 shrink-0 text-center text-lg font-bold italic leading-none text-brand-ink">
         {rank}
       </span>
 
       <span className="flex min-w-0 flex-col gap-1.5">
         <span
-          /* 강조 행은 크기만 키우고 굵기는 순번에 양보한다 — 한 줄에서 굵은 것은 하나면 된다.
+          /* 🔴 제목이 주 정보다 — 순번과 배지보다 먼저 읽혀야 한다.
+             500 굵기로 두었더니 코랄 순번과 코랄 배지가 제목을 이겨 정보가 평평해 보였다.
+             제목을 올리고 순번을 낮춰 위계를 되돌린다 — 굵기는 제목이 가진다.
              줄간격은 두 갈래에 각각 적는다 — 공통 자리에 두면 뒤따르는 글자 크기와
              충돌로 보고 지워진다. */
           className={cn(
-            'line-clamp-2 break-keep font-medium text-content-primary',
+            'line-clamp-2 break-keep font-semibold text-content-primary',
             'transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink',
             emphasis ? 'text-lg leading-[1.5]' : 'leading-[1.5]',
           )}

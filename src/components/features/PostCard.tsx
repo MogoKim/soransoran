@@ -31,24 +31,27 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
        가로 여백은 <main> 의 px-4 가 준다 — 여기서 또 주면 글자가 안쪽으로 밀린다. */
     <Link
       href={`${boardHref}/${post.id}`}
-      className="group block py-3 no-underline"
+      className="group block py-3.5 no-underline"
     >
       <h3 className="line-clamp-2 break-keep text-lg font-bold leading-[1.35] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
         {post.title}
       </h3>
 
-      {/* 미리보기는 글의 일부다. 본문 크기(text-base 18px)와 줄간격을 줄이지 않는다.
-          밀도는 padding·여백으로만 잡는다. */}
+      {/* 🔴 위계는 세 단계다 — 제목(20/700 primary) · 미리보기(16/400 secondary) · 메타(15 muted).
+          미리보기가 본문 크기(18px)면 제목과 2px 차이라 네 줄이 한 덩어리로 밀려 보인다.
+          답답함은 행을 줄여서가 아니라 덩어리를 갈라서 푼다 — 그래서 여백은 오히려 늘렸다.
+          제목은 주 정보라 크기를 줄이지 않는다. */}
       {preview ? (
-        <p className="mt-1.5 line-clamp-2 break-keep text-base text-content-secondary">
+        <p className="mt-2 line-clamp-2 break-keep text-sm text-content-secondary">
           {preview}
         </p>
       ) : null}
 
-      {/* 메타는 한 줄이다 — 두 줄이면 화면당 글이 한 건 덜 들어온다.
-          작성자·시간을 한 span 으로 묶어, 줄이 바뀌어도 "누가"와 "언제"가 갈라지지 않게 한다. */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-content-muted">
-        <span className="flex items-center gap-1.5">
+      {/* 메타는 한 줄이다 — 두 줄이면 행 안에 덩어리가 하나 더 생겨 오히려 빽빽해진다.
+          작성자·시간을 한 span 으로 묶어, 줄이 바뀌어도 "누가"와 "언제"가 갈라지지 않게 한다.
+          작성자에만 굵기를 줘 "누가 썼는지"가 통계 숫자보다 먼저 잡히게 한다. */}
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-content-muted">
+        <span className="flex items-center gap-1.5 font-medium">
           {displayName(post.author)}
           <span aria-hidden>·</span>
           {formatRelativeTime(post.createdAt)}
