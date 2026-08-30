@@ -117,6 +117,7 @@ model User {
   posts         Post[]
   comments      Comment[]
   likes         Like[]
+  scraps        Scrap[]
   reports       Report[]      @relation("Reporter")
   blocking      UserBlock[]   @relation("Blocker")
   blockedBy     UserBlock[]   @relation("Blocked")
@@ -255,6 +256,7 @@ model Post {
 
   comments  Comment[]
   likes     Like[]
+  scraps    Scrap[]
   reports   Report[]
 
   @@index([boardType, status, createdAt])
@@ -303,6 +305,27 @@ model Like {
 
   @@unique([postId, userId])
   @@index([userId])
+}
+
+/// 나중에 다시 보려고 담아 둔 글.
+///
+/// 🔴 Like 와 같은 모양으로 둔다 — @@unique 도 [postId, userId] 순서를 맞춘다.
+///    두 테이블의 키 순서가 다르면 읽는 사람이 매번 어느 쪽인지 확인해야 한다.
+///
+/// 🔴 scrapCount 를 만들지 않는다. 스크랩 수는 어느 화면에도 표시하지 않는다 —
+///    쓰지 않는 카운터는 토글마다 Post 행을 잠그기만 한다.
+///    보여주기로 결정한 날 그때 만든다.
+model Scrap {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  /// 내 스크랩 목록은 최신순이다. 정렬까지 index 가 받아 준다.
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 // ─────────── 보호장치 ───────────

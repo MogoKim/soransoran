@@ -26,6 +26,7 @@ const MENU = [
   { href: '/my/nickname', label: '닉네임 변경' },
   { href: '/my/posts', label: '내가 쓴 글' },
   { href: '/my/comments', label: '내가 쓴 댓글' },
+  { href: '/my/scraps', label: '스크랩한 글' },
 ] as const
 
 const GUIDE = [

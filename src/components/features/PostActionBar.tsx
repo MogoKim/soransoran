@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { loginHref } from '@/lib/callback-url'
 import { togglePostLike } from '@/lib/actions/likes'
+import { togglePostScrap } from '@/lib/actions/scraps'
 import { shareOrCopy } from '@/lib/share-link'
 import BottomSheet from '@/components/ui/BottomSheet'
 import ReportButton from '@/components/features/ReportButton'
@@ -14,12 +15,11 @@ import ReportButton from '@/components/features/ReportButton'
  * 🔴 공감은 왼쪽에 크게, 공유·더보기는 오른쪽에 작게 둔다.
  *    셋을 같은 크기로 놓으면 무엇이 주된 반응인지 사라진다.
  *
- * 🔴 공감과 스크랩은 지금 단계가 다르다.
- *    공감은 로그인 사용자에게 실제로 저장한다(togglePostLike).
- *    스크랩은 아직 저장하지 않고 준비 중 안내만 한다.
+ * 🔴 공감과 스크랩은 로그인 사용자에게 실제로 저장한다
+ *    (togglePostLike · togglePostScrap). 비로그인에게는 로그인 안내만 한다.
  *
- * 🔴 저장하지 않는 쪽은 무슨 일이 일어날지 문장으로 알린다 —
- *    눌러도 아무 일이 없는 버튼은 고장으로 읽히고, 고장은 다시 누르지 않게 만든다.
+ * 🔴 무슨 일이 일어났는지 문장으로 알린다 — 눌렀는데 화면이 말이 없으면
+ *    됐는지 안 됐는지 알 수 없고, 사람은 한 번 더 누른다.
  */
 export default function PostActionBar({
   postId,
@@ -28,6 +28,7 @@ export default function PostActionBar({
   isLoggedIn,
   likeCount,
   isLiked,
+  isScrapped,
 }: {
   postId: string
   title: string
@@ -35,6 +36,7 @@ export default function PostActionBar({
   isLoggedIn: boolean
   likeCount: number
   isLiked: boolean
+  isScrapped: boolean
 }) {
   /** 🔴 로그인 링크는 안내마다 다르다. 문장과 함께 들고 다니지 않으면
       공유 성공 안내에까지 "로그인" 이 붙는다(실측으로 잡은 문제). */
@@ -47,6 +49,8 @@ export default function PostActionBar({
   /* 🔴 useTransition 의 pending 은 다음 렌더에 반영된다. 연타는 그 사이에 들어온다 —
      같은 tick 에서 막으려면 ref 가 필요하다. */
   const inFlight = useRef(false)
+  const [scrapped, setScrapped] = useState(isScrapped)
+  const scrapInFlight = useRef(false)
 
   async function onShare() {
     const result = await shareOrCopy(title, currentPath)
@@ -95,13 +99,32 @@ export default function PostActionBar({
     })
   }
 
+  /** 🔴 공감과 같은 형태다 — 시트를 먼저 닫고, 화면을 바꾼 뒤, 실패하면 되돌린다. */
   function onScrap() {
     setSheetOpen(false)
-    setNotice(
-      isLoggedIn
-        ? { text: '스크랩 기능은 준비 중이에요. 곧 열어드릴게요.' }
-        : { text: '로그인하시면 스크랩을 쓰실 수 있어요.', login: true },
-    )
+
+    if (!isLoggedIn) {
+      setNotice({ text: '로그인하시면 스크랩을 쓰실 수 있어요.', login: true })
+      return
+    }
+    if (scrapInFlight.current) return
+    scrapInFlight.current = true
+
+    const prev = scrapped
+    setScrapped(!prev)
+    setNotice({ text: prev ? '스크랩을 해제했어요.' : '스크랩했어요. 내 정보에서 다시 보실 수 있어요.' })
+
+    startTransition(async () => {
+      const result = await togglePostScrap(postId)
+      scrapInFlight.current = false
+
+      if (result.error) {
+        setScrapped(prev)
+        setNotice({ text: result.error })
+        return
+      }
+      if (typeof result.scrapped === 'boolean') setScrapped(result.scrapped)
+    })
   }
 
   return (
@@ -206,13 +229,14 @@ export default function PostActionBar({
           <button
             type="button"
             onClick={onScrap}
+            aria-pressed={scrapped}
             className="flex min-h-[52px] items-center gap-3 text-content-primary transition-colors duration-150 hover:text-brand-ink"
           >
             <svg
               aria-hidden
               viewBox="0 0 24 24"
               className="h-[22px] w-[22px] shrink-0"
-              fill="none"
+              fill={scrapped ? 'currentColor' : 'none'}
               stroke="currentColor"
               strokeWidth={1.8}
               strokeLinecap="round"
@@ -220,7 +244,7 @@ export default function PostActionBar({
             >
               <path d="M6.5 4h11a1 1 0 0 1 1 1v15l-6.5-4-6.5 4V5a1 1 0 0 1 1-1Z" />
             </svg>
-            <span>스크랩</span>
+            <span>{scrapped ? '스크랩 해제' : '스크랩'}</span>
           </button>
 
           <button
