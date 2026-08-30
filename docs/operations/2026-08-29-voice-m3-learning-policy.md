@@ -159,7 +159,8 @@ fixture 가 커밋 파일 실물을 열어 `memo` · `verdict` · `sourceUrl` ·
 ```
 1) Persona Network 전략 고정          ← 완료
 2) Persona Architecture 설계          ← 완료 → 2026-08-30-persona-architecture-design.md
-3) 🔴 Safety / Originality Gate 설계   생성기보다 먼저
+3) 🔴 Safety / Originality Gate 설계   ✅ 완료 → 2026-08-30-persona-safety-originality-gate-design.md
+   (voice_gold/silver/story 2,504건을 **고유 표현 희귀도 기준 코퍼스**로 재사용한다)
 4) M3 반응 지도 최소 설계
 5) Persona Pool 20~30명 설계
 6) Trend ingestion 설계

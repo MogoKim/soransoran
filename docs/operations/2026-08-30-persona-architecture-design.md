@@ -468,21 +468,32 @@ PersonaActivityRhythm
 
 ## §12 Safety / Originality Gate
 
+> 🔴 **상세 설계: [Safety / Originality Gate 설계](2026-08-30-persona-safety-originality-gate-design.md)**
+> 9관문의 검사 대상 · 실패 기준 · 조치 · 재사용 자산 · Gate 결과 상태(pass/review/regenerate/reject/crisis_hold) ·
+> 재생성 정책 · 로그 스키마 후보를 그쪽에서 확정했다.
+
 🔴 **생성기보다 먼저 설계한다.**
 VE-M3 에서 배운 것 — **가드를 나중에 붙이면 이미 나간 것을 되돌릴 수 없다.**
 
 ### 관문 (하나라도 실패 → 재생성, 3회 실패 → 폐기)
 
+> 🔴 **번호 · 명칭은 Safety 문서 §3 이 정본이다.** 이 표는 그 요약이며, 어긋나면 Safety 문서를 따른다.
+
 | # | 관문 | 판정 | 재사용 자산 |
 |---|---|---|---|
-| 1 | **20자 연속 유출** | 원문 · 댓글과 대조 | 🟢 `assertNoSourceLeak()` (9,411건 검증됨) |
-| 2 | **닉네임 재사용** | 학습 데이터 author · 회원 닉네임 | 🟢 PR #204 원칙 |
-| 3 | **식별 디테일** | 지명 · 기관 · 병원 · 날짜 · 숫자 **2개 이상 결합** | 신규 |
-| 4 | **원문 문장 순서** | 🔴 **3개 이상 동일** | 신규 |
-| 5 | **금지 호칭** | 시니어 · 어르신 · 노인 · 실버 | 🟢 `M3_FORBIDDEN_ADDRESS_TERMS` |
-| 6 | **페르소나 정체성 모순** | SelfMemory · Identity 충돌 | 신규 |
-| 7 | **n-gram 중복** | 🔴 최근 생성물과 문장 지문 중복 | 헌법 §9-7 |
-| 8 | **AI 말투** | "추천드립니다" · 구조화 나열 · 불릿 · 마크다운 | 신규 |
+| ① | **20자 연속 유출** | 원문 · 댓글과 대조 | 🟢 `assertNoSourceLeak()` (9,411건 검증됨) |
+| ② | **고유 표현 / 특이 조어 복제** | 희귀 표현을 그대로 옮겼는가 — 코퍼스 희귀도 | 🟡 voice_gold/silver/story 2,504건 |
+| ③ | **식별 디테일** | 지명 · 기관 · 병원 · 날짜 · 숫자 **2개 이상 결합** | 신규 |
+| ④ | **원문 문장 순서 / 구조 과복제** | 🔴 **핵심 전개 3개 이상 동일** | 신규 |
+| ⑤ | **금지 호칭 / 브랜드 금칙어** | 시니어 · 어르신 · 노인 · 실버 | 🟢 `M3_FORBIDDEN_ADDRESS_TERMS` |
+| ⑥ | **닉네임 / author 재사용** | 학습 데이터 author · 회원 닉네임 | 🟢 PR #204 원칙 |
+| ⑦ | **Persona Consistency** | Identity · Relationship Memory 충돌 | 신규 |
+| ⑧ | **Voice Fingerprint / 반복 패턴** | 시작 문장 · 말끝 · 이모티콘 반복 · **구조화 나열/마크다운 말투** · n-gram 점유율 | 헌법 §9-7 |
+| ⑨ | 🔴 **Source Community Marker** | 외부 커뮤니티명 · 카페 내부 호칭 · "우리 카페" 잔존 | 신규 (marker dictionary) |
+
+🔴 **예전 표의 "AI 말투"는 독립 관문이 아니다.** ⑧ Voice Fingerprint 의 **하위 검사 축**으로 흡수했다.
+같은 문제 — *고정된 한 가지 말투가 반복되어 사람이 쓴 것처럼 읽히지 않는 것* — 을 두 관문으로 세면
+로그에서 원인이 갈라지고, 관문 수만 늘어난다. **9관문을 넘기지 않는다.**
 
 ### 🔴 위기 신호 — 별도 경로
 
@@ -502,7 +513,9 @@ VE-M3 에서 배운 것 — **가드를 나중에 붙이면 이미 나간 것을
 🟢 허용  "저도 그랬어요" 경험 공유 · "병원 가보셨어요?" 정도의 권유 · 감정 공감
 ```
 
-### AI 말투 차단 / 오히려 필요한 것
+### ⑧ 하위 검사 축 — AI 말투 차단 / 오히려 필요한 것
+
+> 별도 관문이 아니라 **⑧ Voice Fingerprint / 반복 패턴이 보는 축의 하나**다.
 
 ```
 🔴 차단  "~하시는 것을 추천드립니다" · "도움이 되셨으면 좋겠습니다"
@@ -532,7 +545,7 @@ VE-M3 에서 배운 것 — **가드를 나중에 붙이면 이미 나간 것을
 ```
 생성물          제목 · 본문 · 반응 유형
 페르소나        누가 · 왜 매칭됐는지 (매칭 점수) · 어떤 variation · 오늘 mood
-Safety Gate     8관문 결과 · 재생성 횟수
+Safety Gate     9관문 결과 · 재생성 횟수
 자기 검증        신호 5종 (gold 평균 대비)
 소스            topicTags · storyRefs · 🔴 원문 링크는 운영자만
 ```
@@ -629,7 +642,7 @@ Persona.userId     @unique → User   🔴 Post.authorId NOT NULL 제약 때문�
        스키마 + 20~30명 정의 (사람이 작성) · 🔴 TS 상수 배열 금지
 
 2단계  🔴 Safety / Originality Gate
-       8관문 + 위기 신호 경로 + fixture + 역검증
+       9관문 + 위기 신호 경로 + fixture + 역검증
        🔴 생성기 없이 가드만. 막을 수 없으면 만들지 않는다
 
 3단계  M3 반응 지도 최소 설계
@@ -662,7 +675,7 @@ Persona.userId     @unique → User   🔴 Post.authorId NOT NULL 제약 때문�
 ```
 1) Persona Architecture 문서 PR        ← 이 문서
 2) 🔴 공개 · 신뢰 정책 결정             창업자 결정. 나머지 설계 방향을 좌우한다
-3) Safety / Originality Gate 설계      생성기보다 먼저
+3) Safety / Originality Gate 설계      ✅ 완료 → 2026-08-30-persona-safety-originality-gate-design.md
 4) M3 반응 지도 최소 설계               §10-2 의 입력
 5) Persona Pool 20~30명 설계
 6) 후보 생성 도구
