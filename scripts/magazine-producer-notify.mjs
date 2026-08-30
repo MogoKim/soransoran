@@ -113,11 +113,16 @@ export function judge({ date, run, runExists }) {
   //    draft.md 있음        → 이미 끝난 건. 여기서 세지 않는다
   //    brief.md 없음        → brief_missing. 회수를 시도조차 하지 않았다
   //    brief 는 있는데 없음 → 회수가 시도됐으나 원고를 못 받았다
+  //
+  // 🔴 needsFullReview 는 HIGH review lane 이다. 이 레인은 brief.md/draft.md 정본을
+  //    자동 회수하지 않고, _runs/{date}/selected/{slug}/*.todo.md 까지만 만든다.
+  //    따라서 brief_missing/fetchFailed 에 섞으면 정상 HIGH 패킷을 ERROR 로 오판한다.
   if (selected > 0) {
     const missing = (run.selected ?? [])
-      .map((x) => (typeof x === 'string' ? x : x?.slug))
-      .filter(Boolean)
-      .filter((slug) => !existsSync(join(DRAFTS_DIR, slug, 'draft.md')))
+      .map((x) => (typeof x === 'string' ? { slug: x, needsFullReview: false } : x))
+      .filter((x) => x?.slug && !x.needsFullReview)
+      .filter((x) => !existsSync(join(DRAFTS_DIR, x.slug, 'draft.md')))
+      .map((x) => x.slug)
 
     const briefMissing = missing.filter((slug) => !existsSync(join(DRAFTS_DIR, slug, 'brief.md')))
     const fetchFailed = missing.filter((slug) => existsSync(join(DRAFTS_DIR, slug, 'brief.md')))
