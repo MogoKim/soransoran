@@ -18,6 +18,11 @@ export type MyPostRow = {
   createdAt: Date
 }
 
+export type MyScrapRow = {
+  id: string
+  post: { id: string; title: string; boardType: BoardType; createdAt: Date }
+}
+
 export type MyCommentRow = {
   id: string
   content: string
@@ -50,6 +55,24 @@ export function getMyPosts(userId: string): Promise<MyPostRow[]> {
   return prisma.post.findMany({
     where: { authorId: userId, ...COMMUNITY_VISIBLE_WHERE },
     select: { id: true, title: true, boardType: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+    take: MY_LIST_LIMIT,
+  })
+}
+
+/**
+ * 담아 둔 글. 내 스크랩을 최신순으로 읽는다.
+ *
+ * 🔴 내려간 글은 조용히 빠진다. 눌러도 갈 곳이 없는 행을 목록에 두지 않는다 —
+ *    "삭제된 글입니다" 껍데기를 남기면 지운 사람의 의사를 화면이 되살린다.
+ */
+export function getMyScraps(userId: string): Promise<MyScrapRow[]> {
+  return prisma.scrap.findMany({
+    where: { userId, post: { ...COMMUNITY_VISIBLE_WHERE } },
+    select: {
+      id: true,
+      post: { select: { id: true, title: true, boardType: true, createdAt: true } },
+    },
     orderBy: { createdAt: 'desc' },
     take: MY_LIST_LIMIT,
   })
