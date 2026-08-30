@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { loginHref } from '@/lib/callback-url'
+import { togglePostLike } from '@/lib/actions/likes'
 import { shareOrCopy } from '@/lib/share-link'
 import BottomSheet from '@/components/ui/BottomSheet'
 import ReportButton from '@/components/features/ReportButton'
@@ -13,26 +14,39 @@ import ReportButton from '@/components/features/ReportButton'
  * 🔴 공감은 왼쪽에 크게, 공유·더보기는 오른쪽에 작게 둔다.
  *    셋을 같은 크기로 놓으면 무엇이 주된 반응인지 사라진다.
  *
- * 🔴 이번 단계에서 공감·스크랩은 저장하지 않는다.
- *    누르면 무슨 일이 일어날지 문장으로 알린다 — 눌러도 아무 일이 없는 버튼은
- *    고장으로 읽히고, 고장은 다시 누르지 않게 만든다.
+ * 🔴 공감과 스크랩은 지금 단계가 다르다.
+ *    공감은 로그인 사용자에게 실제로 저장한다(togglePostLike).
+ *    스크랩은 아직 저장하지 않고 준비 중 안내만 한다.
+ *
+ * 🔴 저장하지 않는 쪽은 무슨 일이 일어날지 문장으로 알린다 —
+ *    눌러도 아무 일이 없는 버튼은 고장으로 읽히고, 고장은 다시 누르지 않게 만든다.
  */
 export default function PostActionBar({
   postId,
   title,
   currentPath,
   isLoggedIn,
+  likeCount,
+  isLiked,
 }: {
   postId: string
   title: string
   currentPath: string
   isLoggedIn: boolean
+  likeCount: number
+  isLiked: boolean
 }) {
   /** 🔴 로그인 링크는 안내마다 다르다. 문장과 함께 들고 다니지 않으면
       공유 성공 안내에까지 "로그인" 이 붙는다(실측으로 잡은 문제). */
   const [notice, setNotice] = useState<{ text: string; login?: true } | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
+  const [liked, setLiked] = useState(isLiked)
+  const [count, setCount] = useState(likeCount)
+  const [, startTransition] = useTransition()
+  /* 🔴 useTransition 의 pending 은 다음 렌더에 반영된다. 연타는 그 사이에 들어온다 —
+     같은 tick 에서 막으려면 ref 가 필요하다. */
+  const inFlight = useRef(false)
 
   async function onShare() {
     const result = await shareOrCopy(title, currentPath)
@@ -46,15 +60,39 @@ export default function PostActionBar({
   }
 
   /**
-   * 🔴 두 문장을 섞지 않는다. 비로그인에게 "로그인하면 됩니다 + 준비 중입니다" 를
-   *    함께 말하면 로그인해도 되는지 알 수 없다. 지금 할 수 있는 일만 말한다.
+   * 🔴 비로그인에게는 지금 할 수 있는 일만 말한다.
+   *
+   * 🔴 화면을 먼저 바꾸고 서버에 보낸다. 실패하면 이전 값으로 되돌린다 —
+   *    누른 뒤 아무 일도 안 일어나는 순간이 있으면 다시 누르게 되고, 그 두 번째가 취소가 된다.
    */
   function onLike() {
-    setNotice(
-      isLoggedIn
-        ? { text: '공감 기능은 준비 중이에요. 곧 열어드릴게요.' }
-        : { text: '로그인하시면 공감을 남기실 수 있어요.', login: true },
-    )
+    if (!isLoggedIn) {
+      setNotice({ text: '로그인하시면 공감을 남기실 수 있어요.', login: true })
+      return
+    }
+    if (inFlight.current) return
+    inFlight.current = true
+
+    const prevLiked = liked
+    const prevCount = count
+    setLiked(!prevLiked)
+    setCount(prevLiked ? Math.max(0, prevCount - 1) : prevCount + 1)
+    setNotice(null)
+
+    startTransition(async () => {
+      const result = await togglePostLike(postId)
+      inFlight.current = false
+
+      if (result.error) {
+        setLiked(prevLiked)
+        setCount(prevCount)
+        setNotice({ text: result.error })
+        return
+      }
+      // 서버가 센 값이 정답이다 — 그 사이 다른 사람이 누른 것까지 반영된다
+      if (typeof result.likeCount === 'number') setCount(result.likeCount)
+      if (typeof result.liked === 'boolean') setLiked(result.liked)
+    })
   }
 
   function onScrap() {
@@ -73,14 +111,19 @@ export default function PostActionBar({
         <button
           type="button"
           onClick={onLike}
-          aria-label="공감"
-          className="inline-flex min-h-[52px] items-center gap-2 rounded-full border border-interactive px-4 text-sm font-bold text-brand-ink transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          aria-label={liked ? '공감 취소' : '공감'}
+          aria-pressed={liked}
+          className={
+            liked
+              ? 'inline-flex min-h-[52px] items-center gap-2 rounded-full border border-interactive bg-surface-soft px-4 text-sm font-bold text-brand-ink transition duration-150 active:scale-[0.98]'
+              : 'inline-flex min-h-[52px] items-center gap-2 rounded-full border border-interactive px-4 text-sm font-bold text-brand-ink transition duration-150 hover:bg-surface-soft active:scale-[0.98]'
+          }
         >
           <svg
             aria-hidden
             viewBox="0 0 24 24"
             className="h-5 w-5"
-            fill="none"
+            fill={liked ? 'currentColor' : 'none'}
             stroke="currentColor"
             strokeWidth={1.8}
             strokeLinecap="round"
@@ -88,7 +131,8 @@ export default function PostActionBar({
           >
             <path d="M12 20s-7.2-4.6-7.2-9.4A4 4 0 0 1 12 7.6a4 4 0 0 1 7.2 3C19.2 15.4 12 20 12 20Z" />
           </svg>
-          <span>공감</span>
+          {/* 0 도 감추지 않는다 — 자리가 사라졌다 생겼다 하면 버튼 폭이 흔들린다 */}
+          <span>공감 {count}</span>
         </button>
 
         <div className="flex-1" />

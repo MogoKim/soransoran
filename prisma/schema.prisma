@@ -247,6 +247,9 @@ model Post {
   publishAt DateTime?
 
   viewCount Int          @default(0)
+  /// 공감 수. Like row 를 세지 않고 담아 둔다 — 목록으로 옮길 때 행마다 세는 일을 피한다.
+  /// 쓰는 곳은 togglePostLike 한 곳뿐이다. 정렬·인기·베스트에는 아직 쓰지 않는다.
+  likeCount Int          @default(0)
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
