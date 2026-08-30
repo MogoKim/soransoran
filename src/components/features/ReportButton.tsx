@@ -16,11 +16,14 @@ import { REPORT_REASONS } from '@/lib/report-reasons'
 export default function ReportButton({
   postId,
   commentId,
+  defaultOpen = false,
 }: {
   postId?: string
   commentId?: string
+  /** 더보기에서 이미 "신고" 를 고른 뒤라면 폼부터 편다 — 같은 선택을 두 번 시키지 않는다 */
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const [state, formAction] = useFormState<ReportActionState, FormData>(createReport, {})
 
   if (state.done) {

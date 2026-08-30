@@ -3,10 +3,10 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import CommentForm from '@/components/features/CommentForm'
-import ReportButton from '@/components/features/ReportButton'
 import DeleteButton from '@/components/features/DeleteButton'
 import CommentItem from '@/components/features/CommentItem'
 import NextToRead from '@/components/features/NextToRead'
+import PostActionBar from '@/components/features/PostActionBar'
 import PostViewBeacon from '@/components/features/PostViewBeacon'
 import WriteCta from '@/components/features/WriteCta'
 import { auth } from '@/lib/auth'
@@ -101,26 +101,30 @@ export default async function PostDetailPage({
           <div className="mt-5 whitespace-pre-wrap break-keep leading-[1.85] text-content-primary [overflow-wrap:anywhere]">
             {post.content}
           </div>
-          {session?.user ? (
+          {session?.user?.id === post.author.id ? (
             <div className="mt-6 flex items-center gap-3 border-t border-subtle pt-3">
-              {session.user.id === post.author.id ? (
-                <>
-                  {/* 🔴 코랄 fill 을 쓰지 않는다. 여기는 글을 읽는 화면이고
-                        수정·삭제는 필요할 때만 찾는 손잡이다. 삭제와 같은 무게로 둔다. */}
-                  <Link
-                    href={`${board.href}/${post.id}/edit`}
-                    className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
-                  >
-                    수정
-                  </Link>
-                  <DeleteButton boardSlug={board.slug} postId={post.id} />
-                </>
-              ) : (
-                <ReportButton postId={post.id} />
-              )}
+              {/* 🔴 코랄 fill 을 쓰지 않는다. 여기는 글을 읽는 화면이고
+                    수정·삭제는 필요할 때만 찾는 손잡이다. 삭제와 같은 무게로 둔다. */}
+              <Link
+                href={`${board.href}/${post.id}/edit`}
+                className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
+              >
+                수정
+              </Link>
+              <DeleteButton boardSlug={board.slug} postId={post.id} />
             </div>
           ) : null}
         </article>
+
+        {/* 🔴 행동 줄은 본문 밖에 둔다. 카드 안에 넣으면 글의 일부로 읽힌다 —
+              여기는 다 읽은 뒤 무엇을 할지 고르는 자리다.
+              신고는 여기 더보기 안으로 옮겼다. 글마다 신고 버튼이 상시 떠 있을 자리가 아니다. */}
+        <PostActionBar
+          postId={post.id}
+          title={post.title}
+          currentPath={`${board.href}/${post.id}`}
+          isLoggedIn={Boolean(session?.user)}
+        />
 
         <section className="mt-8">
           <h2 className="text-lg font-bold text-content-primary">
