@@ -27,6 +27,10 @@ import { assertNoSourceLeak, M3_LEAK_RUN_MIN } from './voice-m3-contract.mjs'
 import { checkForbiddenAddress } from './persona-gate-forbidden-address.mjs'
 import { checkSourceMarker } from './persona-gate-source-marker.mjs'
 import { classifyReaction, type ReactionType } from './voice-comment-signals.mjs'
+import {
+  checkUniqueExpression, checkIdentifyingDetail, checkStructureCopy,
+  type FrequencyLookup,
+} from './persona-gate-234.mjs'
 
 export type GateCode = '①' | '②' | '③' | '④' | '⑤' | '⑥' | '⑦' | '⑧' | '⑨'
 export type GateOutcome = 'pass' | 'review' | 'regenerate' | 'reject' | 'notRun'
@@ -78,6 +82,13 @@ export type CandidateInput = {
   adviceForbidden?: boolean
   /** 출처가 카페 운영/공지 문맥인가 — ⑨ 로 넘긴다 */
   sourceIsCafeOperational?: boolean
+  /**
+   * ② 코퍼스 빈도 조회. 🔴 없으면 ② 는 notRun 이다 — pass 로 세지 않는다.
+   *    댓글 생성물에는 **댓글 코퍼스**를 붙여야 한다(§3-②).
+   */
+  frequencyLookup?: FrequencyLookup
+  /** ② 로그용 — 어느 코퍼스로 쟀는지 */
+  corpusName?: string
 }
 
 const SEVERITY: Record<GateOutcome, number> = {
@@ -204,9 +215,32 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   }
   if (reactionType === 'empathy' && text.length < 15) tags.push('OVER_EMPATHY')
 
-  // ── 돌지 않은 관문 — 🔴 pass 로 보고하지 않는다 ──
-  for (const g of ['②', '③', '④'] as const) {
-    gates.push({ gate: g, outcome: 'notRun', detail: '코퍼스 · 판정부 미구현' })
+  // ── ② 고유 표현 / 특이 조어 ──
+  //    🔴 코퍼스 빈도 조회가 없으면 판정이 성립하지 않는다. notRun 이다.
+  if (input.frequencyLookup === undefined) {
+    gates.push({ gate: '②', outcome: 'notRun', detail: '코퍼스 빈도 조회 없음' })
+  } else if (!hasSource) {
+    gates.push({ gate: '②', outcome: 'notRun', detail: '검사 불가 — sourceTexts 없음' })
+  } else {
+    const two = checkUniqueExpression(
+      text, input.sourceTexts, input.frequencyLookup, input.corpusName ?? 'comment',
+    )
+    gates.push({ gate: '②', outcome: two.status, detail: two.detail })
+    if (two.status !== 'pass') tags.push('SEED_TOO_CLOSE')
+  }
+
+  // ── ③ 식별 디테일 — 🔴 단일은 허용, 결합이 위험하다 ──
+  const three = checkIdentifyingDetail(text)
+  gates.push({ gate: '③', outcome: three.status, detail: three.detail })
+
+  // ── ④ 구조 과복제 — 🔴 ① 과 역할이 다르다 ──
+  //    ① 은 문자열, ④ 는 전개 순서. 표현이 전부 달라도 ④ 는 걸릴 수 있다
+  if (!hasSource) {
+    gates.push({ gate: '④', outcome: 'notRun', detail: '검사 불가 — sourceTexts 없음' })
+  } else {
+    const four = checkStructureCopy(text, input.sourceTexts)
+    gates.push({ gate: '④', outcome: four.status, detail: four.detail })
+    if (four.status !== 'pass') tags.push('STRUCTURE_COPY')
   }
 
   const ran = gates.filter((g) => g.outcome !== 'notRun')
@@ -221,7 +255,9 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
     reactionType,
     status: worst,
     gates: gates.sort((a, b) => a.gate.localeCompare(b.gate)),
-    aiToneTags: tags,
+    // 🔴 중복 제거 — ① 과 ② 가 같은 태그를 붙일 수 있다.
+    //    운영자 화면에서 같은 태그가 두 번 보이면 근거가 둘인지 버그인지 알 수 없다
+    aiToneTags: [...new Set(tags)],
     sourceLeak: leaked,
     charLength: [...text].length,
     reason: failed.length === 0

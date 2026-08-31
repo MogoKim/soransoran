@@ -25,7 +25,10 @@
  *      LLM 호출 (생성) · DB write · 발행 · status 전환 · personaId 채우기
  */
 import { PrismaClient } from '@prisma/client'
+import pg from 'pg'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { loadUnaoReadonlyUrl } from './lib/voice-unao-readonly.mjs'
+import type { FrequencyLookup } from './lib/persona-gate-234.mjs'
 import {
   checkCommentCandidate, summarizeCandidates,
   type CandidateInput, type CandidateVerdict,
@@ -90,6 +93,51 @@ if (linkedPosts !== 0 || linkedComments !== 0) {
 }
 ok('Post/Comment.personaId 전부 NULL')
 
+// ── ② 댓글 코퍼스 빈도 조회 ──
+//    🔴 댓글 생성물은 **댓글 코퍼스**로 잰다(§3-②).
+//       본문 코퍼스로 재면 "고생하셨어요"(댓글 69건 · 본문 0건)가 고유 표현이 된다.
+//    🔴 원문을 저장하지 않는다. 조회할 때만 읽고, 빈도 표만 메모리에 남긴다.
+const unaoUrl = (() => {
+  try { return loadUnaoReadonlyUrl() } catch { return null }
+})()
+
+let lookup: FrequencyLookup | undefined
+let corpusName = 'comment'
+let corpusSize = 0
+
+if (unaoUrl === null) {
+  console.log('   🟡 우나어 read-only 접속 정보 없음 — ② 는 notRun 이 된다')
+} else {
+  const unao = new pg.Client({ connectionString: unaoUrl, ssl: { rejectUnauthorized: false } })
+  await unao.connect()
+  const { rows } = await unao.query<{ topComments: unknown }>(
+    'SELECT "topComments" FROM "CafePost" WHERE "topComments" IS NOT NULL LIMIT 3000',
+  )
+  await unao.end()
+
+  // 🔴 본문만 모은다. author 는 읽지 않는다 (학습 추출과 같은 원칙)
+  const bodies: string[] = []
+  for (const r of rows) {
+    let arr: unknown = r.topComments
+    if (typeof arr === 'string') { try { arr = JSON.parse(arr) } catch { continue } }
+    if (!Array.isArray(arr)) continue
+    for (const item of arr) {
+      if (item === null || typeof item !== 'object') continue
+      const body = (item as Record<string, unknown>).content
+      if (typeof body === 'string' && body.trim() !== '') bodies.push(body.replace(/\s+/g, ''))
+    }
+  }
+  corpusSize = bodies.length
+  // 🔴 substring 카운트다. 사전을 미리 만들지 않는다 —
+  //    후보마다 검사할 n-gram 이 수십 개뿐이라 그때 세는 편이 싸다
+  lookup = (ngram: string): number => {
+    let n = 0
+    for (const b of bodies) if (b.includes(ngram)) { n++; if (n > 6) break }
+    return n
+  }
+  ok(`② 댓글 코퍼스 ${corpusSize}건 (원문 미저장 · 빈도 조회만)`)
+}
+
 // ── ⑥-A 대조 집합 — 회원 표시명. 🔴 값을 출력하지 않는다 ──
 const users = await prisma.user.findMany({ select: { nickname: true, name: true } })
 const knownNames = users
@@ -152,6 +200,7 @@ const verdicts: CandidateVerdict[] = candidates.map((c) => {
     ...(c.sourceIsCafeOperational !== undefined
       ? { sourceIsCafeOperational: c.sourceIsCafeOperational }
       : {}),
+    ...(lookup !== undefined ? { frequencyLookup: lookup, corpusName } : {}),
   }
   return checkCommentCandidate(input)
 })

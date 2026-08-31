@@ -197,11 +197,13 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
 {
   const v = checkCommentCandidate({ personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE })
   const notRun = v.gates.filter((g) => g.outcome === 'notRun').map((g) => g.gate)
-  const expected = ['②', '③', '④']
+  // 🔴 ⑦(identity 대조) · ⑧(반복 패턴) 은 여전히 돌지 않는다.
+  //    ② 는 코퍼스 조회가 없을 때만 notRun 이다
+  const expected = ['⑦', '⑧']
   const missing = expected.filter((g) => !notRun.includes(g as never))
   if (missing.length > 0) bad('미실행은 notRun', 'guard', `🔴 ${missing.join(' ')} 가 notRun 이 아니다`)
   else if (v.gates.length !== 9) bad('미실행은 notRun', 'guard', `🔴 관문 ${v.gates.length}/9`)
-  else ok('미실행은 notRun', 'guard', `9관문 · notRun ${notRun.length}종`)
+  else ok('미실행은 notRun', 'guard', `9관문 · notRun ${notRun.length}종 (⑦ ⑧ 포함)`)
 }
 
 // ── 🔴 반환값에 본문이 없는가 ────────────────────────
@@ -241,6 +243,145 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   }
   if (offenders.length) bad('순수 함수 · 발행 없음', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('순수 함수 · 발행 없음', 'guard', 'DB · LLM · 발행 경로 없음 · ① 반환값 확인')
+}
+
+// ══ ② 고유 표현 ═══════════════════════════════════
+{
+  // 🔴 희귀 = 코퍼스 빈도 0~1. 흔함 = 6+ (§3-② 판정 3단)
+  const rareLookup = () => 0
+  const commonLookup = () => 50
+  const midLookup = () => 3
+  const shared = '남의편이 그러는데'
+
+  const rare = checkCommentCandidate({
+    personaCode: 'P05', text: `${shared} 저도 그래요`, sourceTexts: [`${shared} 참 답답해요`],
+    frequencyLookup: rareLookup,
+  })
+  const common = checkCommentCandidate({
+    personaCode: 'P05', text: `${shared} 저도 그래요`, sourceTexts: [`${shared} 참 답답해요`],
+    frequencyLookup: commonLookup,
+  })
+  const mid = checkCommentCandidate({
+    personaCode: 'P05', text: `${shared} 저도 그래요`, sourceTexts: [`${shared} 참 답답해요`],
+    frequencyLookup: midLookup,
+  })
+  const g = (v: typeof rare) => v.gates.find((x) => x.gate === '②')?.outcome
+  const offenders: string[] = []
+  if (g(rare) !== 'regenerate') offenders.push(`희귀=${g(rare)}`)
+  if (g(mid) !== 'review') offenders.push(`중간=${g(mid)}`)
+  if (g(common) !== 'pass') offenders.push(`흔함=${g(common)}`)
+  if (offenders.length) bad('② 희귀도 3단', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('② 희귀도 3단', 'case', '희귀 regenerate · 중간 review · 흔함 pass')
+}
+
+// ── 🔴 ② 는 코퍼스 없으면 notRun ─────────────────────
+{
+  const v = checkCommentCandidate({ personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE })
+  const g = v.gates.find((x) => x.gate === '②')
+  if (g?.outcome !== 'notRun') bad('② 코퍼스 없으면 notRun', 'guard', `🔴 ②=${g?.outcome}`)
+  else ok('② 코퍼스 없으면 notRun', 'guard', 'pass 로 세지 않는다')
+}
+
+// ── 🔴 ② 반환값에 n-gram 문자열이 없다 ────────────────
+{
+  const shared = '남의편이그러는데'
+  const v = checkCommentCandidate({
+    personaCode: 'P05', text: `${shared} 저도요`, sourceTexts: [`${shared} 답답해요`],
+    frequencyLookup: () => 0,
+  })
+  if (JSON.stringify(v).includes('남의편')) bad('② 원문 조각 없음', 'guard', '🔴 n-gram 이 반환값에 있다')
+  else ok('② 원문 조각 없음', 'guard', '개수만')
+}
+
+// ══ ③ 식별 디테일 ═════════════════════════════════
+{
+  // 🔴 단일은 허용 · 2개 review · 3개 이상 regenerate
+  const one = checkCommentCandidate({ personaCode: 'P05', text: '집 근처 병원 다녀왔어요', sourceTexts: SOURCE })
+  const two = checkCommentCandidate({ personaCode: 'P05', text: '분당구 병원에 다녀왔어요', sourceTexts: SOURCE })
+  const three = checkCommentCandidate({
+    personaCode: 'P05', text: '분당구 병원에 3월 12일 다녀왔어요', sourceTexts: SOURCE,
+  })
+  const g = (v: typeof one) => v.gates.find((x) => x.gate === '③')?.outcome
+  const offenders: string[] = []
+  if (g(one) !== 'pass') offenders.push(`단일=${g(one)}`)
+  if (g(two) !== 'review') offenders.push(`2개=${g(two)}`)
+  if (g(three) !== 'regenerate') offenders.push(`3개=${g(three)}`)
+  if (offenders.length) bad('③ 결합 판정', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('③ 결합 판정', 'case', '단일 pass · 2개 review · 3개 regenerate')
+}
+
+// ── 🔴 ③ 반환값에 걸린 값이 없다 ──────────────────────
+{
+  const v = checkCommentCandidate({
+    personaCode: 'P05', text: '분당구 병원에 3월 12일 다녀왔어요', sourceTexts: SOURCE,
+  })
+  const json = JSON.stringify(v)
+  if (/분당|3월|12일/.test(json)) bad('③ 값 노출 없음', 'guard', '🔴 걸린 값이 반환값에 있다')
+  else if (!json.includes('REGION')) bad('③ 값 노출 없음', 'guard', '🔴 카테고리 코드가 없다')
+  else ok('③ 값 노출 없음', 'guard', '카테고리 코드만')
+}
+
+// ── 🔴 ③ 밴드 표현은 통과한다 ─────────────────────────
+{
+  const v = checkCommentCandidate({
+    personaCode: 'P05', text: '저도 50대 초반인데 수도권 살아요', sourceTexts: SOURCE,
+  })
+  const g = v.gates.find((x) => x.gate === '③')
+  if (g?.outcome !== 'pass') bad('③ 밴드는 통과', 'case', `🔴 ③=${g?.outcome} (${g?.detail})`)
+  else ok('③ 밴드는 통과', 'case', '"50대 초반" · "수도권" 은 특정되지 않는다')
+}
+
+// ══ ④ 구조 과복제 ═════════════════════════════════
+{
+  // 🔴 흔한 전개(병원→검사→기다림)는 순서가 같아도 세지 않는다
+  const src = [
+    '무릎이 아파서 병원에 갔어요. 검사를 받았어요. 결과를 기다리고 있어요.',
+  ]
+  const commonFlow = checkCommentCandidate({
+    personaCode: 'P05',
+    text: '저도 병원에 갔어요. 검사를 받았어요. 결과를 기다려요.',
+    sourceTexts: src,
+  })
+  const g = commonFlow.gates.find((x) => x.gate === '④')
+  if (g?.outcome !== 'pass') bad('④ 흔한 구조는 통과', 'case', `🔴 ④=${g?.outcome} (${g?.detail})`)
+  else ok('④ 흔한 구조는 통과', 'case', '일반 구조 사전으로 걸러진다')
+}
+
+// ── 🔴 ④ 는 sourceTexts 없으면 notRun ────────────────
+{
+  const v = checkCommentCandidate({ personaCode: 'P05', text: '그러네요 저도 그래요', sourceTexts: [] })
+  const g = v.gates.find((x) => x.gate === '④')
+  if (g?.outcome !== 'notRun') bad('④ 검사 불가는 notRun', 'guard', `🔴 ④=${g?.outcome}`)
+  else ok('④ 검사 불가는 notRun', 'guard', 'pass 로 세지 않는다')
+}
+
+// ── 🔴 ④ 와 ① 의 역할이 다르다 ───────────────────────
+{
+  // 표현을 전부 바꿔 ① 은 통과하지만 고유 전개가 순서까지 같은 경우
+  const src = [
+    '옆집에서 고양이를 데려왔대요. 우리 애가 자꾸 넘어다봐요. 결국 같이 키우기로 했어요. 이름도 지어줬대요.',
+  ]
+  const v = checkCommentCandidate({
+    personaCode: 'P05',
+    text: '옆집에서 고양이를 데려왔대요. 우리 애가 자꾸 넘어다봐요. 결국 같이 키우기로 했어요. 이름도 지어줬대요.',
+    sourceTexts: src,
+  })
+  const four = v.gates.find((x) => x.gate === '④')
+  if (four?.outcome === 'pass') {
+    bad('④ 고유 전개 검출', 'case', `🔴 ④=pass (${four.detail})`)
+  } else ok('④ 고유 전개 검출', 'case', `④=${four?.outcome} — ${four?.detail}`)
+}
+
+// ── 🔴 AI 티 태그 중복이 없다 ─────────────────────────
+{
+  const shared = '남의편이그러는데참'
+  const v = checkCommentCandidate({
+    personaCode: 'P05', text: `${shared} 답답하네요 정말로요`, sourceTexts: [`${shared} 답답하네요 정말로요`],
+    frequencyLookup: () => 0,
+  })
+  const dup = v.aiToneTags.length !== new Set(v.aiToneTags).size
+  if (dup) bad('태그 중복 없음', 'guard', `🔴 ${v.aiToneTags.join(' · ')}`)
+  else ok('태그 중복 없음', 'guard', `${v.aiToneTags.length}종`)
 }
 
 // ── 출력 ────────────────────────────────────────────
