@@ -1174,6 +1174,7 @@ model Persona {
   relationships     PersonaUserRelationship[]
   communityMemories PersonaCommunityMemory[]
   negativeMemories  PersonaNegativeMemory[]
+  approvalQueue     PersonaApprovalQueue[]
   auditLogs         PersonaAuditLog[]
   activityLogs      PersonaActivityLog[]
 
@@ -1345,6 +1346,78 @@ model PersonaActivityLog {
 /// 🔴 전체 kill switch. 단일 행으로 운영한다.
 ///    페르소나 20개의 status 를 하나씩 바꾸는 것은 사고 상황에서 쓸 수 없다.
 ///    전략 §10-2: kill switch 가 없으면 자동화 2단계를 열 수 없다.
+/// 승인 대기열의 상태.
+///
+/// 🔴 PENDING 으로 옮기는 것은 **사람 또는 Gate 통과 적재뿐**이다.
+///    자동 발행 경로를 여기에 만들지 않는다 (MicroSeedCandidateStatus 와 같은 원칙).
+enum PersonaCandidateStatus {
+  PENDING    // 대기열. 사람이 읽고 결정한다
+  APPROVED   // 승인 — 🔴 발행이 아니다. 발행 경로는 별도 승인 대상이다
+  EDITED     // 수정 후 승인 — editedText · editDiff 가 함께 있어야 한다
+  DECLINED   // 폐기 — 🔴 사유 코드 필수
+  PUBLISHED  // 발행 완료. 🔴 비가역
+  EXPIRED    // 기한 경과. 🔴 방치가 승인이 되지 않는다
+}
+
+/// 페르소나 댓글 후보 승인 대기열.
+///
+/// 정본: docs/operations/2026-08-30-persona-architecture-design.md §13
+///
+/// 🔴 **승인 대기열은 종착지가 아니라 계측 장치다**(Architecture §15).
+///    무엇이 걸리고 무엇이 통과하는지 재서 자동화 조건을 찾는 곳이다.
+///
+/// 🔴 sourceTexts(원문 · 원댓글 전문)를 저장하지 않는다.
+///    Gate ① 이 대조에 쓰지만, DB 에 남기면 외부 커뮤니티 원문이 우리 DB 에 쌓인다.
+///    Architecture §13 이 "원문 링크는 운영자만" 이라 한 것에 맞춰 storyRefs 참조만 둔다.
+model PersonaApprovalQueue {
+  id String @id @default(cuid())
+
+  personaId String
+  persona   Persona @relation(fields: [personaId], references: [id], onDelete: Restrict)
+
+  /// 어느 글에 달 댓글인가. 🔴 대상 선정(M3 반응 지도)이 아직 연결되지 않아 nullable 이다
+  targetPostId String?
+
+  status PersonaCandidateStatus @default(PENDING)
+
+  /// 🔴 어드민 전용. 고객 경로에서 읽지 않는다
+  candidateText String  @db.Text
+  /// 수정 후 승인본
+  editedText    String? @db.Text
+  /// 🔴 무엇을 왜 고쳤나 — 개선 근거다. 수정 승인의 값어치는 여기에 있다
+  editDiff      Json?
+
+  reactionType String
+  /// pass · review — 🔴 regenerate · reject 는 대기열에 넣지 않는다
+  gateStatus   String
+  /// 9관문 결과. 🔴 코드 · 개수만. 원문 조각을 담지 않는다
+  gateResults  Json
+  aiToneTags   String[] @default([])
+  /// 재생성 횟수 (Architecture §13 대기열 화면 요건)
+  regenCount   Int      @default(0)
+
+  /// 🔴 원문 전문이 아니라 참조만
+  storyRefs String[] @default([])
+  topicTags String[] @default([])
+  /// ⑧ seed 재사용 축의 식별자. 없으면 비운다
+  seedRef   String?
+
+  /// 🔴 중복 적재 방지. persona + 정규화 본문 해시
+  dedupKey String @unique
+
+  /// 🔴 자유 텍스트가 아니라 코드다. 집계되지 않으면 개선 근거가 되지 못한다
+  declineReason String?
+  decidedBy     String?
+  decidedAt     DateTime?
+  publishedCommentId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([personaId, createdAt])
+}
+
 model PersonaGlobalSwitch {
   /// 🔴 항상 'global' 한 행이다
   id String @id @default("global")

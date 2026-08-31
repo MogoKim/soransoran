@@ -56,3 +56,36 @@ export function formatKst(value: Date): string {
     dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Seoul',
   }).format(value)
 }
+
+/**
+ * 후보 본문 마스킹 — 🔴 첫 글자 + 길이만.
+ *
+ * 목록에서 본문 전문을 흘리지 않는다. 닉네임과 같은 이유다 —
+ * 스크린샷 · 화면 공유 · 로그 캡처로 새어 나가는 경로가 실제로 있다.
+ * 전문은 상세에서만 본다(Architecture §13).
+ */
+export function maskCandidateText(value: string | null | undefined): string {
+  const raw = (value ?? '').trim()
+  if (raw === '') return '(본문 없음)'
+  const chars = [...raw]
+  return `${chars[0]}… (${chars.length}자)`
+}
+
+/** 승인 대기열 상태 라벨 */
+export const CANDIDATE_STATUS_LABEL: Record<string, string> = {
+  PENDING: '대기',
+  APPROVED: '승인',
+  EDITED: '수정 승인',
+  DECLINED: '폐기',
+  PUBLISHED: '발행됨',
+  EXPIRED: '만료',
+}
+
+/** Gate 판정 라벨 */
+export const GATE_STATUS_LABEL: Record<string, string> = {
+  pass: '통과',
+  review: '검토 필요',
+  regenerate: '재생성',
+  reject: '반려',
+  notRun: '미실행',
+}
