@@ -251,6 +251,11 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   if (!/stage === 'N3'\) return 'review'/.test(gateCode)) offenders.push('N3 → review 분기가 사라졌다')
   // 🔴 빈 문자열 가드가 사라지지 않았는가
   if (!/c3 !== '' && n3 !== ''/.test(gateCode)) offenders.push('N3 빈 문자열 가드가 사라졌다')
+  // 🔴 길이 구간이 원본 길이로 되돌아가지 않았는가
+  const mn = /function matchNames[\s\S]*?\n}/.exec(gateCode)?.[0] ?? ''
+  if (mn === '') offenders.push('matchNames 를 찾을 수 없다')
+  if (/charLength\((candidate|name)\)/.test(mn)) offenders.push('🔴 길이 구간이 원본 길이로 되돌아갔다')
+  if (!/normalizedLength/.test(mn)) offenders.push('🔴 matchNames 가 N2 길이를 쓰지 않는다')
   // 🔴 B2 에 편집거리가 들어오지 않았는가
   const b2 = /function matchAuthorHashes[\s\S]*?\n}/.exec(gateCode)?.[0] ?? ''
   if (b2 === '') offenders.push('matchAuthorHashes 를 찾을 수 없다')
@@ -293,6 +298,43 @@ const baseSets: NameCollisionSets = { memberNames: MEMBER, personaNames: PERSONA
   }
   if (offenders.length) bad('N3 단독은 reject 아님', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('N3 단독은 reject 아님', 'guard', `${cases.length}종 — reject 0`)
+}
+
+// ── ㉓ 🔴 길이 구간은 N2 기준이다 — 공백·기호로 우회할 수 없다 ─
+{
+  // "솔 밤" 은 원본 3자지만 N2 로는 "솔밤" 2자다.
+  // 원본 길이로 재면 유사도 검사에 들어가 review 가 나온다 — 그러면 안 된다.
+  const v = checkNameCollision('솔 밤', { memberNames: ['솔 달'] })
+  if (v.status !== 'pass') {
+    bad('길이 구간은 N2 기준', 'guard', `🔴 ${v.status} — 원본 길이로 재고 있다 (${v.reason})`)
+  } else if (v.candidateLength !== 2) {
+    bad('길이 구간은 N2 기준', 'guard', `🔴 candidateLength=${v.candidateLength} — N2 길이가 아니다`)
+  } else ok('길이 구간은 N2 기준', 'guard', 'N2 2자 → 유사도 제외 · pass')
+}
+
+// ── ㉔ 기호를 넣어도 짧은 이름 가드가 유지된다 ────────────
+{
+  const cases: Array<[string, string]> = [
+    ['솔.밤', '솔.달'],
+    ['솔_밤', '솔_달'],
+    ['솔 밤 ', ' 솔 달'],
+  ]
+  const offenders: string[] = []
+  for (const [cand, member] of cases) {
+    const v = checkNameCollision(cand, { memberNames: [member] })
+    if (v.status !== 'pass') offenders.push(`${v.status}(len=${v.candidateLength})`)
+  }
+  if (offenders.length) bad('기호로 길이 가드 우회 불가', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('기호로 길이 가드 우회 불가', 'guard', `${cases.length}종 전부 pass`)
+}
+
+// ── ㉕ N2 기준 5자 이상이면 기호가 있어도 거리1 은 reject ──
+{
+  // "가을 바다.셋" → N2 "가을바다셋" 5자. 회원 "가을바다솔" 과 거리 1
+  const v = checkNameCollision('가을 바다.셋', { memberNames: ['가을바다솔'] })
+  if (v.candidateLength !== 5) bad('N2 5자+ 거리1 reject', 'guard', `🔴 len=${v.candidateLength}`)
+  else if (v.status !== 'reject') bad('N2 5자+ 거리1 reject', 'guard', `🔴 ${v.status}`)
+  else ok('N2 5자+ 거리1 reject', 'guard', 'N2 5자 · d1 · reject')
 }
 
 // ── 출력 ────────────────────────────────────────────────

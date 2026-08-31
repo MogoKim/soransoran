@@ -61,6 +61,16 @@ function collapseRepeats(value: string): string {
 
 const charLength = (value: string): number => [...value].length
 
+/**
+ * 🔴 길이 구간 판정은 **N2 정규화 후** 길이로 한다.
+ *
+ *    거리를 N2 로 재면서 길이만 원본으로 재면 기준이 어긋난다.
+ *    예: "솔 밤" 은 원본 3자라 유사도 검사에 들어가지만,
+ *        실제로 비교되는 값은 N2 인 "솔밤"(2자)이다.
+ *        공백·기호를 넣은 이름이 짧은 이름 가드를 우회한다.
+ */
+const normalizedLength = (value: string): number => charLength(normalizeN2(value))
+
 /** 편집 거리 (Levenshtein) */
 export function editDistance(a: string, b: string): number {
   if (a === b) return 0
@@ -118,7 +128,11 @@ export type NameCollisionHit = {
 export type NameCollisionVerdict = {
   status: NameCollisionStatus
   hits: NameCollisionHit[]
-  /** 후보 이름의 글자 수 — 길이 구간 판정 근거 (원문 아님) */
+  /**
+   * 후보 이름의 글자 수 — 길이 구간 판정 근거 (원문 아님).
+   * 🔴 **N2 정규화 후** 길이다. 원본 길이가 아니다 —
+   *    거리를 N2 로 재므로 길이 기준도 N2 여야 한다.
+   */
   candidateLength: number
   /** 🔴 원문 조각을 담지 않는다. 종류 · 단계 · 거리만 적는다 */
   reason: string
@@ -152,8 +166,9 @@ export type NameCollisionOptions = {
 //
 //    🔴 이 수치는 잠정값이다. 회원 표시명 표본이 6개뿐이라
 //       확정할 수 없다(설계 §6-4). 회원이 늘면 재측정해서 고친다.
-const LENGTH_MIN_FOR_SIMILARITY = 3   // 2자 이하는 완전 일치만 본다
-const LENGTH_STRICT_FROM = 5          // 5자 이상은 거리 1 도 reject
+//    🔴 두 상수 모두 **N2 정규화 후** 길이에 적용한다. 원본 길이가 아니다.
+const LENGTH_MIN_FOR_SIMILARITY = 3   // N2 기준 2자 이하는 완전 일치만 본다
+const LENGTH_STRICT_FROM = 5          // N2 기준 5자 이상은 거리 1 도 reject
 
 // ── B5 운영자 / AI 느낌 (설계 §5-4) ──────────────────────────
 const OPERATOR_PATTERNS: ReadonlyArray<{ term: string; re: RegExp }> = [
@@ -220,7 +235,8 @@ function matchNames(
   refType: 'userId' | 'personaId',
 ): NameCollisionHit[] {
   const hits: NameCollisionHit[] = []
-  const cLen = charLength(candidate)
+  // 🔴 N2 기준 길이다. 거리도 N2 로 재므로 기준을 맞춘다
+  const cLen = normalizedLength(candidate)
 
   const stages: ReadonlyArray<{ stage: NormalizeStage; fn: (v: string) => string }> = [
     { stage: 'N0', fn: (v) => v },
@@ -248,7 +264,7 @@ function matchNames(
     }
 
     // ── 유사도 — 🔴 짧은 이름에서는 하지 않는다 (설계 §6-2)
-    const nLen = charLength(name)
+    const nLen = normalizedLength(name)
     if (cLen >= LENGTH_MIN_FOR_SIMILARITY && nLen >= LENGTH_MIN_FOR_SIMILARITY) {
       const d = editDistance(normalizeN2(candidate), normalizeN2(name))
       if (d > 0 && d <= 2) hits.push({ kind, stage: 'N2', distance: d, refType })
@@ -308,7 +324,8 @@ export function checkNameCollision(
   opts: NameCollisionOptions = {},
 ): NameCollisionVerdict {
   const candidate = (candidateName ?? '').trim()
-  const candidateLength = charLength(candidate)
+  // 🔴 판정에 쓰는 길이와 같은 기준이어야 한다 — N2 정규화 후 길이다
+  const candidateLength = normalizedLength(candidate)
 
   if (candidate === '') {
     return {
