@@ -135,18 +135,26 @@ export default async function AdminPersonaDetailPage({
 
         <section className="mt-4 rounded-lg border border-subtle bg-surface-card p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-content-primary">전체 발화 스위치</span>
+            <span className="text-sm font-bold text-content-primary">전체 중지 스위치</span>
+            {/* 🔴 enabled = "중지" 다 */}
             <span className="rounded-md bg-surface-soft px-2 py-1 text-xs text-content-muted">
-              {killSwitch === null ? '미생성 (= 꺼짐)' : killSwitch.enabled ? '켜짐' : '꺼짐'}
+              {killSwitch?.enabled === true
+                ? '중지 켜짐'
+                : killSwitch === null
+                  ? '중지 꺼짐 (미생성)'
+                  : '중지 꺼짐'}
             </span>
-            <button
-              type="button"
-              disabled
-              className="cursor-not-allowed rounded-md border border-subtle px-3 py-1 text-xs text-content-muted opacity-60"
-            >
-              전환 (준비 중)
-            </button>
+            {/* 🔴 전환은 목록에서만 한다 — write 경로를 한 곳으로 모은다 */}
+            <Link href="/admin/personas" className="text-xs text-link">
+              관제실에서 전환
+            </Link>
           </div>
+          {killSwitch !== null ? (
+            <p className="mt-2 text-xs text-content-muted">
+              마지막 변경 {formatKst(killSwitch.changedAt)}
+              {killSwitch.reason !== null ? ` · 사유: ${killSwitch.reason}` : ''}
+            </p>
+          ) : null}
         </section>
 
         <table className="mt-4 w-full table-fixed border-collapse text-sm">

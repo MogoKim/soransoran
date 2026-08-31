@@ -1349,10 +1349,15 @@ model PersonaGlobalSwitch {
   /// 🔴 항상 'global' 한 행이다
   id String @id @default("global")
 
-  /// false 면 모든 페르소나 발화가 멈춘다
+  /// 🔴 kill switch 다. 이름이 enabled 라 반대로 읽히기 쉽다 —
+  ///    "발화가 켜졌나" 가 아니라 "중지가 켜졌나" 를 뜻한다.
+  ///      true  = 중지 켜짐 — 모든 페르소나 발화가 멈춘다
+  ///      false = 중지 꺼짐 — 멈춰 있지 않다
+  ///      행 없음 = false 와 같다 (기본 상태)
+  ///    default false 인 이유: 만들자마자 전체가 멈추면 안 된다.
   enabled Boolean @default(false)
 
-  /// 왜 껐는가 / 켰는가 — 사유 코드
+  /// 왜 중지했는가 / 왜 해제했는가 — 사유
   reason    String?
   changedBy String?
   changedAt DateTime @updatedAt
