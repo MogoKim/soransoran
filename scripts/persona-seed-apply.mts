@@ -40,6 +40,26 @@ const SEED_PATH = 'tmp/persona-seed.json'
 const CODES = ['P05', 'P07', 'P10', 'P15', 'P17'] as const
 const DRAFT: PersonaStatus = 'draft'
 
+/** 🔴 seed 이전이 남기는 AuditLog 표식. 중복 적용 판정의 기준이다 */
+const SEED_AUDIT_REASON = 'Pool 카드 seed 이전'
+
+/** seed 가 채우는 Persona 스칼라 필드 — --check 와 preflight 가 함께 본다 */
+const SEED_FIELDS = [
+  'ageBand', 'region', 'lifeStage',
+  'identity', 'voiceCore', 'voiceVariations', 'activityRhythm',
+  'noGoTopics', 'noGoExpressions', 'forbiddenReactionRoles',
+  'dailyCap', 'weeklyCap', 'silenceRate',
+] as const
+type SeedField = (typeof SEED_FIELDS)[number]
+
+/** DB 값이 "채워져 있는가" — 배열은 길이로 본다 */
+function isFilled(v: unknown): boolean {
+  if (v === null || v === undefined) return false
+  if (Array.isArray(v)) return v.length > 0
+  if (typeof v === 'string') return v.trim() !== ''
+  return true
+}
+
 const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
 const DEFAULT_SALT = 'soransoran-voice-v1'
 
@@ -98,51 +118,6 @@ const prisma = new PrismaClient()
 const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
 const hashOf = (v: string) => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
 
-// ── --check ──
-if (CHECK) {
-  console.log('══ 검증 (--check) ══\n')
-  let failed = 0
-  const bad = (m: string) => { console.log(`  🔴 ${m}`); failed++ }
-  const good = (m: string) => console.log(`  ✅ ${m}`)
-
-  const personas = await prisma.persona.findMany({
-    where: { code: { in: [...CODES] } },
-    select: {
-      code: true, status: true, identity: true, voiceCore: true, voiceVariations: true,
-      activityRhythm: true, noGoTopics: true, dailyCap: true,
-      _count: { select: { selfMemories: true, communityMemories: true, negativeMemories: true } },
-    },
-    orderBy: { code: 'asc' },
-  })
-  if (personas.length === CODES.length) good(`Persona ${personas.length}/${CODES.length}`)
-  else bad(`Persona ${personas.length}/${CODES.length}`)
-
-  const notDraft = personas.filter((p) => p.status !== DRAFT)
-  if (notDraft.length === 0) good('전부 status=draft (seed 는 활성화가 아니다)')
-  else bad(`🔴 draft 가 아닌 것 ${notDraft.length}개`)
-
-  for (const p of personas) {
-    const parts = [
-      p.identity !== null ? 'identity' : null,
-      p.voiceCore !== null ? 'voiceCore' : null,
-      p.voiceVariations !== null ? 'variations' : null,
-      p.activityRhythm !== null ? 'rhythm' : null,
-      p.noGoTopics.length > 0 ? `noGo ${p.noGoTopics.length}` : null,
-      p.dailyCap !== null ? `cap ${p.dailyCap}` : null,
-    ].filter((v): v is string => v !== null)
-    console.log(`     ${p.code}  ${parts.length === 0 ? '(비어 있음)' : parts.join(' · ')}` +
-      `  memory ${p._count.selfMemories}/${p._count.communityMemories}/${p._count.negativeMemories}`)
-  }
-
-  const linkedPosts = await prisma.post.count({ where: { personaId: { not: null } } })
-  const linkedComments = await prisma.comment.count({ where: { personaId: { not: null } } })
-  if (linkedPosts === 0 && linkedComments === 0) good('Post/Comment.personaId 전부 NULL')
-  else bad(`🔴 Post ${linkedPosts} · Comment ${linkedComments} 에 personaId 가 채워졌다`)
-
-  console.log(failed === 0 ? '\n✅ 검증 통과\n' : `\n🔴 ${failed}건 실패\n`)
-  await prisma.$disconnect()
-  process.exit(failed === 0 ? 0 : 1)
-}
 
 // ── seed 파일 ──
 if (!existsSync(SEED_PATH)) {
@@ -174,6 +149,78 @@ if (forbiddenHits.length > 0) {
   fail(`seed 에 금지 패턴이 있습니다 (${forbiddenHits.length}건):\n     ${forbiddenHits.join('\n     ')}`)
 }
 ok('금지 패턴 스캔 — 나이 · 년생 · 실지명 · 병명 · 출처 흔적 · URL · sourceRef 0건')
+
+// ── --check — 🔴 seed 파일 기준으로 "실제 반영됐는가" 를 본다 ──
+//    이전 판은 Persona 존재 · draft · personaId NULL 만 봤다.
+//    그러면 seed 를 한 번도 적용하지 않은 상태도 통과한다 — 검증이 아니다.
+if (CHECK) {
+  console.log('\n══ 검증 (--check) — seed 반영 상태 ══\n')
+  let failed = 0
+  const bad = (m: string) => { console.log(`  🔴 ${m}`); failed++ }
+  const good = (m: string) => console.log(`  ✅ ${m}`)
+
+  const rows = await prisma.persona.findMany({
+    where: { code: { in: [...CODES] } },
+    select: {
+      id: true, code: true, status: true,
+      ageBand: true, region: true, lifeStage: true,
+      identity: true, voiceCore: true, voiceVariations: true, activityRhythm: true,
+      noGoTopics: true, noGoExpressions: true, forbiddenReactionRoles: true,
+      dailyCap: true, weeklyCap: true, silenceRate: true,
+      _count: { select: { selfMemories: true, communityMemories: true, negativeMemories: true } },
+    },
+    orderBy: { code: 'asc' },
+  })
+  if (rows.length === CODES.length) good(`Persona ${rows.length}/${CODES.length}`)
+  else bad(`Persona ${rows.length}/${CODES.length}`)
+
+  const notDraft = rows.filter((r) => r.status !== DRAFT)
+  if (notDraft.length === 0) good('전부 status=draft (seed 는 활성화가 아니다)')
+  else bad(`🔴 draft 가 아닌 것 ${notDraft.length}개 — ${notDraft.map((r) => r.code).join(', ')}`)
+
+  // 🔴 seed 파일이 요구한 필드가 DB 에 실제로 반영됐는가 — 값은 출력하지 않는다
+  let missingTotal = 0
+  for (const row of rows) {
+    const want = seeds[row.code]
+    if (want === undefined) continue
+    const expected = SEED_FIELDS.filter((f) => (want as Record<string, unknown>)[f] !== undefined)
+    const missing = expected.filter((f) => !isFilled((row as unknown as Record<string, unknown>)[f]))
+    missingTotal += missing.length
+
+    const wantSelf = want.selfMemories?.length ?? 0
+    const wantComm = want.communityMemories?.length ?? 0
+    const wantNeg = want.negativeMemories?.length ?? 0
+    const memOk =
+      row._count.selfMemories >= wantSelf &&
+      row._count.communityMemories >= wantComm &&
+      row._count.negativeMemories >= wantNeg
+    if (!memOk) missingTotal++
+
+    const line = `     ${row.code}  필드 ${expected.length - missing.length}/${expected.length}` +
+      `  memory ${row._count.selfMemories}/${row._count.communityMemories}/${row._count.negativeMemories}` +
+      ` (기대 ${wantSelf}/${wantComm}/${wantNeg})`
+    // 🔴 빠진 것은 필드명만 적는다. 값은 담지 않는다
+    console.log(missing.length === 0 && memOk ? line : `${line}  🔴 미반영: ${missing.join(' · ') || 'memory'}`)
+  }
+  if (missingTotal === 0) good('seed 파일의 모든 필드가 DB 에 반영됨')
+  else bad(`🔴 미반영 ${missingTotal}건 — seed 가 적용되지 않았거나 일부만 적용됐다`)
+
+  // 🔴 seed 이전 AuditLog 가 남아 있는가
+  const seedLogs = await prisma.personaAuditLog.count({
+    where: { action: 'updated', reason: SEED_AUDIT_REASON, persona: { code: { in: [...CODES] } } },
+  })
+  if (seedLogs === CODES.length) good(`seed AuditLog ${seedLogs}/${CODES.length}`)
+  else bad(`🔴 seed AuditLog ${seedLogs}/${CODES.length} — 적용 이력이 맞지 않는다`)
+
+  const linkedPosts = await prisma.post.count({ where: { personaId: { not: null } } })
+  const linkedComments = await prisma.comment.count({ where: { personaId: { not: null } } })
+  if (linkedPosts === 0 && linkedComments === 0) good('Post/Comment.personaId 전부 NULL')
+  else bad(`🔴 Post ${linkedPosts} · Comment ${linkedComments} 에 personaId 가 채워졌다`)
+
+  console.log(failed === 0 ? '\n✅ 검증 통과\n' : `\n🔴 ${failed}건 실패\n`)
+  await prisma.$disconnect()
+  process.exit(failed === 0 ? 0 : 1)
+}
 
 // ── 🔴 적용 직전 상태 검증 ──
 console.log('\n══ 적용 직전 검증 ══')
@@ -222,6 +269,56 @@ ok('Post/Comment.personaId 전부 NULL')
 const killSwitch = await prisma.personaGlobalSwitch.findFirst({ orderBy: { changedAt: 'desc' } })
 if (killSwitch?.enabled === true) { await prisma.$disconnect(); fail('전체 발화 스위치가 켜져 있습니다. 끄고 진행하세요.') }
 ok(`전체 발화 스위치 ${killSwitch === null ? '미생성 (= 꺼짐)' : '꺼짐'}`)
+
+// ── 🔴 중복 적용 preflight ──
+//    seed 를 두 번 적용하면 memory 와 AuditLog 가 중복 생성된다.
+//    update 는 멱등하지만 create 는 아니다 — 그래서 여기서 막는다.
+//    🔴 --force 를 만들지 않는다. 다시 넣어야 하면 사람이 지우고 다시 돈다.
+{
+  const already: string[] = []
+
+  // ① seed 대상 필드가 이미 채워져 있는가
+  const filled = await prisma.persona.findMany({
+    where: { code: { in: [...CODES] } },
+    select: {
+      code: true,
+      ageBand: true, region: true, lifeStage: true,
+      identity: true, voiceCore: true, voiceVariations: true, activityRhythm: true,
+      noGoTopics: true, noGoExpressions: true, forbiddenReactionRoles: true,
+      dailyCap: true, weeklyCap: true, silenceRate: true,
+    },
+  })
+  for (const row of filled) {
+    const hit = SEED_FIELDS.filter((f) => isFilled((row as unknown as Record<string, unknown>)[f]))
+    // 🔴 필드명만 적는다. 값은 담지 않는다
+    if (hit.length > 0) already.push(`${row.code} 필드 이미 채워짐: ${hit.join(' · ')}`)
+  }
+
+  // ② memory row 가 이미 있는가
+  const [selfN, commN, negN] = await Promise.all([
+    prisma.personaSelfMemory.count({ where: { persona: { code: { in: [...CODES] } } } }),
+    prisma.personaCommunityMemory.count({ where: { persona: { code: { in: [...CODES] } } } }),
+    prisma.personaNegativeMemory.count({ where: { persona: { code: { in: [...CODES] } } } }),
+  ])
+  if (selfN + commN + negN > 0) already.push(`memory 이미 존재: self ${selfN} · community ${commN} · negative ${negN}`)
+
+  // ③ seed 이전 AuditLog 가 이미 있는가
+  const seedLogs = await prisma.personaAuditLog.count({
+    where: { action: 'updated', reason: SEED_AUDIT_REASON, persona: { code: { in: [...CODES] } } },
+  })
+  if (seedLogs > 0) already.push(`seed AuditLog 이미 존재: ${seedLogs}건`)
+
+  if (already.length > 0) {
+    await prisma.$disconnect()
+    fail(
+      `이미 seed 가 적용된 흔적이 있습니다 (${already.length}건):\n     ` +
+      already.join('\n     ') +
+      `\n\n   🔴 부분 적용을 허용하지 않습니다 — 하나라도 걸리면 전체를 중단합니다.` +
+      `\n   다시 넣어야 하면 해당 행을 정리한 뒤 실행하세요. --force 는 만들지 않았습니다.`,
+    )
+  }
+  ok('중복 적용 preflight — 필드 · memory · AuditLog 흔적 0건')
+}
 
 // ── 생성/수정 예정 ──
 console.log('\n══ 적용 예정 ══')
@@ -287,7 +384,7 @@ try {
       for (const m of s.negativeMemories ?? []) await tx.personaNegativeMemory.create({ data: { personaId: id, avoidance: m.avoidance, reasonCode: m.reasonCode ?? null } })
 
       await tx.personaAuditLog.create({
-        data: { personaId: id, action: 'updated', reason: 'Pool 카드 seed 이전', changedFields: changed },
+        data: { personaId: id, action: 'updated', reason: SEED_AUDIT_REASON, changedFields: changed },
       })
     }
   })
