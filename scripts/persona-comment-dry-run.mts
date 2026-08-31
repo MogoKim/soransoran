@@ -47,6 +47,11 @@ type CandidateFile = {
   personaCode: string
   text: string
   sourceTexts?: string[]
+  /**
+   * 🔴 ⑧ seed 재사용 축의 식별자. 원댓글 seed 하나를 가리킨다.
+   *    없으면 그 축은 notRun 이다 — sourceTexts 로 대신 세지 않는다(아래 이유).
+   */
+  seedRef?: string
   adviceForbidden?: boolean
   sourceIsCafeOperational?: boolean
 }
@@ -65,7 +70,9 @@ const prisma = new PrismaClient()
 console.log('══ 전제 확인 ══')
 const personas = await prisma.persona.findMany({
   select: {
-    code: true, status: true, forbiddenReactionRoles: true,
+    id: true, code: true, status: true, forbiddenReactionRoles: true,
+    // 🔴 ⑦ 대조 근거 — 없으면 설정 모순은 notRun 이다
+    identity: true, noGoTopics: true, noGoExpressions: true,
     user: { select: { nickname: true, name: true } },
   },
   orderBy: { code: 'asc' },
@@ -187,23 +194,82 @@ if (noSource.length > 0) {
 }
 ok(`후보 ${candidates.length}건 · 전부 sourceTexts 보유`)
 
+// ── ⑦ 대조 집합 — 🔴 값이 아니라 보유 여부만 센다 ──
+const withIdentity = personas.filter((p) => p.identity !== null).length
+const withNoGo = personas.filter((p) => p.noGoTopics.length + p.noGoExpressions.length > 0).length
+if (withIdentity === personas.length) ok(`⑦ identity ${withIdentity}/${personas.length}명`)
+else console.log(`   🟡 ⑦ identity ${withIdentity}/${personas.length}명 — 나머지는 설정 모순 notRun`)
+if (withNoGo > 0) ok(`⑦ No-Go 보유 ${withNoGo}/${personas.length}명`)
+else console.log(`   🟡 ⑦ No-Go 0명 — No-Go 축 미실행`)
+
+// ── ⑧ 대조 발화 — 발행물 + 같은 배치의 앞선 후보 ──
+//    🔴 발행물은 지금 0건이다. 조회를 넣어 두는 것은 통계를 부풀리려는 게 아니라,
+//    발행이 시작되면 그 즉시 대조 집합이 되기 때문이다.
+const idToCode = new Map(personas.map((p) => [p.id, p.code]))
+const priorByCode = new Map<string, string[]>(personas.map((p) => [p.code, []]))
+const priorRows = await prisma.comment.findMany({
+  where: { personaId: { not: null } },
+  select: { personaId: true, content: true },
+  orderBy: { createdAt: 'desc' },
+  take: 200,
+})
+for (const c of priorRows) {
+  const code = idToCode.get(c.personaId ?? '')
+  if (code !== undefined) priorByCode.get(code)?.push(c.content)
+}
+ok(`⑧ 대조 발화 ${priorRows.length}건 (발행물) + 같은 배치의 앞선 후보`)
+
+// ── ⑧ seed 사용 이력 — 🔴 persona 단위가 아니라 전체 단위 (§3-⑧) ──
+//    🔴 sourceTexts 를 seed 식별자로 쓰지 않는다.
+//       sourceTexts 는 "원문 본문 · 원댓글" 이라 **같은 글에 달린 댓글이면 원래 같다.**
+//       그것을 재사용으로 세면 한 글에 여러 페르소나가 댓글 다는 정상 동작이
+//       전부 regenerate 가 된다 — 실제로 그렇게 만들었다가 8건 중 7건이 걸렸다.
+//    §3-⑧ 이 말하는 것은 "같은 source **comment** seed 의 반복 배분" 이다.
+//    후보 파일이 seedRef 를 주면 그때 센다. 없으면 그 축은 notRun 이다.
+const seedUse = new Map<string, number>()
+for (const c of candidates) {
+  const ref = (c.seedRef ?? '').trim()
+  if (ref === '') continue
+  seedUse.set(ref, (seedUse.get(ref) ?? 0) + 1)
+}
+const withSeedRef = candidates.filter((c) => (c.seedRef ?? '').trim() !== '').length
+if (withSeedRef === 0) {
+  console.log('   🟡 ⑧ seed 재사용 축 미실행 — 후보에 seedRef 가 없다')
+} else {
+  const reused = [...seedUse.values()].filter((n) => n >= 2).length
+  ok(`⑧ seedRef ${withSeedRef}/${candidates.length}건 · seed ${seedUse.size}종 · 2회 이상 ${reused}종`)
+}
+
 // ── 판정 ──
-const roleByCode = new Map(personas.map((p) => [p.code, p.forbiddenReactionRoles]))
-const verdicts: CandidateVerdict[] = candidates.map((c) => {
+const byCode = new Map(personas.map((p) => [p.code, p]))
+// 🔴 map 이 아니라 순차 루프다 — 같은 배치의 앞선 후보가 다음 후보의 대조 집합이 된다.
+//    "세 페르소나가 나란히 같은 맞장구를 쓰면 기계다"(§3-⑧) 를 보려면 순서가 있어야 한다.
+const verdicts: CandidateVerdict[] = []
+for (const c of candidates) {
+  const persona = byCode.get(c.personaCode)
+  const prior = priorByCode.get(c.personaCode) ?? []
   const input: CandidateInput = {
     personaCode: c.personaCode,
     text: c.text,
     sourceTexts: c.sourceTexts ?? [],
     knownNames,
-    forbiddenRoles: roleByCode.get(c.personaCode) ?? [],
+    forbiddenRoles: persona?.forbiddenReactionRoles ?? [],
+    identity: (persona?.identity ?? null) as CandidateInput['identity'],
+    noGoTopics: persona?.noGoTopics ?? [],
+    noGoExpressions: persona?.noGoExpressions ?? [],
+    priorTexts: [...prior],
+    ...((c.seedRef ?? '').trim() !== ''
+      ? { seedUseCount: seedUse.get((c.seedRef ?? '').trim()) ?? 1 }
+      : {}),
     ...(c.adviceForbidden !== undefined ? { adviceForbidden: c.adviceForbidden } : {}),
     ...(c.sourceIsCafeOperational !== undefined
       ? { sourceIsCafeOperational: c.sourceIsCafeOperational }
       : {}),
     ...(lookup !== undefined ? { frequencyLookup: lookup, corpusName } : {}),
   }
-  return checkCommentCandidate(input)
-})
+  verdicts.push(checkCommentCandidate(input))
+  prior.push(c.text)
+}
 
 // ── 출력 — 🔴 본문 전문 없음 ──
 console.log('\n══ 후보별 판정 ══')
@@ -230,9 +296,20 @@ console.log(`  🔴 source leak (①)  ${s.sourceLeak}건`)
 console.log('  반응 유형:', Object.entries(s.byReaction).map(([k, n]) => `${k} ${n}`).join(' · ') || '—')
 console.log('  AI 티 태그:', Object.entries(s.tagCounts).map(([k, n]) => `${k} ${n}`).join(' · ') || '없음')
 
-const notRunGates = verdicts[0]?.gates.filter((g) => g.outcome === 'notRun').map((g) => g.gate) ?? []
-console.log(`\n  🔴 미실행 관문: ${notRunGates.join(' ')} — 코퍼스 · identity 판정부가 필요하다`)
-console.log('     "돌지 않았다" 를 pass 로 보고하지 않는다')
+// 🔴 첫 후보만 보고 판단하지 않는다 — 후보마다 대조 집합이 달라 notRun 도 다르다.
+//    (identity 가 있는 persona 와 없는 persona 가 한 배치에 섞인다)
+const notRunCount = new Map<string, number>()
+for (const v of verdicts) {
+  for (const g of v.gates) {
+    if (g.outcome === 'notRun') notRunCount.set(g.gate, (notRunCount.get(g.gate) ?? 0) + 1)
+  }
+}
+const notRunLine = [...notRunCount.entries()]
+  .sort((a, b) => a[0].localeCompare(b[0]))
+  .map(([gate, n]) => `${gate} ${n}/${verdicts.length}건`)
+  .join(' · ')
+console.log(`\n  🔴 미실행 관문: ${notRunLine === '' ? '없음' : notRunLine}`)
+console.log('     판정부는 있고 대조 집합이 없다 — "돌지 않았다" 를 pass 로 보고하지 않는다')
 
 if (WRITE_OUT) {
   mkdirSync('tmp', { recursive: true })
