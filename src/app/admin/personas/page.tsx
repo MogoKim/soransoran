@@ -71,7 +71,8 @@ export default async function AdminPersonasPage() {
     prisma.comment.count({ where: { personaId: { not: null } } }),
   ])
 
-  const switchOn = killSwitch?.enabled === true
+  // 🔴 enabled = "중지" 다. true 면 전체 발화가 멈춘 상태다
+  const stopped = killSwitch?.enabled === true
 
   return (
     <PageShell chrome="minimal">
@@ -101,9 +102,9 @@ export default async function AdminPersonasPage() {
           </div>
         </section>
 
-        {/* ── 전체 kill switch — 🔴 이 화면의 유일한 write ── */}
+        {/* ── 전체 중지 kill switch — 🔴 이 화면의 유일한 write ── */}
         <section className="mt-4 rounded-lg border border-subtle bg-surface-card p-4">
-          <PersonaGlobalSwitchControl initialEnabled={switchOn} exists={killSwitch !== null} />
+          <PersonaGlobalSwitchControl initialEnabled={stopped} exists={killSwitch !== null} />
           {killSwitch !== null ? (
             <p className="mt-2 text-xs text-content-muted">
               마지막 변경 {formatKst(killSwitch.changedAt)}

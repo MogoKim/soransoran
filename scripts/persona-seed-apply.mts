@@ -267,8 +267,9 @@ if (linkedPosts !== 0 || linkedComments !== 0) {
 ok('Post/Comment.personaId 전부 NULL')
 
 const killSwitch = await prisma.personaGlobalSwitch.findFirst({ orderBy: { changedAt: 'desc' } })
-if (killSwitch?.enabled === true) { await prisma.$disconnect(); fail('전체 발화 스위치가 켜져 있습니다. 끄고 진행하세요.') }
-ok(`전체 발화 스위치 ${killSwitch === null ? '미생성 (= 꺼짐)' : '꺼짐'}`)
+// 🔴 enabled = "중지" 다. 켜져 있으면 전체 발화가 멈춘 상태이므로 seed 도 넣지 않는다
+if (killSwitch?.enabled === true) { await prisma.$disconnect(); fail('전체 중지 스위치가 켜져 있습니다. 해제하고 진행하세요.') }
+ok(`전체 중지 스위치 ${killSwitch === null ? '꺼짐 (미생성)' : '꺼짐'}`)
 
 // ── 🔴 중복 적용 preflight ──
 //    seed 를 두 번 적용하면 memory 와 AuditLog 가 중복 생성된다.
