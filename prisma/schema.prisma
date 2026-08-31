@@ -676,6 +676,19 @@ model VoiceSource {
   ///    우나어 닉네임은 3~7자라 원문을 두면 검색으로 특정된다.
   authorHash String?
 
+  /// N2 정규화 후의 단방향 해시. Gate ⑥-B displayName 충돌 검사용.
+  ///    N2 = trim + NFC + 소문자 + 공백·기호 제거
+  ///
+  /// 🔴 원문은 여기에도 저장하지 않는다. authorHash 와 같은 salt·같은 방식이다.
+  /// 🔴 N3(숫자·영문 제거) 기준 컬럼은 만들지 않는다.
+  ///    실측: N3 결과가 빈 문자열 10.4~10.5% · 서로 다른 이름이 12~13% 뭉친다.
+  ///    한글 없는 이름이 전부 같아져 근거 없는 충돌이 된다.
+  ///    정본: docs/operations/2026-08-31-persona-gate6-nickname-collision-design.md §5-1
+  ///
+  /// 🔴 authorHash 를 대체하지 않는다. 둘 다 본다 —
+  ///    원본 일치와 정규화 일치는 다른 신호다.
+  authorHashNorm String?
+
   postedAt   DateTime?
   capturedAt DateTime
 
@@ -815,6 +828,13 @@ model VoiceCommentSignal {
   /// 🔴 닉네임 원문이 아니다. 동일인 추적만 가능한 단방향 해시 —
   ///    VoiceSource.authorHash 와 같은 방식이다.
   authorHash String?
+
+  /// N2 정규화 후의 단방향 해시 — VoiceSource.authorHashNorm 과 같은 규칙이다.
+  ///
+  /// 🔴 여기에도 둔다. 댓글 author 고유 수가 글 author 의 2.2배(27,590 대 12,493)라
+  ///    글 쪽에만 두면 더 큰 집합을 방치하게 된다.
+  /// 🔴 N3 기준 컬럼은 만들지 않는다 · 원문 저장 금지 — VoiceSource 와 동일
+  authorHashNorm String?
 
   /// 댓글 본문이 아니라 "그때 그 댓글이었다" 의 증거
   contentHash   String?
