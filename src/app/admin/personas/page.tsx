@@ -4,6 +4,7 @@ import PageShell from '@/components/layouts/PageShell'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
 import { maskNickname, filledMark, STATUS_LABEL, formatKst } from '@/lib/persona-admin'
+import PersonaGlobalSwitchControl from '@/components/admin/PersonaGlobalSwitchControl'
 
 /**
  * 페르소나 관제실 — 🔴 읽기 전용
@@ -100,30 +101,16 @@ export default async function AdminPersonasPage() {
           </div>
         </section>
 
-        {/* ── 전체 kill switch — 🔴 읽기 전용 ── */}
+        {/* ── 전체 kill switch — 🔴 이 화면의 유일한 write ── */}
         <section className="mt-4 rounded-lg border border-subtle bg-surface-card p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-content-primary">전체 발화 스위치</span>
-            <span
-              className={`rounded-md px-2 py-1 text-xs font-bold ${
-                switchOn ? 'bg-surface-soft text-brand-ink' : 'bg-surface-soft text-content-muted'
-              }`}
-            >
-              {killSwitch === null ? '미생성 (= 꺼짐)' : switchOn ? '켜짐' : '꺼짐'}
-            </span>
-            <button
-              type="button"
-              disabled
-              className="cursor-not-allowed rounded-md border border-subtle px-3 py-1 text-xs text-content-muted opacity-60"
-            >
-              전환 (준비 중)
-            </button>
-          </div>
-          <p className="mt-2 text-xs text-content-muted">
-            🔴 이 판에서는 상태만 봅니다. 전환 기능은 별도 승인 후 붙입니다.
-            {killSwitch?.reason ? ` · 사유: ${killSwitch.reason}` : ''}
-            {killSwitch ? ` · ${formatKst(killSwitch.changedAt)}` : ''}
-          </p>
+          <PersonaGlobalSwitchControl initialEnabled={switchOn} exists={killSwitch !== null} />
+          {killSwitch !== null ? (
+            <p className="mt-2 text-xs text-content-muted">
+              마지막 변경 {formatKst(killSwitch.changedAt)}
+              {killSwitch.changedBy !== null ? ` · 운영자 ${killSwitch.changedBy}` : ''}
+              {killSwitch.reason !== null ? ` · 사유: ${killSwitch.reason}` : ''}
+            </p>
+          ) : null}
         </section>
 
         {/* ── 페르소나 목록 ── */}
