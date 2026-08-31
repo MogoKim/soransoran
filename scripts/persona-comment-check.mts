@@ -12,6 +12,7 @@
  * 🔴 텍스트는 전부 합성이다.
  */
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -21,6 +22,8 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIB = join(HERE, 'lib/persona-comment-candidate.mts')
 const RUNNER = join(HERE, 'persona-comment-dry-run.mts')
+const GATE234 = join(HERE, 'lib/persona-gate-234.mts')
+const SELF = join(HERE, 'persona-comment-check.mts')
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
 const failures: string[] = []
@@ -297,9 +300,9 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
 {
   // 🔴 단일은 허용 · 2개 review · 3개 이상 regenerate
   const one = checkCommentCandidate({ personaCode: 'P05', text: '집 근처 병원 다녀왔어요', sourceTexts: SOURCE })
-  const two = checkCommentCandidate({ personaCode: 'P05', text: '분당구 병원에 다녀왔어요', sourceTexts: SOURCE })
+  const two = checkCommentCandidate({ personaCode: 'P05', text: '가나구 병원에 다녀왔어요', sourceTexts: SOURCE })
   const three = checkCommentCandidate({
-    personaCode: 'P05', text: '분당구 병원에 3월 12일 다녀왔어요', sourceTexts: SOURCE,
+    personaCode: 'P05', text: '가나구 병원에 3월 12일 다녀왔어요', sourceTexts: SOURCE,
   })
   const g = (v: typeof one) => v.gates.find((x) => x.gate === '③')?.outcome
   const offenders: string[] = []
@@ -313,10 +316,10 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
 // ── 🔴 ③ 반환값에 걸린 값이 없다 ──────────────────────
 {
   const v = checkCommentCandidate({
-    personaCode: 'P05', text: '분당구 병원에 3월 12일 다녀왔어요', sourceTexts: SOURCE,
+    personaCode: 'P05', text: '가나구 병원에 3월 12일 다녀왔어요', sourceTexts: SOURCE,
   })
   const json = JSON.stringify(v)
-  if (/분당|3월|12일/.test(json)) bad('③ 값 노출 없음', 'guard', '🔴 걸린 값이 반환값에 있다')
+  if (/가나|3월|12일/.test(json)) bad('③ 값 노출 없음', 'guard', '🔴 걸린 값이 반환값에 있다')
   else if (!json.includes('REGION')) bad('③ 값 노출 없음', 'guard', '🔴 카테고리 코드가 없다')
   else ok('③ 값 노출 없음', 'guard', '카테고리 코드만')
 }
@@ -382,6 +385,119 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   const dup = v.aiToneTags.length !== new Set(v.aiToneTags).size
   if (dup) bad('태그 중복 없음', 'guard', `🔴 ${v.aiToneTags.join(' · ')}`)
   else ok('태그 중복 없음', 'guard', `${v.aiToneTags.length}종`)
+}
+
+// ══ 🔴 관문 수는 입력과 무관하게 9개 ════════════
+{
+  // 🔴 관문 하나가 근거를 둘 갖는다고 gates 가 10개가 되면
+  //    "9관문 중 몇 종 통과" 라는 집계가 후보마다 다른 분모를 갖게 된다.
+  const GATES = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
+  type In = Parameters<typeof checkCommentCandidate>[0]
+  const cases: Array<{ name: string; input: In }> = [
+    { name: '기본', input: { personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE } },
+    { name: 'source 없음', input: { personaCode: 'P05', text: '그러네요', sourceTexts: [] } },
+    { name: '금지 호칭', input: { personaCode: 'P07', text: '우리 또래분들 다 그러시더라구요', sourceTexts: SOURCE } },
+    { name: '조언 단정형', input: { personaCode: 'P17', text: '병원 가서 검사받으셔야 합니다', sourceTexts: SOURCE, adviceForbidden: true } },
+    { name: '조언 금지 · 통과', input: { personaCode: 'P17', text: '저도 그랬어요 마음이 참 그렇죠', sourceTexts: SOURCE, adviceForbidden: true } },
+    { name: '호칭+조언 동시', input: { personaCode: 'P07', text: '우리 또래분들은 병원 가서 검사받으셔야 합니다', sourceTexts: SOURCE, adviceForbidden: true } },
+    { name: '코퍼스 있음', input: { personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE, frequencyLookup: () => 50 } },
+    { name: '닉네임 혼입', input: { personaCode: 'P05', text: '그러네요', sourceTexts: SOURCE, knownNames: ['합성닉'] } },
+    { name: '금지 역할', input: { personaCode: 'P05', text: '병원 가보세요', sourceTexts: SOURCE, forbiddenRoles: ['information'] } },
+  ]
+  const offenders: string[] = []
+  for (const c of cases) {
+    // 🔴 여기의 try 는 예외를 삼키려는 게 아니라 **실패로 기록**하려는 것이다.
+    //    관문이 중복되면 판정부가 throw 하는데, 그때 스크립트가 죽으면
+    //    어느 입력이 깨뜨렸는지 리포트에 남지 않는다.
+    let v: CandidateVerdict
+    try {
+      v = checkCommentCandidate(c.input)
+    } catch (e) {
+      offenders.push(`${c.name}=throw(${e instanceof Error ? e.message : '알 수 없음'})`)
+      continue
+    }
+    if (v.gates.length !== 9) offenders.push(`${c.name}=${v.gates.length}개`)
+    const codes = v.gates.map((g) => g.gate)
+    for (const code of GATES) {
+      const n = codes.filter((x) => x === code).length
+      if (n !== 1) offenders.push(`${c.name} ${code}=${n}개`)
+    }
+  }
+  if (offenders.length) bad('관문 수 항상 9', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('관문 수 항상 9', 'guard', `입력 ${cases.length}종 전부 ①~⑨ 각 1개`)
+}
+
+// ── 🔴 ⑤ 는 근거가 둘이어도 관문은 하나 ────────
+{
+  const v = checkCommentCandidate({
+    personaCode: 'P07',
+    text: '우리 또래분들은 병원 가서 검사받으셔야 합니다',
+    sourceTexts: SOURCE, adviceForbidden: true,
+  })
+  const hits = v.gates.filter((g) => g.gate === '⑤')
+  const g = hits[0]
+  const offenders: string[] = []
+  if (hits.length !== 1) offenders.push(`⑤ ${hits.length}개`)
+  if (g?.outcome !== 'regenerate') offenders.push(`outcome=${g?.outcome}`)
+  if (!g?.detail.includes('타겟 설명어')) offenders.push('호칭 근거 누락')
+  if (!g?.detail.includes('§5')) offenders.push('조언 근거 누락')
+  // 🔴 detail 은 코드 · 개수 · 정책명만이다
+  if (/또래|병원|검사/.test(g?.detail ?? '')) offenders.push('🔴 detail 에 본문 조각')
+  if (offenders.length) bad('⑤ 근거 둘 · 관문 하나', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑤ 근거 둘 · 관문 하나', 'case', `1개 · regenerate · "${g?.detail}"`)
+}
+
+// ── 🔴 ⑤ 병합은 더 엄격한 쪽을 남긴다 ────────
+{
+  // 호칭 regenerate + 조언 review → regenerate 여야 한다 (덮어쓰면 완화된다)
+  const v = checkCommentCandidate({
+    personaCode: 'P07', text: '우리 또래분들도 병원 가보세요',
+    sourceTexts: SOURCE, adviceForbidden: true,
+  })
+  const g = v.gates.find((x) => x.gate === '⑤')
+  if (g?.outcome !== 'regenerate') bad('⑤ 더 엄격한 쪽', 'case', `🔴 ⑤=${g?.outcome} (${g?.detail})`)
+  else ok('⑤ 더 엄격한 쪽', 'case', `regenerate 유지 · "${g?.detail}"`)
+}
+
+// ── 🔴 실제 시/구 지명이 저장소에 남지 않았는가 ────
+{
+  // fixture 텍스트는 전부 합성이다. 실제 지명은 그 자체가 식별 정보라
+  // 저장소에 남으면 테스트 데이터가 아니라 기록이 된다.
+  // 🔴 금지 목록을 평문으로 적는 방식은 쓰지 않는다 — 그것도 남기는 것이다.
+  //    지명꼴을 전부 뽑아 해시로만 대조한다.
+  //    거짓양성("활동" · "화면" 등)은 해시가 맞지 않아 무해하다.
+  const ph = (v: string) => createHash('sha1').update(`place:${v}`).digest('hex').slice(0, 12)
+  const BANNED = new Set([
+  '02043db24e11', '04b0aa106ecc', '04beabb36467', '04e0602c9a2f', '06d78663b341', '087316020483',
+  '08b4b3c1aa93', '0acf7b161625', '0e0b34d25a3f', '0e9b1481c6c6', '163342b6f97a', '1a12cbaeb7cd',
+  '1b8ad584f8c8', '1c6f0d1db00e', '1d44e3c454bd', '22e05d897316', '294c6774f682', '2c99b3d460b9',
+  '2fc3d046d9e5', '314e976d7bad', '3822bae0723f', '39b14dc78b2b', '3e541cfbbaef', '3f1057693eea',
+  '416460051862', '41ca4f163dd4', '42bc5f5fd40b', '443ebbea3294', '487b4e96c981', '4bb3a94dce07',
+  '4cfe7d481328', '53aee12601f6', '5897755c8a21', '59edb51fe133', '5abbe0d9c1dc', '5bbbc2b89c61',
+  '5c65f2f55205', '62cf4f7c56e0', '630ce57404e9', '646e3cf32b2b', '6b8c874226b5', '6c53c8e6baa3',
+  '6ce65f30490e', '6f78d5fc5580', '6f999cc99244', '6fe11ab64133', '763d30958fbd', '7ebbea266d4f',
+  '7f961c6bd6ad', '8263b5aaec15', '82e05b543f3a', '84b8b06a0b9d', '84d613d4d4a5', '8526ebb11483',
+  '85f74a44ea5d', '8c1b0e69f909', '8db420fe56a0', '93700473531e', '946dc78e5b73', '9571f3aec810',
+  '962ee723fcb7', '97492184d3d4', '9aae2784f28f', 'a31a02147abe', 'a352c6c8454a', 'a38fa22ea863',
+  'a45e378eed33', 'ab76f1566e87', 'abd083c7b5f7', 'ade3405c5502', 'b429dd6eb8f8', 'b42acbb15b5e',
+  'b47ff229e83b', 'b8f5bb67bca1', 'b9c6a9ec2108', 'bb65cabcf0d1', 'c3520b52fbb3', 'cb3e49ea8585',
+  'cca105d39109', 'cd685b881612', 'd04007ba87e8', 'd2edd25bee54', 'd31b75dd9466', 'd64a9eef1ce9',
+  'd7c01fc9ce4c', 'd7db54062b3d', 'd81ff6531a99', 'da5de4c605dc', 'dc2f8a46b193', 'dd75af27d792',
+  'e15a33b049bb', 'e3065edb8491', 'e7955f170b7d', 'e97b60b76d73', 'e9b69ddcd09b', 'ef3131b10f89',
+  'f12942fde1f5', 'f201d54d7389', 'f2e55d98c878', 'f30b0e7ec55e', 'f3ca2467fc94', 'f4dd769bda91',
+  'f595b70ba5f3', 'f63f92a61f23', 'f7f6088823e3', 'fa06cc139b3e', 'fc4a5a95ed78', 'feffd7eb59e7',
+  ])
+  const raw = [SELF, LIB, GATE234, RUNNER].map((f) => readFileSync(f, 'utf-8'))
+  const hits = new Set<string>()
+  for (const src of raw) {
+    for (const m of src.matchAll(/[가-힣]{2,4}(?:시|구|동|읍|면)/gu)) {
+      const d = ph(m[0])
+      if (BANNED.has(d)) hits.add(d)
+    }
+  }
+  // 🔴 실패해도 지명을 출력하지 않는다 — 해시 · 개수만
+  if (hits.size > 0) bad('실제 지명 없음', 'guard', `🔴 실제 시/구 지명 ${hits.size}종 — ${[...hits].join(' ')}`)
+  else ok('실제 지명 없음', 'guard', `대조 ${BANNED.size}종 · 소스 ${raw.length}개 전부 합성`)
 }
 
 // ── 출력 ────────────────────────────────────────────
