@@ -7,6 +7,8 @@ import { prisma } from '@/lib/prisma'
 import {
   CANDIDATE_STATUS_LABEL, GATE_STATUS_LABEL, STATUS_LABEL, formatKst, filledMark,
 } from '@/lib/persona-admin'
+import PersonaCandidateDecision from '@/components/admin/PersonaCandidateDecision'
+import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-rules'
 
 /**
  * 페르소나 댓글 후보 상세 — 🔴 읽기 전용
@@ -21,8 +23,9 @@ import {
  *      · author · sourceUrl · sourceRef — 컬럼 자체가 없다
  *      · 실회원 닉네임
  *
- * 🔴 액션은 read-only 다. 승인 · 반려 write 는 다음 단계로 분리했다.
- *    승인해도 발행되지 않는다 — 발행 경로는 별도 승인 대상이다.
+ * 🔴 write 는 server action 한 곳에만 있다 — lib/actions/persona-candidate.ts.
+ *    전이 규칙은 lib/persona-candidate-rules.ts 의 순수 함수라 DB 없이 검증된다.
+ *    🔴 승인해도 발행되지 않는다 — APPROVED 에 머물고, 발행 경로는 별도 승인 대상이다.
  */
 export const metadata: Metadata = {
   title: '후보 상세',
@@ -207,30 +210,23 @@ export default async function PersonaCandidateDetailPage(
             <dt className="text-gray-500">결정 시각</dt>
             <dd>{row.decidedAt === null ? '—' : formatKst(row.decidedAt)}</dd>
             <dt className="text-gray-500">폐기 사유</dt>
-            <dd>{row.declineReason ?? '—'}</dd>
+            <dd>
+              {row.declineReason === null
+                ? '—'
+                : (DECLINE_REASONS.find((r) => r.code === row.declineReason)?.label ?? row.declineReason)}
+            </dd>
           </dl>
         </section>
 
-        {/* 🔴 액션은 read-only. write 는 다음 단계로 분리했다 */}
-        <div className="rounded-lg bg-amber-50 px-4 py-3">
-          <div className="flex flex-wrap gap-2">
-            {['승인', '수정 후 승인', '폐기'].map((label) => (
-              <button
-                key={label}
-                type="button"
-                disabled
-                className="min-h-[52px] cursor-not-allowed rounded-lg border border-gray-300 bg-gray-100 px-4 text-sm text-gray-400"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-amber-900">
-            아직 저장되지 않습니다. 승인·반려 기록은 다음 단계에서 붙입니다.
-            <br />
-            승인하더라도 발행되지 않습니다 — 발행 경로는 별도 승인 대상입니다.
+        {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
+        <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+
+        {row.declineReason !== null && (
+          <p className="mt-2 text-xs text-gray-600">
+            폐기 사유 —{' '}
+            {DECLINE_REASONS.find((r) => r.code === row.declineReason)?.label ?? row.declineReason}
           </p>
-        </div>
+        )}
       </div>
     </PageShell>
   )
