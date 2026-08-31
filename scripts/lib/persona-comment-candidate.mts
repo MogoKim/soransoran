@@ -14,19 +14,28 @@
  * 🔴 반환값에 원문 조각을 담지 않는다.
  *    후보 텍스트 자체는 호출부가 이미 갖고 있고, 판정 결과에는 코드·개수만 남는다.
  *
- * 🔴 9관문 중 이 단계에서 자동 판정 가능한 것만 돈다.
+ * 🔴 반환 gates 는 입력과 무관하게 **항상 ①~⑨ 각 1개씩 9개**다.
+ *    관문 하나가 근거를 여럿 가질 수는 있어도 관문 수는 늘지 않는다 —
+ *    분모가 후보마다 달라지면 통과율 집계가 성립하지 않는다. orderGates 가 강제한다.
  *      ① 20자 유출        assertNoSourceLeak 재사용
- *      ⑤ 금지 호칭        checkForbiddenAddress
+ *      ② 고유 표현        checkUniqueExpression — 코퍼스 빈도 조회를 인자로 받는다
+ *      ③ 식별 디테일      checkIdentifyingDetail — 단일 허용 · 결합이 위험
+ *      ④ 구조 과복제      checkStructureCopy — ① 은 문자열, ④ 는 전개 순서
+ *      ⑤ 금지 호칭 + §5 조언 제한  🔴 근거는 둘이지만 관문은 하나다
  *      ⑥-A 닉네임 혼입    author/회원 닉네임이 본문에 섞였는가
+ *      ⑧ 하위 축(일부)    구조화 나열 · 마크다운 — 코퍼스 없이도 확정적으로 잡힌다
  *      ⑨ 출처 marker      checkSourceMarker
- *      ⑧ 하위 축(일부)    구조화 나열 · 구어 표지 부재 — AI 티 태그로만
- *    ②③④⑦ 은 코퍼스·identity·LLM 판정이 필요해 여기서 돌리지 않는다.
+ *    ⑦ identity 대조 · ⑧ 반복 패턴은 identity·코퍼스가 있어야 해서 아직 못 돈다.
  *    🔴 "돌지 않았다" 를 pass 로 보고하지 않는다 — notRun 으로 분리한다.
  */
 import { assertNoSourceLeak, M3_LEAK_RUN_MIN } from './voice-m3-contract.mjs'
 import { checkForbiddenAddress } from './persona-gate-forbidden-address.mjs'
 import { checkSourceMarker } from './persona-gate-source-marker.mjs'
 import { classifyReaction, type ReactionType } from './voice-comment-signals.mjs'
+import {
+  checkUniqueExpression, checkIdentifyingDetail, checkStructureCopy,
+  type FrequencyLookup,
+} from './persona-gate-234.mjs'
 
 export type GateCode = '①' | '②' | '③' | '④' | '⑤' | '⑥' | '⑦' | '⑧' | '⑨'
 export type GateOutcome = 'pass' | 'review' | 'regenerate' | 'reject' | 'notRun'
@@ -78,10 +87,44 @@ export type CandidateInput = {
   adviceForbidden?: boolean
   /** 출처가 카페 운영/공지 문맥인가 — ⑨ 로 넘긴다 */
   sourceIsCafeOperational?: boolean
+  /**
+   * ② 코퍼스 빈도 조회. 🔴 없으면 ② 는 notRun 이다 — pass 로 세지 않는다.
+   *    댓글 생성물에는 **댓글 코퍼스**를 붙여야 한다(§3-②).
+   */
+  frequencyLookup?: FrequencyLookup
+  /** ② 로그용 — 어느 코퍼스로 쟀는지 */
+  corpusName?: string
 }
 
 const SEVERITY: Record<GateOutcome, number> = {
   notRun: -1, pass: 0, review: 1, regenerate: 2, reject: 3,
+}
+
+/** 🔴 근거가 둘일 때 더 엄격한 쪽을 남긴다 — pass < review < regenerate < reject */
+const stricter = (a: GateOutcome, b: GateOutcome): GateOutcome => (SEVERITY[a] >= SEVERITY[b] ? a : b)
+
+const GATE_ORDER: readonly GateCode[] = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨']
+
+/**
+ * 🔴 9관문은 입력과 무관하게 항상 ①~⑨ 각 1개씩이다.
+ *    관문이 빠지면 "돌지 않은 것" 이 집계에서 사라지고,
+ *    중복되면 같은 관문이 두 번 세어져 통과율이 왜곡된다.
+ *    호출부가 아니라 판정부가 막는다 — 이건 반환값의 계약이다.
+ */
+function orderGates(gates: readonly GateResult[]): GateResult[] {
+  const out: GateResult[] = []
+  for (const code of GATE_ORDER) {
+    const hit = gates.filter((g) => g.gate === code)
+    const only = hit[0]
+    if (hit.length !== 1 || only === undefined) {
+      throw new Error(`판정부 결함 — Gate ${code} 가 ${hit.length}개다 (기대 1개)`)
+    }
+    out.push(only)
+  }
+  if (gates.length !== GATE_ORDER.length) {
+    throw new Error(`판정부 결함 — gates ${gates.length}개 (기대 ${GATE_ORDER.length}개)`)
+  }
+  return out
 }
 
 /** 🔴 구어 표지 — 없으면 "생활감 부족" 태그 */
@@ -132,16 +175,6 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
     if (leaked) tags.push('SEED_TOO_CLOSE')
   }
 
-  // ── ⑤ 금지 호칭 / 브랜드 금칙어 ──
-  const five = checkForbiddenAddress(text)
-  gates.push({
-    gate: '⑤',
-    outcome: five.status,
-    detail: five.status === 'pass'
-      ? '금지 호칭 없음'
-      : `타겟 설명어 ${five.targetDescriptors.length} · 브랜드 금지어 ${five.brandBannedWords.length}`,
-  })
-
   // ── ⑥-A 닉네임 혼입 — 🔴 이름 하나가 아니라 본문을 본다 (⑥-B 와 다른 갈래) ──
   const nameHits = (input.knownNames ?? []).filter((n) => n.trim() !== '' && text.includes(n.trim()))
   gates.push({
@@ -185,31 +218,68 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
     // 🔴 identity·memory 대조는 아직 못 한다. 역할 금지만 본다
     gates.push({ gate: '⑦', outcome: 'notRun', detail: 'identity 대조 미구현 — 역할 금지만 확인' })
   }
-  // ── §5 조언 제한 — 🔴 태그로만 두지 않는다 ──
-  //    의료 · 법률 · 재무 · 가족관계 단정 조언은 Gate §5 가 금지한 것이고,
-  //    운영자 힌트로만 두면 pass 로 통과한다.
+  // ── ⑤ 금지 호칭 + §5 조언 제한 — 🔴 근거는 둘, 관문은 하나다 ──
+  //    호칭 위반과 조언 위반은 이유가 다르지만 둘 다 Gate ⑤ 다.
+  //    각각 push 하면 후보에 따라 gates 가 9개가 되기도 10개가 되기도 한다 —
+  //    관문 수가 입력에 따라 흔들리면 "9관문 중 몇 종" 이라는 집계 자체가 성립하지 않는다.
+  //    🔴 둘 다 걸리면 더 엄격한 쪽을 남긴다 (pass < review < regenerate < reject)
   //      단정형("~하셔야 합니다")   regenerate — 판단을 내려주고 있다
   //      그 외 조언 신호            review     — 사람이 본다
+  const five = checkForbiddenAddress(text)
+  let fiveOutcome: GateOutcome = five.status
+  const fiveWhy: string[] = []
+  if (five.status !== 'pass') {
+    if (five.targetDescriptors.length > 0) fiveWhy.push(`타겟 설명어 ${five.targetDescriptors.length}`)
+    if (five.brandBannedWords.length > 0) fiveWhy.push(`브랜드 금지어 ${five.brandBannedWords.length}`)
+    if (fiveWhy.length === 0) fiveWhy.push('금지 호칭 위반')
+  }
   if (input.adviceForbidden === true) {
     const assertive = ADVICE_ASSERTIVE.test(text)
-    const risky = assertive || ADVICE_MARKS.test(text) || reactionType === 'information'
-    if (risky) {
+    if (assertive || ADVICE_MARKS.test(text) || reactionType === 'information') {
       tags.push('ADVICE_RISK')
-      gates.push({
-        gate: '⑤',
-        outcome: assertive ? 'regenerate' : 'review',
-        detail: assertive ? '§5 단정형 조언' : '§5 조언 신호',
-      })
+      fiveOutcome = stricter(fiveOutcome, assertive ? 'regenerate' : 'review')
+      fiveWhy.push(assertive ? '§5 단정형 조언' : '§5 조언 신호')
     }
   }
+  gates.push({
+    gate: '⑤',
+    outcome: fiveOutcome,
+    // 🔴 값이 아니라 코드 · 개수 · 정책명만 남긴다
+    detail: fiveWhy.length > 0 ? fiveWhy.join(' · ') : '금지 호칭 없음',
+  })
   if (reactionType === 'empathy' && text.length < 15) tags.push('OVER_EMPATHY')
 
-  // ── 돌지 않은 관문 — 🔴 pass 로 보고하지 않는다 ──
-  for (const g of ['②', '③', '④'] as const) {
-    gates.push({ gate: g, outcome: 'notRun', detail: '코퍼스 · 판정부 미구현' })
+  // ── ② 고유 표현 / 특이 조어 ──
+  //    🔴 코퍼스 빈도 조회가 없으면 판정이 성립하지 않는다. notRun 이다.
+  if (input.frequencyLookup === undefined) {
+    gates.push({ gate: '②', outcome: 'notRun', detail: '코퍼스 빈도 조회 없음' })
+  } else if (!hasSource) {
+    gates.push({ gate: '②', outcome: 'notRun', detail: '검사 불가 — sourceTexts 없음' })
+  } else {
+    const two = checkUniqueExpression(
+      text, input.sourceTexts, input.frequencyLookup, input.corpusName ?? 'comment',
+    )
+    gates.push({ gate: '②', outcome: two.status, detail: two.detail })
+    if (two.status !== 'pass') tags.push('SEED_TOO_CLOSE')
   }
 
-  const ran = gates.filter((g) => g.outcome !== 'notRun')
+  // ── ③ 식별 디테일 — 🔴 단일은 허용, 결합이 위험하다 ──
+  const three = checkIdentifyingDetail(text)
+  gates.push({ gate: '③', outcome: three.status, detail: three.detail })
+
+  // ── ④ 구조 과복제 — 🔴 ① 과 역할이 다르다 ──
+  //    ① 은 문자열, ④ 는 전개 순서. 표현이 전부 달라도 ④ 는 걸릴 수 있다
+  if (!hasSource) {
+    gates.push({ gate: '④', outcome: 'notRun', detail: '검사 불가 — sourceTexts 없음' })
+  } else {
+    const four = checkStructureCopy(text, input.sourceTexts)
+    gates.push({ gate: '④', outcome: four.status, detail: four.detail })
+    if (four.status !== 'pass') tags.push('STRUCTURE_COPY')
+  }
+
+  // 🔴 집계보다 먼저 관문 수를 확정한다 — 9개가 아니면 여기서 멈춘다
+  const ordered = orderGates(gates)
+  const ran = ordered.filter((g) => g.outcome !== 'notRun')
   const worst = ran.reduce<Exclude<GateOutcome, 'notRun'>>(
     (acc, g) => (SEVERITY[g.outcome] > SEVERITY[acc] ? (g.outcome as Exclude<GateOutcome, 'notRun'>) : acc),
     'pass',
@@ -220,12 +290,14 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
     personaCode: input.personaCode,
     reactionType,
     status: worst,
-    gates: gates.sort((a, b) => a.gate.localeCompare(b.gate)),
-    aiToneTags: tags,
+    gates: ordered,
+    // 🔴 중복 제거 — ① 과 ② 가 같은 태그를 붙일 수 있다.
+    //    운영자 화면에서 같은 태그가 두 번 보이면 근거가 둘인지 버그인지 알 수 없다
+    aiToneTags: [...new Set(tags)],
     sourceLeak: leaked,
     charLength: [...text].length,
     reason: failed.length === 0
-      ? `관문 ${ran.length}종 통과 · 미실행 ${gates.length - ran.length}종`
+      ? `관문 ${ran.length}종 통과 · 미실행 ${ordered.length - ran.length}종`
       : failed.map((g) => `${g.gate}:${g.outcome}`).join(' · '),
   }
 }
