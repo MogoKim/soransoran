@@ -27,7 +27,7 @@
  *      · status 를 active 로 올리는 것 — draft 로만 만든다
  */
 import { PrismaClient, type PersonaStatus } from '@prisma/client'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 import { checkNameCollision, type NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
@@ -183,8 +183,11 @@ if (!APPLY) {
 try {
   await prisma.$transaction(async (tx) => {
     for (const { code, name } of verdicts) {
+      // 🔴 id 를 직접 넣지 않는다. schema 의 @default(cuid()) 에 맡긴다.
+      //    페르소나 User 만 UUID 로 만들면 실회원 cuid 와 형식이 섞이고,
+      //    어드민 · 검증 · 추적에서 "왜 이것만 다른가" 를 매번 되묻게 된다.
       const user = await tx.user.create({
-        data: { id: randomUUID(), nickname: name },
+        data: { nickname: name },
         select: { id: true },
       })
       const persona = await tx.persona.create({
