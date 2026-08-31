@@ -793,7 +793,7 @@ crisis_hold 상태로 기록
 | 흔한 상황 | 고유 표현 · 특이 조어 |
 | 감정 흐름 | 식별 디테일 |
 | 일반 표현 · 관용구 | 원문 문장 순서 과복제 |
-| 댓글 **반응 구조** | **원댓글 문장 복사** |
+| 댓글 **반응 구조** · 🟢 **A 급 seed** (§3-②) | 🔴 **B · C 급 문장 재사용** |
 | 문단 호흡 · 줄바꿈 습관 | 닉네임 재사용 |
 
 ### "오리지널리티 강화" 의 정의
@@ -1092,8 +1092,9 @@ VE-M3 에서 terminal skip 33건이 나온 것이 가드가 일한 증거였다.
 |---|---|---|
 | [M3 반응 지도](2026-08-30-m3-reaction-map-design.md) | §2 taxonomy 뒤 · §8 필요한 데이터 | comment seed A/B/C 등급이 **이 문서 §3-② 계약을 따른다**는 링크 |
 | 〃 | §3 · §4 | 🔴 고정 순서 → `roleWeights` · `firstRole` 후보 · `commentCount` range 로 재작성 |
-| [Persona Architecture](2026-08-30-persona-architecture-design.md) | §12 조언 제한 부근 | "원댓글 문장 복사 금지" → **C 급 문장 한정**으로 조정 |
-| [Persona Network 전략](2026-08-29-persona-network-strategy.md) | §7 가져와도 되는 것 표 · §9 관문 밖 항목 | 동일 조정 |
+| [Persona Architecture](2026-08-30-persona-architecture-design.md) | §10 분산 규칙 · §11 허용/금지 표 | ✅ **완료** — B · C 급 한정으로 조정 |
+| [Persona Network 전략](2026-08-29-persona-network-strategy.md) | §7 가져와도 되는 것 표 · §8 댓글 흐름 · §9 관문 밖 항목 | ✅ **완료** — 동일 조정 |
+| 🔴 **이 문서 §11** | 허용/금지 표 | ✅ **완료** — §3-② 와 어긋나 있던 것을 바로잡음 |
 | [VE-M3 학습 정책](2026-08-29-voice-m3-learning-policy.md) | §7 다음 단계 | 링크 한 줄만. bucket 정의는 건드리지 않는다 |
 
 🔴 **이번 PR 에서 M3 반응 지도를 크게 다시 쓰지 않는다.** 목적은 Gate 계약 보정이다.
