@@ -27,7 +27,9 @@
 import { PrismaClient } from '@prisma/client'
 import pg from 'pg'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { loadUnaoReadonlyUrl } from './lib/voice-unao-readonly.mjs'
+import { normalizeN2 } from './lib/persona-gate-name-collision.mjs'
 import type { FrequencyLookup } from './lib/persona-gate-234.mjs'
 import {
   checkCommentCandidate, summarizeCandidates,
@@ -36,6 +38,10 @@ import {
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const WRITE_OUT = process.argv.includes('--out')
+/**
+ * 🔴 --enqueue 없이는 DB write 가 0 이다. 기본은 지금까지와 같은 read-only dry-run.
+ */
+const ENQUEUE = process.argv.includes('--enqueue')
 const INPUT_PATH = 'tmp/persona-comment-candidates.json'
 const OUTPUT_PATH = 'tmp/persona-comment-verdicts.json'
 
@@ -311,6 +317,73 @@ const notRunLine = [...notRunCount.entries()]
 console.log(`\n  🔴 미실행 관문: ${notRunLine === '' ? '없음' : notRunLine}`)
 console.log('     판정부는 있고 대조 집합이 없다 — "돌지 않았다" 를 pass 로 보고하지 않는다')
 
+// ══ 승인 대기열 적재 (--enqueue) ═══════════════════
+//
+// 🔴 **정책 — 무엇을 대기열에 넣는가**
+//    pass · review 만 넣는다. regenerate · reject 는 넣지 않는다.
+//
+//    대기열은 "사람이 읽고 결정할 것" 의 집합이다(Architecture §13).
+//    regenerate 는 "다시 만들어라" 이지 "사람이 판단하라" 가 아니다.
+//    그것까지 PENDING 으로 넣으면 대기열이 재생성 대상으로 오염되고,
+//    PENDING 수가 실제 검토 부담을 나타내지 못한다 —
+//    🔴 대기열은 계측 장치다(§15). 분모가 틀리면 계측이 무의미하다.
+//
+//    regenerate 통계는 이 dry-run 의 집계로 이미 남는다. DB 에 쌓을 이유가 없다.
+if (ENQUEUE) {
+  console.log('\n══ 승인 대기열 적재 (--enqueue) ══')
+
+  // 🔴 테이블이 없으면 조용히 넘어가지 않는다
+  const tableRows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*)::bigint AS n FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'PersonaApprovalQueue'`
+  if (Number(tableRows[0]?.n ?? 0) === 0) {
+    await prisma.$disconnect()
+    fail('PersonaApprovalQueue 테이블이 없습니다. 0018 migration 을 먼저 적용하세요.')
+  }
+
+  const personaIdByCode = new Map(personas.map((p) => [p.code, p.id]))
+  // 🔴 중복 적재 방지 — persona + 정규화 본문. 같은 후보를 두 번 넣지 않는다
+  const dedupKeyOf = (personaId: string, text: string): string =>
+    createHash('sha256').update(`${personaId}::${normalizeN2(text)}`).digest('hex').slice(0, 32)
+
+  let queued = 0
+  let skippedGate = 0
+  let skippedDup = 0
+  for (const [i, v] of verdicts.entries()) {
+    const c = candidates[i]
+    if (c === undefined) continue
+    // 🔴 대기열에 들어가는 것은 pass · review 뿐이다
+    if (v.status !== 'pass' && v.status !== 'review') { skippedGate++; continue }
+    const personaId = personaIdByCode.get(v.personaCode)
+    if (personaId === undefined) { skippedGate++; continue }
+    const dedupKey = dedupKeyOf(personaId, c.text)
+    const exists = await prisma.personaApprovalQueue.findUnique({ where: { dedupKey }, select: { id: true } })
+    if (exists !== null) { skippedDup++; continue }
+    await prisma.personaApprovalQueue.create({
+      data: {
+        personaId,
+        status: 'PENDING',
+        candidateText: c.text,
+        reactionType: v.reactionType,
+        gateStatus: v.status,
+        // 🔴 관문 코드 · 결과 · 근거 문구만. 원문 조각은 판정부가 이미 걸러 둔다
+        gateResults: v.gates as unknown as object,
+        aiToneTags: [...v.aiToneTags],
+        // 🔴 sourceTexts 는 저장하지 않는다. storyRefs 참조만 둔다
+        storyRefs: [],
+        topicTags: [],
+        ...((c.seedRef ?? '').trim() !== '' ? { seedRef: (c.seedRef ?? '').trim() } : {}),
+        dedupKey,
+      },
+    })
+    queued++
+  }
+  ok(`적재 ${queued}건 · Gate 미통과 제외 ${skippedGate}건 · 중복 ${skippedDup}건`)
+  const total = await prisma.personaApprovalQueue.count()
+  const pending = await prisma.personaApprovalQueue.count({ where: { status: 'PENDING' } })
+  ok(`대기열 총 ${total}건 · PENDING ${pending}건`)
+}
+
 if (WRITE_OUT) {
   mkdirSync('tmp', { recursive: true })
   // 🔴 저장본에도 본문을 넣지 않는다
@@ -318,5 +391,9 @@ if (WRITE_OUT) {
   console.log(`\n  판정 결과 저장: ${OUTPUT_PATH} (gitignored · 본문 미포함)`)
 }
 
-console.log('\n🟡 dry-run 입니다. DB write 0 · 발행 없음 · 승인 대기열 없음.\n')
+console.log(
+  ENQUEUE
+    ? '\n🟡 대기열 적재만 했습니다. 발행 0 · LLM 0 · active 전환 0 · Post/Comment 변경 0.\n'
+    : '\n🟡 dry-run 입니다. DB write 0 · 발행 없음 · 적재하려면 --enqueue 를 붙이세요.\n',
+)
 await prisma.$disconnect()

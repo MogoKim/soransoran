@@ -243,9 +243,19 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   }
   if (!/\.leaked/.test(libCode)) offenders.push('🔴 assertNoSourceLeak 의 반환값을 보지 않는다')
   // 🔴 발행 경로가 들어오지 않았는가
-  for (const key of ['--apply', 'publish', '.create(', '.update(']) {
+  for (const key of ['--apply', 'publish']) {
     if (runnerCode.includes(key)) offenders.push(`🔴 runner 에 ${key} 가 있다`)
   }
+  // 🔴 runner 가 --enqueue 로 대기열에 적재하게 되면서 write 자체는 생겼다.
+  //    막아야 할 것은 "대기열 적재" 가 아니라 **고객에게 나가는 write** 다.
+  //    그래서 문자열 매칭을 푸는 대신 **쓰기 대상 모델을 화이트리스트로** 좁힌다.
+  //    ('.create(' 만 보던 이전 가드는 createHash().update() 까지 잡는 거친 검사였다)
+  const QUEUE_ONLY = ['personaApprovalQueue']
+  const writeTargets = [...runnerCode.matchAll(
+    /prisma\.([A-Za-z]+)\.(create|update|upsert|delete|createMany|updateMany|deleteMany)\b/g,
+  )].map((m) => m[1] ?? '')
+  const badWrites = [...new Set(writeTargets)].filter((m) => !QUEUE_ONLY.includes(m))
+  if (badWrites.length > 0) offenders.push(`🔴 runner 가 ${badWrites.join(' · ')} 에 쓴다`)
   if (offenders.length) bad('순수 함수 · 발행 없음', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('순수 함수 · 발행 없음', 'guard', 'DB · LLM · 발행 경로 없음 · ① 반환값 확인')
 }
