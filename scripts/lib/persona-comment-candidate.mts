@@ -96,7 +96,14 @@ const TIDY_MARKS = /(^|\n)\s*([-*•]|\d+[.)])\s|\*\*|##/u
  *    태그는 판정이 아니라 운영자에게 보내는 힌트다(§4-8).
  */
 const ADVICE_MARKS =
-  /(병원\s*(가|가서|가보|다녀)|검사\s*(받|해보)|약\s*(드시|먹|복용)|처방|진단|수술|\b해야\s*(합니다|해요|됩니다)|하셔야)/u
+  /(병원\s*(가|가서|가보|다녀)|검사\s*(받|해보)|약\s*(드시|먹|복용)|처방|진단|수술)/u
+
+/**
+ * 🔴 단정형 — "판단을 내려주는" 형태다.
+ *    Gate §5 가 "경계는 단정이다. 경험을 나누는 것과 판단을 내려주는 것은 다르다" 로 정했다.
+ */
+const ADVICE_ASSERTIVE =
+  /(하셔야\s*(합니다|해요|됩니다|돼요)|받으셔야|드셔야|가셔야|해야\s*(합니다|돼요|됩니다)|\b꼭\s*(하|가|드)|반드시)/u
 
 /** 후보 하나를 판정한다. 🔴 순수 함수 */
 export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
@@ -107,14 +114,23 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   // ── ① 20자 연속 유출 — 🔴 완화하지 않는다 ──
   //    🔴 assertNoSourceLeak 은 이름과 달리 throw 하지 않는다.
   //       { ok, leaked } 를 돌려준다 — try/catch 로 감싸면 유출을 전부 놓친다.
-  const leak = assertNoSourceLeak(text, input.sourceTexts)
-  const leaked = leak.leaked
-  gates.push(
-    leaked
-      ? { gate: '①', outcome: 'regenerate', detail: `${M3_LEAK_RUN_MIN}자 이상 연속 일치` }
-      : { gate: '①', outcome: 'pass', detail: `연속 일치 < ${M3_LEAK_RUN_MIN}자` },
-  )
-  if (leaked) tags.push('SEED_TOO_CLOSE')
+  //    🔴 sourceTexts 가 비면 검사가 성립하지 않는다.
+  //       assertNoSourceLeak 은 hay 가 짧으면 { leaked: false } 를 돌려주는데,
+  //       그것은 "유출이 없다" 가 아니라 "볼 게 없었다" 다.
+  //       검사 불가를 pass 로 세면 통과율이 거짓이 된다 → regenerate 로 되돌린다.
+  const hasSource = input.sourceTexts.some((t) => t.trim() !== '')
+  let leaked = false
+  if (!hasSource) {
+    gates.push({ gate: '①', outcome: 'regenerate', detail: '검사 불가 — sourceTexts 없음' })
+  } else {
+    leaked = assertNoSourceLeak(text, input.sourceTexts).leaked
+    gates.push(
+      leaked
+        ? { gate: '①', outcome: 'regenerate', detail: `${M3_LEAK_RUN_MIN}자 이상 연속 일치` }
+        : { gate: '①', outcome: 'pass', detail: `연속 일치 < ${M3_LEAK_RUN_MIN}자` },
+    )
+    if (leaked) tags.push('SEED_TOO_CLOSE')
+  }
 
   // ── ⑤ 금지 호칭 / 브랜드 금칙어 ──
   const five = checkForbiddenAddress(text)
@@ -144,11 +160,20 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   gates.push({ gate: '⑨', outcome: nine.status, detail: nine.reason })
   if (nine.hits.length > 0) tags.push('SOURCE_TRACE')
 
-  // ── ⑧ Voice Fingerprint 하위 축 — 🔴 태그만. 판정은 하지 않는다 ──
-  //    반복 패턴 · 정체성은 코퍼스와 identity 가 있어야 판정할 수 있다
-  if (TIDY_MARKS.test(text)) tags.push('TOO_TIDY')
+  // ── ⑧ Voice Fingerprint ──
+  //    🔴 반복 패턴 · n-gram 점유율은 코퍼스가 있어야 본다.
+  //       그러나 구조화 나열 · 마크다운은 코퍼스 없이 확정적으로 잡힌다 —
+  //       사람이 쓴 커뮤니티 댓글에 "- 첫째" · "**꼭**" 는 나오지 않는다.
+  //       확정적으로 잡을 수 있는 것을 태그로만 두면 통과해 버린다.
+  const tidy = TIDY_MARKS.test(text)
+  if (tidy) tags.push('TOO_TIDY')
+  // 🔴 생활감 부족은 태그만이다 — 짧은 댓글은 원래 표지가 없을 수 있다
   if (!LIFE_MARKS.test(text)) tags.push('NO_LIFE_MARKS')
-  gates.push({ gate: '⑧', outcome: 'notRun', detail: '코퍼스 필요 — 태그만 산출' })
+  gates.push(
+    tidy
+      ? { gate: '⑧', outcome: 'regenerate', detail: '구조화 나열 · 마크다운' }
+      : { gate: '⑧', outcome: 'notRun', detail: '반복 패턴은 코퍼스 필요 — 구조 검사만 통과' },
+  )
 
   // ── 반응 역할 ──
   const reactionType = classifyReaction(text)
@@ -160,8 +185,22 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
     // 🔴 identity·memory 대조는 아직 못 한다. 역할 금지만 본다
     gates.push({ gate: '⑦', outcome: 'notRun', detail: 'identity 대조 미구현 — 역할 금지만 확인' })
   }
-  if (input.adviceForbidden === true && (reactionType === 'information' || ADVICE_MARKS.test(text))) {
-    tags.push('ADVICE_RISK')
+  // ── §5 조언 제한 — 🔴 태그로만 두지 않는다 ──
+  //    의료 · 법률 · 재무 · 가족관계 단정 조언은 Gate §5 가 금지한 것이고,
+  //    운영자 힌트로만 두면 pass 로 통과한다.
+  //      단정형("~하셔야 합니다")   regenerate — 판단을 내려주고 있다
+  //      그 외 조언 신호            review     — 사람이 본다
+  if (input.adviceForbidden === true) {
+    const assertive = ADVICE_ASSERTIVE.test(text)
+    const risky = assertive || ADVICE_MARKS.test(text) || reactionType === 'information'
+    if (risky) {
+      tags.push('ADVICE_RISK')
+      gates.push({
+        gate: '⑤',
+        outcome: assertive ? 'regenerate' : 'review',
+        detail: assertive ? '§5 단정형 조언' : '§5 조언 신호',
+      })
+    }
   }
   if (reactionType === 'empathy' && text.length < 15) tags.push('OVER_EMPATHY')
 

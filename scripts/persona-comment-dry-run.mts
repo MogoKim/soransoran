@@ -124,7 +124,20 @@ if (Array.isArray(parsedInput)) {
 const codes = new Set(personas.map((p) => p.code))
 const unknown = candidates.filter((c) => !codes.has(c.personaCode))
 if (unknown.length > 0) { await prisma.$disconnect(); fail(`알 수 없는 personaCode ${unknown.length}건`) }
-ok(`후보 ${candidates.length}건`)
+
+// 🔴 sourceTexts 없이는 ① 20자 유출 검사가 성립하지 않는다.
+//    비워 두면 "검사 불가" 인데 통과처럼 보인다 — 입력 단계에서 막는다.
+const noSource = candidates
+  .map((c, i) => ({ i, has: (c.sourceTexts ?? []).some((t) => t.trim() !== '') }))
+  .filter((x) => !x.has)
+if (noSource.length > 0) {
+  await prisma.$disconnect()
+  fail(
+    `sourceTexts 가 비어 있는 후보 ${noSource.length}건 (#${noSource.map((x) => x.i + 1).join(', #')}).\n` +
+    `   🔴 ① 20자 유출 검사가 성립하지 않습니다. 후보마다 원문/원댓글을 1개 이상 넣으세요.`,
+  )
+}
+ok(`후보 ${candidates.length}건 · 전부 sourceTexts 보유`)
 
 // ── 판정 ──
 const roleByCode = new Map(personas.map((p) => [p.code, p.forbiddenReactionRoles]))
