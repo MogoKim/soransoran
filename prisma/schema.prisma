@@ -216,6 +216,22 @@ model Post {
   // 정책 확정 시 SetNull(익명화) 또는 Cascade(삭제) 중 선택한다.
   author    User         @relation(fields: [authorId], references: [id])
 
+  /// 이 글을 쓴 페르소나. 실회원 글은 null 이다.
+  ///
+  /// 🔴 세 번째 축이다. AuthorSource 를 확장하지 않는다 —
+  ///    AuthorSource = "사람이 썼나" · personaId = "누가 썼나".
+  ///    41~44행 주석이 정한 원칙 그대로다.
+  /// 🔴 postOrigin enum 을 만들지 않는다. personaId 만으로 판별된다 —
+  ///    같은 질문에 답하는 축을 둘 두면 언젠가 어긋난다.
+  /// 🔴 authorId → User → Persona join 으로 대신하지 않는다.
+  ///    takedown 이 급할 때 join 이 하나 더 붙는다. 쓸 곳이 이미 있다.
+  /// 🔴 Restrict 다. 이 글이 있으면 Persona 삭제가 막힌다 —
+  ///    페르소나는 지우는 것이 아니라 status=retired 로 끄는 것이고,
+  ///    SetNull 이면 "어느 페르소나가 썼는지" 를 영구히 잃는다.
+  ///    외부 비공개 정책에서 그 추적성이 유일한 통제 수단이다(전략 §10-3).
+  personaId String?
+  persona   Persona?     @relation(fields: [personaId], references: [id], onDelete: Restrict)
+
   // ── Micro Seed 게이트 (M0) ─────────────────────────────
   // 정본 §3 C-1: 생성 시점에 확정되고 일반 운영 경로로는 변경되지 않는다.
   //   승인된 one-off repair/migration 만 예외이며 감사 로그를 남긴다.
@@ -267,6 +283,7 @@ model Post {
 
   @@index([boardType, status, createdAt])
   @@index([authorId])
+  @@index([personaId])
   // sitemap 등 색인 대상 조회 — SEARCH_INDEXABLE_WHERE 와 짝이다.
   @@index([status, isMicroSeed, permanentNoindex])
   // takedown 역조회 — sheetCandidateId(@unique) 와 함께 §6-6 의 성립 조건이다.
@@ -287,6 +304,17 @@ model Comment {
   authorId  String
   author    User         @relation(fields: [authorId], references: [id])
 
+  /// 이 댓글을 쓴 페르소나. 실회원 댓글은 null 이다.
+  ///
+  /// 🔴 commentOrigin 과 별개 축이다.
+  ///    commentOrigin = "어느 레인에서 왔나"(MEMBER/PERSONA/MICRO_SEED_VERBATIM)
+  ///    personaId     = "어느 페르소나가 썼나"
+  ///    commentOrigin 만으로는 레인만 알 뿐 누구인지 모른다.
+  /// 🔴 CommentOrigin 의 기존 의미를 바꾸지 않는다. 값도 늘리지 않는다.
+  /// 🔴 Restrict — Post.personaId 와 같은 이유다
+  personaId String?
+  persona   Persona?     @relation(fields: [personaId], references: [id], onDelete: Restrict)
+
   parentId  String?
   parent    Comment?     @relation("CommentReplies", fields: [parentId], references: [id])
   replies   Comment[]    @relation("CommentReplies")
@@ -299,6 +327,7 @@ model Comment {
 
   @@index([postId, createdAt])
   @@index([authorId])
+  @@index([personaId])
 }
 
 model Like {
@@ -1147,6 +1176,10 @@ model Persona {
   negativeMemories  PersonaNegativeMemory[]
   auditLogs         PersonaAuditLog[]
   activityLogs      PersonaActivityLog[]
+
+  /// 🔴 이 페르소나가 쓴 글·댓글. Restrict 라 남아 있으면 Persona 삭제가 막힌다
+  posts    Post[]
+  comments Comment[]
 
   @@index([status])
 }
