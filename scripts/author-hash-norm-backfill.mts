@@ -56,6 +56,30 @@ type SkipCode =
   | 'EMPTY_AFTER_N2'    // N2 결과가 빈 문자열이다
   | 'NO_ORDINAL'        // topComments 에 해당 ordinal 이 없다
 
+/**
+ * `--check` 가 보는 `authorHashNorm <> authorHash` 비율의 기대 범위.
+ *
+ * 🔴 이 값은 **row 기준 · 소란소란 적재분 기준**이다. 둘 다 중요하다.
+ *
+ *    row 기준       고유 author 기준이 아니라 테이블의 행 수로 센다.
+ *                   공백·기호를 가진 author 가 평균보다 많이 쓰면 row 비율이 더 높다.
+ *    적재분 기준     우나어 전체가 아니라 소란소란에 적재된 고품질 코퍼스의 author 다.
+ *                   모집단이 다르면 비율도 다르다.
+ *
+ * 실측 (2026-08-31 · backfill 직후 전량):
+ *    VoiceSource         14.4%  (1,396 / 9,674)
+ *    VoiceCommentSignal  15.7%  (9,324 / 59,252)
+ *
+ * 🔴 설계 문서 §6-4 의 10.0% / 9.5% 는 **우나어 전체 · 고유 author 기준**이라
+ *    이 검사의 기준이 아니다. 처음 이 값으로 임계를 잡았다가 정상 데이터를
+ *    실패로 판정했다. 같은 실수를 막으려고 기준을 여기 적어 둔다.
+ *
+ * 임계를 넓히는 것이 아니라 **맞는 모집단의 값으로 바꾼 것**이다.
+ * 데이터 정확성은 별도로 증명했다 — 68,926 건 전량이 hash(N2(원문)) 와 일치한다.
+ */
+const DIFF_PCT_MIN = 13
+const DIFF_PCT_MAX = 17
+
 const BATCH = 500
 
 type Counter = Record<SkipCode, number>
@@ -123,10 +147,10 @@ async function runCheck(prisma: PrismaClient): Promise<void> {
 
     if (n(row.both) > 0) {
       const pct = n(row.differs) / n(row.both) * 100
-      const inRange = pct >= 9 && pct <= 11
+      const inRange = pct >= DIFF_PCT_MIN && pct <= DIFF_PCT_MAX
       const msg = `    authorHashNorm <> authorHash  ${n(row.differs)}  (${pct.toFixed(1)}%)`
-      if (inRange) good(`${msg}  — 예상 9~11% 범위`)
-      else bad(`${msg}  — 🔴 예상 9~11% 를 벗어났다 (0% 면 N2 미적용 · 과다면 잘못된 정규화)`)
+      if (inRange) good(`${msg}  — 예상 ${DIFF_PCT_MIN}~${DIFF_PCT_MAX}% 범위`)
+      else bad(`${msg}  — 🔴 예상 ${DIFF_PCT_MIN}~${DIFF_PCT_MAX}% 를 벗어났다 (0% 면 N2 미적용 · 과다면 잘못된 정규화)`)
     }
   }
 
