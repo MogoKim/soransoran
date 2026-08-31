@@ -18,11 +18,13 @@ import { fileURLToPath } from 'node:url'
 import {
   checkCommentCandidate, summarizeCandidates, type CandidateVerdict,
 } from './lib/persona-comment-candidate.mjs'
+import { checkPersonaConsistency, checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIB = join(HERE, 'lib/persona-comment-candidate.mts')
 const RUNNER = join(HERE, 'persona-comment-dry-run.mts')
 const GATE234 = join(HERE, 'lib/persona-gate-234.mts')
+const GATE78 = join(HERE, 'lib/persona-gate-78.mts')
 const SELF = join(HERE, 'persona-comment-check.mts')
 
 const report: Array<{ ok: boolean; kind: string; name: string; detail: string }> = []
@@ -487,7 +489,7 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   'f12942fde1f5', 'f201d54d7389', 'f2e55d98c878', 'f30b0e7ec55e', 'f3ca2467fc94', 'f4dd769bda91',
   'f595b70ba5f3', 'f63f92a61f23', 'f7f6088823e3', 'fa06cc139b3e', 'fc4a5a95ed78', 'feffd7eb59e7',
   ])
-  const raw = [SELF, LIB, GATE234, RUNNER].map((f) => readFileSync(f, 'utf-8'))
+  const raw = [SELF, LIB, GATE234, GATE78, RUNNER].map((f) => readFileSync(f, 'utf-8'))
   const hits = new Set<string>()
   for (const src of raw) {
     for (const m of src.matchAll(/[가-힣]{2,4}(?:시|구|동|읍|면)/gu)) {
@@ -498,6 +500,169 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   // 🔴 실패해도 지명을 출력하지 않는다 — 해시 · 개수만
   if (hits.size > 0) bad('실제 지명 없음', 'guard', `🔴 실제 시/구 지명 ${hits.size}종 — ${[...hits].join(' ')}`)
   else ok('실제 지명 없음', 'guard', `대조 ${BANNED.size}종 · 소스 ${raw.length}개 전부 합성`)
+}
+
+// ══ ⑦ Persona Consistency ════════════════
+{
+  // 🔴 identity 가 없어도 잡아야 한다 — §5 가족 경유 진술은 설정 대조가 아니다
+  const proxy = checkCommentCandidate({
+    personaCode: 'P05', text: '우리 딸도 그 병원 다녀왔어요', sourceTexts: SOURCE,
+  })
+  const g = proxy.gates.find((x) => x.gate === '⑦')
+  const offenders: string[] = []
+  if (g?.outcome !== 'regenerate') offenders.push(`가족경유=${g?.outcome}`)
+  if (!g?.detail.includes('FAMILY_PROXY')) offenders.push('코드 누락')
+  // 🔴 정서 표현은 걸리지 않아야 한다 — 다 막으면 아무 말도 못 한다
+  const feel = checkCommentCandidate({
+    personaCode: 'P05', text: '우리 딸도 그맘때 참 힘들어했어요', sourceTexts: SOURCE,
+  })
+  const fg = feel.gates.find((x) => x.gate === '⑦')
+  if (fg?.outcome === 'regenerate') offenders.push(`정서표현이 걸림=${fg.detail}`)
+  if (offenders.length) bad('⑦ 가족 경유 진술', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑦ 가족 경유 진술', 'case', 'identity 없어도 regenerate · 정서 표현은 통과')
+}
+
+// ── 🔴 ⑦ identity 없으면 설정 모순은 notRun ────
+{
+  const v = checkCommentCandidate({ personaCode: 'P05', text: '저도 그랬어요', sourceTexts: SOURCE })
+  const g = v.gates.find((x) => x.gate === '⑦')
+  if (g?.outcome !== 'notRun') bad('⑦ 대조 없으면 notRun', 'guard', `🔴 ⑦=${g?.outcome}`)
+  else ok('⑦ 대조 없으면 notRun', 'guard', 'pass 로 세지 않는다')
+}
+
+// ── ⑦ 설정 모순 ──────────────────
+{
+  const offenders: string[] = []
+  const gOf = (v: ReturnType<typeof checkCommentCandidate>) => v.gates.find((x) => x.gate === '⑦')
+  // 자녀 0 인데 자녀 언급
+  const child = gOf(checkCommentCandidate({
+    personaCode: 'P05', text: '우리 애들은 다 컸어요', sourceTexts: SOURCE,
+    identity: { childrenCount: 0 },
+  }))
+  if (child?.outcome !== 'regenerate' || !child.detail.includes('CHILD_CONFLICT')) {
+    offenders.push(`자녀=${child?.outcome}(${child?.detail})`)
+  }
+  // 사별 설정 + 배우자 현재형
+  const spouse = gOf(checkCommentCandidate({
+    personaCode: 'P05', text: '남편이 요즘 자꾸 그래요', sourceTexts: SOURCE,
+    identity: { maritalStatus: '사별' },
+  }))
+  if (spouse?.outcome !== 'regenerate' || !spouse.detail.includes('SPOUSE_CONFLICT')) {
+    offenders.push(`배우자=${spouse?.outcome}`)
+  }
+  // 🔴 과거를 명시하면 모순이 아니다 — 사별한 사람도 남편 얘기를 한다
+  const past = gOf(checkCommentCandidate({
+    personaCode: 'P05', text: '남편이 살아 있을 때는 늘 그랬어요', sourceTexts: SOURCE,
+    identity: { maritalStatus: '사별' },
+  }))
+  if (past?.outcome === 'regenerate') offenders.push(`과거형이 걸림=${past.detail}`)
+  // No-Go
+  const nogo = gOf(checkCommentCandidate({
+    personaCode: 'P05', text: '그 정당 얘기는 좀 그렇죠', sourceTexts: SOURCE,
+    noGoTopics: ['정당'],
+  }))
+  if (nogo?.outcome !== 'regenerate' || !nogo.detail.includes('NO_GO')) offenders.push(`No-Go=${nogo?.outcome}`)
+  if (offenders.length) bad('⑦ 설정 모순', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑦ 설정 모순', 'case', '자녀 · 배우자 · No-Go 검출 · 과거형은 통과')
+}
+
+// ── 🔴 ⑦ 도 근거가 둘이어도 관문은 하나 ────
+{
+  const v = checkCommentCandidate({
+    personaCode: 'P05', text: '우리 딸도 그 병원 다녀왔어요 꼭 가보세요', sourceTexts: SOURCE,
+    forbiddenRoles: ['information'], identity: { childrenCount: 0 },
+  })
+  const hits = v.gates.filter((g) => g.gate === '⑦')
+  const g = hits[0]
+  const offenders: string[] = []
+  if (hits.length !== 1) offenders.push(`⑦ ${hits.length}개`)
+  if (g?.outcome !== 'regenerate') offenders.push(`outcome=${g?.outcome}`)
+  if (/딸|병원/.test(g?.detail ?? '')) offenders.push('🔴 detail 에 본문 조각')
+  if (offenders.length) bad('⑦ 근거 둘 · 관문 하나', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑦ 근거 둘 · 관문 하나', 'case', `1개 · regenerate · "${g?.detail}"`)
+}
+
+// ══ ⑧ Voice Fingerprint ══════════════
+{
+  const PRIOR = ['오늘도 그랬어요', '저도 그랬어요', '어제도 그랬어요', '늘 그랬어요', '항상 그랬어요']
+  const rep = checkCommentCandidate({
+    personaCode: 'P05', text: '저는 매번 그랬어요', sourceTexts: SOURCE, priorTexts: PRIOR,
+  })
+  const g = rep.gates.find((x) => x.gate === '⑧')
+  const offenders: string[] = []
+  if (g?.outcome !== 'regenerate') offenders.push(`반복=${g?.outcome}(${g?.detail})`)
+  if (!rep.aiToneTags.includes('TONE_REPEAT')) offenders.push('TONE_REPEAT 태그 없음')
+  // 🔴 outcome 만 보면 다른 축이 대신 걸려도 통과한다 — 축을 특정해서 본다.
+  //    (말끝 임계를 껐는데 3-gram 이 대신 걸려 fixture 가 통과한 적이 있다)
+  const axes = checkVoiceFingerprint('저는 매번 그랬어요', { priorTexts: PRIOR }).axes
+  if (!axes.includes('ENDING')) offenders.push(`ENDING 축 미검출 (${axes.join('·') || '없음'})`)
+  if (offenders.length) bad('⑧ 말끝 반복', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑧ 말끝 반복', 'case', `regenerate · ENDING 축 · "${g?.detail}"`)
+}
+
+// ── 🔴 ⑧ 표본이 모자라면 반복을 재지 않는다 ───
+{
+  const v = checkCommentCandidate({
+    personaCode: 'P05', text: '저도 그랬어요', sourceTexts: SOURCE, priorTexts: ['저도 그랬어요', '늘 그랬어요'],
+  })
+  const g = v.gates.find((x) => x.gate === '⑧')
+  if (g?.outcome !== 'notRun') bad('⑧ 표본 부족은 notRun', 'guard', `🔴 ⑧=${g?.outcome} (${g?.detail})`)
+  else ok('⑧ 표본 부족은 notRun', 'guard', 'pass 로 세지 않는다')
+}
+
+// ── 🔴 ⑧ 표본이 모자라도 seed 축은 돈다 ────
+{
+  // 🔴 실제로 겪은 결함이다. 표본 부족으로 early return 해서
+  //    seed 재사용이 조용히 무력해졌다. 축마다 실행 조건이 다르다.
+  const three = checkCommentCandidate({
+    personaCode: 'P05', text: '저도 그랬어요', sourceTexts: SOURCE, seedUseCount: 3,
+  })
+  const two = checkCommentCandidate({
+    personaCode: 'P05', text: '저도 그랬어요', sourceTexts: SOURCE, seedUseCount: 2,
+  })
+  const one = checkCommentCandidate({
+    personaCode: 'P05', text: '저도 그랬어요', sourceTexts: SOURCE, seedUseCount: 1,
+  })
+  const g = (v: typeof three) => v.gates.find((x) => x.gate === '⑧')?.outcome
+  const offenders: string[] = []
+  if (g(three) !== 'regenerate') offenders.push(`3회=${g(three)}`)
+  if (g(two) !== 'review') offenders.push(`2회=${g(two)}`)
+  if (g(one) !== 'notRun') offenders.push(`1회=${g(one)}`)
+  if (offenders.length) bad('⑧ seed 축은 표본 무관', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑧ seed 축은 표본 무관', 'guard', '3회 regenerate · 2회 review · 1회는 반복축 notRun')
+}
+
+// ── ⑧ 반복이 없으면 통과 ────────────
+{
+  // 🔴 사람도 반복한다. 다 막으면 아무 글도 못 쓴다
+  const PRIOR = ['그거 참 속상하셨겠어요', '마음이 무겁네요', '저는 잘 모르겠더라구요', '비슷한 일이 있었죠', '토닥토닥 해드리고 싶어요']
+  const v = checkCommentCandidate({
+    personaCode: 'P05', text: '읽는데 눈물이 핑 도네요', sourceTexts: SOURCE, priorTexts: PRIOR,
+  })
+  const g = v.gates.find((x) => x.gate === '⑧')
+  if (g?.outcome !== 'pass') bad('⑧ 자연스러우면 통과', 'case', `🔴 ⑧=${g?.outcome} (${g?.detail})`)
+  else ok('⑧ 자연스러우면 통과', 'case', `pass · "${g?.detail}"`)
+}
+
+// ── 🔴 ⑦⑧ 판정부 반환값에 본문이 없는가 ────────
+{
+  // 🔴 호출부(candidate)가 detail 을 다시 조립하므로, 판정부만 오염돼도
+  //    candidate 출력에는 드러나지 않는다. 판정부를 직접 본다.
+  const TEXT = '우리 딸도 그 병원 다녀왔어요 남편이 그래요'
+  const seven = checkPersonaConsistency(TEXT, { identity: { childrenCount: 0, maritalStatus: '사별' } })
+  const eight = checkVoiceFingerprint(TEXT, {
+    priorTexts: ['오늘도 그랬어요', '저도 그랬어요', '어제도 그랬어요', '늘 그랬어요', '항상 그랬어요'],
+    seedUseCount: 3,
+  })
+  const json = JSON.stringify({ seven, eight })
+  const offenders: string[] = []
+  for (const frag of ['우리', '딸', '병원', '남편', '다녀왔', '그랬어요']) {
+    if (json.includes(frag)) offenders.push(`"${frag}"`)
+  }
+  if (seven.codes.length === 0) offenders.push('🔴 ⑦ 가 아무것도 못 잡았다')
+  if (eight.axes.length === 0) offenders.push('🔴 ⑧ 이 아무것도 못 잡았다')
+  if (offenders.length) bad('⑦⑧ 판정부 값 노출 없음', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑦⑧ 판정부 값 노출 없음', 'guard', `코드 ${seven.codes.length}종 · 축 ${eight.axes.length}종만`)
 }
 
 // ── 출력 ────────────────────────────────────────────

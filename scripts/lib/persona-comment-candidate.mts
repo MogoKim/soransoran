@@ -23,9 +23,12 @@
  *      ④ 구조 과복제      checkStructureCopy — ① 은 문자열, ④ 는 전개 순서
  *      ⑤ 금지 호칭 + §5 조언 제한  🔴 근거는 둘이지만 관문은 하나다
  *      ⑥-A 닉네임 혼입    author/회원 닉네임이 본문에 섞였는가
- *      ⑧ 하위 축(일부)    구조화 나열 · 마크다운 — 코퍼스 없이도 확정적으로 잡힌다
+ *      ⑦ Persona Consistency  checkPersonaConsistency + 금지 역할 — 근거 둘, 관문 하나
+ *      ⑧ Voice Fingerprint    checkVoiceFingerprint — 구조 · 반복 · seed 재사용
  *      ⑨ 출처 marker      checkSourceMarker
- *    ⑦ identity 대조 · ⑧ 반복 패턴은 identity·코퍼스가 있어야 해서 아직 못 돈다.
+ *    🔴 아홉 관문의 판정부가 전부 있다. 그러나 대조 집합이 없으면 돌지 않는다 —
+ *       ⑦ 은 identity·No-Go 가, ⑧ 은 대조 발화·seedRef 가 있어야 본다.
+ *       (§5 가족 경유 진술과 구조화 나열은 대조 집합 없이도 확정적으로 잡힌다)
  *    🔴 "돌지 않았다" 를 pass 로 보고하지 않는다 — notRun 으로 분리한다.
  */
 import { assertNoSourceLeak, M3_LEAK_RUN_MIN } from './voice-m3-contract.mjs'
@@ -36,6 +39,10 @@ import {
   checkUniqueExpression, checkIdentifyingDetail, checkStructureCopy,
   type FrequencyLookup,
 } from './persona-gate-234.mjs'
+import {
+  checkPersonaConsistency, checkVoiceFingerprint,
+  type PersonaIdentityFacts, type FingerprintThresholds,
+} from './persona-gate-78.mjs'
 
 export type GateCode = '①' | '②' | '③' | '④' | '⑤' | '⑥' | '⑦' | '⑧' | '⑨'
 export type GateOutcome = 'pass' | 'review' | 'regenerate' | 'reject' | 'notRun'
@@ -94,6 +101,20 @@ export type CandidateInput = {
   frequencyLookup?: FrequencyLookup
   /** ② 로그용 — 어느 코퍼스로 쟀는지 */
   corpusName?: string
+  /**
+   * ⑦ 설정 대조. 🔴 없으면 설정 모순은 notRun 이다 —
+   *    다만 §5 가족 경유 진술은 설정 없이도 확정적으로 잡는다.
+   */
+  identity?: PersonaIdentityFacts | null
+  /** ⑦ No-Go — noGoTopics · noGoExpressions */
+  noGoTopics?: readonly string[]
+  noGoExpressions?: readonly string[]
+  /** ⑧ 대조 발화 — 같은 persona 의 발행물 + 같은 배치의 앞선 후보 */
+  priorTexts?: readonly string[]
+  /** ⑧ seed 재사용 — 🔴 persona 단위가 아니라 전체 단위 횟수 */
+  seedUseCount?: number
+  /** ⑧ 임계 손잡이 — AI 티가 나면 낮춘다 */
+  fingerprintThresholds?: Partial<FingerprintThresholds>
 }
 
 const SEVERITY: Record<GateOutcome, number> = {
@@ -202,22 +223,39 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   if (tidy) tags.push('TOO_TIDY')
   // 🔴 생활감 부족은 태그만이다 — 짧은 댓글은 원래 표지가 없을 수 있다
   if (!LIFE_MARKS.test(text)) tags.push('NO_LIFE_MARKS')
-  gates.push(
-    tidy
-      ? { gate: '⑧', outcome: 'regenerate', detail: '구조화 나열 · 마크다운' }
-      : { gate: '⑧', outcome: 'notRun', detail: '반복 패턴은 코퍼스 필요 — 구조 검사만 통과' },
-  )
+  const eight = checkVoiceFingerprint(text, {
+    ...(input.priorTexts !== undefined ? { priorTexts: input.priorTexts } : {}),
+    ...(input.seedUseCount !== undefined ? { seedUseCount: input.seedUseCount } : {}),
+    ...(input.fingerprintThresholds !== undefined ? { thresholds: input.fingerprintThresholds } : {}),
+    tidyMarks: tidy,
+  })
+  gates.push({ gate: '⑧', outcome: eight.status, detail: eight.detail })
+  // 🔴 구조화 나열은 이미 TOO_TIDY 다 — 반복 축이 걸렸을 때만 말투 반복으로 센다
+  if (eight.axes.some((a) => a !== 'TIDY')) tags.push('TONE_REPEAT')
 
-  // ── 반응 역할 ──
+  // ── ⑦ Persona Consistency — 🔴 설정 모순 + 금지 역할이 한 관문이다 ──
+  //    실패 기준은 모순 1건이다(§3-⑦). 근거가 둘이어도 ⑤ 와 같이 관문은 하나다.
   const reactionType = classifyReaction(text)
-  const forbidden = input.forbiddenRoles ?? []
-  if (forbidden.includes(reactionType)) {
-    gates.push({ gate: '⑦', outcome: 'regenerate', detail: `금지 역할 ${reactionType}` })
-    tags.push('IDENTITY_CONFLICT')
-  } else {
-    // 🔴 identity·memory 대조는 아직 못 한다. 역할 금지만 본다
-    gates.push({ gate: '⑦', outcome: 'notRun', detail: 'identity 대조 미구현 — 역할 금지만 확인' })
+  const roleHit = (input.forbiddenRoles ?? []).includes(reactionType)
+  const seven = checkPersonaConsistency(text, {
+    ...(input.identity !== undefined ? { identity: input.identity } : {}),
+    ...(input.noGoTopics !== undefined ? { noGoTopics: input.noGoTopics } : {}),
+    ...(input.noGoExpressions !== undefined ? { noGoExpressions: input.noGoExpressions } : {}),
+  })
+  let sevenOutcome: GateOutcome = seven.status
+  const sevenWhy: string[] = []
+  if (seven.codes.length > 0) sevenWhy.push(`모순 ${seven.codes.length} — ${seven.codes.join(' · ')}`)
+  if (roleHit) {
+    sevenOutcome = stricter(sevenOutcome, 'regenerate')
+    sevenWhy.push(`금지 역할 ${reactionType}`)
   }
+  if (sevenWhy.length > 0) tags.push('IDENTITY_CONFLICT')
+  gates.push({
+    gate: '⑦',
+    outcome: sevenOutcome,
+    // 🔴 걸린 문장이 아니라 코드 · 역할명만
+    detail: sevenWhy.length > 0 ? sevenWhy.join(' · ') : seven.detail,
+  })
   // ── ⑤ 금지 호칭 + §5 조언 제한 — 🔴 근거는 둘, 관문은 하나다 ──
   //    호칭 위반과 조언 위반은 이유가 다르지만 둘 다 Gate ⑤ 다.
   //    각각 push 하면 후보에 따라 gates 가 9개가 되기도 10개가 되기도 한다 —
