@@ -45,8 +45,8 @@ enum AuthorSource {
 //    실회원 댓글은 source=USER + commentOrigin=MEMBER 로 그대로 유지된다.
 //    정본: docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §8-6
 enum CommentOrigin {
-  MEMBER // 실회원이 직접 쓴 댓글
-  PERSONA // 페르소나가 생성한 댓글
+  MEMBER              // 실회원이 직접 쓴 댓글
+  PERSONA             // 페르소나가 생성한 댓글
   MICRO_SEED_VERBATIM // 원문 댓글을 그대로 사용한 Micro Seed 댓글
 }
 
@@ -70,10 +70,10 @@ model User {
   image         String?
 
   // 카카오 providerId. 실회원 판별 기준이 된다.
-  providerId String? @unique
+  providerId    String?   @unique
 
-  isAdmin   Boolean @default(false)
-  isBlocked Boolean @default(false)
+  isAdmin       Boolean   @default(false)
+  isBlocked     Boolean   @default(false)
 
   // 카카오 동의 항목. 아직 받지 않는다 — 그릇만 세운다.
   //
@@ -109,19 +109,19 @@ model User {
   ///    글을 지운 순간 이력도 사라져 위젯이 다시 뜬다 — 막으려던 일이 그것이다.
   firstGreetingPostId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  accounts   Account[]
-  sessions   Session[]
-  posts      Post[]
-  comments   Comment[]
-  likes      Like[]
-  scraps     Scrap[]
-  reports    Report[]    @relation("Reporter")
-  blocking   UserBlock[] @relation("Blocker")
-  blockedBy  UserBlock[] @relation("Blocked")
-  agreements Agreement[]
+  accounts      Account[]
+  sessions      Session[]
+  posts         Post[]
+  comments      Comment[]
+  likes         Like[]
+  scraps        Scrap[]
+  reports       Report[]      @relation("Reporter")
+  blocking      UserBlock[]   @relation("Blocker")
+  blockedBy     UserBlock[]   @relation("Blocked")
+  agreements    Agreement[]
 
   /// 🔴 이 회원이 페르소나인가 — 존재 여부가 유일한 답이다.
   ///    User 에 isPersona 플래그를 두지 않는다 (설계 §3-1)
@@ -208,30 +208,24 @@ model Post {
   ///    `category != '가입인사'` 단독 비교는 Postgres 3-value logic 상
   ///    null 행을 함께 제외해 일반 글이 통째로 사라진다.
   ///    greeting-policy.ts 의 EXCLUDE_GREETING 을 쓴다.
-  category String?
+  category  String?
 
-  authorId String
+  authorId  String
   // onDelete 를 지정하지 않아 기본 Restrict 다 — 글이 있으면 User 삭제가 막힌다.
   // 회원 탈퇴/익명화 정책은 private preview 범위 밖이므로 삭제 기능을 만들지 않는다.
   // 정책 확정 시 SetNull(익명화) 또는 Cascade(삭제) 중 선택한다.
-  author   User   @relation(fields: [authorId], references: [id])
+  author    User         @relation(fields: [authorId], references: [id])
 
   // ── Micro Seed 게이트 (M0) ─────────────────────────────
   // 정본 §3 C-1: 생성 시점에 확정되고 일반 운영 경로로는 변경되지 않는다.
   //   승인된 one-off repair/migration 만 예외이며 감사 로그를 남긴다.
   // 판정은 src/lib/post-visibility.ts 3축 함수가 유일한 지점이다 (C-2).
   //   각 파일에서 이 값을 직접 비교하지 마라.
-  /**
-   * /** Micro Seed 레인 발행물인가. 커뮤니티에는 보이되 색인·추천에서는 빠진다.
-   */
+  /** Micro Seed 레인 발행물인가. 커뮤니티에는 보이되 색인·추천에서는 빠진다. */
   isMicroSeed           Boolean @default(false)
-  /**
-   * 영구 noindex. index 전환은 영구 금지다 (정책 8·10).
-   */
+  /** 영구 noindex. index 전환은 영구 금지다 (정책 8·10). */
   permanentNoindex      Boolean @default(false)
-  /**
-   * 승격·추천 write-path 차단 (정책 9·10 · C-4).
-   */
+  /** 승격·추천 write-path 차단 (정책 9·10 · C-4). */
   indexPromotionBlocked Boolean @default(false)
 
   // ── M1 Founder Gate 역조회 (정본 §5-2-3) ────────────────
@@ -244,21 +238,13 @@ model Post {
   //    두 곳에 두면 동기화 부채만 생긴다 (§5-2-3).
   //
   // 전부 nullable 이다. 회원 글(대다수)에는 채워지지 않는다.
-  /**
-   * /** Sheet 후보 행의 불변 id. 양방향 키의 한쪽이다 (§6-1).
-   */
+  /** Sheet 후보 행의 불변 id. 양방향 키의 한쪽이다 (§6-1). */
   sheetCandidateId String?   @unique
-  /**
-   * 82cook · navercafe:{cafeId}
-   */
+  /** 82cook · navercafe:{cafeId} */
   sourceSite       String?
-  /**
-   * 원문 URL. takedown 역조회의 1차 키다.
-   */
+  /** 원문 URL. takedown 역조회의 1차 키다. */
   sourceUrl        String?
-  /**
-   * 원문 글 id. Post.id 와 혼동하지 않도록 Article 로 명명한다.
-   */
+  /** 원문 글 id. Post.id 와 혼동하지 않도록 Article 로 명명한다. */
   sourceArticleId  String?
   sourceCapturedAt DateTime?
 
@@ -267,17 +253,17 @@ model Post {
   //    후보의 scheduledPublishAt(창업자 입력)과 이름을 분리한 이유는 §5-2-3.
   publishAt DateTime?
 
-  viewCount Int      @default(0)
+  viewCount Int          @default(0)
   /// 공감 수. Like row 를 세지 않고 담아 둔다 — 목록으로 옮길 때 행마다 세는 일을 피한다.
   /// 쓰는 곳은 togglePostLike 한 곳뿐이다. 정렬·인기·베스트에는 아직 쓰지 않는다.
-  likeCount Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  likeCount Int          @default(0)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
-  comments Comment[]
-  likes    Like[]
-  scraps   Scrap[]
-  reports  Report[]
+  comments  Comment[]
+  likes     Like[]
+  scraps    Scrap[]
+  reports   Report[]
 
   @@index([boardType, status, createdAt])
   @@index([authorId])
@@ -289,27 +275,27 @@ model Post {
 
 // ─────────── 댓글 ───────────
 model Comment {
-  id            String        @id @default(cuid())
-  content       String        @db.Text
-  source        AuthorSource  @default(USER)
+  id        String       @id @default(cuid())
+  content   String       @db.Text
+  source    AuthorSource @default(USER)
   // 🔴 source 와 별개 축이다. source=USER 인 실회원 댓글은 그대로 MEMBER 다.
   //    정본 §8-6. AuthorSource 확장으로 처리하지 않는다.
   commentOrigin CommentOrigin @default(MEMBER)
 
-  postId   String
-  post     Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
-  authorId String
-  author   User   @relation(fields: [authorId], references: [id])
+  postId    String
+  post      Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User         @relation(fields: [authorId], references: [id])
 
-  parentId String?
-  parent   Comment?  @relation("CommentReplies", fields: [parentId], references: [id])
-  replies  Comment[] @relation("CommentReplies")
+  parentId  String?
+  parent    Comment?     @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[]    @relation("CommentReplies")
 
-  isDeleted Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isDeleted Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
-  reports Report[]
+  reports   Report[]
 
   @@index([postId, createdAt])
   @@index([authorId])
@@ -351,14 +337,14 @@ model Scrap {
 // ─────────── 보호장치 ───────────
 // D-day 최소 보호장치. 신고는 D-day 필수다.
 model Report {
-  id         String @id @default(cuid())
+  id         String       @id @default(cuid())
   reporterId String
-  reporter   User   @relation("Reporter", fields: [reporterId], references: [id])
+  reporter   User         @relation("Reporter", fields: [reporterId], references: [id])
 
-  postId    String?
-  post      Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
-  commentId String?
-  comment   Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  postId     String?
+  post       Post?        @relation(fields: [postId], references: [id], onDelete: Cascade)
+  commentId  String?
+  comment    Comment?     @relation(fields: [commentId], references: [id], onDelete: Cascade)
 
   reason     String
   detail     String?      @db.Text
@@ -419,14 +405,14 @@ model MagazineClick {
 /// §6-2 상태 기계. 8상태에서 늘리거나 줄이지 않는다.
 /// 🔴 ReportStatus.PENDING(신고)과 이름이 겹치므로 타입 접두를 붙여 구분한다.
 enum MicroSeedCandidateStatus {
-  HOLD // 기본값. 후보 보관. 알 수 없는 값도 여기로 떨어진다 (C-6)
-  PENDING // 창업자 발행 승인 — 사람만 설정 가능. 자동 경로를 만들지 않는다
+  HOLD       // 기본값. 후보 보관. 알 수 없는 값도 여기로 떨어진다 (C-6)
+  PENDING    // 창업자 발행 승인 — 사람만 설정 가능. 자동 경로를 만들지 않는다
   PROCESSING // worker 획득. processingStartedAt · processingBy 를 같은 UPDATE 에서 쓴다
-  PUBLISHED // DB 발행 성공을 확인한 뒤에만. 🔴 비가역
-  FAILED // 발행 실패. 사유 기록 필수
-  SKIPPED // 중복 · 이미 발행됨. DB 실측 결과
-  DECLINED // 창업자 반려. 사유 기록 필수
-  TAKEDOWN // 삭제/숨김 대상. Post.status = HIDDEN 과 쌍으로 (§6-6)
+  PUBLISHED  // DB 발행 성공을 확인한 뒤에만. 🔴 비가역
+  FAILED     // 발행 실패. 사유 기록 필수
+  SKIPPED    // 중복 · 이미 발행됨. DB 실측 결과
+  DECLINED   // 창업자 반려. 사유 기록 필수
+  TAKEDOWN   // 삭제/숨김 대상. Post.status = HIDDEN 과 쌍으로 (§6-6)
 }
 
 /// Micro Seed 후보 원장. Sheet 행 1개 = 이 테이블 1행.
@@ -437,10 +423,10 @@ model MicroSeedCandidate {
   status MicroSeedCandidateStatus @default(HOLD)
 
   // ── 원문 출처 ────────────────────────────────────────
-  sourceSite         String
-  sourceUrl          String
-  sourceArticleId    String
-  sourceBoardName    String?
+  sourceSite      String
+  sourceUrl       String
+  sourceArticleId String
+  sourceBoardName String?
   /// 🟢 정책 3 — 좋은 원문의 1순위 신호. 왜 이 후보가 뽑혔는지의 근거값이다.
   sourceCommentCount Int      @default(0)
   sourceCapturedAt   DateTime
@@ -464,9 +450,9 @@ model MicroSeedCandidate {
 
   // ── 창업자 입력 (Sheet 편집 칸) ──────────────────────
   /// 원제 보존. founderTitle 과 비교해야 무엇을 고쳤는지 알 수 있다.
-  originalTitle      String
+  originalTitle String
   /// 실제 발행 제목. 2~120자 (post-policy.ts 와 같은 값, R3)
-  founderTitle       String?
+  founderTitle  String?
   /// 🔴 BoardType 에 MAGAZINE·BEST 가 실재하므로 타입만으로는 못 막는다.
   ///    FREE / MENOPAUSE 화이트리스트는 publisher 코드가 강제한다 (§6-9-D · R2).
   targetBoardType    BoardType?
@@ -631,6 +617,7 @@ model MicroSeedRawContent {
   @@index([deletedDetectedAt])
 }
 
+
 // ═══════════════════════════════════════════════════════════
 // Voice Engine 자산 (VE-M1)
 //
@@ -676,7 +663,7 @@ enum VoiceJudgmentDecision {
 /// 무결성은 `@@unique([origin, sourceRef])` 로만 지킨다.
 /// MicroSeedRawContent 에도 FK 를 걸지 않는다 — 두 출처를 같은 방식으로 다룬다.
 model VoiceSource {
-  id String @id @default(uuid())
+  id     String @id @default(uuid())
 
   /// 'unao_cafe' | 'micro_seed' | 'soransoran_own'
   /// 🔴 enum 이 아니다. M6 multi-source 확장에서 값이 늘어나는데
@@ -726,7 +713,7 @@ model VoiceSource {
   /// desireCategory · desireType · emotionTags · urgencyLevel ·
   /// communitySignal · ageSignal · viralType · commentSplit · psychInsight …
   /// 🔴 필드로 펼치지 않는다 — 우나어 스키마에 종속되면 그쪽이 바뀔 때 같이 깨진다.
-  legacyLabels       Json?
+  legacyLabels Json?
   /// 라벨을 만든 쪽의 버전. 'unao-psych-analyzer-v2' 등.
   /// 버전이 바뀌면 같은 필드라도 의미가 달라진다.
   legacyLabelVersion String?
@@ -752,11 +739,11 @@ model VoiceJudgment {
   voiceSourceId String
   voiceSource   VoiceSource @relation(fields: [voiceSourceId], references: [id], onDelete: Cascade)
 
-  decision  VoiceJudgmentDecision
-  reason    String?               @db.Text
+  decision VoiceJudgmentDecision
+  reason   String?               @db.Text
   /// 'founder' | 'unao-curation' | 'system'
   decidedBy String
-  decidedAt DateTime              @default(now())
+  decidedAt DateTime @default(now())
 
   /// 판단 시점의 VoiceDerived id.
   /// 🔴 VoiceDerived 가 생긴 뒤에도 FK 를 걸지 않는다 —
@@ -783,7 +770,7 @@ model VoiceDerived {
   ruleVersion String
   /// 'rule' | 'llm' — 🔴 규칙 산출물과 LLM 산출물을 섞지 않는다.
   /// VE-M2 는 전부 'rule' 이고 LLM 비용이 0이다.
-  method      String @default("rule")
+  method String @default("rule")
 
   /// 🔴 model · promptVersion 은 nullable 이 아니라 빈 문자열 기본값이다.
   ///    Postgres 에서 NULL 은 서로 같지 않아, 이 둘이 NULL 이면
@@ -797,13 +784,13 @@ model VoiceDerived {
   //       신호를 다듬을 때마다 migration 이 필요해진다.
 
   /// 오타 · 자판 인접 오류 · 반복 입력
-  typingArtifacts   Json?
+  typingArtifacts Json?
   /// `..` `~~` `ㅠㅠ` `^^` · 물음표 / 느낌표 개수
-  punctuationHabit  Json?
+  punctuationHabit Json?
   /// 어절 길이 분포 · 띄어쓰기 편차 · 구어체 붙여쓰기
-  spacingVariance   Json?
+  spacingVariance Json?
   /// 문단 길이 · 줄바꿈 간격 · 문장 중간 개행
-  mobileInputTrace  Json?
+  mobileInputTrace Json?
   /// 🔴 단순 사전이 아니라 다섯 갈래다 (m2-design §3-5):
   ///    sourceSpecific         원출처 호칭 — 82님들 · 우갱님들 · 레테님들 · 은오님들 → 치환 대상
   ///    soransoranRegister     소란소란 내부어 — 소란님들 · 소란소란님들 → 치환 결과
@@ -871,7 +858,7 @@ model VoiceCommentSignal {
   reactionType String?
   /// 원문의 어느 지점에 반응했는가.
   /// ⚠️ 댓글에 인용 정보가 없어 **대부분 null 이 되는 것이 정상**이다.
-  anchorHint   Json?
+  anchorHint Json?
 
   capturedAt DateTime
 
@@ -935,10 +922,10 @@ model VoiceM3Run {
 
   // ── cap — 실행 전에 정하고 실행 중에 넘으면 멈춘다 ──
   /// 🔴 건수 cap 만으로는 못 막는다. 3,000자 글이 몰리면 같은 건수에 토큰이 3배다
-  itemLimit Int
-  tokenCap  Int
+  itemLimit  Int
+  tokenCap   Int
   /// 달러는 소수점이 중요하다. Float 로 두면 반올림이 누적된다
-  dollarCap Decimal @db.Decimal(10, 4)
+  dollarCap  Decimal @db.Decimal(10, 4)
 
   startedAt   DateTime?
   completedAt DateTime?
@@ -985,8 +972,8 @@ model VoiceM3Cache {
   voiceSource   VoiceSource @relation(fields: [voiceSourceId], references: [id], onDelete: Cascade)
 
   // ── cacheKey 구성 요소 ──
-  origin      String
-  sourceRef   String
+  origin    String
+  sourceRef String
   /// 🔴 원문이 수정되면 키가 달라져 자동으로 무효화된다
   contentHash String?
   /// 입력이 된 VoiceDerived 의 규칙 버전
@@ -1050,9 +1037,9 @@ model VoiceM3CostEvent {
   estimatedCostUsd Decimal @default(0) @db.Decimal(10, 4)
 
   /// 0 = 최초 시도. 1 이상이면 재시도다
-  retryAttempt Int     @default(0)
+  retryAttempt Int @default(0)
   /// 사유 요약. 🔴 원문을 넣지 않는다
-  reason       String? @db.Text
+  reason String? @db.Text
 
   occurredAt DateTime @default(now())
 
@@ -1060,7 +1047,6 @@ model VoiceM3CostEvent {
   @@index([cacheId])
   @@index([eventType, occurredAt])
 }
-
 // ═══════════════════════════════════════════════════════════════
 //  Persona — 소란소란 운영 페르소나
 //
