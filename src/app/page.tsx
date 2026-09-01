@@ -2,10 +2,10 @@ import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
 import HomeMagazineRail from '@/components/features/HomeMagazineRail'
+import HomeHero from '@/components/features/HomeHero'
 import HomeJoinCta from '@/components/features/HomeJoinCta'
 import FirstGreetingWidget from '@/components/features/greeting/first-greeting-widget'
 import NewcomerGreetings from '@/components/features/greeting/newcomer-greetings'
-import Logo from '@/components/brand/Logo'
 import MenuIcon from '@/components/icons/MenuIcon'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug, type BoardMeta } from '@/lib/board-registry'
@@ -111,12 +111,7 @@ export default async function HomePage() {
   return (
     <PageShell showWriteFab>
       <main className="mx-auto max-w-3xl pb-16">
-        <section className="px-4 py-6 text-center">
-          <Logo className="text-3xl" />
-          <p className="mt-2 text-sm text-content-muted">
-            40대 50대 여성이 갱년기와 사는 이야기를 나누는 곳
-          </p>
-        </section>
+        <HomeHero />
 
         {showFirstGreeting ? <FirstGreetingWidget /> : null}
 
