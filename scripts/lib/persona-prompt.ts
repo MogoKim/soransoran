@@ -102,6 +102,18 @@ export const CLICHE_OPENERS: readonly string[] = [
 export const CLICHE_OPENER_INITIALS: readonly string[] = ['저', '맞', '그', '어', '아', '와']
 
 /**
+ * 🔴 몇 번부터 "반복" 이라 부르고 이름을 대는가 (2026-09-01).
+ *
+ * #12 를 부를 때 회피 목록에는 반복 글자가 **이미 들어 있었다.** 그런데도 모델은
+ * 그 글자로 시작했다. 목록이 8자를 나열만 했고, 그중 무엇이 실제로 반복된 것인지
+ * 표시가 없었기 때문이다 — 한 번 나온 글자와 네 번 나온 글자가 같은 무게였다.
+ *
+ * Gate ⑧ 은 나열을 보지 않는다. **최빈값 하나**를 본다.
+ * 그래서 프롬프트도 최빈값을 지목해야 한다.
+ */
+export const REPEAT_CALLOUT_MIN = 2
+
+/**
  * 🔴 첫 문장을 여는 방법 — 금지만으로는 부족하다 (2026-09-01).
  *
  * "이렇게 시작하지 마라" 만 주면 모델은 **남은 흔한 자리**로 옮겨 간다.
@@ -133,7 +145,18 @@ export type RecentVoiceMarks = {
   openers: readonly string[]
   /** 말끝 3글자 */
   endings: readonly string[]
+  /**
+   * 🔴 첫 **글자**별 등장 횟수, 많은 순 (2026-09-01).
+   *
+   * openers 는 중복을 지우고 최근 것만 잘라 낸다 — 그 과정에서 "몇 번 썼는가" 가
+   * 사라진다. 네 번 반복한 글자와 한 번 쓴 글자가 목록에서 나란히 서면
+   * 모델에게는 둘이 같아 보인다. Gate ⑧ 이 세는 것은 최빈값이므로,
+   * **빈도는 지우기 전에 따로 남긴다.**
+   */
+  openerInitials: readonly OpenerInitialCount[]
 }
+
+export type OpenerInitialCount = { initial: string; count: number }
 
 /**
  * 🔴 추출 규칙은 Gate ⑧ 과 **같아야 한다.**
@@ -150,18 +173,30 @@ export const MAX_RECENT_MARKS = 6
 export function extractVoiceMarks(texts: readonly string[]): RecentVoiceMarks {
   const openers: string[] = []
   const endings: string[] = []
+  /** 🔴 중복을 지우기 **전에** 센다. 지운 뒤에 세면 전부 1 이 된다 */
+  const initialCount = new Map<string, number>()
   for (const raw of texts) {
     const t = (raw ?? '').trim()
     if (t === '') continue
     const h = hookOf(t)
     const e = endingOf(t)
-    if (h !== '' && !openers.includes(h)) openers.push(h)
+    if (h !== '') {
+      if (!openers.includes(h)) openers.push(h)
+      const first = [...h][0]
+      if (first !== undefined) initialCount.set(first, (initialCount.get(first) ?? 0) + 1)
+    }
     if (e !== '' && !endings.includes(e)) endings.push(e)
   }
   // 🔴 최근 것이 뒤에 오므로 뒤에서 잘라 낸다 — 오래된 말투보다 최근 말투가 중요하다
   return {
     openers: openers.slice(-MAX_RECENT_MARKS),
     endings: endings.slice(-MAX_RECENT_MARKS),
+    // 🔴 빈도는 자르지 않는다. 잘라 내면 최빈값이 목록 밖으로 밀려날 수 있고,
+    //    그러면 Gate ⑧ 이 잡는 바로 그 글자를 프롬프트가 말하지 못한다.
+    //    많은 순 · 같으면 글자순 — 순서를 고정해야 fixture 가 잠글 수 있다
+    openerInitials: [...initialCount.entries()]
+      .map(([initial, count]) => ({ initial, count }))
+      .sort((a, b) => b.count - a.count || a.initial.localeCompare(b.initial)),
   }
 }
 
@@ -268,10 +303,17 @@ export function buildPrompt(input: {
   const reaction = input.reactionType as ReactionType
   const recentOpeners = input.recentMarks?.openers ?? []
   const recentEndings = input.recentMarks?.endings ?? []
-  // 🔴 최근에 쓴 첫 어절의 **첫 글자** + 상투적 시작 글자를 합쳐 막는다.
+  // 🔴 빈도를 지닌 실측 목록을 쓴다. openers 는 중복을 지우고 잘라 낸 뒤라
+  //    최빈 글자가 빠져 있을 수 있다 — 회피 목록의 근거를 그쪽에 두면 안 된다.
+  //    (?? [] 는 이 파일을 거치지 않고 객체를 직접 만든 호출부에 대한 방어다)
+  const recentInitials = input.recentMarks?.openerInitials ?? []
+  // 🔴 실측으로 반복된 글자. 나열이 아니라 **이름을 대고** 막을 대상이다
+  const repeatedInitials = recentInitials.filter((e) => e.count >= REPEAT_CALLOUT_MIN)
+  const topRepeat = repeatedInitials[0]
+  // 🔴 최근에 쓴 첫 **글자** + 상투적 시작 글자를 합쳐 막는다.
   //    #9·#10·#11 이 어절은 달라도 같은 글자로 시작했다 — 어절만 막아서는 안 됐다.
   const avoidInitials = [...new Set([
-    ...recentOpeners.map((w) => [...w][0] ?? '').filter((c) => c !== ''),
+    ...recentInitials.map((e) => e.initial),
     ...CLICHE_OPENER_INITIALS,
   ])]
 
@@ -311,11 +353,10 @@ export function buildPrompt(input: {
       ? [`- 최근에 **이렇게 시작했습니다**: ${recentOpeners.join(' · ')}`,
          '  이번에는 다른 말로 시작하세요.']
       : []),
-    // 🔴 어절만 막으면 첫 글자가 같은 다른 어절로 옮겨 간다. 글자 단위로도 막는다
-    ...(avoidInitials.length > 0
-      ? [`- 🔴 **이 글자로 시작하지 않습니다**: ${avoidInitials.join(' · ')}`,
-         '  어절을 바꿔도 첫 글자가 같으면 같은 자리에서 말을 꺼낸 것입니다.']
-      : []),
+    // 🔴 글자 단위 회피 지시는 여기 두지 않는다 — 아래 "첫 문장을 여는 방법" 으로 옮겼다.
+    //    #12 가 그 이유다. 여기서 막은 글자를 아래 "상황이나 감각으로 열어라" 가
+    //    도로 불러왔고, 모델은 더 구체적이고 더 나중인 쪽을 따랐다.
+    //    두 지시를 붙여 두면 충돌한 채로 남지 않는다.
     ...(recentEndings.length > 0
       ? [`- 최근에 **이렇게 끝냈습니다**: ${recentEndings.join(' · ')}`,
          '  이번에는 다른 말끝으로 끝내세요.']
@@ -347,6 +388,28 @@ export function buildPrompt(input: {
     `예를 들면 이런 방식입니다: ${OPENER_STYLE_EXAMPLES.join(' / ')}`,
     '(예시를 그대로 쓰지 말고, 방식만 가져가세요)',
     '🔴 윗글의 상황을 요약해서 여는 것은 안 됩니다. 그건 반응이 아니라 되풀이입니다.',
+    '',
+    // 🔴 회피 지시를 바로 여기 붙인다 (2026-09-01).
+    //    위쪽 반복 섹션에 두었을 때 이 문단이 그것을 덮었다 —
+    //    "상황이나 감각으로 열어라" 의 자연스러운 착지점이 하필 막아 둔 글자였다.
+    //    금지와 대안은 같은 자리에서 읽혀야 한다.
+    ...(topRepeat !== undefined
+      ? [
+          `🔴 **직전까지 "${topRepeat.initial}…" 으로 ${topRepeat.count}번 시작했습니다.**`,
+          '   이번에는 이 글자로 열면 안 됩니다. 상황이나 감각으로 열되,',
+          '   **그 장면을 다른 데서 고르세요** — 같은 장면으로 돌아가면 같은 글자가 나옵니다.',
+          '   떠오른 첫 문장이 이 글자로 시작하면, 그건 버리고 다시 고릅니다.',
+          ...(repeatedInitials.length > 1
+            ? [`   같은 이유로 이 글자들도 반복됐습니다: ${repeatedInitials
+                .slice(1)
+                .map((e) => `${e.initial}(${e.count}회)`)
+                .join(' · ')}`]
+            : []),
+        ]
+      : []),
+    `🔴 **이 글자로 시작하지 않습니다**: ${avoidInitials.join(' · ')}`,
+    '   어절을 바꿔도 첫 글자가 같으면 같은 자리에서 말을 꺼낸 것입니다.',
+    '   쓰고 나서 첫 글자를 확인하고, 목록에 있으면 첫 문장을 다시 씁니다.',
     '',
     '## 사람이 한 말처럼',
     // 🔴 이전 판에서 "생활 조각이 없으면 얹지 않습니다" 라고 썼더니

@@ -12,7 +12,7 @@ import {
   buildPrompt, parseCandidate, toCandidateRecord, assertNoStoredSource,
   isReactionType, REACTION_TYPES, MAX_OUTPUT_TOKENS, SOURCE_ECHO_MIN, ALLOWED_RECORD_KEYS,
   CLICHE_COMFORT_PHRASES, CLICHE_OPENERS, PROMPT_TARGET_MAX_CHARS,
-  extractVoiceMarks, MAX_RECENT_MARKS,
+  extractVoiceMarks, MAX_RECENT_MARKS, REPEAT_CALLOUT_MIN,
   CLICHE_OPENER_INITIALS, OPENER_STYLE_EXAMPLES,
   type PromptPersona, type PromptTargetPost, type PromptBlockCode, type CandidateRecord,
 } from './lib/persona-prompt'
@@ -146,6 +146,21 @@ console.log('\n══════ ⑩ 🔴 A안 — 최근 발화 말투 표지 
   )
   expect(`상한 ${MAX_RECENT_MARKS}종`, many.openers.length, MAX_RECENT_MARKS)
 
+  // 🔴 빈도는 중복 제거 **전에** 센다 — openers 는 '저도' 를 한 번만 담지만 2회다
+  expect('첫글자 빈도 보존', marks.openerInitials.map((e) => `${e.initial}${e.count}`).join(','), '저2,밤1')
+  expect('  많은 순으로 정렬된다', marks.openerInitials[0]?.initial, '저')
+  // 🔴 빈도는 MAX_RECENT_MARKS 로 자르지 않는다.
+  //    자르면 최빈 글자가 목록 밖으로 밀려 Gate ⑧ 이 잡는 글자를 말하지 못한다
+  const skew = extractVoiceMarks([
+    '밤에 하나', '밤새 둘', '밤마다 셋',
+    '가 넷', '나 다섯', '다 여섯', '라 일곱', '마 여덟', '바 아홉',
+  ])
+  expect('빈도는 상한에 잘리지 않는다', skew.openerInitials.length, 7)
+  expect('  최빈 글자가 맨 앞', skew.openerInitials[0]?.initial, '밤')
+  expect('  최빈 횟수', skew.openerInitials[0]?.count, 3)
+  expect(`  어절 목록은 여전히 ${MAX_RECENT_MARKS}종`, skew.openers.length, MAX_RECENT_MARKS)
+  expect('  🔴 잘려 나간 최빈 어절 (여기가 사고 지점)', skew.openers.includes('밤에'), false)
+
   // 🔴 프롬프트에 표지가 들어가고 **본문은 들어가지 않는다**
   const body = '저도 그맘때 그랬어요 정말 힘들었습니다'
   const withMarks = buildPrompt({
@@ -181,6 +196,48 @@ console.log('\n══════ ⑫ 🔴 ⑧ 시작어절 — 글자 단위 �
     expect(`  최근 첫 글자 "${ch}" 가 목록에 있다`, sys.includes(ch), true)
   }
   expect('  어절만 바꾸는 것으로 부족하다고 말한다', sys.includes('첫 글자가 같으면'), true)
+
+  // ── 🔴 #12 회귀 방어 (2026-09-01) ──
+  //    #12 를 부를 때 회피 목록에는 반복 글자가 **이미 들어 있었다.** 그런데도
+  //    모델은 그 글자로 시작했다. 목록이 나열만 했고 최빈값을 지목하지 않았기 때문이다.
+  //    "목록에 있다" 로는 부족하다 — "몇 번 반복했다" 를 이름 대고 말하는지 본다.
+  const skewed = extractVoiceMarks([
+    '밤에 뒤척이네요', '밤새 못 잤어요', '밤마다 그래요', '저도 그랬어요',
+  ])
+  const ps = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy', recentMarks: skewed,
+  })
+  const sysSkew = ps.ok ? ps.prompt.systemPrompt : ''
+  expect('🔴 최빈 글자를 이름 대고 지목한다', sysSkew.includes('"밤…" 으로 3번 시작했습니다'), true)
+  expect('  이 글자로 열지 말라고 말한다', sysSkew.includes('이번에는 이 글자로 열면 안 됩니다'), true)
+  expect('  장면을 다른 데서 고르라고 말한다', sysSkew.includes('그 장면을 다른 데서 고르세요'), true)
+  expect('  쓰고 나서 첫 글자를 확인시킨다', sysSkew.includes('쓰고 나서 첫 글자를 확인하고'), true)
+  // 🔴 1회짜리는 지목하지 않는다 — 전부 지목하면 다시 나열이 된다
+  expect(`  ${REPEAT_CALLOUT_MIN}회 미만은 지목하지 않는다`, sysSkew.includes('"저…"'), false)
+  expect('  다만 회피 목록에는 남는다', sysSkew.includes('이 글자로 시작하지 않습니다'), true)
+
+  // 🔴 반복이 없으면 지목 문단 자체가 없다 (없는 반복을 만들어 말하지 않는다)
+  const flat = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy',
+    recentMarks: extractVoiceMarks(['밤에 하나', '저도 둘']),
+  })
+  const sysFlat = flat.ok ? flat.prompt.systemPrompt : ''
+  expect('반복 없으면 지목하지 않는다', sysFlat.includes('번 시작했습니다'), false)
+  expect('  그래도 회피 목록은 남는다', sysFlat.includes('이 글자로 시작하지 않습니다'), true)
+
+  // 🔴 배치 — 회피 지시가 "여는 방법" **뒤**에 와야 한다.
+  //    #12 는 위쪽에서 막은 글자를 아래 "상황이나 감각으로 열어라" 가 도로 불러왔다.
+  //    모델은 더 구체적이고 더 나중인 쪽을 따랐다. 순서가 곧 이번 수정의 내용이다.
+  expect(
+    '🔴 회피 지시가 "여는 방법" 뒤에 온다',
+    sysSkew.indexOf('이 글자로 시작하지 않습니다') > sysSkew.indexOf('짧은 상황이나 감각'),
+    true,
+  )
+  expect(
+    '  지목도 "여는 방법" 뒤에 온다',
+    sysSkew.indexOf('번 시작했습니다') > sysSkew.indexOf('첫 문장을 여는 방법'),
+    true,
+  )
 
   // 상수 바닥 — 표지가 없어도 상투적 시작 글자는 막힌다
   const bare = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
