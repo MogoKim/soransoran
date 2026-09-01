@@ -33,14 +33,15 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
       href={`${boardHref}/${post.id}`}
       className="group block py-3.5 no-underline"
     >
-      <h3 className="line-clamp-2 break-keep text-lg font-bold leading-[1.35] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
+      <h3 className="line-clamp-2 break-keep text-base font-bold leading-[1.35] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
         {post.title}
       </h3>
 
-      {/* 🔴 위계는 세 단계다 — 제목(20/700 primary) · 미리보기(16/400 secondary) · 메타(15 muted).
-          미리보기가 본문 크기(18px)면 제목과 2px 차이라 네 줄이 한 덩어리로 밀려 보인다.
-          답답함은 행을 줄여서가 아니라 덩어리를 갈라서 푼다 — 그래서 여백은 오히려 늘렸다.
-          제목은 주 정보라 크기를 줄이지 않는다. */}
+      {/* 🔴 위계는 크기가 아니라 굵기와 색이 만든다 —
+          제목(body/700 primary) · 미리보기(sm/400 secondary) · 메타(caption muted).
+          제목을 본문 크기에 둔다: 목록은 훑는 화면이라 한 화면에 들어오는 줄 수가
+          제목 한 급 키우는 것보다 낫다. 굵기와 색만으로도 제목이 먼저 잡힌다.
+          답답함은 행을 줄여서가 아니라 덩어리를 갈라서 푼다 — 그래서 여백은 오히려 늘렸다. */}
       {preview ? (
         <p className="mt-2 line-clamp-2 break-keep text-sm text-content-secondary">
           {preview}
