@@ -28,11 +28,15 @@ export const metadata: Metadata = {
 }
 
 /**
- * 베스트 — 인기글 모아보기.
+ * 베스트 — 순수 인기글 모아보기.
  *
- * 홈 "지금 뜨는 이야기" 와 같은 조회 함수를 쓴다. 두 화면이 각자 고르면
- * 홈에서 본 글이 여기 없는 일이 생긴다. 제외 규칙(Micro Seed · 첫 인사 ·
- * 차단 사용자)과 갱년기톡 최소 노출도 그 함수가 함께 책임진다.
+ * 🔴 getPopularDiscoveryPosts 를 쓴다. getHomePopularPosts 가 아니다.
+ *    홈 운영 큐레이션(PIN·HIDE)은 홈(/) 과 /admin/home 의 것이고,
+ *    여기는 점수만으로 줄을 세운다 — 운영자가 홈에 고정한 글이
+ *    베스트 상단에 따라 올라오면 "베스트"가 거짓말이 된다.
+ *
+ * 점수·제외 규칙(Micro Seed · 첫 인사 · 차단 사용자)과 갱년기톡 최소 노출은
+ * 홈과 같은 함수가 책임진다. 갈라지는 것은 노출 예외 한 겹뿐이다.
  */
 export default async function BestPage() {
   const board = getBoardBySlug('best')!

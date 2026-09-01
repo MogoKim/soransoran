@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { requireAdmin } from '@/lib/admin'
 import { prisma } from '@/lib/prisma'
-import { getPopularDiscoveryPosts } from '@/lib/queries/posts'
+import { getHomePopularPosts } from '@/lib/queries/posts'
 import { popularityScore } from '@/lib/popularity'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import { formatKst } from '@/lib/admin-format'
@@ -18,7 +18,7 @@ import AdminHomeOverrideControls from '@/components/admin/AdminHomeOverrideContr
  * 🔴 자동 인기 점수를 대체하지 않는다. 예외는 그 위의 한 겹이다.
  *    점수는 popularity.ts 가 그대로 매기고, 여기서는 빼거나(HIDE) 앞에 세울(PIN) 뿐이다.
  *
- * 🔴 홈과 같은 함수·같은 상수를 쓴다 (getPopularDiscoveryPosts · HOME_POPULAR_COUNT).
+ * 🔴 홈과 같은 함수·같은 상수를 쓴다 (getHomePopularPosts · HOME_POPULAR_COUNT).
  *    따로 조회하면 화면과 다른 목록을 보게 되어 이 화면이 거짓말이 된다.
  *
  * 🔴 숨김은 홈에서만이다. Post.status 를 바꾸지 않는다 —
@@ -51,7 +51,7 @@ export default async function AdminHomeExposurePage({
   const now = new Date()
 
   const [posts, overrides] = await Promise.all([
-    getPopularDiscoveryPosts(HOME_POPULAR_COUNT),
+    getHomePopularPosts(HOME_POPULAR_COUNT),
     prisma.homeExposureOverride.findMany({
       where: { surface: 'HOME_POPULAR', isActive: true },
       select: {

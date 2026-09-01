@@ -54,10 +54,43 @@ const REQUIRED = [
  */
 const HOME = {
   file: 'src/app/page.tsx',
-  // 홈이 써야 하는 것 — 이름에 Discovery 가 들어간 쿼리 또는 where 조각
-  mustMatch: /Discovery|DISCOVERY_ELIGIBLE_WHERE/,
+  // 홈이 써야 하는 것 — discovery 게이트를 지나는 쿼리.
+  //
+  // getHomePopularPosts 는 순수 인기 목록(getPopularDiscoveryPosts) 위에
+  // 홈 노출 예외를 한 겹 얹는 홈 전용 진입점이라 이름에 Discovery 가 없다.
+  // 게이트를 우회하는 것이 아니다 — 아래 REQUIRED 가 posts.ts 에서
+  // DISCOVERY_ELIGIBLE_WHERE 유지를 따로 강제하고, 1-d 가 그 예외를
+  // getHomePopularPosts 안에서만 얹게 묶는다.
+  mustMatch: /getHomePopularPosts\b|Discovery|DISCOVERY_ELIGIBLE_WHERE/,
   // 홈이 쓰면 안 되는 것 — 커뮤니티 노출용 쿼리
   mustNotMatch: /getRecentPosts\b|getPostsByBoard\b|COMMUNITY_VISIBLE_WHERE/,
+}
+
+/**
+ * /best 는 순수 인기글 모아보기다.
+ *
+ * 홈 운영 큐레이션(PIN·HIDE)이 여기까지 따라오면 "베스트" 가 점수가 아니라
+ * 운영자 선택이 된다. 실제로 그런 회귀가 났다 — 순수 점수 꼴찌 글을 홈에
+ * 고정했더니 /best 2 번에 올라왔다. 두 화면은 같은 점수를 쓰되
+ * 노출 예외 한 겹에서만 갈라진다.
+ */
+const BEST = {
+  file: 'src/app/best/page.tsx',
+  mustMatch: /getPopularDiscoveryPosts\b/,
+  mustNotMatch: /getHomePopularPosts\b|applyHomeExposure\b|HomeExposureOverride\b|homeExposureOverride\b/,
+}
+
+/**
+ * 홈 노출 예외를 얹는 유일한 지점.
+ *
+ * 규칙 함수(applyHomeExposure)는 여러 곳에서 부를 수 있으면 의미가 없다.
+ * 부르는 곳이 늘어나는 순간 어떤 표면이 예외를 먹는지 이름으로 알 수 없게 된다.
+ */
+const HOME_EXPOSURE = {
+  symbol: 'applyHomeExposure',
+  rulesFile: 'src/lib/home-exposure-rules.ts',
+  callerFile: 'src/lib/queries/posts.ts',
+  callerFn: 'getHomePopularPosts',
 }
 
 /** 게이트 밖에서 이 토큰을 직접 쓰면 판정이 갈라진다. */
@@ -149,7 +182,7 @@ if (!existsSync(join(ROOT, GATE))) {
   }
 }
 
-// ── 1-b. 홈 latest 가 discovery 게이트를 쓰는가 ──────────────────
+// ── 1-b. 홈이 discovery 게이트를 쓰는가 ──────────────────────────
 {
   const abs = join(ROOT, HOME.file)
   if (existsSync(abs)) {
@@ -166,6 +199,66 @@ if (!existsSync(join(ROOT, GATE))) {
         `${HOME.file} 가 커뮤니티 노출용 ${leak[0]} 를 쓴다. ` +
           'Micro Seed 가 첫 화면으로 샌다.',
       )
+    }
+  }
+}
+
+// ── 1-c. /best 가 홈 큐레이션과 격리돼 있는가 ────────────────────
+{
+  const abs = join(ROOT, BEST.file)
+  if (existsSync(abs)) {
+    const code = stripComments(readFileSync(abs, 'utf-8'))
+    if (!BEST.mustMatch.test(code)) {
+      errors.push(
+        `${BEST.file} 가 getPopularDiscoveryPosts 를 쓰지 않는다. ` +
+          '베스트는 순수 인기 점수 목록이다.',
+      )
+    }
+    const leak = code.match(BEST.mustNotMatch)
+    if (leak) {
+      errors.push(
+        `${BEST.file} 가 홈 큐레이션용 ${leak[0]} 를 쓴다. ` +
+          '홈 고정·숨김이 베스트 순서까지 바꾼다.',
+      )
+    }
+  }
+}
+
+// ── 1-d. 홈 노출 예외를 얹는 곳이 하나뿐인가 ─────────────────────
+{
+  const { symbol, rulesFile, callerFile, callerFn } = HOME_EXPOSURE
+
+  for (const abs of walk(join(ROOT, 'src'))) {
+    const rel = relative(ROOT, abs)
+    if (rel === rulesFile || rel === callerFile) continue
+    if (stripComments(readFileSync(abs, 'utf-8')).includes(symbol)) {
+      errors.push(
+        `${rel} 가 ${symbol} 를 쓴다. ` +
+          `홈 노출 예외는 ${callerFile} 의 ${callerFn} 만 얹는다.`,
+      )
+    }
+  }
+
+  const abs = join(ROOT, callerFile)
+  if (existsSync(abs)) {
+    const code = stripComments(readFileSync(abs, 'utf-8'))
+    const start = code.indexOf(`export async function ${callerFn}(`)
+    if (start < 0) {
+      errors.push(
+        `${callerFile} 에 ${callerFn} 가 없다. ` +
+          '홈 노출 예외의 단일 적용 지점이 사라졌다.',
+      )
+    } else {
+      // 최상위 닫는 중괄호 = 함수 끝. 안쪽 블록은 들여쓰기돼 걸리지 않는다.
+      const end = code.indexOf('\n}', start)
+      for (let i = code.indexOf(`${symbol}(`); i >= 0; i = code.indexOf(`${symbol}(`, i + 1)) {
+        if (i < start || (end >= 0 && i > end)) {
+          errors.push(
+            `${callerFile} 가 ${callerFn} 밖에서 ${symbol} 를 부른다. ` +
+              '/best 같은 순수 목록이 홈 예외를 따라간다.',
+          )
+        }
+      }
     }
   }
 }

@@ -180,10 +180,13 @@ const HOME_OVERRIDE_HEADROOM = 2
 const HOME_POPULAR_MIN_MENOPAUSE = 7
 
 /**
- * 홈 "지금 뜨는 이야기" 용 — 댓글과 시간 감쇠로 점수를 매겨 고른다.
+ * 순수 인기 점수 목록 — 홈 노출 예외(PIN·HIDE)를 **얹지 않는다**.
+ *
+ * /best 가 이 함수를 쓴다. 이름에 home 이 없는 것이 규칙이다 —
+ * 홈 운영 큐레이션은 getHomePopularPosts 만 적용한다.
  *
  * getRecentDiscoveryPosts 와 짝이다. 둘 다 discovery 표면이고 고르는 기준만 다르다 —
- * 상세 하단 이어읽기는 최신순, 홈 인기글은 점수순이라 함수를 나눈다.
+ * 상세 하단 이어읽기는 최신순, 인기글은 점수순이라 함수를 나눈다.
  *
  * 게시판별로 따로 가져오는 이유는 배분 때문이다. 한 번에 가져오면 자유게시판이
  * 상위를 채웠을 때 갱년기톡 후보가 애초에 손에 들어오지 않는다.
@@ -192,7 +195,14 @@ const HOME_POPULAR_MIN_MENOPAUSE = 7
  */
 export async function getPopularDiscoveryPosts(take = 20) {
   const blockedIds = await getBlockedUserIds()
+  return pickPopularByScore(take, blockedIds)
+}
 
+/**
+ * 점수 계산 본체. 차단 목록을 인자로 받는다 —
+ * 홈 경로가 getBlockedUserIds 를 두 번 부르지 않게 하려는 것이다.
+ */
+async function pickPopularByScore(take: number, blockedIds: string[]) {
   const candidatesFor = (boardType: BoardType) =>
     prisma.post.findMany({
       where: {
@@ -205,9 +215,33 @@ export async function getPopularDiscoveryPosts(take = 20) {
       take: HOME_POPULAR_CANDIDATES_PER_BOARD,
     })
 
-  const [menopause, free, overrides] = await Promise.all([
-    candidatesFor('MENOPAUSE'),
-    candidatesFor('FREE'),
+  const [menopause, free] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
+
+  return pickHomePopular({
+    menopause,
+    free,
+    take,
+    minMenopause: HOME_POPULAR_MIN_MENOPAUSE,
+    now: new Date(),
+  })
+}
+
+/**
+ * 홈 "지금 뜨는 이야기" 용 — 순수 인기 점수 위에 홈 노출 예외를 한 겹 얹는다.
+ *
+ * 🔴 applyHomeExposure 를 부르는 곳은 여기 하나다.
+ *    getPopularDiscoveryPosts 안에 두었더니 같은 함수를 쓰는 /best 까지
+ *    홈 고정·숨김을 따라갔다. 홈 큐레이션은 홈(/) 과 /admin/home 의 것이다.
+ *
+ * 쓰는 곳: src/app/page.tsx · src/app/admin/(ops)/home/page.tsx
+ */
+export async function getHomePopularPosts(take = 20) {
+  const blockedIds = await getBlockedUserIds()
+
+  const [candidates, overrides] = await Promise.all([
+    // 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
+    //    여유(HEADROOM)를 두고 뽑아 applyHomeExposure 가 잘라 낸다.
+    pickPopularByScore(take * HOME_OVERRIDE_HEADROOM, blockedIds),
     // 🔴 만료 판정을 SQL 로 하지 않는다. isActive 만 좁혀 가져오고
     //    expiresAt 비교는 규칙 함수가 한 곳에서 한다 — 두 곳이면 언젠가 어긋난다.
     prisma.homeExposureOverride.findMany({
@@ -246,17 +280,7 @@ export async function getPopularDiscoveryPosts(take = 20) {
       })
     : []
 
-  // 🔴 자동 점수를 먼저 매긴다. 예외는 그 결과에 얹는 한 겹이다 —
-  //    순서를 바꾸면 PIN 이 점수 계산 자체를 밀어내 자동 배분이 무너진다.
-  const scored = pickHomePopular({
-    menopause,
-    free,
-    take: take * HOME_OVERRIDE_HEADROOM,
-    minMenopause: HOME_POPULAR_MIN_MENOPAUSE,
-    now: new Date(),
-  })
-
-  return applyHomeExposure({ candidates: scored, pinnedPosts, overrides, take })
+  return applyHomeExposure({ candidates, pinnedPosts, overrides, take })
 }
 
 export async function getPostDetail(postId: string) {
