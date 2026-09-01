@@ -8,6 +8,7 @@ import {
 } from '@/lib/post-visibility'
 import { EXCLUDE_GREETING } from '@/lib/greeting-policy'
 import { pickHomePopular } from '@/lib/popularity'
+import { applyHomeExposure, isOverrideActive } from '@/lib/home-exposure-rules'
 import type { BoardType } from '@prisma/client'
 
 const COMMUNITY_BOARD_TYPES = COMMUNITY_BOARDS.map((b) => b.type) as BoardType[]
@@ -167,6 +168,14 @@ export async function getRecentDiscoveryPosts(take = 6) {
 /** 게시판 하나에서 점수 계산에 넣을 후보를 몇 건까지 가져올지. */
 const HOME_POPULAR_CANDIDATES_PER_BOARD = 60
 
+/**
+ * 홈 노출 예외를 얹기 전, 자동 후보를 몇 배로 넉넉히 뽑을지.
+ *
+ * 🔴 take 만큼만 뽑아 두면 HIDE 가 걸릴 때마다 홈이 한 칸씩 짧아진다.
+ *    PIN 이 자동 상위와 겹쳐도 마찬가지다. 여유를 두고 뽑아 잘라 낸다.
+ */
+const HOME_OVERRIDE_HEADROOM = 2
+
 /** 총 노출에서 갱년기톡에 보장하는 최소 자리. 후보가 모자라면 있는 만큼만 채운다. */
 const HOME_POPULAR_MIN_MENOPAUSE = 7
 
@@ -196,15 +205,58 @@ export async function getPopularDiscoveryPosts(take = 20) {
       take: HOME_POPULAR_CANDIDATES_PER_BOARD,
     })
 
-  const [menopause, free] = await Promise.all([candidatesFor('MENOPAUSE'), candidatesFor('FREE')])
+  const [menopause, free, overrides] = await Promise.all([
+    candidatesFor('MENOPAUSE'),
+    candidatesFor('FREE'),
+    // 🔴 만료 판정을 SQL 로 하지 않는다. isActive 만 좁혀 가져오고
+    //    expiresAt 비교는 규칙 함수가 한 곳에서 한다 — 두 곳이면 언젠가 어긋난다.
+    prisma.homeExposureOverride.findMany({
+      where: { surface: 'HOME_POPULAR', isActive: true },
+      select: { postId: true, action: true, position: true, isActive: true, expiresAt: true },
+    }),
+  ])
 
-  return pickHomePopular({
+  /**
+   * 🔴 PIN 글을 따로 조회한다.
+   *    자동 후보 안에서만 찾으면 점수가 낮아 후보에 못 든 글은 고정해도 뜨지 않는다 —
+   *    운영자가 "고정했는데 안 보인다" 를 겪는다. PIN 은 자동 점수를 이겨야 한다.
+   *
+   * 🔴 그러나 노출 안전 규칙은 이기지 않는다.
+   *    자동 후보와 **똑같은 where** 를 쓴다 — 게시판(MENOPAUSE·FREE) ·
+   *    DISCOVERY_ELIGIBLE_WHERE(PUBLISHED · isMicroSeed=false ·
+   *    indexPromotionBlocked=false) · 차단 회원 제외.
+   *    조건을 못 지난 글은 여기서 조회되지 않아 홈에 나가지 않는다.
+   *
+   * 🔴 HIDE 와 겹친 PIN 은 규칙 함수가 뺀다. 여기서는 거르지 않는다 —
+   *    충돌 판정이 두 곳이면 언젠가 서로 다른 답을 낸다.
+   */
+  const activePinIds = overrides
+    .filter((o) => o.action === 'PIN' && isOverrideActive(o))
+    .map((o) => o.postId)
+
+  const pinnedPosts = activePinIds.length
+    ? await prisma.post.findMany({
+        where: {
+          id: { in: activePinIds },
+          boardType: { in: COMMUNITY_BOARD_TYPES },
+          ...DISCOVERY_ELIGIBLE_WHERE,
+          ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+        },
+        select: POST_LIST_ITEM_SELECT,
+      })
+    : []
+
+  // 🔴 자동 점수를 먼저 매긴다. 예외는 그 결과에 얹는 한 겹이다 —
+  //    순서를 바꾸면 PIN 이 점수 계산 자체를 밀어내 자동 배분이 무너진다.
+  const scored = pickHomePopular({
     menopause,
     free,
-    take,
+    take: take * HOME_OVERRIDE_HEADROOM,
     minMenopause: HOME_POPULAR_MIN_MENOPAUSE,
     now: new Date(),
   })
+
+  return applyHomeExposure({ candidates: scored, pinnedPosts, overrides, take })
 }
 
 export async function getPostDetail(postId: string) {

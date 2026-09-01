@@ -129,6 +129,9 @@ model User {
   /// 페르소나가 이 회원에 대해 가진 관계 기억. 🔴 탈퇴 시 Cascade 로 삭제된다
   personaRelationships PersonaUserRelationship[]
 
+  /// 이 회원이 만든 홈 노출 예외. 🔴 SetNull — 사람이 떠나도 예외 이력은 남는다
+  homeExposureOverrides HomeExposureOverride[]
+
   @@index([createdAt])
 }
 
@@ -280,6 +283,8 @@ model Post {
   likes     Like[]
   scraps    Scrap[]
   reports   Report[]
+  /// 홈 노출 예외(고정·숨김). 🔴 Restrict — 예외가 걸린 글은 지워지지 않는다
+  homeExposureOverrides HomeExposureOverride[]
 
   @@index([boardType, status, createdAt])
   @@index([authorId])
@@ -1435,4 +1440,59 @@ model PersonaGlobalSwitch {
   changedBy String?
   changedAt DateTime @updatedAt
   createdAt DateTime @default(now())
+}
+
+/// 홈 노출 예외를 적용할 자리. 지금은 홈 인기글 하나뿐이다.
+///
+/// 🔴 값을 늘리지 않는다. 자리마다 정렬 규칙이 달라서, 한 enum 으로 묶으면
+///    "이 예외가 어느 규칙을 이긴 것인가" 를 아무도 답하지 못하게 된다.
+enum HomeExposureSurface {
+  HOME_POPULAR
+}
+
+enum HomeExposureAction {
+  PIN
+  HIDE
+}
+
+/// 홈 노출 예외 — 자동 인기 점수 위에 운영자가 얹는 한 겹.
+///
+/// 🔴 자동 점수를 대체하지 않는다. popularity.ts 는 그대로 돌고,
+///    이 표는 그 결과에서 빼거나(HIDE) 앞에 붙이는(PIN) 일만 한다.
+///
+/// 🔴 PIN 이 노출 규칙을 면제하지 않는다.
+///    PIN 대상도 discovery 조건(PUBLISHED · isMicroSeed=false ·
+///    permanentNoindex=false · indexPromotionBlocked=false · 차단 회원 제외)을
+///    다시 통과해야 홈에 나간다. 조회 지점은 queries/posts.ts 한 곳이다.
+///
+/// 🔴 Post 를 고치지 않는다. status·isMicroSeed 같은 글의 성질은 그대로다.
+///    "홈에서 안 보인다" 와 "글이 숨겨졌다" 는 다른 일이다.
+///
+/// 🔴 만료된 행을 지우지 않는다. 무엇을 언제 왜 올렸는지가 이력으로 남아야 한다.
+///    활성 판정은 isActive AND (expiresAt IS NULL OR expiresAt > now) 다.
+model HomeExposureOverride {
+  id      String              @id @default(cuid())
+  surface HomeExposureSurface
+  postId  String
+  /// 🔴 Restrict — 예외가 걸린 글이 사라지면 왜 그렇게 보였는지 설명할 수 없다
+  post    Post                @relation(fields: [postId], references: [id], onDelete: Restrict)
+  action  HomeExposureAction
+
+  /// PIN 순서. 작을수록 위. HIDE 는 null 이다.
+  position Int?
+  /// 만료 시각(UTC). null 이면 사람이 끌 때까지 산다.
+  expiresAt DateTime?
+  isActive  Boolean   @default(true)
+  note      String?
+
+  /// 누가 걸었는가. 🔴 SetNull — 사람이 떠나도 예외 이력은 남는다
+  createdByUserId String?
+  createdBy       User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([surface, isActive])
+  @@index([postId])
+  @@index([expiresAt])
 }
