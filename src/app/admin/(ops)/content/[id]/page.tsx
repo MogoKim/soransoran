@@ -8,6 +8,7 @@ import { REPORT_REASONS } from '@/lib/report-reasons'
 import { getBoardByType } from '@/lib/board-registry'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminPostEditForm from '@/components/admin/AdminPostEditForm'
+import AdminCommentEditForm from '@/components/admin/AdminCommentEditForm'
 import { setPostHidden, setCommentHidden } from '@/lib/actions/admin'
 
 /**
@@ -160,7 +161,11 @@ export default async function AdminContentDetailPage({
                   · {formatKst(c.createdAt)}
                   {c.isDeleted ? ' · 숨김' : ''}
                 </p>
-                <div className="mt-2">
+                {/* 숨김 댓글도 고칠 수 있다. 고치는 것과 되살리는 것은 다른 판단이라
+                    수정 폼과 숨김 버튼을 나란히 두되 서로 건드리지 않는다. */}
+                <div className="mt-2 flex flex-col gap-2">
+                  <AdminCommentEditForm commentId={c.id} content={c.content} />
+
                   {c.isDeleted ? (
                     <AdminActionButton
                       label="댓글 다시 보이기"
