@@ -266,14 +266,33 @@ export function parseCandidate(rawText: string): ParsedCandidate {
  *
  * 🔴 sourceTexts 를 담을 자리가 **없다.** 선택적 필드로도 두지 않는다 —
  *    두면 언젠가 채워진다. Gate 판정에 필요한 source 는 런타임에만 넘긴다.
+ *
+ * 🔴 sourcePostId 는 원문이 아니라 **우리 DB 의 Post id** 다 (2026-09-01).
+ *    Gate ① 은 원문 대조가 필요한데 파일에 원문을 두지 않기로 했으므로,
+ *    "어느 글을 보고 썼는가" 만 남기고 원문은 판정할 때 DB 에서 읽는다.
+ *    id 는 그 자체로 아무 문장도 담지 않는다 —
+ *    PersonaApprovalQueue.targetPostId 가 이미 같은 판단을 하고 있다.
  */
 export type CandidateRecord = {
   personaCode: string
   text: string
+  /** 🔴 우리 DB Post.id. 원문이 아니라 참조다 */
+  sourcePostId: string
 }
 
-export function toCandidateRecord(input: { personaCode: string; text: string }): CandidateRecord {
-  return { personaCode: input.personaCode, text: input.text.trim() }
+/** 🔴 저장 레코드에 허용되는 키. 이 목록 밖은 assertNoStoredSource 가 막는다 */
+export const ALLOWED_RECORD_KEYS: readonly string[] = ['personaCode', 'text', 'sourcePostId']
+
+export function toCandidateRecord(input: {
+  personaCode: string
+  text: string
+  sourcePostId: string
+}): CandidateRecord {
+  return {
+    personaCode: input.personaCode,
+    text: input.text.trim(),
+    sourcePostId: input.sourcePostId.trim(),
+  }
 }
 
 /** 대조 최소 길이 — Gate ① 의 20자 유출 판정과 같은 눈금을 쓴다 */
@@ -296,10 +315,11 @@ export function assertNoStoredSource(
 
   for (const record of records) {
     for (const key of Object.keys(record)) {
-      if (key !== 'personaCode' && key !== 'text') {
+      if (!ALLOWED_RECORD_KEYS.includes(key)) {
         throw new Error(
           `저장 레코드에 허용되지 않은 필드가 있다: ${key}\n` +
-            '  candidates.json 에는 personaCode · text 만 남긴다(원문 저장 금지 계약).',
+            `  candidates.json 에는 ${ALLOWED_RECORD_KEYS.join(' · ')} 만 남긴다(원문 저장 금지 계약).\n` +
+            '  sourceTexts · sourceUrl · sourceRef · author · rawContent 는 어느 것도 저장하지 않는다.',
         )
       }
     }

@@ -10,9 +10,11 @@
  */
 import {
   buildPrompt, parseCandidate, toCandidateRecord, assertNoStoredSource,
-  isReactionType, REACTION_TYPES, MAX_OUTPUT_TOKENS, SOURCE_ECHO_MIN,
+  isReactionType, REACTION_TYPES, MAX_OUTPUT_TOKENS, SOURCE_ECHO_MIN, ALLOWED_RECORD_KEYS,
   type PromptPersona, type PromptTargetPost, type PromptBlockCode, type CandidateRecord,
 } from './lib/persona-prompt'
+// 🔴 sourcePostId 로 조달한 원문이 Gate ① 에서 실제로 대조되는지 확인한다
+import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../src/lib/comment-policy'
 
@@ -158,9 +160,12 @@ console.log('\n══════ ⑤ 응답 파싱')
 
 console.log('\n══════ ⑥ 🔴 원문 저장 금지 계약')
 {
-  const rec = toCandidateRecord({ personaCode: 'P05', text: '  저도 그랬어요  ' })
-  expect('레코드 키는 둘뿐', Object.keys(rec).sort().join(','), 'personaCode,text')
+  const rec = toCandidateRecord({ personaCode: 'P05', text: '  저도 그랬어요  ', sourcePostId: ' post_1 ' })
+  expect('레코드 키는 셋뿐', Object.keys(rec).sort().join(','), 'personaCode,sourcePostId,text')
+  expect('  허용 키 목록과 일치', [...ALLOWED_RECORD_KEYS].sort().join(','), 'personaCode,sourcePostId,text')
   expect('  text 는 trim 된다', rec.text, '저도 그랬어요')
+  // 🔴 sourcePostId 는 원문이 아니라 참조다 — 허용되지만 원문은 여전히 금지
+  expect('  sourcePostId 는 trim 된다', rec.sourcePostId, 'post_1')
 
   const source = post().content
   const throws = (records: CandidateRecord[], sources: string[]): string => {
@@ -173,16 +178,46 @@ console.log('\n══════ ⑥ 🔴 원문 저장 금지 계약')
   const echo = [...source].slice(0, SOURCE_ECHO_MIN + 4).join('')
   expect(
     `원문 연속 ${SOURCE_ECHO_MIN}자 포함 → throw`,
-    throws([{ personaCode: 'P05', text: echo }], [source]),
+    throws([{ personaCode: 'P05', text: echo, sourcePostId: 'post_1' }], [source]),
     'throw',
   )
 
-  // 🔴 타입 밖에서 만든 레코드에 sourceTexts 를 얹은 경우
-  const smuggled = { personaCode: 'P05', text: '저도 그랬어요', sourceTexts: [source] } as unknown as CandidateRecord
-  expect('허용되지 않은 필드 → throw', throws([smuggled], []), 'throw')
+  // 🔴 sourcePostId 가 허용된 뒤에도 원문 필드는 여전히 막힌다
+  const banned = ['sourceTexts', 'sourceUrl', 'sourceRef', 'author', 'rawContent']
+  const smuggledCodes = banned.map((key) => {
+    const r = { personaCode: 'P05', text: '저도 그랬어요', sourcePostId: 'post_1', [key]: source }
+    return `${key}=${throws([r as unknown as CandidateRecord], [])}`
+  })
+  expect(
+    `원문 필드 ${banned.length}종 전부 throw`,
+    smuggledCodes.join(','),
+    banned.map((k) => `${k}=throw`).join(','),
+  )
 
   // 짧은 source 는 대조 대상이 아니다 (오탐 방지)
   expect('20자 미만 source 는 건너뛴다', throws([rec], ['짧은글']), '')
+}
+
+console.log('\n══════ ⑧ 🔴 sourcePostId 로 런타임 대조가 성립한다')
+{
+  // Gate ① 은 후보 본문 대 원문을 20자 단위로 본다.
+  // 파일에 원문이 없어도 sourcePostId → DB 조회로 같은 대조가 가능해야 한다.
+  // 여기서는 "조달된 원문을 넘기면 유출이 잡히는가" 만 순수하게 확인한다.
+  const source = post().content
+  // 🔴 Gate ① 은 **공백을 지운 뒤** 연속 20자를 본다.
+  //    글자 수로 22자를 떠 오면 공백 때문에 17자가 되어 잡히지 않는다 — 넉넉히 뜬다.
+  const echoed = [...source].slice(0, 38).join('')
+
+  const leaked = checkCommentCandidate({
+    personaCode: 'P05',
+    text: echoed,
+    sourceTexts: [source], // ← sourcePostId 로 DB 에서 읽어 넘긴 값이라고 보면 된다
+  })
+  expect('조달한 원문으로 ① 유출을 잡는다', leaked.sourceLeak, true)
+
+  // 🔴 조달하지 못하면(빈 배열) pass 가 아니어야 한다 — "검사 불가"가 통과로 보이면 안 된다
+  const notRun = checkCommentCandidate({ personaCode: 'P05', text: '그러네요 저도요', sourceTexts: [] })
+  expect('원문을 못 넘기면 pass 아님', notRun.status !== 'pass', true)
 }
 
 console.log('\n══════ ⑦ 프롬프트에 API key 나 저장 경로가 섞이지 않는다')
