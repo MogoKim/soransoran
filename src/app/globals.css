@@ -155,28 +155,34 @@
     /* ── 글자 크기 3단계 ──
        선택지: 작게 / 기본 / 크게 · 기본값 "기본"
        저장키: soran-font-size (단일 키)
-       "작게" 하한은 16px. 그 아래로 내리지 않는다. */
-    --text-body: 1.125rem;    /* 18px — 기본 */
-    --text-caption: 0.9375rem;
-    --text-sm: 1rem;
-    --text-title: 1.25rem;
-    --text-heading: 1.5rem;
-    --text-display: 1.75rem;
+
+       🔴 세 단계를 한 칸씩 올렸다 (2026-09-01).
+          그 전 "기본"(15/16/18/20/24/28)은 40~60대가 읽기에 작았다.
+          실측으로 확인한 기준선에 맞춰 "기본"을 본문 20px 로 올리고,
+          "작게"가 그 전 "기본" 자리를 받는다. "크게"는 이미 기준선과
+          같아 손대지 않았다.
+          "작게" 하한은 이제 18px 이다. 그 아래로 내리지 않는다. */
+    --text-body: 1.25rem;      /* 20px — 기본 */
+    --text-caption: 1.0625rem; /* 17px */
+    --text-sm: 1.125rem;       /* 18px */
+    --text-title: 1.5rem;      /* 24px */
+    --text-heading: 1.75rem;   /* 28px */
+    --text-display: 2rem;      /* 32px */
 
     /* ── 폰트 ── */
     --font-family: 'Pretendard Variable', 'Pretendard',
       -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   }
 
-  /* 작게 — 하한 16px */
+  /* 작게 — 하한 18px */
   :root[data-font-size='SMALL'] {
     --icon-box: 2.75rem;       /* 44px — 적지 않으면 기본 48px 을 물려받는다 */
-    --text-body: 1rem;         /* 16px */
-    --text-caption: 0.875rem;  /* 14px */
-    --text-sm: 0.9375rem;
-    --text-title: 1.125rem;
-    --text-heading: 1.375rem;
-    --text-display: 1.5rem;
+    --text-body: 1.125rem;     /* 18px */
+    --text-caption: 0.9375rem; /* 15px */
+    --text-sm: 1rem;           /* 16px */
+    --text-title: 1.25rem;     /* 20px */
+    --text-heading: 1.5rem;    /* 24px */
+    --text-display: 1.75rem;   /* 28px */
   }
 
   /* 크게 */
@@ -202,7 +208,9 @@
     background-color: var(--surface-app);
     color: var(--text-primary);
     font-size: var(--text-body);
-    line-height: 1.6;
+    /* 🔴 1.6 이 아니라 1.75 다. 글자만 키우고 줄 간격을 그대로 두면
+       줄이 서로 붙어 오히려 읽기 어려워진다. 기준선과 같은 값이다. */
+    line-height: 1.75;
     -webkit-font-smoothing: antialiased;
   }
 
