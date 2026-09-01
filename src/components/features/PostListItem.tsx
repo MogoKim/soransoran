@@ -60,10 +60,12 @@ export default function PostListItem({
       className="group flex min-h-[52px] items-start gap-3 px-4 py-3.5 no-underline"
     >
       {/* 순번은 순서를 알려줄 뿐 주 정보가 아니다 — 리듬은 만들되 제목을 이기지는 않는다.
-          그래서 제목과 같은 크기까지만 쓴다. 제목보다 크면 행에서 먼저 읽히는 것이
-          "몇 번째인가" 가 되어, 무엇을 읽을지 고르는 일이 뒤로 밀린다.
-          눈에 띄는 몫은 코랄색과 기울임이 가진다 — 기울임은 여기 한 곳에만 둔다. */}
-      <span className="w-8 shrink-0 text-center text-sm font-bold italic leading-none text-brand-ink">
+          눈에 띄는 몫은 코랄색과 기울임이 가진다 — 기울임은 여기 한 곳에만 둔다.
+
+          🔴 22px 고정이다. 글씨 크기 축을 따르게 두면 "크게" 에서 제목과 같은 24px 가 되어
+             순번이 제목만큼 커진다. 순번은 읽는 대상이 아니라 자리표라 본문과 함께
+             커질 이유가 없다 — 기준선(우나어)도 같은 값으로 고정해 두었다. */}
+      <span className="w-8 shrink-0 text-center text-[22px] font-bold italic leading-none text-brand-ink">
         {rank}
       </span>
 
