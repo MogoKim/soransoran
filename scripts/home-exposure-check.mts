@@ -11,8 +11,10 @@
  * 이 테스트가 지키는 것
  *   ① PIN 이 자동 순서를 이긴다
  *   ② HIDE 가 PIN 을 이긴다 (부딪히면 안 보이는 쪽이 안전하다)
- *   ③ 후보에 없는 글은 PIN 이어도 나가지 않는다
+ *   ③ 자동 후보 **밖**의 글도 PIN 하면 맨 앞에 나온다 (pinnedPosts 로 넘어온 경우)
+ *   ④ 그러나 discovery 조건을 못 지난 글은 어느 목록에도 없어 나가지 않는다
  *      — HIDDEN · Micro Seed · indexPromotionBlocked 가 새어 나가는 구멍을 막는다
+ *   ⑤ HIDE 가 여러 건이어도 자리가 줄지 않는다
  *   ④ 만료된 예외는 무시된다
  *   ⑤ 오늘 자정 KST 가 UTC 로 맞게 저장된다
  *
@@ -91,22 +93,58 @@ expect(
   ['b'],
 )
 
-console.log('\n══════ 후보에 없는 글은 PIN 이어도 나가지 않는다')
-// 호출부가 DISCOVERY_ELIGIBLE_WHERE 로 조회하므로
-// HIDDEN · Micro Seed · indexPromotionBlocked 글은 candidates 에 애초에 없다.
+console.log('\n══════ 자동 후보 밖의 글도 PIN 하면 나온다')
+// 🔴 이 레인의 핵심이다. 점수가 낮아 후보에 못 든 글을 고정했을 때
+//    홈에 뜨지 않으면 "고정" 이라는 말이 거짓이 된다.
+//    호출부가 discovery 조건으로 조회해 pinnedPosts 로 넘긴다.
+expect(
+  '후보 밖 글이 맨 앞에 온다',
+  ids(
+    applyHomeExposure({
+      candidates: [post('a'), post('b')],
+      pinnedPosts: [post('z')],
+      overrides: [pin('z', 0)],
+      take: 5,
+      now: NOW,
+    }),
+  ),
+  ['z', 'a', 'b'],
+)
+expect(
+  '후보 밖 PIN 여러 건도 position 순으로',
+  ids(
+    applyHomeExposure({
+      candidates: [post('a')],
+      pinnedPosts: [post('y'), post('z')],
+      overrides: [pin('z', 0), pin('y', 1)],
+      take: 5,
+      now: NOW,
+    }),
+  ),
+  ['z', 'y', 'a'],
+)
+
+console.log('\n══════ discovery 조건을 못 지난 글은 PIN 이어도 나가지 않는다')
+// 호출부가 자동 후보와 **똑같은 where** 로 PIN 글을 조회한다.
+// HIDDEN · Micro Seed · indexPromotionBlocked 글은 pinnedPosts 에도 들어오지 않는다.
 expect(
   'HIDDEN 글은 PIN 돼도 안 나온다',
-  ids(applyHomeExposure({ candidates: [post('a')], overrides: [pin('hidden-post', 0)], take: 5, now: NOW })),
+  ids(applyHomeExposure({ candidates: [post('a')], pinnedPosts: [], overrides: [pin('hidden-post', 0)], take: 5, now: NOW })),
   ['a'],
 )
 expect(
   'Micro Seed 글은 PIN 돼도 안 나온다',
-  ids(applyHomeExposure({ candidates: [post('a')], overrides: [pin('micro-seed-post', 0)], take: 5, now: NOW })),
+  ids(applyHomeExposure({ candidates: [post('a')], pinnedPosts: [], overrides: [pin('micro-seed-post', 0)], take: 5, now: NOW })),
   ['a'],
 )
 expect(
   'indexPromotionBlocked 글은 PIN 돼도 안 나온다',
-  ids(applyHomeExposure({ candidates: [post('a')], overrides: [pin('promotion-blocked-post', 0)], take: 5, now: NOW })),
+  ids(applyHomeExposure({ candidates: [post('a')], pinnedPosts: [], overrides: [pin('promotion-blocked-post', 0)], take: 5, now: NOW })),
+  ['a'],
+)
+expect(
+  '차단 회원 글도 PIN 돼도 안 나온다',
+  ids(applyHomeExposure({ candidates: [post('a')], pinnedPosts: [], overrides: [pin('blocked-author-post', 0)], take: 5, now: NOW })),
   ['a'],
 )
 
@@ -133,6 +171,53 @@ expect(
 )
 expect('isActive=false 는 죽은 것', isOverrideActive({ isActive: false, expiresAt: null }, NOW), false)
 expect('expiresAt=null 은 살아 있다', isOverrideActive({ isActive: true, expiresAt: null }, NOW), true)
+
+console.log('\n══════ PIN + HIDE 충돌 — HIDE 가 이긴다')
+expect(
+  '후보 밖 PIN 이어도 HIDE 가 걸리면 안 나온다',
+  ids(
+    applyHomeExposure({
+      candidates: [post('a'), post('b')],
+      pinnedPosts: [post('z')],
+      overrides: [pin('z', 0), hide('z')],
+      take: 5,
+      now: NOW,
+    }),
+  ),
+  ['a', 'b'],
+)
+
+console.log('\n══════ HIDE 때문에 자리가 줄지 않는다')
+// 후보 6개 중 3개를 숨겨도, 남은 후보로 take(3)를 채운다.
+const six = ['a', 'b', 'c', 'd', 'e', 'f'].map(post)
+expect(
+  'HIDE 3건이어도 take 만큼 채운다',
+  ids(
+    applyHomeExposure({
+      candidates: six,
+      overrides: [hide('a'), hide('b'), hide('c')],
+      take: 3,
+      now: NOW,
+    }),
+  ),
+  ['d', 'e', 'f'],
+)
+expect(
+  'PIN 과 HIDE 가 섞여도 take 를 채운다',
+  applyHomeExposure({
+    candidates: six,
+    pinnedPosts: [post('z')],
+    overrides: [pin('z', 0), hide('a'), hide('b')],
+    take: 4,
+    now: NOW,
+  }).length,
+  4,
+)
+expect(
+  '후보가 모자라면 있는 만큼만',
+  ids(applyHomeExposure({ candidates: [post('a'), post('b')], overrides: [hide('a')], take: 5, now: NOW })),
+  ['b'],
+)
 
 console.log('\n══════ 개수')
 expect(
