@@ -46,7 +46,7 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { callProvider, keyStatus, type ProviderModel } from './lib/voice-m3-provider.mjs'
 import {
   buildPrompt, parseCandidate, toCandidateRecord, assertNoStoredSource,
-  isReactionType, REACTION_TYPES, type CandidateRecord,
+  extractVoiceMarks, isReactionType, REACTION_TYPES, type CandidateRecord,
 } from './lib/persona-prompt'
 
 const OUTPUT_PATH = 'tmp/persona-comment-candidates.json'
@@ -120,8 +120,49 @@ console.log(`\n페르소나  ${persona.code} (${persona.status})`)
 console.log(`대상 글    ${mask(post.id)} · ${post.boardType} · 제목 ${brief(post.title)} · 본문 ${[...post.content].length}자`)
 console.log(`반응 유형  ${REACTION}`)
 
+// ── 🔴 최근 발화의 말투 표지 (A안) ──
+//    ⑧ 은 이 페르소나의 이전 발화와 비교해 말끝·시작어절 반복을 잡는데,
+//    모델은 자기가 예전에 뭘 썼는지 모른다. 첫 어절과 말끝만 뽑아 알려 준다.
+//
+// 🔴 본문은 프롬프트로 나가지 않는다. extractVoiceMarks 가 표지만 남긴다.
+//    본문을 넣으면 이전 생성물이 다시 들어가 비슷하게 쓰도록 부추긴다.
+const recentTexts: string[] = []
+{
+  // ① 이미 발행된 이 페르소나의 댓글
+  const publishedByPersona = await prisma.comment.findMany({
+    where: { personaId: { not: null }, isDeleted: false, persona: { code: persona.code } },
+    select: { content: true, createdAt: true },
+    orderBy: { createdAt: 'asc' },
+  })
+  recentTexts.push(...publishedByPersona.map((c) => c.content))
+
+  // ② 아직 발행되지 않은 같은 페르소나의 후보 (파일)
+  if (existsSync(OUTPUT_PATH)) {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(OUTPUT_PATH, 'utf-8'))
+      if (Array.isArray(raw)) {
+        for (const item of raw as Array<Record<string, unknown>>) {
+          if (item.personaCode === persona.code && typeof item.text === 'string') {
+            recentTexts.push(item.text)
+          }
+        }
+      }
+    } catch {
+      // 🔴 읽지 못해도 생성을 멈추지 않는다. 표지가 없으면 그 지시만 빠진다
+      console.log('   🟡 후보 파일을 읽지 못해 최근 말투 표지를 일부만 씁니다')
+    }
+  }
+}
+const recentMarks = extractVoiceMarks(recentTexts)
+console.log(
+  `\n최근 말투 표지  대조 발화 ${recentTexts.length}건 →` +
+    ` 시작어절 ${recentMarks.openers.length}종 · 말끝 ${recentMarks.endings.length}종` +
+    ' (🔴 본문 미사용)',
+)
+
 // ── 프롬프트 ──
 const plan = buildPrompt({
+  recentMarks,
   persona: {
     code: persona.code,
     ageBand: persona.ageBand,
