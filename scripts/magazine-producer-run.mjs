@@ -2,7 +2,7 @@
 /**
  * launchd 진입점 — producer 를 돌리고, 결과를 판정해 필요할 때만 Slack 으로 알린다.
  *
- *   01:00 KST → 이 스크립트
+ *   00:10 KST → 이 스크립트
  *                 ├ magazine-producer-plan.mjs      오늘 무엇을 만들지 정한다
  *                 ├ magazine-brief-auto.mjs         선정분의 brief.md · review.ts 를 만든다
  *                 ├ magazine-webui-runner.mjs       선정분의 원고를 받아 draft.md 로 저장
