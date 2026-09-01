@@ -13,6 +13,7 @@ import {
   isReactionType, REACTION_TYPES, MAX_OUTPUT_TOKENS, SOURCE_ECHO_MIN, ALLOWED_RECORD_KEYS,
   CLICHE_COMFORT_PHRASES, CLICHE_OPENERS, PROMPT_TARGET_MAX_CHARS,
   extractVoiceMarks, MAX_RECENT_MARKS,
+  CLICHE_OPENER_INITIALS, OPENER_STYLE_EXAMPLES,
   type PromptPersona, type PromptTargetPost, type PromptBlockCode, type CandidateRecord,
 } from './lib/persona-prompt'
 // 🔴 sourcePostId 로 조달한 원문이 Gate ① 에서 실제로 대조되는지 확인한다
@@ -162,6 +163,46 @@ console.log('\n══════ ⑩ 🔴 A안 — 최근 발화 말투 표지 
   const without = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
   const sysNo = without.ok ? without.prompt.systemPrompt : ''
   expect('표지 없으면 지시도 없다', sysNo.includes('이렇게 시작했습니다'), false)
+}
+
+console.log('\n══════ ⑫ 🔴 ⑧ 시작어절 — 글자 단위 회피 + 여는 방법')
+{
+  // #9·#10·#11 이 어절은 달라도 **같은 글자**로 시작했다(⑧ 60% → 50% → 43%, 임계 35%).
+  // 어절만 막아서는 안 됐다는 것이 실측이다.
+  const marks = extractVoiceMarks(['밤마다 뒤척이네요', '저도 그랬어요', '맞아요 정말'])
+  const p = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy', recentMarks: marks,
+  })
+  const sys = p.ok ? p.prompt.systemPrompt : ''
+
+  expect('글자 회피 지시가 들어간다', sys.includes('이 글자로 시작하지 않습니다'), true)
+  // 🔴 최근 어절에서 파생한 첫 글자
+  for (const ch of ['밤', '저', '맞']) {
+    expect(`  최근 첫 글자 "${ch}" 가 목록에 있다`, sys.includes(ch), true)
+  }
+  expect('  어절만 바꾸는 것으로 부족하다고 말한다', sys.includes('첫 글자가 같으면'), true)
+
+  // 상수 바닥 — 표지가 없어도 상투적 시작 글자는 막힌다
+  const bare = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const sysBare = bare.ok ? bare.prompt.systemPrompt : ''
+  expect('표지 없어도 글자 회피는 남는다', sysBare.includes('이 글자로 시작하지 않습니다'), true)
+  const missingInitials = CLICHE_OPENER_INITIALS.filter((c) => !sysBare.includes(c))
+  expect(`상투적 시작 글자 ${CLICHE_OPENER_INITIALS.length}종 전부`, missingInitials.join(','), '')
+
+  // 🔴 금지만으로는 부족 — 무엇으로 열지 알려주는가
+  expect('여는 방법 섹션이 있다', sys.includes('첫 문장을 여는 방법'), true)
+  expect('  감탄·동의 금지', sys.includes('감탄이나 동의로 열지 않습니다'), true)
+  expect('  상황·감각으로 열라', sys.includes('짧은 상황이나 감각'), true)
+  const missingEx = OPENER_STYLE_EXAMPLES.filter((e) => !sys.includes(e))
+  expect(`  예시 ${OPENER_STYLE_EXAMPLES.length}종 전부`, missingEx.join(','), '')
+  expect('  예시를 베끼지 말라', sys.includes('예시를 그대로 쓰지 말고'), true)
+
+  // 🔴 원문 요약 금지는 유지된다 (이 지시가 그쪽을 무너뜨리면 안 된다)
+  expect('원문 요약 금지 유지', sys.includes('요약해서 여는 것은 안 됩니다'), true)
+  expect('  기존 원문 금지 섹션도 유지', sys.includes('한 조각도 그대로 쓰지 않습니다'), true)
+  // 🔴 120자 권장 · 가짜 경험 금지 유지
+  expect('120자 권장 유지', sys.includes(String(PROMPT_TARGET_MAX_CHARS)), true)
+  expect('가짜 경험 금지 유지', sys.includes('지어내지 않습니다'), true)
 }
 
 console.log('\n══════ ⑪ 🔴 C안 — NO_LIFE_MARKS 역효과 수정')

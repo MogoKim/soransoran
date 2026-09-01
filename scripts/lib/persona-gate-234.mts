@@ -43,8 +43,40 @@ export type UniqueExpressionVerdict = {
   /** 검사한 n-gram 수. 0 이면 판정이 성립하지 않는다 */
   checked: number
   corpus: string
+  /** 후보 본문 길이(자). 길이 보정 판정의 분모다 */
+  textLength: number
+  /** rare / textLength. 길이 하한 미만이면 null — 그때는 개수 기준을 쓴다 */
+  rareRatio: number | null
   detail: string
 }
+
+/**
+ * 🔴 길이 보정 하한 (2026-09-01).
+ *
+ * 이 길이 **미만**은 기존 기준(rare > 0 → regenerate)을 그대로 쓴다.
+ * 짧은 후보에 비율을 적용하면 오히려 더 엄격해진다 —
+ * 26자 후보는 rare 1개만 나와도 3.8% 라 임계를 넘는다.
+ */
+export const RARE_RATIO_MIN_LENGTH = 60
+
+/**
+ * 🔴 길이 대비 희귀 표현 비율 임계 (2026-09-01).
+ *
+ * 왜 개수가 아니라 비율인가 — 기존 기준은 **긴 후보에 불리하다.**
+ * 132자 후보는 26자 후보보다 n-gram 이 5배 많아 rare 가 우연히 걸릴 확률도
+ * 그만큼 높다. 절대 개수를 올리는 것(rare>=2 · >=3)은 그 편향을 고치지 못하고,
+ * "3 이면 되고 2 면 안 되는" 이유도 없다.
+ *
+ * 실측 근거 (후보 11건 감사, 2026-09-01)
+ *   원문 복붙 손작성   rare 13 / 30자  = 43%   → 어떤 임계로도 걸린다
+ *   LLM 후보 3건       rare 2~4 / 124~143자 = 1.4~2.8%
+ *   LLM 후보의 rare 는 **길이 3~9자** 조각이고 코퍼스 빈도 0~1 이다.
+ *   3자 조각이 원문을 식별하게 만들 가능성은 낮다 — 주제어 조합이면 자연히 0 이 된다.
+ *
+ * 🔴 원문 복붙은 ① 20자 유출이 함께 잡는다. ② 만 잡던 케이스는 짧은 조각 쪽이었다.
+ *    ① 기준은 이 변경과 무관하게 그대로다.
+ */
+export const RARE_RATIO_REGEN = 0.02
 
 const NGRAM_MIN = 3
 const NGRAM_MAX = 10
@@ -89,13 +121,37 @@ export function checkUniqueExpression(
     else common++
   }
 
-  const status: Gate234Status = rare > 0 ? 'regenerate' : mid > 0 ? 'review' : 'pass'
+  // 🔴 길이 보정 (2026-09-01). 짧은 후보는 기존 개수 기준, 긴 후보는 비율 기준이다.
+  //    긴 후보일수록 n-gram 이 많아 rare 가 우연히 걸릴 확률이 오른다 —
+  //    같은 잣대를 대면 길게 쓸수록 불리해진다.
+  const textLength = [...candidateText].length
+  const useRatio = textLength >= RARE_RATIO_MIN_LENGTH
+  const rareRatio = useRatio ? rare / textLength : null
+
+  let status: Gate234Status
+  if (!useRatio) {
+    // 짧은 후보 — 기존 기준 그대로
+    status = rare > 0 ? 'regenerate' : mid > 0 ? 'review' : 'pass'
+  } else if (rareRatio !== null && rareRatio > RARE_RATIO_REGEN) {
+    status = 'regenerate'
+  } else if (rare > 0 || mid > 0) {
+    // 🔴 임계 아래여도 pass 가 아니다. rare 가 있으면 사람이 본다 —
+    //    "적으니 괜찮다" 가 아니라 "적으니 사람이 판단한다" 다.
+    status = 'review'
+  } else {
+    status = 'pass'
+  }
+
+  // 🔴 n-gram 문자열을 담지 않는다 — 그것이 곧 원문 조각이다. 개수 · 비율 · 길이만 남긴다
+  const ratioText = rareRatio === null
+    ? `${textLength}자 · 길이 ${RARE_RATIO_MIN_LENGTH}자 미만이라 개수 기준`
+    : `${textLength}자 · 희귀비율 ${(rareRatio * 100).toFixed(1)}% (임계 ${(RARE_RATIO_REGEN * 100).toFixed(0)}%)`
+
   return {
-    status, rare, mid, common, checked: maximal.length, corpus,
-    // 🔴 n-gram 문자열을 담지 않는다 — 그것이 곧 원문 조각이다
+    status, rare, mid, common, checked: maximal.length, corpus, textLength, rareRatio,
     detail: maximal.length === 0
       ? 'source 와 공유하는 표현 없음'
-      : `공유 ${maximal.length} (희귀 ${rare} · 중간 ${mid} · 일반 ${common}) · ${corpus} 코퍼스`,
+      : `공유 ${maximal.length} (희귀 ${rare} · 중간 ${mid} · 일반 ${common}) · ${ratioText} · ${corpus} 코퍼스`,
   }
 }
 

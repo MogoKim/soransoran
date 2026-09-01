@@ -19,6 +19,8 @@ import {
   checkCommentCandidate, summarizeCandidates, type CandidateVerdict,
 } from './lib/persona-comment-candidate.mjs'
 import { checkPersonaConsistency, checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
+// 🔴 2026-09-01 ② 길이 보정 — 임계 상수와 판정부를 직접 부른다
+import { checkUniqueExpression, RARE_RATIO_MIN_LENGTH, RARE_RATIO_REGEN } from './lib/persona-gate-234.mjs'
 // 🔴 2026-09-01 가드 좁히기 — 전제 확인이 순수 함수로 빠져 여기서 잠근다
 import { planPersonaPreflight, planPriorOutputPrecondition } from './lib/persona-preflight.mjs'
 
@@ -289,6 +291,66 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   if (g(common) !== 'pass') offenders.push(`흔함=${g(common)}`)
   if (offenders.length) bad('② 희귀도 3단', 'case', `🔴 ${offenders.join(' / ')}`)
   else ok('② 희귀도 3단', 'case', '희귀 regenerate · 중간 review · 흔함 pass')
+}
+
+// ── 🔴 ② 길이 보정 (2026-09-01) ──────────────────────
+//    긴 후보일수록 n-gram 이 많아 rare 가 우연히 걸릴 확률이 오른다.
+//    같은 잣대를 대면 길게 쓸수록 불리해진다 — 길이로 나눠 본다.
+//    🔴 원문 복붙은 어떤 임계로도 걸려야 한다. 그것이 ② 의 존재 이유다.
+{
+  const rareLookup = () => 0
+  const offenders: string[] = []
+  const two = (text: string, src: string) =>
+    checkUniqueExpression(text, [src], rareLookup, 'comment')
+
+  // ① 길이 하한 미만 — 기존 개수 기준 그대로
+  const shortShared = '남의편이 그러는데'
+  const short = two(`${shortShared} 저도 그래요`, `${shortShared} 참 답답해요`)
+  if (short.textLength >= RARE_RATIO_MIN_LENGTH) offenders.push(`짧은 케이스가 ${short.textLength}자`)
+  if (short.rareRatio !== null) offenders.push('짧은데 ratio 가 계산됐다')
+  if (short.rare > 0 && short.status !== 'regenerate') offenders.push(`짧은+rare → ${short.status}`)
+
+  // ② 🔴 원문 복붙 — 길어도 비율이 압도적이라 걸린다
+  const copied =
+    '새벽 세시쯤 꼭 한 번씩 깹니다 다시 잠들기가 어려워서 아침이 늘 무겁고 하루가 통째로 힘드네요 ' +
+    '요즘은 낮에도 자꾸 졸리고 기운이 없어서 집안일도 손에 잘 안 잡히더라구요'
+  const copy = two(copied, copied)
+  if (copy.textLength < RARE_RATIO_MIN_LENGTH) offenders.push(`복붙 케이스가 ${copy.textLength}자 — 60자 이상이어야 한다`)
+  if (copy.status !== 'regenerate') offenders.push(`🔴 복붙이 ${copy.status}`)
+  if (copy.rareRatio !== null && copy.rareRatio <= RARE_RATIO_REGEN) {
+    offenders.push(`복붙 비율 ${copy.rareRatio}`)
+  }
+
+  // ③ 긴 후보 + 희귀 조각 소수 → review (pass 가 아니다)
+  //    60자 이상이면서 공유 조각이 3자 하나뿐인 문장을 만든다
+  const longBase =
+    '어젯밤에도 비슷했는데 아침에 일어나니 몸이 무겁더라구요 그래도 오늘은 좀 낫습니다 다행이에요 정말 ' +
+    '커피 한 잔 마시면서 창밖을 보다가 문득 이 글이 떠올랐네요'
+  const few = two(longBase, '한동안 그랬어요 어젯밤 이야기네요')
+  if (few.textLength < RARE_RATIO_MIN_LENGTH) offenders.push(`긴 케이스가 ${few.textLength}자`)
+  if (few.rareRatio === null) offenders.push('긴데 ratio 가 null')
+  if (few.rare > 0 && few.rareRatio !== null && few.rareRatio <= RARE_RATIO_REGEN && few.status !== 'review') {
+    offenders.push(`임계 아래 rare → ${few.status} (review 여야 한다)`)
+  }
+
+  // ④ 공유 없음 → pass
+  const none = two(longBase, '전혀 다른 이야기입니다 관련 없는 내용이에요')
+  if (none.checked === 0 && none.status !== 'pass') offenders.push(`공유 0 → ${none.status}`)
+
+  // ⑤ 🔴 detail 에 n-gram 문자열이 없다 — 개수 · 비율 · 길이만
+  for (const [label, v] of [['복붙', copy], ['소수', few]] as const) {
+    const flat = (label === '복붙' ? copied : longBase).replace(/\s+/g, '')
+    for (let i = 0; i + 4 <= flat.length; i += 1) {
+      if (v.detail.includes(flat.slice(i, i + 4))) { offenders.push(`🔴 ${label} detail 에 원문 조각`); break }
+    }
+    if (!/희귀비율|개수 기준/.test(v.detail)) offenders.push(`${label} detail 에 비율/기준 표기 없음`)
+  }
+
+  if (offenders.length) bad('② 길이 보정', 'case', `🔴 ${offenders.join(' / ')}`)
+  else {
+    ok('② 길이 보정', 'case',
+      `하한 ${RARE_RATIO_MIN_LENGTH}자 · 임계 ${(RARE_RATIO_REGEN * 100).toFixed(0)}% · 복붙 regenerate 유지`)
+  }
 }
 
 // ── 🔴 ② 는 코퍼스 없으면 notRun ─────────────────────
