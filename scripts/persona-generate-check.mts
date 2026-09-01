@@ -11,6 +11,7 @@
 import {
   buildPrompt, parseCandidate, toCandidateRecord, assertNoStoredSource,
   isReactionType, REACTION_TYPES, MAX_OUTPUT_TOKENS, SOURCE_ECHO_MIN, ALLOWED_RECORD_KEYS,
+  CLICHE_COMFORT_PHRASES, CLICHE_OPENERS, PROMPT_TARGET_MAX_CHARS,
   type PromptPersona, type PromptTargetPost, type PromptBlockCode, type CandidateRecord,
 } from './lib/persona-prompt'
 // 🔴 sourcePostId 로 조달한 원문이 Gate ① 에서 실제로 대조되는지 확인한다
@@ -120,6 +121,40 @@ console.log('\n══════ ④ 🔴 금지어가 프롬프트에 지침�
   expect('  길이 정책이 들어간다', sys.includes(String(MAX_COMMENT_LENGTH)), true)
   expect('  진단·처방 금지가 들어간다', sys.includes('진단'), true)
   expect('  출처 언급 금지가 들어간다', sys.includes('카페'), true)
+}
+
+console.log('\n══════ ⑨ 🔴 #9 실패(② 원문 공유 · ⑧ 말투 반복)를 겨냥한 지시')
+{
+  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const sys = p.ok ? p.prompt.systemPrompt : ''
+
+  // ② — source 와 공유하는 희귀 n-gram 이 1개라도 있으면 regenerate 다.
+  //     "원문을 옮기지 마라" 를 이름 대고 막는지 본다.
+  expect('② 원문 조각 금지가 명시된다', sys.includes('한 조각도 그대로 쓰지 않습니다'), true)
+  expect('  살짝 바꿔 옮기기도 금지', sys.includes('말을 살짝 바꿔 옮기는 것도 안 됩니다'), true)
+  expect('  증상·상황 요약 금지', sys.includes('되풀이해 요약하지 않습니다'), true)
+
+  // ⑧ HOOK — 시작어절 반복. 상투적 첫 어절을 이름으로 막는지 본다
+  const missingOpeners = CLICHE_OPENERS.filter((w) => !sys.includes(w))
+  expect(`⑧ 상투적 첫 어절 ${CLICHE_OPENERS.length}종 전부 명시`, missingOpeners.join(','), '')
+
+  // ⑧ ENDING — 말끝 반복
+  expect('⑧ 말끝 다르게 쓰기가 명시된다', sys.includes('말끝을 서로 다르게'), true)
+  expect('  같은 어미 반복 금지', sys.includes('같은 어미로 두 번 끝내지 않습니다'), true)
+  expect('  같은 리듬 반복 금지', sys.includes('같은 리듬을 매번 반복하면'), true)
+
+  // 상투적 위로
+  const missingCliche = CLICHE_COMFORT_PHRASES.filter((w) => !sys.includes(w))
+  expect(`상투적 위로 ${CLICHE_COMFORT_PHRASES.length}종 전부 명시`, missingCliche.join(','), '')
+
+  // 길이 — 짧을수록 반복할 자리가 줄어든다
+  expect('권장 길이 상한이 명시된다', sys.includes(String(PROMPT_TARGET_MAX_CHARS)), true)
+  expect('  정책 상한보다 좁다', PROMPT_TARGET_MAX_CHARS < MAX_COMMENT_LENGTH, true)
+
+  // 정보 제공 · 판단 금지
+  expect('방법 안내 금지가 명시된다', sys.includes('방법을 알려주지 않습니다'), true)
+  expect('  판단 금지가 명시된다', sys.includes('판단하지 않습니다'), true)
+  expect('  묻지 않은 정보 금지', sys.includes('묻지 않은 정보를 얹지 않습니다'), true)
 }
 
 console.log('\n══════ ⑤ 응답 파싱')
