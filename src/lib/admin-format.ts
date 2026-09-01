@@ -47,6 +47,27 @@ export const REAL_MEMBER_WHERE = {
 } as const
 
 /**
+ * 이미 가져온 User 가 실회원인가 — REAL_MEMBER_WHERE 와 같은 기준을 코드로 쓴 것.
+ *
+ * 🔴 where 로 거를 수 없는 자리에서 쓴다.
+ *    신고 화면의 대상 작성자는 Report → Post/Comment → User 로 딸려 온다.
+ *    거기에 실회원 조건을 걸면 신고 자체가 목록에서 사라진다 — 페르소나 글이
+ *    신고당해도 운영자가 못 보게 된다. 신고는 다 보이되 조치 버튼만 가린다.
+ *
+ * 🔴 판정 근거를 여기 한 곳에 둔다. 화면에서 accounts.length 를 직접 세면
+ *    REAL_MEMBER_WHERE 를 고칠 때 그쪽이 따라오지 않는다.
+ *
+ * 🔴 select 에 accounts(provider:'kakao' 필터)와 persona 를 반드시 포함해야 한다.
+ *    빠뜨리면 타입이 막는다 — 런타임에 조용히 false 가 되지 않게 하려는 것이다.
+ */
+export function isRealMember(user: {
+  accounts: { id: string }[]
+  persona: { id: string } | null
+}): boolean {
+  return user.accounts.length > 0 && user.persona === null
+}
+
+/**
  * 글 상세의 고객 경로. 만들 수 없으면 null 이다.
  *
  * 🔴 매거진은 제외한다.

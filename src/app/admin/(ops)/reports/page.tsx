@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
-import { formatKst } from '@/lib/admin-format'
+import { formatKst, isRealMember } from '@/lib/admin-format'
 import { REPORT_REASONS } from '@/lib/report-reasons'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminCommentEditForm from '@/components/admin/AdminCommentEditForm'
@@ -86,7 +86,18 @@ const SELECT = {
       title: true,
       content: true,
       status: true,
-      author: { select: { id: true, nickname: true, name: true, isAdmin: true, isBlocked: true } },
+      author: {
+        select: {
+          id: true,
+          nickname: true,
+          name: true,
+          isAdmin: true,
+          isBlocked: true,
+          // 🔴 실회원 판정 재료. isRealMember 가 이 둘을 본다 — 빠뜨리면 타입이 막는다.
+          accounts: { where: { provider: 'kakao' }, select: { id: true }, take: 1 },
+          persona: { select: { id: true } },
+        },
+      },
     },
   },
   comment: {
@@ -95,7 +106,18 @@ const SELECT = {
       content: true,
       isDeleted: true,
       postId: true,
-      author: { select: { id: true, nickname: true, name: true, isAdmin: true, isBlocked: true } },
+      author: {
+        select: {
+          id: true,
+          nickname: true,
+          name: true,
+          isAdmin: true,
+          isBlocked: true,
+          // 🔴 실회원 판정 재료. isRealMember 가 이 둘을 본다 — 빠뜨리면 타입이 막는다.
+          accounts: { where: { provider: 'kakao' }, select: { id: true }, take: 1 },
+          persona: { select: { id: true } },
+        },
+      },
     },
   },
 } as const
@@ -129,9 +151,25 @@ function displayName(user: { nickname: string | null; name: string | null }): st
 /** 신고 카드 하나 — 판단 재료와 조치를 한 자리에 둔다. */
 function ReportCard({ report }: { report: ReportRow }) {
   const targetPostId = report.post?.id ?? report.comment?.postId ?? null
-  const postHidden = report.post ? report.post.status !== 'PUBLISHED' : false
+
+  /**
+   * 🔴 status 를 세 값으로 나눠 본다. `!== 'PUBLISHED'` 로 묶으면 DELETED 가
+   *    "숨김" 으로 보이고 "글 다시 공개" 버튼까지 뜬다 — 눌러도 서버가 막아
+   *    반드시 실패하는 버튼이 된다. /admin/content/[id] 도 DELETED 를 따로 가른다.
+   */
+  const postDeleted = report.post?.status === 'DELETED'
+  const postHidden = report.post?.status === 'HIDDEN'
+
   // 글 신고면 글 작성자, 댓글 신고면 댓글 작성자다. 둘 다 없으면 대상이 사라진 것이다.
   const author: TargetAuthor | null = report.post?.author ?? report.comment?.author ?? null
+
+  /**
+   * 🔴 조치 대상이 될 수 있는 사람인가.
+   *    페르소나·시스템 계정은 회원 상세가 열리지 않는다(REAL_MEMBER_WHERE).
+   *    그쪽에서 막아 둔 차단을 이 화면이 열어 주면 안 된다 — 차단해 놓고
+   *    해제하러 갈 화면이 없어진다. 신고는 그대로 보이되 조치 버튼만 가린다.
+   */
+  const authorIsMember = author ? isRealMember(author) : false
 
   return (
     <li className="rounded-lg border border-subtle bg-surface-card p-4">
@@ -158,20 +196,30 @@ function ReportCard({ report }: { report: ReportRow }) {
       {author ? (
         <p className="mt-2 text-sm text-content-primary">
           작성자:{' '}
-          <Link href={`/admin/members/${author.id}`} className="text-link">
-            {displayName(author)}
-          </Link>
+          {authorIsMember ? (
+            <Link href={`/admin/members/${author.id}`} className="text-link">
+              {displayName(author)}
+            </Link>
+          ) : (
+            // 회원 상세가 열리지 않는 계정이다. 링크를 걸면 404 로 보낸다.
+            <span>{displayName(author)}</span>
+          )}
           {author.isBlocked ? (
             <span className="ml-1 text-xs font-bold text-state-danger">차단됨</span>
           ) : null}
           {author.isAdmin ? <span className="ml-1 text-xs text-content-muted">운영자</span> : null}
+          {authorIsMember ? null : (
+            <span className="ml-1 text-xs text-content-muted">
+              {author.persona ? '페르소나' : '시스템 계정'}
+            </span>
+          )}
         </p>
       ) : null}
 
       {report.post ? (
         <div className="mt-2">
           <p className="m-0 text-sm text-content-primary">
-            대상 글{postHidden ? ' (숨김 상태)' : ''}:{' '}
+            대상 글{postDeleted ? ' (삭제 상태)' : postHidden ? ' (숨김 상태)' : ''}:{' '}
             <Link href={`/admin/content/${report.post.id}`} className="text-link">
               {report.post.title}
             </Link>
@@ -243,8 +291,10 @@ function ReportCard({ report }: { report: ReportRow }) {
           />
         )}
 
-        {/* 가리기와 되돌리기를 같은 자리에 둔다 — 잘못 가렸을 때 화면을 옮기지 않게 한다. */}
-        {report.post ? (
+        {/* 가리기와 되돌리기를 같은 자리에 둔다 — 잘못 가렸을 때 화면을 옮기지 않게 한다.
+            🔴 DELETED 는 둘 다 렌더하지 않는다. 삭제는 이 화면이 만드는 상태도,
+               되돌리는 상태도 아니다 — setPostHidden 이 서버에서 거절한다. */}
+        {report.post && !postDeleted ? (
           postHidden ? (
             <AdminActionButton
               label="글 다시 공개"
@@ -293,8 +343,10 @@ function ReportCard({ report }: { report: ReportRow }) {
           <AdminCommentEditForm commentId={report.comment.id} content={report.comment.content} />
         ) : null}
 
-        {/* 🔴 회원 차단은 글·댓글을 지우지 않는다. 운영자는 차단하지 않는다. */}
-        {author ? (
+        {/* 🔴 회원 차단은 글·댓글을 지우지 않는다. 운영자는 차단하지 않는다.
+            🔴 실회원이 아니면 버튼 자체를 렌더하지 않는다 — 페르소나·시스템 계정을
+               차단하면 해제하러 갈 회원 상세가 없다(REAL_MEMBER_WHERE 로 notFound). */}
+        {author && authorIsMember ? (
           author.isBlocked ? (
             <AdminActionButton
               label="작성자 차단 해제"
