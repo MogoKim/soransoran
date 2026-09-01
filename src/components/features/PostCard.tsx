@@ -38,12 +38,12 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
       </h3>
 
       {/* 🔴 위계는 크기가 아니라 굵기와 색이 만든다 —
-          제목(body/700 primary) · 미리보기(sm/400 secondary) · 메타(caption muted).
+          제목(body/700 primary) · 미리보기(caption/400 secondary) · 메타(caption muted).
           제목을 본문 크기에 둔다: 목록은 훑는 화면이라 한 화면에 들어오는 줄 수가
           제목 한 급 키우는 것보다 낫다. 굵기와 색만으로도 제목이 먼저 잡힌다.
           답답함은 행을 줄여서가 아니라 덩어리를 갈라서 푼다 — 그래서 여백은 오히려 늘렸다. */}
       {preview ? (
-        <p className="mt-2 line-clamp-2 break-keep text-sm text-content-secondary">
+        <p className="mt-2 line-clamp-2 break-keep text-xs text-content-secondary">
           {preview}
         </p>
       ) : null}

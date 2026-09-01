@@ -56,7 +56,9 @@ function SectionHeading({
       /* 더보기 유무와 관계없이 홈 섹션 머리 높이를 맞춘다. */
       className="mb-3 flex min-h-[52px] items-center justify-between"
     >
-      <h2 className="flex items-center gap-2 text-xl font-bold text-content-primary">
+      {/* 🔴 섹션 제목은 title 축이다. heading 축에 두면 "크게" 에서 32px 이 되어
+          정작 읽을 글 제목(24px)보다 섹션 이름이 더 크게 선다. */}
+      <h2 className="flex items-center gap-2 text-lg font-bold text-content-primary">
         <span
           aria-hidden
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]"

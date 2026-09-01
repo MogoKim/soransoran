@@ -63,20 +63,21 @@ export default function PostListItem({
           그래서 제목과 같은 크기까지만 쓴다. 제목보다 크면 행에서 먼저 읽히는 것이
           "몇 번째인가" 가 되어, 무엇을 읽을지 고르는 일이 뒤로 밀린다.
           눈에 띄는 몫은 코랄색과 기울임이 가진다 — 기울임은 여기 한 곳에만 둔다. */}
-      <span className="w-8 shrink-0 text-center text-base font-bold italic leading-none text-brand-ink">
+      <span className="w-8 shrink-0 text-center text-sm font-bold italic leading-none text-brand-ink">
         {rank}
       </span>
 
       <span className="flex min-w-0 flex-col gap-1.5">
         <span
           /* 🔴 제목이 주 정보다 — 순번과 배지보다 먼저 읽혀야 한다.
-             그 우위는 크기가 아니라 굵기(semibold)와 색(primary)이 만든다.
+             그 우위는 크기가 아니라 굵기(medium)와 색(primary)이 만든다.
+             semibold 까지 올리면 "크게" 에서 제목 덩어리가 화면을 눌러 답답해진다.
              홈·베스트만 한 급 키우던 것을 되돌렸다 — 같은 목록인데 화면마다
              제목 크기가 달라지면 어디를 보고 있는지가 흐려지고, 훑는 화면에서
              한 화면에 들어오는 줄 수만 줄어든다.
              emphasis 는 이제 배지 톤(quiet)만 가른다. */
           className={cn(
-            'line-clamp-2 break-keep font-semibold leading-[1.5] text-content-primary',
+            'line-clamp-2 break-keep font-medium leading-[1.5] text-content-primary',
             'transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink',
           )}
         >

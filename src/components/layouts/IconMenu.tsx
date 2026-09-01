@@ -62,8 +62,10 @@ export default function IconMenu() {
                 >
                   <MenuIcon name={board.icon} />
                 </span>
+                {/* 🔴 라벨은 caption 축에 둔다. sm 축에 두면 "크게" 에서 22px 이 되어
+                    76px 로 잡아둔 칸을 밀어내고, 카테고리 행만 유독 뚱뚱해진다. */}
                 <span
-                  className={`break-keep text-center text-sm leading-tight ${active ? 'font-bold' : 'text-content-muted'}`}
+                  className={`break-keep text-center text-xs leading-tight ${active ? 'font-bold' : 'text-content-muted'}`}
                   style={active ? { color: `var(${board.iconTextVar})` } : undefined}
                 >
                   {board.label}
