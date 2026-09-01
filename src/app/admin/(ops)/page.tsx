@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
+import { REAL_MEMBER_WHERE } from '@/lib/admin-format'
 
 /**
  * 운영 홈 — 바로가기와 "지금 확인할 것" 만 둔다.
@@ -27,8 +28,10 @@ export default async function AdminHomePage() {
   const [pendingReports, recentPosts, recentMembers, blockedMembers] = await Promise.all([
     prisma.report.count({ where: { status: 'PENDING' } }),
     prisma.post.count({ where: { createdAt: { gte: since } } }),
-    prisma.user.count({ where: { createdAt: { gte: since } } }),
-    prisma.user.count({ where: { isBlocked: true } }),
+    // 🔴 회원 수는 실회원 기준이다 — 목록·상세와 같은 조각을 쓴다.
+    //    페르소나 User 가 섞이면 "가입이 늘었다" 가 거짓이 된다.
+    prisma.user.count({ where: { ...REAL_MEMBER_WHERE, createdAt: { gte: since } } }),
+    prisma.user.count({ where: { ...REAL_MEMBER_WHERE, isBlocked: true } }),
   ])
 
   const cards = [

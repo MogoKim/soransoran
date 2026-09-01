@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
-import { formatKst, orDash } from '@/lib/admin-format'
+import { formatKst, orDash, REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import { setMemberBlocked } from '@/lib/actions/admin'
 
@@ -13,6 +13,10 @@ import { setMemberBlocked } from '@/lib/actions/admin'
  * 🔴 개인정보는 이 화면에만 둔다. 목록으로 새어 나가지 않게 한다.
  * 🔴 긴 값(id·이메일·전화번호)은 break-all 로 접는다 — 모바일에서 가로 스크롤이 생기면
  *    옆 칸을 덮어 읽을 수 없다.
+ * 🔴 실회원이 아니면 notFound 다 — 목록과 같은 기준(REAL_MEMBER_WHERE)을 쓴다.
+ *    목록에서 뺀 사람이 주소만 알면 열리는 상태가 가장 위험하다.
+ *    페르소나 User 를 여기서 열면 차단 버튼까지 보이게 된다.
+ *
  * 🔴 isAdmin 을 화면에서 바꾸지 않는다. 권한 부여는 어드민의 일이 아니다.
  */
 export const metadata: Metadata = { title: '회원 상세' }
@@ -39,8 +43,9 @@ export default async function AdminMemberDetailPage({
 
   const { id } = await params
 
-  const member = await prisma.user.findUnique({
-    where: { id },
+  // findUnique 는 id 외 조건을 받지 못한다. 실회원 조건을 함께 걸려면 findFirst 다.
+  const member = await prisma.user.findFirst({
+    where: { id, ...REAL_MEMBER_WHERE },
     select: {
       id: true,
       name: true,

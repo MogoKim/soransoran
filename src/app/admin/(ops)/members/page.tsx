@@ -2,13 +2,18 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
-import { formatKst } from '@/lib/admin-format'
+import { formatKst, REAL_MEMBER_WHERE } from '@/lib/admin-format'
 
 /**
  * 회원 목록 — 가볍게 본다.
  *
  * 🔴 목록에 개인정보를 뿌리지 않는다.
  *    이메일·전화번호·생년은 상세에서만 본다. 목록은 어깨너머로도 보이는 화면이다.
+ *
+ * 🔴 실회원만 싣는다 — REAL_MEMBER_WHERE.
+ *    페르소나도 User 행을 갖지만 차단하거나 상세를 열 대상이 아니다.
+ *
+ * 🔴 총계는 count 로 센다. 이 페이지가 실은 수(take 100)를 총계처럼 말하지 않는다.
  *
  * 🔴 신고 수는 "이 회원이 신고한 수" 다. 신고당한 수가 아니다 —
  *    Report 는 글·댓글을 가리키지 회원을 가리키지 않는다. 상세에서 글 기준으로 센다.
@@ -22,26 +27,31 @@ export default async function AdminMembersPage() {
   const { ok } = await requireAdmin()
   if (!ok) return null
 
-  const members = await prisma.user.findMany({
-    select: {
-      id: true,
-      name: true,
-      nickname: true,
-      isOnboarded: true,
-      isAdmin: true,
-      isBlocked: true,
-      createdAt: true,
-      _count: { select: { posts: true, comments: true, reports: true } },
-    },
-    orderBy: { createdAt: 'desc' },
-    take: TAKE,
-  })
+  const [total, members] = await Promise.all([
+    prisma.user.count({ where: REAL_MEMBER_WHERE }),
+    prisma.user.findMany({
+      where: REAL_MEMBER_WHERE,
+      select: {
+        id: true,
+        name: true,
+        nickname: true,
+        isOnboarded: true,
+        isAdmin: true,
+        isBlocked: true,
+        createdAt: true,
+        _count: { select: { posts: true, comments: true, reports: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: TAKE,
+    }),
+  ])
 
   return (
     <main>
       <h1 className="pt-8 text-xl font-bold text-content-primary">회원 관리</h1>
       <p className="mt-1 text-sm text-content-muted">
-        최근 가입순 {TAKE}명까지 · 총 {members.length}명 · 이름을 누르면 상세로 갑니다
+        가입 회원 총 {total}명 · 최근 가입순 {members.length}명 표시 · 이름을 누르면 상세로
+        갑니다
       </p>
 
       {members.length === 0 ? (

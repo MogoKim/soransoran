@@ -18,12 +18,20 @@ import { setReportStatus, setPostHidden, setCommentHidden } from '@/lib/actions/
  *
  * 🔴 삭제하지 않는다. 글은 HIDDEN, 댓글은 isDeleted 로만 가린다.
  *
- * 미처리(PENDING)를 위에 둔다 — 오늘 할 일이 먼저 보여야 한다.
+ * 🔴 최신 N건을 받아 그 안에서 PENDING 을 고르지 않는다.
+ *    신고가 쌓이면 오래된 미처리가 N건 밖으로 밀려 화면에서 사라진다 —
+ *    가장 오래 방치된 건이 가장 먼저 안 보이게 된다.
+ *    PENDING 과 처리분을 각각 따로 조회한다.
+ *
+ * 🔴 미처리 수는 count 로 센다. 실은 목록의 길이가 아니다.
+ *
+ * 미처리는 오래된 순이다 — 가장 오래 기다린 신고가 맨 위로 온다.
  */
 export const metadata: Metadata = { title: '신고 관리' }
 export const dynamic = 'force-dynamic'
 
-const TAKE = 200
+/** 한 번에 싣는 최대 건수 — 미처리·처리분 각각에 적용한다 */
+const TAKE = 100
 const REASON_LABEL = new Map<string, string>(REPORT_REASONS.map((r) => [r.value, r.label]))
 
 const STATUS_LABEL: Record<string, string> = {
@@ -36,34 +44,45 @@ export default async function AdminReportsPage() {
   const { ok } = await requireAdmin()
   if (!ok) return null
 
-  const reports = await prisma.report.findMany({
-    select: {
-      id: true,
-      postId: true,
-      commentId: true,
-      reason: true,
-      detail: true,
-      status: true,
-      createdAt: true,
-      reviewedAt: true,
-      reporter: { select: { id: true, nickname: true, name: true } },
-      post: { select: { id: true, title: true, status: true } },
-      comment: { select: { id: true, content: true, isDeleted: true, postId: true } },
-    },
-    // 미처리 우선 — PENDING < RESOLVED < REVIEWED 라 enum 정렬로는 안 된다.
-    orderBy: { createdAt: 'desc' },
-    take: TAKE,
-  })
+  // 미처리와 처리분이 같은 필드를 읽는다. 두 번 적으면 한쪽만 고쳐지는 날이 온다.
+  const SELECT = {
+    id: true,
+    postId: true,
+    commentId: true,
+    reason: true,
+    detail: true,
+    status: true,
+    createdAt: true,
+    reviewedAt: true,
+    reporter: { select: { id: true, nickname: true, name: true } },
+    post: { select: { id: true, title: true, status: true } },
+    comment: { select: { id: true, content: true, isDeleted: true, postId: true } },
+  } as const
 
-  const pending = reports.filter((r) => r.status === 'PENDING')
-  const handled = reports.filter((r) => r.status !== 'PENDING')
+  const [pendingCount, pending, handled] = await Promise.all([
+    prisma.report.count({ where: { status: 'PENDING' } }),
+    prisma.report.findMany({
+      where: { status: 'PENDING' },
+      select: SELECT,
+      orderBy: { createdAt: 'asc' },
+      take: TAKE,
+    }),
+    prisma.report.findMany({
+      where: { status: { not: 'PENDING' } },
+      select: SELECT,
+      orderBy: { createdAt: 'desc' },
+      take: TAKE,
+    }),
+  ])
+
   const ordered = [...pending, ...handled]
 
   return (
     <main>
       <h1 className="pt-8 text-xl font-bold text-content-primary">신고 관리</h1>
       <p className="mt-1 text-sm text-content-muted">
-        미처리 {pending.length}건 · 최근 {TAKE}건까지 · 총 {reports.length}건
+        미처리 {pendingCount}건 (오래된 순) · 처리분 최근 {handled.length}건 · 한 번에 {TAKE}건까지
+        싣습니다
       </p>
 
       {ordered.length === 0 ? (
