@@ -37,13 +37,19 @@ export default function AdminHomeOverrideControls({
     })
   }
 
-  // 예외 조작은 되돌리기 쉬운 보조 조작이다 — 브랜드색을 주지 않는다.
+  /**
+   * 🔴 순서 이동과 해제는 무게가 다르다.
+   *    위/아래는 몇 번을 눌러도 되돌아오는 조작이라 테두리 없는 ghost 로 둔다.
+   *    해제는 예외를 없애 홈 구성이 바로 바뀌므로 그것만 눈에 걸어 둔다.
+   */
   const base =
-    'inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-3 text-sm font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98] disabled:opacity-50 lg:min-h-[36px]'
+    'inline-flex min-h-[52px] items-center justify-center rounded-lg px-2 text-sm transition duration-150 active:scale-[0.98] disabled:opacity-50 lg:min-h-[30px]'
+  const ghost = `${base} text-content-muted hover:bg-surface-soft hover:text-content-primary`
+  const danger = `${base} border border-interactive font-bold text-state-danger hover:bg-surface-soft`
 
   return (
-    <div className="mt-2 flex flex-col gap-1">
-      <div className="flex flex-wrap gap-2">
+    <div className="flex flex-col gap-1 lg:items-end">
+      <div className="flex flex-wrap items-center gap-1">
         {canMove ? (
           <>
             <button
@@ -68,12 +74,12 @@ export default function AdminHomeOverrideControls({
           type="button"
           disabled={pending}
           onClick={() => run(() => deactivateHomeOverride(overrideId))}
-          className={base}
+          className={danger}
         >
           {pending ? '처리 중…' : '해제'}
         </button>
       </div>
-      {error ? <p className="text-sm text-state-danger">{error}</p> : null}
+      {error ? <p className="m-0 text-xs text-state-danger">{error}</p> : null}
     </div>
   )
 }
