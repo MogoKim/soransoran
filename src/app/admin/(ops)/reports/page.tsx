@@ -69,6 +69,7 @@ const SELECT = {
       isDeleted: true,
       postId: true,
       author: AUTHOR_SELECT,
+      guestNickname: true,
     },
   },
 } as const

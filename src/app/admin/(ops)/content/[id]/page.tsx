@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
 import { boardLabel, communityPostHref, formatKst } from '@/lib/admin-format'
 import { REPORT_REASONS } from '@/lib/report-reasons'
+import { GUEST_BADGE } from '@/lib/guest-comment-policy'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminPostEditForm from '@/components/admin/AdminPostEditForm'
 import AdminCommentEditForm from '@/components/admin/AdminCommentEditForm'
@@ -69,6 +70,7 @@ export default async function AdminContentDetailPage({
           isDeleted: true,
           createdAt: true,
           author: { select: { id: true, nickname: true, name: true } },
+          guestNickname: true,
         },
         orderBy: { createdAt: 'asc' },
       },
@@ -189,9 +191,17 @@ export default async function AdminContentDetailPage({
                   {c.content}
                 </p>
                 <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-content-muted">
-                  <Link href={`/admin/members/${c.author.id}`} className="text-link">
-                    {c.author.nickname ?? c.author.name ?? '회원'}
-                  </Link>
+                  {/* 🔴 비회원 댓글은 author 가 null 이다. 회원 상세 링크를 걸면 404 로 보낸다. */}
+                  {c.author ? (
+                    <Link href={`/admin/members/${c.author.id}`} className="text-link">
+                      {c.author.nickname ?? c.author.name ?? '회원'}
+                    </Link>
+                  ) : (
+                    <>
+                      <span>{c.guestNickname ?? '비회원'}</span>
+                      <AdminBadge>{GUEST_BADGE}</AdminBadge>
+                    </>
+                  )}
                   <span>{formatKst(c.createdAt)}</span>
                   {c.isDeleted ? <AdminBadge tone="danger">숨김</AdminBadge> : null}
                 </p>
