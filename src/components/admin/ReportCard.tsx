@@ -69,7 +69,9 @@ export type ReportCardData = {
     content: string
     isDeleted: boolean
     postId: string
-    author: Author
+    /** 🔴 비회원 댓글은 null 이다. 회원이 비회원 댓글을 신고하면 이 자리가 빈다. */
+    author: Author | null
+    guestNickname?: string | null
   } | null
 }
 
@@ -90,6 +92,8 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
 
   // 글 신고면 글 작성자, 댓글 신고면 댓글 작성자다. 둘 다 없으면 대상이 사라진 것이다.
   const author: Author | null = report.post?.author ?? report.comment?.author ?? null
+  // 대상은 있는데 작성자만 없다 = 비회원 댓글. "대상이 사라졌다" 와 구분해 적는다.
+  const guestName = !author && report.comment ? (report.comment.guestNickname ?? '비회원') : null
 
   /**
    * 🔴 조치 대상이 될 수 있는 사람인가.
@@ -162,6 +166,15 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
 
       {/* ③ 누가 썼나 · ④ 누가 신고했나 */}
       <dl className="mt-3 flex flex-col gap-1 text-sm sm:flex-row sm:gap-6">
+        {guestName ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <dt className="text-content-muted">작성자</dt>
+            <dd className="m-0 flex flex-wrap items-center gap-1 text-content-primary">
+              <span>{guestName}</span>
+              <AdminBadge>비회원</AdminBadge>
+            </dd>
+          </div>
+        ) : null}
         {author ? (
           <div className="flex flex-wrap items-center gap-2">
             <dt className="text-content-muted">작성자</dt>

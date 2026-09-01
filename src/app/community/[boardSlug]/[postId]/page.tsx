@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import CommentForm from '@/components/features/CommentForm'
+import GuestCommentForm from '@/components/features/GuestCommentForm'
 import DeleteButton from '@/components/features/DeleteButton'
 import CommentItem from '@/components/features/CommentItem'
 import NextToRead from '@/components/features/NextToRead'
@@ -180,23 +181,9 @@ export default async function PostDetailPage({
           {session?.user ? (
             <CommentForm postId={post.id} boardSlug={board.slug} />
           ) : (
-            /* 🔴 코랄 fill 을 쓰지 않는다. 아래 WriteCta 와 FAB 이 이미 코랄이라
-                  같은 화면에 주 버튼이 셋이 되면 어느 것도 주가 아니게 된다.
-                  여기는 보더로 자기를 알리는 자리다 (--border-interactive). */
-            <div className="rounded-2xl border border-subtle bg-surface-card p-5 text-center">
-              <p className="break-keep leading-relaxed text-content-primary">
-                이 글을 읽고 든 생각을 한 줄로 남겨주세요.
-              </p>
-              <Link
-                href={loginHref(`${board.href}/${post.id}`)}
-                className="mt-4 inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-6 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
-              >
-                로그인하고 댓글 쓰기
-              </Link>
-              <p className="mt-2 text-xs leading-relaxed text-content-muted">
-                로그인하면 읽던 글로 다시 돌아옵니다.
-              </p>
-            </div>
+            /* 🔴 로그인 카드를 비회원 폼으로 바꾼다. 읽고 든 생각을 그 자리에서
+                  남기지 못하면 대부분 그냥 나간다. 가입 권유는 등록한 뒤에 한 줄로 한다. */
+            <GuestCommentForm postId={post.id} boardSlug={board.slug} />
           )}
         </section>
 

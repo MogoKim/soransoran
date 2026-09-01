@@ -1,13 +1,18 @@
 import { formatRelativeTime } from '@/lib/date'
 import { displayName } from '@/lib/display-name'
 import CommentEditor from '@/components/features/CommentEditor'
+import GuestCommentControls from '@/components/features/GuestCommentControls'
 import ReportButton from '@/components/features/ReportButton'
+import { GUEST_BADGE } from '@/lib/guest-comment-policy'
 
 export type CommentItemData = {
   id: string
   content: string
   createdAt: Date
-  author: { id: string; name: string | null; nickname: string | null }
+  /** 🔴 비회원 댓글은 null 이다. 이 자리를 non-null 로 두면 화면이 터진다. */
+  author: { id: string; name: string | null; nickname: string | null } | null
+  /** author 가 null 일 때 화면에 부를 이름 */
+  guestNickname?: string | null
 }
 
 type CommentItemProps = {
@@ -24,7 +29,13 @@ export default function CommentItem({
   postId,
   currentUserId,
 }: CommentItemProps) {
-  const isOwn = currentUserId === comment.author.id
+  /**
+   * 🔴 본인 판정은 회원 댓글에만 쓴다.
+   *    author 가 null 인 비회원 댓글에서 currentUserId 와 비교하면
+   *    둘 다 undefined 인 비로그인 방문자에게 남의 댓글이 "내 댓글" 로 열린다.
+   */
+  const isOwn = Boolean(comment.author && currentUserId === comment.author.id)
+  const isGuest = comment.author === null
 
   // 🔴 본문은 여기서 한 번만 그린다.
   //    본인 댓글은 이것을 CommentEditor 에 넘겨 읽기 모드로 쓰게 한다 —
@@ -40,7 +51,14 @@ export default function CommentItem({
           그래서 선으로 세운다. 매거진의 쉬는 칩과 같은 이유다. */
     <li className="rounded-lg border border-subtle bg-surface-card p-4">
       <div className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
-        <span className="font-bold text-brand-ink">{displayName(comment.author)}</span>
+        <span className="font-bold text-brand-ink">
+          {comment.author ? displayName(comment.author) : (comment.guestNickname ?? '비회원')}
+        </span>
+        {isGuest ? (
+          <span className="rounded bg-surface-page px-1.5 py-0.5 text-content-muted">
+            {GUEST_BADGE}
+          </span>
+        ) : null}
         <span aria-hidden>·</span>
         <span>{formatRelativeTime(comment.createdAt)}</span>
       </div>
@@ -54,6 +72,16 @@ export default function CommentItem({
         >
           {body}
         </CommentEditor>
+      ) : isGuest ? (
+        <>
+          {body}
+          {/* 비회원 댓글은 비밀번호로 고치고 지운다. 신고는 1차 범위가 아니다. */}
+          <GuestCommentControls
+            commentId={comment.id}
+            boardSlug={boardSlug}
+            content={comment.content}
+          />
+        </>
       ) : (
         <>
           {body}

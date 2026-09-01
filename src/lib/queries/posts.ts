@@ -310,13 +310,24 @@ export async function getPostDetail(postId: string) {
     where: {
       postId,
       isDeleted: false,
-      ...(blockedIds.length ? { authorId: { notIn: blockedIds } } : {}),
+      /**
+       * 🔴 authorId: { notIn } 만 쓰면 비회원 댓글이 통째로 사라진다.
+       *    SQL 의 NOT IN 은 NULL 에 대해 NULL(=거짓)을 돌려주므로
+       *    authorId 가 null 인 댓글은 조건을 통과하지 못한다.
+       *    차단한 사람이 한 명이라도 생기는 순간 조용히 없어지는 종류의 버그다.
+       *    "비회원 댓글은 보이고, 차단한 회원의 댓글만 빠진다" 를 그대로 적는다.
+       */
+      ...(blockedIds.length
+        ? { OR: [{ authorId: null }, { authorId: { notIn: blockedIds } }] }
+        : {}),
     },
     select: {
       id: true,
       content: true,
       createdAt: true,
+      // 비회원 댓글은 author 가 null 이고 guestNickname 이 채워진다.
       author: { select: { id: true, name: true, nickname: true, image: true } },
+      guestNickname: true,
     },
     orderBy: { createdAt: 'asc' },
   })
