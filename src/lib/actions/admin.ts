@@ -5,6 +5,13 @@ import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
 import { getBoardByType, type BoardType } from '@/lib/board-registry'
 import { communityPostHref } from '@/lib/admin-format'
+import {
+  COMMENT_TOO_LONG,
+  COMMENT_TOO_SHORT,
+  MAX_COMMENT_LENGTH,
+  MIN_COMMENT_LENGTH,
+} from '@/lib/comment-policy'
+import { checkContent } from '@/lib/content-guard'
 
 /**
  * 어드민 1차 MVP — 운영 write 경로. 🔴 이 파일이 유일한 지점이다.
@@ -130,6 +137,55 @@ export async function setCommentHidden(
   revalidatePath(`/admin/content/${comment.postId}`)
   revalidatePath('/admin/reports')
   // 댓글 수가 홈 인기글 점수에 들어간다 — 글 표면을 함께 다시 그린다.
+  revalidatePostSurfaces(comment.postId, comment.post.boardType)
+  return { ok: true }
+}
+
+/**
+ * 댓글 본문 수정 — 운영자용.
+ *
+ * 🔴 고객용 updateComment 를 쓰지 않는다.
+ *    그쪽은 "본인 댓글만" 이 성립 조건이라 authorId 를 세션과 대조하고 rate limit 을 건다.
+ *    운영자는 남의 댓글을 고치는 사람이라 그 경로로는 통과할 수 없다.
+ *
+ * 🔴 바꾸는 것은 content 하나뿐이다.
+ *    authorId · postId · createdAt · isDeleted · source · commentOrigin · personaId 는
+ *    건드리지 않는다. 누가 언제 어느 레인에서 썼는지가 바뀌면 추적이 끊긴다.
+ *
+ * 🔴 숨김 댓글도 고칠 수 있다. 대신 숨김 상태는 그대로 둔다 —
+ *    고치는 것과 다시 보이게 하는 것은 다른 판단이고, 묶으면 실수로 되살아난다.
+ *
+ * 🔴 길이·금지어는 고객과 같은 기준을 쓴다(comment-policy · content-guard).
+ *    운영자가 고쳤다는 이유로 고객 화면에 다른 기준의 글이 남으면 안 된다.
+ */
+export async function updateCommentContent(
+  _prev: AdminActionState,
+  formData: FormData,
+): Promise<AdminActionState> {
+  const { ok } = await requireAdmin()
+  if (!ok) return DENIED
+
+  const commentId = String(formData.get('commentId') ?? '')
+  const content = String(formData.get('content') ?? '').trim()
+
+  if (!commentId) return { error: '댓글을 찾지 못했습니다.' }
+  if (content.length < MIN_COMMENT_LENGTH) return { error: COMMENT_TOO_SHORT }
+  if (content.length > MAX_COMMENT_LENGTH) return { error: COMMENT_TOO_LONG }
+
+  const guard = checkContent(content)
+  if (!guard.ok) return { error: guard.reason }
+
+  const comment = await prisma.comment.findUnique({
+    where: { id: commentId },
+    select: { id: true, postId: true, post: { select: { boardType: true } } },
+  })
+  if (!comment) return { error: '댓글을 찾지 못했습니다.' }
+
+  await prisma.comment.update({ where: { id: commentId }, data: { content } })
+
+  revalidatePath(`/admin/content/${comment.postId}`)
+  revalidatePath('/admin/content')
+  revalidatePath('/admin/reports')
   revalidatePostSurfaces(comment.postId, comment.post.boardType)
   return { ok: true }
 }
