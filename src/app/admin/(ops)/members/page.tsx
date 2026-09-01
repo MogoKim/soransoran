@@ -36,7 +36,7 @@ const TAKE = 100
  * 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다.
  * 이름은 남는 폭을 먹고, 나머지는 내용 길이에 맞춰 고정한다.
  */
-const COLS = 'lg:grid-cols-[minmax(0,1fr)_9rem_11rem_7rem]'
+const COLS = 'lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_8.5rem_10rem_8rem]'
 
 export default async function AdminMembersPage() {
   const { ok } = await requireAdmin()
@@ -50,6 +50,7 @@ export default async function AdminMembersPage() {
         id: true,
         name: true,
         nickname: true,
+        email: true,
         isOnboarded: true,
         isAdmin: true,
         isBlocked: true,
@@ -60,6 +61,37 @@ export default async function AdminMembersPage() {
       take: TAKE,
     }),
   ])
+
+  /**
+   * 신고당한 수 — Report 는 회원이 아니라 글·댓글을 가리킨다.
+   * 목록에 이 값이 없으면 운영자가 "문제 회원인가" 를 알려고 상세를 하나씩 열어야 했다.
+   * _count.reports 는 "이 회원이 신고한 수" 라 뜻이 정반대다.
+   */
+  const reportedRows = members.length
+    ? await prisma.report.findMany({
+        where: {
+          OR: [
+            { post: { authorId: { in: members.map((m) => m.id) } } },
+            { comment: { authorId: { in: members.map((m) => m.id) } } },
+          ],
+        },
+        select: {
+          status: true,
+          post: { select: { authorId: true } },
+          comment: { select: { authorId: true } },
+        },
+      })
+    : []
+
+  const reportedAgainst = new Map<string, { total: number; pending: number }>()
+  for (const r of reportedRows) {
+    const authorId = r.post?.authorId ?? r.comment?.authorId
+    if (!authorId) continue
+    const cur = reportedAgainst.get(authorId) ?? { total: 0, pending: 0 }
+    cur.total += 1
+    if (r.status === 'PENDING') cur.pending += 1
+    reportedAgainst.set(authorId, cur)
+  }
 
   return (
     <main className="pt-2 lg:pt-0">
@@ -81,37 +113,50 @@ export default async function AdminMembersPage() {
           columns={COLS}
           head={
             <>
-              <span>회원</span>
+              <span>닉네임 · 카카오 이름</span>
+              <span>이메일</span>
               <span>가입일</span>
               <span>활동</span>
               <span>상태</span>
             </>
           }
         >
-          {members.map((m) => (
-            <AdminTableRow key={m.id} href={`/admin/members/${m.id}`} columns={COLS}>
-              <span className="flex min-w-0 flex-wrap items-baseline gap-2">
-                <span className="break-words font-bold text-content-primary">
-                  {m.nickname ?? m.name ?? '(이름 없음)'}
+          {members.map((m) => {
+            const against = reportedAgainst.get(m.id)
+            return (
+              <AdminTableRow key={m.id} href={`/admin/members/${m.id}`} columns={COLS}>
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate font-bold text-content-primary">
+                    {m.nickname ?? '(닉네임 없음)'}
+                  </span>
+                  <span className="truncate text-xs text-content-muted">
+                    {m.name ?? '(카카오 이름 없음)'}
+                  </span>
                 </span>
-                {m.nickname && m.name ? (
-                  <span className="break-words text-sm text-content-muted">{m.name}</span>
-                ) : null}
-              </span>
 
-              <AdminCell label="가입">{formatKst(m.createdAt)}</AdminCell>
+                <AdminCell label="이메일" className="truncate">
+                  {m.email ?? <span className="text-content-muted">없음</span>}
+                </AdminCell>
 
-              <AdminCell label="활동">
-                글 {m._count.posts} · 댓글 {m._count.comments} · 신고함 {m._count.reports}
-              </AdminCell>
+                <AdminCell label="가입">{formatKst(m.createdAt)}</AdminCell>
 
-              <span className="flex flex-wrap items-center gap-1">
-                {m.isBlocked ? <AdminBadge tone="danger">차단됨</AdminBadge> : null}
-                {m.isAdmin ? <AdminBadge tone="brand">운영자</AdminBadge> : null}
-                {!m.isOnboarded ? <AdminBadge>온보딩 전</AdminBadge> : null}
-              </span>
-            </AdminTableRow>
-          ))}
+                <AdminCell label="활동">
+                  글 {m._count.posts} · 댓글 {m._count.comments}
+                </AdminCell>
+
+                <span className="flex flex-wrap items-center gap-1">
+                  {m.isBlocked ? <AdminBadge tone="danger">차단됨</AdminBadge> : null}
+                  {against?.pending ? (
+                    <AdminBadge tone="warning">신고 {against.pending}건 미처리</AdminBadge>
+                  ) : against?.total ? (
+                    <AdminBadge>신고당함 {against.total}</AdminBadge>
+                  ) : null}
+                  {m.isAdmin ? <AdminBadge tone="brand">운영자</AdminBadge> : null}
+                  {!m.isOnboarded ? <AdminBadge>온보딩 전</AdminBadge> : null}
+                </span>
+              </AdminTableRow>
+            )
+          })}
         </AdminTable>
       )}
 

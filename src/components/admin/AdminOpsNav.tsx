@@ -40,10 +40,10 @@ export default function AdminOpsNav({ layout }: { layout: 'sidebar' | 'topbar' }
                 <Link
                   href={item.href}
                   aria-current={current ? 'page' : undefined}
-                  className={`flex min-h-[44px] items-center rounded-lg px-3 text-sm no-underline ${
+                  className={`flex min-h-[40px] items-center border-l-2 px-3 text-sm no-underline ${
                     current
-                      ? 'bg-surface-soft font-bold text-brand-ink'
-                      : 'font-bold text-content-muted hover:bg-surface-soft hover:text-content-primary'
+                      ? 'border-cta bg-surface-card font-bold text-content-primary'
+                      : 'border-transparent text-content-muted hover:bg-surface-card hover:text-content-primary'
                   }`}
                 >
                   {item.label}
@@ -57,7 +57,7 @@ export default function AdminOpsNav({ layout }: { layout: 'sidebar' | 'topbar' }
   }
 
   return (
-    <nav aria-label="운영 메뉴" className="-mx-4 overflow-x-auto border-b border-subtle px-4">
+    <nav aria-label="운영 메뉴" className="-mx-4 overflow-x-auto px-4">
       <ul className="m-0 flex list-none gap-1 whitespace-nowrap p-0">
         {NAV.map((item) => {
           const current = isCurrent(pathname, item.href)
@@ -66,9 +66,9 @@ export default function AdminOpsNav({ layout }: { layout: 'sidebar' | 'topbar' }
               <Link
                 href={item.href}
                 aria-current={current ? 'page' : undefined}
-                className={`inline-flex min-h-[52px] items-center border-b-2 px-3 text-sm font-bold no-underline ${
+                className={`inline-flex min-h-[52px] items-center border-b-2 px-3 text-sm no-underline ${
                   current
-                    ? 'border-interactive text-brand-ink'
+                    ? 'border-cta font-bold text-content-primary'
                     : 'border-transparent text-content-muted'
                 }`}
               >

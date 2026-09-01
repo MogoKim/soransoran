@@ -42,13 +42,22 @@ export const dynamic = 'force-dynamic'
 /** 제목 검색 결과 상한. 더 보여줘도 고르기만 어려워진다. */
 const SEARCH_LIMIT = 10
 
+/** 만료까지 남은 분. 수동 해제(무기한)는 null 이다. */
+function minutesLeft(expiresAt: Date | null, now: Date): number | null {
+  if (!expiresAt) return null
+  return Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 60000))
+}
+
 /** 만료까지 남은 시간을 사람이 읽는 말로. 지난 것은 화면에 오지 않는다. */
 function untilLabel(expiresAt: Date | null, now: Date): string {
-  if (!expiresAt) return '해제할 때까지'
-  const minutes = Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 60000))
-  const left = minutes >= 60 ? `${Math.floor(minutes / 60)}시간 ${minutes % 60}분` : `${minutes}분`
-  return `${formatKst(expiresAt)}까지 (${left} 남음)`
+  const m = minutesLeft(expiresAt, now)
+  if (m === null) return '해제할 때까지'
+  const left = m >= 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`
+  return `${formatKst(expiresAt)}까지 · ${left} 남음`
 }
+
+/** 곧 만료 = 30분 이내. 운영자가 "다시 걸어야 하나" 를 미리 알게 한다. */
+const SOON_MINUTES = 30
 
 export default async function AdminHomeExposurePage({
   searchParams,
@@ -83,6 +92,10 @@ export default async function AdminHomeExposurePage({
   const live = overrides.filter((o) => isOverrideActive(o, now))
   const pinned = live.filter((o) => o.action === 'PIN')
   const hiddenRows = live.filter((o) => o.action === 'HIDE')
+  const soonExpiring = live.filter((o) => {
+    const m = minutesLeft(o.expiresAt, now)
+    return m !== null && m <= SOON_MINUTES
+  }).length
 
   const results = query
     ? await prisma.post.findMany({
@@ -105,20 +118,21 @@ export default async function AdminHomeExposurePage({
 
   return (
     <main className="pt-2 lg:pt-0">
-      <AdminPageHeader
-        title="홈 노출"
-        description="고정·숨김은 홈 첫 화면에만 걸립니다. 글 자체도, 게시판 목록도, 베스트도 그대로입니다."
-        badges={
-          <>
-            <AdminBadge tone={pinned.length > 0 ? 'brand' : 'muted'}>
-              고정 {pinned.length}건
-            </AdminBadge>
-            <AdminBadge tone={hiddenRows.length > 0 ? 'brand' : 'muted'}>
-              홈에서 숨김 {hiddenRows.length}건
-            </AdminBadge>
-          </>
-        }
-      />
+      <AdminPageHeader title="홈 노출" />
+
+      {/* 🔴 "홈에만 영향" 을 눈에 띄는 자리에 둔다. 이것을 "글 내리기" 로 오해하면
+             지워야 할 글을 홈에서만 빼고 끝낸다. 글을 내리는 것은 게시글 화면의 일이다. */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-subtle bg-surface-card px-3 py-2 text-sm">
+        <span className="text-content-primary">
+          고정 <strong>{pinned.length}</strong> · 홈에서 숨김 <strong>{hiddenRows.length}</strong>
+        </span>
+        {soonExpiring > 0 ? (
+          <AdminBadge tone="warning">{SOON_MINUTES}분 내 만료 {soonExpiring}건</AdminBadge>
+        ) : null}
+        <span className="text-content-muted">
+          홈 첫 화면에만 걸립니다 · 게시판·글 상세·베스트는 그대로
+        </span>
+      </div>
 
       {/* ── 1) 걸려 있는 예외 — 지금 무엇이 손대져 있나 ─────── */}
       <AdminSection
@@ -184,7 +198,7 @@ export default async function AdminHomeExposurePage({
               return (
                 <li key={post.id} className="rounded-lg border border-subtle bg-surface-card p-3">
                   <p className="m-0 flex flex-wrap items-center gap-2">
-                    <AdminBadge>{index + 1}번째</AdminBadge>
+                    <span className="text-xs font-bold text-content-muted">{index + 1}</span>
                     <AdminBadge>{boardLabel(post.boardType)}</AdminBadge>
                     {pin ? <AdminBadge tone="brand">고정됨</AdminBadge> : null}
                   </p>
@@ -263,7 +277,7 @@ export default async function AdminHomeExposurePage({
             <li key={article.slug} className="rounded-lg border border-subtle bg-surface-card p-3">
               <p className="m-0 flex flex-wrap items-center gap-2">
                 <AdminBadge>{index + 1}번째</AdminBadge>
-                <AdminBadge tone={article.heroImage ? 'muted' : 'danger'}>
+                <AdminBadge tone={article.heroImage ? 'neutral' : 'danger'}>
                   대표 이미지 {article.heroImage ? '있음' : '없음'}
                 </AdminBadge>
               </p>

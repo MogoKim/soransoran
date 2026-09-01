@@ -155,13 +155,24 @@ export default async function AdminContentDetailPage({
         </Link>
       </AdminSection>
 
-      <AdminSection
-        title="글 내용 고치기"
-        description="고쳐도 작성자에게 알림이 가지 않습니다. 원문은 남지 않습니다."
-      >
-        <div className="mt-2">
-          <AdminPostEditForm postId={post.id} title={post.title} content={post.content} />
-        </div>
+      {/* 🔴 수정 폼을 펼친 채 두면 textarea 가 화면 절반을 먹어 상태·신고·댓글이 밀린다.
+             이 화면에 오는 이유는 대개 "무슨 글인지 보려고" 지 고치려는 것이 아니다. */}
+      <section className="mt-4">
+        <details>
+          <summary className="min-h-[44px] cursor-pointer list-none py-2 text-base font-bold text-content-primary">
+            글 내용 고치기{' '}
+            <span className="text-sm font-normal text-content-muted">
+              (고쳐도 작성자에게 알림이 가지 않습니다)
+            </span>
+          </summary>
+          <div className="mt-2">
+            <AdminPostEditForm postId={post.id} title={post.title} content={post.content} />
+          </div>
+        </details>
+      </section>
+
+      <AdminSection title="본문" description="고객 화면에 보이는 그대로입니다.">
+        <AdminQuote>{post.content}</AdminQuote>
       </AdminSection>
 
       <AdminSection
@@ -225,6 +236,7 @@ export default async function AdminContentDetailPage({
           </>
         ) : (
           <AdminActionGroup
+            danger
             label={hidden ? '되돌리기' : '위험한 조치'}
             hint={
               hidden

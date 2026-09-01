@@ -37,8 +37,9 @@ export default function AdminHomeOverrideControls({
     })
   }
 
+  // 예외 조작은 되돌리기 쉬운 보조 조작이다 — 브랜드색을 주지 않는다.
   const base =
-    'inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 font-bold text-brand-ink transition duration-150 hover:bg-surface-soft active:scale-[0.98] disabled:opacity-50'
+    'inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-3 text-sm font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98] disabled:opacity-50 lg:min-h-[36px]'
 
   return (
     <div className="mt-2 flex flex-col gap-1">
