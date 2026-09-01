@@ -97,7 +97,27 @@ export const BOARD_REGISTRY = [
 
 export const COMMUNITY_BOARDS = BOARD_REGISTRY.filter((b) => b.isCommunity)
 
-export const MENU_BOARDS = BOARD_REGISTRY.filter((b) => b.showInMenu)
+/**
+ * 상단 메뉴 표시 순서 — 등록 순서와 분리한다.
+ *
+ * 🔴 BOARD_REGISTRY 를 재정렬하지 않는다. 그 배열은 보드 정본이라
+ *    getBoardByType·getBoardBySlug·COMMUNITY_BOARDS 가 함께 읽는다.
+ *    메뉴 순서 하나 바꾸자고 정본을 흔들면 다른 화면이 조용히 따라 움직인다.
+ *
+ * 🔴 Record<BoardType, number> 로 둔다. 배열이면 새 보드를 넣고 여기 빠뜨려도
+ *    조용히 맨 앞으로 가지만, Record 는 컴파일이 깨져 알려준다.
+ */
+const MENU_ORDER: Record<BoardType, number> = {
+  BEST: 0,
+  MENOPAUSE: 1,
+  FREE: 2,
+  MAGAZINE: 3,
+}
+
+/** 노출 여부는 showInMenu 가, 순서는 MENU_ORDER 가 정한다. */
+export const MENU_BOARDS = BOARD_REGISTRY.filter((b) => b.showInMenu).sort(
+  (a, b) => MENU_ORDER[a.type] - MENU_ORDER[b.type],
+)
 
 /** 커뮤니티 보드 타입 → 메타. 홈처럼 여러 보드 글을 섞어 보여줄 때 쓴다. */
 export function getBoardByType(type: BoardType): BoardMeta | undefined {
