@@ -42,13 +42,28 @@ export async function generateMetadata({
     ? post.content.replace(/\s+/g, ' ').slice(0, 120)
     : undefined
 
+  // 공유 카드에 쓰는 절대 경로. canonical 과 같은 주소여야 한다 —
+  // 카톡이 보여준 주소와 검색이 대표로 삼는 주소가 갈리면 같은 글이 둘로 읽힌다.
+  const path = `${board.href}/${post.id}`
+
   return {
     title: post.title,
     ...(description ? { description } : {}),
     // noindex 페이지의 canonical 값은 크롤러가 무시한다. 만들지 않는다.
-    ...(indexable ? { alternates: { canonical: `${board.href}/${post.id}` } } : {}),
+    ...(indexable ? { alternates: { canonical: path } } : {}),
+    /* 🔴 openGraph 를 여기서 만들면 layout 것을 통째로 덮는다.
+          images 를 적지 않으면 그 글만 그림 없는 카드가 된다 — 실측으로 잡은 문제다.
+          (검색 비노출 글은 이 블록을 만들지 않아 layout 의 브랜드 카드를 그대로 받는다) */
     ...(indexable
-      ? { openGraph: { title: post.title, description, type: 'article' as const } }
+      ? {
+          openGraph: {
+            title: post.title,
+            description,
+            type: 'article' as const,
+            url: path,
+            images: [{ url: `${path}/opengraph-image`, width: 1200, height: 630, alt: post.title }],
+          },
+        }
       : {}),
     // 🔴 접근은 허용하되 색인은 막는다. "접근 가능" 과 "색인 가능" 은 다른 축이다.
     robots: robotsMetaFor(post),
