@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  매거진 LOW/MEDIUM 자동 레인 — 매일 02:00 KST
+
+  하는 일: magazine-auto-register-run.mjs 를 띄운다.
+    └ magazine-auto-register-ready.mjs --dry-run --notify
+        gate(큐·등급) → 변환 검사 → QA → batch-qa → hero(REQUIRED) → register dry-run
+        결과를 _runs/{date}/auto-register.json 과 Slack 으로 보고
+
+  🔴 **인자 없이 부르면 dry-run 이다. 파일을 하나도 고치지 않는다.**
+     오늘은 "리포트만" 으로 연결한다. 무인 등록 write 를 여는 것은
+     ProgramArguments 에 --write --pr 을 창업자가 직접 넣는 순간뿐이다.
+     지금 켜면 articles.ts 가 사람 눈을 거치지 않고 바뀐다.
+
+  🔴 00:10 producer 와 겹치지 않게 02:00 에 둔다.
+     producer 가 brief 를 만들고 원고를 회수한 뒤여야 이 레인에 태울 것이 생긴다.
+     producer 가 늦어져도 이 레인은 그날 할 것이 없다고 조용히 보고할 뿐이다.
+
+  🔴 HIGH 는 이 레인에 들어오지 않는다.
+     magazine-auto-lane.mjs 의 gate 가 topic-queue 를 정본으로 등급을 본다.
+     batch-qa 는 큐에 없는 slug 의 등급을 검사하지 않으므로 그것만 믿지 않는다.
+     회귀: node scripts/magazine-auto-register-check.mjs
+
+  🔴 이 plist 는 secret 을 모른다.
+     webhook 은 slack-notify 가 ~/.config/soransoran/slack.env 에서 직접 읽는다.
+
+  🔴 node 경로가 nvm 버전에 묶여 있다. `node -v` 가 아래와 다르면 먼저 갱신한다.
+     현재 기준: v24.14.0
+
+  🔴 ProgramArguments[0] 에 셸을 쓰지 않는다 (TCC — producer plist 주석 참조).
+  🔴 KeepAlive 를 넣지 않는다. 실패 시 재시도하면 폭주한다.
+
+  설치:
+    ln -s /Users/yanadoo/Documents/soransoran/launchd/com.soransoran.magazine-auto-register.plist \
+          ~/Library/LaunchAgents/com.soransoran.magazine-auto-register.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.soransoran.magazine-auto-register.plist
+  검증:
+    launchctl kickstart -k gui/$(id -u)/com.soransoran.magazine-auto-register
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.magazine-auto-register</string>
+
+  <!--
+    🔴 인자를 붙이지 않는다 = dry-run.
+       무인 등록을 열려면 여기에 <string>--write</string><string>--pr</string> 를 넣는다.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/yanadoo/.nvm/versions/node/v24.14.0/bin/node</string>
+    <string>/Users/yanadoo/Documents/soransoran/scripts/magazine-auto-register-run.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/yanadoo/Documents/soransoran</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>2</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/yanadoo/Library/Logs/soransoran/magazine-auto-register.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yanadoo/Library/Logs/soransoran/magazine-auto-register.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/yanadoo/.local/bin:/Users/yanadoo/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/yanadoo</string>
+  </dict>
+</dict>
+</plist>
