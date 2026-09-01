@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
-import GuestTurnstile from '@/components/features/GuestTurnstile'
+import GuestTurnstile, { TURNSTILE_SITE_KEY } from '@/components/features/GuestTurnstile'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { createGuestComment, type GuestCommentState } from '@/lib/actions/guest-comments'
 import {
@@ -52,7 +52,19 @@ export default function GuestCommentForm({
   const [showSuccess, setShowSuccess] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  /**
+   * 🔴 토큰을 state 로 들고 controlled hidden input 으로 낸다.
+   *    DOM 에 직접 쓰면 이름·비밀번호를 한 글자 칠 때마다 React 가 defaultValue 를
+   *    다시 적용하면서 값을 지운다 — 화면에는 "성공!" 이 떠 있는데 서버는 빈 토큰을 받았다.
+   */
+  const [token, setToken] = useState('')
+  const [resetSignal, setResetSignal] = useState(0)
+
   useEffect(() => {
+    if (!state.ok && !state.error) return
+    // 🔴 토큰은 1회용이다. 성공이든 실패든 응답을 받으면 새로 받아야 한다.
+    setToken('')
+    setResetSignal((n) => n + 1)
     if (!state.ok) return
     setContent('')
     setPassword('')
@@ -62,10 +74,18 @@ export default function GuestCommentForm({
   useAutoResize(textareaRef, content, COMMENT_TEXTAREA_MAX_HEIGHT)
 
   const showCounter = content.length >= COMMENT_COUNTER_FROM
+  /**
+   * 🔴 토큰이 오기 전에는 등록을 막는다.
+   *    누를 수 있게 두면 사람이 먼저 누르고 "잠시 후 다시 시도해 주세요" 만 보게 된다 —
+   *    무엇을 기다려야 하는지 화면이 말해 주지 않는다.
+   *    사이트 키가 없는 환경(로컬)에서는 위젯이 없으므로 이 조건을 걸지 않는다.
+   */
+  const needsToken = TURNSTILE_SITE_KEY.length > 0
   const canSubmit =
     content.trim().length >= MIN_COMMENT_LENGTH &&
     nickname.trim().length > 0 &&
-    password.length === GUEST_PASSWORD_LENGTH
+    password.length === GUEST_PASSWORD_LENGTH &&
+    (!needsToken || token.length > 0)
 
   return (
     <form
@@ -156,7 +176,14 @@ export default function GuestCommentForm({
         />
       </div>
 
-      <GuestTurnstile />
+      <input type="hidden" name="turnstileToken" value={token} readOnly />
+      <GuestTurnstile onToken={setToken} resetSignal={resetSignal} />
+
+      {needsToken && !token ? (
+        <p className="m-0 text-xs text-content-muted">
+          위 확인이 끝나면 등록할 수 있어요.
+        </p>
+      ) : null}
 
       <p className="m-0 text-xs text-content-muted">
         비밀번호는 이 댓글을 고치거나 지울 때 씁니다. 잊으면 되찾을 수 없어요.
