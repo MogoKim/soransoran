@@ -1,11 +1,17 @@
 'use client'
 
-import { useRef, useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { loginHref } from '@/lib/callback-url'
 import { togglePostLike } from '@/lib/actions/likes'
 import { togglePostScrap } from '@/lib/actions/scraps'
-import { shareOrCopy } from '@/lib/share-link'
+import {
+  canWebShare,
+  copyShareLink,
+  preloadKakaoSdk,
+  shareOrCopy,
+  shareToKakao,
+} from '@/lib/share-link'
 import BottomSheet from '@/components/ui/BottomSheet'
 import ReportButton from '@/components/features/ReportButton'
 
@@ -20,6 +26,12 @@ import ReportButton from '@/components/features/ReportButton'
  *
  * 🔴 무슨 일이 일어났는지 문장으로 알린다 — 눌렀는데 화면이 말이 없으면
  *    됐는지 안 됐는지 알 수 없고, 사람은 한 번 더 누른다.
+ *
+ * 🔴 공유는 갈래를 열어 보여준다. 우리 손님이 글을 나르는 길은 대부분 카카오톡인데,
+ *    OS 공유 시트는 기기마다 목록이 달라 카카오톡을 찾아 헤매게 된다.
+ *    카카오톡을 첫 줄에 두고, 나머지 길은 아래에 남긴다.
+ *
+ * 🔴 줄마다 하는 일과 이름이 같아야 한다. "링크 복사" 라 적고 공유 시트를 띄우지 않는다.
  */
 export default function PostActionBar({
   postId,
@@ -42,6 +54,11 @@ export default function PostActionBar({
       공유 성공 안내에까지 "로그인" 이 붙는다(실측으로 잡은 문제). */
   const [notice, setNotice] = useState<{ text: string; login?: true } | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
+  /* 🔴 서버에는 navigator 가 없다. 첫 렌더에서 이 값을 읽으면 서버·브라우저 화면이
+     달라져 hydration 이 어긋난다 — 마운트 뒤에 정한다. */
+  const [webShareReady, setWebShareReady] = useState(false)
+  const shareRef = useRef<HTMLDivElement>(null)
   const [reportOpen, setReportOpen] = useState(false)
   const [liked, setLiked] = useState(isLiked)
   const [count, setCount] = useState(likeCount)
@@ -52,7 +69,47 @@ export default function PostActionBar({
   const [scrapped, setScrapped] = useState(isScrapped)
   const scrapInFlight = useRef(false)
 
-  async function onShare() {
+  /* 🔴 카카오 SDK 는 이 화면에서만 미리 받아둔다. 클릭한 뒤에 받으면 iOS 가
+     사용자 조작으로 보지 않아 공유창이 열리지 않는다. */
+  useEffect(() => {
+    preloadKakaoSdk()
+    setWebShareReady(canWebShare())
+  }, [])
+
+  /* 열린 목록은 바깥을 누르거나 Esc 로 닫힌다 — 닫는 법이 하나뿐이면 갇힌 것처럼 느낀다 */
+  useEffect(() => {
+    if (!shareOpen) return
+
+    function onPointerDown(event: MouseEvent | TouchEvent) {
+      const target = event.target
+      if (target instanceof Node && shareRef.current?.contains(target)) return
+      setShareOpen(false)
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setShareOpen(false)
+    }
+
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [shareOpen])
+
+  async function onKakaoShare() {
+    setShareOpen(false)
+    const result = await shareToKakao(title, currentPath)
+    setNotice({
+      text:
+        result === 'shared' ? '카카오톡 공유창을 열었어요.'
+          : result === 'copied' ? '카카오톡 공유를 쓸 수 없어 링크를 복사했어요. 붙여넣어 보내주세요.'
+          : '공유가 안 됐어요. 주소창의 주소를 복사해 주세요.',
+    })
+  }
+
+  async function onWebShare() {
+    setShareOpen(false)
     const result = await shareOrCopy(title, currentPath)
     if (result === 'cancelled') return // 닫은 것은 실패가 아니다
     setNotice({
@@ -60,6 +117,16 @@ export default function PostActionBar({
         result === 'shared' ? '공유했어요.'
           : result === 'copied' ? '링크를 복사했어요.'
           : '링크 복사가 안 됐어요. 주소창의 주소를 복사해 주세요.',
+    })
+  }
+
+  async function onCopyLink() {
+    setShareOpen(false)
+    const copied = await copyShareLink(currentPath)
+    setNotice({
+      text: copied
+        ? '링크를 복사했어요.'
+        : '링크 복사가 안 됐어요. 주소창의 주소를 복사해 주세요.',
     })
   }
 
@@ -160,32 +227,119 @@ export default function PostActionBar({
 
         <div className="flex-1" />
 
-        <button
-          type="button"
-          onClick={onShare}
-          aria-label="공유"
-          className="inline-flex min-h-[52px] items-center gap-1.5 rounded-lg px-3 text-sm text-content-muted transition duration-150 hover:text-brand-ink active:scale-[0.98]"
-        >
-          <svg
-            aria-hidden
-            viewBox="0 0 24 24"
-            className="h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.8}
-            strokeLinecap="round"
-            strokeLinejoin="round"
+        {/* 🔴 목록은 이 버튼에 붙여 오른쪽 끝을 맞춘다. 화면 왼쪽으로 펼쳐지므로
+              좁은 폭에서도 밖으로 나가지 않는다. */}
+        <div className="relative" ref={shareRef}>
+          <button
+            type="button"
+            onClick={() => setShareOpen((open) => !open)}
+            aria-label="공유"
+            aria-haspopup="menu"
+            aria-expanded={shareOpen}
+            className="inline-flex min-h-[52px] items-center gap-1.5 rounded-lg px-3 text-sm text-content-muted transition duration-150 hover:text-brand-ink active:scale-[0.98]"
           >
-            <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
-            <path d="M12 15V3.8" />
-            <path d="M8.2 7.6 12 3.8l3.8 3.8" />
-          </svg>
-          <span>공유</span>
-        </button>
+            <svg
+              aria-hidden
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
+              <path d="M12 15V3.8" />
+              <path d="M8.2 7.6 12 3.8l3.8 3.8" />
+            </svg>
+            <span>공유</span>
+          </button>
+
+          {shareOpen ? (
+            /* 🔴 카카오 브랜드 노랑을 칠하지 않는다. 색은 토큰에만 산다 —
+                  여기 리터럴을 두면 나중에 색을 바꿀 때 이 파일부터 놓친다. */
+            <div
+              role="menu"
+              aria-label="공유 방법"
+              className="absolute right-0 top-full z-50 mt-1 min-w-[200px] rounded-xl border border-subtle bg-surface-card p-1 shadow-lg"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={onKakaoShare}
+                className="flex w-full min-h-[52px] items-center gap-3 rounded-lg px-3 text-sm text-content-primary transition-colors duration-150 hover:bg-surface-soft"
+              >
+                <svg
+                  aria-hidden
+                  viewBox="0 0 24 24"
+                  className="h-[22px] w-[22px] shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.8}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 4.2c-4.5 0-8.2 2.8-8.2 6.3 0 2.2 1.5 4.2 3.8 5.3l-.9 3.3 3.7-2.2c.5.1 1.1.1 1.6.1 4.5 0 8.2-2.8 8.2-6.5S16.5 4.2 12 4.2Z" />
+                </svg>
+                <span>카카오톡으로 공유</span>
+              </button>
+
+              {webShareReady ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={onWebShare}
+                  className="flex w-full min-h-[52px] items-center gap-3 rounded-lg px-3 text-sm text-content-primary transition-colors duration-150 hover:bg-surface-soft"
+                >
+                  <svg
+                    aria-hidden
+                    viewBox="0 0 24 24"
+                    className="h-[22px] w-[22px] shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={1.8}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7" />
+                    <path d="M12 15V3.8" />
+                    <path d="M8.2 7.6 12 3.8l3.8 3.8" />
+                  </svg>
+                  <span>다른 앱으로 공유</span>
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={onCopyLink}
+                className="flex w-full min-h-[52px] items-center gap-3 rounded-lg px-3 text-sm text-content-primary transition-colors duration-150 hover:bg-surface-soft"
+              >
+                <svg
+                  aria-hidden
+                  viewBox="0 0 24 24"
+                  className="h-[22px] w-[22px] shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.8}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M10.5 13.5a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1.2 1.2" />
+                  <path d="M13.5 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1.2-1.2" />
+                </svg>
+                <span>링크 복사</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
 
         <button
           type="button"
-          onClick={() => setSheetOpen(true)}
+          onClick={() => {
+            setShareOpen(false)
+            setSheetOpen(true)
+          }}
           aria-label="더보기"
           aria-haspopup="dialog"
           aria-expanded={sheetOpen}
