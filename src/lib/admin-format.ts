@@ -24,8 +24,15 @@ export function orDash(value: string | null | undefined): string {
 /**
  * 실회원 판정 — 어드민 회원 화면의 단일 기준.
  *
- * 🔴 providerId 가 있어야 실회원이다. 카카오로 들어온 사람만 이 값을 갖는다
- *    (schema 주석: "카카오 providerId. 실회원 판별 기준이 된다").
+ * 🔴 providerId 로 판정하지 않는다. 그 컬럼은 아무도 채우지 않는다.
+ *    schema 주석은 "실회원 판별 기준" 이라 말하지만 write 하는 코드가 없고,
+ *    auth.ts 도 "User.providerId 는 adapter 가 채우지 않는다" 라고 적어 두었다.
+ *    실측 결과 카카오로 들어온 회원까지 전원 null 이었고, 그래서 회원 목록이
+ *    0 건 · 회원 상세가 전원 notFound 였다. 기준을 실제로 채워지는 값으로 옮긴다.
+ *
+ * 🔴 카카오 Account 유무로 본다. NextAuth adapter 가 로그인 시 반드시 만든다 —
+ *    "카카오로 들어온 사람" 이라는 원래 뜻을 그대로 지키면서 실제로 존재하는 값이다.
+ *    providerId 컬럼과 auth 흐름은 건드리지 않는다(인증 변경 체크리스트 대상).
  *
  * 🔴 페르소나가 연결된 User 는 뺀다.
  *    페르소나도 User 행을 갖지만 운영자가 차단하거나 상세를 볼 대상이 아니다.
@@ -35,9 +42,30 @@ export function orDash(value: string | null | undefined): string {
  *    상태가 가장 위험하다 — 목록·상세·집계가 같은 조각을 쓴다.
  */
 export const REAL_MEMBER_WHERE = {
-  providerId: { not: null },
+  accounts: { some: { provider: 'kakao' } },
   persona: { is: null },
 } as const
+
+/**
+ * 이미 가져온 User 가 실회원인가 — REAL_MEMBER_WHERE 와 같은 기준을 코드로 쓴 것.
+ *
+ * 🔴 where 로 거를 수 없는 자리에서 쓴다.
+ *    신고 화면의 대상 작성자는 Report → Post/Comment → User 로 딸려 온다.
+ *    거기에 실회원 조건을 걸면 신고 자체가 목록에서 사라진다 — 페르소나 글이
+ *    신고당해도 운영자가 못 보게 된다. 신고는 다 보이되 조치 버튼만 가린다.
+ *
+ * 🔴 판정 근거를 여기 한 곳에 둔다. 화면에서 accounts.length 를 직접 세면
+ *    REAL_MEMBER_WHERE 를 고칠 때 그쪽이 따라오지 않는다.
+ *
+ * 🔴 select 에 accounts(provider:'kakao' 필터)와 persona 를 반드시 포함해야 한다.
+ *    빠뜨리면 타입이 막는다 — 런타임에 조용히 false 가 되지 않게 하려는 것이다.
+ */
+export function isRealMember(user: {
+  accounts: { id: string }[]
+  persona: { id: string } | null
+}): boolean {
+  return user.accounts.length > 0 && user.persona === null
+}
 
 /**
  * 글 상세의 고객 경로. 만들 수 없으면 null 이다.
