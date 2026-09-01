@@ -13,23 +13,12 @@ const LINKS: { href: string; label: string; emphasis?: boolean }[] = [
   { href: '/faq', label: '자주 묻는 질문' },
 ]
 
-/**
- * 사업자 정보 — 표기는 사업자등록증과 한 글자도 다르지 않아야 한다.
- *
- * 🔴 줄여 쓰거나 순서를 바꾸지 않는다.
- *    이 값은 결제·계약 화면의 장식이 아니라 사업자를 특정하는 법정 표기다.
- *    상호를 "케이에이지랩" 으로만 적거나 주소에서 괄호를 빼면
- *    등록증·외부 심사 기록과 대조했을 때 다른 사업자로 읽힌다.
- *
- * 🔴 등록증 이미지는 두지 않는다. 텍스트로만 밝힌다.
- */
+/** 상호는 등록증 표기 그대로 둔다 — 줄이면 다른 사업자로 읽힌다. */
 const BUSINESS = {
   name: '케이에이지랩(K-Agelab)',
   owner: '김용석',
   registrationNumber: '457-24-01157',
-  /** 이어 붙이면 등록증 표기 그대로다. 좁은 화면에서 동·호수가 갈라지지 않도록 둘로 나눠 둔다 */
-  addressRoad: '서울특별시 노원구 월계로55길 15,',
-  addressDetail: '302동 912호(월계동, 사슴아파트)',
+  address: '서울특별시 노원구 월계로55길 15',
 } as const
 
 /**
@@ -63,25 +52,17 @@ export default function Footer({ avoidFloatingAction = false }: { avoidFloatingA
 
         <FontSizeToggle />
 
-        {/* 🔴 접지 않는다. 펼치는 동작 없이 그 자리에서 읽혀야 한다.
-              🔴 동·호수는 whitespace-nowrap 으로 묶는다.
-                 break-keep 은 낱말 안에서 끊는 것만 막고 공백에서는 넘어간다.
-                 320px 에서 실제로 "302동" 과 "912호" 가 갈라져 다른 주소처럼 읽혔다. */}
-        <address className="flex flex-col gap-0.5 not-italic text-xs leading-[1.7] text-content-muted">
-          <span className="break-keep">
-            {SITE.name} · {BUSINESS.name} · 대표 {BUSINESS.owner}
-          </span>
-          <span className="break-keep">사업자등록번호 {BUSINESS.registrationNumber}</span>
-          <span className="break-keep">
-            {BUSINESS.addressRoad}{' '}
-            <span className="whitespace-nowrap">{BUSINESS.addressDetail}</span>
-          </span>
-          <span className="break-keep">문의 soransoran.community@gmail.com</span>
-        </address>
-
-        <p className="text-xs text-content-muted">
-          이곳의 글은 회원들의 경험과 의견이며 의료·법률·금융 조언이 아닙니다.
-        </p>
+        {/* 🔴 summary 에 display 를 주지 않는다 — 주면 크롬·사파리에서 펼침 표시가 사라진다. */}
+        <details className="text-content-muted">
+          <summary className="cursor-pointer py-4 text-sm">사업자 정보</summary>
+          <address className="flex flex-col gap-0.5 not-italic text-xs leading-[1.7]">
+            <span className="break-keep">
+              {SITE.name} · {BUSINESS.name} · 대표 {BUSINESS.owner}
+            </span>
+            <span className="break-keep">사업자등록번호 {BUSINESS.registrationNumber}</span>
+            <span className="break-keep">{BUSINESS.address}</span>
+          </address>
+        </details>
       </div>
     </footer>
   )
