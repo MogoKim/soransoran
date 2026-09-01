@@ -95,32 +95,39 @@ export default async function AdminReportsPage() {
 
   return (
     <main className="pt-2 lg:pt-0">
-      <AdminPageHeader
-        title="신고"
-        description="오래 기다린 신고가 맨 위입니다. 이 화면에서 판단하고 조치까지 끝냅니다."
-      />
+      <AdminPageHeader title="신고" />
 
-      <AdminSection title={`미처리 ${pendingCount}건`} description="오래된 순">
-        {pending.length === 0 ? (
-          <AdminEmptyState>
-            미처리 신고가 없습니다. 새 신고가 들어오면 여기 맨 위에 쌓입니다.
-          </AdminEmptyState>
-        ) : (
+      {/* 상단 요약 — 미처리가 0이어도 화면이 헐겁지 않게 상태를 한 줄로 말한다 */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-subtle bg-surface-card px-3 py-2 text-sm">
+        <span className="text-content-primary">
+          미처리 <strong>{pendingCount}</strong> · 처리 완료 <strong>{handled.length}</strong>
+        </span>
+        <span className="text-content-muted">
+          {pendingCount > 0
+            ? '오래 기다린 신고가 맨 위입니다'
+            : '새 신고가 들어오면 여기 맨 위에 쌓입니다'}
+        </span>
+      </div>
+
+      {pending.length > 0 ? (
+        <AdminSection title={`처리할 신고 ${pendingCount}건`} description="오래된 순">
           <ul className="mt-2 flex list-none flex-col gap-3 p-0">
             {pending.map((report) => (
               <ReportCard key={report.id} report={report} />
             ))}
           </ul>
-        )}
-      </AdminSection>
+        </AdminSection>
+      ) : (
+        <div className="mt-4">
+          <AdminEmptyState>지금 처리할 신고가 없습니다.</AdminEmptyState>
+        </div>
+      )}
 
       {/* 🔴 처리분은 접어 둔다. 펼친 채 두면 미처리가 처리분 100건 위의 한 줄이 된다. */}
-      <section className="mt-8 border-t border-subtle pt-6">
-        {handled.length === 0 ? (
-          <h2 className="m-0 text-sm font-bold text-content-primary">처리한 신고 없음</h2>
-        ) : (
+      {handled.length > 0 ? (
+        <section className="mt-6 border-t border-subtle pt-4">
           <details>
-            <summary className="min-h-[52px] cursor-pointer list-none py-3 text-sm font-bold text-content-primary">
+            <summary className="min-h-[44px] cursor-pointer list-none py-2 text-sm font-bold text-content-primary">
               처리한 신고 {handled.length}건 보기{' '}
               <span className="font-normal text-content-muted">(최신순)</span>
             </summary>
@@ -130,8 +137,8 @@ export default async function AdminReportsPage() {
               ))}
             </ul>
           </details>
-        )}
-      </section>
+        </section>
+      ) : null}
     </main>
   )
 }

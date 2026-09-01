@@ -28,7 +28,7 @@ export const dynamic = 'force-dynamic'
 const TAKE = 100
 
 /** 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다. */
-const COLS = 'lg:grid-cols-[minmax(0,1fr)_6rem_8rem_9rem_7rem]'
+const COLS = 'lg:grid-cols-[minmax(0,1fr)_5rem_7rem_8.5rem_9rem]'
 
 export default async function AdminContentPage() {
   const { ok } = await requireAdmin()
@@ -78,8 +78,15 @@ export default async function AdminContentPage() {
           }
         >
           {posts.map((p) => (
-            <AdminTableRow key={p.id} href={`/admin/content/${p.id}`} columns={COLS}>
-              <span className="min-w-0 break-words font-bold text-content-primary">{p.title}</span>
+            <AdminTableRow
+              key={p.id}
+              href={`/admin/content/${p.id}`}
+              columns={COLS}
+              /* 🔴 행 전체를 분홍으로 칠하지 않는다. 목록의 절반이 가려진 글일 때
+                 화면이 온통 분홍이 되어 오히려 아무것도 눈에 안 띈다. 얇은 왼쪽 선만 둔다. */
+              accent={p.status === 'PUBLISHED' ? undefined : 'muted'}
+            >
+              <span className="min-w-0 truncate font-bold text-content-primary">{p.title}</span>
 
               <AdminCell label="게시판">{boardLabel(p.boardType)}</AdminCell>
 
@@ -97,7 +104,7 @@ export default async function AdminContentPage() {
                 {p._count.reports > 0 ? (
                   <AdminBadge tone="danger">신고 {p._count.reports}</AdminBadge>
                 ) : null}
-                <AdminBadge>댓글 {p._count.comments}</AdminBadge>
+                <span className="text-xs text-content-muted">댓글 {p._count.comments}</span>
               </span>
             </AdminTableRow>
           ))}

@@ -197,17 +197,39 @@ export default async function AdminMemberDetailPage({
         }
       />
 
-      {/* 🔴 판단 요약 — 이 화면에서 가장 먼저 읽혀야 하는 것. */}
-      <section className="mt-4 rounded-lg border border-subtle bg-surface-card p-4">
-        <h2 className="m-0 text-sm font-bold text-content-primary">운영 판단</h2>
+      {/* 1) 프로필 요약 — 누구인지 한 줄로 */}
+      <section className="mt-3 rounded-lg border border-subtle bg-surface-card p-3">
+        <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-content-muted">카카오 이름</dt>
+            <dd className="m-0 min-w-0 truncate text-content-primary">{orDash(member.name)}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-content-muted">이메일</dt>
+            <dd className="m-0 min-w-0 truncate text-content-primary">{orDash(member.email)}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-content-muted">가입</dt>
+            <dd className="m-0 text-content-primary">{formatKst(member.createdAt)}</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="shrink-0 text-content-muted">최근 수정</dt>
+            <dd className="m-0 text-content-primary">{formatKst(member.updatedAt)}</dd>
+          </div>
+        </dl>
+      </section>
+
+      {/* 2) 운영 판단 — 이 화면에서 가장 먼저 읽혀야 하는 것 */}
+      <section className="mt-3 rounded-lg border border-subtle bg-surface-card p-3">
+        <h2 className="m-0 text-base font-bold text-content-primary">운영 판단</h2>
         <dl className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div>
             <dt className="text-xs text-content-muted">신고당함</dt>
             <dd
               className={
                 reportedAgainstTotal > 0
-                  ? 'm-0 text-lg font-bold text-state-danger'
-                  : 'm-0 text-lg font-bold text-content-primary'
+                  ? 'm-0 text-xl font-bold text-state-danger'
+                  : 'm-0 text-xl font-bold text-content-primary'
               }
             >
               {reportedAgainstTotal}건
@@ -218,8 +240,8 @@ export default async function AdminMemberDetailPage({
             <dd
               className={
                 reportedAgainstPending > 0
-                  ? 'm-0 text-lg font-bold text-state-danger'
-                  : 'm-0 text-lg font-bold text-content-primary'
+                  ? 'm-0 text-xl font-bold text-state-danger'
+                  : 'm-0 text-xl font-bold text-content-primary'
               }
             >
               {reportedAgainstPending}건
@@ -227,11 +249,11 @@ export default async function AdminMemberDetailPage({
           </div>
           <div>
             <dt className="text-xs text-content-muted">작성 글</dt>
-            <dd className="m-0 text-lg font-bold text-content-primary">{member._count.posts}건</dd>
+            <dd className="m-0 text-xl font-bold text-content-primary">{member._count.posts}건</dd>
           </div>
           <div>
             <dt className="text-xs text-content-muted">작성 댓글</dt>
-            <dd className="m-0 text-lg font-bold text-content-primary">
+            <dd className="m-0 text-xl font-bold text-content-primary">
               {member._count.comments}건
             </dd>
           </div>
@@ -244,6 +266,7 @@ export default async function AdminMemberDetailPage({
         ) : null}
 
         <AdminActionGroup
+          danger
           label={member.isBlocked ? '되돌리기' : '위험한 조치'}
           hint={
             member.isAdmin
@@ -274,6 +297,46 @@ export default async function AdminMemberDetailPage({
             />
           )}
         </AdminActionGroup>
+      </section>
+
+      {/* 3) 카카오·프로필 정보 — 접어 둔다. 볼 일이 있을 때만 편다. */}
+      <section className="mt-3">
+        <details>
+          <summary className="min-h-[52px] cursor-pointer list-none py-3 text-sm font-bold text-content-primary">
+            가입 정보 보기{' '}
+            <span className="font-normal text-content-muted">
+              (이메일·전화번호 등 개인정보)
+            </span>
+          </summary>
+          <AdminFieldList>
+            <AdminField label="소란소란 닉네임" value={orDash(member.nickname)} />
+            <AdminField label="카카오 이름" value={orDash(member.name)} />
+            <AdminField label="이메일" value={orDash(member.email)} />
+            <AdminField label="전화번호" value={orDash(member.phoneNumber)} />
+            <AdminField label="성별" value={orDash(member.gender)} />
+            <AdminField label="출생연도" value={orDash(member.birthyear)} />
+            <AdminField label="프로필 동의" value={formatKst(member.profileConsentAt)} />
+            <AdminField label="마케팅 동의" value={formatKst(member.marketingConsentAt)} />
+            <AdminField label="온보딩" value={member.isOnboarded ? '완료' : '전'} />
+            <AdminField label="첫 인사" value={formatKst(member.firstGreetingAt)} />
+            <AdminField label="가입일" value={formatKst(member.createdAt)} />
+            <AdminField label="정보 수정일" value={formatKst(member.updatedAt)} />
+          </AdminFieldList>
+
+          {/* 🔴 raw id 는 한 겹 더 접는다. 평소 판단에 쓰이지 않고 자리만 차지한다. */}
+          <details className="mt-2">
+            <summary className="min-h-[52px] cursor-pointer list-none py-3 text-xs text-content-muted">
+              내부 식별자 보기
+            </summary>
+            <AdminFieldList>
+              <AdminField label="회원 id" value={member.id} />
+              <AdminField label="providerId" value={orDash(member.providerId)} />
+              <AdminField label="첫 인사 글 id" value={orDash(member.firstGreetingPostId)} />
+              <AdminField label="프로필 이미지" value={orDash(member.image)} />
+              <AdminField label="관리자" value={member.isAdmin ? '예' : '아니오'} />
+            </AdminFieldList>
+          </details>
+        </details>
       </section>
 
       <AdminSection
@@ -363,45 +426,6 @@ export default async function AdminMemberDetailPage({
         )}
       </AdminSection>
 
-      {/* 🔴 개인정보는 접어 둔다. 볼 일이 있을 때만 편다. */}
-      <section className="mt-8 border-t border-subtle pt-6">
-        <details>
-          <summary className="min-h-[52px] cursor-pointer list-none py-3 text-sm font-bold text-content-primary">
-            가입 정보 보기{' '}
-            <span className="font-normal text-content-muted">
-              (이메일·전화번호 등 개인정보)
-            </span>
-          </summary>
-          <AdminFieldList>
-            <AdminField label="소란소란 닉네임" value={orDash(member.nickname)} />
-            <AdminField label="카카오 이름" value={orDash(member.name)} />
-            <AdminField label="이메일" value={orDash(member.email)} />
-            <AdminField label="전화번호" value={orDash(member.phoneNumber)} />
-            <AdminField label="성별" value={orDash(member.gender)} />
-            <AdminField label="출생연도" value={orDash(member.birthyear)} />
-            <AdminField label="프로필 동의" value={formatKst(member.profileConsentAt)} />
-            <AdminField label="마케팅 동의" value={formatKst(member.marketingConsentAt)} />
-            <AdminField label="온보딩" value={member.isOnboarded ? '완료' : '전'} />
-            <AdminField label="첫 인사" value={formatKst(member.firstGreetingAt)} />
-            <AdminField label="가입일" value={formatKst(member.createdAt)} />
-            <AdminField label="정보 수정일" value={formatKst(member.updatedAt)} />
-          </AdminFieldList>
-
-          {/* 🔴 raw id 는 한 겹 더 접는다. 평소 판단에 쓰이지 않고 자리만 차지한다. */}
-          <details className="mt-2">
-            <summary className="min-h-[52px] cursor-pointer list-none py-3 text-xs text-content-muted">
-              내부 식별자 보기
-            </summary>
-            <AdminFieldList>
-              <AdminField label="회원 id" value={member.id} />
-              <AdminField label="providerId" value={orDash(member.providerId)} />
-              <AdminField label="첫 인사 글 id" value={orDash(member.firstGreetingPostId)} />
-              <AdminField label="프로필 이미지" value={orDash(member.image)} />
-              <AdminField label="관리자" value={member.isAdmin ? '예' : '아니오'} />
-            </AdminFieldList>
-          </details>
-        </details>
-      </section>
 
       {member.isBlocked ? (
         <AdminQuote>

@@ -140,7 +140,7 @@ export default async function AdminHomePage() {
               <AdminCard href={card.href}>
                 <span className="flex flex-wrap items-center gap-2">
                   <span className="font-bold text-content-primary">{card.title}</span>
-                  <AdminBadge tone={card.urgent ? 'danger' : 'muted'}>{card.now}</AdminBadge>
+                  <AdminBadge tone={card.urgent ? 'danger' : 'neutral'}>{card.now}</AdminBadge>
                 </span>
                 <span className="text-sm text-content-muted">{card.hint}</span>
               </AdminCard>

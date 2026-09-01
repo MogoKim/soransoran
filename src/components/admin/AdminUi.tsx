@@ -33,9 +33,9 @@ export function AdminPageHeader({
   badges?: React.ReactNode
 }) {
   return (
-    <header className={backHref ? 'pt-2' : 'pt-8'}>
+    <header className={backHref ? '' : 'pt-1'}>
       {backHref ? (
-        <Link href={backHref} className="inline-flex min-h-[52px] items-center text-link">
+        <Link href={backHref} className="inline-flex min-h-[44px] items-center text-sm text-link">
           {backLabel}
         </Link>
       ) : null}
@@ -60,7 +60,7 @@ export function AdminSection({
 }) {
   return (
     <section className={className}>
-      <h2 className="m-0 text-sm font-bold text-content-primary">{title}</h2>
+      <h2 className="m-0 text-base font-bold text-content-primary">{title}</h2>
       {description ? <p className="mt-1 text-sm text-content-muted">{description}</p> : null}
       {children}
     </section>
@@ -74,14 +74,26 @@ export function AdminSection({
  *    운영자가 "내가 못 찾은 건가" 를 의심하며 화면을 다시 뒤지게 된다.
  */
 export function AdminEmptyState({ children }: { children: React.ReactNode }) {
-  return <p className="py-8 text-center text-sm text-content-muted">{children}</p>
+  return (
+    <p className="m-0 rounded-lg border border-dashed border-subtle px-3 py-4 text-sm text-content-muted">
+      {children}
+    </p>
+  )
 }
 
-type BadgeTone = 'muted' | 'danger' | 'brand'
+type BadgeTone = 'neutral' | 'warning' | 'danger' | 'success' | 'brand'
 
-/** 상태 한 조각. tone 은 세 가지뿐이다 — 색이 늘면 의미가 흐려진다. */
+/**
+ * 상태 한 조각.
+ *
+ * 🔴 기본은 뉴트럴이다. 예전에는 모든 배지가 코랄 바탕(--surface-soft)이라
+ *    화면이 온통 분홍이었고 "정말 위험한 것" 이 묻혔다.
+ *    운영 콘솔의 --surface-soft 는 회색으로 바뀌어 있다(globals.css .admin-shell).
+ *
+ * 🔴 brand 는 아껴 쓴다 — 신고 사유처럼 "이 카드가 왜 여기 있는가" 한 조각에만.
+ */
 export function AdminBadge({
-  tone = 'muted',
+  tone = 'neutral',
   children,
 }: {
   tone?: BadgeTone
@@ -89,12 +101,18 @@ export function AdminBadge({
 }) {
   const skin =
     tone === 'danger'
-      ? 'font-bold text-state-danger'
-      : tone === 'brand'
-        ? 'font-bold text-brand-ink'
-        : 'text-content-muted'
+      ? 'bg-surface-soft font-bold text-state-danger'
+      : tone === 'warning'
+        ? 'bg-surface-soft font-bold text-state-warning'
+        : tone === 'success'
+          ? 'bg-surface-soft font-bold text-state-success'
+          : tone === 'brand'
+            ? 'bg-brand-soft font-bold text-brand-ink'
+            : 'bg-surface-soft text-content-muted'
   return (
-    <span className={`rounded-md bg-surface-soft px-2 py-1 text-xs ${skin}`}>{children}</span>
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs ${skin}`}>
+      {children}
+    </span>
   )
 }
 
@@ -116,11 +134,14 @@ export function AdminStatusBadge({
 }) {
   if (kind === 'report') {
     const label = value === 'PENDING' ? '미처리' : value === 'REVIEWED' ? '확인함' : '처리 완료'
-    return <AdminBadge tone={value === 'PENDING' ? 'danger' : 'muted'}>{label}</AdminBadge>
+    // 미처리는 "아직 안 한 일" 이지 사고가 아니다 — warning. 빨강은 이미 가려진 것에 쓴다.
+    return <AdminBadge tone={value === 'PENDING' ? 'warning' : 'neutral'}>{label}</AdminBadge>
   }
   if (kind === 'post') {
-    const label = value === 'HIDDEN' ? '숨김' : value === 'DELETED' ? '삭제' : '공개'
-    return <AdminBadge tone={value === 'PUBLISHED' ? 'muted' : 'danger'}>{label}</AdminBadge>
+    // 삭제는 이미 끝난 상태라 조용히 둔다. 숨김만 운영자가 되돌릴 수 있어 눈에 걸어 둔다.
+    if (value === 'HIDDEN') return <AdminBadge tone="danger">숨김</AdminBadge>
+    if (value === 'DELETED') return <AdminBadge tone="neutral">삭제됨</AdminBadge>
+    return <AdminBadge tone="neutral">공개</AdminBadge>
   }
   // PIN 은 운영자가 의도해 올린 것이라 위험이 아니다. HIDE 는 무언가를 가린 상태다.
   return value === 'PIN' ? (
@@ -152,7 +173,7 @@ export function AdminTable({
   return (
     <div className="mt-2">
       <div
-        className={`hidden border-b border-subtle px-3 pb-2 text-xs font-bold text-content-muted lg:grid lg:gap-4 ${columns}`}
+        className={`hidden border-b border-subtle px-3 pb-1.5 text-xs text-content-muted lg:grid lg:gap-4 ${columns}`}
       >
         {head}
       </div>
@@ -165,16 +186,25 @@ export function AdminTableRow({
   href,
   columns,
   children,
+  accent,
 }: {
   href: string
   columns: string
   children: React.ReactNode
+  /** 왼쪽 얇은 선으로만 구분한다 — 행 전체를 칠하지 않는다 */
+  accent?: 'muted' | 'danger'
 }) {
+  const edge =
+    accent === 'danger'
+      ? 'border-l-2 border-l-state-danger'
+      : accent === 'muted'
+        ? 'border-l-2 border-l-interactive'
+        : ''
   return (
     <li>
       <Link
         href={href}
-        className={`flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline lg:grid lg:items-center lg:gap-4 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent lg:px-3 lg:py-2 lg:hover:bg-surface-soft ${columns}`}
+        className={`flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline lg:grid lg:min-h-[48px] lg:items-center lg:gap-4 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-surface-card lg:px-3 lg:py-2 lg:hover:bg-surface-page ${edge} ${columns}`}
       >
         {children}
       </Link>
@@ -210,7 +240,7 @@ export function AdminCard({
   children: React.ReactNode
   className?: string
 }) {
-  const base = `rounded-lg border border-subtle bg-surface-card p-4 ${className}`
+  const base = `rounded-lg border border-subtle bg-surface-card p-3 ${className}`
   if (!href) return <div className={base}>{children}</div>
   return (
     <Link href={href} className={`flex min-h-[52px] flex-col gap-1 no-underline ${base}`}>
@@ -243,14 +273,23 @@ export function AdminActionGroup({
   label,
   children,
   hint,
+  danger = false,
 }: {
   label: string
   children: React.ReactNode
   hint?: string
+  /** 되돌리기 어려운 조치 묶음 — 바탕을 떼어 단순 상태 변경과 섞이지 않게 한다 */
+  danger?: boolean
 }) {
   return (
-    <div className="mt-3">
-      <p className="m-0 text-xs font-bold text-content-muted">{label}</p>
+    <div
+      className={
+        danger
+          ? 'mt-3 rounded-lg border border-subtle bg-surface-page p-2'
+          : 'mt-3'
+      }
+    >
+      <p className="m-0 text-xs font-bold uppercase tracking-wide text-content-muted">{label}</p>
       {hint ? <p className="mt-1 text-xs text-content-muted">{hint}</p> : null}
       <div className="mt-2 flex flex-wrap gap-2">{children}</div>
     </div>

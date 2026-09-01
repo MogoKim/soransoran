@@ -104,7 +104,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
     (report.post && !postDeleted) || Boolean(report.comment) || (author && authorIsMember)
 
   return (
-    <li className="rounded-lg border border-subtle bg-surface-card p-4">
+    <li className="rounded-lg border border-subtle bg-surface-card p-3">
       {/* ① 무슨 신고인가 */}
       <div className="flex flex-wrap items-center gap-2">
         <AdminStatusBadge kind="report" value={report.status} />
@@ -233,6 +233,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
 
       {hasRiskyAction ? (
         <AdminActionGroup
+          danger
           label={postHidden || report.comment?.isDeleted ? '되돌리기 · 위험한 조치' : '위험한 조치'}
           hint="가린 글·댓글은 지워지지 않습니다. 차단해도 쓴 글은 남습니다."
         >
