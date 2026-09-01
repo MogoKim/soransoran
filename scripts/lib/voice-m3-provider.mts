@@ -27,6 +27,10 @@ export const PROVIDER_KEY_ENV = {
   'gpt-5-nano': 'OPENAI_API_KEY',
   'gpt-5-mini': 'OPENAI_API_KEY',
   'claude-haiku-4.5': 'ANTHROPIC_API_KEY',
+  // 🔴 오리지널 게시글 초안 실험용 (2026-09-01). VE-M3 판정 기준선과 무관하다.
+  //    2.5-pro 는 이 계정에서 generateContent 가 404 다("no longer available to
+  //    new users", 실측) — 목록에 보인다고 호출되는 것이 아니라서 등록하지 않는다
+  'gemini-3.7-flash': 'GEMINI_API_KEY',
 } as const
 
 export type ProviderModel = keyof typeof PROVIDER_KEY_ENV
@@ -36,7 +40,20 @@ const ENDPOINT = {
   'gpt-5-nano': 'https://api.openai.com/v1/chat/completions',
   'gpt-5-mini': 'https://api.openai.com/v1/chat/completions',
   'claude-haiku-4.5': 'https://api.anthropic.com/v1/messages',
+  // 🔴 모델 ID 가 경로에 들어간다. 아래 callProvider 가 apiModelId 로 치환한다 —
+  //    ENDPOINT 에 내부 라벨을 그대로 박으면 Haiku 404 를 Gemini 에서 되풀이한다
+  'gemini-3.7-flash': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
 } as const
+
+/**
+ * 🔴 Gemini 응답 형식 강제 (2026-09-01).
+ *
+ * Anthropic 은 assistant prefill 로 ```json 울타리를 구조적으로 막았지만
+ * Gemini 에는 prefill 이 없다. 대신 **`responseMimeType`** 이 있다 —
+ * 모델이 JSON 만 내보내도록 API 가 강제하므로 울타리가 나올 자리가 없다.
+ * 프롬프트로 부탁하는 것과 달리 형식이 계약으로 보장된다.
+ */
+export const GEMINI_RESPONSE_MIME = 'application/json'
 
 /**
  * 🔴 **Anthropic 전용 assistant prefill** (2026-08-27).
@@ -150,12 +167,20 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
   if (!status.present) {
     return failure('NO_API_KEY', `${status.envName} 가 없다`)
   }
-  const url = ENDPOINT[req.model]
+  // 🔴 Gemini 는 모델 ID 가 **경로**에 들어간다. 내부 라벨을 그대로 쓰면
+  //    Haiku 가 겪은 404 를 URL 쪽에서 되풀이한다 — apiModelId 로 치환한다
+  const url = ENDPOINT[req.model].replace('{model}', apiModelIdFor(req.model))
   const controller = new AbortController()
   const timer = setTimeout(() => { controller.abort() }, req.timeoutMs)
 
   try {
     const isAnthropic = req.model === 'claude-haiku-4.5'
+    // 🔴 Gemini 는 요청·응답 형태가 둘 다와 다르다. 여기서만 분기하고
+    //    바깥(생성기·run)에는 한 줄도 새지 않는다 — 유료 경로가 하나여야 감시도 하나다
+    // 🔴 모델명을 하나 박지 않는다. Gemini 계열은 요청·응답 형태가 같으므로
+    //    모델이 바뀔 때마다 이 줄을 고치게 두면 언젠가 빠뜨린다 —
+    //    실제로 2.5-pro → 3.7-flash 교체가 하루 만에 일어났다.
+    const isGemini = req.model.startsWith('gemini-')
     const key = process.env[status.envName] ?? ''
     const headers: Record<string, string> = isAnthropic
       ? {
@@ -163,14 +188,26 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
           'x-api-key': key,
           'anthropic-version': '2023-06-01',
         }
-      : {
-          'content-type': 'application/json',
-          authorization: `Bearer ${key}`,
-        }
+      : isGemini
+        ? {
+            'content-type': 'application/json',
+            // 🔴 key 를 URL 쿼리 문자열에 붙이지 않는다. Gemini 는 그 방식도 받지만
+            //    URL 은 로그·에러 메시지·프록시 기록에 남는다. 헤더로 보내면 그 경로가 닫힌다
+            'x-goog-api-key': key,
+          }
+        : {
+            'content-type': 'application/json',
+            authorization: `Bearer ${key}`,
+          }
     // 🔴 **`req.model` 을 그대로 넣지 않는다.** 그것은 우리가 붙인 내부 라벨이고,
     //    provider 가 아는 이름이 아니다. `claude-haiku-4.5` 를 그대로 보냈다가
     //    30건이 전부 HTTP_404 로 돌아왔다(2026-08-27, 비용 0원).
     const apiModelId = apiModelIdFor(req.model)
+    // 🔴 분기 순서를 Anthropic → Gemini → OpenAI 로 둔다.
+    //    voice-m3-check 가 `const body = isAnthropic` 를 기준점으로 body 조립부를
+    //    찾아 "양쪽 다 apiModelId 를 쓰는가 · prefill 이 Anthropic 에만 붙는가" 를 본다.
+    //    Gemini 를 앞에 두면 그 가드가 조립부를 못 찾아 조용히 무력화된다 —
+    //    새 분기를 넣느라 기존 가드를 눈멀게 하지 않는다.
     const body = isAnthropic
       ? {
           model: apiModelId,
@@ -185,14 +222,29 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
             { role: 'assistant', content: ANTHROPIC_JSON_PREFILL },
           ],
         }
-      : {
-          model: apiModelId,
-          max_completion_tokens: req.maxOutputTokens,
-          messages: [
-            { role: 'system', content: req.systemPrompt },
-            { role: 'user', content: req.userPayload },
-          ],
-        }
+      : isGemini
+        ? {
+            // 🔴 모델 ID 는 body 가 아니라 **URL 경로**에 들어간다(위 url 참조).
+            //    그래서 이 분기에만 body.model 이 없다 — 빠뜨린 것이 아니다.
+            // 🔴 systemInstruction 은 contents 와 **다른 자리**다.
+            //    system 을 user 턴에 합치면 모델이 그것을 사용자 발화로 읽는다.
+            systemInstruction: { parts: [{ text: req.systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: req.userPayload }] }],
+            generationConfig: {
+              maxOutputTokens: req.maxOutputTokens,
+              // 🔴 울타리를 막는 자리. Anthropic prefill 과 같은 목적이고,
+              //    prefill 이 없는 provider 라 API 계약으로 대신한다.
+              responseMimeType: GEMINI_RESPONSE_MIME,
+            },
+          }
+        : {
+            model: apiModelId,
+            max_completion_tokens: req.maxOutputTokens,
+            messages: [
+              { role: 'system', content: req.systemPrompt },
+              { role: 'user', content: req.userPayload },
+            ],
+          }
 
     const res = await fetch(url, {
       method: 'POST',
@@ -216,25 +268,49 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
     //    모델은 우리가 준 첫 글자 뒤부터 이어 쓰기 때문이다.
     //    다시 앞에 붙여야 완전한 JSON 이 된다 — 빠뜨리면 이번엔 `not_json` 으로 전멸한다.
     //    유출 대조 · 금지어 검사도 이 재조립된 문자열을 본다.
-    const continuation = isAnthropic
-      ? String(((json.content as Array<{ text?: string }> | undefined)?.[0]?.text) ?? '')
-      : String(choice?.message?.content ?? '')
+    // 🔴 Gemini 는 candidates[0].content.parts[] 에 나눠 담아 보낼 수 있다.
+    //    parts[0] 만 읽으면 긴 응답이 조용히 잘린다 — 전부 이어 붙인다
+    const geminiCand = (json.candidates as Array<{
+      content?: { parts?: Array<{ text?: string }> }
+      finishReason?: string
+    }> | undefined)?.[0]
+    const geminiText = (geminiCand?.content?.parts ?? [])
+      .map((pt) => String(pt.text ?? ''))
+      .join('')
+
+    const continuation = isGemini
+      ? geminiText
+      : isAnthropic
+        ? String(((json.content as Array<{ text?: string }> | undefined)?.[0]?.text) ?? '')
+        : String(choice?.message?.content ?? '')
     const text = isAnthropic && continuation !== ''
       ? ANTHROPIC_JSON_PREFILL + continuation
       : continuation
 
-    const inputTokens = num(usage.input_tokens) || num(usage.prompt_tokens)
-    const outputTokens = num(usage.output_tokens) || num(usage.completion_tokens)
+    // 🔴 Gemini 는 usageMetadata 에 담고 이름도 다르다(promptTokenCount 등)
+    const gUsage = (json.usageMetadata ?? {}) as Record<string, unknown>
+    const inputTokens = isGemini
+      ? num(gUsage.promptTokenCount)
+      : num(usage.input_tokens) || num(usage.prompt_tokens)
+    const outputTokens = isGemini
+      ? num(gUsage.candidatesTokenCount)
+      : num(usage.output_tokens) || num(usage.completion_tokens)
     // 🔴 reasoning 토큰. OpenAI 는 completion_tokens_details 안에 준다.
     //    Anthropic 은 thinking 을 켜지 않았으므로 null 이다 — 0 이 아니다.
     //    0 이면 "추론을 안 썼다", null 이면 "알 수 없다" 로 읽힌다. 둘은 다르다.
     const details = (usage.completion_tokens_details ?? null) as Record<string, unknown> | null
-    const reasoningTokens = isAnthropic || details === null
-      ? null
-      : num(details.reasoning_tokens)
-    const finishReason = isAnthropic
-      ? String(json.stop_reason ?? '')
-      : String(choice?.finish_reason ?? '')
+    // 🔴 Gemini 2.5 는 thinking 토큰을 usageMetadata.thoughtsTokenCount 로 준다.
+    //    없으면 null 이다 — 0 이 아니다. 0 은 "안 썼다", null 은 "알 수 없다" 로 읽힌다
+    const reasoningTokens = isGemini
+      ? (typeof gUsage.thoughtsTokenCount === 'number' ? num(gUsage.thoughtsTokenCount) : null)
+      : isAnthropic || details === null
+        ? null
+        : num(details.reasoning_tokens)
+    const finishReason = isGemini
+      ? String(geminiCand?.finishReason ?? '')
+      : isAnthropic
+        ? String(json.stop_reason ?? '')
+        : String(choice?.finish_reason ?? '')
     const maxTokensReached = isMaxTokensReached(finishReason, outputTokens, req.maxOutputTokens)
 
     // 🔴 종료 사유가 없으면 성공으로 세지 않는다.

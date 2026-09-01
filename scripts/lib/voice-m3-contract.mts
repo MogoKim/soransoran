@@ -103,6 +103,27 @@ export const M3_MODEL_CANDIDATES = {
     source: 'https://claude.com/pricing',
     checkedAt: '2026-08-27',
   },
+  'gemini-3.7-flash': {
+    // 🔴 오리지널 게시글 초안 **실험용**이다 (2026-09-01).
+    //    VE-M3 판정 실험의 후보가 아니다 — 그쪽 기준선(nano 30건)은 건드리지 않는다.
+    //
+    // 🔴 **`gemini-2.5-pro` 를 여기 두지 않는다.** ListModels 에는 보이지만
+    //    generateContent 가 404 로 거부한다:
+    //    *"no longer available to new users"* (2026-09-01 실측, 3/3 실패 · 과금 0).
+    //    목록에 있다고 호출되는 것이 아니다 — 등록 전에 실제로 때려 봐야 안다.
+    //
+    // 🔴 `gemini-3.1-pro-preview` 도 넣지 않는다. 404 메시지가 지목한 대체지만
+    //    비용상 제외하기로 했다(창업자 결정, 2026-09-01).
+    apiModelId: 'gemini-3.7-flash',
+    // ⚠️ **2027-01-01 부터 단가가 2배가 된다** — input $1.50 · output $7.50.
+    //    지금 값은 2026-12-31 까지의 프로모션 단가다.
+    //    🔴 그날이 오면 이 값을 바꾼다. 안 바꾸면 비용 추정이 절반으로 나오고,
+    //       그것이 "확인된 비용" 처럼 읽힌다(계약 §E 가 경계하는 바로 그 상태다).
+    inputPerMTok: 0.75,
+    outputPerMTok: 3.75,
+    source: 'https://ai.google.dev/gemini-api/docs/pricing (2026-12-31 까지 프로모션 단가 · 2027-01-01 부터 input $1.50 / output $7.50)',
+    checkedAt: '2026-09-01',
+  },
 } as const satisfies Record<string, ModelCandidate>
 
 export type M3ModelName = keyof typeof M3_MODEL_CANDIDATES
@@ -411,6 +432,21 @@ export const M3_OUTPUT_TOKEN_POLICY = {
       'extended thinking 을 켜지 않으므로 상한이 곧 JSON 크기다. ' +
       '450 산출물에 여유 3배. 출력 단가가 nano 의 12.5배라 상한을 넓게 두지 않는다. ' +
       '30건 실측 결과 실제 출력은 292~421 tok 로 상한의 28% 이하였다',
+  },
+  'gemini-3.7-flash': {
+    // 🔴 Gemini 3.x 계열은 thinking 이 기본으로 켜져 있고, 그 토큰이
+    //    maxOutputTokens 를 함께 먹는다 — gpt-5-nano 가 1,000 에서 5/5 잘린 구조다.
+    //    끌 수 있는지 실측하지 않았으므로 **켜져 있다고 보고 예산을 잡는다.**
+    //    반대로 가정하면 첫 실행이 잘려 돈만 쓰고 산출물이 0이 된다.
+    maxOutputTokens: 4000,
+    reasoning: true,
+    // 🔴 추론 토큰도 출력으로 과금된다. 최악값(=상한)으로 잡아야 비용 추정이 정직하다
+    estimatedOutputTokens: 4000,
+    rationale:
+      '⚠️ **미실측이다.** 3.x flash 의 thinking 기본값을 확인하지 않았으므로 ' +
+      'reasoning 계열인 gpt-5-nano 의 실측(1000 에서 5/5 잘림)을 준용해 우선 4,000 을 쓴다. ' +
+      '출력 단가가 haiku 의 3/4 이라 상한을 haiku 보다 좁게 둘 이유가 없다. ' +
+      '실제 추론량은 실행 진단(finish · reasoning · out/상한)으로 확인한다',
   },
 } as const satisfies Record<string, OutputTokenPolicy>
 
