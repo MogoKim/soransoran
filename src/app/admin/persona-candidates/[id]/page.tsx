@@ -8,6 +8,7 @@ import {
   CANDIDATE_STATUS_LABEL, GATE_STATUS_LABEL, STATUS_LABEL, formatKst, filledMark,
 } from '@/lib/persona-admin'
 import PersonaCandidateDecision from '@/components/admin/PersonaCandidateDecision'
+import PersonaCandidatePublish from '@/components/admin/PersonaCandidatePublish'
 import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-rules'
 
 /**
@@ -23,9 +24,12 @@ import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-r
  *      · author · sourceUrl · sourceRef — 컬럼 자체가 없다
  *      · 실회원 닉네임
  *
- * 🔴 write 는 server action 한 곳에만 있다 — lib/actions/persona-candidate.ts.
- *    전이 규칙은 lib/persona-candidate-rules.ts 의 순수 함수라 DB 없이 검증된다.
- *    🔴 승인해도 발행되지 않는다 — APPROVED 에 머물고, 발행 경로는 별도 승인 대상이다.
+ * 🔴 write 경로는 둘이고 서로 다른 축이다. 한 버튼에 합치지 않는다.
+ *      결정  lib/actions/persona-candidate.ts   PENDING → APPROVED · DECLINED
+ *      발행  lib/actions/persona-publish.ts     APPROVED → PUBLISHED (+ Comment)
+ *    🔴 승인해도 발행되지 않는다. APPROVED 에 머물고, 발행은 사람이 따로 누른다.
+ *    전이 규칙은 persona-candidate-rules.ts · persona-publish-rules.ts 의
+ *    순수 함수라 DB 없이 검증된다(scripts/persona-*-rules-check.mts).
  */
 export const metadata: Metadata = {
   title: '후보 상세',
@@ -76,7 +80,7 @@ export default async function PersonaCandidateDetailPage(
       reactionType: true, gateStatus: true, gateResults: true, aiToneTags: true,
       regenCount: true, storyRefs: true, topicTags: true, seedRef: true,
       targetPostId: true, declineReason: true, decidedBy: true, decidedAt: true,
-      createdAt: true,
+      publishedCommentId: true, createdAt: true,
       persona: {
         select: {
           code: true, status: true, ageBand: true, region: true,
@@ -220,6 +224,15 @@ export default async function PersonaCandidateDetailPage(
 
         {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
         <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+
+        {/* 🔴 발행은 승인과 다른 축이다 — 별도 버튼 · 별도 server action.
+              승인 버튼으로는 PUBLISHED 에 도달할 수 없다(persona-candidate-rules.ts). */}
+        <PersonaCandidatePublish
+          candidateId={row.id}
+          status={row.status as CandidateStatus}
+          publishedCommentId={row.publishedCommentId}
+          targetPostId={row.targetPostId}
+        />
 
         {row.declineReason !== null && (
           <p className="mt-2 text-xs text-gray-600">
