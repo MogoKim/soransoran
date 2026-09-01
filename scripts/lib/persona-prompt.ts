@@ -90,6 +90,54 @@ export const CLICHE_OPENERS: readonly string[] = [
   '와',
 ]
 
+/**
+ * 🔴 최근 발화에서 뽑은 말투 표지 (2026-09-01, A안).
+ *
+ * ⑧ 은 이 페르소나의 **이전 발화와 비교**해 말끝·시작어절 반복을 잡는다.
+ * 그런데 모델은 자기가 예전에 뭘 썼는지 모른다 — "다르게 써라" 만으로는
+ * 하필 같은 말끝을 고르면 그대로 걸린다(#10 시작어절 50%, 임계 35%).
+ *
+ * 🔴 **본문을 넣지 않는다.** 첫 어절과 말끝 3글자만 넣는다.
+ *    본문을 넣으면 그것이 곧 이전 생성물의 재유입이고, 모델이 그걸 참고해
+ *    비슷하게 쓰기 시작한다 — 막으려던 것을 부추기게 된다.
+ */
+export type RecentVoiceMarks = {
+  /** 첫 어절 */
+  openers: readonly string[]
+  /** 말끝 3글자 */
+  endings: readonly string[]
+}
+
+/**
+ * 🔴 추출 규칙은 Gate ⑧ 과 **같아야 한다.**
+ *    persona-gate-78.mts 의 `endingOf` · `hookOf` 와 같은 규칙이다.
+ *    그쪽이 export 하지 않아 여기서 같은 규칙을 쓰고, fixture 가 동등성을 잠근다 —
+ *    두 규칙이 갈리면 "피하라고 준 말"과 "잡히는 말"이 달라져 아무 효과가 없다.
+ */
+const endingOf = (t: string): string => t.replace(/[\s.!?~ㅋㅎ,]+$/u, '').slice(-3)
+const hookOf = (t: string): string => t.trim().split(/\s+/)[0] ?? ''
+
+/** 프롬프트에 실을 최대 개수 — 너무 많으면 지시가 아니라 목록이 된다 */
+export const MAX_RECENT_MARKS = 6
+
+export function extractVoiceMarks(texts: readonly string[]): RecentVoiceMarks {
+  const openers: string[] = []
+  const endings: string[] = []
+  for (const raw of texts) {
+    const t = (raw ?? '').trim()
+    if (t === '') continue
+    const h = hookOf(t)
+    const e = endingOf(t)
+    if (h !== '' && !openers.includes(h)) openers.push(h)
+    if (e !== '' && !endings.includes(e)) endings.push(e)
+  }
+  // 🔴 최근 것이 뒤에 오므로 뒤에서 잘라 낸다 — 오래된 말투보다 최근 말투가 중요하다
+  return {
+    openers: openers.slice(-MAX_RECENT_MARKS),
+    endings: endings.slice(-MAX_RECENT_MARKS),
+  }
+}
+
 /** Persona 행에서 프롬프트에 필요한 것만. 🔴 userId · nickname 을 받지 않는다 */
 export type PromptPersona = {
   code: string
@@ -156,6 +204,8 @@ export function buildPrompt(input: {
   persona: PromptPersona
   post: PromptTargetPost
   reactionType: string
+  /** 🔴 최근 발화의 첫 어절·말끝만. 본문은 받지 않는다 (A안) */
+  recentMarks?: RecentVoiceMarks
 }): PromptPlan {
   const blocks: PromptBlock[] = []
   const { persona, post } = input
@@ -189,6 +239,8 @@ export function buildPrompt(input: {
   if (blocks.length > 0) return { ok: false, blocks }
 
   const reaction = input.reactionType as ReactionType
+  const recentOpeners = input.recentMarks?.openers ?? []
+  const recentEndings = input.recentMarks?.endings ?? []
 
   const systemPrompt = [
     '당신은 한국의 40~60대 여성 커뮤니티에서 활동하는 한 사람입니다.',
@@ -220,6 +272,16 @@ export function buildPrompt(input: {
     '- 아래 말은 쓰지 않습니다. 너무 많이 쓰여 아무 말도 아니게 된 표현입니다.',
     `  ${CLICHE_COMFORT_PHRASES.join(' · ')}`,
     '- 위 말투 설정은 **버릇**이지 틀이 아닙니다. 같은 리듬을 매번 반복하면 기계로 읽힙니다.',
+    // 🔴 A안 — 최근에 쓴 말투를 알려 주고 피하게 한다.
+    //    본문이 아니라 첫 어절·말끝만이다.
+    ...(recentOpeners.length > 0
+      ? [`- 최근에 **이렇게 시작했습니다**: ${recentOpeners.join(' · ')}`,
+         '  이번에는 다른 말로 시작하세요.']
+      : []),
+    ...(recentEndings.length > 0
+      ? [`- 최근에 **이렇게 끝냈습니다**: ${recentEndings.join(' · ')}`,
+         '  이번에는 다른 말끝으로 끝내세요.']
+      : []),
     '',
     '## 절대 하지 않는 것',
     `- 이 낱말을 쓰지 않습니다: ${BRAND_BANNED_WORDS.join(' · ')}`,
@@ -237,7 +299,16 @@ export function buildPrompt(input: {
     '## 길이',
     `한두 문장. ${PROMPT_TARGET_MAX_CHARS}자를 넘기지 않습니다 (많아야 ${MAX_COMMENT_LENGTH}자).`,
     `${MIN_COMMENT_LENGTH}자짜리 한마디도 괜찮습니다. 길게 쓸수록 사람 말에서 멀어집니다.`,
-    '내 생활에서 나온 짧은 한 조각이 있으면 그것 하나만 얹습니다. 없으면 얹지 않습니다.',
+    '',
+    '## 사람이 한 말처럼',
+    // 🔴 이전 판에서 "생활 조각이 없으면 얹지 않습니다" 라고 썼더니
+    //    생활 흔적을 **빼는 쪽**으로 작동해 NO_LIFE_MARKS 가 붙었다(#10).
+    //    없는 경험을 만들지 말라는 뜻이었는데 "아무것도 쓰지 말라" 로 읽힌 것이다.
+    //    금지가 아니라 **무엇을 쓰라**로 바꾼다.
+    '없는 경험을 지어내지 않습니다. 설정에 없는 일을 겪은 척하지 않습니다.',
+    '대신 그 순간의 **감각이나 상황 한 조각**은 남깁니다 —',
+    '지금 뭘 하다 이 글을 봤는지, 읽고 어떤 기분이 스쳤는지 정도면 됩니다.',
+    '말끝을 다듬지 말고 평소 말하듯 씁니다. 완성된 문장이 아니어도 괜찮습니다.',
     '',
     '## 출력 형식',
     '설명 없이 JSON 하나만 출력합니다. 코드블록으로 감싸지 않습니다.',

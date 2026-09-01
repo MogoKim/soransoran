@@ -12,6 +12,7 @@ import {
   buildPrompt, parseCandidate, toCandidateRecord, assertNoStoredSource,
   isReactionType, REACTION_TYPES, MAX_OUTPUT_TOKENS, SOURCE_ECHO_MIN, ALLOWED_RECORD_KEYS,
   CLICHE_COMFORT_PHRASES, CLICHE_OPENERS, PROMPT_TARGET_MAX_CHARS,
+  extractVoiceMarks, MAX_RECENT_MARKS,
   type PromptPersona, type PromptTargetPost, type PromptBlockCode, type CandidateRecord,
 } from './lib/persona-prompt'
 // 🔴 sourcePostId 로 조달한 원문이 Gate ① 에서 실제로 대조되는지 확인한다
@@ -121,6 +122,61 @@ console.log('\n══════ ④ 🔴 금지어가 프롬프트에 지침�
   expect('  길이 정책이 들어간다', sys.includes(String(MAX_COMMENT_LENGTH)), true)
   expect('  진단·처방 금지가 들어간다', sys.includes('진단'), true)
   expect('  출처 언급 금지가 들어간다', sys.includes('카페'), true)
+}
+
+console.log('\n══════ ⑩ 🔴 A안 — 최근 발화 말투 표지 주입')
+{
+  // Gate ⑧ 과 **같은 규칙**으로 뽑아야 한다. 규칙이 갈리면 아무 효과가 없다:
+  //   endingOf = 끝의 [\s.!?~ㅋㅎ,] 제거 후 마지막 3글자 · hookOf = 첫 어절
+  const marks = extractVoiceMarks([
+    '저도 그맘때 그랬어요',      // hook 저도 · ending 그랬어요→'랬어요'
+    '저도 요즘 자꾸 깨네요',      // hook 저도(중복) · ending '깨네요'
+    '밤마다 뒤척이다 보면 그렇더라구요!',  // hook 밤마다 · 끝 ! 제거 → '라구요'
+  ])
+  expect('시작어절 중복 제거', marks.openers.join(','), '저도,밤마다')
+  expect('말끝 3글자 추출', marks.endings.join(','), '랬어요,깨네요,라구요')
+  expect('  ! 는 말끝에서 제외된다', marks.endings.includes('라구요'), true)
+  expect('빈 입력 → 빈 표지', extractVoiceMarks([]).openers.length, 0)
+  expect('공백만 → 빈 표지', extractVoiceMarks(['   ', '']).endings.length, 0)
+
+  // 🔴 상한
+  const many = extractVoiceMarks(
+    Array.from({ length: 20 }, (_, i) => `단어${i} 문장입니다${i}`),
+  )
+  expect(`상한 ${MAX_RECENT_MARKS}종`, many.openers.length, MAX_RECENT_MARKS)
+
+  // 🔴 프롬프트에 표지가 들어가고 **본문은 들어가지 않는다**
+  const body = '저도 그맘때 그랬어요 정말 힘들었습니다'
+  const withMarks = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy',
+    recentMarks: extractVoiceMarks([body]),
+  })
+  const sys = withMarks.ok ? withMarks.prompt.systemPrompt : ''
+  expect('시작어절 지시가 들어간다', sys.includes('이렇게 시작했습니다'), true)
+  expect('  뽑은 첫 어절이 들어간다', sys.includes('저도'), true)
+  expect('말끝 지시가 들어간다', sys.includes('이렇게 끝냈습니다'), true)
+  expect('🔴 본문 전문은 들어가지 않는다', sys.includes(body), false)
+  expect('  본문 중간 어절도 없다', sys.includes('힘들었습니다'), false)
+
+  // 표지가 없으면 그 지시 자체가 빠진다 (빈 목록을 보여주지 않는다)
+  const without = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const sysNo = without.ok ? without.prompt.systemPrompt : ''
+  expect('표지 없으면 지시도 없다', sysNo.includes('이렇게 시작했습니다'), false)
+}
+
+console.log('\n══════ ⑪ 🔴 C안 — NO_LIFE_MARKS 역효과 수정')
+{
+  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const sys = p.ok ? p.prompt.systemPrompt : ''
+  // 🔴 #10 에 NO_LIFE_MARKS 를 붙인 문구가 사라졌는가
+  expect('"없으면 얹지 않습니다" 제거됨', sys.includes('없으면 얹지 않습니다'), false)
+  // 대신 무엇을 쓰라고 하는가
+  expect('가짜 경험 금지는 남는다', sys.includes('지어내지 않습니다'), true)
+  expect('감각·상황 한 조각 요청', sys.includes('감각이나 상황 한 조각'), true)
+  expect('  구체적으로 뭘 쓸지 알려준다', sys.includes('어떤 기분이 스쳤는지'), true)
+  expect('  말끝 다듬지 말라', sys.includes('평소 말하듯'), true)
+  // 길이 권장은 유지
+  expect('120자 권장 유지', sys.includes(String(PROMPT_TARGET_MAX_CHARS)), true)
 }
 
 console.log('\n══════ ⑨ 🔴 #9 실패(② 원문 공유 · ⑧ 말투 반복)를 겨냥한 지시')
