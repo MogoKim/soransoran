@@ -417,6 +417,23 @@ export const READ_QUERIES = {
        AND jsonb_array_length("topComments"::jsonb) > 0
      ORDER BY "commentCount" DESC
      LIMIT 1`,
+  /**
+   * 🔴 sourceRef 목록으로 본문을 되찾는다 (2026-09-01).
+   *
+   * 왜 필요한가 — voice engine 산출물(voice-gold.jsonl 등)에는 **본문이 없다.**
+   * 26키가 전부 신호이고 VoiceSource 도 해시·길이만 남긴다. 설계상 그렇다:
+   * *"원문을 복제하지 않는다"*. 그래서 말투 샘플이 필요한 순간마다 **여기로 다시 읽으러 온다.**
+   *
+   * 🔴 조건을 다시 걸지 않는다. 선별은 voice-sample-select 가 사람 판정까지 반영해 끝냈다 —
+   *    여기서 HIGH_QUALITY_WHERE 를 한 번 더 걸면 "왜 이 글이 빠졌나" 를 두 곳에서 찾게 된다.
+   *
+   * 🔴 읽어 온 본문은 프롬프트에만 쓰고 저장하지 않는다. 호출부의 책임이다.
+   */
+  bodiesBySourceRefs: `
+    SELECT id, content, "boardName", "commentCount"
+      FROM "CafePost"
+     WHERE id = ANY($1)
+     ORDER BY id ASC`,
 } as const
 
 /** 배치 조회 — 🔴 `SELECT` 다. 커서는 id 오름차순으로 고정한다(재개 가능) */
