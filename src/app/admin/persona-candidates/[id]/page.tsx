@@ -9,6 +9,7 @@ import {
 } from '@/lib/persona-admin'
 import PersonaCandidateDecision from '@/components/admin/PersonaCandidateDecision'
 import PersonaCandidatePublish from '@/components/admin/PersonaCandidatePublish'
+import PersonaCandidateTarget from '@/components/admin/PersonaCandidateTarget'
 import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-rules'
 
 /**
@@ -24,9 +25,10 @@ import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-r
  *      · author · sourceUrl · sourceRef — 컬럼 자체가 없다
  *      · 실회원 닉네임
  *
- * 🔴 write 경로는 둘이고 서로 다른 축이다. 한 버튼에 합치지 않는다.
- *      결정  lib/actions/persona-candidate.ts   PENDING → APPROVED · DECLINED
- *      발행  lib/actions/persona-publish.ts     APPROVED → PUBLISHED (+ Comment)
+ * 🔴 write 경로는 셋이고 서로 다른 축이다. 한 버튼에 합치지 않는다.
+ *      결정    lib/actions/persona-candidate.ts   PENDING → APPROVED · DECLINED
+ *      대상글  lib/actions/persona-target.ts      targetPostId 한 컬럼 (상태 불변)
+ *      발행    lib/actions/persona-publish.ts     APPROVED → PUBLISHED (+ Comment)
  *    🔴 승인해도 발행되지 않는다. APPROVED 에 머물고, 발행은 사람이 따로 누른다.
  *    전이 규칙은 persona-candidate-rules.ts · persona-publish-rules.ts 의
  *    순수 함수라 DB 없이 검증된다(scripts/persona-*-rules-check.mts).
@@ -224,6 +226,15 @@ export default async function PersonaCandidateDetailPage(
 
         {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
         <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+
+        {/* 🔴 대상 글 지정은 발행이 아니다. targetPostId 한 컬럼만 바꾼다.
+              발행 버튼보다 위에 둔다 — 대상을 정해야 발행이 가능해지는 순서다. */}
+        <PersonaCandidateTarget
+          candidateId={row.id}
+          status={row.status as CandidateStatus}
+          targetPostId={row.targetPostId}
+          publishedCommentId={row.publishedCommentId}
+        />
 
         {/* 🔴 발행은 승인과 다른 축이다 — 별도 버튼 · 별도 server action.
               승인 버튼으로는 PUBLISHED 에 도달할 수 없다(persona-candidate-rules.ts). */}
