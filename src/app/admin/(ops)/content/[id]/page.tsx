@@ -3,12 +3,20 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
-import { communityPostHref, formatKst } from '@/lib/admin-format'
+import { boardLabel, communityPostHref, formatKst } from '@/lib/admin-format'
 import { REPORT_REASONS } from '@/lib/report-reasons'
-import { getBoardByType } from '@/lib/board-registry'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminPostEditForm from '@/components/admin/AdminPostEditForm'
 import AdminCommentEditForm from '@/components/admin/AdminCommentEditForm'
+import {
+  AdminPageHeader,
+  AdminSection,
+  AdminBadge,
+  AdminEmptyState,
+  AdminQuote,
+  AdminActionGroup,
+  AdminStatusBadge,
+} from '@/components/admin/AdminUi'
 import { setPostHidden, setCommentHidden } from '@/lib/actions/admin'
 
 /**
@@ -18,10 +26,15 @@ import { setPostHidden, setCommentHidden } from '@/lib/actions/admin'
  *    지우면 신고 근거도 함께 사라져 왜 조치했는지 설명할 수 없다.
  * 🔴 고객 화면 링크를 문자열로 적지 않는다.
  *    실제 경로는 /community/{boardSlug}/{postId} 이고 boardSlug 는 board-registry 가 정한다.
- *    단일 세그먼트 글 경로(예전 형태)는 이 서비스에 없다 — 눌러도 404 가 난다.
+ *    매거진은 하위가 Post.id 가 아니라 파일 slug 라 링크를 만들 수 없다 —
+ *    만들 수 없으면 걸지 않는다. 404 로 가는 링크는 없느니만 못하다.
  *
  * 🔴 숨김은 status 만 바꾼다. 그러면 목록·상세·홈 인기글이 함께 따라온다
  *    (post-visibility.ts 3축이 유일한 판정 지점이다).
+ *
+ * 🔴 화면 순서는 판단 순서다 — 무슨 글인가(머리) → 왜 여기 왔나(신고) →
+ *    무엇을 고칠까(본문·댓글) → 내릴까(조치). 조치가 맨 끝인 것은
+ *    읽기 전에 손이 먼저 나가지 않게 하려는 것이다.
  */
 export const metadata: Metadata = { title: '게시글 상세' }
 export const dynamic = 'force-dynamic'
@@ -68,32 +81,28 @@ export default async function AdminContentDetailPage({
 
   if (!post) notFound()
 
-  const hidden = post.status !== 'PUBLISHED'
-  const board = getBoardByType(post.boardType)
-  // 매거진 글은 커뮤니티 상세 경로가 없다(하위가 Post.id 가 아니라 파일 slug 다).
-  // 링크를 만들 수 없으면 걸지 않는다 — 404 로 가는 링크는 없느니만 못하다.
+  const deleted = post.status === 'DELETED'
+  const hidden = post.status === 'HIDDEN'
   const publicHref = communityPostHref(post.id, post.boardType)
+  const pendingReports = post.reports.filter((r) => r.status === 'PENDING').length
+  const hiddenComments = post.comments.filter((c) => c.isDeleted).length
 
   return (
-    <main>
-      <Link href="/admin/content" className="mt-6 inline-flex min-h-[52px] items-center text-link">
-        ← 목록으로
-      </Link>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-md bg-surface-soft px-2 py-1 text-xs text-content-muted">
-          {board?.label ?? post.boardType}
-        </span>
-        <span
-          className={
-            hidden
-              ? 'rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-state-danger'
-              : 'rounded-md bg-surface-soft px-2 py-1 text-xs text-content-muted'
-          }
-        >
-          {post.status}
-        </span>
-      </div>
+    <main className="pt-2 lg:pt-0">
+      <AdminPageHeader
+        backHref="/admin/content"
+        title={post.title}
+        badges={
+          <>
+            <AdminBadge>{boardLabel(post.boardType)}</AdminBadge>
+            <AdminStatusBadge kind="post" value={post.status} />
+            {post.reports.length > 0 ? (
+              <AdminBadge tone="danger">신고 {post.reports.length}건</AdminBadge>
+            ) : null}
+            <AdminBadge>댓글 {post.comments.length}건</AdminBadge>
+          </>
+        }
+      />
 
       <p className="mt-2 text-sm text-content-muted">
         <Link href={`/admin/members/${post.author.id}`} className="text-link">
@@ -105,65 +114,79 @@ export default async function AdminContentDetailPage({
             {' '}
             ·{' '}
             <Link href={publicHref} className="text-link">
-              고객 화면
+              고객 화면에서 보기
             </Link>
           </>
         ) : null}
       </p>
 
-      <section className="mt-4">
-        <h2 className="text-sm font-bold text-content-primary">내용 수정</h2>
-        <div className="mt-2">
-          <AdminPostEditForm postId={post.id} title={post.title} content={post.content} />
-        </div>
-      </section>
-
-      <section className="mt-6">
-        <h2 className="text-sm font-bold text-content-primary">
-          신고 {post.reports.length}건
-        </h2>
+      <AdminSection
+        title={`신고 ${post.reports.length}건`}
+        description={
+          pendingReports > 0
+            ? `미처리 ${pendingReports}건 · 처리는 신고 관리에서 합니다`
+            : undefined
+        }
+      >
         {post.reports.length === 0 ? (
-          <p className="py-4 text-sm text-content-muted">이 글에 접수된 신고가 없습니다.</p>
+          <AdminEmptyState>이 글에 접수된 신고가 없습니다.</AdminEmptyState>
         ) : (
           <ul className="mt-2 flex list-none flex-col gap-2 p-0">
             {post.reports.map((r) => (
               <li key={r.id} className="rounded-lg border border-subtle bg-surface-card p-3">
-                <p className="m-0 text-sm text-content-primary">
-                  {REASON_LABEL.get(r.reason) ?? r.reason} · {r.status} · {formatKst(r.createdAt)}
+                <p className="m-0 flex flex-wrap items-center gap-2 text-sm text-content-primary">
+                  <AdminBadge tone="brand">
+                    {REASON_LABEL.get(r.reason) ?? r.reason}
+                  </AdminBadge>
+                  <AdminStatusBadge kind="report" value={r.status} />
+                  <span className="text-content-muted">{formatKst(r.createdAt)}</span>
                 </p>
                 {r.detail ? (
-                  <p className="mt-1 whitespace-pre-wrap text-sm text-content-muted">{r.detail}</p>
+                  <p className="mt-1 whitespace-pre-wrap break-words text-sm text-content-muted">
+                    {r.detail}
+                  </p>
                 ) : null}
               </li>
             ))}
           </ul>
         )}
         <Link href="/admin/reports" className="mt-2 inline-flex min-h-[52px] items-center text-link">
-          신고 관리로 가기
+          신고 관리로 가기 →
         </Link>
-      </section>
+      </AdminSection>
 
-      <section className="mt-4">
-        <h2 className="text-sm font-bold text-content-primary">
-          댓글 {post.comments.length}건
-        </h2>
+      <AdminSection
+        title="글 내용 고치기"
+        description="고쳐도 작성자에게 알림이 가지 않습니다. 원문은 남지 않습니다."
+      >
+        <div className="mt-2">
+          <AdminPostEditForm postId={post.id} title={post.title} content={post.content} />
+        </div>
+      </AdminSection>
+
+      <AdminSection
+        title={`댓글 ${post.comments.length}건`}
+        description={hiddenComments > 0 ? `숨긴 댓글 ${hiddenComments}건 포함` : undefined}
+      >
         {post.comments.length === 0 ? (
-          <p className="py-4 text-sm text-content-muted">댓글이 없습니다.</p>
+          <AdminEmptyState>아직 달린 댓글이 없습니다.</AdminEmptyState>
         ) : (
           <ul className="mt-2 flex list-none flex-col gap-2 p-0">
             {post.comments.map((c) => (
               <li key={c.id} className="rounded-lg border border-subtle bg-surface-card p-3">
-                <p className="m-0 whitespace-pre-wrap text-sm text-content-primary">{c.content}</p>
-                <p className="mt-1 text-xs text-content-muted">
+                <p className="m-0 whitespace-pre-wrap break-words text-sm text-content-primary">
+                  {c.content}
+                </p>
+                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-content-muted">
                   <Link href={`/admin/members/${c.author.id}`} className="text-link">
                     {c.author.nickname ?? c.author.name ?? '회원'}
-                  </Link>{' '}
-                  · {formatKst(c.createdAt)}
-                  {c.isDeleted ? ' · 숨김' : ''}
+                  </Link>
+                  <span>{formatKst(c.createdAt)}</span>
+                  {c.isDeleted ? <AdminBadge tone="danger">숨김</AdminBadge> : null}
                 </p>
                 {/* 숨김 댓글도 고칠 수 있다. 고치는 것과 되살리는 것은 다른 판단이라
                     수정 폼과 숨김 버튼을 나란히 두되 서로 건드리지 않는다. */}
-                <div className="mt-2 flex flex-col gap-2">
+                <div className="mt-2 flex flex-wrap gap-2">
                   <AdminCommentEditForm commentId={c.id} content={c.content} />
 
                   {c.isDeleted ? (
@@ -190,36 +213,46 @@ export default async function AdminContentDetailPage({
             ))}
           </ul>
         )}
-      </section>
+      </AdminSection>
 
-      <section className="mt-6 border-t border-subtle pt-4">
-        <h2 className="text-sm font-bold text-content-primary">조치</h2>
-        <p className="mt-1 text-sm text-content-muted">
-          {post.status === 'DELETED'
-            ? '삭제 상태인 글입니다. 이 화면에서는 상태를 바꾸지 않습니다.'
-            : '숨기면 목록·상세·홈 인기글에서 함께 사라집니다. 글은 지워지지 않습니다.'}
-        </p>
-        <div className="mt-3">
-          {post.status === 'DELETED' ? null : hidden ? (
-            <AdminActionButton
-              label="다시 공개"
-              run={async () => {
-                'use server'
-                return setPostHidden(post.id, false)
-              }}
-            />
-          ) : (
-            <AdminActionButton
-              label="글 숨기기"
-              tone="danger"
-              confirmText="이 글을 숨길까요? 고객 화면에서 바로 사라집니다."
-              run={async () => {
-                'use server'
-                return setPostHidden(post.id, true)
-              }}
-            />
-          )}
-        </div>
+      <section className="mt-8 border-t border-subtle pt-6">
+        {deleted ? (
+          <>
+            <h2 className="m-0 text-sm font-bold text-content-primary">조치</h2>
+            <AdminQuote>
+              삭제 상태인 글입니다. 이 화면에서는 공개 상태를 바꾸지 않습니다.
+            </AdminQuote>
+          </>
+        ) : (
+          <AdminActionGroup
+            label={hidden ? '되돌리기' : '위험한 조치'}
+            hint={
+              hidden
+                ? '다시 공개하면 게시판·홈 인기글에 함께 돌아옵니다.'
+                : '숨기면 게시판·상세·홈 인기글에서 함께 사라집니다. 글은 지워지지 않습니다.'
+            }
+          >
+            {hidden ? (
+              <AdminActionButton
+                label="글 다시 공개"
+                run={async () => {
+                  'use server'
+                  return setPostHidden(post.id, false)
+                }}
+              />
+            ) : (
+              <AdminActionButton
+                label="글 숨기기"
+                tone="danger"
+                confirmText="이 글을 숨길까요? 고객 화면에서 바로 사라집니다."
+                run={async () => {
+                  'use server'
+                  return setPostHidden(post.id, true)
+                }}
+              />
+            )}
+          </AdminActionGroup>
+        )}
       </section>
     </main>
   )

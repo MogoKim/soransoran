@@ -6,6 +6,17 @@ import { requireAdmin } from '@/lib/admin'
 import { formatKst, orDash, REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import { setMemberBlocked } from '@/lib/actions/admin'
+import {
+  AdminPageHeader,
+  AdminSection,
+  AdminBadge,
+  AdminEmptyState,
+  AdminQuote,
+  AdminActionGroup,
+  AdminFieldList,
+  AdminField,
+  AdminStatusBadge,
+} from '@/components/admin/AdminUi'
 import type { Prisma } from '@prisma/client'
 
 /**
@@ -19,9 +30,15 @@ import type { Prisma } from '@prisma/client'
  *    50 번 신고당한 사람이 "20건" 으로 보인다 — 가장 위험한 회원이 가장 덜 위험해 보인다.
  *    목록은 최근 20건만 싣고, 그렇다고 화면에 적는다.
  *
- * 🔴 개인정보는 이 화면에만 둔다. 목록으로 새어 나가지 않게 한다.
- * 🔴 긴 값(id·이메일·전화번호)은 break-all 로 접는다 — 모바일에서 가로 스크롤이 생기면
+ * 🔴 "신고한" 과 "신고당한" 을 붙여 두지 않는다. 두 목록이 나란히 있으면
+ *    한 글자 차이로 뒤집혀 읽힌다 — 신고를 많이 한 사람이 문제 회원으로 보인다.
+ *    신고당한 쪽만 위로 올리고, 신고한 쪽은 개인정보 앞에 따로 둔다.
+ *
+ * 🔴 개인정보는 이 화면에만 두고, 접어 둔다.
+ *    전화번호·이메일은 볼 일이 있을 때만 펴서 본다 — 어깨너머로 보이는 화면이다.
+ *    긴 값은 break-all 로 접는다(AdminField). 모바일에서 가로 스크롤이 생기면
  *    옆 칸을 덮어 읽을 수 없다.
+ *
  * 🔴 실회원이 아니면 notFound 다 — 목록과 같은 기준(REAL_MEMBER_WHERE)을 쓴다.
  *    목록에서 뺀 사람이 주소만 알면 열리는 상태가 가장 위험하다.
  *    페르소나 User 를 여기서 열면 차단 버튼까지 보이게 된다.
@@ -34,24 +51,40 @@ export const dynamic = 'force-dynamic'
 /** 각 목록에 싣는 최근 건수. 총계는 따로 센다. */
 const TAKE = 20
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 border-t border-subtle py-3 first:border-t-0 sm:flex-row sm:gap-4">
-      <dt className="shrink-0 text-sm text-content-muted sm:w-40">{label}</dt>
-      <dd className="m-0 break-all text-sm text-content-primary">{value}</dd>
-    </div>
-  )
+/** 목록 제목 — 총계와 "최근 N건 표시" 를 구분해 적는다. */
+function countLabel(total: number, shown: number): string | undefined {
+  return total > shown ? `최근 ${shown}건만 표시` : undefined
 }
 
-/** 목록 제목 — 총계와 "최근 N건 표시" 를 구분해 적는다. */
-function SectionHeading({ label, total, shown }: { label: string; total: number; shown: number }) {
+/** 신고 한 줄 — 신고한 내역과 신고당한 내역이 같은 모양이어야 헷갈리지 않는다. */
+function ReportRow({
+  reason,
+  status,
+  createdAt,
+  postId,
+  commentId,
+}: {
+  reason: string
+  status: string
+  createdAt: Date
+  postId: string | null
+  commentId: string | null
+}) {
   return (
-    <h2 className="text-sm font-bold text-content-primary">
-      {label} {total}건
-      {total > shown ? (
-        <span className="ml-1 font-normal text-content-muted">(최근 {shown}건 표시)</span>
-      ) : null}
-    </h2>
+    <li className="flex flex-wrap items-center gap-2 rounded-lg border border-subtle bg-surface-card p-3 text-sm text-content-primary">
+      <AdminBadge tone="brand">{reason}</AdminBadge>
+      <AdminStatusBadge kind="report" value={status} />
+      <span className="text-content-muted">{formatKst(createdAt)}</span>
+      {postId ? (
+        <Link href={`/admin/content/${postId}`} className="text-link">
+          대상 글 보기
+        </Link>
+      ) : commentId ? (
+        <span className="text-content-muted">대상: 댓글</span>
+      ) : (
+        <span className="text-content-muted">대상 없음</span>
+      )}
+    </li>
   )
 }
 
@@ -150,24 +183,23 @@ export default async function AdminMemberDetailPage({
   const hiddenPosts = member.posts.filter((p) => p.status !== 'PUBLISHED').length
 
   return (
-    <main>
-      <Link href="/admin/members" className="mt-6 inline-flex min-h-[52px] items-center text-link">
-        ← 목록으로
-      </Link>
-
-      <h1 className="text-xl font-bold text-content-primary">
-        {member.nickname ?? member.name ?? '회원'}
-        {member.isBlocked ? (
-          <span className="ml-2 align-middle text-sm font-bold text-state-danger">차단됨</span>
-        ) : null}
-        {member.isAdmin ? (
-          <span className="ml-2 align-middle text-sm text-content-muted">운영자</span>
-        ) : null}
-      </h1>
+    <main className="pt-2 lg:pt-0">
+      <AdminPageHeader
+        backHref="/admin/members"
+        title={member.nickname ?? member.name ?? '회원'}
+        badges={
+          <>
+            {member.isBlocked ? <AdminBadge tone="danger">차단됨</AdminBadge> : null}
+            {member.isAdmin ? <AdminBadge tone="brand">운영자</AdminBadge> : null}
+            {!member.isOnboarded ? <AdminBadge>온보딩 전</AdminBadge> : null}
+            <AdminBadge>가입 {formatKst(member.createdAt)}</AdminBadge>
+          </>
+        }
+      />
 
       {/* 🔴 판단 요약 — 이 화면에서 가장 먼저 읽혀야 하는 것. */}
       <section className="mt-4 rounded-lg border border-subtle bg-surface-card p-4">
-        <h2 className="text-sm font-bold text-content-primary">운영 판단</h2>
+        <h2 className="m-0 text-sm font-bold text-content-primary">운영 판단</h2>
         <dl className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div>
             <dt className="text-xs text-content-muted">신고당함</dt>
@@ -195,14 +227,7 @@ export default async function AdminMemberDetailPage({
           </div>
           <div>
             <dt className="text-xs text-content-muted">작성 글</dt>
-            <dd className="m-0 text-lg font-bold text-content-primary">
-              {member._count.posts}건
-              {hiddenPosts > 0 ? (
-                <span className="ml-1 text-xs font-normal text-content-muted">
-                  최근 숨김 {hiddenPosts}
-                </span>
-              ) : null}
-            </dd>
+            <dd className="m-0 text-lg font-bold text-content-primary">{member._count.posts}건</dd>
           </div>
           <div>
             <dt className="text-xs text-content-muted">작성 댓글</dt>
@@ -212,10 +237,22 @@ export default async function AdminMemberDetailPage({
           </div>
         </dl>
 
-        <p className="mt-3 text-sm text-content-muted">
-          차단하면 이 회원은 로그인 후에도 글·댓글을 쓸 수 없습니다. 글은 지워지지 않습니다.
-        </p>
-        <div className="mt-2">
+        {hiddenPosts > 0 ? (
+          <p className="mt-3 text-sm text-state-danger">
+            최근 글 {member.posts.length}건 중 {hiddenPosts}건이 가려져 있습니다.
+          </p>
+        ) : null}
+
+        <AdminActionGroup
+          label={member.isBlocked ? '되돌리기' : '위험한 조치'}
+          hint={
+            member.isAdmin
+              ? '운영자는 차단할 수 없습니다.'
+              : member.isBlocked
+                ? '해제하면 다시 글과 댓글을 쓸 수 있습니다.'
+                : '차단하면 로그인해도 글·댓글을 쓸 수 없습니다. 이미 쓴 글은 지워지지 않습니다.'
+          }
+        >
           {member.isBlocked ? (
             <AdminActionButton
               label="차단 해제"
@@ -236,42 +273,30 @@ export default async function AdminMemberDetailPage({
               }}
             />
           )}
-        </div>
+        </AdminActionGroup>
       </section>
 
-      <section className="mt-4">
-        <SectionHeading
-          label="신고당한 내역"
-          total={reportedAgainstTotal}
-          shown={reportedAgainst.length}
-        />
+      <AdminSection
+        title={`신고당한 내역 ${reportedAgainstTotal}건`}
+        description={countLabel(reportedAgainstTotal, reportedAgainst.length)}
+      >
         {reportedAgainst.length === 0 ? (
-          <p className="py-4 text-sm text-content-muted">신고당한 내역이 없습니다.</p>
+          <AdminEmptyState>이 회원의 글·댓글이 신고된 적이 없습니다.</AdminEmptyState>
         ) : (
           <ul className="mt-2 flex list-none flex-col gap-2 p-0">
             {reportedAgainst.map((r) => (
-              <li
-                key={r.id}
-                className="rounded-lg border border-subtle bg-surface-card p-3 text-sm text-content-primary"
-              >
-                {r.reason} · {r.status} · {formatKst(r.createdAt)} ·{' '}
-                {r.postId ? (
-                  <Link href={`/admin/content/${r.postId}`} className="text-link">
-                    대상 글
-                  </Link>
-                ) : (
-                  <span className="break-all text-content-muted">댓글 {r.commentId}</span>
-                )}
-              </li>
+              <ReportRow key={r.id} {...r} />
             ))}
           </ul>
         )}
-      </section>
+      </AdminSection>
 
-      <section className="mt-4">
-        <SectionHeading label="작성 글" total={member._count.posts} shown={member.posts.length} />
+      <AdminSection
+        title={`작성 글 ${member._count.posts}건`}
+        description={countLabel(member._count.posts, member.posts.length)}
+      >
         {member.posts.length === 0 ? (
-          <p className="py-4 text-sm text-content-muted">작성한 글이 없습니다.</p>
+          <AdminEmptyState>작성한 글이 없습니다.</AdminEmptyState>
         ) : (
           <ul className="mt-2 flex list-none flex-col gap-2 p-0">
             {member.posts.map((p) => (
@@ -280,96 +305,109 @@ export default async function AdminMemberDetailPage({
                   href={`/admin/content/${p.id}`}
                   className="flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline"
                 >
-                  <span className="font-bold text-content-primary">{p.title}</span>
-                  <span className="text-sm text-content-muted">
-                    {formatKst(p.createdAt)} · {p.status}
-                    {p._count.reports > 0 ? ` · 신고 ${p._count.reports}` : ''}
+                  <span className="break-words font-bold text-content-primary">{p.title}</span>
+                  <span className="flex flex-wrap items-center gap-2 text-sm text-content-muted">
+                    {formatKst(p.createdAt)}
+                    {p.status !== 'PUBLISHED' ? (
+                      <AdminStatusBadge kind="post" value={p.status} />
+                    ) : null}
+                    {p._count.reports > 0 ? (
+                      <AdminBadge tone="danger">신고 {p._count.reports}건</AdminBadge>
+                    ) : null}
                   </span>
                 </Link>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </AdminSection>
 
-      <section className="mt-4">
-        <SectionHeading
-          label="작성 댓글"
-          total={member._count.comments}
-          shown={member.comments.length}
-        />
+      <AdminSection
+        title={`작성 댓글 ${member._count.comments}건`}
+        description={countLabel(member._count.comments, member.comments.length)}
+      >
         {member.comments.length === 0 ? (
-          <p className="py-4 text-sm text-content-muted">작성한 댓글이 없습니다.</p>
+          <AdminEmptyState>작성한 댓글이 없습니다.</AdminEmptyState>
         ) : (
           <ul className="mt-2 flex list-none flex-col gap-2 p-0">
             {member.comments.map((c) => (
               <li key={c.id} className="rounded-lg border border-subtle bg-surface-card p-3">
-                <p className="m-0 whitespace-pre-wrap text-sm text-content-primary">{c.content}</p>
-                <p className="mt-1 text-xs text-content-muted">
-                  {formatKst(c.createdAt)}
-                  {c.isDeleted ? ' · 숨김' : ''} ·{' '}
+                <p className="m-0 whitespace-pre-wrap break-words text-sm text-content-primary">
+                  {c.content}
+                </p>
+                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-content-muted">
+                  <span>{formatKst(c.createdAt)}</span>
+                  {c.isDeleted ? <AdminBadge tone="danger">숨김</AdminBadge> : null}
                   <Link href={`/admin/content/${c.postId}`} className="text-link">
-                    글 보기
+                    글에서 보기
                   </Link>
                 </p>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </AdminSection>
 
-      <section className="mt-4">
-        <SectionHeading
-          label="신고한 내역"
-          total={member._count.reports}
-          shown={member.reports.length}
-        />
+      <AdminSection
+        title={`이 회원이 신고한 내역 ${member._count.reports}건`}
+        description={countLabel(member._count.reports, member.reports.length)}
+      >
         {member.reports.length === 0 ? (
-          <p className="py-4 text-sm text-content-muted">신고한 내역이 없습니다.</p>
+          <AdminEmptyState>이 회원이 신고한 내역이 없습니다.</AdminEmptyState>
         ) : (
           <ul className="mt-2 flex list-none flex-col gap-2 p-0">
             {member.reports.map((r) => (
-              <li
-                key={r.id}
-                className="rounded-lg border border-subtle bg-surface-card p-3 text-sm text-content-primary"
-              >
-                {r.reason} · {r.status} · {formatKst(r.createdAt)} ·{' '}
-                {r.postId ? (
-                  <Link href={`/admin/content/${r.postId}`} className="text-link">
-                    대상 글
-                  </Link>
-                ) : (
-                  <span className="break-all text-content-muted">댓글 {r.commentId}</span>
-                )}
-              </li>
+              <ReportRow key={r.id} {...r} />
             ))}
           </ul>
         )}
+      </AdminSection>
+
+      {/* 🔴 개인정보는 접어 둔다. 볼 일이 있을 때만 편다. */}
+      <section className="mt-8 border-t border-subtle pt-6">
+        <details>
+          <summary className="min-h-[52px] cursor-pointer list-none py-3 text-sm font-bold text-content-primary">
+            가입 정보 보기{' '}
+            <span className="font-normal text-content-muted">
+              (이메일·전화번호 등 개인정보)
+            </span>
+          </summary>
+          <AdminFieldList>
+            <AdminField label="소란소란 닉네임" value={orDash(member.nickname)} />
+            <AdminField label="카카오 이름" value={orDash(member.name)} />
+            <AdminField label="이메일" value={orDash(member.email)} />
+            <AdminField label="전화번호" value={orDash(member.phoneNumber)} />
+            <AdminField label="성별" value={orDash(member.gender)} />
+            <AdminField label="출생연도" value={orDash(member.birthyear)} />
+            <AdminField label="프로필 동의" value={formatKst(member.profileConsentAt)} />
+            <AdminField label="마케팅 동의" value={formatKst(member.marketingConsentAt)} />
+            <AdminField label="온보딩" value={member.isOnboarded ? '완료' : '전'} />
+            <AdminField label="첫 인사" value={formatKst(member.firstGreetingAt)} />
+            <AdminField label="가입일" value={formatKst(member.createdAt)} />
+            <AdminField label="정보 수정일" value={formatKst(member.updatedAt)} />
+          </AdminFieldList>
+
+          {/* 🔴 raw id 는 한 겹 더 접는다. 평소 판단에 쓰이지 않고 자리만 차지한다. */}
+          <details className="mt-2">
+            <summary className="min-h-[52px] cursor-pointer list-none py-3 text-xs text-content-muted">
+              내부 식별자 보기
+            </summary>
+            <AdminFieldList>
+              <AdminField label="회원 id" value={member.id} />
+              <AdminField label="providerId" value={orDash(member.providerId)} />
+              <AdminField label="첫 인사 글 id" value={orDash(member.firstGreetingPostId)} />
+              <AdminField label="프로필 이미지" value={orDash(member.image)} />
+              <AdminField label="관리자" value={member.isAdmin ? '예' : '아니오'} />
+            </AdminFieldList>
+          </details>
+        </details>
       </section>
 
-      <section className="mt-6 border-t border-subtle pt-4">
-        <h2 className="text-sm font-bold text-content-primary">가입 정보</h2>
-        <dl className="mt-2 flex flex-col">
-          <Row label="회원 id" value={member.id} />
-          <Row label="소란소란 닉네임" value={orDash(member.nickname)} />
-          <Row label="카카오 이름" value={orDash(member.name)} />
-          <Row label="이메일" value={orDash(member.email)} />
-          <Row label="프로필 이미지" value={orDash(member.image)} />
-          <Row label="providerId" value={orDash(member.providerId)} />
-          <Row label="성별" value={orDash(member.gender)} />
-          <Row label="출생연도" value={orDash(member.birthyear)} />
-          <Row label="전화번호" value={orDash(member.phoneNumber)} />
-          <Row label="프로필 동의" value={formatKst(member.profileConsentAt)} />
-          <Row label="마케팅 동의" value={formatKst(member.marketingConsentAt)} />
-          <Row label="온보딩" value={member.isOnboarded ? '완료' : '전'} />
-          <Row label="관리자" value={member.isAdmin ? '예' : '아니오'} />
-          <Row label="차단" value={member.isBlocked ? '차단됨' : '정상'} />
-          <Row label="첫 인사" value={formatKst(member.firstGreetingAt)} />
-          <Row label="첫 인사 글 id" value={orDash(member.firstGreetingPostId)} />
-          <Row label="가입일" value={formatKst(member.createdAt)} />
-          <Row label="수정일" value={formatKst(member.updatedAt)} />
-        </dl>
-      </section>
+      {member.isBlocked ? (
+        <AdminQuote>
+          차단된 회원입니다. 글과 댓글은 그대로 남아 있고, 새로 쓰는 것만 막혀 있습니다.
+        </AdminQuote>
+      ) : null}
     </main>
   )
 }

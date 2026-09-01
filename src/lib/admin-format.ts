@@ -68,6 +68,29 @@ export function isRealMember(user: {
 }
 
 /**
+ * 게시판 이름.
+ *
+ * 🔴 화면마다 BOARD_LABEL 상수를 다시 적지 않는다. 실제로 세 곳이 각자 적고 있었고
+ *    한 곳은 board-registry 를 썼다 — 게시판 이름이 바뀌면 두 곳만 따라온다.
+ *    board-registry 가 유일한 출처다.
+ */
+export function boardLabel(boardType: BoardType): string {
+  return getBoardByType(boardType)?.label ?? boardType
+}
+
+/**
+ * 글 상태 이름.
+ *
+ * 🔴 enum 값을 그대로 내보이지 않는다. 운영 화면에 PUBLISHED · HIDDEN 이 영문으로
+ *    뜨면 운영자가 "삭제와 숨김이 뭐가 다른가" 를 화면에서 알 수 없다.
+ */
+export function postStatusLabel(status: 'PUBLISHED' | 'HIDDEN' | 'DELETED'): string {
+  if (status === 'HIDDEN') return '숨김'
+  if (status === 'DELETED') return '삭제'
+  return '공개'
+}
+
+/**
  * 글 상세의 고객 경로. 만들 수 없으면 null 이다.
  *
  * 🔴 매거진은 제외한다.
