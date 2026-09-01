@@ -6,9 +6,15 @@
   하는 일: magazine-auto-register-run.mjs 를 띄운다.
     └ magazine-auto-register-ready.mjs --dry-run --notify
         gate(큐·등급) → 변환 검사 → QA → batch-qa → hero(REQUIRED) → register dry-run
-        결과를 _runs/{date}/auto-register.json 과 Slack 으로 보고
 
-  🔴 **인자 없이 부르면 dry-run 이다. 파일을 하나도 고치지 않는다.**
+  🔴 **새벽 감시 기준은 이 로그다** — Slack 이 아니다.
+     StandardOutPath: ~/Library/Logs/soransoran/magazine-auto-register.log
+     --notify 는 보낼 문구를 만들어 로그에 남기기만 한다(발송 0).
+     Slack 실제 발송을 열려면 ProgramArguments 에 --notify-send 를 넣는다.
+     리포트 JSON(_runs/{date}/auto-register.json)은 --write 회차만 남는다.
+
+  🔴 **인자 없이 부르면 dry-run 이다. repo 파일 변경 0건이다.**
+     원고 회수·변환·hero·register 는 물론 리포트 JSON 도 쓰지 않는다.
      오늘은 "리포트만" 으로 연결한다. 무인 등록 write 를 여는 것은
      ProgramArguments 에 --write --pr 을 창업자가 직접 넣는 순간뿐이다.
      지금 켜면 articles.ts 가 사람 눈을 거치지 않고 바뀐다.
@@ -16,6 +22,11 @@
   🔴 00:10 producer 와 겹치지 않게 02:00 에 둔다.
      producer 가 brief 를 만들고 원고를 회수한 뒤여야 이 레인에 태울 것이 생긴다.
      producer 가 늦어져도 이 레인은 그날 할 것이 없다고 조용히 보고할 뿐이다.
+
+  🔴 write 는 깨끗한 main 에서만 시작한다.
+     현재 브랜치 main · origin/main 과 동기 · 추적 변경 0건 — 하나라도 아니면 BLOCKED.
+     미추적 파일은 판단 대상이 아니지만 stage 에는 절대 들어가지 않는다.
+     PR 브랜치는 register write **앞에** 만든다 (실패해도 articles.ts 가 남지 않도록).
 
   🔴 HIGH 는 이 레인에 들어오지 않는다.
      magazine-auto-lane.mjs 의 gate 가 topic-queue 를 정본으로 등급을 본다.

@@ -2,7 +2,7 @@
 /**
  * LOW/MEDIUM 단일 slug 자동 후속 처리 — 원고 회수부터 등록 PR 까지.
  *
- *   producer(01:00) 가 brief.md 를 만들어 두면 그 다음을 이 스크립트가 잇는다.
+ *   producer(00:10 KST) 가 brief.md 를 만들어 두면 그 다음을 이 스크립트가 잇는다.
  *
  *   gate → draft.md 회수 → article-draft.ts → magazine QA → batch-qa
  *        → hero(REQUIRED) → register → PR
