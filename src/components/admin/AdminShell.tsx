@@ -15,25 +15,35 @@ import AdminOpsNav from '@/components/admin/AdminOpsNav'
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="admin-shell min-h-screen bg-surface-app">
-      <div className="mx-auto w-full max-w-[1400px] lg:flex lg:gap-6 lg:px-6">
+      <div className="mx-auto w-full max-w-[1400px] lg:flex lg:gap-8 lg:px-6">
         {/* 데스크탑: 왼쪽에 붙어 따라오는 메뉴 */}
-        <aside className="hidden lg:block lg:w-44 lg:shrink-0 lg:py-6">
+        <aside className="hidden lg:block lg:w-[228px] lg:shrink-0 lg:py-6">
           <div className="sticky top-6">
+            {/* 콘솔 타이틀 — 여기가 고객 화면이 아니라는 표시이자 홈으로 돌아가는 길 */}
             <Link
               href="/admin"
-              className="mb-3 flex items-center gap-2 px-3 text-sm font-bold text-content-primary no-underline"
+              className="mb-4 block px-3 no-underline"
+              aria-label="운영 콘솔 홈"
             >
-              소란소란 운영
+              <span className="block text-lg font-bold leading-tight text-content-primary">
+                소란소란 운영
+              </span>
+              <span className="block text-xs text-content-muted">운영 콘솔</span>
             </Link>
             <AdminOpsNav layout="sidebar" />
+
+            <p className="mt-4 border-t border-subtle px-3 pt-3 text-xs text-content-muted">
+              페르소나 운영은{' '}
+              <Link href="/admin/personas" className="text-link">
+                별도 화면
+              </Link>
+            </p>
           </div>
         </aside>
 
         {/* 모바일: 상단 줄. 데스크탑에서는 사이드바가 대신한다. */}
         <div className="border-b border-subtle bg-surface-card px-4 lg:hidden">
-          <div className="flex items-center justify-between py-2">
-            <span className="text-sm font-bold text-content-primary">소란소란 운영</span>
-          </div>
+          <p className="m-0 py-2 text-sm font-bold text-content-primary">소란소란 운영</p>
           <AdminOpsNav layout="topbar" />
         </div>
 

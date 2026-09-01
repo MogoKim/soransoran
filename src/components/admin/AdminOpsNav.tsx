@@ -6,18 +6,21 @@ import { usePathname } from 'next/navigation'
 /**
  * 운영 메뉴 — 데스크탑 사이드바와 모바일 상단 줄이 같은 목록을 쓴다.
  *
- * 🔴 지금 어디인지 표시한다. 조치를 하면 router.refresh() 로 화면이 다시 그려지는데,
- *    표시가 없으면 운영자가 "눌렀는데 아무 일도 없었나" 를 의심하며 같은 버튼을 또 누른다.
+ * 🔴 지금 어디인지 분명히 표시한다. 조치를 하면 router.refresh() 로 화면이 다시
+ *    그려지는데, 표시가 약하면 운영자가 "눌렀는데 아무 일도 없었나" 하고
+ *    같은 버튼을 또 누른다. 왼쪽 선 + 배경 + 굵기 셋을 함께 쓴다.
  *
  * 🔴 메뉴는 5개다. 늘리지 않는다 — 회원·게시글·신고·홈 노출을 손으로 처리하는 것이
  *    이 콘솔의 전부다. 페르소나 화면은 별도 운영 축이라 여기 넣지 않는다.
+ *
+ * 아이콘 라이브러리를 새로 넣지 않는다(현재 저장소에 없다). 글자만으로 세운다.
  */
 const NAV = [
-  { href: '/admin', label: '운영 홈' },
-  { href: '/admin/reports', label: '신고' },
-  { href: '/admin/content', label: '게시글' },
-  { href: '/admin/members', label: '회원' },
-  { href: '/admin/home', label: '홈 노출' },
+  { href: '/admin', label: '운영 홈', hint: '오늘 볼 것' },
+  { href: '/admin/reports', label: '신고', hint: '판단하고 조치' },
+  { href: '/admin/content', label: '게시글', hint: '고치고 가리기' },
+  { href: '/admin/members', label: '회원', hint: '차단 관리' },
+  { href: '/admin/home', label: '홈 노출', hint: '고정·숨김' },
 ] as const
 
 function isCurrent(pathname: string, href: string): boolean {
@@ -32,7 +35,7 @@ export default function AdminOpsNav({ layout }: { layout: 'sidebar' | 'topbar' }
   if (layout === 'sidebar') {
     return (
       <nav aria-label="운영 메뉴">
-        <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
           {NAV.map((item) => {
             const current = isCurrent(pathname, item.href)
             return (
@@ -40,13 +43,22 @@ export default function AdminOpsNav({ layout }: { layout: 'sidebar' | 'topbar' }
                 <Link
                   href={item.href}
                   aria-current={current ? 'page' : undefined}
-                  className={`flex min-h-[40px] items-center border-l-2 px-3 text-sm no-underline ${
+                  className={`flex min-h-[44px] flex-col justify-center rounded-r-lg border-l-[3px] px-3 py-1.5 no-underline transition-colors ${
                     current
-                      ? 'border-cta bg-surface-card font-bold text-content-primary'
-                      : 'border-transparent text-content-muted hover:bg-surface-card hover:text-content-primary'
+                      ? 'border-cta bg-surface-card'
+                      : 'border-transparent hover:bg-surface-card'
                   }`}
                 >
-                  {item.label}
+                  <span
+                    className={
+                      current
+                        ? 'text-base font-bold text-content-primary'
+                        : 'text-base text-content-muted'
+                    }
+                  >
+                    {item.label}
+                  </span>
+                  <span className="text-xs text-content-muted">{item.hint}</span>
                 </Link>
               </li>
             )

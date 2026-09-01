@@ -40,8 +40,8 @@ export function AdminPageHeader({
         </Link>
       ) : null}
       <h1 className="m-0 break-words text-xl font-bold text-content-primary">{title}</h1>
-      {badges ? <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div> : null}
-      {description ? <p className="mt-1 text-sm text-content-muted">{description}</p> : null}
+      {badges ? <div className="mt-1 flex flex-wrap items-center gap-2">{badges}</div> : null}
+      {description ? <p className="m-0 mt-1 text-sm text-content-muted">{description}</p> : null}
     </header>
   )
 }
@@ -58,10 +58,11 @@ export function AdminSection({
   children: React.ReactNode
   className?: string
 }) {
+  // 제목·부연·본문 사이 리듬을 /admin/home 과 같게 둔다
   return (
     <section className={className}>
       <h2 className="m-0 text-base font-bold text-content-primary">{title}</h2>
-      {description ? <p className="mt-1 text-sm text-content-muted">{description}</p> : null}
+      {description ? <p className="m-0 mt-1 text-sm text-content-muted">{description}</p> : null}
       {children}
     </section>
   )
@@ -173,7 +174,7 @@ export function AdminTable({
   return (
     <div className="mt-2">
       <div
-        className={`hidden border-b border-subtle px-3 pb-1.5 text-xs text-content-muted lg:grid lg:gap-4 ${columns}`}
+        className={`hidden border-b border-subtle px-2 pb-1.5 text-xs text-content-muted lg:grid lg:gap-3 ${columns}`}
       >
         {head}
       </div>
@@ -204,7 +205,7 @@ export function AdminTableRow({
     <li>
       <Link
         href={href}
-        className={`flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline lg:grid lg:min-h-[48px] lg:items-center lg:gap-4 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-surface-card lg:px-3 lg:py-2 lg:hover:bg-surface-page ${edge} ${columns}`}
+        className={`flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline lg:grid lg:min-h-[44px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-1.5 lg:hover:bg-surface-soft ${edge} ${columns}`}
       >
         {children}
       </Link>

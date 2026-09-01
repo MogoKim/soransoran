@@ -4,7 +4,7 @@ import { requireAdmin } from '@/lib/admin'
 import { REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import { isOverrideActive } from '@/lib/home-exposure-rules'
 import Link from 'next/link'
-import { AdminPageHeader, AdminCard, AdminBadge } from '@/components/admin/AdminUi'
+import { AdminPageHeader, AdminSection, AdminBadge } from '@/components/admin/AdminUi'
 
 /**
  * 운영 홈 — 오늘 볼 것과 바로가기만 둔다.
@@ -52,17 +52,6 @@ export default async function AdminHomePage() {
   const pinned = live.filter((o) => o.action === 'PIN').length
   const homeHidden = live.filter((o) => o.action === 'HIDE').length
 
-  const summary = [
-    { label: '미처리 신고', value: `${pendingReports}건`, urgent: pendingReports > 0 },
-    { label: `최근 ${RECENT_DAYS}일 글`, value: `${recentPosts}건`, urgent: false },
-    { label: `최근 ${RECENT_DAYS}일 가입`, value: `${recentMembers}명`, urgent: false },
-    {
-      label: '홈 고정 · 숨김',
-      value: `${pinned} · ${homeHidden}`,
-      urgent: false,
-    },
-  ]
-
   const cards = [
     {
       href: '/admin/reports',
@@ -108,53 +97,43 @@ export default async function AdminHomePage() {
 
   return (
     <main className="pt-2 lg:pt-0">
-      <AdminPageHeader title="운영 홈" description="오늘 확인할 것만 모아 둡니다." />
+      <AdminPageHeader title="운영 홈" />
 
-      {/* 🔴 지금 손대야 하는 것만 위에 둔다. 추이·총계는 두지 않는다 —
-             매일 늘기만 하는 숫자는 오늘 할 일을 가린다. */}
-      <section className="mt-6">
-        <h2 className="m-0 text-sm font-bold text-content-primary">지금 상태</h2>
-        <dl className="mt-2 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {summary.map((s) => (
-            <div key={s.label} className="rounded-lg border border-subtle bg-surface-card p-3">
-              <dt className="text-xs text-content-muted">{s.label}</dt>
-              <dd
-                className={
-                  s.urgent
-                    ? 'm-0 text-2xl font-bold text-state-danger'
-                    : 'm-0 text-2xl font-bold text-content-primary'
-                }
-              >
-                {s.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </section>
+      {/* /admin/home 과 같은 리듬 — 큰 박스 대신 한 줄로 상태를 말한다 */}
+      <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <span className="text-content-primary">
+          미처리 신고 <strong>{pendingReports}</strong>
+        </span>
+        <span className="text-content-muted">
+          최근 {RECENT_DAYS}일 글 {recentPosts} · 가입 {recentMembers}
+        </span>
+        {pinned + homeHidden > 0 ? (
+          <span className="text-content-muted">
+            홈 고정 {pinned} · 숨김 {homeHidden}
+          </span>
+        ) : null}
+      </p>
 
-      <section className="mt-6">
-        <h2 className="m-0 text-sm font-bold text-content-primary">바로가기</h2>
-        <ul className="mt-2 grid list-none grid-cols-1 gap-3 p-0 lg:grid-cols-2">
+      <AdminSection title="오늘 확인할 것" className="mt-5">
+        <ul className="m-0 mt-2 flex list-none flex-col p-0">
           {cards.map((card) => (
             <li key={card.href}>
-              <AdminCard href={card.href}>
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className="font-bold text-content-primary">{card.title}</span>
-                  <AdminBadge tone={card.urgent ? 'danger' : 'neutral'}>{card.now}</AdminBadge>
+              <Link
+                href={card.href}
+                className="flex min-h-[52px] flex-col gap-0.5 border-b border-subtle px-2 py-2 no-underline hover:bg-surface-soft lg:min-h-[52px] lg:flex-row lg:items-center lg:gap-3"
+              >
+                <span className="w-20 shrink-0 text-sm font-bold text-content-primary">
+                  {card.title}
                 </span>
-                <span className="text-sm text-content-muted">{card.hint}</span>
-              </AdminCard>
+                <span className="flex-1 text-sm text-content-muted">{card.hint}</span>
+                <span className="shrink-0">
+                  <AdminBadge tone={card.urgent ? 'warning' : 'neutral'}>{card.now}</AdminBadge>
+                </span>
+              </Link>
             </li>
           ))}
         </ul>
-      </section>
-
-      <p className="mt-6 text-xs text-content-muted">
-        페르소나 운영은 이 콘솔과 별개입니다 —{' '}
-        <Link href="/admin/personas" className="text-link">
-          페르소나 화면
-        </Link>
-      </p>
+      </AdminSection>
     </main>
   )
 }

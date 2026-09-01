@@ -97,8 +97,8 @@ export default async function AdminReportsPage() {
     <main className="pt-2 lg:pt-0">
       <AdminPageHeader title="신고" />
 
-      {/* 상단 요약 — 미처리가 0이어도 화면이 헐겁지 않게 상태를 한 줄로 말한다 */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-subtle bg-surface-card px-3 py-2 text-sm">
+      {/* 상단 요약 — /admin/home 과 같은 리듬. 미처리가 0이어도 상태를 한 줄로 말한다 */}
+      <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
         <span className="text-content-primary">
           미처리 <strong>{pendingCount}</strong> · 처리 완료 <strong>{handled.length}</strong>
         </span>
@@ -107,10 +107,10 @@ export default async function AdminReportsPage() {
             ? '오래 기다린 신고가 맨 위입니다'
             : '새 신고가 들어오면 여기 맨 위에 쌓입니다'}
         </span>
-      </div>
+      </p>
 
       {pending.length > 0 ? (
-        <AdminSection title={`처리할 신고 ${pendingCount}건`} description="오래된 순">
+        <AdminSection title={`처리할 신고 ${pendingCount}건`} description="오래된 순" className="mt-5">
           <ul className="mt-2 flex list-none flex-col gap-3 p-0">
             {pending.map((report) => (
               <ReportCard key={report.id} report={report} />
@@ -118,7 +118,7 @@ export default async function AdminReportsPage() {
           </ul>
         </AdminSection>
       ) : (
-        <div className="mt-4">
+        <div className="mt-5">
           <AdminEmptyState>지금 처리할 신고가 없습니다.</AdminEmptyState>
         </div>
       )}

@@ -155,6 +155,10 @@ export default async function AdminContentDetailPage({
         </Link>
       </AdminSection>
 
+      <AdminSection title="본문" description="고객 화면에 보이는 그대로입니다.">
+        <AdminQuote>{post.content}</AdminQuote>
+      </AdminSection>
+
       {/* 🔴 수정 폼을 펼친 채 두면 textarea 가 화면 절반을 먹어 상태·신고·댓글이 밀린다.
              이 화면에 오는 이유는 대개 "무슨 글인지 보려고" 지 고치려는 것이 아니다. */}
       <section className="mt-4">
@@ -170,10 +174,6 @@ export default async function AdminContentDetailPage({
           </div>
         </details>
       </section>
-
-      <AdminSection title="본문" description="고객 화면에 보이는 그대로입니다.">
-        <AdminQuote>{post.content}</AdminQuote>
-      </AdminSection>
 
       <AdminSection
         title={`댓글 ${post.comments.length}건`}
