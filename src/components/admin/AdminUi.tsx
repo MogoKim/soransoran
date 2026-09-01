@@ -98,6 +98,108 @@ export function AdminBadge({
   )
 }
 
+/**
+ * 상태 배지 — 라벨과 색을 이 파일 한 곳에서 정한다.
+ *
+ * 🔴 화면마다 STATUS_LABEL 맵을 다시 적지 않는다. 실제로 세 화면이 각자 적고 있었고
+ *    한 곳은 enum 을 영문 그대로 내보였다 — 같은 상태가 화면마다 달리 불린다.
+ *
+ * 🔴 위험(빨강)은 "운영자가 지금 손대야 하는 것" 에만 쓴다.
+ *    미처리 신고 · 가려진 글 · 차단된 회원. 색이 흔해지면 아무것도 눈에 안 띈다.
+ */
+export function AdminStatusBadge({
+  kind,
+  value,
+}: {
+  kind: 'report' | 'post' | 'override'
+  value: string
+}) {
+  if (kind === 'report') {
+    const label = value === 'PENDING' ? '미처리' : value === 'REVIEWED' ? '확인함' : '처리 완료'
+    return <AdminBadge tone={value === 'PENDING' ? 'danger' : 'muted'}>{label}</AdminBadge>
+  }
+  if (kind === 'post') {
+    const label = value === 'HIDDEN' ? '숨김' : value === 'DELETED' ? '삭제' : '공개'
+    return <AdminBadge tone={value === 'PUBLISHED' ? 'muted' : 'danger'}>{label}</AdminBadge>
+  }
+  // PIN 은 운영자가 의도해 올린 것이라 위험이 아니다. HIDE 는 무언가를 가린 상태다.
+  return value === 'PIN' ? (
+    <AdminBadge tone="brand">고정</AdminBadge>
+  ) : (
+    <AdminBadge tone="danger">홈에서 숨김</AdminBadge>
+  )
+}
+
+/**
+ * 데스크탑 표 · 모바일 카드.
+ *
+ * 🔴 진짜 <table> 을 쓰지 않는다. 좁은 화면에서 가로 스크롤이 생기고,
+ *    그 스크롤은 페이지 전체를 흔든다. 같은 grid 템플릿을 머리줄과 각 줄에 주고
+ *    모바일에서는 1열로 떨어뜨린다 — 표처럼 정렬되면서 카드로도 읽힌다.
+ *
+ * 🔴 columns 는 호출부가 정해 머리줄과 줄에 같이 넘긴다.
+ *    한 곳에서 만들어 감추면 화면마다 다른 열 폭을 줄 수 없다.
+ */
+export function AdminTable({
+  columns,
+  head,
+  children,
+}: {
+  columns: string
+  head: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div className="mt-2">
+      <div
+        className={`hidden border-b border-subtle px-3 pb-2 text-xs font-bold text-content-muted lg:grid lg:gap-4 ${columns}`}
+      >
+        {head}
+      </div>
+      <ul className="m-0 flex list-none flex-col gap-2 p-0 lg:gap-0">{children}</ul>
+    </div>
+  )
+}
+
+export function AdminTableRow({
+  href,
+  columns,
+  children,
+}: {
+  href: string
+  columns: string
+  children: React.ReactNode
+}) {
+  return (
+    <li>
+      <Link
+        href={href}
+        className={`flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline lg:grid lg:items-center lg:gap-4 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent lg:px-3 lg:py-2 lg:hover:bg-surface-soft ${columns}`}
+      >
+        {children}
+      </Link>
+    </li>
+  )
+}
+
+/** 표 안의 한 칸. 모바일에서는 라벨을 함께 보여 줘야 무슨 값인지 알 수 있다. */
+export function AdminCell({
+  label,
+  children,
+  className = '',
+}: {
+  label?: string
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <span className={`min-w-0 text-sm text-content-muted ${className}`}>
+      {label ? <span className="lg:hidden">{label} </span> : null}
+      {children}
+    </span>
+  )
+}
+
 /** 목록의 한 줄. 전체가 링크인 경우와 아닌 경우를 같은 모양으로 맞춘다. */
 export function AdminCard({
   href,

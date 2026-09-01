@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
-import { boardLabel, communityPostHref, formatKst, postStatusLabel } from '@/lib/admin-format'
+import { boardLabel, communityPostHref, formatKst } from '@/lib/admin-format'
 import { REPORT_REASONS } from '@/lib/report-reasons'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminPostEditForm from '@/components/admin/AdminPostEditForm'
@@ -15,6 +15,7 @@ import {
   AdminEmptyState,
   AdminQuote,
   AdminActionGroup,
+  AdminStatusBadge,
 } from '@/components/admin/AdminUi'
 import { setPostHidden, setCommentHidden } from '@/lib/actions/admin'
 
@@ -39,12 +40,6 @@ export const metadata: Metadata = { title: '게시글 상세' }
 export const dynamic = 'force-dynamic'
 
 const REASON_LABEL = new Map<string, string>(REPORT_REASONS.map((r) => [r.value, r.label]))
-
-const REPORT_STATUS_LABEL: Record<string, string> = {
-  PENDING: '미처리',
-  REVIEWED: '확인함',
-  RESOLVED: '처리 완료',
-}
 
 export default async function AdminContentDetailPage({
   params,
@@ -93,16 +88,14 @@ export default async function AdminContentDetailPage({
   const hiddenComments = post.comments.filter((c) => c.isDeleted).length
 
   return (
-    <main>
+    <main className="pt-2 lg:pt-0">
       <AdminPageHeader
         backHref="/admin/content"
         title={post.title}
         badges={
           <>
             <AdminBadge>{boardLabel(post.boardType)}</AdminBadge>
-            <AdminBadge tone={post.status === 'PUBLISHED' ? 'muted' : 'danger'}>
-              {postStatusLabel(post.status)}
-            </AdminBadge>
+            <AdminStatusBadge kind="post" value={post.status} />
             {post.reports.length > 0 ? (
               <AdminBadge tone="danger">신고 {post.reports.length}건</AdminBadge>
             ) : null}
@@ -145,9 +138,7 @@ export default async function AdminContentDetailPage({
                   <AdminBadge tone="brand">
                     {REASON_LABEL.get(r.reason) ?? r.reason}
                   </AdminBadge>
-                  <AdminBadge tone={r.status === 'PENDING' ? 'danger' : 'muted'}>
-                    {REPORT_STATUS_LABEL[r.status] ?? r.status}
-                  </AdminBadge>
+                  <AdminStatusBadge kind="report" value={r.status} />
                   <span className="text-content-muted">{formatKst(r.createdAt)}</span>
                 </p>
                 {r.detail ? (

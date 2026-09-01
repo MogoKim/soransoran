@@ -15,6 +15,7 @@ import {
   AdminPageHeader,
   AdminSection,
   AdminBadge,
+  AdminStatusBadge,
   AdminEmptyState,
 } from '@/components/admin/AdminUi'
 
@@ -103,7 +104,7 @@ export default async function AdminHomeExposurePage({
   ].slice(0, HOME_MAGAZINE_COUNT)
 
   return (
-    <main>
+    <main className="pt-2 lg:pt-0">
       <AdminPageHeader
         title="홈 노출"
         description="고정·숨김은 홈 첫 화면에만 걸립니다. 글 자체도, 게시판 목록도, 베스트도 그대로입니다."
@@ -133,7 +134,8 @@ export default async function AdminHomeExposurePage({
             {pinned.map((o, index) => (
               <li key={o.id} className="rounded-lg border border-subtle bg-surface-card p-3">
                 <p className="m-0 flex flex-wrap items-center gap-2">
-                  <AdminBadge tone="brand">고정 {index + 1}번</AdminBadge>
+                  <AdminStatusBadge kind="override" value="PIN" />
+                  <AdminBadge>{index + 1}번</AdminBadge>
                   <AdminBadge>{boardLabel(o.post.boardType)}</AdminBadge>
                 </p>
                 <Link
@@ -149,7 +151,7 @@ export default async function AdminHomeExposurePage({
             {hiddenRows.map((o) => (
               <li key={o.id} className="rounded-lg border border-subtle bg-surface-card p-3">
                 <p className="m-0 flex flex-wrap items-center gap-2">
-                  <AdminBadge tone="danger">홈에서 숨김</AdminBadge>
+                  <AdminStatusBadge kind="override" value="HIDE" />
                   <AdminBadge>{boardLabel(o.post.boardType)}</AdminBadge>
                 </p>
                 <Link
@@ -176,7 +178,7 @@ export default async function AdminHomeExposurePage({
         {posts.length === 0 ? (
           <AdminEmptyState>홈에 뜬 글이 없습니다.</AdminEmptyState>
         ) : (
-          <ol className="mt-2 flex list-none flex-col gap-2 p-0">
+          <ol className="mt-2 grid list-none grid-cols-1 gap-2 p-0 xl:grid-cols-2">
             {posts.map((post, index) => {
               const pin = pinned.find((o) => o.post.id === post.id)
               return (

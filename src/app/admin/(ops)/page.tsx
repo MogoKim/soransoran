@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
 import { REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import { isOverrideActive } from '@/lib/home-exposure-rules'
+import Link from 'next/link'
 import { AdminPageHeader, AdminCard, AdminBadge } from '@/components/admin/AdminUi'
 
 /**
@@ -51,6 +52,17 @@ export default async function AdminHomePage() {
   const pinned = live.filter((o) => o.action === 'PIN').length
   const homeHidden = live.filter((o) => o.action === 'HIDE').length
 
+  const summary = [
+    { label: '미처리 신고', value: `${pendingReports}건`, urgent: pendingReports > 0 },
+    { label: `최근 ${RECENT_DAYS}일 글`, value: `${recentPosts}건`, urgent: false },
+    { label: `최근 ${RECENT_DAYS}일 가입`, value: `${recentMembers}명`, urgent: false },
+    {
+      label: '홈 고정 · 숨김',
+      value: `${pinned} · ${homeHidden}`,
+      urgent: false,
+    },
+  ]
+
   const cards = [
     {
       href: '/admin/reports',
@@ -95,22 +107,54 @@ export default async function AdminHomePage() {
   ]
 
   return (
-    <main>
+    <main className="pt-2 lg:pt-0">
       <AdminPageHeader title="운영 홈" description="오늘 확인할 것만 모아 둡니다." />
 
-      <ul className="mt-6 flex list-none flex-col gap-3 p-0">
-        {cards.map((card) => (
-          <li key={card.href}>
-            <AdminCard href={card.href}>
-              <span className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-content-primary">{card.title}</span>
-                <AdminBadge tone={card.urgent ? 'danger' : 'muted'}>{card.now}</AdminBadge>
-              </span>
-              <span className="text-sm text-content-muted">{card.hint}</span>
-            </AdminCard>
-          </li>
-        ))}
-      </ul>
+      {/* 🔴 지금 손대야 하는 것만 위에 둔다. 추이·총계는 두지 않는다 —
+             매일 늘기만 하는 숫자는 오늘 할 일을 가린다. */}
+      <section className="mt-6">
+        <h2 className="m-0 text-sm font-bold text-content-primary">지금 상태</h2>
+        <dl className="mt-2 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {summary.map((s) => (
+            <div key={s.label} className="rounded-lg border border-subtle bg-surface-card p-3">
+              <dt className="text-xs text-content-muted">{s.label}</dt>
+              <dd
+                className={
+                  s.urgent
+                    ? 'm-0 text-2xl font-bold text-state-danger'
+                    : 'm-0 text-2xl font-bold text-content-primary'
+                }
+              >
+                {s.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section className="mt-6">
+        <h2 className="m-0 text-sm font-bold text-content-primary">바로가기</h2>
+        <ul className="mt-2 grid list-none grid-cols-1 gap-3 p-0 lg:grid-cols-2">
+          {cards.map((card) => (
+            <li key={card.href}>
+              <AdminCard href={card.href}>
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-content-primary">{card.title}</span>
+                  <AdminBadge tone={card.urgent ? 'danger' : 'muted'}>{card.now}</AdminBadge>
+                </span>
+                <span className="text-sm text-content-muted">{card.hint}</span>
+              </AdminCard>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <p className="mt-6 text-xs text-content-muted">
+        페르소나 운영은 이 콘솔과 별개입니다 —{' '}
+        <Link href="/admin/personas" className="text-link">
+          페르소나 화면
+        </Link>
+      </p>
     </main>
   )
 }

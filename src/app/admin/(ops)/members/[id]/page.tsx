@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
-import { formatKst, orDash, postStatusLabel, REAL_MEMBER_WHERE } from '@/lib/admin-format'
+import { formatKst, orDash, REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import { setMemberBlocked } from '@/lib/actions/admin'
 import {
@@ -15,6 +15,7 @@ import {
   AdminActionGroup,
   AdminFieldList,
   AdminField,
+  AdminStatusBadge,
 } from '@/components/admin/AdminUi'
 import type { Prisma } from '@prisma/client'
 
@@ -50,12 +51,6 @@ export const dynamic = 'force-dynamic'
 /** 각 목록에 싣는 최근 건수. 총계는 따로 센다. */
 const TAKE = 20
 
-const REPORT_STATUS_LABEL: Record<string, string> = {
-  PENDING: '미처리',
-  REVIEWED: '확인함',
-  RESOLVED: '처리 완료',
-}
-
 /** 목록 제목 — 총계와 "최근 N건 표시" 를 구분해 적는다. */
 function countLabel(total: number, shown: number): string | undefined {
   return total > shown ? `최근 ${shown}건만 표시` : undefined
@@ -78,9 +73,7 @@ function ReportRow({
   return (
     <li className="flex flex-wrap items-center gap-2 rounded-lg border border-subtle bg-surface-card p-3 text-sm text-content-primary">
       <AdminBadge tone="brand">{reason}</AdminBadge>
-      <AdminBadge tone={status === 'PENDING' ? 'danger' : 'muted'}>
-        {REPORT_STATUS_LABEL[status] ?? status}
-      </AdminBadge>
+      <AdminStatusBadge kind="report" value={status} />
       <span className="text-content-muted">{formatKst(createdAt)}</span>
       {postId ? (
         <Link href={`/admin/content/${postId}`} className="text-link">
@@ -190,7 +183,7 @@ export default async function AdminMemberDetailPage({
   const hiddenPosts = member.posts.filter((p) => p.status !== 'PUBLISHED').length
 
   return (
-    <main>
+    <main className="pt-2 lg:pt-0">
       <AdminPageHeader
         backHref="/admin/members"
         title={member.nickname ?? member.name ?? '회원'}
@@ -316,7 +309,7 @@ export default async function AdminMemberDetailPage({
                   <span className="flex flex-wrap items-center gap-2 text-sm text-content-muted">
                     {formatKst(p.createdAt)}
                     {p.status !== 'PUBLISHED' ? (
-                      <AdminBadge tone="danger">{postStatusLabel(p.status)}</AdminBadge>
+                      <AdminStatusBadge kind="post" value={p.status} />
                     ) : null}
                     {p._count.reports > 0 ? (
                       <AdminBadge tone="danger">신고 {p._count.reports}건</AdminBadge>

@@ -4,9 +4,11 @@ import { requireAdmin } from '@/lib/admin'
 import { formatKst, REAL_MEMBER_WHERE } from '@/lib/admin-format'
 import {
   AdminPageHeader,
-  AdminCard,
   AdminBadge,
   AdminEmptyState,
+  AdminTable,
+  AdminTableRow,
+  AdminCell,
 } from '@/components/admin/AdminUi'
 
 /**
@@ -29,6 +31,12 @@ export const metadata: Metadata = { title: '회원 관리' }
 export const dynamic = 'force-dynamic'
 
 const TAKE = 100
+
+/**
+ * 데스크탑 열 폭. 머리줄과 각 줄이 같은 값을 써야 칸이 맞는다.
+ * 이름은 남는 폭을 먹고, 나머지는 내용 길이에 맞춰 고정한다.
+ */
+const COLS = 'lg:grid-cols-[minmax(0,1fr)_9rem_11rem_7rem]'
 
 export default async function AdminMembersPage() {
   const { ok } = await requireAdmin()
@@ -54,7 +62,7 @@ export default async function AdminMembersPage() {
   ])
 
   return (
-    <main>
+    <main className="pt-2 lg:pt-0">
       <AdminPageHeader
         title="회원"
         description={
@@ -69,32 +77,44 @@ export default async function AdminMembersPage() {
           카카오로 가입한 회원이 아직 없습니다. 페르소나 계정은 여기 나오지 않습니다.
         </AdminEmptyState>
       ) : (
-        <ul className="mt-6 flex list-none flex-col gap-3 p-0">
+        <AdminTable
+          columns={COLS}
+          head={
+            <>
+              <span>회원</span>
+              <span>가입일</span>
+              <span>활동</span>
+              <span>상태</span>
+            </>
+          }
+        >
           {members.map((m) => (
-            <li key={m.id}>
-              <AdminCard href={`/admin/members/${m.id}`}>
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className="break-words font-bold text-content-primary">
-                    {m.nickname ?? m.name ?? '(이름 없음)'}
-                  </span>
-                  {m.nickname && m.name ? (
-                    <span className="break-words text-sm text-content-muted">{m.name}</span>
-                  ) : null}
-                  {m.isBlocked ? <AdminBadge tone="danger">차단됨</AdminBadge> : null}
-                  {m.isAdmin ? <AdminBadge tone="brand">운영자</AdminBadge> : null}
-                  {!m.isOnboarded ? <AdminBadge>온보딩 전</AdminBadge> : null}
+            <AdminTableRow key={m.id} href={`/admin/members/${m.id}`} columns={COLS}>
+              <span className="flex min-w-0 flex-wrap items-baseline gap-2">
+                <span className="break-words font-bold text-content-primary">
+                  {m.nickname ?? m.name ?? '(이름 없음)'}
                 </span>
-                <span className="text-sm text-content-muted">
-                  가입 {formatKst(m.createdAt)}
-                </span>
-                <span className="text-sm text-content-muted">
-                  글 {m._count.posts} · 댓글 {m._count.comments} · 신고함 {m._count.reports}
-                </span>
-              </AdminCard>
-            </li>
+                {m.nickname && m.name ? (
+                  <span className="break-words text-sm text-content-muted">{m.name}</span>
+                ) : null}
+              </span>
+
+              <AdminCell label="가입">{formatKst(m.createdAt)}</AdminCell>
+
+              <AdminCell label="활동">
+                글 {m._count.posts} · 댓글 {m._count.comments} · 신고함 {m._count.reports}
+              </AdminCell>
+
+              <span className="flex flex-wrap items-center gap-1">
+                {m.isBlocked ? <AdminBadge tone="danger">차단됨</AdminBadge> : null}
+                {m.isAdmin ? <AdminBadge tone="brand">운영자</AdminBadge> : null}
+                {!m.isOnboarded ? <AdminBadge>온보딩 전</AdminBadge> : null}
+              </span>
+            </AdminTableRow>
           ))}
-        </ul>
+        </AdminTable>
       )}
+
     </main>
   )
 }
