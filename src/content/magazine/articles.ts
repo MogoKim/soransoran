@@ -1042,7 +1042,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       publishAt: '2026-08-28T10:30:00+09:00',
     medical: true,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/seasonal-change-fatigue/hero.webp',
+      alt: '환절기 아침 창가에서 카디건을 여미며 바깥 공기를 살피는 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -1161,7 +1166,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       status: 'SCHEDULED',
       publishAt: '2026-08-29T10:30:00+09:00',
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/husband-doesnt-understand/hero.webp',
+      alt: '저녁 식탁에 앉아 두 손으로 찻잔을 감싸 쥔 채 잠시 말을 멈춘 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -1293,7 +1303,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       publishAt: '2026-08-30T10:30:00+09:00',
     medical: true,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/menopause-tears/hero.webp',
+      alt: '저녁 부엌 개수대 앞에서 설거지를 하다 잠시 손을 멈춘 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -1406,7 +1421,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     seriesId: 'sleep-series',
     seriesOrder: 2,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/night-sweats-waking/hero.webp',
+      alt: '한밤중 침실에서 잠옷 소매를 걷고 목덜미를 손으로 식히며 침대 가장자리에 앉아 있는 40대 후반 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -1638,7 +1658,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     seriesId: 'menopause-basic',
     seriesOrder: 4,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/menopause-joint-pain-exercise/hero.webp',
+      alt: '아침 거실 소파에 앉아 손가락을 천천히 주무르는 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -1756,7 +1781,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       status: 'SCHEDULED',
       publishAt: '2026-09-03T10:30:00+09:00',
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/rehire-where-to-start/hero.webp',
+      alt: '낮 시간 식탁에서 노트북을 열어 두고 수첩에 메모를 적는 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -1875,7 +1905,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     seriesId: 'body-change',
     seriesOrder: 2,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/dry-skin-menopause/hero.webp',
+      alt: '아침 세면대 앞에서 세수를 마치고 수건을 든 채 잠시 멈춘 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -1992,7 +2027,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     seriesId: 'sleep-series',
     seriesOrder: 3,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/does-nap-affect-sleep/hero.webp',
+      alt: '오후 거실 소파에 앉아 햇빛 속에서 눈을 감고 잠시 쉬는 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
