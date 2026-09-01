@@ -25,9 +25,13 @@ import Image from 'next/image'
  *    왼쪽이 진하고 오른쪽으로 옅어진다 — 글자는 왼쪽에만 놓기 때문이다.
  *    사진이 바뀌어도 왼쪽 대비는 유지된다.
  *
- * 🔴 글자 크기는 글씨 크기 설정 3단을 따라간다. 첫 화면이 가장 큰 글씨인데
- *    여기만 고정이면 "크게" 를 고른 사람에게 배너만 작아 보인다.
- *    전역 토큰을 늘리지 않고 이 파일 안에서만 단계를 잡는다.
+ * 🔴 배너 문구는 글씨 크기 설정을 따르지 않는다. 화면 폭에만 반응한다
+ *    (모바일 29/20px · 데스크탑 44/24px).
+ *    여기 두 줄은 읽는 본문이 아니라 브랜드 타이포다 — 사진 위에 놓인 고정 문구라
+ *    자리와 크기가 정해져 있고, 늘릴 여백이 없다.
+ *    실제로 "크게" 에서 3단을 따라가게 뒀더니 31.2px 이 되어 필요 폭 257px 이
+ *    상한 252px 을 넘겼고, 제목이 "여성을 위한…" 으로 잘렸다.
+ *    본문·목록·카테고리는 그대로 3단을 따라간다 — 여기만 예외다.
  */
 export default function HomeHero() {
   return (
@@ -50,10 +54,10 @@ export default function HomeHero() {
       {/* 좁은 화면은 아래에 붙이고, 넓은 화면은 세로 가운데에 둔다 —
           모바일에서 가운데 정렬하면 글자가 얼굴 위로 올라온다. */}
       <div className="absolute inset-0 flex flex-col items-start justify-end gap-1.5 px-5 pb-3 text-left lg:justify-center lg:gap-3 lg:px-16 lg:pb-0">
-        <h1 className="line-clamp-1 max-w-[72%] shrink-0 break-keep font-bold leading-[1.4] text-white text-[clamp(29px,7.4vw,44px)] [html[data-font-size='SMALL']_&]:text-[clamp(26px,6.8vw,40px)] [html[data-font-size='LARGE']_&]:text-[clamp(31px,8vw,48px)] lg:line-clamp-none lg:max-w-none">
+        <h1 className="line-clamp-1 max-w-[72%] shrink-0 break-keep font-bold leading-[1.4] text-white text-[clamp(29px,7.4vw,44px)] lg:line-clamp-none lg:max-w-none">
           여성을 위한 커뮤니티
         </h1>
-        <p className="line-clamp-1 max-w-[72%] shrink-0 break-keep leading-snug text-white/90 text-[clamp(20px,4.8vw,24px)] [html[data-font-size='SMALL']_&]:text-[clamp(18px,4.4vw,22px)] [html[data-font-size='LARGE']_&]:text-[clamp(22px,5.2vw,27px)] lg:line-clamp-none lg:max-w-none">
+        <p className="line-clamp-1 max-w-[72%] shrink-0 break-keep leading-snug text-white/90 text-[clamp(20px,4.8vw,24px)] lg:line-clamp-none lg:max-w-none">
           갱년기, 가족, 일상까지 같이
         </p>
       </div>
