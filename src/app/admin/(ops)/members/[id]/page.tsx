@@ -197,7 +197,7 @@ export default async function AdminMemberDetailPage({
         }
       />
 
-      {/* 1) 프로필 요약 — 누구인지 한 줄로 */}
+      {/* 1~3) 운영 판단 프로필 — 누구인지 · 얼마나 문제인지 · 무엇을 할지 한 패널에 */}
       <section className="mt-3 rounded-lg border border-subtle bg-surface-card p-3">
         <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
           <div className="flex gap-2">
@@ -217,19 +217,15 @@ export default async function AdminMemberDetailPage({
             <dd className="m-0 text-content-primary">{formatKst(member.updatedAt)}</dd>
           </div>
         </dl>
-      </section>
 
-      {/* 2) 운영 판단 — 이 화면에서 가장 먼저 읽혀야 하는 것 */}
-      <section className="mt-3 rounded-lg border border-subtle bg-surface-card p-3">
-        <h2 className="m-0 text-base font-bold text-content-primary">운영 판단</h2>
-        <dl className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-subtle pt-3 sm:grid-cols-4">
           <div>
             <dt className="text-xs text-content-muted">신고당함</dt>
             <dd
               className={
                 reportedAgainstTotal > 0
-                  ? 'm-0 text-xl font-bold text-state-danger'
-                  : 'm-0 text-xl font-bold text-content-primary'
+                  ? 'm-0 text-lg font-bold text-state-danger'
+                  : 'm-0 text-lg font-bold text-content-primary'
               }
             >
               {reportedAgainstTotal}건
@@ -240,8 +236,8 @@ export default async function AdminMemberDetailPage({
             <dd
               className={
                 reportedAgainstPending > 0
-                  ? 'm-0 text-xl font-bold text-state-danger'
-                  : 'm-0 text-xl font-bold text-content-primary'
+                  ? 'm-0 text-lg font-bold text-state-danger'
+                  : 'm-0 text-lg font-bold text-content-primary'
               }
             >
               {reportedAgainstPending}건
@@ -249,11 +245,11 @@ export default async function AdminMemberDetailPage({
           </div>
           <div>
             <dt className="text-xs text-content-muted">작성 글</dt>
-            <dd className="m-0 text-xl font-bold text-content-primary">{member._count.posts}건</dd>
+            <dd className="m-0 text-lg font-bold text-content-primary">{member._count.posts}건</dd>
           </div>
           <div>
             <dt className="text-xs text-content-muted">작성 댓글</dt>
-            <dd className="m-0 text-xl font-bold text-content-primary">
+            <dd className="m-0 text-lg font-bold text-content-primary">
               {member._count.comments}건
             </dd>
           </div>
