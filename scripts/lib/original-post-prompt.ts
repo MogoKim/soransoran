@@ -194,6 +194,69 @@ export const CRITIQUE_BANNED_REGISTERS: readonly string[] = [
   '정갈한 요약 후기',
 ]
 
+/**
+ * 🔴 표본 선정 — **길이 분위수** (2026-09-01, 10건 검수 준비).
+ *
+ * 이전 로직은 `긴 것 → 짧은 것 → 중앙값` 세 자리만 정의돼 있었다.
+ * 4번째부터는 계속 중앙값을 집어서 **5건으로 늘리면 뒤 셋이 비슷한 길이로 뭉친다.**
+ * 표본을 늘리는 목적이 "길이별로 어디서 실패하는가" 를 보는 것인데,
+ * 뭉치면 늘린 만큼 아무것도 새로 알 수 없다.
+ *
+ * 🔴 결정적이어야 한다. 부를 때마다 표본이 바뀌면
+ *    "프롬프트를 고쳐 좋아진 것" 과 "재료가 바뀌어 좋아진 것" 을 구분할 수 없다.
+ *    길이 오름차순 · 같으면 id 순으로 고정한다.
+ *
+ * 🔴 limit 3 은 이전과 **같은 집합**이 나온다 — p0(가장 짧은 것) · p50(중앙) ·
+ *    p100(가장 긴 것). 순서만 길이 오름차순으로 바뀐다.
+ * 🔴 limit 1 은 **가장 긴 것**이다. 이전 동작을 유지한다 —
+ *    한 건만 볼 때 긴 글이 가장 많은 것을 드러내기 때문이다.
+ */
+export function selectByLengthQuantile<T>(input: {
+  items: readonly T[]
+  lengthOf: (item: T) => number
+  keyOf: (item: T) => string
+  limit: number
+}): T[] {
+  const { items, lengthOf, keyOf } = input
+  const limit = Math.max(0, Math.floor(input.limit))
+  if (limit === 0 || items.length === 0) return []
+
+  // 🔴 정렬을 먼저 고정한다. 길이가 같은 항목이 있으면 id 로 가른다
+  const sorted = [...items].sort(
+    (a, b) => lengthOf(a) - lengthOf(b) || keyOf(a).localeCompare(keyOf(b)),
+  )
+  // 🔴 가진 것보다 많이 달라고 해도 있는 만큼만 돌려준다. 여기서 던지지 않는다 —
+  //    "몇 건이 필요한가" 는 호출부의 판단이고, 이 함수는 고르기만 한다
+  const n = Math.min(limit, sorted.length)
+  if (n === 1) {
+    const longest = sorted[sorted.length - 1]
+    return longest === undefined ? [] : [longest]
+  }
+
+  const used = new Set<number>()
+  const picked: T[] = []
+  for (let i = 0; i < n; i += 1) {
+    // p0 · p25 · p50 · p75 · p100 (n=5 기준). 양 끝을 반드시 포함한다
+    const target = Math.round((i * (sorted.length - 1)) / (n - 1))
+    // 🔴 같은 자리가 두 번 나오면(짧은 목록) 가장 가까운 빈자리로 옮긴다.
+    //    같은 원문을 두 번 넣으면 표본 수만 늘고 아는 것은 늘지 않는다
+    let idx = target
+    if (used.has(idx)) {
+      let step = 1
+      while (step <= sorted.length) {
+        if (target - step >= 0 && !used.has(target - step)) { idx = target - step; break }
+        if (target + step < sorted.length && !used.has(target + step)) { idx = target + step; break }
+        step += 1
+      }
+    }
+    if (used.has(idx)) continue
+    used.add(idx)
+    const item = sorted[idx]
+    if (item !== undefined) picked.push(item)
+  }
+  return picked
+}
+
 /** MicroSeedRawContent 에서 프롬프트에 필요한 것만. 🔴 저장되지 않는다 */
 export type PromptRawContent = {
   /** 🔴 우리 DB MicroSeedRawContent.id. 원문이 아니라 참조다 */

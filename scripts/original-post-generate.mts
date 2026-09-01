@@ -55,7 +55,7 @@ import { outputTokenPolicyFor } from './lib/voice-m3-contract.mjs'
 import {
   buildPrompt, parseDraft, toOriginalPostRecord, assertNoStoredSource, analyzeDraft,
   isPostBoardHint, POST_BOARD_HINTS, RAW_BODY_MIN_CHARS, MAX_VOICE_SAMPLES,
-  partitionByStoredSource,
+  partitionByStoredSource, selectByLengthQuantile,
   type OriginalPostRecord,
 } from './lib/original-post-prompt'
 import { selectVoiceSamples, type VoiceLearningRow, type ManualDecisionRow } from './lib/voice-sample-select'
@@ -67,14 +67,17 @@ import { join } from 'node:path'
 
 const OUTPUT_PATH = 'tmp/original-post-candidates.json'
 /**
- * 🔴 상한 3.
+ * 🔴 상한 5 (2026-09-01, 3 → 5).
  *
- * 댓글 레인은 1건씩이었다. 여기서 3 을 허용하는 이유는 하나뿐이다 —
- * **비교**가 목적이기 때문이다. 원문 하나만 보면 "이 정도면 괜찮나" 를 알 수 없고,
- * 서로 다른 길이·소재 셋을 나란히 놓아야 복붙 티와 AI 티가 드러난다.
- * 그 이상은 검토 부담을 사람에게 떠넘기는 것이라 막는다.
+ * 3 이던 이유는 "비교" 였다 — 원문 하나만 보면 "이 정도면 괜찮나" 를 알 수 없다.
+ * 5 로 올리는 이유는 다르다: **길이 구간을 다 덮기 위해서**다.
+ * 짧음 · 중간 · 김 · 매우 김 네 구간을 3자리로는 채울 수 없고,
+ * 지금까지 실패가 전부 긴 글에서 났는데 긴 쪽 표본이 한 자리뿐이었다.
+ *
+ * 🔴 그 이상은 올리지 않는다. 검토는 사람이 하고, 한 번에 읽을 수 있는 양이 있다.
+ *    30건이 필요하면 5건씩 여섯 번이지 한 번에 30건이 아니다.
  */
-const MAX_LIMIT = 3
+const MAX_LIMIT = 5
 const DEFAULT_MODEL: ProviderModel = 'claude-haiku-4.5'
 const TIMEOUT_MS = 90_000
 
@@ -147,31 +150,23 @@ if (RAW_IDS.length > 0 && pool.length !== RAW_IDS.length) {
 }
 
 /**
- * 🔴 자동 선정은 **길이가 서로 다른 것**부터 고른다.
- *    비슷한 길이 셋을 고르면 "짧은 원문에서도 되는가" 를 알 수 없다.
- *    가장 긴 것 · 가장 짧은 것 · 중앙값 순으로 집는다 — 결정적이라 재현된다.
+ * 🔴 자동 선정은 **길이 분위수**로 고른다 (p0 · p25 · p50 · p75 · p100).
+ *    비슷한 길이끼리 고르면 "어느 길이에서 실패하는가" 를 알 수 없다.
+ *    규칙은 selectByLengthQuantile 에 있다 — 순수 함수라 fixture 가 DB 없이 잠근다.
  */
 const usable = pool.filter((r) => [...r.rawBody.trim()].length >= RAW_BODY_MIN_CHARS)
 if (usable.length === 0) {
   await prisma.$disconnect()
   fail(`재료로 쓸 수 있는 원문이 없습니다 (본문 ${RAW_BODY_MIN_CHARS}자 이상 필요)`)
 }
-const selected = (() => {
-  if (RAW_IDS.length > 0) return usable
-  const byLen = [...usable].sort((a, b) => [...b.rawBody].length - [...a.rawBody].length)
-  const picks: typeof byLen = []
-  while (picks.length < Math.min(LIMIT, byLen.length)) {
-    const rest = byLen.filter((r) => !picks.includes(r))
-    if (rest.length === 0) break
-    // 길이 · 짧이 · 중앙 순
-    const next = picks.length === 0 ? rest[0]
-      : picks.length === 1 ? rest[rest.length - 1]
-      : rest[Math.floor(rest.length / 2)]
-    if (next === undefined) break
-    picks.push(next)
-  }
-  return picks
-})()
+const selected = RAW_IDS.length > 0
+  ? usable
+  : selectByLengthQuantile({
+      items: usable,
+      lengthOf: (r) => [...r.rawBody].length,
+      keyOf: (r) => r.id,
+      limit: LIMIT,
+    })
 if (selected.length < LIMIT) {
   await prisma.$disconnect()
   fail(`--limit ${LIMIT} 인데 쓸 수 있는 원문이 ${selected.length}건뿐입니다`)
@@ -179,8 +174,11 @@ if (selected.length < LIMIT) {
 
 console.log(`재료  MicroSeedRawContent ${pool.length}건 중 ${selected.length}건 선정 (🔴 크롤 없음 · read-only)`)
 for (const [i, r] of selected.entries()) {
+  // 🔴 분위수 라벨을 함께 찍는다 — "왜 이 다섯인가" 를 화면에서 알 수 있어야 한다
+  const pct = selected.length > 1 ? Math.round((i * 100) / (selected.length - 1)) : 100
   console.log(
-    `  [${i + 1}] ${mask(r.id)} · ${r.sourceSite} · 제목 ${brief(r.rawTitle)} · 본문 ${[...r.rawBody].length}자`,
+    `  [${i + 1}] p${String(pct).padStart(3)} · ${mask(r.id)} · ${r.sourceSite}` +
+      ` · 제목 ${brief(r.rawTitle)} · 본문 ${[...r.rawBody].length}자`,
   )
 }
 {

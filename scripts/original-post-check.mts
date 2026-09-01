@@ -18,7 +18,7 @@ import {
   CLICHE_POST_OPENERS, AI_STRUCTURE_BANS, MATERIAL_TAKEAWAYS,
   MAX_VOICE_SAMPLES, VOICE_TAKEAWAYS,
   CRITIQUE_BANNED_PHRASES, CRITIQUE_BANNED_REGISTERS, CRITIQUE_WATCH_PHRASES,
-  partitionByStoredSource, sourceEchoCount, normalizeForEcho,
+  partitionByStoredSource, sourceEchoCount, normalizeForEcho, selectByLengthQuantile,
   type PromptRawContent, type PromptBlockCode, type OriginalPostRecord,
 } from './lib/original-post-prompt'
 import {
@@ -307,8 +307,9 @@ console.log('\n══════ ⑧ 🔴 초안 신호 — 판정이 아니라
 console.log('\n══════ ⑨ 🔴 생성기 스크립트가 지켜야 할 것 (정적 검사)')
 {
   const code = readFileSync('scripts/original-post-generate.mts', 'utf-8')
-  // 🔴 상한 3 — 이 값이 늘면 검토 부담이 사람에게 넘어간다
-  expect('MAX_LIMIT = 3', /const MAX_LIMIT = 3\b/.test(code), true)
+  // 🔴 상한 5 (2026-09-01, 3 → 5). 길이 네 구간을 3자리로는 못 덮는다.
+  //    그 이상 올리면 검토 부담이 사람에게 넘어간다 — 30건은 5건씩 여섯 번이다
+  expect('MAX_LIMIT = 5', /const MAX_LIMIT = 5\b/.test(code), true)
   expect('  --limit 범위를 검사한다', code.includes('LIMIT > MAX_LIMIT'), true)
   // 🔴 dry-run 이 기본이다
   expect('--call 없이는 호출하지 않는다', code.includes("const CALL = argv.includes('--call')"), true)
@@ -1238,6 +1239,86 @@ console.log('\n══════ ㉕ 🔴 7판 — 저장 가드 (레코드별 
   // 🔴 키 위반은 partition 이 아니라 throw 다 — 그건 데이터가 아니라 코드 결함이다
   expect('  partition 은 키 위반을 거르지 않는다',
     partitionByStoredSource([badKey], []).clean.length, 1)
+}
+
+console.log('\n══════ ㉖ 🔴 표본 선정 — 길이 분위수 (limit 5)')
+{
+  type R = { id: string; len: number }
+  const mk = (n: number): R[] => Array.from({ length: n }, (_, i) => ({ id: `r${String(i).padStart(2, '0')}`, len: 100 + i * 10 }))
+  const pick = (items: readonly R[], limit: number): R[] =>
+    selectByLengthQuantile({ items, lengthOf: (r) => r.len, keyOf: (r) => r.id, limit })
+
+  // ── 5건 선정: 양 끝 + 사이가 고르게 ──
+  const ten = mk(10) // 길이 100 · 110 … 190
+  const five = pick(ten, 5)
+  expect('limit 5 → 5건', five.length, 5)
+  expect('  🔴 가장 짧은 것이 들어간다(p0)', five[0]?.len, 100)
+  expect('  🔴 가장 긴 것이 들어간다(p100)', five[4]?.len, 190)
+  expect('  p25', five[1]?.len, 120)
+  expect('  p50', five[2]?.len, 150)
+  expect('  p75', five[3]?.len, 170)
+  // 🔴 뭉치지 않는가 — 이전 로직은 4·5번째가 계속 중앙값이었다
+  const gaps = five.slice(1).map((r, i) => r.len - five[i]!.len)
+  expect('  🔴 간격이 전부 0보다 크다(뭉치지 않는다)', gaps.every((g) => g > 0), true)
+  expect('  길이 오름차순', five.map((r) => r.len).join(','), '100,120,150,170,190')
+
+  // ── rawId 중복 없음 ──
+  expect('🔴 id 중복 없음', new Set(five.map((r) => r.id)).size, 5)
+  const many = pick(mk(40), 5)
+  expect('  40건에서도 중복 없음', new Set(many.map((r) => r.id)).size, 5)
+  expect('  양 끝을 포함한다', `${many[0]?.len},${many[4]?.len}`, '100,490')
+
+  // ── 결정적 ──
+  const again = pick([...ten].reverse(), 5)
+  expect('🔴 입력 순서가 달라도 같은 결과', again.map((r) => r.id).join(','), five.map((r) => r.id).join(','))
+  // 길이가 같으면 id 로 가른다 — 그래야 재현된다
+  const tie = [
+    { id: 'b', len: 300 }, { id: 'a', len: 300 }, { id: 'c', len: 100 }, { id: 'd', len: 500 },
+  ]
+  expect('  길이가 같으면 id 순',
+    pick(tie, 4).map((r) => r.id).join(','), pick([...tie].reverse(), 4).map((r) => r.id).join(','))
+
+  // ── limit 3 은 이전 의도와 같은 집합 ──
+  const three = pick(ten, 3)
+  expect('limit 3 → 3건', three.length, 3)
+  expect('  🔴 짧은 것·중앙·긴 것 (이전과 같은 집합)', three.map((r) => r.len).join(','), '100,150,190')
+
+  // ── limit 1 은 가장 긴 것 (이전 동작 유지) ──
+  expect('limit 1 → 가장 긴 것', pick(ten, 1)[0]?.len, 190)
+
+  // ── 5건 미만일 때 안전 ──
+  expect('🔴 3건뿐인데 5를 요청하면 3건', pick(mk(3), 5).length, 3)
+  expect('  그래도 중복 없음', new Set(pick(mk(3), 5).map((r) => r.id)).size, 3)
+  expect('  양 끝은 포함', pick(mk(3), 5).map((r) => r.len).join(','), '100,110,120')
+  expect('  1건뿐이면 1건', pick(mk(1), 5).length, 1)
+  expect('  🔴 0건이면 0건 (던지지 않는다)', pick([], 5).length, 0)
+  expect('  limit 0 이면 0건', pick(ten, 0).length, 0)
+  expect('  음수 limit 도 0건', pick(ten, -1).length, 0)
+
+  // ── 실제 재료 분포와 같은 모양에서 ──
+  const real: R[] = [
+    { id: 'a', len: 137 }, { id: 'b', len: 236 }, { id: 'c', len: 566 },
+    { id: 'd', len: 741 }, { id: 'e', len: 1071 },
+  ]
+  expect('현재 재료 5건 → 5건 전부', pick(real, 5).map((r) => r.len).join(','), '137,236,566,741,1071')
+}
+
+console.log('\n══════ ㉗ 🔴 생성기 상한 · 선정 배선 (정적 검사)')
+{
+  const code = readFileSync('scripts/original-post-generate.mts', 'utf-8')
+  expect('MAX_LIMIT = 5', /const MAX_LIMIT = 5\b/.test(code), true)
+  expect('  --limit 범위를 검사한다', code.includes('LIMIT > MAX_LIMIT'), true)
+  // 🔴 선정 규칙을 생성기가 따로 적지 않는다 — 순수 함수를 부른다
+  expect('🔴 분위수 함수를 쓴다', code.includes('selectByLengthQuantile({'), true)
+  expect('  길이는 자소 단위로 센다', code.includes('lengthOf: (r) => [...r.rawBody].length'), true)
+  expect('  키는 rawId 다', code.includes('keyOf: (r) => r.id'), true)
+  expect('  🔴 옛 중앙값 반복 로직이 남아 있지 않다', code.includes('rest[Math.floor(rest.length / 2)]'), false)
+  expect('  분위수 라벨을 화면에 찍는다', code.includes('p${String(pct).padStart(3)}'), true)
+  // 🔴 dry-run 계약은 그대로다
+  expect('dry-run 은 파일을 쓰지 않는다', /if \(!CALL\)[\s\S]{0,400}process\.exit\(0\)/.test(code), true)
+  expect('  🔴 Post 를 만들지 않는다', /post\.create|post\.upsert/.test(code), false)
+  expect('  🔴 직접 fetch 하지 않는다', /\bfetch\(/.test(code), false)
+  expect('  🔴 Sheet 를 쓰지 않는다', /Sheet|sheet/.test(code), false)
 }
 
 console.log('\n══════ ㉑ 🔴 생성기가 프로파일을 배선했는가 (정적 검사)')
