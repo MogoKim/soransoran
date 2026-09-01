@@ -2891,7 +2891,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       publishAt: '2026-09-11T10:30:00+09:00',
     medical: true,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/hair-loss-menopause/hero.webp',
+      alt: '아침 세면대 거울 앞에서 손으로 가르마를 넘겨 보는 40대 후반 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -3004,7 +3009,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       publishAt: '2026-09-12T10:30:00+09:00',
     medical: true,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/walking-minutes-50s/hero.webp',
+      alt: '아침 동네 길에서 운동화를 신고 걷다 잠시 멈춰 선 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -3249,7 +3259,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       publishAt: '2026-09-14T10:30:00+09:00',
     medical: true,
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/memory-worry-menopause/hero.webp',
+      alt: '부엌에서 냉장고 문을 열어 둔 채 잠시 생각에 잠긴 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -3358,7 +3373,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       status: 'SCHEDULED',
       publishAt: '2026-09-15T10:30:00+09:00',
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/avoiding-gatherings/hero.webp',
+      alt: '저녁 거실 소파에 앉아 휴대폰을 내려놓고 잠시 쉬는 50대 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
@@ -3478,7 +3498,12 @@ const MAGAZINE_ARTICLE_RECORD = {
       status: 'SCHEDULED',
       publishAt: '2026-09-16T10:30:00+09:00',
 
-    // heroImage 는 이미지 회수 후 채운다
+    heroImage: {
+      src: '/magazine/back-to-work-homemaker/hero.webp',
+      alt: '오후 거실 창가에 서서 바깥을 바라보는 40대 후반 한국 여성',
+      width: 1200,
+      height: 675,
+    },
 
     body: [
       {
