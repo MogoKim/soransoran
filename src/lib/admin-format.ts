@@ -1,3 +1,5 @@
+import { getBoardByType, type BoardType } from '@/lib/board-registry'
+
 /**
  * 어드민 화면 공통 표기.
  * 🔴 화면마다 Intl 설정을 다시 쓰지 않는다 — 한 곳이 틀리면 날짜가 서로 달라 보인다.
@@ -36,3 +38,20 @@ export const REAL_MEMBER_WHERE = {
   providerId: { not: null },
   persona: { is: null },
 } as const
+
+/**
+ * 글 상세의 고객 경로. 만들 수 없으면 null 이다.
+ *
+ * 🔴 매거진은 제외한다.
+ *    MAGAZINE 의 href 는 /magazine 인데 그 하위는 Post.id 가 아니라 파일 slug 를 받는다.
+ *    붙이면 404 로 가는 링크가 만들어진다. 커뮤니티 게시판만 {href}/{postId} 가 성립한다.
+ *
+ * 🔴 경로를 문자열로 적지 않는다. board-registry 가 유일한 출처다.
+ *
+ * 🔴 여기 둔 이유 — actions/admin.ts 는 'use server' 라 동기 함수를 export 할 수 없다.
+ */
+export function communityPostHref(postId: string, boardType: BoardType): string | null {
+  const board = getBoardByType(boardType)
+  if (!board || !board.href.startsWith('/community/')) return null
+  return `${board.href}/${postId}`
+}

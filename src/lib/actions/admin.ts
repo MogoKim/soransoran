@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
+import { getBoardByType, type BoardType } from '@/lib/board-registry'
+import { communityPostHref } from '@/lib/admin-format'
 
 /**
  * 어드민 1차 MVP — 운영 write 경로. 🔴 이 파일이 유일한 지점이다.
@@ -20,7 +22,27 @@ import { requireAdmin } from '@/lib/admin'
  *    모든 화면(목록·상세·홈 인기글·내 활동·좋아요·조회수)이 함께 따라온다.
  *
  * 🔴 전 함수가 requireAdmin 을 먼저 통과한다. 통과 못 하면 한 줄도 쓰지 않는다.
+ *
+ * 🔴 고객 글 경로를 문자열로 짐작하지 않는다.
+ *    실제 경로는 /community/{boardSlug}/{postId} 이고 boardSlug 는 board-registry 가 정한다.
+ *    없는 경로를 revalidate 하면 아무 일도 일어나지 않는다 — 조용히 실패해서
+ *    "숨겼는데 고객 화면에 그대로 있다" 로 나타난다.
  */
+
+/**
+ * 이 글이 바뀌면 다시 그려야 할 고객 화면들.
+ *
+ * 🔴 board.href 를 문자열로 적지 않는다. registry 가 유일한 출처다.
+ * 🔴 홈(/)과 /best 도 함께 넣는다 — 인기글이 두 곳에서 뽑힌다.
+ */
+function revalidatePostSurfaces(postId: string, boardType: BoardType): void {
+  const href = communityPostHref(postId, boardType)
+  if (href) revalidatePath(href)
+  const board = getBoardByType(boardType)
+  if (board) revalidatePath(board.href)
+  revalidatePath('/')
+  revalidatePath('/best')
+}
 
 export type AdminActionState = { error?: string; ok?: true }
 
@@ -43,14 +65,17 @@ export async function updatePost(
   if (title.length > 200) return { error: '제목은 200자까지 쓸 수 있습니다.' }
   if (content === '') return { error: '본문을 적어 주세요.' }
 
-  const exists = await prisma.post.findUnique({ where: { id }, select: { id: true } })
+  const exists = await prisma.post.findUnique({
+    where: { id },
+    select: { id: true, boardType: true },
+  })
   if (!exists) return { error: '글을 찾지 못했습니다.' }
 
   await prisma.post.update({ where: { id }, data: { title, content } })
 
   revalidatePath(`/admin/content/${id}`)
   revalidatePath('/admin/content')
-  revalidatePath(`/post/${id}`)
+  revalidatePostSurfaces(id, exists.boardType)
   return { ok: true }
 }
 
@@ -64,7 +89,10 @@ export async function setPostHidden(postId: string, hidden: boolean): Promise<Ad
   if (!ok) return DENIED
   if (!postId) return { error: '글을 찾지 못했습니다.' }
 
-  const post = await prisma.post.findUnique({ where: { id: postId }, select: { status: true } })
+  const post = await prisma.post.findUnique({
+    where: { id: postId },
+    select: { status: true, boardType: true },
+  })
   if (!post) return { error: '글을 찾지 못했습니다.' }
   // DELETED 는 이 화면이 만드는 상태가 아니다. 되돌리는 것도 여기서 하지 않는다.
   if (post.status === 'DELETED') return { error: '삭제 상태인 글은 여기서 바꾸지 않습니다.' }
@@ -78,7 +106,7 @@ export async function setPostHidden(postId: string, hidden: boolean): Promise<Ad
   revalidatePath('/admin/content')
   revalidatePath('/admin/reports')
   revalidatePath('/admin/home')
-  revalidatePath('/')
+  revalidatePostSurfaces(postId, post.boardType)
   return { ok: true }
 }
 
@@ -93,7 +121,7 @@ export async function setCommentHidden(
 
   const comment = await prisma.comment.findUnique({
     where: { id: commentId },
-    select: { postId: true },
+    select: { postId: true, post: { select: { boardType: true } } },
   })
   if (!comment) return { error: '댓글을 찾지 못했습니다.' }
 
@@ -101,7 +129,8 @@ export async function setCommentHidden(
 
   revalidatePath(`/admin/content/${comment.postId}`)
   revalidatePath('/admin/reports')
-  revalidatePath(`/post/${comment.postId}`)
+  // 댓글 수가 홈 인기글 점수에 들어간다 — 글 표면을 함께 다시 그린다.
+  revalidatePostSurfaces(comment.postId, comment.post.boardType)
   return { ok: true }
 }
 

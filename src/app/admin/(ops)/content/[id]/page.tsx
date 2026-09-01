@@ -3,8 +3,9 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/admin'
-import { formatKst } from '@/lib/admin-format'
+import { communityPostHref, formatKst } from '@/lib/admin-format'
 import { REPORT_REASONS } from '@/lib/report-reasons'
+import { getBoardByType } from '@/lib/board-registry'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminPostEditForm from '@/components/admin/AdminPostEditForm'
 import { setPostHidden, setCommentHidden } from '@/lib/actions/admin'
@@ -14,6 +15,10 @@ import { setPostHidden, setCommentHidden } from '@/lib/actions/admin'
  *
  * 🔴 삭제 버튼을 두지 않는다. 가리기만 한다 —
  *    지우면 신고 근거도 함께 사라져 왜 조치했는지 설명할 수 없다.
+ * 🔴 고객 화면 링크를 문자열로 적지 않는다.
+ *    실제 경로는 /community/{boardSlug}/{postId} 이고 boardSlug 는 board-registry 가 정한다.
+ *    단일 세그먼트 글 경로(예전 형태)는 이 서비스에 없다 — 눌러도 404 가 난다.
+ *
  * 🔴 숨김은 status 만 바꾼다. 그러면 목록·상세·홈 인기글이 함께 따라온다
  *    (post-visibility.ts 3축이 유일한 판정 지점이다).
  */
@@ -63,6 +68,10 @@ export default async function AdminContentDetailPage({
   if (!post) notFound()
 
   const hidden = post.status !== 'PUBLISHED'
+  const board = getBoardByType(post.boardType)
+  // 매거진 글은 커뮤니티 상세 경로가 없다(하위가 Post.id 가 아니라 파일 slug 다).
+  // 링크를 만들 수 없으면 걸지 않는다 — 404 로 가는 링크는 없느니만 못하다.
+  const publicHref = communityPostHref(post.id, post.boardType)
 
   return (
     <main>
@@ -72,7 +81,7 @@ export default async function AdminContentDetailPage({
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-md bg-surface-soft px-2 py-1 text-xs text-content-muted">
-          {post.boardType}
+          {board?.label ?? post.boardType}
         </span>
         <span
           className={
@@ -89,10 +98,16 @@ export default async function AdminContentDetailPage({
         <Link href={`/admin/members/${post.author.id}`} className="text-link">
           {post.author.nickname ?? post.author.name ?? '회원'}
         </Link>{' '}
-        · 작성 {formatKst(post.createdAt)} · 수정 {formatKst(post.updatedAt)} ·{' '}
-        <Link href={`/post/${post.id}`} className="text-link">
-          고객 화면
-        </Link>
+        · 작성 {formatKst(post.createdAt)} · 수정 {formatKst(post.updatedAt)}
+        {publicHref ? (
+          <>
+            {' '}
+            ·{' '}
+            <Link href={publicHref} className="text-link">
+              고객 화면
+            </Link>
+          </>
+        ) : null}
       </p>
 
       <section className="mt-4">

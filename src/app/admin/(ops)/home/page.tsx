@@ -5,6 +5,7 @@ import { getPopularDiscoveryPosts } from '@/lib/queries/posts'
 import { popularityScore } from '@/lib/popularity'
 import { getAllMagazineArticles } from '@/lib/magazine'
 import { formatKst } from '@/lib/admin-format'
+import { HOME_MAGAZINE_COUNT, HOME_POPULAR_COUNT } from '@/lib/home-exposure'
 
 /**
  * 홈 노출 확인 — 읽기 전용.
@@ -12,6 +13,10 @@ import { formatKst } from '@/lib/admin-format'
  * 🔴 고정·제외·순서 조정을 두지 않는다(1.5차).
  *    지금 홈 인기글은 댓글 수 + 최신성 자동 점수다. 수동 배치를 먼저 넣으면
  *    자동 점수와 두 축이 생겨 "왜 이게 떴나" 를 아무도 설명하지 못하게 된다.
+ *
+ * 🔴 개수도 홈과 같은 상수를 읽는다 — home-exposure.ts.
+ *    여기에 숫자를 따로 적어 두면 홈에는 20개가 떠 있는데 운영자는 5개만 보고
+ *    "문제 글이 없다" 고 판단하게 된다. 실제로 그렇게 어긋나 있었다.
  *
  * 🔴 홈과 같은 함수를 쓴다 — getPopularDiscoveryPosts.
  *    여기서 따로 조회하면 화면과 다른 목록을 보게 되고, 그 순간 이 화면은 거짓말이 된다.
@@ -21,9 +26,6 @@ import { formatKst } from '@/lib/admin-format'
 export const metadata: Metadata = { title: '홈 노출' }
 export const dynamic = 'force-dynamic'
 
-/** 홈과 같은 값이어야 한다 (src/app/page.tsx) */
-const HOME_POPULAR_COUNT = 5
-const HOME_MAGAZINE_COUNT = 3
 
 export default async function AdminHomeExposurePage() {
   const { ok } = await requireAdmin()
