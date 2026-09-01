@@ -190,7 +190,13 @@ if (!parsed.ok) {
 console.log(`\n생성물  ${brief(parsed.text)}`)
 
 // ── 저장 — 🔴 원문 저장 금지 계약을 실측으로 확인한 뒤에만 쓴다 ──
-const record: CandidateRecord = toCandidateRecord({ personaCode: persona.code, text: parsed.text })
+// 🔴 sourcePostId 는 원문이 아니라 참조다. Gate 가 이 id 로 원문을 DB 에서 읽는다 —
+//    그래야 파일에 원문을 두지 않고도 ① 20자 유출 검사가 성립한다.
+const record: CandidateRecord = toCandidateRecord({
+  personaCode: persona.code,
+  text: parsed.text,
+  sourcePostId: post.id,
+})
 
 // 기존 파일이 있으면 이어 붙인다. 🔴 덮어쓰면 손으로 채운 후보가 사라진다
 let existing: CandidateRecord[] = []

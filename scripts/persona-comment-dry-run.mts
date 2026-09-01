@@ -36,6 +36,8 @@ import {
   type CandidateInput, type CandidateVerdict,
 } from './lib/persona-comment-candidate.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+// 🔴 전제 확인은 순수 함수로 뺐다. 스크립트 안에 두면 fixture 가 검증할 수 없다
+import { planPersonaPreflight, planPriorOutputPrecondition } from './lib/persona-preflight.mjs'
 
 const WRITE_OUT = process.argv.includes('--out')
 /**
@@ -53,6 +55,13 @@ type CandidateFile = {
   personaCode: string
   text: string
   sourceTexts?: string[]
+  /**
+   * 🔴 우리 DB Post.id — 원문이 아니라 **참조**다 (2026-09-01).
+   *    LLM 생성기가 만든 후보는 원문 저장 금지 계약 때문에 sourceTexts 를 갖지 않는다.
+   *    대신 이 id 를 두고, 판정할 때 DB 에서 제목·본문을 읽어 **런타임에만** 넘긴다.
+   *    파일에는 끝까지 원문이 남지 않는다.
+   */
+  sourcePostId?: string
   /**
    * 🔴 ⑧ seed 재사용 축의 식별자. 원댓글 seed 하나를 가리킨다.
    *    없으면 그 축은 notRun 이다 — sourceTexts 로 대신 세지 않는다(아래 이유).
@@ -72,7 +81,33 @@ const maskText = (s: string): string => {
 await loadEnvLocal()
 const prisma = new PrismaClient()
 
-// ── 전제 확인 — 🔴 이 도구는 draft 상태에서만 돈다 ──
+// ── 후보 파일 — 🔴 전제 확인보다 **먼저** 읽는다 ──
+//    전제가 "후보에 등장한 페르소나" 로 좁혀졌기 때문이다(persona-preflight.mts).
+//    누구를 검사할지 모르는 채로 전제를 볼 수는 없다.
+if (!existsSync(INPUT_PATH)) {
+  await prisma.$disconnect()
+  fail(
+    `${INPUT_PATH} 이 없습니다.\n` +
+    `   [{"personaCode":"P05","text":"…","sourceTexts":["…"]}] 형식으로 두세요 (tmp/ 는 gitignored).`,
+  )
+}
+function readInput(): CandidateFile[] | { error: string } {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(INPUT_PATH, 'utf-8'))
+    if (!Array.isArray(parsed)) return { error: '배열이어야 합니다.' }
+    return parsed as CandidateFile[]
+  } catch (e) { return { error: (e as Error).message } }
+}
+const parsedInput = readInput()
+let candidates: CandidateFile[] = []
+if (Array.isArray(parsedInput)) {
+  candidates = parsedInput
+} else {
+  await prisma.$disconnect()
+  fail(`${INPUT_PATH} 을 읽을 수 없습니다: ${parsedInput.error}`)
+}
+
+// ── 전제 확인 — 🔴 후보에 등장한 페르소나만 본다 ──
 console.log('══ 전제 확인 ══')
 const personas = await prisma.persona.findMany({
   select: {
@@ -86,25 +121,45 @@ const personas = await prisma.persona.findMany({
 if (personas.length === 0) { await prisma.$disconnect(); fail('Persona 가 없습니다.') }
 ok(`Persona ${personas.length}명`)
 
-const notDraft = personas.filter((p) => p.status !== 'draft')
-if (notDraft.length > 0) {
-  // 🔴 active 가 섞여 있으면 이 도구를 쓰지 않는다 — 발행 경로가 열린 뒤의 검증은 다르다
+// 🔴 가드를 없앤 것이 아니라 좁혔다 (2026-09-01).
+//    전 → 전체 Persona 가 draft 여야 한다
+//    후 → **후보에 등장한 Persona** 가 draft·active 이고 identity 가 있어야 한다
+//    원래 가드가 지키려던 것은 "설정이 덜 된 페르소나로 판정하지 않는다" 이고,
+//    그건 status 가 아니라 identity 가 답한다. 근거는 persona-preflight.mts 헤더.
+const preflight = planPersonaPreflight({
+  candidateCodes: candidates.map((c) => c.personaCode),
+  personas: personas.map((p) => ({ code: p.code, status: p.status, identity: p.identity })),
+})
+if (!preflight.ok) {
   await prisma.$disconnect()
-  fail(`draft 가 아닌 페르소나가 있습니다: ${notDraft.map((p) => p.code).join(', ')}`)
+  fail(preflight.blocks.map((b) => `[${b.code}] ${b.message}`).join('\n     '))
 }
-ok('전부 status=draft')
+ok(`후보 페르소나 ${preflight.used.join(' · ')} 판정 가능`)
+if (preflight.ignored.length > 0) {
+  // 🔴 후보에 없는 페르소나 때문에 멈추지 않는다. 다만 무엇을 건너뛰었는지는 남긴다
+  ok(`후보에 없어 검사하지 않음: ${preflight.ignored.join(' · ')}`)
+}
 
 const killSwitch = await prisma.personaGlobalSwitch.findFirst({ orderBy: { changedAt: 'desc' } })
 if (killSwitch?.enabled === true) { await prisma.$disconnect(); fail('전체 중지 스위치가 켜져 있습니다.') }
 ok(`전체 중지 스위치 ${killSwitch === null ? '꺼짐 (미생성)' : '꺼짐'}`)
 
+// 🔴 이 가드도 좁혔다 (2026-09-01). 두 축을 갈라 둔다:
+//      Comment  첫 댓글 발행으로 이미 열린 경로다. 알리고 진행한다
+//      Post     🔴 글 발행 경로는 **열린 적이 없다.** 숫자가 있으면 모르는 경로가 있다는 뜻이다
+//    이 도구는 판정만 하는 read-only 도구라 이미 나간 댓글이 판정을 틀리게 만들지 않는다.
 const linkedPosts = await prisma.post.count({ where: { personaId: { not: null } } })
 const linkedComments = await prisma.comment.count({ where: { personaId: { not: null } } })
-if (linkedPosts !== 0 || linkedComments !== 0) {
+const priorOutput = planPriorOutputPrecondition({
+  personaPosts: linkedPosts,
+  personaComments: linkedComments,
+})
+if (!priorOutput.ok) {
   await prisma.$disconnect()
-  fail(`이미 발행물이 있습니다: Post ${linkedPosts} · Comment ${linkedComments}`)
+  fail(priorOutput.blocks.map((b) => `[${b.code}] ${b.message}`).join('\n     '))
 }
-ok('Post/Comment.personaId 전부 NULL')
+for (const note of priorOutput.notes) console.log(`   🟡 ${note}`)
+ok(`Post.personaId ${linkedPosts} · Comment.personaId ${linkedComments}`)
 
 // ── ② 댓글 코퍼스 빈도 조회 ──
 //    🔴 댓글 생성물은 **댓글 코퍼스**로 잰다(§3-②).
@@ -158,47 +213,61 @@ const knownNames = users
   .filter((v): v is string => v !== null && v.trim() !== '')
 ok(`⑥-A 대조 집합 ${knownNames.length}건 (회원 표시명)`)
 
-// ── 후보 파일 ──
-if (!existsSync(INPUT_PATH)) {
-  await prisma.$disconnect()
-  fail(
-    `${INPUT_PATH} 이 없습니다.\n` +
-    `   [{"personaCode":"P05","text":"…","sourceTexts":["…"]}] 형식으로 두세요 (tmp/ 는 gitignored).`,
-  )
-}
-function readInput(): CandidateFile[] | { error: string } {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(INPUT_PATH, 'utf-8'))
-    if (!Array.isArray(parsed)) return { error: '배열이어야 합니다.' }
-    return parsed as CandidateFile[]
-  } catch (e) { return { error: (e as Error).message } }
-}
-const parsedInput = readInput()
-let candidates: CandidateFile[] = []
-if (Array.isArray(parsedInput)) {
-  candidates = parsedInput
-} else {
-  await prisma.$disconnect()
-  fail(`${INPUT_PATH} 을 읽을 수 없습니다: ${parsedInput.error}`)
-}
-
-const codes = new Set(personas.map((p) => p.code))
-const unknown = candidates.filter((c) => !codes.has(c.personaCode))
-if (unknown.length > 0) { await prisma.$disconnect(); fail(`알 수 없는 personaCode ${unknown.length}건`) }
+// 🔴 후보 파일은 위(전제 확인 앞)에서 이미 읽었다.
+//    알 수 없는 personaCode 검사도 planPersonaPreflight 의 PERSONA_NOT_FOUND 가 대신한다 —
+//    같은 검사를 두 곳에 두면 사유 문구가 갈린다.
 
 // 🔴 sourceTexts 없이는 ① 20자 유출 검사가 성립하지 않는다.
 //    비워 두면 "검사 불가" 인데 통과처럼 보인다 — 입력 단계에서 막는다.
+//
+// 🔴 다만 sourcePostId 가 있으면 여기서 **런타임에** 원문을 조달한다 (2026-09-01).
+//    LLM 생성기는 원문 저장 금지 계약 때문에 sourceTexts 를 파일에 쓰지 않는다.
+//    그렇다고 ① 을 건너뛰면 "검사 불가가 통과로 보이는" 바로 그 구멍이 된다.
+//    id → DB 조회로 메우고, **파일에는 끝까지 원문을 쓰지 않는다.**
+const runtimeSource = new Map<number, string[]>()
+{
+  const needIds = candidates
+    .map((c, i) => ({ i, c }))
+    .filter(({ c }) => !(c.sourceTexts ?? []).some((t) => t.trim() !== ''))
+    .filter(({ c }) => (c.sourcePostId ?? '').trim() !== '')
+
+  if (needIds.length > 0) {
+    const ids = [...new Set(needIds.map(({ c }) => (c.sourcePostId ?? '').trim()))]
+    const posts = await prisma.post.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, title: true, content: true },
+    })
+    const byId = new Map(posts.map((p) => [p.id, p]))
+    const missing: number[] = []
+    for (const { i, c } of needIds) {
+      const post = byId.get((c.sourcePostId ?? '').trim())
+      if (post === undefined) { missing.push(i + 1); continue }
+      // 🔴 메모리에만 둔다. verdicts 저장본에도 나가지 않는다
+      runtimeSource.set(i, [post.title, post.content])
+    }
+    if (missing.length > 0) {
+      await prisma.$disconnect()
+      fail(`sourcePostId 로 글을 찾지 못한 후보 ${missing.length}건 (#${missing.join(', #')}).`)
+    }
+    ok(`sourcePostId 로 원문 조달 ${runtimeSource.size}건 (🔴 메모리만 · 파일 미저장)`)
+  }
+}
+
 const noSource = candidates
-  .map((c, i) => ({ i, has: (c.sourceTexts ?? []).some((t) => t.trim() !== '') }))
+  .map((c, i) => ({
+    i,
+    has: (c.sourceTexts ?? []).some((t) => t.trim() !== '') || runtimeSource.has(i),
+  }))
   .filter((x) => !x.has)
 if (noSource.length > 0) {
   await prisma.$disconnect()
   fail(
-    `sourceTexts 가 비어 있는 후보 ${noSource.length}건 (#${noSource.map((x) => x.i + 1).join(', #')}).\n` +
-    `   🔴 ① 20자 유출 검사가 성립하지 않습니다. 후보마다 원문/원댓글을 1개 이상 넣으세요.`,
+    `source 가 없는 후보 ${noSource.length}건 (#${noSource.map((x) => x.i + 1).join(', #')}).\n` +
+    `   🔴 ① 20자 유출 검사가 성립하지 않습니다.\n` +
+    `   sourceTexts 를 넣거나, 우리 글을 보고 쓴 후보라면 sourcePostId 를 넣으세요.`,
   )
 }
-ok(`후보 ${candidates.length}건 · 전부 sourceTexts 보유`)
+ok(`후보 ${candidates.length}건 · 전부 source 확보 (파일 ${candidates.length - runtimeSource.size} · 런타임 ${runtimeSource.size})`)
 
 // ── ⑦ 대조 집합 — 🔴 값이 아니라 보유 여부만 센다 ──
 const withIdentity = personas.filter((p) => p.identity !== null).length
@@ -251,13 +320,16 @@ const byCode = new Map(personas.map((p) => [p.code, p]))
 // 🔴 map 이 아니라 순차 루프다 — 같은 배치의 앞선 후보가 다음 후보의 대조 집합이 된다.
 //    "세 페르소나가 나란히 같은 맞장구를 쓰면 기계다"(§3-⑧) 를 보려면 순서가 있어야 한다.
 const verdicts: CandidateVerdict[] = []
-for (const c of candidates) {
+for (const [ci, c] of candidates.entries()) {
   const persona = byCode.get(c.personaCode)
   const prior = priorByCode.get(c.personaCode) ?? []
+  // 🔴 파일에 sourceTexts 가 있으면 그것을, 없으면 sourcePostId 로 조달한 원문을 쓴다.
+  //    조달본은 메모리에만 있고 저장되지 않는다.
+  const fileSource = (c.sourceTexts ?? []).filter((t) => t.trim() !== '')
   const input: CandidateInput = {
     personaCode: c.personaCode,
     text: c.text,
-    sourceTexts: c.sourceTexts ?? [],
+    sourceTexts: fileSource.length > 0 ? fileSource : (runtimeSource.get(ci) ?? []),
     knownNames,
     forbiddenRoles: persona?.forbiddenReactionRoles ?? [],
     identity: (persona?.identity ?? null) as CandidateInput['identity'],

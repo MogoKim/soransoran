@@ -19,6 +19,8 @@ import {
   checkCommentCandidate, summarizeCandidates, type CandidateVerdict,
 } from './lib/persona-comment-candidate.mjs'
 import { checkPersonaConsistency, checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
+// 🔴 2026-09-01 가드 좁히기 — 전제 확인이 순수 함수로 빠져 여기서 잠근다
+import { planPersonaPreflight, planPriorOutputPrecondition } from './lib/persona-preflight.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const LIB = join(HERE, 'lib/persona-comment-candidate.mts')
@@ -673,6 +675,67 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   if (eight.axes.length === 0) offenders.push('🔴 ⑧ 이 아무것도 못 잡았다')
   if (offenders.length) bad('⑦⑧ 판정부 값 노출 없음', 'guard', `🔴 ${offenders.join(' / ')}`)
   else ok('⑦⑧ 판정부 값 노출 없음', 'guard', `코드 ${seven.codes.length}종 · 축 ${eight.axes.length}종만`)
+}
+
+// ── 전제 확인(preflight) — 🔴 2026-09-01 가드 좁히기 ──
+//    "전체 draft 강제" 를 "후보에 등장한 Persona 검증" 으로 좁혔다.
+//    좁힌 가드가 무엇을 여전히 막는지 전수로 잠근다.
+{
+  const P = (code: string, status: string, identity: unknown = { maritalStatus: '기혼' }) =>
+    ({ code, status, identity })
+  const pool = [
+    P('P05', 'active'), P('P07', 'draft'), P('P10', 'draft'),
+    P('P15', 'paused'), P('P17', 'retired'), P('P20', 'draft', null),
+  ]
+  const plan = (codes: string[]) => planPersonaPreflight({ candidateCodes: codes, personas: pool })
+  const codesOf = (codes: string[]): string =>
+    plan(codes).blocks.map((b) => b.code).sort().join(',')
+  const offenders: string[] = []
+
+  // 🔴 이번 수정의 핵심 — active 가 더 이상 막지 않는다
+  if (!plan(['P05']).ok) offenders.push('active(P05) 가 막혔다')
+  if (!plan(['P07']).ok) offenders.push('draft(P07) 가 막혔다')
+  if (!plan(['P05', 'P07']).ok) offenders.push('draft+active 혼합이 막혔다')
+
+  // 🔴 후보에 없는 페르소나 때문에 멈추지 않는다 (pool 에 paused · retired · identity 없음이 섞여 있다)
+  const only05 = plan(['P05'])
+  if (only05.ignored.join(',') !== 'P07,P10,P15,P17,P20') offenders.push(`ignored=${only05.ignored.join(',')}`)
+  if (only05.used.join(',') !== 'P05') offenders.push(`used=${only05.used.join(',')}`)
+
+  // 🔴 여전히 막아야 하는 것들
+  if (codesOf(['P15']) !== 'PERSONA_STATUS_BLOCKED') offenders.push(`paused=${codesOf(['P15'])}`)
+  if (codesOf(['P17']) !== 'PERSONA_STATUS_BLOCKED') offenders.push(`retired=${codesOf(['P17'])}`)
+  if (codesOf(['P20']) !== 'PERSONA_IDENTITY_EMPTY') offenders.push(`identity없음=${codesOf(['P20'])}`)
+  if (codesOf(['P99']) !== 'PERSONA_NOT_FOUND') offenders.push(`없는코드=${codesOf(['P99'])}`)
+  if (codesOf([]) !== 'NO_CANDIDATES') offenders.push(`빈후보=${codesOf([])}`)
+  if (codesOf(['   ']) !== 'NO_CANDIDATES') offenders.push('공백 코드가 걸러지지 않았다')
+
+  // 사유를 하나만 내고 멈추지 않는다
+  if (codesOf(['P15', 'P20', 'P99']) !== 'PERSONA_IDENTITY_EMPTY,PERSONA_NOT_FOUND,PERSONA_STATUS_BLOCKED') {
+    offenders.push(`복수사유=${codesOf(['P15', 'P20', 'P99'])}`)
+  }
+  if (plan(['P05', 'P05']).used.length !== 1) offenders.push('중복 코드가 두 번 세어졌다')
+
+  if (offenders.length) bad('preflight 후보 페르소나만', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('preflight 후보 페르소나만', 'guard', 'active 허용 · paused/retired/identity없음/미존재 차단')
+}
+
+// ── 발행물 전제 — 🔴 Comment 는 알리고 진행 · Post 는 여전히 중단 ──
+{
+  const offenders: string[] = []
+  const clean = planPriorOutputPrecondition({ personaPosts: 0, personaComments: 0 })
+  if (!clean.ok || clean.notes.length !== 0) offenders.push('0/0 이 통과하지 않았다')
+
+  const withComment = planPriorOutputPrecondition({ personaPosts: 0, personaComments: 1 })
+  if (!withComment.ok) offenders.push('🔴 발행된 댓글이 막았다')
+  if (withComment.notes.length !== 1) offenders.push('댓글 발행을 알리지 않았다')
+
+  const withPost = planPriorOutputPrecondition({ personaPosts: 1, personaComments: 0 })
+  if (withPost.ok) offenders.push('🔴 Post 발행이 통과했다')
+  if (withPost.blocks[0]?.code !== 'POST_OUTPUT_EXISTS') offenders.push(`Post사유=${withPost.blocks[0]?.code}`)
+
+  if (offenders.length) bad('발행물 전제', 'guard', `🔴 ${offenders.join(' / ')}`)
+  else ok('발행물 전제', 'guard', 'Comment 는 알리고 진행 · Post 는 중단')
 }
 
 // ── 출력 ────────────────────────────────────────────
