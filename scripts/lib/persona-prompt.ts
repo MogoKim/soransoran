@@ -91,6 +91,33 @@ export const CLICHE_OPENERS: readonly string[] = [
 ]
 
 /**
+ * 🔴 첫 **글자** 회피 목록 (2026-09-01).
+ *
+ * 어절 단위로 막았더니 소용이 없었다 — #9·#10·#11 이 전부 같은 글자로 시작했다
+ * (⑧ 시작어절 60% → 50% → 43%, 임계 35%). 어절을 바꿔도 첫 글자가 같으면
+ * 같은 자리에서 말을 꺼낸 것이고, 사람 눈에는 그게 먼저 보인다.
+ *
+ * 🔴 실제로 쓴 표지는 recentMarks 에서 파생한다. 이 상수는 그것이 없을 때의 바닥이다.
+ */
+export const CLICHE_OPENER_INITIALS: readonly string[] = ['저', '맞', '그', '어', '아', '와']
+
+/**
+ * 🔴 첫 문장을 여는 방법 — 금지만으로는 부족하다 (2026-09-01).
+ *
+ * "이렇게 시작하지 마라" 만 주면 모델은 **남은 흔한 자리**로 옮겨 간다.
+ * 실제로 상투적 어절을 막았더니 전부 같은 명사로 시작했다.
+ * 그래서 **무엇으로 열지**를 함께 준다 — 지금 내 자리의 상황이나 감각이다.
+ *
+ * 🔴 예시는 '방식'을 보여줄 뿐 베껴 쓰라는 목록이 아니다.
+ */
+export const OPENER_STYLE_EXAMPLES: readonly string[] = [
+  '설거지하다 말고',
+  '창밖 보다가',
+  '손이 시려워서',
+  '커피 식는 줄도 모르고',
+]
+
+/**
  * 🔴 최근 발화에서 뽑은 말투 표지 (2026-09-01, A안).
  *
  * ⑧ 은 이 페르소나의 **이전 발화와 비교**해 말끝·시작어절 반복을 잡는다.
@@ -241,6 +268,12 @@ export function buildPrompt(input: {
   const reaction = input.reactionType as ReactionType
   const recentOpeners = input.recentMarks?.openers ?? []
   const recentEndings = input.recentMarks?.endings ?? []
+  // 🔴 최근에 쓴 첫 어절의 **첫 글자** + 상투적 시작 글자를 합쳐 막는다.
+  //    #9·#10·#11 이 어절은 달라도 같은 글자로 시작했다 — 어절만 막아서는 안 됐다.
+  const avoidInitials = [...new Set([
+    ...recentOpeners.map((w) => [...w][0] ?? '').filter((c) => c !== ''),
+    ...CLICHE_OPENER_INITIALS,
+  ])]
 
   const systemPrompt = [
     '당신은 한국의 40~60대 여성 커뮤니티에서 활동하는 한 사람입니다.',
@@ -278,6 +311,11 @@ export function buildPrompt(input: {
       ? [`- 최근에 **이렇게 시작했습니다**: ${recentOpeners.join(' · ')}`,
          '  이번에는 다른 말로 시작하세요.']
       : []),
+    // 🔴 어절만 막으면 첫 글자가 같은 다른 어절로 옮겨 간다. 글자 단위로도 막는다
+    ...(avoidInitials.length > 0
+      ? [`- 🔴 **이 글자로 시작하지 않습니다**: ${avoidInitials.join(' · ')}`,
+         '  어절을 바꿔도 첫 글자가 같으면 같은 자리에서 말을 꺼낸 것입니다.']
+      : []),
     ...(recentEndings.length > 0
       ? [`- 최근에 **이렇게 끝냈습니다**: ${recentEndings.join(' · ')}`,
          '  이번에는 다른 말끝으로 끝내세요.']
@@ -299,6 +337,16 @@ export function buildPrompt(input: {
     '## 길이',
     `한두 문장. ${PROMPT_TARGET_MAX_CHARS}자를 넘기지 않습니다 (많아야 ${MAX_COMMENT_LENGTH}자).`,
     `${MIN_COMMENT_LENGTH}자짜리 한마디도 괜찮습니다. 길게 쓸수록 사람 말에서 멀어집니다.`,
+    '',
+    // 🔴 금지만 주면 모델은 **남은 흔한 자리**로 옮겨 간다.
+    //    상투적 어절을 막았더니 셋 다 같은 명사로 시작했다(⑧ 시작어절 60→50→43%).
+    //    무엇으로 열지를 함께 준다.
+    '## 🔴 첫 문장을 여는 방법',
+    '감탄이나 동의로 열지 않습니다. 상대 말을 받아 적는 것으로도 열지 않습니다.',
+    '대신 **지금 내 자리의 짧은 상황이나 감각**으로 엽니다.',
+    `예를 들면 이런 방식입니다: ${OPENER_STYLE_EXAMPLES.join(' / ')}`,
+    '(예시를 그대로 쓰지 말고, 방식만 가져가세요)',
+    '🔴 윗글의 상황을 요약해서 여는 것은 안 됩니다. 그건 반응이 아니라 되풀이입니다.',
     '',
     '## 사람이 한 말처럼',
     // 🔴 이전 판에서 "생활 조각이 없으면 얹지 않습니다" 라고 썼더니
