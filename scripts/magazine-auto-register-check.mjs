@@ -2,14 +2,21 @@
 /**
  * 자동 레인 회귀 테스트 — 게이트가 정말 막는가.
  *
- * 🔴 이 테스트가 지키는 것은 하나다: **HIGH 가 자동 레인에 흘러들지 않는다.**
- *    특히 batch-qa 는 topic-queue 에 없는 slug 의 등급을 검사하지 않고
- *    READY_TO_SCHEDULE 을 낼 수 있다. 그 구멍을 gate 가 막는지 확인한다.
+ * 🔴 이 테스트가 지키는 것 두 가지
+ *    ① **HIGH 가 자동 레인에 흘러들지 않는다.**
+ *       batch-qa 는 topic-queue 에 없는 slug 의 등급을 검사하지 않고
+ *       READY_TO_SCHEDULE 을 낼 수 있다. 그 구멍을 gate 가 막는지 확인한다.
+ *    ② **오염된 원고가 파일이 되지 않는다.**
+ *       ChatGPT 인용 마커가 draft.md 를 지나 production 까지 간 적이 있다
+ *       (after-holiday-body-ache). 관문이 그것을 막는지 확인한다.
  *
  * 사용법: node scripts/magazine-auto-register-check.mjs
  * 종료 코드: FAIL 이 있으면 1
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { gate, heroPlan, LANE_RISK } from './lib/magazine-auto-lane.mjs'
+import { validateManuscript, MIN_BODY_LENGTH } from './lib/magazine-manuscript-guard.mjs'
 import { branchName, preflight, createBranch, assertOnBranch, stageCheck } from './lib/magazine-auto-git.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
 
@@ -125,5 +132,86 @@ const extra = stageCheck(want, [...want, 'SoranSoran_Logo.png'].join('\n'))
 expect('미추적이 섞이면 막는다', extra.blockedBy[0].code, 'UNEXPECTED_STAGED')
 expect('무엇이 섞였는지 알려준다', extra.unexpected, ['SoranSoran_Logo.png'])
 
+console.log('\n══════ 원고 관문 — 저장 전에 막는가')
+
+/**
+ * 관문을 통과하는 원고 — 실제 draft.md 를 그대로 쓴다.
+ *
+ * 🔴 손으로 지어낸 샘플을 쓰지 않는다. 길이·문체·구조가 실제와 어긋나면
+ *    테스트는 통과하는데 실제 원고가 막히는 일이 생긴다.
+ *    파일이 없으면 이 묶음을 건너뛰고 그 사실을 말한다 — 조용히 PASS 하지 않는다.
+ */
+function loadRealDraft() {
+  for (const slug of ['avoiding-gatherings', 'back-to-work-homemaker', 'memory-worry-menopause']) {
+    try { return { slug, text: readFileSync(join('drafts', 'magazine', slug, 'draft.md'), 'utf8') } } catch { /* 다음 */ }
+  }
+  return null
+}
+const sample = loadRealDraft()
+if (!sample) {
+  console.log('  ⚠️ 실제 draft.md 가 하나도 없어 관문 시험을 건너뛴다')
+  fail += 1
+} else {
+  const GOOD = sample.text
+  console.log(`  표본: ${sample.slug}`)
+
+expect('정상 원고는 통과', validateManuscript(GOOD).ok, true)
+expect(`정상 원고 본문이 ${MIN_BODY_LENGTH}자 이상`, validateManuscript(GOOD).stats.bodyLength >= MIN_BODY_LENGTH, true)
+
+const reason = (t) => validateManuscript(t).reasons.map((r) => r.code).sort()
+
+expect('빈 원고는 막는다', reason(''), ['EMPTY'])
+expect('공백만 있어도 막는다', reason('   \n  '), ['EMPTY'])
+expect('frontmatter 가 없으면 막는다', reason(GOOD.replace(/^---\n/, '')).includes('NO_FRONTMATTER'), true)
+expect('title 이 없으면 막는다', reason(GOOD.replace(/^title:.*$\n/m, '')).includes('META_MISSING'), true)
+expect('cluster 가 없으면 막는다', reason(GOOD.replace(/^cluster:.*$\n/m, '')).includes('META_MISSING'), true)
+expect('frontmatter 가 안 닫히면 막는다', reason(GOOD.replace(/\n---\n/, '\n')).includes('FRONTMATTER_UNCLOSED'), true)
+expect('짧은 원고는 막는다', reason(['---', 'title: 짧음', 'description: 짧다', 'cluster: sleep', '---', '', '## 소제목', '', '한 줄.'].join('\n')).includes('TOO_SHORT'), true)
+
+const english = GOOD.replace(/[가-힣]/g, 'a')
+expect('한국어가 아니면 막는다', reason(english).includes('NOT_KOREAN'), true)
+
+expect('contentReference 오염을 막는다', reason(`${GOOD} :contentReference[oaicite:0]{index=0}`).includes('CONTAMINATED'), true)
+expect('oaicite 오염을 막는다', reason(`${GOOD}\n[oaicite:3]`).includes('CONTAMINATED'), true)
+expect('각주 마커 오염을 막는다', reason(`${GOOD}\n【4†source】`).includes('CONTAMINATED'), true)
+expect('도구 호출 흔적을 막는다', reason(`${GOOD}\nturn0search1`).includes('CONTAMINATED'), true)
+// 대화체 인사는 NO_FRONTMATTER 가 잡는다 — 본문 단어로 잡으면 오탐이 난다
+expect('원고 앞에 인사가 붙으면 막는다', reason(`물론입니다. 아래 원고입니다.\n${GOOD}`).includes('NO_FRONTMATTER'), true)
+expect('zero-width 문자를 막는다', reason(`${GOOD}\u200b`).includes('CONTAMINATED'), true)
+expect('## 소제목이 없으면 막는다', reason(GOOD.replace(/^## .*$/gm, '문단.')).includes('NO_SECTION'), true)
+
+// 🔴 오탐이 나면 재고가 멈춘다. 실제 원고로 확인한다.
+}
+
+console.log('\n══════ 원고 관문 — 실제 draft.md 오탐')
+const REAL = ['avoiding-gatherings', 'back-to-work-homemaker', 'memory-worry-menopause']
+for (const slug of REAL) {
+  const path = join('drafts', 'magazine', slug, 'draft.md')
+  let text = null
+  try { text = readFileSync(path, 'utf8') } catch { /* 없으면 건너뛴다 */ }
+  if (text === null) {
+    console.log(`  · ${slug} — draft.md 가 없어 건너뛴다`)
+    continue
+  }
+  expect(`실제 원고 통과: ${slug}`, validateManuscript(text).ok, true)
+}
+
+console.log('\n══════ 운영 활성화 상태 — 아직 켜지 않았다')
+
+/**
+ * 🔴 이 두 검사는 "꺼져 있음" 을 PASS 로 본다.
+ *    원고 회수는 구현했지만 무인 등록·PR 은 창업자가 켜는 순간까지 꺼져 있어야 한다.
+ *    누군가 plist 에 --write 를 넣으면 여기서 FAIL 이 나 알아차린다.
+ */
+const PLIST = 'launchd/com.soransoran.magazine-auto-register.plist'
+let plist = ''
+try { plist = readFileSync(PLIST, 'utf8') } catch { /* 없으면 아래에서 잡힌다 */ }
+const args = (plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/) ?? [, ''])[1]
+expect('plist 를 읽었다', plist.length > 0, true)
+expect('launchd 가 --write 를 켜지 않았다', args.includes('--write'), false)
+expect('launchd 가 --pr 를 켜지 않았다', args.includes('--pr'), false)
+expect('launchd 가 --notify-send 를 켜지 않았다', args.includes('--notify-send'), false)
+
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
+console.log('  상태: 원고 생성 구현됨 · 자동 등록/PR 운영 활성화는 꺼짐\n')
 process.exit(fail === 0 ? 0 : 1)
