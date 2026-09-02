@@ -27,6 +27,15 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 5,
+  /**
+   * 🔴 키보드가 뜨면 화면 자체를 그만큼 줄인다. 하단 고정 요소는 키보드 위에 그대로 남는다.
+   *
+   *    JS 로 `innerHeight - visualViewport.height` 를 재는 방식은 삼성 키보드에서 틀렸다.
+   *    그 브라우저가 키보드 **툴바**(이모지·마이크 줄)를 가시 영역으로 세는 바람에
+   *    댓글 시트가 툴바 높이만큼 덜 올라와 입력창과 등록 버튼이 툴바 뒤로 들어갔다.
+   *    브라우저에게 맡기면 툴바까지 함께 계산된다.
+   */
+  interactiveWidget: 'resizes-content',
   themeColor: BRAND.color,
 }
 
