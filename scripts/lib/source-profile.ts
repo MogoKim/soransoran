@@ -40,6 +40,20 @@ export type EmotionTone = (typeof EMOTION_TONES)[number]
 export const TITLE_TEMPERATURES = ['calm', 'worried', 'urgent', 'overheat', 'playful'] as const
 export type TitleTemperature = (typeof TITLE_TEMPERATURES)[number]
 
+/**
+ * 🔴 **제목의 모양** (2026-09-02 11판 #38 · #39).
+ *
+ * 온도(어떤 감정인가)와 목적(무엇을 원하는가)만으로는 제목이 서지 않았다.
+ * #38 과 #39 는 둘 다 `info_share` 였고, 그 갈래의 지시는 한 줄뿐이라
+ * **둘 다 단정한 요약 제목**으로 나왔다. 재료가 전혀 다른데 제목 모양이 같았다.
+ *
+ * 온도·목적 위에 **소재**를 하나 더 본다. 같은 letdown 이라도
+ * 자식 성적 이야기는 "사건 + 들킨 경로 + 엄마 감정" 으로 서고,
+ * 아기 영상 이야기는 주접으로 선다. 제목 모양은 소재가 정한다.
+ */
+export const TITLE_SHAPES = ['incident_reveal_emotion', 'fond_gush', 'plain_subject'] as const
+export type TitleShape = (typeof TITLE_SHAPES)[number]
+
 export const STRUCTURE_TYPES = [
   'numbered_list', 'fragmented_stream', 'casual_short_post',
   'practical_question', 'brag_post', 'review_post',
@@ -107,6 +121,15 @@ export type SourceProfile = {
    *    호칭보다 더 확실한 유출이다.
    */
   hasSourceUrl: boolean
+  /** 🔴 원문 안의 **출처 링크**. 한 건이라도 최종 글에 나가면 실패다 */
+  originTraceUrls: readonly string[]
+  /**
+   * ✅ 원문 안의 **소재 링크 정본** (유튜브만 · 추적 파라미터 제거됨).
+   *    null 이면 링크는 어떤 것도 못 나간다.
+   */
+  contentReferenceUrl: string | null
+  /** 🔴 제목을 어떤 모양으로 세울 것인가 */
+  titleShape: TitleShape
 }
 
 export type ConcreteDetail = {
@@ -236,6 +259,112 @@ const NUMBERED_RE = /^\s*\d+[.)]\s?\S/m
 const PARENTHETICAL_RE = /\([^)]{1,30}\)/
 /** 🔴 링크는 출처를 그대로 드러낸다. 호칭보다 확실한 유출이다 */
 export const SOURCE_URL_RE = /https?:\/\/|www\.[a-z0-9-]+\.[a-z]{2,}|[a-z0-9-]+\.(com|net|co\.kr|kr)\/[^\s]/i
+
+// ── 🔴 링크 두 갈래 (2026-09-02 11판 #39) ────────────────────────────
+//
+// 지금까지 URL 은 전면 금지였다. 그 규칙이 옳았던 이유는 링크가 **출처**였기 때문이다 —
+// 82cook 게시글 주소 한 줄이면 원문을 찾아갈 수 있다.
+//
+// 그런데 #39 는 달랐다. 원문 안의 유튜브 링크가 **글의 소재 그 자체**였다.
+// "이 영상 보세요" 가 글의 전부인데 링크를 지우면 무슨 영상인지 알 수 없는 글이 된다.
+// 출처를 감추려다 소재를 지운 것이다.
+//
+// 🔴 그래서 **출처 링크**와 **소재 링크**를 가른다. 전면 금지를 푸는 게 아니라
+//    금지의 대상을 정확히 하는 것이다. 출처 링크는 여전히 한 건도 못 나간다.
+
+/** 🔴 출처가 드러나는 호스트. 여기 걸리면 소재든 뭐든 못 나간다 */
+export const ORIGIN_URL_HOST_RE =
+  /(^|\.)(82cook\.com|cafe\.naver\.com|cafe\.daum\.net|blog\.naver\.com|m\.blog\.naver\.com|instagram\.com|tistory\.com|brunch\.co\.kr|band\.us|dcinside\.com|fmkorea\.com|theqoo\.net|ppomppu\.co\.kr)$/i
+
+/** 🔴 게시판 읽기 경로 — 호스트가 안 걸려도 이 경로면 원문 글이다 */
+export const ORIGIN_URL_PATH_RE = /\/(read|view|article|bbs|board)\b|read\.php|\/entiz\//i
+
+/** ✅ 소재로 허용할 수 있는 호스트 — 🔴 유튜브뿐이다. 늘리지 않는다 */
+export const CONTENT_URL_HOSTS: readonly string[] = [
+  'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be',
+]
+
+/**
+ * 🔴 추적·식별 파라미터. 하나라도 있으면 **그대로는** 못 쓴다.
+ *    `si` 는 유튜브 공유 버튼이 붙이는 값이라 누가 공유했는지가 따라간다.
+ */
+export const TRACKING_PARAM_RE = /^(si|utm_|fbclid|gclid|igshid|ref|ref_src|feature|pp|ab_channel)/i
+
+/** 유튜브 영상 id — 11자 고정 */
+const YOUTUBE_ID_RE = /^[A-Za-z0-9_-]{11}$/
+
+/**
+ * 텍스트에서 URL 을 있는 그대로 뽑는다.
+ *
+ * 🔴 `https://` 가 붙은 것만 찾으면 안 된다. 사람은 `cafe.naver.com/abc` 처럼
+ *    스킴 없이 쓴다 — 기존 SOURCE_URL_RE 가 그걸 잡고 있었고, 여기서 놓치면
+ *    **가드가 좁아진 것**이다. 알려진 TLD 로 끝나는 도메인도 URL 로 본다.
+ */
+const URL_TLD = '(?:com|net|org|co\\.kr|kr|be|tv|io|me|gg)'
+const URL_TAIL = '[^\\s<>"\')\\]]*'
+export const findUrls = (text: string): string[] =>
+  [...(text ?? '').matchAll(new RegExp(
+    `https?://${URL_TAIL}|[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.${URL_TLD}\\b${URL_TAIL}`, 'gi'))]
+    .map((m) => m[0].replace(/[.,)\]}>]+$/, ''))
+
+const parseUrl = (raw: string): URL | null => {
+  try { return new URL(raw.startsWith('http') ? raw : `https://${raw}`) } catch { return null }
+}
+
+/** 🔴 출처 링크인가 — 호스트든 경로든 하나만 걸려도 출처다 */
+export function isOriginUrl(raw: string): boolean {
+  const u = parseUrl(raw)
+  if (u === null) return true // 🔴 못 읽으면 출처로 본다. 모르는 것은 막는 쪽이다
+  return ORIGIN_URL_HOST_RE.test(u.host) || ORIGIN_URL_PATH_RE.test(u.pathname)
+}
+
+/**
+ * 🔴 소재 링크를 **정본 형태로 되돌린다.** 쓸 수 없으면 null.
+ *
+ * 창업자 규칙은 "단축 URL · 추적 파라미터 · 개인 식별 링크 금지" 다.
+ * #39 의 실제 링크는 `youtu.be/…?si=…` 로 **둘 다 걸린다.**
+ * 그렇다고 통째로 막으면 소재가 사라진다 — 그래서 **버리지 않고 씻는다**:
+ *   youtu.be 단축 → youtube.com/watch 정본 · `si` 등 추적 파라미터 제거.
+ * 남는 것은 영상 id 하나뿐이라 누가 공유했는지는 따라오지 않는다.
+ *
+ * 🔴 씻어서 안 되는 것은 null 로 돌려보낸다. 억지로 살리지 않는다.
+ */
+export function canonicalContentUrl(raw: string): string | null {
+  const u = parseUrl(raw)
+  if (u === null) return null
+  const host = u.host.toLowerCase()
+  if (!CONTENT_URL_HOSTS.includes(host)) return null
+  if (isOriginUrl(raw)) return null
+
+  const id = host === 'youtu.be'
+    ? u.pathname.replace(/^\//, '').split('/')[0] ?? ''
+    : u.pathname.startsWith('/shorts/')
+      ? u.pathname.slice('/shorts/'.length).split('/')[0] ?? ''
+      : u.searchParams.get('v') ?? ''
+  if (!YOUTUBE_ID_RE.test(id)) return null
+
+  // 🔴 남은 파라미터에 추적 값이 있어도 **버리고** 정본만 만든다. 옮겨 담지 않는다
+  return `https://www.youtube.com/watch?v=${id}`
+}
+
+/**
+ * 원문 안의 **못 옮기는 링크** (있으면 최종 글에 한 건도 못 나간다).
+ *
+ * 🔴 "알려진 출처 호스트" 만 세지 않는다. 모르는 도메인도 여기 들어온다 —
+ *    소재로 쓸 수 있는 것은 정본화에 성공한 유튜브 하나뿐이고, **나머지는 전부 막는다.**
+ *    계측(originUrlHits)과 같은 원칙이다. 눈금이 갈라지면 한쪽만 새어 나간다.
+ */
+export const originUrlsIn = (text: string): string[] =>
+  findUrls(text).filter((u) => isOriginUrl(u) || canonicalContentUrl(u) === null)
+
+/**
+ * 원문 안의 **소재 링크 정본**. 🔴 하나만 고른다 —
+ * 여러 개면 무엇이 소재인지 규칙으로 정할 수 없다. 그때는 아무것도 허용하지 않는다.
+ */
+export function contentUrlIn(text: string): string | null {
+  const ok = [...new Set(findUrls(text).map((u) => canonicalContentUrl(u)).filter((u): u is string => u !== null))]
+  return ok.length === 1 ? ok[0]! : null
+}
 
 const DETAIL_RULES: ReadonlyArray<{ kind: ConcreteDetail['kind']; re: RegExp }> = [
   { kind: 'time', re: /(새벽|아침|점심|저녁|밤|오전|오후)\s?\d{0,2}시?\s?\d{0,2}분?|\d{1,2}시\s?\d{0,2}분?|\d{1,2}:\d{2}/g },
@@ -455,6 +584,9 @@ export function readSourceProfile(input: {
     externalAddressTerms: EXTERNAL_ADDRESS_TERMS.filter((t) => all.includes(t)),
     originTraceTerms: originTraceHitsIn(all),
     hasSourceUrl: SOURCE_URL_RE.test(all),
+    originTraceUrls: originUrlsIn(all),
+    contentReferenceUrl: contentUrlIn(all),
+    titleShape: readTitleShape(title, body, tone),
   }
 }
 
@@ -587,11 +719,120 @@ const TITLE_BY_NEED: Record<InteractionNeed, string[]> = {
   ],
 }
 
+/** 자식·학교·성적 계열 — 🔴 좁게 유지한다. `애` 한 글자로는 잡지 않는다 */
+const CHILD_SCHOOL_TERMS: readonly string[] = [
+  '고3', '고등', '중3', '중학', '수능', '모의고사', '성적표', '성적', '내신', '등급',
+  '담임', '수시', '정시', '원서', '학원', '과외', '입시', '재수', '학교',
+]
+/** 들킨 경로 — 이게 있으면 사건이 "어떻게 알려졌는가" 가 이야기의 축이다 */
+const REVEAL_PATH_TERMS: readonly string[] = [
+  '전화', '문자', '연락', '알았', '들켰', '들통', '밝혀', '확인해 보니', '알게 됐',
+  '속였', '속여', '거짓말', '숨겼', '숨겨',
+]
+/** 아기·영상·귀여움 계열 — 랜선으로 흐뭇하게 보는 글 */
+const FOND_WATCH_TERMS: readonly string[] = [
+  '아기', '애기', '아가', 'baby', '영상', '유튜브', '채널', '브이로그', '릴스',
+  '귀여', '깜찍', '사랑스', '앙증', '조카', '손주', '손녀', '손자',
+]
+
+/**
+ * 🔴 제목 모양을 읽는다. 온도·목적과 **따로** 본다.
+ *
+ * 순서가 규칙이다 — 사건형을 먼저 본다. 자식 성적 이야기에 "귀엽다" 가 한 번
+ * 나온다고 주접 제목이 되면 안 된다. 무거운 쪽이 이긴다.
+ */
+export function readTitleShape(title: string, body: string, tone: EmotionTone): TitleShape {
+  const all = `${title}\n${body}`
+  const LETDOWN_TONES: readonly EmotionTone[] =
+    ['letdown', 'resentment', 'complaint', 'panic', 'worry']
+
+  const childHits = CHILD_SCHOOL_TERMS.filter((t) => all.includes(t)).length
+  const revealHits = REVEAL_PATH_TERMS.filter((t) => all.includes(t)).length
+  if (LETDOWN_TONES.includes(tone) && childHits > 0 && revealHits > 0) {
+    return 'incident_reveal_emotion'
+  }
+
+  const fondHits = FOND_WATCH_TERMS.filter((t) => all.includes(t)).length
+  // 🔴 **소재 링크가 곧 신호다.** 실제 #39 는 본문에 `아기` 한 번뿐이고
+  //    유튜브는 낱말이 아니라 **링크**로 들어 있었다. 낱말만 세면 놓친다 —
+  //    영상 링크를 걸어 두고 무언가를 이야기하는 글은 '보는 글' 이다.
+  const hasContentLink = contentUrlIn(all) !== null
+  // 🔴 그래도 좁게 유지한다. 링크가 없으면 두 종류 이상 걸려야 한다 —
+  //    `영상` 한 번으로 주접 제목을 만들지 않는다
+  if (fondHits >= 2 || (fondHits >= 1 && hasContentLink)) return 'fond_gush'
+
+  return 'plain_subject'
+}
+
+/**
+ * 🔴 사건형 제목에 달 수 있는 **감정 표시** (2026-09-02 12판 #40).
+ *
+ * 제목 구조는 잡혔는데 감정 자리가 비어 있었다. 목록을 주지 않으면
+ * 모델은 그 자리를 그냥 건너뛴다 — 말줄임표 하나로 끝냈다.
+ * 🔴 **하나만** 고르게 한다. 겹쳐 붙이면 신파가 된다.
+ */
+export const INCIDENT_EMOTION_MARKERS: readonly string[] = [
+  '미치겠네요', '어쩌죠', '허탈합니다', '하..', 'ㅠㅠ', '막막합니다', '기가 막혀서',
+]
+
+/** 🔴 모양별 제목 지시 — 목적별 지시보다 **구체적**이라 뒤에 붙여 덮는다 */
+const TITLE_BY_SHAPE: Record<TitleShape, string[]> = {
+  incident_reveal_emotion: [
+    '   🔴 이 글의 제목은 **「사건 + 들킨 경로 + 엄마 감정」** 순서로 세웁니다.',
+    '      · 사건: 무슨 일이 있었나 (성적을 속였다 · 원서를 잘못 썼다)',
+    '      · 들킨 경로: 어떻게 알게 됐나 (담임 전화 · 문자 · 성적표)',
+    `      · 엄마 감정: 알고 난 뒤의 마음 (${INCIDENT_EMOTION_MARKERS.slice(0, 5).join(' · ')})`,
+    '   🔴 구체 낱말을 제목에 살립니다 — 고3 · 모의고사 · 성적 · 담임 · 수시 · 속였 류.',
+    '      "아이 문제로 속상합니다" 처럼 뭉뚱그리면 실패입니다. 무엇이 있었는지가 보여야 합니다.',
+    // 🔴 2026-09-02 12판 #40 — 사건과 경로는 담겼는데 **감정이 절반**이었다.
+    //    "막막" 하나에 말줄임표뿐이었다. 세 번째 자리를 비워 두면 모델이 그냥 안 쓴다.
+    '   🔴 **감정 자리를 비우지 않습니다.** 위 목록에서 **하나만** 골라 제목에 답니다.',
+    '      하나면 충분합니다 — 두 개 이상 겹쳐 붙이면 신파가 됩니다.',
+    '   🔴 이건 **제목에만** 해당합니다. 본문까지 과장하거나 감정을 연기하지 않습니다 —',
+    '      원문에 없는 눈물·한숨·무너짐을 지어내면 실패입니다.',
+    '   🔴 단정한 요약형 금지. 제목이 문장으로 끝나도 됩니다 — ㅠㅠ · .. · 하.. 가 붙어도 됩니다.',
+  ],
+  fond_gush: [
+    '   🔴 이 글의 제목은 **커뮤식 주접 제목**입니다. 짧게 요약하지 않습니다.',
+    '      랜선 이모가 흐뭇하게 자랑하는 말투 — "너무 귀여워서 미쳐요" · "ㅋㅋㅋ".',
+    '   🔴 무엇을 보고 있는지가 제목에 나옵니다 (누구 영상인지 · 무슨 채널인지).',
+    '   🔴 감상문 제목 금지 — "요즘 보는 영상" · "귀여운 아기" 같은 것.',
+    // 🔴 2026-09-02 12판 — 이모지를 성공 지표로 삼지 않는다.
+    //    원문에 이모지가 없는데 제목에만 달면 그건 우리가 만든 톤이지 이 글의 톤이 아니다.
+    '   🔴 이모지(❤️ 등)는 **원문이나 말투에 원래 있을 때만** 씁니다.',
+    '      넣지 않아도 됩니다 — 없다고 실패가 아닙니다. 억지로 달지 마세요.',
+  ],
+  plain_subject: [],
+}
+
+/**
+ * 🔴 온도 줄. 사건형에서는 **온도가 감정 자리를 죽이지 않게** 한 줄 덧붙인다
+ *    (2026-09-02 12판 #40 — 원문이 담담해서 `calm` 이 잡혔고,
+ *     "과장하지 않습니다" 가 「엄마 감정」 지시와 서로 당겨 감정이 빠졌다).
+ *
+ * 🔴 온도 지시를 지우지는 않는다. 본문은 여전히 담담해야 한다 —
+ *    **제목 한 자리에만** 예외를 연다.
+ */
+const CALM_TEMPS: readonly TitleTemperature[] = ['calm', 'worried']
+function temperatureLine(p: SourceProfile): string[] {
+  const base = `- ${TEMP_DIRECTIVE[p.titleTemperature]}`
+  if (p.titleShape !== 'incident_reveal_emotion' || !CALM_TEMPS.includes(p.titleTemperature)) {
+    return [base]
+  }
+  return [
+    base,
+    '  🔴 다만 **제목 끝의 감정 표시 하나는 과장이 아닙니다.** 이건 사건을 알게 된 사람의 말입니다.',
+    '     원문이 담담하다고 제목까지 무표정할 필요는 없습니다 — 본문은 담담하게 갑니다.',
+  ]
+}
+
 export function titleDirectives(p: SourceProfile): string[] {
   return [
     '## 🔴 제목',
-    `- ${TEMP_DIRECTIVE[p.titleTemperature]}`,
+    ...temperatureLine(p),
     ...TITLE_BY_NEED[p.interactionNeed],
+    // 🔴 소재가 정하는 모양은 목적별 지시보다 구체적이라 뒤에 온다
+    ...TITLE_BY_SHAPE[p.titleShape],
     '🔴 **조용한 요약 제목은 실패입니다.** "~에 대하여" · "~후기" · "~생각" 같은 것.',
     '🔴 커뮤니티 목록에서 **눌러 보고 싶은 제목**이어야 합니다.',
     '   다만 낚시·거짓 과장은 금지입니다 — 글에 없는 일을 제목에 넣지 않습니다.',
@@ -605,11 +846,34 @@ export function titleDirectives(p: SourceProfile): string[] {
  * 호칭은 성공 지표가 아니다. 원문이 부를 때만 부른다.
  * `no_call` 에 CTA 를 붙이는 것이 9판에서 나온 AI 티의 정체였다.
  */
+/**
+ * 🔴 글 하나에 허용하는 물음표 수 (2026-09-02 12판 #41).
+ *
+ * 11판에서 질문이 0개로 죽어서 살렸더니, 12판에서 4개가 됐다.
+ * 규칙이 한쪽으로만 세면 반대쪽으로 넘어간다 — 양쪽에 벽을 세운다.
+ *   0개  → 🔴 실패 (explicit_question 인데 묻지 않았다)
+ *   1~2  → ✅ 정상. 주접 자문 한 번은 말버릇이다
+ *   3+   → 🔴 실패. 그건 말버릇이 아니라 공식이다
+ */
+export const MAX_QUESTION_MARKS = 2
+
 const CLOSING_DIRECTIVE: Record<ClosingIntent, string[]> = {
   explicit_question: [
     '- 원문은 **실제로 묻고 끝납니다.** 그 질문을 살립니다.',
+    // 🔴 2026-09-02 11판 #39 — 여기가 약해서 질문이 통째로 죽었다.
+    //    no_call 을 세게 막았더니 "묻지 마라" 가 묻는 글에까지 번졌다.
+    //    억지 CTA 금지와 **원문이 묻는 질문을 살리는 것**은 반대말이 아니다.
+    '  🔴 **질문이 사라지면 실패입니다.** 제목이나 본문 끝 중 한 곳에는 묻는 말이 남아야 합니다.',
     `  부를 때는 우리 호칭을 씁니다: ${SORANSORAN_ADDRESS.slice(0, 2).join(' · ')}`,
+    `  예: "혹시 보시는 ${SORANSORAN_ADDRESS[0]} 계세요?" 처럼 제목에 물어도 됩니다.`,
+    // 🔴 2026-09-02 12판 #41 — 질문을 살렸더니 이번엔 **남발**했다.
+    //    제목 1 + 본문 3 = 물음표 4개. 살리는 것과 반복하는 것은 다르다.
+    '  🔴 **묻는 곳은 한 곳입니다.** 제목에 물었으면 본문 끝에서 또 묻지 않습니다.',
+    `  🔴 글 전체에서 물음표는 **${MAX_QUESTION_MARKS}개까지**입니다. ${MAX_QUESTION_MARKS + 1}개부터는 실패입니다.`,
+    '     "어쩜 이렇게 귀엽죠?" 같은 혼잣말 물음은 **한 번**까지 봐줍니다. 서너 번 반복하면 말버릇이 아니라 공식입니다.',
     '  🔴 다만 원문에 없던 질문을 **더** 만들지 않습니다. 묻는 것은 하나면 됩니다.',
+    '  🔴 "그래서 말인데요" · "댓글 부탁드려요" 같은 **공식 CTA 는 여전히 금지**입니다.',
+    '     원문이 묻던 그 질문을 그대로 살리는 것이지, 댓글을 구걸하는 게 아닙니다.',
   ],
   advice_request: [
     '- 원문은 **조언을 청하며 끝납니다.** 무엇이 궁금한지 구체적으로 적고 청합니다.',
@@ -778,11 +1042,23 @@ export function profileDirectives(p: SourceProfile): string[] {
          '   🔴 다만 그 **상황감까지 버리지는 마세요.** 출처가 아니라 행동으로 바꿔 씁니다 —',
          '   예: "사진도 찍어봤어요" · "비교해 보려고 얼굴 상태도 따로 남겨뒀어요"']
       : []),
-    ...(p.hasSourceUrl
+    // 🔴 2026-09-02 11판 — 링크를 두 갈래로 나눈다.
+    //    출처 링크는 그대로 금지, 소재 링크(유튜브)는 정본 형태로만 허용.
+    ...(p.originTraceUrls.length > 0
       ? ['',
-         '🔴 원문에 링크(URL)가 있습니다. **최종 글에 주소를 옮기지 않습니다.**',
-         '   링크는 출처를 그대로 드러냅니다. 필요하면 "어디서 봤는데" 없이 내용만 내 말로 씁니다.']
+         `🔴 원문에 **출처 링크**가 ${p.originTraceUrls.length}건 있습니다.`,
+         '   **최종 글에 그 주소를 옮기지 않습니다.** 게시판·카페·블로그 주소는 출처를 그대로 드러냅니다.',
+         '   필요하면 "어디서 봤는데" 없이 내용만 내 말로 씁니다.']
       : []),
+    ...(p.contentReferenceUrl !== null
+      ? ['',
+         '✅ 원문 안의 링크가 **이 글의 소재 자체**입니다. 지우면 무슨 이야기인지 알 수 없는 글이 됩니다.',
+         `   쓰려면 **이 주소를 글자 그대로** 씁니다: ${p.contentReferenceUrl}`,
+         '   🔴 다른 주소를 만들지 않습니다. 단축 주소(youtu.be)·추적 파라미터(?si=…)를 붙이지 않습니다.',
+         '   🔴 링크는 **한 번만** 씁니다. 나열하지 않습니다.',
+         '   링크를 쓰지 않고 내용만 내 말로 풀어도 됩니다 — 둘 다 괜찮습니다.']
+      : ['',
+         '🔴 **어떤 주소(URL)도 쓰지 않습니다.** 이 글에는 옮겨도 되는 링크가 없습니다.']),
     ...(p.externalAddressTerms.length > 0
       ? ['',
          `🔴 원문에 다른 커뮤니티 호칭이 있습니다: ${p.externalAddressTerms.join(' · ')}`,
