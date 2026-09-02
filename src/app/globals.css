@@ -273,3 +273,73 @@
     min-height: 0;
   }
 }
+
+/* ──────────────────────────────────────────────────────────────
+   글 본문 — 쓰는 화면(.tiptap)과 읽는 화면(.post-body)
+
+   🔴 두 클래스에 같은 값을 준다. 쓸 때와 읽을 때 모양이 다르면
+      "올리고 나서야 달라진 것을 본다". 사진 여백 하나까지 맞춘다.
+
+   🔴 :root 토큰을 고치지 않는다. 여기서도 글자 크기는 --text-body 를 따르므로
+      고객 화면 "글자 크기" 조절이 본문에 그대로 반영된다.
+
+   🔴 img·iframe 에 max-width 를 준다. 없으면 가로 스크롤이 생기고,
+      좁은 화면에서 글 전체가 옆으로 밀린다.
+   ────────────────────────────────────────────────────────────── */
+.tiptap,
+.post-body {
+  font-size: var(--text-body);
+  line-height: 1.85;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.tiptap p,
+.post-body p {
+  margin: 0.6em 0;
+}
+
+.tiptap p:first-child,
+.post-body p:first-child {
+  margin-top: 0;
+}
+
+.tiptap img,
+.post-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.75em 0;
+  border-radius: 0.5rem;
+}
+
+/* 유튜브는 Tiptap 이 div[data-youtube-video] 로 iframe 을 감싼다 */
+.tiptap div[data-youtube-video],
+.post-body div[data-youtube-video] {
+  margin: 0.75em 0;
+}
+
+.tiptap div[data-youtube-video] iframe,
+.post-body div[data-youtube-video] iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  height: auto;
+  border: 0;
+  border-radius: 0.5rem;
+}
+
+/* 고른 사진에 테두리를 준다 — 무엇을 빼려는지 보이게 */
+.tiptap .ProseMirror-selectednode {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* 빈 본문 안내. 입력 전후로 크기가 같아야 화면이 튀지 않는다. */
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--text-muted);
+}

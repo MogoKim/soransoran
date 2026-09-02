@@ -16,6 +16,8 @@ import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail, getRecentDiscoveryPosts } from '@/lib/queries/posts'
 import { isSearchIndexable, robotsMetaFor } from '@/lib/post-visibility'
 import { displayName } from '@/lib/display-name'
+import PostBody from '@/components/features/PostBody'
+import { postContentToSummary } from '@/lib/post-html'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,8 +38,10 @@ export async function generateMetadata({
 
   // 🔴 Micro Seed 는 본문을 description·OG 로 흘리지 않는다.
   //    원문 본문이 메타데이터로 구조화 노출되면 noindex 로도 막지 못한다.
+  // 🔴 태그를 뺀 글자만 넣는다. 본문이 HTML 이 된 뒤로 그대로 자르면
+  //    description 첫머리가 "<p><img src=..." 로 나간다 — 검색 결과에 그대로 보인다.
   const description = indexable
-    ? post.content.replace(/\s+/g, ' ').slice(0, 120)
+    ? postContentToSummary(post.content).slice(0, 120)
     : undefined
 
   // 공유 카드에 쓰는 절대 경로. canonical 과 같은 주소여야 한다 —
@@ -118,9 +122,8 @@ export default async function PostDetailPage({
             <span aria-hidden>·</span>
             <span>조회 {post.viewCount}</span>
           </p>
-          <div className="mt-5 whitespace-pre-wrap break-keep leading-[1.85] text-content-primary [overflow-wrap:anywhere]">
-            {post.content}
-          </div>
+          {/* 🔴 sanitize 는 PostBody 안에서 한다 — 이 화면이 잊을 수 있는 일이 아니게. */}
+          <PostBody content={post.content} className="mt-5" />
           {session?.user?.id === post.author.id ? (
             <div className="mt-6 flex items-center gap-3 border-t border-subtle pt-3">
               {/* 🔴 코랄 fill 을 쓰지 않는다. 여기는 글을 읽는 화면이고

@@ -27,14 +27,3 @@ export function formatRelativeTime(value: Date, now: Date = new Date()): string 
     timeZone: 'Asia/Seoul',
   }).format(value)
 }
-
-/**
- * 목록 미리보기용 본문 요약
- *
- * 줄바꿈을 공백으로 눌러 2줄 말줄임이 예측 가능하게 만든다.
- * 길이를 넉넉히 잘라 두고 실제 줄 수 제한은 CSS(line-clamp)가 맡는다.
- */
-export function toPreview(content: string, max = 140): string {
-  const flat = content.replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max)}…` : flat
-}

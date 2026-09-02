@@ -6,6 +6,7 @@ import { getBoardBySlug } from '@/lib/board-registry'
 import { loginHref } from '@/lib/callback-url'
 import { prisma } from '@/lib/prisma'
 import { getPostDetail } from '@/lib/queries/posts'
+import { toEditorHtml } from '@/lib/post-content-format'
 
 export const dynamic = 'force-dynamic'
 
@@ -64,11 +65,18 @@ export default async function PostEditPage({
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="mb-6 text-xl font-bold text-content-primary">글 수정</h1>
+        {/*
+          🔴 평문을 그대로 에디터에 넣지 않는다.
+             Tiptap 은 HTML 을 파싱하므로 문자열 안의 \n 은 공백처럼 취급되어
+             한 문단으로 접힌다. 옛 글은 대부분 평문이고 줄바꿈이 많다 —
+             "고치기" 만 눌렀다가 저장하면 줄이 통째로 사라진다.
+             화면에 넣기 전에 <br> 로 바꿔 둔다. 이미 HTML 인 글은 손대지 않는다.
+        */}
         <PostEditForm
           boardSlug={board.slug}
           postId={post.id}
           initialTitle={post.title}
-          initialContent={post.content}
+          initialContent={toEditorHtml(post.content)}
           cancelHref={`${board.href}/${post.id}`}
         />
       </main>

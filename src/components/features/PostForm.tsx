@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
-import { useAutoResize } from '@/lib/use-auto-resize'
+import PostEditor from '@/components/features/PostEditor'
 import { createPost, type ActionState } from '@/lib/actions/posts'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import {
@@ -14,10 +14,10 @@ import {
   POST_CONTENT_COUNTER_FROM,
   POST_CONTENT_COUNTER_WARN_FROM,
   POST_CONTENT_PLACEHOLDER,
-  POST_TEXTAREA_MAX_HEIGHT,
   POST_TITLE_PLACEHOLDER,
 } from '@/lib/post-policy'
 import { readDraft, removeDraft, saveDraft, type PostDraft } from '@/lib/write-draft'
+import { toEditorHtml } from '@/lib/post-content-format'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 
 const DRAFT_SAVE_DELAY_MS = 1000
@@ -32,16 +32,43 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
   const [boardSlug, setBoardSlug] = useState(() => resolveBoardSlug(defaultBoardSlug))
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
+  /**
+   * 🔴 글자 수는 HTML 이 아니라 글자로 센다.
+   *    사진 주소 한 줄이 100 자를 넘어, HTML 길이로 재면 사진 몇 장에
+   *    5000 자 상한이 차 버린다. 서버도 같은 기준으로 본다(post-html.ts).
+   */
+  const [text, setText] = useState('')
+  /**
+   * 🔴 사진을 올리는 동안 등록을 막는다.
+   *    올리는 중에는 본문에 든 것이 아직 blob: 주소다. 그대로 보내면
+   *    sanitize 가 걸러 내 "분명히 넣었는데 올리고 나니 없는" 글이 된다.
+   */
+  const [uploading, setUploading] = useState(false)
   const [restored, setRestored] = useState(false)
 
   // 이벤트 핸들러가 재등록 없이 최신 입력을 읽게 한다.
   const draftRef = useRef<PostDraft>({ boardSlug, title, content })
   draftRef.current = { boardSlug, title, content }
-  const contentRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * 🔴 에디터는 처음 받은 본문만 그린다(Tiptap 은 그렇게 동작한다).
+   *    임시저장을 불러오거나 새로 쓸 때는 key 를 바꿔 다시 그린다 —
+   *    setContent 만으로는 화면이 따라오지 않는다.
+   */
+  const [editorKey, setEditorKey] = useState(0)
 
   function applyDraft(draft: PostDraft) {
     setTitle(draft.title.slice(0, MAX_POST_TITLE_LENGTH))
-    setContent(draft.content.slice(0, MAX_POST_CONTENT_LENGTH))
+    /**
+     * 🔴 본문을 자르지 않는다. 임시저장된 것이 HTML 이라 글자 수로 자르면
+     *    태그 한가운데가 끊겨 사진이 사라지거나 문단이 깨진 채 복원된다.
+     *    길이는 서버가 글자 기준으로 다시 본다.
+     */
+    /**
+     * 🔴 임시저장된 것이 평문일 수 있다 — 에디터가 들어오기 전에 쓰다 만 글이다.
+     *    평문을 그대로 Tiptap 에 넣으면 줄바꿈이 접힌다. HTML 로 바꿔 넣는다.
+     */
+    setContent(toEditorHtml(draft.content))
+    setEditorKey((n) => n + 1)
     setRestored(true)
   }
 
@@ -51,8 +78,6 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
     // 마운트 시 한 번만 복원한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  useAutoResize(contentRef, content, POST_TEXTAREA_MAX_HEIGHT)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -86,19 +111,30 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
     setBoardSlug(nextSlug)
     const draft = readDraft(nextSlug)
     if (draft) applyDraft(draft)
-    else setRestored(false)
+    else {
+      setContent('')
+      setText('')
+      setEditorKey((n) => n + 1)
+      setRestored(false)
+    }
   }
 
   function handleReset() {
     removeDraft(boardSlug)
     setTitle('')
     setContent('')
+    setText('')
+    setEditorKey((n) => n + 1)
     setRestored(false)
   }
 
+  // 🔴 사진만 올린 글도 보낼 수 있게 한다. 글자가 짧아도 할 말을 한 것이다.
+  //    서버도 같은 규칙이다(actions/posts.ts).
+  const hasImage = content.includes('<img')
   const canSubmit =
+    !uploading &&
     title.trim().length >= MIN_POST_TITLE_LENGTH &&
-    content.trim().length >= MIN_POST_CONTENT_LENGTH
+    (hasImage || text.trim().length >= MIN_POST_CONTENT_LENGTH)
 
   return (
     <form
@@ -162,29 +198,36 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
         />
       </label>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-sm font-bold text-content-primary">내용</span>
-        <textarea
-          ref={contentRef}
-          name="content"
-          rows={5}
-          maxLength={MAX_POST_CONTENT_LENGTH}
+        {/* 🔴 form 에는 hidden input 으로 낸다. Tiptap 은 name 을 가진 입력이 아니다. */}
+        <input type="hidden" name="content" value={content} readOnly />
+        <PostEditor
+          key={editorKey}
           value={content}
-          onChange={(e) => setContent(e.target.value)}
-          className="min-h-[140px] resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-card p-3"
+          onChange={setContent}
+          onTextChange={setText}
+          onBusyChange={setUploading}
           placeholder={POST_CONTENT_PLACEHOLDER}
         />
-      </label>
+      </div>
 
-      {content.length >= POST_CONTENT_COUNTER_FROM ? (
+      {text.length >= POST_CONTENT_COUNTER_FROM ? (
         <p
           className={`-mt-2 self-end text-xs ${
-            content.length >= POST_CONTENT_COUNTER_WARN_FROM
+            text.length >= POST_CONTENT_COUNTER_WARN_FROM
               ? 'text-state-warning'
               : 'text-content-muted'
           }`}
         >
-          {content.length}/{MAX_POST_CONTENT_LENGTH}
+          {text.length}/{MAX_POST_CONTENT_LENGTH}
+        </p>
+      ) : null}
+
+      {/* 🔴 왜 못 누르는지 말해 준다. 잠긴 버튼만 두면 고장으로 읽힌다. */}
+      {uploading ? (
+        <p role="status" className="-mb-2 text-sm text-content-muted">
+          사진을 올리고 있어요. 끝나면 올릴 수 있습니다.
         </p>
       ) : null}
 
