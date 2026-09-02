@@ -1,11 +1,11 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
-import { useAutoResize } from '@/lib/use-auto-resize'
+import PostEditor from '@/components/features/PostEditor'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import {
@@ -16,7 +16,6 @@ import {
   POST_CONTENT_COUNTER_FROM,
   POST_CONTENT_COUNTER_WARN_FROM,
   POST_CONTENT_PLACEHOLDER,
-  POST_TEXTAREA_MAX_HEIGHT,
   POST_TITLE_PLACEHOLDER,
 } from '@/lib/post-policy'
 
@@ -47,13 +46,18 @@ export default function PostEditForm({
   const [state, formAction] = useFormState<ActionState, FormData>(updatePost, {})
   const [title, setTitle] = useState(initialTitle)
   const [content, setContent] = useState(initialContent)
-  const contentRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * 🔴 글자 수는 HTML 이 아니라 글자로 센다 — PostForm 과 같은 규칙이다.
+   *    처음 값은 에디터가 그려진 뒤 onTextChange 로 채워진다. 그 전에는
+   *    "글자가 모자란다" 로 잘못 막지 않도록 저장된 본문 길이를 그대로 둔다.
+   */
+  const [text, setText] = useState(initialContent)
 
-  useAutoResize(contentRef, content, POST_TEXTAREA_MAX_HEIGHT)
-
+  // 🔴 사진만 남긴 글도 저장할 수 있다. 서버도 같은 규칙이다.
+  const hasImage = content.includes('<img')
   const canSubmit =
     title.trim().length >= MIN_POST_TITLE_LENGTH &&
-    content.trim().length >= MIN_POST_CONTENT_LENGTH
+    (hasImage || text.trim().length >= MIN_POST_CONTENT_LENGTH)
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
@@ -83,29 +87,26 @@ export default function PostEditForm({
         />
       </label>
 
-      <label className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <span className="text-sm font-bold text-content-primary">내용</span>
-        <textarea
-          ref={contentRef}
-          name="content"
-          rows={5}
-          maxLength={MAX_POST_CONTENT_LENGTH}
+        <input type="hidden" name="content" value={content} readOnly />
+        <PostEditor
           value={content}
-          onChange={(e) => setContent(e.target.value)}
-          className="min-h-[140px] resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-card p-3"
+          onChange={setContent}
+          onTextChange={setText}
           placeholder={POST_CONTENT_PLACEHOLDER}
         />
-      </label>
+      </div>
 
-      {content.length >= POST_CONTENT_COUNTER_FROM ? (
+      {text.length >= POST_CONTENT_COUNTER_FROM ? (
         <p
           className={`-mt-2 self-end text-xs ${
-            content.length >= POST_CONTENT_COUNTER_WARN_FROM
+            text.length >= POST_CONTENT_COUNTER_WARN_FROM
               ? 'text-state-warning'
               : 'text-content-muted'
           }`}
         >
-          {content.length}/{MAX_POST_CONTENT_LENGTH}
+          {text.length}/{MAX_POST_CONTENT_LENGTH}
         </p>
       ) : null}
 

@@ -12,6 +12,8 @@ import {
   MIN_COMMENT_LENGTH,
 } from '@/lib/comment-policy'
 import { checkContent } from '@/lib/content-guard'
+import { sanitizePostHtml, isHtmlContent } from '@/lib/post-html'
+import { firstImageUrl } from '@/lib/post-media'
 
 /**
  * 어드민 1차 MVP — 운영 write 경로. 🔴 이 파일이 유일한 지점이다.
@@ -65,12 +67,22 @@ export async function updatePost(
 
   const id = String(formData.get('postId') ?? '')
   const title = String(formData.get('title') ?? '').trim()
-  const content = String(formData.get('content') ?? '').trim()
+  const raw = String(formData.get('content') ?? '').trim()
 
   if (!id) return { error: '글을 찾지 못했습니다.' }
   if (title === '') return { error: '제목을 적어 주세요.' }
   if (title.length > 200) return { error: '제목은 200자까지 쓸 수 있습니다.' }
-  if (content === '') return { error: '본문을 적어 주세요.' }
+  if (raw === '') return { error: '본문을 적어 주세요.' }
+
+  /**
+   * 🔴 운영자가 고친 본문도 sanitize 를 지난다.
+   *    운영자를 의심해서가 아니라, 신고 글에서 본문을 통째로 복사해 붙이는 일이
+   *    이 화면에서 실제로 일어나기 때문이다. 그때 딸려 온 태그를 그대로 저장하면
+   *    고객 화면에서 그대로 살아난다.
+   *
+   * 🔴 평문으로 온 것은 평문으로 둔다 — 옛 글을 고칠 때 형식을 바꾸지 않는다.
+   */
+  const content = isHtmlContent(raw) ? sanitizePostHtml(raw) : raw
 
   const exists = await prisma.post.findUnique({
     where: { id },
@@ -78,7 +90,10 @@ export async function updatePost(
   })
   if (!exists) return { error: '글을 찾지 못했습니다.' }
 
-  await prisma.post.update({ where: { id }, data: { title, content } })
+  await prisma.post.update({
+    where: { id },
+    data: { title, content, thumbnailUrl: firstImageUrl(content) },
+  })
 
   revalidatePath(`/admin/content/${id}`)
   revalidatePath('/admin/content')

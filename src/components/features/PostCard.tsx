@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import StatIcon from '@/components/icons/StatIcon'
-import { formatRelativeTime, toPreview } from '@/lib/date'
+import { formatRelativeTime } from '@/lib/date'
+import { toPreview } from '@/lib/post-html'
 import { displayName } from '@/lib/display-name'
 
 export type PostCardData = {

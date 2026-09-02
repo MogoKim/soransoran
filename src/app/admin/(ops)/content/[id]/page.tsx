@@ -19,6 +19,7 @@ import {
   AdminStatusBadge,
 } from '@/components/admin/AdminUi'
 import { setPostHidden, setCommentHidden } from '@/lib/actions/admin'
+import PostBody from '@/components/features/PostBody'
 
 /**
  * 게시글 상세 · 수정.
@@ -157,8 +158,14 @@ export default async function AdminContentDetailPage({
         </Link>
       </AdminSection>
 
+      {/* 🔴 사진·영상을 글자로 대신하지 않는다.
+             신고 사유의 대부분이 사진이라, 주소만 보이면 무엇을 신고한 것인지
+             판단할 수 없어 매번 고객 화면을 새 창으로 열어야 한다.
+             고객 화면과 같은 컴포넌트를 쓰므로 보이는 것도 같다. */}
       <AdminSection title="본문" description="고객 화면에 보이는 그대로입니다.">
-        <AdminQuote>{post.content}</AdminQuote>
+        <div className="mt-1 rounded-lg bg-surface-soft p-3">
+          <PostBody content={post.content} />
+        </div>
       </AdminSection>
 
       {/* 🔴 수정 폼을 펼친 채 두면 textarea 가 화면 절반을 먹어 상태·신고·댓글이 밀린다.

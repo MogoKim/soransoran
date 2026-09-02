@@ -18,7 +18,28 @@ import {
   POST_CONTENT_TOO_SHORT,
   POST_CONTENT_TOO_LONG,
 } from '@/lib/post-policy'
+import { sanitizePostHtml, isHtmlContent, postContentToText } from '@/lib/post-html'
+import { firstImageUrl } from '@/lib/post-media'
 import type { BoardType } from '@prisma/client'
+
+/**
+ * 에디터가 낸 본문을 저장 가능한 형태로 만든다.
+ *
+ * 🔴 저장 시점에 sanitize 한다. 화면에서 한 번 더 거르지만(PostBody),
+ *    이 액션은 주소만 알면 누구나 부를 수 있어 에디터를 거치지 않은 HTML 이
+ *    들어올 수 있다. DB 에 깨끗한 것만 넣어야 thumbnailUrl 추출도 믿을 수 있다.
+ *
+ * 🔴 길이·금칙어는 태그를 뺀 글자로 잰다.
+ *    사진 주소 한 줄이 100 자를 넘어 HTML 그대로 재면 사진 몇 장에 5000 자가 차고,
+ *    content-guard 의 URL 개수 판정(3개)은 사진 세 장에서 "링크가 너무 많습니다" 가 된다.
+ *    상한도 판정도 사람이 쓴 글자를 뜻하는 것이었다.
+ *
+ * 🔴 평문으로 온 것은 평문으로 둔다. 옛 글과 같은 형식이라 렌더가 알아서 가른다.
+ */
+function preparePostContent(raw: string): { content: string; text: string } {
+  const content = isHtmlContent(raw) ? sanitizePostHtml(raw) : raw
+  return { content, text: postContentToText(content) }
+}
 
 /** 글쓰기: 사용자당 10분에 3건 */
 const POST_LIMIT = 3
@@ -51,7 +72,7 @@ export async function createPost(
 
   const boardSlug = String(formData.get('boardSlug') ?? '')
   const title = String(formData.get('title') ?? '').trim()
-  const content = String(formData.get('content') ?? '').trim()
+  const { content, text } = preparePostContent(String(formData.get('content') ?? '').trim())
 
   const board = getBoardBySlug(boardSlug)
   if (!board || !board.isCommunity) {
@@ -63,16 +84,18 @@ export async function createPost(
   if (title.length > MAX_POST_TITLE_LENGTH) {
     return { error: POST_TITLE_TOO_LONG }
   }
-  if (content.length < MIN_POST_CONTENT_LENGTH) {
+  // 🔴 사진만 올린 글을 막지 않는다. 글자가 짧아도 사진이 있으면 할 말을 한 것이다.
+  const hasImage = firstImageUrl(content) !== null
+  if (!hasImage && text.length < MIN_POST_CONTENT_LENGTH) {
     return { error: POST_CONTENT_TOO_SHORT }
   }
-  if (content.length > MAX_POST_CONTENT_LENGTH) {
+  if (text.length > MAX_POST_CONTENT_LENGTH) {
     return { error: POST_CONTENT_TOO_LONG }
   }
 
   const titleGuard = checkContent(title, { isTitle: true })
   if (!titleGuard.ok) return { error: titleGuard.reason }
-  const contentGuard = checkContent(content)
+  const contentGuard = checkContent(text)
   if (!contentGuard.ok) return { error: contentGuard.reason }
 
   const limited = checkActionRateLimit('post', userId, POST_LIMIT, POST_WINDOW_MS)
@@ -83,6 +106,7 @@ export async function createPost(
       boardType: board.type as BoardType,
       title,
       content,
+      thumbnailUrl: firstImageUrl(content),
       authorId: userId,
       source: 'USER',
     },
@@ -126,7 +150,7 @@ export async function updatePost(
   const postId = String(formData.get('postId') ?? '')
   const boardSlug = String(formData.get('boardSlug') ?? '')
   const title = String(formData.get('title') ?? '').trim()
-  const content = String(formData.get('content') ?? '').trim()
+  const { content, text } = preparePostContent(String(formData.get('content') ?? '').trim())
 
   const board = getBoardBySlug(boardSlug)
   if (!board || !board.isCommunity) {
@@ -138,16 +162,17 @@ export async function updatePost(
   if (title.length > MAX_POST_TITLE_LENGTH) {
     return { error: POST_TITLE_TOO_LONG }
   }
-  if (content.length < MIN_POST_CONTENT_LENGTH) {
+  const hasImage = firstImageUrl(content) !== null
+  if (!hasImage && text.length < MIN_POST_CONTENT_LENGTH) {
     return { error: POST_CONTENT_TOO_SHORT }
   }
-  if (content.length > MAX_POST_CONTENT_LENGTH) {
+  if (text.length > MAX_POST_CONTENT_LENGTH) {
     return { error: POST_CONTENT_TOO_LONG }
   }
 
   const titleGuard = checkContent(title, { isTitle: true })
   if (!titleGuard.ok) return { error: titleGuard.reason }
-  const contentGuard = checkContent(content)
+  const contentGuard = checkContent(text)
   if (!contentGuard.ok) return { error: contentGuard.reason }
 
   const limited = checkActionRateLimit('post-edit', userId, POST_EDIT_LIMIT, POST_EDIT_WINDOW_MS)
@@ -163,9 +188,16 @@ export async function updatePost(
   if (post.boardType !== board.type) return { error: '글을 찾을 수 없습니다.' }
   if (post.authorId !== userId) return { error: '본인이 쓴 글만 고칠 수 있습니다.' }
 
+  /**
+   * 🔴 본문에서 빠진 사진을 R2 에서 지우지 않는다.
+   *    무엇이 빠졌는지는 lib/post-media.ts 의 removedImageKeys 로 셀 수 있지만,
+   *    "이 글에서 빠졌다" 와 "아무 데서도 안 쓴다" 는 다른 말이다 —
+   *    같은 주소가 다른 글에 복사돼 있으면 살아 있는 글의 사진이 깨진다.
+   *    판단과 보류 사유: docs/decisions/post-media-orphan-files.md
+   */
   await prisma.post.update({
     where: { id: postId },
-    data: { title, content },
+    data: { title, content, thumbnailUrl: firstImageUrl(content) },
   })
 
   revalidatePath(board.href)

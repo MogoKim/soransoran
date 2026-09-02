@@ -1,0 +1,444 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEditor, EditorContent } from '@tiptap/react'
+import type { Editor } from '@tiptap/core'
+import StarterKit from '@tiptap/starter-kit'
+import Image from '@tiptap/extension-image'
+import Youtube from '@tiptap/extension-youtube'
+import Placeholder from '@tiptap/extension-placeholder'
+import EditorIcon from '@/components/icons/EditorIcon'
+import { cn } from '@/lib/utils'
+import {
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_COUNT,
+  ALLOWED_IMAGE_TYPES,
+  HEIC_EXTENSION,
+  IMAGE_TOO_LARGE,
+  IMAGE_TYPE_NOT_ALLOWED,
+  IMAGE_TOO_MANY,
+  IMAGE_UPLOAD_FAILED,
+  YOUTUBE_URL,
+  YOUTUBE_INVALID,
+} from '@/lib/post-media-policy'
+
+/**
+ * 글 본문 에디터 — 사진 · 유튜브 · 굵게.
+ *
+ * 🔴 우나어 TipTapEditor 를 그대로 옮기지 않았다.
+ *    그쪽 842 줄에는 동영상 파일 업로드 · 글자 크기 · 인용 · 디버그 overlay 가
+ *    같이 들어 있다. 1차 범위에 없는 것을 함께 들여오면 쓰지 않는 코드가
+ *    먼저 낡고, 그 위에 다음 사람이 또 얹는다.
+ *    가져온 것은 세 가지다 — 붙여넣기 자동 임베드 · 키보드 위 툴바 ·
+ *    올리는 동안 미리 보여주는 방식.
+ *
+ * 🔴 값(HTML)은 부모가 들고 있는다. 여기서 form 을 만들지 않는다 —
+ *    PostForm 은 임시저장을, PostEditForm 은 취소를 각각 다르게 다룬다.
+ *
+ * 🔴 글자 수는 HTML 이 아니라 글자로 센다.
+ *    사진 주소 한 줄이 100 자를 넘어서, HTML 길이로 재면 사진 몇 장에
+ *    5000 자 상한이 차 버린다. 서버도 같은 기준으로 본다(post-html.ts).
+ */
+
+/** 올리는 동안 화면에 먼저 보여줄 자리를 만들되, 저장되지 않게 blob: 을 쓴다. */
+type Upload = { blobUrl: string; name: string }
+
+function countImages(editor: Editor): number {
+  let count = 0
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === 'image') count += 1
+  })
+  return count
+}
+
+/** 올리기가 끝나면 미리보기 주소를 진짜 주소로 바꾼다. 되돌리기 이력에는 남기지 않는다. */
+function swapImageSrc(editor: Editor, from: string, to: string): void {
+  const { state } = editor.view
+  const tr = state.tr.setMeta('addToHistory', false)
+  let done = false
+  state.doc.descendants((node, pos) => {
+    if (!done && node.type.name === 'image' && node.attrs.src === from) {
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: to })
+      done = true
+    }
+  })
+  if (done) editor.view.dispatch(tr)
+}
+
+/** 실패하면 미리보기 자리를 치운다. 빈 액자가 남으면 저장 뒤에야 알아차린다. */
+function dropImage(editor: Editor, src: string): void {
+  const { state } = editor.view
+  const tr = state.tr.setMeta('addToHistory', false)
+  let done = false
+  state.doc.descendants((node, pos) => {
+    if (!done && node.type.name === 'image' && node.attrs.src === src) {
+      tr.delete(pos, pos + node.nodeSize)
+      done = true
+    }
+  })
+  if (done) editor.view.dispatch(tr)
+}
+
+export default function PostEditor({
+  value,
+  onChange,
+  onTextChange,
+  placeholder,
+}: {
+  /** 본문 HTML. 처음 한 번만 에디터에 넣는다. */
+  value: string
+  onChange: (html: string) => void
+  /** 글자만 뽑은 길이 — 부모가 글자 수·제출 가능 여부를 판단한다. */
+  onTextChange: (text: string) => void
+  placeholder: string
+}) {
+  const [uploading, setUploading] = useState<Upload | null>(null)
+  const [error, setError] = useState('')
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [youtubeUrl, setYoutubeUrl] = useState('')
+  const [youtubeError, setYoutubeError] = useState('')
+  const [mediaSelected, setMediaSelected] = useState(false)
+
+  const fileRef = useRef<HTMLInputElement>(null)
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<Editor | null>(null)
+  // 화면을 떠난 뒤 setState 가 도는 것을 막는다 — 올리는 도중 뒤로 가면 생긴다.
+  const aliveRef = useRef(true)
+  useEffect(() => () => { aliveRef.current = false }, [])
+
+  const editor = useEditor({
+    // Next.js 서버 렌더와 맞물리면 hydration 이 어긋난다. 브라우저에서만 그린다.
+    immediatelyRender: false,
+    extensions: [
+      StarterKit.configure({
+        // 1차 툴바는 굵게 하나다. 손잡이 없는 서식을 문서 구조로만 열어 두면
+        // 붙여넣기로만 들어와 렌더·sanitize 규칙과 어긋난다.
+        heading: false,
+        codeBlock: false,
+        code: false,
+        bulletList: false,
+        orderedList: false,
+        listItem: false,
+        blockquote: false,
+        horizontalRule: false,
+        strike: false,
+      }),
+      Image.configure({ HTMLAttributes: { class: 'rounded-lg' } }),
+      Youtube.configure({
+        // 🔴 nocookie 로 넣는다. 읽기만 해도 추적 쿠키가 붙는 것을 줄인다.
+        //    sanitize 허용 목록에 www.youtube-nocookie.com 이 들어 있는 것과 짝이다.
+        nocookie: true,
+        controls: true,
+        HTMLAttributes: { class: 'rounded-lg overflow-hidden' },
+      }),
+      Placeholder.configure({ placeholder }),
+    ],
+    content: value,
+    onUpdate: ({ editor: ed }) => {
+      onChange(ed.getHTML())
+      onTextChange(ed.getText())
+    },
+    onSelectionUpdate: ({ editor: ed }) => {
+      const selection = ed.state.selection as { node?: { type: { name: string } } }
+      const name = selection.node?.type?.name
+      setMediaSelected(name === 'image' || name === 'youtube')
+    },
+    editorProps: {
+      attributes: {
+        class:
+          'min-h-[240px] px-4 py-3 leading-[1.85] text-content-primary outline-none [word-break:keep-all] [overflow-wrap:anywhere]',
+      },
+      handlePaste: (_view, event) => {
+        const text = event.clipboardData?.getData('text/plain')?.trim() ?? ''
+        // 유튜브 주소만 붙여넣었을 때는 링크가 아니라 화면으로 넣는다.
+        // 주소 뒤에 글이 이어지면 사람이 쓴 문장이므로 건드리지 않는다.
+        if (!YOUTUBE_URL.test(text) || /\s/.test(text)) return false
+        editorRef.current?.chain().focus().setYoutubeVideo({ src: text }).createParagraphNear().run()
+        return true
+      },
+      handleClickOn: (_view, _pos, node, nodePos, _event, direct) => {
+        // 사진·영상을 눌러 고를 수 있게 한다 — 지우려면 먼저 고를 수 있어야 한다.
+        if (!direct) return false
+        if (node.type.name !== 'image' && node.type.name !== 'youtube') return false
+        editorRef.current?.chain().setNodeSelection(nodePos).run()
+        return true
+      },
+    },
+  })
+
+  useEffect(() => {
+    editorRef.current = editor
+  }, [editor])
+
+  /**
+   * 툴바를 키보드 위에 붙인다.
+   *
+   * 🔴 CSS 만으로는 안 된다. 조상 중에 transform 이 있으면 position:fixed 가
+   *    그 요소 기준으로 잡혀 화면 아래에 붙지 않는다 — 우나어가 겪은 문제다.
+   *    그래서 JS 로 직접 fixed 를 주고 visualViewport 로 높이를 잰다.
+   *
+   * 🔴 offsetTop 을 반드시 뺀다. iOS 는 키보드를 올릴 때 화면 자체를 밀어 올리는데
+   *    그 양이 offsetTop 에 들어온다. 빼지 않으면 툴바가 키보드 뒤로 숨는다.
+   */
+  useEffect(() => {
+    const toolbar = toolbarRef.current
+    if (!toolbar) return
+
+    const desktop = window.matchMedia('(min-width: 1024px)')
+    const viewport = window.visualViewport
+
+    const update = () => {
+      if (desktop.matches) {
+        toolbar.style.position = 'sticky'
+        toolbar.style.bottom = ''
+        toolbar.style.left = ''
+        toolbar.style.right = ''
+        toolbar.style.top = '0'
+        toolbar.style.zIndex = '10'
+        return
+      }
+      toolbar.style.position = 'fixed'
+      toolbar.style.top = ''
+      toolbar.style.left = '0'
+      toolbar.style.right = '0'
+      toolbar.style.zIndex = '30'
+      const keyboard = Math.max(
+        0,
+        window.innerHeight - (viewport?.height ?? window.innerHeight) - (viewport?.offsetTop ?? 0),
+      )
+      toolbar.style.bottom = `calc(${keyboard}px + env(safe-area-inset-bottom, 0px))`
+    }
+
+    update()
+    viewport?.addEventListener('resize', update)
+    viewport?.addEventListener('scroll', update)
+    desktop.addEventListener('change', update)
+    return () => {
+      viewport?.removeEventListener('resize', update)
+      viewport?.removeEventListener('scroll', update)
+      desktop.removeEventListener('change', update)
+    }
+  }, [editor])
+
+  const handleFiles = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? [])
+      event.target.value = ''
+      if (files.length === 0 || !editor) return
+
+      setError('')
+
+      if (countImages(editor) + files.length > MAX_IMAGE_COUNT) {
+        setError(IMAGE_TOO_MANY)
+        return
+      }
+      if (files.some((f) => f.size > MAX_IMAGE_BYTES)) {
+        setError(IMAGE_TOO_LARGE)
+        return
+      }
+      const typeOk = (f: File) =>
+        ALLOWED_IMAGE_TYPES.includes(f.type as (typeof ALLOWED_IMAGE_TYPES)[number]) ||
+        (f.type === '' && HEIC_EXTENSION.test(f.name))
+      if (!files.every(typeOk)) {
+        setError(IMAGE_TYPE_NOT_ALLOWED)
+        return
+      }
+
+      // 한 장씩 올린다. 한꺼번에 보내면 어느 것이 실패했는지 말해 줄 수 없다.
+      for (const file of files) {
+        const blobUrl = URL.createObjectURL(file)
+        editor.chain().focus().setImage({ src: blobUrl }).createParagraphNear().run()
+        setUploading({ blobUrl, name: file.name })
+
+        try {
+          const body = new FormData()
+          body.append('file', file)
+          const res = await fetch('/api/uploads', { method: 'POST', body })
+
+          if (!res.ok) {
+            const payload = (await res.json().catch(() => ({}))) as { error?: string }
+            if (aliveRef.current) setError(payload.error ?? IMAGE_UPLOAD_FAILED)
+            dropImage(editor, blobUrl)
+            URL.revokeObjectURL(blobUrl)
+            break
+          }
+
+          const { url } = (await res.json()) as { url: string }
+          swapImageSrc(editor, blobUrl, url)
+          // onUpdate 는 사람이 친 것만 따라온다 — 주소를 바꾼 것은 직접 알린다.
+          onChange(editor.getHTML())
+        } catch {
+          if (aliveRef.current) setError(IMAGE_UPLOAD_FAILED)
+          dropImage(editor, blobUrl)
+          break
+        } finally {
+          URL.revokeObjectURL(blobUrl)
+          if (aliveRef.current) setUploading(null)
+        }
+      }
+    },
+    [editor, onChange],
+  )
+
+  const insertYoutube = useCallback(() => {
+    if (!editor) return
+    const url = youtubeUrl.trim()
+    if (!YOUTUBE_URL.test(url)) {
+      setYoutubeError(YOUTUBE_INVALID)
+      return
+    }
+    editor.chain().focus().setYoutubeVideo({ src: url }).createParagraphNear().run()
+    setYoutubeUrl('')
+    setYoutubeError('')
+    setSheetOpen(false)
+  }, [editor, youtubeUrl])
+
+  if (!editor) {
+    // 에디터가 붙기 전에도 자리가 있어야 화면이 튀지 않는다.
+    return <div className="min-h-[280px] rounded-lg border border-subtle bg-surface-card" />
+  }
+
+  const busy = uploading !== null
+
+  return (
+    <div className="relative">
+      {error ? (
+        <p role="alert" className="mb-2 text-sm text-state-danger">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="rounded-lg border border-subtle bg-surface-card focus-within:border-interactive">
+        <EditorContent editor={editor} />
+      </div>
+
+      {/* 키보드가 올라오면 툴바가 그 위로 붙는다 — 아래를 가리는 만큼 자리를 비워 둔다. */}
+      <div className="h-[72px] lg:h-0" aria-hidden />
+
+      <div
+        ref={toolbarRef}
+        className="border-t border-subtle bg-surface-card px-3 py-1"
+      >
+        {mediaSelected ? (
+          <div className="mb-1 flex items-center justify-between rounded-lg bg-surface-soft px-3">
+            <span className="text-sm text-content-secondary">사진·영상을 골랐어요</span>
+            <button
+              type="button"
+              // 버튼을 누르는 순간 에디터가 초점을 잃으면 무엇이 선택됐는지 사라진다.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                editor.chain().focus().deleteSelection().run()
+                setMediaSelected(false)
+              }}
+              className="inline-flex min-h-[52px] items-center gap-1.5 px-2 text-sm font-bold text-state-danger"
+            >
+              <EditorIcon name="trash" size={18} />
+              빼기
+            </button>
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => { setError(''); fileRef.current?.click() }}
+            disabled={busy}
+            className="inline-flex min-h-[52px] items-center gap-1.5 rounded-lg bg-surface-soft px-3 text-sm text-content-primary disabled:opacity-60"
+          >
+            <EditorIcon name={busy ? 'spinner' : 'photo'} />
+            {busy ? '올리는 중…' : '사진'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setError(''); setSheetOpen(true) }}
+            className="inline-flex min-h-[52px] items-center gap-1.5 rounded-lg bg-surface-soft px-3 text-sm text-content-primary"
+          >
+            <EditorIcon name="youtube" />
+            유튜브
+          </button>
+
+          <button
+            type="button"
+            aria-pressed={editor.isActive('bold')}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => editor.chain().focus().toggleBold().run()}
+            className={cn(
+              'inline-flex min-h-[52px] items-center gap-1.5 rounded-lg px-3 text-sm',
+              editor.isActive('bold')
+                ? 'bg-brand-soft font-bold text-brand-ink'
+                : 'bg-surface-soft text-content-primary',
+            )}
+          >
+            <EditorIcon name="bold" />
+            굵게
+          </button>
+        </div>
+      </div>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleFiles}
+      />
+
+      {sheetOpen ? (
+        <div
+          className="fixed inset-0 z-40"
+          role="dialog"
+          aria-modal="true"
+          aria-label="유튜브 주소 넣기"
+        >
+          <button
+            type="button"
+            aria-label="닫기"
+            onClick={() => setSheetOpen(false)}
+            className="absolute inset-0 w-full cursor-default bg-content-primary/40"
+          />
+          <div className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-surface-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))]">
+            <p className="m-0 font-bold text-content-primary">유튜브 주소를 붙여넣어 주세요</p>
+            <p className="mt-1 text-sm text-content-muted">
+              본문에 주소만 붙여넣어도 영상으로 바뀝니다.
+            </p>
+            <input
+              type="url"
+              inputMode="url"
+              autoFocus
+              value={youtubeUrl}
+              onChange={(e) => { setYoutubeUrl(e.target.value); setYoutubeError('') }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); insertYoutube() }
+              }}
+              placeholder="https://www.youtube.com/watch?v=..."
+              className="mt-3 min-h-[52px] w-full rounded-lg border border-subtle bg-surface-page px-3"
+            />
+            {youtubeError ? (
+              <p role="alert" className="mt-1 text-sm text-state-danger">
+                {youtubeError}
+              </p>
+            ) : null}
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={insertYoutube}
+                className="min-h-[52px] flex-1 rounded-lg bg-cta px-5 font-bold text-cta-text"
+              >
+                넣기
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSheetOpen(false); setYoutubeUrl(''); setYoutubeError('') }}
+                className="min-h-[52px] px-4 text-content-muted"
+              >
+                그만두기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}

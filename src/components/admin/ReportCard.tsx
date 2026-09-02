@@ -3,6 +3,7 @@ import { boardLabel, formatKst, isRealMember } from '@/lib/admin-format'
 import { REPORT_REASONS } from '@/lib/report-reasons'
 import AdminActionButton from '@/components/admin/AdminActionButton'
 import AdminCommentEditForm from '@/components/admin/AdminCommentEditForm'
+import PostBody from '@/components/features/PostBody'
 import {
   AdminBadge,
   AdminStatusBadge,
@@ -33,10 +34,10 @@ const REASON_LABEL = new Map<string, string>(REPORT_REASONS.map((r) => [r.value,
 /**
  * 카드 안에 싣는 글 본문 길이.
  *
- * 🔴 전문을 싣지 않는다. 신고 열 건이면 화면이 글 열 편이 되어 목록이 아니게 된다.
- *    판단에 필요한 만큼만 보이고, 더 볼 사람은 글 상세로 간다.
+ * 🔴 카드 하나가 화면을 다 먹지 않게 한다. 신고 열 건이면 화면이 글 열 편이 되어
+ *    목록이 아니게 된다. 글자 수로 자르는 대신 높이를 묶어 안에서 스크롤한다 —
+ *    본문이 HTML 이 된 뒤로는 글자 수로 자르면 태그 한가운데가 잘린다.
  */
-const EXCERPT = 300
 
 type Author = {
   id: string
@@ -134,10 +135,13 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
               {report.post.title}
             </Link>
           </p>
-          <AdminQuote>
-            {report.post.content.slice(0, EXCERPT)}
-            {report.post.content.length > EXCERPT ? '…' : ''}
-          </AdminQuote>
+          {/* 🔴 사진을 주소 글자로 보여주지 않는다.
+                 신고 사유의 상당수가 사진이라, 무엇을 신고한 것인지 여기서 보이지 않으면
+                 매번 고객 화면을 새 창으로 열어야 한다 — 30 초 컷이 깨지는 자리다.
+                 대신 높이를 묶어 카드 하나가 화면을 다 먹지 않게 한다. */}
+          <div className="mt-1 max-h-[320px] overflow-y-auto rounded-lg bg-surface-soft p-3">
+            <PostBody content={report.post.content} />
+          </div>
         </div>
       ) : report.comment ? (
         <div className="mt-3">
