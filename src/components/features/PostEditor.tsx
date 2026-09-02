@@ -8,7 +8,6 @@ import Image from '@tiptap/extension-image'
 import Youtube from '@tiptap/extension-youtube'
 import Placeholder from '@tiptap/extension-placeholder'
 import EditorIcon from '@/components/icons/EditorIcon'
-import { useWriteViewportTop } from '@/components/features/use-write-viewport-top'
 import { cn } from '@/lib/utils'
 import {
   MAX_IMAGE_BYTES,
@@ -248,20 +247,6 @@ export default function PostEditor({
     if (editor) onTextChangeRef.current(editor.getText())
   }, [editor])
 
-  /**
-   * 🔴 툴바는 제목과 본문 사이, 문서 흐름 안에 둔다.
-   *    화면 아래에 띄워 두면 그 아래로 지나가는 것 위를 덮고 다닌다 —
-   *    등록 버튼이 툴바 밑을 통과하면서 탭을 빼앗기던 것이 그것이었다.
-   *    흐름 안에 두면 겹칠 수 있는 상태 자체가 없어진다.
-   *
-   * 🔴 대신 상단바 바로 밑에 달라붙게(sticky) 한다. 흐름 안에만 두면 긴 글을
-   *    쓰는 동안 툴바가 위로 사라져 사진을 넣으려면 되돌아 올라가야 한다.
-   *
-   * 🔴 상단바와 같은 보정을 쓴다. 둘이 맞붙어 있어 한쪽만 보정하면
-   *    키보드가 열릴 때 사이가 벌어지거나 겹친다.
-   */
-  const setToolbarEl = useWriteViewportTop()
-
   const handleFiles = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(event.target.files ?? [])
@@ -350,11 +335,10 @@ export default function PostEditor({
         </p>
       ) : null}
 
-      <div
-        ref={setToolbarEl}
-        // top-[56px] 는 WriteTopBar 의 h-[56px] 과 짝이다. 한쪽만 바꾸면 겹치거나 뜬다.
-        className="sticky top-[56px] z-30 -mx-1 bg-surface-app px-1 pb-2 will-change-transform"
-      >
+      {/* 🔴 툴바는 문서 흐름 안에만 둔다. sticky·fixed 로 띄우거나 viewport 보정을 주면
+             제자리를 벗어나 본문 카드 테두리와 첫 줄 위를 덮는다 — 실기기에서 그렇게 깨졌다.
+             화면에 붙여 두어야 하는 것은 등록 버튼이지 도구가 아니다. */}
+      <div className="mb-3">
         {mediaSelected ? (
           <div className="mb-1 flex items-center justify-between rounded-lg bg-surface-soft px-3">
             <span className="text-sm text-content-secondary">사진·영상을 골랐어요</span>

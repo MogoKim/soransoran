@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import PostEditor from '@/components/features/PostEditor'
-import WriteFooter from '@/components/features/WriteFooter'
+import WriteFooter, { WriteFooterSpacer } from '@/components/features/WriteFooter'
 import WriteTopBar from '@/components/features/WriteTopBar'
 import { firstImageUrl } from '@/lib/post-media'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
@@ -110,6 +110,8 @@ export default function PostEditForm({
         />
       </div>
 
+      {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}
+      <WriteFooterSpacer />
       <WriteFooter block={block} textLength={text.length} label="수정하기" pendingLabel="수정 중…" />
     </form>
   )
