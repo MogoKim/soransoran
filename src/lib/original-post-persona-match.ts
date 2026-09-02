@@ -134,7 +134,10 @@ export type PersonaForMatch = {
   economicStatus?: string | null
   region?: string | null
   noGoTopics: readonly string[]
-  /** 말투 길이 밴드 — voiceCore.length */
+  /**
+   * `voiceCore.length` **원문**. 🔴 밴드가 아니라 자유 문장이다 (`"짧고 툭툭"` · `"중간"`).
+   *    readLengthBand 가 밴드로 읽는다 — 여기서 정규화하지 않는다.
+   */
   voiceLength?: string | null
   /** 최근 7일 글 수 · 마지막 글 시각 — 부르는 쪽이 ActivityLog 에서 읽어 넣는다 */
   postsThisWeek: number
@@ -258,11 +261,56 @@ export const SCORE_WEIGHTS = {
 export type ScoreBreakdown = { topicFit: number; lifeConsistency: number; voiceFit: number; activitySpread: number; interest: number }
 export type Scored = { total: number; breakdown: ScoreBreakdown }
 
+/**
+ * 말투 길이 밴드.
+ *
+ * 🔴 어휘는 설계 문서(persona-architecture-design §5 `lengthBand`)를 따른다 — `짧게 / 보통 / 길게`.
+ *    E-1 에서 `'short' | 'medium' | 'long'` 을 지어냈는데, DB 의 `voiceCore.length` 는
+ *    `"짧고 툭툭"` 같은 한국어 문장이라 **한 번도 일치하지 않았다.**
+ *    그 결과 voiceFit 이 5/15 로 고정돼 축이 통째로 죽어 있었다(실측: P05 총점 90 = 35+25+**5**+15+10).
+ *    🔴 영어 어휘는 남기지 않는다 — 호환 경로를 두면 죽은 축이 조용히 되살아난다.
+ */
+export const LENGTH_BANDS = ['짧게', '보통', '길게'] as const
+export type LengthBand = (typeof LENGTH_BANDS)[number]
+
+const LENGTH_BAND_SET: ReadonlySet<string> = new Set(LENGTH_BANDS)
+export const isLengthBand = (v: unknown): v is LengthBand =>
+  typeof v === 'string' && LENGTH_BAND_SET.has(v)
+
 /** 초안 길이 → 말투 길이 밴드 */
-export function lengthBandOf(chars: number): 'short' | 'medium' | 'long' {
-  if (chars < 250) return 'short'
-  if (chars <= 500) return 'medium'
-  return 'long'
+export function lengthBandOf(chars: number): LengthBand {
+  if (chars < 250) return '짧게'
+  if (chars <= 500) return '보통'
+  return '길게'
+}
+
+/**
+ * `voiceCore.length` 자유 문장 → 밴드.
+ *
+ * 🔴 DB 를 고치지 않는다. `voiceCore` 는 **생성 프롬프트가 읽는 값**이라
+ *    `"짧고 툭툭"` 이라는 표현 자체가 자산이다 — 매칭기가 거기서 밴드만 읽어 간다.
+ *    noGoTopics 를 "제약 문장" 으로 남기기로 한 결정과 같은 원칙이다.
+ *
+ * 🔴 순서가 규칙이다. `보통` 을 먼저 본다 —
+ *    `"중간 길이"` 는 `길` 을 품고 있어 뒤에 두면 `길게` 로 새어 나간다.
+ *
+ * 🔴 못 읽으면 null 이다. **하드 차단하지 않는다** — 말투는 모순이 아니라 취향이라
+ *    모른다고 배정을 막을 이유가 없다. 부르는 쪽이 중립 점수를 준다.
+ */
+const LENGTH_ALIASES: readonly { band: LengthBand; keys: readonly string[] }[] = [
+  { band: '보통', keys: ['중간', '보통'] },
+  { band: '짧게', keys: ['짧'] },
+  { band: '길게', keys: ['길'] },
+]
+
+export function readLengthBand(raw: string | null | undefined): LengthBand | null {
+  const v = (raw ?? '').trim()
+  if (v === '') return null
+  if (isLengthBand(v)) return v
+  for (const a of LENGTH_ALIASES) {
+    if (a.keys.some((k) => v.includes(k))) return a.band
+  }
+  return null
 }
 
 /**
@@ -301,10 +349,13 @@ export function scoreMatch(p: PersonaForMatch, req: PostRequirements, draftChars
   const lifeConsistency = SCORE_WEIGHTS.lifeConsistency
 
   // ── 말투 적합성 ──
+  // 🔴 자유 문장을 밴드로 읽어서 비교한다. 원문끼리 비교하면 언제나 어긋난다
   const want = lengthBandOf(draftChars)
-  const voiceFit = p.voiceLength == null
+  const got = readLengthBand(p.voiceLength)
+  const voiceFit = got === null
+    // 🔴 못 읽으면 중립이다. 말투는 모순이 아니라 취향이라 모른다고 벌점을 주지 않는다
     ? Math.round(SCORE_WEIGHTS.voiceFit / 2)
-    : p.voiceLength === want ? SCORE_WEIGHTS.voiceFit : Math.round(SCORE_WEIGHTS.voiceFit / 3)
+    : got === want ? SCORE_WEIGHTS.voiceFit : Math.round(SCORE_WEIGHTS.voiceFit / 3)
 
   // ── 활동 분산 — 🔴 최근에 많이 썼으면 감점 ──
   const d = p.daysSinceLastPost
