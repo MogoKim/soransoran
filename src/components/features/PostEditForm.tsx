@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
-import PostEditor from '@/components/features/PostEditor'
+import PostEditor, { EditorBottomSpacer } from '@/components/features/PostEditor'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import {
@@ -137,6 +137,9 @@ export default function PostEditForm({
           그만두기
         </Link>
       </div>
+
+      {/* 🔴 고정 툴바가 저장 버튼을 덮지 않도록 마지막에 자리를 비운다. */}
+      <EditorBottomSpacer />
     </form>
   )
 }

@@ -44,6 +44,27 @@ import {
  *    5000 자 상한이 차 버린다. 서버도 같은 기준으로 본다(post-html.ts).
  */
 
+/**
+ * 모바일에서 툴바가 차지하는 높이. 자리를 비워 둘 때 이 값을 쓴다.
+ *
+ * 🔴 툴바는 모바일에서 position:fixed 라 문서 흐름에서 빠진다.
+ *    그래서 폼 맨 끝의 등록 버튼이 스크롤을 끝까지 내려도 툴바 뒤에 숨는다 —
+ *    QA 에서 "툴바와 올리기 버튼이 겹친다" 로 잡힌 것이 이것이다.
+ *    자리를 비우는 쪽이 폼이므로 높이를 여기서 내보낸다.
+ */
+const TOOLBAR_HEIGHT = 'h-[72px]'
+
+/**
+ * 폼 맨 끝에 두는 여백 — 등록 버튼이 고정 툴바에 가리지 않게 한다.
+ *
+ * 🔴 에디터 안쪽 여백(본문 마지막 줄용)과는 다른 자리다. 그쪽은 에디터가,
+ *    이쪽은 폼이 책임진다. 하나로 합치면 버튼과 툴바가 다시 겹친다.
+ * 🔴 데스크탑에서는 툴바가 sticky 라 흐름 안에 있다. 여백을 두지 않는다.
+ */
+export function EditorBottomSpacer() {
+  return <div className={`${TOOLBAR_HEIGHT} lg:hidden`} aria-hidden />
+}
+
 /** 올리는 동안 화면에 먼저 보여줄 자리를 만들되, 저장되지 않게 blob: 을 쓴다. */
 type Upload = { blobUrl: string; name: string }
 
@@ -387,8 +408,9 @@ export default function PostEditor({
         <EditorContent editor={editor} />
       </div>
 
-      {/* 키보드가 올라오면 툴바가 그 위로 붙는다 — 아래를 가리는 만큼 자리를 비워 둔다. */}
-      <div className="h-[72px] lg:h-0" aria-hidden />
+      {/* 🔴 본문 마지막 줄이 고정 툴바에 가리지 않게 하는 여백이다.
+             폼 맨 끝(EditorBottomSpacer)과 목적이 다르다 — 그쪽은 등록 버튼을 지킨다. */}
+      <div className={`${TOOLBAR_HEIGHT} lg:h-0`} aria-hidden />
 
       <div
         ref={toolbarRef}
