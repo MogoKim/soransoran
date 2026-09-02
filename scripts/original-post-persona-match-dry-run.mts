@@ -32,9 +32,9 @@
 import { PrismaClient } from '@prisma/client'
 import { readFileSync, existsSync } from 'node:fs'
 import {
-  planMatch, isChildAgeBand, BLOCK_LABEL, CHILD_AGE_BANDS,
+  planBatch, isChildAgeBand, BLOCK_LABEL, CHILD_AGE_BANDS,
   POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS, TOP_CANDIDATES,
-  type PersonaForMatch, type ChildAgeBand, type BlockCode,
+  type PersonaForMatch, type ChildAgeBand, type BlockCode, type BatchDraft,
 } from '../src/lib/original-post-persona-match'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -145,7 +145,7 @@ for (const p of personas) {
 const drafts = await prisma.originalPostApprovalQueue.findMany({
   where: { status: { in: ['APPROVED', 'EDITED'] } },
   select: {
-    id: true, status: true, gateVerdict: true,
+    id: true, status: true, gateVerdict: true, createdAt: true,
     draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
     rawContent: { select: { sourceArticleId: true } },
   },
@@ -153,30 +153,55 @@ const drafts = await prisma.originalPostApprovalQueue.findMany({
 })
 console.log(`\n── 대상 ${drafts.length}건 (APPROVED · EDITED)\n`)
 
+// 🔴 수정본이 있으면 그것이 발행될 글이다. 초안으로 매칭하면 다른 글을 판정하는 셈이다
+const batchDrafts: BatchDraft[] = drafts.map((d) => ({
+  queueId: d.id,
+  title: d.editedTitle ?? d.draftTitle,
+  body: d.editedBody ?? d.draftBody,
+  gateVerdict: d.gateVerdict,
+  createdAt: d.createdAt.getTime(),
+}))
+const batch = planBatch(batchDrafts, personas)
+const byId = new Map(batch.assignments.map((a) => [a.queueId, a]))
+
 let publishable = 0
+let assignedCount = 0
 const blockTally = new Map<string, number>()
+const soloCandidate: string[] = []
 
 for (const d of drafts) {
-  // 🔴 수정본이 있으면 그것이 발행될 글이다. 초안으로 매칭하면 다른 글을 판정하는 셈이다
-  const title = d.editedTitle ?? d.draftTitle
+  const a = byId.get(d.id)!
   const body = d.editedBody ?? d.draftBody
-  const plan = planMatch({ queueId: d.id, title, body, personas })
+  const score = (code: string | null): string => {
+    const hit = a.eligible.find((c) => c.code === code)
+    return hit === undefined ? '' : ` (${hit.score.total}점)`
+  }
 
   console.log(`══ ${d.id}  ${d.rawContent.sourceArticleId}  gate=${d.gateVerdict}  ${[...body].length}자`)
-  console.log(`   요구  ${plan.requirements.labels.length === 0 ? '(없음 — 누구나)' : plan.requirements.labels.join(' · ')}`)
+  console.log(`   요구  ${a.requirements.labels.length === 0 ? '(없음 — 누구나)' : a.requirements.labels.join(' · ')}`)
 
-  if (plan.publishable) {
+  if (a.eligible.length > 0) {
     publishable += 1
-    const alts = plan.top.filter((c) => c.code !== plan.recommended)
-    console.log(`   ✅ 발행 가능 · 후보 ${plan.eligible.length}명`)
-    console.log(`      🟢 추천  ${plan.recommended} (${plan.top.find((c) => c.code === plan.recommended)!.score.total}점)`)
-    console.log(`      대체    ${alts.length === 0 ? '(없음)' : alts.map((c) => `${c.code} ${c.score.total}점`).join(' · ')}`)
+    if (a.eligible.length === 1) soloCandidate.push(d.id)
+    console.log(`   ✅ 매칭 가능 · 후보 ${a.eligible.length}명${a.eligible.length === 1 ? ' 🟡 단독' : ''}`)
+    // 🔴 두 방식을 나란히 보여준다. 어느 쪽이 달라졌는지가 이 판의 요점이다
+    console.log(`      독립 추천  ${a.standalone ?? '—'}${score(a.standalone)}`)
+    if (a.assigned === null) {
+      console.log(`      🟡 순차 배정  없음 — 여력 소진 (${a.deferredBy.join(' · ')})`)
+      console.log('         🔴 발행 불가가 아니라 **다음 주기로 밀림**입니다')
+    } else {
+      assignedCount += 1
+      const mark = a.assigned === a.standalone ? '' : '  ← 🔄 바뀜'
+      console.log(`      🟢 순차 배정  ${a.assigned}${score(a.assigned)}${mark}`)
+      const alts = a.top.filter((c) => c.code !== a.assigned)
+      console.log(`      대체        ${alts.length === 0 ? '(없음)' : alts.map((c) => `${c.code} ${c.score.total}점`).join(' · ')}`)
+    }
   } else {
-    console.log('   🔴 발행 불가 — 조건을 만족하는 페르소나가 없습니다')
+    console.log('   🔴 매칭 불가 — 조건을 만족하는 페르소나가 없습니다')
     console.log('      억지로 배정하지 않습니다. 글을 고쳐 맞추지도 않습니다.')
   }
 
-  for (const b of plan.blocked) {
+  for (const b of a.blocked) {
     const codes = b.reasons.map((r) => `${BLOCK_LABEL[r.code as BlockCode] ?? r.code}(${r.detail})`)
     for (const r of b.reasons) blockTally.set(r.code, (blockTally.get(r.code) ?? 0) + 1)
     console.log(`      ⛔ ${b.code}  ${codes.join(' · ')}`)
@@ -184,9 +209,22 @@ for (const d of drafts) {
   console.log('')
 }
 
+// ── 두 방식 비교 ──
+const standaloneLoad = new Map<string, number>()
+for (const a of batch.assignments) {
+  if (a.standalone !== null) standaloneLoad.set(a.standalone, (standaloneLoad.get(a.standalone) ?? 0) + 1)
+}
+const fmtLoad = (m: Map<string, number> | Record<string, number>): string => {
+  const e = m instanceof Map ? [...m.entries()] : Object.entries(m)
+  return e.length === 0 ? '(없음)' : e.sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).map(([k, v]) => `${k} ×${v}`).join(' · ')
+}
+
 console.log('══ 결산 ══')
-console.log(`  발행 가능  ${publishable} / ${drafts.length}건`)
-console.log(`  발행 불가  ${drafts.length - publishable}건`)
+console.log(`  매칭 가능  ${publishable} / ${drafts.length}건 · 🟡 단독 후보 ${soloCandidate.length}건`)
+console.log(`  순차 배정  ${assignedCount}건 · 여력 소진으로 밀림 ${publishable - assignedCount}건`)
+console.log('\n  추천 분산 비교')
+console.log(`    독립      ${fmtLoad(standaloneLoad)}`)
+console.log(`    순차 배정  ${fmtLoad(batch.load)}   ← 🔴 주 ${POST_CAP_PER_WEEK}건 여력 차감`)
 console.log('\n  차단 사유 집계')
 for (const [code, n] of [...blockTally.entries()].sort((a, b) => b[1] - a[1])) {
   console.log(`    ${String(n).padStart(3)}회  ${code} — ${BLOCK_LABEL[code as BlockCode] ?? ''}`)

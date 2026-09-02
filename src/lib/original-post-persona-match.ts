@@ -266,20 +266,36 @@ export function lengthBandOf(chars: number): 'short' | 'medium' | 'long' {
 }
 
 /**
+ * 축별 적합도 0~1.
+ *
+ * 🔴 all-or-nothing 을 쓰지 않는다.
+ *    `간헐` 은 돌봄 경험이 **있는데도** 0점을 받았다. 하드 필터를 통과했다는 것은
+ *    이미 "경험이 있다" 는 뜻인데, 점수에서 없는 사람 취급하면 격차가 인위적으로 벌어진다.
+ *    실측: 돌봄 글에서 P07(간헐) 55점 vs P05(상시) 90점 — 35점이 통째로 갈렸다.
+ *
+ * 🔴 `없음` · `전` 은 여기 없다. 하드 필터에서 이미 탈락한다 —
+ *    점수에 0 으로 두면 "통과했는데 0점" 과 구분되지 않는다.
+ */
+export const CARE_FIT: Record<string, number> = { 상시: 1.0, 간헐: 0.6 }
+export const MENOPAUSE_FIT: Record<string, number> = { 진행중: 1.0, 후: 0.7 }
+
+/**
  * 🔴 하드 필터를 통과한 뒤에만 부른다.
  *    생활사 정합성이 만점인 것은 "모순이 없어서" 다 — 모순이 있으면 이미 탈락했다.
  */
 export function scoreMatch(p: PersonaForMatch, req: PostRequirements, draftChars: number): Scored {
-  // ── 소재 적합성 — 글이 요구한 축을 이 페르소나가 실제로 갖고 있나 ──
-  const axes: boolean[] = []
-  if (req.needsCurrentSpouse) axes.push(p.maritalStatus === '기혼')
-  if (req.needsChildren) axes.push((p.childrenCount ?? 0) > 0)
-  if (req.needsParentCare) axes.push(p.parentCare === '상시')
-  if (req.needsMenopauseExperience) axes.push(p.menopauseStatus === '진행중')
+  // ── 소재 적합성 — 글이 요구한 축을 이 페르소나가 **얼마나** 갖고 있나 ──
+  //
+  // 🔴 needsCurrentSpouse · needsChildren 은 여기 없다.
+  //    하드 필터가 이미 보장해 통과자는 **전원 만점**이 된다 — 변별력이 0 인 죽은 축이다.
+  //    죽은 축을 평균에 넣으면 살아 있는 축의 차이를 희석한다.
+  const axes: number[] = []
+  if (req.needsParentCare) axes.push(CARE_FIT[p.parentCare ?? ''] ?? 0)
+  if (req.needsMenopauseExperience) axes.push(MENOPAUSE_FIT[p.menopauseStatus ?? ''] ?? 0)
   // 🔴 조건이 없는 글은 누구나 쓸 수 있다 — 소재 적합성으로 우열을 가리지 않는다
   const topicFit = axes.length === 0
     ? SCORE_WEIGHTS.topicFit
-    : Math.round((axes.filter(Boolean).length / axes.length) * SCORE_WEIGHTS.topicFit)
+    : Math.round((axes.reduce((a, b) => a + b, 0) / axes.length) * SCORE_WEIGHTS.topicFit)
 
   // ── 생활사 정합성 — 통과했으므로 만점 ──
   const lifeConsistency = SCORE_WEIGHTS.lifeConsistency
@@ -374,4 +390,111 @@ export function planMatch(input: MatchInput): MatchPlan {
     : top[seededPick(input.queueId, top.map((c) => c.score.total))]!.code
 
   return { requirements: req, eligible, top, recommended, blocked, publishable: top.length > 0 }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑥ 배치 순차 할당 — 🔴 여러 건을 한 번에 볼 때
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 왜 필요한가
+ *
+ *    planMatch 는 한 건을 본다. 7건을 각각 부르면 **같은 사람이 계속 뽑힌다** —
+ *    실측에서 P07 이 6건 중 4건을 가져갔다. 주간 상한이 있는데도 그렇다.
+ *    가드가 없어서가 아니라, **배치 안에서 소비되지 않아서**다.
+ *
+ * 🔴 처리 순서가 규칙이다
+ *
+ *    후보가 적은 초안을 **먼저** 배정한다. 조건 없는 글(후보 5명)을 먼저 돌리면
+ *    후보 1명뿐인 글(예: 고3 자녀 글)의 그 1명이 이미 소진돼 발행 불가가 된다.
+ *    희소한 쪽을 먼저 지키는 것이 전체 배정 수를 늘린다.
+ */
+export type BatchDraft = { queueId: string; title: string; body: string; gateVerdict: string; createdAt: number }
+
+export type BatchAssignment = {
+  queueId: string
+  /** 🔴 배치 여력을 반영한 최종 배정. 없으면 이 배치에서 발행하지 않는다 */
+  assigned: string | null
+  /** 여력을 무시했을 때의 추천 — 비교용 */
+  standalone: string | null
+  eligible: Candidate[]
+  top: Candidate[]
+  blocked: MatchPlan['blocked']
+  requirements: PostRequirements
+  /** 🔴 후보는 있었는데 여력이 없어 밀린 것 — 발행 불가와 구분한다 */
+  deferredBy: string[]
+}
+
+export type BatchPlan = {
+  assignments: BatchAssignment[]
+  /** 페르소나별 이번 배치 배정 수 */
+  load: Record<string, number>
+}
+
+/**
+ * 🔴 정렬은 **전부 결정적**이어야 한다. 하나라도 흔들리면 dry-run 이 재현되지 않는다.
+ *    ① 후보 적은 순  ② gate PASS 먼저  ③ createdAt  ④ queueId
+ */
+export function batchOrder(
+  a: { eligibleCount: number; gateVerdict: string; createdAt: number; queueId: string },
+  b: { eligibleCount: number; gateVerdict: string; createdAt: number; queueId: string },
+): number {
+  if (a.eligibleCount !== b.eligibleCount) return a.eligibleCount - b.eligibleCount
+  const rank = (v: string): number => (v === 'PASS' ? 0 : 1)
+  if (rank(a.gateVerdict) !== rank(b.gateVerdict)) return rank(a.gateVerdict) - rank(b.gateVerdict)
+  if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt
+  return a.queueId.localeCompare(b.queueId)
+}
+
+export function planBatch(drafts: readonly BatchDraft[], personas: readonly PersonaForMatch[]): BatchPlan {
+  // ── ① 여력 — 주간 상한에서 이미 쓴 만큼을 뺀다 ──
+  const remaining = new Map<string, number>()
+  for (const p of personas) remaining.set(p.code, Math.max(0, POST_CAP_PER_WEEK - p.postsThisWeek))
+
+  // ── ② 각 초안의 후보를 먼저 구한다 (여력 무시) ──
+  const base = drafts.map((d) => ({
+    draft: d,
+    plan: planMatch({ queueId: d.queueId, title: d.title, body: d.body, personas }),
+  }))
+
+  // ── ③ 🔴 후보 적은 순으로 처리한다 ──
+  const ordered = [...base].sort((x, y) =>
+    batchOrder(
+      { eligibleCount: x.plan.eligible.length, gateVerdict: x.draft.gateVerdict, createdAt: x.draft.createdAt, queueId: x.draft.queueId },
+      { eligibleCount: y.plan.eligible.length, gateVerdict: y.draft.gateVerdict, createdAt: y.draft.createdAt, queueId: y.draft.queueId },
+    ),
+  )
+
+  const out = new Map<string, BatchAssignment>()
+  const load: Record<string, number> = {}
+
+  for (const { draft, plan } of ordered) {
+    // 🔴 여력이 남은 후보만 다시 추린다. 점수는 다시 계산하지 않는다 —
+    //    같은 글에 대해 두 개의 점수가 생기면 어느 것이 진실인지 모른다
+    const alive = plan.eligible.filter((c) => (remaining.get(c.code) ?? 0) > 0)
+    const deferredBy = plan.eligible.filter((c) => (remaining.get(c.code) ?? 0) <= 0).map((c) => c.code)
+    const top = alive.slice(0, TOP_CANDIDATES)
+    const assigned = top.length === 0
+      ? null
+      : top[seededPick(draft.queueId, top.map((c) => c.score.total))]!.code
+
+    if (assigned !== null) {
+      remaining.set(assigned, (remaining.get(assigned) ?? 0) - 1)
+      load[assigned] = (load[assigned] ?? 0) + 1
+    }
+
+    out.set(draft.queueId, {
+      queueId: draft.queueId,
+      assigned,
+      standalone: plan.recommended,
+      eligible: plan.eligible,
+      top,
+      blocked: plan.blocked,
+      requirements: plan.requirements,
+      deferredBy,
+    })
+  }
+
+  // 🔴 입력 순서로 돌려준다. 처리 순서는 내부 사정이고, 읽는 사람은 원래 순서를 기대한다
+  return { assignments: drafts.map((d) => out.get(d.queueId)!), load }
 }

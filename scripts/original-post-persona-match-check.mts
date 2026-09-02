@@ -12,10 +12,11 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  readPostRequirements, hardFilter, scoreMatch, planMatch, lengthBandOf,
+  readPostRequirements, hardFilter, scoreMatch, planMatch, planBatch, batchOrder, lengthBandOf,
   isChildAgeBand, CHILD_AGE_BANDS, BLOCK_CODES, BLOCK_LABEL, SCORE_WEIGHTS,
+  CARE_FIT, MENOPAUSE_FIT,
   POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS, TOP_CANDIDATES,
-  type PersonaForMatch, type ChildAgeBand, type BlockCode,
+  type PersonaForMatch, type ChildAgeBand, type BlockCode, type BatchDraft,
 } from '../src/lib/original-post-persona-match'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -258,10 +259,130 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
   for (const k of ['fetch(', 'anthropic', 'openai', 'googleapis', 'voice-m3-provider']) {
     if (code.toLowerCase().includes(k.toLowerCase())) offenders.push(`🔴 ${k} 가 있다`)
   }
-  if (!code.includes('planMatch(')) offenders.push('🔴 planMatch 를 부르지 않는다 — 규칙을 다시 만들었나')
+  // 🔴 규칙을 다시 만들지 않는다. planBatch · planMatch 중 하나는 반드시 부른다
+  if (!code.includes('planBatch(') && !code.includes('planMatch(')) {
+    offenders.push('🔴 planBatch · planMatch 를 부르지 않는다 — 규칙을 다시 만들었나')
+  }
+  // 🔴 점수를 CLI 에서 다시 계산하지 않는다 — 두 개의 진실이 생긴다
+  if (code.includes('scoreMatch(')) offenders.push('🔴 CLI 가 점수를 다시 계산한다')
   if (!code.includes('writeFileSync')) { /* 정상 — 파일도 쓰지 않는다 */ } else offenders.push('🔴 파일을 쓴다')
   if (offenders.length) bad('dry-run 경계', offenders.join(' / '))
   else ok('dry-run 경계', 'DB write 0 · 트랜잭션 0 · --apply 없음 · 네트워크 0 · 파일 write 0')
+}
+
+
+// ── ⑫ 🔴 점수 3단 보정 — all-or-nothing 을 쓰지 않는다 ──
+{
+  const offenders: string[] = []
+  const careReq = readPostRequirements('친정엄마', '친정엄마 병간호를 하고 있어요')
+  const always = scoreMatch(P({ parentCare: '상시' }), careReq, 300)
+  const sometimes = scoreMatch(P({ parentCare: '간헐' }), careReq, 300)
+  // 🔴 간헐은 0 이 아니다 — 하드 필터를 통과했다는 것은 경험이 있다는 뜻이다
+  if (sometimes.breakdown.topicFit === 0) offenders.push('🔴 간헐이 여전히 0점')
+  if (!(always.breakdown.topicFit > sometimes.breakdown.topicFit)) offenders.push('상시 > 간헐 이 아니다')
+  const wantCare = Math.round(CARE_FIT['간헐']! * SCORE_WEIGHTS.topicFit)
+  if (sometimes.breakdown.topicFit !== wantCare) offenders.push(`간헐 ${sometimes.breakdown.topicFit} (기대 ${wantCare})`)
+
+  const menoReq = readPostRequirements('요즘', '갱년기가 와서 열이 확 올라요')
+  const now = scoreMatch(P({ menopauseStatus: '진행중' }), menoReq, 300)
+  const after = scoreMatch(P({ menopauseStatus: '후' }), menoReq, 300)
+  if (after.breakdown.topicFit === 0) offenders.push('🔴 갱년기 후가 여전히 0점')
+  if (!(now.breakdown.topicFit > after.breakdown.topicFit)) offenders.push('진행중 > 후 가 아니다')
+  const wantMeno = Math.round(MENOPAUSE_FIT['후']! * SCORE_WEIGHTS.topicFit)
+  if (after.breakdown.topicFit !== wantMeno) offenders.push(`후 ${after.breakdown.topicFit} (기대 ${wantMeno})`)
+
+  if (offenders.length) bad('🔴 점수 3단 보정', offenders.join(' / '))
+  else ok('🔴 점수 3단 보정', `간헐 ${sometimes.breakdown.topicFit}점 · 갱년기 후 ${after.breakdown.topicFit}점 — 0점 아님`)
+}
+
+// ── ⑬ 🔴 죽은 축 제거 — 하드 필터가 보장하는 것은 점수로 세지 않는다 ──
+{
+  const offenders: string[] = []
+  // 기혼·자녀만 요구하는 글: 통과자는 전원 만점이어야 한다(변별 없음)
+  const req = readPostRequirements('남편이랑 딸', '남편이랑 딸 이야기예요')
+  if (!req.needsCurrentSpouse || !req.needsChildren) offenders.push('요구 추출 실패')
+  const s = scoreMatch(P({}), req, 300)
+  if (s.breakdown.topicFit !== SCORE_WEIGHTS.topicFit) {
+    offenders.push(`죽은 축이 점수에 남아 있다: topicFit ${s.breakdown.topicFit}`)
+  }
+  // 🔴 돌봄이 섞이면 그 축만으로 갈려야 한다 — 죽은 축이 평균을 희석하면 안 된다
+  const mixed = readPostRequirements('남편이랑 딸', '남편이랑 딸 이야기인데 친정엄마 병간호도 해요')
+  const a = scoreMatch(P({ parentCare: '상시' }), mixed, 300)
+  const b2 = scoreMatch(P({ parentCare: '간헐' }), mixed, 300)
+  if (a.breakdown.topicFit - b2.breakdown.topicFit !== always0Diff()) {
+    offenders.push(`희석됨: 상시 ${a.breakdown.topicFit} · 간헐 ${b2.breakdown.topicFit}`)
+  }
+  if (offenders.length) bad('🔴 죽은 축 제거', offenders.join(' / '))
+  else ok('🔴 죽은 축 제거', '배우자·자녀는 점수에서 빠짐 · 돌봄 축이 희석되지 않음')
+}
+function always0Diff(): number {
+  return Math.round(SCORE_WEIGHTS.topicFit) - Math.round(CARE_FIT['간헐']! * SCORE_WEIGHTS.topicFit)
+}
+
+// ── ⑭ 🔴 처리 순서 — 후보 적은 초안 먼저 ──
+{
+  const offenders: string[] = []
+  const mk = (id: string, n: number, g: string, t: number): { eligibleCount: number; gateVerdict: string; createdAt: number; queueId: string } =>
+    ({ queueId: id, eligibleCount: n, gateVerdict: g, createdAt: t })
+  if (batchOrder(mk('a', 1, 'HOLD', 100), mk('b', 5, 'PASS', 0)) >= 0) offenders.push('🔴 후보 적은 쪽이 뒤로 감')
+  if (batchOrder(mk('a', 3, 'PASS', 100), mk('b', 3, 'HOLD', 0)) >= 0) offenders.push('동수일 때 PASS 가 뒤로 감')
+  if (batchOrder(mk('a', 3, 'PASS', 0), mk('b', 3, 'PASS', 100)) >= 0) offenders.push('동수·동등급에서 createdAt 정렬 실패')
+  if (batchOrder(mk('a', 3, 'PASS', 0), mk('b', 3, 'PASS', 0)) >= 0) offenders.push('완전 동률에서 queueId 정렬 실패')
+  // 🔴 결정적이어야 한다 — 같은 입력이면 같은 순서
+  if (batchOrder(mk('x', 2, 'PASS', 5), mk('x', 2, 'PASS', 5)) !== 0) offenders.push('자기 자신과 비교가 0 이 아니다')
+  if (offenders.length) bad('🔴 처리 순서', offenders.join(' / '))
+  else ok('🔴 처리 순서', '후보 적은 순 → PASS 우선 → createdAt → queueId')
+}
+
+// ── ⑮ 🔴 주간 여력 차감 — 쏠림이 반복되지 않는다 ──
+{
+  const offenders: string[] = []
+  // 조건 없는 글 5건 · 페르소나 3명 → 주 1건이면 3건만 배정되어야 한다
+  const ds: BatchDraft[] = Array.from({ length: 5 }, (_, i) =>
+    ({ queueId: `q${i}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i }))
+  const ps = ['A', 'B', 'C'].map((c) => P({ code: c }))
+  const plan = planBatch(ds, ps)
+  const assigned = plan.assignments.filter((a) => a.assigned !== null)
+  if (assigned.length !== 3) offenders.push(`배정 ${assigned.length} (기대 3 — 3명 × 주 ${POST_CAP_PER_WEEK}건)`)
+  // 🔴 아무도 두 번 배정되지 않는다
+  for (const [code, n] of Object.entries(plan.load)) {
+    if (n > POST_CAP_PER_WEEK) offenders.push(`🔴 ${code} 가 ${n}건 — 상한 ${POST_CAP_PER_WEEK}`)
+  }
+  if (new Set(assigned.map((a) => a.assigned)).size !== assigned.length) offenders.push('🔴 같은 사람이 두 번 배정됨')
+  // 밀린 건은 '불가' 가 아니라 '밀림' 이다
+  const deferred = plan.assignments.filter((a) => a.assigned === null && a.eligible.length > 0)
+  if (deferred.length !== 2) offenders.push(`밀림 ${deferred.length} (기대 2)`)
+  if (deferred.some((a) => a.deferredBy.length === 0)) offenders.push('밀린 사유가 비어 있다')
+  // 🔴 이미 이번 주에 쓴 사람은 처음부터 여력 0
+  const used = planBatch(ds.slice(0, 1), [P({ code: 'A', postsThisWeek: POST_CAP_PER_WEEK })])
+  if (used.assignments[0]!.assigned !== null) offenders.push('🔴 여력 소진자가 배정됨')
+
+  if (offenders.length) bad('🔴 주간 여력 차감', offenders.join(' / '))
+  else ok('🔴 주간 여력 차감', `5건 × 3명 → 배정 3 · 밀림 2 · 중복 0 · 소진자 제외`)
+}
+
+// ── ⑯ 🔴 희소한 글이 먼저 보호된다 ──
+{
+  const offenders: string[] = []
+  // 고3 글은 A 만 가능 · 조건 없는 글은 누구나
+  const ds: BatchDraft[] = [
+    { queueId: 'open1', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0 },
+    { queueId: 'open2', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 },
+    { queueId: 'rare', title: '고3 딸', body: '수능이 코앞이에요.', gateVerdict: 'HOLD', createdAt: 2 },
+  ]
+  const ps = [
+    P({ code: 'A', childrenAgeBands: ['중고등'] }),
+    P({ code: 'B', childrenAgeBands: ['성인'] }),
+  ]
+  const plan = planBatch(ds, ps)
+  const rare = plan.assignments.find((a) => a.queueId === 'rare')!
+  // 🔴 입력 순서로는 마지막이지만, 후보가 1명뿐이라 먼저 배정되어야 한다
+  if (rare.assigned !== 'A') offenders.push(`🔴 희소 글이 배정되지 않음: ${rare.assigned ?? '없음'}`)
+  if (rare.eligible.length !== 1) offenders.push(`희소 글 후보 ${rare.eligible.length} (기대 1)`)
+  // 입력 순서가 보존되는가
+  if (plan.assignments.map((a) => a.queueId).join(',') !== 'open1,open2,rare') offenders.push('출력이 입력 순서가 아니다')
+  if (offenders.length) bad('🔴 희소한 글 우선', offenders.join(' / '))
+  else ok('🔴 희소한 글 우선', '후보 1명뿐인 글이 먼저 배정됨 · 출력은 입력 순서 유지')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
