@@ -60,6 +60,7 @@ import {
 } from './lib/original-post-prompt'
 import { selectVoiceSamples, type VoiceLearningRow, type ManualDecisionRow } from './lib/voice-sample-select'
 import { readSourceProfile, mustKeepDetails, MAX_QUESTION_MARKS } from './lib/source-profile'
+import { gateDraft, formatGate } from './lib/original-post-gate'
 import { READ_QUERIES, loadUnaoReadonlyUrl } from './lib/voice-unao-readonly.mjs'
 import pg from 'pg'
 import { readdirSync, statSync } from 'node:fs'
@@ -452,6 +453,21 @@ for (const [i, raw] of selected.entries()) {
       ` · ${s.externalAddressHits.length === 0 ? '✅' : '🔴'} 외부 호칭 ${s.externalAddressHits.length}건` +
       ` · 우리 호칭 ${s.soransoranAddressHits.length === 0 ? '없음' : s.soransoranAddressHits.join('·')}`,
   )
+  // 🔴 판정 — **저장하지 않는다.** 화면에만 나온다.
+  //    PASS 는 승인이 아니라 "사람이 볼 대기열로 보내도 된다" 는 뜻이다
+  {
+    const must = mustKeepDetails(profile.concreteDetailsToKeep)
+    const both = `${parsed.title}\n${parsed.body}`
+    const g = gateDraft({
+      signals: s,
+      closingIntent: profile.closingIntent,
+      sourceBodyLength: [...raw.rawBody].length,
+      mustKeepTotal: must.length,
+      mustKeepFound: must.filter((d) => both.includes(d.sample)).length,
+    })
+    console.log(`   판정  ${formatGate(g)}`)
+  }
+
   // 🔴 링크는 호칭보다 확실한 유출이다. 경계 표현은 실패와 섞지 않고 따로 센다
   console.log(
     `         ${{ ok: '✅', watch: '🟡', missing: '🔴', overuse: '🔴' }[s.questionVerdict]}` +
