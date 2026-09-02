@@ -1,12 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useFormStatus } from 'react-dom'
+import { useWriteViewportTop } from '@/components/features/use-write-viewport-top'
 import { cn } from '@/lib/utils'
-
-/** 상단바 높이. 본문 위쪽 여백이 같은 값을 쓴다. */
-export const WRITE_TOP_BAR_HEIGHT = 56
 
 /**
  * 글쓰기·수정 전용 상단바.
@@ -40,46 +37,7 @@ export default function WriteTopBar({
 }) {
   const { pending } = useFormStatus()
 
-  /**
-   * 🔴 키보드가 열리면 상단바가 화면 위로 밀려 나간다.
-   *    position:fixed 의 기준은 layout viewport 인데, 모바일 브라우저는 키보드를
-   *    올릴 때 layout viewport 를 그대로 두고 visual viewport 만 아래로 민다.
-   *    밀린 만큼(offsetTop) 되돌려 내려야 상단바가 화면 맨 위에 남는다.
-   *
-   * 🔴 ref 콜백으로 입힌다. 폼이 다시 그려져 상단바가 새로 붙어도
-   *    그 자리에서 마지막 값을 바로 다시 입힌다 — effect 를 기다리면 한 프레임 튄다.
-   */
-  const barRef = useRef<HTMLDivElement | null>(null)
-  const offsetRef = useRef(0)
-  const apply = useCallback((el: HTMLDivElement | null) => {
-    if (el) el.style.transform = `translateY(${offsetRef.current}px)`
-  }, [])
-  const setBar = useCallback(
-    (el: HTMLDivElement | null) => {
-      barRef.current = el
-      apply(el)
-    },
-    [apply],
-  )
-
-  useEffect(() => {
-    const vv = window.visualViewport
-    // visualViewport 가 없는 브라우저는 손대지 않는다 — 그냥 fixed top-0 으로 둔다.
-    if (!vv) return
-    const update = () => {
-      const next = Math.max(0, Math.round(vv.offsetTop))
-      if (next === offsetRef.current) return
-      offsetRef.current = next
-      apply(barRef.current)
-    }
-    update()
-    vv.addEventListener('resize', update)
-    vv.addEventListener('scroll', update)
-    return () => {
-      vv.removeEventListener('resize', update)
-      vv.removeEventListener('scroll', update)
-    }
-  }, [apply])
+  const setBar = useWriteViewportTop()
 
   const ready = canSubmit && !pending
 

@@ -2,20 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useFormState } from 'react-dom'
-import ActionButton from '@/components/ui/ActionButton'
 import PostEditor from '@/components/features/PostEditor'
+import WriteFooter from '@/components/features/WriteFooter'
 import WriteTopBar from '@/components/features/WriteTopBar'
 import { createPost, type ActionState } from '@/lib/actions/posts'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import { firstImageUrl } from '@/lib/post-media'
 import {
-  MAX_POST_CONTENT_LENGTH,
   MAX_POST_TITLE_LENGTH,
-  POST_CONTENT_COUNTER_FROM,
-  POST_CONTENT_COUNTER_WARN_FROM,
   POST_CONTENT_PLACEHOLDER,
   POST_TITLE_PLACEHOLDER,
-  postBlockMessage,
   postSubmitBlock,
 } from '@/lib/post-policy'
 import { readDraft, removeDraft, saveDraft, type PostDraft } from '@/lib/write-draft'
@@ -187,37 +183,34 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
         </div>
       ) : null}
 
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-bold text-content-primary">게시판</span>
-        <select
-          name="boardSlug"
-          value={boardSlug}
-          onChange={(e) => handleBoardChange(e.target.value)}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3"
-        >
-          {COMMUNITY_BOARDS.map((b) => (
-            <option key={b.slug} value={b.slug}>
-              {b.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      {/* 🔴 라벨을 떼고 고른 값·쓴 글이 그대로 보이게 한다. 글쓰기 화면에는
+             입력칸이 셋뿐이라 "게시판·제목·내용" 을 적어 두면 글보다 안내가 먼저 읽힌다. */}
+      <select
+        name="boardSlug"
+        aria-label="게시판"
+        value={boardSlug}
+        onChange={(e) => handleBoardChange(e.target.value)}
+        className="min-h-[52px] border-b border-subtle bg-transparent text-content-primary"
+      >
+        {COMMUNITY_BOARDS.map((b) => (
+          <option key={b.slug} value={b.slug}>
+            {b.label}
+          </option>
+        ))}
+      </select>
 
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-bold text-content-primary">제목</span>
-        <input
-          name="title"
-          type="text"
-          maxLength={MAX_POST_TITLE_LENGTH}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3"
-          placeholder={POST_TITLE_PLACEHOLDER}
-        />
-      </label>
+      <input
+        name="title"
+        type="text"
+        aria-label="제목"
+        maxLength={MAX_POST_TITLE_LENGTH}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted"
+        placeholder={POST_TITLE_PLACEHOLDER}
+      />
 
       <div className="flex flex-col gap-1">
-        <span className="text-sm font-bold text-content-primary">내용</span>
         {/* 🔴 form 에는 hidden input 으로 낸다. Tiptap 은 name 을 가진 입력이 아니다. */}
         <input type="hidden" name="content" value={content} readOnly />
         <PostEditor
@@ -230,35 +223,7 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
         />
       </div>
 
-      {text.length >= POST_CONTENT_COUNTER_FROM ? (
-        <p
-          className={`-mt-2 self-end text-xs ${
-            text.length >= POST_CONTENT_COUNTER_WARN_FROM
-              ? 'text-state-warning'
-              : 'text-content-muted'
-          }`}
-        >
-          {text.length}/{MAX_POST_CONTENT_LENGTH}
-        </p>
-      ) : null}
-
-      {/* 🔴 왜 아직 못 올리는지 그 자리에서 말한다. 잠긴 버튼만 두면 고장으로 읽힌다.
-             누른 뒤에 뜨는 경고가 아니라 쓰는 동안 보이는 안내다. */}
-      {block ? (
-        <p role="status" className="-mt-1 text-sm font-bold text-content-secondary">
-          {postBlockMessage(block)}
-        </p>
-      ) : null}
-
-      {/* 🔴 아래 버튼은 에디터 블록 바깥이다. 툴바는 그 블록 안에만 있으므로
-             (PostEditor 의 붙임 규칙) 이 버튼을 가리지 못한다. */}
-      <ActionButton
-        tone="primary"
-        label="올리기"
-        pendingLabel="올리는 중…"
-        disabled={!canSubmit}
-        className="justify-center px-6"
-      />
+      <WriteFooter block={block} textLength={text.length} label="올리기" pendingLabel="올리는 중…" />
     </form>
   )
 }
