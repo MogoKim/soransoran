@@ -2,10 +2,8 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
-import CommentForm from '@/components/features/CommentForm'
-import GuestCommentForm from '@/components/features/GuestCommentForm'
+import CommentSection from '@/components/features/CommentSection'
 import DeleteButton from '@/components/features/DeleteButton'
-import CommentItem from '@/components/features/CommentItem'
 import NextToRead from '@/components/features/NextToRead'
 import { getPostLikeState } from '@/lib/queries/post-like'
 import { getPostScrapState } from '@/lib/queries/post-scrap'
@@ -14,7 +12,6 @@ import PostViewBeacon from '@/components/features/PostViewBeacon'
 import WriteCta from '@/components/features/WriteCta'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
-import { loginHref } from '@/lib/callback-url'
 import { formatRelativeTime } from '@/lib/date'
 import { getPostDetail, getRecentDiscoveryPosts } from '@/lib/queries/posts'
 import { isSearchIndexable, robotsMetaFor } from '@/lib/post-visibility'
@@ -152,40 +149,13 @@ export default async function PostDetailPage({
           isScrapped={isScrapped}
         />
 
-        <section className="mt-8">
-          <h2 className="text-lg font-bold text-content-primary">
-            댓글 {comments.length}
-          </h2>
-
-          {comments.length === 0 ? (
-            <div className="py-8 text-center">
-              <p className="font-bold text-content-primary">아직 댓글이 없어요</p>
-              <p className="mt-1 text-sm leading-relaxed text-content-muted">
-                짧아도 괜찮습니다. 첫 마디를 남겨보세요.
-              </p>
-            </div>
-          ) : (
-            <ul className="my-4 flex list-none flex-col gap-3 p-0">
-              {comments.map((comment) => (
-                <CommentItem
-                  key={comment.id}
-                  comment={comment}
-                  boardSlug={board.slug}
-                  postId={post.id}
-                  currentUserId={session?.user?.id}
-                />
-              ))}
-            </ul>
-          )}
-
-          {session?.user ? (
-            <CommentForm postId={post.id} boardSlug={board.slug} />
-          ) : (
-            /* 🔴 로그인 카드를 비회원 폼으로 바꾼다. 읽고 든 생각을 그 자리에서
-                  남기지 못하면 대부분 그냥 나간다. 가입 권유는 등록한 뒤에 한 줄로 한다. */
-            <GuestCommentForm postId={post.id} boardSlug={board.slug} />
-          )}
-        </section>
+        <CommentSection
+          comments={comments}
+          boardSlug={board.slug}
+          postId={post.id}
+          isLoggedIn={Boolean(session?.user)}
+          currentUserId={session?.user?.id}
+        />
 
         <NextToRead posts={nextPosts} currentPostId={post.id} />
 
