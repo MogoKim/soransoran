@@ -47,8 +47,12 @@ import { SOURCE_SPECIFIC_TERMS, SORANSORAN_REGISTER_TERMS, TARGET_DESCRIPTOR_TER
 import {
   gateDraft, formatGate, GATE_VERDICTS, BLOCK_REASONS, HOLD_REASONS,
   WORD_SHARE_MIN, WORD_SHARE_MAX, EXPAND_MAX, COMPRESS_MIN, MUST_KEEP_MIN_RATIO,
-  type GateInput,
+  type GateInput, type GateResult,
 } from './lib/original-post-gate'
+import {
+  planEnqueue, queueDedupKey, assertEnqueueable, formatPlan,
+  ENQUEUEABLE_VERDICTS, type QueueRecord,
+} from './lib/original-post-queue'
 import {
   MIN_POST_TITLE_LENGTH, MAX_POST_TITLE_LENGTH,
   MIN_POST_CONTENT_LENGTH, MAX_POST_CONTENT_LENGTH,
@@ -2159,6 +2163,157 @@ console.log('\n══════ ㊷ 🔴 gate 는 저장 계약을 건드리�
   expect('🔴 gate 는 DB 를 모른다', gate.includes('PrismaClient'), false)
   expect('🔴 gate 는 파일을 모른다', gate.includes('node:fs'), false)
   expect('🔴 gate 는 네트워크를 모른다', gate.includes('fetch('), false)
+}
+
+
+console.log('\n══════ ㊸ 🔴 검수 대기열 적재 — BLOCK 은 DB 에 넣지 않는다 (PR-OP-C)')
+{
+  const res = (v: 'PASS' | 'HOLD' | 'BLOCK'): GateResult => ({
+    verdict: v,
+    blocks: v === 'BLOCK' ? [{ code: 'SOURCE_ECHO', detail: '원문 연속 20자 2조각' }] : [],
+    holds: v === 'HOLD' ? [{ code: 'WORD_SHARE_LOW', detail: '어절 공유 3.7%' }] : [],
+  })
+  const d = (id: string, body: string, v: 'PASS' | 'HOLD' | 'BLOCK') =>
+    ({ sourceRawContentId: id, title: `제목 ${id}`, body, gate: res(v) })
+
+  const plan = planEnqueue({
+    drafts: [d('raw-a', '본문 A 입니다', 'PASS'), d('raw-b', '본문 B 입니다', 'HOLD'), d('raw-c', '본문 C 입니다', 'BLOCK')],
+    existingKeys: new Set(), promptVersion: '14판', model: 'gemini-3.7-flash',
+  })
+  expect('PASS · HOLD 만 적재한다', plan.enqueue.length, 2)
+  // 🔴 타입이 이미 BLOCK 을 못 담게 막는다(그래서 === 'BLOCK' 은 타입 오류다).
+  //    타입은 이 파일을 거쳐 갈 때만 유효하므로 **런타임 값**으로 다시 본다
+  expect('🔴 BLOCK 은 적재하지 않는다',
+    plan.enqueue.map((e) => String(e.gateVerdict)).includes('BLOCK'), false)
+  expect('  🔴 제외 사유를 남긴다 — 조용히 사라지지 않는다', plan.skipped.length, 1)
+  expect('  사유 코드', plan.skipped[0]?.reason, 'BLOCKED')
+  expect('적재 가능 판정은 둘뿐', ENQUEUEABLE_VERDICTS.join(','), 'PASS,HOLD')
+
+  // 🔴 판·모델을 함께 싣는다 — 14판까지의 이력이 값을 가진다
+  expect('판을 싣는다', plan.enqueue[0]?.promptVersion, '14판')
+  expect('모델을 싣는다', plan.enqueue[0]?.model, 'gemini-3.7-flash')
+  // 🔴 원문을 싣지 않는다
+  expect('🔴 레코드에 원문 필드가 없다',
+    Object.keys(plan.enqueue[0] ?? {}).some((k) => /rawTitle|rawBody|sourceText|sourceUrl/i.test(k)), false)
+  expect('  저장 키 목록',
+    Object.keys(plan.enqueue[0] ?? {}).sort().join(','),
+    'dedupKey,draftBody,draftTitle,gateResults,gateVerdict,model,promptVersion,sourceRawContentId')
+
+  // ── 멱등 ──
+  const key = queueDedupKey('raw-a', '본문 A 입니다')
+  expect('dedupKey 는 결정적이다', queueDedupKey('raw-a', '본문 A 입니다'), key)
+  expect('  원문이 다르면 키가 다르다', queueDedupKey('raw-z', '본문 A 입니다') === key, false)
+  expect('  본문이 다르면 키가 다르다', queueDedupKey('raw-a', '본문 Z 입니다') === key, false)
+  // 🔴 본문 원문을 키에 그대로 쓰지 않는다
+  expect('🔴 키에 본문이 그대로 들어가지 않는다', key.includes('본문'), false)
+  expect('  sha256 접두', key.startsWith('sha256:'), true)
+
+  {
+    const again = planEnqueue({
+      drafts: [d('raw-a', '본문 A 입니다', 'PASS')],
+      existingKeys: new Set([key]), promptVersion: '14판', model: 'x',
+    })
+    expect('🔴 이미 있으면 다시 넣지 않는다', again.enqueue.length, 0)
+    expect('  사유 코드', again.skipped[0]?.reason, 'ALREADY_QUEUED')
+  }
+  {
+    // 🔴 한 배치 안의 쌍둥이도 잡는다. existingKeys 만 보면 통과한다
+    const twin = planEnqueue({
+      drafts: [d('raw-a', '같은 본문', 'PASS'), d('raw-a', '같은 본문', 'PASS')],
+      existingKeys: new Set(), promptVersion: '14판', model: 'x',
+    })
+    expect('🔴 배치 안 중복도 하나만 넣는다', twin.enqueue.length, 1)
+    expect('  사유 코드', twin.skipped[0]?.reason, 'DUPLICATE_IN_BATCH')
+  }
+  // 제목만 다른 것은 같은 초안의 수정본이지 새 후보가 아니다
+  expect('🔴 제목은 키에 넣지 않는다',
+    queueDedupKey('raw-a', '본문 A 입니다'), queueDedupKey('raw-a', '본문 A 입니다'))
+
+  // ── 저장 직전 방어 ──
+  const raised = (fn: () => void): boolean => {
+    try { fn(); return false } catch { return true }
+  }
+  const bad: QueueRecord = {
+    sourceRawContentId: 'raw-x', draftTitle: 't', draftBody: 'b',
+    gateVerdict: 'BLOCK' as unknown as 'PASS',
+    gateResults: { blocks: [], holds: [] },
+    promptVersion: '14판', model: 'x', dedupKey: 'sha256:zzz',
+  }
+  expect('🔴 BLOCK 레코드를 저장하려 하면 throw', raised(() => assertEnqueueable([bad])), true)
+  const leaky: QueueRecord = {
+    ...bad, gateVerdict: 'PASS',
+    gateResults: { blocks: [{ code: 'SOURCE_ECHO', detail: 'x' }], holds: [] },
+  }
+  expect('🔴 PASS 인데 blocks 가 차 있으면 throw', raised(() => assertEnqueueable([leaky])), true)
+  expect('정상 레코드는 통과', raised(() => assertEnqueueable(plan.enqueue)), false)
+
+  // ── 화면 한 줄 ──
+  const line = formatPlan(plan)
+  expect('요약에 적재 수가 있다', line.includes('적재 2건'), true)
+  expect('  🔴 BLOCK 제외 수도 보인다', line.includes('BLOCK 1'), true)
+  expect('  🔴 본문을 담지 않는다', line.includes('본문 A'), false)
+}
+
+console.log('\n══════ ㊹ 🔴 적재 스크립트가 발행 경로를 만들지 않는다 (정적 검사)')
+{
+  const code = readFileSync('scripts/original-post-enqueue.mts', 'utf-8')
+  expect('🔴 PENDING 으로만 만든다', code.includes("status: 'PENDING'"), true)
+  expect('🔴 APPROVED 로 가는 경로가 없다', /status:\s*'APPROVED'/.test(code), false)
+  expect('🔴 PUBLISHED 로 가는 경로가 없다', /status:\s*'PUBLISHED'/.test(code), false)
+  expect('🔴 Post 를 만들지 않는다', /prisma\.post\.create|\.post\.upsert/.test(code), false)
+  expect('🔴 createdPostId 를 채우지 않는다', /createdPostId:\s*[^,\s]/.test(code), false)
+  expect('🔴 --apply 와 --limit 을 둘 다 요구한다',
+    code.includes('--limit=N (1 이상) 이 함께 있어야 합니다'), true)
+  expect('  dry-run 이 기본이다', code.includes("argv.includes('--apply')"), true)
+  expect('🔴 gate 를 다시 만들지 않고 부른다', code.includes('gateDraft({'), true)
+  expect('🔴 저장 직전 한 번 더 본다', code.includes('assertEnqueueable(take)'), true)
+  expect('🔴 판·모델을 지어내지 않는다', code.includes('--prompt-version 이 필요합니다'), true)
+  expect('🔴 BLOCK 을 화면에 남긴다', code.includes('실행 로그로만 남깁니다'), true)
+
+  // 🔴 순수 모듈이 DB·파일·네트워크를 모르는가
+  const lib = readFileSync('scripts/lib/original-post-queue.ts', 'utf-8')
+  expect('🔴 queue 는 DB 를 모른다', lib.includes('PrismaClient'), false)
+  expect('🔴 queue 는 파일을 모른다', lib.includes('node:fs'), false)
+  expect('🔴 queue 는 네트워크를 모른다', lib.includes('fetch('), false)
+}
+
+console.log('\n══════ ㊺ 🔴 마이그레이션 0022 — 신규 생성만 · 원문 컬럼 없음 (정적 검사)')
+{
+  const sql = readFileSync('prisma/migrations/0022_original_post_queue/migration.sql', 'utf-8')
+  const body = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
+  expect('테이블 1개를 만든다', (body.match(/CREATE TABLE/g) ?? []).length, 1)
+  expect('enum 1개를 만든다', (body.match(/CREATE TYPE/g) ?? []).length, 1)
+  // 🔴 기존 테이블을 건드리지 않는다
+  const altered = [...body.matchAll(/ALTER TABLE\s+"([A-Za-z]+)"/g)].map((m) => m[1])
+  expect('🔴 신규 테이블 밖 ALTER 가 없다',
+    [...new Set(altered)].filter((t) => t !== 'OriginalPostApprovalQueue').length, 0)
+  expect('🔴 MicroSeedCandidate 를 건드리지 않는다', body.includes('"MicroSeedCandidate"'), false)
+  // 🔴 "ON DELETE RESTRICT" 는 FK 정의지 파괴 구문이 아니다 — **구문 시작**만 본다
+  const statements = body.split(';').map((x) => x.trim()).filter((x) => x !== '')
+  expect('🔴 파괴 구문(DROP · TRUNCATE · DELETE · UPDATE)으로 시작하는 문장이 없다',
+    statements.some((x) => /^(DROP|TRUNCATE|DELETE|UPDATE)\b/i.test(x)), false)
+  expect('  허용 구문만 쓴다',
+    statements.every((x) => /^(CREATE TYPE|CREATE TABLE|CREATE UNIQUE INDEX|CREATE INDEX|ALTER TABLE)\b/i.test(x)), true)
+  // 🔴 원문 본문 컬럼이 없다
+  expect('🔴 원문 컬럼을 만들지 않는다',
+    /"(rawTitle|rawBody|sourceTexts|sourceUrl|authorName|originalTitle)"/i.test(body), false)
+  expect('원문은 FK 로만 잇는다', body.includes('"sourceRawContentId" TEXT NOT NULL'), true)
+  expect('🔴 FK 는 RESTRICT — 이력이 있는 원문은 지워지지 않는다',
+    body.includes('ON DELETE RESTRICT'), true)
+  expect('기본 상태는 PENDING', body.includes("DEFAULT 'PENDING'"), true)
+
+  // 적용 스크립트가 dry-run 기본인가
+  const apply = readFileSync('scripts/apply-migration-0022.mjs', 'utf-8')
+  expect('🔴 --apply 없이는 쓰지 않는다', apply.includes("process.argv.includes('--apply')"), true)
+  // 🔴 주석에 "prisma migrate 를 쓰지 않는다" 라고 적혀 있다 — 코드만 본다
+  const applyCode = apply.split('\n')
+    .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//') && !l.trim().startsWith('/**'))
+    .join('\n')
+  expect('🔴 prisma migrate 를 실제로 부르지 않는다',
+    /prisma\s+(migrate|db\s+push|db\s+seed)/.test(applyCode), false)
+  expect('  pg 로 직접 실행한다', apply.includes("import pg from 'pg'"), true)
+  expect('🔴 보호 테이블 row count 를 본다', apply.includes('PROTECTED_TABLES'), true)
+  expect('  MicroSeedCandidate 가 보호 대상이다', apply.includes("'MicroSeedCandidate'"), true)
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
