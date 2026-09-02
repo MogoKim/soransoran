@@ -3,20 +3,16 @@
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
-import ActionButton from '@/components/ui/ActionButton'
 import PostEditor from '@/components/features/PostEditor'
+import WriteFooter from '@/components/features/WriteFooter'
 import WriteTopBar from '@/components/features/WriteTopBar'
 import { firstImageUrl } from '@/lib/post-media'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import {
-  MAX_POST_CONTENT_LENGTH,
   MAX_POST_TITLE_LENGTH,
-  POST_CONTENT_COUNTER_FROM,
-  POST_CONTENT_COUNTER_WARN_FROM,
   POST_CONTENT_PLACEHOLDER,
   POST_TITLE_PLACEHOLDER,
-  postBlockMessage,
   postSubmitBlock,
 } from '@/lib/post-policy'
 
@@ -91,21 +87,19 @@ export default function PostEditForm({
         )
       ) : null}
 
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-bold text-content-primary">제목</span>
-        <input
-          name="title"
-          type="text"
-          maxLength={MAX_POST_TITLE_LENGTH}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="min-h-[52px] rounded-lg border border-subtle bg-surface-card px-3"
-          placeholder={POST_TITLE_PLACEHOLDER}
-        />
-      </label>
+      {/* 🔴 새 글 화면과 같은 배치다 — 라벨 없이 쓴 글이 그대로 보인다. */}
+      <input
+        name="title"
+        type="text"
+        aria-label="제목"
+        maxLength={MAX_POST_TITLE_LENGTH}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted"
+        placeholder={POST_TITLE_PLACEHOLDER}
+      />
 
       <div className="flex flex-col gap-1">
-        <span className="text-sm font-bold text-content-primary">내용</span>
         <input type="hidden" name="content" value={content} readOnly />
         <PostEditor
           value={content}
@@ -116,34 +110,7 @@ export default function PostEditForm({
         />
       </div>
 
-      {text.length >= POST_CONTENT_COUNTER_FROM ? (
-        <p
-          className={`-mt-2 self-end text-xs ${
-            text.length >= POST_CONTENT_COUNTER_WARN_FROM
-              ? 'text-state-warning'
-              : 'text-content-muted'
-          }`}
-        >
-          {text.length}/{MAX_POST_CONTENT_LENGTH}
-        </p>
-      ) : null}
-
-      {/* 🔴 왜 아직 못 고치는지 그 자리에서 말한다 — 새 글 화면과 같은 문장을 쓴다. */}
-      {block ? (
-        <p role="status" className="-mt-1 text-sm font-bold text-content-secondary">
-          {postBlockMessage(block)}
-        </p>
-      ) : null}
-
-      {/* 🔴 그만두기는 상단바의 '취소' 하나로 옮겼다. 같은 일을 하는 길이 화면에
-             둘 있으면 어느 쪽이 진짜인지 매번 고르게 된다. */}
-      <ActionButton
-        tone="primary"
-        label="수정하기"
-        pendingLabel="수정 중…"
-        disabled={!canSubmit}
-        className="justify-center px-6"
-      />
+      <WriteFooter block={block} textLength={text.length} label="수정하기" pendingLabel="수정 중…" />
     </form>
   )
 }
