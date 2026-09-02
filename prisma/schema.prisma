@@ -1247,6 +1247,10 @@ model Persona {
   posts    Post[]
   comments Comment[]
 
+  /// 🔴 이 페르소나에게 배정된 오리지널 초안. 아직 발행 전이어도 Restrict 다 —
+  ///    배정 이력이 있는 페르소나를 지우면 "누가 쓰기로 했었나" 를 영구히 잃는다
+  originalPostMatches OriginalPostApprovalQueue[]
+
   @@index([status])
 }
 
@@ -1598,12 +1602,31 @@ model OriginalPostApprovalQueue {
   /// 🔴 발행 연결. 이번 PR 에서는 아무도 채우지 않는다
   createdPostId String? @unique
 
+  /// 이 글을 쓸 페르소나.
+  ///
+  /// 🔴 PersonaApprovalQueue.targetPostId 의 **거울상**이다 —
+  ///    저쪽은 "페르소나 고정 → 어느 글에", 이쪽은 "글 고정 → 어느 페르소나가".
+  /// 🔴 배정은 발행이 아니다. 여기 값이 있어도 Post 는 생기지 않는다.
+  /// 🔴 Restrict — 배정이 있으면 Persona 삭제가 막힌다 (Post · Comment 와 같은 원칙).
+  matchedPersonaId String?
+  matchedPersona   Persona?  @relation(fields: [matchedPersonaId], references: [id], onDelete: Restrict)
+  matchedAt        DateTime?
+
+  /// 배정 시점의 근거.
+  ///
+  /// 🔴 점수는 순수 함수의 산물이라 언제든 재계산되지만, **그때의 규칙**은 재현할 수 없다.
+  ///    { seed, total, breakdown, top, eligibleCount, blockedCount, ruleVersion }
+  /// 🔴 blockedBy 전문을 담지 않는다 — dry-run 이 언제든 다시 낸다.
+  ///    여기 담는 것은 "왜 이 사람이었나" 에 답할 최소치뿐이다.
+  matchMeta Json?
+
   dedupKey  String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status, createdAt])
   @@index([sourceRawContentId, createdAt])
+  @@index([matchedPersonaId, matchedAt])
 }
 
 enum OriginalPostCandidateStatus {
