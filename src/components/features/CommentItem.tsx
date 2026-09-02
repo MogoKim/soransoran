@@ -41,16 +41,15 @@ export default function CommentItem({
   //    본인 댓글은 이것을 CommentEditor 에 넘겨 읽기 모드로 쓰게 한다 —
   //    고치기 화면을 붙이려고 같은 문단을 client 쪽에 또 적지 않는다.
   const body = (
-    <p className="mt-2 whitespace-pre-wrap break-keep leading-[1.7] text-content-primary [overflow-wrap:anywhere]">
+    <p className="mt-1.5 whitespace-pre-wrap break-keep leading-[1.7] text-content-primary [overflow-wrap:anywhere]">
       {comment.content}
     </p>
   )
 
   return (
-    /* 🔴 댓글은 바탕 위에 직접 놓인다 — 흰 면과 바탕이 1.05:1 이라 면만으로는 카드가 서지 않는다.
-          그래서 선으로 세운다. 매거진의 쉬는 칩과 같은 이유다. */
-    <li className="rounded-lg border border-subtle bg-surface-card p-4">
-      <div className="flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
+    /* 면과 구분선은 목록이 진다 — 이 줄은 여백만 갖는다. */
+    <li className="px-4 py-4">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-content-muted">
         <span className="font-bold text-brand-ink">
           {comment.author ? displayName(comment.author) : (comment.guestNickname ?? '비회원')}
         </span>
