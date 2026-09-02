@@ -6,7 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { formatKst, filledMark } from '@/lib/persona-admin'
 import {
   OP_STATUS_LABEL, OP_VERDICT_LABEL, OP_VERDICT_TONE, OP_REASON_LABEL,
-  toGateFindings,
+  toGateFindings, formatMatchMeta,
 } from '@/lib/original-post-admin'
 
 /**
@@ -55,6 +55,9 @@ export default async function OriginalPostCandidateDetailPage(
       gateVerdict: true, gateResults: true, promptVersion: true, model: true,
       regenCount: true, declineReason: true, decidedBy: true, decidedAt: true,
       createdPostId: true, createdAt: true,
+      matchedAt: true, matchMeta: true,
+      // 🔴 code 만 읽는다. 페르소나 닉네임은 어드민에도 내지 않는다
+      matchedPersona: { select: { code: true } },
       rawContent: {
         select: { sourceArticleId: true, sourceSite: true, rawTitle: true, rawBody: true },
       },
@@ -173,6 +176,13 @@ export default async function OriginalPostCandidateDetailPage(
             <dd>{row.decidedBy ?? '—'}</dd>
             <dt className="text-gray-500">결정 시각</dt>
             <dd>{row.decidedAt === null ? '—' : formatKst(row.decidedAt)}</dd>
+            {/* 🔴 배정은 발행이 아니다. 아래 세 줄이 채워져도 글은 나가지 않았다 */}
+            <dt className="text-gray-500">배정 페르소나</dt>
+            <dd>{row.matchedPersona?.code ?? '— (미배정)'}</dd>
+            <dt className="text-gray-500">배정 시각</dt>
+            <dd>{row.matchedAt === null ? '—' : formatKst(row.matchedAt)}</dd>
+            <dt className="text-gray-500">배정 근거</dt>
+            <dd>{formatMatchMeta(row.matchMeta)}</dd>
             <dt className="text-gray-500">발행 글</dt>
             <dd>{row.createdPostId ?? '— (발행 전)'}</dd>
             <dt className="text-gray-500">적재 시각</dt>
