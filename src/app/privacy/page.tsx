@@ -12,14 +12,12 @@ export const metadata: Metadata = {
  * 🔴 항목·목적이 바뀌면 이 날짜도 함께 바꾼다.
  *
  * 12항에 "중요한 변경은 최소 7일 전에 알린다" 고 스스로 적어 두었다.
- * 이 개정은 그 유예 없이 바로 시행한다 — 알릴 상대가 아직 없기 때문이다.
- * 성별·출생연도·전화번호를 실제로 받는 기능은 배포 전이고,
- * 이 문서는 카카오 동의항목 심사에 앞서 먼저 적어 두는 것이다.
+ * 초기 개인정보처리방침 이후 GA4 이용 통계 항목이 추가되었다.
+ * 회원이 생긴 뒤 중요한 변경을 할 때는 공지가 먼저다.
  *
- * 🔴 회원이 생긴 뒤의 개정은 이 예외를 따라가지 않는다.
- *    그때는 공지가 먼저고, 공지일로부터 7일 뒤가 시행일이다.
+ * 🔴 중요한 변경은 최소 7일 전에 알린다.
  */
-const EFFECTIVE_DATE = '2026년 8월 27일'
+const EFFECTIVE_DATE = '2026년 9월 2일'
 const CONTACT = 'soransoran.community@gmail.com'
 
 function Article({ title, children }: { title: string; children: React.ReactNode }) {
@@ -53,6 +51,7 @@ export default function PrivacyPage() {
           <p>5. 문의에 대한 회신</p>
           <p>6. 커뮤니티 가입 자격 확인 및 서비스 대상 연령대 확인</p>
           <p>7. 회원 본인 확인과 중복·부정 가입 방지</p>
+          <p>8. 서비스 이용 현황 분석 및 품질 개선</p>
         </Article>
 
         <Article title="2. 처리하는 개인정보 항목">
@@ -63,7 +62,7 @@ export default function PrivacyPage() {
           </p>
 
           <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-[520px] border-collapse text-sm">
+            <table className="w-full min-w-[760px] border-collapse text-sm">
               <thead>
                 <tr>
                   <th className="border-b border-subtle py-2 pr-3 text-left font-bold text-content-primary">
@@ -139,6 +138,7 @@ export default function PrivacyPage() {
           <p className="mt-2 font-bold">나. 서비스 이용 과정에서 생성·수집되는 정보</p>
           <p>· 이용자가 작성한 게시글, 댓글, 신고 내용</p>
           <p>· 접속 로그, IP 주소, 브라우저 정보(User-Agent), 접속 일시</p>
+          <p>· 페이지 조회, 스크롤, 클릭 등 서비스 이용 통계</p>
           <p>· 서비스 이용 설정을 위한 쿠키 및 브라우저 저장 정보</p>
           <p className="mt-2 text-sm text-content-muted">
             서비스는 주민등록번호, 계좌정보, 결제정보 등 민감한 정보를 수집하지 않습니다.
@@ -175,6 +175,7 @@ export default function PrivacyPage() {
           <p>· Vercel Inc. — 웹 서비스 호스팅 및 실행 로그</p>
           <p>· Supabase Inc. — 데이터베이스 및 회원 인증 데이터 저장</p>
           <p>· 주식회사 카카오 — 카카오 계정 로그인 인증</p>
+          <p>· Google LLC — Google Analytics 를 통한 서비스 이용 통계 분석</p>
           <p className="mt-2 text-sm text-content-muted">
             위탁 업체가 변경되는 경우 이 방침을 통해 알려드립니다.
           </p>
@@ -221,6 +222,9 @@ export default function PrivacyPage() {
                   <th className="border-b border-subtle py-2 text-left font-bold text-content-primary">
                     Supabase Inc.
                   </th>
+                  <th className="border-b border-subtle py-2 text-left font-bold text-content-primary">
+                    Google LLC
+                  </th>
                 </tr>
               </thead>
               <tbody className="align-top text-content-primary">
@@ -228,6 +232,7 @@ export default function PrivacyPage() {
                   <td className="border-b border-subtle py-2 pr-3 font-bold">이전받는 자</td>
                   <td className="border-b border-subtle py-2 pr-3">Vercel Inc.</td>
                   <td className="border-b border-subtle py-2">Supabase Inc.</td>
+                  <td className="border-b border-subtle py-2">Google LLC</td>
                 </tr>
                 <tr>
                   <td className="border-b border-subtle py-2 pr-3 font-bold">이전 국가</td>
@@ -236,6 +241,9 @@ export default function PrivacyPage() {
                   </td>
                   <td className="border-b border-subtle py-2">
                     미국 등 해당 사업자가 인프라를 운영하는 국가
+                  </td>
+                  <td className="border-b border-subtle py-2">
+                    미국 등 해당 사업자가 서비스를 운영하는 국가
                   </td>
                 </tr>
                 <tr>
@@ -248,6 +256,10 @@ export default function PrivacyPage() {
                     카카오 계정 식별자, 이름(닉네임), 이메일(제공되는 경우), 성별, 출생연도,
                     전화번호, 프로필 이미지(동의한 경우), 게시글, 댓글, 신고 내용
                   </td>
+                  <td className="border-b border-subtle py-2">
+                    접속 로그, IP 주소, 브라우저 정보(User-Agent), 접속 일시, 페이지 조회와
+                    사이트 이용 이벤트
+                  </td>
                 </tr>
                 <tr>
                   <td className="border-b border-subtle py-2 pr-3 font-bold">이전 목적</td>
@@ -257,18 +269,22 @@ export default function PrivacyPage() {
                   <td className="border-b border-subtle py-2">
                     데이터베이스 저장, 회원 인증·세션 처리, 장애 대응
                   </td>
+                  <td className="border-b border-subtle py-2">
+                    서비스 이용 통계 분석 및 품질 개선
+                  </td>
                 </tr>
                 <tr>
                   <td className="border-b border-subtle py-2 pr-3 font-bold">이전 시점 및 방법</td>
-                  <td className="border-b border-subtle py-2 pr-3" colSpan={2}>
+                  <td className="border-b border-subtle py-2 pr-3" colSpan={3}>
                     이용자가 서비스를 이용하는 시점에, 정보통신망을 통해 각 사업자의 서버로 전송되는
                     방식으로 이전됩니다.
                   </td>
                 </tr>
                 <tr>
                   <td className="py-2 pr-3 font-bold">보유 및 이용 기간</td>
-                  <td className="py-2" colSpan={2}>
-                    회원 탈퇴 또는 처리 목적 달성 시까지. 다만 관계 법령에 따른 보존 의무가 있거나
+                  <td className="py-2" colSpan={3}>
+                    회원 탈퇴 또는 처리 목적 달성 시까지. Google Analytics 이용 통계는 Google
+                    Analytics 데이터 보관 설정에 따릅니다. 다만 관계 법령에 따른 보존 의무가 있거나
                     분쟁 대응을 위해 필요한 경우 해당 기간 동안 보관합니다.
                   </td>
                 </tr>
@@ -305,7 +321,11 @@ export default function PrivacyPage() {
             2. 이용자는 브라우저 설정을 통해 쿠키 저장을 거부할 수 있습니다. 다만 이 경우 로그인 등
             일부 기능의 이용이 제한될 수 있습니다.
           </p>
-          <p>3. 서비스는 광고 목적의 추적을 위해 쿠키를 사용하지 않습니다.</p>
+          <p>
+            3. 서비스는 이용 현황 분석과 품질 개선을 위해 Google Analytics 를 사용할 수 있으며,
+            이 과정에서 쿠키 등 자동 수집 장치가 사용될 수 있습니다.
+          </p>
+          <p>4. 서비스는 광고 목적의 추적을 위해 쿠키를 사용하지 않습니다.</p>
         </Article>
 
         <Article title="10. 개인정보의 안전성 확보 조치">
