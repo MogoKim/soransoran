@@ -328,6 +328,7 @@ export async function getPostDetail(postId: string) {
       // 비회원 댓글은 author 가 null 이고 guestNickname 이 채워진다.
       author: { select: { id: true, name: true, nickname: true, image: true } },
       guestNickname: true,
+      likeCount: true,
     },
     orderBy: { createdAt: 'asc' },
   })

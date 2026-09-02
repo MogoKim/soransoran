@@ -8,6 +8,7 @@ export default function CommentSection({
   postId,
   isLoggedIn,
   currentUserId,
+  likedCommentIds,
 }: {
   comments: CommentItemData[]
   boardSlug: string
@@ -15,6 +16,8 @@ export default function CommentSection({
   isLoggedIn: boolean
   /** 비로그인이면 undefined */
   currentUserId?: string
+  /** 이 사람이 공감한 댓글 id. 비로그인이면 비어 있다 */
+  likedCommentIds: Set<string>
 }) {
   return (
     <section className="mt-8">
@@ -38,6 +41,8 @@ export default function CommentSection({
               boardSlug={boardSlug}
               postId={postId}
               currentUserId={currentUserId}
+              isLoggedIn={isLoggedIn}
+              isLiked={likedCommentIds.has(comment.id)}
             />
           ))}
         </ul>

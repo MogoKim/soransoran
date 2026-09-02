@@ -7,6 +7,7 @@ import DeleteButton from '@/components/features/DeleteButton'
 import NextToRead from '@/components/features/NextToRead'
 import { getPostLikeState } from '@/lib/queries/post-like'
 import { getPostScrapState } from '@/lib/queries/post-scrap'
+import { getLikedCommentIds } from '@/lib/queries/comment-like'
 import PostActionBar from '@/components/features/PostActionBar'
 import PostViewBeacon from '@/components/features/PostViewBeacon'
 import WriteCta from '@/components/features/WriteCta'
@@ -87,10 +88,15 @@ export default async function PostDetailPage({
   const session = await auth()
   // 현재 글이 pool 에 섞여 있을 수 있어 넉넉히 받아 NextToRead 가 걸러낸다.
   // 공감 상태는 getPostDetail 을 넓히지 않고 따로 읽는다 — 그 select 는 목록과 함께 쓴다.
-  const [nextPosts, likeState, isScrapped] = await Promise.all([
+  const [nextPosts, likeState, isScrapped, likedCommentIds] = await Promise.all([
     getRecentDiscoveryPosts(6),
     getPostLikeState(post.id, session?.user?.id),
     getPostScrapState(post.id, session?.user?.id),
+    // 댓글 수와 무관하게 한 번만 묻는다. 비로그인이면 DB 를 두드리지 않는다.
+    getLikedCommentIds(
+      comments.map((comment) => comment.id),
+      session?.user?.id,
+    ),
   ])
 
   return (
@@ -158,6 +164,7 @@ export default async function PostDetailPage({
           postId={post.id}
           isLoggedIn={Boolean(session?.user)}
           currentUserId={session?.user?.id}
+          likedCommentIds={likedCommentIds}
         />
 
         <NextToRead posts={nextPosts} currentPostId={post.id} />

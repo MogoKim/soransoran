@@ -3,6 +3,7 @@ import { displayName } from '@/lib/display-name'
 import CommentEditor from '@/components/features/CommentEditor'
 import GuestCommentControls from '@/components/features/GuestCommentControls'
 import ReportButton from '@/components/features/ReportButton'
+import CommentLikeButton from '@/components/features/CommentLikeButton'
 import { GUEST_BADGE } from '@/lib/guest-comment-policy'
 
 export type CommentItemData = {
@@ -13,6 +14,7 @@ export type CommentItemData = {
   author: { id: string; name: string | null; nickname: string | null } | null
   /** author 가 null 일 때 화면에 부를 이름 */
   guestNickname?: string | null
+  likeCount: number
 }
 
 type CommentItemProps = {
@@ -21,6 +23,9 @@ type CommentItemProps = {
   postId: string
   /** 비로그인이면 undefined */
   currentUserId?: string
+  isLoggedIn: boolean
+  /** 이 사람이 이 댓글에 이미 공감했는가 */
+  isLiked: boolean
 }
 
 export default function CommentItem({
@@ -28,6 +33,8 @@ export default function CommentItem({
   boardSlug,
   postId,
   currentUserId,
+  isLoggedIn,
+  isLiked,
 }: CommentItemProps) {
   /**
    * 🔴 본인 판정은 회원 댓글에만 쓴다.
@@ -40,10 +47,19 @@ export default function CommentItem({
   // 🔴 본문은 여기서 한 번만 그린다.
   //    본인 댓글은 이것을 CommentEditor 에 넘겨 읽기 모드로 쓰게 한다 —
   //    고치기 화면을 붙이려고 같은 문단을 client 쪽에 또 적지 않는다.
+  //    공감도 여기 둔다 — 고치는 중에는 함께 사라지는 것이 맞다.
   const body = (
-    <p className="mt-1.5 whitespace-pre-wrap break-keep leading-[1.7] text-content-primary [overflow-wrap:anywhere]">
-      {comment.content}
-    </p>
+    <>
+      <p className="mt-1.5 whitespace-pre-wrap break-keep leading-[1.7] text-content-primary [overflow-wrap:anywhere]">
+        {comment.content}
+      </p>
+      <CommentLikeButton
+        commentId={comment.id}
+        likeCount={comment.likeCount}
+        isLiked={isLiked}
+        isLoggedIn={isLoggedIn}
+      />
+    </>
   )
 
   return (
