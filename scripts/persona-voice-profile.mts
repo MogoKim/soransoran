@@ -13,7 +13,7 @@
  *
  * 🔴 **왜 이 값이 필요한가**
  *      voiceVariations null  → 매번 같은 톤. 헌법 §9-7 "같은 사람이 쓴 티" 의 직접 원인
- *      noGoTopics 0종        → NOGO_TOPIC 가드가 무력
+ *      noGoExpressions 0종   → 금지 표현이 정의되지 않는다
  *      activityRhythm null   → 활동 시간대를 판정할 수 없다
  *    셋이 빈 채로 active 로 켜면, 켜는 것 자체는 안전해도 글이 서로 닮는다.
  *
@@ -23,8 +23,12 @@
  *      · dailyCap · weeklyCap · userId · Post · Queue — 어느 것도 건드리지 않는다
  *      · migration · 발행 · LLM · 크롤
  *
- * 🔴 **write 대상은 Persona 4행의 지정 5필드뿐이다.**
- *      voiceVariations · activityRhythm · noGoTopics · noGoExpressions · forbiddenReactionRoles
+ * 🔴 **write 대상은 Persona 4행의 지정 4필드뿐이다.**
+ *      voiceVariations · activityRhythm · noGoExpressions · forbiddenReactionRoles
+ *
+ * 🔴 **noGoTopics 는 보류다 — 쓰지 않는다.**
+ *    카드 값은 PLANNED 에 그대로 보관하고(`--nogo-scan` 이 읽는다), DB 에는 넣지 않는다.
+ *    형식이 정해지기 전에 넣으면 가드가 작동하는 것처럼만 보인다(FORBIDDEN_WRITE_KEYS 주석).
  *
  * 🔴 dry-run 이 기본이다. `--apply` **와** `--limit=N` 이 **둘 다** 있어야 하고,
  *    `--limit` 은 대상 수와 **정확히 같아야** 한다.
@@ -32,7 +36,7 @@
  * 사용법
  *   npx tsx scripts/persona-voice-profile.mts                  dry-run
  *   npx tsx scripts/persona-voice-profile.mts --apply --limit=4  🔴 실제 반영
- *   npx tsx scripts/persona-voice-profile.mts --nogo-scan       noGo 오탐 실측(읽기 전용)
+ *   npx tsx scripts/persona-voice-profile.mts --nogo-scan       noGo 오탐 실측(읽기 전용 · 보류 판단 근거)
  */
 import { PrismaClient, type Prisma } from '@prisma/client'
 import { pathToFileURL } from 'node:url'
@@ -189,10 +193,19 @@ export function planUpdate(rows: readonly PersonaRow[]): UpdatePlan {
   return { apply, issues }
 }
 
-/** 🔴 저장 직전 실측 방어 — 건드리면 안 되는 것이 data 에 섞이지 않았는가 */
+/**
+ * 🔴 저장 직전 실측 방어 — 건드리면 안 되는 것이 data 에 섞이지 않았는가.
+ *
+ * 🔴 noGoTopics 가 여기 있는 이유는 다르다. 위험해서가 아니라 **아직 형식이 정해지지 않아서**다.
+ *    카드의 noGo 는 행동 서술("병원·약 언급")이지 매칭할 문자열이 아니다 —
+ *    실측: 초안에 `병원` 은 2/7 건 있지만 `"병원·약 언급"` 은 0/7 건이다.
+ *    넣으면 NOGO_TOPIC 가드가 **작동하지 않는데 작동하는 것처럼 보인다.** 그게 비어 있는 것보다 위험하다.
+ *    낱말 목록으로 갈지 생성 프롬프트 제약으로만 쓸지 정해진 뒤에 여기서 뺀다.
+ */
 export const FORBIDDEN_WRITE_KEYS: readonly string[] = [
   'status', 'activatedAt', 'pausedAt', 'retiredAt',
   'identity', 'dailyCap', 'weeklyCap', 'silenceRate', 'userId', 'code', 'voiceCore',
+  'noGoTopics',
 ]
 
 export function assertSafeWrite(data: Record<string, unknown>): void {
@@ -254,7 +267,8 @@ async function main(): Promise<void> {
 
   console.log(APPLY ? '\n══ 🔴 실제 반영 (--apply) ══\n' : '\n══ dry-run (DB write 0) ══\n')
   console.log(`  대상  ${TARGET_CODES.join(' · ')}   (제외 ${EXCLUDED_CODES.join(' · ')})`)
-  console.log('  🔴 status 를 바꾸지 않습니다 · 활성화하지 않습니다 · identity 를 건드리지 않습니다\n')
+  console.log('  🔴 status 를 바꾸지 않습니다 · 활성화하지 않습니다 · identity 를 건드리지 않습니다')
+  console.log('  🟡 noGoTopics 는 보류입니다 — 카드 값만 보관하고 DB 에 쓰지 않습니다 (--nogo-scan 참조)\n')
 
   const rows = await prisma.persona.findMany({
     select: {
@@ -277,7 +291,7 @@ async function main(): Promise<void> {
     console.log(`  ✅ ${a.code}  status=${cur.status}(불변)`)
     console.log(`       voiceVariations  ${curVar === null ? '🔴 null' : `${curVar}개`}  →  ${a.profile.voiceVariations.length}개  [${brief(a.profile.voiceVariations)}]`)
     console.log(`       activityRhythm   ${cur.activityRhythm === null ? '🔴 null' : '있음'}  →  ${JSON.stringify(a.profile.activityRhythm.activeHours)} w${a.profile.activityRhythm.weekdayBias} b${a.profile.activityRhythm.burstiness}`)
-    console.log(`       noGoTopics       ${cur.noGoTopics.length}종  →  ${a.profile.noGoTopics.length}종  [${brief(a.profile.noGoTopics)}]`)
+    console.log(`       noGoTopics       ${cur.noGoTopics.length}종  →  🟡 보류 (쓰지 않음) · 카드 ${a.profile.noGoTopics.length}종 보관`)
     console.log(`       noGoExpressions  ${cur.noGoExpressions.length}종  →  ${a.profile.noGoExpressions.length}종  [${brief(a.profile.noGoExpressions)}]`)
     console.log(`       forbiddenRoles   ${cur.forbiddenReactionRoles.length}종  →  ${a.profile.forbiddenReactionRoles.length}종  [${brief(a.profile.forbiddenReactionRoles)}]`)
   }
@@ -289,7 +303,7 @@ async function main(): Promise<void> {
     fail(`문제 ${plan.issues.length}건 — 아무것도 쓰지 않았습니다.`)
   }
 
-  console.log(`\n  반영 예정 ${plan.apply.length}건`)
+  console.log(`\n  반영 예정 ${plan.apply.length}건 · 4필드 (voiceVariations · activityRhythm · noGoExpressions · forbiddenReactionRoles)`)
 
   if (!APPLY) {
     await prisma.$disconnect()
@@ -309,11 +323,10 @@ async function main(): Promise<void> {
   let done = 0
   for (const a of plan.apply) {
     const before = rows.find((r) => r.code === a.code)!
-    // 🔴 저장 직전 한 번 더 본다. status · identity 가 섞이면 여기서 던진다
+    // 🔴 저장 직전 한 번 더 본다. status · identity · noGoTopics 가 섞이면 여기서 던진다
     const data: Record<string, unknown> = {
       voiceVariations: a.profile.voiceVariations,
       activityRhythm: a.profile.activityRhythm,
-      noGoTopics: a.profile.noGoTopics,
       noGoExpressions: a.profile.noGoExpressions,
       forbiddenReactionRoles: a.profile.forbiddenReactionRoles,
     }
@@ -323,7 +336,6 @@ async function main(): Promise<void> {
       data: {
         voiceVariations: a.profile.voiceVariations as unknown as Prisma.InputJsonValue,
         activityRhythm: a.profile.activityRhythm as unknown as Prisma.InputJsonValue,
-        noGoTopics: a.profile.noGoTopics,
         noGoExpressions: a.profile.noGoExpressions,
         forbiddenReactionRoles: a.profile.forbiddenReactionRoles,
       },
@@ -342,15 +354,19 @@ async function main(): Promise<void> {
     const gotVar = after.voiceVariations
     if (!Array.isArray(gotVar) || gotVar.length !== a.profile.voiceVariations.length) problems.push('voiceVariations 불일치')
     if (after.activityRhythm === null) problems.push('activityRhythm 이 비었다')
-    if (after.noGoTopics.length !== a.profile.noGoTopics.length) problems.push('noGoTopics 불일치')
+    if (after.noGoExpressions.length !== a.profile.noGoExpressions.length) problems.push('noGoExpressions 불일치')
     if (after.forbiddenReactionRoles.length !== a.profile.forbiddenReactionRoles.length) problems.push('forbiddenRoles 불일치')
     // 🔴 건드리면 안 되는 것이 그대로인가
     if (after.status !== before.status) problems.push(`🔴 status 가 바뀌었다: ${before.status} → ${after.status}`)
     if (after.identity === null) problems.push('🔴 identity 가 사라졌다')
+    // 🔴 noGoTopics 는 쓰지 않았으니 그대로여야 한다. 늘어났으면 어딘가에서 샌 것이다
+    if (after.noGoTopics.length !== before.noGoTopics.length) {
+      problems.push(`🔴 noGoTopics 가 변했다: ${before.noGoTopics.length} → ${after.noGoTopics.length}`)
+    }
 
     if (problems.length > 0) { console.log(`  🔴 ${a.code} — ${problems.join(' · ')}`); continue }
     done += 1
-    console.log(`  ✅ ${a.code}  변주 ${a.profile.voiceVariations.length} · noGo ${a.profile.noGoTopics.length} · 금지역할 ${a.profile.forbiddenReactionRoles.length}  status=${after.status}(불변)`)
+    console.log(`  ✅ ${a.code}  변주 ${a.profile.voiceVariations.length} · 표현 ${a.profile.noGoExpressions.length} · 금지역할 ${a.profile.forbiddenReactionRoles.length}  status=${after.status}(불변) · noGoTopics ${after.noGoTopics.length}종(보류)`)
   }
 
   await prisma.$disconnect()

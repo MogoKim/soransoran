@@ -149,18 +149,26 @@ console.log('\n══ 카드 → DB 이관 규칙 fixture ══\n')
 // ── ⑧ 🔴 건드리면 안 되는 것을 쓰지 않는다 ──
 {
   const offenders: string[] = []
+  // 🔴 base 는 반드시 '쓰는 필드' 여야 한다. noGoTopics 를 base 로 두면
+  //    그 자체가 금지 목록에 들어간 뒤로 모든 케이스가 무조건 던져 시험이 헛돈다
   for (const k of FORBIDDEN_WRITE_KEYS) {
     let threw = false
-    try { assertSafeWrite({ noGoTopics: [], [k]: 'x' }) } catch { threw = true }
+    try { assertSafeWrite({ voiceVariations: [], [k]: 'x' }) } catch { threw = true }
     if (!threw) offenders.push(`🔴 ${k} 가 있는데 던지지 않음`)
   }
+  // 🔴 noGoTopics 는 보류다 — data 에 섞이면 던져야 한다
+  if (!FORBIDDEN_WRITE_KEYS.includes('noGoTopics')) offenders.push('🔴 noGoTopics 가 금지 목록에 없다')
+  let nogoThrew = false
+  try { assertSafeWrite({ voiceVariations: [], noGoTopics: ['x'] }) } catch { nogoThrew = true }
+  if (!nogoThrew) offenders.push('🔴 noGoTopics 가 있는데 던지지 않음')
+  // 🔴 쓰는 4필드는 통과해야 한다
   let okThrew = false
   try {
-    assertSafeWrite({ voiceVariations: [], activityRhythm: {}, noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [] })
+    assertSafeWrite({ voiceVariations: [], activityRhythm: {}, noGoExpressions: [], forbiddenReactionRoles: [] })
   } catch { okThrew = true }
-  if (okThrew) offenders.push('정상 data 에서 던짐')
+  if (okThrew) offenders.push('정상 4필드 data 에서 던짐')
   if (offenders.length) bad('🔴 금지 필드 차단', offenders.join(' / '))
-  else ok('🔴 금지 필드 차단', `${FORBIDDEN_WRITE_KEYS.length}종 전부 차단 (status · identity · cap · userId · voiceCore …)`)
+  else ok('🔴 금지 필드 차단', `${FORBIDDEN_WRITE_KEYS.length}종 전부 차단 (status · identity · cap · userId · voiceCore · 🟡 noGoTopics)`)
 }
 
 // ── ⑨ noGo 부분 문자열 판정 ──
@@ -196,6 +204,12 @@ console.log('\n══ 카드 → DB 이관 규칙 fixture ══\n')
   for (const k of ['status', 'activatedAt', 'identity', 'dailyCap', 'weeklyCap', 'userId']) {
     if (dataBlocks.some((b) => b.includes(k))) offenders.push(`🔴 쓰기 자리에 ${k} 가 있다`)
   }
+  // 🔴 noGoTopics 는 보류 — 쓰기 자리에 있으면 실패다
+  if (dataBlocks.some((b) => b.includes('noGoTopics'))) offenders.push('🔴 쓰기 자리에 noGoTopics 가 있다 (보류 대상)')
+  // 🔴 쓰는 4필드는 실제로 쓰기 자리에 있어야 한다 — 빠지면 이관이 안 된다
+  for (const k of ['voiceVariations', 'activityRhythm', 'noGoExpressions', 'forbiddenReactionRoles']) {
+    if (!dataBlocks.some((b) => b.includes(k))) offenders.push(`🔴 쓰기 자리에 ${k} 가 없다`)
+  }
   // 🔴 다른 테이블은 읽기만 — Queue 는 noGo 실측 때 읽는다. 쓰지 않는지가 핵심(위 writes 로 확인)
   for (const t of ['post', 'comment', 'personaGlobalSwitch', 'personaAuditLog']) {
     if (new RegExp(`prisma\\.${t}\\b`, 'i').test(code)) offenders.push(`🔴 prisma.${t} 에 접근한다`)
@@ -210,7 +224,31 @@ console.log('\n══ 카드 → DB 이관 규칙 fixture ══\n')
   if (!code.includes('import.meta.url')) offenders.push('🔴 실행부 가드가 없다')
 
   if (offenders.length) bad('write 경계', offenders.join(' / '))
-  else ok('write 경계', 'persona 5필드만 · status/identity/cap 미포함 · 이중 스위치 · read-back · Post/Queue write 0 · import 안전')
+  else ok('write 경계', 'persona 4필드만 · status/identity/cap/noGoTopics 미포함 · 이중 스위치 · read-back · Post/Queue write 0 · import 안전')
+}
+
+
+// ── ⑪ 🔴 noGoTopics 보류 — 값은 보관하되 쓰지 않는다 ──
+{
+  const offenders: string[] = []
+  // 🔴 카드 값은 그대로 남아 있어야 한다. 지우면 나중에 형식을 정할 때 근거가 사라진다
+  for (const p of PLANNED) {
+    if (p.noGoTopics.length === 0) offenders.push(`🔴 ${p.code} 의 카드 noGoTopics 가 지워졌다`)
+  }
+  // 문서 카드에도 그대로 있어야 한다
+  const doc = readFileSync(CARD, 'utf-8')
+  for (const p of PLANNED) {
+    for (const t of p.noGoTopics) if (!doc.includes(t)) offenders.push(`🔴 ${p.code} "${t}" 가 문서에서 사라졌다`)
+  }
+  // 🔴 --nogo-scan 은 유지된다 — 보류 판단의 근거를 계속 재볼 수 있어야 한다
+  const code = readFileSync(SCRIPT, 'utf-8')
+  if (!code.includes("--nogo-scan")) offenders.push('🔴 --nogo-scan 이 사라졌다')
+  if (!code.includes('nogoHits(')) offenders.push('🔴 nogoHits 가 사라졌다')
+  // dry-run 이 보류를 말하는가
+  if (!code.includes('보류')) offenders.push('🔴 dry-run 출력에 보류 표시가 없다')
+
+  if (offenders.length) bad('🔴 noGoTopics 보류', offenders.join(' / '))
+  else ok('🔴 noGoTopics 보류', `카드 ${PLANNED.length}명 값 보관 · 문서 유지 · --nogo-scan 유지 · dry-run 보류 표시`)
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
