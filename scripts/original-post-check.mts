@@ -20,7 +20,7 @@ import {
   CRITIQUE_BANNED_PHRASES, CRITIQUE_BANNED_REGISTERS, CRITIQUE_WATCH_PHRASES,
   partitionByStoredSource, sourceEchoCount, normalizeForEcho, selectByLengthQuantile,
   stripAllowedUrls,
-  type PromptRawContent, type PromptBlockCode, type OriginalPostRecord,
+  type PromptRawContent, type PromptBlockCode, type OriginalPostRecord, type DraftSignals,
 } from './lib/original-post-prompt'
 import {
   selectVoiceSamples, excludeReason,
@@ -44,6 +44,11 @@ import {
 } from './lib/voice-m3-contract.mjs'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
 import { SOURCE_SPECIFIC_TERMS, SORANSORAN_REGISTER_TERMS, TARGET_DESCRIPTOR_TERMS } from './lib/voice-style-signals.mjs'
+import {
+  gateDraft, formatGate, GATE_VERDICTS, BLOCK_REASONS, HOLD_REASONS,
+  WORD_SHARE_MIN, WORD_SHARE_MAX, EXPAND_MAX, COMPRESS_MIN, MUST_KEEP_MIN_RATIO,
+  type GateInput,
+} from './lib/original-post-gate'
 import {
   MIN_POST_TITLE_LENGTH, MAX_POST_TITLE_LENGTH,
   MIN_POST_CONTENT_LENGTH, MAX_POST_CONTENT_LENGTH,
@@ -2005,6 +2010,155 @@ console.log('\n══════ ㊴ 🔴 12판 수정이 앞선 규칙을 깨�
       '고3 애가 모의고사 성적을 속였습니다. 담임 전화로 알았어요. 어릴 땐 귀여웠는데 영상 보면 눈물납니다.',
       'letdown'),
     'incident_reveal_emotion')
+}
+
+
+console.log('\n══════ ㊵ 🔴 originality gate — 세 등급 (PR-B)')
+{
+  /** 계측 기본값. 각 검사에서 필요한 것만 덮어쓴다 */
+  const clean = (over: Partial<DraftSignals> = {}): DraftSignals => ({
+    titleLength: 20, bodyLength: 400, sourceEchoCount: 0, sharedWordRatio: 0.2,
+    clicheOpener: null, sourceMarkers: [], bannedTerms: [], structureFlags: [],
+    critiqueHits: [], externalAddressHits: [], soransoranAddressHits: [],
+    critiqueWatchHits: [], originUrlHits: [], contentUrlHits: [], urlHits: [],
+    questionMarkCount: 1, questionVerdict: 'ok', originTraceHits: [],
+    emoticonEvenness: 0.2, closingCtaHits: [], ...over,
+  })
+  const g = (over: Partial<DraftSignals> = {}, ctx: Partial<GateInput> = {}) => gateDraft({
+    signals: clean(over), closingIntent: 'no_call',
+    sourceBodyLength: 400, mustKeepTotal: 0, mustKeepFound: 0, ...ctx,
+  })
+
+  expect('등급은 셋뿐', GATE_VERDICTS.join(','), 'PASS,HOLD,BLOCK')
+  expect('깨끗하면 PASS', g().verdict, 'PASS')
+  expect('  PASS 는 사유가 없다', g().blocks.length + g().holds.length, 0)
+
+  // ── BLOCK 6종 + 조건부 1종 ──
+  expect('🔴 원문 20자 유출 → BLOCK', g({ sourceEchoCount: 1 }).verdict, 'BLOCK')
+  expect('  사유 코드', g({ sourceEchoCount: 1 }).blocks[0]?.code, 'SOURCE_ECHO')
+  expect('🔴 출처 URL → BLOCK', g({ originUrlHits: ['https://www.82cook.com/x'] }).verdict, 'BLOCK')
+  expect('🔴 출처 흔적 → BLOCK', g({ originTraceHits: ['줌인줌아웃'] }).verdict, 'BLOCK')
+  expect('🔴 외부 호칭 → BLOCK', g({ externalAddressHits: ['82님들'] }).verdict, 'BLOCK')
+  expect('🔴 금지 낱말 → BLOCK', g({ bannedTerms: ['시니어'] }).verdict, 'BLOCK')
+  expect('🔴 실패 표현 → BLOCK', g({ critiqueHits: ['주책부렸네요'] }).verdict, 'BLOCK')
+  // ✅ 소재 링크(유튜브 정본)는 막지 않는다 — PR #295 의 두 갈래가 유지되는가
+  expect('✅ 소재 링크만 있으면 BLOCK 아님',
+    g({ contentUrlHits: ['https://www.youtube.com/watch?v=OztApxz5qSk'] }).verdict, 'PASS')
+
+  // 🔴 같은 패턴이 글에 따라 위반이기도 정상이기도 하다 (48건 시뮬레이션 #28 · #33)
+  expect('🔴 no_call 인데 마무리 호출 → BLOCK',
+    g({ closingCtaHits: ['그래서 말인데요'] }, { closingIntent: 'no_call' }).verdict, 'BLOCK')
+  expect('  사유 코드', g({ closingCtaHits: ['그래서 말인데요'] }, { closingIntent: 'no_call' }).blocks[0]?.code, 'FORCED_CTA')
+  expect('✅ 조언을 청하는 원문이면 BLOCK 아님 — HOLD',
+    g({ closingCtaHits: ['조언 좀 부탁'] }, { closingIntent: 'advice_request' }).verdict, 'HOLD')
+  expect('  사유 코드', g({ closingCtaHits: ['조언 좀 부탁'] }, { closingIntent: 'advice_request' }).holds[0]?.code, 'CTA_IN_ASKING_POST')
+  expect('✅ 묻는 원문도 BLOCK 아님',
+    g({ closingCtaHits: ['조언 좀 부탁'] }, { closingIntent: 'explicit_question' }).verdict, 'HOLD')
+
+  // ── HOLD ──
+  expect('🟡 질문 소실 → HOLD', g({ questionVerdict: 'missing', questionMarkCount: 0 }).verdict, 'HOLD')
+  expect('🟡 질문 남발 → HOLD', g({ questionVerdict: 'overuse', questionMarkCount: 4 }).verdict, 'HOLD')
+  expect('🟡 어절 상한 초과 → HOLD', g({ sharedWordRatio: WORD_SHARE_MAX + 0.01 }).verdict, 'HOLD')
+  expect('🟡 어절 하한 미달 → HOLD', g({ sharedWordRatio: WORD_SHARE_MIN - 0.01 }).verdict, 'HOLD')
+  expect('  상한 경계값은 통과', g({ sharedWordRatio: WORD_SHARE_MAX }).verdict, 'PASS')
+  expect('  하한 경계값은 통과', g({ sharedWordRatio: WORD_SHARE_MIN }).verdict, 'PASS')
+  expect('🟡 과팽창 → HOLD', g({ bodyLength: 1100 }, { sourceBodyLength: 400 }).verdict, 'HOLD')
+  expect('🟡 과압축 → HOLD', g({ bodyLength: 100 }, { sourceBodyLength: 400 }).verdict, 'HOLD')
+  expect('🟡 필수 디테일 부족 → HOLD',
+    g({}, { mustKeepTotal: 10, mustKeepFound: 7 }).verdict, 'HOLD')
+  expect('  보존율 하한 충족은 통과',
+    g({}, { mustKeepTotal: 10, mustKeepFound: 8 }).verdict, 'PASS')
+  expect('  🔴 필수 0건이면 보존율을 따지지 않는다',
+    g({}, { mustKeepTotal: 0, mustKeepFound: 0 }).verdict, 'PASS')
+  expect('🟡 경계 표현 → HOLD', g({ critiqueWatchHits: ['글쎄'] }).verdict, 'HOLD')
+  expect('🟡 상투 시작 → HOLD', g({ clicheOpener: '요즘' }).verdict, 'HOLD')
+  expect('🟡 구조 흔적 → HOLD', g({ structureFlags: ['numberedList'] }).verdict, 'HOLD')
+  // 🔴 원문 길이를 모르면 배율을 넘겨짚지 않는다
+  expect('🔴 원문 길이 0 이면 배율 판정 없음', g({ bodyLength: 9999 }, { sourceBodyLength: 0 }).verdict, 'PASS')
+
+  // ── 등급 우선순위 ──
+  const both = g({ sourceEchoCount: 1, questionVerdict: 'overuse', questionMarkCount: 5 })
+  expect('🔴 BLOCK 이 HOLD 를 이긴다', both.verdict, 'BLOCK')
+  expect('  🔴 막힌 글에도 HOLD 사유를 함께 돌려준다', both.holds.length > 0, true)
+
+  // ── 사유 코드 목록이 흩어지지 않았는가 ──
+  expect('BLOCK 코드 7종', BLOCK_REASONS.length, 7)
+  expect('HOLD 코드 11종', HOLD_REASONS.length, 11)
+  expect('코드가 겹치지 않는다',
+    BLOCK_REASONS.some((b) => (HOLD_REASONS as readonly string[]).includes(b)), false)
+
+  // ── 출력에 본문이 새지 않는가 ──
+  const line = formatGate(g({ sourceEchoCount: 3 }))
+  expect('한 줄 요약에 등급이 있다', line.includes('BLOCK'), true)
+  expect('  🔴 세어 본 값만 담는다', line.includes('3조각'), true)
+}
+
+console.log('\n══════ ㊶ 🔴 창업자 통과 표본은 hard block 되지 않는다')
+{
+  /**
+   * 🔴 48건 시뮬레이션에서 창업자가 통과시킨 12건의 **실측 계측값**이다.
+   *    임계를 바꾸면 여기가 먼저 깨진다 — 그게 이 fixture 의 존재 이유다.
+   *    #46 · #47 · #48 은 HOLD 가 맞다(창업자 결정) — 다만 **BLOCK 이면 안 된다.**
+   */
+  const PASSED: ReadonlyArray<{
+    n: number; word: number; ratio: number; must: [number, number]
+    q: DraftSignals['questionVerdict']; qc: number; closing: GateInput['closingIntent']
+  }> = [
+    { n: 19, word: 0.329, ratio: 0.64, must: [15, 17], q: 'watch', qc: 2, closing: 'explicit_question' },
+    { n: 20, word: 0.108, ratio: 1.77, must: [2, 2], q: 'ok', qc: 1, closing: 'no_call' },
+    { n: 21, word: 0.296, ratio: 0.81, must: [21, 21], q: 'watch', qc: 2, closing: 'no_call' },
+    { n: 25, word: 0.323, ratio: 0.69, must: [6, 6], q: 'ok', qc: 1, closing: 'advice_request' },
+    { n: 37, word: 0.158, ratio: 0.63, must: [3, 3], q: 'ok', qc: 1, closing: 'no_call' },
+    { n: 42, word: 0.136, ratio: 1.29, must: [2, 2], q: 'ok', qc: 0, closing: 'no_call' },
+    { n: 43, word: 0.208, ratio: 1.59, must: [0, 0], q: 'watch', qc: 2, closing: 'explicit_question' },
+    { n: 44, word: 0.253, ratio: 0.43, must: [2, 2], q: 'ok', qc: 0, closing: 'no_call' },
+    { n: 45, word: 0.256, ratio: 0.88, must: [1, 1], q: 'ok', qc: 1, closing: 'explicit_question' },
+    { n: 46, word: 0.187, ratio: 0.89, must: [2, 2], q: 'overuse', qc: 3, closing: 'explicit_question' },
+    { n: 47, word: 0.037, ratio: 1.98, must: [2, 2], q: 'ok', qc: 0, closing: 'no_call' },
+    { n: 48, word: 0.061, ratio: 2.27, must: [0, 0], q: 'ok', qc: 0, closing: 'no_call' },
+  ]
+  const HOLD_EXPECTED = new Set([46, 47, 48])
+  for (const c of PASSED) {
+    const r = gateDraft({
+      signals: {
+        titleLength: 25, bodyLength: Math.round(400 * c.ratio), sourceEchoCount: 0,
+        sharedWordRatio: c.word, clicheOpener: null, sourceMarkers: [], bannedTerms: [],
+        structureFlags: [], critiqueHits: [], externalAddressHits: [], soransoranAddressHits: [],
+        critiqueWatchHits: [], originUrlHits: [], contentUrlHits: [], urlHits: [],
+        questionMarkCount: c.qc, questionVerdict: c.q, originTraceHits: [],
+        emoticonEvenness: 0.2, closingCtaHits: [],
+      },
+      closingIntent: c.closing, sourceBodyLength: 400,
+      mustKeepTotal: c.must[1], mustKeepFound: c.must[0],
+    })
+    expect(`🔴 #${c.n} 는 BLOCK 이 아니다`, r.verdict === 'BLOCK', false)
+    expect(`   #${c.n} 판정`, r.verdict, HOLD_EXPECTED.has(c.n) ? 'HOLD' : 'PASS')
+  }
+  // 🔴 창업자 결정: #46·#47·#48 은 PASS 로 완화하지 않는다
+  expect('🔴 #46 은 질문 남발로 HOLD',
+    PASSED.find((c) => c.n === 46)?.q, 'overuse')
+  expect('🔴 #47 · #48 은 어절 하한 미달로 HOLD',
+    PASSED.filter((c) => c.n === 47 || c.n === 48).every((c) => c.word < WORD_SHARE_MIN), true)
+  // 🔴 #25 가 상한의 근거다. 상한을 20% 로 낮추면 창업자 호평작이 HOLD 가 된다
+  expect('🔴 #25(32.3%) 가 상한 아래에 있다',
+    (PASSED.find((c) => c.n === 25)?.word ?? 1) < WORD_SHARE_MAX, true)
+}
+
+console.log('\n══════ ㊷ 🔴 gate 는 저장 계약을 건드리지 않는다 (정적 검사)')
+{
+  const gen = readFileSync('scripts/original-post-generate.mts', 'utf-8')
+  expect('생성기가 gate 를 부른다', gen.includes('gateDraft({'), true)
+  expect('  화면에 판정을 찍는다', gen.includes('formatGate(g)'), true)
+  expect('🔴 저장 키는 3개 그대로', ALLOWED_RECORD_KEYS.join(','), 'sourceRawContentId,title,body')
+  // 🔴 판정을 레코드에 싣지 않는다 — 판정이 곧 승인으로 읽히면 사람 검수가 사라진다
+  expect('🔴 저장 레코드에 verdict 를 넣지 않는다',
+    /toOriginalPostRecord\([\s\S]{0,300}?verdict/.test(gen), false)
+  expect('🔴 gate 결과를 파일에 쓰지 않는다',
+    /writeFileSync\([^)]{0,200}(verdict|gate)/i.test(gen), false)
+  const gate = readFileSync('scripts/lib/original-post-gate.ts', 'utf-8')
+  expect('🔴 gate 는 DB 를 모른다', gate.includes('PrismaClient'), false)
+  expect('🔴 gate 는 파일을 모른다', gate.includes('node:fs'), false)
+  expect('🔴 gate 는 네트워크를 모른다', gate.includes('fetch('), false)
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
