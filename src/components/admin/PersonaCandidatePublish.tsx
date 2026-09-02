@@ -72,7 +72,7 @@ export default function PersonaCandidatePublish({
                 type="button"
                 onClick={runPublish}
                 disabled={pending}
-                className="mt-3 min-h-[52px] rounded-lg bg-[#FF6F61] px-5 text-sm font-bold text-white disabled:opacity-50"
+                className="mt-3 min-h-[52px] rounded-lg bg-cta px-5 text-sm font-bold text-cta-text disabled:opacity-50"
               >
                 {pending ? '발행 중…' : '발행하기'}
               </button>

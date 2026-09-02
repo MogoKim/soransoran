@@ -82,7 +82,7 @@ export default async function OriginalPostCandidateDetailPage(
   return (
     <PageShell>
       <div className="mx-auto w-full max-w-5xl px-4 py-6">
-        <Link href="/admin/original-post-candidates" className="text-sm text-[#FF6F61] underline">
+        <Link href="/admin/original-post-candidates" className="text-sm text-link underline">
           ← 대기열
         </Link>
 
