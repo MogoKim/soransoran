@@ -192,3 +192,31 @@ export const GREETING_POST_VISIBILITY_FLAGS = {
   permanentNoindex: true,
   indexPromotionBlocked: true,
 } as const
+
+/**
+ * Original Post 발행 시 3축 필드의 **고정값**.
+ *
+ * 🔴 세 축이 전부 false 인 유일한 레인이다. 그래서 더 조심해야 한다 —
+ *    이 값으로 나간 글은 sitemap 에 실리고 검색에 노출된다.
+ *
+ * 🔴 왜 index 가 허용되는가
+ *    헌법 §10-5 — *"'원문 그대로' 와 '검색 노출' 은 함께 갈 수 없다.
+ *    둘 중 하나를 고르는 것이 레인 분리다."*
+ *    Micro Seed 는 원문을 그대로 쓰는 대가로 영구 noindex 를 받았고,
+ *    Original Post 는 **Derived(재창작)** 이라 index 자격을 얻는다.
+ *    🔴 뒤집어 말하면 **Derived 가 아니게 되는 순간 index 자격도 사라진다** —
+ *    Originality Gate 가 존재하는 이유가 이것이다.
+ *
+ * 🔴 isMicroSeed 는 false 다. 두 레인의 통계 · takedown · 정책이 뒤섞이면 안 된다.
+ *
+ * 🔴 이 파일에 있는 이유
+ *    가드(scripts/check-post-visibility.mjs)가 **src/ 전체를 훑어** 3축 토큰을
+ *    이 파일 밖에서 쓰면 전부 위반으로 잡는다 (C-2). 예외는 이 파일 하나뿐이다.
+ *    발행 쪽에 리터럴로 적으면 판정이 두 곳으로 갈라지고,
+ *    그것이 이 게이트가 막으려는 바로 그 상태다.
+ */
+export const ORIGINAL_POST_VISIBILITY_FLAGS = {
+  isMicroSeed: false,
+  permanentNoindex: false,
+  indexPromotionBlocked: false,
+} as const
