@@ -19,7 +19,7 @@ const SHEET_MIN_HEIGHT = 200
  * 그 아래에 두면 키보드가 올라와 화면이 좁아졌을 때 시트 윗부분이 메뉴에 덮인다.
  */
 const COMPOSER_CLASS =
-  'max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[61] max-md:max-h-[55dvh] max-md:overflow-y-auto max-md:overscroll-contain max-md:border-t max-md:border-subtle max-md:bg-surface-card max-md:px-4 max-md:pb-[max(12px,env(safe-area-inset-bottom))] max-md:pt-2'
+  'max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[61] max-md:max-h-[85dvh] max-md:overflow-y-auto max-md:overscroll-contain max-md:border-t max-md:border-subtle max-md:bg-surface-card max-md:px-4 max-md:pb-[max(12px,env(safe-area-inset-bottom))] max-md:pt-2'
 
 /**
  * 댓글 입력 영역을 감싸 하단 진입점과 연결한다.
@@ -102,10 +102,11 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
   /**
    * 키보드가 올라온 만큼 바닥을 올리고, 보이는 높이에 맞춰 시트를 자른다.
    *
-   * 🔴 maxHeight 를 함께 보정해야 한다. dvh 는 주소창에는 반응하지만 키보드에는 반응하지 않아,
-   *    상한만 믿으면 시트가 가시 영역보다 커져 입력창과 등록 버튼이 키보드에 덮인다.
+   * 🔴 maxHeight 는 키보드 여부와 무관하게 늘 건다. dvh 는 주소창에만 반응하고 키보드에는
+   *    반응하지 않아, CSS 상한만 믿으면 시트가 가시 영역과 어긋난다.
+   *    vv.height 는 키보드가 layout viewport 를 줄이든(keyboard 가 0 이 되는 환경) 아니든
+   *    언제나 "보이는 높이" 라서 두 환경에 같은 값이 맞다.
    * 🔴 iOS 는 화면 자체를 밀어 올리므로 offsetTop 을 반드시 뺀다.
-   * 키보드가 layout viewport 를 줄이는 환경은 계산값이 0 이라 저절로 no-op 이 된다.
    */
   useEffect(() => {
     if (!composing) return
@@ -126,13 +127,12 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
         return
       }
       const keyboard = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
-      if (keyboard <= KEYBOARD_THRESHOLD) {
-        clear()
-        return
-      }
-      el.style.bottom = `${Math.round(keyboard)}px`
       el.style.maxHeight = `${Math.max(SHEET_MIN_HEIGHT, Math.round(viewport.height - SHEET_TOP_GAP))}px`
-      setKeyboardOpen(true)
+      // bottom 은 키보드가 화면을 가릴 때만 올린다. layout viewport 가 줄어드는 환경은
+      // keyboard 가 0 이고, 그때는 bottom-0 이 이미 키보드 위다.
+      const open = keyboard > KEYBOARD_THRESHOLD
+      el.style.bottom = open ? `${Math.round(keyboard)}px` : ''
+      setKeyboardOpen(open)
     }
 
     update()
