@@ -70,7 +70,7 @@ export default async function PersonaCandidatesPage() {
       <div className="mx-auto w-full max-w-5xl px-4 py-6">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h1 className="text-xl font-bold">페르소나 후보 대기열</h1>
-          <Link href="/admin/personas" className="text-sm text-[#FF6F61] underline">
+          <Link href="/admin/personas" className="text-sm text-link underline">
             페르소나 관제실 →
           </Link>
         </div>
@@ -128,7 +128,7 @@ export default async function PersonaCandidatesPage() {
                     <td className="py-2 pr-3 whitespace-nowrap font-mono text-xs">{r.persona.code}</td>
                     <td className="py-2 pr-3">
                       {/* 🔴 첫 글자 + 길이만 */}
-                      <Link href={`/admin/persona-candidates/${r.id}`} className="text-[#FF6F61] underline">
+                      <Link href={`/admin/persona-candidates/${r.id}`} className="text-link underline">
                         {maskCandidateText(r.candidateText)}
                       </Link>
                     </td>

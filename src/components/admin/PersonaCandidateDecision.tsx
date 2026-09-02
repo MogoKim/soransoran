@@ -94,7 +94,7 @@ export default function PersonaCandidateDecision({
           type="button"
           onClick={() => run('approve')}
           disabled={pending}
-          className="min-h-[52px] rounded-lg bg-[#FF6F61] px-5 text-sm font-bold text-white disabled:opacity-50"
+          className="min-h-[52px] rounded-lg bg-cta px-5 text-sm font-bold text-cta-text disabled:opacity-50"
         >
           {pending ? '처리 중…' : '승인'}
         </button>

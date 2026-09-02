@@ -100,7 +100,7 @@ export default async function PersonaCandidateDetailPage(
   return (
     <PageShell>
       <div className="mx-auto w-full max-w-3xl px-4 py-6">
-        <Link href="/admin/persona-candidates" className="text-sm text-[#FF6F61] underline">
+        <Link href="/admin/persona-candidates" className="text-sm text-link underline">
           ← 대기열
         </Link>
 
