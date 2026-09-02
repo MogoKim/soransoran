@@ -20,6 +20,9 @@
 | `soransoran-d7-dday-milestone.md` | 실행 작전표 | **unao-main** ⚠️ |
 | `MICRO_SEED_LANE_CONSTITUTION.md` | Micro Seed · Voice 정책 헌법 | soransoran |
 | `2026-08-26-micro-seed-m1-runbook.md` | 실제 운영 절차 · 장애 대응 | soransoran |
+| `2026-08-29-persona-network-strategy.md` | 페르소나 전략 · 공개 정책 | soransoran |
+| `2026-08-30-persona-architecture-design.md` | **§9 Persona Matching** · 생성 · 분배 | soransoran |
+| **`2026-09-02-original-post-lane-strategy.md`** | **Original Post 레인 파이프라인 · 순서** 🆕 | soransoran |
 | **이 문서** | **큰 마일스톤 지도** | soransoran |
 
 > ⚠️ **위 세 문서는 `unao-main` 레포에 있고 이번 정렬에서 수정하지 않았다.**
@@ -36,15 +39,26 @@
 
 ---
 
-## 1. 현재 실측 상태 (2026-08-26)
+## 1. 현재 실측 상태 (2026-09-02 갱신)
 
 ```
-Micro Seed 발행      4건
-Candidate 4 · RawContent 4 · Post 4 · History 4
-Sheet row2~row5      전부 PUBLISHED
-recover divergence   0
-오늘(KST) 발행       3 / softDaily 3 → 추가 발행 중단
+── Micro Seed 레인 (원문 그대로 · 영구 noindex) ──
+Micro Seed 발행      5건
+Candidate 15 · RawContent 15 · Post 32 (USER 27 · SYSTEM/micro-seed 5)
+Sheet                 15건 · HOLD 10 · PUBLISHED 5 · divergence 0
+
+── Original Post 레인 (Derived · index 가능) 🆕 ──
+OriginalPostApprovalQueue   7건 · 🟢 전부 APPROVED
+  └ createdPostId            0   🔴 발행 경로 없음
+  └ decidedBy             founder · 2026-09-02 16:33 KST
+Post.personaId 있는 글        0
 ```
+
+> 🔴 **두 레인은 다른 것이다.** Micro Seed 는 원문 그대로 · noindex,
+> Original Post 는 Derived · index 가능 · **페르소나가 작성자**다.
+> 정본: [`2026-09-02-original-post-lane-strategy.md`](2026-09-02-original-post-lane-strategy.md)
+
+**2026-08-26 시점 값**(발행 4 · Candidate 4 · RawContent 4)은 위 값으로 대체됐다.
 
 | 축 | 실측 |
 |---|---|
@@ -143,8 +157,11 @@ fixture 5종(read 65 · plan 58 · validate 29 · plan-wiring 17 · collect-chec
 소란소란 톤으로 제목 · 본문 · 댓글 초안을 만든다.
 
 > 🔴 **원문 복제가 아니라 Derived Vault 기반 고유화다.**
-> 현재는 M2(헌법) 이 요구하는 최소본(`MicroSeedRawContent`)만 있고,
-> Raw / Derived / Publishing Input 3계층 자산화는 **미착수**다.
+>
+> **2026-09-02 갱신**: Raw(`MicroSeedRawContent` 15) · Derived(gold 135 · silver 1,065 ·
+> story_topic 1,304) · Publishing Input(초안 48건 → `OriginalPostApprovalQueue` 7건)
+> 3계층이 **모두 가동한다.** 남은 것은 **작성자를 정하는 Persona Matching** 이다 —
+> [Original Post 레인](2026-09-02-original-post-lane-strategy.md) 참조.
 
 ### M5 — Comment / Conversation Engine
 
@@ -192,10 +209,17 @@ fixture 5종(read 65 · plan 58 · validate 29 · plan-wiring 17 · collect-chec
 | M1 Google Sheet Founder Gate | ✅ 완료 (8상태 · ID 양방향 · cap) | M1 |
 | M2 Micro Seed MVP | ✅ **완료** (§12-0 실측) | M1 |
 | M3 Comment Activation Engine | ⬜ 미착수 | **M5** |
-| M4 Persona OS | ⬜ 미착수 | **M4~M5** |
-| M5 Voice Vault | 🟡 최소본만 (`MicroSeedRawContent`) | **M4** |
-| M6 Voice Engine LLM | ⬜ 미착수 | **M4** |
+| M4 Persona OS | 🟡 **설계 완료 · 구현 미착수** (pool · identity · gate · 대기열 있음 / **Matching 미착수**) | **M4~M5** |
+| M5 Voice Vault | 🟢 가동 (gold 135 · silver 1,065 · story 1,304) | **M4** |
+| M6 Voice Engine LLM | 🟢 **부분 가동** — 초안 48건 생성 · Originality Gate | **M4** |
 | M7 Scale / Cost / QA | ⬜ 미착수 | **M7** |
+
+> 🔴 **설계 완료와 구현 완료를 같은 칸에 적지 않는다.** 설계가 끝난 것을 구현됐다고 읽으면
+> 다음 사람이 없는 코드를 부른다. 항목별 대조표는
+> [Original Post 레인 §8](2026-09-02-original-post-lane-strategy.md) 에 있다.
+
+**헌법에 없고 운영에만 있는 것** 추가: **Original Post 레인** — 헌법 §10-5 가 경계만 정하고
+파이프라인은 정하지 않았다. 정본은 [`2026-09-02-original-post-lane-strategy.md`](2026-09-02-original-post-lane-strategy.md).
 
 **헌법에 없고 운영에만 있는 것**: M2 Source Quality Engine · M3 Auto Candidate Queue · M6 Multi-source.
 운영에서 필요가 드러난 것들이며, 정책이 필요해지면 그때 헌법에 절을 신설한다.
@@ -210,11 +234,18 @@ fixture 5종(read 65 · plan 58 · validate 29 · plan-wiring 17 · collect-chec
 |---|---|---|---|
 | ~~1~~ | Q-1 품질 플래그 (M2) | ✅ 완료 | PR #72 · #75 |
 | ~~2~~ | 승인 전용 명령 (M3) | ✅ 완료 | PR #78 |
-| **1** | **우나어 심층 데이터 감사** (M5) | 🔜 | 33,031건 구조를 알아야 그릇을 만든다 |
-| **2** | **Voice 자산 schema 확정** (M5) | 대기 | 감사 후. **Micro Seed 5건 기준 설계 금지** |
-| 3 | 창업자 판단 저장 (M6) | 대기 | 지금도 매 세션 사라진다 |
-| 4 | 댓글 자산화 (M10 선행) | 대기 | 154,872개 |
-| — | row6 발행 | ⏸️ KST 8/27 | 별도 운영 트랙 |
+| ~~3~~ | 우나어 심층 데이터 감사 · Voice 자산 schema (M5) | ✅ 완료 | voice_gold 135 · silver 1,065 · story_topic 1,304 |
+| ~~4~~ | Original Post 생성 · Gate · 대기열 · 결정 | ✅ 완료 | PR #291 · #295 · #300 · #303 · #305 |
+| **1** | 🔴 **Persona Matching 설계** | 🔜 | ⑥ 없이 ⑦ 로 가면 정체성이 무너진다. **되돌릴 수 없다** |
+| **2** | **Persona Publish** (PR-OP-D) | 대기 | 1 이 끝난 뒤. 🔴 지금 직행 금지 |
+| 3 | Persona 댓글 (반응 지도) | 대기 | 글만 있으면 게시판이지 커뮤니티가 아니다 |
+| — | Voice egress 재발 방지 | ⏸️ | **별도 운영 이슈.** Voice/M3 **재개 전** 처리 · 위 1~2 보다 앞서지 않는다 |
+| — | 좋아요 · 베스트 자동화 | 🔴 **금지** | 정책 미확정. 공개 조작으로 읽힌다 |
+
+> 🔴 **지금 PR-OP-D 로 직행하지 않는다.**
+> 발행 코드를 먼저 짜면 작성자를 정해야 하고, 그때 손에 잡히는 답은 **운영 전용 계정**이다.
+> 한 번 그렇게 발행하면 그 계정이 사실상 표준이 되고, **페르소나 발행이라는 최종안이 밀린다.**
+> 상세: [Original Post 레인 §9](2026-09-02-original-post-lane-strategy.md)
 
 ---
 
@@ -229,6 +260,8 @@ fixture 5종(read 65 · plan 58 · validate 29 · plan-wiring 17 · collect-chec
 | `PUBLISHED` 를 다른 상태로 되돌리기 | 헌법 R9 · §6-4 (비가역) |
 | 3축 플래그를 Sheet · 후보 필드로 노출 | 헌법 §6-7-B — 사람 손 하나로 무너진다 |
 | 정치성 **자동 거부** | 오탐이 조용히 좋은 글을 버린다 (§2 M2) |
+| 🔴 **정체성 매칭 없이 오리지널 글 발행** | 억지 배정은 페르소나의 **모든 과거 글**을 거짓으로 만든다 |
+| 🔴 **페르소나 좋아요 · 베스트 유도** | 정책 미확정. 댓글은 대화지만 인기 지표는 **공개 조작**으로 읽힌다 |
 
 > 🔴 **"크롤러/시트 OFF" 와 Micro Seed 는 다른 범주다.**
 > 그 원칙은 **대량 자동 수집·발행**을 막는다.
@@ -237,12 +270,16 @@ fixture 5종(read 65 · plan 58 · validate 29 · plan-wiring 17 · collect-chec
 
 ---
 
-## 6. 남은 한계 (M1 runbook §5 와 동일)
+## 6. 남은 한계 (2026-09-02 갱신)
 
-- 품질 플래그 없음 → **M2**
-- 승인 전용 명령 없음 → **M3**
-- 네이버 카페 세션 · 정책 판단 필요 → **M6**
-- Voice Engine 미착수 → **M4**
+- ~~품질 플래그 없음~~ → ✅ 완료 (M2)
+- ~~승인 전용 명령 없음~~ → ✅ 완료 (M3)
+- ~~Voice Engine 미착수~~ → 🟢 **부분 가동** — 초안 생성 · Originality Gate · 대기열 · 결정
+- 🔴 **Persona Matching 미착수** → **최우선.** 이것 없이는 오리지널 글의 작성자를 정할 수 없다
+- 🔴 **Original Post 발행 경로 없음** — `APPROVED` 7건이 대기 중 (`createdPostId` 전부 null)
+- 🟡 **좋아요 · 베스트 정책 없음** — 구현 금지 상태
 - Comment Engine 미착수 (`rawComments` 테이블 승격 선행) → **M5**
-- 자동화 없음 (의도된 상태) → **M7**
+- 네이버 카페 세션 · 정책 판단 필요 → **M6**
+- 크롤 자동화 없음 (**의도된 상태** — 지금은 소재 테스트용 수동 절차) → **M7**
+- Voice egress 재발 방지 미착수 → **별도 운영 이슈.** Voice/M3 재개 전 처리
 - `2026-08-22-current-state.md` 등 unao-main 문서 3종 갱신 필요 → §0

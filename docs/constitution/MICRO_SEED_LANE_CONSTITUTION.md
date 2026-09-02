@@ -1423,11 +1423,18 @@ commentCount · topCommentsCrawledAt · riskFlags
 
 §10-5 의 표가 레인별 입력을 이미 정했다. 그 표가 실제로 무엇을 금지하는지 적어 둔다.
 
-| 레인 | 입력 | 노출 | 상태 |
+| 레인 | 입력 | 노출 | 상태 (2026-09-02 실측) |
 |---|---|---|---|
-| **Micro Seed** | **원문 그대로** (정책 7) | 🔴 **영구 noindex** (정책 8 · 10) | 운영 중 |
-| **Voice Engine / Derived** | 패턴 · 라벨만 추출 | 발행하지 않는다 | 미착수 |
-| **Original Content / index** | **Derived 만** | index 가능 · **별도 정책 필요** | **미착수** |
+| **Micro Seed** | **원문 그대로** (정책 7) | 🔴 **영구 noindex** (정책 8 · 10) | 운영 중 · 5건 발행 |
+| **Voice Engine / Derived** | 패턴 · 라벨만 추출 | 발행하지 않는다 | 🟢 부분 가동 |
+| **Original Post / index** | **Derived 만** | index 가능 (`permanentNoindex = false`) | 🟡 **창업자 결정까지** · 발행 경로 없음 |
+
+> 🔴 **Original Post 레인의 정본은 [`2026-09-02-original-post-lane-strategy.md`](../operations/2026-09-02-original-post-lane-strategy.md) 다.**
+> 이 절은 레인 **경계**만 정한다. 파이프라인 · 현재 위치 · 다음 순서는 그 문서를 본다.
+>
+> 🔴 **작성자는 시스템 User 가 아니라 페르소나다.** §12 M4 가 이미
+> *"시스템 User 1개를 쓰면 같은 작성자의 글이 반복 노출된다"* 를 근거로 들고 있다.
+> **정체성 매칭 전에는 발행하지 않는다** — 억지 배정은 글 한 건을 살리고 페르소나 하나를 영구히 망가뜨린다.
 
 #### 🔴 예외에는 대가가 있다
 
