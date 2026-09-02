@@ -20,9 +20,12 @@ import {
 export default function CommentForm({
   postId,
   boardSlug,
+  parentId,
 }: {
   postId: string
   boardSlug: string
+  /** 답글이면 부모 댓글 id. 새 댓글이면 undefined */
+  parentId?: string
 }) {
   const pathname = usePathname()
   const [state, formAction] = useFormState<CommentActionState, FormData>(createComment, {})
@@ -47,6 +50,7 @@ export default function CommentForm({
     >
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
+      {parentId ? <input type="hidden" name="parentId" value={parentId} /> : null}
 
       {state.error ? (
         state.needsOnboarding ? (

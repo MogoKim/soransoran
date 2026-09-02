@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import ReplyOpenProvider from '@/components/features/ReplyOpenProvider'
 
 type Sort = 'oldest' | 'likes'
 
@@ -63,11 +64,13 @@ export default function SortableCommentList({
 
       {/* CommentItem 이 <li> 를 그린다 — Fragment 로 감싸 <li> 가 <ul> 의 직계로 남게 한다.
           한 겹이라도 끼면 목록이 사이에 긋는 구분선(`[&>li+li]`)이 걸리지 않는다. */}
-      <ul className={listClassName}>
-        {sorted.map((item) => (
-          <Fragment key={item.id}>{item.node}</Fragment>
-        ))}
-      </ul>
+      <ReplyOpenProvider>
+        <ul className={listClassName}>
+          {sorted.map((item) => (
+            <Fragment key={item.id}>{item.node}</Fragment>
+          ))}
+        </ul>
+      </ReplyOpenProvider>
     </>
   )
 }

@@ -28,3 +28,6 @@ export const POPULAR_COMMENT_TAKE = 2
 
 /** 정렬을 고르게 할 최소 댓글 수. 둘뿐인데 탭이 있으면 탭이 댓글보다 커 보인다. */
 export const COMMENT_SORT_TABS_MIN = 3
+
+/** 지워진 부모 자리에 남는 말. 답글이 어디에 딸린 것인지 알려 주는 표시다. */
+export const DELETED_COMMENT = '삭제된 댓글입니다.'

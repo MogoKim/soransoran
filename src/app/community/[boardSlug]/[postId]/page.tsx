@@ -93,8 +93,9 @@ export default async function PostDetailPage({
     getPostLikeState(post.id, session?.user?.id),
     getPostScrapState(post.id, session?.user?.id),
     // 댓글 수와 무관하게 한 번만 묻는다. 비로그인이면 DB 를 두드리지 않는다.
+    // 답글 id 도 함께 넘긴다 — 답글에도 공감 버튼이 있다.
     getLikedCommentIds(
-      comments.map((comment) => comment.id),
+      comments.flatMap((comment) => [comment.id, ...comment.replies.map((r) => r.id)]),
       session?.user?.id,
     ),
   ])
