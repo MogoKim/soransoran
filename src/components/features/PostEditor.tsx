@@ -220,7 +220,10 @@ export default function PostEditor({
     editorProps: {
       attributes: {
         class:
-          'min-h-[240px] px-4 py-3 leading-[1.85] text-content-primary outline-none [word-break:keep-all] [overflow-wrap:anywhere]',
+          // 🔴 본문이 이 화면의 주인공이다. 모바일에서는 화면 높이를 기준으로 잡아
+          //    작은 상자에 글을 밀어 넣는 느낌이 들지 않게 한다.
+          //    svh 를 쓴다 — vh 는 주소창이 접힐 때 값이 바뀌어 입력 중에 상자가 튄다.
+          'min-h-[max(240px,42svh)] px-4 py-3 leading-[1.85] text-content-primary outline-none [word-break:keep-all] [overflow-wrap:anywhere]',
       },
       handlePaste: (_view, event) => {
         const text = event.clipboardData?.getData('text/plain')?.trim() ?? ''

@@ -1,22 +1,23 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import PostEditor from '@/components/features/PostEditor'
+import WriteTopBar from '@/components/features/WriteTopBar'
+import { firstImageUrl } from '@/lib/post-media'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import {
   MAX_POST_CONTENT_LENGTH,
   MAX_POST_TITLE_LENGTH,
-  MIN_POST_CONTENT_LENGTH,
-  MIN_POST_TITLE_LENGTH,
   POST_CONTENT_COUNTER_FROM,
   POST_CONTENT_COUNTER_WARN_FROM,
   POST_CONTENT_PLACEHOLDER,
   POST_TITLE_PLACEHOLDER,
+  postBlockMessage,
+  postSubmitBlock,
 } from '@/lib/post-policy'
 
 /**
@@ -55,17 +56,30 @@ export default function PostEditForm({
   /** 🔴 사진을 올리는 동안 저장을 막는다 — PostForm 과 같은 이유다(blob: 주소). */
   const [uploading, setUploading] = useState(false)
 
-  // 🔴 사진만 남긴 글도 저장할 수 있다. 서버도 같은 규칙이다.
-  const hasImage = content.includes('<img')
-  const canSubmit =
-    !uploading &&
-    title.trim().length >= MIN_POST_TITLE_LENGTH &&
-    (hasImage || text.trim().length >= MIN_POST_CONTENT_LENGTH)
+  // 🔴 사진만 남긴 글도 저장할 수 있다. 판정은 서버와 같은 함수로 한다 — PostForm 과 같은 이유다.
+  const hasImage = firstImageUrl(content) !== null
+  const block = postSubmitBlock({
+    uploading,
+    title,
+    textLength: text.trim().length,
+    hasImage,
+  })
+  const canSubmit = block === null
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
+
+      {/* 🔴 새 글 화면과 같은 상단바다. 하는 일이 다르다고 조작 구조까지 달라지면
+             같은 사람이 두 화면을 다르게 배워야 한다. */}
+      <WriteTopBar
+        title="수정하기"
+        submitLabel="수정"
+        pendingLabel="수정 중…"
+        canSubmit={canSubmit}
+        cancelHref={cancelHref}
+      />
 
       {state.error ? (
         state.needsOnboarding ? (
@@ -114,29 +128,22 @@ export default function PostEditForm({
         </p>
       ) : null}
 
-      {uploading ? (
-        <p role="status" className="-mb-2 text-sm text-content-muted">
-          사진을 올리고 있어요. 끝나면 저장할 수 있습니다.
+      {/* 🔴 왜 아직 못 고치는지 그 자리에서 말한다 — 새 글 화면과 같은 문장을 쓴다. */}
+      {block ? (
+        <p role="status" className="-mt-1 text-sm font-bold text-content-secondary">
+          {postBlockMessage(block)}
         </p>
       ) : null}
 
-      {/* 저장만 주 버튼이다. 되돌아가기는 링크로 둔다 —
-          같은 자리에 fill 버튼이 둘이면 어느 쪽이 원래 하려던 일인지 흐려진다. */}
-      <div className="flex items-center gap-2">
-        <ActionButton
-          tone="primary"
-          label="저장"
-          pendingLabel="저장 중…"
-          disabled={!canSubmit}
-          className="justify-center px-6"
-        />
-        <Link
-          href={cancelHref}
-          className="inline-flex min-h-[52px] items-center px-4 text-content-muted no-underline"
-        >
-          그만두기
-        </Link>
-      </div>
+      {/* 🔴 그만두기는 상단바의 '취소' 하나로 옮겼다. 같은 일을 하는 길이 화면에
+             둘 있으면 어느 쪽이 진짜인지 매번 고르게 된다. */}
+      <ActionButton
+        tone="primary"
+        label="수정하기"
+        pendingLabel="수정 중…"
+        disabled={!canSubmit}
+        className="justify-center px-6"
+      />
     </form>
   )
 }

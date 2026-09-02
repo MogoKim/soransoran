@@ -1,5 +1,4 @@
 import { notFound, redirect } from 'next/navigation'
-import PageShell from '@/components/layouts/PageShell'
 import PostEditForm from '@/components/features/PostEditForm'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
@@ -61,25 +60,26 @@ export default async function PostEditPage({
     redirect(`/onboarding?callbackUrl=${encodeURIComponent(editHref)}`)
   }
 
+  /**
+   * 🔴 고치는 동안에도 PageShell 을 두르지 않는다 — 새 글 화면과 같은 규칙이다.
+   *    제목·나가기·수정 버튼은 PostEditForm 의 상단바가 진다.
+   */
   return (
-    <PageShell>
-      <main className="mx-auto max-w-3xl px-4 py-8">
-        <h1 className="mb-6 text-xl font-bold text-content-primary">글 수정</h1>
-        {/*
+    <main className="mx-auto min-h-screen max-w-3xl px-4 pb-12 pt-[72px]">
+      {/*
           🔴 평문을 그대로 에디터에 넣지 않는다.
              Tiptap 은 HTML 을 파싱하므로 문자열 안의 \n 은 공백처럼 취급되어
              한 문단으로 접힌다. 옛 글은 대부분 평문이고 줄바꿈이 많다 —
              "고치기" 만 눌렀다가 저장하면 줄이 통째로 사라진다.
              화면에 넣기 전에 <br> 로 바꿔 둔다. 이미 HTML 인 글은 손대지 않는다.
         */}
-        <PostEditForm
-          boardSlug={board.slug}
-          postId={post.id}
-          initialTitle={post.title}
-          initialContent={toEditorHtml(post.content)}
-          cancelHref={`${board.href}/${post.id}`}
-        />
-      </main>
-    </PageShell>
+      <PostEditForm
+        boardSlug={board.slug}
+        postId={post.id}
+        initialTitle={post.title}
+        initialContent={toEditorHtml(post.content)}
+        cancelHref={`${board.href}/${post.id}`}
+      />
+    </main>
   )
 }

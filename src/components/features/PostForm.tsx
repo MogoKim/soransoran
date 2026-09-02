@@ -4,17 +4,19 @@ import { useEffect, useRef, useState } from 'react'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import PostEditor from '@/components/features/PostEditor'
+import WriteTopBar from '@/components/features/WriteTopBar'
 import { createPost, type ActionState } from '@/lib/actions/posts'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
+import { firstImageUrl } from '@/lib/post-media'
 import {
   MAX_POST_CONTENT_LENGTH,
   MAX_POST_TITLE_LENGTH,
-  MIN_POST_CONTENT_LENGTH,
-  MIN_POST_TITLE_LENGTH,
   POST_CONTENT_COUNTER_FROM,
   POST_CONTENT_COUNTER_WARN_FROM,
   POST_CONTENT_PLACEHOLDER,
   POST_TITLE_PLACEHOLDER,
+  postBlockMessage,
+  postSubmitBlock,
 } from '@/lib/post-policy'
 import { readDraft, removeDraft, saveDraft, type PostDraft } from '@/lib/write-draft'
 import { toEditorHtml } from '@/lib/post-content-format'
@@ -128,13 +130,20 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
     setRestored(false)
   }
 
-  // 🔴 사진만 올린 글도 보낼 수 있게 한다. 글자가 짧아도 할 말을 한 것이다.
-  //    서버도 같은 규칙이다(actions/posts.ts).
-  const hasImage = content.includes('<img')
-  const canSubmit =
-    !uploading &&
-    title.trim().length >= MIN_POST_TITLE_LENGTH &&
-    (hasImage || text.trim().length >= MIN_POST_CONTENT_LENGTH)
+  /**
+   * 🔴 사진 판정을 서버와 같은 함수로 한다(post-media).
+   *    `<img` 만 세면 아직 올리는 중인 blob: 미리보기까지 사진으로 쳐서,
+   *    버튼은 열렸는데 서버가 막는 상태가 생긴다.
+   */
+  const hasImage = firstImageUrl(content) !== null
+  const block = postSubmitBlock({
+    uploading,
+    title,
+    textLength: text.trim().length,
+    hasImage,
+  })
+  const canSubmit = block === null
+  const board = COMMUNITY_BOARDS.find((b) => b.slug === boardSlug)
 
   return (
     <form
@@ -144,6 +153,15 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
       }}
       className="flex flex-col gap-4"
     >
+      {/* 🔴 등록은 여기서 항상 누를 수 있다. 키보드가 화면 아래를 덮어도 남는다. */}
+      <WriteTopBar
+        title={board ? `${board.label} 글쓰기` : '글쓰기'}
+        submitLabel="등록"
+        pendingLabel="등록 중…"
+        canSubmit={canSubmit}
+        cancelHref={board?.href ?? '/'}
+      />
+
       {state.error ? (
         state.needsOnboarding ? (
           <OnboardingNotice message={state.error} callbackUrl={`/write?board=${boardSlug}`} />
@@ -224,13 +242,16 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
         </p>
       ) : null}
 
-      {/* 🔴 왜 못 누르는지 말해 준다. 잠긴 버튼만 두면 고장으로 읽힌다. */}
-      {uploading ? (
-        <p role="status" className="-mb-2 text-sm text-content-muted">
-          사진을 올리고 있어요. 끝나면 올릴 수 있습니다.
+      {/* 🔴 왜 아직 못 올리는지 그 자리에서 말한다. 잠긴 버튼만 두면 고장으로 읽힌다.
+             누른 뒤에 뜨는 경고가 아니라 쓰는 동안 보이는 안내다. */}
+      {block ? (
+        <p role="status" className="-mt-1 text-sm font-bold text-content-secondary">
+          {postBlockMessage(block)}
         </p>
       ) : null}
 
+      {/* 🔴 아래 버튼은 에디터 블록 바깥이다. 툴바는 그 블록 안에만 있으므로
+             (PostEditor 의 붙임 규칙) 이 버튼을 가리지 못한다. */}
       <ActionButton
         tone="primary"
         label="올리기"
