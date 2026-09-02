@@ -28,7 +28,12 @@
 
 export const EMOTION_TONES = [
   'panic', 'resentment', 'bright_pride', 'playful_affection',
-  'worry', 'practical_question', 'complaint', 'plain',
+  'worry', 'practical_question', 'complaint',
+  // 🔴 2026-09-02 8판 #26 — 분통(resentment)과 다른 온도다.
+  //    화가 나서 터지는 게 아니라 **가슴이 차갑게 식는** 쪽이다.
+  //    이 둘을 한 칸에 두면 서운한 글이 화난 글로 나온다
+  'letdown',
+  'plain',
 ] as const
 export type EmotionTone = (typeof EMOTION_TONES)[number]
 
@@ -45,6 +50,30 @@ export const INTERACTION_NEEDS = [
   'help_request', 'experience_call', 'advice_request', 'brag_share', 'info_share',
 ] as const
 export type InteractionNeed = (typeof INTERACTION_NEEDS)[number]
+
+/**
+ * 🔴 **글을 어떻게 닫는가** (2026-09-02, 9판 피드백).
+ *
+ * 9판에서 우리 호칭이 5/5 가 됐는데 그게 성공이 아니었다 —
+ * *"소란님들 그래서 말인데요, 다들 어떻게 버티세요?"* 같은 **공식 CTA** 가
+ * 원문에 없는데 끝에 붙었다. 호칭을 기계 지표로 삼은 대가다.
+ *
+ * 🔴 호칭은 **성공 지표가 아니라 조건부 치환 규칙**이다.
+ *    원문이 실제로 묻거나 부를 때만 우리 호칭으로 바꾼다.
+ *    원문이 혼잣말로 끝나면 우리 글도 혼잣말로 끝난다.
+ *
+ * 🔴 interactionNeed 와 **다른 축**이다. "무엇을 원하는 글인가"(need)와
+ *    "실제로 부르며 끝나는가"(closing)는 다르다 — 도움을 구하는 글도
+ *    마지막은 한숨으로 끝날 수 있다.
+ */
+export const CLOSING_INTENTS = [
+  'explicit_question',   // 실제로 물음표로 묻는다
+  'advice_request',      // 조언·추천을 청한다
+  'experience_call',     // 겪어본 사람을 찾는다
+  'vent_to_audience',    // 묻지는 않지만 들어달라고 편다
+  'no_call',             // 🔴 아무도 부르지 않는다. 여기에 CTA 를 붙이면 실패다
+] as const
+export type ClosingIntent = (typeof CLOSING_INTENTS)[number]
 
 /** 🔴 살릴지 말지를 낱개로 판단한다. 하나로 뭉치면 "정리해도 되는 글" 이 생긴다 */
 export type PreserveStructure = {
@@ -66,6 +95,8 @@ export type SourceProfile = {
   /** 살려야 하는 구체 디테일 — 갈래별로 나눠 준다 */
   concreteDetailsToKeep: readonly ConcreteDetail[]
   interactionNeed: InteractionNeed
+  /** 🔴 원문이 어떻게 닫히는가. 여기가 `no_call` 이면 끝에 아무것도 붙이지 않는다 */
+  closingIntent: ClosingIntent
   /** 원문에 있는 외부 커뮤니티 호칭 (있으면 반드시 바꿔야 한다) */
   externalAddressTerms: readonly string[]
   /** 🔴 원문에 있는 출처 흔적 — 서비스·게시판 이름. 최종 글에 남기면 안 된다 */
@@ -84,6 +115,8 @@ export type ConcreteDetail = {
     | 'situation'   // 어디에 올렸나 · 어디서 봤나 (줌인아웃 · 단톡 등)
     | 'lifestyle'   // 외식 · 첨가물 · 식단 · 체중 변화 맥락
     | 'usage_pattern' // 얼마나 쓰다 끊었나 · 언제만 쓰나 (6판 #18)
+    | 'grievance'     // 서운함·치사함·차별·손절 (8판 #24 · #26)
+    | 'tradeoff'      // 현실 계산 — 차라리 · 가성비 · 때려치 (8판 #26)
   /** 🔴 짧은 조각만. 20자 유출 임계 훨씬 아래다 */
   sample: string
 }
@@ -110,6 +143,12 @@ const TONE_LEXICON: ReadonlyArray<{ tone: EmotionTone; terms: readonly string[] 
     '물세안', '폼클', '클렌징', '크림', '연고', '제품', '제약',
   ] },
   { tone: 'complaint', terms: ['불편', '별로', '실망', '최악', '엉망', '짜증나'] },
+  // 🔴 8판 #26 — `plain` 으로 떨어졌다. 현타 · 가성비 · 치사함 신호가 있었는데
+  //    사전에 한 낱말도 없었다. 담담한 글로 읽으면 담담한 글이 나온다
+  { tone: 'letdown', terms: [
+    '서운', '섭섭', '치사', '얍삽', '째째', '쪼잔', '비겁', '허탈', '씁쓸', '찬물',
+    '현타', '허무', '자괴', '차별', '유독 나만', '나만 빼고', '알고 보니', '알게 됐',
+  ] },
 ]
 
 /** 🔴 외부 커뮤니티 호칭 — 최종 글에 남으면 실패다 */
@@ -203,7 +242,10 @@ const DETAIL_RULES: ReadonlyArray<{ kind: ConcreteDetail['kind']; re: RegExp }> 
   // 🔴 `8/24` 같은 월/일 표기를 놓치고 있었다 (5판 #13 피드백)
   { kind: 'date', re: /\d{1,2}\/\d{1,2}|\d{1,2}월\s?\d{0,2}일?|어제|오늘|내일|그저께|지난주|이번 주|한 달째|\d+일째/g },
   // 🔴 `48~49kg` 같은 범위를 먼저 잡는다. 단일 패턴만 두면 앞의 48 만 잡힌다
-  { kind: 'amount', re: /\d+\s?[~-]\s?\d+\s?(kg|cm|개월|주|일|만\s?원|원|%)|\d+\s?(년|개월|주일|주|일|번|회|알|정|mg|ml|kg|cm|만\s?원|원|프로|%)/g },
+  // 🔴 2026-09-02 8판 — `억` · `천만` 이 빠져 있어 **양육비 1억**(#24) 과
+  //    #26 의 억 단위가 필수 목록에서 통째로 누락됐다. 큰 금액일수록 글의 중심인데
+  //    작은 단위(만 원)만 잡고 있었다. 큰 것을 먼저 본다
+  { kind: 'amount', re: /\d+\s?억\s?\d*\s?(천만)?|\d+\s?천만|\d+\s?[~-]\s?\d+\s?(kg|cm|개월|주|일|만\s?원|원|%)|\d+\s?(년|개월|주일|주|일|번|회|알|정|mg|ml|kg|cm|만\s?원|원|프로|%)/g },
   // 🔴 2026-09-01 보강 — #10 에서 약 이름 · 검사 · 진단어 · 시술이 통째로 사라졌다.
   //    이런 것들이 빠지면 남는 것은 느낌뿐이고, 느낌만 남은 글이 AI 티가 나는 글이다.
   { kind: 'medical', re: /CT|MRI|엑스레이|X-?ray|초음파|내시경|검사|처방|진통제|소염제|근이완제|신경안정제|항생제|스테로이드|약|치과|한의원|정형외과|이비인후과|피부과|물리치료|전기자극|주사|연고|크림|폼클렌징|물세안|제약/g },
@@ -221,6 +263,12 @@ const DETAIL_RULES: ReadonlyArray<{ kind: ConcreteDetail['kind']; re: RegExp }> 
   // 🔴 6판 #18 — "연고를 일주일 바르고 끊었다가 안 좋을 때만" 은 단순 언급이 아니라
   //    **어떻게 쓰고 있는지의 흐름**이다. 이게 빠지면 상황이 아니라 목록이 된다
   { kind: 'usage_pattern', re: /일주일\s?\S{0,3}\s?(바르|쓰|먹)|중단했|끊었다가|가끔\s?(만\s?)?(바르|쓰|먹)|안 좋을 때(만)?|\d+\s?(일|주|개월)\s?(정도\s?)?(바르|쓰|먹|하다)/g },
+  // 🔴 8판 #24·#26 — 서운함과 치사함이 글의 중심인데 어디에도 잡히지 않았다.
+  //    감정 형용사가 아니라 **무엇이 서운했는지의 사실**이라 지우면 글이 밋밋해진다
+  { kind: 'grievance', re: /서운|섭섭|치사|얍삽|째째|쪼잔|비겁|차별|손절|연락 끊|의절|양육비|위자료|밀린|미지급|실망|상처|배신/g },
+  // 🔴 8판 #26 — "차라리 배달이 낫겠다" 는 푸념이자 **현실 계산**이다.
+  //    이게 빠지면 고민이 아니라 감상문이 된다
+  { kind: 'tradeoff', re: /가성비|시간 대비|차라리|때려치|그만두|버는 게|나을 것|나을까|현타|허무|자괴|투잡|부업/g },
 ]
 
 /**
@@ -322,6 +370,41 @@ function readStructure(title: string, body: string, tone: EmotionTone): Structur
   return 'casual_short_post'
 }
 
+/**
+ * 🔴 **끝부분만 본다.** 글 전체에 물음표가 하나 있다고 묻는 글로 끝나는 것은 아니다.
+ *    중간에 "왜 그럴까요" 하고 지나간 뒤 한숨으로 닫는 글이 훨씬 많다.
+ */
+export const CLOSING_TAIL_LINES = 3
+
+export function readClosingIntent(input: {
+  title: string
+  body: string
+  tone: EmotionTone
+}): ClosingIntent {
+  const lines = input.body.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+  const tail = lines.slice(-CLOSING_TAIL_LINES).join('\n')
+  if (tail === '') return 'no_call'
+
+  // 🔴 순서가 곧 우선순위다. 구체적인 것부터 본다
+  if (hasAny(tail, ['계신가요', '계실까', '있으신가요', '겪어보신', '써보신', '해보신',
+                    '저만 그런', '저 같은', '아시는 분', '경험 있으신'])) return 'experience_call'
+  if (hasAny(tail, ['추천', '조언', '알려주세요', '어떻게 해야', '어떤 걸', '어떤게',
+                    '뭐가 나은', '도와주세요'])) return 'advice_request'
+  // 물음표는 **끝부분에 있을 때만** 센다.
+  // 🔴 어미는 낱말 목록이 아니라 규칙으로 본다 — `건가요`·`런가요`처럼 앞말이 붙으면
+  //    목록 방식은 놓친다(9판 실측). 한글 뒤에 오는 의문 어미를 통째로 잡는다
+  if (/[?？]/.test(tail) || /[가-힣](가요|나요|까요|런지요|는지요|ㄹ까)/.test(tail)) {
+    return 'explicit_question'
+  }
+  // 🔴 묻지는 않지만 듣는 사람을 향해 펴는 글 — 하소연·서운함 계열에서만
+  if ((input.tone === 'complaint' || input.tone === 'resentment' || input.tone === 'letdown'
+       || input.tone === 'panic')
+      && hasAny(tail, ['하소연', '넋두리', '답답', '속상', '털어놓', '그냥 써', '적어봤',
+                       '읽어주', '들어주'])) return 'vent_to_audience'
+  // 🔴 나머지는 부르지 않는다. 여기에 호칭이나 질문을 붙이면 그것이 AI 티다
+  return 'no_call'
+}
+
 function readInteraction(title: string, body: string, tone: EmotionTone): InteractionNeed {
   const all = `${title}\n${body}`
   if (hasAny(all, ['어떡', '도와주', '도움 좀', '알려주세요', '급해'])) return 'help_request'
@@ -368,6 +451,7 @@ export function readSourceProfile(input: {
     repeatedFixations: extractFixations(body),
     concreteDetailsToKeep: extractDetails(all),
     interactionNeed: readInteraction(title, body, tone),
+    closingIntent: readClosingIntent({ title, body, tone }),
     externalAddressTerms: EXTERNAL_ADDRESS_TERMS.filter((t) => all.includes(t)),
     originTraceTerms: originTraceHitsIn(all),
     hasSourceUrl: SOURCE_URL_RE.test(all),
@@ -411,7 +495,21 @@ const TONE_DIRECTIVE: Record<EmotionTone, string> = {
     '   🔴 원문에 **자책이나 억울함**이 있으면 그대로 살립니다 —',
     '   내 손으로 그르친 것 같은 마음은 이런 글의 핵심입니다. (없으면 만들지 않습니다)',
   ].join('\n'),
-  complaint: '불편하고 못마땅한 글입니다. 균형 잡힌 총평으로 바꾸지 마세요.',
+  // 🔴 8판 #24 피드백 — 양육비·손절 글이 점잖은 설명문이 됐다
+  complaint: [
+    '불편하고 못마땅한 글입니다. 균형 잡힌 총평으로 바꾸지 마세요.',
+    '   🔴 **점잖게 설명하지 마세요.** 속에서 올라오는 하소연입니다 —',
+    '   어이없고 화가 나고 억울한 것이 문장에 그대로 묻어나야 합니다.',
+    '   🔴 밀린 것 · 받지 못한 것의 **액수와 기간을 흐리지 않습니다.** 그게 이 글의 뼈대입니다.',
+  ].join('\n'),
+  // 🔴 8판 #26 피드백 — 화가 난 것과 **가슴이 식는 것**은 다르다
+  letdown: [
+    '서운하고 김이 새는 글입니다. **화내는 글로 쓰지 마세요** — 터지는 게 아니라 식는 쪽입니다.',
+    '   🔴 무엇이 서운했는지를 **사실로** 씁니다 — 누가 무엇을 어떻게 했고 나만 어떻게 됐는지.',
+    '   🔴 "내가 여기서 이러고 있을 일인가" 같은 **현타**가 있으면 그대로 둡니다.',
+    '   🔴 원문에 **현실 계산**(차라리 이게 낫겠다 · 시간 대비 · 그만둘까)이 있으면 살립니다.',
+    '   푸념과 자책이 섞여도 됩니다. 정리된 결론으로 끝내지 마세요.',
+  ].join('\n'),
   plain: '특별한 감정 없이 담담한 글입니다. 억지로 감정을 넣지 마세요.',
 }
 
@@ -445,10 +543,16 @@ const STRUCTURE_DIRECTIVE: Record<StructureType, string> = {
 }
 
 const INTERACTION_DIRECTIVE: Record<InteractionNeed, string> = {
-  help_request: '도움을 구하는 글입니다. 🔴 **부르는 말을 반드시 남깁니다** — "소란님들 저 진짜 어떡하죠", "저 같은 분 계세요ㅠ" 같은 호출입니다.',
-  experience_call: '겪어 본 사람을 찾는 글입니다. 🔴 "혹시 저만 그런가요", "겪어보신 소란님들 계실까요" 처럼 **사람을 부릅니다.**',
+  // 🔴 "반드시" 를 뺐다 (2026-09-02 9판). 무엇을 원하는 글인가와
+  //    실제로 부르며 끝나는가는 다른 축이다 — 부를지는 CLOSING_DIRECTIVE 가 정한다
+  help_request: '도움을 구하는 글입니다. 다급함이 문장에 남아야 합니다.',
+  experience_call: '겪어 본 사람을 찾는 글입니다. 무엇을 겪었는지 구체적으로 적습니다.',
   advice_request: '조언을 구하는 글입니다. 무엇이 궁금한지 구체적으로 적고 물어봅니다.',
   brag_share: '자랑을 나누는 글입니다. "소란님들 주말 잘 보내세요" 처럼 가볍게 건넵니다.',
+  // 🔴 2026-09-02 9판 — 여기 있던 "부르는 말이 한 번은 나옵니다" 를 **제거했다.**
+  //    그 한 줄이 *"소란님들 그래서 말인데요, 다들 어떻게 버티세요?"* 라는
+  //    공식 CTA 를 만들었다. 원문에 없는 질문을 끝에 붙이는 것이 곧 AI 티다.
+  //    부르는지 말지는 아래 CLOSING_DIRECTIVE 가 원문을 보고 정한다.
   info_share: '알게 된 것을 나누는 글입니다. 가르치는 말투가 되지 않게 합니다.',
 }
 
@@ -495,11 +599,46 @@ export function titleDirectives(p: SourceProfile): string[] {
   ]
 }
 
+/**
+ * 🔴 **어떻게 닫는가** (2026-09-02 9판).
+ *
+ * 호칭은 성공 지표가 아니다. 원문이 부를 때만 부른다.
+ * `no_call` 에 CTA 를 붙이는 것이 9판에서 나온 AI 티의 정체였다.
+ */
+const CLOSING_DIRECTIVE: Record<ClosingIntent, string[]> = {
+  explicit_question: [
+    '- 원문은 **실제로 묻고 끝납니다.** 그 질문을 살립니다.',
+    `  부를 때는 우리 호칭을 씁니다: ${SORANSORAN_ADDRESS.slice(0, 2).join(' · ')}`,
+    '  🔴 다만 원문에 없던 질문을 **더** 만들지 않습니다. 묻는 것은 하나면 됩니다.',
+  ],
+  advice_request: [
+    '- 원문은 **조언을 청하며 끝납니다.** 무엇이 궁금한지 구체적으로 적고 청합니다.',
+    `  부를 때는 우리 호칭을 씁니다: ${SORANSORAN_ADDRESS.slice(0, 2).join(' · ')}`,
+  ],
+  experience_call: [
+    '- 원문은 **겪어본 사람을 찾으며 끝납니다.** 그 호출을 살립니다.',
+    `  예: "겪어보신 ${SORANSORAN_ADDRESS[0]} 계실까요" · "혹시 저만 그런가요"`,
+  ],
+  vent_to_audience: [
+    '- 원문은 **묻지는 않지만 듣는 사람을 향해** 펴고 끝납니다.',
+    '  하소연으로 닫습니다. 🔴 **질문으로 바꾸지 마세요** — 답을 구하는 글이 아닙니다.',
+    `  호칭을 쓴다면 부르는 말이 아니라 곁의 말입니다: "${SORANSORAN_ADDRESS[0]}…" 정도.`,
+  ],
+  no_call: [
+    '- 🔴 **원문은 아무도 부르지 않고 끝납니다.** 우리 글도 그렇게 끝냅니다.',
+    '  🔴 마지막에 질문을 붙이지 않습니다. 댓글을 청하지 않습니다.',
+    `  🔴 ${SORANSORAN_ADDRESS[0]} 같은 호칭을 **억지로 넣지 않습니다.**`,
+    '  "그래서 말인데요" · "다들 어떻게 하세요?" · "댓글 부탁드려요" 같은 마무리는 **실패**입니다.',
+    '  하던 말이 끝나면 그냥 끝냅니다. 그게 사람이 쓴 글입니다.',
+  ],
+}
+
 const KIND_LABEL: Record<ConcreteDetail['kind'], string> = {
   time: '시간', date: '날짜', amount: '수치·기간', medical: '약·검사·진료',
   body: '몸의 느낌', family: '가족', emoticon: '이모티콘·자모', verbal_tic: '말버릇',
   situation: '상황(어디서·무엇을 하다가)', lifestyle: '생활 맥락(식단·체중 등)',
   usage_pattern: '어떻게 쓰고 있나(기간·중단·가끔)',
+  grievance: '무엇이 서운했나(차별·손절·밀린 것)', tradeoff: '현실 계산(차라리·가성비)',
 }
 
 /**
@@ -515,6 +654,7 @@ const KIND_LABEL: Record<ConcreteDetail['kind'], string> = {
  */
 export const MUST_KEEP_KINDS: ReadonlyArray<ConcreteDetail['kind']> = [
   'medical', 'amount', 'date', 'time', 'situation', 'lifestyle', 'body', 'usage_pattern',
+  'grievance', 'tradeoff',
 ]
 
 /**
@@ -586,6 +726,9 @@ export function profileDirectives(p: SourceProfile): string[] {
     `- 제목: ${TEMP_DIRECTIVE[p.titleTemperature]}`,
     `- ${STRUCTURE_DIRECTIVE[p.structureType]}`,
     `- ${INTERACTION_DIRECTIVE[p.interactionNeed]}`,
+    '',
+    '🔴 **글을 어떻게 닫는가** (원문이 정합니다):',
+    ...CLOSING_DIRECTIVE[p.closingIntent],
     '',
     ...(keep.length > 0
       ? ['🔴 **이 모양을 살립니다**: ' + keep.join(' · '),
