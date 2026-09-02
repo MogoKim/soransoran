@@ -404,9 +404,15 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
  *   ④ Cloudflare / 로그인 만료
  *      → 보내기 전에 probe 로 걸러낸다. 여기서는 재시도하지 않는다
  *
+ * 🔴 validate 는 **쓰기 직전**에 부른다.
+ *    저장한 뒤 검사하면 오염된 원고가 이미 디스크에 있고, 다음 단계가 그것을 받는다.
+ *    실제로 ChatGPT 인용 마커가 그렇게 흘러가 production 에 공개된 적이 있다.
+ *    받은 문자열을 여기서 고치지 않는다 — 통과하거나, 저장하지 않거나 둘 중 하나다.
+ *
+ * @param {(text: string) => { ok: boolean, reasons?: {code:string, why:string}[] }} [validate]
  * @returns {{ ok: boolean, reason?: string, length?: number, sent: boolean }}
  */
-export async function fetchManuscript({ briefPath, outPath, promptText, requiredMarkers = [], timeoutMs = 300000 }) {
+export async function fetchManuscript({ briefPath, outPath, promptText, requiredMarkers = [], validate = null, timeoutMs = 300000 }) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
   // probe 와 같은 이유로 탭을 먼저 확보한다 — 여기만 빠뜨리면 회수 단계에서 같은 실패가 난다
@@ -479,6 +485,12 @@ export async function fetchManuscript({ briefPath, outPath, promptText, required
     // 지정 문장이 빠졌으면 저장하지 않는다 — 원고를 고치지 않고 되돌린다
     const missing = requiredMarkers.filter((m) => !text.includes(m))
     if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length, length: text.length, sent }
+
+    // 🔴 관문. 여기서 막히면 파일이 생기지 않는다 — 다음 실행이 깨끗한 상태에서 다시 받는다.
+    if (validate) {
+      const v = validate(text)
+      if (!v.ok) return { ok: false, reason: 'invalid_manuscript', invalid: v.reasons ?? [], length: text.length, sent }
+    }
 
     // 🔴 여기서 처음이자 마지막으로 원고가 디스크에 닿는다. 문자열을 손대지 않는다
     writeFileSync(outPath, text)

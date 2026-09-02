@@ -1,17 +1,26 @@
 #!/usr/bin/env node
 /**
- * ChatGPT web UI runner — 구조와 접근 판정까지. **이번 단계에서는 원고를 만들지 않는다.**
+ * ChatGPT web UI runner — brief.md 를 넘기고 원고(draft.md)를 받아 온다.
  *
- * 파이프라인에서 이 스크립트가 채울 자리
+ * 파이프라인에서 이 스크립트가 채우는 자리
  *   producer ──▶ [webui runner] ──▶ md-to-draft ──▶ batch-qa ──▶ register ──▶ PR
  *                 ↑ 여기
  *
- * 🔴 지금 하지 않는 것 — 코드가 아예 없다
- *    brief 첨부 · 메시지 전송 · 응답 대기 · 원고 다운로드 · 파일 쓰기 · Slack 발송
- *    "비활성 플래그"로 막아 두지 않았다. 실수로 켜질 경로 자체를 두지 않는다.
+ * ⚠️ 이 주석은 한 번 사실과 어긋난 적이 있다.
+ *    원고 회수가 구현된 뒤에도 "이번 단계에서는 원고를 만들지 않는다 · 코드가 아예 없다" 가
+ *    그대로 남아 있었다. 그 문장을 읽고 "미구현" 으로 판정한 감사가 실제로 나왔다.
+ *    **동작을 바꾸면 이 머리말부터 고친다.**
  *
- * 🔴 지금 하는 것
- *    오늘 producer 가 고른 대상을 보여주고, ChatGPT 에 닿는지 상태만 판정한다.
+ * 🔴 여기서 하는 것
+ *    접근 판정(probe) · brief 첨부 · 전송 · 응답 대기 · 관문 통과 시 draft.md 저장.
+ *
+ * 🔴 여기서 하지 않는 것
+ *    md-to-draft · batch-qa · hero · register · PR · Slack 발송.
+ *    draft.md 까지가 종점이다. articles.ts 와 topic-queue.ts 를 건드리지 않는다.
+ *
+ * 🔴 관문을 통과하지 못한 원고는 저장하지 않는다 (lib/magazine-manuscript-guard.mjs).
+ *    빈 원고 · 너무 짧은 원고 · 한국어가 아닌 원고 · 생성기 흔적이 남은 원고는
+ *    파일이 되지 않는다. 실제로 ChatGPT 인용 마커가 새어 production 까지 간 적이 있다.
  *
  * 🔴 headed 로만 돈다.
  *    headless 는 Cloudflare 가 403 으로 막는다(7-D-12 시험 5조합에서 확인).
@@ -28,7 +37,8 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { ROOT, DRAFTS_DIR } from './lib/magazine-load.mjs'
+import { ROOT, DRAFTS_DIR, loadQueue } from './lib/magazine-load.mjs'
+import { validateManuscript, describeReasons } from './lib/magazine-manuscript-guard.mjs'
 import {
   probe, fetchManuscript, isFatal, browserAvailable, profileExists, profileInUse, cdpAvailable,
   chromeArgs, CHROME_APP, CDP_PORT,
@@ -85,13 +95,19 @@ function help() {
                                                              CDP 없으면 Chrome 을 직접 띄운다 (무인용)
   node scripts/magazine-webui-runner.mjs --login             전용 Chrome 을 띄운다 (닫지 말 것)
   node scripts/magazine-webui-runner.mjs --fetch <slug>      한 건 회수
+  node scripts/magazine-webui-runner.mjs --fetch <slug> --force
+                                                             이미 있는 draft.md 를 덮어쓴다 (사람이 켠다)
   node scripts/magazine-webui-runner.mjs --fetch-run --dry-run
                                                              오늘 selected 순회 계획만 (전송 0건)
   node scripts/magazine-webui-runner.mjs --fetch-run [--limit N]
                                                              오늘 selected 를 순회하며 회수
+  node scripts/magazine-webui-runner.mjs --status            큐 전체의 단계별 상태 (전송 0건)
+  node scripts/magazine-webui-runner.mjs --status --json
   node scripts/magazine-webui-runner.mjs --dry-run --json
 
 🔴 --fetch 는 draft.md 까지만 만든다. md-to-draft·batch-qa·register 는 돌리지 않는다.
+🔴 관문(lib/magazine-manuscript-guard.mjs)을 통과하지 못하면 저장하지 않는다.
+🔴 --force 는 일괄 회수(--fetch-run)에 적용되지 않는다. 한 건씩만 덮어쓴다.
 🔴 headed 로만 돈다 — headless 는 Cloudflare 가 막는다.
 🔴 Slack 을 보내지 않는다. 알림 등급만 계산해 반환한다.
 🔴 --login 은 Playwright 가 아니라 일반 Chrome 을 CDP 포트로 띄운다.
@@ -158,12 +174,17 @@ async function login() {
  * 🔴 이미 draft.md 가 있으면 전송하지 않는다. 재실행이 원고를 날리면 안 된다.
  * 🔴 brief 가 없으면 만들지 않는다 — 지시서는 세션이 쓴다(§13.1).
  */
-async function fetchSlug(slug, { quiet = false } = {}) {
+async function fetchSlug(slug, { quiet = false, force = false } = {}) {
   const dir = join(DRAFTS_DIR, slug)
   const briefPath = join(dir, 'brief.md')
   const outPath = join(dir, 'draft.md')
 
-  if (existsSync(outPath)) return { slug, status: 'skipped', reason: 'draft_exists', sent: false }
+  // 🔴 기본은 덮어쓰지 않는다. --force 는 사람이 한 건씩 켜는 손잡이다 —
+  //    일괄 회수(--fetch-run)에는 넘기지 않는다. 무인 경로가 원고를 갈아엎으면
+  //    사람이 손본 문장이 조용히 사라진다.
+  if (existsSync(outPath) && !force) {
+    return { slug, status: 'skipped', reason: 'draft_exists', sent: false }
+  }
   if (!existsSync(briefPath)) return { slug, status: 'skipped', reason: 'brief_missing', sent: false }
 
   // brief 의 "반드시 그대로 넣을 문장" 을 대조 기준으로 뽑는다
@@ -180,11 +201,27 @@ async function fetchSlug(slug, { quiet = false } = {}) {
     '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
     '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
     'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+    // 🔴 관문이 막는 것을 프롬프트에서도 한 번 말한다. 막는 것보다 안 나오게 하는 편이 싸다.
+    '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
   ].join(' ')
 
-  const r = await fetchManuscript({ briefPath, outPath, promptText: prompt, requiredMarkers: markers })
+  // 🔴 관문을 쓰기 직전에 건넨다. 막히면 파일이 생기지 않는다.
+  const r = await fetchManuscript({
+    briefPath,
+    outPath,
+    promptText: prompt,
+    requiredMarkers: markers,
+    validate: validateManuscript,
+  })
   if (r.ok) return { slug, status: 'ok', sent: r.sent, length: r.length }
-  return { slug, status: 'failed', reason: r.reason, sent: r.sent, missingCount: r.missingCount }
+  return {
+    slug,
+    status: 'failed',
+    reason: r.reason,
+    sent: r.sent,
+    missingCount: r.missingCount,
+    invalid: r.invalid ?? null,
+  }
 }
 
 /** 저장된 원고를 기계 검사만 한다. 내용을 출력하지 않는다 */
@@ -205,7 +242,7 @@ function describeDraft(slug) {
 }
 
 /** 단건 CLI — 사람이 부르는 경로 */
-async function fetchOne(slug) {
+async function fetchOne(slug, { force = false } = {}) {
   console.log('')
   console.log(`  원고 요청 — ${slug}`)
   console.log('  1) 접근 확인')
@@ -221,15 +258,20 @@ async function fetchOne(slug) {
     process.exit(1)
   }
 
-  console.log('  2) 회수')
-  const r = await fetchSlug(slug)
+  console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
+  const r = await fetchSlug(slug, { force })
   if (r.status === 'skipped') {
-    console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰지 않는다)' : 'brief.md 가 없다'}`)
+    console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
     process.exit(r.reason === 'brief_missing' ? 1 : 0)
   }
   if (r.status === 'failed') {
     console.error(`     ⛔ ${r.reason}${r.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''} · 전송 ${r.sent ? '1건' : '0건'}`)
+    // 🔴 관문에 막혔으면 무엇이 걸렸는지 한 줄씩 말한다. 코드만 찍으면 고칠 수가 없다.
+    if (r.invalid?.length) {
+      console.error('     관문에 막혔다 — 저장하지 않았다:')
+      for (const x of r.invalid) console.error(`       · ${x.code}: ${x.why}`)
+    }
     console.error('')
     process.exit(1)
   }
@@ -323,7 +365,7 @@ async function fetchBatch({ date, dryRun, limit }) {
       const d = describeDraft(p.slug)
       console.log(`     ✅ ${d.length}자 · h2 ${d.h2} · CTA ${d.cta}`)
     } else if (r.status === 'failed') {
-      console.log(`     ⛔ ${r.reason}`)
+      console.log(`     ⛔ ${r.reason}${r.invalid?.length ? ` — ${describeReasons(r.invalid)}` : ''}`)
       // 전역 실패면 나머지를 시도하지 않는다
       if (isFatal(r.reason)) { fatal = r.reason; console.log('     전역 실패 — 나머지를 시도하지 않는다'); break }
       console.log('     다음 글로 넘어간다')
@@ -340,17 +382,66 @@ async function fetchBatch({ date, dryRun, limit }) {
   return { planned, results, sentTotal, fatal }
 }
 
+/**
+ * 큐 전체가 어느 단계까지 왔는지 — 전송 0건, 파일만 본다.
+ *
+ * 🔴 실패한 다음 날 "무엇이 남아 있나" 를 답하는 자리다.
+ *    brief 만 있고 draft 가 없으면 회수가 막힌 것이고,
+ *    draft 는 있는데 article-draft 가 없으면 변환이 남은 것이다.
+ *    로그를 뒤지지 않고 파일 상태만으로 판단할 수 있어야 한다.
+ */
+function status() {
+  const queue = loadQueue()
+  const rows = queue.map((q) => {
+    const dir = join(DRAFTS_DIR, q.slug)
+    const has = (f) => existsSync(join(dir, f))
+    const brief = has('brief.md')
+    const review = has('review.ts')
+    const draft = has('draft.md')
+    const article = has('article-draft.ts')
+    let stage = 'brief 대기'
+    if (article) stage = '변환 완료'
+    else if (draft) stage = 'md-to-draft 대기'
+    else if (brief && review) stage = '원고 회수 대기'
+    else if (brief || review) stage = 'brief 불완전'
+    return { slug: q.slug, riskLevel: q.riskLevel, autoEligible: q.autoEligible === true, brief, review, draft, article, stage }
+  })
+
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify({ generatedAt: new Date().toISOString(), rows }, null, 2))
+    return
+  }
+
+  const count = (s) => rows.filter((r) => r.stage === s).length
+  console.log('')
+  console.log(`  매거진 원고 파이프라인 — 큐 ${rows.length}건 (전송 0건 · 파일만 본다)`)
+  console.log('')
+  console.log(`    변환 완료        ${count('변환 완료')}건`)
+  console.log(`    md-to-draft 대기 ${count('md-to-draft 대기')}건`)
+  console.log(`    원고 회수 대기   ${count('원고 회수 대기')}건`)
+  console.log(`    brief 불완전     ${count('brief 불완전')}건`)
+  console.log(`    brief 대기       ${count('brief 대기')}건`)
+  console.log('')
+
+  // 지금 회수할 수 있는 것만 따로 보여준다 — 자동 레인이 실제로 태울 대상이다
+  const ready = rows.filter((r) => r.stage === '원고 회수 대기' && r.autoEligible && r.riskLevel !== 'HIGH')
+  console.log(`  지금 회수 가능(LOW/MEDIUM · autoEligible): ${ready.length}건`)
+  for (const r of ready) console.log(`    ${r.slug.padEnd(34)}${r.riskLevel}`)
+  console.log('')
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   if (argv.includes('--help') || argv.length === 0) return help()
   if (argv.includes('--login')) return await login()
+  if (argv.includes('--status')) return status()
   if (argv.includes('--fetch')) {
     const slug = argv[argv.indexOf('--fetch') + 1]
     if (!slug || slug.startsWith('--')) {
       console.error('  --fetch <slug> 가 필요하다')
       process.exit(2)
     }
-    return await fetchOne(slug)
+    return await fetchOne(slug, { force: argv.includes('--force') })
   }
   if (argv.includes('--fetch-run')) {
     const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : todayKst()
@@ -362,7 +453,8 @@ async function main() {
 
   const dryRun = argv.includes('--dry-run')
   if (!dryRun) {
-    console.error('  이 단계에서는 --dry-run 만 쓸 수 있다. 원고 생성은 아직 구현되지 않았다.')
+    // 원고 회수는 --fetch · --fetch-run 이 한다. 그 밖의 호출은 판정만 하므로 dry-run 을 요구한다.
+    console.error('  판정 모드는 --dry-run 을 명시해야 한다. 원고 회수는 --fetch <slug> 또는 --fetch-run 이다.')
     process.exit(2)
   }
 
