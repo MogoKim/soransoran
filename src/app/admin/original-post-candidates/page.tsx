@@ -59,6 +59,8 @@ export default async function OriginalPostCandidatesPage() {
         id: true, status: true, draftTitle: true, draftBody: true,
         gateVerdict: true, gateResults: true, promptVersion: true, model: true,
         regenCount: true, createdAt: true,
+        // 🔴 code 만 읽는다. 페르소나 닉네임은 어드민에도 내지 않는다
+        matchedPersona: { select: { code: true } },
         rawContent: { select: { sourceArticleId: true, rawBody: true } },
       },
       orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
@@ -116,7 +118,7 @@ export default async function OriginalPostCandidatesPage() {
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] border-collapse text-sm">
+            <table className="w-full min-w-[920px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
                   <th className="py-2 pr-3">상태</th>
@@ -124,6 +126,7 @@ export default async function OriginalPostCandidatesPage() {
                   <th className="py-2 pr-3">제목</th>
                   <th className="py-2 pr-3">원문 → 초안</th>
                   <th className="py-2 pr-3">사유</th>
+                  <th className="py-2 pr-3">배정</th>
                   <th className="py-2 pr-3">판 · 모델</th>
                   <th className="py-2 pr-3">재생성</th>
                   <th className="py-2">생성</th>
@@ -164,6 +167,10 @@ export default async function OriginalPostCandidatesPage() {
                       </td>
                       <td className="py-2 pr-3 text-xs text-gray-600">
                         {why.length === 0 ? '—' : why.map((f) => OP_REASON_LABEL[f.code] ?? f.code).join(' · ')}
+                      </td>
+                      {/* 🔴 배정은 발행이 아니다. 값이 있어도 글은 나가지 않았다 */}
+                      <td className="py-2 pr-3 whitespace-nowrap text-xs text-gray-600">
+                        {r.matchedPersona?.code ?? '—'}
                       </td>
                       <td className="py-2 pr-3 whitespace-nowrap text-xs text-gray-600">
                         {r.promptVersion}

@@ -90,3 +90,25 @@ export function maskDraft(value: string | null | undefined): string {
   const c = [...(value ?? '').trim()]
   return c.length === 0 ? '(비어 있음)' : `${c[0]}… (${c.length}자)`
 }
+
+/**
+ * 배정 근거 한 줄. 🔴 판정하지 않는다 — 저장된 값을 사람 말로 옮길 뿐이다.
+ *
+ * 🔴 모양이 다르면 조용히 비우지 않고 "형식 불명" 을 낸다.
+ *    화면이 깨지는 것보다 낫지만, 무엇이 이상한지는 화면에 나와야 한다.
+ */
+export function formatMatchMeta(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return '—'
+  const o = value as Record<string, unknown>
+  if (typeof o.total !== 'number' || typeof o.ruleVersion !== 'string') return '(형식 불명)'
+  const top = Array.isArray(o.top)
+    ? o.top.flatMap((t) => {
+        if (typeof t !== 'object' || t === null) return []
+        const x = t as Record<string, unknown>
+        return typeof x.code === 'string' ? [x.code] : []
+      })
+    : []
+  const el = typeof o.eligibleCount === 'number' ? o.eligibleCount : '?'
+  const bl = typeof o.blockedCount === 'number' ? o.blockedCount : '?'
+  return `${o.total}점 · 후보 ${el}명 · 차단 ${bl}명 · 상위 ${top.join('·') || '—'} · 규칙 ${o.ruleVersion}`
+}
