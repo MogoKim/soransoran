@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useFormState } from 'react-dom'
 import PostEditor from '@/components/features/PostEditor'
-import WriteFooter from '@/components/features/WriteFooter'
+import WriteFooter, { WriteFooterSpacer } from '@/components/features/WriteFooter'
 import WriteTopBar from '@/components/features/WriteTopBar'
 import { createPost, type ActionState } from '@/lib/actions/posts'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
@@ -223,6 +223,8 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
         />
       </div>
 
+      {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}
+      <WriteFooterSpacer />
       <WriteFooter block={block} textLength={text.length} label="올리기" pendingLabel="올리는 중…" />
     </form>
   )

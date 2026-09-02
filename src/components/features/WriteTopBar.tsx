@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useFormStatus } from 'react-dom'
-import { useWriteViewportTop } from '@/components/features/use-write-viewport-top'
+import { useWriteViewportTop } from '@/components/features/use-write-viewport'
 import { cn } from '@/lib/utils'
 
 /**
