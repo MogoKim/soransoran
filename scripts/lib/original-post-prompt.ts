@@ -160,6 +160,12 @@ export const CRITIQUE_BANNED_PHRASES: readonly string[] = [
   '손이 떨리고',
   '글이 두서없어도 제발 봐주세요',
   '입을 벌린 채로 멍하니',
+  // 🔴 9판 — 우리 호칭을 지표로 삼자 **공식 CTA** 가 끝에 붙었다.
+  //    원문에 없는 질문을 만들어 붙이는 것이 AI 티의 정체였다
+  '그래서 말인데요',
+  '다들 어떻게 버티세요',
+  '댓글 부탁드려요',
+  '댓글로 알려주세요',
 ]
 
 /**
@@ -172,6 +178,24 @@ export const CRITIQUE_BANNED_PHRASES: readonly string[] = [
  */
 export const CRITIQUE_WATCH_PHRASES: readonly string[] = [
   '글쎄',
+  // 🔴 9판 — 그 자체가 틀린 말은 아니다. 원문이 실제로 묻는 글이면 정상이고,
+  //    아니면 억지 CTA 다. 문자열만으로는 가릴 수 없어 **경계**로만 센다
+  '다들 어떠세요',
+  '다들 어떻게 하세요',
+]
+
+/**
+ * 🔴 **마지막 문장에 붙는 CTA** — 원문이 부르지 않는데 붙었으면 실패다 (2026-09-02).
+ *
+ * 앞의 두 목록과 달리 **위치를 본다.** 같은 말도 글 중간이면 자연스럽고
+ * 마지막 줄이면 공식이다. 그래서 따로 센다.
+ */
+export const CLOSING_CTA_PATTERNS: readonly RegExp[] = [
+  /그래서\s?말인데요?/,
+  /다들\s?(어떻게|어떠)/,
+  /댓글\s?(로)?\s?(부탁|알려)/,
+  /조언\s?(좀)?\s?(부탁|주세요)/,
+  /(어떻게|어찌)\s?(해야|하면)\s?(좋을까요|될까요|하나요)\s*[?？]?\s*$/,
 ]
 
 /** 🔴 문체 자체가 실패인 것들 — 문장이 아니라 장르다 */
@@ -462,7 +486,10 @@ export function buildPrompt(input: {
     `  ${PROMPT_BODY_MIN_CHARS}자보다 짧으면 원문 요약이 됩니다. 요약은 우리 글이 아닙니다.`,
     '',
     '## 🔴 우리를 부르는 말',
-    `우리는 서로를 이렇게 부릅니다: ${SORANSORAN_ADDRESS.join(' · ')}`,
+    `부를 일이 있으면 이렇게 부릅니다: ${SORANSORAN_ADDRESS.join(' · ')}`,
+    // 🔴 2026-09-02 9판 — 호칭은 **성공 지표가 아니다.** 넣으라고 했더니 공식 CTA 가 붙었다
+    '🔴 **부를 일이 없으면 넣지 않습니다.** 위의 「글을 어떻게 닫는가」 를 따릅니다 —',
+    '   원문이 묻지 않는데 끝에 질문이나 호칭을 붙이면 그것이 AI 티입니다.',
     `🔴 다른 커뮤니티 호칭(${EXTERNAL_ADDRESS_TERMS.slice(0, 6).join(' · ')} 등)은 글에 남기지 않습니다.`,
     '🔴 **링크(URL)를 글에 남기지 않습니다.** 주소는 출처를 그대로 드러냅니다.',
     `🔴 **서비스·게시판 이름도 남기지 않습니다** (${ORIGIN_TRACE_TERMS.slice(0, 5).join(' · ')} 등).`,
@@ -493,7 +520,8 @@ export function buildPrompt(input: {
     '   · 구체적인 것(시간·약·검사·수치·이모티콘·되풀이)이 사라지지 않았나?',
     '   · 원문에 없던 사실·감정을 지어내지 않았나?',
     '   · 위 실패 표현·문체가 섞이지 않았나?',
-    '   · 부르는 말이 이 글의 목적에 맞나? 다른 커뮤니티 호칭이 남지 않았나?',
+    '   · 🔴 마지막 문장에 원문에 없던 질문·댓글 유도·호칭을 붙이지 않았나?',
+    '   · 다른 커뮤니티 호칭이 남지 않았나?',
     '   · 문장이 너무 매끄럽지 않나? (매끄러우면 그것이 실패 신호입니다)',
     '   · 링크·서비스 이름·게시판 이름·다른 커뮤니티 호칭이 남지 않았나?',
     '   · 제목이 조용한 요약이 되지 않았나? 원문 온도보다 낮지 않나?',
@@ -804,6 +832,18 @@ export type DraftSignals = {
    * 🔴 판정이 아니라 신호다 — 짧은 글에서는 우연히 높게 나온다.
    */
   emoticonEvenness: number | null
+  /**
+   * 🔴 **마지막 줄에 붙은 CTA** (2026-09-02 9판).
+   *
+   * 우리 호칭 개수를 성공 지표로 삼았더니 *"소란님들 그래서 말인데요,
+   * 다들 어떻게 버티세요?"* 같은 공식 CTA 가 생겼다.
+   * 이제 호칭 수를 세지 않고 **끝에 억지로 붙었는지**를 본다 —
+   * 원문이 부르는 글인지는 source profile 의 `closingIntent` 가 안다.
+   *
+   * 🔴 판정이 아니다. 원문이 실제로 묻는 글이면 여기 걸려도 정상이다.
+   *    둘을 맞춰 보는 것은 사람의 일이다.
+   */
+  closingCtaHits: readonly string[]
 }
 
 const wordsOf = (t: string): string[] =>
@@ -867,6 +907,12 @@ export function analyzeDraft(input: {
     critiqueWatchHits: CRITIQUE_WATCH_PHRASES.filter((x) => draft.includes(x)),
     urlHits: (draft.match(SOURCE_URL_RE_G) ?? []).map((m) => m.trim()),
     originTraceHits: originTraceHitsIn(draft),
+    closingCtaHits: (() => {
+      // 🔴 마지막 두 줄만 본다. 같은 말도 중간이면 자연스럽고 끝이면 공식이다
+      const lines = body.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+      const tail = lines.slice(-2).join('\n')
+      return CLOSING_CTA_PATTERNS.map((re) => tail.match(re)?.[0]?.trim() ?? '').filter((m) => m !== '')
+    })(),
     emoticonEvenness: (() => {
       const lines = body.split('\n').map((l) => l.trim()).filter((l) => l !== '')
       // 🔴 줄이 3개 미만이면 분모가 너무 작아 의미 없는 값이 나온다. null 로 둔다 —

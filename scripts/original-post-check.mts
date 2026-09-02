@@ -722,7 +722,10 @@ console.log('\n══════ ⑰ 🔴 source profile — 원문을 규칙�
     profileDirectives(withUrl).join('\n').includes('최종 글에 주소를 옮기지 않습니다'), true)
   expect('  URL 없으면 그 지시도 없다', p7.hasSourceUrl, false)
   expect('  🔴 되풀이는 붙들린 지점이라고 말한다', d7.includes('붙들린 지점'), true)
-  expect('  🔴 부르는 말을 남기라고 말한다', d7.includes('소란님들 저 진짜 어떡하죠'), true)
+  // 🔴 2026-09-02 9판 — interactionNeed 는 더 이상 부르기를 강제하지 않는다.
+  //    "부를지" 는 closingIntent 가 원문을 보고 정한다(아래 ㉙ 참조)
+  expect('  다급함이 남아야 한다고 말한다', d7.includes('다급함이 문장에 남아야'), true)
+  expect('  🔴 호출을 강제하지 않는다', d7.includes('부르는 말을 반드시 남깁니다'), false)
   expect('  🔴 코드값을 그대로 내보내지 않는다', d7.includes('panic') || d7.includes('numbered_list'), false)
 
   // 🔴 #8 도시락: 밝은 주접글. 3판이 신파 수필로 바꾸고 없던 쓸쓸함을 넣었다
@@ -1319,6 +1322,236 @@ console.log('\n══════ ㉗ 🔴 생성기 상한 · 선정 배선 (�
   expect('  🔴 Post 를 만들지 않는다', /post\.create|post\.upsert/.test(code), false)
   expect('  🔴 직접 fetch 하지 않는다', /\bfetch\(/.test(code), false)
   expect('  🔴 Sheet 를 쓰지 않는다', /Sheet|sheet/.test(code), false)
+}
+
+console.log('\n══════ ㉘ 🔴 8판 — 서운함·하소연 · 금액 · #25 보존')
+{
+  // ── #26(4234422) 계열: 서운함 · 현타 · 현실 계산 ──
+  const LETDOWN = readSourceProfile({
+    rawTitle: '제가 지금 첫 월급받고 현타왔어요',
+    rawBody: [
+      '첫 월급이 188만원인데 알고 보니 전 직원은 더 받았더라고요',
+      '사장이 치사하게 저만 빼고 얘기했던 거예요 알게 되니까 가슴이 식더라고요',
+      '내가 여기서 이러고 있을 일인가 싶고 현타가 오네요',
+      '차라리 과외하고 전기자전거로 배달 뛰는 게 시간 대비 가성비도 낫겠다 싶어요',
+      '밀린 것만 1억이 넘는다는 얘기도 들었고요 그만둘까 고민이에요',
+    ].join('\n'),
+  })
+  expect('#26 계열은 담담한 글이 아니다', LETDOWN.emotionTone === 'plain', false)
+  expect('  🔴 서운함(letdown)으로 읽는다', LETDOWN.emotionTone, 'letdown')
+  const lMust = mustKeepDetails(LETDOWN.concreteDetailsToKeep)
+  const lKinds = new Set(lMust.map((d) => d.kind))
+  const lSamples = lMust.map((d) => d.sample).join(' ')
+  expect('  🔴 현실 계산을 잡는다(tradeoff)', lKinds.has('tradeoff'), true)
+  expect('    현타', lSamples.includes('현타'), true)
+  expect('    차라리', lSamples.includes('차라리'), true)
+  expect('    가성비', lSamples.includes('가성비'), true)
+  expect('  🔴 치사함·차별을 잡는다(grievance)', lKinds.has('grievance'), true)
+  expect('  🔴 금액 188만원', lSamples.includes('188만원'), true)
+  expect('  🔴 1억 을 잡는다 (이전엔 억 단위가 통째로 누락됐다)', lSamples.includes('1억'), true)
+
+  const dL = profileDirectives(LETDOWN).join('\n')
+  expect('  🔴 화내는 글로 쓰지 말라', dL.includes('화내는 글로 쓰지 마세요'), true)
+  expect('    터지는 게 아니라 식는 쪽', dL.includes('터지는 게 아니라 식는 쪽'), true)
+  expect('  🔴 현타를 그대로 두라', dL.includes('그대로 둡니다'), true)
+  expect('  🔴 현실 계산을 살리라', dL.includes('현실 계산'), true)
+  expect('    정리된 결론으로 끝내지 말라', dL.includes('정리된 결론으로 끝내지 마세요'), true)
+  // 🔴 분통(resentment)과 온도가 달라야 한다. 같으면 새 톤을 만든 의미가 없다
+  const ANGRY = readSourceProfile({
+    rawTitle: '진짜 억울해서 잠이 안 와요',
+    rawBody: '어제 그 사람이 화나게 만들어서 분통이 터졌어요 억울하고 열받아서 밤새 뒤척였어요 어이없는 일이 한두 번이 아니라 정말 짜증나고 화가 납니다 이런 경우가 어디 있나요',
+  })
+  expect('🔴 분통 글과 서운함 글은 다른 톤', ANGRY.emotionTone === LETDOWN.emotionTone, false)
+  expect('  분통은 resentment', ANGRY.emotionTone, 'resentment')
+  expect('  지시도 다르다',
+    profileDirectives(ANGRY).join('\n') === dL, false)
+
+  // ── #24(4234431) 계열: 양육비 · 손절 · 하소연 ──
+  const GRIEF = readSourceProfile({
+    rawTitle: '전남편한테 큰상처를받았어요',
+    rawBody: [
+      '양육비 밀린 것만 1억이 넘어요 10년 넘게 한 푼도 못 받았습니다',
+      '아이가 저한테 실망했다고 손절을 선언했어요 연락도 끊었고요',
+      // 🔴 fixture 문구에 `미치겠` 을 쓰지 않는다 — panic 사전에 걸려 톤이 갈린다.
+      //    (실제 원문 4234431 은 complaint 로 읽힌다)
+      '엄마로서 속이 다 뒤집힙니다 정말 최악이에요',
+      '1년 전에 중단했다가 다시 소송을 알아보는 중이에요',
+    ].join('\n'),
+  })
+  expect('#24 계열은 하소연 톤이다', GRIEF.emotionTone, 'complaint')
+  const gMust = mustKeepDetails(GRIEF.concreteDetailsToKeep)
+  const gKinds = new Set(gMust.map((d) => d.kind))
+  const gSamples = gMust.map((d) => d.sample).join(' ')
+  expect('#24 계열 🔴 1억 을 필수로 잡는다', gSamples.includes('1억'), true)
+  expect('  🔴 양육비를 잡는다', gSamples.includes('양육비'), true)
+  expect('  🔴 손절을 잡는다', gSamples.includes('손절'), true)
+  expect('    실망도', gSamples.includes('실망'), true)
+  expect('  grievance 종류가 있다', gKinds.has('grievance'), true)
+  const dG = profileDirectives(GRIEF).join('\n')
+  expect('  🔴 점잖게 설명하지 말라', dG.includes('점잖게 설명하지 마세요'), true)
+  expect('    속에서 올라오는 하소연이라고 말한다', dG.includes('속에서 올라오는 하소연'), true)
+  expect('  🔴 액수와 기간을 흐리지 말라', dG.includes('액수와 기간을 흐리지 않습니다'), true)
+  // 🔴 2026-09-02 9판 — 여기 있던 "부르는 말이 한 번은 나옵니다" 를 **제거했다.**
+  //    그 한 줄이 공식 CTA 를 만들었다. 부를지는 closingIntent 가 정한다
+  expect('  🔴 info_share 가 부르기를 강요하지 않는다', dG.includes('부르는 말이 한 번은 나옵니다'), false)
+
+  // ── 🔴 #25(4234470) 보존 — 좋은 예시를 망가뜨리지 않는다 ──
+  const GOOD = readSourceProfile({
+    rawTitle: '당근에서 집안일 도와주시는 분을 구했는데',
+    rawBody: [
+      '오늘 새벽에 잠이 깨서 생각해보니 좀 그렇더라고요',
+      '당근에서 구한 분인데 이번 주부터 오시기로 했어요',
+      '무릎약 드시면서도 일하시겠다고 하시고 간식도 챙겨드렸는데',
+      // 🔴 fixture 문구에 `불편` 을 쓰지 않는다 — complaint 사전에 걸린다.
+      //    실제 원문 4234470 에는 그 낱말이 없고 plain 으로 읽힌다
+      '괜히 제 마음만 쓰여서 어떻게 해야 할지 모르겠어요',
+    ].join('\n'),
+  })
+  expect('🔴 #25 계열은 새 톤에 걸리지 않는다', GOOD.emotionTone === 'letdown', false)
+  expect('  담담한 글 그대로', GOOD.emotionTone, 'plain')
+  expect('  도움 요청 그대로', GOOD.interactionNeed, 'help_request')
+  const dGood = profileDirectives(GOOD).join('\n')
+  expect('  🔴 서운함 지시가 붙지 않는다', dGood.includes('화내는 글로 쓰지 마세요'), false)
+  expect('  🔴 하소연 지시도 붙지 않는다', dGood.includes('점잖게 설명하지 마세요'), false)
+  expect('  🔴 grievance·tradeoff 가 잡히지 않는다',
+    mustKeepDetails(GOOD.concreteDetailsToKeep).some((d) => d.kind === 'grievance' || d.kind === 'tradeoff'), false)
+  // 🔴 9판 — #30 이 이 지시로 원문에 없는 CTA 를 끝에 붙였다. 강제를 뺐다
+  expect('  🔴 도움 요청도 호출을 강제하지 않는다', dGood.includes('부르는 말을 반드시 남깁니다'), false)
+  expect('    다급함 지시는 남는다', dGood.includes('다급함이 문장에 남아야'), true)
+
+  // ── 새 규칙이 좁은가 — 정상 글을 죽이지 않는다 ──
+  const NORMAL = readSourceProfile({
+    rawTitle: '오늘 김치를 담갔어요',
+    rawBody: '아침부터 배추를 절이고 오후에 양념을 버무렸어요 힘은 들었지만 냉장고에 넣고 나니 마음이 놓이네요 올해는 20포기만 했습니다 다들 김장 하셨나요',
+  })
+  expect('🔴 평범한 생활글은 letdown 아님', NORMAL.emotionTone === 'letdown', false)
+  expect('  grievance 도 안 잡힌다',
+    NORMAL.concreteDetailsToKeep.some((d) => d.kind === 'grievance'), false)
+  expect('  tradeoff 도 안 잡힌다',
+    NORMAL.concreteDetailsToKeep.some((d) => d.kind === 'tradeoff'), false)
+
+  // ── 금액 단위 ──
+  const money = (b: string) => mustKeepDetails(readSourceProfile({ rawTitle: '돈 이야기', rawBody: b + ' 어제 오늘 계속 생각이 나서 여기에 적어봅니다 다들 어떻게 하시는지 궁금해요 정말 고민이 많이 되네요' }).concreteDetailsToKeep).map((d) => d.sample).join(' ')
+  expect('금액 — 1억', money('밀린 게 1억이 넘어요').includes('1억'), true)
+  expect('  3억 5천만', /3억|5천만/.test(money('집이 3억 5천만원이에요')), true)
+  expect('  188만원(기존)', money('월급이 188만원이에요').includes('188만원'), true)
+  expect('  20만원(기존)', money('20만원 들었어요').includes('20만원'), true)
+}
+
+console.log('\n══════ ㉙ 🔴 9판 — 닫는 방식 (호칭은 지표가 아니다)')
+{
+  const prof = (body: string, title = '어제 있었던 일') =>
+    readSourceProfile({ rawTitle: title, rawBody: body + '\n어제부터 계속 생각이 나서 여기에 적어봅니다 정말 여러 가지로 마음이 복잡하네요' })
+  const closing = (tail: string, head = '오늘 하루 종일 이 생각만 했어요 어제 일이 자꾸 떠올라서요 정말 여러모로 마음이 복잡합니다') =>
+    readSourceProfile({ rawTitle: '어제 있었던 일', rawBody: `${head}\n${tail}` }).closingIntent
+
+  // ── 원문이 실제로 묻으면 그대로 살린다 ──
+  expect('물음표로 끝나면 explicit_question', closing('이럴 땐 어떻게 하는 게 맞을까요?'), 'explicit_question')
+  expect('  ~인가요 도', closing('제가 예민한 건가요'), 'explicit_question')
+  expect('조언을 청하면 advice_request', closing('좋은 방법 있으면 알려주세요'), 'advice_request')
+  expect('  추천도', closing('괜찮은 곳 추천 좀 부탁드려요'), 'advice_request')
+  expect('겪은 사람을 찾으면 experience_call', closing('혹시 겪어보신 분 계실까요'), 'experience_call')
+  expect('  저만 그런가요 도', closing('저만 그런 건지 궁금해요 저 같은 분 계신가요'), 'experience_call')
+
+  // ── 🔴 부르지 않고 끝나면 no_call ──
+  expect('🔴 그냥 끝나면 no_call', closing('그래서 오늘은 일찍 잤습니다'), 'no_call')
+  expect('  담담하게 닫아도 no_call', closing('내일은 좀 나아지겠지요'), 'no_call')
+  // 🔴 중간에 물음표가 있어도 끝에 없으면 부르지 않는 글이다
+  // 🔴 CLOSING_TAIL_LINES(3) 보다 줄이 많아야 앞부분이 꼬리 밖으로 나간다
+  expect('🔴 중간 물음표는 세지 않는다',
+    readSourceProfile({
+      rawTitle: '어제 있었던 일',
+      rawBody: [
+        '왜 그럴까요? 한참을 생각했습니다',
+        '정말 알 수가 없더라고요',
+        '하루 종일 그 생각뿐이었어요',
+        '밥도 잘 안 넘어가더라고요',
+        '그냥 그렇게 지나갔어요',
+      ].join('\n'),
+    }).closingIntent, 'no_call')
+
+  // ── 하소연으로 펴고 끝나는 글 ──
+  const vent = readSourceProfile({
+    rawTitle: '너무 속상해서요',
+    rawBody: '어제 그 일 때문에 하루 종일 화가 나고 어이가 없었어요 최악이었습니다 정말 실망스러웠고요\n그냥 답답해서 여기에 하소연 좀 했습니다',
+  })
+  expect('하소연으로 닫으면 vent_to_audience', vent.closingIntent, 'vent_to_audience')
+  // 🔴 담담한 글에는 vent 가 붙지 않는다 — 톤을 함께 본다
+  expect('  🔴 담담한 글은 vent 아님', closing('그냥 답답해서 적어봤어요'), 'no_call')
+
+  // ── 지시문 ──
+  const dNo = profileDirectives(prof('그래서 오늘은 일찍 잤습니다')).join('\n')
+  expect('🔴 no_call 은 아무도 부르지 않는다고 말한다', dNo.includes('아무도 부르지 않고 끝납니다'), true)
+  expect('  🔴 마지막에 질문을 붙이지 말라', dNo.includes('마지막에 질문을 붙이지 않습니다'), true)
+  expect('  🔴 댓글을 청하지 말라', dNo.includes('댓글을 청하지 않습니다'), true)
+  expect('  🔴 호칭을 억지로 넣지 말라', dNo.includes('억지로 넣지 않습니다'), true)
+  expect('  실패 예시를 든다', dNo.includes('그래서 말인데요'), true)
+  expect('  그냥 끝내라', dNo.includes('하던 말이 끝나면 그냥 끝냅니다'), true)
+
+  const dQ = profileDirectives(readSourceProfile({
+    rawTitle: '어떻게 해야 할까요',
+    rawBody: '요즘 계속 이런 일이 반복돼서 고민입니다 어제도 그랬고 오늘도 그랬어요 정말 어찌해야 할지 모르겠어요\n이럴 땐 어떻게 하는 게 맞을까요?',
+  })).join('\n')
+  expect('🔴 묻는 글은 질문을 살리라고 말한다', dQ.includes('실제로 묻고 끝납니다'), true)
+  expect('  🔴 질문을 더 만들지는 말라', dQ.includes('묻는 것은 하나면 됩니다'), true)
+  expect('  🔴 no_call 지시는 붙지 않는다', dQ.includes('아무도 부르지 않고 끝납니다'), false)
+
+  const dVent = profileDirectives(vent).join('\n')
+  expect('🔴 하소연 글을 질문으로 바꾸지 말라', dVent.includes('질문으로 바꾸지 마세요'), true)
+  expect('  답을 구하는 글이 아니라고 말한다', dVent.includes('답을 구하는 글이 아닙니다'), true)
+
+  // ── 호칭 정책이 조건부로 바뀌었다 ──
+  const sysNo = (() => {
+    const p2 = buildPrompt({
+      // 🔴 RAW_BODY_MIN_CHARS(120) 를 넘겨야 buildPrompt 가 막지 않는다
+      raw: {
+        id: 'r',
+        rawTitle: '어제 있었던 일',
+        rawBody: [
+          '오늘 하루 종일 이 생각만 했어요 어제 일이 자꾸 떠올라서요',
+          '정말 여러모로 마음이 복잡하고 이런저런 생각이 많이 들었습니다',
+          '점심도 대충 때우고 오후 내내 멍하게 앉아만 있었어요',
+          '저녁에는 산책도 좀 하고 라디오도 켜 두었습니다',
+          '창밖을 한참 보다가 설거지를 하고 나니 조금 나아지더라고요',
+          '그래서 오늘은 일찍 잤습니다',
+        ].join('\n'),
+        sourceSite: '82cook',
+      },
+      boardHint: 'FREE',
+    })
+    return p2.ok ? p2.prompt.systemPrompt : ''
+  })()
+  expect('🔴 부를 일 없으면 넣지 말라고 말한다', sysNo.includes('부를 일이 없으면 넣지 않습니다'), true)
+  expect('  붙이면 AI 티라고 말한다', sysNo.includes('붙이면 그것이 AI 티입니다'), true)
+  expect('  내부 점검에도 들어간다', sysNo.includes('원문에 없던 질문·댓글 유도·호칭을 붙이지 않았나'), true)
+  // 🔴 외부 호칭 금지는 그대로다
+  expect('  🔴 외부 호칭 금지는 유지', sysNo.includes('글에 남기지 않습니다'), true)
+
+  // ── 계측: 마지막 줄의 CTA 만 센다 ──
+  const cta = (b: string) => analyzeDraft({ title: 'ㅇ', body: b, sourceTexts: [] }).closingCtaHits
+  expect('🔴 끝에 "그래서 말인데요" → 잡힌다',
+    cta('어제는 그랬어요\n소란님들 그래서 말인데요 저는 어떡하죠').length > 0, true)
+  expect('  "다들 어떻게 버티세요" 도', cta('힘드네요\n다들 어떻게 버티세요?').length > 0, true)
+  expect('  "댓글 부탁드려요" 도', cta('그랬습니다\n댓글 부탁드려요').length > 0, true)
+  // 🔴 같은 말도 **중간**이면 세지 않는다 — 위치가 곧 공식 여부다
+  expect('🔴 중간에 있으면 세지 않는다',
+    cta('다들 어떻게 하시는지 궁금해서 물어봤어요\n그랬더니 답이 왔고\n덕분에 잘 해결했습니다').length, 0)
+  expect('  깨끗하면 0건', cta('어제는 김치를 담갔어요\n올해는 스무 포기만 했습니다').length, 0)
+  // 🔴 실패 표현으로도 잡힌다
+  for (const x of ['그래서 말인데요', '다들 어떻게 버티세요', '댓글 부탁드려요']) {
+    expect(`  실패 표현 목록 — "${x}"`, CRITIQUE_BANNED_PHRASES.includes(x), true)
+  }
+  expect('  "다들 어떠세요" 는 경계로만', CRITIQUE_WATCH_PHRASES.includes('다들 어떠세요'), true)
+  expect('    실패로는 세지 않는다', CRITIQUE_BANNED_PHRASES.includes('다들 어떠세요'), false)
+
+  // ── 🔴 정상 질문글까지 죽이지 않는다 ──
+  const normalQ = analyzeDraft({
+    title: '물세안 계속해도 될까요',
+    body: '3개월째 물세안 중인데 폼클을 다시 썼더니 뒤집어졌어요\n계속 물세안만 해도 괜찮을까요?',
+    sourceTexts: [],
+  })
+  expect('🔴 정상 질문은 실패 표현 0', normalQ.critiqueHits.length, 0)
+  expect('  CTA 로도 안 잡힌다', normalQ.closingCtaHits.length, 0)
 }
 
 console.log('\n══════ ㉑ 🔴 생성기가 프로파일을 배선했는가 (정적 검사)')
