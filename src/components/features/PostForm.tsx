@@ -17,6 +17,7 @@ import {
   POST_TITLE_PLACEHOLDER,
 } from '@/lib/post-policy'
 import { readDraft, removeDraft, saveDraft, type PostDraft } from '@/lib/write-draft'
+import { toEditorHtml } from '@/lib/post-content-format'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 
 const DRAFT_SAVE_DELAY_MS = 1000
@@ -37,6 +38,12 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
    *    5000 자 상한이 차 버린다. 서버도 같은 기준으로 본다(post-html.ts).
    */
   const [text, setText] = useState('')
+  /**
+   * 🔴 사진을 올리는 동안 등록을 막는다.
+   *    올리는 중에는 본문에 든 것이 아직 blob: 주소다. 그대로 보내면
+   *    sanitize 가 걸러 내 "분명히 넣었는데 올리고 나니 없는" 글이 된다.
+   */
+  const [uploading, setUploading] = useState(false)
   const [restored, setRestored] = useState(false)
 
   // 이벤트 핸들러가 재등록 없이 최신 입력을 읽게 한다.
@@ -56,7 +63,11 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
      *    태그 한가운데가 끊겨 사진이 사라지거나 문단이 깨진 채 복원된다.
      *    길이는 서버가 글자 기준으로 다시 본다.
      */
-    setContent(draft.content)
+    /**
+     * 🔴 임시저장된 것이 평문일 수 있다 — 에디터가 들어오기 전에 쓰다 만 글이다.
+     *    평문을 그대로 Tiptap 에 넣으면 줄바꿈이 접힌다. HTML 로 바꿔 넣는다.
+     */
+    setContent(toEditorHtml(draft.content))
     setEditorKey((n) => n + 1)
     setRestored(true)
   }
@@ -121,6 +132,7 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
   //    서버도 같은 규칙이다(actions/posts.ts).
   const hasImage = content.includes('<img')
   const canSubmit =
+    !uploading &&
     title.trim().length >= MIN_POST_TITLE_LENGTH &&
     (hasImage || text.trim().length >= MIN_POST_CONTENT_LENGTH)
 
@@ -195,6 +207,7 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
           value={content}
           onChange={setContent}
           onTextChange={setText}
+          onBusyChange={setUploading}
           placeholder={POST_CONTENT_PLACEHOLDER}
         />
       </div>
@@ -208,6 +221,13 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
           }`}
         >
           {text.length}/{MAX_POST_CONTENT_LENGTH}
+        </p>
+      ) : null}
+
+      {/* 🔴 왜 못 누르는지 말해 준다. 잠긴 버튼만 두면 고장으로 읽힌다. */}
+      {uploading ? (
+        <p role="status" className="-mb-2 text-sm text-content-muted">
+          사진을 올리고 있어요. 끝나면 올릴 수 있습니다.
         </p>
       ) : null}
 

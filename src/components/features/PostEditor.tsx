@@ -83,6 +83,7 @@ export default function PostEditor({
   value,
   onChange,
   onTextChange,
+  onBusyChange,
   placeholder,
 }: {
   /** 본문 HTML. 처음 한 번만 에디터에 넣는다. */
@@ -90,6 +91,15 @@ export default function PostEditor({
   onChange: (html: string) => void
   /** 글자만 뽑은 길이 — 부모가 글자 수·제출 가능 여부를 판단한다. */
   onTextChange: (text: string) => void
+  /**
+   * 사진을 올리는 중인가.
+   *
+   * 🔴 부모가 이걸 알아야 등록 버튼을 잠글 수 있다.
+   *    올리는 동안 화면에는 사진이 보이지만 본문에 들어 있는 것은
+   *    아직 blob: 주소다. 그대로 저장하면 sanitize 가 걸러 내
+   *    "분명히 넣었는데 올리고 나니 없는" 글이 된다.
+   */
+  onBusyChange?: (busy: boolean) => void
   placeholder: string
 }) {
   const [uploading, setUploading] = useState<Upload | null>(null)
@@ -105,6 +115,22 @@ export default function PostEditor({
   // 화면을 떠난 뒤 setState 가 도는 것을 막는다 — 올리는 도중 뒤로 가면 생긴다.
   const aliveRef = useRef(true)
   useEffect(() => () => { aliveRef.current = false }, [])
+
+  /**
+   * 🔴 콜백을 ref 로 들고 uploading 만 의존성에 둔다.
+   *    부모가 인라인 함수를 넘기면 매 렌더마다 새 함수가 되어,
+   *    onBusyChange 를 의존성에 넣는 순간 렌더마다 부모 state 를 건드려
+   *    무한 루프가 된다.
+   *
+   * 🔴 화면을 떠날 때 false 로 되돌린다. 올리다 만 채로 나가면
+   *    부모의 버튼이 영영 잠긴 채로 남는다.
+   */
+  const onBusyChangeRef = useRef(onBusyChange)
+  onBusyChangeRef.current = onBusyChange
+  useEffect(() => {
+    onBusyChangeRef.current?.(uploading !== null)
+    return () => onBusyChangeRef.current?.(false)
+  }, [uploading])
 
   const editor = useEditor({
     // Next.js 서버 렌더와 맞물리면 hydration 이 어긋난다. 브라우저에서만 그린다.
@@ -168,6 +194,18 @@ export default function PostEditor({
 
   useEffect(() => {
     editorRef.current = editor
+  }, [editor])
+
+  /**
+   * 🔴 에디터가 붙자마자 글자 수를 한 번 올린다.
+   *    Tiptap 의 onUpdate 는 사람이 친 뒤에만 돈다. 그 전까지 부모는
+   *    처음 넘긴 문자열(HTML)의 길이를 글자 수로 알고 있다 —
+   *    옛 글을 고치러 들어와 아무것도 치지 않고 저장할 때 이 값으로 판정된다.
+   */
+  const onTextChangeRef = useRef(onTextChange)
+  onTextChangeRef.current = onTextChange
+  useEffect(() => {
+    if (editor) onTextChangeRef.current(editor.getText())
   }, [editor])
 
   /**

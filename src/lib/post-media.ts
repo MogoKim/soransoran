@@ -1,4 +1,4 @@
-import { toR2Key, isOwnPublicUrl } from '@/lib/r2'
+import { toR2Key, isOwnPublicUrl } from '@/lib/r2-public'
 
 /**
  * 본문에 붙어 있는 사진을 세는 자리.
@@ -43,9 +43,17 @@ export function extractOwnImageKeys(html: string): string[] {
  * 대표 사진 — 목록·공유 카드에 쓴다. 없으면 null.
  *
  * 🔴 첫 장을 쓴다. 사람이 제일 먼저 보여주려고 올린 것이 대개 첫 장이다.
+ *
+ * 🔴 우리 R2 사진만 고른다. 남의 서버에 걸린 주소를 대표로 담으면
+ *    그쪽이 지우는 순간 우리 목록·공유 카드가 깨지고, 바꿔치기하면
+ *    우리 카드에 다른 그림이 실린다. 우리가 통제할 수 없는 것을 대표로 세우지 않는다.
+ *
+ *    sanitize 가 이미 외부 img 를 지우므로 저장 경로에서는 걸릴 일이 없지만,
+ *    이 함수는 sanitize 를 지나지 않은 문자열로도 불릴 수 있다.
+ *    "지나서 부르기로 했다" 는 약속은 코드가 아니다.
  */
 export function firstImageUrl(html: string): string | null {
-  return extractImageUrls(html)[0] ?? null
+  return extractOwnImageUrls(html)[0] ?? null
 }
 
 /**

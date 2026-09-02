@@ -1,5 +1,9 @@
 import 'server-only'
 import sanitize from 'sanitize-html'
+import { isOwnPublicUrl } from '@/lib/r2-public'
+import { isHtmlContent, plainTextToHtml } from '@/lib/post-content-format'
+
+export { isHtmlContent, plainTextToHtml, toEditorHtml } from '@/lib/post-content-format'
 
 /**
  * 글 본문 HTML — 저장·렌더 양쪽이 보는 유일한 규칙.
@@ -16,6 +20,12 @@ import sanitize from 'sanitize-html'
  *
  * 🔴 iframe 은 유튜브 3개 호스트만이다. 다른 곳을 열려면 이 목록을 고쳐야 하고,
  *    고치는 순간 이 주석이 보인다. 그것이 목적이다.
+ *
+ * 🔴 img 는 우리 R2 주소만이다. "https 면 통과" 로 두면 업로드 정책이 통째로 무의미해진다 —
+ *    사람이 외부 이미지 주소를 본문에 직접 넣는 순간 4MB·6장 제한도, WebP 변환도,
+ *    로그인 검사도, 나중에 만들 정리 정책도 지나지 않는다.
+ *    남의 서버에 걸린 사진은 그쪽이 지우면 우리 글에서 깨지고, 바꿔치기하면
+ *    우리 글에 다른 그림이 뜬다. 우리가 통제할 수 없는 것을 본문에 담지 않는다.
  */
 
 /** 유튜브 임베드만 허용한다. 타사 영상·임의 embed 는 1차 범위 밖이다. */
@@ -58,9 +68,19 @@ const OPTIONS: sanitize.IOptions = {
    *    "/admin/..." 같은 값이 들어오면 우리 화면을 우리 글 안에 그리게 된다.
    */
   exclusiveFilter: (frame) => {
-    if (frame.tag !== 'img' && frame.tag !== 'iframe') return false
     const src = frame.attribs.src
-    return !src || !src.startsWith('https://')
+    if (frame.tag === 'img') {
+      // 🔴 우리 R2 주소가 아니면 태그째 지운다.
+      //    외부 https · blob: · data: · 상대경로가 전부 여기서 걸린다.
+      //    src 만 떼고 태그를 남기면 화면에 깨진 액자가 뜬다.
+      return !src || !isOwnPublicUrl(src)
+    }
+    if (frame.tag === 'iframe') {
+      // 유튜브 호스트 검사는 allowedIframeHostnames 가 이미 했다.
+      // 여기서는 그 검사에 걸려 src 를 잃은 빈 상자를 치운다.
+      return !src || !src.startsWith('https://')
+    }
+    return false
   },
 }
 
@@ -70,45 +90,10 @@ export function sanitizePostHtml(dirty: string): string {
 }
 
 /**
- * 이 본문이 에디터가 만든 HTML 인가.
- *
- * 🔴 기존 글(평문)과 새 글(HTML)이 한 컬럼에 섞인다. 마이그레이션으로
- *    옛 글을 HTML 로 바꾸지 않는다 — 26 건을 한 번에 치환하다 실패하면
- *    되돌릴 근거가 없다. 대신 읽을 때 어느 쪽인지 판별한다.
- *
- * 🔴 "< 가 들어 있으면 HTML" 로 보지 않는다.
- *    평문에도 "<3" 이나 "가격 < 만원" 같은 글자가 들어온다.
- *    Tiptap 이 내는 것은 항상 블록 태그로 시작하므로 그것만 본다.
+ * 기존 글(평문)과 새 글(HTML)이 한 컬럼에 섞인다. 마이그레이션으로 옛 글을
+ * HTML 로 바꾸지 않는다 — 26 건을 한 번에 치환하다 실패하면 되돌릴 근거가 없다.
+ * 대신 읽을 때 어느 쪽인지 판별한다(post-content-format.ts).
  */
-const HTML_HEAD = /^\s*<(?:p|div|img|iframe|figure|ul|ol|blockquote|h[1-6])[\s>/]/i
-
-export function isHtmlContent(content: string): boolean {
-  return HTML_HEAD.test(content)
-}
-
-/**
- * 평문을 HTML 로 바꾼다 — 옛 글의 줄바꿈을 지키는 자리.
- *
- * 🔴 이스케이프를 먼저 하고 <br> 을 넣는다. 순서가 바뀌면
- *    본문에 적힌 "<br>" 글자가 진짜 줄바꿈이 된다.
- *
- * 🔴 빈 줄을 문단(<p>)으로 나누지 않는다. 줄바꿈 하나에 <br> 하나다.
- *    <p> 로 나누면 문단 여백(0.6em×2)이 붙어, 지금까지 whitespace-pre-wrap 으로
- *    보이던 빈 줄(1.85em)보다 간격이 좁아진다. 26 건이 전부 조금씩 달라 보인다 —
- *    "안 깨진다" 로는 부족하고 어제와 같아 보여야 한다.
- *
- * 🔴 \r\n 을 먼저 \n 으로 맞춘다. 실제 글에 섞여 있다(실측).
- *    그대로 두면 \r 이 HTML 에 남고 줄 수 계산도 어긋난다.
- */
-export function plainTextToHtml(text: string): string {
-  const escaped = text
-    .replace(/\r\n?/g, '\n')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-  return `<p>${escaped.replace(/\n/g, '<br />')}</p>`
-}
 
 /**
  * 화면에 낼 최종 HTML. 평문이든 HTML 이든 여기를 지난다.

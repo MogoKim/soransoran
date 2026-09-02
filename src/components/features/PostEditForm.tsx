@@ -48,14 +48,17 @@ export default function PostEditForm({
   const [content, setContent] = useState(initialContent)
   /**
    * 🔴 글자 수는 HTML 이 아니라 글자로 센다 — PostForm 과 같은 규칙이다.
-   *    처음 값은 에디터가 그려진 뒤 onTextChange 로 채워진다. 그 전에는
-   *    "글자가 모자란다" 로 잘못 막지 않도록 저장된 본문 길이를 그대로 둔다.
+   *    에디터가 붙는 즉시 onTextChange 로 실제 글자가 들어온다(PostEditor).
+   *    그 한 박자 전에도 저장 버튼이 잠기지 않도록 넉넉한 초기값을 둔다.
    */
   const [text, setText] = useState(initialContent)
+  /** 🔴 사진을 올리는 동안 저장을 막는다 — PostForm 과 같은 이유다(blob: 주소). */
+  const [uploading, setUploading] = useState(false)
 
   // 🔴 사진만 남긴 글도 저장할 수 있다. 서버도 같은 규칙이다.
   const hasImage = content.includes('<img')
   const canSubmit =
+    !uploading &&
     title.trim().length >= MIN_POST_TITLE_LENGTH &&
     (hasImage || text.trim().length >= MIN_POST_CONTENT_LENGTH)
 
@@ -94,6 +97,7 @@ export default function PostEditForm({
           value={content}
           onChange={setContent}
           onTextChange={setText}
+          onBusyChange={setUploading}
           placeholder={POST_CONTENT_PLACEHOLDER}
         />
       </div>
@@ -107,6 +111,12 @@ export default function PostEditForm({
           }`}
         >
           {text.length}/{MAX_POST_CONTENT_LENGTH}
+        </p>
+      ) : null}
+
+      {uploading ? (
+        <p role="status" className="-mb-2 text-sm text-content-muted">
+          사진을 올리고 있어요. 끝나면 저장할 수 있습니다.
         </p>
       ) : null}
 

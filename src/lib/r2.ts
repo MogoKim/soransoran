@@ -67,29 +67,9 @@ export async function deleteFromR2(key: string): Promise<void> {
 }
 
 /**
- * 우리 bucket 의 공개 주소인가.
- *
- * 🔴 문자열 startsWith 로 보지 않는다. `https://our-cdn.evil.com` 이
- *    `https://our-cdn.com` 으로 시작하는 것처럼 보이는 일을 막는다.
+ * 🔴 "우리 주소인가" 판단은 r2-public.ts 하나가 한다.
+ *    sanitize(server-only) 도 글쓰기 폼(브라우저) 도 같은 것을 물어야 하는데,
+ *    이 모듈은 S3 클라이언트를 만들어 브라우저가 부를 수 없다.
+ *    같은 판단을 두 곳에 적으면 한쪽만 고쳐지는 날이 온다.
  */
-export function isOwnPublicUrl(url: string): boolean {
-  if (!PUBLIC_URL) return false
-  try {
-    return new URL(url).origin === new URL(PUBLIC_URL).origin
-  } catch {
-    return false
-  }
-}
-
-/** 우리 공개 주소 → bucket key. 우리 것이 아니면 null. */
-export function toR2Key(url: string): string | null {
-  if (!isOwnPublicUrl(url)) return null
-  try {
-    const path = new URL(url).pathname.replace(/^\/+/, '')
-    // 경로 순회 차단 — key 에 .. 이 들어갈 일은 없다.
-    if (!path || path.includes('..')) return null
-    return path
-  } catch {
-    return null
-  }
-}
+export { isOwnPublicUrl, toR2Key } from '@/lib/r2-public'
