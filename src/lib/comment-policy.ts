@@ -14,3 +14,17 @@ export const COMMENT_CREATED = '댓글이 등록됐어요.'
 /** 글자수는 상한이 가까워질 때만 보여준다. */
 export const COMMENT_COUNTER_FROM = 400
 export const COMMENT_COUNTER_WARN_FROM = 480
+
+/**
+ * 많이 공감한 댓글 — 위로 한 번 더 올려 보여줄 기준.
+ *
+ * 🔴 공감 1건을 "많이" 라고 부르지 않는다. 댓글이 적은 서비스에서 문턱을 1로 두면
+ *    거의 모든 댓글이 올라와, 올려 보여주는 일 자체가 의미를 잃는다.
+ */
+export const POPULAR_COMMENT_MIN_LIKES = 3
+/** 댓글이 몇 개는 쌓여야 "고를" 일이 생긴다. 셋 중 둘을 고르는 것은 고르는 게 아니다. */
+export const POPULAR_COMMENT_MIN_COMMENTS = 5
+export const POPULAR_COMMENT_TAKE = 2
+
+/** 정렬을 고르게 할 최소 댓글 수. 둘뿐인데 탭이 있으면 탭이 댓글보다 커 보인다. */
+export const COMMENT_SORT_TABS_MIN = 3
