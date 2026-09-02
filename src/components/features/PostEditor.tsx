@@ -32,6 +32,10 @@ import {
  *    가져온 것은 세 가지다 — 붙여넣기 자동 임베드 · 키보드 위 툴바 ·
  *    올리는 동안 미리 보여주는 방식.
  *
+ * 🔴 링크는 붙여넣기로만 만든다. 툴바에 버튼을 두지 않았다.
+ *    https 주소를 붙여넣거나 글자를 고른 뒤 주소를 붙여넣으면 링크가 된다.
+ *    허용 기준(https 절대 주소)은 서버 sanitize 와 같다.
+ *
  * 🔴 값(HTML)은 부모가 들고 있는다. 여기서 form 을 만들지 않는다 —
  *    PostForm 은 임시저장을, PostEditForm 은 취소를 각각 다르게 다룬다.
  *
@@ -148,6 +152,39 @@ export default function PostEditor({
         blockquote: false,
         horizontalRule: false,
         strike: false,
+        /**
+         * 🔴 링크 버튼을 만들지 않는다. 주소를 붙여넣으면 그냥 링크가 된다.
+         *    툴바에 손잡이를 하나 더 두는 것보다, 이미 하는 행동(붙여넣기)이
+         *    바로 되는 편이 배울 것이 적다.
+         *
+         * 🔴 https 만 받는다. 서버 sanitize(post-html.ts)와 같은 기준이다 —
+         *    화면에서 만들어진 것이 저장 단계에서 조용히 사라지면
+         *    "분명히 링크였는데" 가 된다.
+         *
+         * 🔴 openOnClick 을 끈다. 글을 고치다 링크를 누르면 편집하던 화면을
+         *    떠나게 된다. 쓰던 글을 잃는 자리다.
+         *
+         * 🔴 target·rel 을 여기서도 준다. 최종 판정은 서버가 다시 하지만,
+         *    에디터가 만든 것과 저장된 것이 같아야 미리보기가 거짓말을 하지 않는다.
+         */
+        link: {
+          autolink: true,
+          linkOnPaste: true,
+          openOnClick: false,
+          protocols: ['https'],
+          defaultProtocol: 'https',
+          HTMLAttributes: {
+            target: '_blank',
+            rel: 'nofollow noopener noreferrer',
+          },
+          isAllowedUri: (url: string) => {
+            try {
+              return new URL(url).protocol === 'https:'
+            } catch {
+              return false
+            }
+          },
+        },
       }),
       Image.configure({ HTMLAttributes: { class: 'rounded-lg' } }),
       Youtube.configure({

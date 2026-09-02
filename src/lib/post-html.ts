@@ -21,12 +21,49 @@ export { isHtmlContent, plainTextToHtml, toEditorHtml } from '@/lib/post-content
  * 🔴 iframe 은 유튜브 3개 호스트만이다. 다른 곳을 열려면 이 목록을 고쳐야 하고,
  *    고치는 순간 이 주석이 보인다. 그것이 목적이다.
  *
+ * 🔴 링크(a)는 https 절대 주소만이다. 그리고 target·rel 을 우리가 덮어쓴다.
+ *    rel 없이 target="_blank" 만 주면 열린 창이 window.opener 로 원래 탭을 조종할 수 있다.
+ *    사람이 적어 보낸 rel 을 믿지 않고, 여기서 항상 다시 쓴다.
+ *
+ * 🔴 위험한 주소는 태그만 벗기고 글자는 남긴다.
+ *    `<a href="javascript:…">눌러보세요</a>` 에서 문장까지 지우면
+ *    쓴 사람은 자기 글이 사라진 것을 나중에야 안다. 링크만 죽이고 말은 남긴다.
+ *
  * 🔴 img 는 우리 R2 주소만이다. "https 면 통과" 로 두면 업로드 정책이 통째로 무의미해진다 —
  *    사람이 외부 이미지 주소를 본문에 직접 넣는 순간 4MB·6장 제한도, WebP 변환도,
  *    로그인 검사도, 나중에 만들 정리 정책도 지나지 않는다.
  *    남의 서버에 걸린 사진은 그쪽이 지우면 우리 글에서 깨지고, 바꿔치기하면
  *    우리 글에 다른 그림이 뜬다. 우리가 통제할 수 없는 것을 본문에 담지 않는다.
  */
+
+/**
+ * 외부 링크에 항상 붙는 값.
+ *
+ * 🔴 noopener 가 핵심이다. 없으면 새 창이 window.opener 로 원래 탭의 주소를
+ *    바꿀 수 있다(tabnabbing). noreferrer 는 어디서 왔는지 흘리지 않는다.
+ * 🔴 nofollow — 우리 글의 링크가 남의 검색 순위를 밀어 주지 않는다.
+ *    회원이 링크를 붙이는 자리는 스팸이 가장 먼저 노리는 곳이다.
+ */
+const LINK_REL = 'nofollow noopener noreferrer'
+const LINK_TARGET = '_blank'
+
+/**
+ * 이 주소로 링크를 걸어도 되는가. 되면 정규화한 주소를, 아니면 null.
+ *
+ * 🔴 문자열 검사로 하지 않는다. URL 파서에 맡긴다 —
+ *    "https:/\/evil.com" 이나 " javascript:alert(1)" 처럼 눈으로 거르기 어려운 것들이 있다.
+ * 🔴 상대경로·빈 값은 파서가 던진다. javascript:·data:·blob: 은 파서를 지나므로
+ *    protocol 을 직접 본다.
+ */
+export function safeLinkHref(href: string | undefined): string | null {
+  if (!href) return null
+  try {
+    const url = new URL(href)
+    return url.protocol === 'https:' ? url.href : null
+  } catch {
+    return null
+  }
+}
 
 /** 유튜브 임베드만 허용한다. 타사 영상·임의 embed 는 1차 범위 밖이다. */
 export const ALLOWED_IFRAME_HOSTS = [
@@ -39,15 +76,36 @@ const OPTIONS: sanitize.IOptions = {
   allowedTags: [
     // 글의 뼈대
     'p', 'br', 'strong', 'b', 'em', 'i',
+    // 링크
+    'a',
     // 사진
     'img',
     // 유튜브 — Tiptap 이 div[data-youtube-video] 로 iframe 을 감싼다
     'div', 'iframe',
   ],
   allowedAttributes: {
+    // 🔴 세 가지뿐이다. class·style·onclick 이 들어올 자리를 만들지 않는다.
+    a: ['href', 'target', 'rel'],
     img: ['src', 'alt', 'width', 'height', 'class'],
     iframe: ['src', 'allowfullscreen', 'frameborder', 'allow', 'width', 'height'],
     div: ['class', 'data-youtube-video'],
+  },
+  /**
+   * 🔴 링크는 여기서 판정하고 속성을 다시 쓴다.
+   *
+   *    안전한 주소  → a 로 남기고 target·rel 을 우리 값으로 덮어쓴다
+   *    위험한 주소  → span 으로 바꾼다. span 은 allowedTags 에 없으므로
+   *                  sanitize 가 태그를 벗기고 **글자만 남긴다** — 문장은 살아남는다
+   *
+   * 🔴 exclusiveFilter 를 쓰지 않는 이유가 이것이다. 그쪽은 내용까지 지운다.
+   *    img·iframe 은 지워야 맞지만(빈 액자가 남는다) 링크는 글의 일부다.
+   */
+  transformTags: {
+    a: (_tagName, attribs): sanitize.Tag => {
+      const href = safeLinkHref(attribs.href)
+      if (!href) return { tagName: 'span', attribs: {} }
+      return { tagName: 'a', attribs: { href, target: LINK_TARGET, rel: LINK_REL } }
+    },
   },
   // 🔴 style 을 열지 않는다. 인라인 스타일은 CSS 인젝션 표면이고,
   //    1차 툴바에는 굵게밖에 없어 쓸 일도 없다.
@@ -55,7 +113,9 @@ const OPTIONS: sanitize.IOptions = {
   allowedIframeHostnames: [...ALLOWED_IFRAME_HOSTS],
   // 🔴 http 를 허용하지 않는다. 혼합 콘텐츠는 브라우저가 막아 빈 자리만 남는다.
   allowedSchemes: ['https'],
-  allowedSchemesByTag: { img: ['https'] },
+  // 🔴 a 도 https 만. transformTags 가 이미 걸렀지만 두 겹으로 둔다 —
+  //    나중에 transformTags 를 고치는 사람이 이 줄을 함께 보게 된다.
+  allowedSchemesByTag: { img: ['https'], a: ['https'] },
   // 빈 문단은 사람이 만든 여백이다. 지우면 쓴 사람의 리듬이 사라진다.
   nonTextTags: ['style', 'script', 'textarea', 'option', 'noscript'],
   /**
