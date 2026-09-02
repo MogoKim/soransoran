@@ -7,6 +7,7 @@ import { getBoardBySlug } from '@/lib/board-registry'
 import { checkRateLimit, getClientIp, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
 import { verifyTurnstile } from '@/lib/turnstile'
+import { resolveReplyTarget } from '@/lib/reply-target'
 import {
   MIN_COMMENT_LENGTH,
   MAX_COMMENT_LENGTH,
@@ -124,6 +125,10 @@ export async function createGuestComment(
   })
   if (!post) return { error: '글을 찾을 수 없습니다.' }
 
+  // 답글이면 상대를 확인한다 — 회원 경로와 같은 함수를 쓴다
+  const target = await resolveReplyTarget(String(formData.get('parentId') ?? ''), postId)
+  if (!target.ok) return { error: target.error }
+
   const guestPasswordHash = await bcrypt.hash(password, 10)
 
   await prisma.comment.create({
@@ -135,6 +140,7 @@ export async function createGuestComment(
       commentOrigin: 'GUEST',
       guestNickname: nickname,
       guestPasswordHash,
+      parentId: target.parentId,
     },
   })
 

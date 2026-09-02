@@ -4,7 +4,9 @@ import CommentEditor from '@/components/features/CommentEditor'
 import GuestCommentControls from '@/components/features/GuestCommentControls'
 import ReportButton from '@/components/features/ReportButton'
 import CommentLikeButton from '@/components/features/CommentLikeButton'
+import ReplyForm from '@/components/features/ReplyForm'
 import { GUEST_BADGE } from '@/lib/guest-comment-policy'
+import { DELETED_COMMENT } from '@/lib/comment-policy'
 
 export type CommentItemData = {
   id: string
@@ -15,7 +17,11 @@ export type CommentItemData = {
   /** author 가 null 일 때 화면에 부를 이름 */
   guestNickname?: string | null
   likeCount: number
+  /** 지워진 부모는 자리만 남는다 — 아래 답글을 보여주기 위해서다 */
+  isDeleted?: boolean
 }
+
+export type CommentWithReplies = CommentItemData & { replies: CommentItemData[] }
 
 type CommentItemProps = {
   comment: CommentItemData
@@ -26,6 +32,12 @@ type CommentItemProps = {
   isLoggedIn: boolean
   /** 이 사람이 이 댓글에 이미 공감했는가 */
   isLiked: boolean
+  /** 부모 아래에 붙는 줄. 답글에는 답글을 달 수 없다 */
+  isReply?: boolean
+  /** 이 댓글에 달린 답글. 답글에는 없다 */
+  replies?: CommentItemData[]
+  /** 답글의 공감 여부를 부모가 함께 넘긴다 */
+  likedCommentIds?: Set<string>
 }
 
 export default function CommentItem({
@@ -35,6 +47,9 @@ export default function CommentItem({
   currentUserId,
   isLoggedIn,
   isLiked,
+  isReply = false,
+  replies = [],
+  likedCommentIds,
 }: CommentItemProps) {
   /**
    * 🔴 본인 판정은 회원 댓글에만 쓴다.
@@ -43,6 +58,35 @@ export default function CommentItem({
    */
   const isOwn = Boolean(comment.author && currentUserId === comment.author.id)
   const isGuest = comment.author === null
+
+  /* 왼쪽 선이 "위 이야기에 딸린 말" 이라고 알려 준다. */
+  const replyList =
+    replies.length > 0 ? (
+      <ul className="m-0 mt-3 flex list-none flex-col gap-3 border-l-2 border-subtle p-0 pl-3">
+        {replies.map((reply) => (
+          <CommentItem
+            key={reply.id}
+            comment={reply}
+            boardSlug={boardSlug}
+            postId={postId}
+            currentUserId={currentUserId}
+            isLoggedIn={isLoggedIn}
+            isLiked={Boolean(likedCommentIds?.has(reply.id))}
+            isReply
+          />
+        ))}
+      </ul>
+    ) : null
+
+  /* 🔴 지워진 부모는 자리만 남는다 — 이름도 본문도 손잡이도 내보내지 않는다. */
+  if (comment.isDeleted) {
+    return (
+      <li className="px-4 py-4">
+        <p className="m-0 text-sm italic text-content-muted">{DELETED_COMMENT}</p>
+        {replyList}
+      </li>
+    )
+  }
 
   // 🔴 본문은 여기서 한 번만 그린다.
   //    본인 댓글은 이것을 CommentEditor 에 넘겨 읽기 모드로 쓰게 한다 —
@@ -53,18 +97,29 @@ export default function CommentItem({
       <p className="mt-1.5 whitespace-pre-wrap break-keep leading-[1.7] text-content-primary [overflow-wrap:anywhere]">
         {comment.content}
       </p>
-      <CommentLikeButton
-        commentId={comment.id}
-        likeCount={comment.likeCount}
-        isLiked={isLiked}
-        isLoggedIn={isLoggedIn}
-      />
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+        <CommentLikeButton
+          commentId={comment.id}
+          likeCount={comment.likeCount}
+          isLiked={isLiked}
+          isLoggedIn={isLoggedIn}
+        />
+        {/* 🔴 답글에는 답글 버튼이 없다 — 1단계까지만. 서버도 같은 규칙을 다시 본다. */}
+        {isReply ? null : (
+          <ReplyForm
+            postId={postId}
+            boardSlug={boardSlug}
+            parentId={comment.id}
+            isLoggedIn={isLoggedIn}
+          />
+        )}
+      </div>
     </>
   )
 
   return (
     /* 면과 구분선은 목록이 진다 — 이 줄은 여백만 갖는다. */
-    <li className="px-4 py-4">
+    <li className={isReply ? 'py-1' : 'px-4 py-4'}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-content-muted">
         <span className="font-bold text-brand-ink">
           {comment.author ? displayName(comment.author) : (comment.guestNickname ?? '비회원')}
@@ -108,6 +163,8 @@ export default function CommentItem({
           ) : null}
         </>
       )}
+
+      {replyList}
     </li>
   )
 }

@@ -40,9 +40,12 @@ import {
 export default function GuestCommentForm({
   postId,
   boardSlug,
+  parentId,
 }: {
   postId: string
   boardSlug: string
+  /** 답글이면 부모 댓글 id. 새 댓글이면 undefined */
+  parentId?: string
 }) {
   const pathname = usePathname()
   const [state, formAction] = useFormState<GuestCommentState, FormData>(createGuestComment, {})
@@ -94,6 +97,7 @@ export default function GuestCommentForm({
     >
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
+      {parentId ? <input type="hidden" name="parentId" value={parentId} /> : null}
 
       {state.error ? (
         <p role="alert" className="text-sm text-state-danger">

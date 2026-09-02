@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug } from '@/lib/board-registry'
+import { resolveReplyTarget } from '@/lib/reply-target'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
 import { requireOnboarded } from '@/lib/onboarding-guard'
@@ -66,8 +67,12 @@ export async function createComment(
   })
   if (!post) return { error: '글을 찾을 수 없습니다.' }
 
+  // 답글이면 상대를 확인한다 — depth 2 와 지워진 댓글은 여기서 끊는다
+  const target = await resolveReplyTarget(String(formData.get('parentId') ?? ''), postId)
+  if (!target.ok) return { error: target.error }
+
   await prisma.comment.create({
-    data: { postId, authorId: userId, content, source: 'USER' },
+    data: { postId, authorId: userId, content, source: 'USER', parentId: target.parentId },
   })
 
   const board = getBoardBySlug(boardSlug)

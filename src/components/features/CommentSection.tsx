@@ -1,6 +1,6 @@
 import CommentForm from '@/components/features/CommentForm'
 import GuestCommentForm from '@/components/features/GuestCommentForm'
-import CommentItem, { type CommentItemData } from '@/components/features/CommentItem'
+import CommentItem, { type CommentWithReplies } from '@/components/features/CommentItem'
 import SortableCommentList from '@/components/features/SortableCommentList'
 import { displayName } from '@/lib/display-name'
 import { GUEST_BADGE } from '@/lib/guest-comment-policy'
@@ -22,7 +22,7 @@ export default function CommentSection({
   currentUserId,
   likedCommentIds,
 }: {
-  comments: CommentItemData[]
+  comments: CommentWithReplies[]
   boardSlug: string
   postId: string
   isLoggedIn: boolean
@@ -31,12 +31,17 @@ export default function CommentSection({
   /** 이 사람이 공감한 댓글 id. 비로그인이면 비어 있다 */
   likedCommentIds: Set<string>
 }) {
-  /* 이미 받아 둔 배열 안에서 고른다 — 이것 때문에 DB 를 다시 읽지 않는다.
-     정렬은 안정 정렬이라 공감 수가 같으면 등록순이 그대로 남는다. */
+  /* 답글도 사람이 남긴 말이라 함께 센다 — 목록 화면의 댓글 수와 같은 기준이다. */
+  const totalCount = comments.reduce((sum, c) => sum + (c.isDeleted ? 0 : 1) + c.replies.length, 0)
+
+  /* 정렬되는 것은 살아 있는 부모뿐이다 — 탭을 열지 말지도 그 수로 정한다. */
+  const sortableCount = comments.filter((c) => !c.isDeleted).length
+
+  /* 답글과 지워진 부모는 넣지 않는다 — 부모 없는 대답과 본문 없는 자리는 보여줄 것이 없다. */
   const popular =
-    comments.length >= POPULAR_COMMENT_MIN_COMMENTS
+    totalCount >= POPULAR_COMMENT_MIN_COMMENTS
       ? [...comments]
-          .filter((c) => c.likeCount >= POPULAR_COMMENT_MIN_LIKES)
+          .filter((c) => !c.isDeleted && c.likeCount >= POPULAR_COMMENT_MIN_LIKES)
           .sort((a, b) => b.likeCount - a.likeCount)
           .slice(0, POPULAR_COMMENT_TAKE)
       : []
@@ -44,7 +49,7 @@ export default function CommentSection({
   return (
     <section className="mt-8">
       <h2 className="m-0 border-b-2 border-subtle pb-3 text-lg font-bold text-content-primary">
-        댓글 <span className="text-brand-ink">{comments.length}</span>
+        댓글 <span className="text-brand-ink">{totalCount}</span>
       </h2>
 
       {/* 🔴 여기에는 공감 버튼을 두지 않는다. 같은 댓글의 버튼이 위아래로 둘이면
@@ -87,7 +92,7 @@ export default function CommentSection({
         </div>
       ) : (
         <SortableCommentList
-          showTabs={comments.length >= COMMENT_SORT_TABS_MIN}
+          showTabs={sortableCount >= COMMENT_SORT_TABS_MIN}
           listClassName={LIST_CLASS}
           items={comments.map((comment) => ({
             id: comment.id,
@@ -100,6 +105,8 @@ export default function CommentSection({
                 currentUserId={currentUserId}
                 isLoggedIn={isLoggedIn}
                 isLiked={likedCommentIds.has(comment.id)}
+                replies={comment.replies}
+                likedCommentIds={likedCommentIds}
               />
             ),
           }))}

@@ -306,10 +306,10 @@ export async function getPostDetail(postId: string) {
   })
   if (!post) return null
 
-  const comments = await prisma.comment.findMany({
+  // 🔴 지워진 댓글도 읽는다. 여기서 빼면 그 아래 남의 답글까지 함께 사라진다.
+  const rows = await prisma.comment.findMany({
     where: {
       postId,
-      isDeleted: false,
       /**
        * 🔴 authorId: { notIn } 만 쓰면 비회원 댓글이 통째로 사라진다.
        *    SQL 의 NOT IN 은 NULL 에 대해 NULL(=거짓)을 돌려주므로
@@ -329,9 +329,26 @@ export async function getPostDetail(postId: string) {
       author: { select: { id: true, name: true, nickname: true, image: true } },
       guestNickname: true,
       likeCount: true,
+      parentId: true,
+      isDeleted: true,
     },
     orderBy: { createdAt: 'asc' },
   })
+
+  // 🔴 답글을 부모 안에 묶는다. 나란히 두면 공감순 정렬 때 답글만 위로 올라간다.
+  const replyMap = new Map<string, typeof rows>()
+  for (const row of rows) {
+    if (!row.parentId || row.isDeleted) continue
+    const list = replyMap.get(row.parentId)
+    if (list) list.push(row)
+    else replyMap.set(row.parentId, [row])
+  }
+
+  const comments = rows
+    .filter((row) => row.parentId === null)
+    // 지워진 부모는 살아 있는 답글이 있을 때만 자리를 남긴다
+    .filter((row) => !row.isDeleted || replyMap.has(row.id))
+    .map((row) => ({ ...row, replies: replyMap.get(row.id) ?? [] }))
 
   return { post, comments }
 }
