@@ -1,0 +1,212 @@
+#!/usr/bin/env tsx
+/**
+ * Original Post 발행 — 🔴 기본은 dry-run. 되돌릴 수 없는 경로다
+ *
+ * 정본: docs/operations/2026-09-02-original-post-lane-strategy.md §4
+ *
+ *   … → ⑥ Matching → 배정 저장 → **⑦ 발행(여기)**
+ *
+ * 🔴 **여기서 나간 글은 검색에 노출된다.**
+ *    세 축이 전부 false 인 유일한 레인이고 sitemap 에 실린다.
+ *    지금까지의 단계는 전부 되돌릴 수 있었지만 이건 아니다 —
+ *    글이 나간 뒤에는 내리는 것(status=HIDDEN)이지 없던 일로 만들 수 없다.
+ *
+ * 🔴 **write 로직을 여기서 다시 짜지 않는다.**
+ *    src/lib/original-post-publish-tx.ts 의 publishOriginalPostTx 를 부른다.
+ *    둘로 나뉘면 게이트도 둘이 된다 (persona-publish-live 와 같은 원칙).
+ *
+ * 🔴 **dry-run 결과를 신뢰하지 않는다.**
+ *    dry-run 은 판정 시점의 사진이다. 실제 발행은 트랜잭션 안에서 다시 판정한다 —
+ *    배정과 발행 사이에 페르소나가 paused 됐을 수 있다.
+ *
+ * 🔴 **첫 발행은 gate=PASS 만.** HOLD 는 사람이 한 번 더 본 뒤다.
+ * 🔴 **하루 1건.** 색인되는 첫 글들이라 문제가 생겨도 원인을 가릴 수 있어야 한다.
+ *
+ * 사용법
+ *   npx tsx scripts/original-post-publish-live.mts               dry-run
+ *   npx tsx scripts/original-post-publish-live.mts --apply --limit=1   🔴 실제 발행
+ *   npx tsx scripts/original-post-publish-live.mts --check        발행 결과 대조
+ *
+ * 종료 코드: --apply 가 발행하지 못하거나 --check 실패면 1
+ */
+import { PrismaClient } from '@prisma/client'
+import {
+  judgePublish, kstDayStart, DAILY_PUBLISH_CAP, FIRST_PUBLISH_VERDICT,
+  PUBLISH_BLOCK_LABEL, type PublishBlockCode,
+} from '../src/lib/original-post-publish'
+import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
+import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+
+const argv = process.argv.slice(2)
+const APPLY = argv.includes('--apply')
+const CHECK = argv.includes('--check')
+const limitRaw = argv.find((a) => a.startsWith('--limit='))?.slice(8)
+const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
+const kst = (d: Date): string =>
+  `${new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} KST`
+/** 🔴 전문을 남기지 않는다 — 첫 글자 + 길이 */
+const brief = (v: string): string => {
+  const c = [...v.trim()]
+  return c.length === 0 ? '(비어 있음)' : `"${c[0]}…" (${c.length}자)`
+}
+
+await loadEnvLocal()
+const prisma = new PrismaClient()
+
+console.log(`\n══ ${CHECK ? '검증 (--check)' : APPLY ? '🔴 실제 발행 (--apply)' : 'dry-run (DB write 0)'} ══\n`)
+
+// ── kill switch — 🔴 읽기만 한다 ──
+const sw = await prisma.personaGlobalSwitch.findUnique({
+  where: { id: 'global' }, select: { enabled: true, reason: true },
+})
+const killed = sw?.enabled === true
+console.log(`  전체 중지(kill switch)  ${killed ? `🔴 켜짐 — ${sw?.reason ?? '사유 없음'}` : `꺼짐${sw === null ? ' (행 없음 = 기본 상태)' : ''}`}`)
+
+// ── 오늘(KST) 발행 수 — 🔴 cap 의 근거 ──
+const now = new Date()
+const dayStart = kstDayStart(now)
+const publishedToday = await prisma.personaActivityLog.count({
+  where: { kind: 'post', createdAt: { gte: dayStart } },
+})
+console.log(`  오늘(KST ${kst(now).slice(0, 10)}) 발행  ${publishedToday} / ${DAILY_PUBLISH_CAP}건`)
+console.log(`  첫 발행 판정  gate=${FIRST_PUBLISH_VERDICT} 만 · HOLD 제외\n`)
+
+// ══ --check — 발행 결과 대조 ══
+if (CHECK) {
+  const published = await prisma.originalPostApprovalQueue.findMany({
+    where: { status: 'PUBLISHED' },
+    select: { id: true, createdPostId: true, matchedPersona: { select: { id: true, code: true } } },
+  })
+  console.log(`PUBLISHED ${published.length}건`)
+  let bad = 0
+  for (const row of published) {
+    if (row.createdPostId === null) { console.log(`  🔴 ${row.id} — PUBLISHED 인데 createdPostId 가 없다`); bad += 1; continue }
+    const post = await prisma.post.findUnique({
+      where: { id: row.createdPostId },
+      select: {
+        id: true, status: true, boardType: true, source: true, personaId: true, authorId: true,
+        isMicroSeed: true, permanentNoindex: true, indexPromotionBlocked: true,
+        sourceUrl: true, sourceArticleId: true, sheetCandidateId: true,
+      },
+    })
+    const problems: string[] = []
+    if (post === null) problems.push('Post 가 없다')
+    else {
+      if (post.status !== 'PUBLISHED') problems.push(`status=${post.status}`)
+      if (post.source !== 'SYSTEM') problems.push(`source=${post.source}`)
+      if (post.boardType !== 'FREE') problems.push(`boardType=${post.boardType}`)
+      if (post.personaId !== row.matchedPersona?.id) problems.push('personaId 불일치')
+      // 🔴 색인 대상인가 — 이 레인의 존재 이유다
+      if (post.isMicroSeed || post.permanentNoindex || post.indexPromotionBlocked) {
+        problems.push('🔴 색인 대상이 아니다 (3축이 어긋났다)')
+      }
+      // 🔴 출처가 붙지 않았는가
+      for (const [k, v] of [['sourceUrl', post.sourceUrl], ['sourceArticleId', post.sourceArticleId], ['sheetCandidateId', post.sheetCandidateId]] as const) {
+        if (v !== null) problems.push(`🔴 ${k} 가 붙었다`)
+      }
+    }
+    const log = await prisma.personaActivityLog.count({
+      where: { personaId: row.matchedPersona?.id ?? '', kind: 'post', targetId: row.createdPostId },
+    })
+    if (log !== 1) problems.push(`ActivityLog ${log}건 (1이어야 한다)`)
+
+    if (problems.length > 0) { bad += 1; console.log(`  🔴 ${row.id} — ${problems.join(' · ')}`) }
+    else console.log(`  ✅ ${row.id} → Post ${row.createdPostId} · ${row.matchedPersona?.code} · /community/free/${row.createdPostId}`)
+  }
+  await prisma.$disconnect()
+  console.log(bad === 0 ? `\n✅ ${published.length}건 전부 정합\n` : `\n🔴 ${bad}건 이상\n`)
+  process.exit(bad === 0 ? 0 : 1)
+}
+
+// ── 후보 조달 — 🔴 읽기만 한다 ──
+const rows = await prisma.originalPostApprovalQueue.findMany({
+  where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
+  select: {
+    id: true, status: true, createdPostId: true, gateVerdict: true, matchedAt: true,
+    draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+    matchedPersona: {
+      select: { code: true, status: true, user: { select: { providerId: true } } },
+    },
+  },
+  // 🔴 gate=PASS 를 먼저, 그다음 배정이 이른 순 — 정렬이 흔들리면 dry-run 이 재현되지 않는다
+  orderBy: [{ gateVerdict: 'asc' }, { matchedAt: 'asc' }, { id: 'asc' }],
+})
+console.log(`── 후보 ${rows.length}건 (APPROVED · EDITED · 발행 전)\n`)
+
+const eligible: string[] = []
+for (const r of rows) {
+  const v = judgePublish(
+    {
+      status: r.status, createdPostId: r.createdPostId, gateVerdict: r.gateVerdict,
+      matchedPersonaCode: r.matchedPersona?.code ?? null,
+      personaStatus: r.matchedPersona?.status ?? null,
+      personaProviderId: r.matchedPersona?.user?.providerId ?? null,
+    },
+    // 🔴 여기서는 cap 을 이미 채운 것으로 보지 않는다. 몇 건이 자격이 있는지부터 센다
+    { killSwitchEnabled: killed, publishedToday: 0 },
+  )
+  const title = r.editedTitle ?? r.draftTitle
+  const head = `  ${r.id}  ${r.status} · gate=${r.gateVerdict} · ${r.matchedPersona?.code ?? '미배정'}`
+  if (v.ok) {
+    eligible.push(r.id)
+    console.log(`  ✅ ${head}\n       제목 ${brief(title)}`)
+  } else {
+    console.log(`  ⏭️  ${head}\n       ${v.detail}`)
+  }
+}
+
+// 🔴 cap 을 반영해 이번에 나갈 것만 남긴다
+const capRoom = Math.max(0, DAILY_PUBLISH_CAP - publishedToday)
+const take = eligible.slice(0, capRoom)
+console.log(`\n  자격 ${eligible.length}건 · 오늘 남은 cap ${capRoom}건 · 이번 발행 ${take.length}건`)
+if (take.length > 0) console.log(`  🟢 첫 발행 후보  ${take[0]}`)
+
+if (!APPLY) {
+  await prisma.$disconnect()
+  console.log('\n🟡 dry-run 입니다. DB write 0 · Post 0 · 발행하려면 --apply 와 --limit=N 을 둘 다 붙이세요.\n')
+  process.exit(0)
+}
+
+// ── 🔴 --apply --limit 둘 다 있어야 발행한다 ──
+if (killed) { await prisma.$disconnect(); fail('전체 중지가 켜져 있습니다.') }
+const LIMIT = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10)
+if (LIMIT === null || !Number.isInteger(LIMIT) || LIMIT < 1) {
+  await prisma.$disconnect(); fail('--apply 에는 --limit=N (1 이상) 이 함께 있어야 합니다')
+}
+if (LIMIT > DAILY_PUBLISH_CAP) {
+  await prisma.$disconnect(); fail(`--limit ${LIMIT} 이 하루 상한 ${DAILY_PUBLISH_CAP} 을 넘습니다`)
+}
+if (LIMIT !== take.length) {
+  await prisma.$disconnect(); fail(`--limit ${LIMIT} 이 이번 발행 대상 ${take.length} 과 다릅니다. 잘라내지 않고 멈춥니다.`)
+}
+
+console.log(`\n══ 발행 ${take.length}건 (--limit ${LIMIT}) ══`)
+let done = 0
+let failedCount = 0
+for (const id of take) {
+  // 🔴 매 건 직전에 다시 센다. 같은 실행 안에서도 cap 이 소비된다
+  const today = await prisma.personaActivityLog.count({
+    where: { kind: 'post', createdAt: { gte: dayStart } },
+  })
+  const res = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: today })
+  if (res.kind === 'published') {
+    done += 1
+    console.log(`  ✅ ${id}\n     Post ${res.postId} · ${res.personaCode} · ${res.boardType}`)
+    console.log(`     https://soransoran.com/community/free/${res.postId}`)
+    console.log('     🔴 이 글은 검색에 노출됩니다 — sitemap 에 실립니다')
+  } else if (res.kind === 'blocked') {
+    failedCount += 1
+    console.log(`  ⛔ ${id} — ${PUBLISH_BLOCK_LABEL[res.code as PublishBlockCode] ?? res.code}: ${res.detail}`)
+  } else {
+    failedCount += 1
+    console.log(`  🔴 ${id} — ${res.message}`)
+  }
+}
+
+const pub = await prisma.originalPostApprovalQueue.count({ where: { status: 'PUBLISHED' } })
+const posts = await prisma.post.count()
+await prisma.$disconnect()
+console.log(`\n  발행 ${done}건 · 실패 ${failedCount}건`)
+console.log(`  대기열 PUBLISHED ${pub}건 · Post ${posts}건`)
+console.log('  🔴 --check 로 검증하세요. 되돌리려면 내리는 것(status=HIDDEN)이지 없던 일이 되지 않습니다.\n')
+process.exit(failedCount === 0 ? 0 : 1)
