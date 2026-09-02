@@ -196,13 +196,35 @@ export function postContentToText(content: string): string {
 }
 
 /**
+ * 요약에서 지우는 주소 표기.
+ *
+ * 🔴 태그를 떼는 것만으로는 부족하다. 본문에 주소를 그냥 적거나
+ *    주소를 붙여넣어 링크가 되면(autolink) **링크 글자 자체가 주소**다.
+ *    그러면 목록 카드에 "https://…" 가 그대로 뜬다 — QA 에서 실제로 잡혔다.
+ *
+ * 🔴 www. 로 시작하는 것도 본다. 스킴이 없어도 사람 눈에는 주소다.
+ */
+const URL_IN_TEXT = /(?:https?:\/\/|www\.)\S+/gi
+
+/**
  * 한 줄로 눌러 낸 요약 — 목록 미리보기·검색 description 이 쓴다.
  *
  * 🔴 줄바꿈을 공백으로 눌러야 2줄 말줄임(line-clamp)이 예측 가능해진다.
- *    길이 검사에는 이것을 쓰지 않는다 — 거기서는 사람이 쓴 공백을 그대로 세야 한다.
+ *
+ * 🔴 주소를 지우고 사람이 쓴 문장만 남긴다.
+ *    목록은 "무슨 이야기인가" 를 훑는 자리다. 주소 한 줄이 두 줄 미리보기의
+ *    절반을 먹으면 정작 무슨 글인지 보이지 않는다.
+ *    링크에 글자가 달려 있으면(예: "기사 제목") 그 글자는 그대로 남는다 —
+ *    태그를 떼는 단계에서 이미 글자만 남았기 때문이다.
+ *
+ * 🔴 길이·금칙어 검사에는 이것을 쓰지 않는다(postContentToText).
+ *    거기서 주소를 지우면 content-guard 의 링크 도배 판정이 무력해진다.
  */
 export function postContentToSummary(content: string): string {
-  return postContentToText(content).replace(/\s+/g, ' ').trim()
+  return postContentToText(content)
+    .replace(URL_IN_TEXT, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 /**
