@@ -69,23 +69,36 @@ export default async function WritePage({
     }
   }
 
+  /**
+   * 🔴 글을 쓰는 동안에는 PageShell 을 두르지 않는다.
+   *    로고·게시판 아이콘·FAB·Footer 가 함께 있으면 "구경 중" 화면 안에
+   *    폼이 끼어 있는 것처럼 보인다. 이 화면의 목적은 하나뿐이다.
+   *    나가는 길과 끝내는 길은 PostForm 의 상단바가 진다.
+   *
+   * 🔴 로그인 전은 그대로 둔다. 그쪽은 아직 쓰는 화면이 아니라
+   *    "들어오세요" 화면이라 평소의 머리·꼬리가 있는 편이 덜 낯설다.
+   */
+  if (session?.user) {
+    return (
+      <main className="mx-auto min-h-screen max-w-3xl px-4 pb-12 pt-[72px]">
+        <PostForm defaultBoardSlug={searchParams.board} />
+      </main>
+    )
+  }
+
   return (
     <PageShell>
       <main className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="mb-6 text-xl font-bold text-content-primary">글쓰기</h1>
 
-        {session?.user ? (
-          <PostForm defaultBoardSlug={searchParams.board} />
-        ) : (
-          <EmptyState
-            title={boardLabel ? `${boardLabel}에 이야기를 남겨보세요` : '이야기를 남겨보세요'}
-            body="카카오로 시작하면 바로 이어서 쓸 수 있어요. 짧게 써도 괜찮습니다."
-            action={
-              /* callbackUrl 은 내부 경로만 넘긴다. */
-              <KakaoSignInButton callbackUrl={toInternalPath(writePath) ?? '/'} />
-            }
-          />
-        )}
+        <EmptyState
+          title={boardLabel ? `${boardLabel}에 이야기를 남겨보세요` : '이야기를 남겨보세요'}
+          body="카카오로 시작하면 바로 이어서 쓸 수 있어요. 짧게 써도 괜찮습니다."
+          action={
+            /* callbackUrl 은 내부 경로만 넘긴다. */
+            <KakaoSignInButton callbackUrl={toInternalPath(writePath) ?? '/'} />
+          }
+        />
       </main>
     </PageShell>
   )
