@@ -1,6 +1,8 @@
 import CommentForm from '@/components/features/CommentForm'
 import GuestCommentForm from '@/components/features/GuestCommentForm'
 import CommentItem, { type CommentWithReplies } from '@/components/features/CommentItem'
+import CommentComposeAnchor from '@/components/features/CommentComposeAnchor'
+import ReplyOpenProvider from '@/components/features/ReplyOpenProvider'
 import SortableCommentList from '@/components/features/SortableCommentList'
 import { displayName } from '@/lib/display-name'
 import { GUEST_BADGE } from '@/lib/guest-comment-policy'
@@ -83,44 +85,47 @@ export default function CommentSection({
         </div>
       ) : null}
 
-      {comments.length === 0 ? (
-        <div className="mt-4 flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-subtle bg-surface-card p-8 text-center">
-          <p className="m-0 font-bold text-content-primary">아직 댓글이 없어요</p>
-          <p className="m-0 text-sm leading-relaxed text-content-muted">
-            짧아도 괜찮습니다. 첫 마디를 남겨보세요.
-          </p>
-        </div>
-      ) : (
-        <SortableCommentList
-          showTabs={sortableCount >= COMMENT_SORT_TABS_MIN}
-          listClassName={LIST_CLASS}
-          items={comments.map((comment) => ({
-            id: comment.id,
-            likeCount: comment.likeCount,
-            node: (
-              <CommentItem
-                comment={comment}
-                boardSlug={boardSlug}
-                postId={postId}
-                currentUserId={currentUserId}
-                isLoggedIn={isLoggedIn}
-                isLiked={likedCommentIds.has(comment.id)}
-                replies={comment.replies}
-                likedCommentIds={likedCommentIds}
-              />
-            ),
-          }))}
-        />
-      )}
-
-      {/* 입력은 만들지 않고 있는 것을 부른다 — 확인 절차·비밀번호·글자수는 각 폼의 규칙이다. */}
-      <div className="mt-4">
-        {isLoggedIn ? (
-          <CommentForm postId={postId} boardSlug={boardSlug} />
+      {/* 답글과 하단 진입점이 같은 열림 상태를 본다 — 하단에 입력이 둘이 되지 않게. */}
+      <ReplyOpenProvider>
+        {comments.length === 0 ? (
+          <div className="mt-4 flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-subtle bg-surface-card p-8 text-center">
+            <p className="m-0 font-bold text-content-primary">아직 댓글이 없어요</p>
+            <p className="m-0 text-sm leading-relaxed text-content-muted">
+              짧아도 괜찮습니다. 첫 마디를 남겨보세요.
+            </p>
+          </div>
         ) : (
-          <GuestCommentForm postId={postId} boardSlug={boardSlug} />
+          <SortableCommentList
+            showTabs={sortableCount >= COMMENT_SORT_TABS_MIN}
+            listClassName={LIST_CLASS}
+            items={comments.map((comment) => ({
+              id: comment.id,
+              likeCount: comment.likeCount,
+              node: (
+                <CommentItem
+                  comment={comment}
+                  boardSlug={boardSlug}
+                  postId={postId}
+                  currentUserId={currentUserId}
+                  isLoggedIn={isLoggedIn}
+                  isLiked={likedCommentIds.has(comment.id)}
+                  replies={comment.replies}
+                  likedCommentIds={likedCommentIds}
+                />
+              ),
+            }))}
+          />
         )}
-      </div>
+
+        {/* 입력은 만들지 않고 있는 것을 부른다 — 확인 절차·비밀번호·글자수는 각 폼의 규칙이다. */}
+        <CommentComposeAnchor>
+          {isLoggedIn ? (
+            <CommentForm postId={postId} boardSlug={boardSlug} />
+          ) : (
+            <GuestCommentForm postId={postId} boardSlug={boardSlug} />
+          )}
+        </CommentComposeAnchor>
+      </ReplyOpenProvider>
     </section>
   )
 }
