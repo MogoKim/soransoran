@@ -5,9 +5,21 @@ import CommentDock from '@/components/features/CommentDock'
 import { useReplyOpen } from '@/components/features/ReplyOpenProvider'
 import { resolveDockVisible } from '@/lib/comment-dock-visibility'
 
-/** 열린 동안만 붙는다. 데스크탑은 원래 자리 그대로다. */
+/** max-md 가 켜지는 폭. 이보다 넓으면 키보드 보정을 걸지 않는다 */
+const FIXED_MAX_WIDTH = 768
+/** 이 이하는 키보드가 올라온 것으로 보지 않는다 */
+const KEYBOARD_THRESHOLD = 30
+/** 시트 위에 남기는 여백 — 전체 화면이 아니라 올라온 시트로 읽히게 한다 */
+const SHEET_TOP_GAP = 24
+/** 가로 키보드 같은 극단 상황의 하한 */
+const SHEET_MIN_HEIGHT = 200
+
+/**
+ * z-[61] 은 Header(50)·IconMenu(40) 위다.
+ * 그 아래에 두면 키보드가 올라와 화면이 좁아졌을 때 시트 윗부분이 메뉴에 덮인다.
+ */
 const COMPOSER_CLASS =
-  'max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-30 max-md:max-h-[70dvh] max-md:overflow-y-auto max-md:overscroll-contain max-md:border-t max-md:border-subtle max-md:bg-surface-card max-md:px-4 max-md:pb-[max(12px,env(safe-area-inset-bottom))] max-md:pt-2'
+  'max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-[61] max-md:max-h-[85dvh] max-md:overflow-y-auto max-md:overscroll-contain max-md:border-t max-md:border-subtle max-md:bg-surface-card max-md:px-4 max-md:pb-[max(12px,env(safe-area-inset-bottom))] max-md:pt-2'
 
 /**
  * 댓글 입력 영역을 감싸 하단 진입점과 연결한다.
@@ -20,6 +32,7 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
   const areaRef = useRef<HTMLDivElement>(null)
   const [dockVisible, setDockVisible] = useState(false)
   const [composing, setComposing] = useState(false)
+  const [keyboardOpen, setKeyboardOpen] = useState(false)
   // fixed 로 빠지면 흐름에서 나가 아래 콘텐츠가 위로 밀린다 — 원래 높이를 자리로 남긴다
   const [reservedHeight, setReservedHeight] = useState<number>()
   const { openParentId } = useReplyOpen()
@@ -31,6 +44,7 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
 
   const close = useCallback(() => {
     setComposing(false)
+    setKeyboardOpen(false)
     setReservedHeight(undefined)
   }, [])
 
@@ -86,9 +100,13 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
   }, [composing])
 
   /**
-   * 키보드가 올라온 만큼 바닥을 올린다 — PostEditor 툴바와 같은 방식이다.
-   * iOS 는 화면 자체를 밀어 올리므로 offsetTop 을 반드시 뺀다.
-   * 키보드가 layout viewport 를 줄이는 환경은 계산값이 0 이라 저절로 no-op 이 된다.
+   * 키보드가 올라온 만큼 바닥을 올리고, 보이는 높이에 맞춰 시트를 자른다.
+   *
+   * 🔴 maxHeight 는 키보드 여부와 무관하게 늘 건다. dvh 는 주소창에만 반응하고 키보드에는
+   *    반응하지 않아, CSS 상한만 믿으면 시트가 가시 영역과 어긋난다.
+   *    vv.height 는 키보드가 layout viewport 를 줄이든(keyboard 가 0 이 되는 환경) 아니든
+   *    언제나 "보이는 높이" 라서 두 환경에 같은 값이 맞다.
+   * 🔴 iOS 는 화면 자체를 밀어 올리므로 offsetTop 을 반드시 뺀다.
    */
   useEffect(() => {
     if (!composing) return
@@ -96,38 +114,84 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
     const viewport = window.visualViewport
     if (!el || !viewport) return
 
+    const clear = () => {
+      el.style.bottom = ''
+      el.style.maxHeight = ''
+      setKeyboardOpen(false)
+    }
+
     const update = () => {
+      // max-md 가 꺼지는 폭에서 걸면 fixed 가 아닌 데스크탑 레이아웃까지 잘린다
+      if (window.innerWidth >= FIXED_MAX_WIDTH) {
+        clear()
+        return
+      }
       const keyboard = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
-      el.style.bottom = keyboard > 0 ? `${Math.round(keyboard)}px` : ''
+      el.style.maxHeight = `${Math.max(SHEET_MIN_HEIGHT, Math.round(viewport.height - SHEET_TOP_GAP))}px`
+      // bottom 은 키보드가 화면을 가릴 때만 올린다. layout viewport 가 줄어드는 환경은
+      // keyboard 가 0 이고, 그때는 bottom-0 이 이미 키보드 위다.
+      const open = keyboard > KEYBOARD_THRESHOLD
+      el.style.bottom = open ? `${Math.round(keyboard)}px` : ''
+      setKeyboardOpen(open)
     }
 
     update()
     viewport.addEventListener('resize', update)
     viewport.addEventListener('scroll', update)
+    window.addEventListener('resize', update)
     return () => {
       viewport.removeEventListener('resize', update)
       viewport.removeEventListener('scroll', update)
-      el.style.bottom = ''
+      window.removeEventListener('resize', update)
+      // 인라인 스타일이 남으면 인라인 상태의 레이아웃을 깬다
+      clear()
     }
   }, [composing])
 
   return (
     <div className="mt-4" style={reservedHeight ? { minHeight: reservedHeight } : undefined}>
-      <div ref={areaRef} className={composing ? COMPOSER_CLASS : undefined}>
+      <div
+        ref={areaRef}
+        className={
+          composing
+            ? `${COMPOSER_CLASS}${keyboardOpen ? ' max-md:rounded-t-2xl' : ''}`
+            : undefined
+        }
+      >
         {composing ? (
-          <div className="mb-2 flex items-center justify-between md:hidden">
-            <span className="text-sm font-bold text-content-primary">댓글 쓰기</span>
+          <div className="sticky top-0 z-10 -mx-4 mb-2 flex items-center justify-between bg-surface-card px-4 pt-1 md:hidden">
+            <span className="text-sm font-bold text-content-primary">댓글 쓰는 중</span>
             <button
               type="button"
               onClick={close}
-              className="min-h-[52px] px-2 text-sm text-content-muted transition duration-150 active:scale-[0.98]"
+              aria-label="댓글 입력 닫기"
+              className="flex min-h-[52px] min-w-[52px] items-center justify-center rounded-full text-content-muted transition duration-150 active:scale-[0.98]"
             >
-              그만두기
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                aria-hidden
+              >
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
             </button>
           </div>
         ) : null}
         {children}
       </div>
+
+      {/* 뒤를 가라앉힌다. 눌러도 닫지 않는다 — 바깥 탭으로 닫으면 쓰던 글을 잃었다고 느낀다.
+          면을 덮는 것만으로 뒤 링크 오클릭은 막힌다.
+          🔴 입력 영역 뒤에 둔다. 앞에 넣으면 자식 index 가 밀려 Turnstile 이 remount 된다.
+          🔴 색과 투명도를 나눠 적는다 — 토큰이 var() 라 bg-x/50 은 유틸리티가 생성되지 않는다. */}
+      {composing ? (
+        <div aria-hidden className="fixed inset-0 z-[60] bg-content-primary opacity-50 md:hidden" />
+      ) : null}
 
       {dockVisible && !composing && openParentId === null ? <CommentDock onOpen={open} /> : null}
     </div>
