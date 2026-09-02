@@ -45,25 +45,13 @@ import {
  */
 
 /**
- * 모바일에서 툴바가 차지하는 높이. 자리를 비워 둘 때 이 값을 쓴다.
+ * 모바일에서 툴바가 차지하는 높이. 에디터 안에 툴바 자리를 비워 둘 때 쓴다.
  *
- * 🔴 툴바는 모바일에서 position:fixed 라 문서 흐름에서 빠진다.
- *    그래서 폼 맨 끝의 등록 버튼이 스크롤을 끝까지 내려도 툴바 뒤에 숨는다 —
- *    QA 에서 "툴바와 올리기 버튼이 겹친다" 로 잡힌 것이 이것이다.
- *    자리를 비우는 쪽이 폼이므로 높이를 여기서 내보낸다.
+ * 🔴 이 자리는 항상 비어 있다. 툴바가 화면에 붙어 있든(fixed) 자기 자리로
+ *    돌아와 있든(absolute) 높이가 바뀌지 않는다 — 그래야 두 상태를 오갈 때
+ *    글이 밀리지 않고, 밀림이 다시 상태를 뒤집는 진동도 생기지 않는다.
  */
 const TOOLBAR_HEIGHT = 'h-[72px]'
-
-/**
- * 폼 맨 끝에 두는 여백 — 등록 버튼이 고정 툴바에 가리지 않게 한다.
- *
- * 🔴 에디터 안쪽 여백(본문 마지막 줄용)과는 다른 자리다. 그쪽은 에디터가,
- *    이쪽은 폼이 책임진다. 하나로 합치면 버튼과 툴바가 다시 겹친다.
- * 🔴 데스크탑에서는 툴바가 sticky 라 흐름 안에 있다. 여백을 두지 않는다.
- */
-export function EditorBottomSpacer() {
-  return <div className={`${TOOLBAR_HEIGHT} lg:hidden`} aria-hidden />
-}
 
 /** 올리는 동안 화면에 먼저 보여줄 자리를 만들되, 저장되지 않게 blob: 을 쓴다. */
 type Upload = { blobUrl: string; name: string }
@@ -136,6 +124,8 @@ export default function PostEditor({
 
   const fileRef = useRef<HTMLInputElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
+  /** 툴바를 붙일지 제 자리로 돌려보낼지 정할 때 이 블록의 아래끝을 기준으로 삼는다. */
+  const rootRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Editor | null>(null)
   // 화면을 떠난 뒤 setState 가 도는 것을 막는다 — 올리는 도중 뒤로 가면 생긴다.
   const aliveRef = useRef(true)
@@ -267,7 +257,7 @@ export default function PostEditor({
   }, [editor])
 
   /**
-   * 툴바를 키보드 위에 붙인다.
+   * 툴바를 키보드 위에 붙이되, 에디터를 지나쳐 내려가면 자기 자리로 돌려보낸다.
    *
    * 🔴 CSS 만으로는 안 된다. 조상 중에 transform 이 있으면 position:fixed 가
    *    그 요소 기준으로 잡혀 화면 아래에 붙지 않는다 — 우나어가 겪은 문제다.
@@ -275,10 +265,27 @@ export default function PostEditor({
    *
    * 🔴 offsetTop 을 반드시 뺀다. iOS 는 키보드를 올릴 때 화면 자체를 밀어 올리는데
    *    그 양이 offsetTop 에 들어온다. 빼지 않으면 툴바가 키보드 뒤로 숨는다.
+   *
+   * 🔴 툴바를 끝까지 화면에 붙여 두면 에디터 아래의 것들 위를 덮고 다닌다.
+   *    QA 에서 잡힌 것이 이것이다 — 글을 다 쓰고 내려가는 동안 올리기 버튼이
+   *    툴바 밑을 지나가면서 절반쯤 물리고, 그 자리를 누르면 툴바가 눌린다.
+   *    버튼 뒤에 여백을 더하는 것으로는 풀리지 않는다. 여백은 스크롤 범위만
+   *    늘릴 뿐, 버튼이 툴바 밑을 통과하는 구간 자체는 그대로 남는다.
+   *
+   * 🔴 그래서 붙여 두는 조건을 둔다 — 에디터 블록의 아래끝이 툴바 아래끝보다
+   *    밑에 있을 때만 붙인다. 그 아래로 내려가면 absolute 로 바꿔 에디터 안의
+   *    제 자리(위에서 비워 둔 TOOLBAR_HEIGHT)로 돌려보낸다.
+   *    이러면 툴바는 언제나 에디터 블록 안에 있고, 버튼은 언제나 그 블록
+   *    바깥(아래)에 있으므로 두 사각형이 겹칠 수가 없다.
+   *
+   * 🔴 바뀌는 순간 두 위치의 아래끝이 같아서 화면이 튀지 않는다.
+   *    자리 높이도 그대로라 레이아웃이 움직이지 않는다 — 움직이면 그 움직임이
+   *    다시 조건을 뒤집어 툴바가 깜빡인다.
    */
   useEffect(() => {
     const toolbar = toolbarRef.current
-    if (!toolbar) return
+    const root = rootRef.current
+    if (!toolbar || !root) return
 
     const desktop = window.matchMedia('(min-width: 1024px)')
     const viewport = window.visualViewport
@@ -293,15 +300,28 @@ export default function PostEditor({
         toolbar.style.zIndex = '10'
         return
       }
-      toolbar.style.position = 'fixed'
-      toolbar.style.top = ''
-      toolbar.style.left = '0'
-      toolbar.style.right = '0'
-      toolbar.style.zIndex = '30'
+
       const keyboard = Math.max(
         0,
         window.innerHeight - (viewport?.height ?? window.innerHeight) - (viewport?.offsetTop ?? 0),
       )
+      // 붙여 뒀을 때 툴바 아래끝이 놓일 자리(화면 좌표).
+      const pinnedBottom = window.innerHeight - keyboard
+      // 제 자리로 돌아갔을 때 아래끝이 놓일 자리. 에디터 블록의 아래끝이다.
+      const restingBottom = root.getBoundingClientRect().bottom
+
+      toolbar.style.top = ''
+      toolbar.style.left = '0'
+      toolbar.style.right = '0'
+
+      if (restingBottom <= pinnedBottom) {
+        toolbar.style.position = 'absolute'
+        toolbar.style.bottom = '0'
+        toolbar.style.zIndex = '10'
+        return
+      }
+      toolbar.style.position = 'fixed'
+      toolbar.style.zIndex = '30'
       toolbar.style.bottom = `calc(${keyboard}px + env(safe-area-inset-bottom, 0px))`
     }
 
@@ -309,10 +329,16 @@ export default function PostEditor({
     viewport?.addEventListener('resize', update)
     viewport?.addEventListener('scroll', update)
     desktop.addEventListener('change', update)
+    // 🔴 페이지 스크롤은 visualViewport 의 scroll 로 오지 않는다(그쪽은 확대·축소용).
+    //    붙일지 말지를 스크롤로 정하므로 창의 scroll 을 따로 듣는다.
+    window.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
     return () => {
       viewport?.removeEventListener('resize', update)
       viewport?.removeEventListener('scroll', update)
       desktop.removeEventListener('change', update)
+      window.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
     }
   }, [editor])
 
@@ -397,7 +423,7 @@ export default function PostEditor({
   const busy = uploading !== null
 
   return (
-    <div className="relative">
+    <div className="relative" ref={rootRef}>
       {error ? (
         <p role="alert" className="mb-2 text-sm text-state-danger">
           {error}
@@ -408,8 +434,9 @@ export default function PostEditor({
         <EditorContent editor={editor} />
       </div>
 
-      {/* 🔴 본문 마지막 줄이 고정 툴바에 가리지 않게 하는 여백이다.
-             폼 맨 끝(EditorBottomSpacer)과 목적이 다르다 — 그쪽은 등록 버튼을 지킨다. */}
+      {/* 🔴 툴바가 쓸 자리다. 화면에 붙어 있는 동안에는 본문 마지막 줄이 가리지 않게 하고,
+             제 자리로 돌아왔을 때는 툴바가 여기에 놓인다. 두 경우 모두 높이가 같아야
+             오갈 때 글이 밀리지 않는다. */}
       <div className={`${TOOLBAR_HEIGHT} lg:h-0`} aria-hidden />
 
       <div

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
-import PostEditor, { EditorBottomSpacer } from '@/components/features/PostEditor'
+import PostEditor from '@/components/features/PostEditor'
 import { createPost, type ActionState } from '@/lib/actions/posts'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import {
@@ -238,9 +238,6 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
         disabled={!canSubmit}
         className="justify-center px-6"
       />
-
-      {/* 🔴 고정 툴바가 이 버튼을 덮지 않도록 마지막에 자리를 비운다. */}
-      <EditorBottomSpacer />
     </form>
   )
 }
