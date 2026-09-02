@@ -59,7 +59,7 @@ import {
   type OriginalPostRecord,
 } from './lib/original-post-prompt'
 import { selectVoiceSamples, type VoiceLearningRow, type ManualDecisionRow } from './lib/voice-sample-select'
-import { readSourceProfile, mustKeepDetails } from './lib/source-profile'
+import { readSourceProfile, mustKeepDetails, MAX_QUESTION_MARKS } from './lib/source-profile'
 import { READ_QUERIES, loadUnaoReadonlyUrl } from './lib/voice-unao-readonly.mjs'
 import pg from 'pg'
 import { readdirSync, statSync } from 'node:fs'
@@ -319,6 +319,8 @@ if (CALL) {
 // ── 프롬프트 + (선택) 호출 ──
 const records: OriginalPostRecord[] = []
 const sourceTexts: string[] = []
+/** ✅ 소재로 허용된 링크 정본 모음 — 유출 대조에서만 제외한다 */
+const allowedContentUrls: string[] = []
 let calls = 0
 
 for (const [i, raw] of selected.entries()) {
@@ -337,7 +339,9 @@ for (const [i, raw] of selected.entries()) {
       ` · 되풀이 ${profile.repeatedFixations.length}종 · 디테일 ${profile.concreteDetailsToKeep.length}건` +
       ` · 🔴 필수 ${mustKeepDetails(profile.concreteDetailsToKeep).length}건` +
       `${profile.externalAddressTerms.length > 0 ? ` · 🔴 외부호칭 ${profile.externalAddressTerms.length}종` : ''}` +
-      `${profile.hasSourceUrl ? ' · 🔴 원문에 링크 있음' : ''}` +
+      `${profile.originTraceUrls.length > 0 ? ` · 🔴 출처링크 ${profile.originTraceUrls.length}건` : ''}` +
+      `${profile.contentReferenceUrl !== null ? ' · ✅ 소재링크 1건(정본)' : ''}` +
+      ` · 제목모양 ${profile.titleShape}` +
       `${profile.originTraceTerms.length > 0 ? ` · 🔴 출처흔적 ${profile.originTraceTerms.length}종` : ''}`,
   )
   const plan = buildPrompt({
@@ -410,14 +414,24 @@ for (const [i, raw] of selected.entries()) {
     body: parsed.body,
   }))
   sourceTexts.push(raw.rawTitle, raw.rawBody)
+  // ✅ 이 원문에 한해 써도 되는 소재 링크(정본). 저장 가드 대조에서 뺀다 —
+  //    규칙상 허용한 링크 때문에 글 전체가 버려지면 가드가 일을 잘못하는 것이다
+  if (profile.contentReferenceUrl !== null) allowedContentUrls.push(profile.contentReferenceUrl)
 
   // 🔴 판정이 아니다. 사람이 볼 신호만 찍는다.
   //    🔴 대조 대상이 둘이다 — 말투 샘플을 넣은 순간 우나어 원문이 두 번째 유출원이 됐다
   const seedTexts = [raw.rawTitle, raw.rawBody]
   // 🔴 원문이 번호 나열이면 초안의 번호도 흔적이 아니다 — 살리라고 시킨 것이다
   const allowNumberedList = profile.preserveStructure.numberedList
-  const s = analyzeDraft({ title: parsed.title, body: parsed.body, sourceTexts: seedTexts, allowNumberedList })
-  const v = analyzeDraft({ title: parsed.title, body: parsed.body, sourceTexts: voiceSampleBodies, allowNumberedList })
+  const s = analyzeDraft({
+    title: parsed.title, body: parsed.body, sourceTexts: seedTexts, allowNumberedList,
+    allowedContentUrl: profile.contentReferenceUrl,
+    closingIntent: profile.closingIntent,
+  })
+  const v = analyzeDraft({
+    title: parsed.title, body: parsed.body, sourceTexts: voiceSampleBodies, allowNumberedList,
+    allowedContentUrl: profile.contentReferenceUrl,
+  })
   console.log(`   초안  제목 ${brief(parsed.title)} · 본문 ${brief(parsed.body)}`)
   console.log(
     `   신호  재료 연속20자 ${s.sourceEchoCount}건 · 어절 공유 ${pct(s.sharedWordRatio)}` +
@@ -440,7 +454,12 @@ for (const [i, raw] of selected.entries()) {
   )
   // 🔴 링크는 호칭보다 확실한 유출이다. 경계 표현은 실패와 섞지 않고 따로 센다
   console.log(
-    `         ${s.urlHits.length === 0 ? '✅' : '🔴'} 링크 ${s.urlHits.length}건` +
+    `         ${{ ok: '✅', watch: '🟡', missing: '🔴', overuse: '🔴' }[s.questionVerdict]}` +
+      ` 물음표 ${s.questionMarkCount}개` +
+      `${s.questionVerdict === 'missing' ? ' (묻는 글인데 안 물었다)'
+        : s.questionVerdict === 'overuse' ? ` (상한 ${MAX_QUESTION_MARKS} 초과 — 남발)` : ''}` +
+      ` · ${s.originUrlHits.length === 0 ? '✅' : '🔴'} 출처링크 ${s.originUrlHits.length}건` +
+      ` · ${s.contentUrlHits.length > 1 ? '🔴' : '✅'} 소재링크 ${s.contentUrlHits.length}건` +
       ` · ${s.originTraceHits.length === 0 ? '✅' : '🔴'} 출처흔적 ${s.originTraceHits.length}건` +
       `${s.originTraceHits.length > 0 ? ` (${s.originTraceHits.join(' · ')})` : ''}` +
       ` · ${s.critiqueWatchHits.length === 0 ? '✅' : '🟡'} 경계 표현 ${s.critiqueWatchHits.length}건` +
@@ -473,7 +492,7 @@ if (records.length === 0) {
 //    통째로 버려졌다. 유료 호출 3회가 산출물 0건이 됐다.
 //    🔴 완화가 아니다. 걸린 것은 여전히 저장하지 않는다 — 버리는 범위만 좁혔다.
 const allSources = [...sourceTexts, ...voiceSampleBodies]
-const { clean, leaking } = partitionByStoredSource(records, allSources)
+const { clean, leaking } = partitionByStoredSource(records, allSources, allowedContentUrls)
 
 if (leaking.length > 0) {
   console.error(`\n🔴 원문 조각이 섞인 ${leaking.length}건은 저장하지 않습니다 (연속 20자 일치):`)
@@ -492,7 +511,7 @@ if (clean.length === 0) {
 }
 
 // 🔴 통과한 것만 한 번 더 본다. 여기서 던지면 partition 과 assert 의 눈금이 갈린 것이다
-assertNoStoredSource(clean, allSources)
+assertNoStoredSource(clean, allSources, allowedContentUrls)
 
 const existing: OriginalPostRecord[] = existsSync(OUTPUT_PATH)
   ? (JSON.parse(readFileSync(OUTPUT_PATH, 'utf-8')) as OriginalPostRecord[])

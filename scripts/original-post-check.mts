@@ -19,6 +19,7 @@ import {
   MAX_VOICE_SAMPLES, VOICE_TAKEAWAYS,
   CRITIQUE_BANNED_PHRASES, CRITIQUE_BANNED_REGISTERS, CRITIQUE_WATCH_PHRASES,
   partitionByStoredSource, sourceEchoCount, normalizeForEcho, selectByLengthQuantile,
+  stripAllowedUrls,
   type PromptRawContent, type PromptBlockCode, type OriginalPostRecord,
 } from './lib/original-post-prompt'
 import {
@@ -30,6 +31,9 @@ import {
 import {
   readSourceProfile, profileDirectives, SORANSORAN_ADDRESS, BRIGHT_REGISTER_KEEPS,
   mustKeepDetails, MUST_KEEP_KINDS, titleDirectives, originTraceHitsIn,
+  canonicalContentUrl, isOriginUrl, findUrls, contentUrlIn, originUrlsIn,
+  readTitleShape, TITLE_SHAPES, CONTENT_URL_HOSTS,
+  INCIDENT_EMOTION_MARKERS, MAX_QUESTION_MARKS,
 } from './lib/source-profile'
 import { READ_QUERIES, UNAO_READABLE_TABLES } from './lib/voice-unao-readonly.mjs'
 import {
@@ -325,7 +329,7 @@ console.log('\n══════ ⑨ 🔴 생성기 스크립트가 지켜야 �
   // 🔴 저장 직전 실측 방어를 반드시 거친다
   // 🔴 2026-09-01 7판 — 배치 전체 검사에서 **레코드별 검사**로 바뀌었다.
   //    한 건이 걸려 깨끗한 두 건까지 버려진 사고 때문이다
-  const PART_CALL = 'partitionByStoredSource(records, allSources)'
+  const PART_CALL = 'partitionByStoredSource(records, allSources, allowedContentUrls)'
   expect('🔴 레코드별로 가른다', code.includes(PART_CALL), true)
   expect('  🔴 대조 대상이 둘이다 (원문 + 말투 샘플)',
     code.includes('[...sourceTexts, ...voiceSampleBodies]'), true)
@@ -334,7 +338,7 @@ console.log('\n══════ ⑨ 🔴 생성기 스크립트가 지켜야 �
   expect('  저장 건수도 알린다', code.includes('생성 ${records.length}건 → 저장 ${clean.length}건'), true)
   expect('  전부 걸리면 exit 1', code.includes('저장 가능한 초안이 0건입니다'), true)
   // 🔴 통과한 것만 한 번 더 본다 — 두 눈금이 갈리면 여기서 던진다
-  expect('  통과분에 assert 를 한 번 더 건다', code.includes('assertNoStoredSource(clean, allSources)'), true)
+  expect('  통과분에 assert 를 한 번 더 건다', code.includes('assertNoStoredSource(clean, allSources, allowedContentUrls)'), true)
   expect('  writeFileSync 보다 앞이다',
     code.indexOf(PART_CALL) < code.indexOf('writeFileSync(OUTPUT_PATH'), true)
   // 🔴 원문·초안 전문을 찍지 않는다
@@ -718,8 +722,8 @@ console.log('\n══════ ⑰ 🔴 source profile — 원문을 규칙�
     rawBody: '어제 병원 다녀왔는데 https://example.com/abc 여기 글이랑 똑같더라고요 정말 놀랐어요 새벽 3시에 깼고 진통제도 소용이 없었어요 무서워요 무서워요 무서워요 어떡하죠',
   })
   expect('  🔴 원문 URL 을 알아본다', withUrl.hasSourceUrl, true)
-  expect('    주소를 옮기지 말라고 말한다',
-    profileDirectives(withUrl).join('\n').includes('최종 글에 주소를 옮기지 않습니다'), true)
+  expect('    🔴 출처 링크는 옮기지 말라고 말한다',
+    profileDirectives(withUrl).join('\n').includes('그 주소를 옮기지 않습니다'), true)
   expect('  URL 없으면 그 지시도 없다', p7.hasSourceUrl, false)
   expect('  🔴 되풀이는 붙들린 지점이라고 말한다', d7.includes('붙들린 지점'), true)
   // 🔴 2026-09-02 9판 — interactionNeed 는 더 이상 부르기를 강제하지 않는다.
@@ -1564,7 +1568,8 @@ console.log('\n══════ ㉑ 🔴 생성기가 프로파일을 배선�
     code.includes('profile.preserveStructure.numberedList'), true)
   expect('  실패 표현을 찍는다', code.includes('s.critiqueHits.length'), true)
   expect('  외부 호칭을 찍는다', code.includes('s.externalAddressHits.length'), true)
-  expect('  🔴 링크를 찍는다', code.includes('s.urlHits.length'), true)
+  expect('  🔴 출처 링크를 찍는다', code.includes('s.originUrlHits.length'), true)
+  expect('  🔴 소재 링크를 따로 찍는다', code.includes('s.contentUrlHits.length'), true)
   expect('  경계 표현도 찍는다', code.includes('s.critiqueWatchHits.length'), true)
   expect('  🔴 필수 디테일 수를 찍는다', code.includes('mustKeepDetails(profile.concreteDetailsToKeep).length'), true)
   expect('  이모티콘 배치도 찍는다', code.includes('s.emoticonEvenness'), true)
@@ -1574,6 +1579,432 @@ console.log('\n══════ ㉑ 🔴 생성기가 프로파일을 배선�
   expect('  저장 키 3개 그대로', ALLOWED_RECORD_KEYS.join(','), 'sourceRawContentId,title,body')
   expect('  유출 대조 양쪽 유지',
     code.includes('const allSources = [...sourceTexts, ...voiceSampleBodies]'), true)
+}
+
+
+console.log('\n══════ ㉚ 🔴 링크 두 갈래 — 출처는 금지, 소재(유튜브)는 정본만 (11판 #39)')
+{
+  // ── 출처 링크: 한 건도 못 나간다 ──
+  const ORIGIN_SAMPLES: ReadonlyArray<[string, string]> = [
+    ['82cook 게시글', 'https://www.82cook.com/entiz/read.php?bn=15&num=4234468&page=1'],
+    ['네이버 카페', 'https://cafe.naver.com/remonterrace/34783204'],
+    ['다음 카페', 'https://cafe.daum.net/subak/AAAA/1234'],
+    ['네이버 블로그', 'https://blog.naver.com/someone/223456789'],
+    ['인스타그램', 'https://www.instagram.com/p/CxYzAbCdEfG/'],
+    ['티스토리', 'https://someblog.tistory.com/42'],
+  ]
+  for (const [label, url] of ORIGIN_SAMPLES) {
+    expect(`🔴 ${label} 은 출처다`, isOriginUrl(url), true)
+    expect(`   ${label} 은 소재로 못 쓴다`, canonicalContentUrl(url), null)
+  }
+  // 🔴 호스트가 안 걸려도 게시판 읽기 경로면 출처다
+  expect('🔴 모르는 도메인의 /board/read 도 출처',
+    isOriginUrl('https://some-forum.example/board/read?id=9'), true)
+  expect('🔴 못 읽는 주소는 출처로 본다(모르는 것은 막는다)', isOriginUrl('http://'), true)
+
+  // ── 소재 링크: 유튜브만, 정본으로만 ──
+  const CANON = 'https://www.youtube.com/watch?v=OztApxz5qSk'
+  expect('✅ youtu.be 단축을 정본으로 되돌린다',
+    canonicalContentUrl('https://youtu.be/OztApxz5qSk'), CANON)
+  // 🔴 #39 의 실제 링크 형태 — 단축 + 추적 파라미터 둘 다 걸린다
+  expect('✅ 🔴 si 추적 파라미터를 씻어 낸다',
+    canonicalContentUrl('https://youtu.be/OztApxz5qSk?si=aBcDeFgHiJkL'), CANON)
+  expect('✅ watch?v= 는 그대로 정본',
+    canonicalContentUrl('https://www.youtube.com/watch?v=OztApxz5qSk'), CANON)
+  expect('✅ utm 파라미터도 버린다',
+    canonicalContentUrl('https://www.youtube.com/watch?v=OztApxz5qSk&utm_source=x'), CANON)
+  expect('✅ shorts 도 정본으로',
+    canonicalContentUrl('https://www.youtube.com/shorts/OztApxz5qSk'), CANON)
+  expect('✅ m.youtube 도 정본으로',
+    canonicalContentUrl('https://m.youtube.com/watch?v=OztApxz5qSk'), CANON)
+  expect('🔴 영상 id 가 아니면 못 쓴다(11자 아님)',
+    canonicalContentUrl('https://youtu.be/short'), null)
+  expect('🔴 유튜브 채널 주소는 소재가 아니다',
+    canonicalContentUrl('https://www.youtube.com/@somechannel'), null)
+  expect('🔴 허용 호스트는 유튜브뿐이다', CONTENT_URL_HOSTS.every((h) => h.includes('youtu')), true)
+  expect('🔴 비메오는 허용하지 않는다',
+    canonicalContentUrl('https://vimeo.com/123456789'), null)
+
+  // ── 원문에서 갈래를 뽑는다 ──
+  const MIXED = `이 영상 좀 보세요 https://youtu.be/OztApxz5qSk?si=zz 원문은 https://www.82cook.com/entiz/read.php?num=1 입니다`
+  expect('원문에서 소재 링크 정본 1건을 고른다', contentUrlIn(MIXED), CANON)
+  expect('🔴 같은 글의 출처 링크는 따로 잡힌다', originUrlsIn(MIXED).length, 1)
+  expect('🔴 소재 링크가 둘이면 아무것도 허용하지 않는다',
+    contentUrlIn('https://youtu.be/OztApxz5qSk 그리고 https://youtu.be/AbCdEfGhIjK'), null)
+  expect('링크가 없으면 null', contentUrlIn('링크 없는 글입니다'), null)
+  expect('URL 추출이 뒤따르는 문장부호를 먹지 않는다',
+    findUrls('영상은 https://youtu.be/OztApxz5qSk 입니다.').length, 1)
+}
+
+console.log('\n══════ ㉛ 🔴 저장 가드 — 허용 링크로는 안 터지고, 원문 유출은 그대로 막는다')
+{
+  const CANON = 'https://www.youtube.com/watch?v=OztApxz5qSk'
+  const SRC = `요즘 이 아기 영상 보는데 너무 귀여워요 ${CANON} 몬치치 머리에 공놀이도 잘해요`
+
+  // ✅ 허용 링크만 겹치는 초안 — 저장돼야 한다
+  const okRecord: OriginalPostRecord = {
+    sourceRawContentId: 'raw-yt-0001',
+    title: '요즘 보는 아기 영상 하나 있는데요 ㅋㅋㅋ',
+    body: `주말마다 이거 틀어놓고 흐뭇하게 봅니다 ${CANON} 랜선 이모가 따로 없어요`,
+  }
+  expect('🔴 허용 링크를 빼지 않으면 유출로 잡힌다(=이게 7판식 오폭)',
+    sourceEchoCount(`${okRecord.title}\n${okRecord.body}`, [SRC]) > 0, true)
+  expect('✅ 허용 링크를 빼면 유출 0',
+    sourceEchoCount(`${okRecord.title}\n${okRecord.body}`, [SRC], [CANON]), 0)
+  {
+    const { clean, leaking } = partitionByStoredSource([okRecord], [SRC], [CANON])
+    expect('✅ 허용 링크 글은 저장된다', clean.length, 1)
+    expect('   버려지지 않는다', leaking.length, 0)
+  }
+
+  // 🔴 링크 말고 본문을 베낀 초안 — 여전히 막혀야 한다
+  const leakRecord: OriginalPostRecord = {
+    sourceRawContentId: 'raw-yt-0001',
+    title: '아기 영상 이야기',
+    body: `${CANON} 요즘 이 아기 영상 보는데 너무 귀여워요 몬치치 머리에 공놀이도 잘해요`,
+  }
+  {
+    const { clean, leaking } = partitionByStoredSource([leakRecord], [SRC], [CANON])
+    expect('🔴 허용 링크가 있어도 본문 베끼기는 막는다', leaking.length, 1)
+    expect('   깨끗한 것으로 세지 않는다', clean.length, 0)
+  }
+  // 🔴 허용 링크를 빼는 것이 "전체 URL 무시" 가 되면 안 된다
+  expect('🔴 허용되지 않은 주소는 빠지지 않는다',
+    stripAllowedUrls('보세요 https://www.82cook.com/entiz/read.php?num=1', [CANON])
+      .includes('82cook'), true)
+  expect('✅ 허용 주소만 빠진다', stripAllowedUrls(`보세요 ${CANON}`, [CANON]).includes('youtube'), false)
+  expect('허용 목록이 비면 아무것도 빠지지 않는다',
+    stripAllowedUrls(`보세요 ${CANON}`, []).includes('youtube'), true)
+}
+
+console.log('\n══════ ㉜ 🔴 계측 — URL 을 0/1 이 아니라 출처/소재로 나눠 본다')
+{
+  const CANON = 'https://www.youtube.com/watch?v=OztApxz5qSk'
+  const base = { sourceTexts: ['원문입니다'] as readonly string[] }
+
+  const withContent = analyzeDraft({
+    title: '요즘 보는 아기 영상이요', body: `이거예요 ${CANON} 너무 귀엽습니다`,
+    ...base, allowedContentUrl: CANON,
+  })
+  expect('✅ 허용 소재 링크는 소재로 센다', withContent.contentUrlHits.length, 1)
+  expect('   출처 링크로는 세지 않는다', withContent.originUrlHits.length, 0)
+
+  const withOrigin = analyzeDraft({
+    title: '보세요', body: '원문은 https://www.82cook.com/entiz/read.php?num=1 입니다',
+    ...base, allowedContentUrl: CANON,
+  })
+  expect('🔴 게시판 주소는 출처로 잡힌다', withOrigin.originUrlHits.length, 1)
+  expect('   소재로 세지 않는다', withOrigin.contentUrlHits.length, 0)
+
+  // 🔴 허용된 정본과 **글자 그대로** 같아야 소재다 — 비슷한 주소를 지어내면 출처다
+  const madeUp = analyzeDraft({
+    title: '보세요', body: `이거예요 https://youtu.be/OztApxz5qSk?si=zzz`,
+    ...base, allowedContentUrl: CANON,
+  })
+  expect('🔴 단축·추적 형태를 그대로 쓰면 소재가 아니다', madeUp.contentUrlHits.length, 0)
+  expect('   🔴 걸린 쪽(originUrlHits)으로 잡힌다 — 조용히 사라지지 않는다',
+    madeUp.originUrlHits.length, 1)
+
+  const noAllow = analyzeDraft({
+    title: '보세요', body: `이거예요 ${CANON}`, ...base, allowedContentUrl: null,
+  })
+  expect('🔴 허용 링크를 안 주면 어떤 주소도 출처다', noAllow.originUrlHits.length, 1)
+  expect('   기본값은 막는 쪽이다', noAllow.contentUrlHits.length, 0)
+
+  expect('옛 이름 urlHits 는 두 갈래의 합이다',
+    withContent.urlHits.length,
+    withContent.originUrlHits.length + withContent.contentUrlHits.length)
+}
+
+console.log('\n══════ ㉝ 🔴 제목 모양 — 소재가 제목 구조를 정한다 (11판 #38 · #39)')
+{
+  // ── #38 계열: letdown + 자식/성적 + 들킨 경로 ──
+  const s38 = readTitleShape(
+    '고3 아이 성적 문제',
+    '고3 아이가 모의고사 성적을 속여왔습니다. 담임 선생님 전화로 알았어요. 수시 원서를 써야 하는데 허탈합니다.',
+    'letdown',
+  )
+  expect('#38 계열은 사건형 제목', s38, 'incident_reveal_emotion')
+  {
+    const p = readSourceProfile({
+      rawTitle: '고3 아이 성적 문제',
+      rawBody: '고3 아이가 모의고사 성적을 속여왔습니다. 담임 선생님 전화로 알았어요. '
+        + '수시 원서를 써야 하는데 허탈합니다. 애 말만 믿었던 제가 바보 같습니다. '
+        + '성적표를 직접 확인해 보니 등급이 전혀 달랐습니다. 밤새 잠이 오지 않았어요.',
+    })
+    expect('  프로파일에도 사건형으로 실린다', p.titleShape, 'incident_reveal_emotion')
+    const t = titleDirectives(p).join('\n')
+    expect('  🔴 사건+들킨 경로+감정 구조를 지시한다', t.includes('들킨 경로'), true)
+    expect('  🔴 구체 낱말을 제목에 살리라고 한다', t.includes('담임'), true)
+    expect('  🔴 뭉뚱그린 제목을 실패로 못박는다', t.includes('뭉뚱그리면 실패'), true)
+    expect('  🔴 요약형 금지가 남아 있다', t.includes('조용한 요약 제목은 실패'), true)
+  }
+
+  // ── #39 계열: 아기/영상/귀여움 ──
+  const s39 = readTitleShape(
+    '요즘 보는 아기 영상',
+    '요즘 하루라는 아기 영상을 봅니다. 너무 귀여워서 계속 보게 되네요. 유튜브 채널 아시는 분 계신가요?',
+    'plain',
+  )
+  expect('#39 계열은 주접형 제목', s39, 'fond_gush')
+  {
+    const p = readSourceProfile({
+      rawTitle: '요즘 보는 아기 영상 있으세요',
+      rawBody: '요즘 하루라는 아기 영상을 봅니다. 너무 귀여워서 계속 보게 되네요. '
+        + '몬치치 머리에 공놀이도 어찌나 잘하는지 운동신경이 남다릅니다. '
+        + '일본 외가 식구들도 다들 유쾌하시더라고요. 혹시 보시는 분 계신가요?',
+    })
+    expect('  프로파일에도 주접형으로 실린다', p.titleShape, 'fond_gush')
+    const t = titleDirectives(p).join('\n')
+    expect('  🔴 커뮤식 주접 제목을 지시한다', t.includes('주접 제목'), true)
+    expect('  🔴 짧게 요약하지 말라고 한다', t.includes('짧게 요약하지 않습니다'), true)
+    expect('  🔴 감상문 제목을 막는다', t.includes('감상문 제목 금지'), true)
+  }
+
+  // 🔴 무거운 쪽이 이긴다 — 자식 성적 글에 "귀엽" 이 한 번 나온다고 주접이 되면 안 된다
+  expect('🔴 사건형이 주접형을 이긴다',
+    readTitleShape('고3 성적',
+      '고3 애가 모의고사 성적을 속였습니다. 담임 전화로 알았어요. 어릴 땐 귀여웠는데 영상 보면 눈물납니다.',
+      'letdown'),
+    'incident_reveal_emotion')
+  // 🔴 좁게 유지한다 — 낱말 하나로 모양이 바뀌지 않는다
+  expect('🔴 "영상" 한 번으로는 주접형이 아니다',
+    readTitleShape('오늘 본 것', '오늘 영상 하나 봤습니다. 별 내용은 없었어요.', 'plain'), 'plain_subject')
+  // 🔴 실제 #39 가 이랬다 — 본문에 `아기` 한 번뿐이고 유튜브는 **링크**로 있었다.
+  //    낱말만 세면 놓친다. 소재 링크가 함께 있으면 한 번으로도 '보는 글' 이다
+  expect('✅ 낱말 1개 + 소재 링크면 주접형',
+    readTitleShape('이거 아세요',
+      '요즘 이 아기 보는 재미로 삽니다 https://youtu.be/OztApxz5qSk?si=zz 한번 보세요', 'plain'),
+    'fond_gush')
+  expect('🔴 링크가 있어도 관련 낱말이 없으면 아니다',
+    readTitleShape('참고용', '자료는 여기 있습니다 https://youtu.be/OztApxz5qSk 확인 부탁드려요', 'plain'),
+    'plain_subject')
+  expect('🔴 출처 링크는 신호가 되지 않는다',
+    readTitleShape('이거 아세요',
+      '요즘 이 아기 보는 재미로 삽니다 https://www.82cook.com/entiz/read.php?num=1 보세요', 'plain'),
+    'plain_subject')
+  expect('🔴 들킨 경로가 없으면 사건형이 아니다',
+    readTitleShape('고3 성적 걱정', '고3 아이 성적이 걱정입니다. 수시를 어떻게 써야 할지 모르겠어요.', 'worry'),
+    'plain_subject')
+  expect('제목 모양은 세 가지뿐', TITLE_SHAPES.length, 3)
+}
+
+console.log('\n══════ ㉞ 🔴 explicit_question 은 질문을 죽이지 않는다 (11판 #39)')
+{
+  // 🔴 끝이 "계신가요" 면 experience_call 이 맞다 — 그건 겪은 사람을 찾는 말이다.
+  //    explicit_question 은 **그냥 묻고 끝나는** 글이다. 둘을 섞지 않는다
+  const p = readSourceProfile({
+    rawTitle: '요즘 보는 아기 영상 있으세요',
+    rawBody: '요즘 하루라는 아기 영상을 봅니다. 너무 귀여워서 계속 보게 되네요. '
+      + '몬치치 머리에 공놀이도 어찌나 잘하는지 운동신경이 남다릅니다. '
+      + '일본 외가 식구들도 다들 유쾌하시더라고요. '
+      + '이런 거 보다 보면 시간 순삭이지 않나요?',
+  })
+  expect('원문이 묻고 끝나면 explicit_question', p.closingIntent, 'explicit_question')
+  const d = profileDirectives(p).join('\n')
+  expect('🔴 질문이 사라지면 실패라고 못박는다', d.includes('질문이 사라지면 실패'), true)
+  expect('🔴 제목이나 본문 끝 중 한 곳에 남으라고 한다', d.includes('제목이나 본문 끝'), true)
+  expect('🔴 그래도 공식 CTA 는 금지다', d.includes('공식 CTA 는 여전히 금지'), true)
+  expect('🔴 질문을 더 만들지 말라는 규칙은 유지', d.includes('더** 만들지 않습니다'), true)
+
+  // 🔴 no_call 의 CTA 금지는 그대로다 — 이번 완화가 그쪽으로 새면 안 된다
+  const np = readSourceProfile({
+    rawTitle: '전남편 이야기',
+    rawBody: '양육비 이야기를 다시 꺼냈다가 그냥 손절했습니다. 실망만 남았어요. '
+      + '기대한 제가 잘못이지요. 애한테는 아무 말도 하지 않았습니다. '
+      + '그냥 속으로만 삭이고 있습니다. 오늘도 그렇게 하루가 갔습니다.',
+  })
+  expect('묻지 않고 끝나면 no_call', np.closingIntent, 'no_call')
+  const nd = profileDirectives(np).join('\n')
+  expect('🔴 no_call 은 마지막에 질문을 붙이지 않는다', nd.includes('마지막에 질문을 붙이지 않습니다'), true)
+  expect('🔴 no_call 은 호칭도 억지로 넣지 않는다', nd.includes('억지로 넣지 않습니다'), true)
+  expect('🔴 no_call 에는 질문 살리기 지시가 없다', nd.includes('질문이 사라지면 실패'), false)
+}
+
+console.log('\n══════ ㉟ 🔴 #37 계열은 이번 수정에 영향받지 않는다')
+{
+  // #37 = bright_pride 자랑글 · no_call · 링크 없음
+  const p = readSourceProfile({
+    rawTitle: '딸이 첫 월급 탔다고',
+    rawBody: '딸이 첫 월급을 탔다면서 용돈을 주더라고요. 서운했던 마음이 싹 풀렸습니다. '
+      + '고생한 보람이 있네요. 오늘 저녁은 제가 쏘기로 했습니다. '
+      + '괜히 자랑하고 싶어서 몇 자 적어봅니다. 다들 별일 없으시죠.',
+  })
+  expect('자랑 톤 그대로', p.emotionTone, 'bright_pride')
+  expect('no_call 그대로', p.closingIntent, 'no_call')
+  expect('🔴 제목 모양이 바뀌지 않는다(기본형)', p.titleShape, 'plain_subject')
+  expect('🔴 링크가 없으니 소재 링크도 없다', p.contentReferenceUrl, null)
+  expect('🔴 출처 링크도 없다', p.originTraceUrls.length, 0)
+  const t = titleDirectives(p).join('\n')
+  expect('🔴 자랑 제목 지시는 그대로', t.includes('주접 제목이 됩니다'), true)
+  expect('🔴 사건형 지시가 끼어들지 않는다', t.includes('들킨 경로'), false)
+  const d = profileDirectives(p).join('\n')
+  expect('🔴 링크 없는 글에는 "주소를 쓰지 않는다" 가 붙는다', d.includes('어떤 주소(URL)도 쓰지 않습니다'), true)
+  expect('🔴 소재 링크 허용문이 붙지 않는다', d.includes('글의 소재 자체'), false)
+}
+
+
+console.log('\n══════ ㊱ 🔴 사건형 제목 — 감정 자리를 비우지 않는다 (12판 #40)')
+{
+  // 🔴 #40 원문이 이랬다 — 사건은 무거운데 문장은 담담해서 titleTemperature 가 calm 이었다
+  const p = readSourceProfile({
+    rawTitle: '고3 아이 성적 이야기',
+    rawBody: '고3 아이가 모의고사 성적을 속여왔습니다. 담임 선생님 전화로 알았어요. '
+      + '수시 원서를 써야 하는데 어떻게 해야 할지 모르겠습니다. '
+      + '성적표를 직접 확인해 보니 등급이 전혀 달랐습니다. '
+      + '애 말만 믿었던 제가 허탈합니다. 기대가 컸던 만큼 실망도 큽니다.',
+  })
+  expect('제목 모양은 사건형 그대로', p.titleShape, 'incident_reveal_emotion')
+  expect('🔴 원문 온도는 담담하다(calm 계열)',
+    p.titleTemperature === 'calm' || p.titleTemperature === 'worried', true)
+
+  const t = titleDirectives(p).join('\n')
+  expect('🔴 감정 자리를 비우지 말라고 한다', t.includes('감정 자리를 비우지 않습니다'), true)
+  expect('  🔴 목록에서 하나만 고르게 한다', t.includes('**하나만** 골라'), true)
+  expect('  🔴 두 개 겹치면 신파라고 막는다', t.includes('신파'), true)
+  // 🔴 온도가 감정 자리를 죽이지 않게 예외 한 줄이 붙는다
+  expect('🔴 calm 이어도 제목 감정은 과장이 아니라고 못박는다',
+    t.includes('제목 끝의 감정 표시 하나는 과장이 아닙니다'), true)
+  expect('  🔴 온도 지시 자체는 지우지 않는다', t.includes('과장하지 않습니다'), true)
+  expect('  🔴 본문은 담담하게 간다고 함께 말한다', t.includes('본문은 담담하게 갑니다'), true)
+  // 🔴 본문 과장·감정 연기는 여전히 금지다 — 이번 완화가 그쪽으로 새면 안 된다
+  expect('🔴 본문 과장 금지가 함께 붙는다', t.includes('본문까지 과장하거나 감정을 연기하지 않습니다'), true)
+  expect('  🔴 없는 눈물·한숨을 지어내지 말라고 한다', t.includes('원문에 없는 눈물·한숨·무너짐'), true)
+  // 감정 표시 목록이 실제로 제목 지시에 실린다
+  expect('감정 표시 목록이 지시에 실린다', t.includes(INCIDENT_EMOTION_MARKERS[0]!), true)
+  expect('  "막막" 하나로 끝나지 않게 여러 개를 준다', INCIDENT_EMOTION_MARKERS.length >= 5, true)
+
+  // 🔴 사건형이 아니면 예외가 붙지 않는다 — calm 은 calm 이다
+  const calmPlain = readSourceProfile({
+    rawTitle: '오늘 장 본 이야기',
+    rawBody: '오늘 장을 봤습니다. 두부랑 콩나물을 샀어요. 값이 조금 올랐더군요. '
+      + '저녁은 된장찌개를 끓였습니다. 아이는 잘 먹었습니다. 별일 없는 하루였어요.',
+  })
+  expect('🔴 사건형이 아니면 온도 예외가 없다',
+    titleDirectives(calmPlain).join('\n').includes('과장이 아닙니다'), false)
+}
+
+console.log('\n══════ ㊲ 🔴 질문 — 살리되 남발하지 않는다 (12판 #41)')
+{
+  const src = ['원문입니다'] as readonly string[]
+  const one = analyzeDraft({
+    title: '요즘 이 아기 영상 보시는 분 계세요',
+    body: '너무 귀여워서 매일 봅니다. 몬치치 머리가 아주 그냥 예술이에요?',
+    sourceTexts: src, closingIntent: 'explicit_question',
+  })
+  expect('물음표 1개는 정상', one.questionVerdict, 'ok')
+  expect('  개수를 센다', one.questionMarkCount, 1)
+
+  const two = analyzeDraft({
+    title: '요즘 이 아기 영상 보시는 분 계세요?',
+    body: '어쩜 이렇게 귀엽죠? 매일 봅니다.',
+    sourceTexts: src, closingIntent: 'explicit_question',
+  })
+  expect(`🟡 물음표 ${MAX_QUESTION_MARKS}개는 경계`, two.questionVerdict, 'watch')
+
+  // 🔴 #41 이 정확히 이랬다 — 제목 1 + 본문 3
+  const four = analyzeDraft({
+    title: '요즘 이 아기 영상 보시는 분 계세요?',
+    body: '어쩜 이렇게 귀엽죠? 이 표정 보이시나요? 저만 이런가요?',
+    sourceTexts: src, closingIntent: 'explicit_question',
+  })
+  expect('🔴 물음표 4개는 남발(실패)', four.questionVerdict, 'overuse')
+  expect('  개수가 그대로 보인다', four.questionMarkCount, 4)
+
+  // 🔴 반대쪽 벽 — 묻는 글인데 안 물으면 실패다 (11판 #39)
+  const none = analyzeDraft({
+    title: '요즘 보는 아기 영상',
+    body: '너무 귀여워서 매일 봅니다. 몬치치 머리가 예술이에요.',
+    sourceTexts: src, closingIntent: 'explicit_question',
+  })
+  expect('🔴 묻는 글인데 물음표 0개면 실패', none.questionVerdict, 'missing')
+
+  // no_call 은 안 물어야 정상이다 — missing 으로 잡히면 안 된다
+  const quiet = analyzeDraft({
+    title: '오늘 하루 그냥 지나갔습니다',
+    body: '별일 없었어요. 그냥 적어봅니다.',
+    sourceTexts: src, closingIntent: 'no_call',
+  })
+  expect('✅ no_call 은 안 물어도 정상', quiet.questionVerdict, 'ok')
+  expect('🔴 no_call 도 남발은 잡는다',
+    analyzeDraft({
+      title: '오늘요?', body: '이게 맞나요? 다들 그런가요?', sourceTexts: src, closingIntent: 'no_call',
+    }).questionVerdict, 'overuse')
+  // closingIntent 를 안 주면 부족은 못 보고 남발만 본다
+  expect('closingIntent 없으면 0개를 실패로 보지 않는다',
+    analyzeDraft({ title: '제목', body: '본문입니다.', sourceTexts: src }).questionVerdict, 'ok')
+
+  // 프롬프트가 실제로 개수를 말하는가
+  const p = readSourceProfile({
+    rawTitle: '요즘 보는 아기 영상 있으세요',
+    rawBody: '요즘 하루라는 아기 영상을 봅니다. 너무 귀여워서 계속 보게 되네요. '
+      + '몬치치 머리에 공놀이도 어찌나 잘하는지 운동신경이 남다릅니다. '
+      + '일본 외가 식구들도 다들 유쾌하시더라고요. '
+      + '이런 거 보다 보면 시간 순삭이지 않나요?',
+  })
+  expect('원문은 여전히 explicit_question', p.closingIntent, 'explicit_question')
+  const d = profileDirectives(p).join('\n')
+  expect('🔴 묻는 곳은 한 곳이라고 말한다', d.includes('묻는 곳은 한 곳입니다'), true)
+  expect('🔴 물음표 상한을 숫자로 말한다', d.includes(`**${MAX_QUESTION_MARKS}개까지**`), true)
+  expect('🔴 주접 자문 1회는 봐준다고 말한다', d.includes('**한 번**까지 봐줍니다'), true)
+  expect('🔴 질문 살리기 지시는 그대로 남는다', d.includes('질문이 사라지면 실패'), true)
+  expect('🔴 공식 CTA 금지도 그대로', d.includes('공식 CTA 는 여전히 금지'), true)
+}
+
+console.log('\n══════ ㊳ 🔴 이모지를 강제하지 않는다 (12판 #41)')
+{
+  const p = readSourceProfile({
+    rawTitle: '요즘 보는 아기 영상 있으세요',
+    rawBody: '요즘 하루라는 아기 영상을 봅니다. 너무 귀여워서 계속 보게 되네요. '
+      + '몬치치 머리에 공놀이도 어찌나 잘하는지 운동신경이 남다릅니다. '
+      + '일본 외가 식구들도 다들 유쾌하시더라고요. '
+      + '이런 거 보다 보면 시간 순삭이지 않나요?',
+  })
+  expect('주접형 그대로', p.titleShape, 'fond_gush')
+  const t = titleDirectives(p).join('\n')
+  expect('🔴 이모지는 원래 있을 때만 쓴다고 한다', t.includes('원래 있을 때만'), true)
+  expect('🔴 없어도 실패가 아니라고 못박는다', t.includes('없다고 실패가 아닙니다'), true)
+  expect('🔴 억지로 달지 말라고 한다', t.includes('억지로 달지 마세요'), true)
+  expect('🔴 주접 제목 지시 자체는 그대로', t.includes('커뮤식 주접 제목'), true)
+  expect('  🔴 짧게 요약하지 말라도 그대로', t.includes('짧게 요약하지 않습니다'), true)
+}
+
+console.log('\n══════ ㊴ 🔴 12판 수정이 앞선 규칙을 깨지 않는다')
+{
+  // no_call CTA 금지
+  const np = readSourceProfile({
+    rawTitle: '전남편 이야기',
+    rawBody: '양육비 이야기를 다시 꺼냈다가 그냥 손절했습니다. 실망만 남았어요. '
+      + '기대한 제가 잘못이지요. 애한테는 아무 말도 하지 않았습니다. '
+      + '그냥 속으로만 삭이고 있습니다. 오늘도 그렇게 하루가 갔습니다.',
+  })
+  expect('no_call 그대로', np.closingIntent, 'no_call')
+  const nd = profileDirectives(np).join('\n')
+  expect('🔴 마지막에 질문을 붙이지 않는다', nd.includes('마지막에 질문을 붙이지 않습니다'), true)
+  expect('🔴 호칭을 억지로 넣지 않는다', nd.includes('억지로 넣지 않습니다'), true)
+  expect('🔴 질문 살리기 지시가 새어 들어가지 않는다', nd.includes('질문이 사라지면 실패'), false)
+
+  // URL 정책 그대로
+  const CANON = 'https://www.youtube.com/watch?v=OztApxz5qSk'
+  expect('✅ 유튜브 정본 허용 그대로',
+    canonicalContentUrl('https://youtu.be/OztApxz5qSk?si=zz'), CANON)
+  expect('🔴 82cook 금지 그대로',
+    canonicalContentUrl('https://www.82cook.com/entiz/read.php?num=1'), null)
+  expect('🔴 카페 링크 금지 그대로', isOriginUrl('https://cafe.naver.com/x/1'), true)
+  {
+    const rec: OriginalPostRecord = {
+      sourceRawContentId: 'raw-yt-0002', title: '영상 하나 봅니다',
+      body: `이거예요 ${CANON} 자꾸 보게 되네요`,
+    }
+    const { clean } = partitionByStoredSource([rec], [`같이 봐요 ${CANON} 너무 귀엽죠`], [CANON])
+    expect('✅ 허용 링크로 저장 가드가 터지지 않는다', clean.length, 1)
+  }
+  // 사건형·주접형이 서로 침범하지 않는다
+  expect('🔴 사건형이 주접형을 이긴다(그대로)',
+    readTitleShape('고3 성적',
+      '고3 애가 모의고사 성적을 속였습니다. 담임 전화로 알았어요. 어릴 땐 귀여웠는데 영상 보면 눈물납니다.',
+      'letdown'),
+    'incident_reveal_emotion')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)

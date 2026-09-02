@@ -38,11 +38,9 @@ import {
 import {
   readSourceProfile, profileDirectives, titleDirectives,
   EXTERNAL_ADDRESS_TERMS, SORANSORAN_ADDRESS, ORIGIN_TRACE_TERMS, originTraceHitsIn,
-  SOURCE_URL_RE, type SourceProfile,
+  findUrls, MAX_QUESTION_MARKS, type SourceProfile, type ClosingIntent,
 } from './source-profile'
 
-/** 🔴 계측은 전역 플래그가 필요하다. 판정용 상수를 재사용하되 g 를 붙여 새로 만든다 */
-const SOURCE_URL_RE_G = new RegExp(SOURCE_URL_RE.source, 'gi')
 /** 🔴 줄 **끝**에 붙은 이모티콘만 본다. 문장 중간의 것은 균등 배치와 무관하다 */
 const EMOTICON_TAIL_RE = /(ㅋ{2,}|ㅎ{2,}|ㅠ{1,}|ㅜ{1,}|\^\^|\p{Extended_Pictographic})[\s.!?~]*$/u
 
@@ -676,15 +674,38 @@ export const SOURCE_ECHO_MIN = 20
 export const normalizeForEcho = (s: string): string => (s ?? '').replace(/\s+/g, '')
 
 /**
+ * 🔴 **허용된 소재 링크는 유출 대조에서 뺀다** (2026-09-02 11판).
+ *
+ * 유튜브 주소는 43자쯤 된다. 원문에도 있고 초안에도 있으면 그것만으로
+ * 연속 20자 일치가 잡혀 **저장 가드가 터진다.** 규칙상 써도 되는 링크 때문에
+ * 글 전체가 버려지는 것은 가드가 일을 잘못하는 것이다.
+ *
+ * 🔴 완화가 아니다. 빼는 것은 **정확히 그 한 줄**뿐이고, 나머지 본문은 그대로 센다.
+ *    허용되지 않은 주소는 애초에 여기 들어오지 않는다.
+ */
+export const stripAllowedUrls = (text: string, allowed: readonly string[]): string => {
+  let out = text ?? ''
+  for (const url of allowed) {
+    if (url === '') continue
+    out = out.split(url).join(' ')
+  }
+  return out
+}
+
+/**
  * 대상 글에 원문(또는 말투 샘플)의 연속 20자가 몇 조각이나 들어 있는가.
  * 🔴 판정이 아니라 세는 함수다. 막는 것은 호출부의 일이다.
  */
-export function sourceEchoCount(text: string, sourceTexts: readonly string[]): number {
-  const draft = normalizeForEcho(text)
+export function sourceEchoCount(
+  text: string,
+  sourceTexts: readonly string[],
+  allowedUrls: readonly string[] = [],
+): number {
+  const draft = normalizeForEcho(stripAllowedUrls(text, allowedUrls))
   if (draft.length < SOURCE_ECHO_MIN) return 0
   let hits = 0
   for (const source of sourceTexts) {
-    const src = normalizeForEcho(source)
+    const src = normalizeForEcho(stripAllowedUrls(source, allowedUrls))
     if (src.length < SOURCE_ECHO_MIN) continue
     for (let i = 0; i + SOURCE_ECHO_MIN <= draft.length; i += 1) {
       if (src.includes(draft.slice(i, i + SOURCE_ECHO_MIN))) hits += 1
@@ -694,8 +715,9 @@ export function sourceEchoCount(text: string, sourceTexts: readonly string[]): n
 }
 
 /** 한 조각이라도 있는가. 🔴 세는 것보다 빨리 끝난다 */
-export const hasSourceEcho = (text: string, sourceTexts: readonly string[]): boolean =>
-  sourceEchoCount(text, sourceTexts) > 0
+export const hasSourceEcho = (
+  text: string, sourceTexts: readonly string[], allowedUrls: readonly string[] = [],
+): boolean => sourceEchoCount(text, sourceTexts, allowedUrls) > 0
 
 /** 레코드가 담고 있는 글 전체 — 허용된 세 필드를 붙인다 */
 const recordText = (r: OriginalPostRecord): string =>
@@ -720,11 +742,12 @@ export type PartitionResult = {
 export function partitionByStoredSource(
   records: readonly OriginalPostRecord[],
   sourceTexts: readonly string[],
+  allowedUrls: readonly string[] = [],
 ): PartitionResult {
   const clean: OriginalPostRecord[] = []
   const leaking: Array<{ record: OriginalPostRecord; echoCount: number }> = []
   for (const record of records) {
-    const echoCount = sourceEchoCount(recordText(record), sourceTexts)
+    const echoCount = sourceEchoCount(recordText(record), sourceTexts, allowedUrls)
     if (echoCount > 0) leaking.push({ record, echoCount })
     else clean.push(record)
   }
@@ -743,6 +766,7 @@ export function partitionByStoredSource(
 export function assertNoStoredSource(
   records: readonly OriginalPostRecord[],
   sourceTexts: readonly string[],
+  allowedUrls: readonly string[] = [],
 ): void {
   for (const record of records) {
     for (const key of Object.keys(record)) {
@@ -759,7 +783,7 @@ export function assertNoStoredSource(
   // 🔴 눈금은 normalizeForEcho 하나뿐이다. 여기서 따로 정규화하지 않는다 —
   //    그렇게 갈라져 있어서 "계측은 잡는데 저장은 통과" 가 생겼다(7판).
   for (const record of records) {
-    const echo = sourceEchoCount(recordText(record), sourceTexts)
+    const echo = sourceEchoCount(recordText(record), sourceTexts, allowedUrls)
     if (echo > 0) {
       throw new Error(
         `저장 레코드에 원문 조각이 들어 있다 (연속 ${SOURCE_ECHO_MIN}자 일치 ${echo}건).\n` +
@@ -816,7 +840,24 @@ export type DraftSignals = {
   /** 🟡 경계 표현 — 실패로 세지 않고 따로 센다. 합치면 수치가 부푼다 */
   critiqueWatchHits: readonly string[]
   /** 🔴 링크가 남았는가. 남으면 출처가 그대로 드러난다 */
+  /**
+   * 🔴 **출처 링크 잔존** — 게시판·카페·블로그 주소. 한 건이라도 있으면 실패다.
+   *    허용 여부를 모르는 주소도 여기 들어온다(모르는 것은 막는 쪽).
+   */
+  originUrlHits: readonly string[]
+  /** ✅ **소재 링크** — 허용된 정본 유튜브 주소. 0 또는 1건이 정상이다 */
+  contentUrlHits: readonly string[]
+  /** 🔴 옛 이름 — 두 갈래의 합. 기존 호출부를 깨지 않으려고 남겨 둔다 */
   urlHits: readonly string[]
+  /** 글 전체(제목+본문)의 물음표 수 */
+  questionMarkCount: number
+  /**
+   * 🔴 질문이 **모자라지도 넘치지도** 않는가 (2026-09-02 12판).
+   *   `missing`  explicit_question 인데 하나도 묻지 않았다 — 실패
+   *   `overuse`  물음표가 상한을 넘었다 — 실패
+   *   `watch`    상한 안이지만 두 번 물었다 — 신호로만 본다
+   */
+  questionVerdict: 'ok' | 'missing' | 'watch' | 'overuse'
   /**
    * 🔴 출처 흔적이 남았는가 — 서비스·게시판 이름 (2026-09-01 6판 #16).
    *
@@ -855,6 +896,16 @@ export function analyzeDraft(input: {
   sourceTexts: readonly string[]
   /** 🔴 원문이 번호 나열이면 살리는 것이 맞다. 그때는 흔적으로 세지 않는다 */
   allowNumberedList?: boolean
+  /**
+   * ✅ 이 글에 한해 허용되는 **소재 링크 정본** (SourceProfile.contentReferenceUrl).
+   *    주지 않으면 어떤 주소도 출처로 센다 — 기본값이 막는 쪽이다.
+   */
+  allowedContentUrl?: string | null
+  /**
+   * 🔴 원문이 어떻게 닫히는가. 주면 "묻는 글인데 안 물었다" 를 잡을 수 있다.
+   *    주지 않으면 부족은 못 보고 **남발만** 본다.
+   */
+  closingIntent?: ClosingIntent
 }): DraftSignals {
   const title = input.title.trim()
   const body = input.body.trim()
@@ -863,7 +914,8 @@ export function analyzeDraft(input: {
 
   // 🔴 유출 검사는 저장 가드와 **같은 함수**를 쓴다. 눈금이 갈라지면
   //    "계측은 잡는데 저장은 통과" 가 생긴다(7판에서 실제로 그랬다)
-  const echoCount = sourceEchoCount(draft, input.sourceTexts)
+  const allowedForEcho = input.allowedContentUrl == null ? [] : [input.allowedContentUrl]
+  const echoCount = sourceEchoCount(draft, input.sourceTexts, allowedForEcho)
 
   const srcWords = new Set(wordsOf(source))
   const draftWords = wordsOf(draft)
@@ -905,7 +957,30 @@ export function analyzeDraft(input: {
     externalAddressHits: EXTERNAL_ADDRESS_TERMS.filter((x) => draft.includes(x)),
     soransoranAddressHits: SORANSORAN_ADDRESS.filter((x) => draft.includes(x)),
     critiqueWatchHits: CRITIQUE_WATCH_PHRASES.filter((x) => draft.includes(x)),
-    urlHits: (draft.match(SOURCE_URL_RE_G) ?? []).map((m) => m.trim()),
+    ...(() => {
+      // 🔴 주소를 통째로 뽑아 갈래를 나눈다. 정본과 **글자 그대로** 같아야 소재로 친다 —
+      //    비슷한 주소를 지어내면 그건 허용된 링크가 아니다
+      const found = findUrls(draft)
+      const allowed = input.allowedContentUrl ?? null
+      // 🔴 소재로 치는 것은 **허용된 정본과 글자 그대로 같은 것 하나뿐**이다.
+      //    나머지는 전부 걸린 쪽으로 센다 — 출처든, 씻지 않은 단축 주소든,
+      //    읽을 수 없는 주소든 마찬가지다. 어느 갈래도 아니어서 조용히 사라지면
+      //    가드가 있으나 마나다(11판 검증에서 실제로 그랬다).
+      const content = found.filter((u) => allowed !== null && u === allowed)
+      const origin = found.filter((u) => !content.includes(u))
+      return { originUrlHits: origin, contentUrlHits: content, urlHits: [...origin, ...content] }
+    })(),
+    ...(() => {
+      // 🔴 양쪽에 벽을 세운다. 0개도 실패, 상한 초과도 실패다 —
+      //    한쪽만 막으면 규칙이 반대쪽으로 넘어간다(11판 0개 → 12판 4개)
+      const questionMarkCount = (draft.match(/[?？]/g) ?? []).length
+      const verdict: DraftSignals['questionVerdict'] =
+        input.closingIntent === 'explicit_question' && questionMarkCount === 0 ? 'missing'
+          : questionMarkCount > MAX_QUESTION_MARKS ? 'overuse'
+            : questionMarkCount === MAX_QUESTION_MARKS ? 'watch'
+              : 'ok'
+      return { questionMarkCount, questionVerdict: verdict }
+    })(),
     originTraceHits: originTraceHitsIn(draft),
     closingCtaHits: (() => {
       // 🔴 마지막 두 줄만 본다. 같은 말도 중간이면 자연스럽고 끝이면 공식이다
