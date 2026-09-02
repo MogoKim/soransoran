@@ -107,6 +107,10 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
    *    vv.height 는 키보드가 layout viewport 를 줄이든(keyboard 가 0 이 되는 환경) 아니든
    *    언제나 "보이는 높이" 라서 두 환경에 같은 값이 맞다.
    * 🔴 iOS 는 화면 자체를 밀어 올리므로 offsetTop 을 반드시 뺀다.
+   *
+   * bottom 보정은 이제 폴백이다. layout 의 interactive-widget 이 키보드만큼 화면을 줄이면
+   * bottom-0 이 곧 키보드 위라 keyboard 가 0 이 되고 이 계산은 저절로 쉰다 —
+   * 그 설정을 무시하는 브라우저를 위해서만 남긴다.
    */
   useEffect(() => {
     if (!composing) return
