@@ -12,7 +12,8 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  readPostRequirements, hardFilter, scoreMatch, planMatch, planBatch, batchOrder, lengthBandOf,
+  readPostRequirements, hardFilter, scoreMatch, planMatch, planBatch, batchOrder,
+  lengthBandOf, readLengthBand, isLengthBand, LENGTH_BANDS,
   isChildAgeBand, CHILD_AGE_BANDS, BLOCK_CODES, BLOCK_LABEL, SCORE_WEIGHTS,
   CARE_FIT, MENOPAUSE_FIT,
   POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS, TOP_CANDIDATES,
@@ -33,7 +34,7 @@ const base: PersonaForMatch = {
   code: 'PXX', status: 'active', providerId: null,
   maritalStatus: '기혼', childrenCount: 2, childrenAgeBands: ['중고등'],
   parentCare: '상시', menopauseStatus: '진행중', workStatus: '전업',
-  economicStatus: '보통', region: null, noGoTopics: [], voiceLength: 'medium',
+  economicStatus: '보통', region: null, noGoTopics: [], voiceLength: '보통',
   postsThisWeek: 0, daysSinceLastPost: null,
 }
 const P = (o: Partial<PersonaForMatch>): PersonaForMatch => ({ ...base, ...o })
@@ -213,7 +214,7 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
   const fresh = scoreMatch(P({ daysSinceLastPost: 30 }), req, 300)
   const recent = scoreMatch(P({ daysSinceLastPost: 6 }), req, 300)
   if (!(fresh.total > recent.total)) offenders.push('🔴 활동 분산이 감점으로 작동하지 않음')
-  if (lengthBandOf(100) !== 'short' || lengthBandOf(300) !== 'medium' || lengthBandOf(900) !== 'long') offenders.push('길이 밴드 오류')
+  if (lengthBandOf(100) !== '짧게' || lengthBandOf(300) !== '보통' || lengthBandOf(900) !== '길게') offenders.push('길이 밴드 오류')
   if (offenders.length) bad('점수', offenders.join(' / '))
   else ok('점수', `가중 합 100 · 활동 분산 감점 동작 (${fresh.total} > ${recent.total})`)
 }
@@ -383,6 +384,71 @@ function always0Diff(): number {
   if (plan.assignments.map((a) => a.queueId).join(',') !== 'open1,open2,rare') offenders.push('출력이 입력 순서가 아니다')
   if (offenders.length) bad('🔴 희소한 글 우선', offenders.join(' / '))
   else ok('🔴 희소한 글 우선', '후보 1명뿐인 글이 먼저 배정됨 · 출력은 입력 순서 유지')
+}
+
+
+// ── ⑰ 🔴 말투 길이 밴드 — 자유 문장을 읽는다 ──
+{
+  const offenders: string[] = []
+  // 초안 길이 → 밴드
+  if (lengthBandOf(100) !== '짧게' || lengthBandOf(300) !== '보통' || lengthBandOf(900) !== '길게') {
+    offenders.push('초안 길이 밴드 오류')
+  }
+  if (lengthBandOf(249) !== '짧게' || lengthBandOf(250) !== '보통') offenders.push('짧게/보통 경계 오류')
+  if (lengthBandOf(500) !== '보통' || lengthBandOf(501) !== '길게') offenders.push('보통/길게 경계 오류')
+
+  // 🔴 실측 DB 값이 전부 읽혀야 한다 (2026-09-02)
+  const REAL: [string, string][] = [
+    ['짧고 툭툭', '짧게'],   // P05
+    ['중간', '보통'],        // P07 · P10
+    ['짧고 정확', '짧게'],   // P15
+    ['길게', '길게'],        // P17
+  ]
+  for (const [raw, want] of REAL) {
+    const got = readLengthBand(raw)
+    if (got !== want) offenders.push(`🔴 "${raw}" → ${got ?? 'null'} (기대 ${want})`)
+  }
+  // 지시된 별칭
+  for (const [raw, want] of [['짧음', '짧게'], ['중간 길이', '보통'], ['보통', '보통'], ['길게 씀', '길게']] as [string, string][]) {
+    const got = readLengthBand(raw)
+    if (got !== want) offenders.push(`🔴 "${raw}" → ${got ?? 'null'} (기대 ${want})`)
+  }
+  // 🔴 "중간 길이" 는 '길' 을 품는다 — 순서가 틀리면 길게로 샌다
+  if (readLengthBand('중간 길이') === '길게') offenders.push('🔴 "중간 길이" 가 길게로 샜다 — 별칭 순서')
+  // 밴드 그대로도 통과
+  for (const b of LENGTH_BANDS) if (readLengthBand(b) !== b) offenders.push(`밴드 "${b}" 가 안 읽힘`)
+  // 🔴 못 읽으면 null — 하드 차단하지 않는다
+  for (const v of [null, undefined, '', '   ', '알 수 없음']) {
+    if (readLengthBand(v) !== null) offenders.push(`🔴 "${String(v)}" 가 밴드로 읽힘`)
+  }
+  // 🔴 영어 어휘는 남기지 않았다 — 호환 경로를 두면 죽은 축이 되살아난다
+  for (const v of ['short', 'medium', 'long']) {
+    if (readLengthBand(v) !== null) offenders.push(`🔴 영어 "${v}" 가 읽힘 — 어휘가 남아 있다`)
+    if (isLengthBand(v)) offenders.push(`🔴 영어 "${v}" 가 밴드로 판별됨`)
+  }
+  if (offenders.length) bad('🔴 말투 길이 밴드', offenders.join(' / '))
+  else ok('🔴 말투 길이 밴드', `실측 4종 · 별칭 4종 · 경계 · "중간 길이" 순서 · 미상 null · 영어 거부`)
+}
+
+// ── ⑱ 🔴 voiceFit 이 더 이상 5점 고정이 아니다 ──
+{
+  const offenders: string[] = []
+  const req = readPostRequirements('오늘', '국수를 삶았어요.')
+  const CHARS = 300  // 보통 밴드
+  const fit = (voiceLength: string | null) => scoreMatch(P({ voiceLength }), req, CHARS).breakdown.voiceFit
+
+  const full = fit('중간')        // 보통 ↔ 보통 → 만점
+  const miss = fit('짧고 툭툭')    // 짧게 ↔ 보통 → 감점
+  const neutral = fit(null)       // 모름 → 중립
+  if (full !== SCORE_WEIGHTS.voiceFit) offenders.push(`🔴 일치가 만점이 아니다: ${full}`)
+  if (!(full > neutral && neutral > miss)) offenders.push(`순서가 만점>중립>불일치 가 아니다: ${full}/${neutral}/${miss}`)
+  // 🔴 세 값이 서로 달라야 축이 살아 있다
+  if (new Set([full, miss, neutral]).size !== 3) offenders.push(`🔴 값이 뭉쳤다: ${full}/${miss}/${neutral}`)
+  // 🔴 회귀 방지 — 예전 버그는 자유 문장이 언제나 불일치로 떨어지는 것이었다
+  if (fit('중간') === fit('짧고 툭툭')) offenders.push('🔴 자유 문장이 구분되지 않는다 (E-1 버그 재발)')
+
+  if (offenders.length) bad('🔴 voiceFit 5점 고정 해소', offenders.join(' / '))
+  else ok('🔴 voiceFit 5점 고정 해소', `일치 ${full} · 중립 ${neutral} · 불일치 ${miss} — 세 값이 갈린다`)
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
