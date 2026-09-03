@@ -26,6 +26,8 @@ import {
   DEFAULT_SESSION_PATH, PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, DEFAULT_BROWSER_CHANNEL,
   browserLaunchOptions, isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, AUTH_COOKIE_NAMES,
   parsePostedLabel, normalizeCount,
+  safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease,
+  LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
@@ -489,6 +491,116 @@ check('🔴 이미지는 여전히 향후 설계 항목이다',
   /이미지 — \*\*향후 설계 항목\. 지금 구현하지 않는다\*\*/.test(SUPPLY_DOC))
 check('🔴 collector 는 여전히 이미지를 가져오지 않는다',
   /이미지를 가져오지 않는다/.test(COLLECTOR) && !/(img|image|\.src)/i.test(COLLECTOR_CODE))
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑯ 목록 0건 진단 — 🔴 실패를 삼키지 않는다 (PR-S2-b-5)')
+// ─────────────────────────────────────────────────────────
+{
+  const probe = (o: Partial<FrameProbe>): FrameProbe =>
+    ({ frame: '(top)', linkHits: 0, rows: 0, items: 0, error: null, ...o })
+
+  check('항목이 있으면 OK', diagnoseEmptyList([probe({ linkHits: 30, rows: 30, items: 22 })]).code === 'OK')
+  check('🔴 콜백 예외를 0건으로 삼키지 않는다',
+    diagnoseEmptyList([probe({ error: 'sel is not a function' })]).code === 'CALLBACK_ERROR',
+    '이것을 구분 못 해서 22건 → 0건 회귀의 원인을 못 짚었다 (2026-09-03)')
+  check('링크 0개 → SELECTOR_ZERO (로그인·DOM 변화)',
+    diagnoseEmptyList([probe({ linkHits: 0 })]).code === 'SELECTOR_ZERO')
+  check('🔴 링크는 있는데 0건 → PARSE_ZERO (articleId 파싱 실패)',
+    diagnoseEmptyList([probe({ linkHits: 30, rows: 30, items: 0 })]).code === 'PARSE_ZERO',
+    '셀렉터 문제와 파싱 문제는 고칠 곳이 다르다')
+  check('프레임이 없으면 NO_FRAME', diagnoseEmptyList([]).code === 'NO_FRAME')
+  check('🔴 예외가 링크 0개보다 우선한다',
+    diagnoseEmptyList([probe({ linkHits: 0 }), probe({ error: 'boom' })]).code === 'CALLBACK_ERROR',
+    '우리 코드가 터진 것이 먼저 고칠 일이다')
+  check('한 프레임이라도 성공하면 OK',
+    diagnoseEmptyList([probe({ error: 'boom' }), probe({ linkHits: 5, rows: 5, items: 5 })]).code === 'OK')
+  check('진단에 무엇을 고칠지가 들어 있다',
+    /parseArticleId/.test(diagnoseEmptyList([probe({ linkHits: 9, rows: 9 })]).detail))
+
+  // 🔴 URL 에 세션 토큰이 실릴 수 있다
+  check('🔴 프레임 라벨이 쿼리를 떼어낸다',
+    safeFrameLabel('https://cafe.naver.com/x?token=SECRET&a=1') === 'https://cafe.naver.com/x',
+    '로그에 세션 토큰을 남기지 않는다')
+  check('해시도 떼어낸다', safeFrameLabel('https://cafe.naver.com/x#SECRET') === 'https://cafe.naver.com/x')
+  check('아주 긴 URL 은 자른다', safeFrameLabel(`https://cafe.naver.com/${'a'.repeat(300)}`).length <= 120)
+
+  const lines = summarizeProbes([probe({ linkHits: 30, rows: 30, items: 0, error: 'x is not a function' })])
+  check('요약이 링크·행·항목·예외를 전부 담는다',
+    /링크 30/.test(lines[0]) && /행 30/.test(lines[0]) && /항목 0/.test(lines[0]) && /예외/.test(lines[0]))
+  check('🔴 요약에 HTML 이 들어가지 않는다',
+    !/[<>]/.test(lines.join(' ')),
+    '원문 HTML 을 로그에 흘리지 않는다')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑰ 락 해제 — 🔴 finally 에서 풀되 원래 에러를 가리지 않는다')
+// ─────────────────────────────────────────────────────────
+check('🔴 collector 가 finally 에서 락을 지운다',
+  /finally\s*\{[\s\S]{0,600}unlinkSync\(LOCK_PATH\)/.test(COLLECTOR_CODE),
+  '실패 후 TTL 30분을 기다려야 하면 원인을 좁힐 기회가 사라진다')
+check('정상 해제면 경고 없음', judgeLockRelease(true, null).released && judgeLockRelease(true, null).warning === null)
+check('락이 없었으면 해제도 경고도 없다',
+  !judgeLockRelease(false, null).released && judgeLockRelease(false, null).warning === null)
+{
+  const v = judgeLockRelease(true, new Error('EPERM'))
+  check('🔴 해제 실패는 경고만 낸다 (throw 하지 않는다)', !v.released && v.warning !== null)
+  check('경고에 TTL 안내가 있다', /TTL 30분/.test(v.warning ?? ''))
+  check('🔴 collector 가 해제 실패 시 throw 하지 않는다',
+    /console\.warn\(`  ⚠️ \$\{rel\.warning\}`\)/.test(COLLECTOR_CODE),
+    '수집이 왜 실패했는지가 본론이고 락은 곁가지다')
+}
+check('🔴 stale lock 처리는 그대로다', judgeLock(Date.now() - LOCK_TTL - 1000, Date.now()).ok)
+check('🔴 살아 있는 락은 여전히 막는다', !judgeLock(Date.now() - 60_000, Date.now()).ok)
+check('🔴 LOCK_MAX_AGE_MS > RUN_TIMEOUT_MS 유지', LOCK_TTL > RUN_TIMEOUT_MS)
+
+// ── 메타 optional 화 — 링크 수집이 살아남는가 ──
+check('🔴 링크 셀렉터가 메타와 분리돼 있다',
+  /const LIST_LINK_SELECTOR = /.test(COLLECTOR_CODE),
+  '메타 셀렉터 하나가 터져서 링크 수집이 죽으면 안 된다')
+check('🔴 메타 추출이 콜백 안에서 try 로 감싸져 있다',
+  /try \{[\s\S]{0,200}const near = a\.closest/.test(COLLECTOR_CODE))
+check('🔴 pick 각각도 try 로 감싸져 있다',
+  /try \{ return near\?\.querySelector\(sel\)/.test(COLLECTOR_CODE),
+  '셀렉터 문법 오류 하나가 행 전체를 죽이지 않는다')
+{
+  // 🔴 readList 의 catch 만 본다. loadChromium 의 빈 catch 는 다음 후보로 넘어가는
+  //    의도된 루프이고, 마지막에 fail() 로 크게 실패한다 — 삼키는 것이 아니다.
+  const readListCode = COLLECTOR_CODE.slice(
+    COLLECTOR_CODE.indexOf('async function readList'),
+    COLLECTOR_CODE.indexOf('async function readArticleBody'),
+  )
+  check('🔴 readList 의 바깥 catch 가 더 이상 비어 있지 않다',
+    !/\} catch \{\s*\n\s*\}/.test(readListCode) && /error: e instanceof Error \? e\.message/.test(readListCode))
+  check('🔴 readArticleBody 도 실패를 삼키지 않는다',
+    /errors\.push\(e instanceof Error/.test(COLLECTOR_CODE),
+    'readList 와 같은 결함이 한 단계 뒤에 있었다 — 셀렉터가 안 맞는 것과 코드가 터진 것을 구분 못 했다')
+  check('본문 실패 메시지가 두 경우를 구분한다',
+    /본문 셀렉터가 터졌다/.test(COLLECTOR) && /본문이 비었다/.test(COLLECTOR))
+}
+check('🔴 진단이 예외 message 만 담는다 (스택·HTML 아님)',
+  !/e\.stack/.test(COLLECTOR_CODE))
+
+// ── 댓글 수: 진짜 0 과 못 읽음 구분 ──
+{
+  const base = { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '제목' }
+  const real0 = buildCollected('remonterrace', { ...base, sourceCommentCount: 0, sourceCommentCountRead: true }, '본문'.repeat(60), '2026-09-03T06:00:00.000Z')
+  const unread = buildCollected('remonterrace', { ...base, sourceCommentCount: 0, sourceCommentCountRead: false }, '본문'.repeat(60), '2026-09-03T06:00:00.000Z')
+  check('🔴 "진짜 댓글 0" 과 "못 읽음" 이 구분된다',
+    real0.sourceCommentCountRead && !unread.sourceCommentCountRead
+      && real0.sourceCommentCount === unread.sourceCommentCount,
+    'sourceCommentCount 는 number 계약이라 둘 다 0 이다 — 플래그가 없으면 lowEngagement 통계가 오염된다')
+  check('생략하면 "읽었다" 로 본다 (기존 호출부 호환)',
+    buildCollected('remonterrace', { ...base, sourceCommentCount: 2 }, '본문'.repeat(60), '2026-09-03T06:00:00.000Z').sourceCommentCountRead)
+  check('assertNaverCandidate 가 두 경우 다 통과',
+    (() => { try { assertNaverCandidate(real0); assertNaverCandidate(unread); return true } catch { return false } })())
+}
+
+// ── 여전히 DB · Sheet 로 새지 않는다 ──
+for (const [label, code] of [['collector', COLLECTOR_CODE], ['lib', LIB_CODE]] as const) {
+  check(`[${label}] 🔴 진단 보강 후에도 prisma 를 부르지 않는다`, !/prisma|PrismaClient/.test(code))
+  check(`[${label}] 🔴 Sheet · Candidate · Post · Queue 접근 0`,
+    !/(googleapis|sheets\.|MicroSeedCandidate|OriginalPostApprovalQueue|\.post\.create)/.test(code))
+}
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0
