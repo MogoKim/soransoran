@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs'
 import {
   gateOf, scoreRows, rankShift, percentileIn, velocityOf, freshnessOf,
   groupKeyOf, topicHits, conversationHits, WEIGHTS, HOLD_FLAGS,
-  toArticles, articleKeyOf,
+  toArticles, articleKeyOf, laneHintOf, LANE_LABEL, SHORT_TITLE_CHARS,
   type ScoutRow,
 } from './lib/micro-seed-scout-score.mjs'
 
@@ -300,6 +300,86 @@ check('🔴 제외·보류 글 제목은 나오지 않는다 (구조로 보장)'
   'top 은 scored(=candidate)에서만 나온다')
 check('🔴 쿠키·세션·HTML 을 만지지 않는다',
   !/(cookie|storageState|innerHTML|outerHTML)/i.test(RUNNER_CODE) && !/(cookie|storageState|innerHTML)/i.test(LIB_CODE))
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑪ laneHint — 🔴 "좋은 글인가" 가 아니라 "어느 레인에 좋은가" (PR-S2-b-12)')
+// ─────────────────────────────────────────────────────────
+{
+  const lane = (title: string, o: Partial<ScoutRow> = {}) => {
+    const r = row({ originalTitle: title, ...o })
+    return laneHintOf(r, gateOf(r))
+  }
+
+  // ── 게이트가 레인보다 먼저다 ──
+  check('🔴 정치 → exclude', lane('정치 얘기 좀', { sourceExcludeReason: 'politics' }).lane === 'exclude')
+  check('🔴 공지·필독·추천 → exclude', lane('공지사항', { sourceExcludeReason: 'pinned' }).lane === 'exclude')
+  check('🔴 실명·공인 → exclude', lane('누구누구 소식', { sourceExcludeReason: 'publicFigure' }).lane === 'exclude')
+  check('🔴 medical/ad flag → hold',
+    lane('영양제 효과 있나요', { qualityFlags: ['medicalOrAdLikely'] }).lane === 'hold')
+  check('publicFigureMention → hold', lane('제목', { qualityFlags: ['publicFigureMention'] }).lane === 'hold')
+
+  // ── 🔴 정치가 growth 보다 먼저다 ──
+  check('🔴 정치 어휘 + 연예가 섞이면 exclude 가 이긴다',
+    lane('정치인 드라마 출연 화제', { sourceExcludeReason: 'politics' }).lane === 'exclude',
+    '순서를 바꾸면 "정치인 + 방송 출연" 글이 growth 로 새어 나간다')
+  check('🔴 publicFigure 사유에 Growth 여지를 남긴다',
+    /Growth 여지/.test(lane('배우 근황', { sourceExcludeReason: 'publicFigure' }).reason),
+    '사유를 안 남기면 Growth 레인이 열릴 때 무엇을 되살릴지 알 수 없다')
+  check('🔴 정치 사유는 어디에도 안 간다고 적는다',
+    /어디에도 가지 않는다/.test(lane('x', { sourceExcludeReason: 'politics' }).reason))
+
+  // ── 후보 레인 ──
+  check('연예·방송·셀럽 → growthIssue',
+    ['드라마 마지막회 보셨어요', '그 배우 결혼한대요', '예능 너무 웃겨요'].every((t) => lane(t).lane === 'growthIssue'))
+  check('게시판명으로도 growth 를 잡는다',
+    lane('제목만 평범', { sourceBoardName: 'TV / 연예인 / 영상' }).lane === 'growthIssue')
+
+  check('🔴 냉장고·가전 추천 질문 → infoSeed (정보+질문)',
+    lane('냉장고 추천 좀 해주세요').lane === 'infoSeed',
+    '댓글에 정보가 모이는 글이다')
+  check('병원·보험 질문도 infoSeed',
+    lane('보험 어디가 괜찮을까요').lane === 'infoSeed' && lane('치과 추천해주세요').lane === 'infoSeed')
+
+  check('🔴 짧은 질문 → microSeedQuestion',
+    lane('저녁 뭐 쓰세요').lane === 'microSeedQuestion')
+  check('추천 요청도 question',
+    lane('여름 이불 어떤 게 나을까요').lane === 'microSeedQuestion')
+  check('🔴 짧은 것이 결함이 아니라고 사유에 적는다',
+    /짧은 것이 결함이 아니다/.test(lane('뭐 쓰세요').reason),
+    '82cook 짧은 글도 테스트 대상이다 — 짧으면 감점이 아니라 레인이 다르다')
+
+  check('🔴 "다들 어떠세요?" → participationSeed',
+    lane('다들 요즘 어떠세요').lane === 'participationSeed')
+  check('공감 유도형도 참여',
+    lane('저만 그런가요').lane === 'participationSeed' && lane('여러분 주말에 뭐하세요').lane === 'participationSeed')
+
+  check('🔴 가족·관계 긴 고민 → originalRaw',
+    lane('시어머니가 자꾸 저한테만 서운하다고 하셔서 너무 답답합니다').lane === 'originalRaw')
+  check('고민 사유가 붙는다',
+    /긴 사연으로 확장 가능/.test(lane('남편 때문에 너무 속상해요 어떡하죠').reason))
+  check('평범한 생활 소재도 originalRaw', lane('오늘 김장 했어요').lane === 'originalRaw')
+
+  // ── 라벨·상수 ──
+  check('레인 7종에 라벨이 있다', Object.keys(LANE_LABEL).length === 7)
+  check('짧은 글 기준이 노출돼 있다', SHORT_TITLE_CHARS === 25)
+  check('signals 가 매칭 라벨만 담는다',
+    lane('냉장고 추천').signals.every((x) => ['연예', '정보', '질문', '참여', '고민'].includes(x)),
+    '제목 원문이 아니다')
+
+  // ── 🔴 자동 라우팅이 아니다 ──
+  check('🔴 lib 에 Sheet write 경로가 없다',
+    !/(googleapis|sheets\.|spreadsheet|appendRow|values\.append)/i.test(LIB_CODE))
+  check('🔴 runner 에 Sheet write 경로가 없다',
+    !/(googleapis|sheets\.|spreadsheet|appendRow|values\.append)/i.test(RUNNER_CODE))
+  check('🔴 laneHint 로 분기해 무언가를 실행하지 않는다',
+    !/(if \(.*laneHint.*\)[\s\S]{0,120}(write|create|append|import|fetch))/i.test(RUNNER_CODE),
+    'dry-run 은 표시만 한다')
+  check('🔴 "자동 라우팅이 아니다" 를 출력한다', /자동 라우팅이 아니다/.test(RUNNER))
+  check('🔴 네이버 → Sheet 자동 전송 금지를 출력한다',
+    /Google Sheet 자동 전송은 미구현이며 별도 계약·승인 전까지 금지/.test(RUNNER))
+  check('laneHint 별 count 를 요약한다', /laneAll/.test(RUNNER_CODE) && /laneTop/.test(RUNNER_CODE))
+  check('🔴 짧은 글이 버려지지 않는다고 적는다', /버리는 글이 아니다/.test(RUNNER))
+}
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0

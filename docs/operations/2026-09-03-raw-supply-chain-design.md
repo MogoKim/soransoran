@@ -721,6 +721,43 @@ DB write · Sheet 접근 경로가 코드에 없다(fixture 검증).
 🔴 **소스 우열을 답하지 않는다.** 그룹 요약은 "이 소스가 낫다" 가 아니라
 run 별 표본 상태(후보 수 · 상위 진입 수 · 제외 수 · watch 수 · 순위 이동)를 보여준다.
 
+### 🔴 laneHint — "이 글이 좋은가" 가 아니라 **"어느 레인에 좋은가"** (PR-S2-b-12)
+
+**짧은 글은 결함이 아니다.** 긴 사연만 쓸모 있는 것이 아니라, 짧은 질문 · 추천 · 잡담은
+**다른 레인의 재료**다. 그걸 구분하지 못해서 지금까지 `shortBody` 감점으로만 다뤄졌다.
+
+| lane | 무엇 | 예 |
+|---|---|---|
+| `originalRaw` | 생활 고민 — 긴 사연으로 확장 가능 | 가족 · 관계 · 돈 · 일 · 건강 · 마음 |
+| `microSeedQuestion` | 짧은 질문 · 추천 요청 | "뭐 쓰세요?" · "어디가 좋아요?" |
+| `infoSeed` | 정보 주제 + 질문 — **댓글에 정보가 모인다** | 가전 · 병원 · 보험 · 살림 |
+| `participationSeed` | 참여 유도 · 잡담 | "다들 어떠세요?" |
+| `growthIssue` | 연예 · 방송 · 셀럽 | 🔵 §4-C · **미구현 레인** |
+| `hold` | 의료 · 광고 위험 | 본문을 봐야 안다 |
+| `exclude` | 정치 · 진영 / 고정 슬롯 / 실명·공인 | 🔴 점수로 이길 수 없다 |
+
+🔴 **순서가 규칙이다.** exclude → hold → growth → info → question → participation → originalRaw.
+**정치가 growth 보다 먼저다** — 순서를 바꾸면 "정치인 + 방송 출연" 글이 growth 로 새어 나간다.
+
+🔴 `publicFigure` 는 생활 Original 에서 빼되 **사유에 Growth 여지를 남긴다**.
+안 남기면 Growth 레인이 열릴 때 무엇을 되살릴지 알 수 없다(PR-S2-b-8 과 같은 이유).
+
+### 🔴 laneHint 는 **자동 라우팅이 아니다**
+
+```
+dry-run 에서 사람이 보는 힌트다.
+Sheet write · DB write · 자동 fetch · import 경로가 코드에 없다(fixture 검증).
+```
+
+🔴 **네이버 → Google Sheet 자동 전송은 미구현이며 별도 계약·승인 전까지 금지다.**
+Micro Seed Sheet 레인은 현재 `82cook` 만 받는다(§5-B) — `judgeSourceSite` 가 코드로 막는다.
+laneHint 가 `microSeedQuestion` 을 가리켜도 그것이 Sheet 로 가는 문을 열지 않는다.
+
+### 🔴 Raw Vault 는 Original Post **재료** 저장소다
+
+짧은 질문글을 전부 Vault 에 넣는 것이 목적이 아니다. 레인이 다르면 저장 경로도 달라야 한다 —
+`microSeedQuestion` · `participationSeed` 가 어디로 갈지는 **아직 정하지 않았다.**
+
 ### Raw Vault 는 창고가 아니다 — cheap-signal-first
 
 ```

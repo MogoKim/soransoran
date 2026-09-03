@@ -230,6 +230,8 @@ export type ScoredRow = {
   score: ScoreBreakdown
   /** 왜 점수가 높았는가 — 🔴 제목 원문이 아니라 매칭 라벨만 */
   why: string
+  /** 🔴 어느 레인에 좋은 글인가. **자동 라우팅이 아니라 사람이 보는 힌트다** */
+  laneHint: LaneHint
   /** 지금은 미달이지만 다음 scout 에서 다시 볼 값어치가 있는가 */
   watch: boolean
   lagMinutes: number | null
@@ -335,6 +337,7 @@ export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
       row: g.row,
       obs: g.obs,
       gate: g.gate,
+      laneHint: laneHintOf(g.row, g.gate),
       score: { engagement, targetFit, conversation, freshness, total },
       why,
       // 🔴 지금 미달이어도 아직 어린 글이면 다음 scout 에서 다시 본다 (§4-E)
@@ -367,4 +370,142 @@ export function rankShift(scored: readonly ScoredRow[]): { moved: number; maxShi
     maxShift: shifts.length ? Math.max(...shifts) : 0,
     meanShift: shifts.length ? shifts.reduce((a, b) => a + b, 0) / shifts.length : 0,
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑤ laneHint — 🔴 "좋은 글인가" 가 아니라 "어느 레인에 좋은가" (PR-S2-b-12)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **자동 라우팅이 아니다.** dry-run 에서 사람이 보는 힌트다.
+ *    Sheet write · DB write · 자동 fetch · import 를 하지 않는다.
+ *
+ * 🔴 **짧은 글은 결함이 아니다.** 긴 사연만 쓸모 있는 것이 아니라,
+ *    짧은 질문·추천·잡담은 **다른 레인의 재료**다. 그걸 구분하지 못해서
+ *    지금까지 "짧으면 shortBody 라 감점" 으로만 다뤄졌다.
+ *
+ * 🔴 **Raw Vault 는 Original Post 재료 저장소다.** 짧은 질문글을 전부 Vault 에
+ *    넣는 것이 목적이 아니다 — 레인이 다르면 저장 경로도 달라야 한다.
+ */
+export type Lane =
+  | 'exclude'
+  | 'hold'
+  | 'growthIssue'
+  | 'infoSeed'
+  | 'microSeedQuestion'
+  | 'participationSeed'
+  | 'originalRaw'
+
+export type LaneHint = {
+  lane: Lane
+  /** 왜 이 레인인가 — 사람이 읽는 근거 */
+  reason: string
+  /** 매칭된 신호 라벨 (🔴 제목 원문이 아니다) */
+  signals: string[]
+}
+
+/** 연예 · 방송 · 셀럽 — 🔴 정치와 **다른 축**이다 (§4-C) */
+const ENTERTAINMENT =
+  /연예|배우|가수|아이돌|드라마|예능|방송|출연|콘서트|영화|무대|앨범|컴백|열애|결별|가십/
+
+/** 댓글에 **정보가 모이는** 주제 — 제품 · 병원 · 보험 · 가전 · 살림 · 건강관리 */
+const INFO_TOPIC =
+  /냉장고|세탁기|청소기|에어컨|정수기|가전|제품|브랜드|병원|의원|치과|보험|약국|영양제|건강검진|살림|세제|용품|가격|비용|얼마/
+
+/** 질문 · 추천 요청 모양 */
+const ASK_SHAPE =
+  /추천|어디가|어디서|뭐 ?쓰|어떤 ?거|어떤 ?게|얼마나|얼마가|괜찮을까|좋을까|나을까|어때요|어떻게 ?해/
+
+/** 참여 유도형 — 가벼운 잡담 · 공감 질문 */
+const PARTICIPATION =
+  /다들|여러분|저만|계신가|있으신가|어떠세요|어떠신가|같이|함께|수다|잡담|하소연/
+
+/** 생활 고민 — 긴 사연으로 확장 가능한 축 */
+const LIFE_WORRY =
+  /고민|힘들|속상|서운|답답|억울|허무|외롭|밉|화가|눈물|서럽|어쩌면 ?좋|어떡하죠|어쩌죠/
+
+/** 🔴 제목이 이보다 짧으면 "짧은 글" 로 본다 (초안) */
+export const SHORT_TITLE_CHARS = 25
+
+const labelsOf = (title: string, board: string): string[] => {
+  const text = `${title} ${board}`
+  return [
+    ENTERTAINMENT.test(text) ? '연예' : null,
+    INFO_TOPIC.test(text) ? '정보' : null,
+    ASK_SHAPE.test(title) ? '질문' : null,
+    PARTICIPATION.test(title) ? '참여' : null,
+    LIFE_WORRY.test(title) ? '고민' : null,
+  ].filter((s): s is string => s !== null)
+}
+
+/**
+ * 레인 힌트를 판정한다.
+ *
+ * 🔴 **순서가 규칙이다.**
+ * ```
+ *   ① exclude   정치 · 고정 슬롯 · 실명/공인   → 점수로 이길 수 없다
+ *   ② hold      의료 · 광고 위험               → 본문을 봐야 안다
+ *   ③ growth    연예 · 방송 · 셀럽             → 🔴 정치와 섞이면 ①이 이긴다
+ *   ④ info      정보 주제 + 질문 모양          → 댓글에 정보가 모인다
+ *   ⑤ question  질문 · 추천 요청 (짧아도 된다)
+ *   ⑥ participation  참여 유도 · 잡담
+ *   ⑦ originalRaw    나머지 — 생활 Original 재료
+ * ```
+ *
+ * 🔴 **정치가 growth 보다 먼저다.** 순서를 바꾸면 "정치인 + 방송 출연" 글이
+ *    growth 후보로 새어 나간다.
+ */
+export function laneHintOf(row: ScoutRow, gate: Gate): LaneHint {
+  const title = row.originalTitle ?? ''
+  const board = row.sourceBoardName ?? ''
+  const signals = labelsOf(title, board)
+  const short = [...title].length <= SHORT_TITLE_CHARS
+
+  if (gate.verdict === 'excluded') {
+    // 🔴 publicFigure 는 생활 Original 에서 빼되 **Growth 여지를 사유에 남긴다** (§4-C).
+    //    사유를 안 남기면 Growth 레인이 열릴 때 무엇을 되살릴지 알 수 없다.
+    const reason =
+      gate.reason === 'publicFigure'
+        ? '실명·공인 언급 — 생활 Original 제외. 🔵 연예·셀럽이면 Growth 여지 있음'
+        : gate.reason === 'politics'
+          ? '정치·진영 — 🔴 public · growth · shadow 어디에도 가지 않는다'
+          : '고정 슬롯(공지·필독·추천) — 자동 상세 대상 아님'
+    return { lane: 'exclude', reason, signals }
+  }
+  if (gate.verdict === 'hold') {
+    return { lane: 'hold', reason: `${gate.reason} — 본문을 봐야 판단된다`, signals }
+  }
+
+  if (signals.includes('연예')) {
+    return { lane: 'growthIssue', reason: '연예·방송·셀럽 — 🔵 Growth 후보 (🔴 미구현 레인)', signals }
+  }
+  if (signals.includes('정보') && signals.includes('질문')) {
+    return { lane: 'infoSeed', reason: '정보 주제 + 질문 — 댓글에 정보가 모인다', signals }
+  }
+  if (signals.includes('질문')) {
+    return {
+      lane: 'microSeedQuestion',
+      reason: short ? '짧은 질문·추천 요청 — 🔴 짧은 것이 결함이 아니다' : '질문·추천 요청',
+      signals,
+    }
+  }
+  if (signals.includes('참여')) {
+    return { lane: 'participationSeed', reason: '참여 유도·잡담 — 댓글이 붙는 모양', signals }
+  }
+  return {
+    lane: 'originalRaw',
+    reason: signals.includes('고민') ? '생활 고민 — 긴 사연으로 확장 가능' : '생활 소재 — Original Post 재료',
+    signals,
+  }
+}
+
+/** 사람이 읽는 짧은 이름 */
+export const LANE_LABEL: Record<Lane, string> = {
+  exclude: '제외',
+  hold: '보류',
+  growthIssue: 'Growth',
+  infoSeed: 'Info',
+  microSeedQuestion: 'Question',
+  participationSeed: '참여',
+  originalRaw: 'Original',
 }
