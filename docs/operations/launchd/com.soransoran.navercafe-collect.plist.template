@@ -23,9 +23,11 @@
      우나어 storage-state.json 재사용은 judgeSession 이 코드로 막는다 —
      한쪽이 막히면 둘 다 멈추기 때문이다.
 
-  🔴 **Playwright 가 필요하다**
-     이 저장소의 의존성이 아니다. 등록 전에 별도 설치가 선행돼야 한다:
-       npm i -D playwright && npx playwright install chromium
+  🔴 **브라우저는 추가 설치가 필요 없다** (PR-S2-b-3 정정)
+     playwright-core 가 이미 devDependency 이고, 기본값은 설치된 Google Chrome
+     (channel: 'chrome') 이다. 앞선 주석의 "의존성이 아니다" 는 사실이 아니었다.
+     선행 조건은 설치가 아니라 **세션 발급**이다:
+       npx tsx scripts/navercafe-session-setup.mts --open
 
   🔴 **상한은 인자에 박는다**
      --max=10 (슬롯 quota) · 목록 1p. 82cook(30)보다 작은 이유는 위와 같다.

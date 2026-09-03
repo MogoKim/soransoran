@@ -22,10 +22,11 @@
  * 🔴 **사람 속도로 읽는다.** randomDelay(base, 0.8, 1.5) — 82cook 의 고정 2초와 다르다.
  *    이것은 자연화이지 우회가 아니다. UA 위장 · IP 로테이션 · robots 무시는 하지 않는다.
  *
- * ⚠️ **Playwright 는 이 저장소의 의존성이 아니다.**
- *    dry-run · fixture · typecheck 는 Playwright 없이 전부 돈다.
- *    `--live` 를 줬을 때만 동적 import 하고, 없으면 설치 안내를 내고 멈춘다.
- *    의존성 추가(브라우저 바이너리 ~300MB)는 창업자 승인 사항이라 이 PR 이 하지 않는다.
+ * ⚠️ **브라우저는 `--live` 일 때만 뜬다.**
+ *    dry-run · fixture · typecheck 는 브라우저 없이 전부 돈다.
+ *    모듈은 `playwright` → `playwright-core` 순으로 동적 import 한다 —
+ *    `playwright-core` 는 이미 이 저장소의 devDependency 다(PR-S2-b-3 정정).
+ *    🔴 브라우저 바이너리는 받지 않는다. 기본값은 설치된 Google Chrome(`channel: 'chrome'`)이다.
  *
  * 안전장치
  *   dry-run 기본     --live 가 없으면 브라우저를 열지 않는다
@@ -47,6 +48,7 @@ import {
   LIST_URL, ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
   LOCK_PATH, LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS,
   SESSION_PATH_ENV, KILL_SWITCH_ENV, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
+  PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -147,7 +149,10 @@ async function main() {
   let browser: NaverBrowser | null = null
 
   try {
-    browser = await chromium.launch({ headless: true })
+    // 🔴 기본은 설치된 Chrome. 번들 chromium(rev 1234)이 로컬에 없어도 뜬다
+    const launchOpts = browserLaunchOptions({ channel: process.env[BROWSER_CHANNEL_ENV], headless: true })
+    console.log(`  브라우저: ${launchOpts.channel ?? '번들 chromium'}`)
+    browser = await chromium.launch(launchOpts)
     const context = await browser.newContext({ storageState: sessionPath!, locale: 'ko-KR' })
     const page = await context.newPage()
 
@@ -227,25 +232,30 @@ type NaverBrowser = {
 type Chromium = { launch: (o: object) => Promise<NaverBrowser> }
 
 /**
- * 🔴 Playwright 는 이 저장소의 의존성이 **아니다.** live 경로에서만 동적으로 부른다.
+ * Playwright 모듈을 live 경로에서만 동적으로 부른다.
  *
- *    문자열 변수로 부르는 이유: 없는 모듈을 정적으로 import 하면 typecheck 가 깨진다.
- *    dry-run · fixture · typecheck 는 설치 없이 돌아야 한다 —
- *    브라우저 바이너리(~300MB) 설치는 창업자 승인 사항이고 이 PR 이 하지 않는다.
+ * 🔴 **`playwright` 만 찾지 않는다.** 이 저장소에는 `playwright-core` 가 이미 devDependency 로
+ *    들어 있다(package.json). 앞 코드는 `playwright` 만 보고 "설치돼 있지 않다" 고 말했다 —
+ *    있는 것을 없다고 한 셈이라 PR-S2-b-3 에서 고쳤다.
+ *
+ *    문자열 변수로 부르는 이유는 그대로다: 없는 모듈을 정적으로 import 하면 typecheck 가 깨진다.
+ *    dry-run · fixture · typecheck 는 브라우저 없이 전부 돈다.
  */
 async function loadChromium(): Promise<Chromium> {
-  const spec = 'playwright'
-  try {
-    const mod = (await import(spec)) as { chromium: Chromium }
-    return mod.chromium
-  } catch {
-    return fail(
-      'Playwright 가 설치돼 있지 않다.\n' +
-        '   이 저장소의 의존성이 아니라서 live 수집에는 별도 설치가 필요하다:\n' +
-        '     npm i -D playwright && npx playwright install chromium\n' +
-        '   🔴 브라우저 바이너리가 큰 설치라 창업자 승인 사항이다. dry-run 은 설치 없이 돈다.',
-    )
+  for (const spec of PLAYWRIGHT_SPECS) {
+    try {
+      const mod = (await import(spec)) as { chromium?: Chromium }
+      if (mod.chromium) return mod.chromium
+    } catch {
+      // 다음 후보로 넘어간다
+    }
   }
+  return fail(
+    `Playwright 를 찾지 못했다 (시도: ${PLAYWRIGHT_SPECS.join(', ')}).\n` +
+      '     npm i -D playwright-core\n' +
+      '   🔴 브라우저 바이너리는 받지 않아도 된다 — 기본은 설치된 Google Chrome 을 쓴다\n' +
+      `      (${BROWSER_CHANNEL_ENV}=chromium 을 주면 번들 브라우저를 쓴다).`,
+  )
 }
 
 /**
