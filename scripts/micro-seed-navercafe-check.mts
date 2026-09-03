@@ -298,6 +298,9 @@ check('headed 로 연다 (headless: false)',
   /headless:\s*false/.test(SETUP_CODE),
   'headless 로는 2단계 인증을 사람이 통과할 수 없다')
 check('저장 후 권한 600 을 건다', /chmodSync\([^)]*0o600\)/.test(SETUP_CODE))
+check('🔴 loadEnvLocal 을 await 한다',
+  /await loadEnvLocal\(\)/.test(SETUP_CODE) && !/^\s*loadEnvLocal\(\)/m.test(SETUP_CODE),
+  'async 인데 await 를 빠뜨리면 .env.local 의 세션 경로가 조용히 무시되고 기본 경로로 저장된다')
 check('🔴 저장 전에 gitignore 를 본다 (저장 후가 아니라)',
   SETUP_CODE.indexOf('isSessionPathIgnored') < SETUP_CODE.indexOf('storageState'),
   '저장하고 확인하면 이미 워킹트리에 쿠키가 놓인 뒤다')

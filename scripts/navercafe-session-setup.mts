@@ -86,7 +86,9 @@ function waitForEnter(prompt: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  loadEnvLocal()
+  // 🔴 await 를 빠뜨리면 .env.local 의 SORAN_NAVERCAFE_SESSION_PATH 가 조용히 무시되고
+  //    기본 경로로 저장된다 — 실패가 아니라 "다른 곳에 저장" 이라 알아채기 어렵다
+  await loadEnvLocal()
   const now = new Date()
 
   console.log('\n소란소란 전용 네이버 세션 발급')
