@@ -1,0 +1,298 @@
+/**
+ * scout 목록 점수 — 🔴 **초안이다. 운영값이 아니다** (PR-S2-b-11)
+ *
+ * 정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-F
+ *
+ * 🔴 **post-score-first**: 판단 단위는 게시판도 카페도 아니라 **게시글 1개**다.
+ *    우갱 · 레몬테라스 · 82cook 사이에 서열이 없다. 소스는 quota · 가용성 · pacing 의
+ *    단위이지 "무엇을 쓸지" 를 정하지 않는다.
+ *
+ * 🔴 **cheap-signal-first**: 목록에서 판단 가능한 것은 목록에서 끝낸다.
+ *    상세 fetch · DB write · LLM 은 전부 비용이다. 점수 높은 후보에만 쓴다.
+ *
+ * 🔴 **이 파일은 네트워크도 DB 도 만지지 않는다.** 순수 함수뿐이다 —
+ *    그래야 fixture 가 브라우저 없이 전부 검증한다.
+ */
+
+// ─────────────────────────────────────────────────────────
+// 입력 — scout list JSONL 의 행 (읽기 전용)
+// ─────────────────────────────────────────────────────────
+
+export type ScoutRow = {
+  sourceSite: string
+  sourceArticleId: string
+  originalTitle: string
+  sourceBoardName: string
+  sourceCommentCount: number
+  sourceCommentCountRead: boolean
+  sourceViewCount: number | null
+  sourceListedAt: string
+  sourcePostedAt: string | null
+  sourcePage: number | null
+  sourceRankOnPage: number | null
+  sourceRunId?: string
+  sourceBoardKey?: string | null
+  sourceMenuId?: string | null
+  sourceExcludeReason?: 'politics' | 'publicFigure' | 'pinned' | null
+  qualityFlags?: string[]
+}
+
+// ─────────────────────────────────────────────────────────
+// ① hard exclude · hold — 🔴 점수를 매기기 **전에** 가른다
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **점수로 이길 수 있는 축이 아니다.** 아무리 화제성이 높아도 통과하지 않는다.
+ *    그래서 가중치가 아니라 게이트로 둔다 — 가중치로 두면 언젠가 큰 점수가 이긴다.
+ */
+export type Verdict = 'excluded' | 'hold' | 'candidate'
+
+/** 본문을 봐야 아는 위험 — 목록 단계에서는 **보류**이지 제외가 아니다 */
+export const HOLD_FLAGS = ['medicalOrAdLikely', 'publicFigureMention'] as const
+
+export type Gate = {
+  verdict: Verdict
+  /** 왜 갈렸는가. candidate 면 null */
+  reason: string | null
+}
+
+export function gateOf(row: ScoutRow): Gate {
+  // 🔴 sourceExcludeReason 이 단일 판정이다 (PR-S2-b-8). 여기서 다시 만들지 않는다 —
+  //    두 곳에서 판정하면 언젠가 갈라진다.
+  if (row.sourceExcludeReason === 'politics') return { verdict: 'excluded', reason: 'politics' }
+  if (row.sourceExcludeReason === 'pinned') return { verdict: 'excluded', reason: 'pinned' }
+  if (row.sourceExcludeReason === 'publicFigure') return { verdict: 'excluded', reason: 'publicFigure' }
+
+  const flags = row.qualityFlags ?? []
+  const hit = HOLD_FLAGS.find((f) => flags.includes(f))
+  if (hit) return { verdict: 'hold', reason: hit }
+
+  return { verdict: 'candidate', reason: null }
+}
+
+// ─────────────────────────────────────────────────────────
+// ② source normalization — 🔴 절대값을 그대로 비교하지 않는다
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **같은 댓글 10개가 두 소스에서 같은 의미일 수 없다.**
+ *
+ *    실측: 쫑알쫑알 시간당 약 98건 · 우갱 약 14건. 활동량이 7배 다르다.
+ *    절대 임계값 하나로 자르면 활동량 많은 소스가 후보를 독식하고,
+ *    그 순간 다시 source-first 로 되돌아간다(§4-F).
+ *
+ * 🔴 그룹은 `(runId, boardKey|sourceSite)` 다. run 이 다르면 시간대가 다르고,
+ *    게시판이 다르면 활동량이 다르다 — 둘을 섞으면 정규화가 무의미해진다.
+ */
+export function groupKeyOf(row: ScoutRow): string {
+  return `${row.sourceRunId ?? 'norun'}|${row.sourceBoardKey ?? row.sourceSite}`
+}
+
+/**
+ * 그룹 안에서의 백분위(0~1). 동점은 같은 값을 받는다.
+ *
+ * 🔴 값이 하나뿐이면 0.5 를 준다 — 1.0 을 주면 표본 1건짜리 소스가 최상위를 먹는다.
+ */
+export function percentileIn(values: readonly number[], v: number): number {
+  if (values.length === 0) return 0
+  if (values.length === 1) return 0.5
+  const below = values.filter((x) => x < v).length
+  const equal = values.filter((x) => x === v).length
+  return (below + equal / 2) / values.length
+}
+
+// ─────────────────────────────────────────────────────────
+// ③ 타겟 핏 · 대화 가능성 — 제목·게시판 어휘
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **"시니어 · 어르신 · 노인 · 실버" 어휘를 쓰지 않는다** (CLAUDE.md 브랜드 규칙).
+ *    40대 중반~60대 중반 여성이 **자기 이야기처럼** 느낄 생활 주제를 본다.
+ */
+export const TARGET_TOPICS: readonly (readonly [string, RegExp])[] = [
+  ['몸·갱년기', /갱년기|폐경|호르몬|불면|열감|우울|무릎|관절|허리|건강검진|병원|영양제/],
+  ['가족', /남편|아들|딸|며느리|사위|시댁|친정|엄마|아빠|손주|가족|아이들/],
+  ['돈·노후', /돈|생활비|용돈|연금|노후|은퇴|보험|적금|재테크|세금|월급/],
+  ['일', /직장|일터|알바|취업|사장|동료|퇴직|이직|자격증/],
+  ['살림·집', /살림|청소|정리|반찬|김치|요리|집밥|장보기|이사|인테리어|베란다/],
+  ['관계·마음', /친구|이웃|지인|서운|속상|외롭|허무|위로|고맙|미안|서럽/],
+]
+
+export type TopicHit = { label: string }
+
+export function topicHits(title: string, boardName: string): TopicHit[] {
+  const text = `${title} ${boardName}`
+  return TARGET_TOPICS.filter(([, re]) => re.test(text)).map(([label]) => ({ label }))
+}
+
+/**
+ * 대화가 붙을 모양인가.
+ *
+ * 🔴 조회만 높고 대화가 안 붙는 글은 Raw 로서 가치가 낮다 —
+ *    North Star 가 주간 재방문 **참여** 유저 수이기 때문이다.
+ */
+export const CONVERSATION_SHAPES: readonly (readonly [string, RegExp])[] = [
+  ['질문', /\?|나요|까요|을까|나요\?|어떻게|어디|뭐가|추천/],
+  ['고민', /고민|힘들|어쩌|모르겠|괜찮을|해야 ?하나|망설/],
+  ['공감', /저만|다들|여러분|공감|같은 ?분|계신가/],
+  ['경험', /해봤|했어요|후기|해보니|겪었|당했|다녀왔/],
+]
+
+export function conversationHits(title: string): TopicHit[] {
+  return CONVERSATION_SHAPES.filter(([, re]) => re.test(title)).map(([label]) => ({ label }))
+}
+
+// ─────────────────────────────────────────────────────────
+// ④ 점수 — 🔴 가중치는 **초안**이다
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 이 가중치는 확정값이 아니다. 표본이 하루치 몇 회뿐이라 근거가 얇다 —
+ *    dry-run 으로 순위가 납득되는지 보는 용도다.
+ */
+export const WEIGHTS = { engagement: 45, targetFit: 25, conversation: 20, freshness: 10 } as const
+
+export type ScoreBreakdown = {
+  engagement: number
+  targetFit: number
+  conversation: number
+  freshness: number
+  total: number
+}
+
+export type ScoredRow = {
+  row: ScoutRow
+  gate: Gate
+  score: ScoreBreakdown
+  /** 왜 점수가 높았는가 — 🔴 제목 원문이 아니라 매칭 라벨만 */
+  why: string
+  /** 지금은 미달이지만 다음 scout 에서 다시 볼 값어치가 있는가 */
+  watch: boolean
+  lagMinutes: number | null
+  commentPct: number
+  viewPct: number
+}
+
+/** 반응 속도 — 시간당 댓글. 🔴 오래된 글이 절대수만으로 이기지 않게 한다 */
+export function velocityOf(comments: number, lagMinutes: number | null): number {
+  if (lagMinutes === null || lagMinutes <= 0) return 0
+  return comments / (lagMinutes / 60)
+}
+
+/** 🔴 너무 오래된 글은 감점. 12시간을 넘으면 신선도 0 */
+export function freshnessOf(lagMinutes: number | null): number {
+  if (lagMinutes === null) return 0
+  if (lagMinutes < 0) return 0 // 🔴 음수 lag 는 이상치다 — 보상하지 않는다
+  const h = lagMinutes / 60
+  if (h >= 12) return 0
+  return 1 - h / 12
+}
+
+const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n)
+
+export type ScoreOptions = {
+  /** watch 로 볼 최대 경과 시간(분). 이보다 오래됐으면 반응이 더 붙을 여지가 적다 */
+  watchMaxLagMinutes?: number
+  /** 상위 몇 %를 후보로 볼 것인가 — 🔴 표시용이지 자동 fetch 기준이 아니다 */
+  topRatio?: number
+}
+
+/**
+ * 그룹 정규화까지 끝난 점수를 매긴다.
+ *
+ * 🔴 **hard exclude / hold 는 여기서 점수를 받지 않는다.** 0 점을 주는 것이 아니라
+ *    애초에 후보 집합에 들어오지 않는다 — 0 점을 주면 언젠가 "0점도 후보" 가 된다.
+ */
+export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
+  scored: ScoredRow[]
+  excluded: ScoredRow[]
+  held: ScoredRow[]
+} {
+  const watchMax = opts.watchMaxLagMinutes ?? 120
+
+  const lagOf = (r: ScoutRow): number | null =>
+    r.sourcePostedAt === null ? null : (Date.parse(r.sourceListedAt) - Date.parse(r.sourcePostedAt)) / 60_000
+
+  const gated = rows.map((row) => ({ row, gate: gateOf(row), lag: lagOf(row) }))
+  const candidates = gated.filter((g) => g.gate.verdict === 'candidate')
+
+  // 🔴 정규화 모집단은 **후보뿐**이다. 제외된 행(공지는 조회수가 7배다)을 넣으면
+  //    백분위가 통째로 눌린다 — PR-S2-b-9 에서 겪은 착시와 같은 실수다.
+  const byGroup = new Map<string, { comments: number[]; views: number[]; vel: number[] }>()
+  for (const g of candidates) {
+    const k = groupKeyOf(g.row)
+    const b = byGroup.get(k) ?? { comments: [], views: [], vel: [] }
+    b.comments.push(g.row.sourceCommentCount)
+    b.views.push(g.row.sourceViewCount ?? 0)
+    b.vel.push(velocityOf(g.row.sourceCommentCount, g.lag))
+    byGroup.set(k, b)
+  }
+
+  const build = (g: { row: ScoutRow; gate: Gate; lag: number | null }): ScoredRow => {
+    const b = byGroup.get(groupKeyOf(g.row)) ?? { comments: [], views: [], vel: [] }
+    const cPct = percentileIn(b.comments, g.row.sourceCommentCount)
+    const vPct = percentileIn(b.views, g.row.sourceViewCount ?? 0)
+    const velPct = percentileIn(b.vel, velocityOf(g.row.sourceCommentCount, g.lag))
+    // 댓글/조회 비율 — 조회 대비 대화가 붙었는가
+    const ratio = (g.row.sourceViewCount ?? 0) > 0 ? g.row.sourceCommentCount / (g.row.sourceViewCount ?? 1) : 0
+
+    const topics = topicHits(g.row.originalTitle, g.row.sourceBoardName)
+    const convs = conversationHits(g.row.originalTitle)
+
+    // 🔴 댓글 수를 못 읽었으면 화제성을 신뢰하지 않는다 — 0 으로 뭉개지 말고 깎는다
+    const readPenalty = g.row.sourceCommentCountRead ? 1 : 0.5
+
+    const engagement =
+      WEIGHTS.engagement * readPenalty * clamp01(cPct * 0.4 + vPct * 0.2 + velPct * 0.3 + clamp01(ratio * 10) * 0.1)
+    const targetFit = WEIGHTS.targetFit * clamp01(topics.length / 2)
+    const conversation = WEIGHTS.conversation * clamp01(convs.length / 2)
+    const freshness = WEIGHTS.freshness * freshnessOf(g.lag)
+    const total = engagement + targetFit + conversation + freshness
+
+    const why = [
+      `댓글 p${Math.round(cPct * 100)}`,
+      `조회 p${Math.round(vPct * 100)}`,
+      `속도 p${Math.round(velPct * 100)}`,
+      topics.length ? `핏(${topics.map((t) => t.label).join('/')})` : null,
+      convs.length ? `대화(${convs.map((c) => c.label).join('/')})` : null,
+      g.row.sourceCommentCountRead ? null : '🔴 댓글수 미확인',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+
+    return {
+      row: g.row,
+      gate: g.gate,
+      score: { engagement, targetFit, conversation, freshness, total },
+      why,
+      // 🔴 지금 미달이어도 아직 어린 글이면 다음 scout 에서 다시 본다 (§4-E)
+      watch: g.lag !== null && g.lag <= watchMax && g.row.sourceCommentCount >= 1,
+      lagMinutes: g.lag,
+      commentPct: cPct,
+      viewPct: vPct,
+    }
+  }
+
+  return {
+    scored: candidates.map(build).sort((a, b) => b.score.total - a.score.total),
+    excluded: gated.filter((g) => g.gate.verdict === 'excluded').map(build),
+    held: gated.filter((g) => g.gate.verdict === 'hold').map(build),
+  }
+}
+
+/**
+ * 정규화가 순위를 얼마나 바꿨는가 — 🔴 정규화가 실제로 일하고 있는지 본다.
+ *
+ * 단순 댓글수 내림차순 순위와 점수 순위를 비교한다. 차이가 0 이면
+ * 정규화가 아무 일도 하지 않은 것이고, 그건 곧 source-first 와 같다.
+ */
+export function rankShift(scored: readonly ScoredRow[]): { moved: number; maxShift: number; meanShift: number } {
+  const naive = [...scored].sort((a, b) => b.row.sourceCommentCount - a.row.sourceCommentCount)
+  const naiveRank = new Map(naive.map((s, i) => [s.row.sourceArticleId, i]))
+  const shifts = scored.map((s, i) => Math.abs(i - (naiveRank.get(s.row.sourceArticleId) ?? i)))
+  return {
+    moved: shifts.filter((n) => n > 0).length,
+    maxShift: shifts.length ? Math.max(...shifts) : 0,
+    meanShift: shifts.length ? shifts.reduce((a, b) => a + b, 0) / shifts.length : 0,
+  }
+}
