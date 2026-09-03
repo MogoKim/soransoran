@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  네이버 카페 Raw 수집 — 🔴 템플릿이다. 등록되어 있지 않다 (README.md 참조)
+
+  정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-A · §5 · §5-C
+
+  🔴 **LOCAL ONLY — GHA 로 옮기지 않는다**
+     네이버는 로그인 세션이 필요하고, 쿠키를 GHA Secrets 에 올리는 순간 계정이 위험해진다.
+     82cook 이 막히면 IP 이고 네트워크를 바꾸면 회복되지만,
+     네이버가 막히면 **계정**이고 그건 되돌릴 수 없다.
+
+  🔴 **이 job 은 Raw Vault 에 적재하지 않는다**
+     collector 는 prisma 를 import 하지 않는다. 산출물은 로컬 JSONL 뿐이고
+     적재는 raw-import job 이 `--raw-only --batch=N` 으로 따로 한다.
+     Candidate · Sheet · Post · Queue 로 가는 경로가 코드에 없다(fixture 검증).
+
+  🔴 **kill switch 는 plist 가 아니라 환경변수다**
+     .env.local 의 SORAN_NAVERCAFE_COLLECT_ENABLED=true 가 없으면 --live 는 무시된다.
+     plist 를 지우지 않고 멈출 수 있어야 한다.
+
+  🔴 **전용 세션만 쓴다**
+     SORAN_NAVERCAFE_SESSION_PATH 는 소란소란 전용 계정으로 발급한 파일을 가리킨다.
+     우나어 storage-state.json 재사용은 judgeSession 이 코드로 막는다 —
+     한쪽이 막히면 둘 다 멈추기 때문이다.
+
+  🔴 **Playwright 가 필요하다**
+     이 저장소의 의존성이 아니다. 등록 전에 별도 설치가 선행돼야 한다:
+       npm i -D playwright && npx playwright install chromium
+
+  🔴 **상한은 인자에 박는다**
+     --max=10 (슬롯 quota) · 목록 1p. 82cook(30)보다 작은 이유는 위와 같다.
+     여러 카페·시간대에 얇게 분산한다 — 한 소스를 세게 긁지 않는다.
+
+  슬롯: 하루 4회 · 카페를 번갈아 (한 카페를 연속으로 긁지 않는다)
+        09:20 remonterrace · 13:20 wgang · 17:20 dlxogns01 · 21:20 masanmam
+        ⚠️ 이 템플릿은 remonterrace 1개용이다. 카페마다 plist 를 따로 둔다.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.navercafe-collect-remonterrace</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NPX__</string>
+    <string>tsx</string>
+    <string>__REPO__/scripts/micro-seed-collect-navercafe.mts</string>
+    <string>--cafe=remonterrace</string>
+    <string>--pages=1</string>
+    <string>--max=10</string>
+    <string>--live</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>20</integer></dict>
+  </array>
+
+  <!-- 🔴 RunAtLoad 를 쓰지 않는다. load 하는 순간 브라우저가 뜨는 것은 의도가 아니다 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__REPO__/logs/navercafe-collect-remonterrace.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/logs/navercafe-collect-remonterrace-error.log</string>
+</dict>
+</plist>
