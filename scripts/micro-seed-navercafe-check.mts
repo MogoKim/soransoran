@@ -31,6 +31,7 @@ import {
   LIST_SELECTORS, runIdOf, runOutputPath,
   BOARD_TARGETS, findBoard, boardListUrl, pagesOf, activeCafes,
   detectRowLabel, judgePoliticsTitle, SCOUT_MAX_PAGES, DETAIL_MAX_PAGES, maxPagesFor,
+  judgeExcludeReason, dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
@@ -765,10 +766,13 @@ check('🔴 모르는 라벨을 조용히 통과시키지 않는다',
 check('라벨 없으면 unknown 도 null', detectRowLabel('', '').unknown === null)
 check('공백만 있으면 없는 것으로 본다', detectRowLabel('   ', '').unknown === null)
 check('셀렉터에 라벨이 있다', /board-tag/.test(LIST_SELECTORS.label))
+// 🔴 PR-S2-b-8 에서 제외 판정이 judgeExcludeReason 하나로 합쳐졌다.
+//    pinned 를 직접 보던 단정을 사유 기반으로 옮긴다 — 약화가 아니라 축의 이동이다.
 check('🔴 collector 가 pinned 행을 상세 후보에서 뺀다',
-  /!r\.sourcePinned/.test(COLLECTOR_CODE))
+  /r\.sourceExcludeReason === null/.test(COLLECTOR_CODE)
+    && judgeExcludeReason({ politicsExcluded: false, pinned: true, qualityFlags: [] }) === 'pinned')
 check('🔴 그래도 목록 JSONL 에는 남긴다',
-  COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('r.sourcePinned'),
+  COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('sourceExcludeReason'),
   '지우는 것이 아니라 자동 경로에서만 뺀다 — 정책 Q-1')
 {
   const base = { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '오늘 저녁 반찬 고민', sourceCommentCount: 0 }
@@ -805,7 +809,8 @@ check('🔴 판정 단위가 제목이다 — 게시판 이름으로 판정하�
     && !/judgePoliticsTitle\((item\.)?source(BoardName|MenuId|BoardKey)/.test(LIB_CODE),
   '게시판 하나가 통째로 정치로 분류되면 그 게시판의 생활글까지 전부 사라진다')
 check('🔴 collector 가 정치 행을 상세 후보에서 뺀다',
-  /!r\.sourcePoliticsExcluded/.test(COLLECTOR_CODE))
+  /r\.sourceExcludeReason === null/.test(COLLECTOR_CODE)
+    && judgeExcludeReason({ politicsExcluded: true, pinned: false, qualityFlags: [] }) === 'politics')
 check('산출물에 판정이 남는다',
   buildCollected('remonterrace', { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '정치 얘기', sourceCommentCount: 0 }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z').sourcePoliticsExcluded)
 
@@ -826,6 +831,96 @@ check('scout 에서도 목록은 기록한다',
   COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('if (SCOUT)'),
   '조건 미달이던 글도 다음 실행에서 후보가 될 수 있어야 한다')
 check('페이지 상한을 코드가 강제한다', /PAGE_LIST!\.length > PAGE_CAP/.test(COLLECTOR_CODE))
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉖ 게시판명 — 🔴 기본값을 조용히 씌우지 않는다 (PR-S2-b-8)')
+// ─────────────────────────────────────────────────────────
+check('🔴 board 가 있으면 그 label 로 채운다',
+  /sourceBoardName: r\.board \|\| BOARD\?\.label \|\| null/.test(COLLECTOR_CODE),
+  '개별 게시판 페이지에는 a.board_name 셀이 없다 — 쫑알쫑알 225건이 전부 "전체글보기" 로 기록됐다')
+{
+  const b = { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '반찬 고민', sourceCommentCount: 0 }
+  const withBoard = buildCollected('remonterrace', { ...b, sourceBoardName: '쫑알쫑알 게시판', sourceMenuId: '23', sourceBoardKey: 'remonterrace:jjong' }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
+  check('게시판명·menuId·boardKey 가 함께 남는다',
+    withBoard.sourceBoardName === '쫑알쫑알 게시판' && withBoard.sourceMenuId === '23' && withBoard.sourceBoardKey === 'remonterrace:jjong')
+  check('🔴 boardKey 의 label 과 일치한다',
+    withBoard.sourceBoardName === findBoard(withBoard.sourceBoardKey!)!.label,
+    '셋이 어긋나면 분석에서 게시판을 잘못 읽는다')
+  const legacy = buildCollected('remonterrace', b, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
+  check('전체글보기 기존 동작은 그대로', legacy.sourceBoardName === '전체글보기' && legacy.sourceBoardKey === null)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉗ 제외 사유 — 🔴 단일 판정. 축을 합치지도 흩뜨리지도 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const J = (o: Partial<{ politicsExcluded: boolean; pinned: boolean; qualityFlags: string[] }>) =>
+    judgeExcludeReason({ politicsExcluded: false, pinned: false, qualityFlags: [], ...o })
+  check('정치 제목 → politics', J({ politicsExcluded: true }) === 'politics')
+  check('politicalTopicLikely → politics', J({ qualityFlags: ['politicalTopicLikely'] }) === 'politics')
+  check('🔴 politicalOrPublicFigure → publicFigure (더 이상 후보에 남지 않는다)',
+    J({ qualityFlags: ['politicalOrPublicFigure'] }) === 'publicFigure',
+    '실측에서 이 2건이 sourcePoliticsExcluded=false 라 자동 후보에 남을 수 있었다')
+  check('고정 슬롯 → pinned', J({ pinned: true }) === 'pinned')
+  check('해당 없으면 null', J({ qualityFlags: ['lowEngagement'] }) === null)
+  check('🔴 정치가 실명보다 먼저다',
+    J({ politicsExcluded: true, qualityFlags: ['politicalOrPublicFigure'] }) === 'politics',
+    '정치이면서 실명인 글을 publicFigure 로 적으면 나중에 Growth 로 되살릴 후보처럼 보인다')
+  check('🔴 정치가 고정 슬롯보다 먼저다', J({ politicsExcluded: true, pinned: true }) === 'politics')
+
+  // 🔵 연예·방송·셀럽은 정치와 분리된다
+  check('🔵 연예 제목은 politics 가 아니다',
+    !judgePoliticsTitle('연예인 이혼 소식').excluded && !judgePoliticsTitle('드라마 마지막회').excluded)
+  check('🔴 사유를 남기는 이유 — Growth 가 열리면 publicFigure 를 갈라야 한다',
+    /Growth 레인이 열리면/.test(LIB),
+    '사유를 안 남기면 그때 무엇을 되살릴지 알 수 없다')
+  check('collector 가 단일 판정으로 후보를 고른다',
+    /r\.sourceExcludeReason === null/.test(COLLECTOR_CODE)
+      && !/!r\.sourcePinned && !r\.sourcePoliticsExcluded/.test(COLLECTOR_CODE))
+  check('사유별로 다르게 보고한다',
+    /실명·공인 언급/.test(COLLECTOR) && /고정 슬롯/.test(COLLECTOR) && /정치·진영/.test(COLLECTOR))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉘ 목록 중복 — 🔴 threshold 분모를 오염시키지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const R = (id: string, page: number) => ({ sourceSite: 'navercafe:remonterrace', sourceArticleId: id, page })
+  const d = dedupeListRows([R('1', 3), R('2', 3), R('1', 4), R('3', 4)])
+  check('중복이 빠진다', d.rows.length === 3 && d.duplicates === 1)
+  check('🔴 먼저 본 위치를 남긴다',
+    d.rows.find((r) => r.sourceArticleId === '1')?.page === 3,
+    '밀려 내려간 위치는 크롤 타이밍의 산물이다')
+  check('🔴 조용히 버리지 않고 센다', d.duplicateIds.includes('1'))
+  check('카페가 다르면 같은 id 도 별개',
+    dedupeListRows([R('1', 1), { ...R('1', 1), sourceSite: 'navercafe:wgang' }]).rows.length === 2,
+    '네이버 articleId 는 카페 안에서만 유일하다')
+  check('중복이 없으면 그대로', dedupeListRows([R('1', 1), R('2', 1)]).duplicates === 0)
+  check('🔴 collector 가 분석 전에 dedup 한다',
+    COLLECTOR_CODE.indexOf('dedupeListRows') < COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST'),
+    'threshold 를 백분율로 재는 순간 분모가 오염된다')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉙ threshold — 🔴 후보일 뿐이다. 코드가 자동 판정하지 않는다')
+// ─────────────────────────────────────────────────────────
+check('후보 2개', THRESHOLD_CANDIDATES.length === 2)
+check('후보 A/B 값', THRESHOLD_CANDIDATES[0].minComments === 10 && THRESHOLD_CANDIDATES[1].minComments === 15)
+check('둘 다 조회 300', THRESHOLD_CANDIDATES.every((t) => t.minViews === 300))
+{
+  const T = THRESHOLD_CANDIDATES[0]
+  check('둘 다 넘으면 통과', passesThreshold({ sourceCommentCount: 12, sourceViewCount: 400 }, T))
+  check('하나만 넘으면 탈락',
+    !passesThreshold({ sourceCommentCount: 12, sourceViewCount: 100 }, T)
+      && !passesThreshold({ sourceCommentCount: 2, sourceViewCount: 400 }, T))
+  check('🔴 조회수를 못 읽었으면 통과시키지 않는다',
+    !passesThreshold({ sourceCommentCount: 99, sourceViewCount: null }, T),
+    '미지값을 0 으로도 무한대로도 보지 않는다')
+}
+check('🔴 자동 선별이 threshold 를 쓰지 않는다',
+  !/passesThreshold\([\s\S]{0,80}planAutoFetch/.test(COLLECTOR_CODE)
+    && /후보 \$\{t\.label\}/.test(COLLECTOR_CODE),
+  '표본이 2.3시간짜리 하나뿐이라 확정하기에는 이르다 — 세어만 본다')
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0

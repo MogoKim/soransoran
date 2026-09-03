@@ -53,6 +53,7 @@ import {
   LIST_SELECTORS, runIdOf, runOutputPath,
   BOARD_TARGETS, findBoard, boardListUrl, pagesOf, maxPagesFor,
   detectRowLabel, judgePoliticsTitle, activeCafes,
+  dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -261,29 +262,48 @@ async function main() {
     // ── ② 자동 선별 (목록 단계 제외) ──
     // listedAtIso 는 실행 시작 시점에 못 박았다 (runId 와 같은 시각).
     // 🔴 목록을 **본** 시각과 상세를 여는 시각은 다르다 — time lag 조사가 그 차이를 쓴다.
-    const listRows = items.map((i) => buildCollected(cafe!.cafeId, i, '', listedAtIso, listedAtIso))
+    const rawRows = items.map((i) => buildCollected(cafe!.cafeId, i, '', listedAtIso, listedAtIso))
+
+    // 🔴 크롤 중 새 글이 올라오면 같은 글이 두 페이지에 걸린다 (실측: 225건 중 1건).
+    //    threshold 를 백분율로 재는 순간 분모가 오염되므로 **분석 전에** 지운다.
+    const dedup = dedupeListRows(rawRows)
+    if (dedup.duplicates > 0) {
+      console.log(`  ♻️ 페이지 간 중복 ${dedup.duplicates}건 제거 (${dedup.duplicateIds.slice(0, 5).join(' · ')})`)
+      console.log('     🔴 크롤 중 새 글이 올라와 밀린 것이다 — 먼저 본 위치를 남긴다')
+    }
+    const listRows = dedup.rows
     writeJsonl(OUT_LIST, listRows)
 
-    // 🔴 자동 상세 fetch 에서 빼는 두 부류. **파일에서 지우는 것이 아니다** —
-    //    목록 JSONL 에는 전부 남고, 다음 실행에서 조건이 바뀌면 다시 후보가 된다.
-    const pinned = listRows.filter((r) => r.sourcePinned)
-    const political = listRows.filter((r) => r.sourcePoliticsExcluded)
-    if (pinned.length) console.log(`  📌 고정 슬롯 ${pinned.length}건 — 상세 대상 제외 (공지·필독·추천)`)
-    if (political.length) {
-      console.log(`  🚫 정치·진영 ${political.length}건 — 상세 대상 제외`)
+    // 🔴 자동 상세 fetch 에서 빼는 이유는 **하나의 판정**이 정한다 (judgeExcludeReason).
+    //    축이 갈라져 있으면 "어느 쪽이 최종 차단인가" 를 코드만 보고 답할 수 없다.
+    //    **파일에서 지우는 것이 아니다** — 목록 JSONL 에는 전부 남는다.
+    const byReason = { politics: 0, publicFigure: 0, pinned: 0 }
+    for (const r of listRows) if (r.sourceExcludeReason) byReason[r.sourceExcludeReason] += 1
+    if (byReason.politics) {
+      console.log(`  🚫 정치·진영 ${byReason.politics}건 — 상세 대상 제외`)
       console.log('     🔴 public · growth · shadow 어디에도 가지 않는다 (설계 §4-C)')
     }
+    if (byReason.publicFigure) {
+      console.log(`  🟡 실명·공인 언급 ${byReason.publicFigure}건 — 생활 레인 상세 대상 제외`)
+      console.log('     🔴 연예·방송·셀럽이 섞인다. Growth 레인이 열리면 여기서 갈라야 한다')
+    }
+    if (byReason.pinned) console.log(`  📌 고정 슬롯 ${byReason.pinned}건 — 상세 대상 제외 (공지·필독·추천)`)
 
     if (SCOUT) {
       // ── 🔍 scout 종료 — 상세를 열지 않는다 ──
       console.log(`\n  🔍 scout 종료 — 목록 ${listRows.length}건만 기록했다. 상세 요청 0.`)
+      // 🔴 후보값으로 세어만 본다. 코드가 이 값으로 자동 판정하지 않는다
+      for (const t of THRESHOLD_CANDIDATES) {
+        const n = listRows.filter((r) => passesThreshold(r, t)).length
+        console.log(`     후보 ${t.label} (댓글>=${t.minComments} AND 조회>=${t.minViews}) → ${n}건 (${Math.round((n / listRows.length) * 100)}%)`)
+      }
       console.log(`     → ${OUT_LIST}`)
       console.log(`\n  🔴 상세 JSONL 을 만들지 않았다. threshold 를 정하기 전에는 상세를 열지 않는다.`)
       console.log(`     (${kstString(now)} KST · run ${RUN_ID})\n`)
       return
     }
 
-    const eligible = listRows.filter((r) => !r.sourcePinned && !r.sourcePoliticsExcluded)
+    const eligible = listRows.filter((r) => r.sourceExcludeReason === null)
     const plan = planAutoFetch(
       eligible.map((r) => ({
         sourceArticleId: r.sourceArticleId,
@@ -480,7 +500,9 @@ async function readList(
           // 나머지 메타는 못 읽으면 null 로 남긴다(추측하지 않는다)
           sourcePostedLabel: r.date || null,
           sourceViewCount: normalizeCount(r.views),
-          sourceBoardName: r.board || null,
+          // 🔴 개별 게시판 페이지에는 a.board_name 셀이 없다. 그때는 타깃의 label 을 쓴다 —
+          //    앞 코드는 기본값 '전체글보기' 로 떨어져 쫑알쫑알 225건이 전부 잘못 기록됐다.
+          sourceBoardName: r.board || BOARD?.label || null,
           sourcePage: pageNo,
           sourceRankOnPage: items.length + 1,
           // ── PR-S2-b-7 ──
