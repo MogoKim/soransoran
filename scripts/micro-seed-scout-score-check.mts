@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 import {
   gateOf, scoreRows, rankShift, percentileIn, velocityOf, freshnessOf,
   groupKeyOf, topicHits, conversationHits, WEIGHTS, HOLD_FLAGS,
+  toArticles, articleKeyOf,
   type ScoutRow,
 } from './lib/micro-seed-scout-score.mjs'
 
@@ -195,9 +196,12 @@ for (const [label, code] of [['lib', LIB_CODE], ['runner', RUNNER_CODE]] as cons
   check(`[${label}] 🔴 파일을 쓰지 않는다`, !/(writeFileSync|appendFileSync|mkdirSync|unlinkSync)/.test(code))
 }
 check('🔴 runner 가 읽기만 한다', /readFileSync|readdirSync/.test(RUNNER_CODE))
-check('🔴 제목 원문을 출력하지 않는다',
-  !/originalTitle/.test(RUNNER_CODE.replace(/console\.log\([^)]*제목 원문[^)]*\)/g, '')),
-  '매칭 라벨과 백분위만 찍는다')
+// 🔴 PR-S2-b-11 보정에서 --show-title 이 생겼다. "절대 미출력" 은 더 이상 사실이 아니다 —
+//    단정을 **"기본 미출력 + 옵션 안에서만"** 으로 옮긴다. 상세 검사는 ⑩ 이 한다.
+//    약화가 아니라 축의 이동이다: 옵션 밖 참조가 하나라도 있으면 실패한다.
+check('🔴 제목을 기본으로 출력하지 않는다 (옵션 밖 참조 0)',
+  RUNNER_CODE.split('if (SHOW_TITLE)').filter((chunk, i) => i === 0 && /originalTitle/.test(chunk)).length === 0,
+  '기본 실행은 매칭 라벨과 백분위만 찍는다')
 check('추가 크롤 비용 0 임을 명시한다', /추가 크롤 비용 0/.test(RUNNER))
 
 // ─────────────────────────────────────────────────────────
@@ -215,6 +219,87 @@ check('🔴 소스 우열 결론을 내리지 않는다',
   'post-score-first — 판단 단위는 게시글 1개다 (§4-F)')
 check('🔴 구 데이터를 제외하고 건수를 보고한다',
   /sourceRunId/.test(RUNNER_CODE) && /구 데이터 제외/.test(RUNNER))
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 🔴 판단 단위는 row 가 아니라 게시글 1개다 (PR-S2-b-11 보정)')
+// ─────────────────────────────────────────────────────────
+{
+  const obs = (run: string, listed: string, c: number, v: number) =>
+    row({ sourceArticleId: 'A', sourceRunId: run, sourceListedAt: listed, sourceCommentCount: c, sourceViewCount: v })
+  const rows = [
+    obs('R1', '2026-09-03T05:00:00.000Z', 3, 100),
+    obs('R3', '2026-09-03T09:00:00.000Z', 12, 400),   // 🔴 최신 (시각 기준)
+    obs('R2', '2026-09-03T07:00:00.000Z', 7, 250),
+    row({ sourceArticleId: 'B', sourceRunId: 'R1', sourceCommentCount: 5, sourceViewCount: 120 }),
+  ]
+  const arts = toArticles(rows)
+  check('관측 4행 → 고유 글 2건', arts.length === 2)
+  const a = arts.find((x) => x.latest.sourceArticleId === 'A')!
+  check('🔴 최신 관측을 대표로 쓴다 (listedAt 기준)',
+    a.latest.sourceRunId === 'R3' && a.latest.sourceCommentCount === 12,
+    'runId 문자열 정렬은 자릿수가 바뀌면 깨진다 — 시각으로 정렬한다')
+  check('seenCount', a.seenCount === 3)
+  check('firstRunId · lastRunId', a.firstRunId === 'R1' && a.lastRunId === 'R3')
+  check('🔴 commentDelta 는 첫 관측 대비 증가분', a.commentDelta === 9)
+  check('🔴 viewDelta 도 계산된다', a.viewDelta === 300)
+  check('1회만 본 글은 delta 0', arts.find((x) => x.latest.sourceArticleId === 'B')!.commentDelta === 0)
+  check('조회수를 못 읽었으면 viewDelta 는 null',
+    toArticles([row({ sourceArticleId: 'C', sourceViewCount: null }), row({ sourceArticleId: 'C', sourceListedAt: '2026-09-03T08:00:00.000Z' })])[0].viewDelta === null,
+    '미지값을 0 으로 뭉개지 않는다')
+  check('카페가 다르면 같은 articleId 도 별개',
+    toArticles([row({ sourceArticleId: 'X' }), row({ sourceArticleId: 'X', sourceSite: 'navercafe:wgang' })]).length === 2,
+    '네이버 articleId 는 카페 안에서만 유일하다')
+  check('articleKeyOf 가 site + id', articleKeyOf(row({ sourceArticleId: '9' })) === 'navercafe:remonterrace|9')
+
+  // 🔴 top 에 같은 글이 두 번 나오면 안 된다
+  const { scored } = scoreRows(rows)
+  const ids = scored.map((s) => s.row.sourceArticleId)
+  check('🔴 top 에 같은 articleId 가 중복되지 않는다',
+    ids.length === new Set(ids).size && ids.length === 2,
+    `받은 값: ${ids.join(',')} — 실측 611 관측에 중복 49건이 있었다`)
+  check('점수 행이 관측 이력을 들고 있다',
+    scored.every((s) => s.obs.seenCount >= 1 && s.obs.latest === s.row))
+  check('여러 번 본 글은 why 에 증가분이 붙는다',
+    /관측 3회 · 댓글 \+9/.test(scored.find((s) => s.row.sourceArticleId === 'A')!.why))
+  check('🔴 scoreRows 가 먼저 article 로 접는다',
+    /const articles = toArticles\(rows\)/.test(LIB_CODE),
+    '접지 않으면 top 에 같은 글이 중복으로 올라온다')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 비용 요약 — 🔴 절감률 분모는 고유 글이다')
+// ─────────────────────────────────────────────────────────
+check('observation rows 와 unique articles 를 나눠 찍는다',
+  /observation rows/.test(RUNNER) && /unique articles/.test(RUNNER))
+check('🔴 절감률 분모가 uniq 다',
+  /\(\(uniq - top\.length\) \/ uniq\)/.test(RUNNER_CODE)
+    && !/\(\(total - top\.length\) \/ total\)/.test(RUNNER_CODE),
+  'row 기준으로 세면 같은 글을 여러 번 센 값이라 과장된다')
+check('row 기준 수치가 과장임을 명시한다', /과장이다/.test(RUNNER))
+check('watch·후보도 고유 글 기준임을 밝힌다', /전부 고유 글 기준/.test(RUNNER))
+check('trend 를 출력한다 (미달 → 충족 추적)',
+  /댓글이 늘어난 글/.test(RUNNER) && /commentDelta/.test(RUNNER_CODE))
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑩ --show-title — 🔴 기본 미출력 · 후보만 · 본문 절대 금지')
+// ─────────────────────────────────────────────────────────
+check('옵션이 있다', /--show-title/.test(RUNNER))
+check('🔴 기본값이 false 다',
+  /const SHOW_TITLE = argv\.includes\('--show-title'\)/.test(RUNNER_CODE),
+  '기본으로 켜지면 소스 원문이 늘 로그에 남는다')
+check('제목 출력이 옵션 안에만 있다',
+  /if \(SHOW_TITLE\) \{[\s\S]{0,200}originalTitle/.test(RUNNER_CODE),
+  'originalTitle 참조가 옵션 밖에 있으면 안 된다')
+check('🔴 길이를 자른다', /TITLE_MAX/.test(RUNNER_CODE) && /const TITLE_MAX = 80/.test(RUNNER_CODE))
+check('🔴 본문(rawBody)을 어디서도 출력하지 않는다',
+  !/rawBody/.test(RUNNER_CODE) && !/rawBody/.test(LIB_CODE))
+check('🔴 제외·보류 글 제목은 나오지 않는다 (구조로 보장)',
+  /const top = scored\.slice\(0, TOP\)/.test(RUNNER_CODE)
+    && !/excluded[\s\S]{0,120}originalTitle/.test(RUNNER_CODE)
+    && !/held[\s\S]{0,120}originalTitle/.test(RUNNER_CODE),
+  'top 은 scored(=candidate)에서만 나온다')
+check('🔴 쿠키·세션·HTML 을 만지지 않는다',
+  !/(cookie|storageState|innerHTML|outerHTML)/i.test(RUNNER_CODE) && !/(cookie|storageState|innerHTML)/i.test(LIB_CODE))
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0

@@ -15,16 +15,23 @@
  * 🔴 **cheap-signal-first**: 목록에서 판단 가능한 것은 목록에서 끝낸다.
  *    상세 fetch 는 점수 높은 후보에만 쓴다. 이 dry-run 은 **얼마나 아낄 수 있는지**를 센다.
  *
- * 🔴 **제목 원문을 출력하지 않는다.** 매칭 라벨과 백분위만 찍는다.
+ * 🔴 **제목 원문을 기본으로 출력하지 않는다.** 매칭 라벨과 백분위만 찍는다.
+ *    `--show-title` 을 줄 때만 **상위 후보**의 제목을 한 줄로 보여준다 —
+ *    사람이 눈으로 보지 못하면 가중치가 맞는지 판단할 수 없기 때문이다.
+ *    🔴 제외·보류된 글의 제목은 옵션을 켜도 나오지 않는다. 본문은 어떤 경우에도 안 나온다.
  *
  * 사용법
  *   npx tsx scripts/micro-seed-score-scout-dry-run.mts
  *   npx tsx scripts/micro-seed-score-scout-dry-run.mts --run=20260903-204007
  *   npx tsx scripts/micro-seed-score-scout-dry-run.mts --top=20
+ *   npx tsx scripts/micro-seed-score-scout-dry-run.mts --show-title   🟡 로컬 검토용
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { scoreRows, rankShift, groupKeyOf, type ScoutRow, type ScoredRow } from './lib/micro-seed-scout-score.mjs'
+import {
+  scoreRows, rankShift, groupKeyOf, toArticles, articleKeyOf,
+  type ScoutRow, type ScoredRow,
+} from './lib/micro-seed-scout-score.mjs'
 
 const DATA_DIR = './.microseed-data'
 const argv = process.argv.slice(2)
@@ -34,6 +41,14 @@ const arg = (n: string): string | undefined => {
 }
 const TOP = Number(arg('top') ?? '20')
 const ONLY_RUN = arg('run') ?? null
+/**
+ * 🔴 **기본값 false.** 제목은 소스 원문이라 기본으로 찍지 않는다.
+ *    로컬에서 사람이 상위 후보를 눈으로 볼 때만 켠다 — 그래야 가중치를 판단할 수 있다.
+ *    🔴 제외·보류된 글의 제목은 이 옵션을 켜도 출력하지 않는다.
+ *    🔴 본문(rawBody)은 어떤 경우에도 출력하지 않는다.
+ */
+const SHOW_TITLE = argv.includes('--show-title')
+const TITLE_MAX = 80
 
 const fail = (m: string): never => {
   console.error(`\n🛑 ${m}\n`)
@@ -87,13 +102,21 @@ function main(): void {
   console.log('─────────────────────────────────────────────────────────')
   console.log('  🔴 추가 크롤 0 · 브라우저 0 · 상세 fetch 0 · DB write 0 · Sheet 0')
   console.log('  🔴 점수·가중치는 **초안**이다. 자동 상세 fetch 기준이 아니다.')
-  console.log('  🔴 제목 원문을 출력하지 않는다 — 매칭 라벨과 백분위만 찍는다.\n')
+  console.log(
+    SHOW_TITLE
+      ? '  🟡 --show-title: 상위 **후보** 제목만 출력한다. 제외·보류 글 제목과 본문은 출력하지 않는다.\n'
+      : '  🔴 제목 원문을 출력하지 않는다 — 매칭 라벨과 백분위만 찍는다 (--show-title 로 켠다).\n',
+  )
 
   const { loaded, legacyRows, legacyFiles } = load()
   if (loaded.length === 0) fail(ONLY_RUN ? `run ${ONLY_RUN} 을 가진 행이 없다` : '분석할 행이 없다')
 
   const rows = loaded.flatMap((l) => l.rows)
-  console.log(`  입력 파일 ${loaded.length}개 · 행 ${rows.length}건`)
+  const articles = toArticles(rows)
+  const repeats = articles.filter((a) => a.seenCount > 1)
+  console.log(`  입력 파일 ${loaded.length}개 · 관측 행 ${rows.length}건 → 🔴 고유 글 ${articles.length}건`)
+  console.log(`     반복 관측 ${repeats.length}건 (최대 ${articles.reduce((m, a) => Math.max(m, a.seenCount), 0)}회)`)
+  console.log('     🔴 판단 단위는 게시글 1개다 — row 를 세면 top 에 같은 글이 중복으로 올라온다')
   for (const l of loaded) console.log(`     ${l.file} · ${l.rows.length}행`)
   if (legacyRows > 0 || legacyFiles.length > 0) {
     console.log(`\n  ⏭️  구 데이터 제외: ${legacyRows}행 · 파일 ${legacyFiles.length}개 (${legacyFiles.join(' · ')})`)
@@ -112,8 +135,20 @@ function main(): void {
   console.log('\n① 게이트 — 🔴 점수를 매기기 전에 가른다')
   console.log(`   hard exclude ${excluded.length}건  ${JSON.stringify(byReason)}`)
   console.log(`   hold(위험 보류) ${held.length}건  ${JSON.stringify(byHold)}`)
-  console.log(`   후보 ${scored.length}건 · 그중 watch ${watch.length}건`)
+  console.log(`   후보 ${scored.length}건 · 그중 watch ${watch.length}건 (전부 고유 글 기준)`)
   console.log('   🔴 exclude · hold 는 0점이 아니라 **후보 집합에 들어오지 않는다**')
+
+  // ── watch trend — 🔴 "미달 → 다음 실행에서 충족" 을 실제로 추적한다 (§4-E) ──
+  const repeated = scored.filter((s) => s.obs.seenCount > 1)
+  const grew = repeated.filter((s) => s.obs.commentDelta > 0)
+  console.log(`\n   반복 관측된 후보 ${repeated.length}건 · 그중 댓글이 늘어난 글 ${grew.length}건`)
+  for (const s of [...grew].sort((a, b) => b.obs.commentDelta - a.obs.commentDelta).slice(0, 5)) {
+    console.log(
+      `     ${s.row.sourceArticleId} · ${s.obs.seenCount}회 · 댓글 +${s.obs.commentDelta}` +
+        `${s.obs.viewDelta === null ? '' : ` · 조회 +${s.obs.viewDelta}`} · ${s.obs.firstRunId}→${s.obs.lastRunId}`,
+    )
+  }
+  console.log('   🔴 이것이 §4-E 의 "이번에 미달이어도 다음 실행에서 후보가 된다" 가 작동하는 모습이다')
 
   // ── top N ──
   const top = scored.slice(0, TOP)
@@ -131,7 +166,13 @@ function main(): void {
         `${padr(`${r.sourcePage ?? '-'}/${r.sourceRankOnPage ?? '-'}`, 7)} ` +
         `${padr(`${r.sourceCommentCount}/${r.sourceViewCount ?? '-'}`, 10)} ${padr(s.lagMinutes === null ? '-' : s.lagMinutes.toFixed(0), 6)}`,
     )
-    console.log(`       run ${r.sourceRunId} · ${s.why}`)
+    console.log(`       run ${s.obs.firstRunId}${s.obs.seenCount > 1 ? `→${s.obs.lastRunId}` : ''} · ${s.why}`)
+    // 🔴 후보(candidate)만 제목을 찍는다. 제외·보류 글의 제목은 옵션을 켜도 나오지 않는다 —
+    //    top 배열 자체가 scored(=candidate)에서만 나오므로 구조적으로 보장된다.
+    if (SHOW_TITLE) {
+      const t = [...r.originalTitle]
+      console.log(`       제목: ${t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX).join('')}…` : t.join('')}`)
+    }
   })
 
   // ── 그룹 요약 ──
@@ -162,12 +203,17 @@ function main(): void {
 
   // ── 비용 ──
   console.log('\n④ 비용 — 🔴 cheap-signal-first')
-  const total = rows.length
+  const uniq = articles.length
   const saved = excluded.length + held.length
-  console.log(`   전체 목록            ${total}건`)
-  console.log(`   게이트로 아낀 상세    ${saved}건 (exclude ${excluded.length} · hold ${held.length})`)
-  console.log(`   점수 상위 후보        ${top.length}건`)
-  console.log(`   무조건 상세를 열었다면 ${total}건 → 지금 ${top.length}건 · **${total - top.length}건 절약 (${Math.round(((total - top.length) / total) * 100)}%)**`)
+  console.log(`   observation rows      ${rows.length}건  (관측 횟수 — 🔴 절감률의 분모가 아니다)`)
+  console.log(`   unique articles       ${uniq}건  ← 상세 fetch 는 글 단위로 일어난다`)
+  console.log(`   게이트로 아낀 상세     ${saved}건 (exclude ${excluded.length} · hold ${held.length})`)
+  console.log(`   점수 상위 후보         ${top.length}건`)
+  console.log(
+    `   무조건 열었다면 ${uniq}건 → 지금 ${top.length}건 · **${uniq - top.length}건 절약 ` +
+      `(${Math.round(((uniq - top.length) / uniq) * 100)}%)**`,
+  )
+  console.log(`   🔴 row 기준으로 세면 ${Math.round(((rows.length - top.length) / rows.length) * 100)}% 로 보인다 — 같은 글을 여러 번 센 값이라 과장이다`)
   console.log('   🔴 이 dry-run 자체는 기존 JSONL read-only라 **추가 크롤 비용 0**이다')
 
   console.log('\n⑤ 이 dry-run 이 정하지 않은 것')

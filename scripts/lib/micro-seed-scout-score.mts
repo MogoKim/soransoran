@@ -38,6 +38,68 @@ export type ScoutRow = {
 }
 
 // ─────────────────────────────────────────────────────────
+// ⓪ 판단 단위는 **게시글 1개**다 (🔴 PR-S2-b-11 보정)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **row 가 아니라 article 이 판단 단위다** (§4-F).
+ *
+ *    앞 코드는 run 별 row 를 그대로 점수·top20 에 넣었다. 같은 글이 여러 run 에
+ *    관측되면 **top20 에 중복으로 올라온다** — 실측 611 관측 = 552 고유 글,
+ *    중복 49건(2회 39 · 3회 10).
+ *
+ *    "게시글 1개가 판단 단위" 라고 문서에 고정해 놓고 도구는 row 를 세고 있었다.
+ *    비용 절감률도 row 기준이면 과장된다.
+ *
+ * 🔴 **최신 관측을 대표로 쓴다.** 댓글·조회는 시간이 갈수록 쌓이므로
+ *    가장 최근에 본 값이 현재 상태에 가깝다.
+ *
+ * 🔴 **이력을 버리지 않는다.** "미달 → 다음 실행에서 충족" 을 추적하는 것이
+ *    §4-E 의 핵심이라, 몇 번 봤고 얼마나 늘었는지를 함께 남긴다.
+ */
+export type ArticleObservation = {
+  /** 대표 행 — 가장 최근 관측 */
+  latest: ScoutRow
+  firstRunId: string
+  lastRunId: string
+  seenCount: number
+  /** 첫 관측 대비 댓글 증가분. 1회만 봤으면 0 */
+  commentDelta: number
+  /** 조회 증가분. 어느 한쪽이라도 못 읽었으면 null */
+  viewDelta: number | null
+}
+
+export function articleKeyOf(row: ScoutRow): string {
+  return `${row.sourceSite}|${row.sourceArticleId}`
+}
+
+export function toArticles(rows: readonly ScoutRow[]): ArticleObservation[] {
+  const byKey = new Map<string, ScoutRow[]>()
+  for (const r of rows) {
+    const k = articleKeyOf(r)
+    byKey.set(k, [...(byKey.get(k) ?? []), r])
+  }
+  return [...byKey.values()].map((list) => {
+    // 🔴 sourceListedAt 으로 정렬한다. runId 문자열 정렬은 자릿수가 바뀌면 깨진다
+    const sorted = [...list].sort((a, b) => Date.parse(a.sourceListedAt) - Date.parse(b.sourceListedAt))
+    const first = sorted[0]
+    const latest = sorted[sorted.length - 1]
+    const viewDelta =
+      first.sourceViewCount === null || latest.sourceViewCount === null
+        ? null
+        : latest.sourceViewCount - first.sourceViewCount
+    return {
+      latest,
+      firstRunId: first.sourceRunId ?? '',
+      lastRunId: latest.sourceRunId ?? '',
+      seenCount: sorted.length,
+      commentDelta: latest.sourceCommentCount - first.sourceCommentCount,
+      viewDelta,
+    }
+  })
+}
+
+// ─────────────────────────────────────────────────────────
 // ① hard exclude · hold — 🔴 점수를 매기기 **전에** 가른다
 // ─────────────────────────────────────────────────────────
 
@@ -162,6 +224,8 @@ export type ScoreBreakdown = {
 
 export type ScoredRow = {
   row: ScoutRow
+  /** 🔴 이 글의 관측 이력. row 가 아니라 article 이 판단 단위다 */
+  obs: ArticleObservation
   gate: Gate
   score: ScoreBreakdown
   /** 왜 점수가 높았는가 — 🔴 제목 원문이 아니라 매칭 라벨만 */
@@ -213,7 +277,10 @@ export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
   const lagOf = (r: ScoutRow): number | null =>
     r.sourcePostedAt === null ? null : (Date.parse(r.sourceListedAt) - Date.parse(r.sourcePostedAt)) / 60_000
 
-  const gated = rows.map((row) => ({ row, gate: gateOf(row), lag: lagOf(row) }))
+  // 🔴 **row 를 먼저 article 로 접는다.** 같은 글이 여러 run 에 관측되면
+  //    접지 않는 한 top20 에 중복으로 올라온다 (실측 611 관측 = 552 글).
+  const articles = toArticles(rows)
+  const gated = articles.map((obs) => ({ row: obs.latest, obs, gate: gateOf(obs.latest), lag: lagOf(obs.latest) }))
   const candidates = gated.filter((g) => g.gate.verdict === 'candidate')
 
   // 🔴 정규화 모집단은 **후보뿐**이다. 제외된 행(공지는 조회수가 7배다)을 넣으면
@@ -228,7 +295,7 @@ export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
     byGroup.set(k, b)
   }
 
-  const build = (g: { row: ScoutRow; gate: Gate; lag: number | null }): ScoredRow => {
+  const build = (g: { row: ScoutRow; obs: ArticleObservation; gate: Gate; lag: number | null }): ScoredRow => {
     const b = byGroup.get(groupKeyOf(g.row)) ?? { comments: [], views: [], vel: [] }
     const cPct = percentileIn(b.comments, g.row.sourceCommentCount)
     const vPct = percentileIn(b.views, g.row.sourceViewCount ?? 0)
@@ -256,12 +323,17 @@ export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
       topics.length ? `핏(${topics.map((t) => t.label).join('/')})` : null,
       convs.length ? `대화(${convs.map((c) => c.label).join('/')})` : null,
       g.row.sourceCommentCountRead ? null : '🔴 댓글수 미확인',
+      // 🔴 여러 번 본 글은 증가분을 함께 보여준다 — "미달 → 충족" 추적의 근거 (§4-E)
+      g.obs.seenCount > 1
+        ? `관측 ${g.obs.seenCount}회 · 댓글 +${g.obs.commentDelta}${g.obs.viewDelta === null ? '' : ` · 조회 +${g.obs.viewDelta}`}`
+        : null,
     ]
       .filter(Boolean)
       .join(' · ')
 
     return {
       row: g.row,
+      obs: g.obs,
       gate: g.gate,
       score: { engagement, targetFit, conversation, freshness, total },
       why,
