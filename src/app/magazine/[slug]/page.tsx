@@ -133,7 +133,7 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
           <h1 className="text-2xl font-bold leading-snug text-content-primary">{article.title}</h1>
 
           <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
-            <span className="font-bold text-brand-ink">
+            <span className="font-bold text-brand-strong">
               {MAGAZINE_CLUSTER_LABELS[article.cluster]}
             </span>
             <span aria-hidden>·</span>

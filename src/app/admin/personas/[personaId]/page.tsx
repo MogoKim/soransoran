@@ -118,7 +118,7 @@ export default async function AdminPersonaDetailPage({
         </Link>
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-ink">
+          <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-strong">
             {persona.code}
           </span>
           <h1 className="text-xl font-bold text-content-primary">
@@ -184,7 +184,7 @@ export default async function AdminPersonaDetailPage({
             {auditLogs.map((log) => (
               <li key={log.id} className="rounded-lg border border-subtle bg-surface-card p-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-ink">
+                  <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-strong">
                     {AUDIT_ACTION_LABEL[log.action] ?? log.action}
                   </span>
                   {log.fromStatus !== null || log.toStatus !== null ? (

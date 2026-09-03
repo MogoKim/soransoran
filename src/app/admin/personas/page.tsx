@@ -127,7 +127,7 @@ export default async function AdminPersonasPage() {
               return (
                 <li key={p.id} className="rounded-lg border border-subtle bg-surface-card p-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-ink">
+                    <span className="rounded-md bg-surface-soft px-2 py-1 text-xs font-bold text-brand-strong">
                       {p.code}
                     </span>
                     {/* 🔴 마스킹. 전문은 상세에서만 */}

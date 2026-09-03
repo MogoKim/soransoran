@@ -38,6 +38,8 @@ const config: Config = {
           soft: 'var(--brand-soft)',
           muted: 'var(--brand-muted)',
           ink: 'var(--brand-ink)',
+          /* 작은 글씨·연한 코랄 면 위 브랜드 텍스트용 진한 코랄 #b64235 — text-brand-ink 가 대비 미달인 자리 */
+          strong: 'var(--brand-strong)',
         },
         /* CTA — 누르는 것 */
         cta: {
