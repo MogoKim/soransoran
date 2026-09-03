@@ -9,8 +9,20 @@
  *    DB · Sheet 적재는 **다음 PR** 의 일이고, 그 경계를 파일로 나눈 것이 이 설계의 핵심이다.
  *
  * 🔴 목록에서 상세를 전부 긁지 않는다
- *    목록은 URL · 제목 · 댓글수만 본다. 상세는 **사람이 고른 것만** 연다 (--fetch).
+ *    목록은 URL · 제목 · 댓글수만 본다. 상세는 고른 것만 연다.
  *    "일단 다 받아두고 나중에 고른다" 는 부하도 리스크도 우리가 정하지 않은 것이 된다.
+ *
+ *      --fetch=<id,id>   사람이 지정한다 (기존)
+ *      --auto            선별 점수 상위 N건을 자동으로 연다 (PR-S2)
+ *
+ * 🔴 --auto 가 여는 문은 좁다 (scripts/lib/micro-seed-supply.mts)
+ *    상한 30건 · 하한 점수 20 · 정치·실명 / 의료·광고성 플래그는 **자동으로 열지 않는다.**
+ *
+ *    이것은 Q-1("품질 플래그로 거부하지 않는다")의 예외가 아니다.
+ *    거부가 아니라 **자동 경로에서만 빼는 것**이다 — 목록 JSONL 에는 전부 남고
+ *    `--fetch=<id>` 로 지정하면 언제든 열린다.
+ *    구분이 중요한 이유: 자동 경로에는 사람이 없다. 사람이 고를 때는 보고 넘기면 되지만
+ *    자동은 넘길 눈이 없고, 그 글이 그대로 생성기의 재료가 된다.
  *
  * 🔴 댓글 본문을 수집하지 않는다
  *    목록의 댓글 **수**만 신호로 쓴다 (정책 3). 상세에서 댓글 영역을 파싱하지 않는다.
@@ -35,6 +47,8 @@
  *   npm run micro-seed:collect-82cook -- --list --pages=2              계획만
  *   npm run micro-seed:collect-82cook -- --list --pages=2 --live       실제 수집
  *   npm run micro-seed:collect-82cook -- --fetch=4231986,4231985 --live
+ *   npm run micro-seed:collect-82cook -- --list --pages=3 --auto --live         🔴 자동 선별 수집
+ *   npm run micro-seed:collect-82cook -- --list --pages=3 --auto --auto-max=10  상한을 줄여서
  *   npm run micro-seed:collect-82cook -- --list --pages=1 --live --out=./.microseed-data/list.jsonl
  */
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
@@ -46,11 +60,13 @@ import {
   type CollectedCandidate, type ListItem, type RobotsRules,
 } from './lib/micro-seed-82cook.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
+import { planAutoFetch, AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_FLAGS } from './lib/micro-seed-supply.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 
 const KILL_SWITCH = 'SORAN_82COOK_COLLECT_ENABLED'
 const LIVE = process.argv.includes('--live')
 const WANT_LIST = process.argv.includes('--list')
+const AUTO = process.argv.includes('--auto')
 const arg = (name: string): string | undefined => {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`))
   return hit ? hit.slice(name.length + 3) : undefined
@@ -59,6 +75,21 @@ const PAGES = Number(arg('pages') ?? '1')
 const FETCH_IDS = (arg('fetch') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 const OUT = arg('out') ?? './.microseed-data/82cook.jsonl'
 const FROM = arg('from')
+const AUTO_MAX = Number(arg('auto-max') ?? String(AUTO_FETCH_MAX))
+
+// 🔴 --auto 는 목록이 있어야 고를 수 있다. 조합이 안 맞으면 조용히 0건이 아니라 중단한다
+if (AUTO && !WANT_LIST) {
+  console.error('\n🛑 --auto 는 --list 와 함께 쓴다. 고를 목록이 없으면 자동 선별이 성립하지 않는다.\n')
+  process.exit(1)
+}
+if (AUTO && FETCH_IDS.length) {
+  console.error('\n🛑 --auto 와 --fetch 를 함께 주지 않는다. 자동으로 고를지 사람이 고를지 하나만 정한다.\n')
+  process.exit(1)
+}
+if (AUTO && (!Number.isInteger(AUTO_MAX) || AUTO_MAX < 1 || AUTO_MAX > AUTO_FETCH_MAX)) {
+  console.error(`\n🛑 --auto-max 는 1~${AUTO_FETCH_MAX} 의 정수다 (받은 값: ${arg('auto-max') ?? '없음'})\n`)
+  process.exit(1)
+}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -169,6 +200,11 @@ async function main() {
   const plannedArticles = FETCH_IDS.map(ARTICLE_URL)
   if (plannedList.length) console.log(`  목록 ${plannedList.length}페이지:\n${plannedList.map((u) => `     ${u}`).join('\n')}`)
   if (plannedArticles.length) console.log(`  상세 ${plannedArticles.length}건:\n${plannedArticles.map((u) => `     ${u}`).join('\n')}`)
+  if (AUTO) {
+    console.log(`  상세: 🔴 자동 선별 — 목록에서 최대 ${AUTO_MAX}건 (점수 ${AUTO_MIN_SCORE} 이상)`)
+    console.log(`        자동 제외 플래그: ${AUTO_SKIP_FLAGS.join(' · ')}`)
+    console.log('        🔴 제외는 거부가 아니다 — 목록 파일에 남고 --fetch 로 지정하면 열린다')
+  }
   if (!plannedList.length && !plannedArticles.length) {
     console.log('  할 일이 없다. --list --pages=N 또는 --fetch=<num,num> 을 준다.\n')
     return
@@ -203,6 +239,8 @@ async function main() {
     console.log(`  목록 ${p}p → ${parsed.length}건`)
     if (p < PAGES) await sleep(DELAY_MS)
   }
+  // 🔴 --auto 가 이 배열을 읽는다. 블록 밖에 둬야 선별이 목록과 같은 정규화를 본다
+  let listRows: CollectedCandidate[] = []
   if (items.length) {
     const listPath = OUT.replace(/\.jsonl$/, '.list.jsonl')
     // 🔴 목록도 buildCollected 를 거친다 (2026-08-26 실측 결함).
@@ -213,15 +251,53 @@ async function main() {
     //    rawBody 는 **빈 문자열**이다 — 목록은 본문을 읽지 않는다.
     //    importer 는 rawBody 가 빈 행을 거부하므로 목록 파일이 잘못 들어와도 적재되지 않는다.
     const rows = items.map((i) => buildCollected(i, '', now.toISOString()))
+    listRows = rows
     writeJsonl(listPath, rows)
     console.log(`  → ${listPath} (${rows.length}건)\n`)
     printSelectionTable(rows)
   }
 
-  // ── ② 지정 상세 ──────────────────────────────────────
-  if (!FETCH_IDS.length) {
-    console.log('  상세 요청 없음 (--fetch 미지정). 목록만 저장했다.\n')
+  // ── ② 상세 대상 결정 — 사람이 지정(--fetch) 또는 자동 선별(--auto) ──
+  let targets: string[] = FETCH_IDS
+  if (AUTO) {
+    if (!listRows.length) {
+      console.log('  목록이 비어 자동 선별할 것이 없다.\n')
+      return
+    }
+    const plan = planAutoFetch(
+      listRows.map((r) => ({
+        sourceArticleId: r.sourceArticleId,
+        score: selectionScore({ stage: r.qualitySignals.stage, flags: r.qualityFlags, signals: r.qualitySignals } as QualityAssessment),
+        flags: r.qualityFlags,
+        // 🔴 Vault 대조는 여기서 하지 않는다 — 이 스크립트는 DB 를 붙이지 않는다(파일 상단 계약).
+        //    이미 있는 원문은 importer 가 @@unique 로 SKIP 하므로 중복 적재는 생기지 않는다.
+        //    여기서 걸러지지 않아 생기는 비용은 82cook 요청 몇 건이다.
+        alreadyInVault: false,
+      })),
+      { max: AUTO_MAX },
+    )
+    targets = plan.picked
+    const byReason = new Map<string, number>()
+    for (const s of plan.skipped) byReason.set(s.reason, (byReason.get(s.reason) ?? 0) + 1)
+    console.log(`  자동 선별: ${targets.length}건 선택 · ${plan.skipped.length}건 제외`)
+    for (const [reason, n] of byReason) console.log(`     ${reason} ${n}건`)
+    console.log('  🔴 제외는 파일에서 지운 것이 아니다. 목록 JSONL 에 전부 남아 있다.\n')
+  }
+
+  if (!targets.length) {
+    console.log(`  상세 요청 없음 (${AUTO ? '자동 선별 결과 0건' : '--fetch 미지정'}). 목록만 저장했다.\n`)
     return
+  }
+
+  // 🔴 자동 선별 대상은 위 robots 사전 검사에 없었다 — 목록을 받은 뒤에 정해지기 때문이다.
+  //    여기서 다시 본다. 검사를 건너뛰면 --auto 만 robots 밖으로 나가는 구멍이 생긴다.
+  if (AUTO) {
+    const autoBlocked = targets.map(ARTICLE_URL).filter((u) => !isPathAllowed(toRobotsPath(u), rules))
+    if (autoBlocked.length) {
+      console.error(`\n  🛑 robots 가 막는 URL 이 자동 선별에 들어왔다 — 수집하지 않는다:\n${autoBlocked.map((u) => `     ${u}`).join('\n')}\n`)
+      process.exit(1)
+    }
+    console.log(`  ✅ 자동 선별 ${targets.length}건 robots 허용\n`)
   }
   // 목록 정보가 있으면 그것을, 없으면 파일에서 찾는다 — 댓글수를 상세에서 세지 않기 위해서다.
   const known = new Map(items.map((i) => [i.sourceArticleId, i]))
@@ -233,7 +309,7 @@ async function main() {
   }
 
   const collected: CollectedCandidate[] = []
-  for (const [idx, id] of FETCH_IDS.entries()) {
+  for (const [idx, id] of targets.entries()) {
     if (idx > 0) await sleep(DELAY_MS)
     const html = await get(ARTICLE_URL(id))
     const bodyHtml = extractArticleBodyHtml(html)

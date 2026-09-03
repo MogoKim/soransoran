@@ -1050,8 +1050,34 @@ publisher 의 상수 화이트리스트가 방어선이고, CI 가 이를 검사
 | **PROCESSING timeout** | **30분** | 수동 실행 주기 대비 넉넉하게. 짧으면 정상 작업을 timeout 으로 오판한다 |
 | **attemptCount 상한** | **3** | 초과 시 `FAILED` 고정 — 무한 루프 차단 |
 
-**M1 은 자동화 없이 수동 실행부터 시작한다**(확정 정책). cron·workflow 는 붙이지 않는다.
+**M1 은 자동화 없이 수동 실행부터 시작한다**(확정 정책).
 안정화 후 §12-2 자동화 개방 순서를 따른다.
+
+#### 🟡 2026-09-03 개정 — cron 금지를 **공급과 발행으로 나눈다** (창업자 승인)
+
+초판은 *"cron·workflow 는 붙이지 않는다"* 였다. 그 금지의 목적은 **의도치 않은 발행**을 막는 것이었지
+수집을 막는 것이 아니었다. 그런데 문구가 하나라서 **원문 재고가 15건에서 멈췄고,
+그것이 전체 속도의 1위 병목이 됐다**([자동화 전환 정본 §9](../operations/2026-09-03-controlled-activity-automation-strategy.md)).
+
+```
+🟢 cron 허용    크롤 · Raw Vault 적재 · Shadow 생성
+🔴 cron 금지    공개 발행 · 댓글 발행 · reaction · best
+```
+
+**허용 쪽이 안전한 이유는 정책이 아니라 코드다.**
+
+| 경계 | 무엇이 보장하나 |
+|---|---|
+| collector 는 DB 를 못 만진다 | `prisma` 를 import 하지 않는다. 산출물은 로컬 JSONL 뿐 |
+| raw-only 적재는 승인 게이트를 못 건드린다 | `MicroSeedCandidate` 를 만들지 않고 Sheet 를 **읽지도** 않는다 |
+| 어느 모드도 발행하지 못한다 | importer 에 `post.create` 도 `PENDING`·`PUBLISHED` 전환도 없다 |
+| 상한이 레인별로 다르다 | Sheet 레인 1건 · raw-only 50건 — `planSupplyMode` 가 판정하고 fixture 가 검증 |
+
+🔴 **두 스위치 원칙은 그대로다.** cron 이 붙어도 `--apply` 하나로는 아무것도 쓰이지 않는다.
+Micro Seed 레인은 `--apply --limit=1`, raw-only 는 `--apply --raw-only --batch=N` 이다.
+
+🔴 **이 개정은 공급 계층에만 적용된다.** 공개 발행 cap 상향은 별도 ladder 승인 사항이며
+(자동화 전환 정본 §5), 이 문단이 그것을 열지 않는다.
 
 ---
 
@@ -1763,9 +1789,30 @@ limited publish      🟡 진행   softDaily 3 / hardDaily 10 아래 4건 발행
 ```
 
 **Google Sheet 연동은 열렸다** — read(readonly scope) · write(`updateCandidateRow` 한 지점).
-**cron 은 여전히 0개다.** GitHub Actions 는 `visibility-guard.yml`(CI) 하나뿐이고
-`schedule:` 0건, Vercel cron 0건이다.
-자동화 계층 신설은 여전히 **미착수**이며, **수동 실행부터 시작한다** — 이 원칙은 유지된다.
+
+**진행 상태 갱신 (2026-09-03 실측)**
+
+```
+limited publish       ✅ 열림   Micro Seed 5건 발행
+Original Post 레인    ✅ 열림   PR #326 · 페르소나 작성자로 2건 발행 (index 레인)
+공급 cron             🟡 개방 승인   §6-9-F 개정 — 크롤 · Raw 적재 · Shadow 생성만
+발행 cron             🔴 여전히 닫힘  공개 발행 · 댓글 · reaction · best
+```
+
+**cron 은 아직 0개다.** GitHub Actions 는 `visibility-guard.yml`(CI) 하나뿐이고
+`schedule:` 0건, Vercel cron 0건이다. §6-9-F 개정으로 **공급 계층 cron 을 붙일 자격이 생겼을 뿐**
+실제 등록은 PR-S2 이후 별도 절차다.
+
+🔴 **개방 순서에 한 줄이 늘었다.**
+
+```
+read-only inventory → dry-run → HOLD append → founder PENDING
+  → 1건 publish → limited publish → 🟡 공급 cron → 🔴 발행 cron(미개방)
+```
+
+**공급 cron 이 발행 cron 보다 앞에 있는 이유**: 공급은 고객 화면에 아무것도 내보내지 않는다.
+collector 는 DB 를 만지지 못하고, raw-only 적재는 승인 게이트도 발행 경로도 만들지 않는다(§6-9-F).
+**되돌리기 비용이 다른 두 가지를 같은 칸에 두면 둘 다 못 연다.**
 
 ---
 

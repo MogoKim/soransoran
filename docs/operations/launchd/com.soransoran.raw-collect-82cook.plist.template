@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  82cook Raw 수집 — 🔴 템플릿이다. 등록되어 있지 않다 (README.md 참조)
+
+  정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4 · §5
+        docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §6-9-F (공급 cron 개방)
+
+  🔴 이 job 은 DB 를 만지지 않는다
+     collector 는 prisma 를 import 하지 않는다. 산출물은 로컬 JSONL 뿐이고
+     Raw Vault 적재는 별도 job(raw-import)이 한다. 경계를 파일로 나눈 설계다.
+
+  🔴 kill switch 는 plist 가 아니라 환경변수다
+     .env.local 의 SORAN_82COOK_COLLECT_ENABLED=true 가 없으면 --live 는 무시된다.
+     plist 를 지우지 않고 멈출 수 있어야 한다.
+
+  🔴 상한은 인자에 박는다
+     --auto-max=30 · 2초 고정 지연. 한 슬롯 약 1분 30초.
+     300/day 는 이 값이 아니라 슬롯 수(10회)로 채운다.
+
+  슬롯: 2시간 간격 10회 (07:10 ~ 01:10 KST)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.raw-collect-82cook</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NPX__</string>
+    <string>tsx</string>
+    <string>__REPO__/scripts/micro-seed-collect-82cook.mts</string>
+    <string>--list</string>
+    <string>--pages=3</string>
+    <string>--auto</string>
+    <string>--auto-max=30</string>
+    <string>--live</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>10</integer></dict>
+    <dict><key>Hour</key><integer>1</integer><key>Minute</key><integer>10</integer></dict>
+  </array>
+
+  <!-- 🔴 RunAtLoad 를 쓰지 않는다. load 하는 순간 수집이 도는 것은 의도가 아니다 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__REPO__/logs/raw-collect-82cook.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/logs/raw-collect-82cook-error.log</string>
+</dict>
+</plist>
