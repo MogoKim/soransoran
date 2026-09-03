@@ -44,7 +44,7 @@ export default async function MyPostsPage() {
                     <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.35] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
                       {post.title}
                     </span>
-                    <span className="mt-2.5 block text-xs text-content-muted">
+                    <span className="mt-2.5 block text-meta text-content-muted">
                       {board.label} · {formatRelativeTime(post.createdAt)}
                     </span>
                   </Link>

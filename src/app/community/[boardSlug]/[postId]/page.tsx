@@ -122,7 +122,7 @@ export default async function PostDetailPage({
         <article className="rounded-2xl border border-subtle bg-surface-card px-4 py-5 sm:px-6 sm:py-6">
           <h1 className="text-2xl font-bold leading-snug text-content-primary">{post.title}</h1>
 
-          <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
+          <p className="mt-3 flex flex-wrap items-center gap-x-2 text-meta text-content-muted">
             <span className="font-bold text-brand-strong">{displayName(post.author)}</span>
             <span aria-hidden>·</span>
             <span>{formatRelativeTime(post.createdAt)}</span>

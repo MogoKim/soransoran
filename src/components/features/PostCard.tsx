@@ -52,7 +52,7 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
       {/* 메타는 한 줄이다 — 두 줄이면 행 안에 덩어리가 하나 더 생겨 오히려 빽빽해진다.
           작성자·시간을 한 span 으로 묶어, 줄이 바뀌어도 "누가"와 "언제"가 갈라지지 않게 한다.
           작성자에만 굵기를 줘 "누가 썼는지"가 통계 숫자보다 먼저 잡히게 한다. */}
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-content-muted">
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-content-muted">
         <span className="flex items-center gap-1.5 font-medium">
           {displayName(post.author)}
           <span aria-hidden>·</span>

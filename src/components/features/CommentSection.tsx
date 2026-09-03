@@ -63,7 +63,7 @@ export default function CommentSection({
           <ul className="m-0 mt-2 flex list-none flex-col gap-3 p-0">
             {popular.map((comment) => (
               <li key={comment.id}>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-content-muted">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-content-muted">
                   <span className="font-bold text-brand-strong">
                     {comment.author ? displayName(comment.author) : (comment.guestNickname ?? '비회원')}
                   </span>

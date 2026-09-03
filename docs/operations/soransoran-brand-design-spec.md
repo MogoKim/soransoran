@@ -1065,7 +1065,7 @@ MD3 의 본문 기준(`body-large`)은 **16px** 다. 소란소란의 본문은 *
 | **page-title** | `text-xl` / `text-2xl` | 28 / 32px | 일반 페이지 22곳 / 읽는 화면·로그인·온보딩 5곳 | 🔴 **2종 혼재** | `title-page` |
 | **card-title** | *(없음)* / `text-base` / `text-lg` | 20 / 20 / 24px | PostListItem / PostCard / MagazineCard·레일·마이 | 🔴 **3종 혼재** | `title-card` |
 | **section-title** | `text-lg font-bold` | 24px | `<h2>` — 댓글 머리 · 이어서 읽기 · 정책 소제목 | 🟡 1곳 역행(§12-5) | `title-section` |
-| **meta** | `text-xs text-content-muted` | 17px | 작성자 · 날짜 · 조회수 · 댓글수 · 배지 20곳 | 🟢 **가장 일관됨** | `meta` |
+| **meta** | `text-meta text-content-muted` | 17px | 작성자 · 날짜 · 조회수 · 댓글수 · 배지 | 🟢 **가장 일관됨** | ✅ **`text-meta` 도입 완료 (§12-7)** |
 | **label** | `text-sm` | 18px | `min-h-[52px]` 버튼·링크 38곳 | 🟡 body-compact 와 같은 클래스 | `label` |
 | **status** | `text-sm` / `text-xs` | 18 / 17px | `role="alert"`·`role="status"` 14곳 / **2곳** | 🔴 **2종 혼재**(§12-6 A3) | `status` |
 | **body-compact** | `text-sm` | 18px | 약관·정책 본문 · 빈 상태 설명 16곳 | 🟡 label 과 미분리 | `body-compact` |
@@ -1154,7 +1154,7 @@ MD3 의 본문 기준(`body-large`)은 **16px** 다. 소란소란의 본문은 *
 | 단계 | 내용 | 시각 변화 | 선행 조건 |
 |---|---|---|---|
 | **A3** | 저위험 교정 — 오류 문구 2곳 · 입력 라벨 4곳 · 마이 `<h2>` 1곳 | 🟡 있음 (17→18px 등 7곳) | 승인 |
-| **A4** | 역할 별칭 도입 (§12-3 이름을 실제 토큰으로) | 🟢 0 (값 동일) | **A2 완료 필수** |
+| **A4** | 역할 별칭 도입 (§12-3 이름을 실제 토큰으로) | 🟢 0 (값 동일) | ✅ **1차 `meta` 완료 (§12-7)** · 나머지는 아래 조건 |
 | **S1** | 카드 제목 3종 통일 | 🟠 큼 | **시안 필수** |
 | **S2** | 페이지 제목 2종 규칙화 또는 통일 | 🟠 큼 | **시안 필수** |
 
@@ -1163,6 +1163,13 @@ MD3 의 본문 기준(`body-large`)은 **16px** 다. 소란소란의 본문은 *
 역할 이름을 실사용 분류 없이 지으면 **소비처 0 인 죽은 토큰**이 된다.
 `--cta-edge` 가 그렇게 남았고, 2026-09-03 감사에서 "쓰인다" 고 잘못 적혀 있던 것을 정정했다(§2-2-A · §9).
 **별칭을 만들 때는 소비처 교체를 같은 변경에 포함한다.**
+
+#### 🔴 별칭을 만들 때 지키는 것 (§12-7 에서 확인된 것)
+
+1. **별칭과 소비처 교체를 같은 변경에 넣는다** — 별칭만 만들면 죽은 토큰이다.
+2. **값을 복제하지 않는다** — 별칭은 기존 `--text-*` 를 그대로 가리킨다. 새 CSS 변수를 만들지 않는다.
+3. **`src/lib/utils.ts` 에도 등록한다** — 빠뜨리면 `cn()` 안에서 조용히 지워진다(§12-7).
+4. **역할이 한 가지로 좁혀지는 것만** — 클래스가 같아도 역할이 섞여 있으면 만들지 않는다.
 
 #### 🚫 만들지 않기로 한 토큰
 
@@ -1173,3 +1180,64 @@ MD3 의 본문 기준(`body-large`)은 **16px** 다. 소란소란의 본문은 *
 | 소비처 0 인 역할 별칭 | 죽은 토큰이 된다 (위 A4) |
 | 운영 콘솔 전용 타이포 토큰 | `.admin-shell` 오버라이드가 이미 그 일을 한다 |
 | `control` 별칭 | 글자 크기 토글의 3크기는 역할이 아니라 미리보기 그 자체다 |
+
+---
+
+### 12-7. `text-meta` 도입 기록 (2026-09-03 · A4 1차)
+
+> 🟢 **시각 변화 0.** 별칭 값이 `text-xs` 와 완전히 같다 — `var(--text-caption)` · line-height 1.4.
+> 글자 크기 3단계도 그대로 따라간다(작게 15px · 기본 17px · 크게 20px).
+
+#### 무엇을 했나
+
+**별칭 추가와 소비처 교체를 같은 변경에 넣었다.** 별칭만 만들고 쓰는 곳이 없으면 죽은 토큰이 된다(§12-6).
+
+```
+tailwind.config.ts    fontSize.meta 추가 — 값은 xs 와 동일
+src/lib/utils.ts      extendTailwindMerge 로 font-size 그룹에 등록
+소비처 11곳           text-xs → text-meta
+```
+
+#### 🔴 `src/lib/utils.ts` 를 함께 고쳐야 하는 이유
+
+tailwind-merge 는 `text-*` 가 크기인지 색인지를 **이름 모양으로** 판별한다. `xs`·`sm` 은 크기로 알지만
+`meta` 는 모르므로 **색 클래스로 분류**한다. 그러면 진짜 색과 같은 그룹이 되어 뒤엣것만 남는다.
+
+```
+등록 전   cn('text-meta', 'text-content-muted')  →  'text-content-muted'   ⛔ 크기 소실
+등록 후   cn('text-meta', 'text-content-muted')  →  둘 다 유지
+          cn('text-meta', 'text-sm')             →  'text-sm'  (크기끼리는 정상 충돌)
+```
+
+🔴 **빌드 CSS 로는 잡히지 않는다.** CSS 는 멀쩡하고 클래스 문자열이 런타임에 지워지기 때문이다.
+그래서 별칭을 늘릴 때마다 `tailwind.config.ts` 와 `src/lib/utils.ts` 를 **함께** 고친다.
+
+#### 어디를 바꿨나 — 고객 화면 메타 행 11곳
+
+```
+PostCard · CommentItem · CommentSection · PostListItem
+MagazineCard · RelatedMagazineList
+magazine/[slug] · community/[boardSlug]/[postId]
+my/posts · my/comments · my/scraps
+```
+
+전부 **작성자 · 날짜 · 조회수 · 댓글수 · 배지가 나열되는 줄**이다. 전부 `cn()` 밖의 평문 className 이다.
+
+#### 🚫 같은 `text-xs` 인데 바꾸지 않은 것
+
+**클래스가 같다고 역할이 같은 것이 아니다.** `text-xs text-content-muted` 20곳 중 역할이 meta 인 것은 11곳뿐이었다.
+
+| 남긴 것 | 왜 |
+|---|---|
+| 입력 라벨 3곳 (이름 · 비밀번호 ×2) | 역할이 label 이다. A3 에서 18px 로 올릴 대상이라 지금 이름을 붙이면 그 판단을 고정한다 |
+| 안내문 3곳 (비회원 폼 · 신고 안내) | 역할이 body-compact 다 |
+| 공감 상태 1곳 | 역할이 status 다. status 는 크기가 3종이라 A3 전에는 별칭을 만들 수 없다 |
+| 글씨 크기 토글 라벨 1곳 | 역할이 control 이다 |
+| 홈 매거진 레일 1곳 | 메타 *행* 이 아니라 단일 값이다. 애매해서 뺐다 |
+| 운영 콘솔 120곳 | `.admin-shell` 에서 12px 로 렌더된다. 같은 이름이 다른 크기가 되면 이름이 거짓말이 된다 |
+
+#### 다음 별칭을 만들 수 있는 조건
+
+- `status` — **A3 뒤에.** 지금은 같은 역할이 20px 9곳 · 18px 12곳 · 17px 3곳으로 갈려 있다.
+- `card-title` · `page-title` — **S1 · S2 시안 뒤에.** 크기가 갈려 있어 지금 이름을 붙이면 어느 쪽으로든 화면이 바뀐다.
+- `label` · `body-compact` · `caption` — 만들지 않는다(§12-6). 서로 구분되지 않는다.

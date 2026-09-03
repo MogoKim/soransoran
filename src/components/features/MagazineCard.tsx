@@ -48,7 +48,7 @@ export default function MagazineCard({ article }: { article: MagazineArticle }) 
         </span>
 
         {/* 가운뎃점은 장식이라 낭독하지 않는다. */}
-        <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-content-muted">
+        <span className="flex flex-wrap items-center gap-x-1.5 text-meta text-content-muted">
           소란소란 편집팀
           <span aria-hidden>·</span>
           {formatMagazinePublishedDate(article.publishedAt)}

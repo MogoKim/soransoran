@@ -45,7 +45,7 @@ export default async function MyCommentsPage() {
                     <span className="line-clamp-2 break-keep leading-[1.5] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
                       {comment.content}
                     </span>
-                    <span className="mt-2.5 block line-clamp-1 text-xs text-content-muted">
+                    <span className="mt-2.5 block line-clamp-1 text-meta text-content-muted">
                       {board.label} · {comment.post.title} · {formatRelativeTime(comment.createdAt)}
                     </span>
                   </Link>
