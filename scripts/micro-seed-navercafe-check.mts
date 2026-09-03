@@ -31,7 +31,7 @@ import {
   LIST_SELECTORS, runIdOf, runOutputPath,
   BOARD_TARGETS, findBoard, boardListUrl, pagesOf, activeCafes,
   detectRowLabel, judgePoliticsTitle, SCOUT_MAX_PAGES, DETAIL_MAX_PAGES, maxPagesFor,
-  judgeExcludeReason, dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold,
+  judgeExcludeReason, dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold, thresholdBasis,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
@@ -768,9 +768,11 @@ check('공백만 있으면 없는 것으로 본다', detectRowLabel('   ', '').u
 check('셀렉터에 라벨이 있다', /board-tag/.test(LIST_SELECTORS.label))
 // 🔴 PR-S2-b-8 에서 제외 판정이 judgeExcludeReason 하나로 합쳐졌다.
 //    pinned 를 직접 보던 단정을 사유 기반으로 옮긴다 — 약화가 아니라 축의 이동이다.
+// 🔴 PR-S2-b-9 에서 필터가 thresholdBasis 안으로 들어갔다. 단정을 그쪽으로 옮긴다.
 check('🔴 collector 가 pinned 행을 상세 후보에서 뺀다',
-  /r\.sourceExcludeReason === null/.test(COLLECTOR_CODE)
-    && judgeExcludeReason({ politicsExcluded: false, pinned: true, qualityFlags: [] }) === 'pinned')
+  /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
+    && judgeExcludeReason({ politicsExcluded: false, pinned: true, qualityFlags: [] }) === 'pinned'
+    && thresholdBasis([{ sourceExcludeReason: 'pinned' as const }]).eligible.length === 0)
 check('🔴 그래도 목록 JSONL 에는 남긴다',
   COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('sourceExcludeReason'),
   '지우는 것이 아니라 자동 경로에서만 뺀다 — 정책 Q-1')
@@ -809,8 +811,9 @@ check('🔴 판정 단위가 제목이다 — 게시판 이름으로 판정하�
     && !/judgePoliticsTitle\((item\.)?source(BoardName|MenuId|BoardKey)/.test(LIB_CODE),
   '게시판 하나가 통째로 정치로 분류되면 그 게시판의 생활글까지 전부 사라진다')
 check('🔴 collector 가 정치 행을 상세 후보에서 뺀다',
-  /r\.sourceExcludeReason === null/.test(COLLECTOR_CODE)
-    && judgeExcludeReason({ politicsExcluded: true, pinned: false, qualityFlags: [] }) === 'politics')
+  /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
+    && judgeExcludeReason({ politicsExcluded: true, pinned: false, qualityFlags: [] }) === 'politics'
+    && thresholdBasis([{ sourceExcludeReason: 'politics' as const }]).eligible.length === 0)
 check('산출물에 판정이 남는다',
   buildCollected('remonterrace', { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '정치 얘기', sourceCommentCount: 0 }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z').sourcePoliticsExcluded)
 
@@ -824,7 +827,8 @@ check('🔴 쫑알쫑알 15장은 detail 상한을 넘는다 (상세는 얕게)'
   pagesOf(findBoard('remonterrace:jjong')!).length > DETAIL_MAX_PAGES,
   '깊게 보려면 --scout 로 목록만 본다')
 check('🔴 scout 는 상세를 열지 않고 종료한다',
-  /if \(SCOUT\) \{[\s\S]{0,600}return\s*\n\s*\}/.test(COLLECTOR_CODE))
+  /if \(SCOUT\) \{[\s\S]{0,1400}return\s*\n\s*\}/.test(COLLECTOR_CODE),
+  'PR-S2-b-9 에서 요약 줄이 늘어 블록이 길어졌다 — 상한만 넓힌다')
 check('🔴 scout 종료가 상세 루프보다 앞이다',
   COLLECTOR_CODE.indexOf('if (SCOUT)') < COLLECTOR_CODE.indexOf('readArticleBody(page)'))
 check('scout 에서도 목록은 기록한다',
@@ -875,8 +879,10 @@ console.log('\n㉗ 제외 사유 — 🔴 단일 판정. 축을 합치지도 흩
     /Growth 레인이 열리면/.test(LIB),
     '사유를 안 남기면 그때 무엇을 되살릴지 알 수 없다')
   check('collector 가 단일 판정으로 후보를 고른다',
-    /r\.sourceExcludeReason === null/.test(COLLECTOR_CODE)
-      && !/!r\.sourcePinned && !r\.sourcePoliticsExcluded/.test(COLLECTOR_CODE))
+    /const eligible = basis\.eligible/.test(COLLECTOR_CODE)
+      && /sourceExcludeReason === null/.test(LIB_CODE)
+      && !/!r\.sourcePinned && !r\.sourcePoliticsExcluded/.test(COLLECTOR_CODE),
+    '필터는 thresholdBasis 안에 하나만 있어야 한다')
   check('사유별로 다르게 보고한다',
     /실명·공인 언급/.test(COLLECTOR) && /고정 슬롯/.test(COLLECTOR) && /정치·진영/.test(COLLECTOR))
 }
@@ -921,6 +927,76 @@ check('🔴 자동 선별이 threshold 를 쓰지 않는다',
   !/passesThreshold\([\s\S]{0,80}planAutoFetch/.test(COLLECTOR_CODE)
     && /후보 \$\{t\.label\}/.test(COLLECTOR_CODE),
   '표본이 2.3시간짜리 하나뿐이라 확정하기에는 이르다 — 세어만 본다')
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후보다 (PR-S2-b-9)')
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 2026-09-03 유머·연예 1p 실측을 그대로 옮긴 모양:
+  //    고정 슬롯은 조회수 중앙이 2,111 로 일반 글(321)의 7배다.
+  //    전체에 threshold 를 걸면 **상세를 열 수도 없는 행이 통과율을 끌어올린다.**
+  const row = (reason: 'pinned' | 'politics' | 'publicFigure' | null, c: number, v: number) =>
+    ({ sourceExcludeReason: reason, sourceCommentCount: c, sourceViewCount: v })
+  const rows = [
+    ...Array.from({ length: 7 }, () => row('pinned', 50, 2111)),   // 고정 슬롯 — 전부 통과할 값
+    row('politics', 30, 900),
+    row('publicFigure', 30, 900),
+    row(null, 12, 400),                                            // 진짜 후보 중 통과 1건
+    ...Array.from({ length: 13 }, () => row(null, 2, 100)),         // 진짜 후보 중 미달
+  ]
+  const b = thresholdBasis(rows)
+  check('전체와 후보를 나눠 센다', b.total === 23 && b.eligible.length === 14)
+  check('🔴 제외 사유가 있는 행은 후보가 아니다',
+    b.eligible.every((r) => r.sourceExcludeReason === null))
+
+  const T = THRESHOLD_CANDIDATES[0]
+  const whole = rows.filter((r) => passesThreshold(r, T)).length
+  const elig = b.eligible.filter((r) => passesThreshold(r, T)).length
+  check('🔴 전체 기준이면 부풀려진다 (착시)',
+    whole === 10 && elig === 1,
+    `전체 ${whole}건 vs 후보 ${elig}건 — 고정 슬롯이 통과율을 끌어올린다`)
+  // 🔴 비교용 `whole` 계산 자체는 남긴다 — 착시를 보여주는 것이 목적이다.
+  //    봐야 하는 것은 "보고하는 비율의 분모가 후보 수인가" 다.
+  check('🔴 collector 가 후보 기준으로 센다',
+    /const n = basis\.eligible\.filter\(\(r\) => passesThreshold/.test(COLLECTOR_CODE)
+      && /const pct = basis\.eligible\.length === 0 \? 0 : Math\.round\(\(n \/ basis\.eligible\.length\)/.test(COLLECTOR_CODE),
+    '비율의 분모가 후보 수여야 한다')
+  check('전체 기준도 함께 보여주되 비교 축이 아니라고 적는다',
+    /비교 축이 아니다/.test(COLLECTOR),
+    '쫑알쫑알 9% 와 유머 35% 를 나란히 놓으면 안 되는 이유가 이것이다')
+  check('로그가 전체·제외·후보를 구분한다',
+    /목록 \$\{basis\.total\}건 기록/.test(COLLECTOR_CODE)
+      && /제외 \$\{basis\.total - basis\.eligible\.length - basis\.legacy\}건 → 상세 후보 \$\{basis\.eligible\.length\}건/.test(COLLECTOR_CODE),
+    '🔴 제외 수에서 legacy 를 빼야 한다 — 판정 없는 행을 제외로 세면 안 된다')
+  // 🔴 이 저장소가 반복해온 "조용한 0" 을 여기서도 막는다.
+  //    구 산출물(PR-S2-b-8 이전)에는 sourceExcludeReason 필드가 없다 —
+  //    그걸 제외로 떨어뜨리면 225건이 "후보 0건 · NaN%" 가 되고 아무도 이유를 모른다.
+  check('🔴 판정 없는 행을 제외로 세지 않고 따로 알린다',
+    (() => {
+      const b = thresholdBasis([{ sourceCommentCount: 1, sourceViewCount: 1 } as never, row(null, 1, 1)])
+      return b.legacy === 1 && b.eligible.length === 1 && b.total === 2
+    })(),
+    '"판정이 없다" 와 "제외 판정을 받았다" 는 다른 사실이다')
+  check('판정이 다 있으면 legacy 0', thresholdBasis(rows).legacy === 0)
+  check('collector 가 판정 없는 행을 경고한다',
+    /판정 없는 행 \$\{basis\.legacy\}건/.test(COLLECTOR_CODE))
+  check('🔴 후보가 0건이어도 나눗셈이 터지지 않는다',
+    (() => {
+      const empty = thresholdBasis([row('pinned', 50, 2111)])
+      return empty.eligible.length === 0
+    })())
+  check('상세 경로도 같은 basis 를 쓴다',
+    /const eligible = basis\.eligible/.test(COLLECTOR_CODE),
+    '요약과 실제 선별이 다른 집합을 보면 보고가 거짓이 된다')
+  check('🔴 threshold 값은 여전히 확정이 아니다',
+    THRESHOLD_CANDIDATES.length === 2
+      && THRESHOLD_CANDIDATES[0].minComments === 10 && THRESHOLD_CANDIDATES[1].minComments === 15
+      && THRESHOLD_CANDIDATES.every((t) => t.minViews === 300))
+  check('제외 사유 분포는 계속 출력한다',
+    /정치·진영 \$\{byReason\.politics\}건/.test(COLLECTOR_CODE)
+      && /실명·공인 언급 \$\{byReason\.publicFigure\}건/.test(COLLECTOR_CODE)
+      && /고정 슬롯 \$\{byReason\.pinned\}건/.test(COLLECTOR_CODE))
+}
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0

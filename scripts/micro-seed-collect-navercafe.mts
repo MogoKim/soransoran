@@ -53,7 +53,7 @@ import {
   LIST_SELECTORS, runIdOf, runOutputPath,
   BOARD_TARGETS, findBoard, boardListUrl, pagesOf, maxPagesFor,
   detectRowLabel, judgePoliticsTitle, activeCafes,
-  dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold,
+  dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold, thresholdBasis,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -289,13 +289,26 @@ async function main() {
     }
     if (byReason.pinned) console.log(`  📌 고정 슬롯 ${byReason.pinned}건 — 상세 대상 제외 (공지·필독·추천)`)
 
+    // 🔴 threshold 는 **제외 후 후보**에 건다 (PR-S2-b-9).
+    //    전체 목록에 걸면 상세를 열 수도 없는 고정 슬롯이 통과율을 끌어올린다 —
+    //    유머·연예 1p 실측에서 전체 35% vs 후보 7% 로 갈렸다.
+    const basis = thresholdBasis(listRows)
+
     if (SCOUT) {
       // ── 🔍 scout 종료 — 상세를 열지 않는다 ──
-      console.log(`\n  🔍 scout 종료 — 목록 ${listRows.length}건만 기록했다. 상세 요청 0.`)
+      console.log(`\n  🔍 scout 종료 — 목록 ${basis.total}건 기록. 상세 요청 0.`)
+      console.log(`     제외 ${basis.total - basis.eligible.length - basis.legacy}건 → 상세 후보 ${basis.eligible.length}건`)
+      // 🔴 이 실행에서는 0 이어야 한다. 0 이 아니면 buildCollected 를 안 거친 행이 섞인 것이다
+      if (basis.legacy > 0) console.log(`     ⚠️ 판정 없는 행 ${basis.legacy}건 — 제외가 아니라 "판정 자체가 없다"`)
       // 🔴 후보값으로 세어만 본다. 코드가 이 값으로 자동 판정하지 않는다
       for (const t of THRESHOLD_CANDIDATES) {
-        const n = listRows.filter((r) => passesThreshold(r, t)).length
-        console.log(`     후보 ${t.label} (댓글>=${t.minComments} AND 조회>=${t.minViews}) → ${n}건 (${Math.round((n / listRows.length) * 100)}%)`)
+        const n = basis.eligible.filter((r) => passesThreshold(r, t)).length
+        const pct = basis.eligible.length === 0 ? 0 : Math.round((n / basis.eligible.length) * 100)
+        const whole = listRows.filter((r) => passesThreshold(r, t)).length
+        console.log(
+          `     후보 ${t.label} (댓글>=${t.minComments} AND 조회>=${t.minViews}) → ` +
+            `${n}/${basis.eligible.length}건 (${pct}%)  · 전체 기준이면 ${whole}건 — 🔴 비교 축이 아니다`,
+        )
       }
       console.log(`     → ${OUT_LIST}`)
       console.log(`\n  🔴 상세 JSONL 을 만들지 않았다. threshold 를 정하기 전에는 상세를 열지 않는다.`)
@@ -303,7 +316,7 @@ async function main() {
       return
     }
 
-    const eligible = listRows.filter((r) => r.sourceExcludeReason === null)
+    const eligible = basis.eligible
     const plan = planAutoFetch(
       eligible.map((r) => ({
         sourceArticleId: r.sourceArticleId,

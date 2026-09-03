@@ -1090,3 +1090,34 @@ export function passesThreshold(
   if (row.sourceViewCount === null) return false
   return row.sourceCommentCount >= t.minComments && row.sourceViewCount >= t.minViews
 }
+
+/**
+ * threshold 를 **어느 집합에 적용할 것인가** (PR-S2-b-9).
+ *
+ * 🔴 **전체 목록이 아니라 "제외 후 후보" 다.**
+ *
+ *    2026-09-03 유머·연예 1p 실측에서 착시가 드러났다:
+ * ```
+ *    전체 23건 기준   후보 A 8건 (35%)
+ *    후보 14건 기준   후보 A 1건       ← 실제
+ * ```
+ *    차이를 만든 것은 고정 슬롯 8건이다. 공지·필독은 조회수 중앙이 2,111 로
+ *    일반 글(321)의 7배라, 전체에 threshold 를 걸면 **상세를 열 수도 없는 행이
+ *    통과율을 끌어올린다.** 그 숫자로 기준을 정하면 threshold 가 너무 높아진다.
+ *
+ * 🔴 게시판끼리 비교할 때도 같은 축이어야 한다 —
+ *    쫑알쫑알 9% 와 유머 35% 를 나란히 놓으면 안 되는 이유가 이것이다.
+ */
+export function thresholdBasis<T extends { sourceExcludeReason?: ExcludeReason | null }>(
+  rows: readonly T[],
+): { total: number; eligible: T[]; legacy: number } {
+  // 🔴 **필드가 없는 행(PR-S2-b-8 이전 산출물)을 조용히 제외로 떨어뜨리지 않는다.**
+  //    실제로 그렇게 만들었더니 쫑알쫑알 225건이 "후보 0건 · NaN%" 로 나왔다.
+  //    "판정이 없다" 와 "제외 판정을 받았다" 는 다른 사실이다 — 세어서 알린다.
+  const legacy = rows.filter((r) => !('sourceExcludeReason' in r) || r.sourceExcludeReason === undefined).length
+  return {
+    total: rows.length,
+    eligible: rows.filter((r) => r.sourceExcludeReason === null),
+    legacy,
+  }
+}
