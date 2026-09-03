@@ -29,8 +29,8 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  scoreRows, rankShift, groupKeyOf, toArticles, articleKeyOf,
-  type ScoutRow, type ScoredRow,
+  scoreRows, rankShift, groupKeyOf, toArticles, articleKeyOf, LANE_LABEL,
+  type ScoutRow, type ScoredRow, type Lane,
 } from './lib/micro-seed-scout-score.mjs'
 
 const DATA_DIR = './.microseed-data'
@@ -153,20 +153,22 @@ function main(): void {
   // ── top N ──
   const top = scored.slice(0, TOP)
   console.log(`\n② 상위 ${top.length}건 — 🔴 자동 fetch 대상이 아니라 눈으로 볼 목록이다`)
+  console.log('   🔴 laneHint 는 자동 라우팅이 아니다 — 사람이 보는 힌트다. Sheet · DB · 자동 fetch 없음')
   console.log(
-    `   ${padr('#', 3)} ${padr('총점', 6)} ${padr('화제', 5)} ${padr('핏', 4)} ${padr('대화', 4)} ${padr('신선', 4)} ` +
-      `${padr('소스', 22)} ${padr('게시판', 16)} ${padr('articleId', 10)} ${padr('p/r', 7)} ${padr('댓/조', 10)} ${padr('lag', 6)}`,
+    `   ${padr('#', 3)} ${padr('총점', 6)} ${padr('레인', 10)} ${padr('화제', 5)} ${padr('핏', 4)} ${padr('대화', 4)} ${padr('신선', 4)} ` +
+      `${padr('게시판', 16)} ${padr('articleId', 10)} ${padr('p/r', 7)} ${padr('댓/조', 10)} ${padr('lag', 6)}`,
   )
   top.forEach((s, i) => {
     const r = s.row
     console.log(
-      `   ${padr(i + 1, 3)} ${padr(s.score.total.toFixed(1), 6)} ${padr(s.score.engagement.toFixed(1), 5)} ` +
+      `   ${padr(i + 1, 3)} ${padr(s.score.total.toFixed(1), 6)} ${padr(LANE_LABEL[s.laneHint.lane], 10)} ${padr(s.score.engagement.toFixed(1), 5)} ` +
         `${padr(s.score.targetFit.toFixed(0), 4)} ${padr(s.score.conversation.toFixed(0), 4)} ${padr(s.score.freshness.toFixed(0), 4)} ` +
-        `${padr(r.sourceSite, 22)} ${padr((r.sourceBoardName ?? '').slice(0, 14), 16)} ${padr(r.sourceArticleId, 10)} ` +
+        `${padr((r.sourceBoardName ?? '').slice(0, 14), 16)} ${padr(r.sourceArticleId, 10)} ` +
         `${padr(`${r.sourcePage ?? '-'}/${r.sourceRankOnPage ?? '-'}`, 7)} ` +
         `${padr(`${r.sourceCommentCount}/${r.sourceViewCount ?? '-'}`, 10)} ${padr(s.lagMinutes === null ? '-' : s.lagMinutes.toFixed(0), 6)}`,
     )
     console.log(`       run ${s.obs.firstRunId}${s.obs.seenCount > 1 ? `→${s.obs.lastRunId}` : ''} · ${s.why}`)
+    console.log(`       레인: ${s.laneHint.reason}`)
     // 🔴 후보(candidate)만 제목을 찍는다. 제외·보류 글의 제목은 옵션을 켜도 나오지 않는다 —
     //    top 배열 자체가 scored(=candidate)에서만 나오므로 구조적으로 보장된다.
     if (SHOW_TITLE) {
@@ -175,8 +177,23 @@ function main(): void {
     }
   })
 
+  // ── laneHint 요약 ──
+  console.log('\n③ laneHint — 🔴 "좋은 글인가" 가 아니라 "어느 레인에 좋은가"')
+  console.log('   🔴 자동 라우팅이 아니다. Sheet write · DB write · 자동 fetch · import 경로가 없다.')
+  console.log('   🔴 네이버 → Google Sheet 자동 전송은 미구현이며 별도 계약·승인 전까지 금지다.')
+  const laneAll = new Map<Lane, number>()
+  const laneTop = new Map<Lane, number>()
+  for (const s of [...scored, ...excluded, ...held]) laneAll.set(s.laneHint.lane, (laneAll.get(s.laneHint.lane) ?? 0) + 1)
+  for (const s of top) laneTop.set(s.laneHint.lane, (laneTop.get(s.laneHint.lane) ?? 0) + 1)
+  const LANES: Lane[] = ['originalRaw', 'microSeedQuestion', 'infoSeed', 'participationSeed', 'growthIssue', 'hold', 'exclude']
+  console.log(`   ${padr('lane', 20)} ${padr('전체', 6)} ${padr(`상위 ${top.length}`, 8)}`)
+  for (const l of LANES) {
+    console.log(`   ${padr(`${LANE_LABEL[l]} (${l})`, 20)} ${padr(laneAll.get(l) ?? 0, 6)} ${padr(laneTop.get(l) ?? 0, 8)}`)
+  }
+  console.log('   🔴 짧은 질문·잡담글은 버리는 글이 아니다 — Question · 참여 seed 후보다')
+
   // ── 그룹 요약 ──
-  console.log('\n③ 그룹 요약 — 🔴 소스 우열이 아니라 **표본 상태**다')
+  console.log('\n④ 그룹 요약 — 🔴 소스 우열이 아니라 **표본 상태**다')
   const groups = new Map<string, ScoredRow[]>()
   for (const s of scored) {
     const k = groupKeyOf(s.row)
@@ -202,7 +219,7 @@ function main(): void {
   console.log('   🔴 이동이 0 이면 정규화가 아무 일도 안 한 것이고, 그건 곧 단순 댓글수 정렬이다')
 
   // ── 비용 ──
-  console.log('\n④ 비용 — 🔴 cheap-signal-first')
+  console.log('\n⑤ 비용 — 🔴 cheap-signal-first')
   const uniq = articles.length
   const saved = excluded.length + held.length
   console.log(`   observation rows      ${rows.length}건  (관측 횟수 — 🔴 절감률의 분모가 아니다)`)
@@ -216,8 +233,9 @@ function main(): void {
   console.log(`   🔴 row 기준으로 세면 ${Math.round(((rows.length - top.length) / rows.length) * 100)}% 로 보인다 — 같은 글을 여러 번 센 값이라 과장이다`)
   console.log('   🔴 이 dry-run 자체는 기존 JSONL read-only라 **추가 크롤 비용 0**이다')
 
-  console.log('\n⑤ 이 dry-run 이 정하지 않은 것')
+  console.log('\n⑥ 이 dry-run 이 정하지 않은 것')
   console.log('   🔴 가중치 · 최종 임계값 · 자동 상세 fetch 기준 · threshold 운영값 · slot 시간표')
+  console.log('   🔴 laneHint 는 힌트일 뿐 — 레인별 자동 라우팅 · Sheet 전송 · Growth 레인 구현은 없다')
   console.log('   표본이 하루치 몇 회뿐이다. 순위가 납득되는지 눈으로 보는 단계다.\n')
 }
 
