@@ -224,6 +224,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
         {report.status !== 'RESOLVED' ? (
           <AdminActionButton
             label="처리 완료"
+            successText="처리 완료로 표시했어요."
             run={async () => {
               'use server'
               return setReportStatus(report.id, 'RESOLVED')
@@ -232,6 +233,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
         ) : (
           <AdminActionButton
             label="미처리로 되돌리기"
+            successText="미처리로 되돌렸어요."
             run={async () => {
               'use server'
               return setReportStatus(report.id, 'PENDING')
@@ -266,6 +268,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
             ) : (
               <AdminActionButton
                 label="글 숨기기"
+                successText="글을 숨겼어요."
                 tone="danger"
                 confirmText="이 글을 숨길까요? 고객 화면에서 바로 사라집니다."
                 run={async () => {
@@ -280,6 +283,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
             report.comment.isDeleted ? (
               <AdminActionButton
                 label="댓글 다시 보이기"
+                successText="댓글을 다시 보이게 했어요."
                 run={async () => {
                   'use server'
                   return setCommentHidden(report.comment!.id, false)
@@ -288,6 +292,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
             ) : (
               <AdminActionButton
                 label="댓글 숨기기"
+                successText="댓글을 숨겼어요."
                 tone="danger"
                 confirmText="이 댓글을 숨길까요? 내용은 남고 화면에서만 가려집니다."
                 run={async () => {

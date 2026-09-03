@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import AdminOpsNav from '@/components/admin/AdminOpsNav'
+import { ToastProvider, ToastViewport } from '@/components/ui/toast'
 
 /**
  * 운영 콘솔 셸.
@@ -11,10 +12,20 @@ import AdminOpsNav from '@/components/admin/AdminOpsNav'
  *
  * 🔴 .admin-shell 안에서만 글자 크기와 배지 바탕색을 운영용으로 고정한다
  *    (globals.css 하단). 고객 화면 토큰은 그대로다.
+ *
+ * 🔴 토스트도 여기서 조립한다. 이 셸은 layout 이 부르므로((ops)/layout.tsx)
+ *    운영 화면끼리 오가도 살아남는다 — 조치 뒤 router.refresh() 로 화면이
+ *    다시 그려져도 안내가 사라지지 않는다.
+ *    PageShell 은 페이지 안에 있어 라우트가 바뀌면 새로 만들어진다. 여기는 다르다.
+ *
+ * 🔴 chrome="minimal" 로 둔다. 운영 화면에는 고객 Header(64px)·IconMenu(90px) 가
+ *    없지만, 토스트 위치 토큰을 운영용으로 새로 만들지 않는다 —
+ *    값 하나 때문에 정책 파일을 늘리지 않는다.
  */
 export default function AdminShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="admin-shell min-h-screen bg-surface-app">
+    <ToastProvider>
+      <div className="admin-shell min-h-screen bg-surface-app">
       <div className="mx-auto w-full max-w-[1400px] lg:flex lg:gap-8 lg:px-6">
         {/* 데스크탑: 왼쪽에 붙어 따라오는 메뉴 */}
         <aside className="hidden lg:block lg:w-[228px] lg:shrink-0 lg:py-6">
@@ -50,7 +61,10 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         {/* 🔴 min-w-0 — flex 자식 기본값이 min-width:auto 라 긴 제목이 들어오면
             사이드바를 밀어내고 페이지 전체에 가로 스크롤을 만든다. */}
         <main className="min-w-0 flex-1 px-4 pb-16 lg:px-0 lg:py-6">{children}</main>
+        </div>
       </div>
-    </div>
+
+      <ToastViewport chrome="minimal" />
+    </ToastProvider>
   )
 }
