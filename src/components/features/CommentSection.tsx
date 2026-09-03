@@ -59,12 +59,12 @@ export default function CommentSection({
             이 칸은 "먼저 보여주는" 자리이고, 누르는 일은 아래 목록에서 한다. */}
       {popular.length > 0 ? (
         <div className="mt-4 rounded-2xl bg-surface-soft p-4">
-          <p className="m-0 text-xs font-bold text-brand-ink">많이 공감한 댓글</p>
+          <p className="m-0 text-xs font-bold text-brand-strong">많이 공감한 댓글</p>
           <ul className="m-0 mt-2 flex list-none flex-col gap-3 p-0">
             {popular.map((comment) => (
               <li key={comment.id}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-content-muted">
-                  <span className="font-bold text-brand-ink">
+                  <span className="font-bold text-brand-strong">
                     {comment.author ? displayName(comment.author) : (comment.guestNickname ?? '비회원')}
                   </span>
                   {comment.author === null ? (
