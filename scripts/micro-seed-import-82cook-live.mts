@@ -53,7 +53,10 @@ import { SOURCE_SITE, computeDedupKey, type CollectedCandidate } from './lib/mic
 import {
   SHEET_HEADERS, SHEET_TAB_NAME, buildSheetRow, createGoogleSheetSource, updateCandidateRow,
 } from './lib/micro-seed-sheet.mjs'
-import { planSupplyMode, violatesSupplyInvariant, RAW_ONLY_BATCH_MAX } from './lib/micro-seed-supply.mjs'
+import {
+  planSupplyMode, violatesSupplyInvariant, judgeAutoHold,
+  RAW_ONLY_BATCH_MAX, AUTO_HOLD_DETAIL_FLAGS,
+} from './lib/micro-seed-supply.mjs'
 import { loadEnvLocal, kstString, roundUpToFiveMinutes, utcWallClock } from './lib/micro-seed-time.mjs'
 
 const APPLY = process.argv.includes('--apply')
@@ -206,6 +209,8 @@ async function main() {
   const prisma = new PrismaClient()
   let imported = 0
   let skipped = 0
+  /** 🔴 자동 보류. SKIP 과 따로 센다 — 이유가 다르면 숫자도 달라야 한다 */
+  let held = 0
   try {
     // ── ② Sheet 를 한 번만 읽는다 (중복 검사 + 빈 행 찾기) ──
     //
@@ -300,6 +305,24 @@ async function main() {
         skipped += 1
         continue
       }
+      // ── ④-b 자동 보류 — 상세 플래그를 여기서 본다 (PR-S2-a) ──
+      //
+      // 🔴 자동 경로에만 적용한다. `--sourceArticleId` 로 지목한 것은 사람의 판단이다.
+      //    보류는 삭제가 아니다 — 상세 JSONL 의 원자료는 그대로 남는다.
+      if (RAW_ONLY) {
+        const verdict = judgeAutoHold({
+          sourceArticleId: id,
+          flags: Array.isArray(row.qualityFlags) ? row.qualityFlags : [],
+          humanDesignated: ONLY_ID === id,
+        })
+        if (verdict.hold) {
+          console.log(`  🟡 ${id} — ${verdict.detail}`)
+          diagnostics.push({ kind: 'AUTO_HELD', sourceArticleId: id, message: verdict.flags.join('·') })
+          held += 1
+          continue
+        }
+      }
+
       // 🔴 raw-only 는 Sheet 를 읽지 않았으므로 이 검사도 하지 않는다.
       //    Raw Vault 의 멱등성은 위 rawHit(@@unique[sourceSite,sourceArticleId])이 보장한다.
       if (!RAW_ONLY && sheetKeys.has(row.dedupKey)) {
@@ -460,7 +483,15 @@ async function main() {
     console.log('\n  진단')
     for (const d of diagnostics) console.log(`     · ${d.kind} ${d.sourceArticleId ?? ''} — ${d.message}`)
   }
-  console.log(`\n  ${WRITE_DB ? '적재' : '적재 예정'} ${imported}건 · SKIP ${skipped}건`)
+  console.log(
+    `\n  ${WRITE_DB ? '적재' : '적재 예정'} ${imported}건 · SKIP ${skipped}건` +
+      (RAW_ONLY ? ` · 🟡 자동 보류 ${held}건` : ''),
+  )
+  if (RAW_ONLY && held > 0) {
+    console.log(`     보류 기준: ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')} (상세 단계 플래그)`)
+    console.log('     🔴 삭제가 아니다 — 상세 JSONL 원자료는 남아 있다.')
+    console.log('     넣으려면 사람이 --sourceArticleId=<id> 로 지목한다.')
+  }
   if (!WRITE_DB) {
     console.log('  🔍 dry-run 이었다. DB · Sheet 에 아무것도 쓰지 않았다.')
     if (APPLY) {

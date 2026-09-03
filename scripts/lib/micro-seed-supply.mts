@@ -32,17 +32,49 @@
 export const AUTO_FETCH_MAX = 30
 
 /**
- * 자동 선별에서 **열지 않는** 플래그.
+ * 🔴 자동 제외는 **두 단계**다. 한 목록에 섞어 두면 작동하지 않는 가드가 생긴다.
  *
- * 🔴 이것은 Q-1("품질 플래그로 거부하지 않는다")의 예외가 아니다.
- *    거부가 아니라 **자동으로 열지 않는 것**이다 — 목록 JSONL 에는 전부 그대로 남고,
- *    사람이 `--fetch=<id>` 로 지정하면 언제든 열린다.
+ * ## 왜 나누는가 — 2026-09-03 실측 결함
  *
- *    구분이 중요한 이유: 자동 경로에 사람이 없다. 정치·실명 글을 자동으로 상세까지 열고
- *    Raw Vault 에 넣으면 그 다음 단계(생성기)가 그것을 재료로 집어 든다.
- *    사람이 고를 때는 보고 넘기면 되지만 자동은 넘길 눈이 없다.
+ * 처음엔 하나였다: `AUTO_SKIP_FLAGS = ['politicalOrPublicFigure', 'medicalOrAdLikely']`.
+ * 그런데 **자동 선별은 목록 단계에서 일어난다.** 목록에는 제목과 댓글수뿐이다.
+ *
+ * `medicalOrAdLikely` 는 (시설|시술) **AND** 가격, 또는 상업유도 조합을 요구한다.
+ * 제목만으로 그 조합이 성립하는 일은 사실상 없다 — 그래서 목록 단계에서 **한 번도 붙지 않았다.**
+ *
+ * 실측: `불안으로 정신과약 드셔본 분 계신가요`(4234890) ·
+ *       `뇌MRI 사진에서 치매 및 어지럼증 같이 보일까요?`(4234897)
+ *       → 목록 단계 플래그는 `highEngagement` 하나뿐. 자동 수집에 그대로 들어왔다.
+ *
+ * 🔴 **"목록에 있는 이름"과 "그 단계에서 실제로 붙는 플래그"는 다르다.**
+ *    이름만 적어 두면 가드가 있는 것처럼 보이지만 아무것도 막지 않는다 —
+ *    `noGoTopics` 0/28 히트와 같은 종류의 실패다.
  */
-export const AUTO_SKIP_FLAGS = ['politicalOrPublicFigure', 'medicalOrAdLikely'] as const
+
+/**
+ * ① 목록 단계 자동 제외 — **상세를 열기 전에** 뺀다.
+ *
+ * 🔴 여기에는 **제목만으로 판정되는 플래그만** 넣는다.
+ *    fixture 가 "이 플래그가 제목 하나로 실제 발화하는가" 를 증명하고,
+ *    증명하지 못하면 실패한다(구조 가드).
+ *
+ * 🔴 거부가 아니라 **자동으로 열지 않는 것**이다.
+ *    목록 JSONL 에는 전부 남고, 사람이 `--fetch=<id>` 로 지정하면 언제든 열린다.
+ *    자동 경로에는 넘길 눈이 없기 때문에 그 경로만 좁힌다.
+ */
+export const AUTO_SKIP_LIST_FLAGS = ['politicalOrPublicFigure', 'politicalTopicLikely'] as const
+
+/**
+ * ② 상세 단계 자동 보류 — 본문을 읽은 **뒤**, Raw Vault 자동 적재 **전**에 뺀다.
+ *
+ * 🔴 상세 JSONL 에서 지우지 않는다. 원자료는 보존하고 **자동 적재 대상에서만** 뺀다.
+ *    사람이 `--sourceArticleId=<id>` 로 지목하면 적재된다 — 그것이 사람의 판단이다.
+ *
+ * 🔴 Raw Vault 저장 정책과 Originality Gate 정책을 혼동하지 않는다.
+ *    Vault 저장은 발행이 아니다. 다만 **자동 원료 공급**에서는 더 보수적으로 간다 —
+ *    자동으로 들어온 원문은 자동으로 생성기의 재료가 되고, 그 경로에 사람이 없다.
+ */
+export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely', 'publicFigureMention'] as const
 
 /** 자동 선별 하한. 🔴 점수가 낮다고 파일에서 지우지 않는다 — 여는 순서와 범위만 정한다 */
 export const AUTO_MIN_SCORE = 20
@@ -84,7 +116,7 @@ export function planAutoFetch(
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'ALREADY_IN_VAULT', detail: '이미 Raw Vault 에 있다' })
       continue
     }
-    const hit = AUTO_SKIP_FLAGS.filter((f) => r.flags.includes(f))
+    const hit = AUTO_SKIP_LIST_FLAGS.filter((f) => r.flags.includes(f))
     if (hit.length > 0) {
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'SKIP_FLAG', detail: `자동 제외 플래그 ${hit.join('·')} — 지정(--fetch)하면 열린다` })
       continue
@@ -101,6 +133,42 @@ export function planAutoFetch(
   }
 
   return { picked, skipped }
+}
+
+// ─────────────────────────────────────────────────────────
+// 상세 단계 자동 보류 (import --raw-only)
+// ─────────────────────────────────────────────────────────
+
+export type AutoHoldInput = {
+  sourceArticleId: string
+  /** 상세까지 매겨진 플래그 */
+  flags: readonly string[]
+  /** 🔴 사람이 `--sourceArticleId` 로 지목했는가. 지목했으면 보류하지 않는다 */
+  humanDesignated?: boolean
+}
+
+export type AutoHoldVerdict =
+  | { hold: false }
+  | { hold: true; flags: string[]; detail: string }
+
+/**
+ * 자동 적재를 보류할 것인가.
+ *
+ * 🔴 **사람이 지목한 것은 보류하지 않는다.** `--sourceArticleId=<id>` 는
+ *    "이 글을 넣겠다" 는 명시적 판단이고, 그 판단을 코드가 뒤집지 않는다.
+ *    자동 경로에만 사람이 없다 — 좁히는 것도 그 경로만이다.
+ *
+ * 🔴 보류는 삭제가 아니다. 상세 JSONL 의 원자료는 그대로 남는다.
+ */
+export function judgeAutoHold(input: AutoHoldInput): AutoHoldVerdict {
+  if (input.humanDesignated === true) return { hold: false }
+  const hit = AUTO_HOLD_DETAIL_FLAGS.filter((f) => input.flags.includes(f))
+  if (hit.length === 0) return { hold: false }
+  return {
+    hold: true,
+    flags: [...hit],
+    detail: `자동 보류 ${hit.join('·')} — 원자료는 남는다. 넣으려면 --sourceArticleId 로 지목한다`,
+  }
 }
 
 // ─────────────────────────────────────────────────────────

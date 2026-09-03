@@ -60,7 +60,10 @@ import {
   type CollectedCandidate, type ListItem, type RobotsRules,
 } from './lib/micro-seed-82cook.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
-import { planAutoFetch, AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_FLAGS } from './lib/micro-seed-supply.mjs'
+import {
+  planAutoFetch, judgeAutoHold,
+  AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
+} from './lib/micro-seed-supply.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 
 const KILL_SWITCH = 'SORAN_82COOK_COLLECT_ENABLED'
@@ -202,8 +205,10 @@ async function main() {
   if (plannedArticles.length) console.log(`  상세 ${plannedArticles.length}건:\n${plannedArticles.map((u) => `     ${u}`).join('\n')}`)
   if (AUTO) {
     console.log(`  상세: 🔴 자동 선별 — 목록에서 최대 ${AUTO_MAX}건 (점수 ${AUTO_MIN_SCORE} 이상)`)
-    console.log(`        자동 제외 플래그: ${AUTO_SKIP_FLAGS.join(' · ')}`)
-    console.log('        🔴 제외는 거부가 아니다 — 목록 파일에 남고 --fetch 로 지정하면 열린다')
+    console.log(`        ① 목록 단계 제외 (열기 전) : ${AUTO_SKIP_LIST_FLAGS.join(' · ')}`)
+    console.log(`        ② 상세 단계 보류 (연 뒤)   : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')}`)
+    console.log('        🔴 ②는 제목만으로 판정되지 않아 목록 단계에서 못 거른다 (2026-09-03 실측)')
+    console.log('        🔴 제외·보류 전부 거부가 아니다 — 파일에 남고 --fetch 로 지정하면 열린다')
   }
   if (!plannedList.length && !plannedArticles.length) {
     console.log('  할 일이 없다. --list --pages=N 또는 --fetch=<num,num> 을 준다.\n')
@@ -356,10 +361,29 @@ async function main() {
   }
 
   if (collected.length) {
+    // 🔴 원자료를 그대로 쓴다. 보류 대상도 파일에 남는다 —
+    //    조용히 버려진 글은 아무도 모른다(Q-1). 보류는 **적재 단계**에서 일어난다.
     writeJsonl(OUT, collected)
     console.log(`\n  → ${OUT} (${collected.length}건)`)
   }
-  console.log('\n  🔴 DB · Sheet 에 아무것도 쓰지 않았다. 적재는 다음 PR 의 importer 가 한다.\n')
+
+  // ── 자동 보류 예고 — 사람이 지금 알아야 다음 명령을 정할 수 있다 ──
+  if (AUTO && collected.length) {
+    const heldRows = collected.filter((r) => judgeAutoHold({ sourceArticleId: r.sourceArticleId, flags: r.qualityFlags }).hold)
+    if (heldRows.length) {
+      console.log(`\n  🟡 자동 적재 보류 예정 ${heldRows.length}건 — 상세를 열어야 붙는 플래그다`)
+      for (const r of heldRows) {
+        const hit = AUTO_HOLD_DETAIL_FLAGS.filter((f) => r.qualityFlags.includes(f))
+        console.log(`     ${r.sourceArticleId}  ${hit.join('·')}  ${r.originalTitle.slice(0, 30)}`)
+      }
+      console.log('     🔴 파일에는 남아 있다. raw-only 자동 적재에서만 빠진다.')
+      console.log('     넣으려면: import --raw-only --sourceArticleId=<id> --apply --batch=1')
+    } else {
+      console.log('\n  🟢 자동 적재 보류 예정 0건')
+    }
+  }
+
+  console.log('\n  🔴 DB · Sheet 에 아무것도 쓰지 않았다. 적재는 importer 가 한다.\n')
 }
 
 main().catch((e) => {

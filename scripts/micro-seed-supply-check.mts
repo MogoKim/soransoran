@@ -14,10 +14,12 @@
  */
 import { readFileSync } from 'node:fs'
 import {
-  planSupplyMode, violatesSupplyInvariant, planAutoFetch,
-  AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_FLAGS, RAW_ONLY_BATCH_MAX, SHEET_LANE_LIMIT,
+  planSupplyMode, violatesSupplyInvariant, planAutoFetch, judgeAutoHold,
+  AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
+  RAW_ONLY_BATCH_MAX, SHEET_LANE_LIMIT,
   type SupplyModeInput,
 } from './lib/micro-seed-supply.mjs'
+import { assessCandidate, DETAIL_ONLY_FLAGS } from './lib/micro-seed-quality.mjs'
 
 let failed = 0
 const ok = (label: string) => console.log(`  ✅ ${label}`)
@@ -126,12 +128,12 @@ console.log('\n⑤ 자동 선별 — 자동 경로에는 사람이 없다')
     { sourceArticleId: 'a2', score: 80, flags: ['targetLikely', 'politicalOrPublicFigure'] },
     { sourceArticleId: 'a3', score: 70, flags: ['personalExperienceLikely'] },
     { sourceArticleId: 'a4', score: 10, flags: [] },
-    { sourceArticleId: 'a5', score: 60, flags: ['medicalOrAdLikely'] },
+    { sourceArticleId: 'a5', score: 60, flags: ['politicalTopicLikely'] },
     { sourceArticleId: 'a6', score: 50, flags: [], alreadyInVault: true },
   ]
   const p = planAutoFetch(rows)
   check('🔴 정치·실명은 자동으로 열지 않는다', !p.picked.includes('a2'))
-  check('🔴 의료·광고성은 자동으로 열지 않는다', !p.picked.includes('a5'))
+  check('🔴 정치 주제도 자동으로 열지 않는다', !p.picked.includes('a5'))
   check(`점수 ${AUTO_MIN_SCORE} 미만은 열지 않는다`, !p.picked.includes('a4'))
   check('이미 Vault 에 있으면 열지 않는다', !p.picked.includes('a6'))
   check('나머지는 점수 순으로 열린다', p.picked.join(',') === 'a1,a3', p.picked.join(','))
@@ -146,6 +148,138 @@ console.log('\n⑤ 자동 선별 — 자동 경로에는 사람이 없다')
     [...new Set(p.skipped.map((s) => s.reason))].sort().join(',') === 'ALREADY_IN_VAULT,BELOW_MIN_SCORE,SKIP_FLAG',
     JSON.stringify(p.skipped.map((s) => s.reason)),
   )
+  check(
+    '🔴 상세 플래그(medicalOrAdLikely)로는 목록 단계에서 거르지 않는다',
+    planAutoFetch([{ sourceArticleId: 'm1', score: 90, flags: ['medicalOrAdLikely'] }]).picked.includes('m1'),
+    '목록 단계에 없는 플래그를 여기서 막는 척하면 가드가 무력해진다 — 보류는 적재 단계가 한다',
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑤-B 🔴 구조 가드 — 목록 단계에 없는 플래그에 의존하지 않는다 (PR-S2-a)')
+// ─────────────────────────────────────────────────────────
+//
+// 🔴 2026-09-03 실측 결함의 재발 방지다.
+//    AUTO_SKIP_LIST_FLAGS 에 이름을 적는 것만으로는 가드가 되지 않는다.
+//    **제목 하나로 실제 발화하는지**를 fixture 가 증명해야 한다.
+{
+  for (const f of AUTO_SKIP_LIST_FLAGS) {
+    check(
+      `[구조] ${f} 는 DETAIL_ONLY_FLAGS 가 아니다`,
+      !DETAIL_ONLY_FLAGS.includes(f as never),
+      '본문을 읽어야 붙는 플래그를 목록 단계 제외 목록에 두면 아무것도 막지 못한다',
+    )
+  }
+  // 🔴 이름만이 아니라 **발화 증명**을 요구한다. 제목만 주고 실제로 붙는지 본다
+  const titleOnly = (title: string) =>
+    assessCandidate({ originalTitle: title, rawBody: '', sourceCommentCount: 3 }).flags as readonly string[]
+
+  check(
+    '[구조·증명] politicalOrPublicFigure 는 제목만으로 발화한다',
+    titleOnly('이재명 대통령 발언 어떻게 보세요').includes('politicalOrPublicFigure'),
+  )
+  check(
+    '[구조·증명] politicalTopicLikely 는 제목만으로 발화한다',
+    titleOnly('나라별 극우의 특징').includes('politicalTopicLikely'),
+  )
+  check(
+    '🔴 [구조] medicalOrAdLikely 는 목록 단계 제외 목록에 없다',
+    !(AUTO_SKIP_LIST_FLAGS as readonly string[]).includes('medicalOrAdLikely'),
+    '제목만으로 (시설|시술)+가격 조합이 성립하는 일은 사실상 없다 — 무력한 가드가 된다',
+  )
+  check(
+    '🔴 [구조] 두 목록이 겹치지 않는다',
+    (AUTO_SKIP_LIST_FLAGS as readonly string[]).every((f) => !(AUTO_HOLD_DETAIL_FLAGS as readonly string[]).includes(f)),
+    '같은 플래그가 두 단계에 있으면 어느 쪽이 막았는지 알 수 없다',
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑤-C 자동 보류 — 상세를 연 뒤, 적재 전에 (PR-S2-a)')
+// ─────────────────────────────────────────────────────────
+{
+  check(
+    '🔴 의료·광고성은 자동 적재에서 보류된다',
+    judgeAutoHold({ sourceArticleId: 'h1', flags: ['medicalOrAdLikely', 'highEngagement'] }).hold,
+  )
+  check(
+    '🔴 본문 실명도 보류된다',
+    judgeAutoHold({ sourceArticleId: 'h2', flags: ['publicFigureMention'] }).hold,
+  )
+  check(
+    '깨끗한 글은 보류하지 않는다',
+    !judgeAutoHold({ sourceArticleId: 'h3', flags: ['targetLikely', 'personalExperienceLikely'] }).hold,
+  )
+  check(
+    '🔴 사람이 지목하면 보류하지 않는다 (자동 경로 한정)',
+    !judgeAutoHold({ sourceArticleId: 'h4', flags: ['medicalOrAdLikely'], humanDesignated: true }).hold,
+    '--sourceArticleId 는 사람의 명시적 판단이다. 코드가 뒤집지 않는다',
+  )
+  const v = judgeAutoHold({ sourceArticleId: 'h5', flags: ['medicalOrAdLikely'] })
+  check(
+    '보류 사유와 플래그가 남는다',
+    v.hold && v.flags.join(',') === 'medicalOrAdLikely' && v.detail.includes('원자료는 남는다'),
+    JSON.stringify(v),
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑤-D 실측 회귀 — 2026-09-03 live 수집 3건')
+// ─────────────────────────────────────────────────────────
+{
+  const assess = (title: string, body: string) =>
+    assessCandidate({ originalTitle: title, rawBody: body, sourceCommentCount: 8 })
+
+  // ① 4234890 — 정신과약. 제목만으로는 안 잡히고, 본문을 읽으면 보류돼야 한다
+  const t1 = assess('불안으로 정신과약 드셔본 분 계신가요', '')
+  check(
+    '4234890 정신과약 — 목록 단계에서는 자동 제외 대상이 아니다 (실측 재현)',
+    !AUTO_SKIP_LIST_FLAGS.some((f) => (t1.flags as readonly string[]).includes(f)),
+    JSON.stringify(t1.flags),
+  )
+  check(
+    '🔴 4234890 — 상세 플래그가 붙으면 자동 적재에서 보류된다',
+    judgeAutoHold({ sourceArticleId: '4234890', flags: ['medicalOrAdLikely', 'highEngagement'] }).hold,
+  )
+
+  // ② 4234897 — 뇌MRI. 같은 구조
+  check(
+    '🔴 4234897 뇌MRI — 자동 적재에서 보류된다',
+    judgeAutoHold({ sourceArticleId: '4234897', flags: ['medicalOrAdLikely'] }).hold,
+  )
+
+  // ③ 4234894 — 나라별 극우의 특징. 🔴 이번엔 목록 단계에서 잡혀야 한다
+  const t3 = assess('나라별 극우의 특징', '')
+  check(
+    '🔴 4234894 극우 — politicalTopicLikely 가 붙는다',
+    (t3.flags as readonly string[]).includes('politicalTopicLikely'),
+    JSON.stringify(t3.flags),
+  )
+  check(
+    '🔴 4234894 — 공인·실명 플래그와 분리돼 있다',
+    !(t3.flags as readonly string[]).includes('politicalOrPublicFigure'),
+    '실명이 없는데 공인 플래그가 붙으면 두 축이 섞인 것이다',
+  )
+  check(
+    '🔴 4234894 — 목록 단계 자동 선별에서 빠진다',
+    !planAutoFetch([{ sourceArticleId: '4234894', score: 90, flags: [...t3.flags] }]).picked.includes('4234894'),
+  )
+
+  // 과차단 회귀 — 정상 생활글이 걸리면 안 된다
+  const safe = [
+    '작년 은퇴한 남편 건보료 궁금해요',
+    '기미 어째야 하나요',
+    '서울 나이들어 살 동네 추천해주세요.',
+    '고2딸',
+    '아파트 외벽 보수공사 하는데 시끄럽네요',
+    '요즘 애들 진보한 게 눈에 보여요',
+  ]
+  for (const s of safe) {
+    check(
+      `[과차단] "${s.slice(0, 18)}" 에 정치 주제 플래그가 안 붙는다`,
+      !(assess(s, '').flags as readonly string[]).includes('politicalTopicLikely'),
+    )
+  }
 }
 {
   const many = Array.from({ length: AUTO_FETCH_MAX + 15 }, (_, i) => ({
@@ -204,6 +338,26 @@ console.log('\n⑥ 소스 스캔 — 발행 경로가 이 레일에 없다')
     '🔴 raw-only 경로가 Sheet 를 부르지 않는다',
     /if \(RAW_ONLY\) \{[\s\S]{0,900}?microSeedRawContent\.create/.test(importer)
       && !/if \(RAW_ONLY\) \{[\s\S]{0,900}?updateCandidateRow/.test(importer),
+  )
+  // ── PR-S2-a ──
+  check(
+    '🔴 importer 가 자동 보류를 raw-only 경로에서만 본다',
+    /if \(RAW_ONLY\) \{[\s\S]{0,400}?judgeAutoHold\(/.test(importer),
+    '자동 보류가 Micro Seed 레인까지 막으면 사람의 승인 경로를 코드가 대신 판단하는 것이 된다',
+  )
+  check(
+    '🔴 importer 가 사람 지목을 자동 보류에서 제외한다',
+    /humanDesignated: ONLY_ID === id/.test(importer),
+  )
+  check(
+    '🔴 collector 가 목록 단계 제외에 상세 플래그를 쓰지 않는다',
+    /AUTO_SKIP_LIST_FLAGS/.test(collector) && !/AUTO_SKIP_FLAGS\b/.test(collector),
+  )
+  check(
+    '🔴 collector 가 보류 대상도 파일에 남긴다 (Q-1)',
+    // writeJsonl(OUT, collected) 가 보류 필터 **앞**에 있어야 한다
+    collector.indexOf('writeJsonl(OUT, collected)') < collector.indexOf('judgeAutoHold('),
+    '보류를 파일에서 지우면 조용히 버려진 글이 된다',
   )
 }
 
