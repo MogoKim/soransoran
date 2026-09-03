@@ -10,22 +10,32 @@
  * 🔴 dry-run 이 기본이다. 실제 write 는 **스위치 두 개**가 있어야 한다
  *    적재는 되돌리기 번거롭다. 스위치를 두 개 요구하면 크론이나 오타로 도는 일이 없다.
  *
- * 🔴 **레인이 둘이고 상한이 다르다** (PR-S2)
+ * 🔴 **레인이 둘이고 상한도 받는 소스도 다르다** (PR-S2 · PR-S2-b-1)
  *
- *      Micro Seed 레인   --apply --limit=1
+ *      Micro Seed 레인   --apply --limit=1        소스: 🔴 82cook 만
  *        RawContent + Candidate(HOLD) + Sheet 행 1개
  *        🔴 여전히 1건이다 — Sheet 는 창업자가 읽는 승인 게이트다.
  *           한 번에 50행이 꽂히면 그 화면은 게이트로서 기능하지 않는다.
  *
  *      Original Post 공급   --apply --raw-only --batch=N   (N ≤ 50)
+ *        소스: 82cook · navercafe:{cafeId}
  *        RawContent 만
  *        🔴 Candidate 를 만들지 않고 Sheet 를 건드리지 않는다.
  *           Original Post 레인은 Raw 를 **재료로만** 쓰고 승인은
  *           OriginalPostApprovalQueue 에서 따로 받는다 —
  *           그 레인에 Sheet 행은 아무 역할이 없다.
  *
+ * 🔴 **네이버는 raw-only 전용이다.**
+ *    Micro Seed 는 원문을 그대로 쓰고 영구 noindex 를 받는다(헌법 §10-5).
+ *    로그인 영역의 글을 그 레인에 올리는 것은 별개의 판단이고, 이 스크립트가 대신 내리지 않는다.
+ *    판정은 judgeSourceSite 한 곳이 하고 fixture 가 양방향을 고정한다.
+ *
  *    두 레인을 섞은 명령은 **거부한다** (`--raw-only --limit` · `--batch` 단독).
  *    규칙은 scripts/lib/micro-seed-supply.mts 가 정하고 fixture 가 검증한다.
+ *
+ * ⚠️ 파일명이 82cook 이지만 **importer 는 소스 중립**이다 (PR-S2-b-1).
+ *    이름을 바꾸면 npm script · plist 템플릿이 함께 움직여야 해서 이 PR 에서는 두었다.
+ *    수집기는 소스별로 따로다 — collect-82cook / (예정) collect-navercafe.
  *
  * 🔴 발행하지 않는다
  *    status 는 HOLD 로만 만든다. PENDING · PUBLISHED 로 가는 경로가 이 파일에 없다.
@@ -49,13 +59,16 @@ import { existsSync, readFileSync } from 'node:fs'
 import { PrismaClient } from '@prisma/client'
 import { guardMicroSeedCandidate } from '../src/lib/micro-seed-guard'
 import { MIN_POST_CONTENT_LENGTH, MAX_POST_CONTENT_LENGTH, MIN_POST_TITLE_LENGTH, MAX_POST_TITLE_LENGTH } from '../src/lib/post-policy'
-import { SOURCE_SITE, computeDedupKey, type CollectedCandidate } from './lib/micro-seed-82cook.mjs'
+// 🔴 SOURCE_SITE 를 더 이상 쓰지 않는다 (PR-S2-b-1) — 소스 판정은 judgeSourceSite 가 한다.
+//    computeDedupKey 는 사이트 무관 순수 함수라 그대로 쓴다.
+import { computeDedupKey, type CollectedCandidate } from './lib/micro-seed-82cook.mjs'
 import {
   SHEET_HEADERS, SHEET_TAB_NAME, buildSheetRow, createGoogleSheetSource, updateCandidateRow,
 } from './lib/micro-seed-sheet.mjs'
 import {
-  planSupplyMode, violatesSupplyInvariant, judgeAutoHold,
-  RAW_ONLY_BATCH_MAX, AUTO_HOLD_DETAIL_FLAGS,
+  planSupplyMode, violatesSupplyInvariant, judgeAutoHold, judgeSourceSite,
+  RAW_ONLY_BATCH_MAX, AUTO_HOLD_DETAIL_FLAGS, SHEET_LANE_SOURCE_SITE, NAVERCAFE_PREFIX,
+  type SupplyMode,
 } from './lib/micro-seed-supply.mjs'
 import { loadEnvLocal, kstString, roundUpToFiveMinutes, utcWallClock } from './lib/micro-seed-time.mjs'
 
@@ -85,6 +98,12 @@ if (violatesSupplyInvariant(PLAN)) {
 }
 const WRITE_DB = PLAN.mode !== 'dry-run'
 const WRITE_SHEET = PLAN.writes.sheet
+
+/**
+ * 🔴 사용자가 **의도한 레인**. dry-run 이든 apply 든 동일하다.
+ *    소스 허용 판정은 이 값으로 한다 — dry-run 이 apply 결과를 정직하게 예고해야 한다.
+ */
+const INTENDED_LANE: SupplyMode = RAW_ONLY ? 'raw-only' : 'micro-seed'
 
 /** 🔴 board 는 free 고정 (§6-9-D 화이트리스트). magazine·best 로 갈 경로를 만들지 않는다 */
 const BOARD_SHEET_VALUE = 'free'
@@ -135,9 +154,14 @@ async function main() {
   const diagnostics: Diagnostic[] = []
 
   const laneLabel = RAW_ONLY ? 'Original Post 공급 (raw-only)' : 'Micro Seed 레인'
-  console.log('\nMicro Seed importer — 82cook')
+  console.log('\nMicro Seed importer')
   console.log(`  입력 ${INPUT} · ${kstString(now)} KST`)
   console.log(`  레인 ${laneLabel}`)
+  console.log(
+    RAW_ONLY
+      ? `  허용 소스 ${SHEET_LANE_SOURCE_SITE} · ${NAVERCAFE_PREFIX}{cafeId}`
+      : `  허용 소스 🔴 ${SHEET_LANE_SOURCE_SITE} 만 — 네이버는 raw-only 전용`,
+  )
   console.log(
     RAW_ONLY
       ? '  적재 규칙: RawContent origin=live 만 — 🔴 Candidate 없음 · Sheet write 없음'
@@ -252,8 +276,21 @@ async function main() {
       }
 
       // ── ③ 입력 검증 ──────────────────────────────────
-      if (row.sourceSite !== SOURCE_SITE) {
-        fail(`sourceSite 가 ${SOURCE_SITE} 가 아니다: ${JSON.stringify(row.sourceSite)}`)
+      //
+      // 🔴 레인마다 받는 소스가 다르다 (PR-S2-b-1).
+      //    raw-only    82cook · navercafe:*     Original Post 재료
+      //    micro-seed  🔴 82cook 만              Sheet 승인 게이트를 거쳐 원문 그대로 발행된다
+      //
+      //    판정은 judgeSourceSite 한 곳이 한다. 여기서 조건을 다시 쓰지 않는다 —
+      //    두 곳에 쓰면 갈라지고, 갈라지는 쪽이 네이버를 Sheet 레인에 넣는다.
+      //
+      // 🔴 PLAN.mode 가 아니라 **의도한 레인**으로 판정한다.
+      //    dry-run 은 apply 가 무엇을 할지 예고하는 자리다 —
+      //    PLAN.mode 를 쓰면 dry-run 에서 'dry-run' 이 들어와 네이버가 통과한 것처럼 보이고,
+      //    --apply 를 붙인 순간에야 거부된다. 그건 dry-run 이 거짓말을 한 것이다.
+      const src = judgeSourceSite(row.sourceSite, INTENDED_LANE)
+      if (!src.ok) {
+        fail(src.reason)
         continue
       }
       const expectKey = computeDedupKey(row.sourceSite, id)

@@ -18,6 +18,117 @@
  */
 
 // ─────────────────────────────────────────────────────────
+// sourceSite 계약 (PR-S2-b-1)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **82cook 과 네이버 카페는 양대 주요 Raw 공급망이다.** 하나가 보조가 아니다.
+ *
+ *   82cook       짧고 당일성 있는 4050·5060 커뮤니티 언어 · 자유게시판형 소재
+ *   navercafe    깊은 생활 맥락 · 다양한 실제 고민
+ *
+ * 한쪽이 막히면 공급이 0이 된다 — 2026-09-03 82cook 접속 실패로 30건 슬롯이
+ * 전면 중단됐다. 소스 이중화는 처리량이 아니라 **가용성**의 문제다.
+ */
+
+/** Micro Seed Sheet 레인이 받는 유일한 소스. 🔴 여기는 넓히지 않는다 (§레인 분리) */
+export const SHEET_LANE_SOURCE_SITE = '82cook'
+
+/**
+ * 네이버 카페 sourceSite 형태 — `navercafe:{cafeId}`.
+ *
+ * 🔴 **cafeId 를 sourceSite 에 넣는 이유**
+ *    `dedupKey = sha256(sourceSite::sourceArticleId)` 이고 네이버 articleId 는
+ *    **카페 안에서만** 유일하다. cafeId 가 빠지면 다른 카페의 같은 번호 글이
+ *    같은 키가 되어 한쪽이 조용히 SKIP 된다.
+ *
+ * 🔴 **sourceSite 는 운영 단위이지 주제 라벨이 아니다.**
+ *    카페마다 성격 경향은 있지만 그것을 고정 라벨로 굳히지 않는다 —
+ *    주제·소재 판정은 **글 단위**로 한다(qualityFlags · Originality Gate).
+ *    "이 카페는 갱년기 카페" 로 굳히면 그 카페의 다른 글을 잘못 읽고,
+ *    다른 카페의 갱년기 글을 놓친다.
+ *
+ * 실측: Raw Vault 에 `navercafe:remonterrace` / articleId `34783204` 행이 이미 있다.
+ *       이 계약은 새로 만드는 것이 아니라 **코드로 고정하는 것**이다.
+ */
+export const NAVERCAFE_PREFIX = 'navercafe:'
+
+/** cafeId 는 네이버 카페 URL 의 영문 ID 다 (`cafe.naver.com/{cafeId}`) */
+const CAFE_ID_RE = /^[a-z0-9][a-z0-9_-]{1,29}$/i
+
+export function isNaverCafeSource(sourceSite: string): boolean {
+  if (!sourceSite.startsWith(NAVERCAFE_PREFIX)) return false
+  return CAFE_ID_RE.test(sourceSite.slice(NAVERCAFE_PREFIX.length))
+}
+
+/** `navercafe:remonterrace` → `remonterrace`. 형태가 아니면 null */
+export function cafeIdOf(sourceSite: string): string | null {
+  if (!isNaverCafeSource(sourceSite)) return null
+  return sourceSite.slice(NAVERCAFE_PREFIX.length)
+}
+
+export type SourceVerdict = { ok: true } | { ok: false; reason: string }
+
+/**
+ * 이 레인이 이 소스를 받아도 되는가.
+ *
+ * 🔴 **레인마다 받는 소스가 다르다.**
+ *
+ *   raw-only     82cook · navercafe:*     Original Post 재료. 승인은 별도 대기열
+ *   micro-seed   🔴 82cook 만              Sheet 승인 게이트를 거쳐 **원문 그대로** 발행된다
+ *
+ * 🔴 네이버를 Sheet 레인에 넣지 않는 이유는 품질이 아니라 **레인의 성격**이다.
+ *    Micro Seed 는 원문을 그대로 쓰고 영구 noindex 를 받는다(헌법 §10-5).
+ *    네이버 카페 글은 로그인 영역의 글이라 그 레인에 올리는 것은 다른 판단이고,
+ *    그 판단을 이 PR 이 대신 내리지 않는다.
+ *
+ * 🔴 dry-run 은 어느 소스든 **읽고 보여준다** — 판정을 사람이 볼 수 있어야 한다.
+ *    막는 것은 실제 적재 모드다.
+ */
+export function judgeSourceSite(sourceSite: string, mode: SupplyMode): SourceVerdict {
+  const known = sourceSite === SHEET_LANE_SOURCE_SITE || isNaverCafeSource(sourceSite)
+  if (!known) {
+    return {
+      ok: false,
+      reason:
+        `알 수 없는 sourceSite: ${JSON.stringify(sourceSite)} — ` +
+        `'${SHEET_LANE_SOURCE_SITE}' 또는 '${NAVERCAFE_PREFIX}{cafeId}' 만 받는다`,
+    }
+  }
+  if (mode === 'micro-seed' && sourceSite !== SHEET_LANE_SOURCE_SITE) {
+    return {
+      ok: false,
+      reason:
+        `Micro Seed 레인은 '${SHEET_LANE_SOURCE_SITE}' 만 받는다 (받은 값 ${JSON.stringify(sourceSite)}). ` +
+        '네이버는 raw-only 전용이다 — --raw-only --batch=N 을 쓴다',
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * 소스별 한 슬롯 수집 상한.
+ *
+ * 🔴 네이버가 훨씬 작다. **실패 비용이 다르기 때문이다.**
+ *    82cook 이 막히면 IP 문제이고 네트워크를 바꾸면 회복된다(2026-09-03 실측).
+ *    네이버가 막히면 **계정**이고, 그건 되돌릴 수 없다.
+ *
+ * 🔴 한 소스를 세게 긁지 않는다. 여러 카페·시간대에 얇게 분산한다.
+ */
+export const SLOT_QUOTA: Record<string, number> = {
+  '82cook': 30,
+  /** 🔴 네이버 카페 — 슬롯당 10건. 우나어의 카페당 80건과 의도적으로 다르다 */
+  navercafe: 10,
+}
+
+/** 이 소스의 한 슬롯 상한. 모르는 소스는 가장 보수적인 값을 준다 */
+export function slotQuotaOf(sourceSite: string): number {
+  if (sourceSite === SHEET_LANE_SOURCE_SITE) return SLOT_QUOTA['82cook']
+  if (isNaverCafeSource(sourceSite)) return SLOT_QUOTA.navercafe
+  return Math.min(...Object.values(SLOT_QUOTA))
+}
+
+// ─────────────────────────────────────────────────────────
 // 자동 선별 (collect --auto)
 // ─────────────────────────────────────────────────────────
 
