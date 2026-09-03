@@ -51,6 +51,8 @@ import {
   PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions, normalizeCount,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease, type FrameProbe,
   LIST_SELECTORS, runIdOf, runOutputPath,
+  BOARD_TARGETS, findBoard, boardListUrl, pagesOf, maxPagesFor,
+  detectRowLabel, judgePoliticsTitle, activeCafes,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -63,8 +65,26 @@ const arg = (n: string): string | undefined => {
   return hit ? hit.slice(n.length + 3) : undefined
 }
 const LIVE = argv.includes('--live')
-const CAFE_ID = (arg('cafe') ?? FIRST_LIVE_CAFE_ID).trim()
-const PAGES = Number(arg('pages') ?? String(FIRST_LIVE_PAGES))
+/**
+ * 🔴 **scout = 목록만 본다. 상세를 열지 않는다** (PR-S2-b-7).
+ *
+ *    상세에 무조건 들어가지 않는 것이 이 레일의 원칙이다. 먼저 목록에서
+ *    제목·댓글수·조회수·시각·라벨을 보고, 조건을 넘은 글만 상세 후보가 된다.
+ *    scout 는 요청이 목록뿐이라 detail quota 와 별개로 더 깊이 볼 수 있다.
+ */
+const SCOUT = argv.includes('--scout')
+const BOARD_KEY = arg('board')?.trim() ?? null
+const BOARD = BOARD_KEY ? findBoard(BOARD_KEY) : null
+if (BOARD_KEY && !BOARD) {
+  console.error(`\n🛑 모르는 게시판: ${BOARD_KEY}\n   가능한 값: ${BOARD_TARGETS.map((b) => b.key).join(' · ')}\n`)
+  process.exit(1)
+}
+const CAFE_ID = (BOARD?.cafeId ?? arg('cafe') ?? FIRST_LIVE_CAFE_ID).trim()
+// 🔴 page range 는 board 기본값 → 인자 순으로 덮는다. --pages 는 하위호환.
+const START_PAGE = Number(arg('start-page') ?? String(BOARD?.startPage ?? 1))
+const END_PAGE = Number(
+  arg('end-page') ?? String(BOARD ? BOARD.endPage : Number(arg('pages') ?? String(FIRST_LIVE_PAGES))),
+)
 const MAX = Number(arg('max') ?? String(FIRST_LIVE_ARTICLES))
 /**
  * 🔴 **출력 경로는 실행 시각이 정해진 뒤에 만든다** (PR-S2-b-6).
@@ -86,9 +106,31 @@ const cafe = findCafe(CAFE_ID)
 if (cafe === null) {
   fail(`모르는 카페: ${CAFE_ID}\n   알려진 카페: ${CAFES.map((c) => c.cafeId).join(' · ')}`)
 }
+// 🔴 이번 라운드에서 빠진 카페는 여기서 막는다. 선택과 집중이 코드로 강제돼야
+//    "설정에만 있고 아무도 안 지키는 결정" 이 되지 않는다 (PR-S2-b-7).
+if (cafe!.stage === 'excluded') {
+  fail(
+    `${CAFE_ID} 는 이번 라운드 수집 대상이 아니다 — ${cafe!.note}\n` +
+      `   지금 쓰는 카페: ${activeCafes().map((c) => c.cafeId).join(' · ')}`,
+  )
+}
+
 const QUOTA = slotQuota(CAFE_ID)
-if (!Number.isInteger(PAGES) || PAGES < 1 || PAGES > 3) fail(`--pages 는 1~3 이다 (받은 값: ${arg('pages') ?? '없음'})`)
-if (!Number.isInteger(MAX) || MAX < 1 || MAX > QUOTA) {
+// 🔴 scout(목록만)은 상세를 열지 않으므로 더 깊이 본다. detail 은 얕게 유지한다.
+const PAGE_CAP = maxPagesFor(SCOUT ? 'scout' : 'detail')
+let PAGE_LIST: number[]
+try {
+  PAGE_LIST = pagesOf({ startPage: START_PAGE, endPage: END_PAGE })
+} catch (e) {
+  fail(`page range 가 잘못됐다 — ${e instanceof Error ? e.message : String(e)}`)
+}
+if (PAGE_LIST!.length > PAGE_CAP) {
+  fail(
+    `페이지가 ${PAGE_LIST!.length}장이다 — ${SCOUT ? 'scout' : 'detail'} 모드 상한 ${PAGE_CAP}장을 넘는다.\n` +
+      '   🔴 상세를 여는 실행은 얕게 유지한다. 깊게 보려면 --scout 로 목록만 본다.',
+  )
+}
+if (!SCOUT && (!Number.isInteger(MAX) || MAX < 1 || MAX > QUOTA)) {
   fail(`--max 는 1~${QUOTA} 이다 — ${CAFE_ID} 의 슬롯 quota (받은 값: ${arg('max') ?? '없음'})`)
 }
 
@@ -117,7 +159,12 @@ async function main() {
   console.log(`  메모   ${cafe!.note}`)
   console.log('         🔴 메모는 경향일 뿐 고정 라벨이 아니다 — 주제 판정은 글 단위로 한다')
   console.log(`  소스   ${sourceSiteOf(cafe!.cafeId)}`)
-  console.log(`  계획   목록 ${PAGES}p · 상세 최대 ${MAX}건 (quota ${QUOTA})`)
+  console.log(`  게시판 ${BOARD ? `${BOARD.label} (menuId=${BOARD.menuId}) · ${BOARD.purpose}` : '전체글보기 (기본)'}`)
+  console.log(
+    SCOUT
+      ? `  계획   🔍 scout — 목록 ${START_PAGE}~${END_PAGE}p (${PAGE_LIST!.length}장) · 🔴 상세를 열지 않는다`
+      : `  계획   목록 ${START_PAGE}~${END_PAGE}p (${PAGE_LIST!.length}장) · 상세 최대 ${MAX}건 (quota ${QUOTA})`,
+  )
   console.log(`  간격   목록 ${DELAY_LIST_MS}ms · 상세 ${DELAY_ARTICLE_MS}ms · 🔴 ±jitter (사람 속도)`)
   console.log(`  kill switch ${KILL_SWITCH_ENV}=${enabled ? 'ON' : 'OFF'} · --live ${LIVE ? '있음' : '없음'}`)
   console.log(`  세션   ${SESSION_PATH_ENV} ${sessionPath === null ? '🔴 없음' : '설정됨'}`)
@@ -135,7 +182,11 @@ async function main() {
   // ── dry-run 종점 ────────────────────────────────────
   const live = LIVE && enabled
   if (!live) {
-    console.log(`  대상 목록 URL:\n${Array.from({ length: PAGES }, (_, i) => `     ${LIST_URL(cafe!.cafeId, i + 1)}`).join('\n')}`)
+    const urls = PAGE_LIST!.map((p) => (BOARD ? boardListUrl(BOARD, p) : LIST_URL(cafe!.cafeId, p)))
+    console.log(`  대상 목록 URL (${urls.length}장):`)
+    // 🔴 전부 찍지 않는다. 16장을 다 찍으면 정작 봐야 할 경고가 스크롤 밖으로 밀린다
+    for (const u of urls.slice(0, 4)) console.log(`     ${u}`)
+    if (urls.length > 4) console.log(`     … 외 ${urls.length - 4}장`)
     console.log('\n  🔍 dry-run 종료. 브라우저 0 · 네트워크 0 · 파일 쓰기 0.')
     if (LIVE && !enabled) console.log(`     (--live 를 줬지만 ${KILL_SWITCH_ENV} 가 true 가 아니라 무시했다)`)
     console.log('')
@@ -187,9 +238,11 @@ async function main() {
     // ── ① 목록 ──
     const items: NaverListItem[] = []
     const allProbes: FrameProbe[] = []
-    for (let p = 1; p <= PAGES; p += 1) {
+    for (const [idx, p] of PAGE_LIST!.entries()) {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
-      await page.goto(LIST_URL(cafe!.cafeId, p), { waitUntil: 'domcontentloaded', timeout: 20_000 })
+      // 🔴 board 가 있으면 신형 menuId URL, 없으면 기존 전체글보기 URL (하위호환)
+      const url = BOARD ? boardListUrl(BOARD, p) : LIST_URL(cafe!.cafeId, p)
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 })
       await sleep(randomDelay(DELAY_LIST_MS))
       const read = await readList(page, cafe!.cafeId, p)
       items.push(...read.items)
@@ -198,7 +251,7 @@ async function main() {
       // 🔴 0건일 때는 프레임별로 무슨 일이 있었는지 즉시 보여준다.
       //    한 줄짜리 "0건" 만 보고는 다음에 무엇을 고칠지 정할 수 없다.
       if (read.items.length === 0) for (const line of summarizeProbes(read.probes)) console.log(`     · ${line}`)
-      if (p < PAGES) await sleep(randomDelay(DELAY_LIST_MS))
+      if (idx < PAGE_LIST!.length - 1) await sleep(randomDelay(DELAY_LIST_MS))
     }
     if (items.length === 0) {
       const d = diagnoseEmptyList(allProbes)
@@ -210,8 +263,29 @@ async function main() {
     // 🔴 목록을 **본** 시각과 상세를 여는 시각은 다르다 — time lag 조사가 그 차이를 쓴다.
     const listRows = items.map((i) => buildCollected(cafe!.cafeId, i, '', listedAtIso, listedAtIso))
     writeJsonl(OUT_LIST, listRows)
+
+    // 🔴 자동 상세 fetch 에서 빼는 두 부류. **파일에서 지우는 것이 아니다** —
+    //    목록 JSONL 에는 전부 남고, 다음 실행에서 조건이 바뀌면 다시 후보가 된다.
+    const pinned = listRows.filter((r) => r.sourcePinned)
+    const political = listRows.filter((r) => r.sourcePoliticsExcluded)
+    if (pinned.length) console.log(`  📌 고정 슬롯 ${pinned.length}건 — 상세 대상 제외 (공지·필독·추천)`)
+    if (political.length) {
+      console.log(`  🚫 정치·진영 ${political.length}건 — 상세 대상 제외`)
+      console.log('     🔴 public · growth · shadow 어디에도 가지 않는다 (설계 §4-C)')
+    }
+
+    if (SCOUT) {
+      // ── 🔍 scout 종료 — 상세를 열지 않는다 ──
+      console.log(`\n  🔍 scout 종료 — 목록 ${listRows.length}건만 기록했다. 상세 요청 0.`)
+      console.log(`     → ${OUT_LIST}`)
+      console.log(`\n  🔴 상세 JSONL 을 만들지 않았다. threshold 를 정하기 전에는 상세를 열지 않는다.`)
+      console.log(`     (${kstString(now)} KST · run ${RUN_ID})\n`)
+      return
+    }
+
+    const eligible = listRows.filter((r) => !r.sourcePinned && !r.sourcePoliticsExcluded)
     const plan = planAutoFetch(
-      listRows.map((r) => ({
+      eligible.map((r) => ({
         sourceArticleId: r.sourceArticleId,
         score: selectionScore({ stage: r.qualitySignals.stage, flags: r.qualityFlags, signals: r.qualitySignals } as QualityAssessment),
         flags: r.qualityFlags,
@@ -219,7 +293,7 @@ async function main() {
       })),
       { max: MAX },
     )
-    console.log(`\n  자동 선별 ${plan.picked.length}건 · 제외 ${plan.skipped.length}건`)
+    console.log(`\n  자동 선별 ${plan.picked.length}건 · 제외 ${plan.skipped.length}건 (후보 ${eligible.length}/${listRows.length})`)
     console.log('  🔴 제외는 파일에서 지운 것이 아니다 — 목록 JSONL 에 전부 남아 있다\n')
 
     // ── ③ 상세 ──
@@ -278,6 +352,8 @@ async function main() {
 type ListProbeRow = {
   href: string; title: string
   comments: string; date: string; views: string; board: string
+  /** 🔴 공지·필독·추천 라벨 텍스트와 행 class — 둘 다 봐야 놓치지 않는다 */
+  labelText: string; rowClass: string
   rowFound: boolean; metaError: string | null
 }
 type ListProbe = { linkHits: number; rows: ListProbeRow[] }
@@ -338,6 +414,7 @@ async function readList(
 ): Promise<{ items: NaverListItem[]; probes: FrameProbe[] }> {
   const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
   const probes: FrameProbe[] = []
+  const unknownLabels = new Set<string>()
 
   for (const [idx, f] of [page, ...frames].entries()) {
     const label = idx === 0 ? '(top)' : safeFrameLabel(frames[idx - 1].url())
@@ -366,6 +443,8 @@ async function readList(
               date: near?.querySelector(sel.date)?.textContent?.trim() ?? '',
               views: near?.querySelector(sel.view)?.textContent?.trim() ?? '',
               board: near?.querySelector(sel.board)?.textContent?.trim() ?? '',
+              labelText: near?.querySelector(sel.label)?.textContent?.trim() ?? '',
+              rowClass: near === null ? '' : String((near as HTMLElement).className || ''),
               // 🔴 행을 찾았는가. 댓글 링크는 **댓글이 0 이면 아예 없다** —
               //    행을 찾았는데 링크가 없으면 "못 읽음" 이 아니라 "진짜 0" 이다.
               rowFound: near !== null,
@@ -373,7 +452,7 @@ async function readList(
             }
           } catch (e) {
             return {
-              ...base, comments: '', date: '', views: '', board: '', rowFound: false,
+              ...base, comments: '', date: '', views: '', board: '', labelText: '', rowClass: '', rowFound: false,
               metaError: e instanceof Error ? e.message : String(e),
             }
           }
@@ -387,6 +466,7 @@ async function readList(
         if (id === null || r.title === '') continue
         if (items.some((i) => i.sourceArticleId === id)) continue
         const comments = normalizeCount(r.comments)
+        const label = detectRowLabel(r.labelText, r.rowClass)
         items.push({
           sourceArticleId: id,
           sourceUrl: ARTICLE_URL(cafeId, id),
@@ -403,10 +483,20 @@ async function readList(
           sourceBoardName: r.board || null,
           sourcePage: pageNo,
           sourceRankOnPage: items.length + 1,
+          // ── PR-S2-b-7 ──
+          sourceRowLabel: label.label ?? label.unknown,
+          sourcePinned: label.pinned,
+          sourceMenuId: BOARD?.menuId ?? null,
+          sourceBoardKey: BOARD?.key ?? null,
         })
+        // 🔴 모르는 라벨은 조용히 넘기지 않는다. 네이버가 문구를 바꾸면 여기서 드러난다
+        if (label.unknown !== null) unknownLabels.add(label.unknown)
       }
       const metaErr = probe.rows.find((r) => r.metaError !== null)?.metaError ?? null
       probes.push({ frame: label, linkHits: probe.linkHits, rows: probe.rows.length, items: items.length, error: metaErr })
+      if (unknownLabels.size) {
+        console.log(`     ⚠️ 모르는 행 라벨 ${unknownLabels.size}종 — 네이버가 문구를 바꿨을 수 있다: ${[...unknownLabels].slice(0, 5).join(' · ')}`)
+      }
       if (items.length) return { items, probes }
     } catch (e) {
       // 🔴 삼키지 않는다. 이 프레임에 목록이 없는 것과 콜백이 터진 것은 다른 사건이다.

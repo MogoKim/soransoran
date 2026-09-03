@@ -32,7 +32,11 @@ import { NAVERCAFE_PREFIX, isNaverCafeSource, slotQuotaOf } from './micro-seed-s
 // 카페 설정
 // ─────────────────────────────────────────────────────────
 
-export type CafeStage = 'production' | 'core' | 'shadow'
+/**
+ * 🔴 `excluded` 는 "나쁜 카페" 가 아니라 **이번 라운드에 쓰지 않는다** 는 뜻이다 (PR-S2-b-7).
+ *    카페 수를 늘리는 대신 좋은 소스 셋을 깊게 이해하기로 했다 — 창업자 결정.
+ */
+export type CafeStage = 'production' | 'core' | 'shadow' | 'excluded'
 
 export type CafeConfig = {
   /** 네이버 카페 URL 의 영문 ID — `cafe.naver.com/{cafeId}` */
@@ -76,31 +80,41 @@ export const CAFES: readonly CafeConfig[] = [
     stage: 'production',
     note: '4050 여성 핵심 생활권. 레몬테라스와 같은 축이며 주제가 겹친다',
   },
+  // ── 🔴 아래는 이번 라운드에서 쓰지 않는다 (PR-S2-b-7 · 창업자 결정) ──
+  //    "나쁜 소스" 라서가 아니라 **선택과 집중**이다. 카페를 넓히면 각 소스를
+  //    얕게밖에 이해하지 못하고, 그 상태로 늘린 수집량은 품질이 따라오지 않는다.
+  //    기록을 지우지 않는 이유: 왜 뺐는지가 남아야 나중에 다시 볼 수 있다.
   {
     cafeId: 'dlxogns01',
     label: '은퇴 후 50년',
-    stage: 'core',
-    note: '노후·은퇴·돈·건강·미래 불안 비중이 높다',
+    stage: 'excluded',
+    note: '노후·은퇴·돈·건강 축. 🔴 이번 라운드 제외 — 집중 대상 3소스 밖',
   },
   {
     cafeId: 'masanmam',
     label: '줌마렐라',
-    stage: 'core',
-    note: '타겟층 일상·가족·생활 보강',
+    stage: 'excluded',
+    note: '타겟층 일상·가족 보강. 🔴 이번 라운드 제외',
   },
   {
     cafeId: 'goondae',
     label: '군대카페',
-    stage: 'core',
-    note: '타겟층 일상·가족·생활 보강',
+    stage: 'excluded',
+    note: '타겟층 일상·가족 보강. 🔴 이번 라운드 제외',
   },
   {
     cafeId: 'yeowooya',
     label: '여우야',
-    stage: 'shadow',
-    note: '🔴 뷰티·피부·미용·성형 관심사. 버리는 소스가 아니지만 public 발행 재료로 바로 쓰지 않는다',
+    stage: 'excluded',
+    note: '뷰티·피부·미용·성형 관심사. 🔴 이번 라운드 제외 — 의료·광고 위험이 크고 '
+      + 'public 발행 재료로 바로 쓰지 않는다. 필요해지면 shadow 로 되살린다',
   },
 ]
+
+/** 이번 라운드에 실제로 수집하는 카페 */
+export function activeCafes(): CafeConfig[] {
+  return CAFES.filter((c) => c.stage !== 'excluded')
+}
 
 export function findCafe(cafeId: string): CafeConfig | null {
   return CAFES.find((c) => c.cafeId === cafeId) ?? null
@@ -293,6 +307,15 @@ export type NaverListItem = {
   sourceRankOnPage?: number | null
   /** 🔴 댓글 수를 실제로 읽었나. 생략하면 "읽었다" 로 본다(기존 호출부 호환) */
   sourceCommentCountRead?: boolean
+  // ── PR-S2-b-7 ──
+  /** 공지·필독·추천 라벨 텍스트 */
+  sourceRowLabel?: string | null
+  /** 🔴 고정 슬롯인가 — 자동 상세 fetch 에서 뺀다 */
+  sourcePinned?: boolean
+  /** 어느 게시판을 긁었나 (menuId). 🔴 sourceSite 계약은 건드리지 않는다 */
+  sourceMenuId?: string | null
+  /** 게시판 타깃 키 (`remonterrace:jjong`) */
+  sourceBoardKey?: string | null
 }
 
 export type CollectedCandidate = {
@@ -333,6 +356,14 @@ export type CollectedCandidate = {
    *    "22건 중 100% null" 같은 비율이 통째로 거짓이 된다 — 실제로 한 번 잘못 읽었다.
    */
   sourceRunId: string
+  // ── PR-S2-b-7 — 목록 스카우팅 메타 ──
+  sourceRowLabel: string | null
+  /** 🔴 공지·필독·추천. 자동 상세 fetch 대상이 아니다 */
+  sourcePinned: boolean
+  sourceMenuId: string | null
+  sourceBoardKey: string | null
+  /** 🔴 제목 단위 정치·진영 판정. true 면 어느 레인으로도 가지 않는다 */
+  sourcePoliticsExcluded: boolean
 }
 
 // ─────────────────────────────────────────────────────────
@@ -459,6 +490,12 @@ export function buildCollected(
     sourceViewCount: item.sourceViewCount ?? null,
     sourceCommentCountRead: item.sourceCommentCountRead ?? true,
     sourceRunId: runIdOf(listedAtIso),
+    sourceRowLabel: item.sourceRowLabel?.trim() || null,
+    sourcePinned: item.sourcePinned ?? false,
+    sourceMenuId: item.sourceMenuId ?? null,
+    sourceBoardKey: item.sourceBoardKey ?? null,
+    // 🔴 제목 단위로만 판정한다 — 게시판 이름·안내문으로 판정하지 않는다
+    sourcePoliticsExcluded: judgePoliticsTitle(item.originalTitle).excluded,
   }
 }
 
@@ -730,6 +767,8 @@ export const LIST_SELECTORS = {
   view: 'td.type_readCount, .td_normal.type_readCount, td[class*="type_readCount"]',
   comment: 'a.cmt',
   board: 'a.board_name',
+  /** 🔴 공지·필독·추천 라벨 (PR-S2-b-7 실측: em.board-tag > strong.board-tag-txt) */
+  label: 'em.board-tag, .board-tag-txt, .board-tag',
 } as const
 
 /**
@@ -751,4 +790,189 @@ export function runIdOf(iso: string): string {
 export function runOutputPath(cafeId: string, runId: string, kind: 'detail' | 'list'): string {
   const suffix = kind === 'list' ? '.list' : ''
   return `./.microseed-data/navercafe-${cafeId}-${runId}${suffix}.jsonl`
+}
+
+// ─────────────────────────────────────────────────────────
+// 게시판 단위 수집 계약 (PR-S2-b-7)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **전체글보기 하나만 보던 것을 게시판 단위로 바꾼다.**
+ *
+ *    2026-09-03 실측: 레몬테라스 전체글보기는 **시간당 약 225건**이 올라온다.
+ *    24시간 전 글에 닿으려면 245페이지가 필요하다 — page depth 전략은 산술적으로 불가능하다.
+ *    대신 **게시판을 좁히면 속도가 떨어지고**, 같은 페이지 수로 더 긴 시간을 덮는다.
+ *
+ * 🔴 여기 적힌 page range 는 **가설이다.** list-only 스카우팅으로 실측한 뒤 고친다.
+ */
+export type BoardTarget = {
+  /** 명령줄에서 부르는 키 — `--board=remonterrace:jjong` */
+  key: string
+  cafeId: string
+  /** 신형 URL 이 쓰는 숫자 카페 ID */
+  cafeNo: string
+  /** 게시판 menuId. `0` 은 전체글보기 */
+  menuId: string
+  label: string
+  /** 🔴 가설이다. 실측 뒤 고친다 */
+  startPage: number
+  endPage: number
+  /** 사람이 읽는 목적 메모. 🔴 판정에 쓰지 않는다 */
+  purpose: string
+}
+
+export const BOARD_TARGETS: readonly BoardTarget[] = [
+  {
+    key: 'remonterrace:jjong',
+    cafeId: 'remonterrace',
+    cafeNo: '10298136',
+    menuId: '23',
+    label: '쫑알쫑알 게시판',
+    // 🔴 1페이지를 뺀다. 실측상 1p 는 방금 올라온 글이라 반응이 붙을 시간이 없었고,
+    //    상단에 인기글·공지 슬롯이 섞여 평균을 흔든다.
+    startPage: 2,
+    endPage: 16,
+    purpose: '생활 · 가정 · 관계 · 일상 핵심 Raw',
+  },
+  {
+    key: 'remonterrace:humor',
+    cafeId: 'remonterrace',
+    cafeNo: '10298136',
+    menuId: '56',
+    label: '유머,연예,가십',
+    startPage: 1,
+    endPage: 1,
+    purpose: '유머 · 연예 · 셀럽 — 🔴 Growth 후보. 정치·진영은 여기서도 제외다',
+  },
+  {
+    key: 'wgang:all',
+    cafeId: 'wgang',
+    cafeNo: '29349320',
+    menuId: '0',
+    label: '전체글보기',
+    startPage: 1,
+    endPage: 5,
+    purpose: '갱년기 · 몸 · 마음 · 가족 · 중년 생활 Raw',
+  },
+]
+
+export function findBoard(key: string): BoardTarget | null {
+  return BOARD_TARGETS.find((b) => b.key === key) ?? null
+}
+
+/** 🔴 신형 URL. 구형 `iframe_url=` 형태와 달리 menuId 를 경로로 받는다 */
+export function boardListUrl(t: BoardTarget, page: number): string {
+  return `https://cafe.naver.com/f-e/cafes/${t.cafeNo}/menus/${t.menuId}?viewType=L&page=${page}`
+}
+
+/** 대상 페이지 목록. 🔴 start > end 면 빈 배열이 아니라 던진다 — 조용한 0건을 만들지 않는다 */
+export function pagesOf(t: { startPage: number; endPage: number }): number[] {
+  if (!Number.isInteger(t.startPage) || !Number.isInteger(t.endPage)) throw new Error('page range 가 정수가 아니다')
+  if (t.startPage < 1) throw new Error(`startPage 가 1 미만이다: ${t.startPage}`)
+  if (t.endPage < t.startPage) throw new Error(`endPage(${t.endPage}) 가 startPage(${t.startPage}) 보다 작다`)
+  return Array.from({ length: t.endPage - t.startPage + 1 }, (_, i) => t.startPage + i)
+}
+
+// ─────────────────────────────────────────────────────────
+// 목록 스카우팅 (list-only) — PR-S2-b-7
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **상세에 무조건 들어가지 않는다.**
+ *
+ *    먼저 목록에서 제목 · 댓글수 · 조회수 · 작성시각 · 게시판 · page · rank · 라벨을 본다.
+ *    조건을 넘은 글만 상세 fetch 후보가 된다. Raw Vault 는 창고가 아니다.
+ *
+ * 🔴 **이번 실행에서 미달이어도 끝이 아니다.** 다음 실행에서 댓글·조회수가 올라
+ *    조건을 넘으면 그때 후보가 된다 — 그래서 목록 기록을 전부 남긴다.
+ *
+ * scout 모드는 상세를 전혀 열지 않으므로 요청이 목록뿐이다.
+ * 그래서 detail quota 와 **별개로** 더 많은 페이지를 볼 수 있다.
+ */
+export const SCOUT_MAX_PAGES = 20
+export const DETAIL_MAX_PAGES = 5
+
+export function maxPagesFor(mode: 'scout' | 'detail'): number {
+  return mode === 'scout' ? SCOUT_MAX_PAGES : DETAIL_MAX_PAGES
+}
+
+// ─────────────────────────────────────────────────────────
+// 공지 · 필독 · 추천 라벨 (🔴 순수 함수 · PR-S2-b-7)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **라벨 붙은 행은 자동 상세 fetch 대상이 아니다.**
+ *
+ *    2026-09-03 실측: 레몬테라스 1p 상단에 2020년 공지 2건(조회 100만대)과
+ *    인기글 5건(댓글 109~267)이 고정 슬롯으로 박혀 있었다. 이것들이 섞이면
+ *    time lag 평균이 6년으로 튀고 page depth 비교가 통째로 무의미해진다.
+ *
+ * 🔴 **목록 기록은 남긴다.** 지우는 것이 아니라 자동 경로에서만 뺀다 — 정책 Q-1 과 같다.
+ */
+export const ROW_LABELS = ['공지', '필독', '추천'] as const
+export type RowLabel = (typeof ROW_LABELS)[number]
+
+export type RowLabelVerdict = {
+  /** 감지된 라벨. 없으면 null */
+  label: RowLabel | null
+  /** 🔴 자동 상세 fetch 에서 뺄 것인가 */
+  pinned: boolean
+  /** 라벨 텍스트는 있는데 아는 라벨이 아니다 — 조용히 넘기지 않는다 */
+  unknown: string | null
+}
+
+/**
+ * 행이 고정 슬롯인지 판정한다.
+ *
+ * 두 근거를 쓴다. 하나만 보면 놓친다:
+ * ```
+ *   labelText  em.board-tag 의 텍스트 ("공지" · "필독" · "추천")
+ *   rowClass   tr 의 class ("board-notice" 등)
+ * ```
+ */
+export function detectRowLabel(labelText: string | null | undefined, rowClass: string | null | undefined): RowLabelVerdict {
+  const t = (labelText ?? '').trim()
+  const cls = (rowClass ?? '').trim()
+  const byClass = /board-notice|notice|type_required/i.test(cls)
+
+  for (const l of ROW_LABELS) {
+    if (t.includes(l)) return { label: l, pinned: true, unknown: null }
+  }
+  if (byClass) return { label: '공지', pinned: true, unknown: null }
+  // 🔴 텍스트가 있는데 아는 라벨이 아니면 그대로 보고한다.
+  //    조용히 통과시키면 네이버가 라벨 문구를 바꿨을 때 아무도 모른다.
+  if (t !== '') return { label: null, pinned: false, unknown: t }
+  return { label: null, pinned: false, unknown: null }
+}
+
+// ─────────────────────────────────────────────────────────
+// 정치 · 진영 제외 (🔴 순수 함수 · 제목 단위 · PR-S2-b-7)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **정치 · 진영은 public · growth · shadow 어디에도 가지 않는다** (설계 §4-C).
+ *
+ *    2026-09-03 실측: 제목에 `정치` 가 그대로 든 행을 `politicalTopicLikely` 가 놓쳤다.
+ *    기존 정규식이 `정치\\s*성향` · `정치\\s*글` 만 보고 **단독 `정치` 를 안 봤기** 때문이다.
+ *
+ * 🔴 **판정 단위는 게시글 제목이다.** 게시판 이름·카페 안내문으로 판정하지 않는다 —
+ *    게시판 하나가 통째로 정치로 잘못 분류되면 그 게시판의 생활글까지 전부 사라진다.
+ *
+ * 🔴 **연예 · 방송 · 셀럽은 여기에 넣지 않는다.** 그쪽은 Growth 후보이고 축이 다르다.
+ */
+const POLITICS_EXCLUDE = [
+  /정치/, /진영/, /이념/, /정당/, /선거/,
+  /정치인/, /공직자/, /대통령/, /국회/, /의원직/,
+  /여당/, /야당/, /좌파/, /우파/, /극우/, /극좌/,
+] as const
+
+export type PoliticsVerdict = { excluded: boolean; hit: string | null }
+
+export function judgePoliticsTitle(title: string): PoliticsVerdict {
+  const t = (title ?? '').trim()
+  for (const re of POLITICS_EXCLUDE) {
+    const m = t.match(re)
+    if (m) return { excluded: true, hit: m[0] }
+  }
+  return { excluded: false, hit: null }
 }
