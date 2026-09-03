@@ -364,7 +364,24 @@ export type CollectedCandidate = {
   sourceBoardKey: string | null
   /** 🔴 제목 단위 정치·진영 판정. true 면 어느 레인으로도 가지 않는다 */
   sourcePoliticsExcluded: boolean
+  /**
+   * 🔴 자동 상세 fetch 후보에서 **왜** 빠졌는가 (PR-S2-b-8).
+   *
+   *    축을 합치지 않는다. `publicFigure` 에는 연예인·방송인이 섞이는데,
+   *    지금은 생활 Original 레인이라 함께 빼지만 **Growth 레인이 열리면 갈라야 한다.**
+   *    사유를 남기지 않으면 그때 무엇을 되살릴지 알 수 없다.
+   */
+  sourceExcludeReason: ExcludeReason | null
 }
+
+/**
+ * ```
+ *   politics     정치 · 진영 · 이념 · 정당 · 정치인 · 공직자   → 🔴 어느 레인에도 안 간다
+ *   publicFigure 제목의 실명 · 공인 언급                      → 🟡 생활 레인에서만 뺀다
+ *   pinned       공지 · 필독 · 추천 고정 슬롯                 → 🟡 자동 경로에서만 뺀다
+ * ```
+ */
+export type ExcludeReason = 'politics' | 'publicFigure' | 'pinned'
 
 // ─────────────────────────────────────────────────────────
 // 목록 메타 정규화 (🔴 순수 함수 · PR-S2-b-4)
@@ -471,6 +488,10 @@ export function buildCollected(
     sourceSite,
     sourceUrl: item.sourceUrl,
     sourceArticleId: item.sourceArticleId,
+    // 🔴 기본값을 조용히 씌우지 않는다 (PR-S2-b-8 실측 정정).
+    //    개별 게시판 페이지에는 `a.board_name` 셀이 없어 빈 값이 오는데,
+    //    앞 코드가 '전체글보기' 로 채워 **쫑알쫑알 225건이 전부 전체글보기로 기록됐다.**
+    //    부르는 쪽이 board label 을 넘기면 그것을 쓴다.
     sourceBoardName: item.sourceBoardName?.trim() || '전체글보기',
     sourceCommentCount: item.sourceCommentCount,
     originalTitle: item.originalTitle,
@@ -496,7 +517,34 @@ export function buildCollected(
     sourceBoardKey: item.sourceBoardKey ?? null,
     // 🔴 제목 단위로만 판정한다 — 게시판 이름·안내문으로 판정하지 않는다
     sourcePoliticsExcluded: judgePoliticsTitle(item.originalTitle).excluded,
+    sourceExcludeReason: judgeExcludeReason({
+      politicsExcluded: judgePoliticsTitle(item.originalTitle).excluded,
+      pinned: item.sourcePinned ?? false,
+      qualityFlags: a.flags,
+    }),
   }
+}
+
+/**
+ * 자동 상세 fetch 후보에서 빼는 **단일 판정**.
+ *
+ * 🔴 **2026-09-03 실측 문제**: 축이 둘로 갈라져 있었다.
+ *    `judgePoliticsTitle` 은 0건인데 `qualityFlags.politicalOrPublicFigure` 는 2건이었고,
+ *    그 2건이 `sourcePoliticsExcluded=false` 라 자동 후보에 남을 수 있었다.
+ *    "어느 쪽이 최종 차단인가" 를 코드만 보고 답할 수 없으면 언젠가 새어 나간다.
+ *
+ * 🔴 순서가 규칙이다. **정치를 먼저** 본다 — 정치이면서 실명인 글을
+ *    `publicFigure` 로 기록하면 나중에 Growth 로 되살릴 후보처럼 보인다.
+ */
+export function judgeExcludeReason(input: {
+  politicsExcluded: boolean
+  pinned: boolean
+  qualityFlags: readonly string[]
+}): ExcludeReason | null {
+  if (input.politicsExcluded || input.qualityFlags.includes('politicalTopicLikely')) return 'politics'
+  if (input.qualityFlags.includes('politicalOrPublicFigure')) return 'publicFigure'
+  if (input.pinned) return 'pinned'
+  return null
 }
 
 /** 🔴 산출물이 계약을 지키는지 — collector 가 파일에 쓰기 직전에 부른다 */
@@ -975,4 +1023,70 @@ export function judgePoliticsTitle(title: string): PoliticsVerdict {
     if (m) return { excluded: true, hit: m[0] }
   }
   return { excluded: false, hit: null }
+}
+
+// ─────────────────────────────────────────────────────────
+// 목록 중복 제거 (🔴 순수 함수 · PR-S2-b-8)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **크롤 중에 새 글이 올라오면 같은 글이 두 페이지에 걸린다.**
+ *
+ *    2026-09-03 실측: `34998995` 가 page 3 rank 15 와 page 4 rank 1 에 나왔다.
+ *    225건 중 1건이라 작아 보이지만, threshold 를 백분율로 계산하는 순간
+ *    분모가 오염된다. 페이지를 깊게 볼수록 이 확률은 올라간다.
+ *
+ * 🔴 **먼저 본 것을 남긴다.** 나중 것이 아니라 첫 발견을 남기는 이유:
+ *    밀려 내려간 위치(page 4 rank 1)는 크롤 타이밍의 산물이고,
+ *    처음 본 위치(page 3 rank 15)가 그 시점의 실제 목록 위치다.
+ *
+ * 🔴 **버리지 않고 세어서 보고한다.** 조용히 사라지면 중복이 늘어나도 아무도 모른다.
+ */
+export type DedupeResult<T> = { rows: T[]; duplicates: number; duplicateIds: string[] }
+
+export function dedupeListRows<T extends { sourceSite: string; sourceArticleId: string }>(
+  rows: readonly T[],
+): DedupeResult<T> {
+  const seen = new Map<string, T>()
+  const dupes: string[] = []
+  for (const r of rows) {
+    const key = `${r.sourceSite}|${r.sourceArticleId}`
+    if (seen.has(key)) {
+      dupes.push(r.sourceArticleId)
+      continue
+    }
+    seen.set(key, r)
+  }
+  return { rows: [...seen.values()], duplicates: dupes.length, duplicateIds: [...new Set(dupes)] }
+}
+
+// ─────────────────────────────────────────────────────────
+// threshold 후보 (🔴 확정값이 아니다 · PR-S2-b-8)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **후보일 뿐이다. 코드가 이 값으로 자동 판정하지 않는다.**
+ *
+ *    2026-09-03 쫑알쫑알 2~16p 225건 **1회 표본**에서 나온 분위수다.
+ *    표본이 2.3시간짜리 하나뿐이라 확정하기에는 이르다 —
+ *    시간차 재방문으로 여러 회차를 모은 뒤 정한다.
+ *
+ * ```
+ *   댓글 p50=5  p80=12  p90=18       조회 p50=101  p80=250  p90=368
+ *   댓글>=10 AND 조회>=300  → 21/225 (9%)
+ *   댓글>=15 AND 조회>=300  → 18/225 (8%)
+ * ```
+ */
+export const THRESHOLD_CANDIDATES = [
+  { label: 'A', minComments: 10, minViews: 300, observedRate: 0.09 },
+  { label: 'B', minComments: 15, minViews: 300, observedRate: 0.08 },
+] as const
+
+export function passesThreshold(
+  row: { sourceCommentCount: number; sourceViewCount: number | null },
+  t: { minComments: number; minViews: number },
+): boolean {
+  // 🔴 조회수를 못 읽었으면 통과시키지 않는다. 미지값을 0 으로도 무한대로도 보지 않는다
+  if (row.sourceViewCount === null) return false
+  return row.sourceCommentCount >= t.minComments && row.sourceViewCount >= t.minViews
 }
