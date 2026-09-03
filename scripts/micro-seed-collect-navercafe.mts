@@ -40,7 +40,7 @@
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --cafe=wgang --pages=1 --max=3
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --live               🔴 첫 live (승인 필요)
  */
-import { appendFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
   CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate,
@@ -49,6 +49,7 @@ import {
   LOCK_PATH, LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS,
   SESSION_PATH_ENV, KILL_SWITCH_ENV, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
   PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions, normalizeCount,
+  safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease, type FrameProbe,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -158,15 +159,24 @@ async function main() {
 
     // ── ① 목록 ──
     const items: NaverListItem[] = []
+    const allProbes: FrameProbe[] = []
     for (let p = 1; p <= PAGES; p += 1) {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
       await page.goto(LIST_URL(cafe!.cafeId, p), { waitUntil: 'domcontentloaded', timeout: 20_000 })
       await sleep(randomDelay(DELAY_LIST_MS))
-      items.push(...(await readList(page, cafe!.cafeId, p)))
+      const read = await readList(page, cafe!.cafeId, p)
+      items.push(...read.items)
+      allProbes.push(...read.probes)
       console.log(`  목록 ${p}p → 누적 ${items.length}건`)
+      // 🔴 0건일 때는 프레임별로 무슨 일이 있었는지 즉시 보여준다.
+      //    한 줄짜리 "0건" 만 보고는 다음에 무엇을 고칠지 정할 수 없다.
+      if (read.items.length === 0) for (const line of summarizeProbes(read.probes)) console.log(`     · ${line}`)
       if (p < PAGES) await sleep(randomDelay(DELAY_LIST_MS))
     }
-    if (items.length === 0) throw new Error('목록이 비었다 — 세션 만료이거나 셀렉터가 바뀌었다')
+    if (items.length === 0) {
+      const d = diagnoseEmptyList(allProbes)
+      throw new Error(`목록이 비었다 [${d.code}] — ${d.detail}`)
+    }
 
     // ── ② 자동 선별 (목록 단계 제외) ──
     // 🔴 목록을 **본** 시각을 따로 잡는다. 상세를 여는 시각과 다르고,
@@ -193,9 +203,14 @@ async function main() {
       if (idx > 0) await sleep(randomDelay(DELAY_ARTICLE_MS))
       await page.goto(ARTICLE_URL(cafe!.cafeId, id), { waitUntil: 'domcontentloaded', timeout: 20_000 })
       await sleep(randomDelay(DELAY_ARTICLE_MS))
-      const body = await readArticleBody(page)
+      const read = await readArticleBody(page)
+      const body = read.body
       if (!body) {
-        console.log(`  ⚠️ ${id} — 본문을 읽지 못했다. 건너뛴다`)
+        console.log(
+          read.errors.length
+            ? `  ⚠️ ${id} — 본문 셀렉터가 터졌다(건너뛴다): ${read.errors[0]}`
+            : `  ⚠️ ${id} — 본문이 비었다. 셀렉터가 안 맞거나 접근이 막혔다(건너뛴다)`,
+        )
         continue
       }
       const row = buildCollected(cafe!.cafeId, known.get(id)!, body, new Date().toISOString(), listedAtIso)
@@ -205,6 +220,16 @@ async function main() {
     }
   } finally {
     if (browser) await browser.close().catch(() => {})
+    // 🔴 성공이든 실패든 락을 푼다. 앞 코드는 풀지 않아 실패 후 TTL 30분을
+    //    기다려야 했다 — 재시도가 막히면 원인을 좁힐 기회 자체가 사라진다.
+    //
+    // 🔴 해제 실패가 원래 예외를 가리지 않는다. 수집이 왜 실패했는지가 본론이고
+    //    락을 못 지운 것은 곁가지다 — 경고만 내고 예외는 그대로 올라간다.
+    const existed = existsSync(LOCK_PATH)
+    let unlinkError: unknown = null
+    if (existed) { try { unlinkSync(LOCK_PATH) } catch (e) { unlinkError = e } }
+    const rel = judgeLockRelease(existed, unlinkError)
+    if (rel.warning) console.warn(`  ⚠️ ${rel.warning}`)
   }
 
   if (collected.length) {
@@ -267,42 +292,75 @@ async function loadChromium(): Promise<Chromium> {
  *    실제 페이지를 보지 않고 적은 셀렉터는 조용히 0건을 반환한다.
  *    지금은 구조만 두고 첫 live 에서 사람이 확인한다 — 0건이면 위에서 throw 한다.
  */
-async function readList(page: NaverPage, cafeId: string, pageNo: number): Promise<NaverListItem[]> {
+/**
+ * 🔴 **링크 셀렉터는 메타와 분리한다.** 이것이 실패하면 그 프레임에 목록이 없는 것이고,
+ *    메타가 실패하는 것과는 다른 사건이다 (PR-S2-b-5).
+ */
+const LIST_LINK_SELECTOR = 'a.article, a[href*="articleid"], a[href*="/articles/"]'
+
+async function readList(
+  page: NaverPage,
+  cafeId: string,
+  pageNo: number,
+): Promise<{ items: NaverListItem[]; probes: FrameProbe[] }> {
   const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
-  for (const f of [page, ...frames]) {
+  const probes: FrameProbe[] = []
+
+  for (const [idx, f] of [page, ...frames].entries()) {
+    const label = idx === 0 ? '(top)' : safeFrameLabel(frames[idx - 1].url())
     try {
       // 🔴 브라우저 안에서는 **문자열을 그대로 꺼내오기만** 한다.
       //    해석(숫자 변환 · 시각 파싱)은 밖의 순수 함수가 한다 —
       //    $$eval 안의 코드는 fixture 로 검증할 수 없기 때문이다.
-      const rows = await f.$$eval<{ href: string; title: string; comments: string; date: string; views: string; board: string }[]>(
-        'a.article, a[href*="articleid"], a[href*="/articles/"]',
-        (els) =>
-          els.map((el) => {
-            const a = el as HTMLAnchorElement
+      //
+      // 🔴 **메타 추출이 링크 수집을 죽이지 않는다** (PR-S2-b-5).
+      //    메타 셀렉터 하나가 터지면 콜백 전체가 터지고, 그 예외를 바깥
+      //    catch 가 삼켜 "목록 0건" 으로 보였다 — 2026-09-03 실측 사고.
+      //    그래서 메타는 콜백 **안에서** 각자 try 로 감싼다.
+      const probe = await f.$$eval<{
+        linkHits: number
+        rows: { href: string; title: string; comments: string; date: string; views: string; board: string; metaError: string | null }[]
+      }>(LIST_LINK_SELECTOR, (els) => {
+        const rows = els.map((el) => {
+          const a = el as HTMLAnchorElement
+          const base = { href: a.href, title: (a.textContent ?? '').trim() }
+          const empty = { comments: '', date: '', views: '', board: '', metaError: null as string | null }
+          try {
             const near = a.closest('tr, li, div')
-            const pick = (sel: string): string => near?.querySelector(sel)?.textContent?.trim() ?? ''
+            const pick = (sel: string): string => {
+              try { return near?.querySelector(sel)?.textContent?.trim() ?? '' } catch { return '' }
+            }
             return {
-              href: a.href,
-              title: (a.textContent ?? '').trim(),
+              ...base,
               comments: pick('.comment_count, .num, em'),
               date: pick('.td_date, .date, .article-date, .time'),
               views: pick('.td_view, .view, .article-views'),
               board: pick('.td_name, .board-name, .article-board'),
+              metaError: null as string | null,
             }
-          }),
-      )
+          } catch (e) {
+            // 🔴 메타를 못 읽어도 링크는 살린다. 이유는 남긴다
+            return { ...base, ...empty, metaError: e instanceof Error ? e.message : String(e) }
+          }
+        })
+        return { linkHits: els.length, rows }
+      })
+
       const items: NaverListItem[] = []
-      for (const r of rows) {
+      for (const r of probe.rows) {
         const id = parseArticleId(r.href)
         if (id === null || r.title === '') continue
         if (items.some((i) => i.sourceArticleId === id)) continue
+        const comments = normalizeCount(r.comments)
         items.push({
           sourceArticleId: id,
           sourceUrl: ARTICLE_URL(cafeId, id),
           originalTitle: r.title,
           // 🔴 댓글 수만 0 으로 떨어뜨린다 — assessCandidate 계약이 number 다.
-          //    나머지 메타는 못 읽으면 null 로 남긴다(추측하지 않는다).
-          sourceCommentCount: normalizeCount(r.comments) ?? 0,
+          //    다만 "진짜 0" 과 구분되도록 read 플래그를 함께 남긴다.
+          sourceCommentCount: comments ?? 0,
+          sourceCommentCountRead: comments !== null,
+          // 나머지 메타는 못 읽으면 null 로 남긴다(추측하지 않는다)
           sourcePostedLabel: r.date || null,
           sourceViewCount: normalizeCount(r.views),
           sourceBoardName: r.board || null,
@@ -310,29 +368,47 @@ async function readList(page: NaverPage, cafeId: string, pageNo: number): Promis
           sourceRankOnPage: items.length + 1,
         })
       }
-      if (items.length) return items
-    } catch {
-      // 이 프레임에는 목록이 없다 — 다음 프레임을 본다
+      const metaErr = probe.rows.find((r) => r.metaError !== null)?.metaError ?? null
+      probes.push({ frame: label, linkHits: probe.linkHits, rows: probe.rows.length, items: items.length, error: metaErr })
+      if (items.length) return { items, probes }
+    } catch (e) {
+      // 🔴 삼키지 않는다. 이 프레임에 목록이 없는 것과 콜백이 터진 것은 다른 사건이다.
+      //    HTML 전문은 담지 않는다 — message 만 남긴다.
+      probes.push({
+        frame: label,
+        linkHits: 0,
+        rows: 0,
+        items: 0,
+        error: e instanceof Error ? e.message : String(e),
+      })
     }
   }
-  return []
+  return { items: [], probes }
 }
 
-/** 🔴 이미지·댓글을 읽지 않는다. 본문 텍스트만 가져온다 */
-async function readArticleBody(page: NaverPage): Promise<string | null> {
+/**
+ * 🔴 이미지·댓글을 읽지 않는다. 본문 텍스트만 가져온다.
+ *
+ * 🔴 **여기도 실패를 삼키지 않는다** (PR-S2-b-5). readList 와 같은 결함이 한 단계 뒤에 있었다 —
+ *    콜백이 터져도 "본문을 읽지 못했다" 한 줄만 나와서, 셀렉터가 안 맞는 것인지
+ *    코드가 터진 것인지 구분할 수 없었다.
+ */
+async function readArticleBody(page: NaverPage): Promise<{ body: string | null; errors: string[] }> {
   const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
+  const errors: string[] = []
   for (const f of [page, ...frames]) {
     try {
       const texts = await f.$$eval<string[]>('.se-main-container, #postViewArea, .article_viewer', (els) =>
         els.map((el) => (el as HTMLElement).innerText ?? ''),
       )
       const body = texts.join('\n').replace(/\n{3,}/g, '\n\n').trim()
-      if (body) return body
-    } catch {
-      // 다음 프레임
+      if (body) return { body, errors }
+    } catch (e) {
+      // 🔴 message 만 남긴다 — 본문 HTML 을 로그로 흘리지 않는다
+      errors.push(e instanceof Error ? e.message : String(e))
     }
   }
-  return null
+  return { body: null, errors }
 }
 
 main().catch((e) => {

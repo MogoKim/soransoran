@@ -291,6 +291,8 @@ export type NaverListItem = {
   sourcePage?: number | null
   /** 그 페이지 안에서 몇 번째였나 (1-base) */
   sourceRankOnPage?: number | null
+  /** 🔴 댓글 수를 실제로 읽었나. 생략하면 "읽었다" 로 본다(기존 호출부 호환) */
+  sourceCommentCountRead?: boolean
 }
 
 export type CollectedCandidate = {
@@ -316,6 +318,14 @@ export type CollectedCandidate = {
   sourcePage: number | null
   sourceRankOnPage: number | null
   sourceViewCount: number | null
+  /**
+   * 🔴 댓글 수를 **실제로 읽었는가**.
+   *
+   *    `sourceCommentCount` 는 `number` 여야 한다 — assessCandidate 와 importer 계약이 그렇다.
+   *    그래서 못 읽으면 0 으로 떨어지는데, 그러면 "진짜 댓글 0개" 와 구분이 사라진다.
+   *    lowEngagement 통계를 낼 때 **이 플래그가 false 인 행은 빼야 한다.**
+   */
+  sourceCommentCountRead: boolean
 }
 
 // ─────────────────────────────────────────────────────────
@@ -440,6 +450,7 @@ export function buildCollected(
     sourcePage: item.sourcePage ?? null,
     sourceRankOnPage: item.sourceRankOnPage ?? null,
     sourceViewCount: item.sourceViewCount ?? null,
+    sourceCommentCountRead: item.sourceCommentCountRead ?? true,
   }
 }
 
@@ -584,4 +595,97 @@ export function summarizeCookies(cookies: CookieMeta[]): CookieSummary {
     auth,
     hasAuth: AUTH_COOKIE_NAMES.every((n) => auth.some((a) => a.name === n)),
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// 목록 수집 진단 (🔴 순수 함수 · PR-S2-b-5)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **왜 이 구조가 필요한가 (2026-09-03 실측 사고)**
+ *
+ *    readList 가 프레임마다 `catch {}` 로 예외를 통째로 삼켰다. 그 결과
+ *    "이 프레임에는 목록이 없다" 와 "콜백이 터졌다" 가 **같은 0건**으로 보였고,
+ *    22건 → 0건 회귀의 원인을 코드만 보고는 짚을 수 없었다.
+ *
+ *    실패를 삼키는 코드는 두 번째 실행에서도 같은 자리에서 막힌다.
+ *    그래서 프레임마다 **무슨 일이 있었는지**를 남긴다.
+ */
+export type FrameProbe = {
+  /** 🔴 쿼리·해시를 떼고 남긴다 — URL 에 세션 토큰이 실릴 수 있다 */
+  frame: string
+  /** 링크 셀렉터가 잡은 DOM 노드 수 */
+  linkHits: number
+  /** 그중 href·title 을 꺼낸 행 수 */
+  rows: number
+  /** articleId 파싱까지 통과한 최종 항목 수 */
+  items: number
+  /** 🔴 콜백 예외 메시지. HTML 전문이 아니라 message 만 */
+  error: string | null
+}
+
+/** 🔴 URL 에서 쿼리·해시를 떼어낸다. 로그에 세션 토큰을 남기지 않는다 */
+export function safeFrameLabel(url: string): string {
+  const cut = url.split(/[?#]/)[0]
+  return cut.length > 120 ? `${cut.slice(0, 117)}…` : cut
+}
+
+export type EmptyListCode = 'OK' | 'NO_FRAME' | 'CALLBACK_ERROR' | 'SELECTOR_ZERO' | 'PARSE_ZERO'
+
+/**
+ * 목록이 왜 비었는지 **구분해서** 답한다.
+ *
+ * 🔴 "세션 만료이거나 셀렉터가 바뀌었다" 는 진단이 아니다 — 둘 다일 수도, 둘 다 아닐 수도 있다.
+ *    셋을 나눠야 다음에 무엇을 고칠지 정해진다.
+ *
+ * ```
+ *   CALLBACK_ERROR   콜백이 터졌다        → 우리 코드 문제. 셀렉터 문법·DOM API 를 본다
+ *   SELECTOR_ZERO    링크가 0개다          → 로그인이 안 됐거나 페이지 구조가 바뀌었다
+ *   PARSE_ZERO       링크는 있는데 0건이다  → parseArticleId 가 URL 형태를 못 읽는다
+ * ```
+ */
+export function diagnoseEmptyList(probes: readonly FrameProbe[]): { code: EmptyListCode; detail: string } {
+  if (probes.some((p) => p.items > 0)) return { code: 'OK', detail: '' }
+  if (probes.length === 0) {
+    return { code: 'NO_FRAME', detail: '검사한 프레임이 없다 — 페이지가 뜨지 않았거나 iframe 구조가 바뀌었다' }
+  }
+  const errs = probes.filter((p) => p.error !== null)
+  if (errs.length > 0) {
+    return {
+      code: 'CALLBACK_ERROR',
+      detail: `콜백이 ${errs.length}/${probes.length} 프레임에서 터졌다 — 우리 코드 문제다: ${errs[0].error}`,
+    }
+  }
+  if (probes.every((p) => p.linkHits === 0)) {
+    return { code: 'SELECTOR_ZERO', detail: '링크 셀렉터가 0개를 잡았다 — 로그인이 안 됐거나 목록 DOM 이 바뀌었다' }
+  }
+  const hit = probes.reduce((a, p) => a + p.linkHits, 0)
+  return {
+    code: 'PARSE_ZERO',
+    detail: `링크 ${hit}개를 찾았지만 articleId 를 하나도 못 읽었다 — parseArticleId 가 URL 형태를 놓친다`,
+  }
+}
+
+/** 사람이 읽는 한 줄 요약 (🔴 HTML 을 담지 않는다) */
+export function summarizeProbes(probes: readonly FrameProbe[]): string[] {
+  return probes.map(
+    (p) =>
+      `${p.frame} · 링크 ${p.linkHits} · 행 ${p.rows} · 항목 ${p.items}` +
+      (p.error === null ? '' : ` · 🔴 예외: ${p.error}`),
+  )
+}
+
+/**
+ * 락 해제 결과.
+ *
+ * 🔴 **해제 실패가 원래 에러를 가리면 안 된다.** 수집이 왜 실패했는지가 본론이고
+ *    락을 못 지운 것은 곁가지다 — 경고만 내고 원래 예외를 그대로 올린다.
+ */
+export type LockReleaseVerdict = { released: boolean; warning: string | null }
+
+export function judgeLockRelease(existed: boolean, unlinkError: unknown): LockReleaseVerdict {
+  if (!existed) return { released: false, warning: null }
+  if (unlinkError === undefined || unlinkError === null) return { released: true, warning: null }
+  const msg = unlinkError instanceof Error ? unlinkError.message : String(unlinkError)
+  return { released: false, warning: `락파일을 지우지 못했다 (${LOCK_PATH}) — ${msg}. TTL ${LOCK_MAX_AGE_MS / 60_000}분 뒤 자동 해제된다` }
 }
