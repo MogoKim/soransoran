@@ -123,7 +123,7 @@ export default async function PostDetailPage({
           <h1 className="text-2xl font-bold leading-snug text-content-primary">{post.title}</h1>
 
           <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-content-muted">
-            <span className="font-bold text-brand-ink">{displayName(post.author)}</span>
+            <span className="font-bold text-brand-strong">{displayName(post.author)}</span>
             <span aria-hidden>·</span>
             <span>{formatRelativeTime(post.createdAt)}</span>
             <span aria-hidden>·</span>
