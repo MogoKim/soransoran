@@ -317,9 +317,22 @@ const bad = (name: string, kind: string, detail: string) => {
       detail: '중복은 오류가 아니라 진단',
     },
     {
-      name: 'sourceSite 가 82cook 이 아니면 거부',
-      ok: /row\.sourceSite !== SOURCE_SITE/.test(code),
-      detail: '정본 외 출처를 원장에 들이지 않는다',
+      // 🔴 2026-09-03 (PR-S2-b-1) — 소스가 둘이 되며 판정이 judgeSourceSite 로 옮겨갔다.
+      //    계약은 그대로다: **정본 외 출처를 원장에 들이지 않는다.**
+      //    바뀐 것은 "정본" 이 82cook 하나에서 82cook + navercafe:* 로 늘어난 것이고,
+      //    Micro Seed Sheet 레인은 여전히 82cook 하나다.
+      name: '정본 외 sourceSite 를 원장에 들이지 않는다',
+      ok: /judgeSourceSite\(row\.sourceSite, INTENDED_LANE\)/.test(code) &&
+          /if \(!src\.ok\)/.test(code) &&
+          // 🔴 판정을 두 곳에 쓰지 않는다 — 갈라지는 쪽이 네이버를 Sheet 레인에 넣는다
+          !/row\.sourceSite !== SOURCE_SITE/.test(code),
+      detail: 'judgeSourceSite 한 곳 · 레인별로 받는 소스가 다르다',
+    },
+    {
+      // 🔴 PR-S2-b-1 신설 — 네이버가 Sheet 승인 게이트로 새지 않게 한다
+      name: '네이버는 raw-only 전용이다',
+      ok: /const INTENDED_LANE: SupplyMode = RAW_ONLY \? 'raw-only' : 'micro-seed'/.test(code),
+      detail: 'dry-run 도 의도한 레인으로 판정한다 — apply 결과를 정직하게 예고한다',
     },
     {
       name: 'dedupKey 를 재계산해 대조한다',

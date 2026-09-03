@@ -15,10 +15,12 @@
 import { readFileSync } from 'node:fs'
 import {
   planSupplyMode, violatesSupplyInvariant, planAutoFetch, judgeAutoHold,
+  judgeSourceSite, isNaverCafeSource, cafeIdOf, slotQuotaOf,
   AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
-  RAW_ONLY_BATCH_MAX, SHEET_LANE_LIMIT,
+  RAW_ONLY_BATCH_MAX, SHEET_LANE_LIMIT, SHEET_LANE_SOURCE_SITE, NAVERCAFE_PREFIX, SLOT_QUOTA,
   type SupplyModeInput,
 } from './lib/micro-seed-supply.mjs'
+import { computeDedupKey } from './lib/micro-seed-82cook.mjs'
 import { assessCandidate, DETAIL_ONLY_FLAGS } from './lib/micro-seed-quality.mjs'
 
 let failed = 0
@@ -302,6 +304,103 @@ check('같은 입력이면 같은 결과다 (재현성)', (() => {
 })())
 
 // ─────────────────────────────────────────────────────────
+console.log('\n⑤-E sourceSite 계약 — 82cook 과 네이버는 양대 주요 공급망 (PR-S2-b-1)')
+// ─────────────────────────────────────────────────────────
+{
+  // ── 형태 판정 ──
+  check('navercafe:remonterrace 는 네이버 소스다', isNaverCafeSource('navercafe:remonterrace'))
+  check('navercafe:wgang 도 마찬가지', isNaverCafeSource('navercafe:wgang'))
+  check('cafeId 를 뽑아낸다', cafeIdOf('navercafe:remonterrace') === 'remonterrace')
+  check('82cook 은 네이버가 아니다', !isNaverCafeSource('82cook'))
+  check('prefix 만 있으면 안 된다', !isNaverCafeSource('navercafe:'))
+  check('🔴 경로가 붙은 형태는 거부한다', !isNaverCafeSource('navercafe:a/b'))
+  check('🔴 공백이 든 형태는 거부한다', !isNaverCafeSource('navercafe:a b'))
+  check('cafeIdOf 는 형태가 아니면 null', cafeIdOf('82cook') === null && cafeIdOf('navercafe:') === null)
+
+  // ── 🔴 레인별 허용 — 양방향 고정 ──
+  check('raw-only 는 82cook 을 받는다', judgeSourceSite('82cook', 'raw-only').ok)
+  check('🔴 raw-only 는 navercafe:* 를 받는다', judgeSourceSite('navercafe:remonterrace', 'raw-only').ok)
+  check('Micro Seed 레인은 82cook 을 받는다', judgeSourceSite('82cook', 'micro-seed').ok)
+  {
+    const v = judgeSourceSite('navercafe:remonterrace', 'micro-seed')
+    check(
+      '🔴 Micro Seed 레인은 navercafe:* 를 거부한다',
+      !v.ok,
+      '네이버가 Sheet 승인 게이트를 거쳐 원문 그대로 발행되면 안 된다 (헌법 §10-5)',
+    )
+    check(
+      '거부 사유가 대안을 알려준다',
+      !v.ok && v.reason.includes('raw-only'),
+      !v.ok ? v.reason : '',
+    )
+  }
+  for (const lane of ['raw-only', 'micro-seed'] as const) {
+    check(
+      `[${lane}] 🔴 모르는 소스는 거부한다`,
+      !judgeSourceSite('dcinside', lane).ok && !judgeSourceSite('', lane).ok,
+    )
+    check(
+      `[${lane}] 🔴 82cook 을 흉내낸 소스도 거부한다`,
+      !judgeSourceSite('82cook.com', lane).ok && !judgeSourceSite('navercafe', lane).ok,
+    )
+  }
+
+  // ── dedupKey 계약 — 카페가 다르면 키가 다르다 ──
+  {
+    const a = computeDedupKey('navercafe:remonterrace', '34783204')
+    const b = computeDedupKey('navercafe:wgang', '34783204')
+    check('dedupKey 는 sha256:{hex} 형태다', /^sha256:[0-9a-f]{64}$/.test(a), a.slice(0, 20))
+    check(
+      '🔴 같은 articleId 라도 카페가 다르면 dedupKey 가 다르다',
+      a !== b,
+      'cafeId 가 sourceSite 에 없으면 다른 카페 글이 조용히 SKIP 된다',
+    )
+    check(
+      '같은 (카페, articleId) 는 항상 같은 키다',
+      computeDedupKey('navercafe:remonterrace', '34783204') === a,
+    )
+    // 실측 행과의 정합 — Raw Vault 에 이미 있는 형태다
+    check(
+      '실측 행 형태와 계약이 맞는다 (navercafe:remonterrace · 34783204)',
+      isNaverCafeSource('navercafe:remonterrace') && judgeSourceSite('navercafe:remonterrace', 'raw-only').ok,
+    )
+  }
+
+  // ── 소스별 슬롯 quota ──
+  check(`82cook 슬롯 quota ${SLOT_QUOTA['82cook']}`, slotQuotaOf('82cook') === SLOT_QUOTA['82cook'])
+  check(`navercafe 슬롯 quota ${SLOT_QUOTA.navercafe}`, slotQuotaOf('navercafe:wgang') === SLOT_QUOTA.navercafe)
+  check(
+    '🔴 네이버 quota 가 82cook 보다 작다',
+    SLOT_QUOTA.navercafe < SLOT_QUOTA['82cook'],
+    '네이버는 계정이 막히고 그건 되돌릴 수 없다',
+  )
+  check(
+    '🔴 모르는 소스는 가장 보수적인 quota 를 받는다',
+    slotQuotaOf('dcinside') === Math.min(...Object.values(SLOT_QUOTA)),
+  )
+  check(
+    '🔴 우나어의 카페당 80건을 그대로 쓰지 않는다',
+    SLOT_QUOTA.navercafe <= 10,
+    '한 소스를 세게 긁지 않는다 — 여러 카페·시간대에 얇게 분산한다',
+  )
+
+  // ── 🔴 sourceSite 는 운영 단위이지 주제 라벨이 아니다 ──
+  {
+    const src = readFileSync('scripts/lib/micro-seed-supply.mts', 'utf-8')
+    check(
+      '🔴 카페별 주제 고정 라벨이 코드에 없다',
+      !/(갱년기|뷰티|은퇴|노후|미용|성형)\s*[:=]/.test(src),
+      'sourceSite 로 주제를 고정하면 그 카페의 다른 글을 잘못 읽는다 — 주제 판정은 글 단위다',
+    )
+    check(
+      '🔴 popular-sync 를 네이버로 이식하지 않았다',
+      !/popular[-_]?sync/i.test(src),
+      '우나어의 인기글 슬롯 개념은 82cook 수집 슬롯이 대신한다',
+    )
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 console.log('\n⑥ 소스 스캔 — 발행 경로가 이 레일에 없다')
 // ─────────────────────────────────────────────────────────
 {
@@ -358,6 +457,26 @@ console.log('\n⑥ 소스 스캔 — 발행 경로가 이 레일에 없다')
     // writeJsonl(OUT, collected) 가 보류 필터 **앞**에 있어야 한다
     collector.indexOf('writeJsonl(OUT, collected)') < collector.indexOf('judgeAutoHold('),
     '보류를 파일에서 지우면 조용히 버려진 글이 된다',
+  )
+  // ── PR-S2-b-1 ──
+  check(
+    '🔴 importer 가 sourceSite 를 직접 비교하지 않는다 (judgeSourceSite 경유)',
+    /judgeSourceSite\(/.test(importer) && !/row\.sourceSite !== SOURCE_SITE/.test(importer),
+    '판정을 두 곳에 쓰면 갈라지고, 갈라지는 쪽이 네이버를 Sheet 레인에 넣는다',
+  )
+  check(
+    '🔴 importer 가 의도한 레인으로 판정한다 (dry-run 이 거짓말하지 않는다)',
+    /const INTENDED_LANE: SupplyMode = RAW_ONLY \? 'raw-only' : 'micro-seed'/.test(importer)
+      && /judgeSourceSite\(row\.sourceSite, INTENDED_LANE\)/.test(importer),
+    'PLAN.mode 로 판정하면 dry-run 에서 네이버가 통과한 것처럼 보인다',
+  )
+  check(
+    '🔴 importer 에 82cook 하드 결합이 남아 있지 않다',
+    // 🔴 주석이 아니라 **코드**만 본다. 앞선 fixture 들이 같은 실수를 반복했다 —
+    //    "SOURCE_SITE 를 더 이상 쓰지 않는다" 는 주석 문장이 스캔에 걸렸다.
+    !/^import \{[^}]*\bSOURCE_SITE\b/m.test(importer)
+      && !/!==\s*SOURCE_SITE\b/.test(importer),
+    '82cook lib 의 SOURCE_SITE 를 import 하지도, 직접 비교하지도 않는다',
   )
 }
 
