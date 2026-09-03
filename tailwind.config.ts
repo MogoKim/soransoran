@@ -25,6 +25,18 @@ const config: Config = {
       /* 글자 크기 3단계(작게/기본/크게)에 연동되는 스케일 */
       fontSize: {
         xs: ['var(--text-caption)', { lineHeight: '1.4' }],
+        /**
+         * 🔴 역할 별칭 — 새 크기가 아니다. xs 와 값이 **완전히 같다.**
+         *    정본 §12-3 의 meta 역할(작성자·날짜·조회수·댓글수)만 이 이름을 쓴다.
+         *    같은 17px 라도 입력 라벨·안내문·상태 문구는 역할이 달라 xs 로 남는다.
+         *
+         * 🔴 값이 갈라지면 별칭이 아니다. 크기를 바꾸려면 --text-caption 을 고친다 —
+         *    여기서 다른 값을 주는 순간 meta 만 글자 크기 축에서 떨어져 나간다.
+         *
+         * 🔴 별칭을 늘릴 때는 src/lib/utils.ts 의 font-size 그룹에도 함께 등록한다.
+         *    등록하지 않으면 cn() 안에서 조용히 지워진다(그 파일 주석 참조).
+         */
+        meta: ['var(--text-caption)', { lineHeight: '1.4' }],
         sm: ['var(--text-sm)', { lineHeight: '1.5' }],
         base: ['var(--text-body)', { lineHeight: '1.6' }],
         lg: ['var(--text-title)', { lineHeight: '1.6' }],

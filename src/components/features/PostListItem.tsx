@@ -85,7 +85,7 @@ export default function PostListItem({
         >
           {post.title}
         </span>
-        <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-content-muted">
+        <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-meta text-content-muted">
           <BoardBadge boardType={post.boardType} quiet={emphasis} />
           {showComments ? (
             <span className="flex items-center gap-1">

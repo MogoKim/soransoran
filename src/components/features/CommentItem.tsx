@@ -120,7 +120,7 @@ export default function CommentItem({
   return (
     /* 면과 구분선은 목록이 진다 — 이 줄은 여백만 갖는다. */
     <li className={isReply ? 'py-1' : 'px-4 py-4'}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-content-muted">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-content-muted">
         <span className="font-bold text-brand-strong">
           {comment.author ? displayName(comment.author) : (comment.guestNickname ?? '비회원')}
         </span>
