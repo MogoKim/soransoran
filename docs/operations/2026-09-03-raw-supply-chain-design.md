@@ -351,8 +351,27 @@ fixture 가 `micro-seed-supply.mts` 에 주제 라벨이 들어오지 않는지 
 ③ quota        ①②가 정해져야 슬롯당 상한 10 이 맞는지 재산정할 수 있다
 ```
 
-🔴 **지금 collector 는 목록 항목의 작성 시각을 수집하지 않는다.** ② 를 실측하려면
-그것부터 필요하다 — 조사 뒤 별도 PR 로 다룬다. **이 문서는 값을 정하지 않는다.**
+### 🟢 메타 수집은 열렸다 (PR-S2-b-4) — 값은 아직 정하지 않는다
+
+목록 JSONL 이 아래를 남긴다. **DB 컬럼은 만들지 않았고 importer 는 이 키들을 읽지 않는다.**
+
+| 키 | 뜻 |
+|---|---|
+| `sourceListedAt` | 목록에서 **본** 시각 — 상세를 여는 `sourceCapturedAt` 보다 앞선다 |
+| `sourcePostedLabel` | 화면에 보이는 작성 시각 **문자열 원형** |
+| `sourcePostedAt` | 위를 ISO 로 해석한 값 — 🔴 **확실할 때만. 애매하면 `null`** |
+| `sourcePage` · `sourceRankOnPage` | 몇 페이지 · 그 안에서 몇 번째 (page depth 축) |
+| `sourceViewCount` | 조회수 — 못 읽으면 `null` |
+| `sourceCommentCount` · `sourceBoardName` | 기존 |
+
+```
+🔴 모르면 0 이 아니라 null 이다.
+   "댓글 0개" 와 "댓글 수를 못 읽었다" 는 다른 사실이고,
+   0 으로 뭉개면 lowEngagement 통계가 거짓말을 한다.
+```
+
+**이 PR 은 조사를 **가능하게만** 한다.** `--pages` 기본값 · 슬롯 시간표 · quota 는
+데이터가 쌓인 뒤 별도로 정한다 — **이 문서는 값을 정하지 않는다.**
 
 ---
 
