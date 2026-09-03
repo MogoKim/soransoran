@@ -326,6 +326,13 @@ export type CollectedCandidate = {
    *    lowEngagement 통계를 낼 때 **이 플래그가 false 인 행은 빼야 한다.**
    */
   sourceCommentCountRead: boolean
+  /**
+   * 🔴 어느 실행에서 나온 행인가 (PR-S2-b-6).
+   *
+   *    산출 JSONL 이 append 라 여러 실행이 한 파일에 섞인다. 실행 단위를 구분하지 못하면
+   *    "22건 중 100% null" 같은 비율이 통째로 거짓이 된다 — 실제로 한 번 잘못 읽었다.
+   */
+  sourceRunId: string
 }
 
 // ─────────────────────────────────────────────────────────
@@ -451,6 +458,7 @@ export function buildCollected(
     sourceRankOnPage: item.sourceRankOnPage ?? null,
     sourceViewCount: item.sourceViewCount ?? null,
     sourceCommentCountRead: item.sourceCommentCountRead ?? true,
+    sourceRunId: runIdOf(listedAtIso),
   }
 }
 
@@ -481,6 +489,9 @@ export function assertNaverCandidate(row: CollectedCandidate): void {
   }
   if (Number.isNaN(Date.parse(row.sourceListedAt))) {
     throw new Error(`sourceListedAt 이 ISO 가 아니다: ${JSON.stringify(row.sourceListedAt)}`)
+  }
+  if (!/^\d{8}-\d{6}$/.test(row.sourceRunId)) {
+    throw new Error(`sourceRunId 형식이 아니다: ${JSON.stringify(row.sourceRunId)}`)
   }
 }
 
@@ -688,4 +699,56 @@ export function judgeLockRelease(existed: boolean, unlinkError: unknown): LockRe
   if (unlinkError === undefined || unlinkError === null) return { released: true, warning: null }
   const msg = unlinkError instanceof Error ? unlinkError.message : String(unlinkError)
   return { released: false, warning: `락파일을 지우지 못했다 (${LOCK_PATH}) — ${msg}. TTL ${LOCK_MAX_AGE_MS / 60_000}분 뒤 자동 해제된다` }
+}
+
+// ─────────────────────────────────────────────────────────
+// 목록 DOM 셀렉터 — 🔴 2026-09-03 실측으로 확정 (PR-S2-b-6)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **추정하지 않고 실측한 값이다.**
+ *
+ *    PR-S2-b-4 는 `.td_date` · `.td_view` · `.td_name` 을 **추정으로** 넣었고
+ *    셋 다 존재하지 않았다 — 그 결과 메타가 22/22 전부 null 이었다.
+ *    아래는 remonterrace 목록 1p 의 실제 DOM 을 읽어 확정한 값이다.
+ *
+ * ```
+ *   tr
+ *     td > a.board_name                          게시판명
+ *     td > div.board-list > div.inner_list
+ *            > a.article                         제목·링크
+ *            > a.cmt                             댓글 수 — 🔴 0 이면 **엘리먼트가 없다**
+ *     td > div.ArticleBoardWriterInfo ...         작성자 (🔴 수집하지 않는다)
+ *     td.td_normal.type_date                     작성시각 "HH:mm" 또는 "YYYY.MM.DD"
+ *     td.td_normal.type_readCount                조회수 "1,133"
+ * ```
+ */
+export const LIST_SELECTORS = {
+  link: 'a.article, a[href*="articleid"], a[href*="/articles/"]',
+  row: 'tr, li, .article-board-item',
+  date: 'td.type_date, .td_normal.type_date, td[class*="type_date"]',
+  view: 'td.type_readCount, .td_normal.type_readCount, td[class*="type_readCount"]',
+  comment: 'a.cmt',
+  board: 'a.board_name',
+} as const
+
+/**
+ * 실행 단위 식별자.
+ *
+ * 🔴 **왜 필요한가**: 산출 JSONL 이 append 라 첫 live(22건)와 두 번째 live(22건)가
+ *    한 파일에 44행으로 섞였고, null 비율을 재다가 실제로 한 번 잘못 읽었다.
+ *    행마다 어느 실행에서 나온 것인지 알 수 있어야 분석이 성립한다.
+ */
+export function runIdOf(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) throw new Error(`runIdOf: ISO 가 아니다 — ${iso}`)
+  const k = new Date(d.getTime() + KST_OFFSET_MS)
+  const p2 = (n: number): string => String(n).padStart(2, '0')
+  return `${k.getUTCFullYear()}${p2(k.getUTCMonth() + 1)}${p2(k.getUTCDate())}-${p2(k.getUTCHours())}${p2(k.getUTCMinutes())}${p2(k.getUTCSeconds())}`
+}
+
+/** 실행별 산출물 경로 — 🔴 덮어쓰지도 섞이지도 않는다 */
+export function runOutputPath(cafeId: string, runId: string, kind: 'detail' | 'list'): string {
+  const suffix = kind === 'list' ? '.list' : ''
+  return `./.microseed-data/navercafe-${cafeId}-${runId}${suffix}.jsonl`
 }

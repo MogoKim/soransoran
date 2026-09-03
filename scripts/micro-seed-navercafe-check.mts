@@ -28,6 +28,7 @@ import {
   parsePostedLabel, normalizeCount,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease,
   LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
+  LIST_SELECTORS, runIdOf, runOutputPath,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
@@ -555,13 +556,17 @@ check('🔴 LOCK_MAX_AGE_MS > RUN_TIMEOUT_MS 유지', LOCK_TTL > RUN_TIMEOUT_MS)
 
 // ── 메타 optional 화 — 링크 수집이 살아남는가 ──
 check('🔴 링크 셀렉터가 메타와 분리돼 있다',
-  /const LIST_LINK_SELECTOR = /.test(COLLECTOR_CODE),
-  '메타 셀렉터 하나가 터져서 링크 수집이 죽으면 안 된다')
+  // String() 으로 리터럴 좁힘을 푼다 — 검사하려는 것은 런타임 값이다
+  /LIST_SELECTORS\.link/.test(COLLECTOR_CODE) && String(LIST_SELECTORS.link) !== String(LIST_SELECTORS.date),
+  '메타 셀렉터 하나가 터져서 링크 수집이 죽으면 안 된다 (상수는 PR-S2-b-6 에서 lib 로 옮겼다)')
 check('🔴 메타 추출이 콜백 안에서 try 로 감싸져 있다',
   /try \{[\s\S]{0,200}const near = a\.closest/.test(COLLECTOR_CODE))
-check('🔴 pick 각각도 try 로 감싸져 있다',
-  /try \{ return near\?\.querySelector\(sel\)/.test(COLLECTOR_CODE),
-  '셀렉터 문법 오류 하나가 행 전체를 죽이지 않는다')
+// 🔴 앞 단정("pick 각각도 try 로 감싸져 있다")을 지웠다.
+//    그 pick 이 바로 __name 을 부른 코드였다 — 단정이 **버그 원인을 요구**하고 있었다.
+//    이제 querySelector 를 옵셔널 체이닝으로 직접 부르고, 행 전체를 try 가 감싼다.
+check('🔴 메타를 옵셔널 체이닝으로 직접 읽는다 (중간 함수 없음)',
+  /near\?\.querySelector\(sel\.date\)\?\.textContent\?\.trim\(\) \?\? ''/.test(COLLECTOR_CODE),
+  '중간에 이름 있는 헬퍼를 두면 esbuild 가 __name 을 씌운다')
 {
   // 🔴 readList 의 catch 만 본다. loadChromium 의 빈 catch 는 다음 후보로 넘어가는
   //    의도된 루프이고, 마지막에 fail() 로 크게 실패한다 — 삼키는 것이 아니다.
@@ -601,6 +606,92 @@ for (const [label, code] of [['collector', COLLECTOR_CODE], ['lib', LIB_CODE]] a
   check(`[${label}] 🔴 Sheet · Candidate · Post · Queue 접근 0`,
     !/(googleapis|sheets\.|MicroSeedCandidate|OriginalPostApprovalQueue|\.post\.create)/.test(code))
 }
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑱ 🔴 브라우저 콜백에 이름 있는 함수를 두지 않는다 (PR-S2-b-6 근본 원인)')
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 2026-09-03 실측 원인:
+  //    tsx(esbuild) 의 keepNames 가 `const pick = () => {}` 에 __name(...) 래퍼를 씌운다.
+  //    그 코드가 $$eval 로 브라우저에 넘어가면 __name 헬퍼가 없어 ReferenceError 가 난다.
+  //    → PR-S2-b-4 에서는 콜백 전체가 죽어 목록 0건
+  //    → PR-S2-b-5 에서는 try 가 잡아 링크는 살고 메타만 22/22 null
+  //    두 증상이 같은 원인이었다. 이름을 못 붙이게 막는 것이 유일한 구조적 방어다.
+  // 🔴 경계를 좁게 잡는다. 넓게 잡으면 바깥 `async function` 까지 삼켜 거짓 실패가 난다.
+  const evalBodies: string[] = []
+  for (let at = COLLECTOR_CODE.indexOf('$$eval'); at !== -1; at = COLLECTOR_CODE.indexOf('$$eval', at + 1)) {
+    const bounds = [
+      COLLECTOR_CODE.indexOf('async function', at + 1),
+      COLLECTOR_CODE.indexOf('$$eval', at + 1),
+      at + 2500,
+    ].filter((n) => n > at)
+    evalBodies.push(COLLECTOR_CODE.slice(at, Math.min(...bounds)))
+  }
+  check('$$eval 호출을 찾았다', evalBodies.length >= 2, `찾은 수: ${evalBodies.length}`)
+  const named = evalBodies.filter((b) => /const\s+\w+\s*=\s*(\([^)]*\)|\w+)\s*(:[^=]+)?=>/.test(b))
+  check('🔴 $$eval 콜백 안에 이름 있는 화살표 함수가 없다',
+    named.length === 0,
+    'esbuild keepNames 가 __name 을 씌우고 브라우저에서 ReferenceError 가 난다 — 목록 0건의 원인이었다')
+  check('🔴 function 선언도 없다',
+    !evalBodies.some((b) => /\bfunction\s+\w+/.test(b)))
+  check('셀렉터를 콜백 밖에서 인자로 넘긴다',
+    /\}, LIST_SELECTORS\)/.test(COLLECTOR_CODE),
+    '콜백 안에서 상수를 만들면 다시 이름이 붙는다')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑲ 목록 셀렉터 — 🔴 추정이 아니라 실측값이다')
+// ─────────────────────────────────────────────────────────
+check('실측 클래스를 쓴다 (type_date · type_readCount)',
+  /type_date/.test(LIST_SELECTORS.date) && /type_readCount/.test(LIST_SELECTORS.view))
+check('댓글은 a.cmt', LIST_SELECTORS.comment === 'a.cmt')
+check('게시판명은 a.board_name', LIST_SELECTORS.board === 'a.board_name')
+check('🔴 빗나갔던 추정 셀렉터를 더 이상 쓰지 않는다',
+  !/\.td_date|\.article-date|\.td_view\b|\.article-views|\.td_name\b|\.board-name/.test(JSON.stringify(LIST_SELECTORS)),
+  'PR-S2-b-4 의 .td_date · .td_view · .td_name 은 실제 DOM 에 존재하지 않았다 — 메타 22/22 null 의 원인')
+check('🔴 댓글 셀렉터에 em 을 넣지 않는다',
+  !/\bem\b/.test(LIST_SELECTORS.comment),
+  'em 은 board-tag · BadgeNotificationNew 를 잡아 엉뚱한 숫자를 읽는다')
+check('링크 셀렉터는 그대로 (동작이 검증된 값)',
+  LIST_SELECTORS.link.includes('a.article') && LIST_SELECTORS.link.includes('articleid'))
+check('collector 가 lib 의 셀렉터를 쓴다 (하드코딩 없음)',
+  /LIST_SELECTORS\.link/.test(COLLECTOR_CODE) && !/const LIST_LINK_SELECTOR/.test(COLLECTOR_CODE))
+
+// 🔴 "댓글 0" 과 "못 읽음"
+check('🔴 댓글 read 판정이 행 발견 여부다',
+  /sourceCommentCountRead: r\.rowFound/.test(COLLECTOR_CODE),
+  '네이버는 댓글 0 이면 a.cmt 를 렌더하지 않는다 — 링크 부재를 "못 읽음" 으로 보면 진짜 0 이 전부 미지값이 된다')
+check('rowFound 를 브라우저에서 계산한다', /rowFound: near !== null/.test(COLLECTOR_CODE))
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑳ 실행 단위 분리 — 🔴 append 로 두 실행이 섞이지 않는다')
+// ─────────────────────────────────────────────────────────
+check('runId 는 KST yyyymmdd-hhmmss',
+  runIdOf('2026-09-03T07:33:37.982Z') === '20260903-163337',
+  `받은 값: ${runIdOf('2026-09-03T07:33:37.982Z')}`)
+check('자정 경계도 KST 로 넘어간다',
+  runIdOf('2026-09-02T15:00:00.000Z') === '20260903-000000')
+check('🔴 ISO 가 아니면 던진다',
+  (() => { try { runIdOf('어제'); return false } catch { return true } })())
+check('실행별 경로가 갈린다',
+  runOutputPath('remonterrace', '20260903-163337', 'detail')
+    !== runOutputPath('remonterrace', '20260903-170000', 'detail'))
+check('목록과 상세가 다른 파일',
+  runOutputPath('remonterrace', '20260903-163337', 'list')
+    !== runOutputPath('remonterrace', '20260903-163337', 'detail'))
+check('경로에 runId 가 들어간다', runOutputPath('remonterrace', '20260903-163337', 'list').includes('20260903-163337'))
+check('🔴 writeJsonl 이 append 하지 않는다',
+  /function writeJsonl[\s\S]{0,200}writeFileSync/.test(COLLECTOR_CODE) && !/function writeJsonl[\s\S]{0,200}appendFileSync/.test(COLLECTOR_CODE),
+  '두 실행이 한 파일에 44행으로 섞여 null 비율을 한 번 잘못 읽었다')
+check('행마다 sourceRunId 가 붙는다',
+  buildCollected('remonterrace', {
+    sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '제목', sourceCommentCount: 0,
+  }, '본문'.repeat(60), '2026-09-03T07:33:37.982Z').sourceRunId === '20260903-163337')
+check('🔴 잘못된 runId 는 assert 가 막는다',
+  (() => {
+    const r = buildCollected('remonterrace', { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '제목', sourceCommentCount: 0 }, '본문'.repeat(60), '2026-09-03T07:33:37.982Z')
+    try { assertNaverCandidate({ ...r, sourceRunId: 'x' }); return false } catch { return true }
+  })())
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0
