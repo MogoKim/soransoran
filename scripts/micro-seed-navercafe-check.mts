@@ -25,6 +25,7 @@ import {
   SESSION_PATH_ENV, KILL_SWITCH_ENV,
   DEFAULT_SESSION_PATH, PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, DEFAULT_BROWSER_CHANNEL,
   browserLaunchOptions, isUnaoSessionPath, isSessionPathIgnored, summarizeCookies, AUTH_COOKIE_NAMES,
+  parsePostedLabel, normalizeCount,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
@@ -37,6 +38,8 @@ const check = (l: string, c: boolean, d = '') => (c ? ok(l) : bad(l, d))
 const COLLECTOR = readFileSync('scripts/micro-seed-collect-navercafe.mts', 'utf-8')
 const LIB = readFileSync('scripts/lib/micro-seed-navercafe.mts', 'utf-8')
 const SETUP = readFileSync('scripts/navercafe-session-setup.mts', 'utf-8')
+const IMPORTER = readFileSync('scripts/micro-seed-import-82cook-live.mts', 'utf-8')
+const SUPPLY_DOC = readFileSync('docs/operations/2026-09-03-raw-supply-chain-design.md', 'utf-8')
 const GITIGNORE = readFileSync('.gitignore', 'utf-8')
 
 /**
@@ -53,6 +56,7 @@ const codeOf = (src: string): string =>
 const COLLECTOR_CODE = codeOf(COLLECTOR)
 const LIB_CODE = codeOf(LIB)
 const SETUP_CODE = codeOf(SETUP)
+const IMPORTER_CODE = codeOf(IMPORTER)
 
 console.log('\n네이버 카페 수집 계약 fixture\n')
 
@@ -180,10 +184,15 @@ console.log('\n⑦ 산출물 — 🔴 82cook 과 같은 스키마 (importer 가 
     sourceCommentCount: 7,
   }, '아이들 대학 보내고 나니 집이 조용해서 적응이 안 되네요. 낮에는 라디오라도 틀어놔야 견딥니다.', new Date().toISOString())
 
+  // 🔴 필드 **수**를 세지 않는다. 세면 메타를 하나 더할 때마다 이 단정이 깨지고,
+  //    깨진 김에 느슨하게 고치게 된다. 봐야 하는 것은 "importer 가 읽는 키가 다 있는가" 다.
+  //    추가 키의 안전성은 ⑮ 가 importer 쪽에서 따로 본다 (PR-S2-b-4).
   const WANT = ['sourceSite','sourceUrl','sourceArticleId','sourceBoardName','sourceCommentCount',
     'originalTitle','rawBody','sourceCapturedAt','dedupKey','qualityFlags','qualitySignals']
-  check(`산출물이 11필드다 (82cook 과 동일)`, WANT.every((k) => k in row) && Object.keys(row).length === WANT.length,
-    Object.keys(row).join(','))
+  check('importer 가 읽는 키가 전부 있다 (82cook 과 동일)', WANT.every((k) => k in row),
+    `빠진 키: ${WANT.filter((k) => !(k in row)).join(',')}`)
+  check('🔴 82cook 산출물의 상위집합이다 (필수 키를 빼지 않았다)',
+    WANT.every((k) => row[k as keyof CollectedCandidate] !== undefined))
   check('sourceSite 가 navercafe:remonterrace', row.sourceSite === 'navercafe:remonterrace')
   check('dedupKey 가 재계산과 같다', row.dedupKey === computeDedupKey(row.sourceSite, row.sourceArticleId))
   check('qualityFlags 가 붙는다 (글 단위 판정)', Array.isArray(row.qualityFlags))
@@ -345,6 +354,141 @@ check('🔴 설치 안내가 브라우저 바이너리를 강요하지 않는다
     browserLaunchOptions({ channel: null, headless: false }).headless === false)
   check('채널 env 이름이 노출돼 있다', BROWSER_CHANNEL_ENV === 'SORAN_BROWSER_CHANNEL')
 }
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 작성 시각 라벨 파싱 — 🔴 애매하면 null (PR-S2-b-4)')
+// ─────────────────────────────────────────────────────────
+{
+  // 기준시각: 2026-09-03 15:00 KST = 2026-09-03T06:00Z
+  const now = new Date('2026-09-03T06:00:00.000Z')
+  const kstDate = (iso: string | null) =>
+    iso === null ? null : new Date(Date.parse(iso) + 9 * 3600_000).toISOString().slice(0, 16)
+
+  check('오늘 HH:mm → 목록을 본 날의 그 시각 (KST)',
+    kstDate(parsePostedLabel('15:32', now)) === '2026-09-03T15:32',
+    `받은 값: ${kstDate(parsePostedLabel('15:32', now))}`)
+  check('🔴 자정 직후도 같은 날로 본다 (00:05)',
+    kstDate(parsePostedLabel('00:05', now)) === '2026-09-03T00:05')
+  check('YYYY.MM.DD. → 그 날 00:00 KST',
+    kstDate(parsePostedLabel('2026.09.01.', now)) === '2026-09-01T00:00')
+  check('YYYY-MM-DD 형태도 받는다',
+    kstDate(parsePostedLabel('2026-09-01', now)) === '2026-09-01T00:00')
+  check('MM.DD. → 올해로 본다',
+    kstDate(parsePostedLabel('09.01.', now)) === '2026-09-01T00:00')
+  check('🔴 MM.DD. 가 미래면 작년이다 (연말연시 사고 방지)',
+    kstDate(parsePostedLabel('12.31.', now)) === '2025-12-31T00:00',
+    '올해로 두면 12월 글이 "3개월 뒤에 쓰인 글" 이 된다')
+  check('상대시각 3시간 전',
+    parsePostedLabel('3시간 전', now) === new Date(now.getTime() - 3 * 3600_000).toISOString())
+  check('상대시각 5분 전',
+    parsePostedLabel('5분 전', now) === new Date(now.getTime() - 5 * 60_000).toISOString())
+  check('"방금 전" 은 지금', parsePostedLabel('방금 전', now) === now.toISOString())
+
+  const unparsable = ['', '  ', '어제', '25:99', '99:99', 'yesterday', '새글', '2026.13.45.abc', 'N']
+  check('🔴 해석 못 하는 라벨은 전부 null',
+    unparsable.every((l) => parsePostedLabel(l, now) === null),
+    `null 이 아닌 것: ${unparsable.filter((l) => parsePostedLabel(l, now) !== null).join(' · ')}`)
+  check('null · undefined · 숫자도 null',
+    parsePostedLabel(null, now) === null && parsePostedLabel(undefined, now) === null)
+  check('🔴 추측하지 않는다 — 시/분 범위를 넘으면 null',
+    parsePostedLabel('24:00', now) === null && parsePostedLabel('12:60', now) === null,
+    'time lag 측정에 추측값이 섞이면 그 측정이 통째로 못 쓰게 된다')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ 숫자 정규화 — 🔴 모르면 0 이 아니라 null')
+// ─────────────────────────────────────────────────────────
+check('쉼표를 걷어낸다', normalizeCount('1,234') === 1234)
+check('접두 문자열이 붙어도 숫자를 찾는다', normalizeCount('조회 34') === 34)
+check('만 단위', normalizeCount('1.2만') === 12000 && normalizeCount('3만') === 30000)
+check('천 단위', normalizeCount('2천') === 2000)
+check('숫자 타입도 받는다', normalizeCount(12) === 12 && normalizeCount(0) === 0)
+check('🔴 빈 문자열 · null · undefined 는 null (0 이 아니다)',
+  normalizeCount('') === null && normalizeCount('   ') === null
+    && normalizeCount(null) === null && normalizeCount(undefined) === null,
+  '"댓글 0개" 와 "댓글 수를 못 읽었다" 는 다른 사실이다 — 0 으로 뭉개면 lowEngagement 통계가 거짓말한다')
+check('숫자가 없는 문자열은 null', normalizeCount('없음') === null)
+check('음수·NaN 은 null', normalizeCount(-1) === null && normalizeCount(NaN) === null)
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑮ 목록 메타가 산출물에 남는가 · importer 계약은 그대로인가')
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 string 으로 명시한다. 리터럴 타입으로 좁혀지면 아래 !== 비교를
+  //    TS 가 "겹치지 않는다" 며 막는다 — 검사하려는 것은 런타임 값이다.
+  const listedAt: string = '2026-09-03T06:00:00.000Z'
+  const capturedAt: string = '2026-09-03T06:17:00.000Z'
+  const full = buildCollected('remonterrace', {
+    sourceArticleId: '34998655', sourceUrl: ARTICLE_URL('remonterrace', '34998655'),
+    originalTitle: '맛있는 반찬 이야기', sourceCommentCount: 3,
+    sourcePostedLabel: '15:32', sourceViewCount: 1240,
+    sourceBoardName: '자유게시판', sourcePage: 2, sourceRankOnPage: 7,
+  }, '본문'.repeat(60), capturedAt, listedAt)
+
+  check('sourcePage · sourceRankOnPage 가 남는다', full.sourcePage === 2 && full.sourceRankOnPage === 7)
+  check('sourceViewCount 가 남는다', full.sourceViewCount === 1240)
+  check('sourceBoardName 이 목록 값을 쓴다', full.sourceBoardName === '자유게시판')
+  check('sourcePostedLabel 원문이 남는다', full.sourcePostedLabel === '15:32')
+  check('🔴 sourcePostedAt 은 목록을 본 시각 기준으로 해석한다',
+    full.sourcePostedAt === '2026-09-03T06:32:00.000Z',
+    `받은 값: ${full.sourcePostedAt} — "15:32" 는 목록을 본 날의 15:32 다`)
+  check('sourceListedAt 은 상세 시각과 다르다 (time lag 조사의 근거)',
+    full.sourceListedAt === listedAt && full.sourceCapturedAt === capturedAt
+      && full.sourceListedAt !== full.sourceCapturedAt)
+  check('assertNaverCandidate 통과', (() => { try { assertNaverCandidate(full); return true } catch { return false } })())
+
+  // 메타가 하나도 없는 경우 — 첫 live 이전 형태
+  const bare = buildCollected('remonterrace', {
+    sourceArticleId: '34998655', sourceUrl: ARTICLE_URL('remonterrace', '34998655'),
+    originalTitle: '제목', sourceCommentCount: 0,
+  }, '본문'.repeat(60), capturedAt)
+  check('🔴 메타가 없으면 전부 null — 0 이나 추측값이 아니다',
+    bare.sourcePostedLabel === null && bare.sourcePostedAt === null
+      && bare.sourcePage === null && bare.sourceRankOnPage === null && bare.sourceViewCount === null)
+  check('게시판명은 못 읽으면 기본값', bare.sourceBoardName === '전체글보기')
+  check('listedAt 생략 시 capturedAt 과 같다', bare.sourceListedAt === capturedAt)
+  check('메타 없이도 assertNaverCandidate 통과',
+    (() => { try { assertNaverCandidate(bare); return true } catch { return false } })())
+
+  // 🔴 근거 없는 시각을 막는다
+  check('🔴 라벨 없이 sourcePostedAt 만 있으면 거부한다',
+    (() => { try { assertNaverCandidate({ ...bare, sourcePostedAt: capturedAt }); return false } catch { return true } })(),
+    '라벨이 없는 시각은 어디서 왔는지 답할 수 없다')
+  check('🔴 sourcePostedAt 이 ISO 가 아니면 거부한다',
+    (() => { try { assertNaverCandidate({ ...full, sourcePostedAt: '오늘' }); return false } catch { return true } })())
+  check('🔴 음수 page/rank/view 는 거부한다',
+    (() => { try { assertNaverCandidate({ ...full, sourcePage: -1 }); return false } catch { return true } })())
+
+  // ── 필수 키 계약 (기존) ──
+  const required = ['sourceSite', 'sourceArticleId', 'sourceUrl', 'originalTitle', 'rawBody', 'sourceCapturedAt'] as const
+  check('🔴 기존 필수 키가 전부 그대로다',
+    required.every((k) => full[k] !== undefined && full[k] !== ''),
+    `빠진 키: ${required.filter((k) => full[k] === undefined || full[k] === '').join(', ')}`)
+}
+
+// importer 가 추가 키를 무시하는가 — 🔴 명시 필드만 쓴다
+check('🔴 importer 의 RawContent create 가 명시 필드만 쓴다 (스프레드 없음)',
+  !/microSeedRawContent\.create\(\{[\s\S]{0,400}\.\.\.row/.test(IMPORTER_CODE),
+  '...row 를 펼치면 새 키가 그대로 DB 로 가려다 터진다')
+check('🔴 importer 가 새 메타 키를 읽지 않는다',
+  !/row\.(sourcePostedAt|sourcePostedLabel|sourcePage|sourceRankOnPage|sourceViewCount|sourceListedAt)/.test(IMPORTER_CODE),
+  'importer 는 이 PR 로 바뀌지 않아야 한다')
+check('🔴 DB 컬럼을 새로 만들지 않았다 (schema 미변경 전제)',
+  !/dedupKey:\s*row\.dedupKey/.test(IMPORTER_CODE.split('microSeedRawContent.create')[1] ?? ''),
+  'dedupKey 는 DB 컬럼이 아니다 — JSONL 단계 중복 제거용이고 DB 방어는 @@unique 다')
+
+// ── 문서 원칙이 훼손되지 않았는가 ──
+check('🔴 정치 · 진영 제외 원칙이 문서에 남아 있다',
+  /정치 · 진영 이슈는 소란소란이 가져가지 않는다/.test(SUPPLY_DOC)
+    && /🚫 \*\*제외\*\* — 레인 없음/.test(SUPPLY_DOC))
+check('🔴 Growth Issue 는 연예 · 방송 · 셀럽 한정이다',
+  /Growth Issue 후보 = 연예 · 방송 · 셀럽 이슈 \*\*로 한정\*\*/.test(SUPPLY_DOC))
+check('🔴 lowEngagement 를 품질 실패로 읽지 않는다는 원칙이 남아 있다',
+  /`lowEngagement` 는 품질이 아니라/.test(SUPPLY_DOC))
+check('🔴 이미지는 여전히 향후 설계 항목이다',
+  /이미지 — \*\*향후 설계 항목\. 지금 구현하지 않는다\*\*/.test(SUPPLY_DOC))
+check('🔴 collector 는 여전히 이미지를 가져오지 않는다',
+  /이미지를 가져오지 않는다/.test(COLLECTOR) && !/(img|image|\.src)/i.test(COLLECTOR_CODE))
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0

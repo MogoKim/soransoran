@@ -48,7 +48,7 @@ import {
   LIST_URL, ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
   LOCK_PATH, LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS,
   SESSION_PATH_ENV, KILL_SWITCH_ENV, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
-  PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions,
+  PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions, normalizeCount,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -162,14 +162,17 @@ async function main() {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
       await page.goto(LIST_URL(cafe!.cafeId, p), { waitUntil: 'domcontentloaded', timeout: 20_000 })
       await sleep(randomDelay(DELAY_LIST_MS))
-      items.push(...(await readList(page, cafe!.cafeId)))
+      items.push(...(await readList(page, cafe!.cafeId, p)))
       console.log(`  목록 ${p}p → 누적 ${items.length}건`)
       if (p < PAGES) await sleep(randomDelay(DELAY_LIST_MS))
     }
     if (items.length === 0) throw new Error('목록이 비었다 — 세션 만료이거나 셀렉터가 바뀌었다')
 
     // ── ② 자동 선별 (목록 단계 제외) ──
-    const listRows = items.map((i) => buildCollected(cafe!.cafeId, i, '', now.toISOString()))
+    // 🔴 목록을 **본** 시각을 따로 잡는다. 상세를 여는 시각과 다르고,
+    //    time lag 조사는 이 둘의 차이를 알아야 한다 (PR-S2-b-4).
+    const listedAtIso = new Date().toISOString()
+    const listRows = items.map((i) => buildCollected(cafe!.cafeId, i, '', listedAtIso, listedAtIso))
     writeJsonl(OUT.replace(/\.jsonl$/, '.list.jsonl'), listRows)
     const plan = planAutoFetch(
       listRows.map((r) => ({
@@ -195,7 +198,7 @@ async function main() {
         console.log(`  ⚠️ ${id} — 본문을 읽지 못했다. 건너뛴다`)
         continue
       }
-      const row = buildCollected(cafe!.cafeId, known.get(id)!, body, now.toISOString())
+      const row = buildCollected(cafe!.cafeId, known.get(id)!, body, new Date().toISOString(), listedAtIso)
       assertNaverCandidate(row)
       collected.push(row)
       console.log(`  ✅ ${id} · ${[...body].length}자 · 댓글 ${row.sourceCommentCount}`)
@@ -264,18 +267,28 @@ async function loadChromium(): Promise<Chromium> {
  *    실제 페이지를 보지 않고 적은 셀렉터는 조용히 0건을 반환한다.
  *    지금은 구조만 두고 첫 live 에서 사람이 확인한다 — 0건이면 위에서 throw 한다.
  */
-async function readList(page: NaverPage, cafeId: string): Promise<NaverListItem[]> {
+async function readList(page: NaverPage, cafeId: string, pageNo: number): Promise<NaverListItem[]> {
   const frames = page.frames().filter((f) => f.url().includes('cafe.naver.com'))
   for (const f of [page, ...frames]) {
     try {
-      const rows = await f.$$eval<{ href: string; title: string; comments: number }[]>(
+      // 🔴 브라우저 안에서는 **문자열을 그대로 꺼내오기만** 한다.
+      //    해석(숫자 변환 · 시각 파싱)은 밖의 순수 함수가 한다 —
+      //    $$eval 안의 코드는 fixture 로 검증할 수 없기 때문이다.
+      const rows = await f.$$eval<{ href: string; title: string; comments: string; date: string; views: string; board: string }[]>(
         'a.article, a[href*="articleid"], a[href*="/articles/"]',
         (els) =>
           els.map((el) => {
             const a = el as HTMLAnchorElement
             const near = a.closest('tr, li, div')
-            const cm = near?.querySelector('.comment_count, .num, em')?.textContent ?? '0'
-            return { href: a.href, title: (a.textContent ?? '').trim(), comments: Number((cm.match(/\d+/) ?? ['0'])[0]) }
+            const pick = (sel: string): string => near?.querySelector(sel)?.textContent?.trim() ?? ''
+            return {
+              href: a.href,
+              title: (a.textContent ?? '').trim(),
+              comments: pick('.comment_count, .num, em'),
+              date: pick('.td_date, .date, .article-date, .time'),
+              views: pick('.td_view, .view, .article-views'),
+              board: pick('.td_name, .board-name, .article-board'),
+            }
           }),
       )
       const items: NaverListItem[] = []
@@ -287,7 +300,14 @@ async function readList(page: NaverPage, cafeId: string): Promise<NaverListItem[
           sourceArticleId: id,
           sourceUrl: ARTICLE_URL(cafeId, id),
           originalTitle: r.title,
-          sourceCommentCount: r.comments,
+          // 🔴 댓글 수만 0 으로 떨어뜨린다 — assessCandidate 계약이 number 다.
+          //    나머지 메타는 못 읽으면 null 로 남긴다(추측하지 않는다).
+          sourceCommentCount: normalizeCount(r.comments) ?? 0,
+          sourcePostedLabel: r.date || null,
+          sourceViewCount: normalizeCount(r.views),
+          sourceBoardName: r.board || null,
+          sourcePage: pageNo,
+          sourceRankOnPage: items.length + 1,
         })
       }
       if (items.length) return items

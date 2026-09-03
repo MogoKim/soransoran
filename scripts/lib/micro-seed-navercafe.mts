@@ -281,6 +281,16 @@ export type NaverListItem = {
   sourceUrl: string
   originalTitle: string
   sourceCommentCount: number
+  // ── 🔴 PR-S2-b-4 조사용 메타 — 없으면 넣지 않는다(추측하지 않는다) ──
+  /** 게시판명. 목록에서 못 읽으면 생략 → 기본 '전체글보기' */
+  sourceBoardName?: string | null
+  /** 🔴 화면에 보이는 작성 시각 **문자열 그대로**. 해석은 parsePostedLabel 이 따로 한다 */
+  sourcePostedLabel?: string | null
+  sourceViewCount?: number | null
+  /** 목록 몇 페이지에서 봤나 (1-base) */
+  sourcePage?: number | null
+  /** 그 페이지 안에서 몇 번째였나 (1-base) */
+  sourceRankOnPage?: number | null
 }
 
 export type CollectedCandidate = {
@@ -295,6 +305,102 @@ export type CollectedCandidate = {
   dedupKey: string
   qualityFlags: QualityAssessment['flags']
   qualitySignals: QualityAssessment['signals'] & { stage: QualityAssessment['stage'] }
+  // ── 🔴 PR-S2-b-4 — page depth · time lag · quota 조사용 ──
+  //    importer 는 이 키들을 읽지 않는다. DB 컬럼도 만들지 않는다.
+  /** 목록에서 이 글을 **본** 시각. 상세를 여는 시각(sourceCapturedAt)보다 앞선다 */
+  sourceListedAt: string
+  /** 화면 문자열 원형 (예: "15:32" · "2026.09.01.") — 🔴 해석 실패해도 여기는 남는다 */
+  sourcePostedLabel: string | null
+  /** 위 라벨을 ISO 로 해석한 값. 🔴 확실할 때만 채운다. 모르면 null */
+  sourcePostedAt: string | null
+  sourcePage: number | null
+  sourceRankOnPage: number | null
+  sourceViewCount: number | null
+}
+
+// ─────────────────────────────────────────────────────────
+// 목록 메타 정규화 (🔴 순수 함수 · PR-S2-b-4)
+// ─────────────────────────────────────────────────────────
+
+/** KST 는 DST 가 없다 — 고정 오프셋으로 계산해도 안전하다 */
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000
+
+/**
+ * 숫자 정규화. `"1,234"` · `"조회 34"` · `"1.2만"` 을 받는다.
+ *
+ * 🔴 **모르면 0 이 아니라 `null` 이다.** 조사 목적상 "댓글 0개" 와 "댓글 수를 못 읽었다" 는
+ *    완전히 다른 사실이다. 0 으로 뭉개면 lowEngagement 통계가 거짓말을 한다.
+ */
+export function normalizeCount(raw: unknown): number | null {
+  if (typeof raw === 'number') return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : null
+  if (typeof raw !== 'string') return null
+  const t = raw.replace(/,/g, '').trim()
+  if (t === '') return null
+  const unit = t.match(/(\d+(?:\.\d+)?)\s*(만|천)/)
+  if (unit) {
+    const mult = unit[2] === '만' ? 10_000 : 1_000
+    return Math.floor(Number(unit[1]) * mult)
+  }
+  const m = t.match(/\d+/)
+  return m ? Number(m[0]) : null
+}
+
+/**
+ * 네이버 목록의 작성 시각 라벨을 ISO 로 해석한다.
+ *
+ * 🔴 **확실할 때만 값을 낸다. 애매하면 `null` 이다.**
+ *    time lag 를 재려고 만든 필드인데 추측값이 섞이면 그 측정이 통째로 못 쓰게 된다.
+ *    해석에 실패해도 원문 라벨(`sourcePostedLabel`)은 남으므로 잃는 것이 없다.
+ *
+ * 다루는 형태 (네이버 카페 목록 실측 기준)
+ * ```
+ *   15:32          오늘 그 시각 (KST)
+ *   2026.09.01.    그 날짜 00:00 KST
+ *   09.01.         올해 그 날짜 — 🔴 미래가 되면 작년으로 본다(연말연시)
+ *   2026-09-01     ISO 형태
+ *   3시간 전 · 5분 전 · 방금 전
+ * ```
+ */
+export function parsePostedLabel(label: string | null | undefined, now: Date): string | null {
+  if (typeof label !== 'string') return null
+  const t = label.trim()
+  if (t === '') return null
+
+  const iso = (y: number, mo: number, d: number, h: number, mi: number): string =>
+    new Date(Date.UTC(y, mo - 1, d, h, mi) - KST_OFFSET_MS).toISOString()
+
+  // 상대 시각
+  if (/방금/.test(t)) return now.toISOString()
+  const rel = t.match(/^(\d+)\s*(분|시간|일)\s*전$/)
+  if (rel) {
+    const n = Number(rel[1])
+    const ms = rel[2] === '분' ? 60_000 : rel[2] === '시간' ? 3_600_000 : 86_400_000
+    return new Date(now.getTime() - n * ms).toISOString()
+  }
+
+  // 절대 날짜
+  const ymd = t.match(/^(\d{4})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})\.?$/)
+  if (ymd) return iso(Number(ymd[1]), Number(ymd[2]), Number(ymd[3]), 0, 0)
+
+  // 오늘 HH:mm — 🔴 '오늘' 은 KST 기준이다
+  const hm = t.match(/^(\d{1,2}):(\d{2})$/)
+  if (hm) {
+    const h = Number(hm[1]), mi = Number(hm[2])
+    if (h > 23 || mi > 59) return null
+    const kstNow = new Date(now.getTime() + KST_OFFSET_MS)
+    return iso(kstNow.getUTCFullYear(), kstNow.getUTCMonth() + 1, kstNow.getUTCDate(), h, mi)
+  }
+
+  // MM.DD. — 연도가 없다. 올해로 보되 미래면 작년이다
+  const md = t.match(/^(\d{1,2})[.\-/]\s*(\d{1,2})\.?$/)
+  if (md) {
+    const kstNow = new Date(now.getTime() + KST_OFFSET_MS)
+    const y = kstNow.getUTCFullYear()
+    const cand = iso(y, Number(md[1]), Number(md[2]), 0, 0)
+    return Date.parse(cand) > now.getTime() ? iso(y - 1, Number(md[1]), Number(md[2]), 0, 0) : cand
+  }
+
+  return null
 }
 
 /** 🔴 목록도 상세도 이 함수 하나를 지난다 — 정규화가 두 곳이면 필드가 갈라진다 */
@@ -303,6 +409,8 @@ export function buildCollected(
   item: NaverListItem,
   rawBody: string,
   capturedAtIso: string,
+  /** 🔴 목록에서 이 글을 본 시각. 생략하면 capturedAt 과 같다고 본다 */
+  listedAtIso: string = capturedAtIso,
 ): CollectedCandidate {
   const sourceSite = sourceSiteOf(cafeId)
   const a = assessCandidate({
@@ -310,11 +418,12 @@ export function buildCollected(
     rawBody,
     sourceCommentCount: item.sourceCommentCount,
   })
+  const listedAt = new Date(listedAtIso)
   return {
     sourceSite,
     sourceUrl: item.sourceUrl,
     sourceArticleId: item.sourceArticleId,
-    sourceBoardName: '전체글보기',
+    sourceBoardName: item.sourceBoardName?.trim() || '전체글보기',
     sourceCommentCount: item.sourceCommentCount,
     originalTitle: item.originalTitle,
     rawBody,
@@ -322,6 +431,15 @@ export function buildCollected(
     dedupKey: computeDedupKey(sourceSite, item.sourceArticleId),
     qualityFlags: a.flags,
     qualitySignals: { ...a.signals, stage: a.stage },
+    // ── PR-S2-b-4 조사용 메타 ──
+    sourceListedAt: listedAtIso,
+    sourcePostedLabel: item.sourcePostedLabel?.trim() || null,
+    // 🔴 '지금' 이 아니라 **목록을 본 시각** 기준으로 해석한다.
+    //    "15:32" 는 목록을 본 날의 15:32 이지 파일을 읽는 날의 15:32 가 아니다.
+    sourcePostedAt: parsePostedLabel(item.sourcePostedLabel, Number.isNaN(listedAt.getTime()) ? new Date(capturedAtIso) : listedAt),
+    sourcePage: item.sourcePage ?? null,
+    sourceRankOnPage: item.sourceRankOnPage ?? null,
+    sourceViewCount: item.sourceViewCount ?? null,
   }
 }
 
@@ -337,6 +455,21 @@ export function assertNaverCandidate(row: CollectedCandidate): void {
   if (row.dedupKey !== expect) throw new Error('dedupKey 가 재계산과 다르다')
   if (!row.sourceUrl.startsWith('https://cafe.naver.com/')) {
     throw new Error(`sourceUrl 이 카페 주소가 아니다: ${JSON.stringify(row.sourceUrl)}`)
+  }
+  // ── PR-S2-b-4 메타 계약 ──
+  // 🔴 "값이 있어야 한다" 가 아니라 "추측값이 없어야 한다" 를 본다.
+  //    못 읽은 것은 null 이어야 하고, 채워졌다면 해석 가능한 형태여야 한다.
+  if (row.sourcePostedAt !== null && Number.isNaN(Date.parse(row.sourcePostedAt))) {
+    throw new Error(`sourcePostedAt 이 ISO 가 아니다: ${JSON.stringify(row.sourcePostedAt)}`)
+  }
+  if (row.sourcePostedAt !== null && row.sourcePostedLabel === null) {
+    throw new Error('sourcePostedAt 이 있는데 원문 라벨이 없다 — 근거 없는 시각이다')
+  }
+  for (const [k, v] of [['sourcePage', row.sourcePage], ['sourceRankOnPage', row.sourceRankOnPage], ['sourceViewCount', row.sourceViewCount]] as const) {
+    if (v !== null && (!Number.isFinite(v) || v < 0)) throw new Error(`${k} 가 음수이거나 숫자가 아니다: ${JSON.stringify(v)}`)
+  }
+  if (Number.isNaN(Date.parse(row.sourceListedAt))) {
+    throw new Error(`sourceListedAt 이 ISO 가 아니다: ${JSON.stringify(row.sourceListedAt)}`)
   }
 }
 
