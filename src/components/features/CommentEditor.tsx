@@ -8,8 +8,10 @@ import DeleteButton from '@/components/features/DeleteButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { updateComment, type CommentActionState } from '@/lib/actions/comments'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
+import { useToast } from '@/components/ui/toast'
 import {
   COMMENT_TEXTAREA_MAX_HEIGHT,
+  COMMENT_UPDATED,
   MAX_COMMENT_LENGTH,
   MIN_COMMENT_LENGTH,
 } from '@/lib/comment-policy'
@@ -41,6 +43,7 @@ export default function CommentEditor({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
+  const toast = useToast()
   const [state, formAction] = useFormState<CommentActionState, FormData>(updateComment, {})
   const [editing, setEditing] = useState(false)
   const [content, setContent] = useState(initialContent)
@@ -48,9 +51,16 @@ export default function CommentEditor({
 
   useAutoResize(textareaRef, content, COMMENT_TEXTAREA_MAX_HEIGHT)
 
-  // 저장이 끝나면 닫는다. 바뀐 본문은 서버가 다시 그려 준다.
+  /**
+   * 저장이 끝나면 닫는다. 바뀐 본문은 서버가 다시 그려 준다.
+   * 🔴 닫히는 것만으로는 저장됐는지 알 수 없어 토스트로 알린다.
+   */
   useEffect(() => {
-    if (state.ok) setEditing(false)
+    if (!state.ok) return
+    setEditing(false)
+    toast.success(COMMENT_UPDATED, { key: `comment-edit:${commentId}` })
+    // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
   if (!editing) {

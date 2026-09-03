@@ -9,7 +9,21 @@ export const COMMENT_TOO_LONG = `댓글은 ${MAX_COMMENT_LENGTH}자까지 쓸 �
 /** 입력창 자동 확장 상한(px). 넘으면 내부 스크롤. */
 export const COMMENT_TEXTAREA_MAX_HEIGHT = 160
 
+/**
+ * 성공 안내 문구 — 🔴 컴포넌트에 리터럴로 흩뿌리지 않는다.
+ *    톤을 고칠 때 호출부를 전부 찾아다니게 된다.
+ *    말투는 '-어요' 로 맞추고, '완료' 같은 기계적인 말을 쓰지 않는다.
+ */
 export const COMMENT_CREATED = '댓글이 등록됐어요.'
+export const REPLY_CREATED = '답글이 등록됐어요.'
+export const COMMENT_UPDATED = '댓글을 고쳤어요.'
+export const REPORT_RECEIVED = '신고가 접수됐어요.'
+/**
+ * 신고 폼이 사라진 자리에 남는 한 줄.
+ * 🔴 토스트와 같은 말을 반복하지 않는다 — 접수됐다는 사실은 토스트가 이미 알렸다.
+ *    여기 남는 것은 '이 폼은 끝났다' 는 상태 표시다.
+ */
+export const REPORT_REVIEW_HINT = '운영자가 확인할게요.'
 
 /** 글자수는 상한이 가까워질 때만 보여준다. */
 export const COMMENT_COUNTER_FROM = 400
