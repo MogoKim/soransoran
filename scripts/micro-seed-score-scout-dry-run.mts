@@ -155,14 +155,14 @@ function main(): void {
   console.log(`\n② 상위 ${top.length}건 — 🔴 자동 fetch 대상이 아니라 눈으로 볼 목록이다`)
   console.log('   🔴 laneHint 는 자동 라우팅이 아니다 — 사람이 보는 힌트다. Sheet · DB · 자동 fetch 없음')
   console.log(
-    `   ${padr('#', 3)} ${padr('총점', 6)} ${padr('레인', 10)} ${padr('화제', 5)} ${padr('핏', 4)} ${padr('대화', 4)} ${padr('신선', 4)} ` +
+    `   ${padr('#', 3)} ${padr('총점', 6)} ${padr('레인', 10)} ${padr('화제', 5)} ${padr('핏', 4)} ${padr('대화', 4)} ${padr('신선', 4)} ${padr('감점', 5)} ` +
       `${padr('게시판', 16)} ${padr('articleId', 10)} ${padr('p/r', 7)} ${padr('댓/조', 10)} ${padr('lag', 6)}`,
   )
   top.forEach((s, i) => {
     const r = s.row
     console.log(
       `   ${padr(i + 1, 3)} ${padr(s.score.total.toFixed(1), 6)} ${padr(LANE_LABEL[s.laneHint.lane], 10)} ${padr(s.score.engagement.toFixed(1), 5)} ` +
-        `${padr(s.score.targetFit.toFixed(0), 4)} ${padr(s.score.conversation.toFixed(0), 4)} ${padr(s.score.freshness.toFixed(0), 4)} ` +
+        `${padr(s.score.targetFit.toFixed(0), 4)} ${padr(s.score.conversation.toFixed(0), 4)} ${padr(s.score.freshness.toFixed(0), 4)} ${padr(s.score.penalty === 0 ? '-' : s.score.penalty.toFixed(0), 5)} ` +
         `${padr((r.sourceBoardName ?? '').slice(0, 14), 16)} ${padr(r.sourceArticleId, 10)} ` +
         `${padr(`${r.sourcePage ?? '-'}/${r.sourceRankOnPage ?? '-'}`, 7)} ` +
         `${padr(`${r.sourceCommentCount}/${r.sourceViewCount ?? '-'}`, 10)} ${padr(s.lagMinutes === null ? '-' : s.lagMinutes.toFixed(0), 6)}`,
