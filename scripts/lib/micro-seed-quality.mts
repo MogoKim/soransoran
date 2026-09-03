@@ -45,6 +45,7 @@ export type QualityFlag =
   | 'lowEngagement'
   | 'highEngagement'
   | 'politicalOrPublicFigure'
+  | 'politicalTopicLikely'
   | 'clickbaitTitle'
   | 'shortTitle'
   | 'titleTruncated'
@@ -134,6 +135,28 @@ export function stripTruncationTail(title: string): { truncated: boolean; stem: 
  */
 const POLITICS =
   /(대통령|국회의원|장관|여당|야당|민주당|국민의힘|친명|친윤|검찰|공수처|총선|대선|탄핵|관저|청와대|의원)/g
+
+/**
+ * 정치 · 이념 **주제**. 🔴 `POLITICS` 와 목적이 다르다.
+ *
+ * `politicalOrPublicFigure` 는 **공인 · 실명** 탐지다 — 누가 언급됐는가를 본다.
+ * 그래서 `나라별 극우의 특징`(4234894, 2026-09-03 실측)을 놓쳤다.
+ * 사람 이름도 직함도 없고 **주제만 정치**인 글이다.
+ *
+ * 🔴 두 축을 한 플래그로 합치지 않는다.
+ *    합치면 "실명이 없으니 안전하다" 와 "정치 주제가 아니다" 가 같은 뜻이 되고,
+ *    그 순간 이 사례가 다시 새어 나간다.
+ *
+ * 🔴 최소 어휘로 시작한다 — 과차단이 더 나쁘다.
+ *    `보수` 는 넣지 않는다(보수공사 · 보수적). `진보` 도 넣지 않는다(진보한다).
+ *    `시위` · `집회` · `노조` · `파업` 도 뺐다 — 생활글에서 정상적으로 쓰인다.
+ *    이념 진영을 직접 가리키는 말만 남긴다. 후보가 쌓이면 실측으로 넓힌다.
+ *
+ * 🟢 제목만으로 판정된다 — 그래서 목록 단계 자동 선별이 쓸 수 있다.
+ *    이것이 `medicalOrAdLikely` 와 다른 점이다(§DETAIL_ONLY_FLAGS 주석).
+ */
+const POLITICAL_TOPIC =
+  /(극우|극좌|좌파|우파|수구|빨갱이|좌빨|친일파|토착왜구|개딸|태극기\s*부대|진영\s*논리|정치\s*성향|이념\s*갈등|정치\s*글)/g
 
 /**
  * 한자 성 약칭. 언론 제목이 쓰는 형태다 — `李대통령` · `유시민 '李 저격'`.
@@ -304,6 +327,13 @@ export function assessCandidate(input: QualityInput): QualityAssessment {
     note('politicalOrPublicFigure', publicFigure)
   }
 
+  // 🔴 공인·실명과 **별도 축**이다. 제목만 본다 — 목록 단계 자동 선별이 쓸 수 있어야 한다
+  const politicalTopic = collect(POLITICAL_TOPIC, title)
+  if (politicalTopic.length) {
+    flags.push('politicalTopicLikely')
+    note('politicalTopicLikely', politicalTopic)
+  }
+
   // 🔴 stem 에 적용한다 — 말줄임은 낚시가 아니다
   const clickbait = collect(CLICKBAIT, stem)
   if (clickbait.length) {
@@ -411,6 +441,8 @@ export function selectionScore(a: QualityAssessment): number {
   else if (!a.flags.includes('lowEngagement')) score += 8
 
   if (a.flags.includes('politicalOrPublicFigure')) score -= 45
+  // 🔴 실명이 없어도 정치 주제면 우리 커뮤니티 글이 아니다 (4234894 실측)
+  if (a.flags.includes('politicalTopicLikely')) score -= 45
   // 🔴 제목이 깨끗해도 본문에 이름이 나오면 성격이 달라진다 (4232047)
   if (a.flags.includes('publicFigureMention')) score -= 30
   if (a.flags.includes('medicalOrAdLikely')) score -= 25
