@@ -29,6 +29,8 @@ import {
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease,
   LOCK_MAX_AGE_MS as LOCK_TTL, type FrameProbe,
   LIST_SELECTORS, runIdOf, runOutputPath,
+  BOARD_TARGETS, findBoard, boardListUrl, pagesOf, activeCafes,
+  detectRowLabel, judgePoliticsTitle, SCOUT_MAX_PAGES, DETAIL_MAX_PAGES, maxPagesFor,
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
@@ -245,8 +247,10 @@ check(`카페 ${CAFES.length}곳이 등록돼 있다`, CAFES.length >= 5)
 check('cafeId 가 중복되지 않는다', new Set(CAFES.map((c) => c.cafeId)).size === CAFES.length)
 check('첫 live 카페가 목록에 있다', findCafe(FIRST_LIVE_CAFE_ID) !== null)
 check('모르는 카페는 null', findCafe('nosuchcafe') === null)
-check('🔴 여우야는 shadow 다 (뷰티·미용 관심사)',
-  findCafe('yeowooya')?.stage === 'shadow' && /뷰티|미용/.test(findCafe('yeowooya')?.note ?? ''))
+// 🔴 PR-S2-b-7 에서 shadow → excluded 로 바뀌었다. 뷰티 축이라는 성격은 그대로이고,
+//    "이번 라운드에 쓰지 않는다" 가 더해진 것이다 — 단정을 사실에 맞춘다.
+check('🔴 여우야는 이번 라운드 제외 (뷰티·미용 성격은 유지)',
+  findCafe('yeowooya')?.stage === 'excluded' && /뷰티|미용/.test(findCafe('yeowooya')?.note ?? ''))
 check('🔴 여우야 메모가 "바로 쓰지 않는다" 를 적고 있다',
   /바로 쓰지 않는다/.test(findCafe('yeowooya')?.note ?? ''))
 check('우갱·레몬테라스가 같은 축이다 (둘 다 production)',
@@ -692,6 +696,136 @@ check('🔴 잘못된 runId 는 assert 가 막는다',
     const r = buildCollected('remonterrace', { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '제목', sourceCommentCount: 0 }, '본문'.repeat(60), '2026-09-03T07:33:37.982Z')
     try { assertNaverCandidate({ ...r, sourceRunId: 'x' }); return false } catch { return true }
   })())
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉑ 소스 집중 — 🔴 카페를 넓히지 않고 셋을 깊게 본다 (PR-S2-b-7)')
+// ─────────────────────────────────────────────────────────
+{
+  const active = activeCafes().map((c) => c.cafeId)
+  check('활성 카페는 레몬테라스 · 우아한 갱년기 둘뿐',
+    active.length === 2 && active.includes('remonterrace') && active.includes('wgang'),
+    `받은 값: ${active.join(' · ')}`)
+  for (const id of ['dlxogns01', 'masanmam', 'goondae', 'yeowooya']) {
+    check(`🔴 ${id} 는 excluded`, findCafe(id)?.stage === 'excluded')
+  }
+  check('🔴 제외 카페를 지우지 않고 이유를 남긴다',
+    ['dlxogns01', 'masanmam', 'goondae', 'yeowooya'].every((id) => (findCafe(id)?.note ?? '').includes('제외')),
+    '왜 뺐는지가 남아야 나중에 다시 볼 수 있다')
+  check('🔴 collector 가 excluded 카페를 코드로 막는다',
+    /stage === 'excluded'/.test(COLLECTOR_CODE),
+    '설정에만 있고 아무도 안 지키는 결정이 되면 안 된다')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉒ 게시판 타깃 — 🔴 page range 는 가설이고 실측으로 고친다')
+// ─────────────────────────────────────────────────────────
+check('타깃 3개', BOARD_TARGETS.length === 3)
+check('key 중복 0', BOARD_TARGETS.length === new Set(BOARD_TARGETS.map((b) => b.key)).size)
+check('🔴 활성 카페의 게시판만 있다',
+  BOARD_TARGETS.every((b) => activeCafes().some((c) => c.cafeId === b.cafeId)))
+{
+  const j = findBoard('remonterrace:jjong')!
+  check('쫑알쫑알 menuId=23 · 2~16p', j.menuId === '23' && j.startPage === 2 && j.endPage === 16)
+  check('🔴 쫑알쫑알은 1페이지를 보지 않는다',
+    j.startPage > 1,
+    '1p 는 방금 올라온 글이라 반응이 붙을 시간이 없고, 상단에 인기글·공지가 섞인다')
+  const h = findBoard('remonterrace:humor')!
+  check('유머·연예 menuId=56 · 1p만', h.menuId === '56' && h.startPage === 1 && h.endPage === 1)
+  const w = findBoard('wgang:all')!
+  check('우갱 전체글보기 menuId=0 · 1~5p', w.menuId === '0' && w.startPage === 1 && w.endPage === 5)
+  check('모르는 키는 null', findBoard('nope:x') === null)
+
+  check('URL 이 신형 menuId 경로다',
+    boardListUrl(j, 3) === 'https://cafe.naver.com/f-e/cafes/10298136/menus/23?viewType=L&page=3',
+    `받은 값: ${boardListUrl(j, 3)}`)
+  check('우갱 cafeNo 가 다르다', boardListUrl(w, 1).includes('29349320'))
+  check('page range 가 펼쳐진다', pagesOf(j).length === 15 && pagesOf(j)[0] === 2 && pagesOf(j)[14] === 16)
+  check('1p만 타깃이면 1장', pagesOf(h).length === 1)
+  check('🔴 잘못된 range 는 조용히 빈 배열이 아니라 던진다',
+    [{ startPage: 5, endPage: 2 }, { startPage: 0, endPage: 3 }, { startPage: 1.5, endPage: 3 }]
+      .every((r) => { try { pagesOf(r); return false } catch { return true } }))
+  check('🔴 purpose 를 판정에 쓰지 않는다',
+    !/\.purpose/.test(COLLECTOR_CODE.replace(/console\.log[^\n]*/g, '')),
+    '사람이 읽는 메모다 — 코드가 읽으면 게시판이 고정 라벨이 된다')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉓ 공지·필독·추천 라벨 — 🔴 자동 상세 fetch 에서 뺀다')
+// ─────────────────────────────────────────────────────────
+for (const l of ['공지', '필독', '추천']) {
+  check(`"${l}" 라벨을 잡는다`, detectRowLabel(l, '')?.pinned === true)
+}
+check('행 class 로도 잡는다 (라벨 텍스트가 없어도)',
+  detectRowLabel('', 'board-notice type_required').pinned
+    && detectRowLabel('', 'tr board-notice').pinned)
+check('일반 행은 pinned 아님', !detectRowLabel('', '').pinned && !detectRowLabel('', 'article-row').pinned)
+check('🔴 모르는 라벨을 조용히 통과시키지 않는다',
+  detectRowLabel('신규라벨', '').unknown === '신규라벨' && !detectRowLabel('신규라벨', '').pinned,
+  '네이버가 문구를 바꾸면 여기서 드러나야 한다')
+check('라벨 없으면 unknown 도 null', detectRowLabel('', '').unknown === null)
+check('공백만 있으면 없는 것으로 본다', detectRowLabel('   ', '').unknown === null)
+check('셀렉터에 라벨이 있다', /board-tag/.test(LIST_SELECTORS.label))
+check('🔴 collector 가 pinned 행을 상세 후보에서 뺀다',
+  /!r\.sourcePinned/.test(COLLECTOR_CODE))
+check('🔴 그래도 목록 JSONL 에는 남긴다',
+  COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('r.sourcePinned'),
+  '지우는 것이 아니라 자동 경로에서만 뺀다 — 정책 Q-1')
+{
+  const base = { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '오늘 저녁 반찬 고민', sourceCommentCount: 0 }
+  const r = buildCollected('remonterrace', { ...base, sourceRowLabel: '공지', sourcePinned: true, sourceMenuId: '23', sourceBoardKey: 'remonterrace:jjong' }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
+  check('산출물에 라벨·게시판 메타가 남는다',
+    r.sourceRowLabel === '공지' && r.sourcePinned && r.sourceMenuId === '23' && r.sourceBoardKey === 'remonterrace:jjong')
+  check('🔴 sourceSite 계약은 그대로다', r.sourceSite === 'navercafe:remonterrace')
+  check('메타 없으면 기본값', (() => {
+    const b = buildCollected('remonterrace', base, '본문'.repeat(60), '2026-09-03T07:00:00.000Z')
+    return b.sourceRowLabel === null && !b.sourcePinned && b.sourceMenuId === null && b.sourceBoardKey === null
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉔ 정치·진영 제외 — 🔴 제목 단위. 게시판으로 판정하지 않는다')
+// ─────────────────────────────────────────────────────────
+for (const t of ['요즘 정치 얘기 너무 많아요', '진영 논리에 지친다', '이념 갈등이 심하네요',
+  '정당 지지율 보셨어요', '선거 끝나고 조용하네', '대통령 발언 어떻게 보세요',
+  '국회 뉴스 보다가', '공직자 재산공개', '정치인 인터뷰 봤는데', '좌파 우파 싸움']) {
+  check(`제외: "${t.slice(0, 10)}…"`, judgePoliticsTitle(t).excluded)
+}
+check('🔴 2026-09-03 실측에서 놓쳤던 단독 "정치" 를 이제 잡는다',
+  judgePoliticsTitle('정치 얘기는 그만').excluded && judgePoliticsTitle('정치 얘기는 그만').hit === '정치')
+for (const t of ['오늘 저녁 반찬 고민', '갱년기 불면증 어떻게 하세요', '아들 결혼식 준비',
+  '무릎 관절 병원 추천', '드라마 마지막회 보셨어요', '가수 콘서트 다녀왔어요']) {
+  check(`🟢 통과: "${t.slice(0, 10)}…"`, !judgePoliticsTitle(t).excluded)
+}
+check('🔴 연예·방송·셀럽은 정치와 분리한다',
+  !judgePoliticsTitle('연예인 이혼 소식 놀랍네요').excluded
+    && !judgePoliticsTitle('방송 보다가 눈물났어요').excluded,
+  'Growth 후보이고 축이 다르다 (설계 §4-C)')
+check('🔴 판정 단위가 제목이다 — 게시판 이름으로 판정하지 않는다',
+  /judgePoliticsTitle\(item\.originalTitle\)/.test(LIB_CODE)
+    && !/judgePoliticsTitle\((item\.)?source(BoardName|MenuId|BoardKey)/.test(LIB_CODE),
+  '게시판 하나가 통째로 정치로 분류되면 그 게시판의 생활글까지 전부 사라진다')
+check('🔴 collector 가 정치 행을 상세 후보에서 뺀다',
+  /!r\.sourcePoliticsExcluded/.test(COLLECTOR_CODE))
+check('산출물에 판정이 남는다',
+  buildCollected('remonterrace', { sourceArticleId: '1', sourceUrl: ARTICLE_URL('remonterrace', '1'), originalTitle: '정치 얘기', sourceCommentCount: 0 }, '본문'.repeat(60), '2026-09-03T07:00:00.000Z').sourcePoliticsExcluded)
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉕ scout(list-only) — 🔴 상세에 무조건 들어가지 않는다')
+// ─────────────────────────────────────────────────────────
+check('scout 가 detail 보다 깊이 본다', SCOUT_MAX_PAGES > DETAIL_MAX_PAGES)
+check('모드별 상한', maxPagesFor('scout') === SCOUT_MAX_PAGES && maxPagesFor('detail') === DETAIL_MAX_PAGES)
+check('쫑알쫑알 15장이 scout 상한 안에 든다', pagesOf(findBoard('remonterrace:jjong')!).length <= SCOUT_MAX_PAGES)
+check('🔴 쫑알쫑알 15장은 detail 상한을 넘는다 (상세는 얕게)',
+  pagesOf(findBoard('remonterrace:jjong')!).length > DETAIL_MAX_PAGES,
+  '깊게 보려면 --scout 로 목록만 본다')
+check('🔴 scout 는 상세를 열지 않고 종료한다',
+  /if \(SCOUT\) \{[\s\S]{0,600}return\s*\n\s*\}/.test(COLLECTOR_CODE))
+check('🔴 scout 종료가 상세 루프보다 앞이다',
+  COLLECTOR_CODE.indexOf('if (SCOUT)') < COLLECTOR_CODE.indexOf('readArticleBody(page)'))
+check('scout 에서도 목록은 기록한다',
+  COLLECTOR_CODE.indexOf('writeJsonl(OUT_LIST') < COLLECTOR_CODE.indexOf('if (SCOUT)'),
+  '조건 미달이던 글도 다음 실행에서 후보가 될 수 있어야 한다')
+check('페이지 상한을 코드가 강제한다', /PAGE_LIST!\.length > PAGE_CAP/.test(COLLECTOR_CODE))
 
 // ─────────────────────────────────────────────────────────
 console.log(failed === 0
