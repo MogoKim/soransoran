@@ -7,13 +7,29 @@
  * 수집(JSONL) → MicroSeedRawContent + MicroSeedCandidate + Sheet A:Q row.
  * **여기가 이 레일에서 DB·Sheet write 가 처음 생기는 지점**이다.
  *
- * 🔴 dry-run 이 기본이다. 실제 write 는 `--apply` **와** `--limit=1` 이 **둘 다** 있어야 한다
- *    적재는 되돌리기 번거롭다 — DB 두 테이블과 Sheet 한 행이 함께 생기고,
- *    그 뒤 창업자 승인 → 발행으로 이어지는 경로의 첫 칸이다.
- *    스위치를 두 개 요구하면 크론이나 오타로 도는 일이 없다.
+ * 🔴 dry-run 이 기본이다. 실제 write 는 **스위치 두 개**가 있어야 한다
+ *    적재는 되돌리기 번거롭다. 스위치를 두 개 요구하면 크론이나 오타로 도는 일이 없다.
+ *
+ * 🔴 **레인이 둘이고 상한이 다르다** (PR-S2)
+ *
+ *      Micro Seed 레인   --apply --limit=1
+ *        RawContent + Candidate(HOLD) + Sheet 행 1개
+ *        🔴 여전히 1건이다 — Sheet 는 창업자가 읽는 승인 게이트다.
+ *           한 번에 50행이 꽂히면 그 화면은 게이트로서 기능하지 않는다.
+ *
+ *      Original Post 공급   --apply --raw-only --batch=N   (N ≤ 50)
+ *        RawContent 만
+ *        🔴 Candidate 를 만들지 않고 Sheet 를 건드리지 않는다.
+ *           Original Post 레인은 Raw 를 **재료로만** 쓰고 승인은
+ *           OriginalPostApprovalQueue 에서 따로 받는다 —
+ *           그 레인에 Sheet 행은 아무 역할이 없다.
+ *
+ *    두 레인을 섞은 명령은 **거부한다** (`--raw-only --limit` · `--batch` 단독).
+ *    규칙은 scripts/lib/micro-seed-supply.mts 가 정하고 fixture 가 검증한다.
  *
  * 🔴 발행하지 않는다
  *    status 는 HOLD 로만 만든다. PENDING · PUBLISHED 로 가는 경로가 이 파일에 없다.
+ *    raw-only 는 Candidate 자체를 만들지 않으므로 더 멀다.
  *    승인은 사람이 Sheet 에서 하고(§6-7-A), 발행은 publisher 가 따로 한다.
  *
  * 🔴 멱등하다
@@ -24,7 +40,9 @@
  * 사용법
  *   npm run micro-seed:import-82cook                                   진단만
  *   npm run micro-seed:import-82cook -- --sourceArticleId=4231968      대상 지정
- *   npm run micro-seed:import-82cook -- --apply --limit=1              실제 적재
+ *   npm run micro-seed:import-82cook -- --apply --limit=1              Micro Seed 적재
+ *   npm run micro-seed:import-82cook -- --raw-only --batch=30          raw-only dry-run
+ *   npm run micro-seed:import-82cook -- --apply --raw-only --batch=30  🔴 Raw Vault 적재
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -35,6 +53,7 @@ import { SOURCE_SITE, computeDedupKey, type CollectedCandidate } from './lib/mic
 import {
   SHEET_HEADERS, SHEET_TAB_NAME, buildSheetRow, createGoogleSheetSource, updateCandidateRow,
 } from './lib/micro-seed-sheet.mjs'
+import { planSupplyMode, violatesSupplyInvariant, RAW_ONLY_BATCH_MAX } from './lib/micro-seed-supply.mjs'
 import { loadEnvLocal, kstString, roundUpToFiveMinutes, utcWallClock } from './lib/micro-seed-time.mjs'
 
 const APPLY = process.argv.includes('--apply')
@@ -46,6 +65,23 @@ const INPUT = arg('input') ?? './.microseed-data/82cook.jsonl'
 const ONLY_ID = arg('sourceArticleId')
 const LIMIT_RAW = arg('limit')
 const LIMIT = LIMIT_RAW === undefined ? null : Number(LIMIT_RAW)
+const RAW_ONLY = process.argv.includes('--raw-only')
+const BATCH_RAW = arg('batch')
+const BATCH = BATCH_RAW === undefined ? null : Number(BATCH_RAW)
+
+// 🔴 모드 판정은 순수 함수가 한다. 여기서 조건을 다시 쓰지 않는다 —
+//    두 곳에 쓰면 언젠가 갈라지고, 갈라지는 쪽이 Sheet 에 50행을 꽂는다.
+const PLAN = planSupplyMode({ apply: APPLY, limit: LIMIT, rawOnly: RAW_ONLY, batch: BATCH })
+if (PLAN.fatal !== null) {
+  console.error(`\n🛑 ${PLAN.fatal}\n`)
+  process.exit(1)
+}
+if (violatesSupplyInvariant(PLAN)) {
+  console.error('\n🛑 적재 계획이 불변식을 위반했다. 실행하지 않는다.\n')
+  process.exit(1)
+}
+const WRITE_DB = PLAN.mode !== 'dry-run'
+const WRITE_SHEET = PLAN.writes.sheet
 
 /** 🔴 board 는 free 고정 (§6-9-D 화이트리스트). magazine·best 로 갈 경로를 만들지 않는다 */
 const BOARD_SHEET_VALUE = 'free'
@@ -95,23 +131,36 @@ async function main() {
   const now = new Date()
   const diagnostics: Diagnostic[] = []
 
+  const laneLabel = RAW_ONLY ? 'Original Post 공급 (raw-only)' : 'Micro Seed 레인'
   console.log('\nMicro Seed importer — 82cook')
   console.log(`  입력 ${INPUT} · ${kstString(now)} KST`)
-  console.log(`  적재 규칙: RawContent origin=live · Candidate ${INITIAL_STATUS} · board=${BOARD_SHEET_VALUE}(${BOARD_TYPE}) · postUrl/updatedBySystemAt 공란`)
+  console.log(`  레인 ${laneLabel}`)
+  console.log(
+    RAW_ONLY
+      ? '  적재 규칙: RawContent origin=live 만 — 🔴 Candidate 없음 · Sheet write 없음'
+      : `  적재 규칙: RawContent origin=live · Candidate ${INITIAL_STATUS} · board=${BOARD_SHEET_VALUE}(${BOARD_TYPE}) · postUrl/updatedBySystemAt 공란`,
+  )
 
   // 🔴 예약은 **제안값**이다. status 는 HOLD 이고 창업자가 F열에서 고칠 수 있다.
-  const proposed = NO_SCHEDULE ? null : roundUpToFiveMinutes(new Date(now.getTime() + SCHEDULE_MINUTES * 60_000))
-  if (proposed) {
+  //    raw-only 는 Candidate 를 만들지 않으므로 예약 자체가 없다.
+  const proposed = RAW_ONLY || NO_SCHEDULE
+    ? null
+    : roundUpToFiveMinutes(new Date(now.getTime() + SCHEDULE_MINUTES * 60_000))
+  if (RAW_ONLY) {
+    console.log('  예약 제안: 해당 없음 — raw-only 는 Candidate 를 만들지 않는다')
+  } else if (proposed) {
     console.log(`  예약 제안: ${kstString(proposed)} KST (= ${utcWallClock(proposed)} UTC) · 지금 +${SCHEDULE_MINUTES}분, 5분 올림`)
     console.log('             ⚠️ 제안값이다. status 는 HOLD 이고 창업자가 Sheet F열에서 수정할 수 있다')
   } else {
     console.log('  예약 제안: 없음 (--no-schedule) — 창업자가 Sheet F열에 직접 적는다')
   }
   console.log(
-    APPLY && LIMIT === 1
-      ? '  🔴 --apply --limit=1 : 실제로 적재한다\n'
-      : '  🔍 dry-run — DB · Sheet write 없음 (실제 적재는 --apply --limit=1 둘 다 필요)\n',
+    WRITE_DB
+      ? `  🔴 실제 적재 · 모드 ${PLAN.mode} · 이번 실행 최대 ${PLAN.take}건\n`
+      : `  🔍 dry-run — DB · Sheet write 없음\n`,
   )
+  for (const n of PLAN.notes) console.log(`     · ${n}`)
+  console.log('')
   console.log('  🔴 발행하지 않는다: PENDING · PUBLISHED 전환 없음 · Post 생성 없음\n')
 
   // ── ① 입력 읽기 + dedupKey 중복 접기 ──────────────────
@@ -159,24 +208,37 @@ async function main() {
   let skipped = 0
   try {
     // ── ② Sheet 를 한 번만 읽는다 (중복 검사 + 빈 행 찾기) ──
-    const source = await createGoogleSheetSource({ tab: SHEET_TAB_NAME })
-    const { rows: sheetRows } = (await source.fetchRows()) as { rows: unknown[][] }
-    const idCol = SHEET_HEADERS.indexOf('candidateId')
-    const keyCol = SHEET_HEADERS.indexOf('dedupKey')
+    //
+    // 🔴 raw-only 는 Sheet 를 **읽지도 않는다.** 읽기만 해도 자격 증명이 필요하고,
+    //    그 경로가 살아 있으면 언젠가 쓰기로 이어진다. 레인을 나눈 이유가 사라진다.
     const sheetIds = new Set<string>()
     const sheetKeys = new Set<string>()
-    sheetRows.forEach((r) => {
-      const id = String(r?.[idCol] ?? '').trim()
-      const k = String(r?.[keyCol] ?? '').trim()
-      if (id) sheetIds.add(id)
-      if (k) sheetKeys.add(k)
-    })
-    // 🔴 append 하지 않는다. 빈 첫 행을 찾아 그 자리에 bootstrap 으로 쓴다.
-    let nextRowNumber = sheetRows.findIndex((r) => !String(r?.[idCol] ?? '').trim()) + 2
-    if (nextRowNumber === 1) nextRowNumber = sheetRows.length + 2 // 빈 행이 없으면 맨 끝 다음
-    console.log(`  Sheet 행 ${sheetRows.length}건 · 다음 빈 행 ${nextRowNumber}\n`)
+    let nextRowNumber = 0
+    if (RAW_ONLY) {
+      console.log('  Sheet: 접근하지 않는다 (raw-only)\n')
+    } else {
+      const source = await createGoogleSheetSource({ tab: SHEET_TAB_NAME })
+      const { rows: sheetRows } = (await source.fetchRows()) as { rows: unknown[][] }
+      const idCol = SHEET_HEADERS.indexOf('candidateId')
+      const keyCol = SHEET_HEADERS.indexOf('dedupKey')
+      sheetRows.forEach((r) => {
+        const id = String(r?.[idCol] ?? '').trim()
+        const k = String(r?.[keyCol] ?? '').trim()
+        if (id) sheetIds.add(id)
+        if (k) sheetKeys.add(k)
+      })
+      // 🔴 append 하지 않는다. 빈 첫 행을 찾아 그 자리에 bootstrap 으로 쓴다.
+      nextRowNumber = sheetRows.findIndex((r) => !String(r?.[idCol] ?? '').trim()) + 2
+      if (nextRowNumber === 1) nextRowNumber = sheetRows.length + 2 // 빈 행이 없으면 맨 끝 다음
+      console.log(`  Sheet 행 ${sheetRows.length}건 · 다음 빈 행 ${nextRowNumber}\n`)
+    }
 
     for (const row of rows) {
+      // 🔴 이번 실행 상한. dry-run 은 전체를 보여주되 실제 적재는 take 에서 멈춘다.
+      if (WRITE_DB && imported >= PLAN.take) {
+        console.log(`  ⏸  이번 실행 상한 ${PLAN.take}건에 도달했다. 나머지는 다음 실행에서 적재한다`)
+        break
+      }
       const id = row.sourceArticleId
       const fail = (msg: string) => {
         console.log(`  ⛔ ${id} — ${msg}`)
@@ -238,7 +300,9 @@ async function main() {
         skipped += 1
         continue
       }
-      if (sheetKeys.has(row.dedupKey)) {
+      // 🔴 raw-only 는 Sheet 를 읽지 않았으므로 이 검사도 하지 않는다.
+      //    Raw Vault 의 멱등성은 위 rawHit(@@unique[sourceSite,sourceArticleId])이 보장한다.
+      if (!RAW_ONLY && sheetKeys.has(row.dedupKey)) {
         console.log(`  ⏭️  ${id} — Sheet 에 같은 dedupKey 가 있다. SKIP`)
         diagnostics.push({ kind: 'ALREADY_IN_SHEET', sourceArticleId: id, message: 'dedupKey 중복' })
         skipped += 1
@@ -254,7 +318,8 @@ async function main() {
         continue
       }
 
-      const sheetValues = buildSheetRow({
+      // 🔴 raw-only 는 Sheet 행을 조립하지도 않는다. 만들어 두면 언젠가 누가 쓴다.
+      const sheetValues = RAW_ONLY ? [] : buildSheetRow({
         candidateId,
         status: INITIAL_STATUS,
         board: BOARD_SHEET_VALUE,
@@ -276,16 +341,42 @@ async function main() {
         updatedBySystemAt: '',  // 🔴 발행 전 공란 강제
       })
 
-      if (!APPLY || LIMIT !== 1) {
+      if (!WRITE_DB) {
         console.log(`  🔍 ${id} — 적재 예정`)
-        console.log(`     candidate=${candidateId}`)
         console.log(`     raw=${rawContentId} · origin=live · ${rawBody.length}자`)
-        console.log(`     Sheet 행 ${nextRowNumber} · status=${INITIAL_STATUS} · board=${BOARD_SHEET_VALUE}`)
-        console.log(
-          proposed
-            ? `     예약 제안 ${kstString(proposed)} KST (= ${utcWallClock(proposed)} UTC) · F열에 들어간다`
-            : '     예약 없음 (--no-schedule)',
-        )
+        if (RAW_ONLY) {
+          console.log('     🔴 raw-only — Candidate 없음 · Sheet 행 없음')
+        } else {
+          console.log(`     candidate=${candidateId}`)
+          console.log(`     Sheet 행 ${nextRowNumber} · status=${INITIAL_STATUS} · board=${BOARD_SHEET_VALUE}`)
+          console.log(
+            proposed
+              ? `     예약 제안 ${kstString(proposed)} KST (= ${utcWallClock(proposed)} UTC) · F열에 들어간다`
+              : '     예약 없음 (--no-schedule)',
+          )
+        }
+        imported += 1
+        continue
+      }
+
+      // ── raw-only — RawContent 하나만 만든다 ────────────
+      //
+      // 🔴 트랜잭션을 쓰지 않는다. write 가 하나뿐이라 나눠질 부분이 없다 —
+      //    없는 원자성을 흉내 내면 다음 사람이 "여기 두 개가 들어가는구나" 로 읽는다.
+      if (RAW_ONLY) {
+        await prisma.microSeedRawContent.create({
+          data: {
+            id: rawContentId,
+            origin: 'live',
+            sourceSite: row.sourceSite,
+            sourceUrl: row.sourceUrl,
+            sourceArticleId: id,
+            sourceCapturedAt: capturedAt,
+            rawTitle: row.originalTitle,
+            rawBody,
+          },
+        })
+        console.log(`  ✅ ${id} — Raw Vault 적재 (raw=${rawContentId} · ${rawBody.length}자) · Candidate 0 · Sheet 0`)
         imported += 1
         continue
       }
@@ -369,10 +460,20 @@ async function main() {
     console.log('\n  진단')
     for (const d of diagnostics) console.log(`     · ${d.kind} ${d.sourceArticleId ?? ''} — ${d.message}`)
   }
-  console.log(`\n  ${APPLY && LIMIT === 1 ? '적재' : '적재 예정'} ${imported}건 · SKIP ${skipped}건`)
-  if (!(APPLY && LIMIT === 1)) {
+  console.log(`\n  ${WRITE_DB ? '적재' : '적재 예정'} ${imported}건 · SKIP ${skipped}건`)
+  if (!WRITE_DB) {
     console.log('  🔍 dry-run 이었다. DB · Sheet 에 아무것도 쓰지 않았다.')
-    if (APPLY && LIMIT !== 1) console.log('     (--apply 를 줬지만 --limit=1 이 없어 적재하지 않았다)')
+    if (APPLY) {
+      console.log(
+        RAW_ONLY
+          ? `     (--apply 를 줬지만 --batch=N(1~${RAW_ONLY_BATCH_MAX}) 이 없어 적재하지 않았다)`
+          : '     (--apply 를 줬지만 --limit=1 이 없어 적재하지 않았다)',
+      )
+    }
+  } else if (RAW_ONLY) {
+    console.log(`  🔴 Raw Vault 에만 적재했다 — Candidate 0 · Sheet write 0 · Post 0.`)
+    console.log('     이 원문은 Original Post 생성기(original-post-generate)가 재료로 읽는다.')
+    console.log('     Micro Seed 레인으로 보내려면 --raw-only 없이 --apply --limit=1 을 따로 돌린다.')
   } else {
     console.log('  🔴 status 는 HOLD 다. 승인은 Sheet 에서 사람이 하고, 발행은 publisher 가 따로 한다.')
   }

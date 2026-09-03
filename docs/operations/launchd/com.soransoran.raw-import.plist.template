@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  수집분 → Raw Vault 적재 — 🔴 템플릿이다. 등록되어 있지 않다 (README.md 참조)
+
+  정본: docs/operations/2026-09-03-raw-supply-chain-design.md §2 · §4
+        docs/constitution/MICRO_SEED_LANE_CONSTITUTION.md §6-9-F (공급 cron 개방)
+
+  🔴 이 job 은 raw-only 레인만 연다
+     --raw-only --batch=N → MicroSeedRawContent 만 만든다.
+     MicroSeedCandidate 를 만들지 않고 Google Sheet 를 읽지도 않는다.
+     Micro Seed 승인 게이트(Sheet)는 여전히 --apply --limit=1 로 사람이 1건씩 한다.
+
+  🔴 이 job 은 발행하지 않는다
+     importer 에 post.create 도 PENDING·PUBLISHED 전환도 없다 (fixture 가 검증).
+     status 는 어떤 경로로도 HOLD 를 넘지 않는다.
+
+  🔴 두 스위치 원칙
+     --apply 하나로는 아무것도 쓰이지 않는다. --batch=N 이 함께 있어야 적재한다.
+     상한은 50이고 인자에 박혀 있다 — 한 번의 실수가 되돌려야 할 양이다.
+
+  슬롯: 하루 4회. 수집 슬롯 뒤에 붙인다 (수집 07:10 → 적재 08:00)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.raw-import</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NPX__</string>
+    <string>tsx</string>
+    <string>__REPO__/scripts/micro-seed-import-82cook-live.mts</string>
+    <string>--apply</string>
+    <string>--raw-only</string>
+    <string>--batch=30</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <!-- 🔴 RunAtLoad 를 쓰지 않는다. load 하는 순간 DB write 가 도는 것은 의도가 아니다 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__REPO__/logs/raw-import.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/logs/raw-import-error.log</string>
+</dict>
+</plist>

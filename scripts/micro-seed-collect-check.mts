@@ -279,11 +279,37 @@ const bad = (name: string, kind: string, detail: string) => {
 
   const checks: Array<{ name: string; ok: boolean; detail: string }> = [
     {
-      name: 'dry-run 기본 · --apply + --limit=1 둘 다 필요',
+      // 🔴 2026-09-03 (PR-S2) — 레인이 둘로 나뉘며 판정식이 planSupplyMode 로 옮겨갔다.
+      //    계약 자체는 그대로다: **스위치 하나로는 아무것도 쓰이지 않는다.**
+      //    바뀐 것은 그 판정을 어디서 하느냐이고, 이 검사는 그것이 **한 곳**인지까지 본다.
+      name: 'dry-run 기본 · 스위치 두 개를 요구한다',
       ok: /const APPLY = process\.argv\.includes\('--apply'\)/.test(code) &&
-          /if \(!APPLY \|\| LIMIT !== 1\)/.test(code) &&
-          /APPLY && LIMIT === 1/.test(code),
-      detail: '스위치 두 개를 요구한다',
+          /planSupplyMode\(\{ apply: APPLY/.test(code) &&
+          /const WRITE_DB = PLAN\.mode !== 'dry-run'/.test(code) &&
+          /if \(!WRITE_DB\)/.test(code) &&
+          // 🔴 판정을 두 곳에 쓰지 않는다. 갈라지는 쪽이 Sheet 에 배치를 꽂는다
+          !/APPLY && LIMIT === 1/.test(code),
+      detail: '판정은 planSupplyMode 한 곳 · --apply 하나로는 안 쓴다',
+    },
+    {
+      // 🔴 PR-S2 신설 — raw-only 레인이 승인 게이트를 우회하지 못하게 한다
+      name: 'raw-only 는 Candidate·Sheet 를 만들지 않는다',
+      ok: /const RAW_ONLY = process\.argv\.includes\('--raw-only'\)/.test(code) &&
+          // Sheet 를 읽지도 않는다 — 읽기 경로가 살아 있으면 언젠가 쓰기로 이어진다
+          /if \(RAW_ONLY\) \{[\s\S]{0,200}?Sheet: 접근하지 않는다/.test(code) &&
+          // raw-only 분기에서 RawContent 만 만든다
+          /if \(RAW_ONLY\) \{[\s\S]{0,900}?microSeedRawContent\.create/.test(code) &&
+          !/if \(RAW_ONLY\) \{[\s\S]{0,900}?microSeedCandidate\.create/.test(code) &&
+          !/if \(RAW_ONLY\) \{[\s\S]{0,900}?updateCandidateRow/.test(code),
+      detail: '재료만 넣는 문은 승인 게이트를 지나지 않는다',
+    },
+    {
+      // 🔴 PR-S2 신설 — 배치가 Sheet 레인으로 새지 않는다
+      name: '모호한 인자 조합은 거부한다',
+      ok: /PLAN\.fatal !== null/.test(code) &&
+          /process\.exit\(1\)/.test(code) &&
+          /violatesSupplyInvariant\(PLAN\)/.test(code),
+      detail: '--batch 단독 · --raw-only --limit 을 통과시키지 않는다',
     },
     {
       name: 'JSONL 중복은 dedupKey 로 접는다',
@@ -422,11 +448,13 @@ const bad = (name: string, kind: string, detail: string) => {
       detail: '제안 간격 (창업자 직접 승인은 --in=30)',
     },
     {
-      name: '--no-schedule 이면 비운다',
+      // 🔴 2026-09-03 (PR-S2) — raw-only 는 Candidate 를 안 만들어 예약 자체가 없다.
+      //    조건이 `RAW_ONLY || NO_SCHEDULE` 로 늘었을 뿐 계약은 그대로다.
+      name: '--no-schedule · raw-only 면 비운다',
       ok: /NO_SCHEDULE = process\.argv\.includes\('--no-schedule'\)/.test(code) &&
-          /NO_SCHEDULE \? null :/.test(code) &&
+          /RAW_ONLY \|\| NO_SCHEDULE[\s\S]{0,40}\? null/.test(code) &&
           /proposed \? kstString\(proposed\) : ''/.test(code),
-      detail: 'DB null · Sheet 공란',
+      detail: 'DB null · Sheet 공란 · raw-only 는 예약 없음',
     },
     {
       name: '5분 올림을 공용 함수로 쓴다',
