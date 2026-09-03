@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useFormState } from 'react-dom'
+import ActionButton from '@/components/ui/ActionButton'
 import { updateCommentContent, type AdminActionState } from '@/lib/actions/admin'
 import { MAX_COMMENT_LENGTH } from '@/lib/comment-policy'
 
@@ -14,6 +15,9 @@ import { MAX_COMMENT_LENGTH } from '@/lib/comment-policy'
  * 🔴 저장 버튼을 눌러야 반영된다. 자동 저장을 넣지 않는다.
  *
  * 🔴 숨김 상태를 여기서 바꾸지 않는다. 가리기·되살리기는 옆 버튼의 일이다.
+ *
+ * 🔴 저장 버튼은 ActionButton 이 진다 — 저장하는 동안 잠긴다.
+ *    "닫기" 는 그대로 둔다. 저장 중에도 닫을 수 있어야 한다.
  */
 export default function AdminCommentEditForm({
   commentId,
@@ -60,12 +64,12 @@ export default function AdminCommentEditForm({
 
       {/* 좁은 화면에서 두 버튼이 겹치지 않게 감싼다 */}
       <div className="flex flex-wrap gap-2">
-        <button
-          type="submit"
-          className="inline-flex min-h-[52px] flex-1 items-center justify-center rounded-lg bg-cta px-4 font-bold text-cta-text transition duration-150 hover:brightness-95 active:scale-[0.98]"
-        >
-          저장
-        </button>
+        <ActionButton
+          tone="primary"
+          label="저장"
+          pendingLabel="저장 중…"
+          className="flex-1 px-4 justify-center"
+        />
         <button
           type="button"
           onClick={() => setOpen(false)}

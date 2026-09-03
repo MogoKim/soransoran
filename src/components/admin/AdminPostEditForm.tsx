@@ -1,6 +1,7 @@
 'use client'
 
 import { useFormState } from 'react-dom'
+import ActionButton from '@/components/ui/ActionButton'
 import { updatePost, type AdminActionState } from '@/lib/actions/admin'
 
 /**
@@ -9,6 +10,9 @@ import { updatePost, type AdminActionState } from '@/lib/actions/admin'
  * 🔴 수정은 저장 버튼을 눌러야 일어난다. 자동 저장을 넣지 않는다 —
  *    운영자가 읽다가 실수로 고친 것이 그대로 반영되면 되돌릴 근거가 없다.
  * 🔴 숨김·공개는 이 폼에 넣지 않는다. 저장과 가림은 다른 판단이다.
+ *
+ * 🔴 저장 버튼은 ActionButton 이 진다. 저장하는 동안 잠겨야 하는데,
+ *    생 button 은 그 상태를 모른다 — 응답이 늦으면 "안 눌렸나" 하고 다시 누르게 된다.
  */
 export default function AdminPostEditForm({
   postId,
@@ -48,12 +52,7 @@ export default function AdminPostEditForm({
       {state.error ? <p className="text-sm text-state-danger">{state.error}</p> : null}
       {state.ok ? <p className="text-sm text-state-success">저장했습니다.</p> : null}
 
-      <button
-        type="submit"
-        className="inline-flex min-h-[52px] items-center justify-center rounded-lg bg-cta px-4 font-bold text-cta-text transition duration-150 hover:brightness-95 active:scale-[0.98]"
-      >
-        저장
-      </button>
+      <ActionButton tone="primary" label="저장" pendingLabel="저장 중…" className="px-4 justify-center" />
     </form>
   )
 }
