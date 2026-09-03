@@ -373,6 +373,43 @@ fixture 가 `micro-seed-supply.mts` 에 주제 라벨이 들어오지 않는지 
 **이 PR 은 조사를 **가능하게만** 한다.** `--pages` 기본값 · 슬롯 시간표 · quota 는
 데이터가 쌓인 뒤 별도로 정한다 — **이 문서는 값을 정하지 않는다.**
 
+### 🔴 셀렉터는 추정하지 않는다 (PR-S2-b-6 실측 정정)
+
+PR-S2-b-4 는 `.td_date` · `.td_view` · `.td_name` 을 **추정으로** 넣었고 셋 다
+실제 DOM 에 없었다. 그 결과 메타가 22/22 전부 null 이었다. 실측으로 확정한 값:
+
+```
+tr
+  td > a.board_name                    게시판명
+  td > ... > a.article                 제목·링크
+          > a.cmt                      댓글 수 — 🔴 0 이면 엘리먼트가 **없다**
+  td.td_normal.type_date               작성시각 "HH:mm" · "YYYY.MM.DD"
+  td.td_normal.type_readCount          조회수 "1,133"
+```
+
+🔴 **댓글 링크 부재 = 진짜 0** 이다. "못 읽음" 으로 보면 댓글 0 인 글이 전부
+미지값이 되어 lowEngagement 통계가 반대로 망가진다 — `rowFound` 로 판정한다.
+
+### 🔴 브라우저 콜백에 이름 있는 함수를 두지 않는다
+
+목록 0건(PR-S2-b-4)과 메타 전량 null(PR-S2-b-5)은 **같은 원인**이었다.
+
+```
+tsx(esbuild) 의 keepNames 가 `const pick = () => {}` 에 __name(...) 을 씌운다.
+그 코드가 $$eval 로 브라우저에 넘어가면 __name 헬퍼가 없어 ReferenceError 가 난다.
+  → b-4: 콜백 전체가 죽어 목록 0건
+  → b-5: try 가 잡아 링크는 살고 메타만 전부 null
+```
+
+셀렉터는 콜백 **밖에서 인자로** 넘기고, 안에서는 옵셔널 체이닝으로 직접 읽는다.
+fixture 가 `$$eval` 본문에 이름 있는 함수가 없는지 검사한다.
+
+### 실행 단위 분리
+
+산출 JSONL 이 append 라 두 실행이 한 파일에 44행으로 섞였고 **null 비율을 한 번
+잘못 읽었다.** 이제 실행별 파일(`navercafe-{cafe}-{runId}.jsonl`)로 나누고
+행마다 `sourceRunId` 를 남긴다. `--out` 을 주면 그 경로를 쓰되 append 하지 않는다.
+
 ---
 
 ## §4-C 🟡 Growth Issue 레인 — **전략만 적는다. 구현하지 않았다**

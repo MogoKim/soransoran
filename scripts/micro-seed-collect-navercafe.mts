@@ -40,7 +40,7 @@
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --cafe=wgang --pages=1 --max=3
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --live               🔴 첫 live (승인 필요)
  */
-import { appendFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
   CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate,
@@ -50,6 +50,7 @@ import {
   SESSION_PATH_ENV, KILL_SWITCH_ENV, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
   PLAYWRIGHT_SPECS, BROWSER_CHANNEL_ENV, browserLaunchOptions, normalizeCount,
   safeFrameLabel, diagnoseEmptyList, summarizeProbes, judgeLockRelease, type FrameProbe,
+  LIST_SELECTORS, runIdOf, runOutputPath,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
@@ -65,7 +66,16 @@ const LIVE = argv.includes('--live')
 const CAFE_ID = (arg('cafe') ?? FIRST_LIVE_CAFE_ID).trim()
 const PAGES = Number(arg('pages') ?? String(FIRST_LIVE_PAGES))
 const MAX = Number(arg('max') ?? String(FIRST_LIVE_ARTICLES))
-const OUT = arg('out') ?? `./.microseed-data/navercafe-${CAFE_ID}.jsonl`
+/**
+ * 🔴 **출력 경로는 실행 시각이 정해진 뒤에 만든다** (PR-S2-b-6).
+ *
+ *    앞 코드는 카페마다 고정 파일명이었고 writeJsonl 이 append 라,
+ *    첫 live(22건)와 두 번째 live(22건)가 한 파일에 44행으로 섞였다.
+ *    null 비율을 재다가 실제로 한 번 잘못 읽었다 — 분석이 성립하려면 실행이 갈려야 한다.
+ *
+ *    `--out` 을 주면 그것을 쓴다(수동 실행·재현용). 주지 않으면 실행별 파일이다.
+ */
+const OUT_OVERRIDE = arg('out') ?? null
 
 const fail = (msg: string): never => {
   console.error(`\n🛑 ${msg}\n`)
@@ -84,9 +94,16 @@ if (!Number.isInteger(MAX) || MAX < 1 || MAX > QUOTA) {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+/**
+ * 🔴 **append 하지 않는다** (PR-S2-b-6).
+ *
+ *    실행별 파일이라 섞일 일이 없고, 같은 파일에 두 번 쓰는 것은 `--out` 을 준
+ *    수동 실행뿐이다. 그때도 "이번 실행의 결과" 가 파일 내용이어야 한다.
+ *    append 였을 때 두 실행이 44행으로 섞여 분석을 한 번 망쳤다.
+ */
 function writeJsonl(path: string, rows: object[]) {
   mkdirSync(dirname(path), { recursive: true })
-  for (const r of rows) appendFileSync(path, `${JSON.stringify(r)}\n`, 'utf-8')
+  writeFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(''), 'utf-8')
 }
 
 async function main() {
@@ -144,7 +161,17 @@ async function main() {
 
   const chromium = await loadChromium()
 
-  console.log(`  🔴 실제 수집 · 출력 ${OUT}\n`)
+  // 🔴 실행 식별자를 여기서 못 박는다. 이 뒤의 모든 행이 같은 runId 를 갖는다.
+  const listedAtIso = new Date().toISOString()
+  const RUN_ID = runIdOf(listedAtIso)
+  const OUT = OUT_OVERRIDE ?? runOutputPath(CAFE_ID, RUN_ID, 'detail')
+  const OUT_LIST = OUT_OVERRIDE
+    ? OUT_OVERRIDE.replace(/\.jsonl$/, '.list.jsonl')
+    : runOutputPath(CAFE_ID, RUN_ID, 'list')
+
+  console.log(`  🔴 실제 수집 · run ${RUN_ID}`)
+  console.log(`     상세 ${OUT}`)
+  console.log(`     목록 ${OUT_LIST}\n`)
   const started = Date.now()
   const collected: CollectedCandidate[] = []
   let browser: NaverBrowser | null = null
@@ -179,11 +206,10 @@ async function main() {
     }
 
     // ── ② 자동 선별 (목록 단계 제외) ──
-    // 🔴 목록을 **본** 시각을 따로 잡는다. 상세를 여는 시각과 다르고,
-    //    time lag 조사는 이 둘의 차이를 알아야 한다 (PR-S2-b-4).
-    const listedAtIso = new Date().toISOString()
+    // listedAtIso 는 실행 시작 시점에 못 박았다 (runId 와 같은 시각).
+    // 🔴 목록을 **본** 시각과 상세를 여는 시각은 다르다 — time lag 조사가 그 차이를 쓴다.
     const listRows = items.map((i) => buildCollected(cafe!.cafeId, i, '', listedAtIso, listedAtIso))
-    writeJsonl(OUT.replace(/\.jsonl$/, '.list.jsonl'), listRows)
+    writeJsonl(OUT_LIST, listRows)
     const plan = planAutoFetch(
       listRows.map((r) => ({
         sourceArticleId: r.sourceArticleId,
@@ -235,7 +261,7 @@ async function main() {
   if (collected.length) {
     // 🔴 보류 대상도 파일에 남긴다 (Q-1). 보류는 **적재 단계**가 한다
     writeJsonl(OUT, collected)
-    console.log(`\n  → ${OUT} (${collected.length}건)`)
+    console.log(`\n  → ${OUT} (${collected.length}건 · run ${RUN_ID})`)
     const held = collected.filter((r) => judgeAutoHold({ sourceArticleId: r.sourceArticleId, flags: r.qualityFlags }).hold)
     console.log(held.length ? `  🟡 자동 적재 보류 예정 ${held.length}건 (상세 플래그)` : '  🟢 자동 적재 보류 예정 0건')
   }
@@ -248,9 +274,22 @@ async function main() {
 // DOM 읽기 — 🔴 셀렉터는 실측으로 확정한다
 // ─────────────────────────────────────────────────────────
 
+/** 브라우저에서 꺼내오는 원자료 — 🔴 문자열뿐. 해석은 밖에서 한다 */
+type ListProbeRow = {
+  href: string; title: string
+  comments: string; date: string; views: string; board: string
+  rowFound: boolean; metaError: string | null
+}
+type ListProbe = { linkHits: number; rows: ListProbeRow[] }
+
 type NaverPage = {
   goto: (url: string, o: object) => Promise<unknown>
-  $$eval: <T>(sel: string, fn: (els: Element[]) => T) => Promise<T>
+  // 🔴 arg 를 받는 오버로드가 필요하다. 셀렉터를 콜백 **밖에서** 넘겨야
+  //    콜백 안에 이름 있는 상수를 만들지 않을 수 있다 (esbuild __name 회피).
+  $$eval: {
+    <T>(sel: string, fn: (els: Element[]) => T): Promise<T>
+    <T, A>(sel: string, fn: (els: Element[], arg: A) => T, arg: A): Promise<T>
+  }
   frames: () => { $$eval: NaverPage['$$eval']; url: () => string }[]
 }
 type NaverBrowser = {
@@ -292,12 +331,6 @@ async function loadChromium(): Promise<Chromium> {
  *    실제 페이지를 보지 않고 적은 셀렉터는 조용히 0건을 반환한다.
  *    지금은 구조만 두고 첫 live 에서 사람이 확인한다 — 0건이면 위에서 throw 한다.
  */
-/**
- * 🔴 **링크 셀렉터는 메타와 분리한다.** 이것이 실패하면 그 프레임에 목록이 없는 것이고,
- *    메타가 실패하는 것과는 다른 사건이다 (PR-S2-b-5).
- */
-const LIST_LINK_SELECTOR = 'a.article, a[href*="articleid"], a[href*="/articles/"]'
-
 async function readList(
   page: NaverPage,
   cafeId: string,
@@ -317,34 +350,36 @@ async function readList(
       //    메타 셀렉터 하나가 터지면 콜백 전체가 터지고, 그 예외를 바깥
       //    catch 가 삼켜 "목록 0건" 으로 보였다 — 2026-09-03 실측 사고.
       //    그래서 메타는 콜백 **안에서** 각자 try 로 감싼다.
-      const probe = await f.$$eval<{
-        linkHits: number
-        rows: { href: string; title: string; comments: string; date: string; views: string; board: string; metaError: string | null }[]
-      }>(LIST_LINK_SELECTOR, (els) => {
+      // 🔴 명시 제네릭을 주지 않는다 — 주면 arg 없는 오버로드가 선택된다. 추론에 맡긴다.
+      const probe: ListProbe = await f.$$eval(LIST_SELECTORS.link, (els: Element[], sel: typeof LIST_SELECTORS): ListProbe => {
         const rows = els.map((el) => {
           const a = el as HTMLAnchorElement
           const base = { href: a.href, title: (a.textContent ?? '').trim() }
-          const empty = { comments: '', date: '', views: '', board: '', metaError: null as string | null }
           try {
-            const near = a.closest('tr, li, div')
-            const pick = (sel: string): string => {
-              try { return near?.querySelector(sel)?.textContent?.trim() ?? '' } catch { return '' }
-            }
+            const near = a.closest(sel.row)
+            // 🔴 여기서 `const pick = () => ...` 같은 **이름 있는 함수를 만들지 않는다.**
+            //    esbuild(tsx) 의 keepNames 가 __name(...) 래퍼를 씌우는데
+            //    브라우저에는 그 헬퍼가 없어 ReferenceError 가 난다 — 2026-09-03 실측 원인.
             return {
               ...base,
-              comments: pick('.comment_count, .num, em'),
-              date: pick('.td_date, .date, .article-date, .time'),
-              views: pick('.td_view, .view, .article-views'),
-              board: pick('.td_name, .board-name, .article-board'),
+              comments: near?.querySelector(sel.comment)?.textContent?.trim() ?? '',
+              date: near?.querySelector(sel.date)?.textContent?.trim() ?? '',
+              views: near?.querySelector(sel.view)?.textContent?.trim() ?? '',
+              board: near?.querySelector(sel.board)?.textContent?.trim() ?? '',
+              // 🔴 행을 찾았는가. 댓글 링크는 **댓글이 0 이면 아예 없다** —
+              //    행을 찾았는데 링크가 없으면 "못 읽음" 이 아니라 "진짜 0" 이다.
+              rowFound: near !== null,
               metaError: null as string | null,
             }
           } catch (e) {
-            // 🔴 메타를 못 읽어도 링크는 살린다. 이유는 남긴다
-            return { ...base, ...empty, metaError: e instanceof Error ? e.message : String(e) }
+            return {
+              ...base, comments: '', date: '', views: '', board: '', rowFound: false,
+              metaError: e instanceof Error ? e.message : String(e),
+            }
           }
         })
         return { linkHits: els.length, rows }
-      })
+      }, LIST_SELECTORS)
 
       const items: NaverListItem[] = []
       for (const r of probe.rows) {
@@ -359,7 +394,9 @@ async function readList(
           // 🔴 댓글 수만 0 으로 떨어뜨린다 — assessCandidate 계약이 number 다.
           //    다만 "진짜 0" 과 구분되도록 read 플래그를 함께 남긴다.
           sourceCommentCount: comments ?? 0,
-          sourceCommentCountRead: comments !== null,
+          // 🔴 행을 찾았으면 읽은 것이다. 네이버는 댓글이 0 이면 `a.cmt` 를 아예 렌더하지 않는다 —
+          //    "링크가 없다" 를 "못 읽었다" 로 보면 진짜 0 인 글이 전부 미지값이 된다.
+          sourceCommentCountRead: r.rowFound,
           // 나머지 메타는 못 읽으면 null 로 남긴다(추측하지 않는다)
           sourcePostedLabel: r.date || null,
           sourceViewCount: normalizeCount(r.views),
