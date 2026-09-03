@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useFormState } from 'react-dom'
+import { useFormState, useFormStatus } from 'react-dom'
 import { createHomeOverride, type HomeExposureState } from '@/lib/actions/admin-home-exposure'
 import { EXPIRY_CHOICES } from '@/lib/home-exposure-rules'
 
@@ -24,11 +24,30 @@ import { EXPIRY_CHOICES } from '@/lib/home-exposure-rules'
  *
  * 🔴 기본 만료는 4시간이다. 급할 때 누르는 버튼이라, 고르지 않으면
  *    영원히 남는 쪽이 더 위험하다.
+ *
+ * 🔴 누르는 동안 잠근다. 이 액션은 update 가 아니라 create 다 —
+ *    두 번 눌리면 앞선 예외가 꺼지고 새 행이 하나 더 남는다.
+ *    ActionButton 을 쓰지 않는 이유는 색이다. 그쪽은 tone 이 색을 정하는데
+ *    이 버튼은 목록 안에서 조용해야 해서 테두리형을 유지해야 한다.
  */
 
 /** 목록 안에서 쓰는 작은 버튼. 데스크탑은 조용히, 모바일은 누를 수 있게. */
 const BTN =
   'inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-3 text-sm font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98] disabled:opacity-50 lg:min-h-[32px]'
+
+/**
+ * 🔴 useFormStatus 는 form 의 자식에서만 값을 읽는다.
+ *    그래서 버튼을 작은 컴포넌트로 떼어 각 form 안에 둔다 —
+ *    PIN·HIDE 가 독립 form 이라 자기 것만 잠긴다.
+ */
+function SubmitBtn({ label }: { label: string }) {
+  const { pending } = useFormStatus()
+  return (
+    <button type="submit" disabled={pending} className={BTN}>
+      {pending ? '처리 중…' : label}
+    </button>
+  )
+}
 
 export default function AdminHomeOverrideForm({ postId }: { postId: string }) {
   // 🔴 폼마다 상태를 따로 둔다. 하나로 묶으면 고정 결과가 숨김 폼에도 뜬다.
@@ -62,18 +81,14 @@ export default function AdminHomeOverrideForm({ postId }: { postId: string }) {
           <input type="hidden" name="postId" value={postId} />
           <input type="hidden" name="action" value="PIN" />
           <input type="hidden" name="expiry" value={expiry} />
-          <button type="submit" className={BTN}>
-            고정
-          </button>
+          <SubmitBtn label="고정" />
         </form>
 
         <form action={hideAction}>
           <input type="hidden" name="postId" value={postId} />
           <input type="hidden" name="action" value="HIDE" />
           <input type="hidden" name="expiry" value={expiry} />
-          <button type="submit" className={BTN}>
-            숨김
-          </button>
+          <SubmitBtn label="숨김" />
         </form>
       </div>
 
