@@ -72,7 +72,7 @@ export default function GuestCommentControls({
 
   const passwordField = (
     <label className="flex w-[120px] flex-col gap-1">
-      <span className="text-xs text-content-muted">비밀번호</span>
+      <span className="text-sm text-content-muted">비밀번호</span>
       <input
         type="password"
         name="guestPassword"
