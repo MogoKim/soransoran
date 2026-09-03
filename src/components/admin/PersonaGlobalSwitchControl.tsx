@@ -89,7 +89,7 @@ export default function PersonaGlobalSwitchControl({
         </button>
       </div>
 
-      {error !== null ? <p className="mt-2 text-xs text-brand-ink">{error}</p> : null}
+      {error !== null ? <p role="alert" className="mt-2 text-xs text-state-danger">{error}</p> : null}
       <p className="mt-2 text-xs text-content-muted">
         🔴 중지를 해제해도 지금은 발화가 일어나지 않습니다 — 페르소나가 전부 준비 중(draft)이고
         생성 경로가 연결돼 있지 않습니다. 이 스위치는 그 경로가 열릴 때 멈추기 위한 것입니다.

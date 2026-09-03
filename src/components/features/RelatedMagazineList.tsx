@@ -32,7 +32,7 @@ export default function RelatedMagazineList({ articles }: { articles: MagazineAr
                   {article.title}
                 </span>
                 <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-content-muted">
-                  <span className="font-bold text-brand-ink">
+                  <span className="font-bold text-brand-strong">
                     {MAGAZINE_CLUSTER_LABELS[article.cluster]}
                   </span>
                   <span aria-hidden>·</span>
