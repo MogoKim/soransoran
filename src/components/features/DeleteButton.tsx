@@ -58,7 +58,7 @@ export default function DeleteButton({ boardSlug, postId, commentId }: DeleteBut
       </p>
 
       {state.error ? (
-        <p role="alert" className="text-xs text-state-danger">
+        <p role="alert" className="text-sm text-state-danger">
           {state.error}
         </p>
       ) : null}

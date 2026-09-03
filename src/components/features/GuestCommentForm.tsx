@@ -153,7 +153,7 @@ export default function GuestCommentForm({
 
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-xs text-content-muted">이름</span>
+          <span className="text-sm text-content-muted">이름</span>
           <input
             type="text"
             name="guestNickname"
@@ -167,7 +167,7 @@ export default function GuestCommentForm({
         </label>
 
         <label className="flex w-[120px] flex-col gap-1">
-          <span className="text-xs text-content-muted">비밀번호</span>
+          <span className="text-sm text-content-muted">비밀번호</span>
           <input
             type="password"
             name="guestPassword"

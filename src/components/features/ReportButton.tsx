@@ -60,7 +60,7 @@ export default function ReportButton({
       {commentId ? <input type="hidden" name="commentId" value={commentId} /> : null}
 
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-bold text-content-primary">신고 사유</span>
+        <span className="text-sm font-bold text-content-primary">신고 사유</span>
         <select
           name="reason"
           defaultValue=""
@@ -86,7 +86,7 @@ export default function ReportButton({
       />
 
       {state.error ? (
-        <p role="alert" className="text-xs text-state-danger">
+        <p role="alert" className="text-sm text-state-danger">
           {state.error}
         </p>
       ) : null}
