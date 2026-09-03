@@ -55,6 +55,26 @@ plist 는 계속 돌지만 수집이 일어나지 않는다.
 |---|---|---|
 | `com.soransoran.raw-collect-82cook.plist.template` | 82cook 자동 수집 (2시간 간격 10슬롯) | 로컬 또는 GHA 대체 가능 |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
+| `com.soransoran.navercafe-collect.plist.template` | 네이버 카페 수집 (카페별 1슬롯) | 🔴 **로컬 전용** |
 
-🔴 **네이버 카페 템플릿은 아직 없다.** 수집기가 구현되지 않았다(PR-S2-b).
-네이버는 쿠키 때문에 **로컬 전용**이며 GHA 로 올리지 않는다.
+## 🔴 네이버 카페는 등록 전 선행 조건이 셋이다 (PR-S2-b-2)
+
+```
+① 소란소란 전용 네이버 계정 · 세션 발급
+   .env.local  SORAN_NAVERCAFE_SESSION_PATH=<전용 세션 파일 경로>
+   🔴 우나어 storage-state.json 재사용은 judgeSession 이 코드로 막는다 —
+      한쪽이 막히면 둘 다 멈추고, 계정 정지는 되돌릴 수 없다
+
+② Playwright 설치 (이 저장소의 의존성이 아니다)
+   npm i -D playwright && npx playwright install chromium
+   🔴 브라우저 바이너리가 큰 설치라 창업자 승인 사항이다
+
+③ 첫 live 를 사람이 한 번 본다
+   npx tsx scripts/micro-seed-collect-navercafe.mts --cafe=remonterrace --pages=1 --max=3 --live
+   🔴 목록 셀렉터는 첫 live 실측으로 확정한다 — 네이버는 iframe 구조이고
+      신형·구형 DOM 이 섞여 있어 실제 페이지를 보기 전에는 확정할 수 없다.
+      0건이면 스크립트가 throw 한다(조용히 넘어가지 않는다).
+```
+
+**카페마다 plist 를 따로 둔다.** 한 카페를 연속으로 긁지 않고 시간대를 나눈다 —
+`09:20 remonterrace` · `13:20 wgang` · `17:20 dlxogns01` · `21:20 masanmam`.
