@@ -16,7 +16,14 @@
 ## §0 🔴 한 문장
 
 **Original Post 는 "운영 계정이 AI 글을 올리는 레인" 이 아니다.
-가장 잘 맞는 페르소나가 자기 경험처럼 가져가서 쓰는 글이고, 지금은 그 앞 절반만 만들어져 있다.**
+가장 잘 맞는 페르소나가 자기 경험처럼 가져가서 쓰는 글이고,
+2026-09-03 현재 그 경로가 끝까지 연결돼 실제로 2건이 나갔다.**
+
+> 🔴 **갱신 이력 (2026-09-03)**: 초판은 *"지금은 그 앞 절반만 만들어져 있다"* 였다.
+> 그 뒤 PR #309 · #313 · #317 · #318 · #321 · #323 · #325 · #326 이 main 에 들어가
+> **⑥ Persona Matching 과 ⑦ Persona Publish 가 완성됐고 공개 발행 2건이 검증됐다.**
+> 남은 것은 ⑧(댓글 · 반응)과 **속도**다 — 속도 전략 · cap ladder · PR 마일스톤은
+> [자동화 전환 정본](2026-09-03-controlled-activity-automation-strategy.md)이 정한다.
 
 ---
 
@@ -34,7 +41,7 @@
 | 작성자 | 시스템 User 1개 | 🔴 **페르소나** (§4) |
 | 원장 | `MicroSeedCandidate` | `OriginalPostApprovalQueue` |
 | 승인 | Google Sheet | 어드민 화면 + 결정 스크립트 |
-| 상태 | ✅ 운영 중 (5건 발행) | 🟡 **Founder Decision 까지** |
+| 상태 | ✅ 운영 중 (5건 발행) | ✅ **운영 중 (2건 발행)** — 댓글 · 반응은 미착수 |
 
 ### 🔴 왜 이 레인만 index 가 되는가
 
@@ -51,8 +58,8 @@ Original Post 는 정확히 그 Derived 레인이라서 `permanentNoindex = fals
 ## §2 파이프라인 전체
 
 ```
-①  크롤 / 수집          82cook → MicroSeedRawContent
-                        🔴 production 자동화가 아니다 — 소재 테스트용 수동 절차 (§7)
+①  크롤 / 수집          82cook · 네이버 카페 → MicroSeedRawContent
+                        🟡 지금은 수동. 수집 자동화는 열기로 개정됐다 (§7)
         ↓
 ②  Voice Engine         말투 · 사건 구조 · 반응 지도
     + Originality        원문에서 얼마나 멀어졌나
@@ -63,23 +70,24 @@ Original Post 는 정확히 그 Derived 레인이라서 `permanentNoindex = fals
                         🔴 BLOCK 은 적재하지 않는다 — 원문 조각이 든 레코드다
         ↓
 ⑤  Founder Decision     APPROVED · DECLINED · EDITED
-        ↓  ◀━━━━━━━━━━━━━ 🔴 여기까지 구현됨 (2026-09-02)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         ↓
-⑥  Persona Matching     🔜 **다음 작업.** 누가 이 글을 자기 경험으로 쓸 수 있나
+⑥  Persona Matching     하드필터 9축 + 점수 5축 · planBatch 순차 배정
                         🔴 실패하면 발행하지 않는다 (§5)
         ↓
 ⑦  Persona Publish      Post.authorId = 그 페르소나의 User · Post.personaId 기록
+        ↓  ◀━━━━━━━━━━━━━ 🟢 여기까지 구현 · 검증 완료 (2026-09-03 · 발행 2건)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         ↓
-⑧  Persona Comments     다른 페르소나의 댓글 · 반응
-    / Reactions         🔴 좋아요 · 베스트 유도는 **정책 미확정** (§6)
+⑧  Persona Comments     🔜 **다음 작업.** 생성기만 있고 분산기가 없다
+    / Reactions         🟡 좋아요 · 베스트는 controlled scaffold 로 재분류 (§6)
 ```
 
 🔴 **⑥ 을 건너뛰고 ⑦ 로 갈 수 없다.** 근거는 §4 · §5.
+이 원칙은 지금도 코드로 강제된다 — `judgePublish` 가 `NO_MATCH` 를 막는다.
 
 ---
 
-## §3 현재 상태 (2026-09-02 실측)
+## §3 현재 상태 (2026-09-03 실측)
 
 ### main 반영
 
@@ -90,29 +98,55 @@ Original Post 는 정확히 그 Derived 레인이라서 `permanentNoindex = fals
 | **#300** | **Originality Gate** — BLOCK 7종 / HOLD 11종 / PASS |
 | **#303** | **`OriginalPostApprovalQueue`** (migration 0022) + 읽기 전용 어드민 |
 | **#305** | **결정 스크립트** — APPROVED / DECLINED / EDITED |
+| **#309 · #313** | **Persona Matching** — 하드필터 · 점수 · `planBatch` 순차 배정 |
+| **#311 · #315 · #317 · #318** | `childrenAgeBands` · 말투/리듬 DB 이관 · 길이 밴드 한국어 정규화 · `noGoTopics` 보류 |
+| **#321** | **P07 · P10 · P15 · P17 활성화** |
+| **#323 · #325** | **매칭 결과 저장** (migration 0023 · `matchedPersonaId` · `matchedAt` · `matchMeta`) |
+| **#326** | 🟢 **Persona Publish** — 3축 전부 false · 트랜잭션 3 write · cap |
 
 ### DB
 
 ```
-MicroSeedRawContent            15
-MicroSeedCandidate             15   (Micro Seed 레인 · PUBLISHED 5)
-Post                           32   (USER 27 · SYSTEM/micro-seed 5)
-OriginalPostApprovalQueue       7   🟢 전부 APPROVED
-  └ createdPostId               0   🔴 발행된 것 없음
-  └ decidedBy                founder · 2026-09-02 16:33 KST
-Post.personaId 있는 글          0
+MicroSeedRawContent            15   (82cook 14 · navercafe:remonterrace 1)
+MicroSeedCandidate             15   (Micro Seed 레인 · PUBLISHED 5 · HOLD 10)
+Post                           35   (PUBLISHED 25)
+OriginalPostApprovalQueue       7
+  └ PUBLISHED                   2   🟢 발행 완료
+  └ APPROVED                    5   (PASS 2 · HOLD 3)
+  └ matchedPersonaId            5
+  └ createdPostId               2
+Post.personaId 있는 글          2   P05(447자) · P10(293자) · 둘 다 FREE
+Persona active                  5   P05 · P07 · P10 · P15 · P17
+PersonaActivityLog              post 2 · comment 1
+Memory 4종                      🔴 전부 0행 (Self · Community · Negative 1 · UserRelationship · Mood)
 ```
 
-🔴 **발행 경로는 존재하지 않는다.** `APPROVED` 7건은 어디에도 나가지 않았다.
+### 🟢 발행 2건 검증 결과
 
-### 🔴 초안 7건이 index 레인의 첫 자동 생성 글이 된다
+```
+isMicroSeed false · permanentNoindex false · indexPromotionBlocked false
+sourceUrl NULL · sourceArticleId NULL · sheetCandidateId NULL
+authorId = 페르소나 User · personaId 기록됨
+sitemap 포함 · meta robots index, follow
+```
 
-현재 색인되는 Post 26건은 **전부 `source = USER`** 다.
-SYSTEM 글 5건은 전부 micro-seed(noindex).
-즉 이 7건이 **sitemap 에 들어가는 첫 자동 생성 글**이다. 실수의 무게가 다르다.
+**index 레인의 첫 자동 생성 글 2건이 사고 없이 나갔다.**
 
 > 우나어 색인이 4,600 → 0 이 된 것은 품질 문제가 아니라
 > **원문을 SEO 노출 방식으로 다룬 구조**의 문제였다 (헌법 §10-2).
+> 이 레인은 Derived 이고 출처 필드를 채우지 않기 때문에 그 구조를 반복하지 않는다.
+
+### 🔴 그러나 지금 상태는 "됐다" 가 아니라 "너무 느리다"
+
+```
+공개 발행       1/day        (오늘 소진)
+주간 여력       주 5건        active 5명 × POST_CAP_PER_WEEK 1
+원문 재고       15건          shadow 100/day 에 턱없이 부족
+댓글 0개 글     20 / 25 = 80%
+```
+
+속도 전략 · cap ladder · 병목 14개 · PR-S1~S8 은
+[자동화 전환 정본](2026-09-03-controlled-activity-automation-strategy.md)이 정한다.
 
 ---
 
@@ -198,13 +232,19 @@ fallback 을 쓰기로 한다면 그것은 **별도 창업자 결정**이며, �
 
 ## §6 🔴 발행 이후 — 별도 정책이 필요하다
 
-⑧ 단계(다른 페르소나의 댓글 · 좋아요 · 베스트 유도)는 **이 문서가 승인하지 않는다.**
+⑧ 단계(다른 페르소나의 댓글 · 좋아요 · 베스트)는 **이 문서가 세부를 정하지 않는다.**
+개방 순서와 조건은 [자동화 전환 정본 §8](2026-09-03-controlled-activity-automation-strategy.md)이 정한다.
 
-| 항목 | 지위 |
+| 항목 | 지위 (2026-09-03 개정) |
 |---|---|
-| 다른 페르소나의 **댓글** | 🟡 설계는 있음([아키텍처 §10-2](2026-08-30-persona-architecture-design.md) 반응 지도) · **구현 미착수** |
-| **좋아요 자동화** | 🔴 **정책 미확정 — 구현 금지** |
-| **베스트 유도** | 🔴 **정책 미확정 — 구현 금지** |
+| 다른 페르소나의 **댓글** | 🟡 생성기 있음(`persona-comment-generate.mts` · `--limit 1`) · **분산기 미착수** — PR-S6 |
+| **좋아요 자동화** | 🟡 **controlled scaffold 로 재분류** — 금지가 아니라 조건부. 댓글 안정 이후 · PR-S7 |
+| **베스트 유도** | 🟡 **controlled scaffold 로 재분류** — 같은 조건. 🔴 댓글 0개 best 를 만들지 않는다 |
+
+> 🔴 **개정 이유 (2026-09-03)**: 초판은 좋아요·베스트를 *"정책 미확정 — 구현 금지"* 로 두면서
+> **착수 조건을 이미 적어 두었다** — 상한 · kill switch · 사후 감사 · 실회원 반응 대비 비율 상한.
+> **조건이 적혀 있다는 것은 열 수 있다는 뜻이다.** 창업자 결정으로 controlled scaffold 로 재분류한다.
+> 다만 **순서는 바뀌지 않는다** — 댓글이 먼저다.
 
 ### 왜 나누는가
 
@@ -219,15 +259,39 @@ fallback 을 쓰기로 한다면 그것은 **별도 창업자 결정**이며, �
 
 ---
 
-## §7 크롤은 아직 production 자동화가 아니다
+## §7 크롤 — 🟡 수집 자동화는 열고, 발행 자동화는 닫아 둔다 (2026-09-03 개정)
 
 ```
-🟢 지금        소재 테스트 · 샘플 공급용 **수동 절차**
-               사람이 목록을 보고 고른 뒤 건별로 fetch · import
-🔴 아직 아님    cron · workflow · 자동 수집
+🟡 지금         수동. 사람이 목록을 보고 고른 뒤 건별로 fetch · import
+🟡 열자고 제안   크롤 · Raw Vault 적재의 cron / workflow    ← PR-S2 · 🔴 헌법 개정 승인 후
+🔴 여전히 닫음   발행 cron · 댓글 cron
 ```
 
-헌법 §6-9-F · [마일스톤 §5 금지선](2026-08-26-soransoran-milestones.md) 이 그대로 적용된다.
+🔴 **헌법 §6-9-F 가 이 문서보다 상위다.** PR-S1 은 헌법을 수정하지 않았다 —
+**창업자가 §6-9-F · §12-2 개정을 승인하기 전까지 수집 cron 도 금지다.**
+
+> 🔴 **개정 이유**: 초판과 헌법 §6-9-F 의 *"cron · workflow 는 붙이지 않는다"* 는
+> **"발행 자동화를 막는다" 는 뜻이지 "수집을 막는다" 는 뜻이 아니다.**
+> Raw Vault 적재는 `status` 를 HOLD 로만 만들고 `Post` 생성 경로가 코드에 없다 —
+> 고객 화면과 완전히 분리돼 있다. 그런데 이 금지선 때문에 **원문 재고가 15건에서 멈췄고,
+> 그것이 지금 전체 속도의 1위 병목이다.**
+> 근거와 범위는 [자동화 전환 정본 §7](2026-09-03-controlled-activity-automation-strategy.md).
+
+### 실행 환경 분리
+
+| 소스 | 환경 | 이유 |
+|---|---|---|
+| 네이버 카페 | 🔴 **로컬 launchd 전용** | 쿠키를 GHA Secrets 에 올리지 않는다 |
+| 82cook | 🟢 **GHA 가능** | 로그인이 없다. Mac 이 꺼져도 절반은 산다 |
+
+### 🔴 적재기가 1건씩만 받는다 — 의도된 가드다
+
+```
+micro-seed-import-82cook-live.mts   --apply --limit=1 이 둘 다 있어야 적재
+```
+
+**조용히 우회하지 않는다.** PR-S2 에서 `--apply --batch=N` 이라는 **별도 이중 스위치**로
+개정하고, 적재 대상은 여전히 `status=HOLD` 로만 만든다.
 
 ### 🔴 82cook 짧은 글은 결함이 아니다
 
@@ -249,50 +313,93 @@ fallback 을 쓰기로 한다면 그것은 **별도 창업자 결정**이며, �
 
 **둘을 같은 칸에 적지 않는다.** 설계가 끝난 것을 구현됐다고 읽으면 다음 사람이 없는 코드를 부른다.
 
-| 항목 | 설계 | 구현 | 근거 |
-|---|---|---|---|
-| Voice Engine (말투 · 사건 구조) | ✅ | 🟢 부분 | 초안 48건 생성 |
-| Originality Gate | ✅ | ✅ | PR #300 |
-| Approval Queue | ✅ | ✅ | PR #303 · migration 0022 |
-| 어드민 검수 화면 (읽기 전용) | ✅ | ✅ | PR #303 |
-| Founder Decision | ✅ | ✅ | PR #305 |
-| **Persona Matching** | 🟡 **부분** (아키텍처 §9 점수표) | 🔴 **미착수** | 정체성 충돌 축 미확정 (§5) |
-| **Persona Publish** | 🔴 **미착수** | 🔴 **미착수** | 작성자 · 게시판 · cap 미확정 |
-| Persona 댓글 | ✅ (반응 지도) | 🔴 미착수 | 아키텍처 §10-2 |
-| **좋아요 · 베스트** | 🔴 **정책 없음** | 🔴 **금지** | §6 |
-| Relationship / Self Memory | ✅ | 🔴 미착수 | 아키텍처 §7 |
-| Voice egress 재발 방지 | 🟡 부분 | 🔴 미착수 | §9 |
+**추가로 "구현됨" 과 "운영 검증됨" 과 "고객 화면 검증됨" 도 나눈다.**
+코드가 있다는 것과 실제로 한 번 돌려 봤다는 것은 다르다.
+
+| 항목 | 설계 | 구현 | 운영 검증 | 고객 화면 | 근거 |
+|---|---|---|---|---|---|
+| Voice Engine (말투 · 사건 구조) | ✅ | 🟢 부분 | 🟢 초안 48건 | — | 프롬프트 연결은 말투 샘플 2개뿐 |
+| Originality Gate | ✅ | ✅ | ✅ PASS 4 · HOLD 3 | — | PR #300 |
+| Approval Queue | ✅ | ✅ | ✅ 7건 | — | PR #303 · migration 0022 |
+| 어드민 검수 화면 (읽기 전용) | ✅ | ✅ | ✅ | — | PR #303 · #325 |
+| Founder Decision | ✅ | ✅ | ✅ 7건 | — | PR #305 |
+| **Persona Matching** | ✅ | ✅ | ✅ **배정 5건 · 편중 0** | — | PR #309 · #313 · #317 |
+| **Match Store** | ✅ | ✅ | ✅ | — | PR #323 · #325 · migration 0023 |
+| **Persona Publish** | ✅ | ✅ | ✅ **발행 2건** | 🟢 **검증 완료** | PR #326 |
+| Persona 5명 활성 | ✅ | ✅ | ✅ AuditLog 25행 | — | PR #311 · #315 · #321 |
+| **topic-role 매칭** | ✅ (pool §6-1) | 🔴 **미착수** | — | — | 🔴 문서에만. 오배정 1건 실측 |
+| **persona-first generation** | ✅ | 🔴 미착수 | — | — | 지금은 생성 후 매칭 |
+| **Persona 댓글 분산** | ✅ (반응 지도) | 🟡 **생성기만** | 🟡 1건 | 🟡 | 분산기 없음 · PR-S6 |
+| **좋아요 · 베스트** | 🟡 **조건만** | 🔴 미착수 | — | — | controlled scaffold 재분류 (§6) |
+| Relationship / Self Memory | ✅ | 🟠 **스키마만** | 🔴 **0행** | — | 아키텍처 §7 |
+| **스케줄러 · 일일 리포트** | 🔴 없음 | 🔴 없음 | — | — | 🔴 cron 0 · **멈출 기준 없음** |
+| **REAL_MEMBER 가드** | ✅ | 🟡 **실측상 무력** | 🔴 | — | `providerId` 전원 NULL |
+| takedown 정합성 | 🟡 부분 | 🔴 미착수 | — | — | queue↔post 불일치 |
+| Voice egress 재발 방지 | 🟡 부분 | 🔴 미착수 | — | — | §9 |
 
 ---
 
 ## §9 다음 우선순위
 
-| 순위 | 작업 | 왜 지금 |
-|---|---|---|
-| **1** | 🔴 **Persona Matching 설계** | ⑥ 없이 ⑦ 로 가면 정체성이 무너진다. 되돌릴 수 없다 |
-| **2** | Persona Publish 구현 (PR-OP-D) | 1 이 끝난 뒤 |
-| **3** | Persona 댓글 (⑧ 앞 절반) | 글만 있으면 게시판이지 커뮤니티가 아니다 |
-| — | Voice egress 재발 방지 | **별도 운영 이슈.** Voice/M3 **재개 전**에 처리한다. 이 레인의 발행 설계보다 앞서지 않는다 |
-| — | 좋아요 · 베스트 | 🔴 정책 확정 전 착수 금지 |
+🔴 **2026-09-03 개정.** 초판의 1·2번(Matching 설계 · Publish 구현)은 **완료됐다.**
+이후 순서는 [자동화 전환 정본 §10](2026-09-03-controlled-activity-automation-strategy.md)의 PR-S 묶음을 따른다.
 
-### 🔴 지금 PR-OP-D 로 직행하지 않는다
+| 순위 | PR | 왜 지금 | 고객 화면 |
+|---|---|---|---|
+| **1** | **S1 전략 정본화** | 문서가 실제보다 뒤처져 다음 사람이 있는 코드를 다시 짠다 | 없음 |
+| **2** | **S2 Raw 공급망** | 🔴 병목 1위. 원문 15건으로는 아무것도 못 늘린다 | 없음 |
+| **3** | **S3 publish `--id` + cap ladder** | 지정 발행 · 3/day 준비 | 🔴 있음 |
+| **4** | **S4 persona 20명 + topic-role + REAL_MEMBER** | 🔴 주간 여력 5건 병목 · 오배정 방지 · 가드 정정 | 🟡 간접 |
+| **5** | **S5 persona-first shadow 100/day** | S4 뒤라야 의미가 있다 | 없음 |
+| **6** | **S6 댓글 분산 + Memory** | 🔴 댓글 0개 80% — 재방문이 여기서 끊긴다 | 🔴 있음 |
+| **7** | **S8 일일 리포트 · 관제** | 🔴 멈출 기준이 없다. S3 와 병행 가능 | 없음 |
+| **8** | **S7 reaction / best** | 🔴 S6 안정 이후 | 🔴 있음 |
+| — | Voice egress 재발 방지 | **별도 운영 이슈.** Voice/M3 **재개 전**에 처리한다 | — |
 
-발행 코드를 먼저 짜면 작성자를 정해야 하고, 그때 손에 잡히는 답은 **운영 전용 계정**이다.
-그렇게 한 번 발행하면 그 계정이 사실상 표준이 되고 §4 의 최종안이 밀린다.
-**순서를 지키는 것이 이 문서의 목적이다.**
+### 🔴 순서를 지키는 것이 이 문서의 목적이다
+
+초판이 *"PR-OP-D 로 직행하지 않는다"* 라고 막았던 이유는 유효했다 —
+매칭 없이 발행부터 짰다면 작성자는 **운영 전용 계정**이 됐을 것이고,
+그 계정이 사실상 표준이 되어 §4 의 최종안이 밀렸을 것이다.
+**실제로는 순서를 지켰고, 그 결과 발행 2건이 전부 페르소나 작성자로 나갔다.**
+
+같은 이유로 지금은 **S4 를 S5 보다 앞에** 둔다.
+topic-role 없이 persona-first 생성을 하면 **먼저 정해도 똑같이 틀린다.**
 
 ---
 
-## §10 발행 전 창업자 결정 (미해결)
+## §10 창업자 결정
+
+### ✅ 해결됨 (2026-09-03)
+
+| # | 결정 | 결론 |
+|---|---|---|
+| 1 | **작성자** | 🟢 **매칭된 페르소나** — `Post.authorId = matchedPersona.userId` · `personaId` 기록 |
+| 2 | **게시판** | 🟢 **`FREE`** — `ORIGINAL_POST_BOARD` 상수 |
+| 3 | `permanentNoindex = false` | 🟢 확정 (§1 근거) |
+| 4 | **출처 필드** | 🟢 **채우지 않는다** — `FORBIDDEN_POST_KEYS` 로 강제. 추적은 `sourceRawContentId` |
+| 5 | **발행 cap** | 🟢 **하루 1건** (`DAILY_PUBLISH_CAP`) — 상향은 ladder 로 (아래 7번) |
+| 6 | **HOLD 3건 발행 여부** | 🟢 **PASS 먼저** — `FIRST_PUBLISH_VERDICT = 'PASS'`. HOLD 3건은 대기열에 남아 있다 |
+
+### 🟡 미해결 — 속도 결정
+
+세부는 [자동화 전환 정본 §12](2026-09-03-controlled-activity-automation-strategy.md).
+
+| # | 결정 | 제안 |
+|---|---|---|
+| 7 | 공개 발행 **cap ladder** 1 → 3 → 5 | 🟢 채택. 8/day 는 페르소나 56명이 필요해 보류 |
+| 8 | **persona 20명** 확장 | 🟢 승인 — topic-role · REAL_MEMBER 정정과 **같은 PR** |
+| 9 | 100/day 를 **shadow 생성 목표**로 확정 | 🟢 확정. 공개 발행 목표가 아니다 |
+| 10 | 네이버=로컬 / 82cook=GHA | 🟢 채택 |
+| 11 | 댓글 scaffold 를 **공개 글 5건 전후** 개방 | 🟢 개방 |
+| 12 | reaction/best 를 controlled scaffold 로 | 🟢 재분류 · 구현은 댓글 안정 이후 |
+
+### 🟡 남은 레인 내부 결정
 
 | # | 결정 | 상태 |
 |---|---|---|
-| 1 | **작성자** — 어느 페르소나가 쓰나 | 🔴 §5 매칭 설계 후 |
-| 2 | **게시판** — `FREE` / `MENOPAUSE` | 🟡 미정 |
-| 3 | `permanentNoindex = false` | 🟢 **확정** (§1 근거) |
-| 4 | **출처 필드**(`sourceUrl` 등) 채울 것인가 | 🟡 제안: **채우지 않는다** — 색인되는 글에 82cook URL 을 붙이지 않는다. 추적은 대기열의 `sourceRawContentId` |
-| 5 | **발행 cap** | 🟡 제안: 하루 1건 (`CAPS.burst`) |
-| 6 | **HOLD 3건 발행 여부** | 🟡 제안: PASS 4건 먼저 |
+| 13 | **HOLD 3건**(P17 배정 1 · 미배정 2)을 어떻게 할 것인가 | 🔴 미정 — 발행 · 수정 후 발행 · 폐기 |
+| 14 | **takedown 정합성** — 글을 내리면 queue 를 어떤 상태로 | 🔴 미정 — `TAKEDOWN` enum 추가 시 `ALTER TYPE` 이 트랜잭션 밖이어야 한다 |
 
 ---
 
@@ -305,4 +412,5 @@ fallback 을 쓰기로 한다면 그것은 **별도 창업자 결정**이며, �
 | [2026-08-30-persona-architecture-design.md](2026-08-30-persona-architecture-design.md) | §9 Matching · §10 생성/분배 |
 | [2026-08-30-persona-safety-originality-gate-design.md](2026-08-30-persona-safety-originality-gate-design.md) | Safety Gate |
 | [2026-08-26-soransoran-milestones.md](2026-08-26-soransoran-milestones.md) | 큰 마일스톤 지도 |
+| [**2026-09-03-controlled-activity-automation-strategy.md**](2026-09-03-controlled-activity-automation-strategy.md) | 🔴 **속도 전략 · cap ladder · persona 확장 · PR-S1~S8** |
 | **이 문서** | **Original Post 레인 파이프라인 · 순서** |

@@ -1,0 +1,523 @@
+# 소란소란 자동화 전환 정본 (2026-09-03)
+
+> **이 문서의 역할**: **완전 자동화까지 가는 속도 전략 · 안정성 가드 · cap ladder · PR 마일스톤**의 단일 진실.
+> 상위: [헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) · [Persona Network 전략](2026-08-29-persona-network-strategy.md) ·
+> [Persona 아키텍처](2026-08-30-persona-architecture-design.md) · [Original Post 레인 정본](2026-09-02-original-post-lane-strategy.md)
+>
+> 🔴 **왜 새 문서인가**
+> 기존 문서들은 각각 "무엇을 만드는가"를 정했고 **"얼마나 빨리 열 것인가"를 정한 문서가 없었다.**
+> 그 결과 속도 결정이 매번 세션 안에서 즉흥적으로 났고, 실제로 이미 구현된 것을
+> "미착수"로 읽어 다시 만들 뻔한 일이 생겼다.
+>
+> 🔴 **실측이 정본이다.** 이 문서와 코드·DB 가 어긋나면 실측을 믿고 이 문서를 고친다.
+
+---
+
+## §0 🔴 한 문장
+
+**목표는 완전 자동화다. 다만 고객 화면에 안 나가는 구간은 지금 즉시 대량화하고,
+고객 화면에 나가는 구간만 지표로 연다. 이 둘을 섞는 것이 지금까지 속도가 죽은 이유다.**
+
+---
+
+## §1 이 문서가 정하는 것 / 정하지 않는 것
+
+| 정한다 | 정하지 않는다 |
+|---|---|
+| North Star 와 페르소나의 위치 | 페르소나 카드 내용 → [pool](2026-08-30-persona-pool-design.md) |
+| controlled activity scaffold 정의 | 3축 노출 판정 → [헌법 §4](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) |
+| 속도 전략 (A 구간 / B 구간) | 레인 분기 → [헌법 §10-5](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) |
+| 공개 발행 cap ladder | Safety Gate 관문 → [Gate 설계](2026-08-30-persona-safety-originality-gate-design.md) |
+| persona 확장 전략 (5 → 20 → 30) | 발행 파이프라인 세부 → [레인 정본](2026-09-02-original-post-lane-strategy.md) |
+| 크롤 / Raw / Shadow 공급 전략 | |
+| 댓글 · memory · reaction · best **개방 순서** | |
+| PR-S1 ~ S8 마일스톤 | |
+
+---
+
+## §2 North Star
+
+> **최근 7일 안에 재방문했고, 글 또는 댓글을 1회 이상 남긴 고유 실사용자 수**
+
+### 🔴 페르소나는 이 숫자에 포함하지 않는다
+
+```
+페르소나 20명 × 주 1건 = 주 20건
+실사용자 4명            = 주 0~2건
+
+페르소나를 세면  →  주간 참여 22
+페르소나를 빼면  →  주간 참여 2
+```
+
+**페르소나를 세면 이 지표는 페르소나 수의 함수가 된다.**
+지표를 올리는 가장 쉬운 방법이 페르소나를 늘리는 것이 되고, 그 순간 지표가 방향을 잃는다.
+
+우나어가 이 실수를 했다 — 색인 4,600건과 DAU 는 봇 발행만으로 올랐고,
+**그 숫자가 오르는 동안 커뮤니티는 죽었다.**
+
+### 참고 지표 (목표 아님)
+
+`PV` · `DAU` · `색인 수` · `발행량` · `크롤 원문 수` · `PASS 비율`
+— 유입과 공급이 살아 있는지 보는 용도다. **올랐다고 성공이 아니다.**
+
+### 실사용자가 느껴야 하는 세 가지 ↔ 필요한 것 (2026-09-03 실측)
+
+| 느낌 | 필요 | 현재 |
+|---|---|---|
+| "여기 사람들 활동하네" | 글 · 댓글 · 시간대 분산 · 다른 작성자 | 🟡 오리지널 글 2건 · 페르소나 댓글 1건 |
+| "나도 말해도 되겠다" | 댓글 0개 글이 적을 것 | 🔴 **20 / 25 = 80%** |
+| **"전에 내 얘기를 기억해주네"** | Relationship Memory | 🔴 **0행** |
+
+🔴 **세 번째가 우나어에 없던 것이고, 소란소란에도 아직 없다.**
+
+---
+
+## §3 Controlled Activity Scaffold
+
+> **비계(scaffold)는 건물이 아니다. 건물이 서면 걷어낸다.**
+
+초기 커뮤니티에는 활동감이 필요하다. 그것을 자연 성장으로만 기다리면 유입된 사람이
+*"여긴 아무도 없네"* 를 보고 나가고 다시 오지 않는다.
+
+### 포함하는 것
+
+```
+페르소나 글 · 페르소나 댓글 · 시간대 분산 · 반응/좋아요 · 베스트 흐름 · memory 기반 재응답
+```
+
+**전부 금지 대상이 아니다. 통제 대상이다.**
+
+### 🔴 반드시 함께 가는 통제 장치 9종
+
+| 장치 | 현재 |
+|---|---|
+| cap (일 · 주) | 🟢 `DAILY_PUBLISH_CAP` · `POST_CAP_PER_WEEK` · `Persona.dailyCap/weeklyCap` |
+| kill switch | 🟢 `PersonaGlobalSwitch` (0행 = 중지 꺼짐이 정상 기본값) |
+| audit log | 🟢 `PersonaAuditLog` 25행 |
+| **ratio limit** | 🔴 **없음** — 페르소나 활동 비율 ≤ 30% 자동 감속이 미구현 |
+| source leak 0 | 🟢 원문 저장 금지 3키 계약 + `assertNoStoredSource` |
+| persona 분산 | 🟢 `planBatch` 순차 배정 · 주간 여력 차감 |
+| **실사용자 증가 시 페르소나 비율 감소** | 🔴 **없음** |
+| takedown / hidden | 🟡 `setPostHidden` 존재 · **queue 정합성 없음** |
+| daily report | 🔴 **없음** |
+
+🔴 **9개 중 3개가 비어 있다.** 그 셋이 전부 "**멈추는 기준**" 쪽이다.
+**멈출 줄 모르는 자동화는 여는 속도와 무관하게 위험하다** — PR-S8 이 존재하는 이유다.
+
+### 🔴 감소 원칙
+
+**실제 유저 비중이 커지면 페르소나 활동은 줄어들어야 한다.**
+페르소나가 계속 늘어나야 유지되는 커뮤니티는 실패한 것이다
+([전략 §4 기댓값의 정직한 한계](2026-08-29-persona-network-strategy.md)).
+
+---
+
+## §4 속도 전략 — 🔴 두 구간을 섞지 않는다
+
+### 구간 A — 고객 화면에 안 나간다 → **즉시 공격적으로 연다**
+
+| 구간 | 목표 | 왜 안전한가 |
+|---|---|---|
+| Raw 수집 | **100 → 300/day** | 산출물이 로컬 JSONL. DB 도 Sheet 도 안 건드린다 |
+| Raw 적재 | **배치화** | `status` 를 HOLD 로만 만든다. PENDING·PUBLISHED 경로가 파일에 없다 |
+| Shadow 생성 | **100/day** | 종점이 `tmp/*.json`. `Post` 를 만들 코드 경로가 없다 |
+| Gate / scoring | 자동 | 판정만 한다. BLOCK 은 대기열에 적재조차 안 된다 |
+| Admin review | 빠른 검토 | 읽기 전용 화면 |
+| Daily report | 자동 | 읽기 전용 |
+
+> 🔴 **이 여섯 구간은 지금 10배로 열어도 고객이 보는 화면이 한 글자도 바뀌지 않는다.**
+> 여기서 속도를 안 내는 것은 안전이 아니라 손실이다.
+
+### 구간 B — 고객 화면에 나간다 → **ladder 로만 연다**
+
+| 구간 | 방식 |
+|---|---|
+| 공개 발행 | **1 → 3 → 5 → 8/day** (§5) |
+| persona 댓글 | 새 글당 **1개**부터 → 1~3개 |
+| reaction / like | 🔴 **댓글 안정 이후** |
+| best | 🔴 **controlled scaffold 조건 충족 후** |
+
+**필수**: cap · audit · kill switch · ratio limit · rollback
+
+### 구간 C — 정체성 안정성
+
+`topicRoles` · `voiceCore/Variations` · `childrenAgeBands` · `activityRhythm` ·
+`noGoTopics` · `forbiddenReactionRoles` · memory · relationship
+
+🔴 **이 구간이 비어 있으면 속도를 올릴수록 페르소나가 무너진다.**
+실측 사고 2건이 이미 났다 — voiceFit 5/15 고정, topic-role 오배정(P10).
+
+### 구간 D — 운영 관제
+
+source leak count · PASS/HOLD/BLOCK · 발행 수 · 댓글 0개 비율 · persona 활동 비율 ·
+hidden/takedown · cap 승급 조건 · 이상 감지
+
+🔴 **D 가 통째로 비어 있다.** 자동화를 열어도 멈출 기준이 없다.
+
+### 🔴 100/day 는 shadow 생성 목표다
+
+```
+🟢 shadow 생성      100/day    ← 여기가 "속도" 의 자리
+🟡 공개 발행        1 → 3 → 5 → 8/day
+```
+
+**100건 만들어 5건 고르는 것과 5건 만들어 5건 다 쓰는 것은 품질이 다르다.**
+그리고 공개 100/day 는 우나어가 실제로 달성했던 숫자이고, 그 뒤 색인이 4,600 → 0 이 됐다.
+
+---
+
+## §5 공개 발행 cap ladder
+
+| 단계 | 승급 조건 | cap |
+|---|---|---|
+| **현재** | 발행 2건 완료 | **1/day** |
+| **Step 1** | 누적 5건 · source leak 0 · 숨김 0 · AI 티 0 · **kill switch 실동작 확인** | **3/day** |
+| **Step 2** | persona 20명 · topic-role 적용 · 댓글 scaffold 시작 | **5/day** |
+| **Step 3** | persona 30명 (또는 cap 재조정) · 7일 연속 문제 0 | **8/day** |
+| **Step 4** | memory · 관제 안정 | 12/day **검토** |
+
+### 🔴 ladder 의 진짜 이름은 "페르소나 수 ladder" 다
+
+```
+original-post-persona-match.ts   POST_CAP_PER_WEEK = 1
+                                 MIN_DAYS_BETWEEN_POSTS = 5
+```
+
+`DAILY_PUBLISH_CAP` 만 올려도 아무 일도 일어나지 않는다.
+매칭기가 페르소나 1명당 **주 1건**만 배정하기 때문이다.
+
+| 목표 | 필요 페르소나 (주 1건 유지 시) |
+|---|---|
+| 3/day | 21명 |
+| 5/day | 35명 |
+| 8/day | **56명** |
+| 12/day | **84명** |
+
+🔴 **그래서 Step 3(8/day)은 페르소나 30명만으로는 열리지 않는다.**
+Step 3 을 실제로 열려면 셋 중 하나를 창업자가 고른다.
+
+```
+A. 페르소나를 56명까지 늘린다        → pool §2 (20~30명) 개정 필요
+B. POST_CAP_PER_WEEK 을 올린다       → 🔴 한 사람이 이틀에 한 번 글. 정체성 위험
+C. 8/day 를 목표로 삼지 않는다       → 5/day 에서 멈춘다
+```
+
+**이 문서의 기본값은 C 다.** 하루 5건이면 자유게시판이 충분히 살아 보인다.
+A·B 는 Step 2 도달 후 실측을 보고 다시 판단한다.
+
+### 🔴 공개 발행 100/day 는 목표가 아니다
+
+목표는 North Star 이고, 발행량은 참고 지표다(§2).
+
+---
+
+## §6 Persona 확장 전략
+
+```
+현재 5명   P05 · P07 · P10 · P15 · P17    🔴 부족
+1차 목표   20명                            카드가 이미 문서에 있다 — 새 창작이 아니라 DB 이관
+2차 준비   30명
+지금 아님  50 ~ 300명
+```
+
+### 🔴 20명 활성화 전 필수 (전부 충족해야 켠다)
+
+| 항목 | 현재 |
+|---|---|
+| `childrenAgeBands` | 🟢 5명 채움 · 15명 미이관 |
+| `voiceCore` / `voiceVariations` | 🟢 5명 (변주 6~7개) |
+| `activityRhythm` | 🟢 5명 |
+| `forbiddenReactionRoles` | 🟢 5명 (3~4개) · 🔴 **매칭기가 읽지 않는다** |
+| **`topicRoles`** | 🔴 **DB 에 없다** — [pool §6-1](2026-08-30-persona-pool-design.md) 표가 문서에만 있다 |
+| `dailyCap` / `weeklyCap` | 🟢 5명 (2~3 / 8~12) |
+| `PersonaAuditLog` | 🟢 25행 |
+| **REAL_MEMBER 가드 정정** | 🔴 **아래 참조** |
+| noGo 정책 정리 | 🟡 `noGoTopics` 는 매칭 키워드가 아니라 생성 제약 문장으로 확정됨 |
+
+### 🔴 topic-role 없이 20명을 켜면 안 된다
+
+매칭기가 현재 읽는 것은 이것뿐이다.
+
+```
+identity 9축 (자녀나이 · 자녀수 · 결혼 · 배우자 · 돌봄 · 갱년기 · 직업 · 거주 · 경제)
+noGoTopics
+voiceCore.length
+```
+
+**주축 · 부축 · 침묵 · 금지를 코드가 모른다.**
+두 번째 발행에서 P10 에게 생활 잡담 글이 갔는데, `pool §6-1` 표에서 그 유형의
+작성자 후보는 P01·P11·P14·P17·P20 이고 **P10 은 없다.**
+
+🔴 **5명에서 20명으로 늘리면 이 오배정이 4배가 된다.**
+그래서 topic-role DB 화와 20명 이관은 **같은 PR** 이어야 한다(PR-S4).
+
+### 🔴 persona-first generation 은 topic-role 뒤다
+
+생성 전에 화자를 정하는 것(PR-S5)은 후보가 5명이고 topic-role 이 없으면
+**먼저 정해도 똑같이 틀린다.** 순서는 S4 → S5 다.
+
+### 🔴 REAL_MEMBER 가드가 실측상 무력하다
+
+```
+judgePublish()  →  if (c.personaProviderId !== null) → REAL_MEMBER 차단
+                            ↑ User.providerId 를 본다
+
+실측:  User 9명 전원 providerId = NULL
+       카카오 연결은 Account 테이블에 있다 (kakao 3건)
+```
+
+**"실회원 이름으로 발행하지 않는다" 는 가드가 항상 통과한다.**
+
+지금 사고는 나지 않는다 — 페르소나 User 5명은 `Account` 0건이라 실회원과 섞일 일이 없다.
+하지만 **20명으로 늘리고 `userId` 배정을 자동화하는 순간 이것이 마지막 방어선이 된다.**
+`noGoTopics` 가 0/28 히트였던 것과 같은 종류 — **작동하는 것처럼 보이는데 아무것도 막지 않는 가드다.**
+
+### 50~300명을 지금 열지 않는 이유
+
+`계정 수는 비용을 선형으로 늘리지만 가치를 늘리지 않는다`([pool §2](2026-08-30-persona-pool-design.md)).
+헌법 §9-2 도 같은 방향이다 — **active bot 10,000명이 아니라 voice variation 10,000개.**
+50명 이상은 topic-role · memory · lifecycle · 관제가 붙은 뒤 실측으로 판단한다.
+
+---
+
+## §7 크롤 / Raw / Shadow 공급 전략
+
+### 현재 병목 실측
+
+```
+MicroSeedRawContent   15건   (82cook 14 · navercafe:remonterrace 1)
+초안 생성 누적        48건   ← 원문 15건을 여러 번 갈았다는 뜻
+```
+
+**원문 재고가 shadow 100/day 의 선행 조건이다.** 지금 재고로는 사흘이면 마른다.
+
+### 🔴 적재기가 1건씩만 받는다
+
+```
+micro-seed-import-82cook-live.mts:279
+  if (!APPLY || LIMIT !== 1) { ...적재하지 않음 }
+```
+
+`--apply --limit=1` 이 하드 요구다. **300건 적재하려면 명령을 300번 친다.**
+
+> 이것은 버그가 아니라 의도된 가드다 — *"스위치를 두 개 요구하면 크론이나 오타로 도는 일이 없다."*
+> 🔴 **속도를 내려면 이 가드를 의도적으로 개정해야 한다. 조용히 우회하지 않는다.**
+> 개정 방향: `--apply --batch=N` 이라는 **별도 스위치 두 개**를 요구하고,
+> 적재 대상은 여전히 `status=HOLD` 로만 만든다. 발행 경로는 열지 않는다.
+
+### 실행 환경 분리 — 우나어 구조를 그대로 쓴다
+
+| 소스 | 환경 | 이유 |
+|---|---|---|
+| **네이버 카페** | 🔴 **로컬 launchd 전용** | 쿠키를 GHA Secrets 에 올리지 않는다. 계정 정지 위험 |
+| **82cook** | 🟢 **GHA 가능** | 로그인이 없다 |
+
+**Mac 이 꺼져도 공급의 절반은 살아 있어야 한다.**
+우나어가 크롤=로컬 / 큐레이션=GHA 로 나눈 이유가 그대로 적용된다.
+
+### 🔴 헌법 §6-9-F · [레인 정본 §7](2026-09-02-original-post-lane-strategy.md) 개정 근거
+
+두 문서가 *"cron · workflow 는 붙이지 않는다"* 라고 정했다.
+**그 금지의 근거는 "발행 자동화를 막는다" 이지 "수집을 막는다" 가 아니다.**
+
+```
+🟢 여는 것    크롤 · Raw Vault 적재          고객 화면과 완전히 분리 · Post 생성 경로 없음
+🔴 닫힌 것    발행 cron · 댓글 cron          그대로 유지
+```
+
+수집 자동화는 §4 의 구간 A 이므로 **개방을 제안한다.**
+발행 쪽 금지는 변경하지 않는다.
+
+> 🔴 **헌법이 이 문서보다 상위다.** 헌법 §6-9-F 의 *"cron·workflow 는 붙이지 않는다"* 는
+> **이 문서가 단독으로 뒤집을 수 없다.** PR-S1 은 헌법을 수정하지 않았다.
+> **PR-S2 착수 전에 헌법 §6-9-F · §12-2 개정을 창업자가 승인해야 한다** (§12-8).
+> 승인 전까지 수집 cron 은 여전히 금지다.
+
+### 우나어에서 가져올 선별 구조
+
+```
+killerScore    참여 55% · 길이 20% · 미디어 5% · 게시판 15% · 최신 5%
+sourceStage    shadow → publishable → core → production
+락파일 · 쿠키 TTL 30일 · 28일 사전경고 · Slack 알림
+```
+
+---
+
+## §8 댓글 / Memory / Reaction / Best — 🔴 개방 순서
+
+```
+① 공개 글 검증   ◀━━ 지금 (발행 2건)
+② 댓글 scaffold      공개 글 5건 전후
+③ Memory            SelfMemory → Relationship
+④ reaction / like   ②가 안정된 뒤
+⑤ best              ④ 조건 충족 뒤
+```
+
+🔴 **이 순서를 바꾸지 않는다.** 좋아요 10개에 댓글 0개인 글이 더 이상하다.
+그리고 지금 실회원 `Like` 는 2건뿐이라, ④를 먼저 열면 **페르소나 반응이 전체의 90% 가 된다.**
+그건 비율이 아니라 전부다.
+
+### ② 댓글 scaffold 규칙
+
+```
+새 글당 1개부터 → 이후 1~3개
+서로 다른 페르소나 · 반응 유형 분산 · 시간차 (즉답 금지)
+🔴 회원 댓글이 3개 이상 붙은 글에는 페르소나가 끼지 않는다
+🔴 페르소나끼리 대댓글 금지 (1단계)
+🔴 위기 · 건강 · 법률 · 돈 위험 글은 HOLD 또는 응답 금지
+🔴 페르소나 댓글 비율 ≤ 30% — 넘으면 자동 감속
+```
+
+**댓글은 후순위가 아니다.** 댓글 0개 글 비율 80% 가 실사용자가 두 번째 글을 쓰지 않는 이유다.
+
+### ③ Memory
+
+| 종류 | 역할 | 현재 |
+|---|---|---|
+| `PersonaSelfMemory` | 이 페르소나가 전에 무엇을 사실로 말했나 | 0행 |
+| `PersonaUserRelationship` | **"지난번 얘기 기억"** | 0행 |
+| `PersonaCommunityMemory` | 커뮤니티 공통 맥락 | 0행 |
+| `PersonaMoodState` | 오늘의 컨디션 | 0행 |
+
+🔴 **민감정보를 저장하지 않는다.** 건강 진단명 · 금액 · 실명 · 주소는 기억에 남기지 않는다.
+회원 삭제 · 탈퇴 시 해당 관계 기억을 함께 파기한다([pool §8-4](2026-08-30-persona-pool-design.md)).
+
+### ④⑤ Reaction / Best — 🔴 금지가 아니라 조건부
+
+[레인 정본 §6](2026-09-02-original-post-lane-strategy.md) 이 *"정책 미확정 — 구현 금지"* 로 두었고,
+**착수 조건을 이미 적어 두었다** — 상한 · kill switch · 사후 감사 · 실회원 반응 대비 비율 상한.
+
+**조건이 적혀 있다는 것은 열 수 있다는 뜻이다.** 이 문서는 그것을 **controlled scaffold** 로 재분류한다.
+
+```
+필수  실회원 반응 대비 비율 상한 · cap · audit log · kill switch · 이상 감지
+🔴    좋아요만 있고 댓글 없는 best 를 만들지 않는다
+```
+
+---
+
+## §9 병목 (2026-09-03 실측)
+
+| # | 병목 | 왜 병목인가 | 속도 영향 | 안정성 위험 | 푸는 PR | 완료 조건 |
+|---|---|---|---|---|---|---|
+| 1 | **원문 공급** | Raw 15건. 초안 48건이 같은 원문 재사용 | 🔴 치명 | 표본 편향 | **S2** | Raw 300건 |
+| 2 | **Raw 적재** | `--limit=1` 하드 요구 · 1건/실행 | 🔴 치명 | (가드는 유지) | **S2** | 배치 적재 · HOLD 고정 |
+| 3 | **Shadow 생성** | `MAX_LIMIT = 5` · persona-first 아님 | 🔴 높음 | voiceFit 불일치 | S5 | 100/day · 3밴드 분포 |
+| 4 | **공개 발행 cap** | 1/day | 🟡 중간 | — | **S3** | ladder 구조 · `--id` |
+| 5 | **persona 주간 cap** | 5명 × 주1건 = 주 5건 | 🔴 치명 | 상향 시 정체성 위험 | **S4** | 주 20건 |
+| 6 | **persona 수** | 5명. 카드 20명 중 15명 미이관 | 🔴 높음 | 유형별 자격자 공백 | **S4** | 20명 active |
+| 7 | **topic-role 미연결** | 문서에만. 매칭기가 모름 | 🟡 중간 | 🔴 오배정(P10 실측) | **S4** | 매칭기가 읽음 · 오배정 0 |
+| 8 | **댓글 distributor** | 없음 → 댓글 0개 80% | 🔴 높음 | 🔴 재방문 저하 | S6 | 새 글당 1~3개 |
+| 9 | **memory / relationship** | 4테이블 0행 | 🟡 중간 | 🔴 "기억해주네" 부재 | S6 | Relationship 적재 시작 |
+| 10 | **reaction / best** | 정책 없음 | 🟢 낮음 | 🔴 조기 개방 시 조작 | S7 | 정책 확정 + 비율 상한 |
+| 11 | **scheduler** | cron 0 · GHA 1개(CI) | 🔴 높음 | — | S2 · S3 | 수집·발행 스케줄 |
+| 12 | **daily report** | 없음 | 🟡 중간 | 🔴 **멈출 기준 없음** | **S8** | 12지표 일일 |
+| 13 | **REAL_MEMBER 가드** | `providerId` 전원 NULL → 항상 통과 | 🟢 없음 | 🔴 **20명 확장 시 치명** | **S4** | `Account` 기준 실동작 |
+| 14 | **takedown 정합성** | 글을 내려도 queue 가 모름 | 🟢 없음 | 🟡 원장 불일치 | S6 | queue↔post 동기 |
+
+---
+
+## §10 PR 마일스톤 S1 ~ S8
+
+| PR | 목적 | DB write | migration | 고객 화면 |
+|---|---|---|---|---|
+| **S1** | **전략 정본화** — 이 문서 · 실제 상태 동기화 | **0** | **0** | **없음** |
+| **S2** | **Raw 공급망 자동화** — 82cook 자동수집 · 네이버 로컬 launchd · 배치 적재 · killerScore/sourceStage · 목표 Raw 300+ | Raw Vault만 | 1 | **없음** |
+| **S3** | **Publish 선택성 + cap ladder** — `--id` · ladder 구조 · KST 스케줄 준비 | 0 | 0 | 🔴 있음 |
+| **S4** | **Persona 20명 + topic-role + REAL_MEMBER** — DB 이관 · `topicRoles` · 매칭기 연결 · 가드 정정 | 페르소나 15명 | 1 | 🟡 간접 |
+| **S5** | **Persona-first shadow 100/day** — 생성 전 화자·길이·topic 결정 · batch · 비용 hard stop | 0 | 0 | 없음 |
+| **S6** | **Comment distributor + Memory** — 분산 · 시간차 · 유형분산 · Self/Relationship 적재 · 비율 자동 감속 | Comment · Memory | 0~1 | 🔴 있음 |
+| **S7** | **Reaction / Best controlled scaffold** — 비율 상한 · 감사로그 · kill switch | Like 등 | 0~1 | 🔴 있음 |
+| **S8** | **Daily report / 관제** — 12지표 · cap 승급 자동 판정 · 이상 감지 | 0 (읽기) | 0 | 없음 |
+
+### 🔴 순서 근거
+
+```
+S1 → S2   S2 가 수집 자동화를 여는데, 그 규칙 근거를 S1 이 만든다 (§7 개정)
+S2 → S5   원문이 없으면 shadow 100/day 는 불가능하다
+S4 → S5   topic-role 없이 persona-first 를 하면 먼저 정해도 똑같이 틀린다
+S6 → S7   댓글 없이 좋아요만 있는 글이 더 이상하다
+S8        마지막이 아니라 S3 와 병행 가능 — 멈출 기준이 먼저 있어야 cap 을 올린다
+```
+
+### 각 PR 실패 조건 (하나라도 걸리면 중단)
+
+```
+S2   🔴 robots 위반 1건 · 이미지/댓글 본문 수집 1건 · Raw Vault 밖 write 1건
+S3   🔴 --id 로 cap 또는 gate 우회 가능 · HOLD/미배정 발행 가능
+S4   🔴 오배정 1건 · 정체성 모순 1건 · REAL_MEMBER 가드 여전히 무력
+S5   🔴 예산 초과 · source leak 1건 · 문장 지문 중복률 상승
+S6   🔴 회원 불쾌감 1건 · 페르소나 비율 30% 초과 · 봇끼리 대댓글 · 위기 신호 글 응답
+S7   🔴 페르소나 반응이 전체의 50% 초과 · 댓글 0개 best 발생
+```
+
+---
+
+## §11 우나어 — 자산과 부채를 분리한다
+
+| 🟢 가져올 것 (속도 자산) | 🔴 버릴 것 (부채) |
+|---|---|
+| launchd 로컬 크롤 7회/day 구조 | **원문 그대로 index 발행** |
+| GHA 45분 간격 21슬롯 처리 구조 | **공개 발행 100/day 목표** |
+| `killerScore` · `sourceStage` 사다리 | **무기억 봇** |
+| 락파일 · 쿠키 TTL · Slack 알림 | **TS 상수 배열 페르소나 100명** (헌법 §9-6) |
+| **크롤=로컬 / 처리=GHA 분리** | **DAU · PV · 색인 수 목표** |
+| 100건/day 를 돌려 본 운영 경험 | 기계적 대응 · 무대응 |
+
+> **가져올 것은 파이프의 굵기이고, 버릴 것은 그 파이프에 무엇을 흘렸는가다.**
+> 우나어는 하루 100건을 흘릴 배관을 만들었고 그건 진짜 자산이다.
+> 실패한 것은 그 배관에 **원문을 그대로, 무기억 봇 이름으로, 검색 노출을 목표로** 흘린 것이다.
+
+### ⚠️ 이식 전 실측 정정
+
+우나어 크롤러 7슬롯이 **2026-09-01~03 사흘 연속 전부 실패** 중이다
+(`password authentication failed for user "postgres"` · 28P01).
+브라우저는 뜨고 카페에는 붙지만 DB 저장에서 죽는다.
+
+**이식할 것은 코드와 plist 구조이고 그건 멀쩡하다.**
+다만 "돌아가는 것을 복사한다" 가 아니라 "구조를 복사하고 새로 붙인다" 다.
+(우나어 쪽 복구는 별건이며, `docs/features/A01-cafe-crawler.md` 의
+*"✅ launchd 3-mode 스케줄 정상 가동"* 표기도 실제와 어긋난다 — 그 repo 에서 별도 정정한다.)
+
+---
+
+## §12 창업자 결정 (미해결)
+
+| # | 결정 | 제안 | 상태 |
+|---|---|---|---|
+| 1 | 100/day 를 **shadow 생성 목표**로 확정 | 🟢 확정 | 🟡 승인 대기 |
+| 2 | 공개 발행 ladder **1 → 3 → 5**, 8 은 보류 | 🟢 §5 기본값 C | 🟡 승인 대기 |
+| 3 | persona **20명 확장** (topic-role · REAL_MEMBER 와 동일 PR) | 🟢 승인 | 🟡 승인 대기 |
+| 4 | 네이버=**로컬** / 82cook=**GHA** | 🟢 채택 | 🟡 승인 대기 |
+| 5 | 댓글 scaffold 를 **공개 글 5건 전후**에 개방 | 🟢 개방 | 🟡 승인 대기 |
+| 6 | reaction/best 를 **controlled scaffold** 로 재분류 | 🟢 재분류 (구현은 30일 이후) | 🟡 승인 대기 |
+| 7 | Step 3(8/day) 을 열 때 A/B/C 중 무엇 | 🟡 Step 2 도달 후 재판단 | ⬜ 보류 |
+| 8 | 🔴 **헌법 §6-9-F · §12-2 개정** — 수집 cron 개방 | 🟢 개정 (발행 cron 은 그대로 금지) | 🔴 **PR-S2 착수 전 필수** |
+| 9 | 우나어 `docs/features/A01-cafe-crawler.md` 정정 | 🟡 별도 repo · 별도 PR | 🟡 승인 대기 |
+
+---
+
+## §13 현 시점 금지
+
+```
+🔴 공개 발행 cap 을 이 문서 개정 없이 코드에서 올리는 것
+🔴 topic-role 없이 페르소나 20명을 켜는 것
+🔴 댓글 scaffold 보다 좋아요/베스트를 먼저 여는 것
+🔴 --limit=1 · --apply 이중 스위치를 조용히 우회하는 것 (개정하려면 근거를 문서에 남긴다)
+🔴 REAL_MEMBER 가드를 방치한 채 페르소나 userId 배정을 자동화하는 것
+🔴 발행 cron · 댓글 cron 을 붙이는 것 (수집 cron 만 §7 로 열린다)
+🔴 main 직접 push · 창업자 승인 전 merge
+```
+
+---
+
+## §14 관련 문서
+
+| 문서 | 정본 역할 |
+|---|---|
+| [MICRO_SEED_LANE_CONSTITUTION.md](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) | 3축 게이트 · 레인 분기 · 마일스톤 |
+| [2026-09-02-original-post-lane-strategy.md](2026-09-02-original-post-lane-strategy.md) | Original Post 레인 파이프라인 |
+| [2026-08-29-persona-network-strategy.md](2026-08-29-persona-network-strategy.md) | 페르소나 전략 · 공개 정책 · 자동화 3단계 |
+| [2026-08-30-persona-architecture-design.md](2026-08-30-persona-architecture-design.md) | 7층 구조 · 매칭 점수 · 활동 리듬 |
+| [2026-08-30-persona-pool-design.md](2026-08-30-persona-pool-design.md) | 20명 카드 · §6-1 topic-role 표 |
+| **이 문서** | **속도 전략 · cap ladder · 확장 전략 · PR-S1~S8** |
