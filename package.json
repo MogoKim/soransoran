@@ -44,7 +44,9 @@
     "micro-seed:supply-check": "tsx scripts/micro-seed-supply-check.mts",
     "micro-seed:collect-navercafe": "tsx scripts/micro-seed-collect-navercafe.mts",
     "micro-seed:navercafe-check": "tsx scripts/micro-seed-navercafe-check.mts",
-    "navercafe:session-setup": "tsx scripts/navercafe-session-setup.mts"
+    "navercafe:session-setup": "tsx scripts/navercafe-session-setup.mts",
+    "micro-seed:score-dry-run": "tsx scripts/micro-seed-score-scout-dry-run.mts",
+    "micro-seed:scout-score-check": "tsx scripts/micro-seed-scout-score-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
