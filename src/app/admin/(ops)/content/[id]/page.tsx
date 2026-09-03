@@ -220,6 +220,7 @@ export default async function AdminContentDetailPage({
                   {c.isDeleted ? (
                     <AdminActionButton
                       label="댓글 다시 보이기"
+                      successText="댓글을 다시 보이게 했어요."
                       run={async () => {
                         'use server'
                         return setCommentHidden(c.id, false)
@@ -228,6 +229,7 @@ export default async function AdminContentDetailPage({
                   ) : (
                     <AdminActionButton
                       label="댓글 숨기기"
+                      successText="댓글을 숨겼어요."
                       tone="danger"
                       confirmText="이 댓글을 숨길까요? 내용은 남고 화면에서만 가려집니다."
                       run={async () => {
@@ -272,6 +274,7 @@ export default async function AdminContentDetailPage({
             ) : (
               <AdminActionButton
                 label="글 숨기기"
+                successText="글을 숨겼어요."
                 tone="danger"
                 confirmText="이 글을 숨길까요? 고객 화면에서 바로 사라집니다."
                 run={async () => {
