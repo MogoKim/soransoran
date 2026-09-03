@@ -8,8 +8,10 @@ import ActionButton from '@/components/ui/ActionButton'
 import GuestTurnstile, { TURNSTILE_SITE_KEY } from '@/components/features/GuestTurnstile'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { createGuestComment, type GuestCommentState } from '@/lib/actions/guest-comments'
+import { useToast } from '@/components/ui/toast'
 import {
   COMMENT_CREATED,
+  REPLY_CREATED,
   COMMENT_COUNTER_FROM,
   COMMENT_COUNTER_WARN_FROM,
   COMMENT_PLACEHOLDER,
@@ -48,6 +50,7 @@ export default function GuestCommentForm({
   parentId?: string
 }) {
   const pathname = usePathname()
+  const toast = useToast()
   const [state, formAction] = useFormState<GuestCommentState, FormData>(createGuestComment, {})
   const [content, setContent] = useState('')
   const [nickname, setNickname] = useState('')
@@ -72,6 +75,12 @@ export default function GuestCommentForm({
     setContent('')
     setPassword('')
     setShowSuccess(true)
+    /* 🔴 등록됐다는 사실은 토스트가 알린다. 이 자리에는 누를 것(가입 링크)만 남는다 */
+    toast.success(parentId ? REPLY_CREATED : COMMENT_CREATED, {
+      key: `comment:${parentId ?? postId}`,
+    })
+    // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
   useAutoResize(textareaRef, content, COMMENT_TEXTAREA_MAX_HEIGHT)
@@ -104,9 +113,10 @@ export default function GuestCommentForm({
           {state.error}
         </p>
       ) : showSuccess ? (
+        /* 🔴 성공 문구는 토스트로 갔다. 누를 것이 있는 안내만 여기 남는다 —
+              사라지는 자리에 링크를 두면 누르기 전에 없어진다. */
         <div role="status" className="text-sm">
-          <p className="m-0 text-state-success">{COMMENT_CREATED}</p>
-          <p className="mt-1 text-content-muted">
+          <p className="m-0 text-content-muted">
             {GUEST_SIGNUP_HINT}{' '}
             <Link href={`/login?callbackUrl=${encodeURIComponent(pathname)}`} className="text-link">
               카카오로 시작하기

@@ -7,8 +7,10 @@ import ActionButton from '@/components/ui/ActionButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { createComment, type CommentActionState } from '@/lib/actions/comments'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
+import { useToast } from '@/components/ui/toast'
 import {
   COMMENT_CREATED,
+  REPLY_CREATED,
   COMMENT_COUNTER_FROM,
   COMMENT_COUNTER_WARN_FROM,
   COMMENT_PLACEHOLDER,
@@ -28,15 +30,27 @@ export default function CommentForm({
   parentId?: string
 }) {
   const pathname = usePathname()
+  const toast = useToast()
   const [state, formAction] = useFormState<CommentActionState, FormData>(createComment, {})
   const [content, setContent] = useState('')
-  const [showSuccess, setShowSuccess] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  /**
+   * 🔴 성공은 토스트가 알린다. 예전에는 이 자리에 문구를 띄웠는데,
+   *    다시 타자를 치기 전까지 사라지지 않아 다음 댓글을 쓰는 동안에도 남아 있었다.
+   *
+   * 🔴 key 를 두어 연타로 여러 줄이 쌓이지 않게 한다.
+   *    답글은 부모마다 자리가 다르므로 parentId 를 쓴다 —
+   *    서로 다른 댓글에 이어서 답글을 달면 각각 뜬다.
+   */
   useEffect(() => {
     if (!state.ok) return
     setContent('')
-    setShowSuccess(true)
+    toast.success(parentId ? REPLY_CREATED : COMMENT_CREATED, {
+      key: `comment:${parentId ?? postId}`,
+    })
+    // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
   useAutoResize(textareaRef, content, COMMENT_TEXTAREA_MAX_HEIGHT)
@@ -60,10 +74,6 @@ export default function CommentForm({
             {state.error}
           </p>
         )
-      ) : showSuccess ? (
-        <p role="status" className="text-sm text-state-success">
-          {COMMENT_CREATED}
-        </p>
       ) : null}
 
       {/* items-end — 입력창이 길어져도 등록 버튼은 손가락 가까운 아래에 남는다 */}
@@ -74,10 +84,7 @@ export default function CommentForm({
           rows={1}
           maxLength={MAX_COMMENT_LENGTH}
           value={content}
-          onChange={(e) => {
-            setContent(e.target.value)
-            setShowSuccess(false)
-          }}
+          onChange={(e) => setContent(e.target.value)}
           className="min-h-[52px] flex-1 resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-page p-3 leading-[1.7]"
           placeholder={COMMENT_PLACEHOLDER}
         />

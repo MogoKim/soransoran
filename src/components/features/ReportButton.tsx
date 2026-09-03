@@ -1,10 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import { createReport, type ReportActionState } from '@/lib/actions/reports'
 import { REPORT_REASONS } from '@/lib/report-reasons'
+import { useToast } from '@/components/ui/toast'
+import { REPORT_RECEIVED, REPORT_REVIEW_HINT } from '@/lib/comment-policy'
 
 /**
  * 신고 버튼
@@ -23,11 +25,21 @@ export default function ReportButton({
   /** 더보기에서 이미 "신고" 를 고른 뒤라면 폼부터 편다 — 같은 선택을 두 번 시키지 않는다 */
   defaultOpen?: boolean
 }) {
+  const toast = useToast()
   const [open, setOpen] = useState(defaultOpen)
   const [state, formAction] = useFormState<ReportActionState, FormData>(createReport, {})
 
+  /* 🔴 접수됐다는 사실은 토스트가 알린다. 폼 자리에는 상태 표시만 남는다 */
+  useEffect(() => {
+    if (!state.done) return
+    toast.success(REPORT_RECEIVED, { key: `report:${commentId ?? postId}` })
+    // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state])
+
+  /* 🔴 접수 뒤에는 폼을 다시 열지 않는다 — 같은 대상을 두 번 신고하게 만들지 않는다 */
   if (state.done) {
-    return <p className="text-xs text-content-muted">신고가 접수됐습니다. 운영자가 확인합니다.</p>
+    return <p className="text-xs text-content-muted">{REPORT_REVIEW_HINT}</p>
   }
 
   if (!open) {
