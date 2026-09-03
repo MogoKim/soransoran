@@ -45,3 +45,11 @@ yarn-error.log*
 # VE-M3 전량 export 등 사람 판독용 산출물 — 커밋하지 않는다
 # 🔴 원문은 담지 않지만 sourceRef · notes 가 들어가므로 저장소에 두지 않는다
 tmp/
+
+# 네이버 카페 로그인 세션 — 🔴 절대 커밋하지 않는다
+# storage-state 파일에는 로그인 쿠키(NID_AUT · NID_SES)가 평문으로 들어 있다.
+# 이 저장소는 PUBLIC 이 아니지만, 유출되면 계정이 통째로 넘어가고
+# 82cook 과 달리 네이버는 **계정**이 막히는 것이라 되돌릴 수 없다.
+# 🔴 히스토리에 한 번 들어가면 지워도 남는다 — 들어가기 전에 막는 것이 유일한 방어다.
+.naver-session/
+*storage-state*.json

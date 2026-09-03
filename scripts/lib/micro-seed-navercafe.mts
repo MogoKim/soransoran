@@ -339,3 +339,116 @@ export function assertNaverCandidate(row: CollectedCandidate): void {
     throw new Error(`sourceUrl 이 카페 주소가 아니다: ${JSON.stringify(row.sourceUrl)}`)
   }
 }
+
+// ─────────────────────────────────────────────────────────
+// 세션 발급 · 브라우저 기동 (🔴 순수 함수 — PR-S2-b-3)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **권장 저장 경로.** repo 상대경로이고 `.gitignore` 가 막는다.
+ *    경로에 `unao` 가 없어야 judgeSession 을 통과한다(설계상 그렇게 고른 이름이다).
+ */
+export const DEFAULT_SESSION_PATH = '.naver-session/soransoran-storage-state.json'
+
+/** 🔴 우나어 세션 경로인가. judgeSession 과 **같은 규칙**을 쓴다 */
+export function isUnaoSessionPath(path: string): boolean {
+  return UNAO_SESSION_HINT.test(path)
+}
+
+/**
+ * Playwright 모듈 후보 — 🔴 앞에서부터 시도한다.
+ *
+ *    이 저장소에는 `playwright-core` 가 이미 devDependency 로 있다(package.json).
+ *    `playwright` 만 찾던 코드는 설치돼 있는 것을 두고 "없다" 고 말했다 — PR-S2-b-3 에서 고쳤다.
+ */
+export const PLAYWRIGHT_SPECS = ['playwright', 'playwright-core'] as const
+
+/**
+ * 🔴 **기본은 설치된 Google Chrome 을 쓴다(`channel: 'chrome'`).**
+ *
+ *    근거(실측 2026-09-03): `playwright-core@1.62.1` 이 기대하는 번들 chromium 은 rev 1234 인데
+ *    로컬 캐시에는 1208 · 1217 만 있다. 번들 브라우저를 받으려면 별도 다운로드가 필요하다.
+ *    반면 `/Applications/Google Chrome.app` 은 이미 있다 — **다운로드 0바이트로 뜬다.**
+ *
+ *    `SORAN_BROWSER_CHANNEL=chromium` 을 주면 번들 브라우저를 쓴다(설치돼 있을 때).
+ */
+export const BROWSER_CHANNEL_ENV = 'SORAN_BROWSER_CHANNEL'
+export const DEFAULT_BROWSER_CHANNEL = 'chrome'
+
+export type LaunchOptions = { headless: boolean; channel?: string }
+
+export function browserLaunchOptions(input: { channel?: string | null; headless: boolean }): LaunchOptions {
+  const ch = (input.channel ?? '').trim() || DEFAULT_BROWSER_CHANNEL
+  // 'chromium' 은 채널이 아니라 번들 브라우저를 뜻한다 — channel 을 넘기지 않는다
+  return ch === 'chromium' ? { headless: input.headless } : { headless: input.headless, channel: ch }
+}
+
+// ─────────────────────────────────────────────────────────
+// .gitignore 보호 판정 (🔴 순수 함수)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 세션 파일 경로가 `.gitignore` 로 막혀 있는가.
+ *
+ * 🔴 **저장 전에 본다.** 저장하고 나서 확인하면 이미 워킹트리에 쿠키가 놓인 뒤다.
+ *    full gitignore 문법을 구현하지 않는다 — 디렉터리 규칙과 단순 glob 만 본다.
+ *    모르면 "막혀 있다" 가 아니라 **"모른다(false)"** 로 답한다(보수적).
+ */
+export function isSessionPathIgnored(relPath: string, gitignoreText: string): boolean {
+  const path = relPath.replace(/^\.\//, '')
+  const base = path.split('/').pop() ?? path
+  const rules = gitignoreText
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('#') && !l.startsWith('!'))
+
+  for (const raw of rules) {
+    const rule = raw.replace(/^\//, '')
+    if (rule.endsWith('/')) {
+      const dir = rule.slice(0, -1)
+      if (path === dir || path.startsWith(`${dir}/`)) return true
+      continue
+    }
+    const re = new RegExp(`^${rule.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')}$`)
+    if (re.test(path) || re.test(base)) return true
+  }
+  return false
+}
+
+// ─────────────────────────────────────────────────────────
+// 쿠키 요약 (🔴 값을 절대 다루지 않는다)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **`value` 필드가 이 타입에 없다.**
+ *    타입에 없으면 실수로 출력할 수도 없다 — 이것이 이 타입의 존재 이유다.
+ */
+export type CookieMeta = { name: string; domain?: string; expires?: number }
+
+export type CookieSummary = {
+  total: number
+  naverDomain: number
+  /** 로그인 유지에 필요한 쿠키의 만료일 (🔴 값이 아니라 이름과 날짜만) */
+  auth: { name: string; expiresAt: string | null }[]
+  hasAuth: boolean
+}
+
+/** 로그인 유지 쿠키 — 이것들이 없으면 세션이 안 잡힌 것이다 */
+export const AUTH_COOKIE_NAMES = ['NID_AUT', 'NID_SES'] as const
+
+export function summarizeCookies(cookies: CookieMeta[]): CookieSummary {
+  const naverDomain = cookies.filter((c) => (c.domain ?? '').includes('naver.com')).length
+  const auth = cookies
+    .filter((c) => (AUTH_COOKIE_NAMES as readonly string[]).includes(c.name))
+    .map((c) => ({
+      name: c.name,
+      // -1 · 0 · undefined 는 세션 쿠키(브라우저 닫으면 사라짐)를 뜻한다
+      expiresAt: c.expires !== undefined && c.expires > 0 ? new Date(c.expires * 1000).toISOString() : null,
+    }))
+  return {
+    total: cookies.length,
+    naverDomain,
+    auth,
+    hasAuth: AUTH_COOKIE_NAMES.every((n) => auth.some((a) => a.name === n)),
+  }
+}

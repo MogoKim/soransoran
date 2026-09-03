@@ -60,14 +60,20 @@ plist 는 계속 돌지만 수집이 일어나지 않는다.
 ## 🔴 네이버 카페는 등록 전 선행 조건이 셋이다 (PR-S2-b-2)
 
 ```
-① 소란소란 전용 네이버 계정 · 세션 발급
-   .env.local  SORAN_NAVERCAFE_SESSION_PATH=<전용 세션 파일 경로>
+① 소란소란 전용 네이버 계정 · 세션 발급 (PR-S2-b-3)
+   npx tsx scripts/navercafe-session-setup.mts --open   🔴 창업자가 직접 로그인한다
+   .env.local  SORAN_NAVERCAFE_SESSION_PATH=.naver-session/soransoran-storage-state.json
+               SORAN_NAVERCAFE_COLLECT_ENABLED=false    (수집 개시는 별도 승인)
    🔴 우나어 storage-state.json 재사용은 judgeSession 이 코드로 막는다 —
       한쪽이 막히면 둘 다 멈추고, 계정 정지는 되돌릴 수 없다
+   🔴 세션 파일은 .gitignore 가 막는다. 헬퍼는 막혀 있지 않으면 저장을 거부한다
 
-② Playwright 설치 (이 저장소의 의존성이 아니다)
-   npm i -D playwright && npx playwright install chromium
-   🔴 브라우저 바이너리가 큰 설치라 창업자 승인 사항이다
+② 브라우저 — 🔴 추가 설치가 필요 없다 (PR-S2-b-3 정정)
+   playwright-core 는 이미 devDependency 이고, 기본값은 설치된 Google Chrome
+   (channel: 'chrome') 이라 브라우저 바이너리를 받지 않는다.
+   ⚠️ 앞선 문서는 "의존성이 아니다 · npm i -D playwright" 라고 적었다 — 사실이 아니었다.
+   번들 chromium 을 쓰려면 SORAN_BROWSER_CHANNEL=chromium + 별도 설치가 필요하다
+   (playwright-core@1.62.1 은 rev 1234 를 기대하는데 로컬 캐시에는 1208 · 1217 뿐이다).
 
 ③ 첫 live 를 사람이 한 번 본다
    npx tsx scripts/micro-seed-collect-navercafe.mts --cafe=remonterrace --pages=1 --max=3 --live
