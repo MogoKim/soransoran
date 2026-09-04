@@ -69,12 +69,13 @@ export function isSeedInboxLane(lane: Lane): boolean {
  *    40~60대 여성의 실제 경험 · 맥락 · 표현이 모이는 곳은 대개 **댓글**이고,
  *    그건 목록에서 보이지 않는다.
  */
-export type SeedVerdict = 'seedOk' | 'needsDetail' | 'rawMaybe'
+export type SeedVerdict = 'seedOk' | 'needsDetail' | 'rawMaybe' | 'visualDependent'
 
 export const VERDICT_LABEL: Record<SeedVerdict, string> = {
   seedOk: 'Seed로 좋음',
   needsDetail: '상세 읽기',
   rawMaybe: 'Raw 후보',
+  visualDependent: '이미지 의존',
 }
 
 /** 🔴 대표님이 버튼만 보고 뜻을 알 수 있어야 한다 */
@@ -82,6 +83,7 @@ export const VERDICT_MEANING: Record<SeedVerdict, string> = {
   seedOk: '제목만으로 충분 · 본문 열 필요 낮음',
   needsDetail: '본문·댓글이 자산일 가능성 — 확인 필요',
   rawMaybe: '긴 원문 재료 가능 · DETAIL 이후에만 판단',
+  visualDependent: '이미지 없이는 재사용 어려움 · DROP/HOLD 후보',
 }
 
 /**
@@ -106,6 +108,31 @@ export const ASSET_TOPICS: readonly string[] = ['가족', '자녀·교육', '돈
 /** 🔴 화제가 붙은 글은 댓글이 이미 쌓이고 있다는 뜻이다 */
 export const HOT_SCORE = 60
 
+/**
+ * 🔵 **시술·치료 경험을 묻는 글** (2026-09-04 v1 검수 보정).
+ *    `줄기세포 시술 해 보신 분 계신가요??` 가 SEED 로 빠져 있었다.
+ *    타겟 핏이 있고 **댓글에 경험담이 쌓이는** 유형이라 제목만으로 끝낼 글이 아니다.
+ *    🔴 건강 주제를 제외하는 것이 아니다 — HOLD 가 아니라 DETAIL 이다 (§4-J).
+ */
+const HEALTH_EXPERIENCE =
+  /시술|수술|성형|주사|치료|검사|내시경|임플란트|교정|한약|물리치료|재활|줄기세포|보톡스|필러|레이저|약 ?드시|복용/
+
+/**
+ * 🔴 **제목만으로 대상이 불명확한 선택 질문.**
+ *    `두가지중 어떤게 더 괜잖아요` — 두 가지가 무엇인지 본문을 봐야 안다.
+ *    🟡 주제 축이 잡히면 모호하지 않다(`필라테스 둘 중 한곳`) — 그때는 축이 이유가 된다.
+ */
+const TITLE_AMBIGUOUS = /두 ?가지 ?중|둘 ?중|셋 ?중|이것 ?저것|이거 ?저거|이 ?중에|두개 ?중/
+
+/**
+ * 🔴 **이미지·시각 자료가 있어야 성립하는 질문.**
+ *    `이 글씨체 뭔지 아는 분 계신가요???` — 이미지가 없으면 우리가 다시 던질 수 없다.
+ *    🔴 이미지 수집·분석을 하겠다는 뜻이 아니다. **소재로 쓰기 어렵다는 표시**일 뿐이고,
+ *       DROP 인지 HOLD 인지는 사람이 버튼으로 정한다.
+ */
+const VISUAL_DEPENDENT =
+  /글씨체|폰트|이 ?사진|사진 ?속|사진 ?좀|이미지|그림 ?속|무슨 ?글씨|이거 ?뭔지|이게 ?뭔지|이 ?옷|어디 ?거\?|어디 ?제품/
+
 export type VerdictResult = { verdict: SeedVerdict; reason: string }
 
 /**
@@ -120,14 +147,27 @@ export function verdictOf(s: Pick<ScoredRow, 'row' | 'laneHint' | 'watch' | 'sco
   }
   const r = s.row
   const flags = r.qualityFlags ?? []
+  const title = r.originalTitle
+
+  // 🔴 ⓪ 이미지가 있어야 성립하는 질문은 열어봐도 못 쓴다 — 먼저 가른다
+  if (VISUAL_DEPENDENT.test(title)) {
+    return { verdict: 'visualDependent', reason: '이미지·시각 자료가 있어야 성립하는 질문 — 사람이 DROP/HOLD 를 정한다' }
+  }
+
   const why: string[] = []
 
   // ① 민감 · 판단 불가
   for (const [f, label] of DETAIL_FLAGS) if (flags.includes(f)) why.push(label)
 
   // ② 본문·댓글이 자산일 가능성이 큰 축
-  const assets = topicHits(r.originalTitle, r.sourceBoardName).map((h) => h.label).filter((l) => ASSET_TOPICS.includes(l))
+  const assets = topicHits(title, r.sourceBoardName).map((h) => h.label).filter((l) => ASSET_TOPICS.includes(l))
   if (assets.length > 0) why.push(`댓글이 자산일 축(${assets.join('/')})`)
+
+  // ③ 시술·치료 경험 — 댓글에 경험담이 쌓인다
+  if (HEALTH_EXPERIENCE.test(title)) why.push('시술·치료 경험 — 댓글에 경험담이 쌓인다')
+
+  // ④ 🔴 제목만으로 대상 불명확 — 축이 없을 때만 모호하다고 본다
+  if (TITLE_AMBIGUOUS.test(title) && assets.length === 0) why.push('제목만으로 대상이 불명확 — 본문을 봐야 안다')
 
   // ③ 화제 — 이미 댓글이 붙고 있다
   if (s.watch) why.push('watch — 다음 관측에서 더 붙을 글')
@@ -288,7 +328,7 @@ function banner(): void {
   console.log('')
   console.log('  판단 기준 — 🔴 여기는 triage 다. 최종 채택이 아니다')
   console.log('     제목으로 1차 선별하고, 본문·댓글 자산 가능성이 큰 것은 DETAIL 로 보낸다.')
-  for (const v of ['seedOk', 'needsDetail', 'rawMaybe'] as SeedVerdict[]) {
+  for (const v of ['seedOk', 'needsDetail', 'visualDependent', 'rawMaybe'] as SeedVerdict[]) {
     console.log(`     ${pad(VERDICT_LABEL[v], 12)} = ${VERDICT_MEANING[v]}`)
   }
   console.log('  🔴 DETAIL 은 비용 낭비가 아니다 — 좋은 소재의 본문·댓글 자산을 확인하는 단계다.')
@@ -404,7 +444,7 @@ function main(): void {
   const verdicts = seed.map((x) => verdictOf(x))
   const vCount = (v: SeedVerdict): number => verdicts.filter((x) => x.verdict === v).length
   console.log('\n   추천 분포 — 🟢 창업자 승인 v1 기준 (§4-O) · 🔴 상위권은 DETAIL 이 정상이다')
-  for (const v of ['seedOk', 'needsDetail', 'rawMaybe'] as SeedVerdict[]) {
+  for (const v of ['seedOk', 'needsDetail', 'visualDependent', 'rawMaybe'] as SeedVerdict[]) {
     const n = vCount(v)
     const note = v === 'rawMaybe' ? '  🔴 이 화면에서는 자동 추천하지 않는다 (보조·예외)' : ''
     console.log(`      ${pad(VERDICT_LABEL[v], 12)} ${pad(n, 4)}건  ${VERDICT_MEANING[v]}${note}`)
