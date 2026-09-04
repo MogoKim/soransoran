@@ -282,6 +282,42 @@ console.log('\n⑤-D 실측 회귀 — 2026-09-03 live 수집 3건')
       !(assess(s, '').flags as readonly string[]).includes('politicalTopicLikely'),
     )
   }
+
+  const expandedPolitics = [
+    '비상계엄 포고령 봤어요',
+    '김건희특검 채상병특검 뉴스',
+    '김용현 노상원 여인형 곽종근',
+    '한덕수 우원식 오세훈 홍준표',
+    '좌빨 수꼴 국짐 대깨문',
+    '친문 비명 팬덤정치',
+    '도이치모터스 주가조작 명품백',
+    '필리버스터 패스트트랙 법사위',
+    '지방선거 리얼미터 NBS',
+    '더불어민주연합 국민의미래',
+    '방송3법 노란봉투법 의료대란',
+    '한미동맹 사드 대북전단',
+    '선관위 방통위 뉴스공장',
+    '광화문집회 단식농성',
+  ]
+  for (const s of expandedPolitics) {
+    check(
+      `[정치 확장] "${s.slice(0, 18)}" 에 politicalTopicLikely 가 붙는다`,
+      (assess(s, '').flags as readonly string[]).includes('politicalTopicLikely'),
+    )
+  }
+
+  const politicalOverblockSafe = [
+    '미리 감사드립니다',
+    '어머니께 옷 사드릴까요',
+    '반장 선거 준비물',
+    '동대표 선거 안내',
+  ]
+  for (const s of politicalOverblockSafe) {
+    check(
+      `[정치 과차단] "${s}" 는 통과한다`,
+      !(assess(s, '').flags as readonly string[]).includes('politicalTopicLikely'),
+    )
+  }
 }
 {
   const many = Array.from({ length: AUTO_FETCH_MAX + 15 }, (_, i) => ({

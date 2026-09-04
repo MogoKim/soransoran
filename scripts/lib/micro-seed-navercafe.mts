@@ -25,7 +25,7 @@
  *    그래서 quota 가 82cook 30 대 네이버 10 이다.
  */
 import { createHash } from 'node:crypto'
-import { assessCandidate, type QualityAssessment } from './micro-seed-quality.mjs'
+import { assessCandidate, findPoliticalTopicHit, type QualityAssessment } from './micro-seed-quality.mjs'
 import { NAVERCAFE_PREFIX, isNaverCafeSource, slotQuotaOf } from './micro-seed-supply.mjs'
 
 // ─────────────────────────────────────────────────────────
@@ -1008,21 +1008,11 @@ export function detectRowLabel(labelText: string | null | undefined, rowClass: s
  *
  * 🔴 **연예 · 방송 · 셀럽은 여기에 넣지 않는다.** 그쪽은 Growth 후보이고 축이 다르다.
  */
-const POLITICS_EXCLUDE = [
-  /정치/, /진영/, /이념/, /정당/, /선거/,
-  /정치인/, /공직자/, /대통령/, /국회/, /의원직/,
-  /여당/, /야당/, /좌파/, /우파/, /극우/, /극좌/,
-] as const
-
 export type PoliticsVerdict = { excluded: boolean; hit: string | null }
 
 export function judgePoliticsTitle(title: string): PoliticsVerdict {
-  const t = (title ?? '').trim()
-  for (const re of POLITICS_EXCLUDE) {
-    const m = t.match(re)
-    if (m) return { excluded: true, hit: m[0] }
-  }
-  return { excluded: false, hit: null }
+  const hit = findPoliticalTopicHit((title ?? '').trim())
+  return { excluded: hit !== null, hit }
 }
 
 // ─────────────────────────────────────────────────────────
