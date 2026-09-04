@@ -151,8 +151,13 @@ console.log('\n④ 제목 — 기본 미출력 · --show-title 에서만 · 80�
   //    지켜야 할 성질은 "**찍히는** 곳이 하나뿐" 이다. 그것만 센다.
   const printed = (RUNNER_CODE.match(/console\.log\([^\n]*originalTitle/g) ?? []).length
   check('🔴 originalTitle 을 출력하는 곳이 1곳뿐이다', printed === 1, `실제 ${printed}곳`)
-  const readOnly = (RUNNER_CODE.match(/topicHits\(r\.originalTitle/g) ?? []).length
-  check('🟢 나머지 참조는 topicHits 읽기뿐이다', readOnly === 1, `실제 ${readOnly}곳`)
+  // 🔴 참조는 3곳이고 그중 **출력은 위 1곳뿐**이다.
+  //    ① verdictOf 가 판정하려고 읽는다  ② toCards 가 카드에 담는다(화면이 escape 한다)
+  //    ③ --show-title 일 때만 찍는다
+  const total = (RUNNER_CODE.match(/originalTitle/g) ?? []).length
+  check('🟢 originalTitle 참조가 3곳이다 (읽기2 + 출력1)', total === 3, `실제 ${total}곳`)
+  check('🟢 판정용 읽기가 있다', /const title = r\.originalTitle/.test(RUNNER_CODE))
+  check('🟢 카드에 담는 곳이 있다', /title: r\.originalTitle/.test(RUNNER_CODE))
 
   check('🔴 절단 상수가 80 이다', /const TITLE_MAX = 80/.test(RUNNER_CODE))
   check('🔴 코드포인트 단위로 자른다 (한글·이모지 안 깨짐)',
@@ -638,6 +643,80 @@ console.log('\n⑮ 추천값 그대로 회수 — 🔴 자동 라우팅이 아�
   check('🔴 화면이 "사람이 바꾼 값도 덮어쓴다" 를 밝힌다', html.includes('사람이 바꾼 값도 덮어쓴다'))
   check('🟢 되돌리기 버튼이 있다', html.includes('id="undo"'))
   check('🟢 화면에 기본 note 문구가 들어간다', html.includes(RECOMMENDED_NOTE))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑯ SEED 오분류 보정 — 🔴 v1 검수에서 나온 3건 (2026-09-04)')
+// ─────────────────────────────────────────────────────────
+{
+  const sr = (t: string, lane: Lane = 'microSeedQuestion', over: { watch?: boolean; total?: number } = {}) => ({
+    row: row({ originalTitle: t }),
+    laneHint: { lane, reason: '', signals: [] },
+    watch: over.watch ?? false,
+    score: { engagement: 0, targetFit: 0, conversation: 0, freshness: 0, penalty: 0, total: over.total ?? 20 },
+  })
+  const v = (t: string, lane: Lane = 'microSeedQuestion') => verdictOf(sr(t, lane))
+
+  check('라벨: 이미지 의존', VERDICT_LABEL.visualDependent === '이미지 의존')
+  check('뜻: DROP/HOLD 후보',
+    VERDICT_MEANING.visualDependent === '이미지 없이는 재사용 어려움 · DROP/HOLD 후보')
+
+  // ① 🔵 건강·시술 경험담 → DETAIL (🔴 HOLD 도 제외도 아니다)
+  const health = v('줄기세포 시술 해 보신 분 계신가요??', 'participationSeed')
+  check('🔵 줄기세포 시술 → 상세 읽기', health.verdict === 'needsDetail', `실제 ${health.verdict}`)
+  check('   이유에 경험담을 적는다', health.reason.includes('경험담'))
+  check('🔴 건강 주제를 HOLD 로 보내지 않는다', health.verdict !== 'rawMaybe')
+  for (const t of ['임플란트 하신 분 계신가요', '무릎 수술 해보신 분', '갱년기 한약 드셔보셨어요']) {
+    check(`🔵 "${t.slice(0, 12)}…" → 상세 읽기`, v(t, 'participationSeed').verdict === 'needsDetail')
+  }
+
+  // ② 🔴 제목만으로 대상 불명확 → DETAIL
+  const amb = v('두가지중 어떤게 더 괜잖아요')
+  check('🔴 두가지중 → 상세 읽기', amb.verdict === 'needsDetail', `실제 ${amb.verdict}`)
+  check('   이유에 불명확을 적는다', amb.reason.includes('대상이 불명확'))
+  // 🟡 주제 축이 있으면 모호하지 않다 — 축이 이유가 된다
+  // 🔴 '필라테스' 는 축 어휘가 아니다 — 실데이터에서는 게시판명('갱년기 몸 증상')이 축을 만들었다.
+  //    fixture 는 기본 게시판을 쓰므로 제목 자체에 축이 있는 문장을 쓴다.
+  const amb2 = v('노후 자금 둘 중 뭐가 나을까요', 'microSeedQuestion')
+  check('🟡 축이 있으면 불명확 사유를 붙이지 않는다',
+    amb2.verdict === 'needsDetail' && !amb2.reason.includes('대상이 불명확'), amb2.reason)
+
+  // ③ 🔴 이미지 의존 → SEED 에서 뺀다
+  const vis = v('이 글씨체 뭔지 아는 분 계신가요???', 'participationSeed')
+  check('🔴 글씨체 질문 → 이미지 의존', vis.verdict === 'visualDependent', `실제 ${vis.verdict}`)
+  check('🔴 SEED 가 아니다', vis.verdict !== 'seedOk')
+  check('   DROP/HOLD 는 사람이 정한다고 적는다', vis.reason.includes('사람이 DROP/HOLD 를 정한다'))
+  check('🔴 이미지 수집·분석을 하지 않는다',
+    !/download|이미지 ?수집|fetchImage|img src/i.test(RUNNER_CODE))
+
+  // 🟢 나머지 SEED 는 그대로 남는다 — 전부 DETAIL 이 되면 triage 가 아니다
+  for (const t of ['캡슐커피머신 추천해주세요', '안방 붙박이장 어떤게나을까요', '정수기 설치하려고하는데 혜택좋은곳추천부탁드려요']) {
+    check(`🟢 "${t.slice(0, 14)}…" 는 Seed로 좋음 유지`, v(t).verdict === 'seedOk', `실제 ${v(t).verdict}`)
+  }
+
+  // 🔴 유지되어야 하는 원칙
+  check('🔴 Raw 는 여전히 목록 단계에서 추천하지 않는다',
+    ['seedOk', 'needsDetail', 'visualDependent'].includes(v('냉장고 추천해주세요').verdict))
+  check('🔴 Seed Inbox 밖은 여전히 Raw 후보',
+    verdictOf(sr('아무거나', 'originalRaw')).verdict === 'rawMaybe')
+
+  // ── 실데이터 ──
+  try {
+    const { loaded } = loadScoutRows()
+    const rows = loaded.flatMap((l) => l.rows)
+    if (rows.length > 0) {
+      const seed = scoreRows(rows).scored.filter((x) => isSeedInboxLane(x.laneHint.lane))
+      const n: Record<string, number> = {}
+      for (const x of seed) n[verdictOf(x).verdict] = (n[verdictOf(x).verdict] ?? 0) + 1
+      check('🟢 Seed로 좋음이 0건이 아니다 — triage 가 유지된다', (n.seedOk ?? 0) > 0, `${n.seedOk ?? 0}건`)
+      check('🔴 Raw 후보 자동 추천 0건', (n.rawMaybe ?? 0) === 0)
+      check('🟡 이미지 의존이 소수다 (후보의 10% 미만)',
+        (n.visualDependent ?? 0) / seed.length < 0.1, `${n.visualDependent ?? 0}/${seed.length}`)
+      console.log(`     (실측: 상세 읽기 ${n.needsDetail ?? 0} · Seed로 좋음 ${n.seedOk ?? 0} · 이미지 의존 ${n.visualDependent ?? 0} · Raw 후보 ${n.rawMaybe ?? 0})`)
+    }
+  } catch {
+    console.log('     ⏭️  .microseed-data 없음 — 건너뜀 (CI 정상)')
+  }
 }
 
 console.log(`\n${'─'.repeat(57)}`)

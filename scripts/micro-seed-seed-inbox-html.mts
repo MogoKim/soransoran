@@ -93,7 +93,7 @@ function main(): void {
   const seed = scored.filter((s) => isSeedInboxLane(s.laneHint.lane))
   const cards = toCards(seed)
 
-  const counts = { seedOk: 0, needsDetail: 0, rawMaybe: 0 } as Record<string, number>
+  const counts = { seedOk: 0, needsDetail: 0, visualDependent: 0, rawMaybe: 0 } as Record<string, number>
   for (const c of cards) counts[c.verdict] = (counts[c.verdict] ?? 0) + 1
 
   const meta = {
@@ -119,7 +119,7 @@ function main(): void {
   console.log(`        legacy 제외 ${legacyRows}행 · 파일 ${legacyFiles.length}개`)
   console.log(`  후보  ${cards.length}건`)
   for (const l of meta.lanes) console.log(`        ${l.label.padEnd(9)} ${l.n}건`)
-  console.log(`  추천  상세 읽기 ${counts.needsDetail ?? 0} · Seed로 좋음 ${counts.seedOk ?? 0} · Raw 후보 ${counts.rawMaybe ?? 0}`)
+  console.log(`  추천  상세 읽기 ${counts.needsDetail ?? 0} · Seed로 좋음 ${counts.seedOk ?? 0} · 이미지 의존 ${counts.visualDependent ?? 0} · Raw 후보 ${counts.rawMaybe ?? 0}`)
   console.log(`\n  ✅ ${out}`)
   console.log(`     열기: open ${out}\n`)
 }
@@ -135,7 +135,7 @@ export function renderHtml(cards: readonly ReviewCard[], meta: object): string {
 <title>Seed Inbox 검수</title>
 <style>
 :root{--bg:#faf9f7;--fg:#1c1a17;--mut:#6b665e;--line:#e4e0d9;--card:#fff;
---detail:#1d6fd6;--seed:#1f9254;--raw:#b06a00;--hold:#7a6ff0;--drop:#9a9691;--wrong:#d43b3b}
+--detail:#1d6fd6;--seed:#1f9254;--raw:#b06a00;--visual:#8a6d3b;--hold:#7a6ff0;--drop:#9a9691;--wrong:#d43b3b}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
 font:16px/1.6 -apple-system,BlinkMacSystemFont,'Pretendard Variable',Pretendard,sans-serif}
@@ -156,6 +156,7 @@ main{padding:16px;max-width:920px;margin:0 auto}
 .rec[data-v="needsDetail"]{color:var(--detail)}
 .rec[data-v="seedOk"]{color:var(--seed)}
 .rec[data-v="rawMaybe"]{color:var(--raw)}
+.rec[data-v="visualDependent"]{color:var(--visual)}
 .title{margin:8px 0;font-size:17px;font-weight:600;word-break:keep-all}
 .meta{font-size:13px;color:var(--mut);word-break:break-all}
 .why{font-size:13px;color:var(--mut);margin-top:4px}
@@ -315,12 +316,13 @@ function render(){
   });
   document.getElementById('cnt').textContent =
     '후보 ' + CARDS.length + '건 · 상세 읽기 ' + (META.counts.needsDetail||0) +
-    ' · Seed로 좋음 ' + (META.counts.seedOk||0) + ' · Raw 후보 ' + (META.counts.rawMaybe||0);
+    ' · Seed로 좋음 ' + (META.counts.seedOk||0) + ' · 이미지 의존 ' + (META.counts.visualDependent||0) +
+    ' · Raw 후보 ' + (META.counts.rawMaybe||0);
   refresh();
 }
 
 var fEl = document.getElementById('filters');
-[['ALL','전체'],['needsDetail','상세 읽기'],['seedOk','Seed로 좋음'],['rawMaybe','Raw 후보']].forEach(function(f){
+[['ALL','전체'],['needsDetail','상세 읽기'],['seedOk','Seed로 좋음'],['visualDependent','이미지 의존'],['rawMaybe','Raw 후보']].forEach(function(f){
   var b = document.createElement('button');
   b.className = 'pill' + (filter === f[0] ? ' on' : '');
   b.type = 'button'; b.setAttribute('data-f', f[0]);
