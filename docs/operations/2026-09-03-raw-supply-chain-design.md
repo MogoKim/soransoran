@@ -1075,6 +1075,91 @@ Raw Vault 는 "다시 읽을 본문" 을 담는 곳이고,
 
 ---
 
+## §4-M 🟡 Seed Inbox read-only 리포트 — **구현된 저장소가 아니다** (PR-S2-b-18)
+
+> 🔴 **Seed Inbox dry-run 은 구현된 저장소가 아니다.**
+> §4-L 이 계약한 Seed Inbox 는 여전히 **개념뿐**이고, 이 도구는 그것을 만들지 않는다.
+
+### 왜 도구가 먼저인가
+
+§4-L 은 `infoSeed` · `microSeedQuestion` · `participationSeed` 를 Seed Inbox 후보로 계약하면서
+**어디에 둘지(DB · Sheet · 파일)는 의도적으로 비워 뒀다.**
+
+```
+🔴 그릇을 정하려면 내용물을 먼저 봐야 한다.
+   후보 47건이 실제로 어떻게 생겼는지 보지 않고 스키마를 정하면,
+   그 스키마가 판단을 결정해 버린다.
+```
+
+**이것은 저장 경로 결정을 위한 검수 도구다.** 결정을 앞당기지 않고 재료만 만든다.
+
+### 위치
+
+| | |
+|---|---|
+| CLI | `scripts/micro-seed-seed-inbox-dry-run.mts` |
+| npm | `npm run micro-seed:seed-inbox-dry-run -- --top=30 [--show-title]` |
+| fixture | `scripts/micro-seed-seed-inbox-check.mts` · `npm run micro-seed:seed-inbox-check` |
+| 로더 | `scripts/lib/micro-seed-scout-load.mts` (읽기 전용) |
+
+### 🔴 쓰지 않는 것
+
+```
+DB write · Prisma · importer · Google Sheet read/write · LLM 호출 ·
+live 크롤 · 브라우저 · 상세 fetch · 파일 생성 · scheduler 등록
+```
+
+읽는 것은 `.microseed-data/*.list.jsonl` **하나뿐**이다. 목록 파일이라 **본문이 아예 없다** —
+`rawBody` 가 새는 경로가 구조적으로 존재하지 않는다.
+
+### 출력 계약
+
+```
+🔴 Seed Inbox dry-run은 저장소가 아니다.
+🔴 DB write 0 · Sheet write 0 · LLM 0 · live 0.
+🔴 laneHint는 자동 라우팅이 아니다.
+🔴 이 결과로 DB/Sheet 저장 경로를 확정하지 않는다.
+```
+
+이 네 줄은 매 실행 헤더에 찍히고, fixture 가 문자열로 고정한다.
+
+| 대상 | `infoSeed` · `microSeedQuestion` · `participationSeed` |
+|---|---|
+| **제외** | `originalRaw`(Raw Vault) · `growthIssue`(미구현) · `hold` · `exclude`(후보 집합 밖) |
+| **단, count 는** | **7종 전체 lane 분포를 보여준다** — 무엇이 어디로 갔는지 보이지 않으면 검수가 안 된다 |
+
+### 🔴 제목 · 본문 안전장치
+
+```
+🔴 기본 실행은 제목 원문을 출력하지 않는다 (실측 0줄)
+🟡 --show-title 을 켤 때만 Seed Inbox **후보** 제목이 나온다
+🔴 제외 · 보류 글 제목은 옵션을 켜도 나오지 않는다 — seed 배열이 후보에서만 나오므로 구조적 보장
+🔴 제목은 80자에서 자른다 (코드포인트 단위 — 한글이 깨지지 않는다)
+🔴 rawBody 는 어떤 경우에도 출력하지 않는다 — 읽지도 않는다
+```
+
+### 실측 (2026-09-04 · 표본 6파일)
+
+```
+관측 611행 → 고유 글 552건 · legacy 제외 444행(파일 3개)
+Original 477 · Question 25 · 참여 15 · Info 7 · Growth 8 · 보류 4 · 제외 16
+🟡 Seed Inbox 후보 47건 (Question 25 · 참여 15 · Info 7) · 그중 watch 29건
+```
+
+**§4-L 이 말한 47건이 실제로 47건이다.**
+
+### 다음 — 이 리포트를 보고 정할 것
+
+```
+🔴 Seed Inbox 를 DB 에 둘지 Sheet 에 둘지 파일에 둘지
+🔴 어떤 필드를 남길지
+🔴 Raw Vault 승격 임계값 (§4-L C)
+```
+
+**이 도구는 그 결정을 하지 않는다. 결정에 쓸 재료를 만들 뿐이다.**
+
+---
+
 ## §4-C 🟡 Growth Issue 레인 — **전략만 적는다. 구현하지 않았다**
 
 > 🔴 **상태: 미구현.** 코드 · 분류기 · cap · 감사 경로 **어느 것도 없다.**
