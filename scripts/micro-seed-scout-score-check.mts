@@ -519,6 +519,51 @@ console.log('\n⑬ 가중치 재배분 · off-target 감점 (PR-S2-b-14)')
 }
 
 // ─────────────────────────────────────────────────────────
+console.log('\n⑭ `얼마` 오탐 — 🔴 감정 부사는 정보 질문이 아니다 (PR-S2-b-16)')
+// ─────────────────────────────────────────────────────────
+{
+  const lane = (t: string) => {
+    const r = row({ originalTitle: t })
+    return laneHintOf(r, gateOf(r)).lane
+  }
+
+  // 🔴 앞 코드는 `얼마` 를 bare substring 으로 봐서 `얼마나` 부사가 전부 걸렸다.
+  for (const t of ['얼마나 속상한지 모르겠어요', '얼마나 힘든지 아세요', '얼마나 외로운지요', '얼마나 예민한지 모르겠어요']) {
+    check(`🔴 감정 부사는 infoSeed 가 아니다: "${t.slice(0, 14)}…"`,
+      lane(t) !== 'infoSeed',
+      'Info 레인은 "정보 주제 + 질문" 이다 — 감정 부사 `얼마나` 는 정보 질문이 아니다')
+  }
+  check('🔴 감정 부사 글은 고민(originalRaw)으로 간다',
+    ['얼마나 속상한지 모르겠어요', '얼마나 힘든지 아세요', '얼마나 외로운지요'].every((t) => lane(t) === 'originalRaw'),
+    '사연이지 질문이 아니다')
+
+  // 🟢 금액을 묻는 형태는 그대로 infoSeed 여야 한다
+  for (const t of ['축의금 얼마가 적당할까요', '전기세 얼마 나와요', '김치냉장고 얼마짜리 쓰세요', '보험료 얼마 내세요', '병원비 얼마 정도 들까요']) {
+    check(`🟢 금액 질문은 infoSeed 유지: "${t.slice(0, 14)}…"`, lane(t) === 'infoSeed')
+  }
+
+  // 🔴 `얼마` 가 `얼마나` 안에서 매칭되지 않는 구조인지 — 소스로 고정한다
+  check('🔴 INFO_TOPIC 에 맨몸 `얼마` 가 없다',
+    !/\|얼마\|/.test(LIB_CODE) && !/\|얼마\b(?![(가를짜])/.test(LIB_CODE),
+    'bare substring 이면 `얼마나` 가 전부 걸린다')
+  check('금액 맥락 matcher 를 따로 둔다', /const MONEY_ASK = /.test(LIB_CODE))
+  check('🔴 ASK_SHAPE 도 맨몸 `얼마나` 를 쓰지 않는다',
+    !/\|얼마나\|/.test(LIB_CODE),
+    '`얼마나 속상한지` 는 질문이 아니라 사연이다 — 뒤에 무엇이 오는지 봐야 한다')
+  check('공과금·요금도 정보 주제다',
+    ['전기세', '관리비', '병원비', '수리비'].every((w) => new RegExp(w).test(LIB_CODE)))
+
+  // 🟢 다른 레인 구분이 깨지지 않았다
+  check('🟢 짧은 질문은 여전히 살아 있다',
+    lane('냉장고 추천해주세요') === 'infoSeed' && lane('밀리의서재 말고 어떤게 좋나요') === 'microSeedQuestion')
+  check('🟢 참여형 구분 유지', lane('다들 어떠세요') === 'participationSeed')
+  check('🟢 긴 고민 구분 유지', lane('시어머니가 서운하다고 하셔서 답답합니다') === 'originalRaw')
+  check('🟢 `얼마나 잘해야` 같은 정도 질문은 질문으로 남는다',
+    lane('고등 영어 내신 얼마나 잘해야하나요') === 'microSeedQuestion',
+    '정도를 묻는 것은 질문이다 — 감정 부사와 다르다')
+}
+
+// ─────────────────────────────────────────────────────────
 console.log(failed === 0
   ? '\n✅ 전부 통과 — 점수는 초안이고, 게이트는 점수보다 먼저다.\n'
   : `\n❌ ${failed}건 실패\n`)
