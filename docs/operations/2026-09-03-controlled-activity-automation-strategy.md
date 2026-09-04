@@ -413,6 +413,21 @@ source-first 로 되돌아간다.
 Daily 100 → 200 으로 갈 때 비용이 선형으로 터진다.
 전문: [공급망 설계 §4-G](2026-09-03-raw-supply-chain-design.md).
 
+🔴 **후보를 고르는 단계에는 LLM 을 쓰지 않는다.** `laneHint` 와 점수화는 cheap signal 이다.
+Seed Inbox 후보 선별도 마찬가지다 — 고르는 것은 공짜 신호로 하고, 돈은 **가공**에만 쓴다.
+저장 경로 계약 전문: [공급망 설계 §4-L](2026-09-03-raw-supply-chain-design.md).
+
+### 🔴 저장 경로는 Raw Vault 와 Seed Inbox 로 나눈다 (2026-09-04 · 상호참조)
+
+```
+🟢 Raw Vault    긴 원문 · Original Post 재가공 재료      → originalRaw
+🟡 Seed Inbox   커뮤니티에 던질 질문 · 소재 후보          → infoSeed · microSeedQuestion · participationSeed
+```
+
+🔴 **Seed Inbox 는 개념만 고정했고 구현이 없다.** DB 인지 Sheet 인지도 정하지 않았다.
+🔴 Raw Vault 를 짧은 질문 · 잡담 seed 저장소로 오염시키지 않는다 — 짧은 글이 나쁜 것이 아니라 **저장 목적이 다르다**.
+계약 전문: [공급망 설계 §4-L](2026-09-03-raw-supply-chain-design.md).
+
 ### 🚫 정치 · 진영 이슈는 **가져가지 않는다** (2026-09-03 확정)
 
 Growth 든 shadow 든 **레인이 없다.** 나중에 조건을 갖추면 여는 항목이 아니다.
@@ -615,6 +630,9 @@ S7   🔴 페르소나 반응이 전체의 50% 초과 · 댓글 0개 best 발생
 🔴 scout 수치로 소스에 우열을 매기는 것 — calibration 표본이지 확정값이 아니다 (§4-F)
 🔴 소스별 절대 댓글수 · 조회수를 정규화 없이 같은 임계값으로 자르는 것
 🔴 자동 상세 fetch 기준 · threshold 운영값을 표본 1회로 확정하는 것
+🔴 짧은 질문 · 잡담 seed 를 Raw Vault 에 넣는 것 — 저장 목적이 다르다 (§4-L)
+🔴 Seed Inbox 를 승인 없이 DB · Sheet 어느 쪽으로든 구현하는 것 (§4-L)
+🔴 Seed Inbox 후보 선별에 LLM 을 쓰는 것 — 고르는 것은 공짜 신호로 한다 (§4-L)
 🔴 main 직접 push · 창업자 승인 전 merge
 ```
 
