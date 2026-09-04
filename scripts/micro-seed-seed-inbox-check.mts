@@ -28,6 +28,9 @@ import { hasRunId, parseJsonl, loadScoutRows } from './lib/micro-seed-scout-load
 import {
   toCards, renderHtml, escapeHtml, REVIEW_ACTIONS,
 } from './micro-seed-seed-inbox-html.mjs'
+import {
+  TSV_COLUMNS, RECOMMENDED_NOTE, overrideNoteOf, tsvCell, tsvLine, recommendedTsv,
+} from './micro-seed-seed-inbox-dry-run.mjs'
 
 const RUNNER = readFileSync('scripts/micro-seed-seed-inbox-dry-run.mts', 'utf-8')
 const LOADER = readFileSync('scripts/lib/micro-seed-scout-load.mts', 'utf-8')
@@ -570,6 +573,71 @@ console.log('\n⑭ HTML 검수 화면 — 🔴 CLI 와 같은 기준을 쓴다')
   } catch {
     console.log('     ⏭️  .microseed-data 없음 — 건너뜀 (CI 정상)')
   }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑮ 추천값 그대로 회수 — 🔴 자동 라우팅이 아니라 read-only export')
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 컬럼 순서가 계약이다 — 바뀌면 이미 회수한 표와 붙일 수 없다
+  const WANT = ['verdict','lane','score','sourceSite','sourceBoardKey','sourceBoardName',
+    'sourceArticleId','page','rank','commentCount','viewCount','lagMinutes','watch','title','why','signal','note']
+  check('🔴 TSV 컬럼 17개가 계약대로다', JSON.stringify([...TSV_COLUMNS]) === JSON.stringify(WANT),
+    TSV_COLUMNS.join(','))
+
+  check('🟢 기본 note 가 창업자 수용 표시다',
+    RECOMMENDED_NOTE === 'system recommended v1; founder accepted recommendation')
+  check('🔴 override note 는 무엇을 뒤집었는지 남긴다',
+    overrideNoteOf('needsDetail') === 'founder override (recommended: needsDetail)')
+
+  // 🔴 탭·줄바꿈이 들어가면 열이 밀린다 — 제목은 소스 원문이라 반드시 지운다
+  check('🔴 탭을 지운다', tsvCell('a\tb') === 'a b')
+  check('🔴 줄바꿈을 지운다', tsvCell('a\nb') === 'a b')
+  check('🔴 CRLF 도 지운다', tsvCell('a\r\nb') === 'a b')
+
+  const { scored } = scoreRows([
+    row({ sourceArticleId: 'q1', originalTitle: '냉장고 추천해주세요' }),
+    row({ sourceArticleId: 'q2', originalTitle: '아이 학원비 다들 얼마나 쓰세요' }),
+  ])
+  const cards = toCards(scored.filter((s) => isSeedInboxLane(s.laneHint.lane)))
+  check('🟢 카드가 있다', cards.length === 2, `실제 ${cards.length}`)
+
+  const line = tsvLine(cards[0])
+  check('🔴 한 줄의 열 수가 컬럼 수와 같다', line.split('\t').length === TSV_COLUMNS.length,
+    `실제 ${line.split('\t').length}`)
+  check('🟢 사람 선택이 없으면 추천값이 들어간다', line.split('\t')[0] === cards[0].verdict)
+  check('🟢 사람 선택이 없으면 note 가 기본값', line.endsWith(RECOMMENDED_NOTE))
+  check('🔴 사람이 바꾸면 그 값이 들어간다', tsvLine(cards[0], 'WRONG').split('\t')[0] === 'WRONG')
+  check('🔴 사람이 바꾸면 override note',
+    tsvLine(cards[0], 'WRONG').endsWith(overrideNoteOf(cards[0].verdict)))
+  check('🟢 추천값과 같은 값을 골라도 기본 note', tsvLine(cards[0], cards[0].verdict).endsWith(RECOMMENDED_NOTE))
+
+  const out = recommendedTsv(cards)
+  check('🟢 헤더 + 카드 수만큼 줄', out.split('\n').length === cards.length + 1)
+  check('🟢 첫 줄이 헤더', out.split('\n')[0] === TSV_COLUMNS.join('\t'))
+
+  // 🔴 export 는 stdout 전용 — 파일을 쓰지 않는다
+  check('🔴 recommendedTsv 는 문자열만 돌려준다 (파일 쓰기 없음)',
+    !/writeFileSync|appendFileSync|createWriteStream/.test(
+      RUNNER_CODE.slice(RUNNER_CODE.indexOf('export function recommendedTsv'))))
+  check('🔴 CLI export 가 process.stdout.write 만 쓴다',
+    /process\.stdout\.write\(`\$\{recommendedTsv/.test(RUNNER_CODE))
+  check('🔴 CLI export 경로에 파일 쓰기가 없다', !/writeFileSync/.test(RUNNER_CODE))
+  check('🔴 export 는 배너를 찍지 않는다 (파이프 오염 방지)',
+    /if \(argv\.includes\('--export-recommended-tsv'\)\) \{ exportRecommended\(\); return \}/.test(RUNNER_CODE))
+
+  // 🔴 화면도 같은 계약을 쓴다 — 각자 컬럼을 만들면 회수한 표가 서로 다른 표가 된다
+  check('🔴 HTML 이 컬럼을 다시 정의하지 않는다',
+    !/'verdict',\s*'lane',\s*'score'/.test(HTMLGEN_CODE))
+  check('🔴 HTML 이 dry-run 의 TSV 계약을 import 한다',
+    /TSV_COLUMNS/.test(HTMLGEN_CODE) && /RECOMMENDED_NOTE/.test(HTMLGEN_CODE))
+
+  const html = renderHtml(cards, { counts: {}, meanings: VERDICT_MEANING })
+  check('🟢 화면에 "추천값으로 전체 선택" 버튼', html.includes('추천값으로 전체 선택'))
+  check('🔴 화면이 "추천값으로 초기화" 를 밝힌다', html.includes('추천값으로 초기화'))
+  check('🔴 화면이 "사람이 바꾼 값도 덮어쓴다" 를 밝힌다', html.includes('사람이 바꾼 값도 덮어쓴다'))
+  check('🟢 되돌리기 버튼이 있다', html.includes('id="undo"'))
+  check('🟢 화면에 기본 note 문구가 들어간다', html.includes(RECOMMENDED_NOTE))
 }
 
 console.log(`\n${'─'.repeat(57)}`)
