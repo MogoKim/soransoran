@@ -29,7 +29,7 @@ export default function NewcomerGreetings({ greetings }: { greetings: NewcomerGr
        *    홈의 다른 머리글과 높이가 어긋나지 않게 둔다.
        */}
       <div className="mb-3 flex min-h-[52px] items-center">
-        <h2 className="flex items-center gap-2 text-xl font-bold text-content-primary">
+        <h2 className="flex items-center gap-2 text-lg font-bold text-content-primary">
           <span
             aria-hidden
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-surface-soft text-xl"
