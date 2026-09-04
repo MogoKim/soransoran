@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
+import { TITLE_CARD } from '@/lib/typography'
 
 /**
  * 상세 하단 관련글.
@@ -28,7 +29,7 @@ export default function RelatedMagazineList({ articles }: { articles: MagazineAr
               className="group flex min-h-[72px] items-center gap-3 py-3 no-underline"
             >
               <span className="flex min-w-0 flex-col gap-1">
-                <span className="line-clamp-2 break-keep font-bold leading-[1.4] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
+                <span className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
                   {article.title}
                 </span>
                 <span className="flex flex-wrap items-center gap-x-1.5 text-meta text-content-muted">

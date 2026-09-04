@@ -2,6 +2,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
+import { TITLE_CARD } from '@/lib/typography'
 
 /**
  * 홈 전용 매거진 진열 — 좁은 화면은 옆으로 미는 레일, 넓은 화면은 세 칸.
@@ -58,7 +59,7 @@ function Card({ article }: { article: MagazineArticle }) {
           {MAGAZINE_CLUSTER_LABELS[article.cluster]}
         </span>
 
-        <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.4] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
+        <span className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
           {article.title}
         </span>
 
