@@ -277,7 +277,7 @@ function main(): void {
   // 🔴 추천 분포 — "상세 읽기" 가 대부분이면 기준이 잘못된 것이다 (2026-09-04 정정)
   const verdicts = seed.map((x) => verdictOf(x))
   const vCount = (v: SeedVerdict): number => verdicts.filter((x) => x.verdict === v).length
-  console.log('\n   추천 분포 — 🔴 상위권은 DETAIL 이 정상이다')
+  console.log('\n   추천 분포 — 🟢 창업자 승인 v1 기준 (§4-O) · 🔴 상위권은 DETAIL 이 정상이다')
   for (const v of ['seedOk', 'needsDetail', 'rawMaybe'] as SeedVerdict[]) {
     const n = vCount(v)
     const note = v === 'rawMaybe' ? '  🔴 이 화면에서는 자동 추천하지 않는다 (보조·예외)' : ''
@@ -317,7 +317,8 @@ function main(): void {
   console.log('   🔴 이 결과로 DB/Sheet 저장 경로를 확정하지 않는다 — 눈으로 보는 단계다')
   console.log('   🟢 후보 선별에 LLM 을 쓰지 않았다 — laneHint·점수화는 cheap signal 이다')
   console.log('   🔴 자동 상세 fetch 기준을 확정하지 않았다 — "상세 읽기" 는 사람이 누르는 추천일 뿐이다')
-  console.log('   🔴 Raw Vault 확정은 DETAIL 이후에만 가능하다 — 이 화면은 Raw 를 정하지 않는다\n')
+  console.log('   🔴 Raw Vault 확정은 DETAIL 이후에만 가능하다 — 이 화면은 Raw 를 정하지 않는다')
+  console.log('   🟢 v1 승인은 **추천 기준**에 대한 승인이지 자동화에 대한 승인이 아니다 — 버튼은 사람이 누른다\n')
 }
 
 /**

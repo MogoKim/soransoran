@@ -235,7 +235,8 @@ footer{padding:16px;max-width:920px;margin:0 auto}
 🔴 <b>이 화면은 저장소가 아니다.</b> DB write 0 · Sheet write 0 · LLM 0 · live 0 · 상세 fetch 0.<br>
 🔴 판정은 CLI 와 <b>같은 verdictOf()</b> 가 낸다. 이 화면은 판정 로직을 갖지 않는다.<br>
 🔴 저장은 이 브라우저 <b>localStorage</b> 까지다. 결과는 TSV 로 직접 가져간다.<br>
-🔴 여기는 <b>triage</b> 다 — 최종 채택이 아니다. Raw Vault 확정은 DETAIL 이후에만 가능하다.
+🔴 여기는 <b>triage</b> 다 — 최종 채택이 아니다. Raw Vault 확정은 DETAIL 이후에만 가능하다.<br>
+🟢 추천 기준은 <b>창업자 승인 v1</b> 이다 (§4-O). 승인된 것은 <b>추천 기준</b>이지 자동화가 아니다 — 버튼은 사람이 누른다.
 </div>
 <div class="bar" id="filters"></div>
 <div class="bar">
