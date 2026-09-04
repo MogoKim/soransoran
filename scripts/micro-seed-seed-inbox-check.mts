@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs'
 import {
   SEED_INBOX_LANES, NOT_SEED_INBOX, isSeedInboxLane,
-  verdictOf, VERDICT_LABEL, VERDICT_MEANING, DETAIL_FLAGS, type SeedVerdict,
+  verdictOf, VERDICT_LABEL, VERDICT_MEANING, DETAIL_FLAGS, ASSET_TOPICS, HOT_SCORE, type SeedVerdict,
 } from './micro-seed-seed-inbox-dry-run.mjs'
 import {
   scoreRows, gateOf, laneHintOf, toArticles, type ScoutRow, type Lane,
@@ -138,8 +138,12 @@ console.log('\n④ 제목 — 기본 미출력 · --show-title 에서만 · 80�
     /if \(SHOW_TITLE\) console\.log\(`\s*제목\s+\$\{clampTitle\(r\.originalTitle\)\}`\)/.test(RUNNER_CODE))
 
   // 🔴 originalTitle 을 만지는 지점이 그 한 곳뿐인지 — 다른 데서 새면 옵션이 무의미하다
-  const titleUses = (RUNNER_CODE.match(/originalTitle/g) ?? []).length
-  check('🔴 originalTitle 참조가 1곳뿐이다', titleUses === 1, `실제 ${titleUses}곳`)
+  // 🔴 verdictOf 가 topicHits 를 위해 제목을 **읽는다**. 읽기는 유출이 아니다 —
+  //    지켜야 할 성질은 "**찍히는** 곳이 하나뿐" 이다. 그것만 센다.
+  const printed = (RUNNER_CODE.match(/console\.log\([^\n]*originalTitle/g) ?? []).length
+  check('🔴 originalTitle 을 출력하는 곳이 1곳뿐이다', printed === 1, `실제 ${printed}곳`)
+  const readOnly = (RUNNER_CODE.match(/topicHits\(r\.originalTitle/g) ?? []).length
+  check('🟢 나머지 참조는 topicHits 읽기뿐이다', readOnly === 1, `실제 ${readOnly}곳`)
 
   check('🔴 절단 상수가 80 이다', /const TITLE_MAX = 80/.test(RUNNER_CODE))
   check('🔴 코드포인트 단위로 자른다 (한글·이모지 안 깨짐)',
@@ -275,79 +279,125 @@ console.log('\n⑩ 실데이터 — 실행 가능하고 계약을 지킨다')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑪ 추천 기준 — 🔴 제목만으로 질문 소재가 되는가 (2026-09-04 창업자 검수 정정)')
+console.log('\n⑪ 추천 기준 — 🔴 Seed Inbox 는 triage 다 (2026-09-04 창업자 2차 정정)')
 // ─────────────────────────────────────────────────────────
 {
-  // 🔴 버튼 문구는 대표님이 보고 바로 뜻을 알아야 한다 — 문자열을 고정한다
+  /**
+   * 🔴 **규칙만 본다.** 레인 분류기는 ①③ 과 scout-score-check 가 따로 검사한다.
+   *    여기서 실제 채점을 쓰면 단일 행에서 백분위가 퇴화해(watch 가 항상 true)
+   *    "규칙이 틀렸는지" 와 "표본이 1건이라 그런지" 를 구분할 수 없다.
+   */
+  const sr = (o: Partial<ScoutRow>, lane: Lane, over: { watch?: boolean; total?: number } = {}) => ({
+    row: row(o),
+    laneHint: { lane, reason: '', signals: [] },
+    watch: over.watch ?? false,
+    score: { engagement: 0, targetFit: 0, conversation: 0, freshness: 0, penalty: 0, total: over.total ?? 10 },
+  })
+  const verdict = (o: Partial<ScoutRow>, lane: Lane = 'microSeedQuestion', over: { watch?: boolean; total?: number } = {}) =>
+    verdictOf(sr(o, lane, over))
+
+  /** 🔴 창업자 지목 케이스는 **실제 파이프라인**으로 확인한다 — 규칙만 맞으면 의미가 없다 */
+  const pipelineVerdict = (title: string): { verdict: string; reason: string } => {
+    const { scored, excluded, held } = scoreRows([row({ originalTitle: title })])
+    return verdictOf([...scored, ...excluded, ...held][0])
+  }
+
+  // 🔴 버튼 문구 — 대표님이 보고 바로 뜻을 알아야 한다
   check('라벨: Seed로 좋음', VERDICT_LABEL.seedOk === 'Seed로 좋음')
   check('라벨: 상세 읽기', VERDICT_LABEL.needsDetail === '상세 읽기')
   check('라벨: Raw 후보', VERDICT_LABEL.rawMaybe === 'Raw 후보')
-  check('뜻: Seed로 좋음 = 제목만으로 질문 소재로 채택',
-    VERDICT_MEANING.seedOk === '제목만으로 질문 소재로 채택')
-  check('뜻: 상세 읽기 = 본문 확인 필요',
-    VERDICT_MEANING.needsDetail === '본문 확인 필요')
-  check('뜻: Raw 후보 = 긴 원문 재료 가능 · 상세 이후 판단',
-    VERDICT_MEANING.rawMaybe === '긴 원문 재료 가능 · 상세 이후 판단')
+  check('뜻: Seed로 좋음 = 제목만으로 충분',
+    VERDICT_MEANING.seedOk === '제목만으로 충분 · 본문 열 필요 낮음')
+  check('뜻: 상세 읽기 = 본문·댓글이 자산일 가능성',
+    VERDICT_MEANING.needsDetail === '본문·댓글이 자산일 가능성 — 확인 필요')
+  check('뜻: Raw 후보 = DETAIL 이후에만 판단',
+    VERDICT_MEANING.rawMaybe === '긴 원문 재료 가능 · DETAIL 이후에만 판단')
 
-  // 🔴 세 레인 전부 기본값이 seedOk 여야 한다 — 상세 읽기가 기본이면 비용 습관이 잘못 든다
-  for (const lane of SEED_INBOX_LANES) {
-    const v = verdictOf(row({ qualityFlags: [] }), lane)
-    check(`🟢 ${lane} 기본 추천은 Seed로 좋음`, v.verdict === 'seedOk', `실제 ${v.verdict}`)
-  }
-
-  // 🔴 창업자가 직접 지목한 3건 — 전부 Seed 로 좋아야 한다 (상세 읽기 아님)
-  const founderPicks: readonly [string, string][] = [
-    ['혼인신고만 한 친구 축의금 얼마가 적당할까요?', 'infoSeed'],
-    ['다들 28살 조카한테 어머님 모시게 하는거 어떻게 생각하세요?', 'participationSeed'],
-    ['결혼할때 한복 맞추신분들 아직도 가지고계신가요?', 'participationSeed'],
+  // 🔴 창업자가 직접 정정한 5건 — 전부 DETAIL 이어야 한다
+  const founderDetail: readonly string[] = [
+    '혼인신고만 한 친구 축의금 얼마가 적당할까요?',
+    '다들 28살 조카한테 어머님 모시게 하는거 어떻게 생각하세요? (펑예)',
+    '결혼할때 한복 맞추신분들 아직도 가지고계신가요?',
+    '고등 영어 내신. 모고 둘다 1등급나오려면 라이팅을 얼마나 잘해야하나요?',
+    '초딩들 학원보내면 학원에 전화나 문자 얼마나하세요?',
   ]
-  for (const [title, want] of founderPicks) {
+  for (const title of founderDetail) {
     const r = row({ originalTitle: title })
     const lane = laneHintOf(r, gateOf(r)).lane
-    check(`🟡 "${title.slice(0, 12)}…" 은 Seed Inbox 후보`, isSeedInboxLane(lane), `실제 ${lane}`)
-    check(`🟢 "${title.slice(0, 12)}…" 추천은 Seed로 좋음`,
-      verdictOf(r, lane).verdict === 'seedOk')
+    check(`🟡 "${title.slice(0, 14)}…" 은 Seed Inbox 후보`, isSeedInboxLane(lane), `실제 ${lane}`)
+    const v = pipelineVerdict(title)
+    check(`🔵 "${title.slice(0, 14)}…" 추천은 상세 읽기`,
+      v.verdict === 'needsDetail', `실제 ${v.verdict} — ${v.reason}`)
   }
 
-  // 🔴 상세 읽기는 민감·판단불가에만 붙는다
+  // 🔴 레인만으로 Seed로 좋음이 되면 안 된다 — 이것이 1차 정정에서 틀린 지점이다
+  for (const lane of SEED_INBOX_LANES) {
+    check(`🔴 ${lane} 이라는 이유만으로 Seed로 좋음이 되지 않는다`,
+      verdict({ originalTitle: '아이 학원비 다들 얼마나 쓰세요' }, lane).verdict === 'needsDetail')
+  }
+
+  // 🟢 맥락 의존이 낮은 일반 질문만 Seed로 좋음
+  for (const t of ['중드 추천 부탁드려요~', '냉장고 추천해주세요']) {
+    const v = verdict({ originalTitle: t }, 'microSeedQuestion', { watch: false, total: 20 })
+    check(`🟢 "${t}" 는 Seed로 좋음`, v.verdict === 'seedOk', `실제 ${v.verdict} — ${v.reason}`)
+  }
+
+  // 🔵 댓글이 자산인 축은 DETAIL 로 간다
+  for (const [t, axis] of [
+    ['남편 생신 다들 어떻게 하세요', '가족'],
+    ['아이 학원 언제부터 보내셨어요', '자녀·교육'],
+    ['노후 자금 다들 얼마나 모으셨나요', '돈·노후'],
+    ['갱년기 불면증 어떻게들 버티세요', '몸·건강'],
+    ['친구 관계 다들 어떠세요', '관계·마음'],
+  ] as const) {
+    const v = verdict({ originalTitle: t }, 'participationSeed', { watch: false, total: 20 })
+    check(`🔵 ${axis} 축 → 상세 읽기`, v.verdict === 'needsDetail', `실제 ${v.verdict}`)
+    check(`   이유에 축을 적는다`, v.reason.includes(axis))
+  }
+
+  // 🔴 민감·판단불가도 여전히 DETAIL 이다
   for (const [flag, why] of DETAIL_FLAGS) {
-    const v = verdictOf(row({ qualityFlags: [flag] }), 'microSeedQuestion')
+    // 🔴 medicalOrAdLikely 는 gate 에서 이미 hold 라 후보로 오지 않는다.
+    //    그래도 규칙에 남긴다 — 게이트가 바뀌어도 여기서 한 번 더 걸린다(다중 방어).
+    const v = verdict({ originalTitle: '중드 추천 부탁드려요~', qualityFlags: [flag] }, 'microSeedQuestion', { watch: false, total: 20 })
     check(`🔴 ${flag} → 상세 읽기`, v.verdict === 'needsDetail', `실제 ${v.verdict}`)
     check(`   이유를 사람 말로 적는다 (${why})`, v.reason.includes(why))
   }
 
-  // 🔴 "점수가 높아서 열어본다" 는 이유가 아니다 — 점수는 verdict 에 관여하지 않는다
-  const hot = row({ qualityFlags: ['highEngagement', 'targetLikely'], sourceCommentCount: 300, sourceViewCount: 9999 })
-  check('🔴 화제성이 높다고 상세 읽기가 되지 않는다',
-    verdictOf(hot, 'participationSeed').verdict === 'seedOk')
-  check('🟢 짧은 제목이라고 상세 읽기가 되지 않는다',
-    verdictOf(row({ qualityFlags: ['shortTitle'] }), 'microSeedQuestion').verdict === 'seedOk')
-  check('🟢 낚시성 제목만으로는 상세 읽기가 되지 않는다',
-    verdictOf(row({ qualityFlags: ['clickbaitTitle'] }), 'infoSeed').verdict === 'seedOk')
+  // 🔵 화제성 · watch 도 DETAIL 사유다 — 댓글이 이미 붙고 있다는 뜻이다
+  check('🔵 highEngagement → 상세 읽기',
+    verdict({ originalTitle: '중드 추천 부탁드려요~', qualityFlags: ['highEngagement'] }, 'infoSeed', { watch: false, total: 20 }).verdict === 'needsDetail')
+  check('🔵 watch → 상세 읽기',
+    verdict({ originalTitle: '중드 추천 부탁드려요~' }, 'infoSeed', { watch: true, total: 20 }).verdict === 'needsDetail')
+  check(`🔵 상위권 점수(${HOT_SCORE}+) → 상세 읽기`,
+    verdict({ originalTitle: '중드 추천 부탁드려요~' }, 'infoSeed', { watch: false, total: HOT_SCORE }).verdict === 'needsDetail')
 
-  // 🔴 Raw 후보는 이 화면에서 자동 추천하지 않는다 — 본문을 봐야 아는 레인이다
-  for (const lane of SEED_INBOX_LANES) {
-    for (const flags of [[], ['titleTruncated'], ['highEngagement'], ['clickbaitTitle']]) {
-      check(`🔴 ${lane}(${flags.join(',') || '무플래그'})에 Raw 후보를 자동 추천하지 않는다`,
-        verdictOf(row({ qualityFlags: flags }), lane).verdict !== 'rawMaybe')
-    }
+  // 🔴 Raw 후보는 목록·제목 단계에서 추천하지 않는다
+  for (const t of ['중드 추천 부탁드려요~', '남편 생신 다들 어떻게 하세요', '냉장고 추천해주세요']) {
+    check(`🔴 "${t.slice(0, 10)}…" 에 Raw 후보를 추천하지 않는다`,
+      verdict({ originalTitle: t }, 'participationSeed').verdict !== 'rawMaybe')
   }
-  check('🟡 Seed Inbox 밖 레인은 Raw 후보로 떨어진다',
-    verdictOf(row({}), 'originalRaw').verdict === 'rawMaybe')
+  {
+    const { scored } = scoreRows([row({ originalTitle: '시어머니가 서운하다고 하셔서 며칠째 답답하고 속상합니다' })])
+    check('🟡 Seed Inbox 밖(originalRaw)은 Raw 후보로 떨어진다',
+      verdictOf(scored[0]).verdict === 'rawMaybe')
+    check('   그 이유도 DETAIL 이후라고 적는다', verdictOf(scored[0]).reason.includes('DETAIL 이후'))
+  }
 
-  // 🔴 출력이 세 버튼의 뜻을 전부 찍는다
+  // 🔴 출력 계약
   for (const v of ['seedOk', 'needsDetail', 'rawMaybe'] as SeedVerdict[]) {
     check(`🔴 출력에 "${VERDICT_MEANING[v]}"`, RUNNER.includes(VERDICT_MEANING[v]))
   }
-  check('🔴 출력에 "상세 읽기는 기본값이 아니다"', RUNNER.includes('상세 읽기는 기본값이 아니다'))
-  check('🔴 출력에 "Raw 후보는 이 화면에서 추천하지 않는다"',
-    RUNNER.includes('Raw 후보는 이 화면에서 추천하지 않는다'))
+  check('🔴 출력이 triage 단계임을 밝힌다', RUNNER.includes('triage'))
+  check('🔴 출력에 "제목으로 1차 선별"', RUNNER.includes('제목으로 1차 선별'))
+  check('🔴 DETAIL 이 비용 낭비가 아님을 밝힌다', RUNNER.includes('DETAIL 은 비용 낭비가 아니다'))
+  check('🔴 Raw 는 DETAIL 이후에만 판단한다고 밝힌다', RUNNER.includes('DETAIL 이후'))
   check('🔴 자동 상세 fetch 기준을 확정하지 않았다고 찍는다',
     RUNNER.includes('자동 상세 fetch 기준을 확정하지 않았다'))
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑫ 실데이터 — 기본값이 Seed로 좋음인가')
+console.log('\n⑫ 실데이터 — 상위권은 DETAIL 쪽이 맞다')
 // ─────────────────────────────────────────────────────────
 {
   try {
@@ -356,14 +406,14 @@ console.log('\n⑫ 실데이터 — 기본값이 Seed로 좋음인가')
     if (rows.length > 0) {
       const { scored } = scoreRows(rows)
       const seed = scored.filter((s) => isSeedInboxLane(s.laneHint.lane))
-      const vs = seed.map((s) => verdictOf(s.row, s.laneHint.lane))
+      const vs = seed.map((s) => verdictOf(s))
       const n = (v: SeedVerdict): number => vs.filter((x) => x.verdict === v).length
-      check('🟢 Seed로 좋음이 상세 읽기보다 많다', n('seedOk') > n('needsDetail'),
-        `seedOk ${n('seedOk')} vs needsDetail ${n('needsDetail')}`)
-      check('🔴 Seed 후보에 Raw 후보 자동 추천이 0건', n('rawMaybe') === 0, `${n('rawMaybe')}건`)
-      check('🔴 상세 읽기는 소수다 (후보의 20% 미만)',
-        n('needsDetail') / seed.length < 0.2, `${n('needsDetail')}/${seed.length}`)
-      console.log(`     (실측: Seed로 좋음 ${n('seedOk')} · 상세 읽기 ${n('needsDetail')} · Raw 후보 ${n('rawMaybe')})`)
+      check('🔴 Seed 후보에 Raw 후보 추천이 0건', n('rawMaybe') === 0, `${n('rawMaybe')}건`)
+      check('🔵 상위 10건은 전부 DETAIL 이다',
+        seed.slice(0, 10).every((s) => verdictOf(s).verdict === 'needsDetail'),
+        seed.slice(0, 10).map((s) => verdictOf(s).verdict).join(','))
+      check('🟢 Seed로 좋음도 남아 있다 — 전부 DETAIL 이면 triage 가 아니다', n('seedOk') > 0, `${n('seedOk')}건`)
+      console.log(`     (실측: 상세 읽기 ${n('needsDetail')} · Seed로 좋음 ${n('seedOk')} · Raw 후보 ${n('rawMaybe')})`)
     }
   } catch {
     console.log('     ⏭️  .microseed-data 없음 — 건너뜀 (CI 정상)')
