@@ -25,7 +25,7 @@
  *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --run=20260903-204007
  *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --show-title   🟡 로컬 검수용
  */
-import { scoreRows, toArticles, LANE_LABEL, type ScoredRow, type Lane } from './lib/micro-seed-scout-score.mjs'
+import { scoreRows, toArticles, LANE_LABEL, type ScoredRow, type ScoutRow, type Lane } from './lib/micro-seed-scout-score.mjs'
 import { loadScoutRows, SCOUT_DATA_DIR } from './lib/micro-seed-scout-load.mjs'
 
 /**
@@ -41,6 +41,67 @@ export const NOT_SEED_INBOX: readonly Lane[] = ['originalRaw', 'growthIssue', 'h
 
 export function isSeedInboxLane(lane: Lane): boolean {
   return SEED_INBOX_LANES.includes(lane)
+}
+
+/**
+ * 🔴 **이 화면의 판단은 "제목만으로 질문 소재가 되는가" 다** (2026-09-04 창업자 검수 정정).
+ *
+ *    Seed Inbox 는 **원문 보존이 아니다.** 원문을 쌓는 곳은 Raw Vault 다(§4-L).
+ *    여기서 고르는 것은 **우리 커뮤니티에 던질 질문 소재**다.
+ *    그래서 판단 재료는 제목이면 충분하고, 충분한 것을 굳이 더 열지 않는다.
+ *
+ * 🔴 **상세 읽기는 기본값이 아니다.** 앞선 리포트는 상위 후보를 사실상 "열어볼 목록" 처럼
+ *    보여줬는데, 그건 Original Post 레인의 습관이지 Seed Inbox 의 습관이 아니다.
+ *    상세는 **제목만으로 판단이 안 되거나 민감 리스크가 있을 때만** 쓴다.
+ *
+ * 🔴 **Raw 후보는 이 화면에서 자동 추천하지 않는다.**
+ *    Raw 는 본문 길이 · 사연의 깊이로 판단하는 레인이고, 그건 상세 fetch 이후에 알 수 있다.
+ *    제목만 보는 화면에서 Raw 를 권하면 **판단할 수 없는 것을 권하는 셈**이다.
+ *    선택지로는 남기되(사람이 직접 고를 수 있다) 추천은 하지 않는다 — 보조 · 예외다.
+ */
+export type SeedVerdict = 'seedOk' | 'needsDetail' | 'rawMaybe'
+
+export const VERDICT_LABEL: Record<SeedVerdict, string> = {
+  seedOk: 'Seed로 좋음',
+  needsDetail: '상세 읽기',
+  rawMaybe: 'Raw 후보',
+}
+
+/** 🔴 대표님이 버튼만 보고 뜻을 알 수 있어야 한다 */
+export const VERDICT_MEANING: Record<SeedVerdict, string> = {
+  seedOk: '제목만으로 질문 소재로 채택',
+  needsDetail: '본문 확인 필요',
+  rawMaybe: '긴 원문 재료 가능 · 상세 이후 판단',
+}
+
+/**
+ * 🔴 상세를 열어야 하는 이유는 두 가지뿐이다 — **민감하거나, 제목이 말을 안 하거나.**
+ *    "점수가 높아서" 는 이유가 아니다. 점수가 높으면 오히려 Seed 로 바로 쓴다.
+ */
+export const DETAIL_FLAGS: readonly (readonly [string, string])[] = [
+  ['politicalOrPublicFigure', '정치·공인 언급 가능성'],
+  ['medicalOrAdLikely', '의료·광고 가능성'],
+  ['quotedOrMediaLikely', '펌글·미디어 인용 가능성'],
+  ['titleTruncated', '제목이 잘려 판단 불가'],
+] as const
+
+export type VerdictResult = { verdict: SeedVerdict; reason: string }
+
+/**
+ * 🔴 Seed Inbox 레인의 **기본값은 `Seed로 좋음`** 이다.
+ *    민감·판단불가 신호가 있을 때만 `상세 읽기` 로 올린다.
+ *    `Raw 후보` 는 이 함수가 반환하지 않는다 — 사람이 고르는 선택지다(위 주석 참조).
+ */
+export function verdictOf(row: ScoutRow, lane: Lane): VerdictResult {
+  if (!isSeedInboxLane(lane)) {
+    return { verdict: 'rawMaybe', reason: 'Seed Inbox 레인이 아니다' }
+  }
+  const flags = row.qualityFlags ?? []
+  const hit = DETAIL_FLAGS.filter(([f]) => flags.includes(f))
+  if (hit.length > 0) {
+    return { verdict: 'needsDetail', reason: hit.map(([, why]) => why).join(' · ') }
+  }
+  return { verdict: 'seedOk', reason: '제목만으로 질문 소재가 된다 — 더 열 이유가 없다' }
 }
 
 const ALL_LANES: readonly Lane[] = [
@@ -84,6 +145,13 @@ function banner(): void {
   console.log('  🔴 DB write 0 · Sheet write 0 · LLM 0 · live 0.')
   console.log('  🔴 laneHint는 자동 라우팅이 아니다.')
   console.log('  🔴 이 결과로 DB/Sheet 저장 경로를 확정하지 않는다.')
+  console.log('')
+  console.log('  판단 기준 — 🔴 이 화면은 **제목만으로 질문 소재가 되는가**를 본다')
+  for (const v of ['seedOk', 'needsDetail', 'rawMaybe'] as SeedVerdict[]) {
+    console.log(`     ${pad(VERDICT_LABEL[v], 12)} = ${VERDICT_MEANING[v]}`)
+  }
+  console.log('  🔴 상세 읽기는 기본값이 아니다 — 민감하거나 제목이 말을 안 할 때만 쓴다.')
+  console.log('  🔴 Raw 후보는 이 화면에서 추천하지 않는다 — 본문을 봐야 아는 레인이라 보조·예외다.')
   console.log(
     SHOW_TITLE
       ? '  🟡 --show-title: Seed Inbox **후보** 제목만 출력한다. 제외·보류 글 제목과 본문은 출력하지 않는다.\n'
@@ -106,6 +174,8 @@ function line(s: ScoredRow, i: number): void {
       `댓글 ${r.sourceCommentCountRead ? r.sourceCommentCount : '읽지 못함'} · 조회 ${r.sourceViewCount ?? '-'} · ` +
       `lag ${s.lagMinutes === null ? '-' : `${s.lagMinutes.toFixed(0)}분`}`,
   )
+  const v = verdictOf(r, s.laneHint.lane)
+  console.log(`       추천   ${VERDICT_LABEL[v.verdict]} — ${v.reason}`)
   console.log(`       why    ${s.why}`)
   console.log(`       signal ${s.laneHint.signals.length ? s.laneHint.signals.join(' · ') : '-'} → ${s.laneHint.reason}`)
   // 🔴 seed 배열은 Seed Inbox 후보에서만 나온다 — 제외·보류 제목은 구조적으로 도달할 수 없다
@@ -167,6 +237,19 @@ function main(): void {
   }
   console.log(`   watch ${seedWatch.length}건 · 반복 관측 ${seedRepeat.length}건 · 그중 댓글 증가 ${seedGrew.length}건`)
 
+  // 🔴 추천 분포 — "상세 읽기" 가 대부분이면 기준이 잘못된 것이다 (2026-09-04 정정)
+  const verdicts = seed.map((x) => verdictOf(x.row, x.laneHint.lane))
+  const vCount = (v: SeedVerdict): number => verdicts.filter((x) => x.verdict === v).length
+  console.log('\n   추천 분포 — 🔴 기본값은 Seed로 좋음이다')
+  for (const v of ['seedOk', 'needsDetail', 'rawMaybe'] as SeedVerdict[]) {
+    const n = vCount(v)
+    const note = v === 'rawMaybe' ? '  🔴 이 화면에서는 자동 추천하지 않는다 (보조·예외)' : ''
+    console.log(`      ${pad(VERDICT_LABEL[v], 12)} ${pad(n, 4)}건  ${VERDICT_MEANING[v]}${note}`)
+  }
+  if (vCount('needsDetail') > vCount('seedOk')) {
+    console.log('      🔴 상세 읽기가 Seed로 좋음보다 많다 — 기준이 잘못됐거나 표본이 이상하다')
+  }
+
   if (seed.length === 0) {
     console.log('\n   🟡 Seed Inbox 후보가 0건이다 — 표본이 없거나 게이트가 전부 걸렀다.\n')
     return
@@ -195,7 +278,8 @@ function main(): void {
   console.log('   🔴 Seed Inbox 스키마 · Raw Vault 승격 임계값 · 자동 상세 fetch 기준 · threshold 운영값')
   console.log('   🔴 네이버 → Google Sheet 자동 전송은 미구현이며 별도 승인 전까지 금지다')
   console.log('   🔴 이 결과로 DB/Sheet 저장 경로를 확정하지 않는다 — 눈으로 보는 단계다')
-  console.log('   🟢 후보 선별에 LLM 을 쓰지 않았다 — laneHint·점수화는 cheap signal 이다\n')
+  console.log('   🟢 후보 선별에 LLM 을 쓰지 않았다 — laneHint·점수화는 cheap signal 이다')
+  console.log('   🔴 자동 상세 fetch 기준을 확정하지 않았다 — "상세 읽기" 는 사람이 누르는 추천일 뿐이다\n')
 }
 
 main()
