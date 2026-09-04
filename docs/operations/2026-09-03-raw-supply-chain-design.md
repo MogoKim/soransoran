@@ -1381,6 +1381,70 @@ npm run micro-seed:seed-inbox-html                   # HTML 검수 화면
 
 ---
 
+## §4-P 🟢 추천값 그대로 회수 — **read-only export** (PR-S2-b-22)
+
+> 🔴 **자동 라우팅도 자동 저장도 자동 상세 fetch 도 아니다.**
+> 창업자가 47건 추천값에 동의했으므로(§4-O), 47번 누르는 대신 **그대로 회수**할 뿐이다.
+
+### 두 경로 · 같은 표
+
+| | |
+|---|---|
+| CLI | `npm run micro-seed:seed-inbox-dry-run -- --export-recommended-tsv` → **stdout 전용** |
+| HTML | `추천값으로 전체 선택` 버튼 → 하단 TSV |
+
+🔴 **컬럼 정의는 dry-run 모듈 한 곳에만 둔다.** 화면은 그것을 import 한다 —
+각자 컬럼을 만들면 회수한 표가 서로 다른 표가 된다.
+
+```
+verdict · lane · score · sourceSite · sourceBoardKey · sourceBoardName ·
+sourceArticleId · page · rank · commentCount · viewCount · lagMinutes ·
+watch · title · why · signal · note
+```
+🔴 **컬럼 순서가 계약이다** — 바꾸면 이미 회수한 표와 붙일 수 없다. fixture 가 고정한다.
+
+### note 규칙
+
+```
+🟢 사람이 안 골랐거나 추천값과 같음
+   system recommended v1; founder accepted recommendation
+🔴 사람이 다르게 고름
+   founder override (recommended: needsDetail)
+```
+**무엇을 뒤집었는지 남긴다.** 나중에 "왜 이 판정이 이렇게 됐나" 를 표만 보고 답할 수 있어야 한다.
+
+### 🔴 `추천값으로 전체 선택` 은 덮어쓴다
+
+```
+47건을 **추천값으로 초기화**한다. 사람이 바꾼 값도 덮는다.
+확인 창은 두지 않는다 — 대신 화면이 그 사실을 밝히고, **되돌리기** 1단계를 둔다.
+```
+확인 창은 매번 걸리적거리고 결국 무심코 누르게 된다. **되돌릴 수 있게 만드는 편이 낫다.**
+
+### CLI export 규칙
+
+```
+🔴 stdout 으로만 낸다. 파일을 쓰지 않는다.
+🔴 배너를 찍지 않는다 — 섞이면 파이프에서 못 쓴다.
+🟢 회수:  npm run micro-seed:seed-inbox-dry-run -- --export-recommended-tsv > ~/review.tsv
+```
+
+### 실측 (2026-09-04)
+
+```
+CLI    48줄 (헤더 1 + 47) · needsDetail 39 · seedOk 8 · rawMaybe 0
+HTML   같은 48줄 · 같은 분포 · HOLD/DROP/WRONG 0
+수동 1건 변경  DETAIL 39 → 38 · WRONG 1 · override note · 나머지 46건 기본 note 유지
+되돌리기       빈 상태로 복귀
+새로고침       47건 + 수동 1건 + 버튼 상태 전부 복원
+브라우저 QA    20/20 (로컬 file:// · 외부 요청 0)
+```
+
+> 🔴 회수한 TSV 는 **사람이 들고 가는 표**다. DB · Sheet 로 나가는 경로는 여전히 없다.
+> Seed Inbox 저장소도, 자동 상세 fetch 기준도 이 절이 정하지 않는다.
+
+---
+
 ## §4-C 🟡 Growth Issue 레인 — **전략만 적는다. 구현하지 않았다**
 
 > 🔴 **상태: 미구현.** 코드 · 분류기 · cap · 감사 경로 **어느 것도 없다.**

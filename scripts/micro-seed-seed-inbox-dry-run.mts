@@ -24,6 +24,7 @@
  *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --top=30 --lane-top=5
  *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --run=20260903-204007
  *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --show-title   🟡 로컬 검수용
+ *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --export-recommended-tsv   🟢 stdout 전용
  */
 import { pathToFileURL } from 'node:url'
 import {
@@ -138,6 +139,111 @@ export function verdictOf(s: Pick<ScoredRow, 'row' | 'laneHint' | 'watch' | 'sco
   return { verdict: 'seedOk', reason: '맥락 의존이 낮은 일반 질문 — 제목만으로 충분하다' }
 }
 
+/**
+ * 🔴 **카드·TSV 정의는 여기 한 곳에만 둔다** (2026-09-04 · PR-S2-b-22).
+ *    CLI 와 HTML 이 각자 컬럼을 만들면 회수한 TSV 가 서로 다른 표가 된다.
+ *    화면은 이것을 import 해서 쓴다 — 반대 방향(html → 여기)은 순환이라 만들지 않는다.
+ */
+export type ReviewCard = {
+  rank: number
+  articleId: string
+  score: number
+  lane: string
+  laneLabel: string
+  verdict: string
+  verdictLabel: string
+  verdictReason: string
+  sourceSite: string
+  boardKey: string
+  boardName: string
+  page: string
+  rank_: string
+  comments: string
+  views: string
+  lag: string
+  watch: boolean
+  seenCount: number
+  commentDelta: number
+  viewDelta: string
+  why: string
+  signal: string
+  title: string
+}
+
+export function toCards(seed: readonly ScoredRow[]): ReviewCard[] {
+  return seed.map((s, i) => {
+    const r = s.row
+    const v = verdictOf(s)
+    return {
+      rank: i + 1,
+      articleId: r.sourceArticleId,
+      score: Number(s.score.total.toFixed(1)),
+      lane: s.laneHint.lane,
+      laneLabel: LANE_LABEL[s.laneHint.lane],
+      verdict: v.verdict,
+      verdictLabel: VERDICT_LABEL[v.verdict],
+      verdictReason: v.reason,
+      sourceSite: r.sourceSite,
+      boardKey: r.sourceBoardKey ?? '-',
+      boardName: r.sourceBoardName ?? '-',
+      page: String(r.sourcePage ?? '-'),
+      rank_: String(r.sourceRankOnPage ?? '-'),
+      comments: r.sourceCommentCountRead ? String(r.sourceCommentCount) : '읽지 못함',
+      views: r.sourceViewCount === null ? '-' : String(r.sourceViewCount),
+      lag: s.lagMinutes === null ? '-' : `${s.lagMinutes.toFixed(0)}분`,
+      watch: s.watch,
+      seenCount: s.obs.seenCount,
+      commentDelta: s.obs.commentDelta,
+      viewDelta: s.obs.viewDelta === null ? '-' : `+${s.obs.viewDelta}`,
+      why: s.why,
+      signal: s.laneHint.signals.length ? s.laneHint.signals.join(' · ') : '-',
+      title: r.originalTitle,
+    }
+  })
+}
+
+/**
+ * 🔴 **회수 TSV 컬럼.** 순서가 계약이다 — 바꾸면 이미 회수한 표와 붙일 수 없다.
+ */
+export const TSV_COLUMNS: readonly string[] = [
+  'verdict', 'lane', 'score', 'sourceSite', 'sourceBoardKey', 'sourceBoardName',
+  'sourceArticleId', 'page', 'rank', 'commentCount', 'viewCount', 'lagMinutes',
+  'watch', 'title', 'why', 'signal', 'note',
+] as const
+
+/** 🟢 창업자가 v1 추천값을 그대로 받아들인 행 (§4-O) */
+export const RECOMMENDED_NOTE = 'system recommended v1; founder accepted recommendation'
+
+/** 🔴 사람이 추천값과 다르게 고른 행 — 무엇을 뒤집었는지 남긴다 */
+export function overrideNoteOf(recommended: string): string {
+  return `founder override (recommended: ${recommended})`
+}
+
+/** 🔴 탭·줄바꿈이 들어가면 열이 밀린다. 제목·why 는 소스 원문이라 반드시 지운다 */
+export function tsvCell(v: string | number | boolean): string {
+  return String(v).replace(/[\t\r\n]+/g, ' ')
+}
+
+/**
+ * @param myVerdict 사람이 고른 값. 비어 있으면 추천값을 그대로 쓴다.
+ */
+export function tsvLine(c: ReviewCard, myVerdict = '', note = ''): string {
+  const v = myVerdict === '' ? c.verdict : myVerdict
+  const n = note !== '' ? note
+    : myVerdict === '' || myVerdict === c.verdict ? RECOMMENDED_NOTE
+      : overrideNoteOf(c.verdict)
+  return [
+    v, c.lane, c.score, c.sourceSite, c.boardKey, c.boardName, c.articleId,
+    c.page, c.rank_, c.comments, c.views, c.lag, c.watch ? 'watch' : '',
+    c.title, c.why, c.signal, n,
+  ].map(tsvCell).join('\t')
+}
+
+/** 🔴 추천값 그대로의 검수 결과. **파일을 쓰지 않는다** — 호출자가 stdout 으로 보낸다 */
+export function recommendedTsv(cards: readonly ReviewCard[]): string {
+  return [TSV_COLUMNS.join('\t'), ...cards.map((c) => tsvLine(c))].join('\n')
+}
+
 const ALL_LANES: readonly Lane[] = [
   'originalRaw', 'microSeedQuestion', 'infoSeed', 'participationSeed', 'growthIssue', 'hold', 'exclude',
 ]
@@ -219,7 +325,27 @@ function line(s: ScoredRow, i: number): void {
   if (SHOW_TITLE) console.log(`       제목   ${clampTitle(r.originalTitle)}`)
 }
 
+/**
+ * 🔴 **추천값 그대로의 검수 결과를 stdout 으로만 낸다.**
+ *
+ *    창업자가 47건 추천값에 동의했으므로(§4-O), 47번 누르는 대신 그대로 회수한다.
+ *    🔴 이것은 자동 라우팅도 자동 저장도 자동 상세 fetch 도 아니다 —
+ *    **read-only export** 다. 파일을 쓰지 않고, DB · Sheet 로 나가지 않는다.
+ *    배너도 찍지 않는다. 파이프로 바로 받을 수 있어야 한다.
+ */
+function exportRecommended(): void {
+  const { loaded } = (() => {
+    try { return loadScoutRows(SCOUT_DATA_DIR, ONLY_RUN) } catch { return fail(`${SCOUT_DATA_DIR} 를 읽지 못했다`) }
+  })()
+  if (loaded.length === 0) fail('분석할 행이 없다')
+  const rows = loaded.flatMap((l) => l.rows)
+  const seed = scoreRows(rows).scored.filter((s) => isSeedInboxLane(s.laneHint.lane))
+  process.stdout.write(`${recommendedTsv(toCards(seed))}\n`)
+}
+
 function main(): void {
+  // 🔴 export 는 배너 없이 TSV 만 낸다 — 섞이면 파이프에서 못 쓴다
+  if (argv.includes('--export-recommended-tsv')) { exportRecommended(); return }
   banner()
 
   const { loaded, legacyRows, legacyFiles } = (() => {

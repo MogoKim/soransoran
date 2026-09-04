@@ -29,10 +29,16 @@ import { writeFileSync } from 'node:fs'
 import { resolve, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  verdictOf, VERDICT_LABEL, VERDICT_MEANING, SEED_INBOX_LANES, isSeedInboxLane,
+  VERDICT_LABEL, VERDICT_MEANING, SEED_INBOX_LANES, isSeedInboxLane,
+  toCards, TSV_COLUMNS, RECOMMENDED_NOTE, overrideNoteOf,
+  type ReviewCard,
 } from './micro-seed-seed-inbox-dry-run.mjs'
+
+// 🔴 카드·TSV 정의는 dry-run 모듈이 정본이다. 여기서 다시 만들지 않는다.
+//    fixture 가 기존 경로로 import 하므로 그대로 다시 내보낸다.
+export { toCards, TSV_COLUMNS, RECOMMENDED_NOTE, overrideNoteOf, type ReviewCard }
 import { loadScoutRows, SCOUT_DATA_DIR } from './lib/micro-seed-scout-load.mjs'
-import { scoreRows, toArticles, LANE_LABEL, type ScoredRow } from './lib/micro-seed-scout-score.mjs'
+import { scoreRows, toArticles, LANE_LABEL } from './lib/micro-seed-scout-score.mjs'
 
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => {
@@ -53,64 +59,6 @@ export function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
-}
-
-export type ReviewCard = {
-  rank: number
-  articleId: string
-  score: number
-  lane: string
-  laneLabel: string
-  verdict: string
-  verdictLabel: string
-  verdictReason: string
-  sourceSite: string
-  boardKey: string
-  boardName: string
-  page: string
-  rank_: string
-  comments: string
-  views: string
-  lag: string
-  watch: boolean
-  seenCount: number
-  commentDelta: number
-  viewDelta: string
-  why: string
-  signal: string
-  title: string
-}
-
-export function toCards(seed: readonly ScoredRow[]): ReviewCard[] {
-  return seed.map((s, i) => {
-    const r = s.row
-    const v = verdictOf(s)
-    return {
-      rank: i + 1,
-      articleId: r.sourceArticleId,
-      score: Number(s.score.total.toFixed(1)),
-      lane: s.laneHint.lane,
-      laneLabel: LANE_LABEL[s.laneHint.lane],
-      verdict: v.verdict,
-      verdictLabel: VERDICT_LABEL[v.verdict],
-      verdictReason: v.reason,
-      sourceSite: r.sourceSite,
-      boardKey: r.sourceBoardKey ?? '-',
-      boardName: r.sourceBoardName ?? '-',
-      page: String(r.sourcePage ?? '-'),
-      rank_: String(r.sourceRankOnPage ?? '-'),
-      comments: r.sourceCommentCountRead ? String(r.sourceCommentCount) : '읽지 못함',
-      views: r.sourceViewCount === null ? '-' : String(r.sourceViewCount),
-      lag: s.lagMinutes === null ? '-' : `${s.lagMinutes.toFixed(0)}분`,
-      watch: s.watch,
-      seenCount: s.obs.seenCount,
-      commentDelta: s.obs.commentDelta,
-      viewDelta: s.obs.viewDelta === null ? '-' : `+${s.obs.viewDelta}`,
-      why: s.why,
-      signal: s.laneHint.signals.length ? s.laneHint.signals.join(' · ') : '-',
-      title: r.originalTitle,
-    }
-  })
 }
 
 /** 검수 버튼 — 🔴 순서가 곧 권장 순서는 아니다. 판정은 verdictOf 가 이미 냈다 */
@@ -236,10 +184,13 @@ footer{padding:16px;max-width:920px;margin:0 auto}
 🔴 판정은 CLI 와 <b>같은 verdictOf()</b> 가 낸다. 이 화면은 판정 로직을 갖지 않는다.<br>
 🔴 저장은 이 브라우저 <b>localStorage</b> 까지다. 결과는 TSV 로 직접 가져간다.<br>
 🔴 여기는 <b>triage</b> 다 — 최종 채택이 아니다. Raw Vault 확정은 DETAIL 이후에만 가능하다.<br>
-🟢 추천 기준은 <b>창업자 승인 v1</b> 이다 (§4-O). 승인된 것은 <b>추천 기준</b>이지 자동화가 아니다 — 버튼은 사람이 누른다.
+🟢 추천 기준은 <b>창업자 승인 v1</b> 이다 (§4-O). 승인된 것은 <b>추천 기준</b>이지 자동화가 아니다 — 버튼은 사람이 누른다.<br>
+🟡 <b>추천값으로 전체 선택</b> = 47건을 <b>추천값으로 초기화</b>한다. 🔴 <b>사람이 바꾼 값도 덮어쓴다</b> — 바로 뒤 <b>되돌리기</b> 한 번으로 복구된다.
 </div>
 <div class="bar" id="filters"></div>
 <div class="bar">
+<button class="pill" id="fill">추천값으로 전체 선택</button>
+<button class="pill" id="undo" disabled>되돌리기</button>
 <button class="pill" id="copy">TSV 복사</button>
 <button class="pill" id="dl">TSV 내려받기</button>
 <button class="pill" id="reset">검수 초기화</button>
@@ -260,6 +211,10 @@ var DATA = JSON.parse(document.getElementById('data').textContent);
 var CARDS = DATA.cards, META = DATA.meta;
 var ACTIONS = [${actions}];
 var KEY = 'seed-inbox-review-v1';
+// 🔴 컬럼·note 문구는 dry-run 모듈이 정본이다. 화면이 따로 만들지 않는다.
+var COLS = ${JSON.stringify(TSV_COLUMNS)};
+var REC_NOTE = ${JSON.stringify(RECOMMENDED_NOTE)};
+function cell(v){ return String(v == null ? '' : v).replace(/[\\t\\r\\n]+/g, ' '); }
 
 function load(){ try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } }
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(STATE)); } catch (e) { /* 사파리 프라이빗 등 */ } }
@@ -272,13 +227,15 @@ var filter = 'ALL';
 function esc(s){ var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 
 function tsv(){
-  var head = ['articleId','rank','score','lane','추천','내판정','메모','sourceSite','boardName','page','rank','댓글','조회','lag','제목'];
-  var lines = [head.join('\\t')];
+  var lines = [COLS.join('\\t')];
   CARDS.forEach(function(c){
     var st = STATE[c.articleId] || {};
     if (!st.v && !st.memo) return;
-    lines.push([c.articleId,c.rank,c.score,c.lane,c.verdictLabel,st.v||'',(st.memo||'').replace(/[\\t\\n]/g,' '),
-      c.sourceSite,c.boardName,c.page,c.rank_,c.comments,c.views,c.lag,c.title.replace(/[\\t\\n]/g,' ')].join('\\t'));
+    var note = (st.v === '' || st.v === c.verdict) ? REC_NOTE : ('founder override (recommended: ' + c.verdict + ')');
+    if (st.memo) note = note + ' | memo: ' + st.memo;
+    lines.push([st.v || c.verdict, c.lane, c.score, c.sourceSite, c.boardKey, c.boardName,
+      c.articleId, c.page, c.rank_, c.comments, c.views, c.lag, c.watch ? 'watch' : '',
+      c.title, c.why, c.signal, note].map(cell).join('\\t'));
   });
   return lines.join('\\n');
 }
@@ -390,8 +347,30 @@ document.getElementById('dl').addEventListener('click', function(){
   a.click();
   URL.revokeObjectURL(a.href);
 });
+// 🔴 되돌리기 1단계. 전체 선택은 사람이 바꾼 값을 덮으므로 복구 경로를 둔다.
+var UNDO = null;
+var undoBtn = document.getElementById('undo');
+function snapshot(){ UNDO = JSON.parse(JSON.stringify(STATE)); undoBtn.disabled = false; }
+
+document.getElementById('fill').addEventListener('click', function(){
+  snapshot();
+  CARDS.forEach(function(c){
+    var cur = STATE[c.articleId] || {};
+    cur.v = c.verdict;          // 🔴 추천값으로 초기화 — 수동 값도 덮는다
+    STATE[c.articleId] = cur;
+  });
+  render();
+});
+
+undoBtn.addEventListener('click', function(){
+  if (!UNDO) return;
+  STATE = UNDO; UNDO = null; undoBtn.disabled = true;
+  render();
+});
+
 document.getElementById('reset').addEventListener('click', function(){
   if (!confirm('검수 결과를 모두 지웁니다.')) return;
+  snapshot();
   STATE = {};
   try { localStorage.removeItem(KEY); } catch (e) { /* 무시 */ }
   render();
