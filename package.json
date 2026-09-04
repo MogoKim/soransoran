@@ -48,7 +48,8 @@
     "micro-seed:score-dry-run": "tsx scripts/micro-seed-score-scout-dry-run.mts",
     "micro-seed:scout-score-check": "tsx scripts/micro-seed-scout-score-check.mts",
     "micro-seed:seed-inbox-dry-run": "tsx scripts/micro-seed-seed-inbox-dry-run.mts",
-    "micro-seed:seed-inbox-check": "tsx scripts/micro-seed-seed-inbox-check.mts"
+    "micro-seed:seed-inbox-check": "tsx scripts/micro-seed-seed-inbox-check.mts",
+    "micro-seed:seed-inbox-html": "tsx scripts/micro-seed-seed-inbox-html.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
