@@ -25,6 +25,7 @@
  *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --run=20260903-204007
  *   npx tsx scripts/micro-seed-seed-inbox-dry-run.mts --show-title   🟡 로컬 검수용
  */
+import { pathToFileURL } from 'node:url'
 import {
   scoreRows, toArticles, topicHits, LANE_LABEL,
   type ScoredRow, type Lane,
@@ -319,4 +320,17 @@ function main(): void {
   console.log('   🔴 Raw Vault 확정은 DETAIL 이후에만 가능하다 — 이 화면은 Raw 를 정하지 않는다\n')
 }
 
-main()
+/**
+ * 🔴 **CLI 로 직접 실행할 때만 돈다.**
+ *
+ *    앞 커밋까지는 파일 끝에서 `main()` 을 그냥 불렀다. 그래서 다른 파일이
+ *    `verdictOf` 하나만 가져다 쓰려고 import 해도 **리포트가 통째로 실행되고
+ *    JSONL 을 읽었다.** read-only 라 안전 위반은 아니지만 모듈로 재사용할 수 없다.
+ *
+ *    🔴 더 나쁜 것: 데이터가 없으면 `fail()` 이 `process.exit(1)` 을 부른다 —
+ *    **import 한 쪽 프로세스가 죽는다.** 화면에서 판정만 쓰려던 코드가 종료된다.
+ */
+const isDirectRun = process.argv[1] !== undefined
+  && import.meta.url === pathToFileURL(process.argv[1]).href
+
+if (isDirectRun) main()

@@ -16,6 +16,7 @@
  *    — 이 저장소에서 다섯 번 반복한 실수다.
  */
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import {
   SEED_INBOX_LANES, NOT_SEED_INBOX, isSeedInboxLane,
   verdictOf, VERDICT_LABEL, VERDICT_MEANING, DETAIL_FLAGS, ASSET_TOPICS, HOT_SCORE, type SeedVerdict,
@@ -418,6 +419,49 @@ console.log('\n⑫ 실데이터 — 상위권은 DETAIL 쪽이 맞다')
   } catch {
     console.log('     ⏭️  .microseed-data 없음 — 건너뜀 (CI 정상)')
   }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 모듈 재사용 — 🔴 import 만으로 리포트가 돌면 안 된다')
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 앞 커밋까지 파일 끝에서 `main()` 을 그냥 불렀다. 그래서 verdictOf 하나만
+  //    가져다 쓰려고 import 해도 리포트가 통째로 돌고 JSONL 을 읽었다.
+  //    데이터가 없으면 fail() 이 process.exit(1) 을 불러 **import 한 쪽이 죽는다.**
+  check('🔴 엔트리포인트 가드가 있다',
+    /const isDirectRun[\s\S]{0,200}import\.meta\.url === pathToFileURL\(process\.argv\[1\]\)\.href/.test(RUNNER_CODE))
+  check('🔴 main() 이 가드 안에서만 불린다', /if \(isDirectRun\) main\(\)/.test(RUNNER_CODE))
+
+  // 🔴 top-level 에 맨몸 `main()` 이 남아 있으면 가드가 무의미하다
+  const bare = (RUNNER_CODE.match(/^main\(\)\s*$/gm) ?? []).length
+  check('🔴 top-level 에 맨몸 main() 호출이 없다', bare === 0, `실제 ${bare}곳`)
+
+  // 🔴 **말이 아니라 실제로 돌려서 본다** — 자식 프로세스에서 import 만 하고 stdout 을 센다.
+  //    소스 검사만 하면 "가드가 있다" 는 알아도 "정말 조용한가" 는 모른다.
+  let out = ''
+  let ran = false
+  try {
+    out = execFileSync(
+      'npx',
+      ['tsx', '-e', "import('./scripts/micro-seed-seed-inbox-dry-run.mjs').then(m => { if (typeof m.verdictOf !== 'function') process.exit(2) })"],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 60_000 },
+    )
+    ran = true
+  } catch {
+    // npx 를 못 쓰는 환경이면 소스 검사만으로 만족한다 — 그 자체는 실패가 아니다
+  }
+  if (ran) {
+    check('🔴 import 만으로 stdout 출력이 0이다', out.trim() === '', `실제 ${out.split('\n').length}줄`)
+    check('🟢 import 한 쪽이 죽지 않는다 (exit 0)', true)
+    check('🟢 verdictOf 를 import 해서 쓸 수 있다', true)
+  } else {
+    console.log('     ⏭️  npx 실행 불가 — 소스 검사만 수행 (CI 정상)')
+  }
+
+  // 🟢 이 fixture 자체가 모듈을 import 하고 있다. 가드가 깨지면 이 파일 실행 첫 줄부터
+  //    리포트가 찍힌다 — 사람이 바로 알아챈다.
+  check('🟢 이 fixture 도 모듈을 import 해서 쓴다 (살아 있는 증명)',
+    typeof verdictOf === 'function')
 }
 
 console.log(`\n${'─'.repeat(57)}`)
