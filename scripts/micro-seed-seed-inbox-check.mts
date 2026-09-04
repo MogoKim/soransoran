@@ -400,6 +400,10 @@ console.log('\n⑪ 추천 기준 — 🔴 Seed Inbox 는 triage 다 (2026-09-04 
   check('🔴 Raw 는 DETAIL 이후에만 판단한다고 밝힌다', RUNNER.includes('DETAIL 이후'))
   check('🔴 자동 상세 fetch 기준을 확정하지 않았다고 찍는다',
     RUNNER.includes('자동 상세 fetch 기준을 확정하지 않았다'))
+  // 🟢 창업자 승인 v1 (§4-O) — 승인된 것은 추천 기준이지 자동화가 아니다
+  check('🟢 CLI 가 창업자 승인 v1 을 밝힌다', RUNNER.includes('창업자 승인 v1 기준 (§4-O)'))
+  check('🔴 CLI 가 "승인 ≠ 자동화" 를 밝힌다',
+    RUNNER.includes('자동화에 대한 승인이 아니다'))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -544,6 +548,8 @@ console.log('\n⑭ HTML 검수 화면 — 🔴 CLI 와 같은 기준을 쓴다')
     '같은 verdictOf()', 'localStorage', 'triage',
     'Raw Vault 확정은 DETAIL 이후에만 가능하다',
     '이 결과로 DB/Sheet 저장 경로를 확정하지 않는다',
+    // 🟢 창업자 승인 v1 (§4-O)
+    '창업자 승인 v1', '자동화가 아니다',
   ]) check(`🔴 HTML 이 "${m}" 를 밝힌다`, html.includes(m))
 
   // ── 🔴 CLI 와 분포가 같은가 (실데이터) ──
