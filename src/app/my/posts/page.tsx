@@ -5,6 +5,7 @@ import { getBoardByType } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
 import PageShell from '@/components/layouts/PageShell'
 import { requireMyUserId, BackToMy } from '@/components/features/my/shell'
+import { TITLE_CARD } from '@/lib/typography'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,7 +42,7 @@ export default async function MyPostsPage() {
               return (
                 <li key={post.id}>
                   <Link href={`${board.href}/${post.id}`} className="group block py-3.5 no-underline">
-                    <span className="line-clamp-2 break-keep text-lg font-bold leading-[1.35] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
+                    <span className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
                       {post.title}
                     </span>
                     <span className="mt-2.5 block text-meta text-content-muted">

@@ -4,6 +4,7 @@ import BoardBadge from '@/components/ui/board-badge'
 import StatIcon from '@/components/icons/StatIcon'
 import { getBoardByType } from '@/lib/board-registry'
 import { cn } from '@/lib/utils'
+import { TITLE_RANKED } from '@/lib/typography'
 import type { BoardType } from '@prisma/client'
 
 export type PostListItemData = {
@@ -79,7 +80,7 @@ export default function PostListItem({
              한 화면에 들어오는 줄 수만 줄어든다.
              emphasis 는 이제 배지 톤(quiet)만 가른다. */
           className={cn(
-            'line-clamp-2 break-keep font-medium leading-[1.5] text-content-primary',
+            `line-clamp-2 break-keep ${TITLE_RANKED} text-content-primary`,
             'transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink',
           )}
         >

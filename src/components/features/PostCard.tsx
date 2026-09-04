@@ -3,6 +3,7 @@ import StatIcon from '@/components/icons/StatIcon'
 import { formatRelativeTime } from '@/lib/date'
 import { toPreview } from '@/lib/post-html'
 import { displayName } from '@/lib/display-name'
+import { TITLE_CARD } from '@/lib/typography'
 
 export type PostCardData = {
   id: string
@@ -34,7 +35,7 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
       href={`${boardHref}/${post.id}`}
       className="group block py-3.5 no-underline"
     >
-      <h3 className="line-clamp-2 break-keep text-base font-bold leading-[1.35] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
+      <h3 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
         {post.title}
       </h3>
 
