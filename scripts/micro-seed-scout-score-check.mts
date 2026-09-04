@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs'
 import {
   gateOf, scoreRows, rankShift, percentileIn, velocityOf, freshnessOf,
-  groupKeyOf, topicHits, conversationHits, WEIGHTS, HOLD_FLAGS,
+  groupKeyOf, topicHits, conversationHits, WEIGHTS, HOLD_FLAGS, PENALTIES, offTargetHit,
   toArticles, articleKeyOf, laneHintOf, LANE_LABEL, SHORT_TITLE_CHARS,
   type ScoutRow,
 } from './lib/micro-seed-scout-score.mjs'
@@ -159,7 +159,8 @@ check('lag 모르면 신선도 0', freshnessOf(null) === 0)
 // ─────────────────────────────────────────────────────────
 console.log('\n⑤ 타겟 핏 · 대화 가능성 · watch')
 // ─────────────────────────────────────────────────────────
-check('갱년기·몸 축', topicHits('요즘 갱년기라 잠을 못 자요', '').some((t) => t.label === '몸·갱년기'))
+// 🔴 PR-S2-b-14 에서 축 이름이 '몸·갱년기' → '몸·건강' 으로 넓어졌다 (치아·시력·혈당 포함)
+check('몸·건강 축', topicHits('요즘 갱년기라 잠을 못 자요', '').some((t) => t.label === '몸·건강'))
 check('가족 축', topicHits('남편이랑 또 싸웠어요', '').some((t) => t.label === '가족'))
 check('돈·노후 축', topicHits('노후 생활비 얼마나 드나요', '').some((t) => t.label === '돈·노후'))
 check('게시판명도 본다', topicHits('제목', '갱년기 몸 증상').length > 0)
@@ -207,7 +208,11 @@ check('추가 크롤 비용 0 임을 명시한다', /추가 크롤 비용 0/.tes
 // ─────────────────────────────────────────────────────────
 console.log('\n⑦ 🔴 확정하지 않은 것들이 확정되지 않았는지')
 // ─────────────────────────────────────────────────────────
-check('가중치 합이 100', WEIGHTS.engagement + WEIGHTS.targetFit + WEIGHTS.conversation + WEIGHTS.freshness === 100)
+check('양수 축 가중치 합이 100', WEIGHTS.engagement + WEIGHTS.targetFit + WEIGHTS.conversation + WEIGHTS.freshness === 100)
+check('🔴 화제성이 더 이상 단독 최대 축이 아니다',
+  WEIGHTS.engagement < WEIGHTS.targetFit + WEIGHTS.conversation,
+  '화제성 72% 획득 vs 타겟 핏 22% 라 연애·외모 글이 상위를 먹었다')
+check('🔴 감점은 축 합에 포함되지 않는다 (제외가 아니라 감점)', PENALTIES.offTarget === 20)
 check('🔴 가중치가 초안이라고 적혀 있다', /가중치는 \*\*초안\*\*이다|확정값이 아니다/.test(LIB))
 check('🔴 threshold 운영값을 정하지 않았다',
   !/THRESHOLD_CANDIDATES/.test(LIB_CODE) && !/THRESHOLD_CANDIDATES/.test(RUNNER_CODE),
@@ -457,6 +462,60 @@ console.log('\n⑫ 오분류 보정 — 🔴 한국어에 단어 경계가 없�
       .every((t) => !['exclude', 'hold'].includes(lane2(t).lane)),
     '82cook 짧은 글도 테스트 대상이다')
   check('7자짜리도 레인이 붙는다', lane2('다들 어떠세요').lane === 'participationSeed')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 가중치 재배분 · off-target 감점 (PR-S2-b-14)')
+// ─────────────────────────────────────────────────────────
+{
+  check('🔴 자녀·교육 축이 생겼다',
+    ['아이가 새벽 1~2시까지 학원 숙제 하는게 의미가 있을까요', '고3 원서 고민 이대 시립대',
+      '초딩들 학원보내면 학원에 전화나 문자 얼마나하세요', '고등 영어 내신']
+      .every((t) => topicHits(t, '').some((x) => x.label === '자녀·교육')),
+    '검수 실측에서 이 글들이 전부 타겟 핏 0점을 받았다 — 핵심 화제인데 축이 없었다')
+  check('가족 축이 조카·어머님·결혼·명절을 잡는다',
+    ['조카한테 어머님 모시게', '결혼할때 한복', '다들 추석 계획 어떠세요']
+      .every((t) => topicHits(t, '').some((x) => x.label === '가족')))
+  check('돈 축이 금리·축의금을 잡는다',
+    topicHits('금리 오른거 체감 되세요', '').some((x) => x.label === '돈·노후')
+      && topicHits('축의금 얼마가 적당할까요', '').some((x) => x.label === '돈·노후'))
+  check('몸·건강 축이 치아·혈당을 잡는다',
+    topicHits('치아교정 초등때', '').some((x) => x.label === '몸·건강')
+      && topicHits('공복혈당 130', '').some((x) => x.label === '몸·건강'))
+  check('살림·생활 축이 운전·냉장고를 잡는다',
+    topicHits('운전 포기할까요', '').some((x) => x.label === '살림·생활'))
+
+  // ── off-target 감점 ──
+  check('🔴 외모 평가는 감점 대상',
+    ['여자가 피부 엄청 흰편인거는 좋은건가요', '뚱뚱이는 발레 다니기 좀 그렇죠',
+      '이쁘다 소리 칭찬받을경우'].every(offTargetHit))
+  check('🔴 썸·연애 눈치도 감점 대상',
+    ['남사친이 보고싶다 말하는거 무슨 의미', '썸인가요', '소개팅 어땠어요'].every(offTargetHit))
+  check('🟢 생활글은 감점되지 않는다',
+    ['시댁 농산물 부치는', '갱년기 불면증', '고3 원서 고민', '냉장고 추천']
+      .every((t) => !offTargetHit(t)))
+  check('🔴 감점은 제외가 아니다 — 후보 집합에 남는다',
+    (() => {
+      const r = row({ originalTitle: '여자가 피부 엄청 흰편인거는 좋은건가요' })
+      const { scored } = scoreRows([r, row({ sourceArticleId: '2', originalTitle: '평범한 생활글' })])
+      return scored.some((s) => s.row.originalTitle.includes('피부'))
+    })(),
+    '사람이 골라 쓸 수는 있어야 한다')
+  check('감점이 breakdown 에 음수로 남는다',
+    (() => {
+      const { scored } = scoreRows([row({ originalTitle: '남사친이 보고싶다 말하는거 무슨 의미' })])
+      return scored[0].score.penalty === -PENALTIES.offTarget
+    })())
+  check('감점 사유가 why 에 표시된다',
+    (() => {
+      const { scored } = scoreRows([row({ originalTitle: '남사친이 보고싶다 말하는거' })])
+      return /타겟 외 소재/.test(scored[0].why)
+    })())
+  check('🟢 감점 없는 글은 penalty 0',
+    (() => {
+      const { scored } = scoreRows([row({ originalTitle: '시댁 농산물 부치는' })])
+      return scored[0].score.penalty === 0
+    })())
 }
 
 // ─────────────────────────────────────────────────────────

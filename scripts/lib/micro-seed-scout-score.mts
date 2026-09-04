@@ -172,13 +172,39 @@ export function percentileIn(values: readonly number[], v: number): number {
  *    40대 중반~60대 중반 여성이 **자기 이야기처럼** 느낄 생활 주제를 본다.
  */
 export const TARGET_TOPICS: readonly (readonly [string, RegExp])[] = [
-  ['몸·갱년기', /갱년기|폐경|호르몬|불면|열감|우울|무릎|관절|허리|건강검진|병원|영양제/],
-  ['가족', /남편|아들|딸|며느리|사위|시댁|친정|엄마|아빠|손주|가족|아이들/],
-  ['돈·노후', /돈|생활비|용돈|연금|노후|은퇴|보험|적금|재테크|세금|월급/],
-  ['일', /직장|일터|알바|취업|사장|동료|퇴직|이직|자격증/],
-  ['살림·집', /살림|청소|정리|반찬|김치|요리|집밥|장보기|이사|인테리어|베란다/],
-  ['관계·마음', /친구|이웃|지인|서운|속상|외롭|허무|위로|고맙|미안|서럽/],
+  ['몸·건강', /갱년기|폐경|호르몬|불면|열감|우울|무릎|관절|허리|건강검진|병원|영양제|치아|교정|시력|수술|통증|간호사|혈당|혈압|다이어트|자폐|진료/],
+  ['가족', /남편|아들|딸|며느리|사위|시댁|친정|엄마|아빠|손주|가족|아이들|조카|어머님|아버님|모시|결혼|명절|추석|설날|제사|형님|올케|손녀|손자/],
+  ['돈·노후', /돈|생활비|용돈|연금|노후|은퇴|보험|적금|재테크|세금|월급|금리|대출|집값|전세|월세|물가|아끼|비용|축의금|부조/],
+  ['일', /직장|일터|알바|취업|사장|동료|퇴직|이직|자격증|맞벌이|출근|사무실/],
+  ['살림·생활', /살림|청소|정리|반찬|김치|김장|요리|집밥|장보기|이사|인테리어|베란다|세탁|운전|가전|냉장고/],
+  ['관계·마음', /친구|이웃|지인|서운|속상|외롭|허무|위로|고맙|미안|서럽|예민|눈치/],
+  // 🔴 **자녀·교육 축이 아예 없었다** (2026-09-03 검수 실측 · PR-S2-b-14).
+  //    "아이가 새벽 1~2시까지 학원 숙제" · "고3 원서 고민" · "중고딩맘 맞벌이" 가
+  //    전부 타겟 핏 0점을 받았다. 40대 중반~60대 중반 여성의 핵심 화제인데 빠져 있었다.
+  ['자녀·교육', /학원|숙제|성적|내신|모고|수능|원서|고3|고2|고1|중딩|초딩|중고딩|등교|담임|학교|입시|과외|졸업/],
 ]
+
+/**
+ * 🔴 **타겟에서 벗어난 소재 — 감점한다** (PR-S2-b-14).
+ *
+ *    검수 실측: 화제성만 높고 타겟 핏 0점인 글이 상위를 먹었다.
+ * ```
+ *    여자가 피부 엄청 흰편인거는 좋은건가요?
+ *    이쁘다 소리 칭찬받을경우 동성에게 들을때 기분좋나요?
+ *    남사친이 "보고싶다" 말하는거 무슨 의미 일까요
+ *    뚱뚱이는 발레 다니기 좀 그렇죠?
+ * ```
+ *    외모 평가 · 썸 · 연애 눈치보기는 우리 커뮤니티의 중심 화제가 아니다.
+ *
+ * 🔴 **제외가 아니라 감점이다.** 정치처럼 "어디에도 안 간다" 가 아니라
+ *    "상위권을 먹지는 않는다" 다 — 사람이 골라 쓸 수는 있어야 한다.
+ */
+const OFF_TARGET =
+  /피부.{0,4}(흰|하얀|하얗)|이쁘다|예쁘다는|뚱뚱|살쪘|살빠|남사친|여사친|썸|소개팅|짝사랑|고백|이성적으로|관심 ?남자|관심 ?여자|기분좋나요/
+
+export function offTargetHit(title: string): boolean {
+  return OFF_TARGET.test(title)
+}
 
 export type TopicHit = { label: string }
 
@@ -211,14 +237,33 @@ export function conversationHits(title: string): TopicHit[] {
 /**
  * 🔴 이 가중치는 확정값이 아니다. 표본이 하루치 몇 회뿐이라 근거가 얇다 —
  *    dry-run 으로 순위가 납득되는지 보는 용도다.
+ *
+ * 🔴 **2026-09-03 검수 실측 재배분 (PR-S2-b-14)**
+ * ```
+ *    측정 (상위 200건 만점 대비 획득률)
+ *      화제성 72%   타겟 핏 22% (60%가 0점)   대화 34%   신선도 87%
+ * ```
+ *    화제성이 실질 1위 축이 되어 **타겟 핏 0점인 연애·외모 글이 상위를 먹었다.**
+ *
+ *    화제성 45→35 · 타겟 핏 25→30 · 대화 20→25 · 신선도 10 유지.
+ *    대화를 올린 이유: 짧은 질문·참여글이 화제성에서 밀리는데 그 축이 유일한 살길이다.
+ *    신선도를 안 올린 이유: 이미 87% 획득이라 거의 공짜 점수다 — 올리면 변별력이 준다.
  */
-export const WEIGHTS = { engagement: 45, targetFit: 25, conversation: 20, freshness: 10 } as const
+export const WEIGHTS = { engagement: 35, targetFit: 30, conversation: 25, freshness: 10 } as const
+
+/**
+ * 🔴 감점 — **제외가 아니다.** 상위권을 먹지 않게만 한다.
+ *    사람이 골라 쓸 수는 있어야 하므로 후보 집합에서 빼지 않는다.
+ */
+export const PENALTIES = { offTarget: 20 } as const
 
 export type ScoreBreakdown = {
   engagement: number
   targetFit: number
   conversation: number
   freshness: number
+  /** 🔴 타겟에서 벗어난 소재 감점 (0 또는 음수) */
+  penalty: number
   total: number
 }
 
@@ -316,7 +361,9 @@ export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
     const targetFit = WEIGHTS.targetFit * clamp01(topics.length / 2)
     const conversation = WEIGHTS.conversation * clamp01(convs.length / 2)
     const freshness = WEIGHTS.freshness * freshnessOf(g.lag)
-    const total = engagement + targetFit + conversation + freshness
+    // 🔴 감점은 총점에서만 뺀다. 후보 집합에서 빼지 않는다 — 사람이 골라 쓸 수는 있어야 한다
+    const penalty = offTargetHit(g.row.originalTitle) ? -PENALTIES.offTarget : 0
+    const total = engagement + targetFit + conversation + freshness + penalty
 
     const why = [
       `댓글 p${Math.round(cPct * 100)}`,
@@ -325,6 +372,7 @@ export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
       topics.length ? `핏(${topics.map((t) => t.label).join('/')})` : null,
       convs.length ? `대화(${convs.map((c) => c.label).join('/')})` : null,
       g.row.sourceCommentCountRead ? null : '🔴 댓글수 미확인',
+      penalty < 0 ? `🟡 타겟 외 소재 ${penalty}` : null,
       // 🔴 여러 번 본 글은 증가분을 함께 보여준다 — "미달 → 충족" 추적의 근거 (§4-E)
       g.obs.seenCount > 1
         ? `관측 ${g.obs.seenCount}회 · 댓글 +${g.obs.commentDelta}${g.obs.viewDelta === null ? '' : ` · 조회 +${g.obs.viewDelta}`}`
@@ -338,7 +386,7 @@ export function scoreRows(rows: readonly ScoutRow[], opts: ScoreOptions = {}): {
       obs: g.obs,
       gate: g.gate,
       laneHint: laneHintOf(g.row, g.gate),
-      score: { engagement, targetFit, conversation, freshness, total },
+      score: { engagement, targetFit, conversation, freshness, penalty, total },
       why,
       // 🔴 지금 미달이어도 아직 어린 글이면 다음 scout 에서 다시 본다 (§4-E)
       watch: g.lag !== null && g.lag <= watchMax && g.row.sourceCommentCount >= 1,
