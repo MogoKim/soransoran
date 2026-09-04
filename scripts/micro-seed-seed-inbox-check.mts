@@ -25,14 +25,19 @@ import {
   scoreRows, gateOf, laneHintOf, toArticles, type ScoutRow, type Lane,
 } from './lib/micro-seed-scout-score.mjs'
 import { hasRunId, parseJsonl, loadScoutRows } from './lib/micro-seed-scout-load.mjs'
+import {
+  toCards, renderHtml, escapeHtml, REVIEW_ACTIONS,
+} from './micro-seed-seed-inbox-html.mjs'
 
 const RUNNER = readFileSync('scripts/micro-seed-seed-inbox-dry-run.mts', 'utf-8')
 const LOADER = readFileSync('scripts/lib/micro-seed-scout-load.mts', 'utf-8')
+const HTMLGEN = readFileSync('scripts/micro-seed-seed-inbox-html.mts', 'utf-8')
 
 /** 🔴 주석을 걷어낸 뒤 부정 스캔한다 */
 const codeOf = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 const RUNNER_CODE = codeOf(RUNNER)
 const LOADER_CODE = codeOf(LOADER)
+const HTMLGEN_CODE = codeOf(HTMLGEN)
 
 let pass = 0
 let fail = 0
@@ -462,6 +467,103 @@ console.log('\n⑬ 모듈 재사용 — 🔴 import 만으로 리포트가 돌�
   //    리포트가 찍힌다 — 사람이 바로 알아챈다.
   check('🟢 이 fixture 도 모듈을 import 해서 쓴다 (살아 있는 증명)',
     typeof verdictOf === 'function')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ HTML 검수 화면 — 🔴 CLI 와 같은 기준을 쓴다')
+// ─────────────────────────────────────────────────────────
+{
+  // 🔴 **판정 로직을 두 벌 갖지 않는다.** 갈라지면 검수 결과를 믿을 수 없다.
+  check('🔴 HTML 생성기가 verdictOf 를 import 한다', /verdictOf/.test(HTMLGEN_CODE))
+  check('🔴 HTML 생성기에 자체 판정 로직이 없다',
+    !/needsDetail'\s*:|verdict\s*=\s*'(seedOk|needsDetail|rawMaybe)'/.test(HTMLGEN_CODE),
+    'verdict 문자열을 직접 만들면 기준이 갈라진다')
+  check('🔴 ASSET_TOPICS · DETAIL_FLAGS 를 다시 정의하지 않는다',
+    !/ASSET_TOPICS\s*[:=]\s*\[/.test(HTMLGEN_CODE) && !/DETAIL_FLAGS\s*[:=]\s*\[/.test(HTMLGEN_CODE))
+
+  // 🔴 read-only — 생성기도, 생성된 HTML 도
+  const BANNED: readonly (readonly [RegExp, string])[] = [
+    [/PrismaClient|@prisma\/client/, 'Prisma'],
+    [/googleapis|google-spreadsheet|sheets\.spreadsheets/, 'Google Sheet'],
+    [/anthropic|openai|claude-|gpt-/i, 'LLM'],
+    [/playwright|chromium|puppeteer/, '브라우저'],
+    [/rawBody|rawContent/, '본문'],
+    [/cookie|storageState|NID_AUT/i, '쿠키·세션'],
+  ]
+  for (const [re, label] of BANNED) check(`🔴 생성기에 ${label} 없음`, !re.test(HTMLGEN_CODE))
+
+  // 🔴 gitignore 밖으로 내보내지 않는다 — HTML 에 소스 제목이 들어간다
+  check('🔴 .microseed-data/ 밖이면 쓰기를 거부한다',
+    /rel\.startsWith\('\.microseed-data\/'\)/.test(HTMLGEN_CODE))
+  check('🟢 .microseed-data 는 gitignore 돼 있다',
+    readFileSync('.gitignore', 'utf-8').includes('.microseed-data/'))
+
+  // 🔴 import 만으로 파일을 쓰면 안 된다 (dry-run 과 같은 이유)
+  check('🔴 생성기도 엔트리포인트 가드를 쓴다',
+    /if \(isDirectRun\) main\(\)/.test(HTMLGEN_CODE))
+  const bareMain = (HTMLGEN_CODE.match(/^main\(\)\s*$/gm) ?? []).length
+  check('🔴 top-level 맨몸 main() 없음', bareMain === 0, `실제 ${bareMain}곳`)
+
+  // ── 버튼 6종 ──
+  check('버튼 6종', REVIEW_ACTIONS.length === 6, `실제 ${REVIEW_ACTIONS.length}`)
+  for (const k of ['DETAIL', 'SEED', 'RAW', 'HOLD', 'DROP', 'WRONG']) {
+    check(`🟢 버튼 ${k}`, REVIEW_ACTIONS.some(([x]) => x === k))
+  }
+
+  // ── 이스케이프 — 🔴 제목은 소스 원문이다 ──
+  check('🔴 < 를 이스케이프한다', escapeHtml('<script>') === '&lt;script&gt;')
+  check('🔴 따옴표를 이스케이프한다', escapeHtml(`"'`) === '&quot;&#39;')
+  check('🔴 & 를 먼저 이스케이프한다 (이중 인코딩 방지)', escapeHtml('&lt;') === '&amp;lt;')
+
+  // ── 카드 변환 · 렌더 ──
+  const rows = [
+    row({ sourceArticleId: 'q1', originalTitle: '냉장고 추천해주세요' }),
+    row({ sourceArticleId: 'x1', originalTitle: '</script><img src=x onerror=alert(1)>' }),
+  ]
+  const { scored } = scoreRows(rows)
+  const seed = scored.filter((s) => isSeedInboxLane(s.laneHint.lane))
+  const cards = toCards(seed)
+  check('🟢 카드가 만들어진다', cards.length > 0)
+  check('🔴 카드 verdict 이 verdictOf 결과와 같다',
+    cards.every((c, i) => c.verdict === verdictOf(seed[i]).verdict))
+  check('🔴 카드에 본문 필드가 없다',
+    cards.every((c) => !Object.keys(c).some((k) => /body|content/i.test(k))))
+
+  const html = renderHtml(cards, { counts: {}, meanings: VERDICT_MEANING })
+  check('🔴 생성된 HTML 에 외부 요청이 없다',
+    !/https?:\/\//.test(html.replace(/https?:\/\/[^"'\s]*w3\.org[^"'\s]*/g, '')),
+    '외부 CDN·폰트·이미지를 부르면 검수 화면이 네트워크를 쓴다')
+  check('🔴 생성된 HTML 에 rawBody 가 없다', !/rawBody/.test(html))
+  check('🔴 `</script` 가 데이터에서 탈출하지 않는다',
+    (html.match(/<\/script>/g) ?? []).length === 2,
+    `실제 ${(html.match(/<\/script>/g) ?? []).length}개 — 제목이 스크립트를 닫으면 XSS 다`)
+  check('🔴 저장 경로는 localStorage 뿐이다',
+    /localStorage/.test(html) && !/\bfetch\s*\(|XMLHttpRequest|navigator\.sendBeacon/.test(html))
+  for (const m of [
+    '이 화면은 저장소가 아니다', 'DB write 0 · Sheet write 0 · LLM 0 · live 0',
+    '같은 verdictOf()', 'localStorage', 'triage',
+    'Raw Vault 확정은 DETAIL 이후에만 가능하다',
+    '이 결과로 DB/Sheet 저장 경로를 확정하지 않는다',
+  ]) check(`🔴 HTML 이 "${m}" 를 밝힌다`, html.includes(m))
+
+  // ── 🔴 CLI 와 분포가 같은가 (실데이터) ──
+  try {
+    const { loaded } = loadScoutRows()
+    const all = loaded.flatMap((l) => l.rows)
+    if (all.length > 0) {
+      const sc = scoreRows(all).scored.filter((s) => isSeedInboxLane(s.laneHint.lane))
+      const cliCounts = { seedOk: 0, needsDetail: 0, rawMaybe: 0 } as Record<string, number>
+      for (const s of sc) cliCounts[verdictOf(s).verdict]++
+      const htmlCounts = { seedOk: 0, needsDetail: 0, rawMaybe: 0 } as Record<string, number>
+      for (const c of toCards(sc)) htmlCounts[c.verdict]++
+      check('🔴 CLI 와 HTML 의 verdict 분포가 같다',
+        JSON.stringify(cliCounts) === JSON.stringify(htmlCounts),
+        `CLI ${JSON.stringify(cliCounts)} vs HTML ${JSON.stringify(htmlCounts)}`)
+      console.log(`     (실측: 상세 읽기 ${cliCounts.needsDetail} · Seed로 좋음 ${cliCounts.seedOk} · Raw 후보 ${cliCounts.rawMaybe})`)
+    }
+  } catch {
+    console.log('     ⏭️  .microseed-data 없음 — 건너뜀 (CI 정상)')
+  }
 }
 
 console.log(`\n${'─'.repeat(57)}`)

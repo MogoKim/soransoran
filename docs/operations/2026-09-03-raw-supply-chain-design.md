@@ -1240,6 +1240,87 @@ Original 477 · Question 25 · 참여 15 · Info 7 · Growth 8 · 보류 4 · �
 
 ---
 
+## §4-N 🟡 Seed Inbox 검수 화면 (HTML) — **저장소가 아니다** (PR-S2-b-20)
+
+> 🔴 **읽기 전용 검수 도구다.** DB · Sheet · LLM · live · 상세 fetch **어느 것도 열지 않는다.**
+> 저장은 브라우저 `localStorage` 까지고, 결과는 TSV 로 사람이 직접 가져간다.
+
+### 🔴 CLI 와 HTML 이 같은 기준을 쓴다
+
+```
+판정은 verdictOf() 하나가 낸다 (§4-L F).
+HTML 생성기는 그것을 import 해서 쓸 뿐 자체 판정 로직을 갖지 않는다.
+두 화면이 갈라지면 검수 결과 자체를 믿을 수 없다.
+```
+
+PR-S2-b-19 의 **엔트리포인트 가드**가 이것을 가능하게 했다 —
+가드 전에는 `verdictOf` 만 import 해도 리포트가 통째로 돌았다.
+
+fixture 가 **분포 일치**를 실데이터로 검사한다: `CLI == HTML`.
+
+### 위치
+
+| | |
+|---|---|
+| 생성기 | `scripts/micro-seed-seed-inbox-html.mts` |
+| npm | `npm run micro-seed:seed-inbox-html` |
+| 출력 | `.microseed-data/seed-inbox-review.html` (🔴 **gitignore 안**) |
+| 열기 | `open .microseed-data/seed-inbox-review.html` |
+
+🔴 **`.microseed-data/` 밖으로 쓰기를 거부한다.** 이 HTML 에는 소스 제목이 들어간다 —
+git 에 들어가면 히스토리에서 지워지지 않는다.
+
+### 화면
+
+```
+카드 47건 · 필터(전체 / 상세 읽기 / Seed로 좋음 / Raw 후보)
+카드마다  순위 · 점수 · lane · watch · 관측 횟수 · 추천 verdict
+          sourceSite · boardKey · boardName · articleId · page/rank
+          댓글 · 조회 · lag · Δ댓글 · Δ조회
+          why · signal · 추천 이유 · 제목
+버튼      DETAIL · SEED · RAW · HOLD · DROP · WRONG   (같은 버튼 재클릭 = 해제)
+메모      카드마다 자유 입력
+결과      하단 TSV 즉시 반영 · 복사 · 내려받기 · 초기화
+```
+
+🔴 제목은 **검수 화면에서만** 보인다. CLI 기본 실행은 여전히 제목을 찍지 않는다.
+
+### 🔴 화면이 스스로 밝히는 것 (fixture 가 문자열로 고정)
+
+```
+🔴 이 화면은 저장소가 아니다.
+🔴 DB write 0 · Sheet write 0 · LLM 0 · live 0 · 상세 fetch 0.
+🔴 판정은 CLI 와 같은 verdictOf() 가 낸다.
+🔴 저장은 이 브라우저 localStorage 까지다.
+🔴 여기는 triage 다 — Raw Vault 확정은 DETAIL 이후에만 가능하다.
+```
+
+### 안전장치
+
+```
+🔴 외부 네트워크 요청 0    CSS · JS 전부 인라인. CDN · 폰트 · 이미지 없음 (실측 0건)
+🔴 fetch · XHR · sendBeacon 없음 — DB · Sheet 로 나갈 경로가 없다
+🔴 제목 이스케이프         `</script` 탈출 불가 (fixture 가 XSS 페이로드로 검사)
+🔴 rawBody · 쿠키 · 세션   읽지도 쓰지도 않는다 (목록 JSONL 에는 본문이 없다)
+🔴 엔트리포인트 가드        import 만으로 파일을 쓰지 않는다
+```
+
+### 실측 (2026-09-04)
+
+```
+후보 47건 · Info 7 · Question 25 · 참여 15
+추천  상세 읽기 39 · Seed로 좋음 8 · Raw 후보 0   ← 🔴 CLI 와 완전 일치
+
+브라우저 QA 19/19 통과 (로컬 file:// · 네트워크 0)
+  버튼 클릭 · 토글 해제 · 상태 표시 · TSV 즉시 반영 · 메모 ·
+  localStorage 저장 · 새로고침 복원 · 필터 · 터치 52px
+```
+
+> 🔴 이 화면은 **자동 상세 fetch 기준을 정하지 않는다.** 사람이 누르는 버튼일 뿐이고,
+> 무엇을 자동으로 열지는 여전히 미확정이다.
+
+---
+
 ## §4-C 🟡 Growth Issue 레인 — **전략만 적는다. 구현하지 않았다**
 
 > 🔴 **상태: 미구현.** 코드 · 분류기 · cap · 감사 경로 **어느 것도 없다.**
