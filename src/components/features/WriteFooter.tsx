@@ -60,7 +60,7 @@ export default function WriteFooter({
              글자 수는 오른쪽에 그대로 남는다 — 390px 에서 서로 밀지 않는다. */}
       <div className="mb-2 flex min-h-[20px] flex-wrap items-center justify-between gap-x-3 gap-y-1">
         {block ? (
-          <p role="status" className="text-sm font-bold text-state-danger">
+          <p role="alert" className="text-sm font-bold text-state-danger">
             {postBlockMessage(block)}
           </p>
         ) : (
