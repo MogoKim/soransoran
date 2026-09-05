@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { cn } from '@/lib/utils'
 
 type Badge = 'required' | 'optional'
@@ -57,7 +58,7 @@ export default function AgreementCheck({
       <label
         htmlFor={id}
         className={cn(
-          'flex min-h-[52px] min-w-0 flex-1 cursor-pointer items-center gap-3 text-content-primary transition-colors',
+          `flex ${TOUCH_MIN} min-w-0 flex-1 cursor-pointer items-center gap-3 text-content-primary transition-colors`,
           isSummary
             ? cn(
                 'rounded-xl border-2 px-4 py-3 font-bold',
@@ -85,7 +86,7 @@ export default function AgreementCheck({
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`${label} 전문 보기`}
-          className="inline-flex min-h-[52px] min-w-[52px] shrink-0 items-center justify-center text-link underline underline-offset-2"
+          className={`inline-flex ${TOUCH_MIN} min-w-[52px] shrink-0 items-center justify-center text-link underline underline-offset-2`}
         >
           보기
         </Link>

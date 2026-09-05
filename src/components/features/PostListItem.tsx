@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { formatRelativeTime } from '@/lib/date'
 import BoardBadge from '@/components/ui/board-badge'
 import StatIcon from '@/components/icons/StatIcon'
@@ -58,7 +59,7 @@ export default function PostListItem({
     <Link
       href={`${board.href}/${post.id}`}
       data-surface={surface}
-      className="group flex min-h-[52px] items-start gap-3 px-4 py-3.5 no-underline"
+      className={`group flex ${TOUCH_MIN} items-start gap-3 px-4 py-3.5 no-underline`}
     >
       {/* 순번은 순서를 알려줄 뿐 주 정보가 아니다 — 리듬은 만들되 제목을 이기지는 않는다.
           눈에 띄는 몫은 코랄색과 기울임이 가진다 — 기울임은 여기 한 곳에만 둔다.

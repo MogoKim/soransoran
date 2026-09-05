@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import { createReport, type ReportActionState } from '@/lib/actions/reports'
@@ -47,7 +48,7 @@ export default function ReportButton({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
+        className={`inline-flex ${TOUCH_MIN} items-center px-3 text-sm text-content-muted underline`}
       >
         신고
       </button>
@@ -96,7 +97,7 @@ export default function ReportButton({
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="min-h-[52px] px-4 text-content-muted"
+          className={`${TOUCH_MIN} px-4 text-content-muted`}
         >
           취소
         </button>

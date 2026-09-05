@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 
 type Sort = 'oldest' | 'likes'
 
@@ -12,7 +13,7 @@ export type SortableCommentItem = {
 }
 
 const TAB =
-  'inline-flex min-h-[52px] items-center rounded-full px-4 text-sm transition duration-150 active:scale-[0.98]'
+  `inline-flex ${TOUCH_MIN} items-center rounded-full px-4 text-sm transition duration-150 active:scale-[0.98]`
 const TAB_ON = `${TAB} border border-interactive bg-surface-soft font-bold text-brand-ink`
 const TAB_OFF = `${TAB} border border-transparent text-content-muted hover:text-brand-ink`
 

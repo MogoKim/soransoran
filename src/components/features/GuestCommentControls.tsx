@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import {
@@ -26,7 +27,7 @@ import { GUEST_PASSWORD_LENGTH, GUEST_PASSWORD_PLACEHOLDER } from '@/lib/guest-c
 type Mode = 'edit' | 'delete' | null
 
 const SMALL_BTN =
-  'inline-flex min-h-[52px] items-center rounded-lg px-2 text-sm text-content-muted hover:text-content-primary'
+  `inline-flex ${TOUCH_MIN} items-center rounded-lg px-2 text-sm text-content-muted hover:text-content-primary`
 
 export default function GuestCommentControls({
   commentId,

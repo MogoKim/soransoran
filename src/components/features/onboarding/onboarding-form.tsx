@@ -1,6 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import AgreementCheck from '@/components/features/onboarding/agreement-check'
 import NicknameField, {
@@ -40,10 +41,10 @@ function isRequired(key: AgreementKey): boolean {
 }
 
 const CTA_CLASS =
-  'min-h-[52px] w-full rounded-xl bg-cta px-5 font-bold text-cta-text transition duration-150 enabled:hover:brightness-95 enabled:active:scale-95 disabled:opacity-60'
+  `${TOUCH_MIN} w-full rounded-xl bg-cta px-5 font-bold text-cta-text transition duration-150 enabled:hover:brightness-95 enabled:active:scale-95 disabled:opacity-60`
 
 const BACK_CLASS =
-  'min-h-[52px] w-full rounded-xl border border-interactive px-5 font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98]'
+  `${TOUCH_MIN} w-full rounded-xl border border-interactive px-5 font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98]`
 
 /**
  * 가입 마무리 — 닉네임을 정하고 약관에 동의한다.

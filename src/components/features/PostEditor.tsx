@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useEditor, EditorContent } from '@tiptap/react'
 import type { Editor } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
@@ -369,7 +370,7 @@ export default function PostEditor({
                 editor.chain().focus().deleteSelection().run()
                 setMediaSelected(false)
               }}
-              className="inline-flex min-h-[52px] items-center gap-1.5 px-2 text-sm font-bold text-state-danger"
+              className={`inline-flex ${TOUCH_MIN} items-center gap-1.5 px-2 text-sm font-bold text-state-danger`}
             >
               <EditorIcon name="trash" size={18} />
               빼기
@@ -391,7 +392,7 @@ export default function PostEditor({
               fileRef.current?.click()
             }}
             disabled={busy}
-            className="inline-flex min-h-[52px] items-center gap-1.5 rounded-xl bg-surface-page px-3 text-sm text-content-primary disabled:opacity-40"
+            className={`inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-xl bg-surface-page px-3 text-sm text-content-primary disabled:opacity-40`}
           >
             <EditorIcon name={busy ? 'spinner' : 'photo'} />
             {busy ? '올리는 중…' : '사진'}
@@ -400,7 +401,7 @@ export default function PostEditor({
           <button
             type="button"
             onClick={() => { setError(''); setSheetOpen(true) }}
-            className="inline-flex min-h-[52px] items-center gap-1.5 rounded-xl bg-surface-page px-3 text-sm text-content-primary"
+            className={`inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-xl bg-surface-page px-3 text-sm text-content-primary`}
           >
             <EditorIcon name="youtube" />
             유튜브
@@ -412,7 +413,7 @@ export default function PostEditor({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => editor.chain().focus().toggleBold().run()}
             className={cn(
-              'inline-flex min-h-[52px] items-center gap-1.5 rounded-xl px-3 text-sm',
+              `inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-xl px-3 text-sm`,
               editor.isActive('bold')
                 ? 'bg-brand-soft font-bold text-brand-ink'
                 : 'bg-surface-page text-content-primary',
@@ -476,14 +477,14 @@ export default function PostEditor({
               <button
                 type="button"
                 onClick={insertYoutube}
-                className="min-h-[52px] flex-1 rounded-lg bg-cta px-5 font-bold text-cta-text"
+                className={`${TOUCH_MIN} flex-1 rounded-lg bg-cta px-5 font-bold text-cta-text`}
               >
                 넣기
               </button>
               <button
                 type="button"
                 onClick={() => { setSheetOpen(false); setYoutubeUrl(''); setYoutubeError('') }}
-                className="min-h-[52px] px-4 text-content-muted"
+                className={`${TOUCH_MIN} px-4 text-content-muted`}
               >
                 그만두기
               </button>

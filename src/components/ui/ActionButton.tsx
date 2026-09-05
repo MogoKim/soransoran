@@ -1,6 +1,7 @@
 'use client'
 
 import { useFormStatus } from 'react-dom'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { cn } from '@/lib/utils'
 
 export type ActionButtonTone = 'primary' | 'danger'
@@ -26,7 +27,7 @@ const TONE_CLASS: Record<ActionButtonTone, string> = {
  *    두 tone 모두 같은 회색으로 간다 — 못 누르는 상태에 빨강·산호를 남겨 둘 이유가 없다.
  */
 const BASE_CLASS =
-  'min-h-[52px] rounded-lg px-5 transition duration-150 enabled:active:scale-95 ' +
+  `${TOUCH_MIN} rounded-lg px-5 transition duration-150 enabled:active:scale-95 ` +
   'disabled:bg-surface-page disabled:text-content-muted disabled:border-subtle'
 
 type ActionButtonProps = {

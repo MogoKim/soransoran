@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import CommentDock from '@/components/features/CommentDock'
 import { useReplyOpen } from '@/components/features/ReplyOpenProvider'
 import { resolveDockVisible } from '@/lib/comment-dock-visibility'
@@ -169,7 +170,7 @@ export default function CommentComposeAnchor({ children }: { children: ReactNode
               type="button"
               onClick={close}
               aria-label="댓글 입력 닫기"
-              className="flex min-h-[52px] min-w-[52px] items-center justify-center rounded-full text-content-muted transition duration-150 active:scale-[0.98]"
+              className={`flex ${TOUCH_MIN} min-w-[52px] items-center justify-center rounded-full text-content-muted transition duration-150 active:scale-[0.98]`}
             >
               <svg
                 width="22"

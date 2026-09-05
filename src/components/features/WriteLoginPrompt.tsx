@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useId, useRef } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
 
 /**
@@ -97,7 +98,7 @@ export default function WriteLoginPrompt({
           <button
             type="button"
             onClick={onClose}
-            className="min-h-[52px] px-4 text-sm text-content-muted"
+            className={`${TOUCH_MIN} px-4 text-sm text-content-muted`}
           >
             계속 작성하기
           </button>

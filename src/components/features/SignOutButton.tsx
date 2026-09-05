@@ -1,6 +1,7 @@
 'use client'
 
 import { signOut } from 'next-auth/react'
+import { TOUCH_MIN } from '@/lib/spacing'
 
 /**
  * 로그아웃 버튼
@@ -13,7 +14,7 @@ export default function SignOutButton() {
     <button
       type="button"
       onClick={() => signOut({ callbackUrl: '/' })}
-      className="inline-flex min-h-[52px] items-center rounded-lg px-3 text-sm text-content-muted transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+      className={`inline-flex ${TOUCH_MIN} items-center rounded-lg px-3 text-sm text-content-muted transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
     >
       로그아웃
     </button>

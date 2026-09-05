@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { loginHref, onboardingHref } from '@/lib/callback-url'
@@ -29,7 +30,7 @@ export async function requireMyUserId(returnTo: string): Promise<string> {
 export function BackToMy() {
   return (
     <nav aria-label="이동">
-      <Link href="/my" className="inline-flex min-h-[52px] items-center text-sm text-link">
+      <Link href="/my" className={`inline-flex ${TOUCH_MIN} items-center text-sm text-link`}>
         ← 내 정보
       </Link>
     </nav>

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
@@ -109,7 +110,7 @@ export default async function PostDetailPage({
         <nav className="py-2">
           <Link
             href={board.href}
-            className="inline-flex min-h-[52px] items-center text-sm text-link"
+            className={`inline-flex ${TOUCH_MIN} items-center text-sm text-link`}
           >
             ← {board.label}
           </Link>
@@ -137,7 +138,7 @@ export default async function PostDetailPage({
                     수정·삭제는 필요할 때만 찾는 손잡이다. 삭제와 같은 무게로 둔다. */}
               <Link
                 href={`${board.href}/${post.id}/edit`}
-                className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
+                className={`inline-flex ${TOUCH_MIN} items-center px-3 text-sm text-content-muted underline`}
               >
                 수정
               </Link>

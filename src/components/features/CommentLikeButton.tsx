@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { usePathname } from 'next/navigation'
 import { useRef, useState, useTransition } from 'react'
 import { toggleCommentLike } from '@/lib/actions/comment-likes'
@@ -71,7 +72,7 @@ export default function CommentLikeButton({
         onClick={onClick}
         aria-label={liked ? '공감 취소' : '공감'}
         aria-pressed={liked}
-        className={`inline-flex min-h-[52px] items-center gap-1.5 rounded-lg px-2 text-sm transition duration-150 active:scale-[0.98] ${
+        className={`inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-lg px-2 text-sm transition duration-150 active:scale-[0.98] ${
           liked ? 'font-bold text-brand-ink' : 'text-content-muted hover:text-brand-ink'
         }`}
       >

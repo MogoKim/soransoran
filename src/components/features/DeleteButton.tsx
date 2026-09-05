@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useRouter } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
@@ -40,7 +41,7 @@ export default function DeleteButton({ boardSlug, postId, commentId }: DeleteBut
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
+        className={`inline-flex ${TOUCH_MIN} items-center px-3 text-sm text-content-muted underline`}
       >
         삭제
       </button>
@@ -68,7 +69,7 @@ export default function DeleteButton({ boardSlug, postId, commentId }: DeleteBut
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="min-h-[52px] px-4 text-content-muted"
+          className={`${TOUCH_MIN} px-4 text-content-muted`}
         >
           그대로 두기
         </button>

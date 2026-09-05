@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { TOUCH_MIN } from '@/lib/spacing'
 import Image from 'next/image'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
@@ -123,7 +124,7 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
 
       <main className="mx-auto max-w-3xl px-4 pb-16">
         <nav className="py-2">
-          <Link href="/magazine" className="inline-flex min-h-[52px] items-center text-sm text-link">
+          <Link href="/magazine" className={`inline-flex ${TOUCH_MIN} items-center text-sm text-link`}>
             ← 매거진
           </Link>
         </nav>
