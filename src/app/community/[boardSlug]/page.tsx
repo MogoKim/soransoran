@@ -67,7 +67,7 @@ export default async function BoardPage({
           아래 여백은 pb-16 이면 충분하다 — FAB 자리는 PageShell 이 따로 확보한다. */}
       <main className="mx-auto max-w-3xl px-4 pb-16 pt-3">
         {/* 상단 메뉴가 이미 어느 방인지 말한다. 눈에서만 감추고 <h1> 텍스트는 남긴다
-            (매거진·베스트는 기본값 그대로 보인다). */}
+            (매거진도 필터 칩이 있어 같이 감춘다. 조작 줄이 없는 베스트만 제목을 보인다). */}
         <ListHeader board={board} visuallyHidden />
 
         {/* 🔴 글이 없으면 탭도 없다. 정렬할 것이 없는데 고르게 하면 눌러도 아무 일이 없다.
