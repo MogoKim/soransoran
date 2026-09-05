@@ -85,6 +85,18 @@ export function latestApprovalFile(dir: string): string | null {
   return files.length ? `${dir}/${files[files.length - 1]}` : null
 }
 
+/**
+ * 산출물 이름에 쓰는 회차 id — `YYYYMMDD-HHMMSS`.
+ *
+ * 🔴 detail-fetch 의 runId 와 같은 모양이다. 같은 날 여러 번 돌려도 파일이 공존한다.
+ *    이름이 시간순으로 정렬되므로 "가장 최근" 을 이름만으로 고를 수 있다.
+ */
+export function dryRunId(now: Date): string {
+  const p2 = (n: number): string => String(n).padStart(2, '0')
+  return `${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}`
+    + `-${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}`
+}
+
 const cell = (v: unknown): string => String(v ?? '').replace(/[\t\r\n]+/g, ' ')
 
 export function toTsv(exps: readonly Expansion[]): string {
@@ -133,11 +145,12 @@ function main(): void {
 
   // 🔴 한 회차는 하나의 시각을 공유한다 — 행마다 몇 밀리초씩 다르면 같은 회차인지 알기 어렵다
   const generatedAt = new Date().toISOString()
+  // 🔴 **memo 를 넘기지 않는다.** 승인 파일에는 남아 있지만 소재 입력이 아니다 —
+  //    검수 메모의 낱말이 소재 사전에 걸려 엉뚱한 초안이 나온 적이 있다(2026-09-05).
   const exps = seeds.map((r) => expandSeed({
     sourceArticleId: String(r.sourceArticleId ?? ''),
     sourceSite: String(r.sourceSite ?? ''),
     title: String(r.title ?? ''),
-    memo: String(r.memo ?? ''),
   }, generatedAt))
 
   let drafts = 0
@@ -156,9 +169,11 @@ function main(): void {
     }
   }
 
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const tsvPath = `${SEED_DATA_DIR}/seed-originality-dry-run-${stamp}.tsv`
-  const jsonPath = `${SEED_DATA_DIR}/seed-originality-dry-run-${stamp}.json`
+  // 🔴 **날짜만 쓰지 않는다.** 같은 날 두 번 돌리면 앞 회차를 덮어쓴다 —
+  //    2026-09-05 에 1회차 초안 9건이 그렇게 사라졌다. 시각까지 넣어 두 파일이 공존하게 한다.
+  const runId = dryRunId(new Date())
+  const tsvPath = `${SEED_DATA_DIR}/seed-originality-dry-run-${runId}.tsv`
+  const jsonPath = `${SEED_DATA_DIR}/seed-originality-dry-run-${runId}.json`
   assertInsideDataDir(tsvPath)
   assertInsideDataDir(jsonPath)
   writeFileSync(tsvPath, toTsv(exps), 'utf-8')

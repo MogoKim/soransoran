@@ -19,7 +19,7 @@ import {
   BANNED_HONORIFICS, MAX_SOURCE_OVERLAP, DRY_RUN_COLUMNS, DRY_RUN_NOTE,
   type TopicKey,
 } from './lib/micro-seed-seed-originality.mjs'
-import { seedRowsOf, readApprovals, assertInsideDataDir, toTsv, SEED_DATA_DIR } from './micro-seed-seed-originality-dry-run.mjs'
+import { seedRowsOf, readApprovals, assertInsideDataDir, toTsv, dryRunId, SEED_DATA_DIR } from './micro-seed-seed-originality-dry-run.mjs'
 
 const LIB = readFileSync('scripts/lib/micro-seed-seed-originality.mts', 'utf-8')
 const CLI = readFileSync('scripts/micro-seed-seed-originality-dry-run.mts', 'utf-8')
@@ -59,7 +59,7 @@ check('펜션 → 숙소', findMaterial('펜션 어디가 좋을까요').materia
 check('맛집 → 맛집 (여행·먹거리)', findMaterial('통영분들^^ 맛집 추천 좀 부탁드려요').topic === 'travelFood')
 check('프라이팬 → 후라이팬', findMaterial('프라이팬 어때요').material === '후라이팬')
 check('🔴 브랜드가 붙어도 소재어만 쓴다', findMaterial('핀일로 후라이팬 어때요??').material === '후라이팬')
-check('memo 도 함께 본다', findMaterial('제목엔 없음', '후라이팬 살림 소재').material === '후라이팬')
+check('🔴 memo 를 인자로 받지 않는다 (타입에 없다)', findMaterial.length === 1, String(findMaterial.length))
 
 console.log('\n③ 버릴 낱말 — 🔴 지역·브랜드·학년 표현')
 const m1 = findMaterial('통영분들^^ 맛집 추천 좀 부탁드려요')
@@ -184,6 +184,36 @@ check('🔴 분류 못 한 행도 sourceSite 를 잃지 않는다',
 const tsvSite = toTsv([withSite]).split('\n')
 check('🔴 TSV 마지막 두 칸이 sourceSite · generatedAt',
   (tsvSite[1] ?? '').split('\t')[17] === 'navercafe:test' && (tsvSite[1] ?? '').split('\t')[18] === AT)
+
+console.log('\n⑭ 🔴 memo 오염 차단 (2026-09-05 사고)')
+// 🔴 사고: 검수 메모에 "남의 가족 사정이 있다" 고 적었더니 그 "가족" 이 소재 사전에 걸려
+//    간병 글이 가족 일반론 초안 3건으로 바뀌었다. memo 는 판정 근거지 소재가 아니다.
+const MEMO_FAMILY = '원문에 병원 실명과 남의 가족 사정이 있다. 소재(부모 간병)는 우리 또래 핵심이다'
+type SeedRow = Parameters<typeof expandSeed>[0]
+const withMemo = (o: Record<string, unknown>): SeedRow => o as unknown as SeedRow
+const care = expandSeed(withMemo({ sourceArticleId: 'c1', title: '간병인 추천 부탁드립니다.', memo: MEMO_FAMILY }))
+check('🔴 title 에 소재가 없으면 memo 에 "가족" 이 있어도 needsHuman', care.needsHuman === true)
+check('🔴 family 초안을 만들지 않는다', care.drafts.length === 0, String(care.drafts.length))
+check('🔴 material 을 지어내지 않는다', care.material === null)
+for (const [w, memo] of [['여행', '여행지 맛집 소재로 확장 가능'], ['살림', '후라이팬 살림 소재'], ['가족', '가족 여행 숙소 얘기']]) {
+  const e = expandSeed(withMemo({ sourceArticleId: 'c2', title: '어제 그 일 말인데요', memo }))
+  check(`🔴 memo 의 "${w}" 키워드가 소재로 새지 않는다`, e.needsHuman === true && e.drafts.length === 0)
+}
+check('🟢 title 에 소재가 있으면 memo 와 무관하게 분류된다',
+  expandSeed(withMemo({ sourceArticleId: 'c3', title: '후라이팬 어때요', memo: MEMO_FAMILY })).topic === 'household')
+check('🔴 lib 코드에 memo 참조가 없다', !/\bmemo\b/.test(LIB_CODE))
+
+console.log('\n⑮ 🔴 산출물 파일명 — 같은 날 두 번 돌려도 덮어쓰지 않는다')
+const t1 = new Date('2026-09-05T13:05:38')
+const t2 = new Date('2026-09-05T23:18:18')
+check('runId 형식 YYYYMMDD-HHMMSS', /^\d{8}-\d{6}$/.test(dryRunId(t1)), dryRunId(t1))
+check('🔴 같은 날 다른 시각 → 다른 이름', dryRunId(t1) !== dryRunId(t2), `${dryRunId(t1)} vs ${dryRunId(t2)}`)
+check('🔴 날짜만 쓰던 옛 이름과 다르다', dryRunId(t1) !== '20260905')
+check('🟢 이름이 시간순으로 정렬된다 (최신을 이름만으로 고른다)', dryRunId(t1) < dryRunId(t2))
+check('🔴 CLI 가 날짜만 쓰는 stamp 를 더는 만들지 않는다',
+  !/toISOString\(\)\.slice\(0, 10\)/.test(CLI_CODE))
+check('🔴 CLI 산출물 이름이 runId 를 쓴다', /seed-originality-dry-run-\$\{runId\}/.test(CLI_CODE))
+check('🔴 CLI 가 expandSeed 에 memo 를 넘기지 않는다', !/memo:\s*String\(r\.memo/.test(CLI_CODE))
 
 console.log('\n⑩ 경로 가드 — 🔴 .microseed-data/ 밖으로 나가지 않는다')
 check(`기본 디렉터리는 ${SEED_DATA_DIR}`, SEED_DATA_DIR === '.microseed-data')

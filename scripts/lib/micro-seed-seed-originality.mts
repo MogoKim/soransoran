@@ -4,7 +4,7 @@
  * 정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-U · §4-X · §4-AA
  *
  * 🔴 **LLM 을 부르지 않는다. 그래서 이렇게 만든다.**
- *    ① 원문 제목·memo 에서 **소재(무엇을 묻는 글인가)** 를 찾는다 — 키워드 사전.
+ *    ① 원문 **제목에서만** 소재(무엇을 묻는 글인가)를 찾는다 — 키워드 사전.
  *    ② 그 키워드를 **일반화된 소재어**로 바꾼다 (리조트·호텔·펜션 → "숙소").
  *    ③ 소재어를 템플릿에 끼워 **커뮤니티 질문·공감형** 초안을 만든다.
  *    분류하지 못하면 **초안을 만들지 않는다** — 그럴듯한 문장을 지어내지 않는다.
@@ -314,8 +314,12 @@ export const COMMON_WORDS: readonly string[] = [
  *    지역명·브랜드명·학년 표현을 각각 알아내려 하지 않는다.
  *    그런 분류는 틀리는 날 새어 나간다. "인정된 것 말고 전부 버린다" 가 더 좁다.
  */
-export function findMaterial(title: string, memo = ''): Material {
-  const hay = `${title} ${memo}`
+export function findMaterial(title: string): Material {
+  // 🔴 **memo 를 보지 않는다.** 인자로 받지도 않는다 — 타입에 없으면 실수로도 못 넘긴다.
+  //    2026-09-05 사고: 검수자가 memo 에 "남의 가족 사정이 있다" 고 적었는데
+  //    그 "가족" 이 소재 사전에 걸려, 간병 글이 가족 일반론 초안 3건으로 바뀌었다.
+  //    memo 는 **왜 그렇게 판정했나** 를 적는 칸이지 소재가 아니다.
+  const hay = title
   for (const rule of TOPIC_RULES) {
     const m = hay.match(rule.re)
     if (!m) continue
@@ -403,16 +407,17 @@ const DIRECTION: Record<TopicKey, string> = {
 /**
  * SEED 한 행 → 초안 2~3개.
  *
- * 🔴 원문 body 가 없어도 동작한다 — title 과 memo 만 쓴다.
+ * 🔴 원문 body 가 없어도 동작한다 — **title 만** 쓴다.
+ * 🔴 memo 는 받지 않는다 — 검수 메모가 소재 분류를 오염시킨 사고가 있었다(2026-09-05).
  *    (SRN export 는 SEED 행의 body 를 비워서 내보낸다. 그게 정상이다)
  */
 export function expandSeed(
-  row: { sourceArticleId: string; sourceSite?: string; title: string; memo?: string },
+  row: { sourceArticleId: string; sourceSite?: string; title: string },
   generatedAt: string = new Date().toISOString(),
 ): Expansion {
   const title = String(row.title ?? '')
   const site = String(row.sourceSite ?? '')
-  const mat = findMaterial(title, String(row.memo ?? ''))
+  const mat = findMaterial(title)
 
   if (!mat.topic || !mat.material) {
     return {
