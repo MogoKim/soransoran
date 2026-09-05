@@ -28,6 +28,7 @@ export const MAX_SOURCE_OVERLAP = 6
 
 export type TopicKey =
   | 'travelFood' | 'travelStay' | 'household' | 'family' | 'moneyLater' | 'bodyHealth' | 'mindTies'
+  | 'careParent' | 'morningBite'
 
 export const TOPIC_LABEL: Record<TopicKey, string> = {
   travelFood: '여행 · 먹거리',
@@ -37,6 +38,8 @@ export const TOPIC_LABEL: Record<TopicKey, string> = {
   moneyLater: '돈 · 노후',
   bodyHealth: '몸 · 건강',
   mindTies: '관계 · 마음',
+  careParent: '간병 · 부모 돌봄',
+  morningBite: '아침 · 간식',
 }
 
 /**
@@ -69,6 +72,13 @@ export const TOPIC_RULES: readonly Rule[] = [
   { re: /무릎|허리|어깨/, material: '관절', topic: 'bodyHealth' },
   { re: /운동|걷기|산책/, material: '운동', topic: 'bodyHealth' },
   { re: /잠|불면|수면/, material: '잠', topic: 'bodyHealth' },
+  // 🔴 간병 · 부모 돌봄 — **좁게 잡는다.**
+  //    '요양' 단독은 요양원 홍보글까지 물어서 뺐다. '입원' 도 뺐다 —
+  //    의료 상황 자체를 소재로 삼으면 진단·치료 얘기로 흐른다(§4-J).
+  //    여기서 다루는 것은 **돌보는 사람의 마음과 부담**이지 환자의 병이 아니다.
+  { re: /간병|병간호|요양보호|돌봄/, material: '간병', topic: 'careParent' },
+  // 🔴 아침 · 간식 — 특정 식품·브랜드가 걸려도 초안에 나가는 것은 '아침' 뿐이다
+  { re: /아침\s?식사|아침밥|아침에\s?먹|간식|견과류/, material: '아침', topic: 'morningBite' },
   // 관계 · 마음
   { re: /친구|모임/, material: '친구', topic: 'mindTies' },
   { re: /남편|부부/, material: '부부', topic: 'mindTies' },
@@ -228,6 +238,54 @@ export const TEMPLATES: Record<TopicKey, readonly Template[]> = {
         '다들 요즘 뭘 하고 계세요?',
     },
   ],
+  careParent: [
+    {
+      // 🔴 "간병인 추천해주세요" 류를 만들지 않는다 — 그건 알선이지 우리 글이 아니다
+      title: (m) => `${m}, 하시는 분들 제일 힘든 게 뭐예요?`,
+      body: () =>
+        '부모님 일로 오가다 보면 몸보다 마음이 먼저 지치더라고요.\n' +
+        '괜찮은 척하다가 혼자 있을 때 울컥할 때가 있어요.\n\n' +
+        '다들 제일 힘든 게 뭐였어요?',
+    },
+    {
+      title: () => '부모님 일로 마음 무거울 때, 어떻게 버티세요?',
+      body: () =>
+        '해도 해도 부족한 것 같고, 형제들과도 말이 조심스러워지네요.\n' +
+        '누구 탓도 아닌데 마음만 무거워요.\n\n' +
+        '다들 그럴 때 어떻게 버티세요?',
+    },
+    {
+      title: () => '혼자 감당하기 버거울 때 누구한테 기대세요?',
+      body: () =>
+        '주변에 말하자니 걱정 끼치는 것 같고, 안 하자니 혼자 삭이게 돼요.\n' +
+        '같은 일을 겪어본 사람 얘기가 제일 힘이 되더라고요.\n\n' +
+        '다들 그럴 때 누구한테 기대세요?',
+    },
+  ],
+  morningBite: [
+    {
+      // 🔴 특정 제품·브랜드를 묻지 않는다 — material 은 '아침' 하나뿐이다
+      title: (m) => `${m}에 뭐 드세요?`,
+      body: () =>
+        '차려 먹자니 시간이 없고 거르자니 속이 허해서 늘 고민이에요.\n' +
+        '간단히 집어 먹을 걸 두고 먹는 편인데 늘 비슷하네요.\n\n' +
+        '다들 뭐 드세요?',
+    },
+    {
+      title: (m) => `${m} 챙겨 드시는 편이세요?`,
+      body: () =>
+        '거르면 점심에 폭식하게 되고, 챙기자니 아침부터 바쁘고요.\n' +
+        '나이 들수록 거르는 게 더 티가 나는 것 같기도 하고요.\n\n' +
+        '다들 챙겨 드시는 편이세요?',
+    },
+    {
+      title: () => '집에 늘 두고 드시는 간식이 있으세요?',
+      body: () =>
+        '떨어지면 허전해서 꼭 다시 사두게 되는 게 하나쯤 있더라고요.\n' +
+        '저는 손 가는 대로 집어 먹다가 양 조절이 안 되는 게 문제예요.\n\n' +
+        '다들 늘 두고 드시는 게 있으세요?',
+    },
+  ],
   mindTies: [
     {
       title: (m) => `${m} 사이, 요즘 어떠세요?`,
@@ -304,6 +362,7 @@ export function stems(token: string): string[] {
 export const COMMON_WORDS: readonly string[] = [
   '아이', '아이들', '가족', '남편', '엄마', '아빠', '친구', '사람', '우리', '저희',
   '여행', '추천', '부탁', '요즘', '오늘', '어제', '내일', '주말', '방학',
+  '아침', '점심', '저녁',
   '어때요', '어떤', '어디', '언제', '무엇', '뭐가', '같이', '함께', '정말', '너무',
   '갈만한', '괜찮은', '좋은', '많은', '조금', '그냥', '혹시', '다들',
 ] as const
@@ -402,6 +461,8 @@ const DIRECTION: Record<TopicKey, string> = {
   moneyLater: '재테크 정보가 아니라 미루게 되는 마음을 나누는 쪽으로',
   bodyHealth: '진단·처방이 아니라 달라진 것을 서로 확인하는 쪽으로 (§4-J)',
   mindTies: '해법이 아니라 비슷한 마음을 확인하는 쪽으로',
+  careParent: '간병인 알선이 아니라 돌보는 사람의 마음과 부담을 나누는 쪽으로 — 병·치료는 다루지 않는다',
+  morningBite: '특정 제품 추천이 아니라 아침을 어떻게 때우는지 나누는 쪽으로',
 }
 
 /**
