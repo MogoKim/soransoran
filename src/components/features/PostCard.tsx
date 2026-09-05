@@ -35,9 +35,9 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
       href={`${boardHref}/${post.id}`}
       className="group block py-3.5 no-underline"
     >
-      <h3 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
+      <h2 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
         {post.title}
-      </h3>
+      </h2>
 
       {/* 🔴 위계는 크기가 아니라 굵기와 색이 만든다 —
           제목(body/700 primary) · 미리보기(caption/400 secondary) · 메타(caption muted).
