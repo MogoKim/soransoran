@@ -92,7 +92,7 @@ export default function CommentLikeButton({
       </button>
 
       {notice ? (
-        <p role="status" className="m-0 text-xs text-content-muted">
+        <p role="status" className="m-0 text-sm text-content-muted">
           {notice.text}
           {notice.login ? (
             <>
