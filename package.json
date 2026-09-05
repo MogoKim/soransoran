@@ -56,7 +56,9 @@
     "micro-seed:srn-review": "tsx scripts/micro-seed-srn-review.mts",
     "micro-seed:srn-check": "tsx scripts/micro-seed-srn-review-check.mts",
     "micro-seed:seed-originality": "tsx scripts/micro-seed-seed-originality-dry-run.mts",
-    "micro-seed:seed-originality-check": "tsx scripts/micro-seed-seed-originality-check.mts"
+    "micro-seed:seed-originality-check": "tsx scripts/micro-seed-seed-originality-check.mts",
+    "micro-seed:seed-originality-review": "tsx scripts/micro-seed-seed-originality-review.mts",
+    "micro-seed:seed-originality-review-check": "tsx scripts/micro-seed-seed-originality-review-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
