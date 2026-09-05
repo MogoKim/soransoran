@@ -50,6 +50,8 @@
     "micro-seed:seed-inbox-dry-run": "tsx scripts/micro-seed-seed-inbox-dry-run.mts",
     "micro-seed:seed-inbox-check": "tsx scripts/micro-seed-seed-inbox-check.mts",
     "micro-seed:safety-check": "tsx scripts/micro-seed-safety-filter-check.mts",
+    "micro-seed:detail-fetch": "tsx scripts/micro-seed-detail-fetch.mts",
+    "micro-seed:detail-check": "tsx scripts/micro-seed-detail-check.mts",
     "micro-seed:seed-inbox-html": "tsx scripts/micro-seed-seed-inbox-html.mts"
   },
   "dependencies": {
