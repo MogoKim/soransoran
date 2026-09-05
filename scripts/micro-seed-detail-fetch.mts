@@ -155,7 +155,8 @@ async function main(): Promise<void> {
   console.log('  🔴 DB write 0 · Sheet 0 · LLM 0 · 자동 발행 0 · noindex 배포 0 · Raw Vault 0')
   console.log('  🔴 목록 scout 0 — 이미 수집된 후보만 연다')
   console.log(`  🔴 cap ${CAP}건 — **생산 목표가 아니라 요청 리스크 상한**이다 (§4-W ③)`)
-  console.log(`  🟡 길이 기준 ${BASIS} — 🔴 §4-Y ④ 는 아직 미확정이다. 기록만 한다\n`)
+  console.log(`  🟢 SRN 길이 기준은 §4-Y ④ 에 따라 **본문(body)** 으로 확정됐다 — 이번 실행 기준: ${BASIS}`)
+  console.log('  🟡 제목+본문은 참고값이다 — 자격 판정에 쓰지 않는다 (제목은 운영자가 바꿀 수 있다)\n')
 
   if (!ALLOWED_CAPS.includes(CAP)) fail(`cap 은 ${ALLOWED_CAPS.join(' 또는 ')} 만 허용한다 (받은 값 ${CAP})`)
 
