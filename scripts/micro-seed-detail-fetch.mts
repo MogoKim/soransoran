@@ -206,9 +206,6 @@ async function main(): Promise<void> {
         requests++
         const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
         sig.httpStatus = resp?.status()
-        const docTitle: string = await page.title()
-        // 🔴 게시글 제목이 아니라 카페 홈 title 이면 삭제다 (§4-T ④)
-        sig.titleFallback = !docTitle.includes(s.row.originalTitle.slice(0, 8))
         let frame: any = null
         for (let k = 0; k < 20; k++) {
           frame = page.frames().find((f: any) => /\/ca-fe\/cafes\/\d+\/articles\/\d+/.test(f.url())) ?? null
@@ -234,6 +231,10 @@ async function main(): Promise<void> {
           if (r) { body = r.body; imgs = r.imgs; comments = r.cs; sig.permissionNotice = r.notice }
           sig.bodyFound = body.length > 0
         }
+        // 🔴 title 은 **프레임·본문을 확인한 뒤에** 읽는다 (2026-09-05 정정).
+        //    SPA 라 goto 직후에는 아직 카페 홈 제목이다 — 그때 읽으면 멀쩡한 글이 삭제로 잡힌다.
+        const docTitle: string = await page.title()
+        sig.titleFallback = !docTitle.includes(s.row.originalTitle.slice(0, 8))
       } catch (e) { sig.errorMessage = String(e).slice(0, 80) }
       sig.dialogMessage = dialog || null
 
