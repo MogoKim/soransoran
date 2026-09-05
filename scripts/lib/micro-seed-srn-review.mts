@@ -94,6 +94,13 @@ export type SrnCard = {
   safetyVerdict: string
   safetyReasons: string
   reason: string
+  /**
+   * 🔴 승인 가능 여부 — **본문을 보지 않고는 승인할 수 없다**.
+   *    본문이 보존되지 않은 후보를 APPROVE 하면 사람이 무엇을 승인하는지 모르는 채 누른 것이고,
+   *    export 도 body 가 빈 채로 나가 다음 단계가 원문 없이 발행 후보를 받게 된다.
+   *    그래서 화면은 버튼을 잠그고, 계약(exportRows)도 한 번 더 막는다 (§4-Z ⑨).
+   */
+  approvable: boolean
 }
 
 const norm = (s: string): string => s.replace(/\s+/g, ' ').trim()
@@ -178,6 +185,8 @@ export function selectSrn(records: readonly DetailRecord[]): {
       safetyVerdict: sv,
       safetyReasons: String(r.safetyReasons ?? ''),
       reason: String(r.reason ?? ''),
+      // 🔴 본문이 있고 100자 미만일 때만 승인할 수 있다
+      approvable: body !== null && [...body].length < SHORT_RAW_MAX,
     })
   }
 
@@ -193,6 +202,8 @@ export const EXPORT_COLUMNS: readonly string[] = [
   'decision', 'axis', 'sourceArticleId', 'sourceSite', 'url', 'score', 'lane',
   'bodyLength', 'lengthBasis', 'titleBodyRefLength', 'imageCount', 'commentCount',
   'safetyVerdict', 'safetyReasons', 'title', 'memo', 'note',
+  // 🔴 body 는 **맨 뒤에** 붙인다. 앞 17개의 위치를 바꾸면 위치로 읽는 쪽이 조용히 오독한다.
+  'body',
 ] as const
 
 export type DecisionState = { v?: string; memo?: string }
@@ -203,11 +214,46 @@ export type ExportRow = {
   bodyLength: number; lengthBasis: string; titleBodyRefLength: number
   imageCount: number; commentCount: number
   safetyVerdict: string; safetyReasons: string; title: string; memo: string; note: string
+  /**
+   * 🟢 원문 — **APPROVE 된 SRN 행에만** 담긴다 (§4-Z ⑨).
+   *    그 외 결정(SEED·HOLD·DROP)에는 빈 문자열이다.
+   *    승인 파일이 다음 단계(noindex 발행 후보)의 입력이 되려면 원문이 함께 가야 하는데,
+   *    승인하지 않은 글의 원문까지 실어 나르면 그것은 '승인 결과' 가 아니라 원문 배포다.
+   */
+  body: string
+}
+
+/** 🔴 승인했지만 내보낼 수 없는 행 — 조용히 사라지지 않게 이름을 남긴다 */
+export type BlockedApproval = { articleId: string; why: string }
+
+/**
+ * 🔴 APPROVE 인데 본문이 없는 행 — export 에서 막힌다.
+ *
+ *    화면은 그런 후보의 APPROVE 버튼을 아예 잠근다(approvable=false).
+ *    그래도 여기서 한 번 더 보는 이유는, localStorage 에 옛 판정이 남아 있거나
+ *    화면 밖에서 상태가 들어올 수 있기 때문이다. 막는 자리가 하나뿐이면
+ *    그 하나가 뚫리는 날 body 가 빈 승인 행이 다음 단계로 넘어간다.
+ */
+export function blockedApprovals(
+  cards: readonly SrnCard[],
+  state: Readonly<Record<string, DecisionState>>,
+): BlockedApproval[] {
+  const out: BlockedApproval[] = []
+  for (const c of cards) {
+    if (state[c.articleId]?.v !== 'APPROVE') continue
+    if (c.approvable) continue
+    out.push({
+      articleId: c.articleId,
+      why: c.body === null ? '본문 미보존 — 원문을 보지 않고 승인할 수 없다' : `본문 ${c.bodyLength}자 ≥ ${SHORT_RAW_MAX}`,
+    })
+  }
+  return out
 }
 
 /**
  * 승인 결과 행 — 🔴 **사람이 누른 것만** 나간다.
  *    누르지 않은 후보를 기본값으로 채워 내보내면 "승인" 이 사람의 행위가 아니게 된다.
+ *    🔴 APPROVE 인데 본문이 없는 행은 **아예 나가지 않는다** (blockedApprovals 가 이름을 남긴다).
  */
 export function exportRows(
   cards: readonly SrnCard[],
@@ -218,6 +264,8 @@ export function exportRows(
     const st = state[c.articleId]
     const v = st?.v ?? ''
     if (!v) continue
+    // 🔴 승인인데 원문이 없으면 행 자체를 만들지 않는다 — body 빈 승인 행을 만들지 않기 위해서다
+    if (v === 'APPROVE' && !c.approvable) continue
     out.push({
       decision: v,
       axis: SRN_AXIS,
@@ -236,6 +284,8 @@ export function exportRows(
       title: c.title,
       memo: st?.memo ?? '',
       note: NOT_PUBLISH_NOTE,
+      // 🟢 원문은 APPROVE 된 SRN 행에만 (위 가드로 approvable 이 보장된다)
+      body: v === 'APPROVE' ? (c.body ?? '') : '',
     })
   }
   return out
