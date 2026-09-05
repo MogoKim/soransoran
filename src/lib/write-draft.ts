@@ -63,3 +63,26 @@ export function removeDraft(boardSlug: string): void {
     /* 지우지 못해도 화면 흐름을 막지 않는다 */
   }
 }
+
+/**
+ * 여러 게시판 중 가장 최근에 저장된 것을 찾는다.
+ *
+ * 🔴 필요한 이유는 로그인 왕복이다. 비회원이 쓴 글은 게시판별 키로만 남는데,
+ *    로그인·온보딩을 지나며 `?board=` 가 떨어지면 폼이 다른 게시판으로 열리고
+ *    방금 쓴 글을 아무도 못 찾는다. 사용자에게는 글이 사라진 것과 같다.
+ *
+ * 🔴 찾기만 하고 적용하지 않는다. 게시판을 말없이 바꾸면 갱년기 이야기가
+ *    자유게시판에 올라간다 — 되돌릴 수 없는 실수라 사용자가 직접 고르게 한다.
+ *
+ * 🔴 savedAt 이 없는 값은 가장 오래된 것으로 본다. 이 필드가 생기기 전에
+ *    저장된 글이라, 새로 쓴 글보다 앞세울 근거가 없다.
+ */
+export function findLatestDraft(boardSlugs: readonly string[]): PostDraft | null {
+  let latest: PostDraft | null = null
+  for (const slug of boardSlugs) {
+    const draft = readDraft(slug)
+    if (!draft) continue
+    if (!latest || (draft.savedAt ?? 0) > (latest.savedAt ?? 0)) latest = draft
+  }
+  return latest
+}

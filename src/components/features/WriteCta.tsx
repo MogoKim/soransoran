@@ -1,5 +1,4 @@
 import Link from 'next/link'
-import { loginHref } from '@/lib/callback-url'
 
 /**
  * 상세 하단 다음 액션 — 읽은 사람이 쓰는 사람이 되게 한다.
@@ -9,24 +8,16 @@ import { loginHref } from '@/lib/callback-url'
  *    '로그인' 을 앞세우지 않고 글쓰기로 말한다 — 같은 화면에 로그인 유도가
  *    두 번 있는 것처럼 읽히면 둘 다 힘을 잃는다.
  *
- * 🔴 목적지만 분기하고 버튼 문구는 같다.
- *    비로그인에게 다른 라벨을 주면 "나는 못 쓰는 사람" 으로 먼저 읽힌다.
- *    대신 눌렀을 때 로그인 화면이 나오는 것을 보조 문구로 미리 알린다.
- *
- * 로그인 여부는 서버에서 판정해 넘긴다 — 클라이언트 세션 훅을 쓰지 않는
- * 현재 구조(HeaderAuth) 와 같다. 비로그인 화면에는 HTML 자체가 다르게 나간다.
+ * 🔴 로그인 여부로 갈리지 않는다. 목적지도 문구도 모두에게 같다.
+ *    /write 가 비회원에게도 폼을 열게 되면서, 여기서 로그인 화면을 먼저 끼우면
+ *    같은 서비스 안에 "바로 쓰는 입구(FAB)" 와 "로그인부터 하는 입구(여기)" 가
+ *    함께 있게 된다. 어느 쪽이 진짜인지는 눌러 봐야 알 수 있고,
+ *    눌러 보고 로그인 화면을 만난 사람은 두 번 누르지 않는다.
+ *    로그인을 요청하는 자리는 글을 다 쓰고 등록을 누른 시점 하나다.
  */
-export default function WriteCta({
-  boardSlug,
-  isLoggedIn,
-}: {
-  boardSlug: string
-  isLoggedIn: boolean
-}) {
+export default function WriteCta({ boardSlug }: { boardSlug: string }) {
   // FAB · U1 과 같은 규약이다. 여기서 형식을 새로 만들지 않는다.
   const writePath = `/write?board=${boardSlug}`
-  // 비로그인은 로그인 뒤 이 글쓰기 화면으로 돌아온다 (callbackUrl 은 loginHref 가 거른다)
-  const href = isLoggedIn ? writePath : loginHref(writePath)
 
   return (
     /* 🔴 바탕이 중립이 된 뒤로 bg-surface-page 는 이 블록을 보이지 않게 만든다
@@ -35,14 +26,8 @@ export default function WriteCta({
     <section className="mt-10 rounded-lg border border-subtle bg-surface-card px-5 py-6 text-center">
       <p className="m-0 font-bold text-content-primary">당신의 이야기도 궁금합니다</p>
 
-      {isLoggedIn ? null : (
-        <p className="m-0 mt-1 text-sm text-content-muted">
-          카카오로 시작하면 바로 쓸 수 있어요
-        </p>
-      )}
-
       <Link
-        href={href}
+        href={writePath}
         className="mt-4 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
       >
         이야기 남기기

@@ -18,6 +18,7 @@ import {
   IMAGE_TYPE_NOT_ALLOWED,
   IMAGE_TOO_MANY,
   IMAGE_UPLOAD_FAILED,
+  IMAGE_NEEDS_LOGIN,
   YOUTUBE_URL,
   YOUTUBE_INVALID,
 } from '@/lib/post-media-policy'
@@ -89,6 +90,7 @@ export default function PostEditor({
   onTextChange,
   onBusyChange,
   placeholder,
+  canUploadImage = true,
 }: {
   /** 본문 HTML. 처음 한 번만 에디터에 넣는다. */
   value: string
@@ -105,6 +107,16 @@ export default function PostEditor({
    */
   onBusyChange?: (busy: boolean) => void
   placeholder: string
+  /**
+   * 사진을 올릴 수 있는 사람인가.
+   *
+   * 🔴 기본값은 true 다. 글 고치기(PostEditForm)는 이미 로그인한 사람만 들어오므로
+   *    넘기지 않아도 지금까지와 똑같이 동작한다 — 회귀를 만들지 않으려고 optional 로 둔다.
+   *
+   * 🔴 버튼을 감추지 않고 눌렀을 때 말해 준다. 감추면 "이 서비스는 사진을 못 넣는구나"
+   *    로 읽히고, 로그인하면 되는 일이라는 것을 알 길이 없다.
+   */
+  canUploadImage?: boolean
 }) {
   const [uploading, setUploading] = useState<Upload | null>(null)
   const [error, setError] = useState('')
@@ -253,6 +265,13 @@ export default function PostEditor({
       event.target.value = ''
       if (files.length === 0 || !editor) return
 
+      // 버튼에서 이미 막지만 여기서도 본다 — 올리는 길은 하나여야 하고,
+      // 그 하나가 어떤 경로로 불려도 같은 답을 내야 한다.
+      if (!canUploadImage) {
+        setError(IMAGE_NEEDS_LOGIN)
+        return
+      }
+
       setError('')
 
       if (countImages(editor) + files.length > MAX_IMAGE_COUNT) {
@@ -304,7 +323,7 @@ export default function PostEditor({
         }
       }
     },
-    [editor, onChange],
+    [editor, onChange, canUploadImage],
   )
 
   const insertYoutube = useCallback(() => {
@@ -361,7 +380,16 @@ export default function PostEditor({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => { setError(''); fileRef.current?.click() }}
+            onClick={() => {
+              // 🔴 고르는 창을 열기 전에 막는다. 열어 두고 서버 401 로 되돌리면
+              //    본문에 미리보기가 들어갔다 사라지는 것을 한 번 보게 된다(handleFiles).
+              if (!canUploadImage) {
+                setError(IMAGE_NEEDS_LOGIN)
+                return
+              }
+              setError('')
+              fileRef.current?.click()
+            }}
             disabled={busy}
             className="inline-flex min-h-[52px] items-center gap-1.5 rounded-xl bg-surface-page px-3 text-sm text-content-primary disabled:opacity-40"
           >
