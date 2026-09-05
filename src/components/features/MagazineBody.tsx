@@ -1,4 +1,5 @@
 import Image from 'next/image'
+import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
 import type { MagazineArticle, MagazineBlock } from '@/content/magazine/types'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
@@ -54,7 +55,7 @@ function Block({ block, articleSlug }: { block: MagazineBlock; articleSlug: stri
           {block.text ? <p className={TEXT_CLASS}>{block.text}</p> : null}
           <Link
             href={ctaHref(articleSlug, block.href)}
-            className="mt-3 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
+            className={`mt-3 inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95`}
           >
             {block.label}
           </Link>

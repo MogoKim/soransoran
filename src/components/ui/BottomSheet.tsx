@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 
 /**
  * 아래에서 올라오는 시트. 넓은 화면에서는 가운데 모달이 된다.
@@ -69,7 +70,7 @@ export default function BottomSheet({
         <button
           type="button"
           onClick={onClose}
-          className="mt-2 min-h-[52px] w-full rounded-lg text-sm text-content-muted transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          className={`mt-2 ${TOUCH_MIN} w-full rounded-lg text-sm text-content-muted transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
         >
           닫기
         </button>

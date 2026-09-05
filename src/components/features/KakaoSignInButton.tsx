@@ -1,6 +1,7 @@
 'use client'
 
 import { signIn } from 'next-auth/react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { onboardingHref } from '@/lib/callback-url'
 
 /**
@@ -28,7 +29,7 @@ import { onboardingHref } from '@/lib/callback-url'
 type Variant = 'default' | 'onboarding'
 
 const SHAPE: Record<Variant, string> = {
-  default: 'min-h-[52px] max-w-xs rounded-lg px-6',
+  default: `${TOUCH_MIN} max-w-xs rounded-lg px-6`,
   onboarding: 'min-h-[60px] rounded-xl px-4 py-2 shadow-kakao',
 }
 

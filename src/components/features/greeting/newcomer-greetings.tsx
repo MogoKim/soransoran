@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import type { NewcomerGreeting } from '@/lib/queries/greeting'
 
 /**
@@ -51,7 +52,7 @@ export default function NewcomerGreetings({ greetings }: { greetings: NewcomerGr
           <li key={g.id}>
             <Link
               href={g.href}
-              className="group block min-h-[52px] rounded-lg py-3.5 no-underline"
+              className={`group block ${TOUCH_MIN} rounded-lg py-3.5 no-underline`}
             >
               {/**
                * 🔴 이름과 "님이 인사를 남겼어요" 를 나란히 두되 접히게 한다.

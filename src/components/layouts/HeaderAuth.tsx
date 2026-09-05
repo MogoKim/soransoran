@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { auth } from '@/lib/auth'
 import { requireAdmin } from '@/lib/admin'
 
@@ -27,7 +28,7 @@ export default async function HeaderAuth() {
     return (
       <Link
         href="/login"
-        className="inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-4 text-sm font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+        className={`inline-flex ${TOUCH_MIN} items-center rounded-lg border border-interactive px-4 text-sm font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
       >
         로그인
       </Link>
@@ -41,7 +42,7 @@ export default async function HeaderAuth() {
       {isAdmin ? (
         <Link
           href="/admin/reports"
-          className="inline-flex min-h-[52px] items-center rounded-lg px-3 text-sm font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          className={`inline-flex ${TOUCH_MIN} items-center rounded-lg px-3 text-sm font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
         >
           신고 확인
         </Link>
@@ -49,7 +50,7 @@ export default async function HeaderAuth() {
       <Link
         href="/my"
         aria-label="내 정보"
-        className="inline-flex min-h-[52px] min-w-[52px] items-center justify-center rounded-lg text-content-primary no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+        className={`inline-flex ${TOUCH_MIN} min-w-[52px] items-center justify-center rounded-lg text-content-primary no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
       >
         <svg
           aria-hidden

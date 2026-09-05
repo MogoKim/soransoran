@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 
 /**
  * empty state
@@ -34,7 +35,7 @@ export default function EmptyState({ title, body, ctaLabel, ctaHref, action }: E
       {ctaLabel && ctaHref ? (
         <Link
           href={ctaHref}
-          className="mt-3 inline-flex min-h-[52px] items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
+          className={`mt-3 inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95`}
         >
           {ctaLabel}
         </Link>

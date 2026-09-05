@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useFormStatus } from 'react-dom'
 import { useWriteViewportTop } from '@/components/features/use-write-viewport'
 import { cn } from '@/lib/utils'
@@ -48,7 +49,7 @@ export default function WriteTopBar({
     >
       <Link
         href={cancelHref}
-        className="inline-flex min-h-[52px] min-w-[52px] items-center px-2 text-content-muted no-underline"
+        className={`inline-flex ${TOUCH_MIN} min-w-[52px] items-center px-2 text-content-muted no-underline`}
       >
         취소
       </Link>
@@ -60,7 +61,7 @@ export default function WriteTopBar({
       <button
         type="submit"
         disabled={!ready}
-        className="inline-flex min-h-[52px] min-w-[52px] items-center justify-end px-2"
+        className={`inline-flex ${TOUCH_MIN} min-w-[52px] items-center justify-end px-2`}
       >
         <span
           className={cn(

@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import PageShell from '@/components/layouts/PageShell'
 import PostListItem from '@/components/features/PostListItem'
 import HomeMagazineRail from '@/components/features/HomeMagazineRail'
@@ -74,7 +75,7 @@ function SectionHeading({
       {moreHref ? (
         <Link
           href={moreHref}
-          className="inline-flex min-h-[52px] shrink-0 items-center text-sm font-medium text-link"
+          className={`inline-flex ${TOUCH_MIN} shrink-0 items-center text-sm font-medium text-link`}
         >
           더보기 →
         </Link>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useFormState } from 'react-dom'
 import PostEditor from '@/components/features/PostEditor'
 import WriteFooter, { WriteFooterSpacer } from '@/components/features/WriteFooter'
@@ -261,7 +262,7 @@ export default function PostForm({
           <button
             type="button"
             onClick={handleReset}
-            className="inline-flex min-h-[52px] items-center px-2 text-sm text-content-muted underline"
+            className={`inline-flex ${TOUCH_MIN} items-center px-2 text-sm text-content-muted underline`}
           >
             새로 쓰기
           </button>
@@ -283,7 +284,7 @@ export default function PostForm({
               applyDraft(otherDraft)
               setOtherDraft(null)
             }}
-            className="inline-flex min-h-[52px] shrink-0 items-center px-2 text-sm font-bold text-content-primary underline"
+            className={`inline-flex ${TOUCH_MIN} shrink-0 items-center px-2 text-sm font-bold text-content-primary underline`}
           >
             이어서 쓰기
           </button>
@@ -291,7 +292,7 @@ export default function PostForm({
             type="button"
             aria-label="안내 닫기"
             onClick={() => setOtherDraft(null)}
-            className="inline-flex min-h-[52px] min-w-[52px] shrink-0 items-center justify-center text-sm text-content-muted"
+            className={`inline-flex ${TOUCH_MIN} min-w-[52px] shrink-0 items-center justify-center text-sm text-content-muted`}
           >
             ✕
           </button>

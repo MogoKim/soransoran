@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
@@ -86,7 +87,7 @@ export default async function BoardPage({
                   /* 밑줄은 border-b-2 로 항상 자리를 차지한다. 비활성일 때 투명하게 두면
                      고를 때마다 글자가 위아래로 흔들리지 않는다.
                      brand 는 글자로는 대비가 모자라 밑줄로만 쓴다 (globals.css §브랜드). */
-                  className={`inline-flex min-h-[52px] shrink-0 items-center whitespace-nowrap border-b-2 px-3 text-sm no-underline transition-colors duration-150 ${
+                  className={`inline-flex ${TOUCH_MIN} shrink-0 items-center whitespace-nowrap border-b-2 px-3 text-sm no-underline transition-colors duration-150 ${
                     active
                       ? 'border-brand font-bold text-content-primary'
                       : 'border-transparent text-content-muted hover:text-content-primary'

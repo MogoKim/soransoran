@@ -1,5 +1,7 @@
 'use client'
 
+import { TOUCH_MIN } from '@/lib/spacing'
+
 const LABEL = '댓글을 남겨주세요'
 
 /**
@@ -16,7 +18,7 @@ export default function CommentDock({ onOpen }: { onOpen: () => void }) {
         onClick={onOpen}
         aria-label={LABEL}
         /* 🔴 코랄을 쓰지 않는다. 상시 떠 있는 하단 띠에 브랜드색을 얹으면 가입 배너로 읽힌다. */
-        className="flex min-h-[52px] w-full items-center gap-3 rounded-lg border border-interactive bg-surface-page px-4 text-left text-sm text-content-muted transition duration-150 active:scale-[0.99]"
+        className={`flex ${TOUCH_MIN} w-full items-center gap-3 rounded-lg border border-interactive bg-surface-page px-4 text-left text-sm text-content-muted transition duration-150 active:scale-[0.99]`}
       >
         <svg
           width="20"

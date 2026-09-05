@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { TOUCH_MIN } from '@/lib/spacing'
 import PageShell from '@/components/layouts/PageShell'
 import { requireMyUserId, BackToMy } from '@/components/features/my/shell'
 
@@ -35,7 +36,7 @@ export default async function WithdrawalPage() {
 
         <a
           href={`mailto:${CONTACT}`}
-          className="mt-6 inline-flex min-h-[52px] items-center rounded-lg border border-interactive px-4 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          className={`mt-6 inline-flex ${TOUCH_MIN} items-center rounded-lg border border-interactive px-4 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
         >
           문의로 탈퇴 요청하기
         </a>

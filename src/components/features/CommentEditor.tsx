@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
@@ -72,7 +73,7 @@ export default function CommentEditor({
           <button
             type="button"
             onClick={() => setEditing(true)}
-            className="inline-flex min-h-[52px] items-center px-3 text-sm text-content-muted underline"
+            className={`inline-flex ${TOUCH_MIN} items-center px-3 text-sm text-content-muted underline`}
           >
             수정
           </button>
@@ -115,7 +116,7 @@ export default function CommentEditor({
             setContent(initialContent)
             setEditing(false)
           }}
-          className="inline-flex min-h-[52px] items-center px-4 text-content-muted"
+          className={`inline-flex ${TOUCH_MIN} items-center px-4 text-content-muted`}
         >
           그만두기
         </button>

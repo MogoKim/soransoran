@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { useFormState, useFormStatus } from 'react-dom'
 import { submitGreeting, type GreetingActionState } from '@/lib/actions/greeting'
 import {
@@ -25,7 +26,7 @@ function SubmitButton({ enabled }: { enabled: boolean }) {
       type="submit"
       disabled={disabled}
       className={cn(
-        'mt-3 min-h-[52px] w-full rounded-xl bg-cta px-5 font-bold text-cta-text transition duration-150',
+        `mt-3 ${TOUCH_MIN} w-full rounded-xl bg-cta px-5 font-bold text-cta-text transition duration-150`,
         'enabled:hover:brightness-95 enabled:active:scale-95 disabled:opacity-60',
       )}
     >

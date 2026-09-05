@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import { SITE } from '@/lib/brand'
 import FontSizeToggle from '@/components/layouts/FontSizeToggle'
 import { cn } from '@/lib/utils'
@@ -41,7 +42,7 @@ export default function Footer({ avoidFloatingAction = false }: { avoidFloatingA
             <Link
               key={link.href}
               href={link.href}
-              className={`inline-flex min-h-[52px] items-center text-sm text-content-muted no-underline ${
+              className={`inline-flex ${TOUCH_MIN} items-center text-sm text-content-muted no-underline ${
                 link.emphasis ? 'font-bold' : ''
               }`}
             >

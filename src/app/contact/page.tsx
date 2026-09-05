@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
 
@@ -31,7 +32,7 @@ export default function ContactPage() {
 
         <a
           href={`mailto:${CONTACT}`}
-          className="mt-3 inline-flex min-h-[52px] items-center break-all text-link underline underline-offset-2"
+          className={`mt-3 inline-flex ${TOUCH_MIN} items-center break-all text-link underline underline-offset-2`}
         >
           {CONTACT}
         </a>

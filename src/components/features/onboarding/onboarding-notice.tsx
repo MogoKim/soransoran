@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 
 /**
  * 가입을 마쳐야 쓸 수 있다는 안내와 그리로 가는 길.
@@ -35,7 +36,7 @@ export default function OnboardingNotice({
             서버가 toInternalPath 로 다시 본다. */}
       <Link
         href={`/onboarding?callbackUrl=${encodeURIComponent(callbackUrl)}`}
-        className="mt-3 inline-flex min-h-[52px] w-full items-center justify-center rounded-lg bg-cta px-5 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95"
+        className={`mt-3 inline-flex ${TOUCH_MIN} w-full items-center justify-center rounded-lg bg-cta px-5 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95`}
       >
         가입 마저 하기
       </Link>
