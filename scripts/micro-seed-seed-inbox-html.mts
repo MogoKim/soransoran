@@ -185,6 +185,7 @@ footer{padding:16px;max-width:920px;margin:0 auto}
 🔴 판정은 CLI 와 <b>같은 verdictOf()</b> 가 낸다. 이 화면은 판정 로직을 갖지 않는다.<br>
 🔴 저장은 이 브라우저 <b>localStorage</b> 까지다. 결과는 TSV 로 직접 가져간다.<br>
 🔴 여기는 <b>triage</b> 다 — 최종 채택이 아니다. Raw Vault 확정은 DETAIL 이후에만 가능하다.<br>
+🟡 <b>safety</b> 는 안전·브랜드 필터 결과를 <b>표시만</b> 한 것이다 — 추천값·버튼을 바꾸지 않는다.<br>
 🟢 추천 기준은 <b>창업자 승인 v1</b> 이다 (§4-O). 승인된 것은 <b>추천 기준</b>이지 자동화가 아니다 — 버튼은 사람이 누른다.<br>
 🟡 <b>추천값으로 전체 선택</b> = 47건을 <b>추천값으로 초기화</b>한다. 🔴 <b>사람이 바꾼 값도 덮어쓴다</b> — 바로 뒤 <b>되돌리기</b> 한 번으로 복구된다.
 </div>
@@ -272,6 +273,7 @@ function render(){
       '<div class="why">why ' + esc(c.why) + '</div>' +
       '<div class="why">signal ' + esc(c.signal) + '</div>' +
       '<div class="why">추천 이유 ' + esc(c.verdictReason) + '</div>' +
+      '<div class="why">safety <b>' + esc(c.safetyVerdict) + '</b> · ' + esc(c.safetySummary) + ' — 🔴 표시만</div>' +
       '<div class="acts"></div>' +
       '<div class="state"></div>' +
       '<textarea class="memo" placeholder="메모 (선택)"></textarea>';

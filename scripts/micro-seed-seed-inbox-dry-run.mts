@@ -32,6 +32,8 @@ import {
   type ScoredRow, type Lane,
 } from './lib/micro-seed-scout-score.mjs'
 import { loadScoutRows, SCOUT_DATA_DIR } from './lib/micro-seed-scout-load.mjs'
+// 🔴 **read-only 표시용이다.** 후보를 걸러내거나 추천값을 바꾸지 않는다.
+import { safetyFilter, isVolatile, type SafetyResult } from './lib/micro-seed-safety-filter.mjs'
 
 /**
  * 🔴 **Seed Inbox 대상은 이 세 레인뿐이다** (§4-L).
@@ -185,6 +187,10 @@ export function verdictOf(s: Pick<ScoredRow, 'row' | 'laneHint' | 'watch' | 'sco
  *    화면은 이것을 import 해서 쓴다 — 반대 방향(html → 여기)은 순환이라 만들지 않는다.
  */
 export type ReviewCard = {
+  /** 🔴 read-only 표시용. 추천값·레인·점수에 영향을 주지 않는다 */
+  safetyVerdict: string
+  safetyReasons: string
+  safetySummary: string
   rank: number
   articleId: string
   score: number
@@ -214,7 +220,12 @@ export function toCards(seed: readonly ScoredRow[]): ReviewCard[] {
   return seed.map((s, i) => {
     const r = s.row
     const v = verdictOf(s)
+    // 🔴 safety 는 **표시만** 한다. verdict(v)를 바꾸지 않는다.
+    const sf = safetyOf(s)
     return {
+      safetyVerdict: sf.verdict,
+      safetyReasons: sf.reasons.map((x) => x.code).join('/'),
+      safetySummary: sf.summary,
       rank: i + 1,
       articleId: r.sourceArticleId,
       score: Number(s.score.total.toFixed(1)),
@@ -249,6 +260,8 @@ export const TSV_COLUMNS: readonly string[] = [
   'verdict', 'lane', 'score', 'sourceSite', 'sourceBoardKey', 'sourceBoardName',
   'sourceArticleId', 'page', 'rank', 'commentCount', 'viewCount', 'lagMinutes',
   'watch', 'title', 'why', 'signal', 'note',
+  // 🔴 **뒤에만 덧붙인다.** 앞 17개의 위치가 바뀌면 이미 회수한 표와 못 붙는다 (§4-P)
+  'safetyVerdict', 'safetyReasons',
 ] as const
 
 /** 🟢 창업자가 v1 추천값을 그대로 받아들인 행 (§4-O) */
@@ -276,12 +289,35 @@ export function tsvLine(c: ReviewCard, myVerdict = '', note = ''): string {
     v, c.lane, c.score, c.sourceSite, c.boardKey, c.boardName, c.articleId,
     c.page, c.rank_, c.comments, c.views, c.lag, c.watch ? 'watch' : '',
     c.title, c.why, c.signal, n,
+    c.safetyVerdict, c.safetyReasons,
   ].map(tsvCell).join('\t')
 }
 
 /** 🔴 추천값 그대로의 검수 결과. **파일을 쓰지 않는다** — 호출자가 stdout 으로 보낸다 */
 export function recommendedTsv(cards: readonly ReviewCard[]): string {
   return [TSV_COLUMNS.join('\t'), ...cards.map((c) => tsvLine(c))].join('\n')
+}
+
+/**
+ * 🔴 **안전·브랜드 필터를 read-only 로 붙인다** (PR-S2-b-33).
+ *    §4-X ⑦ · §4-Y ⑤ 가 요구한 게이트가 실제 후보에 어떻게 걸리는지 **보기만** 한다.
+ *
+ * 🔴 이 함수는 후보를 제외하지 않고 추천값(verdictOf)도 바꾸지 않는다.
+ *    필터가 너무 세거나 약한지 눈으로 확인하는 것이 목적이다.
+ *
+ * 🟡 목록 단계라 **본문이 없다.** 그래서 제목·메타만 준다 —
+ *    본문 기반 사유(이미지 의존 본문·의료 단정 본문)는 여기서 안 잡힐 수 있다.
+ */
+export function safetyOf(s: ScoredRow): SafetyResult {
+  const r = s.row
+  return safetyFilter({
+    title: r.originalTitle,
+    // 🔴 게시판명은 **행 라벨이 아니다.** 넘기지 않는다 —
+    //    '공지' 같은 이름의 게시판이 있으면 그 게시판 전체가 hardExclude 된다.
+    //    고정 슬롯 판정은 수집 시 sourceExcludeReason='pinned' 로 이미 내려져 있다.
+    sourceExcludeReason: r.sourceExcludeReason ?? null,
+    qualityFlags: r.qualityFlags ?? [],
+  })
 }
 
 const ALL_LANES: readonly Lane[] = [
@@ -361,6 +397,8 @@ function line(s: ScoredRow, i: number): void {
   console.log(`       추천   ${VERDICT_LABEL[v.verdict]} — ${v.reason}`)
   console.log(`       why    ${s.why}`)
   console.log(`       signal ${s.laneHint.signals.length ? s.laneHint.signals.join(' · ') : '-'} → ${s.laneHint.reason}`)
+  const sf = safetyOf(s)
+  console.log(`       safety ${sf.summary}${isVolatile(sf) ? '  🟡volatile' : ''}   🔴 표시만 — 추천값을 바꾸지 않는다`)
   // 🔴 seed 배열은 Seed Inbox 후보에서만 나온다 — 제외·보류 제목은 구조적으로 도달할 수 없다
   if (SHOW_TITLE) console.log(`       제목   ${clampTitle(r.originalTitle)}`)
 }
@@ -474,6 +512,27 @@ function main(): void {
     if (list.length === 0) { console.log('      (없음)'); continue }
     list.forEach((s, i) => line(s, i + 1))
   }
+
+  // ── ⑥ safety 분포 — 🔴 read-only. 후보를 걸러내지 않았다 ──
+  console.log('\n⑥ 안전·브랜드 필터 분포 — 🔴 표시만 한다. 후보를 걸러내지 않았다')
+  const sfAll = seed.map((x) => safetyOf(x))
+  const sfCount = (v: string): number => sfAll.filter((x) => x.verdict === v).length
+  for (const v of ['pass', 'hold', 'drop', 'access', 'hardExclude']) {
+    console.log(`      ${pad(v, 12)} ${pad(sfCount(v), 4)}건`)
+  }
+  console.log(`      ${pad('volatile', 12)} ${pad(sfAll.filter(isVolatile).length, 4)}건  🟡 사유일 뿐 — Drop 이 아니다`)
+  const byCode = new Map<string, number>()
+  for (const x of sfAll) for (const r of x.reasons) byCode.set(r.code, (byCode.get(r.code) ?? 0) + 1)
+  if (byCode.size > 0) {
+    console.log('      사유별:')
+    for (const [k, n] of [...byCode].sort((a, b) => b[1] - a[1])) console.log(`        ${pad(k, 18)} ${n}`)
+  }
+  for (const n of [10, 20, 30]) {
+    const t = seed.slice(0, n).map((x) => safetyOf(x))
+    const c = (v: string): number => t.filter((x) => x.verdict === v).length
+    console.log(`      상위 ${pad(n, 2)}  pass ${c('pass')} · hold ${c('hold')} · drop ${c('drop')} · access ${c('access')} · hardExclude ${c('hardExclude')}`)
+  }
+  console.log('      🔴 이 결과로 후보를 제외하거나 추천값을 바꾸지 않았다.')
 
   // ── ⑥ 이 리포트가 정하지 않은 것 ──
   console.log('\n⑥ 이 리포트가 정하지 않은 것')
