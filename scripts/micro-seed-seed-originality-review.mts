@@ -227,7 +227,10 @@ var filter = 'ALL';
 function esc(s){ var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 
 // 🔴 export 계약 — lib.reviewRows 와 같은 규칙이다. 누른 것만, 컬럼 순서 그대로.
-function rows(){
+// 🔴 reviewedAt 은 **이 export 를 만든 시각**이다. 한 파일 안의 모든 행이 같은 값을 쓴다.
+//    초안을 만든 시각(generatedAt)과 다르다 — 둘 사이가 검수에 걸린 시간이다.
+function rows(at){
+  at = at || new Date().toISOString();
   var out = [];
   GROUPS.forEach(function(g){
     g.drafts.forEach(function(d){
@@ -241,16 +244,18 @@ function rows(){
         maxOverlap: d.maxOverlap, leakedTokens: d.leakedTokens.join('/'),
         clean: d.clean ? 'clean' : 'check',
         recommended: d.recommended ? 'recommended' : '',
-        memo: st.memo || '', note: NOTE
+        memo: st.memo || '', note: NOTE,
+        // 🔴 §4-AC ③ — 행 하나만 떼어 봐도 출처와 두 시각을 알 수 있어야 한다
+        sourceSite: g.sourceSite, generatedAt: d.generatedAt, reviewedAt: at
       });
     });
   });
   return out;
 }
 
-function tsv(){
+function tsv(at){
   var lines = [COLS.join('\\t')];
-  rows().forEach(function(r){ lines.push(COLS.map(function(k){ return cell(r[k]); }).join('\\t')); });
+  rows(at).forEach(function(r){ lines.push(COLS.map(function(k){ return cell(r[k]); }).join('\\t')); });
   return lines.join('\\n');
 }
 
@@ -263,9 +268,11 @@ function overAdopted(){
 }
 
 function refresh(){
-  var rs = rows();
-  outEl.value = tsv();
-  outJsonEl.value = JSON.stringify({ note: NOTE, generatedAt: META.generatedAt, source: META.source, decisions: rs }, null, 2);
+  // 🔴 TSV 와 JSON 이 같은 시각을 써야 한다 — 따로 부르면 몇 밀리초 어긋난다
+  var at = new Date().toISOString();
+  var rs = rows(at);
+  outEl.value = tsv(at);
+  outJsonEl.value = JSON.stringify({ note: NOTE, reviewedAt: at, source: META.source, decisions: rs }, null, 2);
   var total = GROUPS.reduce(function(a, g){ return a + g.drafts.length; }, 0);
   document.getElementById('prog').textContent = '검수 ' + rs.length + ' / ' + total;
   var over = overAdopted();
@@ -301,7 +308,8 @@ function render(){
     gel.className = 'group';
     gel.setAttribute('data-src', g.sourceArticleId);
     gel.innerHTML =
-      '<div class="src">원천 ' + esc(g.sourceArticleId) + ' · ' + esc(g.topicLabel) + '</div>' +
+      '<div class="src">원천 ' + esc(g.sourceArticleId) +
+      (g.sourceSite ? ' · ' + esc(g.sourceSite) : '') + ' · ' + esc(g.topicLabel) + '</div>' +
       '<div class="ghead">' +
       '<b>소재</b> ' + esc(g.material) + (g.matched && g.matched !== g.material ? ' &larr; 원문 "' + esc(g.matched) + '"' : '') + '<br>' +
       '<b>일반화</b> ' + esc(g.generalized) + '<br>' +
@@ -407,7 +415,8 @@ document.getElementById('copy').addEventListener('click', function(){
   try { document.execCommand('copy'); } catch (e) { /* 무시 */ }
 });
 document.getElementById('dl').addEventListener('click', function(){
-  download('seed-originality-review.tsv', tsv(), 'text/tab-separated-values');
+  // 🔴 화면에 보이는 값 그대로 내려받는다 — 다시 계산하면 시각이 달라진다
+  download('seed-originality-review.tsv', outEl.value, 'text/tab-separated-values');
 });
 document.getElementById('dljson').addEventListener('click', function(){
   download('seed-originality-review.json', outJsonEl.value, 'application/json');
