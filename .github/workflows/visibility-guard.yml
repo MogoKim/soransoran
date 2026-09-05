@@ -117,6 +117,21 @@ jobs:
       - name: Micro Seed 승인 레일 (approve-live · 단일 후보)
         run: npm run micro-seed:approve-check
 
+      # SRN 승인 화면의 계약.
+      #
+      # 🔴 이 화면은 사람이 "원문 그대로 내보내겠다" 고 누르는 곳이다.
+      #    그래서 막아야 할 회귀가 전부 **조용한** 종류다:
+      #      · 다른 축(Seed·Raw·Hold·Drop·Access)이 섞여 들어오는 것 —
+      #        화면은 멀쩡히 뜨고, 사람이 누르는 대상만 바뀐다.
+      #      · 자격 길이가 title+body 로 슬쩍 바뀌는 것 — §4-Y ④ 는 body 기준이다.
+      #        제목은 운영자가 바꿀 수 있어서, 기준에 넣으면 기준이 기준이 아니게 된다.
+      #      · 누르지 않은 후보가 기본값으로 승인되어 export 되는 것 —
+      #        그러면 "승인" 이 사람의 행위가 아니게 된다.
+      #
+      # 네트워크 · DB · Sheet 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed SRN 승인 화면 (축 제한 · body 기준 · 사람 승인)
+        run: npm run micro-seed:srn-check
+
       # 우나어 legacy read-only 커넥터의 계약.
       #
       # 🔴 우나어는 우리 **운영 DB** 다. 커넥터가 write SQL 을 만들 수 있으면
