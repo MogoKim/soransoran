@@ -1,0 +1,459 @@
+/**
+ * Seed Originality 초안 생성 — 🔴 **순수 로직. I/O 도 LLM 도 없다**
+ *
+ * 정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-U · §4-X · §4-AA
+ *
+ * 🔴 **LLM 을 부르지 않는다. 그래서 이렇게 만든다.**
+ *    ① 원문 제목·memo 에서 **소재(무엇을 묻는 글인가)** 를 찾는다 — 키워드 사전.
+ *    ② 그 키워드를 **일반화된 소재어**로 바꾼다 (리조트·호텔·펜션 → "숙소").
+ *    ③ 소재어를 템플릿에 끼워 **커뮤니티 질문·공감형** 초안을 만든다.
+ *    분류하지 못하면 **초안을 만들지 않는다** — 그럴듯한 문장을 지어내지 않는다.
+ *
+ * 🔴 **원문 문장을 쓰지 않는다 — 계약으로 강제한다.**
+ *    제목의 낱말은 두 갈래다.
+ *      · **소재 낱말**: 사전에 걸린 것. 초안에 써도 된다(그게 소재니까).
+ *      · **나머지 낱말**: 지역명·브랜드명·학년 표현·사람 이름 등. **초안에 나오면 안 된다.**
+ *    후자를 하나하나 분류하려 들지 않는다 — 분류가 틀리면 새어 나간다.
+ *    "소재로 인정된 것 말고는 전부 버린다" 가 더 좁고 확실하다.
+ *
+ * 🔴 **DB · Sheet · LLM · 발행 · noindex · Raw Vault · 네이버 · 82cook 없음.**
+ */
+import { safetyFilter, type SafetyResult } from './micro-seed-safety-filter.mjs'
+
+/** 🔴 브랜드 규칙 — 이 낱말들은 어디에도 쓰지 않는다 */
+export const BANNED_HONORIFICS: readonly string[] = ['시니어', '어르신', '노인', '실버'] as const
+
+/** 🔴 원문 제목과 이만큼 연속으로 겹치면 '소재만 가져왔다' 가 아니다 */
+export const MAX_SOURCE_OVERLAP = 6
+
+export type TopicKey =
+  | 'travelFood' | 'travelStay' | 'household' | 'family' | 'moneyLater' | 'bodyHealth' | 'mindTies'
+
+export const TOPIC_LABEL: Record<TopicKey, string> = {
+  travelFood: '여행 · 먹거리',
+  travelStay: '여행 · 숙소',
+  household: '살림 · 주방',
+  family: '가족 · 자녀 · 손주',
+  moneyLater: '돈 · 노후',
+  bodyHealth: '몸 · 건강',
+  mindTies: '관계 · 마음',
+}
+
+/**
+ * 소재 사전 — 🔴 **매치된 낱말이 아니라 `material`(일반화된 말) 을 초안에 쓴다.**
+ *    "핀일로 후라이팬" 이 걸려도 초안에 들어가는 것은 `후라이팬` 이다.
+ *    브랜드 일반화가 별도 단계가 아니라 **사전 구조 자체**로 이뤄진다.
+ */
+type Rule = { re: RegExp; material: string; topic: TopicKey }
+
+export const TOPIC_RULES: readonly Rule[] = [
+  // 여행 · 먹거리 — 🔴 '맛집' 은 지역과 붙어 다니지만 지역은 소재가 아니다
+  { re: /맛집|먹을\s?곳|밥집|먹거리/, material: '맛집', topic: 'travelFood' },
+  // 여행 · 숙소 — 리조트·호텔·펜션은 전부 '숙소' 로 모은다
+  { re: /리조트|호텔|펜션|숙소|민박/, material: '숙소', topic: 'travelStay' },
+  // 살림 · 주방
+  { re: /후라이팬|프라이팬/, material: '후라이팬', topic: 'household' },
+  { re: /냄비|압력솥/, material: '냄비', topic: 'household' },
+  { re: /그릇|접시|밥그릇/, material: '그릇', topic: 'household' },
+  { re: /청소기|세탁기|건조기|식기세척기/, material: '가전', topic: 'household' },
+  // 가족
+  { re: /손주|손자|손녀/, material: '손주', topic: 'family' },
+  // 🔴 '가족' 자체도 잡는다 — material 이 '가족' 인데 그 낱말을 못 잡으면 사전에 구멍이 난다
+  //    (2026-09-05 fixture 가 잡아냈다: "가족 얘기" 가 분류되지 않았다)
+  { re: /사위|며느리|시어머니|친정|가족|자녀|딸|아들/, material: '가족', topic: 'family' },
+  // 돈 · 노후
+  { re: /연금|노후|생활비|용돈/, material: '노후 준비', topic: 'moneyLater' },
+  { re: /보험|적금|예금/, material: '목돈 관리', topic: 'moneyLater' },
+  // 몸 · 건강 — 🔴 제외하지 않는다. 단정하지 않을 뿐이다 (§4-J)
+  { re: /갱년기/, material: '갱년기', topic: 'bodyHealth' },
+  { re: /무릎|허리|어깨/, material: '관절', topic: 'bodyHealth' },
+  { re: /운동|걷기|산책/, material: '운동', topic: 'bodyHealth' },
+  { re: /잠|불면|수면/, material: '잠', topic: 'bodyHealth' },
+  // 관계 · 마음
+  { re: /친구|모임/, material: '친구', topic: 'mindTies' },
+  { re: /남편|부부/, material: '부부', topic: 'mindTies' },
+  // 여행 자체는 맨 뒤 — 위 소재가 더 구체적이면 그쪽을 쓴다
+  { re: /여행|나들이|휴가/, material: '여행', topic: 'travelFood' },
+]
+
+type Template = { title: (m: string) => string; body: (m: string) => string }
+
+/**
+ * 커뮤니티 질문 · 공감형 템플릿 — 🔴 정보글 · SEO글 · 뉴스글이 아니다.
+ *
+ *    셋 다 **답이 아니라 질문으로 끝난다.** 우리가 알려주는 글이 아니라
+ *    회원이 자기 얘기를 꺼내게 하는 글이라서다 (North Star: 주간 재방문 참여).
+ */
+export const TEMPLATES: Record<TopicKey, readonly Template[]> = {
+  travelFood: [
+    {
+      title: (m) => `여행 가면 ${m} 어떻게 고르세요?`,
+      body: (m) =>
+        '이번에 오랜만에 며칠 다녀오는데 갈 곳만 정해놓고 나머지는 아직이에요.\n' +
+        '검색하면 광고글이 반이라 뭘 믿어야 할지 모르겠더라고요.\n\n' +
+        `다들 낯선 동네 가면 ${m} 어떻게 고르세요?\n` +
+        '저는 그냥 사람 많은 데로 가는 편인데, 그게 제일 나은 건지 모르겠어요.',
+    },
+    {
+      title: () => '여행 가서 후회한 한 끼, 있으세요?',
+      body: () =>
+        '줄 서서 먹었는데 그냥 그랬던 적이 있어요.\n' +
+        '반대로 지나가다 아무 생각 없이 들어갔는데 아직 생각나는 데도 있고요.\n\n' +
+        '여행 가서 "여기서 이걸 먹지 말걸" 했던 적 있으세요?\n' +
+        '다음엔 안 그러려면 뭘 봐야 하는지 배우고 싶어서요.',
+    },
+    {
+      title: () => '여행 가면 꼭 챙기는 게 있나요?',
+      body: () =>
+        '저는 어디를 가든 그 동네 시장 한 번은 들러요.\n' +
+        '거창한 데보다 거기서 본 게 더 기억에 남더라고요.\n\n' +
+        '다들 여행 가면 이건 꼭 한다, 하는 게 있으세요?',
+    },
+  ],
+  travelStay: [
+    {
+      title: (m) => `아이랑 같이 갈 ${m}, 뭐 보고 고르세요?`,
+      body: (m) =>
+        '온 가족이 같이 움직이기로 했는데 거기서 막혔어요.\n' +
+        '어른만 가면 아무 데나 괜찮은데 아이가 끼니 볼 게 많아지더라고요.\n\n' +
+        `다들 아이나 손주랑 같이 갈 때 ${m}에서 뭘 제일 보세요?`,
+    },
+    {
+      title: (m) => `가족 여행 ${m}, 비싼 데가 정답일까요?`,
+      body: () =>
+        '다 같이 가는 거라 좋은 데로 하자니 사람 수가 있어서 부담이고,\n' +
+        '아끼자니 괜히 미안해지고 그래요.\n\n' +
+        '결국 비싼 데가 정답이던가요?\n' +
+        '돈 쓴 만큼 좋았다 싶었던 적 있으세요?',
+    },
+    {
+      title: () => '온 가족 여행에서 제일 어려운 게 뭐예요?',
+      body: () =>
+        '정하는 것부터 밥 먹는 시간까지, 사람이 많아지니 하나도 쉬운 게 없네요.\n' +
+        '그래도 다녀오면 또 가고 싶어지고요.\n\n' +
+        '다들 온 가족이 같이 움직일 때 제일 어려운 게 뭐예요?',
+    },
+  ],
+  household: [
+    {
+      title: (m) => `${m} 언제 바꾸세요?`,
+      body: (m) =>
+        '슬슬 낡은 것 같은데 아직 쓸 만해 보여서 계속 쓰고 있어요.\n' +
+        '바꿔야 하나 싶다가도 멀쩡한 걸 버리는 것 같아 손이 안 가네요.\n\n' +
+        `다들 ${m}은 언제 바꾸세요?\n` +
+        '몇 년 쓰면 바꾼다, 이런 기준이 있으신가요?',
+    },
+    {
+      title: () => '주방에서 제일 오래 쓴 물건이 뭐예요?',
+      body: () =>
+        '정리하다 보니 결혼할 때 산 게 아직도 있더라고요.\n' +
+        '새로 산 것들은 오히려 금방 안 쓰게 되고요.\n\n' +
+        '다들 주방에서 제일 오래 쓴 물건이 뭐예요?\n' +
+        '오래 쓰는 건 뭐가 다른지 궁금해서요.',
+    },
+    {
+      title: () => '살림 도구, 비싼 게 오래 가던가요?',
+      body: () =>
+        '싼 걸로 몇 번 바꾸느니 좋은 거 하나 사자 싶어 큰맘 먹고 산 적이 있어요.\n' +
+        '그런데 결국 손에 익은 낡은 걸 더 자주 쓰게 되더라고요.\n\n' +
+        '비싼 게 오래 가던가요, 아니면 손에 맞는 게 최고인가요?',
+    },
+  ],
+  family: [
+    {
+      title: (m) => `${m} 얘기, 어디까지 하세요?`,
+      body: () =>
+        '좋은 일도 속상한 일도 밖에서 말하기가 애매할 때가 있어요.\n' +
+        '자랑 같아 보일까 봐, 흉보는 것 같아 보일까 봐요.\n\n' +
+        '다들 이런 얘기 어디까지 하세요?',
+    },
+    {
+      title: () => '가족한테 서운했던 거, 말하는 편이세요?',
+      body: () =>
+        '말하면 분위기 나빠질까 봐 그냥 넘긴 적이 많아요.\n' +
+        '그런데 안 하고 넘긴 게 쌓이더라고요.\n\n' +
+        '다들 서운한 건 그때그때 말하는 편이세요?',
+    },
+    {
+      title: () => '요즘 가족이랑 뭘 같이 하세요?',
+      body: () =>
+        '예전엔 같이 하는 게 많았는데 요즘은 각자 바쁘네요.\n' +
+        '뭐라도 같이 하면 좋겠다 싶어서요.\n\n' +
+        '다들 요즘 가족이랑 뭘 같이 하세요?',
+    },
+  ],
+  moneyLater: [
+    {
+      title: (m) => `${m}, 언제부터 챙기셨어요?`,
+      body: () =>
+        '해야 한다는 건 아는데 자꾸 미루게 되더라고요.\n' +
+        '지금이라도 늦지 않았나 싶기도 하고요.\n\n' +
+        '다들 언제부터 챙기기 시작하셨어요?',
+    },
+    {
+      title: () => '한 달에 나가는 돈, 어떻게 관리하세요?',
+      body: () =>
+        '적어보면 줄겠지 싶어 시작했다가 며칠 만에 그만뒀어요.\n' +
+        '그래도 안 하니까 어디로 새는지를 모르겠고요.\n\n' +
+        '다들 어떻게 관리하세요?',
+    },
+    {
+      title: () => '돈 얘기, 가족끼리 하시나요?',
+      body: () =>
+        '해야 할 얘기인 건 아는데 꺼내기가 어색해요.\n' +
+        '괜히 분위기만 무거워질까 봐요.\n\n' +
+        '다들 가족끼리 돈 얘기 하시나요?',
+    },
+  ],
+  bodyHealth: [
+    {
+      title: (m) => `${m} 때문에 달라진 게 있으세요?`,
+      body: () =>
+        '전에는 아무렇지 않던 게 요즘은 신경 쓰이더라고요.\n' +
+        '나만 그런가 싶어서 여쭤봐요.\n\n' +
+        '다들 어떻게 지내세요?',
+    },
+    {
+      title: () => '몸이 예전 같지 않다고 느낀 순간이 언제였어요?',
+      body: () =>
+        '별것 아닌 일에서 문득 느낄 때가 있어요.\n' +
+        '서운하다기보다 그냥 그렇구나 싶고요.\n\n' +
+        '다들 언제 그런 걸 느끼세요?',
+    },
+    {
+      title: () => '요즘 몸 챙기려고 하는 거 있으세요?',
+      body: () =>
+        '거창한 건 못 하겠고 작은 거라도 해보려고요.\n' +
+        '오래 할 수 있는 게 뭘까 싶어서요.\n\n' +
+        '다들 요즘 뭘 하고 계세요?',
+    },
+  ],
+  mindTies: [
+    {
+      title: (m) => `${m} 사이, 요즘 어떠세요?`,
+      body: () =>
+        '나이 들수록 자주 보는 사람만 보게 되더라고요.\n' +
+        '연락 끊긴 사람도 늘고요.\n\n' +
+        '다들 요즘 어떠세요?',
+    },
+    {
+      title: () => '먼저 연락하는 편이세요?',
+      body: () =>
+        '늘 제가 먼저 하는 것 같아 괜히 서운할 때가 있어요.\n' +
+        '그렇다고 안 하면 그대로 멀어지고요.\n\n' +
+        '다들 먼저 연락하는 편이세요?',
+    },
+    {
+      title: () => '마음이 복잡할 때 누구한테 말하세요?',
+      body: () =>
+        '가족한테는 걱정할까 봐 못 하고, 친구한테는 부담될까 봐 못 하겠더라고요.\n' +
+        '그러다 그냥 넘어가고요.\n\n' +
+        '다들 그럴 때 누구한테 말하세요?',
+    },
+  ],
+}
+
+/** 🔴 소재 낱말이 아니어서 버려진 것 — 지역명·브랜드명·학년 표현이 여기로 온다 */
+export type Material = {
+  topic: TopicKey | null
+  /** 초안에 쓰는 **일반화된** 소재어 */
+  material: string | null
+  /** 원문에서 실제로 걸린 낱말 (일반화 전) */
+  matched: string | null
+  /** 🔴 초안에 나오면 안 되는 원문 낱말 */
+  dropped: string[]
+}
+
+/** 낱말 쪼개기 — 한글·영숫자 덩어리만 본다 */
+export function tokenize(s: string): string[] {
+  return (s.match(/[가-힣]+|[A-Za-z0-9]+/g) ?? []).filter((t) => t.length >= 2)
+}
+
+/**
+ * 조사를 떼어낸다 — "아이랑" 과 "아이" 를 같은 말로 보기 위해서다.
+ *
+ * 🔴 **가장 긴 조사 하나만 떼면 안 된다.** "아이랑" 에서 "이랑" 을 떼면 "아" 한 글자가 되고,
+ *    그러면 원형으로 되돌아가 일상어 목록에 걸리지 않는다(2026-09-05 실제로 걸렸다).
+ *    그래서 **떼어낼 수 있는 후보를 전부** 만들어 하나라도 맞으면 같은 말로 본다.
+ */
+const PARTICLES: readonly string[] = [
+  '이랑', '에서', '으로', '에게', '한테', '까지', '부터',
+  '랑', '은', '는', '이', '가', '을', '를', '에', '와', '과', '의', '로', '도', '나', '만',
+]
+
+export function stems(token: string): string[] {
+  const out = [token]
+  for (const p of PARTICLES) {
+    if (!token.endsWith(p)) continue
+    const t = token.slice(0, -p.length)
+    if (t.length >= 2) out.push(t)
+  }
+  return out
+}
+
+/**
+ * 🟡 일상어 — **버릴 낱말에서 뺀다.**
+ *
+ * 🔴 이 규칙이 막으려는 것은 **지역명·브랜드명·학년 표현 같은 특정 식별어**다.
+ *    한국어 흔한 말까지 막으면 "아이랑 같이 갈 숙소" 같은 정상 문장이 걸린다.
+ *    실제로 걸렸고(2026-09-05), 그래서 좁혔다.
+ *
+ * 🔴 이 목록은 **좁게 유지한다.** 넓히면 브랜드명이 여기 섞여 새어 나간다.
+ *    특정 가게·제품·지역을 가리킬 수 있는 말은 절대 넣지 않는다.
+ */
+export const COMMON_WORDS: readonly string[] = [
+  '아이', '아이들', '가족', '남편', '엄마', '아빠', '친구', '사람', '우리', '저희',
+  '여행', '추천', '부탁', '요즘', '오늘', '어제', '내일', '주말', '방학',
+  '어때요', '어떤', '어디', '언제', '무엇', '뭐가', '같이', '함께', '정말', '너무',
+  '갈만한', '괜찮은', '좋은', '많은', '조금', '그냥', '혹시', '다들',
+] as const
+
+/**
+ * 소재 찾기 — 🔴 **사전에 걸린 것만 소재다. 나머지는 전부 버린다.**
+ *
+ *    지역명·브랜드명·학년 표현을 각각 알아내려 하지 않는다.
+ *    그런 분류는 틀리는 날 새어 나간다. "인정된 것 말고 전부 버린다" 가 더 좁다.
+ */
+export function findMaterial(title: string, memo = ''): Material {
+  const hay = `${title} ${memo}`
+  for (const rule of TOPIC_RULES) {
+    const m = hay.match(rule.re)
+    if (!m) continue
+    const matched = m[0]
+    // 🔴 소재로 인정된 것 + 일상어를 뺀 나머지 = 초안에 나오면 안 되는 낱말
+    const dropped = tokenize(title).filter((t) => {
+      if (t.includes(matched) || matched.includes(t) || rule.material.includes(t)) return false
+      return !stems(t).some((x) => COMMON_WORDS.includes(x))
+    })
+    return { topic: rule.topic, material: rule.material, matched, dropped }
+  }
+  return {
+    topic: null, material: null, matched: null,
+    dropped: tokenize(title).filter((t) => !stems(t).some((x) => COMMON_WORDS.includes(x))),
+  }
+}
+
+const norm = (s: string): string => s.replace(/\s+/g, '')
+
+/** 원문 제목과 가장 길게 연속으로 겹치는 조각 */
+export function longestOverlap(draft: string, sourceTitle: string): { len: number; frag: string } {
+  const A = norm(draft)
+  const B = norm(sourceTitle)
+  let best = { len: 0, frag: '' }
+  for (let i = 0; i < A.length; i++) {
+    for (let j = i + best.len + 1; j <= A.length; j++) {
+      const f = A.slice(i, j)
+      if (!B.includes(f)) break
+      if (f.length > best.len) best = { len: f.length, frag: f }
+    }
+  }
+  return best
+}
+
+export type Draft = {
+  draftNo: number
+  title: string
+  body: string
+  bodyLength: number
+  safety: SafetyResult
+  overlap: number
+  overlapFragment: string
+  /** 🔴 버려야 할 원문 낱말이 초안에 남았는가 — 남으면 초안이 아니라 복붙이다 */
+  leakedTokens: string[]
+  bannedHonorifics: string[]
+  ok: boolean
+}
+
+export type Expansion = {
+  sourceArticleId: string
+  sourceTitle: string
+  topic: TopicKey | null
+  topicLabel: string
+  material: string | null
+  matched: string | null
+  /** 🟡 무엇을 일반화했는가 — 사람이 읽는 한 줄 */
+  generalized: string
+  direction: string
+  drafts: Draft[]
+  /** 🔴 분류하지 못했다 — 사람이 써야 한다. 지어내지 않는다 */
+  needsHuman: boolean
+}
+
+const DIRECTION: Record<TopicKey, string> = {
+  travelFood: '목록이 아니라 고르는 방법과 실패담을 나누는 쪽으로 — 정보글이 되면 우리 얘기가 아니다',
+  travelStay: '추천 목록이 아니라 같이 가는 사람에 따라 뭐가 달라지는가로',
+  household: '제품 리뷰가 아니라 바꾸는 시점과 살림 습관을 묻는 쪽으로',
+  family: '조언이 아니라 각자 어디까지 말하는지를 나누는 쪽으로',
+  moneyLater: '재테크 정보가 아니라 미루게 되는 마음을 나누는 쪽으로',
+  bodyHealth: '진단·처방이 아니라 달라진 것을 서로 확인하는 쪽으로 (§4-J)',
+  mindTies: '해법이 아니라 비슷한 마음을 확인하는 쪽으로',
+}
+
+/**
+ * SEED 한 행 → 초안 2~3개.
+ *
+ * 🔴 원문 body 가 없어도 동작한다 — title 과 memo 만 쓴다.
+ *    (SRN export 는 SEED 행의 body 를 비워서 내보낸다. 그게 정상이다)
+ */
+export function expandSeed(row: { sourceArticleId: string; title: string; memo?: string }): Expansion {
+  const title = String(row.title ?? '')
+  const mat = findMaterial(title, String(row.memo ?? ''))
+
+  if (!mat.topic || !mat.material) {
+    return {
+      sourceArticleId: String(row.sourceArticleId ?? ''),
+      sourceTitle: title,
+      topic: null, topicLabel: '(분류 못 함)',
+      material: null, matched: null,
+      generalized: '소재를 찾지 못했다',
+      direction: '🔴 사람이 직접 써야 한다 — 그럴듯한 문장을 지어내지 않는다',
+      drafts: [],
+      needsHuman: true,
+    }
+  }
+
+  const m = mat.material
+  const drafts: Draft[] = TEMPLATES[mat.topic].map((t, i) => {
+    const dTitle = t.title(m)
+    const dBody = t.body(m)
+    const full = `${dTitle}\n${dBody}`
+    const ov = longestOverlap(full, title)
+    const safety = safetyFilter({
+      title: dTitle, body: dBody, comments: [], qualityFlags: [], imageCount: 0, accessStatus: 'ok',
+    })
+    // 🔴 조사가 달라도 같은 말이면 샌 것이다 — 어간으로 본다
+    const leaked = mat.dropped.filter((t2) => stems(t2).some((x) => full.includes(x)))
+    const banned = BANNED_HONORIFICS.filter((w) => full.includes(w))
+    return {
+      draftNo: i + 1,
+      title: dTitle, body: dBody, bodyLength: [...dBody].length,
+      safety, overlap: ov.len, overlapFragment: ov.frag,
+      leakedTokens: leaked, bannedHonorifics: banned,
+      ok: safety.verdict === 'pass' && ov.len < MAX_SOURCE_OVERLAP && leaked.length === 0 && banned.length === 0,
+    }
+  })
+
+  return {
+    sourceArticleId: String(row.sourceArticleId ?? ''),
+    sourceTitle: title,
+    topic: mat.topic,
+    topicLabel: TOPIC_LABEL[mat.topic],
+    material: m,
+    matched: mat.matched,
+    generalized: mat.matched === m
+      ? `버린 낱말 ${mat.dropped.length}개 (지역·브랜드·학년 표현 등)`
+      : `"${mat.matched}" → "${m}" 로 일반화 · 버린 낱말 ${mat.dropped.length}개`,
+    direction: DIRECTION[mat.topic],
+    drafts,
+    needsHuman: false,
+  }
+}
+
+/** 산출물 컬럼 — 🔴 순서를 바꾸지 않는다. 뒤에만 추가한다 */
+export const DRY_RUN_COLUMNS: readonly string[] = [
+  'sourceArticleId', 'sourceTitle', 'topic', 'material', 'matched', 'generalized', 'direction',
+  'draftNo', 'title', 'body', 'bodyLength',
+  'safetyVerdict', 'safetyReasons', 'maxOverlapWithSourceTitle', 'leakedTokens', 'ok', 'note',
+] as const
+
+export const DRY_RUN_NOTE = '발행 아님 · 초안일 뿐 · 사람 확인 전 사용 금지'
