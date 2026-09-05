@@ -1711,3 +1711,78 @@ S1 은 `className` 만 바꿨다. 조사해 보니 **"h3 로 통일" 은 정답�
      `<span>` 은 phrasing content 만 담을 수 있어 그 안의 heading 은 HTML 유효성 위반이다.
      지금 `span` 인 것이 의도인지 관행인지 **주석이 없어 코드로 판별할 수 없다.**
      (시각 변화 자체는 부모까지 바꿔도 0 임을 실측으로 확인했다 — 막는 것은 위험이지 화면이 아니다.)
+
+---
+
+### 12-12. A3-2 `status` 값 통일 — 🟡 전체는 보류, `CommentLikeButton` 만 먼저 (2026-09-05)
+
+**A3-2 전체 통일은 아직 하지 않는다.** helper 계열 중 **production 실측이 끝난 한 곳만** 먼저 고친다.
+
+#### 먼저 — §12-10 기록 두 곳을 정정한다
+
+조사 대상을 문서가 아니라 **코드에서 다시 셌더니** 두 가지가 달랐다.
+
+1. **"고객 화면 8곳" 이 아니라 7곳이다.** 8번째였던 `WriteFooter`(error-ish)는 그 뒤 `role="alert"` 로
+   전환됐다(§12-10 말미의 별도 발견 항목이 실제로 처리됐다). **error-ish 계열은 이제 0곳이다.**
+2. **요소 7개가 상태 11개를 그린다.** §12-10 은 요소당 한 값으로 셌지만 둘은 상태에 따라 갈린다.
+
+```
+NicknameForm:87     tone==='ok' ? success : danger          2상태
+nickname-field:140  MESSAGE_CLASS[status] 4종                4상태
+                      idle/checking  text-content-muted
+                      valid          font-bold text-state-success
+                      error          font-bold text-state-danger
+```
+
+상태 단위로 다시 세면 **helper 6 · success 2 · danger 2 · 축하 1** 이고, **helper 가 명확한 다수파**다.
+§12-10 이 "어느 축으로도 다수파가 없다" 고 본 것은 요소 단위로 셌기 때문이다.
+
+#### 무엇을 고쳤나 — 1파일 1클래스
+
+```diff
+- <p role="status" className="m-0 text-xs text-content-muted">   17px / 23.8px
++ <p role="status" className="m-0 text-sm text-content-muted">   18px / 27px
+```
+
+`role="status"` · 색(`text-content-muted`) · 굵기(w400) · 문구 · 버튼 · 아이콘 · 로직은 **전부 그대로**다.
+토큰 단위로 사라진 것은 `text-xs`, 생긴 것은 `text-sm` 뿐이고 `m-0` 과 색은 유지된다.
+
+#### 왜 이 한 곳인가
+
+helper 6상태 중 **혼자 17px** 였다. 나머지는 18px(3) · 20px(2) 다.
+그리고 **7곳 중 유일하게 production 실화면에서 직접 잴 수 있었다** — 비로그인 상태로 댓글 공감을
+누르면 서버 호출 없이 안내가 뜬다(non-GET 전면 차단 상태로 확인 · DB write 0).
+
+A3(§12-8)에서 오류 문구·입력 라벨을 17→18px 로 올린 것과 **같은 방향**이다.
+
+```
+높이 47.6px → 54px (+6.4) · 문서 4249 → 4255px · 줄 수 2줄 유지 (실측)
+```
+
+#### 🟡 함께 조사했으나 이번에 뺀 것
+
+| 대상 | 뺀 이유 |
+|---|---|
+| **`first-greeting` 완료 (20px)** | **축하 메시지라 축이 다르다.** 다른 status 는 동작의 부산물인데 이건 화면 전체가 그 메시지로 바뀐다. 바로 아래 설명 문단이 20px 라 18px 로 내리면 **축하가 설명보다 작아진다.** `role="status"` 를 공유한다고 묶으면 역할 사전이 거짓말이 된다 |
+| **`nickname-field` 4상태 (20px)** | **온보딩 화면이라 production 실측이 불가능하다.** 하네스 재현값만 있어 실화면 검증 없이 묶지 않는다 |
+| **`NicknameForm` 2상태** | 로그인 화면 · 이미 18px/27px 로 표준과 일치해 고칠 것이 없다 |
+| **`PostActionBar` 색(secondary)** | helper 표준 색(muted)으로 맞추면 **대비가 8.69:1 → 5.87:1 로 떨어진다.** 둘 다 AA(4.5:1)는 통과하지만 여유가 줄어 **창업자 판단이 필요하다** |
+| `GuestCommentForm` · `PostForm` | 조건부 화면이고 **이미 18px/27px** 로 표준과 일치한다 |
+
+#### 🚫 `status` 별칭은 아직 만들지 않는다
+
+이 교정으로 helper 는 **18px 4상태 + 20px 2상태** 가 된다. 온보딩 2상태가 20px 로 남아 있어
+**`HELPER_STATUS` 상수를 만들 조건이 아직 아니다**(§12-10 의 판단 그대로).
+별칭은 "이미 같은 것" 에 이름을 붙이는 일이다.
+
+#### `role` 판단 — 7곳 모두 `status` 유지가 맞다
+
+danger 를 그리는 2곳(`NicknameForm` 실패 · `nickname-field` error)도 `alert` 로 가지 않는다.
+
+```
+WriteFooter    "지금은 글을 쓸 수 없어요"   차단 통보 · 1회 · 즉시   → alert (처리 완료)
+nickname-field "이미 쓰고 있는 닉네임"      입력 중 실시간 검증      → status 유지
+```
+
+`nickname-field` 는 `aria-live="polite"` 를 명시적으로 함께 선언해 뒀다. 타이핑하는 동안 매 글자마다
+`assertive` 가 끼어들면 오히려 방해다. **의도된 선택으로 보이고 바꾸지 않는다.**
