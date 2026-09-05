@@ -147,6 +147,21 @@ jobs:
       - name: Micro Seed Seed Originality (소재만 · 복붙 0 · 지어내지 않음)
         run: npm run micro-seed:seed-originality-check
 
+      # Seed Originality 초안 검수 화면의 계약.
+      #
+      # 🔴 여기서 사람이 "이 초안을 쓰겠다" 를 누른다. 막아야 할 회귀:
+      #      · 누르지 않은 초안이 기본값으로 export 되는 것 —
+      #        그러면 '검수' 가 사람의 행위가 아니게 된다.
+      #      · 권장이 실행할 때마다 달라지는 것 — 그러면 그 표시를 믿을 수 없다.
+      #        겹침이 가장 작은 것, 동률이면 번호가 작은 것으로 고정한다.
+      #      · 복붙 검증 결과(겹침·유출 낱말·금지 호칭)가 화면에서 사라지는 것 —
+      #        사람이 "원문 냄새가 난다" 를 스스로 판단할 수 없게 된다.
+      #      · 발행 버튼이 생기는 것.
+      #
+      # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed Seed Originality 검수 화면 (사람 선택만 · 권장 고정)
+        run: npm run micro-seed:seed-originality-review-check
+
       # 우나어 legacy read-only 커넥터의 계약.
       #
       # 🔴 우나어는 우리 **운영 DB** 다. 커넥터가 write SQL 을 만들 수 있으면
