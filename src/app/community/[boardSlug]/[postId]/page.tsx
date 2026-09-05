@@ -170,7 +170,7 @@ export default async function PostDetailPage({
 
         <NextToRead posts={nextPosts} currentPostId={post.id} />
 
-        <WriteCta boardSlug={board.slug} isLoggedIn={Boolean(session?.user)} />
+        <WriteCta boardSlug={board.slug} />
       </main>
     </PageShell>
   )
