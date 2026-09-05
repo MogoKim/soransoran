@@ -116,6 +116,16 @@ type Row = {
   sourceSite: string; sourceArticleId: string; url: string; score: number; lane: string
   bodyLength: number; lengthBasis: LengthBasis; imageCount: number; commentCount: number
   safetyVerdict: string; safetyReasons: string; assetAxes: string; reason: string; title: string
+  /**
+   * 🟡 본문 원문 — **Short Raw Noindex 축일 때만** 남긴다 (§4-Z).
+   *
+   * 🔴 그 축은 정의상 본문 100자 미만이다(§4-Y ④). 즉 여기 담기는 것은
+   *    **승인 화면이 그대로 보여줄 분량뿐**이고, 긴 원문은 로컬에도 남지 않는다.
+   *    승인 화면이 원문을 못 보면 사람이 무엇을 승인하는지 모르는 채 누르게 된다 —
+   *    그것이 이 필드가 있는 유일한 이유다.
+   * 🔴 TSV 에는 넣지 않는다. 17컬럼 계약을 건드리지 않는다.
+   */
+  body?: string
 }
 
 function urlOf(s: ScoredRow): string {
@@ -251,6 +261,8 @@ async function main(): Promise<void> {
         commentCount: comments.length, safetyVerdict: v.safety.verdict,
         safetyReasons: v.safety.reasons.map((x) => x.code).join('/'),
         assetAxes: v.assetAxes.join('/'), reason: v.reason, title: s.row.originalTitle,
+        // 🔴 SRN 축에만 본문을 남긴다 — 그 축은 100자 미만이라 분량이 제한된다
+        ...(v.axis === 'shortRawNoindex' ? { body } : {}),
       })
       console.log(`   ${pad(i + 1, 3)} ${pad(AXIS_LABEL[v.axis], 18)} ${pad(access, 17)} ${s.row.sourceArticleId} · 본문 ${v.measuredLength}자 · 댓글 ${comments.length}`)
       await new Promise((r) => setTimeout(r, PACE_MIN_MS + Math.random() * (PACE_MAX_MS - PACE_MIN_MS)))
@@ -276,7 +288,8 @@ async function main(): Promise<void> {
   console.log('\n④ 이 실행이 하지 않은 것')
   console.log('   🔴 DB write · Sheet · LLM · 자동 발행 · noindex 배포 · Raw Vault 적재')
   console.log(`   🔴 Short Raw Noindex 는 **후보**다 — 발행 전 사람이 승인한다 (§4-Y ③)`)
-  console.log(`   🔴 100자 기준(${BASIS})은 아직 확정이 아니다 (§4-Y ④)\n`)
+  console.log(`   🟢 100자 기준은 **본문(body)** 으로 확정됐다 (§4-Y ④) — 이번 실행 기준: ${BASIS}`)
+  console.log('   🟡 SRN 축은 본문을 함께 남긴다 — 승인 화면이 원문을 보여줘야 하기 때문이다 (§4-Z)\n')
 }
 
 /** 🔴 CLI 로 직접 실행할 때만 돈다 — import 만으로 브라우저를 열지 않는다 */
