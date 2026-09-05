@@ -28,6 +28,7 @@ import { hasRunId, parseJsonl, loadScoutRows } from './lib/micro-seed-scout-load
 import {
   toCards, renderHtml, escapeHtml, REVIEW_ACTIONS,
 } from './micro-seed-seed-inbox-html.mjs'
+import { safetyOf } from './micro-seed-seed-inbox-dry-run.mjs'
 import {
   TSV_COLUMNS, RECOMMENDED_NOTE, overrideNoteOf, tsvCell, tsvLine, recommendedTsv,
 } from './micro-seed-seed-inbox-dry-run.mjs'
@@ -154,8 +155,9 @@ console.log('\n④ 제목 — 기본 미출력 · --show-title 에서만 · 80�
   // 🔴 참조는 3곳이고 그중 **출력은 위 1곳뿐**이다.
   //    ① verdictOf 가 판정하려고 읽는다  ② toCards 가 카드에 담는다(화면이 escape 한다)
   //    ③ --show-title 일 때만 찍는다
+  // 🔴 safetyOf 가 판정하려고 제목을 한 번 더 읽는다 (PR-S2-b-33) → 읽기3 + 출력1
   const total = (RUNNER_CODE.match(/originalTitle/g) ?? []).length
-  check('🟢 originalTitle 참조가 3곳이다 (읽기2 + 출력1)', total === 3, `실제 ${total}곳`)
+  check('🟢 originalTitle 참조가 4곳이다 (읽기3 + 출력1)', total === 4, `실제 ${total}곳`)
   check('🟢 판정용 읽기가 있다', /const title = r\.originalTitle/.test(RUNNER_CODE))
   check('🟢 카드에 담는 곳이 있다', /title: r\.originalTitle/.test(RUNNER_CODE))
 
@@ -585,10 +587,11 @@ console.log('\n⑮ 추천값 그대로 회수 — 🔴 자동 라우팅이 아�
 // ─────────────────────────────────────────────────────────
 {
   // 🔴 컬럼 순서가 계약이다 — 바뀌면 이미 회수한 표와 붙일 수 없다
+  // 🔴 앞 17개는 **위치가 계약**이다. safety 2개는 뒤에만 붙는다 (PR-S2-b-33)
   const WANT = ['verdict','lane','score','sourceSite','sourceBoardKey','sourceBoardName',
     'sourceArticleId','page','rank','commentCount','viewCount','lagMinutes','watch','title','why','signal','note']
-  check('🔴 TSV 컬럼 17개가 계약대로다', JSON.stringify([...TSV_COLUMNS]) === JSON.stringify(WANT),
-    TSV_COLUMNS.join(','))
+  check('🔴 앞 17개 컬럼이 계약대로다', JSON.stringify(TSV_COLUMNS.slice(0, 17)) === JSON.stringify(WANT),
+    TSV_COLUMNS.slice(0, 17).join(','))
 
   check('🟢 기본 note 가 창업자 수용 표시다',
     RECOMMENDED_NOTE === 'system recommended v1; founder accepted recommendation')
@@ -611,11 +614,13 @@ console.log('\n⑮ 추천값 그대로 회수 — 🔴 자동 라우팅이 아�
   check('🔴 한 줄의 열 수가 컬럼 수와 같다', line.split('\t').length === TSV_COLUMNS.length,
     `실제 ${line.split('\t').length}`)
   check('🟢 사람 선택이 없으면 추천값이 들어간다', line.split('\t')[0] === cards[0].verdict)
-  check('🟢 사람 선택이 없으면 note 가 기본값', line.endsWith(RECOMMENDED_NOTE))
+  // 🔴 note 는 더 이상 마지막 열이 아니다 (safety 2열이 뒤에 붙었다) — 위치로 본다
+  check('🟢 사람 선택이 없으면 note 가 기본값', line.split('\t')[16] === RECOMMENDED_NOTE)
   check('🔴 사람이 바꾸면 그 값이 들어간다', tsvLine(cards[0], 'WRONG').split('\t')[0] === 'WRONG')
   check('🔴 사람이 바꾸면 override note',
-    tsvLine(cards[0], 'WRONG').endsWith(overrideNoteOf(cards[0].verdict)))
-  check('🟢 추천값과 같은 값을 골라도 기본 note', tsvLine(cards[0], cards[0].verdict).endsWith(RECOMMENDED_NOTE))
+    tsvLine(cards[0], 'WRONG').split('\t')[16] === overrideNoteOf(cards[0].verdict))
+  check('🟢 추천값과 같은 값을 골라도 기본 note',
+    tsvLine(cards[0], cards[0].verdict).split('\t')[16] === RECOMMENDED_NOTE)
 
   const out = recommendedTsv(cards)
   check('🟢 헤더 + 카드 수만큼 줄', out.split('\n').length === cards.length + 1)
@@ -716,6 +721,68 @@ console.log('\n⑯ SEED 오분류 보정 — 🔴 v1 검수에서 나온 3건 (2
     }
   } catch {
     console.log('     ⏭️  .microseed-data 없음 — 건너뜀 (CI 정상)')
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑰ 안전·브랜드 필터 read-only 연결 (PR-S2-b-33)')
+// ─────────────────────────────────────────────────────────
+{
+  check('🟢 safety 2개가 뒤에 붙었다',
+    JSON.stringify(TSV_COLUMNS.slice(17)) === JSON.stringify(['safetyVerdict', 'safetyReasons']),
+    TSV_COLUMNS.slice(17).join(','))
+  check('🔴 컬럼 총 19개', TSV_COLUMNS.length === 19, String(TSV_COLUMNS.length))
+
+  const { scored } = scoreRows([
+    row({ sourceArticleId: 'ok', originalTitle: '냉장고 추천해주세요' }),
+    row({ sourceArticleId: 'pol', originalTitle: '대선 후보 토론 보셨어요' }),
+    row({ sourceArticleId: 'vol', originalTitle: '다들 어떠세요 (펑예)' }),
+  ])
+  const seedAll = scored.filter((x) => isSeedInboxLane(x.laneHint.lane))
+  const cards = toCards(seedAll)
+
+  check('🟢 카드에 safety 필드가 있다',
+    cards.length > 0 && typeof cards[0].safetyVerdict === 'string' && typeof cards[0].safetySummary === 'string')
+  check('🔴 TSV 열 수가 컬럼 수와 같다',
+    tsvLine(cards[0]).split('\t').length === TSV_COLUMNS.length,
+    `실제 ${tsvLine(cards[0]).split('\t').length}`)
+
+  // 🔴 **후보를 걸러내지 않는다** — safety 가 어떻든 개수가 같아야 한다
+  check('🔴 safety 가 후보를 제외하지 않는다',
+    cards.length === seedAll.length, `${cards.length} vs ${seedAll.length}`)
+
+  // 🔴 **추천값을 바꾸지 않는다**
+  for (const x of seedAll) {
+    check(`🔴 ${x.row.sourceArticleId}: 추천값이 safety 와 무관하다`,
+      toCards([x])[0].verdict === verdictOf(x).verdict)
+  }
+
+  // 🟡 volatile 은 verdict 를 낮추지 않는다
+  const vol = scoreRows([row({ originalTitle: '다들 어떠세요 (펑예)' })]).scored[0]
+  if (vol) {
+    const f = safetyOf(vol)
+    check('🟡 펑예는 pass 로 남는다', f.verdict === 'pass', f.verdict)
+    check('🟡 volatile 사유가 붙는다', f.reasons.some((r) => r.code === 'volatile'))
+  }
+
+  // 🔴 목록 단계라 본문이 없다 — 지어내지 않는다
+  check('🔴 safetyOf 가 본문을 넘기지 않는다', !/body:\s*r\.rawBody|body:\s*r\.body/.test(RUNNER_CODE))
+  check('🔴 게시판명을 행 라벨로 넘기지 않는다', !/sourceRowLabel:\s*r\.sourceBoardName/.test(RUNNER_CODE))
+
+  // 🔴 "표시만" 임을 밝힌다
+  check('🔴 CLI 가 "표시만" 을 밝힌다', RUNNER.includes('표시만 — 추천값을 바꾸지 않는다'))
+  check('🔴 CLI 가 "후보를 걸러내지 않았다" 를 밝힌다', RUNNER.includes('후보를 걸러내지 않았다'))
+  const html = renderHtml(cards, { counts: {}, meanings: VERDICT_MEANING })
+  check('🔴 HTML 이 safety 를 표시한다', html.includes('safety'))
+  check('🔴 HTML 이 "표시만" 을 밝힌다', html.includes('표시만'))
+
+  // 🔴 발행·fetch·DB·Sheet·LLM 은 여전히 0
+  for (const [re, label] of [
+    [/PrismaClient|@prisma\/client/, 'Prisma'], [/googleapis|sheets\./, 'Sheet'],
+    [/anthropic|openai|claude-/i, 'LLM'], [/playwright|chromium/, '브라우저'],
+    [/\bfetch\s*\(|axios/, '네트워크'],
+  ] as const) {
+    check(`🔴 runner 에 ${label} 없음`, !re.test(RUNNER_CODE))
   }
 }
 
