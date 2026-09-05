@@ -132,6 +132,21 @@ jobs:
       - name: Micro Seed SRN 승인 화면 (축 제한 · body 기준 · 사람 승인)
         run: npm run micro-seed:srn-check
 
+      # Seed Originality dry-run 의 계약.
+      #
+      # 🔴 이 도구는 **남의 글에서 소재만 가져와** 우리 글 초안을 만든다.
+      #    막아야 할 회귀가 전부 조용한 종류다:
+      #      · 원문 문장이 그대로 옮겨오는 것 — 초안이 아니라 복붙이 된다.
+      #        연속 겹침과 낱말 유출을 둘 다 본다.
+      #      · 지역명·브랜드명·학년 표현이 남는 것 — 특정 가게·제품 홍보로 읽힌다.
+      #      · SEED 아닌 결정(APPROVE·HOLD·DROP)이 입력으로 새는 것.
+      #      · 분류하지 못한 행에 그럴듯한 문장을 지어내는 것 —
+      #        모르면 초안 0건으로 두고 사람에게 넘겨야 한다.
+      #
+      # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed Seed Originality (소재만 · 복붙 0 · 지어내지 않음)
+        run: npm run micro-seed:seed-originality-check
+
       # 우나어 legacy read-only 커넥터의 계약.
       #
       # 🔴 우나어는 우리 **운영 DB** 다. 커넥터가 write SQL 을 만들 수 있으면
