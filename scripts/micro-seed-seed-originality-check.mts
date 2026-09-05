@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs'
 import {
   expandSeed, findMaterial, longestOverlap, tokenize, stems,
   TOPIC_RULES, TEMPLATES, TOPIC_LABEL, COMMON_WORDS,
-  BANNED_HONORIFICS, MAX_SOURCE_OVERLAP, DRY_RUN_COLUMNS, DRY_RUN_NOTE,
+  BANNED_HONORIFICS, MAX_SOURCE_OVERLAP, DRAFTS_PER_SOURCE, DRY_RUN_COLUMNS, DRY_RUN_NOTE,
   type TopicKey,
 } from './lib/micro-seed-seed-originality.mjs'
 import { seedRowsOf, readApprovals, assertInsideDataDir, toTsv, dryRunId, SEED_DATA_DIR } from './micro-seed-seed-originality-dry-run.mjs'
@@ -100,7 +100,7 @@ check('🔴 단독 매칭을 막은 말은 실제로 안 잡힌다 (넓어지지
 console.log('\n⑤ 확장 — 🔴 원문 body 없이 title·memo 만으로 동작한다')
 const ex = expandSeed({ sourceArticleId: 'x', title: '핀일로 후라이팬 어때요??', memo: '살림 소재' })
 check('body 를 주지 않아도 초안이 나온다', ex.drafts.length >= 2)
-check('초안 2~3개', ex.drafts.length >= 2 && ex.drafts.length <= 3, String(ex.drafts.length))
+check(`초안 ${DRAFTS_PER_SOURCE}개`, ex.drafts.length === DRAFTS_PER_SOURCE, String(ex.drafts.length))
 check('topic 이 붙는다', ex.topic === 'household')
 check('🔴 브랜드명이 초안에 없다', !ex.drafts.some((d) => `${d.title}${d.body}`.includes('핀일로')))
 check('🟢 소재어는 초안에 쓰인다', ex.drafts.some((d) => d.title.includes('후라이팬')))
@@ -119,7 +119,9 @@ check('🔴 material 을 지어내지 않는다', none.material === null)
 
 console.log('\n⑦ 말투 — 🔴 정보글·SEO글·뉴스글이 아니다')
 const allTopics = Object.keys(TEMPLATES) as TopicKey[]
-check(`토픽 ${allTopics.length}종 모두 템플릿 3개`, allTopics.every((t) => TEMPLATES[t].length === 3))
+check(`토픽 ${allTopics.length}종 모두 템플릿 ${DRAFTS_PER_SOURCE}개`,
+  allTopics.every((t) => TEMPLATES[t].length === DRAFTS_PER_SOURCE),
+  allTopics.map((t) => `${t}=${TEMPLATES[t].length}`).join(','))
 check('토픽 모두 라벨이 있다', allTopics.every((t) => (TOPIC_LABEL[t] ?? '').length > 0))
 // 🔴 제목은 질문으로 끝나야 한다. 본문은 **물음표를 품기만** 하면 된다 —
 //    공감형 마무리("…모르겠어요.")를 막으면 사람 말투가 아니게 된다.
@@ -229,7 +231,7 @@ check('🔴 CLI 가 expandSeed 에 memo 를 넘기지 않는다', !/memo:\s*Stri
 
 console.log('\n⑯ 🔴 소재 사전 1차 확장 — 간병 · 아침 (2026-09-06)')
 const care2 = expandSeed({ sourceArticleId: 'k1', sourceSite: 'navercafe:wgang', title: '간병인 추천 부탁드립니다.' })
-check('🟢 간병 유형 → 초안 생성', care2.drafts.length === 3 && care2.needsHuman === false)
+check('🟢 간병 유형 → 초안 생성', care2.drafts.length === DRAFTS_PER_SOURCE && care2.needsHuman === false)
 check('🟢 topic=careParent · 소재 간병', care2.topic === 'careParent' && care2.material === '간병')
 const careText = care2.drafts.map((d) => `${d.title} ${d.body}`).join(' ')
 // 🔴 원문의 병원명·입원·개인 가족 사정·추천 요청이 초안에 없어야 한다
@@ -248,7 +250,7 @@ check('🟢 간병 초안 safety pass · 유출 0 · 겹침 6자 미만',
   care2.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0 && d.overlap < MAX_SOURCE_OVERLAP))
 
 const morn = expandSeed({ sourceArticleId: 'k2', sourceSite: 'navercafe:remonterrace', title: '스벅 견과류 아침에 먹기 어때요?' })
-check('🟢 아침 유형 → 초안 생성', morn.drafts.length === 3 && morn.needsHuman === false)
+check('🟢 아침 유형 → 초안 생성', morn.drafts.length === DRAFTS_PER_SOURCE && morn.needsHuman === false)
 check('🟢 topic=morningBite · 소재 아침 (견과류 → 아침 일반화)',
   morn.topic === 'morningBite' && morn.material === '아침' && morn.matched === '견과류')
 const mornText = morn.drafts.map((d) => `${d.title} ${d.body}`).join(' ')
@@ -272,18 +274,50 @@ check('🟢 기존 3건 회귀 없음 — 맛집 · 후라이팬 · 숙소',
    ['초고 아이랑 갈만한 리조트나 호텔  추천부탁드려요', 'travelStay']]
     .every(([t, topic]) => {
       const e = expandSeed({ sourceArticleId: 'r', title: t })
-      return e.topic === topic && e.drafts.length === 3 && e.drafts.every((d) => d.ok)
+      return e.topic === topic && e.drafts.length === DRAFTS_PER_SOURCE && e.drafts.every((d) => d.ok)
     }))
 check('🔴 분류 실패는 여전히 needsHuman',
   expandSeed({ sourceArticleId: 'k6', title: '어제 그 일 말인데요' }).needsHuman === true)
 check('🔴 memo 기반 분류 재발 없음 (새 축에서도)',
   expandSeed(withMemo({ sourceArticleId: 'k7', title: '어제 그 일 말인데요', memo: '간병 아침 간식 소재' })).needsHuman === true)
-check('🟢 새 토픽도 템플릿 3개 · 제목이 질문으로 끝난다',
+check(`🟢 새 토픽도 템플릿 ${DRAFTS_PER_SOURCE}개 · 제목이 질문으로 끝난다`,
   (['careParent', 'morningBite'] as TopicKey[]).every((t) =>
-    TEMPLATES[t].length === 3 && TEMPLATES[t].every((tpl) => /[?？]\s*$/.test(tpl.title('소재').trim()))))
+    TEMPLATES[t].length === DRAFTS_PER_SOURCE && TEMPLATES[t].every((tpl) => /[?？]\s*$/.test(tpl.title('소재').trim()))))
 check('🟢 새 토픽 라벨·방향이 있다',
   (['careParent', 'morningBite'] as TopicKey[]).every((t) => (TOPIC_LABEL[t] ?? '').length > 0))
 check('🟡 사전이 좁게 유지된다 (규칙 20개 이하)', TOPIC_RULES.length <= 20, String(TOPIC_RULES.length))
+
+console.log('\n⑱ 🔴 원천당 초안 2개 (2026-09-06, 3개에서 줄임)')
+check('DRAFTS_PER_SOURCE 는 2', DRAFTS_PER_SOURCE === 2, String(DRAFTS_PER_SOURCE))
+check('🔴 모든 토픽이 정확히 2개', allTopics.every((t) => TEMPLATES[t].length === DRAFTS_PER_SOURCE))
+// 🔴 실측이 있는 5개 소재 — 전부 2개씩 나와야 한다
+const FIVE: [string, string][] = [
+  ['통영분들^^ 맛집 추천 좀 부탁드려요', 'travelFood'],
+  ['핀일로 후라이팬 어때요??', 'household'],
+  ['초고 아이랑 갈만한 리조트나 호텔  추천부탁드려요', 'travelStay'],
+  ['간병인 추천 부탁드립니다.', 'careParent'],
+  ['스벅 견과류 아침에 먹기 어때요?', 'morningBite'],
+]
+for (const [title, topic] of FIVE) {
+  const e = expandSeed({ sourceArticleId: 'p', sourceSite: 'navercafe:test', title })
+  check(`🟢 ${topic}: 초안 ${DRAFTS_PER_SOURCE}개 · safety pass · 유출 0 · 겹침 ${MAX_SOURCE_OVERLAP}자 미만`,
+    e.topic === topic && e.drafts.length === DRAFTS_PER_SOURCE
+    && e.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0
+      && d.overlap < MAX_SOURCE_OVERLAP && d.bannedHonorifics.length === 0),
+    `${e.topic}/${e.drafts.length}`)
+  check(`  🔴 ${topic}: 두 초안의 제목이 서로 다르다`,
+    new Set(e.drafts.map((d) => d.title)).size === DRAFTS_PER_SOURCE)
+}
+// 🔴 morningBite 만 3번이 아니라 2번을 뺐다 — 3번(간식)이 채택된 초안이었다
+const mornKept = expandSeed({ sourceArticleId: 'p2', title: '스벅 견과류 아침에 먹기 어때요?' })
+check('🔴 morningBite 는 채택됐던 "간식" 초안을 남겼다',
+  mornKept.drafts.some((d) => d.title.includes('간식')), mornKept.drafts.map((d) => d.title).join(' / '))
+check('🔴 morningBite 는 중복이던 "챙겨 드시는" 초안을 뺐다',
+  !mornKept.drafts.some((d) => d.title.includes('챙겨 드시는')))
+check('🟢 sourceSite · generatedAt 은 그대로 행마다',
+  expandSeed({ sourceArticleId: 'p3', sourceSite: 'navercafe:test', title: '후라이팬 어때요' }, '2026-09-06T00:00:00.000Z')
+    .drafts.every((d) => d.generatedAt === '2026-09-06T00:00:00.000Z'))
+check('🟢 needsHuman 동작 유지', expandSeed({ sourceArticleId: 'p4', title: '어제 그 일 말인데요' }).needsHuman === true)
 
 console.log('\n⑩ 경로 가드 — 🔴 .microseed-data/ 밖으로 나가지 않는다')
 check(`기본 디렉터리는 ${SEED_DATA_DIR}`, SEED_DATA_DIR === '.microseed-data')
