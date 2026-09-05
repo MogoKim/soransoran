@@ -51,6 +51,13 @@ console.log('\n① 정치 — 🔴 hardExclude. 어디에도 가지 않는다')
   check('🔴 수집기 politics 판정도 hardExclude',
     verdict({ title: '평범한 제목', sourceExcludeReason: 'politics' }) === 'hardExclude')
   check('🔴 사유 코드가 politics 다', codes({ title: '대선 후보 토론 보셨어요' }).includes('politics'))
+  // 🔴 보강된 정치어도 safety 에서 hardExclude 여야 한다 (PR-S2-b-34)
+  for (const t of ['친윤계 갈등', '친명 후보', '내란특검', '탄핵심판']) {
+    check(`🔴 보강 정치어 "${t}" → hardExclude`, verdict({ title: t }) === 'hardExclude')
+  }
+  for (const t of ['모친명의로 된 집', '모친명절 준비', '특검사 받았어요']) {
+    check(`🟢 생활 표현 "${t.slice(0, 12)}…" 는 hardExclude 아님`, verdict({ title: t }) !== 'hardExclude')
+  }
   // 🔴 판정을 두 벌 만들지 않는다 — quality lib 의 matcher 하나를 쓴다 (§4-K)
   check('🔴 정치 matcher 를 재정의하지 않는다',
     !/POLITICAL_TOPIC_TERMS|const POLITICAL_TOPIC\s*=/.test(CODE))
