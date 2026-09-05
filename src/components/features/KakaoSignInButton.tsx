@@ -38,9 +38,19 @@ const LABEL = '카카오로 3초 만에 시작하기'
 export default function KakaoSignInButton({
   callbackUrl = '/',
   variant = 'default',
+  label = LABEL,
 }: {
   callbackUrl?: string
   variant?: Variant
+  /**
+   * 🔴 라벨만 바꿀 수 있게 열어 둔다. 기본값은 그대로라 기존 화면은 달라지지 않는다.
+   *    글을 다 쓰고 등록을 누른 사람에게 "3초 만에 시작하기" 는 처음 온 사람에게 하는 말이라
+   *    이미 한 일을 못 본 척하는 문구가 된다.
+   *
+   * 🔴 그렇다고 그 화면에서 signIn 을 직접 부르지 않는다. onboardingHref 로 감싸는 자리가
+   *    이 버튼 하나여야 입구마다 빠뜨리는 곳이 생기지 않는다(위 주석과 같은 이유).
+   */
+  label?: string
 }) {
   return (
     <button
@@ -56,7 +66,7 @@ export default function KakaoSignInButton({
           />
         </svg>
       ) : null}
-      <span className="min-w-0">{LABEL}</span>
+      <span className="min-w-0">{label}</span>
     </button>
   )
 }

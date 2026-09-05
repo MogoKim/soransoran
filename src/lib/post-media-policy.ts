@@ -42,6 +42,16 @@ export const IMAGE_TOO_MANY = `사진은 ${MAX_IMAGE_COUNT}장까지 넣을 수 
 export const IMAGE_UPLOAD_FAILED = '사진을 올리지 못했어요. 잠시 후 다시 시도해 주세요.'
 export const IMAGE_UPLOAD_OFF = '지금은 사진을 올릴 수 없어요. 글만 먼저 올려주세요.'
 
+/**
+ * 비회원이 사진 버튼을 눌렀을 때.
+ *
+ * 🔴 업로드를 열지 않는다. 신원 없는 업로드는 스팸이 가장 먼저 찾는 문이고,
+ *    R2 키가 userId 로 나뉘어 있어 비회원 몫을 둘 자리도 없다(api/uploads).
+ * 🔴 그래서 서버까지 보내지 않고 여기서 먼저 말한다. 401 을 받아 와서
+ *    "로그인이 필요합니다" 를 띄우면 사진이 사라졌다 나타나는 것을 한 번 보게 된다.
+ */
+export const IMAGE_NEEDS_LOGIN = '사진은 로그인 후에 올릴 수 있어요'
+
 /** 유튜브 주소인가 — 에디터 입력·붙여넣기 양쪽이 같은 것을 본다. */
 export const YOUTUBE_URL = /^https:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)[\w-]+/
 

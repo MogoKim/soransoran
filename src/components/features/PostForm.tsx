@@ -14,18 +14,45 @@ import {
   POST_TITLE_PLACEHOLDER,
   postSubmitBlock,
 } from '@/lib/post-policy'
-import { readDraft, removeDraft, saveDraft, type PostDraft } from '@/lib/write-draft'
+import {
+  findLatestDraft,
+  readDraft,
+  removeDraft,
+  saveDraft,
+  type PostDraft,
+} from '@/lib/write-draft'
 import { toEditorHtml } from '@/lib/post-content-format'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
+import WriteLoginPrompt from '@/components/features/WriteLoginPrompt'
 
 const DRAFT_SAVE_DELAY_MS = 1000
+
+/**
+ * 임시저장이 막힌 브라우저(사파리 시크릿 등)에서 로그인하러 나가기 전에 하는 말.
+ *
+ * 🔴 조용히 넘기지 않는다. 여기서 아무 말도 하지 않으면 사용자는 "글은 그대로 있어요"
+ *    를 믿고 나갔다가 빈 화면으로 돌아온다. 우리가 지킬 수 없는 약속을 한 셈이 된다.
+ */
+const DRAFT_SAVE_FAILED =
+  '이 브라우저에서는 임시저장이 안 돼요. 글을 복사해 두신 뒤 로그인해 주세요'
 
 function resolveBoardSlug(slug: string | undefined): string {
   const found = COMMUNITY_BOARDS.find((b) => b.slug === slug)
   return found ? found.slug : COMMUNITY_BOARDS[0].slug
 }
 
-export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: string }) {
+export default function PostForm({
+  defaultBoardSlug,
+  isLoggedIn,
+}: {
+  defaultBoardSlug?: string
+  /**
+   * 🔴 서버가 판정해 내려 준다. 클라이언트 세션 훅을 쓰지 않는 지금 구조(HeaderAuth·WriteCta)와 같다.
+   *    이 값은 화면을 가르는 데만 쓰고, 저장을 막는 것은 서버(createPost)가 한다 —
+   *    prop 하나로 DB 를 지킬 수는 없다.
+   */
+  isLoggedIn: boolean
+}) {
   const [state, formAction] = useFormState<ActionState, FormData>(createPost, {})
   const [boardSlug, setBoardSlug] = useState(() => resolveBoardSlug(defaultBoardSlug))
   const [title, setTitle] = useState('')
@@ -43,6 +70,16 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
    */
   const [uploading, setUploading] = useState(false)
   const [restored, setRestored] = useState(false)
+  /** 비회원이 등록을 눌렀을 때만 뜬다. 띄우기 전에 저장은 이미 끝나 있다. */
+  const [loginPrompt, setLoginPrompt] = useState<{ warning?: string } | null>(null)
+  /**
+   * 다른 게시판에 쓰다 만 글.
+   *
+   * 🔴 로그인·온보딩을 지나며 `?board=` 가 떨어지면 폼이 엉뚱한 게시판으로 열린다.
+   *    그때 이 게시판의 임시저장만 보면 방금 쓴 글을 못 찾아 빈 화면이 된다.
+   * 🔴 찾아만 두고 적용하지 않는다 — 게시판을 말없이 바꾸면 엉뚱한 곳에 글이 올라간다.
+   */
+  const [otherDraft, setOtherDraft] = useState<PostDraft | null>(null)
 
   // 이벤트 핸들러가 재등록 없이 최신 입력을 읽게 한다.
   const draftRef = useRef<PostDraft>({ boardSlug, title, content })
@@ -71,8 +108,14 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
   }
 
   useEffect(() => {
-    const draft = readDraft(resolveBoardSlug(defaultBoardSlug))
-    if (draft) applyDraft(draft)
+    const slug = resolveBoardSlug(defaultBoardSlug)
+    const draft = readDraft(slug)
+    if (draft) {
+      applyDraft(draft)
+    } else {
+      // 이 게시판에 쓰던 것이 없을 때만 다른 게시판을 본다 — 있으면 그것이 답이다.
+      setOtherDraft(findLatestDraft(COMMUNITY_BOARDS.map((b) => b.slug).filter((s) => s !== slug)))
+    }
     // 마운트 시 한 번만 복원한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -144,6 +187,29 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
   return (
     <form
       action={(formData) => {
+        /**
+         * 🔴 비회원은 여기서 멈춘다. createPost 를 부르지 않는다.
+         *    서버도 세션 없이는 거부하지만, 불러 봐야 돌아오는 것은 실패뿐이고
+         *    그 사이 화면은 "등록 중…" 을 보여 준다 — 될 것처럼 굴다가 안 되는 것이
+         *    가장 나쁘다. 될 수 없다는 것을 아는 쪽에서 미리 멈춘다.
+         *
+         * 🔴 저장이 먼저다. 안내를 띄운 뒤에 저장하면 그 사이 사용자가 카카오를 눌러
+         *    화면을 떠날 수 있고, 그러면 글이 저장되지 않은 채로 나간다.
+         *
+         * 🔴 removeDraft 를 부르지 않는다. 아래 로그인 흐름이 지우는 것은
+         *    "서버에 넘긴 글" 이다. 여기서는 아무것도 넘기지 않았으므로
+         *    지우면 사용자가 쓴 글만 사라진다.
+         *
+         * 🔴 로그인하고 돌아와도 자동으로 등록하지 않는다. 저장은 사람이 마지막으로
+         *    한 번 더 확인하고 누르는 일이다 — 로그인 왕복 사이에 글이 복원되고
+         *    곧바로 발행되면, 무엇이 올라갔는지 보지 못한 채 글이 공개된다.
+         */
+        if (!isLoggedIn) {
+          const saved = saveDraft(draftRef.current, Date.now())
+          setLoginPrompt({ warning: saved ? undefined : DRAFT_SAVE_FAILED })
+          return
+        }
+
         removeDraft(boardSlug)
         formAction(formData)
       }}
@@ -179,6 +245,36 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
             className="inline-flex min-h-[52px] items-center px-2 text-sm text-content-muted underline"
           >
             새로 쓰기
+          </button>
+        </div>
+      ) : null}
+
+      {/* 🔴 누르기 전에는 아무것도 바꾸지 않는다. 게시판이 말없이 바뀌면
+             갱년기 이야기가 자유게시판에 올라간다 — 되돌릴 수 없는 실수다.
+             이미 뭔가 쓰고 있는 사람은 방해하지 않는다. */}
+      {otherDraft && !title && !content ? (
+        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-surface-soft px-3">
+          <p role="status" className="flex-1 text-sm text-content-muted">
+            다른 게시판에 쓰다 만 글이 있어요.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setBoardSlug(otherDraft.boardSlug)
+              applyDraft(otherDraft)
+              setOtherDraft(null)
+            }}
+            className="inline-flex min-h-[52px] shrink-0 items-center px-2 text-sm font-bold text-content-primary underline"
+          >
+            이어서 쓰기
+          </button>
+          <button
+            type="button"
+            aria-label="안내 닫기"
+            onClick={() => setOtherDraft(null)}
+            className="inline-flex min-h-[52px] min-w-[52px] shrink-0 items-center justify-center text-sm text-content-muted"
+          >
+            ✕
           </button>
         </div>
       ) : null}
@@ -220,12 +316,27 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
           onTextChange={setText}
           onBusyChange={setUploading}
           placeholder={POST_CONTENT_PLACEHOLDER}
+          /* 굵게·유튜브는 브라우저 안에서 끝나 임시저장에 그대로 남는다.
+             사진만 서버를 거치므로 비회원에게는 열지 않는다(post-media-policy). */
+          canUploadImage={isLoggedIn}
         />
       </div>
 
       {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}
       <WriteFooterSpacer />
       <WriteFooter block={block} textLength={text.length} label="등록하기" pendingLabel="등록 중…" />
+
+      {/* 🔴 돌아올 곳에 board 를 싣는다. 임시저장이 게시판별 키라, 이 값이 빠지면
+             로그인을 마치고 돌아와도 방금 쓴 글을 찾지 못한다.
+             내부 경로 판정은 KakaoSignInButton 의 onboardingHref 하나가 한다 —
+             여기서 또 거르면 규칙이 두 곳이 되고, 언젠가 서로 다른 답을 낸다. */}
+      {loginPrompt ? (
+        <WriteLoginPrompt
+          callbackUrl={`/write?board=${encodeURIComponent(boardSlug)}`}
+          warning={loginPrompt.warning}
+          onClose={() => setLoginPrompt(null)}
+        />
+      ) : null}
     </form>
   )
 }

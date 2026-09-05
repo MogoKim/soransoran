@@ -1,17 +1,14 @@
 import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
-import PageShell from '@/components/layouts/PageShell'
-import EmptyState from '@/components/layouts/EmptyState'
 import PostForm from '@/components/features/PostForm'
 import { auth } from '@/lib/auth'
-import { getBoardBySlug } from '@/lib/board-registry'
-import KakaoSignInButton from '@/components/features/KakaoSignInButton'
 import { toInternalPath } from '@/lib/callback-url'
 import { prisma } from '@/lib/prisma'
 
 export const metadata: Metadata = {
   title: '글쓰기',
-  // 로그인해야 쓰는 기능 화면이다. 검색 결과에 나올 이유가 없다.
+  // 비회원에게도 열리지만 검색 결과에 나올 내용은 없다. 빈 입력칸을 색인시킬 이유가 없고,
+  // 글이 읽히는 곳은 상세 페이지다.
   robots: { index: false, follow: false },
 }
 export const dynamic = 'force-dynamic'
@@ -22,25 +19,19 @@ export default async function WritePage({
   searchParams: { board?: string }
 }) {
   const session = await auth()
+  const isLoggedIn = Boolean(session?.user)
+
   // 로그인하고 오면 쓰려던 게시판 그대로 다시 연다.
   // board 가 없으면 붙이지 않는다 — 빈 파라미터가 남으면 목적지가 지저분해진다.
   const board = searchParams.board
   const writePath = board ? `/write?board=${encodeURIComponent(board)}` : '/write'
 
-  // 어느 게시판에 쓰려던 것인지 이름으로 되짚어 준다. 이름은 board-registry 가 정한다.
-  //
-  // 🔴 값이 확실할 때만 말한다.
-  //    board 가 없거나 커뮤니티 게시판이 아니면 게시판 이름을 지어내지 않고 일반 문구로 간다.
-  //    PostForm 은 잘못된 값을 COMMUNITY_BOARDS[0] 로 떨어뜨리는데, 그 fallback 을
-  //    여기서 따라 적으면 규칙이 두 곳에 생긴다. 로그인 뒤 동작은 그대로 두고
-  //    이 화면에서 단정만 하지 않는다.
-  const targetBoard = board ? getBoardBySlug(board) : undefined
-  const boardLabel = targetBoard?.isCommunity ? targetBoard.label : null
-
   /**
-   * 🔴 가입을 안 끝낸 사람에게 폼을 그리지 않는다.
+   * 🔴 가입을 안 끝낸 회원은 폼을 그리기 전에 온보딩으로 보낸다.
    *    저장은 createPost 가 막지만, 그건 다 쓰고 누른 뒤의 일이다.
-   *    들어온 순간 보내는 편이 쓴 것을 잃지 않는다.
+   *    비회원과 다른 점은 여기다 — 비회원에게는 글을 다 쓴 뒤 물어볼 것(로그인)이
+   *    남아 있어 폼이 쓸모가 있지만, 이쪽은 이미 로그인한 사람이라 물어볼 것이
+   *    가입 마무리뿐이고 그걸 뒤로 미룰수록 쓴 글만 위태로워진다.
    *
    * 🔴 isOnboarded 만 본다 — 서버 액션 guard 와 같은 규칙이다.
    *    여기서 다른 기준으로 판정하면 화면은 보내는데 저장은 통과하는
@@ -49,8 +40,6 @@ export default async function WritePage({
    * 🔴 돌아올 곳에 board 를 함께 싣는다.
    *    쓰다 만 글은 게시판별 키로 저장되므로, board 가 빠지면 가입을 마치고
    *    돌아와도 그 글이 복원되지 않는다.
-   *
-   * 🔴 비로그인은 여기 오지 않는다. 그쪽은 아래 카카오 CTA 가 그대로 맡는다.
    *
    * 🔴 회원을 못 찾은 것과 가입을 안 끝낸 것을 구분한다.
    *    User 행이 없으면 온보딩으로 보내도 거기서 할 수 있는 일이 없다 —
@@ -70,36 +59,24 @@ export default async function WritePage({
   }
 
   /**
-   * 🔴 글을 쓰는 동안에는 PageShell 을 두르지 않는다.
+   * 🔴 비회원에게도 폼을 연다.
+   *    로그인 CTA 를 먼저 세우면 아직 아무것도 쓰지 않은 사람에게 계정부터 요구하게 된다.
+   *    글을 쓰고 나면 그 글이 로그인할 이유가 되지만, 쓰기 전에는 이유가 없다.
+   *    장벽을 "쓰기 전" 에서 "등록할 때" 로 옮긴다 — 막아야 하는 것은 저장이지 작성이 아니다.
+   *
+   * 🔴 막는 자리는 그대로 서버에 있다. createPost 가 첫 줄에서 세션을 보고,
+   *    /api/uploads 는 401 을 낸다. 이 화면이 여는 것은 입력칸이지 권한이 아니다.
+   *
+   * 🔴 회원·비회원 모두 PageShell 을 두르지 않는다.
    *    로고·게시판 아이콘·FAB·Footer 가 함께 있으면 "구경 중" 화면 안에
    *    폼이 끼어 있는 것처럼 보인다. 이 화면의 목적은 하나뿐이다.
    *    나가는 길과 끝내는 길은 PostForm 의 상단바가 진다.
-   *
-   * 🔴 로그인 전은 그대로 둔다. 그쪽은 아직 쓰는 화면이 아니라
-   *    "들어오세요" 화면이라 평소의 머리·꼬리가 있는 편이 덜 낯설다.
+   *    비회원만 머리·꼬리를 달면, 같은 글쓰기 화면이 사람에 따라 다르게 생기고
+   *    로그인하고 돌아온 순간 화면이 바뀌어 쓰던 자리를 잃는다.
    */
-  if (session?.user) {
-    return (
-      <main className="mx-auto min-h-screen max-w-3xl px-4 pb-12 pt-[72px]">
-        <PostForm defaultBoardSlug={searchParams.board} />
-      </main>
-    )
-  }
-
   return (
-    <PageShell>
-      <main className="mx-auto max-w-3xl px-4 py-8">
-        <h1 className="mb-6 text-xl font-bold text-content-primary">글쓰기</h1>
-
-        <EmptyState
-          title={boardLabel ? `${boardLabel}에 이야기를 남겨보세요` : '이야기를 남겨보세요'}
-          body="카카오로 시작하면 바로 이어서 쓸 수 있어요. 짧게 써도 괜찮습니다."
-          action={
-            /* callbackUrl 은 내부 경로만 넘긴다. */
-            <KakaoSignInButton callbackUrl={toInternalPath(writePath) ?? '/'} />
-          }
-        />
-      </main>
-    </PageShell>
+    <main className="mx-auto min-h-screen max-w-3xl px-4 pb-12 pt-[72px]">
+      <PostForm defaultBoardSlug={searchParams.board} isLoggedIn={isLoggedIn} />
+    </main>
   )
 }
