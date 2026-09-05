@@ -86,10 +86,16 @@ check('🔴 일상어 목록에 식별어 표본이 없다',
 // 🟡 "가족 · 친구 · 여행" 은 소재어이자 일상어다. **그래도 무해하다** —
 //    양쪽 다 "버리지 않는다" 로 귀결되고, 소재 탐지는 사전이 먼저 본다.
 //    겹침 자체를 금지하는 대신 **탐지가 막히지 않는지**를 기능으로 확인한다.
-const overlapWords = TOPIC_RULES.filter((r) => COMMON_WORDS.includes(r.material)).map((r) => r.material)
+// 🔴 '아침' 은 material 이지만 **단독으로는 일부러 안 잡는다** — "아침에 일어나기 힘드네요"
+//    같은 글까지 물기 때문이다. 규칙은 아침식사·아침밥·아침에 먹 만 본다.
+const STANDALONE_EXEMPT = ['아침']
+const overlapWords = TOPIC_RULES.filter((r) => COMMON_WORDS.includes(r.material))
+  .map((r) => r.material).filter((w) => !STANDALONE_EXEMPT.includes(w))
 check(`🟡 소재어이자 일상어인 말(${overlapWords.length}개)도 소재로 잡힌다`,
   overlapWords.every((w) => findMaterial(`${w} 얘기 좀 해요`).material !== null),
   overlapWords.filter((w) => findMaterial(`${w} 얘기 좀 해요`).material === null).join(','))
+check('🔴 단독 매칭을 막은 말은 실제로 안 잡힌다 (넓어지지 않게)',
+  STANDALONE_EXEMPT.every((w) => findMaterial(`${w} 얘기 좀 해요`).material === null))
 
 console.log('\n⑤ 확장 — 🔴 원문 body 없이 title·memo 만으로 동작한다')
 const ex = expandSeed({ sourceArticleId: 'x', title: '핀일로 후라이팬 어때요??', memo: '살림 소재' })
@@ -191,10 +197,16 @@ console.log('\n⑭ 🔴 memo 오염 차단 (2026-09-05 사고)')
 const MEMO_FAMILY = '원문에 병원 실명과 남의 가족 사정이 있다. 소재(부모 간병)는 우리 또래 핵심이다'
 type SeedRow = Parameters<typeof expandSeed>[0]
 const withMemo = (o: Record<string, unknown>): SeedRow => o as unknown as SeedRow
-const care = expandSeed(withMemo({ sourceArticleId: 'c1', title: '간병인 추천 부탁드립니다.', memo: MEMO_FAMILY }))
+// 🟡 사고 당시 제목이던 "간병인 추천…" 은 **이제 사전에 있어서** 정상 분류된다(2026-09-06 확장).
+//    그래서 memo 오염 검사는 **여전히 소재가 없는 제목**으로 한다 — 검사의 뜻은 그대로다.
+const care = expandSeed(withMemo({ sourceArticleId: 'c1', title: '어제 그 일 말인데요', memo: MEMO_FAMILY }))
 check('🔴 title 에 소재가 없으면 memo 에 "가족" 이 있어도 needsHuman', care.needsHuman === true)
 check('🔴 family 초안을 만들지 않는다', care.drafts.length === 0, String(care.drafts.length))
 check('🔴 material 을 지어내지 않는다', care.material === null)
+check('🟡 사고 당시 제목은 이제 memo 없이도 간병으로 분류된다 (사전 확장 결과)',
+  expandSeed({ sourceArticleId: 'c0', title: '간병인 추천 부탁드립니다.' }).topic === 'careParent')
+check('🔴 그때도 memo 의 "가족" 이 topic 을 바꾸지 않는다',
+  expandSeed(withMemo({ sourceArticleId: 'c0b', title: '간병인 추천 부탁드립니다.', memo: MEMO_FAMILY })).topic === 'careParent')
 for (const [w, memo] of [['여행', '여행지 맛집 소재로 확장 가능'], ['살림', '후라이팬 살림 소재'], ['가족', '가족 여행 숙소 얘기']]) {
   const e = expandSeed(withMemo({ sourceArticleId: 'c2', title: '어제 그 일 말인데요', memo }))
   check(`🔴 memo 의 "${w}" 키워드가 소재로 새지 않는다`, e.needsHuman === true && e.drafts.length === 0)
@@ -214,6 +226,64 @@ check('🔴 CLI 가 날짜만 쓰는 stamp 를 더는 만들지 않는다',
   !/toISOString\(\)\.slice\(0, 10\)/.test(CLI_CODE))
 check('🔴 CLI 산출물 이름이 runId 를 쓴다', /seed-originality-dry-run-\$\{runId\}/.test(CLI_CODE))
 check('🔴 CLI 가 expandSeed 에 memo 를 넘기지 않는다', !/memo:\s*String\(r\.memo/.test(CLI_CODE))
+
+console.log('\n⑯ 🔴 소재 사전 1차 확장 — 간병 · 아침 (2026-09-06)')
+const care2 = expandSeed({ sourceArticleId: 'k1', sourceSite: 'navercafe:wgang', title: '간병인 추천 부탁드립니다.' })
+check('🟢 간병 유형 → 초안 생성', care2.drafts.length === 3 && care2.needsHuman === false)
+check('🟢 topic=careParent · 소재 간병', care2.topic === 'careParent' && care2.material === '간병')
+const careText = care2.drafts.map((d) => `${d.title} ${d.body}`).join(' ')
+// 🔴 원문의 병원명·입원·개인 가족 사정·추천 요청이 초안에 없어야 한다
+for (const w of ['서울성모', '성모병원', '병원', '입원', '엄마가', '추천해주실', '추천 부탁']) {
+  check(`🔴 간병 초안에 "${w}" 없음`, !careText.includes(w))
+}
+// 🔴 알선·중개로 읽히는 문장을 만들지 않는다
+for (const w of ['간병인 추천', '간병인 소개', '구합니다', '알선', '중개', '연락처', '모십니다']) {
+  check(`🔴 간병 초안에 알선 문구 "${w}" 없음`, !careText.includes(w))
+}
+// 🔴 의료 조언·치료·효능 단정을 하지 않는다
+for (const w of ['치료', '완치', '효과가', '드시면 좋', '처방', '진단', '증상']) {
+  check(`🔴 간병 초안에 의료 단정 "${w}" 없음`, !careText.includes(w))
+}
+check('🟢 간병 초안 safety pass · 유출 0 · 겹침 6자 미만',
+  care2.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0 && d.overlap < MAX_SOURCE_OVERLAP))
+
+const morn = expandSeed({ sourceArticleId: 'k2', sourceSite: 'navercafe:remonterrace', title: '스벅 견과류 아침에 먹기 어때요?' })
+check('🟢 아침 유형 → 초안 생성', morn.drafts.length === 3 && morn.needsHuman === false)
+check('🟢 topic=morningBite · 소재 아침 (견과류 → 아침 일반화)',
+  morn.topic === 'morningBite' && morn.material === '아침' && morn.matched === '견과류')
+const mornText = morn.drafts.map((d) => `${d.title} ${d.body}`).join(' ')
+for (const w of ['스벅', '스타벅스', '견과류']) {
+  check(`🔴 아침 초안에 "${w}" 없음`, !mornText.includes(w))
+}
+check('🟢 아침 초안 safety pass · 유출 0 · 겹침 6자 미만',
+  morn.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0 && d.overlap < MAX_SOURCE_OVERLAP))
+
+console.log('\n⑰ 🔴 확장이 넓어지지 않았나 · 회귀 없나')
+// 🔴 '요양' 단독·'입원' 은 일부러 뺐다 — 요양원 홍보글과 의료 상황을 물지 않게
+check('🔴 "요양원 추천해주세요" 는 간병으로 잡히지 않는다',
+  expandSeed({ sourceArticleId: 'k3', title: '요양원 추천해주세요' }).topic !== 'careParent')
+check('🔴 "입원했어요" 만으로는 간병이 아니다',
+  expandSeed({ sourceArticleId: 'k4', title: '입원했어요' }).needsHuman === true)
+check('🔴 "아침" 단독은 소재가 아니다 (너무 넓다)',
+  expandSeed({ sourceArticleId: 'k5', title: '아침에 일어나기가 힘드네요' }).topic !== 'morningBite')
+check('🟢 기존 3건 회귀 없음 — 맛집 · 후라이팬 · 숙소',
+  [['통영분들^^ 맛집 추천 좀 부탁드려요', 'travelFood'],
+   ['핀일로 후라이팬 어때요??', 'household'],
+   ['초고 아이랑 갈만한 리조트나 호텔  추천부탁드려요', 'travelStay']]
+    .every(([t, topic]) => {
+      const e = expandSeed({ sourceArticleId: 'r', title: t })
+      return e.topic === topic && e.drafts.length === 3 && e.drafts.every((d) => d.ok)
+    }))
+check('🔴 분류 실패는 여전히 needsHuman',
+  expandSeed({ sourceArticleId: 'k6', title: '어제 그 일 말인데요' }).needsHuman === true)
+check('🔴 memo 기반 분류 재발 없음 (새 축에서도)',
+  expandSeed(withMemo({ sourceArticleId: 'k7', title: '어제 그 일 말인데요', memo: '간병 아침 간식 소재' })).needsHuman === true)
+check('🟢 새 토픽도 템플릿 3개 · 제목이 질문으로 끝난다',
+  (['careParent', 'morningBite'] as TopicKey[]).every((t) =>
+    TEMPLATES[t].length === 3 && TEMPLATES[t].every((tpl) => /[?？]\s*$/.test(tpl.title('소재').trim()))))
+check('🟢 새 토픽 라벨·방향이 있다',
+  (['careParent', 'morningBite'] as TopicKey[]).every((t) => (TOPIC_LABEL[t] ?? '').length > 0))
+check('🟡 사전이 좁게 유지된다 (규칙 20개 이하)', TOPIC_RULES.length <= 20, String(TOPIC_RULES.length))
 
 console.log('\n⑩ 경로 가드 — 🔴 .microseed-data/ 밖으로 나가지 않는다')
 check(`기본 디렉터리는 ${SEED_DATA_DIR}`, SEED_DATA_DIR === '.microseed-data')
