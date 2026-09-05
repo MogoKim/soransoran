@@ -225,7 +225,7 @@ export default function PostForm({ defaultBoardSlug }: { defaultBoardSlug?: stri
 
       {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}
       <WriteFooterSpacer />
-      <WriteFooter block={block} textLength={text.length} label="올리기" pendingLabel="올리는 중…" />
+      <WriteFooter block={block} textLength={text.length} label="등록하기" pendingLabel="등록 중…" />
     </form>
   )
 }
