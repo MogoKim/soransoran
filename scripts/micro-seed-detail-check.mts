@@ -39,14 +39,28 @@ console.log('──────────────────────�
 console.log('\n① Access — 🔴 HTTP 200 만으로 성공을 판정하지 않는다')
 check('🔴 dialog "삭제" → deletedOrExpired',
   classifyAccess({ httpStatus: 200, dialogMessage: '삭제되었거나 존재하지 않는 게시글입니다.' }) === 'deletedOrExpired')
-check('🔴 title 폴백 → deletedOrExpired (HTTP 200 이어도)',
-  classifyAccess({ httpStatus: 200, titleFallback: true, articleFrame: true, bodyFound: true }) === 'deletedOrExpired')
+// 🔴 **본문을 읽었으면 title 이 뭐든 그 글은 존재한다** (2026-09-05 live 1회차 사고)
+//    SPA 라 goto 직후 document.title 이 아직 카페 홈이다.
+//    그 순간을 읽어 titleFallback 만으로 판정했더니 본문을 읽고도 10/10 이 삭제가 됐다(8건 오판).
+check('🟢 본문을 읽었으면 title 폴백이어도 ok — SPA title 지연 사고',
+  classifyAccess({ httpStatus: 200, titleFallback: true, articleFrame: true, bodyFound: true }) === 'ok',
+  '멀쩡한 글이 통째로 Access 로 사라진다')
+check('🟢 프레임 도달 + 본문 있음 + title 폴백 → ok (순서가 바뀌어도)',
+  classifyAccess({ titleFallback: true, bodyFound: true, articleFrame: true }) === 'ok')
+check('🔴 프레임엔 갔는데 본문이 없다 → selectorFailed (삭제 아님)',
+  classifyAccess({ httpStatus: 200, titleFallback: true, articleFrame: true, bodyFound: false }) === 'selectorFailed')
+check('🔴 프레임 미도달 + title 폴백 → deletedOrExpired',
+  classifyAccess({ httpStatus: 200, titleFallback: true, articleFrame: false }) === 'deletedOrExpired')
+check('🔴 dialog 는 본문보다 강하다 — 진짜 삭제는 계속 Access',
+  classifyAccess({ httpStatus: 200, dialogMessage: '삭제되었거나 존재하지 않는 게시글입니다.', bodyFound: true }) === 'deletedOrExpired')
 check('🔴 권한 안내 → permissionDenied',
   classifyAccess({ httpStatus: 200, permissionNotice: true }) === 'permissionDenied')
-check('🔴 ca-fe 프레임 미도달 → renderFailed',
+check('🔴 프레임 미도달 + title 정상 → renderFailed',
   classifyAccess({ httpStatus: 200, titleFallback: false, articleFrame: false }) === 'renderFailed')
 check('🔴 프레임은 있는데 본문 못 찾음 → selectorFailed',
   classifyAccess({ httpStatus: 200, titleFallback: false, articleFrame: true, bodyFound: false }) === 'selectorFailed')
+check('🔴 권한 안내는 본문보다 먼저다 → permissionDenied',
+  classifyAccess({ permissionNotice: true, bodyFound: true, articleFrame: true }) === 'permissionDenied')
 check('🟢 전부 정상 → ok',
   classifyAccess({ httpStatus: 200, titleFallback: false, articleFrame: true, bodyFound: true }) === 'ok')
 
@@ -144,6 +158,16 @@ check('🔴 classify 는 네트워크를 모른다',
   !/playwright|chromium|fetch\(|axios|page\.|browser/.test(CLS_CODE))
 check('🔴 classify 는 파일을 쓰지 않는다', !/writeFileSync|readFileSync/.test(CLS_CODE))
 check('🔴 import 만으로 브라우저를 열지 않는다', /if \(isDirectRun\) void main\(\)/.test(FETCH_CODE))
+// 🔴 title 은 프레임·본문을 본 **뒤에** 읽어야 한다 (SPA 지연)
+check('🔴 goto 직후에 title 을 읽지 않는다',
+  !/page\.goto\([\s\S]{0,200}?await page\.title\(\)/.test(FETCH_CODE),
+  'SPA 라 그 순간 title 은 카페 홈이다')
+check('🔴 title 을 bodyFound 판정 뒤에 읽는다',
+  FETCH_CODE.indexOf('await page.title()') > FETCH_CODE.indexOf('sig.bodyFound ='))
+check('🟢 본문이 읽혔는데 Access 가 되지 않는다 (통합)',
+  classifyDetail({ title: '냉장고 추천해주세요', body: '요즘 뭐 쓰세요 궁금해요', comments: [],
+    imageCount: 0, access: classifyAccess({ httpStatus: 200, titleFallback: true, articleFrame: true, bodyFound: true }) }).axis !== 'access')
+
 check('🔴 evaluate 콜백에 이름 붙은 함수가 없다 (__name 사고)',
   !/frame\.evaluate\(\(\) => \{[\s\S]{0,200}const \w+ = \(/.test(FETCH_CODE))
 

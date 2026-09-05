@@ -66,15 +66,30 @@ export type AccessSignals = {
 
 /**
  * 🔴 **읽지 못한 것은 판정이 아니다.** 왜 못 읽었는지까지 남긴다 (§4-S ⑤).
- *    HTTP 200 이어도 title 폴백이면 삭제다 — 상태 코드만 보면 성공으로 오인한다.
+ *    HTTP 200 만으로 성공을 판정하지 않는 원칙은 그대로다 (§4-W ⑥).
+ *
+ * 🔴 **그러나 titleFallback 하나로 삭제를 단정하지 않는다** (2026-09-05 실측 정정).
+ *    네이버 카페는 SPA 라 `goto` 직후 `document.title` 이 아직 **카페 홈 제목**이다.
+ *    그 순간을 읽으면 멀쩡한 글이 전부 삭제로 잡힌다 —
+ *    live 1회차에서 **본문을 읽고도 10/10 이 deletedOrExpired** 가 됐다(8건이 오판).
+ *
+ *    🟢 본문을 읽었거나 ca-fe 프레임에 도달했다면 **그 글은 존재한다.**
+ *       존재의 증거가 제목 문자열 비교보다 강하다.
  */
 export function classifyAccess(s: AccessSignals): AccessStatus {
+  // ① dialog 는 네이버가 직접 말해준 것이다 — 가장 강한 신호
   if (s.dialogMessage && /삭제|존재하지 않는/.test(s.dialogMessage)) return 'deletedOrExpired'
   if (s.permissionNotice === true) return 'permissionDenied'
+
+  // ② 🟢 **존재의 증거가 먼저다.** 본문을 읽었으면 title 이 뭐든 그 글은 있다
+  if (s.bodyFound === true) return 'ok'
+
+  // ③ 프레임에 도달했는데 본문이 없다 — 삭제가 아니라 셀렉터 문제로 본다
+  if (s.articleFrame === true) return 'selectorFailed'
+
+  // ④ 프레임에 못 갔다. 이때만 title 폴백을 삭제 신호로 쓴다
   if (s.titleFallback === true) return 'deletedOrExpired'
-  if (s.articleFrame !== true) return 'renderFailed'
-  if (s.bodyFound !== true) return 'selectorFailed'
-  return 'ok'
+  return 'renderFailed'
 }
 
 export type DetailInput = {
