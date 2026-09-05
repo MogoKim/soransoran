@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs'
 import {
   SRN_AXIS, SRN_DECISION_KEYS, EXPORT_COLUMNS, NOT_PUBLISH_NOTE, SHORT_RAW_MAX,
-  selectSrn, exportRows, exportTsv, titleBodyRefLength,
+  selectSrn, exportRows, exportTsv, titleBodyRefLength, blockedApprovals,
   type DetailRecord,
 } from './lib/micro-seed-srn-review.mjs'
 import { escapeHtml, assertOutputPath, renderHtml, SRN_DATA_DIR } from './micro-seed-srn-review.mjs'
@@ -121,7 +121,11 @@ check('🟢 body 있으면 공백 정규화해서 담는다',
   selectSrn([ok({ body: '  가  나  ' })]).cards[0]?.body === '가 나')
 
 console.log('\n⑧ export 계약 — 🔴 사람이 누른 것만 나간다')
-const cards = selectSrn([ok({ sourceArticleId: 'x1' }), ok({ sourceArticleId: 'x2' })]).cards
+// 🔴 APPROVE 를 쓰려면 본문이 있어야 한다 (§4-Z ⑨) — 없으면 승인 자체가 막힌다
+const cards = selectSrn([
+  ok({ sourceArticleId: 'x1', body: '원문 하나' }),
+  ok({ sourceArticleId: 'x2', body: '원문 둘' }),
+]).cards
 check('🔴 아무도 안 눌렀으면 0행', exportRows(cards, {}).length === 0)
 check('🔴 빈 문자열 판정은 누른 것이 아니다', exportRows(cards, { x1: { v: '' } }).length === 0)
 check('🔴 메모만 있고 판정이 없으면 나가지 않는다',
@@ -140,6 +144,7 @@ const EXPECTED = [
   'decision', 'axis', 'sourceArticleId', 'sourceSite', 'url', 'score', 'lane',
   'bodyLength', 'lengthBasis', 'titleBodyRefLength', 'imageCount', 'commentCount',
   'safetyVerdict', 'safetyReasons', 'title', 'memo', 'note',
+  'body',
 ]
 check(`🔴 컬럼 ${EXPECTED.length}개가 순서까지 같다`,
   EXPORT_COLUMNS.join('|') === EXPECTED.join('|'), EXPORT_COLUMNS.join('|'))
@@ -152,6 +157,44 @@ check('🔴 탭·개행은 셀 안에서 공백으로 접힌다',
     selectSrn([ok({ sourceArticleId: 'y', title: '가\t나\n다' })]).cards,
     { y: { v: 'APPROVE' } },
   )).split('\n')[1]?.includes('가\t나'))
+
+check('🔴 앞 17개 위치는 그대로다 (body 는 맨 뒤에만 붙었다)',
+  EXPORT_COLUMNS.slice(0, 17).join('|') === EXPECTED.slice(0, 17).join('|')
+  && EXPORT_COLUMNS[17] === 'body')
+
+console.log('\n⑮ body export — 🔴 APPROVE 된 SRN 행에만 실린다')
+const bodyCard = selectSrn([ok({ sourceArticleId: 'b1', bodyLength: 50, body: '짧은 원문이다' })]).cards
+check('🟢 body 있는 후보는 approvable', bodyCard[0]?.approvable === true)
+check('🟢 APPROVE → body 실림',
+  exportRows(bodyCard, { b1: { v: 'APPROVE' } })[0]?.body === '짧은 원문이다')
+for (const v of ['SEED', 'HOLD', 'DROP']) {
+  check(`🔴 ${v} → body 빈 값`, exportRows(bodyCard, { b1: { v } })[0]?.body === '')
+}
+check('🔴 미선택 → 행 자체가 없다', exportRows(bodyCard, {}).length === 0)
+check('🟢 TSV 마지막 셀이 body',
+  (exportTsv(exportRows(bodyCard, { b1: { v: 'APPROVE' } })).split('\n')[1] ?? '').split('\t')[17] === '짧은 원문이다')
+check('🔴 body 의 탭·개행은 셀 안에서 접힌다',
+  (exportTsv(exportRows(
+    selectSrn([ok({ sourceArticleId: 'b2', body: '가\t나\n다' })]).cards, { b2: { v: 'APPROVE' } },
+  )).split('\n')[1] ?? '').split('\t').length === EXPECTED.length)
+check('🟢 selectSrn 이 이미 공백을 정규화한다',
+  selectSrn([ok({ sourceArticleId: 'b3', body: '가\t나\n다' })]).cards[0]?.body === '가 나 다')
+
+console.log('\n⑯ 본문 미보존 승인 — 🔴 막는다 (두 곳에서)')
+const noBody = selectSrn([ok({ sourceArticleId: 'n1', bodyLength: 50 })]).cards
+check('🔴 body 없는 후보는 approvable=false', noBody[0]?.approvable === false)
+check('🔴 APPROVE 해도 export 행이 없다', exportRows(noBody, { n1: { v: 'APPROVE' } }).length === 0)
+check('🔴 body 빈 승인 행을 만들지 않는다',
+  !exportRows(noBody, { n1: { v: 'APPROVE' } }).some((r) => r.decision === 'APPROVE' && r.body === ''))
+check('🔴 blockedApprovals 가 이름을 남긴다',
+  blockedApprovals(noBody, { n1: { v: 'APPROVE' } })[0]?.articleId === 'n1')
+check('🟢 SEED·HOLD·DROP 은 그대로 나간다',
+  ['SEED', 'HOLD', 'DROP'].every((v) => exportRows(noBody, { n1: { v } }).length === 1))
+check('🟢 그 행들의 body 는 빈 값',
+  exportRows(noBody, { n1: { v: 'HOLD' } })[0]?.body === '')
+check('🔴 미선택은 blocked 에도 안 들어간다', blockedApprovals(noBody, {}).length === 0)
+check('🔴 승인 가능한 카드는 blocked 가 아니다',
+  blockedApprovals(bodyCard, { b1: { v: 'APPROVE' } }).length === 0)
 
 console.log('\n⑩ 버튼 — 🔴 여기에 발행이 없다는 것이 계약이다')
 check('🟢 버튼 4종', SRN_DECISION_KEYS.length === 4)
@@ -215,6 +258,18 @@ check('🔴 데이터 블록의 < 는 이스케이프된다',
   renderHtml(selectSrn([ok({ sourceArticleId: 'z', title: '<script>' })]).cards, [], {})
     .includes('\\u003cscript'))
 check('🟢 터치 타깃 52px 이상', /button\.act\{[^}]*min-height:52px/.test(html))
+check('🟢 미판정만 보기 필터가 있다', html.includes("['UNDECIDED','미판정만']"))
+check('🟢 미판정 필터는 판정 없는 카드만 남긴다',
+  /filter === 'UNDECIDED'\) return !\(STATE\[c\.articleId\] \|\| \{\}\)\.v/.test(html))
+check('🔴 화면 export 도 APPROVE 아니면 body 를 비운다',
+  /body: st\.v === 'APPROVE' \? \(c\.body \|\| ''\) : ''/.test(html))
+check('🔴 화면 export 도 승인 불가 행을 건너뛴다',
+  /if \(st\.v === 'APPROVE' && !c\.approvable\) return;/.test(html))
+check('🔴 승인 불가면 APPROVE 버튼을 잠근다', /b\.disabled = true;/.test(html))
+check('🔴 잠금 사유를 화면에 쓴다', html.includes('본문 미보존이라 <b>승인 불가</b>'))
+check('🔴 막힌 승인 건수를 표시한다', html.includes('승인했지만 내보내지 못한'))
+check('🟢 export 컬럼에 body 가 포함돼 화면에 주입된다',
+  html.includes('var COLS = ' + JSON.stringify(EXPORT_COLUMNS)))
 
 console.log('\n⑭ assertOutputPath — 🔴 밖이면 종료한다')
 const origExit = process.exit

@@ -178,6 +178,10 @@ button.act[data-k="SEED"][aria-pressed="true"]{background:var(--seed)}
 button.act[data-k="HOLD"][aria-pressed="true"]{background:var(--hold)}
 button.act[data-k="DROP"][aria-pressed="true"]{background:var(--drop)}
 .state{margin-top:8px;font-size:13px;font-weight:700}
+button.act[disabled]{opacity:.42;cursor:not-allowed;background:var(--bg)}
+button.act[disabled]:hover{border-color:var(--line)}
+.lock{margin-top:6px;font-size:13px;color:var(--warn);font-weight:700}
+#blocked{margin-top:8px;font-size:13px;color:var(--warn);font-weight:700}
 textarea{width:100%;margin-top:8px;min-height:44px;padding:8px;border:1px solid var(--line);
 border-radius:8px;font:inherit;font-size:14px;resize:vertical}
 #out,#outjson{width:100%;min-height:180px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -199,7 +203,9 @@ td,th{border:1px solid var(--line);padding:4px 8px;text-align:left}
 🔴 여기에는 <b>${escapeHtml(SRN_AXIS)} 축만</b> 올라온다. Seed Originality · Raw · Hold · Drop · Access 는 섞이지 않는다.<br>
 🔴 안전·브랜드 필터가 <b>길이보다 먼저</b> 다 — safety 가 pass 가 아닌 글은 애초에 후보가 아니다.<br>
 🟡 ${SHORT_RAW_MAX}자 미만은 <b>자격 조건</b> 이지 <b>자동 발행 조건이 아니다</b>.<br>
-🔴 저장은 이 브라우저 <b>localStorage</b> 까지다. 결과는 TSV/JSON 으로 직접 가져간다.
+🔴 저장은 이 브라우저 <b>localStorage</b> 까지다. 결과는 TSV/JSON 으로 직접 가져간다.<br>
+🟢 <b>APPROVE 된 SRN 행에만</b> 원문(body)이 export 에 실린다 — 승인 파일이 다음 단계의 입력이 되기 때문이다.<br>
+🔴 <b>본문 미보존 후보는 승인할 수 없다</b> — 원문을 보지 않고 누르는 승인을 막는다. 다른 판정은 가능하다.
 </div>
 <div class="bar" id="filters"></div>
 <div class="bar">
@@ -212,6 +218,7 @@ td,th{border:1px solid var(--line);padding:4px 8px;text-align:left}
 </header>
 <main id="list"></main>
 <footer>
+<div id="blocked"></div>
 <h2 style="font-size:16px">승인 결과 TSV</h2>
 <textarea id="out" readonly></textarea>
 <h2 style="font-size:16px">승인 결과 JSON</h2>
@@ -231,6 +238,7 @@ var KEY = 'srn-review-v1';
 // 🔴 컬럼 계약은 lib 이 정본이다. 화면이 따로 만들지 않는다.
 var COLS = ${JSON.stringify(EXPORT_COLUMNS)};
 var NOTE = ${JSON.stringify(NOT_PUBLISH_NOTE)};
+var MAX = ${SHORT_RAW_MAX};
 function cell(v){ return String(v == null ? '' : v).replace(/[\\t\\r\\n]+/g, ' '); }
 
 function load(){ try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } }
@@ -250,6 +258,8 @@ function rows(){
   CARDS.forEach(function(c){
     var st = STATE[c.articleId] || {};
     if (!st.v) return;
+    // 🔴 승인인데 원문이 없으면 행 자체를 만들지 않는다 (lib.exportRows 와 같은 규칙)
+    if (st.v === 'APPROVE' && !c.approvable) return;
     out.push({
       decision: st.v, axis: ${JSON.stringify(SRN_AXIS)},
       sourceArticleId: c.articleId, sourceSite: c.sourceSite, url: c.url,
@@ -258,7 +268,9 @@ function rows(){
       titleBodyRefLength: c.titleBodyRefLength,
       imageCount: c.imageCount, commentCount: c.commentCount,
       safetyVerdict: c.safetyVerdict, safetyReasons: c.safetyReasons,
-      title: c.title, memo: st.memo || '', note: NOTE
+      title: c.title, memo: st.memo || '', note: NOTE,
+      // 🟢 원문은 APPROVE 된 행에만 — 승인하지 않은 글의 원문까지 실으면 그것은 원문 배포다
+      body: st.v === 'APPROVE' ? (c.body || '') : ''
     });
   });
   return out;
@@ -270,8 +282,21 @@ function tsv(){
   return lines.join('\\n');
 }
 
+// 🔴 승인했지만 못 내보내는 행 — 조용히 사라지지 않게 화면에 이름을 남긴다
+function blocked(){
+  return CARDS.filter(function(c){
+    var st = STATE[c.articleId] || {};
+    return st.v === 'APPROVE' && !c.approvable;
+  });
+}
+
 function refresh(){
   var rs = rows();
+  var bl = blocked();
+  document.getElementById('blocked').textContent = bl.length
+    ? '🔴 승인했지만 내보내지 못한 ' + bl.length + '건 — 본문 미보존이라 원문 없이 승인할 수 없다 (' +
+      bl.map(function(c){ return c.articleId; }).join(', ') + ')'
+    : '';
   outEl.value = tsv();
   outJsonEl.value = JSON.stringify({ note: NOTE, generatedAt: META.generatedAt, decisions: rs }, null, 2);
   document.getElementById('prog').textContent = '승인 검토 ' + rs.length + ' / ' + CARDS.length;
@@ -290,6 +315,8 @@ function download(name, text, type){
 function render(){
   var shown = CARDS.filter(function(c){
     if (filter === 'ALL') return true;
+    // 🔴 남은 일을 찾는 필터 — 후보가 늘면 이것 없이는 진행 상황을 눈으로 못 쫓는다
+    if (filter === 'UNDECIDED') return !(STATE[c.articleId] || {}).v;
     if (filter === 'BODY') return c.body !== null;
     if (filter === 'NOBODY') return c.body === null;
     return (STATE[c.articleId] || {}).v === filter;
@@ -322,6 +349,7 @@ function render(){
       (c.safetyReasons ? ' · ' + esc(c.safetyReasons) : '') + '</div>' +
       '<div class="why">판정 ' + esc(c.reason) + '</div>' +
       '<div class="acts"></div>' +
+      (c.approvable ? '' : '<div class="lock">🔴 본문 미보존이라 <b>승인 불가</b> — SEED · HOLD · DROP 은 가능하다</div>') +
       '<div class="state"></div>' +
       '<textarea class="memo" placeholder="메모 (선택)"></textarea>';
 
@@ -333,6 +361,11 @@ function render(){
       b.setAttribute('aria-pressed', st.v === a[0] ? 'true' : 'false');
       b.title = a[1];
       b.textContent = a[0];
+      // 🔴 본문을 못 보는 후보는 승인 자체를 막는다 — 다른 판정은 열어 둔다
+      if (a[0] === 'APPROVE' && !c.approvable) {
+        b.disabled = true;
+        b.title = '본문 미보존이라 승인 불가 — 원문을 보지 않고 승인할 수 없다';
+      }
       b.addEventListener('click', function(){
         var cur = STATE[c.articleId] || {};
         cur.v = (cur.v === a[0]) ? '' : a[0];   // 같은 버튼 다시 누르면 해제
@@ -342,6 +375,8 @@ function render(){
         });
         el.setAttribute('data-done', cur.v ? '1' : '0');
         setState();
+        // 🔴 '미판정만' 을 보고 있으면 방금 판정한 카드는 목록에서 빠져야 한다
+        if (filter === 'UNDECIDED') { render(); return; }
         refresh();
       });
       acts.appendChild(b);
@@ -369,7 +404,7 @@ function render(){
 }
 
 var fEl = document.getElementById('filters');
-var FILTERS = [['ALL','전체'],['BODY','본문 있음'],['NOBODY','본문 미보존']];
+var FILTERS = [['ALL','전체'],['UNDECIDED','미판정만'],['BODY','본문 있음'],['NOBODY','본문 미보존']];
 DECISIONS.forEach(function(d){ FILTERS.push([d[0], d[0]]); });
 FILTERS.forEach(function(f){
   var b = document.createElement('button');
