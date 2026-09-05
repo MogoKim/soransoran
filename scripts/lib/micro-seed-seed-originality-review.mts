@@ -38,10 +38,14 @@ export type DraftIn = {
   leakedTokens?: string[]
   bannedHonorifics?: string[]
   ok?: boolean
+  /** 🔴 초안을 만든 시각 — §4-AC ③ */
+  generatedAt?: string
 }
 
 export type ExpansionIn = {
   sourceArticleId?: string
+  /** 🔴 어느 카페에서 왔는가 — §4-AC ③ */
+  sourceSite?: string
   sourceTitle?: string
   topic?: string
   topicLabel?: string
@@ -62,6 +66,8 @@ export type DraftCard = {
   title: string
   body: string
   bodyLength: number
+  /** 🔴 초안이 만들어진 시각 — 행마다 따라다닌다 */
+  generatedAt: string
   safetyVerdict: string
   safetyReasons: string
   safetySummary: string
@@ -78,6 +84,7 @@ export type DraftCard = {
 
 export type SourceGroup = {
   sourceArticleId: string
+  sourceSite: string
   sourceTitle: string
   topic: string
   topicLabel: string
@@ -129,6 +136,7 @@ export function toGroups(expansions: readonly ExpansionIn[]): SourceGroup[] {
         title: String(d.title ?? ''),
         body: String(d.body ?? ''),
         bodyLength: Number(d.bodyLength ?? 0),
+        generatedAt: String(d.generatedAt ?? ''),
         safetyVerdict: verdict,
         safetyReasons: (d.safety?.reasons ?? []).map((r) => String(r.code ?? '')).filter(Boolean).join('/'),
         safetySummary: String(d.safety?.summary ?? ''),
@@ -144,6 +152,7 @@ export function toGroups(expansions: readonly ExpansionIn[]): SourceGroup[] {
     for (const d of drafts) d.recommended = d.key === rec
     groups.push({
       sourceArticleId: id,
+      sourceSite: String(e.sourceSite ?? ''),
       sourceTitle: String(e.sourceTitle ?? ''),
       topic: String(e.topic ?? ''),
       topicLabel: String(e.topicLabel ?? ''),
@@ -165,6 +174,9 @@ export const REVIEW_COLUMNS: readonly string[] = [
   'title', 'body', 'bodyLength',
   'safetyVerdict', 'safetyReasons', 'maxOverlap', 'leakedTokens', 'clean', 'recommended',
   'memo', 'note',
+  // 🔴 §4-AC 간극 보강 (2026-09-05). **앞 18개 위치는 그대로.**
+  //    이 셋이 있어야 export 파일 한 줄만으로 출처·시각을 추적할 수 있다.
+  'sourceSite', 'generatedAt', 'reviewedAt',
 ] as const
 
 export type DecisionState = { v?: string; memo?: string }
@@ -176,6 +188,7 @@ export type ReviewRow = {
   safetyVerdict: string; safetyReasons: string; maxOverlap: number
   leakedTokens: string; clean: string; recommended: string
   memo: string; note: string
+  sourceSite: string; generatedAt: string; reviewedAt: string
 }
 
 /**
@@ -185,6 +198,12 @@ export type ReviewRow = {
 export function reviewRows(
   groups: readonly SourceGroup[],
   state: Readonly<Record<string, DecisionState>>,
+  /**
+   * 🔴 **사람이 export 한 시각**이다 (§4-AC ③).
+   *    초안을 만든 시각(generatedAt)과 다르다 — 둘 사이가 검수에 걸린 시간이다.
+   *    한 export 안의 모든 행은 같은 값을 쓴다. 파일 하나가 한 번의 검수다.
+   */
+  reviewedAt: string = new Date().toISOString(),
 ): ReviewRow[] {
   const out: ReviewRow[] = []
   for (const g of groups) {
@@ -211,6 +230,9 @@ export function reviewRows(
         recommended: d.recommended ? 'recommended' : '',
         memo: st?.memo ?? '',
         note: NOT_PUBLISH_NOTE,
+        sourceSite: g.sourceSite,
+        generatedAt: d.generatedAt,
+        reviewedAt,
       })
     }
   }

@@ -116,6 +116,8 @@ const EXPECTED = [
   'title', 'body', 'bodyLength',
   'safetyVerdict', 'safetyReasons', 'maxOverlap', 'leakedTokens', 'clean', 'recommended',
   'memo', 'note',
+  // 🔴 §4-AC 간극 보강 — 맨 뒤에만 붙었다
+  'sourceSite', 'generatedAt', 'reviewedAt',
 ]
 check(`컬럼 ${EXPECTED.length}개 순서까지 같다`, REVIEW_COLUMNS.join('|') === EXPECTED.join('|'))
 const tsv = reviewTsv(rows)
@@ -125,6 +127,39 @@ check('🔴 본문 개행이 셀 안에서 접힌다', !(tsv.split('\n')[1] ?? '
 check('🔴 탭도 접힌다',
   (reviewTsv(reviewRows(toGroups([exp('t', [draft(1, { title: '가\t나' })])]), { 't#1': { v: 'ADOPT' } }))
     .split('\n')[1] ?? '').split('\t').length === EXPECTED.length)
+
+check('🔴 앞 18개 위치는 그대로다 (뒤에만 붙었다)',
+  REVIEW_COLUMNS.slice(0, 18).join('|') === EXPECTED.slice(0, 18).join('|')
+  && REVIEW_COLUMNS.slice(18).join('|') === 'sourceSite|generatedAt|reviewedAt')
+
+console.log('\n⑫ 간극 3필드 — 🔴 행마다 있어야 한다 (§4-AC ③)')
+const AT_GEN = '2026-09-05T00:00:00.000Z'
+const AT_REV = '2026-09-05T01:00:00.000Z'
+const gg = toGroups([{
+  sourceArticleId: 'g1', sourceSite: 'navercafe:test', sourceTitle: '원문', topic: 'household',
+  topicLabel: '살림', material: '후라이팬', matched: '후라이팬', generalized: 'g', direction: 'd',
+  drafts: [draft(1, { generatedAt: AT_GEN })], needsHuman: false,
+} as ExpansionIn])
+check('🔴 그룹에 sourceSite', gg[0]?.sourceSite === 'navercafe:test')
+check('🔴 카드에 generatedAt', gg[0]?.drafts[0]?.generatedAt === AT_GEN)
+const rr = reviewRows(gg, { 'g1#1': { v: 'ADOPT' } }, AT_REV)
+check('🔴 export 행에 sourceSite', rr[0]?.sourceSite === 'navercafe:test')
+check('🔴 export 행에 generatedAt', rr[0]?.generatedAt === AT_GEN)
+check('🔴 export 행에 reviewedAt', rr[0]?.reviewedAt === AT_REV)
+check('🔴 reviewedAt 은 generatedAt 과 다르다 (검수 시각)', rr[0]?.reviewedAt !== rr[0]?.generatedAt)
+const many2 = reviewRows(
+  toGroups([{ sourceArticleId: 'g2', sourceSite: 'navercafe:test', drafts: [draft(1), draft(2)] } as ExpansionIn]),
+  { 'g2#1': { v: 'ADOPT' }, 'g2#2': { v: 'DROP' } }, AT_REV)
+check('🟢 한 export 안 reviewedAt 은 모두 같다',
+  new Set(many2.map((r) => r.reviewedAt)).size === 1)
+check('🟡 reviewedAt 을 안 주면 지금 시각을 쓴다',
+  /^\d{4}-\d{2}-\d{2}T/.test(reviewRows(gg, { 'g1#1': { v: 'ADOPT' } })[0]?.reviewedAt ?? ''))
+check('🟡 sourceSite 없으면 빈 문자열 (추측하지 않는다)',
+  toGroups([{ sourceArticleId: 'g3', drafts: [draft(1)] } as ExpansionIn])[0]?.sourceSite === '')
+check('🔴 화면 export 도 세 필드를 넣는다',
+  /sourceSite: g\.sourceSite, generatedAt: d\.generatedAt, reviewedAt: at/.test(renderHtml(gg, {})))
+check('🔴 화면은 TSV·JSON 에 같은 시각을 쓴다',
+  /var at = new Date\(\)\.toISOString\(\);[\s\S]*?rows\(at\)[\s\S]*?tsv\(at\)/.test(renderHtml(gg, {})))
 
 console.log('\n⑦ 버튼 — 🔴 여기에 발행이 없다')
 check('버튼 3종', REVIEW_DECISION_KEYS.length === 3)

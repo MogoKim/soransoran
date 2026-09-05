@@ -152,6 +152,8 @@ const EXPECTED = [
   'sourceArticleId', 'sourceTitle', 'topic', 'material', 'matched', 'generalized', 'direction',
   'draftNo', 'title', 'body', 'bodyLength',
   'safetyVerdict', 'safetyReasons', 'maxOverlapWithSourceTitle', 'leakedTokens', 'ok', 'note',
+  // 🔴 §4-AC 간극 보강 — 맨 뒤에만 붙었다
+  'sourceSite', 'generatedAt',
 ]
 check(`컬럼 ${EXPECTED.length}개 순서까지 같다`, DRY_RUN_COLUMNS.join('|') === EXPECTED.join('|'))
 const tsv = toTsv([ex])
@@ -162,6 +164,26 @@ check('TSV 셀 수가 컬럼 수와 같다',
 check('🔴 본문의 개행이 셀 안에서 접힌다', !(tsv.split('\n')[1] ?? '').includes('\n'))
 check('🔴 모든 행에 발행 아님 문구', tsv.split('\n').slice(1).filter((l) => l.trim()).every((l) => l.includes(DRY_RUN_NOTE)))
 check('발행 아님 문구가 정의돼 있다', DRY_RUN_NOTE.includes('발행 아님') && DRY_RUN_NOTE.includes('초안'))
+
+check('🔴 앞 17개 위치는 그대로다 (뒤에만 붙었다)',
+  DRY_RUN_COLUMNS.slice(0, 17).join('|') === EXPECTED.slice(0, 17).join('|')
+  && DRY_RUN_COLUMNS[17] === 'sourceSite' && DRY_RUN_COLUMNS[18] === 'generatedAt')
+
+console.log('\n⑬ 간극 3필드 중 둘 — 🔴 행마다 있어야 한다 (§4-AC ③)')
+const AT = '2026-09-05T00:00:00.000Z'
+const withSite = expandSeed(
+  { sourceArticleId: 's1', sourceSite: 'navercafe:test', title: '핀일로 후라이팬 어때요??' }, AT)
+check('🔴 expansion 에 sourceSite 가 실린다', withSite.sourceSite === 'navercafe:test')
+check('🔴 모든 draft 에 generatedAt 이 실린다', withSite.drafts.every((d) => d.generatedAt === AT))
+check('🔴 한 회차는 같은 시각을 공유한다',
+  new Set(withSite.drafts.map((d) => d.generatedAt)).size === 1)
+check('🟡 sourceSite 가 없으면 빈 문자열 (추측하지 않는다)',
+  expandSeed({ sourceArticleId: 's2', title: '후라이팬' }, AT).sourceSite === '')
+check('🔴 분류 못 한 행도 sourceSite 를 잃지 않는다',
+  expandSeed({ sourceArticleId: 's3', sourceSite: 'navercafe:test', title: '어제 그 일' }, AT).sourceSite === 'navercafe:test')
+const tsvSite = toTsv([withSite]).split('\n')
+check('🔴 TSV 마지막 두 칸이 sourceSite · generatedAt',
+  (tsvSite[1] ?? '').split('\t')[17] === 'navercafe:test' && (tsvSite[1] ?? '').split('\t')[18] === AT)
 
 console.log('\n⑩ 경로 가드 — 🔴 .microseed-data/ 밖으로 나가지 않는다')
 check(`기본 디렉터리는 ${SEED_DATA_DIR}`, SEED_DATA_DIR === '.microseed-data')

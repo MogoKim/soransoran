@@ -50,7 +50,9 @@ export function assertInsideDataDir(p: string): void {
   }
 }
 
-export type ApprovalRow = { decision?: string; sourceArticleId?: string; title?: string; memo?: string }
+export type ApprovalRow = {
+  decision?: string; sourceArticleId?: string; sourceSite?: string; title?: string; memo?: string
+}
 
 /** 🔴 SEED 행만 — APPROVE · HOLD · DROP · 미선택은 입력이 아니다 */
 export function seedRowsOf(rows: readonly ApprovalRow[]): ApprovalRow[] {
@@ -100,6 +102,9 @@ export function toTsv(exps: readonly Expansion[]): string {
         leakedTokens: d.leakedTokens.join('/'),
         ok: d.ok ? 'ok' : 'check',
         note: DRY_RUN_NOTE,
+        // 🔴 §4-AC ③ — 행마다 출처와 시각을 남긴다
+        sourceSite: e.sourceSite,
+        generatedAt: d.generatedAt,
       } as Record<string, unknown>)[c])).join('\t'))
     }
   }
@@ -126,16 +131,19 @@ function main(): void {
 
   if (seeds.length === 0) fail('SEED 행이 없다 — 승인 화면에서 SEED 로 판정한 뒤 export 한다')
 
+  // 🔴 한 회차는 하나의 시각을 공유한다 — 행마다 몇 밀리초씩 다르면 같은 회차인지 알기 어렵다
+  const generatedAt = new Date().toISOString()
   const exps = seeds.map((r) => expandSeed({
     sourceArticleId: String(r.sourceArticleId ?? ''),
+    sourceSite: String(r.sourceSite ?? ''),
     title: String(r.title ?? ''),
     memo: String(r.memo ?? ''),
-  }))
+  }, generatedAt))
 
   let drafts = 0
   let flagged = 0
   for (const e of exps) {
-    console.log(`\n── ${e.sourceArticleId}  ${e.needsHuman ? '🔴 분류 못 함' : `[${e.topicLabel}]`}`)
+    console.log(`\n── ${e.sourceArticleId}${e.sourceSite ? ` · ${e.sourceSite}` : ''}  ${e.needsHuman ? '🔴 분류 못 함' : `[${e.topicLabel}]`}`)
     console.log(`   소재    ${e.material ?? '(없음)'}${e.matched && e.matched !== e.material ? `  ← 원문 "${e.matched}"` : ''}`)
     console.log(`   일반화  ${e.generalized}`)
     console.log(`   방향    ${e.direction}`)
@@ -156,7 +164,8 @@ function main(): void {
   writeFileSync(tsvPath, toTsv(exps), 'utf-8')
   writeFileSync(jsonPath, JSON.stringify({
     note: DRY_RUN_NOTE,
-    generatedAt: new Date().toISOString(),
+    // 🔴 행에 박은 값과 같아야 한다 — 다르면 어느 쪽이 맞는지 알 수 없다
+    generatedAt,
     source: inPath,
     topics: Object.entries(TOPIC_LABEL).map(([k, v]) => ({ key: k, label: v })),
     expansions: exps,

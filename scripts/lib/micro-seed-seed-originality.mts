@@ -355,6 +355,12 @@ export type Draft = {
   title: string
   body: string
   bodyLength: number
+  /**
+   * 🔴 이 초안을 **언제 만들었는가** — 행마다 남긴다 (§4-AC ③).
+   *    파일 최상위에만 두면 행을 골라 옮기는 순간(그럴 일이 반드시 생긴다)
+   *    시각이 떨어져 나간다. TSV 한 줄만 떼어 봐도 알 수 있어야 한다.
+   */
+  generatedAt: string
   safety: SafetyResult
   overlap: number
   overlapFragment: string
@@ -366,6 +372,11 @@ export type Draft = {
 
 export type Expansion = {
   sourceArticleId: string
+  /**
+   * 🔴 어느 카페에서 왔는가 — articleId 만으로는 원천을 추적할 수 없다 (§4-AC ③).
+   *    SRN 승인 export 에는 있는데 여기로 옮기지 않아 유실됐던 필드다.
+   */
+  sourceSite: string
   sourceTitle: string
   topic: TopicKey | null
   topicLabel: string
@@ -395,13 +406,18 @@ const DIRECTION: Record<TopicKey, string> = {
  * 🔴 원문 body 가 없어도 동작한다 — title 과 memo 만 쓴다.
  *    (SRN export 는 SEED 행의 body 를 비워서 내보낸다. 그게 정상이다)
  */
-export function expandSeed(row: { sourceArticleId: string; title: string; memo?: string }): Expansion {
+export function expandSeed(
+  row: { sourceArticleId: string; sourceSite?: string; title: string; memo?: string },
+  generatedAt: string = new Date().toISOString(),
+): Expansion {
   const title = String(row.title ?? '')
+  const site = String(row.sourceSite ?? '')
   const mat = findMaterial(title, String(row.memo ?? ''))
 
   if (!mat.topic || !mat.material) {
     return {
       sourceArticleId: String(row.sourceArticleId ?? ''),
+      sourceSite: site,
       sourceTitle: title,
       topic: null, topicLabel: '(분류 못 함)',
       material: null, matched: null,
@@ -427,6 +443,7 @@ export function expandSeed(row: { sourceArticleId: string; title: string; memo?:
     return {
       draftNo: i + 1,
       title: dTitle, body: dBody, bodyLength: [...dBody].length,
+      generatedAt,
       safety, overlap: ov.len, overlapFragment: ov.frag,
       leakedTokens: leaked, bannedHonorifics: banned,
       ok: safety.verdict === 'pass' && ov.len < MAX_SOURCE_OVERLAP && leaked.length === 0 && banned.length === 0,
@@ -435,6 +452,7 @@ export function expandSeed(row: { sourceArticleId: string; title: string; memo?:
 
   return {
     sourceArticleId: String(row.sourceArticleId ?? ''),
+    sourceSite: site,
     sourceTitle: title,
     topic: mat.topic,
     topicLabel: TOPIC_LABEL[mat.topic],
@@ -454,6 +472,9 @@ export const DRY_RUN_COLUMNS: readonly string[] = [
   'sourceArticleId', 'sourceTitle', 'topic', 'material', 'matched', 'generalized', 'direction',
   'draftNo', 'title', 'body', 'bodyLength',
   'safetyVerdict', 'safetyReasons', 'maxOverlapWithSourceTitle', 'leakedTokens', 'ok', 'note',
+  // 🔴 §4-AC 간극 보강 (2026-09-05). **앞 17개 위치는 그대로** —
+  //    TSV 를 위치로 읽는 쪽이 있어서 중간 삽입은 조용한 오독이 된다.
+  'sourceSite', 'generatedAt',
 ] as const
 
 export const DRY_RUN_NOTE = '발행 아님 · 초안일 뿐 · 사람 확인 전 사용 금지'
