@@ -14,8 +14,16 @@ const REPORT_WINDOW_MS = 10 * 60 * 1000
  * 🔴 needsOnboarding 은 optional 이다.
  *    지금 화면들은 error 만 읽는다. 필수로 두면 기존 반환 경로가 전부 깨진다.
  *    O3-B 에서 화면이 이 값으로 온보딩 안내를 띄울지 정한다.
+ *
+ * 🔴 already 도 같은 이유로 optional 이다.
+ *    done 만 읽던 화면은 그대로 동작하고, 읽는 화면만 최초와 중복을 가른다.
  */
-export type ReportActionState = { error?: string; done?: boolean; needsOnboarding?: true }
+export type ReportActionState = {
+  error?: string
+  done?: boolean
+  already?: true
+  needsOnboarding?: true
+}
 
 /**
  * 신고 접수
@@ -51,7 +59,15 @@ export async function createReport(
     where: { reporterId: userId, postId, commentId },
     select: { id: true },
   })
-  if (existing) return { done: true }
+  /**
+   * 🔴 여기서는 새 row 가 생기지 않는다. 그러니 화면이 최초 신고와 같은 말을 하면 안 된다.
+   *    `already` 를 함께 돌려주는 것은 그 한 가지 때문이다.
+   *
+   * 🔴 이번에는 기존 신고의 reason·detail 을 갱신하지 않는다.
+   *    사유를 덮어쓰는 것은 운영자가 이미 보고 있을 수 있는 접수 건을 바꾸는 일이다 —
+   *    DB write 경로가 달라지므로 별도 판단으로 남긴다.
+   */
+  if (existing) return { done: true, already: true }
 
   await prisma.report.create({
     data: {

@@ -7,7 +7,7 @@ import ActionButton from '@/components/ui/ActionButton'
 import { createReport, type ReportActionState } from '@/lib/actions/reports'
 import { REPORT_REASONS } from '@/lib/report-reasons'
 import { useToast } from '@/components/ui/toast'
-import { REPORT_RECEIVED, REPORT_REVIEW_HINT } from '@/lib/comment-policy'
+import { REPORT_ALREADY, REPORT_RECEIVED, REPORT_REVIEW_HINT } from '@/lib/comment-policy'
 
 /**
  * 신고 버튼
@@ -33,14 +33,21 @@ export default function ReportButton({
   /* 🔴 접수됐다는 사실은 토스트가 알린다. 폼 자리에는 상태 표시만 남는다 */
   useEffect(() => {
     if (!state.done) return
-    toast.success(REPORT_RECEIVED, { key: `report:${commentId ?? postId}` })
+    /* 🔴 중복은 새 접수를 만들지 않았다 — 최초 신고와 같은 말을 하지 않는다 */
+    toast.success(state.already ? REPORT_ALREADY : REPORT_RECEIVED, {
+      key: `report:${commentId ?? postId}`,
+    })
     // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
   /* 🔴 접수 뒤에는 폼을 다시 열지 않는다 — 같은 대상을 두 번 신고하게 만들지 않는다 */
   if (state.done) {
-    return <p className="text-xs text-content-muted">{REPORT_REVIEW_HINT}</p>
+    return (
+      <p className="text-xs text-content-muted">
+        {state.already ? REPORT_ALREADY : REPORT_REVIEW_HINT}
+      </p>
+    )
   }
 
   if (!open) {

@@ -24,6 +24,14 @@ export const REPORT_RECEIVED = '신고가 접수됐어요.'
  *    여기 남는 것은 '이 폼은 끝났다' 는 상태 표시다.
  */
 export const REPORT_REVIEW_HINT = '운영자가 확인할게요.'
+/**
+ * 이미 신고한 대상을 다시 신고했을 때.
+ *
+ * 🔴 `REPORT_RECEIVED` 를 쓰지 않는다. 중복 신고는 **새 접수를 만들지 않는다** —
+ *    저장되지 않은 일을 접수됐다고 말하면 신고 기능 자체를 못 믿게 된다.
+ * 🔴 알리는 것은 **본인의 중복**뿐이다. 다른 사람이 이 글을 신고했는지는 말하지 않는다.
+ */
+export const REPORT_ALREADY = '이미 신고하셨어요. 운영자가 확인하고 있어요.'
 
 /** 글자수는 상한이 가까워질 때만 보여준다. */
 export const COMMENT_COUNTER_FROM = 400
