@@ -290,7 +290,9 @@ check(`🟢 새 토픽도 템플릿 ${DRAFTS_PER_SOURCE}개 · 제목이 질문�
     TEMPLATES[t].length === DRAFTS_PER_SOURCE && TEMPLATES[t].every((tpl) => /[?？]\s*$/.test(tpl.title('소재').trim()))))
 check('🟢 새 토픽 라벨·방향이 있다',
   (['careParent', 'morningBite'] as TopicKey[]).every((t) => (TOPIC_LABEL[t] ?? '').length > 0))
-check('🟡 사전이 좁게 유지된다 (규칙 20개 이하)', TOPIC_RULES.length <= 20, String(TOPIC_RULES.length))
+// 🟡 상한은 "좁게 유지" 를 지키기 위한 눈금이다. 2종 추가(2026-09-06)로 21 이 됐다.
+//    올릴 때마다 근거를 함께 남긴다 — 소리 없이 늘어나는 것이 사전의 위험이다.
+check('🟡 사전이 좁게 유지된다 (규칙 22개 이하)', TOPIC_RULES.length <= 22, String(TOPIC_RULES.length))
 
 console.log('\n⑱ 🔴 원천당 초안 2개 (2026-09-06, 3개에서 줄임)')
 check('DRAFTS_PER_SOURCE 는 2', DRAFTS_PER_SOURCE === 2, String(DRAFTS_PER_SOURCE))
@@ -382,6 +384,58 @@ check('🔴 앞 19개 위치는 그대로',
   DRY_RUN_COLUMNS.slice(0, 19).join('|') === EXPECTED.slice(0, 19).join('|')
   && DRY_RUN_COLUMNS[19] === 'sourceInput' && DRY_RUN_COLUMNS[20] === 'sourceDecision')
 check('🟡 소스 승인 파일 탐색기가 있다', typeof latestSourceApprovalFile === 'function')
+
+console.log('\n㉑ 🔴 소재 사전 2차 확장 — 조미료 · 통화 (2026-09-06)')
+check('규칙 21개 (19 → +2)', TOPIC_RULES.length === 21, String(TOPIC_RULES.length))
+check('🔴 토픽은 9종 그대로 (구조 변경 없음)', Object.keys(TEMPLATES).length === 9)
+// 🔴 단독어를 일부러 안 잡는다 — 넓히면 소재가 아닌 글까지 물어온다
+check('🔴 "요리" 단독 비매칭', findMaterial('요리 못해서 고민이에요').material === null)
+check('🔴 "요리법" 비매칭', findMaterial('요리법 알려주세요').material === null)
+check('🔴 "전화" 단독 비매칭', findMaterial('전화기가 고장났어요').material === null)
+check('🔴 "전화 왔어요" 비매칭', findMaterial('아침부터 전화 왔어요').material === null)
+check('🟢 조미료·양념·간 맞추 는 잡힌다',
+  ['조미료 뭐 쓰세요', '양념 비율 어떻게', '간 맞추기 어려워요'].every((t) => findMaterial(t).material === '조미료'))
+check('🟢 전화 수다·통화 는 잡힌다',
+  ['전화 수다 좋아하세요', '통화 자주 하세요'].every((t) => findMaterial(t).material === '통화'))
+check('🟢 조미료는 household · 통화는 mindTies',
+  findMaterial('조미료 뭐 쓰세요').topic === 'household' && findMaterial('통화 자주 하세요').topic === 'mindTies')
+
+// 🔴 점검에서 보류·금지로 분류한 것은 들어오지 않아야 한다
+for (const [t, why] of [
+  ['lg얼음정수기 현금 혜택 많은 곳 추천해주세요.', '정수기·큰 살림가전(보류)'],
+  ['올영 세일 틴트 추천 지속력 좋네여', '화장품·꾸밈(보류)'],
+  ['콜레스테롤 수치가 낮아졌는데 약추천', '콜레스테롤·약(금지)'],
+] as [string, string][]) {
+  const e = expandSeed({ sourceArticleId: 'q', title: t })
+  check(`🔴 ${why} → needsHuman · 초안 0`, e.needsHuman === true && e.drafts.length === 0)
+}
+
+console.log('\n㉒ 🔴 슬롯 문안 — 새 소재가 비문을 만들지 않는다')
+// 🔴 "통화 사이, 요즘 어떠세요?" 가 비문이라 mindTies 1번은 슬롯을 쓰지 않는다
+check('mindTies 1번은 슬롯을 쓰지 않는다',
+  TEMPLATES.mindTies[0]!.title('통화') === TEMPLATES.mindTies[0]!.title('친구'))
+check('🔴 "통화 사이" 같은 비문이 없다',
+  !(['통화', '친구', '부부'] as string[]).some((m) => TEMPLATES.mindTies[0]!.title(m).includes(m + ' 사이')))
+// 🔴 household 1번 본문은 "낡았다" 를 전제하지 않는다 — 조미료에는 안 맞는다
+check('🔴 household 1번 본문이 "낡은" 을 전제하지 않는다',
+  !TEMPLATES.household[0]!.body('조미료').includes('낡은'))
+check('🟢 household 1번 제목은 그대로 (후라이팬 초안이 살아 있다)',
+  TEMPLATES.household[0]!.title('후라이팬') === '후라이팬 언제 바꾸세요?')
+check('🟢 11소재 전부 초안 2건 · safety pass · 유출 0 · 겹침 6자 미만',
+  ([['통영분들^^ 맛집 추천 좀 부탁드려요', 'travelFood'], ['핀일로 후라이팬 어때요??', 'household'],
+    ['초고 아이랑 갈만한 리조트나 호텔  추천부탁드려요', 'travelStay'], ['간병인 추천 부탁드립니다.', 'careParent'],
+    ['스벅 견과류 아침에 먹기 어때요?', 'morningBite'], ['손주 데리고 어디 갈까요', 'family'],
+    // 🔴 제목에 "어떻게" 를 넣으면 템플릿의 "어떻게" 와 겹쳐 유출로 잡힌다(main 에서도 같다).
+    //    사전 커버리지를 보는 검사이지 겹침을 보는 검사가 아니므로, 겹치지 않는 제목을 쓴다.
+    ['연금 준비 다들 하시나요', 'moneyLater'], ['갱년기 요즘 힘드네요', 'bodyHealth'],
+    ['친구 만나기가 어렵네요', 'mindTies'],
+    ['음식할때 조미료 안쓰시는 분들은 어떤거 쓰시나요?', 'household'], ['전화 수다', 'mindTies']] as [string, string][])
+    .every(([t, topic]) => {
+      const e = expandSeed({ sourceArticleId: 'w', title: t })
+      return e.topic === topic && e.drafts.length === DRAFTS_PER_SOURCE
+        && e.drafts.every((d) => d.ok && d.safety.verdict === 'pass'
+          && d.leakedTokens.length === 0 && d.overlap < MAX_SOURCE_OVERLAP)
+    }))
 
 console.log('\n⑩ 경로 가드 — 🔴 .microseed-data/ 밖으로 나가지 않는다')
 check(`기본 디렉터리는 ${SEED_DATA_DIR}`, SEED_DATA_DIR === '.microseed-data')
