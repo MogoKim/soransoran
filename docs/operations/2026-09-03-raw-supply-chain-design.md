@@ -3721,8 +3721,8 @@ title · memo · detailRunId · reviewedAt · note
 **다음 PR TODO — 이 순서로**
 - [x] **T1** `raw-detail-fetch` — ④의 재사용 목록대로 (2026-09-06 구현 · ⑩ 참조)
 - [x] **T2** `*.raw-detail.jsonl` 저장 — ⑤ 규칙. **전문 저장 0** 을 fixture 가 감시한다
-- [ ] **T3** 검수 화면 HTML — ⑥. `RAW`/`HOLD`/`DROP` 만. 기존 화면과 섞지 않음
-- [ ] **T4** export — ⑦ 컬럼 21개, 파일명에 시각
+- [x] **T3** 검수 화면 HTML — ⑥ (2026-09-06 구현 · ⑬ 참조)
+- [x] **T4** export — ⑬의 16컬럼, 파일명에 시각
 - [x] **T5** `seenAll()` 이 `.raw-detail.jsonl` 과 `.detail.jsonl` 을 합쳐 본다 (T1 과 함께)
 - [ ] **T6** CI 게이트에 `raw-check` 추가
 - [ ] **T7** (그 뒤) 재작성 초안 경로 — 🔴 **여기서부터는 LLM 논의가 필요하다. 별도 승인 사항**
@@ -3860,6 +3860,40 @@ Raw 는 그 안에 **드물게 섞여 있고, 찾아내야 하는 것**이다.
 
 🔴 **아직 검증된 것이 아니다.** 이 정렬이 실제로 400자 이상을 더 많이 데려오는지는
 다음 live 회차에서만 알 수 있다. 지금은 **근거 있는 가설**이고, 근거는 위 실측 한 줄이다.
+
+### ⑬ Raw 검수 화면 (2026-09-06 구현 · T3·T4)
+
+`scripts/micro-seed-raw-review.mts` · `npm run micro-seed:raw-review`
+
+**입력**: `.microseed-data/*.raw-detail.jsonl` 전부. 같은 id 는 **나중 runId 가 이긴다**(재수집이 최신이다).
+**후보 조건 셋을 모두** 만족해야 화면에 오른다 — `axis=rawOriginality` · `accessStatus=ok` · `safetyVerdict=pass`.
+🔴 빠진 행은 **사유와 함께** 화면 아래에 세어 둔다. 후보가 소리 없이 줄어드는 것이 이 화면의 가장 큰 위험이다.
+
+**버튼은 `RAW`/`HOLD`/`DROP` 뿐**이고 `APPROVE`·`ADOPT`·`SEED`·발행 버튼은 없다(⑥).
+fixture 가 버튼 정의에 그 낱말들이 없음을 확인한다.
+
+🟡 **화면이 스스로 답해야 할 질문 하나를 넣었다.** 카드마다
+"이 300자로 판단이 되셨나요? 된다 / 부족하다" 를 묻고 집계한다.
+§4-AF ⑤ 는 *전문을 저장하지 않는다* 고 정했는데, **그 결정이 실제로 판단을 막는지는 써 봐야 안다.**
+부족이 쌓이면 저장 길이를 다시 논의한다 — **전문 저장이 아니라 길이 조정이다.**
+
+**export 컬럼 16개** (`raw-originality-approvals-YYYYMMDD-HHMMSS.{tsv,json}`):
+```
+decision · sourceArticleId · sourceSite · url · title · score · lane · axis ·
+bodyLength · bodyHead · safetyVerdict · safetyReasons · runId · fetchedAt · reviewedAt · note
+```
+🔴 **`body` 전문 컬럼은 없다.** 🔴 **누른 것만 나간다** — 기본값으로 채우면 "검수" 가 사람의 행위가 아니게 된다.
+
+> ⚠️ ⑦에 적었던 21컬럼은 **설계 당시의 추정**이었다. 실제 `raw-detail` 산출물에 없는 필드
+> (`assetAxes`·`memo`·`detailRunId`)가 섞여 있었다. 위 16개가 **실측에 맞춘 계약**이다.
+
+**headless 렌더 실측**: 외부 네트워크 요청 **0건** · JS 오류 0 · 후보 2건 ·
+버튼 `RAW`·`HOLD`·`DROP` 3종 · 금지 버튼 0개 · RAW 1건 클릭 시 TSV 1행(미선택 1건은 빠짐) ·
+`bodyHead` 300자 · `body` 컬럼 없음.
+
+**곁들여 고친 것**: `raw-plan` 이 `seenArticleIds()`(detail 만)를 써서
+**이미 raw-detail 로 읽은 글이 계획 화면에 그대로 남아 있었다** — 실행은 걸렀지만 계획이 거짓말을 했다.
+`seenAll()` 로 통일했고, 제외가 0건 → **20건**이 됐다.
 
 ### ⑨ 아직 아닌 것
 
