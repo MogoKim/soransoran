@@ -77,12 +77,51 @@ export function readApprovals(path: string): ApprovalRow[] {
   })
 }
 
-/** 최신 승인 파일 찾기 — 🔴 이름으로 고른다. 네트워크가 아니다 */
+/** 최신 SRN 승인 파일 — 🔴 이름으로 고른다. 네트워크가 아니다 */
 export function latestApprovalFile(dir: string): string | null {
   const files = readdirSync(dir)
     .filter((f) => /^srn-approvals-.*\.(json|tsv)$/.test(f))
     .sort()
   return files.length ? `${dir}/${files[files.length - 1]}` : null
+}
+
+/** 최신 **소스 승인** 파일 — §4-AD ⑧ 로 늘어난 두 번째 입력 */
+export function latestSourceApprovalFile(dir: string): string | null {
+  const files = readdirSync(dir)
+    .filter((f) => /^seed-originality-source-approvals-.*\.(json|tsv)$/.test(f))
+    .sort()
+  return files.length ? `${dir}/${files[files.length - 1]}` : null
+}
+
+/** 어느 입력에서 온 SEED 인가 */
+export type SeedInput = { row: ApprovalRow; from: string }
+
+/**
+ * 두 입력의 SEED 를 합친다 — 🔴 **sourceArticleId 로 중복을 제거한다** (§4-AD ⑧).
+ *
+ * 🔴 **먼저 읽은 쪽이 이긴다.** 순서는 SRN → 소스로 고정한다.
+ *    한 글은 한 축이라 지금은 겹치지 않지만(실측 0건),
+ *    재수집으로 본문이 바뀌면 축이 달라질 수 있다. 그때 **둘 다 초안을 만들면
+ *    같은 원천에서 두 벌이 나온다** — 어느 쪽이 맞는지 아무도 모르는 채로.
+ *    무작위나 "나중 것" 이 아니라 **정해진 순서**로 하나만 남긴다.
+ */
+export function mergeSeedInputs(
+  groups: readonly { rows: readonly ApprovalRow[]; from: string }[],
+): { picked: SeedInput[]; duplicates: { articleId: string; kept: string; dropped: string }[] } {
+  const picked: SeedInput[] = []
+  const duplicates: { articleId: string; kept: string; dropped: string }[] = []
+  const seen = new Map<string, string>()
+  for (const g of groups) {
+    for (const row of g.rows) {
+      const id = String(row.sourceArticleId ?? '')
+      if (!id) continue
+      const kept = seen.get(id)
+      if (kept !== undefined) { duplicates.push({ articleId: id, kept, dropped: g.from }); continue }
+      seen.set(id, g.from)
+      picked.push({ row, from: g.from })
+    }
+  }
+  return { picked, duplicates }
 }
 
 /**
@@ -117,6 +156,9 @@ export function toTsv(exps: readonly Expansion[]): string {
         // 🔴 §4-AC ③ — 행마다 출처와 시각을 남긴다
         sourceSite: e.sourceSite,
         generatedAt: d.generatedAt,
+        // 🔴 §4-AD ⑧ — 어느 승인 파일의 어떤 판정에서 왔는지
+        sourceInput: e.sourceInput,
+        sourceDecision: e.sourceDecision,
       } as Record<string, unknown>)[c])).join('\t'))
     }
   }
@@ -124,22 +166,40 @@ export function toTsv(exps: readonly Expansion[]): string {
 }
 
 function main(): void {
-  const inPath = arg('in') ?? latestApprovalFile(SEED_DATA_DIR)
-  if (!inPath) fail(`${SEED_DATA_DIR}/srn-approvals-*.json|tsv 을 찾지 못했다 — 먼저 SRN 승인 화면에서 export 한다`)
-  assertInsideDataDir(inPath)
+  // 🔴 입력이 둘이다 (§4-AD ⑧). --in 을 주면 그 파일 하나만 쓴다.
+  const only = arg('in')
+  const srnPath = only ?? latestApprovalFile(SEED_DATA_DIR)
+  const srcPath = only ? null : latestSourceApprovalFile(SEED_DATA_DIR)
+  if (!srnPath && !srcPath) {
+    fail(`${SEED_DATA_DIR} 에서 승인 파일을 찾지 못했다 —\n`
+      + '   SRN 승인 화면 또는 소스 검수 화면에서 먼저 export 한다')
+  }
 
-  const all = (() => {
-    try { return readApprovals(inPath) } catch { return fail(`${inPath} 를 읽지 못했다`) }
-  })()
-  const seeds = seedRowsOf(all)
+  const read = (path: string | null): { rows: ApprovalRow[]; from: string } => {
+    if (!path) return { rows: [], from: '' }
+    assertInsideDataDir(path)
+    try { return { rows: seedRowsOf(readApprovals(path)), from: path.split('/').pop() ?? path } }
+    catch { return fail(`${path} 를 읽지 못했다`) }
+  }
+  // 🔴 순서 고정: SRN → 소스. 겹치면 먼저 읽은 쪽이 남는다.
+  const srn = read(srnPath)
+  const src = read(srcPath)
+  const { picked, duplicates } = mergeSeedInputs([srn, src])
+  const seeds = picked
 
   console.log('\nSeed Originality dry-run — 🔴 발행하지 않는다')
   console.log('─────────────────────────────────────────────────────────')
   console.log(`  🔴 ${DRY_RUN_NOTE}`)
   console.log('  🔴 DB write 0 · Sheet 0 · LLM 0 · 자동 발행 0 · noindex 0 · Raw Vault 0 · 네이버 0')
   console.log('  🟢 원문 문장을 쓰지 않는다 — 소재 사전에 걸린 낱말만 쓰고 나머지는 버린다\n')
-  console.log(`  입력  ${inPath}`)
-  console.log(`        전체 ${all.length}행 · SEED ${seeds.length}행 (APPROVE·HOLD·DROP·미선택 제외)`)
+  console.log('  입력  🔴 두 곳에서 SEED 만 가져온다 (§4-AD ⑧)')
+  console.log(`        SRN 승인   ${srnPath ?? '(없음)'}  → SEED ${srn.rows.length}행`)
+  console.log(`        소스 승인  ${srcPath ?? '(없음)'}  → SEED ${src.rows.length}행`)
+  if (duplicates.length > 0) {
+    console.log(`        🟡 중복 ${duplicates.length}건 제거 — 먼저 읽은 쪽을 남긴다`)
+    for (const d of duplicates) console.log(`           ${d.articleId}  남김 ${d.kept} · 버림 ${d.dropped}`)
+  }
+  console.log(`        합계 ${seeds.length}건 (APPROVE·HOLD·DROP·미선택은 애초에 오지 않는다)`)
 
   if (seeds.length === 0) fail('SEED 행이 없다 — 승인 화면에서 SEED 로 판정한 뒤 export 한다')
 
@@ -147,10 +207,13 @@ function main(): void {
   const generatedAt = new Date().toISOString()
   // 🔴 **memo 를 넘기지 않는다.** 승인 파일에는 남아 있지만 소재 입력이 아니다 —
   //    검수 메모의 낱말이 소재 사전에 걸려 엉뚱한 초안이 나온 적이 있다(2026-09-05).
-  const exps = seeds.map((r) => expandSeed({
+  const exps = seeds.map(({ row: r, from }) => expandSeed({
     sourceArticleId: String(r.sourceArticleId ?? ''),
     sourceSite: String(r.sourceSite ?? ''),
     title: String(r.title ?? ''),
+    // 🟡 기록용 — 분류에는 쓰이지 않는다
+    sourceInput: from,
+    sourceDecision: String(r.decision ?? ''),
   }, generatedAt))
 
   let drafts = 0
@@ -181,7 +244,7 @@ function main(): void {
     note: DRY_RUN_NOTE,
     // 🔴 행에 박은 값과 같아야 한다 — 다르면 어느 쪽이 맞는지 알 수 없다
     generatedAt,
-    source: inPath,
+    sources: { srn: srnPath, source: srcPath },
     topics: Object.entries(TOPIC_LABEL).map(([k, v]) => ({ key: k, label: v })),
     expansions: exps,
   }, null, 2), 'utf-8')
