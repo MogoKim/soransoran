@@ -19,7 +19,10 @@ import {
   BANNED_HONORIFICS, MAX_SOURCE_OVERLAP, DRAFTS_PER_SOURCE, DRY_RUN_COLUMNS, DRY_RUN_NOTE,
   type TopicKey,
 } from './lib/micro-seed-seed-originality.mjs'
-import { seedRowsOf, readApprovals, assertInsideDataDir, toTsv, dryRunId, SEED_DATA_DIR } from './micro-seed-seed-originality-dry-run.mjs'
+import {
+  seedRowsOf, readApprovals, assertInsideDataDir, toTsv, dryRunId, mergeSeedInputs,
+  latestSourceApprovalFile, SEED_DATA_DIR, type ApprovalRow,
+} from './micro-seed-seed-originality-dry-run.mjs'
 
 const LIB = readFileSync('scripts/lib/micro-seed-seed-originality.mts', 'utf-8')
 const CLI = readFileSync('scripts/micro-seed-seed-originality-dry-run.mts', 'utf-8')
@@ -162,6 +165,8 @@ const EXPECTED = [
   'safetyVerdict', 'safetyReasons', 'maxOverlapWithSourceTitle', 'leakedTokens', 'ok', 'note',
   // 🔴 §4-AC 간극 보강 — 맨 뒤에만 붙었다
   'sourceSite', 'generatedAt',
+  // 🔴 §4-AD ⑧ 입력이 둘이 됨 — 역시 맨 뒤에만
+  'sourceInput', 'sourceDecision',
 ]
 check(`컬럼 ${EXPECTED.length}개 순서까지 같다`, DRY_RUN_COLUMNS.join('|') === EXPECTED.join('|'))
 const tsv = toTsv([ex])
@@ -318,6 +323,65 @@ check('🟢 sourceSite · generatedAt 은 그대로 행마다',
   expandSeed({ sourceArticleId: 'p3', sourceSite: 'navercafe:test', title: '후라이팬 어때요' }, '2026-09-06T00:00:00.000Z')
     .drafts.every((d) => d.generatedAt === '2026-09-06T00:00:00.000Z'))
 check('🟢 needsHuman 동작 유지', expandSeed({ sourceArticleId: 'p4', title: '어제 그 일 말인데요' }).needsHuman === true)
+
+console.log('\n⑲ 🔴 입력이 둘 — SRN 승인 + 소스 승인 (§4-AD ⑧)')
+const R = (id: string, decision = 'SEED', title = '핀일로 후라이팬 어때요??'): ApprovalRow =>
+  ({ decision, sourceArticleId: id, sourceSite: 'navercafe:test', title } as ApprovalRow)
+
+// ① SRN 만 있을 때 — 기존 동작 그대로
+const onlySrn = mergeSeedInputs([{ rows: [R('a1'), R('a2')], from: 'srn.tsv' }, { rows: [], from: 'src.tsv' }])
+check('🟢 SRN SEED 만 있으면 그대로 2건', onlySrn.picked.length === 2)
+check('🟢 출처가 srn 으로 기록된다', onlySrn.picked.every((p) => p.from === 'srn.tsv'))
+check('🟢 중복 0', onlySrn.duplicates.length === 0)
+
+// ② 소스 만 있을 때 — 새 경로로 들어온다
+const onlySrc = mergeSeedInputs([{ rows: [], from: 'srn.tsv' }, { rows: [R('b1')], from: 'src.tsv' }])
+check('🟢 소스 SEED 만 있어도 초안 대상이 된다', onlySrc.picked.length === 1)
+check('🟢 출처가 src 로 기록된다', onlySrc.picked[0]?.from === 'src.tsv')
+
+// ③ 둘 다 있을 때 — 합쳐지고, 겹치면 하나만
+const both = mergeSeedInputs([
+  { rows: [R('x'), R('y')], from: 'srn.tsv' },
+  { rows: [R('y'), R('z')], from: 'src.tsv' },
+])
+check('🔴 중복 제거 — x·y·z 3건만', both.picked.length === 3,
+  both.picked.map((p) => p.row.sourceArticleId).join(','))
+check('🔴 같은 articleId 는 한 번만', new Set(both.picked.map((p) => p.row.sourceArticleId)).size === 3)
+check('🔴 먼저 읽은 쪽(SRN)이 남는다', both.picked.find((p) => p.row.sourceArticleId === 'y')?.from === 'srn.tsv')
+check('🔴 버린 쪽을 기록한다', both.duplicates.length === 1
+  && both.duplicates[0]?.articleId === 'y'
+  && both.duplicates[0]?.kept === 'srn.tsv' && both.duplicates[0]?.dropped === 'src.tsv')
+
+// ④ SEED 아닌 것은 애초에 오지 않는다
+for (const d of ['APPROVE', 'HOLD', 'DROP', '']) {
+  check(`🔴 ${d || '(미선택)'} 은 seedRowsOf 에서 걸러진다`,
+    seedRowsOf([R('n', d)]).length === 0)
+}
+check('🔴 articleId 없는 행은 합치기에서 빠진다',
+  mergeSeedInputs([{ rows: [R('')], from: 'srn.tsv' }, { rows: [], from: '' }]).picked.length === 0)
+check('🔴 빈 입력 둘이면 0건', mergeSeedInputs([{ rows: [], from: 'a' }, { rows: [], from: 'b' }]).picked.length === 0)
+
+console.log('\n⑳ 출처 기록 — 🟡 분류에는 쓰이지 않는다')
+const withFrom = expandSeed({
+  sourceArticleId: 'f1', sourceSite: 'navercafe:test', title: '핀일로 후라이팬 어때요??',
+  sourceInput: 'src.tsv', sourceDecision: 'SEED',
+})
+check('🟡 expansion 에 sourceInput 이 실린다', withFrom.sourceInput === 'src.tsv')
+check('🟡 sourceDecision 이 실린다', withFrom.sourceDecision === 'SEED')
+check('🔴 출처가 소재 분류를 바꾸지 않는다',
+  withFrom.topic === expandSeed({ sourceArticleId: 'f2', title: '핀일로 후라이팬 어때요??' }).topic)
+check('🔴 분류 못 한 행도 출처를 잃지 않는다',
+  expandSeed({ sourceArticleId: 'f3', title: '어제 그 일', sourceInput: 'src.tsv', sourceDecision: 'SEED' })
+    .sourceInput === 'src.tsv')
+check('🟡 안 주면 빈 문자열 (추측하지 않는다)',
+  expandSeed({ sourceArticleId: 'f4', title: '후라이팬' }).sourceInput === '')
+const tsvFrom = toTsv([withFrom]).split('\n')
+check('🔴 TSV 마지막 두 칸이 sourceInput · sourceDecision',
+  (tsvFrom[1] ?? '').split('\t')[19] === 'src.tsv' && (tsvFrom[1] ?? '').split('\t')[20] === 'SEED')
+check('🔴 앞 19개 위치는 그대로',
+  DRY_RUN_COLUMNS.slice(0, 19).join('|') === EXPECTED.slice(0, 19).join('|')
+  && DRY_RUN_COLUMNS[19] === 'sourceInput' && DRY_RUN_COLUMNS[20] === 'sourceDecision')
+check('🟡 소스 승인 파일 탐색기가 있다', typeof latestSourceApprovalFile === 'function')
 
 console.log('\n⑩ 경로 가드 — 🔴 .microseed-data/ 밖으로 나가지 않는다')
 check(`기본 디렉터리는 ${SEED_DATA_DIR}`, SEED_DATA_DIR === '.microseed-data')

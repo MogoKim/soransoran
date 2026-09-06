@@ -393,6 +393,14 @@ export type Draft = {
 export type Expansion = {
   sourceArticleId: string
   /**
+   * 🟡 이 소재가 **어느 승인 파일에서 왔나** (§4-AD ⑧).
+   *    입력이 둘이 되면서, 나중에 "이 초안 어디서 왔냐" 를 물을 자리가 생겼다.
+   *    🔴 **소재 분류에 쓰지 않는다** — memo 가 분류를 오염시킨 사고(⑨)와 같은 이유다.
+   */
+  sourceInput: string
+  /** 🟡 그 파일에서의 판정 — 언제나 `SEED` 다. 다른 판정은 여기까지 오지 않는다 */
+  sourceDecision: string
+  /**
    * 🔴 어느 카페에서 왔는가 — articleId 만으로는 원천을 추적할 수 없다 (§4-AC ③).
    *    SRN 승인 export 에는 있는데 여기로 옮기지 않아 유실됐던 필드다.
    */
@@ -430,7 +438,11 @@ const DIRECTION: Record<TopicKey, string> = {
  *    (SRN export 는 SEED 행의 body 를 비워서 내보낸다. 그게 정상이다)
  */
 export function expandSeed(
-  row: { sourceArticleId: string; sourceSite?: string; title: string },
+  row: {
+    sourceArticleId: string; sourceSite?: string; title: string
+    /** 🔴 아래 둘은 **기록용**이다. findMaterial 은 title 만 본다 */
+    sourceInput?: string; sourceDecision?: string
+  },
   generatedAt: string = new Date().toISOString(),
 ): Expansion {
   const title = String(row.title ?? '')
@@ -440,6 +452,8 @@ export function expandSeed(
   if (!mat.topic || !mat.material) {
     return {
       sourceArticleId: String(row.sourceArticleId ?? ''),
+      sourceInput: String(row.sourceInput ?? ''),
+      sourceDecision: String(row.sourceDecision ?? ''),
       sourceSite: site,
       sourceTitle: title,
       topic: null, topicLabel: '(분류 못 함)',
@@ -475,6 +489,8 @@ export function expandSeed(
 
   return {
     sourceArticleId: String(row.sourceArticleId ?? ''),
+    sourceInput: String(row.sourceInput ?? ''),
+    sourceDecision: String(row.sourceDecision ?? ''),
     sourceSite: site,
     sourceTitle: title,
     topic: mat.topic,
@@ -498,6 +514,8 @@ export const DRY_RUN_COLUMNS: readonly string[] = [
   // 🔴 §4-AC 간극 보강 (2026-09-05). **앞 17개 위치는 그대로** —
   //    TSV 를 위치로 읽는 쪽이 있어서 중간 삽입은 조용한 오독이 된다.
   'sourceSite', 'generatedAt',
+  // 🔴 §4-AD ⑧ 입력이 둘이 됨 (2026-09-06). 역시 **맨 뒤에만** 붙인다.
+  'sourceInput', 'sourceDecision',
 ] as const
 
 export const DRY_RUN_NOTE = '발행 아님 · 초안일 뿐 · 사람 확인 전 사용 금지'
