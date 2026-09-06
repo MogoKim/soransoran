@@ -4258,6 +4258,96 @@ safety  전부 pass · 겹침 최대 5자
 
 ---
 
+## §4-AJ 🟡 발행 후보 → 검수 대기열 **임시 다리** (2026-09-06)
+
+> 🔴 이 절이 만드는 것은 **다리**다. 새 발행 시스템이 아니다.
+> `npm run micro-seed:publish-enqueue`
+
+### ① 왜 다리인가 — 발행 경로는 이미 살아 있다
+
+조사해 보니 발행 파이프라인이 **이미 돌고 있었다.** 9/2·9/3 에 나간 글 2건이 이 경로다.
+
+```
+MicroSeedRawContent → generate → enqueue → OriginalPostApprovalQueue(PENDING)
+                    → decide(사람 승인) → APPROVED → match-assign → publish-live → Post
+```
+
+**창업자가 복붙할 이유가 없었다.** 우리 후보가 이 줄에 못 서 있었을 뿐이다.
+
+막은 것은 딱 하나 — `OriginalPostApprovalQueue.sourceRawContentId` 가 **필수 FK** 이고,
+우리 후보는 원문을 저장하지 않았으므로(§4-AF ⑤) 이을 원문이 없다.
+실측: 후보 9건의 `sourceArticleId` 가 기존 `MicroSeedRawContent` 41건과 **0건 일치**.
+
+🟢 **다행히 발행 시점에는 원문이 필요 없다.** `publishOriginalPostTx` 의 `select` 를 읽어 보면
+`sourceRawContentId` 를 **가져오지 않는다** — `status` · `gateVerdict` · `draftTitle/Body` ·
+`editedTitle/Body` · `matchedPersona` 뿐이다. **FK 는 큐 행을 만들 때만 걸린다.**
+
+### ② 🟡 그래서 진 빚 (semantic debt) — 갚을 것을 적어 둔다
+
+synthetic `MicroSeedRawContent` 행을 만들어 잇는다. 여기에 빚이 둘 있다.
+
+| 빚 | 무엇이 어긋나나 |
+|---|---|
+| 테이블 의미 | `MicroSeedRawContent` 는 **수집한 원문**을 담는 곳인데 **우리가 쓴 글**을 넣는다 |
+| `origin` 값 | 우리 레인 enum 이 없어 `live` 를 쓴다. `unao_legacy` 는 **발행 금지** 대상이라 못 쓴다 |
+
+🔴 **`origin` enum 에 값을 더해 갚는다.** 그건 DB 마이그레이션이라 이번에 하지 않는다(창업자 결정).
+그때까지 **세 곳에 표시를 남긴다** — 나중에 조회로 찾아낼 수 있어야 갚을 수 있다.
+
+- `sourceSite` 에 `publish-candidate:` 접두 → `startsWith` 로 전부 골라낼 수 있다.
+  원래 소스는 지우지 않는다(`publish-candidate:navercafe:remonterrace`) — 어디서 온 소재인지는 남아야 한다
+- `sourceUrl` 은 `publish-candidate://<후보파일>#<id>` — **접속 가능한 주소가 아니다**
+- 큐의 `promptVersion=publish-candidate-v1` · `model=human-curated` → **사람이 쓴 글**임이 큐에 박힌다
+
+🔴 `sourceArticleId` 는 `<원래id>-<해시8>` 로 만든다.
+`@@unique([sourceSite, sourceArticleId])` 가 있어, **나중에 진짜 원문을 수집해도 부딪히지 않는다.**
+
+### ③ 무엇이 올라가나
+
+- `candidateType` 이 `seedOriginality` 또는 `rawOriginality` — 🔴 **SRN 은 오지 않는다**(§4-AH ③)
+- `sourceDecision` 이 `ADOPT`(Seed) 또는 `SAVE`(Raw)
+- `safetyVerdict === 'pass'` — 발행 후보인데 safety 가 다르면 올리지 않는다
+- 기본은 **오늘 목록 2건**만. `--all` 로 파일 전체를 본다
+- 중복은 `sourceArticleId + 제목` 으로 막는다(§4-AH ⑤ 와 같은 규칙).
+  이미 올린 synthetic 행을 `sourceSite` 접두로 조회해 비교한다
+
+### ④ 두 스위치 — `--apply` **와** `--limit=N`
+
+기본은 dry-run 이고 **DB write 0** 이다. 기존 `original-post-enqueue` 와 같은 관례다 —
+적재는 창업자 승인 경로의 첫 칸이라 **스위치 하나로는 열지 않는다.**
+
+🔴 **status 는 `PENDING` 으로만 만든다.** `APPROVED`·`PUBLISHED` 로 가는 코드가 이 파일에 없고,
+페르소나 배정도 하지 않는다. fixture 가 소스에서 그것을 확인한다.
+
+### ⑤ 실측 (dry-run · DB write 0)
+
+```
+입력  publish-candidates-20260906-203335.json · 후보 9건
+대상  오늘 2건 · 이미 올림 0건
+① 올릴 것 2건
+   · [rawOriginality] 엄마가 일을 시작하셨는데 표정이 달라지셨어요
+       synthetic  site=publish-candidate:navercafe:remonterrace  articleId=34999002-0bf49633
+   · [seedOriginality] 집에 늘 두고 드시는 간식이 있으세요?
+       synthetic  site=publish-candidate:navercafe:remonterrace  articleId=35003196-fda9be9c
+② 건너뛴 것 7건 — 전부 "오늘 대상 아님"
+③ dry-run — 🔴 DB write 0건
+```
+
+### ⑥ 발행까지 남은 승인 지점
+
+- [ ] **A** `--apply --limit=2` 실행 → 큐 2건 PENDING (**DB write**)
+- [ ] **B** `original-post-decide` 로 APPROVED 전환 (**사람 검수**)
+- [ ] **C** `match-assign` 으로 페르소나 배정
+- [ ] **D** `publish-live --apply` → 🔴 **되돌릴 수 없다.** 검색 노출 · sitemap 등재
+- [ ] **E** (나중) `origin` enum 추가로 ②의 빚 갚기 — DB 마이그레이션
+
+### ⑦ 아직 아닌 것
+
+- **아무것도 올리지 않았다.** 이번 PR 은 dry-run 까지다.
+- 발행 순서·시각은 이 스크립트가 정하지 않는다. 기존 경로의 cap 과 사람이 정한다.
+
+---
+
 ## §4-C 🟡 Growth Issue 레인 — **전략만 적는다. 구현하지 않았다**
 
 > 🔴 **상태: 미구현.** 코드 · 분류기 · cap · 감사 경로 **어느 것도 없다.**
