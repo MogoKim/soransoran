@@ -5,13 +5,20 @@
  * 정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-AF
  * 읽기만 한다. 네트워크·DB·파일 쓰기 0.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   RAW_LANE, RAW_AXIS, RAW_DECISIONS, RAW_COLUMNS, RAW_MIN_BODY, BODY_HEAD_CHARS,
   NOT_PUBLISH_NOTE, maskSensitive, digestBody, selectRawTargets, prescreen,
   blockedBeforeRead, rawDecisions, heldForReread,
 } from './lib/micro-seed-raw-originality.mjs'
 import { RAW_MIN_BODY as CLASSIFY_MIN } from './lib/micro-seed-detail-classify.mjs'
+import {
+  RAW_DETAIL_COLUMNS, RAW_DETAIL_KILL_SWITCH_ENV, ALLOWED_CAPS, DEFAULT_CAP,
+  seenRawIds, seenAll, toTsv, type RawDetailRow,
+} from './micro-seed-raw-detail-fetch.mjs'
+import { DETAIL_KILL_SWITCH_ENV } from './micro-seed-detail-fetch.mjs'
 
 let pass = 0
 let fail = 0
@@ -90,6 +97,67 @@ console.log('\n⑦ 판정 뒤 흐름')
   check('HOLD 는 다시 볼 대상으로 남는다', heldForReread(rows).map((r) => r.sourceArticleId).join(',') === '2')
   check('🔴 미선택은 어느 쪽도 아니다', !rawDecisions(rows).some((r) => r.sourceArticleId === '4'))
 }
+
+console.log('\n⑨ raw-detail-fetch — 저장 계약 (T1)')
+check('🔴 컬럼에 body 전문이 없다', !RAW_DETAIL_COLUMNS.includes('body'))
+check('bodyHead 컬럼이 있다', RAW_DETAIL_COLUMNS.includes('bodyHead'))
+check('bodyLength 는 자르기 전 길이', RAW_DETAIL_COLUMNS.includes('bodyLength'))
+check('지시된 16컬럼이 모두 있다', [
+  'sourceArticleId', 'sourceSite', 'url', 'title', 'score', 'lane', 'accessStatus',
+  'bodyLength', 'bodyHead', 'axis', 'safetyVerdict', 'safetyReasons',
+  'imageCount', 'commentCount', 'runId', 'fetchedAt',
+].every((c) => RAW_DETAIL_COLUMNS.includes(c)))
+check('🔴 스위치가 detail-fetch 것과 다르다',
+  RAW_DETAIL_KILL_SWITCH_ENV === 'SORAN_NAVERCAFE_RAW_DETAIL_ENABLED'
+  && String(RAW_DETAIL_KILL_SWITCH_ENV) !== String(DETAIL_KILL_SWITCH_ENV))
+check('cap 은 10 또는 20 만', ALLOWED_CAPS.join(',') === '10,20' && DEFAULT_CAP === 10)
+{
+  const row: RawDetailRow = {
+    sourceArticleId: 'a', sourceSite: 's', url: 'u', title: 't', score: 1, lane: RAW_LANE,
+    accessStatus: 'ok', bodyLength: 900, bodyHead: '앞부분', axis: RAW_AXIS,
+    safetyVerdict: 'pass', safetyReasons: '', imageCount: 0, commentCount: 0,
+    runId: 'r', fetchedAt: 'f',
+  }
+  const t = toTsv([row])
+  check('TSV 첫 줄이 컬럼과 같다', t.split('\n')[0] === RAW_DETAIL_COLUMNS.join('\t'))
+  check('🔴 원문 전문이 실릴 자리가 없다',
+    t.split('\n')[0]!.split('\t').length === RAW_DETAIL_COLUMNS.length)
+}
+{
+  // 🔴 `.raw-detail.jsonl` 은 `.detail.jsonl` 로 끝나지 않는다 — 그래서 별도 함수가 필요하다
+  check('🔴 raw-detail 파일명이 detail 규칙에 안 걸린다', !'x.raw-detail.jsonl'.endsWith('.detail.jsonl'))
+  const dir = mkdtempSync(join(tmpdir(), 'raw-seen-'))
+  writeFileSync(join(dir, 'raw-detail-1.raw-detail.jsonl'), `${JSON.stringify({ sourceArticleId: 'RAWID' })}\n`, 'utf-8')
+  writeFileSync(join(dir, 'detail-1.detail.jsonl'), `${JSON.stringify({ sourceArticleId: 'DETID' })}\n`, 'utf-8')
+  check('raw-detail 에서 읽은 id 를 잡는다', seenRawIds(dir).has('RAWID'))
+  check('🔴 seenAll 이 양쪽을 합친다', seenAll(dir).has('RAWID') && seenAll(dir).has('DETID'))
+  writeFileSync(join(dir, 'raw-detail-2.raw-detail.jsonl'), '{깨짐\n', 'utf-8')
+  check('깨진 줄이 있어도 죽지 않는다', seenRawIds(dir).has('RAWID'))
+  check('없는 디렉터리는 빈 목록', seenRawIds(join(dir, 'nope')).size === 0)
+  rmSync(dir, { recursive: true, force: true })
+}
+
+console.log('\n⑩ raw-detail-fetch — 🔴 full body 저장 경로가 없다')
+{
+  const src = readFileSync('scripts/micro-seed-raw-detail-fetch.mts', 'utf-8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  check('🔴 body 가 digestBody 를 거쳐서만 나간다', /digestBody\(body\)/.test(src))
+  check('🔴 bodyHead 는 digest 에서 온다', /bodyHead:\s*digest\.head/.test(src))
+  check('🔴 저장 객체에 body 를 담지 않는다', !/^\s*body,\s*$/m.test(src) && !/\bbody:\s*body\b/.test(src))
+  check('🔴 SRN 식 조건부 body 저장이 없다', !/shortRawNoindex.*\{\s*body\s*\}/.test(src))
+  check('🔴 prisma / DB write 없음', !/prisma|PrismaClient|\.upsert\(/i.test(src))
+  check('🔴 Google Sheet 없음', !/googleapis|spreadsheet/i.test(src))
+  check('🔴 LLM 없음', !/openai|anthropic|claude-|gpt-/i.test(src))
+  check('🔴 82cook adapter 없음', !/82cook/.test(src))
+  check('🔴 금지 호칭 없음', !['시니어', '어르신', '노인', '실버'].some((w) => src.includes(w)))
+  check('두 스위치를 모두 본다',
+    /argv\.includes\('--live'\)/.test(src) && /RAW_DETAIL_KILL_SWITCH_ENV\]/.test(src))
+  check('🔴 스위치가 없으면 write 전에 돌아 나간다', /if \(!LIVE \|\| !switchOn\)/.test(src))
+  check('pacing 을 detail-fetch 에서 가져온다', /PACE_MIN_MS, PACE_MAX_MS/.test(src))
+  check('엔트리포인트 가드가 있다', /if \(isDirectRun\) void main\(\)/.test(src))
+  check('산출 경로가 .raw-detail 이다', /raw-detail-\$\{runId\}\.raw-detail\.(jsonl|tsv)/.test(src))
+}
+
 
 console.log('\n⑧ 금지 — lib 과 계획 CLI 에 위험한 것이 없다')
 {

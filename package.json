@@ -62,6 +62,7 @@
     "micro-seed:seed-source-review": "tsx scripts/micro-seed-seed-source-review.mts",
     "micro-seed:seed-source-check": "tsx scripts/micro-seed-seed-source-review-check.mts",
     "micro-seed:raw-plan": "tsx scripts/micro-seed-raw-originality-plan.mts",
+    "micro-seed:raw-detail-fetch": "tsx scripts/micro-seed-raw-detail-fetch.mts",
     "micro-seed:raw-check": "tsx scripts/micro-seed-raw-originality-check.mts"
   },
   "dependencies": {

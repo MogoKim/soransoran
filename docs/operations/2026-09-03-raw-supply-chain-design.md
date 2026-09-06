@@ -3719,13 +3719,47 @@ title · memo · detailRunId · reviewedAt · note
 - `npm run micro-seed:raw-plan` · `micro-seed:raw-check`
 
 **다음 PR TODO — 이 순서로**
-- [ ] **T1** `raw-detail-fetch` — ④의 재사용 목록대로. 두 스위치 · pacing · `seenArticleIds()` 양쪽 확인
-- [ ] **T2** `*.raw-detail.jsonl` 저장 — ⑤ 규칙. **전문 저장 0** 을 fixture 로 감시
+- [x] **T1** `raw-detail-fetch` — ④의 재사용 목록대로 (2026-09-06 구현 · ⑩ 참조)
+- [x] **T2** `*.raw-detail.jsonl` 저장 — ⑤ 규칙. **전문 저장 0** 을 fixture 가 감시한다
 - [ ] **T3** 검수 화면 HTML — ⑥. `RAW`/`HOLD`/`DROP` 만. 기존 화면과 섞지 않음
 - [ ] **T4** export — ⑦ 컬럼 21개, 파일명에 시각
-- [ ] **T5** `seenArticleIds()` 가 `.raw-detail.jsonl` 도 읽게 확장 (T1 과 함께)
+- [x] **T5** `seenAll()` 이 `.raw-detail.jsonl` 과 `.detail.jsonl` 을 합쳐 본다 (T1 과 함께)
 - [ ] **T6** CI 게이트에 `raw-check` 추가
 - [ ] **T7** (그 뒤) 재작성 초안 경로 — 🔴 **여기서부터는 LLM 논의가 필요하다. 별도 승인 사항**
+
+### ⑩ T1 구현 실측 — `raw-detail-fetch` (2026-09-06)
+
+`scripts/micro-seed-raw-detail-fetch.mts` · `npm run micro-seed:raw-detail-fetch`
+
+**기존 detail-fetch 를 수정하지 않았다.** 검증된 live 경로라 건드릴수록 위험하다.
+순수 함수·상수(`PACE_MIN_MS` · `PACE_MAX_MS` · `runIdOf` · `seenArticleIds`)만 import 하고,
+페이지를 여는 부분은 같은 패턴으로 따로 뒀다. 축 판정도 기존 `classifyDetail()` 을 그대로 쓴다 —
+**Raw 전용 판정을 새로 만들지 않는다.**
+
+**두 스위치** — `--live` 와 `SORAN_NAVERCAFE_RAW_DETAIL_ENABLED=true` 가 **둘 다** 있어야 연다.
+🔴 스위치 이름을 detail-fetch 와 **따로 뒀다.** 레인마다 위험이 다르고, 하나를 켜서 둘이 열리면
+"무엇을 켰는지" 를 사람이 알 수 없다.
+
+**🔴 `seenAll()` 이 왜 필요했나.** `foo.raw-detail.jsonl` 은 `endsWith('.detail.jsonl')` 가 **거짓**이다
+(`-detail` 과 `.detail` 은 다른 글자다). detail 쪽 함수를 그대로 썼다면 **같은 글을 두 번 열었을 것이다.**
+`seenRawIds()` 를 따로 두고 `seenAll()` 로 합친다 — raw-detail · detail · prior-read 셋 다 본다.
+
+**본문이 밖으로 나가는 경로가 하나뿐이다.** 읽은 `body` 는 `digestBody(body)` 를 거쳐
+`bodyHead`(마스킹 후 앞 300자)로만 저장된다. fixture ⑩ 이 소스에서
+`body,` · `body: body` · SRN 식 조건부 저장이 **없음**을 직접 확인한다.
+
+**저장 컬럼 16개** (§4-AF ⑦ 의 검수용 21컬럼과는 다르다 — 이쪽은 fetch 산출이다):
+```
+sourceArticleId · sourceSite · url · title · score · lane · accessStatus ·
+bodyLength · bodyHead · axis · safetyVerdict · safetyReasons ·
+imageCount · commentCount · runId · fetchedAt
+```
+
+**계획 모드 실측 (네트워크 0 · 파일 0)**:
+재고 653 · 이미 읽음 0 · 읽기 전 차단 6 → **대상 10건**, 전부 생활 사연.
+`--live` 만 주면 열리지 않는다(스위치 없음). `--cap=15` 는 거부된다.
+
+🔴 **아직 live 로 돌리지 않았다.** 실제 축 분포는 창업자 승인 뒤에야 안다.
 
 ### ⑨ 아직 아닌 것
 
