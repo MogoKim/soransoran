@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { TOUCH_MIN } from '@/lib/spacing'
 import Logo from '@/components/brand/Logo'
 import HeaderAuth from '@/components/layouts/HeaderAuth'
 import FontSizeToggle from '@/components/layouts/FontSizeToggle'
@@ -13,7 +14,14 @@ import FontSizeToggle from '@/components/layouts/FontSizeToggle'
 export default function Header() {
   return (
     <header className="sticky top-0 z-50 flex h-16 items-center justify-between gap-2 border-b border-subtle bg-surface-card px-4">
-      <Link href="/" className="flex items-center no-underline" aria-label="소란소란 홈">
+      {/* 🔴 워드마크 줄 높이만으로는 44px(크게 49.4px) 이라 터치 기준에 못 미친다.
+          헤더가 h-16(64px) 이라 여기서 52px 을 확보해도 헤더는 그대로다.
+          글자 크기는 Logo 가 정한다 — 여기서는 누를 수 있는 넓이만 맞춘다. */}
+      <Link
+        href="/"
+        className={`flex ${TOUCH_MIN} items-center no-underline`}
+        aria-label="소란소란 홈"
+      >
         <Logo tone="brand" className="text-2xl" />
       </Link>
       <div className="flex items-center gap-1">
