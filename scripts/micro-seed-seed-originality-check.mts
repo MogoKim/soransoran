@@ -479,6 +479,32 @@ try {
 // ─────────────────────────────────────────────────────────
 // 조사 — 🔴 "조미료은" 이 다시 나오지 않게 (2026-09-06)
 // ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────
+// 🔴 제목과 본문 마지막 질문이 겹치지 않는다 (2026-09-06)
+//
+//    "후라이팬 언제 바꾸세요?" 라는 제목에 본문 끝이 "다들 후라이팬은 언제 바꾸세요?" 였다.
+//    두 번 물어놓고 **아무것도 더 묻지 않은 글**이 된다 —
+//    목록에서 제목을 보고 들어온 사람에게 새로 주는 것이 없다.
+//    "다들" 만 붙이는 것은 다른 질문이 아니다.
+// ─────────────────────────────────────────────────────────
+console.log('\n제목과 본문 끝이 겹치지 않는다')
+{
+  const norm = (x: string): string => x.replace(/^다들\s*/, '').replace(/[?,·.\s]/g, '')
+  const mats = [...new Set(TOPIC_RULES.map((r) => r.material))]
+  const dup: string[] = []
+  for (const [topic, tpls] of Object.entries(TEMPLATES)) {
+    const topicMats = mats.filter((m) => TOPIC_RULES.some((r) => r.topic === topic && r.material === m))
+    for (const [i, t] of tpls.entries()) {
+      for (const m of topicMats.length > 0 ? topicMats : ['것']) {
+        const last = t.body(m).split('\n').filter((l) => l.trim() !== '').pop() ?? ''
+        if (norm(t.title(m)) === norm(last)) dup.push(`${topic}#${i + 1}·${m}`)
+      }
+    }
+  }
+  check(`🔴 제목을 본문 끝에서 되풀이하지 않는다${dup.length ? ` — ${dup.join(', ')}` : ''}`,
+    dup.length === 0)
+}
+
 console.log('\n조사 처리')
 check('받침 있음 — 후라이팬·그릇·아침', ['후라이팬', '그릇', '아침'].every(hasBatchim))
 check('받침 없음 — 조미료·냄비·통화', ['조미료', '냄비', '통화'].every((w) => !hasBatchim(w)))
