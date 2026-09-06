@@ -27,14 +27,14 @@
  */
 import { PrismaClient } from '@prisma/client'
 import {
-  selectAutoTargets, judgeApply, verifyAfterPublish, REJECT_LABEL,
+  selectAutoTargets, judgeApply, verifyAfterPublish, splitTargets, REJECT_LABEL,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT,
   type AutoRow,
 } from '../src/lib/original-post-auto-publish'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { planBatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 import { planStore } from '../src/lib/original-post-match-store'
-import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
+import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -63,6 +63,7 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     id: true, status: true, createdPostId: true, gateVerdict: true,
     promptVersion: true, model: true, matchedPersonaId: true,
     draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+    decidedAt: true, createdAt: true,
     rawContent: { select: { sourceSite: true } },
   },
   orderBy: { createdAt: 'asc' },
@@ -74,15 +75,23 @@ const rows: AutoRow[] = raw.map((r) => ({
   title: r.editedTitle ?? r.draftTitle,
   body: r.editedBody ?? r.draftBody,
   sourceSite: r.rawContent.sourceSite,
+  decidedAt: r.decidedAt, createdAt: r.createdAt,
 }))
 
 // ── ② 안전 재판정 — 🔴 저장된 값을 믿지 않는다 ──
 const { targets, rejected } = selectAutoTargets(rows, (t, b) => safetyFilter({ title: t, body: b }).verdict)
 
+const { picked, waiting } = splitTargets(targets)
 console.log(`① 대기열 ${rows.length}건 → 자동 발행 후보 ${targets.length}건`)
-for (const t of targets) {
-  console.log(`  🎯 ${t.id}`)
-  console.log(`     제목 ${brief(t.title)} · 본문 ${[...t.body].length}자 · ${t.sourceSite}`)
+if (picked !== null) {
+  console.log(`  🎯 이번에 나갈 1건  ${picked.id}`)
+  console.log(`     제목 ${brief(picked.title)} · 본문 ${[...picked.body].length}자 · ${picked.sourceSite}`)
+  console.log(`     줄 순서 기준 ${(picked.decidedAt ?? picked.createdAt).toISOString()}`)
+}
+if (waiting.length > 0) {
+  // 🔴 밀린 것을 숨기지 않는다 — 몇 건이 기다리는지 보여야 공급 상태를 안다
+  console.log(`  ⏳ 다음 회차 대기 ${waiting.length}건 — 오래 기다린 순`)
+  for (const w of waiting) console.log(`     ${w.id}  ${brief(w.title)}`)
 }
 if (rejected.length > 0) {
   const by = new Map<string, number>()
@@ -149,7 +158,9 @@ for (const t of targets) {
 }
 
 // ── ④ 오늘 상황 ──
-const dayStart = new Date(); dayStart.setUTCHours(-9, 0, 0, 0)
+// 🔴 KST 자정은 기존 함수를 쓴다 (publish-live 와 같은 것) —
+//    setUTCHours(-9) 는 UTC 15시 이후에 어제로 밀려 cap 을 잘못 센다
+const dayStart = kstDayStart(new Date())
 const publishedToday = await prisma.personaActivityLog.count({ where: { kind: 'post', createdAt: { gte: dayStart } } })
 const sw = await prisma.personaGlobalSwitch.findUnique({ where: { id: 'global' }, select: { enabled: true } })
 const killed = sw?.enabled === true

@@ -35,6 +35,9 @@ export type AutoRow = {
   title: string
   body: string
   sourceSite: string
+  /** 승인 시각 — 없으면 `createdAt` 이 대신한다. 🔴 줄 세우기의 근거다 */
+  decidedAt: Date | null
+  createdAt: Date
 }
 
 export type RejectCode =
@@ -82,9 +85,22 @@ export function selectAutoTargets(
     if (safetyOf(r.title, r.body) !== 'pass') { push(r.id, 'SAFETY'); continue }
     targets.push(r)
   }
-  // 🔴 순서를 고정한다 — 같은 재고에서 매번 같은 것이 뽑혀야 dry-run 이 재현된다
-  targets.sort((a, b) => a.id.localeCompare(b.id))
+  targets.sort(compareAutoRow)
   return { targets, rejected }
+}
+
+/**
+ * 줄 세우기 — 🔴 **오래 기다린 것이 먼저다.**
+ *
+ * 승인 시각(`decidedAt`)이 기준이고, 없으면 `createdAt` 으로 갈음한다.
+ * 시각까지 같으면 `id` 로 가른다 — **어떤 입력 순서로 들어와도 결과가 같아야**
+ * dry-run 에서 본 것이 실제로 나간다.
+ */
+export function queueOrderKey(r: AutoRow): number {
+  return (r.decidedAt ?? r.createdAt).getTime()
+}
+export function compareAutoRow(a: AutoRow, b: AutoRow): number {
+  return queueOrderKey(a) - queueOrderKey(b) || a.id.localeCompare(b.id)
 }
 
 export type ApplyGate = { ok: true; target: AutoRow } | { ok: false; reason: string }
@@ -92,9 +108,9 @@ export type ApplyGate = { ok: true; target: AutoRow } | { ok: false; reason: str
 /**
  * 실제로 돌려도 되는가 — 🔴 **하나라도 어긋나면 멈춘다. 잘라내지 않는다.**
  *
- * 🔴 **후보가 정확히 1건이 아니면 중단한다.** 0건이면 낼 것이 없고,
- *    2건 이상이면 **어느 것을 낼지 사람이 정하지 않았다는 뜻**이다.
- *    자동화는 "고르는 수고"를 없애는 것이지 "고르지 않은 채 내는 것"이 아니다.
+ * 🔴 **한 번에 한 건이다.** 후보가 여럿이면 줄 순서대로 맨 앞을 고르고 나머지는 다음 회차로 민다.
+ *    무작위가 아니라 **정해진 순서**라야 dry-run 에서 본 것이 그대로 나간다.
+ *    0건이면 아무 일도 하지 않는다.
  */
 export function judgeApply(input: {
   targets: readonly AutoRow[]
@@ -110,17 +126,20 @@ export function judgeApply(input: {
   }
   if (input.killSwitchEnabled) return { ok: false, reason: '전체 중지(kill switch)가 켜져 있다' }
   if (input.targets.length === 0) return { ok: false, reason: '후보가 0건이다' }
-  if (input.targets.length > 1) {
-    return {
-      ok: false,
-      reason: `후보가 ${input.targets.length}건이다 — 정확히 1건일 때만 돈다.`
-        + ' 어느 것을 낼지 정해지지 않은 채로 내보내지 않는다',
-    }
-  }
   if (input.publishedToday >= input.dailyCap) {
     return { ok: false, reason: `오늘 상한 ${input.dailyCap}건을 채웠다 (${input.publishedToday}/${input.dailyCap})` }
   }
+  // 🔴 **여럿이면 맨 앞 하나를 고른다.** 임의로 고르는 것이 아니라 줄 순서대로다 —
+  //    `compareAutoRow` 가 정한 순서는 입력이 어떻게 들어와도 같으므로,
+  //    dry-run 에서 본 그 한 건이 그대로 나간다. 나머지는 다음 회차로 밀린다.
   return { ok: true, target: input.targets[0]! }
+}
+
+/** 이번에 나가는 것과 밀리는 것 — 화면에 함께 보여준다 */
+export function splitTargets(targets: readonly AutoRow[]): { picked: AutoRow | null; waiting: AutoRow[] } {
+  return targets.length === 0
+    ? { picked: null, waiting: [] }
+    : { picked: targets[0]!, waiting: [...targets.slice(1)] }
 }
 
 /** 발행 뒤 정합 — 🔴 셋이 다 맞아야 성공이다 */
