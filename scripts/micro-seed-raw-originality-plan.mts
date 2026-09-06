@@ -19,7 +19,10 @@
  */
 import { loadScoutRows, SCOUT_DATA_DIR } from './lib/micro-seed-scout-load.mjs'
 import { scoreRows } from './lib/micro-seed-scout-score.mjs'
-import { seenArticleIds } from './micro-seed-detail-fetch.mjs'
+// 🔴 raw-detail-fetch 와 **같은 기준**으로 제외한다 (2026-09-06 정정).
+//    전에는 detail 쪽 `seenArticleIds()` 만 봐서, 이미 raw-detail 로 읽은 글이
+//    이 계획 화면에는 그대로 남아 있었다 — 실행은 걸렀지만 **계획이 거짓말을 했다.**
+import { seenAll } from './micro-seed-raw-detail-fetch.mjs'
 import {
   RAW_LANE, RAW_AXIS, RAW_MIN_BODY, BODY_HEAD_CHARS, NOT_PUBLISH_NOTE,
   RAW_DECISIONS, RAW_COLUMNS, selectRawTargets, prescreen, blockedBeforeRead,
@@ -64,7 +67,7 @@ function main(): void {
     commentCount: Number(s.row.sourceCommentCount ?? 0),
     title: s.row.originalTitle ?? '',
   }))
-  const seen = seenArticleIds()
+  const seen = seenAll()
   const inLane = rows.filter((r) => r.lane === RAW_LANE)
   const fresh = inLane.filter((r) => !seen.has(r.sourceArticleId))
 
