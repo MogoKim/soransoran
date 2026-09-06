@@ -6,6 +6,7 @@ import { auth } from '@/lib/auth'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { requireOnboarded } from '@/lib/onboarding-guard'
 import { COMMUNITY_VISIBLE_WHERE } from '@/lib/post-visibility'
+import { COMMENT_NOT_FOUND } from '@/lib/comment-policy'
 
 /** 글 공감과 같은 한도를 쓴다 — 누르고 취소하는 일이 잦은 것도 같다 */
 const LIKE_LIMIT = 30
@@ -43,7 +44,7 @@ export async function toggleCommentLike(commentId: string): Promise<CommentLikeS
     where: { id: commentId, isDeleted: false, post: COMMUNITY_VISIBLE_WHERE },
     select: { id: true },
   })
-  if (!target) return { error: '댓글을 찾을 수 없습니다.' }
+  if (!target) return { error: COMMENT_NOT_FOUND }
 
   try {
     const result = await prisma.$transaction(async (tx) => {

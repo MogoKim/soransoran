@@ -4,6 +4,8 @@
  * 🔴 본문 길이·금칙어는 회원 댓글과 같은 것을 쓴다(comment-policy · content-guard).
  *    비회원이라고 기준을 낮추면 스팸이 그쪽으로 몰린다.
  */
+import { COMMENT_NOT_FOUND } from '@/lib/comment-policy'
+
 export const GUEST_NICKNAME_MIN = 1
 export const GUEST_NICKNAME_MAX = 10
 
@@ -23,7 +25,11 @@ export const GUEST_PASSWORD_INVALID = '비밀번호는 숫자 4자리로 적어�
 export const GUEST_NICKNAME_TAKEN = '이미 쓰고 있는 이름이에요. 다른 이름으로 해주세요.'
 export const GUEST_PASSWORD_WRONG = '비밀번호가 맞지 않아요.'
 export const GUEST_LOCKED = `비밀번호를 ${GUEST_PASSWORD_MAX_ATTEMPTS}번 틀렸어요. 1분 뒤에 다시 시도해 주세요.`
-export const GUEST_NOT_FOUND = '댓글을 찾을 수 없습니다.'
+/**
+ * 🔴 회원 경로와 **같은 문장**을 쓴다. 댓글이 사라진 사실은 하나인데
+ *    비회원에게만 다르게 말할 이유가 없다 — 정본 §12-20.
+ */
+export const GUEST_NOT_FOUND = COMMENT_NOT_FOUND
 export const GUEST_ONLY = '회원이 쓴 댓글은 이 방법으로 고칠 수 없어요.'
 
 /** 비회원 댓글임을 화면에서 알리는 말 */
