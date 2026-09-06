@@ -4,7 +4,7 @@ import { getMyComments } from '@/lib/queries/my'
 import { getBoardByType } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
 import PageShell from '@/components/layouts/PageShell'
-import { requireMyUserId, BackToMy } from '@/components/features/my/shell'
+import { requireMyUserId, BackToMy, EmptyNotice } from '@/components/features/my/shell'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,7 +30,11 @@ export default async function MyCommentsPage() {
         <h1 className="mt-2 text-xl font-bold text-content-primary">내가 쓴 댓글</h1>
 
         {comments.length === 0 ? (
-          <p className="py-10 text-content-muted">아직 남기신 댓글이 없어요.</p>
+          <EmptyNotice
+            text="아직 남기신 댓글이 없어요. 마음이 가는 글에 한 마디 남겨보세요."
+            cta="게시판 둘러보기"
+            href="/community/free"
+          />
         ) : (
           <ul className="mt-2 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
             {comments.map((comment) => {

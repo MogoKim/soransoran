@@ -4,7 +4,7 @@ import { getMyPosts } from '@/lib/queries/my'
 import { getBoardByType } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
 import PageShell from '@/components/layouts/PageShell'
-import { requireMyUserId, BackToMy } from '@/components/features/my/shell'
+import { requireMyUserId, BackToMy, EmptyNotice } from '@/components/features/my/shell'
 import { TITLE_CARD } from '@/lib/typography'
 
 export const dynamic = 'force-dynamic'
@@ -31,9 +31,11 @@ export default async function MyPostsPage() {
         <h1 className="mt-2 text-xl font-bold text-content-primary">내가 쓴 글</h1>
 
         {posts.length === 0 ? (
-          <p className="py-10 text-content-muted">
-            아직 쓰신 글이 없어요. 편할 때 한 줄 남겨보세요.
-          </p>
+          <EmptyNotice
+            text="아직 쓰신 글이 없어요. 편할 때 한 줄 남겨보세요."
+            cta="글쓰러 가기"
+            href="/write"
+          />
         ) : (
           <ul className="mt-2 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
             {posts.map((post) => {
