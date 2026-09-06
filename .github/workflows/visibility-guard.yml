@@ -279,6 +279,23 @@ jobs:
       - name: Original Post exact id 타깃팅 (지정한 것만 · limit 대조)
         run: npm run original-post:id-target-check
 
+      # 자동 발행 러너의 계약 (§4-AL).
+      #
+      # 🔴 사람이 매 건을 보지 않고 나가는 경로다. 막아야 할 회귀:
+      #      · legacy 글(13~14판 / gemini-*)이 후보에 섞이는 것 —
+      #        자동 발행은 "내용을 아는 글" 만 대상이어야 한다.
+      #      · gate HOLD · safety fail · 이미 발행된 건이 통과하는 것.
+      #      · 후보가 2건 이상인데 그냥 하나를 골라 내보내는 것 —
+      #        어느 것을 낼지 정해지지 않았다는 뜻이다.
+      #      · 두 스위치(--apply + --limit=1)가 느슨해지는 것.
+      #      · 오늘 cap 을 채웠는데 도는 것.
+      #      · 발행 뒤 ActivityLog 정합을 안 보는 것 — cap 의 정본이다.
+      #      · pacing 상수가 흔들리는 것.
+      #
+      # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 함수 판정이라 몇 초면 끝난다.
+      - name: Original Post 자동 발행 러너 (publish-candidate-v1 만 · 정확히 1건)
+        run: npm run original-post:auto-publish-check
+
       # 우나어 legacy read-only 커넥터의 계약.
       #
       # 🔴 우나어는 우리 **운영 DB** 다. 커넥터가 write SQL 을 만들 수 있으면

@@ -72,7 +72,9 @@
     "micro-seed:publish-candidates-check": "tsx scripts/micro-seed-publish-candidates-check.mts",
     "micro-seed:publish-enqueue": "tsx scripts/micro-seed-publish-enqueue.mts",
     "micro-seed:publish-enqueue-check": "tsx scripts/micro-seed-publish-enqueue-check.mts",
-    "original-post:id-target-check": "tsx scripts/original-post-id-target-check.mts"
+    "original-post:id-target-check": "tsx scripts/original-post-id-target-check.mts",
+    "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",
+    "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
