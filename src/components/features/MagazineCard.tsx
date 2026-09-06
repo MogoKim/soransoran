@@ -36,7 +36,7 @@ export default function MagazineCard({ article }: { article: MagazineArticle }) 
       ) : null}
 
       <span className="flex min-w-0 flex-col justify-center gap-1.5">
-        <span className="inline-flex w-fit items-center rounded-full bg-surface-soft px-2 py-0.5 text-xs font-medium text-brand-ink">
+        <span className="inline-flex w-fit items-center rounded-full bg-surface-soft px-2 py-0.5 text-xs font-medium text-brand-strong">
           {MAGAZINE_CLUSTER_LABELS[article.cluster]}
         </span>
 
