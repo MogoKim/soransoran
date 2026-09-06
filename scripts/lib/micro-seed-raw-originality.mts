@@ -98,13 +98,31 @@ export type RawCandidate = {
   sourceSite: string
   lane: string
   score: number
+  /** 🔴 목록 단계에서 본문 밀도를 가늠할 **유일한** 신호다 (§4-AF ⑫) */
+  commentCount: number
   title: string
 }
 
 /**
  * 읽을 대상 — 🔴 목록 scout 을 돌리지 않는다. 이미 가진 재고에서만 고른다.
  *
- * 순서: 레인 → 이미 읽음 제외 → 점수순 → cap.
+ * 순서: 레인 → 이미 읽음 제외 → **댓글 수** → 점수 → id → cap.
+ *
+ * 🔴 **왜 점수순이 아닌가** (2026-09-06 실측).
+ *    점수(`ScoreBreakdown`)는 engagement · targetFit · conversation · freshness · penalty 다 —
+ *    **본문 길이를 가리키는 항이 하나도 없다.** 목록 단계에서 본문을 모르니 당연하지만,
+ *    그래서 "점수 상위" 는 "긴 글 상위" 가 아니라 **"반응·타겟적합 상위"** 다.
+ *    실제로 점수순으로 상위 10건을 열었더니 400자 이상이 **0건**이었다(최대 198자).
+ *
+ * 🟢 **댓글 수는 대리 신호가 된다.** 읽어본 17건 중 400자 이상은 하나뿐이었는데
+ *    그 글이 **댓글 최다(17개)** 였다. 반면 점수로는 8위권이라 상위 10에 들지 못했다.
+ *    댓글이 많다는 것은 **사람들이 할 말이 많았다**는 뜻이고, 그건 대체로 본문에 사연이 있어서다.
+ *    완벽한 예측은 아니다(댓글 13인데 110자인 글도 있다). 다만 **가진 신호 중 가장 낫다.**
+ *
+ * 🔴 **동률은 반드시 같은 순서로 풀린다.** 댓글 수가 같으면 점수, 그것도 같으면
+ *    `sourceArticleId` 로 가른다. 정렬이 흔들리면 같은 재고에서 매번 다른 10건이 나오고,
+ *    "이미 읽음" 제외가 무의미해진다 — 무엇을 열었는지 재현할 수 없게 된다.
+ *
  * 🔴 **cap 은 생산 목표가 아니라 요청 리스크 상한이다** (§4-W ③). 남았다고 더 열지 않는다.
  */
 export function selectRawTargets<T extends RawCandidate>(
@@ -113,7 +131,11 @@ export function selectRawTargets<T extends RawCandidate>(
   return rows
     .filter((r) => r.lane === RAW_LANE)
     .filter((r) => !seen.has(r.sourceArticleId))
-    .sort((a, b) => b.score - a.score)
+    .slice()
+    .sort((a, b) =>
+      (b.commentCount ?? 0) - (a.commentCount ?? 0)
+      || b.score - a.score
+      || a.sourceArticleId.localeCompare(b.sourceArticleId))
     .slice(0, cap)
 }
 

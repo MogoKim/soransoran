@@ -61,6 +61,7 @@ function main(): void {
     sourceSite: s.row.sourceSite,
     lane: s.laneHint.lane,
     score: s.score.total,
+    commentCount: Number(s.row.sourceCommentCount ?? 0),
     title: s.row.originalTitle ?? '',
   }))
   const seen = seenArticleIds()
@@ -84,11 +85,18 @@ function main(): void {
   console.log('   🟡 생활 사연은 여기서 막지 않는다 — 가족·부부·돈·일은 이 레인의 재료다')
 
   const targets = selectRawTargets(openable.map((x) => x.r), CAP, seen)
-  console.log(`\n③ 다음에 열 대상 — 점수순 상위 ${CAP}건 (cap 은 생산 목표가 아니라 요청 상한)`)
-  console.log(`   ${pad('id', 10)} ${pad('site', 23)} ${pad('score', 6)} title`)
+  console.log(`\n③ 다음에 열 대상 — **댓글 수** 상위 ${CAP}건 (cap 은 생산 목표가 아니라 요청 상한)`)
+  console.log('   정렬 ① 댓글 수 ② 점수 ③ articleId — 🔴 점수순이 아니다 (§4-AF ⑫)')
+  console.log('   점수에는 본문 길이를 가리키는 항이 없다. 댓글 수가 가진 신호 중 가장 낫다.')
+  console.log(`   ${pad('id', 10)} ${pad('site', 23)} ${pad('댓글', 6)} ${pad('score', 6)} title`)
   for (const t of targets) {
-    console.log(`   ${pad(t.sourceArticleId, 10)} ${pad(t.sourceSite, 23)} ${pad(t.score.toFixed(1), 6)} ${head(t.title)}`)
+    console.log(`   ${pad(t.sourceArticleId, 10)} ${pad(t.sourceSite, 23)} ${pad(t.commentCount, 6)}`
+      + ` ${pad(t.score.toFixed(1), 6)} ${head(t.title)}`)
   }
+  // 🔴 점수순으로 뽑았다면 무엇이 왔을지 나란히 보여준다 — 정렬을 바꾼 이유가 눈에 보이게
+  const byScore = [...openable.map((x) => x.r)].sort((a, b) => b.score - a.score).slice(0, CAP)
+  console.log(`\n   (참고) 옛 점수순이라면 댓글 수가 이랬다: ${byScore.map((t) => t.commentCount).join(' · ')}`)
+  console.log(`          지금 댓글순은:                    ${targets.map((t) => t.commentCount).join(' · ')}`)
 
   console.log('\n④ 읽은 뒤 무엇이 되는가 — 🔴 지금은 알 수 없다')
   console.log(`   lane=${RAW_LANE} 는 **목록 추정**이고, axis=${RAW_AXIS} 는 **본문을 읽은 뒤 판정**이다.`)

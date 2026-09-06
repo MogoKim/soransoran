@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import {
   RAW_LANE, RAW_AXIS, RAW_DECISIONS, RAW_COLUMNS, RAW_MIN_BODY, BODY_HEAD_CHARS,
   NOT_PUBLISH_NOTE, maskSensitive, digestBody, selectRawTargets, prescreen,
-  blockedBeforeRead, rawDecisions, heldForReread,
+  blockedBeforeRead, rawDecisions, heldForReread, type RawCandidate,
 } from './lib/micro-seed-raw-originality.mjs'
 import { RAW_MIN_BODY as CLASSIFY_MIN } from './lib/micro-seed-detail-classify.mjs'
 import {
@@ -68,24 +68,44 @@ check('계정을 지운다', maskSensitive('@someone 님이').includes('[계정]
 }
 
 console.log('\n⑤ 대상 선정')
-const mk = (id: string, lane: string, score: number): { sourceArticleId: string; sourceSite: string; lane: string; score: number; title: string } =>
-  ({ sourceArticleId: id, sourceSite: 's', lane, score, title: `제목${id}` })
+const mk = (id: string, lane: string, score: number, commentCount = 0): RawCandidate =>
+  ({ sourceArticleId: id, sourceSite: 's', lane, score, commentCount, title: `제목${id}` })
 {
-  const rows = [mk('a', 'originalRaw', 10), mk('b', 'infoSeed', 99), mk('c', 'originalRaw', 50), mk('d', 'originalRaw', 30)]
+  // mk(id, lane, score, commentCount)
+  const rows = [mk('a', 'originalRaw', 10, 5), mk('b', 'infoSeed', 99, 99),
+    mk('c', 'originalRaw', 50, 1), mk('d', 'originalRaw', 30, 9)]
   const t = selectRawTargets(rows, 2, new Set())
   check('🔴 originalRaw 레인만 고른다', t.every((x) => x.lane === RAW_LANE))
-  check('점수순으로 고른다', t.map((x) => x.sourceArticleId).join(',') === 'c,d')
+  // 🔴 이것이 이번 변경의 핵심이다. c 는 점수가 50 으로 가장 높지만 댓글이 1개다.
+  //    점수순이면 c 가 1위였고, 실제로 그렇게 뽑아 열었더니 400자 이상이 0건이었다(2026-09-06).
+  check('🟢 댓글 수가 점수를 이긴다 — d(댓글9·점수30) 가 c(댓글1·점수50) 보다 앞',
+    t.map((x) => x.sourceArticleId).join(',') === 'd,a')
   check('cap 을 넘지 않는다', t.length === 2)
   check('🔴 이미 읽은 것은 빼고 고른다',
-    selectRawTargets(rows, 10, new Set(['c'])).map((x) => x.sourceArticleId).join(',') === 'd,a')
+    selectRawTargets(rows, 10, new Set(['d'])).map((x) => x.sourceArticleId).join(',') === 'a,c')
   check('빈 입력이면 빈 결과', selectRawTargets([], 10, new Set()).length === 0)
+}
+{
+  // 🔴 동률은 언제나 같은 순서로 풀려야 한다 — 흔들리면 "이미 읽음" 제외가 무의미해진다
+  const tie = [mk('z', 'originalRaw', 10, 7), mk('y', 'originalRaw', 50, 7), mk('x', 'originalRaw', 50, 7)]
+  const t2 = selectRawTargets(tie, 3, new Set())
+  check('동률이면 점수로 가른다 — y·x(50) 가 z(10) 보다 앞',
+    t2[2]!.sourceArticleId === 'z')
+  check('🔴 댓글·점수까지 같으면 articleId 로 가른다 — x 가 y 보다 앞',
+    t2.map((r) => r.sourceArticleId).join(',') === 'x,y,z')
+  check('🔴 몇 번을 불러도 같은 순서다',
+    [0, 1, 2].every(() => selectRawTargets([...tie].reverse(), 3, new Set())
+      .map((r) => r.sourceArticleId).join(',') === 'x,y,z'))
+  check('🔴 입력 배열을 흐트러뜨리지 않는다',
+    (() => { const src = [...tie]; selectRawTargets(src, 3, new Set());
+      return src.map((r) => r.sourceArticleId).join(',') === 'z,y,x' })())
 }
 
 console.log('\n⑥ 읽기 전 안전 — 생활 사연을 미리 버리지 않는다')
 {
   const living = ['남편이랑 크게 싸웠어요', '친정엄마 병원비 어떻게들 하세요', '맞벌이 돈관리 어떻게 하세요', '회사 그만둘까 고민이에요']
   const kept = living.filter((t) =>
-    !blockedBeforeRead(prescreen({ sourceArticleId: 'x', sourceSite: 's', lane: RAW_LANE, score: 1, title: t })))
+    !blockedBeforeRead(prescreen({ sourceArticleId: 'x', sourceSite: 's', lane: RAW_LANE, score: 1, commentCount: 0, title: t })))
   check(`🟡 가족·부부·돈·일 생활 사연 ${living.length}건이 모두 남는다 (${kept.length}건)`, kept.length === living.length)
 }
 

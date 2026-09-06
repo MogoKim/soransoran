@@ -73,7 +73,8 @@ export function readExpansions(path: string): ExpansionIn[] {
 
 function main(): void {
   const inPath = arg('in') ?? latestDryRunFile(REVIEW_DATA_DIR)
-  if (!inPath) fail(`${REVIEW_DATA_DIR}/seed-originality-dry-run-*.json 을 찾지 못했다 — 먼저 dry-run 을 돌린다`)
+  // 🔴 `return` 을 붙인다 — 없으면 아래에서 inPath 가 여전히 `string | null` 로 남는다
+  if (!inPath) return fail(`${REVIEW_DATA_DIR}/seed-originality-dry-run-*.json 을 찾지 못했다 — 먼저 dry-run 을 돌린다`)
   assertInsideDataDir(inPath)
   const out = arg('out') ?? OUT_DEFAULT
   assertInsideDataDir(out)
