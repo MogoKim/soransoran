@@ -6,7 +6,7 @@ import { auth } from '@/lib/auth'
 import { getBoardByType } from '@/lib/board-registry'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
-import { requireOnboarded } from '@/lib/onboarding-guard'
+import { requireOnboarded, MEMBER_NOT_FOUND } from '@/lib/onboarding-guard'
 import {
   FIRST_GREETING_BOARD_TYPE,
   FIRST_GREETING_MAX_LENGTH,
@@ -83,7 +83,7 @@ export async function submitGreeting(
     where: { id: userId },
     select: { createdAt: true, firstGreetingAt: true },
   })
-  if (!member) return { error: '회원 정보를 찾을 수 없습니다. 다시 로그인해 주세요.' }
+  if (!member) return { error: MEMBER_NOT_FOUND }
 
   /**
    * 🔴 기간이 지나면 받지 않는다.

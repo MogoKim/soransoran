@@ -45,7 +45,7 @@ export default async function WritePage({
    *    User 행이 없으면 온보딩으로 보내도 거기서 할 수 있는 일이 없다 —
    *    다시 로그인할 일이지 가입을 마칠 일이 아니다. 그런 사람을 온보딩에
    *    세우면 아무것도 안 되는 화면을 오가게 된다.
-   *    폼을 그대로 두고 createPost 가 "회원 정보를 찾을 수 없습니다" 로 안내한다.
+   *    폼을 그대로 두고 createPost 가 MEMBER_NOT_FOUND 문구로 안내한다.
    */
   if (session?.user) {
     const member = await prisma.user.findUnique({
