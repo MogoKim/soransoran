@@ -65,7 +65,9 @@
     "micro-seed:raw-detail-fetch": "tsx scripts/micro-seed-raw-detail-fetch.mts",
     "micro-seed:raw-check": "tsx scripts/micro-seed-raw-originality-check.mts",
     "micro-seed:raw-review": "tsx scripts/micro-seed-raw-review.mts",
-    "micro-seed:raw-review-check": "tsx scripts/micro-seed-raw-review-check.mts"
+    "micro-seed:raw-review-check": "tsx scripts/micro-seed-raw-review-check.mts",
+    "micro-seed:raw-rewrite": "tsx scripts/micro-seed-raw-rewrite.mts",
+    "micro-seed:raw-rewrite-check": "tsx scripts/micro-seed-raw-rewrite-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
