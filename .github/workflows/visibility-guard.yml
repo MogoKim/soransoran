@@ -264,6 +264,21 @@ jobs:
       - name: Micro Seed 발행 대기열 브리지 (PENDING 까지 · 두 스위치 · SRN 제외)
         run: npm run micro-seed:publish-enqueue-check
 
+      # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
+      #
+      # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:
+      #      · --id 를 줬는데 지정하지 않은 건이 대상에 섞이는 것 —
+      #        2026-09-06 에 발행 하나를 위해 내용 모르는 글 둘이 딸려 왔다.
+      #      · --limit 이 id 개수와 달라도 통과하는 것 — 잘라내면 무엇이 빠졌는지 모른다.
+      #      · id 2건 중 1건만 가능한데 그냥 1건을 처리하는 것.
+      #      · --id 가 없을 때 기존 배치 동작이 달라지는 것.
+      #      · 필터가 정렬을 바꾸는 것 — dry-run 재현성의 근거다.
+      #      · pacing 상수(POST_CAP_PER_WEEK · MIN_DAYS_BETWEEN_POSTS)가 흔들리는 것.
+      #
+      # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 함수 판정이라 몇 초면 끝난다.
+      - name: Original Post exact id 타깃팅 (지정한 것만 · limit 대조)
+        run: npm run original-post:id-target-check
+
       # 우나어 legacy read-only 커넥터의 계약.
       #
       # 🔴 우나어는 우리 **운영 DB** 다. 커넥터가 write SQL 을 만들 수 있으면
