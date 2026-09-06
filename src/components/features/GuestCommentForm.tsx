@@ -135,6 +135,7 @@ export default function GuestCommentForm({
           setContent(e.target.value)
           setShowSuccess(false)
         }}
+        aria-label="댓글"
         className="min-h-[52px] resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-page p-3 leading-[1.7]"
         placeholder={COMMENT_PLACEHOLDER}
       />
