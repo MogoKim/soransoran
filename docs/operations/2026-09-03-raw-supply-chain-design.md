@@ -3583,6 +3583,159 @@ fixture 가 "household 초안 전부가 소재어를 담는다" 를 지킨다.
 
 ---
 
+## §4-AF 🔵 Raw Originality 레인 — **설계 + 계약 확정. 이번 PR 은 읽지 않는다** (2026-09-06)
+
+> 🔴 이번 PR 에서 하지 않는 것: DB write · 발행 · LLM · noindex · Raw Vault 적재 · 82cook adapter · **상세 fetch**.
+> 넣은 것은 **계약(lib)** 과 **읽지 않는 리포트(계획 모드 CLI)** 와 **fixture** 뿐이다.
+
+### ① 왜 지금인가 — 재고가 여기 다 쌓여 있다
+
+detail-fetch 대상이 고갈됐다(2026-09-06 실측). 그런데 목록에는 글이 남아 있다.
+
+```
+전체 스코어링 722건
+├─ originalRaw            653  ← 🔴 여기. 처리 경로가 없어 그대로 쌓였다
+├─ growthIssue             12  ← §4-C (미구현)
+└─ seed inbox 레인         57
+     ├─ needsDetail        47  ← 전부 읽음. 남은 대상 0
+     ├─ seedOk              9  ← 전부 소재 분류 실패(상품 추천 요청)
+     └─ visualDependent     1
+```
+
+**653건이 전체의 90.4%다.** 이 레인을 열지 않으면 scout 을 더 돌려도 같은 곳에 쌓인다 —
+목록 수확률이 11.1% → 3.8% → 2.9% 로 떨어진 것도, 뒤 페이지일수록 originalRaw 가 지배하기 때문이다.
+**병목은 수집이 아니라 처리 경로다.**
+
+점수도 여기가 높다. 상위 3건이 83.3 · 82.0 · 81.9 로, 지금까지 처리한 어떤 글보다 높다(기존 최고 77.3).
+
+### ② 🔴 lane 과 axis 는 다른 말이다 — 이 절에서 가장 헷갈리는 지점
+
+| | 언제 정해지나 | 무엇으로 |
+|---|---|---|
+| `lane === 'originalRaw'` | **목록 단계** | 제목·메타 추정 |
+| `axis === 'rawOriginality'` | **본문을 읽은 뒤** | 본문 400자 이상 **+ 사연 축 존재** |
+
+**653건은 전자다.** 그중 몇 건이 후자가 될지는 **읽어봐야 안다.**
+짧으면 SRN 으로, 사연 축이 없으면 seedOriginality 로 간다 — 축 판정은 이미 `detail-classify` 에 있다(④).
+
+이 구분을 흐리면 "Raw 653건" 이라는 잘못된 숫자가 굳는다. **읽기 전에는 후보 653건일 뿐이다.**
+
+### ③ 입력 — 확정
+
+- `loadScoutRows(SCOUT_DATA_DIR, null)` → `scoreRows()` → `laneHint.lane === 'originalRaw'`
+- 🔴 **목록 scout 을 돌리지 않는다.** 이미 가진 재고에서만 고른다
+- 🔴 `seenArticleIds()` 로 **이미 detail/prior-read 된 id 제외** — `.detail.jsonl` 전부를 본다
+- 점수순 내림차순 → cap
+- 🔴 **cap 은 생산 목표가 아니라 요청 리스크 상한이다**(§4-W ③). 10 또는 20 만 허용
+
+**읽기 전 안전 선별** — 요청 하나가 곧 계정 위험이므로 제목만 봐도 버릴 것은 열지 않는다.
+`safetyFilter(title)` → `hardExclude` · `drop` 이면 제외. **`hold` 는 남긴다**(읽어봐야 안다).
+
+🟡 **생활 사연을 미리 버리지 않는다.** 가족·부부·돈·일은 이 레인의 **재료**다.
+여기서 막는 것은 정치·공인·광고·고정슬롯이지 "무거운 이야기" 가 아니다. fixture 가 이를 지킨다.
+
+**실측 (2026-09-06)**: 재고 653 → 안 읽음 653 → 읽기 전 차단 6 → **열 수 있음 647**.
+차단 사유는 visualDependent 2 · hostility 1 등. 상위 10건은 전부 생활 사연이었다.
+
+### ④ detail-fetch 와의 관계 — **별도 명령을 권한다**
+
+| | 같이 | 따로 |
+|---|---|---|
+| 코드량 | 적다 | 조금 많다 |
+| body 저장 정책 | **섞인다** | 축마다 다르게 |
+| TSV 계약 | 17컬럼을 건드려야 | 그대로 둔다 |
+| cap · 스위치 | 하나로 묶임 | 레인별 상한 |
+
+**추천: `raw-detail-fetch` 를 별도 명령으로 낸다.** 이유는 body 하나로 충분하다.
+
+detail-fetch 는 **SRN 축일 때만 body 를 통째로** 저장한다(§4-Z ⑥). 그 축은 정의상 100자 미만이라
+"승인 화면이 그대로 보여줄 분량" 이 전부이기 때문이다. Raw 는 400자 이상이다 —
+**같은 파일에 두 정책을 섞으면, 어느 줄이 어떤 규칙으로 저장됐는지 파일만 보고는 알 수 없다.**
+
+다만 **아래는 그대로 재사용한다**(새로 만들지 않는다):
+- 요청 pacing `PACE_MIN_MS 2500` ~ `PACE_MAX_MS 4500` + 지터
+- **두 스위치 원칙** — `--live` 와 env kill switch 가 **둘 다** 있어야 연다
+- `seenArticleIds()` — 🔴 **양쪽 산출물을 모두 본다.** 같은 글을 두 명령이 각각 여는 일이 없어야 한다
+- 축 판정 `classifyDetail()` — Raw 전용 판정을 새로 만들지 않는다
+
+산출 파일은 `*.raw-detail.jsonl` 로 나눈다. detail-fetch 의 17컬럼 TSV 계약은 **건드리지 않는다.**
+
+### ⑤ 본문 저장 — 🔴 **전문을 저장하지 않는다**
+
+마스킹 후 **앞 300자**(`BODY_HEAD_CHARS`) + 길이 + 잘림 여부 + 문단 수만 남긴다.
+
+두 가지 이유가 있고 둘 다 같은 방향을 가리킨다.
+
+1. **원문이 남으면 베끼게 된다.** 이 레인의 목적은 사연을 *우리 말로 다시 쓰는* 것이다.
+   전문이 화면에 있으면 사람은 반드시 그 문장을 참고한다 — 그게 사람이라서 그렇다.
+   앞부분만 두면 **"무슨 이야기인가" 는 알 수 있고 "어떻게 썼는가" 는 남지 않는다.**
+2. 남의 글 전문을 우리 디스크에 쌓지 않는다. SRN 이 통째로 저장할 수 있는 건 100자 미만이라서다.
+
+🔴 **요약하지 않는다** — 요약은 LLM 이고 이 레인에 LLM 은 없다. **자르기만 한다.**
+
+**마스킹 → 자르기 순서를 지킨다.** 링크 · 메일 · 휴대폰 · 일반 번호 · `@계정` 을 지운 뒤 자른다.
+순서를 바꾸면 경계에 걸친 연락처가 절반만 남아 마스킹을 빠져나간다 — fixture 가 이 경계를 검사한다.
+
+판단에 전화번호가 필요한 적은 없다. 반면 남겨두면 **우리 디스크에 있는 남의 개인정보**가 된다.
+
+### ⑥ 검수 화면 — decision 은 셋뿐
+
+| decision | 뜻 |
+|---|---|
+| `RAW` | 우리 말로 다시 쓴다 — 원문을 옮기는 것이 아니다 |
+| `HOLD` | 판단을 미룬다 — 본문이 모자라거나 더 볼 것이 있다 |
+| `DROP` | 쓰지 않는다 |
+
+🔴 **`ADOPT` · `APPROVE` · `SEED` 를 여기 두지 않는다.**
+그 셋은 각각 초안 검수(§4-AB) · SRN 승인(§4-Z) · 소스 승인(§4-AD) 의 말이다.
+같은 낱말이 화면마다 다른 뜻이면 **사람이 무엇을 누르는지 모르게 된다.** fixture 가 셋의 부재를 확인한다.
+
+화면은 §4-Z / §4-AD 패턴을 재사용하되 **섞지 않는다** — 별도 HTML, 별도 export.
+표시 항목: 제목 · `bodyHead`(300자) · 원문 길이 · 문단 수 · 이미지/댓글 수 · safety · score · 축.
+
+### ⑦ 출력 — 확정된 컬럼 21개
+
+`.microseed-data/raw-originality-source-approvals-YYYYMMDD-HHMMSS.{tsv,json}`
+
+```
+decision · sourceArticleId · sourceSite · url · score · lane · axis ·
+bodyLength · bodyHead · bodyTruncated · paragraphs ·
+imageCount · commentCount · assetAxes · safetyVerdict · safetyReasons ·
+title · memo · detailRunId · reviewedAt · note
+```
+
+🔴 **`body` 전문 컬럼은 없다.** `bodyHead` 뿐이다.
+🔴 **컬럼은 언제나 맨 뒤에만 더한다** — TSV 를 위치로 읽는 쪽이 있어 중간 삽입은 조용한 오독이 된다.
+🔴 파일명에 **시각(HHMMSS)** 을 넣는다 — 날짜만 쓰면 같은 날 재실행이 앞 회차를 덮어쓴다(2026-09-05 사고).
+
+**Raw Vault 적재는 다음 단계로 미룬다.** 이 파일은 DB 로 가는 입력이 아니라 **사람의 판정 기록**이다.
+
+### ⑧ 이번 PR 에 들어간 것 / 다음 PR 의 TODO
+
+**들어간 것**
+- `scripts/lib/micro-seed-raw-originality.mts` — 계약 전부(레인·축·decision·컬럼·digest·마스킹·선정·prescreen)
+- `scripts/micro-seed-raw-originality-plan.mts` — 🔴 **읽지 않는 리포트.** `--live` 자체가 없다
+- `scripts/micro-seed-raw-originality-check.mts` — fixture 39건
+- `npm run micro-seed:raw-plan` · `micro-seed:raw-check`
+
+**다음 PR TODO — 이 순서로**
+- [ ] **T1** `raw-detail-fetch` — ④의 재사용 목록대로. 두 스위치 · pacing · `seenArticleIds()` 양쪽 확인
+- [ ] **T2** `*.raw-detail.jsonl` 저장 — ⑤ 규칙. **전문 저장 0** 을 fixture 로 감시
+- [ ] **T3** 검수 화면 HTML — ⑥. `RAW`/`HOLD`/`DROP` 만. 기존 화면과 섞지 않음
+- [ ] **T4** export — ⑦ 컬럼 21개, 파일명에 시각
+- [ ] **T5** `seenArticleIds()` 가 `.raw-detail.jsonl` 도 읽게 확장 (T1 과 함께)
+- [ ] **T6** CI 게이트에 `raw-check` 추가
+- [ ] **T7** (그 뒤) 재작성 초안 경로 — 🔴 **여기서부터는 LLM 논의가 필요하다. 별도 승인 사항**
+
+### ⑨ 아직 아닌 것
+
+- **읽지 않았다.** 653건은 여전히 목록 추정이고, 실제 축 분포는 T1 이후에야 안다
+- Raw Vault 적재 · 발행 · noindex 는 이 절의 범위 밖이다
+- 재작성 자체(원문 → 우리 글)는 **T7 이고, 방법이 정해지지 않았다** — 소재 사전 방식으로는
+  400자 사연을 다시 쓸 수 없다. 그 논의는 이 절이 아니라 별도 결정이다
+
+---
+
 ## §4-C 🟡 Growth Issue 레인 — **전략만 적는다. 구현하지 않았다**
 
 > 🔴 **상태: 미구현.** 코드 · 분류기 · cap · 감사 경로 **어느 것도 없다.**
