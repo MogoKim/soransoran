@@ -104,8 +104,9 @@ check(`🟡 소재어이자 일상어인 말(${overlapWords.length}개)도 소�
 check('🔴 단독 매칭을 막은 말은 실제로 안 잡힌다 (넓어지지 않게)',
   STANDALONE_EXEMPT.every((w) => findMaterial(`${w} 얘기 좀 해요`).material === null))
 
-console.log('\n⑤ 확장 — 🔴 원문 body 없이 title·memo 만으로 동작한다')
-const ex = expandSeed({ sourceArticleId: 'x', title: '핀일로 후라이팬 어때요??', memo: '살림 소재' })
+// 🔴 memo 를 넘기지 않는다 — 타입에서 뺀 인자다(2026-09-05 오염 사고). 제목만으로 동작해야 한다
+console.log('\n⑤ 확장 — 🔴 원문 body 없이 **제목만으로** 동작한다')
+const ex = expandSeed({ sourceArticleId: 'x', title: '핀일로 후라이팬 어때요??' })
 check('body 를 주지 않아도 초안이 나온다', ex.drafts.length >= 2)
 check(`초안 ${DRAFTS_PER_SOURCE}개`, ex.drafts.length === DRAFTS_PER_SOURCE, String(ex.drafts.length))
 check('topic 이 붙는다', ex.topic === 'household')
@@ -557,7 +558,7 @@ console.log('\n이미 초안화한 원천 제외')
   check(`실 파일 SEED ${seeds.length}건`, seeds.length > 0)
   check('🔴 SEED 아닌 결정이 섞이지 않았다', seeds.every((r) => r.decision === 'SEED'))
   const exps = seeds.map((r) => expandSeed({
-    sourceArticleId: String(r.sourceArticleId ?? ''), title: String(r.title ?? ''), memo: String(r.memo ?? ''),
+    sourceArticleId: String(r.sourceArticleId ?? ''), title: String(r.title ?? ''),
   }))
   check('🔴 모든 초안 유출 0 · 겹침 6자 미만 · safety pass',
     exps.every((e) => e.drafts.every((d) => d.ok)))

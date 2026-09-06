@@ -207,6 +207,7 @@ async function main(): Promise<void> {
     sourceSite: s.row.sourceSite,
     lane: s.laneHint.lane,
     score: s.score.total,
+    commentCount: Number(s.row.sourceCommentCount ?? 0),
     title: s.row.originalTitle ?? '',
   }))
 
