@@ -4,7 +4,7 @@ import { getMyScraps } from '@/lib/queries/my'
 import { getBoardByType } from '@/lib/board-registry'
 import { formatRelativeTime } from '@/lib/date'
 import PageShell from '@/components/layouts/PageShell'
-import { requireMyUserId, BackToMy } from '@/components/features/my/shell'
+import { requireMyUserId, BackToMy, EmptyNotice } from '@/components/features/my/shell'
 import { TITLE_CARD } from '@/lib/typography'
 
 export const dynamic = 'force-dynamic'
@@ -31,9 +31,11 @@ export default async function MyScrapsPage() {
         <h1 className="mt-2 text-xl font-bold text-content-primary">스크랩한 글</h1>
 
         {scraps.length === 0 ? (
-          <p className="py-10 leading-relaxed text-content-muted">
-            아직 담아 두신 글이 없어요. 글 아래 더보기에서 스크랩하면 여기 모입니다.
-          </p>
+          <EmptyNotice
+            text="아직 담아 두신 글이 없어요. 글 아래 더보기에서 스크랩하면 여기 모입니다."
+            cta="글 보러 가기"
+            href="/community/free"
+          />
         ) : (
           <ul className="mt-2 flex list-none flex-col p-0 [&>li+li]:border-t [&>li+li]:border-subtle">
             {scraps.map((scrap) => {

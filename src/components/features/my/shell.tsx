@@ -59,6 +59,35 @@ export function MenuRow({ href, label }: { href: string; label: string }) {
   )
 }
 
+/**
+ * 빈 목록 안내 — 문구 한 줄과 갈 곳 하나.
+ *
+ * 🔴 **면은 주되 카드로 키우지 않는다.** 면이 없으면 "빈 방" 이 아니라
+ *    "덜 그려진 화면" 으로 읽힌다(`EmptyState` 주석 · /best 사례). 그렇다고
+ *    `EmptyState` 를 그대로 쓰면 흰 카드가 목록 위에 앉아 my 목록 톤에서 과하다
+ *    — 실측 박스 높이가 이 형태의 1.7배다.
+ *
+ * 🔴 **핵심은 면이 아니라 갈 곳이다.** 여기서 막히면 다음 행동까지 세 번 이동해야 한다
+ *    (my/* 에는 글쓰기 FAB 도 없다). 그래서 CTA 가 본체다.
+ *
+ * 🔴 **CTA 는 채운 버튼이 아니라 링크다.** `EmptyState` 의 코랄 fill 버튼은 흰 글자가
+ *    2.73:1 인데(§3-1-B CTA 예외), `--link` 는 바탕 위 4.95:1 이라 AA 를 넘는다.
+ *    이 화면에 새로 들이는 값이라 대비가 높은 쪽을 고른다. 밑줄은 토큰 규칙상 필수다.
+ */
+export function EmptyNotice({ text, cta, href }: { text: string; cta: string; href: string }) {
+  return (
+    <div className="mt-2 flex flex-col items-start gap-2 rounded-lg border border-subtle bg-surface-page px-4 py-6">
+      <p className="m-0 leading-relaxed text-content-muted">{text}</p>
+      <Link
+        href={href}
+        className={`inline-flex ${TOUCH_MIN} items-center text-link underline underline-offset-2`}
+      >
+        {cta} →
+      </Link>
+    </div>
+  )
+}
+
 /** 메뉴 묶음. 줄 사이만 가른다 */
 export function MenuGroup({ children }: { children: React.ReactNode }) {
   return (
