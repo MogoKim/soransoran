@@ -35,10 +35,15 @@ import {
   type QueueStatus,
 } from '../src/lib/original-post-match-store'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import {
+  parseIdArgs, filterByIds, missingIds, checkLimitAgainstIds, describeIdTargeting,
+} from '../src/lib/original-post-id-target'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
 const limitRaw = argv.find((a) => a.startsWith('--limit='))?.slice(8)
+// 🔴 --id 를 주면 그 건만 본다. 없으면 지금까지와 똑같이 배치 전체를 돈다 (§4-AK)
+const IDS = parseIdArgs(argv)
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const kst = (d: Date): string =>
   `${new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} KST`
@@ -93,7 +98,7 @@ for (const r of personaRows) {
 console.log(`  페르소나 ${personas.length}명 (active ${personas.filter((p) => p.status === 'active').length})`)
 
 // ── 대상 조달 — 🔴 APPROVED · EDITED · createdPostId null ──
-const rows = await prisma.originalPostApprovalQueue.findMany({
+const allRows = await prisma.originalPostApprovalQueue.findMany({
   where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
   select: {
     id: true, status: true, gateVerdict: true, createdAt: true, createdPostId: true,
@@ -103,6 +108,14 @@ const rows = await prisma.originalPostApprovalQueue.findMany({
   },
   orderBy: { createdAt: 'asc' },
 })
+// 🔴 지정한 id 만 남긴다 — 순서는 바꾸지 않는다(dry-run 재현성)
+const rows = filterByIds(allRows, IDS)
+const missing = missingIds(allRows, IDS)
+console.log(describeIdTargeting(IDS))
+if (missing.length > 0) {
+  console.log(`  🟡 지정했지만 대상에 없는 id ${missing.length}건 — APPROVED·EDITED·발행 전이 아닙니다`)
+  for (const m of missing) console.log(`     ${m}`)
+}
 console.log(`  대상 ${rows.length}건 (APPROVED · EDITED · 발행 전)\n`)
 
 // 🔴 수정본이 있으면 그것이 발행될 글이다
@@ -163,6 +176,9 @@ if (LIMIT === null || !Number.isInteger(LIMIT) || LIMIT < 1) {
   await prisma.$disconnect(); fail('--apply 에는 --limit=N (1 이상) 이 함께 있어야 합니다')
 }
 // 🔴 개수가 어긋나면 목록이 의도와 다른 것이다. 잘라내지 않고 멈춘다
+// 🔴 --id 를 줬으면 개수가 정확히 맞아야 한다 — 하나라도 배정 불가면 멈춘다 (§4-AK)
+const idCheck = checkLimitAgainstIds(LIMIT, IDS, save.length)
+if (!idCheck.ok) { await prisma.$disconnect(); fail(idCheck.message) }
 if (LIMIT !== save.length) {
   await prisma.$disconnect(); fail(`--limit ${LIMIT} 이 저장 대상 ${save.length} 과 다릅니다. 잘라내지 않고 멈춥니다.`)
 }

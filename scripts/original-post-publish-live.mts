@@ -36,11 +36,16 @@ import {
 } from '../src/lib/original-post-publish'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import {
+  parseIdArgs, filterByIds, missingIds, checkLimitAgainstIds, describeIdTargeting,
+} from '../src/lib/original-post-id-target'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
 const CHECK = argv.includes('--check')
 const limitRaw = argv.find((a) => a.startsWith('--limit='))?.slice(8)
+// 🔴 --id 를 주면 그 건만 발행한다. 없으면 지금까지와 똑같이 배치 전체를 본다 (§4-AK)
+const IDS = parseIdArgs(argv)
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const kst = (d: Date): string =>
   `${new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} KST`
@@ -119,7 +124,7 @@ if (CHECK) {
 }
 
 // ── 후보 조달 — 🔴 읽기만 한다 ──
-const rows = await prisma.originalPostApprovalQueue.findMany({
+const allRows = await prisma.originalPostApprovalQueue.findMany({
   where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
   select: {
     id: true, status: true, createdPostId: true, gateVerdict: true, matchedAt: true,
@@ -131,6 +136,14 @@ const rows = await prisma.originalPostApprovalQueue.findMany({
   // 🔴 gate=PASS 를 먼저, 그다음 배정이 이른 순 — 정렬이 흔들리면 dry-run 이 재현되지 않는다
   orderBy: [{ gateVerdict: 'asc' }, { matchedAt: 'asc' }, { id: 'asc' }],
 })
+// 🔴 지정한 id 만 남긴다 — 순서는 바꾸지 않는다(dry-run 재현성)
+const rows = filterByIds(allRows, IDS)
+const missing = missingIds(allRows, IDS)
+console.log(describeIdTargeting(IDS))
+if (missing.length > 0) {
+  console.log(`  🟡 지정했지만 후보에 없는 id ${missing.length}건 — 이미 발행됐거나 APPROVED·EDITED 가 아닙니다`)
+  for (const m of missing) console.log(`     ${m}`)
+}
 console.log(`── 후보 ${rows.length}건 (APPROVED · EDITED · 발행 전)\n`)
 
 const eligible: string[] = []
@@ -176,6 +189,9 @@ if (LIMIT === null || !Number.isInteger(LIMIT) || LIMIT < 1) {
 if (LIMIT > DAILY_PUBLISH_CAP) {
   await prisma.$disconnect(); fail(`--limit ${LIMIT} 이 하루 상한 ${DAILY_PUBLISH_CAP} 을 넘습니다`)
 }
+// 🔴 --id 를 줬으면 개수가 정확히 맞아야 한다 — 하나라도 발행 불가면 멈춘다 (§4-AK)
+const idCheck = checkLimitAgainstIds(LIMIT, IDS, take.length)
+if (!idCheck.ok) { await prisma.$disconnect(); fail(idCheck.message) }
 if (LIMIT !== take.length) {
   await prisma.$disconnect(); fail(`--limit ${LIMIT} 이 이번 발행 대상 ${take.length} 과 다릅니다. 잘라내지 않고 멈춥니다.`)
 }
