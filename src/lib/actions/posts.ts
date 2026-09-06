@@ -17,6 +17,7 @@ import {
   POST_TITLE_TOO_LONG,
   POST_CONTENT_TOO_SHORT,
   POST_CONTENT_TOO_LONG,
+  POST_NOT_FOUND,
 } from '@/lib/post-policy'
 import { sanitizePostHtml, isHtmlContent, postContentToText } from '@/lib/post-html'
 import { firstImageUrl } from '@/lib/post-media'
@@ -184,8 +185,8 @@ export async function updatePost(
   })
   // 🔴 없는 글·지운 글·주소의 게시판과 다른 글은 같은 문장으로 막는다.
   //    무엇이 존재하는지 하나씩 알려주는 통로가 되면 안 된다.
-  if (!post || post.status !== 'PUBLISHED') return { error: '글을 찾을 수 없습니다.' }
-  if (post.boardType !== board.type) return { error: '글을 찾을 수 없습니다.' }
+  if (!post || post.status !== 'PUBLISHED') return { error: POST_NOT_FOUND }
+  if (post.boardType !== board.type) return { error: POST_NOT_FOUND }
   if (post.authorId !== userId) return { error: '본인이 쓴 글만 고칠 수 있습니다.' }
 
   /**

@@ -14,6 +14,7 @@ import {
   COMMENT_TOO_SHORT,
   COMMENT_TOO_LONG,
 } from '@/lib/comment-policy'
+import { POST_NOT_FOUND } from '@/lib/post-policy'
 import {
   GUEST_NICKNAME_MIN,
   GUEST_NICKNAME_MAX,
@@ -123,7 +124,7 @@ export async function createGuestComment(
     where: { id: postId, status: 'PUBLISHED' },
     select: { id: true },
   })
-  if (!post) return { error: '글을 찾을 수 없습니다.' }
+  if (!post) return { error: POST_NOT_FOUND }
 
   // 답글이면 상대를 확인한다 — 회원 경로와 같은 함수를 쓴다
   const target = await resolveReplyTarget(String(formData.get('parentId') ?? ''), postId)

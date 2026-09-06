@@ -33,6 +33,16 @@ export const REPORT_REVIEW_HINT = '운영자가 확인할게요.'
  */
 export const REPORT_ALREADY = '이미 신고하셨어요. 운영자가 확인하고 있어요.'
 
+/**
+ * 댓글이 그 자리에 없을 때 — 공감·수정·삭제·답글·비회원 경로가 모두 이 한 문장을 쓴다.
+ *
+ * 🔴 사유별로 가르지 않는다. 없는 댓글 · 지운 댓글 · 글이 내려간 댓글 · 주소가 어긋난 댓글이
+ *    전부 같은 문장이어야 한다 — 다르게 말하면 무엇이 존재하는지 알려주는 통로가 된다.
+ * 🔴 다음 행동은 "새로고침" 이다. 댓글은 글 안에 있으므로 목록으로 보내지 않는다
+ *    (`POST_NOT_FOUND` 와 다음 행동이 갈리는 이유).
+ */
+export const COMMENT_NOT_FOUND = '댓글을 찾을 수 없어요. 글을 새로고침한 뒤 다시 시도해 주세요.'
+
 /** 글자수는 상한이 가까워질 때만 보여준다. */
 export const COMMENT_COUNTER_FROM = 400
 export const COMMENT_COUNTER_WARN_FROM = 480

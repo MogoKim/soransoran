@@ -13,7 +13,9 @@ import {
   MAX_COMMENT_LENGTH,
   COMMENT_TOO_SHORT,
   COMMENT_TOO_LONG,
+  COMMENT_NOT_FOUND,
 } from '@/lib/comment-policy'
+import { POST_NOT_FOUND } from '@/lib/post-policy'
 
 /** 댓글: 사용자당 5분에 10건 */
 const COMMENT_LIMIT = 10
@@ -65,7 +67,7 @@ export async function createComment(
     where: { id: postId, status: 'PUBLISHED' },
     select: { id: true },
   })
-  if (!post) return { error: '글을 찾을 수 없습니다.' }
+  if (!post) return { error: POST_NOT_FOUND }
 
   // 답글이면 상대를 확인한다 — depth 2 와 지워진 댓글은 여기서 끊는다
   const target = await resolveReplyTarget(String(formData.get('parentId') ?? ''), postId)
@@ -137,17 +139,17 @@ export async function updateComment(
       post: { select: { status: true, boardType: true } },
     },
   })
-  if (!comment || comment.isDeleted) return { error: '댓글을 찾을 수 없습니다.' }
+  if (!comment || comment.isDeleted) return { error: COMMENT_NOT_FOUND }
   // 글이 내려간 뒤에는 댓글도 고치지 않는다. 읽을 수 없는 자리에 글자만 바뀐다.
-  if (comment.post.status !== 'PUBLISHED') return { error: '글을 찾을 수 없습니다.' }
+  if (comment.post.status !== 'PUBLISHED') return { error: POST_NOT_FOUND }
 
   const board = getBoardBySlug(boardSlug)
   // 주소가 가리키는 게시판과 댓글이 달린 글의 게시판이 다르면 요청 자체가 틀렸다.
   // 댓글이 사는 곳은 커뮤니티 게시판뿐이라, 그 밖의 slug 는 받지 않는다.
   if (!board || !board.isCommunity || comment.post.boardType !== board.type) {
-    return { error: '댓글을 찾을 수 없습니다.' }
+    return { error: COMMENT_NOT_FOUND }
   }
-  if (comment.postId !== postId) return { error: '댓글을 찾을 수 없습니다.' }
+  if (comment.postId !== postId) return { error: COMMENT_NOT_FOUND }
 
   if (comment.authorId !== userId) return { error: '본인이 쓴 댓글만 고칠 수 있습니다.' }
 

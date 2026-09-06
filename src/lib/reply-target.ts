@@ -1,7 +1,12 @@
 import 'server-only'
 import { prisma } from '@/lib/prisma'
+import { COMMENT_NOT_FOUND } from '@/lib/comment-policy'
 
-export const REPLY_TARGET_GONE = '답글을 달 댓글을 찾을 수 없습니다.'
+/**
+ * 🔴 댓글 공감·수정·삭제와 **같은 문장**을 쓴다. 답글을 달려던 상대가 사라진 것도
+ *    "댓글이 그 자리에 없다" 는 같은 사실이다 — 정본 §12-20.
+ */
+export const REPLY_TARGET_GONE = COMMENT_NOT_FOUND
 export const REPLY_DEPTH_LIMIT = '답글에는 다시 답글을 달 수 없어요.'
 
 export type ReplyTarget = { ok: true; parentId: string | null } | { ok: false; error: string }

@@ -6,6 +6,7 @@ import { auth } from '@/lib/auth'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { requireOnboarded } from '@/lib/onboarding-guard'
 import { COMMUNITY_VISIBLE_WHERE } from '@/lib/post-visibility'
+import { POST_NOT_FOUND } from '@/lib/post-policy'
 
 /** 공감: 사용자당 1분에 30건. 누르고 취소하는 일이 잦아 넉넉히 둔다 */
 const LIKE_LIMIT = 30
@@ -42,7 +43,7 @@ export async function togglePostLike(postId: string): Promise<LikeToggleState> {
     where: { id: postId, ...COMMUNITY_VISIBLE_WHERE },
     select: { id: true },
   })
-  if (!target) return { error: '글을 찾을 수 없습니다.' }
+  if (!target) return { error: POST_NOT_FOUND }
 
   try {
     const result = await prisma.$transaction(async (tx) => {
