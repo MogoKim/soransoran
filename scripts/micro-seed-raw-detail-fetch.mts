@@ -72,11 +72,36 @@ const head = (s: string, n = 18): string => {
   return c.length <= n ? s : `${c.slice(0, n).join('')}…(${c.length}자)`
 }
 
+/**
+ * 데이터 디렉터리 이름을 **정규화해서** 갖는다.
+ *
+ * 🔴 `SCOUT_DATA_DIR` 은 `'./.microseed-data'` 다 — 앞에 `./` 가 붙어 있다.
+ *    반면 `relative()` 가 돌려주는 값에는 `./` 가 없다(`'.microseed-data/…'`).
+ *    그래서 상수를 그대로 이어 붙여 비교하면 **언제나 거짓**이 되고,
+ *    정상 경로까지 거부한다 — 2026-09-06 에 live 로 10건을 읽고도
+ *    산출물을 한 줄도 못 쓴 사고가 이것이었다.
+ *    `resolve` → `relative` 를 한 번 거치면 `./` 유무와 무관해진다.
+ */
+const DATA_DIR = relative(process.cwd(), resolve(SCOUT_DATA_DIR))
+
+/**
+ * 🔴 gitignore 된 `.microseed-data/` 안인가 — **순수 판정만 한다.**
+ *
+ * `assertOutputPath` 는 실패하면 프로세스를 죽이므로 fixture 가 부를 수 없다.
+ * 판정을 떼어내야 **실제로 호출해 보는 시험**을 쓸 수 있다 —
+ * 위 사고를 문자열 스캔형 fixture 가 잡지 못한 이유가 그것이다.
+ */
+export function isInsideDataDir(p: string): boolean {
+  const rel = relative(process.cwd(), resolve(p))
+  // 🔴 디렉터리 자신도, 밖으로 빠져나가는 `..` 도 산출 경로가 아니다
+  return rel !== '' && !rel.startsWith('..') && rel.startsWith(`${DATA_DIR}/`)
+}
+
 /** 🔴 gitignore 된 `.microseed-data/` 밖으로 쓰지 않는다 */
 export function assertOutputPath(p: string): void {
-  const rel = relative(process.cwd(), resolve(p))
-  if (!rel.startsWith(`${SCOUT_DATA_DIR}/`)) {
-    fail(`🔴 ${rel} 은 ${SCOUT_DATA_DIR}/ 밖이다 — 거부한다.`)
+  if (!isInsideDataDir(p)) {
+    fail(`🔴 ${relative(process.cwd(), resolve(p))} 은 ${DATA_DIR}/ 밖이다 — 쓰기를 거부한다.`
+      + '\n   본문이 git 에 들어가면 지워지지 않는다.')
   }
 }
 
@@ -159,7 +184,7 @@ async function loadChromium(): Promise<{ launch: (o: object) => Promise<unknown>
 }
 
 async function main(): Promise<void> {
-  loadEnvLocal()
+  await loadEnvLocal()
   if (!ALLOWED_CAPS.includes(CAP)) fail(`cap 은 ${ALLOWED_CAPS.join(' 또는 ')} 만 허용한다 (받은 값 ${CAP})`)
 
   const runId = runIdOf(new Date())
