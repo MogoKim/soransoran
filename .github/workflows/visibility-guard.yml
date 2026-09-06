@@ -61,6 +61,15 @@ jobs:
       - name: 타입 검사
         run: npm run typecheck
 
+      # 🔴 root tsconfig 는 `scripts` 를 **exclude** 한다.
+      #    즉 위 `typecheck` 는 이 디렉터리를 한 줄도 보지 않는다 —
+      #    micro-seed 도구가 전부 거기 있는데도 그렇다.
+      #    2026-09-06 에 그 사각지대에서 타입 오류 4건이 main 까지 갔다
+      #    (타입에서 없앤 인자를 계속 넘기는 호출 2곳 · null 좁히기 누락 2곳).
+      #    로컬에서 `npm run typecheck:ops` 를 따로 돌리는 사람만 볼 수 있었다.
+      - name: 타입 검사 (scripts · ops)
+        run: npm run typecheck:ops
+
       # ── Micro Seed Founder Gate fixture ────────────────────────
       #
       # 여기까지의 단계는 "노출 게이트가 살아 있는가" 만 본다.
@@ -177,6 +186,38 @@ jobs:
       # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
       - name: Micro Seed Seed Originality 소스 검수 (축 제한 · SEED 만 전달)
         run: npm run micro-seed:seed-source-check
+
+      # Raw Originality 레인의 계약 (§4-AF).
+      #
+      # 🔴 이 레인은 **긴 사연을 우리 말로 다시 쓰기 위한** 것이라
+      #    다른 레인과 지켜야 할 것이 다르다. 막아야 할 회귀:
+      #      · 본문 전문이 저장되는 것 — 마스킹 후 앞 300자(bodyHead)까지다.
+      #        원문이 남으면 사람이 그 문장을 참고하게 되고, 그 순간 "다시 쓰기" 가 아니다.
+      #      · 마스킹보다 자르기가 먼저 오는 것 — 경계에 걸친 연락처가 절반만 남아 빠져나간다.
+      #      · 산출 경로 가드가 정상 경로까지 막는 것 —
+      #        2026-09-06 에 live 로 10건을 읽고도 산출물을 한 줄도 못 쓴 사고가 그것이었다.
+      #        그때 fixture 는 소스에 문자열이 있는지만 봤다. 있었고, 그래서 통과했다.
+      #      · 후보 선정이 점수순으로 되돌아가는 것 — 댓글 수가 본문 밀도의 대리 신호다(§4-AF ⑫).
+      #
+      # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed Raw Originality 레인 (전문 미저장 · 경로 가드 · 댓글순)
+        run: npm run micro-seed:raw-check
+
+      # Raw Originality 검수 화면의 계약 (§4-AF ⑥⑬).
+      #
+      # 🔴 여기서 사람이 "이 사연을 우리 말로 다시 쓸 수 있다" 를 누른다.
+      #    막아야 할 회귀:
+      #      · APPROVE · ADOPT · SEED 버튼이 생기는 것 —
+      #        각각 SRN 승인(§4-Z) · 초안 검수(§4-AB) · 소스 승인(§4-AD) 의 말이다.
+      #        같은 낱말이 화면마다 다른 뜻이면 사람이 무엇을 누르는지 모르게 된다.
+      #      · rawOriginality 아닌 축이 섞여 들어오는 것.
+      #      · export 에 body 전문 컬럼이 생기는 것.
+      #      · 누르지 않은 후보가 기본값으로 export 되는 것.
+      #      · 화면이 외부 네트워크를 부르는 것 — CSS·JS 인라인 · localStorage 까지다.
+      #
+      # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed Raw Originality 검수 화면 (RAW/HOLD/DROP 만 · 전문 미저장)
+        run: npm run micro-seed:raw-review-check
 
       # 우나어 legacy read-only 커넥터의 계약.
       #
