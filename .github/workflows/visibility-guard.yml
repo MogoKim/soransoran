@@ -248,6 +248,22 @@ jobs:
       - name: Micro Seed 발행 후보 파일 (ADOPT/SAVE 만 · SRN 제외 · 원문 미유입)
         run: npm run micro-seed:publish-candidates-check
 
+      # 발행 후보 → 검수 대기열 브리지의 계약 (§4-AJ).
+      #
+      # 🔴 이 다리는 **이미 살아 있는 발행 경로의 첫 칸**에 글을 얹는다. 막아야 할 회귀:
+      #      · status 가 PENDING 이 아닌 값으로 만들어지는 것 —
+      #        APPROVED·PUBLISHED 로 바로 가면 사람 검수를 건너뛴다.
+      #      · SRN(shortRawNoindex)이 섞이는 것 — noindex 정책이 다른 레인이다.
+      #      · ADOPT/SAVE 아닌 판정이나 safety!=pass 가 올라가는 것.
+      #      · 두 스위치(--apply + --limit)가 하나로 줄어드는 것 —
+      #        적재는 창업자 승인 경로의 첫 칸이라 오타나 크론으로 돌면 안 된다.
+      #      · 중복 키가 sourceArticleId 로 되돌아가는 것(§4-AH ⑤ 와 같은 이유).
+      #      · 이 스크립트가 발행·승인·배정까지 하게 되는 것.
+      #
+      # 네트워크 · DB · Sheet · LLM 접근이 없다. 순수 fixture 판정이라 몇 초면 끝난다.
+      - name: Micro Seed 발행 대기열 브리지 (PENDING 까지 · 두 스위치 · SRN 제외)
+        run: npm run micro-seed:publish-enqueue-check
+
       # 우나어 legacy read-only 커넥터의 계약.
       #
       # 🔴 우나어는 우리 **운영 DB** 다. 커넥터가 write SQL 을 만들 수 있으면
