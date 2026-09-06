@@ -78,10 +78,23 @@ export function checkActionRateLimit(
   return checkRateLimit(`${action}:ip:${ip}`, ipLimit, windowMs)
 }
 
-/** 사람이 읽는 대기 안내 */
+/**
+ * 사람이 읽는 대기 안내
+ *
+ * 🔴 탓하지 않는다. 이전 문구 `조금 빠릅니다.` 는 *"당신이 빨랐다"* 로 읽혔다 —
+ *    막은 것은 서버 쪽 한도인데 사람을 나무라는 말이 앞에 왔다.
+ *    신고·글쓰기처럼 무거운 행동을 막을 때는 특히 나쁘다.
+ *
+ * 🔴 초와 분이 **같은 문장**을 쓴다. 예전에는 앞부분이 갈렸다 —
+ *    분은 `잠시 후 다시 시도해 주세요.`, 초는 `조금 빠릅니다.` 로 시작했다.
+ *    10분 창(신고·글쓰기·글수정·인사)에서는 60초 경계를 넘나들며 두 문장이 번갈아 나온다.
+ *    이제 남은 시간만 바뀌고 말은 같다 — 정본 §12-20 의 "무엇이 안 됐는지 + 다음 행동".
+ *
+ * 🔴 문구만 바꾼다. 한도·창 크기·버킷 로직은 이 함수 밖의 일이다.
+ */
 export function retryMessage(retryAfterSec: number): string {
   if (retryAfterSec >= 60) {
-    return `잠시 후 다시 시도해 주세요. (약 ${Math.ceil(retryAfterSec / 60)}분 뒤)`
+    return `잠시만 기다려 주세요. 약 ${Math.ceil(retryAfterSec / 60)}분 뒤에 다시 시도할 수 있어요.`
   }
-  return `조금 빠릅니다. ${retryAfterSec}초 뒤에 다시 시도해 주세요.`
+  return `잠시만 기다려 주세요. ${retryAfterSec}초 뒤에 다시 시도할 수 있어요.`
 }
