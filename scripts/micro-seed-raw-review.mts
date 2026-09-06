@@ -157,6 +157,9 @@ export const RAW_REVIEW_COLUMNS: readonly string[] = [
   'decision', 'sourceArticleId', 'sourceSite', 'url', 'title', 'score', 'lane', 'axis',
   'bodyLength', 'bodyHead', 'safetyVerdict', 'safetyReasons',
   'runId', 'fetchedAt', 'reviewedAt', 'note',
+  // 🔴 맨 뒤에 더한다 (2026-09-06). 화면에는 메모 입력란이 있는데 export 에 없었다 —
+  //    사람이 적은 **다시 쓸 각도**가 파일에 남지 않아 다음 단계(T7-1)가 못 읽었다.
+  'memo',
 ] as const
 
 function main(): void {
@@ -332,7 +335,8 @@ function rows(at){
       title: c.title, score: c.score, lane: c.lane, axis: c.axis,
       bodyLength: c.bodyLength, bodyHead: c.bodyHead,
       safetyVerdict: c.safetyVerdict, safetyReasons: c.safetyReasons,
-      runId: c.runId, fetchedAt: c.fetchedAt, reviewedAt: at, note: NOTE
+      runId: c.runId, fetchedAt: c.fetchedAt, reviewedAt: at, note: NOTE,
+      memo: st.memo || ''
     });
   });
   return out;

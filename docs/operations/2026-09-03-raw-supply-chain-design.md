@@ -3725,7 +3725,7 @@ title · memo · detailRunId · reviewedAt · note
 - [x] **T4** export — ⑬의 16컬럼, 파일명에 시각
 - [x] **T5** `seenAll()` 이 `.raw-detail.jsonl` 과 `.detail.jsonl` 을 합쳐 본다 (T1 과 함께)
 - [ ] **T6** CI 게이트에 `raw-check` 추가
-- [ ] **T7** 재작성 초안 경로 — 설계 확정(⑮). 🔴 **구현·LLM 도입은 별도 승인**
+- [ ] **T7** 재작성 초안 경로 — 설계 확정(**§4-AG**). 🔴 **LLM 도입은 별도 승인**
 
 ### ⑩ T1 구현 실측 — `raw-detail-fetch` (2026-09-06)
 
@@ -4051,12 +4051,54 @@ writtenBy · writtenAt · note
 
 ### ⑦ 다음 PR 이 할 일 (이 설계대로)
 
-- [ ] **T7-1** `micro-seed:raw-rewrite` — RAW 행을 읽어 **각도와 빈 초안 칸**을 만든 화면.
-      ②의 재접속은 **스위치 없이는 열리지 않는다**(기본은 300자만 보인다)
+- [x] **T7-1** `micro-seed:raw-rewrite` — 작업대 (2026-09-06 구현 · ⑨ 참조).
+      🔴 재접속은 **넣지 않았다** — 300자만으로 시작한다
 - [ ] **T7-2** 초안 저장 — ④의 컬럼. 유출 검사(§4-AA) 재사용
 - [ ] **T7-3** 초안 검수 화면 — ⑤. `ADOPT`/`REVISE`/`DROP`
 - [ ] **T7-4** CI 게이트에 fixture 추가
 - [ ] **T7-5** (그 뒤) LLM 도입 여부 — 🔴 RAW 10건 이상 쌓인 뒤 별도 승인
+
+### ⑨ T7-1 구현 — 재작성 작업대 (2026-09-06)
+
+`scripts/micro-seed-raw-rewrite.mts` · `npm run micro-seed:raw-rewrite`
+
+🔴 **LLM 전 단계다. 사람이 직접 쓰는 작업대다.**
+③에서 정한 대로 LLM 을 넣지 않았다 — RAW 가 2건이고 회차당 1건꼴인데(수확률 7.5%)
+그 규모에 자동화를 얹는 것은 순서가 뒤바뀐 것이다. **몇 건 써 봐야 무엇을 자동화할지 안다.**
+
+🔴 **②의 재접속도 이번엔 넣지 않았다.** 300자만으로 시작해 본다 —
+실제로 모자라면 그때 열되, 모자란지 아닌지를 **써 보기 전에** 정할 수 없다.
+
+**입력**: `raw-originality-approvals-*.{json,tsv}` 의 `decision=RAW` 행만.
+같은 id 는 **나중 파일이 이긴다**(재검수가 최신이다). HOLD·DROP·미선택은 오지 않는다.
+지난 작업대 산출에서 `SAVE` 한 원천은 제외한다 — 🔴 `HOLD` 는 처리로 치지 않는다.
+**빼면 영영 못 돌아오기 때문이다.**
+
+**decision 은 `SAVE` / `HOLD` / `DROP`.** 🔴 `ADOPT` 를 두지 않았다 —
+여기는 **발행 후보 확정이 아니라 작업대**다. `ADOPT` 는 다음 단계(T7-3)의 말이다.
+
+**화면이 하는 일 하나가 더 있다 — 겹침을 실시간으로 알린다.**
+사람이 본문을 쓰는 동안 원문(제목+`bodyHead`)과의 **최대 연속 겹침**을 재서,
+`MAX_SOURCE_OVERLAP`(6자) 이상이면 그 조각을 빨갛게 보여준다.
+🔴 이 레인에서 가장 쉬운 실수가 **원문을 보며 쓰다가 문장이 따라 나오는 것**이다.
+실측(headless): 원문 30자를 그대로 넣으면 `겹침 30자` 경고, 직접 쓴 45자는 `겹침 3자`.
+
+**산출 컬럼 14개** (`raw-rewrite-workbench-YYYYMMDD-HHMMSS.{tsv,json}`):
+```
+decision · sourceArticleId · sourceSite · sourceTitle · sourceBodyLength ·
+angle · avoid · draftTitle · draftBody · draftBodyLength ·
+overlapWithSource · writtenBy · writtenAt · note
+```
+🔴 **`bodyHead` 조차 넣지 않는다.** 화면에서 참고만 하고 파일에는 **사람이 쓴 것**만 남는다 —
+원문을 초안 파일로 옮기면 그 파일이 다시 원문 저장소가 된다.
+🔴 `leakedTokens`(§4-AG ④)는 소재 사전이 필요해 **T7-2 로 미뤘다.** 지금은 `overlapWithSource` 만 있다.
+
+**곁들여 고친 것**: `raw-review` export 에 `memo` 컬럼이 없었다.
+화면에는 메모 입력란이 있는데 파일에 안 나가서, **사람이 적은 다시 쓸 각도가 유실**됐다.
+T7-1 이 읽어야 할 바로 그 값이다. 컬럼 맨 뒤에 더했다(17개).
+🟡 이미 만들어진 승인 파일 2개에는 `memo` 가 없다 — 없으면 빈 값으로 둔다.
+
+**실측**: 판정 3건 → 후보 **2건**(RAW), DROP 1건 제외. 외부 네트워크 0 · JS 오류 0.
 
 ### ⑧ 아직 아닌 것
 

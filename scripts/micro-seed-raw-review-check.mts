@@ -70,11 +70,13 @@ console.log('\n② bodyHead — 🔴 전문이 아니다')
     !selectRawCards([rec({ bodyLength: 4, bodyHead: '네글자다' })]).cards[0]!.truncated)
   check('🔴 export 컬럼에 body 전문이 없다', !RAW_REVIEW_COLUMNS.includes('body'))
   check('bodyHead 컬럼은 있다', RAW_REVIEW_COLUMNS.includes('bodyHead'))
-  check('지시된 16컬럼이 모두 있다', [
+  check('지시된 컬럼이 모두 있다', [
     'decision', 'sourceArticleId', 'sourceSite', 'url', 'title', 'score', 'lane', 'axis',
     'bodyLength', 'bodyHead', 'safetyVerdict', 'safetyReasons',
     'runId', 'fetchedAt', 'reviewedAt', 'note',
   ].every((k) => RAW_REVIEW_COLUMNS.includes(k)))
+  // 🔴 사람이 적은 각도가 파일에 남아야 다음 단계(T7-1)가 읽을 수 있다
+  check('🔴 memo 컬럼이 있다 — 화면 입력란이 export 로 이어진다', RAW_REVIEW_COLUMNS.includes('memo'))
 }
 
 console.log('\n③ 화면 — 다른 화면의 말을 쓰지 않는다')
