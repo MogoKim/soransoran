@@ -16,7 +16,7 @@ import {
 import { RAW_MIN_BODY as CLASSIFY_MIN } from './lib/micro-seed-detail-classify.mjs'
 import {
   RAW_DETAIL_COLUMNS, RAW_DETAIL_KILL_SWITCH_ENV, ALLOWED_CAPS, DEFAULT_CAP,
-  seenRawIds, seenAll, toTsv, type RawDetailRow,
+  seenRawIds, seenAll, toTsv, isInsideDataDir, assertOutputPath, type RawDetailRow,
 } from './micro-seed-raw-detail-fetch.mjs'
 import { DETAIL_KILL_SWITCH_ENV } from './micro-seed-detail-fetch.mjs'
 
@@ -136,6 +136,40 @@ check('cap 은 10 또는 20 만', ALLOWED_CAPS.join(',') === '10,20' && DEFAULT_
   check('없는 디렉터리는 빈 목록', seenRawIds(join(dir, 'nope')).size === 0)
   rmSync(dir, { recursive: true, force: true })
 }
+
+console.log('\n⑨-2 산출 경로 가드 — 🔴 **실제로 불러 본다**')
+{
+  // 🔴 왜 실호출인가. 2026-09-06 에 live 로 10건을 읽고도 산출물을 한 줄도 못 썼다.
+  //    `SCOUT_DATA_DIR` 이 './.microseed-data' 인데 relative() 는 '.microseed-data/…' 를
+  //    돌려주어, 상수를 이어 붙인 비교가 **언제나 거짓**이었다.
+  //    그때 fixture 는 소스에 문자열이 있는지만 봤다 — 있었고, 그래서 통과했다.
+  //    **불러 보지 않는 시험은 이 사고를 잡지 못한다.**
+  check('🟢 정상 산출 경로를 허용한다',
+    isInsideDataDir('.microseed-data/raw-detail-20260101-000000.raw-detail.jsonl'))
+  check('🟢 ./ 가 붙어도 같은 경로다',
+    isInsideDataDir('./.microseed-data/raw-detail-20260101-000000.raw-detail.tsv'))
+  check('🟢 하위 디렉터리도 허용', isInsideDataDir('.microseed-data/sub/x.jsonl'))
+  check('🔴 바깥 경로는 거부한다', !isInsideDataDir('docs/x.jsonl'))
+  check('🔴 상위로 빠져나가는 경로는 거부한다', !isInsideDataDir('.microseed-data/../x.jsonl'))
+  check('🔴 절대경로로 우회해도 거부한다', !isInsideDataDir('/tmp/x.jsonl'))
+  check('🔴 디렉터리 자신은 산출 경로가 아니다', !isInsideDataDir('.microseed-data'))
+  check('🔴 비슷한 이름에 속지 않는다', !isInsideDataDir('.microseed-data-other/x.jsonl'))
+  // 🔴 assertOutputPath 자체도 불러 본다 — 정상 경로에서 죽지 않아야 한다
+  let threw = false
+  try { assertOutputPath('.microseed-data/raw-detail-20260101-000000.raw-detail.jsonl') }
+  catch { threw = true }
+  check('🔴 정상 경로에서 assertOutputPath 가 멈추지 않는다', !threw)
+}
+
+console.log('\n⑨-3 env 로딩 — 🔴 await 를 빠뜨리지 않는다')
+{
+  const src = readFileSync('scripts/micro-seed-raw-detail-fetch.mts', 'utf-8')
+  // 🔴 loadEnvLocal 은 async 다. await 없이 부르면 .env.local 의 스위치를 못 읽어
+  //    "켰는데 안 열린다" 가 된다 — 저장소의 다른 스크립트는 모두 await 를 쓴다.
+  check('🔴 await loadEnvLocal() 로 부른다', /await loadEnvLocal\(\)/.test(src))
+  check('🔴 await 없는 호출이 남아 있지 않다', !/(?<!await )\bloadEnvLocal\(\)/.test(src))
+}
+
 
 console.log('\n⑩ raw-detail-fetch — 🔴 full body 저장 경로가 없다')
 {
