@@ -20,9 +20,10 @@
  * 사용법
  *   npx tsx scripts/micro-seed-seed-originality-dry-run.mts
  *   npx tsx scripts/micro-seed-seed-originality-dry-run.mts --in=.microseed-data/srn-approvals-20260905.json
+ *   npx tsx scripts/micro-seed-seed-originality-dry-run.mts --include-drafted   # 이미 초안 있는 원천도 다시
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { resolve, relative } from 'node:path'
+import { resolve, relative, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   expandSeed, DRY_RUN_COLUMNS, DRY_RUN_NOTE, TOPIC_LABEL,
@@ -125,6 +126,75 @@ export function mergeSeedInputs(
 }
 
 /**
+ * **이미 초안이 나온 원천** — 지난 dry-run 산출물에서 모은다.
+ *
+ * 🔴 **왜 필요한가.** 승인 파일은 판정 기록이라 한 번 SEED 면 계속 SEED 로 남는다.
+ *    그래서 dry-run 을 다시 돌리면 **어제 초안을 만든 원천이 오늘도 그대로 들어온다.**
+ *    3회차 초안 6건 중 4건이 그렇게 나온 재탕이었고, "반복 템플릿 83.3%" 라는
+ *    지표를 만들어 놨다 — 템플릿이 나빠서가 아니라 같은 글을 두 번 넣어서다(2026-09-06).
+ *    지표가 오염되면 §4-AC ⑥ 기준을 숫자로 정할 수 없다.
+ *
+ * 🔴 **초안이 실제로 나온 것만 센다.** `needsHuman` 으로 초안 0건이었던 원천은 제외하지 않는다 —
+ *    소재 사전이 넓어지면 이번엔 분류될 수 있고, 그건 재탕이 아니라 **첫 시도**다.
+ *
+ * detail-fetch 의 `seenArticleIds()` 와 같은 생각이다. 다만 그쪽은 "읽었는가",
+ * 이쪽은 "초안이 나왔는가" 를 본다 — 읽기만 하고 초안이 없는 상태가 여기선 유효하다.
+ */
+export function draftedArticleIds(dir: string = SEED_DATA_DIR): Map<string, string> {
+  const drafted = new Map<string, string>()
+  let files: string[] = []
+  try {
+    files = readdirSync(dir)
+      .filter((f) => /^seed-originality-dry-run-.*\.(json|tsv)$/.test(f))
+      .sort()
+  } catch { return drafted }
+
+  for (const f of files) {
+    let raw: string
+    try { raw = readFileSync(join(dir, f), 'utf-8') } catch { continue }
+
+    if (f.endsWith('.json')) {
+      let j: { expansions?: { sourceArticleId?: string; drafts?: unknown[] }[] }
+      try { j = JSON.parse(raw) as typeof j } catch { continue }
+      for (const e of j.expansions ?? []) {
+        const id = String(e?.sourceArticleId ?? '')
+        // 🔴 초안 0건(needsHuman)은 "초안화했다" 가 아니다
+        if (!id || !Array.isArray(e?.drafts) || e.drafts.length === 0) continue
+        if (!drafted.has(id)) drafted.set(id, f)
+      }
+      continue
+    }
+
+    // TSV — 한 행이 곧 초안 하나다. JSON 이 깨졌을 때를 위한 보조 경로.
+    const lines = raw.split('\n').filter((l) => l.trim())
+    if (lines.length < 2) continue
+    const idx = lines[0]!.split('\t').indexOf('sourceArticleId')
+    if (idx < 0) continue
+    for (const l of lines.slice(1)) {
+      const id = (l.split('\t')[idx] ?? '').trim()
+      if (id && !drafted.has(id)) drafted.set(id, f)
+    }
+  }
+  return drafted
+}
+
+/** 이미 초안이 나온 원천을 뺀다 — 🔴 **중복 제거(mergeSeedInputs) 다음에** 적용한다 */
+export function excludeDrafted(
+  picked: readonly SeedInput[],
+  drafted: ReadonlyMap<string, string>,
+): { kept: SeedInput[]; excluded: { articleId: string; from: string; firstSeenIn: string }[] } {
+  const kept: SeedInput[] = []
+  const excluded: { articleId: string; from: string; firstSeenIn: string }[] = []
+  for (const p of picked) {
+    const id = String(p.row.sourceArticleId ?? '')
+    const seenIn = drafted.get(id)
+    if (seenIn !== undefined) { excluded.push({ articleId: id, from: p.from, firstSeenIn: seenIn }); continue }
+    kept.push(p)
+  }
+  return { kept, excluded }
+}
+
+/**
  * 산출물 이름에 쓰는 회차 id — `YYYYMMDD-HHMMSS`.
  *
  * 🔴 detail-fetch 의 runId 와 같은 모양이다. 같은 날 여러 번 돌려도 파일이 공존한다.
@@ -185,7 +255,14 @@ function main(): void {
   const srn = read(srnPath)
   const src = read(srcPath)
   const { picked, duplicates } = mergeSeedInputs([srn, src])
-  const seeds = picked
+
+  // 🔴 **순서가 중요하다.** 입력 간 중복 제거(mergeSeedInputs)를 **먼저** 끝낸 뒤에
+  //    "이미 초안화한 원천" 을 뺀다. 순서를 바꾸면 같은 글이 두 입력에 있을 때
+  //    한쪽만 제외되고 다른 쪽이 살아남아 재탕이 새어 나간다.
+  const includeDrafted = argv.includes('--include-drafted')
+  const drafted = includeDrafted ? new Map<string, string>() : draftedArticleIds(SEED_DATA_DIR)
+  const { kept, excluded } = excludeDrafted(picked, drafted)
+  const seeds = kept
 
   console.log('\nSeed Originality dry-run — 🔴 발행하지 않는다')
   console.log('─────────────────────────────────────────────────────────')
@@ -199,9 +276,24 @@ function main(): void {
     console.log(`        🟡 중복 ${duplicates.length}건 제거 — 먼저 읽은 쪽을 남긴다`)
     for (const d of duplicates) console.log(`           ${d.articleId}  남김 ${d.kept} · 버림 ${d.dropped}`)
   }
+  if (excluded.length > 0) {
+    console.log(`        🟡 이미 초안화한 원천 ${excluded.length}건 제외 — 재탕을 만들지 않는다`)
+    for (const e of excluded) console.log(`           ${e.articleId}  ← ${e.from} · 첫 초안 ${e.firstSeenIn}`)
+    console.log('           (다시 만들려면 --include-drafted)')
+  } else if (!includeDrafted && drafted.size > 0) {
+    console.log(`        🟢 이미 초안화한 원천 ${drafted.size}건과 겹치지 않는다`)
+  }
+  if (includeDrafted) console.log('        🔴 --include-drafted — 이미 초안화한 원천도 다시 넣는다')
   console.log(`        합계 ${seeds.length}건 (APPROVE·HOLD·DROP·미선택은 애초에 오지 않는다)`)
 
-  if (seeds.length === 0) fail('SEED 행이 없다 — 승인 화면에서 SEED 로 판정한 뒤 export 한다')
+  if (seeds.length === 0) {
+    fail(excluded.length > 0
+      // 🔴 "SEED 가 없다" 와 "새 SEED 가 없다" 는 다른 상황이다. 섞어 말하면 승인 화면을
+      //    다시 열게 만든다 — 필요한 건 승인이 아니라 **새 원천**이다.
+      ? `새로 초안화할 SEED 가 없다 — ${excluded.length}건은 이미 초안이 있다.\n`
+        + '   소스 검수 화면에서 새 원천을 SEED 로 판정하거나, --include-drafted 로 다시 만든다'
+      : 'SEED 행이 없다 — 승인 화면에서 SEED 로 판정한 뒤 export 한다')
+  }
 
   // 🔴 한 회차는 하나의 시각을 공유한다 — 행마다 몇 밀리초씩 다르면 같은 회차인지 알기 어렵다
   const generatedAt = new Date().toISOString()
@@ -245,6 +337,8 @@ function main(): void {
     // 🔴 행에 박은 값과 같아야 한다 — 다르면 어느 쪽이 맞는지 알 수 없다
     generatedAt,
     sources: { srn: srnPath, source: srcPath },
+    // 🔴 무엇을 왜 뺐는지 산출물에 남긴다 — 나중에 "왜 이 원천이 없지" 를 파일만 보고 답할 수 있게
+    excludedAlreadyDrafted: excluded,
     topics: Object.entries(TOPIC_LABEL).map(([k, v]) => ({ key: k, label: v })),
     expansions: exps,
   }, null, 2), 'utf-8')

@@ -12,16 +12,20 @@
  *    ⑦ 산출물이 .microseed-data/ 밖으로 나가는 것
  *    ⑧ DB·Sheet·LLM·발행·네이버·82cook 이 들어오는 것
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   expandSeed, findMaterial, longestOverlap, tokenize, stems,
   TOPIC_RULES, TEMPLATES, TOPIC_LABEL, COMMON_WORDS,
   BANNED_HONORIFICS, MAX_SOURCE_OVERLAP, DRAFTS_PER_SOURCE, DRY_RUN_COLUMNS, DRY_RUN_NOTE,
   type TopicKey,
+  hasBatchim, josa,
 } from './lib/micro-seed-seed-originality.mjs'
 import {
   seedRowsOf, readApprovals, assertInsideDataDir, toTsv, dryRunId, mergeSeedInputs,
   latestSourceApprovalFile, SEED_DATA_DIR, type ApprovalRow,
+  draftedArticleIds, excludeDrafted,
 } from './micro-seed-seed-originality-dry-run.mjs'
 
 const LIB = readFileSync('scripts/lib/micro-seed-seed-originality.mts', 'utf-8')
@@ -471,6 +475,83 @@ check('🔴 lib 은 파일 I/O 를 하지 않는다', !/readFileSync|writeFileSy
 
 console.log('\n⑫ 실제 승인 파일이 있으면 함께 본다 (없으면 건너뛴다)')
 try {
+// ─────────────────────────────────────────────────────────
+// 조사 — 🔴 "조미료은" 이 다시 나오지 않게 (2026-09-06)
+// ─────────────────────────────────────────────────────────
+console.log('\n조사 처리')
+check('받침 있음 — 후라이팬·그릇·아침', ['후라이팬', '그릇', '아침'].every(hasBatchim))
+check('받침 없음 — 조미료·냄비·통화', ['조미료', '냄비', '통화'].every((w) => !hasBatchim(w)))
+check('한글 아닌 글자는 없음으로 둔다', !hasBatchim('A') && !hasBatchim('7') && !hasBatchim(''))
+check("josa('조미료','은','는') === '는'", josa('조미료', '은', '는') === '는')
+check("josa('후라이팬','은','는') === '은'", josa('후라이팬', '은', '는') === '은')
+
+// 🔴 **전 템플릿 전수** — 새 소재를 넣을 때 조사를 손으로 확인하지 않아도 되게.
+//    슬롯 뒤에 받침 조사가 그대로 붙는 조합이 하나라도 있으면 실패한다.
+{
+  const mats = [...new Set(TOPIC_RULES.map((r) => r.material))]
+  const broken: string[] = []
+  for (const [topic, tpls] of Object.entries(TEMPLATES)) {
+    const topicMats = mats.filter((m) => TOPIC_RULES.some((r) => r.topic === topic && r.material === m))
+    for (const t of tpls) {
+      for (const m of topicMats) {
+        if (hasBatchim(m)) continue
+        const text = `${t.title(m)} ${t.body(m)}`
+        // 받침 없는 말 바로 뒤에 받침용 조사가 붙었는가
+        const hit = text.match(new RegExp(`${m}(은|이|을|과|으로)(?![가-힣])`))
+        if (hit) broken.push(`${topic}·${m} → "${hit[0]}"`)
+      }
+    }
+  }
+  check(`🔴 받침 없는 소재에 받침 조사가 붙지 않는다${broken.length ? ` — ${broken.join(', ')}` : ''}`,
+    broken.length === 0)
+}
+
+// 🔴 household 2번이 소재를 드러내는가 — 슬롯을 안 쓰면 살림 일반론으로 샌다
+{
+  const drafts = TEMPLATES.household.map((t) => `${t.title('조미료')} ${t.body('조미료')}`)
+  check('🔴 household 초안 전부가 소재어를 담는다', drafts.every((d) => d.includes('조미료')))
+  check('🔴 조미료 초안이 "오래 쓴 물건" 일반론으로 새지 않는다',
+    !drafts.some((d) => d.includes('오래 쓴 물건')))
+  check('household 두 템플릿의 제목이 서로 다르다',
+    TEMPLATES.household[0]!.title('조미료') !== TEMPLATES.household[1]!.title('조미료'))
+}
+
+// ─────────────────────────────────────────────────────────
+// 이미 초안화한 원천 제외 (2026-09-06)
+// ─────────────────────────────────────────────────────────
+console.log('\n이미 초안화한 원천 제외')
+{
+  const drafted = new Map<string, string>([['448105', 'a.json'], ['35003196', 'a.json']])
+  const mk = (id: string, from: string): { row: { sourceArticleId: string }; from: string } =>
+    ({ row: { sourceArticleId: id }, from })
+  const { kept, excluded } = excludeDrafted(
+    [mk('448105', 'srn.json'), mk('35003177', 'src.json'), mk('35003196', 'src.json')], drafted)
+  check('🔴 이미 초안화한 2건이 빠진다', excluded.length === 2)
+  check('🔴 새 원천만 남는다 — 35003177', kept.length === 1 && kept[0]!.row.sourceArticleId === '35003177')
+  check('제외 사유에 첫 초안 파일이 남는다', excluded.every((e) => e.firstSeenIn === 'a.json'))
+  check('빈 목록이면 아무것도 빼지 않는다',
+    excludeDrafted([mk('999', 'x')], new Map()).kept.length === 1)
+}
+{
+  // 🔴 needsHuman(초안 0건)은 "초안화했다" 가 아니다 — 사전이 넓어지면 다시 시도해야 한다
+  const dir = mkdtempSync(join(tmpdir(), 'seed-drafted-'))
+  writeFileSync(join(dir, 'seed-originality-dry-run-20260101-000000.json'), JSON.stringify({
+    expansions: [
+      { sourceArticleId: 'HAS', drafts: [{ draftNo: 1 }] },
+      { sourceArticleId: 'NONE', drafts: [] },
+    ],
+  }), 'utf-8')
+  const m = draftedArticleIds(dir)
+  check('🔴 초안이 나온 원천은 잡는다', m.has('HAS'))
+  check('🔴 초안 0건(needsHuman)은 잡지 않는다', !m.has('NONE'))
+
+  writeFileSync(join(dir, 'seed-originality-dry-run-20260101-000001.tsv'),
+    'sourceArticleId\ttitle\nTSVID\t제목\n', 'utf-8')
+  check('TSV 도 읽는다 — JSON 이 깨졌을 때의 보조 경로', draftedArticleIds(dir).has('TSVID'))
+  check('없는 디렉터리는 빈 목록', draftedArticleIds(join(dir, 'nope')).size === 0)
+  rmSync(dir, { recursive: true, force: true })
+}
+
   const real = readApprovals('.microseed-data/srn-approvals-20260905.json')
   const seeds = seedRowsOf(real)
   check(`실 파일 SEED ${seeds.length}건`, seeds.length > 0)
