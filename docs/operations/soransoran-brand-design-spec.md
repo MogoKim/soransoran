@@ -2422,6 +2422,56 @@ REPORT_ALREADY_REVIEW_HINT = '운영자가 확인하고 있어요.'    // 중복
    신고 폼·버튼·제출 로직 · 서버 액션 · **중복 신고 사유 갱신**(§12-19 보류 유지) ·
    `prisma/` · `content-guard`(§12-24 보류) · rate limit(§12-22 로 닫힘). **DB write 0.**
 
+### 12-26. `CommentLikeButton` status 색 — 올려서 맞춘다 (2026-09-07)
+
+§12-14 ② 가 남긴 후속축을 닫는다. 그 소절은 `PostActionBar` 를 `secondary` 로 **유지 확정**하면서
+*"통일을 재검토한다면 **`CommentLikeButton` 을 secondary 로 올리는 방향도 검토 대상**"* 이라고 남겼다.
+그쪽으로 간다 — **내리는 게 아니라 올린다.**
+
+**두 컴포넌트는 쌍둥이다** (실측 확인):
+같은 state 모양(`{ text: string; login?: true } | null`) · 같은 마크업(`<p role="status">` + 조건부 `<Link>`) ·
+같은 크기(`text-sm` 18/22px · line-height 27/33px · weight 400, 3뷰포트 전부 동일) ·
+같은 성격 — **메타가 아니라 "동작 결과 안내문"** 이다.
+**다른 것은 색과 링크 처리뿐이었다.**
+
+```
+전  text-content-muted      rgb(111,94,89)  대비 6.14   토큰 역할: 메타
+후  text-content-secondary  rgb(82,70,66)   대비 9.08   토큰 역할: 미리보기
+```
+
+**대비가 오른다. AAA(7:1) 를 넘긴다.** 새 값을 만드는 게 아니라 쌍둥이가 이미 쓰는 값을 맞춘다.
+3뷰포트 실측에서 **줄 수 · 박스 높이 · 문서 높이 · 폭이 모두 그대로**였다 —
+차이는 색 하나뿐이다(390 기본 54px 2줄 / "크게" 66px 2줄 / 1280 27px 1줄, 잘림 0 · 겹침 0 ·
+가로 스크롤 없음 · hydration 0 · 문서 높이 3046→3046 · 3406→3406 · 2512→2512).
+
+🔴 **C안(`PostActionBar` 를 muted 로 내림)은 하지 않는다.** 재확인해도 §12-14 ② 판단이 유지된다 —
+   9.08 → 6.14 로 떨어지고 AAA 를 잃는다.
+
+🔴 **남는 muted 3곳은 건드리지 않는다.** 성격이 다르다 —
+   `PostForm:259` · `PostForm:277` 은 **글쓰기 폼 helper**(보조 정보), `GuestCommentForm:118` 은
+   **비회원 가입 유도 안내**다. 빠져나가는 하나만 "동작 결과 안내문" 이라
+   색이 **역할대로 갈리는** 방향이다. `role="status"` 분포는
+   primary 1 · **secondary 2** · muted 3 · 상태별 2 · 컨테이너 1 이 된다.
+
+**링크 밑줄** — `className="text-link"` 에 `underline underline-offset-2` 를 더했다.
+**색만으로 링크를 구분하지 않기 위한 보정**이다(`PostActionBar` 는 이미 갖고 있었다).
+본문이 9.08 로 오르면 링크(5.50)와 격차가 벌어져 더 그렇다.
+
+🟡 **`TOUCH_MIN` 은 붙이지 않았다 — 실측 결과 inline 링크에서 무효다.**
+   `min-h-[52px]` 는 computed min-height 로는 잡히지만 **non-replaced inline 요소에는 적용되지 않아
+   실제 박스가 48px 그대로**다. `PostActionBar` 의 `TOUCH_MIN` 도 같은 이유로 실질 무효다
+   (링크 박스 323×48px). 유효하게 하려면 `inline-flex` 가 필요한데 그 순간
+   **부모 `<p>` 가 54 → 79px 로 늘고 링크 폭이 323 → 129px 로 바뀐다** — 레이아웃이 달라진다.
+   **무효인 클래스를 새 파일에 복제하지 않는다.** 이 건은 §13-1 `TOUCH_MIN` 축의 별도 판단으로 남긴다.
+
+🟡 **링크 문구는 유지한다** — `PostActionBar` 는 `로그인하기`, 여기는 `카카오로 시작하기` 다.
+   어느 쪽이 맞는지는 문구 축이라 이번 범위가 아니다.
+
+🔴 **건드리지 않은 것** — `PostActionBar` · `PostForm` · `GuestCommentForm` ·
+   `--text-secondary` / `--text-muted` **토큰 값**(고치면 사이트 전역이 움직인다) ·
+   `role` · 크기(`text-sm`, 두 컴포넌트가 이미 같다) · `onClick` · state · 서버 매핑 ·
+   `login: true` 로직(§12-18) · 서버 액션 · `prisma/`. **DB write 0.**
+
 ---
 
 ## 13. 여백 정본 (2026-09-05 신설)
