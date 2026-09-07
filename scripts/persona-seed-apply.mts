@@ -8,7 +8,8 @@
  * 사용법
  *   npx tsx scripts/persona-seed-apply.mts           # dry-run (기본) — DB write 0
  *   npx tsx scripts/persona-seed-apply.mts --apply   # 실제 적용
- *   npx tsx scripts/persona-seed-apply.mts --check   # 결과 검증
+ *   npx tsx scripts/persona-seed-apply.mts --check   # 결과 검증 (DB 반영 상태)
+ *   npx tsx scripts/persona-seed-apply.mts --check-cards  # 🔴 설계 카드만 검사하고 끝난다 (DB read 최소)
  *
  * 🔴 seed 값을 이 파일에 하드코딩하지 않는다.
  *    헌법 §9-6 — 페르소나를 TS 상수 배열로 두지 않는다.
@@ -32,9 +33,23 @@ import { readFileSync, existsSync } from 'node:fs'
 import { checkNameCollision, type NameCollisionSets } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { parsePoolDoc } from '../src/lib/persona-pool-card'
+import { duplicateKeys, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
+
+const POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 
 const APPLY = process.argv.includes('--apply')
 const CHECK = process.argv.includes('--check')
+/**
+ * 🔴 **설계 카드 전용 검사** — persona 를 늘리기 전에 카드가 쓸 만한지 본다 (2026-09-07).
+ *
+ *    예전에는 MVP 5명 외 코드가 seed 에 있으면 그 자리에서 멈췄다. 그래서 **새 카드를
+ *    이 검사기에 태울 방법이 없었고**, 금지 패턴도 필수 축도 사람 눈으로만 봤다.
+ *
+ *    이 모드는 DB 반영을 보지 않는다 — 아직 DB 에 없는 사람이기 때문이다.
+ *    `--check` 의 의미(seed 가 실제로 반영됐는가)는 건드리지 않는다.
+ */
+const CHECK_CARDS = process.argv.includes('--check-cards')
 
 const SEED_PATH = 'tmp/persona-seed.json'
 const CODES = ['P05', 'P07', 'P10', 'P15', 'P17'] as const
@@ -137,18 +152,81 @@ const seeds = parsed as Record<string, PersonaSeed>
 
 const missing = CODES.filter((c) => seeds[c] === undefined)
 if (missing.length > 0) { await prisma.$disconnect(); fail(`seed 가 없는 코드: ${missing.join(', ')}`) }
-const extra = Object.keys(seeds).filter((k) => !CODES.includes(k as (typeof CODES)[number]))
-if (extra.length > 0) { await prisma.$disconnect(); fail(`MVP 5명 외 코드가 있습니다: ${extra.join(', ')}`) }
-ok(`seed 파일 — ${CODES.length}명`)
 
-// ── 🔴 금지 패턴 스캔 ──
+/** 🔴 설계 카드 — DB 에 아직 없는 정본 Pool 코드다. `--apply` 대상이 **아니다** */
+const DRAFT_CARDS = Object.keys(seeds).filter((k) => !CODES.includes(k as (typeof CODES)[number])).sort()
+
+/**
+ * 🔴 **`--apply` 는 설계 카드를 조용히 지나치지 않는다.**
+ *    무시하면 사람은 "적용했다" 고 믿는데 그 카드는 어디에도 반영되지 않는다.
+ *    persona 생성은 별도 승인이 필요한 일이므로, 여기서 **거부**하고 사람에게 넘긴다.
+ */
+if (APPLY && DRAFT_CARDS.length > 0) {
+  await prisma.$disconnect()
+  fail(`--apply 는 설계 카드를 지원하지 않습니다: ${DRAFT_CARDS.join(', ')}\n`
+    + '     이 스크립트는 이미 있는 Persona 에 seed 를 채웁니다. 새 사람을 만들지 않습니다.\n'
+    + '     카드만 검사하려면 --check-cards 를 쓰세요.')
+}
+
+ok(`seed 파일 — MVP ${CODES.length}명`
+  + (DRAFT_CARDS.length > 0 ? ` + 설계 카드 ${DRAFT_CARDS.length}명 (${DRAFT_CARDS.join(', ')}) — 🔴 검사만, 생성하지 않는다` : ''))
+
+// ── 🔴 금지 패턴 스캔 — 설계 카드도 **똑같이** 훑는다 ──
 const forbiddenHits: string[] = []
-for (const code of CODES) scanForbidden(seeds[code], code, forbiddenHits)
+for (const code of [...CODES, ...DRAFT_CARDS]) scanForbidden(seeds[code], code, forbiddenHits)
 if (forbiddenHits.length > 0) {
   await prisma.$disconnect()
   fail(`seed 에 금지 패턴이 있습니다 (${forbiddenHits.length}건):\n     ${forbiddenHits.join('\n     ')}`)
 }
-ok('금지 패턴 스캔 — 나이 · 년생 · 실지명 · 병명 · 출처 흔적 · URL · sourceRef 0건')
+ok(`금지 패턴 스캔 — 나이 · 년생 · 실지명 · 병명 · 출처 흔적 · URL · sourceRef 0건 (${CODES.length + DRAFT_CARDS.length}명)`)
+
+// ── 🔴 설계 카드 검사 (--check-cards) ──
+//    판정은 `persona-card-verify` 가 한다 — 순수 함수라 CI 가 그것을 직접 시험한다.
+//    여기서 다시 구현하면 CI 가 시험한 것과 운영이 쓰는 것이 갈린다.
+if (DRAFT_CARDS.length > 0 || CHECK_CARDS) {
+  console.log('\n══ 설계 카드 검사 ══\n')
+  let cardFail = 0
+  const cbad = (m: string) => { console.log(`  🔴 ${m}`); cardFail += 1 }
+  const cgood = (m: string) => console.log(`  ✅ ${m}`)
+
+  // 🔴 정본 Pool 형식 — 임의 코드를 만들면 문서와 DB 가 갈린다
+  const badForm = DRAFT_CARDS.filter((c) => !isPoolCode(c))
+  if (badForm.length > 0) cbad(`정본 형식(P01~P20)이 아닌 코드: ${badForm.join(', ')}`)
+  else cgood(`코드 형식 P01~P20 — ${DRAFT_CARDS.length}명`)
+
+  // 🔴 이미 DB 에 있는 코드를 설계 카드로 다시 내면 어느 쪽이 정본인지 알 수 없다
+  const inDb = await prisma.persona.findMany({
+    where: { code: { in: DRAFT_CARDS } }, select: { code: true, status: true },
+  })
+  if (inDb.length > 0) cbad(`이미 DB 에 있는 코드다: ${inDb.map((r) => `${r.code}(${r.status})`).join(', ')}`)
+  else cgood('DB 에 없는 코드다 — 새로 켤 사람이다')
+
+  const dupes = duplicateKeys(readFileSync(SEED_PATH, 'utf-8'))
+  if (dupes.length > 0) cbad(`seed 파일에 중복 코드가 있다: ${dupes.join(', ')}`)
+  else cgood('seed 파일에 중복 코드 없음')
+
+  // 🔴 정본 카드를 읽어 대조한다 — seed 가 문서와 다르면 시뮬레이션한 사람이 아니다
+  const pool = parsePoolDoc(readFileSync(POOL_DOC, 'utf-8'))
+  if (pool.problems.length > 0) cbad(`정본 Pool 문서 파싱 문제 ${pool.problems.length}건: ${pool.problems.join(' / ')}`)
+  else cgood(`정본 Pool 카드 ${pool.cards.length}장 파싱`)
+  const poolOf = new Map(pool.cards.map((c) => [c.code, c]))
+
+  for (const code of DRAFT_CARDS) {
+    const problems = verifySeedCard(code, seeds[code] as never, poolOf.get(code) ?? null)
+    if (problems.length === 0) cgood(`${code}  필수 축 · 제어값 · 정합 · 정본 일치 전부 통과`)
+    else cbad(`${code}  ${problems.join(' / ')}`)
+  }
+
+  if (cardFail > 0) { await prisma.$disconnect(); fail(`설계 카드 ${cardFail}건 실패`) }
+  console.log(`\n  ✅ 설계 카드 ${DRAFT_CARDS.length}명 전부 통과\n`)
+}
+
+// 🔴 카드만 보고 끝낸다 — DB 반영 검증(--check)의 의미를 흐리지 않는다
+if (CHECK_CARDS) {
+  await prisma.$disconnect()
+  console.log('🔴 --check-cards: DB write 0 · persona 생성 0. 카드 검사만 했습니다.\n')
+  process.exit(0)
+}
 
 // ── --check — 🔴 seed 파일 기준으로 "실제 반영됐는가" 를 본다 ──
 //    이전 판은 Persona 존재 · draft · personaId NULL 만 봤다.
