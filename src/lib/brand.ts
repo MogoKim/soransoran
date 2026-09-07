@@ -12,6 +12,7 @@
  * 색을 교체할 때는 이 두 파일만 고치면 된다.
  */
 import { BRAND_NAME } from './brand-name'
+import { PRIMARY_ORIGIN } from './public-site-config'
 
 export const BRAND = {
   /** 브랜드 시그니처 — theme-color · OG 장식 면 · 아이콘 배경 */
@@ -30,8 +31,8 @@ export const BRAND = {
   muted: '#6f5e59',
 } as const
 
-/** 환경변수가 하나도 없을 때의 최종 기준 URL */
-const DEFAULT_SITE_URL = 'https://soransoran.com'
+/** 환경변수가 하나도 없을 때의 최종 기준 URL. 도메인 정본은 public-site-config 다 */
+const DEFAULT_SITE_URL = PRIMARY_ORIGIN
 
 /**
  * 사이트 기준 URL 해석

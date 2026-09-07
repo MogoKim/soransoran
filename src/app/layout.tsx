@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import GoogleAnalytics from '@/components/analytics/GoogleAnalytics'
 import { BRAND, SITE } from '@/lib/brand'
+import { NAVER_SITE_VERIFICATION } from '@/lib/public-site-config'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -60,7 +61,7 @@ export default function RootLayout({
       <head>
         <meta
           name="naver-site-verification"
-          content="5fb6a5b550994c0658f1dd81543e86f5a211ce29"
+          content={NAVER_SITE_VERIFICATION}
         />
         <script dangerouslySetInnerHTML={{ __html: FONT_SIZE_SCRIPT }} />
         {/* Pretendard — scaffold 단계에서는 CDN.

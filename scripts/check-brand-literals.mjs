@@ -25,9 +25,15 @@
  *   - admin 은 운영자 화면이라 제외한다. src/content 는 이미 발행된 과거 콘텐츠라 제외한다.
  *   - 도메인·GA·카카오 같은 외부 식별자는 이 가드의 범위가 아니다(별도 판단이 필요하다).
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import ts from 'typescript'
+import {
+  readManifest,
+  resolveCurrentValues,
+  valueTargets,
+  escapeRe,
+} from './lib/rebrand-manifest-reader.mjs'
 
 const ROOT = process.cwd()
 const TARGET = join(ROOT, 'src')
@@ -37,26 +43,31 @@ const EXCLUDED_PREFIXES = ['src/app/admin/', 'src/components/admin/', 'src/conte
 
 /**
  * 🔴 허용 파일은 값마다 다르다. 공통 allowlist 를 두지 않는다.
+ *    public-site-info.ts 의 브랜드명도, brand-name.ts 의 이메일도 위반이다.
  *
- * 파일 단위로 열어 주면 "정본 파일이니까" 라는 이유로 다른 값까지 함께 들어온다.
- * 브랜드명은 리브랜딩 때 반드시 바뀌고, 문의 이메일은 메일 계정 이전과 함께 판단한다 —
- * 성격이 다른 값이 한 파일에 섞이면 그 구분이 무너진다.
- * 그래서 public-site-info.ts 의 브랜드명도, brand-name.ts 의 이메일도 위반이다.
+ * 🔴 검사할 값을 여기 복사해 두지 않는다.
+ *
+ *   현재 값  brand-name.ts · public-site-info.ts 정본에서 읽는다
+ *   옛 값    rebrand-manifest.ts 의 legacyValues 에서 읽는다
+ *
+ * 값을 복사해 두면 정본을 새 이름으로 바꾼 뒤 이 가드는 **새 이름의 중복만** 보고,
+ * 옛 이름이 화면 어딘가 남아 있어도 통과한다. 그래서 legacy 도 함께 본다.
+ * legacy 목록은 리브랜딩 manifest 하나가 갖는다 — 별도 정본을 또 만들지 않는다.
  */
-const PATTERNS = [
-  {
-    name: '브랜드명',
-    re: /소란소란/g,
-    owner: 'src/lib/brand-name.ts',
-    fix: 'BRAND_NAME (src/lib/brand-name.ts)',
-  },
-  {
-    name: '문의 이메일',
-    re: /soransoran\.community@gmail\.com/g,
-    owner: 'src/lib/public-site-info.ts',
-    fix: 'CONTACT_EMAIL (src/lib/public-site-info.ts)',
-  },
-]
+function buildTargets() {
+  const manifestPath = join(ROOT, 'src/lib/rebrand-manifest.ts')
+  if (!existsSync(manifestPath)) return []
+  const configs = resolveCurrentValues(readManifest(readFileSync(manifestPath, 'utf8')), ROOT)
+  // 이 가드가 책임지는 것은 서비스명과 문의 이메일 두 가지다
+  const mine = configs.filter((c) => c.id === 'brand-name' || c.id === 'contact-email')
+  const out = []
+  for (const c of mine) out.push(...valueTargets(c))
+  return out.map((t) => ({
+    ...t,
+    re: new RegExp(escapeRe(t.value), 'g'),
+    name: `${t.id} (${t.kind === 'legacy' ? '옛 값' : '현재 값'})`,
+  }))
+}
 
 function isExcluded(rel) {
   return EXCLUDED_PREFIXES.some((p) => rel.startsWith(p))
@@ -95,7 +106,7 @@ function collectTextNodes(sourceFile) {
 }
 
 /** 한 파일의 내용을 검사한다. 파일 시스템을 건드리지 않으므로 self-test 가 그대로 쓴다 */
-function scan(rel, text) {
+function scan(rel, text, targets) {
   if (isExcluded(rel)) return []
 
   const sourceFile = ts.createSourceFile(
@@ -111,11 +122,11 @@ function scan(rel, text) {
     // JsxText 는 text 에 원문이, 나머지는 리터럴 값이 들어 있다
     const value = node.text ?? ''
     if (!value) continue
-    for (const { name, re, owner, fix } of PATTERNS) {
-      if (rel === owner) continue // 이 값의 정본 파일에서만 허용한다
-      for (const m of value.match(re) ?? []) {
+    for (const t of targets) {
+      if (t.allowed.includes(rel)) continue
+      for (const m of value.match(t.re) ?? []) {
         const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
-        hits.push({ rel, line: line + 1, name, hit: m, fix })
+        hits.push({ rel, line: line + 1, name: t.name, hit: m, fix: t.fix })
       }
     }
   }
@@ -129,6 +140,33 @@ function scan(rel, text) {
  *    정규식이나 소유권 규칙을 고칠 때 이 목록이 먼저 깨진다.
  */
 function selfTest() {
+  // 지금(리브랜딩 전) 상태 — legacy 가 비어 있다
+  const NOW = [
+    { id: 'brand-name', owner: 'code', source: 'src/lib/brand-name.ts', symbol: 'BRAND_NAME',
+      current: '소란소란', legacyValues: [], legacyAllowed: [] },
+    { id: 'contact-email', owner: 'code', source: 'src/lib/public-site-info.ts', symbol: 'CONTACT_EMAIL',
+      current: 'soransoran.community@gmail.com', legacyValues: [], legacyAllowed: [] },
+  ]
+  const mk = (cfgs) => {
+    const out = []
+    for (const c of cfgs) out.push(...valueTargets(c))
+    return out.map((t) => ({ ...t, re: new RegExp(escapeRe(t.value), 'g'), name: `${t.id} (${t.kind})` }))
+  }
+  const T = mk(NOW)
+
+  /**
+   * 🔴 가짜 "리브랜딩 후" — 정본은 새 이름, 옛 이름은 legacyValues 에 있다.
+   *    가드는 **둘 다** 잡아야 한다.
+   */
+  const AFTER = [
+    { id: 'brand-name', owner: 'code', source: 'src/lib/brand-name.ts', symbol: 'BRAND_NAME',
+      current: '새이름', legacyValues: ['소란소란'], legacyAllowed: [] },
+    { id: 'contact-email', owner: 'code', source: 'src/lib/public-site-info.ts', symbol: 'CONTACT_EMAIL',
+      current: 'new@example.test', legacyValues: ['old@example.test'],
+      legacyAllowed: [{ path: 'src/lib/legacy-contact.ts', why: '옛 주소 안내 문구' }] },
+  ]
+  const TA = mk(AFTER)
+
   const cases = [
     // --- 잡아야 하는 것 ---
     { why: 'JSX 텍스트의 직접 브랜드명', rel: 'src/components/X.tsx', src: 'const a = <p>소란소란</p>', expect: 1 },
@@ -137,60 +175,16 @@ function selfTest() {
     { why: 'alt 의 브랜드명', rel: 'src/components/X.tsx', src: 'const a = <img alt="소란소란 hero" />', expect: 1 },
     { why: 'metadata 문자열의 브랜드명', rel: 'src/app/x/page.tsx', src: "export const metadata = { description: '소란소란 이용약관' }", expect: 1 },
     { why: '직접 적힌 문의 이메일', rel: 'src/app/x/page.tsx', src: "const C = 'soransoran.community@gmail.com'", expect: 1 },
-
-    // --- 이번에 막은 우회 구멍 ---
-    {
-      why: 'URL 문자열 뒤 같은 줄의 브랜드명 (// 오인 금지)',
-      rel: 'src/components/X.tsx',
-      src: "const url = 'https://example.com'; const name = '소란소란'",
-      expect: 1,
-    },
-    {
-      why: '코드 + 블록 주석 + 코드가 한 줄 — 주석 밖만 검출',
-      rel: 'src/components/X.tsx',
-      src: "const a = '소란소란'; /* 소란소란 은 주석이다 */ const b = 1",
-      expect: 1,
-    },
-    {
-      why: '한 줄에 블록 주석 두 개여도 주석 밖만 검출',
-      rel: 'src/components/X.tsx',
-      src: "/* 소란소란 */ const a = '소란소란'; /* 소란소란 */ const b = 2",
-      expect: 1,
-    },
-    {
-      why: 'template literal 안의 브랜드명',
-      rel: 'src/components/X.tsx',
-      src: 'const t = `소란소란 편집팀 ${x}`',
-      expect: 1,
-    },
-
-    // --- 패턴별 소유권 ---
-    {
-      why: 'public-site-info.ts 안의 브랜드명은 위반',
-      rel: 'src/lib/public-site-info.ts',
-      src: "export const X = '소란소란 운영팀'",
-      expect: 1,
-    },
-    {
-      why: 'brand-name.ts 안의 이메일은 위반',
-      rel: 'src/lib/brand-name.ts',
-      src: "export const X = 'soransoran.community@gmail.com'",
-      expect: 1,
-    },
-    {
-      why: '정본 파일의 올바른 값은 허용 — 브랜드명',
-      rel: 'src/lib/brand-name.ts',
-      src: "export const BRAND_NAME = '소란소란'",
-      expect: 0,
-    },
-    {
-      why: '정본 파일의 올바른 값은 허용 — 이메일',
-      rel: 'src/lib/public-site-info.ts',
-      src: "export const CONTACT_EMAIL = 'soransoran.community@gmail.com'",
-      expect: 0,
-    },
+    { why: 'URL 뒤 같은 줄의 브랜드명 (// 오인 금지)', rel: 'src/components/X.tsx', src: "const url = 'https://example.com'; const name = '소란소란'", expect: 1 },
+    { why: '코드+블록주석+코드 한 줄', rel: 'src/components/X.tsx', src: "const a = '소란소란'; /* 소란소란 은 주석이다 */ const b = 1", expect: 1 },
+    { why: '한 줄 블록주석 두 개', rel: 'src/components/X.tsx', src: "/* 소란소란 */ const a = '소란소란'; /* 소란소란 */ const b = 2", expect: 1 },
+    { why: 'template literal 안', rel: 'src/components/X.tsx', src: 'const t = `소란소란 편집팀 ${x}`', expect: 1 },
+    { why: 'public-site-info.ts 안의 브랜드명은 위반', rel: 'src/lib/public-site-info.ts', src: "export const X = '소란소란 운영팀'", expect: 1 },
+    { why: 'brand-name.ts 안의 이메일은 위반', rel: 'src/lib/brand-name.ts', src: "export const X = 'soransoran.community@gmail.com'", expect: 1 },
 
     // --- 잡으면 안 되는 것 ---
+    { why: '정본의 올바른 값 — 브랜드명', rel: 'src/lib/brand-name.ts', src: "export const BRAND_NAME = '소란소란'", expect: 0 },
+    { why: '정본의 올바른 값 — 이메일', rel: 'src/lib/public-site-info.ts', src: "export const CONTACT_EMAIL = 'soransoran.community@gmail.com'", expect: 0 },
     { why: '라인 주석은 무시', rel: 'src/components/X.tsx', src: '// 소란소란 은 이렇게 한다', expect: 0 },
     { why: '블록 주석은 무시', rel: 'src/components/X.tsx', src: '/* 소란소란\n * soransoran.community@gmail.com\n */', expect: 0 },
     { why: 'admin 경로는 무시', rel: 'src/app/admin/(ops)/layout.tsx', src: 'const a = <p>소란소란 운영</p>', expect: 0 },
@@ -203,17 +197,30 @@ function selfTest() {
 
   const failed = []
   for (const c of cases) {
-    const got = scan(c.rel, c.src).length
+    const got = scan(c.rel, c.src, T).length
     if (got !== c.expect) failed.push({ ...c, got })
   }
+
+  // 🔴 리브랜딩 후 — 새 이름 중복과 옛 이름 잔존을 모두 잡는가
+  const after = [
+    { why: '정본 변경 후 새 이름 중복을 잡는다', rel: 'src/components/X.tsx', src: "const n = '새이름'", expect: 1 },
+    { why: '정본 변경 후 옛 이름 잔존을 잡는다', rel: 'src/components/X.tsx', src: 'const a = <p>소란소란</p>', expect: 1 },
+    { why: '옛 이메일 잔존을 잡는다', rel: 'src/app/x.tsx', src: "const c = 'old@example.test'", expect: 1 },
+    { why: '허용된 정확한 경로만 통과', rel: 'src/lib/legacy-contact.ts', src: "const old = 'old@example.test'", expect: 0 },
+    { why: '허용 경로가 아니면 옛 값도 잡는다', rel: 'src/lib/other.ts', src: "const old = 'old@example.test'", expect: 1 },
+    { why: '옛 값도 주석에서는 안 잡는다', rel: 'src/components/X.tsx', src: '// 소란소란 이었다', expect: 0 },
+  ]
+  for (const c of after) {
+    const got = scan(c.rel, c.src, TA).length
+    if (got !== c.expect) failed.push({ ...c, got })
+  }
+
   if (failed.length) {
     console.error('🔴 브랜드 가드 self-test 실패 — 가드 자신이 고장났습니다:\n')
-    for (const f of failed) {
-      console.error(`  ${f.why}\n    ${f.rel}  기대 ${f.expect}건, 실제 ${f.got}건`)
-    }
+    for (const f of failed) console.error(`  ${f.why}\n    ${f.rel}  기대 ${f.expect}건, 실제 ${f.got}건`)
     process.exit(1)
   }
-  return cases.length
+  return cases.length + after.length
 }
 
 function walk(dir, out = []) {
@@ -227,9 +234,16 @@ function walk(dir, out = []) {
 
 const selfTestCount = selfTest()
 
+// 🔴 검사 대상은 정본과 manifest 에서 읽는다 (현재 값 + 옛 값)
+const targets = buildTargets()
+if (!targets.length) {
+  console.error('검사 대상을 만들지 못했습니다 — src/lib/rebrand-manifest.ts 를 확인하세요')
+  process.exit(1)
+}
+
 const violations = []
 for (const file of walk(TARGET)) {
-  violations.push(...scan(relative(ROOT, file), readFileSync(file, 'utf8')))
+  violations.push(...scan(relative(ROOT, file), readFileSync(file, 'utf8'), targets))
 }
 
 if (violations.length) {
@@ -241,4 +255,8 @@ if (violations.length) {
   process.exit(1)
 }
 
-console.log(`브랜드 리터럴 가드 통과 — 정본 파일 외 0건 (self-test ${selfTestCount}건 통과)`)
+const legacyN = targets.filter((t) => t.kind === 'legacy').length
+console.log(
+  `브랜드 리터럴 가드 통과 — 정본 파일 외 0건 · 검사 대상 ${targets.length}개` +
+    `(현재 ${targets.length - legacyN} · 옛 값 ${legacyN}) (self-test ${selfTestCount}건 통과)`,
+)

@@ -2,9 +2,10 @@
 
 import { useEffect } from 'react'
 import { usePathname } from 'next/navigation'
+import { GA_MEASUREMENT_ID, TRACKED_HOSTS } from '@/lib/public-site-config'
 
-const GA_MEASUREMENT_ID = 'G-PW9HHV2LLL'
-const TRACKED_HOSTS = new Set(['soransoran.com', 'www.soransoran.com'])
+/** 🔴 값의 정본은 public-site-config 다 — 도메인이 바뀌면 거기서 한 번에 고친다 */
+const TRACKED = new Set<string>(TRACKED_HOSTS)
 
 type GtagFields = {
   page_path?: string
@@ -22,7 +23,7 @@ declare global {
 }
 
 function shouldTrack() {
-  return typeof window !== 'undefined' && TRACKED_HOSTS.has(window.location.hostname)
+  return typeof window !== 'undefined' && TRACKED.has(window.location.hostname)
 }
 
 function ensureGoogleTag() {

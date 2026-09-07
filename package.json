@@ -15,6 +15,8 @@
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:contrast:rebrand": "node scripts/check-contrast.mjs --rebrand",
     "check:brand-assets": "node scripts/check-brand-assets.mjs",
+    "check:rebrand-config": "node scripts/check-rebrand-config.mjs",
+    "rebrand:plan": "node scripts/rebrand-plan.mjs",
     "check:visibility": "node scripts/check-post-visibility.mjs",
     "check:home-exposure": "tsx scripts/home-exposure-check.mts",
     "micro-seed:validate": "node scripts/micro-seed-validate.mjs",

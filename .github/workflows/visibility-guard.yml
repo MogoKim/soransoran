@@ -92,6 +92,15 @@ jobs:
       - name: 브랜드 자산 manifest
         run: npm run check:brand-assets
 
+      # 🔴 도메인·GA ID·검색 인증값은 틀려도 에러가 나지 않는다.
+      #    GA host 가 옛 도메인이면 수집이 0 이 되고, 네이버 인증값이 옛것이면 색인이 멈춘다.
+      #    둘 다 화면은 멀쩡해서 며칠 뒤 지표로 알아챈다 — 사람이 기억해 막을 수 없다.
+      #
+      # (전환 계획 출력인 rebrand:plan 은 CI 에서 돌리지 않는다.
+      #  사람이 전환을 준비할 때 읽는 도구이고, 통과/실패를 판정하는 검사가 아니다)
+      - name: 리브랜딩 설정 가드
+        run: npm run check:rebrand-config
+
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
       - name: Prisma Client 생성
