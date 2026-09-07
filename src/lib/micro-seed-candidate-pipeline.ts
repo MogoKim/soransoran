@@ -5,36 +5,51 @@
  *
  * 🔴 **이 파일이 답하는 질문은 하나다: "지금 어디가 막혀 있나."**
  *
- * 후보가 큐에 닿기까지 네 층을 지난다. 각 층은 스크립트가 따로 있고,
+ * 후보가 큐에 닿기까지 다섯 층을 지난다. 각 층은 스크립트가 따로 있고,
  * 하나씩 돌려 보기 전에는 **어디서 멈췄는지 알 수가 없었다.**
- * 2026-09-07 에 그걸 알아내는 데 다섯 번을 실행해야 했다 —
- * 그리고 답은 "전 구간이 비었다" 였다.
  *
  * ```
- * ① SEED 승인   사람이 원천을 고름        → 미초안화 몇 건?
- * ② 초안        템플릿이 만듦 (LLM 아님)   → 미판정 몇 건?
- * ③ ADOPT       사람이 초안을 고름         → 미후보화 몇 건?
- * ④ 후보 파일   생성기가 모음              → 미적재 몇 건?
+ * ⓪   목록 → 본문      밖으로 요청  → 본문 없는 목록 몇 건?
+ * ①   SEED 승인 → 초안  기계        → 미초안화 몇 건?
+ * ②   초안 → 판정       사람        → 미판정 몇 건?
+ * ③   ADOPT → 후보 파일 기계        → 미후보화 몇 건?
+ * ④   후보 파일 → 큐    기계        → 미적재 몇 건?
  * ```
  *
- * 🔴 **자동으로 넘길 수 있는 층과 사람이 있어야 하는 층이 번갈아 온다.**
- *    ②와 ④는 기계가 한다. ①과 ③은 사람이 한다.
+ * 🔴 **세 종류의 층이 번갈아 온다.** 기계 · 사람 · 밖으로 나가는 것.
  *    그래서 "전부 자동화" 는 애초에 불가능하고, 목표는 **기계 층을 사람이 손대지 않는 것**이다.
+ *
+ * 🔴 **⓪층을 넣은 이유 (2026-09-07).** 이 도구가 처음엔 ①부터 셌다.
+ *    그래서 "전 구간 일감 0 — 새 원천이 필요하다" 고 말했는데, **절반만 맞는 말**이었다.
+ *    목록에는 1,054건이 있었고 그중 388건은 네이버에 붙지 않고도 본문을 읽을 수 있었다.
+ *    보이지 않는 층은 없는 층이 된다.
+ *
+ * 🔴 **"본문 → 판정 후보" 를 층으로 세지 않는 이유.** 그 판정은 검수 화면 셋이
+ *    (SRN · 소스 · Raw) 각자 다른 조건으로 한다. 여기서 그 조건을 흉내내면
+ *    **판단이 두 곳이 되고**, 화면은 7건이라는데 이 도구는 38건이라 하게 된다
+ *    (실제로 그렇게 나왔다). 화면이 정본이므로 여기서는 참고 수치로만 보여준다.
  */
 
 /** 층 이름 — 순서가 곧 흐름이다 */
-export const LAYERS = ['seedApproval', 'draft', 'adopt', 'candidate'] as const
+export const LAYERS = ['body', 'seedApproval', 'draft', 'adopt', 'candidate'] as const
 export type Layer = (typeof LAYERS)[number]
 
 export const LAYER_LABEL: Record<Layer, string> = {
+  body: '⓪ 목록 → 본문',
   seedApproval: '① SEED 승인 → 초안',
   draft: '② 초안 → 판정',
   adopt: '③ ADOPT → 후보 파일',
   candidate: '④ 후보 파일 → 큐',
 }
 
-/** 누가 이 층을 넘기나 */
-export const LAYER_ACTOR: Record<Layer, 'machine' | 'human'> = {
+/**
+ * 누가 이 층을 넘기나 — 🔴 **`network` 는 기계지만 밖으로 나간다.**
+ *
+ * 남의 서버에 요청을 보내는 층이라 `machine` 과 같이 두면 안 된다.
+ * 자동으로 돌리는 순간 pacing·robots·차단 위험이 생기고, 그건 코드가 아니라 승인의 문제다.
+ */
+export const LAYER_ACTOR: Record<Layer, 'machine' | 'human' | 'network'> = {
+  body: 'network',
   seedApproval: 'machine',
   draft: 'human',
   adopt: 'machine',
@@ -43,10 +58,44 @@ export const LAYER_ACTOR: Record<Layer, 'machine' | 'human'> = {
 
 /** 각 층에서 다음으로 넘어가려면 무엇을 하나 */
 export const LAYER_ACTION: Record<Layer, string> = {
+  body: '🔴 승인 필요: 상세 fetch — 82cook 은 fetch 만, 네이버는 브라우저·세션이 든다',
   seedApproval: 'npm run micro-seed:seed-originality-dry-run',
   draft: '🔴 사람: seed-originality-review.html 에서 ADOPT / REVISE 판정',
   adopt: 'npm run micro-seed:publish-candidates',
   candidate: 'npx tsx scripts/micro-seed-supply-autofill.mts --apply --limit=N',
+}
+
+/**
+ * 목록 재고 — 🔴 **본문이 없으면 판정할 수 없다.**
+ *
+ * 2026-09-07 에 파이프라인이 "전 구간 일감 0 — 새 원천이 필요하다" 고 말했다.
+ * 맞는 말이었지만 **절반만** 맞았다. 목록에는 1,054건이 있었고,
+ * 그중 82cook 388건은 **네이버에 붙지 않고도** 본문을 읽을 수 있는 것이었다.
+ * "원천이 없다" 와 "원천은 있는데 본문을 안 읽었다" 는 완전히 다른 문제다.
+ */
+export type ListStock = {
+  /** 목록에 있으나 본문을 안 읽은 것 */
+  pending: number
+  /** 그중 브라우저·세션 없이 읽을 수 있는 것 (82cook) */
+  fetchOnly: number
+  /** 브라우저·세션이 필요한 것 (네이버 카페) */
+  needsBrowser: number
+}
+
+/**
+ * 🔴 **읽기 비용으로 가른다.** 건수가 아니라 "무엇이 필요한가" 가 판단을 바꾼다.
+ *
+ * `fetchOnly` 가 남아 있으면 네이버 승인을 기다릴 필요가 없다.
+ * 이걸 뭉뚱그리면 "수집 승인" 하나를 기다리며 쓸 수 있는 재고를 놀린다.
+ */
+export function readListStock(rows: readonly { sourceSite?: string }[]): ListStock {
+  let fetchOnly = 0
+  let needsBrowser = 0
+  for (const r of rows) {
+    if (String(r.sourceSite ?? '').startsWith('navercafe')) needsBrowser += 1
+    else fetchOnly += 1
+  }
+  return { pending: rows.length, fetchOnly, needsBrowser }
 }
 
 export type LayerCount = {
@@ -63,7 +112,7 @@ export type LayerState = {
   passed: number
   /** 아직 안 넘어간 것 — 이것이 "일감" 이다 */
   pending: number
-  actor: 'machine' | 'human'
+  actor: 'machine' | 'human' | 'network'
 }
 
 export function readLayer(layer: Layer, c: LayerCount): LayerState {
@@ -113,6 +162,13 @@ export function planSteps(input: PipelineInput): StepPlan[] {
     if (s.pending === 0) {
       return { layer: s.layer, runnable: false, reason: '일감이 없다', command }
     }
+    // 🔴 밖으로 나가는 층은 기계지만 자동으로 돌리지 않는다 — pacing·robots·차단은 승인의 문제다
+    if (s.actor === 'network') {
+      return {
+        layer: s.layer, runnable: false,
+        reason: `🟡 밖으로 요청해야 한다 (${s.pending}건) — 승인 사항`, command,
+      }
+    }
     if (s.actor === 'human') {
       return {
         layer: s.layer, runnable: false,
@@ -124,7 +180,7 @@ export function planSteps(input: PipelineInput): StepPlan[] {
 }
 
 /** 재고 신호 — 공급이 마르고 있는지 */
-export type SupplySignal = 'starved' | 'human-blocked' | 'runnable'
+export type SupplySignal = 'starved' | 'human-blocked' | 'network-blocked' | 'runnable'
 
 /**
  * 한 줄 진단 — 🔴 **"마름" 과 "사람 대기" 를 구분한다.**
@@ -139,6 +195,12 @@ export function diagnose(input: PipelineInput): { signal: SupplySignal; message:
     return {
       signal: 'starved',
       message: '🔴 전 구간에 일감이 0 — 새 원천이 들어와야 한다. 판정할 것도 만들 것도 없다',
+    }
+  }
+  if (next !== null && next.actor === 'network') {
+    return {
+      signal: 'network-blocked',
+      message: `🟡 ${LAYER_LABEL[next.layer]} 에 ${next.pending}건 — 밖으로 요청을 보내야 한다. 승인 사항이다`,
     }
   }
   if (next !== null && next.actor === 'human') {
