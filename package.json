@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:ops": "tsc -p tsconfig.ops.json --noEmit",
     "check:tokens": "node scripts/check-color-literals.mjs",
+    "check:brand": "node scripts/check-brand-literals.mjs",
     "check:visibility": "node scripts/check-post-visibility.mjs",
     "check:home-exposure": "tsx scripts/home-exposure-check.mts",
     "micro-seed:validate": "node scripts/micro-seed-validate.mjs",

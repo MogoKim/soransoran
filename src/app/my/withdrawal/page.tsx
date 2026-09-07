@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { TOUCH_MIN } from '@/lib/spacing'
 import PageShell from '@/components/layouts/PageShell'
 import { requireMyUserId, BackToMy } from '@/components/features/my/shell'
+import { CONTACT_EMAIL } from '@/lib/public-site-info'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,7 +12,6 @@ export const metadata: Metadata = {
 }
 
 const PATH = '/my/withdrawal'
-const CONTACT = 'soransoran.community@gmail.com'
 
 /**
  * 🔴 여기서 계정을 지우지 않는다. 버튼을 두면 누른 순간 끝났다고 읽힌다 —
@@ -35,7 +35,7 @@ export default async function WithdrawalPage() {
         </p>
 
         <a
-          href={`mailto:${CONTACT}`}
+          href={`mailto:${CONTACT_EMAIL}`}
           className={`mt-6 inline-flex ${TOUCH_MIN} items-center rounded-lg border border-interactive px-4 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
         >
           문의로 탈퇴 요청하기

@@ -1,10 +1,11 @@
 import type { Metadata } from 'next'
 import PageShell from '@/components/layouts/PageShell'
 import { SITE } from '@/lib/brand'
+import { CONTACT_EMAIL } from '@/lib/public-site-info'
 
 export const metadata: Metadata = {
   title: '개인정보처리방침',
-  description: '소란소란 개인정보처리방침',
+  description: `${SITE.name} 개인정보처리방침`,
   alternates: { canonical: '/privacy' },
 }
 
@@ -18,7 +19,6 @@ export const metadata: Metadata = {
  * 🔴 중요한 변경은 최소 7일 전에 알린다.
  */
 const EFFECTIVE_DATE = '2026년 9월 2일'
-const CONTACT = 'soransoran.community@gmail.com'
 
 function Article({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -199,7 +199,7 @@ export default function PrivacyPage() {
             4. 이용자가 작성한 게시글과 댓글은 커뮤니티의 대화 맥락이 유지되어야 하므로 탈퇴 후에도
             서비스에 남을 수 있습니다. 이 경우 작성자를 식별할 수 있는 정보는 익명 또는 일반 회원
             표기로 대체됩니다. 게시물 자체의 삭제를 원하는 경우 탈퇴 전에 직접 삭제하거나{' '}
-            {CONTACT} 으로 요청해 주시기 바랍니다.
+            {CONTACT_EMAIL} 으로 요청해 주시기 바랍니다.
           </p>
         </Article>
 
@@ -295,7 +295,7 @@ export default function PrivacyPage() {
           <p className="mt-3">
             이용자는 개인정보의 국외 이전을 거부할 수 있습니다. 다만 위 이전은 서비스 제공에 필수적인
             처리이므로, 거부하는 경우 회원가입 및 서비스 이용이 제한될 수 있습니다. 거부 의사는{' '}
-            {CONTACT} 으로 알려주시기 바랍니다.
+            {CONTACT_EMAIL} 으로 알려주시기 바랍니다.
           </p>
         </Article>
 
@@ -307,7 +307,7 @@ export default function PrivacyPage() {
           <p>4. 처리정지 요구</p>
           <p>5. 동의 철회 및 회원 탈퇴</p>
           <p className="mt-2">
-            권리 행사는 {CONTACT} 으로 요청하실 수 있으며, 서비스는 지체 없이 확인 후 조치합니다.
+            권리 행사는 {CONTACT_EMAIL} 으로 요청하실 수 있으며, 서비스는 지체 없이 확인 후 조치합니다.
             본인 확인이 필요한 경우 추가 확인을 요청할 수 있습니다.
           </p>
         </Article>
@@ -343,7 +343,7 @@ export default function PrivacyPage() {
             책임자를 지정하고 있습니다.
           </p>
           <p>· 담당: {SITE.name} 운영팀</p>
-          <p>· 연락처: {CONTACT}</p>
+          <p>· 연락처: {CONTACT_EMAIL}</p>
           <p className="mt-2 text-sm text-content-muted">
             개인정보 침해에 대한 신고나 상담이 필요한 경우 개인정보침해신고센터(privacy.kisa.or.kr,
             국번 없이 118), 개인정보 분쟁조정위원회(kopico.go.kr, 1833-6972)에 문의하실 수 있습니다.
