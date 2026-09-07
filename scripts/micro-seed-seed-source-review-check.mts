@@ -212,8 +212,12 @@ try {
   check(`실 파일 후보 ${real.length}건`, real.length > 0)
   check('🔴 전부 seedOriginality 축 조건을 만족한다',
     real.every((c) => c.safetyVerdict === 'pass' && c.bodyLength > 0))
-  check('🔴 제외는 전부 notSourceAxis (다른 축)',
-    rejected.every((r) => r.code === 'notSourceAxis'))
+  // 🔴 실 데이터에 기대는 검사다. 사유를 하나로 못박으면 새 회차가 들어올 때마다 깨진다 —
+  //    2026-09-07 에 82cook 어댑터가 access=failed 8건을 넣어 실제로 깨졌다.
+  //    막아야 할 것은 "모르는 사유" 이지 notSourceAxis 외 전부가 아니다.
+  check('🔴 제외 사유가 전부 아는 코드다',
+    rejected.every((r) => (['notSourceAxis', 'notAccessible', 'unsafe', 'noArticleId', 'emptyBody'] as const)
+      .includes(r.code)))
   check('🔴 아무도 안 누르면 export 0행', sourceRows(real, {}).length === 0)
 } catch {
   console.log('  🟡 .detail.jsonl 없음 — 건너뜀')
