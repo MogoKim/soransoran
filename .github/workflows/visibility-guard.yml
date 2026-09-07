@@ -73,6 +73,25 @@ jobs:
       - name: 브랜드 리터럴 가드
         run: npm run check:brand
 
+      # 여기까지가 순수 파일 검사다 — Prisma 없이 몇 초에 끝나므로 generate 앞에 모아 둔다.
+      #
+      # 🔴 색은 정의가 두 곳(globals.css · brand.ts)이라 한쪽만 움직이면
+      #    화면과 OG·manifest 의 색이 조용히 갈린다. 빌드도 타입도 통과한다.
+      - name: 색상 정본 관계 검사
+        run: npm run check:brand-colors
+
+      # 🔴 리브랜딩에서 가장 위험한 실패는 "겨우 안 보이는 화면"이다.
+      #    코랄을 조금 밝히면 화면은 그대로 뜨지만 메타 글씨가 읽히지 않는다.
+      #    문서화된 예외는 baseline 으로 안고 가되, 그보다 나빠지면 실패한다.
+      #    (후보색 검증용 check:contrast:rebrand 는 예외를 인정하지 않으므로 CI 에 넣지 않는다)
+      - name: 대비 검사
+        run: npm run check:contrast
+
+      # 🔴 자산 목록이 현실과 어긋나면 목록이 없는 것보다 나쁘다 —
+      #    "다 적혀 있다"고 믿고 열었는데 경로가 옛것이면 빠뜨린 줄도 모른다.
+      - name: 브랜드 자산 manifest
+        run: npm run check:brand-assets
+
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
       - name: Prisma Client 생성
