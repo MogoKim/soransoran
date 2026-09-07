@@ -309,6 +309,10 @@ jobs:
       - name: 자동 판정 Shadow (사람 사칭 금지 · false pass 0)
         run: npm run micro-seed:auto-judge-check
 
+      # 기계 초안이 사람의 ADOPT 를 사칭하지 않는지 · 원천당 1개인지 본다 (§4-AS)
+      - name: 기계 초안 채택 (ADOPT 사칭 금지 · 원천당 1개)
+        run: npm run micro-seed:auto-draft-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:
