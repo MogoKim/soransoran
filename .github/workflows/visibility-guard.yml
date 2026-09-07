@@ -293,6 +293,10 @@ jobs:
       - name: thin → 검수 어댑터 (전문 미저장 · drop 차단)
         run: npm run micro-seed:82cook-thin-adapt-check
 
+      # 기계 판정이 사람 값을 사칭하지 않는지 · 위험 글이 통과하지 않는지 본다 (§4-AR)
+      - name: 자동 판정 Shadow (사람 사칭 금지 · false pass 0)
+        run: npm run micro-seed:auto-judge-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:
