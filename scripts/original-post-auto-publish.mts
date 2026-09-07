@@ -128,6 +128,11 @@ for (const r of personaRows) {
     providerId: r.user?.providerId ?? null,
     ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
     maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
+    // 🔴 **이것이 빠지면 모든 persona 가 무자녀로 판정된다.**
+    //    hardFilter 는 `p.childrenCount ?? 0` 로 읽으므로, 넘기지 않으면 0 이 되어
+    //    자녀 글이 전부 NO_CHILDREN 으로 막힌다 — match-assign 은 넘기는데 여기만 빠져 있었다.
+    //    2026-09-07 실측: "아이랑 같이 갈 숙소" 글에서 P10·P17 이 부당하게 차단됐다.
+    childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
     ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),
     parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
     menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
