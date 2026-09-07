@@ -63,6 +63,8 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     id: true, status: true, createdPostId: true, gateVerdict: true,
     promptVersion: true, model: true, matchedPersonaId: true,
     draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+    // 🔴 기계 profile 은 게이트 기록까지 본다 — 큐 컬럼 셋만으로는 손으로 넣을 수 있다
+    gateResults: true,
     decidedAt: true, createdAt: true,
     rawContent: { select: { sourceSite: true } },
   },
@@ -72,6 +74,7 @@ const rows: AutoRow[] = raw.map((r) => ({
   id: r.id, status: r.status, createdPostId: r.createdPostId, gateVerdict: r.gateVerdict,
   promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
   // 🔴 수정본이 있으면 그것이 발행될 글이다
+  gateResults: r.gateResults,
   title: r.editedTitle ?? r.draftTitle,
   body: r.editedBody ?? r.draftBody,
   sourceSite: r.rawContent.sourceSite,

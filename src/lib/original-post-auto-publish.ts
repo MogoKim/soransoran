@@ -24,6 +24,33 @@ export const AUTO_SITE_PREFIX = 'publish-candidate:'
 /** 기존 발행 게이트가 요구하는 값 */
 export const AUTO_GATE_VERDICT = 'PASS'
 
+// 🔴 profile 판정의 단일 지점 — 적재기(§4-AN)와 같은 함수를 쓴다
+import { queueProfileOf } from './micro-seed-supply-autofill'
+// 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
+export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
+
+/**
+ * 🔴 **기계가 만든 글도 발행한다 — 다만 profile 을 통째로 맞을 때만** (§4-AT)
+ *
+ * §4-AS 가 낸 초안이 §4-AN 을 거쳐 큐에 들어온다. 그 글은 사람이 고른 것이 아니므로
+ * 사람 판(`publish-candidate-v1` · `human-curated`)을 쓰지 않는다.
+ *
+ * 🔴 **필드를 독립으로 보지 않는다.** `promptVersion` 만 기계 것이고 `model` 이 사람 것이면
+ *    그 행은 어느 경로로 들어왔는지 알 수 없다 — 통째로 맞거나 전부 거절이다.
+ *    "일부만 섞인 행" 을 허용하는 순간 구분이 무너지고, 그 구분 위에 이 레인이 서 있다.
+ */
+export const MACHINE_PROMPT_VERSION = 'publish-candidate-auto-v1'
+export const MACHINE_MODEL = 'claude-haiku-4.5'
+export const MACHINE_SITE_PREFIX = 'publish-candidate:auto:'
+/** gateResults 에 남아야 하는 표시 */
+export const MACHINE_GATE_MARKS = {
+  provenance: 'machine-generated',
+  sourceDecision: 'AUTO_ADOPT',
+  draftRuleVersion: 'auto-draft-v3',
+} as const
+
+export type PublishProfile = 'human' | 'machine'
+
 export type AutoRow = {
   id: string
   status: string
@@ -35,6 +62,8 @@ export type AutoRow = {
   title: string
   body: string
   sourceSite: string
+  /** 🔴 기계 후보 확인용 — 큐에 남긴 표시를 다시 본다 */
+  gateResults?: unknown
   /** 승인 시각 — 없으면 `createdAt` 이 대신한다. 🔴 줄 세우기의 근거다 */
   decidedAt: Date | null
   createdAt: Date
@@ -42,14 +71,16 @@ export type AutoRow = {
 
 export type RejectCode =
   | 'STATUS' | 'ALREADY_PUBLISHED' | 'GATE' | 'PROMPT_VERSION' | 'MODEL' | 'SITE' | 'SAFETY' | 'EMPTY'
+  | 'PROFILE'
 
 export const REJECT_LABEL: Record<RejectCode, string> = {
   STATUS: 'APPROVED · EDITED 가 아니다',
   ALREADY_PUBLISHED: '이미 발행됐다',
   GATE: `gate 가 ${AUTO_GATE_VERDICT} 가 아니다`,
-  PROMPT_VERSION: `${AUTO_PROMPT_VERSION} 판이 아니다 — 내용을 모르는 글이다`,
-  MODEL: `${AUTO_MODEL} 이 아니다 — 사람이 쓴 글이 아니다`,
-  SITE: `${AUTO_SITE_PREFIX} 출처가 아니다`,
+  PROMPT_VERSION: '허용된 판이 아니다 — 내용을 모르는 글이다',
+  MODEL: '허용된 모델이 아니다',
+  SITE: '허용된 출처가 아니다',
+  PROFILE: '🔴 사람 profile 도 기계 profile 도 아니다 — 일부만 섞인 행은 받지 않는다',
   SAFETY: 'safety 재판정이 pass 가 아니다',
   EMPTY: '제목이나 본문이 비었다',
 }
@@ -66,6 +97,21 @@ export type SafetyVerdictOf = (title: string, body: string) => string
  * 🔴 `safety` 는 **저장된 값을 믿지 않고 발행 문안으로 다시 잰다** —
  *    큐에 들어간 뒤 문안이 바뀌었을 수 있고, 필터가 그 사이 좋아졌을 수도 있다.
  */
+/**
+ * 이 행이 어느 profile 인가 — 🔴 **통째로 맞아야 한다. 아니면 `null`.**
+ *
+ * 기계 profile 은 `gateResults` 의 표시까지 본다. 큐 컬럼 셋만 맞으면
+ * 누군가 그 값을 손으로 넣었을 때 통과해 버린다 — 게이트 기록은 적재기가 남긴 것이다.
+ */
+export function profileOf(r: AutoRow): PublishProfile | null {
+  // 🔴 **적재기와 같은 함수를 쓴다.** 각자 판정하면 두 구현이 갈라지고,
+  //    실제로 갈라졌었다 — 적재기가 사람 접두를 붙이는 동안 발행기는 기계 접두를 찾았다.
+  return queueProfileOf({
+    promptVersion: r.promptVersion, model: r.model,
+    sourceSite: r.sourceSite, gateResults: r.gateResults,
+  })
+}
+
 export function selectAutoTargets(
   rows: readonly AutoRow[], safetyOf: SafetyVerdictOf,
 ): { targets: AutoRow[]; rejected: Reject[] } {
@@ -78,9 +124,9 @@ export function selectAutoTargets(
     if (r.createdPostId !== null && r.createdPostId !== '') { push(r.id, 'ALREADY_PUBLISHED'); continue }
     if (r.gateVerdict !== AUTO_GATE_VERDICT) { push(r.id, 'GATE'); continue }
     // 🔴 여기가 legacy 글을 막는 자리다
-    if (r.promptVersion !== AUTO_PROMPT_VERSION) { push(r.id, 'PROMPT_VERSION'); continue }
-    if (r.model !== AUTO_MODEL) { push(r.id, 'MODEL'); continue }
-    if (!r.sourceSite.startsWith(AUTO_SITE_PREFIX)) { push(r.id, 'SITE'); continue }
+    // 🔴 두 profile 중 하나를 **통째로** 만족해야 한다. 일부만 섞인 행은 거절이다
+    const profile = profileOf(r)
+    if (profile === null) { push(r.id, 'PROFILE'); continue }
     if (r.title.trim() === '' || r.body.trim() === '') { push(r.id, 'EMPTY'); continue }
     if (safetyOf(r.title, r.body) !== 'pass') { push(r.id, 'SAFETY'); continue }
     targets.push(r)

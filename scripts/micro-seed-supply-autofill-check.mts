@@ -11,8 +11,14 @@ import {
   STOCK_TARGET, STOCK_MIN, STOCK_WARN, MAX_ALLOWED_OVERLAP,
   AUTOFILL_ALLOWED_TYPES, REQUIRED_DECISION, SKIP_LABEL,
   type Candidate, type HeldEntry, type QueueRow,
+  MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY,
+  MACHINE_SITE_PREFIX, HUMAN_ONLY_VALUES, USABLE_PROMPT_VERSIONS,
+  machineProfileMismatch, impersonatesHuman, buildQueuePayload, queueProfileOf,
+  AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
+  type Envelope, type QueueProfileRow,
 } from '../src/lib/micro-seed-supply-autofill'
 
+const NOW = '2026-09-07T12:00:00.000Z'
 let pass = 0
 let fail = 0
 const check = (label: string, ok: boolean): void => {
@@ -104,8 +110,9 @@ console.log('\n④ 값이 어긋난 후보를 거른다')
   const cases: [string, Partial<Candidate>, string][] = [
     ['SRN 은 경로가 다르다', { candidateType: 'shortRawNoindex' }, 'TYPE'],
     ['모르는 유형', { candidateType: 'growthIssue' }, 'TYPE'],
-    ['Seed 인데 ADOPT 가 아니다', { candidateType: 'seedOriginality', sourceDecision: 'HOLD' }, 'DECISION'],
-    ['Raw 인데 SAVE 가 아니다', { candidateType: 'rawOriginality', sourceDecision: 'ADOPT' }, 'DECISION'],
+    // 🔴 이제 profile 로 통째로 본다 — 사람도 기계도 아닌 조합은 PROFILE 이다
+    ['Seed 인데 ADOPT 가 아니다', { candidateType: 'seedOriginality', sourceDecision: 'HOLD' }, 'PROFILE'],
+    ['Raw 인데 SAVE 가 아니다', { candidateType: 'rawOriginality', sourceDecision: 'ADOPT' }, 'PROFILE'],
     ['safety hold', { safetyVerdict: 'hold' }, 'SAFETY'],
     ['safety 없음', { safetyVerdict: '' }, 'SAFETY'],
     ['겹침 초과', { maxOverlap: MAX_ALLOWED_OVERLAP + 1 }, 'OVERLAP'],
@@ -120,42 +127,123 @@ console.log('\n④ 값이 어긋난 후보를 거른다')
   check('🟢 Raw 는 SAVE 면 통과', planRefill({ ...base, candidates: [
     ok({ candidateType: 'rawOriginality', sourceDecision: 'SAVE' }),
   ] }).targets.length === 1)
-  check('겹침이 경계값이면 통과', planRefill({ ...base, candidates: [
+  // 🔴 경계값은 통과가 아니다 — 정책은 6자 **미만**이다
+  check(`🔴 겹침이 ${MAX_ALLOWED_OVERLAP}자면 거절`, planRefill({ ...base, candidates: [
     ok({ maxOverlap: MAX_ALLOWED_OVERLAP }),
+  ] }).targets.length === 0)
+  check(`🟢 ${MAX_ALLOWED_OVERLAP - 1}자는 통과`, planRefill({ ...base, candidates: [
+    ok({ maxOverlap: MAX_ALLOWED_OVERLAP - 1 }),
   ] }).targets.length === 1)
   check('허용 유형은 둘뿐', AUTOFILL_ALLOWED_TYPES.length === 2)
   check('유형마다 요구 결정이 다르다',
     REQUIRED_DECISION.seedOriginality === 'ADOPT' && REQUIRED_DECISION.rawOriginality === 'SAVE')
-  check('제외 사유에 라벨이 있다', Object.keys(SKIP_LABEL).length === 9)
+  check('제외 사유에 라벨이 있다', Object.keys(SKIP_LABEL).length === 11)
 }
 
-console.log('\n⑤ 재고 계산 — 러너가 먹을 수 있는 것만 센다')
+console.log('\n⑤ 재고 계산 — 🔴 발행 러너가 인정하는 행만 센다')
 {
-  const row = (o: Partial<{ status: string; promptVersion: string; createdPostId: string | null }> = {}) => ({
-    status: 'APPROVED', promptVersion: 'publish-candidate-v1', createdPostId: null, ...o,
+  const hRow = (o: Partial<QueueProfileRow & { status: string; createdPostId: string | null }> = {}) => ({
+    status: 'APPROVED', createdPostId: null,
+    promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL,
+    sourceSite: `${AUTOFILL_SITE_PREFIX}navercafe:x`, gateResults: {}, ...o,
   })
-  check('🟢 우리 판 · APPROVED · 미발행만 센다', readStock([row()]).usable === 1)
-  check('🔴 legacy 판은 재고가 아니다',
-    readStock([row({ promptVersion: '13~14판' })]).usable === 0)
-  check('🔴 이미 발행된 것은 재고가 아니다',
-    readStock([row({ createdPostId: 'post1' })]).usable === 0)
-  check('🔴 PENDING 은 재고가 아니다 — 러너가 안 먹는다',
-    readStock([row({ status: 'PENDING' })]).usable === 0)
-  check('EDITED 는 재고다', readStock([row({ status: 'EDITED' })]).usable === 1)
-  // 🔴 2026-09-07 실제 상황: 큐 14건인데 러너 후보는 5건이었다
-  check('🔴 큐 건수와 재고는 다르다', (() => {
-    const rows = [
-      ...Array.from({ length: 5 }, () => row()),
-      ...Array.from({ length: 5 }, () => row({ promptVersion: '13~14판' })),
-      ...Array.from({ length: 4 }, () => row({ createdPostId: 'p' })),
-    ]
-    return rows.length === 14 && readStock(rows).usable === 5
-  })())
-  check(`경고선 ${STOCK_WARN} 이하`, readStock(Array.from({ length: 3 }, () => row())).level === 'critical')
-  check(`${STOCK_MIN} 미만은 low`, readStock(Array.from({ length: 4 }, () => row())).level === 'low')
-  check(`${STOCK_MIN} 이상은 ok`, readStock(Array.from({ length: 5 }, () => row())).level === 'ok')
+  const mRow = (o: Partial<QueueProfileRow & { status: string; createdPostId: string | null }> = {}) => ({
+    status: 'APPROVED', createdPostId: null,
+    promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+    sourceSite: `${MACHINE_SITE_PREFIX}82cook`,
+    gateResults: { autoDraft: {
+      provenance: MACHINE_PROFILE.envelopeProvenance,
+      sourceDecision: MACHINE_PROFILE.sourceDecision,
+      draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
+    } }, ...o,
+  })
+  check('🟢 사람 행을 센다', readStock([hRow()]).human === 1)
+  check('🟢 기계 행도 센다', readStock([mRow()]).machine === 1)
+  check('합계가 맞다', readStock([hRow(), mRow()]).usable === 2)
+  check('🔴 legacy 는 재고가 아니다',
+    readStock([hRow({ promptVersion: '13~14판' })]).usable === 0)
+  check('🔴 발행된 것은 재고가 아니다', readStock([hRow({ createdPostId: 'p' })]).usable === 0)
+  check('🔴 PENDING 은 재고가 아니다', readStock([hRow({ status: 'PENDING' })]).usable === 0)
+  check('EDITED 는 재고다', readStock([hRow({ status: 'EDITED' })]).usable === 1)
+
+  // 🔴 **잘못된 machine tuple 은 재고 0** — 판만 맞고 나머지가 어긋나면 아무도 못 먹는다
+  check('🔴 기계 판인데 사람 접두 → 재고 0',
+    readStock([mRow({ sourceSite: `${AUTOFILL_SITE_PREFIX}82cook` })]).usable === 0)
+  check('🔴 기계 판인데 모델이 사람 것 → 재고 0',
+    readStock([mRow({ model: AUTOFILL_MODEL })]).usable === 0)
+  check('🔴 기계 판인데 gateResults 표시 없음 → 재고 0',
+    readStock([mRow({ gateResults: {} })]).usable === 0)
+  check('🔴 기계 판인데 gate 가 옛 판 → 재고 0', readStock([mRow({
+    gateResults: { autoDraft: { provenance: 'machine-generated', sourceDecision: 'AUTO_ADOPT', draftRuleVersion: 'auto-draft-v2' } },
+  })]).usable === 0)
+  check('🔴 사람 판인데 기계 접두 → 재고 0',
+    readStock([hRow({ sourceSite: `${MACHINE_SITE_PREFIX}x` })]).usable === 0)
+
+  check(`경고선 ${STOCK_WARN} 이하`, readStock(Array.from({ length: 3 }, () => hRow())).level === 'critical')
+  check(`${STOCK_MIN} 이상은 ok`, readStock(Array.from({ length: 5 }, () => hRow())).level === 'ok')
   check('부족분을 목표 기준으로 센다',
-    readStock(Array.from({ length: 4 }, () => row())).shortfall === STOCK_TARGET - 4)
+    readStock(Array.from({ length: 5 }, () => hRow())).shortfall === STOCK_TARGET - 5)
+}
+
+console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 machine 으로 보이는가')
+{
+  const mEnv: Envelope = {
+    provenance: MACHINE_PROFILE.envelopeProvenance,
+    ruleVersion: MACHINE_PROFILE.envelopeRuleVersion,
+    promptVersion: MACHINE_PROFILE.envelopePromptVersion,
+    model: MACHINE_PROFILE.envelopeModel,
+  }
+  const mc = ok({
+    sourceDecision: 'AUTO_ADOPT', sourceInput: 'auto-judge',
+    candidateType: 'seedOriginality', maxOverlap: 4, leakedTokens: '',
+  })
+  const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
+    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
+  const p1 = buildQueuePayload({ envelope: mEnv, candidate: mc, autoJudge: aj, now: NOW })
+  check('🟢 기계 payload 가 만들어진다', p1 !== null && p1.profile === 'machine')
+  // 🔴 이것이 P0 회귀 fixture다 — 만든 행을 그대로 발행 러너 눈으로 본다
+  check('🔴 만들어진 machine 행이 profileOf=machine 이다', p1 !== null && queueProfileOf({
+    promptVersion: p1.promptVersion, model: p1.model,
+    sourceSite: p1.syntheticSite, gateResults: p1.gateResults,
+  }) === 'machine')
+  check('🔴 기계 접두를 쓴다', p1 !== null && p1.syntheticSite.startsWith(MACHINE_SITE_PREFIX))
+  check('🔴 decidedBy 가 founder 가 아니다', p1 !== null && p1.decidedBy === MACHINE_DECIDED_BY)
+  check('🔴 autoJudge 를 상수가 아니라 후보 값으로 남긴다', (() => {
+    const g = p1?.gateResults.autoJudge as Record<string, unknown> | undefined
+    return g?.ruleVersion === 'auto-judge-v3' && g?.inputHash === 'abc123'
+  })())
+  check('🔴 판정 출처가 없으면 payload 를 만들지 않는다',
+    buildQueuePayload({ envelope: mEnv, candidate: mc, now: NOW }) === null)
+  check('🔴 provenance 에 원문·제목·본문이 없다', (() => {
+    const j = JSON.stringify(p1?.gateResults ?? {})
+    return !/bodyHead|rawBody|"title"|"body"/.test(j)
+  })())
+
+  const p2 = buildQueuePayload({ envelope: {}, candidate: ok(), now: NOW })
+  check('🟢 사람 payload 도 만들어진다', p2 !== null && p2.profile === 'human')
+  check('🔴 만들어진 human 행이 profileOf=human 이다', p2 !== null && queueProfileOf({
+    promptVersion: p2.promptVersion, model: p2.model,
+    sourceSite: p2.syntheticSite, gateResults: p2.gateResults,
+  }) === 'human')
+
+  // 🔴 provenance 세탁 금지 — 입력이 틀렸는데 정상 상수를 찍지 않는다
+  for (const [label, patch] of [
+    ['envelope.promptVersion 없음', { promptVersion: '' }],
+    ['envelope.model 이 사람 것', { model: 'human-curated' }],
+  ] as const) {
+    check(`🔴 ${label} → payload 없음`,
+      buildQueuePayload({ envelope: { ...mEnv, ...patch }, candidate: mc, autoJudge: aj, now: NOW }) === null)
+  }
+  for (const [label, patch] of [
+    ['maxOverlap 이 없음', { maxOverlap: undefined }],
+    ['maxOverlap 6', { maxOverlap: 6 }],
+    ['safety 미통과', { safetyVerdict: 'hold' }],
+    ['leakedTokens 있음', { leakedTokens: '연락처' }],
+  ] as const) {
+    check(`🔴 ${label} → payload 없음`, buildQueuePayload({
+      envelope: mEnv, candidate: ok({ ...mc, ...patch } as never), autoJudge: aj, now: NOW,
+    }) === null)
+  }
 }
 
 console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
