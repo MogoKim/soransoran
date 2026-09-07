@@ -5194,6 +5194,229 @@ DB 를 다른 경로가 먼저 채운 경우다. 이어서 돌면 **목표를 �
 
 ---
 
+## §4-AV 🟢 세 수집원이 한 레일을 탄다 (§4-AP → §4-AU)
+
+확정 수집원은 셋이다. **82cook · navercafe:remonterrace · navercafe:wgang.**
+(`dlxogns01` · `masanmam` · `goondae` · `yeowooya` 는 미활성 장래 후보 — 실행 템플릿을 두지 않는다.)
+
+### ① 🔴 2026-09-07 실측 — 네이버만 레일 밖에 있었다
+
+| | 82cook | 네이버 카페 |
+|---|---|---|
+| 수집 산출물 | `82cook.jsonl` + `.list.jsonl` | `navercafe-<cafe>-<runId>.jsonl` + `.list.jsonl` |
+| 본문 저장 | thin fetch 가 마스킹 후 **300자** | 🔴 `rawBody` **전문** (실측 최대 2,899자) |
+| 판정 도달 | `.thin-detail` → `.detail` → auto-judge ✅ | 🔴 **닿지 못함** — auto-judge 는 `.detail.jsonl` 만 읽는다 |
+
+두 문제는 사실 하나다. **얇은 계약이 82cook 에만 있었다.**
+계약이 둘이면 언젠가 한쪽만 고쳐지고, 전문을 들고 있는 쪽이 이 레인의 존재 이유를 무너뜨린다.
+
+### ② 이어 붙인 방법 — 새 판정도 새 분류도 만들지 않았다
+
+`micro-seed:navercafe-thin` 이 이미 수집된 JSONL 을 읽어 **같은 얇은 행**으로 바꾼다.
+🔴 **네트워크에 나가지 않는다.** 수집은 launchd 가 하고 이 도구는 그 산출물만 받는다.
+
+```
+navercafe-<cafe>-<runId>.jsonl
+  → [navercafe-thin --apply]  마스킹 → 300자 → classifyDetail 로 축·안전 판정
+  → navercafe-thin-<cafe>-<runId>.thin-detail.jsonl
+  → [82cook-thin-adapt --apply]  ← 🔴 **고치지 않았다. 접미가 같아 그대로 집는다**
+  → .detail.jsonl / .raw-detail.jsonl
+  → auto-judge → auto-draft → supply-autofill → Queue
+```
+
+분류·마스킹·저장 관문은 `classifyDetail` · `maskSensitive` · `toThinRow` · `violatesStorage` 를
+그대로 쓴다. `toThinRow` 에 `sourceSite` 인자만 더했다(기본값 `82cook` — 기존 호출부 불변).
+
+### ②-b 🔴 전문을 **쓰지 않는다** — 지우는 것이 아니다
+
+첫 판은 수집기가 `rawBody` 전문을 파일로 쓰고, 그 뒤에 얇은 사본을 만드는 구조였다.
+사본이 생기기 전까지 전문이 디스크에 남고, 사람이 지우지 않으면 계속 남는다.
+
+수집기에 `--thin` 을 넣었다. 이 모드는 **상세 JSONL 을 아예 쓰지 않고**
+메모리 안에서 마스킹 → 300자 → 분류를 끝낸 `*.thin-detail.jsonl` 만 남긴다.
+정기 수집(launchd)은 이 모드로 돈다 — 템플릿 인자에 박혀 있고 fixture 가 검사한다.
+
+**crash · 부분 실패 때 전문이 남지 않는 근거**: 수집 루프는 `collected` 배열에만 쌓고
+파일 write 는 루프가 끝난 뒤 **한 곳**뿐이다. 중간에 죽으면 그 배열은 그냥 사라진다.
+fixture 가 루프 본문에 `writeJsonl`·`writeFileSync`·`appendFileSync` 가 없는지 검사한다.
+
+🔴 **기존 역사 파일은 지우지 않았다.** 이미 만들어진 전문 파일은 그대로 두고,
+신규 회차부터 생기지 않게 한 것이다.
+
+### ②-c 🔴 중복 키는 `sourceSite + articleId` 다
+
+82cook 의 447520 과 레몬테라스의 447520 은 **다른 글**이다.
+id 만으로 판단하면 한쪽을 먹었다는 이유로 다른 쪽을 영영 건너뛴다 —
+소스가 늘수록 조용히 유실되는 글이 늘어난다.
+
+`dedupKeyOf(sourceSite, articleId)` 를 정본 키로 쓴다. 82cook thin 의 `seenBodyIds` 도
+같은 결함이 있어 **82cook 행만 세도록** 좁혔다(그 레인은 82cook 만 여니까).
+
+### ③ 세 소스 연결표 (2026-09-07 실측)
+
+| 소스 | 수집 | 얇게 | 검수용 | 판정 | 생성 | Queue | 실증 |
+|---|---|---|---|---|---|---|---|
+| 82cook | launchd 10슬롯 | `thin-detail --live` | `thin-adapt` | 자동 | 자동 | 자동 | 🟢 실파일 |
+| navercafe:remonterrace | launchd 09:20 `--thin` | 수집기가 겸함 | `thin-adapt` | 자동 | 자동 | 자동 | 🟢 **실파일** (6행 → 4건) |
+| navercafe:wgang | launchd 13:20 `--thin` | 수집기가 겸함 | `thin-adapt` | 자동 | 자동 | 자동 | 🟡 **fixture 만** |
+
+🔴 **wgang 은 아직 실파일로 검증되지 않았다.** 템플릿·인자·fixture 는 remonterrace 와
+같은 계약을 통과하지만, 실제 카페에서 목록·본문 셀렉터가 맞는지는 **첫 live 수집으로만**
+알 수 있다. 그 smoke 는 merge 후 별도 승인 사항이다.
+
+### ③-a 🔴 시간축 — 네이버 thin 은 러너보다 **먼저** 존재한다
+
+```
+09:20  remonterrace launchd  → navercafe-thin-remonterrace-<runId>.thin-detail.jsonl
+13:20  wgang launchd         → navercafe-thin-wgang-<runId>.thin-detail.jsonl
+21:10  공급 러너 시작
+```
+
+첫 판은 회차 **실행 중 새로 생긴 파일**만 artifact 로 기록했다.
+그러면 09:20·13:20 산출물은 어느 갈래에도 잡히지 않아 adapt 입력에서 통째로 빠진다 —
+게다가 82cook 파일이 하나라도 생기면 adapt 가 explicit `--input` 을 받으므로
+스스로 찾지도 않는다. **네이버가 매일 조용히 유실되는 구조였다.**
+
+그래서 회차 시작 시 **미처리 얇은 파일을 한 번 계산해 checkpoint 에 박는다**(`preexisting`).
+adapt 입력은 세 갈래를 모두 합친다(중복은 제거):
+
+| 갈래 | 무엇 |
+|---|---|
+| `collect` | 이번 회차 82cook thin |
+| `cafeThin` | 이번 회차가 역사 raw 를 새로 변환한 thin |
+| `preexisting` | 정기 수집이 러너 시작 **전에** 만들어 둔 thin |
+
+checkpoint 에 박아 두므로 **재개할 때도 같은 파일**을 쓴다.
+
+#### 처리 identity 는 runId 단독이 아니다
+
+09:20 remonterrace 와 13:20 wgang 이 같은 runId 를 가질 수 있다.
+runId 로만 판단하면 한쪽이 다른 쪽을 "이미 했다" 로 막고 산출 파일명도 겹쳐 덮어쓴다.
+그래서 **입력 파일에서 키를 유도한다**:
+
+```
+82cook-thin-<runId>.thin-detail.jsonl           → <runId>
+navercafe-thin-<cafe>-<runId>.thin-detail.jsonl → <cafe>-<runId>
+```
+
+82cook 키는 종전과 같아 기존 산출물과 어긋나지 않는다.
+
+#### 🔴 쓸 자격은 언제나 세 게이트다
+
+`judgeRun` 은 재고가 차 있으면 **스위치를 보기 전에** `NOOP_STOCK_OK` 를 돌려준다.
+재고가 먼저인 것은 옳다 — 스위치가 열려 있어도 재고가 차 있으면 밖으로 나가지 않아야 하니까.
+
+그런데 그 뒤에 오는 유지보수 경로가 `--live` 하나만 보면
+**kill switch 를 내렸는데도 파일을 쓴다.** 스위치를 내린 사람은 멈춘 줄 아는데 돈다.
+
+그래서 "돌 것인가"(`judgeRun`)와 "**써도 되는가**"(`mayWriteRunState`)를 나눠 두고,
+파일 · checkpoint · lock · subprocess `--apply` 전부를 후자 하나로 통과시킨다.
+
+| `--live` | `SORAN_SUPPLY_AUTOPILOT_ENABLED` | `SORAN_82COOK_THIN_DETAIL_ENABLED` | 쓸 수 있나 |
+|---|---|---|---|
+| ✅ | ✅ | ✅ | 🟢 예 |
+| ✅ | ✅ | ❌ | 🔴 아니오 |
+| ✅ | ❌ | ✅ | 🔴 아니오 |
+| ✅ | ❌ | ❌ | 🔴 아니오 |
+| ❌ | 무엇이든 | 무엇이든 | 🔴 아니오 |
+
+막히면 **예정 파일과 막힌 이유만** 출력한다 — 조용히 건너뛰면 사람이 원인을 못 찾는다.
+
+🔴 **삭제도 write 다.** stale lock 을 걷어내는 것도 게이트 뒤에 둔다.
+게이트가 닫혔는데 lock 을 지우면 "파일 write 0" 이 거짓말이 되고,
+dry-run 이 남의 lock 을 걷어내고 끝나는 셈이 된다. 판정은 그대로 stale 로 두되
+(계획 계산은 free 처럼 진행한다) 디스크는 건드리지 않는다.
+
+이 결함은 **정규식 fixture 가 못 잡았다.** "파일 어딘가에 `canWriteState` 조건문이
+있는가" 만 봤기 때문에, 삭제가 그 조건 **밖에** 있어도 통과했다.
+조건이 *어느 write 앞에* 있는지는 실제로 돌려 봐야 안다 —
+#### 🔴 그런데 그 테스트가 운영을 발동할 뻔했다
+
+첫 판의 행동 테스트는 **진짜 러너를 `--live` + 두 스위치 ON 으로** 돌렸다.
+그날은 재고가 차 있어 no-op 이었지만, **재고가 모자란 날 같은 테스트를 돌리면
+실제 수집 · 모델 호출 · DB write 가 일어난다.** 테스트가 운영 공급을 발동하는 것이다.
+
+그래서 판단을 `planStaleLock` 으로 떼어 내고 **삭제 함수를 주입**받게 했다.
+
+```
+planStaleLock({ stale, canWrite, runId, pid }) → { action: 'remove'|'preserve'|'none', lines }
+applyStaleLockPlan(plan, remove)               → { removed }
+```
+
+러너는 이 둘을 그대로 쓰고(`canWrite: canWriteState`), 테스트는 **임시 디렉터리의
+임시 lock** 과 자기 삭제 함수로 게이트 4조합 + dry-run 을 전수 검증한다 —
+실제 `.microseed-data` · DB · 네트워크 · 모델 · Queue 를 전혀 건드리지 않고
+`DATABASE_URL` 없이 돈다. 그래서 **CI 에서 그대로 돌릴 수 있다.**
+
+fixture 가 그 테스트에 `child_process` · `--live` · 환경 스위치 · `DATABASE_URL` 이
+없는지도 고정한다 — 다음 사람이 편의를 위해 러너를 다시 부르지 않도록.
+
+🔴 **유지보수 변환이 실패하면 exit 1 이다.** launchd 는 exit status 로만 성패를 안다.
+로그에만 남기고 0 으로 끝내면 실패가 아무에게도 보이지 않는다.
+
+#### 🔴 기본 dry-run 은 어떤 조건에서도 파일을 쓰지 않는다
+
+밀린 것이 있어도 dry-run 은 **예정 파일만 출력**한다. 인자 없는 실행이 파일을 만들면
+"계획만" 이라는 화면이 거짓말이 된다. live 회차에서만, 그리고 그때도
+**네트워크 0 · LLM 0 · DB 0** 으로 얇은 변환과 검수용 변환까지만 한다 —
+판정·생성·적재는 재고가 모자랄 때만 돈다.
+
+### ③-b 사람 명령 없이 어디까지 가는가
+
+공급 러너(§4-AU)의 단계에 `cafeThin` 이 들어갔다 — `collect` 와 `adapt` 사이다.
+
+```
+collect(82cook) → cafeThin(네이버 수집물 얇게) → adapt → judge → draft → fill
+```
+
+재개도 같은 계약을 탄다. 어디서 끊겼든 **성공한 단계 다음부터** 잇고,
+`cafeThin` 은 앞 단계에서 이어받는 것이 없으므로(launchd 수집물을 스스로 찾는다)
+네이버를 안 돌린 날에도 fail closed 가 되지 않는다.
+
+🔴 **재고가 차 있어도 수집물을 방치하지 않는다.** launchd 는 09:20·13:20 에 계속 긁어 오는데
+재고가 넉넉하다는 이유로 변환을 미루면 파일이 쌓이기만 한다. 그래서 no-op 경로에서도
+미처리 수집물이 있으면 **변환만은** 수행한다 — 네트워크 0 · LLM 0 · DB 0 이라 미룰 이유가 없다.
+
+🔴 **한 카페가 터져도 나머지가 멈추지 않는다.** 파일 단위로 읽어 실패한 것만 건너뛰고,
+수집 자체가 카페별 독립 job 이라 remonterrace 세션이 만료돼도 wgang·82cook 은 그대로 돈다.
+
+실측: 네이버 6행 → 대상 6 → 변환 4 (drop 2 미저장) →
+`seedOriginality 1 · rawOriginality 2 · shortRawNoindex 1` → adapt 4행 → judge 대상에 포함.
+
+### ④ 레일 분기
+
+| 축 | 어디로 |
+|---|---|
+| `seedOriginality` · `rawOriginality` | 🟢 자동 — auto-draft 가 글을 쓰고 Queue 로 |
+| `shortRawNoindex` | 🔴 **사람 검수 레일.** 발행 후보화하지 않는다 (adapt 가 갈라 둔다) |
+| `drop` · `hardExclude` | 🔴 파일에 남기지도 않는다 |
+
+네이버는 82cook 과 한 가지가 다르다 — **`drop` · `hardExclude` 를 아예 저장하지 않는다.**
+82cook 은 전부 저장하고 adapt 에서 걸렀지만, 네이버 원문은 로컬에만 있어도 위험이 크다.
+제목이 정치·공인이면 변환 대상에서도 뺀다. 판정까지 가서 거르면 본문이 한 번 더 저장되고
+모델 호출도 한 번 더 일어난다 — **가져오지 않는 것이 가장 싸고 안전하다.**
+
+### ⑤ 중복·격리
+
+| | 어떻게 |
+|---|---|
+| 같은 글 재변환 | `.thin-detail` · `.detail` · `.raw-detail` 세 접미를 다 보고 id 를 건너뛴다 |
+| 82cook 정기 수집 ↔ 재고 부족 fetch | `planThinFetch` 가 `sourceSite !== '82cook'` 을 `NOT_82COOK` 으로 뺀다. **네이버 목록이 82cook fetch 대상에 섞이지 않는다**(실측 확인) |
+| 네이버 세션 만료·차단 | 수집은 카페별 **독립 job** 이다. 하나가 죽어도 82cook 슬롯과 다른 카페는 그대로 돈다. 이 변환기는 네트워크에 나가지 않으므로 세션과 무관하다 |
+| Sheet 오전송 | 수집기 · thin · 변환기 어디에도 Sheet 호출이 없다(실측 `grep` 0건 · fixture 가 검사) |
+| 발행 | 이 경로 어디에도 발행 코드가 없다. Post 는 auto-publish(00:05 KST)만 만든다 |
+
+### ⑥ 아직 사람이 하는 것
+
+| 구간 | 상태 |
+|---|---|
+| `navercafe-thin` 실행 | 🔴 **수동** — launchd 슬롯을 아직 두지 않았다 (별도 승인) |
+| `shortRawNoindex` | 🔴 사람 검수 레일 |
+| 네이버 세션 발급·갱신 | 🔴 사람 (`navercafe-session-setup.mts --open`) |
+| 산출 파일명 | 🟡 adapt 산출물이 `82cook-adapt-*` 다. 네이버 행이 섞여도 행 안의 `sourceSite` 로 갈리므로 판정에는 문제가 없다 — **이름만 오해를 부른다.** 바꾸려면 하류 전부를 함께 봐야 해 이번 범위에서 뺐다 |
+
+---
+
 ## §9 다음
 
 | 순서 | 작업 | 상태 |

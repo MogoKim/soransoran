@@ -95,14 +95,21 @@ function loadList(): ListRow[] {
   return [...byId.values()]
 }
 
-/** 본문을 이미 읽은 글 — 세 곳을 다 본다. 하나만 보면 재탕이 샌다 */
+/**
+ * 본문을 이미 읽은 글 — 세 곳을 다 본다. 하나만 보면 재탕이 샌다.
+ *
+ * 🔴 **id 만 보지 않는다.** 네이버 카페 행도 같은 접미의 파일에 들어오고,
+ *    82cook 의 447520 과 레몬테라스의 447520 은 다른 글이다.
+ *    id 만으로 세면 남의 소스 때문에 우리 글을 건너뛴다.
+ */
 function seenBodyIds(): Set<string> {
   const seen = new Set<string>()
   for (const suffix of ['.detail.jsonl', '.raw-detail.jsonl', '.thin-detail.jsonl']) {
     for (const f of filesEnding(suffix)) {
       for (const r of jsonl(f)) {
         const id = S(r.sourceArticleId)
-        if (id !== '') seen.add(id)
+        // 🔴 이 레인은 82cook 만 연다. 82cook 행이 아니면 셀 이유가 없다
+        if (id !== '' && S(r.sourceSite) === '82cook') seen.add(id)
       }
     }
   }

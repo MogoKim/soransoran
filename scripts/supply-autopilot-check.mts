@@ -11,7 +11,7 @@ import {
   LOCK_TTL_MS, STAGES, DB_WRITE_STAGES, LLM_STAGES, NETWORK_STAGES,
   collectCapFor, judgeRun, planStages, lockDecision, nextStage, shouldStopRun,
   verifyRun, fmtCount, resumeDecision, stageInputArgs, missingArtifacts, newFiles, upstreamOf,
-  attemptOf, runStages, supersedes, mayWriteRunState,
+  attemptOf, runStages, supersedes, adaptKeyOf, planStaleLock, mayWriteRunState,
   type Artifacts, type Checkpoint, type ExecResult, type Stage,
   type StageOutcome, type StockSnapshot,
 } from '../src/lib/supply-autopilot'
@@ -95,17 +95,27 @@ check('🔴 상한은 하위 스크립트 BATCH_CAP 과 같은 50', COLLECT_CAP 
 
 // ── ⑤ 단계 계획 ──
 const plan = planStages({ collectCap: 36, shortfall: 9 })
-check('🟢 5단계다', plan.length === 5)
-check('🔴 순서가 수집 → 변환 → 판정 → 초안 → 보충이다',
-  plan.map((p) => p.stage).join(',') === 'collect,adapt,judge,draft,fill')
+check('🟢 6단계다', plan.length === 6)
+check('🔴 순서가 수집 → 카페 얇게 → 변환 → 판정 → 초안 → 보충이다',
+  plan.map((p) => p.stage).join(',') === 'collect,cafeThin,adapt,judge,draft,fill')
+// 🔴 네이버 얇은 변환은 밖으로도 모델로도 나가지 않는다 — 순서에 넣는 비용이 없다
+check('🔴 cafeThin 은 네트워크·LLM·DB 를 쓰지 않는다', (() => {
+  const st = plan.find((x) => x.stage === 'cafeThin')
+  return st !== undefined && !st.network && !st.llm && !st.dbWrite
+})())
+check('🔴 cafeThin 은 --apply 만 받는다', (() => {
+  const st = plan.find((x) => x.stage === 'cafeThin')
+  return st !== undefined && st.args.join(' ') === '--apply'
+})())
 check('🔴 STAGES 상수와 계획 순서가 같다', plan.map((p) => p.stage).join(',') === STAGES.join(','))
 check('🔴 수집은 --live 와 --cap 을 둘 다 받는다', (() => {
   const a = plan[0].args.join(' ')
   return a.includes('--live') && a.includes('--cap=36')
 })())
-check('🔴 보충은 목표까지만 — --limit 이 부족분과 같다', plan[4].args.join(' ') === '--apply --limit=9')
+check('🔴 보충은 목표까지만 — --limit 이 부족분과 같다', (plan.find((x) => x.stage === 'fill')?.args.join(' ') ?? '') === '--apply --limit=9')
 check('🔴 판정·초안은 --call --apply 계약을 지킨다',
-  plan[2].args.join(' ') === '--call --apply' && plan[3].args.join(' ') === '--call --apply')
+  (plan.find((x) => x.stage === 'judge')?.args.join(' ') ?? '') === '--call --apply'
+  && (plan.find((x) => x.stage === 'draft')?.args.join(' ') ?? '') === '--call --apply')
 check('🔴 --apply 단독으로 판정기를 부르지 않는다',
   !plan.some((p) => (p.stage === 'judge' || p.stage === 'draft') && !p.args.includes('--call')))
 check('🔴 밖으로 나가는 단계는 수집 하나뿐이다',
@@ -118,7 +128,7 @@ check('🔴 상수 표와 계획이 어긋나지 않는다', (() => (
   NETWORK_STAGES.join(',') === 'collect' && LLM_STAGES.join(',') === 'judge,draft'
   && DB_WRITE_STAGES.join(',') === 'fill'
 ))())
-check('🟢 부족 1건이어도 보충 상한은 1이다', planStages({ collectCap: 10, shortfall: 1 })[4].args.includes('--limit=1'))
+check('🟢 부족 1건이어도 보충 상한은 1이다', planStages({ collectCap: 10, shortfall: 1 }).find((x) => x.stage === 'fill')?.args.includes('--limit=1') === true)
 
 // ── ⑥ 부분 실패 ──
 const okOutcome = (stage: string): StageOutcome => ({
@@ -126,7 +136,9 @@ const okOutcome = (stage: string): StageOutcome => ({
   startedAt: '', endedAt: '', note: '',
 })
 check('🟢 아무것도 안 돌았으면 첫 단계부터', nextStage(plan, [])?.stage === 'collect')
-check('🟢 수집이 끝나면 변환', nextStage(plan, [okOutcome('collect')])?.stage === 'adapt')
+check('🟢 수집이 끝나면 카페 얇은 변환', nextStage(plan, [okOutcome('collect')])?.stage === 'cafeThin')
+check('🟢 카페 변환이 끝나면 검수용 변환',
+  nextStage(plan, [okOutcome('collect'), okOutcome('cafeThin')])?.stage === 'adapt')
 check('🔴 이번 회차 안에서는 실패 뒤로 가지 않는다', (() => {
   const done: StageOutcome[] = [okOutcome('collect'),
     { ...okOutcome('adapt'), status: 'failed', exitCode: 1 }]
@@ -134,7 +146,7 @@ check('🔴 이번 회차 안에서는 실패 뒤로 가지 않는다', (() => {
 })())
 check('🟢 실패가 없으면 계속 간다', !shouldStopRun([okOutcome('collect'), okOutcome('adapt')]))
 check('🔴 실패한 단계는 끝난 것이 아니라 미완료다 — 다음 회차가 거기서 잇는다', (() => {
-  const done: StageOutcome[] = [okOutcome('collect'),
+  const done: StageOutcome[] = [okOutcome('collect'), okOutcome('cafeThin'),
     { ...okOutcome('adapt'), status: 'failed', exitCode: 1 }]
   return nextStage(plan, done)?.stage === 'adapt'
 })())
@@ -153,6 +165,7 @@ const failedAt = (stage: Stage, okBefore: readonly string[]): StageOutcome[] => 
 ]
 const ART: Artifacts = {
   collect: ['.microseed-data/82cook-thin-R1.thin-detail.jsonl', '.microseed-data/82cook-thin-R1.thin-detail.tsv'],
+  cafeThin: ['.microseed-data/navercafe-thin-wgang-R1.thin-detail.jsonl'],
   adapt: ['.microseed-data/82cook-adapt-R1.detail.jsonl', '.microseed-data/82cook-adapt-R1.raw-detail.jsonl'],
   judge: ['.microseed-data/auto-judge-R2.shadow.jsonl'],
   draft: ['.microseed-data/auto-draft-R3.candidates.json', '.microseed-data/auto-draft-R3.picks.jsonl'],
@@ -161,34 +174,44 @@ const allExist = (): boolean => true
 
 // ① adapt 실패 → adapt 부터 재개 · collect 재호출 0
 check('🔴 ① adapt 실패 → 다음 회차는 adapt 부터', (() => {
-  const cp = A({ stages: failedAt('adapt', ['collect']), artifacts: { collect: ART.collect } })
+  const cp = A({ stages: failedAt('adapt', ['collect', 'cafeThin']), artifacts: { collect: ART.collect, cafeThin: ART.cafeThin } })
   const r = resumeDecision({ checkpoint: cp, plan })
   return r.kind === 'resume' && r.from === 'adapt'
 })())
 check('🔴 ① adapt 재개 시 collect 를 다시 부르지 않는다', (() => {
-  const cp = A({ stages: failedAt('adapt', ['collect']), artifacts: { collect: ART.collect } })
+  const cp = A({ stages: failedAt('adapt', ['collect', 'cafeThin']), artifacts: { collect: ART.collect, cafeThin: ART.cafeThin } })
   const r = resumeDecision({ checkpoint: cp, plan })
   // 재개 지점부터 남은 단계에 collect 가 없어야 한다
   const rest = plan.slice(plan.findIndex((x) => x.stage === (r.kind === 'resume' ? r.from : 'collect')))
   return !rest.some((x) => x.stage === 'collect')
 })())
-check('🔴 ① adapt 는 collect 산출물을 exact input 으로 받는다', (() => {
+check('🔴 ① adapt 는 82cook 과 네이버 얇은 파일을 **함께** 받는다 — 한쪽만 넘기면 그 소스가 빠진다', (() => {
   const a = stageInputArgs('adapt', ART)
-  return a.length === 1 && a[0] === '--input=.microseed-data/82cook-thin-R1.thin-detail.jsonl'
+  return a.length === 1
+    && a[0].includes('82cook-thin-R1.thin-detail.jsonl')
+    && a[0].includes('navercafe-thin-wgang-R1.thin-detail.jsonl')
 })())
+check('🔴 cafeThin 은 앞 단계에서 이어받지 않는다 — launchd 수집물을 스스로 찾는다',
+  stageInputArgs('cafeThin', ART).length === 0)
+check('🔴 네이버를 안 돌린 날에도 adapt 가 82cook 것만으로 이어진다', (() => {
+  const a = stageInputArgs('adapt', { collect: ART.collect })
+  return a.length === 1 && a[0].includes('82cook-thin-R1')
+})())
+check('🔴 cafeThin 재개는 앞 산출물이 없어도 fail closed 가 아니다 — 네이버를 안 돌린 날이 그렇다',
+  missingArtifacts({ from: 'cafeThin', artifacts: {}, exists: () => false }).length === 0)
 
 // ② judge 실패 → judge 부터 재개
 check('🔴 ② judge 실패 → 다음 회차는 judge 부터', (() => {
-  const cp = A({ stages: failedAt('judge', ['collect', 'adapt']), artifacts: ART })
+  const cp = A({ stages: failedAt('judge', ['collect', 'cafeThin', 'adapt']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   return r.kind === 'resume' && r.from === 'judge'
 })())
-check('🔴 ② judge 재개 시 collect · adapt 를 다시 부르지 않는다', (() => {
-  const cp = A({ stages: failedAt('judge', ['collect', 'adapt']), artifacts: ART })
+check('🔴 ② judge 재개 시 collect · cafeThin · adapt 를 다시 부르지 않는다', (() => {
+  const cp = A({ stages: failedAt('judge', ['collect', 'cafeThin', 'adapt']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   if (r.kind !== 'resume') return false
   const rest = plan.slice(plan.findIndex((x) => x.stage === r.from))
-  return !rest.some((x) => x.stage === 'collect' || x.stage === 'adapt')
+  return !rest.some((x) => ['collect', 'cafeThin', 'adapt'].includes(x.stage))
 })())
 check('🔴 ② judge 는 adapt 가 만든 두 파일을 함께 받는다', (() => {
   const a = stageInputArgs('judge', ART)
@@ -199,16 +222,16 @@ check('🔴 ② judge 는 adapt 가 만든 두 파일을 함께 받는다', (() 
 
 // ③ draft 실패 → draft 부터 재개
 check('🔴 ③ draft 실패 → 다음 회차는 draft 부터', (() => {
-  const cp = A({ stages: failedAt('draft', ['collect', 'adapt', 'judge']), artifacts: ART })
+  const cp = A({ stages: failedAt('draft', ['collect', 'cafeThin', 'adapt', 'judge']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   return r.kind === 'resume' && r.from === 'draft'
 })())
-check('🔴 ③ draft 재개 시 앞 세 단계를 다시 부르지 않는다', (() => {
-  const cp = A({ stages: failedAt('draft', ['collect', 'adapt', 'judge']), artifacts: ART })
+check('🔴 ③ draft 재개 시 앞 네 단계를 다시 부르지 않는다', (() => {
+  const cp = A({ stages: failedAt('draft', ['collect', 'cafeThin', 'adapt', 'judge']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   if (r.kind !== 'resume') return false
   const rest = plan.slice(plan.findIndex((x) => x.stage === r.from))
-  return !rest.some((x) => ['collect', 'adapt', 'judge'].includes(x.stage))
+  return !rest.some((x) => ['collect', 'cafeThin', 'adapt', 'judge'].includes(x.stage))
 })())
 check('🔴 ③ draft 는 그 회차의 shadow 만 받는다', (() => {
   const a = stageInputArgs('draft', ART)
@@ -217,12 +240,12 @@ check('🔴 ③ draft 는 그 회차의 shadow 만 받는다', (() => {
 
 // ④ fill 실패 → fill 부터 재개 · 새 원천 수집 0
 check('🔴 ④ fill 실패 → 다음 회차는 fill 부터', (() => {
-  const cp = A({ stages: failedAt('fill', ['collect', 'adapt', 'judge', 'draft']), artifacts: ART })
+  const cp = A({ stages: failedAt('fill', ['collect', 'cafeThin', 'adapt', 'judge', 'draft']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   return r.kind === 'resume' && r.from === 'fill'
 })())
 check('🔴 ④ fill 재개 시 새 원천을 수집하지 않는다', (() => {
-  const cp = A({ stages: failedAt('fill', ['collect', 'adapt', 'judge', 'draft']), artifacts: ART })
+  const cp = A({ stages: failedAt('fill', ['collect', 'cafeThin', 'adapt', 'judge', 'draft']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   if (r.kind !== 'resume') return false
   const rest = plan.slice(plan.findIndex((x) => x.stage === r.from))
@@ -237,7 +260,7 @@ check('🔴 ④ fill 은 그 회차의 candidates 만 받는다 — picks 는 �
 check('🔴 ⑤ 죽은 lock 을 걷어내도 미완료 checkpoint 는 재개 대상으로 남는다', (() => {
   const dead = lockDecision(
     { runId: 'x', pid: 1, startedAt: new Date(NOW.getTime() - LOCK_TTL_MS - 1).toISOString() }, NOW)
-  const cp = A({ stages: failedAt('judge', ['collect', 'adapt']), artifacts: ART })
+  const cp = A({ stages: failedAt('judge', ['collect', 'cafeThin', 'adapt']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   return dead === 'stale' && r.kind === 'resume' && r.from === 'judge'
 })())
@@ -256,14 +279,14 @@ check('🔴 ⑥ 이어받을 파일이 사라지면 fail closed', (() => {
   return gone.length === 2
 })())
 check('🔴 ⑥ 앞 단계 산출물 기록 자체가 없으면 fail closed', (() => {
-  const gone = missingArtifacts({ from: 'draft', artifacts: { collect: ART.collect }, exists: allExist })
+  const gone = missingArtifacts({ from: 'draft', artifacts: { collect: ART.collect, cafeThin: ART.cafeThin }, exists: allExist })
   return gone.length === 1 && gone[0].includes('judge')
 })())
 check('🟢 ⑥ 파일이 다 있으면 통과', missingArtifacts({ from: 'fill', artifacts: ART, exists: allExist }).length === 0)
 check('🔴 ⑥ 재개 지점의 앞 단계를 정확히 본다', (() => (
-  upstreamOf('collect') === null && upstreamOf('adapt') === 'collect'
-  && upstreamOf('judge') === 'adapt' && upstreamOf('draft') === 'judge'
-  && upstreamOf('fill') === 'draft'
+  upstreamOf('collect') === null && upstreamOf('cafeThin') === 'collect'
+  && upstreamOf('adapt') === 'cafeThin' && upstreamOf('judge') === 'adapt'
+  && upstreamOf('draft') === 'judge' && upstreamOf('fill') === 'draft'
 ))())
 
 // ⑦ 완료 회차는 재사용하지 않는다
@@ -289,7 +312,7 @@ check('🔴 ⑧ 앞 회차 파일을 이번 단계 것으로 세지 않는다', 
 
 // ⑩ 이미 처리한 원천 재수집 방지는 하위 계약이다 — 러너가 그것을 무력화하지 않는다
 check('🔴 ⑩ 재개는 collect 를 건너뛰므로 같은 원천을 다시 열지 않는다', (() => {
-  const cp = A({ stages: failedAt('fill', ['collect', 'adapt', 'judge', 'draft']), artifacts: ART })
+  const cp = A({ stages: failedAt('fill', ['collect', 'cafeThin', 'adapt', 'judge', 'draft']), artifacts: ART })
   const r = resumeDecision({ checkpoint: cp, plan })
   if (r.kind !== 'resume') return false
   const rest = plan.slice(plan.findIndex((x) => x.stage === r.from))
@@ -298,7 +321,7 @@ check('🔴 ⑩ 재개는 collect 를 건너뛰므로 같은 원천을 다시 �
 check('🔴 ⑩ 재개해도 계획은 앞 회차 것이다 — --limit 이 달라지지 않는다', (() => {
   const cp = A({ shortfall: 9, collectCap: 36 })
   const p2 = planStages({ collectCap: cp.collectCap, shortfall: cp.shortfall })
-  return p2[4].args.join(' ') === '--apply --limit=9'
+  return (p2.find((x) => x.stage === 'fill')?.args.join(' ') ?? '') === '--apply --limit=9'
 })())
 
 // ══════════════════════════════════════════════════════════════════
@@ -472,6 +495,89 @@ check('🔴 superseded 는 재개 대상이 아니다 — 영구 running 기록�
   return cp.status !== 'running'
 })())
 
+// ══════════════════════════════════════════════════════════════════
+// 🔴 시간축 — 네이버 thin 은 러너가 시작하기 **전에** 이미 있다
+//    09:20 remonterrace · 13:20 wgang · 21:10 러너.
+//    "실행 중 새로 생긴 파일" 로만 세면 그 둘이 adapt 입력에서 통째로 빠진다.
+// ══════════════════════════════════════════════════════════════════
+const PRE_R = '.microseed-data/navercafe-thin-remonterrace-20260907-092000.thin-detail.jsonl'
+const PRE_W = '.microseed-data/navercafe-thin-wgang-20260907-132000.thin-detail.jsonl'
+const NEW_82 = '.microseed-data/82cook-thin-20260907-211000.thin-detail.jsonl'
+const NEW_CAFE = '.microseed-data/navercafe-thin-remonterrace-20260907-211500.thin-detail.jsonl'
+
+// A. 세 갈래가 모두 adapt --input 에 들어간다
+check('🔴 [A] 미리 있던 remonterrace · wgang 과 이번 회차 82cook 이 **모두** adapt 입력에 들어간다', (() => {
+  const a = stageInputArgs('adapt', { collect: [NEW_82], preexisting: [PRE_R, PRE_W] })
+  return a.length === 1
+    && a[0].includes('82cook-thin-20260907-211000')
+    && a[0].includes('navercafe-thin-remonterrace-20260907-092000')
+    && a[0].includes('navercafe-thin-wgang-20260907-132000')
+})())
+check('🔴 [A] 82cook 이 생겨도 미리 있던 네이버 파일이 밀려나지 않는다', (() => {
+  const a = stageInputArgs('adapt', { collect: [NEW_82], preexisting: [PRE_R, PRE_W] })
+  return (a[0].match(/\.thin-detail\.jsonl/g) ?? []).length === 3
+})())
+check('🔴 [A] 네 갈래(82cook · 역사변환 · 미리있던 둘)가 전부 들어간다', (() => {
+  const a = stageInputArgs('adapt', {
+    collect: [NEW_82], cafeThin: [NEW_CAFE], preexisting: [PRE_R, PRE_W],
+  })
+  return (a[0].match(/\.thin-detail\.jsonl/g) ?? []).length === 4
+})())
+check('🔴 [A] 같은 파일이 두 갈래에 있어도 한 번만 넘어간다 — adapt 가 두 번 읽지 않는다', (() => {
+  const a = stageInputArgs('adapt', { collect: [NEW_82], cafeThin: [NEW_82], preexisting: [NEW_82] })
+  return (a[0].match(/\.thin-detail\.jsonl/g) ?? []).length === 1
+})())
+check('🟢 [A] 미리 있던 것이 없으면 종전대로다', (() => {
+  const a = stageInputArgs('adapt', { collect: [NEW_82] })
+  return a.length === 1 && a[0] === `--input=${NEW_82}`
+})())
+check('🔴 [A] 82cook 이 하나도 없어도 네이버만으로 adapt 가 돈다', (() => {
+  const a = stageInputArgs('adapt', { preexisting: [PRE_R, PRE_W] })
+  return a.length === 1 && a[0].includes('remonterrace') && a[0].includes('wgang')
+})())
+
+// D. 같은 runId 의 두 카페가 서로를 막지 않는다
+// 🔴 키 로직을 fixture 가 복제하지 않는다 — 실제 함수를 부른다.
+//    복제하면 한쪽만 고쳐졌을 때 fixture 가 통과해 버린다
+check('🔴 [D] 같은 runId 를 가진 remonterrace 와 wgang 이 서로 다른 키다', (() => {
+  const r = adaptKeyOf('.microseed-data/navercafe-thin-remonterrace-R9.thin-detail.jsonl')
+  const w = adaptKeyOf('.microseed-data/navercafe-thin-wgang-R9.thin-detail.jsonl')
+  return r !== w && r.includes('remonterrace') && w.includes('wgang')
+})())
+check('🔴 [D] 82cook 키는 종전 그대로다 — 기존 산출물과 어긋나지 않는다',
+  adaptKeyOf('.microseed-data/82cook-thin-20260907-113234.thin-detail.jsonl') === '20260907-113234')
+check('🔴 [D] 두 카페가 adapt 입력에 나란히 들어간다', (() => {
+  const a = stageInputArgs('adapt', {
+    preexisting: [
+      '.microseed-data/navercafe-thin-remonterrace-R9.thin-detail.jsonl',
+      '.microseed-data/navercafe-thin-wgang-R9.thin-detail.jsonl',
+    ],
+  })
+  return (a[0].match(/\.thin-detail\.jsonl/g) ?? []).length === 2
+})())
+
+// E. adapt 실패 후 재개는 **같은 입력 파일**로
+check('🔴 [E] 재개해도 checkpoint 에 박힌 preexisting 을 그대로 쓴다', (() => {
+  const cp = A({
+    stages: failedAt('adapt', ['collect', 'cafeThin']),
+    artifacts: { collect: [NEW_82], preexisting: [PRE_R, PRE_W] },
+  })
+  const r = resumeDecision({ checkpoint: cp, plan })
+  if (r.kind !== 'resume' || r.from !== 'adapt') return false
+  const a = stageInputArgs('adapt', cp.artifacts)
+  return (a[0].match(/\.thin-detail\.jsonl/g) ?? []).length === 3
+})())
+check('🔴 [E] adapt 재개에 새 수집이 끼지 않는다', (() => {
+  const cp = A({
+    stages: failedAt('adapt', ['collect', 'cafeThin']),
+    artifacts: { collect: [NEW_82], preexisting: [PRE_R] },
+  })
+  const r = resumeDecision({ checkpoint: cp, plan })
+  if (r.kind !== 'resume') return false
+  const rest = plan.slice(plan.findIndex((x) => x.stage === r.from))
+  return !rest.some((x) => x.stage === 'collect' || x.network)
+})())
+
 // ── ⑦ 정합 ──
 const base = {
   postBefore: 38, postAfter: 38,
@@ -518,17 +624,25 @@ check('🔴 러너가 큐에 직접 쓰지 않는다 — 적재는 supply-autofi
 check('🔴 러너가 자체 판정을 만들지 않는다', !/safetyFilter|judgeOne|checkDraft|expandSeed/.test(code))
 check('🔴 러너가 pacing 상수를 건드리지 않는다',
   !/DAILY_PUBLISH_CAP|POST_CAP_PER_WEEK|MIN_DAYS_BETWEEN_POSTS/.test(code))
-check('🔴 러너가 네이버에 가지 않는다', !/naver|navercafe/i.test(code))
+// 🔴 러너는 네이버 **수집물**을 얇게 바꾸는 스크립트를 부를 뿐, 네이버에 접속하지 않는다.
+//    접속은 launchd 가 부르는 수집기의 일이고 그쪽은 세션을 쓴다.
+check('🔴 러너가 네이버에 직접 접속하지 않는다',
+  !/cafe\.naver\.com|playwright|chromium|storage-state|SESSION/i.test(code))
 check('🔴 러너가 Raw SQL 을 쓰지 않는다', !/\$queryRaw|\$executeRaw/.test(code))
-check('🔴 러너가 부르는 스크립트는 기존 5개뿐이다', (() => {
+check('🔴 러너가 부르는 스크립트는 기존 6개뿐이다', (() => {
   const hits = [...code.matchAll(/scripts\/[a-z0-9-]+\.mts/g)].map((m) => m[0])
   const want = new Set([
-    'scripts/micro-seed-82cook-thin-detail.mts', 'scripts/micro-seed-82cook-thin-adapt.mts',
+    'scripts/micro-seed-82cook-thin-detail.mts', 'scripts/micro-seed-navercafe-thin.mts',
+    'scripts/micro-seed-82cook-thin-adapt.mts',
     'scripts/micro-seed-auto-judge.mts', 'scripts/micro-seed-auto-draft.mts',
     'scripts/micro-seed-supply-autofill.mts',
   ])
   return hits.length > 0 && hits.every((h) => want.has(h))
 })())
+// 🔴 재고가 차 있어도 수집물이 방치되지 않는다
+check('🔴 no-op 이어도 미처리 수집물·얇은 파일을 밀어두지 않는다',
+  /pendingRawCafeFiles\(\)/.test(code) && /pendingThinFiles\(\)/.test(code)
+  && /STAGE_SCRIPT\.cafeThin/.test(code))
 check('🔴 checkpoint 는 임시 파일 후 rename 이다', /renameSync/.test(code))
 
 // ── ⑧ spawn 실패가 러너를 매달지 않는다 ──
@@ -560,6 +674,138 @@ check('🔴 죽은 lock 을 걷어낼 때 checkpoint 를 지우지 않는다', (
 check('🔴 재개할 때 계획을 다시 세우지 않는다 — 앞 회차의 shortfall 을 쓴다',
   /unfinished\.cp\.collectCap/.test(code) && /unfinished\.cp\.shortfall/.test(code))
 check('🔴 lock 은 끝나면 지운다', /rmSync\(lockPath/.test(code))
+
+// B·C. 러너 코드가 dry-run 에서 쓰지 않는지 / live 에서만 처리하는지
+// ══════════════════════════════════════════════════════════════════
+// 🔴 실행 게이트 — judgeRun 은 재고가 차 있으면 **스위치를 보기 전에** NOOP 을 돌려준다.
+//    그 뒤 유지보수 경로가 --live 만 보면 kill switch 를 내렸는데도 파일을 쓴다.
+// ══════════════════════════════════════════════════════════════════
+const GATE = { live: true, killOpen: true, childKillOpen: true }
+
+// B. 두 환경 스위치 조합 전수 — 둘 다 true 인 한 경우에만 열린다
+for (const killOpen of [true, false]) {
+  for (const childKillOpen of [true, false]) {
+    const want = killOpen && childKillOpen
+    check(`🔴 [B] live=true · kill=${killOpen} · child=${childKillOpen} → ${want ? '쓸 수 있다' : '쓸 수 없다'}`,
+      mayWriteRunState({ live: true, killOpen, childKillOpen }) === want)
+  }
+}
+// A. live 인데 스위치가 닫혀 있으면 쓰지 않는다
+check('🔴 [A] live=true · 두 스위치 모두 닫힘 → 쓸 수 없다',
+  !mayWriteRunState({ live: true, killOpen: false, childKillOpen: false }))
+check('🔴 [A] 하위 스위치만 닫혀도 쓸 수 없다',
+  !mayWriteRunState({ live: true, killOpen: true, childKillOpen: false }))
+// C. dry-run 은 스위치가 다 열려 있어도 쓰지 않는다
+check('🔴 [C] --live 가 없으면 스위치가 다 열려도 쓸 수 없다',
+  !mayWriteRunState({ live: false, killOpen: true, childKillOpen: true }))
+check('🟢 세 게이트가 다 열릴 때만 쓴다', mayWriteRunState(GATE))
+
+check('🔴 [B] no-op 유지보수가 --live 가 아니라 canWriteState 정본을 본다', (() => {
+  const seg = /if \(pendingRaw > 0 \|\| pendingThin\.length > 0\) \{([\s\S]*?)\n        \}/.exec(code)
+  if (seg === null) return false
+  const body = seg[1]
+  const gate = body.indexOf('if (!canWriteState)')
+  const firstApply = body.indexOf("'--apply'")
+  // 🔴 게이트가 --apply 보다 앞에 있어야 한다
+  return gate !== -1 && firstApply !== -1 && gate < firstApply
+})())
+check('🔴 [B] no-op 유지보수가 --live 단독 분기를 쓰지 않는다', (() => {
+  const seg = /if \(pendingRaw > 0 \|\| pendingThin\.length > 0\) \{([\s\S]*?)\n        \}/.exec(code)
+  return seg !== null && !/if \(!LIVE\) \{/.test(seg[1])
+})())
+check('🔴 [E] 유지보수 실패를 기록한다 — 로그만 남기고 넘어가지 않는다',
+  /maintenanceFailed = true/.test(code))
+check('🔴 [E] 유지보수가 실패하면 exit 1 이다', (() => (
+  /if \(maintenanceFailed\) \{[\s\S]{0,120}process\.exit\(1\)/.test(code)
+))())
+check('🔴 [E] cafeThin 실패와 adapt 실패를 **둘 다** 잡는다',
+  (code.match(/maintenanceFailed = true/g) ?? []).length === 2)
+check('🔴 [D] 유지보수는 cafeThin · adapt 만 부른다 — judge · draft · fill 은 부르지 않는다', (() => {
+  const seg = /if \(pendingRaw > 0 \|\| pendingThin\.length > 0\) \{([\s\S]*?)\n        \}/.exec(code)
+  if (seg === null) return false
+  const body = seg[1]
+  return /STAGE_SCRIPT\.cafeThin/.test(body) && /STAGE_SCRIPT\.adapt/.test(body)
+    && !/STAGE_SCRIPT\.judge|STAGE_SCRIPT\.draft|STAGE_SCRIPT\.fill/.test(body)
+})())
+check('🔴 [F] 재실행 시 이미 사본이 있는 것은 다시 넘기지 않는다 — 키로 거른다', (() => {
+  // pendingThinFiles 가 82cook-adapt-<key> 를 보고 거른다
+  const fn = /function pendingThinFiles\(\)[\s\S]*?\n\}/.exec(code)
+  return fn !== null && /82cook-adapt-/.test(fn[0]) && /adaptKeyOf/.test(fn[0])
+})())
+// 🔴 옛 검사는 "파일 어딘가에 canWriteState 조건문 하나만 있어도" 통과했다.
+//    조건이 **어느 write 앞에** 있는지를 못 보므로 stale lock 삭제가 게이트 밖에 있는 것을 놓쳤다.
+//    아래는 **호출 하나하나가 게이트 안에 있는지**를 본다.
+//    (실제 파일로 확인하는 행동 테스트는 supply-autopilot-lock-check — DB 접속이 필요해 로컬 전용)
+check('🔴 "돌지 않는다" 경로의 디스크 변경이 전부 게이트 안에 있다', (() => {
+  // 🔴 위험한 곳은 **돌지 않기로 한 뒤**다. judgeRun 이 통과시킨 실행 경로는
+  //    이미 세 스위치를 다 본 뒤이므로 별도 게이트가 필요 없다.
+  const head = code.indexOf('if (!verdict.ok) {')
+  if (head === -1) return false
+  let depth = 0
+  let end = head
+  for (let i = code.indexOf('{', head); i < code.length; i += 1) {
+    if (code[i] === '{') depth += 1
+    else if (code[i] === '}') { depth -= 1; if (depth === 0) { end = i; break } }
+  }
+  const seg = code.slice(head, end)
+  // 이 구간 안의 canWriteState 블록 범위
+  const blocks: [number, number][] = []
+  const re = /if \(canWriteState[^)]*\) \{/g
+  for (let m = re.exec(seg); m !== null; m = re.exec(seg)) {
+    let d = 0
+    let i = m.index + m[0].length - 1
+    for (; i < seg.length; i += 1) {
+      if (seg[i] === '{') d += 1
+      else if (seg[i] === '}') { d -= 1; if (d === 0) break }
+    }
+    blocks.push([m.index, i])
+  }
+  const inside = (pos: number): boolean => blocks.some(([a, b]) => pos > a && pos < b)
+  const writes = [...seg.matchAll(/\b(rmSync|writeAtomic|writeFileSync|mkdirSync)\s*\(/g)]
+  return writes.every((w) => inside(w.index))
+})())
+// 🔴 운영 러너가 추출된 함수를 **실제로 쓴다.** 판단이 두 곳에 있으면
+//    테스트가 통과해도 러너는 다른 길로 갈 수 있다
+check('🔴 러너가 planStaleLock 을 쓴다', /planStaleLock\(\{/.test(code))
+check('🔴 러너가 applyStaleLockPlan 으로 집행한다', /applyStaleLockPlan\(lockPlan/.test(code))
+check('🔴 러너가 lock 삭제를 직접 판단하지 않는다 — canWriteState 분기를 lock 자리에 두지 않는다', (() => {
+  const stale = code.indexOf("decision === 'stale' && existing !== null")
+  if (stale === -1) return false
+  const seg = code.slice(stale, stale + 700)
+  // rmSync 는 applyStaleLockPlan 에 넘기는 콜백 안에만 있어야 한다
+  return /applyStaleLockPlan\(lockPlan, \(\) => \{ rmSync\(lockPath/.test(seg)
+})())
+// 🔴 lock 테스트가 운영을 발동할 수 없다는 것도 여기서 고정한다
+check('🔴 lock 테스트가 실제 러너를 돌리지 않는다', (() => {
+  const t = readFileSync('scripts/supply-autopilot-lock-check.mts', 'utf-8')
+  const upto = t.slice(0, t.lastIndexOf('SELF_CHECK_BEGIN'))
+  return !/child_process|execFileSync|spawnSync/.test(upto)
+})())
+
+// 🔴 판단은 lib 에 있다 — 러너는 canWrite 를 넘길 뿐이다
+check('🔴 러너가 게이트 상태를 그대로 넘긴다', /canWrite: canWriteState/.test(code))
+check('🔴 게이트가 닫히면 지우지 않는다고 말한다 (lib 문구)', (() => {
+  const lib = readFileSync('src/lib/supply-autopilot.ts', 'utf-8')
+  return /지우지 않는다 — 게이트가 닫혀 있다/.test(lib)
+})())
+check('🔴 lib 이 preserve 를 실제로 돌려준다',
+  planStaleLock({ stale: true, canWrite: false, runId: 'r', pid: 1 }).action === 'preserve')
+check('🔴 [B·C] 게이트가 닫히면 예정 파일만 보여준다',
+  /쓰지 않는다 — 예정 파일만 보여준다/.test(code))
+check('🔴 [B·C] 왜 막혔는지 화면에 남긴다 — 조용히 건너뛰지 않는다',
+  /막힌 이유/.test(code))
+check('🔴 [C] live no-op 에서 하는 일은 파일 변환뿐이다 — judge · draft · fill 을 부르지 않는다', (() => {
+  const seg = /if \(pendingRaw > 0 \|\| pendingThin\.length > 0\) \{([\s\S]*?)\n        \}/.exec(code)
+  if (seg === null) return false
+  const body = seg[1]
+  return /STAGE_SCRIPT\.cafeThin/.test(body) && /STAGE_SCRIPT\.adapt/.test(body)
+    && !/STAGE_SCRIPT\.judge|STAGE_SCRIPT\.draft|STAGE_SCRIPT\.fill/.test(body)
+})())
+check('🔴 [C] 같은 회차를 다시 돌려도 이미 사본이 있는 것은 다시 넘기지 않는다 — 키로 거른다',
+  /pendingThinFiles\(\)/.test(code) && /82cook-adapt-/.test(code))
+check('🔴 회차 시작 시 preexisting 을 checkpoint 에 박는다',
+  /artifacts: preexisting\.length > 0 \? \{ preexisting \} : \{\}/.test(code))
+check('🔴 처리 여부를 runId 단독으로 보지 않는다', /adaptKeyOf/.test(code))
 
 console.log(`\n─────────────────────────────────────────────────────────`)
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

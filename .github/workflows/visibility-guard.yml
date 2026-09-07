@@ -324,6 +324,16 @@ jobs:
       - name: thin → 검수 어댑터 (전문 미저장 · drop 차단)
         run: npm run micro-seed:82cook-thin-adapt-check
 
+      # 네이버 카페 수집물이 같은 얇은 계약을 타는지 본다 (§4-AV).
+      #
+      # 🔴 2026-09-07 실측: 네이버 수집물에는 rawBody **전문**이 들어 있었고
+      #    (최대 2,899자) 접미가 달라 auto-judge 가 읽지도 못했다.
+      #    전문을 들고 있는 레인이 하나라도 있으면 이 레인의 존재 이유가 사라진다.
+      #
+      # 🔴 네트워크 0 · LLM 0 · DB 0 — 이미 수집된 파일만 다룬다.
+      - name: 네이버 카페 얇은 저장 (전문 미저장 · Sheet 금지 · 정치 hard gate)
+        run: npm run micro-seed:navercafe-thin-check
+
       # 기계 판정이 사람 값을 사칭하지 않는지 · 위험 글이 통과하지 않는지 본다 (§4-AR)
       - name: 자동 판정 Shadow (사람 사칭 금지 · false pass 0)
         run: npm run micro-seed:auto-judge-check
@@ -341,6 +351,18 @@ jobs:
       # 🔴 네트워크 0 · LLM 0 · DB 0 — 순수 판정만 검사한다.
       - name: 공급 Autopilot (발행 금지 · 재개 계약 · fail closed)
         run: npm run supply:autopilot-check
+
+      # stale lock 삭제가 게이트 뒤에 있는지를 **실제 파일로** 본다 (§4-AU).
+      #
+      # 🔴 정규식 검사는 이 결함을 놓쳤다. "파일 어딘가에 canWriteState 조건문이
+      #    있는가" 만 봤기 때문에, 삭제가 그 조건 **밖에** 있어도 통과했다.
+      #    조건이 어느 write 앞에 있는지는 실제로 돌려 봐야 안다.
+      #
+      # 🔴 이 테스트는 실제 러너를 돌리지 않는다 — 재고가 모자란 날 돌리면
+      #    테스트가 운영 공급을 발동하기 때문이다. 임시 디렉터리의 임시 lock 만 쓴다.
+      #    DATABASE_URL 없이 돌아간다.
+      - name: 공급 러너 lock (게이트 4조합 · 임시 파일 전용)
+        run: npm run supply:autopilot-lock-check
 
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #

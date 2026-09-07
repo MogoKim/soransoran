@@ -201,10 +201,17 @@ export function toThinRow(input: {
   bodyHeadChars: number
   axis: string; safetyVerdict: string; safetyReasons: readonly string[]
   reason: string; runId: string; fetchedAt: string
+  /**
+   * 🔴 어느 소스에서 왔는지. 기본은 82cook 이다.
+   *
+   * 네이버 카페도 **같은 얇은 계약**으로 저장한다 (§4-AV) — 계약을 하나로 두지 않으면
+   * 한쪽만 전문을 남기게 되고, 그 한쪽이 이 레인의 존재 이유를 무너뜨린다.
+   */
+  sourceSite?: string
 }): ThinRow {
   return {
     sourceArticleId: input.id,
-    sourceSite: '82cook',
+    sourceSite: input.sourceSite ?? '82cook',
     url: input.url,
     title: input.title,
     commentCount: input.commentCount,

@@ -27,7 +27,8 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
   AUTOPILOT_KILL_SWITCH_ENV, CHILD_KILL_SWITCH_ENV, LOCK_FILE, LOCK_TTL_MS,
   judgeRun, planStages, lockDecision, verifyRun, fmtCount, collectCapFor,
-  resumeDecision, stageInputArgs, missingArtifacts, newFiles, runStages, supersedes,
+  resumeDecision, stageInputArgs, missingArtifacts, newFiles, runStages, supersedes, adaptKeyOf,
+  planStaleLock, applyStaleLockPlan,
   mayWriteRunState,
   STAGE_LABEL,
   type Checkpoint, type ExecResult, type LockRecord, type Stage, type StockSnapshot,
@@ -53,6 +54,7 @@ const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?
 /** 단계 → 실제 스크립트. 🔴 여기 없는 것은 이 러너가 부르지 않는다 */
 const STAGE_SCRIPT: Record<string, string> = {
   collect: 'scripts/micro-seed-82cook-thin-detail.mts',
+  cafeThin: 'scripts/micro-seed-navercafe-thin.mts',
   adapt: 'scripts/micro-seed-82cook-thin-adapt.mts',
   judge: 'scripts/micro-seed-auto-judge.mts',
   draft: 'scripts/micro-seed-auto-draft.mts',
@@ -124,6 +126,47 @@ function run(script: string, args: readonly string[]): Promise<{ code: number | 
 function dataFiles(): string[] {
   if (!existsSync(DATA_DIR)) return []
   return readdirSync(DATA_DIR).map((f) => join(DATA_DIR, f)).sort()
+}
+
+/**
+ * 🔴 **아직 adapt 되지 않은 얇은 파일** — 정확한 파일 identity 로 판단한다.
+ *
+ * 시간축이 어긋나 있다: 네이버는 09:20 · 13:20 에 launchd 가 긁어 `*.thin-detail.jsonl` 을
+ * 만들고, 이 러너는 21:10 에 돈다. 그 파일들은 러너가 시작하기 **전에** 이미 있으므로
+ * "실행 중 새로 생긴 파일" 로는 잡히지 않는다 — 그대로 두면 영영 adapt 되지 않는다.
+ *
+ * 처리 여부는 runId 가 아니라 **입력 파일에서 유도한 키**로 본다.
+ * 09:20 remonterrace 와 13:20 wgang 이 같은 runId 를 가질 수 있고,
+ * 그때 runId 로 판단하면 한쪽이 다른 쪽을 "이미 했다" 로 막는다.
+ */
+function pendingThinFiles(): string[] {
+  if (!existsSync(DATA_DIR)) return []
+  const files = readdirSync(DATA_DIR)
+  // 이미 사본이 있는 키 — adapt 산출물 이름에서 뽑는다
+  const done = new Set<string>()
+  for (const f of files.filter((x) => x.startsWith('82cook-adapt-'))) {
+    const m = /^82cook-adapt-(.+?)\./.exec(f)
+    if (m !== null) done.add(m[1])
+  }
+  return files
+    .filter((f) => f.endsWith('.thin-detail.jsonl'))
+    .filter((f) => !done.has(adaptKeyOf(f)))
+    .sort().map((f) => join(DATA_DIR, f))
+}
+
+/** 아직 얇게 바꾸지 않은 **역사 raw** 수집물 — cafeThin 이 처리할 몫이다 */
+function pendingRawCafeFiles(): number {
+  if (!existsSync(DATA_DIR)) return 0
+  const files = readdirSync(DATA_DIR)
+  const thinKeys = new Set(files
+    .filter((f) => /^navercafe-thin-.*\.thin-detail\.jsonl$/.test(f))
+    .map((f) => adaptKeyOf(f)))
+  return files.filter((f) => {
+    const m = /^navercafe-([a-z0-9]+)-(.+)\.jsonl$/i.exec(f)
+    if (m === null || f.includes('.list.') || f.includes('-thin-')) return false
+    // 🔴 소스까지 붙여 본다 — 같은 runId 의 다른 카페가 서로를 막지 않는다
+    return !thinKeys.has(`${m[1]}-${m[2]}`)
+  }).length
 }
 
 /**
@@ -212,12 +255,14 @@ async function main(): Promise<void> {
   // 🔴 시간이 안 지났어도 프로세스가 죽었으면 stale 이다 — 90분을 헛되이 기다리지 않는다
   if (decision === 'busy' && existing !== null && !pidAlive(existing.pid)) decision = 'stale'
   if (decision === 'stale' && existing !== null) {
-    // 🔴 **lock 과 checkpoint 는 다른 것이다.** lock 은 "지금 누가 돌고 있나" 이고
-    //    checkpoint 는 "어디까지 됐나" 다. 죽은 lock 은 걷어내되 미완료 checkpoint 는 그대로 둔다 —
-    //    함께 지우면 앞 회차의 수집분과 판정 결과가 주인을 잃는다.
-    console.log(`① lock  🟡 죽은 lock 을 걷어낸다 (runId ${existing.runId || '?'} · pid ${existing.pid})`)
-    console.log('        🔴 checkpoint 는 지우지 않는다 — 재개 근거다')
-    rmSync(lockPath, { force: true })
+    // 🔴 **lock 과 checkpoint 는 다른 것이다.** 죽은 lock 은 걷어내되 미완료 checkpoint 는 둔다.
+    //    판단은 planStaleLock 이 한다 — 러너를 돌리지 않고도 검사할 수 있도록 떼어 뒀다.
+    const lockPlan = planStaleLock({
+      stale: true, canWrite: canWriteState,
+      runId: existing.runId, pid: existing.pid,
+    })
+    for (const line of lockPlan.lines) console.log(line)
+    applyStaleLockPlan(lockPlan, () => { rmSync(lockPath, { force: true }) })
   } else if (decision === 'busy') {
     console.log('① lock  🔴 앞 회차가 아직 돈다 — 이번 회차는 돌지 않는다')
   } else {
@@ -261,6 +306,9 @@ async function main(): Promise<void> {
     live: LIVE, killOpen, childKillOpen,
     stock: judged, lock: decision === 'stale' ? 'free' : decision,
   })
+  // 🔴 유지보수 단계가 실패하면 조용히 exit 0 으로 넘어가지 않는다 —
+  //    launchd 는 exit status 로만 성패를 안다. 0 이면 아무도 실패를 모른다.
+  let maintenanceFailed = false
   if (!verdict.ok) {
     console.log(`\n③ 돌지 않는다 — ${verdict.reason}`)
     if (verdict.code === 'NOOP_STOCK_OK') {
@@ -268,6 +316,48 @@ async function main(): Promise<void> {
       // 🔴 DB 가 먼저 목표를 채웠는데 미완료 회차가 남아 있으면 **종결한다.**
       //    이어서 돌면 목표를 넘겨 적재하고, 그냥 두면 영구 running 기록이 된다.
       //    산출물은 지우지 않는다 — 다음 회차가 다시 쓸 수 있다.
+      // 🔴 **재고가 차 있어도 수집물을 방치하지 않는다.**
+      //    launchd 가 09:20·13:20 에 네이버를 계속 긁어 오는데 재고가 차 있다는 이유로
+      //    변환을 미루면, 그 파일들은 아무도 안 보는 채로 쌓이기만 한다.
+      //    이 단계는 네트워크 0 · LLM 0 · DB 0 이라 미뤄 둘 이유가 없다.
+      // 🔴 재고가 차 있어도 수집물을 방치하지 않는다. 다만 **dry-run 은 아무것도 쓰지 않는다** —
+      //    인자 없는 실행이 파일을 만들면 "계획만" 이라는 화면이 거짓말이 된다.
+      if (SIM === null) {
+        const pendingRaw = pendingRawCafeFiles()
+        const pendingThin = pendingThinFiles()
+        if (pendingRaw > 0 || pendingThin.length > 0) {
+          console.log(`\n   🟡 밀린 것 — 역사 수집물 ${pendingRaw}개 · 미처리 얇은 파일 ${pendingThin.length}개`)
+          for (const f of pendingThin) console.log(`      · ${f}`)
+          // 🔴 **`--live` 하나만 보면 안 된다.** judgeRun 은 재고가 차 있으면 스위치를 보기
+          //    전에 NOOP_STOCK_OK 를 돌려준다 — 재고가 먼저인 것은 옳지만, 그 뒤에 오는
+          //    유지보수 경로가 --live 만 보면 **kill switch 를 내렸는데도 파일을 쓴다.**
+          //    쓰는 자격은 언제나 세 게이트가 모두 열렸을 때뿐이다 (canWriteState 정본).
+          if (!canWriteState) {
+            console.log('      🟡 쓰지 않는다 — 예정 파일만 보여준다 (subprocess 0 · 파일 write 0)')
+            const why: string[] = []
+            if (!LIVE) why.push('--live 없음')
+            if (!killOpen) why.push(`${AUTOPILOT_KILL_SWITCH_ENV} 닫힘`)
+            if (!childKillOpen) why.push(`${CHILD_KILL_SWITCH_ENV} 닫힘`)
+            console.log(`         막힌 이유: ${why.join(' · ')}`)
+          } else {
+            // 🔴 세 게이트가 다 열렸다. 그래도 여기서 하는 일은 파일 변환뿐이다 —
+            //    네트워크 0 · LLM 0 · DB 0. 판정·생성·적재는 재고가 모자랄 때만 돈다.
+            if (pendingRaw > 0) {
+              const r = await run(STAGE_SCRIPT.cafeThin, ['--apply'])
+              console.log(r.code === 0 ? '   ✅ 얇은 변환 완료' : `   🔴 얇은 변환 실패 (exit ${String(r.code)})`)
+              if (r.code !== 0) maintenanceFailed = true
+            }
+            const after = pendingThinFiles()
+            if (after.length > 0) {
+              const r2 = await run(STAGE_SCRIPT.adapt, ['--apply', `--input=${after.join(',')}`])
+              console.log(r2.code === 0
+                ? '   ✅ 검수용 변환 완료 — 다음 회차가 이어받는다'
+                : `   🔴 검수용 변환 실패 (exit ${String(r2.code)}) — 다음 회차가 다시 시도한다`)
+              if (r2.code !== 0) maintenanceFailed = true
+            }
+          }
+        }
+      }
       if (unfinished !== null && SIM === null && supersedes({ usable: before.stock.usable })) {
         if (canWriteState) {
           const closed: Checkpoint = {
@@ -289,10 +379,20 @@ async function main(): Promise<void> {
       for (const p of would) {
         console.log(`   ${p.stage.padEnd(8)} ${p.label} · npx tsx ${STAGE_SCRIPT[p.stage]} ${p.args.join(' ')}`)
       }
+      // 🔴 어떤 파일이 adapt 입력이 될지 미리 보여준다 — 실행하지는 않는다
+      const pre = pendingThinFiles()
+      if (pre.length > 0) {
+        console.log(`\n   돌았다면 adapt 가 이어받을 미처리 얇은 파일 ${pre.length}개`)
+        for (const f of pre) console.log(`      · ${f}`)
+      }
       console.log('   🟡 네트워크 0 · LLM 0 · 파일 write 0 · DB write 0')
     }
     console.log()
     await prisma.$disconnect()
+    if (maintenanceFailed) {
+      console.error('🔴 유지보수 변환이 실패했다 — exit 1\n')
+      process.exit(1)
+    }
     process.exit(0)
   }
 
@@ -334,10 +434,19 @@ async function main(): Promise<void> {
     }
     writeAtomic(lockPath, `${JSON.stringify({ runId, pid: process.pid, startedAt: now.toISOString() })}\n`)
     cpPath = join(DATA_DIR, `supply-autopilot-${runId}.state.json`)
+    // 🔴 회차 시작 **전에** 이미 있던 미처리 얇은 파일을 붙잡아 둔다.
+    //    정기 수집(09:20 · 13:20)이 만든 것은 실행 중 "새로 생긴 파일" 로 잡히지 않는다.
+    //    checkpoint 에 박아 두면 재개할 때도 같은 파일을 쓴다.
+    const preexisting = pendingThinFiles()
+    if (preexisting.length > 0) {
+      console.log(`   이미 있던 미처리 얇은 파일 ${preexisting.length}개 — 이번 회차 adapt 입력에 넣는다`)
+      for (const f of preexisting) console.log(`      · ${f}`)
+    }
     cp = {
       runId, startedAt: now.toISOString(), status: 'running', completedAt: null,
       shortfall: verdict.shortfall, collectCap: verdict.collectCap,
-      stock: { before: before.stock, after: null }, stages: [], artifacts: {},
+      stock: { before: before.stock, after: null }, stages: [],
+      artifacts: preexisting.length > 0 ? { preexisting } : {},
     }
   }
   const saveCp = (): void => { writeAtomic(cpPath, `${JSON.stringify(cp, null, 2)}\n`) }

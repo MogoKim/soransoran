@@ -55,6 +55,8 @@
     "micro-seed:82cook-thin-check": "tsx scripts/micro-seed-82cook-thin-check.mts",
     "micro-seed:82cook-thin-adapt": "tsx scripts/micro-seed-82cook-thin-adapt.mts",
     "micro-seed:82cook-thin-adapt-check": "tsx scripts/micro-seed-82cook-thin-adapt-check.mts",
+    "micro-seed:navercafe-thin": "tsx scripts/micro-seed-navercafe-thin.mts",
+    "micro-seed:navercafe-thin-check": "tsx scripts/micro-seed-navercafe-thin-check.mts",
     "micro-seed:auto-judge": "tsx scripts/micro-seed-auto-judge.mts",
     "micro-seed:auto-judge-check": "tsx scripts/micro-seed-auto-judge-check.mts",
     "micro-seed:auto-draft": "tsx scripts/micro-seed-auto-draft.mts",
@@ -92,6 +94,7 @@
     "original-post:id-target-check": "tsx scripts/original-post-id-target-check.mts",
     "supply:autopilot": "tsx scripts/supply-autopilot.mts",
     "launchd:template-check": "tsx scripts/launchd-template-check.mts",
+    "supply:autopilot-lock-check": "tsx scripts/supply-autopilot-lock-check.mts",
     "supply:autopilot-check": "tsx scripts/supply-autopilot-check.mts",
     "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",
     "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts"
