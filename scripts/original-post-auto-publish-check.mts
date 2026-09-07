@@ -13,6 +13,7 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_GATE_MARKS,
 } from '../src/lib/original-post-auto-publish'
 import { kstDayStart } from '../src/lib/original-post-publish'
+import { planMatch } from '../src/lib/original-post-persona-match'
 
 let pass = 0
 let fail = 0
@@ -262,6 +263,63 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
   check('러너가 상수를 재정의하지 않는다', (() => {
     const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
     return !/const (DAILY_PUBLISH_CAP|POST_CAP_PER_WEEK|MIN_DAYS_BETWEEN_POSTS)\s*=/.test(src)
+  })())
+}
+
+// ══════════════════════════════════════════════════════════════════
+// 🔴 persona mapping 누락 회귀 (2026-09-07 실측 사고)
+//
+// auto-publish 가 identity.childrenCount 를 넘기지 않아 **모든 persona 가 무자녀로
+// 판정**됐다. hardFilter 는 `p.childrenCount ?? 0` 으로 읽기 때문이다.
+// "아이랑 같이 갈 숙소, 뭐 보고 고르세요?" 글에서 자녀 있는 4명이 전부 NO_CHILDREN 으로
+// 막혀 그 글은 영영 배정되지 못했다 — match-assign 은 넘기는데 여기만 빠져 있었다.
+// ══════════════════════════════════════════════════════════════════
+{
+  // 🔴 CHILDREN_RE 가 실제로 잡는 낱말을 쓴다 — '아이랑' 은 패턴에 없다.
+  //    fixture 가 트리거하지 못하면 통과해도 아무것도 검증하지 못한다.
+  const KID_TITLE = '애들이랑 같이 갈 숙소, 뭐 보고 고르세요?'
+  const KID_BODY = '이번에 애들이랑 같이 가려는데 숙소를 뭘 보고 골라야 할지 모르겠어요. 다들 어떻게 고르세요?'
+  const base = {
+    status: 'active', providerId: null, maritalStatus: 'married',
+    parentCare: null, menopauseStatus: null, workStatus: null,
+    economicStatus: null, region: null, noGoTopics: [],
+    voiceLength: null, postsThisWeek: 0, daysSinceLastPost: null,
+  }
+  const withKids = [
+    { ...base, code: 'P10', childrenCount: 1 },
+    { ...base, code: 'P17', childrenCount: 2 },
+    { ...base, code: 'P15', childrenCount: 0 },
+  ] as never[]
+  // 🔴 버그 재현 — childrenCount 를 아예 넘기지 않은 입력
+  const withoutKids = [
+    { ...base, code: 'P10' }, { ...base, code: 'P17' }, { ...base, code: 'P15' },
+  ] as never[]
+
+  const planWith = planMatch({ queueId: 'q', title: KID_TITLE, body: KID_BODY, personas: withKids })
+  const planWithout = planMatch({ queueId: 'q', title: KID_TITLE, body: KID_BODY, personas: withoutKids })
+
+  check('🔴 [회귀] childrenCount 를 넘기면 자녀 있는 persona 가 eligible 이다', (() => {
+    const codes = planWith.eligible.map((c) => c.code).sort().join(' ')
+    return codes === 'P10 P17'
+  })())
+  check('🔴 [회귀] 무자녀 persona 는 자녀 글에서 계속 차단된다',
+    planWith.blocked.some((b) => b.code === 'P15' && b.reasons.some((r) => r.code === 'NO_CHILDREN')))
+  check('🔴 [회귀] childrenCount 가 없으면 **전원** 무자녀로 막힌다 — 이것이 사고였다', (() => {
+    const blockedAll = planWithout.blocked.filter(
+      (b) => b.reasons.some((r) => r.code === 'NO_CHILDREN')).length
+    return planWithout.eligible.length === 0 && blockedAll === 3
+  })())
+  check('🔴 [회귀] 두 입력의 결과가 실제로 다르다 — fixture 가 헛돌지 않는다',
+    planWith.eligible.length !== planWithout.eligible.length)
+
+  // 🔴 러너가 실제로 그 필드를 넘기는지 소스로 고정한다
+  const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  check('🔴 [회귀] auto-publish 가 childrenCount 를 넘긴다',
+    /childrenCount: typeof id\.childrenCount === 'number' \? id\.childrenCount : null/.test(src))
+  check('🔴 [회귀] match-assign 과 같은 필드 집합을 넘긴다', (() => {
+    const assign = readFileSync('scripts/original-post-match-assign.mts', 'utf-8')
+    const fields = ['childrenCount', 'childrenAgeBands', 'maritalStatus', 'parentCare', 'menopauseStatus', 'noGoTopics']
+    return fields.every((f) => src.includes(f) && assign.includes(f))
   })())
 }
 

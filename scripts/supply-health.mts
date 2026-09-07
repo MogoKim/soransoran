@@ -35,7 +35,7 @@ import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
 import {
   forecastPublishing, nextScheduleAt, capacityOf, personasNeededFor,
-  splitBlockReasons, kstStamp, judgeCapacity,
+  blockRatesByCombination, kstStamp, judgeCapacity,
   type PersonaHistory,
 } from '../src/lib/supply-capacity-forecast'
 import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
@@ -400,6 +400,8 @@ async function main(): Promise<void> {
       code: r.code, status: r.status, providerId: r.user?.providerId ?? null,
       ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
       maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
+      // 🔴 auto-publish 와 **같은 필드**를 넘긴다 — 빠지면 전원 무자녀로 판정된다 (#468)
+      childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
       ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),
       parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
       menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
@@ -421,8 +423,9 @@ async function main(): Promise<void> {
     personas: personas as never, history, startAt, days: 14, dailyCap: DAILY_PUBLISH_CAP,
   })
 
-  // 🔴 매칭률은 **자동 후보 × active persona** 로만 센다 (legacy 제외)
-  const blockCounts: Record<string, number> = {}
+  // 🔴 매칭률은 **조합 단위**로 센다 — 후보 × persona. 사유 개수가 아니다.
+  //    한 조합에 사유가 여러 개여도 한 번만 센다.
+  const blockedCombos: string[][] = []
   {
     const { planBatch } = await import('../src/lib/original-post-persona-match')
     const b = planBatch(
@@ -432,19 +435,20 @@ async function main(): Promise<void> {
       personas as never,
     )
     for (const a of b.assignments) {
-      for (const x of a.blocked) {
-        for (const c of x.reasons) blockCounts[c.code] = (blockCounts[c.code] ?? 0) + 1
-      }
+      for (const x of a.blocked) blockedCombos.push(x.reasons.map((r) => r.code))
     }
   }
-  const split = splitBlockReasons(blockCounts)
-  const cap = capacityOf({ activePersonas: personas.length, lifeBlockRate: split.lifeRate })
+  const rates = blockRatesByCombination({
+    candidates: autoTargets.length, personas: personas.length, blockedCombos,
+  })
+  const cap = capacityOf({ activePersonas: personas.length, lifeBlockRate: rates.lifeRate })
   const need = personasNeededFor({
-    targetPerDay: DAILY_PUBLISH_CAP, lifeBlockRate: split.lifeRate, activePersonas: personas.length,
+    targetPerDay: DAILY_PUBLISH_CAP, lifeBlockRate: rates.lifeRate, activePersonas: personas.length,
   })
   const capacity = judgeCapacity({
     stockUsable: stock.usable, in7: fc.in7, nextWillPublish: fc.nextScheduleWillPublish,
     nextCandidates: fc.nextPersonaCandidates.length, shortfallMin: need.shortfallMin,
+    dailyCap: DAILY_PUBLISH_CAP,
   })
 
   await prisma.$disconnect()
@@ -467,9 +471,12 @@ async function main(): Promise<void> {
         nextScheduleWillPublish: fc.nextScheduleWillPublish,
         in7: fc.in7, in14: fc.in14,
         gapDates7: fc.gapDates7, gapDates14: fc.gapDates14,
+        nextBlockReason: fc.nextBlockReason,
         days: fc.days.map((d) => ({
-          date: d.date, persona: d.publishedPersona,
-          queueId: d.publishedQueueId, blocked: d.blockedReason,
+          date: d.date,
+          // 🔴 배열이다 — dailyCap 이 2 이상이면 하루에 여러 건이 나간다
+          published: d.published,
+          blocked: d.blockedReason, blockedQueueId: d.blockedQueueId,
           available: d.availableCodes,
         })),
         theoreticalPerWeek: cap.theoreticalPerWeek,
@@ -478,7 +485,12 @@ async function main(): Promise<void> {
         activePersonas: personas.length,
         personasNeeded: { min: need.min, max: need.max },
         shortfall: { min: need.shortfallMin, max: need.shortfallMax },
-        blocks: { life: split.life, capacity: split.capacity, lifeRate: split.lifeRate },
+        // 🔴 조합 단위 — 사유 개수가 아니다
+        combinations: {
+          total: rates.total, eligible: rates.eligible,
+          lifeBlocked: rates.lifeBlocked, capacityBlocked: rates.capacityBlocked,
+          lifeRate: rates.lifeRate, capacityRate: rates.capacityRate,
+        },
         autoCandidates: autoTargets.length,
       },
     }, null, 2))
@@ -504,22 +516,37 @@ async function main(): Promise<void> {
   for (const x of report.publish) console.log(`   ${mark(x)} ${x.message}`)
 
   console.log('\n③-b 발행 여력 (KST 기준)')
+  const REASON_LABEL: Record<string, string> = {
+    NONE: '', DAILY_CAP_DONE: '오늘 상한을 채웠다',
+    LIFE_BLOCKED: '🔴 생활사로 영구 매칭 불가 — persona 를 늘려야 풀린다',
+    CAPACITY_WAIT: '🟡 맞는 persona 는 있으나 cap·간격으로 일시 대기',
+    BATCH_EXHAUSTED: '🟡 배치 배정에서 여력이 소진됨',
+    NO_CANDIDATE: '🔴 후보가 없다',
+  }
   console.log(`   다음 예약     ${kstStamp(startAt)}`)
   console.log(`   다음 대상     ${fc.nextQueueId ?? '(없음)'}`)
-  console.log(`   배정 가능     ${fc.nextPersonaCandidates.length}명${fc.nextPersonaCandidates.length > 0 ? ` (${fc.nextPersonaCandidates.join(' ')})` : ''}`)
-  console.log(`   다음 예약 발행 ${fc.nextScheduleWillPublish ? '🟢 가능' : '🔴 불가'}`)
-  console.log(`   향후 7일      ${fc.in7}건 · 공백 ${fc.gapDates7.length}일${fc.gapDates7.length > 0 ? ` (${fc.gapDates7.join(' ')})` : ''}`)
+  console.log(`   배정 가능     ${fc.nextPersonaCandidates.length}명`
+    + `${fc.nextPersonaCandidates.length > 0 ? ` (${fc.nextPersonaCandidates.join(' ')})` : ''}`)
+  console.log(`   다음 예약 발행 ${fc.nextScheduleWillPublish ? '🟢 가능' : '🔴 불가'}`
+    + `${fc.nextScheduleWillPublish ? '' : ` — ${REASON_LABEL[fc.nextBlockReason] ?? fc.nextBlockReason}`}`)
+  console.log(`   향후 7일      ${fc.in7}건 · 공백 ${fc.gapDates7.length}일`
+    + `${fc.gapDates7.length > 0 ? ` (${fc.gapDates7.join(' ')})` : ''}`)
   console.log(`   향후 14일     ${fc.in14}건`)
   console.log(`   이론 capacity ${cap.theoreticalPerWeek}건/주 = ${cap.theoreticalPerDay.toFixed(2)}/day`
     + ` · 실매칭 반영 ${cap.effectivePerDay.toFixed(2)}/day`)
   console.log(`   목표 ${DAILY_PUBLISH_CAP}/day 에 필요한 persona ${need.min}~${need.max}명`
     + ` · 현재 ${personas.length}명 · 부족 ${need.shortfallMin}~${need.shortfallMax}명`)
-  console.log(`   매칭 차단     생활사(영구) ${split.life}회 · 여력(임시) ${split.capacity}회`
-    + ` · 생활사 비율 ${(split.lifeRate * 100).toFixed(1)}%`)
+  console.log(`   매칭 조합     후보 ${autoTargets.length} × persona ${personas.length} = ${rates.total}개`)
+  console.log(`     가능        ${rates.eligible}개`)
+  console.log(`     생활사 영구  ${rates.lifeBlocked}개 (${(rates.lifeRate * 100).toFixed(1)}%)`)
+  console.log(`     cap·간격 임시 ${rates.capacityBlocked}개 (${(rates.capacityRate * 100).toFixed(1)}%)`)
   console.log('   🔴 표본이 작다 — persona 권장 수는 범위로 읽는다')
   for (const d of fc.days.slice(0, 7)) {
-    console.log(`     ${d.date}  ${d.publishedPersona ?? '—'}`
-      + `${d.publishedQueueId === null ? `  🔴 ${d.blockedReason}` : ''}`)
+    const who = d.published.length === 0 ? '—' : d.published.map((x) => x.persona).join(' ')
+    const why = d.published.length > 0 ? ''
+      : `  ${REASON_LABEL[d.blockedReason] ?? d.blockedReason}`
+        + `${d.blockedQueueId === null ? '' : ` (${d.blockedQueueId.slice(0, 12)})`}`
+    console.log(`     ${d.date}  ${who}${why}`)
   }
 
   console.log(`\n④ 판정 ${report.level}${report.exitCode === 1 ? ' — exit 1' : ''}`)

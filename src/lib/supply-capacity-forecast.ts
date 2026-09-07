@@ -6,8 +6,8 @@
  *    이 파일은 그 함수들을 **날짜를 밀어 가며 여러 번 부를** 뿐이다.
  *
  * 왜 필요한가 — 2026-09-07 실측:
- * 재고가 14/14 라 관제 화면은 초록인데, persona 5명의 `matchedAt` 을 놓고 계산하면
- * 앞으로 14일 중 **5일이 발행 공백**이다. 재고는 "며칠치" 가 아니다 —
+ * 재고가 가득 차 관제 화면이 초록이어도, persona 의 `matchedAt` 을 놓고 계산하면
+ * 앞으로 며칠이 발행 공백일 수 있다. 재고는 "며칠치" 가 아니다 —
  * persona 회전이 막히면 재고가 아무리 많아도 나가지 못한다.
  * 그 사실이 화면에 보이지 않으면 사람은 큐가 빌 때까지 모른다.
  *
@@ -18,10 +18,9 @@ import {
   MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK, planBatch,
   type BatchDraft, type PersonaForMatch,
 } from './original-post-persona-match'
+// 🔴 KST 자정은 **정본 하나**를 쓴다. 여기서 다시 구현하면 언젠가 한쪽만 고쳐진다
+import { kstDayStart } from './original-post-publish'
 import type { Finding } from './supply-health'
-
-/** 🔴 발행 러너와 같은 하루 상한 */
-export const DAILY_CAP_FOR_FORECAST = 1
 
 /** 🔴 00:05 KST — auto-publish workflow 의 예약 시각 */
 export const PUBLISH_HOUR_KST = 0
@@ -29,13 +28,6 @@ export const PUBLISH_MINUTE_KST = 5
 
 const DAY_MS = 86_400_000
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000
-
-/** KST 기준 하루의 시작(UTC Date) — 🔴 표시도 계산도 KST 로 한다 */
-export function kstDayStartOf(now: Date): Date {
-  const kst = new Date(now.getTime() + KST_OFFSET_MS)
-  kst.setUTCHours(0, 0, 0, 0)
-  return new Date(kst.getTime() - KST_OFFSET_MS)
-}
 
 /** `YYYY-MM-DD` (KST) — 🔴 UTC 날짜를 KST 처럼 보여주지 않는다 */
 export function kstDateLabel(d: Date): string {
@@ -56,10 +48,11 @@ export function kstStamp(d: Date): string {
 export function nextScheduleAt(input: {
   now: Date
   publishedToday: number
-  dailyCap?: number
+  /** 🔴 필수다 — 상한을 여기서 정하지 않는다. 러너의 DAILY_PUBLISH_CAP 을 주입받는다 */
+  dailyCap: number
 }): Date {
-  const cap = input.dailyCap ?? DAILY_CAP_FOR_FORECAST
-  const day = kstDayStartOf(input.now)
+  const cap = input.dailyCap
+  const day = kstDayStart(input.now)
   const todayAt = new Date(day.getTime() + (PUBLISH_HOUR_KST * 60 + PUBLISH_MINUTE_KST) * 60_000)
   // 오늘 예약이 아직 안 왔고 상한도 안 찼으면 오늘이다
   if (input.now.getTime() < todayAt.getTime() && input.publishedToday < cap) return todayAt
@@ -95,17 +88,34 @@ export function availablePersonasAt(hist: readonly PersonaHistory[], at: Date): 
   return hist.filter((h) => personaAvailableAt(h, at)).map((h) => h.code).sort()
 }
 
+/**
+ * 🔴 발행하지 못한 이유 — **서로 다른 대응이 필요하므로 코드를 나눈다.**
+ *
+ *   LIFE_BLOCKED   맨 앞 글이 생활사로 **영구** 매칭 불가 (persona 를 늘려야 풀린다)
+ *   CAPACITY_WAIT  맞는 persona 는 있는데 주간 cap·최소 간격으로 **일시** 대기
+ *   BATCH_EXHAUSTED 배치 배정에서 여력이 소진됨 (다른 글이 먼저 가져갔다)
+ *   NO_CANDIDATE   큐가 비었다
+ *   DAILY_CAP_DONE 그날 상한을 이미 채웠다
+ */
+export type BlockReason =
+  | 'NONE' | 'LIFE_BLOCKED' | 'CAPACITY_WAIT' | 'BATCH_EXHAUSTED'
+  | 'NO_CANDIDATE' | 'DAILY_CAP_DONE'
+
 export type ForecastDay = {
   /** KST 날짜 */
   date: string
   scheduledAt: Date
   /** 그날 쓸 수 있던 persona */
   availableCodes: string[]
-  /** 실제로 발행됐다고 본 글 */
-  publishedQueueId: string | null
-  publishedPersona: string | null
-  /** 🔴 발행하지 못한 이유 */
-  blockedReason: 'NONE' | 'NO_PERSONA' | 'NO_CANDIDATE' | 'MATCH_BLOCKED'
+  /**
+   * 🔴 그날 발행된 것들 — **배열이다.**
+   * `dailyCap` 이 2 이상이면 하루에 여러 건이 나간다. 한 필드에 덮어쓰면 뒤엣것만 남는다.
+   */
+  published: { queueId: string; persona: string }[]
+  /** 🔴 발행하지 못한 이유 (그날 마지막으로 막힌 사유) */
+  blockedReason: BlockReason
+  /** 막힌 글 — 사람이 어느 글인지 알아야 한다 */
+  blockedQueueId: string | null
 }
 
 export type Forecast = {
@@ -117,6 +127,8 @@ export type Forecast = {
   /** 다음 예약에 나갈 글 */
   nextQueueId: string | null
   nextPersonaCandidates: string[]
+  /** 🔴 다음 예약이 막힌 이유 */
+  nextBlockReason: BlockReason
   nextScheduleAt: Date
   /** 오늘(또는 다음 예약) 발행 가능한가 */
   nextScheduleWillPublish: boolean
@@ -132,6 +144,30 @@ export type Forecast = {
  *   우회하면 예측이 실제보다 낙관적이 되고, 그 낙관 위에서 cap 을 올리게 된다
  * · 가상 발행한 건 그 persona 의 `matchedAt` 에 더해 다음 날 계산에 반영한다
  */
+/**
+ * 맨 앞 글이 왜 막혔는가 — 🔴 **persona 조합 단위로 본다.**
+ *
+ * 전체 blocked 에서 "생활사가 하나라도 있나 / capacity 가 하나라도 있나" 를 따로 세면
+ * 서로 다른 persona 의 사유가 섞인다. 그러면
+ * `P1: NO_CHILDREN+WEEKLY_CAP · P2: NO_CHILDREN` 처럼 **아무도 시간이 지나서 풀리지 않는**
+ * 경우가 CAPACITY_WAIT 로 잘못 읽힌다 — 기다리면 된다고 착각하게 된다.
+ *
+ * 규칙: **생활사 차단 없이 capacity 사유만 있는 persona 가 한 명이라도 있으면** 기다리면 풀린다.
+ * 한 persona 에 `NO_CHILDREN + WEEKLY_CAP` 이 함께 있으면 그 사람은 시간이 지나도 못 맡는다.
+ */
+export function classifyHeadBlock(input: {
+  eligibleCount: number
+  /** persona 별 차단 사유 코드 묶음 */
+  blocked: readonly (readonly string[])[]
+}): BlockReason {
+  // 🔴 후보가 있는데 배정이 안 됐다 = 배치에서 다른 글이 여력을 가져갔다
+  if (input.eligibleCount > 0) return 'BATCH_EXHAUSTED'
+  const waitable = input.blocked.some((reasons) =>
+    !reasons.some((c) => LIFE_BLOCK_CODES.includes(c))
+    && reasons.some((c) => CAPACITY_BLOCK_CODES.includes(c)))
+  return waitable ? 'CAPACITY_WAIT' : 'LIFE_BLOCKED'
+}
+
 export function forecastPublishing(input: {
   /** 🔴 `selectAutoTargets` 를 통과한 자동 발행 후보만. legacy 는 이미 빠져 있다 */
   queue: readonly BatchDraft[]
@@ -139,73 +175,86 @@ export function forecastPublishing(input: {
   history: readonly PersonaHistory[]
   startAt: Date
   days: number
-  dailyCap?: number
+  /** 🔴 필수 — 러너의 DAILY_PUBLISH_CAP 을 주입받는다 */
+  dailyCap: number
 }): Forecast {
-  const cap = input.dailyCap ?? DAILY_CAP_FOR_FORECAST
+  const cap = input.dailyCap
   // 🔴 이력을 복사해 쓴다 — 호출자의 배열을 바꾸지 않는다
   const hist: PersonaHistory[] = input.history.map((h) => ({ code: h.code, matchedAts: [...h.matchedAts] }))
   const remaining = [...input.queue]
   const days: ForecastDay[] = []
   let nextQueueId: string | null = null
   let nextPersonaCandidates: string[] = []
+  let nextBlockReason: BlockReason = 'NONE'
 
   for (let i = 0; i < input.days; i += 1) {
     const at = new Date(input.startAt.getTime() + i * DAY_MS)
     const availableCodes = availablePersonasAt(hist, at)
-    let publishedQueueId: string | null = null
-    let publishedPersona: string | null = null
-    let blockedReason: ForecastDay['blockedReason'] = 'NONE'
+    const published: { queueId: string; persona: string }[] = []
+    let blockedReason: BlockReason = 'NONE'
+    let blockedQueueId: string | null = null
 
     for (let n = 0; n < cap; n += 1) {
       const head = remaining[0]
       if (head === undefined) { blockedReason = 'NO_CANDIDATE'; break }
-      if (availableCodes.length === 0) { blockedReason = 'NO_PERSONA'; break }
 
-      // 🔴 그 시점에 여력이 있는 persona 만 후보로 넘긴다 —
-      //    `planBatch` 는 `postsThisWeek` 로 여력을 보므로 그 값을 시뮬레이션 시점으로 맞춘다
+      // 🔴 그 시점의 여력을 persona 에 반영한다 — planBatch 는 postsThisWeek 로 여력을 본다
       const weekAgo = new Date(at.getTime() - 7 * DAY_MS)
       const personasNow: PersonaForMatch[] = input.personas.map((p) => {
         const h = hist.find((x) => x.code === p.code)
-        const used = (h?.matchedAts ?? []).filter(
-          (d) => d.getTime() >= weekAgo.getTime() && d.getTime() <= at.getTime()).length
-        const last = (h?.matchedAts ?? []).length === 0 ? null
-          : (h?.matchedAts ?? []).reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
-        const daysSince = last === null ? null : Math.floor((at.getTime() - last.getTime()) / DAY_MS)
-        return { ...p, postsThisWeek: used, daysSinceLastPost: daysSince }
+        const ats = h?.matchedAts ?? []
+        const used = ats.filter((d) => d.getTime() >= weekAgo.getTime() && d.getTime() <= at.getTime()).length
+        const last = ats.length === 0 ? null : ats.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
+        return {
+          ...p, postsThisWeek: used,
+          daysSinceLastPost: last === null ? null : Math.floor((at.getTime() - last.getTime()) / DAY_MS),
+        }
       })
 
-      // 🔴 맨 앞 글 하나만 본다 — 러너의 splitTargets 와 같다
-      const batch = planBatch([head], personasNow)
+      // 🔴 **남은 후보 전체**를 planBatch 에 넘긴다 — 러너가 그렇게 한다.
+      //    head 하나만 넘기면 배치 여력 경쟁이 사라져 예측이 낙관적이 된다.
+      const batch = planBatch(remaining, personasNow)
       const a = batch.assignments.find((x) => x.queueId === head.queueId)
-      if (i === 0) {
+
+      // 🔴 발행 대상은 러너와 같이 **head** 다. 배정이 다른 글에 갔어도 head 를 건너뛰지 않는다
+      if (i === 0 && n === 0) {
         nextQueueId = head.queueId
         nextPersonaCandidates = (a?.eligible ?? []).map((c) => c.code)
       }
-      if (a?.assigned == null) { blockedReason = 'MATCH_BLOCKED'; break }
 
-      // 🔴 assigned 는 persona **코드 문자열**이다 (BatchAssignment 계약)
-      publishedQueueId = head.queueId
-      publishedPersona = a.assigned
+      if (a?.assigned == null) {
+        blockedQueueId = head.queueId
+        blockedReason = classifyHeadBlock({
+          eligibleCount: a?.eligible.length ?? 0,
+          blocked: (a?.blocked ?? []).map((b) => b.reasons.map((r) => r.code)),
+        })
+        if (i === 0 && n === 0) nextBlockReason = blockedReason
+        break
+      }
+
+      published.push({ queueId: head.queueId, persona: a.assigned })
       remaining.shift()
       const h = hist.find((x) => x.code === a.assigned)
       if (h !== undefined) h.matchedAts.push(at)
+      // 상한을 다 채웠으면 그 사유를 남긴다
+      if (n === cap - 1) blockedReason = 'DAILY_CAP_DONE'
     }
 
     days.push({
       date: kstDateLabel(at), scheduledAt: at, availableCodes,
-      publishedQueueId, publishedPersona, blockedReason,
+      published, blockedReason, blockedQueueId,
     })
   }
 
-  const in7 = days.slice(0, 7).filter((d) => d.publishedQueueId !== null).length
-  const in14 = days.filter((d) => d.publishedQueueId !== null).length
+  const count = (ds: readonly ForecastDay[]): number => ds.reduce((a, d) => a + d.published.length, 0)
+  const gaps = (ds: readonly ForecastDay[]): string[] => ds.filter((d) => d.published.length === 0).map((d) => d.date)
   return {
-    days, in7, in14,
-    gapDates7: days.slice(0, 7).filter((d) => d.publishedQueueId === null).map((d) => d.date),
-    gapDates14: days.filter((d) => d.publishedQueueId === null).map((d) => d.date),
-    nextQueueId, nextPersonaCandidates,
+    days,
+    in7: count(days.slice(0, 7)), in14: count(days),
+    gapDates7: gaps(days.slice(0, 7)), gapDates14: gaps(days),
+    nextQueueId, nextPersonaCandidates, nextBlockReason,
     nextScheduleAt: input.startAt,
-    nextScheduleWillPublish: days[0]?.publishedQueueId !== null,
+    nextScheduleWillPublish: (days[0]?.published.length ?? 0) > 0,
   }
 }
 
@@ -256,7 +305,8 @@ export function personasNeededFor(input: {
 /**
  * 등급 — 🔴 **재고가 있어도 나가지 못하면 경고다.**
  *
- * 관제 화면이 "재고 14/14 초록" 만 보여주면 사람은 앞으로 5일 공백을 모른다.
+ * 관제 화면이 "재고 초록" 만 보여주면 사람은 앞으로 며칠이 공백인지 모른다.
+ * 🔴 숫자는 그날그날 다르다 — 이 주석에 특정 실측치를 박아 두면 며칠 뒤 거짓말이 된다.
  */
 // 🔴 관제 화면과 **같은 Finding 타입**을 쓴다 — 두 벌이면 등급 규칙이 갈린다
 export type CapacityFinding = Finding
@@ -267,8 +317,14 @@ export function judgeCapacity(input: {
   nextWillPublish: boolean
   nextCandidates: number
   shortfallMin: number
+  /** 🔴 명시적으로 받는다 — 기대량은 상한에 따라 달라진다 */
+  dailyCap: number
 }): CapacityFinding[] {
   const out: CapacityFinding[] = []
+  // 🔴 기대량은 상한 × 7 이다. 그 절반에 못 미치면 경고한다 —
+  //    "다음 한 건은 나간다" 는 사실이 그 뒤 엿새가 막힌 것을 가리면 안 된다.
+  const expected = input.dailyCap * 7
+  const half = expected / 2
 
   // 🔴 7일 내내 0건이면 재고가 아무리 많아도 레인이 멈춘 것이다
   if (input.in7 === 0) {
@@ -276,7 +332,15 @@ export function judgeCapacity(input: {
       level: 'CRITICAL', code: 'FORECAST_EMPTY',
       message: `향후 7일 예상 발행 0건 — 재고 ${input.stockUsable}건이 있어도 나가지 못한다`,
     })
-  } else if (!input.nextWillPublish) {
+  } else if (input.in7 < half) {
+    // 🔴 **경계는 "절반 미만" 이다.** 정확히 절반이면 경고하지 않는다 —
+    //    상한이 홀수일 때 반올림 방향을 두고 헷갈리지 않도록 부등호를 하나로 못박는다.
+    out.push({
+      level: 'WARNING', code: 'FORECAST_LOW',
+      message: `향후 7일 예상 ${input.in7}건 — 기대 ${expected}건의 절반(${half}건)에 못 미친다`,
+    })
+  }
+  if (!input.nextWillPublish) {
     // 재고는 있는데 **다음 후보**가 배정 불가
     out.push({
       level: 'WARNING', code: 'NEXT_NOT_ASSIGNABLE',
@@ -307,6 +371,38 @@ export const LIFE_BLOCK_CODES: readonly string[] = [
   'NO_PARENT_CARE', 'MENOPAUSE_NOT_YET', 'NOGO_TOPIC', 'REAL_MEMBER', 'NOT_ACTIVE',
 ] as const
 export const CAPACITY_BLOCK_CODES: readonly string[] = ['WEEKLY_CAP', 'TOO_SOON'] as const
+
+/**
+ * 🔴 **조합 단위**로 센다 — 사유 개수가 아니다.
+ *
+ * 한 조합(글 하나 × persona 한 명)에 차단 사유가 여러 개 붙을 수 있다.
+ * 사유를 세면 "이유가 많은 조합" 이 비율을 끌어올려, 실제로는 몇 조합이 막혔는지 알 수 없다.
+ * 분모는 **후보 × persona 조합 수**이고, 한 조합은 한 번만 센다.
+ */
+export function blockRatesByCombination(input: {
+  candidates: number
+  personas: number
+  /** 조합별 차단 사유 코드들 — 막히지 않은 조합은 넣지 않는다 */
+  blockedCombos: readonly (readonly string[])[]
+}): {
+  total: number; lifeBlocked: number; capacityBlocked: number
+  lifeRate: number; capacityRate: number; eligible: number
+} {
+  const total = input.candidates * input.personas
+  let life = 0
+  let capacity = 0
+  for (const reasons of input.blockedCombos) {
+    // 🔴 생활사가 하나라도 있으면 그 조합은 **영구** 차단이다 — 시간이 지나도 안 풀린다
+    if (reasons.some((c) => LIFE_BLOCK_CODES.includes(c))) life += 1
+    else if (reasons.some((c) => CAPACITY_BLOCK_CODES.includes(c))) capacity += 1
+  }
+  return {
+    total, lifeBlocked: life, capacityBlocked: capacity,
+    lifeRate: total === 0 ? 0 : life / total,
+    capacityRate: total === 0 ? 0 : capacity / total,
+    eligible: total - life - capacity,
+  }
+}
 
 export function splitBlockReasons(counts: Readonly<Record<string, number>>): {
   life: number; capacity: number; lifeRate: number

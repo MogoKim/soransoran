@@ -7,13 +7,13 @@
 import { readFileSync } from 'node:fs'
 
 import {
-  DAILY_CAP_FOR_FORECAST, MAX_NEED_MULTIPLIER,
-  availablePersonasAt, capacityOf, forecastPublishing, judgeCapacity, kstDateLabel,
-  kstDayStartOf, kstStamp, nextScheduleAt, personaAvailableAt, personasNeededFor,
-  splitBlockReasons,
+  MAX_NEED_MULTIPLIER, availablePersonasAt, blockRatesByCombination, capacityOf, classifyHeadBlock,
+  forecastPublishing, judgeCapacity, kstDateLabel, kstStamp, nextScheduleAt,
+  personaAvailableAt, personasNeededFor, splitBlockReasons,
   type PersonaHistory,
 } from '../src/lib/supply-capacity-forecast'
-import { MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK } from '../src/lib/original-post-persona-match'
+import { MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK, planMatch } from '../src/lib/original-post-persona-match'
+import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 
 let pass = 0
 let failN = 0
@@ -29,9 +29,17 @@ const utc = (iso: string): Date => new Date(iso)
 console.log('\n══ 발행 여력 예측 fixture ══\n')
 
 // ── ① KST 경계 ──
-check('🔴 KST 하루 시작이 UTC 15:00 이다', (() => {
-  const d = kstDayStartOf(NOW)
+check('🔴 KST 하루 시작은 **정본** kstDayStart 를 쓴다 — 복제하지 않는다', (() => {
+  const d = kstDayStart(NOW)
   return d.toISOString() === '2026-09-06T15:00:00.000Z'
+})())
+check('🔴 forecast lib 이 자체 KST 자정 계산을 두지 않는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return /import \{ kstDayStart \}/.test(lib) && !/function kstDayStartOf/.test(lib)
+})())
+check('🔴 하루 상한 중복 상수를 두지 않는다 — DAILY_PUBLISH_CAP 정본을 주입받는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return !/DAILY_CAP_FOR_FORECAST/.test(lib) && DAILY_PUBLISH_CAP === 1
 })())
 check('🔴 UTC 날짜를 KST 처럼 보여주지 않는다 — 09-06T15:00Z 는 KST 09-07 이다',
   kstDateLabel(utc('2026-09-06T15:00:00.000Z')) === '2026-09-07')
@@ -116,15 +124,15 @@ check('🟢 여유 persona 가 있으면 첫날 발행한다', (() => {
     queue: [draft('q1')], personas: [persona('P1')], history: [h('P1')],
     startAt: START, days: 7, dailyCap: 1,
   })
-  return fc.days[0].publishedQueueId === 'q1' && fc.in7 === 1
+  return fc.days[0].published[0]?.queueId === 'q1' && fc.in7 === 1
 })())
 check('🔴 발행 후 그 persona 는 다음 날 못 쓴다 — 여력이 줄어든 것이 반영된다', (() => {
   const fc = forecastPublishing({
     queue: [draft('q1'), draft('q2')], personas: [persona('P1')], history: [h('P1')],
     startAt: START, days: 7, dailyCap: 1,
   })
-  return fc.days[0].publishedQueueId === 'q1' && fc.days[1].publishedQueueId === null
-    && fc.days[1].blockedReason === 'NO_PERSONA'
+  return fc.days[0].published[0]?.queueId === 'q1' && fc.days[1].published.length === 0
+    && fc.days[1].blockedReason === 'CAPACITY_WAIT'
 })())
 check('🔴 rolling 7일 경계가 포함이라 8일째에 풀린다', (() => {
   const fc = forecastPublishing({
@@ -132,9 +140,9 @@ check('🔴 rolling 7일 경계가 포함이라 8일째에 풀린다', (() => {
     startAt: START, days: 10, dailyCap: 1,
   })
   // 0일째 발행 → 7일째는 경계 포함이라 아직 막히고, 8일째에 풀린다
-  return fc.days[0].publishedQueueId !== null
-    && fc.days[7].publishedQueueId === null
-    && fc.days[8].publishedQueueId !== null
+  return fc.days[0].published.length > 0
+    && fc.days[7].published.length === 0
+    && fc.days[8].published.length > 0
 })())
 check('🔴 후보가 떨어지면 NO_CANDIDATE 다', (() => {
   const fc = forecastPublishing({
@@ -151,7 +159,7 @@ check('🔴 맨 앞 글에 배정이 안 되면 **뒤 글로 우회하지 않는
     startAt: START, days: 3, dailyCap: 1,
   })
   // 우회했다면 q2 가 나갔을 것이다
-  return fc.days[0].publishedQueueId === null && fc.in7 === 0
+  return fc.days[0].published.length === 0 && fc.in7 === 0
 })())
 check('🔴 호출자의 이력 배열을 바꾸지 않는다', (() => {
   const hist = [h('P1')]
@@ -178,19 +186,19 @@ check('🔴 다음 대상과 배정 가능 persona 를 돌려준다', (() => {
 
 // ── ⑤ 등급 ──
 check('🔴 7일 예상 0건이면 CRITICAL — 재고가 있어도 나가지 못한다', (() => {
-  const r = judgeCapacity({ stockUsable: 14, in7: 0, nextWillPublish: false, nextCandidates: 0, shortfallMin: 2 })
+  const r = judgeCapacity({ stockUsable: 14, in7: 0, nextWillPublish: false, nextCandidates: 0, shortfallMin: 2, dailyCap: 1 })
   return r.some((x) => x.code === 'FORECAST_EMPTY' && x.level === 'CRITICAL')
 })())
 check('🟡 재고는 있는데 다음 후보가 배정 불가면 WARNING', (() => {
-  const r = judgeCapacity({ stockUsable: 14, in7: 3, nextWillPublish: false, nextCandidates: 0, shortfallMin: 0 })
+  const r = judgeCapacity({ stockUsable: 14, in7: 3, nextWillPublish: false, nextCandidates: 0, shortfallMin: 0, dailyCap: 1 })
   return r.some((x) => x.code === 'NEXT_NOT_ASSIGNABLE' && x.level === 'WARNING')
 })())
 check('🟡 persona 가 부족하면 WARNING', (() => {
-  const r = judgeCapacity({ stockUsable: 14, in7: 3, nextWillPublish: true, nextCandidates: 2, shortfallMin: 2 })
+  const r = judgeCapacity({ stockUsable: 14, in7: 3, nextWillPublish: true, nextCandidates: 2, shortfallMin: 2, dailyCap: 1 })
   return r.some((x) => x.code === 'PERSONA_SHORTFALL' && x.level === 'WARNING')
 })())
 check('🟢 다 괜찮으면 HEALTHY', (() => {
-  const r = judgeCapacity({ stockUsable: 14, in7: 7, nextWillPublish: true, nextCandidates: 3, shortfallMin: 0 })
+  const r = judgeCapacity({ stockUsable: 14, in7: 7, nextWillPublish: true, nextCandidates: 3, shortfallMin: 0, dailyCap: 1 })
   return r.length === 1 && r[0].level === 'HEALTHY'
 })())
 
@@ -221,6 +229,229 @@ check('🔴 생활사(영구)와 여력(임시)을 나눈다', (() => {
 })())
 check('🟢 차단이 없으면 비율 0', splitBlockReasons({}).lifeRate === 0)
 
+// ══════════════════════════════════════════════════════════════════
+// 🔴 #468 이후 — childrenCount · 전체 후보 planBatch · 조합 분모 · dailyCap>1
+// ══════════════════════════════════════════════════════════════════
+
+// ① 실제 두 번째 후보의 조건에서 자녀 있는 persona 가 eligible 인가
+{
+  // 🔴 CHILDREN_RE 가 잡는 낱말을 쓴다 — '아이랑' 은 패턴에 없어 트리거되지 않는다
+  const KID_TITLE = '애들이랑 같이 갈 숙소, 뭐 보고 고르세요?'
+  const KID_BODY = '이번에 애들이랑 같이 가려는데 숙소를 뭘 보고 골라야 할지 모르겠어요.'
+  const kidPersona = (code: string, kids: number | null): P => ({
+    ...persona(code), ...(kids === null ? {} : { childrenCount: kids }),
+  } as unknown as P)
+
+  const withKids = planMatch({
+    queueId: 'q2', title: KID_TITLE, body: KID_BODY,
+    personas: [kidPersona('P10', 1), kidPersona('P17', 2), kidPersona('P15', 0)] as never,
+  })
+  check('🔴 [#468] 자녀 글에 P10·P17 이 eligible 이다',
+    withKids.eligible.map((c) => c.code).sort().join(' ') === 'P10 P17')
+  check('🔴 [#468] 무자녀 P15 는 차단된다',
+    withKids.blocked.some((b) => b.code === 'P15' && b.reasons.some((r) => r.code === 'NO_CHILDREN')))
+
+  const missing = planMatch({
+    queueId: 'q2', title: KID_TITLE, body: KID_BODY,
+    personas: [kidPersona('P10', null), kidPersona('P17', null)] as never,
+  })
+  check('🔴 [#468 회귀] childrenCount 를 넘기지 않으면 전원 잘못 막힌다',
+    missing.eligible.length === 0
+    && missing.blocked.every((b) => b.reasons.some((r) => r.code === 'NO_CHILDREN')))
+  check('🔴 [#468] health 러너도 childrenCount 를 넘긴다', (() => {
+    const h = readFileSync('scripts/supply-health.mts', 'utf-8')
+    return /childrenCount: typeof id\.childrenCount === 'number'/.test(h)
+  })())
+}
+
+// ② 전체 후보를 planBatch 에 넘기되 발행 대상은 head 다
+check('🔴 [배치] 남은 후보 **전체**를 planBatch 에 넘긴다 — head 하나만 넘기지 않는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return /planBatch\(remaining, personasNow\)/.test(lib) && !/planBatch\(\[head\]/.test(lib)
+})())
+check('🔴 [배치] 발행 대상은 head 다 — 배정이 다른 글에 갔어도 건너뛰지 않는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return /const a = batch\.assignments\.find\(\(x\) => x\.queueId === head\.queueId\)/.test(lib)
+})())
+check('🔴 [배치] 여력이 다른 글에 쓰이면 BATCH_EXHAUSTED 로 구분한다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return /BATCH_EXHAUSTED/.test(lib)
+})())
+
+// ③ 조합 분모 — 사유 개수가 아니다
+check('🔴 [조합] 분모는 후보 × persona 다', (() => {
+  const r = blockRatesByCombination({ candidates: 14, personas: 5, blockedCombos: [] })
+  return r.total === 70 && r.eligible === 70
+})())
+check('🔴 [조합] 한 조합에 사유가 여러 개여도 **한 번만** 센다', (() => {
+  const r = blockRatesByCombination({
+    candidates: 2, personas: 1,
+    blockedCombos: [['NO_CHILDREN', 'CHILD_AGE_CONFLICT', 'MARITAL_CONFLICT']],
+  })
+  return r.total === 2 && r.lifeBlocked === 1 && r.eligible === 1
+})())
+check('🔴 [조합] 생활사가 하나라도 있으면 영구 차단으로 센다 — 시간이 지나도 안 풀린다', (() => {
+  const r = blockRatesByCombination({
+    candidates: 1, personas: 1, blockedCombos: [['WEEKLY_CAP', 'NO_CHILDREN']],
+  })
+  return r.lifeBlocked === 1 && r.capacityBlocked === 0
+})())
+check('🟢 [조합] cap·간격만이면 임시 차단이다', (() => {
+  const r = blockRatesByCombination({
+    candidates: 1, personas: 1, blockedCombos: [['WEEKLY_CAP', 'TOO_SOON']],
+  })
+  return r.capacityBlocked === 1 && r.lifeBlocked === 0
+})())
+check('🔴 [조합] 러너가 조합 단위로 센다 — 사유 개수 집계를 쓰지 않는다', (() => {
+  const h = readFileSync('scripts/supply-health.mts', 'utf-8')
+  return /blockRatesByCombination\(/.test(h) && !/blockCounts\[/.test(h)
+})())
+
+// ④ dailyCap 1 · 3
+check('🟢 [cap=1] 하루 1건만 나간다', (() => {
+  const fc = forecastPublishing({
+    queue: [draft('q1'), draft('q2'), draft('q3')],
+    personas: [persona('P1'), persona('P2'), persona('P3')],
+    history: [h('P1'), h('P2'), h('P3')], startAt: START, days: 2, dailyCap: 1,
+  })
+  return fc.days[0].published.length === 1
+})())
+check('🔴 [cap=3] 하루 여러 건이 **배열로** 남는다 — 덮어쓰지 않는다', (() => {
+  const fc = forecastPublishing({
+    queue: [draft('q1'), draft('q2'), draft('q3')],
+    personas: [persona('P1'), persona('P2'), persona('P3')],
+    history: [h('P1'), h('P2'), h('P3')], startAt: START, days: 2, dailyCap: 3,
+  })
+  const first = fc.days[0].published
+  return first.length === 3
+    && new Set(first.map((x) => x.queueId)).size === 3
+    && new Set(first.map((x) => x.persona)).size === 3
+})())
+check('🔴 [cap=3] 세 건이 in7 에 모두 반영된다', (() => {
+  const fc = forecastPublishing({
+    queue: [draft('q1'), draft('q2'), draft('q3')],
+    personas: [persona('P1'), persona('P2'), persona('P3')],
+    history: [h('P1'), h('P2'), h('P3')], startAt: START, days: 7, dailyCap: 3,
+  })
+  return fc.in7 === 3
+})())
+check('🔴 [cap=3] persona 가 모자라면 그만큼만 나간다', (() => {
+  const fc = forecastPublishing({
+    queue: [draft('q1'), draft('q2'), draft('q3')],
+    personas: [persona('P1')], history: [h('P1')], startAt: START, days: 2, dailyCap: 3,
+  })
+  return fc.days[0].published.length === 1
+})())
+
+// ⑤ 차단 사유 구분
+check('🔴 [사유] 생활사 영구 차단을 LIFE_BLOCKED 로 낸다', (() => {
+  const blocked = { ...persona('P1'), noGoTopics: ['저녁'] } as unknown as P
+  const fc = forecastPublishing({
+    queue: [draft('q1')], personas: [blocked], history: [h('P1')],
+    startAt: START, days: 2, dailyCap: 1,
+  })
+  return fc.days[0].blockedReason === 'LIFE_BLOCKED' && fc.nextBlockReason === 'LIFE_BLOCKED'
+})())
+check('🔴 [사유] cap·간격 대기는 CAPACITY_WAIT 다', (() => {
+  const fc = forecastPublishing({
+    queue: [draft('q1'), draft('q2')], personas: [persona('P1')], history: [h('P1')],
+    startAt: START, days: 3, dailyCap: 1,
+  })
+  return fc.days[1].blockedReason === 'CAPACITY_WAIT'
+})())
+check('🔴 [사유] 막힌 글의 id 를 남긴다', (() => {
+  const blocked = { ...persona('P1'), noGoTopics: ['저녁'] } as unknown as P
+  const fc = forecastPublishing({
+    queue: [draft('q1')], personas: [blocked], history: [h('P1')],
+    startAt: START, days: 2, dailyCap: 1,
+  })
+  return fc.days[0].blockedQueueId === 'q1'
+})())
+check('🔴 [사유] 상한을 채우면 DAILY_CAP_DONE 이다', (() => {
+  const fc = forecastPublishing({
+    queue: [draft('q1'), draft('q2')], personas: [persona('P1'), persona('P2')],
+    history: [h('P1'), h('P2')], startAt: START, days: 2, dailyCap: 1,
+  })
+  return fc.days[0].blockedReason === 'DAILY_CAP_DONE'
+})())
+
+// ══════════════════════════════════════════════════════════════════
+// 🔴 차단 분류는 **persona 조합 단위**다
+//
+// 전체 blocked 에서 "생활사가 하나라도 / capacity 가 하나라도" 를 따로 세면
+// 서로 다른 persona 의 사유가 섞여, 아무도 기다려서 풀리지 않는 경우가
+// CAPACITY_WAIT 로 잘못 읽힌다 — 기다리면 된다고 착각하게 된다.
+// ══════════════════════════════════════════════════════════════════
+check('🔴 [분류] P1: NO_CHILDREN+WEEKLY_CAP · P2: NO_CHILDREN → LIFE_BLOCKED', (() => (
+  classifyHeadBlock({
+    eligibleCount: 0,
+    blocked: [['NO_CHILDREN', 'WEEKLY_CAP'], ['NO_CHILDREN']],
+  }) === 'LIFE_BLOCKED'
+))())
+check('🔴 [분류] P1: NO_CHILDREN · P2: WEEKLY_CAP 만 → CAPACITY_WAIT', (() => (
+  classifyHeadBlock({
+    eligibleCount: 0,
+    blocked: [['NO_CHILDREN'], ['WEEKLY_CAP']],
+  }) === 'CAPACITY_WAIT'
+))())
+check('🔴 [분류] 한 persona 의 NO_CHILDREN+WEEKLY_CAP 은 기다려도 안 풀린다', (() => (
+  classifyHeadBlock({ eligibleCount: 0, blocked: [['NO_CHILDREN', 'WEEKLY_CAP']] }) === 'LIFE_BLOCKED'
+))())
+check('🟡 [분류] TOO_SOON 만 있는 persona 가 있으면 CAPACITY_WAIT', (() => (
+  classifyHeadBlock({ eligibleCount: 0, blocked: [['MARITAL_CONFLICT'], ['TOO_SOON']] }) === 'CAPACITY_WAIT'
+))())
+check('🔴 [분류] eligible 이 있으면 배치 여력 문제다', (() => (
+  classifyHeadBlock({ eligibleCount: 2, blocked: [['WEEKLY_CAP']] }) === 'BATCH_EXHAUSTED'
+))())
+check('🔴 [분류] 러너가 이 함수를 쓴다 — anyLife/anyCapacity 를 섞지 않는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return /classifyHeadBlock\(\{/.test(lib) && !/const anyLife =/.test(lib)
+})())
+
+// ══════════════════════════════════════════════════════════════════
+// 🔴 FORECAST_LOW — "다음 한 건은 나간다" 가 그 뒤 엿새를 가리면 안 된다
+// ══════════════════════════════════════════════════════════════════
+const jc = (in7: number, dailyCap = 1, nextWillPublish = true): ReturnType<typeof judgeCapacity> =>
+  judgeCapacity({ stockUsable: 14, in7, nextWillPublish, nextCandidates: 2, shortfallMin: 0, dailyCap })
+
+check('🔴 [LOW] cap=1 · 7일 3건(기대 7의 절반 미만) → WARNING', (() => {
+  const r = jc(3)
+  return r.some((x) => x.code === 'FORECAST_LOW' && x.level === 'WARNING')
+})())
+check('🟢 [LOW 경계] 정확히 절반(3.5 → 4건)은 경고하지 않는다 — 부등호는 "미만" 하나다',
+  !jc(4).some((x) => x.code === 'FORECAST_LOW'))
+check('🔴 [LOW 경계] 3건은 3.5 미만이라 경고한다',
+  jc(3).some((x) => x.code === 'FORECAST_LOW'))
+check('🔴 [LOW] 다음 예약 1건이 가능해도 이후가 막히면 HEALTHY 가 아니다', (() => {
+  const r = jc(1, 1, true)
+  return r.some((x) => x.code === 'FORECAST_LOW') && !r.some((x) => x.code === 'CAPACITY_OK')
+})())
+check('🔴 [LOW] cap=3 이면 기대 21건 — 10건도 경고다', (() => {
+  const r = jc(10, 3)
+  return r.some((x) => x.code === 'FORECAST_LOW')
+})())
+check('🟢 [LOW] cap=3 · 11건(절반 10.5 초과)은 경고하지 않는다',
+  !jc(11, 3).some((x) => x.code === 'FORECAST_LOW'))
+check('🔴 [LOW] 0건은 여전히 CRITICAL 이다 — LOW 로 낮추지 않는다', (() => {
+  const r = jc(0, 1, false)
+  return r.some((x) => x.code === 'FORECAST_EMPTY' && x.level === 'CRITICAL')
+    && !r.some((x) => x.code === 'FORECAST_LOW')
+})())
+check('🟢 [LOW] 기대량을 채우면 HEALTHY', (() => {
+  const r = jc(7)
+  return r.length === 1 && r[0].code === 'CAPACITY_OK'
+})())
+check('🔴 [LOW] 러너가 dailyCap 을 judgeCapacity 에 넘긴다', (() => {
+  const h = readFileSync('scripts/supply-health.mts', 'utf-8')
+  return /dailyCap: DAILY_PUBLISH_CAP,\s*\}\)/.test(h)
+})())
+
+// 🔴 옛 실측 수치가 주석에 박혀 있지 않다
+check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return !/14일 중 \*\*5일|앞으로 5일 공백|7일 중 6일/.test(lib)
+})())
+
 // ── ⑧ read-only 계약 ──
 {
   const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
@@ -240,7 +471,9 @@ check('🟢 차단이 없으면 비율 0', splitBlockReasons({}).lifeRate === 0)
   })())
   check('🔴 러너가 오늘 발행 수를 넘겨 다음 예약을 정한다',
     /nextScheduleAt\(\{ now, publishedToday: todayCount/.test(runner))
-  check('🔴 하루 상한은 러너 상수를 쓴다', DAILY_CAP_FOR_FORECAST === 1)
+  check('🔴 하루 상한은 러너 정본 상수를 쓴다', DAILY_PUBLISH_CAP === 1)
+  check('🔴 러너가 dailyCap 을 명시적으로 주입한다',
+    /dailyCap: DAILY_PUBLISH_CAP/.test(runner))
 }
 
 console.log('\n─────────────────────────────────────────────────────────')
