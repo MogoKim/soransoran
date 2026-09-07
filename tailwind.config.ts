@@ -59,6 +59,11 @@ const config: Config = {
           edge: 'var(--cta-edge)',
           text: 'var(--cta-text)',
         },
+        /* 🔴 FAB 전용 내용색 — cta.text 와 섞지 않는다 (globals.css §FAB 내용색)
+           FAB 만 흰 내용을 쓴다. 다른 primary CTA 는 cta.text(#241e1b) 를 그대로 쓴다. */
+        fab: {
+          content: 'var(--fab-content)',
+        },
         surface: {
           page: 'var(--surface-page)',
           card: 'var(--surface-card)',

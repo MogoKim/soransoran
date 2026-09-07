@@ -84,7 +84,11 @@ export default function FAB() {
       className={cn(
         /* motion-safe: 를 붙인 것은 전환뿐이다. 접힘(폭·여백) 자체는 항상 적용된다 —
            움직임을 줄이도록 설정하면 애니메이션 없이 바로 그 폭이 된다. */
-        'fixed bottom-6 right-5 z-40 inline-flex h-[56px] items-center justify-center rounded-full bg-cta font-bold text-cta-text no-underline shadow-[shadow:var(--shadow-brand)] hover:brightness-95 motion-safe:transition-all motion-safe:duration-200 motion-safe:active:scale-95',
+        /* 🔴 내용색은 text-cta-text 가 아니라 text-fab-content(흰색)다.
+           FAB 은 브랜드를 가장 강하게 보여주는 자리라 원색 면 위에 흰 내용을 얹는다.
+           일반 primary CTA 는 계속 text-cta-text 를 쓴다 — 섞지 않는다.
+           (값과 근거는 정본 §2-2-C · globals.css §FAB 내용색) */
+        'fixed bottom-6 right-5 z-40 inline-flex h-[56px] items-center justify-center rounded-full bg-cta font-bold text-fab-content no-underline shadow-[shadow:var(--shadow-brand)] hover:brightness-95 motion-safe:transition-all motion-safe:duration-200 motion-safe:active:scale-95',
         collapsed ? 'w-[56px] px-0' : 'px-6',
       )}
     >
@@ -92,12 +96,17 @@ export default function FAB() {
         +
       </span>
       {/* 접힘은 폭으로 준다 — display:none 으로 지우면 글자가 튀듯 사라진다.
-          펼친 폭은 넉넉히 잡는다: 글자 크기 "크게"에서 본문이 24px 이라
-          세 글자가 72px 을 넘는다. 여기서 좁게 잡으면 라벨이 잘린다. */}
+          펼친 폭은 넉넉히 잡는다: 글자 크기 "크게"에서 라벨이 28px 이라
+          세 글자가 84px 을 넘는다. 여기서 좁게 잡으면 라벨이 잘린다.
+
+          🔴 text-lg 는 장식이 아니라 대비 조건이다.
+             흰 글씨는 원색 위에서 3.53:1 이라 **큰 굵은 글씨(18.66px+700)** 로만 통과한다.
+             상속값(text-base = --text-body)은 "작게" 에서 18px 이라 그 경계 아래다.
+             text-lg(--text-title)는 20/24/28px 로 세 모드 전부 넘긴다. */}
       <span
         aria-hidden
         className={cn(
-          'overflow-hidden whitespace-nowrap motion-safe:transition-all motion-safe:duration-200',
+          'overflow-hidden whitespace-nowrap text-lg motion-safe:transition-all motion-safe:duration-200',
           collapsed ? 'ml-0 max-w-0 opacity-0' : 'ml-1.5 max-w-[140px] opacity-100',
         )}
       >
