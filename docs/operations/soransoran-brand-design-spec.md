@@ -2556,3 +2556,47 @@ Tailwind 가 클래스를 못 보는 문제는 없다 — `spacing.ts` 의 리�
 | FAB `bottom-6 right-5` | `PageShell` 의 `pb-[72px] lg:pb-0` 과 **한 쌍**. 한쪽만 바꾸면 FAB 가 마지막 글을 가린다 |
 | `safe-area-inset` 6곳 | iOS 홈 인디케이터 대응 — **임의값이 맞다** |
 | **admin 여백** | `.admin-shell` 이 타이포 토큰을 따로 갖듯 여백도 **별도 축**으로 보인다. 이번 조사에서 제외했다 |
+
+### 13-4. 문장 안 inline 링크 — 52px 예외 (2026-09-07)
+
+`TOUCH_MIN` 이 **안 먹는 자리**가 있었다. §12-26 작업 중 발견해 전수 확인했다.
+
+🔴 **`min-height` 는 non-replaced inline 요소(`<a>` 등)의 실제 박스 높이를 키우지 않는다.**
+   실측: `<a>` 에 `min-h-[52px]` 만 주면 computed min-height 는 52px 인데 **박스는 48px 그대로**다
+   (390 기본 323×48 · "크게" 95×26 · 1280 78×21).
+
+**전수 결과 — 116곳 중 무효는 1곳뿐이었다.**
+
+| 요소 | display | `min-h-[52px]` 만 줬을 때 | 판정 |
+|---|---|---|---|
+| `<a>` (Link) | **inline** | 323×**48** | 🔴 무효 |
+| `<button>` | inline-block | 63×**52** | ✅ 유효 |
+| `<input>` | inline-block | 240×**52** | ✅ 유효 |
+| `<summary>` | list-item | 324×**52** | ✅ 유효 |
+| `<a>` + `inline-flex` | inline-flex | 78×**52** | ✅ 유효 (단 부모가 커진다) |
+
+**무효였던 1곳** — `PostActionBar` notice 의 `로그인하기` 링크. **이번에 `TOUCH_MIN` 을 뺐다.**
+`<button>` 에 display 없이 붙은 6곳(`ActionButton` · `DeleteButton` · `KakaoSignInButton` ·
+`ReportButton` · `WriteLoginPrompt` · `PostEditor`)은 **기본 display 가 inline 이 아니라 정상 작동**한다.
+나머지 108곳은 `inline-flex` · `flex` · `block` · `w-full` 을 이미 갖고 있다 — **유효 114곳은 건드리지 않았다.**
+
+`CommentLikeButton` 의 `카카오로 시작하기` 는 **원래 `TOUCH_MIN` 이 없다**(§12-26 에서 밑줄만 붙였다).
+두 컴포넌트의 실제 터치 높이는 **전부터 같았다** — 한쪽만 클래스가 붙어 코드상 달라 보였을 뿐이다.
+
+🔴 **문장 안 inline 링크는 52px 예외로 둔다. 대신 `underline` 으로 링크임을 보장한다.**
+   헌법의 52px 은 **누르는 것**(버튼·탭·카드)의 기준이고, 문장 안 링크는 그 대상이 아니다.
+   48px 은 iOS HIG(44pt)·Material(48dp)·WCAG 2.5.5(44px)를 넘는다.
+
+🔴 **`inline-flex` 는 쓰지 않는다.** 52px 은 달성되지만 **부모 `<p>` 가 54 → 79px(390 기본) ·
+   66 → 85px("크게") 로 커지고 링크 폭이 323 → 78px 로 줄어 문장에서 튀어나온다.**
+   §12-14 ② · §12-26 이 "크기·줄 수·박스 변화 0" 으로 닫은 판단을 되돌리는 일이다.
+
+🔴 **`TOUCH_MIN` 상수 값은 바꾸지 않았다.** 상수에 `inline-flex` 를 넣으면
+   이미 `flex` · `block` · `w-full` 을 쓰는 114곳과 충돌한다(`inline-flex flex` 같은 조합).
+   주석에 "inline 에는 안 먹는다" 를 적어 다음 사람이 같은 조사를 반복하지 않게 했다.
+
+**렌더 변화 0px** — 지운 클래스가 원래 무효였으므로 3뷰포트 모두 값이 그대로다.
+
+🟡 **별도 구조 축으로 남긴 것** — 390 "크게" 에서 문장이 2줄이 되며 링크가 한 줄에 들어가
+   실제 높이가 **26px** 로 더 작아진다. **글자를 키운 사람일수록 터치 영역이 줄어든다.**
+   `line-height` 기반 최소 높이 같은 다른 접근이 필요하고, 이번 축(무효 클래스 정리)이 아니다.

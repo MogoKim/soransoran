@@ -385,9 +385,14 @@ export default function PostActionBar({
           {notice.login ? (
             <>
               {' '}
+              {/* 🔴 여기엔 TOUCH_MIN 을 쓰지 않는다. 문장 안 링크는 inline 이라
+                     `min-height` 가 적용되지 않는다 — 붙여도 박스는 48px 그대로였고
+                     "지켰다" 는 착각만 남았다. 52px 을 실제로 만들려면 `inline-flex` 가
+                     필요한데 그러면 부모 `<p>` 가 25px 커지고 링크가 문장에서 튀어나온다.
+                     문장 안 inline 링크는 예외로 두고 **밑줄로 링크임을 보장한다** — 정본 §13-4. */}
               <Link
                 href={loginHref(currentPath)}
-                className={`${TOUCH_MIN} text-link underline underline-offset-2`}
+                className="text-link underline underline-offset-2"
               >
                 로그인하기
               </Link>
