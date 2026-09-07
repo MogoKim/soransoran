@@ -277,6 +277,10 @@ jobs:
       - name: 82cook 얇은 상세 fetch (전문 미저장 · 두 스위치)
         run: npm run micro-seed:82cook-thin-check
 
+      # 사본으로도 전문이 새지 않는지 · drop 이 화면에 오르지 않는지 본다 (§4-AQ)
+      - name: thin → 검수 어댑터 (전문 미저장 · drop 차단)
+        run: npm run micro-seed:82cook-thin-adapt-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:
