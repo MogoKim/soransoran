@@ -342,6 +342,18 @@ jobs:
       - name: 공급 Autopilot (발행 금지 · 재개 계약 · fail closed)
         run: npm run supply:autopilot-check
 
+      # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
+      #
+      # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.
+      #    ① launchd 기본 PATH 에 nvm 의 node 가 없어 npx shebang 이 실패
+      #    ② 로그를 ~/Documents 아래 두면 TCC 로 파일을 열지 못함
+      #    둘 다 프로세스가 뜨기도 전에 죽어 stdout·stderr 어디에도 원인이 없다.
+      #    사람이 알아채는 데 며칠이 걸리고, 그동안 공급은 멈추고 큐는 비어간다.
+      #
+      # 🔴 파일만 읽는다 — launchctl 0 · 네트워크 0 · DB 0.
+      - name: launchd 템플릿 (PATH · 로그 위치 · placeholder · 불변 계약)
+        run: npm run launchd:template-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:

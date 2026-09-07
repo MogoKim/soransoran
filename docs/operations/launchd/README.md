@@ -19,22 +19,64 @@
 헌법 §6-9-F 개정으로 **공급 cron 을 붙일 자격**이 생겼을 뿐,
 자격과 등록은 다르다. 첫 live 수집을 사람이 한 번 보고 나서 붙인다.
 
-## 등록 절차 (승인 후)
+## 🔴 등록이 조용히 실패하는 두 가지 (2026-09-07 실측)
+
+supply-autopilot 을 처음 등록했을 때 job 은 `loaded` 인데 **exit 78 로 죽고 로그가 0바이트**였다.
+프로세스가 뜨기도 전에 죽어서 stdout·stderr 어디에도 원인이 남지 않는다 —
+사람 눈에는 "등록은 됐는데 아무 일도 안 일어나는" 상태로 보인다.
+
+| 원인 | 왜 |
+|---|---|
+| **PATH** | launchd 기본 PATH 는 `/usr/bin:/bin:/usr/sbin:/sbin` 뿐이다. `npx` 의 shebang 이 `#!/usr/bin/env node` 라 nvm 의 node 를 못 찾는다 (`env: node: No such file or directory`) |
+| **로그 위치** | 로그를 `~/Documents` 아래 두면 macOS 의 Documents 접근 보호(TCC)로 launchd 가 그 파일을 열지 못한다 |
+
+그래서 템플릿은 `__NODEBIN__` 과 `__LOGDIR__` 을 요구한다.
+`~` 나 `$HOME` 은 plist 안에서 **확장되지 않으므로** 아래 절차가 절대경로로 치환한다.
+
+## 등록 절차 (승인 후) — 🔴 몇 번을 돌려도 같은 상태가 된다
 
 ```bash
-# 1) 값 치환 — 템플릿의 __PLACEHOLDER__ 를 실제 경로로
+# ── 0) 값을 한 번만 계산한다 ──
+REPO=/Users/yanadoo/Documents/soransoran-m0
+NPX="$(which npx)"
+NODEBIN="$(dirname "$(which node)")"
+LOGDIR="$HOME/Library/Logs/soransoran"   # 🔴 Documents 밖이어야 한다
+# 🔴 JOB 하나가 **템플릿 파일명이자 launchd Label** 이다. 이 디렉터리의 템플릿은
+#    파일명과 Label 을 일치시켜 두었으므로, 아래 render·lint·load·print 가 전부 같은 것을 가리킨다.
+JOB=com.soransoran.raw-collect-82cook
+
+# ── 1) 로그 디렉터리를 먼저 만든다 ──
+mkdir -p "$LOGDIR"
+
+# ── 2) 치환 ──
 sed -e "s#__NODE__#$(which node)#g" \
-    -e "s#__NPX__#$(which npx)#g" \
-    -e "s#__REPO__#/Users/yanadoo/Documents/soransoran-m0#g" \
-    docs/operations/launchd/com.soransoran.raw-collect-82cook.plist.template \
-    > ~/Library/LaunchAgents/com.soransoran.raw-collect-82cook.plist
+    -e "s#__NPX__#${NPX}#g" \
+    -e "s#__NODEBIN__#${NODEBIN}#g" \
+    -e "s#__LOGDIR__#${LOGDIR}#g" \
+    -e "s#__REPO__#${REPO}#g" \
+    "docs/operations/launchd/${JOB}.plist.template" \
+    > "$HOME/Library/LaunchAgents/${JOB}.plist"
 
-# 2) 등록
-launchctl load ~/Library/LaunchAgents/com.soransoran.raw-collect-82cook.plist
+# ── 3) 문법 검증 — 🔴 통과해야 등록한다 ──
+plutil -lint "$HOME/Library/LaunchAgents/${JOB}.plist"
 
-# 3) 확인 — 두 번째 컬럼이 마지막 exit status 다
-launchctl list | grep soransoran
+# ── 4) 등록 (unload 후 load — 이미 있으면 걷어내고 다시 올린다) ──
+launchctl unload "$HOME/Library/LaunchAgents/${JOB}.plist" 2>/dev/null || true
+launchctl load  "$HOME/Library/LaunchAgents/${JOB}.plist"
+
+# ── 5) 확인 ──
+launchctl list | grep soransoran                       # 2번째 컬럼 = 마지막 exit status
+launchctl print "gui/$(id -u)/${JOB}" | grep -E 'state|program|path ='
 ```
+
+🔴 **치환 후 남은 `__…__` 가 하나라도 있으면 안 된다.** 확인:
+
+```bash
+grep -o '__[A-Z_]*__' "$HOME/Library/LaunchAgents/${JOB}.plist" || echo "남은 placeholder 없음"
+```
+
+🔴 **`plutil -extract` 로 값을 볼 때는 `-o -` 를 붙여라.** 안 붙이면 **원본 파일을 덮어쓴다** —
+2026-09-07 에 등록된 plist 하나를 그렇게 날렸다. 읽기만 할 거면 `plutil -p` 를 쓴다.
 
 🔴 **`.env.local` 에 `SORAN_82COOK_COLLECT_ENABLED=true` 가 없으면 `--live` 는 무시된다.**
 kill switch 는 plist 가 아니라 환경변수다 — plist 를 지우지 않고도 멈출 수 있어야 한다.
@@ -49,49 +91,45 @@ rm ~/Library/LaunchAgents/com.soransoran.raw-collect-82cook.plist
 또는 **더 빠르게**: `.env.local` 에서 `SORAN_82COOK_COLLECT_ENABLED` 를 `false` 로.
 plist 는 계속 돌지만 수집이 일어나지 않는다.
 
+## 확정 수집원은 셋뿐이다
+
+| 수집원 | Label / 템플릿 파일명 | 시각 (KST) | 명령 |
+|---|---|---|---|
+| 82cook | `com.soransoran.raw-collect-82cook` | 2시간 간격 10슬롯 (07:10~01:10) | `micro-seed-collect-82cook.mts --list --pages=3 --auto --auto-max=30 --live` |
+| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace` | **09:20** | `micro-seed-collect-navercafe.mts --cafe=remonterrace --pages=1 --max=10 --live` |
+| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang` | **13:20** | `micro-seed-collect-navercafe.mts --cafe=wgang --pages=1 --max=10 --live` |
+
+🟡 `dlxogns01` · `masanmam` · `goondae` · `yeowooya` 는 **미활성 장래 후보**다.
+수집기가 아는 카페일 뿐 확정 수집원도 현재 스케줄도 아니며, **실행 템플릿을 두지 않는다.**
+늘리려면 그때 승인을 받고 템플릿을 새로 만든다 — fixture 가 이 넷의 템플릿이 없는지 검사한다.
+
 ## 목록
 
 | 템플릿 | 무엇을 | 환경 |
 |---|---|---|
 | `com.soransoran.raw-collect-82cook.plist.template` | 82cook 자동 수집 (2시간 간격 10슬롯) | 로컬 또는 GHA 대체 가능 |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
-| `com.soransoran.navercafe-collect.plist.template` | 네이버 카페 수집 (카페별 1슬롯) | 🔴 **로컬 전용** |
+| `com.soransoran.navercafe-collect-remonterrace.plist.template` | 레몬테라스 수집 (09:20 KST 1슬롯) | 🔴 **로컬 전용** |
+| `com.soransoran.navercafe-collect-wgang.plist.template` | 우아한 갱년기 수집 (13:20 KST 1슬롯) | 🔴 **로컬 전용** |
 | `com.soransoran.supply-autopilot.plist.template` | 공급 Autopilot v1 — 재고 14 미만일 때만 수집→판정→생성→적재 (21:10 KST 1슬롯) | 🔴 **로컬 전용** (§4-AU) |
 
 ## 공급 Autopilot 등록 (승인 후)
 
 ```bash
-# 0) 🔴 .env.local 에 스위치 둘. 하나라도 없으면 러너가 시작 전에 멈춘다
+# ── 0) 🔴 .env.local 에 스위치 둘. 하나라도 없으면 러너가 시작 전에 멈춘다 ──
 #    SORAN_SUPPLY_AUTOPILOT_ENABLED=true
 #    SORAN_82COOK_THIN_DETAIL_ENABLED=true
 
-# 1) 첫 실행은 사람이 본다 — dry-run 은 네트워크 0 · LLM 0 · DB write 0
-npm run supply:autopilot                      # 오늘 재고로 판정만
+# ── 1) 첫 실행은 사람이 본다 — dry-run 은 네트워크 0 · LLM 0 · DB write 0 ──
+npm run supply:autopilot                        # 오늘 재고로 판정만
 npm run supply:autopilot -- --simulate-stock=5  # 부족했다면 무엇을 할지
 
-# 2) 🔴 로그 디렉터리를 **먼저** 만든다
-#    StandardOutPath 의 상위 디렉터리가 없으면 launchd 가 job 을 띄우지 못한다.
-#    "등록은 됐는데 아무 일도 안 일어나는" 상태가 되고, 원인이 화면에 안 보인다.
-mkdir -p /Users/yanadoo/Documents/soransoran-m0/logs
-
-# 3) 값 치환 + 문법 검증 — 🔴 lint 를 통과해야 등록한다
-sed -e "s#__NPX__#$(which npx)#g" \
-    -e "s#__REPO__#/Users/yanadoo/Documents/soransoran-m0#g" \
-    docs/operations/launchd/com.soransoran.supply-autopilot.plist.template \
-    > ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist
-
-plutil -lint ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist
-
-# 4) 등록 — 🔴 멱등적이다. 이미 있으면 걷어내고 다시 올린다
-launchctl unload ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist 2>/dev/null || true
-launchctl load  ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist
-
-# 5) 확인 — 두 번째 컬럼이 마지막 exit status 다
-launchctl list | grep supply-autopilot
+# ── 2) 위 "등록 절차" 의 0~5 를 JOB 만 바꿔 그대로 돌린다 ──
+JOB=com.soransoran.supply-autopilot
 ```
 
-🔴 **위 절차는 몇 번을 돌려도 같은 상태가 된다.** `mkdir -p` · `sed >` · `unload || true` 는
-이미 그런 상태면 아무 일도 하지 않는다. 반쯤 등록된 상태가 남지 않는다.
+실행 시각은 **21:10 KST**, auto-publish(00:05 KST)보다 약 3시간 앞선다.
+재고가 목표(14건) 이상이면 그 한 번도 네트워크로 나가지 않는다.
 
 🔴 **멈추는 가장 빠른 방법**은 `.env.local` 의 `SORAN_SUPPLY_AUTOPILOT_ENABLED` 를 지우는 것이다.
 job 은 계속 돌지만 재고만 읽고 끝난다 — 네트워크도 모델도 DB 도 건드리지 않는다.
@@ -122,4 +160,5 @@ job 은 계속 돌지만 재고만 읽고 끝난다 — 네트워크도 모델�
 ```
 
 **카페마다 plist 를 따로 둔다.** 한 카페를 연속으로 긁지 않고 시간대를 나눈다 —
-`09:20 remonterrace` · `13:20 wgang` · `17:20 dlxogns01` · `21:20 masanmam`.
+`09:20 remonterrace` · `13:20 wgang`. 🔴 **이 둘이 확정 수집원의 전부**이며,
+같은 시각에 돌지 않는 것을 fixture 가 검사한다.
