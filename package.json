@@ -42,6 +42,8 @@
     "micro-seed:collect-check": "tsx scripts/micro-seed-collect-check.mts",
     "micro-seed:import-82cook": "tsx scripts/micro-seed-import-82cook-live.mts",
     "micro-seed:supply-check": "tsx scripts/micro-seed-supply-check.mts",
+    "micro-seed:supply-autofill": "tsx scripts/micro-seed-supply-autofill.mts",
+    "micro-seed:supply-autofill-check": "tsx scripts/micro-seed-supply-autofill-check.mts",
     "micro-seed:collect-navercafe": "tsx scripts/micro-seed-collect-navercafe.mts",
     "micro-seed:navercafe-check": "tsx scripts/micro-seed-navercafe-check.mts",
     "navercafe:session-setup": "tsx scripts/navercafe-session-setup.mts",

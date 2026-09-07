@@ -264,6 +264,11 @@ jobs:
       - name: Micro Seed 발행 대기열 브리지 (PENDING 까지 · 두 스위치 · SRN 제외)
         run: npm run micro-seed:publish-enqueue-check
 
+      # 자동 보충은 사람이 매 건을 보지 않는다는 뜻이다. 그래서 사람이 뺀 것을
+      # 기계가 도로 집어넣지 않는지 · 발행 코드가 섞여 들어오지 않았는지를 여기서 본다.
+      - name: 공급 자동 보충 (APPROVED 까지 · 보류 목록 · 발행 금지)
+        run: npm run micro-seed:supply-autofill-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:
