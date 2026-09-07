@@ -1,5 +1,6 @@
 import { ImageResponse } from 'next/og'
 import { BRAND, SITE } from '@/lib/brand'
+import { BRAND_NAME_HEAD, BRAND_NAME_TAIL } from '@/lib/brand-name'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostDetail } from '@/lib/queries/posts'
 import { isSearchIndexable } from '@/lib/post-visibility'
@@ -53,10 +54,13 @@ export default async function PostOgImage({
           background: BRAND.background,
         }}
       >
-        <div style={{ display: 'flex', fontSize: 52, fontWeight: 800, color: BRAND.ink }}>
-          {SITE.name}
+        {/* 두 색 워드마크 (정본 §3-2-A) — 기본 OG·화면 Logo 와 같은 조각이다.
+            보드 라벨은 워드마크 **전체 뒤에** 기존 간격(marginLeft 20)으로 붙는다. */}
+        <div style={{ display: 'flex', fontSize: 52, letterSpacing: '-0.03em' }}>
+          <span style={{ fontWeight: 800, color: BRAND.color }}>{BRAND_NAME_HEAD}</span>
+          <span style={{ fontWeight: 500, color: BRAND.strong }}>{BRAND_NAME_TAIL}</span>
           {showTitle ? (
-            <span style={{ marginLeft: 20, fontSize: 40, fontWeight: 700, color: BRAND.muted }}>
+            <span style={{ marginLeft: 20, fontSize: 40, fontWeight: 700, color: BRAND.muted, letterSpacing: 'normal' }}>
               {board!.label}
             </span>
           ) : null}
