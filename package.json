@@ -46,6 +46,8 @@
     "micro-seed:supply-autofill-check": "tsx scripts/micro-seed-supply-autofill-check.mts",
     "micro-seed:candidate-pipeline": "tsx scripts/micro-seed-candidate-pipeline.mts",
     "micro-seed:candidate-pipeline-check": "tsx scripts/micro-seed-candidate-pipeline-check.mts",
+    "micro-seed:82cook-thin": "tsx scripts/micro-seed-82cook-thin-detail.mts",
+    "micro-seed:82cook-thin-check": "tsx scripts/micro-seed-82cook-thin-check.mts",
     "micro-seed:collect-navercafe": "tsx scripts/micro-seed-collect-navercafe.mts",
     "micro-seed:navercafe-check": "tsx scripts/micro-seed-navercafe-check.mts",
     "navercafe:session-setup": "tsx scripts/navercafe-session-setup.mts",
