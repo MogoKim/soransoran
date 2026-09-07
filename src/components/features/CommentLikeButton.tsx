@@ -109,13 +109,22 @@ export default function CommentLikeButton({
         <span>공감 {count}</span>
       </button>
 
+      {/* 🔴 색은 `PostActionBar` 의 notice 와 맞춘다 — 둘은 같은 자리의 쌍둥이다
+             (같은 state 모양 · 같은 마크업 · 같은 "동작 결과 안내문" 역할).
+             muted 는 메타용이라 읽어야 하는 문장을 내려 두는 셈이었다. 6.14 → 9.08 로 오른다.
+             정본 §12-14 ② 가 남긴 "올려 맞추는 방향" 이다 — PostActionBar 를 내리지 않는다.
+          🔴 링크에 밑줄을 붙인다. 색만으로 링크를 구분하지 않는다.
+             본문이 9.08 로 오르면 링크(5.50)와 격차가 벌어져 더 그렇다. */}
       {notice ? (
-        <p role="status" className="m-0 text-sm text-content-muted">
+        <p role="status" className="m-0 text-sm text-content-secondary">
           {notice.text}
           {notice.login ? (
             <>
               {' '}
-              <Link href={loginHref(pathname)} className="text-link">
+              <Link
+                href={loginHref(pathname)}
+                className="text-link underline underline-offset-2"
+              >
                 카카오로 시작하기
               </Link>
             </>
