@@ -7,7 +7,12 @@ import ActionButton from '@/components/ui/ActionButton'
 import { createReport, type ReportActionState } from '@/lib/actions/reports'
 import { REPORT_REASONS } from '@/lib/report-reasons'
 import { useToast } from '@/components/ui/toast'
-import { REPORT_ALREADY, REPORT_RECEIVED, REPORT_REVIEW_HINT } from '@/lib/comment-policy'
+import {
+  REPORT_ALREADY,
+  REPORT_ALREADY_REVIEW_HINT,
+  REPORT_RECEIVED,
+  REPORT_REVIEW_HINT,
+} from '@/lib/comment-policy'
 
 /**
  * 신고 버튼
@@ -41,11 +46,15 @@ export default function ReportButton({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
-  /* 🔴 접수 뒤에는 폼을 다시 열지 않는다 — 같은 대상을 두 번 신고하게 만들지 않는다 */
+  /* 🔴 접수 뒤에는 폼을 다시 열지 않는다 — 같은 대상을 두 번 신고하게 만들지 않는다
+       🔴 토스트와 다른 말을 쓴다. 접수·중복이라는 사실은 토스트가 이미 알렸고,
+          여기 남는 것은 '이 폼은 끝났다' 는 상태 표시다.
+       🔴 크기만 sm 이다. 신고를 마친 사람이 읽어야 하는 안심 문구인데
+          caption(메타·배지) 크기였다. 색은 muted 그대로 둔다 — 정본 §12-14 ② 판단. */
   if (state.done) {
     return (
-      <p className="text-xs text-content-muted">
-        {state.already ? REPORT_ALREADY : REPORT_REVIEW_HINT}
+      <p className="text-sm text-content-muted">
+        {state.already ? REPORT_ALREADY_REVIEW_HINT : REPORT_REVIEW_HINT}
       </p>
     )
   }
