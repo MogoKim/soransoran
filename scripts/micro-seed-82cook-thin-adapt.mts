@@ -32,6 +32,8 @@ import {
   DETAIL_KEYS, RAW_DETAIL_KEYS, SOURCE_AXIS, RAW_AXIS, SRN_AXIS,
   type ThinRow,
 } from '../src/lib/micro-seed-82cook-thin-adapt'
+// 🔴 처리 identity 는 공급 러너와 **같은 함수**를 쓴다 — 복제하면 한쪽만 고쳐진다
+import { adaptKeyOf } from '../src/lib/supply-autopilot'
 
 const DATA_DIR = '.microseed-data'
 const argv = process.argv.slice(2)
@@ -62,13 +64,15 @@ function jsonl(path: string): Record<string, unknown>[] {
 /** thin 산출물 — 지정이 없으면 전부 */
 function thinFiles(): string[] {
   const only = arg('input')
-  if (only !== null) return [only]
+  // 🔴 콤마로 여러 개를 받는다 — 한 회차에 82cook 과 네이버가 **둘 다** 얇은 파일을 만든다.
+  //    하나만 받으면 그 회차에 수집한 다른 소스가 통째로 빠진다.
+  if (only !== null) return only.split(',').map((x) => x.trim()).filter((x) => x !== '')
   if (!existsSync(DATA_DIR)) return []
   return readdirSync(DATA_DIR)
     .filter((f) => f.endsWith('.thin-detail.jsonl')).sort().map((f) => join(DATA_DIR, f))
 }
 
-/** 이미 사본을 낸 회차 — 두 번 내지 않는다 */
+/** 이미 사본을 낸 것 — 두 번 내지 않는다 */
 function adaptedRunIds(): Set<string> {
   const out = new Set<string>()
   if (!existsSync(DATA_DIR)) return out
@@ -98,7 +102,8 @@ function main(): void {
   for (const f of files) {
     const rows = jsonl(f) as ThinRow[]
     total += rows.length
-    const runId = String(rows[0]?.runId ?? f.split('/').pop() ?? '')
+    // 🔴 행의 runId 가 아니라 **입력 파일**에서 키를 만든다 — 두 카페가 서로를 막지 않는다
+    const runId = adaptKeyOf(f)
     plans.push({ runId, rows, from: f, already: done.has(runId) })
   }
 

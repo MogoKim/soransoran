@@ -41,6 +41,11 @@
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --live               🔴 첫 live (승인 필요)
  */
 import { appendFileSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+
+import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
+import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
+import { toThinRow, violatesStorage } from '../src/lib/micro-seed-82cook-thin'
+import { keepAfterClassify, outPathOf } from '../src/lib/micro-seed-navercafe-thin'
 import { dirname } from 'node:path'
 import {
   CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate,
@@ -74,6 +79,17 @@ const LIVE = argv.includes('--live')
  *    scout 는 요청이 목록뿐이라 detail quota 와 별개로 더 깊이 볼 수 있다.
  */
 const SCOUT = argv.includes('--scout')
+/**
+ * 🔴 **전문을 디스크에 남기지 않는다** (§4-AV ②).
+ *
+ * `--thin` 이면 상세 JSONL(`rawBody` 전문 포함)을 **쓰지 않고**, 메모리 안에서
+ * 마스킹 → 300자 → 분류를 끝낸 `*.thin-detail.jsonl` 만 남긴다.
+ * 전문이 파일로 존재하는 시간이 0 이 된다 — 지웠다가 아니라 **쓰지 않는다.**
+ *
+ * 정기 수집(launchd)은 이 모드로 돈다. `--thin` 없이 도는 것은 사람이
+ * Raw Vault 적재용 원본이 필요할 때뿐이고, 그때는 화면이 그렇다고 말한다.
+ */
+const THIN = argv.includes('--thin')
 const BOARD_KEY = arg('board')?.trim() ?? null
 const BOARD = BOARD_KEY ? findBoard(BOARD_KEY) : null
 if (BOARD_KEY && !BOARD) {
@@ -365,10 +381,49 @@ async function main() {
     if (rel.warning) console.warn(`  ⚠️ ${rel.warning}`)
   }
 
-  if (collected.length) {
+  if (collected.length && THIN) {
+    // 🔴 **전문을 쓰지 않는다.** 메모리에서 곧바로 얇은 행을 만든다.
+    //    crash 나 부분 실패로 중간에 죽어도 전문 파일은 애초에 생기지 않는다 —
+    //    수집 루프는 메모리에만 쌓고, 파일 write 는 이 지점 한 번뿐이기 때문이다.
+    const thinRows: Record<string, unknown>[] = []
+    let droppedThin = 0
+    for (const r of collected) {
+      const masked = maskSensitive(String(r.rawBody ?? ''))
+      const v = classifyDetail({
+        title: String(r.originalTitle ?? ''), body: masked, comments: [], imageCount: 0,
+        boardName: String(r.sourceBoardName ?? '') || '자유게시판',
+        qualityFlags: Array.isArray(r.qualityFlags) ? r.qualityFlags.map(String) : [],
+        access: 'ok',
+      })
+      const axis = String(v.axis)
+      const safetyVerdict = String(v.safety.verdict)
+      // 🔴 drop · hardExclude 는 얇은 사본조차 만들지 않는다
+      if (!keepAfterClassify({ axis, safetyVerdict }).keep) { droppedThin += 1; continue }
+      const row = toThinRow({
+        id: String(r.sourceArticleId ?? ''), url: String(r.sourceUrl ?? ''),
+        title: String(r.originalTitle ?? ''),
+        commentCount: Number(r.sourceCommentCount ?? 0), score: 0,
+        maskedBody: masked, bodyHeadChars: BODY_HEAD_CHARS,
+        axis, safetyVerdict, safetyReasons: v.safety.reasons.map((x) => String(x)),
+        reason: String(v.reason), runId: RUN_ID, fetchedAt: new Date().toISOString(),
+        sourceSite: String(r.sourceSite ?? ''),
+      }) as unknown as Record<string, unknown>
+      const bad = violatesStorage(row, BODY_HEAD_CHARS)
+      if (bad.length > 0) throw new Error(`저장 계약 위반: ${bad.join(' · ')}`)
+      thinRows.push(row)
+    }
+    const thinPath = outPathOf(dirname(OUT), CAFE_ID, RUN_ID)
+    writeJsonl(thinPath, thinRows)
+    console.log(`\n  → ${thinPath} (${thinRows.length}건 · run ${RUN_ID})`)
+    console.log(`  🔴 전문을 저장하지 않았다 — 마스킹 후 앞 ${BODY_HEAD_CHARS}자만 남겼다`)
+    if (droppedThin > 0) console.log(`  🔴 drop·hardExclude ${droppedThin}건은 얇은 사본도 만들지 않았다`)
+    console.log('  다음: micro-seed:82cook-thin-adapt 가 검수용으로 바꾼다')
+  } else if (collected.length) {
     // 🔴 보류 대상도 파일에 남긴다 (Q-1). 보류는 **적재 단계**가 한다
     writeJsonl(OUT, collected)
     console.log(`\n  → ${OUT} (${collected.length}건 · run ${RUN_ID})`)
+    console.log('  🟡 이 파일에는 **본문 전문**이 들어 있다 — Raw Vault 적재용이다.')
+    console.log('     정기 수집은 --thin 으로 돌려 전문을 남기지 않는다.')
     const held = collected.filter((r) => judgeAutoHold({ sourceArticleId: r.sourceArticleId, flags: r.qualityFlags }).hold)
     console.log(held.length ? `  🟡 자동 적재 보류 예정 ${held.length}건 (상세 플래그)` : '  🟢 자동 적재 보류 예정 0건')
   }

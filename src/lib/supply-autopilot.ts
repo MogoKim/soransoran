@@ -28,11 +28,20 @@ export const LOCK_TTL_MS = 90 * 60 * 1000
 
 export const LOCK_FILE = 'supply-autopilot.lock'
 
-export const STAGES = ['collect', 'adapt', 'judge', 'draft', 'fill'] as const
+/**
+ * 🔴 `cafeThin` 이 `collect` 와 `adapt` 사이에 있다.
+ *
+ * 네이버 카페는 launchd 가 따로 수집한다(09:20 · 13:20). 그 산출물이 `adapt` 가 집는
+ * 형태가 되려면 얇은 변환을 한 번 거쳐야 하는데, 그것을 사람이 치고 있었다 —
+ * 치지 않으면 수집물이 그대로 쌓이기만 했다.
+ * 네트워크에도 모델에도 나가지 않는 단계라 순서에 넣는 비용이 거의 없다.
+ */
+export const STAGES = ['collect', 'cafeThin', 'adapt', 'judge', 'draft', 'fill'] as const
 export type Stage = (typeof STAGES)[number]
 
 export const STAGE_LABEL: Record<Stage, string> = {
   collect: '82cook thin 수집',
+  cafeThin: '네이버 카페 수집물 얇은 변환',
   adapt: '검수용 변환',
   judge: 'AI 자동 판정',
   draft: 'AI 초안 생성 · 품질 게이트',
@@ -162,6 +171,8 @@ export function planStages(input: { collectCap: number; shortfall: number }): St
   })
   return [
     mk('collect', ['--live', `--cap=${input.collectCap}`]),
+    // 🔴 네트워크 0 · LLM 0 · DB 0. 이미 수집된 파일만 얇게 바꾼다
+    mk('cafeThin', ['--apply']),
     mk('adapt', ['--apply']),
     mk('judge', ['--call', '--apply']),
     mk('draft', ['--call', '--apply']),
@@ -189,6 +200,59 @@ export function lockDecision(
   return now.getTime() - t > ttlMs ? 'stale' : 'busy'
 }
 
+/**
+ * 죽은 lock 을 어떻게 할 것인가 — 🔴 **삭제도 write 다.**
+ *
+ * 게이트가 닫혔는데 lock 을 지우면 "파일 write 0" 이 거짓말이 되고,
+ * dry-run 이나 스위치가 내려간 실행이 남의 lock 을 걷어내고 끝나는 셈이 된다.
+ * 판정은 그대로 stale 로 두되(계획 계산은 free 처럼 진행한다) 디스크는 건드리지 않는다.
+ *
+ * 🔴 이 판단을 러너 안에 두면 **테스트가 러너를 통째로 돌려야** 확인할 수 있다.
+ *    그 테스트는 실제 수집·모델·DB 를 건드릴 수 있다 — 재고가 모자란 날 돌리면 그렇게 된다.
+ *    그래서 판단만 떼어 두고, 삭제 함수는 인자로 받는다.
+ */
+export type StaleLockPlan = {
+  action: 'remove' | 'preserve' | 'none'
+  lines: string[]
+}
+
+export function planStaleLock(input: {
+  stale: boolean
+  canWrite: boolean
+  runId: string
+  pid: number
+}): StaleLockPlan {
+  if (!input.stale) return { action: 'none', lines: [] }
+  const who = `(runId ${input.runId || '?'} · pid ${input.pid})`
+  if (input.canWrite) {
+    return {
+      action: 'remove',
+      lines: [
+        `① lock  🟡 죽은 lock 을 걷어낸다 ${who}`,
+        '        🔴 checkpoint 는 지우지 않는다 — 재개 근거다',
+      ],
+    }
+  }
+  return {
+    action: 'preserve',
+    lines: [
+      `① lock  🟡 죽은 lock 이 있다 ${who}`,
+      '        🔴 지우지 않는다 — 게이트가 닫혀 있다 (파일 write 0 · 삭제 0)',
+    ],
+  }
+}
+
+/**
+ * 계획대로 집행한다 — 🔴 삭제 함수를 **주입**받는다.
+ * 테스트는 임시 디렉터리의 임시 파일과 자기 삭제 함수를 넘긴다.
+ */
+export function applyStaleLockPlan(
+  plan: StaleLockPlan, remove: () => void,
+): { removed: boolean } {
+  if (plan.action === 'remove') { remove(); return { removed: true } }
+  return { removed: false }
+}
+
 export type StageOutcome = {
   stage: Stage
   status: 'ok' | 'failed' | 'skipped'
@@ -205,7 +269,17 @@ export type StageOutcome = {
  * 하위 스크립트는 대개 "가장 최근 파일" 을 집는다 — 재개할 때 그 습성에 맡기면
  * 앞 회차가 만든 것 대신 남의 것을 먹는다.
  */
-export type Artifacts = { [K in Stage]?: string[] }
+export type Artifacts = { [K in Stage]?: string[] } & {
+  /**
+   * 🔴 **회차 시작 전에 이미 있던 미처리 thin 파일.**
+   *
+   * 네이버는 09:20 · 13:20 에 launchd 가 긁고, 공급 러너는 21:10 에 돈다.
+   * 그 파일들은 러너가 시작하기 **전에** 이미 존재하므로 "실행 중 새로 생긴 파일"
+   * 로는 절대 잡히지 않는다 — 그대로 두면 adapt 입력에서 통째로 빠진다.
+   * 그래서 회차 시작 시 한 번 계산해 checkpoint 에 박아 둔다(재개 시 같은 파일을 쓴다).
+   */
+  preexisting?: string[]
+}
 
 /**
  * 🔴 terminal 상태를 명시한다. `running` 인 채로 남은 것만 재개 대상이다.
@@ -331,7 +405,25 @@ export function stageInputArgs(stage: Stage, artifacts: Artifacts): string[] {
   switch (stage) {
     // 수집은 이어받을 것이 없다 — 스스로 목록에서 고른다
     case 'collect': return []
-    case 'adapt': return pick('collect', ['.thin-detail.jsonl'])
+    // 🔴 82cook 과 네이버가 **둘 다** 만든 얇은 파일을 함께 넘긴다.
+    //    한쪽만 넘기면 그 회차에 수집한 다른 소스가 통째로 빠진다
+    case 'adapt': {
+      const thin = (f: string): boolean => f.endsWith('.thin-detail.jsonl')
+      // 🔴 세 갈래를 **모두** 넣는다. 하나라도 빠지면 그 소스가 그 회차에서 통째로 사라진다.
+      //    · collect     이번 회차 82cook
+      //    · cafeThin    이번 회차가 역사 raw 를 새로 변환한 것
+      //    · preexisting 정기 수집(09:20 · 13:20)이 러너 시작 **전에** 만들어 둔 것
+      const all = [
+        ...(artifacts.collect ?? []).filter(thin),
+        ...(artifacts.cafeThin ?? []).filter(thin),
+        ...(artifacts.preexisting ?? []).filter(thin),
+      ]
+      // 🔴 중복 제거 — 같은 파일을 두 번 넘기면 adapt 가 두 번 읽는다
+      const uniq = [...new Set(all)]
+      return uniq.length === 0 ? [] : [`--input=${uniq.join(',')}`]
+    }
+    // 수집물은 스스로 찾는다 — 앞 단계가 만든 것이 아니라 launchd 가 남긴 것이다
+    case 'cafeThin': return []
     case 'judge': return pick('adapt', ['.detail.jsonl', '.raw-detail.jsonl'])
     case 'draft': return pick('judge', ['.shadow.jsonl'])
     case 'fill': return pick('draft', ['.candidates.json'])
@@ -360,6 +452,9 @@ export function missingArtifacts(input: {
   const up = upstreamOf(input.from)
   // 수집부터 재개하는 것은 이어받을 것이 없으니 누락도 없다
   if (up === null) return []
+  // 🔴 cafeThin 은 launchd 수집물을 스스로 찾는다. 앞 단계가 넘겨주는 것이 없으므로
+  //    "앞 단계 산출물이 없다" 가 실패 사유가 되면 안 된다 — 네이버를 안 돌린 날이 그렇다
+  if (input.from === 'cafeThin') return []
   const listed = input.artifacts[up] ?? []
   if (listed.length === 0) return [`${up} 단계의 산출물 기록이 없다`]
   return listed.filter((f) => !input.exists(f)).map((f) => `${f} 가 없다`)
@@ -460,6 +555,23 @@ export async function runStages(input: {
     calls, status, failedStage: failed?.stage ?? null,
     exitCode: status === 'done' ? 0 : 1,
   }
+}
+
+/**
+ * 🔴 얇은 파일 하나의 **처리 identity**. runId 단독으로는 안 된다.
+ *
+ * 09:20 remonterrace 와 13:20 wgang 이 같은 runId 를 가질 수 있다.
+ * runId 로만 판단하면 한쪽이 다른 쪽을 "이미 했다" 로 막고 산출물 이름도 겹쳐 덮어쓴다.
+ *
+ *   82cook-thin-<runId>.thin-detail.jsonl           → <runId>
+ *   navercafe-thin-<cafe>-<runId>.thin-detail.jsonl → <cafe>-<runId>
+ *
+ * 82cook 키는 종전과 같아 기존 산출물과 어긋나지 않는다.
+ * 🔴 러너 · adapt · fixture 가 **이 하나**를 쓴다. 복제하면 한쪽만 고쳐진다.
+ */
+export function adaptKeyOf(path: string): string {
+  const base = (path.split('/').pop() ?? path).replace(/\.thin-detail\.jsonl$/, '')
+  return base.replace(/^82cook-thin-/, '').replace(/^navercafe-thin-/, '')
 }
 
 export type RunProblem = string

@@ -58,6 +58,10 @@
     <string>--cafe=wgang</string>
     <string>--pages=1</string>
     <string>--max=10</string>
+    <!-- 🔴 정기 수집은 전문을 디스크에 남기지 않는다 (§4-AV ②).
+         메모리 안에서 마스킹 → 300자 → 분류를 끝낸 *.thin-detail.jsonl 만 쓴다.
+         이 인자를 빼면 rawBody 전문이 담긴 상세 JSONL 이 생긴다. -->
+    <string>--thin</string>
     <string>--live</string>
   </array>
 

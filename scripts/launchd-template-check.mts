@@ -102,7 +102,7 @@ const EXPECTED: Record<string, {
   'com.soransoran.navercafe-collect-remonterrace.plist.template': {
     label: 'com.soransoran.navercafe-collect-remonterrace',
     args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-collect-navercafe.mts',
-      '--cafe=remonterrace', '--pages=1', '--max=10', '--live'],
+      '--cafe=remonterrace', '--pages=1', '--max=10', '--thin', '--live'],
     slots: [{ hour: 9, minute: 20 }],
     out: '__LOGDIR__/navercafe-collect-remonterrace.log',
     err: '__LOGDIR__/navercafe-collect-remonterrace-error.log',
@@ -110,7 +110,7 @@ const EXPECTED: Record<string, {
   'com.soransoran.navercafe-collect-wgang.plist.template': {
     label: 'com.soransoran.navercafe-collect-wgang',
     args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-collect-navercafe.mts',
-      '--cafe=wgang', '--pages=1', '--max=10', '--live'],
+      '--cafe=wgang', '--pages=1', '--max=10', '--thin', '--live'],
     slots: [{ hour: 13, minute: 20 }],
     out: '__LOGDIR__/navercafe-collect-wgang.log',
     err: '__LOGDIR__/navercafe-collect-wgang-error.log',
@@ -141,6 +141,14 @@ const EXPECTED: Record<string, {
 
 check('🔴 검사표가 템플릿 전부를 덮는다 — 표에 없는 템플릿이 있으면 무검사로 새어나간다',
   files.every((f) => EXPECTED[f] !== undefined) && Object.keys(EXPECTED).length === files.length)
+
+// 🔴 정기 수집이 전문을 남기지 않는지 — 인자 하나가 빠지면 rawBody 전문 파일이 생긴다
+for (const cafe of ['remonterrace', 'wgang']) {
+  const f = `com.soransoran.navercafe-collect-${cafe}.plist.template`
+  if (!files.includes(f)) continue
+  check(`🔴 [${cafe}] --thin 이 있다 — 없으면 전문이 디스크에 남는다 (§4-AV ②)`,
+    programArguments(readFileSync(join(DIR, f), 'utf-8')).includes('--thin'))
+}
 
 // 🔴 확정 수집원 셋. 늘리려면 여기부터 고쳐야 한다
 check('🔴 네이버 카페 템플릿은 remonterrace · wgang 둘뿐이다',
