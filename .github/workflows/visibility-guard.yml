@@ -385,6 +385,19 @@ jobs:
       - name: 발행 여력 예측 (KST 경계 · rolling 7일 · 러너 재현)
         run: npm run supply:forecast-check
 
+      # persona 확장 planner — 🔴 **정본 Pool 카드를 읽는 규칙**만 고정한다.
+      #
+      # 🔴 **실제 조합은 운영 데이터에 따라 변한다** — 큐 재고·발행 이력·활성 persona 가
+      #    바뀌면 답도 바뀐다. 특정 코드를 여기 적으면 그날부터 매일 깨진다.
+      #    그것을 CI 에 박으면 매일 깨진다. 그래서 여기서는 synthetic 으로 **규칙**만 본다 —
+      #    카드 20장을 정확히 읽는가 · 사람을 늘려 발행량이 줄지 않는가 ·
+      #    hardFilter 가 카드에서 와도 작동하는가 · planner 가 read-only 인가 ·
+      #    정본 §7-1 말투 배분과 카드 voiceCore 가 어긋나지 않는가.
+      #    실제 수치는 `npm run persona:capacity-planner` 를 사람이 돌려 본다.
+      #    네트워크 0 · LLM 0 · DB 0.
+      - name: persona 확장 planner (Pool 카드 파싱 · 단조성 · read-only 계약)
+        run: npm run persona:planner-check
+
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #
       # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.
