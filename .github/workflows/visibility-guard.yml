@@ -49,6 +49,18 @@ jobs:
       - name: Micro Seed 노출 게이트
         run: npm run check:visibility
 
+      # 색상 가드도 같은 자리에 둔다 — 순수 파일 파싱이라 Prisma 없이 몇 초다.
+      #
+      # 🔴 이 스크립트는 있었지만 CI 에 없었다. 로컬에서 기억해 돌리는 사람만 보는 가드는
+      #    사람이 잊는 순간 무력해진다 — check:visibility 를 여기 둔 것과 같은 이유다.
+      #    이 파일 상단 on: 절에 따라 pull_request 와 main push 양쪽에서 돈다.
+      #
+      # 검사 범위는 hex 리터럴과 Tailwind arbitrary hex 다.
+      # rgb/rgba/hsl · Tailwind 기본 팔레트 · SVG fill/stroke · inline style 직접 색은
+      # 아직 보지 않는다. 확장은 후속 PR 로 분리한다 — 이번에는 있는 가드를 켜기만 한다.
+      - name: 색상 토큰 가드
+        run: npm run check:tokens
+
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
       - name: Prisma Client 생성
