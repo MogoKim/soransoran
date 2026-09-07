@@ -74,7 +74,7 @@ export default function NicknameForm({ current }: { current: string }) {
         <button
           type="submit"
           disabled={pending}
-          className={`inline-flex ${TOUCH_MIN} shrink-0 items-center rounded-lg border border-interactive px-4 font-bold text-brand-ink transition duration-150 hover:bg-surface-soft active:scale-[0.98] disabled:opacity-60`}
+          className={`inline-flex ${TOUCH_MIN} shrink-0 items-center rounded-lg border border-interactive px-4 font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98] disabled:opacity-60`}
         >
           {pending ? '저장 중' : '변경'}
         </button>

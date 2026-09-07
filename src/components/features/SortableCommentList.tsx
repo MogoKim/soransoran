@@ -14,8 +14,8 @@ export type SortableCommentItem = {
 
 const TAB =
   `inline-flex ${TOUCH_MIN} items-center rounded-full px-4 text-sm transition duration-150 active:scale-[0.98]`
-const TAB_ON = `${TAB} border border-interactive bg-surface-soft font-bold text-brand-ink`
-const TAB_OFF = `${TAB} border border-transparent text-content-muted hover:text-brand-ink`
+const TAB_ON = `${TAB} border border-interactive bg-surface-soft font-bold text-brand-strong`
+const TAB_OFF = `${TAB} border border-transparent text-content-muted hover:text-brand-strong`
 
 /**
  * 🔴 서버가 그린 댓글을 받아 순서만 바꾼다. 여기서 다시 그리지 않는다 —

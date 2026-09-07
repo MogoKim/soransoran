@@ -14,20 +14,30 @@
 import { BRAND_NAME } from './brand-name'
 
 export const BRAND = {
-  /** 브랜드 시그니처 — theme-color · OG 장식 면 · 아이콘 배경 */
-  color: '#ff6f61',
-  /** 페이지 배경 — manifest background_color · OG 배경 */
-  background: '#fff8f6',
-  /** 읽는 브랜드색 — OG 워드마크 */
-  ink: '#ff6f61',
-  /** 본문 텍스트 — OG 카피 */
-  text: '#2f2624',
-  /** 아이콘 글자색 · CTA 위 글자 */
+  /** 브랜드 시그니처 — theme-color · OG 장식 면 · 아이콘 배경 (= --brand) */
+  color: '#fa4601',
+  /**
+   * 페이지 배경 — manifest background_color · OG 배경 (= --surface-app)
+   *
+   * 🔴 이전에는 이 값만 폐기된 옛 바탕색에 남아 화면과 갈려 있었다(KNOWN_DRIFT).
+   *    웜 모노크롬 전환에서 --surface-app 과 같은 값으로 맞췄고,
+   *    check:brand-colors 의 정식 PAIR 로 올려 다시 갈라지면 CI 가 잡는다.
+   */
+  background: '#fbfaf9',
+  /** 큰 글씨 브랜드색 — OG 워드마크 (= --brand-ink) */
+  ink: '#fa4601',
+  /** 본문 텍스트 — OG 카피 (= --text-primary) */
+  text: '#241e1b',
+  /** 아이콘 글자색 · CTA 위 글자 (= --cta-text) */
   onBrand: '#ffffff',
-  /** 주요 액션 — global-error 처럼 CSS 가 없을 수 있는 화면의 인라인 스타일용 */
-  cta: '#b64235',
-  /** 보조 텍스트 — 위와 동일 */
-  muted: '#6f5e59',
+  /**
+   * 주요 액션 — global-error 처럼 CSS 가 없을 수 있는 화면의 인라인 스타일용.
+   * 🔴 짝은 --cta-edge 다(= --cta · --brand-strong · --link 와 같은 값).
+   *    CSS 없이도 흰 글씨가 읽혀야 하는 자리라 원색이 아니라 진한 주황을 쓴다.
+   */
+  cta: '#c43300',
+  /** 보조 텍스트 — 위와 동일 (= --text-muted) */
+  muted: '#6e625c',
 } as const
 
 /** 환경변수가 하나도 없을 때의 최종 기준 URL */

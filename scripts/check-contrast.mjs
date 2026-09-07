@@ -85,80 +85,38 @@ const COMBOS = [
  * 🔴 baseline 은 "지금 이 정도"라는 기록이다. 이 값보다 나빠지면 실패한다.
  *    통과시키려고 baseline 을 낮추지 않는다 — 낮추는 순간 이 목록은 의미가 없다.
  * 🔴 --rebrand 모드는 이 목록을 보지 않는다. 새 색은 예외 없이 기준을 넘어야 한다.
+ *
+ * 🔴 지금은 비어 있다. 웜 모노크롬 전환에서 세 예외가 모두 필요 없어졌다:
+ *      --cta-text on --cta   2.72 → 5.49  (CTA 를 원색에서 진한 주황으로 바꿔 AA 통과)
+ *      --brand-ink on card   2.72 → 3.53  (원색이 밝아져 큰 글씨 3:1 통과)
+ *      --brand-ink on app    2.61 → 3.39  (같은 이유)
+ *    기준을 낮춘 것이 아니라 색이 실제로 통과한다. 예외를 다시 늘리지 않는다.
  */
-const EXCEPTIONS = [
-  {
-    fg: '--cta-text',
-    bg: '--cta',
-    baseline: 2.72,
-    why:
-      '정본 §3-1-B 코랄 전환. 코랄 fill + 흰 글씨는 2.72:1 로 AA 미달이지만 ' +
-      '실기기 판독성 결정으로 채택했다(먹색 글씨 5.41:1 은 버튼으로 읽히지 않았다). ' +
-      '큰 버튼과 FAB 에만 쓰고 본문·라벨에는 쓰지 않는다. ' +
-      '흰 글씨가 필요한 다른 자리는 --cta-edge(5.49:1)를 쓴다.',
-  },
-  {
-    fg: '--brand-ink',
-    bg: '--surface-card',
-    baseline: 2.72,
-    why:
-      '🔴 이 예외는 "이 토큰은 봐준다"가 아니다. logotype 사용에만 근거가 있다. ' +
-      'WCAG 1.4.3 은 로고·브랜드명(logotype)을 대비 요건에서 제외하고, ' +
-      'Logo.tsx 의 워드마크가 그 예외에 해당한다(원색이 브랜드 인상을 진다 — §2-1-A). ' +
-      '🔴 aria-label 은 접근 가능한 이름을 제공할 뿐 시각 대비 예외의 근거가 아니다. ' +
-      '🔴 나머지 사용처(text-sm 버튼 라벨·11px 배지 등)는 logotype 이 아니라 ' +
-      '**현재 접근성 부채**다. 아래 BRAND_INK_USAGE 가 그 목록을 고정하고, ' +
-      '새 사용과 증가를 막는다 — 값만 예외 처리하면 부채가 조용히 늘어난다.',
-  },
-  {
-    fg: '--brand-ink',
-    bg: '--surface-app',
-    baseline: 2.61,
-    why: '위와 같다. 바탕 위에 놓이는 경우.',
-  },
-]
+const EXCEPTIONS = []
 
 /**
- * `text-brand-ink` 사용처 baseline — 대비 부채를 이름으로 고정한다
+ * `text-brand-ink` 사용처 baseline — 어디에 원색을 쓰는지 이름으로 고정한다
  *
- * 🔴 토큰 값만 예외로 두면 "brand-ink 는 봐준다"가 되어, 앞으로 작은 글씨에
- *    text-brand-ink 를 새로 써도 CI 가 통과한다. 부채가 조용히 늘어나는 통로다.
- *    그래서 값이 아니라 **사용처**를 고정한다.
+ * 🔴 토큰 값만 보면 "brand-ink 는 봐준다"가 되어, 앞으로 작은 글씨에
+ *    text-brand-ink 를 새로 써도 CI 가 통과한다. 그래서 **사용처**를 고정한다.
  *
- *   LOGOTYPE        워드마크. WCAG logotype 예외에 해당한다 — 부채가 아니다.
- *   BASELINE_DEBT   지금 존재하는 비-로고 사용. 일반 글자 대비 기준을 넘지 못한다.
- *                   지우는 것은 환영이고, 늘리는 것은 막는다.
+ *   LARGE_TEXT      WCAG 큰 글씨(18.66px+bold 또는 24px+)라 요구가 3:1 이고,
+ *                   지금 원색이 카드 위 3.53:1 · 바탕 위 3.39:1 로 **실제로 통과한다.**
+ *                   예외가 아니라 기준을 넘는 사용이다.
+ *   BASELINE_DEBT   작은 글씨에 원색을 쓴 것. 4.5:1 을 넘지 못한다.
+ *                   🔴 지금은 0 건이다 — 웜 모노크롬 전환에서 45 건을
+ *                   --brand-strong(카드 위 5.49:1)으로 옮겼다.
  *
  * count 는 파일별 `text-brand-ink` 출현 횟수다(hover:·group-hover: 변형 포함).
  * 🔴 통과시키려고 count 를 올리지 않는다 — 올리는 순간 이 목록은 의미가 없다.
+ * 🔴 새 사용을 추가할 때는 그 자리가 정말 큰 글씨인지 먼저 확인한다.
+ *    작은 글씨라면 --brand-strong 을 쓴다.
  */
 const BRAND_INK_USAGE = [
-  { file: 'src/components/brand/Logo.tsx', count: 1, kind: 'LOGOTYPE', note: '워드마크 자체. WCAG 1.4.3 logotype 예외에 해당한다' },
-  { file: 'src/app/error.tsx', count: 2, kind: 'BASELINE_DEBT', note: '워드마크 표기 + 버튼 라벨. 워드마크는 Logo 를 거치지 않는다' },
-  { file: 'src/app/my/comments/page.tsx', count: 2, kind: 'BASELINE_DEBT', note: '본문 미리보기 hover·active 색' },
-  { file: 'src/app/my/posts/page.tsx', count: 2, kind: 'BASELINE_DEBT', note: '제목 hover·active 색' },
-  { file: 'src/app/my/scraps/page.tsx', count: 2, kind: 'BASELINE_DEBT', note: '제목 hover·active 색' },
-  { file: 'src/app/my/withdrawal/page.tsx', count: 1, kind: 'BASELINE_DEBT', note: '버튼 라벨' },
-  { file: 'src/components/features/CommentLikeButton.tsx', count: 2, kind: 'BASELINE_DEBT', note: '공감 상태 라벨 · hover' },
-  { file: 'src/components/features/CommentSection.tsx', count: 1, kind: 'BASELINE_DEBT', note: '댓글 수 강조' },
-  { file: 'src/components/features/HomeMagazineRail.tsx', count: 2, kind: 'BASELINE_DEBT', note: '제목 hover·active 색' },
-  { file: 'src/components/features/MagazineCard.tsx', count: 2, kind: 'BASELINE_DEBT', note: '제목 hover·active 색' },
-  { file: 'src/components/features/MagazineList.tsx', count: 1, kind: 'BASELINE_DEBT', note: '선택된 필터 라벨(연분홍 면 위)' },
-  { file: 'src/components/features/PostActionBar.tsx', count: 5, kind: 'BASELINE_DEBT', note: 'text-sm 액션 라벨 · hover 색' },
-  { file: 'src/components/features/PostCard.tsx', count: 2, kind: 'BASELINE_DEBT', note: '제목 hover·active 색' },
-  { file: 'src/components/features/PostEditor.tsx', count: 1, kind: 'BASELINE_DEBT', note: '선택된 게시판 라벨(연분홍 면 위)' },
-  { file: 'src/components/features/PostListItem.tsx', count: 3, kind: 'BASELINE_DEBT', note: '22px 순번(큰 글씨) · 제목 hover' },
-  { file: 'src/components/features/RelatedMagazineList.tsx', count: 2, kind: 'BASELINE_DEBT', note: '제목 hover·active 색' },
-  { file: 'src/components/features/ReplyForm.tsx', count: 1, kind: 'BASELINE_DEBT', note: '취소 버튼 hover 색' },
-  { file: 'src/components/features/SortableCommentList.tsx', count: 2, kind: 'BASELINE_DEBT', note: '정렬 탭 선택 상태 · hover' },
-  { file: 'src/components/features/greeting/newcomer-greetings.tsx', count: 3, kind: 'BASELINE_DEBT', note: '닉네임 강조 · hover 색' },
-  { file: 'src/components/features/login/LoginOnboarding.tsx', count: 1, kind: 'BASELINE_DEBT', note: '뒤로가기 hover 색' },
-  { file: 'src/components/features/login/SignupBlockedNotice.tsx', count: 2, kind: 'BASELINE_DEBT', note: '버튼 라벨 · hover 색' },
-  { file: 'src/components/features/my/NicknameForm.tsx', count: 1, kind: 'BASELINE_DEBT', note: '버튼 라벨' },
-  { file: 'src/components/features/my/shell.tsx', count: 2, kind: 'BASELINE_DEBT', note: '메뉴 hover·active 색' },
-  { file: 'src/components/features/onboarding/agreement-check.tsx', count: 1, kind: 'BASELINE_DEBT', note: '필수 표시 라벨' },
-  { file: 'src/components/layouts/FontSizeToggle.tsx', count: 3, kind: 'BASELINE_DEBT', note: '11px 배지 · 선택 상태 라벨' },
-  { file: 'src/components/layouts/HeaderAuth.tsx', count: 2, kind: 'BASELINE_DEBT', note: 'text-sm 버튼 라벨' },
+  { file: 'src/app/error.tsx', count: 1, kind: 'LARGE_TEXT', note: 'text-2xl extrabold 워드마크 표기. Logo 를 거치지 않는 최소 화면이다' },
+  { file: 'src/components/brand/Logo.tsx', count: 1, kind: 'LARGE_TEXT', note: '워드마크 자체. Header 에서 text-2xl(--text-display 28~38px) extrabold' },
+  { file: 'src/components/features/CommentSection.tsx', count: 1, kind: 'LARGE_TEXT', note: 'text-lg(--text-title 20~28px) bold 안의 댓글 수' },
+  { file: 'src/components/features/PostListItem.tsx', count: 1, kind: 'LARGE_TEXT', note: '고정 22px bold 순번. 읽는 글자가 아니라 자리표 장식이다' },
 ]
 
 /**
@@ -217,10 +175,10 @@ export function countInkInSource(rel, text) {
  *   등록 파일이 감소·0   → 통과하되 baseline 정리를 요구 (알림)
  *   rebrand 모드         → BASELINE_DEBT 자체를 실패로 본다
  */
-export function checkInkUsage(actual, { rebrand }) {
+export function checkInkUsage(actual, { rebrand, usage = BRAND_INK_USAGE } = {}) {
   const failures = []
   const cleanups = []
-  const registered = new Map(BRAND_INK_USAGE.map((u) => [u.file, u]))
+  const registered = new Map(usage.map((u) => [u.file, u]))
 
   for (const [file, count] of actual) {
     if (count === 0) continue
@@ -244,7 +202,7 @@ export function checkInkUsage(actual, { rebrand }) {
     }
   }
 
-  for (const u of BRAND_INK_USAGE) {
+  for (const u of usage) {
     const count = actual.get(u.file) ?? 0
     if (count < u.count) {
       cleanups.push({ ...u, actual: count })
@@ -252,8 +210,8 @@ export function checkInkUsage(actual, { rebrand }) {
   }
 
   if (rebrand) {
-    for (const u of BRAND_INK_USAGE) {
-      if (u.kind !== 'BASELINE_DEBT') continue
+    for (const u of usage) {
+      if (u.kind !== 'BASELINE_DEBT') continue // LARGE_TEXT 는 기준을 실제로 통과한다
       const count = actual.get(u.file) ?? 0
       if (count > 0) {
         failures.push({
@@ -269,17 +227,17 @@ export function checkInkUsage(actual, { rebrand }) {
   return { failures, cleanups }
 }
 
-function exceptionFor(fg, bg) {
-  return EXCEPTIONS.find((e) => e.fg === fg && e.bg === bg)
+function exceptionFor(fg, bg, list = EXCEPTIONS) {
+  return list.find((e) => e.fg === fg && e.bg === bg)
 }
 
 /** 검사 본체. 토큰 Map 만 받으므로 self-test 가 그대로 쓴다 */
-function run(tokens, { rebrand }) {
+function run(tokens, { rebrand, exceptions = EXCEPTIONS, combos = COMBOS } = {}) {
   const rows = []
   const failures = []
   const missing = []
 
-  for (const combo of COMBOS) {
+  for (const combo of combos) {
     const fgv = resolve(tokens, combo.fg)
     if (fgv === null) {
       missing.push(combo.fg)
@@ -293,7 +251,7 @@ function run(tokens, { rebrand }) {
       }
       const ratio = contrast(fgv, bgv)
       const required = REQ[combo.req]
-      const ex = rebrand ? null : exceptionFor(combo.fg, bg)
+      const ex = rebrand ? null : exceptionFor(combo.fg, bg, exceptions)
 
       let status
       if (ratio >= required) status = 'pass'
@@ -320,24 +278,36 @@ function selfTest() {
         rebrand: true,
       }).failures.length > 0,
     ],
-    [
-      'rebrand 모드는 예외를 인정하지 않는다',
-      run(new Map([['--cta-text', '#ffffff'], ['--cta', '#ff6f61']]), { rebrand: true }).failures.some(
-        (f) => f.fg === '--cta-text',
-      ),
-    ],
-    [
-      '기본 모드는 baseline 이상이면 예외로 통과',
-      run(new Map([['--cta-text', '#ffffff'], ['--cta', '#ff6f61']]), { rebrand: false }).rows.some(
-        (r) => r.fg === '--cta-text' && r.status === 'exception',
-      ),
-    ],
-    [
-      '예외라도 baseline 보다 나빠지면 실패',
-      run(new Map([['--cta-text', '#ffffff'], ['--cta', '#ff8f81']]), { rebrand: false }).failures.some(
-        (f) => f.fg === '--cta-text',
-      ),
-    ],
+    // 🔴 예외 로직은 **가짜 목록**으로 검증한다. 실제 EXCEPTIONS 에 의존하면
+    //    예외가 0 이 되는 순간(=색이 실제로 통과) 검사기 자신의 테스트가 깨진다.
+    (() => {
+      const C = [{ fg: '--x', bgs: ['--bg'], req: 'text', why: 't' }]
+      const E = [{ fg: '--x', bg: '--bg', baseline: 2.72, why: 't' }]
+      const T = (fg) => new Map([['--x', fg], ['--bg', '#ffffff']])
+      return [
+        'rebrand 모드는 예외를 인정하지 않는다',
+        run(T('#ff6f61'), { rebrand: true, exceptions: E, combos: C }).failures.length === 1,
+      ]
+    })(),
+    (() => {
+      const C = [{ fg: '--x', bgs: ['--bg'], req: 'text', why: 't' }]
+      const E = [{ fg: '--x', bg: '--bg', baseline: 2.72, why: 't' }]
+      const T = (fg) => new Map([['--x', fg], ['--bg', '#ffffff']])
+      return [
+        '기본 모드는 baseline 이상이면 예외로 통과',
+        run(T('#ff6f61'), { rebrand: false, exceptions: E, combos: C }).rows.some((r) => r.status === 'exception'),
+      ]
+    })(),
+    (() => {
+      const C = [{ fg: '--x', bgs: ['--bg'], req: 'text', why: 't' }]
+      const E = [{ fg: '--x', bg: '--bg', baseline: 2.72, why: 't' }]
+      const T = (fg) => new Map([['--x', fg], ['--bg', '#ffffff']])
+      return [
+        '예외라도 baseline 보다 나빠지면 실패',
+        run(T('#ff8f81'), { rebrand: false, exceptions: E, combos: C }).failures.length === 1,
+      ]
+    })(),
+    ['지금 EXCEPTIONS 는 비어 있다 (색이 실제로 통과한다)', EXCEPTIONS.length === 0],
 
     // ── text-brand-ink 사용처 baseline ──
     [
@@ -349,39 +319,41 @@ function selfTest() {
       countInkInSource('src/x.tsx', "const a = 'text-brand-ink'; const b = <p className=\"hover:text-brand-ink\" />") === 2,
     ],
     ['admin 은 세지 않는다', countInkInSource('src/app/admin/x.tsx', "const a = 'text-brand-ink'") === 0],
-    [
-      '등록되지 않은 새 사용을 잡는다',
-      checkInkUsage(new Map([['src/components/features/New.tsx', 1]]), { rebrand: false }).failures.some(
-        (f) => f.kind === 'NEW',
-      ),
-    ],
-    [
-      '등록 파일이라도 사용이 늘면 잡는다',
-      checkInkUsage(new Map([['src/components/brand/Logo.tsx', 2]]), { rebrand: false }).failures.length === 1,
-    ],
-    [
-      'logotype 사용은 baseline 그대로면 통과',
-      checkInkUsage(new Map([['src/components/brand/Logo.tsx', 1]]), { rebrand: false }).failures.length === 0,
-    ],
-    [
-      '사용이 줄면 실패가 아니라 정리 요구',
-      (() => {
-        const r = checkInkUsage(new Map([['src/components/brand/Logo.tsx', 1]]), { rebrand: false })
-        return r.failures.length === 0 && r.cleanups.length > 0
-      })(),
-    ],
-    [
-      'rebrand 모드는 BASELINE_DEBT 를 허용하지 않는다',
-      checkInkUsage(new Map([['src/components/layouts/HeaderAuth.tsx', 2]]), { rebrand: true }).failures.some(
-        (f) => f.kind === 'BASELINE_DEBT',
-      ),
-    ],
-    [
-      'rebrand 모드에서도 LOGOTYPE 은 통과',
-      !checkInkUsage(new Map([['src/components/brand/Logo.tsx', 1]]), { rebrand: true }).failures.some(
-        (f) => f.file === 'src/components/brand/Logo.tsx',
-      ),
-    ],
+    // 사용처 baseline 도 가짜 목록으로 검증한다
+    (() => {
+      const U = [
+        { file: 'a/big.tsx', count: 1, kind: 'LARGE_TEXT', note: 'n' },
+        { file: 'a/small.tsx', count: 2, kind: 'BASELINE_DEBT', note: 'n' },
+      ]
+      return ['등록되지 않은 새 사용을 잡는다',
+        checkInkUsage(new Map([['a/new.tsx', 1]]), { rebrand: false, usage: U }).failures.some((f) => f.kind === 'NEW')]
+    })(),
+    (() => {
+      const U = [{ file: 'a/big.tsx', count: 1, kind: 'LARGE_TEXT', note: 'n' }]
+      return ['등록 파일이라도 사용이 늘면 잡는다',
+        checkInkUsage(new Map([['a/big.tsx', 2]]), { rebrand: false, usage: U }).failures.length === 1]
+    })(),
+    (() => {
+      const U = [{ file: 'a/big.tsx', count: 1, kind: 'LARGE_TEXT', note: 'n' }]
+      return ['baseline 그대로면 통과',
+        checkInkUsage(new Map([['a/big.tsx', 1]]), { rebrand: false, usage: U }).failures.length === 0]
+    })(),
+    (() => {
+      const U = [{ file: 'a/big.tsx', count: 2, kind: 'LARGE_TEXT', note: 'n' }]
+      const r = checkInkUsage(new Map([['a/big.tsx', 1]]), { rebrand: false, usage: U })
+      return ['사용이 줄면 실패가 아니라 정리 요구', r.failures.length === 0 && r.cleanups.length > 0]
+    })(),
+    (() => {
+      const U = [{ file: 'a/small.tsx', count: 2, kind: 'BASELINE_DEBT', note: 'n' }]
+      return ['rebrand 모드는 BASELINE_DEBT 를 허용하지 않는다',
+        checkInkUsage(new Map([['a/small.tsx', 2]]), { rebrand: true, usage: U }).failures.some((f) => f.kind === 'BASELINE_DEBT')]
+    })(),
+    (() => {
+      const U = [{ file: 'a/big.tsx', count: 1, kind: 'LARGE_TEXT', note: 'n' }]
+      return ['rebrand 모드에서도 LARGE_TEXT 는 통과',
+        checkInkUsage(new Map([['a/big.tsx', 1]]), { rebrand: true, usage: U }).failures.length === 0]
+    })(),
+    ['지금 BASELINE_DEBT 는 0 건이다', BRAND_INK_USAGE.every((u) => u.kind !== 'BASELINE_DEBT')],
   ]
   const failed = checks.filter(([, ok]) => !ok).map(([why]) => why)
   if (failed.length) {
@@ -457,14 +429,19 @@ if (exceptions.length) {
 }
 
 const inkTotal = [...actualInk.values()].reduce((a, b) => a + b, 0)
-const inkLogotype = BRAND_INK_USAGE.filter((u) => u.kind === 'LOGOTYPE')
+const inkLarge = BRAND_INK_USAGE.filter((u) => u.kind === 'LARGE_TEXT')
 const inkDebt = BRAND_INK_USAGE.filter((u) => u.kind === 'BASELINE_DEBT')
 console.log('')
 console.log(
   `text-brand-ink 사용처 ${actualInk.size}파일 · ${inkTotal}건 — ` +
-    `LOGOTYPE ${inkLogotype.length}파일 · BASELINE_DEBT ${inkDebt.length}파일`,
+    `LARGE_TEXT ${inkLarge.length}파일 · BASELINE_DEBT ${inkDebt.length}파일`,
 )
-console.log('  logotype 만 WCAG 예외다. 나머지는 접근성 부채이며 새 사용·증가는 실패한다.')
+if (inkDebt.length === 0) {
+  console.log('  전부 WCAG 큰 글씨(3:1)를 실제로 통과하는 자리다. 작은 글씨 부채 0건.')
+} else {
+  console.log('  BASELINE_DEBT 는 작은 글씨에 원색을 쓴 것이다 — --brand-strong 으로 옮긴다.')
+}
+console.log('  🔴 새 사용·증가는 실패한다. 큰 글씨가 아니면 --brand-strong 을 쓴다.')
 
 if (ink.cleanups.length) {
   console.log('')

@@ -90,7 +90,7 @@ export default function CommentLikeButton({
         aria-label={liked ? '공감 취소' : '공감'}
         aria-pressed={liked}
         className={`inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-lg px-2 text-sm transition duration-150 active:scale-[0.98] ${
-          liked ? 'font-bold text-brand-ink' : 'text-content-muted hover:text-brand-ink'
+          liked ? 'font-bold text-brand-strong' : 'text-content-muted hover:text-brand-strong'
         }`}
       >
         <svg

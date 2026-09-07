@@ -46,7 +46,7 @@ export default async function MyCommentsPage() {
                     href={`${board.href}/${comment.post.id}`}
                     className="group block py-3.5 no-underline"
                   >
-                    <span className="line-clamp-2 break-keep leading-[1.5] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
+                    <span className="line-clamp-2 break-keep leading-[1.5] text-content-primary transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong">
                       {comment.content}
                     </span>
                     <span className="mt-2.5 block line-clamp-1 text-meta text-content-muted">

@@ -59,7 +59,7 @@ function Card({ article }: { article: MagazineArticle }) {
           {MAGAZINE_CLUSTER_LABELS[article.cluster]}
         </span>
 
-        <span className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
+        <span className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong`}>
           {article.title}
         </span>
 

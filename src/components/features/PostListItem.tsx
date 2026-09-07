@@ -82,7 +82,7 @@ export default function PostListItem({
              emphasis 는 이제 배지 톤(quiet)만 가른다. */
           className={cn(
             `line-clamp-2 break-keep ${TITLE_RANKED} text-content-primary`,
-            'transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink',
+            'transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong',
           )}
         >
           {post.title}

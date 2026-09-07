@@ -35,7 +35,7 @@ export default function PostCard({ post, boardHref }: PostCardProps) {
       href={`${boardHref}/${post.id}`}
       className="group block py-3.5 no-underline"
     >
-      <h2 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
+      <h2 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong`}>
         {post.title}
       </h2>
 

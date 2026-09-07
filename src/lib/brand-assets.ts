@@ -89,7 +89,9 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     locked: false,
     note:
       '32×32. 겹친 원 3개의 추상 심볼로 글자가 없다 — 이름이 바뀌어도 모양은 재사용할 수 있다. ' +
-      '다만 코랄·오렌지·연분홍이 픽셀에 구워져 있어 색을 바꾸면 다시 만들어야 한다.',
+      '🔴 웜 모노크롬 전환(2026-09-07) 이후 **화면 팔레트와 어긋나 있다.** ' +
+      '이 파일에는 이전 코랄 계열이 픽셀로 구워져 있고, 화면은 주황으로 바뀌었다. ' +
+      '색은 코드로 못 고친다 — 사람이 새로 만들어야 한다.',
   },
   {
     path: 'src/app/apple-icon.png',
@@ -98,7 +100,9 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     use: 'iOS 홈 화면 아이콘 (Next.js app 규약)',
     replace: true,
     locked: false,
-    note: '180×180. 위와 같은 심볼. 배경이 브랜드 계열이라 색 교체 시 함께 다시 만든다.',
+    note:
+      '180×180. 위와 같은 심볼. 🔴 웜 모노크롬 전환 이후 화면 팔레트와 어긋나 있다 — ' +
+      'icon.png 와 함께 새로 만들어야 한다.',
   },
   {
     path: 'src/components/brand/Logo.tsx',
@@ -149,6 +153,7 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     locked: false,
     note:
       '1920×1194. 40~50대 여성 셋이 대화하는 사진으로 로고·문구가 들어 있지 않다. ' +
+      '웜 모노크롬 전환 때 실측했다 — 따뜻한 색은 나무·피부 톤이고 브랜드 카피가 아니다. ' +
       '타깃이 그대로면 내용은 재사용할 수 있다 — 파일명에만 옛 브랜드가 남는다.',
   },
   {
@@ -156,27 +161,34 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     kind: 'file',
     category: 'login-image',
     use: '로그인 화면 슬라이드 1',
-    replace: false,
+    replace: true,
     locked: false,
-    note: '720×900. 브랜드 요소 없는 사진. 파일명에만 옛 브랜드가 남는다.',
+    note:
+      '720×900. 🔴 이전 기록("브랜드 요소 없는 사진")은 사실이 아니었다 — ' +
+      '사진 위에 브랜드색 카피가 **픽셀로 구워져 있다.** ' +
+      '웜 모노크롬 전환(2026-09-07) 실측: 채도 높은 주황·빨강 13,309px 의 평균이 ' +
+      '이전 코랄에 가깝고 새 브랜드 주황과 어긋난다. ' +
+      '🔴 수치는 여기 적지 않는다 — 설명문에 색 값을 쓰면 check:tokens 가 잡는다. ' +
+      '(PR 본문과 커밋 메시지에 남겼다. 세 자리 hex 형태라 PR 번호 표기도 함께 걸린다) ' +
+      '카피 색은 코드로 못 고친다 — 사람이 다시 만들어야 한다.',
   },
   {
     path: 'public/images/login/soransoran-login-slide-2.jpg',
     kind: 'file',
     category: 'login-image',
     use: '로그인 화면 슬라이드 2',
-    replace: false,
+    replace: true,
     locked: false,
-    note: '위와 같다.',
+    note: '슬라이드 1 과 같다 — 브랜드색 카피가 픽셀에 구워져 있어 새 팔레트와 어긋난다.',
   },
   {
     path: 'public/images/login/soransoran-login-slide-3.jpg',
     kind: 'file',
     category: 'login-image',
     use: '로그인 화면 슬라이드 3',
-    replace: false,
+    replace: true,
     locked: false,
-    note: '위와 같다.',
+    note: '슬라이드 1 과 같다 — 브랜드색 카피가 픽셀에 구워져 있어 새 팔레트와 어긋난다.',
   },
   {
     path: 'src/components/features/KakaoSignInButton.tsx',

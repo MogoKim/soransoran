@@ -36,7 +36,7 @@ export default async function WithdrawalPage() {
 
         <a
           href={`mailto:${CONTACT_EMAIL}`}
-          className={`mt-6 inline-flex ${TOUCH_MIN} items-center rounded-lg border border-interactive px-4 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
+          className={`mt-6 inline-flex ${TOUCH_MIN} items-center rounded-lg border border-interactive px-4 font-bold text-brand-strong no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
         >
           문의로 탈퇴 요청하기
         </a>

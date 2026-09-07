@@ -44,7 +44,7 @@ export default async function MyPostsPage() {
               return (
                 <li key={post.id}>
                   <Link href={`${board.href}/${post.id}`} className="group block py-3.5 no-underline">
-                    <h2 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink`}>
+                    <h2 className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong`}>
                       {post.title}
                     </h2>
                     <span className="mt-2.5 block text-meta text-content-muted">
