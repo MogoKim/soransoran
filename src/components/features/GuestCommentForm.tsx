@@ -118,7 +118,13 @@ export default function GuestCommentForm({
         <div role="status" className="text-sm">
           <p className="m-0 text-content-muted">
             {GUEST_SIGNUP_HINT}{' '}
-            <Link href={`/login?callbackUrl=${encodeURIComponent(pathname)}`} className="text-link">
+            {/* 🔴 밑줄을 붙인다. 색만으로 링크를 구분하지 않는다 —
+                   `PostActionBar` · `CommentLikeButton` 의 같은 자리는 이미 갖고 있었다
+                   (§12-18 · §12-26). 크기·display 는 건드리지 않는다 — 정본 §13-4. */}
+            <Link
+              href={`/login?callbackUrl=${encodeURIComponent(pathname)}`}
+              className="text-link underline underline-offset-2"
+            >
               카카오로 시작하기
             </Link>
           </p>
