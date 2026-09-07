@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { TOUCH_MIN } from '@/lib/spacing'
 import { SITE } from '@/lib/brand'
+import { BUSINESS_INFO } from '@/lib/public-site-info'
 import FontSizeToggle from '@/components/layouts/FontSizeToggle'
 import { cn } from '@/lib/utils'
 
@@ -13,14 +14,6 @@ const LINKS: { href: string; label: string; emphasis?: boolean }[] = [
   { href: '/contact', label: '문의' },
   { href: '/faq', label: '자주 묻는 질문' },
 ]
-
-/** 상호는 등록증 표기 그대로 둔다 — 줄이면 다른 사업자로 읽힌다. */
-const BUSINESS = {
-  name: '케이에이지랩(K-Agelab)',
-  owner: '김용석',
-  registrationNumber: '457-24-01157',
-  address: '서울특별시 노원구 월계로55길 15',
-} as const
 
 /**
  * 하단 영역 — 약관·규칙·문의·사업자 정보. 터치 타겟 52px 유지
@@ -58,10 +51,10 @@ export default function Footer({ avoidFloatingAction = false }: { avoidFloatingA
           <summary className="cursor-pointer py-4 text-sm">사업자 정보</summary>
           <address className="flex flex-col gap-0.5 not-italic text-xs leading-[1.7]">
             <span className="break-keep">
-              {SITE.name} · {BUSINESS.name} · 대표 {BUSINESS.owner}
+              {SITE.name} · {BUSINESS_INFO.name} · 대표 {BUSINESS_INFO.owner}
             </span>
-            <span className="break-keep">사업자등록번호 {BUSINESS.registrationNumber}</span>
-            <span className="break-keep">{BUSINESS.address}</span>
+            <span className="break-keep">사업자등록번호 {BUSINESS_INFO.registrationNumber}</span>
+            <span className="break-keep">{BUSINESS_INFO.address}</span>
           </address>
         </details>
       </div>

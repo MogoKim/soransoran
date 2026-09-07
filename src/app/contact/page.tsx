@@ -2,14 +2,14 @@ import type { Metadata } from 'next'
 import { TOUCH_MIN } from '@/lib/spacing'
 import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
+import { CONTACT_EMAIL } from '@/lib/public-site-info'
+import { SITE } from '@/lib/brand'
 
 export const metadata: Metadata = {
   title: '문의',
-  description: '소란소란 운영팀에 불편한 일이나 궁금한 점을 알리는 방법',
+  description: `${SITE.name} 운영팀에 불편한 일이나 궁금한 점을 알리는 방법`,
   alternates: { canonical: '/contact' },
 }
-
-const CONTACT = 'soransoran.community@gmail.com'
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -31,10 +31,10 @@ export default function ContactPage() {
         </p>
 
         <a
-          href={`mailto:${CONTACT}`}
+          href={`mailto:${CONTACT_EMAIL}`}
           className={`mt-3 inline-flex ${TOUCH_MIN} items-center break-all text-link underline underline-offset-2`}
         >
-          {CONTACT}
+          {CONTACT_EMAIL}
         </a>
 
         <Section title="이렇게 적어주시면 빠릅니다">

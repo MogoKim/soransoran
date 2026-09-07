@@ -61,6 +61,18 @@ jobs:
       - name: 색상 토큰 가드
         run: npm run check:tokens
 
+      # 브랜드 가드도 같은 자리다 — 색을 지키는 이유와 이름을 지키는 이유가 같다.
+      #
+      # 🔴 리브랜딩 때 옛 이름이 남는 것은 에러를 내지 않는다. 화면에 그냥 나간다.
+      #    그래서 사람이 아니라 CI 가 본다.
+      #
+      # 검사 대상은 src/**/*.{ts,tsx} 의 브랜드명·문의 이메일 리터럴이다.
+      # admin · src/content(발행된 과거 콘텐츠) · 주석은 제외한다.
+      # 스크립트가 스스로 self-test 를 먼저 돌려, 가드가 조용히 아무것도
+      # 잡지 못하게 되는 경우를 막는다.
+      - name: 브랜드 리터럴 가드
+        run: npm run check:brand
+
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
       - name: Prisma Client 생성

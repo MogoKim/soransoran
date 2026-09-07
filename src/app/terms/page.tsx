@@ -2,15 +2,15 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
 import { SITE } from '@/lib/brand'
+import { CONTACT_EMAIL } from '@/lib/public-site-info'
 
 export const metadata: Metadata = {
   title: '이용약관',
-  description: '소란소란 이용약관',
+  description: `${SITE.name} 이용약관`,
   alternates: { canonical: '/terms' },
 }
 
 const EFFECTIVE_DATE = '2026년 8월 22일'
-const CONTACT = 'soransoran.community@gmail.com'
 
 function Article({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -167,7 +167,7 @@ export default function TermsPage() {
             있습니다. 이 경우 작성자 표시는 익명 또는 일반 회원 표기로 대체될 수 있습니다.
           </p>
           <p>
-            3. 게시물의 삭제를 원하는 경우 탈퇴 전에 직접 삭제하거나 {CONTACT} 으로 요청할 수
+            3. 게시물의 삭제를 원하는 경우 탈퇴 전에 직접 삭제하거나 {CONTACT_EMAIL} 으로 요청할 수
             있습니다.
           </p>
         </Article>
@@ -201,7 +201,7 @@ export default function TermsPage() {
 
         <Article title="제14조 (문의처)">
           <p>서비스 이용과 관련한 문의는 아래로 보내주시기 바랍니다.</p>
-          <p>{SITE.name} 운영팀 · {CONTACT}</p>
+          <p>{SITE.name} 운영팀 · {CONTACT_EMAIL}</p>
         </Article>
 
         <p className="mt-10 text-sm text-content-muted">

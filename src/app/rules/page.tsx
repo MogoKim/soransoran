@@ -1,14 +1,13 @@
 import type { Metadata } from 'next'
 import PageShell from '@/components/layouts/PageShell'
 import { SITE } from '@/lib/brand'
+import { CONTACT_EMAIL } from '@/lib/public-site-info'
 
 export const metadata: Metadata = {
   title: '커뮤니티 규칙',
-  description: '소란소란에서 편하게 이야기하기 위한 몇 가지 약속',
+  description: `${SITE.name}에서 편하게 이야기하기 위한 몇 가지 약속`,
   alternates: { canonical: '/rules' },
 }
-
-const CONTACT = 'soransoran.community@gmail.com'
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -125,7 +124,7 @@ export default function RulesPage() {
             충분해요.
           </p>
           <p>
-            궁금한 점이나 불편한 일이 있으면 언제든 알려주세요. {SITE.name} 운영팀 · {CONTACT}
+            궁금한 점이나 불편한 일이 있으면 언제든 알려주세요. {SITE.name} 운영팀 · {CONTACT_EMAIL}
           </p>
         </Section>
       </main>

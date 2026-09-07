@@ -1,10 +1,11 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import PageShell from '@/components/layouts/PageShell'
+import { SITE } from '@/lib/brand'
 
 export const metadata: Metadata = {
   title: '자주 묻는 질문',
-  description: '소란소란에 처음 오신 분들이 자주 묻는 다섯 가지',
+  description: `${SITE.name}에 처음 오신 분들이 자주 묻는 다섯 가지`,
   alternates: { canonical: '/faq' },
 }
 
