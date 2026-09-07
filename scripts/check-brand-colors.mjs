@@ -29,19 +29,21 @@ const PAIRS = [
   { brand: 'color', css: '--brand', why: '브랜드 시그니처 — theme-color · OG 장식 면' },
   { brand: 'ink', css: '--brand-ink', why: '읽는 브랜드색 — OG 워드마크' },
   { brand: 'text', css: '--text-primary', why: '본문 텍스트 — OG 카피' },
-  { brand: 'onBrand', css: '--cta-text', why: 'CTA 위 흰 글씨' },
+  { brand: 'onBrand', css: '--cta-text', why: 'CTA 면 위 글자·아이콘' },
   { brand: 'muted', css: '--text-muted', why: '보조 텍스트' },
   /**
-   * 🔴 BRAND.cta 의 짝은 --cta 가 아니라 --cta-edge 다. 사용처로 판정했다.
-   *    BRAND.cta 는 global-error.tsx 한 곳에서만 쓰이는데, 그 화면은 CSS 가 없을 수 있어
-   *    흰 글씨 대비를 값 자체로 보장해야 한다.
-   *    그 역할을 지는 토큰이 --cta-edge(흰 글씨 5.49:1)이고 값도 같다.
+   * 🔴 BRAND.cta 의 짝은 --cta 다. 둘 다 **대표 행동의 면**을 칠하는 같은 역할이다.
    *
-   *    🟡 웜 모노크롬 전환에서 --cta 와 --cta-edge 가 같은 값이 되어 지금은 어느 쪽으로
-   *       묶어도 통과한다. 그래도 --cta-edge 로 둔다 — 나중에 --cta 만 원색으로 돌릴 때
-   *       global-error 가 조용히 따라가면 안 되기 때문이다.
+   *    이전에는 --cta-edge 와 묶여 있었다. 그 판정의 근거는 "CSS 가 없을 수 있는
+   *    global-error 화면에서 흰 글씨가 값 자체로 읽혀야 한다" 였는데,
+   *    지금은 CTA 위 글자가 흰색이 아니라 먹색(--cta-text #241e1b)이고
+   *    그 짝이 BRAND.onBrand 로 따로 있다. 즉 판독은 면이 아니라 글자가 진다.
+   *    면끼리 묶이지 않으면 화면 CTA 와 최후 에러 화면 버튼이 서로 다른 색이 된다.
+   *
+   * 🔴 --cta 는 `var(--brand)` 라 문자열 그대로는 비교할 수 없다.
+   *    resolveVar 가 최종값(#fa4601)까지 따라가서 대조한다 — 느슨하게 만든 것이 아니다.
    */
-  { brand: 'cta', css: '--cta-edge', why: 'CSS 없이도 흰 글씨가 읽혀야 하는 진한 액션색' },
+  { brand: 'cta', css: '--cta', why: '대표 행동 면 — 화면 CTA 와 CSS 없는 화면의 버튼이 같아야 한다' },
   /**
    * 🔴 웜 모노크롬 전환에서 KNOWN_DRIFT 를 해소하고 정식 PAIR 로 올렸다.
    *    이전에는 brand.ts 만 폐기된 옛 바탕색에 남아 화면과 갈려 있었다 —
@@ -65,10 +67,11 @@ const KNOWN_DRIFT = []
 const NOT_PAIRED = [
   {
     brand: 'cta',
-    css: '--cta',
+    css: '--cta-edge',
     why:
-      '--cta 는 화면 CTA 버튼의 fill, BRAND.cta 는 CSS 없이도 흰 글씨가 읽혀야 하는 자리다. ' +
-      '지금은 두 값이 같지만 역할이 달라 묶지 않는다 — BRAND.cta 의 짝은 --cta-edge 다.',
+      '--cta-edge 는 숨은 접근성 유틸 전용의 진한 보조색이고, BRAND.cta 는 대표 행동 면이다. ' +
+      '두 값이 달라진 지금(#c43300 vs #fa4601) 묶으면 어느 한쪽이 잘못 따라간다 — ' +
+      'BRAND.cta 의 짝은 --cta 다.',
   },
 ]
 

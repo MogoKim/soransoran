@@ -28,14 +28,14 @@ export const BRAND = {
   ink: '#fa4601',
   /** 본문 텍스트 — OG 카피 (= --text-primary) */
   text: '#241e1b',
-  /** 아이콘 글자색 · CTA 위 글자 (= --cta-text) */
-  onBrand: '#ffffff',
+  /** CTA 면 위 글자·아이콘 (= --cta-text). #fa4601 위 4.65:1 */
+  onBrand: '#241e1b',
   /**
-   * 주요 액션 — global-error 처럼 CSS 가 없을 수 있는 화면의 인라인 스타일용.
-   * 🔴 짝은 --cta-edge 다(= --cta · --brand-strong · --link 와 같은 값).
-   *    CSS 없이도 흰 글씨가 읽혀야 하는 자리라 원색이 아니라 진한 주황을 쓴다.
+   * 대표 행동 면 — global-error 처럼 CSS 가 없을 수 있는 화면의 인라인 스타일용.
+   * 🔴 짝은 --cta 다. 화면 CTA 와 같은 색이어야 CSS 유무로 버튼색이 갈리지 않는다.
+   *    판독은 면이 아니라 onBrand(먹색 글씨)로 맞춘다 — 4.65:1.
    */
-  cta: '#c43300',
+  cta: '#fa4601',
   /** 보조 텍스트 — 위와 동일 (= --text-muted) */
   muted: '#6e625c',
 } as const
