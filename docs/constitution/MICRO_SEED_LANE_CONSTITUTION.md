@@ -1079,6 +1079,42 @@ Micro Seed 레인은 `--apply --limit=1`, raw-only 는 `--apply --raw-only --bat
 🔴 **이 개정은 공급 계층에만 적용된다.** 공개 발행 cap 상향은 별도 ladder 승인 사항이며
 (자동화 전환 정본 §5), 이 문단이 그것을 열지 않는다.
 
+#### 🟡 2026-09-07 개정 — 발행 cron 을 **조건부로** 연다 (창업자 승인 · PR #440)
+
+위 09-03 개정은 발행 cron 을 닫아 두었다. 그 금지가 막으려던 것은
+**"무엇이 나갈지 아무도 모르는 채 글이 나가는 것"** 이었다.
+
+그 사이에 그 위험을 없애는 것이 따로 생겼다 — `original-post-auto-publish` 러너다(§4-AL).
+러너는 **무엇을 낼지 스스로 정하고, 낼 수 없으면 스스로 멈춘다.**
+그러니 이제 금지의 근거가 "cron 이 붙었다" 가 아니라 **"판단이 어디 있느냐"** 로 옮겨간다.
+
+```
+🟢 cron 허용    크롤 · Raw Vault 적재 · Shadow 생성
+🟢 cron 조건부  공개 발행 — 아래 6조건을 **모두** 만족할 때만
+🔴 cron 금지    댓글 발행 · reaction · best
+```
+
+**6조건 — 하나라도 빠지면 다시 금지다.**
+
+| # | 조건 | 왜 |
+|---|---|---|
+| 1 | **`scripts/original-post-auto-publish.mts` 만 호출한다** | 판단을 한 곳에 둔다. workflow 가 조건을 다시 판단하면 판단이 갈라져 "왜 나갔는지" 를 설명할 수 없다 |
+| 2 | **cap · pacing 상수를 건드리지 않는다** | `DAILY_PUBLISH_CAP=1` · `POST_CAP_PER_WEEK=1` · `MIN_DAYS_BETWEEN_POSTS=5`. cron 은 **횟수를 늘리는 장치가 아니라 사람 손을 대신하는 장치**다 |
+| 3 | **kill switch 가 살아 있다** | 러너가 DB 에서 읽는다. 켜면 cron 이 돌아도 발행되지 않는다 |
+| 4 | **legacy 큐를 제외한다** | `promptVersion` · `model` · `sourceSite` 세 검사. 내용을 모르는 글은 후보에 오르지도 못한다 |
+| 5 | **safety 를 발행 문안으로 다시 잰다** | 저장된 판정값을 믿지 않는다. 큐에 들어간 뒤 문안이 바뀌었을 수 있다 |
+| 6 | **발행 뒤 정합을 확인한다** | Queue PUBLISHED · `createdPostId` · Post 실재 · `PersonaActivityLog` 1건. 어긋나면 exit 1 로 빨갛게 뜬다 |
+
+🔴 **중복 발행 방지를 cron 쪽에 만들지 않는다.** 러너가 KST 자정 기준 `PersonaActivityLog` 를
+세는 것이 **정본**이다. workflow 에 "이미 돌았나" 표식을 따로 두면,
+그 표식이 정본과 어긋나는 순간이 사고다. 두 번 돌아도 두 번째는 러너가 스스로 멈춘다.
+
+🔴 **두 스위치 원칙은 그대로다.** cron 이 `--apply --limit=1` 을 붙이지만,
+러너는 둘 다 없으면 아무것도 쓰지 않는다. `--limit` 이 1 이 아니어도 멈춘다.
+
+🔴 **이 개정도 cap 을 올리지 않는다.** 하루 1건은 그대로다.
+cap 상향은 여전히 ladder 승인 사항이다(자동화 전환 정본 §5).
+
 ---
 
 ### 6-10. 중복 발행 3중 방어
@@ -1453,7 +1489,7 @@ commentCount · topCommentsCrawledAt · riskFlags
 |---|---|---|---|
 | **Micro Seed** | **원문 그대로** (정책 7) | 🔴 **영구 noindex** (정책 8 · 10) | 운영 중 · 5건 발행 |
 | **Voice Engine / Derived** | 패턴 · 라벨만 추출 | 발행하지 않는다 | 🟢 부분 가동 |
-| **Original Post / index** | **Derived 만** | index 가능 (`permanentNoindex = false`) | 🟡 **창업자 결정까지** · 발행 경로 없음 |
+| **Original Post / index** | **Derived 만** | index 가능 (`permanentNoindex = false`) | 🟢 **열림** — 발행 경로 있음 (§4-AL 러너 · 2026-09-07 기준 4건 발행) |
 
 > 🔴 **Original Post 레인의 정본은 [`2026-09-02-original-post-lane-strategy.md`](../operations/2026-09-02-original-post-lane-strategy.md) 다.**
 > 이 절은 레인 **경계**만 정한다. 파이프라인 · 현재 위치 · 다음 순서는 그 문서를 본다.
@@ -1795,19 +1831,29 @@ limited publish      🟡 진행   softDaily 3 / hardDaily 10 아래 4건 발행
 ```
 limited publish       ✅ 열림   Micro Seed 5건 발행
 Original Post 레인    ✅ 열림   PR #326 · 페르소나 작성자로 2건 발행 (index 레인)
-공급 cron             🟡 개방 승인   §6-9-F 개정 — 크롤 · Raw 적재 · Shadow 생성만
-발행 cron             🔴 여전히 닫힘  공개 발행 · 댓글 · reaction · best
+공급 cron             🟡 개방 승인   §6-9-F 개정 — 크롤 · Raw 적재 · Shadow 생성만 · **아직 미등록**
+발행 cron             🟢 조건부 열림  §6-9-F 2026-09-07 개정 · 6조건 · **하루 1건 유지**
+댓글 · reaction · best 🔴 여전히 닫힘
 ```
 
-**cron 은 아직 0개다.** GitHub Actions 는 `visibility-guard.yml`(CI) 하나뿐이고
-`schedule:` 0건, Vercel cron 0건이다. §6-9-F 개정으로 **공급 계층 cron 을 붙일 자격이 생겼을 뿐**
-실제 등록은 PR-S2 이후 별도 절차다.
+**cron 은 1개다 (2026-09-07 갱신).** GitHub Actions 는 `visibility-guard.yml`(CI) 과
+**`auto-publish.yml`(schedule)** 둘이고, `schedule:` 1건 · Vercel cron 0건이다.
+
+```
+auto-publish.yml   cron '5 15 * * *'  =  15:05 UTC  =  익일 00:05 KST
+                   npx tsx scripts/original-post-auto-publish.mts --apply --limit=1
+```
+
+🔴 **순서가 뒤집혀 있다.** 허용된 공급 cron 은 **0개**이고, 조건부로 연 발행 cron 이 **1개**다.
+공급이 마르면 발행 cron 은 "후보가 0건이다" 로 조용히 멈출 뿐이다 — 스케줄이 공급을 만들지 않는다.
+공급 cron 등록은 PR-S2 이후 별도 절차로 남아 있다.
 
 🔴 **개방 순서에 한 줄이 늘었다.**
 
 ```
 read-only inventory → dry-run → HOLD append → founder PENDING
-  → 1건 publish → limited publish → 🟡 공급 cron → 🔴 발행 cron(미개방)
+  → 1건 publish → limited publish → 🟡 공급 cron(미등록) → 🟢 발행 cron(조건부 열림 · PR #440)
+                                              → 🔴 댓글 cron · reaction · best(닫힘)
 ```
 
 **공급 cron 이 발행 cron 보다 앞에 있는 이유**: 공급은 고객 화면에 아무것도 내보내지 않는다.
