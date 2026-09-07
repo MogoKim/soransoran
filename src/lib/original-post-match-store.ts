@@ -49,10 +49,15 @@ export const canSetMatch = (status: QueueStatus): boolean =>
  * 🔴 규칙 판. 저장된 점수가 어느 규칙의 산물인지 없으면 비교가 불가능하다.
  *
  *    "E-2a" = 점수 3단 보정(간헐 0.6 · 갱년기 후 0.7) + 죽은 축 제거
- *           + 배치 순차 할당 + 한국어 길이 밴드
+ *    "E-2b" = 배치 배정을 **최대 매칭**으로 (2026-09-07). 예전 탐욕 순차 할당에서는
+ *             persona 를 늘렸는데 배정 수가 줄었다 — 실측 14일 13건 → 10건.
+ *             이제 이분 최대 매칭(증가 경로)이라 persona 를 더해도 줄지 않는다.
+ *             상위 3명은 **선호**이고, 자리가 겹치면 hardFilter 를 통과한 전체
+ *             `eligible` 까지 내려간다(아키텍처 §9). 한국어 길이 밴드는 그대로다.
+ *             🔴 이미 저장된 E-2a 기록은 **고치지 않는다** — 그때의 판정은 그때의 판이다
  *    규칙이 바뀌면 이 값을 올린다. 옛 배정을 조용히 새 규칙으로 읽지 않기 위해서다.
  */
-export const RULE_VERSION = 'E-2a'
+export const RULE_VERSION = 'E-2b'
 
 export type ScoreBreakdownLike = {
   topicFit: number
@@ -70,6 +75,7 @@ export type MatchMeta = {
   /** 🔴 점수만 남기면 "왜 이 사람이었나" 에 답할 수 없다 */
   breakdown: ScoreBreakdownLike
   /** 상위 후보 — 대안이 있었는지. 단독이었다면 재검토 신호다 */
+  /** 🔴 그때의 상위 대안 기록 — `assigned` 가 여기 들어 있어야 한다는 뜻이 아니다 */
   top: { code: string; total: number }[]
   eligibleCount: number
   blockedCount: number
@@ -135,6 +141,9 @@ export function planStore(input: MatchInput): StorePlan {
   if (code === '') return { ok: false, reason: SKIP_LABEL.NO_ASSIGNMENT }
 
   // ── ④ 🔴 배정된 코드가 후보 안에 있어야 한다. 없으면 계산이 어긋난 것이다 ──
+  //    🔴 검사하는 것은 `eligible` 하나다. **`top` 안에 있어야 한다는 뜻이 아니다** —
+  //    배치 최대 매칭은 자리가 겹치면 상위 3명 밖으로 내려간다(아키텍처 §9).
+  //    `top` 은 "그때 상위 대안이 누구였나" 의 기록이지 배정의 허용 범위가 아니다
   const hit = input.eligible.find((e) => e.code === code)
   if (hit === undefined) return { ok: false, reason: `${SKIP_LABEL.ASSIGNED_NOT_ELIGIBLE} (${code})` }
 

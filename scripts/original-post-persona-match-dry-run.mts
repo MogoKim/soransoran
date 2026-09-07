@@ -72,7 +72,9 @@ await loadEnvLocal()
 const prisma = new PrismaClient()
 
 console.log('\n══ Persona Matching dry-run — 🔴 DB write 0 ══\n')
-console.log(`  리듬  주 ${POST_CAP_PER_WEEK}건 · 최소 간격 ${MIN_DAYS_BETWEEN_POSTS}일 · 상위 ${TOP_CANDIDATES}명 중 추천`)
+console.log(`  리듬  주 ${POST_CAP_PER_WEEK}건 · 최소 간격 ${MIN_DAYS_BETWEEN_POSTS}일`)
+console.log(`  추천  단건 = 상위 ${TOP_CANDIDATES}명 중 가중 무작위`)
+console.log(`  배정  배치 = 최대 매칭 · 상위 ${TOP_CANDIDATES}명 우선 선호, 자리가 겹치면 eligible 전체까지`)
 if (overrides.size > 0) console.log(`  🟡 override ${overrides.size}명 — ${OVERRIDE} (DB 는 고치지 않습니다)`)
 console.log('  🔴 발행하지 않습니다 · Post 를 만들지 않습니다 · Persona 를 고치지 않습니다\n')
 

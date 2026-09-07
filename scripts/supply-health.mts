@@ -416,10 +416,21 @@ async function main(): Promise<void> {
 
   // 🔴 오늘 이미 상한을 채웠으면 다음 예약은 **내일** 00:05 KST 다
   const startAt = nextScheduleAt({ now, publishedToday: todayCount, dailyCap: DAILY_PUBLISH_CAP })
+  // 🔴 **이미 배정된 행은 기존 배정이 정본이다** — 러너와 같아야 한다.
+  //    이것을 넘기지 않으면 예측이 그 행을 새로 매칭해 **다른 사람**에게 주고,
+  //    화면이 보여준 필자와 실제로 나갈 필자가 달라진다.
+  //    배정된 persona 를 못 찾으면 빈 값이 아니라 **모르는 코드**를 넘긴다 —
+  //    forecast 가 fail-closed(RECOVERY_BROKEN)로 잡아야 하기 때문이다
+  const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
+  const forecastQueue = autoTargets.map((t) => ({
+    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
+    assignedPersonaCode: t.matchedPersonaId === null
+      ? null
+      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+  }))
+
   const fc = forecastPublishing({
-    queue: autoTargets.map((t) => ({
-      queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
-    })),
+    queue: forecastQueue,
     personas: personas as never, history, startAt, days: 14, dailyCap: DAILY_PUBLISH_CAP,
   })
 
@@ -428,12 +439,8 @@ async function main(): Promise<void> {
   const blockedCombos: string[][] = []
   {
     const { planBatch } = await import('../src/lib/original-post-persona-match')
-    const b = planBatch(
-      autoTargets.map((t) => ({
-        queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
-      })),
-      personas as never,
-    )
+    // 🔴 예측과 **같은 입력**이다. 여기서만 기존 배정을 빼면 두 수치가 갈린다
+    const b = planBatch(forecastQueue, personas as never)
     for (const a of b.assignments) {
       for (const x of a.blocked) blockedCombos.push(x.reasons.map((r) => r.code))
     }
@@ -449,6 +456,8 @@ async function main(): Promise<void> {
     stockUsable: stock.usable, in7: fc.in7, nextWillPublish: fc.nextScheduleWillPublish,
     nextCandidates: fc.nextPersonaCandidates.length, shortfallMin: need.shortfallMin,
     dailyCap: DAILY_PUBLISH_CAP,
+    // 🔴 기존 배정이 깨졌으면 이것 하나로 CRITICAL 이다 — 다른 수치는 의미를 잃는다
+    recoveryBroken: fc.recoveryBroken,
   })
 
   await prisma.$disconnect()

@@ -53,6 +53,12 @@ export type FindingCode =
   | 'FORECAST_EMPTY'
   | 'PERSONA_SHORTFALL'
   | 'FORECAST_LOW'
+  /**
+   * 🔴 기존 배정이 쓸 수 없는 persona 를 가리킨다 — 없는 사람 · 비활성 · 실계정.
+   *    러너가 fail-closed 로 멈추므로 **아무것도 나가지 않는다.**
+   *    다른 수치가 초록이어도 이 하나면 레인은 멈춘 것이다.
+   */
+  | 'RECOVERY_BROKEN'
 
 /**
  * 🔴 **안전 불변 위반과 가용성 실패는 다른 것이다.**
