@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import { BRAND_NAME } from '@/lib/brand-name'
+import { BRAND_NAME, BRAND_NAME_HEAD, BRAND_NAME_TAIL } from '@/lib/brand-name'
 
 /**
  * 소란소란 워드마크 — 🔴 브랜드 표시의 단일 진입점
@@ -25,16 +25,9 @@ import { BRAND_NAME } from '@/lib/brand-name'
  */
 
 /**
- * 🔴 이름 값을 여기에 복사하지 않는다. BRAND_NAME 에서 파생한다.
- *
- * 지금 이름은 같은 두 음절이 두 번 반복되는 형태라 **앞 절반 / 뒤 절반**으로 가른다.
- * 리브랜딩으로 이름이 바뀌면 이 한 줄만 그 이름의 분리 위치로 고친다 —
- * 글자 수를 코드가 추측하게 두면 엉뚱한 자리에서 갈라진 채 배포된다.
+ * 🔴 이름도 분리 위치도 여기서 정하지 않는다. `brand-name.ts` 가 정본이다.
+ *    화면·CSS 없는 fallback·OG 이미지가 같은 조각을 써야 하므로 자르는 곳은 한 곳뿐이다.
  */
-const SPLIT_AT = 2
-
-const HEAD = BRAND_NAME.slice(0, SPLIT_AT)
-const TAIL = BRAND_NAME.slice(SPLIT_AT)
 
 type LogoProps = {
   /** 레이아웃 보정 전용 — 색·크기·무게는 여기서 바꾸지 않는다 */
@@ -53,10 +46,10 @@ export default function Logo({ className }: LogoProps) {
           시각 조각은 aria-hidden 으로 빼고, 이름은 아래 sr-only 한 곳에서만 읽힌다.
           헤더처럼 조상 링크에 aria-label 이 있으면 그쪽이 이름을 이겨 중복도 없다. */}
       <span aria-hidden className="font-extrabold text-brand">
-        {HEAD}
+        {BRAND_NAME_HEAD}
       </span>
       <span aria-hidden className="font-medium text-brand-strong">
-        {TAIL}
+        {BRAND_NAME_TAIL}
       </span>
       <span className="sr-only">{BRAND_NAME}</span>
     </span>

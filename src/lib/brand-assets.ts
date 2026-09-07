@@ -128,8 +128,11 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     replace: false,
     locked: false,
     note:
-      'next/og 로 매 요청 생성한다. SITE.name · SITE.tagline · BRAND 색을 읽으므로 ' +
-      '픽셀에 글자가 박히지 않는다. 우나어는 og-cover.png 에 로고가 구워져 있어 수동 교체가 필요했다.',
+      'next/og 로 매 요청 생성한다. **두 색 워드마크**(2026-09-07)를 화면 Logo 와 같은 ' +
+      'BRAND_NAME_HEAD / BRAND_NAME_TAIL 조각으로 그린다 — 앞 800 BRAND.color, 뒤 500 BRAND.strong, ' +
+      '52px 에 자간 -0.03em. next/og 는 CSS 변수를 해석하지 못해 색은 BRAND 상수를 쓴다. ' +
+      'SITE.tagline 과 카피도 코드가 읽으므로 픽셀에 글자가 박히지 않는다. ' +
+      '우나어는 og-cover.png 에 로고가 구워져 있어 수동 교체가 필요했다.',
   },
   {
     path: 'src/app/community/[boardSlug]/[postId]/opengraph-image.tsx',
@@ -138,7 +141,9 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     use: '글 상세 OG 이미지',
     replace: false,
     locked: false,
-    note: '위와 같은 방식. 글 제목 + 브랜드 워드마크를 코드로 그린다.',
+    note:
+      '위와 같은 방식이고 워드마크도 같은 두 색 조각이다. 글 제목 + 브랜드 워드마크를 코드로 그린다. ' +
+      '보드 라벨은 워드마크 전체 뒤에 기존 간격으로 붙는다.',
   },
   {
     path: 'src/app/manifest.ts',

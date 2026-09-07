@@ -1,5 +1,6 @@
 import { ImageResponse } from 'next/og'
 import { BRAND, SITE } from '@/lib/brand'
+import { BRAND_NAME_HEAD, BRAND_NAME_TAIL } from '@/lib/brand-name'
 
 /**
  * 기본 OG 이미지 — 코드 생성
@@ -25,8 +26,12 @@ export default function OgImage() {
           background: BRAND.background,
         }}
       >
-        <div style={{ display: 'flex', fontSize: 52, fontWeight: 800, color: BRAND.ink }}>
-          {SITE.name}
+        {/* 두 색 워드마크 (정본 §3-2-A) — 화면 Logo 와 같은 조각이다.
+            next/og 는 CSS 변수를 해석하지 못하므로 색은 BRAND 상수를 쓴다.
+            자간은 52px 에서 -0.03em — 화면 24px 의 -0.02em 보다 한 단계 조인다. */}
+        <div style={{ display: 'flex', fontSize: 52, letterSpacing: '-0.03em' }}>
+          <span style={{ fontWeight: 800, color: BRAND.color }}>{BRAND_NAME_HEAD}</span>
+          <span style={{ fontWeight: 500, color: BRAND.strong }}>{BRAND_NAME_TAIL}</span>
         </div>
         <div
           style={{

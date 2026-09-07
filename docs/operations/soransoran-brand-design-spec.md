@@ -895,8 +895,34 @@ hover 색 토큰도, 테두리 토큰도, pressed 색도 두지 않는다.
 그렇게 하지 않으면 보조기술이 "소란" 을 두 번 읽는다. 헤더처럼 조상 링크에
 `aria-label` 이 있으면 그쪽이 이름을 이겨 중복도 생기지 않는다.
 
-🔴 **값을 컴포넌트에 복사하지 않는다.** `Logo.tsx` 는 `BRAND_NAME` 에서 두 조각을 파생하고,
-**분리 위치(`SPLIT_AT`)만** 상수로 둔다. 이름이 바뀌면 그 한 줄만 고친다.
+🔴 **분리 정본은 `src/lib/brand-name.ts` 한 곳이다** (2026-09-07 이동).
+
+```
+BRAND_NAME            '소란소란'
+BRAND_NAME_SPLIT_AT   2            ← 분리 위치. 이름이 바뀌면 이 한 줄만 고친다
+BRAND_NAME_HEAD       앞 조각
+BRAND_NAME_TAIL       뒤 조각
+```
+
+분리 위치는 **이름의 성질**이지 컴포넌트의 사정이 아니다. 네 자리가 같은 조각을 써야 하므로
+자르는 곳을 하나로 둔다 — 각자 자르면 한 곳만 어긋난 채 배포된다.
+
+| 자리 | 파일 | 색 출처 | 크기 · 자간 |
+|---|---|---|---|
+| 화면 워드마크 | `components/brand/Logo.tsx` | CSS 토큰 `--brand` / `--brand-strong` | 24px · **-0.02em** |
+| CSS 없는 fallback | `app/global-error.tsx` | `BRAND.color` / **`BRAND.strong`** | 24px · **-0.02em** |
+| 기본 OG | `app/opengraph-image.tsx` | `BRAND.color` / **`BRAND.strong`** | 52px · **-0.03em** |
+| 글 상세 OG | `app/community/[boardSlug]/[postId]/opengraph-image.tsx` | 위와 같다 | 52px · **-0.03em** |
+
+🔴 **CSS 밖의 보조색은 `BRAND.strong` 이다.** `global-error` 는 레이아웃이 죽어 `globals.css` 가
+없을 수 있고, `next/og` 는 브라우저가 아니라 서버에서 그린다 — 둘 다 CSS 변수를 해석하지 못한다.
+값이 `--brand-strong` 과 갈라지면 같은 워드마크가 자리마다 달라 보이므로
+`check:brand-colors` 의 **정식 PAIR**(`BRAND.strong ↔ --brand-strong`)로 묶었다. **대조 8쌍.**
+
+🟡 **`global-error` 는 `sr-only` 클래스에 의존하지 않는다.** CSS 가 없을 수 있어
+`role="img"` + `aria-label={BRAND_NAME}` 으로 이름을 한 번만 읽히게 하고 시각 조각은 `aria-hidden` 이다.
+
+✅ **단색 워드마크 잔존 0** — 화면·fallback·OG 두 곳이 모두 같은 두 색 조각을 쓴다.
 
 #### 가드 — 실제 로고 색을 잰다
 
@@ -919,12 +945,12 @@ hover 색 토큰도, 테두리 토큰도, pressed 색도 두지 않는다.
 |---|---:|---|---|
 | **헤더 워드마크** | **24px 고정** | `--brand` 800 + `--brand-strong` 500 | `Logo.tsx` 한 곳이 정본 |
 | **에러 화면 워드마크** | **24px 고정** | 위와 같다 — `Logo` 를 쓴다 | 직접 마크업을 버리고 중앙화 |
-| `global-error.tsx` 워드마크 | 24px | 🟡 **`BRAND.ink` 단색** | CSS 가 없을 수 있는 화면이라 인라인 style 이다 — **이번 범위 밖** |
-| OG 이미지 워드마크 | 52px | 🟡 **`BRAND.ink` 단색** | `next/og` 는 별도 출력 환경 — **이번 범위 밖** |
+| `global-error.tsx` 워드마크 | **24px** · -0.02em | `BRAND.color` 800 + `BRAND.strong` 500 | ✅ 두 색 (2026-09-07) |
+| OG 이미지 워드마크 (2곳) | **52px** · -0.03em | 위와 같다 | ✅ 두 색 (2026-09-07) |
 
-> 🟡 **아래 두 자리는 아직 단색이다.** `global-error.tsx`(CSS 없는 fallback)와
-> `opengraph-image.tsx` 2개(next/og)는 화면과 다른 출력 환경이라 이번에 손대지 않았다.
-> 두 색 워드마크는 **화면(헤더·에러 화면)에만** 적용돼 있다.
+> 🕘 **이전에는 아래 두 자리가 `BRAND.ink` 단색이었다.** `global-error`(CSS 없는 fallback)와
+> `opengraph-image` 2개(next/og)는 화면과 다른 출력 환경이라 워드마크 1차 도입에서 빠져 있었다.
+> **2026-09-07 후속 작업으로 같은 두 색 조각에 통일했다 — 단색 워드마크 잔존 0.**
 
 > 🕘 **이전에는 "헤더 24px 포인트 / 홈 hero 30px 읽는 색" 두 자리로 적혀 있었다.**
 > 홈 hero 워드마크는 실측 결과 **존재하지 않는다** — `Logo` 를 쓰는 파일은
@@ -1189,6 +1215,9 @@ npm run typecheck · lint · build
 | 🔴 **CTA 역할 보정 — FAB·primary CTA 를 메인 `#FA4601` 로** | ✅ 반영 · **2026-09-07 §2-2-B** |
 | 🔴 **FAB 내용색만 흰색으로 분리** (`--fab-content`) + 라벨 `text-lg` | ✅ 반영 · **2026-09-07 §2-2-C** |
 | 🔴 **두 색 텍스트 워드마크** — 24px 고정 · 800/500 · `--brand`/`--brand-strong` · 자간 -0.02em | ✅ 반영 · **2026-09-07 §3-2-A** |
+| 🔴 **분리 정본을 `brand-name.ts` 로 이동** (`BRAND_NAME_SPLIT_AT` / `HEAD` / `TAIL`) | ✅ 반영 · 2026-09-07 |
+| 🔴 **`global-error` · OG 2곳도 두 색으로 통일** — CSS 밖 보조색 `BRAND.strong` · parity 8쌍 | ✅ 반영 · 2026-09-07 |
+| ✅ **단색 워드마크 잔존** | **0건** |
 | 🔴 **`icon.png` · `apple-icon.png` 새 팔레트 자산으로 교체 완료** (32×32 · 180×180) | ✅ 반영 · 2026-09-07 |
 | 🟡 **현재 새 팔레트와 어긋난 stale 자산** | **로그인 슬라이드 3장뿐** |
 

@@ -24,8 +24,24 @@ export const BRAND = {
    *    check:brand-colors 의 정식 PAIR 로 올려 다시 갈라지면 CI 가 잡는다.
    */
   background: '#fbfaf9',
-  /** 큰 글씨 브랜드색 — OG 워드마크 (= --brand-ink) */
+  /**
+   * 큰 글씨 브랜드색 (= --brand-ink)
+   *
+   * 🟡 워드마크가 두 색으로 갈린 뒤(2026-09-07) CSS 밖에서는 앞 조각이 `color` 를 쓴다.
+   *    지금 이 값을 읽는 코드는 없지만, 화면의 --brand-ink 가 갈라지는지 보는 짝으로 남긴다.
+   */
   ink: '#fa4601',
+  /**
+   * 워드마크 **뒤 조각** — CSS 변수를 쓸 수 없는 자리용 (= --brand-strong)
+   *
+   * 🔴 두 색 워드마크(정본 §3-2-A)는 화면에서 --brand / --brand-strong 두 토큰을 쓴다.
+   *    그런데 global-error(레이아웃이 죽어 globals.css 가 없을 수 있다)와
+   *    next/og(브라우저가 아니라 서버에서 그린다)는 그 변수를 해석하지 못한다.
+   *    같은 워드마크가 자리마다 달라 보이지 않도록 뒤 조각 값을 여기 둔다.
+   *
+   * 🔴 --brand-strong 과 값이 갈라지면 check:brand-colors 가 잡는다(정식 PAIR).
+   */
+  strong: '#c43300',
   /** 본문 텍스트 — OG 카피 (= --text-primary) */
   text: '#241e1b',
   /** CTA 면 위 글자·아이콘 (= --cta-text). #fa4601 위 4.65:1 */

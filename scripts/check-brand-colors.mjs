@@ -27,7 +27,12 @@ const BRAND_TS = join(ROOT, 'src/lib/brand.ts')
 /** 같은 역할이므로 값이 일치해야 하는 쌍 */
 const PAIRS = [
   { brand: 'color', css: '--brand', why: '브랜드 시그니처 — theme-color · OG 장식 면' },
-  { brand: 'ink', css: '--brand-ink', why: '읽는 브랜드색 — OG 워드마크' },
+  { brand: 'ink', css: '--brand-ink', why: '큰 글씨 브랜드색 — 화면 --brand-ink 의 CSS 밖 짝' },
+  /**
+   * 🔴 두 색 워드마크의 뒤 조각. 화면은 --brand-strong 을, CSS 밖(global-error·next/og)은
+   *    BRAND.strong 을 쓴다. 같은 워드마크라 값이 갈라지면 자리마다 다른 색이 된다.
+   */
+  { brand: 'strong', css: '--brand-strong', why: '워드마크 뒤 조각 — CSS 밖에서도 같은 색이어야 한다' },
   { brand: 'text', css: '--text-primary', why: '본문 텍스트 — OG 카피' },
   { brand: 'onBrand', css: '--cta-text', why: 'CTA 면 위 글자·아이콘' },
   { brand: 'muted', css: '--text-muted', why: '보조 텍스트' },

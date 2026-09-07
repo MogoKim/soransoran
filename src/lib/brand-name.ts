@@ -19,6 +19,27 @@
 export const BRAND_NAME = '소란소란'
 
 /**
+ * 두 색 워드마크의 분리 위치 — 🔴 이름의 일부라 이름 옆에 둔다
+ *
+ * 워드마크는 앞·뒤 두 조각을 다른 무게와 색으로 그린다(정본 §3-2-A).
+ * 그 분리 위치는 **이름의 성질**이지 컴포넌트의 사정이 아니다 —
+ * 지금 이름은 같은 두 음절이 두 번 반복되는 형태라 절반에서 가른다.
+ *
+ * 🔴 화면(Logo.tsx) · CSS 없는 fallback(global-error) · next/og 이미지가
+ *    모두 같은 조각을 써야 한다. 각자 자르면 한 곳만 어긋난 채 배포된다.
+ *    그래서 자르는 곳을 여기 하나로 두고 결과만 내보낸다.
+ *
+ * 🔴 글자 수를 코드가 추측하게 두지 않는다. 리브랜딩 때 BRAND_NAME 을 고치는 사람이
+ *    바로 아래 줄에서 분리 위치도 함께 정하게 된다.
+ */
+export const BRAND_NAME_SPLIT_AT = 2
+
+/** 워드마크 앞 조각 — weight 800 · 브랜드 원색 */
+export const BRAND_NAME_HEAD = BRAND_NAME.slice(0, BRAND_NAME_SPLIT_AT)
+/** 워드마크 뒤 조각 — weight 500 · 진한 주황 */
+export const BRAND_NAME_TAIL = BRAND_NAME.slice(BRAND_NAME_SPLIT_AT)
+
+/**
  * 브랜드명에 붙는 주제 조사 — 🔴 받침을 코드가 판별하지 않는다.
  *
  * 자동 판별은 한글 받침에만 통한다. 영문·숫자·혼합 이름은 **발음**이 조사를 정하므로

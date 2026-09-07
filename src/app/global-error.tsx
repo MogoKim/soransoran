@@ -1,7 +1,7 @@
 'use client'
 
 import { BRAND } from '@/lib/brand'
-import { BRAND_NAME } from '@/lib/brand-name'
+import { BRAND_NAME, BRAND_NAME_HEAD, BRAND_NAME_TAIL } from '@/lib/brand-name'
 
 /**
  * 최상위 에러 화면 — layout 자체가 실패한 경우에만 쓰인다.
@@ -28,7 +28,17 @@ export default function GlobalError({ reset }: { error: Error; reset: () => void
           color: BRAND.text,
         }}
       >
-        <p style={{ fontSize: 24, fontWeight: 800, color: BRAND.ink, margin: 0 }}>{BRAND_NAME}</p>
+        {/* 두 색 워드마크 (정본 §3-2-A) — 화면 Logo 와 같은 조각·같은 색이다.
+            🔴 여기는 globals.css 가 없을 수 있어 토큰도 sr-only 클래스도 못 쓴다.
+               그래서 색은 BRAND 상수로, 이름은 role="img" + aria-label 로 한 번만 읽힌다. */}
+        <p
+          role="img"
+          aria-label={BRAND_NAME}
+          style={{ fontSize: 24, letterSpacing: '-0.02em', whiteSpace: 'nowrap', margin: 0 }}
+        >
+          <span aria-hidden style={{ fontWeight: 800, color: BRAND.color }}>{BRAND_NAME_HEAD}</span>
+          <span aria-hidden style={{ fontWeight: 500, color: BRAND.strong }}>{BRAND_NAME_TAIL}</span>
+        </p>
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
           일시적인 문제가 발생했습니다
         </h1>
