@@ -269,6 +269,10 @@ jobs:
       - name: 공급 자동 보충 (APPROVED 까지 · 보류 목록 · 발행 금지)
         run: npm run micro-seed:supply-autofill-check
 
+      # 기계가 사람 판정 층을 넘지 않는지 · 후보 파일 계약이 소비기와 맞는지 본다 (§4-AO)
+      - name: 후보 생성 파이프라인 (사람 판정 층 보호)
+        run: npm run micro-seed:candidate-pipeline-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:
