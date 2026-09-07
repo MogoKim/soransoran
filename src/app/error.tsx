@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { TOUCH_MIN } from '@/lib/spacing'
+import { BRAND_NAME } from '@/lib/brand-name'
 
 /**
  * route 에러 화면
@@ -12,7 +13,7 @@ import { TOUCH_MIN } from '@/lib/spacing'
 export default function Error({ reset }: { error: Error; reset: () => void }) {
   return (
     <main className="mx-auto flex max-w-3xl flex-col items-center px-4 py-20 text-center">
-      <p className="text-2xl font-extrabold text-brand-ink">소란소란</p>
+      <p className="text-2xl font-extrabold text-brand-ink">{BRAND_NAME}</p>
       <h1 className="mt-6 text-xl font-bold text-content-primary">
         화면을 불러오지 못했습니다
       </h1>

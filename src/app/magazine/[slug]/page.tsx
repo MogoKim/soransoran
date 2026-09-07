@@ -10,6 +10,7 @@ import { getMagazineArticleBySlug, getRelatedMagazineArticles } from '@/lib/maga
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
 import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
 import { SITE } from '@/lib/brand'
+import { BRAND_NAME } from '@/lib/brand-name'
 
 // 다른 route 와 같이 동적 렌더한다. 콘텐츠가 TS 데이터라 조회 비용이 없다.
 export const dynamic = 'force-dynamic'
@@ -138,7 +139,7 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
               {MAGAZINE_CLUSTER_LABELS[article.cluster]}
             </span>
             <span aria-hidden>·</span>
-            <span>소란소란 편집팀</span>
+            <span>{`${BRAND_NAME} 편집팀`}</span>
             <span aria-hidden>·</span>
             <span>{formatMagazinePublishedDate(article.publishedAt)}</span>
           </p>

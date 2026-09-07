@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { BRAND_NAME } from '@/lib/brand-name'
 
 /**
  * 소란소란 워드마크 — 🔴 브랜드 표시의 단일 진입점
@@ -31,7 +32,7 @@ export default function Logo({ tone = 'ink', className }: LogoProps) {
         className,
       )}
     >
-      소란소란
+      {BRAND_NAME}
     </span>
   )
 }

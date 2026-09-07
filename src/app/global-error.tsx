@@ -1,6 +1,7 @@
 'use client'
 
 import { BRAND } from '@/lib/brand'
+import { BRAND_NAME } from '@/lib/brand-name'
 
 /**
  * 최상위 에러 화면 — layout 자체가 실패한 경우에만 쓰인다.
@@ -27,7 +28,7 @@ export default function GlobalError({ reset }: { error: Error; reset: () => void
           color: BRAND.text,
         }}
       >
-        <p style={{ fontSize: 24, fontWeight: 800, color: BRAND.ink, margin: 0 }}>소란소란</p>
+        <p style={{ fontSize: 24, fontWeight: 800, color: BRAND.ink, margin: 0 }}>{BRAND_NAME}</p>
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
           일시적인 문제가 발생했습니다
         </h1>

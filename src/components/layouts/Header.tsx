@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { TOUCH_MIN } from '@/lib/spacing'
 import Logo from '@/components/brand/Logo'
+import { BRAND_NAME } from '@/lib/brand-name'
 import HeaderAuth from '@/components/layouts/HeaderAuth'
 import FontSizeToggle from '@/components/layouts/FontSizeToggle'
 
@@ -20,7 +21,7 @@ export default function Header() {
       <Link
         href="/"
         className={`flex ${TOUCH_MIN} items-center no-underline`}
-        aria-label="소란소란 홈"
+        aria-label={`${BRAND_NAME} 홈`}
       >
         <Logo tone="brand" className="text-2xl" />
       </Link>
