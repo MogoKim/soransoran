@@ -24,7 +24,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  findBottleneck, planSteps, diagnose, checkCandidateShape,
+  findBottleneck, planSteps, diagnose, checkCandidateShape, readListStock,
   LAYERS, LAYER_LABEL, type PipelineInput, type Layer, type Candidate,
 } from '../src/lib/micro-seed-candidate-pipeline'
 // 🔴 "이미 초안화됐나" 를 여기서 다시 판정하지 않는다 — 생성기가 쓰는 그 함수를 그대로 쓴다.
@@ -69,7 +69,51 @@ function uniqueBy(
   return new Set(out.keys())
 }
 
+/** `.jsonl` 한 줄씩 — 깨진 줄은 건너뛴다 */
+function jsonl(path: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = []
+  let raw: string
+  try { raw = readFileSync(path, 'utf-8') } catch { return out }
+  for (const line of raw.split('\n')) {
+    const t = line.trim()
+    if (t === '') continue
+    try { out.push(JSON.parse(t) as Record<string, unknown>) } catch { /* 건너뛴다 */ }
+  }
+  return out
+}
+function listFiles(suffix: string): string[] {
+  if (!existsSync(DATA_DIR)) return []
+  return readdirSync(DATA_DIR).filter((f) => f.endsWith(suffix)).sort().map((f) => join(DATA_DIR, f))
+}
+
 function collect(): { input: PipelineInput; detail: Record<Layer, string> } {
+  // ⓪ 목록 → 본문 — 🔴 목록에 있는데 본문을 안 읽은 것
+  const listed = new Map<string, Record<string, unknown>>()
+  for (const f of listFiles('.list.jsonl')) for (const r of jsonl(f)) {
+    const id = S(r.sourceArticleId)
+    // 🔴 이미 걸러진 것은 세지 않는다 — 고정글·정치·실명은 애초에 대상이 아니다
+    if (id === '' || S(r.sourceExcludeReason) !== '' || r.sourcePoliticsExcluded === true) continue
+    listed.set(id, r)
+  }
+  const bodyFiles = [...listFiles('.detail.jsonl'), ...listFiles('.raw-detail.jsonl')]
+  const hasBody = new Set<string>()
+  for (const f of bodyFiles) for (const r of jsonl(f)) {
+    const id = S(r.sourceArticleId)
+    if (id !== '') hasBody.add(id)
+  }
+  const noBody = [...listed.entries()].filter(([id]) => !hasBody.has(id)).map(([, r]) => r)
+  const listStock = readListStock(noBody.map((r) => ({ sourceSite: S(r.sourceSite) })))
+
+  // 참고 수치 — 🔴 층으로 세지 않는다. 판정 조건은 검수 화면 셋이 각자 갖고 있다
+  const judgedIds = new Set<string>()
+  for (const re of [/^srn-approvals.*\.json$/, /^seed-originality-source-approvals-.*\.json$/,
+    /^raw-originality-approvals-.*\.json$/]) {
+    for (const f of listJson(re)) for (const r of rowsOf(f, ['decisions'])) {
+      const id = S(r.sourceArticleId)
+      if (id !== '') judgedIds.add(id)
+    }
+  }
+
   // ① SEED 승인 — 🔴 **생성기와 똑같이 고른다.**
   //    최신 SRN 승인 1개 + 최신 소스 승인 1개다. 모든 파일을 긁으면 생성기와 숫자가 어긋나고,
   //    화면은 "3건 가능" 이라 하는데 생성기는 "0건" 이라 한다 (2026-09-07 실제로 겪었다).
@@ -111,12 +155,18 @@ function collect(): { input: PipelineInput; detail: Record<Layer, string> } {
 
   return {
     input: {
+      body: { total: listStock.pending, passed: 0 },
       seedApproval: { total: picked.length, passed: picked.length - kept.length },
       draft: { total: draftKeys.size, passed: inter(draftKeys, reviewedIds) },
       adopt: { total: adopted.size, passed: inter(adopted, candKeys) },
       candidate: { total: candUsable.length, passed: candUsable.length },
     },
     detail: {
+      body: `목록 ${listed.size}건 · 본문 있음 ${listed.size - listStock.pending}건`
+        + ` · 🎯 본문 없음 ${listStock.pending}건`
+        + ` (fetch 만 ${listStock.fetchOnly} · 브라우저·세션 ${listStock.needsBrowser})`
+        + `\n       참고: 본문 ${hasBody.size}건 중 판정됨 ${[...hasBody].filter((x) => judgedIds.has(x)).length}건`
+        + ' — 판정 후보 수는 검수 화면이 정본이다',
       seedApproval: `SEED 승인 ${picked.length}건 · 초안 있음 ${picked.length - kept.length}건`
         + ` (생성기와 같은 파일: ${[srnPath, srcPath].filter((x) => x !== null).map((x) => x!.split('/').pop()).join(' · ') || '없음'})`,
       draft: `초안 ${draftKeys.size}건 · 판정됨 ${inter(draftKeys, reviewedIds)}건`,
@@ -150,10 +200,11 @@ function main(): void {
 
   console.log('① 층별 재고')
   for (const s of states) {
-    const mark = s.pending === 0 ? '  ' : s.actor === 'human' ? '🔴' : '🟢'
+    const mark = s.pending === 0 ? '  ' : s.actor === 'human' ? '🔴' : s.actor === 'network' ? '🟡' : '🟢'
+    const who = s.actor === 'human' ? '사람' : s.actor === 'network' ? '밖으로 요청 · 승인 사항' : '기계'
     console.log(`  ${mark} ${LAYER_LABEL[s.layer]}`)
     console.log(`       ${detail[s.layer]}`)
-    if (s.pending > 0) console.log(`       → 일감 ${s.pending}건 (${s.actor === 'human' ? '사람' : '기계'})`)
+    if (s.pending > 0) console.log(`       → 일감 ${s.pending}건 (${who})`)
   }
 
   const d = diagnose(input)

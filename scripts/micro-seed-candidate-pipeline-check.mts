@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs'
 import {
-  findBottleneck, planSteps, diagnose, checkCandidateShape, readLayer, candidateKeyOf,
+  findBottleneck, planSteps, diagnose, checkCandidateShape, readLayer, candidateKeyOf, readListStock,
   LAYERS, LAYER_ACTOR, LAYER_LABEL, LAYER_ACTION,
   type PipelineInput,
 } from '../src/lib/micro-seed-candidate-pipeline'
@@ -19,6 +19,7 @@ const check = (label: string, ok: boolean): void => {
 
 /** 전부 비어 있는 상태 — 여기서 한 층씩 채워 본다 */
 const empty = (): PipelineInput => ({
+  body: { total: 0, passed: 0 },
   seedApproval: { total: 0, passed: 0 },
   draft: { total: 0, passed: 0 },
   adopt: { total: 0, passed: 0 },
@@ -50,6 +51,30 @@ console.log('\n① 🔴 기계는 사람 판정 층을 넘지 않는다')
     return true
   })())
   check('사람 층 안내에 화면 이름이 있다', LAYER_ACTION.draft.includes('seed-originality-review'))
+}
+
+console.log('\n①-b 🔴 밖으로 나가는 층도 기계가 자동으로 돌리지 않는다')
+{
+  check('⓪ 층은 network 다', LAYER_ACTOR.body === 'network')
+  const i = empty()
+  i.body = { total: 1054, passed: 0 }
+  const step = planSteps(i).find((s) => s.layer === 'body')!
+  check('🔴 목록이 1054건 쌓여도 자동으로 요청하지 않는다', !step.runnable)
+  check('승인 사항이라고 말한다', step.reason.includes('승인 사항'))
+  check('진단 신호가 따로 있다', diagnose(i).signal === 'network-blocked')
+  check('🔴 사람 대기와 구분된다', (() => {
+    const h = empty(); h.draft = { total: 3, passed: 0 }
+    return diagnose(h).signal !== diagnose(i).signal
+  })())
+
+  // 🔴 읽기 비용으로 가른다 — 네이버 승인을 기다리며 82cook 을 놀리지 않는다
+  const st = readListStock([
+    { sourceSite: '82cook' }, { sourceSite: '82cook' },
+    { sourceSite: 'navercafe:remonterrace' }, { sourceSite: 'navercafe:wgang' },
+  ])
+  check('브라우저 없이 읽을 수 있는 것을 따로 센다', st.fetchOnly === 2 && st.needsBrowser === 2)
+  check('합이 전체와 같다', st.pending === 4)
+  check('출처를 모르면 fetch 쪽으로 센다', readListStock([{}]).fetchOnly === 1)
 }
 
 console.log('\n② 막힌 곳은 가장 앞에서 찾는다')
@@ -96,7 +121,7 @@ console.log('\n④ 층 계산')
   check('🔴 넘어간 것이 더 많아도 음수가 안 된다',
     readLayer('adopt', { total: 2, passed: 5 }).pending === 0)
   check('전부 넘어가면 일감 0', readLayer('draft', { total: 4, passed: 4 }).pending === 0)
-  check('층은 넷이다', LAYERS.length === 4)
+  check('층은 다섯이다', LAYERS.length === 5)
   check('층마다 이름과 명령이 있다',
     LAYERS.every((l) => LAYER_LABEL[l] !== '' && LAYER_ACTION[l] !== ''))
 }
