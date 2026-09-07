@@ -23,5 +23,11 @@
  *    - 홈 섹션 머리글의 `min-h-[52px]` 은 "더보기 유무와 관계없이 머리 높이를 맞추는"
  *      레이아웃 값이라 터치와 무관하다(2곳 · `app/page.tsx` · `newcomer-greetings.tsx`).
  *    셋이 우연히 같은 값일 뿐이므로, 한 이름으로 묶으면 역할 사전이 거짓말이 된다.
+ *
+ * 🔴 **문장 안 inline 링크에는 붙이지 않는다 — 붙여도 먹지 않는다.**
+ *    `min-height` 는 non-replaced inline 요소(`<a>` 등)의 실제 박스 높이를 키우지 않는다.
+ *    실측: `<a>` 에 이 상수만 주면 computed min-height 는 52px 인데 **박스는 48px 그대로**다.
+ *    (`<button>` · `<input>` · `<summary>` 는 기본 display 가 inline 이 아니라 정상 적용된다.)
+ *    문장 안 inline 링크는 **52px 예외**로 두고 `underline` 으로 링크임을 보장한다 — 정본 §13-4.
  */
 export const TOUCH_MIN = 'min-h-[52px]'
