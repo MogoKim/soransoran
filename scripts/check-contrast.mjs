@@ -92,6 +92,20 @@ const COMBOS = [
    *    새 색을 고를 때 "로고니까 아무 색이나 된다"로 가지 않기 위한 하한선이다.
    */
   { fg: '--brand-ink', bgs: ['--surface-card', '--surface-app'], req: 'large', standard: 'internal', why: '브랜드 원색 — 워드마크 및 그 밖의 사용처' },
+
+  /**
+   * ── 워드마크 앞 조각 (3:1) ──
+   *
+   * 🔴 --brand-ink 만 검사하면 실제 로고 색을 놓친다.
+   *    Logo.tsx 의 앞 조각은 `text-brand`(= --brand)를 쓴다. 지금은 --brand 와 --brand-ink 가
+   *    같은 값이라 한쪽만 재도 결과가 같지만, **리브랜딩에서 둘이 갈라지는 순간**
+   *    화면에 실제로 칠해지는 --brand 의 회귀를 아무도 잡지 못한다.
+   *    같은 값일 때 미리 걸어 두는 것이 이 조합의 목적이다.
+   *
+   * 🔴 standard: 'internal' — WCAG 1.4.3 은 로고타입을 대비 요건에서 제외한다.
+   *    그럼에도 3:1 을 두는 것은 --brand-ink 와 같은 이유의 내부 품질 목표다.
+   */
+  { fg: '--brand', bgs: ['--surface-card', '--surface-app'], req: 'large', standard: 'internal', why: '워드마크 앞 조각 — Logo.tsx 24px / weight 800' },
 ]
 
 /**
@@ -128,10 +142,25 @@ const EXCEPTIONS = []
  *    작은 글씨라면 --brand-strong 을 쓴다.
  */
 const BRAND_INK_USAGE = [
-  { file: 'src/app/error.tsx', count: 1, kind: 'LARGE_TEXT', note: 'text-2xl extrabold 워드마크 표기. Logo 를 거치지 않는 최소 화면이다' },
-  { file: 'src/components/brand/Logo.tsx', count: 1, kind: 'LARGE_TEXT', note: '워드마크 자체. Header 에서 text-2xl(--text-display 28~38px) extrabold' },
+  /**
+   * 🔴 워드마크는 2026-09-07 두 색 전환으로 이 목록에서 빠졌다.
+   *    Logo.tsx 가 --brand-ink 대신 --brand(앞) · --brand-strong(뒤) 두 조각을 쓰고,
+   *    error.tsx 는 직접 마크업을 버리고 Logo 를 쓴다.
+   *    목록을 줄인 것이지 기준을 푼 것이 아니다 — 남은 두 자리는 그대로 큰 글씨다.
+   */
   { file: 'src/components/features/CommentSection.tsx', count: 1, kind: 'LARGE_TEXT', note: 'text-lg(--text-title 20~28px) bold 안의 댓글 수' },
   { file: 'src/components/features/PostListItem.tsx', count: 1, kind: 'LARGE_TEXT', note: '고정 22px bold 순번. 읽는 글자가 아니라 자리표 장식이다' },
+]
+
+/**
+ * `text-brand` 사용처 baseline — 원색을 **글자로** 쓰는 자리를 이름으로 고정한다
+ *
+ * 🔴 --brand 는 원래 비텍스트 전용이었다. 두 색 워드마크(2026-09-07 · 정본 §3-2-A)에서
+ *    앞 조각이 처음 글자에 쓰였고, 그 자리는 24px / weight 800 이라 큰 글씨다.
+ *    작은 글씨에 새로 쓰면 4.5:1 을 못 넘는다(3.53) — 그래서 여기 없는 파일은 실패한다.
+ */
+const BRAND_USAGE = [
+  { file: 'src/components/brand/Logo.tsx', count: 1, kind: 'LARGE_TEXT', note: '두 색 워드마크 앞 조각. 24px 고정 / weight 800' },
 ]
 
 /**
@@ -142,6 +171,15 @@ const BRAND_INK_USAGE = [
  * admin 은 리브랜딩 대상이 아니라 제외한다.
  */
 const INK_CLASS = /text-brand-ink/g
+/**
+ * 🔴 `text-brand` 는 **정확히** 그 클래스만 센다.
+ *
+ *    /text-brand/ 로 두면 text-brand-ink · text-brand-strong · text-brand-soft 까지
+ *    전부 걸려 숫자가 부풀고, 그러면 baseline 이 무슨 뜻인지 알 수 없게 된다.
+ *    뒤에 [-\w] 가 오면 다른 클래스이므로 부정 전방탐색으로 끊는다.
+ *    변형 접두사(hover: · group-hover:)는 앞에 붙으므로 그대로 잡힌다.
+ */
+const BRAND_CLASS = /text-brand(?![-\w])/g
 const INK_EXCLUDED = ['src/app/admin/', 'src/components/admin/']
 
 function walkSrc(dir, out = []) {
@@ -153,7 +191,8 @@ function walkSrc(dir, out = []) {
   return out
 }
 
-export function countInkInSource(rel, text) {
+/** 파일 하나에서 특정 클래스의 출현을 센다 — 주석은 파서가 알아서 뺀다 */
+export function countClassInSource(rel, text, re) {
   if (INK_EXCLUDED.some((p) => rel.startsWith(p))) return 0
   const sf = ts.createSourceFile(
     rel,
@@ -171,7 +210,7 @@ export function countInkInSource(rel, text) {
       case ts.SyntaxKind.TemplateMiddle:
       case ts.SyntaxKind.TemplateTail:
       case ts.SyntaxKind.JsxText:
-        n += (node.text ?? '').match(INK_CLASS)?.length ?? 0
+        n += (node.text ?? '').match(re)?.length ?? 0
         break
       default:
         break
@@ -182,6 +221,9 @@ export function countInkInSource(rel, text) {
   return n
 }
 
+export const countInkInSource = (rel, text) => countClassInSource(rel, text, INK_CLASS)
+export const countBrandInSource = (rel, text) => countClassInSource(rel, text, BRAND_CLASS)
+
 /**
  * baseline 과 실제 사용을 대조한다.
  *
@@ -190,7 +232,7 @@ export function countInkInSource(rel, text) {
  *   등록 파일이 감소·0   → 통과하되 baseline 정리를 요구 (알림)
  *   rebrand 모드         → BASELINE_DEBT 자체를 실패로 본다
  */
-export function checkInkUsage(actual, { rebrand, usage = BRAND_INK_USAGE } = {}) {
+export function checkUsage(actual, { rebrand, usage = BRAND_INK_USAGE, className = 'text-brand-ink' } = {}) {
   const failures = []
   const cleanups = []
   const registered = new Map(usage.map((u) => [u.file, u]))
@@ -203,7 +245,7 @@ export function checkInkUsage(actual, { rebrand, usage = BRAND_INK_USAGE } = {})
         file,
         count,
         kind: 'NEW',
-        msg: `등록되지 않은 새 text-brand-ink 사용 ${count}건`,
+        msg: `등록되지 않은 새 ${className} 사용 ${count}건`,
       })
       continue
     }
@@ -212,7 +254,7 @@ export function checkInkUsage(actual, { rebrand, usage = BRAND_INK_USAGE } = {})
         file,
         count,
         kind: reg.kind,
-        msg: `text-brand-ink 사용이 늘었습니다 (baseline ${reg.count} → ${count})`,
+        msg: `${className} 사용이 늘었습니다 (baseline ${reg.count} → ${count})`,
       })
     }
   }
@@ -241,6 +283,14 @@ export function checkInkUsage(actual, { rebrand, usage = BRAND_INK_USAGE } = {})
 
   return { failures, cleanups }
 }
+
+/** 기존 이름 유지 — 호출부와 self-test 가 그대로 쓴다 */
+export const checkInkUsage = (actual, opts = {}) =>
+  checkUsage(actual, { usage: BRAND_INK_USAGE, className: 'text-brand-ink', ...opts })
+
+/** text-brand 전용 — 같은 규칙을 원색 글자 사용처에 적용한다 */
+export const checkBrandUsage = (actual, opts = {}) =>
+  checkUsage(actual, { usage: BRAND_USAGE, className: 'text-brand', ...opts })
 
 function exceptionFor(fg, bg, list = EXCEPTIONS) {
   return list.find((e) => e.fg === fg && e.bg === bg)
@@ -369,6 +419,43 @@ function selfTest() {
         checkInkUsage(new Map([['a/big.tsx', 1]]), { rebrand: true, usage: U }).failures.length === 0]
     })(),
     ['지금 BASELINE_DEBT 는 0 건이다', BRAND_INK_USAGE.every((u) => u.kind !== 'BASELINE_DEBT')],
+
+    // ── text-brand 사용처 baseline (원색을 글자로 쓰는 자리) ──
+    [
+      'text-brand 를 정확히 센다',
+      countBrandInSource('src/x.tsx', "const a = 'text-brand'; const b = <p className=\"group-hover:text-brand\" />") === 2,
+    ],
+    [
+      '🔴 text-brand-ink · text-brand-strong 을 text-brand 로 오인하지 않는다',
+      countBrandInSource('src/x.tsx', "const a = 'text-brand-ink text-brand-strong text-brand-soft text-brand-muted'") === 0,
+    ],
+    [
+      'bg-brand · border-brand 는 text-brand 가 아니다',
+      countBrandInSource('src/x.tsx', "const a = 'bg-brand border-brand shadow-brand'") === 0,
+    ],
+    ['주석의 text-brand 는 세지 않는다', countBrandInSource('src/x.tsx', '// text-brand 는 원색\n/* text-brand */') === 0],
+    ['admin 의 text-brand 는 세지 않는다', countBrandInSource('src/app/admin/x.tsx', "const a = 'text-brand'") === 0],
+    (() => {
+      const U = [{ file: 'a/logo.tsx', count: 1, kind: 'LARGE_TEXT', note: 'n' }]
+      return ['등록되지 않은 새 text-brand 사용을 잡는다',
+        checkBrandUsage(new Map([['a/other.tsx', 1]]), { rebrand: false, usage: U }).failures.some((f) => f.kind === 'NEW')]
+    })(),
+    (() => {
+      const U = [{ file: 'a/logo.tsx', count: 1, kind: 'LARGE_TEXT', note: 'n' }]
+      return ['등록 파일이라도 text-brand 사용이 늘면 잡는다',
+        checkBrandUsage(new Map([['a/logo.tsx', 2]]), { rebrand: false, usage: U }).failures.length === 1]
+    })(),
+    (() => {
+      const U = [{ file: 'a/logo.tsx', count: 1, kind: 'LARGE_TEXT', note: 'n' }]
+      return ['rebrand 모드에서도 LARGE_TEXT 는 통과',
+        checkBrandUsage(new Map([['a/logo.tsx', 1]]), { rebrand: true, usage: U }).failures.length === 0]
+    })(),
+    (() => {
+      const U = [{ file: 'a/logo.tsx', count: 2, kind: 'LARGE_TEXT', note: 'n' }]
+      const r = checkBrandUsage(new Map([['a/logo.tsx', 1]]), { rebrand: false, usage: U })
+      return ['text-brand 사용이 줄면 실패가 아니라 정리 요구', r.failures.length === 0 && r.cleanups.length > 0]
+    })(),
+    ['지금 BRAND_USAGE 는 LARGE_TEXT 뿐이다', BRAND_USAGE.every((u) => u.kind === 'LARGE_TEXT')],
   ]
   const failed = checks.filter(([, ok]) => !ok).map(([why]) => why)
   if (failed.length) {
@@ -417,6 +504,25 @@ for (const file of walkSrc(join(ROOT, 'src'))) {
 }
 const ink = checkInkUsage(actualInk, { rebrand: REBRAND })
 
+// ── text-brand 사용처 baseline 대조 ──
+const actualBrand = new Map()
+for (const file of walkSrc(join(ROOT, 'src'))) {
+  const rel = relative(ROOT, file)
+  const n = countBrandInSource(rel, readFileSync(file, 'utf8'))
+  if (n) actualBrand.set(rel, n)
+}
+const brandUse = checkBrandUsage(actualBrand, { rebrand: REBRAND })
+
+if (brandUse.failures.length) {
+  console.error('text-brand 사용처가 baseline 과 어긋납니다:\n')
+  for (const f of brandUse.failures) console.error(`  ${f.file}   [${f.kind}] ${f.msg}`)
+  console.error('')
+  console.error('🔴 --brand 를 글자로 쓸 수 있는 자리는 큰 글씨(24px / weight 800)뿐이다.')
+  console.error('   작은 글씨에는 --brand-strong 을 쓴다 (흰 카드 5.49:1).')
+  console.error('   기존 사용을 정리했다면 check-contrast.mjs 의 BRAND_USAGE 를 함께 줄이세요.')
+  failed = true
+}
+
 if (ink.failures.length) {
   console.error('text-brand-ink 사용처가 baseline 과 어긋납니다:\n')
   for (const f of ink.failures) console.error(`  ${f.file}   [${f.kind}] ${f.msg}`)
@@ -457,6 +563,20 @@ if (inkDebt.length === 0) {
   console.log('  BASELINE_DEBT 는 작은 글씨에 원색을 쓴 것이다 — --brand-strong 으로 옮긴다.')
 }
 console.log('  🔴 새 사용·증가는 실패한다. 큰 글씨가 아니면 --brand-strong 을 쓴다.')
+
+const brandTotal = [...actualBrand.values()].reduce((a, b) => a + b, 0)
+console.log('')
+console.log(
+  `text-brand 사용처 ${actualBrand.size}파일 · ${brandTotal}건 — ` +
+    `LARGE_TEXT ${BRAND_USAGE.filter((u) => u.kind === 'LARGE_TEXT').length}파일`,
+)
+console.log('  워드마크 앞 조각(24px / weight 800)뿐이다. 작은 글씨의 새 사용은 실패한다.')
+
+if (brandUse.cleanups.length) {
+  console.log('')
+  console.log('ℹ️  사용이 줄었습니다 — BRAND_USAGE 를 함께 정리하세요:')
+  for (const c of brandUse.cleanups) console.log(`  ${c.file}   baseline ${c.count} → 실제 ${c.actual}`)
+}
 
 if (ink.cleanups.length) {
   console.log('')

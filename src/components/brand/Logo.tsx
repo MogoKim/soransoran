@@ -10,29 +10,55 @@ import { BRAND_NAME } from '@/lib/brand-name'
  * 우나어 반례: <Image src="/logo-symbol.png"> 가 6개 파일에 하드코딩되어
  * 로고 교체가 사실상 불가능한 상태다.
  *
- * 색상 정본 (soransoran-brand-design-spec.md §3-1 · §9)
- *   기본값 ink  = --brand-ink (브랜드 원색)
- *   brand       = --brand (#FF6F61) · 배경 위 2.60:1 — 로고 예외로만 성립
- *                 weight 900 + 충분한 크기/여백 + 실기기 판독성 확인을 통과해야 쓴다
+ * ── 두 색 워드마크 (정본 §3-2) ────────────────────────────────
+ *   앞 조각  weight 800  --brand         #FA4601   원색
+ *   뒤 조각  weight 500  --brand-strong  #C43300   한 단계 진한 주황
  *
- * 🔴 "브랜드 컬러니까"를 이유로 안 읽히는 워드마크를 유지하지 않는다.
+ * 🔴 두 조각은 **한 단어**다. 사이에 공백을 두지 않고 줄바꿈도 하지 않는다.
+ *    무게와 색만 갈라, 같은 음절이 두 번 반복되는 이름의 리듬을 드러낸다.
+ *
+ * 🔴 크기는 24px 고정이다. 본문 글자 크기(작게·기본·크게)를 따라가지 않는다.
+ *    로고는 읽는 글이 아니라 **표식**이다 — 본문을 키웠다고 헤더의 브랜드가
+ *    함께 커질 이유가 없다. 헤더 h-16(64px)·터치 52px 도 그대로 유지된다.
+ *
+ * 🔴 폰트를 새로 들이지 않는다. Pretendard Variable 을 전역에서 그대로 상속한다.
  */
+
+/**
+ * 🔴 이름 값을 여기에 복사하지 않는다. BRAND_NAME 에서 파생한다.
+ *
+ * 지금 이름은 같은 두 음절이 두 번 반복되는 형태라 **앞 절반 / 뒤 절반**으로 가른다.
+ * 리브랜딩으로 이름이 바뀌면 이 한 줄만 그 이름의 분리 위치로 고친다 —
+ * 글자 수를 코드가 추측하게 두면 엉뚱한 자리에서 갈라진 채 배포된다.
+ */
+const SPLIT_AT = 2
+
+const HEAD = BRAND_NAME.slice(0, SPLIT_AT)
+const TAIL = BRAND_NAME.slice(SPLIT_AT)
+
 type LogoProps = {
-  /** ink = 판독 우선(기본) · brand = 브랜드 우선(조건부) */
-  tone?: 'ink' | 'brand'
+  /** 레이아웃 보정 전용 — 색·크기·무게는 여기서 바꾸지 않는다 */
   className?: string
 }
 
-export default function Logo({ tone = 'ink', className }: LogoProps) {
+export default function Logo({ className }: LogoProps) {
   return (
     <span
       className={cn(
-        'inline-block whitespace-nowrap font-extrabold tracking-[-0.02em]',
-        tone === 'ink' ? 'text-brand-ink' : 'text-brand',
+        'inline-block whitespace-nowrap text-[24px] leading-none tracking-[-0.02em]',
         className,
       )}
     >
-      {BRAND_NAME}
+      {/* 🔴 두 조각이 보조기술에서 각각 읽히면 "소란" 을 두 번 듣게 된다.
+          시각 조각은 aria-hidden 으로 빼고, 이름은 아래 sr-only 한 곳에서만 읽힌다.
+          헤더처럼 조상 링크에 aria-label 이 있으면 그쪽이 이름을 이겨 중복도 없다. */}
+      <span aria-hidden className="font-extrabold text-brand">
+        {HEAD}
+      </span>
+      <span aria-hidden className="font-medium text-brand-strong">
+        {TAIL}
+      </span>
+      <span className="sr-only">{BRAND_NAME}</span>
     </span>
   )
 }
