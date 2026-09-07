@@ -13,6 +13,7 @@ import {
 } from '../src/lib/supply-health'
 import { STOCK_MIN, STOCK_TARGET } from '../src/lib/micro-seed-supply-autofill'
 import { verifyPublishedRow } from '../src/lib/original-post-publish-verify'
+import { judgeCapacity } from '../src/lib/supply-capacity-forecast'
 
 let pass = 0
 let failN = 0
@@ -589,6 +590,59 @@ check('🔴 cap 을 자체 정의하지 않는다',
 check('🔴 금지 키 목록을 lib 과 공유한다', /FORBIDDEN_BODY_KEYS/.test(code))
 check('🟢 금지 키 목록에 rawBody 가 있다', FORBIDDEN_BODY_KEYS.includes('rawBody'))
 check('🟢 목표 재고는 lib 상수를 쓴다', STOCK_TARGET === 14 && STOCK_MIN === 5)
+
+// ── [11] 🔴 생산 경로 — supply-health 가 기존 배정을 forecast 에 넘기는가 (2026-09-07) ──
+//
+//    fixture 에서 assignedPersonaCode 를 직접 넣어 라이브러리만 시험하면,
+//    **러너는 넘기는데 관제는 안 넘기는** 상태를 못 잡는다. 실제로 그랬다 —
+//    러너와 forecast 라이브러리는 고쳤는데 supply-health 만 끊겨 있었다.
+//    그래서 여기서는 **소스를 읽어** 생산 경로를 검사한다.
+{
+  const health = readFileSync('scripts/supply-health.mts', 'utf-8')
+  const codeOnly = health.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  check('🔴 [11] persona id → code 매핑을 만든다',
+    /const codeOfPersonaId = new Map\(personaRows\.map\(/.test(codeOnly))
+  check('🔴 [11] forecast 큐에 assignedPersonaCode 를 넘긴다',
+    /assignedPersonaCode:/.test(codeOnly))
+  check('🔴 [11] matchedPersonaId 를 근거로 넘긴다',
+    /t\.matchedPersonaId === null/.test(codeOnly))
+  check('🔴 [11] 못 찾은 persona 는 빈 값이 아니라 모르는 코드로 넘긴다 — fail-closed 로 잡히게',
+    /__unknown:/.test(codeOnly))
+  check('🔴 [11] forecast 와 매칭률이 **같은 큐**를 쓴다 — 두 수치가 갈리지 않는다',
+    /forecastPublishing\(\{\s*queue: forecastQueue/.test(codeOnly)
+    && /planBatch\(forecastQueue, personas as never\)/.test(codeOnly))
+  check('🔴 [11] 깨진 복구를 관제 판정에 넘긴다',
+    /recoveryBroken: fc\.recoveryBroken/.test(codeOnly))
+  // 🔴 queueRows 가 matchedPersonaId 를 실제로 읽어 오는가 — 안 읽으면 위가 다 무의미하다
+  check('🔴 [11] 큐를 읽을 때 matchedPersonaId 를 가져온다',
+    /matchedPersonaId: true/.test(codeOnly))
+  // 🔴 persona 를 읽을 때 id 가 있어야 매핑이 성립한다
+  check('🔴 [11] persona 를 읽을 때 id 를 가져온다',
+    /id: true, code: true, status: true/.test(codeOnly))
+}
+
+// ── [12] 🔴 RECOVERY_BROKEN 은 CRITICAL 이고 다른 판정을 덮는다 ──
+{
+  const broken = [{ queueId: 'q1', problem: '배정된 persona ZZZ 를 찾을 수 없다' }]
+  // 🔴 나머지 입력이 전부 건강해도 CRITICAL 이다
+  const healthy = {
+    stockUsable: 14, in7: 7, nextWillPublish: true, nextCandidates: 5,
+    shortfallMin: 0, dailyCap: 1,
+  }
+  const okCase = judgeCapacity(healthy)
+  check('🔴 [12] 깨진 복구가 없으면 예전과 같다', okCase.every((f) => f.code !== 'RECOVERY_BROKEN'))
+
+  const badCase = judgeCapacity({ ...healthy, recoveryBroken: broken })
+  check('🔴 [12] 깨진 복구가 있으면 CRITICAL', badCase.some((f) => f.level === 'CRITICAL' && f.code === 'RECOVERY_BROKEN'))
+  check('🔴 [12] 다른 판정을 섞지 않는다 — 발행이 돈다는 전제가 깨졌다', badCase.length === 1)
+  check('🔴 [12] 어느 행인지 말한다', badCase[0]!.message.includes('q1'))
+  check('🔴 [12] 왜인지 말한다', badCase[0]!.message.includes('찾을 수 없다'))
+
+  // 🔴 CRITICAL 이므로 전체 등급이 CRITICAL 이 된다 = exit 1
+  const rep = buildReport({ sources: [], supply: [], publish: badCase as Finding[] })
+  check('🔴 [12] 레인 전체 등급이 CRITICAL 이 된다', rep.level === 'CRITICAL')
+}
 
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

@@ -451,5 +451,238 @@ function always0Diff(): number {
   else ok('🔴 voiceFit 5점 고정 해소', `일치 ${full} · 중립 ${neutral} · 불일치 ${miss} — 세 값이 갈린다`)
 }
 
+// ── ⑱ 🔴 단조성 — persona 를 늘렸는데 배정이 줄어들면 안 된다 (2026-09-07 사고) ──
+//
+//    실측 사고: 현재 5명 + N01 N02 N03 은 14일 13건이었는데, 무자녀 persona N04 를
+//    **더했더니** 10건으로 줄었다. N04 가 나쁜 것이 아니라 탐욕법이 순서에 의존했기 때문이다.
+//    최대 매칭은 그래프에 정점·간선만 늘어나므로 크기가 줄어들 수 없다.
+{
+  const offenders: string[] = []
+  // 자녀 중고등 글 1건(A 만 가능) + 조건 없는 글 3건
+  const ds: BatchDraft[] = [
+    { queueId: 'kid', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 0 },
+    { queueId: 'open1', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 },
+    { queueId: 'open2', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 2 },
+    { queueId: 'open3', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 3 },
+  ]
+  const A = P({ code: 'A', childrenCount: 1, childrenAgeBands: ['중고등'] })
+  const B = P({ code: 'B', childrenCount: 0, childrenAgeBands: [] })
+  const C = P({ code: 'C', childrenCount: 1, childrenAgeBands: ['성인'] })
+  // 🔴 D 가 사고를 낸 N04 역할 — 무자녀 · 조건 없는 글만 맡을 수 있다
+  const D = P({ code: 'D', childrenCount: 0, childrenAgeBands: [] })
+
+  const nOf = (ps: PersonaForMatch[]): number =>
+    planBatch(ds, ps).assignments.filter((a) => a.assigned !== null).length
+
+  const n3 = nOf([A, B, C])
+  const n4 = nOf([A, B, C, D])
+  if (n4 < n3) offenders.push(`🔴 persona 를 늘렸는데 배정이 줄었다: ${n3} → ${n4}`)
+  if (n3 !== 3) offenders.push(`3명일 때 배정 ${n3} (기대 3)`)
+  if (n4 !== 4) offenders.push(`4명일 때 배정 ${n4} (기대 4 — D 가 조건 없는 글을 하나 더 맡는다)`)
+
+  // 🔴 무자녀 persona 를 넣어도 자녀 글이 희생되지 않는다
+  const with4 = planBatch(ds, [A, B, C, D])
+  if (with4.assignments.find((a) => a.queueId === 'kid')?.assigned !== 'A') {
+    offenders.push('🔴 무자녀 persona 추가 후 자녀 글이 A 를 잃었다')
+  }
+  // 🔴 어떤 부분집합을 더해도 줄지 않는다 — 전수로 본다
+  const all = [A, B, C, D]
+  for (let mask = 0; mask < 16; mask += 1) {
+    const subset = all.filter((_, i) => (mask & (1 << i)) !== 0)
+    const here = nOf(subset)
+    for (let i = 0; i < 4; i += 1) {
+      if ((mask & (1 << i)) !== 0) continue
+      const bigger = nOf([...subset, all[i]!])
+      if (bigger < here) offenders.push(`🔴 ${all[i]!.code} 추가로 감소: ${here} → ${bigger}`)
+    }
+  }
+  if (offenders.length) bad('🔴 단조성 (persona 추가 ⇒ 감소 없음)', offenders.join(' / '))
+  else ok('🔴 단조성 (persona 추가 ⇒ 감소 없음)', `3명 ${n3}건 → 4명 ${n4}건 · 16개 부분집합 전수에서 감소 0`)
+}
+
+// ── ⑲ 🔴 최대 매칭 — 탐욕법이 놓치던 배정을 찾는다 ──
+{
+  const offenders: string[] = []
+  // 고전적 함정: 조건 없는 글이 먼저 처리되면 희소 persona 를 먹어 희소 글이 굶는다
+  const ds: BatchDraft[] = [
+    { queueId: 'open', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0 },
+    { queueId: 'kid', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 1 },
+  ]
+  // A 만 자녀 중고등 · B 는 무자녀(조건 없는 글만)
+  const ps = [P({ code: 'A', childrenCount: 1, childrenAgeBands: ['중고등'] }), P({ code: 'B', childrenCount: 0, childrenAgeBands: [] })]
+  const plan = planBatch(ds, ps)
+  const got = plan.assignments.filter((a) => a.assigned !== null).length
+  if (got !== 2) offenders.push(`🔴 배정 ${got} (기대 2 — 최대 매칭이면 둘 다 나간다)`)
+  if (plan.assignments.find((a) => a.queueId === 'kid')?.assigned !== 'A') offenders.push('희소 글이 A 를 못 받았다')
+  if (plan.assignments.find((a) => a.queueId === 'open')?.assigned !== 'B') offenders.push('조건 없는 글이 B 를 못 받았다')
+
+  // 🔴 입력 순서를 뒤집어도 같은 결과여야 한다
+  const rev = planBatch([...ds].reverse(), ps)
+  const keyOf = (pl: ReturnType<typeof planBatch>): string =>
+    [...pl.assignments].sort((x, y) => x.queueId.localeCompare(y.queueId)).map((a) => `${a.queueId}:${a.assigned}`).join(',')
+  if (keyOf(plan) !== keyOf(rev)) offenders.push(`🔴 입력 순서로 결과가 달라진다: ${keyOf(plan)} vs ${keyOf(rev)}`)
+  // 🔴 persona 입력 순서도 무관해야 한다
+  if (keyOf(planBatch(ds, [...ps].reverse())) !== keyOf(plan)) offenders.push('🔴 persona 순서로 결과가 달라진다')
+  // 🔴 같은 입력이면 몇 번을 불러도 같다
+  if (keyOf(planBatch(ds, ps)) !== keyOf(plan)) offenders.push('🔴 결정적이지 않다')
+
+  if (offenders.length) bad('🔴 최대 매칭 · 입력 순서 무관', offenders.join(' / '))
+  else ok('🔴 최대 매칭 · 입력 순서 무관', '탐욕법이 1건 놓치던 배치에서 2건 · 초안/persona 순서 뒤집어도 동일')
+}
+
+// ── ⑳ 🔴 최대 매칭이 hardFilter · cap · 최소 간격을 우회하지 않는다 ──
+{
+  const offenders: string[] = []
+  const ds: BatchDraft[] = Array.from({ length: 4 }, (_, i) =>
+    ({ queueId: `q${i}`, title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: i }))
+
+  // 🔴 생활사: 무자녀 persona 밖에 없으면 배정 0 — 매칭이 급해도 뚫지 않는다
+  const noKid = planBatch(ds, [P({ code: 'A', childrenCount: 0, childrenAgeBands: [] })])
+  if (noKid.assignments.some((a) => a.assigned !== null)) offenders.push('🔴 무자녀 persona 에게 자녀 글이 배정됨')
+
+  // 🔴 실계정이 붙은 persona 는 쓰지 않는다
+  const real = planBatch(ds, [P({ code: 'A', providerId: 'x', childrenCount: 1, childrenAgeBands: ['중고등'] })])
+  if (real.assignments.some((a) => a.assigned !== null)) offenders.push('🔴 실계정 persona 가 배정됨')
+
+  // 🔴 active 아닌 persona 도 쓰지 않는다
+  const inactive = planBatch(ds, [P({ code: 'A', status: 'draft', childrenCount: 1, childrenAgeBands: ['중고등'] })])
+  if (inactive.assignments.some((a) => a.assigned !== null)) offenders.push('🔴 비활성 persona 가 배정됨')
+
+  // 🔴 주간 cap: 3명이면 3건까지. 매칭이 4건을 만들려고 cap 을 넘기지 않는다
+  const capped = planBatch(ds, ['A', 'B', 'C'].map((c) => P({ code: c, childrenCount: 1, childrenAgeBands: ['중고등'] })))
+  const n = capped.assignments.filter((a) => a.assigned !== null).length
+  if (n !== 3) offenders.push(`cap 아래 배정 ${n} (기대 3)`)
+  for (const [code, cnt] of Object.entries(capped.load)) {
+    if (cnt > POST_CAP_PER_WEEK) offenders.push(`🔴 ${code} 가 ${cnt}건 — 주간 상한 ${POST_CAP_PER_WEEK} 초과`)
+  }
+  // 🔴 최소 간격: 최근에 쓴 사람은 매칭 대상에서 빠진다
+  const tooSoon = planBatch(ds.slice(0, 1),
+    [P({ code: 'A', childrenCount: 1, childrenAgeBands: ['중고등'], daysSinceLastPost: MIN_DAYS_BETWEEN_POSTS - 1 })])
+  if (tooSoon.assignments[0]!.assigned !== null) offenders.push(`🔴 ${MIN_DAYS_BETWEEN_POSTS}일 간격을 우회했다`)
+  if (!tooSoon.assignments[0]!.blocked.some((b) => b.reasons.some((r) => r.code === 'TOO_SOON'))) {
+    offenders.push('TOO_SOON 사유가 남지 않았다')
+  }
+  // 🔴 배정된 코드는 반드시 eligible 안에 있다 — planStore 가 이것을 믿는다
+  for (const a of capped.assignments) {
+    if (a.assigned !== null && !a.eligible.some((e) => e.code === a.assigned)) {
+      offenders.push(`🔴 ${a.queueId} 배정 ${a.assigned} 이 eligible 밖이다`)
+    }
+  }
+  if (offenders.length) bad('🔴 매칭이 게이트를 우회하지 않는다', offenders.join(' / '))
+  else ok('🔴 매칭이 게이트를 우회하지 않는다', `생활사·실계정·비활성·주 ${POST_CAP_PER_WEEK}건·${MIN_DAYS_BETWEEN_POSTS}일 간격 모두 유지 · 배정은 전부 eligible 안`)
+}
+
+// ── ㉑ 🔴 복구 — 배정만 하고 발행하지 못한 행은 재배정하지 않는다 (2026-09-07) ──
+//
+//    사고 상태: status APPROVED/EDITED · createdPostId null · matchedPersonaId 있음 · matchedAt 있음.
+//    이 행을 새 매칭에 넣으면 다른 사람에게 넘어가고, 화면이 보여준 사람과 실제 필자가 달라진다.
+{
+  const offenders: string[] = []
+  // A 는 그 행 때문에 이미 이번 주를 다 썼다 (matchedAt 이 postsThisWeek 에 세어졌다)
+  const A = P({ code: 'A', postsThisWeek: POST_CAP_PER_WEEK })
+  const B = P({ code: 'B' })
+  const ds: BatchDraft[] = [
+    { queueId: 'stuck', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'A' },
+    { queueId: 'fresh', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 },
+  ]
+  const plan = planBatch(ds, [A, B])
+  const stuck = plan.assignments.find((a) => a.queueId === 'stuck')!
+  const fresh = plan.assignments.find((a) => a.queueId === 'fresh')!
+
+  // 🔴 기존 배정이 정본이다 — WEEKLY_CAP 상태여도 그대로 A 다
+  if (stuck.assigned !== 'A') offenders.push(`🔴 기존 배정이 바뀌었다: ${stuck.assigned ?? '없음'}`)
+  if (!stuck.recovery) offenders.push('복구 행으로 표시되지 않았다')
+  if (stuck.recoveryProblem !== null) offenders.push(`복구 문제 오탐: ${stuck.recoveryProblem}`)
+  // 🔴 새 자리를 받을 수 없는 상태인데도 배정이 살아 있어야 한다
+  if (planBatch([{ ...ds[0]!, assignedPersonaCode: null }], [A, B]).assignments[0]!.assigned === 'A') {
+    offenders.push('🔴 A 는 여력이 없어야 하는데 새 배정을 받았다 — 시나리오가 성립하지 않는다')
+  }
+  // 🔴 신규 행은 정상적으로 매칭된다
+  if (fresh.assigned !== 'B') offenders.push(`신규 행 배정 ${fresh.assigned ?? '없음'} (기대 B)`)
+  if (fresh.recovery) offenders.push('신규 행이 복구로 표시됐다')
+  // 🔴 여력을 두 번 빼지 않는다 — A 의 부하는 1 이다 (기존 배정 1건, 새 배정 0건)
+  if (plan.load.A !== 1) offenders.push(`A 부하 ${plan.load.A ?? 0} (기대 1 — 두 번 세지 않는다)`)
+
+  // 🔴 fail-closed ① 없는 persona
+  const gone = planBatch([{ ...ds[0]!, assignedPersonaCode: 'ZZZ' }], [A, B]).assignments[0]!
+  if (gone.assigned !== null) offenders.push('🔴 없는 persona 배정인데 발행 대상이 됐다')
+  if (gone.recoveryProblem === null) offenders.push('없는 persona 인데 문제로 잡히지 않았다')
+
+  // 🔴 fail-closed ② 비활성 persona
+  const off = planBatch([{ ...ds[0]!, assignedPersonaCode: 'C' }], [P({ code: 'C', status: 'draft' })]).assignments[0]!
+  if (off.assigned !== null) offenders.push('🔴 비활성 persona 배정인데 발행 대상이 됐다')
+  if (off.recoveryProblem === null) offenders.push('비활성인데 문제로 잡히지 않았다')
+
+  // 🔴 fail-closed ③ 실계정이 붙은 persona
+  const real = planBatch([{ ...ds[0]!, assignedPersonaCode: 'D' }], [P({ code: 'D', providerId: 'kakao:1' })]).assignments[0]!
+  if (real.assigned !== null) offenders.push('🔴 실회원 persona 배정인데 발행 대상이 됐다')
+  if (real.recoveryProblem === null) offenders.push('실회원인데 문제로 잡히지 않았다')
+
+  // 🔴 조용히 다른 사람으로 바뀌지 않는다 — 문제가 있으면 null 이지 대체가 아니다
+  for (const [name, a] of [['없는 persona', gone], ['비활성', off], ['실회원', real]] as const) {
+    if (a.assigned !== null) offenders.push(`🔴 ${name} 인데 대체 persona 가 들어갔다: ${a.assigned}`)
+  }
+
+  // 🔴 기존 배정 행은 생활사 조건과 무관하게 그대로다 — 재판정하지 않는다
+  const kidStuck = planBatch(
+    [{ queueId: 'k', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'E' }],
+    [P({ code: 'E', childrenCount: 0, childrenAgeBands: [] })],
+  ).assignments[0]!
+  if (kidStuck.assigned !== 'E') offenders.push('🔴 기존 배정 행이 재판정으로 뒤집혔다')
+
+  if (offenders.length) bad('🔴 복구 — 기존 배정이 정본', offenders.join(' / '))
+  else ok('🔴 복구 — 기존 배정이 정본', 'WEEKLY_CAP 이어도 유지 · 여력 이중차감 0 · 없는/비활성/실회원 배정은 fail-closed · 대체 0')
+}
+
+// ── ㉒ 🔴 top 3 정책 정합 — 단건 추천과 배치 배정은 규칙이 다르다 ──
+{
+  const offenders: string[] = []
+  // 조건 없는 글 4건 · persona 4명 → 자리가 겹치므로 누군가는 상위 3명 밖으로 내려가야 한다
+  const ds: BatchDraft[] = Array.from({ length: 4 }, (_, i) =>
+    ({ queueId: `q${i}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i }))
+  const ps = ['A', 'B', 'C', 'D'].map((c) => P({ code: c }))
+  const plan = planBatch(ds, ps)
+  const assigned = plan.assignments.filter((a) => a.assigned !== null)
+
+  // 🔴 4건 모두 나간다 — top 3 로 잘라냈다면 불가능하다
+  if (assigned.length !== 4) offenders.push(`배정 ${assigned.length} (기대 4 — top 3 밖까지 확장되어야 한다)`)
+
+  // 🔴 실제로 top 밖 배정이 일어났는가 — 안 일어났으면 이 fixture 는 헛돈다
+  const outsideTop = assigned.filter((a) => !a.top.some((t) => t.code === a.assigned))
+  if (outsideTop.length === 0) offenders.push('🔴 top 밖 배정이 하나도 없다 — fixture 가 상황을 못 만들었다')
+
+  // 🔴 top 밖 배정도 반드시 eligible 안이다 — 게이트를 연 것이 아니라 선호를 낮춘 것이다
+  for (const a of outsideTop) {
+    if (!a.eligible.some((e) => e.code === a.assigned)) {
+      offenders.push(`🔴 ${a.queueId} 배정 ${a.assigned} 이 eligible 밖이다 — 게이트가 열렸다`)
+    }
+  }
+  // 🔴 단건 추천은 여전히 상위 3명 안에서만 뽑는다
+  const single = planMatch({ queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', personas: ps })
+  if (single.recommended !== null && !single.top.some((t) => t.code === single.recommended)) {
+    offenders.push('🔴 단건 추천이 상위 3명 밖으로 나갔다')
+  }
+  if (single.top.length !== TOP_CANDIDATES) offenders.push(`단건 top ${single.top.length} (기대 ${TOP_CANDIDATES})`)
+
+  // 🔴 자리 경쟁이 없으면 배치 1순위 = 단건 추천과 같은 사람
+  const alone = planBatch([ds[0]!], ps)
+  if (alone.assignments[0]!.assigned !== single.recommended) {
+    offenders.push(`경쟁이 없는데 배치(${alone.assignments[0]!.assigned}) 와 단건(${single.recommended}) 이 다르다`)
+  }
+  // 🔴 문서가 코드와 같은 말을 하는가
+  const arch = readFileSync(join(HERE, '..', 'docs', 'operations', '2026-08-30-persona-architecture-design.md'), 'utf-8')
+  if (!arch.includes('단건 추천과 배치 배정은 규칙이 다르다')) offenders.push('🔴 아키텍처 정본에 배치 규칙이 없다')
+  if (!arch.includes('전체 `eligible`')) offenders.push('🔴 아키텍처 정본이 eligible 확장을 말하지 않는다')
+  const lane = readFileSync(join(HERE, '..', 'docs', 'operations', '2026-09-03-raw-supply-chain-design.md'), 'utf-8')
+  if (!lane.includes('배정은 최대 매칭이다')) offenders.push('🔴 lane 정본에 최대 매칭 절이 없다')
+  if (!lane.includes('복구가 먼저다')) offenders.push('🔴 lane 정본에 복구 계약이 없다')
+  // 🔴 dry-run 화면이 배치 규칙을 말하는가
+  const dry = readFileSync(CLI, 'utf-8')
+  if (!dry.includes('자리가 겹치면 eligible 전체까지')) offenders.push('🔴 dry-run 출력이 배치 규칙을 말하지 않는다')
+
+  if (offenders.length) bad('🔴 top 3 정책 정합', offenders.join(' / '))
+  else ok('🔴 top 3 정책 정합', `배치 4/4 배정 · top 밖 ${outsideTop.length}건 전부 eligible 안 · 단건은 top 3 유지 · 문서 3종 일치`)
+}
+
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
 process.exit(failed === 0 ? 0 : 1)

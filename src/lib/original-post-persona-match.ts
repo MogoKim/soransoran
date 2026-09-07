@@ -17,7 +17,9 @@
  *    자녀가 있는데 나이대가 기재되지 않았으면 `CHILD_AGE_UNKNOWN` 으로 **막는다.**
  *    "아마 맞겠지" 로 배정하는 것이 이 파일이 막으려는 바로 그 사고다.
  *
- * 🔴 **최고점을 뽑지 않는다.** 상위 3명 중 가중 무작위다(아키텍처 §9) —
+ * 🔴 **최고점을 뽑지 않는다.** 단건 추천은 상위 3명 중 가중 무작위다(아키텍처 §9) —
+ *    배치 배정(`planBatch`)은 그 3명을 **우선 선호**하되 자리가 겹치면 전체 `eligible` 까지 내려간다.
+ *    두 규칙이 다른 이유는 §9 표에 적어 두었다 —
  *    항상 최고점을 뽑으면 특정 페르소나에 활동이 몰리고, 그것이 "같은 사람이 쓴 티" 의 원인이다.
  *    다만 **queueId 로 seed 를 고정**한다. dry-run 은 사람이 읽는 것이라 매번 답이 달라지면 안 된다.
  *
@@ -403,9 +405,9 @@ export type MatchPlan = {
   requirements: PostRequirements
   /** 하드 필터 통과자 — 점수 내림차순 */
   eligible: Candidate[]
-  /** 🔴 상위 3명. 여기서 추천을 뽑는다 */
+  /** 🔴 상위 3명. **단건 추천**은 여기서만 뽑는다 (배치는 선호 순서로만 쓴다) */
   top: Candidate[]
-  /** 🔴 최고점이 아니라 상위 3명 중 가중 무작위 (seed 고정) */
+  /** 🔴 최고점이 아니라 상위 3명 중 가중 무작위 (seed 고정) — **단건 추천 전용** */
   recommended: string | null
   blocked: { code: string; reasons: Blocked[] }[]
   /** 🔴 후보가 없으면 발행하지 않는다. 억지로 배정하지 않는다 */
@@ -454,13 +456,49 @@ export function planMatch(input: MatchInput): MatchPlan {
  *    실측에서 P07 이 6건 중 4건을 가져갔다. 주간 상한이 있는데도 그렇다.
  *    가드가 없어서가 아니라, **배치 안에서 소비되지 않아서**다.
  *
- * 🔴 처리 순서가 규칙이다
+ * 🔴 **최대 매칭이다. 선착순이 아니다** (2026-09-07 교체)
  *
- *    후보가 적은 초안을 **먼저** 배정한다. 조건 없는 글(후보 5명)을 먼저 돌리면
- *    후보 1명뿐인 글(예: 고3 자녀 글)의 그 1명이 이미 소진돼 발행 불가가 된다.
- *    희소한 쪽을 먼저 지키는 것이 전체 배정 수를 늘린다.
+ *    이전에는 "후보가 적은 초안부터 한 명씩 집어 간다"는 탐욕법이었다.
+ *    그 방식은 **쓸 수 있는 persona 를 늘렸는데 배정 수가 줄어드는** 일을 허용한다 —
+ *    실측: 5명 + N01 N02 N03 은 14일 13건인데, 여기에 N04 를 더하면 10건으로 **줄었다.**
+ *    N04 가 나쁜 것이 아니다. persona 가 하나 늘면 각 초안의 `eligible` 수가 달라지고,
+ *    그러면 처리 순서가 통째로 뒤집혀 앞선 초안이 희소한 persona 를 먼저 먹어버린다.
+ *
+ *    그래서 순서로 답을 정하지 않는다. **이분 그래프의 최대 매칭**을 구한다
+ *    (증가 경로 · Kuhn). persona 를 더하면 그래프에 정점과 간선만 늘어나므로
+ *    최대 매칭 크기는 **수학적으로 줄어들 수 없다.** 이것이 단조성의 근거다.
+ *
+ * 🔴 처리 순서는 "누가 먼저 보장받는가" 만 정한다
+ *
+ *    증가 경로는 이미 매칭된 초안을 매칭에서 빼지 않는다. 그래서 먼저 처리한 초안은
+ *    **매칭 가능하기만 하면 반드시 배정된다.** 오래 기다린 글부터 처리하는 이유다.
+ *    크기는 어느 순서로 돌려도 최대이므로, 순서는 공정성만 정하고 총량은 건드리지 않는다.
+ *
+ * 🔴 `top` 3명은 **선호이지 제약이 아니다**
+ *
+ *    경쟁이 없으면 단건 추천과 똑같이 상위 3명 중 시드로 뽑은 사람이 간다. 경쟁이 생겼을 때만
+ *    그 아래 `eligible` 로 내려간다. 여기서 top 밖을 잘라내면 persona 를 늘렸을 때
+ *    남의 top 구성이 바뀌며 기존 간선이 사라져 **다시 단조성이 깨진다.**
+ *    `eligible` 은 전원 hardFilter 를 통과한 사람이므로 내려가도 안전하다.
  */
-export type BatchDraft = { queueId: string; title: string; body: string; gateVerdict: string; createdAt: number }
+export type BatchDraft = {
+  queueId: string
+  title: string
+  body: string
+  gateVerdict: string
+  createdAt: number
+  /**
+   * 🔴 **이전 회차가 이미 배정한 persona code** — 있으면 그것이 정본이다 (2026-09-07).
+   *
+   * 배정을 저장한 뒤 발행 전에 죽으면 이 상태로 남는다. 그때 새 매칭을 돌려
+   * 다른 사람에게 넘기면, 화면이 보여준 사람과 실제로 글을 쓴 사람이 달라진다.
+   * 그래서 이 행은 **매칭에 넣지 않고 그대로 둔다.**
+   *
+   * 여력도 다시 빼지 않는다 — `matchedAt` 이 이미 남아 있어 `postsThisWeek` 에 세어졌다.
+   * 여기서 또 빼면 한 건이 두 번 센 것이 된다.
+   */
+  assignedPersonaCode?: string | null
+}
 
 export type BatchAssignment = {
   queueId: string
@@ -474,6 +512,13 @@ export type BatchAssignment = {
   requirements: PostRequirements
   /** 🔴 후보는 있었는데 여력이 없어 밀린 것 — 발행 불가와 구분한다 */
   deferredBy: string[]
+  /** 🔴 이전 회차가 배정만 하고 발행하지 못한 행인가 — 그렇다면 재배정 대상이 아니다 */
+  recovery: boolean
+  /**
+   * 🔴 기존 배정이 **쓸 수 없는 persona** 를 가리킨다 — 없는 사람 · 비활성 · 실회원.
+   *    조용히 다른 사람으로 바꾸지 않는다. 부르는 쪽이 멈춰야 한다.
+   */
+  recoveryProblem: string | null
 }
 
 export type BatchPlan = {
@@ -484,7 +529,16 @@ export type BatchPlan = {
 
 /**
  * 🔴 정렬은 **전부 결정적**이어야 한다. 하나라도 흔들리면 dry-run 이 재현되지 않는다.
+ *
  *    ① 후보 적은 순  ② gate PASS 먼저  ③ createdAt  ④ queueId
+ *
+ * 🔴 최대 매칭에서 이 순서는 **총량을 정하지 않는다.** 크기는 어느 순서로 돌려도 최대다.
+ *    순서가 정하는 것은 "누가 먼저 자리를 보장받는가" 뿐이다. 그래서 후보가 1명뿐인 글
+ *    (예: 자녀 중고등 글) 을 앞에 두어 그 1명을 지킨다 — 예전처럼 순서로 총량이
+ *    흔들리지는 않으므로, `eligibleCount` 가 persona 추가로 변해도 발행량은 줄지 않는다.
+ *
+ * 🔴 발행 순서와는 다른 이야기다. 실제로 나갈 한 건은 `pickPublishTarget` 이
+ *    **가장 오래 기다린 배정 가능 글**로 따로 고른다.
  */
 export function batchOrder(
   a: { eligibleCount: number; gateVerdict: string; createdAt: number; queueId: string },
@@ -497,18 +551,72 @@ export function batchOrder(
   return a.queueId.localeCompare(b.queueId)
 }
 
+/**
+ * 이분 최대 매칭 — 🔴 증가 경로(Kuhn). 외부 라이브러리를 쓰지 않는다.
+ *
+ * 후보 수십 · persona 수십 규모라 O(V·E) 로 충분하다. 라이브러리를 들이면
+ * 이 판정이 우리 것이 아니게 되고, 버전이 바뀌면 배정이 조용히 달라진다.
+ *
+ * `prefOf` 는 **선호 순서**다. 앞에 있는 자리를 먼저 시도하므로 경쟁이 없으면 1순위가 간다.
+ * 결과는 입력 순서와 무관하고 같은 입력에 항상 같다.
+ */
+function maxMatch(order: readonly string[], prefOf: ReadonlyMap<string, readonly string[]>): Map<string, string> {
+  /** 자리 → 그 자리를 쓰는 초안 */
+  const owner = new Map<string, string>()
+  /** 초안 → 배정된 자리 */
+  const seat = new Map<string, string>()
+
+  const augment = (key: string, seen: Set<string>): boolean => {
+    for (const slot of prefOf.get(key) ?? []) {
+      if (seen.has(slot)) continue
+      seen.add(slot)
+      const held = owner.get(slot)
+      // 🔴 빈 자리거나, 그 자리 주인이 다른 자리로 옮겨갈 수 있으면 이 초안이 앉는다
+      if (held === undefined || augment(held, seen)) {
+        owner.set(slot, key)
+        seat.set(key, slot)
+        return true
+      }
+    }
+    return false
+  }
+
+  // 🔴 앞에서 처리한 초안은 이후에도 매칭에서 빠지지 않는다 — 증가 경로의 성질이다
+  for (const key of order) augment(key, new Set())
+  return seat
+}
+
 export function planBatch(drafts: readonly BatchDraft[], personas: readonly PersonaForMatch[]): BatchPlan {
   // ── ① 여력 — 주간 상한에서 이미 쓴 만큼을 뺀다 ──
-  const remaining = new Map<string, number>()
-  for (const p of personas) remaining.set(p.code, Math.max(0, POST_CAP_PER_WEEK - p.postsThisWeek))
+  const capacity = new Map<string, number>()
+  for (const p of personas) capacity.set(p.code, Math.max(0, POST_CAP_PER_WEEK - p.postsThisWeek))
+  const byCode = new Map(personas.map((p) => [p.code, p]))
+
+  // ── ①-b 🔴 이미 배정된 행은 **매칭에 넣지 않는다.** 기존 배정이 정본이다 ──
+  //    여력도 다시 빼지 않는다 — matchedAt 이 이미 postsThisWeek 에 세어져 있다
+  const pinnedCodeOf = (d: BatchDraft): string | null => {
+    const c = (d.assignedPersonaCode ?? '').trim()
+    return c === '' ? null : c
+  }
+  /** 🔴 그 배정을 지금도 쓸 수 있는가. 못 쓰면 **멈춘다** — 말없이 다른 사람으로 바꾸지 않는다 */
+  const recoveryProblemOf = (code: string): string | null => {
+    const p = byCode.get(code)
+    if (p === undefined) return `배정된 persona ${code} 를 찾을 수 없다`
+    if (p.status !== 'active') return `배정된 persona ${code} 가 active 가 아니다 (${p.status})`
+    if (p.providerId !== null && p.providerId !== '') return `배정된 persona ${code} 에 실계정이 붙어 있다`
+    return null
+  }
+
+  const pinned = drafts.filter((d) => pinnedCodeOf(d) !== null)
+  const fresh = drafts.filter((d) => pinnedCodeOf(d) === null)
 
   // ── ② 각 초안의 후보를 먼저 구한다 (여력 무시) ──
-  const base = drafts.map((d) => ({
+  const base = fresh.map((d) => ({
     draft: d,
     plan: planMatch({ queueId: d.queueId, title: d.title, body: d.body, personas }),
   }))
 
-  // ── ③ 🔴 후보 적은 순으로 처리한다 ──
+  // ── ③ 🔴 희소한 글부터 자리를 보장한다. 총량은 최대 매칭이 정하므로 순서로 흔들리지 않는다 ──
   const ordered = [...base].sort((x, y) =>
     batchOrder(
       { eligibleCount: x.plan.eligible.length, gateVerdict: x.draft.gateVerdict, createdAt: x.draft.createdAt, queueId: x.draft.queueId },
@@ -516,33 +624,89 @@ export function planBatch(drafts: readonly BatchDraft[], personas: readonly Pers
     ),
   )
 
-  const out = new Map<string, BatchAssignment>()
-  const load: Record<string, number> = {}
+  // ── ④ 자리(slot) 를 편다 — 주 상한이 2 이상이면 한 사람이 자리를 여러 개 갖는다 ──
+  const slotsOf = (code: string): string[] =>
+    Array.from({ length: capacity.get(code) ?? 0 }, (_, i) => `${code}#${i}`)
+
+  const prefOf = new Map<string, string[]>()
+  const topOf = new Map<string, Candidate[]>()
+  const deferredOf = new Map<string, string[]>()
 
   for (const { draft, plan } of ordered) {
-    // 🔴 여력이 남은 후보만 다시 추린다. 점수는 다시 계산하지 않는다 —
+    // 🔴 여력이 남은 후보만. 점수는 다시 계산하지 않는다 —
     //    같은 글에 대해 두 개의 점수가 생기면 어느 것이 진실인지 모른다
-    const alive = plan.eligible.filter((c) => (remaining.get(c.code) ?? 0) > 0)
-    const deferredBy = plan.eligible.filter((c) => (remaining.get(c.code) ?? 0) <= 0).map((c) => c.code)
+    const alive = plan.eligible.filter((c) => (capacity.get(c.code) ?? 0) > 0)
+
     const top = alive.slice(0, TOP_CANDIDATES)
-    const assigned = top.length === 0
-      ? null
-      : top[seededPick(draft.queueId, top.map((c) => c.score.total))]!.code
+    topOf.set(draft.queueId, top)
 
-    if (assigned !== null) {
-      remaining.set(assigned, (remaining.get(assigned) ?? 0) - 1)
-      load[assigned] = (load[assigned] ?? 0) + 1
-    }
+    // 🔴 1순위는 단건 추천과 같은 사람이다 — 상위 3명 중 시드로 뽑는다.
+    //    그 뒤에 나머지 eligible 을 붙여, **자리 경쟁이 있을 때만** 아래로 내려가게 한다
+    const pickedAt = top.length === 0 ? 0 : seededPick(draft.queueId, top.map((c) => c.score.total))
+    const preferred = top.length === 0 ? [] : [...top.slice(pickedAt), ...top.slice(0, pickedAt)]
+    const pref = [...preferred, ...alive.slice(TOP_CANDIDATES)]
+    prefOf.set(draft.queueId, pref.flatMap((c) => slotsOf(c.code)))
+  }
 
+  // ── ⑤ 🔴 최대 매칭 ──
+  const seat = maxMatch(ordered.map((o) => o.draft.queueId), prefOf)
+
+  const load: Record<string, number> = {}
+  for (const slot of seat.values()) {
+    const code = slot.slice(0, slot.lastIndexOf('#'))
+    load[code] = (load[code] ?? 0) + 1
+  }
+  // 🔴 기존 배정도 부하로 센다 — 화면이 "이번 주 누가 몇 건" 을 말할 때 빠지면 안 된다.
+  //    여력(capacity)은 이미 반영돼 있으므로 여기서만 더한다
+  for (const d of pinned) {
+    const code = pinnedCodeOf(d)!
+    if (recoveryProblemOf(code) === null) load[code] = (load[code] ?? 0) + 1
+  }
+
+  // 🔴 "여력이 없어 밀렸다" 는 **매칭이 끝난 뒤**에야 알 수 있다.
+  //    탐욕법에서는 차감해 가며 알 수 있었지만, 최대 매칭은 자리를 한꺼번에 정한다.
+  //    그래서 남은 자리로 판단한다 — 처음부터 여력 0 인 사람과 이번 배치에서 자리를 다 내준 사람이 함께 잡힌다
+  const freeSeats = (code: string): number => (capacity.get(code) ?? 0) - (seatLoad(code))
+  function seatLoad(code: string): number {
+    let n = 0
+    for (const slot of seat.values()) if (slot.slice(0, slot.lastIndexOf('#')) === code) n += 1
+    return n
+  }
+
+  const out = new Map<string, BatchAssignment>()
+  for (const { draft, plan } of ordered) {
+    const slot = seat.get(draft.queueId)
+    const assigned = slot === undefined ? null : slot.slice(0, slot.lastIndexOf('#'))
     out.set(draft.queueId, {
       queueId: draft.queueId,
       assigned,
       standalone: plan.recommended,
       eligible: plan.eligible,
-      top,
+      top: topOf.get(draft.queueId) ?? [],
       blocked: plan.blocked,
       requirements: plan.requirements,
-      deferredBy,
+      deferredBy: plan.eligible.filter((c) => c.code !== assigned && freeSeats(c.code) <= 0).map((c) => c.code),
+      recovery: false,
+      recoveryProblem: null,
+    })
+  }
+
+  // ── ⑥ 🔴 기존 배정 행 — 재계산하지 않는다. 요건만 읽어 화면에 보여준다 ──
+  for (const d of pinned) {
+    const code = pinnedCodeOf(d)!
+    const problem = recoveryProblemOf(code)
+    out.set(d.queueId, {
+      queueId: d.queueId,
+      // 🔴 쓸 수 없는 배정이면 null 이다. 다른 사람을 넣지 않는다 — 부르는 쪽이 멈춘다
+      assigned: problem === null ? code : null,
+      standalone: null,
+      eligible: [],
+      top: [],
+      blocked: [],
+      requirements: readPostRequirements(d.title, d.body),
+      deferredBy: [],
+      recovery: true,
+      recoveryProblem: problem,
     })
   }
 

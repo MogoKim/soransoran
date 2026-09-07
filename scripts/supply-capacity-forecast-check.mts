@@ -9,10 +9,15 @@ import { readFileSync } from 'node:fs'
 import {
   MAX_NEED_MULTIPLIER, availablePersonasAt, blockRatesByCombination, capacityOf, classifyHeadBlock,
   forecastPublishing, judgeCapacity, kstDateLabel, kstStamp, nextScheduleAt,
+  type BlockReason,
   personaAvailableAt, personasNeededFor, splitBlockReasons,
   type PersonaHistory,
 } from '../src/lib/supply-capacity-forecast'
-import { MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK, planMatch } from '../src/lib/original-post-persona-match'
+import {
+  MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK, planMatch, planBatch,
+  type BatchDraft, type PersonaForMatch,
+} from '../src/lib/original-post-persona-match'
+import { pickPublishTarget } from '../src/lib/original-post-auto-publish'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 
 let pass = 0
@@ -269,9 +274,22 @@ check('🔴 [배치] 남은 후보 **전체**를 planBatch 에 넘긴다 — hea
   const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
   return /planBatch\(remaining, personasNow\)/.test(lib) && !/planBatch\(\[head\]/.test(lib)
 })())
-check('🔴 [배치] 발행 대상은 head 다 — 배정이 다른 글에 갔어도 건너뛰지 않는다', (() => {
+// 🔴 2026-09-07 교체: 발행 대상은 head 가 아니라 **배정이 있는 첫 글**이다.
+//    그리고 그 규칙은 러너의 함수를 **그대로 부른다** — 예측용으로 복제하지 않는다
+check('🔴 [선택] 러너의 pickPublishTarget 을 부른다 — 규칙을 복제하지 않는다', (() => {
   const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
-  return /const a = batch\.assignments\.find\(\(x\) => x\.queueId === head\.queueId\)/.test(lib)
+  return /import \{ pickPublishTarget \} from '\.\/original-post-auto-publish'/.test(lib)
+    && /pickPublishTarget\(\{/.test(lib)
+})())
+check('🔴 [선택] 예측이 자기만의 선택 규칙을 다시 만들지 않는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  // head 를 집어 그대로 발행 대상으로 삼던 옛 코드가 남아 있으면 안 된다
+  return !/const head = remaining\[0\]/.test(lib)
+    && !/function pickPublishTarget/.test(lib)
+})())
+check('🔴 [선택] 나간 것만 큐에서 뺀다 — 건너뛴 앞 글은 줄에 남는다', (() => {
+  const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  return /remaining\.splice\(/.test(lib) && !/remaining\.shift\(\)/.test(lib)
 })())
 check('🔴 [배치] 여력이 다른 글에 쓰이면 BATCH_EXHAUSTED 로 구분한다', (() => {
   const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
@@ -474,6 +492,228 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
   check('🔴 하루 상한은 러너 정본 상수를 쓴다', DAILY_PUBLISH_CAP === 1)
   check('🔴 러너가 dailyCap 을 명시적으로 주입한다',
     /dailyCap: DAILY_PUBLISH_CAP/.test(runner))
+}
+
+// ③ 🔴 예측과 러너가 **같은 글**을 고른다 — 두 화면이 다른 말을 하면 안 된다
+{
+  const D = (n: number): BatchDraft => ({ queueId: `q${n}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: n })
+  const queue = [D(0), D(1), D(2)]
+  // q0 만 자녀 글로 바꿔 아무도 못 맡게 한다 → 예측도 러너도 q1 을 골라야 한다
+  const blockedHead: BatchDraft = { ...D(0), title: '중학생 딸', body: '딸이 사춘기라 힘들어요.' }
+  const q = [blockedHead, D(1), D(2)]
+  const personas = ['A', 'B'].map((c) => ({
+    code: c, status: 'active', providerId: null,
+    maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
+    parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
+    region: null, noGoTopics: [] as string[], voiceLength: '중간',
+    postsThisWeek: 0, daysSinceLastPost: null,
+  })) as unknown as PersonaForMatch[]
+
+  const batch = planBatch(q, personas)
+  const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
+  const runnerPick = pickPublishTarget({
+    ordered: q.map((d) => ({ id: d.queueId })),
+    assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
+  }).picked?.id ?? null
+
+  const f = forecastPublishing({
+    queue: q, personas, history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
+    startAt: new Date('2026-09-08T15:05:00.000Z'), days: 1, dailyCap: 1,
+  })
+  const forecastPick = f.days[0]?.published[0]?.queueId ?? null
+
+  check('🔴 맨 앞이 막혀도 예측이 하루를 버리지 않는다', forecastPick !== null)
+  check('🔴 예측과 러너가 같은 글을 고른다', forecastPick === runnerPick && forecastPick === 'q1')
+  check('🔴 막힌 맨 앞 글은 큐에서 사라지지 않는다 — 다음 날 다시 후보다', (() => {
+    const two = forecastPublishing({
+      queue: q, personas, history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
+      startAt: new Date('2026-09-08T15:05:00.000Z'), days: 2, dailyCap: 1,
+    })
+    return two.days.every((d) => d.published.every((pb) => pb.queueId !== 'q0'))
+  })())
+  check('🔴 아무도 배정되지 않으면 발행 0 — 아무거나 내지 않는다', (() => {
+    const none = forecastPublishing({
+      queue: [blockedHead], personas, history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
+      startAt: new Date('2026-09-08T15:05:00.000Z'), days: 3, dailyCap: 1,
+    })
+    return none.days.every((d) => d.published.length === 0)
+      && none.days.every((d) => d.blockedReason === 'LIFE_BLOCKED')
+  })())
+}
+
+// ④ 🔴 복구 행은 가상 발행해도 matchedAt 을 다시 더하지 않는다 (2026-09-07)
+{
+  const persona = {
+    code: 'A', status: 'active', providerId: null,
+    maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
+    parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
+    region: null, noGoTopics: [] as string[], voiceLength: '중간',
+    postsThisWeek: 0, daysSinceLastPost: null,
+  } as unknown as PersonaForMatch
+  const start = new Date('2026-09-08T15:05:00.000Z')
+  // 🔴 A 는 이 행 때문에 이미 이번 주를 썼다 — matchedAt 이 이력에 있다
+  const already = new Date('2026-09-08T00:00:00.000Z')
+  const stuck: BatchDraft = {
+    queueId: 'stuck', title: '오늘', body: '국수를 삶았어요.',
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'A',
+  }
+  const fresh: BatchDraft = { queueId: 'fresh', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 }
+
+  const f = forecastPublishing({
+    queue: [stuck, fresh], personas: [persona],
+    history: [{ code: 'A', matchedAts: [already] }],
+    // 🔴 A 의 주간 여력이 풀릴 때까지 봐야 차이가 드러난다. 7일이면 양쪽 다 발행 0 이라
+    //    "같다" 가 참이 되어 fixture 가 헛돈다
+    startAt: start, days: 12, dailyCap: 1,
+  })
+  const out = f.days.flatMap((d) => d.published)
+  check('🔴 복구 행이 먼저 나간다', out[0]?.queueId === 'stuck' && out[0]?.persona === 'A')
+  check('🔴 복구 행은 기존 배정 persona 로 나간다 — 재배정되지 않는다',
+    out.every((pb) => pb.queueId !== 'stuck' || pb.persona === 'A'))
+
+  // 🔴 matchedAt 을 중복으로 더했다면 A 의 여력이 한 번 더 줄어
+  //    다음 글이 실제보다 늦게 나간다. 그 차이를 잡는다
+  const noDup = forecastPublishing({
+    queue: [fresh], personas: [persona],
+    history: [{ code: 'A', matchedAts: [already] }],
+    startAt: start, days: 12, dailyCap: 1,
+  })
+  const freshDayWith = f.days.findIndex((d) => d.published.some((pb) => pb.queueId === 'fresh'))
+  const freshDayAlone = noDup.days.findIndex((d) => d.published.some((pb) => pb.queueId === 'fresh'))
+  check('🔴 fixture 가 헛돌지 않는다 — 두 경우 모두 실제로 발행에 도달한다',
+    freshDayWith !== -1 && freshDayAlone !== -1)
+  check('🔴 복구 발행이 A 의 여력을 두 번 깎지 않는다', freshDayWith === freshDayAlone)
+
+  // 🔴 예측이 쓰는 선택 함수에 복구 규칙이 함께 붙어 있다
+  const libSrc = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
+  check('🔴 예측도 복구 우선 규칙을 그대로 쓴다', /isRecovery: \(id\) =>/.test(libSrc))
+  check('🔴 복구 행은 이력에 다시 더하지 않는다', /if \(!plan\.recovery\) \{/.test(libSrc))
+}
+
+// ⑤ 🔴 DB 모양 입력 — supply-health 가 만드는 그대로를 넣어 본다 (2026-09-07)
+//
+//    관제는 `matchedPersonaId`(id) 를 code 로 바꿔 `assignedPersonaCode` 로 넘긴다.
+//    여기서는 그 변환 결과와 **같은 모양**을 만들어 행동을 고정한다.
+{
+  const mkPersona = (code: string, over: Record<string, unknown> = {}): PersonaForMatch => ({
+    code, status: 'active', providerId: null,
+    maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
+    parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
+    region: null, noGoTopics: [] as string[], voiceLength: '중간',
+    postsThisWeek: 0, daysSinceLastPost: null, ...over,
+  } as unknown as PersonaForMatch)
+
+  /** 🔴 관제의 변환을 그대로 흉내낸다 — id 를 못 찾으면 `__unknown:` 이다 */
+  const codeOfId = new Map([['pid_A', 'A'], ['pid_B', 'B'], ['pid_OFF', 'OFF'], ['pid_REAL', 'REAL']])
+  const asHealthDoes = (rows: readonly { id: string; matchedPersonaId: string | null; title?: string }[]): BatchDraft[] =>
+    rows.map((r, i) => ({
+      queueId: r.id, title: r.title ?? '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i,
+      assignedPersonaCode: r.matchedPersonaId === null
+        ? null
+        : (codeOfId.get(r.matchedPersonaId) ?? `__unknown:${r.matchedPersonaId}`),
+    }))
+
+  const START = new Date('2026-09-08T15:05:00.000Z')
+  const ALREADY = new Date('2026-09-08T00:00:00.000Z')
+
+  // ── A. 정상 기배정 행 → 기존 persona 로 복구 우선 ──
+  {
+    const queue = asHealthDoes([
+      { id: 'stuck', matchedPersonaId: 'pid_A' },
+      { id: 'fresh', matchedPersonaId: null },
+    ])
+    const f = forecastPublishing({
+      queue, personas: [mkPersona('A'), mkPersona('B')],
+      history: [{ code: 'A', matchedAts: [ALREADY] }, { code: 'B', matchedAts: [] }],
+      startAt: START, days: 12, dailyCap: 1,
+    })
+    const first = f.days.flatMap((d) => d.published)[0]
+    check('🔴 [A] DB 모양 기배정 행이 기존 persona 로 먼저 나간다',
+      first?.queueId === 'stuck' && first?.persona === 'A')
+    // 🔴 nextPersonaCandidates 가 빈 배열로 거짓 표시되지 않는다
+    check('🔴 [A] 복구 행의 다음 후보가 빈 배열로 거짓 표시되지 않는다',
+      f.nextQueueId === 'stuck' && f.nextPersonaCandidates.join(',') === 'A')
+    check('🔴 [A] 복구 행은 배정 가능으로 보고된다', f.nextScheduleWillPublish)
+    check('🔴 [A] 깨진 복구는 없다', f.recoveryBroken.length === 0)
+  }
+
+  // ── B. 복구 발행 후 matchedAt 이중 추가 0 ──
+  {
+    const withStuck = forecastPublishing({
+      queue: asHealthDoes([{ id: 'stuck', matchedPersonaId: 'pid_A' }, { id: 'fresh', matchedPersonaId: null }]),
+      personas: [mkPersona('A')],
+      history: [{ code: 'A', matchedAts: [ALREADY] }],
+      startAt: START, days: 12, dailyCap: 1,
+    })
+    const alone = forecastPublishing({
+      queue: asHealthDoes([{ id: 'fresh', matchedPersonaId: null }]),
+      personas: [mkPersona('A')],
+      history: [{ code: 'A', matchedAts: [ALREADY] }],
+      startAt: START, days: 12, dailyCap: 1,
+    })
+    const dayOf = (f: typeof withStuck): number => f.days.findIndex((d) => d.published.some((p) => p.queueId === 'fresh'))
+    check('🔴 [B] fixture 가 헛돌지 않는다 — 두 경우 모두 fresh 가 실제로 나간다',
+      dayOf(withStuck) !== -1 && dayOf(alone) !== -1)
+    check('🔴 [B] 복구 발행이 A 의 여력을 두 번 깎지 않는다', dayOf(withStuck) === dayOf(alone))
+  }
+
+  // ── C. 깨진 복구 + 정상 신규 후보 → 우회하지 않고 RECOVERY_BROKEN ──
+  {
+    const cases: [string, BatchDraft[]][] = [
+      ['없는 persona', asHealthDoes([{ id: 'gone', matchedPersonaId: 'pid_MISSING' }, { id: 'fresh', matchedPersonaId: null }])],
+      ['비활성 persona', asHealthDoes([{ id: 'off', matchedPersonaId: 'pid_OFF' }, { id: 'fresh', matchedPersonaId: null }])],
+      ['실계정 persona', asHealthDoes([{ id: 'real', matchedPersonaId: 'pid_REAL' }, { id: 'fresh', matchedPersonaId: null }])],
+    ]
+    const personas = [
+      mkPersona('A'),
+      mkPersona('OFF', { status: 'draft' }),
+      mkPersona('REAL', { providerId: 'kakao:1' }),
+    ]
+    for (const [name, queue] of cases) {
+      const f = forecastPublishing({
+        queue, personas, history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
+        startAt: START, days: 14, dailyCap: 1,
+      })
+      // 🔴 신규 후보(fresh)가 배정 가능한데도 우회해서 내지 않는다 — 러너가 멈추기 때문이다
+      check(`🔴 [C] ${name}: 신규 후보로 우회하지 않는다 — 발행 0`,
+        f.days.every((d) => d.published.length === 0) && f.in7 === 0 && f.in14 === 0)
+      check(`🔴 [C] ${name}: 사유가 RECOVERY_BROKEN 이다`,
+        f.days.every((d) => d.blockedReason === ('RECOVERY_BROKEN' satisfies BlockReason))
+        && f.nextBlockReason === 'RECOVERY_BROKEN')
+      check(`🔴 [C] ${name}: 어느 행인지 말한다`, f.recoveryBroken.length === 1)
+      check(`🔴 [C] ${name}: 관제가 CRITICAL 로 본다`, judgeCapacity({
+        stockUsable: 14, in7: f.in7, nextWillPublish: f.nextScheduleWillPublish,
+        nextCandidates: f.nextPersonaCandidates.length, shortfallMin: 0, dailyCap: 1,
+        recoveryBroken: f.recoveryBroken,
+      }).some((x) => x.level === 'CRITICAL' && x.code === 'RECOVERY_BROKEN'))
+    }
+    // 🔴 우회했다면 fresh 가 나갔을 것이다 — 그 대조군으로 fixture 가 헛돌지 않음을 보인다
+    const onlyFresh = forecastPublishing({
+      queue: asHealthDoes([{ id: 'fresh', matchedPersonaId: null }]),
+      personas, history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
+      startAt: START, days: 14, dailyCap: 1,
+    })
+    check('🔴 [C] 대조군: 깨진 복구가 없으면 fresh 는 나간다 — fixture 가 헛돌지 않는다', onlyFresh.in7 > 0)
+  }
+
+  // ── D. 기배정 없는 현재 정상 경로 수치 회귀 0 ──
+  {
+    const rows = Array.from({ length: 6 }, (_, i) => ({ id: `q${i}`, matchedPersonaId: null }))
+    const personas = ['A', 'B', 'C'].map((c) => mkPersona(c))
+    const history = personas.map((p) => ({ code: p.code, matchedAts: [] as Date[] }))
+    // 🔴 관제가 만드는 모양(assignedPersonaCode: null 이 붙은 것) 과
+    //    그 필드가 아예 없는 옛 모양이 **같은 결과**여야 한다
+    const withField = forecastPublishing({ queue: asHealthDoes(rows), personas, history, startAt: START, days: 14, dailyCap: 1 })
+    const withoutField = forecastPublishing({
+      queue: rows.map((r, i) => ({ queueId: r.id, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i })),
+      personas, history, startAt: START, days: 14, dailyCap: 1,
+    })
+    const sig = (f: typeof withField): string =>
+      `${f.in7}/${f.in14}/${f.nextQueueId}/${f.nextPersonaCandidates.join('|')}/${f.days.map((d) => d.published.map((p) => `${d.date}:${p.queueId}:${p.persona}`).join(';')).join(',')}`
+    check('🔴 [D] 기배정이 없으면 수치가 예전과 완전히 같다', sig(withField) === sig(withoutField))
+    check('🔴 [D] 깨진 복구도 없다', withField.recoveryBroken.length === 0)
+    check('🔴 [D] 대조군이 실제로 발행한다 — 빈 비교가 아니다', withField.in7 > 0)
+  }
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

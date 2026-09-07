@@ -27,7 +27,7 @@
  */
 import { PrismaClient } from '@prisma/client'
 import {
-  selectAutoTargets, judgeApply, verifyAfterPublish, splitTargets, REJECT_LABEL,
+  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, REJECT_LABEL,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT,
   type AutoRow,
 } from '../src/lib/original-post-auto-publish'
@@ -84,18 +84,9 @@ const rows: AutoRow[] = raw.map((r) => ({
 // ── ② 안전 재판정 — 🔴 저장된 값을 믿지 않는다 ──
 const { targets, rejected } = selectAutoTargets(rows, (t, b) => safetyFilter({ title: t, body: b }).verdict)
 
-const { picked, waiting } = splitTargets(targets)
+// 🔴 발행 대상은 **배정을 끝낸 뒤** 고른다 (③ 아래). 맨 앞 한 건을 미리 집으면,
+//    그 글이 배정되지 않았을 때 뒤에 배정된 글이 있어도 하루를 통째로 버린다.
 console.log(`① 대기열 ${rows.length}건 → 자동 발행 후보 ${targets.length}건`)
-if (picked !== null) {
-  console.log(`  🎯 이번에 나갈 1건  ${picked.id}`)
-  console.log(`     제목 ${brief(picked.title)} · 본문 ${[...picked.body].length}자 · ${picked.sourceSite}`)
-  console.log(`     줄 순서 기준 ${(picked.decidedAt ?? picked.createdAt).toISOString()}`)
-}
-if (waiting.length > 0) {
-  // 🔴 밀린 것을 숨기지 않는다 — 몇 건이 기다리는지 보여야 공급 상태를 안다
-  console.log(`  ⏳ 다음 회차 대기 ${waiting.length}건 — 오래 기다린 순`)
-  for (const w of waiting) console.log(`     ${w.id}  ${brief(w.title)}`)
-}
 if (rejected.length > 0) {
   const by = new Map<string, number>()
   for (const r of rejected) by.set(r.code, (by.get(r.code) ?? 0) + 1)
@@ -143,16 +134,33 @@ for (const r of personaRows) {
     daysSinceLastPost: last?.matchedAt == null ? null : Math.floor((Date.now() - last.matchedAt.getTime()) / 864e5),
   })
 }
+// 🔴 이미 배정된 행은 기존 배정이 정본이다 — id → code 로 바꿔 넘긴다.
+//    넘기지 않으면 planBatch 가 그 행을 새로 매칭해 **다른 사람에게** 줄 수 있다
+const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
+
 // 🔴 후보만 넣어 계산한다 — legacy 글이 여력을 가져가면 안 된다
 const batch = planBatch(
-  targets.map((t) => ({ queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0 })),
+  targets.map((t) => ({
+    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
+    // 🔴 배정된 persona 를 못 찾으면 빈 문자열이 아니라 **모르는 코드**를 넘긴다 —
+    //    planBatch 가 fail-closed 로 잡아 멈춘다. 조용히 재배정되면 안 된다
+    assignedPersonaCode: t.matchedPersonaId === null
+      ? null
+      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+  })),
   personas,
 )
 const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
 
 console.log(`\n③ persona 배정 가능성 (active ${personas.length}명)`)
 for (const t of targets) {
-  if (t.matchedPersonaId !== null) { console.log(`   ${t.id} — 이미 배정돼 있다`); continue }
+  const rec = assignOf.get(t.id)
+  if (rec?.recovery === true) {
+    console.log(rec.recoveryProblem === null
+      ? `   ${t.id} → ${rec.assigned} (이미 배정돼 있다 — 재배정하지 않는다)`
+      : `   ${t.id} — 🔴 ${rec.recoveryProblem}`)
+    continue
+  }
   const a = assignOf.get(t.id)
   const plan = planStore({
     status: t.status as never, createdPostId: t.createdPostId,
@@ -165,6 +173,48 @@ for (const t of targets) {
     : `   ${t.id} — 🔴 ${plan.reason}`)
 }
 
+// ── ③-a 🔴 기존 배정이 깨졌으면 **여기서 멈춘다** ──
+//    없는 persona · 비활성 · 실계정이 붙은 사람을 가리키는 배정은 조용히 바꾸지 않는다.
+//    바꾸면 화면이 보여준 사람과 실제로 글을 쓴 사람이 달라진다
+const brokenRecovery = targets
+  .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
+  .filter((x) => x.problem !== null)
+if (brokenRecovery.length > 0) {
+  console.log(`\n🔴 기존 배정을 쓸 수 없습니다 — ${brokenRecovery.length}건. 아무것도 발행하지 않습니다.`)
+  for (const b of brokenRecovery) console.log(`   ${b.id}  ${b.problem}`)
+  await prisma.$disconnect()
+  fail('배정 정합이 깨졌습니다 — 사람이 확인해야 합니다')
+}
+
+// ── ③-b 🔴 이번에 나갈 한 건 — **복구가 먼저, 그다음 배정이 있는 첫 글** ──
+const { picked, recovered, skipped, waiting } = pickPublishTarget({
+  ordered: targets,
+  assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
+  isRecovery: (id) => assignOf.get(id)?.recovery === true,
+})
+if (skipped.length > 0) {
+  // 🔴 건너뛴 글을 숨기지 않는다. 지우지도 상태를 바꾸지도 않았고, 다음 회차에 다시 맨 앞이다
+  console.log(`\n   ⏭️  이번에 나가지 않는 앞줄 ${skipped.length}건 (상태 그대로 · 다음 회차 재시도)`)
+  for (const sk of skipped) {
+    const a = assignOf.get(sk.id)
+    const why = a?.assigned != null
+      ? '배정은 있으나 이번 회차는 복구가 먼저다'
+      : (a?.eligible.length ?? 0) > 0
+        ? `후보 ${a?.eligible.length}명이 모두 이번 배치에서 소진됐다`
+        : '생활사 조건에 맞는 persona 가 없다'
+    console.log(`      ${sk.id}  ${why}`)
+  }
+}
+if (picked !== null) {
+  console.log(`\n   🎯 이번에 나갈 1건  ${picked.id} → ${assignOf.get(picked.id)?.assigned ?? '?'}`
+    + `${recovered ? '  🔧 복구 — 이전 회차가 배정만 하고 발행하지 못한 행이다' : ''}`)
+  console.log(`      제목 ${brief(picked.title)} · 본문 ${[...picked.body].length}자 · ${picked.sourceSite}`)
+  console.log(`      줄 순서 기준 ${(picked.decidedAt ?? picked.createdAt).toISOString()}`)
+}
+if (waiting.length > 0) {
+  console.log(`   ⏳ 다음 회차 대기 ${waiting.length}건 — 오래 기다린 순`)
+}
+
 // ── ④ 오늘 상황 ──
 // 🔴 KST 자정은 기존 함수를 쓴다 (publish-live 와 같은 것) —
 //    setUTCHours(-9) 는 UTC 15시 이후에 어제로 밀려 cap 을 잘못 센다
@@ -175,7 +225,7 @@ const killed = sw?.enabled === true
 console.log(`\n④ 오늘(${kst(new Date())}) 발행 ${publishedToday} / ${DAILY_PUBLISH_CAP}건 · 전체 중지 ${killed ? '🔴 켜짐' : '꺼짐'}`)
 
 // ── ⑤ 실행 판정 ──
-const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: DAILY_PUBLISH_CAP, killSwitchEnabled: killed })
+const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: DAILY_PUBLISH_CAP, killSwitchEnabled: killed })
 if (!gate.ok) {
   console.log(`\n⑤ 발행하지 않는다 — ${gate.reason}`)
   if (!APPLY) console.log('   🟡 dry-run 입니다. DB write 0 · Post 0 · 실행하려면 --apply 와 --limit=1 을 둘 다 붙이세요.')
@@ -188,6 +238,8 @@ const target = gate.target
 console.log(`\n⑤ 🔴 실행 — ${target.id}`)
 
 // ── ⑥ 배정 (없을 때만) ──
+// 🔴 기존 배정 행은 여기 들어오지 않는다 — matchedPersonaId · matchedAt · matchMeta 를 다시 쓰지 않는다.
+//    다시 쓰면 matchedAt 이 밀려 주간 여력이 한 번 더 열리고, 이력이 두 번 세어진다
 if (target.matchedPersonaId === null) {
   const a = assignOf.get(target.id)
   const plan = planStore({
@@ -211,6 +263,13 @@ const res = await publishOriginalPostTx(prisma, { queueId: target.id, publishedT
 if (res.kind !== 'published') {
   await prisma.$disconnect()
   fail(res.kind === 'blocked' ? `발행이 막혔습니다 — ${res.code} · ${res.detail}` : `발행 오류 — ${res.message}`)
+}
+// 🔴 화면이 예고한 사람과 실제로 글을 쓴 사람이 같아야 한다.
+//    다르면 사람은 어느 쪽을 믿을지 모르고, 복구 계약이 조용히 깨진 것이다
+const announced = assignOf.get(target.id)?.assigned ?? null
+if (announced !== null && res.personaCode !== announced) {
+  await prisma.$disconnect()
+  fail(`🔴 예고한 persona(${announced}) 와 발행된 persona(${res.personaCode}) 가 다릅니다`)
 }
 console.log(`   ✅ Post ${res.postId} · ${res.personaCode} · ${res.boardType}`)
 console.log(`   https://soransoran.com/community/free/${res.postId}`)

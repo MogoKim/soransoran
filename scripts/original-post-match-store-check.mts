@@ -90,7 +90,9 @@ console.log('\n══ 매칭 결과 저장 규칙 fixture ══\n')
     const keys = Object.keys(m).sort()
     if (keys.join(',') !== [...MATCH_META_KEYS].sort().join(',')) offenders.push(`키가 다르다: ${keys.join(',')}`)
     if (m.ruleVersion !== RULE_VERSION) offenders.push(`ruleVersion=${m.ruleVersion} (기대 ${RULE_VERSION})`)
-    if (RULE_VERSION !== 'E-2a') offenders.push(`🔴 RULE_VERSION 이 "E-2a" 가 아니다: ${RULE_VERSION}`)
+    // 🔴 배치 배정이 최대 매칭으로 바뀐 판이다 (2026-09-07). 규칙이 바뀌면 판도 올려야
+    //    나중에 "이 배정이 어느 규칙에서 나왔나" 를 말할 수 있다
+    if (RULE_VERSION !== 'E-2b') offenders.push(`🔴 RULE_VERSION 이 "E-2b" 가 아니다: ${RULE_VERSION}`)
     if (m.seed !== 'q1') offenders.push(`seed=${m.seed}`)
     // 🔴 배정된 사람의 점수여야 한다 — 최고점이 아니라
     if (m.total !== 90) offenders.push(`total=${m.total} (기대 90 · P07)`)

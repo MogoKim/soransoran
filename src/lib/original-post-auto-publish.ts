@@ -160,6 +160,11 @@ export type ApplyGate = { ok: true; target: AutoRow } | { ok: false; reason: str
  */
 export function judgeApply(input: {
   targets: readonly AutoRow[]
+  /**
+   * 🔴 `pickPublishTarget` 이 고른 한 건. **게이트가 스스로 고르지 않는다** —
+   *    고르는 규칙이 두 곳에 있으면 dry-run 이 보여준 것과 다른 글이 나갈 수 있다.
+   */
+  picked: AutoRow | null
   apply: boolean
   limit: number | null
   publishedToday: number
@@ -175,17 +180,71 @@ export function judgeApply(input: {
   if (input.publishedToday >= input.dailyCap) {
     return { ok: false, reason: `오늘 상한 ${input.dailyCap}건을 채웠다 (${input.publishedToday}/${input.dailyCap})` }
   }
-  // 🔴 **여럿이면 맨 앞 하나를 고른다.** 임의로 고르는 것이 아니라 줄 순서대로다 —
-  //    `compareAutoRow` 가 정한 순서는 입력이 어떻게 들어와도 같으므로,
-  //    dry-run 에서 본 그 한 건이 그대로 나간다. 나머지는 다음 회차로 밀린다.
-  return { ok: true, target: input.targets[0]! }
+  // 🔴 배정된 글이 하나도 없으면 나가지 않는다 — 후보가 있어도 persona 가 없으면 발행은 없다
+  if (input.picked === null) {
+    return { ok: false, reason: '배정된 후보가 없다 — persona 여력이나 생활사 조건이 막고 있다' }
+  }
+  // 🔴 줄에 같은 id 가 두 번 있으면 어느 쪽을 낸 것인지 말할 수 없다. 멈춘다
+  const ids = input.targets.map((t) => t.id)
+  if (new Set(ids).size !== ids.length) {
+    return { ok: false, reason: '후보 목록에 같은 id 가 두 번 있다 — 어느 행을 낸 것인지 말할 수 없다' }
+  }
+  // 🔴 **고른 것이 줄 안에 있어야 한다.** 밖에서 들어온 행은 안전 재판정을 거치지 않았다 —
+  //    legacy 도, 이미 발행된 것도, 내용을 모르는 글도 이 문으로 들어올 수 있다
+  const inLine = input.targets.find((t) => t.id === input.picked!.id)
+  if (inLine === undefined) {
+    return { ok: false, reason: `고른 행 ${input.picked.id} 이 후보 목록에 없다 — 재판정을 거치지 않은 행이다` }
+  }
+  // 🔴 같은 id 라도 **줄에 있는 그 행**을 낸다. 밖에서 온 사본을 쓰지 않는다
+  return { ok: true, target: inLine }
 }
 
-/** 이번에 나가는 것과 밀리는 것 — 화면에 함께 보여준다 */
-export function splitTargets(targets: readonly AutoRow[]): { picked: AutoRow | null; waiting: AutoRow[] } {
-  return targets.length === 0
-    ? { picked: null, waiting: [] }
-    : { picked: targets[0]!, waiting: [...targets.slice(1)] }
+/**
+ * 이번에 나가는 것 · 건너뛴 것 · 밀리는 것
+ *
+ * 🔴 **맨 앞 한 건을 집지 않는다** (2026-09-07 교체).
+ *
+ *    예전에는 줄 맨 앞(`targets[0]`)을 그대로 발행 대상으로 삼았다. 그런데 그 한 건이
+ *    배정되지 않으면 **그날 하루를 통째로 버렸다** — 뒤에 배정된 글이 있어도 나가지 않았다.
+ *    실측: 최희소 후보 하나가 막혀 09-20 · 21 · 22 사흘이 연속으로 비었다.
+ *
+ *    그래서 줄 순서는 그대로 두되, **배정이 있는 첫 글**을 집는다.
+ *    건너뛴 글은 지우지도 상태를 바꾸지도 않는다 — 다음 회차에 다시 맨 앞이고,
+ *    왜 건너뛰었는지는 `skipped` 로 화면과 관제에 남는다.
+ *
+ * 🔴 한 회차에 나가는 것은 여전히 **한 건**이다. 상한을 여는 변경이 아니다.
+ *
+ * 🔴 **복구가 먼저다** (2026-09-07)
+ *
+ *    이전 회차가 배정을 저장한 뒤 발행 전에 죽으면, 그 행은 persona 의 주간 여력을
+ *    **이미 써 버린 채** 발행되지 않은 상태로 남는다. 그 사람은 글을 쓰지도 못했는데
+ *    이번 주를 다 쓴 것이 된다. 그러니 새 글보다 이 행을 먼저 내보내 상태를 푼다.
+ *    복구 대상이 여럿이면 그중 가장 오래 기다린 것이다.
+ */
+export function pickPublishTarget<T extends { id: string }>(input: {
+  /** 🔴 이미 `compareAutoRow` 로 정렬된 줄 — 오래 기다린 순 */
+  ordered: readonly T[]
+  /** 그 글에 배정된 persona code. 없으면 null */
+  assignedOf: (id: string) => string | null
+  /** 🔴 이전 회차가 배정만 하고 발행하지 못한 행인가 — 있으면 먼저 복구한다 */
+  isRecovery?: (id: string) => boolean
+}): { picked: T | null; recovered: boolean; skipped: T[]; waiting: T[] } {
+  const has = (t: T): boolean => input.assignedOf(t.id) !== null
+  const isRec = input.isRecovery ?? ((): boolean => false)
+
+  // 🔴 ① 기존 배정이 살아 있는 행 중 가장 오래된 것
+  let at = input.ordered.findIndex((t) => isRec(t.id) && has(t))
+  const recovered = at !== -1
+  // ② 없으면 이번에 배정된 것 중 가장 오래된 것
+  if (at === -1) at = input.ordered.findIndex((t) => has(t))
+
+  if (at === -1) return { picked: null, recovered: false, skipped: [...input.ordered], waiting: [] }
+  return {
+    picked: input.ordered[at]!,
+    recovered,
+    skipped: [...input.ordered.slice(0, at)],
+    waiting: [...input.ordered.slice(at + 1)],
+  }
 }
 
 /** 발행 뒤 정합 — 🔴 셋이 다 맞아야 성공이다 */
