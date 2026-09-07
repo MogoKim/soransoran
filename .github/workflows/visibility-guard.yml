@@ -364,6 +364,17 @@ jobs:
       - name: 공급 러너 lock (게이트 4조합 · 임시 파일 전용)
         run: npm run supply:autopilot-lock-check
 
+      # 관제가 무엇을 장애로 볼지 — 판정만 검사한다 (§4-AW).
+      #
+      # 🔴 등급을 잘못 매기면 화면이 쓸모없어진다. 매일 CRITICAL 이 뜨면
+      #    사람이 곧 무시하고, 그러면 진짜 CRITICAL 도 같이 묻힌다.
+      #    그래서 역사 기록·반복 no-op 은 INFO 이고, 소스 하나 실패와
+      #    전체 중단은 다른 등급이며, CRITICAL 만 exit 1 이다.
+      #
+      # 🔴 네트워크 0 · LLM 0 · DB 0 — 순수 판정만 본다.
+      - name: 공급 관제 (등급 경계 · 소스 독립 실패 · read-only 계약)
+        run: npm run supply:health-check
+
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #
       # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.

@@ -35,10 +35,13 @@ import {
   PUBLISH_BLOCK_LABEL, type PublishBlockCode,
 } from '../src/lib/original-post-publish'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
+import { verifyPublishedRow } from '../src/lib/original-post-publish-verify'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
   parseIdArgs, filterByIds, missingIds, checkLimitAgainstIds, describeIdTargeting,
 } from '../src/lib/original-post-id-target'
+// 🔴 3축 판정은 정본 게이트 함수가 한다 (노출 게이트 C-2 · C-4)
+import { isSearchIndexable, isDiscoveryEligible } from '../src/lib/post-visibility'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -78,14 +81,28 @@ console.log(`  첫 발행 판정  gate=${FIRST_PUBLISH_VERDICT} 만 · HOLD 제�
 
 // ══ --check — 발행 결과 대조 ══
 if (CHECK) {
+  // 🔴 **PUBLISHED 만 보면 반쪽이다.** 발행은 됐는데 큐가 그렇게 말하지 않는 행
+  //    (createdPostId 는 있는데 status≠PUBLISHED)이 검사 밖으로 새어 나간다 —
+  //    그 행은 다음 회차가 **같은 글을 또 낼 수 있는** 상태다.
   const published = await prisma.originalPostApprovalQueue.findMany({
-    where: { status: 'PUBLISHED' },
-    select: { id: true, createdPostId: true, matchedPersona: { select: { id: true, code: true } } },
+    where: { OR: [{ status: 'PUBLISHED' }, { NOT: { createdPostId: null } }] },
+    select: {
+      id: true, status: true, createdPostId: true,
+      matchedPersona: { select: { id: true, code: true } },
+    },
   })
-  console.log(`PUBLISHED ${published.length}건`)
+  console.log(`검사 대상 ${published.length}건 (PUBLISHED · createdPostId 가 있는 행)`)
   let bad = 0
   for (const row of published) {
-    if (row.createdPostId === null) { console.log(`  🔴 ${row.id} — PUBLISHED 인데 createdPostId 가 없다`); bad += 1; continue }
+    if (row.createdPostId === null) {
+      // 🔴 판정은 공용 정본이 한다 — 여기서 문구를 따로 만들지 않는다
+      const p0 = verifyPublishedRow({
+        queueId: row.id, queueStatus: row.status, createdPostId: null,
+        queuePersonaId: row.matchedPersona?.id ?? null, post: null, activityLogCount: 0,
+      })
+      if (p0.length > 0) { console.log(`  🔴 ${row.id} — ${p0.join(' · ')}`); bad += 1 }
+      continue
+    }
     const post = await prisma.post.findUnique({
       where: { id: row.createdPostId },
       select: {
@@ -94,26 +111,25 @@ if (CHECK) {
         sourceUrl: true, sourceArticleId: true, sheetCandidateId: true,
       },
     })
-    const problems: string[] = []
-    if (post === null) problems.push('Post 가 없다')
-    else {
-      if (post.status !== 'PUBLISHED') problems.push(`status=${post.status}`)
-      if (post.source !== 'SYSTEM') problems.push(`source=${post.source}`)
-      if (post.boardType !== 'FREE') problems.push(`boardType=${post.boardType}`)
-      if (post.personaId !== row.matchedPersona?.id) problems.push('personaId 불일치')
-      // 🔴 색인 대상인가 — 이 레인의 존재 이유다
-      if (post.isMicroSeed || post.permanentNoindex || post.indexPromotionBlocked) {
-        problems.push('🔴 색인 대상이 아니다 (3축이 어긋났다)')
-      }
-      // 🔴 출처가 붙지 않았는가
-      for (const [k, v] of [['sourceUrl', post.sourceUrl], ['sourceArticleId', post.sourceArticleId], ['sheetCandidateId', post.sheetCandidateId]] as const) {
-        if (v !== null) problems.push(`🔴 ${k} 가 붙었다`)
-      }
-    }
     const log = await prisma.personaActivityLog.count({
       where: { personaId: row.matchedPersona?.id ?? '', kind: 'post', targetId: row.createdPostId },
     })
-    if (log !== 1) problems.push(`ActivityLog ${log}건 (1이어야 한다)`)
+    // 🔴 판단은 공용 정본이 한다 — 관제(supply:health)와 **같은 함수**를 쓴다.
+    //    두 곳이 각자 판단하면 언젠가 한쪽만 고쳐지고, 그날 어느 쪽을 믿을지 알 수 없다.
+    const problems = verifyPublishedRow({
+      // 🔴 하드코딩하지 않는다 — 실제 status 를 넘겨야 불일치가 드러난다
+      queueId: row.id, queueStatus: row.status, createdPostId: row.createdPostId,
+      queuePersonaId: row.matchedPersona?.id ?? null,
+      post: post === null ? null : {
+        status: post.status, source: post.source, boardType: post.boardType,
+        personaId: post.personaId,
+        // 🔴 3축 판정은 post-visibility 정본 함수가 한다
+        searchIndexable: isSearchIndexable(post), discoveryEligible: isDiscoveryEligible(post),
+        sourceUrl: post.sourceUrl, sourceArticleId: post.sourceArticleId,
+        sheetCandidateId: post.sheetCandidateId,
+      },
+      activityLogCount: log,
+    })
 
     if (problems.length > 0) { bad += 1; console.log(`  🔴 ${row.id} — ${problems.join(' · ')}`) }
     else console.log(`  ✅ ${row.id} → Post ${row.createdPostId} · ${row.matchedPersona?.code} · /community/free/${row.createdPostId}`)
