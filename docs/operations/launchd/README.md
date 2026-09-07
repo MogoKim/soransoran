@@ -56,6 +56,45 @@ plist 는 계속 돌지만 수집이 일어나지 않는다.
 | `com.soransoran.raw-collect-82cook.plist.template` | 82cook 자동 수집 (2시간 간격 10슬롯) | 로컬 또는 GHA 대체 가능 |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
 | `com.soransoran.navercafe-collect.plist.template` | 네이버 카페 수집 (카페별 1슬롯) | 🔴 **로컬 전용** |
+| `com.soransoran.supply-autopilot.plist.template` | 공급 Autopilot v1 — 재고 14 미만일 때만 수집→판정→생성→적재 (21:10 KST 1슬롯) | 🔴 **로컬 전용** (§4-AU) |
+
+## 공급 Autopilot 등록 (승인 후)
+
+```bash
+# 0) 🔴 .env.local 에 스위치 둘. 하나라도 없으면 러너가 시작 전에 멈춘다
+#    SORAN_SUPPLY_AUTOPILOT_ENABLED=true
+#    SORAN_82COOK_THIN_DETAIL_ENABLED=true
+
+# 1) 첫 실행은 사람이 본다 — dry-run 은 네트워크 0 · LLM 0 · DB write 0
+npm run supply:autopilot                      # 오늘 재고로 판정만
+npm run supply:autopilot -- --simulate-stock=5  # 부족했다면 무엇을 할지
+
+# 2) 🔴 로그 디렉터리를 **먼저** 만든다
+#    StandardOutPath 의 상위 디렉터리가 없으면 launchd 가 job 을 띄우지 못한다.
+#    "등록은 됐는데 아무 일도 안 일어나는" 상태가 되고, 원인이 화면에 안 보인다.
+mkdir -p /Users/yanadoo/Documents/soransoran-m0/logs
+
+# 3) 값 치환 + 문법 검증 — 🔴 lint 를 통과해야 등록한다
+sed -e "s#__NPX__#$(which npx)#g" \
+    -e "s#__REPO__#/Users/yanadoo/Documents/soransoran-m0#g" \
+    docs/operations/launchd/com.soransoran.supply-autopilot.plist.template \
+    > ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist
+
+plutil -lint ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist
+
+# 4) 등록 — 🔴 멱등적이다. 이미 있으면 걷어내고 다시 올린다
+launchctl unload ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist 2>/dev/null || true
+launchctl load  ~/Library/LaunchAgents/com.soransoran.supply-autopilot.plist
+
+# 5) 확인 — 두 번째 컬럼이 마지막 exit status 다
+launchctl list | grep supply-autopilot
+```
+
+🔴 **위 절차는 몇 번을 돌려도 같은 상태가 된다.** `mkdir -p` · `sed >` · `unload || true` 는
+이미 그런 상태면 아무 일도 하지 않는다. 반쯤 등록된 상태가 남지 않는다.
+
+🔴 **멈추는 가장 빠른 방법**은 `.env.local` 의 `SORAN_SUPPLY_AUTOPILOT_ENABLED` 를 지우는 것이다.
+job 은 계속 돌지만 재고만 읽고 끝난다 — 네트워크도 모델도 DB 도 건드리지 않는다.
 
 ## 🔴 네이버 카페는 등록 전 선행 조건이 셋이다 (PR-S2-b-2)
 

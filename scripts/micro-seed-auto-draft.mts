@@ -84,8 +84,23 @@ type JudgeProv = {
 }
 const seedProv = new Map<string, JudgeProv>()
 
+/**
+ * 🔴 **판정 결과 파일을 지정한다** (`--input=<path>`).
+ *
+ * 지정이 없으면 종전대로 `.shadow.jsonl` 전체를 읽는다. Autopilot 이 끊긴 회차를
+ * 이을 때는 앞 회차가 낸 **그 판정**으로 초안을 써야 한다 — 최신 파일에 맡기면
+ * 이번에 수집하지도 판정하지도 않은 원천으로 글을 쓴다.
+ */
+function shadowOverride(): string[] | null {
+  const hit = argv.find((a) => a.startsWith('--input='))
+  if (hit === undefined) return null
+  const paths = hit.slice('--input='.length).split(',').map((x) => x.trim())
+    .filter((x) => x !== '' && x.endsWith('.shadow.jsonl'))
+  return paths.length === 0 ? null : paths
+}
+
 function loadAutoSeeds(): Judgement[] {
-  const files = filesEnding('.shadow.jsonl')
+  const files = shadowOverride() ?? filesEnding('.shadow.jsonl')
   if (files.length === 0) return []
   const byId = new Map<string, Judgement>()
   for (const f of files) {

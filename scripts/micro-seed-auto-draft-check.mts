@@ -414,6 +414,15 @@ console.log('\n⑨ 🔴 기존 경로를 건드리지 않았다')
     /export const MAX_SOURCE_OVERLAP = 6/.test(readFileSync('scripts/lib/micro-seed-seed-originality.mts', 'utf-8')))
 }
 
+// ── exact input — 🔴 이번에 판정하지 않은 원천으로 글을 쓰지 않는다 (§4-AU) ──
+{
+  const r = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 --input 으로 판정 결과 파일을 지정할 수 있다', /--input=/.test(r) && /shadowOverride/.test(r))
+  check('🔴 지정이 없으면 종전대로 shadow 전체를 읽는다',
+    /shadowOverride\(\) \?\? filesEnding\('\.shadow\.jsonl'\)/.test(r))
+  check('🔴 shadow 가 아닌 경로는 받지 않는다', /endsWith\('\.shadow\.jsonl'\)/.test(r))
+}
+
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${fail === 0 ? '✅' : '❌'} ${pass} pass · ${fail} fail\n`)
 if (fail > 0) process.exit(1)

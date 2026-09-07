@@ -101,9 +101,28 @@ function humanDecisions(): Map<string, string> {
  *
  * 두 화면의 access 키 이름이 다르므로(`access` vs `accessStatus`) 여기서 맞춘다.
  */
+/**
+ * 🔴 **판정할 파일을 지정한다** (`--input=a,b`).
+ *
+ * 지정이 없으면 종전대로 디렉터리 전체를 읽는다. 지정이 있으면 그것만 읽는다 —
+ * Autopilot 이 끊긴 회차를 이을 때 앞 회차가 만든 **그 파일**을 판정해야 하기 때문이다.
+ * 최신 파일에 맡기면 수집한 판과 판정한 판이 어긋난다.
+ */
+function inputOverride(): string[] | null {
+  const hit = argv.find((a) => a.startsWith('--input='))
+  if (hit === undefined) return null
+  const paths = hit.slice('--input='.length).split(',').map((x) => x.trim()).filter((x) => x !== '')
+  return paths.length === 0 ? null : paths
+}
+
 function loadTargets(): JudgeInput[] {
   const byId = new Map<string, JudgeInput>()
-  for (const f of filesEnding('.detail.jsonl')) {
+  const only = inputOverride()
+  // 🔴 지정이 있으면 그 목록에서만 고른다. 없으면 종전대로 디렉터리 전체다
+  const pick = (suffix: string): string[] => (only === null
+    ? filesEnding(suffix)
+    : only.filter((f) => f.endsWith(suffix)))
+  for (const f of pick('.detail.jsonl')) {
     for (const r of jsonl(f)) {
       const id = S(r.sourceArticleId)
       if (id === '') continue
@@ -118,7 +137,7 @@ function loadTargets(): JudgeInput[] {
       })
     }
   }
-  for (const f of filesEnding('.raw-detail.jsonl')) {
+  for (const f of pick('.raw-detail.jsonl')) {
     for (const r of jsonl(f)) {
       const id = S(r.sourceArticleId)
       if (id === '') continue

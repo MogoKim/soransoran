@@ -443,6 +443,18 @@ console.log('\n⑧ 🔴 기존 경로를 건드리지 않았다')
     /AUTOFILL_MODEL = 'human-curated'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
 }
 
+// ── exact input — 🔴 Autopilot 이 끊긴 회차를 이을 때 그 판을 판정해야 한다 (§4-AU) ──
+{
+  const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
+  check('🔴 --input 으로 판정할 파일을 지정할 수 있다', /--input=/.test(r) && /inputOverride/.test(r))
+  check('🔴 지정이 없으면 종전대로 디렉터리 전체를 읽는다 — 기존 동작이 바뀌지 않는다',
+    /only === null[\s\S]{0,80}filesEnding\(suffix\)/.test(r))
+  check('🔴 지정한 파일만 판정한다 — 최신 파일에 맡기지 않는다',
+    /only\.filter\(\(f\) => f\.endsWith\(suffix\)\)/.test(r))
+  check('🔴 detail 과 raw-detail 둘 다 지정 목록에서 고른다',
+    /pick\('\.detail\.jsonl'\)/.test(r) && /pick\('\.raw-detail\.jsonl'\)/.test(r))
+}
+
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${fail === 0 ? '✅' : '❌'} ${pass} pass · ${fail} fail\n`)
 if (fail > 0) process.exit(1)
