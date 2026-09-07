@@ -103,6 +103,8 @@ const config: Config = {
          컴포넌트에 rgba 를 직접 쓰면 색을 바꿀 때 찾아다녀야 한다. */
       boxShadow: {
         kakao: 'var(--shadow-kakao)',
+        toast: 'var(--shadow-toast)',
+        modal: 'var(--shadow-modal)',
       },
       borderRadius: {
         lg: 'var(--radius)',

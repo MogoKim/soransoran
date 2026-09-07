@@ -29,7 +29,7 @@ const STRIPE: Record<ToastVariant, string> = {
 
 /** 🔴 radius 8px. pill 로 두면 안내가 아니라 배지로 읽힌다 */
 const BASE =
-  'pointer-events-auto flex items-start gap-3 rounded-lg border border-subtle border-l-4 bg-surface-card px-4 py-3.5 text-sm font-medium leading-[1.5] text-content-primary shadow-[0_4px_16px_rgb(47_38_36_/_0.12)] [overflow-wrap:anywhere] [word-break:keep-all] motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-safe:duration-200'
+  'pointer-events-auto flex items-start gap-3 rounded-lg border border-subtle border-l-4 bg-surface-card px-4 py-3.5 text-sm font-medium leading-[1.5] text-content-primary shadow-toast [overflow-wrap:anywhere] [word-break:keep-all] motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-safe:duration-200'
 
 export default function ToastItem({
   toast,

@@ -245,7 +245,7 @@ export default function OnboardingForm({ destination }: { destination: string })
   }
 
   return (
-    <div className="flex min-h-[100dvh] w-full flex-col bg-surface-card sm:min-h-0 sm:max-h-[86vh] sm:max-w-[440px] sm:rounded-2xl sm:shadow-[0_4px_20px_rgba(0,0,0,0.08)]">
+    <div className="flex min-h-[100dvh] w-full flex-col bg-surface-card sm:min-h-0 sm:max-h-[86vh] sm:max-w-[440px] sm:rounded-2xl sm:shadow-modal">
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pt-[max(32px,env(safe-area-inset-top))]">
         {/* 두 칸짜리 진행 표시 — 지금 어디쯤인지, 얼마나 남았는지 */}
         <div className="mb-8 flex gap-2" aria-hidden>
