@@ -94,6 +94,8 @@
     "original-post:id-target-check": "tsx scripts/original-post-id-target-check.mts",
     "supply:autopilot": "tsx scripts/supply-autopilot.mts",
     "launchd:template-check": "tsx scripts/launchd-template-check.mts",
+    "supply:health": "tsx scripts/supply-health.mts",
+    "supply:health-check": "tsx scripts/supply-health-check.mts",
     "supply:autopilot-lock-check": "tsx scripts/supply-autopilot-lock-check.mts",
     "supply:autopilot-check": "tsx scripts/supply-autopilot-check.mts",
     "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",
