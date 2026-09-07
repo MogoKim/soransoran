@@ -273,6 +273,10 @@ jobs:
       - name: 후보 생성 파이프라인 (사람 판정 층 보호)
         run: npm run micro-seed:candidate-pipeline-check
 
+      # 82cook 얇은 상세 — 본문 전문이 디스크에 남지 않는지 본다 (§4-AP)
+      - name: 82cook 얇은 상세 fetch (전문 미저장 · 두 스위치)
+        run: npm run micro-seed:82cook-thin-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:
