@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { TOUCH_MIN } from '@/lib/spacing'
-import { BRAND_NAME } from '@/lib/brand-name'
+import Logo from '@/components/brand/Logo'
 
 /**
  * route 에러 화면
@@ -13,7 +13,8 @@ import { BRAND_NAME } from '@/lib/brand-name'
 export default function Error({ reset }: { error: Error; reset: () => void }) {
   return (
     <main className="mx-auto flex max-w-3xl flex-col items-center px-4 py-20 text-center">
-      <p className="text-2xl font-extrabold text-brand-ink">{BRAND_NAME}</p>
+      {/* 🔴 브랜드명을 여기서 직접 마크업하지 않는다 — 워드마크는 Logo 한 곳이 정본이다 */}
+      <Logo />
       <h1 className="mt-6 text-xl font-bold text-content-primary">
         화면을 불러오지 못했습니다
       </h1>
