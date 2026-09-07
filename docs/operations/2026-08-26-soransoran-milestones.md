@@ -39,20 +39,43 @@
 
 ---
 
-## 1. 현재 실측 상태 (2026-09-02 갱신)
+## 1. 현재 실측 상태 (2026-09-07 갱신)
 
 ```
 ── Micro Seed 레인 (원문 그대로 · 영구 noindex) ──
 Micro Seed 발행      5건
-Candidate 15 · RawContent 15 · Post 32 (USER 27 · SYSTEM/micro-seed 5)
 Sheet                 15건 · HOLD 10 · PUBLISHED 5 · divergence 0
 
-── Original Post 레인 (Derived · index 가능) 🆕 ──
-OriginalPostApprovalQueue   7건 · 🟢 전부 APPROVED
-  └ createdPostId            0   🔴 발행 경로 없음
-  └ decidedBy             founder · 2026-09-02 16:33 KST
-Post.personaId 있는 글        0
+── Original Post 레인 (Derived · index 가능) ──
+Post                 38건 (PUBLISHED 28 · HIDDEN 1 · DELETED 9)
+  └ personaId 있는 글    4   🟢 발행 경로 있음
+RawContent           48건 (82cook 39 · navercafe 2 · synthetic 7)
+OriginalPostApprovalQueue  14건
+  ├ publish-candidate-v1 (우리가 쓴 글)   7   APPROVED 5 · PUBLISHED 2
+  └ legacy (13~14판 · gemini)             7   APPROVED 5 · PUBLISHED 2
+                                             🔴 APPROVED 5 는 내용을 모르는 글 — 발행 금지
+sitemap              43 URL
+Comment              26건 (persona 1)
+Persona              active 5명
 ```
+
+> **2026-09-02 시점 값**(Queue 7건 전부 APPROVED · `createdPostId` 0 · "발행 경로 없음" ·
+> `Post.personaId` 0 · Post 32 · sitemap 11 URL)은 위 값으로 대체됐다.
+> **발행 경로는 2026-09-06 에 열렸다** — §4-AL 자동 발행 러너.
+
+### 🔴 자동화는 발행만 끝났다 — 공급은 아직 사람 손이다
+
+| 층 | 자동화 | 근거 |
+|---|---|---|
+| A 수집 | 🔴 **수동** | 공급 cron 개방 승인은 났으나 **등록 0개** |
+| B 판단/Gate | 🟡 스크립트는 자동 · 실행은 수동 | 6축 판정 · safety |
+| C 글 생성/재작성 | 🔴 **수동** | workbench 는 사람이 쓰는 도구 |
+| **D 발행** | 🟢 **완료 · 운영 검증 대기** | 러너(PR #439) + 스케줄러(PR #440) · **첫 자동 실행 2026-09-08 00:05 KST** |
+| E 대화/학습 | 🔴 없음 | persona 댓글 1 · memory 0행 |
+
+🔴 **D 만 자동인 결과가 "재고 0" 이었다.** 2026-09-07 에 후보 9건이 전부 소진돼
+러너가 먹을 것이 없어졌고, 사람이 5건을 손으로 다시 올려야 했다.
+**자동 소비기 앞에 수동 공급기가 있으면 그 속도는 사람 손의 속도다.**
 
 > 🔴 **두 레인은 다른 것이다.** Micro Seed 는 원문 그대로 · noindex,
 > Original Post 는 Derived · index 가능 · **페르소나가 작성자**다.
@@ -276,7 +299,9 @@ fixture 5종(read 65 · plan 58 · validate 29 · plan-wiring 17 · collect-chec
 - ~~승인 전용 명령 없음~~ → ✅ 완료 (M3)
 - ~~Voice Engine 미착수~~ → 🟢 **부분 가동** — 초안 생성 · Originality Gate · 대기열 · 결정
 - 🔴 **Persona Matching 미착수** → **최우선.** 이것 없이는 오리지널 글의 작성자를 정할 수 없다
-- 🔴 **Original Post 발행 경로 없음** — `APPROVED` 7건이 대기 중 (`createdPostId` 전부 null)
+- 🟢 ~~Original Post 발행 경로 없음~~ — **2026-09-06 해소.** §4-AL 러너로 4건 발행
+- 🔴 **공급 자동화 미완** — A·C 층이 수동이라 재고가 마르면 발행이 멈춘다 (2026-09-07 실제 발생)
+- 🔴 **legacy 큐 APPROVED 5건** — 내용을 모르는 글. 러너가 `promptVersion` 으로 막고 있으나 큐에는 남아 있다
 - 🟡 **좋아요 · 베스트 정책 없음** — 구현 금지 상태
 - Comment Engine 미착수 (`rawComments` 테이블 승격 선행) → **M5**
 - 네이버 카페 세션 · 정책 판단 필요 → **M6**
