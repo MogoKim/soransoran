@@ -1,4 +1,5 @@
 import Image from 'next/image'
+import { BRAND_NAME } from '@/lib/brand-name'
 
 /**
  * 홈 첫 화면 배너 — 사진 위에 커뮤니티 정체성 한 줄.
@@ -38,7 +39,7 @@ export default function HomeHero() {
     <section className="relative w-full overflow-hidden [aspect-ratio:3/1] lg:[aspect-ratio:auto] lg:h-[300px]">
       <Image
         src="/images/hero/soransoran-community-hero.jpg"
-        alt="소란소란 커뮤니티 hero 이미지"
+        alt={`${BRAND_NAME} 커뮤니티 hero 이미지`}
         fill
         priority
         sizes="(min-width: 1200px) 1200px, 100vw"

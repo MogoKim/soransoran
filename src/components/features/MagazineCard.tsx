@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
 import { TITLE_CARD } from '@/lib/typography'
+import { BRAND_NAME } from '@/lib/brand-name'
 
 /**
  * 목록 카드 — 왼쪽 썸네일 · 오른쪽 글.
@@ -50,7 +51,7 @@ export default function MagazineCard({ article }: { article: MagazineArticle }) 
 
         {/* 가운뎃점은 장식이라 낭독하지 않는다. */}
         <span className="flex flex-wrap items-center gap-x-1.5 text-meta text-content-muted">
-          소란소란 편집팀
+          {`${BRAND_NAME} 편집팀`}
           <span aria-hidden>·</span>
           {formatMagazinePublishedDate(article.publishedAt)}
         </span>

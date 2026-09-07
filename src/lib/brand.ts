@@ -11,6 +11,8 @@
  *
  * 색을 교체할 때는 이 두 파일만 고치면 된다.
  */
+import { BRAND_NAME } from './brand-name'
+
 export const BRAND = {
   /** 브랜드 시그니처 — theme-color · OG 장식 면 · 아이콘 배경 */
   color: '#ff6f61',
@@ -77,8 +79,8 @@ function resolveSiteUrl(): string {
 }
 
 export const SITE = {
-  name: '소란소란',
-  title: '소란소란 - 40대 50대 여성을 위한 커뮤니티',
+  name: BRAND_NAME,
+  title: `${BRAND_NAME} - 40대 50대 여성을 위한 커뮤니티`,
   tagline: '40대 50대 여성이 이야기하는 곳',
   description:
     '갱년기, 몸과 마음, 사는 이야기. 40대 50대 여성이 서로의 이야기를 나누는 곳입니다.',

@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { TOUCH_MIN } from '@/lib/spacing'
+import { BRAND_NAME_WITH_TOPIC } from '@/lib/brand-name'
 
 /**
  * 가입 안내 — 카카오 계정의 성별 정보로 가입이 제한된 경우.
@@ -35,7 +36,7 @@ export default function SignupBlockedNotice() {
             가입 안내
           </h1>
           <p className="mt-3 break-keep text-lg leading-relaxed text-content-primary">
-            소란소란은 여성을 위한 커뮤니티로 운영되고 있어요.
+            {`${BRAND_NAME_WITH_TOPIC} 여성을 위한 커뮤니티로 운영되고 있어요.`}
           </p>
           <p className="mt-2 break-keep leading-relaxed text-content-secondary">
             그래서 카카오 계정의 성별 정보를 기준으로 가입이 제한될 수 있습니다. 찾아와 주셨는데

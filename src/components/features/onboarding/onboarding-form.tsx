@@ -10,6 +10,7 @@ import NicknameField, {
 import { AGREEMENT_TYPE, REQUIRED_AGREEMENTS } from '@/lib/agreement-policy'
 import { checkNickname, completeOnboarding } from '@/lib/actions/onboarding'
 import { NICKNAME_AVAILABLE, NICKNAME_TAKEN, validateNicknameFormat } from '@/lib/nickname'
+import { BRAND_NAME } from '@/lib/brand-name'
 import { cn } from '@/lib/utils'
 
 /** 손을 멈춘 뒤에 물어본다. 글자마다 부르면 1분 30건 제한에 금방 닿는다 */
@@ -270,7 +271,7 @@ export default function OnboardingForm({ destination }: { destination: string })
                 반가워요!
               </h1>
               <p className="break-keep leading-relaxed text-content-secondary">
-                소란소란에서 쓰실 닉네임을 정해 주세요
+                {`${BRAND_NAME}에서 쓰실 닉네임을 정해 주세요`}
               </p>
             </div>
 
