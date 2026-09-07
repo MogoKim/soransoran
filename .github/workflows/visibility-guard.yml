@@ -375,6 +375,16 @@ jobs:
       - name: 공급 관제 (등급 경계 · 소스 독립 실패 · read-only 계약)
         run: npm run supply:health-check
 
+      # 발행 여력 예측 — 재고가 있어도 persona 가 없으면 나가지 못한다 (§4-AW ③-b).
+      #
+      # 🔴 2026-09-07 실측: 재고 14/14 로 화면은 초록인데 앞으로 14일 중 절반이 공백이었다.
+      #    재고는 "며칠치" 가 아니다 — persona 회전이 막히면 재고가 아무리 많아도 안 나간다.
+      #
+      # 🔴 KST 경계 · rolling 7일 경계 · 러너 동작 재현(우회 금지)을 고정한다.
+      #    네트워크 0 · LLM 0 · DB 0 — 순수 판정만 본다.
+      - name: 발행 여력 예측 (KST 경계 · rolling 7일 · 러너 재현)
+        run: npm run supply:forecast-check
+
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #
       # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.

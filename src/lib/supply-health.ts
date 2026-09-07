@@ -47,6 +47,12 @@ export type FindingCode =
   | 'PUBLISH_MISMATCH'
   | 'PUBLISH_NO_CANDIDATE'
   | 'PUBLISH_HISTORIC_UNKNOWN'
+  // 발행 여력 (§4-AW ③-b)
+  | 'CAPACITY_OK'
+  | 'NEXT_NOT_ASSIGNABLE'
+  | 'FORECAST_EMPTY'
+  | 'PERSONA_SHORTFALL'
+  | 'FORECAST_LOW'
 
 /**
  * 🔴 **안전 불변 위반과 가용성 실패는 다른 것이다.**

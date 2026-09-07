@@ -24,6 +24,7 @@ import { pathToFileURL } from 'node:url'
 import type { PrismaClient } from '@prisma/client'
 
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import {
   FORBIDDEN_BODY_KEYS, buildReport, judgePublish, judgeSource, judgeSupply, logHintOf,
   PUBLISH_GRACE_MS, type Finding, type HealthReport, type LogFacts,
@@ -31,6 +32,12 @@ import {
 import { STOCK_TARGET, readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
 import { LOCK_FILE, LOCK_TTL_MS, adaptKeyOf, lockDecision } from '../src/lib/supply-autopilot'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
+import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
+import {
+  forecastPublishing, nextScheduleAt, capacityOf, personasNeededFor,
+  splitBlockReasons, kstStamp, judgeCapacity,
+  type PersonaHistory,
+} from '../src/lib/supply-capacity-forecast'
 import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
 import { kstDayStart } from '../src/lib/persona-cap'
 // 🔴 3축 판정은 정본 게이트 함수가 한다 (노출 게이트 C-2 · C-4)
@@ -337,9 +344,112 @@ async function main(): Promise<void> {
     candidates: stock.usable, now,
   })
 
+  // ── ③-b 발행 여력 — 🔴 재고가 있어도 사람이 없으면 나가지 못한다 ──
+  //    러너와 **같은 함수**를 날짜만 밀어 가며 부른다. 새 판정을 만들지 않는다.
+  const queueRows = await prisma.originalPostApprovalQueue.findMany({
+    where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
+    select: {
+      id: true, status: true, createdPostId: true, gateVerdict: true, matchedAt: true,
+      draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+      promptVersion: true, model: true, matchedPersonaId: true, gateResults: true,
+      // 🔴 러너와 **같은 필드**를 읽는다 — compareAutoRow 가 decidedAt·createdAt 으로 정렬한다
+      decidedAt: true, createdAt: true,
+      rawContent: { select: { sourceSite: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  })
+  // 🔴 legacy 를 여기서 뺀다 — selectAutoTargets 가 발행 러너와 같은 기준으로 거른다
+  const { targets: autoTargets } = selectAutoTargets(
+    queueRows.map((r) => ({
+      id: r.id, status: r.status, createdPostId: r.createdPostId,
+      gateVerdict: r.gateVerdict, matchedAt: r.matchedAt,
+      title: S(r.editedTitle) !== '' ? S(r.editedTitle) : S(r.draftTitle),
+      body: S(r.editedBody) !== '' ? S(r.editedBody) : S(r.draftBody),
+      promptVersion: r.promptVersion, model: r.model,
+      matchedPersonaId: r.matchedPersonaId, gateResults: r.gateResults,
+      decidedAt: r.decidedAt, createdAt: r.createdAt,
+      sourceSite: r.rawContent?.sourceSite ?? '',
+    })) as never,
+    (t: string, b: string) => safetyFilter({ title: t, body: b }).verdict,
+  )
+
+  const personaRows = await prisma.persona.findMany({
+    where: { status: 'active' },
+    select: {
+      id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
+      user: { select: { providerId: true } },
+    },
+  })
+  const history: PersonaHistory[] = []
+  const personas = []
+  for (const r of personaRows) {
+    const id = (r.identity ?? {}) as Record<string, unknown>
+    const vc = (r.voiceCore ?? {}) as Record<string, unknown>
+    const past = await prisma.originalPostApprovalQueue.findMany({
+      where: { matchedPersona: { code: r.code }, NOT: { matchedAt: null } },
+      select: { matchedAt: true },
+    })
+    const ats = past.map((x) => x.matchedAt as Date)
+    history.push({ code: r.code, matchedAts: ats })
+    // 🔴 매칭률 집계는 **지금 시점의 실제 여력**으로 봐야 한다.
+    //    0 으로 넣으면 WEEKLY_CAP·TOO_SOON 이 한 번도 안 잡혀 생활사 비율이 100% 로 왜곡된다.
+    const weekAgoNow = new Date(now.getTime() - 7 * 86_400_000)
+    const usedNow = ats.filter((d) => d.getTime() >= weekAgoNow.getTime()).length
+    const lastNow = ats.length === 0 ? null : ats.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
+    personas.push({
+      code: r.code, status: r.status, providerId: r.user?.providerId ?? null,
+      ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
+      maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
+      ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),
+      parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
+      menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
+      workStatus: null, economicStatus: null, region: null,
+      noGoTopics: r.noGoTopics,
+      voiceLength: typeof vc.length === 'string' ? vc.length : null,
+      postsThisWeek: usedNow,
+      daysSinceLastPost: lastNow === null ? null
+        : Math.floor((now.getTime() - lastNow.getTime()) / 86_400_000),
+    })
+  }
+
+  // 🔴 오늘 이미 상한을 채웠으면 다음 예약은 **내일** 00:05 KST 다
+  const startAt = nextScheduleAt({ now, publishedToday: todayCount, dailyCap: DAILY_PUBLISH_CAP })
+  const fc = forecastPublishing({
+    queue: autoTargets.map((t) => ({
+      queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
+    })),
+    personas: personas as never, history, startAt, days: 14, dailyCap: DAILY_PUBLISH_CAP,
+  })
+
+  // 🔴 매칭률은 **자동 후보 × active persona** 로만 센다 (legacy 제외)
+  const blockCounts: Record<string, number> = {}
+  {
+    const { planBatch } = await import('../src/lib/original-post-persona-match')
+    const b = planBatch(
+      autoTargets.map((t) => ({
+        queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
+      })),
+      personas as never,
+    )
+    for (const a of b.assignments) {
+      for (const x of a.blocked) {
+        for (const c of x.reasons) blockCounts[c.code] = (blockCounts[c.code] ?? 0) + 1
+      }
+    }
+  }
+  const split = splitBlockReasons(blockCounts)
+  const cap = capacityOf({ activePersonas: personas.length, lifeBlockRate: split.lifeRate })
+  const need = personasNeededFor({
+    targetPerDay: DAILY_PUBLISH_CAP, lifeBlockRate: split.lifeRate, activePersonas: personas.length,
+  })
+  const capacity = judgeCapacity({
+    stockUsable: stock.usable, in7: fc.in7, nextWillPublish: fc.nextScheduleWillPublish,
+    nextCandidates: fc.nextPersonaCandidates.length, shortfallMin: need.shortfallMin,
+  })
+
   await prisma.$disconnect()
 
-  const report: HealthReport = buildReport({ sources, supply, publish })
+  const report: HealthReport = buildReport({ sources, supply, publish: [...publish, ...capacity] })
 
   if (JSON_OUT) {
     console.log(JSON.stringify({
@@ -348,6 +458,28 @@ async function main(): Promise<void> {
       numbers: {
         stock: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
         target: STOCK_TARGET, todayPublished: todayCount, dailyCap: DAILY_PUBLISH_CAP,
+      },
+      // 🔴 화면과 같은 결과다 — 두 번 계산하지 않는다
+      capacity: {
+        nextScheduleAtKst: kstStamp(startAt),
+        nextQueueId: fc.nextQueueId,
+        nextPersonaCandidates: fc.nextPersonaCandidates,
+        nextScheduleWillPublish: fc.nextScheduleWillPublish,
+        in7: fc.in7, in14: fc.in14,
+        gapDates7: fc.gapDates7, gapDates14: fc.gapDates14,
+        days: fc.days.map((d) => ({
+          date: d.date, persona: d.publishedPersona,
+          queueId: d.publishedQueueId, blocked: d.blockedReason,
+          available: d.availableCodes,
+        })),
+        theoreticalPerWeek: cap.theoreticalPerWeek,
+        theoreticalPerDay: cap.theoreticalPerDay,
+        effectivePerDay: cap.effectivePerDay,
+        activePersonas: personas.length,
+        personasNeeded: { min: need.min, max: need.max },
+        shortfall: { min: need.shortfallMin, max: need.shortfallMax },
+        blocks: { life: split.life, capacity: split.capacity, lifeRate: split.lifeRate },
+        autoCandidates: autoTargets.length,
       },
     }, null, 2))
     process.exit(report.exitCode)
@@ -370,6 +502,25 @@ async function main(): Promise<void> {
 
   console.log('\n③ 발행')
   for (const x of report.publish) console.log(`   ${mark(x)} ${x.message}`)
+
+  console.log('\n③-b 발행 여력 (KST 기준)')
+  console.log(`   다음 예약     ${kstStamp(startAt)}`)
+  console.log(`   다음 대상     ${fc.nextQueueId ?? '(없음)'}`)
+  console.log(`   배정 가능     ${fc.nextPersonaCandidates.length}명${fc.nextPersonaCandidates.length > 0 ? ` (${fc.nextPersonaCandidates.join(' ')})` : ''}`)
+  console.log(`   다음 예약 발행 ${fc.nextScheduleWillPublish ? '🟢 가능' : '🔴 불가'}`)
+  console.log(`   향후 7일      ${fc.in7}건 · 공백 ${fc.gapDates7.length}일${fc.gapDates7.length > 0 ? ` (${fc.gapDates7.join(' ')})` : ''}`)
+  console.log(`   향후 14일     ${fc.in14}건`)
+  console.log(`   이론 capacity ${cap.theoreticalPerWeek}건/주 = ${cap.theoreticalPerDay.toFixed(2)}/day`
+    + ` · 실매칭 반영 ${cap.effectivePerDay.toFixed(2)}/day`)
+  console.log(`   목표 ${DAILY_PUBLISH_CAP}/day 에 필요한 persona ${need.min}~${need.max}명`
+    + ` · 현재 ${personas.length}명 · 부족 ${need.shortfallMin}~${need.shortfallMax}명`)
+  console.log(`   매칭 차단     생활사(영구) ${split.life}회 · 여력(임시) ${split.capacity}회`
+    + ` · 생활사 비율 ${(split.lifeRate * 100).toFixed(1)}%`)
+  console.log('   🔴 표본이 작다 — persona 권장 수는 범위로 읽는다')
+  for (const d of fc.days.slice(0, 7)) {
+    console.log(`     ${d.date}  ${d.publishedPersona ?? '—'}`
+      + `${d.publishedQueueId === null ? `  🔴 ${d.blockedReason}` : ''}`)
+  }
 
   console.log(`\n④ 판정 ${report.level}${report.exitCode === 1 ? ' — exit 1' : ''}`)
   console.log('   🔴 CRITICAL 만 exit 1 이다. WARNING 은 사람이 보고 판단한다\n')
