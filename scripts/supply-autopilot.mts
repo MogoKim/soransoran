@@ -28,6 +28,7 @@ import {
   AUTOPILOT_KILL_SWITCH_ENV, CHILD_KILL_SWITCH_ENV, LOCK_FILE, LOCK_TTL_MS,
   judgeRun, planStages, lockDecision, verifyRun, fmtCount, collectCapFor,
   resumeDecision, stageInputArgs, missingArtifacts, newFiles, runStages, supersedes,
+  mayWriteRunState,
   STAGE_LABEL,
   type Checkpoint, type ExecResult, type LockRecord, type Stage, type StockSnapshot,
 } from '../src/lib/supply-autopilot'
@@ -201,7 +202,8 @@ async function main(): Promise<void> {
   console.log(`  스위치  ${AUTOPILOT_KILL_SWITCH_ENV}=${killOpen ? 'true' : '없음'}`
     + ` · ${CHILD_KILL_SWITCH_ENV}=${childKillOpen ? 'true' : '없음'}\n`)
 
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
+  const canWriteState = mayWriteRunState({ live: LIVE, killOpen, childKillOpen })
+  if (canWriteState && !existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
   const lockPath = join(DATA_DIR, LOCK_FILE)
 
   // ── ① lock ──
@@ -267,12 +269,17 @@ async function main(): Promise<void> {
       //    이어서 돌면 목표를 넘겨 적재하고, 그냥 두면 영구 running 기록이 된다.
       //    산출물은 지우지 않는다 — 다음 회차가 다시 쓸 수 있다.
       if (unfinished !== null && SIM === null && supersedes({ usable: before.stock.usable })) {
-        const closed: Checkpoint = {
-          ...unfinished.cp, status: 'superseded', completedAt: new Date().toISOString(),
+        if (canWriteState) {
+          const closed: Checkpoint = {
+            ...unfinished.cp, status: 'superseded', completedAt: new Date().toISOString(),
+          }
+          writeAtomic(unfinished.path, `${JSON.stringify(closed, null, 2)}\n`)
+          console.log(`   🟡 미완료 회차 ${unfinished.cp.runId} 를 superseded 로 종결했다`)
+          console.log('      재고를 다른 경로가 먼저 채웠다 — 네트워크로 나가지 않는다')
+        } else {
+          console.log(`   🟡 미완료 회차 ${unfinished.cp.runId} 는 live 실행에서 superseded 로 종결할 예정이다`)
+          console.log('      dry-run 또는 닫힌 스위치 — checkpoint 파일은 바꾸지 않는다')
         }
-        writeAtomic(unfinished.path, `${JSON.stringify(closed, null, 2)}\n`)
-        console.log(`   🟡 미완료 회차 ${unfinished.cp.runId} 를 superseded 로 종결했다`)
-        console.log('      재고를 다른 경로가 먼저 채웠다 — 네트워크로 나가지 않는다')
       }
     }
     // 🔴 막혔더라도 "돌면 무엇을 할지" 는 보여준다. 계획을 감추면 dry-run 이 아니다

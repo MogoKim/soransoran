@@ -273,6 +273,20 @@ export function supersedes(input: { usable: number; target?: number }): boolean 
 }
 
 /**
+ * 실행 상태 파일을 바꿔도 되는가.
+ *
+ * dry-run과 kill switch가 닫힌 실행은 관찰만 해야 한다. 재고가 이미 찼더라도
+ * checkpoint를 종결하거나 데이터 디렉터리를 만드는 것은 live 실행에서만 한다.
+ */
+export function mayWriteRunState(input: {
+  live: boolean
+  killOpen: boolean
+  childKillOpen: boolean
+}): boolean {
+  return input.live && input.killOpen && input.childKillOpen
+}
+
+/**
  * 재개할 것인가 — 🔴 **미완료 회차가 있으면 새 수집보다 그것이 먼저다.**
  *
  * 중간에서 끊긴 회차를 두고 새로 collect 부터 시작하면 앞 회차의 수집분 ·

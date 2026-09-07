@@ -11,7 +11,7 @@ import {
   LOCK_TTL_MS, STAGES, DB_WRITE_STAGES, LLM_STAGES, NETWORK_STAGES,
   collectCapFor, judgeRun, planStages, lockDecision, nextStage, shouldStopRun,
   verifyRun, fmtCount, resumeDecision, stageInputArgs, missingArtifacts, newFiles, upstreamOf,
-  attemptOf, runStages, supersedes,
+  attemptOf, runStages, supersedes, mayWriteRunState,
   type Artifacts, type Checkpoint, type ExecResult, type Stage,
   type StageOutcome, type StockSnapshot,
 } from '../src/lib/supply-autopilot'
@@ -458,6 +458,14 @@ for (const broken of ['adapt', 'judge', 'draft', 'fill'] as const) {
 // ── 재고가 먼저 찼을 때 ──
 check('🔴 DB 가 목표를 채웠으면 미완료 회차를 잇지 않는다', supersedes({ usable: 14 }))
 check('🟢 재고가 모자라면 종결하지 않는다', !supersedes({ usable: 13 }))
+check('🔴 dry-run 은 checkpoint 와 데이터 디렉터리를 바꾸지 않는다',
+  !mayWriteRunState({ live: false, killOpen: true, childKillOpen: true }))
+check('🔴 전체 kill switch 가 닫히면 실행 상태를 바꾸지 않는다',
+  !mayWriteRunState({ live: true, killOpen: false, childKillOpen: true }))
+check('🔴 수집 kill switch 가 닫히면 실행 상태를 바꾸지 않는다',
+  !mayWriteRunState({ live: true, killOpen: true, childKillOpen: false }))
+check('🟢 live + 두 스위치가 모두 열릴 때만 실행 상태를 바꾼다',
+  mayWriteRunState({ live: true, killOpen: true, childKillOpen: true }))
 check('🔴 superseded 는 재개 대상이 아니다 — 영구 running 기록을 남기지 않는다', (() => {
   const cp = A({ status: 'superseded', stages: [okOutcome('collect'), failedOutcome('adapt')] })
   // findUnfinished 는 status==='running' 만 집으므로 superseded 는 애초에 잡히지 않는다
