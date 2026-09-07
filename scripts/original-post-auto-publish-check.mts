@@ -9,6 +9,8 @@ import {
   selectAutoTargets, judgeApply, verifyAfterPublish, splitTargets, queueOrderKey, compareAutoRow,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT, REJECT_LABEL,
   type AutoRow,
+  profileOf, machineMarksOk,
+  MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_GATE_MARKS,
 } from '../src/lib/original-post-auto-publish'
 import { kstDayStart } from '../src/lib/original-post-publish'
 
@@ -44,9 +46,10 @@ console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
     ['status 가 DECLINED', { status: 'DECLINED' }, 'STATUS'],
     ['이미 발행됨', { createdPostId: 'post1' }, 'ALREADY_PUBLISHED'],
     ['gate 가 HOLD', { gateVerdict: 'HOLD' }, 'GATE'],
-    ['legacy 판', { promptVersion: '13~14판' }, 'PROMPT_VERSION'],
-    ['LLM 모델', { model: 'gemini-3.7-flash' }, 'MODEL'],
-    ['출처가 synthetic 이 아님', { sourceSite: '82cook' }, 'SITE'],
+    // 🔴 이제 셋을 따로 보지 않고 profile 로 통째로 본다
+    ['legacy 판', { promptVersion: '13~14판' }, 'PROFILE'],
+    ['LLM 모델', { model: 'gemini-3.7-flash' }, 'PROFILE'],
+    ['출처가 synthetic 이 아님', { sourceSite: '82cook' }, 'PROFILE'],
     ['제목이 빔', { title: '  ' }, 'EMPTY'],
     ['본문이 빔', { body: '' }, 'EMPTY'],
   ]
@@ -62,7 +65,53 @@ console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
     return seen === 'T|B'
   })())
   check('EDITED 도 대상이다', selectAutoTargets([ok({ status: 'EDITED' })], allPass).targets.length === 1)
-  check('제외 사유에 라벨이 있다', Object.keys(REJECT_LABEL).length === 8)
+  check('제외 사유에 라벨이 있다', Object.keys(REJECT_LABEL).length === 9)
+}
+
+console.log('\n①-b 🔴 기계 profile — 통째로 맞아야 발행 후보다')
+{
+  const goodGate = { holds: [], blocks: [], autoDraft: { ...MACHINE_GATE_MARKS } }
+  const m = (o: Partial<AutoRow> = {}): AutoRow => ok({
+    promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+    sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`,
+    gateResults: goodGate, ...o,
+  })
+  check('🟢 완전한 기계 profile 은 후보가 된다', selectAutoTargets([m()], allPass).targets.length === 1)
+  check('🟢 사람 profile 은 그대로 후보 (회귀 0)', selectAutoTargets([ok()], allPass).targets.length === 1)
+  check('profileOf 가 둘을 가른다', profileOf(m()) === 'machine' && profileOf(ok()) === 'human')
+
+  // 🔴 일부만 섞인 행은 전부 제외
+  const mixed: [string, Partial<AutoRow>][] = [
+    ['판만 기계 · 모델은 사람', { promptVersion: MACHINE_PROMPT_VERSION }],
+    ['모델만 기계', { model: MACHINE_MODEL }],
+    ['출처만 기계', { sourceSite: `${MACHINE_SITE_PREFIX}x` }],
+    ['판·모델 기계인데 출처가 사람', {
+      promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+      sourceSite: 'publish-candidate:navercafe:x',
+    }],
+  ]
+  for (const [label, patch] of mixed) {
+    const r = selectAutoTargets([ok(patch)], allPass)
+    check(`🔴 ${label} → 제외`, r.targets.length === 0 && r.rejected[0]?.code === 'PROFILE')
+  }
+  check('🔴 gateResults 표시가 없으면 기계가 아니다',
+    selectAutoTargets([m({ gateResults: { holds: [], blocks: [] } })], allPass).targets.length === 0)
+  check('🔴 gateResults 가 옛 판이면 제외', selectAutoTargets([m({
+    gateResults: { autoDraft: { ...MACHINE_GATE_MARKS, draftRuleVersion: 'auto-draft-v2' } },
+  })], allPass).targets.length === 0)
+  check('🔴 provenance 가 사람이면 제외', selectAutoTargets([m({
+    gateResults: { autoDraft: { ...MACHINE_GATE_MARKS, provenance: 'human-curated' } },
+  })], allPass).targets.length === 0)
+  check('🔴 sourceDecision 이 ADOPT 면 제외', selectAutoTargets([m({
+    gateResults: { autoDraft: { ...MACHINE_GATE_MARKS, sourceDecision: 'ADOPT' } },
+  })], allPass).targets.length === 0)
+  check('machineMarksOk 가 셋을 다 본다',
+    machineMarksOk(goodGate) && !machineMarksOk({ autoDraft: {} }) && !machineMarksOk(null))
+  check('🔴 기계 후보도 safety 를 다시 잰다',
+    selectAutoTargets([m()], () => 'hold').targets.length === 0)
+  check('🔴 기계 표시가 사람 것과 겹치지 않는다',
+    (MACHINE_PROMPT_VERSION as string) !== (AUTO_PROMPT_VERSION as string)
+    && (MACHINE_MODEL as string) !== (AUTO_MODEL as string))
 }
 
 console.log('\n② 🔴 legacy APPROVED 5건이 섞이지 않는다')
@@ -82,7 +131,7 @@ console.log('\n② 🔴 legacy APPROVED 5건이 섞이지 않는다')
     !r.targets.some((t) => t.id === 'L1' || t.id === 'L4'))
   check('제외 5건 전부 사유가 남는다', r.rejected.length === 5)
   check('🔴 어느 것도 우연히 통과하지 않는다',
-    r.rejected.every((x) => x.code === 'PROMPT_VERSION' || x.code === 'GATE'))
+    r.rejected.every((x) => x.code === 'PROFILE' || x.code === 'GATE'))
 }
 
 console.log('\n③ 줄 세우기 — 오래 기다린 것이 먼저다')

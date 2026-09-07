@@ -4637,6 +4637,100 @@ stdin 파이프(`... | gh secret set KEY`)로 재등록해 해결했다.
 
 ---
 
+## §4-AT 🟢 기계 후보를 큐와 발행 러너에 잇는다 (§4-AS → §4-AN → §4-AL)
+
+§4-AS 가 낸 기계 초안을 **기존 경로에 태운다.** 새 생성기도 새 판정기도 만들지 않는다 —
+`supply-autofill`(§4-AN)과 `auto-publish`(§4-AL)에 **profile 하나씩을 더할** 뿐이다.
+
+```
+AUTO_SEED(§4-AR) → 초안·채택(§4-AS) → Queue APPROVED(§4-AN) → 발행(§4-AL)
+```
+
+### ⓪ 🔴 2026-09-07 실측 — 근거는 생산자가 실어야 한다
+
+첫 dry-run 에서 적재 예정 9건의 payload 가 **전부 `null`** 이었다. profile tuple 은 다 맞았고
+`machineProfileMismatch` 도 빈 배열이었다. 걸린 곳은 하나뿐이다 —
+`buildQueuePayload` 는 **판정 출처(`autoJudge.ruleVersion`·`provenance`)가 없으면 만들지 않는다.**
+그런데 `auto-draft`(§4-AS)가 후보 행에 그 값을 **싣지 않고** 있었다.
+
+여기서 상수를 찍어 메우면(`ruleVersion: 'auto-judge-v3'`) 큐는 채워지지만
+**그 값은 근거가 아니라 장식이 된다.** 판정을 실제로 거쳤는지 사후에 알 수 없게 된다.
+그래서 소비자가 아니라 **생산자**를 고쳤다 — `auto-draft` 가 `*.shadow.jsonl` 의
+`ruleVersion`·`promptVersion`·`model`·`inputHash`·`provenance` 를 후보마다 **이관**한다.
+
+두 번째 교훈: 이 P0 를 잡은 것은 fixture 가 아니라 **dry-run 의 `③-b` 미리보기**였다.
+fixture 는 "판정 출처가 없으면 만들지 않는다" 를 이미 통과하고 있었다 —
+없었던 것은 **실제 산출물로 만든 payload 를 발행 러너 눈(`profileOf`)으로 보는 단계**다.
+그래서 dry-run 은 이제 적재될 값을 그대로 만들어 profile 을 세고, 못 만든 건은 사유까지 찍는다.
+**DB write 는 여전히 0 이다.**
+
+### ① 🔴 profile 은 통째로 맞아야 한다
+
+필드를 하나씩 독립으로 보면 **섞인 행이 통과한다.** `sourceDecision` 만 `AUTO_ADOPT` 이고
+provenance 가 사람 것이면 그 행은 어느 경로로 들어왔는지 알 수 없고,
+"기계가 만든 글" 과 "사람이 고른 글" 의 구분이 무너진다. 그 구분 위에 이 레인이 서 있다.
+
+| | 사람 profile | 기계 profile |
+|---|---|---|
+| 봉투 provenance | (없음) | `machine-generated` |
+| 봉투 ruleVersion | — | `auto-draft-v3` |
+| `sourceDecision` | `ADOPT` · `SAVE` | `AUTO_ADOPT` |
+| `sourceInput` | — | `auto-judge` |
+| `candidateType` | seed · raw | `seedOriginality` |
+
+🔴 **봉투(envelope)를 버리고 행만 읽지 않는다.** 행에는 봉투 값이 없어서,
+행만 보면 기계 profile 을 검증할 방법이 없다.
+🔴 **`provenanceNote` 같은 자유 문자열을 믿지 않는다.** 그건 사람이 읽는 메모다.
+
+### ② 🔴 겹침 경계가 어긋나 있었다
+
+`supply-autofill` 이 `maxOverlap > 6` 으로 재고 있어서 **정확히 6자가 통과**했다.
+초안 생성 쪽(§4-AS)은 `< 6` 으로 막고 있었으므로 **두 곳의 기준이 달랐다.**
+느슨한 쪽에 맞추면 엄한 쪽 검사가 무의미해진다 — `>= 6` 으로 고쳤고,
+사람 후보와 기계 후보 양쪽에 fixture 를 뒀다.
+
+### ③ Queue 에 남기는 표시
+
+```
+promptVersion  publish-candidate-auto-v1
+model          claude-haiku-4.5          (실제 생성 모델)
+decidedBy      machine:auto-draft-v3     🔴 founder 가 아니다
+sourceSite     publish-candidate:auto:…  🔴 사람 접두와 다르다
+```
+
+`gateResults.autoDraft` 에 provenance · sourceDecision · draft/judge 판 · 모델 ·
+`draftFrom` · safety · overlap · `queuedAt` 을 구조화해 남긴다.
+🔴 `founder` · `human-curated` · `ADOPT` · `SAVE` 를 기계 후보에 쓰지 않는다.
+스키마는 바꾸지 않았다 — 기존 컬럼과 JSON 필드만 쓴다.
+
+### ④ 적재 직전 재검증
+
+파일과 DB 사이에 시간이 흐른다. **§4-AS 의 함수를 그대로 다시 부른다** —
+safety · 금지어 · 겹침 · 반말 · 마지막 물음표 · 제목 낱말 반복 · 제목 되풀이 ·
+빈 값 · 중복 · 형제. 🔴 **새 판정을 만들지 않고 LLM 도 다시 부르지 않는다.**
+두 곳이 다른 기준을 쓰면 어느 쪽이 맞는지 알 수 없게 된다.
+
+### ⑤ 발행 allowlist
+
+`auto-publish` 가 두 profile 을 받는다. 기계 profile 은 큐 컬럼 셋에 더해
+**`gateResults` 의 표시까지** 본다 — 컬럼만 맞으면 누군가 손으로 넣었을 때 통과한다.
+🔴 일부만 섞인 행은 전부 제외. legacy 5건은 계속 후보 0이다.
+발행 직전 safety 재판정 · kill switch · cap/pacing · persona 배정 규칙은 **바꾸지 않았다.**
+
+### ⑥ 재고
+
+`readStock` 이 두 판(`publish-candidate-v1` · `publish-candidate-auto-v1`)을 센다.
+legacy · HOLD · 발행 완료는 재고가 아니다. `STOCK_TARGET = 14` 는 그대로다.
+
+### ⑦ 실측 (2026-09-07)
+
+```
+기계 후보 파일 16건 → supply dry-run 보충 후보 16건 · DB write 0
+auto-publish dry-run  후보 5건 (기존 human 재고) — 아직 DB 미적재라 정상
+```
+
+---
+
 ## §4-C 🟡 Growth Issue 레인 — **전략만 적는다. 구현하지 않았다**
 
 > 🔴 **상태: 미구현.** 코드 · 분류기 · cap · 감사 경로 **어느 것도 없다.**

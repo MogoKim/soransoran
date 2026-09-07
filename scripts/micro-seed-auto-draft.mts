@@ -76,6 +76,14 @@ function jsonl(path: string): Record<string, unknown>[] {
 }
 
 /** 최신 판정 파일의 AUTO_SEED — 🔴 회차가 여럿이면 마지막 판정이 정본이다 */
+/** 🔴 판정 출처. Judgement 는 초안 생성에 필요한 3필드만 담으므로 따로 모은다 —
+ *  상수를 찍지 않고 **그 판에서 나온 값**을 후보에 이관하기 위한 것이다 (§4-AT) */
+type JudgeProv = {
+  ruleVersion: string; promptVersion: string; model: string
+  inputHash: string; provenance: string
+}
+const seedProv = new Map<string, JudgeProv>()
+
 function loadAutoSeeds(): Judgement[] {
   const files = filesEnding('.shadow.jsonl')
   if (files.length === 0) return []
@@ -87,6 +95,10 @@ function loadAutoSeeds(): Judgement[] {
       byId.set(id, {
         sourceArticleId: id, decision: S(r.decision),
         semanticRisks: Array.isArray(r.semanticRisks) ? r.semanticRisks.map(String) : [],
+      })
+      seedProv.set(id, {
+        ruleVersion: S(r.ruleVersion), promptVersion: S(r.promptVersion),
+        model: S(r.model), inputHash: S(r.inputHash), provenance: S(r.provenance),
       })
     }
   }
@@ -523,6 +535,8 @@ async function main(): Promise<void> {
   const candPath = join(DATA_DIR, `auto-draft-${rid}.candidates.json`)
   for (const pp of [pickPath, candPath]) if (!isInsideDataDir(pp)) fail(`${pp} 은 ${DATA_DIR}/ 밖이다`)
   writeFileSync(pickPath, `${picks.map((pp) => JSON.stringify(pp)).join('\n')}\n`, 'utf-8')
+  // 🔴 후보마다 "어느 판정에서 왔는지"를 실어 보낸다. 상수를 찍으면 근거가 아니라 장식이 된다 —
+  //    supply-autofill 은 이 값이 없으면 큐 payload 를 만들지 않는다 (§4-AT)
   writeFileSync(candPath, `${JSON.stringify({
     note: '🔴 기계가 만들고 기계가 고른 초안이다. 사람의 ADOPT 가 아니다 —'
       + ' sourceDecision 이 AUTO_ADOPT 라 supply-autofill 이 받지 않는다.',
@@ -539,6 +553,7 @@ async function main(): Promise<void> {
       safetyVerdict: a.draft.safetyVerdict, maxOverlap: a.draft.overlap,
       leakedTokens: '', reviewedAt: nowIso, writtenAt: a.draft.generatedAt,
       provenanceNote: `기계 생성 · ${DRAFT_RULE_VERSION} · ${DRAFT_PROVENANCE} · ${a.from}`,
+      autoJudge: seedProv.get(a.pick.sourceArticleId) ?? null,
     })),
   }, null, 2)}\n`, 'utf-8')
   saveCache(cache)

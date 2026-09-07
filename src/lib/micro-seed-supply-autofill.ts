@@ -37,7 +37,133 @@ export const REQUIRED_DECISION: Readonly<Record<string, string>> = {
   rawOriginality: 'SAVE',
 }
 
-/** 원문이 새지 않았다고 볼 수 있는 선 — 후보 파일이 이미 재는 값이다 */
+/**
+ * 🔴 **기계 후보 profile — 통째로 맞아야 받는다** (§4-AT)
+ *
+ * `micro-seed-auto-draft`(§4-AS)가 낸 후보를 받는 자리다.
+ * 사람 경로(`ADOPT` · `SAVE`)는 그대로 두고 **별도 profile** 로 더한다.
+ *
+ * 🔴 **필드를 하나씩 독립으로 보지 않는다.** `sourceDecision` 만 맞고 provenance 가
+ *    사람 것이면 통과해서는 안 된다 — 그런 행은 어느 쪽 경로로 들어왔는지 알 수 없고,
+ *    "기계가 만든 글" 과 "사람이 고른 글" 의 구분이 무너진다.
+ *    그래서 **완전한 tuple** 로만 받는다. 하나라도 어긋나면 전부 거절이다.
+ *
+ * 🔴 **`provenanceNote` 같은 자유 문자열을 믿지 않는다.** 그건 사람이 읽는 메모다.
+ */
+export const MACHINE_PROFILE = {
+  /** 파일 봉투(envelope)의 값 — 🔴 행만 읽고 봉투를 버리면 안 된다 */
+  envelopeProvenance: 'machine-generated',
+  envelopeRuleVersion: 'auto-draft-v3',
+  envelopePromptVersion: 'draft-gen-v3',
+  envelopeModel: 'claude-haiku-4.5',
+  /** 행의 값 */
+  sourceDecision: 'AUTO_ADOPT',
+  sourceInput: 'auto-judge',
+  candidateType: 'seedOriginality',
+} as const
+
+/** 🔴 기계 후보가 큐에 남길 표시 — 사람 것과 한 글자도 겹치지 않는다 */
+export const MACHINE_PROMPT_VERSION = 'publish-candidate-auto-v1'
+export const MACHINE_MODEL = 'claude-haiku-4.5'
+export const MACHINE_DECIDED_BY = 'machine:auto-draft-v3'
+export const MACHINE_SITE_PREFIX = 'publish-candidate:auto:'
+
+/** 🔴 사람 값 — 기계 경로가 이 값을 쓰면 안 된다 */
+export const HUMAN_ONLY_VALUES: readonly string[] = [
+  'founder', 'human-curated', 'ADOPT', 'SAVE',
+] as const
+
+export type Envelope = {
+  provenance?: string
+  ruleVersion?: string
+  promptVersion?: string
+  model?: string
+}
+
+/**
+ * 이 후보가 기계 profile 을 **통째로** 만족하는가.
+ *
+ * 🔴 어긋난 항목을 전부 돌려준다 — "무엇이 안 맞았나" 를 조용히 삼키지 않는다.
+ */
+export function machineProfileMismatch(
+  env: Envelope, c: Candidate,
+): string[] {
+  const bad: string[] = []
+  const eq = (got: unknown, want: string, label: string): void => {
+    if (S(got) !== want) bad.push(`${label}=${S(got) || '(없음)'} (기대 ${want})`)
+  }
+  eq(env.provenance, MACHINE_PROFILE.envelopeProvenance, 'envelope.provenance')
+  eq(env.ruleVersion, MACHINE_PROFILE.envelopeRuleVersion, 'envelope.ruleVersion')
+  eq(env.promptVersion, MACHINE_PROFILE.envelopePromptVersion, 'envelope.promptVersion')
+  eq(env.model, MACHINE_PROFILE.envelopeModel, 'envelope.model')
+  eq(c.sourceDecision, MACHINE_PROFILE.sourceDecision, 'sourceDecision')
+  eq(c.sourceInput, MACHINE_PROFILE.sourceInput, 'sourceInput')
+  eq(c.candidateType, MACHINE_PROFILE.candidateType, 'candidateType')
+  eq(c.safetyVerdict, 'pass', 'safetyVerdict')
+  // 🔴 **숫자로 존재해야 한다.** 없으면 `?? 0` 이 0 을 만들어 통과시킨다 —
+  //    "재지 않았다" 가 "겹침 0" 이 되는 것이 provenance 세탁의 시작이다
+  const ov = c.maxOverlap
+  if (typeof ov !== 'number' || !Number.isFinite(ov)) bad.push('maxOverlap 이 숫자가 아니다')
+  else if (ov < 0 || ov >= MAX_ALLOWED_OVERLAP) bad.push(`maxOverlap=${ov} (0~${MAX_ALLOWED_OVERLAP - 1})`)
+  if (S(c.leakedTokens) !== '') bad.push(`leakedTokens=${S(c.leakedTokens)}`)
+  return bad
+}
+
+/**
+ * 🔴 **큐 행이 어느 profile 인가 — 발행 러너와 같은 눈으로 본다.**
+ *
+ * 적재기와 발행기가 각자 판정하면 두 구현이 갈라진다. 실제로 갈라졌었다 —
+ * 적재기가 사람 접두를 붙이는 동안 발행기는 기계 접두를 찾고 있었고,
+ * 그러면 **넣은 행을 아무도 못 먹는다.**
+ * 여기가 그 판정의 단일 지점이고, `original-post-auto-publish` 가 이걸 부른다.
+ */
+export type QueueProfileRow = {
+  promptVersion: string
+  model: string
+  sourceSite: string
+  gateResults?: unknown
+}
+
+export function queueProfileOf(r: QueueProfileRow): 'human' | 'machine' | null {
+  if (r.promptVersion === AUTOFILL_PROMPT_VERSION
+    && r.model === AUTOFILL_MODEL
+    && r.sourceSite.startsWith(AUTOFILL_SITE_PREFIX)
+    // 🔴 사람 접두가 기계 접두의 앞부분이므로 반드시 배제한다
+    && !r.sourceSite.startsWith(MACHINE_SITE_PREFIX)) return 'human'
+
+  if (r.promptVersion === MACHINE_PROMPT_VERSION
+    && r.model === MACHINE_MODEL
+    && r.sourceSite.startsWith(MACHINE_SITE_PREFIX)
+    && machineGateOk(r.gateResults)) return 'machine'
+
+  return null
+}
+
+/** gateResults 에 기계 표시가 온전히 남아 있는가 */
+export function machineGateOk(gate: unknown): boolean {
+  if (gate === null || typeof gate !== 'object') return false
+  const g = (gate as Record<string, unknown>).autoDraft
+  if (g === null || typeof g !== 'object') return false
+  const m = g as Record<string, unknown>
+  return String(m.provenance ?? '') === MACHINE_PROFILE.envelopeProvenance
+    && String(m.sourceDecision ?? '') === MACHINE_PROFILE.sourceDecision
+    && String(m.draftRuleVersion ?? '') === MACHINE_PROFILE.envelopeRuleVersion
+}
+
+/** 🔴 사람 값을 사칭했는가 — 하나라도 있으면 기계 후보가 아니다 */
+export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
+  const vals = [S(env.provenance), S(c.sourceDecision), S(env.model), S(env.promptVersion)]
+  return vals.some((v) => HUMAN_ONLY_VALUES.includes(v))
+}
+
+/**
+ * 원문이 새지 않았다고 볼 수 있는 선 — 후보 파일이 이미 재는 값이다.
+ *
+ * 🔴 **6자 "미만" 이다.** 이 파일은 `> MAX_ALLOWED_OVERLAP` 으로 재고 있어서
+ *    정확히 6자가 통과했다(2026-09-07 실측). 초안 생성 쪽(`micro-seed-auto-draft`)은
+ *    `overlap < MAX_OVERLAP` 으로 6자를 막고 있었으므로 **두 곳의 기준이 어긋나 있었다.**
+ *    통과선을 느슨한 쪽에 맞추면 엄한 쪽 검사가 무의미해진다.
+ */
 export const MAX_ALLOWED_OVERLAP = 6
 
 /** 재고 기준선 (§4-AN) */
@@ -54,16 +180,24 @@ export type StockLevel = 'critical' | 'low' | 'ok'
  * 그래서 큐 전체 건수를 세면 재고를 과대평가한다 — 2026-09-07 에 큐가 9건인데
  * 러너 후보는 0건이었던 것이 그 경우다.
  */
-export function readStock(rows: readonly {
-  status: string; promptVersion: string; createdPostId: string | null
-}[]): { usable: number; level: StockLevel; shortfall: number } {
-  const usable = rows.filter((r) =>
-    r.promptVersion === AUTOFILL_PROMPT_VERSION
-    && (r.status === 'APPROVED' || r.status === 'EDITED')
-    && (r.createdPostId === null || r.createdPostId === ''),
-  ).length
+/** 🔴 러너가 먹는 판 — 사람 것과 기계 것 둘 다 */
+export const USABLE_PROMPT_VERSIONS: readonly string[] = [
+  AUTOFILL_PROMPT_VERSION, MACHINE_PROMPT_VERSION,
+] as const
+
+export function readStock(rows: readonly (QueueProfileRow & {
+  status: string; createdPostId: string | null
+})[]): { usable: number; level: StockLevel; shortfall: number; human: number; machine: number } {
+  // 🔴 **promptVersion 만 보지 않는다.** 발행 러너가 인정하는 행만 재고다 —
+  //    판만 맞고 접두나 게이트 기록이 어긋난 행은 넣어도 아무도 못 먹는다.
+  const live = rows.filter((r) =>
+    (r.status === 'APPROVED' || r.status === 'EDITED')
+    && (r.createdPostId === null || r.createdPostId === ''))
+  const human = live.filter((r) => queueProfileOf(r) === 'human').length
+  const machine = live.filter((r) => queueProfileOf(r) === 'machine').length
+  const usable = human + machine
   const level: StockLevel = usable <= STOCK_WARN ? 'critical' : usable < STOCK_MIN ? 'low' : 'ok'
-  return { usable, level, shortfall: Math.max(0, STOCK_TARGET - usable) }
+  return { usable, level, shortfall: Math.max(0, STOCK_TARGET - usable), human, machine }
 }
 
 export type Candidate = {
@@ -87,17 +221,20 @@ export type HeldEntry = { sourceArticleId: string; title: string; reason?: strin
 export type SkipCode =
   | 'TYPE' | 'DECISION' | 'SAFETY' | 'OVERLAP' | 'LEAK' | 'EMPTY'
   | 'ALREADY' | 'HELD' | 'SIBLING'
+  | 'PROFILE' | 'IMPERSONATION'
 
 export const SKIP_LABEL: Record<SkipCode, string> = {
   TYPE: 'seedOriginality · rawOriginality 가 아니다 (SRN 은 경로가 다르다)',
   DECISION: '사람이 채택한 표시가 없다 (Seed=ADOPT · Raw=SAVE)',
   SAFETY: 'safety 가 pass 가 아니다',
-  OVERLAP: `원문 겹침이 ${MAX_ALLOWED_OVERLAP}자를 넘는다`,
+  OVERLAP: `원문 겹침이 ${MAX_ALLOWED_OVERLAP}자 이상이다 (${MAX_ALLOWED_OVERLAP}자 미만이어야 한다)`,
   LEAK: '유출 토큰이 있다',
   EMPTY: '제목이나 본문이 비었다',
   ALREADY: '이미 큐에 올라갔다',
   HELD: '🔴 사람이 보류한 글이다',
   SIBLING: '같은 원문의 형제가 아직 큐에서 안 나갔다',
+  PROFILE: '🔴 사람 profile 도 기계 profile 도 아니다 — 섞인 조합은 받지 않는다',
+  IMPERSONATION: '🔴 기계 후보가 사람 값을 쓰고 있다',
 }
 
 export type Skip = { title: string; code: SkipCode }
@@ -155,6 +292,8 @@ export function baseArticleId(synthetic: string): string {
 }
 
 export type RefillInput = {
+  /** 🔴 파일 봉투 — 행만 읽고 버리면 기계 profile 을 검증할 수 없다 */
+  envelope?: Envelope
   candidates: readonly Candidate[]
   held: readonly HeldEntry[]
   /** 이미 큐에 올라간 것들의 provenanceKey */
@@ -185,9 +324,19 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
     const type = S(c.candidateType)
 
     if (!AUTOFILL_ALLOWED_TYPES.includes(type)) { push(title, 'TYPE'); continue }
-    if (S(c.sourceDecision) !== REQUIRED_DECISION[type]) { push(title, 'DECISION'); continue }
+
+    // 🔴 **두 profile 중 하나를 통째로 만족해야 한다.** 섞인 조합은 받지 않는다.
+    const env = input.envelope ?? {}
+    const isHumanShape = S(c.sourceDecision) === REQUIRED_DECISION[type]
+      && S(env.provenance) !== MACHINE_PROFILE.envelopeProvenance
+    const machineBad = machineProfileMismatch(env, c)
+    const isMachineShape = machineBad.length === 0
+    if (!isHumanShape && !isMachineShape) { push(title, 'PROFILE'); continue }
+    // 🔴 기계 후보가 사람 값을 쓰고 있으면 거절한다 — 사칭이다
+    if (isMachineShape && impersonatesHuman(env, c)) { push(title, 'IMPERSONATION'); continue }
     if (S(c.safetyVerdict) !== 'pass') { push(title, 'SAFETY'); continue }
-    if (Number(c.maxOverlap ?? 0) > MAX_ALLOWED_OVERLAP) { push(title, 'OVERLAP'); continue }
+    // 🔴 `>=` 다. `>` 였을 때 정확히 6자가 통과했다
+    if (Number(c.maxOverlap ?? 0) >= MAX_ALLOWED_OVERLAP) { push(title, 'OVERLAP'); continue }
     if (S(c.leakedTokens) !== '') { push(title, 'LEAK'); continue }
     if (title === '' || S(c.body) === '') { push(title, 'EMPTY'); continue }
     if (input.existing.has(provenanceKeyOf(id, title))) { push(title, 'ALREADY'); continue }
@@ -255,4 +404,116 @@ export function verifyAfterRefill(input: {
     problems.push(`🔴 Post 가 ${input.before.post} → ${input.after.post} 로 변했다 — 공급은 발행하지 않는다`)
   }
   return { ok: problems.length === 0, problems }
+}
+
+
+/**
+ * 🔴 **큐에 넣을 값을 여기서 만든다 — 순수 함수다.**
+ *
+ * 2026-09-07 에 러너가 기계 후보에도 사람 접두(`publish-candidate:`)를 붙였다.
+ * 그러면 발행 러너의 `queueProfileOf` 가 그 행을 `null` 로 보고 **넣은 것을 아무도 못 먹는다.**
+ * 값 만들기를 러너에 두면 이런 어긋남을 fixture 가 볼 수 없다 — 그래서 여기로 옮긴다.
+ *
+ * 🔴 **입력이 틀렸는데 정상 상수를 찍지 않는다.** profile 이 어긋난 후보로는
+ *    payload 를 만들지 않는다(`null`) — 그게 provenance 세탁이다.
+ */
+export type QueuePayload = {
+  profile: 'human' | 'machine'
+  syntheticSite: string
+  decidedBy: string
+  promptVersion: string
+  model: string
+  gateResults: Record<string, unknown>
+}
+
+export type AutoJudgeProvenance = {
+  ruleVersion?: string
+  promptVersion?: string
+  model?: string
+  inputHash?: string
+  provenance?: string
+}
+
+export function buildQueuePayload(input: {
+  envelope: Envelope
+  candidate: Candidate
+  /** 🔴 후보에 실려 온 판정 출처. 상수를 찍지 않고 **이관**한다 */
+  autoJudge?: AutoJudgeProvenance
+  now: string
+}): QueuePayload | null {
+  const { envelope: env, candidate: c } = input
+  const site = S(c.sourceSite)
+  const machineBad = machineProfileMismatch(env, c)
+  const isMachine = machineBad.length === 0
+
+  if (isMachine) {
+    if (impersonatesHuman(env, c)) return null
+    const aj = input.autoJudge ?? {}
+    // 🔴 판정 출처가 없으면 만들지 않는다 — 있지도 않은 근거를 지어내지 않는다
+    if (S(aj.ruleVersion) === '' || S(aj.provenance) === '') return null
+    return {
+      profile: 'machine',
+      // 🔴 여기가 P0 였다. 기계는 기계 접두다
+      syntheticSite: `${MACHINE_SITE_PREFIX}${site}`,
+      decidedBy: MACHINE_DECIDED_BY,
+      promptVersion: MACHINE_PROMPT_VERSION,
+      model: MACHINE_MODEL,
+      gateResults: {
+        holds: [], blocks: [],
+        autofill: {
+          note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
+          candidateType: S(c.candidateType),
+          sourceDecision: S(c.sourceDecision),
+          safetyVerdict: S(c.safetyVerdict),
+          maxOverlap: Number(c.maxOverlap ?? 0),
+          sourceInput: S(c.sourceInput),
+          filledAt: input.now,
+        },
+        autoDraft: {
+          provenance: MACHINE_PROFILE.envelopeProvenance,
+          sourceDecision: MACHINE_PROFILE.sourceDecision,
+          draftRuleVersion: S(env.ruleVersion),
+          draftPromptVersion: S(env.promptVersion),
+          model: S(env.model),
+          draftFrom: S((c as unknown as Record<string, unknown>).draftFrom),
+          safetyVerdict: S(c.safetyVerdict),
+          maxOverlap: Number(c.maxOverlap ?? 0),
+          queuedAt: input.now,
+        },
+        // 🔴 상수가 아니라 **후보에 실려 온 값**이다. 그 판에서 만들어졌다는 증거다
+        autoJudge: {
+          ruleVersion: S(aj.ruleVersion),
+          promptVersion: S(aj.promptVersion),
+          model: S(aj.model),
+          inputHash: S(aj.inputHash),
+          provenance: S(aj.provenance),
+        },
+      },
+    }
+  }
+
+  // 사람 경로 — 기존 그대로
+  const type = S(c.candidateType)
+  if (S(c.sourceDecision) !== REQUIRED_DECISION[type]) return null
+  if (S(env.provenance) === MACHINE_PROFILE.envelopeProvenance) return null
+  return {
+    profile: 'human',
+    syntheticSite: `${AUTOFILL_SITE_PREFIX}${site}`,
+    decidedBy: 'founder',
+    promptVersion: AUTOFILL_PROMPT_VERSION,
+    model: AUTOFILL_MODEL,
+    gateResults: {
+      holds: [], blocks: [],
+      autofill: {
+        note: '공급 자동 보충 — 사람이 고른 글이다. LLM 생성이 아니다',
+        candidateType: type,
+        sourceDecision: S(c.sourceDecision),
+        safetyVerdict: S(c.safetyVerdict),
+        maxOverlap: Number(c.maxOverlap ?? 0),
+        sourceInput: S(c.sourceInput),
+        provenanceNote: S(c.provenanceNote),
+        filledAt: input.now,
+      },
+    },
+  }
 }
