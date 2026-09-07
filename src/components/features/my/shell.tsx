@@ -48,7 +48,7 @@ export function MenuRow({ href, label }: { href: string; label: string }) {
     <li>
       <Link
         href={href}
-        className="flex min-h-[56px] items-center gap-3 py-1 text-content-primary no-underline transition-colors duration-150 hover:text-brand-ink active:text-brand-ink"
+        className="flex min-h-[56px] items-center gap-3 py-1 text-content-primary no-underline transition-colors duration-150 hover:text-brand-strong active:text-brand-strong"
       >
         <span className="break-keep">{label}</span>
         <span aria-hidden className="ml-auto shrink-0 text-content-muted">

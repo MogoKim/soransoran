@@ -21,7 +21,7 @@ export default function SignupBlockedNotice() {
       <nav className="shrink-0 px-4 pt-[max(10px,env(safe-area-inset-top))]">
         <Link
           href="/"
-          className={`inline-flex ${TOUCH_MIN} items-center gap-1 px-2 font-bold text-content-primary no-underline transition duration-150 hover:text-brand-ink active:scale-[0.98]`}
+          className={`inline-flex ${TOUCH_MIN} items-center gap-1 px-2 font-bold text-content-primary no-underline transition duration-150 hover:text-brand-strong active:scale-[0.98]`}
         >
           <span className="text-2xl leading-none" aria-hidden>
             ‹
@@ -55,7 +55,7 @@ export default function SignupBlockedNotice() {
       <div className="shrink-0 px-6 pb-[max(24px,env(safe-area-inset-bottom))]">
         <Link
           href="/contact"
-          className={`inline-flex ${TOUCH_MIN} w-full items-center justify-center rounded-lg border border-interactive px-6 font-bold text-brand-ink no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
+          className={`inline-flex ${TOUCH_MIN} w-full items-center justify-center rounded-lg border border-interactive px-6 font-bold text-brand-strong no-underline transition duration-150 hover:bg-surface-soft active:scale-[0.98]`}
         >
           문의하기
         </Link>

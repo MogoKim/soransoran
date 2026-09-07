@@ -24,7 +24,7 @@ export default function ReplyForm({
       <button
         type="button"
         onClick={() => setOpenParentId(parentId)}
-        className={`inline-flex ${TOUCH_MIN} items-center rounded-lg px-2 text-sm text-content-muted transition duration-150 hover:text-brand-ink active:scale-[0.98]`}
+        className={`inline-flex ${TOUCH_MIN} items-center rounded-lg px-2 text-sm text-content-muted transition duration-150 hover:text-brand-strong active:scale-[0.98]`}
       >
         답글
       </button>

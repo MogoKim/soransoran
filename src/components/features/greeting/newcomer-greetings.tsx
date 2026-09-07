@@ -61,7 +61,7 @@ export default function NewcomerGreetings({ greetings }: { greetings: NewcomerGr
                *    각자 온전히 유지한 채 다음 줄로 넘긴다.
                */}
               <div className="mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
-                <span className="break-keep font-bold text-brand-ink">{g.name}</span>
+                <span className="break-keep font-bold text-brand-strong">{g.name}</span>
                 <span className="text-sm text-content-muted">님이 인사를 남겼어요</span>
               </div>
 
@@ -71,7 +71,7 @@ export default function NewcomerGreetings({ greetings }: { greetings: NewcomerGr
                *    나머지는 눌러서 본다.
                */}
               {g.content ? (
-                <p className="m-0 line-clamp-2 break-keep font-medium leading-[1.5] text-content-primary transition-colors duration-150 group-hover:text-brand-ink group-active:text-brand-ink">
+                <p className="m-0 line-clamp-2 break-keep font-medium leading-[1.5] text-content-primary transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong">
                   {g.content}
                 </p>
               ) : null}

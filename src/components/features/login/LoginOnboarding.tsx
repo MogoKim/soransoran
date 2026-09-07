@@ -95,7 +95,7 @@ export default function LoginOnboarding({
         type="button"
         onClick={() => router.back()}
         aria-label="뒤로가기"
-        className={`absolute left-2 top-[max(10px,env(safe-area-inset-top))] z-10 flex ${TOUCH_MIN} items-center gap-1 px-2 text-content-primary transition duration-150 hover:text-brand-ink active:scale-[0.98]`}
+        className={`absolute left-2 top-[max(10px,env(safe-area-inset-top))] z-10 flex ${TOUCH_MIN} items-center gap-1 px-2 text-content-primary transition duration-150 hover:text-brand-strong active:scale-[0.98]`}
       >
         <span className="text-2xl leading-none" aria-hidden>
           ‹

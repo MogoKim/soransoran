@@ -230,8 +230,8 @@ export default function PostActionBar({
           aria-pressed={liked}
           className={
             liked
-              ? `inline-flex ${TOUCH_MIN} items-center gap-2 rounded-full border border-interactive bg-surface-soft px-4 text-sm font-bold text-brand-ink transition duration-150 active:scale-[0.98]`
-              : `inline-flex ${TOUCH_MIN} items-center gap-2 rounded-full border border-interactive px-4 text-sm font-bold text-brand-ink transition duration-150 hover:bg-surface-soft active:scale-[0.98]`
+              ? `inline-flex ${TOUCH_MIN} items-center gap-2 rounded-full border border-interactive bg-surface-soft px-4 text-sm font-bold text-brand-strong transition duration-150 active:scale-[0.98]`
+              : `inline-flex ${TOUCH_MIN} items-center gap-2 rounded-full border border-interactive px-4 text-sm font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]`
           }
         >
           <svg
@@ -261,7 +261,7 @@ export default function PostActionBar({
             aria-label="공유"
             aria-haspopup="menu"
             aria-expanded={shareOpen}
-            className={`inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-lg px-3 text-sm text-content-muted transition duration-150 hover:text-brand-ink active:scale-[0.98]`}
+            className={`inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-lg px-3 text-sm text-content-muted transition duration-150 hover:text-brand-strong active:scale-[0.98]`}
           >
             <svg
               aria-hidden
@@ -368,7 +368,7 @@ export default function PostActionBar({
           aria-label="더보기"
           aria-haspopup="dialog"
           aria-expanded={sheetOpen}
-          className={`inline-flex ${TOUCH_MIN} min-w-[52px] items-center justify-center rounded-lg text-content-muted transition duration-150 hover:text-brand-ink active:scale-[0.98]`}
+          className={`inline-flex ${TOUCH_MIN} min-w-[52px] items-center justify-center rounded-lg text-content-muted transition duration-150 hover:text-brand-strong active:scale-[0.98]`}
         >
           <svg aria-hidden viewBox="0 0 24 24" className="h-[22px] w-[22px]" fill="currentColor">
             <circle cx="5" cy="12" r="1.8" />
@@ -414,7 +414,7 @@ export default function PostActionBar({
             type="button"
             onClick={onScrap}
             aria-pressed={scrapped}
-            className={`flex ${TOUCH_MIN} items-center gap-3 text-content-primary transition-colors duration-150 hover:text-brand-ink`}
+            className={`flex ${TOUCH_MIN} items-center gap-3 text-content-primary transition-colors duration-150 hover:text-brand-strong`}
           >
             <svg
               aria-hidden

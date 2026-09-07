@@ -13,7 +13,7 @@ const BADGE_TEXT: Record<Badge, string> = {
 
 /** 🔴 --brand 는 글자로 못 쓴다(바탕 위 2.46:1). 읽는 브랜드색은 brand-ink 다 */
 const BADGE_CLASS: Record<Badge, string> = {
-  required: 'font-bold text-brand-ink',
+  required: 'font-bold text-brand-strong',
   optional: 'text-content-muted',
 }
 

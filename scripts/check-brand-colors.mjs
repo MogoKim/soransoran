@@ -9,7 +9,7 @@
  * 🔴 두 곳이라는 사실 자체는 문제가 아니다. 문제는 **한쪽만 움직이는 것**이다.
  *    globals.css 를 고치면 화면은 바뀌지만 OG 이미지·manifest·최후 에러 화면은
  *    옛 색으로 남는다. 빌드도 타입도 통과하고, 아무도 모른 채 배포된다.
- *    (실제로 그 상태가 하나 있다 — 아래 KNOWN_DRIFT 참조)
+ *    (실제로 BRAND.background 가 그 상태였다. 웜 모노크롬 전환에서 해소해 PAIRS 로 올렸다)
  *
  * 🔴 이름이 비슷하다고 묶지 않는다. 아래 세 목록은 코드 사용처를 확인해 갈랐다.
  *    PAIRS        같은 역할 · 같아야 함
@@ -33,12 +33,22 @@ const PAIRS = [
   { brand: 'muted', css: '--text-muted', why: '보조 텍스트' },
   /**
    * 🔴 BRAND.cta 의 짝은 --cta 가 아니라 --cta-edge 다. 사용처로 판정했다.
-   *    --cta 는 var(--brand) = 코랄이고 화면 CTA 버튼의 fill 이다(§3-1-B 코랄 전환).
    *    BRAND.cta 는 global-error.tsx 한 곳에서만 쓰이는데, 그 화면은 CSS 가 없을 수 있어
-   *    흰 글씨 대비를 값 자체로 보장해야 한다 — 코랄은 흰 글씨에 2.73:1 로 미달이다.
-   *    그 역할을 지는 토큰이 --cta-edge(#b64235, 흰 글씨 5.50:1)이고 값도 같다.
+   *    흰 글씨 대비를 값 자체로 보장해야 한다.
+   *    그 역할을 지는 토큰이 --cta-edge(흰 글씨 5.49:1)이고 값도 같다.
+   *
+   *    🟡 웜 모노크롬 전환에서 --cta 와 --cta-edge 가 같은 값이 되어 지금은 어느 쪽으로
+   *       묶어도 통과한다. 그래도 --cta-edge 로 둔다 — 나중에 --cta 만 원색으로 돌릴 때
+   *       global-error 가 조용히 따라가면 안 되기 때문이다.
    */
   { brand: 'cta', css: '--cta-edge', why: 'CSS 없이도 흰 글씨가 읽혀야 하는 진한 액션색' },
+  /**
+   * 🔴 웜 모노크롬 전환에서 KNOWN_DRIFT 를 해소하고 정식 PAIR 로 올렸다.
+   *    이전에는 brand.ts 만 폐기된 옛 바탕색에 남아 화면과 갈려 있었다 —
+   *    manifest background_color · OG 배경 · 최후 에러 화면이 그 값을 쓰는데
+   *    화면 바탕은 --surface-app 이 져서, 공유 카드와 홈 화면의 바탕이 서로 달랐다.
+   */
+  { brand: 'background', css: '--surface-app', why: '페이지 바탕 — manifest·OG 배경과 화면이 같아야 한다' },
 ]
 
 /**
@@ -46,26 +56,19 @@ const PAIRS = [
  *
  * 🔴 통과시키되 눈에 보이게 둔다. 조용히 목록에서 빼면 그대로 굳는다.
  * 🔴 값이 같아지면 이 목록에서 빼고 PAIRS 로 올려야 한다 — 그때 검사가 알려준다.
+ *
+ * 🔴 지금은 비어 있다. BRAND.background 가 유일한 drift 였고
+ *    웜 모노크롬 전환에서 --surface-app 과 값을 맞춰 PAIRS 로 올렸다.
  */
-const KNOWN_DRIFT = [
-  {
-    brand: 'background',
-    css: '--surface-app',
-    why:
-      'globals.css 는 #fff8f6 을 "이전 값"으로 명시하고 버렸다(§3-2 개정 2026-08-27) — ' +
-      '면적이 가장 넓은 바탕에 브랜드 계열을 깔면 화면 전체가 분홍으로 읽히고 CTA 가 묻힌다. ' +
-      '화면 바탕은 --surface-app(#f9fafb)이 지는데 BRAND.background 만 옛 값에 남았다. ' +
-      'manifest background_color · OG 배경 2곳 · global-error 배경이 그 값을 쓴다. ' +
-      '해소는 렌더가 실제로 바뀌는 변경이라 단독으로 다룬다.',
-  },
-]
-
+const KNOWN_DRIFT = []
 /** 이름은 비슷하나 역할이 달라 묶지 않기로 판정한 것 — 재발 방지용 기록 */
 const NOT_PAIRED = [
   {
     brand: 'cta',
     css: '--cta',
-    why: '--cta 는 코랄 fill(var(--brand)), BRAND.cta 는 흰 글씨용 진한 색. BRAND.cta 의 짝은 --cta-edge 다.',
+    why:
+      '--cta 는 화면 CTA 버튼의 fill, BRAND.cta 는 CSS 없이도 흰 글씨가 읽혀야 하는 자리다. ' +
+      '지금은 두 값이 같지만 역할이 달라 묶지 않는다 — BRAND.cta 의 짝은 --cta-edge 다.',
   },
 ]
 
@@ -151,13 +154,18 @@ function readBrandConstants(text) {
   return out
 }
 
-/** 대조 본체. 파일을 읽지 않으므로 self-test 가 그대로 쓴다 */
-function compare(brandMap, cssTokens) {
+/**
+ * 대조 본체. 파일을 읽지 않으므로 self-test 가 그대로 쓴다.
+ *
+ * 🔴 목록을 인자로 받는다 — self-test 가 실제 PAIRS·KNOWN_DRIFT 에 의존하면
+ *    목록이 비는 순간(=drift 해소) 검사기 자신의 테스트가 깨진다.
+ */
+function compare(brandMap, cssTokens, { pairs = PAIRS, drift = KNOWN_DRIFT } = {}) {
   const mismatched = []
   const missing = []
   const healed = []
 
-  for (const pair of PAIRS) {
+  for (const pair of pairs) {
     const a = brandMap.get(pair.brand)
     const b = resolve(cssTokens, pair.css)
     if (a === undefined || b === null) {
@@ -167,7 +175,7 @@ function compare(brandMap, cssTokens) {
     if (a !== b) mismatched.push({ ...pair, a, b })
   }
 
-  for (const pair of KNOWN_DRIFT) {
+  for (const pair of drift) {
     const a = brandMap.get(pair.brand)
     const b = resolve(cssTokens, pair.css)
     if (a === undefined || b === null) {
@@ -182,19 +190,20 @@ function compare(brandMap, cssTokens) {
 
 /** self-test — 파일을 만들지 않고 Map 만으로 검사기 자신을 확인한다 */
 function selfTest() {
+  // 가짜 값이다 — 실제 팔레트가 바뀌어도 이 테스트는 그대로 유효해야 한다
   const css = new Map([
-    ['--brand', '#ff6f61'],
-    ['--cta', 'var(--brand)'],
+    ['--sample', '#123456'],
+    ['--ref', 'var(--sample)'],
     ['--x-short', '#fff'],
   ])
   const checks = [
-    ['var() 를 따라간다', resolve(css, '--cta') === '#ff6f61'],
+    ['var() 를 따라간다', resolve(css, '--ref') === '#123456'],
     ['#abc 를 #aabbcc 로 편다', resolve(css, '--x-short') === '#ffffff'],
     ['없는 토큰은 null', resolve(css, '--nope') === null],
     [
       'brand.ts 파싱 — as const 를 벗긴다',
-      readBrandConstants("export const BRAND = { color: '#FF6F61' } as const").get('color') ===
-        '#ff6f61',
+      readBrandConstants("export const BRAND = { color: '#AABBCC' } as const").get('color') ===
+        '#aabbcc',
     ],
     [
       ':root 블록만 읽는다',
@@ -206,16 +215,33 @@ function selfTest() {
     ],
     [
       '불일치를 잡는다',
-      compare(new Map([['color', '#000000']]), new Map([['--brand', '#ff6f61']])).mismatched
-        .length === 1,
+      compare(new Map([['x', '#000000']]), new Map([['--x', '#ffffff']]), {
+        pairs: [{ brand: 'x', css: '--x', why: 't' }],
+        drift: [],
+      }).mismatched.length === 1,
+    ],
+    [
+      '일치하면 통과',
+      compare(new Map([['x', '#ffffff']]), new Map([['--x', '#ffffff']]), {
+        pairs: [{ brand: 'x', css: '--x', why: 't' }],
+        drift: [],
+      }).mismatched.length === 0,
     ],
     [
       'KNOWN_DRIFT 가 같아지면 알린다',
-      compare(
-        new Map([['background', '#f9fafb']]),
-        new Map([['--surface-app', '#f9fafb']]),
-      ).healed.length === 1,
+      compare(new Map([['y', '#ffffff']]), new Map([['--y', '#ffffff']]), {
+        pairs: [],
+        drift: [{ brand: 'y', css: '--y', why: 't' }],
+      }).healed.length === 1,
     ],
+    [
+      'KNOWN_DRIFT 가 아직 다르면 조용하다',
+      compare(new Map([['y', '#000000']]), new Map([['--y', '#ffffff']]), {
+        pairs: [],
+        drift: [{ brand: 'y', css: '--y', why: 't' }],
+      }).healed.length === 0,
+    ],
+    ['지금 KNOWN_DRIFT 는 비어 있다', KNOWN_DRIFT.length === 0],
   ]
   const failed = checks.filter(([, ok]) => !ok).map(([why]) => why)
   if (failed.length) {

@@ -51,7 +51,7 @@ export default function MagazineList({ articles }: { articles: MagazineArticle[]
                    고른 칩은 면으로 서니 선을 얹지 않는다 — 선과 면을 겹쳐 두 번 강조하지 않는다. */
                 className={`inline-flex ${TOUCH_MIN} shrink-0 items-center whitespace-nowrap rounded-full px-4 text-sm transition duration-150 active:scale-[0.98] ${
                   active
-                    ? 'bg-surface-soft font-bold text-brand-ink'
+                    ? 'bg-surface-soft font-bold text-brand-strong'
                     : 'border border-subtle bg-surface-card font-medium text-content-primary hover:bg-surface-soft'
                 }`}
               >

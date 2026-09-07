@@ -60,12 +60,12 @@ export default function FontSizeToggle({ variant = 'panel' }: { variant?: 'panel
           aria-expanded={open}
           aria-haspopup="true"
           className={`flex h-[52px] w-[52px] items-center justify-center rounded-xl transition duration-150 hover:bg-surface-soft active:scale-95 ${
-            open ? 'bg-surface-soft text-brand-ink' : 'text-content-muted'
+            open ? 'bg-surface-soft text-brand-strong' : 'text-content-muted'
           }`}
         >
           <span className="relative select-none leading-none">
             <span className="text-lg font-bold">가</span>
-            <span className="absolute -right-2 -top-1.5 text-[11px] font-bold leading-none text-brand-ink">
+            <span className="absolute -right-2 -top-1.5 text-[11px] font-bold leading-none text-brand-strong">
               +
             </span>
           </span>
@@ -92,7 +92,7 @@ export default function FontSizeToggle({ variant = 'panel' }: { variant?: 'panel
                       setOpen(false)
                     }}
                     className={`flex ${TOUCH_MIN} w-full items-center gap-3 rounded-xl px-3 text-left transition duration-150 hover:bg-surface-soft active:scale-[0.98] ${
-                      selected ? 'bg-surface-soft font-bold text-brand-ink' : 'text-content-muted'
+                      selected ? 'bg-surface-soft font-bold text-brand-strong' : 'text-content-muted'
                     }`}
                   >
                     <span className={`w-6 text-center font-bold leading-none ${PREVIEW_CLASS[value]}`}>

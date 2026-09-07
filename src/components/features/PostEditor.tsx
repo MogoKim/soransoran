@@ -415,7 +415,7 @@ export default function PostEditor({
             className={cn(
               `inline-flex ${TOUCH_MIN} items-center gap-1.5 rounded-xl px-3 text-sm`,
               editor.isActive('bold')
-                ? 'bg-brand-soft font-bold text-brand-ink'
+                ? 'bg-brand-soft font-bold text-brand-strong'
                 : 'bg-surface-page text-content-primary',
             )}
           >
