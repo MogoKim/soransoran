@@ -477,7 +477,7 @@ export default function PostEditor({
               <button
                 type="button"
                 onClick={insertYoutube}
-                className={`${TOUCH_MIN} flex-1 rounded-lg bg-cta px-5 font-bold text-cta-text`}
+                className={`${TOUCH_MIN} flex-1 rounded-lg bg-cta px-5 text-lg font-bold text-cta-content`}
               >
                 넣기
               </button>

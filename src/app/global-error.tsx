@@ -56,7 +56,9 @@ export default function GlobalError({ reset }: { error: Error; reset: () => void
             background: BRAND.cta,
             color: BRAND.onBrand,
             fontWeight: 700,
-            fontSize: 16,
+            /* 🔴 흰 내용(BRAND.onBrand)은 CTA 면 위 3.53:1 이라 큰 굵은 글씨(18.66px+700)로만 통과한다.
+               16px 이던 것을 20px 로 올린다 — 기준을 낮추지 않고 글자를 조건 안으로 올린다. */
+            fontSize: 20,
           }}
         >
           다시 시도

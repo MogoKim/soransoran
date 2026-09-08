@@ -35,7 +35,7 @@ export default function EmptyState({ title, body, ctaLabel, ctaHref, action }: E
       {ctaLabel && ctaHref ? (
         <Link
           href={ctaHref}
-          className={`mt-3 inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95`}
+          className={`mt-3 inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 text-lg font-bold text-cta-content no-underline transition duration-150 hover:brightness-95 active:scale-95`}
         >
           {ctaLabel}
         </Link>

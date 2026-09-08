@@ -25,7 +25,7 @@ export default function Error({ reset }: { error: Error; reset: () => void }) {
         <button
           type="button"
           onClick={reset}
-          className={`inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 font-bold text-cta-text transition duration-150 hover:brightness-95 active:scale-95`}
+          className={`inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 text-lg font-bold text-cta-content transition duration-150 hover:brightness-95 active:scale-95`}
         >
           다시 시도
         </button>

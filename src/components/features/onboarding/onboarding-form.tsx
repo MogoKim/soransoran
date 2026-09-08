@@ -42,7 +42,11 @@ function isRequired(key: AgreementKey): boolean {
 }
 
 const CTA_CLASS =
-  `${TOUCH_MIN} w-full rounded-xl bg-cta px-5 font-bold text-cta-text transition duration-150 enabled:hover:brightness-95 enabled:active:scale-95 disabled:opacity-60`
+  `${TOUCH_MIN} w-full rounded-xl bg-cta px-5 text-lg font-bold text-cta-content transition duration-150 ` +
+  'enabled:hover:brightness-95 enabled:active:scale-95 ' +
+  /* 🔴 못 누르는 버튼은 흐린 브랜드색이 아니라 회색이다 (ActionButton 과 같은 계약).
+     opacity 로만 죽이면 "누를 수 있는데 흐린 것" 으로 읽힌다. */
+  'disabled:bg-surface-page disabled:text-content-muted disabled:opacity-100'
 
 const BACK_CLASS =
   `${TOUCH_MIN} w-full rounded-xl border border-interactive px-5 font-bold text-content-primary transition duration-150 hover:bg-surface-soft active:scale-[0.98]`

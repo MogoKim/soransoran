@@ -63,10 +63,13 @@ export default function WriteTopBar({
         disabled={!ready}
         className={`inline-flex ${TOUCH_MIN} min-w-[52px] items-center justify-end px-2`}
       >
+        {/* 🔴 알약 높이는 52px 다. 40px 이던 것을 올렸다 —
+               라벨이 text-lg(--text-title 20/24/28px)라 "크게" 에서 줄 높이가 49px 이고,
+               40px 안에서는 글자가 위아래로 잘렸다. 바깥 바는 h-[56px] 그대로다. */}
         <span
           className={cn(
-            'inline-flex h-[40px] items-center rounded-full px-4 font-bold transition-colors',
-            ready ? 'bg-cta text-cta-text' : 'bg-surface-page text-content-muted',
+            'inline-flex h-[52px] items-center rounded-full px-4 text-lg font-bold transition-colors',
+            ready ? 'bg-cta text-cta-content' : 'bg-surface-page text-content-muted',
           )}
         >
           {pending ? pendingLabel : submitLabel}

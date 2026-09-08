@@ -66,6 +66,7 @@ export default function AdminCommentEditForm({
       <div className="flex flex-wrap gap-2">
         <ActionButton
           tone="primary"
+          size="compact"
           label="저장"
           pendingLabel="저장 중…"
           className="flex-1 px-4 justify-center"
