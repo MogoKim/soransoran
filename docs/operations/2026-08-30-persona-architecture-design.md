@@ -1,6 +1,11 @@
 # Persona Architecture 설계
 
-> 작성 2026-08-30 · 상태 **설계 확정 · 구현 미착수**
+> 작성 2026-08-30 · 상태 **설계 확정 · 구현은 부분 완료**
+> 현재 구현·운영 상태: [Master Operating System §4, §7](./MASTER-OPERATING-SYSTEM.md)
+>
+> `구현 미착수`는 이 문서 작성 당시 상태였다. 2026-09-08 main에는 Persona DB,
+> Account 실회원 Gate, 최대 매칭, 발행, 8명 활성화가 반영됐다. Persona-first generation,
+> 자동 댓글 분산과 Memory 연결은 아직 미구현이다.
 > 선행: [Persona Network 전략](2026-08-29-persona-network-strategy.md) · [VE-M3 학습 후보 선별 정책](2026-08-29-voice-m3-learning-policy.md)
 > 상위: [Micro Seed Lane 헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) **§9 페르소나 원칙** · §12 마일스톤 **M4 Persona OS**
 
@@ -9,7 +14,8 @@
 ## §0 이 문서가 정하는 것
 
 [전략 문서](2026-08-29-persona-network-strategy.md)가 **무엇을 만들 것인가**를 정했다.
-이 문서는 **그것을 어떤 구조로 만들 것인가**를 정한다. 구현은 하지 않는다.
+이 문서는 **그것을 어떤 구조로 만들 것인가**를 정한 설계 기록이다.
+현재 구현 완료 여부는 이 문서의 과거 문구가 아니라 Master 상태표와 main 코드로 판정한다.
 
 ### 헌법이 이미 정해 놓은 것
 

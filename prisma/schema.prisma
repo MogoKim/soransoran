@@ -644,7 +644,14 @@ enum MicroSeedRawOrigin {
   unao_legacy
 }
 
-/// 원문 1건 = 이 테이블 1행. MicroSeedCandidate 와 1:1 이다.
+/// 처음 설계는 외부 원문 1건 = 이 테이블 1행이었다.
+///
+/// 🔴 현재 자동 Original Supply는 Queue FK를 연결하기 위해 `publish-candidate:*` sourceSite의
+/// 생성 후보 envelope도 이 테이블에 저장한다. 따라서 이 테이블의 모든 행을 외부 원문이라고
+/// 간주하면 안 된다. 외부 원문과 생성 envelope의 장기 스키마 분리는 미완료다.
+/// 현재 구조·실측: docs/operations/MASTER-OPERATING-SYSTEM.md §4.1.
+///
+/// 외부 원문 Micro Seed 경로에서는 MicroSeedCandidate와 1:1이다.
 model MicroSeedRawContent {
   id     String             @id @default(uuid())
   /// 🔴 기본값을 live 로 두지 않는다. 적재 주체가 명시하게 한다 —
