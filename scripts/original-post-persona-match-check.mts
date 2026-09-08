@@ -934,7 +934,7 @@ export function hasDirectAccountCompare(src: string): boolean {
   }
 
   if (offenders.length) bad('🔴 실회원 정본 — 유효하지 않은 count', offenders.join(' / '))
-  else ok('🔴 실회원 정본 — 유효하지 않은 count', 'NaN·±Infinity·음수·소수·문자열·불리언 차단 · 배정=발행 · 복붙 탐지기 7종 검출 · 7종 오탐 0')
+  else ok('🔴 실회원 정본 — 유효하지 않은 count', 'NaN·±Infinity·음수·소수·문자열·불리언 차단 · 배정=발행 · 복붙 탐지기 9종 검출 · 7종 오탐 0')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
