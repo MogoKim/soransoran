@@ -72,7 +72,12 @@ function SectionHeading({
           }}
         >
           {trending ? (
-            <span className="text-xl leading-none">🔥</span>
+            /* 🔴 24px 고정이다. 본문 글자 크기(작게·기본·크게)를 따라가지 않는다.
+               이 이모지는 읽는 글이 아니라 배지 안의 장식 아이콘이고,
+               바깥 배지가 32px 고정이라 글자를 키우면 배지를 밀고 나간다.
+               text-xl 을 쓰면 --text-heading 을 상속해 기본에서 28px 이 된다 —
+               같은 자리의 MenuIcon 은 18px 이고 우나어의 같은 배지는 24px 이다. */
+            <span className="text-[24px] leading-none">🔥</span>
           ) : (
             <MenuIcon name={board.icon} size={18} />
           )}
