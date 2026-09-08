@@ -398,6 +398,16 @@ jobs:
       - name: persona 확장 planner (Pool 카드 파싱 · 단조성 · read-only 계약)
         run: npm run persona:planner-check
 
+      # persona 2차 확장 도구 — 🔴 **순서와 대상 고정**만 본다.
+      #
+      # 🔴 생성 → seed → 검증 → 활성화. 순서를 어기면 fail-closed 여야 한다 —
+      #    seed 없이 켜면 매칭이 그 사람을 기본값으로 잘못 판정한다(#468 재현).
+      #    대상(P01·P02·P11)이 코드에 못박혀 있는지, `--code` 인자로 다른 사람을
+      #    켤 수 없는지, 실행 게이트가 하나로 열리지 않는지도 함께 고정한다.
+      #    DB 0 · 네트워크 0 · 파일 write 0.
+      - name: persona 2차 확장 도구 (순서 fail-closed · 대상 고정 · 4중 게이트)
+        run: npm run persona:wave2-check
+
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #
       # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.
