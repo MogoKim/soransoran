@@ -100,6 +100,8 @@
     "persona:capacity-planner": "tsx scripts/persona-capacity-planner.mts",
     "persona:planner-check": "tsx scripts/persona-capacity-planner-check.mts",
     "persona:wave2-check": "tsx scripts/persona-wave2-check.mts",
+    "persona:cohort-run": "tsx scripts/persona-cohort-run.mts",
+    "scale:foundation-check": "tsx scripts/scale-foundation-check.mts",
     "supply:autopilot-lock-check": "tsx scripts/supply-autopilot-lock-check.mts",
     "supply:autopilot-check": "tsx scripts/supply-autopilot-check.mts",
     "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",

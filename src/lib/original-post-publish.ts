@@ -19,6 +19,8 @@
  *    저쪽은 noindex 라서 붙일 수 있고, 이쪽은 index 라서 붙이면 안 된다.
  */
 
+import { derive, SAFEST_PROFILE } from './scale-profile'
+
 // 🔴 실회원 판별은 단일 정본이다. 여기서 다시 쓰지 않는다
 import { judgeRealMember } from './real-member-gate'
 import { ORIGINAL_POST_VISIBILITY_FLAGS } from './post-visibility'
@@ -133,7 +135,42 @@ export const PUBLISHABLE_STATUSES: readonly string[] = ['APPROVED', 'EDITED']
 export const FIRST_PUBLISH_VERDICT = 'PASS'
 
 /** 하루 전역 상한 — 🔴 색인되는 첫 글들이다. 문제가 생겨도 원인을 가릴 수 있어야 한다 */
-export const DAILY_PUBLISH_CAP = 1
+/**
+ * 🔴 **이 값은 "가장 안전한 기본값" 이다** (2026-09-08 개정).
+ *
+ *    예전에는 이 상수를 env 에서 파생시켰다. 그런데 ESM 은 정적 import 를 모듈 본문보다
+ *    먼저 평가하므로, 운영 스크립트가 `loadEnvLocal()` 로 `.env.local` 을 읽기 **전에**
+ *    이 값이 굳어 버렸다 — 설정은 반영되지 않는데 화면만 반영됐다고 말했다.
+ *
+ *    🔴 그래서 실제 상한은 **러너가 주입한다**(`judgePublish` 의 `ctx.dailyCap`).
+ *       주입을 잊으면 이 상수(=1)로 떨어진다 — 조용히 10건이 나가지 않는다.
+ */
+export const DAILY_PUBLISH_CAP = derive(SAFEST_PROFILE).dailyPublishCap
+
+/**
+ * 🔴 **수동 발행기의 상한** — 환경과 무관하게 항상 가장 안전한 값이다 (2026-09-08, Codex P0).
+ *
+ *    수동 도구(`original-post-publish-live`)는 준비도 시뮬레이션을 돌리지 않는다.
+ *    거기에 env 를 그대로 적용하면 `SORAN_RELEASE_STAGE=d10` 에서 사람이
+ *    `--apply --limit=10` 을 쳐서 **감속을 손으로 우회**할 수 있다.
+ *    d3·d5·d10 확장은 준비도를 계산하는 자동 레인만 허용한다.
+ */
+export const MANUAL_PUBLISH_CAP = derive(SAFEST_PROFILE).dailyPublishCap
+
+/** 🔴 수동 발행 `--limit` 판정 — **write 전에** 막는다 */
+export function judgeManualLimit(limit: number | null): { ok: boolean; reason: string } {
+  if (limit === null || !Number.isInteger(limit) || limit < 1) {
+    return { ok: false, reason: `--limit=N (1 이상 정수) 이 필요하다 (받은 값 ${limit ?? '없음'})` }
+  }
+  if (limit > MANUAL_PUBLISH_CAP) {
+    return {
+      ok: false,
+      reason: `--limit ${limit} 이 이 도구의 상한 ${MANUAL_PUBLISH_CAP}건을 넘는다`
+        + ` — 수동 도구는 긴급 단건 발행 전용이다. 여러 건은 original-post-auto-publish 경로를 쓴다`,
+    }
+  }
+  return { ok: true, reason: '' }
+}
 
 export const PUBLISH_BLOCK_CODES = [
   'KILL_SWITCH', 'NOT_PUBLISHABLE', 'ALREADY_PUBLISHED', 'NO_MATCH',
@@ -149,7 +186,7 @@ export const PUBLISH_BLOCK_LABEL: Record<PublishBlockCode, string> = {
   PERSONA_NOT_ACTIVE: '페르소나가 active 가 아니다',
   REAL_MEMBER: '🔴 실회원 계정이다 — 실회원 이름으로 발행하지 않는다',
   GATE_NOT_PASS: '첫 발행은 gate=PASS 만 (HOLD 는 다음 판단)',
-  DAILY_CAP: `오늘 상한 ${DAILY_PUBLISH_CAP}건을 채웠다`,
+  DAILY_CAP: '오늘 상한을 채웠다',
 }
 
 export type PublishCandidate = {
@@ -179,7 +216,11 @@ export type PublishVerdict =
  */
 export function judgePublish(
   c: PublishCandidate,
-  ctx: { killSwitchEnabled: boolean; publishedToday: number },
+  /**
+   * 🔴 `dailyCap` 은 **필수 주입**이다. 모듈 상수를 읽지 않는다 —
+   *    읽으면 `.env.local`·GHA vars 로 정한 단계가 쓰기 경로에 도달하지 못한다.
+   */
+  ctx: { killSwitchEnabled: boolean; publishedToday: number; dailyCap: number },
 ): PublishVerdict {
   if (c.createdPostId !== null && c.createdPostId.trim() !== '') {
     return { ok: false, code: 'ALREADY_PUBLISHED', detail: PUBLISH_BLOCK_LABEL.ALREADY_PUBLISHED }
@@ -210,8 +251,10 @@ export function judgePublish(
   if (c.gateVerdict !== FIRST_PUBLISH_VERDICT) {
     return { ok: false, code: 'GATE_NOT_PASS', detail: `${PUBLISH_BLOCK_LABEL.GATE_NOT_PASS} — 현재 ${c.gateVerdict}` }
   }
-  if (ctx.publishedToday >= DAILY_PUBLISH_CAP) {
-    return { ok: false, code: 'DAILY_CAP', detail: `${PUBLISH_BLOCK_LABEL.DAILY_CAP} (${ctx.publishedToday}/${DAILY_PUBLISH_CAP})` }
+  // 🔴 주입값이 이상하면 **가장 안전한 상수**로 떨어진다 (fail-closed)
+  const cap = Number.isInteger(ctx.dailyCap) && ctx.dailyCap > 0 ? ctx.dailyCap : DAILY_PUBLISH_CAP
+  if (ctx.publishedToday >= cap) {
+    return { ok: false, code: 'DAILY_CAP', detail: `${PUBLISH_BLOCK_LABEL.DAILY_CAP} (${ctx.publishedToday}/${cap})` }
   }
   return { ok: true }
 }

@@ -27,6 +27,7 @@
  */
 
 import { judgeRealMember } from './real-member-gate'
+import { effectiveWeeklyCap, SAFEST_PROFILE } from './scale-profile'
 
 // ─────────────────────────────────────────────────────────
 // 자녀 나이대 — 🔴 밴드만. 정확한 나이 금지 (헌법 §9-3)
@@ -49,9 +50,14 @@ export const isChildAgeBand = (v: unknown): v is ChildAgeBand =>
 // ─────────────────────────────────────────────────────────
 
 /** 🔴 댓글 cap(dailyCap 3)을 재사용하지 않는다. 글은 성격이 다르다 */
-export const POST_CAP_PER_WEEK = 1
+/**
+ * 🔴 **가장 안전한 기본값이다** (2026-09-08 개정). 실제 값은 러너가 `caps` 로 주입한다 —
+ *    module-load 시점에 env 를 읽으면 `loadEnvLocal()` 보다 먼저 굳어 설정이 반영되지 않는다.
+ *    주입을 잊으면 여기로 떨어진다(주 1건 · 5일). 조용히 느슨해지지 않는다.
+ */
+export const POST_CAP_PER_WEEK = effectiveWeeklyCap(SAFEST_PROFILE.postsPerWeek, SAFEST_PROFILE.minDaysBetween)
 /** 🔴 같은 사람이 사흘 걸러 글을 쓰면 티가 난다 */
-export const MIN_DAYS_BETWEEN_POSTS = 5
+export const MIN_DAYS_BETWEEN_POSTS = SAFEST_PROFILE.minDaysBetween
 
 // ─────────────────────────────────────────────────────────
 // ① 글이 요구하는 정체성 조건
@@ -206,11 +212,20 @@ export type Blocked = { code: BlockCode; detail: string }
  * 🔴 모순은 감점이 아니라 탈락이다.
  *    그리고 **모르는 것도 탈락이다** — 통과시키면 나중에 두 글이 함께 거짓이 된다.
  */
+/**
+ * 🔴 규모 프로필 주입 — 기본은 운영 프로필이다.
+ *    시뮬레이션(10/day 계획 등)이 다른 cap 으로 돌 수 있어야 하되,
+ *    **운영 경로는 아무것도 넘기지 않아 항상 가장 안전한 기본값 을 쓴다.**
+ */
+export type BatchCaps = { postsPerWeek?: number; minDaysBetween?: number }
+
 export function hardFilter(
   p: PersonaForMatch,
   req: PostRequirements,
   postTitle: string,
   postBody: string,
+  /** 🔴 시뮬레이션용 cap. 운영은 넘기지 않아 가장 안전한 기본값 을 쓴다 */
+  caps: BatchCaps = {},
 ): Blocked[] {
   const out: Blocked[] = []
 
@@ -262,11 +277,13 @@ export function hardFilter(
   }
 
   // ── 리듬 ──
-  if (p.postsThisWeek >= POST_CAP_PER_WEEK) {
-    out.push({ code: 'WEEKLY_CAP', detail: `이번 주 ${p.postsThisWeek} / ${POST_CAP_PER_WEEK}` })
+  const weekCap = caps.postsPerWeek ?? POST_CAP_PER_WEEK
+  const minGap = caps.minDaysBetween ?? MIN_DAYS_BETWEEN_POSTS
+  if (p.postsThisWeek >= weekCap) {
+    out.push({ code: 'WEEKLY_CAP', detail: `이번 주 ${p.postsThisWeek} / ${weekCap}` })
   }
-  if (p.daysSinceLastPost !== null && p.daysSinceLastPost < MIN_DAYS_BETWEEN_POSTS) {
-    out.push({ code: 'TOO_SOON', detail: `${p.daysSinceLastPost}일 전 · 최소 ${MIN_DAYS_BETWEEN_POSTS}일` })
+  if (p.daysSinceLastPost !== null && p.daysSinceLastPost < minGap) {
+    out.push({ code: 'TOO_SOON', detail: `${p.daysSinceLastPost}일 전 · 최소 ${minGap}일` })
   }
 
   return out
@@ -445,6 +462,8 @@ export type MatchInput = {
   title: string
   body: string
   personas: readonly PersonaForMatch[]
+  /** 🔴 시뮬레이션용 cap. 운영은 넘기지 않아 가장 안전한 기본값 을 쓴다 */
+  caps?: BatchCaps
 }
 
 export function planMatch(input: MatchInput): MatchPlan {
@@ -455,7 +474,7 @@ export function planMatch(input: MatchInput): MatchPlan {
   const blocked: MatchPlan['blocked'] = []
 
   for (const p of input.personas) {
-    const reasons = hardFilter(p, req, input.title, input.body)
+    const reasons = hardFilter(p, req, input.title, input.body, input.caps ?? {})
     if (reasons.length > 0) { blocked.push({ code: p.code, reasons }); continue }
     eligible.push({ code: p.code, score: scoreMatch(p, req, chars) })
   }
@@ -611,10 +630,15 @@ function maxMatch(order: readonly string[], prefOf: ReadonlyMap<string, readonly
   return seat
 }
 
-export function planBatch(drafts: readonly BatchDraft[], personas: readonly PersonaForMatch[]): BatchPlan {
+export function planBatch(
+  drafts: readonly BatchDraft[],
+  personas: readonly PersonaForMatch[],
+  caps: BatchCaps = {},
+): BatchPlan {
+  const weekCap = caps.postsPerWeek ?? POST_CAP_PER_WEEK
   // ── ① 여력 — 주간 상한에서 이미 쓴 만큼을 뺀다 ──
   const capacity = new Map<string, number>()
-  for (const p of personas) capacity.set(p.code, Math.max(0, POST_CAP_PER_WEEK - p.postsThisWeek))
+  for (const p of personas) capacity.set(p.code, Math.max(0, weekCap - p.postsThisWeek))
   const byCode = new Map(personas.map((p) => [p.code, p]))
 
   // ── ①-b 🔴 이미 배정된 행은 **매칭에 넣지 않는다.** 기존 배정이 정본이다 ──
@@ -641,7 +665,7 @@ export function planBatch(drafts: readonly BatchDraft[], personas: readonly Pers
   // ── ② 각 초안의 후보를 먼저 구한다 (여력 무시) ──
   const base = fresh.map((d) => ({
     draft: d,
-    plan: planMatch({ queueId: d.queueId, title: d.title, body: d.body, personas }),
+    plan: planMatch({ queueId: d.queueId, title: d.title, body: d.body, personas, caps }),
   }))
 
   // ── ③ 🔴 희소한 글부터 자리를 보장한다. 총량은 최대 매칭이 정하므로 순서로 흔들리지 않는다 ──

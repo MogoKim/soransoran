@@ -37,7 +37,9 @@ const C = (o: Partial<PublishCandidate> = {}): PublishCandidate => ({
   // 🔴 기본은 "Account 0" — 운영 persona 의 정상 상태다. 누락(null)은 별도 fixture 가 본다
   personaAccountCount: 0, ...o,
 })
-const CTX = { killSwitchEnabled: false, publishedToday: 0 }
+// 🔴 `dailyCap` 은 러너가 주입한다 — fixture 도 명시한다.
+//    안 주면 judgePublish 가 가장 안전한 상수로 떨어뜨린다(그 동작도 아래에서 검사한다)
+const CTX = { killSwitchEnabled: false, publishedToday: 0, dailyCap: DAILY_PUBLISH_CAP }
 
 console.log('\n══ 발행 규칙 fixture ══\n')
 
@@ -151,8 +153,21 @@ console.log('\n══ 발행 규칙 fixture ══\n')
   // 🔴 이미 발행된 것은 kill switch 보다 먼저 잡힌다 — 순서가 규칙이다
   const both = judgePublish(C({ createdPostId: 'p' }), { ...CTX, killSwitchEnabled: true })
   if (both.ok || both.code !== 'ALREADY_PUBLISHED') offenders.push('🔴 발행 여부를 먼저 보지 않는다')
+
+  // 🔴 **상한은 주입값을 쓴다** (2026-09-08). 모듈 상수를 읽으면 설정이 쓰기 경로에 닿지 않는다
+  if (!judgePublish(C(), { ...CTX, publishedToday: 3, dailyCap: 10 }).ok) {
+    offenders.push('🔴 주입한 상한 10 이 반영되지 않는다')
+  }
+  const injected = judgePublish(C(), { ...CTX, publishedToday: 10, dailyCap: 10 })
+  if (injected.ok || injected.code !== 'DAILY_CAP') offenders.push('🔴 주입한 상한에서 cap 이 막지 않는다')
+  if (!injected.ok && !injected.detail.includes('10/10')) offenders.push('🔴 막힌 사유에 주입값이 적히지 않는다')
+  // 🔴 이상한 주입값은 **가장 안전한 상수로 떨어진다** (fail-closed)
+  for (const bad2 of [0, -1, 1.5, Number.NaN]) {
+    const r = judgePublish(C(), { ...CTX, publishedToday: DAILY_PUBLISH_CAP, dailyCap: bad2 })
+    if (r.ok) offenders.push(`🔴 잘못된 주입값 ${bad2} 에서 열렸다 — fail-closed 여야 한다`)
+  }
   if (offenders.length) bad('🔴 발행 자격', offenders.join(' / '))
-  else ok('🔴 발행 자격', `${cases.length}종 차단 · EDITED 허용 · kill switch · cap ${DAILY_PUBLISH_CAP} · 순서 보장`)
+  else ok('🔴 발행 자격', `${cases.length}종 차단 · EDITED 허용 · kill switch · 주입 cap 반영 · 잘못된 주입값 fail-closed · 순서 보장`)
 }
 
 // ── ⑤ 상수 · 라벨 · cap ──

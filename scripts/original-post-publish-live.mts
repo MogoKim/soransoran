@@ -35,6 +35,8 @@ import {
   PUBLISH_BLOCK_LABEL, type PublishBlockCode,
 } from '../src/lib/original-post-publish'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
+import { MANUAL_PUBLISH_CAP, judgeManualLimit } from '../src/lib/original-post-publish'
+import { resolveScale, SAFEST_SCALE, describeScale } from '../src/lib/scale-runtime'
 import { verifyPublishedRow } from '../src/lib/original-post-publish-verify'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
@@ -76,7 +78,32 @@ const dayStart = kstDayStart(now)
 const publishedToday = await prisma.personaActivityLog.count({
   where: { kind: 'post', createdAt: { gte: dayStart } },
 })
-console.log(`  오늘(KST ${kst(now).slice(0, 10)}) 발행  ${publishedToday} / ${DAILY_PUBLISH_CAP}건`)
+/**
+ * 🔴 **이 도구는 규모 확장 경로가 아니다** (2026-09-08, Codex P0).
+ *
+ *    예전 판은 `installFromEnv(process.env)` 를 **준비도 없이** 불렀다.
+ *    그러면 `SORAN_RELEASE_STAGE=d10` 환경에서 사람이 `--apply --limit=10` 을 치면
+ *    준비도 판정을 한 번도 거치지 않고 **10건이 그대로 나간다** — 자동 레인이 지키는
+ *    감속을 손으로 우회하는 문이 열린 것이다.
+ *
+ *    그래서 이 도구의 적용 상한은 **환경과 무관하게 항상 가장 안전한 d1(하루 1건)** 이다.
+ *    d3 · d5 · d10 확장은 준비도를 계산하는 `original-post-auto-publish` 경로만 허용한다.
+ *
+ *    🔴 **수동 도구는 긴급 단건 발행 전용이다.**
+ *
+ *    설정은 **보여 주기만** 한다 — 사람이 "환경은 d10 인데 왜 1건이지" 를 묻지 않도록.
+ */
+const envScale = resolveScale(process.env)
+const scale = SAFEST_SCALE
+// 🔴 정본은 `MANUAL_PUBLISH_CAP` 하나다 — 여기서 다시 계산하지 않는다
+const RELEASE_DAILY_CAP = MANUAL_PUBLISH_CAP
+console.log('  🔴 수동 도구는 **긴급 단건 발행 전용**이다 — 규모 확장 경로가 아니다')
+console.log(`  적용 상한  하루 ${RELEASE_DAILY_CAP}건 (항상 가장 안전한 단계 · 환경 설정과 무관)`)
+if (envScale.capacityStage !== 'd1' || envScale.requestedRelease !== 'd1') {
+  console.log(`  🟡 환경 설정은 ${describeScale(envScale)} 이지만 **이 도구에는 적용하지 않는다**`)
+  console.log('     d3·d5·d10 확장은 준비도를 계산하는 original-post-auto-publish 경로만 허용한다')
+}
+console.log(`  오늘(KST ${kst(now).slice(0, 10)}) 발행  ${publishedToday} / ${RELEASE_DAILY_CAP}건`)
 console.log(`  첫 발행 판정  gate=${FIRST_PUBLISH_VERDICT} 만 · HOLD 제외\n`)
 
 // ══ --check — 발행 결과 대조 ══
@@ -178,7 +205,8 @@ for (const r of rows) {
       personaAccountCount: r.matchedPersona?.user?._count.accounts ?? null,
     },
     // 🔴 여기서는 cap 을 이미 채운 것으로 보지 않는다. 몇 건이 자격이 있는지부터 센다
-    { killSwitchEnabled: killed, publishedToday: 0 },
+    // 🔴 여기서는 cap 을 이미 채운 것으로 보지 않는다. 상한은 설치된 값을 그대로 쓴다
+    { killSwitchEnabled: killed, publishedToday: 0, dailyCap: RELEASE_DAILY_CAP },
   )
   const title = r.editedTitle ?? r.draftTitle
   const head = `  ${r.id}  ${r.status} · gate=${r.gateVerdict} · ${r.matchedPersona?.code ?? '미배정'}`
@@ -191,7 +219,7 @@ for (const r of rows) {
 }
 
 // 🔴 cap 을 반영해 이번에 나갈 것만 남긴다
-const capRoom = Math.max(0, DAILY_PUBLISH_CAP - publishedToday)
+const capRoom = Math.max(0, RELEASE_DAILY_CAP - publishedToday)
 const take = eligible.slice(0, capRoom)
 console.log(`\n  자격 ${eligible.length}건 · 오늘 남은 cap ${capRoom}건 · 이번 발행 ${take.length}건`)
 if (take.length > 0) console.log(`  🟢 첫 발행 후보  ${take[0]}`)
@@ -205,11 +233,12 @@ if (!APPLY) {
 // ── 🔴 --apply --limit 둘 다 있어야 발행한다 ──
 if (killed) { await prisma.$disconnect(); fail('전체 중지가 켜져 있습니다.') }
 const LIMIT = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10)
-if (LIMIT === null || !Number.isInteger(LIMIT) || LIMIT < 1) {
-  await prisma.$disconnect(); fail('--apply 에는 --limit=N (1 이상) 이 함께 있어야 합니다')
-}
-if (LIMIT > DAILY_PUBLISH_CAP) {
-  await prisma.$disconnect(); fail(`--limit ${LIMIT} 이 하루 상한 ${DAILY_PUBLISH_CAP} 을 넘습니다`)
+// 🔴 **write 전에 막는다.** 판정은 `judgeManualLimit` 정본 하나다 —
+//    환경이 d10 이어도 이 도구로는 2건 이상 나가지 않는다
+const manual = judgeManualLimit(LIMIT)
+if (!manual.ok) {
+  await prisma.$disconnect()
+  fail(`${manual.reason}\n     🔴 수동 도구는 긴급 단건 발행 전용입니다.`)
 }
 // 🔴 --id 를 줬으면 개수가 정확히 맞아야 한다 — 하나라도 발행 불가면 멈춘다 (§4-AK)
 const idCheck = checkLimitAgainstIds(LIMIT, IDS, take.length)
@@ -226,7 +255,7 @@ for (const id of take) {
   const today = await prisma.personaActivityLog.count({
     where: { kind: 'post', createdAt: { gte: dayStart } },
   })
-  const res = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: today })
+  const res = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: today, dailyCap: RELEASE_DAILY_CAP })
   if (res.kind === 'published') {
     done += 1
     console.log(`  ✅ ${id}\n     Post ${res.postId} · ${res.personaCode} · ${res.boardType}`)

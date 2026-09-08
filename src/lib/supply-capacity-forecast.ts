@@ -15,7 +15,7 @@
  */
 
 import {
-  MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK, planBatch,
+  MIN_DAYS_BETWEEN_POSTS, POST_CAP_PER_WEEK, planBatch, type BatchCaps,
   type BatchDraft, type PersonaForMatch,
 } from './original-post-persona-match'
 // 🔴 KST 자정은 **정본 하나**를 쓴다. 여기서 다시 구현하면 언젠가 한쪽만 고쳐진다
@@ -74,19 +74,22 @@ export type PersonaHistory = {
  *   🔴 rolling 7일이다. 달력 주가 아니다. 경계는 **포함**(`>=`)이며 러너 쿼리와 같다
  * · 최소 간격: 마지막 배정에서 `MIN_DAYS_BETWEEN_POSTS` 일 경과
  */
-export function personaAvailableAt(h: PersonaHistory, at: Date): boolean {
+export function personaAvailableAt(h: PersonaHistory, at: Date, caps: BatchCaps = {}): boolean {
+  // 🔴 상한은 **주입값이 먼저**다. 넘기지 않으면 가장 안전한 상수로 떨어진다
+  const weekCap = caps.postsPerWeek ?? POST_CAP_PER_WEEK
+  const minGap = caps.minDaysBetween ?? MIN_DAYS_BETWEEN_POSTS
   const weekAgo = new Date(at.getTime() - 7 * DAY_MS)
   const inWeek = h.matchedAts.filter((d) => d.getTime() >= weekAgo.getTime() && d.getTime() <= at.getTime()).length
-  if (inWeek >= POST_CAP_PER_WEEK) return false
+  if (inWeek >= weekCap) return false
   const last = h.matchedAts.length === 0 ? null
     : h.matchedAts.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
   if (last === null) return true
-  return at.getTime() - last.getTime() >= MIN_DAYS_BETWEEN_POSTS * DAY_MS
+  return at.getTime() - last.getTime() >= minGap * DAY_MS
 }
 
 /** 그 시점에 쓸 수 있는 persona 코드들 */
-export function availablePersonasAt(hist: readonly PersonaHistory[], at: Date): string[] {
-  return hist.filter((h) => personaAvailableAt(h, at)).map((h) => h.code).sort()
+export function availablePersonasAt(hist: readonly PersonaHistory[], at: Date, caps: BatchCaps = {}): string[] {
+  return hist.filter((h) => personaAvailableAt(h, at, caps)).map((h) => h.code).sort()
 }
 
 /**
@@ -192,6 +195,8 @@ export function forecastPublishing(input: {
   days: number
   /** 🔴 필수 — 러너의 DAILY_PUBLISH_CAP 을 주입받는다 */
   dailyCap: number
+  /** 🔴 시뮬레이션용 cap. 운영은 넘기지 않아 `RUNTIME_PROFILE` 을 쓴다 */
+  caps?: BatchCaps
 }): Forecast {
   const cap = input.dailyCap
   // 🔴 이력을 복사해 쓴다 — 호출자의 배열을 바꾸지 않는다
@@ -207,7 +212,7 @@ export function forecastPublishing(input: {
   //    보여주면, 멈춘 레인이 초록으로 보이고 사람은 큐가 빌 때까지 모른다
   const recoveryBroken: { queueId: string; problem: string }[] = []
   {
-    const probe = planBatch(input.queue, input.personas)
+    const probe = planBatch(input.queue, input.personas, input.caps ?? {})
     for (const a of probe.assignments) {
       if (a.recoveryProblem !== null) recoveryBroken.push({ queueId: a.queueId, problem: a.recoveryProblem })
     }
@@ -215,7 +220,7 @@ export function forecastPublishing(input: {
 
   for (let i = 0; i < input.days; i += 1) {
     const at = new Date(input.startAt.getTime() + i * DAY_MS)
-    const availableCodes = availablePersonasAt(hist, at)
+    const availableCodes = availablePersonasAt(hist, at, input.caps ?? {})
     const published: { queueId: string; persona: string }[] = []
     let blockedReason: BlockReason = 'NONE'
     let blockedQueueId: string | null = null
@@ -249,7 +254,7 @@ export function forecastPublishing(input: {
 
       // 🔴 **남은 후보 전체**를 planBatch 에 넘긴다 — 러너가 그렇게 한다.
       //    head 하나만 넘기면 배치 여력 경쟁이 사라져 예측이 낙관적이 된다.
-      const batch = planBatch(remaining, personasNow)
+      const batch = planBatch(remaining, personasNow, input.caps ?? {})
       const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
 
       // 🔴 러너와 **같은 함수**로 고른다. 여기서 다시 고르지 않는다
@@ -325,8 +330,10 @@ export function capacityOf(input: {
   activePersonas: number
   /** 큐 후보 × persona 조합 중 생활사로 **영구** 막힌 비율 (0~1) */
   lifeBlockRate: number
+  /** 🔴 release 프로필의 주 cap. 넘기지 않으면 가장 안전한 상수 */
+  weeklyCap?: number
 }): { theoreticalPerWeek: number; theoreticalPerDay: number; effectivePerDay: number } {
-  const perWeek = input.activePersonas * POST_CAP_PER_WEEK
+  const perWeek = input.activePersonas * (input.weeklyCap ?? POST_CAP_PER_WEEK)
   const perDay = perWeek / 7
   return {
     theoreticalPerWeek: perWeek,
@@ -345,12 +352,15 @@ export function personasNeededFor(input: {
   targetPerDay: number
   lifeBlockRate: number
   activePersonas: number
+  /** 🔴 release 프로필의 주 cap. 넘기지 않으면 가장 안전한 상수 */
+  weeklyCap?: number
 }): { min: number; max: number; shortfallMin: number; shortfallMax: number } {
+  const weekCap = input.weeklyCap ?? POST_CAP_PER_WEEK
   const perWeek = input.targetPerDay * 7
-  const min = Math.ceil(perWeek / POST_CAP_PER_WEEK)
+  const min = Math.ceil(perWeek / weekCap)
   // 🔴 탈락률이 1 에 가까우면 나눗셈이 폭주한다 — 표본이 작을 때 그런 값이 나온다.
   //    "700명 필요" 같은 수는 근거가 아니라 잡음이다. 상한을 min 의 3배로 묶는다.
-  const raw = Math.ceil(perWeek / POST_CAP_PER_WEEK / Math.max(0.05, 1 - input.lifeBlockRate))
+  const raw = Math.ceil(perWeek / weekCap / Math.max(0.05, 1 - input.lifeBlockRate))
   const max = Math.min(raw, min * MAX_NEED_MULTIPLIER)
   return {
     min, max,

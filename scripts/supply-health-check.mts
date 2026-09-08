@@ -176,13 +176,24 @@ check('🔴 [독립] 죽은 소스 이름이 메시지에 남는다', (() => {
 })())
 
 // ── B. 공급 ──
+// 🔴 재고 기준선은 **주입값**이다 (2026-09-08). 기본은 지금 운영값(d1)과 같다
 const sup = (over: Partial<Parameters<typeof judgeSupply>[0]> = {}): Finding[] => judgeSupply({
   usable: 14, human: 5, machine: 9, legacyExcluded: 5, pendingThin: 0, historicRawNoop: 0,
   runningCheckpoints: 0, failedCheckpoints: 0, lock: 'free',
   lastSupplyOkAt: ago(2), now: NOW, staleAfterMs: STALE,
+  stockMin: 5, stockTarget: 14,
   ...over,
 })
 check('🟢 재고가 목표면 HEALTHY', sup()[0].code === 'STOCK_OK')
+// 🔴 **기준선이 주입값을 따른다** — capacity=d10 이면 재고 14건은 부족이다
+check('🔴 capacity 기준(50/140)에서 재고 14건은 STOCK_LOW',
+  sup({ stockMin: 50, stockTarget: 140 })[0].code === 'STOCK_LOW'
+  && sup({ stockMin: 50, stockTarget: 140 })[0].level === 'WARNING')
+check('🔴 그 메시지에 주입한 최소값이 적힌다', sup({ stockMin: 50, stockTarget: 140 })[0].message.includes('50건'))
+check('🟢 재고가 capacity 목표를 채우면 HEALTHY',
+  sup({ usable: 140, stockMin: 50, stockTarget: 140 })[0].code === 'STOCK_OK')
+check('🔴 정상 요약에도 주입한 목표가 적힌다',
+  sup({ usable: 140, stockMin: 50, stockTarget: 140 })[0].message.includes('140/140건'))
 check('🔴 재고 0 은 CRITICAL', sup({ usable: 0 })[0].level === 'CRITICAL')
 check('🟡 재고가 최소 미만이면 WARNING', sup({ usable: STOCK_MIN - 1 })[0].level === 'WARNING')
 check('🟢 재고 최소 경계는 정상', sup({ usable: STOCK_MIN })[0].code === 'STOCK_OK')
@@ -609,9 +620,10 @@ check('🟢 목표 재고는 lib 상수를 쓴다', STOCK_TARGET === 14 && STOCK
     /t\.matchedPersonaId === null/.test(codeOnly))
   check('🔴 [11] 못 찾은 persona 는 빈 값이 아니라 모르는 코드로 넘긴다 — fail-closed 로 잡히게',
     /__unknown:/.test(codeOnly))
-  check('🔴 [11] forecast 와 매칭률이 **같은 큐**를 쓴다 — 두 수치가 갈리지 않는다',
+  check('🔴 [11] forecast 와 매칭률이 **같은 큐·같은 cap** 을 쓴다 — 두 수치가 갈리지 않는다',
     /forecastPublishing\(\{\s*queue: forecastQueue/.test(codeOnly)
-    && /planBatch\(forecastQueue, personas as never\)/.test(codeOnly))
+    && /planBatch\(forecastQueue, personas as never, RELEASE_CAPS\)/.test(codeOnly)
+    && /caps: RELEASE_CAPS/.test(codeOnly))
   check('🔴 [11] 깨진 복구를 관제 판정에 넘긴다',
     /recoveryBroken: fc\.recoveryBroken/.test(codeOnly))
   // 🔴 queueRows 가 matchedPersonaId 를 실제로 읽어 오는가 — 안 읽으면 위가 다 무의미하다

@@ -408,6 +408,17 @@ jobs:
       - name: persona 2차 확장 도구 (순서 fail-closed · 대상 고정 · 4중 게이트)
         run: npm run persona:wave2-check
 
+      # 10/day Scale Foundation — 🔴 **회귀 0 이 가장 중요하다.**
+      #
+      # 🔴 규모 상수(DAILY_PUBLISH_CAP · STOCK_TARGET · POST_CAP_PER_WEEK …)를
+      #    `ACTIVE_PROFILE` 하나에서 파생시켰다. 파생값이 옛 하드코딩과 하나라도
+      #    다르면 지금 도는 1/day 가 조용히 달라진다 — 그것을 여기서 막는다.
+      #    프로필을 몰래 바꾸면 7건이 FAIL 한다(실측 확인).
+      #    cohort manifest · 단계 fail-closed · 공급 역산 · 병목도 함께 본다.
+      #    DB 0 · 네트워크 0 · LLM 0.
+      - name: Scale Foundation (회귀 0 · cohort · 공급 역산 · 병목)
+        run: npm run scale:foundation-check
+
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #
       # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.

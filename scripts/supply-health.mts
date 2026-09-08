@@ -32,6 +32,10 @@ import {
 import { STOCK_TARGET, readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
 import { LOCK_FILE, LOCK_TTL_MS, adaptKeyOf, lockDecision } from '../src/lib/supply-autopilot'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
+import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
+import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, slotLabel } from '../src/lib/scale-profile'
+import { simulateAllStages } from '../src/lib/scale-readiness'
+import { compareWorkflow } from '../src/lib/scale-workflow-render'
 import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
 import {
   forecastPublishing, nextScheduleAt, capacityOf, personasNeededFor,
@@ -252,19 +256,17 @@ async function main(): Promise<void> {
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   }))
-  const stock = readStock(mapped)
+  /**
+   * 🔴 **여기서 판정하지 않는다** (2026-09-08, Codex P1).
+   *    재고 판정은 **capacity 프로필**을 알아야 하고, 그 프로필은 준비도 시뮬레이션 뒤에 정해진다.
+   *    예전에는 여기서 안전 상수(d1)로 먼저 판정하고 나중에 설정을 설치했다 —
+   *    그래서 `capacity=d10` 인데 `numbers.target=14` · `level=HEALTHY` 인 모순이 나왔다.
+   *    입력만 모아 두고, 판정은 규모가 확정된 뒤 ③-c 에서 한 번에 한다.
+   */
   const live = mapped.filter((r) =>
     (r.status === 'APPROVED' || r.status === 'EDITED')
     && (r.createdPostId === null || r.createdPostId === ''))
-  const legacyExcluded = live.length - stock.usable
-
   const cp = checkpoints()
-  const supply = judgeSupply({
-    usable: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
-    pendingThin: pendingThinCount(), historicRawNoop: historicRawNoop(),
-    runningCheckpoints: cp.running, failedCheckpoints: cp.failed,
-    lock: lockState(now), lastSupplyOkAt: cp.lastOkAt, now, staleAfterMs: SUPPLY_STALE_MS,
-  })
 
   // ── C. 발행 ──
   const dayStart = kstDayStart(now)
@@ -337,12 +339,7 @@ async function main(): Promise<void> {
   // 🔴 00:05 KST + 유예. cron 은 정시에 돌지 않는다 — 유예 없이 경고하면 거짓 경보다
   const scheduledPublishAt = new Date(dayStart.getTime() + 5 * 60_000)
   const graceUntil = new Date(scheduledPublishAt.getTime() + PUBLISH_GRACE_MS)
-  const publish = judgePublish({
-    todayCount, dailyCap: DAILY_PUBLISH_CAP,
-    afterPublishGrace: now.getTime() >= graceUntil.getTime(),
-    mismatched: verdict.bad.length, legacyPublishedToday, historicUnknownProfile,
-    candidates: stock.usable, now,
-  })
+  // 🔴 발행 판정도 규모 확정 뒤로 미룬다 — 상한이 release 프로필에서 나온다
 
   // ── ③-b 발행 여력 — 🔴 재고가 있어도 사람이 없으면 나가지 못한다 ──
   //    러너와 **같은 함수**를 날짜만 밀어 가며 부른다. 새 판정을 만들지 않는다.
@@ -416,8 +413,6 @@ async function main(): Promise<void> {
     })
   }
 
-  // 🔴 오늘 이미 상한을 채웠으면 다음 예약은 **내일** 00:05 KST 다
-  const startAt = nextScheduleAt({ now, publishedToday: todayCount, dailyCap: DAILY_PUBLISH_CAP })
   // 🔴 **이미 배정된 행은 기존 배정이 정본이다** — 러너와 같아야 한다.
   //    이것을 넘기지 않으면 예측이 그 행을 새로 매칭해 **다른 사람**에게 주고,
   //    화면이 보여준 필자와 실제로 나갈 필자가 달라진다.
@@ -431,9 +426,51 @@ async function main(): Promise<void> {
       : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
   }))
 
+  /**
+   * ── ③-c 🔴 **규모를 여기서 확정한다.** 이 아래의 모든 판정이 이 값을 쓴다 ──
+   *
+   *    ① 지금 큐·지금 사람으로 각 단계가 14일을 버티는지 시뮬레이션하고
+   *    ② 그 판정을 넘겨 release 를 실제로 낮춘다.
+   *    🔴 준비도 시작점은 `now` 다 — 단계마다 다른 시작점을 쓰면 단계 비교가 무의미해진다.
+   */
+  const scaleRows = simulateAllStages({
+    queue: forecastQueue, personas: personas as never, history, startAt: now, days: 14,
+  })
+  const resolved = installFromEnv(process.env, { readiness: scaleRows.map((x) => x.verdict) })
+  const capDerived = deriveProfile(resolved.capacityProfile)
+  /** 🔴 내부 공급 기준 — capacity 프로필 */
+  const CAPACITY_LIMITS = { warn: capDerived.stockWarn, min: capDerived.stockMin, target: capDerived.stockTarget }
+  /** 🔴 공개 발행 기준 — release 프로필 */
+  const RELEASE_DAILY_CAP = resolved.releaseProfile.dailyTarget
+  const RELEASE_CAPS = {
+    postsPerWeek: effectiveWeeklyCap(resolved.releaseProfile.postsPerWeek, resolved.releaseProfile.minDaysBetween),
+    minDaysBetween: resolved.releaseProfile.minDaysBetween,
+  }
+
+  // ── ③-d 규모가 정해진 뒤에 판정한다 ──
+  const stock = readStock(mapped, CAPACITY_LIMITS)
+  const legacyExcluded = live.length - stock.usable
+  const supply = judgeSupply({
+    usable: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
+    pendingThin: pendingThinCount(), historicRawNoop: historicRawNoop(),
+    runningCheckpoints: cp.running, failedCheckpoints: cp.failed,
+    lock: lockState(now), lastSupplyOkAt: cp.lastOkAt, now, staleAfterMs: SUPPLY_STALE_MS,
+    // 🔴 capacity 기준이다 — 모듈 안전 상수를 운영 숫자로 다시 쓰지 않는다
+    stockMin: CAPACITY_LIMITS.min, stockTarget: CAPACITY_LIMITS.target,
+  })
+  const publish = judgePublish({
+    todayCount, dailyCap: RELEASE_DAILY_CAP,
+    afterPublishGrace: now.getTime() >= graceUntil.getTime(),
+    mismatched: verdict.bad.length, legacyPublishedToday, historicUnknownProfile,
+    candidates: stock.usable, now,
+  })
+
+  // 🔴 오늘 이미 상한을 채웠으면 다음 예약은 **내일** 00:05 KST 다
+  const startAt = nextScheduleAt({ now, publishedToday: todayCount, dailyCap: RELEASE_DAILY_CAP })
   const fc = forecastPublishing({
     queue: forecastQueue,
-    personas: personas as never, history, startAt, days: 14, dailyCap: DAILY_PUBLISH_CAP,
+    personas: personas as never, history, startAt, days: 14,
+    dailyCap: RELEASE_DAILY_CAP, caps: RELEASE_CAPS,
   })
 
   // 🔴 매칭률은 **조합 단위**로 센다 — 후보 × persona. 사유 개수가 아니다.
@@ -442,7 +479,7 @@ async function main(): Promise<void> {
   {
     const { planBatch } = await import('../src/lib/original-post-persona-match')
     // 🔴 예측과 **같은 입력**이다. 여기서만 기존 배정을 빼면 두 수치가 갈린다
-    const b = planBatch(forecastQueue, personas as never)
+    const b = planBatch(forecastQueue, personas as never, RELEASE_CAPS)
     for (const a of b.assignments) {
       for (const x of a.blocked) blockedCombos.push(x.reasons.map((r) => r.code))
     }
@@ -450,14 +487,17 @@ async function main(): Promise<void> {
   const rates = blockRatesByCombination({
     candidates: autoTargets.length, personas: personas.length, blockedCombos,
   })
-  const cap = capacityOf({ activePersonas: personas.length, lifeBlockRate: rates.lifeRate })
+  const cap = capacityOf({
+    activePersonas: personas.length, lifeBlockRate: rates.lifeRate, weeklyCap: RELEASE_CAPS.postsPerWeek,
+  })
   const need = personasNeededFor({
-    targetPerDay: DAILY_PUBLISH_CAP, lifeBlockRate: rates.lifeRate, activePersonas: personas.length,
+    targetPerDay: RELEASE_DAILY_CAP, lifeBlockRate: rates.lifeRate, activePersonas: personas.length,
+    weeklyCap: RELEASE_CAPS.postsPerWeek,
   })
   const capacity = judgeCapacity({
     stockUsable: stock.usable, in7: fc.in7, nextWillPublish: fc.nextScheduleWillPublish,
     nextCandidates: fc.nextPersonaCandidates.length, shortfallMin: need.shortfallMin,
-    dailyCap: DAILY_PUBLISH_CAP,
+    dailyCap: RELEASE_DAILY_CAP,
     // 🔴 기존 배정이 깨졌으면 이것 하나로 CRITICAL 이다 — 다른 수치는 의미를 잃는다
     recoveryBroken: fc.recoveryBroken,
   })
@@ -466,13 +506,69 @@ async function main(): Promise<void> {
 
   const report: HealthReport = buildReport({ sources, supply, publish: [...publish, ...capacity] })
 
+  /**
+   * 🔴 규모 설정 — **한 번만 계산해 화면과 JSON 이 같은 객체를 읽는다** (2026-09-08).
+   *    설정(env)과 실제 달성 가능성이 어긋나면 여기서 감속 사유가 나온다.
+   */
+  // 🔴 규모는 위 ③-c 에서 이미 확정했다 — 여기서 다시 계산하지 않는다
+  const scale = {
+    capacityStage: resolved.capacityStage,
+    releaseStage: resolved.releaseStage,
+    requestedRelease: resolved.requestedRelease,
+    throttledByCapacity: resolved.throttledByCapacity,
+    notes: resolved.notes,
+    summary: describeScale(resolved),
+    throttledByReadiness: resolved.throttledByReadiness,
+    readinessApplied: resolved.readinessApplied,
+    /**
+     * 🔴 **내부 공급은 capacity, 공개 발행은 release.**
+     *    한 프로필로 둘을 다루면 `capacity=d10 · release=d1` 에서 재고 목표가 14가 된다.
+     */
+    capacity: {
+      stockTarget: CAPACITY_LIMITS.target, stockMin: CAPACITY_LIMITS.min, stockWarn: CAPACITY_LIMITS.warn,
+      internalDailyTarget: resolved.capacityProfile.dailyTarget,
+    },
+    release: {
+      dailyCap: RELEASE_DAILY_CAP,
+      weeklyCap: RELEASE_CAPS.postsPerWeek,
+      minDaysBetween: RELEASE_CAPS.minDaysBetween,
+    },
+    // 🔴 설정과 러너 상수가 어긋났는가 — 어긋나면 화면이 말하는 값과 실제가 다르다
+    /**
+     * 🔴 설치된 release 와 **모듈 안전 상수**가 다른 것은 정상이다(주입이 그 일을 한다).
+     *    문제가 되는 것은 설치가 아예 일어나지 않은 경우다 — 그때는 `source` 가 default 다.
+     */
+    configMismatch: resolved.source === 'default-safest'
+      ? `규모 설정이 설치되지 않았다 — 안전 기본값(${DAILY_PUBLISH_CAP}/day)으로 돈다`
+      : null,
+    /**
+     * 🔴 **프로필을 올려도 워크플로우가 그대로면 글은 안 나간다** — 그 어긋남을 여기서 본다.
+     *    yml 을 못 읽는 경우도 사유로 남긴다(조용히 통과시키지 않는다).
+     */
+    workflowMismatch: (() => {
+      const f = join(process.cwd(), '.github/workflows/auto-publish.yml')
+      if (!existsSync(f)) return ['auto-publish.yml 을 찾지 못했다 — 스케줄을 확인할 수 없다']
+      return compareWorkflow(resolved.releaseProfile, readFileSync(f, 'utf-8')).map((m) => m.detail)
+    })(),
+    slots: resolved.releaseProfile.slots.map((x) => slotLabel(x)),
+    stages: scaleRows.map(({ sim, verdict }) => ({
+      stage: sim.stage, dailyTarget: PROFILES[sim.stage].dailyTarget,
+      in14: sim.in14, want14: sim.want14, gaps: sim.gaps, recoveryBroken: sim.recoveryBroken,
+      ready: verdict.ready, reasons: verdict.reasons,
+      personasNeededArithmetic: verdict.arithmeticPersonas,
+    })),
+  }
+
   if (JSON_OUT) {
     console.log(JSON.stringify({
       level: report.level, checkedAt: now.toISOString(),
       sources: report.sources, supply: report.supply, publish: report.publish, rollUp: report.rollUp,
+      // 🔴 화면 ⑤ 와 같은 객체다 — 두 번 계산하지 않는다
+      scale,
       numbers: {
         stock: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
-        target: STOCK_TARGET, todayPublished: todayCount, dailyCap: DAILY_PUBLISH_CAP,
+        // 🔴 적용값이다 — 재고 목표는 capacity, 발행 상한은 release
+        target: CAPACITY_LIMITS.target, todayPublished: todayCount, dailyCap: RELEASE_DAILY_CAP,
       },
       // 🔴 화면과 같은 결과다 — 두 번 계산하지 않는다
       capacity: {
@@ -545,7 +641,7 @@ async function main(): Promise<void> {
   console.log(`   향후 14일     ${fc.in14}건`)
   console.log(`   이론 capacity ${cap.theoreticalPerWeek}건/주 = ${cap.theoreticalPerDay.toFixed(2)}/day`
     + ` · 실매칭 반영 ${cap.effectivePerDay.toFixed(2)}/day`)
-  console.log(`   목표 ${DAILY_PUBLISH_CAP}/day 에 필요한 persona ${need.min}~${need.max}명`
+  console.log(`   목표 ${RELEASE_DAILY_CAP}/day 에 필요한 persona ${need.min}~${need.max}명`
     + ` · 현재 ${personas.length}명 · 부족 ${need.shortfallMin}~${need.shortfallMax}명`)
   console.log(`   매칭 조합     후보 ${autoTargets.length} × persona ${personas.length} = ${rates.total}개`)
   console.log(`     가능        ${rates.eligible}개`)
@@ -560,7 +656,33 @@ async function main(): Promise<void> {
     console.log(`     ${d.date}  ${who}${why}`)
   }
 
-  console.log(`\n④ 판정 ${report.level}${report.exitCode === 1 ? ' — exit 1' : ''}`)
+  // ── ④ 🔴 규모 설정 — JSON `scale` 과 **같은 객체**를 읽는다 ──
+  console.log('\n④ 규모 설정')
+  console.log(`   ${scale.summary} · 슬롯 ${scale.slots.join(' ')}`)
+  console.log(`   내부 공급(capacity ${scale.capacityStage})  재고 목표 ${scale.capacity.stockTarget}건`
+    + ` · 최소 ${scale.capacity.stockMin} · 경고 ${scale.capacity.stockWarn}`)
+  console.log(`   공개 발행(release ${scale.releaseStage})   일 ${scale.release.dailyCap}건`
+    + ` · 주 ${scale.release.weeklyCap}건 · 최소 ${scale.release.minDaysBetween}일`)
+  for (const n of scale.notes) console.log(`   · ${n}`)
+  if (scale.configMismatch !== null) console.log(`   🔴 설정 불일치 — ${scale.configMismatch}`)
+  for (const m of scale.workflowMismatch) console.log(`   🔴 워크플로우 불일치 — ${m}`)
+  for (const r of scale.stages) {
+    console.log(`   ${r.ready ? '🟢' : '🔴'} ${r.stage.padEnd(4)} ${String(r.dailyTarget).padStart(3)}/day`
+      + ` → 14일 ${r.in14}/${r.want14} · 공백 ${r.gaps}일`
+      + `${r.ready ? '' : `  ${r.reasons[0] ?? ''}`}`)
+  }
+  if (scale.throttledByReadiness) {
+    // 🔴 표시가 아니라 **실제로 적용된 값**이다 — 러너가 쓰는 상한이 아래 숫자다
+    console.log(`   🔴 자동 감속 적용됨 — 요청 ${scale.requestedRelease} → 실제 ${scale.releaseStage}`
+      + ` (공개 ${scale.release.dailyCap}건/day)`)
+  } else if (!scale.readinessApplied) {
+    console.log('   🟡 준비도 판정이 없어 감속이 적용되지 않았다')
+  } else {
+    console.log(`   🟢 ${scale.releaseStage} 는 지금 큐·인원으로 달성 가능하다`)
+  }
+  console.log('   🔴 산술 인원은 참고값이다 — 판정은 위 14일 실측이 한다')
+
+  console.log(`\n⑤ 판정 ${report.level}${report.exitCode === 1 ? ' — exit 1' : ''}`)
   console.log('   🔴 CRITICAL 만 exit 1 이다. WARNING 은 사람이 보고 판단한다\n')
   process.exit(report.exitCode)
 }

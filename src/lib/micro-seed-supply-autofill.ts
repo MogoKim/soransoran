@@ -16,6 +16,8 @@
  *    그래서 "사람이 이미 판단한 것" 만 통과시킨다 — 판단을 새로 하지 않는다.
  */
 
+import { derive, SAFEST_PROFILE } from './scale-profile'
+
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
 export const AUTOFILL_MODEL = 'human-curated'
@@ -167,9 +169,18 @@ export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
 export const MAX_ALLOWED_OVERLAP = 6
 
 /** 재고 기준선 (§4-AN) */
-export const STOCK_WARN = 3
-export const STOCK_MIN = 5
-export const STOCK_TARGET = 14
+/**
+ * 🔴 **가장 안전한 기본값이다** (2026-09-08 개정).
+ *    내부 공급 기준은 **capacity 단계**를 따르며, 러너가 `readStock`·`judgeFill` 에 주입한다.
+ *    주입을 잊으면 여기로 떨어진다 — 재고 목표가 조용히 커지지 않는다.
+ */
+export const STOCK_WARN = derive(SAFEST_PROFILE).stockWarn
+export const STOCK_MIN = derive(SAFEST_PROFILE).stockMin
+export const STOCK_TARGET = derive(SAFEST_PROFILE).stockTarget
+
+/** 🔴 재고 기준선 묶음 — capacity 프로필에서 만들어 주입한다 */
+export type StockLimits = { warn: number; min: number; target: number }
+export const SAFEST_STOCK_LIMITS: StockLimits = { warn: STOCK_WARN, min: STOCK_MIN, target: STOCK_TARGET }
 
 export type StockLevel = 'critical' | 'low' | 'ok'
 
@@ -187,7 +198,10 @@ export const USABLE_PROMPT_VERSIONS: readonly string[] = [
 
 export function readStock(rows: readonly (QueueProfileRow & {
   status: string; createdPostId: string | null
-})[]): { usable: number; level: StockLevel; shortfall: number; human: number; machine: number } {
+})[],
+/** 🔴 capacity 프로필에서 만든 기준선. 주지 않으면 가장 안전한 값이다 */
+limits: StockLimits = SAFEST_STOCK_LIMITS,
+): { usable: number; level: StockLevel; shortfall: number; human: number; machine: number } {
   // 🔴 **promptVersion 만 보지 않는다.** 발행 러너가 인정하는 행만 재고다 —
   //    판만 맞고 접두나 게이트 기록이 어긋난 행은 넣어도 아무도 못 먹는다.
   const live = rows.filter((r) =>
@@ -196,8 +210,8 @@ export function readStock(rows: readonly (QueueProfileRow & {
   const human = live.filter((r) => queueProfileOf(r) === 'human').length
   const machine = live.filter((r) => queueProfileOf(r) === 'machine').length
   const usable = human + machine
-  const level: StockLevel = usable <= STOCK_WARN ? 'critical' : usable < STOCK_MIN ? 'low' : 'ok'
-  return { usable, level, shortfall: Math.max(0, STOCK_TARGET - usable), human, machine }
+  const level: StockLevel = usable <= limits.warn ? 'critical' : usable < limits.min ? 'low' : 'ok'
+  return { usable, level, shortfall: Math.max(0, limits.target - usable), human, machine }
 }
 
 export type Candidate = {
@@ -365,15 +379,19 @@ export function judgeApply(input: {
   apply: boolean
   limit: number | null
   usable: number
+  /** 🔴 capacity 프로필의 재고 목표. 주지 않으면 가장 안전한 값 */
+  target?: number
 }): ApplyGate {
   if (!input.apply) return { ok: false, reason: 'dry-run — --apply 가 없다' }
   if (input.limit === null || !Number.isInteger(input.limit) || input.limit < 1) {
     return { ok: false, reason: `--limit=N 이 필요하다 (받은 값 ${input.limit ?? '없음'})` }
   }
   if (input.targets.length === 0) return { ok: false, reason: '보충할 후보가 0건이다' }
-  const room = Math.max(0, STOCK_TARGET - input.usable)
+  // 🔴 목표는 capacity 프로필에서 주입한다. 주지 않으면 가장 안전한 값이다
+  const target = input.target ?? STOCK_TARGET
+  const room = Math.max(0, target - input.usable)
   if (room === 0) {
-    return { ok: false, reason: `재고가 이미 목표 ${STOCK_TARGET}건이다 (현재 ${input.usable}건)` }
+    return { ok: false, reason: `재고가 이미 목표 ${target}건이다 (현재 ${input.usable}건)` }
   }
   const n = Math.min(input.limit, input.targets.length, room)
   if (n < input.limit) {

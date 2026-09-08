@@ -12,7 +12,15 @@
  * 🔴 조회한 이름 원문을 로그 · 반환 요약에 출력하지 않는다.
  *    반환값은 판정부에 그대로 넘길 배열이며, 사람이 보는 출력은 개수뿐이다.
  */
-import type { PrismaClient } from '@prisma/client'
+import type { Prisma, PrismaClient } from '@prisma/client'
+
+/**
+ * 🔴 **트랜잭션 클라이언트도 받는다** (2026-09-08).
+ *    Gate ⑥-B 를 트랜잭션 **밖에서만** 보면, 그 사이에 회원이 같은 이름을 만들어도
+ *    커밋이 그대로 통과한다. 최종 판정은 트랜잭션 안에서 다시 해야 한다.
+ *    여기 함수들은 전부 `findMany` 만 쓰므로 두 클라이언트 모두에서 같은 결과를 준다.
+ */
+type Reader = PrismaClient | Prisma.TransactionClient
 import type { NameCollisionSets } from './persona-gate-name-collision.mjs'
 
 /**
@@ -24,7 +32,7 @@ import type { NameCollisionSets } from './persona-gate-name-collision.mjs'
  *   🔴 nickname 만 보면 name 만 가진 회원(실측 25%)을 통째로 놓친다.
  *   🔴 name 에는 @unique 가 없어 DB 가 막아주지도 않는다.
  */
-export async function loadMemberNames(prisma: PrismaClient): Promise<string[]> {
+export async function loadMemberNames(prisma: Reader): Promise<string[]> {
   const users = await prisma.user.findMany({ select: { nickname: true, name: true } })
   const out: string[] = []
   for (const u of users) {
@@ -47,7 +55,7 @@ export async function loadMemberNames(prisma: PrismaClient): Promise<string[]> {
  *    지금은 빈 배열을 돌려준다. B3 검사가 조용히 통과하는 것이 아니라
  *    **대조할 대상이 0개**라는 뜻이다.
  */
-export async function loadPersonaDisplayNames(_prisma: PrismaClient): Promise<string[]> {
+export async function loadPersonaDisplayNames(_prisma: Reader): Promise<string[]> {
   return []
 }
 
@@ -57,7 +65,7 @@ export async function loadPersonaDisplayNames(_prisma: PrismaClient): Promise<st
  * 🔴 원문이 없다. salted 단방향 해시라 부분 포함 · 유사도 대조가 불가능하다.
  *    판정부는 이 집합으로 **일치 계열만** 본다 (설계 §4-2).
  */
-export async function loadAuthorHashSets(prisma: PrismaClient): Promise<{
+export async function loadAuthorHashSets(prisma: Reader): Promise<{
   authorHashes: Set<string>
   authorHashNorms: Set<string>
 }> {
@@ -89,7 +97,7 @@ export async function loadAuthorHashSets(prisma: PrismaClient): Promise<{
 }
 
 /** 대조 집합 전체를 모은다. 🔴 read-only */
-export async function loadNameCollisionSets(prisma: PrismaClient): Promise<NameCollisionSets> {
+export async function loadNameCollisionSets(prisma: Reader): Promise<NameCollisionSets> {
   const [memberNames, personaNames, hashes] = await Promise.all([
     loadMemberNames(prisma),
     loadPersonaDisplayNames(prisma),

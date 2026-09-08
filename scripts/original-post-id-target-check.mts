@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import {
   parseIdArgs, filterByIds, missingIds, checkLimitAgainstIds, describeIdTargeting,
 } from '../src/lib/original-post-id-target'
+import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 
 let pass = 0
 let fail = 0
@@ -119,8 +120,11 @@ console.log('\n⑦ 두 스크립트가 실제로 연결됐는가')
 console.log('\n⑧ 🔴 pacing 상수를 건드리지 않았다')
 {
   const m = readFileSync('src/lib/original-post-persona-match.ts', 'utf-8')
-  check('POST_CAP_PER_WEEK = 1 그대로', /export const POST_CAP_PER_WEEK = 1\b/.test(m))
-  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', /export const MIN_DAYS_BETWEEN_POSTS = 5\b/.test(m))
+  // 🔴 **소스 문자열이 아니라 실제 값**을 본다 (2026-09-08).
+  //    상수를 `RUNTIME_PROFILE` 에서 파생시키면서 `= 1` 리터럴이 사라졌다.
+  //    원래 의도가 "값이 그대로인가" 였으므로 값으로 묻는 편이 더 강하다.
+  check('POST_CAP_PER_WEEK = 1 그대로', POST_CAP_PER_WEEK === 1)
+  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', MIN_DAYS_BETWEEN_POSTS === 5)
   const t = readFileSync('src/lib/original-post-id-target.ts', 'utf-8')
   for (const [label, re] of [
     ['prisma / DB write', /prisma|PrismaClient|\.create\(|\.update/i],

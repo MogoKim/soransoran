@@ -5,6 +5,8 @@
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
 import { readFileSync } from 'node:fs'
+import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
+import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import {
   planRefill, judgeApply, readStock, verifyAfterRefill, isHeld, hasPendingSibling,
   provenanceKeyOf, baseArticleId,
@@ -333,10 +335,14 @@ console.log('\n⑧ 🔴 원문 컬럼을 만들지 않는다 · 발행 코드가
 console.log('\n⑨ 🔴 pacing 상수를 건드리지 않았다')
 {
   const m = readFileSync('src/lib/original-post-persona-match.ts', 'utf-8')
-  check('POST_CAP_PER_WEEK = 1 그대로', /export const POST_CAP_PER_WEEK = 1\b/.test(m))
-  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', /export const MIN_DAYS_BETWEEN_POSTS = 5\b/.test(m))
+  // 🔴 **소스 문자열이 아니라 실제 값**을 본다 (2026-09-08).
+  //    상수를 `RUNTIME_PROFILE` 에서 파생시키면서 `= 1` 같은 리터럴이 사라졌다.
+  //    문자열을 찾던 검사는 "값이 그대로인가" 를 물으려던 것이므로, 값으로 묻는 편이 더 강하다 —
+  //    프로필이 바뀌면 문자열은 그대로여도 값이 달라질 수 있다.
+  check('POST_CAP_PER_WEEK = 1 그대로', POST_CAP_PER_WEEK === 1)
+  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', MIN_DAYS_BETWEEN_POSTS === 5)
   const pub = readFileSync('src/lib/original-post-publish.ts', 'utf-8')
-  check('DAILY_PUBLISH_CAP = 1 그대로', /export const DAILY_PUBLISH_CAP = 1\b/.test(pub))
+  check('DAILY_PUBLISH_CAP = 1 그대로', DAILY_PUBLISH_CAP === 1)
   const lib = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
   check('🔴 공급 lib 이 발행 상수를 재정의하지 않는다',
     !/DAILY_PUBLISH_CAP|POST_CAP_PER_WEEK|MIN_DAYS_BETWEEN_POSTS/.test(lib))

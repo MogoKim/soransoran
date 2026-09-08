@@ -13,7 +13,6 @@
  *    사람이 곧 무시하게 되고, 그러면 CRITICAL 도 같이 묻힌다.
  */
 
-import { STOCK_TARGET, STOCK_MIN } from './micro-seed-supply-autofill'
 
 export type Level = 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'INFO'
 
@@ -248,6 +247,14 @@ export type SupplyInput = {
   now: Date
   /** 마지막 성공이 이보다 오래되면 경고 */
   staleAfterMs: number
+  /**
+   * 🔴 **재고 기준선을 주입받는다** (2026-09-08, Codex P1).
+   *    모듈 상수(가장 안전한 d1 값)를 쓰면 `capacity=d10` 인데 "재고 14/14 정상" 이라고
+   *    말하게 된다 — 관제가 준비 부족을 초록으로 보여 주는 것이 가장 나쁜 실패다.
+   *    내부 공급 기준이므로 **capacity 프로필**에서 만들어 넘긴다.
+   */
+  stockMin: number
+  stockTarget: number
 }
 
 export function judgeSupply(input: SupplyInput): Finding[] {
@@ -255,12 +262,12 @@ export function judgeSupply(input: SupplyInput): Finding[] {
 
   if (input.usable === 0) {
     out.push(f('CRITICAL', 'STOCK_CRITICAL', '발행 가능한 재고가 0건이다 — 다음 회차에 내보낼 것이 없다'))
-  } else if (input.usable < STOCK_MIN) {
+  } else if (input.usable < input.stockMin) {
     out.push(f('WARNING', 'STOCK_LOW',
-      `재고 ${input.usable}건 — 최소 ${STOCK_MIN}건 아래다 (사람 ${input.human} · 기계 ${input.machine})`))
+      `재고 ${input.usable}건 — 최소 ${input.stockMin}건 아래다 (사람 ${input.human} · 기계 ${input.machine})`))
   } else {
     out.push(f('HEALTHY', 'STOCK_OK',
-      `재고 ${input.usable}/${STOCK_TARGET}건 (사람 ${input.human} · 기계 ${input.machine} · legacy ${input.legacyExcluded} 제외)`))
+      `재고 ${input.usable}/${input.stockTarget}건 (사람 ${input.human} · 기계 ${input.machine} · legacy ${input.legacyExcluded} 제외)`))
   }
 
   if (input.failedCheckpoints > 0) {

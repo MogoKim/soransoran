@@ -249,7 +249,8 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
    *    그 lib 을 불러야 하는데, import 를 전부 막으면 **판정을 복붙하게 된다** —
    *    그쪽이 훨씬 나쁘다. 허용 목록을 좁게 두고, 새 import 는 여기서 걸린다.
    */
-  const ALLOWED_IMPORTS = ['./real-member-gate'] as const
+  // 🔴 둘 다 순수 lib 이다 — DB · 네트워크 · env · 난수 0
+  const ALLOWED_IMPORTS = ['./real-member-gate', './scale-profile', './scale-runtime'] as const
   for (const line of code.split('\n')) {
     const m = /^import .*from '([^']+)'/.exec(line.trim())
     if (m === null) continue

@@ -23,6 +23,12 @@ import { forecastPublishing, type PersonaHistory } from '../src/lib/supply-capac
 import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { parsePoolDoc, cardToPersona, type PoolCard } from '../src/lib/persona-pool-card'
+import {
+  PROFILES, derive as deriveProfile, describeProfile,
+  effectiveWeeklyCap, slotLabel, type ReleaseStage,
+} from '../src/lib/scale-profile'
+import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
+import { simulateAllStages } from '../src/lib/scale-readiness'
 import type { BatchDraft, PersonaForMatch } from '../src/lib/original-post-persona-match'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -300,6 +306,44 @@ const payload = {
   /** 🔴 남은 후보를 전부 켜도 2명이 안 되는 축 — 정본 보완이 필요하다 */
   unfillableAxes: UNFILLABLE,
   bySize: Object.fromEntries([...bySize].map(([k, v]) => [k, [...v].sort(rank).slice(0, 5)])),
+  /**
+   * 🔴 규모 단계 — **화면과 JSON 이 같은 객체를 본다.**
+   *    예전에는 표를 화면에서만 그렸다. `--json` 으로 받은 사람은 그 표를 볼 수 없었고,
+   *    두 곳이 어긋나도 아무도 몰랐다.
+   */
+  scale: (() => {
+    const rows = simulateAllStages({ queue, personas: active, startAt, days: DAYS })
+    // 🔴 러너·관제와 **같은 설치 경로**다. planner 가 따로 감속하지 않는다
+    const resolved = installFromEnv(process.env, { readiness: rows.map((x) => x.verdict) })
+    return {
+      capacityStage: resolved.capacityStage,
+      releaseStage: resolved.releaseStage,
+      requestedRelease: resolved.requestedRelease,
+      throttledByCapacity: resolved.throttledByCapacity,
+      notes: resolved.notes,
+      summary: describeScale(resolved),
+      throttledByReadiness: resolved.throttledByReadiness,
+      readinessApplied: resolved.readinessApplied,
+      capacityDailyTarget: resolved.capacityProfile.dailyTarget,
+      releaseDailyCap: resolved.releaseProfile.dailyTarget,
+      stages: rows.map(({ sim, verdict }) => {
+        const prof = PROFILES[sim.stage]
+        const d = deriveProfile(prof)
+        return {
+          stage: sim.stage, dailyTarget: prof.dailyTarget,
+          postsPerWeek: prof.postsPerWeek, minDaysBetween: prof.minDaysBetween,
+          effectiveWeeklyCap: effectiveWeeklyCap(prof.postsPerWeek, prof.minDaysBetween),
+          stockTarget: d.stockTarget,
+          // 🔴 산술 최소 — **참고값이다.** 판정은 아래 시뮬레이션이 한다
+          personasNeededArithmetic: d.personasNeededArithmetic,
+          slots: prof.slots.map((x) => slotLabel(x)),
+          sim: { in14: sim.in14, want14: sim.want14, gaps: sim.gaps, recoveryBroken: sim.recoveryBroken,
+            personas: sim.personas, stock: sim.stock },
+          ready: verdict.ready, reasons: verdict.reasons,
+        }
+      }),
+    }
+  })(),
 }
 
 if (JSON_OUT) {
@@ -324,7 +368,10 @@ if (JSON_OUT) {
     say(`  🟡 길이 미상 ${payload.lengthUnknown.length}장 (${payload.lengthUnknown.join(' ')})`)
     say('     — readLengthBand 별칭에 없는 표현이다. 매칭은 중립으로 다룬다 (차단 아님)')
   }
-  say(`\n① 현재 5명만 — 7일 ${baseline.in7}건 · 14일 ${baseline.in14}건 · 공백 ${baseline.gaps}일`)
+  // 🔴 인원 수를 문구에 박지 않는다 — active 가 늘면 그 순간 거짓말이 된다 (실측으로 잡았다)
+  const meets = baseline.in7 >= GOAL.in7 && baseline.in14 >= GOAL.in14 && baseline.gaps <= GOAL.gaps
+  say(`\n① 지금 active ${active.length}명만 — 7일 ${baseline.in7}건 · 14일 ${baseline.in14}건 · 공백 ${baseline.gaps}일`
+    + (meets ? '  ✅ 이미 목표를 채운다' : ''))
   say('\n② 조합 크기별 상위 5')
   for (const [k, v] of bySize) {
     say(`\n   ── +${k}명 (조합 ${combinations(inactive, k).length}가지)`)
@@ -333,7 +380,10 @@ if (JSON_OUT) {
         + ` · 공백 ${r.gaps}일 ${r.meetsGoal ? '✅ 목표 달성' : ''}`)
     }
   }
-  say(`\n③ 목표를 채우는 최소 인원: ${minSize === null ? `🔴 +${SIZE}명으로도 못 채운다` : `+${minSize}명`}`)
+  // 🔴 baseline 이 이미 목표를 채웠으면 "추가 인원" 은 의미가 없다 — 그렇게 말한다
+  say(`\n③ ${meets
+    ? '지금 인원으로 목표를 채운다 — 추가 인원은 여유분이다'
+    : `목표를 채우는 최소 추가 인원: ${minSize === null ? `🔴 +${SIZE}명으로도 못 채운다` : `+${minSize}명`}`}`)
   if (best !== null) {
     say(`\n④ 권장 조합  ${best.codes.join(' ')}`)
     say(`   7일 ${best.in7}건 · 14일 ${best.in14}건 · 공백 ${best.gaps}일 · RECOVERY_BROKEN ${best.recoveryBroken}건`)
@@ -358,5 +408,29 @@ if (JSON_OUT) {
     say(`\n🔴 **재고 ${queue.length}건 / 목표 ${GOAL.in14}건 — inventory-limited.** 위 조합은 잠정이다.`)
     say(`   재고가 ${GOAL.in14}건으로 찬 뒤 \`npm run persona:capacity-planner\` 를 다시 돌려 확정한다.`)
   }
+  // ── 🔴 규모 단계 — **payload.scale 을 그대로 읽는다.** 화면과 JSON 이 같은 값이다 ──
+  say('\n⑥ 규모 단계 (🔴 판정은 산술이 아니라 지금 큐·지금 인원으로 돌린 시뮬레이션이다)')
+  say(`   설정  ${payload.scale.summary}`)
+  say(`         내부 공급 ${payload.scale.capacityDailyTarget}/day 기준 · 공개 발행 ${payload.scale.releaseDailyCap}/day 적용`)
+  for (const n of payload.scale.notes) say(`         · ${n}`)
+  say('   단계  발행/day  주cap  실효  간격  재고   산술인원  슬롯   14일 실측      판정')
+  for (const r of payload.scale.stages) {
+    say(`   ${r.stage.padEnd(5)} ${String(r.dailyTarget).padStart(6)}건  ${String(r.postsPerWeek).padStart(4)}`
+      + `  ${String(r.effectiveWeeklyCap).padStart(4)}  ${r.minDaysBetween}일  ${String(r.stockTarget).padStart(4)}건`
+      + `  ${String(r.personasNeededArithmetic).padStart(6)}명  ${String(r.slots.length).padStart(3)}개`
+      + `  ${String(r.sim.in14).padStart(4)}/${String(r.sim.want14).padEnd(4)} 공백 ${r.sim.gaps}일`
+      + `  ${r.ready ? '🟢 READY' : `🔴 ${r.reasons[0] ?? '미달'}`}`)
+  }
+  say(`   🔴 산술인원은 참고값이다 — 생활사 hardFilter 를 모른다. 판정은 위 "14일 실측" 이 한다.`)
+  say(`   🔴 지금 적용된 공개 프로필: ${describeProfile(PROFILES[payload.scale.releaseStage as ReleaseStage])}`)
+  if (payload.scale.throttledByReadiness) {
+    say(`   🔴 준비되지 않아 감속 적용됨: 요청 ${payload.scale.requestedRelease} → 실제 ${payload.scale.releaseStage}`)
+    say('      이것은 표시가 아니라 러너가 실제로 쓰는 값이다')
+  } else if (!payload.scale.readinessApplied) {
+    say('   🟡 준비도 판정이 없어 감속이 적용되지 않았다')
+  } else {
+    say(`   🟢 요청 단계 ${payload.scale.releaseStage} 는 지금 큐·인원으로 달성 가능하다`)
+  }
+
   say('\n🔴 이 명령은 DB 를 쓰지 않는다. persona 생성·활성화·발행은 하지 않았다.\n')
 }
