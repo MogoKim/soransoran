@@ -27,7 +27,7 @@ const ok = (n: string, d: string): void => { passed += 1; console.log(`  ✅ ${n
 const bad = (n: string, d: string): void => { failed += 1; console.log(`  🔴 ${n} — ${d}`) }
 
 /** 실측 DB 를 본뜬 행 (2026-09-02) */
-const ROWS: PersonaRow[] = TARGET_CODES.map((code) => ({ code, status: 'draft', providerId: null }))
+const ROWS: PersonaRow[] = TARGET_CODES.map((code) => ({ code, status: 'draft', providerId: null, accountCount: 0 }))
 
 console.log('\n══ 카드 → DB 이관 규칙 fixture ══\n')
 
@@ -137,7 +137,7 @@ console.log('\n══ 카드 → DB 이관 규칙 fixture ══\n')
   if (!real.issues.some((i) => i.code === 'P07')) offenders.push('🔴 실회원이 통과')
   if (real.apply.some((a) => a.code === 'P07')) offenders.push('🔴 실회원이 반영 대상')
   // 🔴 P05 가 섞여 들어오면 잡아야 한다
-  const withP05 = planUpdate([...ROWS, { code: 'P05', status: 'active', providerId: null }])
+  const withP05 = planUpdate([...ROWS, { code: 'P05', status: 'active', providerId: null, accountCount: 0 }])
   if (!withP05.issues.some((i) => i.code === 'P05')) offenders.push('🔴 P05 가 조용히 넘어감')
   if (withP05.apply.some((a) => a.code === 'P05')) offenders.push('🔴 P05 가 반영 대상')
   const missing = planUpdate(ROWS.filter((r) => r.code !== 'P15'))

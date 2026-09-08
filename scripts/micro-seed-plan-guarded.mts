@@ -701,7 +701,8 @@ async function run() {
 
   // ── ⑲ 작성자 검증 3종 (§5-2A · §6-9-E) ─────────────────
   {
-    const base = { id: 'micro-seed-system', exists: true, providerId: null, isBlocked: false }
+    // 🔴 시스템 작성자의 정상 상태 — Account 0 · providerId null
+    const base = { id: 'micro-seed-system', exists: true, providerId: null, accountCount: 0, isBlocked: false }
     const okCase = verifyPublishAuthor(base)
     const missing = verifyPublishAuthor({ ...base, exists: false })
     const realMember = verifyPublishAuthor({ ...base, providerId: 'kakao-12345' })
@@ -728,7 +729,8 @@ async function run() {
   //    publisher 가 select 에서 빠뜨린 필드는 undefined 로 온다.
   //    "문제 없음" 으로 읽으면 조회하지 않은 채 발행하게 된다.
   {
-    const base = { id: 'micro-seed-system', exists: true, providerId: null, isBlocked: false }
+    // 🔴 시스템 작성자의 정상 상태 — Account 0 · providerId null
+    const base = { id: 'micro-seed-system', exists: true, providerId: null, accountCount: 0, isBlocked: false }
     const noProviderId = verifyPublishAuthor({ ...base, providerId: undefined } as unknown as AuthorProbe)
     const noBlocked = verifyPublishAuthor({ ...base, isBlocked: undefined } as unknown as AuthorProbe)
     const noExists = verifyPublishAuthor({ ...base, exists: undefined } as unknown as AuthorProbe)
@@ -1069,11 +1071,17 @@ async function run() {
     const planOk = verifyPublishablePlanRow(cleanRow)
 
     const authorCases: Array<[string, AuthorProbe]> = [
-      ['User 없음', { id: 'x', exists: false, providerId: null, isBlocked: false }],
-      ['실회원', { id: 'x', exists: true, providerId: 'kakao-1', isBlocked: false }],
-      ['차단됨', { id: 'x', exists: true, providerId: null, isBlocked: true }],
-      ['providerId 미조회', { id: 'x', exists: true, providerId: undefined, isBlocked: false } as unknown as AuthorProbe],
-      ['isBlocked 미조회', { id: 'x', exists: true, providerId: null, isBlocked: undefined } as unknown as AuthorProbe],
+      ['User 없음', { id: 'x', exists: false, providerId: null, accountCount: 0, isBlocked: false }],
+      ['실회원(providerId)', { id: 'x', exists: true, providerId: 'kakao-1', accountCount: 0, isBlocked: false }],
+      // 🔴 정본 — Account 가 붙어 있으면 실회원이다 (providerId 가 null 이어도)
+      ['🔴 실회원(Account 1)', { id: 'x', exists: true, providerId: null, accountCount: 1, isBlocked: false }],
+      ['🔴 실회원(Account 3)', { id: 'x', exists: true, providerId: null, accountCount: 3, isBlocked: false }],
+      ['차단됨', { id: 'x', exists: true, providerId: null, accountCount: 0, isBlocked: true }],
+      ['providerId 미조회', { id: 'x', exists: true, providerId: undefined, accountCount: 0, isBlocked: false } as unknown as AuthorProbe],
+      // 🔴 fail-closed — select 누락과 알 수 없음 둘 다 막는다
+      ['🔴 Account 미조회', { id: 'x', exists: true, providerId: null, isBlocked: false } as unknown as AuthorProbe],
+      ['🔴 Account 알 수 없음', { id: 'x', exists: true, providerId: null, accountCount: null, isBlocked: false } as unknown as AuthorProbe],
+      ['isBlocked 미조회', { id: 'x', exists: true, providerId: null, accountCount: 0, isBlocked: undefined } as unknown as AuthorProbe],
     ]
     const leaked: string[] = []
     for (const [label, probe] of authorCases) {

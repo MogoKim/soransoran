@@ -18,8 +18,13 @@
  * 🚫 회원 계정 재사용 금지
  *    실회원 이름으로 발행되면 신뢰 문제이자 되돌리기 어렵다.
  *    ⚠️ 이 파일은 env 값만 보므로 "그 ID 가 실회원인지" 를 판별할 수 없다.
- *       publisher 는 발행 직전 DB 에서 `providerId IS NULL` 을 확인해야 한다 —
- *       providerId 는 카카오 실회원 판별 기준이다(User 모델 주석).
+ *       publisher 는 발행 직전 DB 에서 확인해야 한다 — 🔴 **정본은 `Account` 다**
+ *       (2026-09-08 정정). 카카오 로그인이 만드는 것은 `Account` 행이지
+ *       `User.providerId` 가 아니다 — NextAuth adapter 는 그 값을 채우지 않는다
+ *       (`src/lib/auth.ts` §signIn). 실측: User 9명 전원 providerId=null · Account 3건.
+ *       `providerId IS NULL` 만 보면 실회원을 한 명도 못 막는다.
+ *       판정은 `src/lib/real-member-gate.ts` `judgeRealMember` 하나뿐이고,
+ *       `providerId` 는 수동으로 채워 둔 값을 잡는 **방어적 보조**로만 남는다.
  */
 
 /** 시스템 작성자 ID 를 담는 환경변수. 이 이름 외에는 읽지 않는다 */

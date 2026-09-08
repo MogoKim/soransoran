@@ -139,18 +139,26 @@ export async function createPrismaCandidateSource() {
     /**
      * 시스템 작성자 실측 (§5-2A · §6-9-E).
      *
-     * 🔴 providerId 를 반드시 select 한다. 빠뜨리면 undefined 가 되고
+     * 🔴 `_count.accounts` 와 `providerId` 를 **둘 다** select 한다. 빠뜨리면 undefined 가 되고
      *    verifyPublishAuthor 가 "실측하지 못했다" 로 중단시킨다 — 그게 맞는 동작이다.
+     *
+     * 🔴 실회원 판별 **정본은 `Account`** 다 (2026-09-08). `User.providerId` 는
+     *    NextAuth adapter 가 채우지 않는다 (`src/lib/auth.ts` §signIn).
+     *    실측: User 9명 전원 providerId=null 인데 Account 3건이었다 —
+     *    providerId 만 보는 가드는 한 번도 발동한 적이 없었다.
      */
     async fetchAuthor(id) {
       const user = await prisma.user.findUnique({
         where: { id },
-        select: { id: true, providerId: true, isBlocked: true },
+        select: { id: true, providerId: true, isBlocked: true, _count: { select: { accounts: true } } },
       })
       return {
         id,
         exists: user !== null,
         providerId: user ? user.providerId : null,
+        // 🔴 User 를 못 찾으면 null 이고 verifyPublishAuthor 가 fail-closed 로 막는다.
+        //    0 으로 눙치면 "없는 계정" 이 실회원 검사를 통과한 것처럼 된다
+        accountCount: user ? user._count.accounts : null,
         isBlocked: user ? user.isBlocked : false,
       }
     },

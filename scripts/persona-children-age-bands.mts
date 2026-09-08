@@ -32,6 +32,8 @@
  *   npx tsx scripts/persona-children-age-bands.mts --apply --limit=5
  *       → 🔴 실제 반영
  */
+
+import { judgeRealMember } from '../src/lib/real-member-gate'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import { pathToFileURL } from 'node:url'
 import { isChildAgeBand, CHILD_AGE_BANDS, type ChildAgeBand } from '../src/lib/original-post-persona-match'
@@ -97,6 +99,8 @@ export type PersonaRow = {
   status: string
   identity: IdentityLike | null
   providerId: string | null
+  /** 🔴 실회원 판별 정본 — Account 행 수. 모르면 막는다 */
+  accountCount: number | null
 }
 
 export type UpdatePlan = {
@@ -129,7 +133,9 @@ export function planUpdate(rows: readonly PersonaRow[]): UpdatePlan {
     if (row === undefined) continue
 
     // 🔴 실회원 계정이면 손대지 않는다
-    if (row.providerId !== null) { issues.push({ code: plan.code, reason: '🔴 실회원 User 다 (providerId 있음)' }); continue }
+    // 🔴 판정은 `judgeRealMember` 하나뿐이다 — 정본은 Account 다
+    const real = judgeRealMember({ accountCount: row.accountCount, providerId: row.providerId })
+    if (real.real) { issues.push({ code: plan.code, reason: `🔴 쓸 수 없는 User — ${real.reason}` }); continue }
 
     const bandErr = validateBands(plan.bands)
     if (bandErr !== null) { issues.push({ code: plan.code, reason: bandErr }); continue }
@@ -180,7 +186,7 @@ async function main(): Promise<void> {
   console.log('  🔴 status 를 바꾸지 않습니다 · Post 를 만들지 않습니다 · 발행하지 않습니다\n')
 
   const rows = await prisma.persona.findMany({
-    select: { code: true, status: true, identity: true, user: { select: { providerId: true } } },
+    select: { code: true, status: true, identity: true, user: { select: { providerId: true, _count: { select: { accounts: true } } } } },
     orderBy: { code: 'asc' },
   })
   const mapped: PersonaRow[] = rows.map((r) => ({
@@ -188,6 +194,7 @@ async function main(): Promise<void> {
     status: r.status,
     identity: (r.identity ?? null) as IdentityLike | null,
     providerId: r.user?.providerId ?? null,
+    accountCount: r.user?._count.accounts ?? null,
   }))
 
   const plan = planUpdate(mapped)

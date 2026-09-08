@@ -377,7 +377,7 @@ async function main(): Promise<void> {
     where: { status: 'active' },
     select: {
       id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-      user: { select: { providerId: true } },
+      user: { select: { providerId: true, _count: { select: { accounts: true } } } },
     },
   })
   const history: PersonaHistory[] = []
@@ -398,6 +398,8 @@ async function main(): Promise<void> {
     const lastNow = ats.length === 0 ? null : ats.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b))
     personas.push({
       code: r.code, status: r.status, providerId: r.user?.providerId ?? null,
+    // 🔴 실회원 판별 정본. 넘기지 않으면 hardFilter 가 fail-closed 로 막는다
+    accountCount: r.user?._count.accounts ?? null,
       ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
       maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
       // 🔴 auto-publish 와 **같은 필드**를 넘긴다 — 빠지면 전원 무자녀로 판정된다 (#468)

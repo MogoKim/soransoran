@@ -78,7 +78,7 @@ const personaRows = await prisma.persona.findMany({
   where: { status: 'active' },
   select: {
     id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-    user: { select: { providerId: true } },
+    user: { select: { providerId: true, _count: { select: { accounts: true } } } },
   },
   orderBy: { code: 'asc' },
 })
@@ -90,6 +90,8 @@ const active: PersonaForMatch[] = personaRows.map((r) => {
   const vc = (r.voiceCore ?? {}) as Record<string, unknown>
   return {
     code: r.code, status: r.status, providerId: r.user?.providerId ?? null,
+    // 🔴 실회원 판별 정본. 넘기지 않으면 hardFilter 가 fail-closed 로 막는다
+    accountCount: r.user?._count.accounts ?? null,
     maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
     childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
     ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),

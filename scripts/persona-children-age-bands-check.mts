@@ -28,11 +28,11 @@ const bad = (n: string, d: string): void => { failed += 1; console.log(`  🔴 $
 
 /** 실측 DB 를 본뜬 행 (2026-09-02) */
 const ROWS: PersonaRow[] = [
-  { code: 'P05', status: 'active', providerId: null, identity: { childrenCount: 2, maritalStatus: '기혼', coreWound: '돌봄이 당연시되는 자리', warmPoint: 'x' } },
-  { code: 'P07', status: 'draft', providerId: null, identity: { childrenCount: 1, maritalStatus: '기혼' } },
-  { code: 'P10', status: 'draft', providerId: null, identity: { childrenCount: 1, maritalStatus: '이혼' } },
-  { code: 'P15', status: 'draft', providerId: null, identity: { childrenCount: 0, maritalStatus: '비혼' } },
-  { code: 'P17', status: 'draft', providerId: null, identity: { childrenCount: 2, maritalStatus: '기혼' } },
+  { code: 'P05', status: 'active', providerId: null, accountCount: 0, identity: { childrenCount: 2, maritalStatus: '기혼', coreWound: '돌봄이 당연시되는 자리', warmPoint: 'x' } },
+  { code: 'P07', status: 'draft', providerId: null, accountCount: 0, identity: { childrenCount: 1, maritalStatus: '기혼' } },
+  { code: 'P10', status: 'draft', providerId: null, accountCount: 0, identity: { childrenCount: 1, maritalStatus: '이혼' } },
+  { code: 'P15', status: 'draft', providerId: null, accountCount: 0, identity: { childrenCount: 0, maritalStatus: '비혼' } },
+  { code: 'P17', status: 'draft', providerId: null, accountCount: 0, identity: { childrenCount: 2, maritalStatus: '기혼' } },
 ]
 
 console.log('\n══ childrenAgeBands 반영 규칙 fixture ══\n')
@@ -123,7 +123,7 @@ console.log('\n══ childrenAgeBands 반영 규칙 fixture ══\n')
   const mismatch = planUpdate(ROWS.map((r) => (r.code === 'P17' ? { ...r, identity: { childrenCount: 3 } } : r)))
   if (!mismatch.issues.some((i) => i.code === 'P17')) offenders.push('🔴 자녀 수 불일치가 통과')
   // 대상에 없는 페르소나
-  const extra = planUpdate([...ROWS, { code: 'P99', status: 'draft', providerId: null, identity: {} }])
+  const extra = planUpdate([...ROWS, { code: 'P99', status: 'draft', providerId: null, accountCount: 0, identity: {} }])
   if (!extra.issues.some((i) => i.code === 'P99')) offenders.push('🔴 목록 밖 페르소나가 조용히 넘어감')
   if (extra.apply.some((a) => a.code === 'P99')) offenders.push('🔴 목록 밖 페르소나가 반영 대상')
   // 누락

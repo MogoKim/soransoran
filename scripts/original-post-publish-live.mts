@@ -146,7 +146,11 @@ const allRows = await prisma.originalPostApprovalQueue.findMany({
     id: true, status: true, createdPostId: true, gateVerdict: true, matchedAt: true,
     draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
     matchedPersona: {
-      select: { code: true, status: true, user: { select: { providerId: true } } },
+      // 🔴 실회원 판별 정본은 Account 다 — providerId 는 adapter 가 채우지 않는다
+      select: {
+        code: true, status: true,
+        user: { select: { providerId: true, _count: { select: { accounts: true } } } },
+      },
     },
   },
   // 🔴 gate=PASS 를 먼저, 그다음 배정이 이른 순 — 정렬이 흔들리면 dry-run 이 재현되지 않는다
@@ -170,6 +174,8 @@ for (const r of rows) {
       matchedPersonaCode: r.matchedPersona?.code ?? null,
       personaStatus: r.matchedPersona?.status ?? null,
       personaProviderId: r.matchedPersona?.user?.providerId ?? null,
+      // 🔴 persona 가 없으면 null 이고 judgePublish 가 fail-closed 로 막는다
+      personaAccountCount: r.matchedPersona?.user?._count.accounts ?? null,
     },
     // 🔴 여기서는 cap 을 이미 채운 것으로 보지 않는다. 몇 건이 자격이 있는지부터 센다
     { killSwitchEnabled: killed, publishedToday: 0 },

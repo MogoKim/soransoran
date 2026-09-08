@@ -38,6 +38,8 @@
  *   npx tsx scripts/persona-voice-profile.mts --apply --limit=4  🔴 실제 반영
  *   npx tsx scripts/persona-voice-profile.mts --nogo-scan       noGo 오탐 실측(읽기 전용 · 보류 판단 근거)
  */
+
+import { judgeRealMember } from '../src/lib/real-member-gate'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import { pathToFileURL } from 'node:url'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -120,7 +122,8 @@ export const REACTION_ROLES: readonly string[] = [
 // 순수 함수 — 🔴 DB 없이 fixture 가 전수 확인한다
 // ─────────────────────────────────────────────────────────
 
-export type PersonaRow = { code: string; status: string; providerId: string | null }
+/** 🔴 `accountCount` 는 실회원 판별 정본이다. 모르면 막는다 */
+export type PersonaRow = { code: string; status: string; providerId: string | null; accountCount: number | null }
 export type PlanIssue = { code: string; reason: string }
 
 /** 🔴 활동 시간대가 말이 되는가 */
@@ -185,7 +188,9 @@ export function planUpdate(rows: readonly PersonaRow[]): UpdatePlan {
     const row = rows.find((r) => r.code === profile.code)
     if (row === undefined) continue
     // 🔴 실회원 계정이면 손대지 않는다
-    if (row.providerId !== null) { issues.push({ code: profile.code, reason: '🔴 실회원 User 다' }); continue }
+    // 🔴 판정은 `judgeRealMember` 하나뿐이다 — 정본은 Account 다
+    const real = judgeRealMember({ accountCount: row.accountCount, providerId: row.providerId })
+    if (real.real) { issues.push({ code: profile.code, reason: `🔴 쓸 수 없는 User — ${real.reason}` }); continue }
     const err = validateProfile(profile)
     if (err !== null) { issues.push({ code: profile.code, reason: err }); continue }
     apply.push({ code: profile.code, profile })
@@ -274,14 +279,14 @@ async function main(): Promise<void> {
     select: {
       code: true, status: true, voiceVariations: true, activityRhythm: true,
       noGoTopics: true, noGoExpressions: true, forbiddenReactionRoles: true,
-      user: { select: { providerId: true } },
+      user: { select: { providerId: true, _count: { select: { accounts: true } } } },
     },
     orderBy: { code: 'asc' },
   })
   // 🔴 대상 4명만 계획에 넣는다. P05 는 목록 밖이라 issue 가 되므로 미리 거른다
   const targets: PersonaRow[] = rows
     .filter((r) => TARGET_CODES.includes(r.code))
-    .map((r) => ({ code: r.code, status: r.status, providerId: r.user?.providerId ?? null }))
+    .map((r) => ({ code: r.code, status: r.status, providerId: r.user?.providerId ?? null, accountCount: r.user?._count.accounts ?? null }))
 
   const plan = planUpdate(targets)
 

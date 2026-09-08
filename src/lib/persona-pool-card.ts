@@ -261,8 +261,10 @@ export function cardToPersona(card: PoolCard): PersonaForMatch {
   return {
     code: card.code,
     status: 'active',
-    // 🔴 아직 계정이 붙지 않았다. 실회원 차단(REAL_MEMBER)에 걸리지 않아야 시뮬이 성립한다
+    // 🔴 아직 계정이 붙지 않았다. 실회원 차단(REAL_MEMBER)에 걸리지 않아야 시뮬이 성립한다.
+    //    카드는 **아직 DB 에 없는 사람**이므로 Account 도 0 이다 — 만들 때 로그인 수단을 붙이지 않는다
     providerId: null,
+    accountCount: 0,
     maritalStatus: card.maritalStatus,
     childrenCount: card.childrenCount,
     childrenAgeBands: card.childrenAgeBands,

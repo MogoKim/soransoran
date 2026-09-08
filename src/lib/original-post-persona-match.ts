@@ -26,6 +26,8 @@
  * 🔴 이 파일은 고객 경로에서 import 되지 않는다. import 가 하나도 없다(fixture 가 강제).
  */
 
+import { judgeRealMember } from './real-member-gate'
+
 // ─────────────────────────────────────────────────────────
 // 자녀 나이대 — 🔴 밴드만. 정확한 나이 금지 (헌법 §9-3)
 // ─────────────────────────────────────────────────────────
@@ -124,8 +126,27 @@ export function readPostRequirements(title: string, body: string): PostRequireme
 export type PersonaForMatch = {
   code: string
   status: string
-  /** 🔴 카카오 실회원 판별 기준. null 이 아니면 실회원이다 */
+  /**
+   * 🔴 **방어적 보조 지표다 — 정본이 아니다** (2026-09-08).
+   *
+   *    `User.providerId` 는 NextAuth adapter 가 채우지 않는다 (`src/lib/auth.ts` §signIn).
+   *    실제로 실회원 판별은 **`Account` 행이 있는가**로 한다 — 카카오 로그인이 만드는 것은
+   *    `Account` 이지 `User.providerId` 가 아니다.
+   *    실측(2026-09-08): User 9명 전원 `providerId=null` 이라 이 검사만으로는 아무도 못 막는다.
+   *
+   *    그래도 남겨 둔다. 누군가 수동으로 채워 둔 값이 있으면 그것도 막아야 한다.
+   */
   providerId: string | null
+  /**
+   * 🔴 **실회원 판별 정본** — 이 persona 의 User 에 연결된 `Account` 행 수.
+   *
+   *    하나라도 있으면 로그인 수단이 붙은 계정이므로 **실회원**이다.
+   *    운영 persona 는 로그인하지 않으므로 항상 0 이다 (실측: active 5명 전원 0).
+   *
+   *    🔴 `null` 은 **"모른다"** 이고 fail-closed 로 막는다 — 조회에 실패했거나
+   *    생산 경로가 이 필드를 넘기지 않았다는 뜻이다. 모르는 채로 남의 이름으로 발행하느니 멈춘다.
+   */
+  accountCount: number | null
   maritalStatus?: string | null
   childrenCount?: number | null
   /** 🔴 undefined 와 [] 는 다르다. undefined = 미기재(모름) · [] = 무자녀(앎) */
@@ -163,7 +184,7 @@ export type BlockCode = (typeof BLOCK_CODES)[number]
 
 export const BLOCK_LABEL: Record<BlockCode, string> = {
   NOT_ACTIVE: 'active 가 아니다',
-  REAL_MEMBER: '🔴 실회원 계정이다',
+  REAL_MEMBER: '🔴 실회원 계정이다 (Account 연결 또는 판별 불가)',
   NO_CHILDREN: '자녀가 없는데 자녀 글이다',
   CHILD_AGE_CONFLICT: '🔴 자녀 나이대가 어긋난다',
   CHILD_AGE_UNKNOWN: '🔴 자녀 나이대가 기재되지 않아 판정할 수 없다',
@@ -195,8 +216,12 @@ export function hardFilter(
 
   // ── 운영 조건 ──
   if (p.status !== 'active') out.push({ code: 'NOT_ACTIVE', detail: `status=${p.status}` })
-  // 🔴 실회원 이름으로 발행되면 신뢰 사고다. 되돌리기 어렵다
-  if (p.providerId !== null) out.push({ code: 'REAL_MEMBER', detail: 'providerId 가 있다' })
+  // 🔴 실회원 이름으로 발행되면 신뢰 사고다. 되돌리기 어렵다.
+  //    정본은 `Account` 다 — 카카오 로그인이 만드는 것은 Account 이지 User.providerId 가 아니다.
+  //    `providerId` 검사는 방어적으로 남긴다(수동으로 채워 둔 값도 막는다).
+  //    🔴 판정은 `judgeRealMember` 하나뿐이다 — 여기서 다시 쓰면 한쪽만 고쳐지는 날이 온다
+  const real = judgeRealMember({ accountCount: p.accountCount, providerId: p.providerId })
+  if (real.real) out.push({ code: 'REAL_MEMBER', detail: real.reason })
 
   // ── 생활사 ──
   const kids = p.childrenCount ?? 0
@@ -603,7 +628,10 @@ export function planBatch(drafts: readonly BatchDraft[], personas: readonly Pers
     const p = byCode.get(code)
     if (p === undefined) return `배정된 persona ${code} 를 찾을 수 없다`
     if (p.status !== 'active') return `배정된 persona ${code} 가 active 가 아니다 (${p.status})`
-    if (p.providerId !== null && p.providerId !== '') return `배정된 persona ${code} 에 실계정이 붙어 있다`
+    // 🔴 복구도 같은 판정을 쓴다. 배정 때 통과했더라도 그 사이에 계정이 붙을 수 있고,
+    //    모르면 막는다 — 우회해서 다른 글을 내면 멈춘 레인이 도는 것처럼 보인다
+    const real = judgeRealMember({ accountCount: p.accountCount, providerId: p.providerId })
+    if (real.real) return `배정된 persona ${code} — ${real.reason}`
     return null
   }
 

@@ -15,6 +15,7 @@ import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
   type PublishCandidate, type PublishBlockCode,
 } from '../src/lib/original-post-publish'
+import { judgeRealMember } from '../src/lib/real-member-gate'
 import {
   ORIGINAL_POST_VISIBILITY_FLAGS, MICRO_SEED_POST_VISIBILITY_FLAGS,
 } from '../src/lib/post-visibility'
@@ -32,7 +33,9 @@ const bad = (n: string, d: string): void => { failed += 1; console.log(`  🔴 $
 const IN = { title: '제목입니다', content: '본문입니다. 두 문장쯤 됩니다.', authorId: 'u_1', personaId: 'p_1' }
 const C = (o: Partial<PublishCandidate> = {}): PublishCandidate => ({
   status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
-  matchedPersonaCode: 'P10', personaStatus: 'active', personaProviderId: null, ...o,
+  matchedPersonaCode: 'P10', personaStatus: 'active', personaProviderId: null,
+  // 🔴 기본은 "Account 0" — 운영 persona 의 정상 상태다. 누락(null)은 별도 fixture 가 본다
+  personaAccountCount: 0, ...o,
 })
 const CTX = { killSwitchEnabled: false, publishedToday: 0 }
 
@@ -242,6 +245,51 @@ console.log('\n══ 발행 규칙 fixture ══\n')
   if (offenders.length) bad('CLI 경계', offenders.join(' / '))
   else ok('CLI 경계', 'CLI 직접 write 0 · tx 경유 · 이중 스위치 · cap 상한 · --check · 본문 출력 0')
 }
+
+// ── 🔴 발행 직전 실회원 게이트 — 정본은 Account 다 (2026-09-08) ──
+//    발행은 되돌릴 수 없다. 배정 때 통과했더라도 여기서 다시 본다.
+{
+  const offenders: string[] = []
+  const v = (o: Partial<PublishCandidate>): ReturnType<typeof judgePublish> => judgePublish(C(o), CTX)
+  const blocked = (o: Partial<PublishCandidate>): boolean => {
+    const r = v(o)
+    return !r.ok && r.code === 'REAL_MEMBER'
+  }
+  if (!v({}).ok) offenders.push('🟢 Account 0 · providerId null 인데 막혔다')
+  if (!blocked({ personaAccountCount: 1 })) offenders.push('🔴 Account 1건인데 통과했다')
+  if (!blocked({ personaAccountCount: 3 })) offenders.push('🔴 Account 3건인데 통과했다')
+  // 🔴 fail-closed — 모르면 막는다
+  if (!blocked({ personaAccountCount: null })) offenders.push('🔴 Account 를 모르는데 통과했다 (fail-closed 실패)')
+  // 🔴 providerId 방어는 남는다
+  if (!blocked({ personaProviderId: 'kakao:1' })) offenders.push('🔴 providerId 가 있는데 통과했다')
+  // 🔴 실회원 User 에 persona 가 잘못 연결된 사고 상황
+  if (!blocked({ personaAccountCount: 1, personaProviderId: 'kakao:9' })) offenders.push('🔴 실회원 연결 persona 가 통과했다')
+  // 🔴 DB count 가 될 수 없는 값 — `NaN > 0` 은 false 라 검사 없이 두면 조용히 통과한다
+  for (const [label, v] of [
+    ['NaN', Number.NaN], ['Infinity', Number.POSITIVE_INFINITY], ['음수', -1], ['소수', 0.5],
+  ] as const) {
+    if (!blocked({ personaAccountCount: v })) offenders.push(`🔴 ${label} 이 통과했다`)
+  }
+  // 🔴 providerId 미조회도 막는다
+  if (!blocked({ personaProviderId: undefined as never })) offenders.push('🔴 providerId 미조회가 통과했다')
+  // 🔴 판정을 여기서 다시 쓰지 않는다 — 정본과 같은 답이어야 한다
+  for (const [label, acc] of [['0', 0], ['1', 1], ['null', null], ['NaN', Number.NaN], ['소수', 0.5]] as const) {
+    const gate = !v({ personaAccountCount: acc as never }).ok
+    const canon = judgeRealMember({ accountCount: acc as never, providerId: null }).real
+    if (gate !== canon) offenders.push(`🔴 ${label}: 발행 게이트(${gate}) 와 정본(${canon}) 이 다르다`)
+  }
+  // 🔴 사유가 무엇인지 말한다 — 사람이 어느 쪽인지 알아야 한다
+  const r = v({ personaAccountCount: 2 })
+  if (r.ok || !r.detail.includes('Account')) offenders.push('차단 사유에 Account 가 없다')
+  const u = v({ personaAccountCount: null })
+  if (u.ok || !u.detail.includes('fail-closed')) offenders.push('모름 차단 사유에 fail-closed 가 없다')
+  // 🔴 REAL_MEMBER 코드는 유지된다 — 사유만 정본에서 온다
+  if (!blocked({ personaAccountCount: 1 })) offenders.push('REAL_MEMBER 코드가 유지되지 않았다')
+
+  if (offenders.length) bad('🔴 발행 게이트 실회원 판별', offenders.join(' / '))
+  else ok('🔴 발행 게이트 실회원 판별', 'Account 0 통과 · 1건 이상 차단 · 모름 fail-closed · providerId 방어 · 사유 표기')
+}
+
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)
 process.exit(failed === 0 ? 0 : 1)

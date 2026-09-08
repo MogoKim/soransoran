@@ -1,6 +1,8 @@
 import type { BoardType, MicroSeedCandidateStatus } from '@prisma/client'
 // 🔴 3축 필드는 post-visibility 가 유일한 지점이다 (C-2). 여기서 값을 새로 적지 않는다.
 import { MICRO_SEED_POST_VISIBILITY_FLAGS } from './post-visibility'
+// 🔴 실회원 판별은 단일 정본이다. 여기서 다시 쓰지 않는다
+import { judgeRealMember } from './real-member-gate'
 
 /**
  * Micro Seed write-path 가드
@@ -321,11 +323,18 @@ export type AuthorProbe = {
   /** User row 가 실제로 있는가 (DB 실측) */
   exists: boolean
   /**
-   * 🔴 카카오 실회원 판별 기준. 값이 있으면 실회원이다.
+   * 🔴 **방어적 보조 지표** — 정본이 아니다 (2026-09-08 정정).
+   *    `User.providerId` 는 NextAuth adapter 가 채우지 않는다 (`src/lib/auth.ts` §signIn).
+   *    그래도 남긴다 — 누군가 수동으로 넣어 둔 값은 막아야 한다.
    *    `null` = 실측했고 비어 있음(시스템 User) / `undefined` = **select 하지 않음**.
-   *    둘은 다른 사건이라 undefined 는 통과시키지 않는다.
    */
   providerId: string | null
+  /**
+   * 🔴 **실회원 판별 정본** — 그 User 에 연결된 `Account` 행 수.
+   *    카카오 로그인이 만드는 것은 `Account` 이지 `User.providerId` 가 아니다.
+   *    `undefined`(select 누락) · `null`(알 수 없음) 은 **막는다** — fail-closed.
+   */
+  accountCount: number | null
   isBlocked: boolean
 }
 
@@ -352,7 +361,7 @@ export function verifyPublishAuthor(probe: AuthorProbe): AuthorVerdict {
     return { ok: false, reason: `exists 를 실측하지 못했다 (${JSON.stringify(probe.exists)}). User row 조회 결과가 필요하다` }
   }
   if (probe.providerId === undefined) {
-    return { ok: false, reason: 'providerId 를 실측하지 못했다. select 에 providerId 를 포함해야 한다 (실회원 판별 기준)' }
+    return { ok: false, reason: 'providerId 를 실측하지 못했다. select 에 providerId 를 포함해야 한다 (방어적 보조 지표)' }
   }
   if (typeof probe.isBlocked !== 'boolean') {
     return { ok: false, reason: `isBlocked 를 실측하지 못했다 (${JSON.stringify(probe.isBlocked)}). select 에 isBlocked 를 포함해야 한다` }
@@ -363,11 +372,11 @@ export function verifyPublishAuthor(probe: AuthorProbe): AuthorVerdict {
   }
 
   // 🚫 회원 계정 재사용 금지 — 실회원 이름으로 발행되면 되돌리기 어렵다.
-  if (probe.providerId !== null) {
-    return {
-      ok: false,
-      reason: `작성자가 실회원이다 (providerId 존재). 시스템 User 는 providerId 가 NULL 이어야 한다`,
-    }
+  //    🔴 판정은 `judgeRealMember` 하나뿐이다 (src/lib/real-member-gate.ts).
+  //    정본은 `Account` 이고, 실측하지 못했으면 막는다 — 조회하지 않고 발행하지 않는다
+  const real = judgeRealMember({ accountCount: probe.accountCount, providerId: probe.providerId })
+  if (real.real) {
+    return { ok: false, reason: `작성자를 쓸 수 없다 — ${real.reason}` }
   }
 
   if (probe.isBlocked) {

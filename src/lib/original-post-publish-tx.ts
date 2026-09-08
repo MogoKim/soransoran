@@ -56,7 +56,9 @@ export async function publishOriginalPostTx(
           matchedPersona: {
             select: {
               id: true, code: true, status: true, userId: true,
-              user: { select: { providerId: true } },
+              // 🔴 실회원 판별 정본 — 카카오 로그인이 만드는 것은 Account 다.
+              //    `providerId` 는 adapter 가 채우지 않는다 (src/lib/auth.ts §signIn)
+              user: { select: { providerId: true, _count: { select: { accounts: true } } } },
             },
           },
         },
@@ -78,6 +80,9 @@ export async function publishOriginalPostTx(
           matchedPersonaCode: row.matchedPersona?.code ?? null,
           personaStatus: row.matchedPersona?.status ?? null,
           personaProviderId: row.matchedPersona?.user?.providerId ?? null,
+          // 🔴 persona 가 없으면 `null` 이고, judgePublish 가 fail-closed 로 막는다.
+          //    여기서 0 으로 눙치면 "없는 persona" 가 실회원 검사를 통과한 것처럼 된다
+          personaAccountCount: row.matchedPersona?.user?._count.accounts ?? null,
         },
         { killSwitchEnabled: sw?.enabled === true, publishedToday: input.publishedToday },
       )

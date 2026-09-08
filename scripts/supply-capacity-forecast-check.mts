@@ -114,7 +114,7 @@ check('🟢 가능한 persona 만 추린다', (() => {
 // ── ④ 시뮬레이션 — 실제 러너 동작 재현 ──
 type P = Parameters<typeof forecastPublishing>[0]['personas'][number]
 const persona = (code: string): P => ({
-  code, status: 'active', providerId: null,
+  code, status: 'active', providerId: null, accountCount: 0,
   maritalStatus: null, parentCare: null, menopauseStatus: null,
   workStatus: null, economicStatus: null, region: null,
   noGoTopics: [], postsThisWeek: 0, daysSinceLastPost: null,
@@ -502,7 +502,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
   const blockedHead: BatchDraft = { ...D(0), title: '중학생 딸', body: '딸이 사춘기라 힘들어요.' }
   const q = [blockedHead, D(1), D(2)]
   const personas = ['A', 'B'].map((c) => ({
-    code: c, status: 'active', providerId: null,
+    code: c, status: 'active', providerId: null, accountCount: 0,
     maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
     parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
     region: null, noGoTopics: [] as string[], voiceLength: '중간',
@@ -544,7 +544,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
 // ④ 🔴 복구 행은 가상 발행해도 matchedAt 을 다시 더하지 않는다 (2026-09-07)
 {
   const persona = {
-    code: 'A', status: 'active', providerId: null,
+    code: 'A', status: 'active', providerId: null, accountCount: 0,
     maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
     parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
     region: null, noGoTopics: [] as string[], voiceLength: '중간',
@@ -596,7 +596,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
 //    여기서는 그 변환 결과와 **같은 모양**을 만들어 행동을 고정한다.
 {
   const mkPersona = (code: string, over: Record<string, unknown> = {}): PersonaForMatch => ({
-    code, status: 'active', providerId: null,
+    code, status: 'active', providerId: null, accountCount: 0,
     maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
     parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
     region: null, noGoTopics: [] as string[], voiceLength: '중간',
