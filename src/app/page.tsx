@@ -37,8 +37,9 @@ function pickForHome(articles: MagazineArticle[], count: number): MagazineArticl
 /**
  * 섹션 머리 — 아이콘 배지 · 제목 · 더보기.
  *
- * 🔴 색과 아이콘은 board-registry 가 정한다. 여기서 토큰명을 직접 쓰지 않는다.
- *    두 섹션이 각자 배지를 그리면 한쪽만 고쳐지는 날이 온다.
+ * 🔴 색과 기본 아이콘은 board-registry 가 정한다. 여기서 토큰명을 직접 쓰지 않는다.
+ *    다만 홈의 "지금 뜨는 이야기"는 베스트 방이 아니라 현재 인기 신호를 말하므로
+ *    우나어와 같은 불 아이콘을 쓴다. /best와 상단 메뉴의 별 아이콘은 바꾸지 않는다.
  *
  * 🔴 갈 곳이 없으면 더보기를 그리지 않는다.
  *    눌렀는데 빈 화면이 나오는 링크는 없느니만 못하다.
@@ -47,10 +48,12 @@ function SectionHeading({
   board,
   title,
   moreHref,
+  trending = false,
 }: {
   board: BoardMeta
   title: string
   moreHref?: string
+  trending?: boolean
 }) {
   return (
     <div
@@ -68,7 +71,11 @@ function SectionHeading({
             color: `var(${board.iconStrokeVar})`,
           }}
         >
-          <MenuIcon name={board.icon} size={18} />
+          {trending ? (
+            <span className="text-xl leading-none">🔥</span>
+          ) : (
+            <MenuIcon name={board.icon} size={18} />
+          )}
         </span>
         {title}
       </h2>
@@ -118,7 +125,7 @@ export default async function HomePage() {
 
         {posts.length > 0 ? (
           <section className="px-4 py-5">
-            <SectionHeading board={best} title="지금 뜨는 이야기" moreHref="/best" />
+            <SectionHeading board={best} title="지금 뜨는 이야기" moreHref="/best" trending />
 
             {/* -mx-4 로 섹션 여백을 되돌린다 — 행이 자기 px-4 를 가지므로
                 그대로 두면 32px 이 된다.
