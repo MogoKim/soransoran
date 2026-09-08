@@ -174,15 +174,13 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     replace: true,
     locked: false,
     note:
-      '720×900. 🔴 이전 기록("브랜드 요소 없는 사진")은 사실이 아니었다 — ' +
-      '사진 위에 브랜드색 카피가 **픽셀로 구워져 있다.** ' +
-      '웜 모노크롬 전환(2026-09-07) 실측: 채도 높은 주황·빨강 13,309px 의 평균이 ' +
-      '이전 코랄에 가깝고 새 브랜드 주황과 어긋난다. ' +
-      '🔴 수치는 여기 적지 않는다 — 설명문에 색 값을 쓰면 check:tokens 가 잡는다. ' +
-      '(PR 본문과 커밋 메시지에 남겼다. 세 자리 hex 형태라 PR 번호 표기도 함께 걸린다) ' +
-      '카피 색은 코드로 못 고친다 — 사람이 다시 만들어야 한다. ' +
-      '🔴 아이콘 2종이 2026-09-07 교체된 뒤로 **실제로 새 팔레트와 어긋난 채 남은 자산은 ' +
-      '이 로그인 슬라이드 3장뿐이다.**',
+      '720×900. ✅ 2026-09-08 새 팔레트로 **교체 완료.** ' +
+      '사진 위 강조 카피가 픽셀로 구워져 있어 코드로는 못 고치던 자리다 — ' +
+      '사진·인물·배치·카피는 그대로 두고 **강조 글자 색만** 이전 코랄에서 --brand 계열로 옮겼다. ' +
+      '흰 글자는 건드리지 않았다. ' +
+      '🔴 replace 는 true 로 둔다 — 지금 어긋나 있다는 뜻이 아니라 ' +
+      '**다음 리브랜딩에서도 사람이 다시 만들어야 하는 자산**이라는 정책값이다. ' +
+      '🔴 이 파일에는 색 값을 적지 않는다(check:tokens 대상). 토큰명으로만 가리킨다.',
   },
   {
     path: 'public/images/login/soransoran-login-slide-2.jpg',
@@ -191,7 +189,7 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     use: '로그인 화면 슬라이드 2',
     replace: true,
     locked: false,
-    note: '슬라이드 1 과 같다 — 브랜드색 카피가 픽셀에 구워져 있어 새 팔레트와 어긋난다.',
+    note: '슬라이드 1 과 같다 — 2026-09-08 강조 글자만 --brand 계열로 교체 완료.',
   },
   {
     path: 'public/images/login/soransoran-login-slide-3.jpg',
@@ -200,7 +198,7 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     use: '로그인 화면 슬라이드 3',
     replace: true,
     locked: false,
-    note: '슬라이드 1 과 같다 — 브랜드색 카피가 픽셀에 구워져 있어 새 팔레트와 어긋난다.',
+    note: '슬라이드 1 과 같다 — 2026-09-08 강조 글자만 --brand 계열로 교체 완료.',
   },
   {
     path: 'src/components/features/KakaoSignInButton.tsx',
