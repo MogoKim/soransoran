@@ -13,6 +13,8 @@ import {
   type ThinRow,
 } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
+import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
+import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 
 let pass = 0
 let fail = 0
@@ -153,10 +155,12 @@ console.log('\n⑤ 🔴 하지 않는 것 — 스캔')
 console.log('\n⑥ 🔴 상수를 건드리지 않았다')
 {
   const m = readFileSync('src/lib/original-post-persona-match.ts', 'utf-8')
-  check('POST_CAP_PER_WEEK = 1 그대로', /export const POST_CAP_PER_WEEK = 1\b/.test(m))
-  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', /export const MIN_DAYS_BETWEEN_POSTS = 5\b/.test(m))
-  check('DAILY_PUBLISH_CAP = 1 그대로',
-    /export const DAILY_PUBLISH_CAP = 1\b/.test(readFileSync('src/lib/original-post-publish.ts', 'utf-8')))
+  // 🔴 **소스 문자열이 아니라 실제 값**을 본다 (2026-09-08).
+  //    상수를 `RUNTIME_PROFILE` 에서 파생시키면서 `= 1` 리터럴이 사라졌다.
+  //    원래 의도가 "값이 그대로인가" 였으므로 값으로 묻는 편이 더 강하다.
+  check('POST_CAP_PER_WEEK = 1 그대로', POST_CAP_PER_WEEK === 1)
+  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', MIN_DAYS_BETWEEN_POSTS === 5)
+  check('DAILY_PUBLISH_CAP = 1 그대로', DAILY_PUBLISH_CAP === 1)
   check(`BODY_HEAD_CHARS = ${BODY_HEAD_CHARS} 그대로`,
     /export const BODY_HEAD_CHARS = 300\b/.test(readFileSync('scripts/lib/micro-seed-raw-originality.mts', 'utf-8')))
   check('🔴 thin 저장 계약을 바꾸지 않았다',

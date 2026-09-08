@@ -35,6 +35,9 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { planBatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
+import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
+import { stageVerdicts } from '../src/lib/scale-readiness'
+import { effectiveWeeklyCap } from '../src/lib/scale-profile'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -53,8 +56,8 @@ const prisma = new PrismaClient()
 
 console.log(APPLY ? '\n══ 🔴 실제 발행 (--apply) ══\n' : '\n══ dry-run (DB write 0 · Post 0) ══\n')
 console.log(`  대상 조건  gate=${AUTO_GATE_VERDICT} · ${AUTO_PROMPT_VERSION} / ${AUTO_MODEL} · ${AUTO_SITE_PREFIX}*`)
-console.log(`  상수      일 ${DAILY_PUBLISH_CAP}건 · persona 주 ${POST_CAP_PER_WEEK}건 · 최소 ${MIN_DAYS_BETWEEN_POSTS}일`)
-console.log('  🔴 이 러너는 상수를 바꾸지 않는다\n')
+console.log(`  안전 기본값 일 ${DAILY_PUBLISH_CAP}건 · persona 주 ${POST_CAP_PER_WEEK}건 · 최소 ${MIN_DAYS_BETWEEN_POSTS}일`)
+console.log('  🔴 실제 상한은 아래 ③-c 에서 설치한다 — 설치 전에는 이 안전값이다\n')
 
 // ── ① 후보 수집 — 🔴 읽기만 한다 ──
 const raw = await prisma.originalPostApprovalQueue.findMany({
@@ -140,6 +143,41 @@ for (const r of personaRows) {
 //    넘기지 않으면 planBatch 가 그 행을 새로 매칭해 **다른 사람에게** 줄 수 있다
 const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
 
+/**
+ * ── ③-c 🔴 **규모 설정 설치** — `loadEnvLocal()` 뒤, 쓰기 판정 **앞**이다 ──
+ *
+ *    ① 지금 큐·지금 사람으로 각 단계가 14일을 버티는지 시뮬레이션하고
+ *    ② 그 판정을 넘겨 `release` 단계를 **실제로** 낮춘다.
+ *    화면 문구가 아니라 아래 `dailyCap`·`caps` 가 바뀐다 — 그것이 이 설치의 목적이다.
+ */
+const historyRows = await prisma.personaActivityLog.findMany({
+  where: { kind: 'post' }, select: { createdAt: true, persona: { select: { code: true } } },
+})
+const readiness = stageVerdicts({
+  queue: targets.map((t) => ({
+    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
+    assignedPersonaCode: null,
+  })),
+  personas: personas as never,
+  history: personas.map((p) => ({
+    code: p.code,
+    matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
+  })),
+  startAt: new Date(),
+})
+const scale = installFromEnv(process.env, { readiness })
+// 🔴 여기서부터 쓰기 판정에 쓰이는 값은 전부 `scale` 에서 나온다
+const RELEASE_DAILY_CAP = scale.releaseProfile.dailyTarget
+const RELEASE_CAPS = {
+  postsPerWeek: effectiveWeeklyCap(scale.releaseProfile.postsPerWeek, scale.releaseProfile.minDaysBetween),
+  minDaysBetween: scale.releaseProfile.minDaysBetween,
+}
+console.log(`\n③-c 규모 설정  ${describeScale(scale)}`)
+for (const n of scale.notes) console.log(`     · ${n}`)
+console.log(`     적용된 발행 상한  일 ${RELEASE_DAILY_CAP}건 · persona 주 ${RELEASE_CAPS.postsPerWeek}건`
+  + ` · 최소 ${RELEASE_CAPS.minDaysBetween}일`)
+if (scale.throttledByReadiness) console.log('     🔴 준비도 미달로 감속됐다 — 이 값이 실제로 적용된다')
+
 // 🔴 후보만 넣어 계산한다 — legacy 글이 여력을 가져가면 안 된다
 const batch = planBatch(
   targets.map((t) => ({
@@ -151,6 +189,8 @@ const batch = planBatch(
       : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
   })),
   personas,
+  // 🔴 설치된 release 프로필을 **명시적으로** 넘긴다. 모듈 상수에 기대지 않는다
+  RELEASE_CAPS,
 )
 const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
 
@@ -224,10 +264,10 @@ const dayStart = kstDayStart(new Date())
 const publishedToday = await prisma.personaActivityLog.count({ where: { kind: 'post', createdAt: { gte: dayStart } } })
 const sw = await prisma.personaGlobalSwitch.findUnique({ where: { id: 'global' }, select: { enabled: true } })
 const killed = sw?.enabled === true
-console.log(`\n④ 오늘(${kst(new Date())}) 발행 ${publishedToday} / ${DAILY_PUBLISH_CAP}건 · 전체 중지 ${killed ? '🔴 켜짐' : '꺼짐'}`)
+console.log(`\n④ 오늘(${kst(new Date())}) 발행 ${publishedToday} / ${RELEASE_DAILY_CAP}건 · 전체 중지 ${killed ? '🔴 켜짐' : '꺼짐'}`)
 
 // ── ⑤ 실행 판정 ──
-const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: DAILY_PUBLISH_CAP, killSwitchEnabled: killed })
+const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: RELEASE_DAILY_CAP, killSwitchEnabled: killed })
 if (!gate.ok) {
   console.log(`\n⑤ 발행하지 않는다 — ${gate.reason}`)
   if (!APPLY) console.log('   🟡 dry-run 입니다. DB write 0 · Post 0 · 실행하려면 --apply 와 --limit=1 을 둘 다 붙이세요.')
@@ -261,7 +301,8 @@ if (target.matchedPersonaId === null) {
 }
 
 // ── ⑦ 발행 — 🔴 되돌릴 수 없다 ──
-const res = await publishOriginalPostTx(prisma, { queueId: target.id, publishedToday })
+// 🔴 상한을 주입한다 — 트랜잭션 안 재판정도 같은 값을 쓴다
+const res = await publishOriginalPostTx(prisma, { queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP })
 if (res.kind !== 'published') {
   await prisma.$disconnect()
   fail(res.kind === 'blocked' ? `발행이 막혔습니다 — ${res.code} · ${res.detail}` : `발행 오류 — ${res.message}`)

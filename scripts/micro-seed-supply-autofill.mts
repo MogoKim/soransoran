@@ -47,6 +47,8 @@ import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_P
   from '../src/lib/micro-seed-auto-judge'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
+import { derive as deriveProfile } from '../src/lib/scale-profile'
 
 const DATA_DIR = '.microseed-data'
 /** 🔴 사람이 보류한 글 — 재생성되는 후보 파일과 따로 산다 (§4-AN ②) */
@@ -150,6 +152,10 @@ function dedupKeyOf(rawContentId: string, body: string): string {
 
 async function main(): Promise<void> {
   await loadEnvLocal()
+  // 🔴 `loadEnvLocal()` 뒤에 설치한다. 내부 공급이므로 **capacity 단계**를 쓴다
+  const scale = installFromEnv(process.env)
+  const capD = deriveProfile(scale.capacityProfile)
+  const LIMITS = { warn: capD.stockWarn, min: capD.stockMin, target: capD.stockTarget }
   const override = arg('input')
   const inputPaths = override !== null ? [override] : latestOfEach(DATA_DIR)
   if (inputPaths.length === 0) fail(`${DATA_DIR} 에 후보 파일이 없습니다`)
@@ -179,7 +185,9 @@ async function main(): Promise<void> {
   console.log(APPLY ? '\n══ 🔴 실제 보충 (--apply) ══\n' : '\n══ dry-run (DB write 0 · Post 0) ══\n')
   console.log(`  후보 파일  ${fileNote.join(' · ')} → 합계 ${candidates.length}건`)
   console.log(`  보류 목록  ${missing ? '🔴 없음' : `${HELD_FILE} · ${held.length}건`}`)
-  console.log(`  재고 기준  경고 ${STOCK_WARN} 이하 · 최소 ${STOCK_MIN} · 목표 ${STOCK_TARGET}`)
+  console.log(`  규모 설정  ${describeScale(scale)}`)
+  console.log(`  재고 기준  경고 ${LIMITS.warn} 이하 · 최소 ${LIMITS.min} · 목표 ${LIMITS.target}`
+    + `  (capacity=${scale.capacityStage} 기준 · 안전 기본값은 ${STOCK_WARN}/${STOCK_MIN}/${STOCK_TARGET})`)
   console.log('  🔴 이 도구는 발행하지 않는다 — Post · persona 배정 · ActivityLog 를 만들지 않는다\n')
 
   if (missing) {
@@ -205,7 +213,7 @@ async function main(): Promise<void> {
     status: r.status, createdPostId: r.createdPostId,
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
-  })))
+  })), LIMITS)
   const mark = stock.level === 'critical' ? '🔴' : stock.level === 'low' ? '🟡' : '🟢'
   console.log(`① 재고  ${mark} 러너가 먹을 수 있는 것 ${stock.usable}건`)
   console.log(`   큐 전체 ${queueRows.length}건 중 발행 러너가 인정하는 것만 센다`
@@ -302,7 +310,7 @@ async function main(): Promise<void> {
   if (nNull > 0) console.log('   🔴 profile 을 못 만든 건이 있다 — 그 건은 적재 단계에서 건너뛴다')
 
   // ── ④ 실행 판정 ──
-  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, usable: stock.usable })
+  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, usable: stock.usable, target: LIMITS.target })
   if (!gate.ok) {
     console.log(`\n④ 보충하지 않는다 — ${gate.reason}`)
     if (!APPLY) {
@@ -401,7 +409,7 @@ async function main(): Promise<void> {
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   })))
-  console.log(`   재고 ${stock.usable} → ${stockAfter.usable}건 (목표 ${STOCK_TARGET})`)
+  console.log(`   재고 ${stock.usable} → ${stockAfter.usable}건 (목표 ${LIMITS.target})`)
   console.log('\n   🔴 발행하지 않았다. 다음 발행은 auto-publish 러너가 스케줄에 따라 한다.\n')
   await prisma.$disconnect()
   process.exit(v.ok ? 0 : 1)

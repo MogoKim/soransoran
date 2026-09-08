@@ -12,8 +12,8 @@ import {
   profileOf, machineMarksOk,
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_GATE_MARKS,
 } from '../src/lib/original-post-auto-publish'
-import { kstDayStart } from '../src/lib/original-post-publish'
-import { planMatch } from '../src/lib/original-post-persona-match'
+import { kstDayStart, DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
+import { planMatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 
 let pass = 0
 let fail = 0
@@ -406,9 +406,13 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
 {
   const m = readFileSync('src/lib/original-post-persona-match.ts', 'utf-8')
   const p = readFileSync('src/lib/original-post-publish.ts', 'utf-8')
-  check('POST_CAP_PER_WEEK = 1 그대로', /export const POST_CAP_PER_WEEK = 1\b/.test(m))
-  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', /export const MIN_DAYS_BETWEEN_POSTS = 5\b/.test(m))
-  check('DAILY_PUBLISH_CAP = 1 그대로', /export const DAILY_PUBLISH_CAP = 1\b/.test(p))
+  // 🔴 **소스 문자열이 아니라 실제 값**을 본다 (2026-09-08).
+  //    상수를 `RUNTIME_PROFILE` 에서 파생시키면서 `= 1` 같은 리터럴이 사라졌다.
+  //    문자열을 찾던 검사는 "값이 그대로인가" 를 물으려던 것이므로, 값으로 묻는 편이 더 강하다 —
+  //    프로필이 바뀌면 문자열은 그대로여도 값이 달라질 수 있다.
+  check('POST_CAP_PER_WEEK = 1 그대로', POST_CAP_PER_WEEK === 1)
+  check('MIN_DAYS_BETWEEN_POSTS = 5 그대로', MIN_DAYS_BETWEEN_POSTS === 5)
+  check('DAILY_PUBLISH_CAP = 1 그대로', DAILY_PUBLISH_CAP === 1)
   check('러너가 상수를 재정의하지 않는다', (() => {
     const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
     return !/const (DAILY_PUBLISH_CAP|POST_CAP_PER_WEEK|MIN_DAYS_BETWEEN_POSTS)\s*=/.test(src)

@@ -33,7 +33,17 @@ import {
   STAGE_LABEL,
   type Checkpoint, type ExecResult, type LockRecord, type Stage, type StockSnapshot,
 } from '../src/lib/supply-autopilot'
-import { STOCK_TARGET, readStock } from '../src/lib/micro-seed-supply-autofill'
+import { STOCK_TARGET, readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
+import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
+import { derive as deriveProfile } from '../src/lib/scale-profile'
+
+/**
+ * 🔴 **내부 공급은 capacity 단계를 따른다** (2026-09-08).
+ *    공개 발행이 1/day 여도 재고는 capacity 만큼 쌓아 둔다 — 그것이 준비다.
+ *    🔴 준비도 판정은 넘기지 않는다. 준비도 감속은 **공개 발행**을 낮추는 장치이지
+ *       내부 재고를 줄이는 장치가 아니다 (줄이면 영원히 준비되지 않는다).
+ */
+let CAPACITY_LIMITS: StockLimits | undefined
 
 const DATA_DIR = '.microseed-data'
 const argv = process.argv.slice(2)
@@ -216,7 +226,7 @@ async function snapshot(
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   }))
-  const st = readStock(mapped)
+  const st = readStock(mapped, CAPACITY_LIMITS)
   const liveRows = mapped.filter((r) =>
     (r.status === 'APPROVED' || r.status === 'EDITED')
     && (r.createdPostId === null || r.createdPostId === ''))
@@ -230,6 +240,10 @@ async function snapshot(
 
 async function main(): Promise<void> {
   await loadEnvLocal()
+  // 🔴 `loadEnvLocal()` **뒤에** 설치한다 — import 시점에 읽으면 .env.local 이 반영되지 않는다
+  const scale = installFromEnv(process.env)
+  const capD = deriveProfile(scale.capacityProfile)
+  CAPACITY_LIMITS = { warn: capD.stockWarn, min: capD.stockMin, target: capD.stockTarget }
   const { PrismaClient } = await import('@prisma/client')
   const prisma = new PrismaClient()
 
@@ -240,7 +254,10 @@ async function main(): Promise<void> {
 
   console.log(`\n══ 공급 Autopilot v1 — ${LIVE ? '🔴 live' : 'dry-run (네트워크 0 · LLM 0 · DB write 0)'} ══\n`)
   console.log(`  runId ${runId}`)
-  console.log(`  목표 재고 ${STOCK_TARGET}건 · 순서 수집 → 변환 → 판정 → 초안 → 보충`)
+  console.log(`  규모 설정 ${describeScale(scale)}`)
+  for (const n of scale.notes) console.log(`     · ${n}`)
+  console.log(`  목표 재고 ${CAPACITY_LIMITS.target}건 (capacity=${scale.capacityStage} 기준)`
+    + ` · 순서 수집 → 변환 → 판정 → 초안 → 보충`)
   console.log('  🔴 이 러너는 발행하지 않는다 — Post · persona 배정 · ActivityLog 0')
   console.log(`  스위치  ${AUTOPILOT_KILL_SWITCH_ENV}=${killOpen ? 'true' : '없음'}`
     + ` · ${CHILD_KILL_SWITCH_ENV}=${childKillOpen ? 'true' : '없음'}\n`)
@@ -300,11 +317,13 @@ async function main(): Promise<void> {
   // ── ③ 판정 ──
   if (SIM !== null && LIVE) fail('--simulate-stock 은 dry-run 전용이다 — 모의 재고로 밖에 나가지 않는다')
   const judged = SIM === null ? before.stock
-    : { ...before.stock, usable: SIM, shortfall: Math.max(0, STOCK_TARGET - SIM) }
+    : { ...before.stock, usable: SIM, shortfall: Math.max(0, CAPACITY_LIMITS.target - SIM) }
   if (SIM !== null) console.log(`\n   🟡 모의 재고 ${SIM}건으로 계획만 본다 (실측 ${before.stock.usable}건)`)
   const verdict = judgeRun({
     live: LIVE, killOpen, childKillOpen,
     stock: judged, lock: decision === 'stale' ? 'free' : decision,
+    // 🔴 capacity 기준 목표를 주입한다 — 모듈 상수(안전값)로 판정하지 않는다
+    target: CAPACITY_LIMITS.target,
   })
   // 🔴 유지보수 단계가 실패하면 조용히 exit 0 으로 넘어가지 않는다 —
   //    launchd 는 exit status 로만 성패를 안다. 0 이면 아무도 실패를 모른다.
@@ -518,7 +537,7 @@ async function main(): Promise<void> {
   })
 
   console.log('\n⑤ 관제')
-  console.log(`   재고     ${before.stock.usable} → ${after.stock.usable} (목표 ${STOCK_TARGET})`)
+  console.log(`   재고     ${before.stock.usable} → ${after.stock.usable} (목표 ${CAPACITY_LIMITS.target})`)
   console.log(`   구성     사람 ${after.stock.human} · 기계 ${after.stock.machine} · legacy ${after.legacy}`)
   console.log(`   수집     열림 ${fmtCount(tally.collected)} · 404 ${fmtCount(tally.fetch404)}`)
   console.log(`   판정     SEED ${fmtCount(tally.seeds)} · HOLD ${fmtCount(tally.hold)} · DROP ${fmtCount(tally.drop)}`)

@@ -12,6 +12,7 @@
  */
 
 import { STOCK_TARGET } from './micro-seed-supply-autofill'
+import { detailPerQueueItem } from './scale-supply-plan'
 
 /** 🔴 전체 kill switch. plist 를 지우지 않고도 멈출 수 있어야 한다 */
 export const AUTOPILOT_KILL_SWITCH_ENV = 'SORAN_SUPPLY_AUTOPILOT_ENABLED'
@@ -82,12 +83,15 @@ export type RunVerdict = RunGo | ({ ok: false } & RunBlock)
  * 수집량 — 🔴 부족분과 같은 수만 열면 모자란다.
  *
  * 2026-09-07 실측: 열기 50 → AUTO_SEED 24 → 채택 16 → 적재 가능 9.
- * 원천 하나가 큐 한 줄이 되지 않는다. 그래서 부족분의 4배를 열되
- * 상한 50 · 하한 10 을 지킨다 — 상한은 하위 스크립트도 다시 막는다.
+ * 원천 하나가 큐 한 줄이 되지 않는다. 그래서 부족분의 몇 배를 열어야 한다.
+ *
+ * 🔴 그 **배수를 여기에 적지 않는다** (2026-09-08). 통과율에서 계산한다 —
+ *    예전에는 `* 4` 리터럴이었고, 통과율이 바뀌어도 4 는 그대로였다.
+ *    상한 50 · 하한 10 은 그대로 지킨다 — 상한은 하위 스크립트도 다시 막는다.
  */
 export function collectCapFor(shortfall: number): number {
   if (shortfall <= 0) return 0
-  return Math.min(COLLECT_CAP, Math.max(COLLECT_MIN, shortfall * 4))
+  return Math.min(COLLECT_CAP, Math.max(COLLECT_MIN, shortfall * detailPerQueueItem()))
 }
 
 /**

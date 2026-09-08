@@ -36,6 +36,13 @@ export type PublishTxInput = {
   queueId: string
   /** 오늘(KST) 이미 발행된 수 — 부르는 쪽이 센다 */
   publishedToday: number
+  /**
+   * 🔴 **하루 상한을 주입받는다** (2026-09-08).
+   *    모듈 상수를 읽으면 `loadEnvLocal()`·GHA vars 로 정한 단계가 이 쓰기 경로에
+   *    도달하지 못한다 — 관제는 감속했다고 말하는데 여기서는 옛 값으로 나간다.
+   *    주지 않으면 `judgePublish` 가 가장 안전한 상수(1건)로 떨어뜨린다.
+   */
+  dailyCap: number
 }
 
 /**
@@ -84,7 +91,12 @@ export async function publishOriginalPostTx(
           //    여기서 0 으로 눙치면 "없는 persona" 가 실회원 검사를 통과한 것처럼 된다
           personaAccountCount: row.matchedPersona?.user?._count.accounts ?? null,
         },
-        { killSwitchEnabled: sw?.enabled === true, publishedToday: input.publishedToday },
+        {
+          killSwitchEnabled: sw?.enabled === true,
+          publishedToday: input.publishedToday,
+          // 🔴 주입값이다. 트랜잭션 안에서 다시 판정할 때도 같은 상한을 쓴다
+          dailyCap: input.dailyCap,
+        },
       )
       if (!verdict.ok) return { kind: 'blocked', code: verdict.code, detail: verdict.detail }
 

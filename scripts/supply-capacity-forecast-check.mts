@@ -272,7 +272,7 @@ check('🟢 차단이 없으면 비율 0', splitBlockReasons({}).lifeRate === 0)
 // ② 전체 후보를 planBatch 에 넘기되 발행 대상은 head 다
 check('🔴 [배치] 남은 후보 **전체**를 planBatch 에 넘긴다 — head 하나만 넘기지 않는다', (() => {
   const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
-  return /planBatch\(remaining, personasNow\)/.test(lib) && !/planBatch\(\[head\]/.test(lib)
+  return /planBatch\(remaining, personasNow/.test(lib) && !/planBatch\(\[head\]/.test(lib)
 })())
 // 🔴 2026-09-07 교체: 발행 대상은 head 가 아니라 **배정이 있는 첫 글**이다.
 //    그리고 그 규칙은 러너의 함수를 **그대로 부른다** — 예측용으로 복제하지 않는다
@@ -459,9 +459,10 @@ check('🟢 [LOW] 기대량을 채우면 HEALTHY', (() => {
   const r = jc(7)
   return r.length === 1 && r[0].code === 'CAPACITY_OK'
 })())
-check('🔴 [LOW] 러너가 dailyCap 을 judgeCapacity 에 넘긴다', (() => {
+// 🔴 **주입값을 넘겨야 한다** (2026-09-08). 모듈 상수를 넘기면 규모 설정이 관제에 닿지 않는다
+check('🔴 [LOW] 러너가 확정된 release 상한을 judgeCapacity 에 넘긴다', (() => {
   const h = readFileSync('scripts/supply-health.mts', 'utf-8')
-  return /dailyCap: DAILY_PUBLISH_CAP,\s*\}\)/.test(h)
+  return /dailyCap: RELEASE_DAILY_CAP,/.test(h) && !/dailyCap: DAILY_PUBLISH_CAP/.test(h)
 })())
 
 // 🔴 옛 실측 수치가 주석에 박혀 있지 않다
@@ -490,8 +491,11 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
   check('🔴 러너가 오늘 발행 수를 넘겨 다음 예약을 정한다',
     /nextScheduleAt\(\{ now, publishedToday: todayCount/.test(runner))
   check('🔴 하루 상한은 러너 정본 상수를 쓴다', DAILY_PUBLISH_CAP === 1)
+  // 🔴 러너는 **확정된 release 프로필**의 상한을 주입한다 — 모듈 상수는 안전 기본값일 뿐이다
   check('🔴 러너가 dailyCap 을 명시적으로 주입한다',
-    /dailyCap: DAILY_PUBLISH_CAP/.test(runner))
+    /dailyCap: RELEASE_DAILY_CAP/.test(runner) && !/dailyCap: DAILY_PUBLISH_CAP/.test(runner))
+  check('🔴 러너가 그 상한을 규모 확정 뒤에 만든다',
+    runner.indexOf('installFromEnv(') < runner.indexOf('const RELEASE_DAILY_CAP ='))
 }
 
 // ③ 🔴 예측과 러너가 **같은 글**을 고른다 — 두 화면이 다른 말을 하면 안 된다
