@@ -1,6 +1,7 @@
 # Persona MVP 활성화 설계 — 초기 5명
 
-> 작성 2026-08-30 · 상태 **설계 초안 · 구현 미착수**
+> 작성 2026-08-30 · 상태 **설계 기록 · MVP 및 Wave2 활성화 구현 완료**
+> 현재 구현·운영 상태: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
 > 선행: [Persona Pool 설계](2026-08-30-persona-pool-design.md) · [M3 반응 지도](2026-08-30-m3-reaction-map-design.md) · [Safety / Originality Gate](2026-08-30-persona-safety-originality-gate-design.md)
 
 ---

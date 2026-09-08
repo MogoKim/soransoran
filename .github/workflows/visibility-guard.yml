@@ -419,6 +419,13 @@ jobs:
       - name: Scale Foundation (회귀 0 · cohort · 공급 역산 · 병목)
         run: npm run scale:foundation-check
 
+      # 목적·North Star·Lane·AI 모델·현재 운영 상태의 단일 진입점.
+      # 날짜별 문서가 다시 현재 정본을 자처하거나 코드의 기본 모델·d1 workflow와
+      # Master가 갈라지면 다음 작업자가 잘못된 전제에서 시작한다.
+      # DB 숫자는 가변값이라 CI에 고정하지 않고 Master에 시각이 있는 스냅샷으로만 남긴다.
+      - name: Master 운영 문서 (필수 절 · 모델 · workflow · 문서 지도)
+        run: npm run master:doc-check
+
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #
       # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.

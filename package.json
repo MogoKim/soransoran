@@ -102,6 +102,7 @@
     "persona:wave2-check": "tsx scripts/persona-wave2-check.mts",
     "persona:cohort-run": "tsx scripts/persona-cohort-run.mts",
     "scale:foundation-check": "tsx scripts/scale-foundation-check.mts",
+    "master:doc-check": "tsx scripts/master-operating-doc-check.mts",
     "supply:autopilot-lock-check": "tsx scripts/supply-autopilot-lock-check.mts",
     "supply:autopilot-check": "tsx scripts/supply-autopilot-check.mts",
     "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",

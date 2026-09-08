@@ -1,5 +1,9 @@
 # 소란소란 자동화 전환 정본 (2026-09-03)
 
+> **전체 현재 상태와 실행 우선순위**: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
+> 이 문서는 속도·안전 전략의 상세 정본이다. 날짜가 붙은 DB 수치와 구현 상태는 역사 스냅샷이며,
+> 현재값은 Master와 main/DB/workflow 실측을 따른다.
+>
 > **이 문서의 역할**: **완전 자동화까지 가는 속도 전략 · 안정성 가드 · cap ladder · PR 마일스톤**의 단일 진실.
 > 상위: [헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) · [Persona Network 전략](2026-08-29-persona-network-strategy.md) ·
 > [Persona 아키텍처](2026-08-30-persona-architecture-design.md) · [Original Post 레인 정본](2026-09-02-original-post-lane-strategy.md)

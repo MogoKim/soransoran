@@ -1,6 +1,8 @@
 # 소란소란 Persona Network 전략
 
-> 작성 2026-08-29 · 상태 **방향 확정 · 구현 미착수**
+> 작성 2026-08-29 · 상태 **방향 확정 · 구현 부분 완료**
+> 현재 구현·운영 상태: [Master Operating System](./MASTER-OPERATING-SYSTEM.md)
+> 이 문서의 인원·DB 숫자·`없음` 표시는 작성 당시 스냅샷이다.
 > 선행: [VE-M3 학습 후보 선별 정책](2026-08-29-voice-m3-learning-policy.md) · [export 설계](2026-08-29-voice-m3-export-design.md)
 > 상위: [Micro Seed Lane 헌법](../constitution/MICRO_SEED_LANE_CONSTITUTION.md) §12 마일스톤 **M4 Persona OS**
 
