@@ -376,13 +376,23 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
   const cardOf = new Map(cards.map((c) => [c.code, c]))
 
   /** §7-1 `문장 길이` 줄에서 밴드별 코드를 읽는다 — 손으로 옮겨 적지 않는다 */
-  const line = doc.split('\n').find((l) => l.startsWith('문장 길이')) ?? ''
+  const lengthLine = doc.split('\n').find((l) => l.startsWith('문장 길이')) ?? ''
   const groups = new Map<string, string[]>()
-  for (const seg of line.replace(/^문장 길이\s*/, '').split('·')) {
+  for (const seg of lengthLine.replace(/^문장 길이\s*/, '').split('·')) {
     const m = /^\s*(\S+)\s+((?:P\d{2}\s*)+)$/.exec(seg.trim())
     if (m !== null) groups.set(m[1]!, m[2]!.trim().split(/\s+/))
   }
   check('🔴 §7-1 문장 길이 줄을 읽는다 — 짧음·중간·긴 세 묶음', groups.size === 3)
+
+  /**
+   * 🔴 **명시적 길이 미상 목록** — 근거가 없어 비워 둔 카드다.
+   *    이 줄이 없으면 "빠진 것" 과 "일부러 비운 것" 을 구별할 수 없다 —
+   *    실측: P05 · P09 · P10 · P14 네 명이 어느 목록에도 없었는데,
+   *    그중 셋은 단순 누락이고 하나(P09)만 근거가 없는 것이었다.
+   */
+  const unknownLine = doc.split('\n').find((l) => l.startsWith('길이 미상')) ?? ''
+  const unknownCodes = (unknownLine.match(/P\d{2}/g) ?? [])
+  check('🔴 §7-1 에 명시적 `길이 미상` 줄이 있다', unknownCodes.length > 0)
 
   /** §7-1 밴드 이름 → 매칭 밴드 */
   const BAND: Record<string, string> = { '짧음': '짧게', '중간': '보통', '긴': '길게' }
@@ -397,28 +407,58 @@ console.log('\n⑧ 정본 §7-1 ↔ 카드 voiceCore 정합')
       if (got !== BAND[label]) mismatched.push(`${code}(§7-1 ${label} / 카드 ${got ?? '미상'})`)
     }
   }
-  /**
-   * 🔴 **알려진 불일치** — 2026-09-08 보정 범위 밖이라 손대지 않은 카드다.
-   *
-   *    §7-1 과 카드가 어긋나지만, 어느 쪽이 저자의 의도인지 사람이 판단해야 한다.
-   *    여기 적어 두는 이유는 **새로 생기는 불일치를 잡기 위해서**다 —
-   *    전부 통과시키면 다음에 어긋나는 카드가 조용히 늘어난다.
-   *
-   *    🔴 이 목록을 늘려 문제를 덮지 마라. 고쳤으면 지운다.
-   */
-  const KNOWN_MISMATCH = new Set(['P01', 'P13', 'P16'])
-  const unexpected = mismatched.filter((m) => !KNOWN_MISMATCH.has(m.slice(0, 3)))
-  check(`🔴 §7-1 과 카드 사이에 **새로운** 불일치가 없다${unexpected.length ? ` — ${unexpected.join(' ')}` : ''}`,
-    unexpected.length === 0 && missing.length === 0)
-  // 🔴 목록이 실제와 맞는지도 본다 — 고쳤는데 목록이 남아 있으면 다음 사람이 헷갈린다
-  check('🔴 알려진 불일치 목록이 실제와 같다',
-    mismatched.map((m) => m.slice(0, 3)).sort().join(',') === [...KNOWN_MISMATCH].sort().join(','))
+  // 🔴 **알려진 불일치 예외 목록을 두지 않는다.** 예외는 한 번 생기면 늘어나기만 한다 —
+  //    다음에 어긋나는 카드가 생겨도 "거기 넣으면 되지" 가 되기 때문이다. 전부 맞춘 뒤 없앴다
+  check(`🔴 §7-1 과 카드 사이에 불일치가 없다${mismatched.length ? ` — ${mismatched.join(' ')}` : ''}`,
+    mismatched.length === 0 && missing.length === 0)
+
+  // ── 🔴 완전성 — 20명 전원이 **정확히 한 번씩** 어느 목록에 있어야 한다 ──
+  //    한 명이라도 빠지면 그 카드의 말투는 아무도 배분하지 않은 채로 남는다.
+  //    두 번 들어가면 어느 밴드가 그 사람인지 문서가 두 말을 한다.
+  {
+    const listed = [...[...groups.values()].flat(), ...unknownCodes]
+    const counts = new Map<string, number>()
+    for (const c of listed) counts.set(c, (counts.get(c) ?? 0) + 1)
+    const allCodes = cards.map((c) => c.code)
+    const absent = allCodes.filter((c) => !counts.has(c))
+    const dupes = [...counts].filter(([, n]) => n > 1).map(([c, n]) => `${c}×${n}`)
+    const stray = [...counts.keys()].filter((c) => !allCodes.includes(c))
+
+    check(`🔴 어느 목록에도 없는 카드가 없다${absent.length ? ` — ${absent.join(' ')}` : ''}`, absent.length === 0)
+    check(`🔴 두 목록에 겹쳐 든 카드가 없다${dupes.length ? ` — ${dupes.join(' ')}` : ''}`, dupes.length === 0)
+    check(`🔴 카드에 없는 코드가 목록에 없다${stray.length ? ` — ${stray.join(' ')}` : ''}`, stray.length === 0)
+    check(`🔴 목록 합계가 카드 수와 같다 (${listed.length} / ${allCodes.length})`, listed.length === allCodes.length)
+
+    // 🔴 미상 목록에 든 카드는 **정말로** 카드에서도 길이를 읽지 못해야 한다.
+    //    읽히는데 미상 목록에 있으면, 쓸 수 있는 사람을 근거 없이 후보에서 빼는 것이다
+    const wronglyUnknown = unknownCodes.filter((c) => cardOf.get(c)?.voiceLength !== null)
+    check(`🔴 미상 목록의 카드는 실제로 길이를 읽지 못한다${wronglyUnknown.length ? ` — ${wronglyUnknown.join(' ')}` : ''}`,
+      wronglyUnknown.length === 0)
+    // 🔴 반대로, 카드에서 못 읽는데 밴드 목록에 든 것도 없어야 한다
+    const readable = cards.filter((c) => c.voiceLength !== null).map((c) => c.code)
+    const bandListed = [...groups.values()].flat()
+    check('🔴 밴드 목록에 든 카드는 전부 길이를 읽을 수 있다',
+      bandListed.every((c) => readable.includes(c)))
+    check('🔴 미상 목록과 파서의 미상 판정이 일치한다',
+      [...unknownCodes].sort().join(',') === cards.filter((c) => c.voiceLength === null).map((c) => c.code).sort().join(','))
+  }
 
   // 🔴 이번 보정을 회귀로 고정한다 — 되돌아가면 여기서 걸린다
   check('🔴 [회귀] P02 voiceCore 에 길이가 있다 (§7-1 중간)',
     readLengthBand(cardOf.get('P02')?.voiceLength) === '보통')
   check('🔴 [회귀] P03 voiceCore 를 매칭이 읽는다 (§7-1 긴)',
     readLengthBand(cardOf.get('P03')?.voiceLength) === '길게')
+  // 🔴 카드가 명확하면 카드가 우선이다 — §7-1 을 옮겼다
+  check('🔴 [회귀] P01 은 카드의 `짧은 문장` 을 지킨다', readLengthBand(cardOf.get('P01')?.voiceLength) === '짧게')
+  check('🔴 [회귀] P16 은 카드의 `짧음` 을 지킨다', readLengthBand(cardOf.get('P16')?.voiceLength) === '짧게')
+  // 🔴 P13 은 방향(§7-1 `긴`)을 지키되 매칭이 읽는 표현으로 바꿨다.
+  //    괄호 안에 "중간" 을 쓰면 별칭 검사 순서 때문에 **보통**으로 읽힌다 — 실측으로 잡았다
+  check('🔴 [회귀] P13 을 매칭이 `길게` 로 읽는다', readLengthBand(cardOf.get('P13')?.voiceLength) === '길게')
+  check('🔴 [회귀] P13 의 문체 뉘앙스가 지워지지 않았다',
+    (cardOf.get('P13')?.voiceLength ?? '').includes('아주 길지는'))
+  // 🔴 별칭 검사 순서가 바뀌면 위 표현이 조용히 다른 밴드가 된다 — 그 전제를 고정한다
+  check('🔴 별칭은 보통 → 짧게 → 길게 순으로 검사된다 (괄호 표현이 이 순서에 걸린다)',
+    readLengthBand('길게(중간보다 조금 긴 편)') === '보통' && readLengthBand('길게(아주 길지는 않은 편)') === '길게')
   // 🔴 P09 는 §7-1 에도 없다 — 추정하지 않고 미상으로 남긴다
   check('🔴 P09 는 §7-1 어디에도 없다 — 추정하지 않는다',
     [...groups.values()].every((cs) => !cs.includes('P09')))
