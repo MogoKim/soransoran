@@ -158,7 +158,7 @@ export default function PersonaCandidateTarget({
                           type="button"
                           onClick={() => runSet(p.id)}
                           disabled={pending || p.id === current}
-                          className="mt-2 min-h-[52px] rounded-lg bg-cta px-4 text-sm font-bold text-cta-text disabled:opacity-50"
+                          className="mt-2 min-h-[52px] rounded-lg bg-cta px-4 text-sm font-bold text-content-primary disabled:opacity-50"
                         >
                           {p.id === current ? '지정됨' : '이 글로 지정'}
                         </button>

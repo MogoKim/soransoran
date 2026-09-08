@@ -26,8 +26,10 @@ function SubmitButton({ enabled }: { enabled: boolean }) {
       type="submit"
       disabled={disabled}
       className={cn(
-        `mt-3 ${TOUCH_MIN} w-full rounded-xl bg-cta px-5 font-bold text-cta-text transition duration-150`,
-        'enabled:hover:brightness-95 enabled:active:scale-95 disabled:opacity-60',
+        `mt-3 ${TOUCH_MIN} w-full rounded-xl bg-cta px-5 text-lg font-bold text-cta-content transition duration-150`,
+        /* 🔴 회색으로 죽인다 — opacity 로만 흐리면 "누를 수 있는데 흐린 것" 으로 읽힌다 */
+        'disabled:bg-surface-page disabled:text-content-muted disabled:opacity-100',
+        'enabled:hover:brightness-95 enabled:active:scale-95',
       )}
     >
       {pending ? '남기는 중…' : '첫 인사 남기기'}

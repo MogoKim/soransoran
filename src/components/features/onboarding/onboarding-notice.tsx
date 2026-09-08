@@ -36,7 +36,7 @@ export default function OnboardingNotice({
             서버가 toInternalPath 로 다시 본다. */}
       <Link
         href={`/onboarding?callbackUrl=${encodeURIComponent(callbackUrl)}`}
-        className={`mt-3 inline-flex ${TOUCH_MIN} w-full items-center justify-center rounded-lg bg-cta px-5 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95`}
+        className={`mt-3 inline-flex ${TOUCH_MIN} w-full items-center justify-center rounded-lg bg-cta px-5 text-lg font-bold text-cta-content no-underline transition duration-150 hover:brightness-95 active:scale-95`}
       >
         가입 마저 하기
       </Link>

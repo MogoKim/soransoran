@@ -67,7 +67,7 @@ export default function AdminActionButton({
   const skin =
     tone === 'danger'
       ? 'border border-interactive text-brand-ink hover:bg-surface-soft'
-      : 'bg-cta text-cta-text hover:brightness-95'
+      : 'bg-cta text-content-primary hover:brightness-95'
 
   return (
     <div className="flex flex-col gap-1">

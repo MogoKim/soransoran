@@ -34,16 +34,22 @@ const PAIRS = [
    */
   { brand: 'strong', css: '--brand-strong', why: '워드마크 뒤 조각 — CSS 밖에서도 같은 색이어야 한다' },
   { brand: 'text', css: '--text-primary', why: '본문 텍스트 — OG 카피' },
-  { brand: 'onBrand', css: '--cta-text', why: 'CTA 면 위 글자·아이콘' },
+  { brand: 'onBrand', css: '--cta-content', why: '고객 primary CTA 의 글자·아이콘' },
   { brand: 'muted', css: '--text-muted', why: '보조 텍스트' },
   /**
    * 🔴 BRAND.cta 의 짝은 --cta 다. 둘 다 **대표 행동의 면**을 칠하는 같은 역할이다.
    *
    *    이전에는 --cta-edge 와 묶여 있었다. 그 판정의 근거는 "CSS 가 없을 수 있는
    *    global-error 화면에서 흰 글씨가 값 자체로 읽혀야 한다" 였는데,
-   *    지금은 CTA 위 글자가 흰색이 아니라 먹색(--cta-text #241e1b)이고
-   *    그 짝이 BRAND.onBrand 로 따로 있다. 즉 판독은 면이 아니라 글자가 진다.
-   *    면끼리 묶이지 않으면 화면 CTA 와 최후 에러 화면 버튼이 서로 다른 색이 된다.
+   *    그 일은 이제 **내용색 짝**이 따로 진다 — BRAND.onBrand ↔ --cta-content 다.
+   *
+   *    현재 고객 CTA 의 내용은 **흰색(#ffffff)** 이다. 흰색은 원색 면 위에서 3.53:1 이라
+   *    **text-lg + font-bold 계약과 한 몸**으로만 성립한다(큰 굵은 글씨 3:1).
+   *    그 계약은 check-contrast.mjs 의 고객 CTA 계약 검사가 className 표현마다 확인한다.
+   *    admin compact 버튼만 13~14px 이라 흰색을 못 쓰고 --text-primary 먹색(4.65:1)을 쓴다.
+   *
+   *    그래서 여기서는 **면끼리만** 묶는다. 면끼리 묶이지 않으면 화면 CTA 와
+   *    최후 에러 화면 버튼이 서로 다른 색이 된다.
    *
    * 🔴 --cta 는 `var(--brand)` 라 문자열 그대로는 비교할 수 없다.
    *    resolveVar 가 최종값(#fa4601)까지 따라가서 대조한다 — 느슨하게 만든 것이 아니다.

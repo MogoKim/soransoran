@@ -52,7 +52,7 @@ export default function AdminPostEditForm({
       {state.error ? <p className="text-sm text-state-danger">{state.error}</p> : null}
       {state.ok ? <p className="text-sm text-state-success">저장했습니다.</p> : null}
 
-      <ActionButton tone="primary" label="저장" pendingLabel="저장 중…" className="px-4 justify-center" />
+      <ActionButton tone="primary" size="compact" label="저장" pendingLabel="저장 중…" className="px-4 justify-center" />
     </form>
   )
 }

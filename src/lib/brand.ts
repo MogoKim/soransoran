@@ -44,8 +44,14 @@ export const BRAND = {
   strong: '#c43300',
   /** 본문 텍스트 — OG 카피 (= --text-primary) */
   text: '#241e1b',
-  /** CTA 면 위 글자·아이콘 (= --cta-text). #fa4601 위 4.65:1 */
-  onBrand: '#241e1b',
+  /**
+   * 고객 primary CTA 의 글자·아이콘 (= --cta-content)
+   *
+   * 🔴 CSS 변수를 쓸 수 없는 자리(global-error)에서도 화면과 같은 흰 내용을 쓴다.
+   *    이 색은 **크기 계약과 한 몸**이다 — #fa4601 위 3.53:1 이라
+   *    큰 굵은 글씨(18.66px+700)로만 통과한다. 작은 버튼에 쓰지 않는다.
+   */
+  onBrand: '#ffffff',
   /**
    * 대표 행동 면 — global-error 처럼 CSS 가 없을 수 있는 화면의 인라인 스타일용.
    * 🔴 짝은 --cta 다. 화면 CTA 와 같은 색이어야 CSS 유무로 버튼색이 갈리지 않는다.

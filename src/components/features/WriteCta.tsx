@@ -29,7 +29,7 @@ export default function WriteCta({ boardSlug }: { boardSlug: string }) {
 
       <Link
         href={writePath}
-        className={`mt-4 inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 font-bold text-cta-text no-underline transition duration-150 hover:brightness-95 active:scale-95`}
+        className={`mt-4 inline-flex ${TOUCH_MIN} items-center rounded-lg bg-cta px-6 text-lg font-bold text-cta-content no-underline transition duration-150 hover:brightness-95 active:scale-95`}
       >
         이야기 남기기
       </Link>
