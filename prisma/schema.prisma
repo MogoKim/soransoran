@@ -70,7 +70,11 @@ model User {
   emailVerified DateTime?
   image         String?
 
-  // 카카오 providerId. 실회원 판별 기준이 된다.
+  // 🔴 카카오 providerId — **실회원 판별 정본이 아니다** (2026-09-08 정정).
+  //    NextAuth adapter 는 이 값을 채우지 않는다. 로그인이 만드는 것은 `Account` 행이다
+  //    (src/lib/auth.ts §signIn: "Account 로 본다 — User.providerId 는 adapter 가 채우지 않는다").
+  //    실측: User 9명 전원 null 이었다. 이 값만 보는 가드는 아무도 막지 못한다.
+  //    🔴 실회원 판별은 `accounts` 관계로 한다. 이 필드는 방어적 보조 지표로만 남긴다.
   providerId    String?   @unique
 
   isAdmin       Boolean   @default(false)

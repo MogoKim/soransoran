@@ -429,7 +429,8 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
   const KID_TITLE = '애들이랑 같이 갈 숙소, 뭐 보고 고르세요?'
   const KID_BODY = '이번에 애들이랑 같이 가려는데 숙소를 뭘 보고 골라야 할지 모르겠어요. 다들 어떻게 고르세요?'
   const base = {
-    status: 'active', providerId: null, maritalStatus: 'married',
+    // 🔴 운영 persona 는 로그인하지 않으므로 Account 0 이 정상이다 (없으면 fail-closed 로 막힌다)
+    status: 'active', providerId: null, accountCount: 0, maritalStatus: 'married',
     parentCare: null, menopauseStatus: null, workStatus: null,
     economicStatus: null, region: null, noGoTopics: [],
     voiceLength: null, postsThisWeek: 0, daysSinceLastPost: null,

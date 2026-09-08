@@ -101,7 +101,7 @@ const WEEK_AGO = new Date(Date.now() - 7 * 864e5)
 const personaRows = await prisma.persona.findMany({
   where: { status: 'active' },
   select: { id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-            user: { select: { providerId: true } } },
+            user: { select: { providerId: true, _count: { select: { accounts: true } } } } },
 })
 const personas = []
 for (const r of personaRows) {
@@ -117,6 +117,8 @@ for (const r of personaRows) {
     code: r.code, status: r.status,
     // 🔴 실계정이 붙은 페르소나는 쓰지 않는다 (REAL_MEMBER 차단의 입력)
     providerId: r.user?.providerId ?? null,
+    // 🔴 실회원 판별 정본. 넘기지 않으면 hardFilter 가 fail-closed 로 막는다
+    accountCount: r.user?._count.accounts ?? null,
     ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
     maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
     // 🔴 **이것이 빠지면 모든 persona 가 무자녀로 판정된다.**

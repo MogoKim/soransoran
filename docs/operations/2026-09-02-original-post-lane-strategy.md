@@ -361,7 +361,7 @@ micro-seed-import-82cook-live.mts   --apply --limit=1 이 둘 다 있어야 적�
 | Relationship / Self Memory | ✅ | 🟠 **스키마만** | 🔴 **0행** | — | 아키텍처 §7 |
 | **발행 스케줄러** | ✅ | ✅ **완료** | 🟡 dry-run 만 | 🟡 | `auto-publish.yml` 00:05 KST · PR #440 · 첫 실행 09-08 |
 | **일일 리포트 · 관제** | 🔴 없음 | 🔴 없음 | — | — | 🔴 **멈출 기준 없음** — 스케줄러가 도는데 관제가 없다 |
-| **REAL_MEMBER 가드** | ✅ | 🟡 **실측상 무력** | 🔴 | — | `providerId` 전원 NULL |
+| **REAL_MEMBER 가드** | ✅ | ✅ **완료** | ✅ | — | 🔴 정본은 `Account` — `providerId` 는 adapter 가 채우지 않는다 (2026-09-08) |
 | takedown 정합성 | 🟡 부분 | 🔴 미착수 | — | — | queue↔post 불일치 |
 | Voice egress 재발 방지 | 🟡 부분 | 🔴 미착수 | — | — | §9 |
 
@@ -402,7 +402,7 @@ SEO / indexable 레일     100~200/day 가능   ← 다른 레일. 아직 설계
 | **1** | **S1 전략 정본화** | 문서가 실제보다 뒤처져 다음 사람이 있는 코드를 다시 짠다 | 없음 |
 | **2** | **S2 Raw 공급망** | 🔴 병목 1위. 원문 15건으로는 아무것도 못 늘린다 | 없음 |
 | **3** | **S3 publish `--id` + cap ladder** | 지정 발행 · 3/day 준비 | 🔴 있음 |
-| **4** | **S4 persona 20명 + topic-role + REAL_MEMBER** | 🔴 주간 여력 5건 병목 · 오배정 방지 · 가드 정정 | 🟡 간접 |
+| **4** | **S4 persona 20명 + topic-role** | 🔴 주간 여력 5건 병목 · 오배정 방지 (REAL_MEMBER 가드 정정은 2026-09-08 완료) | 🟡 간접 |
 | **5** | **S5 persona-first shadow 100/day** | S4 뒤라야 의미가 있다 | 없음 |
 | **6** | **S6 댓글 분산 + Memory** | 🔴 댓글 0개 80% — 재방문이 여기서 끊긴다 | 🔴 있음 |
 | **7** | **S8 일일 리포트 · 관제** | 🔴 멈출 기준이 없다. S3 와 병행 가능 | 없음 |

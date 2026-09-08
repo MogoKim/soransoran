@@ -321,17 +321,37 @@ voiceCore.length
 생성 전에 화자를 정하는 것(PR-S5)은 후보가 5명이고 topic-role 이 없으면
 **먼저 정해도 똑같이 틀린다.** 순서는 S4 → S5 다.
 
-### 🔴 REAL_MEMBER 가드가 실측상 무력하다
+### ✅ REAL_MEMBER 가드 — 해소됨 (2026-09-08)
+
+**문제였던 것**
 
 ```
 judgePublish()  →  if (c.personaProviderId !== null) → REAL_MEMBER 차단
                             ↑ User.providerId 를 본다
 
 실측:  User 9명 전원 providerId = NULL
-       카카오 연결은 Account 테이블에 있다 (kakao 3건)
+       카카오 연결은 Account 테이블에 있다
 ```
 
-**"실회원 이름으로 발행하지 않는다" 는 가드가 항상 통과한다.**
+`User.providerId` 는 **NextAuth adapter 가 채우지 않는다** — `src/lib/auth.ts` §signIn 이
+*"Account 로 본다"* 고 적어 둔 그대로다. 그래서 "실회원 이름으로 발행하지 않는다" 는
+가드가 **항상 통과했다.**
+
+**고친 것**
+
+`Account` 행 수를 실회원 판별 **정본**으로 쓴다. `providerId` 검사는 방어적으로 남긴다
+— 누군가 수동으로 채워 둔 값도 막아야 한다.
+
+| 조건 | 판정 |
+|---|---|
+| `accountCount === null` | 🔴 **REAL_MEMBER 차단 (fail-closed)** — 모르면 막는다 |
+| `accountCount > 0` | 🔴 REAL_MEMBER 차단 — 로그인 수단이 붙은 계정이다 |
+| `providerId !== null` | 🔴 REAL_MEMBER 차단 (방어적) |
+| 그 외 | 🟢 통과 — 운영 persona 는 Account 0 이다 |
+
+`hardFilter`(배정)와 `judgePublish`(발행 직전) **양쪽**에 걸었다.
+`PersonaForMatch.accountCount` 는 **필수 필드**라 생산 경로가 빠뜨리면 타입이 먼저 잡고,
+그래도 새 경로가 생기면 fixture 가 소스를 읽어 잡는다.
 
 지금 사고는 나지 않는다 — 페르소나 User 5명은 `Account` 0건이라 실회원과 섞일 일이 없다.
 하지만 **20명으로 늘리고 `userId` 배정을 자동화하는 순간 이것이 마지막 방어선이 된다.**
@@ -587,7 +607,7 @@ North Star 는 주간 재방문 참여 유저 수인데, 진영 싸움은 그 �
 | 10 | **reaction / best** | 정책 없음 | 🟢 낮음 | 🔴 조기 개방 시 조작 | S7 | 정책 확정 + 비율 상한 |
 | 11 | **scheduler** | 🟡 **발행만 등록** — `auto-publish.yml`(00:05 KST) · 수집 cron 0 | 🟡 중간 | — | **S2** | 수집 스케줄 (발행은 PR #440 완료) |
 | 12 | **daily report** | 없음 | 🟡 중간 | 🔴 **멈출 기준 없음** | **S8** | 12지표 일일 |
-| 13 | **REAL_MEMBER 가드** | `providerId` 전원 NULL → 항상 통과 | 🟢 없음 | 🔴 **20명 확장 시 치명** | **S4** | `Account` 기준 실동작 |
+| 13 | **REAL_MEMBER 가드** | ✅ **해소 (2026-09-08)** — `Account` 기준 + fail-closed | 🟢 없음 | 🟢 해소 | — | 배정·발행 양쪽 게이트 |
 | 14 | **takedown 정합성** | 글을 내려도 queue 가 모름 | 🟢 없음 | 🟡 원장 불일치 | S6 | queue↔post 동기 |
 
 ---
@@ -599,7 +619,7 @@ North Star 는 주간 재방문 참여 유저 수인데, 진영 싸움은 그 �
 | **S1** | **전략 정본화** — 이 문서 · 실제 상태 동기화 | **0** | **0** | **없음** |
 | **S2** | **Raw 공급망 자동화** — 82cook 자동수집 · 네이버 로컬 launchd · 배치 적재 · killerScore/sourceStage · 목표 Raw 300+ | Raw Vault만 | 1 | **없음** |
 | **S3** | **Publish 선택성 + cap ladder** — `--id` · ladder 구조 · KST 스케줄 준비 | 0 | 0 | 🔴 있음 |
-| **S4** | **Persona 20명 + topic-role + REAL_MEMBER** — DB 이관 · `topicRoles` · 매칭기 연결 · 가드 정정 | 페르소나 15명 | 1 | 🟡 간접 |
+| **S4** | **Persona 20명 + topic-role** — DB 이관 · `topicRoles` · 매칭기 연결 (🔴 REAL_MEMBER 가드 정정은 2026-09-08 완료) | 페르소나 15명 | 1 | 🟡 간접 |
 | **S5** | **Persona-first shadow 100/day** — 생성 전 화자·길이·topic 결정 · batch · 비용 hard stop | 0 | 0 | 없음 |
 | **S6** | **Comment distributor + Memory** — 분산 · 시간차 · 유형분산 · Self/Relationship 적재 · 비율 자동 감속 | Comment · Memory | 0~1 | 🔴 있음 |
 | **S7** | **Reaction / Best controlled scaffold** — 비율 상한 · 감사로그 · kill switch | Like 등 | 0~1 | 🔴 있음 |
@@ -620,7 +640,8 @@ S8        마지막이 아니라 S3 와 병행 가능 — 멈출 기준이 먼�
 ```
 S2   🔴 robots 위반 1건 · 이미지/댓글 본문 수집 1건 · Raw Vault 밖 write 1건
 S3   🔴 --id 로 cap 또는 gate 우회 가능 · HOLD/미배정 발행 가능
-S4   🔴 오배정 1건 · 정체성 모순 1건 · REAL_MEMBER 가드 여전히 무력
+S4   🔴 오배정 1건 · 정체성 모순 1건
+     (REAL_MEMBER 가드는 2026-09-08 해소 — Account 정본 + fail-closed)
 S5   🔴 예산 초과 · source leak 1건 · 문장 지문 중복률 상승
 S6   🔴 회원 불쾌감 1건 · 페르소나 비율 30% 초과 · 봇끼리 대댓글 · 위기 신호 글 응답
 S7   🔴 페르소나 반응이 전체의 50% 초과 · 댓글 0개 best 발생

@@ -330,12 +330,15 @@ async function reverify(
   // 🔴 작성자를 다시 실측한다. providerId 를 빠뜨리면 verifyPublishAuthor 가 거부한다.
   const user = await prisma.user.findUnique({
     where: { id: authorId },
-    select: { id: true, providerId: true, isBlocked: true },
+    // 🔴 실회원 판별 정본은 Account 다 — providerId 는 adapter 가 채우지 않는다
+    select: { id: true, providerId: true, isBlocked: true, _count: { select: { accounts: true } } },
   })
   const author = verifyPublishAuthor({
     id: authorId,
     exists: user !== null,
     providerId: user ? user.providerId : null,
+    // 🔴 User 를 못 찾으면 null 이고 verifyPublishAuthor 가 fail-closed 로 막는다
+    accountCount: user ? user._count.accounts : null,
     isBlocked: user ? user.isBlocked : false,
   })
   if (!author.ok) return { ok: false, reason: `작성자: ${author.reason}` }

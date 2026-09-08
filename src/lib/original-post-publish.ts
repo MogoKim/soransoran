@@ -18,6 +18,9 @@
  *    🔴 Micro Seed 는 반대다. 저쪽은 takedown 역조회를 위해 반드시 채운다(§6-6) —
  *    저쪽은 noindex 라서 붙일 수 있고, 이쪽은 index 라서 붙이면 안 된다.
  */
+
+// 🔴 실회원 판별은 단일 정본이다. 여기서 다시 쓰지 않는다
+import { judgeRealMember } from './real-member-gate'
 import { ORIGINAL_POST_VISIBILITY_FLAGS } from './post-visibility'
 
 /**
@@ -155,7 +158,13 @@ export type PublishCandidate = {
   gateVerdict: string
   matchedPersonaCode: string | null
   personaStatus: string | null
+  /** 🔴 방어적 보조 — adapter 가 채우지 않는다. 정본은 `personaAccountCount` 다 */
   personaProviderId: string | null
+  /**
+   * 🔴 **실회원 판별 정본** — persona User 의 `Account` 행 수.
+   *    `null` 은 "모른다" 이고 **막는다**. 발행은 되돌릴 수 없으므로 fail-closed 다.
+   */
+  personaAccountCount: number | null
 }
 
 export type PublishVerdict =
@@ -191,9 +200,12 @@ export function judgePublish(
   if (c.personaStatus !== 'active') {
     return { ok: false, code: 'PERSONA_NOT_ACTIVE', detail: `${PUBLISH_BLOCK_LABEL.PERSONA_NOT_ACTIVE} (${c.personaStatus ?? '—'})` }
   }
-  // 🔴 실회원 이름으로 발행되면 신뢰 사고다. 되돌리기 어렵다
-  if (c.personaProviderId !== null) {
-    return { ok: false, code: 'REAL_MEMBER', detail: PUBLISH_BLOCK_LABEL.REAL_MEMBER }
+  // 🔴 실회원 이름으로 발행되면 신뢰 사고다. 되돌리기 어렵다.
+  //    정본은 `Account` 이고, 모르면 막는다 — 발행 직전 게이트라 fail-closed 여야 한다
+  //    🔴 판정은 `judgeRealMember` 하나뿐이다 — 여기서 다시 쓰면 배정과 발행이 다른 말을 한다
+  const real = judgeRealMember({ accountCount: c.personaAccountCount, providerId: c.personaProviderId })
+  if (real.real) {
+    return { ok: false, code: 'REAL_MEMBER', detail: `${PUBLISH_BLOCK_LABEL.REAL_MEMBER} — ${real.reason}` }
   }
   if (c.gateVerdict !== FIRST_PUBLISH_VERDICT) {
     return { ok: false, code: 'GATE_NOT_PASS', detail: `${PUBLISH_BLOCK_LABEL.GATE_NOT_PASS} — 현재 ${c.gateVerdict}` }

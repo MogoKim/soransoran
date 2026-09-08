@@ -59,7 +59,7 @@ console.log('  🔴 발행하지 않습니다 · Post 를 만들지 않습니다
 const personaRows = await prisma.persona.findMany({
   select: {
     code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-    user: { select: { providerId: true } },
+    user: { select: { providerId: true, _count: { select: { accounts: true } } } },
   },
   orderBy: { code: 'asc' },
 })
@@ -83,6 +83,8 @@ for (const r of personaRows) {
     code: r.code,
     status: r.status,
     providerId: r.user?.providerId ?? null,
+    // 🔴 실회원 판별 정본. 넘기지 않으면 hardFilter 가 fail-closed 로 막는다
+    accountCount: r.user?._count.accounts ?? null,
     maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
     childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
     ...(bands === undefined ? {} : { childrenAgeBands: bands }),
