@@ -17,6 +17,10 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
+import {
+  planSlots, verifySchedule, verifyNoCrossOverlap, isolationOf,
+} from '../src/lib/collect-schedule'
+
 const DIR = 'docs/operations/launchd'
 
 /** 🔴 설치 스크립트가 반드시 치환해야 하는 것들 */
@@ -83,7 +87,7 @@ const files = existsSync(DIR)
   ? readdirSync(DIR).filter((f) => f.endsWith('.plist.template')).sort()
   : []
 
-check('🔴 템플릿이 5개다 — 하나라도 빠지면 검사 밖에 있는 job 이 생긴다', files.length === 5)
+check('🔴 템플릿이 7개다 — 하나라도 빠지면 검사 밖에 있는 job 이 생긴다', files.length === 7)
 
 /**
  * 🔴 **등록될 job 의 전부**를 적는다. 슬롯 개수만 세면 시각이 틀려도 통과한다 —
@@ -137,6 +141,27 @@ const EXPECTED: Record<string, {
     out: '__LOGDIR__/supply-autopilot.log',
     err: '__LOGDIR__/supply-autopilot-error.log',
   },
+  /**
+   * 🔴 **다회 운영 준비판** (2026-09-08). 등록하지 않았다 —
+   *    지금 도는 것은 위의 1회짜리이고, 그 템플릿은 건드리지 않았다.
+   *    시각은 `collect-schedule.planSlots(id, 'start')` 가 정한다 (fixture 가 대조).
+   */
+  'com.soransoran.navercafe-collect-remonterrace-multi.plist.template': {
+    label: 'com.soransoran.navercafe-collect-remonterrace-multi',
+    args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-collect-navercafe.mts',
+      '--cafe=remonterrace', '--pages=1', '--max=10', '--thin', '--live'],
+    slots: planSlots('navercafe:remonterrace', 'start'),
+    out: '__LOGDIR__/navercafe-collect-remonterrace-multi.log',
+    err: '__LOGDIR__/navercafe-collect-remonterrace-multi-error.log',
+  },
+  'com.soransoran.navercafe-collect-wgang-multi.plist.template': {
+    label: 'com.soransoran.navercafe-collect-wgang-multi',
+    args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-collect-navercafe.mts',
+      '--cafe=wgang', '--pages=1', '--max=10', '--thin', '--live'],
+    slots: planSlots('navercafe:wgang', 'start'),
+    out: '__LOGDIR__/navercafe-collect-wgang-multi.log',
+    err: '__LOGDIR__/navercafe-collect-wgang-multi-error.log',
+  },
 }
 
 check('🔴 검사표가 템플릿 전부를 덮는다 — 표에 없는 템플릿이 있으면 무검사로 새어나간다',
@@ -151,8 +176,39 @@ for (const cafe of ['remonterrace', 'wgang']) {
 }
 
 // 🔴 확정 수집원 셋. 늘리려면 여기부터 고쳐야 한다
-check('🔴 네이버 카페 템플릿은 remonterrace · wgang 둘뿐이다',
-  files.filter((f) => f.includes('navercafe')).length === 2)
+// 🔴 카페는 둘뿐이다. 각각 1회판 + 다회 준비판 = 4개
+check('🔴 네이버 카페 템플릿은 remonterrace · wgang 둘뿐이다 (각 1회판 + 다회판)',
+  files.filter((f) => f.includes('navercafe')).length === 4
+  && files.filter((f) => f.includes('remonterrace')).length === 2
+  && files.filter((f) => f.includes('wgang')).length === 2)
+// 🔴 **지금 도는 1회판은 건드리지 않았다** — 다회는 별도 Label·별도 로그다
+for (const cafe of ['remonterrace', 'wgang'] as const) {
+  const one = EXPECTED[`com.soransoran.navercafe-collect-${cafe}.plist.template`]!
+  const many = EXPECTED[`com.soransoran.navercafe-collect-${cafe}-multi.plist.template`]!
+  check(`🔴 [${cafe}] 1회판은 여전히 1슬롯이다`, one.slots.length === 1)
+  check(`🔴 [${cafe}] 다회판이 더 자주 돈다`, many.slots.length > one.slots.length)
+  check(`🔴 [${cafe}] Label 이 다르다 — 같은 job 을 덮어쓰지 않는다`, one.label !== many.label)
+  check(`🔴 [${cafe}] 로그 파일이 다르다`, one.out !== many.out && one.err !== many.err)
+  check(`🔴 [${cafe}] 인자는 같다 — 회차만 늘린다`, one.args.join() === many.args.join())
+}
+// 🔴 다회판 시각이 계획과 **정확히** 같은가 — 손으로 고치면 여기서 걸린다
+for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
+  const name = `com.soransoran.navercafe-collect-${id.split(':')[1]}-multi.plist.template`
+  const want = planSlots(id, 'start').map((s) => `${s.hour}:${s.minute}`).join()
+  const got = calendarSlots(readFileSync(join(DIR, name), 'utf-8')).map((s) => `${s.hour}:${s.minute}`).join()
+  check(`🔴 [${id}] 다회판 시각이 planSlots(start) 와 같다`, want === got)
+  check(`🔴 [${id}] 계획 자체가 성립한다 (간격·부하·겹침)`, verifySchedule(id, 'start').length === 0)
+  check(`🔴 [${id}] 안정 단계도 성립한다`, verifySchedule(id, 'stable').length === 0)
+}
+check('🔴 세 수집원이 같은 시각에 겹치지 않는다',
+  verifyNoCrossOverlap('start').length === 0 && verifyNoCrossOverlap('stable').length === 0)
+// 🔴 한 소스가 죽어도 나머지는 돈다
+for (const down of ['82cook', 'navercafe:remonterrace', 'navercafe:wgang'] as const) {
+  const iso = isolationOf([down])
+  check(`🔴 [${down}] 가 죽어도 나머지 ${iso.alive.length}개는 돈다`, iso.isolated && iso.aliveDetailPerDay > 0)
+}
+check('🔴 셋이 다 죽으면 격리가 아니다 — 전면 중단이다',
+  !isolationOf(['82cook', 'navercafe:remonterrace', 'navercafe:wgang']).isolated)
 for (const gone of ['dlxogns01', 'masanmam', 'goondae', 'yeowooya']) {
   check(`🔴 ${gone} 실행 템플릿이 없다 — 미활성 장래 후보를 스케줄로 두지 않는다`,
     !files.some((f) => f.includes(gone)))

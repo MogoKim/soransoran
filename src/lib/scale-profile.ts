@@ -245,28 +245,119 @@ export type StageVerdict = { stage: ReleaseStage; ready: boolean; reasons: reado
  *    "모른다" 를 "준비됐다" 로도 "실패" 로도 읽지 않는다. 모를 때의 안전장치는
  *    호출부가 정한다(운영 러너는 판정을 반드시 만들어 넘긴다).
  */
-export function safeStageFor(
-  requested: ReleaseStage,
-  verdicts: readonly StageVerdict[],
-): { stage: ReleaseStage; throttled: boolean; reason: string | null } {
-  if (verdicts.length === 0) return { stage: requested, throttled: false, reason: null }
+export type SafeStage = {
+  stage: ReleaseStage
+  throttled: boolean
+  reason: string | null
+  /**
+   * 🔴 **고른 단계가 실제로 달성 가능한가.**
+   *
+   *    최저 단계마저 미달이면 `stage` 는 여전히 d1 이고 `throttled` 는 false 다
+   *    (더 내려갈 곳이 없으므로). 그 상태에서 "달성 가능" 이라고 적으면
+   *    화면이 미달을 초록으로 보여 준다 — 실제로 그런 모순이 나왔다.
+   *    그래서 **고른 단계의 준비 여부를 따로 들고 다닌다.**
+   */
+  chosenReady: boolean
+  /** 판정을 받지 못했다 (모른다). `chosenReady` 를 신뢰하지 않는다 */
+  unknown: boolean
+}
+
+export function safeStageFor(requested: ReleaseStage, verdicts: readonly StageVerdict[]): SafeStage {
+  if (verdicts.length === 0) {
+    return { stage: requested, throttled: false, reason: null, chosenReady: false, unknown: true }
+  }
   const byStage = new Map(verdicts.map((v) => [v.stage, v]))
-  if (byStage.get(requested)?.ready === true) return { stage: requested, throttled: false, reason: null }
+  if (byStage.get(requested)?.ready === true) {
+    return { stage: requested, throttled: false, reason: null, chosenReady: true, unknown: false }
+  }
   const lower = [...RELEASE_STAGES].filter((s) => stageRank(s) <= stageRank(requested)).reverse()
   for (const s of lower) {
     if (byStage.get(s)?.ready === true) {
       return {
-        stage: s, throttled: s !== requested,
+        stage: s, throttled: s !== requested, chosenReady: true, unknown: false,
         reason: s === requested ? null
           : `${requested} 는 준비되지 않았다 (${(byStage.get(requested)?.reasons ?? ['판정 없음']).join(' / ')}) — ${s} 로 감속`,
       }
     }
   }
+  // 🔴 최저 단계마저 미달이다. 더 내려갈 곳이 없으니 d1 을 유지하되 **NOT_READY 로 말한다**
   return {
     stage: SAFEST_STAGE, throttled: requested !== SAFEST_STAGE,
-    reason: `어느 단계도 준비되지 않았다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다`,
+    chosenReady: false, unknown: false,
+    reason: `어느 단계도 준비되지 않았다 — 가장 안전한 ${SAFEST_STAGE} 를 유지하지만 그 단계도 미달이다`
+      + ` (${(byStage.get(SAFEST_STAGE)?.reasons ?? ['판정 없음']).join(' / ')})`,
   }
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 시간축 — **두 개다. 섞으면 준비도가 부풀거나 깎인다** (2026-09-08)
+//
+//    ① `nextSlotAnchor`   그 단계의 **다음 실제 발행 슬롯**. 러너·화면이 "다음에 언제
+//       나가는가" 를 말할 때 쓴다. 오늘 몫이 남았으면 오늘, 다 채웠으면 내일이다.
+//
+//    ② `horizonStart`     **준비도 14일 지평의 시작점.** 언제나 다음 KST 운영일 0시다.
+//
+//    🔴 왜 나눠야 하는가 — ②에 ①을 쓰면 두 가지가 동시에 깨진다.
+//       · **오늘 몫이 한 번 더 계산된다.** d10 에서 오늘 3건을 내고 13:25 를 시작점으로
+//         잡으면, 예측기는 그 지점부터 하루를 세어 **오늘 하루에 10건을 다시 배정**한다
+//         (= 오늘 13건). 재고·인원이 실제보다 넉넉해 보인다.
+//       · **단계 비교가 성립하지 않는다.** d1 은 내일 00:05, d10 은 오늘 13:25 가 되어
+//         서로 다른 창(그것도 반나절짜리 조각 하루가 섞인 창)을 비교하게 된다.
+//
+//    🔴 그래서 지평은 **모든 단계가 같은, 완전한 KST 운영일 14일**이다.
+//       오늘(이미 일부가 지나갔고 이미 일부를 낸 날)은 지평에 넣지 않는다.
+// ─────────────────────────────────────────────────────────
+
+const DAY_MS = 86_400_000
+const KST_OFFSET_MS = 9 * 3600_000
+
+/** KST 자정 (UTC Date) — 하루 경계는 러너와 같아야 한다 */
+export function kstMidnight(now: Date): Date {
+  const k = new Date(now.getTime() + KST_OFFSET_MS)
+  return new Date(Date.UTC(k.getUTCFullYear(), k.getUTCMonth(), k.getUTCDate()) - KST_OFFSET_MS)
+}
+
+/**
+ * 🔴 그 단계의 **다음 실제 발행 슬롯**.
+ *
+ *    · 오늘 이미 그 단계의 하루 상한을 채웠으면 → 내일 첫 슬롯
+ *    · 아니면 오늘 남은 슬롯 중 `now` 이후 첫 번째, 없으면 내일 첫 슬롯
+ *
+ *    🔴 슬롯이 여러 건을 내는 경우(`count > 1`)도 슬롯 단위로 본다 —
+ *       한 슬롯이 3건을 내면 그 슬롯 하나가 3건을 담당한다.
+ */
+export function nextSlotAnchor(p: ScaleProfile, input: { now: Date; publishedToday: number }): Date {
+  const midnight = kstMidnight(input.now)
+  const minutes = [...p.slots].map(minuteOfDay).sort((a, b) => a - b)
+  const first = minutes[0] ?? 0
+  if (minutes.length === 0) return new Date(midnight.getTime() + DAY_MS)
+  // 🔴 오늘 상한을 채웠으면 오늘 남은 슬롯은 의미가 없다
+  if (input.publishedToday >= p.dailyTarget) {
+    return new Date(midnight.getTime() + DAY_MS + first * 60_000)
+  }
+  const elapsed = Math.floor((input.now.getTime() - midnight.getTime()) / 60_000)
+  const next = minutes.find((m) => m > elapsed)
+  return next === undefined
+    ? new Date(midnight.getTime() + DAY_MS + first * 60_000)
+    : new Date(midnight.getTime() + next * 60_000)
+}
+
+/**
+ * 🔴 **준비도 지평의 시작점 — 다음 KST 운영일 0시.**
+ *
+ *    · 단계에 의존하지 않는다. d1·d3·d5·d10 이 **같은 창**을 본다
+ *    · 오늘은 지평에 들어가지 않는다 — 이미 일부가 지나갔고 이미 일부를 냈다.
+ *      조각 하루를 하루로 세면 그날 상한이 두 번 계산된다
+ *    · 그래서 `publishedToday` 를 보지 않는다. 오늘 몫은 지평 밖이라 뺄 것도 더할 것도 없다
+ *
+ *    🔴 이 값이 `nextSlotAnchor` 와 같아지면 위 두 성질이 깨진다. fixture 가 그것을 본다.
+ */
+export function horizonStart(now: Date): Date {
+  return new Date(kstMidnight(now).getTime() + DAY_MS)
+}
+
+/** 🔴 지평이 덮는 KST 운영일 수 — 재고 지평과 같은 값이어야 한다 */
+export const HORIZON_ANCHOR_DAYS = HORIZON_DAYS
 
 /** 🔴 주입을 잊었을 때 쓰이는 값. 지금 운영값과 정확히 같다 */
 export const SAFEST_PROFILE: ScaleProfile = PROFILES[SAFEST_STAGE]

@@ -1,9 +1,19 @@
 # 소란소란 Master Operating System
 
-> 상태: 운영 정본 후보
-> 기준 시각: 2026-09-08 16:31 KST
-> 코드 기준: `origin/main` `7c6530e46dcb9f52545bc24644bb5a4b02da011f`
+> 상태: 운영 정본
 > 원칙: 이 문서의 상태값과 코드·DB·workflow 실측이 다르면 실측을 먼저 믿고 이 문서를 같은 PR에서 갱신한다.
+>
+> 🔴 **여기에 SHA·PR 번호·"미커밋 변경" 같은 순간값을 적지 않는다.**
+> 그런 문구는 merge 되는 순간 낡고, 다음 사람은 낡은 전제에서 시작한다.
+> 코드 기준이 궁금하면 `git log`, PR 상태는 `gh pr list` 를 본다 — 그것이 정본이다.
+>
+> 🔴 **세 가지를 섞지 않는다.**
+>
+> | | 뜻 |
+> |---|---|
+> | 구현됨 | 코드가 있고 fixture 가 지킨다 |
+> | runtime 미활성 | 구현은 됐지만 job·설정이 올라가 있지 않다 |
+> | 운영 미검증 | 실제로 돌려 본 적이 없거나 실측이 없다 |
 
 ## 0. 이 문서가 답해야 하는 질문
 
@@ -171,6 +181,20 @@ flowchart LR
 | Health/Forecast | DB, 파일, 로그, scale | 화면 + JSON | 없음 | 완료 | 완료 | 수동 조회 | 부분완료 |
 | SEO Bulk | 별도 indexable 콘텐츠 | 별도 URL/작성자/색인 정책 | 미정 | 미완료 | 없음 | 없음 | 미착수 |
 
+### 4.0 `sourceCapturedAt` 은 게시 시각이 아니다
+
+🔴 **`sourceCapturedAt` 은 "우리가 그 글을 본 시각" 이다 — 원문이 올라온 시각이 아니다.**
+수집기가 목록·상세를 연 순간을 적는다. 원문 게시 시각은 지금 어느 source에서도 수집하지 않는다.
+
+freshness TTL(§8.2)은 이 값을 **관측 시각 proxy**로 쓴다. 그래서
+
+- 오래된 글을 오늘 처음 수집하면 우리 기준으로는 "갓 들어온 글"이다.
+- 즉 **완전한 실시간성 보장이 아니다.** "수집 후 며칠 지났는가"를 보장할 뿐이다.
+- 게시 시각을 수집하기 전까지 이 한계를 그대로 안고 간다. 문서에서 "최신 글만 나간다"고
+  적지 않는다.
+
+`sourceCapturedAt`이 없는 행은 나이를 알 수 없으므로 `AGE_UNKNOWN`으로 hold 한다(fail-closed).
+
 ### 4.1 Raw Vault 용어 정리
 
 현재 `MicroSeedRawContent`에는 성격이 다른 데이터가 함께 있다.
@@ -248,19 +272,24 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 
 ### 6.1 main 반영분
 
-기준 SHA는 `7c6530e`다. 다음이 main에 있다.
+🔴 **SHA 를 적지 않는다** — 아래 목록은 "무엇이 있는가" 이고, "언제부터" 는 `git log` 가 답한다.
 
-- 3개 source 수집기와 thin 공통 레일.
-- 규칙 + Haiku judge/draft와 Queue 자동 보충.
-- Account 기준 실회원 차단.
-- 최대 매칭, 기존 배정 복구, Queue/Post/ActivityLog 정합성 검사.
-- Persona 8명 생성·seed·활성화.
-- 공급 health와 capacity forecast.
-- d1/d3/d5/d10 scale profile, capacity/release 분리, readiness 기반 강제 감속.
-- 수동 발행기 1건 제한.
+| 기능 | 구현 | runtime | 운영 검증 |
+|---|---|---|---|
+| 3개 source 수집기 · thin 공통 레일 | ✅ | 카페 2개만 job 등록 · 82cook 미등록 | 카페 ✅ · 82cook 🔴 |
+| 규칙 + Haiku judge/draft · Queue 자동 보충 | ✅ | ✅ autopilot 1회/day | 통과율 실측 없음 🔴 |
+| Account 기준 실회원 차단 | ✅ | ✅ | ✅ |
+| 최대 매칭 · 기존 배정 복구 · 정합성 검사 | ✅ | ✅ | ✅ |
+| Persona 생성·seed·활성화 도구 | ✅ | active 8명 | ✅ |
+| 공급 health · capacity forecast | ✅ | ✅ | ✅ |
+| d1/d3/d5/d10 profile · capacity/release 분리 · 강제 감속 | ✅ | d1 운영 중 | d1 ✅ · 그 위 🔴 |
+| 수동 발행기 1건 제한 | ✅ | ✅ | ✅ |
+| freshness hold 단일 계약 (§8.2) | ✅ | ✅ (d1 경로에서 동작) | hold 발생 사례 없음 |
+| 수집 보호장치 — 예산·backoff·breaker (§8.3) | ✅ 3 source 전부 | 🔴 아직 한 번도 돌지 않음(상태 파일 없음) | 🔴 미검증 |
+| Persona Pool 25장 · cohort 24명 | ✅ 카드·도구 | 🔴 생성·활성화 0 | 🔴 |
+| Naver 다회 슬롯 템플릿 | ✅ 템플릿 | 🔴 미등록 | 🔴 |
 
-Claude의 `feat/d10-activation-prep` 미커밋 변경은 main이 아니다. 해당 변경의 Persona 24명,
-freshness TTL, Naver 다중 슬롯, 82cook 수집 계획은 검토 전 가정으로 취급한다.
+🔴 **"구현됨" 은 "돌고 있다" 가 아니다.** 세 칸을 한 칸으로 합치는 순간 이 표는 거짓이 된다.
 
 ### 6.2 실제 설정
 
@@ -348,12 +377,152 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 3. 공개 workflow가 1/10 슬롯이다.
 4. 수집 능력과 yield가 증명되지 않았고 82cook 접근도 불안정하다.
 
+### 8.0 수집 능력: current, prepared, required를 합치지 않는다
+
+세 숫자는 뜻이 다르므로 절대 한 값으로 합치지 않는다.
+
+| 구분 | 뜻 | 정본 | 2026-09-08 값 |
+|---|---|---|---:|
+| current | `launchctl`에 **실제로 올라와 있는** job의 실제 슬롯 수 × 회차당 상세 × 성공률 | 관측(`launchctl list` + 설치된 plist) | **20/day** |
+| prepared | 저장소에 템플릿·계획이 있고 계획이 성립하는 것 | `collect-schedule` 계획 | **320/day** |
+| on-demand potential | `supply-autopilot`이 **재고가 모자랄 때만** 여는 몫 | 관측 + 성공률 | **+40/day** (조건부) |
+| required | 그 capacity 단계가 요구하는 상세 요청 수 | `planSupply` 역산 | **382/day** (내부 100/day) |
+
+🔴 **on-demand potential을 current에 합치지 않는다.** 재고가 차 있으면 autopilot은 0건을 연다.
+합치면 "재고가 찼을 때는 0인 능력"을 상시 능력으로 세게 된다 — 그렇게 해서 60/day라는 수가 나왔었다.
+
+- current의 정본은 **관측**이다. 코드의 정적 `loaded: true` 플래그를 능력의 근거로 쓰지 않는다.
+- 지금 등록된 것은 Naver 카페 **1회 job 2개**와 `supply-autopilot`뿐이다.
+  `*-multi` job과 82cook job은 **미등록**이므로 current 기여가 0이거나 1회분이다.
+- 템플릿이 저장소에 있다는 사실은 prepared이지 current가 아니다.
+- 여유 기준은 `required / 0.7`이다. 382 기준으로 **546/day**가 있어야 여유 30%를 만족한다.
+
+따라서 **d10 collect readiness는 BLOCKED**다. current 20, prepared 320 모두 required 382에 못 미친다.
+
+d1 운영 건강성과 d10 승격 준비도는 다른 질문이다. d1은 현재 job과 재고로 정상 운영될 수 있고,
+그 사실이 d10 준비 완료를 뜻하지 않는다. 승격 준비도는 **계획한 다회 job이 정확한 label과
+슬롯 수로 등록되어 있을 때만** READY가 될 수 있다.
+
 ### 8.1 내부 100/day 역산
 
 현재 문서의 관측·가정으로 Queue 100건에는 judge 약 286건, draft 약 143건,
 상세 요청 약 382건, 목록 약 43,816건, LLM 약 429회/day가 필요하다.
 
 `judgePass 50%`, `draftPass 70%`는 아직 가정이다. 이 값으로 READY를 선언하지 않는다.
+
+### 8.2 발행 후보 준비는 하나의 계약이다
+
+러너, 관제(`supply:health`), 예측(`forecast`), 단계 준비도가 **같은 순수 함수**
+`prepareCandidates`를 부른다. 같은 입력이면 자동 대상 id, hold 사유, 정렬 순서가 모두 같다.
+
+hold 대상은 자동 발행에서만 빠지며 **큐에서 삭제하거나 status·배정을 바꾸지 않는다**.
+
+| hold 사유 | 뜻 | 처리 |
+|---|---|---|
+| `TTL_EXPIRED` | 주제 성격 기준 TTL을 넘겼다 | 사람 검수 |
+| `AGE_UNKNOWN` | 원문 시각을 모른다 | 사람 검수. **`warm`으로 낙관하지 않는다** |
+| `RECOVERY_STALE` | 기존 배정이 있는데 그 글이 상했다 | 사람 검수. 재배정·우회 금지 |
+
+깨진 배정(`RECOVERY_BROKEN`)은 hold가 아니라 **전체 중단**이다.
+
+발행 우선순위는 다음과 같고, 최대 매칭 cardinality와 persona 주 상한을 깨지 않는다
+(`maxMatch`가 증가 경로라 처리 순서가 총 배정 수를 바꾸지 않는다).
+
+1. 유효한 recovery
+2. timely hot
+3. timely warm
+4. evergreen — 실제 배정 persona 점수 → freshness → 안정적 tie-break
+
+### 8.3 수집 차단기 상태 전이와 사람 해제
+
+실패는 `403 FORBIDDEN`, `429 RATE_LIMIT`, `TCP NETWORK`, `5xx SERVER`, `OTHER`로 나눈다.
+**대응이 다르므로 임계와 쿨다운도 분리한다.** 셋을 한 임계로 묶으면 403을 다섯 번 맞을 때까지 두드린다.
+
+```
+closed ──(연속 실패 = 임계)──> open
+open   ──(쿨다운 경과)────────> half-open
+half-open ──(시험 요청 1건)──> open        시험 중에는 두 번째 요청을 보내지 않는다
+half-open ──(시험 성공)──────> closed
+half-open ──(시험 실패)──────> open        🔴 openedAt을 그 실패 시각으로 갱신한다
+                                          = 쿨다운이 그때부터 다시 시작한다
+```
+
+`FORBIDDEN`은 임계 1이며 쿨다운으로 풀리지 않는다. **사람이 확인해야 닫힌다.**
+
+해제 절차는 전용 도구 하나뿐이다. 상태 파일 삭제나 수동 JSON 편집을 운영 절차로 두지 않는다.
+
+```
+npm run collect:guard-status
+npm run collect:guard-clear -- --source=82cook --class=FORBIDDEN
+npm run collect:guard-clear -- --source=82cook --class=FORBIDDEN --apply --reason "..."
+```
+
+- 기본 dry-run, source·class allowlist, `--apply`와 `--reason` 필수.
+- 지정한 source/class 하나만 연다. 예산과 다른 분류는 건드리지 않는다.
+- 해제 이력은 `.microseed-data/collect-guard-audit.log`에 append-only로 남긴다.
+
+🔴 **세 source 전부가 이 보호장치를 지난다.** 82cook은 `fetch`를 감싼 `guardedGet`,
+Naver 카페는 Playwright `page.goto`를 감싼 `guardedNavigate`다. 둘은 같은 상태 파일·같은 계약을 쓴다.
+어느 한쪽이라도 우회하면 "source별 보호장치 구현 완료"라고 적을 수 없다 — fixture가 그것을 지킨다.
+
+🔴 **`half-open`에서 시험 요청은 한 건이다.** 그 한 건이 실패하면 즉시 다시 열리고
+쿨다운이 **그 실패 시각부터** 다시 시작한다. 처음 열린 시각을 유지하면 시험이 실패해도
+계속 half-open으로 남아 무한히 두드리게 된다.
+
+상태 파일은 82cook 독립 job과 `supply-autopilot`이 공유할 수 있으므로,
+읽기·판단·기록을 **파일 잠금 안에서 한 번에** 한다. 얻지 못하면 그 회차는 요청하지 않는다(fail-closed).
+
+### 8.4 잠금 회수 계약 — 무엇을 뺏고 무엇을 뺏지 않는가
+
+잠금은 두 층이다.
+
+| 파일 | 뺏는가 | 근거 |
+|---|---|---|
+| `collect-guard-<source>.json.lock` (primary) | 🟢 시효(60초) 뒤 **뺏는다** | 회수 잠금(reaper)을 `wx`로 **새로 얻은** 프로세스만 수행한다 |
+| `collect-guard-<source>.json.reap` (reaper) | 🔴 **절대 뺏지 않는다** | 뺏는 판정 자체가 다시 경쟁이 된다 (아래) |
+
+🔴 **reaper는 시효가 지나도 자동 회수하지 않는다.** 2026-09-09에 실제 다중 프로세스로 재현했다:
+"시효가 지난 reaper를 원자적으로 교체하고 다시 읽어 내 token인지 확인한다"를 두면,
+A가 교체·확인을 마친 **뒤** B가 낡은 관측으로 다시 교체한다. A의 확인은 이미 지나갔고
+둘 다 primary를 바꿔 들어간다 — 강제 안무에서 `MAX_CONCURRENT=2`.
+재확인·token·rename을 어떻게 조합해도 검사와 다음 조작 사이가 새 창이 될 뿐이고,
+임시 잠금을 하나 더 두면 문제를 한 층 아래로 옮기기만 한다.
+
+그래서 reaper는 **`wx`로만 생기고 주인만 지운다**. `EEXIST`면 살아 있든 시효가 지났든
+그 회차는 물러난다(fail-closed). 대가는 **reaper를 쥔 채 죽으면 그 source의 수집이 멈춘다**는 것이다.
+뺏는 것보다 멈추는 것이 낫다 — 뺏으면 두 프로세스가 남의 서버에 두 배로 요청한다.
+
+🔔 **reaper crash는 사람이 복구한다.** 남은 reaper는 `npm run collect:guard-status`와
+잠금 실패 오류 메시지에 운영 이상으로 표시된다. 복구 절차(수집 job 전부 정지 → 소유 프로세스
+부재 확인 → 그 뒤에만 파일 삭제)는 `docs/operations/2026-09-08-d10-activation-prep.md` §12다.
+
+🔴 **"TTL이 지나면 알아서 풀린다"고 적지 않는다.** 그 문장은 reaper가 남지 않은 경우에만 참이다.
+잠금 해제 실패 안내도 세 갈래(reaper 없음 / 남이 쥔 중 / 시효 넘겨 남음)를 구분해 말한다.
+
+### 8.5 상태 write는 fencing한다 — 승계당한 옛 주인은 쓰지 못한다
+
+🔴 **2026-09-09 재현**: 잠금을 "쥐었었다"는 사실만 확인하고 쓰던 판은
+**승계당한 옛 owner의 write를 받아들였다**(`staleOwnerWriteAccepted = true`).
+그 프로세스는 이미 잠금을 뺏긴 상태였고, 결과적으로 새 주인의 예산·차단기를 덮어썼다 —
+2건 보내고 1건으로 기록하거나, 열린 403 차단기를 닫힌 것으로 되돌린다.
+
+상태를 쓰는 길은 `saveGuard` 하나뿐이고, 그 안에서 **fence**한다.
+
+1. `wx`로 **새 reaper**를 얻는다 — 못 얻으면 쓰지 않고 던진다(fail-closed)
+2. 그 reaper 안에서 실제 primary lock의 token이 **내 token**인지 확인한다
+3. 같을 때만 쓴다. 다르거나·읽을 수 없거나·없으면 쓰지 않고 던진다
+4. `finally`에서 **내 reaper만** 푼다
+
+🔴 **"token을 읽고 바로 쓴다"는 다시 TOCTOU다.** 읽기와 쓰기 사이에 회수가 끼어들면
+이미 옛 주인이 된 채로 쓴다. 회수는 reaper를 요구하므로(§8.4 불변식 B),
+확인과 write를 **같은 reaper 구간 안**에 두어야 그 사이가 닫힌다.
+
+`reserveRequest`·`settleRequest`·사람 해제(`collect:guard-clear`)가 모두 이 한 관문을 지난다.
+
+🔴 **잠금 안은 동기다.** 잠금을 쥔 채 `await`하면 TTL(60초)을 넘길 수 있고,
+그러면 남이 회수한 뒤에 **옛 callback이 뒤늦게 돌아와** 부작용을 만든다.
+그래서 `withGuardLock` callback이 Promise를 돌려주면 실행 중에 던진다.
+네트워크·대기는 잠금 **밖**에서 한다(`guardedGet`·`guardedNavigate`가 그 구조다).
 
 ## 9. 댓글 규모와 ratio 계약
 
@@ -376,33 +545,61 @@ Persona 댓글은 전체 댓글의 30% 이하를 기본 안전 상한으로 한�
 
 ### 10.1 현재 사실
 
-- 2026-09-08 도서관 Wi-Fi에서 82cook HTTP와 HTTPS 모두 TCP 연결 단계에서 실패했다.
-- HTTP status, 응답 body, captcha를 받지 못했으므로 selector 실패나 HTTP 403으로 확정할 수 없다.
-- 같은 날 오전 수집은 상세 10건 중 성공 8, HTTP 404 1, fetch 실패 1이었다.
-- 외부 네트워크에서는 82cook 게시판이 정상 응답했다.
+망을 바꿔 가며 **같은 Mac · 같은 코드**로 확인한 결과다.
 
-현재 결론은 `도서관 공인 IP 또는 네트워크 경로 문제 가능성이 높다`이다.
-우리 crawler가 차단을 유발했다는 인과관계와 영구 차단 여부는 미확정이다.
+| 네트워크 | 82cook 접속 | 비고 |
+|---|---|---|
+| 도서관 Wi-Fi | 🔴 실패 | HTTP·HTTPS 모두 **TCP 연결 단계**에서 실패 |
+| 스타벅스 Wi-Fi | 🟢 정상 | 같은 Mac · 같은 코드 |
+| 집 Wi-Fi | 🟢 정상 | 같은 Mac · 같은 코드 |
+
+- HTTP status, 응답 body, captcha를 받지 못했으므로 selector 실패나 HTTP 403으로 확정할 수 없다.
+- 같은 날 오전 수집은 상세 10건 중 성공 8, HTTP 404 1, fetch 실패 1이었다. 성공률은 **0.8**이다.
+
+### 결론
+
+- **전역 차단·기기 차단·계정 차단 가능성은 낮다.** 같은 기기·같은 코드가 두 망에서 정상이었다.
+- **도서관 공인 IP · 방화벽 · DNS · 라우팅 등 네트워크 경로 문제 가능성이 높다.**
+- 🔴 **정확한 원인은 미확정이다.** 위 둘은 가능성의 크기이지 확정이 아니다.
+- 🔴 **도서관 Wi-Fi에서는 82cook live 수집을 하지 않는다.** 원인을 모르는 채 재시도하면
+  관측만 오염되고 상대 서버에는 실패 요청만 쌓인다.
+
+🔴 **403 과 TCP 를 같은 원인으로 합치지 않는다.** 403은 상대가 우리를 알아보고 막은 것이고,
+TCP 실패는 연결 자체가 안 된 것이다. 전자는 재시도가 상황을 악화시키고 후자는 우리 쪽 망일 수 있다.
+코드에서도 두 분류의 임계·쿨다운·해제 방법이 다르다(§8.3).
 
 ### 10.2 안전한 확인과 금지
 
-같은 노트북에서 휴대폰 핫스팟으로 게시판 한 번만 열어 본다.
+🔴 **이미 같은 Mac에서 두 개의 정상 망(스타벅스·집)을 확인했다.** 그것으로
+"기기·계정·전역 차단" 은 사실상 배제됐다. 따라서 **핫스팟 확인은 필수 다음 단계가 아니다** —
+같은 종류의 관측을 한 번 더 얻을 뿐이다. 하고 싶으면 해도 되지만, 이것을 못 해서
+다음 작업이 막히지는 않는다.
 
-- 핫스팟 성공: 도서관 IP/망 문제.
-- 핫스팟 실패: 기기 또는 로컬 경로 추가 조사.
+원인을 좁히려면 **도서관 망 자체를 보는 관측**이 필요하다(공인 IP, 방화벽, DNS 응답,
+경로 추적). 그것 없이는 정확한 원인이 확정되지 않는다.
 
-VPN, 프록시, UA 위장, IP 회전으로 우회하지 않는다. 원인 확인 전에는 82cook 10슬롯 job을 활성화하지 않는다.
+🔴 금지: VPN · 프록시 · UA 위장 · IP 회전으로 우회하지 않는다.
+🔴 금지: **도서관 Wi-Fi에서는 82cook live 수집을 하지 않는다.**
+🔴 원인 확인 전에는 82cook 10슬롯 job을 활성화하지 않는다.
 
 ### 10.3 활성화 선행 조건
 
-- source별 일일 요청 budget.
-- 정상 요청 간격과 jitter의 단일 정본.
-- 429, 403, TCP 실패별 지수 backoff.
-- 연속 실패 circuit breaker.
-- 성공률과 실패 종류를 health JSON에 노출.
-- 한 source가 중단돼도 Naver와 발행이 계속되는 격리.
+| 선행 조건 | 2026-09-08 상태 |
+|---|---|
+| source별 일일 요청 budget | ✅ 구현 (`collect-guard`, KST 하루 단위) |
+| 정상 요청 간격과 jitter의 단일 정본 | ✅ 구현 (`collect-schedule` 실측값) |
+| 429, 403, TCP 실패별 지수 backoff | ✅ 구현 (분류별 base·cap·재시도 상한 분리) |
+| 연속 실패 circuit breaker | ✅ 구현 (§8.3 상태 전이, 403은 사람 해제) |
+| 성공률과 실패 종류를 health JSON에 노출 | ✅ 구현 (`supply:health --json`의 `collect.guards`) |
+| 한 source가 중단돼도 Naver와 발행이 계속되는 격리 | ✅ job 분리 · 유효 처리량 기준 격리 계산 |
+| **82cook 신규 유입 실측** | 🔴 **미측정** — 놓침 상한을 계산할 수 없다 |
+| **접속 불안정 원인 확정** | 🔴 미확정 (§10.1) |
+| **실제 job 등록** | 🔴 미등록 — current 기여 0 |
 
-Claude의 현재 WIP에 적힌 `82cook detail 성공률 100%`와 10회/day 즉시 준비 판정은 실제와 다르므로 수정 전 merge하면 안 된다.
+앞의 여섯 개가 구현됐어도 뒤의 세 개가 남아 있으므로 **82cook readiness는 BLOCKED**다.
+
+`82cook detail 성공률 100%`는 잘못된 값이었다. 실측은 **8/10 = 0.8**이며,
+공급 능력은 이론 최대가 아니라 이 성공률을 곱한 **유효 처리량**으로 계산한다.
 
 ## 11. 문서 감사 결과
 

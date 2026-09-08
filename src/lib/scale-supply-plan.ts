@@ -16,6 +16,16 @@
  */
 
 import { derive, type ScaleProfile } from './scale-profile'
+import {
+  RUNS_PER_DAY, SOURCE_FACTS, effectiveDetailPerDay, effectiveDetailPerDayOf,
+  factsOf, theoreticalDetailPerDay, verifySchedule,
+  type Phase, type SourceId,
+} from './collect-schedule'
+import { BREAKER, FAILURE_CLASSES, breakerOf, budgetOf, type GuardState } from './collect-guard'
+import {
+  JOB_LABELS, currentCapacity, inventoryMismatches, preparedCapacity, runsPlannedMulti,
+  type InventoryMismatch, type ObservedJob,
+} from './collect-inventory'
 
 // ─────────────────────────────────────────────────────────
 // ① 통과율 — 🔴 근거를 함께 적고, 비율은 근거에서 **계산한다**
@@ -148,27 +158,29 @@ export function detailPerQueueItem(): number {
   return rate > 0 ? Math.ceil(1 / rate) : 0
 }
 
-export type SupplyCapacity = {
-  /** 🔴 지금 실제로 열리는 하루 상세 건수 */
-  currentPerDay: number
-  /** 🔴 준비된 템플릿을 전부 올렸을 때 */
-  preparedPerDay: number
-  perSource: { id: string; loaded: boolean; currentPerDay: number; preparedPerDay: number; note: string }[]
-}
+/**
+ * 🔴 **`supplyCapacity()` 를 없앴다** (2026-09-08).
+ *
+ *    이 파일에는 능력 계산이 **두 벌** 있었다.
+ *      · 관측 기반 `currentCapacity(observed)` = 20/day  (collect-inventory)
+ *      · 정적 `SOURCES[].loaded` 기반 `supplyCapacity()` = 60/day  (여기)
+ *    `findBottlenecks` 는 뒤엣것을 썼다 — 아무도 등록하지 않은 job 과
+ *    조건부로만 도는 autopilot 몫이 **지금 열리는 능력**으로 세어졌다.
+ *
+ *    이제 current 의 정본은 **관측 하나뿐**이다(`collect-inventory.currentCapacity`).
+ *    `SOURCES[].loaded` 는 문서용 메모로만 남기고 판정에 쓰지 않는다.
+ */
 
-/** 🔴 능력 계산 — 현재와 준비를 **따로** 낸다 */
-export function supplyCapacity(): SupplyCapacity {
-  const perSource = SOURCES.map((s) => ({
-    id: s.id, loaded: s.loaded, note: s.note,
-    currentPerDay: s.loaded ? s.maxPerRun * s.runsPerDay : 0,
-    preparedPerDay: s.maxPerRun * s.runsPerDay,
-  }))
-  const autopilot = AUTOPILOT_COLLECT.maxPerRun * AUTOPILOT_COLLECT.runsPerDay
-  return {
-    currentPerDay: perSource.reduce((n, s) => n + s.currentPerDay, 0) + autopilot,
-    preparedPerDay: perSource.reduce((n, s) => n + s.preparedPerDay, 0) + autopilot,
-    perSource,
-  }
+/**
+ * 🔴 **조건부로만 열리는 몫** — `supply-autopilot` 은 재고가 목표에 못 미칠 때만 수집한다.
+ *    보장된 current 에 합치면 "재고가 찼을 때는 0인 능력" 을 상시 능력으로 세게 된다.
+ *    그래서 **따로** 낸다. 이름이 곧 계약이다.
+ */
+export function onDemandPotentialPerDay(observed: readonly ObservedJob[]): number {
+  const on = observed.some((o) => o.loaded && o.label === 'com.soransoran.supply-autopilot')
+  if (!on) return 0
+  // 🔴 autopilot 이 여는 것은 82cook 상세다 — 그 성공률이 걸린다
+  return AUTOPILOT_COLLECT.maxPerRun * AUTOPILOT_COLLECT.runsPerDay * factsOf('82cook').detailSuccessRate.value
 }
 
 // ─────────────────────────────────────────────────────────
@@ -294,6 +306,21 @@ export function estimateCost(plan: SupplyPlan, pricing: Pricing | null): CostEst
 export type Bottleneck = { stage: string; severity: 'BLOCK' | 'WARN'; detail: string }
 
 /**
+ * 🔴 **수집 여유 기준 — 이 상수 하나가 정본이다** (기존 "여유 30% 미만" 규칙).
+ *
+ *    필요량이 능력의 70% 를 넘으면 여유가 30% 미만이다. 회차·성공률이 조금만 흔들려도
+ *    그날 큐가 마르므로, 준비 완료라고 부르려면 **능력 ≥ 필요량 ÷ 0.7** 이어야 한다.
+ *    여기 한 곳에서만 정한다 — 병목 판정과 준비도 판정이 서로 다른 여유를 쓰면
+ *    한 화면은 경고를 띄우고 다른 화면은 READY 라고 적는다.
+ */
+export const COLLECT_MARGIN_RATIO = 0.7
+
+/** 🔴 이 필요량을 여유까지 갖춰 감당하려면 능력이 얼마여야 하는가 */
+export function requiredCapacityWithMargin(detailPerDay: number): number {
+  return Math.ceil(detailPerDay / COLLECT_MARGIN_RATIO)
+}
+
+/**
  * 🔴 병목 — **무엇이 먼저 막히는가.**
  *
  *    `limits` 를 넘기지 않으면 **실제 상수·실측 등록 상태**를 쓴다.
@@ -303,27 +330,35 @@ export function findBottlenecks(plan: SupplyPlan, limits?: {
   collectCapMax: number
   runsPerDay: number
   registeredSources: number
-}): Bottleneck[] {
-  const cap = supplyCapacity()
+}, observed: readonly ObservedJob[] = []): Bottleneck[] {
+  /**
+   * 🔴 **current 는 관측에서만 나온다.** 정적 `loaded` 를 쓰던 예전 판은
+   *    미등록 job 과 조건부 autopilot 몫까지 세어 60건이라고 말했다(실제 20건).
+   */
+  const cur = currentCapacity(observed)
   const collectCapacity = limits === undefined
-    ? cap.currentPerDay
+    ? cur.effectivePerDay
     : limits.collectCapMax * limits.runsPerDay
-  const registered = limits?.registeredSources ?? SOURCES.filter((s) => s.loaded).length
+  const registered = limits?.registeredSources ?? cur.perSource.filter((s) => s.registered).length
   const out: Bottleneck[] = []
 
   if (plan.detailPerDay > collectCapacity) {
     out.push({
       stage: 'collect', severity: 'BLOCK',
-      detail: `하루 ${plan.detailPerDay}건을 읽어야 하는데 지금 열리는 것은 ${collectCapacity}건`,
+      detail: `하루 ${plan.detailPerDay}건을 읽어야 하는데 지금 열리는 것은 ${Math.round(collectCapacity)}건`,
     })
-  } else if (plan.detailPerDay > collectCapacity * 0.7) {
-    out.push({ stage: 'collect', severity: 'WARN', detail: `수집 여유 30% 미만 (${plan.detailPerDay}/${collectCapacity})` })
+  } else if (plan.detailPerDay > collectCapacity * COLLECT_MARGIN_RATIO) {
+    out.push({
+      stage: 'collect', severity: 'WARN',
+      detail: `수집 여유 ${Math.round((1 - COLLECT_MARGIN_RATIO) * 100)}% 미만`
+        + ` (${plan.detailPerDay}/${Math.round(collectCapacity)})`,
+    })
   }
-  if (registered < SOURCES.length) {
-    const missing = SOURCES.filter((s) => !s.loaded).map((s) => s.id)
+  if (registered < SOURCE_FACTS.length) {
+    const missing = cur.perSource.filter((s) => !s.registered).map((s) => s.id)
     out.push({
       stage: 'source', severity: 'WARN',
-      detail: `수집원 ${registered}/${SOURCES.length} 등록 — 미등록: ${missing.join(', ')}`,
+      detail: `수집원 ${registered}/${SOURCE_FACTS.length} 등록 — 미등록: ${missing.join(', ')}`,
     })
   }
   // 🔴 통과율에 가정이 섞였으면 그것도 병목이다 — 숫자가 아니라 근거가 없다
@@ -333,11 +368,175 @@ export function findBottlenecks(plan: SupplyPlan, limits?: {
       detail: `통과율 실측 없음: ${plan.assumedStages.join(', ')} — 이 숫자로 READY 라고 말하지 않는다`,
     })
   }
-  const perSource = Math.ceil(plan.detailPerDay / SOURCES.length)
+  const perSource = Math.ceil(plan.detailPerDay / SOURCE_FACTS.length)
   if (perSource > 200) {
     out.push({ stage: 'source', severity: 'WARN', detail: `수집원당 하루 ${perSource}건 — 세션·robots 부담` })
   }
   return out
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑥ 수집 준비도 — 🔴 **모자라면 BLOCKED 다. "근접한다" 는 판정이 아니다** (2026-09-08)
+//
+//    예전 fixture 는 `detailPerDay('start') >= 380` 이라고 적어 두고 통과했다.
+//    필요량은 382 였다. 즉 **필요량보다 작은 수를 손으로 낮춘 문턱에 맞춰 통과시킨 것**이다.
+//    게다가 380 은 성공률을 곱하지 않은 이론 최대였다.
+//
+//    준비도는 세 가지를 모두 요구한다.
+//      ① 계획이 성립하는가 — 간격·부하·겹침, 그리고 **놓침 상한을 계산할 수 있는가**
+//      ② 보호장치가 붙어 있는가 — 예산 · 지수 backoff · 분류별 차단기
+//      ③ 유효 처리량이 필요량을 **여유(30%)까지 포함해** 넘는가
+// ─────────────────────────────────────────────────────────
+
+export type ReadinessStatus = 'READY' | 'BLOCKED'
+
+export type SourceReadiness = {
+  id: SourceId
+  status: ReadinessStatus
+  reasons: string[]
+  /** 🔴 **지금 실제로 열리는** 하루 상세 처리량 (관측 기반) */
+  currentPerDay: number
+  /** 🔴 다회 계획대로 올렸을 때 (템플릿 · 계획) */
+  preparedPerDay: number
+  /** 계획한 다회 job 이 실제로 올라와 있는가 */
+  multiRegistered: boolean
+  /** 지금 올라와 있는 job 의 label — 없으면 null */
+  currentLabel: string | null
+}
+
+/**
+ * 🔴 소스 하나의 준비도.
+ *
+ *    **세 가지를 모두 요구한다.**
+ *      ① 계획이 성립하는가 — 간격·부하·겹침, 그리고 놓침 상한을 계산할 수 있는가
+ *      ② 보호장치가 붙어 있는가 — 없으면 BLOCKED. "아직 안 붙였다" 를 "문제 없다" 로 읽지 않는다
+ *      ③ **계획한 다회 job 이 실제로 등록돼 있는가** — 1회판이 도는 것은 준비 완료가 아니다
+ *
+ *    🔴 `nowMs` 는 **필수**다. 예전 판은 `Date.parse(guard.budgetDay)`(그날 자정)를
+ *       차단기 판정에 넘겼다 — 같은 상태가 관제 화면에서는 half-open, 준비도에서는 open 으로
+ *       갈렸다. 두 화면이 다른 시각을 보면 어느 쪽도 믿을 수 없다.
+ */
+export function sourceReadiness(input: {
+  id: SourceId
+  phase: Phase
+  nowMs: number
+  guard: GuardState | null
+  observed: readonly ObservedJob[]
+}): SourceReadiness {
+  const { id, phase, nowMs, guard } = input
+  const f = factsOf(id)
+  const reasons: string[] = []
+
+  for (const p of verifySchedule(id, phase)) reasons.push(`계획: ${p}`)
+  if (f.newPerHourFloor === null) reasons.push('신규 유입 실측이 없다 — 얼마나 자주 봐야 놓치지 않는지 모른다')
+
+  // 🔴 ③ 등록 상태 — **관측이 정본이다.** 정적 loaded 플래그를 쓰지 않는다
+  const cur = currentCapacity(input.observed).perSource.find((x) => x.id === id)!
+  const multiOk = runsPlannedMulti(input.observed, id, phase)
+  if (!multiOk) {
+    reasons.push(cur.registered
+      ? `계획한 다회 job(${JOB_LABELS[id].multi} · ${RUNS_PER_DAY[id][phase]}회)이 아니다`
+        + ` — 지금은 ${cur.label} ${cur.runsPerDay}회`
+      : `${JOB_LABELS[id].multi} 미등록 — 템플릿만 있고 돌지 않는다`)
+  }
+
+  if (guard === null) {
+    reasons.push('보호장치 상태가 없다 — 예산·backoff·차단기가 붙지 않았거나 아직 한 번도 돌지 않았다')
+  } else {
+    const b = budgetOf(guard)
+    if (b.exhausted) reasons.push(`하루 요청 예산 소진 (${b.used}/${b.limit})`)
+    for (const cls of FAILURE_CLASSES) {
+      // 🔴 **실제 지금 시각**으로 본다 — 관제 화면과 같은 값이어야 한다
+      if (breakerOf(guard, cls, nowMs) === 'open') {
+        reasons.push(`${cls} 차단기가 열려 있다${BREAKER[cls].requiresHuman ? ' — 사람이 확인해야 닫힌다' : ''}`)
+      }
+    }
+  }
+  const prep = preparedCapacity(phase).perSource.find((x) => x.id === id)!
+  return {
+    id, status: reasons.length === 0 ? 'READY' : 'BLOCKED', reasons,
+    currentPerDay: cur.effectivePerDay,
+    preparedPerDay: prep.effectivePerDay,
+    multiRegistered: multiOk,
+    currentLabel: cur.label,
+  }
+}
+
+export type CollectReadiness = {
+  status: ReadinessStatus
+  phase: Phase
+  /** 필요한 하루 상세 건수 (역산값) */
+  requiredPerDay: number
+  /** 여유까지 갖추려면 있어야 하는 능력 */
+  requiredWithMargin: number
+  /** 🔴 **지금 실제로 열리는** 처리량 (관측 기반) */
+  currentPerDay: number
+  /** 🔴 다회 계획대로 올렸을 때 */
+  preparedPerDay: number
+  /** 이론 최대 — 🔴 판정에 쓰지 않는다. 둘의 차이를 보여주려고 적는다 */
+  theoreticalPerDay: number
+  /** 등록 상태와 계획이 어긋나는 지점 */
+  mismatches: InventoryMismatch[]
+  perSource: SourceReadiness[]
+  reasons: string[]
+}
+
+/**
+ * 🔴 계획 전체의 수집 준비도. **하나라도 BLOCKED 면 전체가 BLOCKED 다.**
+ *    "두 소스는 괜찮다" 는 위안이지 준비 완료가 아니다.
+ *
+ * 🔴 **current 와 prepared 를 각각 필요량과 견준다.**
+ *      · current 가 모자라면 → 지금 못 돌린다 (등록이 필요하다)
+ *      · prepared 가 모자라면 → 올려도 못 돌린다 (계획 자체가 모자라다)
+ *    둘을 한 숫자로 합치면 "템플릿을 만들었으니 능력이 늘었다" 가 된다.
+ */
+export function collectReadiness(input: {
+  phase: Phase
+  plan: SupplyPlan
+  nowMs: number
+  observed: readonly ObservedJob[]
+  guards?: Partial<Record<SourceId, GuardState>>
+}): CollectReadiness {
+  const guards = input.guards ?? {}
+  const perSource = SOURCE_FACTS.map((f) => sourceReadiness({
+    id: f.id, phase: input.phase, nowMs: input.nowMs,
+    guard: guards[f.id] ?? null, observed: input.observed,
+  }))
+  const cur = currentCapacity(input.observed)
+  const prep = preparedCapacity(input.phase)
+  const required = input.plan.detailPerDay
+  const withMargin = requiredCapacityWithMargin(required)
+  const reasons: string[] = []
+
+  if (cur.effectivePerDay < required) {
+    reasons.push(`지금 열리는 것 ${Math.round(cur.effectivePerDay)}건/day < 필요량 ${required}건/day`
+      + ` — ${required - Math.round(cur.effectivePerDay)}건 모자란다 (등록된 job 기준)`)
+  }
+  if (prep.effectivePerDay < required) {
+    reasons.push(`준비된 계획 ${Math.round(prep.effectivePerDay)}건/day < 필요량 ${required}건/day`
+      + ` — 전부 올려도 ${required - Math.round(prep.effectivePerDay)}건 모자란다`)
+  } else if (prep.effectivePerDay < withMargin) {
+    reasons.push(`준비된 계획 ${Math.round(prep.effectivePerDay)}건/day 는 필요량 ${required}건은 넘지만`
+      + ` 여유 ${Math.round((1 - COLLECT_MARGIN_RATIO) * 100)}% 기준(${withMargin}건)에 못 미친다`)
+  }
+  // 🔴 통과율에 가정이 섞였으면 이 숫자 자체가 근거가 못 된다
+  if (!input.plan.proven) {
+    reasons.push(`통과율 실측 없음: ${input.plan.assumedStages.join(', ')} — 이 숫자로 READY 라고 말하지 않는다`)
+  }
+  for (const s of perSource) {
+    if (s.status === 'BLOCKED') reasons.push(`${s.id}: ${s.reasons.join(' / ')}`)
+  }
+  return {
+    status: reasons.length === 0 ? 'READY' : 'BLOCKED',
+    phase: input.phase,
+    requiredPerDay: required,
+    requiredWithMargin: withMargin,
+    currentPerDay: cur.effectivePerDay,
+    preparedPerDay: prep.effectivePerDay,
+    theoreticalPerDay: theoreticalDetailPerDay(input.phase),
+    mismatches: inventoryMismatches(input.observed, input.phase),
+    perSource, reasons,
+  }
 }
 
 /** 사람이 읽을 요약 */

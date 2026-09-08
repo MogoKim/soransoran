@@ -16,13 +16,13 @@ import {
   PROFILES, RELEASE_STAGES, SAFEST_STAGE, HORIZON_DAYS, MAX_DAILY_TARGET,
   RELEASE_ENV, CAPACITY_ENV, derive, verifyProfile, describeProfile,
   maxPostsPerWeek, effectiveWeeklyCap, minuteOfDay, slotLabel, slotCronUtc,
-  expandSlots, resolveStage, stageRank,
+  expandSlots, resolveStage, stageRank, horizonStart,
 } from '../src/lib/scale-profile'
 import {
   resolveScale, installFromEnv, activeScale, resetScale, describeScale, SAFEST_SCALE,
 } from '../src/lib/scale-runtime'
 import {
-  planSupply, findBottlenecks, requiredRuns, supplyCapacity, estimateCost, readPricing,
+  planSupply, findBottlenecks, requiredRuns, onDemandPotentialPerDay, estimateCost, readPricing,
   YIELD, YIELD_EVIDENCE, ASSUMED_STAGES, SOURCES, AUTOPILOT_COLLECT, rateOf, COST_ENV,
   detailPerQueueItem,
 } from '../src/lib/scale-supply-plan'
@@ -39,7 +39,9 @@ import {
 } from '../src/lib/persona-cohort'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
-import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS, type BatchDraft } from '../src/lib/original-post-persona-match'
+import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
+import type { QueueCandidate } from '../src/lib/supply-candidates'
+import { currentCapacity, preparedCapacity, type ObservedJob } from '../src/lib/collect-inventory'
 import { STOCK_TARGET, STOCK_MIN, STOCK_WARN } from '../src/lib/micro-seed-supply-autofill'
 import { COLLECT_CAP, COLLECT_MIN, collectCapFor } from '../src/lib/supply-autopilot'
 import {
@@ -321,7 +323,9 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     /throw new Error\('트랜잭션 안 Gate ⑥-B 재판정 실패/.test(txBlock))
   check('F 🔴 재판정은 사전 검사와 **같은 판정 함수**를 쓴다 — 두 규칙이 갈리지 않는다',
     (txBlock.match(/checkNameCollision\(/g) ?? []).length === 1
-    && (toolSrc.match(/checkNameCollision\(/g) ?? []).length === 2)
+    // 도구 전체에서는 세 번 쓴다 — 자동 선정 · 사전 검사 · 트랜잭션 재판정.
+    // 🔴 셋 다 **같은 함수**다. 규칙이 갈리지 않는다
+    && (toolSrc.match(/checkNameCollision\(/g) ?? []).length === 3)
   check('F 🔴 트랜잭션 밖 검사는 "안내" 로 격하됐다',
     toolSrc.includes('사전 검사는 안내다') && toolSrc.includes('사전 검사 전원 pass'))
   check('F 🔴 대조 함수가 트랜잭션 클라이언트를 받는다',
@@ -344,7 +348,15 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   check('G 🔴 발행 러너가 그 값을 write 경로에 넘긴다',
     /publishOriginalPostTx\(prisma, \{ queueId: target\.id, publishedToday, dailyCap: RELEASE_DAILY_CAP \}\)/
       .test(users['auto-publish']))
-  check('G 🔴 발행 러너가 planBatch 에도 넘긴다', /RELEASE_CAPS,/.test(users['auto-publish']))
+  // 🔴 러너는 이제 공용 준비 함수(`prepareCandidates`)를 통해 매칭한다.
+  //    **주입 자체가 사라지면 안 된다** — 그 함수가 caps 를 planBatch 로 넘기는지도 함께 본다
+  check('G 🔴 발행 러너가 매칭 경로에 release cap 을 넘긴다',
+    /caps: RELEASE_CAPS/.test(users['auto-publish']))
+  check('G 🔴 공용 준비 함수가 그 cap 을 planBatch 로 넘긴다', (() => {
+    const lib = read('src/lib/supply-candidates.ts')
+    return /planBatch\(keep\.map\(draftOf\), input\.personas, caps\)/.test(lib)
+      && /planBatch\(autoDrafts, input\.personas, caps, \{/.test(lib)
+  })())
   check('G 🔴 공급 러너는 capacity 프로필로 재고 기준을 만든다',
     /scale\.capacityProfile/.test(users['supply-autopilot']) && /scale\.capacityProfile/.test(users['supply-autofill']))
   check('G 🔴 health 가 capacity 와 release 를 따로 보여 준다',
@@ -555,7 +567,17 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
   check('🔴 100/day 목록 요구량이 3만 건대다', p100.listPerDay > 30000 && p100.listPerDay < 50000)
 
   // 🔴 수집원 — **실제 launchd 템플릿과 대조**한다
-  const cap = supplyCapacity()
+  /**
+   * 🔴 **현재 능력의 정본은 관측 하나뿐이다** (2026-09-08).
+   *    정적 `SOURCES[].loaded` 로 세던 `supplyCapacity()` 를 지웠다 —
+   *    아무도 등록하지 않은 job 과 조건부 autopilot 몫이 "지금 열리는 능력" 으로 세어졌다.
+   */
+  const OBSERVED: readonly ObservedJob[] = [
+    { label: 'com.soransoran.navercafe-collect-remonterrace', slots: [{ hour: 9, minute: 20 }], loaded: true },
+    { label: 'com.soransoran.navercafe-collect-wgang', slots: [{ hour: 13, minute: 20 }], loaded: true },
+    { label: 'com.soransoran.supply-autopilot', slots: [{ hour: 21, minute: 10 }], loaded: true },
+  ]
+  const cap = currentCapacity(OBSERVED)
   for (const s of SOURCES) {
     const t = read(join('docs/operations/launchd', s.template))
     const maxArg = /--(?:auto-)?max=(\d+)/.exec(t)
@@ -570,9 +592,20 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
     return /<integer>13<\/integer>/.test(t)
       && SOURCES.some((s) => s.id === 'navercafe:wgang' && s.note.includes('13:20'))
   })())
-  check('🔴 현재 능력 < 준비 능력 — 둘을 합치지 않는다', cap.currentPerDay < cap.preparedPerDay)
-  check('🔴 현재 능력은 등록된 것만 센다',
-    cap.currentPerDay === 10 + 10 + AUTOPILOT_COLLECT.maxPerRun * AUTOPILOT_COLLECT.runsPerDay)
+  check('🔴 현재 능력 < 준비 능력 — 둘을 합치지 않는다',
+    cap.effectivePerDay < preparedCapacity('start').effectivePerDay)
+  // 🔴 **관측된 슬롯 수**로 센다. 계획 회차(4·8회)로 세지 않는다
+  check('🔴 현재 능력은 등록된 것만 · 관측 슬롯 수로 센다', cap.effectivePerDay === 10 + 10)
+  check('🔴 조건부 autopilot 몫을 보장 능력에 합치지 않는다', (() => {
+    const onDemand = onDemandPotentialPerDay(OBSERVED)
+    // autopilot 은 재고가 모자랄 때만 돈다 — 별도 표시이지 current 가 아니다
+    return onDemand === AUTOPILOT_COLLECT.maxPerRun * AUTOPILOT_COLLECT.runsPerDay * 0.8
+      && cap.effectivePerDay < cap.effectivePerDay + onDemand
+  })())
+  check('🔴 정적 loaded 계산기(supplyCapacity)가 사라졌다',
+    !/export function supplyCapacity/.test(read('src/lib/scale-supply-plan.ts')))
+  check('🔴 병목 판정도 관측을 쓴다',
+    /const cur = currentCapacity\(observed\)/.test(read('src/lib/scale-supply-plan.ts')))
   check('🔴 autopilot 상한은 하위 BATCH_CAP 과 같은 COLLECT_CAP 이다', AUTOPILOT_COLLECT.maxPerRun === COLLECT_CAP)
   // 🔴 수집 배수를 통과율에 연결했다 — 리터럴 4 를 지웠고, 값은 그대로 4 다 (회귀 0)
   check('🔴 수집 배수 = ceil(1 / (detail→judge × judge → draft × draft 통과))',
@@ -588,13 +621,14 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
   check('🔴 지금 회차는 등록된 것만 센다', runs.find((r) => r.id === '82cook')!.runsNow === 0)
 
   // 🔴 병목 — limits 를 넘기지 않으면 **실제 상수**로 본다
-  const now = findBottlenecks(p100)
+  const now = findBottlenecks(p100, undefined, OBSERVED)
   check('🔴 실제 상한으로 100/day 는 BLOCK', now.some((b) => b.stage === 'collect' && b.severity === 'BLOCK'))
   check('🔴 미등록 수집원을 경고한다', now.some((b) => b.stage === 'source' && b.detail.includes('82cook')))
   check('🔴 통과율 가정도 병목으로 적는다', now.some((b) => b.stage === 'yield'))
   const fixed = findBottlenecks(p100, { collectCapMax: 500, runsPerDay: 10, registeredSources: 3 })
   check('🔴 상한을 올리면 collect BLOCK 이 사라진다', !fixed.some((b) => b.stage === 'collect' && b.severity === 'BLOCK'))
-  check('🟢 지금 운영(d1)은 BLOCK 이 없다', !findBottlenecks(planSupply(PROFILES.d1)).some((b) => b.severity === 'BLOCK'))
+  check('🟢 지금 운영(d1)은 BLOCK 이 없다',
+    !findBottlenecks(planSupply(PROFILES.d1), undefined, OBSERVED).some((b) => b.severity === 'BLOCK'))
 
   // 🔴 비용 — 단가를 모르면 계산하지 않는다
   check('🔴 단가 없으면 비용 unknown (추정 금지)', (() => {
@@ -620,24 +654,34 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
   const pool = parsePoolDoc(read('docs/operations/2026-08-30-persona-pool-design.md'))
   check('정본 Pool 파싱 문제 0', pool.problems.length === 0)
   const usable = pool.cards.filter((c) => c.voiceLength !== null)
-  check('🔴 길이를 읽을 수 있는 카드 19장 (P09 제외)', usable.length === 19)
+  // 🔴 Pool 이 25장으로 늘었다 (P21~P25 · 얇은 축 보강). P09 만 길이 미상이다
+  check('🔴 길이를 읽을 수 있는 카드 24장 (Pool 25 - P09)', usable.length === 24)
   const personas = usable.map(cardToPersona)
 
   // 🔴 **재현 가능한 fixture** — 시각 · 난수 · DB 없이 같은 결과가 나온다
   const START = new Date('2026-09-09T00:05:00+09:00')
-  const NEUTRAL = ['요즘 날씨가 부쩍 서늘해졌어요', '아침에 산책을 다녀왔습니다', '오랜만에 김치를 담갔어요',
-    '오늘 장 보러 다녀왔어요', '커피 한 잔 마시며 쉬는 중이에요']
-  const q = (n: number): BatchDraft[] => Array.from({ length: n }, (_, i) => ({
+  /**
+   * 🔴 **상시(evergreen) 문구만 쓴다.** 이 큐로 재는 것은 **persona 여력**이지 TTL 이 아니다.
+   *    현재성 문구를 섞으면 14일 지평 중간에 TTL(7일)로 빠져 무엇을 재는지 흐려진다 —
+   *    나이가 흐르는 것은 `d10:prep-check ⑬` 이 따로 잰다.
+   */
+  const NEUTRAL = ['아침에 산책을 다녀왔습니다', '주말에 산책을 다녀왔습니다', '오랜만에 김치를 담갔어요',
+    '장 보러 다녀왔어요', '커피 한 잔 마시며 쉬는 중이에요']
+  const q = (n: number): QueueCandidate[] => Array.from({ length: n }, (_, i) => ({
     queueId: `q-${String(i).padStart(3, '0')}`,
     title: `${NEUTRAL[i % NEUTRAL.length]} (${i})`,
-    body: `${NEUTRAL[i % NEUTRAL.length]}\n\n오늘 있었던 소소한 이야기를 적어 봅니다. ${i}번째 글이에요.`,
+    body: `${NEUTRAL[i % NEUTRAL.length]}\n\n있었던 소소한 이야기를 적어 봅니다. ${i}번째 글이에요.`,
     gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
+    // 🔴 나이는 계획 시점마다 다시 잰다 — 갓 수집된 글로 둔다
+    capturedAt: START,
   }))
   const q140 = q(140)
   check('🔴 queue id 140개가 전부 다르다', new Set(q140.map((x) => x.queueId)).size === 140)
 
+  // 🔴 시작점을 직접 주지 않는다 — 단계별 anchor 는 lib 이 만든다
+  const AXIS = { now: START, publishedToday: 0 }
   const sim = (stage: 'd1' | 'd3' | 'd5' | 'd10', ps = personas, queue = q140): ReturnType<typeof simulateStage> =>
-    simulateStage({ stage, queue, personas: ps, startAt: START })
+    simulateStage({ stage, queue, personas: ps, axis: AXIS })
 
   // 🔴 산술 최소 인원만으로는 채우지 못한다 — 이것이 이번 수정의 핵심 근거다
   const arithmetic = derive(PROFILES.d10).personasNeededArithmetic
@@ -648,9 +692,13 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
   check('🔴 not-ready 사유에 미달 건수가 적힌다', judgeReadiness(at14).reasons.some((r) => r.includes('11건 미달')))
   check('🔴 산술값은 참고로만 적는다', judgeReadiness(at14).arithmeticPersonas === 14)
 
-  const at19 = sim('d10')
-  check('🔴 Pool 19명 전원도 139/140 — d10 은 아직 도달 불가', at19.in14 === 139 && !judgeReadiness(at19).ready)
+  // 🔴 옛 Pool(19명)은 미달이었다 — 그래서 얇은 축을 메웠다
+  const at19 = sim('d10', personas.slice(0, 19))
+  check('🔴 옛 Pool 19명은 139/140 — 여유가 없었다', at19.in14 === 139 && !judgeReadiness(at19).ready)
+  const at24 = sim('d10')
+  check('🟢 24명이면 140/140 — 얇은 축 보강의 결과다', at24.in14 === 140 && judgeReadiness(at24).ready)
   check('🔴 공백 0일 · 복구 깨짐 0 (막힌 것이 아니라 모자란 것이다)', at19.gaps === 0 && at19.recoveryBroken === 0)
+  check('🔴 24명에서도 공백 0 · 복구 깨짐 0', at24.gaps === 0 && at24.recoveryBroken === 0)
 
   const d5at19 = sim('d5', personas, q(70))
   check('🟢 d5 는 19명 · 재고 70 이면 70/70 · 공백 0 → READY', d5at19.in14 === 70 && d5at19.gaps === 0
@@ -660,32 +708,39 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
   const d1at19 = sim('d1', personas, q(14))
   check('🟢 d1 은 14/14 · 공백 0 → READY', d1at19.in14 === 14 && judgeReadiness(d1at19).ready)
 
-  // 🔴 persona 한 명이 멈추면 자동으로 낮춘다
-  const d5at11 = sim('d5', personas.slice(0, 11), q(70))
+  /**
+   * 🔴 persona 가 줄면 자동으로 낮춘다.
+   *
+   *    🔴 경계가 11명 → **10명**으로 내려갔다. 예측이 이제 러너와 **같은 발행 순서**
+   *    (복구 → 현재성 → 상시 적합도)를 쓰기 때문이다 — 자리 경쟁에서 더 잘 맞는 사람이
+   *    먼저 앉으므로 같은 인원으로 더 많이 나간다. 값이 흔들린 것이 아니라 **정확해진 것**이다.
+   */
   const d5at10 = sim('d5', personas.slice(0, 10), q(70))
-  check('🟢 d5 는 11명이면 70/70', d5at11.in14 === 70 && judgeReadiness(d5at11).ready)
-  check('🔴 한 명이 멈춰 10명이 되면 69/70 — not-ready', d5at10.in14 === 69 && !judgeReadiness(d5at10).ready)
+  const d5at9 = sim('d5', personas.slice(0, 9), q(70))
+  check('🟢 d5 는 10명이면 70/70', d5at10.in14 === 70 && judgeReadiness(d5at10).ready)
+  check('🔴 한 명이 멈춰 9명이 되면 66/70 — not-ready', d5at9.in14 === 66 && !judgeReadiness(d5at9).ready)
   const throttled = safeStageFor('d5', [
-    judgeReadiness(sim('d1', personas.slice(0, 10), q(14))),
-    judgeReadiness(sim('d3', personas.slice(0, 10), q(42))),
-    judgeReadiness(d5at10),
-    judgeReadiness(sim('d10', personas.slice(0, 10))),
+    judgeReadiness(sim('d1', personas.slice(0, 9), q(14))),
+    judgeReadiness(sim('d3', personas.slice(0, 9), q(42))),
+    judgeReadiness(d5at9),
+    judgeReadiness(sim('d10', personas.slice(0, 9))),
   ])
-  check('🔴 자동으로 d3 로 감속한다', throttled.stage === 'd3' && throttled.throttled)
-  check('🔴 감속 사유를 남긴다', (throttled.reason ?? '').includes('d5'))
+  check('🔴 자동으로 아래 단계로 감속한다', throttled.throttled && stageRank(throttled.stage) < stageRank('d5'))
+  check('🔴 감속 사유에 어느 단계가 미달인지 적는다', (throttled.reason ?? '').includes('d5'))
 
   // 🔴 재고가 모자라면 그것도 not-ready 다
   const lowStock = sim('d10', personas, q(100))
-  check('🔴 재고 100건이면 100/140 · 공백 3일', lowStock.in14 === 100 && lowStock.gaps === 3)
+  check('🔴 재고 100건이면 100/140 · 공백 4일', lowStock.in14 === 100 && lowStock.gaps === 4)
   check('🔴 재고 부족 사유가 적힌다', judgeReadiness(lowStock).reasons.some((r) => r.includes('재고')))
 
   // 🔴 생활사 쏠림 — **큐가 한 축을 요구할 때** 인원 수는 답이 아니다.
   //    아래 큐는 전부 "중학생 아이" 이야기다. `hardFilter` 는 그 축을 가진 사람만 통과시킨다
   const kidQ = Array.from({ length: 140 }, (_, i) => ({
     queueId: `k-${String(i).padStart(3, '0')}`,
-    title: `중학생 아이 시험 때문에 요즘 잠을 못 잡니다 (${i})`,
+    // 🔴 현재성 낱말을 넣지 않는다 — 이 큐가 재는 것은 **생활사 축 쏠림**이다
+    title: `중학생 아이 시험 때문에 잠을 못 잡니다 (${i})`,
     body: `중학생 아이 시험 준비로 온 집이 예민해요. 저녁마다 학원 데려다주고 오면 하루가 다 갑니다. ${i}`,
-    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
+    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, capturedAt: START,
   }))
   const kidDiverse = sim('d10', personas, kidQ)
   check('🔴 큐가 한 축으로 쏠리면 19명이어도 40/140 뿐이다', kidDiverse.in14 === 40 && kidDiverse.gaps === 4)
@@ -704,7 +759,9 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
   // 🔴 **판정 분기를 직접 시험한다.** 시뮬레이션만 돌리면 그 분기가 한 번도 안 켜져
   //    가드를 지워도 fixture 가 통과한다 — 실제로 그랬다(복구 깨짐 가드).
   const synth = (o: Partial<ReturnType<typeof simulateStage>> = {}): ReturnType<typeof simulateStage> => ({
-    stage: 'd1', in14: 14, want14: 14, gaps: 0, recoveryBroken: 0, personas: 19, stock: 14, ...o,
+    stage: 'd1', in14: 14, want14: 14, gaps: 0, recoveryBroken: 0, personas: 19, stock: 14,
+    // 🔴 지평 시작점과 다음 슬롯은 **다른 값**이다 — 판정 분기 시험에는 둘 다 필요하다
+    horizonStartAt: horizonStart(START), nextSlotAt: START, horizonDays: 14, ...o,
   })
   check('🟢 아무 문제 없으면 READY', judgeReadiness(synth()).ready)
   check('🔴 복구 깨짐이 1건이라도 있으면 not-ready — 레인이 멈춘 것이다',
@@ -731,10 +788,13 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
   check('🟢 요청 단계가 ready 면 그대로', safeStageFor('d3', [judgeReadiness(d3at19)]).throttled === false)
 
   // 🔴 네 단계를 한 번에 — planner 와 같은 함수다
-  const all = simulateAllStages({ queue: q140, personas, startAt: START })
+  const all = simulateAllStages({ queue: q140, personas, axis: AXIS })
   check('네 단계를 모두 판정한다', all.length === 4)
-  check('🔴 d10 만 not-ready 다 (재고 140 기준)',
-    all.filter((x) => !x.verdict.ready).map((x) => x.sim.stage).join() === 'd10')
+  // 🔴 24명·재고 140 이면 네 단계가 전부 ready 다 — 그것이 이번 보강의 목적이다
+  check('🔴 24명·재고 140 이면 네 단계 모두 ready', all.every((x) => x.verdict.ready))
+  check('🔴 19명이면 d10 만 not-ready 다', simulateAllStages({
+    queue: q140, personas: personas.slice(0, 19), axis: AXIS,
+  }).filter((x) => !x.verdict.ready).map((x) => x.sim.stage).join() === 'd10')
 }
 
 // ── ⑦ cohort manifest ──
@@ -744,8 +804,8 @@ console.log('\n⑦ cohort manifest')
   check('wave3 는 11명이다', COHORTS['wave3-scale'].codes.length === 11)
   check('🔴 P09 가 어느 cohort 에도 없다', Object.values(COHORTS).every((m) => !m.codes.includes('P09')))
   check('🔴 P09 제외 이유가 코드에 적혀 있다', (EXCLUDED_CODES.P09 ?? '').includes('readLengthBand'))
-  check('🔴 세 cohort 합이 19명 (Pool 20 - P09)',
-    Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0) === 19)
+  check('🔴 네 cohort 합이 24명 (Pool 25 - P09)',
+    Object.values(COHORTS).reduce((n, m) => n + m.codes.length, 0) === 24)
   check('wave3 는 선행 두 개를 요구한다', COHORTS['wave3-scale'].requires.length === 2)
   check('알 수 없는 id 는 null', cohortOf('nope') === null)
   check('🔴 제외 대상이 들어가면 잡는다',

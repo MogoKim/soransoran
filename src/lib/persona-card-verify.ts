@@ -145,7 +145,9 @@ export function verifySeedCard(code: string, card: SeedCard, poolCard: PoolCard 
 
 /** 🔴 코드가 정본 형식인가 — 임의 코드를 만들면 문서와 DB 가 갈린다 */
 export function isPoolCode(code: string): boolean {
-  return /^P(0[1-9]|1[0-9]|20)$/.test(code)
+  // 🔴 **P01~P50** (2026-09-08). Pool 이 25장으로 늘었고 50장까지 갈 계획이다.
+  //    범위를 넓혀도 안전한 이유: 도구가 **정본 Pool 문서에 카드가 없는 코드를 거부**한다.
+  return /^P(0[1-9]|[1-4][0-9]|50)$/.test(code)
 }
 
 /**

@@ -29,7 +29,8 @@ import {
 } from '../src/lib/scale-profile'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { simulateAllStages } from '../src/lib/scale-readiness'
-import type { BatchDraft, PersonaForMatch } from '../src/lib/original-post-persona-match'
+import type { PersonaForMatch } from '../src/lib/original-post-persona-match'
+import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -65,7 +66,8 @@ const queueRows = await prisma.originalPostApprovalQueue.findMany({
     id: true, status: true, createdPostId: true, gateVerdict: true, promptVersion: true,
     model: true, matchedPersonaId: true, draftTitle: true, draftBody: true,
     editedTitle: true, editedBody: true, gateResults: true, decidedAt: true, createdAt: true,
-    rawContent: { select: { sourceSite: true } },
+    // 🔴 freshness 근거 — 러너·관제와 같은 필드다. 없으면 나이를 모르므로 hold 로 간다
+    rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
   },
   orderBy: { createdAt: 'asc' },
 })
@@ -75,6 +77,7 @@ const { targets } = selectAutoTargets(
     promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
     gateResults: r.gateResults, title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
     sourceSite: r.rawContent.sourceSite, decidedAt: r.decidedAt, createdAt: r.createdAt,
+    capturedAt: r.rawContent.sourceCapturedAt ?? null,
   })),
   (t, b) => safetyFilter({ title: t, body: b }).verdict,
 )
@@ -148,11 +151,13 @@ const excludedNoLength = notActive.filter((c) => c.voiceLength === null)
 const inactive = notActive.filter((c) => c.voiceLength !== null)
 
 // ── ⑥ 큐 — 🔴 기존 배정은 정본이다 (러너·관제와 같다) ──
-const queue: BatchDraft[] = targets.map((t) => ({
+// 🔴 `capturedAt` 을 그대로 넘긴다 — 예측이 날짜마다 나이를 다시 잰다
+const queue: QueueCandidate[] = targets.map((t) => ({
   queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
   assignedPersonaCode: t.matchedPersonaId === null
     ? null
     : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+  capturedAt: (t as { capturedAt?: Date | null }).capturedAt ?? null,
 }))
 
 export type ComboResult = {
@@ -312,7 +317,7 @@ const payload = {
    *    두 곳이 어긋나도 아무도 몰랐다.
    */
   scale: (() => {
-    const rows = simulateAllStages({ queue, personas: active, startAt, days: DAYS })
+    const rows = simulateAllStages({ queue, personas: active, axis: { now, publishedToday: todayCount }, days: DAYS })
     // 🔴 러너·관제와 **같은 설치 경로**다. planner 가 따로 감속하지 않는다
     const resolved = installFromEnv(process.env, { readiness: rows.map((x) => x.verdict) })
     return {
@@ -324,6 +329,7 @@ const payload = {
       summary: describeScale(resolved),
       throttledByReadiness: resolved.throttledByReadiness,
       readinessApplied: resolved.readinessApplied,
+      chosenReady: resolved.chosenReady,
       capacityDailyTarget: resolved.capacityProfile.dailyTarget,
       releaseDailyCap: resolved.releaseProfile.dailyTarget,
       stages: rows.map(({ sim, verdict }) => {
@@ -428,6 +434,8 @@ if (JSON_OUT) {
     say('      이것은 표시가 아니라 러너가 실제로 쓰는 값이다')
   } else if (!payload.scale.readinessApplied) {
     say('   🟡 준비도 판정이 없어 감속이 적용되지 않았다')
+  } else if (!payload.scale.chosenReady) {
+    say(`   🔴 NOT_READY — ${payload.scale.releaseStage} 를 유지하지만 그 단계도 미달이다`)
   } else {
     say(`   🟢 요청 단계 ${payload.scale.releaseStage} 는 지금 큐·인원으로 달성 가능하다`)
   }

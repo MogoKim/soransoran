@@ -34,7 +34,14 @@ import { LOCK_FILE, LOCK_TTL_MS, adaptKeyOf, lockDecision } from '../src/lib/sup
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, slotLabel } from '../src/lib/scale-profile'
-import { simulateAllStages } from '../src/lib/scale-readiness'
+import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } from '../src/lib/scale-readiness'
+import { SOURCE_FACTS, type SourceId } from '../src/lib/collect-schedule'
+import { guardSnapshot, rollBudgetDay, type GuardState } from '../src/lib/collect-guard'
+import { guardPath, kstDayOf } from './lib/collect-guard-store.mjs'
+import { planSupply, collectReadiness, onDemandPotentialPerDay } from '../src/lib/scale-supply-plan'
+import { currentCapacity, preparedCapacity, describeInventory } from '../src/lib/collect-inventory'
+import { observeJobsSafe } from './lib/launchd-observe.mjs'
+import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { compareWorkflow } from '../src/lib/scale-workflow-render'
 import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
 import {
@@ -351,10 +358,15 @@ async function main(): Promise<void> {
       promptVersion: true, model: true, matchedPersonaId: true, gateResults: true,
       // 🔴 러너와 **같은 필드**를 읽는다 — compareAutoRow 가 decidedAt·createdAt 으로 정렬한다
       decidedAt: true, createdAt: true,
-      rawContent: { select: { sourceSite: true } },
+      // 🔴 freshness 근거도 러너와 같은 필드다. 없으면 나이를 모르므로 hold 로 간다
+      rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
     orderBy: { createdAt: 'asc' },
   })
+  // 🔴 queueId → 원문 확인 시각. 러너의 `capturedAtOf` 와 같은 값이다
+  const capturedAtOfHealth = new Map<string, Date | null>(
+    queueRows.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]),
+  )
   // 🔴 legacy 를 여기서 뺀다 — selectAutoTargets 가 발행 러너와 같은 기준으로 거른다
   const { targets: autoTargets } = selectAutoTargets(
     queueRows.map((r) => ({
@@ -419,22 +431,41 @@ async function main(): Promise<void> {
   //    배정된 persona 를 못 찾으면 빈 값이 아니라 **모르는 코드**를 넘긴다 —
   //    forecast 가 fail-closed(RECOVERY_BROKEN)로 잡아야 하기 때문이다
   const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
-  const forecastQueue = autoTargets.map((t) => ({
-    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
+  /**
+   * 🔴 **러너와 같은 준비 함수를 부른다** (2026-09-08).
+   *
+   *    예전에는 여기서 필터 전 Queue 를 그대로 세어 재고·예측·준비도를 냈다.
+   *    러너만 freshness hold 를 적용하니 화면이 READY 라 적은 날 실제 발행이 모자랐다.
+   *    자동 대상 id · hold 사유 · 순서가 이제 러너와 **글자 그대로 같다**.
+   */
+  const queueCandidates: QueueCandidate[] = autoTargets.map((t, i) => ({
+    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: i,
     assignedPersonaCode: t.matchedPersonaId === null
       ? null
       : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+    // 🔴 나이를 굳히지 않는다 — 예측이 매일 다시 잰다
+    capturedAt: capturedAtOfHealth.get(t.id) ?? null,
   }))
+  const prepared = prepareCandidates({ candidates: queueCandidates, personas: personas as never, at: now })
+  /**
+   * 🔴 **예측에는 거르지 않은 후보를 넘긴다.** 예측기가 날짜마다 나이를 다시 재고
+   *    그날 hold 를 다시 판정한다 — 오늘 통과한 글이 8일 뒤에는 빠질 수 있다.
+   */
+  const forecastQueue = queueCandidates
 
   /**
    * ── ③-c 🔴 **규모를 여기서 확정한다.** 이 아래의 모든 판정이 이 값을 쓴다 ──
    *
    *    ① 지금 큐·지금 사람으로 각 단계가 14일을 버티는지 시뮬레이션하고
    *    ② 그 판정을 넘겨 release 를 실제로 낮춘다.
-   *    🔴 준비도 시작점은 `now` 다 — 단계마다 다른 시작점을 쓰면 단계 비교가 무의미해진다.
+   *    🔴 준비도 지평은 **다음 KST 운영일 0시부터 완전한 하루 14일**이고 네 단계가 공유한다.
+   *       다음 발행 슬롯을 시작점으로 쓰면 오늘 낸 몫 위에 그 단계의 하루 상한이 통째로
+   *       다시 얹히고(d10 · 오늘 3건 → 오늘 13건), 단계마다 창이 달라 비교가 성립하지 않는다.
    */
   const scaleRows = simulateAllStages({
-    queue: forecastQueue, personas: personas as never, history, startAt: now, days: 14,
+    queue: forecastQueue, personas: personas as never, history,
+    // 🔴 러너와 **같은 시간축**이다 — 단계별 시작점은 lib 이 만든다
+    axis: { now, publishedToday: todayCount }, days: 14,
   })
   const resolved = installFromEnv(process.env, { readiness: scaleRows.map((x) => x.verdict) })
   const capDerived = deriveProfile(resolved.capacityProfile)
@@ -520,6 +551,8 @@ async function main(): Promise<void> {
     summary: describeScale(resolved),
     throttledByReadiness: resolved.throttledByReadiness,
     readinessApplied: resolved.readinessApplied,
+    /** 🔴 고른 단계가 실제로 달성 가능한가 — 화면 색은 이 값이 정한다 */
+    chosenReady: resolved.chosenReady,
     /**
      * 🔴 **내부 공급은 capacity, 공개 발행은 release.**
      *    한 프로필로 둘을 다루면 `capacity=d10 · release=d1` 에서 재고 목표가 14가 된다.
@@ -551,13 +584,75 @@ async function main(): Promise<void> {
       return compareWorkflow(resolved.releaseProfile, readFileSync(f, 'utf-8')).map((m) => m.detail)
     })(),
     slots: resolved.releaseProfile.slots.map((x) => slotLabel(x)),
+    /** 🔴 무엇이 채워지면 올라가는가 — 감속 조건은 이 표의 뒤집음이다 */
+    promotion: promotionPlan(scaleRows),
+    highestReady: highestReady(scaleRows),
+    /** 🔴 네 단계가 **같은 창**을 봤는가 — 하나라도 다르면 단계 비교가 성립하지 않는다 */
+    horizon: {
+      startKst: kstStamp(scaleRows[0]!.sim.horizonStartAt),
+      days: scaleRows[0]!.sim.horizonDays,
+      mismatches: horizonMismatches(scaleRows),
+    },
     stages: scaleRows.map(({ sim, verdict }) => ({
       stage: sim.stage, dailyTarget: PROFILES[sim.stage].dailyTarget,
       in14: sim.in14, want14: sim.want14, gaps: sim.gaps, recoveryBroken: sim.recoveryBroken,
       ready: verdict.ready, reasons: verdict.reasons,
       personasNeededArithmetic: verdict.arithmeticPersonas,
+      // 🔴 준비도 창과 **다음 발행 슬롯은 다른 값**이다. 둘을 같이 보여 준다
+      nextSlotKst: kstStamp(sim.nextSlotAt),
     })),
   }
+
+  /**
+   * ── 🔴 **수집 보호장치와 수집 준비도** (2026-09-08) ──
+   *
+   *    ① 소스마다 예산·차단기가 지금 어떤 상태인가 (상태 파일 read-only)
+   *    ② 다회 계획의 **유효 처리량**(성공률 반영)이 필요량을 여유 30% 까지 포함해 넘는가
+   *    🔴 하나라도 막히면 BLOCKED 다. "두 소스는 괜찮다" 는 준비 완료가 아니다.
+   */
+  const collect = (() => {
+    const guards: Partial<Record<SourceId, GuardState>> = {}
+    const snapshots: ReturnType<typeof guardSnapshot>[] = []
+    for (const f of SOURCE_FACTS) {
+      const path = guardPath(f.id)
+      if (!existsSync(path)) continue
+      try {
+        const st = rollBudgetDay(JSON.parse(readFileSync(path, 'utf-8')) as GuardState, kstDayOf(now))
+        guards[f.id] = st
+        snapshots.push(guardSnapshot(st, now.getTime()))
+      } catch {
+        // 🔴 읽지 못한 상태를 "정상" 으로 세지 않는다 — 아래 준비도가 보호장치 없음으로 잡는다
+      }
+    }
+    // 🔴 내부 공급 목표는 **capacity 프로필의 하루 목표**다. 공개 발행량(release)이 아니고,
+    //    문서에 적힌 100/day 같은 최대 시나리오도 아니다 — 지금 설정된 값으로 판정한다
+    const plan = planSupply(resolved.capacityProfile)
+    /**
+     * 🔴 **등록 상태는 관측에서만 나온다** — 코드의 `loaded: true` 를 쓰지 않는다.
+     *    관측에 실패하면 "없다" 가 아니라 **모른다**로 남겨 준비도가 BLOCKED 로 떨어진다.
+     */
+    const { observed, problem: observeProblem } = observeJobsSafe()
+    const cur = currentCapacity(observed)
+    const prep = preparedCapacity('start')
+    return {
+      internalDailyTarget: plan.queuePerDay,
+      guards: snapshots,
+      guardsMissing: SOURCE_FACTS.filter((f) => guards[f.id] === undefined).map((f) => f.id),
+      observeProblem,
+      // 🔴 셋을 **따로** 낸다. 합치면 "템플릿을 만들었으니 능력이 늘었다" 가 된다
+      capacity: {
+        currentPerDay: cur.effectivePerDay,
+        // 🔴 조건부로만 열리는 몫 — 보장 능력에 합치지 않는다
+        onDemandPotentialPerDay: onDemandPotentialPerDay(observed),
+        preparedPerDay: prep.effectivePerDay,
+        requiredPerDay: plan.detailPerDay,
+        perSource: cur.perSource,
+        summary: describeInventory(observed, 'start'),
+      },
+      start: collectReadiness({ phase: 'start', plan, nowMs: now.getTime(), observed, guards }),
+      stable: collectReadiness({ phase: 'stable', plan, nowMs: now.getTime(), observed, guards }),
+    }
+  })()
 
   if (JSON_OUT) {
     console.log(JSON.stringify({
@@ -565,6 +660,14 @@ async function main(): Promise<void> {
       sources: report.sources, supply: report.supply, publish: report.publish, rollUp: report.rollUp,
       // 🔴 화면 ⑤ 와 같은 객체다 — 두 번 계산하지 않는다
       scale,
+      // 🔴 화면 ④-b 와 같은 객체다 — 보호장치 상태와 수집 준비도
+      collect,
+      // 🔴 화면 ④-c 와 같은 값이다 — 러너가 세는 것과 같은 자동 대상·hold
+      candidates: {
+        auto: prepared.auto.map((c) => c.queueId),
+        held: prepared.held,
+        summary: describePrepared(prepared),
+      },
       numbers: {
         stock: stock.usable, human: stock.human, machine: stock.machine, legacyExcluded,
         // 🔴 적용값이다 — 재고 목표는 capacity, 발행 상한은 release
@@ -677,10 +780,62 @@ async function main(): Promise<void> {
       + ` (공개 ${scale.release.dailyCap}건/day)`)
   } else if (!scale.readinessApplied) {
     console.log('   🟡 준비도 판정이 없어 감속이 적용되지 않았다')
+  } else if (!scale.chosenReady) {
+    // 🔴 더 내려갈 곳이 없어 감속은 안 됐지만 **그 단계도 미달**이다. 초록으로 쓰지 않는다
+    console.log(`   🔴 NOT_READY — ${scale.releaseStage} 를 유지하지만 그 단계도 지금 큐·인원으로는 미달이다`)
   } else {
     console.log(`   🟢 ${scale.releaseStage} 는 지금 큐·인원으로 달성 가능하다`)
   }
   console.log('   🔴 산술 인원은 참고값이다 — 판정은 위 14일 실측이 한다')
+  // 🔴 **승격·감속 조건** — 무엇을 채우면 올라가는지 숫자로 적는다
+  console.log(`   지금 올릴 수 있는 최고 단계: ${scale.highestReady ?? '없음'}`)
+  for (const pl of scale.promotion) {
+    if (pl.ready) { console.log(`     🟢 ${pl.stage.padEnd(4)} 승격 가능`); continue }
+    console.log(`     🔴 ${pl.stage.padEnd(4)} 승격 조건 — ${pl.missing.join(' · ')}`)
+  }
+  console.log('   🔴 감속 조건은 같은 표의 뒤집음이다 — ready 였던 단계가 아니게 되면 내려간다')
+  console.log(`   준비도 지평 ${scale.horizon.startKst} 부터 ${scale.horizon.days}일 — 네 단계가 같은 창을 본다`)
+  for (const m of scale.horizon.mismatches) console.log(`   🔴 지평 불일치 — ${m}`)
+
+  // ── ④-b 🔴 수집 보호장치와 수집 준비도 — JSON `collect` 와 **같은 객체**를 읽는다 ──
+  console.log('\n④-b 수집 보호장치 · 준비도')
+  if (collect.guards.length === 0) {
+    console.log('   ⚪ 보호장치 상태 파일이 아직 없다 — 다회 수집이 한 번도 돌지 않았다는 뜻이다')
+  }
+  for (const g of collect.guards) {
+    const open = g.breakers.filter((b) => b.status !== 'closed')
+    console.log(`   ${g.healthy ? '🟢' : '🔴'} ${g.source}  예산 ${g.budget.used}/${g.budget.limit}`
+      + ` · 차단기 ${open.length === 0 ? '전부 closed' : open.map((b) => `${b.cls}:${b.status}`).join(' · ')}`)
+  }
+  if (collect.guardsMissing.length > 0) {
+    console.log(`   🔴 보호장치 상태 없음: ${collect.guardsMissing.join(' · ')}`)
+  }
+  if (collect.observeProblem !== null) console.log(`   🔴 ${collect.observeProblem}`)
+  // 🔴 **현재 · 준비 · 필요를 한 줄에 나란히** 적는다. 합치지 않는다
+  console.log(`   수집 능력  현재 ${Math.round(collect.capacity.currentPerDay)}건/day`
+    + ` · 조건부 +${Math.round(collect.capacity.onDemandPotentialPerDay)}건/day(autopilot · 재고 미달 시에만)`
+    + ` · 준비 ${Math.round(collect.capacity.preparedPerDay)}건/day`
+    + ` · 필요 ${collect.capacity.requiredPerDay}건/day`)
+  for (const s2 of collect.capacity.perSource) {
+    console.log(`      ${s2.registered ? '🟢' : '⚪'} ${s2.id}  ${s2.label ?? '미등록'}`
+      + ` · ${s2.runsPerDay}회/day(${s2.kind ?? '—'}) → ${Math.round(s2.effectivePerDay)}건`)
+  }
+  for (const m of collect.start.mismatches) console.log(`   🔴 ${m.code} — ${m.detail}`)
+  for (const phase of [collect.start, collect.stable]) {
+    console.log(`   [${phase.phase}] ${phase.status === 'READY' ? '🟢 READY' : '🔴 BLOCKED'}`
+      + ` — 현재 ${Math.round(phase.currentPerDay)} · 준비 ${Math.round(phase.preparedPerDay)}`
+      + ` · 필요 ${phase.requiredPerDay} · 여유 기준 ${phase.requiredWithMargin}`
+      + ` (이론 ${phase.theoreticalPerDay})`)
+    for (const r of phase.reasons) console.log(`      🔴 ${r}`)
+  }
+  console.log('   🔴 이론 최대가 아니라 성공률을 곱한 유효 처리량으로 판정한다')
+  console.log('   🔴 템플릿이 있다는 것은 "준비" 다. "현재" 는 launchctl 에 올라온 것만 센다')
+
+  // ── ④-c 🔴 freshness — **러너·예측·준비도가 같은 목록을 센다** ──
+  console.log('\n④-c 발행 후보 준비 (러너와 같은 함수)')
+  console.log(`   ${describePrepared(prepared)}`)
+  for (const h of prepared.held) console.log(`   ⏸️  ${h.queueId}  [${h.hold}] ${h.reason}`)
+  console.log('   🔴 hold 는 자동 발행에서만 빠진다 — 큐에 그대로 있고 삭제·재배정하지 않는다')
 
   console.log(`\n⑤ 판정 ${report.level}${report.exitCode === 1 ? ' — exit 1' : ''}`)
   console.log('   🔴 CRITICAL 만 exit 1 이다. WARNING 은 사람이 보고 판단한다\n')

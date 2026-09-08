@@ -65,6 +65,8 @@ import {
   AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
 } from './lib/micro-seed-supply.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
+import { guardedGet, readGuard } from './lib/collect-guard-store.mjs'
+import { budgetOf, describeGuard, type GuardState, type SourceId } from '../src/lib/collect-guard'
 
 const KILL_SWITCH = 'SORAN_82COOK_COLLECT_ENABLED'
 const LIVE = process.argv.includes('--live')
@@ -96,10 +98,31 @@ if (AUTO && (!Number.isInteger(AUTO_MAX) || AUTO_MAX < 1 || AUTO_MAX > AUTO_FETC
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+/**
+ * 🔴 **모든 요청이 보호장치를 지난다** (2026-09-08).
+ *
+ *    회차를 하루 1회에서 10회로 늘리면 실패의 성격이 달라진다 — 막혔을 때 그대로 계속
+ *    두드리면 다음에 오는 것은 느려짐이 아니라 차단이다. 그래서 요청 하나마다
+ *      · 하루 요청 **예산**을 쓰고 (소진되면 아예 보내지 않는다)
+ *      · 403 · 429 · TCP 를 **나눠 세고** (대응이 다르므로 임계도 다르다)
+ *      · 실패하면 분류별 **지수 backoff** 로 물러난다
+ *    판정은 `src/lib/collect-guard.ts`(순수 함수), 저장은 `collect-guard-store` 가 한다.
+ */
+const GUARD_SOURCE: SourceId = '82cook'
+let guardState: GuardState = readGuard(GUARD_SOURCE, new Date())
+
 async function get(url: string): Promise<string> {
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' } })
-  if (!res.ok) throw new Error(`${url} → HTTP ${res.status}`)
-  return await res.text()
+  // 🔴 예약·기록은 `guardedGet` 이 **파일 잠금 안에서** 한다.
+  //    여기서 상태를 들고 다니며 저장하면 다른 job 이 올린 예산을 덮어쓴다
+  const r = await guardedGet({
+    url,
+    source: GUARD_SOURCE,
+    now: () => new Date(),
+    headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
+    log: (m) => console.log(m),
+  })
+  guardState = r.state
+  return r.text
 }
 
 function writeJsonl(path: string, rows: object[]) {
@@ -191,6 +214,10 @@ async function main() {
   console.log(`  User-Agent: ${USER_AGENT}`)
   console.log(`  요청 간격: ${DELAY_MS}ms 고정 (랜덤 jitter 없음)`)
   console.log(`  kill switch ${KILL_SWITCH}=${enabled ? 'ON' : 'OFF'} · --live ${LIVE ? '있음' : '없음'}`)
+  // 🔴 보호장치 상태를 **먼저** 말한다 — 막혀 있으면 계획을 읽기 전에 알아야 한다
+  guardState = readGuard(GUARD_SOURCE, now)
+  console.log(`  보호장치: ${describeGuard(guardState, now.getTime())}`
+    + ` (상한 ${budgetOf(guardState).limit}건/day · 403·429·TCP 차단기 분리)`)
   console.log(
     live
       ? `  🔴 실제 수집 · 출력 ${OUT}\n`
@@ -383,6 +410,10 @@ async function main() {
     }
   }
 
+  // 🔴 상태는 요청마다 잠금 안에서 이미 기록됐다. 여기서는 **읽어서 보여주기만** 한다
+  guardState = readGuard(GUARD_SOURCE, new Date())
+  console.log(`\n  보호장치: ${describeGuard(guardState, new Date().getTime())}`
+    + ` · 남은 예산 ${budgetOf(guardState).remaining}건`)
   console.log('\n  🔴 DB · Sheet 에 아무것도 쓰지 않았다. 적재는 importer 가 한다.\n')
 }
 

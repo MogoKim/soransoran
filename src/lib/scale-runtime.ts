@@ -41,6 +41,13 @@ export type ResolvedScale = {
   throttledByReadiness: boolean
   /** 준비도 판정을 받았는가. false 면 감속이 적용되지 않았다는 뜻이다 */
   readinessApplied: boolean
+  /**
+   * 🔴 **고른 단계가 실제로 달성 가능한가.**
+   *    최저 단계마저 미달이면 더 내려갈 곳이 없어 `throttledByReadiness` 는 false 다.
+   *    그때 "달성 가능" 이라고 적으면 화면이 미달을 초록으로 보여 준다 —
+   *    그래서 이 값을 따로 들고 다니고, 화면은 이것으로 색을 정한다.
+   */
+  chosenReady: boolean
   notes: readonly string[]
   /** 이 설정이 어디서 왔는가 — 화면·JSON 에 같이 적는다 */
   source: 'default-safest' | 'env'
@@ -56,6 +63,7 @@ export const SAFEST_SCALE: ResolvedScale = Object.freeze({
   throttledByCapacity: false,
   throttledByReadiness: false,
   readinessApplied: false,
+  chosenReady: false,
   notes: Object.freeze([`규모 설정이 설치되지 않았다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다`]),
   source: 'default-safest',
 })
@@ -86,6 +94,7 @@ export function resolveScale(
 
   // ② 준비도 감속 — 🔴 표시가 아니라 **실제 프로필을 낮춘다**
   let throttledByReadiness = false
+  let chosenReady = false
   const readiness = opts.readiness
   if (readiness !== undefined && readiness.length > 0) {
     const safe = safeStageFor(stage, readiness)
@@ -94,6 +103,9 @@ export function resolveScale(
       notes.push(safe.reason ?? `${stage} → ${safe.stage} 감속`)
       stage = safe.stage
     }
+    chosenReady = safe.chosenReady
+    // 🔴 더 내려갈 곳이 없어 감속 플래그가 안 서는 경우도 **사유는 남긴다**
+    if (!safe.chosenReady && !throttledByReadiness && safe.reason !== null) notes.push(safe.reason)
   } else {
     notes.push('준비도 판정을 받지 않았다 — 준비도 감속은 적용되지 않았다')
   }
@@ -107,6 +119,7 @@ export function resolveScale(
     throttledByCapacity,
     throttledByReadiness,
     readinessApplied: readiness !== undefined && readiness.length > 0,
+    chosenReady,
     notes,
     source: 'env',
   }

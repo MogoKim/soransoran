@@ -64,6 +64,8 @@ import {
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
+import { guardedNavigate, readGuard, type NavigationResponse } from './lib/collect-guard-store.mjs'
+import { budgetOf, describeGuard, type SourceId } from '../src/lib/collect-guard'
 
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => {
@@ -123,6 +125,12 @@ const cafe = findCafe(CAFE_ID)
 if (cafe === null) {
   fail(`모르는 카페: ${CAFE_ID}\n   알려진 카페: ${CAFES.map((c) => c.cafeId).join(' · ')}`)
 }
+/**
+ * 🔴 **보호장치 source** — `SOURCE_FACTS` 의 id 와 같은 문자열이어야 한다.
+ *    `sourceSiteOf` 가 `navercafe:<cafeId>` 를 준다. 모르는 값이면 아래에서 막힌다.
+ */
+const GUARD_SOURCE = sourceSiteOf(cafe!.cafeId) as SourceId
+
 // 🔴 이번 라운드에서 빠진 카페는 여기서 막는다. 선택과 집중이 코드로 강제돼야
 //    "설정에만 있고 아무도 안 지키는 결정" 이 되지 않는다 (PR-S2-b-7).
 if (cafe!.stage === 'excluded') {
@@ -176,6 +184,12 @@ async function main() {
   console.log(`  메모   ${cafe!.note}`)
   console.log('         🔴 메모는 경향일 뿐 고정 라벨이 아니다 — 주제 판정은 글 단위로 한다')
   console.log(`  소스   ${sourceSiteOf(cafe!.cafeId)}`)
+  // 🔴 보호장치 상태를 **먼저** 말한다 — 막혀 있으면 계획을 읽기 전에 알아야 한다
+  {
+    const g = readGuard(GUARD_SOURCE, new Date())
+    console.log(`  보호장치 ${describeGuard(g, Date.now())} · 남은 예산 ${budgetOf(g).remaining}건`
+      + ' (403·429·TCP 차단기 분리 · 82cook 과 같은 계약)')
+  }
   console.log(`  게시판 ${BOARD ? `${BOARD.label} (menuId=${BOARD.menuId}) · ${BOARD.purpose}` : '전체글보기 (기본)'}`)
   console.log(
     SCOUT
@@ -259,7 +273,11 @@ async function main() {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
       // 🔴 board 가 있으면 신형 menuId URL, 없으면 기존 전체글보기 URL (하위호환)
       const url = BOARD ? boardListUrl(BOARD, p) : LIST_URL(cafe!.cafeId, p)
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 })
+      // 🔴 82cook 과 **같은 보호장치**를 지난다 — Playwright 라고 예외를 두지 않는다
+      await guardedNavigate({
+        url, source: GUARD_SOURCE, now: () => new Date(),
+        goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
+      })
       await sleep(randomDelay(DELAY_LIST_MS))
       const read = await readList(page, cafe!.cafeId, p)
       items.push(...read.items)
@@ -350,7 +368,10 @@ async function main() {
     for (const [idx, id] of plan.picked.entries()) {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
       if (idx > 0) await sleep(randomDelay(DELAY_ARTICLE_MS))
-      await page.goto(ARTICLE_URL(cafe!.cafeId, id), { waitUntil: 'domcontentloaded', timeout: 20_000 })
+      await guardedNavigate({
+        url: ARTICLE_URL(cafe!.cafeId, id), source: GUARD_SOURCE, now: () => new Date(),
+        goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
+      })
       await sleep(randomDelay(DELAY_ARTICLE_MS))
       const read = await readArticleBody(page)
       const body = read.body

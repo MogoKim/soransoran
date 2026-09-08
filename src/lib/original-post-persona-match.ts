@@ -631,10 +631,26 @@ function maxMatch(order: readonly string[], prefOf: ReadonlyMap<string, readonly
   return seat
 }
 
+/**
+ * 🔴 **배치 순서 우선권** (2026-09-08).
+ *
+ *    `maxMatch` 는 증가 경로(Kuhn)라 **먼저 처리한 초안은 이후에도 매칭에서 빠지지 않는다.**
+ *    그래서 처리 순서를 바꿔도 **총 배정 수(최대 매칭 cardinality)는 그대로**이고,
+ *    자리 경쟁이 있을 때 누가 앉는지만 달라진다.
+ *
+ *    이 성질 덕분에 "신선한 글이 먼저 자리를 갖는다" 를 **최대 매칭을 깨지 않고** 넣을 수 있다.
+ *    넘기지 않으면 예전 순서(희소한 글 먼저)를 그대로 쓴다 — d1 운영 회귀 0.
+ */
+export type BatchOrdering = {
+  /** 낮을수록 먼저 배정 자리를 본다. 같으면 기존 `batchOrder` 로 떨어진다 */
+  priorityOf?: (queueId: string) => number
+}
+
 export function planBatch(
   drafts: readonly BatchDraft[],
   personas: readonly PersonaForMatch[],
   caps: BatchCaps = {},
+  ordering: BatchOrdering = {},
 ): BatchPlan {
   const weekCap = caps.postsPerWeek ?? POST_CAP_PER_WEEK
   // ── ① 여력 — 주간 상한에서 이미 쓴 만큼을 뺀다 ──
@@ -670,12 +686,17 @@ export function planBatch(
   }))
 
   // ── ③ 🔴 희소한 글부터 자리를 보장한다. 총량은 최대 매칭이 정하므로 순서로 흔들리지 않는다 ──
-  const ordered = [...base].sort((x, y) =>
-    batchOrder(
+  const ordered = [...base].sort((x, y) => {
+    // 🔴 우선권이 있으면 그것이 먼저다 — 최대 매칭 총량은 순서로 흔들리지 않는다(Kuhn)
+    if (ordering.priorityOf !== undefined) {
+      const d = ordering.priorityOf(x.draft.queueId) - ordering.priorityOf(y.draft.queueId)
+      if (d !== 0) return d
+    }
+    return batchOrder(
       { eligibleCount: x.plan.eligible.length, gateVerdict: x.draft.gateVerdict, createdAt: x.draft.createdAt, queueId: x.draft.queueId },
       { eligibleCount: y.plan.eligible.length, gateVerdict: y.draft.gateVerdict, createdAt: y.draft.createdAt, queueId: y.draft.queueId },
-    ),
-  )
+    )
+  })
 
   // ── ④ 자리(slot) 를 편다 — 주 상한이 2 이상이면 한 사람이 자리를 여러 개 갖는다 ──
   const slotsOf = (code: string): string[] =>
