@@ -87,14 +87,16 @@ Persona, 봇, 운영 계정은 제외한다. 단순 게시량, 페이지뷰, 색
 |---|---|---|---|
 | North Star | 주간 재방문 참여 실사용자 | 유일한 대표 지표 | 재방문 이벤트가 없어 정확히 측정 불가 |
 | 선행 | D7 retention, 첫 댓글 전환, UGC 비율 | North Star를 움직이는 레버 | 일부만 계산 가능 |
-| 경험 | 댓글 0개 공개 글 비율, 답글 도달 시간 | 말해도 되는 분위기 | 댓글 0개 25/30 |
+| 경험 | 댓글 0개 공개 글 비율, 답글 도달 시간 | 말해도 되는 분위기 | 🔴 지금 값은 §6.3 |
 | 안전 | source leak, safety failure, 실회원 오배정 | 공개 자동화 정지 조건 | 주요 Gate 구현 |
 | 공급 | 신선 재고, source health, Queue yield | 자동화 가용성 | d1 health 구현 |
 | 참고 | DAU, MAU, PV, SEO 클릭, 색인, 발행량 | 유입·생존 상태 | North Star로 사용 금지 |
 
-2026-09-08 현재 최근 7일 대용 지표는 실사용자 글 9건, 댓글 15건, 고유 기여자 3명이다.
-직전 7일도 고유 기여자는 같은 3명이지만 방문 이벤트가 없으므로 이들을 North Star의
-`재방문 사용자`라고 확정해서는 안 된다.
+🔴 **최근 7일 대용 지표의 지금 값은 §6.3 에만 둔다.** 여기 숫자를 다시 적지 않는다 —
+한 번 적으면 그 숫자가 낡은 채 남아 "현재값" 으로 읽힌다. 실제로 이 문단은
+`댓글 15건` 을 들고 있었는데, 그것은 **삭제된 댓글을 포함한 수**였고
+살아 있는 실사용자 댓글은 그보다 훨씬 적었다(§6.3 참조).
+방문 이벤트가 없으므로 고유 기여자를 North Star 의 `재방문 사용자` 라고 확정해서는 안 된다.
 
 ## 3. 전체 시스템 구조
 
@@ -171,11 +173,11 @@ flowchart LR
 | Raw Micro Seed | 승인한 외부 원문 | `MicroSeedRawContent`, Sheet, permanent noindex | 없음 | 완료 | 완료 | 과거 5건 발행 | 완료 |
 | Automated Original Supply | thin row | adapt, judge, draft, Queue | Haiku | 완료 | 완료 | 재고는 §6.3 | d1 가동 |
 | Voice Asset | 우나어 legacy read-only | VoiceSource/Derived/CommentSignal | 규칙 + Haiku 분석 | 완료 | 완료 | 전량 분석 완료 | 자산화 완료 |
-| Persona-first Generation | Persona identity/voice + topic | Persona 고유 초안 | 생성 모델 미확정 | 완료 | 미구현 | 미가동 | 미착수 |
+| Persona-first Generation (Comment 경로) | Persona identity/voice + 대상 글 | 댓글 후보 입력·프롬프트 | 생성 모델 미확정(provisional) | 완료 | 입력 계약·bridge 완료 | 실제 DB 는 preflight 까지 · provider 호출은 합성 eval 만 | 공개 미활성 |
 | Persona Matching | Queue + active Persona | matchedPersonaId, matchMeta | 없음 | 완료 | 완료 | active Persona 수는 §6.3 | 완료 |
 | Original Publish | matched Queue | Post + ActivityLog | 없음 | 완료 | 완료 | GHA 1회/day | d1 가동 |
-| Persona Comment | Post + reaction role | 댓글 후보 Queue | 기본 Haiku | 대부분 완료 | 생성기·Gate만 | 자동 스케줄 0 | 초기 단계 |
-| Comment Distribution | 새 글, 댓글 비율 | 공개 Persona 댓글 | 없음 | 완료 | 미구현 | 미가동 | 미착수 |
+| Persona Comment | Post + reaction role | 후보 텍스트 (shadow) | provisional · 미확정 | 완료 | 생성기·Gate·입력·bridge | 🔴 자동 스케줄 0 | shadow 만 |
+| Comment Distribution | 댓글 0개 글, ratio 30% | 대상·Persona·역할 배정 | 없음 | 완료 | 완료(§9.2) | 🔴 shadow 만 | 공개 0/day |
 | Memory | 사용자·Persona 대화 | Self/Relationship/Community/Mood | 미정 | 완료 | 스키마만 | 사실상 0행 | 미착수 |
 | Reply/Reaction/Best | 댓글·기억·시간 | 답글, 좋아요, Best | 미정 | 방향만 | 미구현 | 미가동 | 미착수 |
 | Health/Forecast | DB, 파일, 로그, scale | 화면 + JSON | 없음 | 완료 | 완료 | 수동 조회 | 부분완료 |
@@ -362,7 +364,11 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | PersonaAuditLog | 101 |
 | Post | 42: PUBLISHED 32, HIDDEN 1, DELETED 9 |
 | Comment / Reply | 26 / 4 |
-| 공개 글 중 댓글 0개 | 27/32, 84.4% |
+| 공개 글 중 댓글 0개 (댓글 행 기준) | 27/32, 84.4% |
+| 🔴 공개 글 중 **살아 있는** 댓글 0개 | 29/32, 90.6% |
+| 🔴 최근 7일 살아 있는 실사용자 댓글 | 1 |
+| 🔴 최근 7일 Persona 댓글 | 0 |
+| Comment 중 isDeleted | 18/26 |
 | Like / CommentLike / Scrap | 5 / 4 / 1 |
 | MicroSeedRawContent | 70 |
 | OriginalPostApprovalQueue | 36: APPROVED 30, PUBLISHED 6 |
@@ -392,9 +398,9 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | M5 | Legacy Data Vault | 완료 | 완료 | 9,674건 | 완료 |
 | M6 | Derived Voice Dataset | 완료 | 완료 | 9,674건 + 댓글 신호 | 완료 |
 | M7 | Offline Voice Analyzer | 완료 | 완료 | 전량 분석 | 완료 |
-| M8 | LLM Voice Engine | 분석 완료 | 분석 완료 | 생성 모델 미확정 | 부분완료 |
+| M8 | LLM Voice Engine | 분석 완료 | 분석 완료 | 생성 모델 provisional · 호출 0회 | 부분완료 |
 | M9 | Original Content Lane | 완료 | 완료 | d1 가동 | 부분완료 |
-| M10 | Comment/Conversation Engine | 대부분 완료 | 초기 scaffold | 자동 댓글 0/day | 미완료 |
+| M10 | Comment/Conversation Engine | 완료 | 실제 DB preflight + 합성 eval (두 경로) | 🔴 공개 0/day · runner·schedule 없음 | 부분완료 |
 
 이 번호는 운영 마일스톤이다. 제품 생애주기의 Phase/M 번호와 섞어 쓰지 않는다.
 
@@ -633,19 +639,252 @@ A가 교체·확인을 마친 **뒤** B가 낡은 관측으로 다시 교체한�
 ## 9. 댓글 규모와 ratio 계약
 
 Persona 댓글은 전체 댓글의 30% 이하를 기본 안전 상한으로 한다.
+🔴 **계약은 이제 문서가 아니라 코드다** — `src/lib/persona-comment-governor.ts` 가 정본이고,
+`npm run persona:comment-engine-check` 가 경계값을 행동으로 지킨다.
 
-최근 실사용자 댓글은 15건/7일, 약 2.14건/day다. 비율식 `p / (p + real) <= 0.30`을 적용하면
-현재 안전한 Persona 댓글은 평균 약 0.92건/day, 즉 0~1건/day다.
+비율식은 `p / (p + real) <= 0.30` 이고, 이를 만족하는 최대 persona 수는 `⌊(0.3/0.7)·real⌋` 다.
+🔴 **내림한다.** 0.43건은 0건이다 — 반올림하면 실사용자 1명에 봇 1개가 붙는다.
 
-| Persona 댓글 목표 | 필요한 실사용자 댓글 |
-|---|---:|
-| 1/day | 약 3/day |
-| 3/day | 약 7/day |
-| 5/day | 약 12/day |
-| 10/day | 약 24/day |
+| 최근 7일 실사용자 댓글 | 7일 Persona 상한 |
+|---:|---:|
+| 0 | 0 |
+| 1~2 | 0 |
+| 3~4 | 1 |
+| 7 | 3 |
+| 15 | 6 |
+
+🔴 **`real` 은 살아 있는 댓글만 센다.** 지워진 대화가 봇 예산을 만들어 주면 안 된다.
+🔴 **집계에 실패하거나 값이 손상되면 상한은 0이다.** 0으로 보정해 열어 두면
+감속 장치가 아니라 통과 장치가 된다.
+🔴 최종 상한은 **min(일 cap, ratio 여유)** 이고 기본 일 cap 은 1이다.
+비율이 여유로워도 하루에 몰아 달면 그날 타임라인이 봇으로 덮인다.
 
 따라서 d10에서 새 글 10개에 Persona 댓글을 무조건 하나씩 달면 안 된다.
-댓글 0개 글을 우선하고, 실제 사용자 댓글량에 따라 자동으로 대상 글 수를 늘리거나 줄여야 한다.
+🔴 **글 발행량(d1/d3/d5/d10)과 댓글 상한을 묶지 않는다.**
+댓글 0개 글을 우선하고, 실제 사용자 댓글량에 따라 자동으로 늘리거나 줄인다.
+
+### 9.1 실행 모드 — 셋을 섞지 않는다
+
+| 모드 | 하는 것 | 공개 Comment write |
+|---|---|---|
+| `inspect` | 계획과 준비도만 본다 | 0 |
+| `shadow` | 후보 생성 입력·Gate 검증까지 | 🔴 0 |
+| `release` | 공개 발행이 가능한 유일한 모드 | 가능 |
+
+🔴 **기본은 `shadow` 다.** `SORAN_PERSONA_COMMENT_STAGE` 가 없거나 모르는 값이면
+공개 write 로 가지 않는다 — "설정을 안 했더니 발행이 시작됐다" 가 일어나지 않게 한다.
+🔴 준비도 미달은 스위치를 끄는 것이 아니라 **0/day 감속**이다.
+조건이 회복되면 사람이 다시 켜지 않아도 상한이 돌아온다.
+
+### 9.2 대상 선정 계약
+
+정본은 `src/lib/persona-comment-planner.ts` 다. 우선순위는
+① 댓글 0개 글 → ② 댓글이 적은 글 → ③ 그 안에서 최신 글이다.
+
+제외한다: HIDDEN·DELETED · 보류/가입인사 · 공개 시각 불명 · 30일 초과 ·
+이미 Persona 댓글이 있는 글 · 회원 댓글 3건 이상 · 중복 Queue ·
+active 아닌 Persona · 🔴 **Account 가 붙은 Persona(사칭)** · Account 조회 불명 ·
+seed/voice 불완전 · 자기 글 · 생활사 충돌 · 맡지 않는 반응 역할.
+🔴 한 회차에 같은 Persona 는 한 번만 나오고, 반응 역할도 고르게 쓴다.
+
+### 9.3 생성 입력 계약 — Persona-first
+
+정본은 `src/lib/persona-comment-input.ts` 다.
+
+🔴 **정정 (2026-09-09).** 앞선 판에 "옛 생성기는 과거 댓글만 근거로 썼다" 고 적었는데
+그것은 사실이 아니다. 기존 생성기도 `voiceCore` · `voiceVariations` 를 `buildPrompt` 로
+넘기고 있었다. 실제 문제는 **새 planner/input 계약이 기존 생성·Gate 흐름과 연결되지
+않았던 것**이다 — `persona-comment-input` 을 import 하는 곳이 doc-check 의 문자열뿐이었다.
+
+🔴 **말투 근거 없이 생성하지 않는다.** `Persona.voiceCore`(ending·register·emoji·length)와
+`voiceVariations` 를 개인 근거로 쓰고, 근거가 비면 입력을 만들지 않는다.
+자기 발화(과거 댓글)는 있으면 더 단단해지는 것이지 전제가 아니다 —
+실측상 24명 중 자기 댓글이 있는 Persona 는 1명뿐이다.
+
+🔴 corpus(VoiceDerived 9,674 · VoiceCommentSignal 59,252)는 **공통 배경**이지 개인 근거가 아니다.
+커뮤니티 전체의 말투를 개인 근거로 쓰면 24명이 다시 한 목소리가 된다.
+
+🔴 입력에 **지문**을 붙이고, 지문에 `code` 를 넣지 않는다.
+code 를 넣으면 나머지가 전부 같아도 지문이 달라져 "다 다르다" 는 거짓 통과가 나온다.
+
+🔴 Memory 가 없으면 **없다고 적는다**. 빈자리를 그럴듯한 문장으로 채우면
+그 문장이 곧 그 Persona 의 거짓 과거가 된다.
+
+🔴 `advice` · `caution` 전면 금지와 의료·법률·투자 단정 금지는 기존 Gate 계약 그대로다.
+이번 범위에서 풀지 않았다.
+
+🔴 **새 생성기를 만들지 않았다.** 프롬프트 정본은 `buildPrompt`, 안전 판정 정본은
+`checkCommentCandidate`(9관문)이고, `scripts/lib/persona-comment-bridge.ts` 가 그 사이를 잇는다.
+끊겨 있던 것은 생성기가 아니라 **연결**이었다 — 새 입력 계약을 실제 생성기가
+import 하지 않아 어디에도 닿지 않고 있었다.
+
+#### 🔴 정정 — 경로는 **둘**이고 하나로 이어져 있지 않다 (2026-09-09)
+
+앞선 판이 "planner → callProvider → Gate end-to-end 완료" 라고 적었는데 사실이 아니다.
+실제 DB 글로는 provider 를 부르지 않는다(개인정보 계약 §9.7). 지금 있는 것은 두 경로다.
+
+| 경로 | 흐름 | 외부 호출 | 후보 Gate 실행 |
+|---|---|---|---|
+| **실제 DB shadow** | planner → Persona-first input → `buildPrompt` → **Gate 입력 사전검사** | 🔴 0 | 🔴 0 (후보 텍스트를 만들지 않는다) |
+| **합성 eval** | 합성 input → buildPrompt → provider → 실제 Gate | 있음 | 있음 |
+
+🔴 **실제 DB 글을 provider 로 보내는 단일 end-to-end 경로는 지금 없고, 의도적으로 막혀 있다.**
+그 둘을 이으려면 §9.7 의 PII 제거·대상 글 유형·보관 금지·provider 전송 계약을 먼저 확정해야 한다.
+그전까지 "end-to-end 완료" 라고 쓰지 않는다 — 읽는 사람이 없는 경로를 있다고 믿는다.
+
+🔴 **반응 역할 어휘의 정본은 `src/lib/persona-reaction-roles.ts` 하나다.**
+planner 가 `share` 를 배정하고 생성기가 그것을 거부하던 일이 있었다 —
+계획과 생성이 다른 낱말을 쓰면 계획은 아무 데도 도달하지 못한다.
+
+### 9.4 지금 상태 — 🔴 **설계 / 코드 / shadow / public 설정 / 실제 가동**을 나눈다
+
+| 축 | 상태 |
+|---|---|
+| 설계 | 완료 |
+| 코드 구현 | 완료 — governor · planner · input · cost · eval-runner · bridge |
+| **실제 DB shadow** | planner → input → `buildPrompt` → **Gate 입력 사전검사** 까지 완료 · 🔴 외부 호출 0 · 🔴 후보 Gate 실행 0 |
+| **합성 eval** | 합성 입력 → provider → 실제 9관문 Gate — 실행 완료 (§9.5) |
+| public 설정 | 🔴 **없음** — `SORAN_PERSONA_COMMENT_STAGE` 미설정 = shadow |
+| 자동 공개 runner/schedule | 🔴 **없음** — cron·launchd 어디에도 등록돼 있지 않다 |
+| 실제 공개 가동 | 🔴 **0/day** |
+| 최종 생성 모델 | 🔴 **provisional · winner 없음** (사람 채점 전) |
+| Memory · 대댓글 | 🔴 이번 범위 **아님**. 후속 |
+| 옛 1회판 수집 job | ✅ unload + plist 를 정본 밖 보관소로 이동(재부팅 재등록 차단) |
+| 평가 artifact 불변성 | ✅ 유료 회차 디렉터리 분리 · dry-run 격리 (§9.5-b) |
+| Gate ⑧ cold-start | ✅ 판정 계약까지 (§9.5-c) · 🔴 Queue write 경로는 없음 |
+
+🔴 **"shadow 검증 완료" 를 한 줄로 적지 않는다.** 경로가 둘이고 도달 지점이 다르다 —
+실제 DB 글은 Gate 입력 사전검사에서 멈추고(개인정보 계약 §9.7),
+provider 와 실제 9관문까지 간 것은 **합성 입력뿐**이다.
+한 줄로 합쳐 적으면 실제 회원 글이 모델까지 갔다고 읽힌다.
+
+🔴 **"실사용자 댓글 3건 + env" 만으로 자동 댓글이 시작되지 않는다.**
+그 둘은 *상한이 0을 넘게 하는* 조건일 뿐이다. 실제 공개 발행에는 아래가 더 필요하다.
+
+| 공개 release 에 남은 것 | 왜 |
+|---|---|
+| 승인 Queue 적재 경로 | Gate 통과는 "대기열에 갈 자격" 이지 발행이 아니다 |
+| 발행 transaction 안의 재검사 | 계획 시점과 발행 시점 사이에 글·댓글 상태가 바뀐다 |
+| 자동 runner + schedule | 지금은 사람이 명령을 쳐야만 돈다 |
+| 사람 채점 기반 모델 확정 | parse율·Gate율은 안전 지표이지 "그 사람 목소리인가" 를 재지 못한다 |
+
+### 9.5 모델 비교 실측 (2026-09-09 · 합성 입력 10건 × 2모델)
+
+🔴 실제 회원 글이 아니라 **합성 fixture** 로 비교했다. 원문·닉네임·개인정보는 나가지 않았다.
+🔴 실행 회차 `20260909-181515` · **20회 · $0.038924**.
+
+| 모델 | parse | statusPass | 🔴 fullGatePass | missingRequired | bootstrap review |
+|---|---:|---:|---:|---|---:|
+| `claude-haiku-4.5` | 10/10 | 10/10 | **0/10** | ⑧ ×10 | 10 |
+| `gemini-3.7-flash` | 9/10 | 9/10 | **0/10** | ⑧ ×10 | 9 |
+
+| 모델 | 평균 latency | 실제 비용 | reasoning |
+|---|---:|---:|---:|
+| `claude-haiku-4.5` | 1,478ms | $0.027767 | 0 |
+| `gemini-3.7-flash` | 3,183ms | $0.011157 | 4,868 |
+
+🔴 **`statusPass` 와 `fullGatePass` 는 다르다.**
+`statusPass` 는 **돌아간 관문만** 봤을 때 최악 상태가 pass 라는 뜻이고,
+`fullGatePass` 는 필수 관문이 하나도 빠짐없이 돌았고 그 전부가 pass 라는 뜻이다.
+지금 표본은 전부 ⑧ 이 `notRun` 이라 **fullGatePass 는 0/20** 이다 —
+"9관문 통과" 라고 부를 수 있는 표본은 하나도 없다.
+(앞선 판이 `status === 'pass'` 만 보고 20건을 전부 Gate pass 로 셌다. 그것이 오류였다.)
+
+🔴 `gpt-5-mini` 는 1차(3모델 30회 $0.058605)에서 reasoning 토큰 8,000 이 출력 예산을
+전부 먹어 10건 전부 `EMPTY` 였다. 이 프롬프트·출력 상한 조합에서 결과물이 나오지 않으므로
+자동 재호출하지 않는다 — 돈만 쓰고 같은 빈 응답을 받는다.
+
+🔴 **사람 채점 미완료 · winner null.** 채점된 축이 하나도 없다.
+`tmp/persona-comment-eval/<runId>/samples.json`(모델명 없음 · 7축 빈칸)을 읽고 채점한 뒤
+같은 디렉터리의 `key.json` 을 연다.
+
+### 9.5-b 평가 artifact 불변성
+
+🔴 **유료 실행 결과를 dry-run 이 덮어썼다** (2026-09-09 실측).
+실제 20회 호출로 만든 표본이 그 다음 dry-run 에 지워져 `samples: []` 만 남았다.
+파일 이름 하나를 공유한 것이 원인이고, 그 표본은 **복구하지 못했다**
+(tmp 백업 없음 · git 미추적 · 로컬 스냅샷은 OS update 뿐 · 로그에 본문 미출력).
+
+지금은 경로를 나눈다.
+
+| | 경로 |
+|---|---|
+| 유료 실행 | `tmp/persona-comment-eval/<runId>/{summary,samples,key}.json` |
+| dry-run | `tmp/persona-comment-eval-dryrun.json` |
+| latest 포인터 | `tmp/persona-comment-eval/latest.json` — 🔴 **성공한 유료 실행 뒤에만** 갱신 |
+
+🔴 기존 `runId` 디렉터리는 **덮어쓰지 않는다**(이미 있으면 실패한다).
+🔴 셋을 임시 디렉터리에 다 쓴 뒤 `rename` 한 번으로 들여놓는다 — 반쯤 쓰인 회차가 남지 않게.
+🔴 fixture 가 mkdtemp 세계에서 유료 저장 → dry-run → **해시가 그대로인지**를 행동으로 확인한다.
+
+### 9.5-c Gate ⑧ cold-start
+
+🔴 **첫 댓글을 영원히 시작할 수 없는 자리가 있었다.**
+⑧ 은 같은 Persona 의 이전 발화와 대조하는데, 발화는 Queue 를 거쳐야 생기고
+Queue 는 ⑧ 이 돌아야 통과한다. 실측상 24명 중 자기 댓글이 있는 Persona 는 1명뿐이라
+나머지 23명은 이대로면 첫 댓글을 만들 수 없다.
+
+자동 통과시키지 않는다 — 그러면 ⑧ 은 있으나 마나 한 관문이 된다.
+대신 `bootstrapReviewEligible` 이라는 **별도 상태**로 뺀다.
+
+| 조건 | |
+|---|---|
+| `missingRequired` 가 **오직 ⑧** | ⑧ 외에도 안 돌았으면 입력 누락이지 cold-start 가 아니다 |
+| 나머지 필수 전부 pass · `statusPass` | |
+| Persona active · Account 0 · providerId null | `judgeRealMember` 정본 |
+| seed/voice 완전 · 생활사 충돌 없음 | |
+| ratio·일 cap·kill switch 정상 | |
+| 🔴 자동 공개 발행 **불가** | `autoPublishAllowed: false` — 타입으로 못박았다 |
+| 사람 승인 Queue 로만 이동 | |
+| Persona 당 최대 `minSamples-1`건 · 하루 1건 | 🔴 상한이 작으면 그 상한이 새 사각지대가 된다 |
+| 발화 `minSamples-1`건이 쌓이면 종료 | 예외가 영구 규칙이 되지 않게 |
+
+🔴 **숫자를 여기 다시 적지 않는다.** 종료 기준은 Gate ⑧ 정본
+(`DEFAULT_FINGERPRINT_THRESHOLDS.minSamples`)에서 파생한다.
+후보 자신이 표본에 들어가므로 필요한 이전 발화는 `minSamples - 1` 건이다.
+
+🔴 옛 판은 종료를 `2` 로 적었는데 ⑧ 의 기준은 `5` 였다. 그래서 prior 가 1·2·3 건인
+Persona 는 **bootstrap 도 막히고 ⑧ 도 돌지 않는 사각지대**에 빠졌다 —
+첫 댓글을 하나 만들고 나면 두 번째부터 아무 데로도 갈 수 없었다.
+지금은 종료 시점과 ⑧ 실행 시점이 **정확히 같다**.
+
+🔴 `judgeGateInputs` 는 **필드 전달**과 **실제 실행 가능**을 나눠 돌려준다.
+`priorTexts: []` 는 필드는 왔지만 표본이 0 건이라 ⑧ 이 돌지 않는다 —
+그것을 "완비" 로 세면 notRun 을 통과로 세는 것과 같다.
+가짜 표지를 이전 발화로 채워 표본 수를 부풀리지도 않는다.
+
+🔴 이번 PR 에는 공개 Queue write 경로가 없다. **판정 함수와 계약까지만** 만들었고
+DB write 는 만들지 않았다.
+
+### 9.6 9관문 Gate — 🔴 "결과 9개" 와 "실제 실행" 을 나눈다
+
+`checkCommentCandidate` 는 입력과 무관하게 항상 ①~⑨ 각 1개를 돌려준다.
+그래서 `gates.length === 9` 는 아무것도 보장하지 않는다 — 입력을 빠뜨리면
+`notRun` 인 채로 9개가 채워지고 겉보기에는 "9관문 통과" 가 된다.
+첫 shadow 판이 정확히 그랬다(`knownNames` · `frequencyLookup` · `identity` ·
+`noGoTopics` · `priorTexts` 를 하나도 넘기지 않았다).
+
+| 축 | 뜻 |
+|---|---|
+| 결과 존재 | ①~⑨ 각 1개가 왔는가 (형식 계약) |
+| 실제 실행 | `notRun` 이 아닌 관문 수 |
+| notRun | 입력이 없어 돌지 않은 관문 |
+| 필수 미실행 | `REQUIRED_GATES`(①~⑧) 중 돌지 않은 것 — 🔴 하나라도 있으면 공개 Queue 불가 |
+
+🔴 `notRun` 을 `pass` 로 세지 않는다. 돌지 않은 검사는 "문제가 없었다" 가 아니라
+**"보지 않았다"** 다. 그 둘을 같이 세면 통과율이 거짓이 되고, 거짓 통과율 위에서 공개를 켠다.
+🔴 ⑨(카페 운영 문맥)만 필수에서 뺀다 — 출처가 카페일 때만 의미가 있다.
+다만 `sourceIsCafeOperational` 을 **명시하지 않으면** ⑨ 도 `notRun` 이 된다.
+
+### 9.7 실제 회원 글의 외부 전송 금지
+
+🔴 `pr.content.slice(0, 600)` 은 **요약이 아니라 원문 앞부분**이다.
+그래서 `persona:comment-plan` 의 외부 호출을 코드에서 막았다 —
+실제 글로는 planner → 입력 → 프롬프트 생성까지만 하고 네트워크는 0 이다.
+모델 비교는 합성 입력을 쓰는 `persona:comment-eval` 에서만 한다.
+
+🔴 이 금지를 풀려면 별도 단계에서 **PII 제거 · 대상 글 유형 · 보관 금지 ·
+provider 전송 계약**을 먼저 확정해야 한다. 플래그 하나로 풀 일이 아니다.
 
 ## 10. 82cook 사건과 수집 원칙
 

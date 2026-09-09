@@ -32,6 +32,41 @@ export const RETIRED_JOBS: readonly string[] = [
   'com.soransoran.navercafe-collect-wgang',
 ]
 
+/**
+ * 🔴 **unload 만으로는 되돌아온다.**
+ *
+ *    2026-09-09 실측: 은퇴시킨 1회판 job 2개가 다시 loaded 되어 있었고,
+ *    `WorkingDirectory` 가 **개발 작업트리**였다(`runs = 0` 이라 실행 전에 잡았다).
+ *    `launchctl unload` 는 지금 세션에서만 내린다 — plist 가 `~/Library/LaunchAgents`
+ *    에 남아 있으면 로그인·재부팅 때 launchd 가 다시 등록한다.
+ *
+ *    그래서 계약은 "loaded 가 아니다" 가 아니라 **"그 자리에 파일이 없다"** 다.
+ *    지우지는 않고 정본 밖 보관소로 옮긴다 — 되돌릴 수 있어야 한다.
+ */
+export function judgeRetiredPlists(input: {
+  /** `~/Library/LaunchAgents` 안에 있는 파일 이름들 */
+  agentFiles: readonly string[]
+  /** 보관소 안에 있는 파일 이름들 — 옮겼는지 확인한다 */
+  rollbackFiles?: readonly string[]
+  retired?: readonly string[]
+}): PathVerdict {
+  const retired = input.retired ?? RETIRED_JOBS
+  const problems: string[] = []
+  for (const label of retired) {
+    const file = `${label}.plist`
+    if (input.agentFiles.includes(file)) {
+      problems.push(
+        `🔴 옛 plist 가 LaunchAgents 에 남아 있다 — ${file}`
+        + ' (unload 해도 로그인·재부팅 때 다시 등록된다)',
+      )
+    } else if (input.rollbackFiles !== undefined && !input.rollbackFiles.includes(file)) {
+      // 🔴 옮긴 것과 그냥 사라진 것은 다르다. 보관본이 없으면 되돌릴 수 없다
+      problems.push(`🟡 옛 plist 보관본이 없다 — ${file} (되돌릴 수 없다)`)
+    }
+  }
+  return { ok: problems.length === 0, problems }
+}
+
 export type PathVerdict = { ok: boolean; problems: string[] }
 
 /**

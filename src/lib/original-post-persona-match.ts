@@ -220,26 +220,27 @@ export type Blocked = { code: BlockCode; detail: string }
  */
 export type BatchCaps = { postsPerWeek?: number; minDaysBetween?: number }
 
-export function hardFilter(
+/**
+ * 🔴 **생활사 모순과 noGo 만** 본다 — 운영 조건(active·실회원)도 리듬(cap·간격)도 보지 않는다.
+ *
+ *    이것을 떼어 낸 이유는 **댓글 배정**이다 (2026-09-09).
+ *
+ *    "과거에 30살 딸이 있다고 한 페르소나가 고3 딸 이야기에 댓글을 달면 안 된다" 는
+ *    글 발행과 댓글에 똑같이 적용된다. 그런데 `hardFilter` 를 통째로 부르면
+ *    **글 발행 cadence(WEEKLY_CAP · TOO_SOON)까지 댓글에 걸린다** —
+ *    글을 이번 주에 다 쓴 페르소나가 댓글도 못 다는 것은 이 규칙이 의도한 바가 아니다.
+ *
+ * 🔴 그렇다고 댓글 쪽에 같은 판정을 **복붙하지 않는다.** 두 벌이 되면 한쪽만 고쳐지는 날이 온다.
+ *    `hardFilter` 도 이 함수를 부른다 — 그래서 기존 글 매칭 행동은 그대로다.
+ */
+export function judgeLifeHistory(
   p: PersonaForMatch,
   req: PostRequirements,
   postTitle: string,
   postBody: string,
-  /** 🔴 시뮬레이션용 cap. 운영은 넘기지 않아 가장 안전한 기본값 을 쓴다 */
-  caps: BatchCaps = {},
 ): Blocked[] {
   const out: Blocked[] = []
 
-  // ── 운영 조건 ──
-  if (p.status !== 'active') out.push({ code: 'NOT_ACTIVE', detail: `status=${p.status}` })
-  // 🔴 실회원 이름으로 발행되면 신뢰 사고다. 되돌리기 어렵다.
-  //    정본은 `Account` 다 — 카카오 로그인이 만드는 것은 Account 이지 User.providerId 가 아니다.
-  //    `providerId` 검사는 방어적으로 남긴다(수동으로 채워 둔 값도 막는다).
-  //    🔴 판정은 `judgeRealMember` 하나뿐이다 — 여기서 다시 쓰면 한쪽만 고쳐지는 날이 온다
-  const real = judgeRealMember({ accountCount: p.accountCount, providerId: p.providerId })
-  if (real.real) out.push({ code: 'REAL_MEMBER', detail: real.reason })
-
-  // ── 생활사 ──
   const kids = p.childrenCount ?? 0
   if (req.needsChildren && kids === 0) {
     out.push({ code: 'NO_CHILDREN', detail: `childrenCount=${kids}` })
@@ -276,6 +277,31 @@ export function hardFilter(
   if (hitTopics.length > 0) {
     out.push({ code: 'NOGO_TOPIC', detail: `${hitTopics.length}종 일치` })
   }
+
+  return out
+}
+
+export function hardFilter(
+  p: PersonaForMatch,
+  req: PostRequirements,
+  postTitle: string,
+  postBody: string,
+  /** 🔴 시뮬레이션용 cap. 운영은 넘기지 않아 가장 안전한 기본값 을 쓴다 */
+  caps: BatchCaps = {},
+): Blocked[] {
+  const out: Blocked[] = []
+
+  // ── 운영 조건 ──
+  if (p.status !== 'active') out.push({ code: 'NOT_ACTIVE', detail: `status=${p.status}` })
+  // 🔴 실회원 이름으로 발행되면 신뢰 사고다. 되돌리기 어렵다.
+  //    정본은 `Account` 다 — 카카오 로그인이 만드는 것은 Account 이지 User.providerId 가 아니다.
+  //    `providerId` 검사는 방어적으로 남긴다(수동으로 채워 둔 값도 막는다).
+  //    🔴 판정은 `judgeRealMember` 하나뿐이다 — 여기서 다시 쓰면 한쪽만 고쳐지는 날이 온다
+  const real = judgeRealMember({ accountCount: p.accountCount, providerId: p.providerId })
+  if (real.real) out.push({ code: 'REAL_MEMBER', detail: real.reason })
+
+  // ── 생활사 · noGo — 🔴 정본은 judgeLifeHistory 하나다 ──
+  out.push(...judgeLifeHistory(p, req, postTitle, postBody))
 
   // ── 리듬 ──
   const weekCap = caps.postsPerWeek ?? POST_CAP_PER_WEEK

@@ -26,14 +26,15 @@ import { TARGET_DESCRIPTOR_TERMS } from './voice-style-signals.mjs'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../../src/lib/comment-policy'
 
 /** 반응 유형 — voice-comment-signals 의 ReactionType 과 같은 값이다 */
-export const REACTION_TYPES = [
-  'empathy', 'question', 'rebuttal', 'experience', 'information', 'other',
-] as const
-
-export type ReactionType = (typeof REACTION_TYPES)[number]
-
-export const isReactionType = (v: unknown): v is ReactionType =>
-  typeof v === 'string' && (REACTION_TYPES as readonly string[]).includes(v)
+/**
+ * 🔴 어휘 정본은 `src/lib/persona-reaction-roles.ts` 로 올렸다 (2026-09-09).
+ *
+ *    댓글 분산 planner 가 `share` 를 배정하고 생성기가 그것을 거부하는 일이 있었다 —
+ *    계획과 생성이 다른 낱말을 쓰고 있었다. 어휘가 두 곳에 있으면 언젠가 갈린다.
+ *    여기서는 다시 내보내기만 한다. 값을 여기 다시 적지 않는다.
+ */
+export { REACTION_TYPES, isReactionType, type ReactionType } from '../../src/lib/persona-reaction-roles'
+import { REACTION_TYPES, isReactionType, type ReactionType } from '../../src/lib/persona-reaction-roles'
 
 /** 사람 말로 옮긴 반응 지침. 🔴 모델에게 코드값을 그대로 주지 않는다 */
 const REACTION_GUIDE: Record<ReactionType, string> = {
