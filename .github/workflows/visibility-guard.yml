@@ -113,6 +113,18 @@ jobs:
       - name: 타입 검사 (scripts · ops)
         run: npm run typecheck:ops
 
+      # 🔴 계측은 틀려도 화면이 멀쩡하다. 이벤트가 두 번 나가거나, 실패한 글이 성공으로
+      #    세지거나, 보내면 안 되는 값이 하나 섞여도 사용자는 아무것도 못 느낀다.
+      #    사람이 알아채는 유일한 순간은 **그 숫자로 판단을 내린 뒤**다 —
+      #    check:visibility 를 CI 에 둔 것과 같은 이유로 여기 둔다.
+      #
+      #    typecheck:ops 바로 뒤다. 이 가드의 magazine·best 차단은 @ts-expect-error 라
+      #    타입이 느슨해지면 위 단계가 먼저 잡는다 — 원인이 분명한 순서로 실패한다.
+      #    Prisma 가 필요 없지만(레지스트리·analytics 모듈은 DB 를 모른다) 그 이유로
+      #    앞으로 당기지 않는다. 짝이 되는 검사 옆에 있는 편이 읽기 쉽다.
+      - name: GA4 참여 계측 가드
+        run: npm run check:ga4-events
+
       # ── Micro Seed Founder Gate fixture ────────────────────────
       #
       # 여기까지의 단계는 "노출 게이트가 살아 있는가" 만 본다.
