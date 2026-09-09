@@ -789,3 +789,74 @@ npm run persona:cohort-run -- --cohort=wave4-depth --step=create   # 이하 동�
 ```
 
 🔴 `--step=create` 를 다시 돌리면 "이미 존재" 로 막힌다. 그것이 정상이다.
+
+---
+
+## §15 Scale Activation Wave A 완료 — Persona 24명 active (2026-09-09)
+
+> 🔴 아래는 **2026-09-09 실행 시점의 운영 데이터 순간값**이다. 고정 계약이 아니다.
+
+§14 에서 멈췄던 wave3 activate 를 PR #485 merge 뒤 이어서 완료하고, wave4 까지 마쳤다.
+
+### 실행 결과
+
+| 회차 | 대상 | create | seed | activate |
+|---|---|---|---|---|
+| wave3-scale | 11명 | ✅ | ✅ | ✅ (재개 1회 성공) |
+| wave4-depth | 5명 | ✅ | ✅ | ✅ |
+
+배정된 표시명 — Gate ⑥-B 전원 pass (회원 표시명 25 · authorHash 17,992 · norm 17,945 대조)
+
+```
+P03 골목   P04 창가   P06 그늘   P08 갈대
+P12 봉숭아  P13 민들레  P14 마루   P16 자락
+P18 조약돌  P19 들국화  P20 산딸기  P21 제비꽃
+P22 달맞이  P23 물봉선  P24 노루귀  P25 패랭이
+```
+
+P09 는 정본에 따라 **제외 상태를 유지**한다.
+
+### DB before/after
+
+| | before | after |
+|---|---|---|
+| User | 12 | **28** |
+| Persona | 8 | **24** (active 24 · draft 0) |
+| PersonaAuditLog | 37 | **101** |
+| Account | 3 | **3** (신규 16명 전원 0) |
+| Post · Comment · Queue · ActivityLog · Raw | 42 · 26 · 24 · 7 · 58 | **동일** |
+
+persona 별 분포도 확인했다 — 신규 16명 각각 `created` 1 · `display_name_assigned` 1 ·
+`updated`(seed) 1 · `status_changed` 1(draft→active · actorUserId·reason 있음).
+기존 8명은 status·값·AuditLog 건수 불변.
+
+### 활성화가 실측에 반영된 것
+
+| | before | after |
+|---|---|---|
+| activePersonas | 8 | **24** |
+| theoreticalPerWeek | 8 | **24** |
+| effectivePerDay | 1.02 | **2.85** |
+| personas shortfall | 0 | **0** |
+
+### 🔴 공개 발행은 여전히 d1 이다
+
+`capacity=d1 · release=d1` 그대로다. 이번 작업은 **켠 것이지 내보낸 것이 아니다** —
+발행은 auto-publish 러너가 스케줄에 따라 한다. 실제 발행 0 · Comment 0 · Raw/Queue 0.
+
+### d10 readiness — 억지로 READY 로 만들지 않는다
+
+- `persona:capacity-planner` — **NOT_READY**. d1 조차 14일 12/14건(2건 미달 · 공백 2일).
+  🔴 **원인은 인원이 아니라 재고다** — 재고 13/14 (inventory-limited).
+- `supply:health` collect readiness — start · stable 모두 **BLOCKED**
+  - 82cook `com.soransoran.raw-collect-82cook` **미등록** (현재 0건/day)
+  - 카페 2개가 계획된 다회 job 이 아니라 1회판이다 (현재 각 10건/day)
+  - current 20 · prepared 320 · required 6(여유 기준 9) — 등록 2/3
+  - 통과율(judgePass · draftPass) 실측 없음
+
+즉 **다음 병목은 인원이 아니라 재고와 수집 능력**이다.
+
+### 다음 단계
+
+`Scale Activation Wave B — 다회 수집 활성화와 재고 확장`.
+🔴 이번 PR 에서 launchctl 등록·cron·env·GitHub Variables·capacity/release 승격은 **하지 않았다**.
