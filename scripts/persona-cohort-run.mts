@@ -407,6 +407,15 @@ if (!gate.ok) {
 
 // ── 적용 — 🔴 회차 전원이 하나의 Serializable 트랜잭션이다 ──
 const AUDIT_REASON = `cohort ${COHORT} — ${M.purpose}`
+
+/**
+ * 🔴 트랜잭션 마감 — **인원에 비례해서** 잡는다. 기본값(5초)에 기대지 않는다.
+ *    실측 왕복 220~290ms · 사람당 최대 4왕복이므로 넉넉히 사람당 3초를 준다.
+ *    최소 60초를 보장해 작은 회차도 콜드 스타트에 걸려 넘어지지 않게 한다.
+ */
+const TX_TIMEOUT_MS = Math.max(60_000, M.codes.length * 3_000)
+/** 🔴 연결을 기다리는 시간도 명시한다 — 기본 2초는 원격 DB 에 짧다 */
+const TX_MAX_WAIT_MS = 20_000
 try {
   await prisma.$transaction(async (tx) => {
     // 🔴 **트랜잭션 안에서 다시 본다** (TOCTOU). 읽은 뒤 쓰기까지 사이에 누가
@@ -456,6 +465,15 @@ try {
       if (blocking.length > 0) throw new Error(`트랜잭션 안 재확인 실패 — ${blocking.join(' / ')}`)
     }
 
+    /**
+     * 🔴 **왕복을 줄인다.** 사람마다 `findUniqueOrThrow` 를 부르면 회차 인원만큼 왕복이 더 생기고,
+     *    그만큼 트랜잭션이 길어져 마감을 넘길 확률이 올라간다. id 는 한 번에 가져온다.
+     */
+    const idRows = await tx.persona.findMany({ where: { code: { in: [...M.codes] } }, select: { id: true, code: true } })
+    const idOf = new Map(idRows.map((r) => [r.code, r.id]))
+    const noId = M.codes.filter((c) => !idOf.has(c))
+    if (noId.length > 0) throw new Error(`트랜잭션 안 재확인 실패 — id 를 찾지 못했다: ${noId.join(', ')}`)
+
     for (const code of M.codes) {
       // 🔴 **조건부 write** — 기대 status 인 행만 고친다. 읽은 뒤 바뀌었으면 count 가 0 이 되어 throw
       const data = STEP === 'seed'
@@ -479,7 +497,8 @@ try {
       const u = await tx.persona.updateMany({ where: { code, status: expect }, data })
       if (u.count !== 1) throw new Error(`${code}: 조건부 update 가 ${u.count}건 — 읽은 뒤 status 가 바뀌었다 (전원 롤백)`)
 
-      const p = await tx.persona.findUniqueOrThrow({ where: { code }, select: { id: true } })
+      // 🔴 id 는 루프 **밖에서 한 번에** 읽어 왔다 — 사람마다 다시 묻지 않는다(왕복 1/3 감소)
+      const p = { id: idOf.get(code)! }
       await tx.personaAuditLog.create({
         data: STEP === 'seed'
           // 🔴 enum 에 있는 값만 쓴다 — schema 를 바꾸지 않는다 (migration 금지)
@@ -492,9 +511,27 @@ try {
       })
     }
   },
-  // 🔴 **Serializable** — Account 가 트랜잭션 중간에 붙는 경합까지 막는다.
-  //    조건부 update 는 `status` 만 지킨다. Account 는 다른 테이블이라 그것만으로는 부족하다
-  { isolationLevel: 'Serializable' })
+  {
+    // 🔴 **Serializable** — Account 가 트랜잭션 중간에 붙는 경합까지 막는다.
+    //    조건부 update 는 `status` 만 지킨다. Account 는 다른 테이블이라 그것만으로는 부족하다
+    isolationLevel: 'Serializable',
+    /**
+     * 🔴 **마감을 회차 크기에 맞춰 명시한다** (2026-09-09 실측 재현).
+     *
+     *    Prisma 의 기본 interactive transaction 마감은 **5초**다. 그런데 이 트랜잭션은
+     *    회차 전원을 하나로 묶는 계약이라 왕복 수가 인원에 비례한다.
+     *    원격 DB 왕복이 220~290ms 인 환경에서 11명 activate 는 **5초를 넘겼고**,
+     *    `Transaction not found ... refers to an old closed transaction` 으로 전원 롤백했다.
+     *
+     *    🔴 위험한 것은 실패 자체가 아니라 **실패 시점**이다. create·seed 는 이미 커밋된 뒤라
+     *    회차가 `draft-seeded` 에 멈춰 선다. 데이터는 안전하지만 운영은 진행할 수 없다.
+     *
+     *    그래서 인원에 비례한 마감을 준다. 넉넉하게 두는 것이 옳다 —
+     *    이 트랜잭션은 사람이 승인한 회차 1회이고, 중간 상태로 남기는 것이 훨씬 나쁘다.
+     */
+    timeout: TX_TIMEOUT_MS,
+    maxWait: TX_MAX_WAIT_MS,
+  })
 } catch (e) {
   await prisma.$disconnect()
   fail(`${STEP} 실패 — ${M.codes.length}명 전원 롤백했습니다 (write 0): ${(e as Error).message}`)

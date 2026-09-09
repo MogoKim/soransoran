@@ -955,6 +955,22 @@ console.log('\n⑩ 소스 계약')
     && /originalPostApprovalQueue\.count/.test(tool) && /personaActivityLog\.count/.test(tool)
     && /microSeedRawContent\.count/.test(tool))
   check('🔴 cohort 도구가 Raw SQL 을 쓰지 않는다', !/\$queryRaw|\$executeRaw/.test(tool))
+  /**
+   * 🔴 **트랜잭션 마감을 회차 크기에 맞춰 명시한다** (2026-09-09 실측 재현).
+   *    Prisma 기본 마감은 5초다. 회차 전원을 한 트랜잭션으로 묶는 계약이라
+   *    왕복이 인원에 비례하고, 원격 DB(왕복 220~290ms)에서 11명 activate 가 5초를 넘겨
+   *    `Transaction not found` 로 전원 롤백했다. create·seed 는 이미 커밋된 뒤라
+   *    회차가 `draft-seeded` 에 멈춰 선다 — 데이터는 안전하지만 운영이 진행되지 않는다.
+   */
+  check('🔴 cohort 트랜잭션이 마감을 명시한다 — 기본 5초에 기대지 않는다',
+    /timeout: TX_TIMEOUT_MS/.test(tool) && /maxWait: TX_MAX_WAIT_MS/.test(tool))
+  check('🔴 그 마감이 **회차 인원에 비례**한다 (고정 상수가 아니다)',
+    /const TX_TIMEOUT_MS = Math\.max\(60_000, M\.codes\.length \* 3_000\)/.test(tool))
+  check('🔴 사람마다 id 를 다시 묻지 않는다 — 왕복이 인원에 비례해 늘지 않는다',
+    !/findUniqueOrThrow\(\{ where: \{ code \}/.test(tool)
+    && /const idRows = await tx\.persona\.findMany\(\{ where: \{ code: \{ in: \[\.\.\.M\.codes\] \} \}/.test(tool))
+  check('🔴 id 를 못 찾으면 전원 롤백한다 — 조용히 건너뛰지 않는다',
+    /id 를 찾지 못했다/.test(tool))
   check('🔴 supply-autopilot 에 배수 리터럴이 남아 있지 않다',
     !/shortfall \* 4/.test(code('src/lib/supply-autopilot.ts')))
   // 🔴 planner 가 낡은 문구를 쓰지 않는다
