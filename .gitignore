@@ -41,6 +41,9 @@ yarn-error.log*
 
 # Micro Seed 수집 산출물 (로컬 전용 — repo 에 추적하지 않는다)
 .microseed-data/
+# 🔴 정본이 두 worktree 밖(~/Library/Application Support/soransoran)에 있고
+#    각 worktree 에는 **심볼릭 링크**만 둔다. 링크는 위 `디렉터리/` 패턴에 걸리지 않는다
+.microseed-data
 
 # VE-M3 전량 export 등 사람 판독용 산출물 — 커밋하지 않는다
 # 🔴 원문은 담지 않지만 sourceRef · notes 가 들어가므로 저장소에 두지 않는다

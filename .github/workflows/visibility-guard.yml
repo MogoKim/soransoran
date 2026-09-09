@@ -459,6 +459,12 @@ jobs:
       - name: launchd 템플릿 (PATH · 로그 위치 · placeholder · 불변 계약)
         run: npm run launchd:template-check
 
+      # 🔴 예약 실행이 개발 브랜치를 돌면 여기서 FAIL 한다.
+      #    CI 에는 runtime worktree 가 없으므로 **판정 규칙**만 시험한다 —
+      #    실제 관측은 운영 기계에서 `--require-runtime` 으로 요구한다
+      - name: 예약 실행 격리 (판정 규칙)
+        run: npm run runtime:isolation-check
+
       # 발행 경로 exact id 타깃팅의 계약 (§4-AK).
       #
       # 🔴 이 타깃팅이 없으면 "이 글만" 이 되지 않는다. 막아야 할 회귀:

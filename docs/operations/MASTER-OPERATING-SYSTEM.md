@@ -313,6 +313,40 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 🔴 **내부 capacity 와 공개 release 는 다른 손잡이다.** Wave B 는 내부만 d3 로 올렸다 —
 공개 발행량·cron·GitHub Variables 는 하나도 건드리지 않았다. 현재 운영 숫자는 §6.3.
 
+### 6.2-b 예약 실행은 개발 작업트리가 아니라 **runtime worktree** 가 한다
+
+🔴 **2026-09-09 이전에는 launchd 가 개발 작업트리를 직접 실행했다.** plist 의
+`ProgramArguments` 가 `~/Documents/soransoran-m0/scripts/*.mts` 를 가리켰고,
+그 경로는 `origin/main` 이 아니라 **그 순간 checkout 된 파일**이다 —
+개발자가 feature branch 로 바꿔 두면 밤 예약 회차가 그 브랜치 코드로 돈다.
+
+| | 위치 |
+|---|---|
+| 예약 실행 코드 | `~/Documents/soransoran-runtime` — 🔴 **detached · main 계보의 고정 SHA** |
+| 고정 SHA 기록 | `~/Library/Application Support/soransoran/runtime-pinned-sha` |
+| 비밀(`.env.local`) | `~/Library/Application Support/soransoran/env.local` — 양쪽에서 **심볼릭 링크** |
+| 상태(`.microseed-data`) | `~/Library/Application Support/soransoran/microseed-data` — 양쪽에서 **심볼릭 링크** |
+| 로그 | `~/Library/Logs/soransoran/` (Documents 밖 · TCC 회피) |
+
+🔴 **코드는 나누고 상태는 하나로 둔다.** 보호장치 예산·차단기는 source 하나당 **원장 하나**여야 한다 —
+worktree 마다 따로 두면 같은 사이트를 두 배로 두드린다. 그래서 데이터는 두 worktree **밖**에 두고
+양쪽이 같은 실체를 가리킨다. 비밀도 같은 이유로 복제하지 않고 링크한다.
+
+🔴 **runtime 은 자립한다** — 자체 `node_modules` 와 Prisma client 를 가진다.
+개발 트리가 브랜치를 바꾸거나 재설치해도 예약 실행은 영향받지 않는다(재부팅 뒤에도 같다).
+
+검사: `npm run runtime:isolation-check` (CI 는 판정 규칙만 · 운영 기계는 `--require-runtime`).
+
+🔴 **배포는 job 을 올린 뒤에 끝난다.** `npm run runtime:deploy` 는 잠금 → fetch(실패 시 정지) →
+unload 확인 → checkout·설치 → offline 게이트 → manifest/pin → load 확인 →
+**실제 loaded 설정 대조 → `runtime:isolation-check --require-runtime`** 까지 통과해야 완료다.
+job 이 내려가 있는 동안에는 loaded 를 요구하는 검사를 돌리지 않는다.
+🔴 launchctl 상태는 loaded/unloaded/**unknown** 세 가지이고 unknown 은 어디서든 fail-closed 다.
+🔴 runtime 아래여야 하는 것은 program 과 WorkingDirectory 뿐이다 — plist·로그 경로는 아니다.
+실패하면 되돌리기를 **끝까지 시도**하고, 완전하지 않으면 남은 것을 적고 실패로 끝낸다.
+🔴 Wave C 승격 신선도는 로컬 `origin/main` 이 아니라 **원격 main**(`git ls-remote`)으로 본다 —
+읽지 못하면 NOT_READY 다. 자세한 것은 d10 운영 문서 §17~§18.
+
 GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 예정 실행이 약 04:05 KST에 시작된
 사례가 있다. 10개 공개 슬롯의 실시간성을 GHA schedule에만 의존해서는 안 된다.
 

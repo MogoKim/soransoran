@@ -19,7 +19,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 
 import type { PrismaClient } from '@prisma/client'
 
@@ -471,6 +471,15 @@ async function main(): Promise<void> {
       artifacts: preexisting.length > 0 ? { preexisting } : {},
     }
   }
+  /**
+   * 🔴 **어느 코드로 돈 회차인지 남긴다** (2026-09-09).
+   *    Wave C 준비도가 "전환 이후의 done" 만 증거로 인정하는데, 시각만으로는
+   *    같은 시각에 다른 SHA 가 돌았을 가능성을 배제하지 못한다.
+   *    읽지 못하면 남기지 않는다 — 없는 것과 틀린 것은 다르다.
+   */
+  cp.runtimeSha = ((): string | undefined => {
+    try { return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim() } catch { return undefined }
+  })()
   const saveCp = (): void => { writeAtomic(cpPath, `${JSON.stringify(cp, null, 2)}\n`) }
   saveCp()
 
