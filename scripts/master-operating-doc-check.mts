@@ -45,8 +45,179 @@ check('North Star가 재방문+글/댓글+고유 실사용자를 모두 요구�
 check('Persona를 North Star에서 제외한다', master.includes('Persona, 봇, 운영 계정은 제외한다'))
 check('설계/main/설정/가동/관찰을 분리한다',
   ['설계', 'main 구현', '설정', '가동', '관찰'].every((term) => master.includes(term)))
-check('Persona-first가 현재 미구현임을 명시한다',
-  /Persona-first Generation[^\n]*\|[^\n]*미구현/.test(master))
+/**
+ * 🔴 **Persona-first 가 "가동 중" 으로 읽히지 않게 한다.**
+ *
+ *    옛 판은 그 행에 `미구현` 이라는 글자가 있는지만 봤다. 그런데 2026-09-09 에
+ *    입력 계약·분산 planner·속도 제어가 실제로 구현됐고, 그 행은 더 이상 "미구현" 이 아니다.
+ *    글자 하나를 지키면 문서가 사실과 어긋나고, 사실을 적으면 가드가 깨진다 —
+ *    그때 가드를 지우는 것이 아니라 **무엇을 지키려 했는지**로 다시 쓴다.
+ *
+ *    지켜야 하는 것은 "구현했다" 가 아니라 **공개 발행이 아직 꺼져 있다** 는 사실이다.
+ */
+check('Persona-first 레인이 공개 가동 중으로 읽히지 않는다',
+  /Persona-first Generation[^\n]*\|[^\n]*(미구현|공개 미활성)/.test(master))
+check('Persona 댓글 public 설정이 없음을 명시한다',
+  /public 설정 \| 🔴 \*\*없음\*\*/.test(master))
+/**
+ * 🔴 **"코드가 됐다" 와 "공개가 돈다" 를 섞지 않게 한다.**
+ *    상한이 0을 넘는 조건(실사용자 댓글·env)만 적어 두면, 그것만 채우면 자동 댓글이
+ *    시작된다고 읽힌다. 실제로는 승인 Queue·transaction 재검사·runner 가 더 필요하다.
+ */
+check('자동 공개 runner·schedule 이 없음을 명시한다',
+  /자동 공개 runner\/schedule \| 🔴 \*\*없음\*\*/.test(master))
+check('실제 공개 가동이 0/day 임을 명시한다',
+  /실제 공개 가동 \| 🔴 \*\*0\/day\*\*/.test(master))
+check('env 와 댓글 3건만으로 시작되지 않음을 명시한다',
+  master.includes('만으로 자동 댓글이 시작되지 않는다'))
+check('공개 release 에 남은 항목을 표로 적는다',
+  master.includes('공개 release 에 남은 것')
+  && ['승인 Queue', 'transaction', 'runner'].every((t) => master.includes(t)))
+check('최종 생성 모델을 확정으로 적지 않는다',
+  /최종 생성 모델 \| 🔴 \*\*provisional · winner 없음\*\*/.test(master))
+/** 🔴 호출 수와 비용은 **실측**으로 적는다. 추정과 섞으면 "얼마 안 든다" 가 근거 없이 돈다 */
+check('실제 API 호출 수와 실제 비용을 함께 적는다',
+  /\*\*\d+회 · \$0\.\d+\*\*/.test(master))
+/**
+ * 🔴 **`statusPass` 를 "9관문 통과" 로 읽지 못하게 한다.**
+ *    옛 집계가 `status === 'pass'` 만 보고 ⑧ 이 notRun 인 20건을 전부 통과로 셌다.
+ */
+check('모델 비교 표가 statusPass 와 fullGatePass 를 나눠 적는다',
+  master.includes('| parse | statusPass | 🔴 fullGatePass | missingRequired | bootstrap review |'))
+check('지금 표본의 fullGatePass 가 0 임을 정직하게 적는다',
+  master.includes('fullGatePass 는 0/20'))
+check('사람 채점 미완료와 winner null 을 적는다',
+  master.includes('사람 채점 미완료 · winner null'))
+/** 🔴 유료 결과가 dry-run 에 지워진 사고를 남겨 둔다 — 잊으면 같은 구조를 다시 만든다 */
+check('평가 artifact 불변성 계약을 적는다',
+  master.includes('유료 실행 결과를 dry-run 이 덮어썼다')
+  && master.includes('덮어쓰지 않는다')
+  && master.includes('성공한 유료 실행 뒤에만'))
+check('Gate ⑧ cold-start 계약을 적는다',
+  master.includes('첫 댓글을 영원히 시작할 수 없는 자리가 있었다')
+  && master.includes('bootstrapReviewEligible')
+  && master.includes('자동 공개 발행 **불가**')
+  && master.includes('사람 승인 Queue 로만 이동'))
+check('이번 PR 에 Queue write 경로가 없음을 명시한다',
+  master.includes('공개 Queue write 경로가 없다'))
+/**
+ * 🔴 **없는 경로를 있다고 쓰지 않게 한다.**
+ *    실제 DB 글로는 provider 를 부르지 않는데 "end-to-end 완료" 라고 적혀 있었다.
+ */
+check('실제 DB shadow 와 합성 eval 경로를 나눠 적는다',
+  master.includes('경로는 **둘**이고 하나로 이어져 있지 않다')
+  && master.includes('Gate 입력 사전검사')
+  && master.includes('합성 input → buildPrompt → provider → 실제 Gate'))
+check('단일 end-to-end 경로가 의도적으로 없다고 적는다',
+  master.includes('의도적으로 막혀 있다')
+  && master.includes('"end-to-end 완료" 라고 쓰지 않는다'))
+
+/**
+ * 🔴 **존재 여부 검사로는 모순을 못 잡는다.**
+ *
+ *    §9.3 이 "실제 DB 글은 provider 로 가지 않는다" 를 정확히 적어 두었는데도
+ *    §9.4 상태표는 `end-to-end shadow 검증 | 완료 — … callProvider → 9관문 Gate` 였고,
+ *    M10 은 `end-to-end shadow 파이프라인` 이었다. 두 문장이 문서 안에 함께 있었고
+ *    검사가 **각각의 존재만** 봐서 102 pass 로 지나갔다(2026-09-09 Codex 지적).
+ *
+ *    그래서 여기서는 "옳은 문장이 있는가" 가 아니라
+ *    **"현재 상태 표가 틀린 주장을 하고 있지 않은가"** 를 본다.
+ *
+ * 🔴 과거를 설명하는 역사 문장은 허용한다 — 사고를 지우면 같은 구조를 다시 만든다.
+ *    그래서 §9.3 의 정정 문단(`앞선 판이 …`, `… 라고 쓰지 않는다`)은 대상에서 뺀다.
+ */
+{
+  /** 상태를 주장하는 줄만 고른다 — 표의 행과 상태 표기 */
+  const lines = master.split('\n')
+  const HISTORY = [
+    '앞선 판이', '사실이 아니다', '라고 쓰지 않는다', '의도적으로 막혀 있다',
+    '옛 판', '한 줄로 합쳐 적으면',
+  ]
+  const isHistory = (l: string): boolean => HISTORY.some((h) => l.includes(h))
+
+  /** 🔴 실제 DB 경로를 말하면서 provider 호출·9관문 완료를 주장하는 줄 */
+  const badCurrent = lines.filter((l) => {
+    if (isHistory(l)) return false
+    // 표 행 또는 상태 문장만 본다
+    const claimsDone = /완료|가동|파이프라인/.test(l)
+    if (!claimsDone) return false
+    const mentionsProvider = /callProvider|provider 호출|9관문 Gate/.test(l)
+    const mentionsSynthetic = /합성/.test(l)
+    // 🔴 합성이라고 밝힌 줄은 provider·Gate 완료를 말해도 된다
+    return mentionsProvider && !mentionsSynthetic
+  })
+  check('🔴 현재 상태 표가 실제 DB 경로의 provider 호출·9관문 완료를 주장하지 않는다',
+    badCurrent.length === 0)
+  for (const l of badCurrent) console.log(`     🔴 모순: ${l.trim().slice(0, 110)}`)
+
+  /** 🔴 `end-to-end shadow` 를 현재 상태로 쓰지 않는다 — 역사 문장만 허용 */
+  const badE2E = lines.filter((l) => /end-to-end shadow/.test(l) && !isHistory(l))
+  check('🔴 `end-to-end shadow` 를 현재 상태 표기로 쓰지 않는다', badE2E.length === 0)
+  for (const l of badE2E) console.log(`     🔴 모순: ${l.trim().slice(0, 110)}`)
+
+  // 🟢 반대로, 나눠 적은 두 행은 실제로 있어야 한다
+  check('§9.4 가 실제 DB shadow 의 종점을 Gate 입력 사전검사로 적는다',
+    /\| \*\*실제 DB shadow\*\* \|[^\n]*Gate 입력 사전검사[^\n]*외부 호출 0[^\n]*후보 Gate 실행 0/.test(master))
+  check('§9.4 가 합성 eval 만 provider·9관문까지 갔다고 적는다',
+    /\| \*\*합성 eval\*\* \|[^\n]*provider[^\n]*9관문 Gate[^\n]*실행 완료/.test(master))
+  check('M10 이 두 경로를 구분해 적는다',
+    /\| M10 \|[^\n]*실제 DB preflight \+ 합성 eval/.test(master))
+  check('Lane 표의 Persona-first Generation 이 Comment 경로임을 밝힌다',
+    master.includes('Persona-first Generation (Comment 경로)'))
+  check('그 행이 provider 호출은 합성 eval 만이라고 적는다',
+    /Persona-first Generation \(Comment 경로\)[^\n]*provider 호출은 합성 eval 만/.test(master))
+  check('shadow 검증 완료를 한 줄로 적지 않는다고 못박는다',
+    master.includes('"shadow 검증 완료" 를 한 줄로 적지 않는다'))
+}
+/** 🔴 bootstrap 숫자를 문서에 다시 적으면 코드와 어긋난다 */
+check('bootstrap 기준을 Gate ⑧ 정본에서 파생한다고 적는다',
+  master.includes('DEFAULT_FINGERPRINT_THRESHOLDS.minSamples')
+  && master.includes('필요한 이전 발화는 `minSamples - 1` 건'))
+check('옛 사각지대를 기록으로 남긴다',
+  master.includes('bootstrap 도 막히고 ⑧ 도 돌지 않는 사각지대'))
+check('필드 전달과 실제 실행 가능을 나눠 적는다',
+  master.includes('**필드 전달**과 **실제 실행 가능**을 나눠 돌려준다'))
+/**
+ * 🔴 **"결과 9개" 를 "9관문 통과" 로 읽지 못하게 한다.**
+ *    입력을 빠뜨리면 notRun 인 채로 9개가 채워진다 — 첫 shadow 판이 그랬다.
+ */
+check('9관문의 결과 존재와 실제 실행을 나눠 적는다',
+  master.includes('"결과 9개" 와 "실제 실행" 을 나눈다')
+  && ['결과 존재', '실제 실행', 'notRun', '필수 미실행'].every((t) => master.includes(t)))
+check('notRun 을 pass 로 세지 않는다고 명시한다',
+  master.includes('`notRun` 을 `pass` 로 세지 않는다'))
+/** 🔴 자른 원문을 "요약" 이라 부르지 않게 한다 */
+check('실제 회원 글의 외부 전송 금지를 명시한다',
+  master.includes('요약이 아니라 원문 앞부분')
+  && master.includes('PII 제거'))
+check('옛 1회판 job 처리 상태를 적는다',
+  master.includes('옛 1회판 수집 job') && master.includes('재부팅 재등록 차단'))
+/** 🔴 앞선 판의 오진이 되살아나지 않게 한다 */
+check('옛 생성기 오진을 정정한 채로 둔다',
+  master.includes('그것은 사실이 아니다')
+  && !master.includes('옛 생성기는 근거를 그 Persona 가 과거에 쓴'))
+check('모델 비교가 합성 입력이었음을 명시한다',
+  master.includes('합성 fixture') && master.includes('원문·닉네임·개인정보는 나가지 않았다'))
+check('Memory·대댓글이 이번 범위가 아님을 명시한다',
+  /Memory · 대댓글 \| 🔴 이번 범위 \*\*아님\*\*/.test(master))
+/** 🔴 옛 수치가 "현재값" 으로 되살아나지 않게 한다 */
+for (const stale of ['댓글 0개 25/30', '댓글 15건, 고유 기여자']) {
+  check(`옛 댓글 수치가 상단에 남아 있지 않다 — ${stale}`, !master.includes(stale))
+}
+check('살아 있는 댓글 기준 실측을 §6.3 에 둔다',
+  master.includes('최근 7일 살아 있는 실사용자 댓글'))
+/**
+ * 🔴 ratio 계약이 **문서에만** 남지 않게 한다.
+ *    숫자를 문서에 적어 두고 코드가 그것을 모르면, 그 숫자는 지켜지지 않는다.
+ */
+check('ratio 계약의 정본이 코드임을 가리킨다',
+  master.includes('src/lib/persona-comment-governor.ts'))
+check('ratio 를 내림한다고 명시한다 (반올림하면 사람 1명에 봇 1개가 붙는다)',
+  master.includes('내림한다') && master.includes('0.43건은 0건'))
+check('집계 실패 시 상한 0 임을 명시한다',
+  /집계에 실패하거나 값이 손상되면 상한은 0이다/.test(master))
+check('글 발행량과 댓글 상한을 묶지 않는다고 명시한다',
+  master.includes('글 발행량(d1/d3/d5/d10)과 댓글 상한을 묶지 않는다'))
 check('RawContent 혼재 상태를 명시한다', master.includes('생성 후보 envelope도 이 테이블에 저장한다') || master.includes('생성·큐레이션 후보를 Queue에 연결하기 위한 envelope'))
 check('82cook 10슬롯을 현재 READY로 표시하지 않는다', master.includes('82cook 10슬롯 활성화 보류'))
 check('100/day와 공개 Persona 레인을 분리한다', master.includes('100/day는 Shadow 또는 별도 SEO Lane이며 Persona 공개 100/day가 아님'))

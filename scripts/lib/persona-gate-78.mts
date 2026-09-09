@@ -153,31 +153,20 @@ export function checkPersonaConsistency(
  *
  * 🔴 이 값들은 손잡이다. AI 티가 나면 낮춘다.
  */
-export type FingerprintThresholds = {
-  /** 🔴 표본이 적으면 비율이 튄다 — 5건 미만은 재지 않는다 */
-  minSamples: number
-  endingReview: number
-  endingRegen: number
-  hookReview: number
-  hookRegen: number
-  ngramReview: number
-  ngramRegen: number
-  /** seed 재사용은 persona 단위가 아니라 **전체 단위**로 본다 (§3-⑧) */
-  seedReuseReview: number
-  seedReuseRegen: number
-}
-
-export const DEFAULT_FINGERPRINT_THRESHOLDS: FingerprintThresholds = {
-  minSamples: 5,
-  endingReview: 0.33,
-  endingRegen: 0.40,
-  hookReview: 0.25,
-  hookRegen: 0.35,
-  ngramReview: 0.67,
-  ngramRegen: 0.80,
-  seedReuseReview: 2,
-  seedReuseRegen: 3,
-}
+/**
+ * 🔴 임계 정본은 `src/lib/persona-fingerprint-thresholds.ts` 로 올렸다 (2026-09-09).
+ *
+ *    bootstrap 종료 기준을 따로 `2` 라고 적어 둔 곳이 있었고, 여기 `minSamples: 5` 와
+ *    어긋나 prior 1·2·3 건인 Persona 가 사각지대에 빠졌다.
+ *    같은 것을 두 곳에 적으면 언젠가 어긋난다 — 여기서는 다시 내보내기만 한다.
+ */
+export {
+  DEFAULT_FINGERPRINT_THRESHOLDS, REQUIRED_PRIOR_TEXTS, gateEightCanRun,
+  type FingerprintThresholds,
+} from '../../src/lib/persona-fingerprint-thresholds'
+import {
+  DEFAULT_FINGERPRINT_THRESHOLDS, type FingerprintThresholds,
+} from '../../src/lib/persona-fingerprint-thresholds'
 
 export type FingerprintInput = {
   /** 같은 persona 의 최근 발화 — 발행물 + 같은 배치의 앞선 후보 */

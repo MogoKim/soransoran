@@ -12,6 +12,7 @@
 import { execFileSync } from 'node:child_process'
 import {
   closeSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync, writeSync,
+  readdirSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,7 +22,8 @@ import { statSync } from 'node:fs'
 import {
   RUNTIME_JOBS, RETIRED_JOBS,
   judgeCanonicalMode, judgeJobPath, judgeJobState, judgeLoadedConfig, judgeLoadedJobs,
-  judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, parseLaunchctlPrint, type JobState,
+  judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists,
+  parseLaunchctlPrint, type JobState,
 } from '../src/lib/runtime-isolation'
 import {
   judgeCheckpointFreshness, judgePromotionFreshness, judgeSlotEvidence, parseSuccessRuns, runIdToMs,
@@ -369,6 +371,26 @@ const DEV = '/Users/x/Documents/soransoran-m0'
   const waveC = readFileSync('scripts/wave-c-readiness.mts', 'utf-8')
   check('🔴 Wave C 판정이 --require-runtime 으로 관측을 요구한다',
     /runtime-isolation-check\.mts', '--require-runtime'/.test(waveC))
+}
+
+{
+  // ── 🔴 옛 plist 재등록 방지 (2026-09-09) ──
+  const files = RETIRED_JOBS.map((l) => `${l}.plist`)
+  const alive = ['com.soransoran.supply-autopilot.plist']
+  check('🟢 옛 plist 가 LaunchAgents 에 없고 보관본이 있으면 통과',
+    judgeRetiredPlists({ agentFiles: alive, rollbackFiles: files }).ok)
+  /**
+   * 🔴 **unload 만으로는 되돌아온다.** 파일이 그 자리에 있으면 로그인·재부팅 때
+   *    launchd 가 다시 등록한다 — 실제로 그렇게 2개가 되살아났다.
+   */
+  const left = judgeRetiredPlists({ agentFiles: [...alive, files[0]!], rollbackFiles: files })
+  check('🔴 옛 plist 가 LaunchAgents 에 남아 있으면 막는다', !left.ok)
+  check('🔴 그 이유를 "다시 등록된다" 로 말한다',
+    left.problems.some((p) => p.includes('다시 등록된다')))
+  check('🔴 보관본이 없으면 알린다 (되돌릴 수 없다)',
+    !judgeRetiredPlists({ agentFiles: alive, rollbackFiles: [] }).ok)
+  check('🟢 보관소를 안 넘기면 존재 여부만 본다',
+    judgeRetiredPlists({ agentFiles: alive }).ok)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -961,6 +983,17 @@ if (!existsSync(RUNTIME_ROOT)) {
     check(`🔴 ${label} 권한이 닫혀 있다 (${max.toString(8)} 이하 · group/other 0)`, v.ok)
     for (const p of v.problems) console.log(`      ${p}`)
   }
+
+  // ── 🔴 옛 plist 가 그 자리에 없는가 — unload 는 지금 세션만 내린다 ──
+  const agentFiles = ((): string[] => {
+    try { return readdirSync(AGENT_DIR) } catch { return [] }
+  })()
+  const rollbackFiles = ((): string[] => {
+    try { return readdirSync(join(CANON_DIR, 'launchd-rollback')) } catch { return [] }
+  })()
+  const retiredPlists = judgeRetiredPlists({ agentFiles, rollbackFiles })
+  check('🔴 옛 1회판 plist 가 LaunchAgents 에 없다 (재부팅 재등록 차단)', retiredPlists.ok)
+  for (const msg of retiredPlists.problems) console.log(`      ${msg}`)
 
   // ── 🔴 격리 ≠ 최신 — lag 는 알리되 격리 실패로 세지 않는다 ──
   const originMain = git(['rev-parse', 'origin/main'], RUNTIME_ROOT)
