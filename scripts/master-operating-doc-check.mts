@@ -91,5 +91,123 @@ for (const file of historicalDocs) {
   check(`${file}가 현재 Master를 안내한다`, body.includes('MASTER-OPERATING-SYSTEM.md'))
 }
 
+/**
+ * 🔴 **문서 내부 정합성 — 변동 숫자를 두 곳에 적지 않는다** (2026-09-09 실제 사고).
+ *
+ *    Wave A 로 Persona 가 8 → 24 명이 됐는데 §4 Lane 표에는 `재고 14/14` · `8명 대상 가동` 이,
+ *    §6.3 에는 `User / Account 12 / 3` · `Persona 8, 모두 active` 가 그대로 남아 있었다.
+ *    같은 값을 여러 절에 복제해 둔 것이 원인이다 — 한 곳을 고치면 다른 곳이 낡는다.
+ *
+ * 🔴 **그래서 "지금 값이 얼마인가" 를 검사하지 않는다.**
+ *    검사기에 24·101·13/14 를 박아 두면 그 검사기 자체가 또 하나의 복제본이 되고,
+ *    내일 사람이 한 명 늘면 **문서가 옳은데 검사기가 FAIL** 한다. 그건 같은 실수의 반복이다.
+ *
+ *    검사하는 것은 **구조**다.
+ *      ① 현재 상태 절(§4 Lane 표 · §6.1)이 변동 숫자를 복제하지 않고 §6.3 을 가리키는가
+ *      ② §6.3 에 필요한 행이 있고 **숫자로 파싱되는가**
+ *      ③ §6.3 이 스스로 모순되지 않는가 ("모두 active" 면 총계 == active 수)
+ *      ④ Wave A 의 24·101 은 **역사 기록**으로만 존재하는가 (현재값으로 읽히지 않는가)
+ */
+const sectionOf = (from: string, to: string): string => {
+  const a = master.indexOf(from)
+  const b = master.indexOf(to, a + 1)
+  if (a < 0) return ''
+  return master.slice(a, b < 0 ? master.length : b)
+}
+/** §4 Lane 표 — 표 헤더부터 §4.0 앞까지 */
+const laneTable = sectionOf('| Lane | 입력 | 저장/출력 | AI |', '### 4.0')
+/** §6.1 main 반영분 표 */
+const mainTable = sectionOf('### 6.1 main 반영분', '### 6.2')
+/** §6.3 — 현재 운영 숫자의 유일한 정본 */
+const snapshot = sectionOf('### 6.3 DB 스냅샷', '## 7.')
+/** §7.x Wave A — 역사적 실행 기록 */
+const waveA = sectionOf('### 7.x Scale Activation Wave A', '### 8.0')
+/** 현재 d10 병목 목록 */
+const bottleneck = sectionOf('현재 d10 병목은 다음 네 가지다.', '### 7.x')
+
+/** 🔴 표 행에서 값을 실제로 읽는다 — "그 글자가 있나" 가 아니라 "무슨 값인가" 를 본다 */
+const rowValue = (body: string, label: string): string => {
+  const m = new RegExp(`\\|\\s*${label}\\s*\\|([^|\\n]*)\\|`).exec(body)
+  return m === null ? '' : m[1]!.trim()
+}
+
+// ── ① 현재 상태 절은 변동 숫자를 복제하지 않는다 ──
+/**
+ * 🔴 **현재 상태 절**은 §4 Lane 표 · §6.1 · d10 병목 목록이다.
+ *    여기에 `숫자/숫자` 재고나 `active N명` 을 다시 쓰면 §6.3 과 갈라진다.
+ */
+const currentSections: ReadonlyArray<readonly [string, string]> = [
+  ['§4 Lane 표', laneTable],
+  ['§6.1 main 반영분', mainTable],
+  ['현재 d10 병목', bottleneck],
+]
+for (const [label, body] of currentSections) {
+  check(`${label} 이 비어 있지 않다 (앵커가 살아 있다)`, body !== '')
+  check(`${label} 이 재고 숫자를 복제하지 않는다`, body !== '' && !/재고[^|\n]{0,6}\d+\/\d+/.test(body))
+  check(`${label} 이 active 인원을 복제하지 않는다`,
+    body !== '' && !/active\s*\d+\s*명/.test(body) && !/\d+\s*명\s*(전원|대상)\s*(active|가동)/.test(body))
+  check(`${label} 이 §6.3 을 가리킨다`, body !== '' && /§6\.3/.test(body))
+}
+check('§4 Lane 표에 변동 숫자 금지 규칙이 있다',
+  master.includes('이 표에 변동하는 운영 숫자를 적지 않는다'))
+check('§6.1 에도 같은 규칙이 있다',
+  master.includes('이 표에도 변동하는 운영 숫자를 적지 않는다'))
+
+// ── ② §6.3 에 필요한 행이 있고 숫자로 파싱된다 ──
+check('§6.3 이 존재하고 "여기 한 곳에서만 관리한다" 를 밝힌다',
+  snapshot !== '' && /변동하는 운영 숫자는 여기 한 곳에서만 관리한다/.test(snapshot))
+const userRow = rowValue(snapshot, 'User / Account')
+const personaRow = rowValue(snapshot, 'Persona')
+const auditRow = rowValue(snapshot, 'PersonaAuditLog')
+const stockRow = rowValue(snapshot, '현재 사용 가능 재고')
+check('§6.3 User / Account 행이 숫자 두 개로 파싱된다', /^\d+\s*\/\s*\d+/.test(userRow))
+check('§6.3 Persona 행이 총계 숫자로 파싱된다', /^\d+\b/.test(personaRow))
+check('§6.3 Persona 행이 상태 분포를 적는다', /active/.test(personaRow))
+check('§6.3 PersonaAuditLog 행이 숫자다', /^\d+$/.test(auditRow))
+check('§6.3 재고 행이 `쓸 수 있는 수/목표` 로 파싱된다', /\d+\s*\/\s*\d+/.test(stockRow))
+
+// ── ③ §6.3 이 스스로 모순되지 않는다 ──
+/**
+ * 🔴 "모두 active" 라고 적었으면 총계와 active 수가 같아야 한다.
+ *    숫자를 박지 않고 **문장과 숫자가 서로 맞는지**만 본다.
+ */
+check('§6.3 Persona 행이 스스로 모순되지 않는다 ("모두 active" ↔ 총계·분포)', (() => {
+  const total = /^(\d+)/.exec(personaRow)
+  if (total === null) return false
+  const n = Number(total[1])
+  if (/모두 active/.test(personaRow)) {
+    // draft 를 함께 적었다면 0 이어야 "모두" 가 참이다
+    const draft = /draft\s*(\d+)/.exec(personaRow)
+    return draft === null || Number(draft[1]) === 0
+  }
+  // "모두" 가 아니면 분포 합이 총계와 같아야 한다
+  const parts = [...personaRow.matchAll(/(?:active|draft|paused|retired)\s*(\d+)/g)].map((m) => Number(m[1]))
+  return parts.length > 0 && parts.reduce((a, b) => a + b, 0) === n
+})())
+check('§6.3 재고가 목표를 넘지 않는다', (() => {
+  const m = /(\d+)\s*\/\s*(\d+)/.exec(stockRow)
+  return m !== null && Number(m[1]) <= Number(m[2])
+})())
+
+// ── ④ Wave A 의 숫자는 **역사 기록**으로만 존재한다 ──
+check('Wave A 절이 존재한다', waveA !== '')
+check('Wave A 절이 before/after 실행 기록임을 밝힌다',
+  /이 회차가 바꾼 것/.test(waveA) && /before/.test(waveA) && /after/.test(waveA))
+check('Wave A 절이 지금 값의 정본을 §6.3 으로 넘긴다',
+  /지금 값의 정본은 §6\.3 하나뿐이다/.test(waveA))
+check('Wave A 의 숫자는 그 절 안에만 있다 — 현재 상태 절로 새지 않았다',
+  currentSections.every(([, body]) => !/24 \(active 24/.test(body) && !/AuditLog\s*\|\s*101/.test(body)))
+
+// ── ⑤ 옛 현재값이 남아 있지 않다 ──
+for (const stale of [
+  '8명 대상 가동',
+  '| User / Account | 12 / 3 |',
+  '| Persona | 8, 모두 active |',
+  '재고 14/14',
+  '재고가 14/140이다',
+]) {
+  check(`옛 현재값이 남아 있지 않다 — ${stale}`, !master.includes(stale))
+}
+
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
 if (failed > 0) process.exit(1)

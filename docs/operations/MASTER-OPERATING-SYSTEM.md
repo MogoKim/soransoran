@@ -169,10 +169,10 @@ flowchart LR
 | Source Crawl | 82cook, Naver 2개 | list JSONL | 없음 | 완료 | 완료 | Naver 2개만 독립 가동 | 부분완료 |
 | Thin Detail | selector 결과 | `*.thin-detail.jsonl`, 300자 이하 | 없음 | 완료 | 완료 | 세 source 실파일 존재 | 완료 |
 | Raw Micro Seed | 승인한 외부 원문 | `MicroSeedRawContent`, Sheet, permanent noindex | 없음 | 완료 | 완료 | 과거 5건 발행 | 완료 |
-| Automated Original Supply | thin row | adapt, judge, draft, Queue | Haiku | 완료 | 완료 | 재고 14/14 | d1 가동 |
+| Automated Original Supply | thin row | adapt, judge, draft, Queue | Haiku | 완료 | 완료 | 재고는 §6.3 | d1 가동 |
 | Voice Asset | 우나어 legacy read-only | VoiceSource/Derived/CommentSignal | 규칙 + Haiku 분석 | 완료 | 완료 | 전량 분석 완료 | 자산화 완료 |
 | Persona-first Generation | Persona identity/voice + topic | Persona 고유 초안 | 생성 모델 미확정 | 완료 | 미구현 | 미가동 | 미착수 |
-| Persona Matching | Queue + active Persona | matchedPersonaId, matchMeta | 없음 | 완료 | 완료 | 8명 대상 가동 | 완료 |
+| Persona Matching | Queue + active Persona | matchedPersonaId, matchMeta | 없음 | 완료 | 완료 | active Persona 수는 §6.3 | 완료 |
 | Original Publish | matched Queue | Post + ActivityLog | 없음 | 완료 | 완료 | GHA 1회/day | d1 가동 |
 | Persona Comment | Post + reaction role | 댓글 후보 Queue | 기본 Haiku | 대부분 완료 | 생성기·Gate만 | 자동 스케줄 0 | 초기 단계 |
 | Comment Distribution | 새 글, 댓글 비율 | 공개 Persona 댓글 | 없음 | 완료 | 미구현 | 미가동 | 미착수 |
@@ -180,6 +180,10 @@ flowchart LR
 | Reply/Reaction/Best | 댓글·기억·시간 | 답글, 좋아요, Best | 미정 | 방향만 | 미구현 | 미가동 | 미착수 |
 | Health/Forecast | DB, 파일, 로그, scale | 화면 + JSON | 없음 | 완료 | 완료 | 수동 조회 | 부분완료 |
 | SEO Bulk | 별도 indexable 콘텐츠 | 별도 URL/작성자/색인 정책 | 미정 | 미완료 | 없음 | 없음 | 미착수 |
+
+🔴 **이 표에 변동하는 운영 숫자를 적지 않는다.** 재고·Persona 수·발행량 같은 값은
+움직이는 순간값이라, 여기와 §6.3 두 곳에 적으면 반드시 한쪽이 낡는다(2026-09-09 실제 발생).
+이 표는 **Lane 의 구조와 판정**만 적고, 숫자는 **§6.3 한 곳**에서만 관리한다.
 
 ### 4.0 `sourceCapturedAt` 은 게시 시각이 아니다
 
@@ -280,14 +284,17 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 | 규칙 + Haiku judge/draft · Queue 자동 보충 | ✅ | ✅ autopilot 1회/day | 통과율 실측 없음 🔴 |
 | Account 기준 실회원 차단 | ✅ | ✅ | ✅ |
 | 최대 매칭 · 기존 배정 복구 · 정합성 검사 | ✅ | ✅ | ✅ |
-| Persona 생성·seed·활성화 도구 | ✅ | active 8명 | ✅ |
+| Persona 생성·seed·활성화 도구 | ✅ | Wave A 실행 완료 · 현재 인원은 §6.3 | ✅ |
 | 공급 health · capacity forecast | ✅ | ✅ | ✅ |
 | d1/d3/d5/d10 profile · capacity/release 분리 · 강제 감속 | ✅ | d1 운영 중 | d1 ✅ · 그 위 🔴 |
 | 수동 발행기 1건 제한 | ✅ | ✅ | ✅ |
 | freshness hold 단일 계약 (§8.2) | ✅ | ✅ (d1 경로에서 동작) | hold 발생 사례 없음 |
 | 수집 보호장치 — 예산·backoff·breaker (§8.3) | ✅ 3 source 전부 | 🔴 아직 한 번도 돌지 않음(상태 파일 없음) | 🔴 미검증 |
-| Persona Pool 25장 · cohort 24명 | ✅ 카드·도구 | 🔴 생성·활성화 0 | 🔴 |
+| Persona Pool 25장 · cohort 24명 | ✅ 카드·도구 | ✅ cohort 전원 활성화 완료 · 현재 인원은 §6.3 (P09 정본 제외 유지) | ✅ persona별 AuditLog 검증 |
 | Naver 다회 슬롯 템플릿 | ✅ 템플릿 | 🔴 미등록 | 🔴 |
+
+🔴 **이 표에도 변동하는 운영 숫자를 적지 않는다.** 인원·재고·발행량은 §6.3 한 곳에서만 관리한다 —
+여기와 §6.3 두 곳에 적으면 반드시 한쪽이 낡는다(2026-09-09 실제 발생).
 
 🔴 **"구현됨" 은 "돌고 있다" 가 아니다.** 세 칸을 한 칸으로 합치는 순간 이 표는 거짓이 된다.
 
@@ -308,25 +315,31 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 
 ### 6.3 DB 스냅샷
 
-| 항목 | 2026-09-08 실측 |
+> 🔴 **변동하는 운영 숫자는 여기 한 곳에서만 관리한다.** §4 Lane 표·§7 마일스톤은
+> 숫자를 복제하지 않고 이 절을 가리킨다 — 두 곳에 적으면 반드시 한쪽이 낡는다.
+
+| 항목 | 2026-09-09 실측 (read-only 전수) |
 |---|---:|
-| User / Account | 12 / 3 |
-| Persona | 8, 모두 active |
-| Post | 40: PUBLISHED 30, HIDDEN 1, DELETED 9 |
+| User / Account | 28 / 3 (Account 가 붙은 실회원 3명) |
+| Persona | 24, 모두 active (draft 0 · 신규 16명 Account 0) |
+| PersonaAuditLog | 101 |
+| Post | 42: PUBLISHED 32, HIDDEN 1, DELETED 9 |
 | Comment / Reply | 26 / 4 |
-| 공개 글 중 댓글 0개 | 25/30, 83.3% |
+| 공개 글 중 댓글 0개 | 27/32, 84.4% |
 | Like / CommentLike / Scrap | 5 / 4 / 1 |
 | MicroSeedRawContent | 58 |
-| OriginalPostApprovalQueue | 24: APPROVED 19, PUBLISHED 5 |
-| 현재 사용 가능 재고 | 14: human 4, Haiku machine 10 |
+| OriginalPostApprovalQueue | 24: APPROVED 18, PUBLISHED 6 |
+| 현재 사용 가능 재고 | 13/14: human 3, Haiku machine 10 |
 | legacy Gemini 재고 | 5, 현재 재고에서 제외 |
-| PersonaApprovalQueue | PENDING 1, APPROVED 2, PUBLISHED 1 |
-| PersonaActivityLog | post 5, comment 1 |
+| PersonaApprovalQueue | 4: PENDING 1, APPROVED 2, PUBLISHED 1 |
+| PersonaActivityLog | 7: post 6, comment 1 |
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
 
-이 표는 역사 스냅샷이다. 현재 운영 판정은 `npm run supply:health -- --json`과 DB 실측을 사용한다.
+`capacity=d1 · release=d1` (§7.x Wave A 이후에도 그대로다).
+
+이 표는 순간값이다. 현재 운영 판정은 `npm run supply:health -- --json`과 DB 실측을 사용한다.
 
 ## 7. 마일스톤과 진행률
 
@@ -372,10 +385,65 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 
 현재 d10 병목은 다음 네 가지다.
 
-1. 재고가 14/140이다.
-2. Persona가 active 8명이며 실제 큐 시뮬레이션 기준 20명 이상이 필요하다.
+1. 재고가 모자란다 — 현재 재고는 §6.3, d10 목표는 140이다.
+2. ~~Persona 인원~~ → **2026-09-09 Wave A 로 해소.** 현재 active 인원은 §6.3.
+   이제 병목은 인원이 아니라 재고다.
 3. 공개 workflow가 1/10 슬롯이다.
 4. 수집 능력과 yield가 증명되지 않았고 82cook 접근도 불안정하다.
+
+### 7.x Scale Activation Wave A — Persona 24명 (2026-09-09 실행 완료)
+
+> 🔴 아래 숫자는 **2026-09-09 실행 시점의 운영 데이터 순간값**이다. 고정 계약이 아니다.
+> 계약은 §8.0~§8.5와 `src/lib/persona-cohort.ts` manifest가 정본이다.
+
+`persona:cohort-run` 고정 cohort 도구로 두 회차를 실행했다. `--code` 같은 임의 지정은 쓰지 않았다.
+
+| 회차 | 대상 | 결과 |
+|---|---|---|
+| wave3-scale | P03·P04·P06·P08·P12·P13·P14·P16·P18·P19·P20 (11명) | ✅ create → seed → activate |
+| wave4-depth | P21·P22·P23·P24·P25 (5명) | ✅ create → seed → activate |
+
+P09는 정본에 따라 **제외 상태를 유지**한다.
+
+**배정된 표시명** (Gate ⑥-B 전원 pass · 회원 표시명 25 · authorHash 17,992 · norm 17,945 대조)
+
+| | | | |
+|---|---|---|---|
+| P03 골목 | P04 창가 | P06 그늘 | P08 갈대 |
+| P12 봉숭아 | P13 민들레 | P14 마루 | P16 자락 |
+| P18 조약돌 | P19 들국화 | P20 산딸기 | P21 제비꽃 |
+| P22 달맞이 | P23 물봉선 | P24 노루귀 | P25 패랭이 |
+
+이름은 코드에 배정표를 두지 않고 **적용 시점 Gate ⑥-B가 정한다**(Pool §3-2).
+
+**이 회차가 바꾼 것** (2026-09-09 실행)
+
+| | before | after |
+|---|---|---|
+| User | 12 | 28 |
+| Persona | 8 (active 8) | 24 (active 24 · draft 0) |
+| PersonaAuditLog | 37 | 101 |
+| Account | 3 | 3 (신규 16명 전원 0) |
+| Post · Comment · Queue · ActivityLog · RawContent | 42 · 26 · 24 · 7 · 58 | **건드리지 않았다** |
+
+🔴 위 `after` 는 **이 회차의 변화량을 보여주는 실행 기록**이다.
+**지금 값의 정본은 §6.3 하나뿐이다** — 이후 값이 움직이면 §6.3만 갱신한다.
+
+persona별 분포도 확인했다 — 신규 16명 각각 `created` 1 · `display_name_assigned` 1 ·
+`updated`(seed) 1 · `status_changed` 1(draft→active, actorUserId·reason 있음).
+총합만 맞고 분포가 틀리면 FAIL로 본다.
+
+**기존 8명**(P01·P02·P05·P07·P10·P11·P15·P17)은 status·값·AuditLog 건수 모두 불변이다.
+
+🔴 **공개 발행은 여전히 d1이다.** 활성화는 "말이 나간다"는 뜻이 아니다 —
+발행은 auto-publish 러너가 스케줄에 따라 한다. capacity·release 단계는 올리지 않았다.
+
+**실행 중 한 번 막혔던 것**: wave3 activate가 Prisma 기본 트랜잭션 마감 5초에 걸려
+2회 연속 전원 롤백(write 0)했다. 원인과 수정은 PR #485(runbook §14)이고,
+merge 뒤 `--step=activate`부터 이어서 완료했다. 부분 활성화는 발생하지 않았다.
+
+**다음 단계**: `Scale Activation Wave B — 다회 수집 활성화와 재고 확장`.
+지금 병목은 인원이 아니라 **재고와 수집 능력**이다(§8.0).
 
 ### 8.0 수집 능력: current, prepared, required를 합치지 않는다
 
