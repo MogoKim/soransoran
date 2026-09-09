@@ -54,7 +54,13 @@ export async function publishPersonaCandidate(id: string): Promise<PublishState>
   const session = await auth()
   if (!session?.user?.id) return { error: '로그인이 필요합니다.' }
 
-  const res = await publishCandidateTx(prisma, { id })
+  /**
+   * 🔴 **`manual-admin` 은 여기서만 나온다.**
+   *    바로 위 `requireAdmin()` 이 통과했다는 사실이 그 근거다 —
+   *    호출부가 문자열로 주장하는 것을 믿지 않는다.
+   *    이것이 bootstrap 후보를 사람이 발행할 수 있는 유일한 문이다.
+   */
+  const res = await publishCandidateTx(prisma, { id, actor: 'manual-admin' })
 
   if (res.kind === 'error') return { error: res.message }
   if (res.kind === 'blocked') return { blocks: res.blocks }

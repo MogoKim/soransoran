@@ -751,7 +751,13 @@ planner 가 `share` 를 배정하고 생성기가 그것을 거부하던 일이 
 | Memory · 대댓글 | 🔴 이번 범위 **아님**. 후속 |
 | 옛 1회판 수집 job | ✅ unload + plist 를 정본 밖 보관소로 이동(재부팅 재등록 차단) |
 | 평가 artifact 불변성 | ✅ 유료 회차 디렉터리 분리 · dry-run 격리 (§9.5-b) |
-| Gate ⑧ cold-start | ✅ 판정 계약까지 (§9.5-c) · 🔴 Queue write 경로는 없음 |
+| Gate ⑧ cold-start | ✅ 판정 계약까지 (§9.5-c) |
+| 공개 release 계약 | ✅ 모델 게이트·개인정보·Queue·트랜잭션 재검사 (§9.5-d) |
+| Queue 적재 실행 | ✅ 파이프라인 연결 · 🔴 **모델 미확정으로 fail-closed** — DB write 0 |
+| 발행 트랜잭션 | ✅ Serializable · 댓글 레인 재검사 배선 완료 |
+| runner | ✅ `publishCandidateTx` 배선 완료 · 🔴 조건 미충족으로 발행 0 |
+| runner/schedule 등록 | 🔴 **등록 0** |
+| 후보 provenance | ✅ 적재·재검증 · 🔴 스키마 전용 컬럼은 **blocker**(§9.5-e) |
 
 🔴 **"shadow 검증 완료" 를 한 줄로 적지 않는다.** 경로가 둘이고 도달 지점이 다르다 —
 실제 DB 글은 Gate 입력 사전검사에서 멈추고(개인정보 계약 §9.7),
@@ -855,6 +861,332 @@ Persona 는 **bootstrap 도 막히고 ⑧ 도 돌지 않는 사각지대**에 �
 
 🔴 이번 PR 에는 공개 Queue write 경로가 없다. **판정 함수와 계약까지만** 만들었고
 DB write 는 만들지 않았다.
+
+### 9.5-d 공개 release 계약 — 🔴 env 하나로 켜지지 않는다
+
+정본은 `src/lib/persona-comment-release.ts` · `persona-comment-queue.ts` 다.
+
+| 조건 | 판정 |
+|---|---|
+| 실행 모드가 `release` | `readRunMode` — 기본·모르는 값은 shadow |
+| **모델 확정** | `judgeModelGate` — `provisional`·winner null·모르는 모델은 전부 막는다 |
+| 오늘 공개 허용량 > 0 | ratio 30% · 일 cap · kill switch |
+| 사람이 승인한 Queue 후보 | 🔴 자동 승인 경로 없음 — 적재는 `PENDING` 으로만 |
+| bootstrap 후보가 아님 | ⑧ 표본이 없는 후보는 사람 승인 전용 |
+| 트랜잭션 재검사 연결 | `recheckBeforePublish` |
+| runner/schedule 등록 | 🔴 **이번 PR 에서 등록하지 않았다** |
+
+🔴 **하나라도 빠지면 0 이다.** "거의 다 됐으니 일단 켜자" 가 가능한 구조를 만들지 않는다.
+
+#### Queue 적재
+
+🔴 기본 dry-run. `--apply` 없이 DB write 0 이고, `--apply` 를 붙여도
+**모델이 확정되지 않으면 write 하지 않는다** — 플래그가 계약을 이기지 못하게 한다.
+중복 열쇠는 `comment:<postId>:<personaCode>:<reactionRole>` 다 —
+본문 해시로만 잡으면 같은 자리에 문장만 바꿔 계속 넣을 수 있다.
+`notRun` 을 `pass` 로 세지 않고, 이미 Comment/Queue 가 있거나 글 상태가 바뀌면 멈춘다.
+
+#### 발행 트랜잭션
+
+기존 `publishCandidateTx` 가 이미 세 테이블(Comment · Queue · ActivityLog)을
+**한 트랜잭션**으로 처리하고 조건부 `updateMany` 로 경쟁을 가른다.
+여기에 댓글 레인 고유의 재검사를 더한다 — ratio · 실회원(Account/providerId) ·
+생활사·No-Go · 저장된 Gate 결과 · bootstrap · 글 상태 · 중복 · 회원 댓글 3건.
+🔴 계획 시점의 판정은 그 순간의 사진이다. 적재와 발행 사이에 글이 지워지고
+사람이 댓글을 달고 Persona 가 멈추고 Account 가 붙는다.
+
+#### 대상 글 개인정보
+
+🔴 **실회원이 쓴 글의 원문을 외부 모델로 보내지 않는다.**
+보낼 수 있는 것은 작성자 유형이 **확인된** 글뿐이다 — Persona · 관리자 · 자동 생성.
+micro seed 원문도 보내지 않는다(외부에서 가져온 글을 다시 외부로 보내지 않는다).
+확인하지 못하면 막는다 — `unknown` 은 `member` 보다 안전한 상태가 아니다.
+🔴 `slice` 를 요약이나 익명화라고 부르지 않는다.
+🔴 이 금지를 푸는 것은 코드 변경이 아니라 **정책 승인**이다.
+
+#### runner / schedule
+
+템플릿은 `scripts/lib/persona-comment-runner-template.ts` 에 있고
+`RunAtLoad=false` · runtime worktree 를 가리킨다.
+🔴 **이번 PR 에서 plist 를 쓰지도 load 하지도 않았다** —
+등록은 되돌리기 어려운 쪽이고, 실제로 은퇴시킨 job 2개가 파일이 남아 있어 되살아난 적이 있다.
+🔴 댓글 회차는 하루 1회이고 **글 발행량(d1~d10)과 묶지 않는다.**
+
+#### 대상 선정 — 한 함수, 두 호출부
+
+🔴 shadow planner(`persona:comment-plan`)와 Queue CLI(`persona:comment-queue`)는
+**`scripts/lib/persona-comment-targets.ts` 의 `materializeTargets` 하나**를 부른다.
+
+앞선 판은 둘이 각자 적어 두었고 곧 갈라졌다 — shadow 는 생활사 축 8개를 넘겼는데
+Queue 는 `noGoTopics` 하나만 넘겨 같은 planner 가 **다른 대상**을 뽑았고,
+열린 Queue 를 보는 열쇠도 서로 달랐다. 호출부가 정하는 것은 상한뿐이다.
+
+DB 읽기는 `persona-comment-source-db.ts` 가 맡고 판정 함수는 그것을 **주입받는다** —
+그래서 `persona:comment-engine-check` 가 가짜 source 로 실제 합성을 시험할 수 있다.
+
+#### 열린 Queue 판정 — 두 층위
+
+| 층위 | 묻는 것 | 열쇠 |
+|---|---|---|
+| planner | 이 **글**에 열린 것이 있나 | dedupKey 에서 뽑은 글 id |
+| 적재 직전 | 이 **조합**이 열려 있나 | `comment:<postId>:<persona>:<role>` |
+
+🔴 앞선 판은 dedupKey 집합에 `postId` 를 물어 **항상 false** 였다 — 중복 검사가 통째로 죽어 있었다.
+
+#### Queue CLI 세 모드
+
+| 명령 | 대상 계산 | provider | DB write |
+|---|---|---|---|
+| `npm run persona:comment-queue` | ✅ | 0 | 0 |
+| `npm run persona:comment-queue -- --call` | ✅ | 호출 | 0 |
+| `npm run persona:comment-queue -- --call` + 쓰기 플래그 | ✅ | 호출 | `PENDING` 최대 1건 |
+
+🔴 쓰기 플래그 **단독은 실패**다. 부르지 않고 적재할 후보 텍스트가 없기 때문이고,
+조용히 dry-run 으로 낮추면 "적재했다고 생각했는데 아무것도 없다" 가 생긴다.
+🔴 기본 회차도 **실제 대상을 계산한다** — 옛 판은 상한이 `0` 이라 아무것도 보지 못했다.
+
+#### 유료 호출 앞의 fail-closed
+
+`knownNames`(⑥-A) · `frequencyLookup`(②) · `priorTexts`(⑧) · `seedUseCount`(⑧) 를
+**읽지 못하면** provider 를 한 번도 부르지 않는다. 부른 뒤에 "잴 수 없다" 를 알게 되면
+돈은 이미 나갔고 표본도 못 쓴다.
+
+🔴 표본이 모자라 ⑧ 이 돌지 않는 것은 **읽기 실패가 아니다**(cold-start).
+그것까지 막으면 첫 후보를 영원히 만들 수 없다 — 호출은 열어 두고 사람 승인 경로로 보낸다.
+
+🔴 provider 로 나가는 조각(제목·본문 요약·기존 댓글 요약)은 **전부** Gate ① `sourceTexts`
+에 들어간다. 목록을 손으로 적지 않고 입력 객체에서 파생시킨다(`sourceTextsOf`).
+
+#### 생성 근거(provenance) — 전용 칼럼
+
+**고정 계약** (스키마가 바뀌어도 변하지 않는다)
+
+마이그레이션 `0024_persona_comment_provenance` 가 `PersonaApprovalQueue` 에
+`generatedModel` · `canonRunId` · `canonDigest` 를 **nullable** 로 더한다.
+
+**현재 상태** (2026-09-10 실측 — 🔴 이 줄만 상태다)
+
+| 항목 | 값 |
+|---|---|
+| production 적용 | ✅ **적용됨** (`APPLIED_AND_VALID`) |
+| 적용 방식 | `node scripts/apply-migration-0024.mjs --apply` 1회 · COMMIT 1 · ROLLBACK 0 |
+| 컬럼 | 22 → 25 (신규 3개 전부 nullable text) |
+| 인덱스 | 5 → 6 (`PersonaApprovalQueue_canonRunId_idx` 추가) |
+| 기존 4행의 근거 | **전부 null** → 자동 발행 불가 3건(열린 행 기준) |
+| 보호 테이블 row | 전부 불변 |
+
+🔴 **적용됐다고 댓글이 나가는 것이 아니다.** 이 칼럼은 "어느 모델이 만들었는가" 를
+적을 **자리**를 만든 것뿐이고, 공개 발행은 여전히 shadow·모델 미확정·상한 0·
+runner 미등록으로 막혀 있다(§9.5-e).
+
+🔴 옛 경로는 `storyRefs`·`topicTags` 에 문자열 표식을 끼워 넣었다 —
+사람이 편집하는 자리라 한 번 고치면 근거가 사라지거나 위조됐다. 그 표식은 제거했다.
+🔴 **기존 행은 전부 null 이다.** null 인 후보는 **자동 발행 대상이 아니다.**
+사람이 어드민에서 읽고 발행하는 것(`manual-admin`)은 가능하다 —
+근거가 없다는 것은 "자동으로 내보내도 되는가" 의 문제이지 "사람이 읽어도 되는가" 의 문제가 아니다.
+🔴 `manual-admin` 도 실행 모드·ratio·kill switch·일 상한은 **우회하지 못한다.**
+
+발행 트랜잭션은 저장된 근거를 확정 정본과 **대조**한다(`verifyProvenance`) —
+회차·digest·모델이 하나라도 다르면 막는다. 모양만 보지 않는다.
+
+#### 채점 artifact 공용 경로
+
+```
+npm run persona:comment-canon                      상태만
+npm run persona:comment-canon -- --promote=<runId>  공용 경로로 원자적 승격
+```
+
+🔴 앞선 판은 정본은 `~/Library/Application Support/soransoran/` 에 두고
+artifact 는 `process.cwd()/tmp` 에서 읽었다 — runtime worktree 에서는 그 경로가
+없거나 다른 것이라 **모델 확정을 재검증할 수 없었다.** 지금은 둘이 같은 자리에 있다.
+
+🔴 승격은 **불변**이다. 같은 내용이면 아무것도 바꾸지 않고, 다르면 거부한다.
+🔴 이 도구는 **winner 를 정하지 않는다.** 확정은 사람이 blind 표본을 채점한 뒤의 결정이다.
+
+#### runner 배치 진행
+
+🔴 옛 판은 허용치만큼만 읽어(`take: release.allowed`) 맨 앞 후보가 막히면
+그 회차가 **0건 발행**으로 끝났다. 다음 회차도 같은 후보를 맨 앞에서 다시 집으므로
+사실상 영구히 막힌다.
+
+지금은 결정적으로 정렬된 **유한 배치**(허용치 ×5, 상한 25)를 읽고
+막힌 것은 건너뛴다. **성공** 수가 허용치에 닿으면 멈추고, 못 채우면 사실대로 말한다.
+배치가 유한하므로 무한 루프가 없다.
+
+#### health
+
+`npm run persona:comment-health [-- --json]` — 화면과 JSON 이 **같은 객체**를 쓴다.
+오늘 상한 / 사용 / **남은 수량**을 이름으로 갈라 낸다 — 하나로 적어 두 뜻으로 읽혔다.
+승인 Queue 수 · bootstrap 수 · winner 상태 · runner 등록 상태 ·
+최근 성공/실패 · `blockReason` 을 한 번에 낸다.
+
+🔴 근거 칼럼(0024) 집계와 bootstrap 집계는 **따로 센다.** 한 쿼리로 묶으면
+칼럼이 아직 없는 DB 에서 bootstrap 집계까지 함께 죽는다 — 실제로 그랬다.
+
+### 9.5-d2 acceptance — Safety 와 Liveness 를 나눠 적는다
+
+🔴 **"643 pass" 는 acceptance 가 아니다.** 개수는 무엇이 지켜졌는지 말하지 않는다.
+앞선 판이 정확히 그랬다 — 검사는 다 통과했는데,
+
+* Gate 입력이 **있기만** 하고 사실이 아니었고(`adviceForbidden: false` 고정),
+* 조회 실패가 **정상 0건으로 위장**됐고(`recentRoleCounts` 가 `{}`),
+* `--check` 는 다른 테이블의 컬럼을 찾다가 **한 번도 끝까지 돈 적이 없었다.**
+
+셋 다 "source 에 이름이 있다" 로는 잡히지 않는다. 그래서 운영 경로별로 나눠 적는다.
+
+#### Safety — 일어나면 안 되는 일이 일어나지 않는가
+
+| 경로 | 지켜야 하는 것 | 어떻게 확인하는가 |
+|---|---|---|
+| 유료 호출 | Gate 입력을 **못 읽으면** 0회 | 가짜 source 주입 → `providerCalls === 0` |
+| 유료 호출 | 분산 근거를 못 읽으면 0회 | `recentRoleCounts → null` → 호출 0 |
+| 유료 호출 | 출처 문맥을 판정 못 하면 0회 | 게시판 미상 → 호출 0 |
+| 외부 전송 | 외부 원문(micro seed)은 나가지 않는다 | `judgePostAuthor` 가 provider 앞에서 막는다 |
+| 공개 write | shadow·inspect 에서 0건 | 트랜잭션 안에서 모드 재확인 |
+| 공개 write | `manual-admin` 도 모드·ratio·kill switch·상한을 우회 못 한다 | 재검사 blocker 가 주체보다 앞이다 |
+| 일 상한 | cap 을 넘지 않는다 | cap 2 → 2건 통과 · 3건째 차단 |
+| 생성 근거 | 위조·회차 불일치는 자동 발행 불가 | 정본 대조(`verifyProvenance`) |
+| migration | `--apply` 없이는 어떤 쓰기도 없다 | 분기 순서 검사 + CI |
+| migration | 어느 프로젝트인지 모르면 진행하지 않는다 | ref 판별 fail-closed |
+| migration | **COMMIT 전에** postcondition 을 검증한다 | 가짜 client · 순서 `BEGIN→SQL→OBSERVE→COUNT→COMMIT` |
+| migration | 검증 실패·관측 실패·row 변동이면 ROLLBACK | 실패 유형별 COMMIT 0 · ROLLBACK 1 |
+| migration | COMMIT 이 실패하면 성공으로 보고하지 않는다 | COMMIT 실패 주입 → `ok:false` |
+| migration | 기존 인덱스 5개가 하나라도 사라지면 잡는다 | 5개 각각 제거 → `PARTIAL_OR_INVALID` |
+
+#### Liveness — 되어야 하는 일이 막히지 않는가
+
+| 경로 | 되어야 하는 것 | 어떻게 확인하는가 |
+|---|---|---|
+| 대상 계산 | 기본 회차도 실제 대상을 만든다 | 가짜 source → 대상 1건 |
+| 대상 계산 | 분산을 못 읽어도 **보여는 준다** | 조회 실패 회차도 대상 1건 (호출만 0) |
+| Gate ⑧ | 표본 부족(cold-start)은 호출을 막지 않는다 | `fieldsComplete` 와 `gateReady` 를 나눈다 |
+| 발행 | 맨 앞 후보가 막혀도 다음으로 간다 | 배치 진행 — 성공 수로 센다 |
+| 발행 | 사람 승인 경로가 살아 있다 | bootstrap 후보는 `manual-admin` 으로 나간다 |
+| migration | 미적용을 **미적용이라고** 말한다 | `NOT_APPLIED` + controlled exit 1 |
+| health | 새 칼럼이 없어도 나머지 집계는 산다 | bootstrap 집계와 근거 집계를 분리 |
+| health | 칼럼이 생기면 근거 집계가 실제로 돈다 | 2026-09-10 적용 후 "근거 없음 3건" 실측 |
+
+🔴 **Safety 만 보면 아무것도 안 하는 시스템이 만점이다.** 둘을 함께 적는 이유다.
+
+### 9.5-d3 migration 실행 계약 — 네 상태를 구분한다
+
+```
+npm run check:migration-0024                 판정 계약 (🔴 DB 연결 0)
+node scripts/apply-migration-0024.mjs --check 실제 DB 상태 (🔴 read-only)
+```
+
+| 상태 | 뜻 | exit |
+|---|---|---|
+| `NOT_APPLIED` | 아직 적용하지 않았다 — **오류가 아니라 사실** | 1 |
+| `APPLIED_AND_VALID` | 컬럼 3개(nullable text) + 인덱스 · 기존 스키마 불변 | 0 |
+| `PARTIAL_OR_INVALID` | 일부만 · NOT NULL · 타입 다름 · 인덱스 없음 · 기존 컬럼 유실 | 1 |
+| `OBSERVATION_FAILED` | 다른 테이블 · metadata 를 못 읽음 · 연결 실패 | 1 |
+
+#### 적용 순서 — 🔴 COMMIT 전에 검증한다
+
+```
+BEGIN
+ → migration SQL
+ → 같은 transaction 안에서 state()·counts() 재관측
+ → judgeMigrationState(after) === APPLIED_AND_VALID 인가
+ → 기존 row count 가 하나도 안 변했는가
+ → 전부 통과 → COMMIT
+ → 하나라도 실패하거나 관측 불가 → ROLLBACK
+ → COMMIT 뒤 read-only 최종 확인
+```
+
+🔴 **2026-09-10 정정 — 검증이 COMMIT 뒤에 있었다.**
+옛 순서는 `BEGIN → SQL → COMMIT → 검증` 이었다. 검증이 실패해도 이미 COMMIT 한
+뒤라 되돌릴 방법이 없다 — 스크립트는 "적용 실패" 라고 말하면서 DB 는 바뀐 채로 남는다.
+가장 나쁜 결말이고, 그래서 **성공의 정의를 바꿨다**:
+"SQL 이 실행됐다" 가 아니라 **"COMMIT 전에 postcondition 이 검증됐다"** 다.
+
+| 실패 유형 | COMMIT | ROLLBACK |
+|---|---|---|
+| 정상 | 1 | 0 |
+| 신규 인덱스 누락 | 0 | 1 |
+| 신규 컬럼 모양 오류(NOT NULL·타입) | 0 | 1 |
+| 기존 row count 변동 | 0 | 1 |
+| 검증 query 실패(관측 불가) | 0 | 1 |
+| SQL 실패 | 0 | 1 |
+| COMMIT 실패 | 0 | 1 (성공 보고 0) |
+| `--check` · dry-run | 0 | 0 (BEGIN 도 0) |
+
+🔴 트랜잭션 제어는 `applyWithVerification` **한 곳**에만 있다. CLI 는 `--apply`
+뒤에만 그것을 부르고, `BEGIN`·`COMMIT` 을 직접 쓰지 않는다 — 두 곳이면 순서가 갈린다.
+🔴 순서와 commit/rollback 횟수는 **가짜 client 로 행동 검증**한다.
+source 문자열 검사는 보조일 뿐이다.
+
+🔴 **현재 상태 (2026-09-10)**: `APPLIED_AND_VALID` · exit 0.
+그 전까지는 `NOT_APPLIED` 였고, 그 사실을 exit 1 로 말했다.
+
+🔴 **미적용도 exit 0 이 아니다.** "확인했다" 는 뜻이지 "준비됐다" 는 뜻이 아니다.
+🔴 어떤 경로에서도 raw stack trace 로 끝나지 않는다 —
+앞선 판은 `PersonaApprovalQueue` 에 없는 `createdPostId` 를 조회하다
+PostgreSQL **42703** 으로 죽었고, 운영자가 본 것은 판정이 아니라 `parse_relation.c` 였다.
+그 이름들(`sourceRawContentId`·`draftTitle`·`draftBody`·`createdPostId`)은
+0023(`MicroSeedCandidate`)에서 베껴 온 것이다. 기존 스키마 정본은
+`scripts/lib/migration-0024-state.mjs` 의 `BASELINE_COLUMNS`(실측 22개)와
+`BASELINE_INDEXES`(**실측 5개**)다.
+
+🔴 인덱스 기준선도 한 번 틀렸다 — unique 3종만 적어 두어, 조회용 둘
+(`personaId_createdAt` · `status_createdAt`)이 사라져도 "기존 인덱스 그대로" 라고
+말했다. 목록에 적는 것과 판정이 보는 것은 다른 일이라, 지금은 5개를 하나씩 빼는
+행동 검사로 잠근다.
+
+🔴 판정은 순수 함수라 **production 에 쓰지 않고** 네 상태를 전부 시험한다.
+CI 는 그 함수만 돌린다 — DB 연결 0 · write 0.
+
+### 9.5-d4 Gate 입력 — 있음 ≠ 맞음
+
+| 입력 | 앞선 판 | 지금 |
+|---|---|---|
+| `adviceForbidden` | `false` 고정 → ⑤ 조언 검사가 한 번도 안 돎 | `FORBIDDEN_REACTION_ROLES` 정본에서 파생 |
+| `sourceIsCafeOperational` | `false` 고정 → ⑨ 가 올릴 근거를 못 받음 | 글·출처에서 판정 · **모르면 `null`** |
+| `recentRoleCounts` | 실패를 `{}` 로 삼킴 | 실패는 `null` · 유료 호출 차단 |
+
+🔴 `null`(판정 불가)은 `false` 로 보정하지 않는다. 보정한 값은 관문을 열지만
+아무것도 지키지 않는다. 판정할 수 없으면 **provider 앞에서 막는다.**
+
+출처 문맥 판정 정본은 `src/lib/persona-comment-source-context.ts` 하나다 —
+Gate ⑨(`persona-gate-source-marker.mts`)는 그 값을 **받아서** reject 로 올릴 뿐이고,
+스스로 판정하지 않는다고 이미 적어 두었는데 그 앞 단계가 없었다.
+
+### 9.5-e 실제 배선 — 구현됨 / 연결됨 / 실가동을 나눈다
+
+🔴 앞선 판은 계약을 만들었지만 **어느 것도 실제 write 경로에 닿지 않았다.**
+`recheckBeforePublish` 사용처는 fixture 뿐이었고, Queue CLI 는 `void planEnqueue` 로
+끝나는 stub 이었으며, runner 는 `publishCandidateTx` 를 import 조차 하지 않았다.
+
+| 축 | 구현됨 | 연결됨 | 실가동 |
+|---|---|---|---|
+| 발행 트랜잭션 재검사 | ✅ | ✅ `publishCandidateTx` 안에서 호출 | 🔴 조건 미충족 |
+| Serializable 격리 | ✅ | ✅ `isolationLevel` + maxWait/timeout | 🔴 |
+| Queue 적재 파이프라인 | ✅ | ✅ `runEnqueuePipeline` | 🔴 모델 미확정 |
+| runner 발행 | ✅ | ✅ `publishCandidateTx` import | 🔴 조건 미충족 |
+| 후보 provenance | ✅ | ✅ 적재 시 기록 · tx 에서 재검증 | 🟡 칼럼 적용됨(0024) · 기존 행 null · 모델 미확정이라 적재 0 |
+| schedule 등록 | ✅ 템플릿 | 🔴 **미등록** | 🔴 |
+
+#### 글로벌 일일 상한
+
+🔴 조건부 `updateMany` 는 **같은 후보**의 경쟁만 막는다. 서로 다른 후보 2건이
+같은 스냅샷에서 `publishedToday=0` 을 읽으면 둘 다 통과했다 —
+상한이 1 인데 2건이 나간다. 그래서 **Serializable** 로 막는다.
+직렬화 충돌(P2034)은 **재시도하지 않는다** — 재시도는 막으려던 그 일을 다시 하는 것이다.
+
+#### 실행 주체
+
+🔴 bootstrap 후보는 `automation` 이 발행할 수 없고 **어드민 수동 발행만** 가능하다.
+그 근거는 server action 의 `requireAdmin()` 통과이고, 호출부의 문자열 주장이 아니다.
+사람이 눌러도 bootstrap governor(하루 1건 · 총 상한 · prior 도달)는 그대로 본다.
+🔴 이 예외가 없으면 Queue 에는 들어가는데 어느 경로로도 나갈 수 없는 **dead-end** 가 된다.
+
+#### 🔴 blocker — production 에 적용하지 않은 것
+
+후보 provenance 를 `storyRefs` · `topicTags` 문자열 표식으로 넣었다.
+**전용 컬럼(`generatedModel` · `canonRunId` · `canonDigest`)이 있어야 정확하다** —
+그것은 `prisma migrate` 가 아니라 `/prisma-guide` 절차의 production migration 이고,
+이번 PR 에서 **임의로 적용하지 않았다.** 창업자 승인이 필요한 blocker다.
 
 ### 9.6 9관문 Gate — 🔴 "결과 9개" 와 "실제 실행" 을 나눈다
 

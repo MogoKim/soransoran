@@ -41,3 +41,21 @@ export const FORBIDDEN_REACTION_ROLES: readonly string[] = ['advice', 'caution']
  *    반박은 첫 댓글로 붙을 자리가 아니고, 정보 제공은 조언 금지선에 너무 가깝다.
  */
 export const COMMENT_REACTION_ROLES: readonly ReactionType[] = ['empathy', 'question', 'experience']
+
+/**
+ * 🔴 **Gate ⑤ 의 `adviceForbidden` 은 이 정본에서 파생한다.**
+ *
+ *    앞선 판은 대상 materializer 가 `adviceForbidden: false` 를 **고정**으로 넘겼다.
+ *    필드가 채워졌으니 완비 판정은 통과했지만, 그 `false` 때문에 ⑤ 의 조언 검사가
+ *    **한 번도 돌지 않았다** — 전면 금지라고 적어 둔 바로 그 축이 꺼져 있었다.
+ *
+ *    금지 목록을 여기 두고 함수로 파생시킨다. 복제 상수를 만들지 않는다 —
+ *    만들면 한쪽만 고쳐지는 날이 온다.
+ *
+ *    persona 가 자기 금지 목록에 `advice` 를 더 적어 두었어도 결과는 같다(true).
+ *    합집합으로 보는 이유는 정본이 좁아질 때도 persona 쪽이 살아남게 하기 위해서다.
+ */
+export function isAdviceForbidden(personaForbiddenRoles: readonly string[] = []): boolean {
+  return FORBIDDEN_REACTION_ROLES.includes('advice')
+    || personaForbiddenRoles.includes('advice')
+}

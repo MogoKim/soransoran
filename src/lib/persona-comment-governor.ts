@@ -192,8 +192,27 @@ export type ReadinessFacts = {
   shadowLimit?: number
 }
 
+/**
+ * 🔴 **세 수를 이름으로 나눈다** (2026-09-09 정정).
+ *
+ *    옛 판은 `publicAllowedToday` 하나였고 그 값은 **남은 수량**이었다.
+ *    그런데 트랜잭션이 그것을 "총 상한" 으로 읽고 오늘 사용량과 비교했다 —
+ *    cap 2 에서 1건을 쓴 뒤 남은 1건이 있는데도 막혔다(실측).
+ *    같은 이름이 두 뜻을 가지면 반드시 한쪽이 틀린다.
+ */
+export type DailyAllowance = {
+  /** 오늘 총 상한 (ratio 여유와 일 cap 중 작은 값) */
+  cap: number
+  /** 오늘 이미 쓴 수 */
+  used: number
+  /** 🔴 남은 수량 — 트랜잭션이 쓰는 것은 **이것**이다 */
+  remaining: number
+}
+
 export type ReadinessVerdict = {
-  /** 🔴 **공개** Comment write 가 오늘 몇 건까지 가능한가 */
+  /** 🔴 오늘 허용량을 셋으로 나눠 준다 */
+  allowance: DailyAllowance
+  /** @deprecated `allowance.remaining` 을 쓴다 — 이름이 두 뜻으로 읽혔다 */
   publicAllowedToday: number
   /**
    * 🔴 **내부 shadow 로 몇 건까지 만들어 볼 것인가.**
@@ -242,10 +261,19 @@ export function judgeReadiness(f: ReadinessFacts): ReadinessVerdict {
     blockers.push('kill switch 상태를 읽지 못했다 — 상한 0(fail-closed)')
   }
 
+  const used = isCount(f.publishedToday) ? f.publishedToday : 0
+  // 🔴 오늘 총 상한 — 일 cap 과 ratio 여유 중 작은 값
+  const dayCap = !capOk ? 0 : Math.min(cap, ratio.headroom + used)
   const capLeft = !capOk || !isCount(f.publishedToday)
     ? 0
     : Math.max(0, cap - f.publishedToday)
-  const publicAllowedToday = blockers.length > 0 ? 0 : Math.min(capLeft, ratio.headroom)
+  const remaining = blockers.length > 0 ? 0 : Math.min(capLeft, ratio.headroom)
+  const allowance: DailyAllowance = {
+    cap: blockers.length > 0 ? 0 : dayCap,
+    used,
+    remaining,
+  }
+  const publicAllowedToday = remaining
 
   // 🔴 release 가 아니면 공개 write 는 언제나 불가다. 상한이 남아 있어도 마찬가지다
   const canPublish = f.mode === 'release' && publicAllowedToday > 0
@@ -261,11 +289,12 @@ export function judgeReadiness(f: ReadinessFacts): ReadinessVerdict {
     : Math.max(0, Math.min(isCount(wanted) ? wanted : 0, DEFAULT_SHADOW_LIMIT))
 
   return {
+    allowance,
     publicAllowedToday,
     shadowLimit,
     canPublish,
     blockers,
-    detail: `ratio 여유 ${ratio.headroom} · 일 cap 남음 ${capLeft}`
-      + ` → 공개 ${publicAllowedToday}건 · shadow ${shadowLimit}건`,
+    detail: `ratio 여유 ${ratio.headroom} · 상한 ${allowance.cap} · 사용 ${allowance.used}`
+      + ` → 남은 ${allowance.remaining}건 · shadow ${shadowLimit}건`,
   }
 }

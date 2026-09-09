@@ -1485,6 +1485,20 @@ model PersonaApprovalQueue {
   /// 🔴 중복 적재 방지. persona + 정규화 본문 해시
   dedupKey String @unique
 
+  /// 🔴 **생성 근거 (0024).** 어느 모델이 어느 확정 회차로 만들었는가.
+  ///
+  ///    옛 경로는 `storyRefs`·`topicTags` 에 문자열 표식을 끼워 넣었다 —
+  ///    그 배열은 다른 뜻으로 쓰이는 자리이고 표식은 누구나 흉내 낼 수 있다.
+  ///
+  /// 🔴 **기존 행은 전부 null 이다.** null 인 후보는 자동 발행 대상이 아니다 —
+  ///    어느 모델이 만들었는지 모르는 것을 자동으로 내보내지 않는다.
+  ///    사람이 어드민에서 읽고 발행하는 것은 별개다(manual-admin).
+  generatedModel String?
+  /// 확정 정본이 가리키던 유료 회차
+  canonRunId     String?
+  /// 🔴 확정 정본 자체의 digest — 정본이 바뀌면 이 후보의 근거도 바뀐 것이다
+  canonDigest    String?
+
   /// 🔴 자유 텍스트가 아니라 코드다. 집계되지 않으면 개선 근거가 되지 못한다
   declineReason String?
   decidedBy     String?
@@ -1496,6 +1510,8 @@ model PersonaApprovalQueue {
 
   @@index([status, createdAt])
   @@index([personaId, createdAt])
+  /// 🔴 어느 회차의 후보인지 묶어 본다. UNIQUE 가 아니다 — 한 회차에 여러 후보가 나온다
+  @@index([canonRunId])
 }
 
 model PersonaGlobalSwitch {

@@ -389,83 +389,26 @@ const notRunLine = [...notRunCount.entries()]
 console.log(`\n  🔴 미실행 관문: ${notRunLine === '' ? '없음' : notRunLine}`)
 console.log('     판정부는 있고 대조 집합이 없다 — "돌지 않았다" 를 pass 로 보고하지 않는다')
 
-// ══ 승인 대기열 적재 (--enqueue) ═══════════════════
+// ══ 승인 대기열 적재 — 🔴 이 경로는 닫혔다 ═══════════════════
 //
-// 🔴 **정책 — 무엇을 대기열에 넣는가**
-//    pass · review 만 넣는다. regenerate · reject 는 넣지 않는다.
+// 🔴 **왜 막았나** (2026-09-09).
 //
-//    대기열은 "사람이 읽고 결정할 것" 의 집합이다(Architecture §13).
-//    regenerate 는 "다시 만들어라" 이지 "사람이 판단하라" 가 아니다.
-//    그것까지 PENDING 으로 넣으면 대기열이 재생성 대상으로 오염되고,
-//    PENDING 수가 실제 검토 부담을 나타내지 못한다 —
-//    🔴 대기열은 계측 장치다(§15). 분모가 틀리면 계측이 무의미하다.
+//    이 스크립트의 `--enqueue` 는 `personaApprovalQueue.create` 를 직접 불렀다.
+//    그래서 모델 확정·대상 글 개인정보·중복 열쇠·Gate notRun 같은
+//    새 적재 계약을 **전부 우회**했다 — 계약이 있어도 이 문 하나로 새어 나간다.
 //
-//    regenerate 통계는 이 dry-run 의 집계로 이미 남는다. DB 에 쌓을 이유가 없다.
+//    write 경로는 하나여야 한다. 지금 정본은 `npm run persona:comment-queue` 다.
 if (ENQUEUE) {
-  console.log('\n══ 승인 대기열 적재 (--enqueue) ══')
-
-  // 🔴 테이블이 없으면 조용히 넘어가지 않는다
-  const tableRows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-    SELECT COUNT(*)::bigint AS n FROM information_schema.tables
-     WHERE table_schema = 'public' AND table_name = 'PersonaApprovalQueue'`
-  if (Number(tableRows[0]?.n ?? 0) === 0) {
-    await prisma.$disconnect()
-    fail('PersonaApprovalQueue 테이블이 없습니다. 0018 migration 을 먼저 적용하세요.')
-  }
-
-  const personaIdByCode = new Map(personas.map((p) => [p.code, p.id]))
-  // 🔴 중복 적재 방지 — persona + 정규화 본문. 같은 후보를 두 번 넣지 않는다
-  const dedupKeyOf = (personaId: string, text: string): string =>
-    createHash('sha256').update(`${personaId}::${normalizeN2(text)}`).digest('hex').slice(0, 32)
-
-  let queued = 0
-  let skippedGate = 0
-  let skippedDup = 0
-  for (const [i, v] of verdicts.entries()) {
-    const c = candidates[i]
-    if (c === undefined) continue
-    // 🔴 대기열에 들어가는 것은 pass · review 뿐이다
-    if (v.status !== 'pass' && v.status !== 'review') { skippedGate++; continue }
-    const personaId = personaIdByCode.get(v.personaCode)
-    if (personaId === undefined) { skippedGate++; continue }
-    const dedupKey = dedupKeyOf(personaId, c.text)
-    const exists = await prisma.personaApprovalQueue.findUnique({ where: { dedupKey }, select: { id: true } })
-    if (exists !== null) { skippedDup++; continue }
-    await prisma.personaApprovalQueue.create({
-      data: {
-        personaId,
-        status: 'PENDING',
-        candidateText: c.text,
-        reactionType: v.reactionType,
-        gateStatus: v.status,
-        // 🔴 관문 코드 · 결과 · 근거 문구만. 원문 조각은 판정부가 이미 걸러 둔다
-        gateResults: v.gates as unknown as object,
-        aiToneTags: [...v.aiToneTags],
-        // 🔴 sourceTexts 는 저장하지 않는다. storyRefs 참조만 둔다
-        storyRefs: [],
-        topicTags: [],
-        ...((c.seedRef ?? '').trim() !== '' ? { seedRef: (c.seedRef ?? '').trim() } : {}),
-        dedupKey,
-      },
-    })
-    queued++
-  }
-  ok(`적재 ${queued}건 · Gate 미통과 제외 ${skippedGate}건 · 중복 ${skippedDup}건`)
-  const total = await prisma.personaApprovalQueue.count()
-  const pending = await prisma.personaApprovalQueue.count({ where: { status: 'PENDING' } })
-  ok(`대기열 총 ${total}건 · PENDING ${pending}건`)
+  console.log('\n🔴 --enqueue 는 이 스크립트에서 제거됐다.')
+  console.log('   이 경로는 모델 확정·개인정보·중복·Gate 계약을 우회했다.')
+  // 🔴 이 파일에 발행 플래그 문자열을 두지 않는다 — 가드가 그것을 발행 경로로 읽는다.
+  //    사용법은 그 스크립트가 스스로 적는다.
+  console.log('   적재 정본: npm run persona:comment-queue (사용법은 그 스크립트가 적는다)')
+  console.log('   🔴 DB write 0\n')
+  await prisma.$disconnect()
+  process.exit(1)
 }
 
-if (WRITE_OUT) {
-  mkdirSync('tmp', { recursive: true })
-  // 🔴 저장본에도 본문을 넣지 않는다
-  writeFileSync(OUTPUT_PATH, JSON.stringify(verdicts, null, 2) + '\n', 'utf-8')
-  console.log(`\n  판정 결과 저장: ${OUTPUT_PATH} (gitignored · 본문 미포함)`)
-}
-
-console.log(
-  ENQUEUE
-    ? '\n🟡 대기열 적재만 했습니다. 발행 0 · LLM 0 · active 전환 0 · Post/Comment 변경 0.\n'
-    : '\n🟡 dry-run 입니다. DB write 0 · 발행 없음 · 적재하려면 --enqueue 를 붙이세요.\n',
-)
+console.log('\n🟡 dry-run 입니다. DB write 0 · 발행 없음.')
+console.log('   적재는 npm run persona:comment-queue 로 한다.\n')
 await prisma.$disconnect()

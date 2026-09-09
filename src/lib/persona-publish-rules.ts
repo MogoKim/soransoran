@@ -49,6 +49,13 @@ export type PublishBlockCode =
   | 'WEEKLY_CAP_UNSET'
   | 'DAILY_CAP_EXCEEDED'
   | 'WEEKLY_CAP_EXCEEDED'
+  /**
+   * 🔴 댓글 레인 재검사가 막았다 (2026-09-09).
+   *    ratio 30% · 실회원 · 생활사·No-Go · 저장된 Gate · bootstrap 은
+   *    이 파일이 보는 축이 아니다 — `recheckBeforePublish` 가 트랜잭션 안에서 본다.
+   *    코드를 캐스팅으로 밀어 넣지 않고 여기 정식으로 둔다.
+   */
+  | 'COMMENT_RECHECK'
 
 export type PublishBlock = { code: PublishBlockCode; message: string }
 

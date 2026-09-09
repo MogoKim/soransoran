@@ -47,6 +47,23 @@ export const POST_VISIBILITY_SELECT = {
   indexPromotionBlocked: true,
 } as const satisfies Prisma.PostSelect
 
+/**
+ * 🔴 **본문이 외부 커뮤니티에서 온 것인가** — 외부 모델 전송 정책이 쓴다 (2026-09-09).
+ *
+ *    Persona 댓글 생성은 대상 글의 본문을 프롬프트에 싣는다. 그때 물어야 하는 것은
+ *    "이 글이 우리가 쓴 것인가" 이고, micro seed 글은 **남의 커뮤니티 원문**이다.
+ *    가져온 글을 다시 외부로 보내지 않는다.
+ *
+ * 🔴 이 판정을 여기 두는 이유: `isMicroSeed` 축은 이 파일이 소유한다(C-2).
+ *    호출부가 직접 비교하면 판정이 갈라지고, 한 곳을 고쳐도 나머지가 따라오지 않는다 —
+ *    우나어에서 49곳 9파일로 확산됐던 그 구조다.
+ *
+ * 🔴 노출 판정이 아니다. 화면·검색·추천에 쓰지 않는다.
+ */
+export function isExternalSourcedBody(p: PostVisibilityInput): boolean {
+  return p.isMicroSeed
+}
+
 // ─────────────────────────────────────────────────────────
 // 축 1 — 커뮤니티 노출
 // ─────────────────────────────────────────────────────────

@@ -27,25 +27,17 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 
 import { PrismaClient } from '@prisma/client'
 
-import {
-  buildCommentInput, judgeInputDiversity, voiceEvidenceFromAssets,
-  type CommentInput,
-} from '../src/lib/persona-comment-input'
+import { judgeInputDiversity, type CommentInput } from '../src/lib/persona-comment-input'
 import {
   judgeRatio, judgeReadiness, readRunMode, windowFromRows,
   RATIO_WINDOW_DAYS, type CommentWindow,
 } from '../src/lib/persona-comment-governor'
-import {
-  planCommentDistribution, type PlannerPersona, type PlannerPost,
-} from '../src/lib/persona-comment-planner'
-import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
-import { buildPromptFromInput, describeGateInput, toGateInput } from './lib/persona-comment-bridge'
+import { buildPromptFromInput, describeGateInput } from './lib/persona-comment-bridge'
+import { gateInputOf, materializeTargets } from './lib/persona-comment-targets'
+import { makeDbTargetSource } from './lib/persona-comment-source-db'
 import {
   judgeGateInputs, judgeRealPostExternalCall, REAL_POST_EXTERNAL_CALL_ALLOWED,
 } from '../src/lib/persona-comment-gate-report'
-import pg from 'pg'
-
-import { loadUnaoReadonlyUrl } from './lib/voice-unao-readonly.mjs'
 import { keyStatus, type ProviderModel } from './lib/voice-m3-provider.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -122,116 +114,39 @@ console.log(`  🟡 shadow   ${readiness.shadowLimit}건 — ratio 와 무관하
 for (const b of readiness.blockers) console.log(`     · ${b}`)
 
 // ── ③ 대상 글·Persona 실측 ──
-const postRows = await prisma.post.findMany({
-  select: {
-    id: true, status: true, title: true, content: true, boardType: true,
-    publishAt: true, createdAt: true, category: true,
-    persona: { select: { code: true } },
-    comments: {
-      where: { isDeleted: false },
-      select: { commentOrigin: true, personaId: true, content: true },
-    },
-  },
-})
-const openTargets = new Set(
-  (await prisma.personaApprovalQueue.findMany({
-    where: { status: { in: ['PENDING', 'APPROVED'] } },
-    select: { targetPostId: true },
-  })).map((q) => q.targetPostId).filter((x): x is string => x !== null),
-)
-
-const posts: PlannerPost[] = postRows.map((p) => ({
-  id: p.id,
-  status: p.status,
-  authorPersonaCode: p.persona?.code ?? null,
-  memberComments: p.comments.filter((c) => c.commentOrigin === 'MEMBER' || c.commentOrigin === 'GUEST').length,
-  personaComments: p.comments.filter((c) => c.commentOrigin === 'PERSONA').length,
-  hasOpenQueue: openTargets.has(p.id),
-  publishedAtMs: (p.publishAt ?? p.createdAt)?.getTime() ?? null,
-  // 🔴 가입인사는 대화를 여는 자리가 아니다
-  onHold: p.category === '가입인사',
-  title: p.title,
-  body: p.content,
-}))
-
-const personaRows = await prisma.persona.findMany({
-  select: {
-    id: true, code: true, status: true, identity: true, voiceCore: true, voiceVariations: true,
-    ageBand: true, region: true, lifeStage: true, noGoTopics: true, noGoExpressions: true,
-    forbiddenReactionRoles: true,
-    // 🔴 실회원 판별 정본에 필요한 **두 값을 모두** 넣는다.
-    //    하나라도 빠지면 judgeRealMember 가 unknown 으로 막는다(그것이 맞는 동작이다).
-    user: { select: { providerId: true, _count: { select: { accounts: true } } } },
-    comments: { where: { isDeleted: false }, select: { content: true, createdAt: true } },
-  },
-})
-
-/** identity JSON 에서 생활사 축을 읽는다. 🔴 없으면 undefined 로 둔다 — 0 으로 보정하지 않는다 */
-const lifeOf = (identity: unknown): PlannerPersona['life'] => {
-  const id = (identity ?? {}) as Record<string, unknown>
-  const num = (v: unknown): number | null | undefined => (typeof v === 'number' ? v : undefined)
-  const str = (v: unknown): string | null | undefined => (typeof v === 'string' ? v : undefined)
-  const bands = Array.isArray(id.childrenAgeBands)
-    ? (id.childrenAgeBands as unknown[]).filter((x): x is string => typeof x === 'string')
-    : undefined
-  return {
-    maritalStatus: str(id.maritalStatus),
-    childrenCount: num(id.childrenCount),
-    childrenAgeBands: bands as PlannerPersona['life']['childrenAgeBands'],
-    parentCare: str(id.parentCare),
-    menopauseStatus: str(id.menopauseStatus),
-    workStatus: str(id.workStatus),
-    economicStatus: str(id.economicStatus),
-    region: str(id.region),
-    noGoTopics: [],
-    voiceLength: undefined,
-  }
-}
-
-const personas: PlannerPersona[] = personaRows.map((p) => ({
-  code: p.code,
-  status: p.status,
-  // 🔴 판정은 judgeRealMember 하나가 한다. 여기서 비교하지 않는다
-  realMember: {
-    accountCount: p.user?._count.accounts ?? null,
-    providerId: p.user?.providerId ?? null,
-  },
-  seedComplete: p.identity !== null && p.voiceCore !== null && p.lifeStage !== null && p.lifeStage.trim() !== '',
-  forbiddenReactionRoles: p.forbiddenReactionRoles,
-  recentComments: p.comments.filter((c) => c.createdAt >= windowStart).length,
-  life: { ...lifeOf(p.identity), noGoTopics: p.noGoTopics },
-}))
-
 /**
- * 🔴 **최근 역할 사용량을 읽어 넘긴다.**
- *    넘기지 않으면 프로세스가 새로 뜰 때마다 `empathy` 부터 다시 고른다 —
- *    회차가 바뀌어도 같은 역할만 나가고, 커뮤니티는 응원봇 하나를 보게 된다.
+ * 🔴 **Queue CLI 와 같은 함수를 쓴다** (2026-09-09 정정).
+ *
+ *    옛 판은 이 스크립트가 자기 몫의 대상 선정을 따로 적어 두었고,
+ *    Queue CLI 도 자기 것을 따로 적어 두었다. 두 벌은 곧 갈라졌다 —
+ *    이쪽은 생활사 축 8개를 넘겼고 저쪽은 하나만 넘겨서, 같은 planner 가
+ *    **다른 대상**을 뽑았다. 열린 Queue 를 보는 열쇠도 서로 달랐다.
+ *
+ *    이제 재료는 `materializeTargets` 한 곳에서 나온다. 이 스크립트가 정하는 것은
+ *    상한(`shadowLimit`)뿐이다.
  */
-const recentRoleCounts = await (async (): Promise<Record<string, number>> => {
-  const counts: Record<string, number> = {}
-  try {
-    for (const q of await prisma.personaApprovalQueue.findMany({
-      where: { createdAt: { gte: windowStart } },
-      select: { reactionType: true },
-    })) counts[q.reactionType] = (counts[q.reactionType] ?? 0) + 1
-  } catch { /* 못 읽으면 빈 채로 — 편중 방지가 약해질 뿐 상한은 건드리지 않는다 */ }
-  return counts
-})()
-
-const plan = planCommentDistribution({
-  posts, personas,
-  reactionRoles: COMMENT_REACTION_ROLES,
+const material = await materializeTargets({
+  source: makeDbTargetSource({ prisma, windowStart }),
   // 🔴 shadow 회차는 shadowLimit 로 돈다. 공개 상한이 0 이어도 계획은 만들어진다
-  limit: WANT_SHADOW ? readiness.shadowLimit : readiness.publicAllowedToday,
+  limit: WANT_SHADOW ? readiness.shadowLimit : readiness.allowance.remaining,
   nowMs,
-  recentRoleCounts,
+  windowMs: RATIO_WINDOW_DAYS * 86_400_000,
+  digestChars: DIGEST_CHARS,
+  commentDigestChars: COMMENT_DIGEST_CHARS,
 })
+const plan = material.plan
 
-console.log(`\n  공개 글 ${posts.filter((p) => p.status === 'PUBLISHED').length}건`
-  + ` · 살아 있는 댓글 0개 ${posts.filter((p) => p.status === 'PUBLISHED' && p.memberComments + p.personaComments === 0).length}건`)
-console.log(`  Persona ${personas.length}명 · active ${personas.filter((p) => p.status === 'active').length}`
-  + ` · seed 완전 ${personas.filter((p) => p.seedComplete).length}`)
-console.log(`  최근 역할 사용  ${Object.keys(recentRoleCounts).length === 0 ? '(없음)' : Object.entries(recentRoleCounts).map(([k, v]) => `${k}=${v}`).join(' · ')}`)
+console.log(`\n  공개 글 ${material.counts.posts}건`
+  + ` · 살아 있는 댓글 0개 ${material.counts.postsWithNoComments}건`)
+console.log(`  Persona ${material.counts.personas}명 · active ${material.counts.personasActive}`
+  + ` · seed 완전 ${material.counts.personasSeedComplete}`)
+// 🔴 "못 읽었다" 와 "0건" 을 갈라 적는다 — 같은 화면 글자로 뭉개면 다시 삼킨다
+console.log(`  최근 역할 사용  ${material.recentRoleCounts === null
+  ? '🔴 읽지 못했다 — 편중 방지를 신뢰할 수 없다'
+  : Object.keys(material.recentRoleCounts).length === 0
+    ? '(0건)'
+    : Object.entries(material.recentRoleCounts).map(([k, v]) => `${k}=${v}`).join(' · ')}`)
+for (const b of material.providerBlockers) console.log(`  🔴 유료 호출 차단: ${b}`)
 
 console.log(`\n  ── 계획 ${plan.items.length}건`)
 for (const it of plan.items) {
@@ -280,130 +195,42 @@ if (WANT_SHADOW) {
   console.log(`     provider key ${key.envName} ${key.present ? '있음' : '없음'} — 🔴 이 도구는 부르지 않는다`)
 
   /**
-   * 🔴 **Gate 입력을 여기서 갖춘다.**
-   *    빠뜨리면 관문이 `notRun` 인 채로 9개가 채워져 "9관문 통과" 처럼 읽힌다.
+   * 🔴 **Gate 입력은 materializer 가 이미 갖췄다.**
+   *    여기서 다시 읽지 않는다 — 두 번 읽으면 두 값이 갈리고,
+   *    갈린 쪽으로 판정한 회차가 "관문이 돈다" 고 잘못 말하게 된다.
    */
-  // ⑥-A 회원 표시명 — 🔴 값은 찍지 않는다. `[]` 와 `undefined` 를 구별해 넘긴다
-  const knownNames = await (async (): Promise<string[] | undefined> => {
-    try {
-      const users = await prisma.user.findMany({ select: { nickname: true, name: true } })
-      return users.flatMap((u) => [u.nickname, u.name])
-        .filter((v): v is string => v !== null && v.trim() !== '')
-    } catch { return undefined }
-  })()
-  console.log(`     ⑥-A 회원 표시명 ${knownNames === undefined ? '🔴 조회 실패(undefined)' : `${knownNames.length}건`}`)
+  const withNames = material.gaps.filter((g) => g.startsWith('knownNames')).length === 0
+  const withCorpus = material.gaps.filter((g) => g.startsWith('frequencyLookup')).length === 0
+  console.log(`     ⑥-A 회원 표시명 ${withNames ? '조회함' : '🔴 조회 실패(undefined)'}`)
+  console.log(`     ② 댓글 코퍼스 ${withCorpus ? '읽음 (원문 미저장)' : '🔴 없음 — ② 가 notRun 이 된다'}`)
+  for (const g of material.gaps) console.log(`       빠짐: ${g}`)
 
-  /**
-   * ② 댓글 코퍼스 빈도 — 🔴 우나어 read-only 에서 읽는다. 원문은 저장하지 않는다.
-   *    dry-run 이 쓰는 것과 **같은 코퍼스**(댓글)다 — 본문 코퍼스로 재면
-   *    "고생하셨어요" 같은 흔한 말이 고유 표현이 된다.
-   */
-  const corpus = await (async (): Promise<{ lookup: (n: string) => number; size: number } | null> => {
-    const url = ((): string | null => { try { return loadUnaoReadonlyUrl() } catch { return null } })()
-    if (url === null) return null
-    try {
-      const unao = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } })
-      await unao.connect()
-      const { rows } = await unao.query<{ topComments: unknown }>(
-        'SELECT "topComments" FROM "CafePost" WHERE "topComments" IS NOT NULL LIMIT 3000',
-      )
-      await unao.end()
-      const bodies: string[] = []
-      for (const r of rows) {
-        let arr: unknown = r.topComments
-        if (typeof arr === 'string') { try { arr = JSON.parse(arr) } catch { continue } }
-        if (!Array.isArray(arr)) continue
-        for (const item of arr) {
-          if (item === null || typeof item !== 'object') continue
-          const body = (item as Record<string, unknown>).content
-          if (typeof body === 'string' && body.trim() !== '') bodies.push(body.replace(/\s+/gu, ''))
-        }
-      }
-      return {
-        size: bodies.length,
-        lookup: (ngram: string): number => {
-          let n = 0
-          for (const b of bodies) if (b.includes(ngram)) { n += 1; if (n > 6) break }
-          return n
-        },
-      }
-    } catch { return null }
-  })()
-  console.log(`     ② 댓글 코퍼스 ${corpus === null ? '🔴 없음 — ② 가 notRun 이 된다' : `${corpus.size}건 (원문 미저장)`}`)
-
-  const postById = new Map(postRows.map((p) => [p.id, p]))
-  const personaById = new Map(personaRows.map((p) => [p.code, p]))
-  const inputs: CommentInput[] = []
+  const inputs: CommentInput[] = material.targets.map((t) => t.target.input)
   const records: ShadowRecord[] = []
-  const blockedInput: string[] = []
 
-  for (const item of plan.items) {
-    const pr = postById.get(item.postId)
-    const pe = personaById.get(item.personaCode)
-    if (pr === undefined || pe === undefined) continue
-
-    const voice = voiceEvidenceFromAssets({
-      voiceCore: pe.voiceCore,
-      voiceVariations: pe.voiceVariations,
-      recentTexts: pe.comments.map((c) => c.content),
-    })
-    const built = buildCommentInput({
-      persona: {
-        code: pe.code, ageBand: pe.ageBand, region: pe.region, lifeStage: pe.lifeStage,
-        identity: pe.identity, voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations,
-        noGoTopics: pe.noGoTopics, noGoExpressions: pe.noGoExpressions,
-        forbiddenReactionRoles: pe.forbiddenReactionRoles,
-      },
-      post: {
-        id: pr.id,
-        title: pr.title,
-        // 🔴 이것은 요약이 아니라 **원문 앞부분**이다. 그래서 외부로 나가지 않는다
-        bodyDigest: pr.content.slice(0, DIGEST_CHARS),
-        boardLabel: String(pr.boardType),
-        existingCommentDigests: pr.comments.map((c) => c.content.slice(0, COMMENT_DIGEST_CHARS)),
-      },
-      reactionRole: item.reactionRole,
-      voice,
-      memory: { has: false, note: '' },
-    })
-    if (!built.ok) {
-      for (const b of built.blocks) blockedInput.push(b.code)
-      continue
-    }
-    inputs.push(built.input)
-
-    const prompt = buildPromptFromInput(built.input, pe.comments.map((c) => c.content))
+  for (const t of material.targets) {
+    const input = t.target.input
+    /**
+     * 🔴 **자기 발화로 표지를 뽑는다.** 가짜 표지를 이전 발화로 세지 않는다 —
+     *    그것은 발화가 아니라 글자이고, ⑧ 은 그것으로 말끝·시작어절을 잰다.
+     */
+    const prompt = buildPromptFromInput(input, t.recentTexts)
 
     /**
-     * 🔴 **호출은 하지 않지만 Gate 입력은 갖춘다.**
-     *    후보 텍스트가 없으므로 Gate 를 돌릴 수는 없다 — 대신 "돌릴 수 있는 상태인가" 를
-     *    `judgeGateInputs` 로 판정한다. 이것이 `notRun` 을 미리 아는 방법이다.
+     * 🔴 후보 텍스트가 없으므로 Gate 를 돌릴 수는 없다 —
+     *    대신 "돌릴 수 있는 상태인가" 를 `judgeGateInputs` 로 판정한다.
+     *    이것이 `notRun` 을 미리 아는 방법이다.
      */
-    /**
-     * 🔴 **가짜 표지를 이전 발화로 세지 않는다.**
-     *    옛 판은 배치 prior 자리에 뜻 없는 표지 문자열을 밀어 넣었다.
-     *    그것은 발화가 아니라 글자이고, ⑧ 은 그것으로 말끝·시작어절을 잰다 —
-     *    표본 수만 부풀려 관문이 돈 것처럼 보이게 만든다.
-     *    이 회차는 후보 텍스트를 만들지 않으므로 **배치 prior 도 없다.**
-     */
-    const prior = pe.comments.map((c) => c.content)
-    const gateInput = toGateInput({
-      input: built.input,
-      text: '(shadow — 생성물 없음)',
-      sourceTexts: [pr.title, pr.content, ...pr.comments.map((c) => c.content)],
-      knownNames,
-      ...(corpus === null ? {} : { frequencyLookup: corpus.lookup, corpusName: 'comment' }),
-      priorTexts: prior,
-      seedUseCount: 1,
-      // 🔴 명시한다. 없으면 ⑨ 가 notRun 이 된다
-      adviceForbidden: false,
-      sourceIsCafeOperational: false,
-    })
-    const readiness2 = judgeGateInputs(describeGateInput(gateInput))
+    const readiness2 = judgeGateInputs(describeGateInput(
+      gateInputOf(t.gate, input, '(shadow — 생성물 없음)'),
+    ))
 
     records.push({
-      postId: item.postId, personaCode: item.personaCode, reactionRole: item.reactionRole,
-      fingerprint: built.input.fingerprint, voiceSource: voice.source,
+      postId: t.target.facts.postId,
+      personaCode: t.target.facts.personaCode,
+      reactionRole: t.target.facts.reactionRole,
+      fingerprint: input.fingerprint,
+      voiceSource: input.voice.source,
       promptOk: prompt.ok, promptBlocks: prompt.ok ? [] : prompt.blocks.map((b) => b.code),
       called: false, parseOk: null, gateStatus: null, gateHits: [], textLength: null,
       failure: null, latencyMs: null, inputTokens: null, outputTokens: null, reasoningTokens: null,
@@ -415,10 +242,10 @@ if (WANT_SHADOW) {
   }
 
   const dv = judgeInputDiversity(inputs)
-  console.log(`     입력 ${inputs.length}건 · 막힘 ${blockedInput.length}건`)
-  if (blockedInput.length > 0) {
+  console.log(`     입력 ${inputs.length}건 · 막힘 ${material.blockedInputs.length}건`)
+  if (material.blockedInputs.length > 0) {
     const m = new Map<string, number>()
-    for (const c of blockedInput) m.set(c, (m.get(c) ?? 0) + 1)
+    for (const c of material.blockedInputs) m.set(c, (m.get(c) ?? 0) + 1)
     for (const [c, n] of m) console.log(`       ${c} ${n}건`)
   }
   console.log(`     입력 고유성  ${dv.ok ? '🟢' : '🔴'} ${dv.reason}`)
@@ -442,8 +269,13 @@ if (WANT_SHADOW) {
     ranAt: now.toISOString(), mode: mode.mode,
     externalCallAllowed: REAL_POST_EXTERNAL_CALL_ALLOWED,
     called: false, calls: 0,
-    publicAllowedToday: readiness.publicAllowedToday, shadowLimit: readiness.shadowLimit,
-    window, recentRoleCounts, records,
+    // 🔴 남은 수량과 총 상한을 이름으로 나눠 적는다 — 하나로 적어 두 뜻으로 읽혔다
+    publicAllowedToday: readiness.allowance.remaining,
+    allowance: readiness.allowance,
+    shadowLimit: readiness.shadowLimit,
+    window, recentRoleCounts: material.recentRoleCounts,
+    providerAllowed: material.providerAllowed, providerBlockers: material.providerBlockers,
+    records,
   }, null, 2)}\n`, 'utf-8')
   console.log(`\n     기록 ${OUT} (🔴 gitignored · DB write 0 · 외부 호출 0)`)
 }
