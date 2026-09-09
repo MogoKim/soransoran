@@ -8,6 +8,7 @@ import ActionButton from '@/components/ui/ActionButton'
 import GuestTurnstile, { TURNSTILE_SITE_KEY } from '@/components/features/GuestTurnstile'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { createGuestComment, type GuestCommentState } from '@/lib/actions/guest-comments'
+import { trackEvent } from '@/lib/analytics/track'
 import { useToast } from '@/components/ui/toast'
 import {
   COMMENT_CREATED,
@@ -66,12 +67,26 @@ export default function GuestCommentForm({
   const [token, setToken] = useState('')
   const [resetSignal, setResetSignal] = useState(0)
 
+  /** 이미 처리한 성공 응답. 회원 폼(CommentForm)과 같은 계약이다 */
+  const handledRef = useRef<GuestCommentState | null>(null)
+
   useEffect(() => {
     if (!state.ok && !state.error) return
-    // 🔴 토큰은 1회용이다. 성공이든 실패든 응답을 받으면 새로 받아야 한다.
+    /**
+     * 🔴 토큰은 1회용이다. 성공이든 실패든 응답을 받으면 새로 받아야 한다.
+     *    이 두 줄은 아래 성공 판정보다 **위**에 있어야 한다 — 실패했을 때도 새 토큰이 필요하다.
+     */
     setToken('')
     setResetSignal((n) => n + 1)
+
+    /**
+     * 🔴 여기부터가 성공이다. 위 두 줄 자리에 계측을 두면 Turnstile 실패·금칙어 같은
+     *    거절까지 등록으로 세게 된다 — 이 effect 는 실패에도 들어온다.
+     */
     if (!state.ok) return
+    if (handledRef.current === state) return
+    handledRef.current = state
+
     setContent('')
     setPassword('')
     setShowSuccess(true)
@@ -79,6 +94,12 @@ export default function GuestCommentForm({
     toast.success(parentId ? REPLY_CREATED : COMMENT_CREATED, {
       key: `comment:${parentId ?? postId}`,
     })
+    /**
+     * 🔴 회원/비회원은 컴포넌트가 이미 갈라져 있으므로 리터럴로 적는다.
+     *    세션을 다시 묻지 않는다 — 물으면 두 곳이 되고 언젠가 어긋난다.
+     * 🔴 게스트 닉네임·비밀번호·본문은 보내지 않는다. 답글 여부만 boolean 으로 남긴다.
+     */
+    trackEvent('comment_publish', { member_type: 'guest', is_reply: Boolean(parentId) })
     // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])

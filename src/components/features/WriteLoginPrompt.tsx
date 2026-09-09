@@ -3,6 +3,9 @@
 import { useEffect, useId, useRef } from 'react'
 import { TOUCH_MIN } from '@/lib/spacing'
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
+import { trackEvent } from '@/lib/analytics/track'
+import { markWriteAuthStart } from '@/lib/analytics/write-auth-marker'
+import type { BoardSlug } from '@/lib/board-registry'
 
 /**
  * 다 쓰고 등록을 누른 비회원에게 보여 주는 안내.
@@ -30,10 +33,13 @@ import KakaoSignInButton from '@/components/features/KakaoSignInButton'
  *    서버 액션을 부른다.
  */
 export default function WriteLoginPrompt({
+  boardSlug,
   callbackUrl,
   warning,
   onClose,
 }: {
+  /** 어느 게시판에서 나가는가. 표식과 계측이 같은 값을 써야 돌아왔을 때 짝이 맞는다. */
+  boardSlug: BoardSlug
   /** 로그인 뒤 돌아올 곳. 게시판까지 포함한 글쓰기 경로여야 임시저장을 찾을 수 있다. */
   callbackUrl: string
   /** 임시저장이 실패했을 때만 온다 — 아래 warning 블록 참조 */
@@ -42,6 +48,29 @@ export default function WriteLoginPrompt({
 }) {
   const titleId = useId()
   const panelRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * 🔴 useState 가 아니라 ref 다. signIn 은 화면을 떠나기까지 수백 ms 가 걸리고
+   *    그 사이 버튼은 살아 있다. state 로 막으면 다음 렌더에야 반영돼 연타가 먼저 들어온다
+   *    (PostActionBar 가 같은 이유로 ref 를 쓴다).
+   *
+   * 🔴 안내를 닫았다 다시 열면 이 컴포넌트가 다시 마운트돼 ref 가 풀린다. 그게 맞다 —
+   *    "계속 작성하기" 로 돌아갔다가 나중에 다시 누른 것은 별개의 인증 시도다.
+   */
+  const authStartedRef = useRef(false)
+
+  /**
+   * 🔴 표식을 이벤트보다 **먼저** 심는다.
+   *    GA 가 막힌 환경에서도 "돌아와서 글이 살아났는가" 판정은 살아 있어야 한다.
+   *    반대로 두면 계측이 실패한 사람은 복원 여부도 영영 알 수 없다.
+   */
+  function handleSignInStart() {
+    if (authStartedRef.current) return
+    authStartedRef.current = true
+
+    markWriteAuthStart(boardSlug, Date.now())
+    trackEvent('write_auth_start', { board_slug: boardSlug, method: 'kakao' })
+  }
 
   useEffect(() => {
     // 되돌아갈 길은 눈에 보이는 버튼 말고 키보드에도 있어야 한다.
@@ -93,7 +122,11 @@ export default function WriteLoginPrompt({
         ) : null}
 
         <div className="mt-5 flex flex-col items-center gap-1">
-          <KakaoSignInButton callbackUrl={callbackUrl} label="카카오로 계속하기" />
+          <KakaoSignInButton
+            callbackUrl={callbackUrl}
+            label="카카오로 계속하기"
+            onSignInStart={handleSignInStart}
+          />
 
           <button
             type="button"

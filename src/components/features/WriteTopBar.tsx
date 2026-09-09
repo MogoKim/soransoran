@@ -29,18 +29,29 @@ export default function WriteTopBar({
   pendingLabel,
   canSubmit,
   cancelHref,
+  busy = false,
 }: {
   title: string
   submitLabel: string
   pendingLabel: string
   canSubmit: boolean
   cancelHref: string
+  /**
+   * 폼 밖에서 아직 끝나지 않은 일이 있는가.
+   *
+   * 🔴 useFormStatus 의 pending 은 **서버 액션이 돌아오는 순간 꺼진다.**
+   *    새 글은 그 뒤에도 저장된 글로 이동하는 일이 남아 있는데, 그 사이 버튼이 다시
+   *    켜지면 방금 올린 글을 한 번 더 올리게 된다. 이동이 끝날 때까지 눌린 상태를 잇는다.
+   * 🔴 선택이다. 넘기지 않는 화면(글 수정)은 지금과 똑같이 동작한다.
+   */
+  busy?: boolean
 }) {
   const { pending } = useFormStatus()
 
   const setBar = useWriteViewportTop()
 
-  const ready = canSubmit && !pending
+  const working = pending || busy
+  const ready = canSubmit && !working
 
   return (
     <div
@@ -72,7 +83,7 @@ export default function WriteTopBar({
             ready ? 'bg-cta text-cta-content' : 'bg-surface-page text-content-muted',
           )}
         >
-          {pending ? pendingLabel : submitLabel}
+          {working ? pendingLabel : submitLabel}
         </span>
       </button>
     </div>

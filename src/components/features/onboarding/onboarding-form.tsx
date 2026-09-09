@@ -9,6 +9,7 @@ import NicknameField, {
 } from '@/components/features/onboarding/nickname-field'
 import { AGREEMENT_TYPE, REQUIRED_AGREEMENTS } from '@/lib/agreement-policy'
 import { checkNickname, completeOnboarding } from '@/lib/actions/onboarding'
+import { trackEvent } from '@/lib/analytics/track'
 import { NICKNAME_AVAILABLE, NICKNAME_TAKEN, validateNicknameFormat } from '@/lib/nickname'
 import { BRAND_NAME } from '@/lib/brand-name'
 import { cn } from '@/lib/utils'
@@ -84,6 +85,15 @@ export default function OnboardingForm({ destination }: { destination: string })
   const [checkingNext, setCheckingNext] = useState(false)
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * '시작하기' 를 이미 눌렀는가.
+   *
+   * 🔴 isPending 만 믿지 않는다. useTransition 의 pending 은 다음 렌더에 반영되는데
+   *    같은 tick 에 들어온 두 번째 클릭은 그 전에 도착한다. 그러면 completeOnboarding 이
+   *    두 번 불리고, 두 번째가 성공으로 읽히면 가입이 두 번 센다.
+   *    (서버가 ALREADY_ONBOARDED 로 막지만, 그건 DB 를 지키는 일이지 계측을 지키는 일이 아니다)
+   */
+  const submitStartedRef = useRef(false)
   /** 한글은 조합이 끝나야 글자가 된다. 조합 중에는 묻지 않는다 */
   const composingRef = useRef(false)
   /** 늦게 도착한 답이 최신 입력을 덮어쓰지 않게 하는 순번 */
@@ -233,18 +243,40 @@ export default function OnboardingForm({ destination }: { destination: string })
     setAgreed((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
+  /**
+   * 🔴 성공하면 잠금을 풀지 않는다. 곧바로 화면을 옮기므로 다시 누를 일이 없고,
+   *    푸는 순간 이동하는 사이에 한 번 더 눌릴 자리가 생긴다.
+   * 🔴 실패하면 푼다 — 닉네임이 겹쳤다는 말을 듣고 고쳐서 다시 눌러야 하는 사람을
+   *    영영 막아 두면 안 된다. 던져서 끝난 경우(연결 끊김 등)에도 푼다.
+   * 🔴 catch 를 새로 두지 않는다. 예외를 여기서 삼키면 지금까지 위로 올라가던 오류가
+   *    조용해진다 — 잠금만 되돌리고 예외는 그대로 흘려보낸다.
+   */
   function handleSubmit() {
     if (!requiredDone || isPending) return
+    if (submitStartedRef.current) return
+    submitStartedRef.current = true
     setSubmitError('')
 
     startTransition(async () => {
-      const result = await completeOnboarding(nickname, agreed)
-      if (result.error) {
-        setSubmitError(result.error)
-        return
+      let succeeded = false
+      try {
+        const result = await completeOnboarding(nickname, agreed)
+        if (result.error) {
+          setSubmitError(result.error)
+          return
+        }
+        succeeded = true
+        /**
+         * 🔴 가입은 여기서 확정된다. completeOnboarding 이 isOnboarded 를 false→true 로
+         *    바꾸는 트랜잭션을 마쳤고, 다시 부르면 ALREADY_ONBOARDED 로 막힌다 —
+         *    계정 생애 1회다. 마케팅 동의 여부는 보내지 않는다.
+         */
+        trackEvent('sign_up', { method: 'kakao' })
+        // 🔴 replace 다. 뒤로 가기로 다 끝낸 가입 화면에 돌아오지 않게 한다.
+        router.replace(destination)
+      } finally {
+        if (!succeeded) submitStartedRef.current = false
       }
-      // 🔴 replace 다. 뒤로 가기로 다 끝낸 가입 화면에 돌아오지 않게 한다.
-      router.replace(destination)
     })
   }
 

@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
-import { getBoardBySlug } from '@/lib/board-registry'
+import { getBoardBySlug, type BoardSlug } from '@/lib/board-registry'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
 import { requireOnboarded } from '@/lib/onboarding-guard'
@@ -50,14 +50,36 @@ const POST_WINDOW_MS = 10 * 60 * 1000
  * 🔴 needsOnboarding 은 optional 이다.
  *    지금 화면들은 error 만 읽는다. 필수로 두면 기존 반환 경로가 전부 깨진다.
  *    O3-B 에서 화면이 이 값으로 온보딩 안내를 띄울지 정한다.
+ *
+ * 🔴 ok·destination·boardSlug 는 createPost 만 채운다.
+ *    updatePost 는 지금도 redirect 로 끝나고, 그 화면(PostEditForm)은 error 만 읽는다 —
+ *    선택 필드라 기존 경로는 그대로다.
  */
-export type ActionState = { error?: string; needsOnboarding?: true }
+export type ActionState = {
+  error?: string
+  needsOnboarding?: true
+  ok?: true
+  /** 저장된 글로 갈 곳. 화면 이동에만 쓴다 — 글 id 가 들어 있어 계측에 싣지 않는다 */
+  destination?: string
+  /** 계측 정본. 화면이 들고 있던 값이 아니라 서버가 실제로 저장한 게시판이다 */
+  boardSlug?: BoardSlug
+}
 
 /**
  * 글 생성
  *
  * 🔴 로그인 회원만 쓸 수 있다. 게스트 쓰기는 열지 않는다.
  * 🔴 source 는 항상 USER 다. 봇 발행 경로를 만들지 않는다.
+ *
+ * 🔴 redirect 로 끝내지 않고 목적지를 돌려준다.
+ *    redirect() 는 NEXT_REDIRECT 를 던지므로 useFormState 의 state 에 성공이 **도달하지 않는다**.
+ *    그러면 화면은 "글이 실제로 저장됐다" 를 알 수 없고, 저장 전에 미리 이벤트를 보내면
+ *    금칙어·글자수·rate limit 으로 거절된 글까지 발행으로 세게 된다.
+ *    이동은 화면이 router.replace 로 잇는다 — 그 편이 한 tick 늦지만, 무엇이 저장됐는지
+ *    아는 자리에서 한 번만 세는 편이 정확하다.
+ *
+ * 🔴 목적지는 서버가 조립한다. board.href 는 레지스트리 상수이고 post.id 는 DB 가 만든 값이라
+ *    사용자 입력이 닿을 자리가 없다 — open redirect 가 성립하지 않는다.
  */
 export async function createPost(
   _prev: ActionState,
@@ -115,7 +137,12 @@ export async function createPost(
   })
 
   revalidatePath(board.href)
-  redirect(`${board.href}/${post.id}`)
+  /**
+   * 🔴 board 는 레지스트리에서 찾은 값이라 slug 는 반드시 레지스트리 상수다.
+   *    getBoardBySlug 의 반환 타입이 BoardMeta(slug: string)라 넓어져 있을 뿐이고,
+   *    formData 의 문자열이 이 자리에 올 수는 없다 — 위 `!board` 검사가 걸러 낸다.
+   */
+  return { ok: true, destination: `${board.href}/${post.id}`, boardSlug: board.slug as BoardSlug }
 }
 
 /** 글 수정: 사용자당 10분에 10건 */

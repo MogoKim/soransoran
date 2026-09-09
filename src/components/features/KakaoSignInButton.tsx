@@ -40,6 +40,7 @@ export default function KakaoSignInButton({
   callbackUrl = '/',
   variant = 'default',
   label = LABEL,
+  onSignInStart,
 }: {
   callbackUrl?: string
   variant?: Variant
@@ -52,11 +53,24 @@ export default function KakaoSignInButton({
    *    이 버튼 하나여야 입구마다 빠뜨리는 곳이 생기지 않는다(위 주석과 같은 이유).
    */
   label?: string
+  /**
+   * 나가기 직전에 부를 일 — 지금은 글쓰기 화면이 인증 시작을 세고 표식을 심는 데 쓴다.
+   *
+   * 🔴 선택이다. 넘기지 않은 화면(홈·로그인)은 지금과 한 글자도 달라지지 않는다.
+   * 🔴 여기서 하는 일은 부르는 것뿐이다. 무엇을 셀지·막을지는 부르는 쪽이 정한다 —
+   *    이 버튼은 외부 브랜드 자산이라(brand-assets.ts) 계측 규칙을 안에 들이지 않는다.
+   * 🔴 signIn 앞에 둔다. signIn 은 화면을 떠나므로 뒤에 두면 실행되지 않는다.
+   *    await 를 걸지 않는다 — 기다리는 사이 iOS 가 사용자 조작으로 보지 않을 수 있다.
+   */
+  onSignInStart?: () => void
 }) {
   return (
     <button
       type="button"
-      onClick={() => signIn('kakao', { callbackUrl: onboardingHref(callbackUrl) })}
+      onClick={() => {
+        onSignInStart?.()
+        signIn('kakao', { callbackUrl: onboardingHref(callbackUrl) })
+      }}
       className={`inline-flex w-full flex-wrap items-center justify-center gap-2 break-keep bg-kakao text-center font-bold leading-tight text-kakao-text transition duration-150 hover:brightness-95 active:scale-95 ${SHAPE[variant]}`}
     >
       {variant === 'onboarding' ? (

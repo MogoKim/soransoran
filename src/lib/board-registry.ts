@@ -95,6 +95,16 @@ export const BOARD_REGISTRY = [
   },
 ] as const satisfies readonly BoardMeta[]
 
+/**
+ * 레지스트리에 실재하는 slug 만.
+ *
+ * 🔴 BoardMeta.slug 는 string 이라 그 타입으로는 아무 문자열이나 통과한다.
+ *    주소·form·localStorage 에서 온 값이 응답이나 계측에 그대로 실리는 것을 막으려면
+ *    "레지스트리에 있는 것" 이 타입이어야 한다. 여기서 파생시켜 두면
+ *    보드를 추가·삭제할 때 이 타입이 따라 움직인다 — 손으로 적은 목록은 언젠가 어긋난다.
+ */
+export type BoardSlug = (typeof BOARD_REGISTRY)[number]['slug']
+
 export const COMMUNITY_BOARDS = BOARD_REGISTRY.filter((b) => b.isCommunity)
 
 /**

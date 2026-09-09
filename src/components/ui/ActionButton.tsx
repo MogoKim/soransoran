@@ -70,6 +70,14 @@ type ActionButtonProps = {
   size?: ActionButtonSize
   /** 레이아웃 보정 전용 — 색·크기·상태를 여기서 바꾸지 않는다. */
   className?: string
+  /**
+   * 폼 밖에서 아직 끝나지 않은 일이 있는가.
+   *
+   * 🔴 useFormStatus 의 pending 은 서버 액션이 돌아오는 순간 꺼진다. 그 뒤에도 남은 일이
+   *    있는 화면(글 등록 후 이동)이 눌린 상태를 이어가려고 쓴다. WriteTopBar 와 같은 계약이다.
+   * 🔴 선택이다. 넘기지 않는 화면은 지금과 똑같이 동작한다.
+   */
+  busy?: boolean
 }
 
 export default function ActionButton({
@@ -79,16 +87,19 @@ export default function ActionButton({
   disabled,
   size = 'default',
   className,
+  busy = false,
 }: ActionButtonProps) {
   const { pending } = useFormStatus()
+
+  const working = pending || busy
 
   return (
     <button
       type="submit"
-      disabled={disabled || pending}
+      disabled={disabled || working}
       className={cn(BASE_CLASS, className, TONE_CLASS[tone][size])}
     >
-      {pending ? pendingLabel : label}
+      {working ? pendingLabel : label}
     </button>
   )
 }
