@@ -308,6 +308,8 @@ export type RunStatus = 'running' | 'done' | 'failed' | 'superseded'
 
 export type Checkpoint = {
   runId: string
+  /** 🔴 이 회차가 돈 runtime SHA — 읽지 못하면 없다(없는 것과 틀린 것은 다르다) */
+  runtimeSha?: string
   startedAt: string
   status: RunStatus
   completedAt: string | null

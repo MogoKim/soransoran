@@ -991,3 +991,222 @@ Post    42 → 42 ✅ 불변       Comment · Persona · Account 불변
 
 🔴 이 PR 에서 launchctl 은 **이번 전환분 외에 건드리지 않았고**, cron·GitHub Variables·
 release 단계·82cook job 등록은 하지 않았다.
+
+---
+
+## §17 예약 실행 격리 — runtime worktree (2026-09-09)
+
+### 왜 했나
+
+launchd 가 **개발 작업트리를 직접 실행**하고 있었다. plist 가
+`~/Documents/soransoran-m0/scripts/*.mts` 를 가리켰고, 그 경로는 `origin/main` 이 아니라
+**그 순간 checkout 된 파일**이다 — 개발자가 브랜치를 바꿔 두면 밤 예약 회차가 그 코드로 돈다.
+Wave B 작업 중 실제로 그 상태로 21:10 을 맞을 뻔했다.
+
+### 구조
+
+```
+~/Documents/soransoran-runtime          예약 실행 전용 worktree (detached · main 계보 고정 SHA)
+  ├─ node_modules                       🔴 자체 설치 — 개발 트리와 공유하지 않는다
+  ├─ .env.local        ─┐
+  └─ .microseed-data   ─┤ 심볼릭 링크
+                        ↓
+~/Library/Application Support/soransoran/
+  ├─ env.local                          비밀 정본 (평문 복제 0)
+  ├─ microseed-data/                    상태 정본 (보호장치·checkpoint·thin)
+  └─ runtime-pinned-sha                 무엇을 돌리기로 했는지
+~/Library/Logs/soransoran/              로그 (Documents 밖)
+```
+
+🔴 **코드는 나누고 상태는 하나로 둔다.** 보호장치 예산·차단기는 source 하나당 **원장 하나**여야 한다.
+worktree 마다 따로 두면 같은 사이트를 하루에 두 배로 두드린다.
+그래서 데이터·비밀은 두 worktree **밖**에 두고 양쪽이 같은 실체를 가리킨다.
+
+### 전환 순서 (실행한 그대로)
+
+1. `git worktree add --detach ~/Documents/soransoran-runtime <검증된 origin/main SHA>`
+2. `npm ci` + `npx prisma generate` — 🔴 runtime 이 혼자 돌 수 있어야 한다
+3. `.microseed-data` 를 정본 위치로 **이동**하고 양쪽에 심볼릭 링크 (파일 178개 그대로)
+4. `.env.local` 도 같은 방식 (sha256 동일 · 평문 복제 0)
+5. 템플릿을 `__REPO__=runtime` 으로 render → `plutil -lint` → placeholder 0 · 개발 경로 참조 0
+6. **source 마다** unload → 내려간 것 확인(0) → load → 올라온 것 확인(1)
+   🔴 old/new 가 동시에 loaded 인 순간을 만들지 않는다
+7. 고정 SHA 를 `runtime-pinned-sha` 에 적는다
+
+### 되돌리기
+
+옛 plist 는 `/tmp/<label>.plist.rollback` 에 두었고, 언제든
+`launchctl unload → cp rollback → launchctl load` 로 개발 트리 실행으로 돌아간다.
+🔴 다만 그것은 **이 §17 이 없애려던 상태**다 — 되돌린다면 이유를 남긴다.
+
+### 정본 권한 (2026-09-09 강화)
+
+```
+~/Library/Application Support/soransoran   700
+  ├─ env.local                             600
+  └─ microseed-data/                       700
+```
+
+🔴 심볼릭 링크가 아니라 **최종 실체**의 권한을 본다. group/other 비트가 하나라도 서 있으면
+`--require-runtime` 에서 FAIL 이다 — 비밀이 644 면 같은 기계의 다른 계정이 읽고,
+상태가 755 면 남이 보호장치 예산을 지울 수 있다. 🔴 값·해시는 로그에 찍지 않는다.
+
+### 배포 기록 (manifest)
+
+`~/Library/Application Support/soransoran/runtime-manifest.json` — `sha` · `deployedAt` ·
+통과한 게이트 · 직전 SHA. **원자적으로**(tmp → rename) 쓴다.
+공급 회차 checkpoint 에도 그 회차가 돈 `runtimeSha` 를 남긴다.
+🔴 **전환 이후 회차인데 `runtimeSha` 가 없으면 Wave C 증거가 아니다** — 없는 것을
+"옛 회차일 수도 있으니" 라며 통과시키지 않는다(전환 이전 회차는 `deployedAt` 에서 이미 걸러진다).
+
+### 배포 도구 — `npm run runtime:deploy`
+
+기본은 dry-run. `--apply --target=<40자리 SHA>` 만 실제로 바꾼다.
+🔴 **배포 잠금이 하나 있다.** 두 배포가 겹치면 어느 SHA 가 올라갔는지 알 수 없다 —
+잠금을 잡지 못하거나 잠금 상태를 읽지 못하면 들어가지 않는다(fail-closed).
+
+막는 것: 축약 SHA · 방금 fetch 한 origin/main 과 다른 SHA · main 계보 아님 ·
+runtime dirty · 실행 중 job · 상태를 읽지 못함(fail-closed).
+
+#### 🔴 배포 순서 (이 순서여야 하는 이유가 각각 있다)
+
+1. 배포 잠금을 잡는다
+2. `git fetch` — 🔴 **실패하면 그 자리에서 멈춘다.** 오래된 ref 로 "최신" 을 판단하지 않는다
+3. preflight 게이트 · 직전 SHA·manifest 보존
+4. job 3개 unload — 🔴 **하나씩 실제로 내려간 것을 확인**한다. 하나라도 실패하면
+   이미 내린 것만 다시 올리고 **코드는 건드리지 않은 채** 멈춘다
+5. `git checkout --detach <target>` · `npm ci` · `prisma generate`
+6. **offline 게이트** — `supply:autopilot-check` · `collect:guard-lock-check` · `launchd:template-check`
+7. manifest·pin 준비 → job 3개 load → 🔴 **하나씩 올라온 것을 확인**
+8. 🔴 **실제 loaded 설정 대조** → `runtime:isolation-check --require-runtime`
+9. 여기까지 통과해야 "배포 완료" 다
+
+#### 🔴 launchctl 상태는 세 가지다 — loaded / unloaded / unknown
+
+`launchctl print` 실패를 곧바로 "내려가 있다" 로 읽으면, 권한 오류·도메인 오류·명령 실패가
+전부 "확인했다" 가 된다. **`unloaded` 로 인정하는 근거는 하나뿐이다** —
+launchctl 이 그 이름의 서비스를 도메인에서 **찾지 못했다고 말한 경우**.
+
+| 실측(macOS 15.6 · `gui/501`) | 판정 |
+|---|---|
+| exit 0 | `loaded` |
+| exit 113 · `Could not find service "…" in domain` | `unloaded` |
+| exit 125 · `Could not print domain: … Domain does not support specified action` | `unknown` |
+| 명령 자체를 못 돌림 | `unknown` |
+
+exit code 만으로 가르지 않는다 — 113 은 넓은 "Bad request" 계열이라 다른 이유로도 나온다.
+`unknown` 은 **모든 단계에서 fail-closed** 다: preflight 의 실행 여부 확인, unload 뒤 확인,
+load 뒤 확인 어디서든 통과가 아니다.
+
+#### 🔴 runtime 아래여야 하는 것은 program 과 WorkingDirectory 뿐이다
+
+정상 `launchctl print` 출력에는 runtime 밖 경로가 셋 들어 있다 —
+plist(`~/Library/LaunchAgents/…`) · `stdout path` · `stderr path`(`~/Library/Logs/soransoran/…`).
+"soransoran 이 들어간 경로는 전부 runtime 밑" 이라는 규칙은 **정상 job 3개를 전부 실패시켰다**(실측).
+판정은 `parseLaunchctlPrint` + `judgeLoadedConfig` **정본 하나**만 쓴다 —
+`.mts` program 과 `working directory` 만 본다.
+
+🔴 **`runtime:isolation-check --require-runtime` 은 6단계에 둘 수 없다.**
+그 검사는 job 3개가 loaded 여야 통과하는데 그 시점에는 우리가 내려 둔 상태다 —
+그 순서였던 첫 판은 정상 배포가 **구조적으로 항상 실패**했다.
+
+#### 🔴 되돌리기는 best-effort 다
+
+어느 단계에서 실패하든 checkout → `npm ci` → `prisma generate` → manifest/pin 복원 →
+job 3개 재load 를 **끝까지 시도한다.** 한 단계가 죽었다고 뒤 단계를 건너뛰지 않는다 —
+예전 판은 `npm ci` 가 죽으면 job 을 다시 올리지 못하고 3개가 내려간 채 끝났다.
+직전 manifest 가 없었다면 새로 쓴 것을 **지운다**(배포하지 않았는데 기록이 남으면 안 된다).
+복구 뒤 SHA·pin·manifest·의존성·loaded job 3개를 다시 확인하고,
+완전하지 않으면 **무엇이 남았는지 그대로 적고 exit 1** 한다.
+
+🔴 **복구 대상은 "성공했다고 적어 둔 목록" 이 아니라 지금의 실제 상태다.**
+`launchctl unload` 가 실패를 돌려줬는데 실제로는 내려간 경우가 있다 —
+성공 목록만 되돌리면 그 job 은 내려간 채 남는다. 그래서 expected 3개를 **전부 다시 관측**해
+`unloaded` 인 것만 올리고, `loaded` 는 그대로 두고, `unknown` 은 복구 불완전으로 적는다.
+마지막에 3개가 모두 `loaded` 인지 다시 본다.
+
+🔴 **load 는 멱등이다.** 이미 올라와 있으면 다시 부르지 않는다 —
+`launchctl load` 는 이미 loaded 인 job 에 실패를 돌려주므로, 반환값만 보면
+**정상인 상태를 복구 실패로 오판**하게 된다.
+
+🔴 **배포 잠금에는 token 을 적는다.** 무조건 `unlink` 하면 먼저 죽은 배포의 뒷정리가
+그 사이 시작한 배포의 잠금을 지운다. 풀 때 파일의 token 이 내 것일 때만 지우고,
+다르거나 읽지 못하면 그대로 둔다. stale 잠금 자동 회수는 하지 않는다 — 사람이 지운다.
+
+🔴 위 문장들은 `runtime:isolation-check` 의 배포 행동 fixture A~I 가 실제로 증명한다
+(가짜 명령 세계 · 실제 launchctl 0). 증명되지 않은 복구 약속은 여기 적지 않는다.
+
+🔴 배포는 live crawl·DB write·발행·release 변경을 하지 않는다.
+
+### 🔴 격리 ≠ 최신
+
+| | 뜻 |
+|---|---|
+| **isolation** | detached · 고정 SHA · main 계보 · 추적 변경 0 |
+| **promotion freshness** | runtime HEAD == 지금 **원격** `main` |
+
+🔴 **로컬 `origin/main` 은 "지금 main" 이 아니다.** fetch 하지 않은 저장소에서는 며칠 전 ref 일 수
+있고, 그러면 뒤처진 runtime 이 "최신" 으로 보인다. 그래서 Wave C 판정은 `git ls-remote origin
+refs/heads/main` 으로 **원격에 직접 묻고**, 읽지 못하면 NOT_READY 로 둔다(fail-closed).
+화면에는 로컬 ref 와 원격 main 을 **따로** 적어 둘이 다를 때 눈에 보이게 한다.
+🔴 이것은 live crawl 도 DB write 도 아니다 — 우리 저장소의 ref 하나를 읽을 뿐이다.
+
+runtime 이 원격 main 보다 뒤여도 **격리는 성립한다**(고정돼 있으니까). lag 는 화면에 적되
+격리 실패로 세지 않는다. 다만 **Wave C 승격은 최신이 배포된 뒤에만** 허용한다 —
+올리는 순간의 코드가 무엇인지 모르는 채로 공개 발행량을 늘리지 않는다.
+
+### 검사
+
+`npm run runtime:isolation-check`
+
+- CI: runtime 이 없으므로 **판정 규칙만** 시험한다(관측은 건너뛴다)
+- 운영 기계: `--require-runtime` 을 붙이면 **관측 없이는 통과하지 않는다**(fail-closed)
+
+잡는 것: 개발 작업트리 실행 · 이름이 비슷한 이웃 경로 · WorkingDirectory 누락/오지정 ·
+브랜치를 문 runtime · 고정 SHA 불일치 · main 계보 아님(feature branch 고정) · 계보 확인 실패 ·
+옛 1회판 잔여 loaded · 중복 loaded · node_modules/Prisma 누락 · env 평문 복제 · 데이터 원장 분리 ·
+🔴 **설치 plist 는 runtime 인데 실제 loaded 는 개발 경로**(`launchctl print` 대조) ·
+🔴 **runtime 추적 파일 변경**(`--untracked-files=no`) · 🔴 **정본 권한 열림**.
+
+### 실증
+
+개발 트리를 임시 feature branch 로 바꾸고 `supply-autopilot.mts` 를 실제로 고쳐도
+runtime HEAD 와 파일 해시가 **바뀌지 않았다**(`a2977dac…` 유지).
+
+---
+
+## §18 Wave C 준비 — 공개 d3 승격 (🔴 아직 올리지 않았다)
+
+`npm run wave-c:readiness [-- --plan]` — read-only · DB write 0 · 승격 0.
+
+여섯 조건을 **하나의 판정**으로 묶는다. 흩어져 있으면 사람이 "대충 됐다" 고 읽는다.
+
+| 조건 | 2026-09-09 14시 기준 |
+|---|---|
+| 재고가 목표를 채웠다 | 🔴 25/42 — 17건 모자란다 |
+| Naver 다회 슬롯이 계획대로 돌았다 | 🔴 0/4 · 0/4 — 전환 이후 지나간 슬롯 0개 |
+| 보호장치 이상 0 | ✅ |
+| 마지막 회차 checkpoint done | 🔴 **전환 이전 회차라 증거가 아니다** |
+| 공개 단계가 아직 d1 | ✅ |
+| 예약 실행 격리 성립 | ✅ |
+| (승격 신선도) runtime == 원격 main | ✅ |
+
+🔴 **checkpoint 는 네 가지를 함께 본다** — status=done · `runtimeSha` 가 **있고**
+manifest 의 sha 와 **같고** · startedAt/completedAt 이 온전하고(순서·미래·손상) ·
+그 회차가 **21:10 예약 슬롯의 회차**여야 한다. 손으로 돌린 회차는 정기 회차 증거가 아니다.
+
+🔴 **슬롯은 "오늘 몇 번" 이 아니라 회차 증거로 센다.** 로그의 runId 시각을 읽어
+**전환 이후 고유 성공 회차**를 최근 4개 예정 슬롯에 하나씩 붙인다 —
+그래서 자정이 지나도 증거가 0 으로 되돌아가지 않는다.
+전환 이전 회차·같은 runId 중복·시작 줄·중단 출력은 세지 않는다.
+
+🔴 **슬롯 창은 한 방향이다** — `슬롯 시각 ≤ 회차 시각 ≤ 슬롯 + 90분`.
+양쪽으로 열어 두면 13:20 에 손으로 돌린 회차가 14:50 예약 슬롯을 채운다.
+슬롯보다 **먼저** 끝난 회차는 그 슬롯이 돌았는지에 대해 아무것도 말해 주지 않는다.
+미래 시각 runId 와 없는 날짜(9/31 · 2/30 · 25시) runId 도 회차로 읽지 않는다.
+
+→ **NOT_READY.** 남은 둘은 오늘 밤 자동 회차가 채울 항목이다.
+
+🔴 **`--plan` 은 승격 절차와 롤백을 함께 낸다.** 올리기 전에 되돌리는 법부터 읽는다.
+승격은 `SORAN_RELEASE_STAGE` 한 줄 + workflow 슬롯 3개이고, 롤백도 같은 두 줄이다.
+🔴 이미 나간 글은 되돌리지 않는다 — 발행 취소는 회원이 본 것을 지우는 일이다.
