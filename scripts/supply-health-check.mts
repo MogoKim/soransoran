@@ -589,7 +589,28 @@ check('🔴 수집·적재·발행을 실행하지 않는다 — 자식 프로�
   !/child_process|execFileSync|execSync|spawnSync|spawn\(/.test(code))
 check('🔴 스크립트 경로를 부르지 않는다',
   !/scripts\/micro-seed-collect|scripts\/micro-seed-supply-autofill|scripts\/original-post-auto-publish/.test(code))
-check('🔴 launchctl 을 부르지 않는다', !/launchctl/.test(code))
+/**
+ * 🔴 **launchctl 은 `list` 만 허용한다** (2026-09-08).
+ *
+ *    등록 상태를 코드 상수(`loaded: true`)로 적어 두니 아무도 올리지 않은 job 이
+ *    능력으로 세어졌다. 그래서 관제가 **실측**을 읽는다 — 다만 읽기뿐이다.
+ *    바꾸는 하위 명령은 전부 금지하고, 관제 본문은 여전히 자식 프로세스를 만들지 않는다.
+ */
+check('🔴 관제 본문은 자식 프로세스를 만들지 않는다',
+  !/child_process|execFileSync|execSync|spawnSync|spawn\(/.test(code))
+{
+  const observer = readFileSync('scripts/lib/launchd-observe.mts', 'utf-8')
+  const bare = observer.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const calls = [...bare.matchAll(/execFileSync\(\s*'launchctl'\s*,\s*\[([^\]]*)\]/g)]
+    .map((m) => m[1]!.replace(/['"\s]/g, ''))
+  check('🔴 관측기는 launchctl 을 정확히 한 번 부른다', calls.length === 1)
+  check('🔴 그것은 read-only `list` 다', calls[0] === 'list')
+  check('🔴 상태를 바꾸는 하위 명령이 없다',
+    !/(load|unload|bootstrap|bootout|enable|disable|kickstart|remove|start|stop)['"]/.test(bare))
+  check('🔴 관측기는 파일에 쓰지 않는다',
+    !/writeFileSync|appendFileSync|rmSync|renameSync|mkdirSync/.test(bare))
+  check('🔴 관측기는 네트워크·DB 를 타지 않는다', !/fetch\(|PrismaClient/.test(bare))
+}
 check('🔴 파일에 쓰지 않는다', !/writeFileSync|appendFileSync|rmSync|mkdirSync|renameSync/.test(code))
 check('🔴 env 를 고치지 않는다', !/process\.env\[[^\]]+\]\s*=/.test(code))
 check('🔴 본문·세션·키 값을 찍지 않는다', !/bodyHead|rawBody|storage-state|API_KEY|DATABASE_URL/.test(code))

@@ -18,6 +18,7 @@ import {
   type BatchDraft, type PersonaForMatch,
 } from '../src/lib/original-post-persona-match'
 import { pickPublishTarget } from '../src/lib/original-post-auto-publish'
+import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 
 let pass = 0
@@ -119,10 +120,13 @@ const persona = (code: string): P => ({
   workStatus: null, economicStatus: null, region: null,
   noGoTopics: [], postsThisWeek: 0, daysSinceLastPost: null,
 } as unknown as P)
-const draft = (id: string): { queueId: string; title: string; body: string; gateVerdict: string; createdAt: number } =>
-  ({ queueId: id, title: '오늘 저녁 뭐 드세요', body: '요즘 반찬이 마땅치 않아서요. 다들 어떻게 하세요?', gateVerdict: 'PASS', createdAt: 0 })
-
 const START = utc('2026-09-07T15:05:00.000Z')  // KST 09-08 00:05
+const draft = (id: string): QueueCandidate =>
+  ({ queueId: id, title: '저녁 뭐 드세요', body: '반찬이 마땅치 않아서요. 다들 어떻게 하세요?',
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null,
+    // 🔴 예측일마다 나이를 다시 잰다 — 여기서는 늘 갓 수집된 글로 둔다
+    capturedAt: START })
+
 
 check('🟢 여유 persona 가 있으면 첫날 발행한다', (() => {
   const fc = forecastPublishing({
@@ -270,9 +274,16 @@ check('🟢 차단이 없으면 비율 0', splitBlockReasons({}).lifeRate === 0)
 }
 
 // ② 전체 후보를 planBatch 에 넘기되 발행 대상은 head 다
-check('🔴 [배치] 남은 후보 **전체**를 planBatch 에 넘긴다 — head 하나만 넘기지 않는다', (() => {
+check('🔴 [배치] 남은 후보 **전체**를 계획 함수에 넘긴다 — head 하나만 넘기지 않는다', (() => {
   const lib = readFileSync('src/lib/supply-capacity-forecast.ts', 'utf-8')
-  return /planBatch\(remaining, personasNow/.test(lib) && !/planBatch\(\[head\]/.test(lib)
+  /**
+   * 🔴 2026-09-08: 배정은 이제 **공용 계획 함수**가 한다. 예측이 `planBatch` 를 직접 부르면
+   *    러너가 쓰는 발행 우선권이 빠져 같은 입력에 다른 글을 고른다(재현 확인).
+   *    그래도 "남은 후보 전체" 라는 계약은 그대로다.
+   */
+  return /prepareCandidates\(\{\s*candidates: remaining, personas: personasNow/.test(lib)
+    && !/planBatch\(/.test(lib)
+    && !/prepareCandidates\(\{ candidates: \[head\]/.test(lib)
 })())
 // 🔴 2026-09-07 교체: 발행 대상은 head 가 아니라 **배정이 있는 첫 글**이다.
 //    그리고 그 규칙은 러너의 함수를 **그대로 부른다** — 예측용으로 복제하지 않는다
@@ -500,10 +511,10 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
 
 // ③ 🔴 예측과 러너가 **같은 글**을 고른다 — 두 화면이 다른 말을 하면 안 된다
 {
-  const D = (n: number): BatchDraft => ({ queueId: `q${n}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: n })
+  const D = (n: number): QueueCandidate => ({ queueId: `q${n}`, title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null, capturedAt: new Date('2026-09-07T15:05:00.000Z') })
   const queue = [D(0), D(1), D(2)]
   // q0 만 자녀 글로 바꿔 아무도 못 맡게 한다 → 예측도 러너도 q1 을 골라야 한다
-  const blockedHead: BatchDraft = { ...D(0), title: '중학생 딸', body: '딸이 사춘기라 힘들어요.' }
+  const blockedHead: QueueCandidate = { ...D(0), title: '중학생 딸', body: '딸이 사춘기라 힘들어요.' }
   const q = [blockedHead, D(1), D(2)]
   const personas = ['A', 'B'].map((c) => ({
     code: c, status: 'active', providerId: null, accountCount: 0,
@@ -557,11 +568,11 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
   const start = new Date('2026-09-08T15:05:00.000Z')
   // 🔴 A 는 이 행 때문에 이미 이번 주를 썼다 — matchedAt 이 이력에 있다
   const already = new Date('2026-09-08T00:00:00.000Z')
-  const stuck: BatchDraft = {
-    queueId: 'stuck', title: '오늘', body: '국수를 삶았어요.',
-    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'A',
+  const stuck: QueueCandidate = {
+    queueId: 'stuck', title: '국수', body: '국수를 삶았어요.',
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'A', capturedAt: new Date('2026-09-07T15:05:00.000Z'),
   }
-  const fresh: BatchDraft = { queueId: 'fresh', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 }
+  const fresh: QueueCandidate = { queueId: 'fresh', title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1, assignedPersonaCode: null, capturedAt: new Date('2026-09-07T15:05:00.000Z') }
 
   const f = forecastPublishing({
     queue: [stuck, fresh], personas: [persona],
@@ -609,9 +620,10 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
 
   /** 🔴 관제의 변환을 그대로 흉내낸다 — id 를 못 찾으면 `__unknown:` 이다 */
   const codeOfId = new Map([['pid_A', 'A'], ['pid_B', 'B'], ['pid_OFF', 'OFF'], ['pid_REAL', 'REAL']])
-  const asHealthDoes = (rows: readonly { id: string; matchedPersonaId: string | null; title?: string }[]): BatchDraft[] =>
+  const asHealthDoes = (rows: readonly { id: string; matchedPersonaId: string | null; title?: string }[]): QueueCandidate[] =>
     rows.map((r, i) => ({
-      queueId: r.id, title: r.title ?? '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i,
+      queueId: r.id, title: r.title ?? '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i,
+      capturedAt: new Date('2026-09-07T15:05:00.000Z'),
       assignedPersonaCode: r.matchedPersonaId === null
         ? null
         : (codeOfId.get(r.matchedPersonaId) ?? `__unknown:${r.matchedPersonaId}`),
@@ -663,7 +675,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
 
   // ── C. 깨진 복구 + 정상 신규 후보 → 우회하지 않고 RECOVERY_BROKEN ──
   {
-    const cases: [string, BatchDraft[]][] = [
+    const cases: [string, QueueCandidate[]][] = [
       ['없는 persona', asHealthDoes([{ id: 'gone', matchedPersonaId: 'pid_MISSING' }, { id: 'fresh', matchedPersonaId: null }])],
       ['비활성 persona', asHealthDoes([{ id: 'off', matchedPersonaId: 'pid_OFF' }, { id: 'fresh', matchedPersonaId: null }])],
       ['실계정 persona', asHealthDoes([{ id: 'real', matchedPersonaId: 'pid_REAL' }, { id: 'fresh', matchedPersonaId: null }])],
@@ -709,7 +721,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
     //    그 필드가 아예 없는 옛 모양이 **같은 결과**여야 한다
     const withField = forecastPublishing({ queue: asHealthDoes(rows), personas, history, startAt: START, days: 14, dailyCap: 1 })
     const withoutField = forecastPublishing({
-      queue: rows.map((r, i) => ({ queueId: r.id, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i })),
+      queue: rows.map((r, i) => ({ queueId: r.id, title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, capturedAt: new Date('2026-09-07T15:05:00.000Z') })),
       personas, history, startAt: START, days: 14, dailyCap: 1,
     })
     const sig = (f: typeof withField): string =>

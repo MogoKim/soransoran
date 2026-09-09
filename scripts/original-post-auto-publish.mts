@@ -38,6 +38,7 @@ import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish
 import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
 import { stageVerdicts } from '../src/lib/scale-readiness'
 import { effectiveWeeklyCap } from '../src/lib/scale-profile'
+import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -69,7 +70,8 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     // 🔴 기계 profile 은 게이트 기록까지 본다 — 큐 컬럼 셋만으로는 손으로 넣을 수 있다
     gateResults: true,
     decidedAt: true, createdAt: true,
-    rawContent: { select: { sourceSite: true } },
+    // 🔴 신선도 판정 근거 — 원문을 언제 봤는가
+    rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
   },
   orderBy: { createdAt: 'asc' },
 })
@@ -98,6 +100,9 @@ if (rejected.length > 0) {
     console.log(`   ${String(n).padStart(2)}건  ${REJECT_LABEL[code as keyof typeof REJECT_LABEL]}`)
   }
 }
+
+// 🔴 신선도 근거 — queueId → 원문 확인 시각
+const capturedAtOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
 
 // ── ③ persona 배정 가능성 ──
 const WEEK_AGO = new Date(Date.now() - 7 * 864e5)
@@ -144,6 +149,29 @@ for (const r of personaRows) {
 const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
 
 /**
+ * ── ②-b 🔴 **후보 준비 — 관제·예측·준비도와 같은 함수다** (2026-09-08) ──
+ *
+ *    freshness hold 를 러너에만 넣었더니 화면은 필터 전 재고로 READY 라 적고
+ *    러너는 hold 때문에 그날 한 건을 못 냈다. 이제 네 곳이 같은 함수를 부른다.
+ *
+ *    🔴 hold 된 글은 매칭에 **들어가지 않는다** — persona 자리를 선점하지 못한다.
+ *       예전 러너는 planBatch 를 먼저 돌리고 순서를 나중에 바꿔, 상한 글이 자리를 쥐고 있었다.
+ */
+/**
+ * 🔴 `capturedAt` 을 **그대로** 넘긴다 — 나이를 여기서 굳히지 않는다.
+ *    예측은 하루씩 밀며 그날의 나이로 다시 판정해야 하므로 스냅숏을 주면 안 된다.
+ */
+const queueCandidates: QueueCandidate[] = targets.map((t, i) => ({
+  queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: i,
+  // 🔴 배정된 persona 를 못 찾으면 빈 문자열이 아니라 **모르는 코드**를 넘긴다 —
+  //    planBatch 가 fail-closed 로 잡아 멈춘다. 조용히 재배정되면 안 된다
+  assignedPersonaCode: t.matchedPersonaId === null
+    ? null
+    : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+  capturedAt: capturedAtOf.get(t.id) ?? null,
+}))
+
+/**
  * ── ③-c 🔴 **규모 설정 설치** — `loadEnvLocal()` 뒤, 쓰기 판정 **앞**이다 ──
  *
  *    ① 지금 큐·지금 사람으로 각 단계가 14일을 버티는지 시뮬레이션하고
@@ -153,17 +181,22 @@ const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
 const historyRows = await prisma.personaActivityLog.findMany({
   where: { kind: 'post' }, select: { createdAt: true, persona: { select: { code: true } } },
 })
+// 🔴 **시간축은 하나다** — `now` 와 오늘 발행 수만 넘기고 단계별 시작점은 lib 이 만든다.
+//    러너와 관제가 각자 시작점을 정하면 같은 DB 를 보고 다른 준비도를 말한다
+const axisNow = new Date()
+const axisPublishedToday = await prisma.personaActivityLog.count({
+  where: { kind: 'post', createdAt: { gte: kstDayStart(axisNow) } },
+})
 const readiness = stageVerdicts({
-  queue: targets.map((t) => ({
-    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
-    assignedPersonaCode: null,
-  })),
+  // 🔴 **거르지 않은 후보**를 넘긴다 — 자동/hold 갈림과 배정을 단계마다 그 cap 으로 다시 정한다.
+  //    d1 로 한 번 준비한 목록을 d10 계산에 돌려쓰면 cap 이 다른데도 같은 글이 빠진다
+  queue: queueCandidates,
   personas: personas as never,
   history: personas.map((p) => ({
     code: p.code,
     matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
   })),
-  startAt: new Date(),
+  axis: { now: axisNow, publishedToday: axisPublishedToday },
 })
 const scale = installFromEnv(process.env, { readiness })
 // 🔴 여기서부터 쓰기 판정에 쓰이는 값은 전부 `scale` 에서 나온다
@@ -178,20 +211,16 @@ console.log(`     적용된 발행 상한  일 ${RELEASE_DAILY_CAP}건 · person
   + ` · 최소 ${RELEASE_CAPS.minDaysBetween}일`)
 if (scale.throttledByReadiness) console.log('     🔴 준비도 미달로 감속됐다 — 이 값이 실제로 적용된다')
 
-// 🔴 후보만 넣어 계산한다 — legacy 글이 여력을 가져가면 안 된다
-const batch = planBatch(
-  targets.map((t) => ({
-    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: 0,
-    // 🔴 배정된 persona 를 못 찾으면 빈 문자열이 아니라 **모르는 코드**를 넘긴다 —
-    //    planBatch 가 fail-closed 로 잡아 멈춘다. 조용히 재배정되면 안 된다
-    assignedPersonaCode: t.matchedPersonaId === null
-      ? null
-      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
-  })),
-  personas,
-  // 🔴 설치된 release 프로필을 **명시적으로** 넘긴다. 모듈 상수에 기대지 않는다
-  RELEASE_CAPS,
-)
+// 🔴 확정된 release cap · **지금 시각**으로 계획한다. 관제·예측이 부르는 함수와 같다
+const prepared = prepareCandidates({
+  candidates: queueCandidates, personas, caps: RELEASE_CAPS, at: axisNow,
+})
+
+/**
+ * 🔴 **배정은 준비 함수가 이미 했다** — 우선순위(복구 → hot → warm → 상시 적합도)를
+ *    반영한 최대 매칭이다. 여기서 다시 돌리면 hold 된 글이 자리를 선점한다.
+ */
+const batch = prepared.batch
 const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
 
 console.log(`\n③ persona 배정 가능성 (active ${personas.length}명)`)
@@ -215,6 +244,25 @@ for (const t of targets) {
     : `   ${t.id} — 🔴 ${plan.reason}`)
 }
 
+/**
+ * ── ③-d 🔴 **준비 결과를 화면에 적는다** (2026-09-08) ──
+ *
+ *    자동 대상 · hold 목록 · 순서는 위 ②-b 에서 이미 `prepareCandidates` 가 만들었다.
+ *    러너가 여기서 다시 정하지 않는다 — 관제·예측과 갈리지 않기 위해서다.
+ */
+console.log(`\n③-d 신선도  ${describePrepared(prepared)}`)
+// 🔴 뺀 것은 **사람 검수**로 간다. 지운 것도 상태를 바꾼 것도 아니다
+for (const h of prepared.held) {
+  console.log(`   ⏸️  ${h.queueId}  [${h.hold}] ${h.reason}`)
+}
+if (prepared.held.length > 0) {
+  console.log('   🔴 위 행은 자동 발행에서만 빠졌다 — 큐에 그대로 있고 사람이 확인해야 한다')
+}
+const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
+const freshOrdered = targets
+  .filter((t) => orderById.has(t.id))
+  .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
+
 // ── ③-a 🔴 기존 배정이 깨졌으면 **여기서 멈춘다** ──
 //    없는 persona · 비활성 · 실계정이 붙은 사람을 가리키는 배정은 조용히 바꾸지 않는다.
 //    바꾸면 화면이 보여준 사람과 실제로 글을 쓴 사람이 달라진다
@@ -230,7 +278,8 @@ if (brokenRecovery.length > 0) {
 
 // ── ③-b 🔴 이번에 나갈 한 건 — **복구가 먼저, 그다음 배정이 있는 첫 글** ──
 const { picked, recovered, skipped, waiting } = pickPublishTarget({
-  ordered: targets,
+  // 🔴 신선도로 다시 세운 줄이다 — 복구는 그 안에서도 맨 앞이다
+  ordered: freshOrdered,
   assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
   isRecovery: (id) => assignOf.get(id)?.recovery === true,
 })

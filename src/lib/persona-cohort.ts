@@ -12,7 +12,7 @@
  * 🔴 순수 함수·상수만. DB 도 파일도 읽지 않는다.
  */
 
-export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale'
+export type CohortId = 'wave1-mvp' | 'wave2' | 'wave3-scale' | 'wave4-depth'
 
 export type CohortManifest = {
   id: CohortId
@@ -46,9 +46,22 @@ export const COHORTS: Readonly<Record<CohortId, CohortManifest>> = {
   },
   'wave3-scale': {
     id: 'wave3-scale',
-    purpose: '10/day 확장 — Pool 남은 유효 카드 전부 (P09 제외)',
+    purpose: '10/day 확장 — Pool 20장 중 남은 유효 카드 전부 (P09 제외)',
     codes: ['P03', 'P04', 'P06', 'P08', 'P12', 'P13', 'P14', 'P16', 'P18', 'P19', 'P20'],
     requires: ['wave1-mvp', 'wave2'],
+  },
+  /**
+   * 🔴 **얇은 축 보강 회차** (2026-09-08).
+   *    19명으로는 d10 이 139/140 이었다 — 여유가 없다. 그런데 인원을 아무나 늘리면
+   *    이미 두터운 축만 더 두터워진다. 그래서 `persona-axis-coverage` 가 **측정한**
+   *    얇은 축(별거 1 · 이혼 2 · 사별 2 · 비혼 2 · 자녀 초등 2 · 자녀 대학·취준 2 · 일:직장 2)을
+   *    메우도록 P21~P25 를 설계했다 (Pool §5-0).
+   */
+  'wave4-depth': {
+    id: 'wave4-depth',
+    purpose: '얇은 축 보강 — 총 24명. 별거·이혼·사별·비혼·초등·대학취준·직장 축을 두텁게',
+    codes: ['P21', 'P22', 'P23', 'P24', 'P25'],
+    requires: ['wave1-mvp', 'wave2', 'wave3-scale'],
   },
 }
 
@@ -219,10 +232,16 @@ export function judgeArgs(input: {
  *    이미 켜진 wave1·wave2 를 대상으로 `--apply` 를 돌리는 실수를 막으려면
  *    "지금 열려 있는 회차" 를 코드로 좁혀야 한다. 다음 회차는 여기에 추가한다 — 커밋으로 남는다.
  */
-export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave3-scale']
+export const RUNNABLE_COHORTS: readonly CohortId[] = ['wave3-scale', 'wave4-depth']
 
 /** 🔴 이미 끝난 회차 — 도구가 다시 만지지 않는다 */
 export const CLOSED_COHORTS: readonly CohortId[] = ['wave1-mvp', 'wave2']
+
+/**
+ * 🔴 **최종 목표 인원** — wave1 5 + wave2 3 + wave3 11 + wave4 5 = 24.
+ *    Pool 25장에서 P09(길이 미상)를 뺀 수와 같아야 한다. fixture 가 대조한다.
+ */
+export const TARGET_PERSONA_COUNT = 24
 
 /** 🔴 회차 전용 입력 파일. gitignored 이며 다른 회차 파일을 덮어쓰지 않는다 */
 export function displayNamePathOf(id: CohortId): string { return `tmp/persona-${id}-displayname.json` }

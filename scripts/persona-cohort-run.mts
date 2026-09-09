@@ -36,6 +36,7 @@ import { judgeRealMember } from '../src/lib/real-member-gate'
 import { parsePoolDoc, type PoolCard } from '../src/lib/persona-pool-card'
 import { verifySeedCard, duplicateKeys } from '../src/lib/persona-card-verify'
 import { preflightAll, preflightPersona, verifyPersonaSeed, type PersonaDbRow } from '../src/lib/persona-wave2-verify'
+import { assignCandidates, verifyNamePolicy } from '../src/lib/persona-nickname-candidates'
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { loadNameCollisionSets, describeSets } from './lib/persona-name-collision-sets.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -44,6 +45,12 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
  * 🔴 크롤 author 해시 salt — `persona-wave2-assign` 과 **같은 계약**이다.
  *    `hashOf` 를 넘기지 않으면 `matchAuthorHashes` 가 `return []` 로 빠져
  *    **authorHash 대조가 통째로 건너뛰어진다** (실측 17,992건 무시).
+ *
+ * 🔴 **값을 읽는 것은 `loadEnvLocal()` 뒤다.** 여기서는 이름만 둔다 —
+ *    salt 는 `.env.local` 에만 있어서, 모듈 최상단에서 읽으면 언제나 기본값으로 굳는다.
+ *    그러면 해시가 적재 때와 달라져 `authorHashes.has(...)` 가 전부 빗나가고,
+ *    **Gate ⑥-B 의 B2 갈래가 조용히 전원 pass 로 통과한다.**
+ *    (`persona-wave2-assign` 은 `loadEnvLocal()` 뒤에서 만든다 — 그쪽이 정본 순서다)
  */
 const AUTHOR_SALT_ENV = 'VOICE_AUTHOR_HASH_SALT'
 const DEFAULT_SALT = 'soransoran-voice-v1'
@@ -62,10 +69,6 @@ const REASON_AT = argv.indexOf('--reason')
 const REASON = REASON_AT >= 0 ? (argv[REASON_AT + 1] ?? null) : null
 const ACTOR = (process.env.ACTOR_USER_ID ?? '').trim() || null
 
-/** 🔴 salt 계약은 `persona-wave2-assign` 과 같다 — 호출부가 쥐어 판정부를 순수하게 둔다 */
-const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
-const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
-
 const fail = (m: string): never => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const ok = (m: string): void => console.log(`   ✅ ${m}`)
 
@@ -83,6 +86,16 @@ if (!sg.ok) fail(sg.reason)
 const STEP: CohortStep = sg.step!
 
 await loadEnvLocal()
+
+/**
+ * 🔴 **salt 는 `loadEnvLocal()` 뒤에 만든다.** 순서가 계약이다 —
+ *    앞에서 만들면 `.env.local` 의 값이 아직 `process.env` 에 없어 기본값으로 굳는다.
+ *    그 상태로는 후보 해시가 적재 해시와 달라 B2(크롤 author) 대조가 한 건도 걸리지 않고,
+ *    Gate ⑥-B 는 "전원 pass" 라고 말한다 — 검사한 적이 없는데도.
+ */
+const salt = (process.env[AUTHOR_SALT_ENV] ?? DEFAULT_SALT).trim()
+const hashOf = (v: string): string => `sha256:${createHash('sha256').update(`${salt}::${v}`, 'utf8').digest('hex')}`
+
 const prisma = new PrismaClient()
 
 const mode = STEP === 'check' ? '검증 (read-only)' : APPLY ? '🔴 실제 적용' : 'dry-run (DB write 0)'
@@ -233,23 +246,50 @@ let creates: CreatePlan[] = []
 let seeds: Record<string, Record<string, unknown>> = {}
 
 if (STEP === 'create') {
+  /**
+   * 🔴 **닉네임은 자동으로 고른다** (2026-09-08).
+   *
+   *    16명(Wave3 11 + Wave4 5)을 하나씩 고르게 하면 열여섯 번 멈춘다.
+   *    그리고 사람이 고른 이름은 Gate ⑥-B 를 통과할지 모른 채 고른 것이다.
+   *    후보 공간은 `persona-nickname-candidates` 에 있고, **누구에게 갈지는
+   *    적용 시점의 Gate ⑥-B 가 정한다** — 코드에 배정표를 두지 않는다(Pool §3-2 이유 ②).
+   *
+   *    🔴 파일(`tmp/persona-<cohort>-displayname.json`)이 있으면 **그것이 이긴다.**
+   *       창업자가 직접 고르고 싶을 때의 문은 닫지 않는다.
+   */
   const path = displayNamePathOf(COHORT)
-  if (!existsSync(path)) {
-    await prisma.$disconnect()
-    fail(`${path} 이 없습니다.\n`
-      + `     창업자가 고른 이름을 {"P03":"...", …} 형식으로 두세요 (tmp/ 는 gitignored).\n`
-      + `     🔴 다른 회차 파일을 덮어쓰지 마세요.`)
+  if (existsSync(path)) {
+    let selection: Record<string, string>
+    try { selection = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string> }
+    catch (e) { await prisma.$disconnect(); fail(`${path} 을 읽을 수 없습니다: ${(e as Error).message}`) }
+    const keyProblems = checkCohortKeys(M, Object.keys(selection!))
+    if (keyProblems.length > 0) { await prisma.$disconnect(); fail(keyProblems.join(' / ')) }
+    creates = M.codes.map((code) => ({ code, name: (selection![code] ?? '').trim() }))
+    if (creates.some((c) => c.name === '')) { await prisma.$disconnect(); fail('비어 있는 이름이 있습니다') }
+    ok(`이름 선택 파일 사용 (${path}) — ${creates.length}개`)
+  } else {
+    // 🔴 후보를 만들고 Gate ⑥-B 로 걸러 **자동으로** 고른다
+    const sets0 = await loadNameCollisionSets(prisma)
+    const auto = assignCandidates(M.codes, (n) => checkNameCollision(n, sets0, { hashOf }).status !== 'pass')
+    if (!auto.ok) {
+      await prisma.$disconnect()
+      fail(`닉네임 후보를 자동으로 고르지 못했습니다:\n     ${auto.problems.join('\n     ')}`)
+    }
+    creates = M.codes.map((code) => ({ code, name: auto.picked.get(code)! }))
+    ok(`닉네임 자동 선정 ${creates.length}개 — 정책 검사 + Gate ⑥-B 통과분에서 골랐다`)
+    console.log(`      🔴 파일(${path})을 두면 그것이 우선한다`)
   }
-  let selection: Record<string, string>
-  try { selection = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string> }
-  catch (e) { await prisma.$disconnect(); fail(`${path} 을 읽을 수 없습니다: ${(e as Error).message}`) }
-  const keyProblems = checkCohortKeys(M, Object.keys(selection!))
-  if (keyProblems.length > 0) { await prisma.$disconnect(); fail(keyProblems.join(' / ')) }
-  creates = M.codes.map((code) => ({ code, name: (selection![code] ?? '').trim() }))
-  if (creates.some((c) => c.name === '')) { await prisma.$disconnect(); fail('비어 있는 이름이 있습니다') }
+  // 🔴 어느 경로로 왔든 정책은 다시 본다 — 파일로 들어온 이름도 예외가 아니다
+  const policyBad = creates
+    .map((c) => ({ ...c, v: verifyNamePolicy(c.name) }))
+    .filter((x) => !x.v.ok)
+  if (policyBad.length > 0) {
+    await prisma.$disconnect()
+    fail(`작명 정책을 어긴 이름이 ${policyBad.length}개 있습니다:\n`
+      + policyBad.map((x) => `     ${x.code}: ${x.v.problems.join(' / ')}`).join('\n'))
+  }
   const names = creates.map((c) => c.name)
   if (new Set(names).size !== names.length) { await prisma.$disconnect(); fail('선택된 이름 중 중복이 있습니다') }
-  ok(`이름 선택 ${names.length}개`)
 
   /**
    * 🔴 Gate ⑥-B **사전 검사는 안내다. 최종 판정이 아니다** (2026-09-08, Codex P1-2).
@@ -260,9 +300,26 @@ if (STEP === 'create') {
    */
   const preSets = await loadNameCollisionSets(prisma)
   console.log(`   대조 대상 — ${describeSets(preSets)}`)
-  const preBlocked = creates
-    .map((c) => ({ ...c, v: checkNameCollision(c.name, preSets, { hashOf }) }))
-    .filter((x) => x.v.status !== 'pass')
+  const preVerdicts = creates.map((c) => ({ ...c, v: checkNameCollision(c.name, preSets, { hashOf }) }))
+
+  /**
+   * 🔴 **P 코드 → 예정 닉네임과 그 자리의 Gate ⑥-B 결과를 함께 보여 준다** (2026-09-08).
+   *
+   *    dry-run 이 "전원 pass" 한 줄만 내면, 창업자는 **무슨 이름이 붙을지 모른 채**
+   *    `--apply` 를 눌러야 한다. 이름은 회원에게 그대로 보이는 것이라
+   *    적용 전에 눈으로 볼 수 있어야 한다.
+   *
+   *    🔴 여기 적히는 것은 **우리가 만들 persona 의 이름**이다. 대조 대상(회원 닉네임 ·
+   *    크롤 author)은 한 글자도 나오지 않는다 — 판정부가 원문을 돌려주지 않기 때문이다.
+   */
+  console.log('\n   ── 예정 닉네임 (P 코드 → 이름 · Gate ⑥-B)')
+  for (const x of preVerdicts) {
+    const mark = x.v.status === 'pass' ? '✅ pass' : `🔴 ${x.v.status}`
+    console.log(`      ${x.code}  ${x.name.padEnd(6)}  ${mark}  ${x.v.reason}`)
+  }
+  console.log(`      🔴 적용 시점에 트랜잭션 안에서 다시 판정한다 — 위 결과는 지금 시점의 안내다`)
+
+  const preBlocked = preVerdicts.filter((x) => x.v.status !== 'pass')
   if (preBlocked.length > 0) {
     await prisma.$disconnect()
     fail(`Gate ⑥-B 를 통과하지 못한 이름이 ${preBlocked.length}개 있습니다.\n`

@@ -21,6 +21,7 @@ import {
   planBatch, POST_CAP_PER_WEEK, type BatchDraft, type PersonaForMatch,
 } from '../src/lib/original-post-persona-match'
 import { duplicateKeys, isPoolCode, verifySeedCard } from '../src/lib/persona-card-verify'
+import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 
 let pass = 0
@@ -90,15 +91,15 @@ noGo 남의 형편 비교
     p.maritalStatus === '기혼' && p.childrenCount === 2 && p.parentCare === '간헐')
 }
 
-// ── ② 정본 문서 — 🔴 20장이 전부 읽혀야 한다 ──
+// ── ② 정본 문서 — 🔴 25장이 전부 읽혀야 한다 ──
 console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-design.md §5)')
 {
   const doc = readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')
   const { cards, problems } = parsePoolDoc(doc)
-  check('🔴 카드 20장을 전부 읽는다', cards.length === 20)
+  check('🔴 카드 25장을 전부 읽는다', cards.length === 25)
   check('🔴 파싱 문제 0건', problems.length === 0)
-  check('코드가 P01~P20 이다',
-    cards.map((c) => c.code).join(',') === Array.from({ length: 20 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`).join(','))
+  check('코드가 P01~P25 이다',
+    cards.map((c) => c.code).join(',') === Array.from({ length: 25 }, (_, i) => `P${String(i + 1).padStart(2, '0')}`).join(','))
   check('🔴 카드마다 제목이 있다', cards.every((c) => c.title.trim() !== ''))
   check('🔴 카드마다 성격이 있다', cards.every((c) => c.personality.length >= 3))
   check('🔴 나이대가 전부 매칭이 아는 밴드다', cards.every((c) => c.childrenAgeBands.every(isKnownChildBand)))
@@ -106,8 +107,8 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
     cards.every((c) => (c.childrenCount > 0) === (c.childrenAgeBands.length > 0)))
   check('variation 이 전부 5~8개다', cards.every((c) => c.variationCount >= 5 && c.variationCount <= 8))
   // 🔴 마지막 카드가 뒤 절을 먹지 않는다 — 코드펜스로 자르지 않으면 여기서 걸린다
-  check('🔴 마지막 카드(P20)가 뒤 절을 먹지 않는다',
-    cards.find((c) => c.code === 'P20')?.variationCount === 7)
+  check('🔴 마지막 카드(P25)가 뒤 절을 먹지 않는다',
+    cards.find((c) => c.code === 'P25')?.variationCount === 6)
   check('혼인 상태를 전부 읽었다', cards.every((c) => c.maritalStatus !== ''))
   // 🔴 얇은 축이 실재함을 문서로 확인한다 — 중고등 자녀는 소수다
   check('🔴 중고등 자녀 카드가 소수다 — 얇은 축이 실재한다',
@@ -117,8 +118,9 @@ console.log('\n② 정본 Pool 문서 (docs/operations/2026-08-30-persona-pool-d
 // ── ③ planner 가 쓰는 규칙 — synthetic 큐로 고정 ──
 console.log('\n③ 조합 탐색 규칙 (synthetic)')
 {
-  const draft = (n: number, title = '오늘', body = '국수를 삶았어요.'): BatchDraft =>
-    ({ queueId: `q${n}`, title, body, gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null })
+  const draft = (n: number, title = '오늘', body = '국수를 삶았어요.'): QueueCandidate =>
+    ({ queueId: `q${n}`, title, body, gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null,
+      capturedAt: new Date('2026-09-08T00:00:00Z') })
   // 🔴 `as never` 를 쓰지 않는다 — 카드에 필드가 늘었을 때 컴파일러가 잡아야 한다.
   //    실측: 캐스팅 때문에 `noGoTopics` 누락이 런타임 오류로만 드러났다
   const card = (code: string, over: Partial<PoolCard> = {}): PersonaForMatch =>
@@ -343,7 +345,9 @@ console.log('\n⑥ 설계 카드 검증 (persona-card-verify)')
   })())
 
   // 🔴 코드 형식 · 중복
-  check('🔴 P01~P20 만 정본 코드다', isPoolCode('P01') && isPoolCode('P20') && !isPoolCode('P99') && !isPoolCode('N01'))
+  // 🔴 P01~P50 을 받는다 — Pool 확장 계획. 실제 안전장치는 "Pool 문서에 카드가 있는가" 다
+  check('🔴 P01~P50 이 정본 코드 범위다',
+    isPoolCode('P01') && isPoolCode('P25') && isPoolCode('P50') && !isPoolCode('P51') && !isPoolCode('N01'))
   check('🔴 최상위 중복 키만 센다 — 중첩 키는 정상 반복이다',
     duplicateKeys('{"P01":{"a":1},"P02":{"a":2}}').length === 0
     && duplicateKeys('{"P01":{"a":1},"P01":{"a":2}}').join(',') === 'P01')

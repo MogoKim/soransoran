@@ -426,6 +426,15 @@ jobs:
       - name: Master 운영 문서 (필수 절 · 모델 · workflow · 문서 지도)
         run: npm run master:doc-check
 
+      - name: d10 activation preparation fixture
+        run: npm run d10:prep-check
+
+      # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
+      # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
+      # mkdtemp 안에서만 돌고 저장소 .microseed-data 는 건드리지 않는다.
+      - name: 수집 차단기 잠금 (실제 프로세스 경쟁)
+        run: npm run collect:guard-lock-check
+
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
       #
       # 🔴 2026-09-07 실측: job 은 loaded 인데 exit 78 로 죽고 로그가 0바이트였다.

@@ -6,6 +6,25 @@
 이 디렉터리의 `.plist.template` 은 **템플릿이다. `~/Library/LaunchAgents/` 에 복사되어 있지 않고
 `launchctl load` 되지도 않았다.**
 
+🔴 **"등록됐는가" 의 정본은 이 디렉터리가 아니라 `launchctl list` 와 `~/Library/LaunchAgents/` 다.**
+
+```bash
+npx tsx -e "import {observeJobs} from './scripts/lib/launchd-observe.mjs'; console.log(observeJobs())"
+npm run supply:health          # ④-b 에 current · prepared · required 가 나온다
+```
+
+수집 능력은 **세 값을 절대 합치지 않는다**(MASTER §8.0).
+
+```
+current   launchctl 에 올라와 있는 job 의 **실제 슬롯 수** × 회차당 상세 × 성공률
+prepared  이 디렉터리에 템플릿이 있고 계획이 성립하는 것
+required  그 capacity 단계가 요구하는 상세 요청 수
+```
+
+템플릿을 만든 것은 `prepared` 다. `current` 는 **정확한 Label 과 정확한 슬롯 수**로
+올라와 있을 때만 늘어난다 — 다회 Label 이어도 슬롯이 2개면 그것은 2회 job 이다.
+
+
 🔴 **등록은 창업자 승인 후 별도 절차다.** 등록하는 순간 되돌리는 주체가 사람이 된다 —
 이 PR 은 "무엇을 등록할 것인가" 까지만 정한다.
 

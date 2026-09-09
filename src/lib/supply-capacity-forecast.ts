@@ -22,6 +22,9 @@ import {
 import { kstDayStart } from './original-post-publish'
 import { pickPublishTarget } from './original-post-auto-publish'
 import type { Finding } from './supply-health'
+// 🔴 계획은 **공용 순수 함수 하나**가 만든다. 여기서 planBatch 를 직접 부르면
+//    러너가 쓰는 우선권이 빠져 같은 입력에 다른 글을 고른다(2026-09-08 재현)
+import { prepareCandidates, type QueueCandidate } from './supply-candidates'
 
 /** 🔴 00:05 KST — auto-publish workflow 의 예약 시각 */
 export const PUBLISH_HOUR_KST = 0
@@ -187,8 +190,14 @@ export function classifyHeadBlock(input: {
 }
 
 export function forecastPublishing(input: {
-  /** 🔴 `selectAutoTargets` 를 통과한 자동 발행 후보만. legacy 는 이미 빠져 있다 */
-  queue: readonly BatchDraft[]
+  /**
+   * 🔴 `selectAutoTargets` 를 통과한 자동 발행 후보만. legacy 는 이미 빠져 있다.
+   *
+   * 🔴 **`QueueCandidate` 로 받는다** — `capturedAt` 을 들고 있어야 예측일마다 나이를 다시 잰다.
+   *    예전 판은 `ageDays` 스냅숏이 굳은 `BatchDraft` 를 받아, 오늘 2일짜리 timely 후보가
+   *    14일 뒤에도 2일로 남았다. 그래서 TTL 을 넘긴 글까지 전부 발행된다고 셌다.
+   */
+  queue: readonly QueueCandidate[]
   personas: readonly PersonaForMatch[]
   history: readonly PersonaHistory[]
   startAt: Date
@@ -201,7 +210,9 @@ export function forecastPublishing(input: {
   const cap = input.dailyCap
   // 🔴 이력을 복사해 쓴다 — 호출자의 배열을 바꾸지 않는다
   const hist: PersonaHistory[] = input.history.map((h) => ({ code: h.code, matchedAts: [...h.matchedAts] }))
-  const remaining = [...input.queue]
+  const remaining: QueueCandidate[] = [...input.queue]
+  /** 🔴 날짜가 지나 hold 된 후보 — 그 뒤로는 자리 경쟁에서도 빠진다 */
+  const heldByDate: { date: string; queueId: string; hold: string }[] = []
   const days: ForecastDay[] = []
   let nextQueueId: string | null = null
   let nextPersonaCandidates: string[] = []
@@ -212,7 +223,9 @@ export function forecastPublishing(input: {
   //    보여주면, 멈춘 레인이 초록으로 보이고 사람은 큐가 빌 때까지 모른다
   const recoveryBroken: { queueId: string; problem: string }[] = []
   {
-    const probe = planBatch(input.queue, input.personas, input.caps ?? {})
+    const probe = prepareCandidates({
+      candidates: input.queue, personas: input.personas, caps: input.caps ?? {}, at: input.startAt,
+    }).batch
     for (const a of probe.assignments) {
       if (a.recoveryProblem !== null) recoveryBroken.push({ queueId: a.queueId, problem: a.recoveryProblem })
     }
@@ -252,15 +265,39 @@ export function forecastPublishing(input: {
         }
       })
 
-      // 🔴 **남은 후보 전체**를 planBatch 에 넘긴다 — 러너가 그렇게 한다.
-      //    head 하나만 넘기면 배치 여력 경쟁이 사라져 예측이 낙관적이 된다.
-      const batch = planBatch(remaining, personasNow, input.caps ?? {})
+      /**
+       * 🔴 **러너와 같은 계획 함수를 그날 시각으로 부른다.**
+       *
+       *    · 그날의 나이로 freshness 를 다시 판정한다 (TTL 을 넘기면 그날부터 hold)
+       *    · hold 된 것은 자리 경쟁에서 빠진다
+       *    · 발행 우선권(복구 → hot → warm → 상시 적합도)이 최대 매칭에 그대로 들어간다
+       *
+       *    예전에는 여기서 `planBatch` 를 **우선권 없이** 다시 불러, 같은 입력에서
+       *    러너는 `z-hot` · 예측은 `a-ever` 를 골랐다.
+       */
+      const prep = prepareCandidates({
+        candidates: remaining, personas: personasNow, caps: input.caps ?? {}, at,
+      })
+      const batch = prep.batch
       const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
+      for (const h of prep.held) {
+        if (!heldByDate.some((x) => x.queueId === h.queueId)) {
+          heldByDate.push({ date: kstDateLabel(at), queueId: h.queueId, hold: h.hold })
+        }
+      }
+      // 🔴 그날 hold 된 것은 후보에서 뺀다 — 다음 날은 나이가 더 들어 되살아나지 않는다
+      if (prep.held.length > 0) {
+        for (const h of prep.held) {
+          const at2 = remaining.findIndex((d) => d.queueId === h.queueId)
+          if (at2 >= 0) remaining.splice(at2, 1)
+        }
+      }
+      if (remaining.length === 0) { blockedReason = 'NO_CANDIDATE'; break }
 
-      // 🔴 러너와 **같은 함수**로 고른다. 여기서 다시 고르지 않는다
-      // 🔴 러너와 **같은 함수**로 고른다. 복구 우선 규칙도 함께 따라온다
+      // 🔴 러너와 **같은 함수**로 고른다. 복구 우선 규칙도 함께 따라온다.
+      //    순서는 준비 함수가 정한 발행 우선순위다 — 줄 순서가 아니다
       const { picked } = pickPublishTarget({
-        ordered: remaining.map((d) => ({ id: d.queueId })),
+        ordered: prep.auto.map((d) => ({ id: d.queueId })),
         assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
         isRecovery: (id) => assignOf.get(id)?.recovery === true,
       })
