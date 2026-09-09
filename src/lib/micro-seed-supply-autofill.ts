@@ -377,14 +377,35 @@ export type ApplyGate =
 export function judgeApply(input: {
   targets: readonly Candidate[]
   apply: boolean
+  /**
+   * 🔴 **사람이 준 정확한 개수.** 못 채우면 잘라내지 않고 멈춘다 —
+   *    사람이 "10건" 이라고 했는데 3건만 들어가면 그건 다른 작업이다.
+   */
   limit: number | null
+  /**
+   * 🔴 **자동 경로의 상한.** "이만큼까지 채워라" 이지 "정확히 이만큼" 이 아니다.
+   *
+   *    러너는 부족분(예: 29건)을 넘기는데 한 회차가 만드는 후보는 몇 건뿐이다.
+   *    그것을 `limit` 으로 받으면 **영원히 한 건도 못 채운다** —
+   *    2026-09-09 Wave B 에서 목표를 42 로 올리자 실제로 그렇게 됐다(적재 0건).
+   *    자동 경로에는 사람이 없으므로 "부분 적재" 가 정상이고, 상한만 지키면 된다.
+   *
+   *    🔴 `limit` 과 함께 주지 않는다 — 둘 중 하나만 쓴다.
+   */
+  upTo?: number | null
   usable: number
   /** 🔴 capacity 프로필의 재고 목표. 주지 않으면 가장 안전한 값 */
   target?: number
 }): ApplyGate {
   if (!input.apply) return { ok: false, reason: 'dry-run — --apply 가 없다' }
-  if (input.limit === null || !Number.isInteger(input.limit) || input.limit < 1) {
-    return { ok: false, reason: `--limit=N 이 필요하다 (받은 값 ${input.limit ?? '없음'})` }
+  const upTo = input.upTo ?? null
+  if (input.limit !== null && upTo !== null) {
+    return { ok: false, reason: '--limit 과 --up-to 를 함께 주지 않는다 — 정확히 채울지 상한까지 채울지 하나만 정한다' }
+  }
+  const asked = upTo ?? input.limit
+  const flag = upTo !== null ? '--up-to' : '--limit'
+  if (asked === null || !Number.isInteger(asked) || asked < 1) {
+    return { ok: false, reason: `${flag}=N 이 필요하다 (받은 값 ${asked ?? '없음'})` }
   }
   if (input.targets.length === 0) return { ok: false, reason: '보충할 후보가 0건이다' }
   // 🔴 목표는 capacity 프로필에서 주입한다. 주지 않으면 가장 안전한 값이다
@@ -393,14 +414,16 @@ export function judgeApply(input: {
   if (room === 0) {
     return { ok: false, reason: `재고가 이미 목표 ${target}건이다 (현재 ${input.usable}건)` }
   }
-  const n = Math.min(input.limit, input.targets.length, room)
-  if (n < input.limit) {
+  const n = Math.min(asked, input.targets.length, room)
+  // 🔴 `--limit` 은 **정확히** 그 수여야 한다. `--up-to` 는 상한이므로 부분 적재가 정상이다
+  if (upTo === null && n < asked) {
     return {
       ok: false,
-      reason: `--limit ${input.limit} 을 채울 수 없다 — 후보 ${input.targets.length}건 · 남은 여력 ${room}건.`
+      reason: `--limit ${asked} 을 채울 수 없다 — 후보 ${input.targets.length}건 · 남은 여력 ${room}건.`
         + ' 잘라내지 않고 멈춘다',
     }
   }
+  if (n < 1) return { ok: false, reason: '보충할 후보가 0건이다' }
   return { ok: true, take: input.targets.slice(0, n) }
 }
 

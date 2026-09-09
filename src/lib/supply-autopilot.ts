@@ -12,6 +12,7 @@
  */
 
 import { STOCK_TARGET } from './micro-seed-supply-autofill'
+import type { SourceId } from './collect-guard'
 import { detailPerQueueItem } from './scale-supply-plan'
 
 /** 🔴 전체 kill switch. plist 를 지우지 않고도 멈출 수 있어야 한다 */
@@ -51,6 +52,12 @@ export const STAGE_LABEL: Record<Stage, string> = {
 
 /** 🔴 밖으로 나가는 단계. 이 단계만 kill switch 와 robots 를 요구한다 */
 export const NETWORK_STAGES: readonly Stage[] = ['collect']
+
+/**
+ * 🔴 네트워크 단계가 **어느 source 를 두드리는가** — 보호장치 기록을 찾을 때 쓴다.
+ *    여기 없는 단계는 source 판정을 하지 않는다(= 실패하면 예전처럼 멈춘다).
+ */
+export const STAGE_SOURCE: Partial<Record<Stage, SourceId>> = { collect: '82cook' }
 /** 🔴 모델을 부르는 단계 */
 export const LLM_STAGES: readonly Stage[] = ['judge', 'draft']
 /** 🔴 DB 에 쓰는 단계 — 하나뿐이다. 나머지는 전부 파일까지다 */
@@ -180,8 +187,13 @@ export function planStages(input: { collectCap: number; shortfall: number }): St
     mk('adapt', ['--apply']),
     mk('judge', ['--call', '--apply']),
     mk('draft', ['--call', '--apply']),
-    // 🔴 목표까지만. 부족분을 넘겨 적재하지 않는다
-    mk('fill', ['--apply', `--limit=${input.shortfall}`]),
+    /**
+     * 🔴 목표까지만. 부족분을 넘겨 적재하지 않는다.
+     *    🔴 `--limit`(정확히)이 아니라 `--up-to`(상한까지)다 — 한 회차가 만드는 후보는
+     *    부족분보다 훨씬 적어서, 정확한 수를 요구하면 **영원히 한 건도 못 채운다**
+     *    (2026-09-09 Wave B 실측: 목표 42 · 부족 29 · 후보 1 → 적재 0건).
+     */
+    mk('fill', ['--apply', `--up-to=${input.shortfall}`]),
   ]
 }
 
@@ -313,9 +325,167 @@ export type Checkpoint = {
  * 실패한 단계는 "끝난 것" 이 아니라 **미완료** 다. 다음 회차는 거기서 다시 시작한다.
  * 그래서 실패 기록은 건너뛰기의 근거가 되지 않는다 — `ok` 만 센다.
  */
-export function nextStage(plan: readonly StagePlan[], done: readonly StageOutcome[]): StagePlan | null {
+export function nextStage(
+  plan: readonly StagePlan[],
+  done: readonly StageOutcome[],
+  /**
+   * 🔴 이번 attempt 의 시작 위치. 넘기면 **이번 회차에서 건너뛴 단계**도 다시 부르지 않는다.
+   *    넘기지 않으면 예전처럼 `ok` 만 본다 — 건너뛴 단계는 **다음 회차에 다시 시도**한다.
+   *    (건너뜀을 전체 이력에 남기면 82cook 이 살아나도 영영 수집하지 않는다)
+   */
+  attemptFrom?: number,
+): StagePlan | null {
   const doneSet = new Set(done.filter((d) => d.status === 'ok').map((d) => d.stage))
+  if (attemptFrom !== undefined) {
+    for (const d of done.slice(attemptFrom)) if (d.status === 'skipped') doneSet.add(d.stage)
+  }
   return plan.find((p) => !doneSet.has(p.stage)) ?? null
+}
+
+/**
+ * 🔴 **차단기 한 칸의 상태** — 문자열로 뭉개지 않는다.
+ *
+ *    앞선 판은 `status:consecutive:openedAt` 을 **문자열로 이어 붙여** 비교했다.
+ *    그러면 `closed:3:-` → `closed:0:-` (연속 실패가 **줄어든 것 = 성공**)도
+ *    "달라졌다" 는 이유로 실패 증거가 된다. 실측 재현: 수집 성공 뒤 로컬 오류로 exit 1 →
+ *    `blocked=true`. **방향을 보려면 값을 값으로 들고 있어야 한다.**
+ */
+export type BreakerMark = {
+  /** `closed` · `open` · `half-open` */
+  status: string
+  consecutive: number
+  openedAt: number | null
+}
+
+/** 🔴 보호장치 지문 — 실행 전후를 대조하기 위한 최소 정보 */
+export type GuardProbe = {
+  /** 🔴 읽었는가. 파일이 없거나 손상됐으면 false — 그때는 판단 근거가 없다 */
+  readable: boolean
+  /**
+   * 🔴 **지금 두드리면 안 되는 상태인가** — breaker 가 `open` 이거나 예산이 소진됐다.
+   *    🔴 `half-open` 은 여기 넣지 않는다. 그건 **복구 시험이 허용된 상태**라
+   *    미리 건너뛰면 영영 복구를 확인하지 못한다.
+   */
+  preblocked: boolean
+  /** 복구 시험 가능 상태인가 — 사전 건너뛰기를 하지 않고 실제로 두드려 본다 */
+  halfOpen: boolean
+  /** 막힌 이유(사람이 읽을 문장). `preblocked` 가 아니면 빈 문자열 */
+  blockedReason: string
+  /** 분류별 상태 — 🔴 값으로 들고 있어야 증감 방향을 볼 수 있다 */
+  breakers: Readonly<Record<string, BreakerMark>>
+}
+
+/**
+ * 🔴 **source 쪽 실패로 볼 수 있는 분류.** `OTHER` 는 원인이 특정되지 않으므로 증거가 아니다 —
+ *    모르는 실패를 "남의 서버 탓" 으로 돌리면 우리 버그가 조용히 지나간다.
+ */
+export const REMOTE_FAILURE_CLASSES: readonly string[] = ['NETWORK', 'RATE_LIMIT', 'SERVER', 'FORBIDDEN']
+
+/** 실패 방향으로 움직였는가 — 🔴 늘어남·새로 열림·닫힘→열림만 실패다 */
+function movedToFailure(before: BreakerMark, after: BreakerMark): boolean {
+  if (after.consecutive > before.consecutive) return true
+  if (before.openedAt === null && after.openedAt !== null) return true
+  if (before.openedAt !== null && after.openedAt !== null && after.openedAt > before.openedAt) return true
+  return before.status === 'closed' && after.status !== 'closed'
+}
+
+/** 복구 방향으로 움직였는가 — 🔴 줄어듦·0 초기화·열림→닫힘은 **성공**의 흔적이다 */
+function movedToRecovery(before: BreakerMark, after: BreakerMark): boolean {
+  if (after.consecutive < before.consecutive) return true
+  return before.status !== 'closed' && after.status === 'closed'
+}
+
+/**
+ * 🔴 **이번 실패가 source 차단인가** (2026-09-09 Codex 지적 2회 → 재현 2회).
+ *
+ *    ① 1차 오판: 실행 **후** 스냅숏만 보고 `consecutive > 0` 이면 차단이라고 했다.
+ *       82cook 은 도서관 Wi-Fi 의 `ECONNREFUSED` 로 연속 3회 기록이 남아 있어,
+ *       설정 오류·코드 오류·spawn 오류까지 전부 "82cook 장애" 로 읽혔다.
+ *    ② 2차 오판: 전후를 **문자열로** 비교했다. 그러면 `closed:3:-` → `closed:0:-`,
+ *       즉 **수집이 성공해 연속 실패가 초기화된 것**까지 "달라졌으니 실패" 가 된다.
+ *
+ *    🔴 그래서 값을 값으로 보고 **방향**까지 확인한다.
+ *
+ *      · `spawnError` → 무조건 멈춘다. 프로세스가 뜨지도 못한 것이다
+ *      · guard 를 못 읽으면 → 멈춘다(fail-closed)
+ *      · 실행 **전부터** `open`·예산 소진 → 지금 막힌 것이 분명하다(건너뛴다)
+ *      · 이번에 **실패 방향**으로 움직인 remote 분류가 있으면 → 건너뛴다
+ *      · **복구 방향**으로 움직였는데 exit 1 이면 → 수집은 됐고 그 뒤가 틀린 것이다. 멈춘다
+ *      · 전후가 같거나 원인이 불명확하면 → 멈춘다
+ */
+export function judgeSourceBlocked(input: {
+  /** 프로세스를 띄우지 못한 경우의 메시지. 비어 있지 않으면 그 자체로 stop */
+  spawnError: string
+  /** 단계 실행 **전** 지문. 못 읽었으면 null */
+  before: GuardProbe | null
+  /** 단계 실행 **후** 지문. 못 읽었으면 null */
+  after: GuardProbe | null
+}): { blocked: boolean; reason: string } {
+  if (input.spawnError.trim() !== '') {
+    return { blocked: false, reason: 'spawn 실패 — 프로세스가 뜨지 못했다. 보호장치 기록과 무관하게 멈춘다' }
+  }
+  const { before, after } = input
+  if (before === null || after === null || !before.readable || !after.readable) {
+    return { blocked: false, reason: '보호장치 상태를 읽지 못했다 — 판단 근거가 없으므로 멈춘다(fail-closed)' }
+  }
+  if (before.preblocked) {
+    return { blocked: true, reason: `실행 전부터 막혀 있었다 — ${before.blockedReason}` }
+  }
+  const classes = [...new Set([...Object.keys(before.breakers), ...Object.keys(after.breakers)])]
+  const zero: BreakerMark = { status: 'closed', consecutive: 0, openedAt: null }
+  const failed: string[] = []
+  const recovered: string[] = []
+  for (const cls of classes) {
+    const b = before.breakers[cls] ?? zero
+    const a = after.breakers[cls] ?? zero
+    // 🔴 remote 분류만 실패 증거로 센다. `OTHER` 는 우리 쪽 버그일 수 있다
+    if (REMOTE_FAILURE_CLASSES.includes(cls) && movedToFailure(b, a)) failed.push(cls)
+    if (movedToRecovery(b, a)) recovered.push(cls)
+  }
+  if (failed.length > 0) {
+    return { blocked: true, reason: `이번 실행이 새 실패를 기록했다 — ${failed.join(' · ')}` }
+  }
+  if (recovered.length > 0) {
+    return {
+      blocked: false,
+      reason: `보호장치가 **복구 방향**으로 움직였다(${recovered.join(' · ')}) — 수집은 됐고 그 뒤가 틀렸다. 멈춘다`,
+    }
+  }
+  return {
+    blocked: false,
+    reason: '보호장치 기록이 이번 실행 전후로 **똑같다** — 이번 실패는 source 가 만든 것이 아니다',
+  }
+}
+
+/**
+ * 🔴 **실패한 단계에서 멈출 것인가, 건너뛰고 갈 것인가** (2026-09-09 Wave B 실측).
+ *
+ *    82cook 이 이 망에서 `ECONNREFUSED` 였다. 그런데 `collect` 가 첫 단계라
+ *    **뒤 단계를 전부 돌리지 않았고**, 이미 받아 둔 네이버 thin 이 그대로 묵었다 —
+ *    한 source 의 네트워크 장애가 **다른 source 의 공급까지 세운다.**
+ *
+ *    그래서 네트워크 단계가 **source 쪽 차단**으로 실패하면 그 단계만 건너뛰고
+ *    로컬 단계(변환·판정·초안·보충)는 살린다. 로컬 단계는 그 source 를 필요로 하지 않는다.
+ *
+ *    🔴 **아무 실패나 건너뛰지 않는다.** 판단 근거는 우리 추측이 아니라
+ *    **보호장치가 남긴 기록**이다(`sourceBlocked`) — 차단기가 열렸거나 연속 실패가 있을 때만이다.
+ *    스크립트 버그·설정 오류는 `sourceBlocked` 가 아니므로 예전처럼 멈춘다.
+ *
+ *    🔴 건너뛴 회차는 `done` 이 아니다. 다음 회차가 그 단계부터 다시 시도한다.
+ */
+export function judgeStageFailure(input: {
+  stage: Stage
+  /** 보호장치가 "source 가 막았다" 고 기록했는가 — 부르는 쪽이 실측해 넘긴다 */
+  sourceBlocked: boolean
+}): { action: 'skip' | 'stop'; note: string } {
+  if (NETWORK_STAGES.includes(input.stage) && input.sourceBlocked) {
+    return {
+      action: 'skip',
+      note: `🟡 ${STAGE_LABEL[input.stage]} 건너뜀 — source 가 막혔다(보호장치 기록). `
+        + '다른 source 의 공급은 계속한다 · 다음 회차에 다시 시도한다',
+    }
+  }
+  return { action: 'stop', note: '🔴 실패 — 뒤 단계로 가지 않는다' }
 }
 
 /**
@@ -480,6 +650,11 @@ export type ExecResult = {
   spawnError: string
   /** 그 단계가 만든 파일 */
   made: string[]
+  /**
+   * 🔴 실패가 **source 쪽 차단**인가 — 보호장치 기록으로 부르는 쪽이 판단해 넘긴다.
+   *    없으면 false 로 본다(= 예전처럼 멈춘다). 추측으로 건너뛰지 않는다.
+   */
+  sourceBlocked?: boolean
 }
 
 export type ExecFn = (stage: Stage, args: readonly string[]) => Promise<ExecResult>
@@ -528,8 +703,12 @@ export async function runStages(input: {
   for (;;) {
     // 🔴 이번 attempt 몫만 본다. cp.stages 전체를 보면 재개가 첫 줄에서 죽는다
     if (shouldStopRun(attemptOf(cp.stages, attemptFrom))) break
-    // 🔴 전체 이력 기준 — 이미 성공한 단계는 다시 돌리지 않는다
-    const step = nextStage(input.plan, cp.stages)
+    /**
+     * 🔴 전체 이력 기준 — 이미 성공한 단계는 다시 돌리지 않는다.
+     *    🔴 **이번 attempt 에서 건너뛴 단계도 제외한다** — 넘기지 않으면 같은 단계를
+     *    영원히 다시 고르는 무한 루프가 된다(건너뜀은 `ok` 가 아니기 때문이다).
+     */
+    const step = nextStage(input.plan, cp.stages, attemptFrom)
     if (step === null) break
 
     const args = [...step.args, ...inputArgsFor(step.stage, cp.artifacts)]
@@ -538,19 +717,27 @@ export async function runStages(input: {
     const r = await input.exec(step.stage, args)
     calls.push({ stage: step.stage, args })
     if (r.made.length > 0) cp.artifacts[step.stage] = r.made
+    // 🔴 실패했을 때만 판정한다 — source 차단이면 그 단계만 건너뛰고 로컬 단계는 살린다
+    const verdict = r.ok ? null : judgeStageFailure({ stage: step.stage, sourceBlocked: r.sourceBlocked === true })
     cp.stages.push({
-      stage: step.stage, status: r.ok ? 'ok' : 'failed', exitCode: r.exitCode,
+      stage: step.stage,
+      status: r.ok ? 'ok' : (verdict!.action === 'skip' ? 'skipped' : 'failed'),
+      exitCode: r.exitCode,
       startedAt, endedAt: input.now(),
-      note: r.ok ? '' : (r.spawnError !== '' ? `🔴 ${r.spawnError}` : '🔴 실패 — 뒤 단계로 가지 않는다'),
+      note: r.ok ? '' : (r.spawnError !== '' ? `🔴 ${r.spawnError}` : verdict!.note),
     })
     save()
-    if (!r.ok) break
+    if (!r.ok && verdict!.action === 'stop') break
   }
 
   const mine = attemptOf(cp.stages, attemptFrom)
   const failed = mine.find((x) => x.status === 'failed') ?? null
-  // 🔴 전체 이력 기준으로 남은 단계가 없으면 끝난 것이다 — 과거에 실패했더라도
-  const allDone = nextStage(input.plan, cp.stages) === null
+  /**
+   * 🔴 **이번 attempt 기준**이다. 건너뛴 단계가 있어도 이 회차는 할 수 있는 것을 다 했다 —
+   *    `running` 으로 남겨 두면 다음 회차가 새로 시작하지 못하고 옛 checkpoint 를 붙든다.
+   *    건너뛴 단계는 **다음 회차가 처음부터 다시** 시도한다.
+   */
+  const allDone = nextStage(input.plan, cp.stages, attemptFrom) === null
   const status: RunStatus = failed !== null ? 'running' : (allDone ? 'done' : 'running')
   cp.status = status
   cp.completedAt = status === 'done' ? input.now() : null

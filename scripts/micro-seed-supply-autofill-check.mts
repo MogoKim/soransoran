@@ -263,6 +263,44 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
     const r = judgeApply({ ...g, limit: 3 })
     return !r.ok && r.reason.includes('잘라내지 않고 멈춘다')
   })())
+  /**
+   * 🔴 **자동 경로는 상한이다** (2026-09-09 Wave B 실측).
+   *    목표를 42 로 올리자 부족분 29 를 `--limit` 으로 요구해 후보 1건에서 **적재 0건**이 됐다.
+   *    사람이 주는 `--limit`(정확히)과 러너가 주는 `--up-to`(상한까지)를 나눈다.
+   */
+  check('🔴 --up-to 는 못 채워도 있는 만큼 적재한다', (() => {
+    const r = judgeApply({ ...g, limit: null, upTo: 29 })
+    return r.ok && r.take.length === g.targets.length
+  })())
+  check('🔴 --up-to 도 상한을 넘기지 않는다', (() => {
+    const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
+    const r = judgeApply({ targets: many, apply: true, limit: null, upTo: 2, usable: 0, target: 42 })
+    return r.ok && r.take.length === 2
+  })())
+  check('🔴 --up-to 도 목표 여력을 넘기지 않는다', (() => {
+    const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
+    const r = judgeApply({ targets: many, apply: true, limit: null, upTo: 99, usable: 41, target: 42 })
+    return r.ok && r.take.length === 1
+  })())
+  check('🔴 --up-to 와 --limit 을 함께 주면 막는다', (() => {
+    const r = judgeApply({ ...g, limit: 1, upTo: 1 })
+    return !r.ok && r.reason.includes('함께 주지 않는다')
+  })())
+  check('🔴 --up-to 여도 후보 0건이면 안 돈다', !judgeApply({ ...g, limit: null, upTo: 29, targets: [] }).ok)
+  check('🔴 사람이 주는 --limit 의 "정확히" 계약은 그대로다', (() => {
+    const r = judgeApply({ ...g, limit: 3 })
+    return !r.ok && r.reason.includes('잘라내지 않고 멈춘다')
+  })())
+  check('🔴 러너는 --up-to 로 부른다 — --limit 으로 부르지 않는다', (() => {
+    const lib = readFileSync('src/lib/supply-autopilot.ts', 'utf-8')
+    return /mk\('fill', \['--apply', `--up-to=\$\{input\.shortfall\}`\]\)/.test(lib)
+      && !/mk\('fill', \['--apply', `--limit=/.test(lib)
+  })())
+  check('🔴 autofill CLI 가 --up-to 를 실제로 판정부에 넘긴다', (() => {
+    const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
+    return /const UP_TO = UP_TO_RAW === null \? null : Number\.parseInt\(UP_TO_RAW, 10\)/.test(cli)
+      && /judgeApply\(\{ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO,/.test(cli)
+  })())
   check('여력만큼만 가져간다', (() => {
     const many = Array.from({ length: 5 }, (_, i) => ok({ title: `t${i}`, sourceArticleId: `a${i}` }))
     const r = judgeApply({ targets: many, apply: true, limit: 2, usable: 10 })

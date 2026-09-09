@@ -860,3 +860,134 @@ persona 별 분포도 확인했다 — 신규 16명 각각 `created` 1 · `displ
 
 `Scale Activation Wave B — 다회 수집 활성화와 재고 확장`.
 🔴 이번 PR 에서 launchctl 등록·cron·env·GitHub Variables·capacity/release 승격은 **하지 않았다**.
+
+---
+
+## §16 Scale Activation Wave B — 다회 수집 활성화와 재고 확장 (2026-09-09)
+
+> 🔴 아래 숫자는 **실행 시점의 운영 데이터 순간값**이다. 현재값 정본은 MASTER §6.3.
+
+### 구현 / 설정 / 가동 / 관찰
+
+| | 상태 |
+|---|---|
+| 구현 | 다회 job 템플릿·schedule 계약은 이미 main 에 있었다 |
+| 설정 | 🟢 single 2개 → **multi 4회/day 2개** 로 교체 · `SORAN_CAPACITY_STAGE=d3` |
+| 가동 | 🟢 사전 live 검증 2 source · 공급 회차 1회 수동 실행 |
+| 관찰 | 🔴 **아직 없다** — 첫 자동 회차(02:50 wgang · 04:20 remonterrace)를 봐야 한다 |
+
+### A. source 사전 검증 (`--pages=1 --max=3 --thin --live`)
+
+| source | 목록 | 상세 | thin | 판정 |
+|---|---|---|---|---|
+| remonterrace | 23건 | 3건 | 2건 | 🟢 통과 |
+| wgang | 21건 | 3건 | 3건 | 🟢 통과 |
+
+403·429 0 · 차단기 전부 closed · 세션 정상(우나어 재사용 아님) ·
+thin 파일에 전문 없음(`bodyHead` 최대 300자, `body`/`rawBody` 컬럼 없음).
+
+### B. launchd 전환
+
+```
+before  navercafe-collect-remonterrace        1회/day 09:20
+        navercafe-collect-wgang               1회/day 13:20
+after   navercafe-collect-remonterrace-multi  4회/day 04:20 · 10:20 · 16:20 · 22:20
+        navercafe-collect-wgang-multi         4회/day 02:50 · 08:50 · 14:50 · 20:50
+        supply-autopilot                      21:10 (변경 없음)
+```
+
+🔴 source 마다 **unload → load 순서**로 바꿔 old/new 가 동시에 loaded 인 순간을 남기지 않았다.
+설치본은 템플릿과 치환값 외 차이 0 · `plutil -lint` PASS · placeholder 0.
+옛 single plist 파일은 **지우지 않고 남겼다**(롤백용, loaded 아님).
+🔴 안정 단계 8회/day 로 올리지 않았다.
+
+### C. 수집 능력
+
+```
+현재  20건/day → 80건/day   (remonterrace 4회 40 · wgang 4회 40 · 82cook 0)
+```
+
+### D. 공급 회차 1회 (수동)
+
+`collect` 는 82cook 이 막혀 **건너뛰고**, 나머지 5단계가 돌았다. checkpoint `done`.
+
+```
+재고    13 → 25 (목표 42)     구성 사람 3 · 기계 22 · legacy 5
+판정    SEED 33 · HOLD 88 · DROP 35      생성 채택 22 · 적재 12
+LLM     Haiku 호출 6건
+Raw     58 → 70              Queue 24 → 36
+Post    42 → 42 ✅ 불변       Comment · Persona · Account 불변
+```
+
+🔴 재고가 42 에 못 미쳐도 **반복 실행하지 않았다.** 21:10 정기 회차가 이어받는다.
+
+### E. 82cook 관측 — 🔴 네트워크 실패 (403 아님)
+
+이 망에서 `www.82cook.com:443` 이 **12ms 만에 연결 거부**됐다(`ECONNREFUSED`).
+기존 CLI 가 `--list --pages=1` + `--fetch`/`--auto` 없음이면 **상세 요청 0** 을 보장하는 것을
+코드로 확인한 뒤 목록 1페이지 snapshot 을 1회 시도했고, `robots.txt` 단계에서 끝났다.
+
+- 보호장치 분류 **NETWORK** (연속 3회 · 차단기 closed) — 🔴 **403 과 합치지 않는다**
+- IP·프록시·VPN 우회 **하지 않았다**
+- 🔴 `--auto --auto-max=30` 10슬롯 job 은 **등록하지 않았다**
+- 새 유입량 관측은 **아직 시작하지 못했다** — 82cook 에 닿는 망에서 다시 시도한다
+
+### F. 이번에 드러난 코드 결함 3종 (같은 PR 에서 수정)
+
+1. **한 source 의 장애가 전체 공급을 세웠다.** `collect` 가 첫 단계라 82cook 실패로
+   뒤 단계를 전부 건너뛰었고, 받아 둔 네이버 thin 이 그대로 묵었다.
+   → 네트워크 단계가 **이번 회차에 실제로 source 차단을 겪었을 때만** 그 단계를 `skipped` 로
+   남기고 로컬 단계는 계속한다. 건너뜀은 성공이 아니라 다음 회차가 다시 시도한다.
+
+   🔴 **판정은 "실행 전후 보호장치 지문 대조" 다** (첫 판을 Codex 가 잡아 고쳤다).
+   첫 판은 실행 **후** 스냅숏만 보고 `consecutive > 0` 이면 차단이라고 했는데,
+   82cook 은 도서관 Wi-Fi 의 `ECONNREFUSED` 로 **연속 3회 기록이 남아 있다.**
+   그 상태에서는 설정 오류·코드 오류·spawn 오류까지 전부 "82cook 장애" 로 읽혀
+   **DB write 단계까지 그대로 진행**된다(실측 재현: guard 불변 · exit 1 → `sourceBlocked=true`).
+
+   지금 계약:
+
+   🔴 **2차 오판도 있었다**(Codex 재지적): 전후를 `status:count:time` **문자열로** 비교하니
+   `closed:3:-` → `closed:0:-`, 즉 **수집이 성공해 연속 실패가 초기화된 것**까지
+   "달라졌으니 실패" 가 됐다. 그래서 값을 값으로 들고 **방향**을 본다.
+
+   | 상황 | 판정 |
+   |---|---|
+   | `spawnError` (프로세스가 뜨지 못함) | 🔴 **STOP** — guard 상태와 무관하다 |
+   | guard 없음·손상 | 🔴 **STOP** (fail-closed) |
+   | 실행 **전부터** breaker `open` 또는 예산 소진 | 🟡 SKIP — 자식을 **띄우지도 않는다** |
+   | 실행 전 `half-open` | 🔴 사전 SKIP 하지 않는다 — 복구 시험이므로 실제로 두드려 본다 |
+   | remote 분류가 **실패 방향**으로 이동 (연속 증가 · openedAt 생성/전진 · closed→open) | 🟡 SKIP |
+   | **복구 방향**으로 이동 (연속 감소·0 초기화 · open→closed) 뒤 exit 1 | 🔴 **STOP** — 수집은 됐고 그 뒤가 틀렸다 |
+   | 전후 지문 **동일** | 🔴 **STOP** |
+   | `OTHER` 분류만 움직임 | 🔴 **STOP** — 원인 불명을 남의 서버 탓으로 돌리지 않는다 |
+
+   🔴 82cook 접속 실패 자체는 도서관 Wi-Fi 사정이다(집·핫스팟에서는 접속된다).
+   IP 우회도 82cook 수집 정책 변경도 하지 않았다 — 고친 것은 **실패 원인 판정**뿐이다.
+2. **목표 42 로 올리자 적재가 영영 0이 됐다.** 러너가 부족분(29)을 `--limit`(정확히)으로
+   요구하는데 한 회차 후보는 몇 건뿐이다. → 자동 경로용 `--up-to`(상한까지)를 나눴다.
+   사람이 주는 `--limit` 의 "정확히" 계약은 그대로다.
+3. **러너 최종 정합이 목표를 14 로 봤다.** capacity 목표를 `verifyRun` 에 넘기지 않아
+   정상 적재를 "목표 초과" 로 잘못 경고했다. → `CAPACITY_LIMITS.target` 을 넘긴다.
+
+### F-b. launchd 는 **현재 checkout 을 직접 실행한다**
+
+🔴 앞선 보고에서 "merge 전이면 옛 코드가 돈다" 고 적은 것은 **틀렸다.** plist 의
+`ProgramArguments` 는 `/Users/yanadoo/Documents/soransoran-m0/scripts/supply-autopilot.mts` 를
+가리킨다 — `origin/main` 이 아니라 **그 순간 checkout 된 작업 트리 파일**이다.
+따라서 21:10 회차는 merge 여부가 아니라 **그때 어느 브랜치가 checkout 돼 있는가**로 정해진다.
+
+### G. 다음 자동 회차와 관찰 항목
+
+```
+02:50 wgang-multi · 04:20 remonterrace-multi · 21:10 supply-autopilot
+```
+
+- 다회 job 이 실제로 4회 다 도는가 (`~/Library/Logs/soransoran/*-multi.log`)
+- 네이버 예산·차단기 (`collect:guard-status`) — 4배로 늘어난 요청에서 403·429 가 없는가
+- 재고가 25 → 42 로 차는가 · `fill` 이 `--up-to` 로 부분 적재를 잇는가
+- 82cook 은 닿는 망에서 다시 관측
+- 🔴 공개 발행은 계속 1/day 인가
+
+🔴 이 PR 에서 launchctl 은 **이번 전환분 외에 건드리지 않았고**, cron·GitHub Variables·
+release 단계·82cook job 등록은 하지 않았다.

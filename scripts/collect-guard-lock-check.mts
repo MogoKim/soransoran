@@ -47,6 +47,16 @@ const repoBefore = existsSync(REPO_DATA)
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 🔴 **경쟁 시험의 마감 — 기계 속도 여유일 뿐 판정 기준이 아니다.**
+ *    판정은 `maxConcurrent`(동시에 몇이 들어갔나)이고, 마감을 늘려도 두 주인이 생기지 않는다.
+ *    반대로 마감이 짧으면 느린 CI 러너에서 **둘 다 마감을 넘겨 진입 0** 이 되어
+ *    경쟁을 재지 못한다 — 2026-09-09 CI 에서 실제로 `maxConcurrent = 0` 이 나왔다.
+ */
+const RACE_WAIT_MS = 4000
+/** `slow` 가 successor 를 기다리는 창 — 위와 같은 이유로 넉넉히 둔다 */
+const RACE_OBSERVE_MS = 6000
+
 /** mkdtemp 하나 — 반드시 지운다 */
 function withTemp<T>(fn: (dir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), 'guardlock-'))
@@ -99,7 +109,7 @@ while (!existsSync(process.env.START)) { /* spin */ }
 if (ROLE === 'slow') {
   // 🔴 fast 가 successor 를 세울 때까지 기다린다 — 그 뒤에 낡은 관측으로 덤빈다
   const t0 = Date.now()
-  while (Date.now() - t0 < 3000) {
+  while (Date.now() - t0 < ${RACE_OBSERVE_MS}) {
     try {
       const cur = JSON.parse(readFileSync(LOCK, 'utf-8'))
       if (cur.token !== observed.token) break
@@ -112,7 +122,9 @@ try {
     appendFileSync(process.env.OUT, JSON.stringify({ ev: 'enter', t: Date.now(), role: ROLE }) + '\\n')
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)
     appendFileSync(process.env.OUT, JSON.stringify({ ev: 'exit', t: Date.now(), role: ROLE }) + '\\n')
-  }, { waitMs: 700 })
+    // 🔴 마감은 **기계 속도 여유**다. 판정은 "동시에 몇이 들어갔나" 이지 "얼마나 빨랐나" 가 아니다.
+    //    CI 러너가 느릴 때 둘 다 마감을 넘겨 진입 0 이 되면 경쟁을 재지 못한다(2026-09-09 실측)
+  }, { waitMs: ${RACE_WAIT_MS} })
 } catch (e) {
   appendFileSync(process.env.OUT, JSON.stringify({ ev: 'blocked', role: ROLE }) + '\\n')
 }
@@ -135,7 +147,7 @@ writeFileSync(process.env.READY + '.' + ROLE, String(observed.at))
 while (!existsSync(process.env.START)) { /* spin */ }
 if (ROLE === 'slow') {
   const t0 = Date.now()
-  while (Date.now() - t0 < 3000) {
+  while (Date.now() - t0 < ${RACE_OBSERVE_MS}) {
     try {
       const cur = JSON.parse(readFileSync(LOCK, 'utf-8'))
       if (cur.token !== observed.token) break
@@ -143,7 +155,7 @@ if (ROLE === 'slow') {
   }
 }
 let got = false
-const deadline = Date.now() + 700
+const deadline = Date.now() + ${RACE_WAIT_MS}
 while (!got && Date.now() < deadline) {
   try { writeFileSync(LOCK, JSON.stringify({ at: Date.now(), token: ROLE }), { flag: 'wx' }); got = true; break }
   catch (e) { if (e.code !== 'EEXIST') throw e }

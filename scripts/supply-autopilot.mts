@@ -30,9 +30,12 @@ import {
   resumeDecision, stageInputArgs, missingArtifacts, newFiles, runStages, supersedes, adaptKeyOf,
   planStaleLock, applyStaleLockPlan,
   mayWriteRunState,
-  STAGE_LABEL,
+  STAGE_LABEL, NETWORK_STAGES, STAGE_SOURCE, judgeSourceBlocked,
+  type GuardProbe, type BreakerMark,
   type Checkpoint, type ExecResult, type LockRecord, type Stage, type StockSnapshot,
 } from '../src/lib/supply-autopilot'
+import { guardSnapshot, type SourceId } from '../src/lib/collect-guard'
+import { readGuard } from './lib/collect-guard-store.mjs'
 import { STOCK_TARGET, readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
@@ -492,6 +495,20 @@ async function main(): Promise<void> {
     },
     exec: async (stage, args): Promise<ExecResult> => {
       const seenBefore = dataFiles()
+      // 🔴 **실행 전** 지문을 먼저 뜬다 — 뒤에서 대조할 기준이다
+      const src = STAGE_SOURCE[stage]
+      const probeBefore = NETWORK_STAGES.includes(stage) && src !== undefined ? probeGuard(src) : null
+      /**
+       * 🔴 **이미 막혀 있으면 자식을 아예 띄우지 않는다.** breaker 가 `open` 이거나 예산이 소진된
+       *    상태로 두드리는 것은 남의 서버에 대한 예의가 아니고, 차단만 길어진다.
+       *    🔴 `half-open` 은 여기서 걸러지지 않는다 — 그건 복구 시험이 허용된 상태다.
+       */
+      if (probeBefore !== null && probeBefore.readable && probeBefore.preblocked) {
+        console.log(`\n🟡 ${stage} — **${String(src)} 가 이미 막혀 있다**: ${probeBefore.blockedReason}`)
+        console.log('   자식 프로세스를 띄우지 않고 이 단계만 건너뛴다 · 나머지 단계는 계속한다')
+        console.log(`   🔴 ${String(src)} 는 다음 회차에 다시 시도한다 (건너뜀은 성공이 아니다)`)
+        return { ok: false, exitCode: null, spawnError: '', made: [], sourceBlocked: true }
+      }
       const r = await run(STAGE_SCRIPT[stage], args)
       // 🔴 이 단계가 만든 것만 기록한다. 하위 스크립트가 자기 runId 를 쓰므로 전후 차이로 안다
       const made = newFiles(seenBefore, dataFiles())
@@ -512,15 +529,67 @@ async function main(): Promise<void> {
         tally.queued = num(r.out, /보충\s+(\d+)건/)
       }
       const ok = r.code === 0 && r.spawnError === ''
-      if (!ok) {
+      /**
+       * 🔴 **이번 실행이 남긴 변화**로 판단한다 (2026-09-09 Codex 지적 → 재현).
+       *    실행 후 스냅숏만 보면, 도서관에서 남은 `NETWORK 연속 3회` 때문에
+       *    설정 오류·코드 오류·spawn 오류까지 전부 "82cook 장애" 로 읽힌다.
+       *    그래서 **실행 전 지문(`probeBefore`)과 대조**한다.
+       */
+      const after = !ok && src !== undefined ? probeGuard(src) : null
+      const verdict = ok
+        ? { blocked: false, reason: '' }
+        : judgeSourceBlocked({ spawnError: r.spawnError, before: probeBefore, after })
+      const sourceBlocked = verdict.blocked
+      if (!ok && sourceBlocked) {
+        console.log(`\n🟡 ${stage} 실패 — **${String(src)} 가 막혔다**: ${verdict.reason}`)
+        console.log('   이 단계만 건너뛰고 나머지 단계는 계속한다 — 다른 source 의 공급을 세우지 않는다')
+        console.log(`   🔴 ${String(src)} 는 다음 회차에 다시 시도한다 (건너뜀은 성공이 아니다)`)
+      }
+      if (!ok && !sourceBlocked) {
+        console.log(`\n   판정 근거: ${verdict.reason}`)
+      }
+      if (!ok && !sourceBlocked) {
         console.log(`\n🔴 ${stage} 실패 (exit ${String(r.code)}) — 뒤 단계를 돌리지 않는다`)
         console.log(`   🟢 다음 회차는 ${stage} 부터 잇는다 — 앞 단계를 다시 돌리지 않는다`)
       }
-      return { ok, exitCode: r.code, spawnError: r.spawnError, made }
+      return { ok, exitCode: r.code, spawnError: r.spawnError, made, sourceBlocked }
     },
   })
 
-  // ── ⑤ 정합 ──
+  /**
+ * 🔴 보호장치 지문 한 장 — 읽지 못하면 `readable: false` 로 정직하게 남긴다.
+ *    예외를 삼켜 "정상" 으로 만들지 않는다. 판단 근거가 없으면 멈추는 것이 계약이다.
+ */
+function probeGuard(source: SourceId): GuardProbe {
+  try {
+    const snap = guardSnapshot(readGuard(source, new Date()), Date.now())
+    // 🔴 `open` 만 사전 차단이다. `half-open` 은 복구 시험이 허용된 상태라 두드려 봐야 한다
+    const open = snap.breakers.filter((b) => b.status === 'open')
+    const halfOpen = snap.breakers.some((b) => b.status === 'half-open')
+    const preblocked = open.length > 0 || snap.budget.exhausted
+    const breakers: Record<string, BreakerMark> = {}
+    for (const b of snap.breakers) {
+      breakers[b.cls] = { status: b.status, consecutive: b.consecutive, openedAt: b.openedAt }
+    }
+    return {
+      readable: true,
+      preblocked,
+      halfOpen,
+      blockedReason: preblocked
+        ? [
+          ...open.map((b) => `${b.cls} open`),
+          ...(snap.budget.exhausted ? [`예산 소진 ${snap.budget.used}/${snap.budget.limit}`] : []),
+        ].join(' · ')
+        : '',
+      breakers,
+    }
+  } catch {
+    // 🔴 예외를 삼켜 "정상" 으로 만들지 않는다 — 근거가 없으면 멈추는 것이 계약이다
+    return { readable: false, preblocked: false, halfOpen: false, blockedReason: '', breakers: {} }
+  }
+}
+
+// ── ⑤ 정합 ──
   const after = await snapshot(prisma)
   cp.stock.after = after.stock
   saveCp()
@@ -533,6 +602,9 @@ async function main(): Promise<void> {
   const v = verifyRun({
     postBefore: before.post, postAfter: after.post,
     stockBefore: before.stock, stockAfter: after.stock,
+    // 🔴 **capacity 프로필의 목표를 넘긴다.** 안 넘기면 기본값(14)으로 판정해
+    //    d3(42) 로 정상 적재한 회차를 "목표를 넘겼다" 고 잘못 경고한다 (2026-09-09 Wave B 실측)
+    target: CAPACITY_LIMITS.target,
     queuedMachine, queuedNonMachine,
   })
 
