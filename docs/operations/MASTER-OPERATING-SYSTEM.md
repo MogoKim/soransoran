@@ -302,13 +302,16 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 
 | 항목 | 현재 |
 |---|---|
-| `SORAN_CAPACITY_STAGE` | 미설정 -> d1 |
-| `SORAN_RELEASE_STAGE` | 미설정 -> d1 |
-| 공개 발행 workflow | `5 15 * * *`, 1슬롯/day, `--limit=1` |
-| Naver remonterrace | launchd 09:20 KST |
-| Naver wgang | launchd 13:20 KST |
+| `SORAN_CAPACITY_STAGE` | **d3** (내부 3/day 기준 · Wave B, 2026-09-09) |
+| `SORAN_RELEASE_STAGE` | **d1** (공개 1/day) — 🔴 Wave B 에서도 올리지 않았다 |
+| 공개 발행 workflow | `5 15 * * *`, 1슬롯/day, `--limit=1` — 🔴 변경 없음 |
+| Naver remonterrace | launchd **4회/day** 04:20 · 10:20 · 16:20 · 22:20 KST |
+| Naver wgang | launchd **4회/day** 02:50 · 08:50 · 14:50 · 20:50 KST |
 | supply runner | launchd 21:10 KST |
 | 82cook 독립 job | 미등록 |
+
+🔴 **내부 capacity 와 공개 release 는 다른 손잡이다.** Wave B 는 내부만 d3 로 올렸다 —
+공개 발행량·cron·GitHub Variables 는 하나도 건드리지 않았다. 현재 운영 숫자는 §6.3.
 
 GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 예정 실행이 약 04:05 KST에 시작된
 사례가 있다. 10개 공개 슬롯의 실시간성을 GHA schedule에만 의존해서는 안 된다.
@@ -327,17 +330,18 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | Comment / Reply | 26 / 4 |
 | 공개 글 중 댓글 0개 | 27/32, 84.4% |
 | Like / CommentLike / Scrap | 5 / 4 / 1 |
-| MicroSeedRawContent | 58 |
-| OriginalPostApprovalQueue | 24: APPROVED 18, PUBLISHED 6 |
-| 현재 사용 가능 재고 | 13/14: human 3, Haiku machine 10 |
+| MicroSeedRawContent | 70 |
+| OriginalPostApprovalQueue | 36: APPROVED 30, PUBLISHED 6 |
+| 현재 사용 가능 재고 | 25/42: human 3, Haiku machine 22 |
 | legacy Gemini 재고 | 5, 현재 재고에서 제외 |
 | PersonaApprovalQueue | 4: PENDING 1, APPROVED 2, PUBLISHED 1 |
 | PersonaActivityLog | 7: post 6, comment 1 |
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
+| 수집 능력 (현재) | 80건/day — remonterrace 4회 40 · wgang 4회 40 · 82cook 0 (미등록) |
 
-`capacity=d1 · release=d1` (§7.x Wave A 이후에도 그대로다).
+`capacity=d3 · release=d1` (§6.2). 🔴 **공개 발행은 여전히 1/day 다.**
 
 이 표는 순간값이다. 현재 운영 판정은 `npm run supply:health -- --json`과 DB 실측을 사용한다.
 

@@ -12,6 +12,8 @@ import {
   collectCapFor, judgeRun, planStages, lockDecision, nextStage, shouldStopRun,
   verifyRun, fmtCount, resumeDecision, stageInputArgs, missingArtifacts, newFiles, upstreamOf,
   attemptOf, runStages, supersedes, adaptKeyOf, planStaleLock, mayWriteRunState,
+  judgeStageFailure, STAGE_SOURCE, judgeSourceBlocked, REMOTE_FAILURE_CLASSES,
+  type GuardProbe, type BreakerMark,
   type Artifacts, type Checkpoint, type ExecResult, type Stage,
   type StageOutcome, type StockSnapshot,
 } from '../src/lib/supply-autopilot'
@@ -112,7 +114,7 @@ check('🔴 수집은 --live 와 --cap 을 둘 다 받는다', (() => {
   const a = plan[0].args.join(' ')
   return a.includes('--live') && a.includes('--cap=36')
 })())
-check('🔴 보충은 목표까지만 — --limit 이 부족분과 같다', (plan.find((x) => x.stage === 'fill')?.args.join(' ') ?? '') === '--apply --limit=9')
+check('🔴 보충은 목표까지만 — 상한이 부족분과 같다', (plan.find((x) => x.stage === 'fill')?.args.join(' ') ?? '') === '--apply --up-to=9')
 check('🔴 판정·초안은 --call --apply 계약을 지킨다',
   (plan.find((x) => x.stage === 'judge')?.args.join(' ') ?? '') === '--call --apply'
   && (plan.find((x) => x.stage === 'draft')?.args.join(' ') ?? '') === '--call --apply')
@@ -128,7 +130,7 @@ check('🔴 상수 표와 계획이 어긋나지 않는다', (() => (
   NETWORK_STAGES.join(',') === 'collect' && LLM_STAGES.join(',') === 'judge,draft'
   && DB_WRITE_STAGES.join(',') === 'fill'
 ))())
-check('🟢 부족 1건이어도 보충 상한은 1이다', planStages({ collectCap: 10, shortfall: 1 }).find((x) => x.stage === 'fill')?.args.includes('--limit=1') === true)
+check('🟢 부족 1건이어도 보충 상한은 1이다', planStages({ collectCap: 10, shortfall: 1 }).find((x) => x.stage === 'fill')?.args.includes('--up-to=1') === true)
 
 // ── ⑥ 부분 실패 ──
 const okOutcome = (stage: string): StageOutcome => ({
@@ -318,10 +320,10 @@ check('🔴 ⑩ 재개는 collect 를 건너뛰므로 같은 원천을 다시 �
   const rest = plan.slice(plan.findIndex((x) => x.stage === r.from))
   return rest.every((x) => !x.network)
 })())
-check('🔴 ⑩ 재개해도 계획은 앞 회차 것이다 — --limit 이 달라지지 않는다', (() => {
+check('🔴 ⑩ 재개해도 계획은 앞 회차 것이다 — 상한이 달라지지 않는다', (() => {
   const cp = A({ shortfall: 9, collectCap: 36 })
   const p2 = planStages({ collectCap: cp.collectCap, shortfall: cp.shortfall })
-  return (p2.find((x) => x.stage === 'fill')?.args.join(' ') ?? '') === '--apply --limit=9'
+  return (p2.find((x) => x.stage === 'fill')?.args.join(' ') ?? '') === '--apply --up-to=9'
 })())
 
 // ══════════════════════════════════════════════════════════════════
@@ -473,8 +475,8 @@ for (const broken of ['adapt', 'judge', 'draft', 'fill'] as const) {
   check('🔴 [러너] judge 호출에 앞 회차 adapt 산출물이 --input 으로 실린다',
     judgeCall !== undefined && judgeCall.args.some((a) => a.startsWith('--input=')
       && a.includes('82cook-adapt-R1.detail.jsonl')))
-  check('🔴 [러너] fill 호출에 --limit 이 그대로 실린다',
-    ex.calls.find((c) => c.stage === 'fill')?.args.includes('--limit=9') === true)
+  check('🔴 [러너] fill 호출에 상한이 그대로 실린다',
+    ex.calls.find((c) => c.stage === 'fill')?.args.includes('--up-to=9') === true)
   check('🟢 [러너] 그 회차도 done', r.status === 'done')
 }
 
@@ -806,6 +808,287 @@ check('🔴 [C] 같은 회차를 다시 돌려도 이미 사본이 있는 것은
 check('🔴 회차 시작 시 preexisting 을 checkpoint 에 박는다',
   /artifacts: preexisting\.length > 0 \? \{ preexisting \} : \{\}/.test(code))
 check('🔴 처리 여부를 runId 단독으로 보지 않는다', /adaptKeyOf/.test(code))
+
+
+// ─────────────────────────────────────────────────────────
+// 🔴 한 source 의 네트워크 장애가 **다른 source 의 공급을 세우지 않는다** (2026-09-09 Wave B)
+//
+//    실측: 82cook 이 이 망에서 ECONNREFUSED 였는데, `collect` 가 첫 단계라
+//    뒤 단계를 전부 돌리지 않았다 — 받아 둔 네이버 thin 이 그대로 묵었다.
+// ─────────────────────────────────────────────────────────
+{
+  const blocked = judgeStageFailure({ stage: 'collect', sourceBlocked: true })
+  const bug = judgeStageFailure({ stage: 'collect', sourceBlocked: false })
+  const local = judgeStageFailure({ stage: 'judge', sourceBlocked: true })
+  check('🔴 네트워크 단계가 source 차단으로 실패하면 **건너뛴다**', blocked.action === 'skip')
+  check('🔴 그 이유를 화면 문구로 남긴다 — 조용히 넘어가지 않는다',
+    /건너뜀/.test(blocked.note) && /다음 회차에 다시 시도/.test(blocked.note))
+  check('🔴 source 차단이 아니면(스크립트 버그 등) 예전처럼 **멈춘다**', bug.action === 'stop')
+  check('🔴 로컬 단계는 건너뛰지 않는다 — 차단 판정이 있어도 멈춘다', local.action === 'stop')
+  check('🔴 어느 source 를 볼지 코드가 정해 둔다 — 러너가 즉흥으로 고르지 않는다',
+    STAGE_SOURCE.collect === '82cook' && STAGE_SOURCE.judge === undefined)
+
+  // 🔴 **행동으로 본다** — 건너뛴 뒤 로컬 단계가 실제로 돌았는가
+  const plan = planStages({ collectCap: 10, shortfall: 5 })
+  const cp: Checkpoint = {
+    runId: 'r1', startedAt: 't0', status: 'running', completedAt: null,
+    stages: [], artifacts: {}, stock: { before: 0, after: null }, plan: { shortfall: 5, collectCap: 10 },
+  } as unknown as Checkpoint
+  const called: Stage[] = []
+  const loop = await runStages({
+    plan, checkpoint: cp, now: () => 't',
+    exec: async (stage) => {
+      called.push(stage)
+      // 🔴 82cook 만 막힌 상황을 그대로 재현한다
+      return stage === 'collect'
+        ? { ok: false, exitCode: 1, spawnError: '', made: [], sourceBlocked: true }
+        : { ok: true, exitCode: 0, spawnError: '', made: [] }
+    },
+  })
+  check('🔴 [행동] collect 가 막혀도 뒤 단계가 전부 돈다',
+    called.join(',') === 'collect,cafeThin,adapt,judge,draft,fill')
+  check('🔴 [행동] 그 회차는 failed 가 아니다', loop.exitCode === 0 || cp.status !== 'failed')
+  check('🔴 [행동] collect 는 ok 가 아니라 skipped 로 남는다',
+    cp.stages.find((x) => x.stage === 'collect')?.status === 'skipped')
+  check('🔴 [행동] 건너뛴 단계는 무한히 다시 불리지 않는다', called.filter((c) => c === 'collect').length === 1)
+  check('🔴 [행동] 이 회차는 done 으로 닫힌다 — 다음 회차가 새로 시작한다', cp.status === 'done')
+  check('🔴 [행동] 건너뜀은 전체 이력에서 성공이 아니다 — 다음 회차가 collect 부터 다시 본다',
+    nextStage(plan, cp.stages)?.stage === 'collect')
+
+  // 🔴 대조군 — sourceBlocked 가 아니면 옛 동작 그대로 멈춰야 한다
+  const cp2 = { ...cp, stages: [], artifacts: {}, status: 'running' } as unknown as Checkpoint
+  const called2: Stage[] = []
+  await runStages({
+    plan, checkpoint: cp2, now: () => 't',
+    exec: async (stage) => {
+      called2.push(stage)
+      return stage === 'collect'
+        ? { ok: false, exitCode: 1, spawnError: '', made: [], sourceBlocked: false }
+        : { ok: true, exitCode: 0, spawnError: '', made: [] }
+    },
+  })
+  check('🔴 [대조군] source 차단이 아니면 collect 에서 멈춘다 — 뒤 단계 0',
+    called2.join(',') === 'collect')
+  check('🔴 [대조군] 그때는 failed 로 남는다',
+    cp2.stages.find((x) => x.stage === 'collect')?.status === 'failed')
+}
+
+  /**
+   * 🔴 **판정을 소스 정규식으로 보지 않는다** (2026-09-09 Codex 지적).
+   *    앞선 fixture 는 "그 조건식이 코드에 있는가" 를 봤다 — 조건식 **자체가 틀렸으므로**
+   *    그 검사는 틀린 것을 지키고 있었다. 그래서 행동으로 본다.
+   */
+  const mark = (o: Partial<BreakerMark>): BreakerMark => {
+    return { status: 'closed', consecutive: 0, openedAt: null, ...o }
+  }
+  const probe = (o: Partial<GuardProbe>): GuardProbe => {
+    // 🔴 기본값은 "도서관에서 남은 과거 기록" 이다 — 과거만으로는 차단이 아니어야 한다
+    return {
+      readable: true, preblocked: false, halfOpen: false, blockedReason: '',
+      breakers: { NETWORK: mark({ consecutive: 3 }) },
+      ...o,
+    }
+  }
+  const judge = (o: {
+    spawnError?: string; before?: GuardProbe | null; after?: GuardProbe | null
+  }): { blocked: boolean; reason: string } => judgeSourceBlocked({
+    spawnError: o.spawnError ?? '',
+    before: o.before === undefined ? probe({}) : o.before,
+    after: o.after === undefined ? probe({}) : o.after,
+  })
+
+  // A. 🔴 NETWORK 3→0 (수집 성공) + exit 1 → STOP
+  {
+    const v = judge({
+      before: probe({ breakers: { NETWORK: mark({ consecutive: 3 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ consecutive: 0 }) } }),
+    })
+    check('🔴 [A] 연속 실패가 **줄어든 것**(성공)을 새 실패로 읽지 않는다 → STOP',
+      !v.blocked && v.reason.includes('복구 방향'))
+  }
+  // B. NETWORK 3→4 → SKIP
+  {
+    const v = judge({
+      before: probe({ breakers: { NETWORK: mark({ consecutive: 3 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ consecutive: 4 }) } }),
+    })
+    check('🔴 [B] 연속 실패가 **늘어나면** 이번 회차의 source 실패로 본다 → SKIP',
+      v.blocked && v.reason.includes('NETWORK'))
+  }
+  // C. half-open + guard 불변 → STOP
+  {
+    const ho = probe({ halfOpen: true, breakers: { NETWORK: mark({ status: 'half-open', consecutive: 3, openedAt: 100 }) } })
+    const v = judge({ before: ho, after: ho })
+    check('🔴 [C] half-open 이어도 전후가 같으면 멈춘다', !v.blocked && v.reason.includes('똑같다'))
+    check('🔴 [C] half-open 은 사전 차단이 아니다 — 두드려 봐야 한다', !ho.preblocked && ho.halfOpen)
+  }
+  // D. half-open probe 실패로 openedAt 갱신 → SKIP
+  {
+    const v = judge({
+      before: probe({ halfOpen: true, breakers: { NETWORK: mark({ status: 'half-open', consecutive: 3, openedAt: 100 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ status: 'open', consecutive: 4, openedAt: 200 }) } }),
+    })
+    check('🔴 [D] half-open 시험이 실패해 openedAt 이 앞으로 가면 SKIP', v.blocked)
+  }
+  // E. breaker open · 예산 소진 → 사전 차단
+  {
+    const openV = judge({ before: probe({ preblocked: true, blockedReason: 'NETWORK open' }) })
+    const budgetV = judge({ before: probe({ preblocked: true, blockedReason: '예산 소진 400/400' }) })
+    check('🔴 [E] 실행 전 open 이면 사전 차단으로 건너뛴다',
+      openV.blocked && openV.reason.includes('실행 전부터'))
+    check('🔴 [E] 예산 소진도 사전 차단이다', budgetV.blocked)
+  }
+  // F. spawnError → STOP
+  {
+    const v = judge({ spawnError: 'ENOENT npx', before: probe({ preblocked: true, blockedReason: 'NETWORK open' }) })
+    check('🔴 [F] spawnError 는 guard 상태와 무관하게 멈춘다',
+      !v.blocked && v.reason.includes('spawn 실패'))
+  }
+  // G. guard missing / malformed → STOP
+  {
+    const miss = judge({ before: null, after: null })
+    const bad = judge({ before: probe({ readable: false }) })
+    check('🔴 [G] guard 를 못 읽으면 멈춘다 (fail-closed)',
+      !miss.blocked && !bad.blocked && miss.reason.includes('판단 근거가 없으므로'))
+  }
+  // 🔴 **openedAt 도 방향을 본다** — 사라지거나 뒤로 가는 것은 복구다
+  {
+    const cleared = judge({
+      before: probe({ breakers: { NETWORK: mark({ status: 'open', consecutive: 5, openedAt: 500 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ status: 'closed', consecutive: 0, openedAt: null }) } }),
+    })
+    check('🔴 openedAt 이 사라지고 닫히면 복구다 — 실패로 읽지 않는다', !cleared.blocked)
+    const backwards = judge({
+      before: probe({ breakers: { NETWORK: mark({ status: 'open', consecutive: 5, openedAt: 500 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ status: 'open', consecutive: 5, openedAt: 200 }) } }),
+    })
+    check('🔴 openedAt 이 **뒤로** 가면 이번 회차의 새 실패가 아니다', !backwards.blocked)
+    const forward = judge({
+      before: probe({ breakers: { NETWORK: mark({ status: 'open', consecutive: 5, openedAt: 500 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ status: 'open', consecutive: 5, openedAt: 900 }) } }),
+    })
+    check('🔴 openedAt 이 **앞으로** 가면 이번 회차가 다시 실패한 것이다', forward.blocked)
+    const born = judge({
+      before: probe({ breakers: { NETWORK: mark({ consecutive: 0, openedAt: null }) } }),
+      after: probe({ breakers: { NETWORK: mark({ status: 'open', consecutive: 1, openedAt: 900 }) } }),
+    })
+    check('🔴 openedAt 이 새로 생기면 이번 회차의 실패다', born.blocked)
+  }
+
+  // 🔴 원인이 특정되지 않는 분류(OTHER)는 증거가 아니다
+  {
+    const v = judge({
+      before: probe({ breakers: { OTHER: mark({ consecutive: 0 }) } }),
+      after: probe({ breakers: { OTHER: mark({ consecutive: 1 }) } }),
+    })
+    check('🔴 OTHER 증가만으로는 source 탓으로 돌리지 않는다', !v.blocked)
+    check('🔴 remote 분류 목록이 OTHER 를 빼고 정의돼 있다',
+      REMOTE_FAILURE_CLASSES.includes('NETWORK') && !REMOTE_FAILURE_CLASSES.includes('OTHER'))
+  }
+
+  // 🔴 **러너가 실제로 그렇게 동작한다** — 판정부만 옳고 러너가 안 부르면 무력하다
+  check('🔴 러너가 실행 **전** 지문을 뜬다', /const probeBefore = NETWORK_STAGES\.includes\(stage\)/.test(code))
+  check('🔴 러너가 judgeSourceBlocked 에 spawnError·before·after 를 넘긴다',
+    /judgeSourceBlocked\(\{ spawnError: r\.spawnError, before: probeBefore, after \}\)/.test(code))
+  check('🔴 [E·러너] 사전 차단이면 자식을 띄우지 않고 돌아온다', (() => {
+    const seg = /if \(probeBefore !== null && probeBefore\.readable && probeBefore\.preblocked\)([\s\S]*?)\n      \}/.exec(code)
+    if (seg === null) return false
+    // 🔴 그 분기 안에서 run(...) 을 부르지 않고 sourceBlocked 로 돌아와야 한다
+    return !/await run\(/.test(seg[1]) && /sourceBlocked: true/.test(seg[1])
+  })())
+  check('🔴 러너가 옛 문자열 지문(marks) 비교를 더는 쓰지 않는다',
+    !/marks\[b\.cls\] = /.test(code) && /breakers\[b\.cls\] = \{ status: b\.status/.test(code))
+  check('🔴 half-open 은 사전 차단에 넣지 않는다',
+    /const open = snap\.breakers\.filter\(\(b\) => b\.status === 'open'\)/.test(code))
+  check('🔴 지문을 못 읽으면 readable:false 로 남긴다 — 예외를 삼켜 정상으로 만들지 않는다',
+    /readable: false, preblocked: false/.test(code))
+
+  // 🔴 **루프 전체 행동** — 판정이 실제로 뒤 단계 실행 여부를 가르는가
+  {
+    const mkCp = (): Checkpoint => ({
+      runId: 'r', startedAt: 't0', status: 'running', completedAt: null,
+      stages: [], artifacts: {}, stock: { before: 0, after: null }, plan: { shortfall: 5, collectCap: 10 },
+    } as unknown as Checkpoint)
+    const plan2 = planStages({ collectCap: 10, shortfall: 5 })
+    const runWith = async (collect: () => ExecResult): Promise<{ cp: Checkpoint; called: Stage[] }> => {
+      const cp = mkCp()
+      const called: Stage[] = []
+      await runStages({
+        plan: plan2, checkpoint: cp, now: () => 't',
+        exec: async (stage) => {
+          called.push(stage)
+          return stage === 'collect' ? collect() : { ok: true, exitCode: 0, spawnError: '', made: [] }
+        },
+      })
+      return { cp, called }
+    }
+    const failWith = (blocked: boolean, spawnError = ''): ExecResult =>
+      ({ ok: false, exitCode: spawnError === '' ? 1 : null, spawnError, made: [], sourceBlocked: blocked })
+
+    // A-행동: 3→0 (수집 성공 뒤 로컬 오류) → 뒤 단계 0
+    const A = await runWith(() => failWith(judge({
+      before: probe({ breakers: { NETWORK: mark({ consecutive: 3 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ consecutive: 0 }) } }),
+    }).blocked))
+    check('🔴 [A·행동] 3→0 이면 뒤 단계 호출 0', A.called.join(',') === 'collect')
+    check('🔴 [A·행동] collect 는 failed 로 남는다',
+      A.cp.stages.find((x) => x.stage === 'collect')?.status === 'failed')
+
+    // B-행동: 3→4 → 뒤 단계 전부 실행
+    const B = await runWith(() => failWith(judge({
+      before: probe({ breakers: { NETWORK: mark({ consecutive: 3 }) } }),
+      after: probe({ breakers: { NETWORK: mark({ consecutive: 4 }) } }),
+    }).blocked))
+    check('🔴 [B·행동] 이번 NETWORK 실패면 collect 만 건너뛰고 뒤 단계가 전부 돈다',
+      B.called.join(',') === 'collect,cafeThin,adapt,judge,draft,fill')
+    check('🔴 [B·행동] collect 는 skipped 다',
+      B.cp.stages.find((x) => x.stage === 'collect')?.status === 'skipped')
+    check('🔴 [H] 건너뛴 collect 는 다음 회차가 다시 시도한다',
+      nextStage(plan2, B.cp.stages)?.stage === 'collect')
+
+    // F-행동: spawnError → 뒤 단계 0
+    const F = await runWith(() => failWith(judge({
+      spawnError: 'ENOENT npx',
+      before: probe({ preblocked: true, blockedReason: 'NETWORK open' }),
+    }).blocked, 'ENOENT npx'))
+    check('🔴 [F·행동] spawnError 면 과거 기록이 있어도 뒤 단계 0', F.called.join(',') === 'collect')
+
+    // E-행동: 사전 차단 → collect 만 건너뛰고 뒤 단계는 계속
+    const E = await runWith(() => failWith(
+      judge({ before: probe({ preblocked: true, blockedReason: 'NETWORK open' }) }).blocked))
+    check('🔴 [E·행동] 사전 차단이면 collect 만 건너뛰고 뒤 단계가 돈다',
+      E.called.join(',') === 'collect,cafeThin,adapt,judge,draft,fill')
+
+    // C-행동: half-open + 전후 불변 → 뒤 단계 0
+    const ho = probe({
+      halfOpen: true,
+      breakers: { NETWORK: mark({ status: 'half-open', consecutive: 3, openedAt: 100 }) },
+    })
+    const C = await runWith(() => failWith(judge({ before: ho, after: ho }).blocked))
+    check('🔴 [C·행동] half-open 이어도 전후가 같으면 뒤 단계 0', C.called.join(',') === 'collect')
+
+    // I. 기존 Wave B 계약 회귀
+    check('🔴 [I] --up-to 계약 회귀 0',
+      (plan2.find((x) => x.stage === 'fill')?.args.join(' ') ?? '') === '--apply --up-to=5')
+    const okRun = await runWith(() => ({ ok: true, exitCode: 0, spawnError: '', made: [] }))
+    check('🔴 [I] 정상 실행은 6단계 전부 돌고 done 이다',
+      okRun.called.join(',') === 'collect,cafeThin,adapt,judge,draft,fill' && okRun.cp.status === 'done')
+  }
+
+  check('🔴 러너가 verifyRun 에 **capacity 목표**를 넘긴다 — 기본값 14 로 판정하지 않는다',
+    /target: CAPACITY_LIMITS\.target,/.test(code))
+  check('🔴 [판정부] 목표를 넘기면 그 목표로 본다', (() => {
+    const base = {
+      postBefore: 1, postAfter: 1,
+      stockBefore: { usable: 13, human: 3, machine: 10 },
+      stockAfter: { usable: 25, human: 3, machine: 22 },
+      queuedMachine: 12, queuedNonMachine: 0,
+    } as unknown as Parameters<typeof verifyRun>[0]
+    const d3 = verifyRun({ ...base, target: 42 })
+    const dflt = verifyRun(base)
+    // 🔴 목표 42 면 정상, 목표를 안 주면 기본값(14)이라 "넘겼다" 고 잡힌다
+    return d3.ok && !dflt.ok && dflt.problems.some((p) => p.includes('넘겨 적재했다'))
+  })())
 
 console.log(`\n─────────────────────────────────────────────────────────`)
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

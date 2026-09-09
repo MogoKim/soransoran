@@ -62,6 +62,12 @@ const arg = (n: string): string | null => {
 const APPLY = argv.includes('--apply')
 const LIMIT_RAW = arg('limit')
 const LIMIT = LIMIT_RAW === null ? null : Number.parseInt(LIMIT_RAW, 10)
+/**
+ * 🔴 **자동 경로용 상한.** "이만큼까지" 이지 "정확히 이만큼" 이 아니다 —
+ *    러너가 부족분을 넘기는데 한 회차 후보는 몇 건뿐이라, `--limit` 으로 받으면 영영 0건이다.
+ */
+const UP_TO_RAW = arg('up-to')
+const UP_TO = UP_TO_RAW === null ? null : Number.parseInt(UP_TO_RAW, 10)
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 
 /**
@@ -281,7 +287,8 @@ async function main(): Promise<void> {
   // ── ③-b 적재 예정 payload 미리보기 ──
   // 🔴 dry-run 에서도 실제 create 에 쓰일 값을 그대로 만들어 profileOf 를 확인한다.
   //    P0 (기계 행에 사람 접두가 붙어 러너가 전부 거절) 이 다시 나면 여기서 먼저 걸린다.
-  const previewN = LIMIT !== null && LIMIT > 0 ? Math.min(LIMIT, targets.length) : Math.min(stock.shortfall, targets.length)
+  const askedN = UP_TO ?? LIMIT
+  const previewN = askedN !== null && askedN > 0 ? Math.min(askedN, targets.length) : Math.min(stock.shortfall, targets.length)
   const preview = targets.slice(0, previewN).map((c) => {
     const pl = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c,
@@ -310,12 +317,12 @@ async function main(): Promise<void> {
   if (nNull > 0) console.log('   🔴 profile 을 못 만든 건이 있다 — 그 건은 적재 단계에서 건너뛴다')
 
   // ── ④ 실행 판정 ──
-  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, usable: stock.usable, target: LIMITS.target })
+  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO, usable: stock.usable, target: LIMITS.target })
   if (!gate.ok) {
     console.log(`\n④ 보충하지 않는다 — ${gate.reason}`)
     if (!APPLY) {
       console.log('   🟡 dry-run 입니다. DB write 0 · Post 0'
-        + ' · 실행하려면 --apply 와 --limit=N 을 둘 다 붙이세요.')
+        + ' · 실행하려면 --apply 와 --limit=N(정확히) 또는 --up-to=N(상한까지) 을 붙이세요.')
     }
     console.log()
     await prisma.$disconnect()
@@ -328,7 +335,7 @@ async function main(): Promise<void> {
     queue: await prisma.originalPostApprovalQueue.count(),
     post: await prisma.post.count(),
   }
-  console.log(`\n⑤ 🔴 보충 ${gate.take.length}건 (--limit ${LIMIT})`)
+  console.log(`\n⑤ 🔴 보충 ${gate.take.length}건 (${UP_TO !== null ? `--up-to ${UP_TO} · 상한까지` : `--limit ${LIMIT} · 정확히`})`)
   let done = 0
   for (const c of gate.take) {
     const title = S(c.title)
