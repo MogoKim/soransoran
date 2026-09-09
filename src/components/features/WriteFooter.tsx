@@ -34,11 +34,14 @@ export default function WriteFooter({
   textLength,
   label,
   pendingLabel,
+  busy = false,
 }: {
   block: PostSubmitBlock | null
   textLength: number
   label: string
   pendingLabel: string
+  /** 폼 밖에서 남은 일. 상단바와 같은 값을 받아 두 버튼이 같은 상태를 보인다 */
+  busy?: boolean
 }) {
   const keyboard = useKeyboardInset()
   const over = textLength > MAX_POST_CONTENT_LENGTH
@@ -86,6 +89,7 @@ export default function WriteFooter({
         label={label}
         pendingLabel={pendingLabel}
         disabled={block !== null}
+        busy={busy}
         className="min-h-[56px] w-full justify-center"
       />
     </div>

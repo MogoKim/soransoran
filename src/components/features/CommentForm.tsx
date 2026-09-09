@@ -6,6 +6,7 @@ import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
 import { createComment, type CommentActionState } from '@/lib/actions/comments'
+import { trackEvent } from '@/lib/analytics/track'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import { useToast } from '@/components/ui/toast'
 import {
@@ -36,6 +37,16 @@ export default function CommentForm({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   /**
+   * 이미 처리한 서버 응답.
+   *
+   * 🔴 값이 아니라 **객체 그 자체**를 기억한다. 성공은 늘 {ok:true} 라 값으로는
+   *    "방금 온 답" 과 "아까 그 답" 을 가를 수 없다. 새 결과가 올 때만 다른 객체가 오므로
+   *    같은 객체면 이미 처리한 것이다. 댓글을 연달아 두 번 달면 서로 다른 객체라
+   *    정상적으로 두 번 센다 — 막는 것은 같은 성공을 두 번 세는 일뿐이다.
+   */
+  const handledRef = useRef<CommentActionState | null>(null)
+
+  /**
    * 🔴 성공은 토스트가 알린다. 예전에는 이 자리에 문구를 띄웠는데,
    *    다시 타자를 치기 전까지 사라지지 않아 다음 댓글을 쓰는 동안에도 남아 있었다.
    *
@@ -45,10 +56,19 @@ export default function CommentForm({
    */
   useEffect(() => {
     if (!state.ok) return
+    if (handledRef.current === state) return
+    handledRef.current = state
+
     setContent('')
     toast.success(parentId ? REPLY_CREATED : COMMENT_CREATED, {
       key: `comment:${parentId ?? postId}`,
     })
+    /**
+     * 🔴 서버가 {ok:true} 를 돌려준 뒤에만 센다. 그 앞에는 길이·금칙어·rate limit ·
+     *    글 존재 확인이 있고, 하나라도 걸리면 error 로 돌아와 이 자리에 오지 않는다.
+     * 🔴 본문·postId·parentId 를 보내지 않는다. 답글인지 여부만 boolean 으로 남긴다.
+     */
+    trackEvent('comment_publish', { member_type: 'member', is_reply: Boolean(parentId) })
     // toast 는 매 렌더 새 객체라 의존성에 넣으면 같은 상태로 다시 뜬다
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])

@@ -95,7 +95,43 @@ export const BOARD_REGISTRY = [
   },
 ] as const satisfies readonly BoardMeta[]
 
-export const COMMUNITY_BOARDS = BOARD_REGISTRY.filter((b) => b.isCommunity)
+/**
+ * 레지스트리에 실재하는 slug 만.
+ *
+ * 🔴 BoardMeta.slug 는 string 이라 그 타입으로는 아무 문자열이나 통과한다.
+ *    주소·form·localStorage 에서 온 값이 응답이나 계측에 그대로 실리는 것을 막으려면
+ *    "레지스트리에 있는 것" 이 타입이어야 한다. 여기서 파생시켜 두면
+ *    보드를 추가·삭제할 때 이 타입이 따라 움직인다 — 손으로 적은 목록은 언젠가 어긋난다.
+ */
+export type BoardSlug = (typeof BOARD_REGISTRY)[number]['slug']
+
+/** 회원이 글을 쓰는 보드의 메타 — 매거진·베스트는 여기 들어오지 않는다 */
+type CommunityBoardMeta = Extract<(typeof BOARD_REGISTRY)[number], { isCommunity: true }>
+
+/**
+ * 🔴 술어(predicate)로 거른다. 그냥 filter 하면 결과 타입이 여전히 보드 전체의 합집합이라
+ *    COMMUNITY_BOARDS[0].slug 가 'magazine' 일 수도 있는 타입이 된다.
+ *    글쓰기·계측처럼 "커뮤니티 게시판" 만 말이 되는 자리가 그 넓은 타입을 받으면,
+ *    매거진 slug 를 넣어도 컴파일이 통과한다.
+ */
+export const COMMUNITY_BOARDS = BOARD_REGISTRY.filter(
+  (b): b is CommunityBoardMeta => b.isCommunity,
+)
+
+/**
+ * 글을 쓸 수 있는 게시판의 slug — 지금은 menopause · free 둘뿐이다.
+ *
+ * 🔴 BoardSlug 를 쓰지 않는다. 그쪽은 magazine·best 까지 포함하는데,
+ *    그 둘은 글쓰기 화면도 임시저장도 없어 write_* 계측에 올 수가 없다.
+ *    넓은 타입을 그대로 쓰면 "올 수 없는 값" 이 타입상 통과해, 나중에 잘못 넘겨도
+ *    컴파일이 잡아 주지 못한다. 좁은 자리에는 좁은 타입을 둔다.
+ */
+export type CommunityBoardSlug = CommunityBoardMeta['slug']
+
+/** 런타임에서 커뮤니티 게시판 목록을 확인할 때 쓴다 (가드 스크립트 등) */
+export const COMMUNITY_BOARD_SLUGS: readonly CommunityBoardSlug[] = COMMUNITY_BOARDS.map(
+  (b) => b.slug,
+)
 
 /**
  * 상단 메뉴 표시 순서 — 등록 순서와 분리한다.
