@@ -7,11 +7,14 @@
  *    **타입에 자리가 없어** 컴파일러가 막는다. 사람의 기억에 맡기지 않는다.
  *
  * 🔴 이벤트 이름에 값을 넣지 않는다. `like_add` 가 아니라 `reaction` + `action:'add'` 다.
- *    이름에 값을 섞으면 이벤트 종류가 값의 가짓수만큼 늘어나 GA4 상한을 향해 간다.
+ *    개수 때문이 아니다 — 웹 스트림에는 서로 다른 이벤트 **이름 개수 제한이 없다**.
+ *    이름에 값을 섞으면 한 가지 행동의 지표가 이름마다 흩어진다. "공감이 몇 번 일어났나" 를
+ *    보려면 매번 여러 이벤트를 더해야 하고, 이름이 늘어난 만큼 보고서·측정기준·전환 설정을
+ *    따로 관리하게 된다. 행동 하나는 이름 하나로 두고, 갈래는 파라미터로 나눈다.
  *
  * 🔴 여기 없는 이벤트는 보낼 수 없다. trackEvent 가 이 map 의 키만 받는다.
  */
-import type { BoardSlug } from '@/lib/board-registry'
+import type { CommunityBoardSlug } from '@/lib/board-registry'
 
 /**
  * 1차 이벤트 6종.
@@ -21,15 +24,15 @@ import type { BoardSlug } from '@/lib/board-registry'
  */
 export type SoranEventMap = {
   /** 유효한 글을 쓴 비회원에게 로그인 안내가 실제로 열렸다 */
-  write_login_prompt: { board_slug: BoardSlug; draft_saved: boolean }
+  write_login_prompt: { board_slug: CommunityBoardSlug; draft_saved: boolean }
   /** 그 안내에서 카카오로 계속하기를 실제로 눌렀다 */
-  write_auth_start: { board_slug: BoardSlug; method: 'kakao' }
+  write_auth_start: { board_slug: CommunityBoardSlug; method: 'kakao' }
   /** 온보딩이 끝나 회원이 됐다. 계정 생애 1회 */
   sign_up: { method: 'kakao' }
   /** 인증 왕복을 마치고 돌아와 쓰던 글이 실제로 복원됐다 */
-  write_draft_restored: { board_slug: BoardSlug; logged_in: boolean }
+  write_draft_restored: { board_slug: CommunityBoardSlug; logged_in: boolean }
   /** 글이 DB 에 저장됐다 */
-  post_publish: { board_slug: BoardSlug }
+  post_publish: { board_slug: CommunityBoardSlug }
   /** 댓글이 DB 에 저장됐다 */
   comment_publish: { member_type: 'member' | 'guest'; is_reply: boolean }
 }

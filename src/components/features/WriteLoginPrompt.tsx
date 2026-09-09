@@ -5,7 +5,7 @@ import { TOUCH_MIN } from '@/lib/spacing'
 import KakaoSignInButton from '@/components/features/KakaoSignInButton'
 import { trackEvent } from '@/lib/analytics/track'
 import { markWriteAuthStart } from '@/lib/analytics/write-auth-marker'
-import type { BoardSlug } from '@/lib/board-registry'
+import type { CommunityBoardSlug } from '@/lib/board-registry'
 
 /**
  * 다 쓰고 등록을 누른 비회원에게 보여 주는 안내.
@@ -39,7 +39,7 @@ export default function WriteLoginPrompt({
   onClose,
 }: {
   /** 어느 게시판에서 나가는가. 표식과 계측이 같은 값을 써야 돌아왔을 때 짝이 맞는다. */
-  boardSlug: BoardSlug
+  boardSlug: CommunityBoardSlug
   /** 로그인 뒤 돌아올 곳. 게시판까지 포함한 글쓰기 경로여야 임시저장을 찾을 수 있다. */
   callbackUrl: string
   /** 임시저장이 실패했을 때만 온다 — 아래 warning 블록 참조 */

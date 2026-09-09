@@ -26,9 +26,18 @@
 
 const MARKER_KEY = 'soran-write-auth-return'
 
+import type { CommunityBoardSlug } from '@/lib/board-registry'
+
 /** 왕복에 허용하는 시간 */
 export const WRITE_AUTH_MARKER_TTL_MS = 30 * 60 * 1000
 
+/**
+ * 저장된 표식.
+ *
+ * 🔴 boardSlug 가 string 인 것은 의도다. 이건 **읽어 온 값**의 모양이라
+ *    localStorage 에 무엇이 들어 있든 담을 수 있어야 한다. 좁은 타입은
+ *    바깥으로 나가는 함수 인자에 둔다 — 거기가 우리 코드가 값을 정하는 자리다.
+ */
 type WriteAuthMarker = {
   boardSlug: string
   /** 만료 시각(ms) */
@@ -59,7 +68,7 @@ export function clearWriteAuthMarker(): void {
 }
 
 /** 인증하러 나가기 직전에 심는다 */
-export function markWriteAuthStart(boardSlug: string, now: number): void {
+export function markWriteAuthStart(boardSlug: CommunityBoardSlug, now: number): void {
   try {
     const marker: WriteAuthMarker = { boardSlug, expiresAt: now + WRITE_AUTH_MARKER_TTL_MS }
     localStorage.setItem(MARKER_KEY, JSON.stringify(marker))
@@ -77,7 +86,7 @@ export function markWriteAuthStart(boardSlug: string, now: number): void {
  * 🔴 게시판이 다르면 지우지 않는다. `?board=` 를 잃고 돌아온 사람은 다른 게시판 화면에서
  *    "이어서 쓰기" 로 자기 글을 복원한다 — 그때 이 표식이 살아 있어야 그 왕복을 셀 수 있다.
  */
-export function takeWriteAuthMarker(boardSlug: string, now: number): boolean {
+export function takeWriteAuthMarker(boardSlug: CommunityBoardSlug, now: number): boolean {
   const marker = readMarker()
   if (!marker) return false
 

@@ -24,10 +24,19 @@ import type { SoranEventMap, SoranEventName, SoranEventParams } from '@/lib/anal
 
 type EventGtag = (command: 'event', name: SoranEventName, params: SoranEventParams) => void
 
+/**
+ * 🔴 전역 Window 선언에 기대지 않는다.
+ *    `window.gtag` 의 타입은 GoogleAnalytics.tsx 안의 `declare global` 이 정한다.
+ *    그 선언은 앱 tsconfig 에만 들어 있어서, 이 모듈을 가드 스크립트(tsconfig.ops.json)가
+ *    가져오면 "Window 에 gtag 가 없다" 로 컴파일이 깨진다.
+ *    여기서 window 를 좁혀 읽으면 이 파일이 홀로 서고, 동결된 그 파일에 손댈 이유도 없어진다.
+ */
+type GtagHolder = { gtag?: unknown }
+
 export function trackEvent<K extends SoranEventName>(name: K, params: SoranEventMap[K]): void {
   if (typeof window === 'undefined') return
 
-  const send = window.gtag as unknown as EventGtag | undefined
+  const send = (window as unknown as GtagHolder).gtag as EventGtag | undefined
   if (typeof send !== 'function') return
 
   try {

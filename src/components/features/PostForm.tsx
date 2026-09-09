@@ -8,7 +8,7 @@ import PostEditor from '@/components/features/PostEditor'
 import WriteFooter, { WriteFooterSpacer } from '@/components/features/WriteFooter'
 import WriteTopBar from '@/components/features/WriteTopBar'
 import { createPost, type ActionState } from '@/lib/actions/posts'
-import { COMMUNITY_BOARDS, type BoardSlug } from '@/lib/board-registry'
+import { COMMUNITY_BOARDS, type CommunityBoardSlug } from '@/lib/board-registry'
 import { trackEvent } from '@/lib/analytics/track'
 import { clearWriteAuthMarker, takeWriteAuthMarker } from '@/lib/analytics/write-auth-marker'
 import { firstImageUrl } from '@/lib/post-media'
@@ -43,12 +43,13 @@ const DRAFT_SAVE_FAILED =
 /**
  * 아무 문자열이나 받아 레지스트리에 실재하는 slug 로 만든다.
  *
- * 🔴 돌려주는 타입이 BoardSlug 다. 이 화면에 들어오는 slug 는 주소(`?board=`)와
+ * 🔴 돌려주는 타입이 CommunityBoardSlug 다. 이 화면에 들어오는 slug 는 주소(`?board=`)와
  *    임시저장(localStorage)에서 오는데 둘 다 사람이 고칠 수 있는 값이다.
  *    그대로 두면 계측 파라미터에 임의 문자열이 실릴 수 있다 — 여기서 한 번 좁히고,
  *    그 뒤로는 타입이 그 자리를 지킨다.
+ *    `?board=magazine` 처럼 글을 쓸 수 없는 보드로 와도 커뮤니티 게시판으로 떨어진다.
  */
-function resolveBoardSlug(slug: string | undefined): BoardSlug {
+function resolveBoardSlug(slug: string | undefined): CommunityBoardSlug {
   const found = COMMUNITY_BOARDS.find((b) => b.slug === slug)
   return found ? found.slug : COMMUNITY_BOARDS[0].slug
 }

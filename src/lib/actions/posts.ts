@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
-import { getBoardBySlug, type BoardSlug } from '@/lib/board-registry'
+import { getBoardBySlug, type CommunityBoardSlug } from '@/lib/board-registry'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { checkContent } from '@/lib/content-guard'
 import { requireOnboarded } from '@/lib/onboarding-guard'
@@ -62,7 +62,7 @@ export type ActionState = {
   /** 저장된 글로 갈 곳. 화면 이동에만 쓴다 — 글 id 가 들어 있어 계측에 싣지 않는다 */
   destination?: string
   /** 계측 정본. 화면이 들고 있던 값이 아니라 서버가 실제로 저장한 게시판이다 */
-  boardSlug?: BoardSlug
+  boardSlug?: CommunityBoardSlug
 }
 
 /**
@@ -138,11 +138,15 @@ export async function createPost(
 
   revalidatePath(board.href)
   /**
-   * 🔴 board 는 레지스트리에서 찾은 값이라 slug 는 반드시 레지스트리 상수다.
-   *    getBoardBySlug 의 반환 타입이 BoardMeta(slug: string)라 넓어져 있을 뿐이고,
-   *    formData 의 문자열이 이 자리에 올 수는 없다 — 위 `!board` 검사가 걸러 낸다.
+   * 🔴 board 는 레지스트리에서 찾은 값이고, 위에서 `!board.isCommunity` 를 이미 걸렀다.
+   *    그러니 slug 는 커뮤니티 게시판 상수다 — getBoardBySlug 의 반환 타입이
+   *    BoardMeta(slug: string)라 넓어져 있을 뿐, formData 의 문자열이 이 자리에 올 수 없다.
    */
-  return { ok: true, destination: `${board.href}/${post.id}`, boardSlug: board.slug as BoardSlug }
+  return {
+    ok: true,
+    destination: `${board.href}/${post.id}`,
+    boardSlug: board.slug as CommunityBoardSlug,
+  }
 }
 
 /** 글 수정: 사용자당 10분에 10건 */
