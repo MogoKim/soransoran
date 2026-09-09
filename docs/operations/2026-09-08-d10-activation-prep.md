@@ -740,3 +740,52 @@ freshness TTL 은 이 값을 **관측 시각 proxy** 로 쓴다. 그래서
 TTL 을 넘긴 옛 callback 이 회수 뒤에 돌아와 부작용을 만드는 경로를 원천 차단한다.
 
 🔴 이 PR 에서 job 정지·파일 삭제·live 수집은 **하지 않았다.** 계약과 절차만 적었다.
+
+---
+
+## §14 Scale Activation Wave A — 🔴 activate 에서 멈춤 (2026-09-09)
+
+### 무슨 일이 있었나
+
+Wave A(persona 24명)를 실행하다 **wave3-scale 11명 activate 에서 멈췄다.**
+
+```
+create  ✅ 커밋   User 12→23 · Persona 8→19(draft) · AuditLog 37→59
+seed    ✅ 커밋   11명 draft-seeded · AuditLog 59→70
+activate 🔴 2회 연속 실패 — 전원 롤백(write 0)
+```
+
+원인은 **Prisma interactive transaction 기본 마감 5초**다.
+회차 전원을 한 트랜잭션으로 묶는 계약이라 왕복이 인원에 비례하는데,
+이 환경의 DB 왕복은 **220~290ms** 였다. 11명 activate 는 사람마다 3왕복(33왕복)이라
+5초를 넘겼고 `Transaction not found ... refers to an old closed transaction` 으로 끝났다.
+
+🔴 read-only 재현(write 0): 같은 DB에서 `$transaction` 안에 33왕복을 넣으면 **5,718ms 에서 실패**하고,
+같은 프로세스의 두 번째 트랜잭션(44왕복)은 2,254ms 에 끝난다 — 콜드 스타트가 겹치면 넘어간다.
+
+### 지금 상태 (안전)
+
+- 🟢 데이터는 안전하다. **부분 활성화 0** — 11명 전부 `draft` · `activatedAt` null · `status_changed` 0.
+- 🟢 기존 8명은 그대로 active 이고 값도 불변이다.
+- 🟢 Post · Comment · Queue · ActivityLog · RawContent 불변. 공개 발행은 계속 d1.
+- 🔴 **wave4-depth 는 시작하지 않았다** — wave3 가 끝나야 시작한다는 계약을 지켰다.
+
+🔴 **이 상태를 임의로 되돌리지 않는다.** `draft-seeded` 는 안전한 중간 상태이고,
+수동 status 변경·Raw SQL·직접 보정은 하지 않는다.
+
+### 복구 순서 (수정 PR merge 뒤)
+
+```bash
+# 1. 지금 상태 확인 — 11명이 draft-seeded 그대로인지
+npm run persona:cohort-run -- --cohort=wave3-scale --step=check
+
+# 2. activate (create·seed 는 다시 하지 않는다 — 이미 커밋됐다)
+ACTOR_USER_ID=<admin id> npm run persona:cohort-run -- \
+  --cohort=wave3-scale --step=activate --apply --limit=11 --reason "..."
+npm run persona:cohort-run -- --cohort=wave3-scale --step=check
+
+# 3. wave3 가 전원 active 로 검증된 뒤에만 wave4
+npm run persona:cohort-run -- --cohort=wave4-depth --step=create   # 이하 동일 순서
+```
+
+🔴 `--step=create` 를 다시 돌리면 "이미 존재" 로 막힌다. 그것이 정상이다.
