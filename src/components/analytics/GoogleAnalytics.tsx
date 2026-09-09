@@ -8,10 +8,16 @@ const TRACKED_HOSTS = new Set(['soransoran.com', 'www.soransoran.com'])
 
 type GtagFields = {
   page_path?: string
+  page_location?: string
+  page_title?: string
   send_page_view?: boolean
+  send_to?: string
 }
 
-type GtagArgs = ['js', Date] | ['config', string, GtagFields]
+type GtagArgs =
+  | ['js', Date]
+  | ['config', string, GtagFields]
+  | ['event', 'page_view', GtagFields]
 
 declare global {
   interface Window {
@@ -51,8 +57,11 @@ export default function GoogleAnalytics() {
     if (!shouldTrack()) return
 
     ensureGoogleTag()
-    window.gtag?.('config', GA_MEASUREMENT_ID, {
+    window.gtag?.('event', 'page_view', {
+      send_to: GA_MEASUREMENT_ID,
       page_path: `${pathname}${window.location.search}`,
+      page_location: window.location.href,
+      page_title: document.title,
     })
   }, [pathname])
 
