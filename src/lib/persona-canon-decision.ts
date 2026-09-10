@@ -27,30 +27,39 @@ import { judgeExperienceGrounding } from './persona-experience-grounding'
  *    명령줄 인자로 winner 를 받지 않는다 — 받으면 오타 하나가 다른 모델을 확정한다.
  */
 export const APPROVED_DECISION = {
-  runId: '20260910-180719',
+  runId: '20260910-215242',
   winner: 'gemini-3.7-flash',
   /** 🔴 탈락 근거로 기록하되 winner 로 고르지 않는다 */
   rejected: 'claude-haiku-4.5',
   decidedBy: 'founder',
   /** 승인 근거 — 사람이 읽고 확인한 사실 */
-  basis: '근거 없는 자기 경험 0/9 · statusPass 8/9',
-  rejectedBasis: '근거 없는 자기 경험 2/9 · statusPass 2/9',
+  basis: '근거 없는 자기 경험 0/9 · statusPass 6/9',
+  rejectedBasis: '근거 없는 자기 경험 1/9 · statusPass 2/9',
   /** 🔴 winner 표본 수. 이 수가 아니면 다른 회차를 보고 있는 것이다 */
   expectedWinnerSamples: 9,
   /**
-   * 🔴 **승인한 artifact 의 실제 SHA** (2026-09-10 보강).
+   * 🔴 **승인한 artifact 의 실제 SHA.**
    *
-   *    앞선 판은 SHA 가 **16자 hex 인지**만 봤다. 그러면 표본 내용을 바꾸고
-   *    새 SHA 를 다시 계산해 넣어도 통과한다 — 실측으로 확인했다.
-   *    형식 검사는 승인 대조가 아니다. **승인한 그 파일인지**를 값으로 못 박는다.
+   *    형식(16자 hex) 검사는 승인 대조가 아니다 — 내용을 바꾸고 새 SHA 를 계산해
+   *    넣어도 통과한다(실측). **승인한 그 파일인지**를 값으로 못 박는다.
    */
   artifactSha: {
-    summary: '63b894fabc7c4976',
-    samples: '3b082388e15f0489',
-    key: '8919d62fedebb902',
+    summary: '5d3b933f15932501',
+    samples: 'f3c5ce4b78470c4e',
+    key: '9f8ea80e872d7c72',
   },
   /** 🔴 승인 당시 정본 자산의 코퍼스 digest */
   referenceCorpusDigest: '56caff2e05d45ce4',
+  /**
+   * 🔴 **묶음 digest 도 결정에 명시한다** (2026-09-10 보강).
+   *
+   *    앞선 회차(`20260910-180719`)는 코퍼스 digest 는 같았는데 **묶음 digest 가 달라**
+   *    승격에서 막혔다 — 회차를 만든 뒤 1인칭 판정 오탐을 고쳤고,
+   *    그 수정이 경험형 참고 댓글 제외를 255→202 로 바꿔 묶음 구성이 달라졌기 때문이다.
+   *    코퍼스가 같아도 **묶음이 다르면 그 회차는 재현되지 않는다.**
+   *    그래서 승인 결정에 값으로 적고, 회차 manifest 의 실제 값과 대조한다.
+   */
+  referenceBundleDigest: 'bb3ee27d45f7c76c',
 } as const
 
 export type DecisionBlockCode =
@@ -121,6 +130,8 @@ export function judgeCanonDecision(input: {
   runCorpusDigest: string | null
   /** 지금 정본 자산의 코퍼스 digest. `null` 이면 대조 불가 */
   assetCorpusDigest: string | null
+  /** 🔴 회차 manifest 가 적어 둔 **묶음** digest */
+  runBundleDigest?: string | null
 }): DecisionVerdict {
   const blocks: DecisionBlock[] = []
 
@@ -242,6 +253,22 @@ export function judgeCanonDecision(input: {
       code: 'REFERENCE_DIGEST_MISMATCH',
       message: `승인한 코퍼스 digest 가 아니다`
         + ` — 실측 ${input.runCorpusDigest} · 승인 ${APPROVED_DECISION.referenceCorpusDigest}`,
+    })
+  }
+
+  /**
+   * 🔴 **묶음 digest 도 본다.** 코퍼스가 같아도 묶음이 다르면 재현되지 않는다.
+   */
+  if (input.runBundleDigest === undefined || input.runBundleDigest === null) {
+    blocks.push({
+      code: 'REFERENCE_DIGEST_UNAVAILABLE',
+      message: '회차 manifest 에 묶음 digest 가 없다',
+    })
+  } else if (input.runBundleDigest !== APPROVED_DECISION.referenceBundleDigest) {
+    blocks.push({
+      code: 'REFERENCE_DIGEST_MISMATCH',
+      message: `승인한 묶음 digest 가 아니다`
+        + ` — 실측 ${input.runBundleDigest} · 승인 ${APPROVED_DECISION.referenceBundleDigest}`,
     })
   }
 

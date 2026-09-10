@@ -75,15 +75,22 @@ const actualSha = {
 console.log(`\n  회차 artifact ${dir} (🔴 공용 경로 — 소비 경로와 같은 곳)`)
 console.log(`     SHA  summary=${actualSha.summary} · samples=${actualSha.samples} · key=${actualSha.key}`)
 
-const runCorpusDigest = ((): string | null => {
+const runManifest = ((): { corpus: string | null; bundle: string | null } => {
   try {
-    const m = (JSON.parse(summaryJson) as { referenceManifest?: { sanitizedCorpusDigest?: unknown } })
-      .referenceManifest
-    return typeof m?.sanitizedCorpusDigest === 'string' ? m.sanitizedCorpusDigest : null
-  } catch { return null }
+    const m = (JSON.parse(summaryJson) as {
+      referenceManifest?: { sanitizedCorpusDigest?: unknown; personaBundleDigest?: unknown }
+    }).referenceManifest
+    return {
+      corpus: typeof m?.sanitizedCorpusDigest === 'string' ? m.sanitizedCorpusDigest : null,
+      bundle: typeof m?.personaBundleDigest === 'string' ? m.personaBundleDigest : null,
+    }
+  } catch { return { corpus: null, bundle: null } }
 })()
+const runCorpusDigest = runManifest.corpus
 const asset = readAssetDigests()
 console.log(`     회차 코퍼스 digest  ${runCorpusDigest ?? '🔴 없음'}`)
+console.log(`     회차 묶음 digest    ${runManifest.bundle ?? '🔴 없음'}`
+  + ` (승인 ${APPROVED_DECISION.referenceBundleDigest})`)
 console.log(`     지금 자산 digest    ${asset?.sanitizedCorpusDigest ?? '🔴 읽지 못함'}`)
 
 // ── 🔴 판정 ──
@@ -94,6 +101,7 @@ const v = judgeCanonDecision({
   summaryJson, samplesJson, keyJson, actualSha,
   runCorpusDigest,
   assetCorpusDigest: asset?.sanitizedCorpusDigest ?? null,
+  runBundleDigest: runManifest.bundle,
 })
 
 if (v.evidence !== null) {

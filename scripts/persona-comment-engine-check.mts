@@ -1079,6 +1079,8 @@ console.log('⑤-c 🔴 댓글 생성 모델 확정 판정 (winner 를 쓰기 �
     summaryJson: SUMMARY, samplesJson: mkSamples(CLEAN9, DIRTY9), keyJson: KEY,
     actualSha: SHA,
     runCorpusDigest: DIGEST, assetCorpusDigest: DIGEST,
+    // 🔴 묶음 digest 도 결정에 명시돼 있고 회차 값과 대조된다
+    runBundleDigest: APPROVED_DECISION.referenceBundleDigest,
   }
 
   const good = judgeCanonDecision(base)
@@ -1099,6 +1101,14 @@ console.log('⑤-c 🔴 댓글 생성 모델 확정 판정 (winner 를 쓰기 �
     ['🔴 둘이 같아도 승인값이 아니면 막는다',
       { ...base, runCorpusDigest: '1111111111111111', assetCorpusDigest: '1111111111111111' },
       'REFERENCE_DIGEST_MISMATCH'],
+    /**
+     * 🔴 **코퍼스가 같아도 묶음이 다르면 막는다.**
+     *    회차 `20260910-180719` 이 정확히 이 상태로 승격에서 걸렸다 —
+     *    자산은 그대로인데 묶음 구성이 달라져 그 회차가 재현되지 않았다.
+     */
+    ['🔴 코퍼스는 같은데 묶음 digest 가 다름',
+      { ...base, runBundleDigest: '3cc036fc81eb807f' }, 'REFERENCE_DIGEST_MISMATCH'],
+    ['🔴 묶음 digest 가 없음', { ...base, runBundleDigest: null }, 'REFERENCE_DIGEST_UNAVAILABLE'],
     ['자산 digest 못 읽음', { ...base, assetCorpusDigest: null }, 'REFERENCE_DIGEST_UNAVAILABLE'],
     ['회차 digest 없음', { ...base, runCorpusDigest: null }, 'REFERENCE_DIGEST_UNAVAILABLE'],
     ['🔴 SHA 를 다시 계산해 넣어도 막는다',
@@ -1353,6 +1363,8 @@ console.log('⑤-c 🔴 댓글 생성 모델 확정 판정 (winner 를 쓰기 �
         },
         runCorpusDigest: (JSON.parse(sJson) as { referenceManifest?: { sanitizedCorpusDigest?: string } })
           .referenceManifest?.sanitizedCorpusDigest ?? null,
+        runBundleDigest: (JSON.parse(sJson) as { referenceManifest?: { personaBundleDigest?: string } })
+          .referenceManifest?.personaBundleDigest ?? null,
         assetCorpusDigest: readAssetDigests()?.sanitizedCorpusDigest ?? null,
       })
       check(`🟢 실물 승인 회차가 통과한다 (${real.blocks.map((b) => b.code).join(',') || '막힘 없음'})`,
