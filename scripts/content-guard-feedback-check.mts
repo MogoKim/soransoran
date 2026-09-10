@@ -231,6 +231,82 @@ for (const t of STRICT_MUST_PASS) {
   }
 }
 
+// ══ 7-D. 상담·피해 글과 광고 가입 글을 가른다 ══
+// `가입` 하나로는 **누구에게** 가입시키는지 알 수 없다. 위험 서비스에 직접 붙었을 때만 센다.
+{
+  const HELP_PASS = [
+    '카지노 중독 상담소 가입 https://help.example',
+    '리딩방 피해자 모임 가입 https://help.example',
+    '카지노 중독 상담 안내 https://help.example',
+    '코인노래방 회원 가입 https://music.example',
+    '도서관 가입 후 책 대출 https://library.example',
+    '리딩방 피해 기사 https://news.example',
+  ]
+  for (const t of HELP_PASS) {
+    check(`상담·일상 글은 통과 — "${t.slice(0, 22)}"`, userOk(t), code(t))
+  }
+  const JOIN_BLOCK = [
+    '리딩방 가입 https://spam.example',
+    '리딩방 지금 가입 https://spam.example',
+    '카지노 가입 https://spam.example',
+    '카지노 충전 https://spam.example',
+    '작업대출 모집 https://spam.example',
+  ]
+  for (const t of JOIN_BLOCK) {
+    check(`위험 서비스 직접 가입·모집은 차단 — "${t.slice(0, 22)}"`, code(t) === 'AD_COMBO', code(t))
+  }
+  // 제목/본문에 나눠 담아도 같은 판정이 나온다
+  const splitJoin = checkPostContent({ title: '리딩방 가입 안내', text: 'https://spam.example' })
+  check('분리 광고 — 제목 "리딩방 가입 안내"', splitJoin?.code === 'AD_COMBO', splitJoin?.code ?? 'null')
+  const splitNow = checkPostContent({ title: '카지노 지금 가입', text: 'https://spam.example' })
+  check('분리 광고 — 제목 "카지노 지금 가입"', splitNow?.code === 'AD_COMBO', splitNow?.code ?? 'null')
+  const splitHelp = checkPostContent({ title: '카지노 중독 상담소 가입', text: 'https://help.example' })
+  check('🔴 분리해도 상담소 가입은 통과', splitHelp === null, JSON.stringify(splitHelp))
+}
+
+// ══ 7-E. 외부 연락처 ID — 명시형·핸들형·맨몸형 ══
+{
+  const ID_BLOCK = [
+    '카톡: abc123', '카톡 abc123', '카카오톡: abc123', '카카오톡 abc123',
+    '카톡 아이디 abc123', '카톡ID: abc123', '카톡아이디 abc123',
+    '카카오톡 아이디 mysecret', '카카오톡ID @my_id',
+    '텔레그램: abc1234', '텔레그램 abc1234', '텔레그램 아이디 abc1234',
+    '텔레ID: abc1234', '텔레 @abc1234',
+  ]
+  for (const t of ID_BLOCK) {
+    const s = `연락은 ${t} 로 주세요`
+    check(`외부 ID 차단 — "${t}"`, code(s) === 'CONTACT_EXTERNAL_ID', code(s))
+  }
+  const ID_PASS = [
+    '카톡으로 가족과 이야기했어요',
+    '카카오톡이 업데이트됐어요',
+    '오픈카톡 사기를 조심하세요',
+    '카톡 알림 소리가 커요',
+    '카톡 alarm 소리가 커요',
+    '어제 카톡\nsomething123 이라는 노래를 들었어요',
+    '텔레그램이 업데이트됐어요',
+    '텔레비전을 보고 있었어요',
+    '어제 텔레그램\nabc1234라는 노래를 들었어요',
+  ]
+  for (const t of ID_PASS) {
+    check(`일상 언급은 통과 — "${t.replace(/\n/g, '⏎').slice(0, 26)}"`, userOk(t), code(t))
+  }
+  // 🔴 걸린 ID 원문이 결과에 실리지 않는다
+  for (const [t, secret] of [
+    ['카톡 아이디 abc123', 'abc123'],
+    ['카카오톡ID @my_id', 'my_id'],
+    ['텔레그램 아이디 abc1234', 'abc1234'],
+  ] as const) {
+    check(`🔴 결과에 ID 원문이 없다 — "${t}"`, !JSON.stringify(userRes(t)).includes(secret))
+    const r = userRes(t)
+    check(`🔴 문구에도 ID 원문이 없다 — "${t}"`, r.ok || !postGuardMessage('content', r.issue!).includes(secret))
+  }
+  check(
+    '🔴 차단 결과에 URL 원문이 실리지 않는다',
+    !JSON.stringify(userRes('리딩방 가입 https://spam.example')).includes('spam.example'),
+  )
+}
+
 // ══ 8. 민감한 원문이 결과·문구에 실리지 않는다 ══
 {
   const phone = userRes('연락은 010-1234-5678 로 주세요')
