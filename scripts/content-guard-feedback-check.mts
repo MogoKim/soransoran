@@ -26,6 +26,7 @@
  */
 import { checkContent, BRAND_BANNED_WORDS, MAX_BODY_LINKS } from '../src/lib/content-guard'
 import { postGuardMessage } from '../src/lib/post-guard-message'
+import { checkPostContent } from '../src/lib/post-guard-check'
 
 const results: Array<[string, boolean, string]> = []
 const check = (why: string, ok: boolean, detail = '') => void results.push([why, ok, detail])
@@ -182,6 +183,40 @@ for (const [input, expected] of REASONS) {
     !r.ok && r.reason === expected,
     r.ok ? '통과해 버림' : r.reason,
   )
+}
+
+
+// ── 13. 제목 → 본문 순서 · 다음 문제 안내 (checkPostContent) ──
+{
+  const both = checkPostContent({ title: '지랄 같은 제목', text: '본문에도 병신 이 있다' })
+  check('제목과 본문이 둘 다 걸리면 제목을 먼저 말한다', both?.field === 'title', both?.field ?? 'null')
+  check("  걸린 표현이 '지랄' 이다", both?.matchedText === '지랄', both?.matchedText ?? '')
+
+  const afterTitleFixed = checkPostContent({ title: '평범한 제목', text: '본문에도 병신 이 있다' })
+  check(
+    '제목을 고치면 다음 문제(본문)를 말한다',
+    afterTitleFixed?.field === 'content',
+    afterTitleFixed?.field ?? 'null',
+  )
+
+  // 차단 표현 2개 — 첫 표현을 지우면 두 번째를 말한다
+  const two = checkPostContent({ title: '제목', text: '지랄 하고 병신 같다' })
+  check('차단 표현 2개면 첫 번째를 말한다', two?.matchedText === '지랄', two?.matchedText ?? '')
+  const oneLeft = checkPostContent({ title: '제목', text: '하고 병신 같다' })
+  check(
+    '  첫 표현을 지우면 두 번째를 말한다',
+    oneLeft?.matchedText === '병신',
+    oneLeft?.matchedText ?? 'null',
+  )
+  const allGone = checkPostContent({ title: '제목', text: '하고 같다' })
+  check('  둘 다 지우면 통과한다 (null)', allGone === null, JSON.stringify(allGone))
+
+  // 금칙어와 무관한 글자를 바꿔도 여전히 막힌다
+  const unrelatedEdit = checkPostContent({ title: '제목', text: '지랄 하고 병신 같다!!' })
+  check('금칙어와 무관한 글자를 바꿔도 막힌 채로 남는다', unrelatedEdit !== null)
+
+  const clean = checkPostContent({ title: '평범한 제목', text: '평범하고 즐거운 본문입니다.' })
+  check('둘 다 깨끗하면 null 이다 — CTA 를 열 수 있는 유일한 조건', clean === null)
 }
 
 // ── 보고 ────────────────────────────────────────────────

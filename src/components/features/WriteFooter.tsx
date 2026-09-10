@@ -31,12 +31,23 @@ const BAR_HEIGHT = 'h-[124px]'
  */
 export default function WriteFooter({
   block,
+  canSubmit,
   textLength,
   label,
   pendingLabel,
   busy = false,
 }: {
+  /** 길이·업로드 때문에 막혔다면 그 사유. 아래 안내 문구를 고르는 데만 쓴다 */
   block: PostSubmitBlock | null
+  /**
+   * 지금 올릴 수 있는가.
+   *
+   * 🔴 `block !== null` 로 스스로 판정하지 않는다. 그렇게 두면 금칙어처럼
+   *    block 이 아닌 사유로 막혔을 때 **상단 버튼은 잠기고 이 버튼만 열린** 상태가 된다.
+   *    실제로 그랬다 — 서버가 막았다고 말한 화면에서 아래 CTA 를 다시 누를 수 있었다.
+   *    판정은 부모가 한 번 하고, 상단바와 이 버튼이 **같은 값**을 받는다.
+   */
+  canSubmit: boolean
   textLength: number
   label: string
   pendingLabel: string
@@ -88,7 +99,7 @@ export default function WriteFooter({
         tone="primary"
         label={label}
         pendingLabel={pendingLabel}
-        disabled={block !== null}
+        disabled={!canSubmit}
         busy={busy}
         className="min-h-[56px] w-full justify-center"
       />

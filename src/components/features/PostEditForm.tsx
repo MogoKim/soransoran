@@ -62,21 +62,33 @@ export default function PostEditForm({
     textLength: text.trim().length,
     hasImage,
   })
-  const canSubmit = block === null
-
-  /**
-   * 🔴 새 글 폼과 같은 훅을 쓴다. 고치는 화면만 다르게 말하면 같은 사람이 두 번 배운다.
-   * 🔴 금칙어 판정을 화면에서 다시 하지 않는다. 서버가 검사하는 평문은
-   *    postContentToText(HTML) 이고 에디터가 아는 글자는 editor.getText() 라 서로 다르다 —
-   *    화면이 미리 막으면 "버튼은 잠겼는데 서버는 통과" 또는 그 반대가 생긴다.
-   *    판정은 서버 하나가 하고, 화면은 그 답을 제자리에 붙인다(정본 §5-3·§5-11).
-   */
-  const guard = usePostGuardError({ fieldError: state.fieldError, title, content })
+  /** 🔴 새 글 폼과 같은 훅·같은 canSubmit 을 쓴다. 두 화면이 다르게 말하면 두 번 배운다. */
+  const guard = usePostGuardError({
+    serverFieldError: state.fieldError,
+    title,
+    text,
+  })
   const titleBlocked = guard.error?.field === 'title'
   const contentBlocked = guard.error?.field === 'content'
 
+  /** 🔴 상단바와 하단 CTA 가 이 하나를 함께 본다 */
+  const canSubmit = block === null && !guard.blocked
+
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form
+      action={(formData) => {
+        /**
+         * 🔴 버튼이 잠겨 있다는 것만 믿지 않는다. 제목칸 Enter·requestSubmit() 은
+         *    버튼을 거치지 않는다. 같은 문을 여기서 한 번 더 닫는다.
+         * 🔴 걸리면 서버 액션을 부르지 않는다 — 다녀와도 돌아오는 것은 같은 거절뿐이고,
+         *    그 사이 "수정 중…" 을 보여 주는 것은 될 것처럼 구는 일이다.
+         */
+        if (block) return
+        if (guard.runBeforeSubmit()) return
+        formAction(formData)
+      }}
+      className="flex flex-col gap-4"
+    >
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
 
@@ -122,7 +134,7 @@ export default function PostEditForm({
         ) : null}
       </div>
 
-      <div ref={guard.bodyRef} className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         <input type="hidden" name="content" value={content} readOnly />
         <PostEditor
           value={content}
@@ -141,7 +153,13 @@ export default function PostEditForm({
 
       {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}
       <WriteFooterSpacer />
-      <WriteFooter block={block} textLength={text.length} label="수정하기" pendingLabel="수정 중…" />
+      <WriteFooter
+        block={block}
+        canSubmit={canSubmit}
+        textLength={text.length}
+        label="수정하기"
+        pendingLabel="수정 중…"
+      />
     </form>
   )
 }

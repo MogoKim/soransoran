@@ -298,21 +298,22 @@ export default function PostForm({
     textLength: text.trim().length,
     hasImage,
   })
-  // 🔴 넘긴 뒤에는 다시 누를 수 없다. 서버가 막아 세우면 위 effect 가 다시 열어 준다.
-  const canSubmit = block === null && !submitting
-
-  /**
-   * 🔴 고치기 화면과 같은 훅을 쓴다. 두 화면이 각자 적으면 언젠가 한쪽만 고쳐진다.
-   * 🔴 금칙어 판정을 화면에서 다시 하지 않는다. 서버가 검사하는 평문은
-   *    postContentToText(HTML) 이고 에디터가 아는 글자는 editor.getText() 라 서로 다르다 —
-   *    화면이 미리 막으면 "버튼은 잠겼는데 서버는 통과" 또는 그 반대가 생긴다.
-   *    판정은 서버 하나가 하고(정본 §5-3), 화면은 그 답을 제자리에 붙인다.
-   *    그래서 postSubmitBlock 에 금칙어를 넣지 않았다 — 상단·하단 CTA 는 지금처럼
-   *    같은 block 하나만 보므로 서로 다른 답을 낼 자리가 없다.
-   */
-  const guard = usePostGuardError({ fieldError: state.fieldError, title, content })
+  /** 🔴 고치기 화면과 같은 훅·같은 canSubmit 을 쓴다. 각자 적으면 한쪽만 고쳐진다. */
+  const guard = usePostGuardError({
+    serverFieldError: state.fieldError,
+    title,
+    text,
+  })
   const titleBlocked = guard.error?.field === 'title'
   const contentBlocked = guard.error?.field === 'content'
+
+  /**
+   * 🔴 상단바와 하단 CTA 가 이 하나를 함께 본다.
+   *    한때 하단 CTA 만 `block !== null` 로 스스로 판정해서, 서버가 막았다고 말한 화면에서
+   *    아래 버튼을 다시 누를 수 있었다. 판정은 여기서 한 번만 한다.
+   * 🔴 넘긴 뒤에는 다시 누를 수 없다. 서버가 막아 세우면 위 effect 가 다시 열어 준다.
+   */
+  const canSubmit = block === null && !submitting && !guard.blocked
   const board = COMMUNITY_BOARDS.find((b) => b.slug === boardSlug)
 
   return (
@@ -347,6 +348,19 @@ export default function PostForm({
          *    저장된 글로 이동한다 — 올린 글을 한 번 더 올릴 길을 남기지 않는다.
          */
         if (submittingRef.current) return
+
+        /**
+         * 🔴 콘텐츠 가드를 **로그인 안내보다 먼저** 본다.
+         *    한때는 비회원이면 무조건 로그인 안내부터 띄웠다. 그래서 금칙어가 든 글을 쓴 사람은
+         *    카카오로 로그인하고 돌아온 **다음에야** "그 말은 쓸 수 없어요" 를 만났다 —
+         *    글을 쓰게 하려고 부른 로그인이 헛걸음이 된다.
+         *    걸리면 서버 액션도, 임시저장 로그인 안내도, write_login_prompt 계측도
+         *    **아무것도 하지 않는다.** 지금 고칠 수 있는 것을 지금 말한다.
+         *
+         * 🔴 서버와 같은 함수(checkPostContent)를 제목 → 본문 순서로 부른다.
+         *    화면이 통과시켜도 저장을 막는 최종 판정은 서버가 다시 한다.
+         */
+        if (guard.runBeforeSubmit()) return
 
         /**
          * 🔴 비회원은 여기서 멈춘다. createPost 를 부르지 않는다.
@@ -494,7 +508,7 @@ export default function PostForm({
         ) : null}
       </div>
 
-      <div ref={guard.bodyRef} className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1">
         {/* 🔴 form 에는 hidden input 으로 낸다. Tiptap 은 name 을 가진 입력이 아니다. */}
         <input type="hidden" name="content" value={content} readOnly />
         <PostEditor
@@ -520,6 +534,7 @@ export default function PostForm({
       <WriteFooterSpacer />
       <WriteFooter
         block={block}
+        canSubmit={canSubmit}
         textLength={text.length}
         label="등록하기"
         pendingLabel="등록 중…"
