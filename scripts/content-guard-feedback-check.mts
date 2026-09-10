@@ -342,6 +342,50 @@ for (const t of STRICT_MUST_PASS) {
   }
 }
 
+// ══ 7-F-2. 가입 **뒤**에 무슨 말이 오는가 ══
+// 🔴 `위험 서비스 + 가입` 은 광고도 피해 글도 똑같이 생겼다. 다른 것은 그다음 말이다.
+{
+  const AFTER_PASS = [
+    '리딩방 가입 사기를 조심하세요 https://news.example',
+    '리딩방 가입했다가 피해를 봤어요 https://help.example',
+    '리딩방 가입했는데 사기였어요 https://help.example',
+    '카지노 가입 피해 후기 https://help.example',
+    '카지노 가입 과정에서 피해를 봤어요 https://help.example',
+  ]
+  for (const t of AFTER_PASS) {
+    check(`가입 뒤가 피해·경고면 통과 — "${t.slice(0, 24)}"`, userOk(t), code(t))
+  }
+  const AFTER_BLOCK = [
+    '리딩방 가입하세요 https://spam.example',
+    '리딩방 가입하세요, 피해 없습니다 https://spam.example',
+    '카지노 지금 가입하십시오 https://spam.example',
+    '카지노 신규 회원 가입 안내 https://spam.example',
+    '토토 바로 가입 문의 https://spam.example',
+  ]
+  for (const t of AFTER_BLOCK) {
+    check(`가입 뒤가 권유·안내면 차단 — "${t.slice(0, 24)}"`, code(t) === 'AD_COMBO', code(t))
+  }
+  // 🔴 피해 낱말을 **앞에** 심어 두는 우회는 통하지 않는다 (뒤만 본다)
+  check(
+    '🔴 "피해 없는 리딩방 가입 안내" 는 차단된다',
+    code('피해 없는 리딩방 가입 안내 https://spam.example') === 'AD_COMBO',
+    code('피해 없는 리딩방 가입 안내 https://spam.example'),
+  )
+  // 🔴 경고를 앞에 깔고 뒤에 광고를 붙이는 우회도 통하지 않는다 (가입 자리마다 본다)
+  check(
+    '🔴 경고 뒤에 광고를 붙여도 차단된다',
+    code('리딩방 가입 사기 조심하세요. 리딩방 가입하세요 https://spam.example') === 'AD_COMBO',
+    code('리딩방 가입 사기 조심하세요. 리딩방 가입하세요 https://spam.example'),
+  )
+  // 제목/본문 분리도 같은 판정을 쓴다
+  const sPass = checkPostContent({ title: '리딩방 가입 사기를 조심하세요', text: 'https://news.example' })
+  check('분리 — 제목 경고 + 본문 링크는 통과', sPass === null, JSON.stringify(sPass))
+  const sAd = checkPostContent({ title: '리딩방 가입 안내', text: 'https://spam.example' })
+  check('분리 — 제목 "가입 안내" + 본문 링크는 차단', sAd?.code === 'AD_COMBO', sAd?.code ?? 'null')
+  const sSolicit = checkPostContent({ title: '리딩방 가입하세요, 피해 없습니다', text: 'https://spam.example' })
+  check('분리 — 제목 권유형은 피해 낱말이 있어도 차단', sSolicit?.code === 'AD_COMBO', sSolicit?.code ?? 'null')
+}
+
 // ══ 7-G. 고위험 낱말은 "말하는 꼴" 로 가른다 ══
 // 🔴 낱말이 있느냐가 아니라 읽는 사람에게 하라고 말하느냐를 본다.
 {

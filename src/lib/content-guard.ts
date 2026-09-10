@@ -220,25 +220,70 @@ const AD_SOLICIT_PATTERN = new RegExp(
  */
 const AD_JOIN_MODIFIER = /지금|바로|무료|신규|즉시|간편|오늘부터|회원/
 
-/** 가입형 — 위험 서비스 + 광고 수식어 0~2개 + 가입 */
+/** 가입형 자리 찾기 — 위험 서비스 + 광고 수식어 0~2개 + 가입 */
 const AD_JOIN_PATTERN = new RegExp(
   `(?:${AD_DOMAIN_PATTERN.source})[ \\t]*(?:(?:${AD_JOIN_MODIFIER.source})[ \\t]*){0,2}가입`,
-  'i',
+  'gi',
 )
 
 /**
- * 피해·경고·보도 신호 — 맨몸 낱말을 광고로 세지 않게 하는 자리.
+ * 피해·경고·보도 신호 — 사람이 겪은 일을 말하고 있다는 표시.
  *
  * 🔴 이 목록을 늘려서 오탐을 막으려 하지 마라. 그 길은 끝이 없다.
  *    오탐이 나오면 먼저 권유형·가입형을 더 정확하게 만든다.
  */
 const VICTIM_CONTEXT =
-  /피해|사기|속았|속인|속여|속였|속지|당했|당한|조심|주의|경고|기사|뉴스|신고|중독|상담|예방/
+  /피해|사기|속았|속인|속여|속였|속지|당했|당한|조심|주의|경고|기사|뉴스|신고|중독|상담|예방|후기/
+
+/**
+ * `가입` **바로 뒤**에 붙는 권유 어미.
+ *
+ * 🔴 "바로 뒤" 가 핵심이다. 문장 어디에나 있는 `하세요` 를 보면
+ *    "가입 사기를 조심**하세요**" 가 광고가 된다. 붙어 있는 것만 본다.
+ */
+const JOIN_SOLICIT_AFTER = new RegExp(
+  `^[ \\t]*(?:${AD_SOLICIT_TAIL.source}|하러|하시고|하시길|고고)`,
+  'i',
+)
+
+/**
+ * 가입형 판정 — `가입` 을 찾은 다음 **그 뒤에 무슨 말이 오는지**까지 본다.
+ *
+ * 🔴 `가입` 을 찾자마자 광고로 확정하면 피해 글이 통째로 막힌다.
+ *      "리딩방 가입했다가 피해를 봤어요"   겪은 일이다
+ *      "리딩방 가입 사기를 조심하세요"      경고다
+ *      "카지노 가입 피해 후기"             보도·경험담이다
+ *    셋 다 `위험 서비스 + 가입` 이라는 점에서 광고와 똑같이 생겼다.
+ *    다른 것은 **가입 다음에 이어지는 말**이다.
+ *
+ * 판정 순서 —
+ *   ① 위험 서비스에 직접 붙은 `가입` 자리를 찾는다
+ *   ② 그 바로 뒤가 명령·권유면 **차단**한다.
+ *      뒤에 무슨 말이 오든 상관없다. "가입하세요, 피해 없습니다" 는 광고다.
+ *   ③ 뒤에 피해·사기·경고·보도 문맥이 있으면 **허용**한다. 사람의 이야기다.
+ *   ④ 그 밖의 "가입 안내 + 링크" 는 **차단**한다.
+ *
+ * 🔴 ③ 은 `가입` **뒤**만 본다. 앞은 보지 않는다 —
+ *    "피해 없는 리딩방 가입 안내" 처럼 피해 낱말을 앞에 심어 두는 우회를 막는다.
+ *
+ * 🔴 `가입` 이 여러 번 나오면 **하나라도 광고면 광고다.**
+ *    "리딩방 가입 사기 조심하세요. 리딩방 가입하세요" 로 앞에 경고를
+ *    깔아 두는 우회를 막는다.
+ */
+function hasAdJoin(value: string): boolean {
+  for (const m of value.matchAll(AD_JOIN_PATTERN)) {
+    const after = value.slice((m.index ?? 0) + m[0].length)
+    if (JOIN_SOLICIT_AFTER.test(after)) return true // ② 명령·권유
+    if (VICTIM_CONTEXT.test(after)) continue // ③ 겪은 일·경고·보도
+    return true // ④ 그 밖의 가입 안내
+  }
+  return false
+}
 
 /** ② 모집·수익 유도 */
 function hasAdIntent(value: string): boolean {
   if (AD_SOLICIT_PATTERN.test(value)) return true // 권유형 — 면제 없음
-  if (AD_JOIN_PATTERN.test(value)) return true // 가입형 — 면제 없음
+  if (hasAdJoin(value)) return true // 가입형 — 가입 뒤 문맥까지 본다
   if (VICTIM_CONTEXT.test(value)) return false // 겪은 일·경고·보도를 말하는 글이다
   return AD_RISK_WORD.test(value) // 맨몸형
 }
