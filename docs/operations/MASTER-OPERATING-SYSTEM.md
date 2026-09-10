@@ -934,6 +934,41 @@ canon 승격이 막힌다. **"유출 검사를 안 돌렸다" 를 "깨끗하다"
 | 24 | **21** | 0.051 | 3 |
 | 40 | **27** | 0.025 | 8 (anchor 34명이 상한) |
 
+🔴 **모델 확정 경로 (2026-09-10, 창업자 승인 — 아직 실행하지 않았다).**
+
+확정 정본(`persona-comment-model.json`)을 쓰는 일은 되돌리기 어렵다 —
+한 번 쓰이면 health · Queue · runner · 발행 트랜잭션이 전부 그것을 읽는다.
+그래서 **묻는 것을 한 곳에 모아 순수 함수**로 두고, 명령은 기본이 read-only 다.
+
+| 계약 | 정본 |
+|---|---|
+| 확정 판정 (순수) | `src/lib/persona-canon-decision.ts` |
+| 명령 | `npm run persona:comment-decide -- --run=<runId> [--apply]` |
+
+🔴 **`winner` 를 명령줄로 받지 않는다.** 승인된 결정은 `APPROVED_DECISION` 상수 하나다 —
+받으면 오타 하나가 다른 모델을 확정한다. 바꾸려면 커밋이 있어야 하고 그 커밋이 기록이 된다.
+
+확정 전에 묻는 것 — 하나라도 어긋나면 **파일 write 0**
+
+- 회차가 승인된 것인가 (`20260910-180719`)
+- 그 회차가 무효 목록에 없는가
+- `winner` 가 **key.json 에 실제로 있는가** · 승인된 모델인가
+- `decidedBy` 가 `founder` 인가
+- artifact 3파일 SHA 가 16자 hex 이고 runId 가 일치하는가
+- 회차 manifest 의 코퍼스 digest 가 **지금 정본 자산**과 같은가
+- winner 표본이 9건이고 **근거 없는 자기 경험 0건**인가
+
+🔴 **탈락 모델은 근거로만 기록한다.** `claude-haiku-4.5` 는 화면과 판정 근거에 남지만
+`winner` 로 고를 수 없다.
+
+🔴 **쓰기는 덮어쓰지 않는다.** 없으면 쓰고, 같으면 멱등 성공, **다르면 중단**이다.
+temp write → atomic rename → 권한 600. 쓴 뒤에는 `readConfirmedSelection` 으로
+다시 읽어 `confirmed · winner` 를 확인한다 — 소비 경로가 받아들이지 않으면 쓴 의미가 없다.
+
+🔴 **이 명령은 Queue 를 만들지 않고 runner 를 등록하지 않고 release 를 켜지 않는다.**
+
+🔴 **아직 `--apply` 를 실행하지 않았다.** 확정 정본 파일은 존재하지 않고 winner 는 null 이다.
+
 🔴 **정정 (2026-09-10, A — 역할 체계를 실제 댓글 분포에 맞춘다).**
 
 실제 공개 댓글 879건을 기존 분류기(`classifyReaction`)로 재면
