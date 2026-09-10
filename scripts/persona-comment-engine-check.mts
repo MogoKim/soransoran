@@ -28,9 +28,12 @@ import {
   COMMENT_REACTION_ROLES, REACTION_TYPES, isAdviceForbidden, isReactionType,
 } from '../src/lib/persona-reaction-roles'
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
+  statSync, writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 /** fixture 전용 — 중간 디렉터리까지 만든다 */
@@ -94,6 +97,10 @@ import {
   buildReferenceManifest, carriesExperience, identityLeakCheck, loadCommentsFrom, planBundles,
 } from './lib/persona-reference-store.mjs'
 import { judgeExperienceGrounding } from '../src/lib/persona-experience-grounding'
+import {
+  APPROVED_DECISION, judgeCanonDecision, judgeCanonWrite,
+} from '../src/lib/persona-canon-decision'
+import { readAssetDigests } from '../src/lib/persona-reference-digest'
 import {
   bundlesAreDistinct, findContextMismatch, judgeExperienceEligibility,
   judgeVoiceSeparation, looksLikePostBody, styleDistance, styleOf,
@@ -1035,6 +1042,327 @@ console.log('⑤-b 🔴 Wave E — 말투 근거 · 무효 회차 · manifest ·
     })
     check('🟢 같은 맥락이면 표현이 가까워도 드러나지 않는다',
       okCtx.mismatched.filter((w) => w.startsWith('도서')).length === 0)
+  }
+}
+
+console.log('⑤-c 🔴 댓글 생성 모델 확정 판정 (winner 를 쓰기 전에 묻는 것)')
+{
+  const OK_RUN = APPROVED_DECISION.runId
+  const KEY = JSON.stringify({
+    runId: OK_RUN,
+    key: [{ blindLabel: 'A', model: APPROVED_DECISION.rejected },
+      { blindLabel: 'B', model: APPROVED_DECISION.winner }],
+  })
+  const SUMMARY = JSON.stringify({
+    runId: OK_RUN,
+    referenceManifest: { sanitizedCorpusDigest: APPROVED_DECISION.referenceCorpusDigest },
+  })
+  /** 🔴 winner 9건 전부 자기 사실 주장 없음 · 탈락 모델에는 2건 있음 */
+  const mkSamples = (winnerTexts: readonly string[], rejectedTexts: readonly string[]): string =>
+    JSON.stringify({
+      samples: [
+        ...winnerTexts.map((t, i) => ({ id: `W${i}`, blindLabel: 'B', text: t, statusPass: i < 8 })),
+        ...rejectedTexts.map((t, i) => ({ id: `R${i}`, blindLabel: 'A', text: t, statusPass: i < 2 })),
+      ],
+    })
+  const CLEAN9 = Array.from({ length: 9 }, (_, i) => `그러게요 정말 그렇죠 ${i}`)
+  const DIRTY9 = [
+    '저도 계단이 참 힘들어요',
+    '저도 작년에 그거 겪었어요',
+    ...Array.from({ length: 7 }, (_, i) => `그렇군요 ${i}`),
+  ]
+  // 🔴 승인한 값을 그대로 쓴다 — 형식이 아니라 값을 대조하기 때문이다
+  const SHA = { ...APPROVED_DECISION.artifactSha }
+  const DIGEST = APPROVED_DECISION.referenceCorpusDigest
+  const base = {
+    runId: OK_RUN, winner: APPROVED_DECISION.winner, decidedBy: APPROVED_DECISION.decidedBy,
+    summaryJson: SUMMARY, samplesJson: mkSamples(CLEAN9, DIRTY9), keyJson: KEY,
+    actualSha: SHA,
+    runCorpusDigest: DIGEST, assetCorpusDigest: DIGEST,
+  }
+
+  const good = judgeCanonDecision(base)
+  check('🟢 조건이 다 맞으면 확정할 수 있다', good.ok)
+  check('  winner 표본 9건 · 근거 없는 자기 경험 0건',
+    good.evidence?.winnerSamples === 9 && good.evidence.winnerUngrounded === 0)
+  check('  🔴 탈락 모델의 근거도 함께 남긴다',
+    (good.evidence?.rejectedUngrounded ?? 0) > 0
+    && good.evidence?.rejected === APPROVED_DECISION.rejected)
+
+  /** 🔴 실패 대조군 — 하나씩 무너뜨려 본다 */
+  const fails: readonly [string, Parameters<typeof judgeCanonDecision>[0], string][] = [
+    ['승인 안 된 회차', { ...base, runId: '20260101-000000' }, 'RUN_NOT_APPROVED'],
+    ['무효 회차', { ...base, runId: '20260910-153254' }, 'RUN_INVALIDATED'],
+    ['승인 안 된 winner', { ...base, winner: 'claude-haiku-4.5' }, 'WINNER_NOT_APPROVED'],
+    ['decidedBy 가 founder 아님', { ...base, decidedBy: 'claude' }, 'DECIDED_BY_NOT_FOUNDER'],
+    ['자산 digest 불일치', { ...base, assetCorpusDigest: '9999999999999999' }, 'REFERENCE_DIGEST_MISMATCH'],
+    ['🔴 둘이 같아도 승인값이 아니면 막는다',
+      { ...base, runCorpusDigest: '1111111111111111', assetCorpusDigest: '1111111111111111' },
+      'REFERENCE_DIGEST_MISMATCH'],
+    ['자산 digest 못 읽음', { ...base, assetCorpusDigest: null }, 'REFERENCE_DIGEST_UNAVAILABLE'],
+    ['회차 digest 없음', { ...base, runCorpusDigest: null }, 'REFERENCE_DIGEST_UNAVAILABLE'],
+    ['🔴 SHA 를 다시 계산해 넣어도 막는다',
+      { ...base, actualSha: { ...SHA, samples: 'af3c6ef40541bf54' } }, 'ARTIFACT_SHA_MISMATCH'],
+    ['SHA 가 hex 가 아님', { ...base, actualSha: { ...SHA, summary: 'zz' } }, 'ARTIFACT_SHA_MISMATCH'],
+    ['summary 의 runId 가 다름',
+      { ...base, summaryJson: JSON.stringify({ runId: 'x', referenceManifest: { sanitizedCorpusDigest: APPROVED_DECISION.referenceCorpusDigest } }) },
+      'ARTIFACT_SHA_MISMATCH'],
+    ['artifact 손상', { ...base, keyJson: '{{{' }, 'ARTIFACT_UNREADABLE'],
+    ['winner 표본이 9건이 아님',
+      { ...base, samplesJson: mkSamples(CLEAN9.slice(0, 5), DIRTY9) }, 'WINNER_SAMPLE_COUNT'],
+    ['🔴 winner 에 근거 없는 자기 경험이 있음',
+      { ...base, samplesJson: mkSamples(DIRTY9, DIRTY9) }, 'WINNER_UNGROUNDED_EXPERIENCE'],
+  ]
+  for (const [label, arg, code] of fails) {
+    const r = judgeCanonDecision(arg)
+    check(`🔴 ${label} → 막는다 [${code}]`,
+      !r.ok && r.blocks.some((b) => b.code === code))
+  }
+  /** 🔴 winner 가 key.json 에 없으면 막는다 */
+  const noWinner = judgeCanonDecision({
+    ...base,
+    keyJson: JSON.stringify({ runId: OK_RUN, key: [{ blindLabel: 'A', model: 'other-model' }] }),
+  })
+  check('🔴 winner 가 key.json 에 없으면 막는다',
+    !noWinner.ok && noWinner.blocks.some((b) => b.code === 'WINNER_NOT_IN_KEY'))
+  check('  탈락 모델이 없어도 막는다',
+    !noWinner.ok && noWinner.blocks.some((b) => b.code === 'REJECTED_NOT_PRESENT'))
+
+  /**
+   * 🔴 **`--apply` 없이는 파일을 쓰지 않는다** — 실제 프로세스로 확인한다.
+   *
+   *    "dry-run 이다" 라고 적어 두는 것과 실제로 쓰지 않는 것은 다르다.
+   *
+   * 🔴 **가짜 HOME 에 정본 자산을 복사해 넣는다.** 처음 판은 빈 HOME 을 줬는데,
+   *    그러면 digest 대조에서 **먼저** 막혀 쓰기 지점에 닿지도 못한다 —
+   *    `--apply` 가드를 없애 봐도 검사가 그대로 통과했다(재주입으로 확인).
+   *    조건을 다 만족시킨 뒤에 **오직 `--apply` 유무만** 다르게 해야 그 축을 잰다.
+   */
+  {
+    const dir = `tmp/persona-comment-eval/${APPROVED_DECISION.runId}`
+    const realAsset = join(homedir(), 'Library', 'Application Support', 'soransoran',
+      'persona-reference')
+    if (existsSync(`${dir}/key.json`) && existsSync(join(realAsset, 'manifest.json'))) {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'canon-home-'))
+      const appSup = join(fakeHome, 'Library', 'Application Support', 'soransoran')
+      mkdirSync(join(appSup, 'persona-reference'), { recursive: true })
+      for (const f of ['corpus.json', 'manifest.json']) {
+        copyFileSync(join(realAsset, f), join(appSup, 'persona-reference', f))
+      }
+      // 🔴 **공용 artifact 도 넣는다** — decide 는 소비 경로와 같은 곳만 읽는다
+      const sharedDir = join(appSup, 'persona-comment-eval', APPROVED_DECISION.runId)
+      mkdirSync(sharedDir, { recursive: true })
+      for (const f of ['summary.json', 'samples.json', 'key.json']) {
+        copyFileSync(join(dir, f), join(sharedDir, f))
+      }
+      const canonPath = join(appSup, 'persona-comment-model.json')
+      let dryOk = true
+      try {
+        execFileSync('npx', ['tsx', 'scripts/persona-comment-decide.mts',
+          `--run=${APPROVED_DECISION.runId}`], {
+          env: { ...process.env, HOME: fakeHome }, stdio: 'ignore', timeout: 180_000,
+        })
+      } catch { dryOk = false }
+      check('🟢 조건을 갖추면 dry-run 이 성공한다(=쓰기 지점까지 간다)', dryOk)
+      check('🔴 그런데도 확정 정본을 쓰지 않는다', !existsSync(canonPath))
+      rmSync(fakeHome, { recursive: true, force: true })
+    }
+  }
+
+  /**
+   * 🔴 **A~F — `--apply` 의 실제 행동을 임시 HOME 에서 확인한다.**
+   *
+   *    선언이 아니라 **파일이 남았는가**를 본다. 앞선 판은
+   *      · 로컬 tmp 를 읽고 공용 경로를 읽는 소비 경로와 어긋났고
+   *      · destination 에 rename 한 **뒤** 되읽기를 해서, 실패해도 파일이 남았다
+   *      · `decidedAt` 이 달라 같은 명령 두 번째가 늘 CONFLICT 였다
+   *    셋 다 실측으로 재현한 뒤 고쳤다.
+   */
+  {
+    const src = `tmp/persona-comment-eval/${APPROVED_DECISION.runId}`
+    const realAsset = join(homedir(), 'Library', 'Application Support', 'soransoran',
+      'persona-reference')
+    if (existsSync(`${src}/key.json`) && existsSync(join(realAsset, 'manifest.json'))) {
+      const appSupOf = (h: string): string => join(h, 'Library', 'Application Support', 'soransoran')
+      const canonOf = (h: string): string => join(appSupOf(h), 'persona-comment-model.json')
+      /** 자산은 늘 넣고, 공용 artifact 는 `withShared` 일 때만 넣는다 */
+      const mkHome = (withShared: boolean): string => {
+        const h = mkdtempSync(join(tmpdir(), 'decide-'))
+        mkdirSync(join(appSupOf(h), 'persona-reference'), { recursive: true })
+        for (const f of ['corpus.json', 'manifest.json']) {
+          copyFileSync(join(realAsset, f), join(appSupOf(h), 'persona-reference', f))
+        }
+        if (withShared) {
+          const d = join(appSupOf(h), 'persona-comment-eval', APPROVED_DECISION.runId)
+          mkdirSync(d, { recursive: true })
+          for (const f of ['summary.json', 'samples.json', 'key.json']) {
+            copyFileSync(join(src, f), join(d, f))
+          }
+        }
+        return h
+      }
+      /** 🔴 종료 코드뿐 아니라 **어디서 멈췄는지**도 본다 */
+      const runApplyFull = (h: string): { code: number; out: string } => {
+        try {
+          const out = execFileSync('npx', ['tsx', 'scripts/persona-comment-decide.mts',
+            `--run=${APPROVED_DECISION.runId}`, '--apply'], {
+            env: { ...process.env, HOME: h }, timeout: 180_000, encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          return { code: 0, out }
+        } catch (e) {
+          const err = e as { stdout?: string; stderr?: string }
+          return { code: 1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` }
+        }
+      }
+      const runApply = (h: string): number => runApplyFull(h).code
+      const digestOf = (f: string): string =>
+        createHash('sha256').update(readFileSync(f)).digest('hex')
+
+      // ── A 공용 artifact 없음 → destination write 0 ──
+      {
+        const h = mkHome(false)
+        const r = runApplyFull(h)
+        check('A 🔴 공용 artifact 가 없으면 실패한다', r.code === 1)
+        check('A 🔴 그때 확정 정본을 남기지 않는다', !existsSync(canonOf(h)))
+        /**
+         * 🔴 **어디서 멈췄는지 본다.**
+         *    종료 코드만 보면 로컬 tmp 를 읽어도 통과한다 —
+         *    로컬 경로는 `cwd` 기준이라 가짜 HOME 에서도 찾아지고,
+         *    그러면 뒤의 staging 검증에서 걸려 결과적으로 exit 1 이 되기 때문이다(실측).
+         *    **읽기 단계에서** 멈춰야 소비 경로와 같은 곳을 본다는 뜻이다.
+         */
+        check('A 🔴 **읽기 단계**에서 멈춘다 (공용 경로를 본다는 증거)',
+          r.out.includes('공용 경로에서'))
+        check('A 🔴 승격을 먼저 하라고 알려준다', r.out.includes('--promote='))
+        rmSync(h, { recursive: true, force: true })
+      }
+
+      // ── B 변조 artifact → write 0 ──
+      {
+        const h = mkHome(true)
+        const f = join(appSupOf(h), 'persona-comment-eval', APPROVED_DECISION.runId, 'samples.json')
+        const j = JSON.parse(readFileSync(f, 'utf-8')) as { samples: { text: string }[] }
+        j.samples[0]!.text = '바꿔치기한 내용'
+        writeFileSync(f, JSON.stringify(j), 'utf-8')
+        check('B 🔴 변조 artifact 는 실패한다', runApply(h) === 1)
+        check('B 🔴 그때 확정 정본을 남기지 않는다', !existsSync(canonOf(h)))
+        rmSync(h, { recursive: true, force: true })
+      }
+
+      // ── C 정확한 공용 artifact → 첫 apply 성공 · D 두 번째는 멱등 ──
+      {
+        const h = mkHome(true)
+        check('C 🟢 정확한 공용 artifact 로 첫 apply 가 성공한다', runApply(h) === 0)
+        const c = canonOf(h)
+        check('C 🟢 확정 정본이 생겼다', existsSync(c))
+        if (existsSync(c)) {
+          check('C 🔴 권한이 600 이다', (statSync(c).mode & 0o777) === 0o600)
+          const canon = JSON.parse(readFileSync(c, 'utf-8')) as { winner?: string }
+          check(`C 🟢 winner 가 ${APPROVED_DECISION.winner} 다`,
+            canon.winner === APPROVED_DECISION.winner)
+          const before = digestOf(c)
+          const size = statSync(c).size
+
+          // ── D 같은 명령 두 번째 ──
+          check('D 🟢 두 번째 apply 도 성공한다(멱등)', runApply(h) === 0)
+          check('D 🔴 파일 bytes 가 그대로다', statSync(c).size === size)
+          check('D 🔴 파일 hash 가 그대로다', digestOf(c) === before)
+
+          // ── F 기존 canon 이 다르면 덮어쓰지 않는다 ──
+          const other = JSON.parse(readFileSync(c, 'utf-8')) as Record<string, unknown>
+          other.winner = APPROVED_DECISION.rejected
+          writeFileSync(c, `${JSON.stringify(other, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 })
+          const changed = digestOf(c)
+          check('F 🔴 다른 결정이 이미 있으면 실패한다', runApply(h) === 1)
+          check('F 🔴 기존 파일을 덮어쓰지 않는다', digestOf(c) === changed)
+        }
+        rmSync(h, { recursive: true, force: true })
+      }
+
+      // ── E staging 검증 실패 → destination 없음 ──
+      {
+        /**
+         * 🔴 staging 만 깨뜨린다. `readConfirmedSelection` 은 공용 artifact 를 읽어
+         *    SHA 를 대조하므로, 공용 쪽을 **apply 도중에** 바꿀 수는 없다.
+         *    대신 winner 를 미등록 모델로 바꾼 사본을 돌려 staging 검증에서만 걸리게 한다.
+         */
+        const h = mkHome(true)
+        const patched = join(tmpdir(), `decide-patched-${process.pid}.mts`)
+        writeFileSync(patched,
+          readFileSync('scripts/persona-comment-decide.mts', 'utf-8')
+            .replace('  winner: APPROVED_DECISION.winner,\n  decidedBy: APPROVED_DECISION.decidedBy,\n  decidedAt:',
+              "  winner: 'zzz-unregistered',\n  decidedBy: APPROVED_DECISION.decidedBy,\n  decidedAt:")
+            .replace(/from '\.\.\/src\//g, `from '${join(process.cwd(), 'src')}/`)
+            .replace(/from '\.\/lib\//g, `from '${join(process.cwd(), 'scripts', 'lib')}/`),
+          'utf-8')
+        let code = 0
+        try {
+          execFileSync('npx', ['tsx', patched, `--run=${APPROVED_DECISION.runId}`, '--apply'], {
+            env: { ...process.env, HOME: h }, stdio: 'ignore', timeout: 180_000,
+          })
+        } catch { code = 1 }
+        check('E 🔴 staging 검증에 걸리면 실패한다', code === 1)
+        check('E 🔴 그때 destination 이 없다', !existsSync(canonOf(h)))
+        check('E 🔴 staging 잔여 파일도 없다',
+          readdirSync(appSupOf(h)).filter((f) => f.includes('staging')).length === 0)
+        rmSync(patched, { force: true })
+        rmSync(h, { recursive: true, force: true })
+      }
+    }
+  }
+
+  // ── 🔴 쓰기 판정 — 덮어쓰지 않는다 ──
+  const NEXT = JSON.stringify({ runId: OK_RUN, winner: APPROVED_DECISION.winner }, null, 2)
+  check('🟢 없으면 쓴다', judgeCanonWrite({ existingJson: null, nextJson: NEXT }).action === 'WRITE')
+  check('🟢 같으면 멱등 성공',
+    judgeCanonWrite({ existingJson: NEXT, nextJson: NEXT }).action === 'IDENTICAL')
+  check('🟢 공백만 달라도 멱등으로 본다',
+    judgeCanonWrite({ existingJson: `${NEXT}\n`, nextJson: NEXT }).action === 'IDENTICAL')
+  check('🔴 다르면 덮어쓰지 않고 중단',
+    judgeCanonWrite({
+      existingJson: JSON.stringify({ runId: OK_RUN, winner: 'claude-haiku-4.5' }),
+      nextJson: NEXT,
+    }).action === 'CONFLICT')
+
+  /**
+   * 🔴 **실물 artifact 로 확인한다** — 시험용 문자열만 보면
+   *    "승인된 회차가 실제로 통과하는가" 를 증명하지 못한다.
+   *    회차 artifact 는 gitignored 라 CI 에는 없다 — 없으면 그 사실을 말한다.
+   */
+  {
+    const dir = `tmp/persona-comment-eval/${APPROVED_DECISION.runId}`
+    const has = existsSync(`${dir}/key.json`)
+    console.log(has
+      ? '   🟢 승인 회차 artifact 있음 — 실물로 확인한다'
+      : '   🟡 승인 회차 artifact 없음(gitignored · CI) — 계약만 본다')
+    if (has) {
+      const sJson = readFileSync(`${dir}/summary.json`, 'utf-8')
+      const real = judgeCanonDecision({
+        runId: APPROVED_DECISION.runId,
+        winner: APPROVED_DECISION.winner,
+        decidedBy: APPROVED_DECISION.decidedBy,
+        summaryJson: sJson,
+        samplesJson: readFileSync(`${dir}/samples.json`, 'utf-8'),
+        keyJson: readFileSync(`${dir}/key.json`, 'utf-8'),
+        // 🔴 실제 파일에서 잰다 — 승인한 값과 같아야 통과한다
+        actualSha: {
+          summary: createHash('sha256').update(sJson).digest('hex').slice(0, 16),
+          samples: createHash('sha256').update(readFileSync(`${dir}/samples.json`, 'utf-8')).digest('hex').slice(0, 16),
+          key: createHash('sha256').update(readFileSync(`${dir}/key.json`, 'utf-8')).digest('hex').slice(0, 16),
+        },
+        runCorpusDigest: (JSON.parse(sJson) as { referenceManifest?: { sanitizedCorpusDigest?: string } })
+          .referenceManifest?.sanitizedCorpusDigest ?? null,
+        assetCorpusDigest: readAssetDigests()?.sanitizedCorpusDigest ?? null,
+      })
+      check(`🟢 실물 승인 회차가 통과한다 (${real.blocks.map((b) => b.code).join(',') || '막힘 없음'})`,
+        real.ok)
+      check('  🔴 Gemini 9건 · 근거 없는 자기 경험 0건',
+        real.evidence?.winnerSamples === 9 && real.evidence.winnerUngrounded === 0)
+      check('  🔴 Haiku 는 탈락 근거로만 남는다',
+        real.evidence?.rejected === 'claude-haiku-4.5'
+        && (real.evidence?.rejectedUngrounded ?? 0) > 0)
+    }
   }
 }
 
