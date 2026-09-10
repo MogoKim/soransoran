@@ -32,6 +32,9 @@ import {
 import {
   SANITIZER_VERSION, type IdentityLeakCheck, type ReferenceManifest,
 } from '../../src/lib/persona-eval-invalidation'
+import {
+  isProductionPersonaCode, PRODUCTION_PERSONA_CODES,
+} from '../../src/lib/persona-cohort'
 import { findExperienceClaims } from '../../src/lib/persona-experience-grounding'
 import { classifyReaction } from './voice-comment-signals.mjs'
 
@@ -219,10 +222,16 @@ export function loadLocalComments(repoRoot: string): {
 
 /** 🔴 한 묶음이 "한 사람의 말투" 라고 불리려면 anchor 가 이만큼은 있어야 한다 */
 export const ANCHOR_MIN_COMMENTS = 3
-/** 묶음 목표 크기 */
-export const BUNDLE_TARGET = 8
-/** 🔴 anchor 비중이 이보다 낮으면 그 묶음은 한 사람의 말투가 아니다 */
-export const ANCHOR_MIN_RATIO = 0.375
+/**
+ * 🔴 묶음 **상한**. 목표가 아니다 — 이보다 적어도 된다.
+ *
+ * 🔴 **다른 화자 댓글로 채우던 것을 없앴다** (2026-09-10).
+ *    앞선 판은 8건을 맞추려고 문체가 가까운 **다른 사람의 댓글**로 보완했다.
+ *    실측: 18개 중 13개가 anchor 3건 + 보완 5건이었다 —
+ *    **말투 근거의 과반이 남의 말**이었고, 그것을 "이 Persona 의 말투" 라고 불렀다.
+ *    한 묶음은 **정확히 한 화자**의 댓글만 쓴다. 모자라면 모자란 채로 둔다.
+ */
+export const BUNDLE_MAX = 8
 
 export type BundlePlan = {
   bundles: VoiceReferenceBundle[]
@@ -231,6 +240,7 @@ export type BundlePlan = {
     personaCode: string
     anchorComments: number
     supplements: number
+    /** 🔴 언제나 1.0 이다 — 한 묶음은 한 화자뿐이다 */
     anchorRatio: number
     medianLen: number
     p90Len: number
@@ -254,19 +264,11 @@ export function planBundles(input: {
   rows: readonly LocalComment[]
   personaCodes: readonly string[]
   target?: number
-  /**
-   * 🔴 **경험형 참고 댓글을 줘도 되는가** (B).
-   *    `memory` 나 `identity` 에 구체적 경험이 있는 Persona 만 `true` 다.
-   *    기본은 `false` — 모르면 주지 않는다.
-   */
+  /** 🔴 경험형 참고 댓글을 줘도 되는가. 기본은 `false` — 모르면 주지 않는다 */
   allowExperience?: boolean
 }): BundlePlan {
-  const target = input.target ?? BUNDLE_TARGET
+  const cap = input.target ?? BUNDLE_MAX
   const blocks: string[] = []
-  /**
-   * 🔴 **입력에서 걸러 낸다.** 프롬프트로 "따라 하지 마라" 고 더 말하는 대신
-   *    애초에 보여 주지 않는다 — 이 Wave 가 배운 방식이다.
-   */
   const rowsIn = input.allowExperience === true
     ? input.rows
     : input.rows.filter((r) => !carriesExperience(r.text))
@@ -275,67 +277,52 @@ export function planBundles(input: {
     blocks.push(`🟡 경험형 참고 댓글 ${excluded}건 제외 — 경험 근거 없는 Persona 용`)
   }
 
-  // ── ① 작성자별 ──
-  const byAuthor = new Map<string, string[]>()
+  // ── 화자별로 묶는다 ──
+  const bySpeaker = new Map<string, string[]>()
   for (const r of rowsIn) {
     if (r.speakerId === '') continue
-    const cur = byAuthor.get(r.speakerId) ?? []
+    const cur = bySpeaker.get(r.speakerId) ?? []
     if (!cur.includes(r.text)) cur.push(r.text)
-    byAuthor.set(r.speakerId, cur)
+    bySpeaker.set(r.speakerId, cur)
   }
-  // 🔴 많이 가진 순 · 동수는 이름순 — 순서를 고정해야 다시 돌려도 같은 묶음이 나온다
-  const anchors = [...byAuthor.entries()]
+  /**
+   * 🔴 많이 가진 순 · 동수는 화자 id 순 — 순서를 고정해야 다시 돌려도 같은 배정이 나온다.
+   * 🔴 `ANCHOR_MIN_COMMENTS` 미만은 아예 후보가 아니다.
+   */
+  const speakers = [...bySpeaker.entries()]
     .filter(([, ts]) => ts.length >= ANCHOR_MIN_COMMENTS)
     .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
 
   const codes = [...new Set(input.personaCodes)].sort()
-  if (anchors.length < codes.length) {
+  if (speakers.length < codes.length) {
     blocks.push(
-      `anchor 작성자가 ${anchors.length}명뿐이다 — Persona ${codes.length}종을 채울 수 없다`
+      `화자가 ${speakers.length}명뿐이다 — Persona ${codes.length}종을 채울 수 없다`
       + ` (기준 ${ANCHOR_MIN_COMMENTS}건 이상)`,
     )
   }
 
-  // ── 보완 풀 — 🔴 텍스트만. 여기서부터 작성자는 쓰이지 않는다 ──
-  const used = new Set<string>()
-  const pool: string[] = []
-  for (const r of rowsIn) if (!pool.includes(r.text)) pool.push(r.text)
-  const poolStyle = new Map(pool.map((t) => [t, styleOf(t)]))
-
   const bundles: VoiceReferenceBundle[] = []
   const table: BundlePlan['table'] = []
-
-  for (let i = 0; i < Math.min(codes.length, anchors.length); i += 1) {
+  for (let i = 0; i < Math.min(codes.length, speakers.length); i += 1) {
     const code = codes[i]!
-    const anchorTexts = anchors[i]![1].filter((t) => !used.has(t))
-    for (const t of anchorTexts) used.add(t)
+    /**
+     * 🔴 **이 화자의 댓글만.** 다른 화자에서 가져오지 않는다.
+     *    길이순으로 세워 고르게 집어 짧은 것만 모이지 않게 한다.
+     */
+    const own = speakers[i]![1].slice()
+      .sort((a, b) => [...a].length - [...b].length || a.localeCompare(b))
+    const take = own.length <= cap
+      ? own
+      : Array.from({ length: cap }, (_, k) => own[Math.floor(k * (own.length / cap))]!)
 
-    // ── ③④ 문체 중심에 가까운 것으로 채운다 ──
-    const centre = styleCentroid(anchorTexts)
-    const supplements = pool
-      .filter((t) => !used.has(t))
-      .map((t) => ({ t, d: styleDistance(centre, poolStyle.get(t)!) }))
-      .sort((a, b) => a.d - b.d || a.t.localeCompare(b.t))
-      .slice(0, Math.max(0, target - anchorTexts.length))
-      .map((x) => x.t)
-    for (const t of supplements) used.add(t)
-
-    const texts = [...anchorTexts, ...supplements]
-    const ratio = texts.length === 0 ? 0 : anchorTexts.length / texts.length
-    if (ratio < ANCHOR_MIN_RATIO) {
-      // 🔴 빌린 말이 더 많으면 그것은 그 사람의 말투가 아니다
-      blocks.push(`${code}: anchor 비중 ${(ratio * 100).toFixed(0)}%`
-        + ` — 기준 ${(ANCHOR_MIN_RATIO * 100).toFixed(0)}% 미만이라 묶음을 만들지 않는다`)
-      continue
-    }
-    const v = judgeReferenceBundle({ personaCode: code, texts, anchorCount: anchorTexts.length })
+    const v = judgeReferenceBundle({ personaCode: code, texts: take, anchorCount: take.length })
     if (!v.ok) { blocks.push(...v.blocks.map((b) => b.message)); continue }
     bundles.push(v.bundle)
     table.push({
       personaCode: code,
-      anchorComments: anchorTexts.length,
-      supplements: supplements.length,
-      anchorRatio: v.bundle.anchorRatio,
+      anchorComments: take.length,
+      supplements: 0,
+      anchorRatio: 1,
       medianLen: v.bundle.lengths.median,
       p90Len: v.bundle.lengths.p90,
     })
@@ -344,27 +331,31 @@ export function planBundles(input: {
 }
 
 /**
- * 🔴 **생성 경로가 쓰는 단일 진입점.**
- *    자산이 없거나 anchor 가 모자라면 **빈 Map 과 blocker** 를 돌려준다 — 가짜로 채우지 않는다.
+ * 🔴 **안정 배정 — 전체 정본 universe 를 기준으로 **한 번** 계산한다** (2026-09-10).
+ *
+ *    앞선 판은 부르는 쪽이 넘긴 코드 목록으로 그때그때 나눴다.
+ *    그래서 **같은 Persona 가 배치에 따라 다른 묶음**을 받았다 —
+ *    실측: `P10` 이 단독 · 둘 · 24명 안에서 각각 다른 8건을 받았다(digest 3종).
+ *    말투가 배치마다 달라지면 그 Persona 의 말투라고 부를 수 없다.
+ *
+ *    이제 **정본 24명 전체로 한 번 계산하고, 실행 대상은 거기서 꺼내 쓴다.**
+ *    배치 인원·순서·다른 Persona 포함 여부가 바뀌어도 결과가 같다.
+ *
+ * 🔴 정본 밖 코드는 **임의로 재배정하지 않는다.** 묶음을 주지 않으면
+ *    `buildPrompt` 가 `REFERENCE_MISSING` 으로 막는다.
  */
-export function bundlesForPersonas(input: {
+export function stableAssignment(input: {
   repoRoot: string
-  personaCodes: readonly string[]
   target?: number
-  /** 🔴 경험 근거가 있는 Persona 만 경험형 참고 댓글을 받는다 (B) */
-  allowExperience?: boolean
 }): {
   byCode: Map<string, VoiceReferenceBundle>
   assets: ReferenceAssetReport[]
   table: BundlePlan['table']
   blocks: string[]
-  /** 정본 자산인가 개발 자산인가 — 🔴 숨기지 않는다 */
   origin: string
-  /** manifest 계산용 (🔴 작성자 포함 · 로컬 전용) */
   rows: LocalComment[]
   sourceDigest: string | null
 } {
-  /** 🔴 정본 자산이 있으면 그것을 쓴다. 없으면 개발 자산으로 내려간다(소리 내어 말한다) */
   const canon = loadCanonAsset()
   const dev = canon.ok ? { rows: [] as LocalComment[], assets: [] as ReferenceAssetReport[] }
     : loadLocalComments(input.repoRoot)
@@ -372,43 +363,79 @@ export function bundlesForPersonas(input: {
   const assets = canon.ok
     ? [{ path: REFERENCE_CORPUS_FILE, exists: true, posts: 0, comments: rows.length, skipped: 0 }]
     : dev.assets
-  const originNote = canon.ok ? '정본 자산' : `🟡 개발 자산 (정본 없음 — ${canon.code})`
+  const origin = canon.ok ? '정본 자산' : `🟡 개발 자산 (정본 없음 — ${canon.code})`
   if (rows.length === 0) {
     return {
-      byCode: new Map(),
-      assets,
-      table: [],
+      byCode: new Map(), assets, table: [],
       blocks: [`말투 근거 자산이 없다 — ${canon.reason}`],
-      origin: originNote,
-      rows: [],
-      sourceDigest: canon.sourceDigest,
+      origin, rows: [], sourceDigest: canon.sourceDigest,
     }
   }
+  /** 🔴 **언제나 정본 24명 전체**로 나눈다. 부르는 쪽의 목록을 보지 않는다 */
   const plan = planBundles({
-    rows, personaCodes: input.personaCodes, target: input.target,
-    allowExperience: input.allowExperience,
+    rows, personaCodes: PRODUCTION_PERSONA_CODES, target: input.target,
   })
   return {
     byCode: new Map(plan.bundles.map((b) => [b.personaCode, b])),
-    assets,
-    table: plan.table,
-    blocks: plan.blocks,
-    origin: originNote,
-    rows,
+    assets, table: plan.table, blocks: plan.blocks, origin, rows,
     sourceDigest: canon.sourceDigest ?? sha16(JSON.stringify(rows.map((r) => r.text).sort())),
   }
 }
 
+/**
+ * 🔴 **생성 경로가 쓰는 단일 진입점.**
+ *
+ *    고정 배정에서 **필요한 것만 꺼낸다.** 여기서 다시 나누지 않는다 —
+ *    나누는 순간 배치에 따라 달라진다.
+ */
+export function bundlesForPersonas(input: {
+  repoRoot: string
+  personaCodes: readonly string[]
+  target?: number
+  /** 🔴 남겨 둔다 — 경험 근거가 있는 Persona 용 (현재 정본 배정은 안전한 것만 쓴다) */
+  allowExperience?: boolean
+}): {
+  byCode: Map<string, VoiceReferenceBundle>
+  assets: ReferenceAssetReport[]
+  table: BundlePlan['table']
+  blocks: string[]
+  origin: string
+  rows: LocalComment[]
+  sourceDigest: string | null
+} {
+  const all = stableAssignment({ repoRoot: input.repoRoot, target: input.target })
+  const want = [...new Set(input.personaCodes)]
+  const byCode = new Map<string, VoiceReferenceBundle>()
+  const blocks = [...all.blocks]
+  for (const code of want) {
+    if (!isProductionPersonaCode(code)) {
+      // 🔴 정본 밖은 채우지 않는다. 받지 못하면 buildPrompt 가 막는다
+      blocks.push(`${code}: production 정본 universe 밖이다 — reference 를 주지 않는다`)
+      continue
+    }
+    const b = all.byCode.get(code)
+    if (b === undefined) {
+      blocks.push(`${code}: anchor 가 모자라 묶음이 서지 않았다`)
+      continue
+    }
+    byCode.set(code, b)
+  }
+  return {
+    byCode,
+    assets: all.assets,
+    table: all.table.filter((t) => byCode.has(t.personaCode)),
+    blocks,
+    origin: all.origin,
+    rows: all.rows,
+    sourceDigest: all.sourceDigest,
+  }
+}
 
 /**
  * 🔴 **식별자 유출 검사** — 근거 텍스트가 작성자 식별자와 **같은지** 본다.
  *
- *    `20260910-153254` 는 정확히 이 검사가 없어서 닉네임을 내보냈다.
- *    "안 돌렸다" 를 "깨끗하다" 로 세지 않도록 `ran` 을 따로 남긴다.
- *
- * 🔴 **회차에서는 이 함수를 쓰지 않는다** (2026-09-10 정정, P0-4).
- *    회차 시점에 남아 있는 것은 불투명 `speakerId` 뿐이라,
- *    그것을 "작성자" 라고 부르며 대조하면 **늘 0건**이 나온다 —
+ * 🔴 **회차에서는 이 함수를 쓰지 않는다.** 회차 시점에 남아 있는 것은 불투명
+ *    `speakerId` 뿐이라, 그것을 "작성자" 라고 부르며 대조하면 **늘 0건**이 나온다 —
  *    검사한 적 없는 것을 검사했다고 보고하는 셈이다.
  *    실제 작성자명 대조는 **자산 생성 시점에만** 가능하고,
  *    회차는 그 증거를 `inheritedIdentityLeakCheck` 로 이어받는다.
@@ -429,7 +456,7 @@ export function identityLeakCheck(input: {
 }
 
 /**
- * 🔴 **자산 manifest 의 검사 증거를 이어받는다** (P0-4).
+ * 🔴 **자산 manifest 의 검사 증거를 이어받는다.**
  *    이어받을 것이 없으면 **`ran: false`** 다 — 회차가 스스로 돌린 척하지 않는다.
  */
 export function inheritedIdentityLeakCheck(): IdentityLeakCheck {
@@ -447,7 +474,6 @@ export function inheritedIdentityLeakCheck(): IdentityLeakCheck {
     return {
       ran: l.ran,
       hits: l.hits,
-      // 🔴 언제 · 무엇으로 한 검사인지 밝힌다
       detail: `자산 생성 시점 실제 작성자명 대조를 이어받음 — ${l.detail}`,
     }
   } catch {
@@ -456,7 +482,7 @@ export function inheritedIdentityLeakCheck(): IdentityLeakCheck {
 }
 
 /**
- * 🔴 **회차가 남길 manifest.** 이것이 없으면 canon 승격이 막힌다(P0-2).
+ * 🔴 **회차가 남길 manifest.** 이것이 없으면 canon 승격이 막힌다.
  *    묶음 digest 는 **텍스트만**으로 낸다 — 작성자가 digest 에도 들어가지 않는다.
  */
 export function buildReferenceManifest(input: {
@@ -475,24 +501,14 @@ export function buildReferenceManifest(input: {
     sanitizedCorpusDigest,
     commentCount: texts.length,
     personaBundleDigest,
-    /**
-     * 🔴 회차는 검사를 **재실행하지 않는다.** speakerId 를 작성자라고 부르며
-     *    대조하면 늘 0건이 나오고, 그것은 거짓 보고다(P0-4).
-     */
     identityLeakCheck: inheritedIdentityLeakCheck(),
   }
 }
 
 /**
- * 🔴 **실제 코퍼스 분포로 역할을 배정한다** (2026-09-10, 창업자 판정 A).
- *
- *    고정 교대(`i % roles.length`)는 인위적 균등 분배다 —
- *    실제 댓글은 `other` 가 81.3% 인데 셋을 3분의 1씩 돌리면
- *    질문할 것이 없어도 질문을, 겪은 일이 없어도 공감을 만들게 된다.
- *
- * 🔴 분포는 **자산에서 매번 다시 잰다.** 숫자를 상수로 박으면 자산이 바뀔 때 갈린다.
- * 🔴 최대잉여법으로 나눈다 — 반올림 오차가 특정 역할에 몰리지 않는다.
- * 🔴 순서를 고정한다(비율 큰 것부터). 다시 돌려도 같은 배정이 나온다.
+ * 🔴 **실제 코퍼스 분포로 역할을 배정한다.**
+ *    고정 교대는 인위적 균등 분배다 — 실제 댓글은 `other` 가 81.3% 다.
+ * 🔴 분포는 **자산에서 매번 다시 잰다.** 최대잉여법 · 무작위 없음 · 재현 가능.
  */
 export function allocateRolesByCorpus(input: {
   rows: readonly LocalComment[]
@@ -505,13 +521,13 @@ export function allocateRolesByCorpus(input: {
     seen.set(k, (seen.get(k) ?? 0) + 1)
   }
   const total = input.rows.length || 1
-  // 🔴 planner 가 쓸 수 있는 역할만 남기고 비율을 다시 정규화한다
   const usable = input.roles.map((role) => ({ role, n: seen.get(role) ?? 0 }))
   const sum = usable.reduce((a, x) => a + x.n, 0) || 1
-  const exact = usable.map((x) => ({ ...x, share: (x.n / sum) * input.count }))
-  const base = exact.map((x) => ({ ...x, floor: Math.floor(x.share) }))
+  const base = usable.map((x) => {
+    const share = (x.n / sum) * input.count
+    return { ...x, share, floor: Math.floor(share) }
+  })
   let left = input.count - base.reduce((a, x) => a + x.floor, 0)
-  // 잉여는 소수부가 큰 순서로 — 같으면 코퍼스 비율이 큰 쪽
   const order = base.slice().sort((a, b) =>
     (b.share - b.floor) - (a.share - a.floor) || b.n - a.n || a.role.localeCompare(b.role))
   const assigned = new Map(base.map((x) => [x.role, x.floor]))
@@ -520,7 +536,6 @@ export function allocateRolesByCorpus(input: {
     assigned.set(o.role, (assigned.get(o.role) ?? 0) + 1)
     left -= 1
   }
-  /** 🔴 많이 배정된 역할부터 늘어놓는다 — 무작위를 쓰지 않는다 */
   const roles: string[] = []
   for (const x of base.slice().sort((a, b) => (assigned.get(b.role) ?? 0) - (assigned.get(a.role) ?? 0)
     || a.role.localeCompare(b.role))) {

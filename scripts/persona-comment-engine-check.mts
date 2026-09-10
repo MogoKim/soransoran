@@ -93,9 +93,17 @@ import {
 } from '../src/lib/persona-fingerprint-thresholds'
 import { checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
 import {
-  allocateRolesByCorpus, ANCHOR_MIN_COMMENTS, ANCHOR_MIN_RATIO, bundlesForPersonas,
-  buildReferenceManifest, carriesExperience, identityLeakCheck, loadCommentsFrom, planBundles,
+  allocateRolesByCorpus, ANCHOR_MIN_COMMENTS, BUNDLE_MAX, bundlesForPersonas,
+  buildReferenceManifest, carriesExperience, identityLeakCheck, loadCanonAsset, loadCommentsFrom,
+  planBundles, stableAssignment,
 } from './lib/persona-reference-store.mjs'
+import {
+  EXCLUDED_CODES, isProductionPersonaCode, PRODUCTION_PERSONA_CODES,
+} from '../src/lib/persona-cohort'
+import {
+  EVALUATOR_VERSION, summarize, verifyJudgement,
+  type JudgedRow, type JudgementArtifact,
+} from '../src/lib/persona-shadow-artifact'
 import { judgeExperienceGrounding } from '../src/lib/persona-experience-grounding'
 import {
   APPROVED_DECISION, judgeCanonDecision, judgeCanonWrite,
@@ -715,8 +723,9 @@ console.log('⑤-b 🔴 Wave E — 말투 근거 · 무효 회차 · manifest ·
     const plan = planBundles({ rows, personaCodes: ['P1', 'P2'], target: 8 })
     check('🟢 anchor 작성자로 묶음이 선다', plan.bundles.length === 2)
     check(`🔴 anchor 건수를 기록한다`, plan.table.every((t) => t.anchorComments >= ANCHOR_MIN_COMMENTS))
-    check(`🔴 anchor 비중이 기준 이상이다 (${ANCHOR_MIN_RATIO})`,
-      plan.table.every((t) => t.anchorRatio >= ANCHOR_MIN_RATIO))
+    /** 🔴 **한 묶음은 한 화자뿐** — 보완이 0 이고 비중이 1.0 이다 */
+    check('🔴 다른 화자 보완이 0 이다', plan.table.every((t) => t.supplements === 0))
+    check('🔴 anchor 비중이 1.0 이다', plan.table.every((t) => t.anchorRatio === 1))
 
     /** 🔴 anchor 가 모자라면 **억지로 만들지 않는다** */
     const thin = planBundles({
@@ -954,8 +963,8 @@ console.log('⑤-b 🔴 Wave E — 말투 근거 · 무효 회차 · manifest ·
         !blocked.ok && blocked.blocks.some((b) => b.code === 'REFERENCE_MISSING'))
     }
     /** 🔴 기준을 낮춰 채우지 않는다 — 상수가 그대로인지 본다 */
-    check(`🔴 anchor 비중 기준이 ${ANCHOR_MIN_RATIO} 그대로다`, ANCHOR_MIN_RATIO === 0.375)
     check(`🔴 anchor 최소 건수가 ${ANCHOR_MIN_COMMENTS} 그대로다`, ANCHOR_MIN_COMMENTS === 3)
+    check(`🔴 묶음 상한이 ${BUNDLE_MAX} 다`, BUNDLE_MAX === 8)
   }
 
   // ── P1 🔴 정본 자산 계약 (데이터 없이 스키마·digest 만) ──
@@ -1374,6 +1383,219 @@ console.log('⑤-c 🔴 댓글 생성 모델 확정 판정 (winner 를 쓰기 �
       check('  🔴 Haiku 는 탈락 근거로만 남는다',
         real.evidence?.rejected === 'claude-haiku-4.5'
         && (real.evidence?.rejectedUngrounded ?? 0) > 0)
+    }
+  }
+}
+
+console.log('⑤-d 🔴 Persona reference 안정 배정 (배치가 바뀌어도 같은 묶음)')
+{
+  const digestOfBundle = (b: { comments: readonly { text: string }[] } | undefined): string =>
+    b === undefined ? '(없음)'
+      : createHash('sha256').update(JSON.stringify(b.comments.map((c) => c.text))).digest('hex').slice(0, 16)
+  const get = (codes: readonly string[], code: string): string =>
+    digestOfBundle(bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: codes }).byCode.get(code))
+
+  const assetOk = stableAssignment({ repoRoot: process.cwd() }).byCode.size > 0
+  console.log(assetOk
+    ? '   🟢 말투 근거 자산 있음 — 실물로 검증한다'
+    : '   🟡 자산 없음(CI) — 계약만 본다')
+
+  /** 🔴 정본 universe 는 cohort 에서 파생한다 — 목록을 다시 적지 않는다 */
+  check(`🟢 정본 universe 가 24명이다 (${PRODUCTION_PERSONA_CODES.length})`,
+    PRODUCTION_PERSONA_CODES.length === 24)
+  check('🔴 P09 는 정본에 없다', !isProductionPersonaCode('P09'))
+  check('  제외 이유가 코드에 적혀 있다', (EXCLUDED_CODES.P09 ?? '') !== '')
+
+  if (assetOk) {
+    // ── A 같은 P10 은 어느 배치에서도 같다 ──
+    const a1 = get(['P10'], 'P10')
+    const a2 = get(['P01', 'P10'], 'P10')
+    const a3 = get(PRODUCTION_PERSONA_CODES, 'P10')
+    check(`A 🔴 P10 단독 == 둘 중 P10 == 24명 중 P10 (${a1})`,
+      a1 !== '(없음)' && a1 === a2 && a2 === a3)
+
+    // ── B 입력 순서를 뒤집어도 전 Persona 불변 ──
+    const fwd = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: PRODUCTION_PERSONA_CODES })
+    const rev = bundlesForPersonas({
+      repoRoot: process.cwd(), personaCodes: [...PRODUCTION_PERSONA_CODES].reverse(),
+    })
+    const diff = [...fwd.byCode.keys()].filter((c) =>
+      digestOfBundle(fwd.byCode.get(c)) !== digestOfBundle(rev.byCode.get(c)))
+    check(`B 🔴 순서를 뒤집어도 전 Persona bundle 불변 (다른 것 ${diff.length}건)`, diff.length === 0)
+
+    // ── C 일부가 빠져도 나머지 불변 ──
+    const subset = PRODUCTION_PERSONA_CODES.filter((_, i) => i % 2 === 0)
+    const sub = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: subset })
+    const moved = [...sub.byCode.keys()].filter((c) =>
+      digestOfBundle(sub.byCode.get(c)) !== digestOfBundle(fwd.byCode.get(c)))
+    check(`C 🔴 일부가 빠져도 나머지 bundle 불변 (다른 것 ${moved.length}건)`, moved.length === 0)
+
+    /**
+     * ── A-2 🔴 **한 묶음은 정확히 한 화자의 댓글만 쓴다** ──
+     *
+     *    앞선 판은 8건을 맞추려고 문체가 가까운 **다른 사람의 댓글**로 채웠다 —
+     *    18개 중 13개가 anchor 3 + 보완 5 였고, 말투 근거의 **과반이 남의 말**이었다.
+     */
+    {
+      const canon2 = loadCanonAsset()
+      if (canon2.ok) {
+        const owner = new Map<string, string>()
+        for (const r of canon2.rows) if (!owner.has(r.text)) owner.set(r.text, r.speakerId)
+        let mixed = 0
+        for (const [, b] of fwd.byCode) {
+          const speakers = new Set(b.comments.map((c) => owner.get(c.text) ?? '?'))
+          if (speakers.size > 1) mixed += 1
+        }
+        check(`A-2 🔴 cross-speaker 혼합 0 (섞인 묶음 ${mixed}개)`, mixed === 0)
+        check('A-2 🔴 표에 보완 0 으로 남는다',
+          [...fwd.byCode.keys()].every((c) =>
+            (fwd.table.find((t) => t.personaCode === c)?.supplements ?? -1) === 0))
+        /** 🔴 3~8 가변 길이 — 8 로 맞추려고 채우지 않는다 */
+        const sizes = [...fwd.byCode.values()].map((b) => b.comments.length)
+        check(`A-2 🟢 3~8 가변 길이다 (${Math.min(...sizes)}~${Math.max(...sizes)})`,
+          Math.min(...sizes) >= 3 && Math.max(...sizes) <= 8)
+        check('A-2 🔴 3건 미만은 묶음이 되지 않는다', sizes.every((n) => n >= 3))
+      }
+    }
+
+    // ── F 같은 참고 댓글이 두 Persona 에 중복 배정되지 않는다 ──
+    const seen = new Map<string, string>()
+    let dup = 0
+    for (const [code, b] of fwd.byCode) {
+      for (const c of b.comments) {
+        if (seen.has(c.text)) dup += 1
+        else seen.set(c.text, code)
+      }
+    }
+    check(`F 🔴 참고 댓글 중복 배정 0 (검사 ${seen.size}건)`, dup === 0)
+
+    /**
+     * ── G 기준이 바뀌면 digest 도 바뀐다 ──
+     *
+     * 🔴 상한은 **가진 것이 상한보다 많은 화자**에게만 걸린다.
+     *    3건뿐인 화자로 재면 상한을 바꿔도 결과가 같아 아무것도 증명하지 못한다.
+     *    가장 많이 가진 묶음으로 잰다.
+     */
+    const t8 = stableAssignment({ repoRoot: process.cwd(), target: 8 })
+    const biggest = [...t8.byCode.entries()]
+      .sort((a, b) => b[1].comments.length - a[1].comments.length)[0]
+    const t3 = stableAssignment({ repoRoot: process.cwd(), target: 3 })
+    check(`G 🔴 상한을 낮추면 그 묶음이 달라진다 (${biggest?.[0]} ${biggest?.[1].comments.length}건)`,
+      biggest !== undefined && biggest[1].comments.length > 3
+      && digestOfBundle(t3.byCode.get(biggest[0])) !== digestOfBundle(t8.byCode.get(biggest[0])))
+  }
+
+  // ── D 정본 밖 코드는 차단 ──
+  {
+    const r = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: ['P09', 'ZZ99'] })
+    check('D 🔴 정본 밖 P코드에 묶음을 주지 않는다', r.byCode.size === 0)
+    check('  이유를 남긴다',
+      r.blocks.some((b) => b.includes('P09')) && r.blocks.some((b) => b.includes('ZZ99')))
+  }
+
+  // ── E anchor 부족은 차단 · 기준을 낮추지 않는다 ──
+  {
+    const thin = planBundles({
+      rows: [{ speakerId: 'aaaaaaaaaaaa', text: '하나뿐이라 anchor 가 되지 못한다' }],
+      personaCodes: ['P01', 'P02'],
+    })
+    check('E 🔴 anchor 가 모자라면 묶음을 만들지 않는다', thin.bundles.length === 0)
+    check(`E 🔴 최소 anchor ${ANCHOR_MIN_COMMENTS} 를 낮추지 않았다`, ANCHOR_MIN_COMMENTS === 3)
+    check(`E 🔴 묶음 상한은 ${BUNDLE_MAX} 다 (목표가 아니라 상한)`, BUNDLE_MAX === 8)
+  }
+
+  // ── H 🔴 배치 종속 배정을 재주입하면 FAIL 해야 한다 ──
+  {
+    /**
+     * 🔴 **옛 방식을 그 자리에서 재현한다.** 부르는 쪽이 넘긴 코드 목록으로 직접 나누면
+     *    같은 P10 이 배치마다 다른 묶음을 받는다 — 그것이 고치기 전 상태였다.
+     *    이 검사가 통과하지 못하면 A~C 는 아무것도 증명하지 못한다.
+     */
+    const canon = loadCanonAsset()
+    if (canon.ok && canon.rows.length > 0) {
+      const batchDependent = (codes: readonly string[]): string =>
+        digestOfBundle(planBundles({ rows: canon.rows, personaCodes: codes }).bundles
+          .find((b) => b.personaCode === 'P10'))
+      const b1 = batchDependent(['P10'])
+      const b2 = batchDependent(PRODUCTION_PERSONA_CODES)
+      check('H 🔴 옛 배치 종속 방식은 실제로 달라진다 (이 검사의 판별력 증거)', b1 !== b2)
+    }
+  }
+}
+
+console.log('⑤-e 🔴 shadow artifact 계약 (저장값과 보고값이 갈리지 않는다)')
+{
+  /**
+   * 🔴 **앞선 회차에서 저장값과 보고값이 달랐다.**
+   *      저장  statusPass 18/18 · Gate ②⑦⑧ notRun 18/18
+   *      보고  statusPass 8/18 · ② regenerate 10 · ⑦ pass 18
+   *    보고 쪽이 맞았지만 그 숫자는 **콘솔에서 한 번 다시 계산한 것**이었다.
+   *    저장된 것과 말한 것이 다르면 나중에 누구도 어느 쪽을 믿을 수 없다.
+   */
+  const row = (over: Partial<JudgedRow> = {}): JudgedRow => ({
+    personaCode: 'P01', role: 'other', postId: 'sp-01',
+    personaSource: 'DB production Persona 정본 (Queue 와 같은 경로)',
+    bundleComments: 4, textLength: 30, gateStatus: 'pass',
+    statusPass: true, fullGatePass: false,
+    gateLines: [{ gate: '①', outcome: 'pass' }, { gate: '⑧', outcome: 'notRun' }],
+    notRunGates: ['⑧'], ungrounded: 0, ungroundedSentences: [], ...over,
+  })
+  const rows = [row(), row({ personaCode: 'P02', statusPass: false, gateStatus: 'review' })]
+  const good: JudgementArtifact = {
+    kind: 'judgement', evaluatorVersion: EVALUATOR_VERSION, runId: 'R',
+    judgedAt: 'now', rawSha: '0123456789abcdef', inputDigest: 'fedcba9876543210',
+    rows,
+    summary: summarize({ rows, minStyleDistance: 0.044, closestPair: 'P10 ↔ P18' }),
+  }
+  check('🟢 집계가 행에서 나왔으면 통과한다', verifyJudgement({ judgement: good }).ok)
+
+  /** 🔴 **저장 집계를 손으로 바꾸면 잡는다** — 이것이 보고 불일치를 막는 자리다 */
+  for (const [label, patch] of [
+    ['statusPass', { statusPass: 99 }],
+    ['fullGatePass', { fullGatePass: 7 }],
+    ['ungroundedTotal', { ungroundedTotal: 5 }],
+    ['rows', { rows: 99 }],
+  ] as [string, Record<string, number>][]) {
+    const bad = { ...good, summary: { ...good.summary, ...patch } }
+    const v = verifyJudgement({ judgement: bad })
+    check(`🔴 저장 집계 ${label} 이 행과 다르면 FAIL`, !v.ok)
+  }
+  const badGate = {
+    ...good,
+    summary: { ...good.summary, gateTally: { '①': { pass: 99 } } },
+  }
+  check('🔴 Gate 집계가 행과 다르면 FAIL', !verifyJudgement({ judgement: badGate }).ok)
+
+  check('🔴 판정 판이 다르면 FAIL',
+    !verifyJudgement({ judgement: { ...good, evaluatorVersion: 'v0' } }).ok)
+  check('🔴 raw SHA 가 다르면 FAIL',
+    !verifyJudgement({ judgement: good, actualRawSha: '9999999999999999' }).ok)
+  check('🔴 input digest 가 다르면 FAIL',
+    !verifyJudgement({ judgement: good, actualInputDigest: '9999999999999999' }).ok)
+
+  /**
+   * 🔴 **저장된 실물 artifact 도 검사한다.**
+   *    이것이 있어야 "코드·fixture·저장 artifact·보고가 같은 숫자" 가 성립한다.
+   */
+  {
+    const dir = 'tmp/persona-reference-shadow'
+    const files = existsSync(dir)
+      ? readdirSync(dir).filter((f) => f.endsWith('.judgement.json')).sort()
+      : []
+    console.log(files.length === 0
+      ? '   🟡 저장된 judgement 없음(CI) — 계약만 본다'
+      : `   🟢 저장된 judgement ${files.length}건 — 실물로 검증한다`)
+    for (const f of files) {
+      const j = JSON.parse(readFileSync(join(dir, f), 'utf-8')) as JudgementArtifact
+      const rawPath = join(dir, f.replace('.judgement.json', '.raw.json'))
+      const v = verifyJudgement({
+        judgement: j,
+        actualRawSha: existsSync(rawPath)
+          ? createHash('sha256').update(readFileSync(rawPath, 'utf-8')).digest('hex').slice(0, 16)
+          : undefined,
+      })
+      check(`🔴 ${f} 의 집계가 행과 일치한다 (${v.blocks.map((b) => b.code).join(',') || '문제 없음'})`,
+        v.ok)
     }
   }
 }

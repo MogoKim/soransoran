@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { APPROVED_DECISION } from '../src/lib/persona-canon-decision'
+import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
@@ -74,8 +76,27 @@ check('env 와 댓글 3건만으로 시작되지 않음을 명시한다',
 check('공개 release 에 남은 항목을 표로 적는다',
   master.includes('공개 release 에 남은 것')
   && ['승인 Queue', 'transaction', 'runner'].every((t) => master.includes(t)))
-check('최종 생성 모델을 확정으로 적지 않는다',
-  /최종 생성 모델 \| 🔴 \*\*provisional · winner 없음\*\*/.test(master))
+/**
+ * 🔴 **문자열이 있는가가 아니라 상태가 어긋나는가를 본다** (2026-09-10 정정).
+ *
+ *    옛 판은 `"provisional · winner 없음" 이라고 적혀 있는가` 를 통과 조건으로 삼았다.
+ *    그런데 창업자가 모델을 확정한 날, 문서를 사실대로 고치면 검사가 깨지고
+ *    검사를 지키면 문서가 거짓이 된다 — **검사가 거짓을 지키는 쪽**이 된다.
+ *    실제로 그렇게 됐다: canon 은 confirmed 인데 문서는 provisional 이었고
+ *    두 검사가 그 상태를 붙잡고 있었다.
+ *
+ *    그래서 기준을 **repo 안의 승인 결정**(`APPROVED_DECISION`) 으로 옮긴다.
+ *    canon 정본 파일은 worktree 밖이라 CI 에서 읽히지 않는다 — 읽히지 않는 것을
+ *    기준으로 삼으면 CI 에서는 아무것도 검사하지 못한다.
+ */
+check('문서가 승인된 winner 와 같은 모델을 적는다',
+  master.includes(APPROVED_DECISION.winner))
+check('문서가 승인된 확정 회차를 적는다',
+  master.includes(APPROVED_DECISION.runId))
+check('🔴 확정과 미확정을 동시에 주장하지 않는다',
+  !master.includes('provisional · winner 없음')
+  && !master.includes('모델 미확정으로 fail-closed')
+  && !/모델 확정 경로[^\n]*아직 실행하지 않았다/.test(master))
 /** 🔴 호출 수와 비용은 **실측**으로 적는다. 추정과 섞으면 "얼마 안 든다" 가 근거 없이 돈다 */
 check('실제 API 호출 수와 실제 비용을 함께 적는다',
   /\*\*\d+회 · \$0\.\d+\*\*/.test(master))
@@ -319,8 +340,13 @@ check('하나라도 빠지면 0 이라고 못박는다',
   master.includes('하나라도 빠지면 0 이다'))
 check('runner 를 이번 PR 에서 등록하지 않았다고 적는다',
   master.includes('plist 를 쓰지도 load 하지도 않았다'))
-check('Queue 적재가 모델 미확정으로 막혀 있다고 적는다',
-  /Queue 적재 실행 \|[^\n]*🔴 \*\*모델 미확정으로 fail-closed\*\*/.test(master))
+/**
+ * 🔴 Queue 가 막힌 **이유**는 바뀌었다 — 모델은 확정됐고, 지금 막는 것은
+ *    shadow 미완료·허용량 0·runner 미등록이다. 막혀 있다는 사실만 지킨다.
+ */
+check('Queue 적재가 여전히 fail-closed 임을 적는다',
+  /Queue 적재 실행 \|[^\n]*🔴 \*\*[^\n]*fail-closed\*\*/.test(master)
+  && /Queue 적재 실행 \|[^\n]*DB write 0/.test(master))
 /**
  * 🔴 **"구현됨" 을 "실가동" 으로 읽지 못하게 한다.**
  *    앞선 판은 계약을 만들고도 어느 것도 write 경로에 닿지 않았다.
@@ -547,6 +573,74 @@ for (const stale of [
 ]) {
   check(`옛 현재값이 남아 있지 않다 — ${stale}`, !master.includes(stale))
 }
+
+/**
+ * ══ 🔴 Persona 준비 상태 — **숫자끼리 어긋나는지** 본다 ══
+ *
+ *    창업자 지적: 문서가 "9명" 과 "15명" 과 "18명" 을 서로 다른 절에서 말하고 있었다.
+ *    절마다 문자열이 있는지 세는 검사로는 이런 모순을 절대 잡지 못한다 —
+ *    셋 다 "있었기" 때문이다.
+ *
+ *    그래서 §9.5-f 표의 숫자를 **뽑아서 서로 더해 본다.** 그리고 정본 universe 는
+ *    문서가 아니라 코드(`PRODUCTION_PERSONA_CODES`)에서 가져와 맞춘다.
+ */
+const num = (label: string): number | null => {
+  const m = new RegExp(`\\| \\*?\\*?${label}\\*?\\*? \\| \\*\\*(\\d+)명\\*\\*`).exec(master)
+  return m === null ? null : Number(m[1])
+}
+const universe = num('production 정본 universe')
+const bundleOk = num('reference bundle 성립')
+const bundleNo = num('bundle 미성립')
+const inputOk = num('production 입력 성립')
+const inputNo = num('production 입력 실패')
+const shadowRan = num('Gemini shadow 실행')
+const fullPass = num('9관문 완주')
+
+check('🔴 Persona 준비 상태 정본 표(§9.5-f)가 있다',
+  master.includes('### 9.5-f Persona reference 준비 상태')
+  && [universe, bundleOk, bundleNo, inputOk, inputNo, shadowRan, fullPass]
+    .every((v) => v !== null))
+check('🔴 문서의 정본 universe 가 코드의 정본 universe 와 같다',
+  universe === PRODUCTION_PERSONA_CODES.length)
+check('🔴 bundle 성립 + 미성립 = universe',
+  universe !== null && bundleOk !== null && bundleNo !== null
+  && bundleOk + bundleNo === universe)
+check('🔴 입력 성립 + 입력 실패 = bundle 성립',
+  bundleOk !== null && inputOk !== null && inputNo !== null
+  && inputOk + inputNo === bundleOk)
+check('🔴 shadow 실행이 입력 성립보다 많지 않다',
+  shadowRan !== null && inputOk !== null && shadowRan <= inputOk)
+/**
+ * 🔴 **관문 ⑧ 이 돌지 않은 만큼은 9관문을 완주할 수 없다.**
+ *    수만 비교하면 `9관문 완주 14 / shadow 14` 가 통과한다 — 같은 문서가
+ *    바로 아래에서 `관문 ⑧ notRun 14` 라고 적고 있는데도. 두 문장을 함께 본다.
+ */
+const notRun8 = ((): number | null => {
+  const m = /관문 ⑧ \*\*notRun (\d+)\*\*/.exec(master)
+  return m === null ? null : Number(m[1])
+})()
+check('🔴 관문 ⑧ notRun 수를 적는다', notRun8 !== null)
+check('🔴 9관문 완주가 shadow 실행보다 많지 않다',
+  fullPass !== null && shadowRan !== null && fullPass <= shadowRan)
+check('🔴 9관문 완주 + 관문 ⑧ notRun 이 shadow 실행을 넘지 않는다',
+  fullPass !== null && shadowRan !== null && notRun8 !== null
+  && fullPass + notRun8 <= shadowRan)
+check('🔴 statusPass 를 9관문 통과로 읽지 말라고 적는다',
+  master.includes('`statusPass` 를 "9관문 통과" 로 읽지 않는다'))
+/** 🔴 막힌 P 코드를 적었으면 **개수가 표와 같아야 한다** */
+const codesOf = (label: string): number => {
+  const m = new RegExp(`\\| \\*?\\*?${label}\\*?\\*? \\|[^\\n]*\\| ((?:P\\d\\d ?)+)`).exec(master)
+  return m === null ? -1 : m[1]!.trim().split(/\s+/).length
+}
+check('🔴 bundle 미성립 P 코드 개수가 표의 수와 같다', codesOf('bundle 미성립') === bundleNo)
+check('🔴 입력 실패 P 코드 개수가 표의 수와 같다', codesOf('production 입력 실패') === inputNo)
+/**
+ * 🔴 **같은 숫자를 두 곳에서 말하지 않는다.** 두 곳에 적으면 한쪽만 고쳐지는 날이 온다 —
+ *    "9명뿐이다 / 나머지 15명" 이 정확히 그렇게 남아 있었다.
+ */
+check('🔴 Persona 준비 수를 정본 표 밖에서 또 주장하지 않는다',
+  !/(검증된 )?reference Persona (는|가) \d+명뿐/.test(master)
+  && !/나머지 \d+명은 근거가 없어/.test(master))
 
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
 if (failed > 0) process.exit(1)

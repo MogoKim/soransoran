@@ -70,6 +70,25 @@ export const EXCLUDED_CODES: Readonly<Record<string, string>> = {
   P09: 'Pool §7-1 길이 목록 어디에도 없고 카드 voiceCore 에도 길이 표현이 없다 — readLengthBand 가 읽지 못한다. 근거 없이 채우지 않는다',
 }
 
+/**
+ * 🔴 **production Persona 정본 universe** (2026-09-10).
+ *
+ *    cohort 넷의 codes 를 합친 것이다. **여기서 파생시킨다** —
+ *    24명 목록을 어딘가에 다시 적으면 한쪽만 고쳐지는 날이 온다.
+ *    `P09` 는 `EXCLUDED_CODES` 에 이유와 함께 빠져 있다.
+ *
+ * 🔴 순서를 **코드순으로 고정**한다. reference 배정이 이 순서에 의존하므로
+ *    순서가 흔들리면 같은 Persona 가 다른 묶음을 받는다.
+ */
+export const PRODUCTION_PERSONA_CODES: readonly string[] = Object.freeze(
+  [...new Set(Object.values(COHORTS).flatMap((c) => c.codes))].sort(),
+)
+
+/** 🔴 이 코드가 정본 universe 에 있는가. 밖이면 임의로 채우지 않는다 */
+export function isProductionPersonaCode(code: string): boolean {
+  return PRODUCTION_PERSONA_CODES.includes(code)
+}
+
 export function cohortOf(id: string): CohortManifest | null {
   return (COHORTS as Record<string, CohortManifest>)[id] ?? null
 }
