@@ -152,6 +152,85 @@ for (const t of STRICT_MUST_PASS) {
   check('거친 표현만 있는 글은 제목·본문 모두 통과 (null)', clean === null, JSON.stringify(clean))
 }
 
+// ══ 7-A. 제목과 본문에 나눠 담은 광고 ══
+// 칸마다 따로 보면 ①통로·②모집·③판이 한 번도 같이 서지 않는다. 이어 붙여 한 번 더 본다.
+{
+  const split = checkPostContent({ title: '리딩방 가입 안내', text: 'https://spam.example' })
+  check('제목에 모집·판, 본문에 링크로 나눠도 막힌다', split?.code === 'AD_COMBO', split?.code ?? 'null')
+  check('  통로가 있는 칸(본문)을 짚어 준다', split?.field === 'content', split?.field ?? 'null')
+  check('  문구가 본문을 가리킨다', split?.message.startsWith('본문에') === true, split?.message ?? '')
+
+  const openChatInTitle = checkPostContent({ title: '코인리딩 오픈카톡 모집', text: '관심 있으신 분 연락 주세요' })
+  check('통로가 제목에만 있으면 제목을 짚는다', openChatInTitle?.field === 'title', openChatInTitle?.field ?? 'null')
+
+  // 🔴 이어 붙이기가 없던 위반을 만들지 않는다
+  // 붙여 놓으면 '코인' + '리딩' 이 없던 낱말 '코인리딩'(③) 이 된다. 구분자가 그것을 끊는다
+  check(
+    '🔴 제목 끝과 본문 첫 글자가 한 낱말로 붙지 않는다',
+    checkPostContent({ title: '오늘 산 코인', text: '리딩 연습 모임 가입 안내 https://book.example' }) === null,
+  )
+  check(
+    "🔴 제목 '수익' + 본문 '보장' 이 `수익\\s*보장` 으로 합쳐지지 않는다",
+    checkPostContent({ title: '올해 수익', text: '보장 없는 리딩방 이야기입니다' }) === null,
+  )
+  // 나눠 담아도 세 신호가 다 서지 않으면 통과한다
+  check('제목 모집 + 본문 링크만 (판 없음) 은 통과', checkPostContent({ title: '독서모임 가입 안내', text: 'https://book.example' }) === null)
+  check('제목 판 + 본문 링크만 (모집 없음) 은 통과', checkPostContent({ title: '리딩방 피해 기사', text: 'https://news.example' }) === null)
+  check('제목 판·모집 + 본문 통로 없음 은 통과', checkPostContent({ title: '리딩방 가입 안내', text: '이런 글 조심하세요' }) === null)
+
+  // 🔴 나머지 규칙은 칸마다 따로 본다 — 이어 붙여 합산하지 않는다
+  check(
+    '🔴 본문 링크 2개가 제목과 합산되지 않는다',
+    checkPostContent({ title: '주말 나들이', text: 'https://a.example 와 https://b.example 참고' }) === null,
+  )
+}
+
+// ══ 7-B. 카카오톡 아이디 — 콜론이 없어도 데려간다 ══
+{
+  const KAKAO_BLOCK = ['카톡: abc123', '카톡 abc123', '카카오톡: abc123', '카카오톡 abc123']
+  for (const t of KAKAO_BLOCK) {
+    const s = `연락은 ${t} 로 주세요`
+    check(`카톡 아이디를 막는다 — "${t}"`, code(s) === 'CONTACT_EXTERNAL_ID', code(s))
+  }
+  const KAKAO_PASS = [
+    '카톡으로 가족과 이야기했어요',
+    '카카오톡이 업데이트됐어요',
+    '오픈카톡 사기를 조심하세요',
+    '카톡 알림 소리가 너무 커요',
+    '카톡 alarm 소리가 커요',
+    '어제 카톡 했어요',
+  ]
+  for (const t of KAKAO_PASS) {
+    check(`일상 언급은 통과한다 — "${t}"`, userOk(t), code(t))
+  }
+  check(
+    '🔴 줄바꿈 너머의 영문을 아이디로 합치지 않는다',
+    userOk('어제 카톡\nsomething123 이라는 노래를 들었어요'),
+    code('어제 카톡\nsomething123 이라는 노래를 들었어요'),
+  )
+}
+
+// ══ 7-C. 광고 분야(③) 는 맨몸 낱말을 담지 않는다 ══
+{
+  const DOMAIN_PASS = [
+    '코인노래방 회원 가입 https://music.example',
+    '코인세탁소 가입 https://laundry.example',
+    '도서관 가입 후 책 대출 https://library.example',
+    '리딩방 피해 기사 https://news.example',
+  ]
+  for (const t of DOMAIN_PASS) {
+    check(`③ 오탐 없음 — "${t.slice(0, 24)}"`, userOk(t), code(t))
+  }
+  const DOMAIN_BLOCK = [
+    '코인 리딩방 가입 https://spam.example',
+    '작업대출 모집 https://spam.example',
+    '카지노 충전 https://spam.example',
+  ]
+  for (const t of DOMAIN_BLOCK) {
+    check(`③ 차단 유지 — "${t.slice(0, 24)}"`, code(t) === 'AD_COMBO', code(t))
+  }
+}
+
 // ══ 8. 민감한 원문이 결과·문구에 실리지 않는다 ══
 {
   const phone = userRes('연락은 010-1234-5678 로 주세요')

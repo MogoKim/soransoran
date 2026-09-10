@@ -67,10 +67,32 @@ const WORD_PATTERNS: RegExp[] = [
  * 🔴 전화번호와 ID 를 나눠 둔다. 사람에게 할 말이 다르기 때문이다 —
  *    "전화번호를 지워 주세요" 와 "외부 연락처 ID 는 넣을 수 없어요" 는 다른 안내다.
  * 🔴 여기서도 `\s*` 를 쓰지 않는다. 같은 이유다.
+ *
+ * 🔴 카톡은 **콜론이 있든 없든** 아이디를 데려간다.
+ *    콜론만 보던 때 `카톡 abc123` 이 그대로 통과했다. 그렇다고 `카톡` 뒤에 오는 것을
+ *    무엇이든 아이디로 읽으면 일상 언급까지 막힌다 — 그래서 두 갈래로 나눈다.
+ *
+ *      콜론형   `카톡: abc123`   콜론이 이미 "이게 아이디다" 라고 말해 준다
+ *      맨몸형   `카톡 abc123`    콜론이 없으므로 **아이디꼴**일 때만 센다
+ *                               (숫자나 `_` 가 섞여 있어야 한다)
+ *
+ *    맨몸형에 아이디꼴을 요구하는 이유는 `카톡 alarm 소리가 커요` 때문이다.
+ *    영문 낱말 하나가 뒤따른다고 아이디는 아니다.
+ *
+ * 🔴 `카톡` 뒤에 한글이 붙으면 아이디가 아니라 조사다 — `카톡으로`·`카톡이`·`카톡방`.
+ *    lookahead 로 잘라낸다. (lookbehind 는 구형 iOS Safari 가 지원하지 않는다)
+ *    `카카오톡` 을 먼저 써야 `카카오톡이` 가 `카톡` 으로 잘못 쪼개지지 않는다.
+ *
+ * 🔴 아이디 앞뒤 여백은 `[ \t]` 뿐이다. `\s` 는 줄바꿈까지 건너뛰어
+ *    문단 끝 `카톡` 과 **다음 문장의 영문**을 한 아이디로 합친다.
  */
 const PHONE_PATTERN = /\b01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}\b/
+const KAKAO = /(?:카카오톡|카톡)(?![가-힣])/.source
 const EXTERNAL_ID_PATTERNS: RegExp[] = [
-  /카톡\s*[:：]\s*[a-z0-9_-]{3,}/i,
+  /* 콜론형 — 콜론이 아이디임을 밝혔으므로 영문만으로도 센다 */
+  new RegExp(`${KAKAO}[ \\t]*[:：][ \\t]*@?[a-z0-9][a-z0-9_.-]{2,}`, 'i'),
+  /* 맨몸형 — 3글자 이상이면서 숫자나 `_` 가 섞인 아이디꼴만 센다 */
+  new RegExp(`${KAKAO}[ \\t]+@?(?=[a-z0-9_.-]{3,})[a-z0-9.-]*[0-9_][a-z0-9_.-]*`, 'i'),
   /텔레\s*[:：]?\s*@?[a-z0-9_]{4,}/i,
   /텔레그램\s*[:：]?\s*@?[a-z0-9_]{4,}/i,
 ]
@@ -93,7 +115,7 @@ export const MAX_BODY_LINKS = 2
  *
  *   ① 밖으로 나가는 통로   링크 · 전화번호 · 외부 ID · 오픈채팅
  *   ② 모집·수익 유도       가입 · 충전 · 추천인 · 수익 보장 · 입금 · 첫충 · 꽁머니 · 모집
- *   ③ 도박·투자·대출 판    카지노 · 바카라 · 토토 · 먹튀 · 리딩방 · 코인리딩 · 대출 · 신용불량 …
+ *   ③ 도박·투자·대출 판    카지노 · 바카라 · 토토 · 먹튀 · 리딩방 · 코인리딩 · 작업대출 …
  *
  * 🔴 하나만으로는 절대 막지 않는다. 그래야 이런 글이 살아남는다.
  *      "리딩방 사기를 당했어요"            ③만 있다
@@ -102,13 +124,23 @@ export const MAX_BODY_LINKS = 2
  *      "대출 문의 전화가 계속 와서 무서워요" ③만 있다
  *      "동호회 가입하려면 https://…"        ①②만 있다 (도박 판이 아니다)
  *
+ * 🔴 ③ 에 **맨몸 낱말**을 넣지 않는다.
+ *    `코인` 과 `대출` 을 그대로 넣었더니 ③ 이 도박판이 아닌 곳에서 켜졌다.
+ *      "코인노래방 회원 가입 https://music.example"   코인 ← 노래방이다
+ *      "코인세탁소 가입 https://laundry.example"      코인 ← 빨래방이다
+ *      "도서관 가입 후 책 대출 https://library.example" 대출 ← 책을 빌리는 일이다
+ *    ①②는 동호회·도서관·동네 가게 안내에도 흔히 함께 선다. 그래서 ③ 이 헐거우면
+ *    조합 규칙 전체가 "링크 달린 가입 안내 금지" 로 변한다.
+ *    남기는 것은 **광고 맥락이 낱말 안에 이미 들어 있는 것**뿐이다 —
+ *    `코인리딩`·`리딩방`·`작업대출`·`대출문의` 처럼.
+ *
  * 🔴 문맥을 AI 로 판정하지 않는다. 왜 막혔는지 사람이 설명할 수 있어야 하고,
  *    같은 입력이면 언제나 같은 답이 나와야 한다.
  */
 const AD_INTENT_PATTERN =
   /가입|충전|추천인|수익\s*보장|보장\s*수익|입금|첫\s*충|꽁\s*머니|모집|총판|콜센터/i
 const AD_DOMAIN_PATTERN =
-  /카지노|바카라|토토|먹튀|조건만남|리딩방|코인리딩|작업대출|대출|신용불량|배팅|베팅|슬롯|홀덤|선물거래|코인/i
+  /카지노|바카라|토토|먹튀|조건만남|리딩방|코인리딩|작업대출|대출문의|신용불량|배팅|베팅|슬롯|홀덤|선물거래/i
 
 export type ContentGuardIssue =
   | {
@@ -156,6 +188,30 @@ function firstMatch(patterns: RegExp[], value: string): RegExpExecArray | null {
     if (m) return m
   }
   return null
+}
+
+/**
+ * 밖으로 나가는 통로가 있는가 — 링크·오픈채팅.
+ *
+ * 🔴 전화번호·외부 ID 는 여기서 세지 않는다. 그것들은 조합을 기다리지 않고
+ *    ②에서 이미 단독으로 막히기 때문이다. 여기까지 왔다면 남은 통로는 이 둘뿐이다.
+ */
+export function hasOutboundChannel(text: string): boolean {
+  return countUrls(text) > 0 || OPEN_CHAT_PATTERN.test(text)
+}
+
+/**
+ * 광고 조합이 성립하는가 — ①통로 + ②모집 + ③판이 **모두** 있을 때만 true.
+ *
+ * 🔴 이 판정을 함수로 뽑아 둔 이유: 글쓰기는 제목과 본문을 **이어 붙여** 한 번 더 본다.
+ *    칸마다 따로 보면 세 신호가 한 번도 같이 서지 않아 조합이 그대로 새어 나간다
+ *    (제목 "리딩방 가입 안내" + 본문 "https://…"). 규칙이 두 벌이 되지 않도록
+ *    checkContent 도 이 함수를 부른다 — 판정은 언제나 한 곳에서 나온다.
+ */
+export function hasAdCombo(text: string): boolean {
+  const value = text.trim()
+  if (!value) return false
+  return hasOutboundChannel(value) && AD_INTENT_PATTERN.test(value) && AD_DOMAIN_PATTERN.test(value)
 }
 
 /** 같은 문자가 과도하게 반복되는 자리 (ㅋㅋㅋㅋ… 같은 정상 표현은 허용 범위를 넉넉히 둔다) */
@@ -226,10 +282,9 @@ export function checkContent(
   if (count > allowed) return fail({ code: 'TOO_MANY_LINKS', count, allowed })
 
   // ④ 광고 조합 — 통로 + 모집 유도 + 도박·투자 판이 **모두** 있을 때만
-  const hasChannel = count > 0 || OPEN_CHAT_PATTERN.test(value)
-  if (hasChannel && AD_INTENT_PATTERN.test(value) && AD_DOMAIN_PATTERN.test(value)) {
-    return fail({ code: 'AD_COMBO' })
-  }
+  //    댓글·닉네임·인사말처럼 칸이 하나뿐인 곳은 이 판정이 끝이다.
+  //    글쓰기는 여기에 더해 제목+본문을 이어 붙여 한 번 더 본다 (post-guard-check).
+  if (hasAdCombo(value)) return fail({ code: 'AD_COMBO' })
 
   // ⑤ 도배
   const repeat = EXCESSIVE_REPEAT.exec(value)
