@@ -94,7 +94,16 @@ const MUST_BLOCK: Array<[string, string, string]> = [
   ['리딩방 가입은 https://spam.example 에서 하세요', 'AD_COMBO', '리딩방 가입 + URL'],
   ['카지노 충전 문의는 오픈카톡으로 주세요', 'AD_COMBO', '카지노 충전 + 오픈채팅'],
   ['코인리딩 수익 보장 가입 https://x.example', 'AD_COMBO', '수익보장 + URL'],
-  ['작업대출 상담 가입 www.loan.example', 'AD_COMBO', '대출 가입 + URL'],
+  /**
+   * 🔴 기대값이 바뀐 자리다 (2026-09-10). 지운 것이 아니라 **정책이 바뀌었다.**
+   *    "카지노 상담소 가입 + 도움 링크" 를 반드시 통과시키라는 결정이 내려오면서,
+   *    구조가 똑같은 "작업대출 상담 가입" 도 함께 통과한다 —
+   *    분야 + `상담` + 가입 은 어느 쪽이든 상담을 받으러 가는 꼴이기 때문이다.
+   *    `작업대출` 만 예외로 막으려면 낱말별 특례가 필요하고, 그것이 이 정책이
+   *    벗어나려던 길이다. 대출 광고 차단은 바로 아래 광고 수식어 형태로 지킨다.
+   */
+  ['작업대출 지금 가입 www.loan.example', 'AD_COMBO', '대출 + 광고 수식어 + 가입 + URL'],
+  ['작업대출 모집합니다 www.loan.example', 'AD_COMBO', '대출 모집 권유 + URL'],
 ]
 for (const [t, expected, label] of MUST_BLOCK) {
   const got = code(t)
@@ -305,6 +314,75 @@ for (const t of STRICT_MUST_PASS) {
     '🔴 차단 결과에 URL 원문이 실리지 않는다',
     !JSON.stringify(userRes('리딩방 가입 https://spam.example')).includes('spam.example'),
   )
+}
+
+// ══ 7-F. 가입은 "누구에게" 가입시키는가로 가른다 ══
+// 🔴 길이로 재지 않는다. 사이에 낄 수 있는 것은 적어 둔 광고 수식어뿐이다.
+{
+  const JOIN_PASS = [
+    '카지노 상담소 가입 https://help.example',
+    '리딩방 피해자 가입 https://help.example',
+    '리딩방 모임 가입 https://help.example',
+    '카지노 중독 상담소 가입 https://help.example',
+    /* 위 MUST_BLOCK 에서 기대값이 바뀐 자리 — 구조가 같으므로 함께 통과한다 */
+    '작업대출 상담 가입 www.loan.example',
+  ]
+  for (const t of JOIN_PASS) {
+    check(`도움 글의 가입은 통과 — "${t.slice(0, 20)}"`, userOk(t), code(t))
+  }
+  const JOIN_BLOCK2 = [
+    '리딩방 가입 https://spam.example',
+    '리딩방 지금 가입 https://spam.example',
+    '리딩방 오늘부터 가입 https://spam.example',
+    '카지노 신규 회원 가입 https://spam.example',
+    '토토 바로 가입 https://spam.example',
+  ]
+  for (const t of JOIN_BLOCK2) {
+    check(`광고 수식어 + 가입은 차단 — "${t.slice(0, 20)}"`, code(t) === 'AD_COMBO', code(t))
+  }
+}
+
+// ══ 7-G. 고위험 낱말은 "말하는 꼴" 로 가른다 ══
+// 🔴 낱말이 있느냐가 아니라 읽는 사람에게 하라고 말하느냐를 본다.
+{
+  const TELL_PASS = [
+    '카지노에 입금했다가 피해를 봤어요 https://help.example',
+    '카지노 충전 피해 상담 https://help.example',
+    '리딩방에서 수익 보장이라며 속였다는 기사 https://news.example',
+    '추천인 코드 사기를 조심하세요 https://news.example',
+  ]
+  for (const t of TELL_PASS) {
+    check(`겪은 일·보도·경고는 통과 — "${t.slice(0, 24)}"`, userOk(t), code(t))
+  }
+  const ASK_BLOCK = [
+    '카지노에 지금 입금하세요 https://spam.example',
+    '카지노 충전하세요 https://spam.example',
+    '리딩방 수익 보장합니다 https://spam.example',
+    '추천인 코드를 입력하세요 https://spam.example',
+    '작업대출 모집합니다 https://spam.example',
+  ]
+  for (const t of ASK_BLOCK) {
+    check(`권유·모집 형태는 차단 — "${t.slice(0, 24)}"`, code(t) === 'AD_COMBO', code(t))
+  }
+  // 🔴 면제 신호로 권유형이 풀리지 않는다
+  check(
+    '🔴 "피해 없는 카지노 충전하세요" 는 면제되지 않는다',
+    code('피해 없는 카지노 충전하세요 https://spam.example') === 'AD_COMBO',
+    code('피해 없는 카지노 충전하세요 https://spam.example'),
+  )
+}
+
+// ══ 7-H. 텔레그램 맨몸형은 카톡과 같은 기준 ══
+{
+  const TG_BLOCK = ['텔레그램: moneyking', '텔레그램 @moneyking', '텔레그램 아이디 moneyking', '텔레그램 abc1234', '텔레 my_id']
+  for (const t of TG_BLOCK) {
+    const s = `연락은 ${t} 로 주세요`
+    check(`텔레그램 ID 차단 — "${t}"`, code(s) === 'CONTACT_EXTERNAL_ID', code(s))
+  }
+  const TG_PASS = ['텔레그램 update 됐어요', '텔레그램 alarm 설정을 바꿨어요', '텔레그램이 업데이트됐어요', '어제 텔레그램\nabc1234라는 노래를 들었어요']
+  for (const t of TG_PASS) {
+    check(`텔레그램 일상 언급 통과 — "${t.replace(/\n/g, '⏎').slice(0, 26)}"`, userOk(t), code(t))
+  }
 }
 
 // ══ 8. 민감한 원문이 결과·문구에 실리지 않는다 ══
