@@ -37,10 +37,27 @@ export const FORBIDDEN_REACTION_ROLES: readonly string[] = ['advice', 'caution']
  *    `REACTION_TYPES` 의 부분집합이어야 한다 — 아니면 planner 가 고른 것을
  *    생성기가 거부한다. `persona-comment-engine-check` 가 부분집합임을 행동으로 잠근다.
  *
- *    `rebuttal`(반박)·`information`(정보)·`other` 는 넣지 않는다.
+ *    `rebuttal`(반박)·`information`(정보)는 넣지 않는다.
  *    반박은 첫 댓글로 붙을 자리가 아니고, 정보 제공은 조언 금지선에 너무 가깝다.
+ *
+ * 🔴 **`other` 를 넣었다** (2026-09-10, 창업자 판정 A).
+ *
+ *    옛 목록은 `empathy · question · experience` 셋뿐이었다.
+ *    그런데 실제 공개 댓글 879건을 기존 분류기(`classifyReaction`)로 재 보면
+ *
+ *      other 81.3% · question 11.5% · empathy 5.3% · rebuttal 0.8%
+ *      experience 0.7% · information 0.3%
+ *
+ *    셋을 합쳐도 **17.5%** 다. 사람 댓글의 다섯 중 넷은 공감도 질문도 경험담도 아닌
+ *    **그냥 한마디**인데, planner 는 매 댓글을 셋 중 하나로 **억지로** 만들고 있었다.
+ *    그래서 특별히 물을 것이 없어도 질문을 지어내고, 겪은 일이 없어도 공감할
+ *    경험을 만들었다 — 회차 `20260910-172838` 의 근거 없는 자기 경험 7/18 이 그 결과다.
+ *
+ *    🔴 `other` 가 **기본 후보**다. 반응할 특별한 이유가 있을 때만 다른 역할을 쓴다.
  */
-export const COMMENT_REACTION_ROLES: readonly ReactionType[] = ['empathy', 'question', 'experience']
+export const COMMENT_REACTION_ROLES: readonly ReactionType[] = [
+  'other', 'empathy', 'question', 'experience',
+]
 
 /**
  * 🔴 **Gate ⑤ 의 `adviceForbidden` 은 이 정본에서 파생한다.**

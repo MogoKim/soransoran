@@ -20,6 +20,9 @@
  */
 
 /** 🔴 이번 범위에서 만들지 않는 반응 역할. 기존 정책 그대로다 */
+import { judgeExperienceEligibility } from './persona-voice-reference'
+import { groundingTextOf } from './persona-experience-grounding'
+
 export const FORBIDDEN_REACTION_ROLES: readonly string[] = ['advice', 'caution']
 
 /** Voice 자산에서 뽑은 말투 근거 — 🔴 원문이 아니라 **표지**만 담는다 */
@@ -34,6 +37,15 @@ export type VoiceEvidence = {
   punctuation: readonly string[]
   /** 근거가 된 발화 수 */
   sampleCount: number
+}
+
+/**
+ * 🔴 identity 에 **겪은 일**이라 부를 만한 내용이 있는가.
+ *    `{ job, note }` 처럼 설정만 있는 것은 경험 근거가 아니다 —
+ *    직업 이름 하나로 "친구를 오랜만에 만났다" 를 지어낼 수는 없다.
+ */
+export function hasLifeGroundIn(identity: unknown): boolean {
+  return groundingTextOf({ identity, memory: { has: false } }).trim() !== ''
 }
 
 export type MemoryState =
@@ -71,6 +83,7 @@ export type InputBlockCode =
   | 'PERSONA_VOICE_MISSING'
   | 'PERSONA_LIFESTAGE_MISSING'
   | 'POST_DIGEST_EMPTY'
+  | 'EXPERIENCE_WITHOUT_GROUND'
 
 export type InputBlock = { code: InputBlockCode; message: string }
 
@@ -174,6 +187,35 @@ export function buildCommentInput(args: {
   }
   if (post.title.trim() === '' || post.bodyDigest.trim() === '') {
     blocks.push({ code: 'POST_DIGEST_EMPTY', message: '대상 글의 제목 또는 요약이 비어 있다' })
+  }
+  /**
+   * 🔴 **근거 없는 `experience` 를 배정하지 않는다** (2026-09-10, P0-5).
+   *
+   *    참고 댓글(reference)은 **어휘·호흡·길이·질문 방식**의 근거다.
+   *    겪은 일의 근거가 아니다. 그런데 `experience` 는 자기 이야기를 요구하므로,
+   *    들려줄 기억이 없으면 모델은 **참고 댓글에 있던 장면을 자기 것으로 옮긴다.**
+   *
+   *    실제로 그랬다(회차 `20260910-153254`, experience 6건):
+   *      *"저도 저번에 진짜 오랜만에 친구 봤는데 … 목 쉴 때까지 한참 떠들다 헤어졌어요"*
+   *      *"저도 가까운 데 있어서 종종 들르는데"*
+   *    그 Persona 에게는 그런 기억이 없다.
+   *
+   *    🔴 프롬프트로 "지어내지 마라" 고 더 말해서 될 일이 아니다 —
+   *       역할 자체가 없는 것을 요구한다. **배정하지 않는다.**
+   */
+  {
+    const ground = judgeExperienceEligibility({
+      reactionRole: args.reactionRole,
+      hasMemory: args.memory.has,
+      // 🔴 lifeStage 는 "어떤 시기인가" 일 뿐 겪은 일이 아니다. identity 의 실제 내용을 본다
+      hasLifeGround: hasLifeGroundIn(persona.identity),
+    })
+    if (!ground.allowed) {
+      blocks.push({
+        code: 'EXPERIENCE_WITHOUT_GROUND',
+        message: `${persona.code}: experience 를 배정하지 않는다 — ${ground.reason}`,
+      })
+    }
   }
 
   if (blocks.length > 0) return { ok: false, blocks }

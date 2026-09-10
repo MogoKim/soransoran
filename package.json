@@ -48,6 +48,8 @@
     "persona:comment-runner": "tsx scripts/persona-comment-runner.mts",
     "persona:comment-gate-check": "tsx scripts/persona-comment-check.mts",
     "persona:generate-check": "tsx scripts/persona-generate-check.mts",
+    "persona:reference-preflight": "tsx scripts/persona-reference-preflight.mts",
+    "persona:reference-build-asset": "tsx scripts/persona-reference-build-asset.mts",
     "persona:publish-rules-check": "tsx scripts/persona-publish-rules-check.mts",
     "persona:target-rules-check": "tsx scripts/persona-target-rules-check.mts",
     "original-post:persona-match-check": "tsx scripts/original-post-persona-match-check.mts",

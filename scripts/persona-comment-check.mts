@@ -64,6 +64,8 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
 {
   const v = checkCommentCandidate({
     personaCode: 'P05', text: '저도 그맘때 그랬어요... 지금도 가끔 그러네요', sourceTexts: SOURCE,
+    // 🔴 이 절의 주제는 Gate ① 이다. ⑦ 의 경험 근거 판정이 끼어들지 않게 근거를 준다
+    personaGrounding: '그맘때 비슷한 일을 겪었고 지금도 가끔 그렇다',
   })
   if (v.sourceLeak) bad('① 정상은 통과', 'case', '🔴 정상 후보를 유출로 잡았다')
   else if (v.status !== 'pass') bad('① 정상은 통과', 'case', `🔴 ${v.status} (${v.reason})`)
@@ -121,6 +123,8 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
 {
   const v = checkCommentCandidate({
     personaCode: 'P05', text: '저도 작년에 그거 겪었어요', sourceTexts: SOURCE, forbiddenRoles: [],
+    // 🔴 이 절의 주제는 **역할 허용**이다. 경험 근거는 따로 잰다
+    personaGrounding: '작년에 그 일을 겪었다',
   })
   if (v.reactionType !== 'experience') bad('금지 아니면 통과', 'case', `🔴 분류 ${v.reactionType}`)
   else if (v.status !== 'pass') bad('금지 아니면 통과', 'case', `🔴 ${v.status} (${v.reason})`)
@@ -586,9 +590,16 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   const offenders: string[] = []
   if (g?.outcome !== 'regenerate') offenders.push(`가족경유=${g?.outcome}`)
   if (!g?.detail.includes('FAMILY_PROXY')) offenders.push('코드 누락')
-  // 🔴 정서 표현은 걸리지 않아야 한다 — 다 막으면 아무 말도 못 한다
+  /**
+   * 🔴 정서 표현은 걸리지 않아야 한다 — 다 막으면 아무 말도 못 한다.
+   *
+   * 🔴 **예문을 바꿨다** (2026-09-10, P0-1). 옛 예문 `우리 딸도 그맘때 참 힘들어했어요` 는
+   *    정서 표현이 아니라 **가족 사실 주장**이다(딸이 있고 그때 힘들어했다).
+   *    근거 없이 통과해야 한다고 잠가 두면, 그것이 곧 가짜 경험의 통로가 된다.
+   *    진짜 정서 표현으로 바꿔 잰다.
+   */
   const feel = checkCommentCandidate({
-    personaCode: 'P05', text: '우리 딸도 그맘때 참 힘들어했어요', sourceTexts: SOURCE,
+    personaCode: 'P05', text: '그 마음 어떨지 알 것 같아요', sourceTexts: SOURCE,
   })
   const fg = feel.gates.find((x) => x.gate === '⑦')
   if (fg?.outcome === 'regenerate') offenders.push(`정서표현이 걸림=${fg.detail}`)
@@ -596,9 +607,49 @@ const SOURCE = ['시어머니 모시는 게 이렇게 힘든 줄 몰랐어요 �
   else ok('⑦ 가족 경유 진술', 'case', 'identity 없어도 regenerate · 정서 표현은 통과')
 }
 
+// ── 🔴 P0-1 근거 없는 자기 경험은 역할과 무관하게 ⑦ 가 막는다 ────
+{
+  /**
+   * 🔴 회차 `20260910-165632` 는 이 문장들을 `empathy` · `question` 역할로
+   *    `gateStatus=pass` 시켰다. 역할 검사만으로는 잡히지 않는다.
+   */
+  const CASES: readonly [string, string][] = [
+    ['통증', '저도 계단이 참 힘들어요'],
+    ['가족', '우리 딸도 그맘때 참 힘들어했어요'],
+    ['과거 행동', '저도 작년에 그거 겪었어요'],
+  ]
+  const offenders: string[] = []
+  for (const [kind, text] of CASES) {
+    const v = checkCommentCandidate({ personaCode: 'P05', text, sourceTexts: SOURCE })
+    const g = v.gates.find((x) => x.gate === '⑦')
+    if (g?.outcome !== 'regenerate') offenders.push(`${kind}=${g?.outcome}`)
+  }
+  // 🔴 근거를 주면 같은 문장이 통과한다 — 계약이 대칭이어야 한다
+  const grounded = checkCommentCandidate({
+    personaCode: 'P05', text: '저도 계단이 참 힘들어요', sourceTexts: SOURCE,
+    personaGrounding: '작년부터 무릎이 아파 계단이 힘들다',
+  })
+  const gg = grounded.gates.find((x) => x.gate === '⑦')
+  if (gg?.outcome === 'regenerate') offenders.push(`근거 있어도 막힘=${gg.detail}`)
+  // 🔴 맞장구는 막지 않는다
+  for (const okText of ['저도요', '그러게요', '맞아요']) {
+    const v = checkCommentCandidate({ personaCode: 'P05', text: okText, sourceTexts: SOURCE })
+    const g = v.gates.find((x) => x.gate === '⑦')
+    if (g?.outcome === 'regenerate') offenders.push(`맞장구 막힘="${okText}"`)
+  }
+  if (offenders.length) bad('⑦ 근거 없는 자기 경험', 'case', `🔴 ${offenders.join(' / ')}`)
+  else ok('⑦ 근거 없는 자기 경험', 'case', '역할 무관 차단 · 근거 있으면 통과 · 맞장구 통과')
+}
+
 // ── 🔴 ⑦ identity 없으면 설정 모순은 notRun ────
 {
-  const v = checkCommentCandidate({ personaCode: 'P05', text: '저도 그랬어요', sourceTexts: SOURCE })
+  /**
+   * 🔴 **순수 맞장구로 잰다** (2026-09-10, P0-1).
+   *    옛 예문 `저도 그랬어요` 는 과거 경험을 주장한다 — 근거가 없으면 이제 막힌다.
+   *    이 절의 주제는 **identity 대조가 없을 때 notRun 인가**이므로,
+   *    새 사실을 보태지 않는 맞장구로 재야 그 축만 잰다.
+   */
+  const v = checkCommentCandidate({ personaCode: 'P05', text: '저도요', sourceTexts: SOURCE })
   const g = v.gates.find((x) => x.gate === '⑦')
   if (g?.outcome !== 'notRun') bad('⑦ 대조 없으면 notRun', 'guard', `🔴 ⑦=${g?.outcome}`)
   else ok('⑦ 대조 없으면 notRun', 'guard', 'pass 로 세지 않는다')

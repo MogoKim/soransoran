@@ -39,6 +39,7 @@ import {
   checkUniqueExpression, checkIdentifyingDetail, checkStructureCopy,
   type FrequencyLookup,
 } from './persona-gate-234.mjs'
+import { judgeExperienceGrounding } from '../../src/lib/persona-experience-grounding'
 import {
   checkPersonaConsistency, checkVoiceFingerprint,
   type PersonaIdentityFacts, type FingerprintThresholds,
@@ -65,6 +66,7 @@ export type AiToneTag =
   | 'SEED_TOO_CLOSE'     // 원문 댓글과 유사
   | 'ADVICE_RISK'        // 조언 위험
   | 'SOURCE_TRACE'       // 외부 커뮤니티 흔적
+  | 'FABRICATED_EXPERIENCE' // 🔴 근거 없는 자기 경험 주장 (역할과 무관하게 본다)
 
 export type CandidateVerdict = {
   personaCode: string
@@ -81,6 +83,11 @@ export type CandidateVerdict = {
 }
 
 export type CandidateInput = {
+  /**
+   * 🔴 Persona 가 들고 있는 **사실**(memory · identity). 자기 경험 주장의 유일한 근거다.
+   *    🔴 참고 댓글은 여기 들어가지 않는다 — 말투 근거이지 인생 사실의 근거가 아니다.
+   */
+  personaGrounding?: string
   personaCode: string
   /** 후보 댓글 본문 — 🔴 판정에만 쓰고 반환값에 담지 않는다 */
   text: string
@@ -248,6 +255,27 @@ export function checkCommentCandidate(input: CandidateInput): CandidateVerdict {
   if (roleHit) {
     sevenOutcome = stricter(sevenOutcome, 'regenerate')
     sevenWhy.push(`금지 역할 ${reactionType}`)
+  }
+  /**
+   * 🔴 **근거 없는 자기 경험은 Persona 모순이다** (2026-09-10, P0-1).
+   *
+   *    옛 판은 `reactionRole === 'experience'` 일 때만 경험 근거를 물었다.
+   *    회차 `20260910-165632` 는 18건 중 **10건에 근거 없는 자기 경험**이 있었고
+   *    그중 **7건이 `pass`** 였다 — 역할이 `empathy` · `question` 이었기 때문이다.
+   *    역할은 무엇을 쓸지를 정할 뿐 **무엇을 주장해도 되는지**를 정하지 않는다.
+   *
+   * 🔴 생성 계획(`buildPrompt`)과 이 검증이 **같은 함수**를 쓴다 —
+   *    두 곳에 각각 적으면 언젠가 갈리고, 그날부터 프롬프트가 막는 것을 Gate 가 통과시킨다.
+   */
+  const grounding = judgeExperienceGrounding({
+    text,
+    grounding: input.personaGrounding ?? '',
+  })
+  if (!grounding.ok) {
+    sevenOutcome = stricter(sevenOutcome, 'regenerate')
+    sevenWhy.push(`근거 없는 자기 경험 ${grounding.ungrounded.length}건`
+      + ` (${[...new Set(grounding.ungrounded.map((c) => c.kind))].join(' · ')})`)
+    tags.push('FABRICATED_EXPERIENCE')
   }
   if (sevenWhy.length > 0) tags.push('IDENTITY_CONFLICT')
   gates.push({

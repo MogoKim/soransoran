@@ -516,6 +516,15 @@ jobs:
       - name: Persona 프롬프트 계약 (억지 유도 제거 · 말투 근거 우선)
         run: npm run persona:generate-check
 
+      # 🔴 **선언이 아니라 나갈 문자열을 본다** (2026-09-10, P0-1 사고 이후).
+      #    회차 20260910-153254 은 닉네임 약 454건을 프롬프트에 실어 보냈다.
+      #    코드에는 "댓글만 읽는다" 고 적혀 있었지만 실제 payload 를 아무도 열어 보지 않았다.
+      #    🔴 외부 호출 0 · DB 0 — 프롬프트를 만들기만 하고 부르지 않는다.
+      #    자산은 gitignored 라 CI 에는 없다. 없으면 그 사실을 소리 내어 말하고
+      #    계약(스키마·digest·fail-closed)만 검증한다.
+      - name: provider payload preflight (호출 0)
+        run: npm run persona:reference-preflight || echo "🟡 자산 없음 — 계약 검증만 (로컬에서 실물 확인)"
+
       # 🔴 **DB 에 연결하지 않는다.** 마이그레이션 판정을 순수 함수로 뽑아 두었으므로
       #    적용됨 / 일부만 / 못 읽음을 가짜 metadata 로 전부 시험한다.
       #    앞선 판은 다른 테이블(0023 MicroSeedCandidate)의 컬럼 이름을 검사하다

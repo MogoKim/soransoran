@@ -89,10 +89,22 @@ import {
   DEFAULT_FINGERPRINT_THRESHOLDS, REQUIRED_PRIOR_TEXTS, gateEightCanRun,
 } from '../src/lib/persona-fingerprint-thresholds'
 import { checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
-import { bundlesForPersonas, partitionByPersona } from './lib/persona-reference-store.mjs'
 import {
-  bundlesAreDistinct, findReferenceCopy, judgeReferenceBundle, looksLikePostBody,
+  allocateRolesByCorpus, ANCHOR_MIN_COMMENTS, ANCHOR_MIN_RATIO, bundlesForPersonas,
+  buildReferenceManifest, carriesExperience, identityLeakCheck, loadCommentsFrom, planBundles,
+} from './lib/persona-reference-store.mjs'
+import { judgeExperienceGrounding } from '../src/lib/persona-experience-grounding'
+import {
+  bundlesAreDistinct, findContextMismatch, judgeExperienceEligibility,
+  judgeVoiceSeparation, looksLikePostBody, styleDistance, styleOf,
 } from '../src/lib/persona-voice-reference'
+import {
+  findInvalidation, judgeReferenceManifest, judgeRunUsable, SANITIZER_VERSION,
+} from '../src/lib/persona-eval-invalidation'
+import {
+  ASSET_VERSION, isTooOpen as assetTooOpen, judgeAssetLocation, judgeAssetReadiness,
+  judgeAssetShape, REFERENCE_CORPUS_FILE,
+} from '../src/lib/persona-reference-asset'
 import {
   buildPromptFromInput, describeGateInput, toGateInput, toPromptPost, toRecentMarks,
 } from './lib/persona-comment-bridge'
@@ -300,10 +312,21 @@ console.log('③ 댓글 분산 planner')
     const r3 = planCommentDistribution({
       posts: [post({ id: 'a' })], personas: [persona({ code: 'P01' })],
       reactionRoles: ROLES, limit: 1, nowMs: NOW,
-      // 🔴 정본 어휘로 센다. 최근에 많이 쓴 역할은 뒤로 밀린다
-      recentRoleCounts: { empathy: 9, experience: 3, question: 0 },
+      /**
+       * 🔴 정본 어휘로 센다. 최근에 많이 쓴 역할은 뒤로 밀린다.
+       * 🔴 **`other` 까지 센다** (2026-09-10, A 에서 정본에 추가됨).
+       *    빠뜨리면 0회로 읽혀 늘 먼저 배정되고, 이 절이 재려던 LRU 축이 죽는다.
+       */
+      recentRoleCounts: { other: 12, empathy: 9, experience: 3, question: 0 },
     })
     check('🔴 최근에 적게 쓰인 역할이 먼저 배정된다', r3.items[0]?.reactionRole === 'question')
+    /** 🔴 `other` 가 정본 역할이다 — planner 가 배정할 수 있어야 한다 */
+    const r4 = planCommentDistribution({
+      posts: [post({ id: 'a' })], personas: [persona({ code: 'P01' })],
+      reactionRoles: ROLES, limit: 1, nowMs: NOW,
+      recentRoleCounts: { other: 0, empathy: 9, experience: 9, question: 9 },
+    })
+    check('🟢 other 도 planner 가 배정한다', r4.items[0]?.reactionRole === 'other')
   }
 
   // ── 상한 ──
@@ -566,92 +589,347 @@ console.log('⑤ 모델·비용 원장')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('⑤-b 🔴 Wave E — 말투 근거(reference) 계약')
+console.log('⑤-b 🔴 Wave E — 말투 근거 · 무효 회차 · manifest · 정본 자산')
 {
-  /** 🔴 **자산을 실물로 읽는다.** 시험용 문자열만 보면 "연결됐는가" 를 증명하지 못한다 */
-  const codes = ['S01', 'S02', 'S03', 'S04', 'S05']
-  const ref = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: codes })
-  const assetOk = ref.assets.some((a) => a.exists && a.comments > 0)
-  /**
-   * 🔴 **자산은 `tmp/` 라 gitignored 다 — CI 에는 없다.**
-   *
-   *    그러니 "자산이 붙어 있다" 를 CI 에서 PASS 로 요구하면 거짓이 된다.
-   *    반대로 조용히 건너뛰면 **연결이 끊겨도 초록**이 된다 —
-   *    그 조용함이 `20260909-181515` 를 만든 바로 그 실패 방식이다.
-   *
-   *    그래서 **어느 쪽인지 화면에 말한다.**
-   *      · 자산이 있으면(로컬) 실물로 전부 검증한다
-   *      · 없으면(CI) **fail-closed 가 실제로 작동하는지**를 검증하고,
-   *        실물 검증이 돌지 않았음을 소리 내어 남긴다
-   *    분할·겹침·길이 분포 같은 **논리는 합성 코퍼스로 CI 가 전수 검증**한다.
-   */
-  console.log(assetOk
-    ? '   🟢 실제 댓글 자산 있음 — 실물로 검증한다'
-    : '   🟡 실제 댓글 자산 없음(gitignored · CI) — 실물 검증은 로컬에서만 돈다'
-      + ' · 여기서는 fail-closed 와 분할 논리를 본다')
-
-  /** 🔴 자산이 없으면 **숨기지 않고 blocker 를 낸다** — 가짜로 채우지 않는다 */
-  if (!assetOk) {
-    check('🔴 자산이 없으면 blocker 를 낸다', ref.blocks.length > 0)
-    check('🔴 자산이 없으면 묶음을 만들지 않는다', ref.byCode.size === 0)
-  }
-
-  /**
-   * 🔴 **분할 논리는 자산과 무관하게 검증한다** — CI 가 볼 수 있는 부분이다.
-   *    합성 코퍼스는 길이를 일부러 흩어 놓는다. 앞에서 자르는 버그가 되살아나면
-   *    묶음의 중앙값과 p90 이 같아져 여기서 걸린다.
-   */
+  // ── P0-1 🔴 무효 회차는 영구히 쓰지 못한다 ──
   {
-    const synth = Array.from({ length: 200 }, (_, i) =>
-      '가'.repeat(5 + (i % 60)) + `-${i}`)
-    const codes5 = ['P1', 'P2', 'P3', 'P4', 'P5']
-    const part = partitionByPersona({ texts: synth, personaCodes: codes5, perPersona: 12 })
-    check('🟢 합성 코퍼스로 Persona 5종 묶음이 선다', part.bundles.length === 5)
-    check('🔴 묶음이 서로 겹치지 않는다(논리)', bundlesAreDistinct(part.bundles).distinct)
-    for (const b of part.bundles) {
-      check(`🔴 ${b.personaCode} 이 길이 분포를 갖는다 (중앙 ${b.lengths.median} < p90 ${b.lengths.p90})`,
-        b.lengths.p90 > b.lengths.median)
-    }
-    /** 🔴 근거가 비면 만들지 않는다 */
-    const empty = partitionByPersona({ texts: [], personaCodes: codes5, perPersona: 12 })
-    check('🔴 근거가 비면 묶음을 만들지 않는다', empty.bundles.length === 0)
-    /** 🔴 본문 길이는 걸러진다 */
-    const withBody = judgeReferenceBundle({
-      personaCode: 'P9', texts: [...synth.slice(0, 10), '나'.repeat(600)],
+    const bad = findInvalidation('20260910-153254')
+    check('🔴 20260910-153254 가 무효로 기록돼 있다', bad !== null)
+    check('  사유가 REFERENCE_IDENTITY_DISCLOSURE 다', bad?.reason === 'REFERENCE_IDENTITY_DISCLOSURE')
+    /** 🔴 "저장되지 않았다" 고 쓰지 않는다 — 우리가 아는 것은 보냈다는 사실뿐이다 */
+    check('🔴 Anthropic·Google 전송 사실을 적는다',
+      (bad?.disclosure ?? '').includes('Anthropic') && (bad?.disclosure ?? '').includes('Google'))
+    check('🔴 외부 보존 여부 미확인이라고 적는다',
+      (bad?.disclosure ?? '').includes('외부 보존 여부 미확인'))
+    check('🔴 "저장되지 않았다" 고 쓰지 않는다',
+      !(bad?.disclosure ?? '').includes('저장되지 않') && !(bad?.detail ?? '').includes('저장되지 않'))
+    const u = judgeRunUsable({ runId: '20260910-153254' })
+    check('🔴 근거로 쓸 수 없다고 판정한다', !u.usable && u.code === 'REFERENCE_IDENTITY_DISCLOSURE')
+    /** 🔴 manifest 를 아무리 잘 갖춰도 무효는 무효다 */
+    const withManifest = judgeRunUsable({
+      runId: '20260910-153254',
+      manifest: {
+        sanitizerVersion: SANITIZER_VERSION, sourceDigest: '0123456789abcdef', sanitizedCorpusDigest: 'fedcba9876543210',
+        commentCount: 10, personaBundleDigest: 'aabbccddeeff0011',
+        identityLeakCheck: { ran: true, hits: 0, detail: '검사 완료' },
+      },
     })
-    check('🔴 본문 길이 항목이 섞이면 묶음을 거부한다',
-      !withBody.ok && withBody.blocks.some((b) => b.code === 'REFERENCE_LOOKS_LIKE_POST_BODY'))
+    check('🔴 manifest 가 완벽해도 무효는 풀리지 않는다', !withManifest.usable)
+    check('🟢 다른 회차는 무효 목록에 없다', findInvalidation('20260101-000000') === null)
   }
 
-  if (assetOk) {
-    check(`🟢 Persona ${codes.length}종 전부 근거를 얻는다`, ref.byCode.size === codes.length)
-    const bundles = [...ref.byCode.values()]
-
-    /** 🔴 Persona 마다 근거가 **실제로 다르다** — 어미 차이가 아니라 자산이 다르다 */
-    check('🔴 묶음이 서로 한 건도 겹치지 않는다', bundlesAreDistinct(bundles).distinct)
-
-    /** 🔴 길이 분포가 살아 있다 — 짧은 것만 모이면 "무조건 짧게" 가 되살아난다 */
-    for (const b of bundles) {
-      check(`🔴 ${b.personaCode} 묶음이 길이 분포를 갖는다 (중앙 ${b.lengths.median} < p90 ${b.lengths.p90})`,
-        b.lengths.p90 > b.lengths.median)
+  // ── P0-2 🔴 manifest 가 없거나 어긋나면 승격 금지 ──
+  {
+    const full = {
+      sanitizerVersion: SANITIZER_VERSION, sourceDigest: '0123456789abcdef', sanitizedCorpusDigest: 'fedcba9876543210',
+      commentCount: 881, personaBundleDigest: 'aabbccddeeff0011',
+      identityLeakCheck: { ran: true, hits: 0, detail: 'ok' },
     }
+    check('🟢 다 갖추면 통과한다', judgeReferenceManifest({ manifest: full }).ok)
+    check('🔴 manifest 자체가 없으면 막는다',
+      judgeReferenceManifest({ manifest: undefined }).ok === false)
+    for (const k of ['sanitizerVersion', 'sourceDigest', 'sanitizedCorpusDigest',
+      'commentCount', 'personaBundleDigest', 'identityLeakCheck'] as const) {
+      const partial = { ...full } as Record<string, unknown>
+      delete partial[k]
+      const v = judgeReferenceManifest({ manifest: partial })
+      check(`🔴 ${k} 가 빠지면 막는다`, !v.ok)
+    }
+    /** 🔴 "안 돌렸다" 를 "깨끗하다" 로 세지 않는다 */
+    check('🔴 유출 검사를 안 돌렸으면 막는다',
+      !judgeReferenceManifest({
+        manifest: { ...full, identityLeakCheck: { ran: false, hits: 0, detail: '' } },
+      }).ok)
+    check('🔴 유출이 있으면 막는다',
+      !judgeReferenceManifest({
+        manifest: { ...full, identityLeakCheck: { ran: true, hits: 3, detail: '' } },
+      }).ok)
+    check('🔴 sanitizer 판이 다르면 막는다',
+      !judgeReferenceManifest({ manifest: { ...full, sanitizerVersion: 'v1' } }).ok)
+    check('🔴 코퍼스 digest 가 다르면 막는다',
+      !judgeReferenceManifest({ manifest: full, expected: { sanitizedCorpusDigest: '9999999999999999' } }).ok)
+    check('🔴 묶음 digest 가 다르면 막는다',
+      !judgeReferenceManifest({ manifest: full, expected: { personaBundleDigest: '9999999999999999' } }).ok)
 
-    /** 🔴 본문·닉네임이 섞이지 않는다 */
-    const allTexts = bundles.flatMap((b) => b.comments.map((c) => c.text))
-    check('🔴 본문 길이 항목이 없다', allTexts.every((t) => !looksLikePostBody(t)))
-    check('🔴 반환 항목에 작성자 자리가 없다',
-      bundles.every((b) => b.comments.every((c) => Object.keys(c).join() === 'text')))
+    /**
+     * 🔴 **값까지 본다** (2026-09-10, P0-3).
+     *    앞선 판은 `typeof === 'string'` 만 봤다 — `''` 도 `'corp'` 도 통과했다.
+     *    "있다" 와 "맞다" 는 다르다.
+     */
+    for (const badDigest of ['', 'corp', 'ZZZZZZZZZZZZZZZZ', '0123456789abcde', '0123456789ABCDEF']) {
+      check(`🔴 digest "${badDigest}" 를 거부한다`,
+        !judgeReferenceManifest({ manifest: { ...full, sanitizedCorpusDigest: badDigest } }).ok)
+    }
+    for (const badCount of [0, -1, 1.5, Number.NaN, '12']) {
+      check(`🔴 commentCount ${String(badCount)} 를 거부한다`,
+        !judgeReferenceManifest({ manifest: { ...full, commentCount: badCount } }).ok)
+    }
+    for (const badHits of [-1, 1.5, Number.NaN, '0']) {
+      check(`🔴 hits ${String(badHits)} 를 거부한다`,
+        !judgeReferenceManifest({
+          manifest: { ...full, identityLeakCheck: { ran: true, hits: badHits, detail: 'x' } },
+        }).ok)
+    }
+    for (const badDetail of ['', '   ', 42]) {
+      check(`🔴 detail "${String(badDetail)}" 를 거부한다`,
+        !judgeReferenceManifest({
+          manifest: { ...full, identityLeakCheck: { ran: true, hits: 0, detail: badDetail } },
+        }).ok)
+    }
+    check('🔴 ran 이 truthy 문자열이어도 거부한다',
+      !judgeReferenceManifest({
+        manifest: { ...full, identityLeakCheck: { ran: 'yes', hits: 0, detail: 'x' } },
+      }).ok)
+  }
 
+  // ── P0-3 🔴 `{ content }` 만 받는다 ──
+  {
+    const mixed = loadCommentsFrom([
+      '닉네임같은것',
+      { content: '이건 진짜 댓글이에요 오늘 좀 힘드네요' },
+      { body: '본문 자리에 있는 것은 받지 않는다 아무리 길어도' },
+      { text: '텍스트 자리에 있는 것도 받지 않는다 아무리 길어도' },
+      { content: '저도 그맘때 그랬어요 지나가더라고요' },
+    ])
+    check(`🔴 content 자리만 받는다 (얻은 값 ${mixed.length})`, mixed.length === 2)
+    check('🔴 맨 문자열은 받지 않는다', !mixed.includes('닉네임같은것'))
+    check('🔴 body fallback 이 없다', !mixed.some((t) => t.includes('본문 자리')))
+    check('🔴 text fallback 이 없다', !mixed.some((t) => t.includes('텍스트 자리')))
+  }
+
+  // ── P0-4 🔴 anchor 작성자 묶기 · 겹침은 증거가 아니다 ──
+  {
+    const rows = [
+      // 🔴 speakerId 는 12자 hex — 실제 닉네임을 fixture 에 옮기지 않는다
+      ...Array.from({ length: 6 }, (_, i) => ({ speakerId: 'aaaaaaaaaaaa', text: `가나다라마바사 아자차카 ${i} 질문이에요?` })),
+      ...Array.from({ length: 6 }, (_, i) => ({ speakerId: 'bbbbbbbbbbbb', text: `짧게 말해요 ${i}` })),
+      ...Array.from({ length: 20 }, (_, i) => ({ speakerId: `cccccccccc${String(i).padStart(2, '0')}`, text: `보완용 문장 ${i} 입니다 그렇군요` })),
+    ]
+    const plan = planBundles({ rows, personaCodes: ['P1', 'P2'], target: 8 })
+    check('🟢 anchor 작성자로 묶음이 선다', plan.bundles.length === 2)
+    check(`🔴 anchor 건수를 기록한다`, plan.table.every((t) => t.anchorComments >= ANCHOR_MIN_COMMENTS))
+    check(`🔴 anchor 비중이 기준 이상이다 (${ANCHOR_MIN_RATIO})`,
+      plan.table.every((t) => t.anchorRatio >= ANCHOR_MIN_RATIO))
+
+    /** 🔴 anchor 가 모자라면 **억지로 만들지 않는다** */
+    const thin = planBundles({
+      rows: [{ speakerId: 'dddddddddddd', text: '하나뿐이라 anchor 가 되지 못한다' }],
+      personaCodes: ['P1', 'P2', 'P3'],
+    })
+    check('🔴 anchor 가 모자라면 묶음을 만들지 않는다', thin.bundles.length === 0)
+    check('  blocker 로 낸다', thin.blocks.length > 0)
+
+    /** 🔴 겹침은 위생일 뿐 — 문구가 "말투가 다르다" 로 읽히지 않아야 한다 */
+    const hy = bundlesAreDistinct(plan.bundles)
+    check('🔴 겹침 검사 문구가 말투 증거라고 말하지 않는다',
+      hy.detail.includes('위생 검사일 뿐') || hy.detail.includes('나눠 썼다'))
+
+    /** 🔴 말투 차이의 근거는 문체 거리다 */
+    const sep = judgeVoiceSeparation(plan.bundles)
+    check('🟢 문체 거리로 말투 분리를 낸다', sep.minDistance > 0 && sep.closestPair !== '')
+    check('🔴 같은 문장만 모인 두 묶음은 거리가 0 이다',
+      styleDistance(styleOf('같아요'), styleOf('같아요')) === 0)
+
+    /** 🔴 작성자 식별자는 묶음에 담기지 않는다 */
+    check('🔴 묶음 항목의 키는 text 뿐이다',
+      plan.bundles.every((b) => b.comments.every((c) => Object.keys(c).join() === 'text')))
+    const asJson = JSON.stringify(plan.bundles)
+    check('🔴 묶음 JSON 에 speakerId 가 없다',
+      !asJson.includes('aaaaaaaaaaaa') && !asJson.includes('bbbbbbbbbbbb'))
+
+    /** 🔴 유출 검사 */
+    /** 🔴 실제 닉네임을 fixture 에 옮기지 않는다 — 지어낸 값으로 검사한다 */
+    const FAKE_SPEAKER = '시험용식별자ZZ'
+    check('🟢 유출 없으면 hits 0',
+      identityLeakCheck({ texts: ['평범한 댓글이에요'], authors: [FAKE_SPEAKER] }).hits === 0)
+    check('🔴 근거가 식별자와 같으면 잡는다',
+      identityLeakCheck({ texts: [FAKE_SPEAKER], authors: [FAKE_SPEAKER] }).hits === 1)
+
+    /**
+     * 🔴 manifest 를 만든다.
+     *
+     * 🔴 `identityLeakCheck` 는 **자산 생성 시점 증거를 이어받는다**(P0-4).
+     *    그래서 자산이 없는 환경(CI)에서는 `ran:false` 가 되고 manifest 는 **거부돼야 한다** —
+     *    이어받을 증거가 없는데 "검사했다" 고 적는 것이 바로 고친 문제이기 때문이다.
+     *    두 환경에서 **각각 옳은 것**을 잰다.
+     */
+    const man = buildReferenceManifest({ sourceDigest: '0123456789abcdef', rows, bundles: plan.bundles })
+    const manOk = judgeReferenceManifest({ manifest: man }).ok
+    if (man.identityLeakCheck.ran) {
+      check('🟢 자산 증거를 이어받으면 manifest 가 계약을 지킨다', manOk)
+      check('  🔴 이어받았다고 밝힌다', man.identityLeakCheck.detail.includes('이어받음'))
+    } else {
+      check('🔴 이어받을 증거가 없으면 ran:false 다', man.identityLeakCheck.ran === false)
+      check('🔴 그러면 manifest 도 거부된다 — 검사한 척하지 않는다', !manOk)
+    }
+    check('🔴 manifest 에 speakerId 가 들어가지 않는다',
+      !JSON.stringify(man).includes('aaaaaaaaaaaa'))
+  }
+
+  // ── P0-5 🔴 근거 없는 experience 를 배정하지 않는다 ──
+  {
+    check('🔴 memory 도 생활 근거도 없으면 experience 를 막는다',
+      !judgeExperienceEligibility({ reactionRole: 'experience', hasMemory: false, hasLifeGround: false }).allowed)
+    check('🟢 memory 가 있으면 허용한다',
+      judgeExperienceEligibility({ reactionRole: 'experience', hasMemory: true, hasLifeGround: false }).allowed)
+    check('🟢 생활 근거가 있으면 허용한다',
+      judgeExperienceEligibility({ reactionRole: 'experience', hasMemory: false, hasLifeGround: true }).allowed)
+    check('🟢 다른 역할은 경험을 요구하지 않는다',
+      judgeExperienceEligibility({ reactionRole: 'empathy', hasMemory: false, hasLifeGround: false }).allowed)
+
+    /**
+     * 🔴 **회차 20260910-153254 의 실제 사례를 못으로 박는다.**
+     *    그 Persona 의 identity 는 `{ job, note }` 뿐인데 experience 를 맡아
+     *    *"저도 저번에 진짜 오랜만에 친구 봤는데 … 목 쉴 때까지 한참 떠들다 헤어졌어요"*
+     *    같은 없는 기억을 만들었다.
+     */
     const built = buildCommentInput({
       persona: {
-        code: 'S01', ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
-        identity: { job: '합성', note: '시험' },
-        voiceCore: { ending: '~해요', register: '존댓말', emoji: '없음', length: '중간 길이' },
+        code: 'S09', ageBand: '60대', region: '경기', lifeStage: '독립 준비',
+        identity: { job: '합성-8', note: '비교용 합성 설정 — 실제 인물이 아니다' },
+        voiceCore: { ending: '~어요', register: '구어체', emoji: '없음', length: '중간 길이' },
         voiceVariations: ['질문형'], noGoTopics: ['정치'], noGoExpressions: ['~하시길'],
         forbiddenReactionRoles: [],
       },
       post: {
-        id: 'ref-1', title: '무릎이 시큰해요', bodyDigest: '계단 오를 때 아프다는 이야기',
+        id: 'p', title: '오랜만에 친구를 만났어요',
+        bodyDigest: '고등학교 친구를 몇 년 만에 만났다는 이야기',
+        boardLabel: '수다방', existingCommentDigests: [],
+      },
+      reactionRole: 'experience',
+      voice: voiceEvidenceFromAssets({
+        voiceCore: { ending: '~어요', register: '구어체', emoji: '없음', length: '중간 길이' },
+        voiceVariations: ['질문형'],
+      }),
+      memory: { has: false, note: '' },
+    })
+    check('🔴 근거 없는 experience 입력은 만들어지지 않는다', !built.ok)
+    check('  EXPERIENCE_WITHOUT_GROUND 로 막는다',
+      !built.ok && built.blocks.some((b) => b.code === 'EXPERIENCE_WITHOUT_GROUND'))
+  }
+
+  // ── A 🔴 역할 체계가 실제 댓글 분포를 따른다 ──
+  {
+    /**
+     * 🔴 실측: 실제 공개 댓글 879건에서 other 81.3% · question 11.5% · empathy 5.3%.
+     *    옛 목록(empathy·question·experience)은 합쳐서 17.5% 뿐이었다 —
+     *    매 댓글을 셋 중 하나로 억지로 만들고 있었다.
+     */
+    check('🟢 other 가 planner 정본 역할이다', COMMENT_REACTION_ROLES.includes('other'))
+    const rows = [
+      ...Array.from({ length: 80 }, (_, i) => ({ speakerId: 'aaaaaaaaaaaa', text: `그냥 한마디 ${i} 입니다` })),
+      ...Array.from({ length: 15 }, (_, i) => ({ speakerId: 'bbbbbbbbbbbb', text: `이건 어떠세요 ${i}?` })),
+      ...Array.from({ length: 5 }, (_, i) => ({ speakerId: 'cccccccccccc', text: `맞아요 정말 ${i}` })),
+    ]
+    const plan = allocateRolesByCorpus({
+      rows, roles: ['other', 'empathy', 'question'], count: 9,
+    })
+    check(`🔴 배정이 코퍼스 비율을 따른다 (${plan.distribution.map((d) => `${d.role} ${d.assigned}`).join(' · ')})`,
+      (plan.distribution.find((d) => d.role === 'other')?.assigned ?? 0) >= 6)
+    check('🔴 인위적 균등 분배가 아니다',
+      new Set(plan.distribution.map((d) => d.assigned)).size > 1)
+    check('🟢 배정 총합이 요청 수와 같다', plan.roles.length === 9)
+    /** 🔴 다시 돌려도 같은 배정 — 무작위를 쓰지 않는다 */
+    const again = allocateRolesByCorpus({ rows, roles: ['other', 'empathy', 'question'], count: 9 })
+    check('🔴 재현된다', JSON.stringify(again.roles) === JSON.stringify(plan.roles))
+  }
+
+  // ── B 🔴 경험형 참고 댓글은 근거 없는 Persona 에게 주지 않는다 ──
+  {
+    /** 🔴 새 문구 목록이 아니라 **기존 분류기 둘**을 쓴다 */
+    check('🔴 자기 경험이 든 참고 댓글을 가려낸다',
+      carriesExperience('저도 작년에 그거 겪었어요'))
+    check('🟢 맞장구는 경험형이 아니다', !carriesExperience('그러게요 정말요'))
+    check('🟢 질문은 경험형이 아니다', !carriesExperience('요즘은 좀 어떠세요?'))
+
+    const rows = [
+      ...Array.from({ length: 6 }, (_, i) => ({ speakerId: 'aaaaaaaaaaaa', text: `그렇군요 정말 그러네요 ${i}` })),
+      ...Array.from({ length: 6 }, (_, i) => ({ speakerId: 'aaaaaaaaaaaa', text: `저도 작년에 그거 겪었어요 ${i}` })),
+      ...Array.from({ length: 20 }, (_, i) => ({ speakerId: `cccccccccc${String(i).padStart(2, '0')}`, text: `보완 문장 ${i} 그렇군요` })),
+    ]
+    const safe = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: false })
+    const safeTexts = safe.bundles.flatMap((b) => b.comments.map((c) => c.text))
+    check(`🔴 경험 근거 없으면 경험형 0건 (${safeTexts.filter(carriesExperience).length}건)`,
+      safeTexts.length > 0 && safeTexts.every((t) => !carriesExperience(t)))
+    check('🔴 제외했다고 소리 내어 말한다', safe.blocks.some((b) => b.includes('경험형 참고 댓글')))
+    const rich = planBundles({ rows, personaCodes: ['P1'], target: 8, allowExperience: true })
+    check('🟢 근거가 있으면 경험형도 받을 수 있다',
+      rich.bundles.flatMap((b) => b.comments.map((c) => c.text)).some(carriesExperience))
+  }
+
+  // ── P0-1 🔴 역할과 무관하게 근거 없는 자기 경험을 막는다 ──
+  {
+    /**
+     * 🔴 **실제로 통과했던 문장을 못으로 박는다** (회차 `20260910-165632`).
+     *    아래는 전부 `empathy` · `question` 역할이었고 `gateStatus=pass` 였다 —
+     *    역할 검사만으로는 잡히지 않는다는 증거다.
+     *    (모델이 만든 문장이다. 실제 사람이 쓴 글이 아니다)
+     */
+    const FABRICATED: readonly [string, string][] = [
+      ['통증', '저도 계단이 참 힘들어요'],
+      ['통증', '저도 그래요 ㅠ 계단이 진짜 힘들더라고요.'],
+      ['구어 변이', '저두 요즘 그래요 ㅠ 내려갈 때가 특히 그렇고 난간 꼭 잡아야 해요.'],
+      ['가족 상황', '우리 집도 요즘 자꾸 양을 줄이게 되던데, 그래도 손이 많이 가네요.'],
+      ['과거 행동', '저도 한두 개 사 놓고 보니까 어느새 자리가 다 찼더라고요.'],
+      ['방문 경험', '저도요 조용히 시간 보내기엔 참 좋더라고요.'],
+      ['감정 지속', '저도 그런 날은 괜히 하루 종일 마음이 몽글몽글해지더라고요'],
+    ]
+    for (const [kind, text] of FABRICATED) {
+      check(`🔴 [${kind}] 근거 없으면 막는다 — "${text.slice(0, 18)}…"`,
+        !judgeExperienceGrounding({ text, grounding: '' }).ok)
+    }
+    /** 🔴 **맞장구는 막지 않는다** — 막으면 사람이 가장 많이 쓰는 반응이 사라진다 */
+    for (const ok of ['저도요', '저두요 ㅠㅠ', '그러게요', '맞아요', '저도 그래요']) {
+      check(`🟢 맞장구는 통과 — "${ok}"`, judgeExperienceGrounding({ text: ok, grounding: '' }).ok)
+    }
+    /**
+     * 🔴 **지시사 `저` 를 1인칭으로 읽지 않는다** (2026-09-10, 실측 오탐).
+     *    `저 아이` · `저 길` 의 `저` 는 "나" 가 아니라 "저기 그" 다.
+     */
+    for (const ok of [
+      '이제 저 아이가 저 길을 가는구나 하는 생각도 들고',
+      '저 위쪽 길로 돌아가면 좀 낫더라고요',
+    ]) {
+      check(`🟢 지시사 "저" 는 1인칭이 아니다 — "${ok.slice(0, 16)}…"`,
+        judgeExperienceGrounding({ text: ok, grounding: '' }).ok)
+    }
+
+    /** 🟢 원글에 반응하거나 묻는 것도 막지 않는다 */
+    for (const ok of [
+      '공사 언제까지 한대요? 매일 다니던 길이 막히면 진짜 난감한데',
+      '헤어질 때 다음 약속도 잡으셨어요?^^ 조만간 또 만나시는 건지 궁금해요.',
+      '그 길이 없어지니까 얼마나 답답하셨을 거예요.',
+    ]) {
+      check(`🟢 원글 반응·질문은 통과 — "${ok.slice(0, 16)}…"`,
+        judgeExperienceGrounding({ text: ok, grounding: '' }).ok)
+    }
+    /** 🔴 근거가 있으면 같은 문장이 통과한다 — 계약이 대칭이다 */
+    check('🟢 근거가 있으면 같은 문장이 통과한다',
+      judgeExperienceGrounding({
+        text: '저도 계단이 참 힘들어요',
+        grounding: '작년부터 무릎 연골이 닳아 계단이 힘들어졌다',
+      }).ok)
+    /** 🔴 종류가 분류에 없어도 근거를 요구한다 — 구멍을 두지 않는다 */
+    check('🔴 분류에 없는 갈래(OTHER)도 근거를 요구한다',
+      !judgeExperienceGrounding({ text: '저도 그 책 읽었어요', grounding: '' }).ok)
+  }
+
+  // ── P0-5 🔴 근거 없는 Persona 는 공개 후보를 만들지 못한다 ──
+  {
+    /**
+     * 🔴 **차단은 문서의 약속이 아니라 코드의 동작이다.**
+     *    reference 가 없는 Persona 로 프롬프트를 만들려 하면 막혀야 한다 —
+     *    "24명 준비 완료" 라고 쓰고 15명이 조용히 공통 프롬프트로 나가는 길을 막는다.
+     */
+    const built = buildCommentInput({
+      persona: {
+        code: 'S24', ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
+        identity: { job: '합성', note: '시험' },
+        voiceCore: { ending: '~해요', register: '존댓말', emoji: '없음', length: '중간 길이' },
+        voiceVariations: ['질문형'], noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
+      },
+      post: {
+        id: 'p', title: '무릎이 아파요', bodyDigest: '계단에서 시큰하다',
         boardLabel: '수다방', existingCommentDigests: [],
       },
       reactionRole: 'empathy',
@@ -661,30 +939,102 @@ console.log('⑤-b 🔴 Wave E — 말투 근거(reference) 계약')
       }),
       memory: { has: false, note: '' },
     })
-    check('🟢 시험 입력이 성립한다', built.ok)
+    check('🟢 입력 자체는 만들어진다', built.ok)
     if (built.ok) {
-      const bundle = ref.byCode.get('S01')!
-      const p = buildPromptFromInput(built.input, [], bundle)
-      check('🟢 근거를 주면 프롬프트가 만들어진다', p.ok)
-      const sys = p.ok ? p.prompt.systemPrompt : ''
-      /** 🔴 선언이 아니라 문자열로 확인한다 */
-      check('🔴 근거 댓글이 실제로 프롬프트 안에 있다',
-        bundle.comments.every((c) => sys.includes(c.text)))
-      check('🔴 근거가 금지 목록보다 앞에 온다',
-        sys.indexOf('말투는 아래 실제 댓글에서') < sys.indexOf('## 절대 하지 않는 것'))
-
-      /** 🔴 **근거 없이는 부르지 않는다** — 옛 경로(설정만 보고 창작)로 돌아가지 못한다 */
       const blocked = buildPromptFromInput(built.input, [], undefined)
-      check('🔴 근거가 없으면 프롬프트를 만들지 않는다', !blocked.ok)
+      check('🔴 근거 없는 Persona 는 프롬프트를 만들지 못한다', !blocked.ok)
       check('  REFERENCE_MISSING 으로 막는다',
         !blocked.ok && blocked.blocks.some((b) => b.code === 'REFERENCE_MISSING'))
-
-      /** 🔴 통째로 베낀 것을 잡는다 — Gate ① 은 원글 대조라 이 자리를 보지 않는다 */
-      const longest = bundle.comments.slice().sort((a, b) => b.text.length - a.text.length)[0]!
-      const copied = findReferenceCopy(longest.text, bundle)
-      check(`🔴 근거를 통째로 옮기면 잡는다 (연속 ${copied.runLength}자)`, copied.copied)
-      check('🟢 제 말로 쓴 것은 잡지 않는다', !findReferenceCopy('오늘은 좀 낫네요 그쵸', bundle).copied)
     }
+    /** 🔴 기준을 낮춰 채우지 않는다 — 상수가 그대로인지 본다 */
+    check(`🔴 anchor 비중 기준이 ${ANCHOR_MIN_RATIO} 그대로다`, ANCHOR_MIN_RATIO === 0.375)
+    check(`🔴 anchor 최소 건수가 ${ANCHOR_MIN_COMMENTS} 그대로다`, ANCHOR_MIN_COMMENTS === 3)
+  }
+
+  // ── P1 🔴 정본 자산 계약 (데이터 없이 스키마·digest 만) ──
+  {
+    check('🔴 정본은 worktree 밖 절대 경로다', judgeAssetLocation(REFERENCE_CORPUS_FILE).ok)
+    check('🔴 상대 경로는 막는다', !judgeAssetLocation('tmp/corpus.json').ok)
+    check('🔴 worktree 안 경로는 막는다',
+      !judgeAssetLocation('/Users/x/Documents/soransoran-m0/tmp/corpus.json').ok)
+    check('🔴 600 보다 느슨하면 잡는다', assetTooOpen(0o644) && !assetTooOpen(0o600))
+
+    const good = {
+      version: ASSET_VERSION, generatedAt: '2026-09-10',
+      comments: [{ speakerId: '0123456789ab', content: '댓글이에요' }],
+    }
+    check('🟢 모양이 맞으면 통과', judgeAssetShape(good).ok)
+    check('🔴 판이 다르면 막는다', !judgeAssetShape({ ...good, version: 99 }).ok)
+    check('🔴 비어 있으면 막는다', !judgeAssetShape({ ...good, comments: [] }).ok)
+    check('🔴 맨 문자열 항목은 막는다', !judgeAssetShape({ ...good, comments: ['댓글'] }).ok)
+    check('🔴 content 가 없으면 막는다',
+      !judgeAssetShape({ ...good, comments: [{ speakerId: '0123456789ab' }] }).ok)
+    /** 🔴 실제 닉네임이 speakerId 자리에 오면 모양에서 걸린다 */
+    check('🔴 speakerId 가 hex 가 아니면 막는다',
+      !judgeAssetShape({ ...good, comments: [{ speakerId: '실제닉네임', content: '댓글' }] }).ok)
+    check('🔴 speakerId 길이가 다르면 막는다',
+      !judgeAssetShape({ ...good, comments: [{ speakerId: 'abc', content: '댓글' }] }).ok)
+
+    /** 🔴 runtime 부재·불일치는 fail-closed */
+    check('🔴 자산이 없으면 막는다', !judgeAssetReadiness({
+      corpusExists: false, manifestExists: true, actualDigest: 'a', expectedDigest: 'a', mode: 0o600,
+    }).ok)
+    check('🔴 manifest 가 없으면 막는다', !judgeAssetReadiness({
+      corpusExists: true, manifestExists: false, actualDigest: 'a', expectedDigest: null, mode: 0o600,
+    }).ok)
+    check('🔴 digest 가 다르면 막는다', !judgeAssetReadiness({
+      corpusExists: true, manifestExists: true, actualDigest: 'a', expectedDigest: 'b', mode: 0o600,
+    }).ok)
+    check('🔴 digest 를 못 재면 막는다', !judgeAssetReadiness({
+      corpusExists: true, manifestExists: true, actualDigest: null, expectedDigest: 'b', mode: 0o600,
+    }).ok)
+    check('🔴 권한이 느슨하면 막는다', !judgeAssetReadiness({
+      corpusExists: true, manifestExists: true, actualDigest: 'a', expectedDigest: 'a', mode: 0o644,
+    }).ok)
+    check('🟢 다 맞으면 통과', judgeAssetReadiness({
+      corpusExists: true, manifestExists: true, actualDigest: 'a', expectedDigest: 'a', mode: 0o600,
+    }).ok)
+    /** 🔴 저장소에 파생 댓글 원문을 커밋하지 않는다 */
+    check('🔴 정본 경로가 저장소 밖이다', !REFERENCE_CORPUS_FILE.includes('/soransoran-m0/'))
+  }
+
+  // ── 실물 자산이 있으면 실제로 검증한다 ──
+  const ref = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: ['S01', 'S02', 'S03'] })
+  const assetOk = ref.byCode.size > 0
+  console.log(assetOk
+    ? `   🟢 말투 근거 자산 있음 (${ref.origin}) — 실물로 검증한다`
+    : `   🟡 말투 근거 자산 없음 — 실물 검증은 로컬에서만 · 여기서는 계약만 본다`)
+  if (!assetOk) {
+    check('🔴 자산이 없으면 blocker 를 낸다', ref.blocks.length > 0)
+  } else {
+    const bundles = [...ref.byCode.values()]
+    check('🔴 실물 묶음에 본문 길이 항목이 없다',
+      bundles.every((b) => b.comments.every((c) => !looksLikePostBody(c.text))))
+    check('🔴 실물 묶음 항목의 키는 text 뿐이다',
+      bundles.every((b) => b.comments.every((c) => Object.keys(c).join() === 'text')))
+    const man = buildReferenceManifest({
+      sourceDigest: ref.sourceDigest ?? '(미상)', rows: ref.rows, bundles,
+    })
+    check('🔴 실물 manifest 의 유출 검사가 0 이다', man.identityLeakCheck.hits === 0)
+    check('🟢 실물 manifest 가 계약을 지킨다', judgeReferenceManifest({ manifest: man }).ok)
+    const longest = bundles[0]!.comments.slice().sort((a, b) => b.text.length - a.text.length)[0]!
+    /**
+     * 🔴 **길이로 막지 않는다** (2026-09-10, P0-2 창업자 결정).
+     *    표현을 가깝게 쓰는 것은 허용된다. 막을 것은 **맥락이 어긋난 사실 복사**다.
+     */
+    const mm = findContextMismatch({
+      candidate: '김장을 혼자 담그려니 손이 많이 가더라고요',
+      referenceTexts: ['김장을 혼자 담그려니 손이 많이 가더라고요'],
+      postContext: '동네 도서관이 좋아요 집 근처 도서관에서 시간을 보낸다',
+    })
+    check('🔴 지금 글에 없는 소재가 딸려 오면 드러난다', mm.mismatched.length > 0)
+    const okCtx = findContextMismatch({
+      candidate: '도서관 조용해서 좋더라고요',
+      referenceTexts: ['도서관 조용해서 좋더라고요'],
+      postContext: '동네 도서관이 좋아요 집 근처 도서관에서 조용히 시간을 보낸다',
+    })
+    check('🟢 같은 맥락이면 표현이 가까워도 드러나지 않는다',
+      okCtx.mismatched.filter((w) => w.startsWith('도서')).length === 0)
   }
 }
 
@@ -796,12 +1146,21 @@ console.log('⑧ 역할 어휘 통합 — planner 가 고른 것을 생성기가
     id: 'p1', title: '무릎이 아파요', bodyDigest: '계단에서 무릎이 시큰하다',
     boardLabel: '수다방', existingCommentDigests: ['비슷하다는 댓글 1건'],
   }
-  /** 🔴 planner 가 돌려줄 수 있는 **모든** 역할이 buildPrompt 를 통과해야 한다 */
+  /**
+   * 🔴 planner 가 돌려줄 수 있는 **모든** 역할이 buildPrompt 를 통과해야 한다.
+   *
+   * 🔴 다만 `experience` 는 **경험 근거가 있어야** 성립한다(2026-09-10, P0-5).
+   *    그래서 이 절에서는 memory 를 준다 — 근거 없는 experience 가 막히는 것은
+   *    ⑤-b 가 따로 본다. 여기서 memory 를 주지 않으면 "역할 어휘 통합" 검사가
+   *    사실은 **경험 게이트**를 재게 되어 무엇이 깨졌는지 알 수 없다.
+   */
   for (const role of COMMENT_REACTION_ROLES) {
     const built = buildCommentInput({
       persona, post, reactionRole: role,
       voice: voiceEvidenceFromAssets({ voiceCore: persona.voiceCore, voiceVariations: persona.voiceVariations }),
-      memory: { has: false, note: '' },
+      memory: role === 'experience'
+        ? { has: true, summary: '작년에 비슷한 일을 겪었다' }
+        : { has: false, note: '' },
     })
     check(`🟢 [${role}] 입력이 만들어진다`, built.ok)
     if (!built.ok) continue
@@ -2534,32 +2893,122 @@ console.log('㊲ runner 배선 · capability · provenance 검증')
   }
   check('🟢 전부 연결됐다', capabilitiesReady(COMMENT_CAPABILITIES).ok)
 
-  /** 🔴 정본이 artifact 를 실제로 읽고 대조한다 */
+  /**
+   * 🔴 정본이 artifact 를 실제로 읽고 대조한다.
+   * 🔴 **summary 에 manifest 가 있어야 한다** (2026-09-10, P0-2) —
+   *    읽기 경로가 manifest 를 직접 검증하므로 없으면 provisional 이 된다.
+   */
+  const OK_SUMMARY = JSON.stringify({
+    s: 1,
+    referenceManifest: {
+      sanitizerVersion: SANITIZER_VERSION,
+      sourceDigest: '0123456789abcdef', sanitizedCorpusDigest: 'fedcba9876543210',
+      commentCount: 12, personaBundleDigest: 'aabbccddeeff0011',
+      identityLeakCheck: { ran: true, hits: 0, detail: '검사 완료' },
+    },
+  })
   const good = buildCanonFromScoring({
-    runId: 'R1', summaryJson: 's', samplesJson: 'p', keyJson: 'k',
+    runId: 'R1', summaryJson: OK_SUMMARY, samplesJson: 'p', keyJson: 'k',
     winner: 'claude-haiku-4.5', decidedBy: 'founder', decidedAt: 'now', scoredSamples: 20,
   })
   const tmpDir = mkdtempSync(join(tmpdir(), 'soran-canon-'))
   const canonFile = join(tmpDir, 'canon.json')
   writeFileSync(canonFile, JSON.stringify(good), 'utf-8')
+  /** 🔴 읽기 경로가 자산 digest 를 **반드시** 대조하므로 시험에서도 준다 (P0-4) */
+  const OK_DIGESTS = { sanitizedCorpusDigest: 'fedcba9876543210' }
   const okRead = readConfirmedSelection({
     file: canonFile,
-    readArtifacts: () => ({ summaryJson: 's', samplesJson: 'p', keyJson: 'k' }),
+    readArtifacts: () => ({ summaryJson: OK_SUMMARY, samplesJson: 'p', keyJson: 'k' }),
+    expectedReferenceDigests: OK_DIGESTS,
   })
   check('🟢 artifact 가 그대로면 confirmed', okRead.selection?.status === 'confirmed')
+
+  /**
+   * 🔴 **P0-2 — 읽기 경로가 무효 회차를 직접 막는다.**
+   *
+   *    `promoteRun` 만 막는 것으로는 부족하다. 승격은 **한 번** 지나가는 문이고,
+   *    공용 경로에 파일을 **손으로 놓으면** 그 문을 거치지 않는다.
+   *    health · Queue · runner · 발행 트랜잭션이 전부 이 함수를 쓰므로
+   *    여기서 막아야 모두 같이 막힌다.
+   */
+  {
+    const forgedCanon = buildCanonFromScoring({
+      runId: '20260910-153254', summaryJson: OK_SUMMARY, samplesJson: 'p', keyJson: 'k',
+      winner: 'claude-haiku-4.5', decidedBy: 'founder', decidedAt: 'now', scoredSamples: 20,
+    })
+    const f = join(tmpDir, 'forged.json')
+    writeFileSync(f, JSON.stringify(forgedCanon), 'utf-8')
+    const r = readConfirmedSelection({
+      file: f, readArtifacts: () => ({ summaryJson: OK_SUMMARY, samplesJson: 'p', keyJson: 'k' }),
+      expectedReferenceDigests: OK_DIGESTS,
+    })
+    check('🔴 손으로 만든 무효 회차 canon 은 confirmed 가 되지 않는다',
+      r.selection?.status === 'provisional')
+    check('  winner 도 없다', r.selection?.winner === null)
+    check('  사유를 REFERENCE_IDENTITY_DISCLOSURE 로 말한다',
+      r.detail.includes('REFERENCE_IDENTITY_DISCLOSURE'))
+    check('  🔴 Queue 쓰기도 막힌다', !judgeModelGate({ selection: r.selection }).canWriteQueue)
+
+    /** 🔴 manifest 가 없으면 유효 회차라도 provisional 이다 */
+    const noManifest = readConfirmedSelection({
+      file: canonFile, readArtifacts: () => ({ summaryJson: '{"s":1}', samplesJson: 'p', keyJson: 'k' }),
+    })
+    check('🔴 manifest 가 없으면 confirmed 가 아니다', noManifest.selection?.status === 'provisional')
+
+    /** 🔴 손상된 summary 도 막힌다 */
+    const broken = readConfirmedSelection({
+      file: canonFile, readArtifacts: () => ({ summaryJson: '{{{', samplesJson: 'p', keyJson: 'k' }),
+    })
+    check('🔴 summary 가 손상되면 confirmed 가 아니다', broken.selection?.status === 'provisional')
+
+    /** 🔴 digest 가 지금 자산과 다르면 막힌다 */
+    const mismatch = readConfirmedSelection({
+      file: canonFile,
+      readArtifacts: () => ({ summaryJson: OK_SUMMARY, samplesJson: 'p', keyJson: 'k' }),
+      expectedReferenceDigests: { sanitizedCorpusDigest: '9999999999999999' },
+    })
+    check('🔴 자산 digest 가 어긋나면 confirmed 가 아니다',
+      mismatch.selection?.status === 'provisional')
+
+    /**
+     * 🔴 **자산 대조는 선택 사항이 아니다** (P0-4).
+     *    digest 를 주지 않으면 읽기 경로가 **스스로 정본 자산을 읽는다.**
+     *    지금 자산의 digest 는 시험용 manifest 와 다르므로 막혀야 한다 —
+     *    막히지 않으면 대조가 실제로 일어나지 않는다는 뜻이다.
+     */
+    const noInject = readConfirmedSelection({
+      file: canonFile, readArtifacts: () => ({ summaryJson: OK_SUMMARY, samplesJson: 'p', keyJson: 'k' }),
+    })
+    check('🔴 digest 를 주지 않아도 자산을 직접 읽어 대조한다',
+      noInject.selection?.status === 'provisional')
+    check('  사유가 자산 대조 실패다',
+      noInject.detail.includes('MANIFEST_DIGEST_MISMATCH')
+      || noInject.detail.includes('REFERENCE_ASSET_UNAVAILABLE'))
+    check('  🔴 Queue 쓰기도 막힌다', !judgeModelGate({ selection: noInject.selection }).canWriteQueue)
+
+    /** 🔴 health · Queue · runner 가 같은 읽기 경로를 쓴다 — 문자열로 확인한다 */
+    for (const f2 of ['scripts/persona-comment-health.mts', 'scripts/persona-comment-queue.mts',
+      'scripts/persona-comment-runner.mts', 'src/lib/persona-publish-tx.ts']) {
+      check(`🔴 ${f2} 가 readConfirmedSelection 을 쓴다`,
+        readFileSync(f2, 'utf-8').includes('readConfirmedSelection'))
+    }
+  }
   const changed = readConfirmedSelection({
     file: canonFile,
     readArtifacts: () => ({ summaryJson: 'CHANGED', samplesJson: 'p', keyJson: 'k' }),
+    expectedReferenceDigests: OK_DIGESTS,
   })
   check('🔴 artifact 가 바뀌면 confirmed 가 아니다', changed.selection?.status === 'provisional')
   check('🔴 그때 winner 도 없다', changed.selection?.winner === null)
-  const missing = readConfirmedSelection({ file: canonFile, readArtifacts: () => null })
+  const missing = readConfirmedSelection({
+    file: canonFile, readArtifacts: () => null, expectedReferenceDigests: OK_DIGESTS,
+  })
   check('🔴 artifact 를 못 읽으면 confirmed 가 아니다(fail-closed)',
     missing.selection?.status === 'provisional')
   /** 🔴 모양만 맞는 파일로 공개를 열지 못한다 */
   writeFileSync(canonFile, JSON.stringify({ ...good, winner: 'made-up' }), 'utf-8')
   const forged = readConfirmedSelection({
-    file: canonFile, readArtifacts: () => ({ summaryJson: 's', samplesJson: 'p', keyJson: 'k' }),
+    file: canonFile, readArtifacts: () => ({ summaryJson: OK_SUMMARY, samplesJson: 'p', keyJson: 'k' }),
   })
   check('🔴 모양은 맞지만 등록되지 않은 모델이면 게이트가 막는다',
     !judgeModelGate({ selection: forged.selection }).canWriteQueue)
@@ -2894,8 +3343,22 @@ console.log('㊵ 실행 모드 · 상한 · 배치 진행')
 console.log('㊶ 생성 근거 위조 · artifact 공용 경로')
 // ─────────────────────────────────────────────────────────
 {
+  /**
+   * 🔴 **summary 에 manifest 를 담는다** (2026-09-10, P0-2).
+   *    승격이 manifest 를 요구하므로, 정본 SHA 도 **manifest 를 담은 내용**으로 내야
+   *    승격된 파일과 정본이 같은 것을 가리킨다. 옛 값을 그대로 두면
+   *    "정본이 적어 둔 SHA" 와 실제 파일이 어긋난다.
+   */
+  const CANON_SUMMARY_JSON = JSON.stringify({
+    s: 1,
+    referenceManifest: {
+      sanitizerVersion: SANITIZER_VERSION, sourceDigest: '0123456789abcdef', sanitizedCorpusDigest: 'fedcba9876543210',
+      commentCount: 12, personaBundleDigest: 'aabbccddeeff0011',
+      identityLeakCheck: { ran: true, hits: 0, detail: 'ok' },
+    },
+  })
   const canon2 = buildCanonFromScoring({
-    runId: '20260909-101010', summaryJson: '{"s":1}', samplesJson: '{"m":2}', keyJson: '{"k":3}',
+    runId: '20260909-101010', summaryJson: CANON_SUMMARY_JSON, samplesJson: '{"m":2}', keyJson: '{"k":3}',
     winner: 'claude-haiku-4.5', decidedBy: 'founder',
     decidedAt: '2026-09-10T00:00:00Z', scoredSamples: 20,
   })
@@ -2923,15 +3386,32 @@ console.log('㊶ 생성 근거 위조 · artifact 공용 경로')
     const toRoot = join(tmpBase, 'shared')
     const runId = '20260909-101010'
     mkdirDeep(join(fromRoot, runId))
-    writeFileSync(join(fromRoot, runId, 'summary.json'), '{"s":1}', 'utf-8')
+    /**
+     * 🔴 **manifest 를 갖춘 summary 를 쓴다** (2026-09-10, P0-2).
+     *    manifest 가 없으면 승격 자체가 막힌다 — 이 절은 **불변성**을 재는 곳이므로
+     *    manifest 게이트를 통과한 뒤의 행동을 봐야 한다.
+     *    manifest 가 없을 때 막히는 것은 ⑤-b 가 따로 본다.
+     */
+    // 🔴 정본이 SHA 를 낸 것과 **같은 문자열**을 쓴다
+    writeFileSync(join(fromRoot, runId, 'summary.json'), CANON_SUMMARY_JSON, 'utf-8')
     writeFileSync(join(fromRoot, runId, 'samples.json'), '{"m":2}', 'utf-8')
     writeFileSync(join(fromRoot, runId, 'key.json'), '{"k":3}', 'utf-8')
+
+    /**
+     * 🔴 **지금 자산의 digest 를 주입한다** (2026-09-10, P0-3).
+     *    실제 승격은 정본 자산에서 digest 를 다시 내어 대조한다 —
+     *    이 절은 **불변성**을 재는 곳이므로 대조를 통과한 뒤의 행동을 본다.
+     *    대조 자체가 막는 것은 바로 아래에서 따로 본다.
+     */
+    const EXPECTED_DIGESTS = (): { sanitizedCorpusDigest: string; personaBundleDigest: string } => ({
+      sanitizedCorpusDigest: 'fedcba9876543210', personaBundleDigest: 'aabbccddeeff0011',
+    })
 
     const before = promotionStatus(runId, { fromRoot, toRoot })
     check('🔴 승격 전에는 공용 경로에 없다',
       before.inLocal !== null && before.inShared === null && !before.same)
 
-    const r1 = promoteRun({ runId, fromRoot, toRoot })
+    const r1 = promoteRun({ runId, fromRoot, toRoot, expectedDigests: EXPECTED_DIGESTS })
     check('🟢 승격하면 공용 경로에 들어간다', r1.ok && !r1.already)
     const after = promotionStatus(runId, { fromRoot, toRoot })
     check('🟢 두 곳이 같은 SHA 를 본다', after.same)
@@ -2940,12 +3420,26 @@ console.log('㊶ 생성 근거 위조 · artifact 공용 경로')
       && after.inShared?.['samples.json'] === canon2.artifactSha.samples
       && after.inShared?.['key.json'] === canon2.artifactSha.key)
 
-    const r2 = promoteRun({ runId, fromRoot, toRoot })
+    const r2 = promoteRun({ runId, fromRoot, toRoot, expectedDigests: EXPECTED_DIGESTS })
     check('🟢 같은 내용을 다시 승격하면 아무것도 바꾸지 않는다', r2.ok && r2.already)
+
+    /** 🔴 **지금 자산의 digest 를 구하지 못하면 승격하지 않는다** (fail-closed) */
+    const noAsset = promoteRun({ runId, fromRoot, toRoot, expectedDigests: () => null })
+    check('🔴 자산 digest 를 못 구하면 승격을 거부한다',
+      !noAsset.ok && noAsset.reason.includes('REFERENCE_ASSET_UNAVAILABLE'))
+    /** 🔴 digest 가 어긋나면 승격하지 않는다 */
+    const wrong = promoteRun({
+      runId, fromRoot, toRoot,
+      expectedDigests: () => ({
+        sanitizedCorpusDigest: '9999999999999999', personaBundleDigest: 'aabbccddeeff0011',
+      }),
+    })
+    check('🔴 자산 digest 가 어긋나면 승격을 거부한다',
+      !wrong.ok && wrong.reason.includes('MANIFEST_DIGEST_MISMATCH'))
 
     // 🔴 로컬을 고쳐 두고 다시 승격해도 덮어쓰지 않는다
     writeFileSync(join(fromRoot, runId, 'samples.json'), '{"m":999}', 'utf-8')
-    const r3 = promoteRun({ runId, fromRoot, toRoot })
+    const r3 = promoteRun({ runId, fromRoot, toRoot, expectedDigests: EXPECTED_DIGESTS })
     check('🔴 내용이 달라지면 승격을 거부한다 (불변)',
       !r3.ok && r3.reason.includes('덮어쓰지 않는다'))
     check('🔴 거부 뒤에도 공용 경로는 그대로다',
@@ -2963,7 +3457,11 @@ console.log('㊶ 생성 근거 위조 · artifact 공용 경로')
         }
       } catch { return null }
     }
-    const confirmed2 = readConfirmedSelection({ file: canonFile, readArtifacts: readShared })
+    const confirmed2 = readConfirmedSelection({
+      file: canonFile, readArtifacts: readShared,
+      // 🔴 읽기 경로가 자산 digest 를 반드시 대조한다 (P0-4)
+      expectedReferenceDigests: { sanitizedCorpusDigest: 'fedcba9876543210' },
+    })
     check('🟢 공용 경로의 artifact 로 확정이 성립한다',
       confirmed2.selection?.status === 'confirmed' && confirmed2.canon?.runId === runId)
     const missing2 = readConfirmedSelection({ file: canonFile, readArtifacts: () => null })
