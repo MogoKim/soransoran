@@ -29,6 +29,9 @@ import type { ModelSelection } from './persona-comment-release'
  *
  *    canon 과 같은 자리에 두어 두 worktree 가 **같은 SHA** 를 본다.
  */
+import { judgeRunUsable } from './persona-eval-invalidation'
+import { readAssetDigests } from './persona-reference-digest'
+
 export const ARTIFACT_ROOT = join(
   homedir(), 'Library', 'Application Support', 'soransoran', 'persona-comment-eval',
 )
@@ -72,6 +75,11 @@ export function readConfirmedSelection(input?: {
   file?: string
   /** 🔴 artifact 를 어디서 읽는가 — 시험용 주입 */
   readArtifacts?: (runId: string) => { summaryJson: string; samplesJson: string; keyJson: string } | null
+  /**
+   * 🔴 지금 정본 자산으로 다시 낸 digest. 주면 manifest 와 **대조**한다 —
+   *    회차가 저장된 뒤 자산이 바뀌었으면 그 회차의 근거는 더 이상 재현되지 않는다.
+   */
+  expectedReferenceDigests?: { sanitizedCorpusDigest: string; personaBundleDigest?: string }
 }): CanonRead {
   const file = input?.file ?? MODEL_CANON_FILE
   if (!existsSync(file)) {
@@ -128,6 +136,51 @@ export function readConfirmedSelection(input?: {
     const v = verifyCanonArtifacts(canon, actual)
     if (!v.ok) {
       return { selection: { status: 'provisional', winner: null }, canon: null, detail: v.reason }
+    }
+
+    /**
+     * 🔴 **무효 회차와 manifest 를 여기서 본다** (2026-09-10, P0-2).
+     *
+     *    `promoteRun` 만 막는 것으로는 부족하다. 승격은 **한 번** 지나가는 문이고,
+     *    공용 경로에 파일을 손으로 놓거나 옛 승격분이 남아 있으면 그 문을 거치지 않는다.
+     *    health · Queue · runner · 발행 트랜잭션이 전부 **이 함수**를 쓰므로,
+     *    **읽는 자리**에서 막아야 모든 소비자가 같이 막힌다.
+     *
+     * 🔴 무효 · manifest 없음 · 손상 · digest 불일치는 **항상 provisional · winner null** 이다.
+     */
+    let manifest: unknown
+    try {
+      manifest = (JSON.parse(actual.summaryJson) as { referenceManifest?: unknown }).referenceManifest
+    } catch { manifest = undefined }
+    /**
+     * 🔴 **자산 대조는 선택 사항이 아니다** (2026-09-10, P0-4).
+     *
+     *    앞선 판은 `expectedReferenceDigests` 를 주면 대조하고 안 주면 넘어갔다.
+     *    health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았으므로**
+     *    실제 운영 경로에서는 대조가 한 번도 일어나지 않았다.
+     *    이제 **여기서 직접 읽는다.** 못 읽으면 provisional 이다 —
+     *    "대조할 수 없었다" 를 "대조 통과" 로 세지 않는다.
+     */
+    const assetDigests = input?.expectedReferenceDigests ?? readAssetDigests()
+    if (assetDigests === null) {
+      return {
+        selection: { status: 'provisional', winner: null },
+        canon: null,
+        detail: '[REFERENCE_ASSET_UNAVAILABLE] 지금 정본 자산의 digest 를 읽지 못했다'
+          + ' — 대조 없이 확정으로 보지 않는다(fail-closed)',
+      }
+    }
+    const usable = judgeRunUsable({
+      runId: canon.runId,
+      manifest,
+      expected: { sanitizedCorpusDigest: assetDigests.sanitizedCorpusDigest },
+    })
+    if (!usable.usable) {
+      return {
+        selection: { status: 'provisional', winner: null },
+        canon: null,
+        detail: `[${usable.code}] ${usable.reason}`,
+      }
     }
 
     return {

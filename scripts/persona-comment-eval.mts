@@ -27,10 +27,16 @@ import {
   type ModelPrice,
 } from '../src/lib/persona-comment-cost'
 import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
+import { judgePostRichness, postBodyOf, SYNTHETIC_POSTS } from '../src/lib/persona-eval-posts'
 import {
   runEval, textFingerprint, type EvalCaller, type EvalJudge,
 } from './lib/persona-comment-eval-runner'
 import { buildPromptFromInput, describeGateInput, toGateInput } from './lib/persona-comment-bridge'
+import {
+  allocateRolesByCorpus, bundlesForPersonas, buildReferenceManifest, carriesExperience,
+  loadCanonAsset,
+} from './lib/persona-reference-store.mjs'
+import { judgeVoiceSeparation } from '../src/lib/persona-voice-reference'
 import { judgeGateInputs } from '../src/lib/persona-comment-gate-report'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import {
@@ -58,11 +64,26 @@ const WANT_CALL = process.argv.includes('--call')
  *    자동으로 다시 부르지 않는다 — 돈만 쓰고 같은 빈 응답을 받는다.
  */
 const CANDIDATES = ['claude-haiku-4.5', 'gemini-3.7-flash'] as const
-/** 🔴 모델당 입력 수. 셋 × 10 = 30 으로 상한과 같다 */
-const SAMPLES = 10
+/**
+ * 🔴 **모델당 입력 수 = 9** (2026-09-10, 창업자 판정 P0-5).
+ *
+ *    고품질 anchor 로 설 수 있는 Persona 는 **9종**이다.
+ *    10번째는 anchor 비중이 바닥(37.5%)에 겨우 걸치므로 이번 비교에서 쓰지 않는다.
+ *    🔴 production Persona 24명 중 나머지 15명은 근거가 없어
+ *       `REFERENCE_MISSING` 으로 공개 후보 생성이 막힌다 —
+ *       "24명 말투 준비 완료" 가 아니다.
+ */
+const SAMPLES = 9
 /** 🔴 dry-run 전용 경로. 유료 저장소와 **다른 곳**이다 */
 const DRYRUN_OUT = 'tmp/persona-comment-eval-dryrun.json'
 const TIMEOUT_MS = 60_000
+/**
+ * 🔴 **이번 회차 상한** (2026-09-10, 창업자 승인).
+ *    정본 상한(`EVAL_MAX_CALLS` 30 · `EVAL_MAX_USD` 3)보다 **좁다**.
+ *    좁은 쪽을 쓴다 — 넓은 쪽을 쓰면 승인 범위를 넘어도 코드가 막지 않는다.
+ */
+const RUN_MAX_CALLS = 18
+const RUN_MAX_USD = 0.10
 
 await loadEnvLocal()
 
@@ -90,17 +111,39 @@ const priceOf = (label: (typeof CANDIDATES)[number]): ModelPrice => {
 const ENDINGS = ['~해요', '~같아요', '~어요', '~네요', '~더라고요']
 const EMOJIS = ['가끔', '없음', '자주']
 const STAGES = ['자녀 대학생', '손주 있음', '독립 준비', '부모님 돌봄', '재취업 준비']
-const TOPICS = [
-  { title: '요즘 무릎이 시큰해요', digest: '계단 오를 때 무릎이 아프다는 이야기' },
-  { title: '김장을 혼자 하려니', digest: '올해는 식구가 줄어 김장 양을 줄였다는 이야기' },
-  { title: '동네 도서관이 좋아요', digest: '집 근처 도서관에서 시간을 보낸다는 이야기' },
-  { title: '오랜만에 친구를 만났어요', digest: '고등학교 친구를 몇 년 만에 만났다는 이야기' },
-  { title: '베란다 화분이 늘었어요', digest: '화분을 하나씩 늘리다 보니 베란다가 찼다는 이야기' },
-]
+/**
+ * 🔴 **한 줄 요약을 버렸다** (2026-09-10, P0-3).
+ *    `bodyDigest` 한 줄로는 반응할 거리가 없어 모델이 남는 자리를 자기 이야기로 채웠다.
+ *    이제 주제·상황·감정·물음이 담긴 여러 문장 합성 원글을 쓴다.
+ *    정본: `src/lib/persona-eval-posts.ts`
+ */
+
+/**
+ * 🔴 이 회차의 Persona 가 맡을 수 있는 역할.
+ *    `experience` 는 경험 근거가 있어야 한다 — 합성 설정에는 없다(P0-5).
+ * 🔴 다만 **다른 역할에서도** 근거 없는 자기 경험은 막힌다 —
+ *    판정은 역할이 아니라 `judgeExperienceGrounding` 이 한다(P0-1).
+ */
+/**
+ * 🔴 이 회차의 Persona 가 맡을 수 있는 역할.
+ *    `experience` 는 경험 근거가 있어야 한다 — 합성 설정에는 없다(P0-5).
+ * 🔴 다만 **다른 역할에서도** 근거 없는 자기 경험은 막힌다 —
+ *    판정은 역할이 아니라 `judgeExperienceGrounding` 이 한다.
+ */
+const ELIGIBLE_ROLES = COMMENT_REACTION_ROLES.filter((r) => r !== 'experience')
+
+/**
+ * 🔴 **역할 배정을 실제 코퍼스 분포에서 뽑는다** (2026-09-10, A).
+ *    자산을 먼저 읽어야 하므로 입력을 만들기 전에 정한다.
+ */
+const ROLE_CORPUS = loadCanonAsset()
+const ROLE_PLAN = allocateRolesByCorpus({
+  rows: ROLE_CORPUS.rows, roles: ELIGIBLE_ROLES, count: SAMPLES,
+})
 
 const inputs: CommentInput[] = []
 for (let i = 0; i < SAMPLES; i += 1) {
-  const topic = TOPICS[i % TOPICS.length]!
+  const post = SYNTHETIC_POSTS[i % SYNTHETIC_POSTS.length]!
   const voice = voiceEvidenceFromAssets({
     voiceCore: {
       ending: ENDINGS[i % ENDINGS.length]!,
@@ -108,7 +151,9 @@ for (let i = 0; i < SAMPLES; i += 1) {
       emoji: EMOJIS[i % EMOJIS.length]!,
       length: i % 3 === 0 ? '짧은 문장' : '중간 길이',
     },
-    voiceVariations: ['바쁠 때 한 줄', '질문형', '맞장구형', '자기 경험 짧게'],
+    // 🔴 `자기 경험 짧게` 를 지웠다 (2026-09-10, A) — 경험 근거가 없는 Persona 에게
+    //    말투 변주로 자기 경험을 유도하고 있었다. 유도를 **입력에서** 없앤다.
+    voiceVariations: ['바쁠 때 한 줄', '맞장구형', '한 줄 반응'],
   })
   const built = buildCommentInput({
     persona: {
@@ -123,19 +168,26 @@ for (let i = 0; i < SAMPLES; i += 1) {
         emoji: EMOJIS[i % EMOJIS.length]!,
         length: i % 3 === 0 ? '짧은 문장' : '중간 길이',
       },
-      voiceVariations: ['바쁠 때 한 줄', '질문형', '맞장구형', '자기 경험 짧게'],
+      // 🔴 `자기 경험 짧게` 를 지웠다 (2026-09-10, A) — 경험 근거가 없는 Persona 에게
+    //    말투 변주로 자기 경험을 유도하고 있었다. 유도를 **입력에서** 없앤다.
+    voiceVariations: ['바쁠 때 한 줄', '맞장구형', '한 줄 반응'],
       noGoTopics: ['정치'],
       noGoExpressions: ['~하시길'],
       forbiddenReactionRoles: [],
     },
     post: {
-      id: `synthetic-${i}`,
-      title: topic.title,
-      bodyDigest: topic.digest,
-      boardLabel: '수다방',
+      id: post.id,
+      title: post.title,
+      // 🔴 여러 문장 본문 — 반응할 거리를 준다
+      bodyDigest: postBodyOf(post),
+      boardLabel: post.boardLabel,
       existingCommentDigests: [],
     },
-    reactionRole: COMMENT_REACTION_ROLES[i % COMMENT_REACTION_ROLES.length]!,
+    // 🔴 **경험 근거가 없으면 `experience` 를 배정하지 않는다** (P0-5).
+    //    합성 Persona 의 identity 는 `{ job, note }` 뿐이라 들려줄 기억이 없다.
+    //    억지로 배정하면 모델이 참고 댓글의 장면을 자기 것으로 옮긴다(실측).
+    // 🔴 고정 교대가 아니라 **실제 코퍼스 분포**에서 배정한다 (A)
+    reactionRole: ROLE_PLAN.roles[i]!,
     voice,
     memory: { has: false, note: '' },
   })
@@ -145,7 +197,108 @@ for (let i = 0; i < SAMPLES; i += 1) {
   }
   inputs.push(built.input)
 }
+for (const sp of SYNTHETIC_POSTS) {
+  const rich = judgePostRichness(sp)
+  if (!rich.ok) { console.error(`\n🔴 중단: ${rich.reason}\n`); process.exit(1) }
+}
 console.log(`  합성 입력 ${inputs.length}건 (🔴 실제 회원 글 아님 · 고유 지문 ${new Set(inputs.map((i) => i.fingerprint)).size}개)`)
+
+/**
+ * ── 🔴 말투 근거 (2026-09-10, Wave E) ─────────────────────────
+ *
+ *    옛 회차는 Persona 설정만 주고 창작하게 했다. 20건이 서로 비슷했고
+ *    원글과 무관한 생활 장면이 반복됐다. 이제 **실제 사람이 쓴 댓글**을 근거로 준다.
+ *
+ * 🔴 근거가 없거나 Persona 별로 겹치면 **호출 전에 멈춘다.** 돈을 쓰고 알면 늦다.
+ */
+const reference = bundlesForPersonas({
+  repoRoot: process.cwd(),
+  personaCodes: inputs.map((i) => i.persona.code),
+})
+console.log('\n  ── 말투 근거 (실제 공개 댓글)')
+for (const a of reference.assets) {
+  console.log(`     ${a.path.padEnd(42)} ${a.exists ? `글 ${a.posts} · 댓글 ${a.comments}` : '🔴 없음'}`)
+}
+if (reference.blocks.length > 0) {
+  for (const b of reference.blocks) console.error(`     🔴 ${b}`)
+}
+const refBundles = [...reference.byCode.values()]
+console.log(`     출처  ${reference.origin}`)
+for (const b of reference.blocks) console.error(`     🔴 ${b}`)
+if (refBundles.length !== inputs.length) {
+  console.error(`\n🔴 중단: Persona ${inputs.length}종 중 ${refBundles.length}종만 근거를 얻었다.`)
+  console.error('   🔴 억지로 채우지 않는다. anchor 가 모자라면 그대로 blocker 다.\n')
+  process.exit(1)
+}
+
+/**
+ * 🔴 **manifest 를 먼저 만든다** (P0-2). 이것이 없으면 이 회차는 canon 승격이 막힌다.
+ *    식별자 유출 검사가 여기서 돌고, 하나라도 걸리면 **호출 전에** 멈춘다.
+ */
+const referenceManifest = buildReferenceManifest({
+  sourceDigest: reference.sourceDigest ?? '(미상)',
+  rows: reference.rows,
+  bundles: refBundles,
+})
+console.log(`     manifest  sanitizer ${referenceManifest.sanitizerVersion}`
+  + ` · 코퍼스 ${referenceManifest.commentCount}건`
+  + ` · corpus ${referenceManifest.sanitizedCorpusDigest}`
+  + ` · bundle ${referenceManifest.personaBundleDigest}`)
+console.log(`     🔴 식별자 유출 검사  ${referenceManifest.identityLeakCheck.detail}`)
+if (referenceManifest.identityLeakCheck.hits > 0) {
+  console.error('\n🔴 중단: 근거에 작성자 식별자가 섞였다 — 부르지 않는다.\n')
+  process.exit(1)
+}
+
+/** 🔴 **말투가 실제로 갈리는가** — 겹침이 아니라 문체 좌표 거리로 본다 */
+const sep = judgeVoiceSeparation(refBundles)
+console.log(`     Persona ${refBundles.length}종 · 묶음당 ${refBundles[0]?.comments.length ?? 0}건`)
+console.log(`     🔴 말투 분리(문체 거리) 최소 ${sep.minDistance.toFixed(3)} · 가장 가까운 쌍 ${sep.closestPair}`)
+console.log('     🔴 "겹치지 않는다" 는 말투 차이의 증거가 아니다 — 위 거리가 근거다')
+console.log('     code  anchor 보완 비중  중앙 p90')
+for (const t of reference.table) {
+  console.log(`       ${t.personaCode}  ${String(t.anchorComments).padStart(5)}`
+    + ` ${String(t.supplements).padStart(4)} ${(t.anchorRatio * 100).toFixed(0).padStart(4)}%`
+    + ` ${String(t.medianLen).padStart(5)} ${String(t.p90Len).padStart(4)}`)
+}
+
+/**
+ * ── 🔴 유료 호출 전 사람이 확인할 다섯 가지 (2026-09-10, 창업자 요구) ──
+ */
+console.log('\n  ── 🔴 호출 전 확인 (dry-run 에서도 항상 찍는다)')
+console.log(`     ① 역할 분포 (실제 코퍼스 근거)`)
+for (const d of ROLE_PLAN.distribution) {
+  console.log(`        ${d.role.padEnd(10)} 코퍼스 ${String(d.corpusPct).padStart(5)}% → 배정 ${d.assigned}건`)
+}
+const hasOther = ROLE_PLAN.roles.includes('other')
+console.log(`     ② other 포함 ${hasOther ? '🟢 예' : '🔴 아니오'}`
+  + ` (${ROLE_PLAN.roles.filter((r) => r === 'other').length}/${SAMPLES}건)`)
+
+{
+  // ③ 경험 근거 없는 Persona 의 프롬프트에 자기 경험 유도가 0건인가
+  const lures = ['자기 경험 짧게', '나도 비슷했다', '내 이야기 한 토막']
+  let lureHits = 0
+  let conflict = 0
+  for (const inp of inputs) {
+    const pl = buildPromptFromInput(inp, [], reference.byCode.get(inp.persona.code))
+    if (!pl.ok) continue
+    const sys = pl.prompt.systemPrompt
+    for (const l of lures) if (sys.includes(l)) lureHits += 1
+    // ⑤ 상충 지시 — "지어내지 마라" 와 "자기 경험을 말하라" 가 같이 있으면 안 된다
+    if (sys.includes('들려줄 자기 이야기가 없습니다') && sys.includes('내 이야기 한 토막')) conflict += 1
+  }
+  console.log(`     ③ 자기 경험 유도 문구 ${lureHits === 0 ? '🟢 0건' : `🔴 ${lureHits}건`}`)
+  // ④ 각 bundle 에서 경험형 참고 댓글이 제외됐는가
+  const refTexts = [...reference.byCode.values()].flatMap((b) => b.comments.map((c) => c.text))
+  const carried = refTexts.filter(carriesExperience).length
+  console.log(`     ④ 묶음 안 경험형 참고 댓글 ${carried === 0 ? '🟢 0건' : `🔴 ${carried}건`}`
+    + ` (검사 ${refTexts.length}건)`)
+  console.log(`     ⑤ 상충 지시 ${conflict === 0 ? '🟢 0건' : `🔴 ${conflict}건`}`)
+  if (lureHits > 0 || carried > 0 || conflict > 0 || !hasOther) {
+    console.error('\n🔴 중단: 호출 전 확인에서 걸렸다.\n')
+    process.exit(1)
+  }
+}
 
 console.log('\n  ── 후보와 단가 (정본: voice-m3-contract 의 M3_MODEL_CANDIDATES)')
 for (const label of CANDIDATES) {
@@ -171,7 +324,12 @@ const keysReady = keys.every((k) => k.present)
 
 /** 🔴 `--call` 이 없으면 아예 부르지 않는다 — keysReady 를 null 로 넘겨 fail-closed 로 막는다 */
 const caller: EvalCaller = async ({ model, input }) => {
-  const prompt = buildPromptFromInput(input)
+  /**
+   * 🔴 **말투 근거 없이 부르지 않는다.**
+   *    없으면 `buildPromptFromInput` 이 `REFERENCE_MISSING` 으로 막고,
+   *    막힌 호출은 돈을 쓰지 않는다. 옛 경로(설정만 보고 창작)로 돌아가지 않는다.
+   */
+  const prompt = buildPromptFromInput(input, [], reference.byCode.get(input.personaCode))
   if (!prompt.ok) {
     return {
       ok: false, rawText: '', inputTokens: 0, outputTokens: 0, reasoningTokens: null,
@@ -300,8 +458,9 @@ const result = await runEval({
   judge,
   // 🔴 --call 이 없으면 key 상태를 null 로 넘긴다 → judgeSpend 가 fail-closed 로 막는다
   keysReady: WANT_CALL ? keysReady : null,
-  maxCalls: EVAL_MAX_CALLS,
-  maxUsd: EVAL_MAX_USD,
+  // 🔴 정본 상한과 이번 회차 승인치 중 **좁은 쪽**
+  maxCalls: Math.min(EVAL_MAX_CALLS, RUN_MAX_CALLS),
+  maxUsd: Math.min(EVAL_MAX_USD, RUN_MAX_USD),
 })
 
 console.log(`\n  🔴 실제 호출  ${result.totalCalls}회 · 실제 비용 $${result.totalActualUsd ?? 0}`)
@@ -395,7 +554,12 @@ if (!result.called) {
   process.exit(0)
 }
 
-const saved = savePaidRun({ runId, called: result.called, artifact: { summary, samples: samplesDoc, key: keyDoc } })
+/** 🔴 manifest 를 summary 에 남긴다 — 없으면 canon 승격이 막힌다(P0-2) */
+const summaryWithManifest = { ...summary, referenceManifest }
+const saved = savePaidRun({
+  runId, called: result.called,
+  artifact: { summary: summaryWithManifest, samples: samplesDoc, key: keyDoc },
+})
 if (!saved.ok) {
   console.error(`\n🔴 결과를 저장하지 못했다 — ${saved.reason}\n`)
   process.exit(1)

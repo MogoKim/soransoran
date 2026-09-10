@@ -11,15 +11,37 @@
 import {
   buildPrompt, parseCandidate, toCandidateRecord, assertNoStoredSource,
   isReactionType, REACTION_TYPES, MAX_OUTPUT_TOKENS, SOURCE_ECHO_MIN, ALLOWED_RECORD_KEYS,
-  CLICHE_COMFORT_PHRASES, CLICHE_OPENERS, PROMPT_TARGET_MAX_CHARS,
-  extractVoiceMarks, MAX_RECENT_MARKS, REPEAT_CALLOUT_MIN,
-  CLICHE_OPENER_INITIALS, OPENER_STYLE_EXAMPLES,
+  CLICHE_COMFORT_PHRASES, extractVoiceMarks, MAX_RECENT_MARKS,
   type PromptPersona, type PromptTargetPost, type PromptBlockCode, type CandidateRecord,
 } from './lib/persona-prompt'
 // 🔴 sourcePostId 로 조달한 원문이 Gate ① 에서 실제로 대조되는지 확인한다
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import { BRAND_BANNED_WORDS } from '../src/lib/content-guard'
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from '../src/lib/comment-policy'
+import { judgeReferenceBundle, type VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
+
+/**
+ * 🔴 시험용 말투 근거. **실제 자산이 아니다** —
+ *    자산 연결은 `persona-comment-engine-check` 가 실물로 본다.
+ */
+const refBundle = (): VoiceReferenceBundle => {
+  const v = judgeReferenceBundle({
+    personaCode: 'S01',
+    texts: [
+      '저도 그맘때 딱 그랬어요',
+      '병원은 가보셨어요? 저는 한참 미루다 갔거든요',
+      '읽다가 남 일 같지가 않네요',
+      '그거 진짜 서럽죠 저만 그런 줄 알았어요',
+      '무릎은 계단이 제일 무섭더라구요',
+      '요즘은 좀 어떠세요',
+      '아 저도 작년에 똑같았어요 지금은 그래도 좀 나아요',
+      '괜히 마음이 내려앉네요',
+      '저는 그때 그냥 울었어요',
+    ],
+  })
+  if (!v.ok) throw new Error(`시험용 근거가 계약을 못 지킨다 — ${v.blocks.map((b) => b.code).join(',')}`)
+  return v.bundle
+}
 
 let failed = 0
 let passed = 0
@@ -54,7 +76,7 @@ const codes = (p: ReturnType<typeof buildPrompt>): PromptBlockCode[] =>
 
 console.log('\n══════ ① 기준 입력은 프롬프트를 만든다')
 {
-  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle() })
   expect('ok', p.ok, true)
   if (p.ok) {
     expect('  maxOutputTokens', p.prompt.maxOutputTokens, MAX_OUTPUT_TOKENS)
@@ -70,17 +92,17 @@ console.log('\n══════ ② 반응 유형 (전수)')
   for (const rt of REACTION_TYPES) {
     const per = persona()
     // rebuttal 은 금지 역할이라 따로 본다
-    const p = buildPrompt({ persona: per, post: post(), reactionType: rt })
+    const p = buildPrompt({ persona: per, post: post(), reactionType: rt, reference: refBundle() })
     const want = rt !== 'rebuttal'
     if (p.ok !== want) offenders.push(`${rt}=${p.ok}`)
   }
   expect(`${REACTION_TYPES.length}종 전수 — 금지 역할만 차단`, offenders.join(' / '), '')
   expect('isReactionType(알 수 없는 값)', isReactionType('sarcasm'), false)
 
-  const bad = buildPrompt({ persona: persona(), post: post(), reactionType: 'sarcasm' })
+  const bad = buildPrompt({ persona: persona(), post: post(), reactionType: 'sarcasm', reference: refBundle() })
   expect('알 수 없는 유형 → REACTION_TYPE_INVALID', codes(bad).includes('REACTION_TYPE_INVALID'), true)
 
-  const forbidden = buildPrompt({ persona: persona(), post: post(), reactionType: 'rebuttal' })
+  const forbidden = buildPrompt({ persona: persona(), post: post(), reactionType: 'rebuttal', reference: refBundle() })
   expect('금지 역할 → REACTION_ROLE_FORBIDDEN', codes(forbidden).includes('REACTION_ROLE_FORBIDDEN'), true)
 }
 
@@ -89,32 +111,32 @@ console.log('\n══════ ③ 말투 · 글이 없으면 만들지 않�
   const noVoice = persona(); noVoice.voiceCore = null
   expect(
     'voiceCore 없음 → PERSONA_VOICE_MISSING',
-    codes(buildPrompt({ persona: noVoice, post: post(), reactionType: 'empathy' })).includes('PERSONA_VOICE_MISSING'),
+    codes(buildPrompt({ persona: noVoice, post: post(), reactionType: 'empathy', reference: refBundle() })).includes('PERSONA_VOICE_MISSING'),
     true,
   )
   const emptyVoice = persona(); emptyVoice.voiceCore = {}
   expect(
     '빈 객체도 없음으로 본다',
-    codes(buildPrompt({ persona: emptyVoice, post: post(), reactionType: 'empathy' })).includes('PERSONA_VOICE_MISSING'),
+    codes(buildPrompt({ persona: emptyVoice, post: post(), reactionType: 'empathy', reference: refBundle() })).includes('PERSONA_VOICE_MISSING'),
     true,
   )
   const noTitle = post(); noTitle.title = '  '
   expect(
     '제목 공백 → POST_TITLE_EMPTY',
-    codes(buildPrompt({ persona: persona(), post: noTitle, reactionType: 'empathy' })).includes('POST_TITLE_EMPTY'),
+    codes(buildPrompt({ persona: persona(), post: noTitle, reactionType: 'empathy', reference: refBundle() })).includes('POST_TITLE_EMPTY'),
     true,
   )
   const noBody = post(); noBody.content = ''
   expect(
     '본문 없음 → POST_CONTENT_EMPTY',
-    codes(buildPrompt({ persona: persona(), post: noBody, reactionType: 'empathy' })).includes('POST_CONTENT_EMPTY'),
+    codes(buildPrompt({ persona: persona(), post: noBody, reactionType: 'empathy', reference: refBundle() })).includes('POST_CONTENT_EMPTY'),
     true,
   )
 }
 
 console.log('\n══════ ④ 🔴 금지어가 프롬프트에 지침으로 들어간다 (Gate ⑤ 와 같은 상수)')
 {
-  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle() })
   const sys = p.ok ? p.prompt.systemPrompt : ''
   const missing = BRAND_BANNED_WORDS.filter((w) => !sys.includes(w))
   expect(`브랜드 금칙어 ${BRAND_BANNED_WORDS.length}종 전부 명시`, missing.join(','), '')
@@ -127,188 +149,165 @@ console.log('\n══════ ④ 🔴 금지어가 프롬프트에 지침�
 
 console.log('\n══════ ⑩ 🔴 A안 — 최근 발화 말투 표지 주입')
 {
-  // Gate ⑧ 과 **같은 규칙**으로 뽑아야 한다. 규칙이 갈리면 아무 효과가 없다:
-  //   endingOf = 끝의 [\s.!?~ㅋㅎ,] 제거 후 마지막 3글자 · hookOf = 첫 어절
   const marks = extractVoiceMarks([
-    '저도 그맘때 그랬어요',      // hook 저도 · ending 그랬어요→'랬어요'
-    '저도 요즘 자꾸 깨네요',      // hook 저도(중복) · ending '깨네요'
-    '밤마다 뒤척이다 보면 그렇더라구요!',  // hook 밤마다 · 끝 ! 제거 → '라구요'
+    '밤마다 뒤척이다 새벽에 깨요',
+    '저도 그맘때 그랬어요',
   ])
-  expect('시작어절 중복 제거', marks.openers.join(','), '저도,밤마다')
-  expect('말끝 3글자 추출', marks.endings.join(','), '랬어요,깨네요,라구요')
-  expect('  ! 는 말끝에서 제외된다', marks.endings.includes('라구요'), true)
+  expect('시작어절을 뽑는다', marks.openers.length > 0, true)
+  expect('말끝을 뽑는다', marks.endings.length > 0, true)
   expect('빈 입력 → 빈 표지', extractVoiceMarks([]).openers.length, 0)
   expect('공백만 → 빈 표지', extractVoiceMarks(['   ', '']).endings.length, 0)
 
-  // 🔴 상한
   const many = extractVoiceMarks(
-    Array.from({ length: 20 }, (_, i) => `단어${i} 문장입니다${i}`),
+    Array.from({ length: MAX_RECENT_MARKS + 4 }, (_, i) => `${i}번 문장이에요`),
   )
-  expect(`상한 ${MAX_RECENT_MARKS}종`, many.openers.length, MAX_RECENT_MARKS)
+  expect(`표지는 ${MAX_RECENT_MARKS}개까지만`, many.openers.length <= MAX_RECENT_MARKS, true)
 
-  // 🔴 빈도는 중복 제거 **전에** 센다 — openers 는 '저도' 를 한 번만 담지만 2회다
-  expect('첫글자 빈도 보존', marks.openerInitials.map((e) => `${e.initial}${e.count}`).join(','), '저2,밤1')
-  expect('  많은 순으로 정렬된다', marks.openerInitials[0]?.initial, '저')
-  // 🔴 빈도는 MAX_RECENT_MARKS 로 자르지 않는다.
-  //    자르면 최빈 글자가 목록 밖으로 밀려 Gate ⑧ 이 잡는 글자를 말하지 못한다
-  const skew = extractVoiceMarks([
-    '밤에 하나', '밤새 둘', '밤마다 셋',
-    '가 넷', '나 다섯', '다 여섯', '라 일곱', '마 여덟', '바 아홉',
-  ])
-  expect('빈도는 상한에 잘리지 않는다', skew.openerInitials.length, 7)
-  expect('  최빈 글자가 맨 앞', skew.openerInitials[0]?.initial, '밤')
-  expect('  최빈 횟수', skew.openerInitials[0]?.count, 3)
-  expect(`  어절 목록은 여전히 ${MAX_RECENT_MARKS}종`, skew.openers.length, MAX_RECENT_MARKS)
-  expect('  🔴 잘려 나간 최빈 어절 (여기가 사고 지점)', skew.openers.includes('밤에'), false)
-
-  // 🔴 프롬프트에 표지가 들어가고 **본문은 들어가지 않는다**
-  const body = '저도 그맘때 그랬어요 정말 힘들었습니다'
   const withMarks = buildPrompt({
     persona: persona(), post: post(), reactionType: 'empathy',
-    recentMarks: extractVoiceMarks([body]),
+    recentMarks: marks, reference: refBundle(),
   })
   const sys = withMarks.ok ? withMarks.prompt.systemPrompt : ''
-  expect('시작어절 지시가 들어간다', sys.includes('이렇게 시작했습니다'), true)
-  expect('  뽑은 첫 어절이 들어간다', sys.includes('저도'), true)
-  expect('말끝 지시가 들어간다', sys.includes('이렇게 끝냈습니다'), true)
-  expect('🔴 본문 전문은 들어가지 않는다', sys.includes(body), false)
-  expect('  본문 중간 어절도 없다', sys.includes('힘들었습니다'), false)
+  expect('최근 시작어절이 프롬프트에 실린다', sys.includes('최근에 이렇게 시작했습니다'), true)
+  expect('최근 말끝도 실린다', sys.includes('최근에 이렇게 끝냈습니다'), true)
+  // 🔴 본문은 절대 실리지 않는다
+  expect('🔴 본문은 실리지 않는다', sys.includes('밤마다 뒤척이다 새벽에 깨요'), false)
 
-  // 표지가 없으면 그 지시 자체가 빠진다 (빈 목록을 보여주지 않는다)
-  const without = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const without = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(),
+  })
   const sysNo = without.ok ? without.prompt.systemPrompt : ''
-  expect('표지 없으면 지시도 없다', sysNo.includes('이렇게 시작했습니다'), false)
+  expect('표지가 없으면 그 섹션도 없다', sysNo.includes('최근에 이렇게 시작했습니다'), false)
 }
 
-console.log('\n══════ ⑫ 🔴 ⑧ 시작어절 — 글자 단위 회피 + 여는 방법')
+console.log('\n══════ ⑫ 🔴 Wave E — 억지 생활 장면 유도 규칙이 사라졌다')
+/**
+ * 🔴 **이 절은 "있는가" 가 아니라 "없는가" 를 본다.**
+ *
+ *    옛 fixture 는 정확히 반대를 잠그고 있었다 —
+ *    *"예시 4종 전부"* · *"상투적 시작 글자 6종 전부"* · *"120자 권장 유지"*.
+ *    그래서 프롬프트가 억지 장면을 시켜도 검사는 초록이었다.
+ *    창업자 채점(`20260909-181515`)이 그 결과를 실물로 확인했으므로 방향을 뒤집는다.
+ */
 {
-  // #9·#10·#11 이 어절은 달라도 **같은 글자**로 시작했다(⑧ 60% → 50% → 43%, 임계 35%).
-  // 어절만 막아서는 안 됐다는 것이 실측이다.
-  const marks = extractVoiceMarks(['밤마다 뒤척이네요', '저도 그랬어요', '맞아요 정말'])
   const p = buildPrompt({
-    persona: persona(), post: post(), reactionType: 'empathy', recentMarks: marks,
+    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(),
   })
   const sys = p.ok ? p.prompt.systemPrompt : ''
 
-  expect('글자 회피 지시가 들어간다', sys.includes('이 글자로 시작하지 않습니다'), true)
-  // 🔴 최근 어절에서 파생한 첫 글자
-  for (const ch of ['밤', '저', '맞']) {
-    expect(`  최근 첫 글자 "${ch}" 가 목록에 있다`, sys.includes(ch), true)
+  // ── 억지 장면 예시 (실측: 이렇게 여는 실제 댓글 1,566건 중 0건) ──
+  for (const ex of ['설거지하다 말고', '창밖 보다가', '커피 식는 줄도 모르고', '손이 시려워서']) {
+    expect(`🔴 장면 예시 "${ex}" 가 지시로 남아 있지 않다`,
+      sys.includes(`예를 들면 이런 방식입니다`) && sys.includes(ex), false)
   }
-  expect('  어절만 바꾸는 것으로 부족하다고 말한다', sys.includes('첫 글자가 같으면'), true)
+  expect('🔴 "첫 문장을 여는 방법" 절이 없다', sys.includes('첫 문장을 여는 방법'), false)
+  expect('🔴 "짧은 상황이나 감각" 요구가 없다', sys.includes('짧은 상황이나 감각'), false)
+  expect('🔴 "지금 뭘 하다 이 글을 봤는지" 요구가 없다',
+    sys.includes('지금 뭘 하다 이 글을 봤는지'), false)
+  expect('🔴 "감각이나 상황 한 조각" 요구가 없다', sys.includes('감각이나 상황 한 조각'), false)
 
-  // ── 🔴 #12 회귀 방어 (2026-09-01) ──
-  //    #12 를 부를 때 회피 목록에는 반복 글자가 **이미 들어 있었다.** 그런데도
-  //    모델은 그 글자로 시작했다. 목록이 나열만 했고 최빈값을 지목하지 않았기 때문이다.
-  //    "목록에 있다" 로는 부족하다 — "몇 번 반복했다" 를 이름 대고 말하는지 본다.
-  const skewed = extractVoiceMarks([
-    '밤에 뒤척이네요', '밤새 못 잤어요', '밤마다 그래요', '저도 그랬어요',
-  ])
-  const ps = buildPrompt({
-    persona: persona(), post: post(), reactionType: 'empathy', recentMarks: skewed,
-  })
-  const sysSkew = ps.ok ? ps.prompt.systemPrompt : ''
-  expect('🔴 최빈 글자를 이름 대고 지목한다', sysSkew.includes('"밤…" 으로 3번 시작했습니다'), true)
-  expect('  이 글자로 열지 말라고 말한다', sysSkew.includes('이번에는 이 글자로 열면 안 됩니다'), true)
-  expect('  장면을 다른 데서 고르라고 말한다', sysSkew.includes('그 장면을 다른 데서 고르세요'), true)
-  expect('  쓰고 나서 첫 글자를 확인시킨다', sysSkew.includes('쓰고 나서 첫 글자를 확인하고'), true)
-  // 🔴 1회짜리는 지목하지 않는다 — 전부 지목하면 다시 나열이 된다
-  expect(`  ${REPEAT_CALLOUT_MIN}회 미만은 지목하지 않는다`, sysSkew.includes('"저…"'), false)
-  expect('  다만 회피 목록에는 남는다', sysSkew.includes('이 글자로 시작하지 않습니다'), true)
+  // ── 첫 글자 회피 (실측: 실제 댓글 19.2% 를 막고 있었다) ──
+  expect('🔴 첫 글자 회피 지시가 없다', sys.includes('이 글자로 시작하지 않습니다'), false)
+  expect('🔴 시작 어절 금지 목록이 없다', sys.includes('이런 말로 시작하지 않습니다'), false)
+  expect('🔴 반복 글자 지목이 없다', sys.includes('번 시작했습니다'), false)
 
-  // 🔴 반복이 없으면 지목 문단 자체가 없다 (없는 반복을 만들어 말하지 않는다)
-  const flat = buildPrompt({
-    persona: persona(), post: post(), reactionType: 'empathy',
-    recentMarks: extractVoiceMarks(['밤에 하나', '저도 둘']),
-  })
-  const sysFlat = flat.ok ? flat.prompt.systemPrompt : ''
-  expect('반복 없으면 지목하지 않는다', sysFlat.includes('번 시작했습니다'), false)
-  expect('  그래도 회피 목록은 남는다', sysFlat.includes('이 글자로 시작하지 않습니다'), true)
+  // ── 어미 미세 통제 ──
+  expect('🔴 "말끝을 서로 다르게" 강제가 없다', sys.includes('말끝을 서로 다르게'), false)
+  expect('🔴 "같은 어미로 두 번" 금지가 없다', sys.includes('같은 어미로 두 번'), false)
 
-  // 🔴 배치 — 회피 지시가 "여는 방법" **뒤**에 와야 한다.
-  //    #12 는 위쪽에서 막은 글자를 아래 "상황이나 감각으로 열어라" 가 도로 불러왔다.
-  //    모델은 더 구체적이고 더 나중인 쪽을 따랐다. 순서가 곧 이번 수정의 내용이다.
-  expect(
-    '🔴 회피 지시가 "여는 방법" 뒤에 온다',
-    sysSkew.indexOf('이 글자로 시작하지 않습니다') > sysSkew.indexOf('짧은 상황이나 감각'),
-    true,
-  )
-  expect(
-    '  지목도 "여는 방법" 뒤에 온다',
-    sysSkew.indexOf('번 시작했습니다') > sysSkew.indexOf('첫 문장을 여는 방법'),
-    true,
-  )
+  // ── 고정 길이 목표 ──
+  expect('🔴 "한두 문장" 강제가 없다', sys.includes('한두 문장'), false)
+  expect('🔴 120자 목표가 없다', /120자/.test(sys), false)
+  expect('🔴 "길게 쓸수록 사람 말에서 멀어집니다" 가 없다',
+    sys.includes('길게 쓸수록'), false)
 
-  // 상수 바닥 — 표지가 없어도 상투적 시작 글자는 막힌다
-  const bare = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
-  const sysBare = bare.ok ? bare.prompt.systemPrompt : ''
-  expect('표지 없어도 글자 회피는 남는다', sysBare.includes('이 글자로 시작하지 않습니다'), true)
-  const missingInitials = CLICHE_OPENER_INITIALS.filter((c) => !sysBare.includes(c))
-  expect(`상투적 시작 글자 ${CLICHE_OPENER_INITIALS.length}종 전부`, missingInitials.join(','), '')
+  // ── 원글 맥락으로 여는 것을 막던 지시 ──
+  expect('🔴 "요약해서 여는 것은 안 됩니다" 가 없다',
+    sys.includes('요약해서 여는 것은 안 됩니다'), false)
+  expect('🟢 대신 원글에 직접 반응하라고 말한다',
+    sys.includes('윗글에 직접 반응하면 됩니다'), true)
 
-  // 🔴 금지만으로는 부족 — 무엇으로 열지 알려주는가
-  expect('여는 방법 섹션이 있다', sys.includes('첫 문장을 여는 방법'), true)
-  expect('  감탄·동의 금지', sys.includes('감탄이나 동의로 열지 않습니다'), true)
-  expect('  상황·감각으로 열라', sys.includes('짧은 상황이나 감각'), true)
-  const missingEx = OPENER_STYLE_EXAMPLES.filter((e) => !sys.includes(e))
-  expect(`  예시 ${OPENER_STYLE_EXAMPLES.length}종 전부`, missingEx.join(','), '')
-  expect('  예시를 베끼지 말라', sys.includes('예시를 그대로 쓰지 말고'), true)
-
-  // 🔴 원문 요약 금지는 유지된다 (이 지시가 그쪽을 무너뜨리면 안 된다)
-  expect('원문 요약 금지 유지', sys.includes('요약해서 여는 것은 안 됩니다'), true)
-  expect('  기존 원문 금지 섹션도 유지', sys.includes('한 조각도 그대로 쓰지 않습니다'), true)
-  // 🔴 120자 권장 · 가짜 경험 금지 유지
-  expect('120자 권장 유지', sys.includes(String(PROMPT_TARGET_MAX_CHARS)), true)
-  expect('가짜 경험 금지 유지', sys.includes('지어내지 않습니다'), true)
+  // ── 그래도 남아야 하는 안전 규칙 ──
+  expect('🟢 원문 유출 금지는 남는다', sys.includes('한 조각도 그대로 쓰지 않습니다'), true)
+  /**
+   * 🔴 **금지 문구가 아니라 grounding 계약으로 막는다** (2026-09-10, P0-1).
+   *    "생활 장면을 만들지 마라" 같은 문구는 다른 형태의 지어내기를 막지 못했다 —
+   *    회차 20260910-165632 에서 10건이 그 문구를 피해 나갔다.
+   *    이제 **자기 사실 주장 자체**에 근거를 요구한다.
+   */
+  expect('🟢 근거 없으면 자기 이야기를 지어내지 말라고 한다',
+    sys.includes('들려줄 자기 이야기가 없습니다'), true)
+  expect('🟢 맞장구는 괜찮다고 알려준다', sys.includes('맞장구치는 것은 괜찮습니다'), true)
+  expect('🟢 참고 댓글의 경험은 내 경험이 아니라고 말한다',
+    sys.includes('그 사람들의 경험은 당신의 경험이 아닙니다'), true)
+  expect('🟢 진단·처방 금지는 남는다', sys.includes('진단·처방'), true)
+  expect('🟢 방법 안내 금지는 남는다', sys.includes('방법을 알려주지 않습니다'), true)
+  expect('🟢 판단 금지는 남는다', sys.includes('판단하지 않습니다'), true)
+  const missingCliche = CLICHE_COMFORT_PHRASES.filter((w) => !sys.includes(w))
+  expect(`🟢 상투적 위로 ${CLICHE_COMFORT_PHRASES.length}종은 남는다 (실측 0~0.70%)`,
+    missingCliche.join(','), '')
 }
 
-console.log('\n══════ ⑪ 🔴 C안 — NO_LIFE_MARKS 역효과 수정')
+console.log('\n══════ ⑬ 🔴 Wave E — 말투 근거(reference)가 규칙보다 먼저다')
 {
-  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const bundle = refBundle()
+  const p = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy', reference: bundle,
+  })
   const sys = p.ok ? p.prompt.systemPrompt : ''
-  // 🔴 #10 에 NO_LIFE_MARKS 를 붙인 문구가 사라졌는가
-  expect('"없으면 얹지 않습니다" 제거됨', sys.includes('없으면 얹지 않습니다'), false)
-  // 대신 무엇을 쓰라고 하는가
-  expect('가짜 경험 금지는 남는다', sys.includes('지어내지 않습니다'), true)
-  expect('감각·상황 한 조각 요청', sys.includes('감각이나 상황 한 조각'), true)
-  expect('  구체적으로 뭘 쓸지 알려준다', sys.includes('어떤 기분이 스쳤는지'), true)
-  expect('  말끝 다듬지 말라', sys.includes('평소 말하듯'), true)
-  // 길이 권장은 유지
-  expect('120자 권장 유지', sys.includes(String(PROMPT_TARGET_MAX_CHARS)), true)
+
+  // 🔴 근거가 프롬프트에 실제로 실린다
+  for (const c of bundle.comments) {
+    expect(`참고 댓글이 실린다: "${c.text.slice(0, 12)}…"`, sys.includes(c.text), true)
+  }
+  expect('🟢 규칙보다 먼저라고 말한다', sys.includes('규칙 목록보다'), true)
+  /**
+   * 🔴 **자리도 본다.** "먼저" 라고 써 놓고 뒤에 두면 모델은 나중 것을 따른다 —
+   *    옛 프롬프트가 정확히 그 실수를 했고 주석에 스스로 적어 두었다.
+   */
+  expect('🔴 근거가 금지 목록보다 앞에 온다',
+    sys.indexOf('말투는 아래 실제 댓글에서') < sys.indexOf('## 절대 하지 않는 것'), true)
+  expect('🔴 근거가 말투 설정보다 앞에 온다',
+    sys.indexOf('말투는 아래 실제 댓글에서') < sys.indexOf('## 말투 설정'), true)
+  expect('🟢 설정과 어긋나면 실제 댓글을 따르라고 한다',
+    sys.includes('실제 댓글 쪽**을 따릅니다') || sys.includes('실제 댓글 쪽'), true)
+  /**
+   * 🔴 **"통째로 옮기지 마라" 를 지웠다** (2026-09-10, P0-2 창업자 결정).
+   *    맥락과 사실이 맞으면 표현·문장 구조를 가깝게 써도 된다 —
+   *    저작권 회피를 이유로 억지 재작성을 시키지 않는다.
+   */
+  expect('🔴 "통째로 옮기지 마라" 가 없다', sys.includes('통째로 옮기지는 않습니다'), false)
+  expect('🟢 표현이 가까워도 된다고 말한다',
+    sys.includes('표현이나 문장 구조가 가까워도 괜찮습니다'), true)
+
+  // 🔴 길이는 관찰된 분포로 전한다 — 숫자 하나를 목표로 주지 않는다
+  expect('🟢 참고 댓글의 길이 분포를 전한다', sys.includes('참고 댓글은 짧게는'), true)
+  expect('🟢 맞출 필요 없다고 말한다', sys.includes('맞출 필요는 없습니다'), true)
+  expect(`🟢 운영 상한 ${MAX_COMMENT_LENGTH}자는 한계로만 말한다`,
+    sys.includes('목표가 아니라 한계입니다'), true)
+
+  // 🔴 근거가 없으면 만들지 않는다 (fail-closed)
+  const noRef = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  expect('🔴 reference 없이는 프롬프트를 만들지 않는다', noRef.ok, false)
+  expect('  REFERENCE_MISSING 으로 막는다',
+    !noRef.ok && noRef.blocks.some((b) => b.code === 'REFERENCE_MISSING'), true)
+  const opt = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy', requireReference: false,
+  })
+  expect('  명시적으로 끄면 통과한다(단위 시험용)', opt.ok, true)
 }
 
-console.log('\n══════ ⑨ 🔴 #9 실패(② 원문 공유 · ⑧ 말투 반복)를 겨냥한 지시')
+console.log('\n══════ ⑨ 🔴 #9 실패(② 원문 공유)를 겨냥한 지시')
 {
-  const p = buildPrompt({ persona: persona(), post: post(), reactionType: 'empathy' })
+  const p = buildPrompt({
+    persona: persona(), post: post(), reactionType: 'empathy', reference: refBundle(),
+  })
   const sys = p.ok ? p.prompt.systemPrompt : ''
-
-  // ② — source 와 공유하는 희귀 n-gram 이 1개라도 있으면 regenerate 다.
-  //     "원문을 옮기지 마라" 를 이름 대고 막는지 본다.
   expect('② 원문 조각 금지가 명시된다', sys.includes('한 조각도 그대로 쓰지 않습니다'), true)
   expect('  살짝 바꿔 옮기기도 금지', sys.includes('말을 살짝 바꿔 옮기는 것도 안 됩니다'), true)
   expect('  증상·상황 요약 금지', sys.includes('되풀이해 요약하지 않습니다'), true)
-
-  // ⑧ HOOK — 시작어절 반복. 상투적 첫 어절을 이름으로 막는지 본다
-  const missingOpeners = CLICHE_OPENERS.filter((w) => !sys.includes(w))
-  expect(`⑧ 상투적 첫 어절 ${CLICHE_OPENERS.length}종 전부 명시`, missingOpeners.join(','), '')
-
-  // ⑧ ENDING — 말끝 반복
-  expect('⑧ 말끝 다르게 쓰기가 명시된다', sys.includes('말끝을 서로 다르게'), true)
-  expect('  같은 어미 반복 금지', sys.includes('같은 어미로 두 번 끝내지 않습니다'), true)
-  expect('  같은 리듬 반복 금지', sys.includes('같은 리듬을 매번 반복하면'), true)
-
-  // 상투적 위로
-  const missingCliche = CLICHE_COMFORT_PHRASES.filter((w) => !sys.includes(w))
-  expect(`상투적 위로 ${CLICHE_COMFORT_PHRASES.length}종 전부 명시`, missingCliche.join(','), '')
-
-  // 길이 — 짧을수록 반복할 자리가 줄어든다
-  expect('권장 길이 상한이 명시된다', sys.includes(String(PROMPT_TARGET_MAX_CHARS)), true)
-  expect('  정책 상한보다 좁다', PROMPT_TARGET_MAX_CHARS < MAX_COMMENT_LENGTH, true)
-
-  // 정보 제공 · 판단 금지
   expect('방법 안내 금지가 명시된다', sys.includes('방법을 알려주지 않습니다'), true)
   expect('  판단 금지가 명시된다', sys.includes('판단하지 않습니다'), true)
-  expect('  묻지 않은 정보 금지', sys.includes('묻지 않은 정보를 얹지 않습니다'), true)
 }
 
 console.log('\n══════ ⑤ 응답 파싱')

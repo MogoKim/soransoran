@@ -14,6 +14,8 @@
  * 🔴 여기서 새 판정을 만들지 않는다. 모양만 바꾼다 —
  *    판정을 여기 두면 `buildPrompt` 와 이중이 되고, 언젠가 둘이 갈린다.
  */
+import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
+import { groundingTextOf } from '../../src/lib/persona-experience-grounding'
 import {
   buildPrompt, extractVoiceMarks, MAX_RECENT_MARKS,
   type PromptPersona, type PromptPlan, type PromptTargetPost, type RecentVoiceMarks,
@@ -99,12 +101,22 @@ export function toRecentMarks(input: CommentInput, recentTexts: readonly string[
 export function buildPromptFromInput(
   input: CommentInput,
   recentTexts: readonly string[] = [],
+  /**
+   * 🔴 **말투 근거** (2026-09-10, Wave E). 없으면 `buildPrompt` 가 막는다 —
+   *    여기서 우회하지 않는다. 설정만 보고 창작하는 옛 경로로 돌아가지 않기 위해서다.
+   */
+  reference?: VoiceReferenceBundle,
+  opts: { requireReference?: boolean } = {},
 ): PromptPlan {
   return buildPrompt({
     persona: toPromptPersona(input),
     post: toPromptPost(input),
     reactionType: input.reactionRole,
     recentMarks: toRecentMarks(input, recentTexts),
+    reference,
+    requireReference: opts.requireReference,
+    // 🔴 생성과 검증이 **같은 grounding** 을 본다 (P0-1)
+    grounding: groundingTextOf({ identity: input.persona.identity, memory: input.memory }),
   })
 }
 
@@ -153,6 +165,11 @@ export function toGateInput(args: {
     // 🔴 CommentInput 이 들고 있는 것은 자동으로 잇는다 — 호출부가 잊을 자리를 없앤다
     forbiddenRoles: p.forbiddenReactionRoles,
     identity: (p.identity ?? null) as CandidateInput['identity'],
+    /**
+     * 🔴 **생성 계획과 후보 검증이 같은 grounding 을 본다** (2026-09-10, P0-1).
+     *    호출부가 따로 넘기지 않아도 이어지게 한다 — 잊을 자리를 없앤다.
+     */
+    personaGrounding: groundingTextOf({ identity: p.identity, memory: args.input.memory }),
     noGoTopics: p.noGoTopics,
     noGoExpressions: p.noGoExpressions,
     ...(args.frequencyLookup === undefined

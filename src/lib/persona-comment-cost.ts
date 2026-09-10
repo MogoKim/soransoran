@@ -157,6 +157,28 @@ export type EvalAxis = (typeof EVAL_AXES)[number]
 
 export type EvalScore = Partial<Record<EvalAxis, number>>
 
+/**
+ * 🔴 **사람이 공개 불가로 본 이유** (2026-09-10, Wave E).
+ *
+ *    옛 채점기는 1~5 밖에 없었다. 형편없는 후보에도 숫자를 줘야 했고,
+ *    그래서 **절대 품질 탈락을 표현할 방법이 아예 없었다** —
+ *    창업자 채점 메모가 *"판단할 수 없을정도로 최악의 댓글"* 이라고 적었는데
+ *    파일에는 `2점` 으로 남았다. 2점은 "조금 나쁨" 으로 읽힌다.
+ *    그 차이가 평균을 만들고, 평균이 winner 를 만든다.
+ */
+export const REJECT_REASONS = [
+  /** 매번 같은 AI 도입부 (`빨래 개다 말고 문득 생각나서`) */
+  'REPEATED_AI_OPENER',
+  /** 원글에 없는 생활 장면·개인 경험을 지어냄 */
+  'FABRICATED_SCENE',
+  /** 지나치게 정돈된 완결 문장 — 사람이 쓴 것으로 읽히지 않음 */
+  'OVER_POLISHED',
+  /** 원글 맥락과 어긋남 */
+  'OFF_CONTEXT',
+  'OTHER',
+] as const
+export type RejectReason = (typeof REJECT_REASONS)[number]
+
 export type ModelVerdict = {
   model: string
   /** 축별 평균 — 못 잰 축은 빠진다 */
@@ -164,6 +186,50 @@ export type ModelVerdict = {
   /** 모든 축을 쟀는가. 🔴 하나라도 못 쟀으면 확정하지 않는다 */
   complete: boolean
   samples: number
+  /** 🔴 사람이 **공개 불가**로 판정한 후보 수. 점수와 별개 축이다 */
+  rejected?: number
+  /** 사유별 건수 — 무엇이 반복됐는지 남긴다 */
+  rejectReasons?: Partial<Record<RejectReason, number>>
+}
+
+/**
+ * 🔴 **절대 품질 기준.** 상대 비교보다 먼저 온다.
+ *
+ *    이 비율을 넘게 공개 불가가 나오면 그 모델은 **비교 대상이 아니다** —
+ *    다른 모델보다 나아도 공개할 수 없는 것은 공개할 수 없다.
+ */
+export const ABSOLUTE_REJECT_MAX_RATIO = 0.2
+
+export type AbsoluteQuality =
+  | { pass: true; rejected: number; ratio: number; reason: string }
+  | { pass: false; rejected: number; ratio: number; reason: string }
+
+/**
+ * 🔴 **Gate 통과는 사람 품질 통과가 아니다.**
+ *    9관문은 안전·유출·설정 모순을 본다. "사람이 쓴 것처럼 읽히는가" 는 보지 않는다.
+ *    `20260909-181515` 는 gateStatus 가 전부 `pass` 였고 사람 판정은 전부 미달이었다.
+ */
+export function judgeAbsoluteQuality(v: ModelVerdict): AbsoluteQuality {
+  const rejected = v.rejected ?? 0
+  const ratio = v.samples > 0 ? rejected / v.samples : 0
+  if (v.samples === 0) {
+    return { pass: false, rejected, ratio, reason: `${v.model}: 표본이 없다` }
+  }
+  if (ratio > ABSOLUTE_REJECT_MAX_RATIO) {
+    const top = Object.entries(v.rejectReasons ?? {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([k, n]) => `${k} ${n}건`).join(' · ')
+    return {
+      pass: false, rejected, ratio,
+      reason: `${v.model}: 공개 불가 ${rejected}/${v.samples}`
+        + ` (${Math.round(ratio * 100)}% · 상한 ${Math.round(ABSOLUTE_REJECT_MAX_RATIO * 100)}%)`
+        + (top === '' ? '' : ` — ${top}`),
+    }
+  }
+  return {
+    pass: true, rejected, ratio,
+    reason: `${v.model}: 공개 불가 ${rejected}/${v.samples} — 절대 기준 안이다`,
+  }
 }
 
 /**
@@ -176,10 +242,37 @@ export function judgeModelSelection(input: {
   verdicts: readonly ModelVerdict[]
   /** 확정에 필요한 최소 표본 수 */
   minSamples?: number
-}): { status: 'confirmed' | 'provisional' | 'none'; winner: string | null; reason: string } {
+}): {
+  status: 'confirmed' | 'provisional' | 'none'
+  winner: string | null
+  reason: string
+  /** 🔴 절대 품질에서 떨어진 모델 — 상대 비교에 들어가지 못한다 */
+  rejectedModels?: string[]
+} {
   const minSamples = input.minSamples ?? 20
   if (input.verdicts.length === 0) {
     return { status: 'none', winner: null, reason: '비교 결과가 없다' }
+  }
+  /**
+   * 🔴 **절대 품질을 먼저 본다.**
+   *    상대 비교는 "공개할 수 있는 것들 중 무엇이 나은가" 다.
+   *    전부 공개할 수 없으면 비교 자체가 성립하지 않는다 — winner 는 null 이다.
+   */
+  const quality = input.verdicts.map((v) => ({ v, q: judgeAbsoluteQuality(v) }))
+  const survivors = quality.filter((x) => x.q.pass).map((x) => x.v)
+  const droppedModels = quality.filter((x) => !x.q.pass).map((x) => x.v.model)
+  if (survivors.length === 0) {
+    return {
+      status: 'none',
+      winner: null,
+      rejectedModels: droppedModels,
+      reason: '🔴 모든 모델이 절대 품질 기준에 미달했다 — 우세를 말하지 않는다 · '
+        + quality.map((x) => x.q.reason).join(' / '),
+    }
+  }
+  if (droppedModels.length > 0) {
+    // 🔴 떨어진 모델은 아예 빼고 남은 것끼리만 본다
+    input = { ...input, verdicts: survivors }
   }
   /**
    * 🔴 **점수가 하나도 없으면 winner 도 null 이다.**
@@ -193,7 +286,18 @@ export function judgeModelSelection(input: {
     return {
       status: 'provisional',
       winner: null,
+      rejectedModels: droppedModels,
       reason: '채점된 축이 하나도 없다 — 우세한 모델을 말할 수 없다(provisional · winner 없음)',
+    }
+  }
+  /** 🔴 절대 기준을 통과한 것이 하나뿐이면 "비교" 가 아니다 */
+  if (survivors.length === 1) {
+    return {
+      status: 'provisional',
+      winner: null,
+      rejectedModels: droppedModels,
+      reason: `비교 대상이 ${survivors[0]!.model} 하나뿐이다 — 상대 비교가 성립하지 않는다`
+        + `(탈락: ${droppedModels.join(' · ')})`,
     }
   }
   const scored = input.verdicts.map((v) => ({
@@ -206,8 +310,12 @@ export function judgeModelSelection(input: {
     return {
       status: 'provisional',
       winner: top.v.model,
+      rejectedModels: droppedModels,
       reason: `표본 ${minSamples}건·전 축 채점을 채우지 못했다 — provisional 로 둔다`,
     }
   }
-  return { status: 'confirmed', winner: top.v.model, reason: `${top.v.model} 가 평균 ${top.mean.toFixed(2)} 로 앞섰다` }
+  return {
+    status: 'confirmed', winner: top.v.model, rejectedModels: droppedModels,
+    reason: `${top.v.model} 가 평균 ${top.mean.toFixed(2)} 로 앞섰다`,
+  }
 }

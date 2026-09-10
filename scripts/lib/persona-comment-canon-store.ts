@@ -25,11 +25,35 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 
 import { ARTIFACT_ROOT } from '../../src/lib/persona-comment-provenance'
+import { judgeRunUsable } from '../../src/lib/persona-eval-invalidation'
+import { buildReferenceManifest, loadCanonAsset, planBundles } from './persona-reference-store.mjs'
 import { EVAL_ROOT } from './persona-comment-eval-store'
 
 export const ARTIFACT_FILES = ['summary.json', 'samples.json', 'key.json'] as const
 
 const sha16 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 16)
+
+/**
+ * 🔴 지금 정본 자산으로 corpus·bundle digest 를 다시 낸다.
+ *    자산이 없거나 묶음이 서지 않으면 `null` — 그러면 승격이 막힌다.
+ */
+function defaultExpectedDigests(): { sanitizedCorpusDigest: string; personaBundleDigest: string } | null {
+  try {
+    const canon = loadCanonAsset()
+    if (!canon.ok || canon.rows.length === 0) return null
+    const codes = [...new Set(canon.rows.map((r) => r.speakerId))].slice(0, 9)
+      .map((_, i) => `S${String(i + 1).padStart(2, '0')}`)
+    const plan = planBundles({ rows: canon.rows, personaCodes: codes })
+    if (plan.bundles.length === 0) return null
+    const m = buildReferenceManifest({
+      sourceDigest: canon.sourceDigest ?? '', rows: canon.rows, bundles: plan.bundles,
+    })
+    return {
+      sanitizedCorpusDigest: m.sanitizedCorpusDigest,
+      personaBundleDigest: m.personaBundleDigest,
+    }
+  } catch { return null }
+}
 
 export type PromoteResult =
   | { ok: true; dir: string; hashes: Record<string, string>; already: boolean; reason: string }
@@ -54,6 +78,8 @@ export function promoteRun(input: {
   fromRoot?: string
   /** 공용 정본 경로 (기본 Application Support) */
   toRoot?: string
+  /** 🔴 지금 자산의 digest 를 내는 함수 — 시험용 주입. `null` 이면 승격 금지 */
+  expectedDigests?: () => { sanitizedCorpusDigest: string; personaBundleDigest: string } | null
 }): PromoteResult {
   const fromRoot = input.fromRoot ?? EVAL_ROOT
   const toRoot = input.toRoot ?? ARTIFACT_ROOT
@@ -61,6 +87,41 @@ export function promoteRun(input: {
     return { ok: false, reason: `runId 형식이 아니다 — ${input.runId}` }
   }
   const src = readTriple(join(fromRoot, input.runId))
+  /**
+   * 🔴 **무효 회차와 manifest 없는 회차는 승격하지 않는다** (2026-09-10, P0-1·P0-2).
+   *
+   *    옮기는 것은 값싼 일이라 막지 않으면 그대로 정본 옆에 놓인다.
+   *    한 번 놓이면 다음 사람은 그것을 "확정된 근거" 로 읽는다.
+   *    그래서 **옮기는 자리에서 막는다.**
+   */
+  {
+    let manifest: unknown
+    try {
+      manifest = (JSON.parse(src?.['summary.json'] ?? '{}') as { referenceManifest?: unknown })
+        .referenceManifest
+    } catch { manifest = undefined }
+    /**
+     * 🔴 **지금 정본 자산으로 다시 낸 digest 와 실제로 대조한다** (2026-09-10, P0-3).
+     *
+     *    manifest 안의 값끼리만 보면 "적어 둔 대로 적었다" 를 확인할 뿐이다.
+     *    회차가 저장된 뒤 자산이 바뀌었으면 그 회차의 근거는 재현되지 않는다.
+     *
+     * 🔴 **expected 를 구하지 못하면 승격하지 않는다.** 대조할 수 없는 것을
+     *    "대조 통과" 로 세지 않는다(fail-closed).
+     */
+    const expected = (input.expectedDigests ?? defaultExpectedDigests)()
+    if (expected === null) {
+      return {
+        ok: false,
+        reason: '[REFERENCE_ASSET_UNAVAILABLE] 지금 정본 자산의 digest 를 구하지 못했다'
+          + ' — 대조 없이 승격하지 않는다(fail-closed)',
+      }
+    }
+    const usable = judgeRunUsable({ runId: input.runId, manifest, expected })
+    if (!usable.usable) {
+      return { ok: false, reason: `[${usable.code}] ${usable.reason}` }
+    }
+  }
   if (src === null) {
     return { ok: false, reason: `옮길 회차를 읽지 못했다 — ${join(fromRoot, input.runId)} (세 파일이 다 있어야 한다)` }
   }
