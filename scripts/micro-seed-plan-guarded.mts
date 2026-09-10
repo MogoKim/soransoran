@@ -120,7 +120,10 @@ async function run() {
   //    checkContent 는 브랜드 금지어를 통과시켜야 한다. 여기가 막히면
   //    회원이 "어르신" 이라고 쓴 글이 거부된다 — 이 PR 이 건드리면 안 되는 지점이다.
   {
-    const leaked = BRAND_BANNED_WORDS.filter((w) => !checkContent(`${w} 이야기입니다`).ok)
+    // 🔴 audience:'user' 로 묻는다. 여기서 확인하려는 것이 "회원이 쓴 글" 경로이기 때문이다.
+    const leaked = BRAND_BANNED_WORDS.filter(
+      (w) => !checkContent(`${w} 이야기입니다`, { audience: 'user' }).ok,
+    )
     if (leaked.length === 0) {
       pass('사용자 글 경로 무변경 (checkContent 는 브랜드어를 통과시킨다)', '4개 전부 통과 확인')
     } else {
@@ -141,7 +144,8 @@ async function run() {
   // ── ⑦ base 위반이면 사유를 덮어쓰지 않는가 ───────────────
   {
     const r = checkMicroSeedContent('카톡: abc123 어르신')
-    const baseReason = checkContent('카톡: abc123 어르신')
+    // 🔴 checkMicroSeedContent 와 같은 audience 로 물어야 사유를 비교할 수 있다.
+    const baseReason = checkContent('카톡: abc123 어르신', { audience: 'bot' })
     if (!r.ok && !baseReason.ok && r.reason === baseReason.reason) {
       pass('base 위반 사유를 덮어쓰지 않는다', r.reason)
     } else {

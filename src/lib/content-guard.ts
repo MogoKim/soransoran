@@ -1,63 +1,136 @@
 /**
- * 최소 콘텐츠 가드 — 금칙어 · 스팸 패턴
+ * 콘텐츠 가드 — **단어가 아니라 행동**을 막는다.
  *
- * 목적은 완벽한 차단이 아니라 D-day 최소 방어선이다.
- * 오탐으로 실회원의 첫 글을 막는 것이 스팸 몇 건보다 손해이므로,
- * 확실한 것만 막고 애매한 것은 통과시킨다.
+ * 🔴 왜 영역(audience)을 나누는가
+ *    한 배열을 회원 글·닉네임·공식 글·봇 글이 함께 쓰고 있었다. 그래서 회원의 말을 풀어
+ *    주려고 단어를 지우면 **우리 이름으로 나가는 봇 글까지** 함께 풀렸다.
+ *    푸는 곳과 조이는 곳이 다르므로 정책도 갈라야 한다.
+ *
+ * 🔴 왜 단어가 아니라 행동 조합인가
+ *    실측(2026-09-10, 43문장): 단어 목록은 "카지노에서 돈을 잃은 가족 때문에 고민이에요",
+ *    "리딩방 사기를 당했어요", "코인 리딩방에 속지 마세요" 같은 **피해·경고 글 11건을
+ *    전부 막으면서**, "추천인 코드 ABC123 입력하시면 보너스", "수익보장 지금 충전하세요"
+ *    같은 **실제 광고는 통과**시켰다. 단어는 우회가 쉽고 오탐이 크다.
+ *    피해를 **이야기하는** 글은 허용하고, 피해자를 **모집하는** 글을 막는다 —
+ *    모집은 언제나 "밖으로 데려갈 통로"(링크·전화·ID)를 함께 들고 온다.
  */
 
 /** 서비스 표현 금지어 — 브랜드 규칙 (사용자 글에는 적용하지 않는다) */
 export const BRAND_BANNED_WORDS = ['시니어', '어르신', '노인', '실버'] as const
 
-/** 사용자 글에서 차단할 표현 — 욕설·혐오·노골적 광고 */
-const BLOCKED_PATTERNS: RegExp[] = [
-  // 욕설 (자모 분리·반복 우회 일부 포함)
-  /시\s*발|씨\s*발|시\s*팔|병\s*신|개\s*새\s*끼|좆|썅|지\s*랄/i,
-  // 성인/불법 광고
-  /카\s*지\s*노|바\s*카\s*라|토\s*토\s*사\s*이\s*트|먹\s*튀|조\s*건\s*만\s*남/i,
-  // 대출·투자 스팸
-  /대\s*출\s*문\s*의|신\s*용\s*불\s*량|작\s*업\s*대\s*출|코\s*인\s*리\s*딩|리\s*딩\s*방/i,
+/**
+ * 검사 대상이 누구의 글인가.
+ *
+ *   user      회원·비회원이 직접 쓴 글·댓글·인사말 — 가장 넓게 허용한다
+ *   nickname  비회원 닉네임 — 여러 화면에 반복 노출되므로 엄격을 유지한다
+ *   official  어드민이 쓰는 공식 콘텐츠 — 서비스가 직접 말하는 글이다
+ *   bot       Micro Seed·persona — 우리 이름으로 발행되므로 가장 엄격하다
+ *
+ * 🔴 기본값을 두지 않는다. 넘기지 않으면 컴파일이 깨진다 —
+ *    한 곳이라도 빠뜨렸을 때 조용히 느슨해지는 쪽이 훨씬 나쁘다.
+ */
+export type GuardAudience = 'user' | 'nickname' | 'official' | 'bot'
+
+/** 영역별로 거친 표현·도박/금융 단어를 단독으로 막는가 */
+const BLOCKS_WORDS: Record<GuardAudience, boolean> = {
+  user: false,
+  nickname: true,
+  official: true,
+  bot: true,
+}
+
+/**
+ * 단어 자체로 막는 표현 — **user 를 제외한 영역에서만** 본다.
+ *
+ * 🔴 `\s*` 를 쓰지 않는다. 그것이 공백과 **줄바꿈까지** 무제한 건너뛰어
+ *    서로 다른 낱말과 문장을 하나의 욕설로 합쳤다. 실측으로 잡은 오탐:
+ *      도시 발전 · 질병 신호 · 병 신경 · 시 팔월 · 이 시 발표회 ·
+ *      신용 불량품 · 작업 대출계 · 대출 문의 없이 ·
+ *      문단 끝 "도시" + 다음 문단 "발전" · "카지"+"노래방" · "먹"+"튀김"
+ *    띄어쓰기 우회를 막아 얻는 것보다 일상어를 막아 잃는 것이 훨씬 컸다.
+ *    이제 **붙어 있는 글자만** 본다.
+ *
+ * 🔴 한글에는 ASCII `\b` 를 쓰지 않는다. 한글은 낱말 경계가 아니라 음절 경계라
+ *    `\b` 가 아무 데서나 참이 된다. 대신 **알려진 정상 낱말만** 앞을 내다보고 뺀다 —
+ *    지금은 始發點·始發驛·始發車 하나뿐이고, 늘어나면 여기에 적는다.
+ *    (lookbehind 는 쓰지 않는다. 구형 iOS Safari 가 지원하지 않는다)
+ */
+const WORD_PATTERNS: RegExp[] = [
+  /시발(?!점|역|차)|씨발|시팔|병신|개새끼|좆|썅|지랄/i,
+  /카지노|바카라|토토사이트|먹튀|조건만남/i,
+  /대출문의|신용불량|작업대출|코인리딩|리딩방/i,
 ]
 
-/** 연락처 유도 — 커뮤니티 밖으로 빼내려는 시도 */
-const CONTACT_PATTERNS: RegExp[] = [
-  /카\s*톡\s*[:：]?\s*[a-z0-9_-]{3,}/i,
-  /오\s*픈\s*카\s*톡/i,
-  /텔\s*레\s*[:：]?\s*@?[a-z0-9_]{4,}/i,
-  /\b01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}\b/,
+/**
+ * 밖으로 데려가는 통로 — 어느 영역에서든 막는다.
+ *
+ * 🔴 전화번호와 ID 를 나눠 둔다. 사람에게 할 말이 다르기 때문이다 —
+ *    "전화번호를 지워 주세요" 와 "외부 연락처 ID 는 넣을 수 없어요" 는 다른 안내다.
+ * 🔴 여기서도 `\s*` 를 쓰지 않는다. 같은 이유다.
+ */
+const PHONE_PATTERN = /\b01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}\b/
+const EXTERNAL_ID_PATTERNS: RegExp[] = [
+  /카톡\s*[:：]\s*[a-z0-9_-]{3,}/i,
+  /텔레\s*[:：]?\s*@?[a-z0-9_]{4,}/i,
+  /텔레그램\s*[:：]?\s*@?[a-z0-9_]{4,}/i,
 ]
+
+/**
+ * 오픈채팅 언급.
+ *
+ * 🔴 user 영역에서는 이것만으로 막지 않는다.
+ *    "오픈카톡 사기 조심하세요" 같은 **경고 글**이 막히기 때문이다.
+ *    대신 아래 광고 조합의 "밖으로 나가는 통로" 신호로 센다.
+ *    엄격 영역(nickname·official·bot)에서는 지금까지처럼 단독으로 막는다.
+ */
+const OPEN_CHAT_PATTERN = /오픈카톡|오픈채팅/i
 
 /** 본문에 넣을 수 있는 링크 수. 제목은 0개다 */
 export const MAX_BODY_LINKS = 2
 
 /**
- * 무엇 때문에 막혔는가 — 화면이 **문구를 읽지 않고** 판단할 수 있게 하는 값.
+ * 광고 조합 — 세 가지가 **모두** 있을 때만 막는다.
  *
- * 🔴 문구를 파싱해 사유를 추론하지 않게 하려고 둔다.
- *    한때 화면이 '로그인이 필요합니다.' 같은 문장을 비교해 분기했고,
- *    서버 문구가 바뀌는 날 그 연결이 조용히 끊겼다(PostActionBar 에 같은 기록이 있다).
- *    사유는 code 로, 사람에게 할 말은 message 로 나눈다.
+ *   ① 밖으로 나가는 통로   링크 · 전화번호 · 외부 ID · 오픈채팅
+ *   ② 모집·수익 유도       가입 · 충전 · 추천인 · 수익 보장 · 입금 · 첫충 · 꽁머니 · 모집
+ *   ③ 도박·투자·대출 판    카지노 · 바카라 · 토토 · 먹튀 · 리딩방 · 코인리딩 · 대출 · 신용불량 …
  *
- * 🔴 matchedText 는 **차단 표현일 때만** 준다. 연락처는 주지 않는다 —
- *    전화번호·카톡 아이디를 화면과 로그에 다시 흘리는 일이 된다.
+ * 🔴 하나만으로는 절대 막지 않는다. 그래야 이런 글이 살아남는다.
+ *      "리딩방 사기를 당했어요"            ③만 있다
+ *      "코인 리딩방에 속지 마세요"          ③만 있다 (경고 글)
+ *      "카지노에서 돈을 잃은 가족 때문에"   ③만 있다
+ *      "대출 문의 전화가 계속 와서 무서워요" ③만 있다
+ *      "동호회 가입하려면 https://…"        ①②만 있다 (도박 판이 아니다)
+ *
+ * 🔴 문맥을 AI 로 판정하지 않는다. 왜 막혔는지 사람이 설명할 수 있어야 하고,
+ *    같은 입력이면 언제나 같은 답이 나와야 한다.
  */
+const AD_INTENT_PATTERN =
+  /가입|충전|추천인|수익\s*보장|보장\s*수익|입금|첫\s*충|꽁\s*머니|모집|총판|콜센터/i
+const AD_DOMAIN_PATTERN =
+  /카지노|바카라|토토|먹튀|조건만남|리딩방|코인리딩|작업대출|대출|신용불량|배팅|베팅|슬롯|홀덤|선물거래|코인/i
+
 export type ContentGuardIssue =
   | {
       code: 'BLOCKED_EXPRESSION'
-      /** 실제로 걸린 문자열. 공백 우회('지 랄')면 그 모양 그대로다 */
+      /** 실제로 걸린 문자열 */
       matchedText: string
       /** 넘겨받은 원본 문자열 기준 위치 */
       start: number
       end: number
     }
-  | { code: 'CONTACT_INFO' }
+  /** 🔴 걸린 번호를 싣지 않는다. 지우라고 하면서 한 번 더 노출하는 일이 된다 */
+  | { code: 'CONTACT_PHONE' }
+  /** 🔴 걸린 아이디를 싣지 않는다. 같은 이유다 */
+  | { code: 'CONTACT_EXTERNAL_ID' }
   | { code: 'TOO_MANY_LINKS'; count: number; allowed: number }
   | { code: 'EXCESSIVE_REPEAT'; start: number; end: number }
+  /** 🔴 걸린 문구를 싣지 않는다. 광고 원문을 화면에 되풀이할 이유가 없다 */
+  | { code: 'AD_COMBO' }
 
 /**
  * 🔴 issue 는 optional 이다.
- *    micro-seed-guard 처럼 `{ ok:false, reason }` 만 만들어 돌려주는 기존 소비자가 있다.
- *    필수로 두면 그쪽이 전부 깨진다 — 넓히는 변경만 하고 기존 계약은 건드리지 않는다.
+ *    micro-seed-guard 처럼 `{ ok:false, reason }` 만 만들어 돌려주는 소비자가 있다.
  */
 export type GuardResult =
   | { ok: true }
@@ -73,10 +146,7 @@ function countUrls(text: string): number {
 /**
  * 정규식이 **실제로 문 문자열**과 그 위치를 돌려준다.
  *
- * 🔴 test() 로 걸러 낸 뒤 indexOf 로 다시 찾지 않는다.
- *    패턴은 `지\s*랄` 처럼 공백을 건너뛰므로 원문에는 '지랄' 이라는 연속 문자열이 없다 —
- *    다시 찾으면 못 찾거나 엉뚱한 자리를 가리킨다. exec() 가 이미 답을 들고 있다.
- *
+ * 🔴 test() 로 거른 뒤 indexOf 로 다시 찾지 않는다. exec() 가 이미 답을 들고 있다.
  * 🔴 패턴에 /g 를 붙이지 않는다. lastIndex 가 호출 사이에 남아
  *    같은 입력이 한 번은 걸리고 한 번은 통과하는 상태가 생긴다.
  */
@@ -91,69 +161,84 @@ function firstMatch(patterns: RegExp[], value: string): RegExpExecArray | null {
 /** 같은 문자가 과도하게 반복되는 자리 (ㅋㅋㅋㅋ… 같은 정상 표현은 허용 범위를 넉넉히 둔다) */
 const EXCESSIVE_REPEAT = /(.)\1{19,}/
 
+/** 사람에게 할 말. 화면이 문구를 파싱하지 않도록 code 와 짝으로만 쓴다 */
+function reasonFor(issue: ContentGuardIssue): string {
+  switch (issue.code) {
+    case 'BLOCKED_EXPRESSION':
+      return '사용할 수 없는 표현이 있습니다. 다시 적어주세요.'
+    case 'CONTACT_PHONE':
+      return '전화번호는 남길 수 없어요. 전화번호를 지워 주세요.'
+    case 'CONTACT_EXTERNAL_ID':
+      return '외부 연락처 ID는 입력할 수 없어요.'
+    case 'TOO_MANY_LINKS':
+      return issue.allowed === 0
+        ? '링크를 넣을 수 없어요. 링크를 지워 주세요.'
+        : `링크는 ${issue.allowed}개까지만 넣을 수 있어요. 링크를 줄여 주세요.`
+    case 'EXCESSIVE_REPEAT':
+      return '같은 글자가 너무 많이 반복돼요. 그 부분을 줄여 주세요.'
+    case 'AD_COMBO':
+      return '광고성 가입·충전 안내와 외부 링크·연락처를 함께 넣을 수 없어요.'
+  }
+}
+
+function fail(issue: ContentGuardIssue): GuardResult {
+  return { ok: false, reason: reasonFor(issue), issue }
+}
+
 /**
- * 사용자 글 검사.
+ * 글 하나를 잰다.
  *
- * 🔴 위치는 **넘겨받은 원본** 기준으로 돌려준다.
- *    내부에서 trim() 한 문자열로 재면 앞 공백만큼 어긋나, 화면이 그 값으로
- *    제목 입력칸을 선택했을 때 한 글자씩 밀린 자리를 잡는다.
- *
- * 🔴 reason 문구는 바꾸지 않는다.
- *    댓글·비회원 댓글·인사말·어드민·Micro Seed 가 같은 함수를 쓰고 그 문구를 화면과
- *    보고서에 그대로 띄운다. 이번 작업의 범위는 글쓰기 화면이므로, 더 친절한 문장은
- *    issue 를 받은 쪽이 만든다(post-guard-message.ts).
+ * 🔴 audience 는 필수다. 넘기지 않으면 컴파일이 깨진다 — §GuardAudience 참조.
+ * 🔴 위치는 **넘겨받은 원본** 기준으로 돌려준다. 내부 trim 기준으로 재면
+ *    앞 공백만큼 어긋나 제목 구간 선택이 밀린다.
  */
-export function checkContent(text: string, { isTitle = false } = {}): GuardResult {
+export function checkContent(
+  text: string,
+  { isTitle = false, audience }: { isTitle?: boolean; audience: GuardAudience },
+): GuardResult {
   const value = text.trim()
   if (!value) return OK
 
-  // trim 으로 잘려 나간 앞쪽 길이. 위치를 원본 기준으로 되돌리는 데 쓴다.
   const offset = text.indexOf(value)
 
-  const blocked = firstMatch(BLOCKED_PATTERNS, value)
-  if (blocked) {
-    return {
-      ok: false,
-      reason: '사용할 수 없는 표현이 있습니다. 다시 적어주세요.',
-      issue: {
+  // ① 단어 — user 를 제외한 영역에서만 본다
+  if (BLOCKS_WORDS[audience]) {
+    const blocked = firstMatch(WORD_PATTERNS, value)
+    if (blocked) {
+      return fail({
         code: 'BLOCKED_EXPRESSION',
         matchedText: blocked[0],
         start: offset + blocked.index,
         end: offset + blocked.index + blocked[0].length,
-      },
+      })
     }
+    // 오픈채팅 단독 차단도 엄격 영역에만 남긴다 (user 는 아래 광고 조합이 본다)
+    if (OPEN_CHAT_PATTERN.test(value)) return fail({ code: 'CONTACT_EXTERNAL_ID' })
   }
 
-  if (firstMatch(CONTACT_PATTERNS, value)) {
-    // 🔴 걸린 문자열을 싣지 않는다. 전화번호·카톡 아이디가 화면·로그로 다시 나간다.
-    return {
-      ok: false,
-      reason: '연락처나 외부 대화방 주소는 남길 수 없습니다.',
-      issue: { code: 'CONTACT_INFO' },
-    }
-  }
+  // ② 밖으로 데려가는 통로 — 어느 영역에서든 막는다
+  if (PHONE_PATTERN.test(value)) return fail({ code: 'CONTACT_PHONE' })
+  if (firstMatch(EXTERNAL_ID_PATTERNS, value)) return fail({ code: 'CONTACT_EXTERNAL_ID' })
 
+  // ③ 링크 개수
   const allowed = isTitle ? 0 : MAX_BODY_LINKS
   const count = countUrls(value)
-  if (count > allowed) {
-    return {
-      ok: false,
-      reason: '링크가 너무 많습니다.',
-      issue: { code: 'TOO_MANY_LINKS', count, allowed },
-    }
+  if (count > allowed) return fail({ code: 'TOO_MANY_LINKS', count, allowed })
+
+  // ④ 광고 조합 — 통로 + 모집 유도 + 도박·투자 판이 **모두** 있을 때만
+  const hasChannel = count > 0 || OPEN_CHAT_PATTERN.test(value)
+  if (hasChannel && AD_INTENT_PATTERN.test(value) && AD_DOMAIN_PATTERN.test(value)) {
+    return fail({ code: 'AD_COMBO' })
   }
 
+  // ⑤ 도배
   const repeat = EXCESSIVE_REPEAT.exec(value)
   if (repeat) {
-    return {
-      ok: false,
-      reason: '같은 글자가 너무 많이 반복됩니다.',
-      issue: {
-        code: 'EXCESSIVE_REPEAT',
-        start: offset + repeat.index,
-        end: offset + repeat.index + repeat[0].length,
-      },
-    }
+    return fail({
+      code: 'EXCESSIVE_REPEAT',
+      start: offset + repeat.index,
+      end: offset + repeat.index + repeat[0].length,
+    })
   }
 
   return OK

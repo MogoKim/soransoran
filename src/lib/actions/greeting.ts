@@ -73,7 +73,7 @@ export async function submitGreeting(
   if (content.length < FIRST_GREETING_MIN_LENGTH) return { error: TOO_SHORT }
   if (content.length > FIRST_GREETING_MAX_LENGTH) return { error: TOO_LONG }
 
-  const guard = checkContent(content)
+  const guard = checkContent(content, { audience: 'user' })
   if (!guard.ok) return { error: guard.reason }
 
   const limited = checkActionRateLimit('greeting', userId, GREETING_LIMIT, GREETING_WINDOW_MS)

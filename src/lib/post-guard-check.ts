@@ -54,10 +54,10 @@ export function checkPostContent({
   title: string
   text: string
 }): PostGuardBlock | null {
-  const titleGuard = checkContent(title, { isTitle: true })
+  const titleGuard = checkContent(title, { isTitle: true, audience: 'user' })
   if (!titleGuard.ok && titleGuard.issue) return toBlock('title', titleGuard.issue)
 
-  const contentGuard = checkContent(text)
+  const contentGuard = checkContent(text, { audience: 'user' })
   if (!contentGuard.ok && contentGuard.issue) return toBlock('content', contentGuard.issue)
 
   return null
