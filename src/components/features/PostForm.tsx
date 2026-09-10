@@ -28,6 +28,8 @@ import {
 import { toEditorHtml } from '@/lib/post-content-format'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import WriteLoginPrompt from '@/components/features/WriteLoginPrompt'
+import FieldErrorNotice from '@/components/features/FieldErrorNotice'
+import { usePostGuardError } from '@/components/features/use-post-guard-error'
 
 const DRAFT_SAVE_DELAY_MS = 1000
 
@@ -298,6 +300,19 @@ export default function PostForm({
   })
   // 🔴 넘긴 뒤에는 다시 누를 수 없다. 서버가 막아 세우면 위 effect 가 다시 열어 준다.
   const canSubmit = block === null && !submitting
+
+  /**
+   * 🔴 고치기 화면과 같은 훅을 쓴다. 두 화면이 각자 적으면 언젠가 한쪽만 고쳐진다.
+   * 🔴 금칙어 판정을 화면에서 다시 하지 않는다. 서버가 검사하는 평문은
+   *    postContentToText(HTML) 이고 에디터가 아는 글자는 editor.getText() 라 서로 다르다 —
+   *    화면이 미리 막으면 "버튼은 잠겼는데 서버는 통과" 또는 그 반대가 생긴다.
+   *    판정은 서버 하나가 하고(정본 §5-3), 화면은 그 답을 제자리에 붙인다.
+   *    그래서 postSubmitBlock 에 금칙어를 넣지 않았다 — 상단·하단 CTA 는 지금처럼
+   *    같은 block 하나만 보므로 서로 다른 답을 낼 자리가 없다.
+   */
+  const guard = usePostGuardError({ fieldError: state.fieldError, title, content })
+  const titleBlocked = guard.error?.field === 'title'
+  const contentBlocked = guard.error?.field === 'content'
   const board = COMMUNITY_BOARDS.find((b) => b.slug === boardSlug)
 
   return (
@@ -386,7 +401,9 @@ export default function PostForm({
         busy={submitting}
       />
 
-      {state.error ? (
+      {/* 🔴 칸에 붙는 안내가 있으면 위쪽 요약은 띄우지 않는다.
+             같은 문장이 두 번 읽히면 무엇이 문제인지 오히려 흐려진다. */}
+      {state.error && !guard.error ? (
         state.needsOnboarding ? (
           <OnboardingNotice message={state.error} callbackUrl={`/write?board=${boardSlug}`} />
         ) : (
@@ -458,18 +475,26 @@ export default function PostForm({
         ))}
       </select>
 
-      <input
-        name="title"
-        type="text"
-        aria-label="제목"
-        maxLength={MAX_POST_TITLE_LENGTH}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted"
-        placeholder={POST_TITLE_PLACEHOLDER}
-      />
-
       <div className="flex flex-col gap-1">
+        <input
+          ref={guard.titleRef}
+          name="title"
+          type="text"
+          aria-label="제목"
+          aria-invalid={titleBlocked || undefined}
+          aria-describedby={titleBlocked ? guard.titleErrorId : undefined}
+          maxLength={MAX_POST_TITLE_LENGTH}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted aria-[invalid]:border-state-danger"
+          placeholder={POST_TITLE_PLACEHOLDER}
+        />
+        {titleBlocked && guard.error ? (
+          <FieldErrorNotice id={guard.titleErrorId} message={guard.error.message} />
+        ) : null}
+      </div>
+
+      <div ref={guard.bodyRef} className="flex flex-col gap-1">
         {/* 🔴 form 에는 hidden input 으로 낸다. Tiptap 은 name 을 가진 입력이 아니다. */}
         <input type="hidden" name="content" value={content} readOnly />
         <PostEditor
@@ -482,7 +507,13 @@ export default function PostForm({
           /* 굵게·유튜브는 브라우저 안에서 끝나 임시저장에 그대로 남는다.
              사진만 서버를 거치므로 비회원에게는 열지 않는다(post-media-policy). */
           canUploadImage={isLoggedIn}
+          focusSignal={guard.editorFocusSignal}
+          ariaInvalid={contentBlocked}
+          ariaDescribedBy={guard.contentErrorId}
         />
+        {contentBlocked && guard.error ? (
+          <FieldErrorNotice id={guard.contentErrorId} message={guard.error.message} />
+        ) : null}
       </div>
 
       {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}

@@ -9,6 +9,8 @@ import WriteTopBar from '@/components/features/WriteTopBar'
 import { firstImageUrl } from '@/lib/post-media'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
+import FieldErrorNotice from '@/components/features/FieldErrorNotice'
+import { usePostGuardError } from '@/components/features/use-post-guard-error'
 import {
   MAX_POST_TITLE_LENGTH,
   POST_CONTENT_PLACEHOLDER,
@@ -62,6 +64,17 @@ export default function PostEditForm({
   })
   const canSubmit = block === null
 
+  /**
+   * 🔴 새 글 폼과 같은 훅을 쓴다. 고치는 화면만 다르게 말하면 같은 사람이 두 번 배운다.
+   * 🔴 금칙어 판정을 화면에서 다시 하지 않는다. 서버가 검사하는 평문은
+   *    postContentToText(HTML) 이고 에디터가 아는 글자는 editor.getText() 라 서로 다르다 —
+   *    화면이 미리 막으면 "버튼은 잠겼는데 서버는 통과" 또는 그 반대가 생긴다.
+   *    판정은 서버 하나가 하고, 화면은 그 답을 제자리에 붙인다(정본 §5-3·§5-11).
+   */
+  const guard = usePostGuardError({ fieldError: state.fieldError, title, content })
+  const titleBlocked = guard.error?.field === 'title'
+  const contentBlocked = guard.error?.field === 'content'
+
   return (
     <form action={formAction} className="flex flex-col gap-4">
       <input type="hidden" name="postId" value={postId} />
@@ -77,7 +90,9 @@ export default function PostEditForm({
         cancelHref={cancelHref}
       />
 
-      {state.error ? (
+      {/* 🔴 칸에 붙는 안내가 있으면 위쪽 요약은 띄우지 않는다.
+             같은 문장이 두 번 읽히면 무엇이 문제인지 오히려 흐려진다. */}
+      {state.error && !guard.error ? (
         state.needsOnboarding ? (
           <OnboardingNotice message={state.error} callbackUrl={pathname} />
         ) : (
@@ -88,18 +103,26 @@ export default function PostEditForm({
       ) : null}
 
       {/* 🔴 새 글 화면과 같은 배치다 — 라벨 없이 쓴 글이 그대로 보인다. */}
-      <input
-        name="title"
-        type="text"
-        aria-label="제목"
-        maxLength={MAX_POST_TITLE_LENGTH}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted"
-        placeholder={POST_TITLE_PLACEHOLDER}
-      />
-
       <div className="flex flex-col gap-1">
+        <input
+          ref={guard.titleRef}
+          name="title"
+          type="text"
+          aria-label="제목"
+          aria-invalid={titleBlocked || undefined}
+          aria-describedby={titleBlocked ? guard.titleErrorId : undefined}
+          maxLength={MAX_POST_TITLE_LENGTH}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted aria-[invalid]:border-state-danger"
+          placeholder={POST_TITLE_PLACEHOLDER}
+        />
+        {titleBlocked && guard.error ? (
+          <FieldErrorNotice id={guard.titleErrorId} message={guard.error.message} />
+        ) : null}
+      </div>
+
+      <div ref={guard.bodyRef} className="flex flex-col gap-1">
         <input type="hidden" name="content" value={content} readOnly />
         <PostEditor
           value={content}
@@ -107,7 +130,13 @@ export default function PostEditForm({
           onTextChange={setText}
           onBusyChange={setUploading}
           placeholder={POST_CONTENT_PLACEHOLDER}
+          focusSignal={guard.editorFocusSignal}
+          ariaInvalid={contentBlocked}
+          ariaDescribedBy={guard.contentErrorId}
         />
+        {contentBlocked && guard.error ? (
+          <FieldErrorNotice id={guard.contentErrorId} message={guard.error.message} />
+        ) : null}
       </div>
 
       {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}

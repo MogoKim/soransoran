@@ -6,7 +6,8 @@ import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
 import { getBoardBySlug, type CommunityBoardSlug } from '@/lib/board-registry'
 import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
-import { checkContent } from '@/lib/content-guard'
+import { checkContent, type ContentGuardIssue } from '@/lib/content-guard'
+import { postGuardMessage, type PostField } from '@/lib/post-guard-message'
 import { requireOnboarded } from '@/lib/onboarding-guard'
 import {
   MIN_POST_TITLE_LENGTH,
@@ -55,6 +56,26 @@ const POST_WINDOW_MS = 10 * 60 * 1000
  *    updatePost 는 지금도 redirect 로 끝나고, 그 화면(PostEditForm)은 error 만 읽는다 —
  *    선택 필드라 기존 경로는 그대로다.
  */
+/**
+ * 어느 칸이 왜 막혔는가 — 화면이 그 자리에 붙여 보여 줄 값.
+ *
+ * 🔴 error 와 함께 채운다. error 만 읽는 기존 경로(제출 잠금 해제 effect 등)를
+ *    깨지 않으려고 넓히기만 한다. 화면은 fieldError 가 있으면 그쪽을 우선한다.
+ * 🔴 message 는 서버가 만든다. 화면이 code 를 보고 문장을 지어내면
+ *    새 글과 고치기 화면이 각자 다른 말을 하게 된다.
+ * 🔴 matchedText·start·end 는 차단 표현일 때만 온다. 연락처는 오지 않는다.
+ */
+export type PostFieldError = {
+  field: PostField
+  code: ContentGuardIssue['code']
+  message: string
+  /** 실제로 걸린 표현. 공백 우회면 그 모양 그대로다 */
+  matchedText?: string
+  /** 원본 문자열 기준 위치 — 제목은 이 값으로 해당 구간을 선택한다 */
+  start?: number
+  end?: number
+}
+
 export type ActionState = {
   error?: string
   needsOnboarding?: true
@@ -63,6 +84,33 @@ export type ActionState = {
   destination?: string
   /** 계측 정본. 화면이 들고 있던 값이 아니라 서버가 실제로 저장한 게시판이다 */
   boardSlug?: CommunityBoardSlug
+  /** 콘텐츠 가드에 걸렸을 때만 온다 */
+  fieldError?: PostFieldError
+}
+
+/**
+ * 가드 결과를 화면이 쓸 수 있는 모양으로 옮긴다.
+ *
+ * 🔴 issue 가 없으면(옛 소비자가 만든 결과) reason 만 담는다 — 화면은 지금처럼 동작한다.
+ * 🔴 여기서 console 에 남기지 않는다. 제목·본문·연락처가 서버 로그로 흘러간다.
+ */
+function guardFailure(field: PostField, guard: { reason: string; issue?: ContentGuardIssue }): ActionState {
+  if (!guard.issue) return { error: guard.reason }
+
+  const message = postGuardMessage(field, guard.issue)
+  const issue = guard.issue
+  return {
+    error: message,
+    fieldError: {
+      field,
+      code: issue.code,
+      message,
+      ...(issue.code === 'BLOCKED_EXPRESSION'
+        ? { matchedText: issue.matchedText, start: issue.start, end: issue.end }
+        : {}),
+      ...(issue.code === 'EXCESSIVE_REPEAT' ? { start: issue.start, end: issue.end } : {}),
+    },
+  }
 }
 
 /**
@@ -117,9 +165,9 @@ export async function createPost(
   }
 
   const titleGuard = checkContent(title, { isTitle: true })
-  if (!titleGuard.ok) return { error: titleGuard.reason }
+  if (!titleGuard.ok) return guardFailure('title', titleGuard)
   const contentGuard = checkContent(text)
-  if (!contentGuard.ok) return { error: contentGuard.reason }
+  if (!contentGuard.ok) return guardFailure('content', contentGuard)
 
   const limited = checkActionRateLimit('post', userId, POST_LIMIT, POST_WINDOW_MS)
   if (!limited.ok) return { error: retryMessage(limited.retryAfterSec) }
@@ -203,9 +251,9 @@ export async function updatePost(
   }
 
   const titleGuard = checkContent(title, { isTitle: true })
-  if (!titleGuard.ok) return { error: titleGuard.reason }
+  if (!titleGuard.ok) return guardFailure('title', titleGuard)
   const contentGuard = checkContent(text)
-  if (!contentGuard.ok) return { error: contentGuard.reason }
+  if (!contentGuard.ok) return guardFailure('content', contentGuard)
 
   const limited = checkActionRateLimit('post-edit', userId, POST_EDIT_LIMIT, POST_EDIT_WINDOW_MS)
   if (!limited.ok) return { error: retryMessage(limited.retryAfterSec) }
