@@ -6,7 +6,7 @@
  *
  *    · `inspect` (기본)  실제 대상을 계산한다. provider 0 · DB write 0
  *    · `--call`          provider 를 부른다. 🔴 DB write 는 여전히 0
- *    · `--call --apply`  조건이 다 맞으면 `PENDING` 을 **최대 1건** 만든다
+ *    · `--call --apply`  조건이 다 맞으면 `PENDING` 을 **오늘 예산까지** 만든다
  *
  *    `--apply` 단독은 실패다 — 부르지 않고 적재할 후보 텍스트가 없기 때문이다.
  *
@@ -29,7 +29,9 @@ import type { Prisma } from '@prisma/client'
 
 import { judgeModelGate } from '../src/lib/persona-comment-release'
 import { judgeGateReport } from '../src/lib/persona-comment-gate-report'
-import { RATIO_WINDOW_DAYS } from '../src/lib/persona-comment-governor'
+import {
+  judgeReadiness, windowFromRows, RATIO_WINDOW_DAYS,
+} from '../src/lib/persona-comment-governor'
 import { runEnqueuePipeline } from './lib/persona-comment-pipeline'
 import {
   gateInputOf, materializeTargets, type GateContext,
@@ -45,6 +47,8 @@ import { dedupKeyOf, OPEN_STATUSES } from '../src/lib/persona-comment-queue'
 import { EVAL_ROOT } from './lib/persona-comment-eval-store'
 import { MODEL_CANON_FILE } from '../src/lib/persona-comment-provenance'
 import { judgeQueueFlags } from './lib/persona-comment-run-flags'
+import { legacyRunModeFor, readCommentStage, stagePowers } from '../src/lib/persona-comment-stage'
+import { countManagedPostsToday } from '../src/lib/persona-comment-bootstrap-source'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 /** 🔴 모드 판정은 순수 함수가 한다 — 스크립트 안의 `if` 는 fixture 가 볼 수 없다 */
@@ -53,21 +57,54 @@ if (!flags.ok) {
   console.error(`\n🔴 ${flags.reason}`)
   console.error('   기본(inspect): 대상 계산만 · provider 0 · DB write 0')
   console.error('   --call        : provider 호출 · DB write 0')
-  console.error('   --call 과 --apply 함께: 조건 충족 시 PENDING 최대 1건\n')
+  console.error('   --call 과 --apply 함께: 조건 충족 시 PENDING 을 오늘 예산까지\n')
   process.exit(1)
 }
 const WANT_CALL = flags.providerAllowed
 const WANT_APPLY = flags.writeAllowed
 const MODE = flags.mode
-/** 🔴 대상 계산 상한. 실제 write 상한(1건)과 별개다 */
-const TARGET_LIMIT = 5
+
+/**
+ * 🔴 **한 회차가 만들 수 있는 후보 상한.**
+ *
+ *    하루 예산이 500 이어도 한 번에 500 을 부르지 않는다 — 유료 호출이 한 회차에
+ *    몰리면 실패했을 때 잃는 것도 한꺼번에 크다. 발행 배치 상한(`BATCH_MAX`)과 같은 25 다.
+ */
+const QUEUE_RUN_MAX = 25
+/**
+ * 🔴 **예산이 0 이어도 "무엇이 대상이 될지" 는 보여 준다.**
+ *    inspect 회차 전용 상한이고, 이 경로는 provider 를 부르지 않는다.
+ */
+const PREVIEW_LIMIT = 5
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
 
 console.log('\n══ 댓글 후보 Queue 적재 ══\n')
+/**
+ * 🔴 **shadow 단계에서는 후보를 만들지 않는다** (2026-09-11 정정).
+ *
+ *    옛 판은 이 명령이 단계를 아예 읽지 않았다. 그래서 `SORAN_PERSONA_COMMENT_STAGE`
+ *    가 비어 있는 shadow 상태에서도 `--call --apply` 가 provider 를 부르고
+ *    PENDING 을 적재했다 — 실측으로 그렇게 1건이 들어갔다.
+ *    "shadow 는 provider 0 · Queue write 0" 이라고 적어 두고 코드가 지키지 않으면
+ *    그 문장은 계약이 아니라 장식이다.
+ */
+const stage = readCommentStage(process.env)
+const powers = stagePowers(stage.stage)
+console.log(`  단계  ${stage.stage} — ${stage.reason}`)
+console.log(`  권한  후보 생성 ${powers.generateCandidates ? '가능' : '🔴 불가'}`
+  + ` · 공개 ${powers.publishAllowed ? '가능' : '🔴 불가'}`
+  + ` · ${powers.detail}`)
+if (WANT_CALL && !powers.generateCandidates) {
+  console.error(`\n🔴 중단: ${stage.stage} 단계는 후보를 만들지 않는다 (provider 0 · Queue write 0)`)
+  console.error(`   후보를 만들려면 ${'SORAN_PERSONA_COMMENT_STAGE'}=bootstrap-review 로 올린다`)
+  console.error('   🔴 이 값은 창업자가 바꾸는 것이다 — 스크립트가 바꾸지 않는다.\n')
+  await prisma.$disconnect()
+  process.exit(1)
+}
 console.log(`  모드  ${MODE} — provider ${WANT_CALL ? '호출 가능' : '0'}`
-  + ` · DB write ${WANT_APPLY ? '최대 1건' : '0'}`)
+  + ` · DB write ${WANT_APPLY ? '예산까지' : '0'}`)
 
 // ── 🔴 모델 확정 여부가 첫 관문이다. 정본은 worktree 밖 파일이다 ──
 const canon = readConfirmedSelection()
@@ -88,12 +125,70 @@ if (!modelGate.canWriteQueue) {
 }
 
 /**
+ * 🔴 **적재 상한의 정본은 단계 예산이다** (2026-09-11).
+ *
+ *    옛 판은 `limit: WANT_APPLY ? 1 : 0` — **회차당 1건 고정**이었다.
+ *    그 숫자는 "글당 Persona 댓글 1건" 계약과 함께 들어온 값이고,
+ *    글 100편 × 자리 5개(=500)를 목표로 삼는 지금은 계약이 아니라 병목이다.
+ *    상한은 `judgeBootstrapBudget`(bootstrap) · `judgeRatio`(organic) 하나가 정한다 —
+ *    스크립트가 제 숫자를 지어내면 예산이 두 벌로 갈라진다.
+ *
+ * 🔴 이 블록은 **읽기만** 한다. write 0 · provider 0.
+ */
+const now = new Date()
+const nowMs = now.getTime()
+const windowMs = RATIO_WINDOW_DAYS * 86_400_000
+const kstDayStart = new Date(
+  Math.floor((nowMs + 9 * 3_600_000) / 86_400_000) * 86_400_000 - 9 * 3_600_000,
+)
+const commentWindow = await (async () => {
+  try {
+    return windowFromRows(await prisma.comment.findMany({
+      where: { isDeleted: false, createdAt: { gte: new Date(nowMs - windowMs), lte: now } },
+      select: { commentOrigin: true, personaId: true },
+    }), RATIO_WINDOW_DAYS)
+  } catch { return { measured: false, real: 0, persona: 0, windowDays: RATIO_WINDOW_DAYS } }
+})()
+const publishedToday = await prisma.comment.count({
+  where: { isDeleted: false, commentOrigin: 'PERSONA', createdAt: { gte: kstDayStart } },
+}).catch(() => null)
+const killSwitchOff = await (async (): Promise<boolean | null> => {
+  try {
+    const r = await prisma.personaGlobalSwitch.findUnique({
+      where: { id: 'global' }, select: { enabled: true },
+    })
+    return r === null ? true : !r.enabled
+  } catch { return null }
+})()
+const managed = powers.budget === 'bootstrap'
+  ? await countManagedPostsToday(prisma, kstDayStart, now)
+  : null
+const readiness = judgeReadiness({
+  window: commentWindow,
+  mode: legacyRunModeFor(stage.stage),
+  stage: stage.stage,
+  publishedToday,
+  killSwitchOff,
+  bootstrap: {
+    openSlots: managed?.openSlots ?? Number.NaN, publishedToday, killSwitchOff,
+  },
+})
+/** 🔴 유료 호출과 write 가 함께 묶이는 상한 */
+const RUN_LIMIT = Math.min(QUEUE_RUN_MAX, readiness.allowance.remaining)
+const TARGET_LIMIT = WANT_CALL ? RUN_LIMIT : PREVIEW_LIMIT
+console.log(`  예산  ${powers.budget} — ${readiness.detail}`)
+if (powers.budget === 'bootstrap') {
+  console.log(`        관리형 공개 글 ${managed?.eligible ?? '🔴 읽지 못함'}편`
+    + ` · 열린 댓글 자리 ${managed?.openSlots ?? '🔴 읽지 못함'}개`)
+}
+console.log(`  회차 상한  ${TARGET_LIMIT}건`
+  + ` (하루 남은 ${readiness.allowance.remaining} · 회차 상한 ${QUEUE_RUN_MAX})`)
+
+/**
  * 🔴 **대상은 공유 materializer 가 만든다.**
  *    글·Persona·생활사 축·열린 Queue·최근 역할·이전 발화·회원 표시명·
  *    코퍼스 빈도·seed 사용 횟수가 **한 경로**로 이어진다.
  */
-const nowMs = Date.now()
-const windowMs = RATIO_WINDOW_DAYS * 86_400_000
 const material = await materializeTargets({
   source: makeDbTargetSource({ prisma, windowStart: new Date(nowMs - windowMs) }),
   limit: TARGET_LIMIT,
@@ -227,8 +322,8 @@ const result = await runEnqueuePipeline({
     },
   } : {}),
   // 🔴 호출 상한과 write 상한은 다른 것이다. inspect 는 부르지 않는다
-  providerCallLimit: WANT_CALL ? TARGET_LIMIT : 0,
-  limit: WANT_APPLY ? 1 : 0,
+  providerCallLimit: WANT_CALL ? RUN_LIMIT : 0,
+  limit: WANT_APPLY ? RUN_LIMIT : 0,
 })
 
 console.log(`\n  provider 호출 ${result.providerCalls}회 · 적재 ${result.created}건`)

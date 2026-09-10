@@ -10,15 +10,14 @@
  *    뒤엣것은 유료 호출을 막아야 하는 사실이다.
  */
 import type { PrismaClient } from '@prisma/client'
-import pg from 'pg'
 
-import { POST_VISIBILITY_SELECT } from '../../src/lib/post-visibility'
+import { pickPostVisibility, POST_VISIBILITY_SELECT } from '../../src/lib/post-visibility'
 import { OPEN_STATUSES } from '../../src/lib/persona-comment-queue'
-import type { FrequencyCorpus, TargetSource } from './persona-comment-targets'
-import { loadUnaoReadonlyUrl } from './voice-unao-readonly.mjs'
+import type { FrequencyCorpus, FrequencyRead, TargetSource } from './persona-comment-targets'
+import { loadCanonCorpusTexts } from './persona-reference-store.mjs'
 
-/** 🔴 코퍼스는 회차마다 한 번만 읽는다 — 대상마다 다시 열면 read-only DB 를 두드린다 */
-let corpusOnce: Promise<FrequencyCorpus | null> | null = null
+/** 🔴 코퍼스는 회차마다 한 번만 읽는다 — 대상마다 다시 열면 같은 파일을 반복해서 연다 */
+let corpusOnce: FrequencyRead | null = null
 
 export function makeDbTargetSource(args: {
   prisma: PrismaClient
@@ -42,7 +41,9 @@ export function makeDbTargetSource(args: {
           author: { select: { providerId: true, isAdmin: true, _count: { select: { accounts: true } } } },
           comments: {
             where: { isDeleted: false },
-            select: { commentOrigin: true, content: true },
+            // 🔴 `persona.code` 까지 읽는다 — "누가 달았나" 를 모르면
+            //    같은 Persona 가 같은 글에 두 번 다는 것을 막을 수 없다
+            select: { commentOrigin: true, content: true, persona: { select: { code: true } } },
           },
         },
       })
@@ -61,13 +62,11 @@ export function makeDbTargetSource(args: {
           isAdmin: p.author.isAdmin,
           accountCount: p.author._count.accounts,
         },
-        visibility: {
-          status: p.status,
-          isMicroSeed: p.isMicroSeed,
-          permanentNoindex: p.permanentNoindex,
-          indexPromotionBlocked: p.indexPromotionBlocked,
-        },
-        comments: p.comments.map((c) => ({ origin: String(c.commentOrigin), content: c.content })),
+        // 🔴 축 이름은 정본만 안다 — 같은 추출 함수를 쓴다(C-2)
+        visibility: pickPostVisibility(p),
+        comments: p.comments.map((c) => ({
+          origin: String(c.commentOrigin), content: c.content, personaCode: c.persona?.code ?? null,
+        })),
       }))
     },
 
@@ -131,8 +130,10 @@ export function makeDbTargetSource(args: {
     },
 
     frequency: async () => {
-      if (args.readCorpus === false) return null
-      corpusOnce ??= readCommentCorpus()
+      if (args.readCorpus === false) {
+        return { corpus: null, reason: '이 회차는 코퍼스를 읽지 않기로 했다(readCorpus=false)' }
+      }
+      corpusOnce ??= readCanonCorpus()
       return corpusOnce
     },
 
@@ -158,38 +159,41 @@ export function makeDbTargetSource(args: {
 }
 
 /**
- * ② 댓글 코퍼스 — 🔴 우나어 read-only 에서 읽는다. **원문은 저장하지 않는다.**
- *    본문 코퍼스로 재면 "고생하셨어요" 같은 흔한 말이 고유 표현이 된다.
+ * ② 댓글 코퍼스 — 🔴 **소란소란 익명 정본 자산에서 읽는다** (2026-09-11).
+ *
+ * 🔴 **왜 우나어가 아닌가.** 옛 판은 우나어 read-only 의 `CafePost.topComments` 를 읽었다.
+ *    남의 서비스 DB 하나가 우리 댓글 레인의 생사를 쥐고 있었고,
+ *    2026-09-10 네이버 카페 데이터 폐기 이후 그 표는 근거가 되지 못한다.
+ *
+ * 🔴 **왜 자기 Comment 표가 아닌가.** 지금 우리 댓글은 한 자릿수다. 얇은 코퍼스에서는
+ *    `고생하셨어요` 같은 흔한 말도 빈도 0 이라 `rare` 로 잡혀 전부 regenerate 가 된다.
+ *    그렇다고 "쌓일 때까지 기다린다" 는 규제를 두면 초기에는 영영 돌지 않는다 —
+ *    **기다릴 필요가 없다.** 이미 정제를 마친 익명 정본이 그 자리에 있다
+ *    (`persona-reference/corpus.json`, 작성자 729명 대조 · 잔존 0건).
+ *
+ * 🔴 **자산 부재·digest 불일치는 사유와 함께 표면화한다.** 새 규제를 만들지 않는다 —
+ *    기존 fail-closed(② notRun · 유료 호출 차단) 그대로이고, 다른 것은
+ *    "왜 못 읽었는지" 가 로그에 남는다는 점뿐이다.
+ *
+ * 🔴 원문을 Git·DB 로 복사하지 않는다. 메모리에만 올려 빈도 조회에만 쓴다.
+ * 🔴 `speakerId` 는 받지도 않는다 — 빈도 판정에 화자는 들어가지 않는다.
  */
-async function readCommentCorpus(): Promise<FrequencyCorpus | null> {
-  const url = ((): string | null => { try { return loadUnaoReadonlyUrl() } catch { return null } })()
-  if (url === null) return null
-  try {
-    const unao = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } })
-    await unao.connect()
-    const { rows } = await unao.query<{ topComments: unknown }>(
-      'SELECT "topComments" FROM "CafePost" WHERE "topComments" IS NOT NULL LIMIT 3000',
-    )
-    await unao.end()
-    const bodies: string[] = []
-    for (const r of rows) {
-      let arr: unknown = r.topComments
-      if (typeof arr === 'string') { try { arr = JSON.parse(arr) } catch { continue } }
-      if (!Array.isArray(arr)) continue
-      for (const item of arr) {
-        if (item === null || typeof item !== 'object') continue
-        const body = (item as Record<string, unknown>).content
-        if (typeof body === 'string' && body.trim() !== '') bodies.push(body.replace(/\s+/gu, ''))
-      }
-    }
-    return {
-      size: bodies.length,
-      corpusName: 'comment',
-      lookup: (ngram: string): number => {
-        let n = 0
-        for (const b of bodies) if (b.includes(ngram)) { n += 1; if (n > 6) break }
-        return n
-      },
-    }
-  } catch { return null }
+function readCanonCorpus(): FrequencyRead {
+  const canon = loadCanonCorpusTexts()
+  if (!canon.ok) return { corpus: null, reason: `${canon.code} — ${canon.reason}` }
+  // 🔴 공백을 지운 형태로만 들고 있는다. n-gram 조회가 그 형태를 본다
+  const bodies = canon.texts.map((t) => t.replace(/\s+/gu, '')).filter((b) => b !== '')
+  if (bodies.length === 0) {
+    return { corpus: null, reason: 'ASSET_EMPTY — 정본 자산에 쓸 수 있는 본문이 없다' }
+  }
+  const corpus: FrequencyCorpus = {
+    size: bodies.length,
+    corpusName: 'comment',
+    lookup: (ngram: string): number => {
+      let n = 0
+      for (const b of bodies) if (b.includes(ngram)) { n += 1; if (n > 6) break }
+      return n
+    },
+  }
+  return { corpus, reason: canon.reason }
 }

@@ -29,9 +29,10 @@ import { PrismaClient } from '@prisma/client'
 
 import { judgeInputDiversity, type CommentInput } from '../src/lib/persona-comment-input'
 import {
-  judgeRatio, judgeReadiness, readRunMode, windowFromRows,
+  judgeRatio, judgeReadiness, windowFromRows,
   RATIO_WINDOW_DAYS, type CommentWindow,
 } from '../src/lib/persona-comment-governor'
+import { readCommentStage } from '../src/lib/persona-comment-stage'
 import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
 import { buildPromptFromInput, describeGateInput } from './lib/persona-comment-bridge'
 import { gateInputOf, materializeTargets } from './lib/persona-comment-targets'
@@ -65,9 +66,10 @@ const now = new Date()
 const nowMs = now.getTime()
 const windowStart = new Date(nowMs - RATIO_WINDOW_DAYS * 86_400_000)
 
-const mode = readRunMode(process.env)
+/** 🔴 단계 정본에서 읽는다 — 옛 파서로 읽으면 새 단계 이름이 "모르는 값" 으로 보인다 */
+const stage = readCommentStage(process.env)
 console.log('\n══ Conversation Engine shadow 파이프라인 (공개 write 0) ══\n')
-console.log(`  실행 모드  ${mode.mode} — ${mode.reason}`)
+console.log(`  운영 단계  ${stage.stage} — ${stage.reason}`)
 console.log(`  이 회차    ${WANT_SHADOW ? 'shadow' : 'inspect'}`)
 if (ASKED_CALL && !WANT_CALL) {
   console.log(`  🔴 --call 을 막았다 — ${externalCall.reason}`)
@@ -280,7 +282,7 @@ if (WANT_SHADOW) {
 
   mkdirSync('tmp', { recursive: true })
   writeFileSync(OUT, `${JSON.stringify({
-    ranAt: now.toISOString(), mode: mode.mode,
+    ranAt: now.toISOString(), mode: stage.stage,
     externalCallAllowed: REAL_POST_EXTERNAL_CALL_ALLOWED,
     called: false, calls: 0,
     // 🔴 남은 수량과 총 상한을 이름으로 나눠 적는다 — 하나로 적어 두 뜻으로 읽혔다

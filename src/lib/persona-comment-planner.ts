@@ -6,8 +6,11 @@
  *    공개 글 32건 중 27건에 댓글이 하나도 없다. 그 자리에 사람 대신 봇을 채우는 것이
  *    목적이 아니다 — 목적은 **말해도 되는 분위기**를 만드는 것이고, 그러려면
  *    ① 아무도 답하지 않은 글을 먼저 골라야 하고
- *    ② 같은 사람이 계속 나타나면 안 되고
+ *    ② 같은 사람이 같은 글에 두 번 나타나면 안 되고
  *    ③ 사람들끼리 대화가 붙은 자리에는 끼어들지 않아야 한다.
+ *
+ * 🔴 한 글에 붙는 Persona 댓글은 **1~5건**이다(`PERSONA_COMMENTS_PER_POST_MAX`).
+ *    억지로 5건을 채우지 않는다 — 붙일 수 있는 사람이 하나면 1건이고 그것으로 끝이다.
  *
  * 🔴 **판정에 필요한 값이 없으면 그 글·그 Persona 를 뺀다.** 채우지 않는다.
  *    모르는 것을 0 으로 보정하면 가장 위험한 대상이 가장 먼저 뽑힌다.
@@ -22,7 +25,9 @@ import {
 } from './original-post-persona-match'
 import { COMMENT_REACTION_ROLES } from './persona-reaction-roles'
 import { judgeRealMember, type RealMemberProbe } from './real-member-gate'
-import { judgeTargetPost, MEMBER_COMMENT_LIMIT, type TargetPostFacts } from './persona-target-rules'
+import {
+  judgeTargetPost, PERSONA_COMMENTS_PER_POST_MAX, type TargetPostFacts,
+} from './persona-target-rules'
 
 /** 대상 후보 글의 실측 */
 export type PlannerPost = {
@@ -35,8 +40,20 @@ export type PlannerPost = {
   memberComments: number
   /** 살아 있는 Persona 댓글 수 */
   personaComments: number
-  /** 이 글을 대상으로 하는 Queue 가 이미 있는가 */
-  hasOpenQueue: boolean
+  /**
+   * 🔴 이 글에 **이미 댓글을 단** Persona 들. 같은 사람이 두 번 달지 않게 한다.
+   *
+   *    `personaComments` 는 "몇 자리 찼나" 이고 이것은 "누가 찼나" 다.
+   *    수만 보면 같은 Persona 가 다시 뽑혀 한 사람이 여럿인 척하게 된다.
+   */
+  personaCodesOnPost: readonly string[]
+  /**
+   * 🔴 이 글을 대상으로 **열려 있는 Queue 의 Persona** 들.
+   *
+   *    옛 판은 `hasOpenQueue: boolean` 하나였고, 열린 것이 하나라도 있으면
+   *    글을 통째로 뺐다 — 글당 1건 계약의 잔재다. 지금은 자리를 **차지**할 뿐이다.
+   */
+  openQueuePersonaCodes: readonly string[]
   /** 공개된 시각(epoch ms). 모르면 null — 🔴 null 은 제외 사유다 */
   publishedAtMs: number | null
   /** 지금 노출 대상에서 내려가 있는가(expired/hold 등). 모르면 null */
@@ -83,9 +100,9 @@ export type PlannerPersona = {
 
 export type PlanBlockCode =
   | 'POST_NOT_PUBLISHED'
-  | 'POST_HAS_PERSONA_COMMENT'
+  | 'POST_PERSONA_COMMENTS_FULL'
   | 'POST_MEMBER_COMMENTS_FULL'
-  | 'POST_HAS_OPEN_QUEUE'
+  | 'POST_SLOTS_FULL'
   | 'POST_ON_HOLD'
   | 'POST_HOLD_UNKNOWN'
   | 'POST_PUBLISHED_AT_UNKNOWN'
@@ -97,6 +114,7 @@ export type PlanBlockCode =
   | 'PERSONA_OWN_POST'
   | 'PERSONA_LIFE_CONFLICT'
   | 'PERSONA_ROLE_FORBIDDEN'
+  | 'PERSONA_ALREADY_ON_POST'
   | 'NO_ELIGIBLE_PERSONA'
   | 'LIMIT_EXHAUSTED'
 
@@ -124,13 +142,33 @@ export type PlanResult = {
  * 🔴 우선순위. **작을수록 먼저**다.
  *
  *    ① 댓글이 하나도 없는 글  (아무도 답하지 않은 자리)
- *    ② 회원 댓글이 적은 글
+ *    ② 댓글이 적은 글
  *    그 안에서 최신 글이 먼저다 — 오래된 글에 붙는 댓글은 대화가 아니다.
+ *
+ * 🔴 **나이를 신선도 상한으로 자른다.** 자르지 않으면 아주 오래된 글의 나이 점수가
+ *    댓글 한 칸(1_000)을 넘어 **댓글 1건짜리 글이 댓글 0건짜리 글보다 먼저** 뽑힌다.
+ *    실제로 그 글들은 `POST_TOO_OLD` 로 이미 걸러지지만, 정렬이 그 사실에 기대면
+ *    상한이 바뀌는 날 조용히 뒤집힌다.
  */
 export function priorityOf(post: PlannerPost, nowMs: number): number {
   const total = post.memberComments + post.personaComments
-  const ageDays = post.publishedAtMs === null ? 9_999 : (nowMs - post.publishedAtMs) / 86_400_000
-  return total * 1_000 + Math.max(0, Math.floor(ageDays))
+  const ageDays = post.publishedAtMs === null
+    ? FRESHNESS_MAX_DAYS
+    : (nowMs - post.publishedAtMs) / 86_400_000
+  return total * 1_000 + Math.min(FRESHNESS_MAX_DAYS, Math.max(0, Math.floor(ageDays)))
+}
+
+/**
+ * 🔴 **이 글에 지금 몇 자리가 남았는가.**
+ *
+ *    이미 달린 댓글과 **열려 있는 대기열**이 함께 자리를 먹는다.
+ *    대기열을 세지 않으면 승인 대기 중인 4건 위에 또 5건을 계획하게 된다.
+ */
+export function postSlotsOf(post: PlannerPost): number {
+  return Math.max(
+    0,
+    PERSONA_COMMENTS_PER_POST_MAX - post.personaComments - post.openQueuePersonaCodes.length,
+  )
 }
 
 /** 글 쪽 자격 — 🔴 `judgeTargetPost` 정본을 재사용하고 planner 만의 조건을 더한다 */
@@ -145,8 +183,13 @@ export function judgePlannerPost(post: PlannerPost, nowMs: number): PlanBlock[] 
     code: b.code as PlanBlockCode, message: b.message,
   }))
 
-  if (post.hasOpenQueue) {
-    blocks.push({ code: 'POST_HAS_OPEN_QUEUE', message: '이 글을 대상으로 하는 대기열이 이미 있다' })
+  // 🔴 대기열까지 세고도 자리가 없으면 이번 회차 대상이 아니다
+  if (postSlotsOf(post) === 0) {
+    blocks.push({
+      code: 'POST_SLOTS_FULL',
+      message: `댓글 ${post.personaComments}건 + 대기열 ${post.openQueuePersonaCodes.length}건`
+        + ` — ${PERSONA_COMMENTS_PER_POST_MAX}자리가 찼다`,
+    })
   }
   if (post.onHold === null) {
     blocks.push({ code: 'POST_HOLD_UNKNOWN', message: '노출 보류 여부를 읽지 못했다 — 제외한다(fail-closed)' })
@@ -186,6 +229,26 @@ export function judgePlannerPersona(
   if (post.authorPersonaCode !== null && post.authorPersonaCode === persona.code) {
     // 🔴 자기 글에 자기가 댓글을 달면 그것은 대화가 아니라 연출이다
     blocks.push({ code: 'PERSONA_OWN_POST', message: `${persona.code} 자신의 글이다` })
+  }
+  /**
+   * 🔴 **같은 Persona 가 같은 글에 두 번 달지 않는다.**
+   *
+   *    글당 5건을 연 대가로 반드시 지켜야 하는 쪽이 이것이다.
+   *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 **"한 사람이 여럿인 척하는 것"** 이다.
+   *    이미 발행된 댓글과 **열려 있는 대기열**을 둘 다 본다 — 대기열을 빼면
+   *    승인을 기다리는 사이에 같은 사람이 한 번 더 계획된다.
+   */
+  if (post.personaCodesOnPost.includes(persona.code)) {
+    blocks.push({
+      code: 'PERSONA_ALREADY_ON_POST',
+      message: `${persona.code} 는 이 글에 이미 댓글을 달았다`,
+    })
+  }
+  if (post.openQueuePersonaCodes.includes(persona.code)) {
+    blocks.push({
+      code: 'PERSONA_ALREADY_ON_POST',
+      message: `${persona.code} 는 이 글에 열린 대기열이 있다`,
+    })
   }
   // 🔴 생활사·noGo — 글 매칭과 **같은 함수**를 부른다. 복붙하면 한쪽만 고쳐진다
   const req = readPostRequirements(post.title, post.body)
@@ -232,8 +295,19 @@ export type PlanInput = {
 }
 
 /**
- * 🔴 **한 Persona 는 한 회차에 한 번만** 나온다. 같은 얼굴이 연달아 나오면
- *    사람들은 그것이 사람이 아니라는 것을 먼저 알아차린다.
+ * 🔴 **같은 Persona 가 같은 글에 두 번 달지 않는다** (2026-09-11 계약 교체).
+ *
+ *    옛 판은 "한 Persona 는 **한 회차에** 한 번만" 이었다. 글당 1건 시절에는
+ *    그 둘이 같은 뜻이었지만, 글당 5건을 열고 나면 완전히 다른 규칙이 된다 —
+ *    Persona 가 24명인데 회차당 1회씩만 쓰면 하루 24건이 천장이 되고,
+ *    글 100편 × 5자리(=500)는 영원히 닿지 못하는 수가 된다.
+ *
+ *    그래서 제약을 **글 단위**로 옮긴다. 한 사람이 여러 글에 말하는 것은 커뮤니티이고,
+ *    한 사람이 한 글에 두 번 말하는 것은 여럿인 척하는 것이다. 막을 것은 뒤엣것이다.
+ *
+ * 🔴 **댓글 0개 글이 항상 먼저다.** 라운드로빈으로 한 바퀴에 글마다 한 건씩 붙인다 —
+ *    한 글을 5건까지 채우고 다음 글로 가면, 상한이 걸리는 순간
+ *    **댓글 5건짜리 글 하나와 댓글 0건짜리 글 아흔아홉**이 남는다.
  *
  * 🔴 역할도 고르게 쓴다 — 전부 `empathy` 면 커뮤니티가 아니라 응원봇이 된다.
  */
@@ -265,48 +339,82 @@ export function planCommentDistribution(input: PlanInput): PlanResult {
   // ② 댓글 0개 · 최신 순
   eligible.sort((a, b) => priorityOf(a, input.nowMs) - priorityOf(b, input.nowMs) || a.id.localeCompare(b.id))
 
-  const usedPersona = new Set<string>()
+  /** 이번 회차에 이 글에 배정한 Persona 들 */
+  const takenByPost = new Map<string, Set<string>>()
+  /** 이번 회차에 이 Persona 를 몇 번 썼는가 — 🔴 적게 쓴 사람부터 고른다 */
+  const assigned = new Map<string, number>()
   const roleCount: Record<string, number> = { ...input.recentRoleCounts }
+  /** 글별로 "왜 못 붙였나" 를 모은다 — 조용히 사라지지 않게 한다 */
+  const whyNot = new Map<string, PlanBlock[]>()
 
-  for (const post of eligible) {
-    if (items.length >= input.limit) break
+  /** 🔴 이 글에 한 건 붙여 본다. 붙일 수 없으면 사유를 모아 null 을 돌려준다 */
+  const pickOne = (post: PlannerPost): PlanItem | null => {
+    const taken = takenByPost.get(post.id) ?? new Set<string>()
     // 🔴 지금까지 **가장 적게 쓰인 역할**부터 시도한다
-    const ordered = [...roles].sort(
+    const orderedRoles = [...roles].sort(
       (a, b) => (roleCount[a] ?? 0) - (roleCount[b] ?? 0) || a.localeCompare(b),
     )
-    // 🔴 최근에 적게 말한 Persona 를 먼저 — 같은 사람이 계속 나타나지 않게
+    // 🔴 이번 회차에 적게 말한 사람 → 최근 창에서 적게 말한 사람 순
     const candidates = [...input.personas].sort(
-      (a, b) => a.recentComments - b.recentComments || a.code.localeCompare(b.code),
+      (a, b) => (assigned.get(a.code) ?? 0) - (assigned.get(b.code) ?? 0)
+        || a.recentComments - b.recentComments
+        || a.code.localeCompare(b.code),
     )
-    let picked: PlanItem | null = null
-    const postBlocks: PlanBlock[] = []
-    for (const role of ordered) {
+    const blocks: PlanBlock[] = []
+    for (const role of orderedRoles) {
       for (const persona of candidates) {
-        if (usedPersona.has(persona.code)) continue
-        const blocks = judgePlannerPersona(persona, post, role)
-        if (blocks.length > 0) { postBlocks.push(...blocks); continue }
-        picked = {
+        // 🔴 이번 회차에 이 글에 이미 배정한 사람은 다시 고르지 않는다
+        if (taken.has(persona.code)) continue
+        const personaBlocks = judgePlannerPersona(persona, post, role)
+        if (personaBlocks.length > 0) { blocks.push(...personaBlocks); continue }
+        const total = post.memberComments + post.personaComments
+        return {
           postId: post.id, personaCode: persona.code, reactionRole: role,
           priority: priorityOf(post, input.nowMs),
-          why: post.memberComments + post.personaComments === 0
+          why: total === 0 && taken.size === 0
             ? '아무도 답하지 않은 글이다'
-            : `댓글 ${post.memberComments + post.personaComments}건 — ${MEMBER_COMMENT_LIMIT}건 미만이라 아직 자리가 있다`,
+            : `댓글 ${total + taken.size}건 — 글당 ${PERSONA_COMMENTS_PER_POST_MAX}건 미만이라 아직 자리가 있다`,
         }
-        break
       }
-      if (picked !== null) break
     }
-    if (picked === null) {
-      skipped.push({
-        postId: post.id,
-        blocks: postBlocks.length > 0 ? postBlocks
-          : [{ code: 'NO_ELIGIBLE_PERSONA', message: '이 글에 붙일 수 있는 Persona 가 없다' }],
-      })
-      continue
+    const prior = whyNot.get(post.id) ?? []
+    whyNot.set(post.id, [...prior, ...blocks])
+    return null
+  }
+
+  /**
+   * ③ 🔴 **라운드로빈.** 한 바퀴에 글마다 한 건씩, 최대 `PERSONA_COMMENTS_PER_POST_MAX` 바퀴.
+   *    바퀴 수가 유한하고 한 바퀴가 유한하므로 무한 루프는 없다.
+   */
+  outer: for (let pass = 0; pass < PERSONA_COMMENTS_PER_POST_MAX; pass += 1) {
+    let progressed = false
+    for (const post of eligible) {
+      if (items.length >= input.limit) break outer
+      const taken = takenByPost.get(post.id) ?? new Set<string>()
+      // 🔴 이미 찬 자리에는 더 넣지 않는다 (기존 댓글 + 열린 대기열 + 이번 회차 배정)
+      if (taken.size >= postSlotsOf(post)) continue
+      const picked = pickOne(post)
+      if (picked === null) continue
+      items.push(picked)
+      taken.add(picked.personaCode)
+      takenByPost.set(post.id, taken)
+      assigned.set(picked.personaCode, (assigned.get(picked.personaCode) ?? 0) + 1)
+      roleCount[picked.reactionRole] = (roleCount[picked.reactionRole] ?? 0) + 1
+      progressed = true
     }
-    items.push(picked)
-    usedPersona.add(picked.personaCode)
-    roleCount[picked.reactionRole] = (roleCount[picked.reactionRole] ?? 0) + 1
+    // 🔴 한 바퀴를 돌고도 하나도 못 붙였으면 더 돌아도 같다
+    if (!progressed) break
+  }
+
+  // ④ 🔴 **한 건도 못 붙인 글만** skipped 에 남긴다. 일부라도 붙은 글은 성공이다
+  for (const post of eligible) {
+    if ((takenByPost.get(post.id)?.size ?? 0) > 0) continue
+    const blocks = whyNot.get(post.id) ?? []
+    skipped.push({
+      postId: post.id,
+      blocks: blocks.length > 0 ? blocks
+        : [{ code: 'NO_ELIGIBLE_PERSONA', message: '이 글에 붙일 수 있는 Persona 가 없다' }],
+    })
   }
   return { items, skipped }
 }

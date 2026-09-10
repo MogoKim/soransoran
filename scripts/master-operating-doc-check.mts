@@ -2,6 +2,15 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { APPROVED_DECISION } from '../src/lib/persona-canon-decision'
 import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
+import {
+  BOOTSTRAP_DAILY_MAX, countManagedPosts, judgeBootstrapBudget,
+} from '../src/lib/persona-comment-bootstrap-budget'
+import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
+import {
+  planRunnerSchedule, FIRST_COMMENT_MAX_MINUTES,
+} from './lib/persona-comment-runner-template'
+import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
+import { PROFILES } from '../src/lib/scale-profile'
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
@@ -358,9 +367,9 @@ check('runner schedule 이 미등록임을 그 표에도 적는다',
   /schedule 등록 \| ✅ 템플릿 \| 🔴 \*\*미등록\*\*/.test(master))
 check('글로벌 상한을 Serializable 로 막는다고 적는다',
   master.includes('Serializable') && master.includes('재시도하지 않는다'))
-check('bootstrap 을 어드민 수동 발행만 허용한다고 적는다',
-  master.includes('어드민 수동 발행만')
-  && master.includes('requireAdmin()') && master.includes('dead-end'))
+check('bootstrap 자동 발행이 bootstrap-auto 단계로만 열린다고 적는다',
+  master.includes('requireAdmin()') && master.includes('dead-end')
+  && master.includes('**`bootstrap-auto` 단계 하나**에만 열린다'))
 /** 🔴 production 에 적용하지 않은 것을 blocker 로 남긴다 */
 check('provenance 전용 컬럼이 blocker 임을 적는다',
   master.includes('임의로 적용하지 않았다') && master.includes('창업자 승인이 필요한 blocker'))
@@ -641,6 +650,167 @@ check('🔴 입력 실패 P 코드 개수가 표의 수와 같다', codesOf('pro
 check('🔴 Persona 준비 수를 정본 표 밖에서 또 주장하지 않는다',
   !/(검증된 )?reference Persona (는|가) \d+명뿐/.test(master)
   && !/나머지 \d+명은 근거가 없어/.test(master))
+
+/**
+ * ══ 🔴 부트스트랩 정책 — **문서의 숫자를 코드로 계산해서 맞춘다** ══
+ *
+ *    표에 `100편 → 50건` 이라고 적어 두고 코드가 다른 답을 내면,
+ *    그 표는 계약이 아니라 소망이다. 그래서 여기서 실제로 계산해 비교한다.
+ */
+check('🔴 부트스트랩 정본 절(§9.5-g)이 있다',
+  master.includes('### 9.5-g 초기 부트스트랩'))
+check('🔴 단계 네 개를 코드와 같은 이름으로 적는다',
+  COMMENT_STAGES.every((s) => master.includes(`\`${s}\``)))
+check('🔴 기본 단계가 shadow 임을 적는다',
+  /\| `shadow` \(기본\) \| 🔴 0 \| 🔴 0 \|/.test(master))
+check('🔴 모르는 값이 shadow 로 내려간다고 적는다',
+  master.includes('모르는 값은 `shadow` 다'))
+check('🔴 옛 문자열 이동을 적는다',
+  master.includes('`release` → `organic`') && master.includes('`inspect` → `shadow`'))
+check('🔴 옛 값이 bootstrap-auto 로 가지 않는다고 적는다',
+  master.includes('옛 값이 `bootstrap-auto` 로 올라가는 경로는 없다'))
+/**
+ * 🔴 **단기 정본은 한 곳에만 있다** (2026-09-11).
+ *    §2 는 장기(North Star), §9.5-g 는 단기다. 같은 수가 두 곳에 있으면
+ *    반드시 한쪽이 낡고, 낡은 쪽이 먼저 읽힌다.
+ */
+check('🔴 §2 를 장기 정본으로 선언한다',
+  master.includes('### 2.1 North Star — 🔴 장기 정본')
+  && master.includes('이 절은 장기 정본이다. 단기 목표는 여기 적지 않는다'))
+check('🔴 단기 목표가 §9.5-g 한 곳에만 있다고 적는다',
+  master.includes('**§9.5-g 한 곳에만**')
+  && master.includes('🔴 **이 절이 지금 분기의 단기 정본이다.**'))
+check('🔴 Persona·봇 활동을 North Star 에 넣지 않는다고 적는다',
+  master.includes('Persona·봇 활동과 게시량은 North Star 에 넣지 않는다'))
+check('🔴 단기 정본 표가 있다', master.includes('#### 🔴 단기 정본 (2026-09-11 교체)'))
+check('🔴 글당 상한을 코드와 같은 수로 적는다',
+  master.includes(`| 한 글의 Persona 댓글 | **1~${PERSONA_COMMENTS_PER_POST_MAX}건** |`))
+check('🔴 일 절대 상한을 코드와 같은 수로 적는다',
+  master.includes(`| Persona 댓글 하루 상한 | **${BOOTSTRAP_DAILY_MAX}건** |`))
+check('🔴 첫 댓글 목표를 코드와 같은 수로 적는다',
+  master.includes(`| 새 관리형 글의 첫 댓글 | **${FIRST_COMMENT_MAX_MINUTES}분 안에** |`))
+check('🔴 댓글 0개 글을 먼저 고른다고 적는다',
+  master.includes('| 선택 순서 | **댓글 0개 글을 항상 먼저** |'))
+check('🔴 같은 Persona 가 같은 글에 두 번 달지 않는다고 적는다',
+  master.includes('| 같은 Persona 가 같은 글에 | **금지** |'))
+check('🔴 30% 는 organic 에서만이라고 적는다',
+  master.includes('| 30% ratio | **`organic` 단계에서만** |'))
+/**
+ * 🔴 **폐기한 계약을 역사로 명시한다.** 지우기만 하면 다음 사람이
+ *    "왜 없지" 하고 되살린다 — 실제로 되살아난 적이 있다(은퇴 job 2개).
+ */
+for (const gone of ['coverage **50%**', '하루 **100건** 절대 상한',
+  '한 글에 Persona **1명**', 'Queue 적재 **회차당 1건**',
+  '한 Persona 는 **한 회차에 한 번**', '댓글 runner **하루 1회**(19:40)']) {
+  check(`🔴 폐기 계약을 역사로 남긴다 — ${gone}`, master.includes(gone))
+}
+check('🔴 폐기 표에 "되살리지 않는다" 를 적는다',
+  master.includes('폐기한 계약 — 역사로만 남긴다'))
+/**
+ * 🔴 **살아 있는 coverage 문구가 남아 있으면 안 된다.**
+ *    폐기 표의 한 줄(`| coverage **50%** | ...`)만 허용한다 — 그 줄은 역사다.
+ *    본문 어디든 다시 나타나면 다음 사람은 그것을 현재 계약으로 읽는다.
+ */
+{
+  const lines = master.split('\n').filter((l) => l.includes('coverage **50%**'))
+  check('🔴 coverage 50% 는 폐기 표의 한 줄로만 남아 있다',
+    lines.length === 1 && lines[0]!.startsWith('| coverage **50%** |'))
+}
+/** 🔴 표의 네 줄을 실제 함수로 계산해 맞춘다 */
+for (const posts of [1, 10, 100, 200]) {
+  const budget = judgeBootstrapBudget({
+    openSlots: posts * PERSONA_COMMENTS_PER_POST_MAX, publishedToday: 0, killSwitchOff: true,
+  })
+  const row = new RegExp(`\\| ${posts}편 \\| (\\d+) \\| \\*\\*(\\d+)건\\*\\*`).exec(master)
+  check(`🔴 문서의 "글 ${posts}편 → 자리 N · 상한 M" 이 실제 계산과 같다`,
+    row !== null
+    && Number(row[1]) === posts * PERSONA_COMMENTS_PER_POST_MAX
+    && Number(row[2]) === budget.remaining)
+}
+/**
+ * 🔴 **남은 자리 표(기존 0/1/4/5 → 5/4/1/0)를 실제 계산과 맞춘다.**
+ *    이 줄이 문서에만 있고 코드와 어긋나면, 다음 사람은 문서를 믿고 예산을 잘못 읽는다.
+ */
+{
+  const row = /\| 남은 자리 \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \|/
+    .exec(master)
+  const want = [0, 1, 4, 5].map((had) => countManagedPosts([
+    { authorKind: 'persona', externalSourced: false, personaCommentCount: had },
+  ]).openSlots)
+  check('🔴 "기존 0/1/4/5 → 남은 5/4/1/0" 이 실제 계산과 같다',
+    row !== null && want.every((v, i) => Number(row[i + 1]) === v))
+}
+/** 🔴 이중 차감 정정을 기록으로 남긴다 — 지우면 같은 산식이 되살아난다 */
+check('🔴 오늘 발행 수를 두 번 빼지 않는다고 적는다',
+  master.includes('**오늘 발행 수를 두 번 빼지 않는다**')
+  && master.includes('**3건**') && master.includes('**250건**'))
+check('🔴 트랜잭션 재검증을 유지한다고 적는다',
+  master.includes('**그 재검증은 유지한다.**'))
+/** 🔴 산식이 실제로 이중 차감을 하지 않는지 값으로 확인한다 */
+check('🔴 cap - used 가 remaining 과 같다 (재검증이 이중 차감이 되지 않는다)',
+  [0, 1, 250, 499, 500].every((used) => {
+    const b = judgeBootstrapBudget({ openSlots: 500, publishedToday: used, killSwitchOff: true })
+    return b.cap - b.used === b.remaining
+  }))
+/** 🔴 Gate ⑧ cold-start 개방 범위를 문서가 좁게 적는다 */
+check('🔴 cold-start 를 영구 blocker 로 쓰지 않는다고 적는다',
+  master.includes('Gate ⑧ cold-start 를 자동화의 영구 blocker 로 쓰지 않는다'))
+check('🔴 여는 단계가 bootstrap-auto 하나뿐이라고 적는다',
+  master.includes('**`bootstrap-auto` 단계 하나**에만 열린다'))
+check('🔴 여는 모양이 좁다고 적는다', master.includes('isGateEightColdStart'))
+check('🔴 다른 Gate 실패는 그대로 막는다고 적는다',
+  master.includes('① 유출이 `reject` 면 Gate 재검사에서 그대로 막힌다'))
+/** 🔴 schedule 실측을 문서가 그대로 적는다 */
+{
+  const plan = planRunnerSchedule(BOOTSTRAP_DAILY_MAX)
+  check('🔴 슬롯 수·간격·야간 공백을 실제 계산과 같이 적는다',
+    master.includes(`회차당 25건 × **${plan.runs}회**`)
+    && master.includes(`회차 간격 최대 ${plan.maxGapMinutes}분`)
+    && master.includes(`야간 공백 ${plan.nightGapMinutes}분`))
+  check('🔴 60분 계약을 슬롯이 실제로 만족한다',
+    plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
+}
+/** 🔴 ② 코퍼스 정본과 버린 길을 함께 적는다 */
+check('🔴 ② 코퍼스 정본이 익명 정본 자산이라고 적는다',
+  master.includes('② 댓글 코퍼스 공급원 — 소란소란 익명 정본 자산')
+  && master.includes('loadCanonCorpusTexts'))
+check('🔴 화자를 빈도 판정에 쓰지 않는다고 적는다',
+  master.includes('`speakerId` 는 빈도 판정에 쓰지 않는다'))
+check('🔴 원문을 Git·DB 로 복사하지 않는다고 적는다',
+  master.includes('원문을 Git·DB 로 복사하지 않는다'))
+check('🔴 버린 두 길을 기록으로 남긴다',
+  master.includes('CafePost`') === false
+  && master.includes('자체 `Comment` 표 + 500건 대기'))
+check('🔴 자산 부재를 영구 정지로 만들지 않는다고 적는다',
+  master.includes('bootstrap 전체를 영구 정지시키지 않는다'))
+/** 🔴 운영 창 계약 — 글 발행도 같은 창 안이어야 한다 */
+check('🔴 운영 창을 08~22 로 못박는다',
+  master.includes('#### 🔴 운영 창 계약 — 08~22시')
+  && master.includes('24시간으로 만들지 않는다'))
+check('🔴 글 발행도 같은 창 안에 배치해야 한다고 적는다',
+  master.includes('관리형 글 발행도 같은 창 안에 배치해야 한다'))
+check('🔴 이번 PR 에서 글 100/day 로 확장하지 않는다고 적는다',
+  master.includes('이번 PR 에서 글 파이프라인을 100/day 로 확장하지 않는다'))
+/** 🔴 Persona 하루 1건 폐기를 기록으로 남긴다 */
+check('🔴 Persona 하루 1건 폐기를 역사로 남긴다',
+  master.includes('Persona **하루 1건** bootstrap')
+  && master.includes('planner 의 soft balancing 이 다룬다'))
+/** 🔴 마일스톤 — 하나라도 빠지면 로드맵이 아니다 */
+for (const m of ['M0', 'M1', 'M2', 'M3', 'M4', 'M5']) {
+  check(`🔴 ${m} 을 적는다`, new RegExp(`\\*\\*${m}\\*\\*`).test(master))
+}
+/**
+ * 🔴 **글 쪽 준비 상태를 숨기지 않는다.**
+ *    댓글 목표 100/200 을 적으면서 글이 하루 1편인 사실을 빼면,
+ *    읽는 사람은 100/day 가 이미 도는 줄로 읽는다.
+ */
+check('🔴 지금 글 단계가 d1 이고 하루 1편임을 적는다',
+  master.includes('`SORAN_RELEASE_STAGE=d1`')
+  && master.includes(`\`dailyTarget\` 은 **${PROFILES.d1.dailyTarget}**`))
+check('🔴 이번 변경이 글을 올린 것이 아니라고 적는다',
+  master.includes('글 자체를 100 으로 올린 것이 아니다'))
+check('🔴 runner 를 등록하지 않았다고 적는다',
+  master.includes('runner 는 등록하지 않았다'))
 
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
 if (failed > 0) process.exit(1)

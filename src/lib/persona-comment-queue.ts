@@ -9,17 +9,15 @@
  */
 
 import {
-  judgeBootstrapEligible, judgeGateReport, GATE_CODES,
+  isGateEightColdStart, judgeBootstrapEligible, judgeGateReport,
   type GateLine, type GateReport,
 } from './persona-comment-gate-report'
+import { stagePowers, type CommentStage } from './persona-comment-stage'
+import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
 
 /** 🔴 DB count 가 될 수 있는 값인가 */
 const isCount = (v: unknown): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0
-
-/** 🔴 관문 하나의 결과를 읽는다 — 없으면 `notRun` 으로 본다(fail-closed) */
-const outcomeOf = (gates: readonly GateLine[], code: string): string =>
-  gates.find((g) => g.gate === code)?.outcome ?? 'notRun'
 
 /** Queue 상태 전이 — 스키마의 `PersonaCandidateStatus` 와 같은 낱말을 쓴다 */
 export type QueueStatus = 'PENDING' | 'APPROVED' | 'EDITED' | 'DECLINED' | 'PUBLISHED' | 'EXPIRED'
@@ -38,7 +36,8 @@ export type EnqueueBlockCode =
   | 'GATE_MISSING_REQUIRED'
   | 'BOOTSTRAP_NEEDS_HUMAN'
   | 'DUPLICATE_QUEUE'
-  | 'POST_HAS_PERSONA_COMMENT'
+  | 'POST_PERSONA_COMMENTS_FULL'
+  | 'PERSONA_ALREADY_ON_POST'
   | 'POST_NOT_PUBLISHED'
   | 'POST_STATE_UNKNOWN'
   | 'PERSONA_NOT_ACTIVE'
@@ -65,6 +64,13 @@ export type EnqueueFacts = {
   hasOpenQueue: boolean | null
   /** 그 글에 살아 있는 Persona 댓글 수. 🔴 모르면 null */
   personaCommentsOnPost: number | null
+  /**
+   * 🔴 **이 Persona 가 그 글에 이미 댓글을 달았는가.** 모르면 null(fail-closed).
+   *
+   *    글당 5건을 연 대가로 반드시 지켜야 하는 쪽이 이것이다 —
+   *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 "한 사람이 여럿인 척하는 것" 이다.
+   */
+  personaAlreadyOnPost: boolean | null
   /** 글 상태. 🔴 모르면 null */
   postStatus: string | null
   personaActive: boolean
@@ -127,10 +133,7 @@ export function planEnqueue(f: EnqueueFacts): EnqueuePlan {
    *
    *    그래서 Gate 결과로 **다시 판정한다** — 호출자의 주장과 실제가 다르면 실제를 따른다.
    */
-  const bootstrapShaped = report.shaped
-    && report.missingRequired.length === 1 && report.missingRequired[0] === '⑧'
-    // 🔴 ⑧ 을 뺀 나머지가 전부 pass 여야 한다. review·regenerate·reject 가 하나라도 있으면 아니다
-    && GATE_CODES.filter((c) => c !== '⑧').every((c) => outcomeOf(f.gates, c) === 'pass')
+  const bootstrapShaped = isGateEightColdStart(f.gates, report)
   const bootstrapClaimed = f.isBootstrap
   const bootstrapReal = bootstrapClaimed && bootstrapShaped
 
@@ -168,9 +171,25 @@ export function planEnqueue(f: EnqueueFacts): EnqueuePlan {
     blocks.push({ code: 'DUPLICATE_QUEUE', message: '같은 글·Persona·역할의 Queue 가 이미 열려 있다' })
   }
   if (f.personaCommentsOnPost === null) {
-    blocks.push({ code: 'POST_HAS_PERSONA_COMMENT', message: '그 글의 Persona 댓글 수를 읽지 못했다(fail-closed)' })
-  } else if (f.personaCommentsOnPost > 0) {
-    blocks.push({ code: 'POST_HAS_PERSONA_COMMENT', message: '이미 Persona 댓글이 있는 글이다 — 같은 글에 1명이다' })
+    blocks.push({ code: 'POST_PERSONA_COMMENTS_FULL', message: '그 글의 Persona 댓글 수를 읽지 못했다(fail-closed)' })
+  } else if (f.personaCommentsOnPost >= PERSONA_COMMENTS_PER_POST_MAX) {
+    blocks.push({
+      code: 'POST_PERSONA_COMMENTS_FULL',
+      message: `Persona 댓글이 ${f.personaCommentsOnPost}건이다 —`
+        + ` 한 글에 ${PERSONA_COMMENTS_PER_POST_MAX}건까지다`,
+    })
+  }
+  // 🔴 수가 남아 있어도 **같은 사람**이면 막는다. 모르면 막는다(fail-closed)
+  if (f.personaAlreadyOnPost === null) {
+    blocks.push({
+      code: 'PERSONA_ALREADY_ON_POST',
+      message: '이 Persona 가 그 글에 이미 달았는지 읽지 못했다(fail-closed)',
+    })
+  } else if (f.personaAlreadyOnPost) {
+    blocks.push({
+      code: 'PERSONA_ALREADY_ON_POST',
+      message: '🔴 이 Persona 는 그 글에 이미 댓글이 있다 — 한 사람이 두 번 말하지 않는다',
+    })
   }
   if (f.postStatus === null) {
     blocks.push({ code: 'POST_STATE_UNKNOWN', message: '글 상태를 읽지 못했다(fail-closed)' })
@@ -236,16 +255,23 @@ export type TxRecheckFacts = {
   personaRealMember: boolean
   /** 그 글의 살아 있는 Persona 댓글 수 */
   personaCommentsOnPost: number | null
+  /** 🔴 이 Persona 가 그 글에 이미 댓글을 달았는가. 모르면 null(fail-closed) */
+  personaAlreadyOnPost: boolean | null
   /** 그 글의 살아 있는 회원 댓글 수 — 3건 이상이면 끼어들지 않는다 */
   memberCommentsOnPost: number | null
   /** 🔴 오늘 **총 상한**. 남은 수량이 아니다 — 사용량을 여기서 뺀다 */
   allowanceCap: number
   /**
-   * 🔴 **실행 모드.** `release` 가 아니면 공개 write 를 하지 않는다.
+   * 🔴 **운영 단계.** 공개가 열리지 않은 단계면 write 를 하지 않는다.
    *    env 를 트랜잭션 안에서 읽어 넘긴다 — 호출부가 주장하는 값을 믿지 않는다.
    *    `manual-admin` 도 이것을 우회하지 못한다.
+   *
+   * 🔴 옛 판은 `mode: 'inspect'|'shadow'|'release'` 였다. 그 축에는 `bootstrap-*` 이
+   *    없어서 `readRunMode` 가 **모르는 값**으로 보고 `shadow` 로 내렸다 —
+   *    단계를 `bootstrap-auto` 로 올려도 트랜잭션이 "shadow 모드다" 로 막았다(실측).
+   *    축이 둘이면 반드시 한쪽이 다른 쪽을 모른다. 그래서 단계 하나로 합친다.
    */
-  mode: 'inspect' | 'shadow' | 'release'
+  stage: CommentStage
   /**
    * 🔴 **이 트랜잭션 안에서 다시 센** 오늘의 Persona 댓글 수.
    *    밖에서 센 값은 다른 후보가 그 사이에 발행한 것을 모른다.
@@ -271,7 +297,6 @@ export type TxRecheckFacts = {
   /** 🔴 bootstrap governor 입력 — 사람 수동 발행일 때 다시 본다 */
   bootstrapPriorTextCount?: number
   bootstrapUsedTotal?: number
-  bootstrapUsedToday?: number
   seedComplete?: boolean
 }
 
@@ -294,8 +319,9 @@ export function recheckBeforePublish(f: TxRecheckFacts): TxRecheckVerdict {
    *    `judgeRelease` 는 화면 판정일 뿐이고, 실제 write 함수는 shadow 에서도 돌았다.
    *    server action·CLI·runner 어느 경로로 들어와도 여기서 막힌다.
    */
-  if (f.mode !== 'release') {
-    blockers.push(`${f.mode} 모드다 — 공개 Comment 를 쓰지 않는다(manual-admin 도 우회하지 못한다)`)
+  const powers = stagePowers(f.stage)
+  if (!powers.publishAllowed) {
+    blockers.push(`${f.stage} 단계다 — 공개 Comment 를 쓰지 않는다(manual-admin 도 우회하지 못한다)`)
   }
 
   if (f.queueStatus !== 'APPROVED' && f.queueStatus !== 'EDITED') {
@@ -310,7 +336,18 @@ export function recheckBeforePublish(f: TxRecheckFacts): TxRecheckVerdict {
   if (f.personaRealMember) blockers.push('🔴 실회원 계정이 붙었다(또는 판별 불가)')
 
   if (f.personaCommentsOnPost === null) blockers.push('Persona 댓글 수를 읽지 못했다(fail-closed)')
-  else if (f.personaCommentsOnPost > 0) blockers.push('그 사이 Persona 댓글이 생겼다 — 같은 글에 1명이다')
+  else if (f.personaCommentsOnPost >= PERSONA_COMMENTS_PER_POST_MAX) {
+    blockers.push(
+      `그 사이 Persona 댓글이 ${f.personaCommentsOnPost}건이 됐다`
+      + ` — 한 글에 ${PERSONA_COMMENTS_PER_POST_MAX}건까지다`,
+    )
+  }
+  // 🔴 자리가 남아도 **같은 사람**이면 막는다. 적재와 발행 사이에 그 사람이 먼저 달았을 수 있다
+  if (f.personaAlreadyOnPost === null) {
+    blockers.push('이 Persona 가 그 글에 이미 달았는지 읽지 못했다(fail-closed)')
+  } else if (f.personaAlreadyOnPost) {
+    blockers.push('🔴 이 Persona 는 그 글에 이미 댓글이 있다 — 한 사람이 두 번 말하지 않는다')
+  }
 
   if (f.memberCommentsOnPost === null) blockers.push('회원 댓글 수를 읽지 못했다(fail-closed)')
   else if (f.memberCommentsOnPost >= MEMBER_COMMENT_LIMIT_ON_PUBLISH) {
@@ -358,8 +395,7 @@ export function recheckBeforePublish(f: TxRecheckFacts): TxRecheckVerdict {
    * 🔴 bootstrap 은 자동 발행 경로로 오지 않는다.
    *    호출자 주장과 **Gate 실제 모양**을 둘 다 본다 — 변조로 우회하지 못하게.
    */
-  const bootstrapShaped = report.shaped
-    && report.missingRequired.length === 1 && report.missingRequired[0] === '⑧'
+  const bootstrapShaped = isGateEightColdStart(f.gates, report)
   /**
    * 🔴 **생성 근거가 없으면 자동 발행하지 않는다.**
    *    사람이 읽고 승인하는 것은 가능하다 — 근거가 없는 것은 "자동으로 내보내도 되는가" 의
@@ -382,24 +418,42 @@ export function recheckBeforePublish(f: TxRecheckFacts): TxRecheckVerdict {
    *    그래서 "⑧ 만 못 돈 정확한 모양" 일 때만 이 검사를 통과시키고,
    *    그 뒤의 주체·governor 검사가 실제로 막는다. 예외는 하나이고 좁다.
    */
-  if (!report.fullGatePass && !(isBootstrapCandidate && bootstrapShaped)) {
+  if (!report.fullGatePass && !bootstrapShaped) {
     blockers.push(`Gate 재검사 실패 — ${report.reason}`)
   }
   // 🔴 주체를 안 넘겼으면 automation 으로 본다 — 모르는 것을 사람으로 보지 않는다
   const actor: PublishActor = actorEarly
-  if (isBootstrapCandidate && actor !== 'manual-admin') {
-    blockers.push('bootstrap 후보다 — 자동 발행 대상이 아니다(어드민 수동 발행만 가능)')
+  /**
+   * 🔴 **Gate ⑧ cold-start 를 bootstrap 자동화의 영구 blocker 로 쓰지 않는다** (2026-09-11).
+   *
+   *    옛 판은 bootstrap 후보면 주체가 `manual-admin` 이 아닌 한 무조건 막았다.
+   *    그런데 ⑧ 은 **이전 발화가 쌓이기 전에는 정의상 돌지 않는다** —
+   *    즉 그 규칙은 "자동화는 첫 발화가 생긴 뒤에만 가능하다" 였고,
+   *    첫 발화를 자동으로 만들 길이 없으니 **영원히 열리지 않는 문**이었다.
+   *
+   *    그래서 문을 **`bootstrap-auto` 단계 하나**에만 연다. 그 단계는 창업자가
+   *    명시로 올린 자리이고, 옛 env 값이 그리로 승격되는 경로도 없다(`persona-comment-stage`).
+   *
+   * 🔴 **다른 Gate 실패는 그대로 막는다.** 여는 것은 "⑧ 만 notRun 이고 나머지 여덟이
+   *    전부 pass" 라는 좁은 모양뿐이다(`isGateEightColdStart`). ① 유출이 reject 면
+   *    `bootstrapShaped` 가 false 라 바로 위 Gate 재검사에서 막힌다.
+   */
+  const coldStartAutoOpen = f.stage === 'bootstrap-auto'
+  if (isBootstrapCandidate && actor !== 'manual-admin' && !coldStartAutoOpen) {
+    blockers.push(
+      `bootstrap 후보다 — ${f.stage} 단계에서는 자동 발행 대상이 아니다(어드민 수동 발행만 가능)`,
+    )
   }
   /**
-   * 🔴 사람이 눌렀어도 **bootstrap governor 조건**은 그대로 본다.
-   *    "사람이 눌렀으니 통과" 가 되면 상한도 cold-start 종료 조건도 의미가 없다.
+   * 🔴 **주체와 무관하게 bootstrap governor 조건은 그대로 본다.**
+   *    "사람이 눌렀으니 통과" 도, "자동 단계니 통과" 도 두지 않는다 —
+   *    그러면 Persona 당 상한도 cold-start 종료 조건도 의미가 없어진다.
    */
-  if (isBootstrapCandidate && actor === 'manual-admin') {
+  if (isBootstrapCandidate) {
     const boot = judgeBootstrapEligible({
       report,
       priorTextCount: f.bootstrapPriorTextCount ?? Number.NaN,
       bootstrapUsedTotal: f.bootstrapUsedTotal ?? Number.NaN,
-      bootstrapUsedToday: f.bootstrapUsedToday ?? Number.NaN,
       personaActive: f.personaActive,
       realMember: f.personaRealMember,
       seedComplete: f.seedComplete ?? false,

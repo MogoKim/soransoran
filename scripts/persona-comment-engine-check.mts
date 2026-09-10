@@ -11,8 +11,8 @@ import {
   type CommentInput, type CommentInputPersona, type CommentInputPost, type VoiceEvidence,
 } from '../src/lib/persona-comment-input'
 import {
-  judgeRatio, judgeReadiness, readRunMode,
-  DEFAULT_DAILY_CAP, PERSONA_RATIO_MAX, RATIO_WINDOW_DAYS, RELEASE_ENV_KEY,
+  judgeRatio, judgeReadiness,
+  DEFAULT_DAILY_CAP, PERSONA_RATIO_MAX, RATIO_WINDOW_DAYS,
   type CommentWindow,
 } from '../src/lib/persona-comment-governor'
 import {
@@ -23,7 +23,9 @@ import {
   estimateCost, judgeAbsoluteQuality, judgeModelSelection, judgeSpend,
   EVAL_MAX_CALLS, EVAL_MAX_USD, type ModelPrice,
 } from '../src/lib/persona-comment-cost'
-import { MEMBER_COMMENT_LIMIT } from '../src/lib/persona-target-rules'
+import {
+  MEMBER_COMMENT_LIMIT, PERSONA_COMMENTS_PER_POST_MAX,
+} from '../src/lib/persona-target-rules'
 import {
   COMMENT_REACTION_ROLES, REACTION_TYPES, isAdviceForbidden, isReactionType,
 } from '../src/lib/persona-reaction-roles'
@@ -37,6 +39,17 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 /** fixture 전용 — 중간 디렉터리까지 만든다 */
+import {
+  BOOTSTRAP_DAILY_MAX, countManagedPosts, judgeBootstrapBudget,
+} from '../src/lib/persona-comment-bootstrap-budget'
+import { isGateEightColdStart } from '../src/lib/persona-comment-gate-report'
+import { rarityOf } from './lib/persona-gate-234.mjs'
+import { FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
+import {
+  readCommentStage, stagePowers, COMMENT_STAGES, COMMENT_STAGE_ENV,
+} from '../src/lib/persona-comment-stage'
+import { planRunnerSchedule } from './lib/persona-comment-runner-template'
+
 const mkdirDeep = (dir: string): void => { mkdirSync(dir, { recursive: true }) }
 
 import { M3_MODEL_CANDIDATES, apiModelIdFor } from './lib/voice-m3-contract.mjs'
@@ -85,7 +98,7 @@ import { isSerializationConflict, TX_MAX_WAIT_MS, TX_TIMEOUT_MS } from '../src/l
 import {
   judgeBootstrapEligible, judgeGateInputs, judgeGateReport, judgeRealPostExternalCall,
   bootstrapPhaseOver, GATE_CODES, REQUIRED_GATES, REAL_POST_EXTERNAL_CALL_ALLOWED,
-  BOOTSTRAP_MAX_PER_PERSONA, BOOTSTRAP_MAX_PER_DAY_PER_PERSONA, BOOTSTRAP_EXIT_PRIOR_TEXTS,
+  BOOTSTRAP_MAX_PER_PERSONA, BOOTSTRAP_EXIT_PRIOR_TEXTS,
   type GateReport,
 } from '../src/lib/persona-comment-gate-report'
 import {
@@ -94,7 +107,8 @@ import {
 import { checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
 import {
   allocateRolesByCorpus, ANCHOR_MIN_COMMENTS, BUNDLE_MAX, bundlesForPersonas,
-  buildReferenceManifest, carriesExperience, identityLeakCheck, loadCanonAsset, loadCommentsFrom,
+  buildReferenceManifest, carriesExperience, identityLeakCheck,
+  loadCanonAsset, loadCanonCorpusTexts, loadCommentsFrom,
   planBundles, stableAssignment,
 } from './lib/persona-reference-store.mjs'
 import {
@@ -177,18 +191,25 @@ console.log('① ratio 30% 와 감속')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('② 실행 모드 — 기본은 shadow')
+console.log('② 실행 단계 — 기본은 shadow (env 파서는 정본 하나뿐)')
 // ─────────────────────────────────────────────────────────
 {
+  /**
+   * 🔴 **옛 파서 `readRunMode` 는 삭제했다.** 같은 env 를 두 파서가 다르게 읽어
+   *    `bootstrap-*` 가 shadow 로 내려갔다 — 단계를 올려도 공개가 열리지 않았다.
+   *    지금 정본은 `readCommentStage` 하나이고, 그 행동을 여기서 본다.
+   */
   check('🔴 env 가 없으면 shadow 다 (설정을 안 했는데 발행이 시작되지 않게)',
-    readRunMode({}).mode === 'shadow')
-  check('🔴 빈 문자열도 shadow', readRunMode({ [RELEASE_ENV_KEY]: '   ' }).mode === 'shadow')
-  const unknown = readRunMode({ [RELEASE_ENV_KEY]: 'production' })
-  check('🔴 모르는 값이면 shadow 로 내린다 (fail-closed)', unknown.mode === 'shadow')
+    readCommentStage({}).stage === 'shadow')
+  check('🔴 빈 문자열도 shadow',
+    readCommentStage({ [COMMENT_STAGE_ENV]: '   ' }).stage === 'shadow')
+  const unknown = readCommentStage({ [COMMENT_STAGE_ENV]: 'production' })
+  check('🔴 모르는 값이면 shadow 로 내린다 (fail-closed)', unknown.stage === 'shadow')
   check('🔴 그때 왜 내렸는지 말한다', unknown.reason.includes('모르는 값'))
-  check('🟢 inspect · shadow · release 는 그대로 읽는다',
-    readRunMode({ [RELEASE_ENV_KEY]: 'inspect' }).mode === 'inspect'
-    && readRunMode({ [RELEASE_ENV_KEY]: 'release' }).mode === 'release')
+  check('🟢 네 단계는 그대로 읽는다',
+    COMMENT_STAGES.every((st) => readCommentStage({ [COMMENT_STAGE_ENV]: st }).stage === st))
+  check('🔴 env 이름 상수가 한 벌이다 — governor 는 더 이상 제 것을 갖지 않는다',
+    COMMENT_STAGE_ENV === 'SORAN_PERSONA_COMMENT_STAGE')
 
   const base = {
     window: { measured: true, real: 15, persona: 0, windowDays: 7 } as CommentWindow,
@@ -229,7 +250,7 @@ console.log('③ 댓글 분산 planner')
   const day = (n: number): number => NOW - n * 86_400_000
   const post = (o: Partial<PlannerPost> & { id: string }): PlannerPost => ({
     status: 'PUBLISHED', authorPersonaCode: null, memberComments: 0, personaComments: 0,
-    hasOpenQueue: false, publishedAtMs: day(1), onHold: false,
+    personaCodesOnPost: [], openQueuePersonaCodes: [], publishedAtMs: day(1), onHold: false,
     title: '오늘 날씨 이야기', body: '비가 와서 무릎이 시큰합니다', ...o,
   })
   const persona = (o: Partial<PlannerPersona> & { code: string }): PlannerPersona => ({
@@ -265,9 +286,12 @@ console.log('③ 댓글 분산 planner')
     const cases: [string, PlannerPost, string][] = [
       ['HIDDEN 은 제외', post({ id: 'h', status: 'HIDDEN' }), 'POST_NOT_PUBLISHED'],
       ['DELETED 는 제외', post({ id: 'd', status: 'DELETED' }), 'POST_NOT_PUBLISHED'],
-      ['이미 Persona 댓글이 있으면 제외', post({ id: 'p', personaComments: 1 }), 'POST_HAS_PERSONA_COMMENT'],
+      // 🔴 글당 1건 계약은 폐기했다 — 5건이 차야 막힌다
+      ['Persona 댓글 5건이면 제외', post({ id: 'p', personaComments: 5 }), 'POST_PERSONA_COMMENTS_FULL'],
       [`회원 댓글 ${MEMBER_COMMENT_LIMIT}건 이상이면 끼어들지 않는다`, post({ id: 'm', memberComments: MEMBER_COMMENT_LIMIT }), 'POST_MEMBER_COMMENTS_FULL'],
-      ['중복 Queue 가 있으면 제외', post({ id: 'q', hasOpenQueue: true }), 'POST_HAS_OPEN_QUEUE'],
+      // 🔴 열린 대기열은 글을 빼는 것이 아니라 **자리를 먹는다**. 5자리가 다 차야 막힌다
+      ['대기열이 5자리를 다 먹으면 제외',
+        post({ id: 'q', openQueuePersonaCodes: ['P1', 'P2', 'P3', 'P4', 'P5'] }), 'POST_SLOTS_FULL'],
       ['보류 중이면 제외', post({ id: 'o', onHold: true }), 'POST_ON_HOLD'],
       ['보류 여부를 모르면 제외 (fail-closed)', post({ id: 'ou', onHold: null }), 'POST_HOLD_UNKNOWN'],
       ['공개 시각을 모르면 제외 (fail-closed)', post({ id: 'pu', publishedAtMs: null }), 'POST_PUBLISHED_AT_UNKNOWN'],
@@ -1806,7 +1830,7 @@ console.log('⑩ 실회원 정본 — judgeRealMember 하나만')
   const NOW = Date.parse('2026-09-09T12:00:00+09:00')
   const post = (o: Partial<PlannerPost> = {}): PlannerPost => ({
     id: 'x', status: 'PUBLISHED', authorPersonaCode: null, memberComments: 0, personaComments: 0,
-    hasOpenQueue: false, publishedAtMs: NOW - 86_400_000, onHold: false,
+    personaCodesOnPost: [], openQueuePersonaCodes: [], publishedAtMs: NOW - 86_400_000, onHold: false,
     title: '날씨', body: '비가 온다', ...o,
   })
   const pers = (probe: PlannerPersona['realMember']): PlannerPersona => ({
@@ -2274,7 +2298,7 @@ console.log('⑰ Gate ⑧ cold-start — 자동 통과가 아니라 사람 승�
     judgeGateReport({ gates: GATE_CODES.map((g) => line(g, g === '⑧' ? eight : 'pass')), status })
   const base = {
     report: rep('notRun'), priorTextCount: 0,
-    bootstrapUsedTotal: 0, bootstrapUsedToday: 0,
+    bootstrapUsedTotal: 0,
     personaActive: true, realMember: false, seedComplete: true,
     lifeConflict: false, governorOk: true,
   }
@@ -2320,8 +2344,14 @@ console.log('⑰ Gate ⑧ cold-start — 자동 통과가 아니라 사람 승�
     !judgeBootstrapEligible({ ...base, bootstrapUsedTotal: BOOTSTRAP_MAX_PER_PERSONA }).bootstrapReviewEligible)
   check('🟢 상한 직전은 아직 가능하다',
     judgeBootstrapEligible({ ...base, bootstrapUsedTotal: BOOTSTRAP_MAX_PER_PERSONA - 1 }).bootstrapReviewEligible)
-  check(`🔴 하루 ${BOOTSTRAP_MAX_PER_DAY_PER_PERSONA}건까지다`,
-    !judgeBootstrapEligible({ ...base, bootstrapUsedToday: BOOTSTRAP_MAX_PER_DAY_PER_PERSONA }).bootstrapReviewEligible)
+  /**
+   * 🔴 **하루 1건 제한은 없앴다** (2026-09-11). 그 규칙은 편중을 조금 줄이는 대신
+   *    cold-start 상한을 "묶음이 선 Persona 수" 로 굳혔다 — 실측 18/day 천장이었다.
+   *    편중은 planner 의 soft balancing 이 다룬다(㊻ ⑨ 참조).
+   */
+  check('🟢 같은 Persona 가 하루에 여러 글에 달 수 있다 — 총량만 본다',
+    judgeBootstrapEligible({ ...base, bootstrapUsedTotal: BOOTSTRAP_MAX_PER_PERSONA - 1 })
+      .bootstrapReviewEligible)
 
   /** 🔴 예외가 영구 규칙이 되지 않게 — 표본이 쌓이면 끝낸다 */
   check('🔴 표본이 쌓이기 전에는 bootstrap 구간이다', !bootstrapPhaseOver(0) && !bootstrapPhaseOver(1))
@@ -2340,7 +2370,7 @@ console.log('⑱ Gate ⑧ 기준 단일 정본 — 사각지대가 없다')
     judgeGateReport({ gates: GATE_CODES.map((g) => line(g, g === '⑧' ? eight : 'pass')), status })
   const base = {
     report: rep('notRun'),
-    bootstrapUsedTotal: 0, bootstrapUsedToday: 0,
+    bootstrapUsedTotal: 0,
     personaActive: true, realMember: false, seedComplete: true,
     lifeConflict: false, governorOk: true,
   }
@@ -2386,12 +2416,10 @@ console.log('⑱ Gate ⑧ 기준 단일 정본 — 사각지대가 없다')
   check('🔴 한 건만 모자라도 Gate ⑧ 은 notRun 이다', notRan.status === 'notRun')
   check('🔴 그때 "대조 발화 부족" 이라고 말한다', notRan.detail.includes('대조 발화 부족'))
 
-  // 🔴 자동 공개 불가·사람 승인 전용·하루 1건은 그대로다
+  // 🔴 `judgeBootstrapEligible` 자체는 자동 공개를 허락하지 않는다 — 단계가 따로 연다
   const mid = judgeBootstrapEligible({ ...base, priorTextCount: 2, bootstrapUsedTotal: 2 })
-  check('🔴 bootstrap 중에도 자동 공개는 불가하다', mid.autoPublishAllowed === false)
+  check('🔴 이 판정만으로 자동 공개가 열리지 않는다', mid.autoPublishAllowed === false)
   check('🔴 사람 승인 Queue 로만 간다', mid.reason.includes('사람 승인 Queue'))
-  check(`🔴 하루 ${BOOTSTRAP_MAX_PER_DAY_PER_PERSONA}건 제한은 그대로다`,
-    !judgeBootstrapEligible({ ...base, priorTextCount: 1, bootstrapUsedToday: 1 }).bootstrapReviewEligible)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -2586,7 +2614,7 @@ console.log('㉔ Queue 적재 계약')
   const base: EnqueueFacts = {
     postId: 'p1', personaCode: 'P01', reactionRole: 'empathy', text: '저도 그래요',
     gates: gates(), gateStatus: 'pass', isBootstrap: false,
-    hasOpenQueue: false, personaCommentsOnPost: 0, postStatus: 'PUBLISHED',
+    hasOpenQueue: false, personaCommentsOnPost: 0, personaAlreadyOnPost: false, postStatus: 'PUBLISHED',
     personaActive: true, personaRealMember: false, modelConfirmed: true,
   }
   const ok = planEnqueue(base)
@@ -2602,8 +2630,9 @@ console.log('㉔ Queue 적재 계약')
     ['모델이 미확정이면', { modelConfirmed: false }, 'MODEL_NOT_CONFIRMED'],
     ['같은 Queue 가 열려 있으면', { hasOpenQueue: true }, 'DUPLICATE_QUEUE'],
     ['기존 Queue 를 못 읽으면', { hasOpenQueue: null }, 'DUPLICATE_QUEUE'],
-    ['이미 Persona 댓글이 있으면', { personaCommentsOnPost: 1 }, 'POST_HAS_PERSONA_COMMENT'],
-    ['Persona 댓글 수를 못 읽으면', { personaCommentsOnPost: null }, 'POST_HAS_PERSONA_COMMENT'],
+    ['Persona 댓글 자리가 다 찼으면', { personaCommentsOnPost: PERSONA_COMMENTS_PER_POST_MAX },
+      'POST_PERSONA_COMMENTS_FULL'],
+    ['Persona 댓글 수를 못 읽으면', { personaCommentsOnPost: null }, 'POST_PERSONA_COMMENTS_FULL'],
     ['글이 공개가 아니면', { postStatus: 'HIDDEN' }, 'POST_NOT_PUBLISHED'],
     ['글 상태를 못 읽으면', { postStatus: null }, 'POST_STATE_UNKNOWN'],
     ['Persona 가 active 가 아니면', { personaActive: false }, 'PERSONA_NOT_ACTIVE'],
@@ -2641,7 +2670,7 @@ console.log('㉕ 발행 transaction 재검사')
   const line = (gate: string, outcome: string): { gate: string; outcome: string } => ({ gate, outcome })
   const base: TxRecheckFacts = {
     postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
-    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, mode: 'release' as const,
+    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, stage: 'organic' as const, personaAlreadyOnPost: false,
     lifeConflict: false, gates: GATE_CODES.map((g) => line(g, 'pass')), gateStatus: 'pass',
     isBootstrap: false, queueStatus: 'APPROVED', publishedCommentId: null,
     publishedTodayInTx: 0,
@@ -2661,7 +2690,8 @@ console.log('㉕ 발행 transaction 재검사')
     ['글 상태를 못 읽으면', { postStatus: null }],
     ['Persona 가 정지되면', { personaActive: false }],
     ['Account 가 생기면(실회원)', { personaRealMember: true }],
-    ['그 사이 Persona 댓글이 생기면', { personaCommentsOnPost: 1 }],
+    ['그 사이 Persona 댓글 자리가 다 차면',
+      { personaCommentsOnPost: PERSONA_COMMENTS_PER_POST_MAX }],
     ['Persona 댓글 수를 못 읽으면', { personaCommentsOnPost: null }],
     [`회원 댓글이 ${MEMBER_COMMENT_LIMIT_ON_PUBLISH}건이 되면`, { memberCommentsOnPost: MEMBER_COMMENT_LIMIT_ON_PUBLISH }],
     ['회원 댓글 수를 못 읽으면', { memberCommentsOnPost: null }],
@@ -2739,15 +2769,17 @@ console.log('㉗ release 조건 — 하나라도 빠지면 0')
 {
   const good: ModelGateVerdict = { canCallProvider: true, canWriteQueue: true, reason: '확정' }
   const base = {
-    mode: 'release' as const, publicAllowedToday: 1, modelGate: good,
+    stage: 'organic' as const, humanApproved: true,
+    publicAllowedToday: 1, modelGate: good,
     approvedQueueCount: 1, isBootstrap: false, txRecheckWired: true, runnerRegistered: true,
   }
   const ok = judgeRelease(base)
   check('🟢 전부 맞으면 공개 가능', ok.canPublishNow && ok.allowed === 1)
 
   for (const [label, over] of [
-    ['shadow 모드면', { mode: 'shadow' as const }],
-    ['inspect 모드면', { mode: 'inspect' as const }],
+    ['shadow 단계면', { stage: 'shadow' as const }],
+    ['사람이 승인하지 않았는데 bootstrap-review 면',
+      { stage: 'bootstrap-review' as const, humanApproved: false }],
     ['모델이 미확정이면', { modelGate: { canCallProvider: false, canWriteQueue: false, reason: 'provisional' } }],
     ['오늘 허용량이 0 이면', { publicAllowedToday: 0 }],
     ['허용량이 손상되면', { publicAllowedToday: Number.NaN }],
@@ -2761,7 +2793,7 @@ console.log('㉗ release 조건 — 하나라도 빠지면 0')
   }
   /** 🔴 빠진 것을 전부 나열한다 — 하나만 보여 주면 고치고 또 막힌다 */
   const many = judgeRelease({
-    ...base, mode: 'shadow', publicAllowedToday: 0, approvedQueueCount: 0, runnerRegistered: false,
+    ...base, stage: 'shadow', publicAllowedToday: 0, approvedQueueCount: 0, runnerRegistered: false,
   })
   check('🔴 빠진 것을 전부 나열한다', many.blockers.length === 4)
   check('🔴 화면·JSON 이 같이 쓸 한 줄이 있다', many.summary.includes('공개 불가'))
@@ -2786,8 +2818,17 @@ console.log('㉘ runner schedule 템플릿 — 만들되 올리지 않는다')
   /** 🔴 RunAtLoad 가 true 면 등록하는 순간 돈다 */
   check('🔴 RunAtLoad 가 false 다 — 올리는 순간 돌지 않는다', plist.includes('<key>RunAtLoad</key><false/>'))
   check('🔴 label 이 정본과 같다', plist.includes(COMMENT_RUNNER_LABEL))
-  /** 🔴 댓글 회차를 글 발행량과 묶지 않는다 */
-  check('🔴 댓글 회차는 하루 1회다 (글 발행량과 무관)', COMMENT_RUNNER_SLOTS.length === 1)
+  /**
+   * 🔴 **댓글 회차는 하루 상한에서 역산한다** (2026-09-11 계약 교체).
+   *    옛 판은 하루 1회(19:40)를 손으로 적어 두었다 — 한 회차 발행 상한이 25 건이라
+   *    schedule 만으로 이미 25/day 가 천장이었고, 500/day 목표와 정면으로 어긋났다.
+   */
+  check('🔴 슬롯이 하루 상한에서 역산한 값이다',
+    COMMENT_RUNNER_SLOTS.length === planRunnerSchedule(BOOTSTRAP_DAILY_MAX).runs)
+  check('🔴 plist 가 그 슬롯을 전부 적는다',
+    COMMENT_RUNNER_SLOTS.every((sl) =>
+      plist.includes(`<key>Hour</key><integer>${sl.hour}</integer>`
+        + `<key>Minute</key><integer>${sl.minute}</integer>`)))
   // 🔴 이번 PR 은 등록하지 않는다 — 실제 LaunchAgents 에 없어야 한다
   const agentDir = join(homedir(), 'Library', 'LaunchAgents')
   const registered = ((): boolean => {
@@ -2817,8 +2858,16 @@ console.log('㉙ 실제 배선 — 재검사가 발행 함수에 닿아 있는�
     txSrc.includes('judgeLifeHistory(') && txSrc.includes('readPostRequirements('))
   check('🔴 저장된 Gate 를 다시 읽는다', txSrc.includes('readStoredGates('))
   check('🔴 오늘 발행 수를 트랜잭션 안에서 다시 센다', txSrc.includes('publishedTodayInTx'))
-  check('🔴 mode 를 env 에서 읽는다 (호출부가 넘긴 값을 믿지 않는다)',
-    txSrc.includes('readRunMode(process.env)'))
+  /**
+   * 🔴 **단계를 env 에서 읽는다** (2026-09-11 교체).
+   *    옛 판은 `readRunMode` 를 썼고, 그 파서는 `bootstrap-*` 를 모르는 값으로 보고
+   *    shadow 로 내렸다 — 단계를 올려도 트랜잭션이 막았다. 축을 하나로 합쳤다.
+   */
+  check('🔴 단계를 env 에서 읽는다 (호출부가 넘긴 값을 믿지 않는다)',
+    txSrc.includes('readCommentStage(process.env)'))
+  check('🔴 옛 mode 파서는 더 이상 쓰지 않는다', !txSrc.includes('readRunMode('))
+  check('🔴 예산도 트랜잭션 안에서 단계로 다시 센다',
+    txSrc.includes('countManagedPostsToday(tx') && txSrc.includes('stage: stage.stage'))
 
   /** 🔴 server action 과 CLI 가 **같은 함수**를 쓴다 — 우회 경로가 없어야 한다 */
   const actionSrc = readFileSync('src/lib/actions/persona-publish.ts', 'utf-8')
@@ -2856,7 +2905,7 @@ console.log('㉚ 글로벌 ratio 경쟁 — 다른 후보끼리도 상한을 넘
   const line = (gate: string, outcome: string): { gate: string; outcome: string } => ({ gate, outcome })
   const t: TxRecheckFacts = {
     postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
-    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, mode: 'release' as const,
+    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, stage: 'organic' as const, personaAlreadyOnPost: false,
     publishedTodayInTx: 0, lifeConflict: false,
     gates: GATE_CODES.map((g) => line(g, 'pass')), gateStatus: 'pass',
     isBootstrap: false, queueStatus: 'APPROVED', publishedCommentId: null,
@@ -2873,14 +2922,14 @@ console.log('㉚ 글로벌 ratio 경쟁 — 다른 후보끼리도 상한을 넘
   check('🔴 그 이유를 "다른 후보가 먼저 자리를 가져갔다" 로 말한다',
     second.blockers.some((b) => b.includes('먼저 자리를 가져갔다')))
   check('🔴 상한이 2 면 두 번째까지 간다',
-    recheckBeforePublish({ ...t, allowanceCap: 2, mode: 'release' as const, publishedTodayInTx: 1 }).ok)
+    recheckBeforePublish({ ...t, allowanceCap: 2, stage: 'organic' as const, publishedTodayInTx: 1 }).ok)
   check('🔴 트랜잭션 안에서 못 세면 막는다',
     !recheckBeforePublish({ ...t, publishedTodayInTx: Number.NaN }).ok)
-  /** 🔴 mode 가 release 가 아니면 어떤 주체도 공개 write 를 못 한다 */
-  for (const m of ['inspect', 'shadow'] as const) {
-    check(`🔴 ${m} 모드면 발행하지 않는다`, !recheckBeforePublish({ ...t, mode: m }).ok)
-    check(`🔴 ${m} 에서는 manual-admin 도 우회하지 못한다`,
-      !recheckBeforePublish({ ...t, mode: m, actor: 'manual-admin' }).ok)
+  /** 🔴 공개가 열리지 않은 단계면 어떤 주체도 공개 write 를 못 한다 */
+  for (const st of ['shadow'] as const) {
+    check(`🔴 ${st} 단계면 발행하지 않는다`, !recheckBeforePublish({ ...t, stage: st }).ok)
+    check(`🔴 ${st} 에서는 manual-admin 도 우회하지 못한다`,
+      !recheckBeforePublish({ ...t, stage: st, actor: 'manual-admin' }).ok)
   }
   check('🔴 음수도 막는다', !recheckBeforePublish({ ...t, publishedTodayInTx: -1 }).ok)
 }
@@ -2895,7 +2944,7 @@ console.log('㉛ bootstrap 변조 — 호출자 주장을 믿지 않는다')
   const base: EnqueueFacts = {
     postId: 'p1', personaCode: 'P01', reactionRole: 'empathy', text: '저도 그래요',
     gates: gates({}), gateStatus: 'pass', isBootstrap: false,
-    hasOpenQueue: false, personaCommentsOnPost: 0, postStatus: 'PUBLISHED',
+    hasOpenQueue: false, personaCommentsOnPost: 0, personaAlreadyOnPost: false, postStatus: 'PUBLISHED',
     personaActive: true, personaRealMember: false, modelConfirmed: true,
   }
   /**
@@ -2923,7 +2972,7 @@ console.log('㉛ bootstrap 변조 — 호출자 주장을 믿지 않는다')
   /** 🔴 트랜잭션에서도 Gate 모양으로 다시 본다 — 플래그를 지워도 막힌다 */
   const tx: TxRecheckFacts = {
     postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
-    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, mode: 'release' as const,
+    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, stage: 'organic' as const, personaAlreadyOnPost: false,
     publishedTodayInTx: 0, lifeConflict: false,
     gates: gates({ '⑧': 'notRun' }), gateStatus: 'pass',
     // 🔴 호출자가 false 로 지워도
@@ -3126,7 +3175,7 @@ console.log('㉞ Serializable — 동시 두 트랜잭션에서 1건만')
   const line = (gate: string, outcome: string): { gate: string; outcome: string } => ({ gate, outcome })
   const facts = (publishedTodayInTx: number): TxRecheckFacts => ({
     postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
-    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, mode: 'release' as const,
+    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, stage: 'organic' as const, personaAlreadyOnPost: false,
     publishedTodayInTx, lifeConflict: false,
     gates: GATE_CODES.map((g) => line(g, 'pass')), gateStatus: 'pass',
     isBootstrap: false, queueStatus: 'APPROVED', publishedCommentId: null,
@@ -3188,7 +3237,7 @@ console.log('㉟ Queue 파이프라인 — 실제 경로 (provider 주입)')
     },
     facts: {
       postId: 'p1', personaCode: 'P01', reactionRole: 'empathy',
-      hasOpenQueue: false, personaCommentsOnPost: 0, postStatus: 'PUBLISHED',
+      hasOpenQueue: false, personaCommentsOnPost: 0, personaAlreadyOnPost: false, postStatus: 'PUBLISHED',
       personaActive: true, personaRealMember: false,
     },
     ...over,
@@ -3289,12 +3338,12 @@ console.log('㊱ 실행 주체 — bootstrap dead-end 를 없앤다')
   const line = (gate: string, outcome: string): { gate: string; outcome: string } => ({ gate, outcome })
   const boot = (over: Partial<TxRecheckFacts> = {}): TxRecheckFacts => ({
     postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
-    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, mode: 'release' as const,
+    personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, stage: 'organic' as const, personaAlreadyOnPost: false,
     publishedTodayInTx: 0, lifeConflict: false,
     gates: GATE_CODES.map((g) => line(g, g === '⑧' ? 'notRun' : 'pass')), gateStatus: 'pass',
     isBootstrap: true, queueStatus: 'APPROVED', publishedCommentId: null,
     provenanceOk: true, provenanceReason: '근거 확인',
-    bootstrapPriorTextCount: 0, bootstrapUsedTotal: 0, bootstrapUsedToday: 0, seedComplete: true,
+    bootstrapPriorTextCount: 0, bootstrapUsedTotal: 0, seedComplete: true,
     ...over,
   })
   /** 🔴 자동 경로는 막힌다 */
@@ -3306,7 +3355,6 @@ console.log('㊱ 실행 주체 — bootstrap dead-end 를 없앤다')
     recheckBeforePublish(boot({ actor: 'manual-admin' })).ok)
   /** 🔴 사람이 눌러도 governor 조건은 그대로다 */
   for (const [label, over] of [
-    ['하루 상한을 썼으면', { bootstrapUsedToday: 1 }],
     ['총 상한을 썼으면', { bootstrapUsedTotal: BOOTSTRAP_MAX_PER_PERSONA }],
     ['prior 가 이미 충분하면', { bootstrapPriorTextCount: REQUIRED_PRIOR_TEXTS }],
     ['seed 가 불완전하면', { seedComplete: false }],
@@ -3408,8 +3456,15 @@ console.log('㊲ runner 배선 · capability · provenance 검증')
   check('🔴 대상 상한을 쓰기 플래그에 묶지 않는다',
     queueCode.includes('limit: TARGET_LIMIT') && !/limit:\s*WANT_APPLY \? 1 : 0,\n\s*nowMs/.test(queueCode))
   check('🔴 호출 상한과 write 상한을 나눠 넘긴다',
-    queueCode.includes('providerCallLimit: WANT_CALL ? TARGET_LIMIT : 0')
-    && queueCode.includes('limit: WANT_APPLY ? 1 : 0'))
+    queueCode.includes('providerCallLimit: WANT_CALL ? RUN_LIMIT : 0')
+    && queueCode.includes('limit: WANT_APPLY ? RUN_LIMIT : 0'))
+  /**
+   * 🔴 **회차당 1건 고정은 폐기했다.** 그 숫자는 "글당 Persona 댓글 1건" 계약과
+   *    함께 들어온 값이고, 지금은 예산이 아니라 병목이다.
+   */
+  check('🔴 회차당 1건 고정이 남아 있지 않다', !queueCode.includes('limit: WANT_APPLY ? 1 : 0'))
+  check('🔴 적재 상한을 단계 예산에서 받는다',
+    queueCode.includes('judgeReadiness(') && queueCode.includes('readiness.allowance.remaining'))
   /**
    * 🔴 **막는 사유를 한 자리에 모아 넘긴다.**
    *    Gate 입력만 뜻하는 이름이었을 때 분산 조회 실패를 다른 데서 삼켰다.
@@ -3612,7 +3667,7 @@ console.log('㊳ EDITED 상태 정합성')
     const line = (gate: string, outcome: string): { gate: string; outcome: string } => ({ gate, outcome })
     return recheckBeforePublish({
       postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
-      personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, mode: 'release' as const,
+      personaCommentsOnPost: 0, memberCommentsOnPost: 0, allowanceCap: 1, stage: 'organic' as const, personaAlreadyOnPost: false,
       publishedTodayInTx: 0, lifeConflict: false,
       gates: GATE_CODES.map((g) => line(g, 'pass')), gateStatus: 'pass',
       isBootstrap: false, queueStatus: 'EDITED', publishedCommentId: null,
@@ -3638,7 +3693,7 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     visibility: {
       status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
     },
-    comments: [{ origin: 'MEMBER', content: '저도 어제 걸었어요 좋더라고요' }],
+    comments: [{ origin: 'MEMBER', content: '저도 어제 걸었어요 좋더라고요', personaCode: null }],
   }
   const persona: SourcePersona = {
     code: 'P01', status: 'active',
@@ -3661,7 +3716,9 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     openDedupKeys: async () => [],
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
-    frequency: async () => ({ lookup: () => 0, size: 1_000, corpusName: 'comment' }),
+    frequency: async () => ({
+      corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스',
+    }),
     seedUseCount: async () => 3,
     ...over,
   })
@@ -3709,9 +3766,14 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
       limit: 5, nowMs: NOW, windowMs: 7 * DAY,
     })
     check('🔴 열린 Queue 의 dedupKey 에서 postId 를 읽어 낸다', m2.openPostIds.has('p1'))
-    check('🔴 그 글은 planner 단계에서 빠진다', m2.counts.built === 0)
-    check('🔴 사유를 남긴다 (POST_HAS_OPEN_QUEUE)',
-      m2.plan.skipped.some((sk) => sk.blocks.some((b) => b.code === 'POST_HAS_OPEN_QUEUE')))
+    /**
+     * 🔴 **열린 Queue 는 글을 빼지 않고 그 Persona 만 뺀다** (2026-09-11 계약 교체).
+     *    fixture 의 Persona 는 P01 하나뿐이라, P01 이 빠지면 붙일 사람이 없어 0건이 된다.
+     *    빠진 이유가 "글이 막혔다" 가 아니라 "그 사람이 이미 있다" 여야 한다.
+     */
+    check('🔴 그 글에 붙일 사람이 없어진다', m2.counts.built === 0)
+    check('🔴 사유를 남긴다 (PERSONA_ALREADY_ON_POST)',
+      m2.plan.skipped.some((sk) => sk.blocks.some((b) => b.code === 'PERSONA_ALREADY_ON_POST')))
     // 🔴 열쇠를 postId 로 물었다면 아래가 통과하지 못한다
     const m2b = await materializeTargets({
       source: makeSource({ openDedupKeys: async () => ['comment:p9:P09:advice'] }),
@@ -3731,11 +3793,16 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     check('🔴 knownNames 를 못 읽으면 미완이다',
       !noNames.gateInputsComplete && noNames.gaps.some((g) => g.startsWith('knownNames')))
     const noCorpus = await materializeTargets({
-      source: makeSource({ frequency: async () => null }),
+      source: makeSource({
+        frequency: async () => ({ corpus: null, reason: 'ASSET_MISSING — 정본 자산이 없다' }),
+      }),
       limit: 5, nowMs: NOW, windowMs: 7 * DAY,
     })
     check('🔴 코퍼스를 못 읽으면 미완이다',
       !noCorpus.gateInputsComplete && noCorpus.gaps.some((g) => g.startsWith('frequencyLookup')))
+    // 🔴 왜 못 읽었는지가 로그에 남아야 한다 — `null` 하나로는 고칠 곳을 알 수 없다
+    check('🔴 못 읽은 사유를 그대로 실어 보낸다',
+      noCorpus.gaps.some((g) => g.includes('ASSET_MISSING')))
     const noSeed = await materializeTargets({
       source: makeSource({ seedUseCount: async () => null }),
       limit: 5, nowMs: NOW, windowMs: 7 * DAY,
@@ -3825,21 +3892,20 @@ console.log('㊵ 실행 모드 · 상한 · 배치 진행')
   const txFacts = (over: Partial<TxRecheckFacts> = {}): TxRecheckFacts => ({
     postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
     personaCommentsOnPost: 0, memberCommentsOnPost: 0,
-    allowanceCap: 1, mode: 'release' as const, publishedTodayInTx: 0, lifeConflict: false,
+    allowanceCap: 1, stage: 'organic' as const, personaAlreadyOnPost: false, publishedTodayInTx: 0, lifeConflict: false,
     gates: GATE_CODES.map((g) => gline(g, 'pass')), gateStatus: 'pass',
     isBootstrap: false, queueStatus: 'APPROVED', publishedCommentId: null,
     provenanceOk: true, provenanceReason: '근거 확인',
     ...over,
   })
 
-  /** 🔴 shadow·inspect 에서는 공개 write 가 0 이다 — manual-admin 도 우회하지 못한다 */
-  check('🔴 shadow 모드면 트랜잭션이 막는다', !recheckBeforePublish(txFacts({ mode: 'shadow' })).ok)
-  check('🔴 inspect 모드면 트랜잭션이 막는다', !recheckBeforePublish(txFacts({ mode: 'inspect' })).ok)
+  /** 🔴 공개가 열리지 않은 단계에서는 write 0 이다 — manual-admin 도 우회하지 못한다 */
+  check('🔴 shadow 단계면 트랜잭션이 막는다', !recheckBeforePublish(txFacts({ stage: 'shadow' })).ok)
   check('🔴 manual-admin 도 shadow 를 우회하지 못한다',
-    !recheckBeforePublish(txFacts({ mode: 'shadow', actor: 'manual-admin' })).ok)
-  check('🔴 그 사유를 말한다', recheckBeforePublish(txFacts({ mode: 'shadow' })).blockers
+    !recheckBeforePublish(txFacts({ stage: 'shadow', actor: 'manual-admin' })).ok)
+  check('🔴 그 사유를 말한다', recheckBeforePublish(txFacts({ stage: 'shadow' })).blockers
     .some((b) => b.includes('공개 Comment 를 쓰지 않는다')))
-  check('🟢 release 면 통과한다', recheckBeforePublish(txFacts()).ok)
+  check('🟢 공개가 열린 단계면 통과한다', recheckBeforePublish(txFacts()).ok)
 
   /** 🔴 cap 2 — 두 건은 되고 세 번째는 막힌다. 상한에서 **사용량을 뺀다** */
   check('🟢 cap 2 · 사용 0 → 통과',
@@ -4116,7 +4182,7 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     visibility: {
       status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
     },
-    comments: [{ origin: 'MEMBER', content: '저도 어제 걸었어요 좋더라고요' }],
+    comments: [{ origin: 'MEMBER', content: '저도 어제 걸었어요 좋더라고요', personaCode: null }],
   }
   const persona: SourcePersona = {
     code: 'P01', status: 'active',
@@ -4137,7 +4203,9 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     openDedupKeys: async () => [],
     recentRoleCounts: async () => ({}),
     knownNames: async () => ['홍길동'],
-    frequency: async () => ({ lookup: () => 0, size: 1_000, corpusName: 'comment' }),
+    frequency: async () => ({
+      corpus: { lookup: () => 0, size: 1_000, corpusName: 'comment' }, reason: '시험 코퍼스',
+    }),
     seedUseCount: async () => 3,
     ...over,
   })
@@ -4236,7 +4304,9 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
     check('🔴 seed 사용 횟수도 실패를 null 로 돌려준다',
       await src(true).seedUseCount('P01') === null)
     check('🟢 정상이면 실측 횟수를 돌려준다', await src(false).seedUseCount('P01') === 6)
-    check('🔴 코퍼스를 열지 않기로 하면 null 이다', await src(false).frequency() === null)
+    check('🔴 코퍼스를 열지 않기로 하면 corpus 가 null 이다',
+      (await src(false).frequency()).corpus === null)
+    check('🔴 그때도 사유는 남는다', (await src(false).frequency()).reason.trim() !== '')
   }
 
   /** 🔴 출처 문맥 판정 불가 — provider 앞에서 막는다 */
@@ -4453,6 +4523,595 @@ console.log('㊹ migration 0024 상태 판정 — metadata 로만 (DB write 0)')
       .reason.includes('fail-closed'))
   check('🔴 다른 프로젝트면 막는다',
     !judgeProjectRef({ hostname: 'db.otherproject.supabase.co', username: 'postgres' }, REF).ok)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('㊺ bootstrap 단계 — 아무도 없을 때 먼저 말을 건다')
+// ─────────────────────────────────────────────────────────
+{
+  const win = { measured: true, real: 0, persona: 0, windowDays: 7 }
+  const facts = (over: Record<string, unknown> = {}): never => ({
+    window: win, mode: 'shadow' as const, publishedToday: 0, killSwitchOff: true, ...over,
+  } as never)
+  /** 오늘 관리형 글 n 편이 전부 새 글일 때의 열린 자리 */
+  const slotsFor = (posts: number): number => posts * PERSONA_COMMENTS_PER_POST_MAX
+
+  /** 🔴 ① 실회원 0 이어도 글이 있으면 예산이 생긴다 — 이것이 이번 변경의 전부다 */
+  const boot = judgeReadiness(facts({
+    stage: 'bootstrap-review',
+    bootstrap: { openSlots: slotsFor(10), publishedToday: 0, killSwitchOff: true },
+  }))
+  check('🟢 bootstrap 은 실회원 0 에서도 allowance 가 난다',
+    boot.allowance.cap === 50 && boot.allowance.remaining === 50)
+  check('🔴 같은 입력을 organic 으로 보면 0 이다',
+    judgeReadiness(facts({ stage: 'organic' })).allowance.remaining === 0)
+  check('🔴 organic 이 0 인 이유는 실사용자 0 이다',
+    judgeReadiness(facts({ stage: 'organic' })).blockers
+      .some((b) => b.includes('실사용자 댓글이 0')))
+
+  /** 🔴 ② organic 에서만 30% 가 적용된다 */
+  const busy = { measured: true, real: 100, persona: 0, windowDays: 7 }
+  check('🟢 organic 은 실사용자 100 → 30% 규칙으로 42건',
+    judgeReadiness(facts({ window: busy, stage: 'organic', dailyCap: 999 }))
+      .allowance.cap === 42)
+  check('🔴 bootstrap 은 실사용자 100 이어도 글 자리만 본다',
+    judgeReadiness(facts({
+      window: busy, stage: 'bootstrap-review',
+      bootstrap: { openSlots: slotsFor(4), publishedToday: 0, killSwitchOff: true },
+    })).allowance.cap === 20)
+
+  /**
+   * 🔴 ③ **글 1/10/100 → 댓글 5/50/500.** 단기 정본의 핵심 수다.
+   *    옛 판은 coverage 50% · 일 100 이었고, 그 둘이 "글당 1~5" 를 조용히 잘랐다.
+   */
+  const leftFor = (posts: number, used = 0): number => judgeBootstrapBudget({
+    openSlots: slotsFor(posts), publishedToday: used, killSwitchOff: true,
+  }).remaining
+  check('🟢 글 1 → 남은 자리 5', leftFor(1) === 5)
+  check('🟢 글 10 → 남은 자리 50', leftFor(10) === 50)
+  check('🟢 글 100 → 남은 자리 500', leftFor(100) === 500)
+  check('🔴 글 200 이어도 500 을 넘지 않는다', leftFor(200) === BOOTSTRAP_DAILY_MAX)
+  check('🔴 글 1000 이어도 500 을 넘지 않는다', leftFor(1000) === BOOTSTRAP_DAILY_MAX)
+  check('🔴 500 을 다 쓰면 자리가 남아도 0', leftFor(200, BOOTSTRAP_DAILY_MAX) === 0)
+  check('🔴 절대 상한이 글당 상한 × 100 과 어긋나지 않는다',
+    BOOTSTRAP_DAILY_MAX === 100 * PERSONA_COMMENTS_PER_POST_MAX)
+
+  /**
+   * 🔴 ③-b **오늘 발행 수를 두 번 빼지 않는다** (2026-09-11 회귀 잠금).
+   *
+   *    `openSlots` 는 이미 기존 댓글을 뺀 **남은** 자리다. 여기서 `publishedToday` 를
+   *    또 빼면 한 건 나갈 때마다 예산이 2씩 준다 — 실측으로 글 1편이 5가 아니라 **3**,
+   *    글 100편이 500이 아니라 **250**에서 멈췄다. 회차를 실제로 굴려 확인한다.
+   */
+  const drain = (posts: number): number => {
+    let published = 0
+    let filled = 0
+    for (let i = 0; i < 2_000; i += 1) {
+      const b = judgeBootstrapBudget({
+        openSlots: slotsFor(posts) - filled, publishedToday: published, killSwitchOff: true,
+      })
+      if (b.remaining <= 0) break
+      published += 1
+      filled += 1
+    }
+    return published
+  }
+  check('🟢 글 1편은 정확히 5건까지 나간다 (옛 산식은 3건에서 멈췄다)', drain(1) === 5)
+  check('🟢 글 100편은 정확히 500건까지 나간다 (옛 산식은 250건에서 멈췄다)', drain(100) === 500)
+  /** 🔴 트랜잭션이 `cap - used` 로 다시 빼도 같은 값이어야 한다 */
+  check('🔴 cap - used 가 remaining 과 같다 — 재검증이 이중 차감이 되지 않는다',
+    [0, 1, 4, 250, 499, 500].every((used) => {
+      const b = judgeBootstrapBudget({ openSlots: 500, publishedToday: used, killSwitchOff: true })
+      return b.cap - b.used === b.remaining
+    }))
+
+  /** 🔴 ④ kill switch·집계 실패는 단계와 무관하게 0 이다 */
+  check('🔴 kill switch 가 켜지면 bootstrap 도 0',
+    judgeBootstrapBudget({ openSlots: 500, publishedToday: 0, killSwitchOff: false })
+      .remaining === 0)
+  check('🔴 kill switch 를 못 읽어도 0(fail-closed)',
+    judgeBootstrapBudget({ openSlots: 500, publishedToday: 0, killSwitchOff: null })
+      .remaining === 0)
+  check('🔴 오늘 발행 수를 못 세면 0(fail-closed)',
+    judgeBootstrapBudget({ openSlots: 500, publishedToday: null, killSwitchOff: true })
+      .remaining === 0)
+  check('🔴 자리 수가 count 가 아니면 0(fail-closed)',
+    judgeBootstrapBudget({ openSlots: Number.NaN, publishedToday: 0, killSwitchOff: true })
+      .remaining === 0)
+  check('🔴 오늘 500 을 다 쓰면 남은 0',
+    judgeBootstrapBudget({ openSlots: 500, publishedToday: 500, killSwitchOff: true })
+      .remaining === 0)
+
+  /**
+   * 🔴 ⑤ **글당 남은 자리를 센다.** 4건인 글은 1자리, 5건인 글은 0자리다 —
+   *    옛 판(`hasPersonaComment`)은 1건만 있어도 글을 통째로 뺐다.
+   */
+  const managed = countManagedPosts([
+    { authorKind: 'persona', externalSourced: false, personaCommentCount: 0 },
+    { authorKind: 'admin', externalSourced: false, personaCommentCount: 4 },
+    { authorKind: 'persona', externalSourced: false, personaCommentCount: 5 },
+    { authorKind: 'member', externalSourced: false, personaCommentCount: 0 },
+    { authorKind: 'persona', externalSourced: true, personaCommentCount: 0 },
+    { authorKind: 'unknown', externalSourced: false, personaCommentCount: 0 },
+    { authorKind: 'persona', externalSourced: null, personaCommentCount: 0 },
+    { authorKind: 'persona', externalSourced: false, personaCommentCount: null },
+  ])
+  check('🟢 자리가 남은 글은 2편이다 (0건 글 · 4건 글)', managed.eligible === 2)
+  check('🟢 열린 자리는 6개다 (5 + 1)', managed.openSlots === 6)
+  /** 🔴 기존 댓글 0/1/4/5 → 남은 자리 5/4/1/0 */
+  for (const [had, left] of [[0, 5], [1, 4], [4, 1], [5, 0]] as const) {
+    const one = countManagedPosts([
+      { authorKind: 'persona', externalSourced: false, personaCommentCount: had },
+    ])
+    check(`🔴 기존 ${had}건 → 남은 자리 ${left}`, one.openSlots === left)
+    check(`🔴 기존 ${had}건 → 대상 ${left > 0 ? 1 : 0}편`, one.eligible === (left > 0 ? 1 : 0))
+  }
+  check('🔴 5건이 찬 이유를 센다',
+    managed.excluded[`Persona 댓글 ${PERSONA_COMMENTS_PER_POST_MAX}건이 이미 찼다`] === 1)
+  check('🔴 실회원 글은 빠진다', managed.excluded['실회원 글'] === 1)
+  check('🔴 외부 커뮤니티 원문은 빠진다', managed.excluded['외부 커뮤니티 원문'] === 1)
+  check('🔴 작성자 유형 불명은 빠진다', managed.excluded['작성자 유형 불명'] === 1)
+  check('🔴 출처 불명은 빠진다', managed.excluded['출처 불명'] === 1)
+  check('🔴 댓글 수 불명은 빠진다', managed.excluded['기존 Persona 댓글 수 불명'] === 1)
+  check('🔴 이상한 글 6편이 있어도 회차가 죽지 않는다 — 나머지로 센다',
+    judgeBootstrapBudget({ openSlots: managed.openSlots, publishedToday: 0, killSwitchOff: true })
+      .cap === 6)
+
+  /** 🔴 ⑥ 단계 문자열 — 모르면 shadow */
+  check('🔴 없으면 shadow', readCommentStage({}).stage === 'shadow')
+  check('🔴 모르는 값이면 shadow(fail-closed)',
+    readCommentStage({ SORAN_PERSONA_COMMENT_STAGE: 'bootstrap' }).stage === 'shadow')
+  check('🔴 그 사유를 말한다',
+    readCommentStage({ SORAN_PERSONA_COMMENT_STAGE: 'zzz' }).reason.includes('fail-closed'))
+  check('🟢 옛 release 는 organic 으로 옮긴다 — 30% 를 조용히 벗기지 않는다',
+    readCommentStage({ SORAN_PERSONA_COMMENT_STAGE: 'release' }).stage === 'organic')
+  check('🟢 옛 inspect 는 shadow 로 접는다',
+    readCommentStage({ SORAN_PERSONA_COMMENT_STAGE: 'inspect' }).stage === 'shadow')
+  check('🔴 옛 문자열이 bootstrap-auto 로 올라가지 않는다',
+    (['release', 'inspect', 'shadow'] as const).every((v) =>
+      readCommentStage({ SORAN_PERSONA_COMMENT_STAGE: v }).stage !== 'bootstrap-auto'))
+
+  /** 🔴 ⑦ 단계별 권한 */
+  check('🔴 shadow 는 후보를 만들지 않는다', !stagePowers('shadow').generateCandidates)
+  check('🔴 shadow 는 공개하지 않는다', !stagePowers('shadow').publishAllowed)
+  check('🟢 bootstrap-review 는 만들고, 사람 승인만 공개한다',
+    stagePowers('bootstrap-review').generateCandidates
+    && stagePowers('bootstrap-review').humanApprovalRequired)
+  check('🟢 bootstrap-auto 만 사람 승인 없이 공개한다',
+    !stagePowers('bootstrap-auto').humanApprovalRequired)
+  check('🔴 bootstrap-auto 는 기본값이 아니다',
+    readCommentStage({}).stage !== 'bootstrap-auto')
+
+  /** 🔴 ⑧ 승인 없는 후보는 공개 0 */
+  const rel = (over: Record<string, unknown>): ReturnType<typeof judgeRelease> => judgeRelease({
+    stage: 'bootstrap-review', humanApproved: true, publicAllowedToday: 1,
+    modelGate: { canCallProvider: true, canWriteQueue: true, reason: '확정' },
+    approvedQueueCount: 1, isBootstrap: true, txRecheckWired: true, runnerRegistered: true,
+    ...over,
+  } as never)
+  check('🟢 bootstrap-review 는 사람이 승인한 bootstrap 후보를 공개할 수 있다',
+    rel({}).canPublishNow)
+  check('🔴 승인하지 않은 후보는 공개 0', !rel({ humanApproved: false }).canPublishNow)
+  check('🔴 shadow 단계면 승인돼 있어도 공개 0', !rel({ stage: 'shadow' }).canPublishNow)
+  check('🔴 organic 에서 bootstrap 후보는 자동 공개 대상이 아니다',
+    !rel({ stage: 'organic' }).canPublishNow)
+
+  /** 🔴 ⑨ 외부 원문은 provider 를 부르기 **전에** 막힌다 — 호출 수로 본다 */
+  {
+    let calls = 0
+    const r = await runEnqueuePipeline({
+      selection: { status: 'confirmed', winner: 'gemini-3.7-flash' },
+      canon: { winner: 'gemini-3.7-flash', runId: 'r', decidedBy: 'founder', decidedAt: 'x' },
+      targets: [{
+        input: { personaCode: 'P01', role: 'other', post: { id: 'p1' } },
+        facts: { postId: 'p1', personaCode: 'P01' },
+        author: {
+          // 🔴 Persona 가 올렸어도 본문이 micro seed 면 나가지 않는다
+          authorPersonaCode: 'P01', source: 'SYSTEM', authorIsAdmin: false,
+          authorRealMember: { accountCount: 0, providerId: null },
+          visibility: {
+            status: 'PUBLISHED', isMicroSeed: true,
+            permanentNoindex: true, indexPromotionBlocked: true,
+          },
+        },
+      }],
+      limit: 0, providerCallLimit: 5, preflightOk: true,
+      provider: async () => { calls += 1; return { ok: true, text: 'x', errorCode: null } },
+      gate: () => ({ ok: true, status: 'pass', lines: [], notRun: [], summary: '' }),
+    } as never)
+    check('🔴 외부 커뮤니티 원문은 provider 호출 0 — 누가 올렸든',
+      calls === 0 && (r as { outcomes: { step: string }[] }).outcomes[0]?.step === 'AUTHOR_BLOCKED')
+  }
+
+  /** 🔴 ⑩ health 가 쓰는 숫자와 governor 의 숫자가 같은 함수에서 나온다 */
+  {
+    const f = { openSlots: 37, publishedToday: 4, killSwitchOff: true }
+    const budget = judgeBootstrapBudget(f)
+    const readiness = judgeReadiness(facts({ stage: 'bootstrap-review', bootstrap: f }))
+    check('🟢 governor 의 allowance 가 budget 과 같은 값이다',
+      readiness.allowance.cap === budget.cap
+      && readiness.allowance.used === budget.used
+      && readiness.allowance.remaining === budget.remaining)
+    check('🟢 health 가 읽는 publicAllowedToday 도 같은 값이다',
+      readiness.publicAllowedToday === budget.remaining)
+    check('🔴 두 벌로 갈라지지 않았다 — 자리 19개면 둘 다 남은 19건',
+      judgeBootstrapBudget({ ...f, openSlots: 19 }).remaining === 19
+      && judgeReadiness(facts({
+        stage: 'bootstrap-review', bootstrap: { ...f, openSlots: 19 },
+      })).allowance.remaining === 19)
+    /** 🔴 `cap` 은 총 상한(남은 + 쓴)이다 — 트랜잭션이 `cap - used` 로 다시 뺀다 */
+    check('🔴 cap - used 가 remaining 과 정확히 같다',
+      budget.cap - budget.used === budget.remaining)
+  }
+
+  /** 🔴 ⑪ schedule 이 하루 목표와 60분 계약을 실제로 감당하는가 */
+  for (const [target, runs] of [[1, 1], [10, 1], [50, 2], [100, 4], [200, 8], [500, 20]] as const) {
+    const plan = planRunnerSchedule(target)
+    check(`🟢 하루 ${target}건 → ${runs}회 · 감당 ${plan.capacity} ≥ ${target}`,
+      plan.runs === runs && plan.capacity >= target && plan.slots.length === runs)
+  }
+  {
+    const plan = planRunnerSchedule(BOOTSTRAP_DAILY_MAX)
+    check('🟢 500/day schedule 의 회차 간격이 60분 계약 안이다',
+      plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
+    check('🔴 야간 공백은 사실대로 낸다 — 0 이라고 말하지 않는다',
+      plan.nightGapMinutes > 0)
+    check('🔴 회차가 1회면 간격은 0 이 아니라 null 이다',
+      planRunnerSchedule(1).maxGapMinutes === null)
+    check('🔴 template 슬롯은 하루 상한에서 역산한 값이다 — 손으로 적지 않는다',
+      COMMENT_RUNNER_SLOTS.length === plan.runs
+      && COMMENT_RUNNER_SLOTS.every((sl, i) =>
+        sl.hour === plan.slots[i]!.hour && sl.minute === plan.slots[i]!.minute))
+    check('🔴 한 시각에 몰지 않는다',
+      new Set(planRunnerSchedule(100).slots.map((x) => x.hour)).size === 4)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('㊻ 글당 1~5 · 댓글 0개 우선 · 같은 Persona 재댓글 금지')
+// ─────────────────────────────────────────────────────────
+{
+  const NOW = Date.parse('2026-09-11T12:00:00+09:00')
+  const mkPost = (o: Partial<PlannerPost> & { id: string }): PlannerPost => ({
+    status: 'PUBLISHED', authorPersonaCode: null, memberComments: 0, personaComments: 0,
+    personaCodesOnPost: [], openQueuePersonaCodes: [],
+    publishedAtMs: NOW - 3_600_000, onHold: false,
+    title: '요즘 잠이 잘 안 와요', body: '새벽에 자꾸 깹니다', ...o,
+  })
+  const mkPersona = (code: string, o: Partial<PlannerPersona> = {}): PlannerPersona => ({
+    code, status: 'active', realMember: { accountCount: 0, providerId: null },
+    seedComplete: true, forbiddenReactionRoles: [], recentComments: 0,
+    life: { noGoTopics: [] }, ...o,
+  })
+  const personas = (n: number): PlannerPersona[] =>
+    Array.from({ length: n }, (_, i) => mkPersona(`P${String(i + 1).padStart(2, '0')}`))
+  const plan = (posts: readonly PlannerPost[], people: readonly PlannerPersona[], limit: number) =>
+    planCommentDistribution({
+      posts, personas: people, limit, nowMs: NOW, recentRoleCounts: {},
+    })
+
+  /**
+   * 🔴 ① **댓글 0개 글이 1개 이상 글보다 먼저 뽑힌다.**
+   *    상한 1 이면 뽑히는 것은 0개짜리 하나뿐이어야 한다.
+   */
+  {
+    const r = plan(
+      [mkPost({ id: 'has', memberComments: 1 }), mkPost({ id: 'zero' })],
+      personas(3), 1,
+    )
+    check('🟢 상한 1 에서 댓글 0개 글이 먼저 뽑힌다',
+      r.items.length === 1 && r.items[0]!.postId === 'zero')
+    check('🟢 그 이유를 말한다', r.items[0]!.why.includes('아무도 답하지 않은 글'))
+    check('🔴 우선순위 수도 0개 글이 더 작다',
+      priorityOf(mkPost({ id: 'zero' }), NOW) < priorityOf(mkPost({ id: 'has', memberComments: 1 }), NOW))
+    /** 🔴 아주 오래된 0개 글이라도 댓글 1개 글보다 앞선다 — 나이가 댓글 칸을 넘지 못한다 */
+    check('🔴 나이가 댓글 한 칸을 넘지 못한다',
+      priorityOf(mkPost({ id: 'old', publishedAtMs: NOW - 400 * 86_400_000 }), NOW)
+      < priorityOf(mkPost({ id: 'new1', memberComments: 1 }), NOW))
+  }
+
+  /**
+   * 🔴 ② **라운드로빈** — 한 바퀴에 글마다 한 건씩. 한 글을 5건까지 채우고
+   *    다음 글로 가면, 상한이 걸리는 순간 "5건짜리 하나와 0건짜리 아흔아홉" 이 남는다.
+   */
+  {
+    const r = plan([mkPost({ id: 'a' }), mkPost({ id: 'b' })], personas(5), 2)
+    check('🟢 상한 2 는 두 글에 하나씩 간다 — 한 글에 몰지 않는다',
+      new Set(r.items.map((x) => x.postId)).size === 2)
+  }
+
+  /**
+   * 🔴 ③ **글 1/10/100 개에서 실제 배정이 5/50/500 이다.**
+   *    예산 계산이 아니라 planner 가 실제로 뽑은 수로 본다.
+   */
+  for (const [postCount, expected] of [[1, 5], [10, 50], [100, 500]] as const) {
+    const posts = Array.from({ length: postCount }, (_, i) => mkPost({ id: `p${i}` }))
+    const r = plan(posts, personas(24), BOOTSTRAP_DAILY_MAX)
+    const perPost = new Map<string, string[]>()
+    for (const it of r.items) {
+      perPost.set(it.postId, [...(perPost.get(it.postId) ?? []), it.personaCode])
+    }
+    check(`🟢 글 ${postCount}개 → 댓글 ${expected}건`, r.items.length === expected)
+    check(`🔴 글 ${postCount}개에서 어느 글도 ${PERSONA_COMMENTS_PER_POST_MAX}건을 넘지 않는다`,
+      [...perPost.values()].every((v) => v.length <= PERSONA_COMMENTS_PER_POST_MAX))
+    check(`🔴 글 ${postCount}개에서 같은 글에 같은 Persona 가 두 번 오지 않는다`,
+      [...perPost.values()].every((v) => new Set(v).size === v.length))
+  }
+
+  /**
+   * 🔴 ③-b **한 Persona 는 다른 글 여러 편에 달 수 있다.**
+   *    옛 계약("한 회차에 한 번")이면 Persona 18명 × 1 = 18건이 천장이었다.
+   *    편중은 금지가 아니라 **soft balancing** 으로 다룬다 — 배정 차이가 1을 넘지 않는다.
+   */
+  {
+    const posts = Array.from({ length: 20 }, (_, i) => mkPost({ id: `q${i}` }))
+    const r = plan(posts, personas(4), BOOTSTRAP_DAILY_MAX)
+    const perPersona = new Map<string, number>()
+    for (const it of r.items) perPersona.set(it.personaCode, (perPersona.get(it.personaCode) ?? 0) + 1)
+    check('🟢 한 Persona 가 여러 글에 댓글을 단다',
+      [...perPersona.values()].some((n) => n > 1))
+    check('🟢 Persona 4명이 20편 × 4자리를 채운다', r.items.length === 20 * 4)
+    const counts = [...perPersona.values()]
+    check('🟢 soft balancing — 가장 많이 쓴 사람과 적게 쓴 사람의 차이가 1 이하',
+      Math.max(...counts) - Math.min(...counts) <= 1)
+  }
+
+  /** 🔴 ④ 억지로 5건을 채우지 않는다 — 붙일 사람이 둘이면 2건이다 */
+  {
+    const r = plan([mkPost({ id: 'only' })], personas(2), BOOTSTRAP_DAILY_MAX)
+    check('🟢 Persona 가 2명이면 그 글은 2건에서 멈춘다', r.items.length === 2)
+  }
+
+  /** 🔴 ⑤ 이미 댓글을 단 Persona 는 그 글에 다시 오지 않는다 */
+  {
+    const r = plan([mkPost({ id: 'p', personaComments: 1, personaCodesOnPost: ['P01'] })],
+      [mkPersona('P01')], BOOTSTRAP_DAILY_MAX)
+    check('🔴 같은 Persona 는 그 글에 다시 달지 않는다', r.items.length === 0)
+    check('🔴 사유를 PERSONA_ALREADY_ON_POST 로 말한다',
+      r.skipped.some((sk) => sk.blocks.some((b) => b.code === 'PERSONA_ALREADY_ON_POST')))
+    const ok = plan([mkPost({ id: 'p', personaComments: 1, personaCodesOnPost: ['P01'] })],
+      [mkPersona('P01'), mkPersona('P02')], BOOTSTRAP_DAILY_MAX)
+    check('🟢 다른 Persona 는 그 글에 달 수 있다',
+      ok.items.length === 1 && ok.items[0]!.personaCode === 'P02')
+  }
+
+  /** 🔴 ⑥ 열린 대기열도 자리를 먹고, 그 Persona 는 빠진다 */
+  {
+    const r = plan([mkPost({ id: 'p', openQueuePersonaCodes: ['P01'] })],
+      [mkPersona('P01'), mkPersona('P02')], BOOTSTRAP_DAILY_MAX)
+    check('🟢 대기열이 1자리를 먹으면 남는 자리는 4개다', r.items.length === 1)
+    check('🔴 대기열에 있는 Persona 는 다시 뽑히지 않는다',
+      r.items.every((x) => x.personaCode !== 'P01'))
+  }
+
+  /** 🔴 ⑦ 4건은 통과하고 5건은 막힌다 — 경계값 */
+  {
+    const four = plan([mkPost({ id: 'p', personaComments: 4, personaCodesOnPost: ['A', 'B', 'C', 'D'] })],
+      personas(3), BOOTSTRAP_DAILY_MAX)
+    check('🟢 Persona 댓글 4건 글은 1건 더 받는다', four.items.length === 1)
+    const five = plan([mkPost({ id: 'p', personaComments: 5, personaCodesOnPost: ['A', 'B', 'C', 'D', 'E'] })],
+      personas(3), BOOTSTRAP_DAILY_MAX)
+    check('🔴 Persona 댓글 5건 글은 막힌다', five.items.length === 0)
+    check('🔴 사유를 POST_PERSONA_COMMENTS_FULL 로 말한다',
+      five.skipped.some((sk) => sk.blocks.some((b) => b.code === 'POST_PERSONA_COMMENTS_FULL')))
+  }
+
+  /** 🔴 ⑧ 적재·발행 계약도 같은 경계를 본다 */
+  {
+    const gates = (eight = 'pass'): { gate: string; outcome: string }[] =>
+      GATE_CODES.map((g) => ({ gate: g, outcome: g === '⑧' ? eight : 'pass' }))
+    const enq = (over: Partial<EnqueueFacts>): ReturnType<typeof planEnqueue> => planEnqueue({
+      postId: 'p1', personaCode: 'P01', reactionRole: 'empathy', text: '저도 그래요',
+      gates: gates(), gateStatus: 'pass', isBootstrap: false,
+      hasOpenQueue: false, personaCommentsOnPost: 0, personaAlreadyOnPost: false,
+      postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false, modelConfirmed: true,
+      ...over,
+    })
+    check('🟢 적재: 4건인 글은 통과한다', enq({ personaCommentsOnPost: 4 }).ok)
+    check('🔴 적재: 5건인 글은 막힌다', !enq({ personaCommentsOnPost: 5 }).ok)
+    check('🔴 적재: 같은 Persona 는 막힌다', !enq({ personaAlreadyOnPost: true }).ok)
+    check('🔴 적재: 같은 Persona 여부를 모르면 막는다(fail-closed)',
+      !enq({ personaAlreadyOnPost: null }).ok)
+
+    const tx = (over: Partial<TxRecheckFacts>): ReturnType<typeof recheckBeforePublish> =>
+      recheckBeforePublish({
+        stage: 'organic', postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
+        personaCommentsOnPost: 0, personaAlreadyOnPost: false, memberCommentsOnPost: 0,
+        allowanceCap: 500, publishedTodayInTx: 0, lifeConflict: false,
+        gates: GATE_CODES.map((g) => ({ gate: g, outcome: 'pass' })), gateStatus: 'pass',
+        isBootstrap: false, queueStatus: 'APPROVED', publishedCommentId: null,
+        provenanceOk: true, provenanceReason: '근거 확인',
+        ...over,
+      })
+    check('🟢 발행: 4건인 글은 통과한다', tx({ personaCommentsOnPost: 4 }).ok)
+    check('🔴 발행: 5건인 글은 막힌다', !tx({ personaCommentsOnPost: 5 }).ok)
+    check('🔴 발행: 같은 Persona 는 막힌다', !tx({ personaAlreadyOnPost: true }).ok)
+    check('🔴 발행: 같은 Persona 여부를 모르면 막는다(fail-closed)',
+      !tx({ personaAlreadyOnPost: null }).ok)
+    check('🔴 발행: 500 을 다 쓰면 막힌다', !tx({ publishedTodayInTx: 500 }).ok)
+    check('🟢 발행: 499 까지는 자리가 있다', tx({ publishedTodayInTx: 499 }).ok)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('㊼ Gate ⑧ cold-start — bootstrap-auto 만 연다')
+// ─────────────────────────────────────────────────────────
+{
+  const g = (o: Record<string, string> = {}): { gate: string; outcome: string }[] =>
+    GATE_CODES.map((c) => ({ gate: c, outcome: o[c] ?? (c === '⑧' ? 'notRun' : 'pass') }))
+  const tx = (over: Partial<TxRecheckFacts>): ReturnType<typeof recheckBeforePublish> =>
+    recheckBeforePublish({
+      stage: 'bootstrap-auto', postStatus: 'PUBLISHED', personaActive: true,
+      personaRealMember: false, personaCommentsOnPost: 0, personaAlreadyOnPost: false,
+      memberCommentsOnPost: 0, allowanceCap: 500, publishedTodayInTx: 0, lifeConflict: false,
+      gates: g(), gateStatus: 'pass', isBootstrap: true,
+      queueStatus: 'APPROVED', publishedCommentId: null,
+      provenanceOk: true, provenanceReason: '근거 확인',
+      // 🔴 bootstrap governor 입력 — 주체와 무관하게 본다
+      bootstrapPriorTextCount: 0, bootstrapUsedTotal: 0, seedComplete: true,
+      ...over,
+    })
+
+  /** 🔴 ① 모양 판정은 한 함수다 — 적재와 발행이 같은 답을 낸다 */
+  check('🟢 ⑧ 만 notRun 이고 나머지가 pass 면 cold-start 다',
+    isGateEightColdStart(g(), judgeGateReport({ gates: g(), status: 'pass' })))
+  check('🔴 ① 이 reject 면 cold-start 가 아니다 — Gate 실패다',
+    !isGateEightColdStart(g({ '①': 'reject' }),
+      judgeGateReport({ gates: g({ '①': 'reject' }), status: 'reject' })))
+  check('🔴 ② 도 notRun 이면 cold-start 가 아니다 — 입력 누락이다',
+    !isGateEightColdStart(g({ '②': 'notRun' }),
+      judgeGateReport({ gates: g({ '②': 'notRun' }), status: 'pass' })))
+  check('🔴 ⑧ 이 돌았으면 cold-start 가 아니다',
+    !isGateEightColdStart(g({ '⑧': 'pass' }),
+      judgeGateReport({ gates: g({ '⑧': 'pass' }), status: 'pass' })))
+
+  /** 🔴 ② bootstrap-auto 에서 자동 경로가 열린다 — 이것이 이번 변경의 핵심이다 */
+  check('🟢 bootstrap-auto 에서 ⑧ 만 notRun 인 후보는 자동으로 나간다', tx({}).ok)
+  check('🟢 어드민 수동 발행도 그대로 된다', tx({ actor: 'manual-admin' }).ok)
+
+  /** 🔴 ③ 다른 단계에서는 여전히 사람만 */
+  for (const stage of ['bootstrap-review', 'organic'] as const) {
+    check(`🔴 ${stage} 에서는 자동 발행이 막힌다`, !tx({ stage }).ok)
+    check(`🟢 ${stage} 에서도 어드민 수동 발행은 된다`,
+      tx({ stage, actor: 'manual-admin' }).ok)
+  }
+  check('🔴 shadow 에서는 어드민도 못 나간다',
+    !tx({ stage: 'shadow', actor: 'manual-admin' }).ok)
+
+  /** 🔴 ④ 다른 Gate 실패는 그대로 막는다 — 예외는 ⑧ 하나뿐이다 */
+  for (const [code, outcome] of [['①', 'reject'], ['③', 'regenerate'], ['⑦', 'review'],
+    ['②', 'notRun']] as const) {
+    const blocked = tx({ gates: g({ [code]: outcome }), gateStatus: outcome })
+    check(`🔴 ${code} 가 ${outcome} 이면 bootstrap-auto 여도 막힌다`, !blocked.ok)
+    check(`🔴 그 사유가 Gate 재검사 실패다 (${code})`,
+      blocked.blockers.some((b) => b.includes('Gate 재검사 실패')))
+  }
+
+  /** 🔴 ⑤ governor 조건은 주체·단계와 무관하게 본다 */
+  check('🔴 Persona 당 총량을 다 쓰면 자동도 막힌다',
+    !tx({ bootstrapUsedTotal: 99 }).ok)
+  check('🟢 같은 Persona 가 하루에 여러 글에 달 수 있다 — 하루 1건 제한을 없앴다',
+    tx({ bootstrapUsedTotal: 0 }).ok)
+  check('🔴 seed 가 불완전하면 자동도 막힌다', !tx({ seedComplete: false }).ok)
+  check('🔴 kill switch 로 상한이 0 이면 막힌다', !tx({ allowanceCap: 0 }).ok)
+  check('🔴 생성 근거가 없으면 자동 발행하지 않는다',
+    !tx({ provenanceOk: false, provenanceReason: '근거 없음' }).ok)
+  check('🟢 근거가 없어도 사람은 읽고 내보낼 수 있다',
+    tx({ provenanceOk: false, provenanceReason: '근거 없음', actor: 'manual-admin' }).ok)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('㊽ 우나어 runtime 의존 — live 댓글 경로에 0 이어야 한다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **소스 문자열 검사를 여기서만 쓴다.**
+   *
+   *    다른 검사는 전부 함수를 불러 행동을 본다. 그런데 "이 파일이 저 DB 에
+   *    붙지 않는다" 는 **없음**에 대한 주장이라 행동으로는 확인할 수 없다 —
+   *    붙지 않는 코드를 아무리 불러도 아무 일도 일어나지 않는다.
+   *    그래서 import 그래프를 실제로 읽는다.
+   */
+  const LIVE = [
+    'scripts/persona-comment-runner.mts',
+    'scripts/persona-comment-queue.mts',
+    'scripts/persona-comment-health.mts',
+    'scripts/lib/persona-comment-source-db.ts',
+    'scripts/lib/persona-comment-targets.ts',
+    'scripts/lib/persona-comment-pipeline.ts',
+    'src/lib/persona-publish-tx.ts',
+    'src/lib/persona-comment-bootstrap-source.ts',
+    'src/lib/persona-comment-bootstrap-budget.ts',
+    'src/lib/persona-comment-planner.ts',
+    'src/lib/persona-comment-queue.ts',
+  ]
+  /**
+   * 🔴 **주석은 빼고 본다.** 끊어 낸 이유를 주석으로 남기려면 옛 이름을 적어야 하고,
+   *    그 글자까지 금지하면 "왜 끊었는지" 를 적을 수 없게 된다 —
+   *    기록을 못 남기게 하는 검사는 다음 사람이 같은 실수를 반복하게 만든다.
+   */
+  const stripComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  for (const f of LIVE) {
+    const code = stripComments(readFileSync(join(process.cwd(), f), 'utf8'))
+    check(`🔴 ${f} 에 우나어 참조가 없다`,
+      !/voice-unao-readonly|loadUnaoReadonlyUrl|UNAO_READONLY_DATABASE_URL|CafePost/.test(code))
+  }
+  /**
+   * 🔴 **② 코퍼스는 소란소란 익명 정본 자산에서 온다.**
+   *    자산 자체는 worktree 밖 600 권한이라 CI 는 보지 못한다 — 여기서는
+   *    "그 자산을 본다" 는 배선과 "화자를 빈도에 섞지 않는다" 는 계약만 잠근다.
+   */
+  {
+    const src = readFileSync(join(process.cwd(), 'scripts/lib/persona-comment-source-db.ts'), 'utf8')
+    check('🟢 코퍼스를 정본 자산 로더에서 읽는다', src.includes('loadCanonCorpusTexts('))
+    check('🔴 자기 DB Comment 표를 코퍼스로 쓰지 않는다', !src.includes('prisma.comment.findMany'))
+    check('🔴 화자를 빈도 판정에 쓰지 않는다 — 반환 타입에 없다',
+      !/speakerId/.test(stripComments(src)))
+    /**
+     * 🔴 **정본 자산으로 ② 가 실제로 성립하는가** — 개수가 아니라 **판정 능력**으로 본다.
+     *
+     *    얇은 코퍼스의 문제는 "적다" 가 아니라 **흔한 말조차 `rare` 로 잡힌다**는 것이다
+     *    (`rarityOf`: 0~1 rare · 2~5 mid · 6+ common). 자산이 그 구분을 실제로
+     *    해내는지 본다 — 해내지 못하면 모든 후보가 regenerate 가 된다.
+     *
+     * 🔴 본문은 찍지 않는다. 개수만 센다.
+     */
+    const corpus = loadCanonCorpusTexts()
+    // 🔴 못 읽었으면 **왜** 못 읽었는지가 남아야 한다 — CI 에는 자산이 없다(600 권한·worktree 밖)
+    check('🔴 자산을 못 읽어도 사유가 남는다', corpus.reason.trim() !== '')
+    if (!corpus.ok) {
+      /**
+       * 🔴 **자산 부재를 실패로 만들지 않는다.** CI 는 자산을 볼 수 없고,
+       *    볼 수 없는 것을 실패로 세면 다음 사람은 검사를 끄게 된다.
+       *    대신 **건너뛴 사실을 숨기지 않는다** — `reference-preflight` 와 같은 규칙이다.
+       */
+      console.log(`     🟡 정본 자산 없음(${corpus.code}) — ② 능력 검사는 로컬에서만 돈다`)
+    }
+    if (corpus.ok) {
+      check('🟢 정본 자산을 읽는다', corpus.texts.length > 0)
+      const bodies = corpus.texts.map((t) => t.replace(/\s+/gu, '')).filter((b) => b !== '')
+      const lookup = (g: string): number => {
+        let n = 0
+        for (const b of bodies) if (b.includes(g)) { n += 1; if (n > 6) break }
+        return n
+      }
+      // 🔴 자산에서 뽑은 2-gram 표본이 실제로 `common` 대역에 닿는가
+      const grams = new Set<string>()
+      for (const b of bodies.slice(0, 200)) {
+        for (let i = 0; i + 2 <= b.length && grams.size < 400; i += 1) grams.add(b.slice(i, i + 2))
+      }
+      const common = [...grams].filter((g) => rarityOf(lookup(g)) === 'common').length
+      check('🟢 흔한 말이 common 으로 잡힌다 — 얇은 코퍼스였다면 전부 rare 다', common > 0)
+      check('🔴 그렇다고 전부 common 은 아니다 — 희귀어를 구분한다',
+        common < grams.size)
+    }
+  }
+
+  /**
+   * 🔴 **CI 가 preflight 실패를 숨기지 않는가** (2026-09-11).
+   *
+   *    옛 워크플로우는 `npm run persona:reference-preflight || echo "🟡 자산 없음 …"` 이었다.
+   *    그 `||` 는 **모든 실패**를 성공으로 바꿨다 — 그래서 preflight 가 옛 합성 코드
+   *    `S01~S10` 을 들고 **언제나 exit 1** 이었는데도 CI 는 계속 초록이었다.
+   *    자산 부재만 스크립트가 `SKIP` 으로 정상 종료하고, 나머지는 빨갛게 떠야 한다.
+   */
+  {
+    const wf = readFileSync(join(process.cwd(), '.github/workflows/visibility-guard.yml'), 'utf8')
+    const step = wf.split('\n').find((l) => l.includes('run: npm run persona:reference-preflight'))
+    check('🔴 CI 가 preflight 실패를 `|| echo` 로 삼키지 않는다',
+      step !== undefined && !step.includes('||'))
+    check('🔴 그 스텝에 continue-on-error 도 없다', !/continue-on-error/.test(wf))
+    const pf = stripComments(
+      readFileSync(join(process.cwd(), 'scripts/persona-reference-preflight.mts'), 'utf8'),
+    )
+    check('🔴 preflight 가 옛 합성 코드(S01~S10)를 만들지 않는다',
+      !/`S\$\{String\(i \+ 1\)/.test(pf))
+    check('🟢 preflight 가 정본 universe 를 그대로 쓴다',
+      pf.includes('personaCodes: PRODUCTION_PERSONA_CODES'))
+    check('🔴 SKIP 은 자산 **부재** 일 때만이다 — digest 불일치는 통과시키지 않는다',
+      pf.includes("canon.code === 'ASSET_MISSING'") && pf.includes('ref.rows.length === 0'))
+  }
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

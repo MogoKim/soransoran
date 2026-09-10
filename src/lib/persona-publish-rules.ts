@@ -20,6 +20,7 @@
  */
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from './comment-policy'
 import { planCap, type CapContext } from './persona-cap'
+import { PERSONA_COMMENTS_PER_POST_MAX } from './persona-target-rules'
 import type { CandidateStatus } from './persona-candidate-rules'
 
 /**
@@ -44,7 +45,7 @@ export type PublishBlockCode =
   | 'BODY_EMPTY'
   | 'BODY_TOO_SHORT'
   | 'BODY_TOO_LONG'
-  | 'PERSONA_ALREADY_ON_POST'
+  | 'PERSONA_POST_SLOTS_FULL'
   | 'DAILY_CAP_UNSET'
   | 'WEEKLY_CAP_UNSET'
   | 'DAILY_CAP_EXCEEDED'
@@ -156,13 +157,15 @@ export function planPublish(input: PublishInput): PublishPlan {
     block('BODY_TOO_LONG', `본문이 ${len}자입니다 — ${MAX_COMMENT_LENGTH}자를 넘을 수 없습니다`)
   }
 
-  // ⑦ 🔴 같은 글에 페르소나는 1명이다 (Architecture §8 전체 상한).
-  //    1단계는 봇끼리 상호작용 **전면 금지**라, 이미 페르소나 댓글이 있는 글에
-  //    또 다는 것은 그 금지에 정면으로 걸린다.
-  if (input.personaCommentsOnPost > 0) {
+  // ⑦ 🔴 한 글에 페르소나 댓글은 최대 5건이다 (2026-09-11 계약 교체).
+  //    옛 계약은 1명이었고, 그것이 "댓글이 달린 글" 을 영원히 만들지 못하게 했다.
+  //    🔴 **같은 페르소나가 두 번 다는 것**은 여기가 아니라 댓글 레인 재검사가 막는다
+  //    (`recheckBeforePublish.personaAlreadyOnPost`) — 그쪽이 후보의 personaId 를 안다.
+  if (input.personaCommentsOnPost >= PERSONA_COMMENTS_PER_POST_MAX) {
     block(
-      'PERSONA_ALREADY_ON_POST',
-      `대상 글에 이미 페르소나 댓글이 ${input.personaCommentsOnPost}건 있습니다 — 같은 글에 1명입니다`,
+      'PERSONA_POST_SLOTS_FULL',
+      `대상 글에 이미 페르소나 댓글이 ${input.personaCommentsOnPost}건 있습니다`
+      + ` — 한 글에 ${PERSONA_COMMENTS_PER_POST_MAX}건까지입니다`,
     )
   }
 

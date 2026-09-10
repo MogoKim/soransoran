@@ -4,8 +4,10 @@ import {
   recheckBeforePublish, type PublishActor, type QueueStatus,
 } from './persona-comment-queue'
 import {
-  judgeRatio, judgeReadiness, readRunMode, windowFromRows, RATIO_WINDOW_DAYS,
+  judgeReadiness, windowFromRows, RATIO_WINDOW_DAYS,
 } from './persona-comment-governor'
+import { legacyRunModeFor, readCommentStage, stagePowers } from './persona-comment-stage'
+import { countManagedPostsToday } from './persona-comment-bootstrap-source'
 import { judgeRealMember } from './real-member-gate'
 import { judgeLifeHistory, readPostRequirements } from './original-post-persona-match'
 import type { GateLine } from './persona-comment-gate-report'
@@ -182,6 +184,18 @@ export async function publishCandidateTx(
             where: { postId: row.targetPostId, personaId: { not: null }, isDeleted: false },
           })
         : 0
+      /**
+       * 🔴 **이 Persona 가 그 글에 이미 달았는가** — 수와 별개의 질문이다.
+       *    글당 5건을 연 대가로 반드시 지켜야 하는 쪽이 이것이다.
+       *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 "한 사람이 여럿인 척하는 것" 이다.
+       */
+      const personaAlreadyOnPost = row.targetPostId === null
+        ? null
+        : (await tx.comment.count({
+            where: {
+              postId: row.targetPostId, personaId: row.persona.id, isDeleted: false,
+            },
+          })) > 0
 
       // 🔴 cap 실측. 못 세면 requireCapContext 가 throw 한다 — 0 으로 보정하지 않는다
       const [usedToday, usedWeek] = await Promise.all([
@@ -207,7 +221,7 @@ export async function publishCandidateTx(
       const commentWindowStart = new Date(now.getTime() - RATIO_WINDOW_DAYS * 86_400_000)
       const [
         windowRows, personaUser, memberCommentsOnPost, publishedTodayInTx,
-        personaPriorTexts, bootstrapUsedTotal, bootstrapUsedToday,
+        personaPriorTexts, bootstrapUsedTotal,
       ] = await Promise.all([
         tx.comment.findMany({
           where: { isDeleted: false, createdAt: { gte: commentWindowStart, lte: now } },
@@ -240,20 +254,35 @@ export async function publishCandidateTx(
         tx.comment.count({
           where: { personaId: row.persona.id, isDeleted: false, commentOrigin: 'PERSONA' },
         }),
-        tx.comment.count({
-          where: {
-            personaId: row.persona.id, isDeleted: false, commentOrigin: 'PERSONA',
-            createdAt: { gte: kstDayStart(now) },
-          },
-        }),
       ])
 
       const commentWindow = windowFromRows(windowRows, RATIO_WINDOW_DAYS)
-      // 🔴 mode 는 env 에서 읽는다 — 호출부가 넘긴 값을 믿지 않는다
-      const runMode = readRunMode(process.env).mode
+      /**
+       * 🔴 **단계는 env 에서 읽는다** — 호출부가 넘긴 값을 믿지 않는다.
+       *
+       *    옛 판은 `readRunMode` 를 썼다. 그 파서는 `bootstrap-review`·`bootstrap-auto`
+       *    를 **모르는 값**으로 보고 `shadow` 로 내렸다 — 단계를 올려도 트랜잭션이
+       *    "shadow 모드다" 로 막았다. 게다가 `judgeReadiness` 를 **stage 없이** 불러
+       *    예산이 언제나 30% ratio 였고, 실회원 댓글이 0 인 지금 그 값은 항상 0 이다.
+       *    즉 bootstrap 공개 경로는 코드상 **닫혀 있었다**. 두 축을 하나로 합친다.
+       */
+      const stage = readCommentStage(process.env)
+      /**
+       * 🔴 **예산도 트랜잭션 안에서 다시 센다.** 밖에서 센 값은 그 사이 다른 후보가
+       *    가져간 자리를 모른다 — 상한 1 에서 2건이 나가던 그 자리와 같은 이유다.
+       */
+      const managed = stagePowers(stage.stage).budget === 'bootstrap'
+        ? await countManagedPostsToday(tx, kstDayStart(now), now)
+        : null
       const commentReadiness = judgeReadiness({
         window: commentWindow,
-        mode: runMode,
+        mode: legacyRunModeFor(stage.stage),
+        stage: stage.stage,
+        bootstrap: {
+          openSlots: managed?.openSlots ?? Number.NaN,
+          publishedToday: publishedTodayInTx,
+          killSwitchOff: sw?.enabled === true ? false : true,
+        },
         publishedToday: publishedTodayInTx,
         killSwitchOff: sw?.enabled === true ? false : true,
       })
@@ -290,10 +319,11 @@ export async function publishCandidateTx(
         personaActive: row.persona.status === 'active',
         personaRealMember: realMember.real,
         personaCommentsOnPost,
+        personaAlreadyOnPost,
         memberCommentsOnPost,
         // 🔴 **총 상한**을 넘긴다. 남은 수량은 트랜잭션이 사용량으로 다시 뺀다
         allowanceCap: commentReadiness.allowance.cap,
-        mode: runMode,
+        stage: stage.stage,
         publishedTodayInTx,
         lifeConflict: lifeBlocks.length > 0,
         gates: storedGates,
@@ -310,7 +340,6 @@ export async function publishCandidateTx(
         // 🔴 bootstrap governor 입력 — 사람 수동 발행일 때 다시 본다
         bootstrapPriorTextCount: personaPriorTexts,
         bootstrapUsedTotal: bootstrapUsedTotal,
-        bootstrapUsedToday: bootstrapUsedToday,
         seedComplete: row.persona.identity !== null && row.persona.voiceCore !== null
           && row.persona.lifeStage !== null && row.persona.lifeStage.trim() !== '',
       })
