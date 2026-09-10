@@ -101,7 +101,7 @@ export default async function PersonaCandidatesPage() {
             후보가 없습니다.
             <br />
             <span className="text-xs">
-              Gate 통과분은 <code>persona-comment-dry-run --enqueue</code> 로 적재됩니다.
+              Gate 통과분은 <code>npm run persona:comment-queue</code> 로 적재됩니다.
             </span>
           </p>
         ) : (

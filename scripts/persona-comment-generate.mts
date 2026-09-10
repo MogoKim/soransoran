@@ -7,10 +7,10 @@
  *
  * 파이프라인에서 이 스크립트가 채우는 자리
  *   [생성] ──▶ tmp/persona-comment-candidates.json ──▶ persona-comment-dry-run(Gate)
- *     ↑ 여기                                              ──▶ --enqueue ──▶ PENDING
+ *     ↑ 여기                                              ──▶ persona:comment-queue ──▶ PENDING
  *
  * 🔴 **여기가 종점이다.** Gate 도 적재도 발행도 하지 않는다.
- *    --enqueue 를 부르지 않는다. 생성물이 그대로 대기열에 들어가면
+ *    적재 경로를 부르지 않는다. 생성물이 그대로 대기열에 들어가면
  *    "생성기가 켜지는 순간 대기열이 찬다" 가 되고, Gate 결과를 사람이 보는 단계가 사라진다.
  *
  * 🔴 API 는 voice-m3-provider.mts 로만 부른다.
@@ -274,4 +274,4 @@ await prisma.$disconnect()
 console.log(`\n✅ 기록 — ${OUTPUT_PATH} (기존 ${existing.length}건 + 1건 · gitignored)`)
 console.log('   🔴 대기열에 넣지 않았습니다. Gate 판정은 아래를 따로 실행합니다:')
 console.log('      npx tsx scripts/persona-comment-dry-run.mts')
-console.log('   Gate 결과를 사람이 본 뒤에만 --enqueue 를 붙입니다.\n')
+console.log('   Gate 결과를 사람이 본 뒤에만 npm run persona:comment-queue 를 씁니다.\n')

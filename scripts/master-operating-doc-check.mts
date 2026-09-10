@@ -178,6 +178,44 @@ check('옛 사각지대를 기록으로 남긴다',
 check('필드 전달과 실제 실행 가능을 나눠 적는다',
   master.includes('**필드 전달**과 **실제 실행 가능**을 나눠 돌려준다'))
 /**
+ * 🔴 **공개를 켜는 조건이 문서에서 빠지지 않게 한다.**
+ *    조건이 흩어지면 하나가 빠진 채로 켜지고, 빠진 것이 무엇인지 나중에 알게 된다.
+ */
+check('공개 release 조건을 표로 적는다',
+  master.includes('### 9.5-d 공개 release 계약')
+  && ['모델 확정', '사람이 승인한 Queue', 'bootstrap', '트랜잭션 재검사', 'runner/schedule 등록']
+    .every((t) => master.includes(t)))
+check('하나라도 빠지면 0 이라고 못박는다',
+  master.includes('하나라도 빠지면 0 이다'))
+check('runner 를 이번 PR 에서 등록하지 않았다고 적는다',
+  master.includes('plist 를 쓰지도 load 하지도 않았다'))
+check('Queue 적재가 모델 미확정으로 막혀 있다고 적는다',
+  /Queue 적재 실행 \|[^\n]*🔴 \*\*모델 미확정으로 fail-closed\*\*/.test(master))
+/**
+ * 🔴 **"구현됨" 을 "실가동" 으로 읽지 못하게 한다.**
+ *    앞선 판은 계약을 만들고도 어느 것도 write 경로에 닿지 않았다.
+ */
+check('구현됨·연결됨·실가동을 나눠 적는다',
+  master.includes('구현됨 / 연결됨 / 실가동을 나눈다')
+  && /\| 축 \| 구현됨 \| 연결됨 \| 실가동 \|/.test(master))
+check('runner schedule 이 미등록임을 그 표에도 적는다',
+  /schedule 등록 \| ✅ 템플릿 \| 🔴 \*\*미등록\*\*/.test(master))
+check('글로벌 상한을 Serializable 로 막는다고 적는다',
+  master.includes('Serializable') && master.includes('재시도하지 않는다'))
+check('bootstrap 을 어드민 수동 발행만 허용한다고 적는다',
+  master.includes('어드민 수동 발행만')
+  && master.includes('requireAdmin()') && master.includes('dead-end'))
+/** 🔴 production 에 적용하지 않은 것을 blocker 로 남긴다 */
+check('provenance 전용 컬럼이 blocker 임을 적는다',
+  master.includes('임의로 적용하지 않았다') && master.includes('창업자 승인이 필요한 blocker'))
+check('--apply 가 계약을 이기지 못한다고 적는다',
+  master.includes('플래그가 계약을 이기지 못하게 한다'))
+check('실회원 글 외부 전송 금지를 release 절에도 적는다',
+  master.includes('실회원이 쓴 글의 원문을 외부 모델로 보내지 않는다')
+  && master.includes('`slice` 를 요약이나 익명화라고 부르지 않는다'))
+check('댓글 회차를 글 발행량과 묶지 않는다고 적는다',
+  master.includes('글 발행량(d1~d10)과 묶지 않는다'))
+/**
  * 🔴 **"결과 9개" 를 "9관문 통과" 로 읽지 못하게 한다.**
  *    입력을 빠뜨리면 notRun 인 채로 9개가 채워진다 — 첫 shadow 판이 그랬다.
  */
