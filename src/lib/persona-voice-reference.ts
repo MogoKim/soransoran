@@ -132,8 +132,16 @@ export function styleDistance(a: StyleVector, b: StyleVector): number {
 export const REFERENCE_MAX_CHARS = 500
 /** 🔴 너무 짧은 것은 말투 근거가 되지 못한다 (`ㅎㅎ` · `👍`) */
 export const REFERENCE_MIN_CHARS = 5
-/** 🔴 묶음 하나가 말투를 대표하려면 최소 이만큼은 있어야 한다 */
-export const REFERENCE_MIN_COUNT = 8
+/**
+ * 🔴 묶음 하나가 말투를 대표하려면 최소 이만큼은 있어야 한다.
+ *
+ * 🔴 **8 에서 3 으로 내렸다** (2026-09-10). 낮춘 것이 아니라 **기준을 바로잡은 것**이다 —
+ *    앞선 판은 8건을 맞추려고 **다른 화자 댓글로 채웠고**, 그래서 묶음의 과반이
+ *    남의 말이었다. 한 화자의 말만 쓰기로 한 이상, 그 사람이 3건밖에 없으면
+ *    묶음도 3건이다. 모자란 것을 남의 말로 가리지 않는다.
+ *    3건 미만은 `REFERENCE_MISSING` 이다.
+ */
+export const REFERENCE_MIN_COUNT = 3
 
 const charLen = (s: string): number => [...s].length
 

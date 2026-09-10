@@ -958,12 +958,12 @@ canon 승격이 막힌다. **"유출 검사를 안 돌렸다" 를 "깨끗하다"
 - 🔴 **`fullGatePass` 는 0/9 다.** Gate ⑧(Voice Fingerprint)은 9/9 `notRun` 이고,
   **`notRun` 을 `pass` 로 바꾸지 않는다.**
 - 🔴 `bootstrap` 은 기존대로 **사람 승인 전용**이다.
-- 🔴 **검증된 reference Persona 는 9명뿐이다.** 나머지 15명은 근거가 없어
-  `REFERENCE_MISSING` 으로 공개 후보 생성이 막힌 상태를 **유지한다.**
+- 🔴 **Persona 준비 상태는 §9.5-f 한 곳만 정본이다.** 여기 숫자를 적지 않는다 —
+  두 곳에 적으면 한쪽만 고쳐지는 날이 온다.
 - 🔴 `더라고요` · 주어 생략 · 짧은 구어체를 **새 금지 규칙으로 만들지 않는다.**
   프롬프트 · Gate · reference bundle 알고리즘은 이번에 수정하지 않았다.
 
-🔴 **모델 확정 경로 (2026-09-10, 창업자 승인 — 아직 실행하지 않았다).**
+🔴 **모델 확정 경로 (2026-09-10 · 실행 완료 — winner `gemini-3.7-flash`).**
 
 확정 정본(`persona-comment-model.json`)을 쓰는 일은 되돌리기 어렵다 —
 한 번 쓰이면 health · Queue · runner · 발행 트랜잭션이 전부 그것을 읽는다.
@@ -1090,21 +1090,39 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 회차 시점에는 불투명 `speakerId` 뿐이라 그것을 작성자라고 부르며 대조하면 늘 0건이 나온다 —
 검사한 적 없는 것을 검사했다고 보고하지 않는다. 이어받을 것이 없으면 `ran: false` 다.
 
-🔴 **9종과 24명은 다른 상태다** (2026-09-10, P0-5).
+### 9.5-f Persona reference 준비 상태 — 🔴 **이 표 하나만 정본이다**
 
-| 상태 | 값 |
-|---|---|
-| 현재 고품질 anchor 로 가능한 Persona | **9종** |
-| 이번 모델 비교에 쓰는 Persona | **9종** |
-| production Persona | 24명 |
-| reference 부족으로 공개 후보 생성 차단 | **15명** |
+🔴 **한 묶음은 정확히 한 화자의 댓글만 쓴다** (2026-09-10 정정).
+앞선 판은 8건을 맞추려고 문체가 가까운 **다른 화자의 댓글**로 채웠다 —
+18개 중 13개가 anchor 3 + 보완 5 였고, **말투 근거의 과반이 남의 말**이었다.
+이제 모자라면 모자란 채로 둔다(3~8 가변). 3건 미만은 `REFERENCE_MISSING` 이다.
 
-🔴 **"production Persona 24명 말투 준비 완료" 라고 쓰지 않는다.**
-말투 근거가 없는 15명은 `buildPrompt` 가 `REFERENCE_MISSING` 으로 막는다 —
-차단은 문서의 약속이 아니라 **코드의 동작**이다.
+🔴 **배정은 정본 universe 전체로 한 번 계산한다**(`stableAssignment`).
+부르는 쪽이 넘긴 목록으로 나누면 같은 Persona 가 배치마다 다른 묶음을 받는다 —
+실측으로 `P10` 이 단독·둘·24명에서 각각 다른 묶음을 받았다.
 
-🔴 **기준을 낮춰 채우지 않는다.** anchor 비중 37.5% 를 내리면 24명을 채울 수 있지만,
-그때 만들어지는 것은 "한 사람의 말투" 가 아니라 빌린 말의 평균이다.
+| 축 | 수 | 뜻 |
+|---|---|---|
+| production 정본 universe | **24명** | `PRODUCTION_PERSONA_CODES` (P09 정본 제외) |
+| **reference bundle 성립** | **18명** | P01~P08 P10~P19 · 한 화자 3~8건 |
+| bundle 미성립 | **6명** | P20 P21 P22 P23 P24 P25 — 화자 부족 |
+| **production 입력 성립** | **14명** | Queue 와 같은 경로로 입력이 서는 수 |
+| production 입력 실패 | **4명** | P07 P10 P15 P17 — DB 에 `lifeStage` 없음 |
+| **Gemini shadow 실행** | **14명** | 회차 `20260910143505` · 호출 14회 · 실측 $0.019713 |
+| **9관문 완주** | **0명** | 🔴 `fullGatePass` — 관문 ⑧ 은 shadow 에서 돌지 않는다 |
+
+🔴 **"bundle 성립" · "production 입력 성립" · "shadow 실행" · "9관문 완주" 는 서로 다른 상태다.**
+넷을 같은 수로 말하지 않는다.
+
+🔴 **shadow 회차 `20260910143505` 실측** (저장 judgement 를 되읽은 값이다).
+`statusPass` **10/14** · `fullGatePass` **0/14** · 근거 없는 자기 경험 **1/14**(P14).
+관문 ② 재생성 2 · 검토 1, 관문 ⑦ 재생성 1, 관문 ⑧ **notRun 14**.
+🔴 `statusPass` 를 "9관문 통과" 로 읽지 않는다 — ⑧ 이 아예 돌지 않았다.
+🔴 P07 P10 P15 P17 은 `PERSONA_LIFESTAGE_MISSING` 으로 **막힌 채 두었다**.
+`lifeStage` 를 채우는 것은 DB write 라 이번 승인 범위 밖이다.
+
+🔴 문체 최소거리 **0.044** (P10 ↔ P18) — 얇다.
+🔴 anchor 최소 3건 기준을 **낮추지 않았다.**
 
 🔴 **억지로 24개를 만들지 않는다.** anchor 비중 37.5% 미만이면 그 묶음은
 "한 사람의 말투" 가 아니므로 만들지 않고 blocker 로 낸다.
@@ -1181,13 +1199,13 @@ planner 가 `share` 를 배정하고 생성기가 그것을 거부하던 일이 
 | public 설정 | 🔴 **없음** — `SORAN_PERSONA_COMMENT_STAGE` 미설정 = shadow |
 | 자동 공개 runner/schedule | 🔴 **없음** — cron·launchd 어디에도 등록돼 있지 않다 |
 | 실제 공개 가동 | 🔴 **0/day** |
-| 최종 생성 모델 | 🔴 **provisional · winner 없음** (사람 채점 전) |
+| 최종 생성 모델 | ✅ **confirmed · winner `gemini-3.7-flash`** (회차 `20260910-215242` · 창업자 확정) |
 | Memory · 대댓글 | 🔴 이번 범위 **아님**. 후속 |
 | 옛 1회판 수집 job | ✅ unload + plist 를 정본 밖 보관소로 이동(재부팅 재등록 차단) |
 | 평가 artifact 불변성 | ✅ 유료 회차 디렉터리 분리 · dry-run 격리 (§9.5-b) |
 | Gate ⑧ cold-start | ✅ 판정 계약까지 (§9.5-c) |
 | 공개 release 계약 | ✅ 모델 게이트·개인정보·Queue·트랜잭션 재검사 (§9.5-d) |
-| Queue 적재 실행 | ✅ 파이프라인 연결 · 🔴 **모델 미확정으로 fail-closed** — DB write 0 |
+| Queue 적재 실행 | ✅ 파이프라인 연결 · 🔴 **shadow·허용량 0·runner 미등록으로 fail-closed** — DB write 0 |
 | 발행 트랜잭션 | ✅ Serializable · 댓글 레인 재검사 배선 완료 |
 | runner | ✅ `publishCandidateTx` 배선 완료 · 🔴 조건 미충족으로 발행 0 |
 | runner/schedule 등록 | 🔴 **등록 0** |
