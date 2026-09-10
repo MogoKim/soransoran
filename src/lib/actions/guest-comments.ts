@@ -67,7 +67,7 @@ function revalidateBoardPost(boardSlug: string, postId: string): void {
 function checkBody(content: string): string | null {
   if (content.length < MIN_COMMENT_LENGTH) return COMMENT_TOO_SHORT
   if (content.length > MAX_COMMENT_LENGTH) return COMMENT_TOO_LONG
-  const guard = checkContent(content)
+  const guard = checkContent(content, { audience: 'user' })
   if (!guard.ok) return guard.reason
   return null
 }
@@ -89,7 +89,7 @@ export async function createGuestComment(
   if (nickname.length < GUEST_NICKNAME_MIN || nickname.length > GUEST_NICKNAME_MAX) {
     return { error: GUEST_NICKNAME_INVALID }
   }
-  const nicknameGuard = checkContent(nickname)
+  const nicknameGuard = checkContent(nickname, { audience: 'nickname' })
   if (!nicknameGuard.ok) return { error: nicknameGuard.reason }
 
   if (!GUEST_PASSWORD_PATTERN.test(password)) return { error: GUEST_PASSWORD_INVALID }

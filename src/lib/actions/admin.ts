@@ -187,7 +187,7 @@ export async function updateCommentContent(
   if (content.length < MIN_COMMENT_LENGTH) return { error: COMMENT_TOO_SHORT }
   if (content.length > MAX_COMMENT_LENGTH) return { error: COMMENT_TOO_LONG }
 
-  const guard = checkContent(content)
+  const guard = checkContent(content, { audience: 'official' })
   if (!guard.ok) return { error: guard.reason }
 
   const comment = await prisma.comment.findUnique({

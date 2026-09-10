@@ -43,7 +43,7 @@ export function checkMicroSeedContent(
 ): GuardResult {
   // ① 사용자 글과 같은 기준을 먼저 통과해야 한다. 여기서 걸리면 그대로 돌려준다 —
   //    사유를 다시 쓰면 같은 위반이 두 가지 문구로 보고된다.
-  const base = checkContent(text, { isTitle })
+  const base = checkContent(text, { isTitle, audience: 'bot' })
   if (!base.ok) return base
 
   // ② 브랜드 금지어 (§6-9-B).

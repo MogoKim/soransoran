@@ -57,7 +57,7 @@ export async function createComment(
     return { error: COMMENT_TOO_LONG }
   }
 
-  const guard = checkContent(content)
+  const guard = checkContent(content, { audience: 'user' })
   if (!guard.ok) return { error: guard.reason }
 
   const limited = checkActionRateLimit('comment', userId, COMMENT_LIMIT, COMMENT_WINDOW_MS)
@@ -118,7 +118,7 @@ export async function updateComment(
     return { error: COMMENT_TOO_LONG }
   }
 
-  const guard = checkContent(content)
+  const guard = checkContent(content, { audience: 'user' })
   if (!guard.ok) return { error: guard.reason }
 
   const limited = checkActionRateLimit(
