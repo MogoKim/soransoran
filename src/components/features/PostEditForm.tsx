@@ -9,6 +9,8 @@ import WriteTopBar from '@/components/features/WriteTopBar'
 import { firstImageUrl } from '@/lib/post-media'
 import { updatePost, type ActionState } from '@/lib/actions/posts'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
+import FieldErrorNotice from '@/components/features/FieldErrorNotice'
+import { usePostGuardError } from '@/components/features/use-post-guard-error'
 import {
   MAX_POST_TITLE_LENGTH,
   POST_CONTENT_PLACEHOLDER,
@@ -60,10 +62,33 @@ export default function PostEditForm({
     textLength: text.trim().length,
     hasImage,
   })
-  const canSubmit = block === null
+  /** 🔴 새 글 폼과 같은 훅·같은 canSubmit 을 쓴다. 두 화면이 다르게 말하면 두 번 배운다. */
+  const guard = usePostGuardError({
+    serverFieldError: state.fieldError,
+    title,
+    text,
+  })
+  const titleBlocked = guard.error?.field === 'title'
+  const contentBlocked = guard.error?.field === 'content'
+
+  /** 🔴 상단바와 하단 CTA 가 이 하나를 함께 본다 */
+  const canSubmit = block === null && !guard.blocked
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form
+      action={(formData) => {
+        /**
+         * 🔴 버튼이 잠겨 있다는 것만 믿지 않는다. 제목칸 Enter·requestSubmit() 은
+         *    버튼을 거치지 않는다. 같은 문을 여기서 한 번 더 닫는다.
+         * 🔴 걸리면 서버 액션을 부르지 않는다 — 다녀와도 돌아오는 것은 같은 거절뿐이고,
+         *    그 사이 "수정 중…" 을 보여 주는 것은 될 것처럼 구는 일이다.
+         */
+        if (block) return
+        if (guard.runBeforeSubmit()) return
+        formAction(formData)
+      }}
+      className="flex flex-col gap-4"
+    >
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />
 
@@ -77,7 +102,9 @@ export default function PostEditForm({
         cancelHref={cancelHref}
       />
 
-      {state.error ? (
+      {/* 🔴 칸에 붙는 안내가 있으면 위쪽 요약은 띄우지 않는다.
+             같은 문장이 두 번 읽히면 무엇이 문제인지 오히려 흐려진다. */}
+      {state.error && !guard.error ? (
         state.needsOnboarding ? (
           <OnboardingNotice message={state.error} callbackUrl={pathname} />
         ) : (
@@ -88,16 +115,24 @@ export default function PostEditForm({
       ) : null}
 
       {/* 🔴 새 글 화면과 같은 배치다 — 라벨 없이 쓴 글이 그대로 보인다. */}
-      <input
-        name="title"
-        type="text"
-        aria-label="제목"
-        maxLength={MAX_POST_TITLE_LENGTH}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted"
-        placeholder={POST_TITLE_PLACEHOLDER}
-      />
+      <div className="flex flex-col gap-1">
+        <input
+          ref={guard.titleRef}
+          name="title"
+          type="text"
+          aria-label="제목"
+          aria-invalid={titleBlocked || undefined}
+          aria-describedby={titleBlocked ? guard.titleErrorId : undefined}
+          maxLength={MAX_POST_TITLE_LENGTH}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="min-h-[52px] border-b border-subtle bg-transparent text-lg font-bold text-content-primary placeholder:font-normal placeholder:text-content-muted aria-[invalid]:border-state-danger"
+          placeholder={POST_TITLE_PLACEHOLDER}
+        />
+        {titleBlocked && guard.error ? (
+          <FieldErrorNotice id={guard.titleErrorId} message={guard.error.message} />
+        ) : null}
+      </div>
 
       <div className="flex flex-col gap-1">
         <input type="hidden" name="content" value={content} readOnly />
@@ -107,12 +142,24 @@ export default function PostEditForm({
           onTextChange={setText}
           onBusyChange={setUploading}
           placeholder={POST_CONTENT_PLACEHOLDER}
+          focusSignal={guard.editorFocusSignal}
+          ariaInvalid={contentBlocked}
+          ariaDescribedBy={guard.contentErrorId}
         />
+        {contentBlocked && guard.error ? (
+          <FieldErrorNotice id={guard.contentErrorId} message={guard.error.message} />
+        ) : null}
       </div>
 
       {/* 🔴 고정된 하단 바가 본문 마지막 줄을 덮지 않게 자리를 비운다. */}
       <WriteFooterSpacer />
-      <WriteFooter block={block} textLength={text.length} label="수정하기" pendingLabel="수정 중…" />
+      <WriteFooter
+        block={block}
+        canSubmit={canSubmit}
+        textLength={text.length}
+        label="수정하기"
+        pendingLabel="수정 중…"
+      />
     </form>
   )
 }

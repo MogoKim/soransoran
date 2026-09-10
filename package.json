@@ -18,6 +18,7 @@
     "check:visibility": "node scripts/check-post-visibility.mjs",
     "check:home-exposure": "tsx scripts/home-exposure-check.mts",
     "check:ga4-events": "tsx scripts/ga4-participation-events-check.mts",
+    "check:content-guard": "tsx scripts/content-guard-feedback-check.mts",
     "micro-seed:validate": "node scripts/micro-seed-validate.mjs",
     "micro-seed:read": "node scripts/micro-seed-read.mjs",
     "micro-seed:plan": "tsx scripts/micro-seed-plan-guarded.mts",

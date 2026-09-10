@@ -92,6 +92,9 @@ export default function PostEditor({
   onBusyChange,
   placeholder,
   canUploadImage = true,
+  focusSignal,
+  ariaInvalid,
+  ariaDescribedBy,
 }: {
   /** 본문 HTML. 처음 한 번만 에디터에 넣는다. */
   value: string
@@ -118,6 +121,19 @@ export default function PostEditor({
    *    로 읽히고, 로그인하면 되는 일이라는 것을 알 길이 없다.
    */
   canUploadImage?: boolean
+  /**
+   * 값이 바뀌면 본문에 초점을 준다.
+   *
+   * 🔴 에디터 인스턴스를 밖에 내주지 않는다. 밖에서 문서를 직접 만질 수 있게 되면
+   *    저장될 HTML 을 건드리는 길이 함께 열린다 — 이 파일이 지키는 경계가 그것이다.
+   *    "초점을 달라" 는 신호 하나만 받는다.
+   * 🔴 optional 이라 넘기지 않는 화면은 지금과 똑같이 동작한다.
+   */
+  focusSignal?: number
+  /** 본문이 막혔을 때 스크린리더에 알린다 */
+  ariaInvalid?: boolean
+  /** 안내 문구와 잇는다 */
+  ariaDescribedBy?: string
 }) {
   const [uploading, setUploading] = useState<Upload | null>(null)
   const [error, setError] = useState('')
@@ -247,6 +263,36 @@ export default function PostEditor({
   useEffect(() => {
     editorRef.current = editor
   }, [editor])
+
+  /**
+   * 본문이 막혔다는 사실을 스크린리더에도 알린다.
+   *
+   * 🔴 useEditor 의 editorProps.attributes 에 넣지 않는다. 그건 만들 때 한 번 굳는 값이라
+   *    오류가 났다 풀렸다 하는 것을 따라오지 않는다. 실제 DOM 에 붙였다 뗀다.
+   */
+  useEffect(() => {
+    const dom = editor?.view.dom
+    if (!dom) return
+    if (ariaInvalid) dom.setAttribute('aria-invalid', 'true')
+    else dom.removeAttribute('aria-invalid')
+    if (ariaInvalid && ariaDescribedBy) dom.setAttribute('aria-describedby', ariaDescribedBy)
+    else dom.removeAttribute('aria-describedby')
+  }, [editor, ariaInvalid, ariaDescribedBy])
+
+  /**
+   * 부모가 "본문으로 데려가 달라" 고 하면 초점을 준다.
+   *
+   * 🔴 첫 렌더에서는 움직이지 않는다. 화면에 들어오자마자 본문으로 초점이 튀면
+   *    제목부터 쓰려던 사람의 손이 엉뚱한 곳으로 간다.
+   * 🔴 문서를 고르거나 바꾸지 않는다. 초점만 준다 — 저장될 HTML 은 그대로다.
+   */
+  const focusSignalRef = useRef(focusSignal)
+  useEffect(() => {
+    if (focusSignal === undefined) return
+    if (focusSignalRef.current === focusSignal) return
+    focusSignalRef.current = focusSignal
+    editor?.commands.focus()
+  }, [focusSignal, editor])
 
   /**
    * 🔴 에디터가 붙자마자 글자 수를 한 번 올린다.
