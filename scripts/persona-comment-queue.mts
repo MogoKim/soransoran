@@ -35,6 +35,7 @@ import {
   gateInputOf, materializeTargets, type GateContext,
 } from './lib/persona-comment-targets'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
+import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
 import { buildPromptFromInput } from './lib/persona-comment-bridge'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import { parseCandidate } from './lib/persona-prompt'
@@ -110,6 +111,18 @@ console.log(`  최근 역할  ${material.recentRoleCounts === null
   : `${Object.keys(material.recentRoleCounts).length}종`}`)
 console.log(`  유료 호출  ${material.providerAllowed ? '가능' : '🔴 막힘 — provider 를 부르지 않는다'}`)
 for (const b of material.providerBlockers) console.log(`     차단: ${b}`)
+/**
+ * 🔴 **말투 근거** (2026-09-10, Wave E). 자산이 있으면 강제하고, 없으면 끈다 —
+ *    이 경로는 shadow·미리보기라 자산 부재로 멈추면 관제가 죽는다.
+ *    유료 생성 경로(`persona-comment-eval` · `persona-comment-generate`)는 강제한다.
+ */
+const reference = bundlesForPersonas({
+  repoRoot: process.cwd(),
+  personaCodes: material.targets.map((x) => x.target.input.personaCode),
+})
+console.log(`  말투 근거  Persona ${reference.byCode.size}종`
+  + (reference.blocks.length > 0 ? ` · 🟡 ${reference.blocks[0]}` : ''))
+
 for (const t of material.targets) {
   if (t.gateReady) continue
   console.log(`     ${t.target.facts.personaCode} → 🔴 notRun 예정 ${t.willNotRun.join('·')}`)
@@ -141,7 +154,8 @@ const result = await runEnqueuePipeline({
   provider: async ({ model, input }) => {
     const ctx = ctxOf(input.post.id, input.personaCode, input.reactionRole)
     if (ctx === undefined) return { ok: false, text: null, errorCode: 'NO_GATE_CONTEXT' }
-    const prompt = buildPromptFromInput(input, ctx.recentTexts)
+    const prompt = buildPromptFromInput(input, ctx.recentTexts, reference.byCode.get(input.personaCode),
+      { requireReference: reference.byCode.size > 0 })
     if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
     const res = await callProvider({
       model: model as ProviderModel,

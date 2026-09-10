@@ -32,6 +32,7 @@ import {
   judgeRatio, judgeReadiness, readRunMode, windowFromRows,
   RATIO_WINDOW_DAYS, type CommentWindow,
 } from '../src/lib/persona-comment-governor'
+import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
 import { buildPromptFromInput, describeGateInput } from './lib/persona-comment-bridge'
 import { gateInputOf, materializeTargets } from './lib/persona-comment-targets'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
@@ -208,13 +209,26 @@ if (WANT_SHADOW) {
   const inputs: CommentInput[] = material.targets.map((t) => t.target.input)
   const records: ShadowRecord[] = []
 
+  /**
+ * 🔴 **말투 근거** (2026-09-10, Wave E). 자산이 있으면 강제하고, 없으면 끈다 —
+ *    이 경로는 shadow·미리보기라 자산 부재로 멈추면 관제가 죽는다.
+ *    유료 생성 경로(`persona-comment-eval` · `persona-comment-generate`)는 강제한다.
+ */
+  const reference = bundlesForPersonas({
+    repoRoot: process.cwd(),
+    personaCodes: material.targets.map((x) => x.target.input.personaCode),
+  })
+  console.log(`  말투 근거  Persona ${reference.byCode.size}종`
+    + (reference.blocks.length > 0 ? ` · 🟡 ${reference.blocks[0]}` : ''))
+
   for (const t of material.targets) {
     const input = t.target.input
     /**
      * 🔴 **자기 발화로 표지를 뽑는다.** 가짜 표지를 이전 발화로 세지 않는다 —
      *    그것은 발화가 아니라 글자이고, ⑧ 은 그것으로 말끝·시작어절을 잰다.
      */
-    const prompt = buildPromptFromInput(input, t.recentTexts)
+    const prompt = buildPromptFromInput(input, t.recentTexts, reference.byCode.get(input.personaCode),
+      { requireReference: reference.byCode.size > 0 })
 
     /**
      * 🔴 후보 텍스트가 없으므로 Gate 를 돌릴 수는 없다 —

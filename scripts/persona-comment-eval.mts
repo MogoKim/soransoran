@@ -31,6 +31,8 @@ import {
   runEval, textFingerprint, type EvalCaller, type EvalJudge,
 } from './lib/persona-comment-eval-runner'
 import { buildPromptFromInput, describeGateInput, toGateInput } from './lib/persona-comment-bridge'
+import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
+import { bundlesAreDistinct, findReferenceCopy } from '../src/lib/persona-voice-reference'
 import { judgeGateInputs } from '../src/lib/persona-comment-gate-report'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import {
@@ -63,6 +65,13 @@ const SAMPLES = 10
 /** 🔴 dry-run 전용 경로. 유료 저장소와 **다른 곳**이다 */
 const DRYRUN_OUT = 'tmp/persona-comment-eval-dryrun.json'
 const TIMEOUT_MS = 60_000
+/**
+ * 🔴 **이번 회차 상한** (2026-09-10, 창업자 승인).
+ *    정본 상한(`EVAL_MAX_CALLS` 30 · `EVAL_MAX_USD` 3)보다 **좁다**.
+ *    좁은 쪽을 쓴다 — 넓은 쪽을 쓰면 승인 범위를 넘어도 코드가 막지 않는다.
+ */
+const RUN_MAX_CALLS = 20
+const RUN_MAX_USD = 0.10
 
 await loadEnvLocal()
 
@@ -147,6 +156,43 @@ for (let i = 0; i < SAMPLES; i += 1) {
 }
 console.log(`  합성 입력 ${inputs.length}건 (🔴 실제 회원 글 아님 · 고유 지문 ${new Set(inputs.map((i) => i.fingerprint)).size}개)`)
 
+/**
+ * ── 🔴 말투 근거 (2026-09-10, Wave E) ─────────────────────────
+ *
+ *    옛 회차는 Persona 설정만 주고 창작하게 했다. 20건이 서로 비슷했고
+ *    원글과 무관한 생활 장면이 반복됐다. 이제 **실제 사람이 쓴 댓글**을 근거로 준다.
+ *
+ * 🔴 근거가 없거나 Persona 별로 겹치면 **호출 전에 멈춘다.** 돈을 쓰고 알면 늦다.
+ */
+const reference = bundlesForPersonas({
+  repoRoot: process.cwd(),
+  personaCodes: inputs.map((i) => i.persona.code),
+})
+console.log('\n  ── 말투 근거 (실제 공개 댓글)')
+for (const a of reference.assets) {
+  console.log(`     ${a.path.padEnd(42)} ${a.exists ? `글 ${a.posts} · 댓글 ${a.comments}` : '🔴 없음'}`)
+}
+if (reference.blocks.length > 0) {
+  for (const b of reference.blocks) console.error(`     🔴 ${b}`)
+}
+const refBundles = [...reference.byCode.values()]
+if (refBundles.length !== inputs.length) {
+  console.error(`\n🔴 중단: Persona ${inputs.length}종 중 ${refBundles.length}종만 근거를 얻었다.`)
+  console.error('   🔴 근거 없이 호출하지 않는다. 가짜로 채우지 않는다.\n')
+  process.exit(1)
+}
+const distinct = bundlesAreDistinct(refBundles)
+console.log(`     Persona ${refBundles.length}종 · 묶음당 ${refBundles[0]?.comments.length ?? 0}건`)
+console.log(`     🔴 겹침 검사 — ${distinct.detail}`)
+if (!distinct.distinct) {
+  console.error('\n🔴 중단: Persona 사이에 같은 근거가 섞였다 — 말투가 다를 수 없다.\n')
+  process.exit(1)
+}
+for (const b of refBundles) {
+  console.log(`       ${b.personaCode}  길이 p25 ${b.lengths.p25} · 중앙 ${b.lengths.median}`
+    + ` · p75 ${b.lengths.p75} · p90 ${b.lengths.p90}`)
+}
+
 console.log('\n  ── 후보와 단가 (정본: voice-m3-contract 의 M3_MODEL_CANDIDATES)')
 for (const label of CANDIDATES) {
   const p = priceOf(label)
@@ -171,7 +217,12 @@ const keysReady = keys.every((k) => k.present)
 
 /** 🔴 `--call` 이 없으면 아예 부르지 않는다 — keysReady 를 null 로 넘겨 fail-closed 로 막는다 */
 const caller: EvalCaller = async ({ model, input }) => {
-  const prompt = buildPromptFromInput(input)
+  /**
+   * 🔴 **말투 근거 없이 부르지 않는다.**
+   *    없으면 `buildPromptFromInput` 이 `REFERENCE_MISSING` 으로 막고,
+   *    막힌 호출은 돈을 쓰지 않는다. 옛 경로(설정만 보고 창작)로 돌아가지 않는다.
+   */
+  const prompt = buildPromptFromInput(input, [], reference.byCode.get(input.personaCode))
   if (!prompt.ok) {
     return {
       ok: false, rawText: '', inputTokens: 0, outputTokens: 0, reasoningTokens: null,
@@ -300,8 +351,9 @@ const result = await runEval({
   judge,
   // 🔴 --call 이 없으면 key 상태를 null 로 넘긴다 → judgeSpend 가 fail-closed 로 막는다
   keysReady: WANT_CALL ? keysReady : null,
-  maxCalls: EVAL_MAX_CALLS,
-  maxUsd: EVAL_MAX_USD,
+  // 🔴 정본 상한과 이번 회차 승인치 중 **좁은 쪽**
+  maxCalls: Math.min(EVAL_MAX_CALLS, RUN_MAX_CALLS),
+  maxUsd: Math.min(EVAL_MAX_USD, RUN_MAX_USD),
 })
 
 console.log(`\n  🔴 실제 호출  ${result.totalCalls}회 · 실제 비용 $${result.totalActualUsd ?? 0}`)

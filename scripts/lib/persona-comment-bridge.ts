@@ -14,6 +14,7 @@
  * 🔴 여기서 새 판정을 만들지 않는다. 모양만 바꾼다 —
  *    판정을 여기 두면 `buildPrompt` 와 이중이 되고, 언젠가 둘이 갈린다.
  */
+import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
 import {
   buildPrompt, extractVoiceMarks, MAX_RECENT_MARKS,
   type PromptPersona, type PromptPlan, type PromptTargetPost, type RecentVoiceMarks,
@@ -99,12 +100,20 @@ export function toRecentMarks(input: CommentInput, recentTexts: readonly string[
 export function buildPromptFromInput(
   input: CommentInput,
   recentTexts: readonly string[] = [],
+  /**
+   * 🔴 **말투 근거** (2026-09-10, Wave E). 없으면 `buildPrompt` 가 막는다 —
+   *    여기서 우회하지 않는다. 설정만 보고 창작하는 옛 경로로 돌아가지 않기 위해서다.
+   */
+  reference?: VoiceReferenceBundle,
+  opts: { requireReference?: boolean } = {},
 ): PromptPlan {
   return buildPrompt({
     persona: toPromptPersona(input),
     post: toPromptPost(input),
     reactionType: input.reactionRole,
     recentMarks: toRecentMarks(input, recentTexts),
+    reference,
+    requireReference: opts.requireReference,
   })
 }
 

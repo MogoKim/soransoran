@@ -173,7 +173,7 @@ flowchart LR
 | Raw Micro Seed | 승인한 외부 원문 | `MicroSeedRawContent`, Sheet, permanent noindex | 없음 | 완료 | 완료 | 과거 5건 발행 | 완료 |
 | Automated Original Supply | thin row | adapt, judge, draft, Queue | Haiku | 완료 | 완료 | 재고는 §6.3 | d1 가동 |
 | Voice Asset | 우나어 legacy read-only | VoiceSource/Derived/CommentSignal | 규칙 + Haiku 분석 | 완료 | 완료 | 전량 분석 완료 | 자산화 완료 |
-| Persona-first Generation (Comment 경로) | Persona identity/voice + 대상 글 | 댓글 후보 입력·프롬프트 | 생성 모델 미확정(provisional) | 완료 | 입력 계약·bridge 완료 | 실제 DB 는 preflight 까지 · provider 호출은 합성 eval 만 | 공개 미활성 |
+| Persona-first Generation (Comment 경로) | Persona identity/voice + **실제 공개 댓글 reference** + 대상 글 | 댓글 후보 입력·프롬프트 | 🔴 생성 모델 **미확정 · winner null** (두 모델 공개 품질 미달, 2026-09-10 창업자 판정) | 완료 | 입력 계약·bridge·말투 근거 완료 | 실제 DB 는 preflight 까지 · provider 호출은 합성 eval 만 | 공개 미활성 |
 | Persona Matching | Queue + active Persona | matchedPersonaId, matchMeta | 없음 | 완료 | 완료 | active Persona 수는 §6.3 | 완료 |
 | Original Publish | matched Queue | Post + ActivityLog | 없음 | 완료 | 완료 | GHA 1회/day | d1 가동 |
 | Persona Comment | Post + reaction role | 후보 텍스트 (shadow) | provisional · 미확정 | 완료 | 생성기·Gate·입력·bridge | 🔴 자동 스케줄 0 | shadow 만 |
@@ -856,6 +856,52 @@ seed/voice 불완전 · 자기 글 · 생활사 충돌 · 맡지 않는 반응 �
 
 🔴 corpus(VoiceDerived 9,674 · VoiceCommentSignal 59,252)는 **공통 배경**이지 개인 근거가 아니다.
 커뮤니티 전체의 말투를 개인 근거로 쓰면 24명이 다시 한 목소리가 된다.
+
+🔴 **정정 (2026-09-10, Wave E — Natural Voice Reset).**
+위 두 문단은 *"설정을 개인 근거로 쓴다"* 로 읽혔고, 그대로 구현돼 있었다.
+유료 회차 `20260909-181515` 가 그 결과를 실물로 보여 줬다 — **두 모델 모두 공개 품질 미달**이다.
+창업자 채점 메모: *"빨래 개다 말고 문득 생각나서 ← 이딴 거 왜 있는 거야"* · *"억지 상황으로 조짐"*.
+
+원인은 모델이 아니라 **프롬프트**였다. 옛 `buildPrompt` 는 셋을 동시에 요구했다.
+
+| 옛 지시 | 실측 (실제 공개 댓글 1,566건) |
+|---|---|
+| 원글 상황으로 여는 것을 **금지** | — |
+| 대신 "지금 내 자리의 생활 장면" 으로 열라 + 예시 4종 | 그렇게 여는 실제 댓글 **0건 (0.00%)** |
+| `저 맞 그 어 아 와` 로 시작 금지 (첫 **글자**) | 그 글자로 시작하는 실제 댓글 **19.2%** |
+| `한두 문장` · `120자` 상한 | 120자 초과 **15.6%** · 문장 2개 이상 **42.1%** |
+
+맥락을 막고 장면을 요구하고 길이를 조이면 남는 답은 하나다 —
+**원글과 무관한 생활 장면 한 줄.** 20건이 서로 비슷했던 것은 모델이 게을러서가 아니다.
+
+🔴 **고치는 방향은 규칙 추가가 아니다.** 옛 주석이 스스로 그 실패를 기록하고 있다 —
+어절을 막으니 첫 글자가 같아졌고, 첫 글자를 막으니 장면이 같아졌다.
+금지를 하나 더 얹으면 모델은 남은 흔한 자리로 옮겨 갈 뿐이다.
+**실제 사람이 쓴 댓글을 근거로 준다.**
+
+| 계약 | 정본 |
+|---|---|
+| 말투 근거 판정 (순수) | `src/lib/persona-voice-reference.ts` |
+| 자산 로더 · Persona 별 분할 | `scripts/lib/persona-reference-store.mts` |
+| 프롬프트 주입 | `buildPrompt({ reference })` — 없으면 `REFERENCE_MISSING` 으로 **막는다** |
+
+🔴 **Persona 마다 근거가 실제로 달라야 한다.** `voiceCore` 의 어미·존댓말 차이는
+설정이 다른 것이지 말투 자산이 다른 것이 아니다. 입력 지문이 다르다는 사실도
+말투 다양성의 증거가 아니다. `bundlesAreDistinct` 가 **겹침 0** 을 강제한다.
+
+🔴 **길이 목표를 두지 않는다.** `PROMPT_TARGET_MAX_CHARS` 를 지웠다.
+참고 댓글의 **관찰된 분포**(p25 · 중앙 · p90)를 전하고 "맞출 필요 없다" 고 말한다.
+`MAX_COMMENT_LENGTH` 500자는 운영 절대 상한이지 목표가 아니다.
+
+🔴 **댓글만 내보낸다.** 창업자의 법률 판단은 공개 **댓글**에 관한 것이다.
+원글 본문 외부 전송 권한으로 확대 해석하지 않는다 —
+로더가 `comments[].content` 만 읽고, 반환 타입에 본문·닉네임을 담을 자리가 없다.
+
+🔴 **Gate 통과는 사람 품질 통과가 아니다.** `20260909-181515` 는 gateStatus 가 전부 `pass`
+였고 사람 판정은 전부 미달이었다. 채점기에 **공개 불가(REJECT)** 축을 따로 뒀다
+(`REJECT_REASONS` · `judgeAbsoluteQuality`). 두 모델이 모두 탈락할 수 있고,
+그때 `judgeModelSelection` 은 `status: none · winner: null` 을 낸다 —
+평균이 더 높은 쪽도 승자가 아니다.
 
 🔴 입력에 **지문**을 붙이고, 지문에 `code` 를 넣지 않는다.
 code 를 넣으면 나머지가 전부 같아도 지문이 달라져 "다 다르다" 는 거짓 통과가 나온다.

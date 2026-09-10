@@ -46,7 +46,7 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { callProvider, keyStatus, type ProviderModel } from './lib/voice-m3-provider.mjs'
 import {
   buildPrompt, parseCandidate, toCandidateRecord, assertNoStoredSource,
-  extractVoiceMarks, isReactionType, REACTION_TYPES, REPEAT_CALLOUT_MIN,
+  extractVoiceMarks, isReactionType, REACTION_TYPES,
   type CandidateRecord,
 } from './lib/persona-prompt'
 
@@ -160,18 +160,12 @@ console.log(
     ` 시작어절 ${recentMarks.openers.length}종 · 말끝 ${recentMarks.endings.length}종` +
     ' (🔴 본문 미사용)',
 )
-// 🔴 반복된 첫 글자를 사람이 보게 한다.
-//    #12 때는 회피 목록에 그 글자가 **이미 있었는데도** 8자 나열에 섞여 보이지 않았고,
-//    프롬프트가 최빈값을 지목하지 않는다는 사실도 화면에 드러나지 않았다.
-{
-  const repeated = recentMarks.openerInitials.filter((e) => e.count >= REPEAT_CALLOUT_MIN)
-  console.log(
-    repeated.length === 0
-      ? `   시작 첫글자 반복 없음 (${recentMarks.openerInitials.length}종 · 전부 1회)`
-      : `   🔴 시작 첫글자 반복 ${repeated.map((e) => `"${e.initial}" ${e.count}회`).join(' · ')}` +
-          ' → 프롬프트가 이름을 대고 막습니다',
-  )
-}
+/**
+ * 🔴 **첫 글자 반복 지목을 지웠다** (2026-09-10, Wave E).
+ *    실측: 실제 사람 댓글의 19.2% 가 그 글자로 시작한다.
+ *    사람이 가장 많이 쓰는 자리를 막으면 모델은 남은 자리로 밀려나고,
+ *    그 자리가 억지 생활 장면이었다. 말투 근거(reference)가 이 역할을 대신한다.
+ */
 
 // ── 프롬프트 ──
 const plan = buildPrompt({

@@ -20,7 +20,7 @@ import {
   FRESHNESS_MAX_DAYS, type PlannerPersona, type PlannerPost,
 } from '../src/lib/persona-comment-planner'
 import {
-  estimateCost, judgeModelSelection, judgeSpend,
+  estimateCost, judgeAbsoluteQuality, judgeModelSelection, judgeSpend,
   EVAL_MAX_CALLS, EVAL_MAX_USD, type ModelPrice,
 } from '../src/lib/persona-comment-cost'
 import { MEMBER_COMMENT_LIMIT } from '../src/lib/persona-target-rules'
@@ -89,6 +89,10 @@ import {
   DEFAULT_FINGERPRINT_THRESHOLDS, REQUIRED_PRIOR_TEXTS, gateEightCanRun,
 } from '../src/lib/persona-fingerprint-thresholds'
 import { checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
+import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
+import {
+  bundlesAreDistinct, findReferenceCopy, looksLikePostBody,
+} from '../src/lib/persona-voice-reference'
 import {
   buildPromptFromInput, describeGateInput, toGateInput, toPromptPost, toRecentMarks,
 } from './lib/persona-comment-bridge'
@@ -526,7 +530,30 @@ console.log('⑤ 모델·비용 원장')
     verdicts: [{ model: 'claude-haiku-4.5', scores: { personaIdentity: 4 }, complete: false, samples: 3 }],
   })
   check('🔴 축을 다 못 쟀으면 provisional 이다', partial.status === 'provisional')
-  check('🔴 그래도 지금까지 앞선 모델은 알려 준다', partial.winner === 'claude-haiku-4.5')
+  /**
+   * 🔴 **모델이 하나면 "우세" 가 아니다** (2026-09-10, Wave E 정정).
+   *    옛 판은 하나뿐인 목록의 첫 줄을 winner 로 적었다. 그것은 비교 결과가 아니다.
+   */
+  check('🔴 비교 대상이 하나면 winner 를 내지 않는다', partial.winner === null)
+  check('  이유를 말한다', partial.reason.includes('상대 비교가 성립하지 않는다'))
+
+  /** 🔴 절대 품질 미달이면 평균이 더 높아도 winner 는 null 이다 */
+  const allRejected = judgeModelSelection({
+    minSamples: 2,
+    verdicts: [
+      { model: 'A', scores: { personaIdentity: 5 }, complete: true, samples: 10, rejected: 9,
+        rejectReasons: { FABRICATED_SCENE: 9 } },
+      { model: 'B', scores: { personaIdentity: 2 }, complete: true, samples: 10, rejected: 8,
+        rejectReasons: { REPEATED_AI_OPENER: 8 } },
+    ],
+  })
+  check('🔴 두 모델 모두 공개 불가면 winner 가 없다', allRejected.winner === null)
+  check('  status 는 none', allRejected.status === 'none')
+  check('  평균이 높은 A 도 승자가 아니다', !allRejected.reason.includes('앞섰다'))
+  check('  탈락 모델을 이름으로 남긴다',
+    (allRejected.rejectedModels ?? []).length === 2)
+  check('🔴 Gate 통과는 사람 품질 통과가 아니다 — 별도 판정 함수가 있다',
+    judgeAbsoluteQuality({ model: 'X', scores: {}, complete: true, samples: 10, rejected: 3 }).pass === false)
   check('🔴 비교 결과가 없으면 none', judgeModelSelection({ verdicts: [] }).status === 'none')
   const full = judgeModelSelection({
     minSamples: 2,
@@ -539,6 +566,80 @@ console.log('⑤ 모델·비용 원장')
 }
 
 // ─────────────────────────────────────────────────────────
+console.log('⑤-b 🔴 Wave E — 말투 근거(reference) 계약')
+{
+  /** 🔴 **자산을 실물로 읽는다.** 시험용 문자열만 보면 "연결됐는가" 를 증명하지 못한다 */
+  const codes = ['S01', 'S02', 'S03', 'S04', 'S05']
+  const ref = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: codes })
+  const assetOk = ref.assets.some((a) => a.exists && a.comments > 0)
+  check('🟢 실제 댓글 자산이 붙어 있다', assetOk)
+  if (!assetOk) {
+    check('🔴 자산이 없으면 숨기지 않고 blocker 를 낸다', ref.blocks.length > 0)
+  } else {
+    check(`🟢 Persona ${codes.length}종 전부 근거를 얻는다`, ref.byCode.size === codes.length)
+    const bundles = [...ref.byCode.values()]
+
+    /** 🔴 Persona 마다 근거가 **실제로 다르다** — 어미 차이가 아니라 자산이 다르다 */
+    check('🔴 묶음이 서로 한 건도 겹치지 않는다', bundlesAreDistinct(bundles).distinct)
+
+    /** 🔴 길이 분포가 살아 있다 — 짧은 것만 모이면 "무조건 짧게" 가 되살아난다 */
+    for (const b of bundles) {
+      check(`🔴 ${b.personaCode} 묶음이 길이 분포를 갖는다 (중앙 ${b.lengths.median} < p90 ${b.lengths.p90})`,
+        b.lengths.p90 > b.lengths.median)
+    }
+
+    /** 🔴 본문·닉네임이 섞이지 않는다 */
+    const allTexts = bundles.flatMap((b) => b.comments.map((c) => c.text))
+    check('🔴 본문 길이 항목이 없다', allTexts.every((t) => !looksLikePostBody(t)))
+    check('🔴 반환 항목에 작성자 자리가 없다',
+      bundles.every((b) => b.comments.every((c) => Object.keys(c).join() === 'text')))
+
+    const built = buildCommentInput({
+      persona: {
+        code: 'S01', ageBand: '50대', region: '경기', lifeStage: '자녀 대학생',
+        identity: { job: '합성', note: '시험' },
+        voiceCore: { ending: '~해요', register: '존댓말', emoji: '없음', length: '중간 길이' },
+        voiceVariations: ['질문형'], noGoTopics: ['정치'], noGoExpressions: ['~하시길'],
+        forbiddenReactionRoles: [],
+      },
+      post: {
+        id: 'ref-1', title: '무릎이 시큰해요', bodyDigest: '계단 오를 때 아프다는 이야기',
+        boardLabel: '수다방', existingCommentDigests: [],
+      },
+      reactionRole: 'empathy',
+      voice: voiceEvidenceFromAssets({
+        voiceCore: { ending: '~해요', register: '존댓말', emoji: '없음', length: '중간 길이' },
+        voiceVariations: ['질문형'],
+      }),
+      memory: { has: false, note: '' },
+    })
+    check('🟢 시험 입력이 성립한다', built.ok)
+    if (built.ok) {
+      const bundle = ref.byCode.get('S01')!
+      const p = buildPromptFromInput(built.input, [], bundle)
+      check('🟢 근거를 주면 프롬프트가 만들어진다', p.ok)
+      const sys = p.ok ? p.prompt.systemPrompt : ''
+      /** 🔴 선언이 아니라 문자열로 확인한다 */
+      check('🔴 근거 댓글이 실제로 프롬프트 안에 있다',
+        bundle.comments.every((c) => sys.includes(c.text)))
+      check('🔴 근거가 금지 목록보다 앞에 온다',
+        sys.indexOf('말투는 아래 실제 댓글에서') < sys.indexOf('## 절대 하지 않는 것'))
+
+      /** 🔴 **근거 없이는 부르지 않는다** — 옛 경로(설정만 보고 창작)로 돌아가지 못한다 */
+      const blocked = buildPromptFromInput(built.input, [], undefined)
+      check('🔴 근거가 없으면 프롬프트를 만들지 않는다', !blocked.ok)
+      check('  REFERENCE_MISSING 으로 막는다',
+        !blocked.ok && blocked.blocks.some((b) => b.code === 'REFERENCE_MISSING'))
+
+      /** 🔴 통째로 베낀 것을 잡는다 — Gate ① 은 원글 대조라 이 자리를 보지 않는다 */
+      const longest = bundle.comments.slice().sort((a, b) => b.text.length - a.text.length)[0]!
+      const copied = findReferenceCopy(longest.text, bundle)
+      check(`🔴 근거를 통째로 옮기면 잡는다 (연속 ${copied.runLength}자)`, copied.copied)
+      check('🟢 제 말로 쓴 것은 잡지 않는다', !findReferenceCopy('오늘은 좀 낫네요 그쵸', bundle).copied)
+    }
+  }
+}
+
 console.log('⑥ 레인 분류 — 같은 행을 양쪽에 세지 않는다')
 // ─────────────────────────────────────────────────────────
 {
@@ -656,7 +757,7 @@ console.log('⑧ 역할 어휘 통합 — planner 가 고른 것을 생성기가
     })
     check(`🟢 [${role}] 입력이 만들어진다`, built.ok)
     if (!built.ok) continue
-    const prompt = buildPromptFromInput(built.input)
+    const prompt = buildPromptFromInput(built.input, [], undefined, { requireReference: false })
     check(`🟢 [${role}] buildPrompt 가 받아들인다 (share 사고 재발 방지)`, prompt.ok)
   }
   // 🔴 정본에 없는 낱말은 생성기가 거부한다 — 그 사실을 행동으로 확인한다
@@ -666,7 +767,7 @@ console.log('⑧ 역할 어휘 통합 — planner 가 고른 것을 생성기가
     memory: { has: false, note: '' },
   })
   check('🔴 share 로 만든 입력은 buildPrompt 가 거부한다',
-    bogus.ok && !buildPromptFromInput(bogus.input).ok)
+    bogus.ok && !buildPromptFromInput(bogus.input, [], undefined, { requireReference: false }).ok)
 
   /** 🔴 Memory 가 없다는 사실이 프롬프트 본문에 실제로 실린다 */
   const built = buildCommentInput({
@@ -2527,7 +2628,8 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     const input = m1.targets[0]?.target.input
     if (input === undefined) throw new Error('fixture 대상 없음')
     const st = sourceTextsOf(input)
-    const prompt = buildPromptFromInput(input, m1.targets[0]?.recentTexts ?? [])
+    const prompt = buildPromptFromInput(
+      input, m1.targets[0]?.recentTexts ?? [], undefined, { requireReference: false })
     const payload = prompt.ok ? prompt.prompt.userPayload : ''
     const fragments = [input.post.title, input.post.bodyDigest, ...input.post.existingCommentDigests]
     check('🔴 프롬프트에 실리는 조각이 전부 ① sourceTexts 에 있다',
