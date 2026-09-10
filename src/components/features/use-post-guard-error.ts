@@ -84,8 +84,12 @@ export function usePostGuardError({
     if (fieldError.field === 'title') {
       const input = titleRef.current
       if (!input) return
+      /**
+       * 🔴 초점만 준다. 화면을 옮기는 일은 안내(FieldErrorNotice)가 스스로 한다 —
+       *    입력칸을 가운데 두면 그 아래 붙는 안내가 어디에 놓이는지 보장되지 않는다.
+       *    preventScroll 로 초점이 화면을 먼저 끌어당기지 않게 막는다.
+       */
       input.focus({ preventScroll: true })
-      input.scrollIntoView({ block: 'center', behavior: 'smooth' })
 
       const lead = title.length - title.trimStart().length
       const start = typeof fieldError.start === 'number' ? fieldError.start + lead : null
@@ -96,7 +100,15 @@ export function usePostGuardError({
       return
     }
 
-    bodyRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    /**
+     * 🔴 본문 wrapper 를 가운데로 옮기지 않는다.
+     *    본문 상자는 min-height 가 `max(240px,42svh)` 라, 그 상자를 가운데 두면
+     *    아래 끝에 붙는 안내가 하단 고정 CTA 뒤로 밀린다.
+     *    실측(2026-09-10 · 격리 프로필 · 키보드 열린 390×380):
+     *      wrapper 를 center → 안내 top 401 / CTA top 316 → **가려짐**
+     *      안내를 center     → 안내 top 163 / CTA top 316 → 보임
+     *    그래서 화면 이동은 안내가 스스로 하고, 여기서는 초점만 준다.
+     */
     setEditorFocusSignal((n) => n + 1)
     // title·content 는 "오류가 난 시점의 값" 으로만 쓴다. 값이 바뀔 때마다 다시 돌 이유가 없다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
