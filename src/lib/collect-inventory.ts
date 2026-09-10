@@ -222,7 +222,8 @@ export function runsPlannedMulti(observed: readonly ObservedJob[], id: SourceId,
 export function describeInventory(observed: readonly ObservedJob[], phase: Phase): string {
   const cur = currentCapacity(observed)
   const prep = preparedCapacity(phase)
-  return `현재 ${Math.round(cur.effectivePerDay)}건/day (등록 ${cur.perSource.filter((s) => s.registered).length}/${SOURCE_FACTS.length})`
+  // 🔴 **`설정`이다.** 등록된 슬롯 × 상한일 뿐 실제로 나오는 양이 아니다
+  return `설정 ${Math.round(cur.effectivePerDay)}건/day (등록 ${cur.perSource.filter((s) => s.registered).length}/${SOURCE_FACTS.length})`
     + ` · 준비 ${Math.round(prep.effectivePerDay)}건/day`
 }
 

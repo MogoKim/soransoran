@@ -24,6 +24,10 @@
  *    (2026-09-03 실측). 네이버가 막히면 **계정**이고 그건 되돌릴 수 없다.
  *    그래서 quota 가 82cook 30 대 네이버 10 이다.
  */
+import {
+  isTooOpen, judgeSessionLocation, NAVER_SESSION_FILE, SESSION_FILE_MODE,
+  type SessionLocationCode, type SessionShape,
+} from '../../src/lib/naver-session-canon'
 import { createHash } from 'node:crypto'
 import { assessCandidate, findPoliticalTopicHit, type QualityAssessment } from './micro-seed-quality.mjs'
 import { NAVERCAFE_PREFIX, isNaverCafeSource, slotQuotaOf } from './micro-seed-supply.mjs'
@@ -219,6 +223,8 @@ export const FIRST_LIVE_ARTICLES = 3
  *    코드에 계정도 비밀번호도 두지 않는다. 이 파일은 **경로 문자열만** 다룬다.
  */
 export const SESSION_PATH_ENV = 'SORAN_NAVERCAFE_SESSION_PATH'
+/** 🔴 정본 경로·검증은 `src/lib/naver-session-canon.ts` 하나가 정한다. 여기서 다시 적지 않는다 */
+export { NAVER_SESSION_FILE, NAVER_SESSION_DIR, judgeStorageStateShape } from '../../src/lib/naver-session-canon'
 export const KILL_SWITCH_ENV = 'SORAN_NAVERCAFE_COLLECT_ENABLED'
 
 /** 🔴 우나어 세션 경로로 판정되는 형태. 재사용을 코드가 막는다 */
@@ -231,9 +237,32 @@ export type SessionInput = {
   exists: boolean
   /** SESSION_HALTED 플래그가 있는가 */
   halted: boolean
+  /**
+   * 🔴 **일반 파일인가.** 디렉터리·symlink 깨짐을 파일 존재로 세지 않는다.
+   *    넘기지 않으면 검사하지 않는다(옛 호출부 호환).
+   */
+  isFile?: boolean
+  /** 🔴 파일 권한(8진수). 남이 읽을 수 있으면 세션이 아니다 */
+  mode?: number | null
+  /** 🔴 storageState 모양. provider 를 열기 **전에** 본다 */
+  shape?: SessionShape | null
+  /**
+   * 🔴 **운영 회차인가.** 운영에서는 상대 경로·worktree 내부 경로를 막는다 —
+   *    그 두 가지가 Wave B 다회 수집을 8회 연속 죽인 원인이다.
+   *    기본값 `true` — 모르면 엄격한 쪽이다.
+   */
+  strict?: boolean
 }
 
-export type SessionBlockCode = 'NO_SESSION_PATH' | 'SESSION_FILE_MISSING' | 'UNAO_SESSION_REUSE' | 'SESSION_HALTED'
+export type SessionBlockCode =
+  | 'NO_SESSION_PATH'
+  | 'SESSION_FILE_MISSING'
+  | 'UNAO_SESSION_REUSE'
+  | 'SESSION_HALTED'
+  | SessionLocationCode
+  | 'SESSION_NOT_REGULAR_FILE'
+  | 'SESSION_BAD_PERMISSIONS'
+  | 'SESSION_MALFORMED'
 export type SessionVerdict = { ok: true } | { ok: false; code: SessionBlockCode; detail: string }
 
 /**
@@ -256,8 +285,47 @@ export function judgeSession(input: SessionInput): SessionVerdict {
       detail: '🔴 우나어 세션을 재사용하지 않는다 — 한쪽이 막히면 둘 다 멈춘다. 소란소란 전용 계정으로 따로 발급한다',
     }
   }
+  /**
+   * 🔴 **경로 계약을 파일 존재보다 먼저 본다** (2026-09-10).
+   *
+   *    옛 판은 존재만 봤다. 상대 경로는 실행 디렉터리에 따라 다른 파일을 가리키므로,
+   *    개발 트리에서는 "있다" 가 되고 runtime 에서는 "없다" 가 된다 —
+   *    같은 설정이 두 곳에서 다른 뜻이 되는 것이 사고의 씨앗이었다.
+   */
+  const loc = judgeSessionLocation(input.sessionPath, input.strict ?? true)
+  if (!loc.ok) return { ok: false, code: loc.code, detail: loc.reason }
+
   if (!input.exists) {
     return { ok: false, code: 'SESSION_FILE_MISSING', detail: `세션 파일이 없다: ${input.sessionPath}` }
+  }
+  // 🔴 디렉터리나 끊긴 symlink 를 "있다" 로 세지 않는다
+  if (input.isFile === false) {
+    return {
+      ok: false,
+      code: 'SESSION_NOT_REGULAR_FILE',
+      detail: `세션 경로가 일반 파일이 아니다: ${input.sessionPath}`,
+    }
+  }
+  // 🔴 남이 읽을 수 있으면 세션이 아니다. 값은 찍지 않고 권한만 말한다
+  if (typeof input.mode === 'number' && isTooOpen(input.mode)) {
+    return {
+      ok: false,
+      code: 'SESSION_BAD_PERMISSIONS',
+      detail: `세션 파일 권한이 느슨하다 (${(input.mode & 0o777).toString(8)}) — ${SESSION_FILE_MODE.toString(8)} 이어야 한다`,
+    }
+  }
+  /**
+   * 🔴 **모양이 아니면 열지 않는다.** 깨진 세션으로 브라우저를 열면
+   *    로그인 화면을 긁어 오고, 그 회차가 "성공" 으로 기록된다.
+   */
+  if (input.shape === 'malformed' || input.shape === 'unreadable') {
+    return {
+      ok: false,
+      code: 'SESSION_MALFORMED',
+      detail: input.shape === 'unreadable'
+        ? '세션 파일을 읽지 못했다 — 값은 찍지 않는다'
+        : '세션 파일이 storageState 모양이 아니다 — 값은 찍지 않는다(사람이 headed 로 재발급한다)',
+    }
   }
   return { ok: true }
 }
@@ -588,7 +656,14 @@ export function assertNaverCandidate(row: CollectedCandidate): void {
  * 🔴 **권장 저장 경로.** repo 상대경로이고 `.gitignore` 가 막는다.
  *    경로에 `unao` 가 없어야 judgeSession 을 통과한다(설계상 그렇게 고른 이름이다).
  */
-export const DEFAULT_SESSION_PATH = '.naver-session/soransoran-storage-state.json'
+/**
+ * 🔴 **정본 하나를 가리킨다** (2026-09-10 정정).
+ *
+ *    옛 기본값은 상대 경로(`.naver-session/...`)였다. launchd 의 WorkingDirectory 는
+ *    runtime worktree 인데 파일은 개발 트리에만 있어, 다회 수집이 8회 연속 죽었다.
+ *    운영과 setup 이 **같은 상수**를 보게 한다 — 두 곳에 적으면 언젠가 갈린다.
+ */
+export const DEFAULT_SESSION_PATH = NAVER_SESSION_FILE
 
 /** 🔴 우나어 세션 경로인가. judgeSession 과 **같은 규칙**을 쓴다 */
 export function isUnaoSessionPath(path: string): boolean {

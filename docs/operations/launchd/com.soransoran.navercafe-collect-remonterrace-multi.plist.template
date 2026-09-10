@@ -51,9 +51,11 @@
      여러 카페·시간대에 얇게 분산한다 — 한 소스를 세게 긁지 않는다.
 
   🔴 **확정 수집원은 셋뿐이다** — 82cook · navercafe:remonterrace · navercafe:wgang.
-     카페는 하루 2회, 시간대를 벌려 번갈아 돈다 (한 카페를 연속으로 긁지 않는다):
-        09:20 remonterrace  ← 이 템플릿
-        13:20 wgang         ← com.soransoran.navercafe-collect-wgang
+     🔴 **2026-09-10 정정 — 아래 옛 문구를 지웠다.**
+        Wave B 이후 두 카페 모두 **하루 4회**이고 `-multi` job 이 정본이다:
+           remonterrace  04:20 · 10:20 · 16:20 · 22:20 KST
+           wgang         02:50 · 08:50 · 14:50 · 20:50 KST
+        🔴 '하루 2회' · '09:20/13:20' · '1회판' · '미등록' 은 더는 사실이 아니다.
 
   🟡 dlxogns01 · masanmam · goondae · yeowooya 는 **미활성 장래 후보**다.
      수집기가 아는 카페일 뿐, 확정 수집원도 현재 스케줄도 아니다 —

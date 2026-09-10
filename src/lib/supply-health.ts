@@ -18,6 +18,36 @@ export type Level = 'HEALTHY' | 'WARNING' | 'CRITICAL' | 'INFO'
 
 /** 🔴 코드가 서로 달라야 사람이 무엇을 볼지 안다. 같은 등급이라도 대응이 다르다 */
 export type FindingCode =
+  /**
+   * 🔴 회차 기록 기반 코드 — 서로 다른 조치를 요구하는 것은 서로 다른 코드다.
+   *    `RUN_SESSION_FILE_MISSING`(env 를 고친다)과 `RUN_AUTH_EXPIRED`(사람이 재로그인)는
+   *    옛 판에서 `SOURCE_SESSION_EXPIRED` 하나로 뭉개져 있었다.
+   */
+  | 'RUN_OK'
+  | 'RUN_NO_RECORD'
+  | 'RUN_SESSION_FILE_MISSING'
+  | 'RUN_AUTH_MISSING'
+  | 'RUN_AUTH_EXPIRED'
+  | 'RUN_SELECTOR'
+  | 'RUN_NETWORK'
+  | 'RUN_OTHER'
+  | 'RUN_NO_NEW'
+  | 'RUN_LOCK_BUSY'
+  | 'RUN_LOCK_STALE'
+  | 'COLLECT_LOCK_STALE'
+  | 'RUN_RUNTIME_DEPENDENCY'
+  | 'MANUAL_PREFLIGHT_OK'
+  | 'RUN_LEGACY_RECORD'
+  | 'RUN_UNKNOWN_LEGACY'
+  | 'RUN_IN_PROGRESS'
+  | 'RUN_STALE_STARTED'
+  | 'DETAIL_BODY_EMPTY'
+  | 'DETAIL_NO_NEW'
+  | 'SCHEDULED_OK'
+  | 'SCHEDULED_BROKEN'
+  | 'SCHEDULED_DEGRADED'
+  | 'SCHEDULED_ACCUMULATING'
+  | 'SCHEDULED_OBSERVATION_PENDING'
   // 수집
   | 'SOURCE_OK'
   | 'SOURCE_PENDING_FIRST_RUN'
@@ -131,6 +161,67 @@ export type SourceInput = {
   now: Date
   /** 이 시간을 넘겨 산출물이 없으면 오래된 것으로 본다 */
   staleAfterMs: number
+  /**
+   * 🔴 **회차 기록으로 판정한 현재 상태** (2026-09-10).
+   *
+   *    이것이 있으면 로그 글자(`logs`)보다 **이것을 먼저** 믿는다.
+   *    append-only stderr 의 옛 낱말로 현재를 말하던 것이 사고였다 —
+   *    세션을 고친 뒤에도 `세션` 이라는 글자가 남아 "만료" 가 계속 나왔다.
+   *    쿠키는 3주 뒤까지 유효했다.
+   */
+  /**
+   * 🔴 **공통 운영 판정 결과** (`judgeSourceOperations`).
+   *
+   *    이것이 있으면 로그 글자(`logs`)보다 **이것을 먼저** 믿는다.
+   *    supply:health 와 wave-c 가 **같은 함수**의 결과를 쓴다 —
+   *    앞선 판은 각자 판정해 같은 시점에 HEALTHY 와 BROKEN 을 동시에 냈다.
+   */
+  ops?: {
+    level: Level
+    codes: readonly string[]
+    reason: string
+    scheduled: { health: string; succeeded: number; expected: number; elapsed: number }
+    latestRun: { level: Level; code: string; reason: string; runId: string | null }
+    detail: string
+    manual: { ok: boolean; detail: string }
+  } | null
+  /**
+   * 🔴 **남아 있는 죽은 수집 락** — 회차 기록과 무관하게 관측된다.
+   *    자동 회수를 하지 않으므로, 관제가 내지 않으면 조용히 멈춘 채로 남는다.
+   */
+  lockStale?: { path: string; ageMs: number | null; detail: string } | null
+}
+
+/**
+ * 🔴 **stale 임계를 슬롯 간격에서 파생시킨다** (2026-09-10).
+ *
+ *    앞선 판은 30시간 상수였다. 하루 4회(6시간 간격) 도는 job 이 22시간째
+ *    아무것도 못 내놓아도 `SOURCE_OK` 였다 — 실제로 그 22시간 동안
+ *    8회 연속 실패하고 있었다. 하루 1~2회 시절의 상수가 그대로 남은 것이다.
+ *
+ *    "얼마나 오래되면 이상한가" 는 그 job 이 **얼마나 자주 도는가**에서 나온다.
+ *
+ * 🔴 **옛 상수보다 느슨해지지 않는다.** 상한을 30시간으로 둔다 —
+ *    하루 1회 도는 레인에서 48시간이 나오면 그건 개선이 아니라 후퇴다.
+ *
+ * @param slots 그 source 의 하루 슬롯 (KST 시·분). 예약 job 이 없는 on-demand 레인은 빈 배열
+ * @param graceFactor 슬롯 간격의 몇 배까지 봐주는가
+ * @param floorMs 아무리 짧아도 이보다 짧게 잡지 않는다
+ */
+export const STALE_CEILING_MS = 30 * 3_600_000
+
+export function staleAfterFromSlots(
+  slots: readonly (readonly [number, number])[],
+  graceFactor = 2,
+  floorMs = 3 * 3_600_000,
+): number {
+  // 🔴 예약 job 이 없으면 슬롯에서 파생할 것이 없다 — 하루 단위 상한을 쓴다
+  if (slots.length === 0) return STALE_CEILING_MS
+  if (slots.length === 1) return Math.min(STALE_CEILING_MS, Math.max(floorMs, 24 * 3_600_000 * graceFactor))
+  const mins = [...slots].map(([h, m]) => h * 60 + m).sort((a, b) => a - b)
+  let maxGap = mins[0]! + 24 * 60 - mins[mins.length - 1]!
+  for (let i = 1; i < mins.length; i += 1) maxGap = Math.max(maxGap, mins[i]! - mins[i - 1]!)
+  return Math.min(STALE_CEILING_MS, Math.max(floorMs, maxGap * 60_000 * graceFactor))
 }
 
 export function judgeSource(input: SourceInput): Finding[] {
@@ -141,6 +232,55 @@ export function judgeSource(input: SourceInput): Finding[] {
   if (input.leakedKeys.length > 0) {
     out.push(f('CRITICAL', 'SOURCE_LEAKED_BODY',
       `${id} 산출물에 전문 필드가 있다 (${input.leakedKeys.join(' · ')})`, 'safety'))
+  }
+
+  /**
+   * 🔴 **회차 기록이 있으면 그것이 현재 상태다** (2026-09-10).
+   *
+   *    로그 글자는 보조다. 구조적 종료 기록의 **최신 것**이 무엇을 말하는지가 먼저다 —
+   *    과거 실패 뒤 성공이 있으면 과거는 과거이고, 성공 뒤 실패가 있으면 최신이 이긴다.
+   *    그리고 `SESSION_FILE_MISSING`(경로 없음)을 "세션 만료" 라고 말하지 않는다.
+   */
+  if (input.ops != null) {
+    const o = input.ops
+    /**
+     * 🔴 **예약 수집 상태가 등급을 정한다.** 수동 성공이 이것을 덮지 못한다 —
+     *    같은 시점에 wave-c 가 BROKEN 이라고 말하는데
+     *    여기서 HEALTHY 를 내던 것이 이번 모순이었다.
+     */
+    out.push(f(o.level, `SCHEDULED_${o.scheduled.health}` as FindingCode,
+      `${id} ${o.reason}`
+      + ` [예약 ${o.scheduled.succeeded}/${o.scheduled.expected} · 지나간 슬롯 ${o.scheduled.elapsed}]`,
+      o.level === 'HEALTHY' ? undefined : 'availability'))
+
+    // 🔴 최신 회차 상태는 따로 낸다 — legacy 는 성공이 아니다
+    if (o.latestRun.code !== 'RUN_OK') {
+      out.push(f(o.latestRun.level, o.latestRun.code as FindingCode,
+        `${id} ${o.latestRun.reason}${o.latestRun.runId === null ? '' : ` (run ${o.latestRun.runId})`}`))
+    }
+    if (o.detail === 'BODY_EMPTY') {
+      out.push(f('CRITICAL', 'DETAIL_BODY_EMPTY',
+        `${id} 상세를 열었지만 본문을 읽지 못했다 — 성공으로 세지 않는다`, 'availability'))
+    } else if (o.detail === 'NO_NEW') {
+      out.push(f('INFO', 'DETAIL_NO_NEW', `${id} 새 후보가 없어 상세를 열지 않았다 — 공급 0 (고장 아님)`))
+    }
+    // 🔴 수동은 INFO 로만 남는다. 등급을 올리지 않는다
+    if (o.manual.ok) out.push(f('INFO', 'MANUAL_PREFLIGHT_OK', `${id} ${o.manual.detail}`))
+    /**
+     * 🔴 **남은 죽은 락은 사람이 봐야 한다.**
+     *    "다음 회차가 자동으로 치운다" 가 아니다 — 자동 회수를 하지 않기로 했다.
+     */
+    if (input.lockStale != null) {
+      const mins = input.lockStale.ageMs === null ? '?' : Math.round(input.lockStale.ageMs / 60_000)
+      out.push(f('CRITICAL', 'COLLECT_LOCK_STALE',
+        `${id} 죽은 수집 락이 ${mins}분째 남아 있다 (${input.lockStale.path})`
+        + ' — 🔴 자동 회수하지 않는다 · 사람 확인 필요'
+        + ' (실행 중 프로세스가 없음을 확인한 뒤에만 지운다)', 'availability'))
+    }
+
+    // 🔴 예약이 정상일 때만 로그의 옛 낱말을 건너뛴다
+    if (o.level === 'HEALTHY') return finishSource(out, input, id)
+    return out
   }
 
   // 🔴 로그가 말하는 실패는 산출물 유무보다 구체적이다.
@@ -166,6 +306,11 @@ export function judgeSource(input: SourceInput): Finding[] {
       `${id} 로그에 지난 오류 흔적이 있으나 그 뒤 산출물이 나왔다 — 지난 일이다`))
   }
 
+  return finishSource(out, input, id)
+}
+
+/** 🔴 산출물 신선도 — 회차 기록 경로와 로그 경로가 **같은 함수**를 쓴다 */
+function finishSource(out: Finding[], input: SourceInput, id: string): Finding[] {
   // 🔴 아직 첫 예정 시각이 오지 않았으면 없는 게 정상이다
   const beforeFirstRun = input.firstScheduledAt !== null
     && input.now.getTime() < input.firstScheduledAt.getTime()

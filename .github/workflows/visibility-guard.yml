@@ -346,6 +346,19 @@ jobs:
       - name: 네이버 카페 얇은 저장 (전문 미저장 · Sheet 금지 · 정치 hard gate)
         run: npm run micro-seed:navercafe-thin-check
 
+      # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
+      #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —
+      #    상대 경로 하나가 Wave B 다회 수집을 8회 연속 죽였다.
+      - name: Naver 수집 계약 (세션 정본 · raw-only)
+        run: npm run micro-seed:navercafe-check
+
+      # 🔴 **실제 OS 프로세스 2개로 락 경쟁을 붙인다.**
+      #    `unlinkSync(LOCK_PATH)` 는 소스에 멀쩡히 있고 문법도 맞았다 —
+      #    누구의 락인지 묻지 않는다는 것은 두 프로세스를 실제로 붙여야 드러난다.
+      #    🔴 /tmp 임시 경로만 쓴다. 운영 락은 건드리지 않는다.
+      - name: 수집 락 (실제 프로세스 경쟁)
+        run: npm run collect:lock-check
+
       # 기계 판정이 사람 값을 사칭하지 않는지 · 위험 글이 통과하지 않는지 본다 (§4-AR)
       - name: 자동 판정 Shadow (사람 사칭 금지 · false pass 0)
         run: npm run micro-seed:auto-judge-check

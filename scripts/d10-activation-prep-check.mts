@@ -780,9 +780,10 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 시작 단계 수집 준비도는 BLOCKED 다', readyStart.status === 'BLOCKED')
   check('🔴 안정 단계도 BLOCKED 다', readyStable.status === 'BLOCKED')
   check('🔴 current · prepared · required 를 각각 낸다',
-    readyStart.currentPerDay === 20 && readyStart.preparedPerDay === 320 && readyStart.requiredPerDay === 382)
+    readyStart.configuredPerDay === 20 && readyStart.preparedPerDay === 320 && readyStart.requiredPerDay === 382)
   check('🔴 지금 열리는 것이 모자란다고 숫자로 적는다',
-    readyStart.reasons.some((r) => r.includes('지금 열리는 것 20건/day') && r.includes('362건 모자란다')))
+    // 🔴 이름을 `설정된 것` 으로 바꿨다 — 등록은 능력이 아니다(2026-09-10)
+    readyStart.reasons.some((r) => r.includes('설정된 것 20건/day') && r.includes('362건 모자란다')))
   check('🔴 전부 올려도 모자란다는 것을 따로 적는다',
     readyStart.reasons.some((r) => r.includes('전부 올려도') && r.includes('62건 모자란다')))
   check('🔴 판정은 이론 최대(380)로 하지 않는다', readyStart.theoreticalPerDay === 380)
@@ -809,7 +810,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
     }))
     const guards = Object.fromEntries(SOURCE_FACTS.map((f) => [f.id, newGuardState(f.id, '2026-09-08')]))
     const r3 = collectReadiness({ phase: 'start', plan: p100, nowMs: NOW_MS, observed: allMulti, guards })
-    return r3.status === 'BLOCKED' && r3.currentPerDay === 320
+    return r3.status === 'BLOCKED' && r3.configuredPerDay === 320
       && r3.reasons.some((x) => x.includes('전부 올려도'))
   })())
   check('🔴 current d1 운영과 d10 승격 준비도를 섞지 않는다 — d1 필요량은 지금 능력으로 충분하다', (() => {
@@ -823,9 +824,9 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 health 가 정적 loaded 플래그로 능력을 세지 않는다',
     !/SOURCES\.filter\(\(s\) => s\.loaded\)/.test(hh))
   check('🔴 health JSON 이 current·prepared·required 를 따로 낸다',
-    /currentPerDay: cur\.effectivePerDay/.test(hh) && /preparedPerDay: prep\.effectivePerDay/.test(hh)
+    /configuredPerDay: cur\.effectivePerDay/.test(hh) && /preparedPerDay: prep\.effectivePerDay/.test(hh)
     && /requiredPerDay: plan\.detailPerDay/.test(hh))
-  check('🔴 화면도 같은 객체를 읽는다', /collect\.capacity\.currentPerDay/.test(hh))
+  check('🔴 화면도 같은 객체를 읽는다', /collect\.capacity\.configuredPerDay/.test(hh))
   check('🔴 어긋남을 화면에 낸다', /collect\.start\.mismatches/.test(hh))
   check('🔴 준비도 두 호출 **모두** 실제 now 를 넘긴다',
     (hh.match(/collectReadiness\(\{[^}]*nowMs: now\.getTime\(\)/g) ?? []).length === 2

@@ -16,7 +16,9 @@
  *
  * 사용법: npx tsx scripts/micro-seed-navercafe-check.mts
  */
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate,
   judgeSession, judgeLock, randomDelay, parseArticleId, computeDedupKey,
@@ -35,6 +37,24 @@ import {
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
+import {
+  isTooOpen, judgeStorageStateShape, NAVER_SESSION_FILE,
+  SESSION_DIR_MODE, SESSION_FILE_MODE,
+} from '../src/lib/naver-session-canon'
+import {
+  judgeObservedCapacity, judgeSlotHealth,
+} from '../src/lib/runtime-evidence'
+import {
+  judgeOperationalReadiness, judgeSourceOperations,
+} from '../src/lib/collect-operations'
+import { readLedgerAt } from './lib/collect-run-store.mjs'
+import {
+  collapseByRunId, isDetailSuccess, isNoNewRun, isScheduledAlive, isYieldSuccess,
+  judgeAuthCookies, judgeDetailHealth, judgeRunHealth, judgeTrigger, latestTerminal,
+  manualPreflightOk, observedRows, scheduledDetailRuns,
+  type CollectRunRecord,
+} from '../src/lib/collect-run-record'
+import { judgeSource, staleAfterFromSlots, STALE_CEILING_MS } from '../src/lib/supply-health'
 
 let failed = 0
 const ok = (l: string) => console.log(`  ✅ ${l}`)
@@ -314,7 +334,12 @@ check('🔴 헬퍼가 카페 글을 읽지 않는다 (로그인 페이지만 연
 check('headed 로 연다 (headless: false)',
   /headless:\s*false/.test(SETUP_CODE),
   'headless 로는 2단계 인증을 사람이 통과할 수 없다')
-check('저장 후 권한 600 을 건다', /chmodSync\([^)]*0o600\)/.test(SETUP_CODE))
+/**
+ * 🔴 상수를 쓰므로 숫자 리터럴을 찾지 않는다 — 값이 600 인지는
+ *    `SESSION_FILE_MODE === 0o600` 으로 따로 잠근다(정본 한 곳).
+ */
+check('저장 후 권한 600 을 건다',
+  /chmodSync\([^)]*(0o600|SESSION_FILE_MODE)\)/.test(SETUP_CODE))
 check('🔴 loadEnvLocal 을 await 한다',
   /await loadEnvLocal\(\)/.test(SETUP_CODE) && !/^\s*loadEnvLocal\(\)/m.test(SETUP_CODE),
   'async 인데 await 를 빠뜨리면 .env.local 의 세션 경로가 조용히 무시되고 기본 경로로 저장된다')
@@ -495,8 +520,18 @@ check('🔴 lowEngagement 를 품질 실패로 읽지 않는다는 원칙이 남
   /`lowEngagement` 는 품질이 아니라/.test(SUPPLY_DOC))
 check('🔴 이미지는 여전히 향후 설계 항목이다',
   /이미지 — \*\*향후 설계 항목\. 지금 구현하지 않는다\*\*/.test(SUPPLY_DOC))
+/**
+ * 🔴 **"가져오는가" 를 묻는다 — `image` 라는 글자를 찾지 않는다** (2026-09-10 정정).
+ *
+ *    옛 검사는 `/(img|image|\.src)/i` 였다. 그런데 collector 에는
+ *    `imageCount: 0` 이 있다 — **이미지를 안 가져왔다는 증거**인데 그것이 걸렸다.
+ *    이 fixture 는 CI 에 없어서 그 실패가 오래 방치됐다(지금은 CI 에 넣었다).
+ *
+ *    수집을 뜻하는 것은 DOM 에서 이미지를 **읽는** 표현이다.
+ */
 check('🔴 collector 는 여전히 이미지를 가져오지 않는다',
-  /이미지를 가져오지 않는다/.test(COLLECTOR) && !/(img|image|\.src)/i.test(COLLECTOR_CODE))
+  /이미지를 가져오지 않는다/.test(COLLECTOR)
+  && !/<img|querySelector(All)?\(\s*['"`][^'"`]*img|\.src\b|imageUrls?\b|srcset/i.test(COLLECTOR_CODE))
 
 // ─────────────────────────────────────────────────────────
 console.log('\n⑯ 목록 0건 진단 — 🔴 실패를 삼키지 않는다 (PR-S2-b-5)')
@@ -541,8 +576,17 @@ console.log('\n⑯ 목록 0건 진단 — 🔴 실패를 삼키지 않는다 (PR
 // ─────────────────────────────────────────────────────────
 console.log('\n⑰ 락 해제 — 🔴 finally 에서 풀되 원래 에러를 가리지 않는다')
 // ─────────────────────────────────────────────────────────
-check('🔴 collector 가 finally 에서 락을 지운다',
-  /finally\s*\{[\s\S]{0,600}unlinkSync\(LOCK_PATH\)/.test(COLLECTOR_CODE),
+/**
+ * 🔴 **락은 브라우저를 닫는 `finally` 에서 풀지 않는다** (2026-09-10 정정).
+ *
+ *    분류·thin 저장·원장 확정이 그 뒤에 오기 때문이다 —
+ *    거기서 풀면 그 사이에 들어온 회차가 같은 글을 다시 연다.
+ *    해제는 **결과가 확정된 뒤** 최외곽에서 한 번만 한다.
+ *    그래도 실패 경로에서 TTL 을 기다리게 두지는 않는다(`fail()` 이 놓는다).
+ */
+check('🔴 collector 가 결과 확정 뒤 자기 락을 놓는다',
+  COLLECTOR_CODE.includes('const releaseOwnLock')
+  && /lockHandle = null\n  const r = releaseLock\(h\)/.test(COLLECTOR_CODE),
   '실패 후 TTL 30분을 기다려야 하면 원인을 좁힐 기회가 사라진다')
 check('정상 해제면 경고 없음', judgeLockRelease(true, null).released && judgeLockRelease(true, null).warning === null)
 check('락이 없었으면 해제도 경고도 없다',
@@ -1054,6 +1098,851 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
     /정치·진영 \$\{byReason\.politics\}건/.test(COLLECTOR_CODE)
       && /실명·공인 언급 \$\{byReason\.publicFigure\}건/.test(COLLECTOR_CODE)
       && /고정 슬롯 \$\{byReason\.pinned\}건/.test(COLLECTOR_CODE))
+}
+
+
+// ─────────────────────────────────────────────────────────
+// 세션 정본 계약 — 🔴 등록을 능력으로 오판한 사고의 뿌리
+// ─────────────────────────────────────────────────────────
+{
+  const CANON = NAVER_SESSION_FILE
+  const base = { sessionPath: CANON, exists: true, halted: false, isFile: true, mode: 0o600, shape: 'ok' as const }
+
+  check('🟢 정본 경로 · 600 · 모양 정상이면 통과한다', judgeSession(base).ok)
+
+  /** 🔴 상대 경로 — 실행 디렉터리에 따라 다른 파일을 본다 */
+  const rel = judgeSession({ ...base, sessionPath: '.naver-session/soransoran-storage-state.json' })
+  check('🔴 상대 경로는 운영에서 막는다', !rel.ok && rel.code === 'SESSION_PATH_RELATIVE',
+    rel.ok ? '' : rel.code)
+  check('🔴 그 사유가 정본 경로를 알려 준다',
+    !rel.ok && rel.detail.includes('Application Support'))
+  check('🟡 개발 회차(strict=false)에서는 통과시킨다',
+    judgeSession({ ...base, sessionPath: '.naver-session/x.json', strict: false }).ok)
+
+  /** 🔴 worktree 내부 절대 경로 — 배포가 트리를 갈아 끼우면 사라진다 */
+  const inTree = judgeSession({
+    ...base, sessionPath: '/Users/yanadoo/Documents/soransoran-runtime/.naver-session/s.json',
+  })
+  check('🔴 worktree 안 경로는 막는다', !inTree.ok && inTree.code === 'SESSION_PATH_IN_WORKTREE')
+  check('🔴 개발 트리 경로도 막는다', (() => {
+    const v = judgeSession({
+      ...base, sessionPath: '/Users/yanadoo/Documents/soransoran-m0/.naver-session/s.json',
+    })
+    return !v.ok && v.code === 'SESSION_PATH_IN_WORKTREE'
+  })())
+
+  /** 🔴 runtime 에 파일이 없으면 통과시키지 않는다 */
+  const missing = judgeSession({ ...base, exists: false })
+  check('🔴 파일이 없으면 막는다', !missing.ok && missing.code === 'SESSION_FILE_MISSING')
+  const notFile = judgeSession({ ...base, isFile: false })
+  check('🔴 일반 파일이 아니면 막는다', !notFile.ok && notFile.code === 'SESSION_NOT_REGULAR_FILE')
+
+  /** 🔴 권한이 느슨하면 세션이 아니다 */
+  const open644 = judgeSession({ ...base, mode: 0o644 })
+  check('🔴 644 는 막는다', !open644.ok && open644.code === 'SESSION_BAD_PERMISSIONS')
+  check('🔴 640 도 막는다', !judgeSession({ ...base, mode: 0o640 }).ok)
+  check('🟢 600 은 통과한다', judgeSession({ ...base, mode: 0o600 }).ok)
+  check('🔴 권한 사유에 값이 아니라 권한만 담는다', (() => {
+    const v = judgeSession({ ...base, mode: 0o644 })
+    return !v.ok && v.detail.includes('644') && !v.detail.includes('cookie')
+  })())
+
+  /** 🔴 깨진 세션으로 브라우저를 열지 않는다 */
+  const bad1 = judgeSession({ ...base, shape: 'malformed' })
+  check('🔴 storageState 모양이 아니면 막는다', !bad1.ok && bad1.code === 'SESSION_MALFORMED')
+  check('🔴 읽지 못한 경우도 막는다', !judgeSession({ ...base, shape: 'unreadable' }).ok)
+  check('🔴 사람이 headed 로 재발급하라고 말한다', bad1.ok ? false : bad1.detail.includes('headed'))
+
+  /** 🔴 모양 판정 자체 — 값을 반환하지 않는다 */
+  check('🟢 cookies·origins 가 있으면 ok',
+    judgeStorageStateShape('{"cookies":[{"name":"x"}],"origins":[]}') === 'ok')
+  check('🔴 JSON 이 아니면 malformed', judgeStorageStateShape('not json') === 'malformed')
+  check('🔴 cookies 가 없으면 malformed', judgeStorageStateShape('{"origins":[]}') === 'malformed')
+  check('🔴 쿠키가 0개면 malformed (로그인 상태가 아니다)',
+    judgeStorageStateShape('{"cookies":[],"origins":[]}') === 'malformed')
+  check('🔴 배열을 넘겨도 malformed', judgeStorageStateShape('[]') === 'malformed')
+
+  /** 🔴 순서 — 우나어 재사용을 경로 계약보다 먼저 본다 */
+  const unao = judgeSession({ ...base, sessionPath: '/tmp/unao/agents/cafe/storage-state.json' })
+  check('🔴 우나어 세션 재사용이 경로 계약보다 먼저다',
+    !unao.ok && unao.code === 'UNAO_SESSION_REUSE')
+
+  /** 🔴 정본 경로 상수 자체 */
+  check('🔴 정본이 worktree 밖이다',
+    NAVER_SESSION_FILE.includes('Application Support/soransoran/naver-session')
+    && !NAVER_SESSION_FILE.includes('/Documents/'))
+  check('🔴 디렉터리 700 · 파일 600 을 상수로 못박는다',
+    SESSION_DIR_MODE === 0o700 && SESSION_FILE_MODE === 0o600)
+  check('🔴 느슨한 권한 판정이 정확하다',
+    isTooOpen(0o644) && isTooOpen(0o604) && isTooOpen(0o660) && !isTooOpen(0o600) && !isTooOpen(0o400))
+}
+
+// ─────────────────────────────────────────────────────────
+// 등록 ≠ 능력 — 슬롯 건강도와 observed capacity
+// ─────────────────────────────────────────────────────────
+{
+  const v = (succeeded: number, elapsed: number, expected = 4): Parameters<typeof judgeSlotHealth>[0] => ({
+    succeeded, expected, elapsed, detail: '',
+  })
+
+  check('🔴 지나간 슬롯 0 이면 OBSERVATION_PENDING (실패가 아니다)',
+    judgeSlotHealth(v(0, 0)).health === 'OBSERVATION_PENDING')
+  check('🔴 지나갔는데 전부 실패면 BROKEN',
+    judgeSlotHealth(v(0, 1)).health === 'BROKEN')
+  check('🔴 8회 지나가고 0회 성공도 BROKEN', judgeSlotHealth(v(0, 8)).health === 'BROKEN')
+  check('🔴 일부만 성공하면 DEGRADED', judgeSlotHealth(v(1, 2)).health === 'DEGRADED')
+  check('🟡 지나간 만큼 성공했지만 기대에 못 미치면 ACCUMULATING',
+    judgeSlotHealth(v(2, 2)).health === 'ACCUMULATING')
+  check('🟢 기대 수를 채우면 OK', judgeSlotHealth(v(4, 4)).health === 'OK')
+  check('🔴 PENDING 과 BROKEN 이 같은 낱말이 아니다',
+    judgeSlotHealth(v(0, 0)).health !== judgeSlotHealth(v(0, 1)).health)
+
+  /** 🔴 loaded 슬롯 수를 성공 능력으로 계산하지 않는다 */
+  const pending = judgeObservedCapacity({ configuredPerDay: 40, slot: v(0, 0) })
+  check('🔴 지나간 슬롯이 없으면 observed 는 null 이다 (configured 로 채우지 않는다)',
+    pending.configuredPerDay === 40 && pending.observedPerDay === null)
+  const broken = judgeObservedCapacity({ configuredPerDay: 40, slot: v(0, 4) })
+  check('🔴 전부 실패면 observed 는 0 이다', broken.observedPerDay === 0 && broken.health === 'BROKEN')
+  check('🔴 그때도 configured 는 40 그대로다 — 둘을 합치지 않는다',
+    broken.configuredPerDay === 40)
+  const half = judgeObservedCapacity({ configuredPerDay: 40, slot: v(2, 4) })
+  check('🟡 절반 성공이면 observed 는 절반이다', half.observedPerDay === 20)
+  const full = judgeObservedCapacity({ configuredPerDay: 40, slot: v(4, 4) })
+  check('🟢 전부 성공해야 observed == configured', full.observedPerDay === 40)
+}
+
+// ─────────────────────────────────────────────────────────
+// 오래된 산출물을 SOURCE_OK 로 세지 않는다
+// ─────────────────────────────────────────────────────────
+{
+  /** 하루 4회(6시간 간격) → 임계 12시간 */
+  const four: [number, number][] = [[4, 20], [10, 20], [16, 20], [22, 20]]
+  check('🔴 4회 슬롯의 임계가 12시간이다', staleAfterFromSlots(four) === 12 * 3_600_000)
+  check('🔴 22시간 된 산출물은 그 임계를 넘는다', 22 * 3_600_000 > staleAfterFromSlots(four))
+  check('🔴 상수 30시간이었다면 넘지 못했다 — 그것이 옛 사고다',
+    22 * 3_600_000 < 30 * 3_600_000)
+  check('🔴 예약 job 이 없으면 슬롯에서 파생하지 않는다 (상한을 쓴다)',
+    staleAfterFromSlots([]) === STALE_CEILING_MS)
+  check('🔴 옛 상수보다 느슨해지지 않는다 (상한 30시간)',
+    staleAfterFromSlots([[21, 10]]) <= STALE_CEILING_MS)
+  check('🔴 아무리 촘촘해도 바닥이 있다', staleAfterFromSlots(
+    Array.from({ length: 24 }, (_, h) => [h, 0] as [number, number]),
+  ) === 3 * 3_600_000)
+
+  const NOW = new Date('2026-09-10T01:05:00Z')
+  const src = (ageH: number, staleMs: number): Parameters<typeof judgeSource>[0] => ({
+    sourceId: 'navercafe:remonterrace',
+    lastArtifactAt: new Date(NOW.getTime() - ageH * 3_600_000),
+    lastArtifactRows: 2, leakedKeys: [], firstScheduledAt: null, logs: [],
+    now: NOW, staleAfterMs: staleMs,
+  })
+  check('🔴 22시간 · 12시간 임계 → SOURCE_STALE',
+    judgeSource(src(22, staleAfterFromSlots(four))).some((f) => f.code === 'SOURCE_STALE'))
+  check('🔴 그때 SOURCE_OK 를 내지 않는다',
+    !judgeSource(src(22, staleAfterFromSlots(four))).some((f) => f.code === 'SOURCE_OK'))
+  check('🟢 2시간이면 SOURCE_OK',
+    judgeSource(src(2, staleAfterFromSlots(four))).some((f) => f.code === 'SOURCE_OK'))
+
+  /** 🔴 관제가 실제로 도는 job 의 로그를 본다 */
+  const healthSrc = readFileSync('scripts/supply-health.mts', 'utf-8')
+  check('🔴 navercafe 로그 이름이 -multi 다 (실제 도는 job)',
+    healthSrc.includes("logName: 'navercafe-collect-remonterrace-multi'")
+    && healthSrc.includes("logName: 'navercafe-collect-wgang-multi'"))
+  check('🔴 navercafe 슬롯이 4개씩이다 (Wave B 계약)',
+    /slots: \[\[4, 20\], \[10, 20\], \[16, 20\], \[22, 20\]\]/.test(healthSrc)
+    && /slots: \[\[2, 50\], \[8, 50\], \[14, 50\], \[20, 50\]\]/.test(healthSrc))
+  check('🔴 stale 임계를 상수로 쓰지 않는다',
+    !/const SOURCE_STALE_MS\s*=/.test(healthSrc) && healthSrc.includes('staleAfterFromSlots('))
+}
+
+
+// ─────────────────────────────────────────────────────────
+// 회차 기록 — 🔴 로그 글자가 아니라 구조로 판정한다
+// ─────────────────────────────────────────────────────────
+{
+  const rec = (o: Partial<CollectRunRecord> & { runId: string }): CollectRunRecord => ({
+    source: 'navercafe:remonterrace',
+    trigger: 'schedule',
+    mode: 'detail',
+    status: 'ok',
+    startedAt: '2026-09-10T00:00:00.000Z',
+    endedAt: '2026-09-10T00:05:00.000Z',
+    code: null,
+    listRows: 20,
+    detailRequests: 10,
+    bodyRows: 10,
+    thinRows: 6,
+    skippedSeen: 0,
+    repeatedRows: 0,
+    newUniqueThinRows: 6,
+    ...o,
+  })
+
+  /** 🔴 scout 는 상세 성공이 아니다 */
+  check('🔴 scout 회차는 상세 성공이 아니다',
+    !isDetailSuccess(rec({ runId: 'a', mode: 'scout', detailRequests: 0 })))
+  check('🔴 상세 요청 0 이면 detail 모드여도 성공이 아니다',
+    !isDetailSuccess(rec({ runId: 'a', detailRequests: 0 })))
+  check('🟢 상세를 실제로 연 회차만 성공이다',
+    isDetailSuccess(rec({ runId: 'a', detailRequests: 1 })))
+  check('🔴 scout 는 예약 슬롯 증거에 들어가지 않는다',
+    scheduledDetailRuns([rec({ runId: 'a', mode: 'scout', detailRequests: 0 })]).length === 0)
+
+  /** 🔴 기술적 성공과 공급 산출 성공을 나눈다 */
+  check('🟢 thin 0건도 기술적으로는 성공이다',
+    isDetailSuccess(rec({ runId: 'a', thinRows: 0, newUniqueThinRows: 0 })))
+  check('🔴 그러나 공급 산출 성공은 아니다',
+    !isYieldSuccess(rec({ runId: 'a', thinRows: 0, newUniqueThinRows: 0 })))
+  check('🟢 신규 고유 행이 나오면 둘 다 성공이다',
+    isYieldSuccess(rec({ runId: 'a', thinRows: 1, newUniqueThinRows: 1 })))
+  check('🔴 반복분만 담았으면 공급 성공이 아니다',
+    !isYieldSuccess(rec({ runId: 'a', thinRows: 4, newUniqueThinRows: 0, repeatedRows: 4 })))
+
+  /** 🔴 수동 회차는 예약 슬롯을 채우지 않는다 */
+  check('🔴 수동 회차는 예약 증거가 아니다',
+    scheduledDetailRuns([rec({ runId: 'm', trigger: 'manual' })]).length === 0)
+  check('🟢 예약 회차만 들어간다',
+    scheduledDetailRuns([
+      rec({ runId: 'm', trigger: 'manual' }),
+      rec({ runId: 's', trigger: 'schedule' }),
+    ]).map((r) => r.runId).join(',') === 's')
+  check('🔴 launchd 가 띄운 프로세스만 schedule 이다',
+    judgeTrigger({ XPC_SERVICE_NAME: 'com.soransoran.navercafe-collect-wgang-multi' }) === 'schedule'
+    && judgeTrigger({}) === 'manual'
+    && judgeTrigger({ XPC_SERVICE_NAME: 'application.com.other' }) === 'manual')
+
+  /** 🔴 과거 실패 뒤 성공이면 과거는 과거다 */
+  const pastFailThenOk = [
+    rec({ runId: 'f1', status: 'failed', code: 'SESSION_FILE_MISSING', startedAt: '2026-09-09T01:00:00.000Z' }),
+    rec({ runId: 'f2', status: 'failed', code: 'SESSION_FILE_MISSING', startedAt: '2026-09-09T07:00:00.000Z' }),
+    rec({ runId: 'ok1', status: 'ok', startedAt: '2026-09-10T01:00:00.000Z' }),
+  ]
+  const h1 = judgeRunHealth(pastFailThenOk)
+  check('🟢 과거 실패 뒤 성공이면 HEALTHY 다', h1.level === 'HEALTHY' && h1.code === 'RUN_OK')
+  check('🔴 그 성공이 예약인지 수동인지 밝힌다',
+    h1.reason.includes('예약 회차') || h1.reason.includes('수동 회차'))
+  check('🔴 그때 과거 실패를 사실로 남긴다', h1.reason.includes('지난 일이다'))
+  check('🔴 유효한 세션을 옛 missing 로그 때문에 만료로 읽지 않는다',
+    !h1.code.includes('EXPIRED') && !h1.reason.includes('만료'))
+
+  /** 🔴 성공 뒤 실패면 최신 실패가 이긴다 */
+  const okThenFail = [
+    rec({ runId: 'ok1', status: 'ok', startedAt: '2026-09-10T01:00:00.000Z' }),
+    rec({ runId: 'f3', status: 'failed', code: 'AUTH_EXPIRED', startedAt: '2026-09-10T07:00:00.000Z' }),
+  ]
+  const h2 = judgeRunHealth(okThenFail)
+  check('🔴 성공 뒤 최신 실패를 놓치지 않는다', h2.level === 'CRITICAL' && h2.code === 'RUN_AUTH_EXPIRED')
+
+  /** 🔴 경로 없음과 인증 만료를 다른 코드로 말한다 */
+  const miss = judgeRunHealth([rec({ runId: 'x', status: 'failed', code: 'SESSION_FILE_MISSING' })])
+  check('🔴 경로 없음은 RUN_SESSION_FILE_MISSING 이다', miss.code === 'RUN_SESSION_FILE_MISSING')
+  check('🔴 그때 "만료" 라고 말하지 않는다', !miss.reason.includes('만료'))
+  check('🔴 대신 env 를 고치라고 말한다', miss.reason.includes('env'))
+  check('🔴 인증 만료는 재발급을 말한다',
+    judgeRunHealth([rec({ runId: 'x', status: 'failed', code: 'AUTH_EXPIRED' })]).reason.includes('재발급'))
+  check('🔴 셀렉터·네트워크도 서로 다른 코드다', (() => {
+    const sel = judgeRunHealth([rec({ runId: 'x', status: 'failed', code: 'SELECTOR' })])
+    const net = judgeRunHealth([rec({ runId: 'y', status: 'failed', code: 'NETWORK' })])
+    return sel.code === 'RUN_SELECTOR' && net.code === 'RUN_NETWORK' && sel.level !== net.level
+  })())
+
+  /** 🔴 started 뒤 terminal 이 오면 terminal 이 이긴다 */
+  check('🔴 started 를 결과로 세지 않는다', (() => {
+    const both = [rec({ runId: 'r', status: 'started' }), rec({ runId: 'r', status: 'ok' })]
+    return collapseByRunId(both).length === 1 && latestTerminal(both)?.status === 'ok'
+  })())
+
+  /** 🔴 관측 처리량은 실제 행 수다 */
+  const runs = [
+    rec({ runId: 's1', thinRows: 1, newUniqueThinRows: 1 }),
+    rec({ runId: 's2', thinRows: 0, newUniqueThinRows: 0 }),
+    rec({ runId: 'other', thinRows: 99, newUniqueThinRows: 99 }),
+  ]
+  const obs = observedRows(runs, ['s1', 's2'])
+  check('🔴 매칭된 회차의 실제 행만 센다', obs.rows === 1 && obs.runs === 2)
+  check('🔴 configured 를 곱해 만들어 내지 않는다 — 1행이면 1이다', obs.rows !== 10)
+  check('🔴 매칭 안 된 회차는 세지 않는다', obs.rows !== 100)
+
+  /** 🔴 인증 쿠키 — 이름·시각만 */
+  const nowMs = Date.parse('2026-09-10T00:00:00.000Z')
+  check('🟢 두 쿠키가 미래 만료면 유효하다',
+    judgeAuthCookies(
+      [{ name: 'NID_AUT', expires: nowMs / 1000 + 86_400 }, { name: 'NID_SES', expires: nowMs / 1000 + 86_400 }],
+      nowMs,
+    ).ok)
+  check('🔴 하나라도 없으면 AUTH_MISSING', (() => {
+    const v = judgeAuthCookies([{ name: 'NID_AUT', expires: nowMs / 1000 + 10 }], nowMs)
+    return !v.ok && v.code === 'AUTH_MISSING'
+  })())
+  check('🔴 만료됐으면 AUTH_EXPIRED', (() => {
+    const v = judgeAuthCookies(
+      [{ name: 'NID_AUT', expires: nowMs / 1000 - 10 }, { name: 'NID_SES', expires: nowMs / 1000 + 10 }],
+      nowMs,
+    )
+    return !v.ok && v.code === 'AUTH_EXPIRED'
+  })())
+  check('🟢 세션 쿠키(-1)는 만료로 보지 않는다',
+    judgeAuthCookies([{ name: 'NID_AUT', expires: -1 }, { name: 'NID_SES' }], nowMs).ok)
+  check('🔴 판정에 쿠키 값을 담지 않는다', (() => {
+    const v = judgeAuthCookies([{ name: 'NID_AUT', expires: -1 }, { name: 'NID_SES' }], nowMs)
+    return v.reason.includes('값 미출력') || !/=/.test(v.reason)
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+// 세션 발급 경로 — 🔴 target 직접 write 금지
+// ─────────────────────────────────────────────────────────
+{
+  check('🔴 기본 세션 경로가 공용 정본이다', DEFAULT_SESSION_PATH === NAVER_SESSION_FILE)
+  check('🔴 기본값이 상대 경로가 아니다', DEFAULT_SESSION_PATH.startsWith('/'))
+
+  check('🔴 setup 이 target 에 직접 쓰지 않는다',
+    !/storageState\(\{\s*path:\s*target\s*\}\)/.test(SETUP_CODE))
+  check('🟢 setup 이 staging 에 쓴다', /storageState\(\{\s*path:\s*staging\s*\}\)/.test(SETUP_CODE))
+  check('🟢 setup 이 atomic rename 으로 들여놓는다',
+    SETUP_CODE.includes('renameSync(staging, target)'))
+  check('🔴 rename 앞에 모양·인증 검사가 있다', (() => {
+    const shapeAt = SETUP_CODE.indexOf('judgeStorageStateShape(')
+    const authAt = SETUP_CODE.indexOf('judgeAuthCookies(')
+    const renameAt = SETUP_CODE.indexOf('renameSync(staging, target)')
+    return shapeAt > 0 && authAt > 0 && renameAt > shapeAt && renameAt > authAt
+  })())
+  /**
+   * 🔴 **순서만 보면 분기를 지워도 통과한다.** 실제 조건을 본다 —
+   *    모양이나 인증이 어긋나면 정본을 갱신하지 않고 멈춰야 한다.
+   */
+  check('🔴 인증이 없으면 staging 을 버린다', SETUP_CODE.includes('rmSync(staging'))
+  check('🔴 모양·인증 실패를 실제로 분기한다',
+    /if \(shape !== 'ok' \|\| !auth\.ok\)/.test(SETUP_CODE))
+  check('🔴 그 분기가 rename 앞에서 멈춘다', (() => {
+    const guardAt = SETUP_CODE.search(/if \(shape !== 'ok' \|\| !auth\.ok\)/)
+    const renameAt = SETUP_CODE.indexOf('renameSync(staging, target)')
+    const failAt = SETUP_CODE.indexOf('정본을 갱신하지 않았다')
+    return guardAt > 0 && renameAt > guardAt && failAt > guardAt && failAt < renameAt
+  })())
+  check('🔴 그때 기존 정본을 덮어쓰지 않았다고 말한다',
+    SETUP_CODE.includes('덮어쓰지 않았다') || SETUP_CODE.includes('그대로다'))
+  check('🟢 setup 도 경로 계약을 본다', SETUP_CODE.includes('judgeSessionLocation('))
+  check('🟢 디렉터리 700 을 보장한다',
+    /mkdirSync\(dirname\(target\)[^)]*SESSION_DIR_MODE/.test(SETUP_CODE)
+    && /chmodSync\(dirname\(target\), SESSION_DIR_MODE\)/.test(SETUP_CODE))
+  check('🟢 파일 600 을 보장한다', SETUP_CODE.includes('chmodSync(target, SESSION_FILE_MODE)'))
+
+  /** 🔴 collector 도 상세 요청을 실제로 센다 */
+  check('🟢 collector 가 상세 요청 수를 센다',
+    COLLECTOR_CODE.includes('detailRequests += 1'))
+  check('🟢 collector 가 회차 기록을 남긴다',
+    COLLECTOR_CODE.includes('appendRunRecord(') && COLLECTOR_CODE.includes("finishRun('ok')"))
+  check('🔴 scout 종료가 상세 0 으로 기록된다',
+    /markRun\(\{ listRows: basis\.total, detailRequests: 0, thinRows: 0 \}\)/.test(COLLECTOR_CODE))
+  check('🟢 collector 가 인증을 브라우저 앞에서 본다',
+    COLLECTOR_CODE.includes('judgeAuthCookies('))
+
+  /** 🔴 health 가 로그 글자보다 회차 기록을 먼저 본다 */
+  const healthLib = readFileSync('src/lib/supply-health.ts', 'utf-8')
+  check('🔴 health 가 회차 기록을 먼저 본다',
+    healthLib.indexOf('input.runHealth') < healthLib.indexOf('const fresh = input.logs'))
+  check('🔴 로그를 지우거나 자르는 경로가 없다', (() => {
+    const hs = readFileSync('scripts/supply-health.mts', 'utf-8')
+    return !/truncateSync|unlinkSync\([^)]*LOG_DIR|rmSync\([^)]*LOG_DIR/.test(hs)
+  })())
+}
+
+
+// ─────────────────────────────────────────────────────────
+// 회차 기록 II — 🔴 열었다 ≠ 읽었다 · 담았다 ≠ 새로 왔다
+// ─────────────────────────────────────────────────────────
+{
+  const r2 = (o: Partial<CollectRunRecord> & { runId: string }): CollectRunRecord => ({
+    source: 'navercafe:wgang', trigger: 'schedule', mode: 'detail', status: 'ok',
+    startedAt: '2026-09-11T00:00:00.000Z', endedAt: '2026-09-11T00:05:00.000Z', code: null,
+    listRows: 20, detailRequests: 10, bodyRows: 10, thinRows: 6,
+    skippedSeen: 0, repeatedRows: 0, newUniqueThinRows: 6, ...o,
+  })
+
+  /** ④ 상세 10회 요청, body 0 → 상세 성공이 아니다 */
+  const bodyless = r2({ runId: 'b0', detailRequests: 10, bodyRows: 0, thinRows: 0, newUniqueThinRows: 0 })
+  check('🔴 상세 10회 열고 본문 0이면 성공이 아니다', !isDetailSuccess(bodyless))
+  check('🔴 그 상태를 BODY_EMPTY 로 부른다', judgeDetailHealth(bodyless) === 'BODY_EMPTY')
+  /**
+   * 🔴 **옛 형식 기록을 고장으로 읽지 않는다.**
+   *    `bodyRows` 가 생기기 전 회차는 본문을 읽었는지 알 수 없다 —
+   *    그것을 BODY_EMPTY(셀렉터가 터졌다)로 말하면 멀쩡한 회차를 고장으로 보고한다.
+   */
+  const legacy = { ...r2({ runId: 'lg' }) } as Partial<CollectRunRecord> as CollectRunRecord
+  delete (legacy as { bodyRows?: number }).bodyRows
+  check('🟡 옛 형식은 UNKNOWN_LEGACY 다', judgeDetailHealth(legacy) === 'UNKNOWN_LEGACY')
+  check('🔴 옛 형식을 BODY_EMPTY 라 말하지 않는다', judgeDetailHealth(legacy) !== 'BODY_EMPTY')
+  check('🔴 옛 형식은 예약 성공으로도 세지 않는다 (fail-closed)',
+    !isDetailSuccess(legacy) && scheduledDetailRuns([legacy]).length === 0)
+  check('🔴 예약 증거로도 세지 않는다', scheduledDetailRuns([bodyless]).length === 0)
+
+  /** ⑤ NO_NEW → 예약은 돌았고 공급은 0 */
+  const noNew = r2({ runId: 'nn', detailRequests: 0, bodyRows: 0, thinRows: 0, newUniqueThinRows: 0, skippedSeen: 15 })
+  check('🟡 신규가 없어 상세 0인 회차는 NO_NEW 다', isNoNewRun(noNew))
+  check('🟢 그래도 예약은 돌았다 (liveness 는 산다)', isScheduledAlive(noNew))
+  check('🔴 그러나 공급은 0 이다', !isYieldSuccess(noNew))
+  check('🔴 detail health 가 NO_NEW 다', judgeDetailHealth(noNew) === 'NO_NEW')
+  check('🔴 NO_NEW 를 BROKEN 으로 세지 않는다',
+    scheduledDetailRuns([noNew]).length === 1)
+
+  /** ⑥ 같은 글 4회 → unique observed 1 */
+  const repeated4 = [
+    r2({ runId: 'x1', thinRows: 1, newUniqueThinRows: 1, repeatedRows: 0 }),
+    r2({ runId: 'x2', thinRows: 1, newUniqueThinRows: 0, repeatedRows: 1 }),
+    r2({ runId: 'x3', thinRows: 1, newUniqueThinRows: 0, repeatedRows: 1 }),
+    r2({ runId: 'x4', thinRows: 1, newUniqueThinRows: 0, repeatedRows: 1 }),
+  ]
+  const obs4 = observedRows(repeated4, ['x1', 'x2', 'x3', 'x4'])
+  check('🔴 같은 글 4회면 신규 공급은 1건이다', obs4.rows === 1)
+  check('🔴 thinRows 합(4)을 쓰지 않는다', obs4.rows !== 4)
+  check('🔴 반복분을 따로 센다', obs4.repeated === 3)
+
+  /** ⑦ 수동 상세 성공 → 예약 0/4 */
+  const manual = r2({ runId: 'm1', trigger: 'manual' })
+  check('🔴 수동 상세 성공은 예약 슬롯을 채우지 않는다',
+    scheduledDetailRuns([manual]).length === 0)
+  const mp = manualPreflightOk([manual])
+  check('🟡 대신 MANUAL_PREFLIGHT_OK 로만 표시한다',
+    mp.ok && mp.detail.includes('MANUAL_PREFLIGHT_OK'))
+  check('🔴 그 표시가 4/4 를 채우지 않는다고 말한다', mp.detail.includes('예약 4/4'))
+  check('🔴 수동만 있으면 preflight 표시도 없다', !manualPreflightOk([]).ok)
+
+  /** ⑧ 예약 회차 4개 → scheduled 4/4 */
+  const four = ['s1', 's2', 's3', 's4'].map((id, i) => r2({
+    runId: id, startedAt: new Date(Date.parse('2026-09-11T00:00:00.000Z') + i * 6 * 3_600_000).toISOString(),
+  }))
+  check('🟢 예약 상세 성공 4건은 4개 증거가 된다', scheduledDetailRuns(four).length === 4)
+
+  /** ①② 최신 성공 뒤 실패가 최신 상태를 정한다 */
+  const okThenMissing = [
+    r2({ runId: 'ok', startedAt: '2026-09-11T00:00:00.000Z' }),
+    r2({ runId: 'f', status: 'failed', code: 'SESSION_FILE_MISSING', startedAt: '2026-09-11T06:00:00.000Z' }),
+  ]
+  check('🔴 최신 성공 뒤 session missing 이면 RUN_SESSION_FILE_MISSING',
+    judgeRunHealth(okThenMissing).code === 'RUN_SESSION_FILE_MISSING')
+  const okThenExpired = [
+    r2({ runId: 'ok', startedAt: '2026-09-11T00:00:00.000Z' }),
+    r2({ runId: 'f', status: 'failed', code: 'AUTH_EXPIRED', startedAt: '2026-09-11T06:00:00.000Z' }),
+  ]
+  check('🔴 최신 성공 뒤 auth expired 면 RUN_AUTH_EXPIRED',
+    judgeRunHealth(okThenExpired).code === 'RUN_AUTH_EXPIRED')
+
+  /** ③ lock·dependency 실패도 terminal 로 남는다 */
+  check('🔴 LOCK_STALE 은 CRITICAL 이고 사람 확인을 말한다', (() => {
+    const h = judgeRunHealth([r2({ runId: 's', status: 'failed', code: 'LOCK_STALE' })])
+    return h.code === 'RUN_LOCK_STALE' && h.level === 'CRITICAL'
+      && h.reason.includes('사람 확인 필요') && !h.reason.includes('다음 회차')
+  })())
+  check('🔴 LOCK_BUSY 와 LOCK_STALE 은 다른 등급이다', (() => {
+    const busy = judgeRunHealth([r2({ runId: 'b', status: 'failed', code: 'LOCK_BUSY' })])
+    const stale = judgeRunHealth([r2({ runId: 's', status: 'failed', code: 'LOCK_STALE' })])
+    return busy.level === 'WARNING' && stale.level === 'CRITICAL'
+  })())
+  check('🔴 LOCK_BUSY 도 terminal 코드다',
+    judgeRunHealth([r2({ runId: 'l', status: 'failed', code: 'LOCK_BUSY' })]).code === 'RUN_LOCK_BUSY')
+  check('🔴 RUNTIME_DEPENDENCY 도 terminal 코드다',
+    judgeRunHealth([r2({ runId: 'd', status: 'failed', code: 'RUNTIME_DEPENDENCY' })]).code
+      === 'RUN_RUNTIME_DEPENDENCY')
+  check('🔴 락 충돌은 CRITICAL 이 아니다 (겹침 방지가 동작한 것)',
+    judgeRunHealth([r2({ runId: 'l', status: 'failed', code: 'LOCK_BUSY' })]).level === 'WARNING')
+  check('🔴 의존성 실패는 CRITICAL 이다',
+    judgeRunHealth([r2({ runId: 'd', status: 'failed', code: 'RUNTIME_DEPENDENCY' })]).level === 'CRITICAL')
+}
+
+// ─────────────────────────────────────────────────────────
+// collector 배선 — 🔴 기록이 검사보다 먼저다
+// ─────────────────────────────────────────────────────────
+{
+  const idx = (needle: string): number => COLLECTOR_CODE.indexOf(needle)
+
+  /** ⑨ 기록 저장 실패면 외부 요청 0 */
+  check('🔴 첫 기록 실패면 외부 요청 전에 멈춘다',
+    COLLECTOR_CODE.includes('if (!appendRunRecord(runRecord))')
+    && COLLECTOR_CODE.includes('RECORD_WRITE_FAILED'))
+  check('🔴 기록 저장기가 성공 여부를 돌려준다', (() => {
+    const store = readFileSync('scripts/lib/collect-run-store.mts', 'utf-8')
+    return /export function appendRunRecord\([^)]*\): boolean/.test(store)
+  })())
+
+  /** 🔴 기록이 세션·인증·락·의존성 검사보다 앞에 있다 */
+  const recAt = idx('appendRunRecord(runRecord)')
+  check('🔴 세션 검사보다 먼저 기록한다', recAt > 0 && recAt < idx('judgeSession({'))
+  check('🔴 인증 검사보다 먼저 기록한다', recAt < idx('judgeAuthCookies('))
+  check('🔴 락 획득보다 먼저 기록한다', recAt < idx('acquireLock(LOCK_PATH'))
+  check('🔴 브라우저 로드보다 먼저 기록한다', recAt < idx('loadChromium()'))
+
+  /** ③ 락을 쥐고 죽지 않는다 */
+  /**
+   * 🔴 **락은 결과가 확정될 때까지 유지된다** (2026-09-10).
+   *    앞선 판은 브라우저를 닫는 `finally` 에서 락을 놓았는데,
+   *    분류·thin 저장·원장 확정은 그 **뒤**에 왔다 —
+   *    그 사이에 들어온 회차가 같은 글을 다시 열었다.
+   */
+  check('🔴 브라우저 닫는 finally 에서 락을 풀지 않는다', (() => {
+    const at = COLLECTOR_CODE.indexOf('if (browser) await browser.close()')
+    if (at < 0) return false
+    const body = COLLECTOR_CODE.slice(at, at + 300)
+    return !body.includes('releaseOwnLock') && !body.includes('releaseLock(')
+  })())
+  check('🔴 해제가 산출·원장 확정보다 뒤에 있다', (() => {
+    const kept = COLLECTOR_CODE.indexOf("outcome: 'kept'")
+    const thin = COLLECTOR_CODE.indexOf('writeJsonl(thinPath, thinRows)')
+    // 🔴 최외곽 해제는 `main()\n  .then(` 안에 있다 — 함수 선언이 아니라 호출 지점이다
+    const outer = COLLECTOR_CODE.indexOf('main()\n  .then(')
+    return kept > 0 && thin > 0 && outer > kept && outer > thin
+  })())
+  check('🔴 해제는 최외곽에서만 한다 (정상·예외 각 한 번)', (() => {
+    const calls = (COLLECTOR_CODE.match(/releaseOwnLock\(\)/g) ?? []).length
+    // fail() · then · then 안 실패분기 · catch — 네 자리 모두 같은 헬퍼를 쓴다
+    return calls >= 3 && /lockHandle = null\n  const r = releaseLock\(h\)/.test(COLLECTOR_CODE)
+  })())
+  check('🔴 stale 은 LOCK_BUSY 로 뭉개지 않는다',
+    /lock\.kind === 'STALE_HELD' \? 'LOCK_STALE' : 'LOCK_BUSY'/.test(COLLECTOR_CODE))
+
+  check('🔴 실패 경로가 락을 해제한다', (() => {
+    // 🔴 fail() 본문 안에서 **내 락만** 놓는다
+    const at = COLLECTOR_CODE.indexOf('const fail = (msg: string')
+    if (at < 0) return false
+    const body = COLLECTOR_CODE.slice(at, at + 400)
+    return body.includes('releaseOwnLock()') && body.includes("finishRun('failed'")
+  })())
+  check('🔴 락 충돌을 LOCK_BUSY 로 기록한다', COLLECTOR_CODE.includes("'LOCK_BUSY'"))
+  check('🔴 의존성 실패를 RUNTIME_DEPENDENCY 로 기록한다',
+    COLLECTOR_CODE.includes("'RUNTIME_DEPENDENCY'"))
+
+  /** ⑥ 중복 제거가 실제로 배선됐다 */
+  check('🔴 alreadyInVault 를 false 로 고정하지 않는다',
+    !/alreadyInVault:\s*false/.test(COLLECTOR_CODE))
+  check('🟢 이미 본 글을 실제로 조회한다',
+    COLLECTOR_CODE.includes('readSeenArticleIds(')
+    && /alreadyInVault:\s*doneIds\.has\(/.test(COLLECTOR_CODE))
+  check('🟢 신규 고유 행을 센다', COLLECTOR_CODE.includes('newUniqueThinRows: newUnique'))
+  check('🟢 건너뛴 수·반복 수도 기록한다',
+    COLLECTOR_CODE.includes('skippedSeen') && COLLECTOR_CODE.includes('repeatedRows: repeated'))
+  check('🟢 본문을 읽은 수를 센다', COLLECTOR_CODE.includes('bodyRows += 1'))
+}
+
+
+// ─────────────────────────────────────────────────────────
+// 관제 정본 통합 — 🔴 두 명령이 반대를 말하지 않는다
+// ─────────────────────────────────────────────────────────
+{
+  const SLOTS = [
+    { hour: 4, minute: 20 }, { hour: 10, minute: 20 },
+    { hour: 16, minute: 20 }, { hour: 22, minute: 20 },
+  ]
+  /**
+   * 🔴 **슬롯은 머신의 로컬 시간이다.**
+   *
+   *    `elapsedSlots` 는 `new Date(y, m, d, hour, minute)` 로 슬롯을 만든다 —
+   *    launchd 의 `StartCalendarInterval` 이 로컬 시간으로 발화하기 때문이고,
+   *    그게 운영상 맞다.
+   *
+   *    그러므로 fixture 도 **로컬 시간으로** 기대값을 만들어야 한다.
+   *    UTC 로 못 박으면 KST 머신에서는 통과하고 UTC CI 에서는 깨진다 —
+   *    실제로 그렇게 깨졌다(2026-09-10).
+   */
+  const localSlot = (y: number, mo: number, d: number, h: number, mi: number): number =>
+    new Date(y, mo - 1, d, h, mi, 0, 0).getTime()
+  const DAY0 = localSlot(2026, 9, 11, 0, 0)
+  const rec3 = (o: Partial<CollectRunRecord> & { runId: string }): CollectRunRecord => ({
+    source: 'navercafe:remonterrace', trigger: 'schedule', mode: 'detail', status: 'ok',
+    startedAt: new Date(DAY0).toISOString(), endedAt: new Date(DAY0 + 60_000).toISOString(),
+    code: null, listRows: 20, detailRequests: 10, bodyRows: 10, thinRows: 6,
+    skippedSeen: 0, repeatedRows: 0, newUniqueThinRows: 6, ...o,
+  })
+  const ops = (records: CollectRunRecord[], nowOffsetH = 30): ReturnType<typeof judgeSourceOperations> =>
+    judgeSourceOperations({
+      sourceId: 'navercafe:remonterrace', records, slots: SLOTS,
+      since: DAY0 - 12 * 3_600_000, now: DAY0 + nowOffsetH * 3_600_000,
+      expected: 4, configuredPerDay: 40,
+    })
+
+  /**
+   * 🔴 수동 성공이 예약 실패를 덮지 못한다.
+   *
+   *    🔴 수동 회차를 **슬롯 직후**에 둔다 — 시각이 슬롯에서 멀면
+   *    trigger 필터를 풀어도 매칭이 안 돼 검사가 아무것도 증명하지 못한다.
+   */
+  const slotAt = (_day: number, hour: number, minute: number): number =>
+    localSlot(2026, 9, 11, hour, minute)
+  /** 🔴 그 하루의 네 슬롯만 보게 창을 좁힌다 — 그래야 매칭이 실제로 일어난다 */
+  const manualOnly = judgeSourceOperations({
+    sourceId: 'navercafe:remonterrace',
+    records: [rec3({
+      runId: 'm', trigger: 'manual',
+      startedAt: new Date(slotAt(DAY0, 10, 20) + 60_000).toISOString(),
+    })],
+    slots: SLOTS,
+    since: slotAt(DAY0, 4, 0),
+    now: slotAt(DAY0, 23, 0),
+    expected: 4,
+    configuredPerDay: 40,
+  })
+  check('🔴 수동만 성공했으면 예약은 BROKEN 이다', manualOnly.scheduled.health === 'BROKEN')
+  check('🔴 그때 등급은 CRITICAL 이다 (HEALTHY 가 아니다)', manualOnly.level === 'CRITICAL')
+  check('🟡 수동 성공은 INFO 코드로만 남는다',
+    manualOnly.codes.includes('MANUAL_PREFLIGHT_OK') && manualOnly.codes.includes('SCHEDULED_BROKEN'))
+  check('🔴 예약 성공 수는 0 이다', manualOnly.scheduled.succeeded === 0)
+
+  /** 🔴 legacy 기록은 RUN_OK 가 아니다 */
+  const legacyRec = { ...rec3({ runId: 'lg', trigger: 'manual' }) } as Partial<CollectRunRecord>
+  delete legacyRec.bodyRows
+  delete legacyRec.newUniqueThinRows
+  const lh = judgeRunHealth([legacyRec as CollectRunRecord])
+  check('🔴 legacy 는 RUN_OK 가 아니다', lh.code === 'RUN_UNKNOWN_LEGACY' && lh.level !== 'HEALTHY')
+  check('🔴 undefined 를 화면에 찍지 않는다',
+    !lh.reason.includes('undefined') && lh.reason.includes('미상'))
+
+  /** 🔴 관측 전은 HEALTHY 가 아니다 */
+  const pending = judgeSourceOperations({
+    sourceId: 'x', records: [], slots: SLOTS,
+    since: DAY0 + 100 * 3_600_000, now: DAY0 + 100 * 3_600_000 + 60_000,
+    expected: 4, configuredPerDay: 40,
+  })
+  check('🔴 지나간 슬롯 0 이면 HEALTHY 가 아니다 (INFO)',
+    pending.scheduled.health === 'OBSERVATION_PENDING' && pending.level === 'INFO')
+
+  /** 🟢 예약 4회 성공이면 HEALTHY */
+  /**
+   * 🔴 슬롯 시각은 **KST** 다. 04:20 KST = 전날 19:20Z —
+   *    UTC 로 04:20 을 만들면 슬롯에 붙지 않는다(그것이 이 fixture 의 첫 실수였다).
+   */
+  const four = [4, 10, 16, 22].map((h, i) => rec3({
+    runId: `s${i}`, startedAt: new Date(slotAt(DAY0, h, 20) + 60_000).toISOString(),
+  }))
+  const good = judgeSourceOperations({
+    sourceId: 'navercafe:remonterrace', records: four, slots: SLOTS,
+    since: slotAt(DAY0, 4, 0), now: slotAt(DAY0, 23, 0), expected: 4, configuredPerDay: 40,
+  })
+  check('🟢 예약 4/4 면 HEALTHY 다', good.scheduled.succeeded === 4 && good.level === 'HEALTHY')
+  check('🟢 그때 observed 는 신규 고유 행 합이다', good.observed.rows === 24)
+
+  /** 🔴 configured 는 등급에 영향을 주지 않는다 */
+  check('🔴 configured 40 이어도 예약이 죽으면 CRITICAL 이다',
+    manualOnly.configuredPerDay === 40 && manualOnly.level === 'CRITICAL')
+
+  /** 🔴 설정 준비도와 운영 준비도를 나눈다 */
+  const rd = judgeOperationalReadiness({
+    configurationReady: true, configurationReasons: [], perSource: [manualOnly],
+  })
+  check('🔴 설정이 READY 여도 운영은 BLOCKED 일 수 있다',
+    rd.configuration === 'READY' && rd.operational === 'BLOCKED')
+  const rdPending = judgeOperationalReadiness({
+    configurationReady: true, configurationReasons: [], perSource: [pending],
+  })
+  check('🔴 관측 전이면 운영은 PENDING 이다 (READY 가 아니다)',
+    rdPending.operational === 'PENDING')
+  const rdOk = judgeOperationalReadiness({
+    configurationReady: true, configurationReasons: [], perSource: [good],
+  })
+  check('🟢 예약이 살아 있어야 운영 READY 다', rdOk.operational === 'READY')
+}
+
+// ─────────────────────────────────────────────────────────
+// 회차 기록 내구성 — 🔴 started 로 남은 회차를 성공이라 말하지 않는다
+// ─────────────────────────────────────────────────────────
+{
+  const NOW = Date.parse('2026-09-11T12:00:00.000Z')
+  const mk = (o: Partial<CollectRunRecord> & { runId: string }): CollectRunRecord => ({
+    source: 'navercafe:wgang', trigger: 'schedule', mode: 'detail', status: 'ok',
+    startedAt: new Date(NOW - 3_600_000).toISOString(), endedAt: null, code: null,
+    listRows: 20, detailRequests: 10, bodyRows: 10, thinRows: 6,
+    skippedSeen: 0, repeatedRows: 0, newUniqueThinRows: 6, ...o,
+  })
+
+  /** 🔴 초기 기록은 됐는데 terminal 만 실패한 경우 */
+  const orphan = [
+    mk({ runId: 'old', status: 'ok', startedAt: new Date(NOW - 8 * 3_600_000).toISOString() }),
+    mk({ runId: 'new', status: 'started', startedAt: new Date(NOW - 3 * 60_000).toISOString() }),
+  ]
+  const inProg = judgeRunHealth(orphan, { nowMs: NOW })
+  check('🔴 최신 started 가 있으면 옛 성공으로 되돌아가지 않는다', inProg.code !== 'RUN_OK')
+  check('🟡 마감 전이면 RUN_IN_PROGRESS 다', inProg.code === 'RUN_IN_PROGRESS')
+
+  const stale = [
+    mk({ runId: 'old', status: 'ok', startedAt: new Date(NOW - 8 * 3_600_000).toISOString() }),
+    mk({ runId: 'new', status: 'started', startedAt: new Date(NOW - 60 * 60_000).toISOString() }),
+  ]
+  const st = judgeRunHealth(stale, { nowMs: NOW })
+  check('🔴 마감이 지난 started 는 RUN_STALE_STARTED 다', st.code === 'RUN_STALE_STARTED')
+  check('🔴 그때 CRITICAL 이다 (fail-closed)', st.level === 'CRITICAL')
+  check('🔴 그 회차는 예약 증거가 되지 못한다', (() => {
+    const o = judgeSourceOperations({
+      sourceId: 'navercafe:wgang', records: stale,
+      slots: [{ hour: 2, minute: 50 }, { hour: 8, minute: 50 },
+        { hour: 14, minute: 50 }, { hour: 20, minute: 50 }],
+      since: NOW - 24 * 3_600_000, now: NOW, expected: 4, configuredPerDay: 40,
+    })
+    return o.level === 'CRITICAL'
+  })())
+
+  /** 🔴 수집기가 terminal 저장 실패를 성공으로 끝내지 않는다 */
+  check('🔴 terminal 저장 실패면 exit 0 이 아니다',
+    COLLECTOR_CODE.includes('RECORD_TERMINAL_WRITE_FAILED')
+    && COLLECTOR_CODE.includes("if (!finishRun('ok'))"))
+  check('🔴 runFinished 를 저장 성공 뒤에만 세운다',
+    /if \(okWrite\) runFinished = true/.test(COLLECTOR_CODE))
+  check('🔴 finishRun 이 저장 결과를 돌려준다',
+    /const finishRun = [^=]*=>\s*boolean|\): boolean =>/.test(COLLECTOR_CODE)
+    || COLLECTOR_CODE.includes('const okWrite = appendRunRecord('))
+}
+
+// ─────────────────────────────────────────────────────────
+// 락 · 상세 원장 배선
+// ─────────────────────────────────────────────────────────
+{
+  /** 🔴 exists/stat → append 와 token 없는 unlink 가 사라졌다 */
+  check('🔴 token 없는 unlink 가 없다', !/unlinkSync\(LOCK_PATH\)/.test(COLLECTOR_CODE))
+  check('🔴 append 로 락을 잡지 않는다', !/appendFileSync\(LOCK_PATH/.test(COLLECTOR_CODE))
+  check('🟢 원자적 획득을 쓴다', COLLECTOR_CODE.includes('acquireLock(LOCK_PATH'))
+  check('🟢 해제는 소유 handle 로 한다', COLLECTOR_CODE.includes('releaseOwnLock()'))
+  /**
+   * 🔴 **자동 인수를 없앴다** (2026-09-10).
+   *    이 저장소는 PR #483 에서 "재확인·token·rename 어떤 조합도 안 된다" 는
+   *    결론을 이미 냈다. 락도 `wx` 로만 생기고 주인만 지운다.
+   */
+  check('🟢 락은 wx 로만 생긴다', (() => {
+    const lib = readFileSync('scripts/lib/collect-lock.mts', 'utf-8')
+    const code = lib.split('\n')
+      .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//')).join('\n')
+    return /flag: 'wx'/.test(code) && code.includes('held.token !== handle.token')
+      && !/renameSync/.test(code)
+  })())
+
+  /** 🔴 상세 원장 */
+  check('🟢 상세 원장을 읽는다', COLLECTOR_CODE.includes('readDetailLedger(GUARD_SOURCE)'))
+  check('🔴 원장을 못 읽으면 상세 요청 전에 멈춘다', (() => {
+    const at = COLLECTOR_CODE.indexOf('if (!ledger.ok)')
+    const nav = COLLECTOR_CODE.indexOf('guardedNavigate({')
+    return at > 0 && nav > at
+  })())
+  check('🔴 중복 없음으로 보정하지 않는다',
+    COLLECTOR_CODE.includes('중복 없음으로 보정하지 않는다'))
+  check('🟢 drop 된 글도 원장에 남는다',
+    COLLECTOR_CODE.includes("outcome: 'kept'") && COLLECTOR_CODE.includes("outcome: 'body_failed'"))
+  check('🟢 본문 실패 재시도에 상한이 있다',
+    COLLECTOR_CODE.includes('BODY_RETRY_MAX'))
+  check('🟢 선별이 원장을 반영한다',
+    /alreadyInVault:\s*doneIds\.has\(/.test(COLLECTOR_CODE))
+  check('🔴 손상된 원장은 fail-closed 다', (() => {
+    const store = readFileSync('scripts/lib/collect-run-store.mts', 'utf-8')
+    // 🔴 비율로 봐주지 않는다 — 한 줄이라도 깨지면 멈춘다
+    return store.includes('한 줄이라도 손상되면 fail-closed')
+      && !store.includes('broken > total / 2')
+  })())
+}
+
+
+// ─────────────────────────────────────────────────────────
+// 상세 조회 원장 — 🔴 실제 파일로 검증한다
+// ─────────────────────────────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'soran-ledger-'))
+  try {
+    const src = 'navercafe:test'
+    const path = join(dir, 'l.jsonl')
+    const good = (o: Partial<Record<string, unknown>> = {}): string => JSON.stringify({
+      articleId: 'a1', outcome: 'kept', at: '2026-09-10T00:00:00.000Z',
+      runId: '20260910-000000', attempts: 1, ...o,
+    })
+
+    /** 🔴 한 줄이라도 손상되면 fail-closed — 비율로 봐주지 않는다 */
+    const lines = Array.from({ length: 10 }, (_, i) => good({ articleId: `a${i}` }))
+    writeFileSync(path, `${lines.join('\n')}\n`, 'utf-8')
+    check('🟢 온전한 원장은 읽힌다', (() => {
+      const r = readLedgerAt(path)
+      return r.ok && r.entries.size === 10
+    })())
+
+    const withBroken = [...lines]
+    withBroken[3] = '{ not json'
+    writeFileSync(path, `${withBroken.join('\n')}\n`, 'utf-8')
+    check('🔴 10줄 중 1줄만 깨져도 fail-closed 다', !readLedgerAt(path).ok)
+
+    /** 🔴 타입·범위를 전부 본다 */
+    const bad = (o: Record<string, unknown>, label: string): void => {
+      writeFileSync(path, `${JSON.stringify({
+        articleId: 'a1', outcome: 'kept', at: '2026-09-10T00:00:00.000Z',
+        runId: 'r1', attempts: 1, ...o,
+      })}\n`, 'utf-8')
+      check(`🔴 ${label} 이면 fail-closed`, !readLedgerAt(path).ok)
+    }
+    bad({ articleId: '' }, 'articleId 가 비었다')
+    bad({ articleId: 42 }, 'articleId 가 문자열이 아니다')
+    bad({ outcome: 'unknown' }, 'outcome 이 알 수 없는 값이다')
+    bad({ at: 'not-a-date' }, 'at 이 시각이 아니다')
+    bad({ runId: '' }, 'runId 가 비었다')
+    bad({ attempts: 0 }, 'attempts 가 0 이다')
+    bad({ attempts: -1 }, 'attempts 가 음수다')
+    bad({ attempts: 1.5 }, 'attempts 가 정수가 아니다')
+    bad({ attempts: 10_000 }, 'attempts 가 범위를 넘는다')
+
+    /** 🟢 세 outcome 은 모두 유효하다 */
+    for (const o of ['kept', 'dropped', 'body_failed']) {
+      writeFileSync(path, `${good({ outcome: o })}\n`, 'utf-8')
+      check(`🟢 outcome ${o} 은 유효하다`, readLedgerAt(path).ok)
+    }
+
+    /** 🔴 같은 글이 여러 줄이면 마지막이 이긴다 */
+    writeFileSync(path, [
+      good({ outcome: 'body_failed', attempts: 1 }),
+      good({ outcome: 'kept', attempts: 2 }),
+    ].join('\n') + '\n', 'utf-8')
+    check('🟢 같은 글은 마지막 기록이 이긴다', (() => {
+      const r = readLedgerAt(path)
+      return r.ok && r.entries.get('a1')?.outcome === 'kept' && r.entries.get('a1')?.attempts === 2
+    })())
+    void src
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  /** 🔴 collector 배선 — 실패 확인·기록 시점 */
+  check('🔴 원장 저장 실패를 모든 호출부에서 확인한다', (() => {
+    /**
+     * 🔴 `appendDetailLedger` 를 부르는 자리는 **헬퍼 하나뿐**이고,
+     *    그 헬퍼는 반환값을 보고 실패하면 회차를 끝낸다.
+     *    호출부들은 전부 `recordDetail` 을 쓴다.
+     */
+    const direct = (COLLECTOR_CODE.match(/appendDetailLedger\(GUARD_SOURCE,/g) ?? []).length
+    const checked = /if \(appendDetailLedger\(GUARD_SOURCE, e\)\) return/.test(COLLECTOR_CODE)
+    const uses = (COLLECTOR_CODE.match(/recordDetail\(\{/g) ?? []).length
+    return direct === 1 && checked && COLLECTOR_CODE.includes('const recordDetail =') && uses === 3
+  })())
+  check('🔴 저장 실패면 회차가 실패한다 (LEDGER_WRITE_FAILED)',
+    COLLECTOR_CODE.includes('LEDGER_WRITE_FAILED')
+    && COLLECTOR_CODE.includes('이후 상세 요청을 중단한다'))
+  check('🔴 body_failed 를 본문 실패 뒤에 기록한다', (() => {
+    const bodyFail = COLLECTOR_CODE.indexOf('if (!body) {')
+    const rec = COLLECTOR_CODE.indexOf("outcome: 'body_failed'")
+    return bodyFail > 0 && rec > bodyFail
+  })())
+  check('🔴 dropped 를 분류 뒤에 기록한다', (() => {
+    const classify = COLLECTOR_CODE.indexOf('keepAfterClassify({ axis, safetyVerdict })')
+    const rec = COLLECTOR_CODE.indexOf("outcome: 'dropped'")
+    return classify > 0 && rec > classify
+  })())
+  /**
+   * 🔴 **kept 는 thin 저장 뒤에만 확정한다.**
+   *    본문을 읽은 자리에서 확정하면, 저장이 실패했을 때
+   *    원장에는 있고 산출물은 없는 **영구 유실**이 된다.
+   */
+  check('🔴 kept 를 thin 저장 뒤에 확정한다', (() => {
+    const write = COLLECTOR_CODE.indexOf('writeJsonl(thinPath, thinRows)')
+    const rec = COLLECTOR_CODE.indexOf("outcome: 'kept'")
+    return write > 0 && rec > write
+  })())
+  check('🔴 본문을 읽은 자리에서 kept 를 적지 않는다', (() => {
+    const bodyAt = COLLECTOR_CODE.indexOf('bodyRows += 1')
+    const write = COLLECTOR_CODE.indexOf('writeJsonl(thinPath, thinRows)')
+    const rec = COLLECTOR_CODE.indexOf("outcome: 'kept'")
+    return bodyAt > 0 && write > bodyAt && rec > write
+  })())
+  check('🔴 thin 저장 실패면 kept 를 확정하지 않는다',
+    COLLECTOR_CODE.includes('THIN_WRITE_FAILED')
+    && COLLECTOR_CODE.includes('다음 회차가 그 글을 다시 연다'))
 }
 
 // ─────────────────────────────────────────────────────────

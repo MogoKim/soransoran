@@ -29,8 +29,8 @@
  *   npx tsx scripts/navercafe-session-setup.mts --open     🔴 창을 띄운다 (사람이 직접 로그인)
  *   npx tsx scripts/navercafe-session-setup.mts --open --path=<경로>
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, isAbsolute, relative } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { createInterface } from 'node:readline'
 import {
   DEFAULT_SESSION_PATH, SESSION_PATH_ENV, KILL_SWITCH_ENV,
@@ -39,6 +39,10 @@ import {
   type CookieMeta,
 } from './lib/micro-seed-navercafe.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
+import {
+  judgeSessionLocation, judgeStorageStateShape, SESSION_DIR_MODE, SESSION_FILE_MODE,
+} from '../src/lib/naver-session-canon'
+import { judgeAuthCookies } from '../src/lib/collect-run-record'
 
 const argv = process.argv.slice(2)
 const arg = (n: string): string | undefined => {
@@ -100,6 +104,14 @@ async function main(): Promise<void> {
   const rel = isAbsolute(target) ? relative(process.cwd(), target) : target.replace(/^\.\//, '')
 
   console.log(`  저장 경로  ${target}`)
+
+  /**
+   * 🔴 **운영과 같은 경로 계약을 setup 에도 적용한다** (2026-09-10).
+   *    한쪽만 엄격하면 사람이 느슨한 쪽으로 파일을 만들고, 그것이 운영에서 막힌다.
+   */
+  const loc = judgeSessionLocation(target, true)
+  if (!loc.ok) fail(`🔴 ${loc.code} — ${loc.reason}`)
+  console.log(`  ✅ ${loc.reason}`)
 
   if (isUnaoSessionPath(target)) {
     fail(
@@ -164,19 +176,42 @@ async function main(): Promise<void> {
     console.log('     · 카페에 한 번 들어가 로그인이 유지되는지 확인합니다\n')
     await waitForEnter('  로그인이 끝났으면 Enter ▶ ')
 
-    mkdirSync(dirname(target), { recursive: true })
-    const state = await context.storageState({ path: target })
-    chmodSync(target, 0o600) // 🔴 본인만 읽는다
+    /**
+     * 🔴 **target 에 직접 쓰지 않는다** (2026-09-10 정정).
+     *
+     *    옛 판은 `storageState({ path: target })` 로 정본 자리에 곧바로 썼다.
+     *    로그인이 안 잡힌 채 Enter 를 누르면 **인증 쿠키가 없는 파일이
+     *    멀쩡하던 정본을 덮어썼다.** 되돌릴 방법이 없다.
+     *
+     *    같은 디렉터리의 staging 에 쓰고 → 모양·인증·만료를 보고 →
+     *    600 으로 맞춘 뒤 → atomic rename 한다.
+     */
+    mkdirSync(dirname(target), { recursive: true, mode: SESSION_DIR_MODE })
+    chmodSync(dirname(target), SESSION_DIR_MODE)
+    const staging = join(dirname(target), `.staging-${process.pid}.json`)
+    const state = await context.storageState({ path: staging })
+    chmodSync(staging, SESSION_FILE_MODE)
 
     // ── ④ 요약 — 🔴 값이 아니라 개수와 만료일만 ──
     const sum = summarizeCookies(state.cookies ?? [])
-    console.log(`\n  ✅ 저장 완료 · 권한 600`)
-    console.log(`     쿠키 ${sum.total}개 (naver.com ${sum.naverDomain}개)`)
+    console.log(`\n     쿠키 ${sum.total}개 (naver.com ${sum.naverDomain}개)`)
     for (const c of sum.auth) console.log(`     ${c.name} 만료 ${c.expiresAt ?? '세션(브라우저 종료 시 사라짐)'}`)
-    if (!sum.hasAuth) {
-      console.log('\n  🔴 로그인 쿠키(NID_AUT · NID_SES)가 없다 — 로그인이 안 잡혔다.')
+
+    // 🔴 staging 을 검사한다 — 모양 · 인증 쿠키 · 만료
+    const shape = judgeStorageStateShape(readFileSync(staging, 'utf-8'))
+    const auth = judgeAuthCookies(state.cookies ?? [], Date.now())
+    if (shape !== 'ok' || !auth.ok) {
+      rmSync(staging, { force: true })
+      const why = shape !== 'ok' ? 'storageState 모양이 아니다' : auth.reason
+      console.log(`\n  🔴 저장하지 않았다 — ${why}`)
+      console.log(`     기존 정본은 그대로다${existsSync(target) ? ' (덮어쓰지 않았다)' : ' (아직 없다)'}.`)
       console.log('     다시 실행해 로그인을 끝낸 뒤 Enter 를 누른다.')
+      fail('🔴 인증이 확인되지 않아 정본을 갱신하지 않았다')
     }
+    // 🔴 여기까지 왔으면 유효하다. 한 번의 rename 으로 들여놓는다
+    renameSync(staging, target)
+    chmodSync(target, SESSION_FILE_MODE)
+    console.log(`\n  ✅ 저장 완료 · 권한 600 · ${auth.reason}`)
     console.log('\n  🔴 쿠키 값은 출력하지 않았다. 이 파일을 열어보거나 공유하지 마십시오.\n')
   } finally {
     if (browser) await browser.close().catch(() => {})

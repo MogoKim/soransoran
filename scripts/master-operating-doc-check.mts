@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
@@ -160,14 +161,143 @@ check('단일 end-to-end 경로가 의도적으로 없다고 적는다',
     /\| \*\*실제 DB shadow\*\* \|[^\n]*Gate 입력 사전검사[^\n]*외부 호출 0[^\n]*후보 Gate 실행 0/.test(master))
   check('§9.4 가 합성 eval 만 provider·9관문까지 갔다고 적는다',
     /\| \*\*합성 eval\*\* \|[^\n]*provider[^\n]*9관문 Gate[^\n]*실행 완료/.test(master))
-  check('M10 이 두 경로를 구분해 적는다',
-    /\| M10 \|[^\n]*실제 DB preflight \+ 합성 eval/.test(master))
+  /**
+   * 🔴 **문구를 하드코딩하지 않는다** (2026-09-10 정정).
+   *
+   *    옛 검사는 `실제 DB preflight + 합성 eval` 이라는 **글자**를 찾았다.
+   *    그래서 M10 의 main 구현이 실제로 나아가도(PR #491 merge · 0024 적용)
+   *    문서를 고치는 순간 검사가 깨졌다 — 낡은 상태를 지키는 검사였다.
+   *    지금은 **계약**을 본다: 구현이 무엇이든 공개 댓글이 꺼져 있다고 말해야 한다.
+   */
+  const m10 = lines.find((l) => /^\| M10 \|/.test(l)) ?? ''
+  check('M10 행이 존재한다', m10 !== '')
+  check('🔴 M10 이 공개 댓글 OFF 를 명시한다',
+    /공개 (댓글 )?(OFF|0\/day)/.test(m10) || m10.includes('공개 0/day'))
+  check('🔴 M10 이 운영을 "완료" 로 적지 않는다', !/\| 완료 \|\s*$/.test(m10))
   check('Lane 표의 Persona-first Generation 이 Comment 경로임을 밝힌다',
     master.includes('Persona-first Generation (Comment 경로)'))
   check('그 행이 provider 호출은 합성 eval 만이라고 적는다',
     /Persona-first Generation \(Comment 경로\)[^\n]*provider 호출은 합성 eval 만/.test(master))
   check('shadow 검증 완료를 한 줄로 적지 않는다고 못박는다',
     master.includes('"shadow 검증 완료" 를 한 줄로 적지 않는다'))
+}
+
+/**
+ * 🔴 **Wave 단계와 수집 능력은 구조로 검사한다** (2026-09-10).
+ *
+ *    숫자를 하드코딩하면 값이 바뀔 때마다 검사가 깨지고, 사람은 검사를 고친다.
+ *    지켜야 하는 것은 값이 아니라 **구분**이다 —
+ *    끝난 Wave 를 "다음 단계" 로 적지 않는 것, 등록을 능력으로 적지 않는 것.
+ */
+{
+  console.log('\n── Wave 단계 · 수집 능력 구분')
+  const lines = master.split('\n')
+  /** 🔴 이미 끝난 Wave 를 "다음 단계" 로 가리키지 않는다 */
+  const nextStepLines = lines.filter((l) => /\*\*다음 단계\*\*/.test(l))
+  check('🔴 끝난 Wave 를 "다음 단계" 로 적지 않는다',
+    !nextStepLines.some((l) => /Wave B/.test(l)))
+  check('🔴 현재 단계를 명시한다', /\*\*현재 단계\*\*/.test(master))
+
+  /** 🔴 Wave B 는 구현·설정과 운영 성공을 갈라 적는다 */
+  check('🔴 Wave B 의 구현·설정과 운영 성공을 갈라 적는다',
+    /Wave B 는 구현·설정은 끝났고 운영 성공은/.test(master))
+
+  /** 🔴 수집 능력은 configured 와 observed 를 따로 적는다 */
+  check('🔴 수집 능력에 configured 행이 있다', /수집 능력 \(configured\)/.test(master))
+  check('🔴 수집 능력에 observed 행이 있다', /수집 능력 \(observed\)/.test(master))
+  check('🔴 둘을 한 행으로 합치지 않는다',
+    !lines.some((l) => /^\| 수집 능력 \(현재\) \|/.test(l)))
+
+  /** 🔴 등록을 능력으로 읽지 말라고 못박는다 */
+  check('🔴 "등록 ≠ 능력" 을 문서가 말한다', /등록은 능력이 아니다|등록 ≠ 능력/.test(master))
+  check('🔴 슬롯 건강도 다섯 갈래를 적는다',
+    ['OBSERVATION_PENDING', 'ACCUMULATING', 'DEGRADED', 'BROKEN', 'OK']
+      .every((k) => master.includes(k)))
+  check('🔴 guard closed + 요청 0 을 건강으로 읽지 말라고 적는다',
+    /요청이 0회면 건강의 증거가 아니다/.test(master))
+
+  /** 🔴 세션 정본이 절대 경로이고 worktree 밖이다 */
+  check('🔴 세션 정본 절을 둔다', /### 8\.0-a 세션 정본/.test(master))
+  check('🔴 세션 정본이 Application Support 아래다',
+    /Application Support\/soransoran\/naver-session/.test(master))
+  check('🔴 문서가 상대 경로를 정본으로 적지 않는다',
+    !/SORAN_NAVERCAFE_SESSION_PATH\s*=\s*\.naver-session/.test(master))
+  check('🔴 권한 700·600 을 적는다', /700/.test(master) && /600/.test(master))
+
+  /** 🔴 세 값을 갈라 적는다 — 합치면 등록이 능력이 된다 */
+  check('🔴 configured / scheduled liveness / observed 를 나눠 적는다',
+    /`configured`/.test(master) && /`scheduled liveness`/.test(master) && /`observed`/.test(master))
+  check('🔴 observed 를 설정값의 그림자로 만들지 말라고 적는다',
+    /설정값의 그림자/.test(master))
+  check('🔴 scout 가 예약 성공 증거가 아니라고 적는다',
+    /--scout` 는 예약 경로의 성공 증거가 아니다|scout` 는 예약/.test(master))
+  check('🔴 수동 회차가 예약 슬롯을 채우지 못한다고 적는다',
+    /수동 preflight 가 성공해도/.test(master))
+  check('🔴 경로 없음과 인증 만료를 다른 조치로 적는다',
+    /RUN_SESSION_FILE_MISSING/.test(master) && /RUN_AUTH_EXPIRED/.test(master)
+    && /env 를 고친다/.test(master))
+  check('🔴 로그를 지워 통과시키지 않는다고 못박는다',
+    /로그를 지우거나 잘라서 통과시키지 않는다/.test(master))
+  check('🔴 기술적 성공과 공급 산출을 나눈다고 적는다',
+    /기술적 성공과 공급 산출 성공을 나눈다/.test(master))
+  check('🔴 setup 이 정본에 직접 쓰지 않는다고 적는다',
+    /정본 자리에 직접 쓰지 않는다/.test(master))
+
+  /**
+   * 🔴 **옛 문구가 되돌아오면 잡는다** (2026-09-10).
+   *    plist 템플릿과 README 가 "하루 2회 · 09:20/13:20 · 1회판 · 미등록" 으로
+   *    되돌아가면 사람이 그것을 계약으로 읽는다.
+   */
+  const launchdDir = 'docs/operations/launchd'
+  const launchdFiles = readdirSync(launchdDir)
+    .filter((n) => n.endsWith('.template') || n === 'README.md')
+  for (const n of launchdFiles) {
+    const body = readFileSync(join(launchdDir, n), 'utf-8')
+    // 🔴 "더는 사실이 아니다" 라고 적어 둔 정정 문장은 제외하고 본다
+    const claim = body.split('\n')
+      .filter((l) => !l.includes('더는 사실이 아니다') && !l.includes('옛 문구'))
+      .join('\n')
+    check(`🔴 ${n} 에 옛 슬롯 문구가 없다`,
+      !/카페는 하루 2회/.test(claim)
+      && !/`09:20 remonterrace`/.test(claim))
+  }
+
+  /** 🔴 configured 를 current 로 부르지 않는다 */
+  check('🔴 configured 를 current 라고 부르지 않는다',
+    /`current` 라고 부르지 않는다|current 가 아니다/.test(master))
+  check('🔴 observed 가 신규 고유 행이라고 적는다',
+    /신규 고유 산출 행 수|신규 고유 행이다/.test(master))
+  check('🔴 body-read 를 따로 적는다', /`body-read`/.test(master))
+  check('🔴 NO_NEW 와 BODY_EMPTY 를 나눠 적는다',
+    /NO_NEW/.test(master) && /BODY_EMPTY/.test(master))
+  check('🔴 기록이 검사보다 먼저라고 적는다', /어떤 검사보다 먼저 연다/.test(master))
+
+  /**
+   * 🔴 **배포되지 않은 코드로 4/4 를 약속하지 않는다.**
+   *    지금 runtime 은 이 PR 이전 SHA 다 — 다음 슬롯은 새 기록을 만들지 못한다.
+   */
+  /**
+   * 🔴 **configured 를 current 라고 부르지 않는다** (2026-09-10 P1).
+   *    §8.0 표가 `current` 라는 이름으로 등록 기반 값을 적고 있었다 —
+   *    그 이름은 "지금 실제로 나오는 양" 으로 읽힌다.
+   */
+  check('🔴 §8.0 표가 configured 로 이름을 바꿨다',
+    /~~current~~ → \*\*configured\*\*/.test(master))
+  check('🔴 등록을 능력으로 읽지 말라고 그 자리에 적는다',
+    /이 행을 `current` 라고 부르지 않는다/.test(master))
+  check('🔴 화면 문구도 "설정" 이다', (() => {
+    const inv = readFileSync('src/lib/collect-inventory.ts', 'utf-8')
+    return /return `설정 \$\{Math\.round\(cur\.effectivePerDay\)\}건\/day/.test(inv)
+      && !/return `현재 \$\{Math\.round/.test(inv)
+  })())
+
+  check('🔴 지금 배포된 것이 이 코드가 아니라고 밝힌다',
+    /지금 배포된 것은 이 코드가 아니다/.test(master))
+  check('🔴 "다음 슬롯부터 4\/4" 라고 쓰지 않는다',
+    /다음 슬롯부터 4\/4 가 시작된다" 고 쓰지 않는다/.test(master)
+    && !/^[^🔴\n]*다음 슬롯부터 4\/4 가 시작된다\s*$/m.test(master))
+  check('🔴 4/4 는 배포 이후 슬롯부터라고 적는다',
+    /merge 후 runtime 배포 시각 이후 슬롯부터/.test(master))
 }
 /** 🔴 bootstrap 숫자를 문서에 다시 적으면 코드와 어긋난다 */
 check('bootstrap 기준을 Gate ⑧ 정본에서 파생한다고 적는다',

@@ -40,16 +40,19 @@
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --cafe=wgang --pages=1 --max=3
  *   npx tsx scripts/micro-seed-collect-navercafe.mts --live               🔴 첫 live (승인 필요)
  */
-import { appendFileSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync,
+} from 'node:fs'
 
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
 import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import { toThinRow, violatesStorage } from '../src/lib/micro-seed-82cook-thin'
 import { keepAfterClassify, outPathOf } from '../src/lib/micro-seed-navercafe-thin'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 import {
   CAFES, findCafe, sourceSiteOf, slotQuota, buildCollected, assertNaverCandidate,
-  judgeSession, judgeLock, randomDelay, parseArticleId,
+  judgeSession, judgeLock, randomDelay, parseArticleId, judgeStorageStateShape,
   LIST_URL, ARTICLE_URL, DELAY_LIST_MS, DELAY_ARTICLE_MS,
   LOCK_PATH, LOCK_MAX_AGE_MS, RUN_TIMEOUT_MS,
   SESSION_PATH_ENV, KILL_SWITCH_ENV, FIRST_LIVE_CAFE_ID, FIRST_LIVE_PAGES, FIRST_LIVE_ARTICLES,
@@ -61,6 +64,16 @@ import {
   dedupeListRows, THRESHOLD_CANDIDATES, passesThreshold, thresholdBasis,
   type CollectedCandidate, type NaverListItem,
 } from './lib/micro-seed-navercafe.mjs'
+import type { SessionShape } from '../src/lib/naver-session-canon'
+import {
+  judgeAuthCookies, judgeTrigger,
+  type CollectFailureCode, type CollectRunRecord,
+} from '../src/lib/collect-run-record'
+import {
+  appendDetailLedger, appendRunRecord, readDetailLedger, readSeenArticleIds,
+  BODY_RETRY_MAX,
+} from './lib/collect-run-store.mjs'
+import { acquireLock, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
 import { planAutoFetch, judgeAutoHold, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS } from './lib/micro-seed-supply.mjs'
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
@@ -116,7 +129,70 @@ const MAX = Number(arg('max') ?? String(FIRST_LIVE_ARTICLES))
  */
 const OUT_OVERRIDE = arg('out') ?? null
 
-const fail = (msg: string): never => {
+/**
+ * 🔴 **회차마다 구조적 기록을 남긴다** (2026-09-10).
+ *
+ *    관제가 append-only stderr 의 **글자**로 현재 상태를 판정했다 —
+ *    옛 `SESSION_FILE_MISSING` 이 남아 있어 세션을 고친 뒤에도 "만료" 라고 말했다.
+ *    로그를 지워서 통과시키는 것은 답이 아니다. 회차 기록으로 판정한다.
+ */
+/**
+ * 🔴 이미 본 글을 기억하는 두 자리 — 실행 디렉터리의 산출물과 worktree 밖 정본.
+ *    정본 쪽이 배포·checkout 과 무관하게 살아남는다.
+ */
+const DATA_DIR = './.microseed-data'
+const CANON_DATA_DIR = join(
+  homedir(), 'Library', 'Application Support', 'soransoran', 'microseed-data',
+)
+
+const RUN_TRIGGER = judgeTrigger(process.env)
+let runRecord: CollectRunRecord | null = null
+/**
+ * 🔴 **락은 소유 token 으로 다룬다** (2026-09-10).
+ *    `unlinkSync(LOCK_PATH)` 는 누구의 락인지 묻지 않는다 —
+ *    늦게 깨어난 옛 owner 가 후임의 락을 지운다.
+ */
+let lockHandle: LockHandle | null = null
+/**
+ * 🔴 **락을 쥐고 죽지 않는다.** 다만 **내 것일 때만** 놓는다.
+ *    쥔 채로 exit 하면 다음 예약 회차가 TTL 을 기다린다.
+ */
+const releaseOwnLock = (): void => {
+  if (lockHandle === null) return
+  const h = lockHandle
+  // 🔴 먼저 비운다 — 어느 경로로 두 번 불려도 실제 해제는 한 번뿐이다
+  lockHandle = null
+  const r = releaseLock(h)
+  // 🔴 내 것이 아니었으면 그것도 사실이다 — 경고로 남기고 예외는 가리지 않는다
+  const rel = judgeLockRelease(true, r === 'RELEASED' || r === 'ABSENT' ? null : new Error(`락 해제 ${r}`))
+  if (rel.warning) console.warn(`  ⚠️ ${rel.warning}`)
+}
+const markRun = (patch: Partial<CollectRunRecord>): void => {
+  if (runRecord === null) return
+  runRecord = { ...runRecord, ...patch }
+}
+/**
+ * 🔴 **종료 기록은 저장에 성공한 뒤에만 확정한다** (2026-09-10).
+ *
+ *    앞선 판은 `runFinished = true` 를 먼저 세우고 저장 결과를 버렸다.
+ *    terminal 저장이 실패하면 그 회차는 **영원히 `started` 로 남는데**
+ *    스크립트는 exit 0 으로 끝났다 — 성공이라고 말하면서 증거가 없었다.
+ */
+let runFinished = false
+const finishRun = (status: 'ok' | 'failed', code: CollectFailureCode | null = null): boolean => {
+  if (runRecord === null || runFinished) return true
+  const okWrite = appendRunRecord({
+    ...runRecord, status, code, endedAt: new Date().toISOString(),
+  })
+  // 🔴 저장에 성공했을 때만 "끝났다" 로 본다
+  if (okWrite) runFinished = true
+  return okWrite
+}
+
+const fail = (msg: string, code: CollectFailureCode = 'OTHER'): never => {
+  finishRun('failed', code)
+  // 🔴 락을 쥐고 죽지 않는다 — 다음 회차가 30분을 기다리게 된다
+  releaseOwnLock()
   console.error(`\n🛑 ${msg}\n`)
   process.exit(1)
 }
@@ -225,27 +301,158 @@ async function main() {
   }
 
   // ── 여기서부터 live ─────────────────────────────────
-  //
+  /**
+   * 🔴 **회차 기록을 여기서 연다** (2026-09-10 정정).
+   *
+   *    앞선 판은 브라우저를 띄운 뒤에야 기록을 만들었다. 그래서
+   *    세션·인증·락·의존성 실패는 **terminal record 를 하나도 남기지 못했고**,
+   *    관제는 그 회차가 있었다는 사실조차 알지 못했다 —
+   *    8회 연속 실패가 조용했던 이유가 이것이다.
+   *
+   *    live 가 확정된 직후, **어떤 검사보다 먼저** 연다.
+   */
+  const OPEN_ISO = new Date().toISOString()
+  runRecord = {
+    runId: runIdOf(OPEN_ISO),
+    source: sourceSiteOf(CAFE_ID),
+    trigger: RUN_TRIGGER,
+    mode: SCOUT ? 'scout' : 'detail',
+    status: 'started',
+    startedAt: OPEN_ISO,
+    endedAt: null,
+    code: null,
+    listRows: 0, detailRequests: 0, bodyRows: 0, thinRows: 0,
+    skippedSeen: 0, repeatedRows: 0, newUniqueThinRows: 0,
+  }
+  /**
+   * 🔴 **기록을 남기지 못하면 외부 요청을 하지 않는다.**
+   *    증거를 못 남기는 회차는 돌아도 관제가 볼 수 없다 — 조용한 실패가 다시 생긴다.
+   */
+  if (!appendRunRecord(runRecord)) {
+    runRecord = null
+    console.error('\n🛑 RECORD_WRITE_FAILED — 회차 기록을 남기지 못했다. 외부 요청 0으로 멈춘다.\n')
+    process.exit(1)
+  }
+
+  /**
+   * 🔴 **이미 본 글 목록** — 상세 요청 전에 거르고, 산출 뒤 신규를 세는 데 쓴다.
+   *    한 번만 읽어 두 곳에서 같은 집합을 본다(두 벌이면 숫자가 갈린다).
+   */
+  /**
+   * 🔴 **상세 조회 이력 원장** — thin 이 남지 않는 결과(drop·본문 실패)까지 기억한다.
+   *    thin 만 보면 걸러진 글을 회차마다 다시 열게 된다.
+   *    🔴 못 읽거나 손상됐으면 "중복 없음" 으로 보정하지 않고 **여기서 멈춘다.**
+   */
+  const ledger = readDetailLedger(GUARD_SOURCE)
+  if (!ledger.ok) {
+    fail(`상세 조회 원장을 신뢰할 수 없다 — ${ledger.reason}\n`
+      + '   🔴 중복 없음으로 보정하지 않는다. 같은 글을 다시 열지 않기 위해 멈춘다.',
+      'OTHER')
+  }
+  const ledgerEntries = ledger.ok ? ledger.entries : new Map()
+  /**
+   * 🔴 **원장 저장 실패는 회차 실패다** (2026-09-10).
+   *
+   *    남기지 못한 조회는 다음 회차가 또 연다. 같은 글에 두 번 요청하는 것을
+   *    "조용히" 하지 않는다 — 여기서 멈추고 이후 상세 요청을 중단한다.
+   */
+  const recordDetail = (e: Parameters<typeof appendDetailLedger>[1]): void => {
+    if (appendDetailLedger(GUARD_SOURCE, e)) return
+    fail(`LEDGER_WRITE_FAILED — 상세 조회 이력을 남기지 못했다 (${e.articleId})\n`
+      + '   🔴 남기지 못한 조회는 다음 회차가 또 연다. 이후 상세 요청을 중단한다.',
+      'OTHER')
+  }
+  const seen = readSeenArticleIds(GUARD_SOURCE, [DATA_DIR, CANON_DATA_DIR])
+  /**
+   * 🔴 **다시 열지 않을 글** = thin 에 남은 글 ∪ 원장이 끝냈다고 말한 글.
+   *    본문 실패는 재시도하되 `BODY_RETRY_MAX` 를 넘기면 포기한다(무한 반복 상한).
+   */
+  const doneIds = new Set<string>(seen)
+  for (const [id, e] of ledgerEntries) {
+    if (e.outcome === 'body_failed' && e.attempts < BODY_RETRY_MAX) continue
+    doneIds.add(id)
+  }
+
   // 🔴 세션 판정을 브라우저보다 **먼저** 한다. 우나어 세션 재사용은 파일이 실제로
   //    존재하므로, 존재 검사만 하면 통과해 버린다.
+  /**
+   * 🔴 **파일을 실제로 재어 넘긴다** (2026-09-10).
+   *    존재만 보던 옛 판은 상대 경로·깨진 파일·느슨한 권한을 전부 통과시켰다.
+   *    쿠키 값은 어디에도 담지 않는다 — 모양과 권한만 판정에 넘긴다.
+   */
+  const sessionStat = ((): { isFile: boolean; mode: number } | null => {
+    if (sessionPath === null || sessionPath === '') return null
+    try {
+      const st = statSync(sessionPath)
+      return { isFile: st.isFile(), mode: st.mode }
+    } catch { return null }
+  })()
+  const sessionShape = ((): SessionShape | null => {
+    if (sessionStat === null || !sessionStat.isFile) return null
+    try { return judgeStorageStateShape(readFileSync(sessionPath!, 'utf-8')) } catch { return 'unreadable' }
+  })()
   const sv = judgeSession({
     sessionPath,
-    exists: sessionPath !== null && sessionPath !== '' && existsSync(sessionPath),
+    exists: sessionStat !== null,
     halted: existsSync(`${LOCK_PATH}.halted`),
+    isFile: sessionStat?.isFile ?? false,
+    mode: sessionStat?.mode ?? null,
+    shape: sessionShape,
   })
-  if (!sv.ok) fail(`${sv.code} — ${sv.detail}`)
+  if (!sv.ok) {
+    // 🔴 경로 없음과 인증 만료를 같은 코드로 뭉개지 않는다 — 조치가 다르다
+    fail(`${sv.code} — ${sv.detail}`,
+      sv.code === 'SESSION_FILE_MISSING' ? 'SESSION_FILE_MISSING' : 'OTHER')
+  }
+  /**
+   * 🔴 **인증 쿠키를 브라우저 열기 전에 본다.** 이름과 만료 시각만 본다 —
+   *    값은 어디에도 담지 않는다. 만료됐으면 자동 로그인하지 않고 멈춘다.
+   */
+  const auth = ((): ReturnType<typeof judgeAuthCookies> => {
+    try {
+      const j = JSON.parse(readFileSync(sessionPath!, 'utf-8')) as {
+        cookies?: { name: string; expires?: number }[]
+      }
+      return judgeAuthCookies(j.cookies ?? [], Date.now())
+    } catch { return { ok: false, code: 'AUTH_MISSING', reason: '세션을 읽지 못했다' } }
+  })()
+  console.log(`  인증   ${auth.ok ? '🟢' : '🔴'} ${auth.reason}`)
+  if (!auth.ok) {
+    fail(`${auth.code} — ${auth.reason}\n   🔴 사람이 headed 로 재발급한다: npm run navercafe:session-setup`,
+      auth.code)
+  }
 
-  // 🔴 락. TTL(30분) > 실행 timeout(15분) — 짧으면 아직 도는 작업을 죽은 것으로 본다
-  const lockMtime = existsSync(LOCK_PATH) ? statSync(LOCK_PATH).mtimeMs : null
-  const lv = judgeLock(lockMtime, now.getTime())
-  if (!lv.ok) fail(`락이 잡혀 있다 — ${lv.detail}`)
-  appendFileSync(LOCK_PATH, `${now.toISOString()}\n`, 'utf-8')
+  /**
+   * 🔴 **원자적으로 잡는다.** TTL(30분) > 실행 timeout(15분) —
+   *    짧으면 아직 도는 작업을 죽은 것으로 본다.
+   *    `exists → stat → append` 방식은 셋 사이에 끼어들 틈이 있었다.
+   */
+  const lock = acquireLock(LOCK_PATH, now.getTime(), LOCK_MAX_AGE_MS)
+  if (!lock.ok) {
+    /**
+     * 🔴 **일시적인 겹침과 남아 있는 죽은 락은 다른 사건이다** (2026-09-10 정정).
+     *
+     *    `HELD` 는 다음 회차에 저절로 풀린다. `STALE_HELD` 는 **저절로 풀리지 않는다** —
+     *    자동 회수를 하지 않기로 했기 때문이다(그것이 두 회차를 동시에 들여보낸다).
+     *    둘을 한 코드로 뭉개면 사람이 봐야 할 것이 "흔한 겹침" 에 묻힌다.
+     */
+    fail(`락이 잡혀 있다 — ${lock.reason}`,
+      lock.kind === 'STALE_HELD' ? 'LOCK_STALE' : 'LOCK_BUSY')
+  }
+  else lockHandle = lock.handle
 
-  const chromium = await loadChromium()
+  // 🔴 의존성 실패도 terminal record 를 남긴다 (배포·설치 문제로 읽혀야 한다)
+  const chromium = await (async (): Promise<Chromium> => {
+    try { return await loadChromium() } catch (e) {
+      return fail(`브라우저 모듈을 불러오지 못했다 — ${e instanceof Error ? e.message : String(e)}`,
+        'RUNTIME_DEPENDENCY')
+    }
+  })()
 
   // 🔴 실행 식별자를 여기서 못 박는다. 이 뒤의 모든 행이 같은 runId 를 갖는다.
   const listedAtIso = new Date().toISOString()
-  const RUN_ID = runIdOf(listedAtIso)
+  // 🔴 회차 id 는 위에서 이미 못 박았다 — 기록과 산출물이 같은 id 를 쓴다
+  const RUN_ID = runRecord!.runId
   const OUT = OUT_OVERRIDE ?? runOutputPath(CAFE_ID, RUN_ID, 'detail')
   const OUT_LIST = OUT_OVERRIDE
     ? OUT_OVERRIDE.replace(/\.jsonl$/, '.list.jsonl')
@@ -330,7 +537,11 @@ async function main() {
 
     if (SCOUT) {
       // ── 🔍 scout 종료 — 상세를 열지 않는다 ──
+      // 🔴 scout 는 상세를 열지 않는다 — 예약 경로의 성공 증거가 되지 못한다
+      markRun({ listRows: basis.total, detailRequests: 0, thinRows: 0 })
+      finishRun('ok')
       console.log(`\n  🔍 scout 종료 — 목록 ${basis.total}건 기록. 상세 요청 0.`)
+      console.log('     🔴 이 회차는 상세를 열지 않았다 — 예약 수집 성공 증거가 아니다.')
       console.log(`     제외 ${basis.total - basis.eligible.length - basis.legacy}건 → 상세 후보 ${basis.eligible.length}건`)
       // 🔴 이 실행에서는 0 이어야 한다. 0 이 아니면 buildCollected 를 안 거친 행이 섞인 것이다
       if (basis.legacy > 0) console.log(`     ⚠️ 판정 없는 행 ${basis.legacy}건 — 제외가 아니라 "판정 자체가 없다"`)
@@ -351,23 +562,43 @@ async function main() {
     }
 
     const eligible = basis.eligible
+    /**
+     * 🔴 **이미 본 글은 상세를 열지 않는다** (2026-09-10 정정).
+     *
+     *    옛 판은 `alreadyInVault: false` 를 **고정**으로 넘겼다. 그래서 같은 글을
+     *    회차마다 다시 열었고, `thinRows` 합은 늘었지만 **새 공급은 0** 이었다.
+     *    관측 처리량이 실제보다 부풀고, 대상 카페에는 같은 요청이 반복됐다.
+     *
+     *    collector 는 DB 를 import 하지 않는다(계약 유지). 정본 경로와 기존 thin
+     *    산출물에서 `sourceArticleId` 를 모아 요청 **전에** 거른다.
+     */
+    const skippedSeen = eligible.filter((r) => doneIds.has(r.sourceArticleId)).length
     const plan = planAutoFetch(
       eligible.map((r) => ({
         sourceArticleId: r.sourceArticleId,
         score: selectionScore({ stage: r.qualitySignals.stage, flags: r.qualityFlags, signals: r.qualitySignals } as QualityAssessment),
         flags: r.qualityFlags,
-        alreadyInVault: false,
+        alreadyInVault: doneIds.has(r.sourceArticleId),
       })),
       { max: MAX },
     )
+    markRun({ listRows: listRows.length, skippedSeen })
+    console.log(`  이미 본 글 ${skippedSeen}건 — 상세를 열지 않는다`
+      + ` (thin ${seen.size}건 · 원장 ${ledgerEntries.size}건 기억)`)
     console.log(`\n  자동 선별 ${plan.picked.length}건 · 제외 ${plan.skipped.length}건 (후보 ${eligible.length}/${listRows.length})`)
     console.log('  🔴 제외는 파일에서 지운 것이 아니다 — 목록 JSONL 에 전부 남아 있다\n')
 
     // ── ③ 상세 ──
+    let detailRequests = 0
+    /** 🔴 **연 것과 읽은 것은 다르다** — 셀렉터가 터지면 열어도 0 이다 */
+    let bodyRows = 0
     const known = new Map(items.map((i) => [i.sourceArticleId, i]))
     for (const [idx, id] of plan.picked.entries()) {
       if (Date.now() - started > RUN_TIMEOUT_MS) throw new Error('실행 timeout')
       if (idx > 0) await sleep(randomDelay(DELAY_ARTICLE_MS))
+      // 🔴 상세를 **실제로 연 횟수**를 센다 — scout 와 구별하는 유일한 값이다
+      detailRequests += 1
+      markRun({ detailRequests })
       await guardedNavigate({
         url: ARTICLE_URL(cafe!.cafeId, id), source: GUARD_SOURCE, now: () => new Date(),
         goto: async (u) => (await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 20_000 })) as NavigationResponse,
@@ -376,6 +607,11 @@ async function main() {
       const read = await readArticleBody(page)
       const body = read.body
       if (!body) {
+        // 🔴 본문 실패도 조회는 끝났다 — 재시도 횟수와 함께 남긴다
+        recordDetail({
+          articleId: id, outcome: 'body_failed', at: new Date().toISOString(),
+          runId: RUN_ID, attempts: (ledgerEntries.get(id)?.attempts ?? 0) + 1,
+        })
         console.log(
           read.errors.length
             ? `  ⚠️ ${id} — 본문 셀렉터가 터졌다(건너뛴다): ${read.errors[0]}`
@@ -385,21 +621,34 @@ async function main() {
       }
       const row = buildCollected(cafe!.cafeId, known.get(id)!, body, new Date().toISOString(), listedAtIso)
       assertNaverCandidate(row)
+      bodyRows += 1
+      markRun({ bodyRows })
+      /**
+       * 🔴 **여기서 `kept` 를 확정하지 않는다** (2026-09-10 정정).
+       *
+       *    본문을 읽었을 뿐 아직 분류도 저장도 하지 않았다.
+       *    여기서 `kept` 를 적으면, thin 저장이 실패했을 때
+       *    **원장에는 있고 산출물은 없는** 영구 유실이 된다 —
+       *    그 글은 다시 열리지 않으므로 영영 공급되지 않는다.
+       *
+       *    분류 뒤(`dropped`)와 저장 뒤(`kept`)에 나눠 적는다.
+       */
       collected.push(row)
       console.log(`  ✅ ${id} · ${[...body].length}자 · 댓글 ${row.sourceCommentCount}`)
     }
   } finally {
+    /**
+     * 🔴 **브라우저만 닫는다. 락은 여기서 풀지 않는다** (2026-09-10 정정).
+     *
+     *    앞선 판은 여기서 락을 놓았다. 그런데 분류·thin 저장·원장 확정은
+     *    **이 뒤에** 온다 — 그 사이에 B 가 락을 얻으면
+     *    A 가 이미 읽은 글을 **다시 상세 조회한다.**
+     *    요청은 두 배로 나가고 원장에는 한 번만 남는다.
+     *
+     *    락은 최외곽(`main().then/catch`·`fail()`)에서 **결과가 확정된 뒤**
+     *    정확히 한 번 풀린다(`releaseOwnLock` 이 `lockHandle` 을 먼저 비운다).
+     */
     if (browser) await browser.close().catch(() => {})
-    // 🔴 성공이든 실패든 락을 푼다. 앞 코드는 풀지 않아 실패 후 TTL 30분을
-    //    기다려야 했다 — 재시도가 막히면 원인을 좁힐 기회 자체가 사라진다.
-    //
-    // 🔴 해제 실패가 원래 예외를 가리지 않는다. 수집이 왜 실패했는지가 본론이고
-    //    락을 못 지운 것은 곁가지다 — 경고만 내고 예외는 그대로 올라간다.
-    const existed = existsSync(LOCK_PATH)
-    let unlinkError: unknown = null
-    if (existed) { try { unlinkSync(LOCK_PATH) } catch (e) { unlinkError = e } }
-    const rel = judgeLockRelease(existed, unlinkError)
-    if (rel.warning) console.warn(`  ⚠️ ${rel.warning}`)
   }
 
   if (collected.length && THIN) {
@@ -419,7 +668,21 @@ async function main() {
       const axis = String(v.axis)
       const safetyVerdict = String(v.safety.verdict)
       // 🔴 drop · hardExclude 는 얇은 사본조차 만들지 않는다
-      if (!keepAfterClassify({ axis, safetyVerdict }).keep) { droppedThin += 1; continue }
+      if (!keepAfterClassify({ axis, safetyVerdict }).keep) {
+        droppedThin += 1
+        /**
+         * 🔴 **걸러진 글도 조회는 끝났다.** 여기 남기지 않으면 thin 이 없으므로
+         *    다음 회차가 같은 글을 다시 연다 — 요청은 쓰이고 산출은 0 이다.
+         */
+        const dropId = String(r.sourceArticleId ?? '')
+        if (dropId !== '') {
+          recordDetail({
+            articleId: dropId, outcome: 'dropped', at: new Date().toISOString(),
+            runId: RUN_ID, attempts: (ledgerEntries.get(dropId)?.attempts ?? 0) + 1,
+          })
+        }
+        continue
+      }
       const row = toThinRow({
         id: String(r.sourceArticleId ?? ''), url: String(r.sourceUrl ?? ''),
         title: String(r.originalTitle ?? ''),
@@ -434,7 +697,38 @@ async function main() {
       thinRows.push(row)
     }
     const thinPath = outPathOf(dirname(OUT), CAFE_ID, RUN_ID)
+    /**
+     * 🔴 **저장이 끝난 뒤에만 `kept` 를 확정한다.**
+     *    저장이 실패하면 원장에 아무것도 남지 않고, 다음 회차가 그 글을 다시 연다 —
+     *    되찾을 수 있는 상태로 남기는 것이 영구 유실보다 낫다.
+     */
     writeJsonl(thinPath, thinRows)
+    if (!existsSync(thinPath)) {
+      fail(`THIN_WRITE_FAILED — 산출물을 저장하지 못했다 (${thinPath})\n`
+        + '   🔴 kept 를 확정하지 않았다. 다음 회차가 그 글을 다시 연다.', 'OTHER')
+    }
+    for (const r of thinRows) {
+      const keptId = typeof r.id === 'string' ? r.id
+        : typeof r.sourceArticleId === 'string' ? r.sourceArticleId : ''
+      if (keptId === '') continue
+      recordDetail({
+        articleId: keptId, outcome: 'kept', at: new Date().toISOString(),
+        runId: RUN_ID, attempts: (ledgerEntries.get(keptId)?.attempts ?? 0) + 1,
+      })
+    }
+    /**
+     * 🔴 **공급은 신규 고유 행이다.**
+     *    같은 글을 네 회차가 반복해 담으면 `thinRows` 합은 4 지만 공급은 1 건이다.
+     *    관측 처리량은 이 값으로 센다.
+     */
+    const newUnique = thinRows.filter((r) => {
+      const id = typeof r.id === 'string' ? r.id
+        : typeof r.sourceArticleId === 'string' ? r.sourceArticleId : ''
+      return id !== '' && !doneIds.has(id)
+    }).length
+    const repeated = thinRows.length - newUnique
+    markRun({ thinRows: thinRows.length, newUniqueThinRows: newUnique, repeatedRows: repeated })
+    console.log(`  신규 고유 ${newUnique}행 · 반복 ${repeated}행 (🔴 공급은 신규 고유 행이다)`)
     console.log(`\n  → ${thinPath} (${thinRows.length}건 · run ${RUN_ID})`)
     console.log(`  🔴 전문을 저장하지 않았다 — 마스킹 후 앞 ${BODY_HEAD_CHARS}자만 남겼다`)
     if (droppedThin > 0) console.log(`  🔴 drop·hardExclude ${droppedThin}건은 얇은 사본도 만들지 않았다`)
@@ -649,7 +943,26 @@ async function readArticleBody(page: NaverPage): Promise<{ body: string | null; 
   return { body: null, errors }
 }
 
-main().catch((e) => {
-  console.error(`\n❌ ${e instanceof Error ? e.message : String(e)}\n`)
-  process.exit(1)
-})
+main()
+  .then(() => {
+    // 🔴 여기 닿았으면 회차가 끝난 것이다. scout 는 이미 위에서 기록했다
+    if (!finishRun('ok')) {
+      // 🔴 성공했는데 종료 기록을 못 남겼다 — exit 0 으로 끝내지 않는다.
+      //    그 회차는 `started` 로 남고, 관제는 그것을 STALE_STARTED 로 잡는다
+      releaseOwnLock()
+      console.error('\n🛑 RECORD_TERMINAL_WRITE_FAILED — 수집은 됐으나 종료 기록을 남기지 못했다.\n')
+      process.exit(1)
+    }
+    releaseOwnLock()
+  })
+  .catch((e) => {
+    const msg = e instanceof Error ? e.message : String(e)
+    // 🔴 원인별로 코드를 남긴다 — "세션" 한 낱말로 뭉개지 않는다
+    const code = /셀렉터|selector|목록이 비었다/i.test(msg) ? 'SELECTOR'
+      : /net::|ECONN|timeout|타임아웃|네트워크/i.test(msg) ? 'NETWORK'
+        : 'OTHER'
+    finishRun('failed', code)
+    releaseOwnLock()
+    console.error(`\n❌ ${msg}\n`)
+    process.exit(1)
+  })
