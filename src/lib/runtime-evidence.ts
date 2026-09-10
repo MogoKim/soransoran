@@ -98,6 +98,12 @@ export type SlotVerdict = {
   expected: number
   /** 전환 이후 실제로 지나간 슬롯 수 */
   elapsed: number
+  /**
+   * 🔴 어느 회차가 어느 슬롯에 붙었는가.
+   *    관측 처리량은 **이 회차들의 실제 산출 행 수**로 센다 —
+   *    설정값에 성공 비율을 곱하면 그건 여전히 설정값의 그림자다.
+   */
+  matchedRunIds?: readonly string[]
   detail: string
 }
 
@@ -127,6 +133,8 @@ export function judgeSlotEvidence(input: {
     .filter((r) => r.at >= input.since && r.at <= input.now)
     .sort((a, b) => a.at - b.at)
   const used = new Set<string>()
+  /** 🔴 어느 회차가 어느 슬롯에 붙었는가 — 관측 처리량을 그 회차에서만 센다 */
+  const matchedRunIds: string[] = []
   let succeeded = 0
   for (const slot of recent) {
     // 🔴 **슬롯 시각 이후**로 tolerance 안에 시작한 회차만 그 슬롯의 것이다.
@@ -135,12 +143,13 @@ export function judgeSlotEvidence(input: {
     //    예약이 돌았다는 증거를 손으로 만든 증거가 대신할 수 없다 —
     //    슬롯보다 **먼저** 끝난 회차는 그 슬롯이 돌았는지에 대해 아무것도 말해 주지 않는다.
     const hit = usable.find((r) => !used.has(r.runId) && r.at >= slot && r.at - slot <= tolerance)
-    if (hit !== undefined) { used.add(hit.runId); succeeded += 1 }
+    if (hit !== undefined) { used.add(hit.runId); matchedRunIds.push(hit.runId); succeeded += 1 }
   }
   return {
     succeeded,
     expected,
     elapsed: elapsed.length,
+    matchedRunIds,
     detail: elapsed.length < expected
       ? `전환 이후 지나간 슬롯이 ${elapsed.length}개뿐이다 — ${expected}개가 지나야 판정할 수 있다`
       : `최근 ${expected}개 슬롯 중 ${succeeded}개 성공`,
@@ -296,5 +305,97 @@ export function judgePromotionFreshness(input: {
     fresh: false,
     lag: input.lag,
     detail: `runtime 이 origin/main 보다 ${input.lag ?? '?'}커밋 뒤다 — 격리는 성립하지만 승격 전에 배포해야 한다`,
+  }
+}
+
+/**
+ * 🔴 **슬롯 증거를 건강도로 읽는다** (2026-09-10).
+ *
+ *    앞선 판은 `succeeded/expected` 숫자만 냈다. 그래서 "0/4" 가
+ *    **아직 안 지나갔다**(정상)인지 **지나갔는데 다 실패했다**(고장)인지 구별되지 않았다.
+ *
+ *    실제로 그 구별이 필요했다 — Wave B 다회 수집은 등록 이후 8회 연속 실패했는데
+ *    관제는 "슬롯 미달" 한 줄로만 말했고, 그 사이 "수집 능력 80건/day" 를 유지했다.
+ *
+ * 🔴 **판정을 다시 만들지 않는다.** `judgeSlotEvidence` 결과를 읽어 이름만 붙인다.
+ */
+export type SlotHealth =
+  /** 전환 이후 지나간 슬롯이 없다 — 실패가 아니라 아직 볼 것이 없다 */
+  | 'OBSERVATION_PENDING'
+  /** 지나간 슬롯을 전부 성공했고 기대 수를 채웠다 */
+  | 'OK'
+  /** 지나간 만큼은 다 성공했지만 아직 기대 수에 못 미친다 */
+  | 'ACCUMULATING'
+  /** 일부 성공 일부 실패 */
+  | 'DEGRADED'
+  /** 지나간 슬롯이 있는데 성공이 0 이다 */
+  | 'BROKEN'
+
+export function judgeSlotHealth(v: SlotVerdict): { health: SlotHealth; reason: string } {
+  if (v.elapsed === 0) {
+    return {
+      health: 'OBSERVATION_PENDING',
+      reason: '전환 이후 지나간 슬롯이 없다 — 아직 판정할 증거가 없다(실패가 아니다)',
+    }
+  }
+  if (v.succeeded === 0) {
+    return {
+      health: 'BROKEN',
+      reason: `지나간 슬롯 ${v.elapsed}개가 **전부 실패**했다 — 등록돼 있어도 수집되지 않는다`,
+    }
+  }
+  if (v.succeeded < v.elapsed) {
+    return {
+      health: 'DEGRADED',
+      reason: `지나간 슬롯 ${v.elapsed}개 중 ${v.succeeded}개만 성공했다`,
+    }
+  }
+  if (v.succeeded < v.expected) {
+    return {
+      health: 'ACCUMULATING',
+      reason: `지나간 ${v.elapsed}개는 전부 성공했다 — ${v.expected}개까지 더 지나야 증명이 끝난다`,
+    }
+  }
+  return { health: 'OK', reason: `최근 ${v.expected}개 슬롯 전부 성공` }
+}
+
+/**
+ * 🔴 **등록은 능력이 아니다.**
+ *
+ *    `loaded` 슬롯 수 × 회차당 상세는 **configured**(설정된 능력)일 뿐이다.
+ *    실제로 몇 건이 들어왔는지는 **성공한 회차**로만 알 수 있다.
+ *    둘을 한 숫자로 내면 "job 을 올렸으니 40건/day" 가 되고, 그것이 이번 사고다.
+ *
+ * @param configuredPerDay 슬롯 수 × 회차당 상세 (기존 `currentCapacity`)
+ * @param slot 그 source 의 슬롯 증거
+ */
+export function judgeObservedCapacity(input: {
+  configuredPerDay: number
+  slot: SlotVerdict
+}): {
+  configuredPerDay: number
+  /** 🔴 지나간 슬롯 중 성공한 비율로 환산한 값. 증거가 없으면 `null` */
+  observedPerDay: number | null
+  health: SlotHealth
+  reason: string
+} {
+  const h = judgeSlotHealth(input.slot)
+  if (input.slot.elapsed === 0) {
+    // 🔴 모르는 것을 configured 로 채우지 않는다
+    return {
+      configuredPerDay: input.configuredPerDay,
+      observedPerDay: null,
+      health: h.health,
+      reason: `설정 ${input.configuredPerDay}건/day · 관측 아직 없음 — ${h.reason}`,
+    }
+  }
+  const rate = input.slot.succeeded / input.slot.elapsed
+  const observed = Math.round(input.configuredPerDay * rate * 10) / 10
+  return {
+    configuredPerDay: input.configuredPerDay,
+    observedPerDay: observed,
+    health: h.health,
+    reason: `설정 ${input.configuredPerDay}건/day · 관측 ${observed}건/day`
+      + ` (지나간 ${input.slot.elapsed}개 중 ${input.slot.succeeded}개 성공) — ${h.reason}`,
   }
 }

@@ -21,10 +21,16 @@ import { readStock } from '../src/lib/micro-seed-supply-autofill'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
 import { installFromEnv } from '../src/lib/scale-runtime'
 import {
-  judgeCheckpointFreshness, judgePromotionFreshness, judgeSlotEvidence, parseSuccessRuns,
+  judgeCheckpointFreshness, judgePromotionFreshness, judgeSlotEvidence, judgeSlotHealth,
+  type SlotHealth,
 } from '../src/lib/runtime-evidence'
 import { judgeWaveC, planPromotion, WAVE_C_CONDITIONS } from '../src/lib/wave-c-readiness'
 import { readGuard } from './lib/collect-guard-store.mjs'
+import {
+  judgeDetailHealth, latestTerminal, manualPreflightOk, observedRows, scheduledDetailRuns,
+} from '../src/lib/collect-run-record'
+import { judgeSourceOperations } from '../src/lib/collect-operations'
+import { readRunRecords } from './lib/collect-run-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const WANT_PLAN = process.argv.includes('--plan')
@@ -34,6 +40,11 @@ const NAVER_EXPECTED: Readonly<Record<string, number>> = {
   'navercafe:wgang': 4,
 }
 const LOG_DIR = join(homedir(), 'Library', 'Logs', 'soransoran')
+/** 🔴 슬롯 수 × 회차당 상한 — **설정된** 능력이다. 관측이 아니다 */
+const CONFIGURED_PER_DAY: Readonly<Record<string, number>> = {
+  'navercafe:remonterrace': 40,
+  'navercafe:wgang': 40,
+}
 const LOG_OF: Readonly<Record<string, string>> = {
   'navercafe:remonterrace': 'navercafe-collect-remonterrace-multi.log',
   'navercafe:wgang': 'navercafe-collect-wgang-multi.log',
@@ -89,12 +100,43 @@ const runtimeSha = manifest?.sha ?? null
  *    지금은 runId 의 시각을 읽어 **전환 이후 고유 회차**를 예정 슬롯에 하나씩 붙인다.
  */
 const naverRuns: Record<string, { expected: number; succeeded: number }> = {}
+/** 🔴 configured / scheduled liveness / observed rows 를 **따로** 낸다 */
+const capacityLines: string[] = []
+/** 🔴 공통 판정 결과 — supply:health 와 같은 객체를 본다 */
+const opsById: Record<string, ReturnType<typeof judgeSourceOperations>> = {}
 const slotDetail: string[] = []
+/** 🔴 source 별 건강도 — PENDING 과 BROKEN 을 갈라 둔다 */
+const slotHealth: Record<string, SlotHealth> = {}
+/** 🔴 지나간 슬롯이 실패한 것들 — 이것이 있으면 "아직 안 지나갔다" 가 아니다 */
+const slotBroken: string[] = []
 for (const [id, expected] of Object.entries(NAVER_EXPECTED)) {
-  const path = join(LOG_DIR, LOG_OF[id]!)
-  const body = existsSync(path) ? readFileSync(path, 'utf-8') : ''
+  /**
+   * 🔴 **예약 회차 증거는 회차 기록에서 나온다** (2026-09-10 정정).
+   *
+   *    옛 판은 로그 본문에서 runId 를 긁었다. 그러면
+   *    ① 손으로 돌린 회차가 예약 슬롯을 채우고
+   *    ② `--scout`(상세 0건) 회차도 성공으로 세어졌다.
+   *    둘 다 "예약 수집이 돈다" 의 증거가 되지 못한다.
+   *
+   *    지금은 `trigger === 'schedule'` 이고 **상세를 실제로 연** 회차만 센다.
+   */
+  const records = readRunRecords(id)
+  /**
+   * 🔴 **supply:health 와 같은 함수를 쓴다** (2026-09-10 Codex 지적).
+   *    앞선 판은 각자 판정해 같은 시점에 HEALTHY 와 BROKEN 을 동시에 냈다.
+   */
+  const ops = judgeSourceOperations({
+    sourceId: id,
+    records,
+    slots: SLOTS_OF[id]!,
+    since: deployedAt ?? Number.MAX_SAFE_INTEGER,
+    now: now.getTime(),
+    expected,
+    configuredPerDay: CONFIGURED_PER_DAY[id] ?? 0,
+  })
+  opsById[id] = ops
   const v = judgeSlotEvidence({
-    runs: parseSuccessRuns(body),
+    runs: scheduledDetailRuns(records),
     slots: SLOTS_OF[id]!,
     // 🔴 배포 기록이 없으면 "언제부터" 를 모른다 — 그때는 아무 회차도 인정하지 않는다
     since: deployedAt ?? Number.MAX_SAFE_INTEGER,
@@ -102,18 +144,63 @@ for (const [id, expected] of Object.entries(NAVER_EXPECTED)) {
     expected,
   })
   naverRuns[id] = { expected, succeeded: v.succeeded }
-  slotDetail.push(`${id} ${v.succeeded}/${v.expected} (지나간 슬롯 ${v.elapsed})`)
+  /**
+   * 🔴 **"0/4" 를 한 낱말로 뭉개지 않는다** (2026-09-10).
+   *    아직 안 지나간 것과 지나갔는데 다 실패한 것은 조치가 정반대다.
+   *    판정은 `judgeSlotHealth` 하나가 한다 — 여기서 다시 세지 않는다.
+   */
+  const h = judgeSlotHealth(v)
+  slotHealth[id] = h.health
+  /**
+   * 🔴 **관측 처리량은 실제 산출 행 수다.** 설정값에 성공 비율을 곱한 값이 아니다 —
+   *    그것은 여전히 설정값의 그림자이고, 회차가 몇 행을 만들었는지 말하지 않는다.
+   */
+  const matched = v.matchedRunIds ?? []
+  const obs = observedRows(records, matched)
+  const configured = CONFIGURED_PER_DAY[id] ?? 0
+  /** 🔴 상세 경로가 사는가 — liveness·yield 와 다른 질문이다 */
+  const dh = judgeDetailHealth(latestTerminal(records))
+  const mp = manualPreflightOk(records)
+  capacityLines.push(
+    `${id}`
+    + `\n        configured   ${configured}건/day (슬롯×상한 — 🔴 current 가 아니다)`
+    + `\n        liveness     ${ops.scheduled.health} (예약 회차가 돌았는가)`
+    + `\n        운영 등급     ${ops.level} — ${ops.codes.join(' · ')}`
+    + `\n        body-read    ${dh} (상세를 열어 본문을 읽었는가)`
+    + `\n        observed     ${v.elapsed === 0 ? '(관측 전)' : `신규 고유 ${obs.rows}행 / 회차 ${obs.runs}`}`
+    + `${obs.repeated > 0 ? ` · 반복 ${obs.repeated}행 제외` : ''}`
+    + `${obs.skippedSeen > 0 ? ` · 이미 본 글 ${obs.skippedSeen}건 건너뜀` : ''}`
+    + `${v.elapsed > 0 && v.elapsed < expected ? '\n        🟡 관찰 중 — 하루 처리량으로 확정하지 않는다' : ''}`
+    + `${mp.ok ? `\n        🟡 ${mp.detail}` : ''}`,
+  )
+  if (h.health === 'BROKEN' || h.health === 'DEGRADED') slotBroken.push(`${id} — ${h.reason}`)
+  slotDetail.push(`${id} ${v.succeeded}/${v.expected} [${h.health}] (지나간 슬롯 ${v.elapsed})`)
 }
 
 // ── ③ 보호장치 ──
 const guardProblems: string[] = []
+/**
+ * 🔴 **요청 0회를 건강 증거로 쓰지 않는다** (2026-09-10).
+ *
+ *    차단기가 전부 `closed` 이고 연속 실패가 0 이면 건강해 보인다. 그런데
+ *    8회 연속 세션 오류로 중단된 동안에도 그 값은 그대로였다 —
+ *    요청을 **한 번도 보내지 않았기** 때문이다.
+ *    "아무 일도 없었다" 를 "아무 문제 없다" 로 읽으면 안 된다.
+ */
+const guardIdle: string[] = []
 for (const id of Object.keys(NAVER_EXPECTED) as SourceId[]) {
   try {
-    const snap = guardSnapshot(readGuard(id, now), now.getTime())
+    const g = readGuard(id, now)
+    const snap = guardSnapshot(g, now.getTime())
     for (const b of snap.breakers) {
       if (b.status !== 'closed') guardProblems.push(`${id} ${b.cls} ${b.status}`)
     }
-    if (budgetOf(readGuard(id, now)).exhausted) guardProblems.push(`${id} 예산 소진`)
+    if (budgetOf(g).exhausted) guardProblems.push(`${id} 예산 소진`)
+    // 🔴 지나간 슬롯이 있는데 요청이 0 이면, closed 는 건강이 아니라 침묵이다
+    const elapsedHere = naverRuns[id] === undefined ? 0 : slotHealth[id] !== 'OBSERVATION_PENDING'
+    if (elapsedHere === true && g.requestsToday === 0) {
+      guardIdle.push(`${id} 오늘 요청 0회 — closed 는 건강의 증거가 아니다`)
+    }
   } catch { guardProblems.push(`${id} 보호장치 상태를 읽지 못했다`) }
 }
 
@@ -151,11 +238,16 @@ const runtimeIsolated = ((): boolean => {
   catch { return false }
 })()
 
+/**
+ * 🔴 **실패한 회차는 보호장치 문제로 함께 올린다** (2026-09-10).
+ *    "슬롯 미달" 한 줄로만 말하면 아직 안 지나간 것과 구별되지 않는다.
+ *    요청 0회인 침묵도 여기 적는다 — closed 를 건강으로 읽지 않게.
+ */
 const verdict = judgeWaveC({
   stock: stock.usable,
   stockTarget: capD.stockTarget,
   naverRuns,
-  guardProblems,
+  guardProblems: [...guardProblems, ...slotBroken, ...guardIdle],
   lastCheckpoint,
   releaseStage: scale.releaseStage,
   runtimeIsolated,
@@ -194,6 +286,14 @@ const fresh = remoteMain === null
 
 console.log(`\n  ${verdict.summary}`)
 console.log(`  슬롯 증거  ${slotDetail.join(' · ')}`)
+console.log('  ── 능력 (🔴 셋을 합치지 않는다)')
+for (const c of capacityLines) console.log(`     ${c}`)
+// 🔴 PENDING 과 BROKEN 을 화면에서도 갈라 적는다 — 조치가 정반대다
+for (const b of slotBroken) console.log(`  🔴 회차 실패  ${b}`)
+for (const g of guardIdle) console.log(`  🔴 침묵      ${g}`)
+if (slotBroken.length === 0 && Object.values(slotHealth).every((h) => h === 'OBSERVATION_PENDING')) {
+  console.log('  🟡 아직 지나간 슬롯이 없다 — OBSERVATION_PENDING (실패가 아니다)')
+}
 console.log(`  배포 기록  ${manifest === null ? '🔴 없다' : `${(runtimeSha ?? '?').slice(0, 7)} @ ${manifest.deployedAt ?? '?'}`}`)
 console.log(`  로컬 origin/main ${(localOriginMain ?? '?').slice(0, 7)}`
   + `  ·  원격 main ${remoteMain === null ? '🔴 읽지 못함' : remoteMain.slice(0, 7)}`

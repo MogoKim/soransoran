@@ -27,6 +27,7 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import {
   FORBIDDEN_BODY_KEYS, buildReport, judgePublish, judgeSource, judgeSupply, logHintOf,
+  staleAfterFromSlots,
   PUBLISH_GRACE_MS, type Finding, type HealthReport, type LogFacts,
 } from '../src/lib/supply-health'
 import { STOCK_TARGET, readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
@@ -57,11 +58,28 @@ import { isSearchIndexable, isDiscoveryEligible } from '../src/lib/post-visibili
 const DATA_DIR = '.microseed-data'
 const LOG_DIR = join(homedir(), 'Library', 'Logs', 'soransoran')
 const argv = process.argv.slice(2)
+import { judgeOperationalReadiness, judgeSourceOperations } from '../src/lib/collect-operations'
+import { lockAnomaly } from './lib/collect-lock.mjs'
+import { LOCK_PATH, LOCK_MAX_AGE_MS } from './lib/micro-seed-navercafe.mjs'
+import { readRunRecords } from './lib/collect-run-store.mjs'
+
+/** 🔴 슬롯 × 회차당 상한 — **설정값**이다. `current` 가 아니다 */
+const CONFIGURED_PER_DAY: Readonly<Record<string, number>> = {
+  'navercafe:remonterrace': 40,
+  'navercafe:wgang': 40,
+}
+const MANIFEST_FILE = join(
+  homedir(), 'Library', 'Application Support', 'soransoran', 'runtime-manifest.json',
+)
+
 const JSON_OUT = argv.includes('--json')
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
 
-/** 🔴 이 시간을 넘겨 산출물이 없으면 오래된 것으로 본다 */
-const SOURCE_STALE_MS = 30 * 60 * 60 * 1000   // 30시간 — 하루 1~2회 도는 job 의 여유
+/**
+ * 🔴 산출물 stale 임계는 **슬롯 간격에서 파생**한다 (`staleAfterFromSlots`).
+ *    상수 30시간을 쓰던 옛 판은 하루 4회 도는 job 이 22시간 죽어 있어도
+ *    `SOURCE_OK` 라고 말했다 — 그 22시간 동안 8회 연속 실패하고 있었다.
+ */
 const SUPPLY_STALE_MS = 30 * 60 * 60 * 1000
 
 /**
@@ -70,18 +88,37 @@ const SUPPLY_STALE_MS = 30 * 60 * 60 * 1000
  * 🔴 **슬롯은 배열이다.** 82cook 은 하루 10번 돈다 — 07:10 하나만 보면
  *    "다음 실행" 을 09:10 이 아니라 내일 07:10 으로 잡아 12시간을 헛기다린다.
  */
-const SOURCES: { id: string; filePrefix: string; logName: string; slots: [number, number][] }[] = [
+const SOURCES: {
+  id: string; filePrefix: string; logName: string; slots: [number, number][]
+  /** 🔴 예약 job 없이 autopilot 이 필요할 때만 여는 레인인가 */
+  onDemand?: boolean
+}[] = [
   {
+    /**
+     * 🔴 **82cook 은 예약 job 이 없다.** 아래 슬롯은 *계획*(prepared)이고
+     *    실제로는 supply-autopilot 이 재고가 모자랄 때만 연다.
+     *    그래서 stale 임계를 이 슬롯에서 파생시키지 않는다 —
+     *    돌지 않는 슬롯으로 "왜 안 도느냐" 를 물으면 늘 빨갛다.
+     */
     id: '82cook', filePrefix: '82cook-thin-', logName: 'raw-collect-82cook',
     slots: [7, 9, 11, 13, 15, 17, 19, 21, 23, 1].map((h) => [h, 10] as [number, number]),
+    onDemand: true,
   },
   {
+    /**
+     * 🔴 **Wave B 이후 다회 job 이 정본이다** (2026-09-10 정정).
+     *    옛 판은 1회 슬롯(`[[9,20]]`)과 1회판 로그 이름을 보고 있었다 —
+     *    실제로 도는 `-multi` job 의 로그를 **한 번도 읽지 않았고**,
+     *    그래서 8회 연속 `SESSION_FILE_MISSING` 을 놓쳤다.
+     */
     id: 'navercafe:remonterrace', filePrefix: 'navercafe-thin-remonterrace-',
-    logName: 'navercafe-collect-remonterrace', slots: [[9, 20]],
+    logName: 'navercafe-collect-remonterrace-multi',
+    slots: [[4, 20], [10, 20], [16, 20], [22, 20]],
   },
   {
     id: 'navercafe:wgang', filePrefix: 'navercafe-thin-wgang-',
-    logName: 'navercafe-collect-wgang', slots: [[13, 20]],
+    logName: 'navercafe-collect-wgang-multi',
+    slots: [[2, 50], [8, 50], [14, 50], [20, 50]],
   },
 ]
 
@@ -229,6 +266,34 @@ async function main(): Promise<void> {
   await loadEnvLocal()
   const now = new Date()
 
+  /**
+   * 🔴 **운영 판정은 `judgeSourceOperations` 하나가 한다** (2026-09-10 Codex 지적).
+   *
+   *    앞선 판은 supply:health 와 wave-c 가 각자 판정해 같은 시점에
+   *    `HEALTHY / RUN_OK` 와 `BROKEN 0/4` 를 동시에 냈다.
+   *    판정이 두 곳에 있으면 언젠가 갈린다 — 그래서 한 함수를 부른다.
+   */
+  const manifestSha = ((): { at: number | null } => {
+    try {
+      const m = JSON.parse(readFileSync(MANIFEST_FILE, 'utf-8')) as { deployedAt?: string }
+      return { at: m.deployedAt === undefined ? null : Date.parse(m.deployedAt) }
+    } catch { return { at: null } }
+  })()
+  const OPS: Record<string, ReturnType<typeof judgeSourceOperations>> = {}
+  for (const s of SOURCES) {
+    if (s.onDemand === true) continue
+    OPS[s.id] = judgeSourceOperations({
+      sourceId: s.id,
+      records: readRunRecords(s.id),
+      slots: s.slots.map(([hour, minute]) => ({ hour, minute })),
+      // 🔴 배포 기록이 없으면 아무 회차도 인정하지 않는다 — 언제부터인지 모른다
+      since: manifestSha.at ?? Number.MAX_SAFE_INTEGER,
+      now: now.getTime(),
+      expected: s.slots.length,
+      configuredPerDay: CONFIGURED_PER_DAY[s.id] ?? 0,
+    })
+  }
+
   // ── A. 수집원 ──
   const sources = SOURCES.map((s) => {
     const art = lastArtifact(s.filePrefix)
@@ -243,7 +308,18 @@ async function main(): Promise<void> {
       findings: judgeSource({
         sourceId: s.id, lastArtifactAt: art.at, lastArtifactRows: art.rows,
         leakedKeys: art.leaked, firstScheduledAt, logs,
-        now, staleAfterMs: SOURCE_STALE_MS,
+        /**
+         * 🔴 **공통 판정 결과를 그대로 넘긴다.** 여기서 다시 세지 않는다 —
+         *    두 곳에서 세면 두 숫자가 갈린다(그것이 이번 모순이었다).
+         */
+        ops: OPS[s.id] ?? null,
+        /**
+         * 🔴 **남은 죽은 락은 회차 기록과 별개로 관측한다.**
+         *    회차가 아예 못 돌아 기록이 없을 수도 있다 — 그때도 사람이 알아야 한다.
+         */
+        lockStale: s.onDemand === true ? null : lockAnomaly(LOCK_PATH, now.getTime(), LOCK_MAX_AGE_MS),
+        // 🔴 그 source 의 실제 슬롯 간격에서 파생한다 — 상수를 쓰지 않는다
+        now, staleAfterMs: staleAfterFromSlots(s.onDemand === true ? [] : s.slots),
       }),
     }
   })
@@ -632,6 +708,10 @@ async function main(): Promise<void> {
      *    관측에 실패하면 "없다" 가 아니라 **모른다**로 남겨 준비도가 BLOCKED 로 떨어진다.
      */
     const { observed, problem: observeProblem } = observeJobsSafe()
+    // 🔴 한 번만 센다 — 같은 판정을 두 번 부르면 두 값이 갈릴 자리가 생긴다
+    const startReadiness = collectReadiness({
+      phase: 'start', plan, nowMs: now.getTime(), observed, guards,
+    })
     const cur = currentCapacity(observed)
     const prep = preparedCapacity('start')
     return {
@@ -641,7 +721,7 @@ async function main(): Promise<void> {
       observeProblem,
       // 🔴 셋을 **따로** 낸다. 합치면 "템플릿을 만들었으니 능력이 늘었다" 가 된다
       capacity: {
-        currentPerDay: cur.effectivePerDay,
+        configuredPerDay: cur.effectivePerDay,
         // 🔴 조건부로만 열리는 몫 — 보장 능력에 합치지 않는다
         onDemandPotentialPerDay: onDemandPotentialPerDay(observed),
         preparedPerDay: prep.effectivePerDay,
@@ -649,8 +729,19 @@ async function main(): Promise<void> {
         perSource: cur.perSource,
         summary: describeInventory(observed, 'start'),
       },
-      start: collectReadiness({ phase: 'start', plan, nowMs: now.getTime(), observed, guards }),
+      start: startReadiness,
       stable: collectReadiness({ phase: 'stable', plan, nowMs: now.getTime(), observed, guards }),
+      /**
+       * 🔴 **등록만으로 READY 를 내지 않는다.**
+       *    설정 준비도(job 이 올라와 있는가)와 운영 준비도(그 job 이 실제로 도는가)를
+       *    나눈다 — 앞선 판은 8회 연속 죽은 job 을 두고도 설정만 보고 판정했다.
+       *    🔴 `collectReadiness` 를 다시 부르지 않는다 — 같은 값을 두 번 세지 않는다.
+       */
+      operational: judgeOperationalReadiness({
+        configurationReady: startReadiness.status === 'READY',
+        configurationReasons: [],
+        perSource: Object.values(OPS),
+      }),
     }
   })()
 
@@ -812,7 +903,7 @@ async function main(): Promise<void> {
   }
   if (collect.observeProblem !== null) console.log(`   🔴 ${collect.observeProblem}`)
   // 🔴 **현재 · 준비 · 필요를 한 줄에 나란히** 적는다. 합치지 않는다
-  console.log(`   수집 능력  현재 ${Math.round(collect.capacity.currentPerDay)}건/day`
+  console.log(`   수집 능력  설정 ${Math.round(collect.capacity.configuredPerDay)}건/day`
     + ` · 조건부 +${Math.round(collect.capacity.onDemandPotentialPerDay)}건/day(autopilot · 재고 미달 시에만)`
     + ` · 준비 ${Math.round(collect.capacity.preparedPerDay)}건/day`
     + ` · 필요 ${collect.capacity.requiredPerDay}건/day`)
@@ -823,7 +914,7 @@ async function main(): Promise<void> {
   for (const m of collect.start.mismatches) console.log(`   🔴 ${m.code} — ${m.detail}`)
   for (const phase of [collect.start, collect.stable]) {
     console.log(`   [${phase.phase}] ${phase.status === 'READY' ? '🟢 READY' : '🔴 BLOCKED'}`
-      + ` — 현재 ${Math.round(phase.currentPerDay)} · 준비 ${Math.round(phase.preparedPerDay)}`
+      + ` — 설정 ${Math.round(phase.configuredPerDay)} · 준비 ${Math.round(phase.preparedPerDay)}`
       + ` · 필요 ${phase.requiredPerDay} · 여유 기준 ${phase.requiredWithMargin}`
       + ` (이론 ${phase.theoreticalPerDay})`)
     for (const r of phase.reasons) console.log(`      🔴 ${r}`)

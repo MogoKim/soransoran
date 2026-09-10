@@ -158,11 +158,31 @@ job 은 계속 돌지만 재고만 읽고 끝난다 — 네트워크도 모델�
 ```
 ① 소란소란 전용 네이버 계정 · 세션 발급 (PR-S2-b-3)
    npx tsx scripts/navercafe-session-setup.mts --open   🔴 창업자가 직접 로그인한다
-   .env.local  SORAN_NAVERCAFE_SESSION_PATH=.naver-session/soransoran-storage-state.json
-               SORAN_NAVERCAFE_COLLECT_ENABLED=false    (수집 개시는 별도 승인)
+   🔴 세션 정본은 **worktree 밖 절대 경로**다 (2026-09-10 정정)
+   공유 env  SORAN_NAVERCAFE_SESSION_PATH=/Users/<user>/Library/Application Support/soransoran/naver-session/soransoran-storage-state.json
+             SORAN_NAVERCAFE_COLLECT_ENABLED=false    (수집 개시는 별도 승인)
+   권한      디렉터리 700 · 파일 600
+
+   🔴 **상대 경로를 쓰지 않는다.** launchd 의 WorkingDirectory 는 runtime worktree 인데
+      세션 파일은 개발 트리에만 있었다 — 다회 수집 job 이 등록 이후 8회 연속
+      SESSION_FILE_MISSING 으로 중단됐고, 그동안 관제는 "수집 능력 80건/day" 라고 말했다.
+      지금은 judgeSession 이 상대 경로·worktree 내부 경로를 운영에서 막는다(fail-closed).
+
+   🔴 이전 도구  node scripts/naver-session-migrate.mjs [--apply]
+      temp copy → digest 대조 → atomic rename · env 한 항목만 교체 · 쿠키 값 미출력
+
    🔴 우나어 storage-state.json 재사용은 judgeSession 이 코드로 막는다 —
       한쪽이 막히면 둘 다 멈추고, 계정 정지는 되돌릴 수 없다
    🔴 세션 파일은 .gitignore 가 막는다. 헬퍼는 막혀 있지 않으면 저장을 거부한다
+   🔴 세션이 만료되면 자동 로그인·재시도하지 않는다. 사람이 headed 로 재발급한다
+   🔴 setup 은 target 에 직접 쓰지 않는다 — staging → 모양·인증·만료 검사 → 600 → rename.
+      인증이 없으면 **기존 정본을 덮어쓰지 않고** 멈춘다
+
+   🔴 회차 증거  ~/Library/Application Support/soransoran/collect-runs/*.jsonl
+      runId 별 시작·종료 기록. 관제는 이 **최신 종료 회차**로 현재 상태를 판정한다 —
+      append-only stderr 의 옛 낱말로 "세션 만료" 를 만들어 내지 않는다.
+      launchd 가 띄운 회차만 trigger=schedule 이다(XPC_SERVICE_NAME).
+      🔴 --scout 는 상세 요청이 0이라 예약 성공 증거가 되지 못한다
 
 ② 브라우저 — 🔴 추가 설치가 필요 없다 (PR-S2-b-3 정정)
    playwright-core 는 이미 devDependency 이고, 기본값은 설치된 Google Chrome
@@ -178,6 +198,15 @@ job 은 계속 돌지만 재고만 읽고 끝난다 — 네트워크도 모델�
       0건이면 스크립트가 throw 한다(조용히 넘어가지 않는다).
 ```
 
-**카페마다 plist 를 따로 둔다.** 한 카페를 연속으로 긁지 않고 시간대를 나눈다 —
-`09:20 remonterrace` · `13:20 wgang`. 🔴 **이 둘이 확정 수집원의 전부**이며,
+**카페마다 plist 를 따로 둔다.** 한 카페를 연속으로 긁지 않고 시간대를 나눈다.
+
+🔴 **2026-09-10 정정 — Wave B 이후 두 카페 모두 하루 4회이고 `-multi` 가 정본이다.**
+
+```
+remonterrace  04:20 · 10:20 · 16:20 · 22:20 KST
+wgang         02:50 · 08:50 · 14:50 · 20:50 KST
+```
+
+옛 문구(`09:20 remonterrace` · `13:20 wgang` · 하루 2회 · 1회판 · 미등록)는
+더는 사실이 아니다. 🔴 **이 둘이 확정 수집원의 전부**이며,
 같은 시각에 돌지 않는 것을 fixture 가 검사한다.

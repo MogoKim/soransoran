@@ -379,7 +379,8 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
-| 수집 능력 (현재) | 80건/day — remonterrace 4회 40 · wgang 4회 40 · 82cook 0 (미등록) |
+| 수집 능력 (configured) | 80건/day — remonterrace 4회 40 · wgang 4회 40 · 82cook 0 (예약 job 없음) |
+| 🔴 수집 능력 (observed) | **0건/day** — 등록 이후 성공 회차 0 (2026-09-10 복구 전) · 복구 후 재측정 대기 |
 
 `capacity=d3 · release=d1` (§6.2). 🔴 **공개 발행은 여전히 1/day 다.**
 
@@ -400,7 +401,7 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | M7 | Offline Voice Analyzer | 완료 | 완료 | 전량 분석 | 완료 |
 | M8 | LLM Voice Engine | 분석 완료 | 분석 완료 | 생성 모델 provisional · 호출 0회 | 부분완료 |
 | M9 | Original Content Lane | 완료 | 완료 | d1 가동 | 부분완료 |
-| M10 | Comment/Conversation Engine | 완료 | 실제 DB preflight + 합성 eval (두 경로) | 🔴 공개 0/day · runner·schedule 없음 | 부분완료 |
+| M10 | Comment/Conversation Engine | 완료 | Queue→승인→발행 실경로 · Serializable · provenance 칼럼(0024 **적용됨**) — PR #491 | 🔴 **공개 댓글 OFF** — shadow · 모델 미확정 · runner·schedule 없음 · 공개 0/day | 부분완료 |
 
 이 번호는 운영 마일스톤이다. 제품 생애주기의 Phase/M 번호와 섞어 쓰지 않는다.
 
@@ -486,30 +487,182 @@ persona별 분포도 확인했다 — 신규 16명 각각 `created` 1 · `displa
 2회 연속 전원 롤백(write 0)했다. 원인과 수정은 PR #485(runbook §14)이고,
 merge 뒤 `--step=activate`부터 이어서 완료했다. 부분 활성화는 발생하지 않았다.
 
-**다음 단계**: `Scale Activation Wave B — 다회 수집 활성화와 재고 확장`.
+**현재 단계**: `Wave B 복구 / Wave C 운영 증명` (2026-09-10).
+
+🔴 **Wave B 는 구현·설정은 끝났고 운영 성공은 0 이었다.** 둘을 갈라 적는다.
+
+| Wave B | 상태 | 근거 |
+|---|---|---|
+| 다회 job 템플릿·등록 | ✅ 완료 | `-multi` 2개 launchd `loaded` |
+| capacity d3 설정 | ✅ 완료 | `SORAN_CAPACITY_STAGE=d3` |
+| **운영 성공 회차** | 🔴 **0회** | 등록 이후 8회 전부 `SESSION_FILE_MISSING` |
+
+원인은 `SORAN_NAVERCAFE_SESSION_PATH` 가 **상대 경로**였던 것이다. launchd 의
+`WorkingDirectory` 는 runtime worktree 인데 세션 파일은 개발 트리에만 있었고,
+그 파일은 gitignore 대상이라 checkout 으로 따라가지 않는다. 2026-09-10 에
+정본을 `~/Library/Application Support/soransoran/naver-session/` 으로 옮기고
+env 를 절대 경로로 바꿔 복구했다(§8.0-a).
+
 지금 병목은 인원이 아니라 **재고와 수집 능력**이다(§8.0).
+
+### 8.0-a 세션 정본 — 🔴 상대 경로가 8회를 죽였다
+
+```
+정본  ~/Library/Application Support/soransoran/naver-session/soransoran-storage-state.json
+권한  디렉터리 700 · 파일 600
+env   SORAN_NAVERCAFE_SESSION_PATH = 위 절대 경로 (공유 env 한 항목)
+```
+
+🔴 **worktree 안에 두지 않는다.** 배포가 트리를 갈아 끼우면 사라지고,
+개발 트리에만 있으면 runtime 이 못 읽는다. 두 트리의 `.env.local` 은 공유 env 를
+가리키는 symlink 이므로 **한 항목만 바꾸면 둘 다 같은 실체를 읽는다.**
+
+🔴 **운영에서 fail-closed 인 것** (`judgeSession`):
+
+| 코드 | 뜻 |
+|---|---|
+| `SESSION_PATH_RELATIVE` | 상대 경로 — 실행 디렉터리에 따라 다른 파일을 본다 |
+| `SESSION_PATH_IN_WORKTREE` | worktree 안 — 배포에 사라진다 |
+| `SESSION_FILE_MISSING` | 파일이 없다 |
+| `SESSION_NOT_REGULAR_FILE` | 디렉터리·끊긴 symlink |
+| `SESSION_BAD_PERMISSIONS` | 남이 읽을 수 있다 (600 이 아니다) |
+| `SESSION_MALFORMED` | storageState 모양이 아니다 — 열면 로그인 화면을 긁는다 |
+
+판정은 provider 요청 **앞**에 있다. 인증 쿠키(NID_AUT·NID_SES)의 **존재와 만료**도
+브라우저를 열기 전에 본다 — 이름과 시각만 보고 값은 담지 않는다.
+세션이 만료됐으면 자동 로그인·재시도하지 않고 멈춘다
+— 사람이 headed 로 재발급한다(`npm run navercafe:session-setup`).
+
+🔴 **발급도 정본 자리에 직접 쓰지 않는다.** 옛 판은 `storageState({ path: target })` 로
+곧바로 썼고, 로그인이 안 잡힌 채 Enter 를 누르면 **인증 없는 파일이 멀쩡하던 정본을
+덮어썼다.** 지금은 같은 디렉터리의 staging → 모양·인증·만료 검사 → 600 →
+atomic rename 이다. 검사에 걸리면 staging 을 버리고 **정본은 건드리지 않는다.**
+
+🔴 쿠키 값·자격증명은 화면·로그·커밋 어디에도 남기지 않는다. 이전 도구는
+digest 와 바이트 수만 찍는다(`scripts/naver-session-migrate.mjs`).
+
+### 8.0-a2 🔴 지금 배포된 것은 이 코드가 아니다 (2026-09-10)
+
+| | 값 |
+|---|---|
+| runtime HEAD · pin · manifest | `f3d3d24` |
+| 회차 기록·중복 제거·본문 카운트 | **PR 브랜치에만 있다 — 배포되지 않았다** |
+
+🔴 **그러므로 지금 상태의 14:50 · 16:20 회차는 새 구조적 기록을 만들지 못한다.**
+"다음 슬롯부터 4/4 가 시작된다" 고 쓰지 않는다.
+**4/4 증명은 PR merge 후 runtime 배포 시각 이후 슬롯부터** 시작한다.
+
+수동 preflight 로 상세 경로가 산다는 것은 확인했지만(`MANUAL_PREFLIGHT_OK`),
+그것은 예약 4/4 를 채우지 않는다 — 예약이 돌았다는 증거는 예약 회차에서만 나온다.
+
+### 8.0-b 관제 계약 — 등록 ≠ 능력
+
+| 무엇 | 어디서 나오는가 |
+|---|---|
+| `configured` | `loaded` 슬롯 수 × 회차당 상세 — **설정값** (🔴 `current` 라고 부르지 않는다) |
+| `scheduled liveness` | 예약 회차가 실제로 돌았는가 (`judgeSlotHealth`) |
+| `body-read` | 상세를 열어 **본문을 읽었는가** (`judgeDetailHealth`) |
+| **`observed`** | 매칭된 회차의 **신규 고유 산출 행 수** (`observedRows`) |
+
+🔴 **넷을 합치지 않는다.** `observed` 를 `configured × 성공 비율` 로 만들면
+그건 여전히 설정값의 그림자다 — 회차가 몇 행을 만들었는지 말하지 않는다.
+
+🔴 **`observed` 는 `thinRows` 합이 아니라 신규 고유 행이다.** 같은 글을 네 회차가
+반복해 담으면 `thinRows` 합은 4 지만 새로 들어온 공급은 **1건**이다.
+collector 는 DB 를 import 하지 않고(계약 유지), 정본 경로와 기존 thin 산출물에서
+`sourceArticleId` 를 모아 **상세 요청 전에** 거른다(`skippedSeen`·`repeatedRows`).
+
+🔴 **열었다는 것과 읽었다는 것은 다르다.** 상세를 10번 열고 셀렉터가 다 터지면
+`bodyRows` 는 0 이고, 그 회차는 성공이 아니다(`BODY_EMPTY`).
+반대로 **신규 후보가 없어 상세 0인 회차**는 고장이 아니다(`NO_NEW`) —
+예약은 돌았고 공급만 0 이다. 셋을 한 낱말로 뭉개지 않는다.
+🔴 일부 슬롯만 지났으면 **누적 실측 + 관찰 중**으로 적고 하루 처리량으로 확정하지 않는다.
+🔴 성공 회차 0이면 `observed 0`, 지나간 슬롯 0이면 `null / PENDING`.
+
+| 건강도 | 뜻 | 조치 |
+|---|---|---|
+| `OBSERVATION_PENDING` | 전환 이후 지나간 슬롯이 0 | 기다린다 (실패가 아니다) |
+| `ACCUMULATING` | 지나간 만큼 다 성공, 기대 수 미달 | 기다린다 |
+| `DEGRADED` | 일부 실패 | 로그를 본다 |
+| `BROKEN` | 지나간 슬롯이 있는데 성공 0 | **즉시 고친다** |
+| `OK` | 기대 수 전부 성공 | — |
+
+🔴 `0/4` 를 한 낱말로 뭉개지 않는다. 아직 안 지나간 것과 다 실패한 것은 조치가 정반대다.
+
+#### 회차 기록 — 🔴 로그 글자로 현재를 말하지 않는다
+
+관제는 append-only stderr 의 **낱말**로 현재 상태를 판정했다(`logHintOf`).
+그 파일에 옛 `SESSION_FILE_MISSING` 이 남아 있어, 세션을 고친 뒤에도
+`세션` 이 걸려 **`SOURCE_SESSION_EXPIRED`** 가 계속 나왔다 — 쿠키는 3주 뒤까지 유효했다.
+
+지금은 회차마다 구조적 종료 기록을 남기고(`collect-runs/*.jsonl`),
+**최신 종료 회차 하나**가 현재 상태를 말한다.
+
+| 규칙 | 뜻 |
+|---|---|
+| 과거 실패 뒤 성공 | 과거는 과거다 (`RUN_OK` · 실패 횟수는 사실로 남긴다) |
+| 성공 뒤 실패 | 최신 실패가 이긴다 |
+| `RUN_SESSION_FILE_MISSING` | 경로 문제 — **env 를 고친다** (재로그인이 아니다) |
+| `RUN_AUTH_MISSING` / `RUN_AUTH_EXPIRED` | 사람이 headed 로 재발급한다 |
+| `RUN_SELECTOR` / `RUN_NETWORK` / `RUN_OTHER` | 서로 다른 조치 |
+
+🔴 **로그를 지우거나 잘라서 통과시키지 않는다.** 그것도 거짓말이다.
+
+🔴 **기록은 어떤 검사보다 먼저 연다.** live 가 확정된 직후 `started` 를 남긴다 —
+세션·인증·락·의존성 실패도 전부 terminal record 를 남겨야 하기 때문이다.
+앞선 판은 브라우저를 띄운 뒤에야 기록을 만들어, 그 앞의 실패는 **기록이 하나도 없었다.**
+8회 연속 실패가 조용했던 이유가 이것이다.
+첫 기록을 남기지 못하면 **외부 요청을 하지 않고 멈춘다**(fail-closed).
+🔴 락을 쥔 뒤의 어떤 실패에서도 락을 놓고 나간다.
+
+#### 예약 회차와 수동 회차
+
+`XPC_SERVICE_NAME` 이 `com.soransoran.*` 이면 launchd 가 띄운 **예약 회차**,
+아니면 사람이 돌린 **수동 회차**다. 예약 슬롯 증거는 예약 회차에서만 나온다 —
+수동 preflight 가 성공해도 `4/4` 를 채우지 못한다.
+
+🔴 **`--scout` 는 예약 경로의 성공 증거가 아니다.** 목록만 읽고 상세 요청이 0이다.
+예약 job 은 상세를 연다. 상세를 실제로 연 회차(`detailRequests > 0`)만 성공으로 센다.
+
+🔴 **기술적 성공과 공급 산출 성공을 나눈다.** 상세를 열었는데 전부 걸러져
+thin 이 0건일 수 있다 — 실패는 아니지만 재고를 늘리지도 않는다.
+🔴 **guard 가 `closed` 이고 요청이 0회면 건강의 증거가 아니다** — 침묵이다.
+그 8회 동안 차단기는 내내 `closed` 였다. 요청을 한 번도 보내지 않았기 때문이다.
+🔴 산출물 stale 임계는 **슬롯 간격에서 파생**한다(`staleAfterFromSlots`).
+상수 30시간을 쓰던 옛 판은 6시간마다 도는 job 이 22시간 죽어 있어도 `SOURCE_OK` 였다.
+🔴 관제는 **실제로 도는 job 의 로그**를 읽는다. 옛 판은 1회판 로그를 보고 있어서
+`-multi` 의 실패를 한 번도 읽지 못했다.
 
 ### 8.0 수집 능력: current, prepared, required를 합치지 않는다
 
 세 숫자는 뜻이 다르므로 절대 한 값으로 합치지 않는다.
 
-| 구분 | 뜻 | 정본 | 2026-09-08 값 |
+| 구분 | 뜻 | 정본 | 2026-09-08 값 (🔴 낡음 — 아래 정정 참조) |
 |---|---|---|---:|
-| current | `launchctl`에 **실제로 올라와 있는** job의 실제 슬롯 수 × 회차당 상세 × 성공률 | 관측(`launchctl list` + 설치된 plist) | **20/day** |
+| ~~current~~ → **configured** | `launchctl`에 **올라와 있는** job의 슬롯 수 × 회차당 상세 × 가정 성공률 | 관측(`launchctl list` + 설치된 plist) | **20/day** |
 | prepared | 저장소에 템플릿·계획이 있고 계획이 성립하는 것 | `collect-schedule` 계획 | **320/day** |
 | on-demand potential | `supply-autopilot`이 **재고가 모자랄 때만** 여는 몫 | 관측 + 성공률 | **+40/day** (조건부) |
 | required | 그 capacity 단계가 요구하는 상세 요청 수 | `planSupply` 역산 | **382/day** (내부 100/day) |
 
-🔴 **on-demand potential을 current에 합치지 않는다.** 재고가 차 있으면 autopilot은 0건을 연다.
+🔴 **2026-09-10 정정 — 이 행을 `current` 라고 부르지 않는다.**
+`launchctl` 관측은 **무엇이 올라와 있는가**를 말할 뿐, 그 job 이 실제로 돌아
+몇 건을 냈는지는 말하지 않는다. 실제 산출은 회차 기록의 `observed`(신규 고유 행)가
+답한다(§8.0-b). 등록을 능력으로 읽은 것이 Wave B 사고의 핵심이었다.
+
+🔴 **on-demand potential을 configured에 합치지 않는다.** 재고가 차 있으면 autopilot은 0건을 연다.
 합치면 "재고가 찼을 때는 0인 능력"을 상시 능력으로 세게 된다 — 그렇게 해서 60/day라는 수가 나왔었다.
 
-- current의 정본은 **관측**이다. 코드의 정적 `loaded: true` 플래그를 능력의 근거로 쓰지 않는다.
-- 지금 등록된 것은 Naver 카페 **1회 job 2개**와 `supply-autopilot`뿐이다.
-  `*-multi` job과 82cook job은 **미등록**이므로 current 기여가 0이거나 1회분이다.
+- configured의 정본은 **관측**이다. 코드의 정적 `loaded: true` 플래그를 근거로 쓰지 않는다.
+  🔴 그러나 관측된 **등록**은 `configured` 일 뿐 `observed` 가 아니다.
+- 🔴 **2026-09-10 정정**: 지금 등록된 것은 Naver 카페 **다회(`*-multi`) job 2개**와
+  `supply-autopilot` 이다. 82cook 은 여전히 예약 job 이 없고 autopilot 이 필요할 때만 연다.
+- 🔴 **그런데 등록은 능력이 아니다.** 그 `-multi` 2개는 등록 이후 8회 전부 실패했고,
+  그동안 관제는 "current 80/day" 라고 말했다. 지금은 `configured` 와
+  `observed`(성공한 회차로 환산한 값)를 **따로** 낸다 — `judgeObservedCapacity`.
 - 템플릿이 저장소에 있다는 사실은 prepared이지 current가 아니다.
 - 여유 기준은 `required / 0.7`이다. 382 기준으로 **546/day**가 있어야 여유 30%를 만족한다.
 
-따라서 **d10 collect readiness는 BLOCKED**다. current 20, prepared 320 모두 required 382에 못 미친다.
+따라서 **d10 collect readiness는 BLOCKED**다. configured 20, prepared 320 모두 required 382에 못 미친다.
 
 d1 운영 건강성과 d10 승격 준비도는 다른 질문이다. d1은 현재 job과 재고로 정상 운영될 수 있고,
 그 사실이 d10 준비 완료를 뜻하지 않는다. 승격 준비도는 **계획한 다회 job이 정확한 label과

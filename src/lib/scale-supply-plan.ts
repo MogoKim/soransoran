@@ -394,8 +394,8 @@ export type SourceReadiness = {
   id: SourceId
   status: ReadinessStatus
   reasons: string[]
-  /** 🔴 **지금 실제로 열리는** 하루 상세 처리량 (관측 기반) */
-  currentPerDay: number
+  /** 🔴 **설정된** 하루 상세 처리량 (슬롯 × 상한). `current` 가 아니다 */
+  configuredPerDay: number
   /** 🔴 다회 계획대로 올렸을 때 (템플릿 · 계획) */
   preparedPerDay: number
   /** 계획한 다회 job 이 실제로 올라와 있는가 */
@@ -455,7 +455,7 @@ export function sourceReadiness(input: {
   const prep = preparedCapacity(phase).perSource.find((x) => x.id === id)!
   return {
     id, status: reasons.length === 0 ? 'READY' : 'BLOCKED', reasons,
-    currentPerDay: cur.effectivePerDay,
+    configuredPerDay: cur.effectivePerDay,
     preparedPerDay: prep.effectivePerDay,
     multiRegistered: multiOk,
     currentLabel: cur.label,
@@ -469,8 +469,14 @@ export type CollectReadiness = {
   requiredPerDay: number
   /** 여유까지 갖추려면 있어야 하는 능력 */
   requiredWithMargin: number
-  /** 🔴 **지금 실제로 열리는** 처리량 (관측 기반) */
-  currentPerDay: number
+  /**
+   * 🔴 **설정된** 처리량 — `loaded` 슬롯 수 × 회차당 상세.
+   *
+   *    이름이 `currentPerDay` 였을 때 "지금 실제로 나오는 양" 으로 읽혔다.
+   *    그 job 이 8회 연속 죽어 있어도 80건/day 라고 말했다 —
+   *    등록은 능력이 아니다. 실제 산출은 회차 기록의 `observed` 가 답한다.
+   */
+  configuredPerDay: number
   /** 🔴 다회 계획대로 올렸을 때 */
   preparedPerDay: number
   /** 이론 최대 — 🔴 판정에 쓰지 않는다. 둘의 차이를 보여주려고 적는다 */
@@ -509,8 +515,8 @@ export function collectReadiness(input: {
   const reasons: string[] = []
 
   if (cur.effectivePerDay < required) {
-    reasons.push(`지금 열리는 것 ${Math.round(cur.effectivePerDay)}건/day < 필요량 ${required}건/day`
-      + ` — ${required - Math.round(cur.effectivePerDay)}건 모자란다 (등록된 job 기준)`)
+    reasons.push(`설정된 것 ${Math.round(cur.effectivePerDay)}건/day < 필요량 ${required}건/day`
+      + ` — ${required - Math.round(cur.effectivePerDay)}건 모자란다 (등록된 job 기준 · 🔴 실제 산출이 아니다)`)
   }
   if (prep.effectivePerDay < required) {
     reasons.push(`준비된 계획 ${Math.round(prep.effectivePerDay)}건/day < 필요량 ${required}건/day`
@@ -531,7 +537,7 @@ export function collectReadiness(input: {
     phase: input.phase,
     requiredPerDay: required,
     requiredWithMargin: withMargin,
-    currentPerDay: cur.effectivePerDay,
+    configuredPerDay: cur.effectivePerDay,
     preparedPerDay: prep.effectivePerDay,
     theoreticalPerDay: theoreticalDetailPerDay(input.phase),
     mismatches: inventoryMismatches(input.observed, input.phase),

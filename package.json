@@ -44,6 +44,7 @@
     "persona:comment-queue": "tsx scripts/persona-comment-queue.mts",
     "persona:comment-canon": "tsx scripts/persona-comment-canon.mts",
     "check:migration-0024": "tsx scripts/migration-0024-check.mts",
+    "collect:lock-check": "tsx scripts/collect-lock-check.mts",
     "persona:comment-runner": "tsx scripts/persona-comment-runner.mts",
     "persona:comment-gate-check": "tsx scripts/persona-comment-check.mts",
     "persona:generate-check": "tsx scripts/persona-generate-check.mts",
