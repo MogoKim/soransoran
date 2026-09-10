@@ -89,9 +89,9 @@ import {
   DEFAULT_FINGERPRINT_THRESHOLDS, REQUIRED_PRIOR_TEXTS, gateEightCanRun,
 } from '../src/lib/persona-fingerprint-thresholds'
 import { checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
-import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
+import { bundlesForPersonas, partitionByPersona } from './lib/persona-reference-store.mjs'
 import {
-  bundlesAreDistinct, findReferenceCopy, looksLikePostBody,
+  bundlesAreDistinct, findReferenceCopy, judgeReferenceBundle, looksLikePostBody,
 } from '../src/lib/persona-voice-reference'
 import {
   buildPromptFromInput, describeGateInput, toGateInput, toPromptPost, toRecentMarks,
@@ -572,10 +572,58 @@ console.log('⑤-b 🔴 Wave E — 말투 근거(reference) 계약')
   const codes = ['S01', 'S02', 'S03', 'S04', 'S05']
   const ref = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: codes })
   const assetOk = ref.assets.some((a) => a.exists && a.comments > 0)
-  check('🟢 실제 댓글 자산이 붙어 있다', assetOk)
+  /**
+   * 🔴 **자산은 `tmp/` 라 gitignored 다 — CI 에는 없다.**
+   *
+   *    그러니 "자산이 붙어 있다" 를 CI 에서 PASS 로 요구하면 거짓이 된다.
+   *    반대로 조용히 건너뛰면 **연결이 끊겨도 초록**이 된다 —
+   *    그 조용함이 `20260909-181515` 를 만든 바로 그 실패 방식이다.
+   *
+   *    그래서 **어느 쪽인지 화면에 말한다.**
+   *      · 자산이 있으면(로컬) 실물로 전부 검증한다
+   *      · 없으면(CI) **fail-closed 가 실제로 작동하는지**를 검증하고,
+   *        실물 검증이 돌지 않았음을 소리 내어 남긴다
+   *    분할·겹침·길이 분포 같은 **논리는 합성 코퍼스로 CI 가 전수 검증**한다.
+   */
+  console.log(assetOk
+    ? '   🟢 실제 댓글 자산 있음 — 실물로 검증한다'
+    : '   🟡 실제 댓글 자산 없음(gitignored · CI) — 실물 검증은 로컬에서만 돈다'
+      + ' · 여기서는 fail-closed 와 분할 논리를 본다')
+
+  /** 🔴 자산이 없으면 **숨기지 않고 blocker 를 낸다** — 가짜로 채우지 않는다 */
   if (!assetOk) {
-    check('🔴 자산이 없으면 숨기지 않고 blocker 를 낸다', ref.blocks.length > 0)
-  } else {
+    check('🔴 자산이 없으면 blocker 를 낸다', ref.blocks.length > 0)
+    check('🔴 자산이 없으면 묶음을 만들지 않는다', ref.byCode.size === 0)
+  }
+
+  /**
+   * 🔴 **분할 논리는 자산과 무관하게 검증한다** — CI 가 볼 수 있는 부분이다.
+   *    합성 코퍼스는 길이를 일부러 흩어 놓는다. 앞에서 자르는 버그가 되살아나면
+   *    묶음의 중앙값과 p90 이 같아져 여기서 걸린다.
+   */
+  {
+    const synth = Array.from({ length: 200 }, (_, i) =>
+      '가'.repeat(5 + (i % 60)) + `-${i}`)
+    const codes5 = ['P1', 'P2', 'P3', 'P4', 'P5']
+    const part = partitionByPersona({ texts: synth, personaCodes: codes5, perPersona: 12 })
+    check('🟢 합성 코퍼스로 Persona 5종 묶음이 선다', part.bundles.length === 5)
+    check('🔴 묶음이 서로 겹치지 않는다(논리)', bundlesAreDistinct(part.bundles).distinct)
+    for (const b of part.bundles) {
+      check(`🔴 ${b.personaCode} 이 길이 분포를 갖는다 (중앙 ${b.lengths.median} < p90 ${b.lengths.p90})`,
+        b.lengths.p90 > b.lengths.median)
+    }
+    /** 🔴 근거가 비면 만들지 않는다 */
+    const empty = partitionByPersona({ texts: [], personaCodes: codes5, perPersona: 12 })
+    check('🔴 근거가 비면 묶음을 만들지 않는다', empty.bundles.length === 0)
+    /** 🔴 본문 길이는 걸러진다 */
+    const withBody = judgeReferenceBundle({
+      personaCode: 'P9', texts: [...synth.slice(0, 10), '나'.repeat(600)],
+    })
+    check('🔴 본문 길이 항목이 섞이면 묶음을 거부한다',
+      !withBody.ok && withBody.blocks.some((b) => b.code === 'REFERENCE_LOOKS_LIKE_POST_BODY'))
+  }
+
+  if (assetOk) {
     check(`🟢 Persona ${codes.length}종 전부 근거를 얻는다`, ref.byCode.size === codes.length)
     const bundles = [...ref.byCode.values()]
 
