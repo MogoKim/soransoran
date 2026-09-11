@@ -9,7 +9,7 @@ import {
   toDetailRecord, toRawDetailRecord, statsOf, violatesAdapt, accessOf,
   DETAIL_KEYS, RAW_DETAIL_KEYS, FORBIDDEN_KEYS,
   SOURCE_AXIS, RAW_AXIS, SRN_AXIS,
-  DEFAULT_IMAGE_COUNT, DEFAULT_LENGTH_BASIS,
+  DEFAULT_IMAGE_COUNT, DEFAULT_LENGTH_BASIS, ADAPT_PREFIX,
   type ThinRow,
 } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
@@ -144,7 +144,13 @@ console.log('\n⑤ 🔴 하지 않는 것 — 스캔')
     !/readFileSync|writeFileSync|fetch\(|await |PrismaClient/.test(lib))
   check('🔴 thin 원본을 쓰지 않는다 — 읽기만 한다',
     !/writeFileSync\([^)]*thin-detail/.test(runner))
-  check('🔴 사본 파일명이 원본과 다르다', /82cook-adapt-/.test(runner))
+  // 🔴 **소스 문자열이 아니라 실제 값**을 본다 (2026-09-11).
+  //    접두를 lib 정본(`ADAPT_PREFIX`)으로 옮기면서 러너의 리터럴이 사라졌다.
+  //    원래 의도는 "사본 이름이 원본과 다른가" 였으므로 값으로 묻는 편이 더 강하다.
+  check('🔴 사본 파일명이 원본과 다르다',
+    ADAPT_PREFIX === '82cook-adapt-'
+    && !ADAPT_PREFIX.includes('thin-detail')
+    && /ADAPT_PREFIX/.test(runner))
   check('계획이 기본이고 --apply 가 있어야 쓴다',
     /const APPLY = argv\.includes\('--apply'\)/.test(runner))
   check('🔴 산출물은 데이터 디렉터리 안에만', /isInsideDataDir/.test(runner))
