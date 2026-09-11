@@ -112,6 +112,21 @@ export function removeInstalled(agentDir: string, label: string): boolean {
 }
 
 /**
+ * 🔴 **퇴역 plist 보관소의 이름 — 정본은 여기 하나다** (2026-09-11).
+ *
+ *    PR #501 배포가 마지막 게이트에서 멈춘 원인이 이 이름이었다.
+ *    배포기는 `launchagents-rollback` 에 옮겼고, 격리 검사는 `launchd-rollback` 을 봤다 —
+ *    파일은 정상적으로 옮겨졌는데 검사가 **다른 폴더를 보고** "보관본이 없다" 고 판정했다
+ *    (266 pass · 1 fail). 이름을 두 벌로 두면 언젠가 한쪽만 고쳐진다.
+ *
+ *    🔴 부르는 쪽은 이 상수를 쓴다. 문자열을 다시 적지 않는다.
+ */
+export const ROLLBACK_DIR_NAME = 'launchd-rollback'
+
+/** 정본 디렉터리(`CANON_DIR`) 아래의 보관소 절대경로 */
+export const rollbackDirOf = (canonDir: string): string => join(canonDir, ROLLBACK_DIR_NAME)
+
+/**
  * 🔴 **퇴역 plist 는 지우지 않고 옮긴다.** 되돌릴 수 있어야 한다.
  *    `launchctl unload` 만으로는 로그인·재부팅 때 다시 등록된다 —
  *    그 자리에서 **파일이 없어야** 퇴역이다.
@@ -121,6 +136,20 @@ export function retireInstalled(agentDir: string, rollbackDir: string, label: st
   if (!existsSync(from)) return true
   try {
     renameSync(from, join(rollbackDir, plistFileOf(label)))
+    return true
+  } catch { return false }
+}
+
+/**
+ * 🔴 **퇴역을 되돌린다** — 보관소의 사본을 제자리로 옮긴다.
+ *    배포가 실패하면 퇴역도 되돌려야 한다. 보관소에 남겨 두면
+ *    "배포는 안 됐는데 옛 job 만 사라진" 상태가 된다.
+ */
+export function unretireInstalled(agentDir: string, rollbackDir: string, label: string): boolean {
+  const from = join(rollbackDir, plistFileOf(label))
+  if (!existsSync(from)) return true
+  try {
+    renameSync(from, join(agentDir, plistFileOf(label)))
     return true
   } catch { return false }
 }

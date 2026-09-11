@@ -36,7 +36,7 @@ import {
 } from '../src/lib/runtime-isolation'
 import {
   leftoverPlaceholders, plistFileOf, programArguments, readInstalled, removeInstalled,
-  render, retireInstalled, templatePathOf, writeInstalled,
+  render, retireInstalled, rollbackDirOf, templatePathOf, unretireInstalled, writeInstalled,
 } from './lib/launchd-install.mjs'
 
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
@@ -49,8 +49,12 @@ const LOCK_FILE = join(CANON_DIR, 'runtime-deploy.lock')
 /** 🔴 정본은 `RUNTIME_JOBS` 하나다 — 여기에 label 을 다시 적지 않는다 */
 const JOBS = RUNTIME_JOBS
 const AGENT_DIR = join(homedir(), 'Library', 'LaunchAgents')
-/** 🔴 퇴역 plist 보관소 — 지우지 않고 옮긴다. 되돌릴 수 있어야 한다 */
-const ROLLBACK_DIR = join(CANON_DIR, 'launchagents-rollback')
+/**
+ * 🔴 퇴역 plist 보관소 — 지우지 않고 옮긴다. 되돌릴 수 있어야 한다.
+ *    🔴 이름은 `launchd-install` 정본에서 온다. 여기 문자열을 적지 않는다 —
+ *    적었다가 격리 검사와 어긋나 PR #501 배포가 마지막 게이트에서 멈췄다.
+ */
+const ROLLBACK_DIR = rollbackDirOf(CANON_DIR)
 const UID = process.getuid?.() ?? 0
 /**
  * 🔴 **치환값.** 설치 절차(README)와 **같은 값**이어야 한다 —
@@ -271,6 +275,11 @@ const fx: DeployEffects = {
   },
 
   unload: (l) => act('launchctl', ['unload', plistOf(l)], homedir()),
+  /**
+   * 🔴 **label 기반 정지.** plist 파일이 없어도 내려간다 —
+   *    rollback 이 파일을 건드리기 전에 이것으로 먼저 전부 내린다.
+   */
+  bootout: (l) => act('launchctl', ['bootout', `gui/${UID}/${l}`], homedir()),
   probeJob: (l) => stateOf(l),
   load: (l) => act('launchctl', ['load', plistOf(l)], homedir()),
 
@@ -295,6 +304,7 @@ const fx: DeployEffects = {
     try { mkdirSync(ROLLBACK_DIR, { recursive: true }) } catch { return false }
     return retireInstalled(AGENT_DIR, ROLLBACK_DIR, l)
   },
+  unretirePlist: (l) => unretireInstalled(AGENT_DIR, ROLLBACK_DIR, l),
   lintPlist: (l) => act('plutil', ['-lint', join(AGENT_DIR, plistFileOf(l))], homedir()),
   /**
    * 🔴 실제 loaded 설정을 **정본 파서**로 뽑는다.
@@ -307,6 +317,7 @@ const fx: DeployEffects = {
   isolationGate: () => act('npx', ['tsx', 'scripts/runtime-isolation-check.mts', '--require-runtime']),
 
   readManifest: () => (existsSync(MANIFEST_FILE) ? readFileSync(MANIFEST_FILE, 'utf-8') : null),
+  readPin: () => { try { return readFileSync(PIN_FILE, 'utf-8').trim() } catch { return null } },
   writeManifest: (json) => {
     try {
       // 🔴 원자적으로 쓴다 — 반쯤 쓰인 manifest 를 다음 검사가 읽지 않게
