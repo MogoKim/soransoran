@@ -28,7 +28,14 @@ import {
 } from '../src/lib/scale-supply-plan'
 import {
   renderSlots, cronLines, parseCronLines, compareWorkflow, dailyCeiling, verifySlotRenderable,
+  allStageCronLines, judgeSlotRun, slotOfCron, scheduledRunsPerDay, actualDailyPublishable,
 } from '../src/lib/scale-workflow-render'
+// 🔴 댓글 슬롯의 정본 — 여기서 시각을 다시 적지 않는다
+import {
+  planRunnerSchedule, FIRST_COMMENT_MAX_MINUTES,
+  RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
+} from './lib/persona-comment-runner-template'
+import { BOOTSTRAP_DAILY_MAX } from '../src/lib/persona-comment-bootstrap-budget'
 import { judgeReadiness, safeStageFor, simulateStage, simulateAllStages, stageVerdicts } from '../src/lib/scale-readiness'
 import {
   COHORTS, EXCLUDED_CODES, cohortOf, verifyManifest, verifyAllCohorts, stageOf,
@@ -88,9 +95,10 @@ console.log('① 회귀 0 (env 없음 → d1 · 옛 하드코딩과 동일)')
   check('🔴 STOCK_MIN = 5', STOCK_MIN === 5 && d.stockMin === 5)
   check('🔴 STOCK_WARN = 3', STOCK_WARN === 3 && d.stockWarn === 3)
   check('지평은 14일', HORIZON_DAYS === 14)
-  // 🔴 지금 도는 발행 시각은 00:05 KST 다 — 시(hour) 정수 배열로는 적을 수 없었다
-  check('🔴 d1 슬롯이 정확히 00:05 KST 1건', d1.slots.length === 1
-    && d1.slots[0]!.hour === 0 && d1.slots[0]!.minute === 5 && d1.slots[0]!.count === 1)
+  // 🔴 지금 도는 발행 시각은 09:30 KST 다 — 분 단위라야 적을 수 있다.
+  //    (2026-09-12 이전에는 00:05 였다. 댓글 창 밖이라 첫 댓글이 8시간 넘게 걸렸다)
+  check('🔴 d1 슬롯이 정확히 09:30 KST 1건', d1.slots.length === 1
+    && d1.slots[0]!.hour === 9 && d1.slots[0]!.minute === 30 && d1.slots[0]!.count === 1)
   check('🔴 가장 안전한 단계는 d1', SAFEST_STAGE === 'd1')
 }
 
@@ -286,12 +294,10 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   check('D 🟢 정상 d5 → 러너가 d5 를 쓴다', d5.releaseProfile.dailyTarget === 5
     && effectiveWeeklyCap(d5.releaseProfile.postsPerWeek, d5.releaseProfile.minDaysBetween) === 4)
   check('D 🟢 그때 워크플로우가 내야 할 cron 은 5줄이다', cronLines(d5.releaseProfile).length === 5)
-  check('D 🔴 지금 yml(1줄)과 d5 는 어긋난다 — 그것을 잡는다',
-    compareWorkflow(d5.releaseProfile, wf).filter((m) => m.kind === 'missing').length === 4)
-  check('D 🟢 d5 로 렌더한 yml 은 어긋나지 않는다', (() => {
-    const rendered = wf.replace(/- cron: '5 15 \* \* \*'/, cronLines(d5.releaseProfile).map((c) => `- cron: '${c}'`).join('\n    '))
-    return compareWorkflow(d5.releaseProfile, rendered).length === 0
-  })())
+  // 🔴 이제 yml 은 **모든 단계의 합집합**을 예약한다 — d5 슬롯이 전부 들어 있어야 한다
+  check('D 🟢 yml 에 d5 슬롯이 하나도 빠지지 않았다',
+    compareWorkflow(d5.releaseProfile, wf).filter((m) => m.kind === 'missing').length === 0)
+  check('D 🟢 d5 는 실제로 하루 5번 불린다', scheduledRunsPerDay('d5', wf) === 5)
 
   // ── E. 위험한 persona 도 pause 는 되고 activate 는 안 된다 ──
   const m3 = COHORTS['wave3-scale']
@@ -530,17 +536,160 @@ console.log('\n④ 슬롯 → 워크플로우')
 
   const yml = read('.github/workflows/auto-publish.yml')
   const have = parseCronLines(yml)
-  check('🔴 워크플로우 cron 을 정확히 1개 읽는다 (주석은 세지 않는다)', have.length === 1)
-  check('🔴 지금 yml 은 5 15 * * * = 00:05 KST', have[0] === '5 15 * * *')
-  // 🔴 **지금 운영 프로필(d1)과 yml 이 같은 말을 하는가** — 이것이 어긋나면 규모를 올려도 안 나간다
-  check('🔴 d1 프로필과 yml 이 일치한다', compareWorkflow(PROFILES.d1, yml).length === 0)
-  // 🔴 어긋남을 실제로 잡는가
-  const d3Mismatch = compareWorkflow(PROFILES.d3, yml)
-  check('🔴 d3 로 올렸는데 yml 이 그대로면 잡는다', d3Mismatch.some((m) => m.kind === 'missing'))
-  check('🔴 부족한 회차를 이름으로 말한다', d3Mismatch.some((m) => m.detail.includes('40 10') || m.detail.includes('20 4')))
+  // 🔴 **yml 은 모든 단계 슬롯의 합집합을 예약한다** (2026-09-12).
+  //    옛 판은 cron 이 하나(00:05 KST)뿐이었다. 그래서 단계를 d10 으로 올려도 하루 한 번만
+  //    러너가 불렸고, 러너는 호출당 1건이므로 실제로는 1건/day 였다.
+  //    cron 은 파일 고정이라 변수로 못 바꾼다 — 합집합을 예약하고 러너가 자기 회차를 고른다.
+  // 🔴 **계약은 "빠짐없이 담는다" 다.** 슬롯을 바꾸면 yml 을 함께 갱신하면 된다 —
+  //    포함 관계나 개수를 여기서 고정하지 않는다.
+  check('🔴 yml 이 allStageCronLines() 를 빠짐없이 담는다 (주석은 세지 않는다)',
+    allStageCronLines().every((c) => have.includes(c)))
+  check('🔴 계획에 없는 회차를 예약하지 않는다', have.every((c) => allStageCronLines().includes(c)))
+
+  // 🔴 **각 단계가 실제로 하루 몇 건 낼 수 있는가** — yml 을 근거로 센다.
+  //    이것이 이 파일에서 가장 중요한 줄이다. 프로필만 고치고 yml 을 두면 여기서 걸린다.
+  for (const stage of RELEASE_STAGES) {
+    check(`🔴 ${stage} 는 실제로 하루 ${PROFILES[stage].dailyTarget}건 가능하다`,
+      actualDailyPublishable(stage, yml) === PROFILES[stage].dailyTarget)
+    check(`🔴 ${stage} 는 자기 슬롯 ${PROFILES[stage].slots.length}개에서만 돈다`,
+      scheduledRunsPerDay(stage, yml) === PROFILES[stage].slots.length)
+    check(`🔴 ${stage} 프로필과 yml 이 어긋나지 않는다`,
+      compareWorkflow(PROFILES[stage], yml).filter((m) => m.kind === 'missing').length === 0)
+  }
+
+  // 🔴 지금 단계에 없는 회차는 돌지 않는다
+  check('🔴 d1 운영 중 13:30 회차는 쉰다',
+    !judgeSlotRun({ stage: 'd1', cron: slotCronUtc({ hour: 13, minute: 30 }) }).run)
+  check('🟢 d3 운영 중 13:30 회차는 돈다',
+    judgeSlotRun({ stage: 'd3', cron: slotCronUtc({ hour: 13, minute: 30 }) }).run)
+  check('🔴 d1 은 10번 불려도 자기 슬롯은 1개뿐이다', scheduledRunsPerDay('d1', yml) === 1)
+
+  // 🔴 **지연에 흔들리지 않는다** — 판정 입력은 시계가 아니라 예약 cron 이다
+  check('🔴 판정은 wall clock 을 쓰지 않는다 — 같은 예약은 언제 불려도 같은 회차다', (() => {
+    const cron = slotCronUtc({ hour: 9, minute: 30 })
+    const a = judgeSlotRun({ stage: 'd3', cron })
+    const b = judgeSlotRun({ stage: 'd3', cron })
+    return a.run && b.run && a.kst === '09:30' && b.kst === '09:30'
+  })())
+  check('🔴 예약 cron 을 못 받으면 내보내지 않는다', !judgeSlotRun({ stage: 'd10', cron: null }).run)
+  check('🔴 슬롯으로 읽을 수 없는 cron 이면 내보내지 않는다',
+    !judgeSlotRun({ stage: 'd10', cron: '*/5 * * * *' }).run)
+  check('🔴 cron → KST 변환이 slotCronUtc 의 역이다',
+    RELEASE_STAGES.every((st) => PROFILES[st].slots.every((s) => {
+      const back = slotOfCron(slotCronUtc(s))
+      return back !== null && back.hour === s.hour && back.minute === s.minute
+    })))
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 **모든 공개 슬롯이 댓글 운영 창 안에 있고, 첫 댓글이 60분 안에 붙는가**
+  //
+  //    §9.5-g 확정 계약: 댓글 창 08:00~22:00 · 첫 댓글 60분 이내 ·
+  //    관리형 글도 같은 창 안에 발행. 창 밖 발행은 계약 위반이다.
+  //    옛 판은 네 단계 전부 00:05 를 포함해 첫 댓글까지 8시간 넘게 걸렸다.
+  //
+  //    🔴 **시각을 여기 복제하지 않는다.** PROFILES 와 planRunnerSchedule 이 각각 정본이고
+  //       이 블록은 둘을 대조만 한다.
+  // ─────────────────────────────────────────────────────────
+  {
+    const runner = planRunnerSchedule(BOOTSTRAP_DAILY_MAX)
+    const commentMins = runner.slots.map(minuteOfDay).sort((a, b) => a - b)
+    const WIN_START = RUNNER_WINDOW_START_HOUR * 60
+    const WIN_END = RUNNER_WINDOW_END_HOUR * 60
+
+    check('🔴 댓글 runner 슬롯이 실제로 있다 (대조 대상이 비면 시험이 성립하지 않는다)',
+      commentMins.length > 0)
+
+    for (const stage of RELEASE_STAGES) {
+      const slots = PROFILES[stage].slots.map(minuteOfDay)
+      check(`🔴 ${stage} 슬롯이 전부 댓글 창 ${RUNNER_WINDOW_START_HOUR}:00~${RUNNER_WINDOW_END_HOUR}:00 안이다`,
+        slots.every((m) => m >= WIN_START && m <= WIN_END))
+      check(`🔴 ${stage} 모든 글의 첫 댓글이 ${FIRST_COMMENT_MAX_MINUTES}분 안에 붙는다`,
+        slots.every((m) => {
+          const next = commentMins.find((c) => c >= m)
+          return next !== undefined && next - m <= FIRST_COMMENT_MAX_MINUTES
+        }))
+      check(`🔴 ${stage} 에 다음 날로 넘어가는 글이 0건이다`,
+        slots.every((m) => commentMins.some((c) => c >= m)))
+    }
+
+    /**
+     * 🔴 **슬롯 사이의 포함 관계는 계약이 아니다** (2026-09-12 정정).
+     *
+     *    앞선 판은 "d1·d3·d5 는 d10 의 부분집합이어야 한다" · "합집합은 d10 과 같아야 한다" ·
+     *    "연쇄는 거짓이어야 한다" 를 **검사로 굳혔다.** 그것은 지금 스케줄의 **관측값**이지
+     *    제품 계약이 아니다. 그대로 두면 앞으로 유효한 시간 조정 — 창 안이고 댓글 간격을
+     *    지키고 슬롯 수가 맞는 변경 — 이 포함 관계 때문에 막힌다.
+     *
+     *    🔴 지켜야 할 것은 아래 넷이다: 슬롯 수 = dailyTarget · 창 08~22 ·
+     *       다음 댓글 회차까지 60분 · yml 이 `allStageCronLines()` 를 빠짐없이 담는다.
+     *       유효한 슬롯 변경은 yml 을 함께 갱신하면 통과해야 한다.
+     */
+    check(`🟢 [현재값] 합집합 슬롯 ${allStageCronLines().length}개 — 계약이 아니라 지금 값이다`,
+      allStageCronLines().length === new Set(
+        RELEASE_STAGES.flatMap((st) => PROFILES[st].slots.map(minuteOfDay)),
+      ).size)
+
+    /**
+     * 🔴 **유효한 슬롯 변경은 통과해야 한다.**
+     *
+     *    계약(슬롯 수 = dailyTarget · 창 08~22 · 다음 댓글 회차 60분)만 만족하면
+     *    포함 관계가 깨져도 막지 않는다. 앞선 판은 "d5 에 09:30 을 넣는 것" 자체를
+     *    결함으로 봤는데, 그것은 창 안이고 댓글 간격도 지키는 **유효한 배치**다.
+     */
+    const satisfiesContract = (slots: readonly { hour: number; minute: number }[], target: number): boolean => {
+      if (slots.length !== target) return false
+      const mins = slots.map(minuteOfDay)
+      if (!mins.every((m) => m >= WIN_START && m <= WIN_END)) return false
+      return mins.every((m) => {
+        const next = commentMins.find((c) => c >= m)
+        return next !== undefined && next - m <= FIRST_COMMENT_MAX_MINUTES
+      })
+    }
+    check('🟢 지금 승인된 슬롯은 계약을 만족한다',
+      RELEASE_STAGES.every((st) => satisfiesContract(PROFILES[st].slots, PROFILES[st].dailyTarget)))
+    check('🟢 포함 관계를 깨는 유효한 배치도 허용된다 (d5 에 09:30 을 넣은 가상 배치)',
+      satisfiesContract([
+        { hour: 8, minute: 10 }, { hour: 9, minute: 30 }, { hour: 12, minute: 10 },
+        { hour: 16, minute: 10 }, { hour: 19, minute: 0 },
+      ], 5))
+    check('🔴 창 밖 배치는 여전히 막는다',
+      !satisfiesContract([{ hour: 23, minute: 0 }], 1))
+    check('🔴 슬롯 수가 dailyTarget 과 다르면 막는다',
+      !satisfiesContract([{ hour: 9, minute: 30 }], 3))
+  }
+
   check('cron 목록에 중복이 없다', new Set(cronLines(PROFILES.d10)).size === cronLines(PROFILES.d10).length)
+  check('합집합 cron 에 중복이 없다',
+    new Set(allStageCronLines()).size === allStageCronLines().length)
   // 🔴 슬롯이 두 번 돌아도 하루 상한을 넘지 않는다 — 상한은 러너가 지킨다
   check('🔴 중복 실행에도 하루 상한이 지켜진다', dailyCeiling(PROFILES.d10, 2) === 10 && dailyCeiling(PROFILES.d1, 5) === 1)
+  // 🔴 워크플로우가 예약을 러너에 그대로 넘긴다 — 이것이 없으면 슬롯 판정이 불가능하다
+  check('🔴 yml 이 github.event.schedule 을 러너에 넘긴다',
+    /SLOT_CRON:\s*\$\{\{\s*github\.event\.schedule\s*\}\}/.test(yml)
+    && /--slot-cron=/.test(yml))
+  // 🔴 수동 실행은 여전히 dry-run 이다
+  // 🔴 발행 명령이 붙은 줄이 **어느 조건 아래**에 있는가 — 줄 단위로 본다
+  const runLines = yml.split('\n')
+  const condOfPublishLines = runLines
+    .map((l, i) => ({ l, i }))
+    .filter(({ l }) => l.includes('original-post-auto-publish.mts'))
+    .map(({ i }) => {
+      // 위로 올라가며 가장 가까운 `if:` 를 찾는다
+      for (let k = i; k >= 0; k -= 1) {
+        const m = /if:\s*github\.event_name == '(\w+)'/.exec(runLines[k] ?? '')
+        if (m?.[1] !== undefined) return { cond: m[1], line: runLines[i] ?? '' }
+      }
+      return { cond: '(없음)', line: runLines[i] ?? '' }
+    })
+  check('🔴 러너를 부르는 곳은 두 군데다 — 수동·스케줄', condOfPublishLines.length === 2)
+  check('🔴 수동 실행(workflow_dispatch)은 --apply 를 붙이지 않는다',
+    condOfPublishLines.filter((x) => x.cond === 'workflow_dispatch')
+      .every((x) => !x.line.includes('--apply')))
+  check('🔴 실제 발행은 schedule 경로에서만 --apply --limit=1 한다', (() => {
+    const sched = condOfPublishLines.filter((x) => x.cond === 'schedule')
+    return sched.length === 1 && sched[0]!.line.includes('--apply')
+      && sched[0]!.line.includes('--limit=1') && sched[0]!.line.includes('--slot-cron=')
+  })())
 }
 
 // ── ⑤ 공급 모델 (🔴 근거·실제 plist 대조) ──

@@ -36,6 +36,7 @@ import { planBatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
+import { judgeSlotRun } from '../src/lib/scale-workflow-render'
 import { stageVerdicts } from '../src/lib/scale-readiness'
 import { effectiveWeeklyCap } from '../src/lib/scale-profile'
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -46,6 +47,13 @@ const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
 const limitRaw = argv.find((a) => a.startsWith('--limit='))?.slice(8)
 const LIMIT = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10)
+/**
+ * 🔴 **이 run 을 띄운 예약 그 자체.** 워크플로우가 `github.event.schedule` 을 그대로 넘긴다.
+ *    시계로 "지금 몇 시니까 어느 슬롯" 을 추측하지 않는다 — GitHub Actions 는 수십 분 늦게
+ *    시작하고, 그러면 00:05 회차가 다른 슬롯으로 둔갑하거나 아무 슬롯도 아니게 된다.
+ *    수동 실행에는 이 값이 없고, 없으면 발행하지 않는다(dry-run 이므로 어차피 막힌다).
+ */
+const SLOT_CRON = argv.find((a) => a.startsWith('--slot-cron='))?.slice(12) ?? null
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const kst = (d: Date): string =>
   `${new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} KST`
@@ -316,7 +324,11 @@ const killed = sw?.enabled === true
 console.log(`\n④ 오늘(${kst(new Date())}) 발행 ${publishedToday} / ${RELEASE_DAILY_CAP}건 · 전체 중지 ${killed ? '🔴 켜짐' : '꺼짐'}`)
 
 // ── ⑤ 실행 판정 ──
-const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: RELEASE_DAILY_CAP, killSwitchEnabled: killed })
+// 🔴 어느 회차인가 — 예약 cron 이 정본이다 (wall clock 아님)
+const slot = judgeSlotRun({ stage: scale.releaseStage, cron: SLOT_CRON })
+console.log(`   회차 ${slot.kst ?? '(모름)'} — ${slot.reason}`)
+
+const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: RELEASE_DAILY_CAP, killSwitchEnabled: killed, slot })
 if (!gate.ok) {
   console.log(`\n⑤ 발행하지 않는다 — ${gate.reason}`)
   if (!APPLY) console.log('   🟡 dry-run 입니다. DB write 0 · Post 0 · 실행하려면 --apply 와 --limit=1 을 둘 다 붙이세요.')

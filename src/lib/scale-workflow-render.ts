@@ -9,10 +9,13 @@
  * 🔴 그래서 **프로필이 정본**이고, 워크플로우는 여기서 렌더한 결과와 같아야 한다.
  *    fixture 가 실제 yml 을 읽어 대조한다 — 어긋나면 CI 가 먼저 막는다.
  *
- * 🔴 시각 표현은 **분 단위**다. 시(hour) 정수 배열로는 지금 도는 `00:05 KST` 를 적을 수 없었다.
+ * 🔴 시각 표현은 **분 단위**다. 시(hour) 정수 배열로는 `09:30`·`08:10` 같은 슬롯을 적을 수 없다.
  */
 
-import { minuteOfDay, slotCronUtc, slotLabel, type ScaleProfile, type Slot } from './scale-profile'
+import {
+  minuteOfDay, slotCronUtc, slotLabel, PROFILES, RELEASE_STAGES,
+  type ReleaseStage, type ScaleProfile, type Slot,
+} from './scale-profile'
 
 /** GitHub Actions cron 은 UTC 다. KST = UTC+9 */
 export const KST_OFFSET_HOURS = 9
@@ -98,4 +101,103 @@ export function verifySlotRenderable(s: Slot): string[] {
   if (!Number.isInteger(s.minute) || s.minute < 0 || s.minute > 59) out.push(`minute ${s.minute} 가 0~59 밖이다`)
   if (!Number.isInteger(s.count) || s.count < 1) out.push(`count ${s.count} 가 1 이상 정수가 아니다`)
   return out
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **워크플로우는 모든 단계의 슬롯을 예약하고, 러너가 자기 단계만 고른다** (2026-09-12)
+//
+//    옛 판은 yml 에 cron 이 **하나**(00:05 KST)뿐이었다. 그래서 `SORAN_RELEASE_STAGE` 를
+//    d3·d5·d10 으로 올려도 워크플로우는 하루 한 번만 러너를 불렀고, 러너는 호출당 1건이므로
+//    **실제로는 언제나 1건/day** 였다. 설정은 d10 인데 나가는 건 1건 —
+//    그 어긋남이 로그 어디에도 실패로 남지 않았다.
+//
+//    🔴 왜 "단계별 yml" 이 아니라 "합집합 + 러너 판정" 인가.
+//       GitHub Actions 의 cron 은 파일에 고정이고 변수로 바꿀 수 없다. 단계를 바꿀 때마다
+//       yml 을 고쳐 배포해야 한다면 "설정만으로 확대" 가 성립하지 않는다.
+//       합집합을 예약해 두고 **러너가 자기 단계의 슬롯인지 판정**하면, 단계 변경은 변수 하나다.
+//
+//    🔴 하루 상한은 이것이 지키지 않는다. 슬롯 판정은 "이 회차가 내 단계 것인가" 만 답한다.
+//       총량은 여전히 러너의 DB 카운트(dailyCap)가 지킨다 — 이중이라서 재실행·중복에도 안전하다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 모든 단계 슬롯의 합집합 — yml 이 예약해야 할 전부 */
+export function allStageSlots(): Slot[] {
+  const byMinute = new Map<number, Slot>()
+  for (const stage of RELEASE_STAGES) {
+    for (const s of PROFILES[stage].slots) {
+      const m = minuteOfDay(s)
+      // 🔴 같은 시각은 한 번만 예약한다 — count 는 그 시각의 최대치를 쓴다
+      const had = byMinute.get(m)
+      if (had === undefined || s.count > had.count) byMinute.set(m, { ...s })
+    }
+  }
+  return [...byMinute.values()].sort((a, b) => minuteOfDay(a) - minuteOfDay(b))
+}
+
+/** yml 에 들어갈 cron 전체 (KST 시각순) */
+export function allStageCronLines(): string[] {
+  return allStageSlots().map(slotCronUtc)
+}
+
+/**
+ * 🔴 UTC cron → KST 슬롯. `slotCronUtc` 의 역함수다.
+ *    `m h * * *` 만 받는다 — 목록(`1,2`) · 범위(`0-5`) · 스텝 표기는 슬롯이 아니다.
+ */
+export function slotOfCron(cron: string): { hour: number; minute: number } | null {
+  const parts = cron.trim().split(/\s+/)
+  if (parts.length !== 5) return null
+  const [m, h, dom, mon, dow] = parts as [string, string, string, string, string]
+  if (dom !== '*' || mon !== '*' || dow !== '*') return null
+  if (!/^\d{1,2}$/.test(m) || !/^\d{1,2}$/.test(h)) return null
+  const minute = Number.parseInt(m, 10)
+  const utcHour = Number.parseInt(h, 10)
+  if (minute > 59 || utcHour > 23) return null
+  return { hour: (utcHour + KST_OFFSET_HOURS) % 24, minute }
+}
+
+export type SlotVerdict = {
+  /** 이 회차가 지금 단계의 슬롯인가 */
+  run: boolean
+  /** KST 표기 — 판정 못 하면 null */
+  kst: string | null
+  reason: string
+}
+
+/**
+ * 🔴 **이 회차를 돌려야 하는가** — 판정 근거는 GitHub 이 준 예약 cron 하나다.
+ *
+ *    🔴 **wall clock 을 보지 않는다.** GitHub Actions 는 수십 분 늦게 시작한다.
+ *       시계로 "지금 09:20 쯤이니 d3 슬롯" 이라고 추측하면, 40분 늦은 00:05 회차가
+ *       다른 슬롯으로 둔갑하거나 아무 슬롯도 아니게 된다.
+ *       `github.event.schedule` 은 **어느 예약이 이 run 을 띄웠는지**를 그대로 말해 준다.
+ *
+ *    🔴 cron 을 모르면(수동 실행 · 값 누락) `run: false` 다. 모를 때 내보내지 않는다.
+ */
+export function judgeSlotRun(input: { stage: ReleaseStage; cron: string | null }): SlotVerdict {
+  const raw = (input.cron ?? '').trim()
+  if (raw === '') {
+    return { run: false, kst: null, reason: '예약 cron 을 받지 못했다 — 어느 회차인지 모르면 내보내지 않는다' }
+  }
+  const slot = slotOfCron(raw)
+  if (slot === null) {
+    return { run: false, kst: null, reason: `예약 cron "${raw}" 를 슬롯으로 읽을 수 없다` }
+  }
+  const kst = slotLabel(slot)
+  const mine = PROFILES[input.stage].slots.some((s) => minuteOfDay(s) === minuteOfDay(slot))
+  return mine
+    ? { run: true, kst, reason: `${kst} KST 는 ${input.stage} 의 슬롯이다` }
+    : { run: false, kst, reason: `${kst} KST 는 ${input.stage} 의 슬롯이 아니다 — 이 회차는 쉰다` }
+}
+
+/** 🔴 그 단계가 yml 로부터 실제로 하루 몇 번 불리는가 */
+export function scheduledRunsPerDay(stage: ReleaseStage, yml: string): number {
+  return parseCronLines(yml).filter((c) => judgeSlotRun({ stage, cron: c }).run).length
+}
+
+/**
+ * 🔴 그 단계가 **실제로** 하루 몇 건 낼 수 있는가 — yml 을 근거로.
+ *    호출 1회당 1건이므로 `min(예약 회차 수, 하루 상한)` 이다.
+ */
+export function actualDailyPublishable(stage: ReleaseStage, yml: string): number {
+  return Math.min(scheduledRunsPerDay(stage, yml), PROFILES[stage].dailyTarget)
 }

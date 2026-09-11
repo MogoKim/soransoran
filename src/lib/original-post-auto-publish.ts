@@ -170,11 +170,26 @@ export function judgeApply(input: {
   publishedToday: number
   dailyCap: number
   killSwitchEnabled: boolean
+  /**
+   * 🔴 **이 회차가 지금 단계의 슬롯인가** (2026-09-12).
+   *
+   *    워크플로우는 모든 단계(d1·d3·d5·d10)의 슬롯을 전부 예약한다 — cron 은 파일에 고정이라
+   *    변수로 바꿀 수 없기 때문이다. 그래서 d1 로 운영해도 하루 15번 불린다.
+   *    어느 회차가 내 것인지는 `judgeSlotRun` 이 `github.event.schedule` 로 판정하고,
+   *    그 결과가 여기로 들어온다. **판정은 이 게이트 하나에서만 쓴다** —
+   *    쓰기 직전의 문이 두 개가 되면 어느 쪽이 막았는지 말할 수 없다.
+   *
+   *    🔴 이것이 하루 상한을 대신하지 않는다. 총량은 아래 `dailyCap` 이 DB 카운트로 지킨다.
+   *       슬롯 판정은 "언제" 를, 상한은 "몇 건" 을 답한다.
+   */
+  slot: { run: boolean; reason: string }
 }): ApplyGate {
   if (!input.apply) return { ok: false, reason: 'dry-run — --apply 가 없다' }
   if (input.limit !== 1) {
     return { ok: false, reason: `--limit 은 1 이어야 한다 (받은 값 ${input.limit ?? '없음'})` }
   }
+  // 🔴 내 단계의 회차가 아니면 여기서 끝난다 — DB write 0
+  if (!input.slot.run) return { ok: false, reason: input.slot.reason }
   if (input.killSwitchEnabled) return { ok: false, reason: '전체 중지(kill switch)가 켜져 있다' }
   if (input.targets.length === 0) return { ok: false, reason: '후보가 0건이다' }
   if (input.publishedToday >= input.dailyCap) {

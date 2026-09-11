@@ -12,7 +12,7 @@
  * source 별로 훑어 변환 → 판정 → 초안 → 적재까지 흘려보낼 뿐이다.
  *
  * 🔴 **이 러너는 발행하지 않는다.** Post · persona 배정 · ActivityLog 를 만들지 않는다.
- *    발행은 auto-publish 가 매일 00:05 KST 에 한다.
+ *    발행은 auto-publish 가 그 단계의 예약 슬롯에 한다 (`PROFILES` 가 정본).
  *
  * 🔴 **새 판정도 새 생성도 여기 없다.** 기존 스크립트를 순서대로 부를 뿐이다 —
  *    저장 계약 · 안전성 게이트 · dedup 은 그 안에 이미 있다.
@@ -393,7 +393,7 @@ async function main(): Promise<number> {
     for (const p of v.problems) console.log(`   ${p}`)
     ok = ok && v.ok
   }
-  console.log('\n   🔴 발행하지 않았다. 발행은 auto-publish 가 00:05 KST 에 한다.\n')
+  console.log('\n   🔴 발행하지 않았다. 발행은 auto-publish 가 예약 슬롯에 한다.\n')
 
   console.log(`   회차 ${record.status}${record.status === 'done' ? ' ✅' : ''}`)
   return ok ? 0 : 1

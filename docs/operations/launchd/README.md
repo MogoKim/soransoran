@@ -217,7 +217,7 @@ supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 �
 
 | 템플릿 | 무엇을 | 환경 |
 |---|---|---|
-| `com.soransoran.raw-collect-82cook.plist.template` | 82cook Raw Vault 수집 (2시간 간격 10슬롯) | 로컬 또는 GHA 대체 가능 |
+| `com.soransoran.raw-collect-82cook.plist.template` | 82cook Raw Vault 수집 (**5회/day** 07:00·10:00·13:00·16:00·19:00 KST) | 로컬 또는 GHA 대체 가능 |
 | `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (4슬롯) | 로컬 또는 GHA 대체 가능 |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
 | `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |

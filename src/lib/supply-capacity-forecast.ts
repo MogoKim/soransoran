@@ -20,15 +20,13 @@ import {
 } from './original-post-persona-match'
 // 🔴 KST 자정은 **정본 하나**를 쓴다. 여기서 다시 구현하면 언젠가 한쪽만 고쳐진다
 import { kstDayStart } from './original-post-publish'
+// 🔴 다음 슬롯 계산은 **정본 하나**다 — 여기서 시각을 다시 계산하지 않는다
+import { nextSlotAnchor, type ScaleProfile } from './scale-profile'
 import { pickPublishTarget } from './original-post-auto-publish'
 import type { Finding } from './supply-health'
 // 🔴 계획은 **공용 순수 함수 하나**가 만든다. 여기서 planBatch 를 직접 부르면
 //    러너가 쓰는 우선권이 빠져 같은 입력에 다른 글을 고른다(2026-09-08 재현)
 import { prepareCandidates, type QueueCandidate } from './supply-candidates'
-
-/** 🔴 00:05 KST — auto-publish workflow 의 예약 시각 */
-export const PUBLISH_HOUR_KST = 0
-export const PUBLISH_MINUTE_KST = 5
 
 const DAY_MS = 86_400_000
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000
@@ -44,23 +42,26 @@ export function kstStamp(d: Date): string {
 }
 
 /**
- * 다음 발행 예약 시각 — 🔴 **오늘 이미 상한을 채웠으면 내일이다.**
+ * 다음 발행 예약 시각 — 🔴 **`nextSlotAnchor` 에 위임한다. 여기서 계산하지 않는다.**
  *
- * 2026-09-07 에 이미 1/1 을 채웠는데 그날 발행을 한 번 더 세면
- * 예측이 하루씩 앞당겨져 공백이 가려진다.
+ * 🔴 **왜 위임인가** (2026-09-12). 옛 판은 `PUBLISH_HOUR_KST=0 · PUBLISH_MINUTE_KST=5` 로
+ *    "다음 발행은 00:05" 를 **여기서 다시 계산**했다. 발행 슬롯을 댓글 운영 창 안으로
+ *    옮긴 뒤에도 이 함수는 00:05 를 가리켰다 — 관제와 예측이 러너와 **다른 시각**을
+ *    말하게 된 것이다. d3 에서 09:30 에 내고 나면 다음은 13:30 인데 "내일 00:05" 라고 했다.
+ *
+ *    시각의 정본은 `PROFILES[stage].slots` 하나이고, 그것을 읽는 함수도 하나여야 한다.
+ *
+ * 🔴 **오늘 이미 상한을 채웠으면 내일이다.** (`nextSlotAnchor` 가 그 판정을 한다)
+ *    2026-09-07 에 이미 1/1 을 채웠는데 그날 발행을 한 번 더 세면
+ *    예측이 하루씩 앞당겨져 공백이 가려진다.
  */
 export function nextScheduleAt(input: {
   now: Date
   publishedToday: number
-  /** 🔴 필수다 — 상한을 여기서 정하지 않는다. 러너의 DAILY_PUBLISH_CAP 을 주입받는다 */
-  dailyCap: number
+  /** 🔴 지금 **실제로 적용된** release profile — 상한도 슬롯도 여기서 나온다 */
+  profile: ScaleProfile
 }): Date {
-  const cap = input.dailyCap
-  const day = kstDayStart(input.now)
-  const todayAt = new Date(day.getTime() + (PUBLISH_HOUR_KST * 60 + PUBLISH_MINUTE_KST) * 60_000)
-  // 오늘 예약이 아직 안 왔고 상한도 안 찼으면 오늘이다
-  if (input.now.getTime() < todayAt.getTime() && input.publishedToday < cap) return todayAt
-  return new Date(todayAt.getTime() + DAY_MS)
+  return nextSlotAnchor(input.profile, { now: input.now, publishedToday: input.publishedToday })
 }
 
 /** persona 한 명의 발행 이력 — 🔴 `matchedAt` 이 정본이다 */

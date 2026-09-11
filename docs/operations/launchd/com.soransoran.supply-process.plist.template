@@ -15,7 +15,7 @@
 
   🔴 이 job 은 발행하지 않는다
      Post · persona 배정 · ActivityLog 를 만들지 않는다.
-     발행은 auto-publish(GHA, 매일 00:05 KST)가 한다.
+     발행은 auto-publish(GHA)가 그 단계의 예약 슬롯에 한다 — `scale-profile.ts` `PROFILES` 가 정본이다.
 
   🔴 하루 6회다 — 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST (2026-09-11 확정)
      수집이 하루 14회 들어오므로 처리가 하루 1회면 입력이 반나절씩 묵는다.

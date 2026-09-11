@@ -296,19 +296,19 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 
 | 기능 | 구현 | runtime | 운영 검증 |
 |---|---|---|---|
-| 3개 source 수집기 · thin 공통 레일 | ✅ | 카페 2개만 job 등록 · 82cook 미등록 | 카페 ✅ · 82cook 🔴 |
-| 수집 job 과 처리 job 의 분리 (source 독립 실패) | ✅ | 처리 job 템플릿만 · 미등록 | fixture ✅ · 운영 🔴 |
-| 규칙 + Haiku judge/draft · Queue 자동 보충 | ✅ | `supply-process` 6회/day 계획 · 미등록 | 통과율 실측 없음 🔴 |
+| 3개 source 수집기 · thin 공통 레일 | ✅ | 🟢 **4 job 전부 등록** (카페 2 · 82cook 목록 · 82cook 본문) | 카페 ✅ · 82cook 🟢 1회 canary |
+| 수집 job 과 처리 job 의 분리 (source 독립 실패) | ✅ | 🟢 **`supply-process` 등록·loaded** | fixture ✅ · 운영 🟢 1회 실행 |
+| 규칙 + Haiku judge/draft · Queue 자동 보충 | ✅ | 🟢 **6회/day 등록** 08:15·12:15·14:15·17:15·21:15·22:15 KST | 통과율 24h 관측 중 🟡 |
 | Account 기준 실회원 차단 | ✅ | ✅ | ✅ |
 | 최대 매칭 · 기존 배정 복구 · 정합성 검사 | ✅ | ✅ | ✅ |
 | Persona 생성·seed·활성화 도구 | ✅ | Wave A 실행 완료 · 현재 인원은 §6.3 | ✅ |
 | 공급 health · capacity forecast | ✅ | ✅ | ✅ |
-| d1/d3/d5/d10 profile · capacity/release 분리 · 강제 감속 | ✅ | d1 운영 중 | d1 ✅ · 그 위 🔴 |
+| d1/d3/d5/d10 profile · capacity/release 분리 · 강제 감속 | ✅ | d1 운영 중 (Variables 부재 → fallback) | d1 ✅ · 그 위 🟡 코드는 준비, 운영 미전환 |
 | 수동 발행기 1건 제한 | ✅ | ✅ | ✅ |
 | freshness hold 단일 계약 (§8.2) | ✅ | ✅ (d1 경로에서 동작) | hold 발생 사례 없음 |
 | 수집 보호장치 — 예산·backoff·breaker (§8.3) | ✅ 3 source 전부 | 🔴 아직 한 번도 돌지 않음(상태 파일 없음) | 🔴 미검증 |
 | Persona Pool 25장 · cohort 24명 | ✅ 카드·도구 | ✅ cohort 전원 활성화 완료 · 현재 인원은 §6.3 (P09 정본 제외 유지) | ✅ persona별 AuditLog 검증 |
-| Naver 다회 슬롯 템플릿 | ✅ 템플릿 | 🔴 미등록 | 🔴 |
+| Naver 다회 슬롯 템플릿 | ✅ 템플릿 | 🟢 등록됨 (remonterrace 5회 · wgang 4회) | 🟢 |
 
 🔴 **이 표에도 변동하는 운영 숫자를 적지 않는다.** 인원·재고·발행량은 §6.3 한 곳에서만 관리한다 —
 여기와 §6.3 두 곳에 적으면 반드시 한쪽이 낡는다(2026-09-09 실제 발생).
@@ -317,19 +317,43 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 
 ### 6.2 실제 설정
 
-| 항목 | 현재 |
-|---|---|
-| `SORAN_CAPACITY_STAGE` | **d3** (내부 3/day 기준 · Wave B, 2026-09-09) |
-| `SORAN_RELEASE_STAGE` | **d1** (공개 1/day) — 🔴 Wave B 에서도 올리지 않았다 |
-| 공개 발행 workflow | `5 15 * * *`, 1슬롯/day, `--limit=1` — 🔴 변경 없음 |
-| Naver remonterrace | launchd **5회/day** 07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST |
-| Naver wgang | launchd **4회/day** 09:30 · 11:30 · 15:30 · 20:30 KST |
-| 82cook 목록 | launchd **5회/day** 07:00 · 10:00 · 13:00 · 16:00 · 19:00 KST — 🔴 미등록 |
-| 82cook 본문 | launchd **5회/day** 07:40 · 10:40 · 13:40 · 16:40 · 19:40 KST (목록 40분 뒤) — 🔴 미등록 |
-| 공급 처리 | launchd **6회/day** 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST — 🔴 미등록 |
+🔴 **두 축을 나눠 읽는다** — ① 코드가 무엇을 할 수 있는가 ② 지금 운영이 무엇을 하고 있는가.
+저장소의 코드와 운영 설정은 다른 것이고, 둘을 한 칸에 적으면 반드시 한쪽이 낡는다.
 
-🔴 **내부 capacity 와 공개 release 는 다른 손잡이다.** Wave B 는 내부만 d3 로 올렸다 —
-공개 발행량·cron·GitHub Variables 는 하나도 건드리지 않았다. 현재 운영 숫자는 §6.3.
+| 항목 | 현재 운영 상태 (실측) |
+|---|---|
+| `SORAN_CAPACITY_STAGE` | 🔴 **Variable 없음** → `d1` fallback (저장된 d1 이 아니다 · 2026-09-12 `gh variable list` 0건) |
+| `SORAN_RELEASE_STAGE` | 🔴 **Variable 없음** → `d1` fallback (같음) |
+| 실제 공개 발행 | **1건/day** — d1 의 슬롯은 `09:30 KST` 하나뿐이다 |
+| Naver remonterrace | launchd **5회/day** 07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST — 🟢 등록·loaded |
+| Naver wgang | launchd **4회/day** 09:30 · 11:30 · 15:30 · 20:30 KST — 🟢 등록·loaded |
+| 82cook 목록 | launchd **5회/day** 07:00 · 10:00 · 13:00 · 16:00 · 19:00 KST — 🟢 등록·loaded |
+| 82cook 본문 | launchd **5회/day** 07:40 · 10:40 · 13:40 · 16:40 · 19:40 KST (목록 40분 뒤) — 🟢 등록·loaded |
+| 공급 처리 | launchd **6회/day** 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST — 🟢 등록·loaded |
+
+| 항목 | 코드 계약 (PR #504 반영 시) |
+|---|---|
+| 공개 발행 workflow | 네 단계 슬롯의 **합집합 10개**를 예약한다 (`allStageCronLines()` 가 정본) |
+| 어느 회차를 쓰는가 | 러너가 `github.event.schedule` 로 판정 — **지금 stage 의 슬롯에서만** 발행을 시도한다 |
+| 한 호출당 | 최대 **1건** (`--limit` 은 반드시 1) |
+| 단계별 하루 | d1 1슬롯 · d3 3슬롯 · d5 5슬롯 · d10 10슬롯 → 각각 **1 · 3 · 5 · 10건** |
+| 발행 시각 | 🔴 **전부 댓글 운영 창 08:00~22:00 KST 안**(§9.5-g) — 예약표상 첫 댓글 대기 최대 43분 (🟡 댓글 runner 미등록이라 운영 실적 아님) |
+| 슬롯 계약 | ① 슬롯 수 = `dailyTarget` ② 창 08:00~22:00 ③ 다음 댓글 회차 60분 이하 ④ yml 이 `allStageCronLines()` 를 빠짐없이 담는다. 🟢 [현재값] 합집합 10개 — **포함 관계는 계약이 아니다** |
+| 중복·재실행 | 단계의 하루 상한(DB 카운트) + 발행 트랜잭션 안 재판정이 막는다 |
+
+🔴 **내부 capacity 와 공개 release 는 다른 손잡이다.** 둘 다 Variable 이고, **둘 다 올려야**
+공개량이 올라간다 — release 만 올리면 capacity 가 그것을 눌러 d1 로 되돌린다(`resolveScale`).
+현재 운영 숫자는 §6.3.
+
+#### d3 로 올리는 절차 — 🔴 **Variable 은 두 개다**
+
+1. **PR #504 merge** — 안 하면 예약 슬롯이 하나뿐이라 변수를 바꿔도 1건/day 다
+2. 재고와 준비도 확인 — d3 는 재고 목표 **42건** (현재 재고는 §6.3)
+3. `SORAN_CAPACITY_STAGE=d3` ← Settings → Secrets and variables → Actions → Variables
+4. `SORAN_RELEASE_STAGE=d3` ← **같이 올린다.** 하나만 올리면 낮은 쪽이 이긴다
+5. 첫 세 슬롯(`09:30` · `13:30` · `19:00` KST) 실행 결과 확인
+
+   🔴 실측(`resolveScale`): `{RELEASE=d3}` 만 → release **d1** · `{CAPACITY=d3, RELEASE=d3}` → release **d3**
 
 ### 6.2-b 예약 실행은 개발 작업트리가 아니라 **runtime worktree** 가 한다
 
@@ -395,7 +419,7 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
-| 수집 능력 (configured) | 80건/day — remonterrace 4회 40 · wgang 4회 40 · 82cook 0 (두 job 다 미등록) |
+| 수집 능력 (configured) | 210건/day — 82cook 5회 120 · remonterrace 5회 50 · wgang 4회 40 (🟢 4 job 전부 등록) |
 | 🔴 수집 능력 (observed) | **0건/day** — 등록 이후 성공 회차 0 (2026-09-10 복구 전) · 복구 후 재측정 대기 |
 
 `capacity=d3 · release=d1` (§6.2). 🔴 **공개 발행은 여전히 1/day 다.**
@@ -449,7 +473,9 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 1. 재고가 모자란다 — 현재 재고는 §6.3, d10 목표는 140이다.
 2. ~~Persona 인원~~ → **2026-09-09 Wave A 로 해소.** 현재 active 인원은 §6.3.
    이제 병목은 인원이 아니라 재고다.
-3. 공개 workflow가 1/10 슬롯이다.
+3. ~~공개 workflow가 1/10 슬롯이다~~ → **PR #504 에서 해소.** 워크플로우가 네 단계 슬롯의
+   합집합 10개를 예약하고 러너가 지금 stage 의 슬롯만 고른다. 남은 것은 코드가 아니라
+   **운영 전환**이다 — `SORAN_CAPACITY_STAGE` 와 `SORAN_RELEASE_STAGE` 를 **둘 다** 올려야 한다(§6.2).
 4. 수집 능력과 yield가 증명되지 않았고 82cook 접근도 불안정하다.
 
 ### 7.x Scale Activation Wave A — Persona 24명 (2026-09-09 실행 완료)
@@ -676,6 +702,9 @@ thin 이 0건일 수 있다 — 실패는 아니지만 재고를 늘리지도 �
 - 🔴 **2026-09-11 정정**: 지금 등록된 **수집** job 은 Naver 카페 **다회(`*-multi`) job 2개**뿐이다.
   82cook 은 두 job(`raw-collect-82cook` · `supply-collect-82cook-thin`) 다 템플릿까지만 있다.
   공급 **처리**(`supply-process`)는 수집하지 않으므로 이 표에 한 건도 보태지 않는다.
+  > 🟢 **2026-09-12 해소** — 위는 **2026-09-11 당시 사실이다.** 그 뒤 runtime 을 `b2a8cbd` 로
+  > 전환해 **수집 4 job + 처리 1 job 이 전부 등록·loaded** 됐다. 현재값은 §6.2 를 본다.
+  > 아래 표의 `🔴 미등록` 도 당시 값이며, 지우지 않고 기록으로 남긴다.
 - 🔴 **그런데 등록은 능력이 아니다.** 그 `-multi` 2개는 등록 이후 8회 전부 실패했고,
   그동안 관제는 "current 80/day" 라고 말했다. 지금은 `configured` 와
   `observed`(성공한 회차로 환산한 값)를 **따로** 낸다 — `judgeObservedCapacity`.
@@ -1447,9 +1476,19 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 **창 밖에 글을 내보낸 것**이 계약 위반이다. 글 쪽 슬롯(`scale-profile.ts` `PROFILES`)을
 100/day 로 올릴 때 `{hour: 0, minute: 5}` 같은 창 밖 슬롯을 그대로 늘리면 안 된다.
 
-🔴 **이번 PR 에서 글 파이프라인을 100/day 로 확장하지 않는다.** 지금 `d1` 의 슬롯은
-00:05 로 창 밖이지만, 그것을 고치는 것은 글 레인의 일이고 별도 승인 대상이다.
-여기서는 **계약만 적어 둔다.**
+> 🔴 **위는 2026-09-11 당시 기록이다.** 그때 `d1` 의 슬롯은 `00:05` 로 창 밖이었고,
+> "그것을 고치는 것은 글 레인의 일" 이라고 미뤄 두었다.
+>
+> 🟢 **2026-09-12 해소** — PR #504 가 네 단계의 슬롯을 전부 창 안으로 옮겼다.
+> `d1` 09:30 · `d3` 09:30 13:30 19:00 · `d5` 08:10 10:50 13:30 16:10 19:00 ·
+> `d10` 은 08:10~20:30 을 80~90분 간격으로 채운다. 정본은 `scale-profile.ts` `PROFILES` 하나다.
+> 예약표 대조: 모든 슬롯의 첫 댓글 대기 **최대 43분** · 60분 초과 **0건** · 22시 넘어가는 글 **0건**.
+> 🔴 **전제를 분명히 한다** — 댓글 runner 가 **등록·loaded** 되고 그 stage 가 가동될 때의 값이다.
+> 현재 댓글 runner 는 **미등록**이므로 이것은 운영 SLA **달성 실적이 아니다.**
+> `scale:foundation-check` 가 `planRunnerSchedule(500)` 과 대조해 이것을 지킨다.
+
+🔴 **글 파이프라인을 100/day 로 확장하는 것은 여전히 별도 승인 대상이다.**
+이 절은 **계약만** 적는다 — 확장은 재고와 준비도가 답한다(§6.2).
 
 🔴 **② 댓글 코퍼스 공급원 — 소란소란 익명 정본 자산** (2026-09-11 확정).
 
