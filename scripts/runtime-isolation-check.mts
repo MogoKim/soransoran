@@ -32,6 +32,8 @@ import {
 import {
   judgeDeploy, judgeDeployLock, judgeLockRelease, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
+/** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
+import { rollbackDirOf } from './lib/launchd-install.mjs'
 
 /** 🔴 예약 실행 전용 worktree — 개발 작업트리와 **다른 곳**이다 */
 export const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
@@ -554,6 +556,12 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     renderFromOldRuntime?: boolean
     /** 활성화 스위치가 막는 job */
     envBlocked?: readonly string[]
+    /**
+     * 🔴 **옛 rollback 순서를 재주입한다** — plist 를 먼저 지우고 그 다음 unload.
+     *    이것이 PR #501 배포에서 새 job 3개를 남긴 순서다.
+     *    되돌리면 [R-2] 가 깨져야 한다 — 그것이 이 fixture 의 검증력이다.
+     */
+    legacyRollbackOrder?: boolean
   }
   type World = {
     dir: string; manifestFile: string; pinFile: string
@@ -575,7 +583,8 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
   const OLD_ARGS_OF = (l: string): string[] =>
     ['/nvm/bin/npx', 'tsx', `${RTDIR}/scripts/${l}.mts`, '--pages=1', '--max=10']
   const OLD_RENDERED = (l: string): string => `<plist>${l}:stale:${OLD_ARGS_OF(l).join(' ')}</plist>`
-  const OLD_PLIST = (l: string): string => `<plist>${l}:old</plist>`
+  /** 🔴 배포 전 설치본 — **옛 인자**가 들어 있다. 되돌리면 이 인자로 돌아와야 한다 */
+  const OLD_PLIST = (l: string): string => `<plist>${l}:stale:${OLD_ARGS_OF(l).join(' ')}</plist>`
   /** 설치본에서 인자를 되꺼낸다 — fixture 안의 `argsOf` 정본 */
   const PARSE_ARGS = (xml: string): string[] => {
     const m = /:(?:new|stale):([^<]*)</.exec(xml)
@@ -624,10 +633,37 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         unknown: (f.probeUnknown ?? []).filter((l) => [...J, ...RETIRED].includes(l)),
       }),
 
+      /**
+       * 🔴 **실제 `launchctl unload <plist>` 를 그대로 흉내낸다** (2026-09-11).
+       *
+       *    앞선 fixture 는 plist 유무와 무관하게 성공했다. 그래서 "plist 를 먼저 지우고
+       *    그 다음 unload" 라는 **실제로 불가능한 순서**를 통과시켰다 —
+       *    운영에서 새 job 3개가 내려가지 않고 남은 것이 그 결함이다.
+       *    파일이 없으면 unload 는 실패하고 상태도 바뀌지 않는다.
+       */
       unload: (l) => {
         rec(`unload:${l}`)
+        if (!plists.has(l)) return false
         applyEffect(l, f.unloadEffect?.[l], 'unloaded')
         return f.unloadReturns?.[l] ?? true
+      },
+      /**
+       * 🔴 **label 기반 정지** — 파일에 의존하지 않는다.
+       *    `legacyRollbackOrder` 면 옛 판을 재주입한다: bootout 이 없던 시절처럼
+       *    **plist 경로에 의존**하게 만들어, 파일이 지워진 뒤에는 내려가지 않게 한다.
+       */
+      /**
+       * 🔴 **label 기반 정지.** 파일에 의존하지 않는다.
+       *
+       *    `legacyRollbackOrder` 는 **이 수단이 없던 옛 판**을 재주입한다 —
+       *    그때는 정지가 `launchctl unload <plist>` 뿐이었고, rollback 이 파일을
+       *    먼저 지운 뒤라 전부 실패했다. 그 상태에서는 복구가 불완전해야 한다.
+       */
+      bootout: (l) => {
+        rec(`bootout:${l}`)
+        if (f.legacyRollbackOrder === true) return false
+        state.set(l, 'unloaded')
+        return true
       },
       probeJob: (l) => ((f.probeUnknown ?? []).includes(l) ? 'unknown' : state.get(l)!),
       load: (l) => {
@@ -695,21 +731,37 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         if (cur !== undefined) { w.retiredStore.set(l, cur); plists.delete(l) }
         return true
       },
+      unretirePlist: (l) => {
+        rec(`unretire:${l}`)
+        const kept = w.retiredStore.get(l)
+        if (kept === undefined) return true
+        plists.set(l, kept); w.retiredStore.delete(l)
+        return true
+      },
       lintPlist: (l) => { rec(`lint:${l}`); return !(f.lintFail ?? []).includes(l) },
       // 🔴 실제 launchctl 출력 형태를 그대로 파싱한다
+      /**
+       * 🔴 **실제 launchctl 처럼 "지금 물고 있는" 설정을 돌려준다.**
+       *
+       *    launchd 는 load 시점의 plist 를 들고 있다. 그래서 fixture 도
+       *    **현재 설치된 plist 에서** 인자를 뽑아야 한다 —
+       *    항상 새 인자를 돌려주면 "plist 는 옛것인데 인자는 새것" 인 상태를 못 잡는다.
+       */
       loadedConfig: (l) => {
         rec(`loaded-config:${l}`)
         const dev = (f.devPathJobs ?? []).includes(l)
         const base = parseLaunchctlPrint(printSample(l, `${dev ? DEVDIR : RTDIR}/scripts/${l}.mts`, RTDIR))
-        // 🔴 **인자까지 실어 준다.** 경로만 보면 옛 인자로 도는 job 이 통과한다
-        const args = (f.staleArgsJobs ?? []).includes(l)
-          ? ['/nvm/bin/npx', 'tsx', `${RTDIR}/scripts/${l}.mts`, '--pages=1', '--max=10']
-          : ARGS_OF(l)
-        return { ...base, args }
+        if ((f.staleArgsJobs ?? []).includes(l)) {
+          // 🔴 옛 인자로 도는 job 재현 — 경로만 보면 이것이 통과한다
+          return { ...base, args: ['/nvm/bin/npx', 'tsx', `${RTDIR}/scripts/${l}.mts`, '--pages=1', '--max=10'] }
+        }
+        const xml = plists.get(l)
+        return { ...base, args: xml === undefined ? [] : PARSE_ARGS(xml) }
       },
       isolationGate: () => { rec('isolation-gate'); return f.isolation !== true },
 
       readManifest: () => (existsSync(manifestFile) ? readFileSync(manifestFile, 'utf-8') : null),
+      readPin: () => { try { return readFileSync(pinFile, 'utf-8').trim() } catch { return null } },
       writeManifest: (j) => { rec('write-manifest'); writeFileSync(manifestFile, j, 'utf-8'); return true },
       removeManifest: () => { rec('remove-manifest'); rmSync(manifestFile, { force: true }); return true },
       writePin: (sha) => { writeFileSync(pinFile, `${sha}\n`, 'utf-8'); return true },
@@ -918,13 +970,22 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       r.problems.some((x) => x.includes(NEXT.slice(0, 7))))
   }
   {
-    // 🔴 옛 runtime 에 템플릿이 **있는** 경우 — 더 나쁜 쪽이다. 조용히 옛 인자를 설치한다
+    /**
+     * 🔴 **옛 runtime 에 템플릿이 있으면 post-load 대조로는 잡지 못한다** (2026-09-11 정정).
+     *
+     *    기대 인자(`expectedArgs`)는 **방금 render 한 그 문자열**에서 나온다.
+     *    옛 템플릿을 render 해서 설치하면 설치한 것과 기대가 **같아지므로** 대조는 통과한다.
+     *    앞선 fixture 는 `loadedConfig` 가 plist 와 무관하게 늘 새 인자를 돌려줘서
+     *    이 검사가 **우연히** 초록이었다 — 허구였다.
+     *
+     *    🔴 그래서 **유일한 방어는 render 를 target commit 에서 하는 것**이다([T] 참조).
+     *    아래는 그 사실 자체를 기록한다 — 다음 사람이 post-load 대조를 믿지 않도록.
+     */
     const w = makeWorld({ renderFromOldRuntime: true })
     const r = await deploy(w)
-    check('🔴 [T-회귀] 옛 템플릿이 있으면 **옛 인자로 설치되고** post-load 에서 잡힌다',
-      !r.ok && r.phase === 'post-load')
-    check('🔴 [T-회귀] 이유가 ProgramArguments 불일치다',
-      r.problems.some((x) => x.includes('ProgramArguments')))
+    check('🔴 [T-회귀] 옛 템플릿이 설치되면 배포는 "성공" 으로 끝난다 — 대조로는 못 잡는다', r.ok)
+    check('🔴 [T-회귀] 그때 설치본이 옛 인자다 (그래서 render 출처가 유일한 방어다)',
+      J.every((l) => PARSE_ARGS(w.plists.get(l)!).join(' ') === OLD_ARGS_OF(l).join(' ')))
   }
 
   /** 🔴 render 와 기대 인자가 **같은 문자열 하나**에서 나온다 — 두 번 읽지 않는다 */
@@ -1015,6 +1076,123 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     /** 🔴 퇴역 job 의 스위치는 요구하지 않는다 — 그 job 은 없어질 것이다 */
     check('🔴 [E] 퇴역 job 의 스위치를 요구하지 않는다',
       !Object.values(JOB_ENV_REQUIREMENTS).includes('SORAN_SUPPLY_AUTOPILOT_ENABLED'))
+  }
+
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [R] **PR #501 배포를 막은 두 결함** — 실제 실패를 그대로 재현한다
+  //
+  //    2026-09-11 실측: 배포가 loaded-paths 까지 전부 통과하고 마지막
+  //    `isolation-gate` 한 줄에서 멈췄다(266 pass · 1 fail).
+  //      · 결함 ① 보관소 이름이 두 벌 — 배포기는 옮겼는데 검사는 다른 폴더를 봤다
+  //      · 결함 ② rollback 이 plist 를 먼저 지우고 unload 해서 새 job 3개가 남았다
+  // ─────────────────────────────────────────────────────────
+
+  /**
+   * 🔴 ① 보관소 경로는 **한 곳에서만** 나온다.
+   *
+   *    🔴 검사 대상은 **운영 코드**다(배포기 · 정본 모듈). 이 fixture 자신은 제외한다 —
+   *    결함을 설명하려면 그 문자열을 써야 하고, 그것까지 금지하면 왜 고쳤는지 남길 수 없다.
+   */
+  {
+    const deploy = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
+    const lib = readFileSync('scripts/lib/launchd-install.mts', 'utf-8')
+    /** 🔴 이름의 정본은 상수 선언 한 줄뿐이다 */
+    check('🔴 [R-1] 보관소 이름이 정본 모듈에 상수로 한 번만 선언된다',
+      (lib.match(/export const ROLLBACK_DIR_NAME = '[a-z-]+'/g) ?? []).length === 1)
+    check('🔴 [R-1] 배포기가 보관소 이름을 스스로 적지 않는다',
+      !/['"]launchd-rollback['"]|['"]launchagents-rollback['"]/.test(deploy))
+    check('🔴 [R-1] 배포기가 정본 함수를 쓴다', /rollbackDirOf\(CANON_DIR\)/.test(deploy))
+    /** 🔴 **같은 함수에서 나오므로 값이 갈라질 수 없다** — 그것이 이 수정의 전부다 */
+    check('🔴 [R-1] 배포기와 격리 검사가 같은 정본 함수를 import 한다', (() => {
+      const isol = readFileSync('scripts/runtime-isolation-check.mts', 'utf-8')
+      const imported = (src: string): boolean =>
+        /import \{[^}]*rollbackDirOf[^}]*\} from '\.\/lib\/launchd-install\.mjs'/.test(src)
+      return imported(deploy) && imported(isol) && /rollbackDirOf\(CANON_DIR\)/.test(isol)
+    })())
+    /**
+     * 🔴 옛 이름이 **실행되는 코드**에 남아 있지 않다 — 남으면 다음 사람이 그걸 쓴다.
+     *    🔴 주석은 뺀다. 왜 바뀌었는지 적으려면 그 이름을 써야 하고,
+     *    그것까지 금지하면 다음 사람이 같은 실수를 반복한다.
+     */
+    const codeOnly = (src: string): string =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    check('🔴 [R-1] 옛 이름(launchagents-rollback)이 실행 코드에 0건이다',
+      !codeOnly(deploy).includes('launchagents-rollback')
+      && !codeOnly(lib).includes('launchagents-rollback'))
+  }
+
+  /**
+   * 🔴 ② **실제 실패 시나리오 그대로.**
+   *
+   *    이전: 네이버 2개 + supply-autopilot loaded (새 3개는 plist 도 없다)
+   *    배포: 새 5개 설치·load · supply-autopilot 퇴역
+   *    실패: isolation-gate
+   *    복구: 네이버 2개 + supply-autopilot 만 **옛 인자로** loaded ·
+   *          새 3개는 unloaded 이고 plist 도 없다 · SHA·pin·manifest·plist bytes 원복
+   */
+  {
+    const w = makeWorld({
+      isolation: true,
+      // 🔴 새 job 3개는 배포 전에 plist 도 없고 내려가 있었다
+      noInstalledPlist: ['job-b', 'job-c'],
+      initial: { 'job-b': 'unloaded', 'job-c': 'unloaded', 'job-old': 'loaded' },
+    })
+    const r = await deploy(w)
+    check('🔴 [R-2] isolation-gate 실패로 배포하지 않는다', !r.ok && r.phase === 'post-load')
+
+    // ── 복구 결과 ──
+    check('🔴 [R-2] 배포 중 올린 새 job 이 전부 내려간다',
+      w.state.get('job-b') === 'unloaded' && w.state.get('job-c') === 'unloaded')
+    check('🔴 [R-2] 원래 없던 plist 가 남지 않는다',
+      !w.plists.has('job-b') && !w.plists.has('job-c'))
+    check('🔴 [R-2] 배포 전 loaded 였던 job 만 다시 올라온다',
+      w.state.get('job-a') === 'loaded' && w.state.get('job-old') === 'loaded')
+    check('🔴 [R-2] 그 job 들이 **옛 plist 원문**으로 돌아온다',
+      w.plists.get('job-a') === OLD_PLIST('job-a')
+      && w.plists.get('job-old') === OLD_PLIST('job-old'))
+    check('🔴 [R-2] 퇴역했던 plist 가 보관소에서 제자리로 돌아온다', !w.retiredStore.has('job-old'))
+    check('🔴 [R-2] SHA · pin · manifest 가 배포 전 값이다',
+      w.sha === PREV && pinOf(w) === PREV && manifestSha(w) === PREV)
+    check('🟢 [R-2] 복구가 완전하다고 보고한다', r.rollback?.complete === true)
+
+    /**
+     * 🔴 **순서를 값으로 못박는다.** 정지가 **가장 먼저**, 그 다음 파일 복원, 그 다음 load.
+     *    "plist 를 먼저 지우고 unload" 로 되돌아가면 여기가 깨진다.
+     */
+    // 🔴 `steps` 는 runDeploy 가 남긴 단계 이름이다 — 순서를 값으로 본다
+    const st = (m: string): number => r.steps.findIndex((x) => x === m || x.startsWith(m))
+    const iStop = st('rollback:stop')
+    const iPlist = st('rollback:plist')
+    const iLoad = st('rollback:load')
+    if (iStop < 0 || iPlist < 0 || iLoad < 0) console.log(`      steps: ${r.steps.join(' → ')}`)
+    check('🔴 [R-2] 정지가 plist 복원보다 **먼저**다', iStop >= 0 && iStop < iPlist)
+    check('🔴 [R-2] plist 복원이 load 보다 **먼저**다', iPlist >= 0 && iLoad >= 0 && iPlist < iLoad)
+    check('🔴 [R-2] 정지는 label 기반 bootout 으로 한다 — plist 경로에 의존하지 않는다',
+      w.order.some((x) => x.startsWith('bootout:')))
+    if (r.rollback?.complete !== true) {
+      console.log(`      residual: ${(r.rollback?.residual ?? []).join(' / ')}`)
+    }
+  }
+
+  /**
+   * 🔴 **실패 재주입** — 옛 순서로 되돌리면 이 fixture 가 깨진다는 것을 증명한다.
+   *    plist 를 먼저 지우면 `launchctl unload <없는 파일>` 이 실패하고 job 이 남는다.
+   */
+  {
+    const w = makeWorld({
+      isolation: true,
+      noInstalledPlist: ['job-b', 'job-c'],
+      initial: { 'job-b': 'unloaded', 'job-c': 'unloaded', 'job-old': 'loaded' },
+      legacyRollbackOrder: true,
+    })
+    const r = await deploy(w)
+    check('🔴 [R-3] label 기반 정지가 없으면 복구가 불완전하다고 보고한다',
+      r.rollback?.complete === false)
+    check('🔴 [R-3] 그때 새 job 이 loaded 로 남는다',
+      w.state.get('job-b') === 'loaded' || w.state.get('job-c') === 'loaded')
+    check('🔴 [R-3] residual 이 "정지하지 못했다" 를 정확히 적는다',
+      (r.rollback?.residual ?? []).some((x) => x.includes('정지하지 못했다')))
   }
 
   // ── [A] 정상 배포 ──
@@ -1384,7 +1562,7 @@ if (!existsSync(RUNTIME_ROOT)) {
     try { return readdirSync(AGENT_DIR) } catch { return [] }
   })()
   const rollbackFiles = ((): string[] => {
-    try { return readdirSync(join(CANON_DIR, 'launchd-rollback')) } catch { return [] }
+    try { return readdirSync(rollbackDirOf(CANON_DIR)) } catch { return [] }
   })()
   const retiredPlists = judgeRetiredPlists({ agentFiles, rollbackFiles })
   check('🔴 옛 1회판 plist 가 LaunchAgents 에 없다 (재부팅 재등록 차단)', retiredPlists.ok)

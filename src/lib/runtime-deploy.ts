@@ -109,9 +109,13 @@ export const DEPLOY_STEPS: readonly string[] = [
   '⑪ **실제 loaded 경로 + ProgramArguments** 대조 → runtime:isolation-check --require-runtime',
   '⑫ 여기까지 통과해야 "배포 완료" 다',
   '🔴 어느 단계든 실패하면 ⑬ 으로 간다',
-  '⑬ rollback(best-effort): checkout · npm ci · prisma generate · manifest/pin 복원 ·'
-  + ' **plist 원문 복원** · **원래 loaded 였던 job 만 재load** —'
-  + ' 한 단계가 실패해도 **뒤 단계를 계속 시도**하고, 남은 것을 보고한다',
+  '⑬ rollback(best-effort) — 🔴 **다 내리고 → 파일을 원래대로 → 원래 돌던 것만 올린다**:'
+  + ' ⓐ 영향받는 job 을 label 기반으로 **전부 정지**(plist 경로에 의존하지 않는다) →'
+  + ' ⓑ 다 내려갔는지 재관측 → ⓒ 이전 SHA checkout · npm ci · generate →'
+  + ' ⓓ plist 원문 복원 / 원래 없던 것 제거 / 퇴역 되돌리기 → ⓔ manifest·pin 복원 →'
+  + ' ⓕ **배포 전 loaded 였던 job 만** 복원된 plist 로 load →'
+  + ' ⓖ loaded · ProgramArguments · plist 원문 · SHA · pin · manifest 를 배포 전과 대조.'
+  + ' 🔴 한 단계가 실패해도 **뒤 단계를 계속 시도**하고, 남은 것을 정확히 보고한다',
 ]
 
 /**
@@ -173,6 +177,14 @@ export type DeployEffects = {
   envBlockers: (jobs: readonly string[]) => readonly EnvBlocker[]
 
   unload: (label: string) => boolean
+  /**
+   * 🔴 **label 기반 정지** — `launchctl bootout gui/<uid>/<label>`.
+   *
+   *    `unload` 는 **plist 파일 경로**를 받는다. 그래서 rollback 이 파일을 먼저 지우면
+   *    그 뒤의 unload 가 전부 실패한다 — PR #501 에서 새 job 3개가 그렇게 남았다.
+   *    정지는 파일이 있든 없든 되어야 한다. 그것이 이 effect 가 따로 있는 이유다.
+   */
+  bootout: (label: string) => boolean
   /** 🔴 unload/load 뒤 **실제 상태**를 다시 본다 — loaded / unloaded / unknown */
   probeJob: (label: string) => JobState
   load: (label: string) => boolean
@@ -210,6 +222,12 @@ export type DeployEffects = {
   removePlist: (label: string) => boolean
   /** 🔴 퇴역 job 의 설치본을 **보관소로 옮긴다.** 지우지 않는다 — 되돌릴 수 있어야 한다 */
   retirePlist: (label: string) => boolean
+  /**
+   * 🔴 **퇴역을 되돌린다** — 보관소의 사본을 제자리로.
+   *    배포가 실패하면 퇴역도 되돌려야 한다. 안 되돌리면
+   *    "배포는 안 됐는데 옛 job 만 사라진" 상태가 남는다.
+   */
+  unretirePlist: (label: string) => boolean
   /** `plutil -lint` — 문법이 깨진 plist 는 load 가 조용히 실패한다 */
   lintPlist: (label: string) => boolean
   /**
@@ -229,6 +247,8 @@ export type DeployEffects = {
   isolationGate: () => boolean
 
   readManifest: () => string | null
+  /** 🔴 복구 사후 대조용 — pin 이 정말 이전 값으로 돌아왔는가 */
+  readPin: () => string | null
   writeManifest: (json: string) => boolean
   removeManifest: () => boolean
   writePin: (sha: string) => boolean
@@ -378,47 +398,52 @@ export async function runDeploy(input: {
   }
 
   /**
-   * 🔴 **복구 대상은 "성공했다고 적어 둔 목록" 이 아니라 배포 전의 실제 상태다.**
-   *
-   *    unload 가 false 를 돌려줬는데 실제로는 내려간 경우가 있다. 성공 목록만 되돌리면
-   *    그 job 은 내려간 채로 남는다. 그래서 **배포 전에 관측해 둔 `prevLoaded`** 로 되돌린다.
-   *    🔴 원래 내려가 있던 job(퇴역 대상 등)을 "복구" 한다며 올리지 않는다.
+   * 🔴 **복구 기준은 "성공했다고 적어 둔 목록" 이 아니라 배포 전에 관측해 둔 실제 상태다**
+   *    (`prevPlists` · `prevLoaded`). 명령의 반환값은 실제 상태와 다를 수 있다 —
+   *    unload 가 false 를 돌려줬는데 내려간 경우가 실제로 있었다.
    */
-  const restoreAll = (): string[] => {
-    steps.push('restore-observe')
+  /**
+   * ── 🔴 rollback 상태 머신 (2026-09-11 재설계) ──
+   *
+   *    앞선 판은 `checkout → plist 복원 → manifest → job 복원` 순서였다.
+   *    plist 를 먼저 지운 뒤 `launchctl unload <plist>` 를 부르니 **파일이 없어 실패**했고,
+   *    배포 중 올린 job 3개가 loaded 로 남았다(PR #501 실측).
+   *
+   *    🔴 **순서만 뒤집는 것으로는 안 된다.** 먼저 load 를 되돌리면
+   *      · 아직 새 plist 가 깔려 있어 **새 인자 그대로** 올라가고
+   *      · 퇴역시킨 job 은 plist 가 보관소에 있어 **없는 파일로 load** 하게 된다.
+   *
+   *    그래서 이렇게 나눈다 — **다 내리고 → 파일을 원래대로 → 원래 돌던 것만 올린다.**
+   *      ⓐ 영향받는 loaded job 을 **전부 정지**한다 (label 기반 — 파일에 의존하지 않는다)
+   *      ⓑ 정말 다 내려갔는지 재관측한다
+   *      ⓒ 이전 SHA checkout · npm ci · prisma generate
+   *      ⓓ plist 원문 복원 / 원래 없던 것 제거 / 퇴역 되돌리기
+   *      ⓔ manifest · pin 복원
+   *      ⓕ **배포 전 loaded 였던 job만** 복원된 plist 로 load
+   *      ⓖ loaded · ProgramArguments · plist 원문 · SHA · pin · manifest 를 배포 전과 대조
+   *      ⓗ 한 단계가 실패해도 나머지를 계속 시도하고 residual 을 정확히 남긴다
+   */
+
+  /** ⓐ 🔴 **전부 내린다.** label 기반이라 plist 가 없어도 된다 */
+  const stopAll = (): string[] => {
+    steps.push('rollback:stop')
     const residual: string[] = []
     for (const l of allJobs) {
-      const want = prevLoaded.get(l)
-      if (want === 'loaded') {
-        const why = ensureLoaded(l)
-        if (why !== null) residual.push(why)
-        continue
-      }
-      /**
-       * 🔴 **원래 내려가 있던 job 은 다시 내린다.**
-       *    배포 도중에 우리가 올린 job(첫 설치 대상 등)을 그대로 두면,
-       *    배포는 실패했는데 **새 job 만 돌고 있는** 어중간한 상태가 남는다.
-       */
-      if (fx.probeJob(l) !== 'loaded') continue
-      steps.push(`restore-unload:${l}`)
-      fx.unload(l)
-      if (fx.probeJob(l) === 'loaded') residual.push(`${l}: 배포 중 올린 job 을 다시 내리지 못했다`)
+      if (fx.probeJob(l) === 'unloaded') continue
+      steps.push(`bootout:${l}`)
+      fx.bootout(l)
     }
-    steps.push('restore-verify')
+    // ⓑ 🔴 명령의 반환값이 아니라 **다시 관측한 상태**로 판정한다
+    steps.push('rollback:stop-verify')
     for (const l of allJobs) {
-      const want = prevLoaded.get(l)
-      const nowState = fx.probeJob(l)
-      if (want === 'loaded' && nowState !== 'loaded') {
-        residual.push(`${l}: 최종 확인에서 loaded 가 아니다`)
-      }
-      if (want !== 'loaded' && nowState === 'loaded') {
-        residual.push(`${l}: 최종 확인에서 배포 전과 달리 loaded 다`)
-      }
+      const st = fx.probeJob(l)
+      if (st === 'loaded') residual.push(`${l}: 정지하지 못했다 — 아직 loaded 다`)
+      else if (st === 'unknown') residual.push(`${l}: 정지 뒤 상태를 확인하지 못했다(fail-closed)`)
     }
-    return [...new Set(residual)]
+    return residual
   }
 
-  /** 🔴 plist 를 **배포 전 원문 그대로** 되돌린다. 원래 없던 것은 지운다 */
+  /** ⓓ 🔴 파일을 배포 전 원문 그대로. 원래 없던 것은 지우고, 퇴역은 되돌린다 */
   const restorePlists = (): string[] => {
     steps.push('rollback:plist')
     const residual: string[] = []
@@ -429,22 +454,90 @@ export async function runDeploy(input: {
         if (!fx.removePlist(l)) residual.push(`${l}: 새로 설치한 plist 제거 실패`)
         continue
       }
+      // 🔴 퇴역시킨 것은 보관소에서 제자리로 되돌린다 (없으면 no-op)
+      if (retired.includes(l) && !fx.unretirePlist(l)) {
+        residual.push(`${l}: 퇴역 plist 를 제자리로 되돌리지 못했다`)
+      }
       if (!fx.writePlist(l, before)) residual.push(`${l}: 이전 plist 복원 실패`)
     }
     return residual
   }
 
-  // ── ⑬ rollback — best-effort. 🔴 한 단계 실패가 뒤 단계를 건너뛰지 않게 한다 ──
+  /** ⓕ 🔴 **배포 전 loaded 였던 것만** 올린다. 그때 plist 는 이미 옛 원문이다 */
+  const loadPrevious = (): string[] => {
+    steps.push('rollback:load')
+    const residual: string[] = []
+    for (const l of allJobs) {
+      if (prevLoaded.get(l) !== 'loaded') continue
+      /**
+       * 🔴 **이미 올라와 있으면 다시 부르지 않는다.**
+       *    `launchctl load` 는 이미 loaded 인 job 에 실패를 돌려준다("already loaded").
+       *    그걸 복구 실패로 적으면 **정상 상태를 고장이라고** 보고하게 된다.
+       */
+      const before = fx.probeJob(l)
+      if (before === 'loaded') continue
+      if (before === 'unknown') {
+        residual.push(`${l}: 상태를 확인하지 못했다 — 올릴지 판단할 수 없다(fail-closed)`)
+        continue
+      }
+      steps.push(`load:${l}`)
+      fx.load(l)
+      const after = fx.probeJob(l)
+      if (after !== 'loaded') {
+        residual.push(after === 'unknown'
+          ? `${l}: load 뒤 상태를 확인하지 못했다(fail-closed)`
+          : `${l}: load 했는데 올라오지 않았다`)
+      }
+    }
+    return residual
+  }
+
+  /**
+   * ⓖ 🔴 **최종 대조 — loaded 상태만 보지 않는다.**
+   *    올라와 있어도 **새 인자로** 올라와 있으면 되돌린 것이 아니다.
+   */
+  const verifyRestored = (): string[] => {
+    steps.push('rollback:verify')
+    const residual: string[] = []
+    for (const l of allJobs) {
+      const want = prevLoaded.get(l)
+      const now = fx.probeJob(l)
+      if (want === 'loaded' && now !== 'loaded') residual.push(`${l}: 최종 확인에서 loaded 가 아니다`)
+      if (want !== 'loaded' && now === 'loaded') residual.push(`${l}: 최종 확인에서 배포 전과 달리 loaded 다`)
+      // 🔴 파일이 배포 전 원문 그대로인가
+      const beforeXml = prevPlists.get(l) ?? null
+      const nowXml = fx.readInstalledPlist(l)
+      if (beforeXml !== nowXml) residual.push(`${l}: plist 원문이 배포 전과 다르다`)
+      // 🔴 올라와 있는 것은 **옛 인자**로 올라와 있어야 한다
+      if (want === 'loaded' && now === 'loaded' && beforeXml !== null) {
+        const wantArgs = fx.argsOf(beforeXml)
+        const gotArgs = fx.loadedConfig(l).args
+        if (wantArgs.length !== gotArgs.length || wantArgs.some((x, i) => x !== gotArgs[i])) {
+          residual.push(`${l}: 되돌렸는데 ProgramArguments 가 배포 전과 다르다`)
+        }
+      }
+    }
+    if (fx.currentSha() !== prevSha) residual.push('사후 대조: SHA 가 이전 값이 아니다')
+    if (fx.readPin() !== prevSha) residual.push('사후 대조: pin 이 이전 값이 아니다')
+    if (fx.readManifest() !== prevManifest) residual.push('사후 대조: manifest 가 이전 값이 아니다')
+    return residual
+  }
+
+  // ── ⓗ rollback — best-effort. 🔴 한 단계 실패가 뒤 단계를 건너뛰지 않게 한다 ──
   const rollbackAll = (): { attempted: boolean; complete: boolean; residual: string[] } => {
     const residual: string[] = []
+    // ⓐⓑ 🔴 **가장 먼저 전부 내린다.** 파일을 건드리기 전이라 정지가 확실히 된다
+    residual.push(...stopAll())
+    // ⓒ
     steps.push('rollback:checkout')
     if (!fx.checkout(prevSha)) residual.push(`이전 SHA(${prevSha.slice(0, 7)}) checkout 실패`)
     steps.push('rollback:install')
     if (!fx.install()) residual.push('npm ci 실패 — 의존성이 target 것으로 남아 있을 수 있다')
     steps.push('rollback:generate')
     if (!fx.generate()) residual.push('prisma generate 실패')
-    // 🔴 plist 를 먼저 되돌린 뒤에 load 한다 — 순서가 바뀌면 새 plist 로 올라간다
+    // ⓓ
     residual.push(...restorePlists())
+    // ⓔ
     steps.push('rollback:manifest')
     if (prevManifest === null) {
       // 🔴 원래 없었으면 **새로 쓴 것을 지운다** — 성공하지 않았는데 기록이 남으면 안 된다
@@ -453,12 +546,12 @@ export async function runDeploy(input: {
       residual.push('이전 manifest 복원 실패')
     }
     if (!fx.writePin(prevSha)) residual.push('pin 복원 실패')
-    steps.push('rollback:load')
-    residual.push(...restoreAll())
-    // 🔴 사후 대조 — 정말 돌아왔는가
-    if (fx.currentSha() !== prevSha) residual.push('사후 대조: SHA 가 이전 값이 아니다')
+    // ⓕⓖ
+    residual.push(...loadPrevious())
+    residual.push(...verifyRestored())
     return { attempted: true, complete: residual.length === 0, residual: [...new Set(residual)] }
   }
+
   const failWith = (phase: string, why: string): DeployResult => {
     problems.push(why)
     const rb = rollbackAll()
@@ -480,11 +573,15 @@ export async function runDeploy(input: {
       : state === 'unknown'
         ? `${l} unload 뒤 상태를 확인하지 못했다(fail-closed)`
         : `${l} unload 했는데 아직 내려가지 않았다`
-    const residual = restoreAll()
+    /**
+     * 🔴 아직 checkout 도 plist 설치도 안 했다 — **파일은 배포 전 그대로**다.
+     *    되돌릴 것은 loaded 상태뿐이므로 정지·파일 복원 단계를 거치지 않는다.
+     */
+    const residual = [...loadPrevious(), ...verifyRestored()]
     return {
       ok: false, phase: 'unload', steps,
       problems: [`${why} — 코드도 plist 도 건드리지 않았다`],
-      rollback: { attempted: true, complete: residual.length === 0, residual },
+      rollback: { attempted: true, complete: residual.length === 0, residual: [...new Set(residual)] },
     }
   }
   steps.push('unload-verified')
