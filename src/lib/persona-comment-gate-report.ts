@@ -124,6 +124,26 @@ export function judgeGateReport(input: {
 // ─────────────────────────────────────────────────────────
 
 /**
+ * 🔴 **"⑧ 만 못 돈 정확한 모양" 인가 — 판정은 여기 하나다.**
+ *
+ *    적재(`planEnqueue`)와 발행(`recheckBeforePublish`)이 각자 이 모양을 세고 있었고,
+ *    두 판정이 **달랐다.** 적재 쪽은 "⑧ 을 뺀 나머지가 전부 pass" 까지 봤고,
+ *    발행 쪽은 `missingRequired` 만 봤다 — 즉 ① 유출이 `reject` 여도 발행 쪽 재검사에서는
+ *    cold-start 로 보였다. 예외는 좁아야 하고, 좁은 예외는 한 곳에만 있어야 한다.
+ *
+ * 🔴 **`notRun` 인 필수 관문은 ⑧ 하나**여야 하고, **나머지 여덟은 전부 `pass`** 여야 한다.
+ *    하나라도 review·regenerate·reject 면 그것은 cold-start 가 아니라 **Gate 실패**다.
+ */
+export function isGateEightColdStart(
+  gates: readonly GateLine[], report: GateReport,
+): boolean {
+  if (!report.shaped) return false
+  if (!(report.missingRequired.length === 1 && report.missingRequired[0] === '⑧')) return false
+  const byCode = new Map(gates.map((g) => [g.gate, g.outcome]))
+  return GATE_CODES.filter((c) => c !== '⑧').every((c) => byCode.get(c) === 'pass')
+}
+
+/**
  * 🔴 **첫 댓글을 영원히 시작할 수 없는 자리가 있다.**
  *
  *    ⑧ 은 "같은 Persona 의 이전 발화와 얼마나 닮았나" 를 본다. 그러려면 이전 발화가
@@ -149,7 +169,23 @@ export const BOOTSTRAP_EXIT_PRIOR_TEXTS = REQUIRED_PRIOR_TEXTS
  *    상한이 곧 새로운 사각지대가 된다.
  */
 export const BOOTSTRAP_MAX_PER_PERSONA = REQUIRED_PRIOR_TEXTS
-export const BOOTSTRAP_MAX_PER_DAY_PER_PERSONA = 1
+
+/**
+ * 🔴 **Persona 하루 1건 제한은 없앴다** (2026-09-11).
+ *
+ *    `BOOTSTRAP_MAX_PER_DAY_PER_PERSONA = 1` 이 있었다. 취지는 편중 방지였는데,
+ *    실제로 만든 것은 **전체 운영의 천장**이었다 — 말투 근거 묶음이 서는 Persona 가
+ *    18명이므로 cold-start 상한이 하루 **18건**으로 굳었다(실측).
+ *    글 100편 × 자리 5개(=500)는 그 규칙 아래에서 산술적으로 도달할 수 없다.
+ *
+ *    편중은 **누가 몇 번 나왔나**의 문제이고, 그것은 대상을 고르는 자리
+ *    (`planCommentDistribution` 의 soft balancing)가 다룰 일이다.
+ *    발행 관문에 하드 상한을 두면 편중은 조금 줄고 운영은 통째로 멈춘다.
+ *
+ * 🔴 `BOOTSTRAP_MAX_PER_PERSONA`(총량)는 **남긴다.** 그 수는 Gate ⑧ 이 실제로
+ *    돌기 시작하는 지점(`REQUIRED_PRIOR_TEXTS`)과 **같은 수**라서 영구 병목이 아니다 —
+ *    그만큼 쌓이면 cold-start 를 벗어나 정상 판정으로 넘어간다.
+ */
 
 export type BootstrapFacts = {
   report: GateReport
@@ -157,8 +193,6 @@ export type BootstrapFacts = {
   priorTextCount: number
   /** 이 Persona 가 지금까지 쓴 bootstrap 건수 */
   bootstrapUsedTotal: number
-  /** 오늘 쓴 bootstrap 건수 */
-  bootstrapUsedToday: number
   /** Persona 가 active 인가 */
   personaActive: boolean
   /** 🔴 실회원이 아닌가 — `judgeRealMember` 결과를 그대로 받는다 */
@@ -223,9 +257,6 @@ export function judgeBootstrapEligible(f: BootstrapFacts): BootstrapVerdict {
   if (!f.governorOk) blockers.push('ratio·일 cap·kill switch 가 정상이 아니다')
   if (f.bootstrapUsedTotal >= BOOTSTRAP_MAX_PER_PERSONA) {
     blockers.push(`bootstrap 을 이미 ${f.bootstrapUsedTotal}건 썼다 — Persona 당 ${BOOTSTRAP_MAX_PER_PERSONA}건까지다`)
-  }
-  if (f.bootstrapUsedToday >= BOOTSTRAP_MAX_PER_DAY_PER_PERSONA) {
-    blockers.push(`오늘 bootstrap 을 이미 ${f.bootstrapUsedToday}건 썼다 — 하루 ${BOOTSTRAP_MAX_PER_DAY_PER_PERSONA}건까지다`)
   }
 
   return {

@@ -16,7 +16,7 @@
 import { PrismaClient } from '@prisma/client'
 
 import {
-  judgeReadiness, readRunMode, windowFromRows, RATIO_WINDOW_DAYS, type CommentWindow,
+  judgeReadiness, windowFromRows, RATIO_WINDOW_DAYS, type CommentWindow,
 } from '../src/lib/persona-comment-governor'
 import {
   capabilitiesReady, judgeModelGate, judgeRelease,
@@ -24,6 +24,8 @@ import {
 } from '../src/lib/persona-comment-release'
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { readRunnerState } from './lib/persona-comment-runner-template'
+import { legacyRunModeFor, readCommentStage, stagePowers } from '../src/lib/persona-comment-stage'
+import { countManagedPostsToday } from '../src/lib/persona-comment-bootstrap-source'
 import { publishCandidateTx } from '../src/lib/persona-publish-tx'
 import { batchSizeFor, publishBatch } from './lib/persona-comment-publish-batch'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -31,10 +33,8 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 await loadEnvLocal()
 const prisma = new PrismaClient()
 const now = new Date()
-const mode = readRunMode(process.env)
 
 console.log('\n══ 댓글 runner ══\n')
-console.log(`  모드  ${mode.mode} — ${mode.reason}`)
 
 const windowStart = new Date(now.getTime() - RATIO_WINDOW_DAYS * 86_400_000)
 const window: CommentWindow = await (async (): Promise<CommentWindow> => {
@@ -58,7 +58,24 @@ const killSwitchOff = await (async (): Promise<boolean | null> => {
   } catch { return null }
 })()
 
-const readiness = judgeReadiness({ window, mode: mode.mode, publishedToday, killSwitchOff })
+/** 🔴 단계가 예산의 정본이다 — bootstrap 계열은 오늘 관리형 공개 글 수로 센다 */
+const stage = readCommentStage(process.env)
+const powers = stagePowers(stage.stage)
+const managed = powers.budget === 'bootstrap'
+  ? await countManagedPostsToday(prisma, kstDayStart, now)
+  : null
+const readiness = judgeReadiness({
+  window, mode: legacyRunModeFor(stage.stage), stage: stage.stage, publishedToday, killSwitchOff,
+  bootstrap: {
+    openSlots: managed?.openSlots ?? Number.NaN, publishedToday, killSwitchOff,
+  },
+})
+console.log(`  단계  ${stage.stage} — ${stage.reason}`)
+console.log(`  예산  ${powers.budget}`
+  + (powers.budget === 'bootstrap'
+    ? ` · 관리형 공개 글 ${managed?.eligible ?? '🔴 읽지 못함'}편`
+      + ` · 열린 댓글 자리 ${managed?.openSlots ?? '🔴 읽지 못함'}개`
+    : ''))
 const selection: ModelSelection | null = readConfirmedSelection().selection
 const modelGate = judgeModelGate({ selection })
 const approved = await prisma.personaApprovalQueue.count({
@@ -76,7 +93,9 @@ const runner = readRunnerState()
  */
 const caps = capabilitiesReady(COMMENT_CAPABILITIES)
 const release = judgeRelease({
-  mode: mode.mode,
+  stage: stage.stage,
+  /** 🔴 runner 는 APPROVED/EDITED 만 발행한다 — 그것이 곧 사람 승인이다 */
+  humanApproved: approved > 0,
   // 🔴 **남은 수량**이다. 총 상한이 아니다 — 이름을 갈라 둔 이유가 이것이다
   publicAllowedToday: readiness.allowance.remaining,
   modelGate,
@@ -94,6 +113,34 @@ console.log(`  모델       ${selection?.status ?? '없음'} · winner ${selecti
 console.log(`  runner     ${runner.detail}`)
 console.log(`\n  ${release.summary}`)
 for (const b of release.blockers) console.log(`     · ${b}`)
+
+/**
+ * 🔴 **canary dry-run — 무엇이 첫 번째로 나갈지 보여 준다** (2026-09-11).
+ *
+ *    "승인은 했는데 저게 정말 나가는 건가" 를 사람이 확인할 자리가 없었다.
+ *    조건이 안 맞아 멈추는 회차에서도 **대상은 보여야** 한다 —
+ *    그래야 무엇이 막고 있는지와 무엇이 기다리는지를 같이 볼 수 있다.
+ *
+ *    🔴 이 분기는 읽기만 한다. write 0 · provider 0.
+ */
+{
+  const waiting = await prisma.personaApprovalQueue.findMany({
+    where: { status: { in: ['APPROVED', 'EDITED'] }, publishedCommentId: null },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: 3,
+    select: {
+      id: true, status: true, gateStatus: true, decidedBy: true,
+      targetPostId: true, persona: { select: { code: true } },
+    },
+  }).catch(() => [])
+  console.log(`\n  ── canary dry-run — 승인 대기 ${waiting.length}건 (🔴 읽기만 한다)`)
+  for (const [i, w] of waiting.entries()) {
+    console.log(`     ${i === 0 ? '🔵 다음 발행 대상' : '   대기'} ${w.id}`
+      + ` · ${w.persona?.code ?? '?'} · ${w.status} · gate ${w.gateStatus}`
+      + ` · 승인자 ${w.decidedBy === null ? '🔴 없음' : '있음'} · 글 ${w.targetPostId}`)
+  }
+  if (waiting.length === 0) console.log('     (없음)')
+}
 
 if (!release.canPublishNow) {
   // 🔴 조건이 맞지 않으면 후보를 만들지도, provider 를 부르지도 않는다

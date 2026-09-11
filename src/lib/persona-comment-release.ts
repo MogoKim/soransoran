@@ -12,6 +12,7 @@
  */
 
 import { isExternalSourcedBody, type PostVisibilityInput } from './post-visibility'
+import { stagePowers, type CommentStage } from './persona-comment-stage'
 import { judgeRealMember, type RealMemberProbe } from './real-member-gate'
 
 // ─────────────────────────────────────────────────────────
@@ -203,8 +204,16 @@ export const MEMBER_POST_EXTERNAL_SEND_POLICY =
 // ─────────────────────────────────────────────────────────
 
 export type ReleaseFacts = {
-  /** `readRunMode` 결과 */
-  mode: 'inspect' | 'shadow' | 'release'
+  /** 🔴 `readCommentStage` 결과 — 옛 `mode` 를 대신한다 */
+  stage: CommentStage
+  /**
+   * 🔴 **이 후보를 사람이 승인했는가.** `bootstrap-review` 는 이것만 내보낸다.
+   *
+   *    옛 판은 `isBootstrap` 이면 무조건 막았다. 그래서 사람이 승인 버튼을 눌러도
+   *    나갈 길이 없었다 — 실측으로 `cmtw53fzz…` 가 APPROVED 인 채 공개 0 이었다.
+   *    막아야 하는 것은 "bootstrap 후보" 가 아니라 **"사람이 안 본 것"** 이다.
+   */
+  humanApproved: boolean
   /** governor 가 계산한 오늘 공개 허용 수 */
   publicAllowedToday: number
   /** 모델 선택 판정 */
@@ -238,7 +247,8 @@ export type ReleaseVerdict = {
 export function judgeRelease(f: ReleaseFacts): ReleaseVerdict {
   const blockers: string[] = []
 
-  if (f.mode !== 'release') blockers.push(`${f.mode} 모드다 — 공개 발행 경로가 아니다`)
+  const powers = stagePowers(f.stage)
+  if (!powers.publishAllowed) blockers.push(`${f.stage} 단계다 — 공개 발행 경로가 아니다`)
   if (!f.modelGate.canWriteQueue) blockers.push(`모델 미확정 — ${f.modelGate.reason}`)
   if (!Number.isInteger(f.publicAllowedToday) || f.publicAllowedToday <= 0) {
     blockers.push('오늘 공개 허용량이 0 이다 (ratio·일 cap·kill switch)')
@@ -246,8 +256,18 @@ export function judgeRelease(f: ReleaseFacts): ReleaseVerdict {
   if (!Number.isInteger(f.approvedQueueCount) || f.approvedQueueCount <= 0) {
     blockers.push('사람이 승인한 Queue 후보가 없다')
   }
-  // 🔴 bootstrap 은 사람 승인 전용이다. 자동 공개 경로로 새어 나가지 않게 한다
-  if (f.isBootstrap) blockers.push('bootstrap 후보다 — 자동 공개 대상이 아니다(사람 승인 전용)')
+  /**
+   * 🔴 **사람 승인이 필요한 단계에서는 승인된 것만 나간다.**
+   *    `bootstrap-auto` 는 창업자가 명시로 올린 단계이므로 이 조건을 묻지 않는다 —
+   *    대신 그 단계는 Gate 결과가 `pass` 인 후보만 받는다(호출부 계약).
+   */
+  if (powers.humanApprovalRequired && !f.humanApproved) {
+    blockers.push('사람이 승인하지 않은 후보다 — 이 단계에서는 승인된 것만 공개한다')
+  }
+  /** 🔴 자동 단계에서도 bootstrap 후보를 그냥 통과시키지 않는다 */
+  if (f.isBootstrap && f.stage === 'organic') {
+    blockers.push('bootstrap 후보다 — organic 단계의 자동 공개 대상이 아니다')
+  }
   if (!f.txRecheckWired) blockers.push('트랜잭션 재검사가 붙어 있지 않다(fail-closed)')
   if (!f.runnerRegistered) blockers.push('runner/schedule 이 등록돼 있지 않다')
 

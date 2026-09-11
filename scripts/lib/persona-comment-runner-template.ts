@@ -17,13 +17,18 @@ export const COMMENT_RUNNER_LABEL = 'com.soransoran.persona-comment-runner'
 export const COMMENT_RUNNER_SCRIPT = 'scripts/persona-comment-runner.mts'
 
 /**
- * 🔴 **글 발행량과 묶지 않는다.**
- *    d10 이 되어 글이 하루 10개 나가도 댓글 회차는 그대로다 —
- *    "새 글마다 댓글 하나" 는 편한 규칙이지만 그 규칙이 곧 30% 를 넘긴다.
+ * 🔴 **슬롯은 손으로 적지 않고 하루 상한에서 역산한다** (2026-09-11).
+ *
+ *    옛 값은 `[{ hour: 19, minute: 40 }]` — **하루 한 번**이었다. 그 값은
+ *    "댓글은 글 발행량과 묶지 않는다" 는 옛 계약에서 나온 것이고,
+ *    지금 단기 정본(공개 글 100/day · 글당 1~5 · 하루 최대 500)과 정면으로 어긋난다.
+ *    한 회차가 발행할 수 있는 상한은 25 건(`BATCH_MAX`)이므로
+ *    하루 한 번이면 **schedule 만으로 이미 25/day 가 천장**이다.
+ *    목표를 문서에만 적고 슬롯을 그대로 두면 500 은 영원히 "적혀만 있는 수" 가 된다.
+ *
+ * 🔴 정의는 파일 아래 `planRunnerSchedule` 뒤에 있다 — 그 함수가 정본이고
+ *    이 상수는 그 결과다. 두 곳에 적으면 반드시 한쪽이 낡는다.
  */
-export const COMMENT_RUNNER_SLOTS: readonly { hour: number; minute: number }[] = [
-  { hour: 19, minute: 40 },
-]
 
 export function renderCommentRunnerPlist(input: {
   /** runtime worktree 절대 경로 */
@@ -80,6 +85,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { judgeJobPath, parseLaunchctlPrint } from '../../src/lib/runtime-isolation'
+import { BOOTSTRAP_DAILY_MAX } from '../../src/lib/persona-comment-bootstrap-budget'
 
 export type RunnerState = {
   /** plist 파일이 그 자리에 있는가 */
@@ -172,3 +178,100 @@ export function readRunnerState(input?: {
             : '🔴 loaded 지만 실행 경로가 runtime 이 아니다'
   return { plistPresent, loaded, pathsOk, targetExists, healthy, detail }
 }
+
+
+// ─────────────────────────────────────────────────────────
+// 🔴 하루 목표에서 schedule 을 **역산**한다 (2026-09-11)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **왜 slot 을 손으로 적지 않는가.**
+ *
+ *    지금 template 은 하루 한 번(19:40)이다. 한 회차가 publish 하는 상한은
+ *    `batchSizeFor` 의 `BATCH_MAX` 로 25 건이다 — 즉 지금 구조로는
+ *    하루 100 건이 **schedule 만으로 이미 불가능**하다. 목표를 문서에만 적고
+ *    template 을 그대로 두면, 100/day 는 영원히 "적혀만 있는 수" 가 된다.
+ *
+ *    그래서 slot 을 목표에서 역산한다. 그리고 **하루에 몰지 않는다** —
+ *    한 시간에 100 건이 쏟아지면 타임라인이 봇으로 덮인다.
+ *    깨어 있는 시간대(08~22시)에 고르게 나눈다.
+ *
+ * 🔴 이 함수는 **아무것도 등록하지 않는다.** 문자열만 만든다.
+ */
+export const RUNNER_WINDOW_START_HOUR = 8
+export const RUNNER_WINDOW_END_HOUR = 22
+
+/**
+ * 🔴 **정각에서 이만큼 밀어 둔다.** 매시 정각은 사람보다 기계처럼 보인다.
+ *    창 전체를 미루므로 간격은 그대로 균등하다 — 슬롯마다 따로 흔들면 간격이 깨진다.
+ */
+export const RUNNER_WINDOW_OFFSET_MINUTES = 7
+
+/** 🔴 새 글에 첫 댓글이 붙기까지의 목표 — 단기 정본(§9.5-g)에서 온 수다 */
+export const FIRST_COMMENT_MAX_MINUTES = 60
+
+export type RunnerSchedule = {
+  /** 하루 몇 번 도는가 */
+  runs: number
+  /** 한 회차가 발행할 수 있는 상한 */
+  perRun: number
+  slots: readonly { hour: number; minute: number }[]
+  /** 이 schedule 이 감당하는 하루 최대치 */
+  capacity: number
+  /**
+   * 🔴 **창 안에서 회차 사이의 최대 간격(분).** 회차가 1회 이하면 `null` —
+   *    "간격이 0" 이 아니라 "간격이라는 것이 없다" 이고, 둘을 같이 세면
+   *    하루 한 번 도는 schedule 이 "간격 0분" 으로 보인다.
+   */
+  maxGapMinutes: number | null
+  /** 🔴 창 **밖**(밤)의 공백. 이 시간에 올라온 글은 아침까지 기다린다 */
+  nightGapMinutes: number
+  reason: string
+}
+
+/**
+ * @param dailyTarget 하루 목표 발행 수
+ * @param perRunMax   한 회차 상한 (기본은 배치 상한 25)
+ */
+export function planRunnerSchedule(dailyTarget: number, perRunMax = 25): RunnerSchedule {
+  const target = Number.isInteger(dailyTarget) && dailyTarget > 0 ? dailyTarget : 0
+  const perRun = Math.max(1, Math.min(perRunMax, target === 0 ? 1 : target))
+  const runs = target === 0 ? 0 : Math.ceil(target / perRun)
+  const startMin = RUNNER_WINDOW_START_HOUR * 60 + RUNNER_WINDOW_OFFSET_MINUTES
+  const endMin = RUNNER_WINDOW_END_HOUR * 60
+  const span = endMin - startMin
+  /**
+   * 🔴 **분을 시각에서 파생시킨다** (2026-09-11 정정).
+   *
+   *    옛 판은 시각을 `span * i / (runs-1)` 로 잡아 놓고 분을 `(i * 17) % 60` 으로
+   *    따로 지어냈다. 두 수가 무관해서 간격이 들쭉날쭉했고 —
+   *    500/day(20회)에서 실측 **최대 77분** — 회차 사이가 60분 계약을 넘겼다.
+   *    분은 그 회차가 돌기로 한 시각의 나머지여야 한다.
+   */
+  const atMinutes = Array.from({ length: runs }, (_, i) => Math.round(
+    runs === 1 ? startMin + span / 2 : startMin + (span * i) / (runs - 1),
+  ))
+  const slots = atMinutes.map((m) => ({ hour: Math.floor(m / 60), minute: m % 60 }))
+  const maxGapMinutes = atMinutes.length < 2
+    ? null
+    : atMinutes.slice(1).reduce((max, m, i) => Math.max(max, m - atMinutes[i]!), 0)
+  // 🔴 마지막 회차부터 다음 날 첫 회차까지 — 창을 08~22 로 잡은 대가다
+  const nightGapMinutes = runs === 0 ? 24 * 60 : 24 * 60 - span
+
+  return {
+    runs, perRun, slots, capacity: runs * perRun, maxGapMinutes, nightGapMinutes,
+    reason: target === 0
+      ? '하루 목표가 0 이다 — 도는 회차가 없다'
+      : `하루 ${target}건 ÷ 회차당 ${perRun}건 → ${runs}회`
+        + ` · ${RUNNER_WINDOW_START_HOUR}~${RUNNER_WINDOW_END_HOUR}시에 균등 분산`
+        + ` · 감당 ${runs * perRun}건`
+        + ` · 회차 간격 최대 ${maxGapMinutes ?? '—'}분 · 🔴 야간 공백 ${nightGapMinutes}분`,
+  }
+}
+
+/**
+ * 🔴 **template 슬롯의 정본.** 하루 절대 상한에서 역산한다 —
+ *    상한이 바뀌면 슬롯도 함께 바뀐다. 손으로 적은 값이 남으면 반드시 어긋난다.
+ */
+export const COMMENT_RUNNER_SLOTS: readonly { hour: number; minute: number }[] =
+  planRunnerSchedule(BOOTSTRAP_DAILY_MAX).slots

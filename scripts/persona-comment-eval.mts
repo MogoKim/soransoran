@@ -444,7 +444,7 @@ const judge: EvalJudge = ({ rawText, input }) => {
      */
     bootstrapReviewEligible: judgeBootstrapEligible({
       report, priorTextCount: 0,
-      bootstrapUsedTotal: 0, bootstrapUsedToday: 0,
+      bootstrapUsedTotal: 0,
       personaActive: true, realMember: false, seedComplete: true,
       lifeConflict: false, governorOk: true,
     }).bootstrapReviewEligible,

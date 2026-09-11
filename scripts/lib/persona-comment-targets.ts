@@ -55,7 +55,8 @@ export type SourcePost = {
   author: { providerId: string | null; isAdmin: boolean | null; accountCount: number | null } | null
   /** 🔴 3축은 정본 select 로 읽어 그대로 넘긴다 — 여기서 축을 비교하지 않는다 */
   visibility: NonNullable<PostAuthorFacts['visibility']>
-  comments: readonly { origin: string; content: string }[]
+  /** 🔴 `personaCode` 는 "누가 달았나" 다 — 같은 사람이 두 번 달지 않게 하는 근거다 */
+  comments: readonly { origin: string; content: string; personaCode: string | null }[]
 }
 
 export type SourcePersona = BuildPersona & {
@@ -70,6 +71,19 @@ export type FrequencyCorpus = {
   lookup: CandidateInput['frequencyLookup']
   size: number
   corpusName: string
+}
+
+/**
+ * 🔴 **코퍼스를 못 읽었으면 그 사유를 함께 돌려준다** (2026-09-11).
+ *
+ *    `FrequencyCorpus | null` 만으로는 "자산이 없다" 와 "digest 가 어긋났다" 와
+ *    "모양이 깨졌다" 가 전부 같은 `null` 로 보인다. 운영자는 ② 가 왜 안 도는지를
+ *    로그에서 알 수 없고, 그러면 원인을 찾는 대신 검사를 끄게 된다.
+ */
+export type FrequencyRead = {
+  corpus: FrequencyCorpus | null
+  /** 사람이 읽는 한 줄 — 🔴 원문은 담지 않는다 */
+  reason: string
 }
 
 /**
@@ -91,8 +105,8 @@ export type TargetSource = {
   recentRoleCounts: () => Promise<Record<string, number> | null>
   /** ⑥-A 회원 표시명 — 🔴 못 읽으면 `undefined`. `[]` 는 "없었다" 라 다른 뜻이다 */
   knownNames: () => Promise<readonly string[] | undefined>
-  /** ② 댓글 코퍼스 — 🔴 못 읽으면 `null` */
-  frequency: () => Promise<FrequencyCorpus | null>
+  /** ② 댓글 코퍼스 — 🔴 못 읽으면 `corpus: null` 과 **사유**를 함께 준다 */
+  frequency: () => Promise<FrequencyRead>
   /** ⑧ seed 재사용 횟수 — 🔴 못 세면 `null` */
   seedUseCount: (personaCode: string) => Promise<number | null>
 }
@@ -244,7 +258,7 @@ export async function materializeTargets(args: {
   const commentDigestChars = args.commentDigestChars ?? 60
   const windowStartMs = args.nowMs - args.windowMs
 
-  const [posts, personas, openKeys, recentRoleCounts, knownNames, frequency] = await Promise.all([
+  const [posts, personas, openKeys, recentRoleCounts, knownNames, frequencyRead] = await Promise.all([
     args.source.posts(),
     args.source.personas(),
     args.source.openDedupKeys(),
@@ -252,16 +266,36 @@ export async function materializeTargets(args: {
     args.source.knownNames(),
     args.source.frequency(),
   ])
+  const frequency = frequencyRead.corpus
 
   const openDedupKeys = new Set(openKeys)
   /** 🔴 planner 는 "이 글에 열린 것이 있나" 를 묻는다 — 조합 열쇠에서 글 id 를 뽑는다 */
   const openPostIds = new Set(
     [...openDedupKeys].map((k) => k.split(':')[1] ?? '').filter((x) => x !== ''),
   )
+  /**
+   * 🔴 **열린 대기열의 Persona 를 글별로 모은다** (2026-09-11).
+   *
+   *    옛 판은 "열린 것이 하나라도 있으면 그 글을 통째로 뺀다" 였다 —
+   *    글당 1건 계약의 잔재다. 지금 대기열은 그 글의 **자리를 차지**할 뿐이고,
+   *    막아야 하는 것은 **같은 Persona 가 같은 글에** 또 들어가는 것이다.
+   *    열쇠 모양은 `comment:<postId>:<personaCode>:<role>` 이다(`dedupKeyOf`).
+   */
+  const openQueueByPost = new Map<string, string[]>()
+  for (const key of openDedupKeys) {
+    const parts = key.split(':')
+    const postId = parts[1] ?? ''
+    const personaCode = parts[2] ?? ''
+    if (postId === '' || personaCode === '') continue
+    const list = openQueueByPost.get(postId) ?? []
+    list.push(personaCode)
+    openQueueByPost.set(postId, list)
+  }
 
   const gaps: string[] = []
   if (knownNames === undefined) gaps.push('knownNames (⑥-A 회원 표시명을 읽지 못했다)')
-  if (frequency === null) gaps.push('frequencyLookup (② 댓글 코퍼스를 읽지 못했다)')
+  // 🔴 사유를 그대로 실어 보낸다 — "읽지 못했다" 만으로는 무엇을 고쳐야 할지 알 수 없다
+  if (frequencyRead.corpus === null) gaps.push(`frequencyLookup (② 댓글 코퍼스) — ${frequencyRead.reason}`)
 
   /**
    * 🔴 **조회 실패를 정상 0건으로 읽지 않는다.**
@@ -281,7 +315,10 @@ export async function materializeTargets(args: {
     authorPersonaCode: p.authorPersonaCode,
     memberComments: p.comments.filter((c) => c.origin === 'MEMBER' || c.origin === 'GUEST').length,
     personaComments: p.comments.filter((c) => c.origin === 'PERSONA').length,
-    hasOpenQueue: openPostIds.has(p.id),
+    personaCodesOnPost: p.comments
+      .map((c) => c.personaCode)
+      .filter((code): code is string => code !== null),
+    openQueuePersonaCodes: openQueueByPost.get(p.id) ?? [],
     publishedAtMs: p.publishAtMs,
     // 🔴 가입인사는 대화를 여는 자리가 아니다
     onHold: p.category === '가입인사',
@@ -400,6 +437,8 @@ export async function materializeTargets(args: {
           // 🔴 **정확한 조합**으로 본다 — 같은 글이라도 역할이 다르면 다른 자리다
           hasOpenQueue: openDedupKeys.has(dedupKeyOf(pr.id, pe.code, item.reactionRole)),
           personaCommentsOnPost: pr.comments.filter((c) => c.origin === 'PERSONA').length,
+          // 🔴 수가 아니라 "이 사람이 이미 달았나" — 적재 계약이 따로 묻는 축이다
+          personaAlreadyOnPost: pr.comments.some((c) => c.personaCode === pe.code),
           postStatus: pr.visibility.status,
           personaActive: pe.status === 'active',
           personaRealMember: judgeRealMember({

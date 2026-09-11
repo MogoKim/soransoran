@@ -48,6 +48,25 @@ export const POST_VISIBILITY_SELECT = {
 } as const satisfies Prisma.PostSelect
 
 /**
+ * 🔴 **select 결과에서 3축만 뽑는다** (2026-09-11).
+ *
+ *    `POST_VISIBILITY_SELECT` 로 읽어 온 행을 판정 함수에 넘기려면 누군가는
+ *    `{ status, isMicroSeed, permanentNoindex, indexPromotionBlocked }` 를 손으로 적어야 했다.
+ *    그 순간 **축 이름이 호출부로 새어 나간다** — `check-post-visibility` 가 막는 바로 그 일이고,
+ *    우나어에서 49곳 9파일로 퍼졌던 구조다.
+ *
+ *    축 이름은 이 파일만 안다. 호출부는 이 함수만 부른다.
+ */
+export function pickPostVisibility(row: PostVisibilityInput): PostVisibilityInput {
+  return {
+    status: row.status,
+    isMicroSeed: row.isMicroSeed,
+    permanentNoindex: row.permanentNoindex,
+    indexPromotionBlocked: row.indexPromotionBlocked,
+  }
+}
+
+/**
  * 🔴 **본문이 외부 커뮤니티에서 온 것인가** — 외부 모델 전송 정책이 쓴다 (2026-09-09).
  *
  *    Persona 댓글 생성은 대상 글의 본문을 프롬프트에 싣는다. 그때 물어야 하는 것은

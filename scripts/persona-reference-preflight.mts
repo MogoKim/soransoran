@@ -14,8 +14,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { buildCommentInput, voiceEvidenceFromAssets } from '../src/lib/persona-comment-input'
 import { buildPromptFromInput } from './lib/persona-comment-bridge'
 import {
-  bundlesForPersonas, buildReferenceManifest, loadLocalComments, REFERENCE_SOURCES,
+  bundlesForPersonas, buildReferenceManifest, loadCanonAsset, loadLocalComments, REFERENCE_SOURCES,
 } from './lib/persona-reference-store.mjs'
+import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 import { judgeVoiceSeparation } from '../src/lib/persona-voice-reference'
 import { COMMENT_REACTION_ROLES } from '../src/lib/persona-reaction-roles'
 import { judgePostRichness, postBodyOf, SYNTHETIC_POSTS } from '../src/lib/persona-eval-posts'
@@ -29,12 +30,43 @@ const check = (name: string, ok: boolean, hint = ''): void => {
 
 console.log('\n══ provider payload preflight (🔴 호출 0) ══\n')
 
-const CODES = Array.from({ length: 10 }, (_, i) => `S${String(i + 1).padStart(2, '0')}`)
-const ref = bundlesForPersonas({ repoRoot: process.cwd(), personaCodes: CODES })
+/**
+ * 🔴 **정본 universe 를 그대로 쓴다** (2026-09-11 정정).
+ *
+ *    옛 판은 `S01`~`S10` 을 손으로 만들어 넣었다. 그 코드들은 합성 실험 시절의
+ *    잔재이고 지금 정본 universe(`PRODUCTION_PERSONA_CODES` = P 코드)에 없다.
+ *    그래서 `bundlesForPersonas` 가 열 개를 전부 "정본 밖" 으로 돌려보냈고,
+ *    묶음이 하나도 서지 않아 **preflight 가 언제나 exit 1** 이었다 —
+ *    payload 를 한 번도 열어 보지 못한 채 "근거가 없다" 만 찍고 끝났다.
+ *
+ * 🔴 목록을 여기 다시 적지 않는다. 정본이 늘면 이 스크립트도 같이 늘어야 한다.
+ */
+const ref = bundlesForPersonas({
+  repoRoot: process.cwd(), personaCodes: PRODUCTION_PERSONA_CODES,
+})
 console.log(`  자산 출처  ${ref.origin}`)
+console.log(`  대상 Persona  정본 ${PRODUCTION_PERSONA_CODES.length}종 · 묶음이 선 것 ${ref.byCode.size}종`)
 for (const b of ref.blocks) console.log(`  🟡 ${b}`)
 if (ref.byCode.size === 0) {
-  console.log('\n🔴 근거가 없다 — preflight 를 돌릴 것이 없다.\n')
+  /**
+   * 🔴 **자산 "부재" 만 SKIP 이다.**
+   *
+   *    정본 파일이 아예 없고 개발 자산도 없으면 preflight 가 열어 볼 payload 자체가
+   *    없다 — CI 는 worktree 밖 600 권한 자산을 볼 수 없으므로 늘 이 경우다.
+   *    그때는 **건너뛴 사실을 크게 적고** 정상 종료한다.
+   *
+   * 🔴 **그 밖은 전부 실패다.** 자산이 있는데 digest 가 어긋났거나(`ASSET_DIGEST_MISMATCH`),
+   *    manifest 가 없거나, 권한이 느슨하거나, 있는데도 묶음이 서지 않으면 exit 1 이다.
+   *    "없어서 못 했다" 와 "있는데 틀렸다" 를 같이 넘기면 검사가 장식이 된다.
+   */
+  const canon = loadCanonAsset()
+  if (canon.code === 'ASSET_MISSING' && ref.rows.length === 0) {
+    console.log(`\n🟡 SKIP — 정본 자산이 없다 (${canon.code}) · 개발 자산도 없다`)
+    console.log(`   ${canon.reason}`)
+    console.log('   🔴 검사를 통과한 것이 아니다. 자산이 있는 곳에서 돌려야 한다.\n')
+    process.exit(0)
+  }
+  console.log(`\n🔴 근거가 없다 — preflight 를 돌릴 것이 없다 (${canon.code}: ${canon.reason})\n`)
   process.exit(1)
 }
 
@@ -138,8 +170,20 @@ check(`🟢 근거 댓글이 payload 에 실렸다 (${carried}/${payloads.length
  * 🔴 **지시문 기준으로 본다.** 참고 댓글에 우연히 같은 말이 들어 있을 수 있고,
  *    그것은 사람이 실제로 쓴 말이라 막을 이유가 없다. 막을 것은 **우리가 시키는 것**이다.
  */
+/**
+ * 🔴 **`'120자'` 는 목록에서 뺐다** (2026-09-11).
+ *
+ *    그 항목은 옛 프롬프트의 **고정 길이 지시**("120자 내외로")를 잡으려던 것이다.
+ *    그런데 지금 길이 문장은 `${ref.lengths.median}자` 로 **그 Persona 자신의
+ *    참고 댓글에서 잰 값**이다(`persona-prompt.ts`). P10 의 중앙값이 마침 120 이라
+ *    금지어에 걸렸다 — 잡아야 할 것은 숫자가 아니라 **고정하라는 말**이다.
+ *
+ *    숫자 자체를 금지하면 다음 회차에 중앙값이 121 이 되는 순간 검사가 통과한다.
+ *    늘 걸리거나 우연히 통과하는 검사는 아무것도 지키지 않는다.
+ *    고정 지시 여부는 아래 ③ 이 **형태**로 본다.
+ */
 for (const bad of ['설거지하다 말고', '창밖 보다가', '커피 식는 줄도 모르고',
-  '첫 문장을 여는 방법', '이 글자로 시작하지 않습니다', '한두 문장', '120자',
+  '첫 문장을 여는 방법', '이 글자로 시작하지 않습니다', '한두 문장',
   '지금 뭘 하다 이 글을 봤는지', '말끝을 서로 다르게']) {
   check(`🔴 지시문에 "${bad}" 가 없다`, !scaffold.includes(bad))
 }
@@ -169,10 +213,23 @@ check('② 참고 댓글의 경험을 자기 것으로 옮기지 말라고 말�
   payloads.every((p) => p.system.includes('그 사람들의 경험은 당신의 경험이 아닙니다')))
 check('② 근거 없는 Persona 에게 자기 이야기를 지어내지 말라고 말한다',
   payloads.every((p) => p.system.includes('들려줄 자기 이야기가 없습니다')))
-/** ③ 길이를 고정하지 않았는가 */
+/**
+ * ③ 길이를 고정하지 않았는가 — 🔴 **숫자가 아니라 "고정하라는 말" 을 본다.**
+ *
+ *    옛 판은 `/\b120자\b/` 였다. JS 의 `\b` 는 `[A-Za-z0-9_]` 경계라
+ *    `자` 앞뒤에서는 성립하지 않는다 — 그 정규식은 **어떤 입력에도 걸리지 않았고**,
+ *    통과 표시만 찍고 아무것도 재지 않았다(실측: 지시문에 `120자` 가 있는데도 통과).
+ *
+ *    재야 하는 것은 "그 길이에 맞춰 써라" 는 **지시 형태**다.
+ */
+const FIXED_LENGTH = /\d+\s*자\s*(이내|안팎|정도로|내외|로 맞|에 맞|로 써|로 쓰|씩)/
 check('③ 길이를 숫자 하나로 고정하지 않는다',
   payloads.every((p) => p.system.includes('맞출 필요는 없습니다')
-    && !/\b120자\b/.test(p.system) && !p.system.includes('한두 문장')))
+    && !FIXED_LENGTH.test(p.system) && !p.system.includes('한두 문장')))
+/** 🔴 그 정규식이 실제로 무언가를 잡는지 — 잡지 못하는 가드는 장식이다 */
+check('③ 고정 길이 지시 형태를 실제로 잡는다',
+  FIXED_LENGTH.test('120자 이내로 쓰세요') && FIXED_LENGTH.test('80자 내외')
+  && !FIXED_LENGTH.test('보통 120자쯤, 긴 것은 167자 넘게도 씁니다'))
 
 const OUT = 'tmp/wave-e/payload-preflight.txt'
 mkdirSync('tmp/wave-e', { recursive: true })

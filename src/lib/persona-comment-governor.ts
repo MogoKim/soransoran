@@ -1,3 +1,8 @@
+import {
+  judgeBootstrapBudget, type BootstrapBudgetFacts,
+} from './persona-comment-bootstrap-budget'
+import { stagePowers, type CommentStage } from './persona-comment-stage'
+
 /**
  * Persona 댓글 **속도 제어** — 🔴 순수 함수. DB · 시계 · 네트워크 없음
  *
@@ -161,27 +166,30 @@ export function judgeRatio(win: CommentWindow): RatioVerdict {
  */
 export type RunMode = 'inspect' | 'shadow' | 'release'
 
-export const RELEASE_ENV_KEY = 'SORAN_PERSONA_COMMENT_STAGE'
-
 /**
- * 🔴 **기본은 shadow 다.** env 가 없거나 모르는 값이면 공개 write 로 가지 않는다.
- *    "설정을 안 했더니 발행이 시작됐다" 가 일어나지 않게 한다.
+ * 🔴 **옛 env 파서(`readRunMode`)는 삭제했다** (2026-09-11).
+ *
+ *    그 함수는 `inspect|shadow|release` 축만 알았고, `bootstrap-review`·`bootstrap-auto`
+ *    를 **모르는 값**으로 보고 shadow 로 내렸다 — 발행 트랜잭션이 그것을 쓰는 동안
+ *    단계를 올려도 공개가 열리지 않았다. 같은 env 이름을 두 파서가 다르게 읽으면
+ *    반드시 한쪽이 틀린다. 지금 정본은 `persona-comment-stage.readCommentStage` 하나다.
+ *
+ *    env 이름도 그쪽(`COMMENT_STAGE_ENV`)에만 둔다 — 상수를 두 벌 두면 같은 일이 반복된다.
  */
-export function readRunMode(env: Readonly<Record<string, string | undefined>>): {
-  mode: RunMode; reason: string
-} {
-  const raw = (env[RELEASE_ENV_KEY] ?? '').trim()
-  if (raw === '') return { mode: 'shadow', reason: `${RELEASE_ENV_KEY} 가 없다 — shadow(공개 write 0)` }
-  if (raw === 'inspect' || raw === 'shadow') return { mode: raw, reason: `${RELEASE_ENV_KEY}=${raw}` }
-  if (raw === 'release') return { mode: 'release', reason: `${RELEASE_ENV_KEY}=release — 🔴 공개 write 가능` }
-  return { mode: 'shadow', reason: `${RELEASE_ENV_KEY}=${raw} 는 모르는 값이다 — shadow 로 내린다(fail-closed)` }
-}
 
 export type ReadinessFacts = {
   /** rolling 창 실측 */
   window: CommentWindow
-  /** 이 모드에서 돌고 있는가 */
+  /** 이 모드에서 돌고 있는가 — 🔴 `stage` 를 주면 그쪽이 이긴다(옛 축) */
   mode: RunMode
+  /**
+   * 🔴 **운영 단계.** 주면 예산의 정본이 이것으로 바뀐다 —
+   *    `bootstrap-*` 은 실회원 댓글 수가 아니라
+   *    **오늘 관리형 공개 글에 남은 댓글 자리 수**로 센다.
+   */
+  stage?: CommentStage
+  /** `stage` 가 bootstrap 계열일 때 쓰는 예산 입력 */
+  bootstrap?: BootstrapBudgetFacts
   /** 오늘 이미 발행한 Persona 댓글 수 — 못 셌으면 null */
   publishedToday: number | null | undefined
   /** Persona 개인 cap 등 상위 계약이 준 하루 상한 */
@@ -243,6 +251,17 @@ export const DEFAULT_SHADOW_LIMIT = 10
  *    전자는 사람이 다시 켜야 하고, 후자는 조건이 회복되면 저절로 돌아온다.
  */
 export function judgeReadiness(f: ReadinessFacts): ReadinessVerdict {
+  /**
+   * 🔴 **bootstrap 단계는 30% 를 묻지 않는다** (2026-09-11).
+   *
+   *    실회원 댓글이 0 이면 ratio 는 언제나 0 이고, 그 0 은 "위험하다" 가 아니라
+   *    **"아직 아무도 없다"** 는 뜻이다. 아무도 없어서 못 만들면 영원히 아무도 없다.
+   *    그래서 초기 단계의 예산은 오늘 내보낸 관리형 글의 **남은 댓글 자리**에서 나온다.
+   *    30% 는 사라지지 않고 `organic` 단계에서 그대로 다시 적용된다.
+   */
+  if (f.stage !== undefined && stagePowers(f.stage).budget === 'bootstrap') {
+    return bootstrapReadiness(f, f.stage)
+  }
   const blockers: string[] = []
   const ratio = judgeRatio(f.window)
   if (ratio.headroom === 0) blockers.push(ratio.reason)
@@ -275,9 +294,15 @@ export function judgeReadiness(f: ReadinessFacts): ReadinessVerdict {
   }
   const publicAllowedToday = remaining
 
-  // 🔴 release 가 아니면 공개 write 는 언제나 불가다. 상한이 남아 있어도 마찬가지다
-  const canPublish = f.mode === 'release' && publicAllowedToday > 0
-  if (f.mode !== 'release') blockers.push(`${f.mode} 모드다 — 공개 댓글을 발행하지 않는다`)
+  // 🔴 공개가 열린 단계가 아니면 상한이 남아 있어도 발행하지 않는다
+  const publishOpen = f.stage === undefined
+    ? f.mode === 'release'
+    : stagePowers(f.stage).publishAllowed
+  const canPublish = publishOpen && publicAllowedToday > 0
+  if (!publishOpen) {
+    blockers.push(`${f.stage ?? f.mode} ${f.stage === undefined ? '모드' : '단계'}다`
+      + ' — 공개 댓글을 발행하지 않는다')
+  }
 
   /**
    * 🔴 shadow 상한은 **ratio 와 무관하다.** 다만 `inspect` 는 아무것도 만들지 않는다 —
@@ -296,5 +321,31 @@ export function judgeReadiness(f: ReadinessFacts): ReadinessVerdict {
     blockers,
     detail: `ratio 여유 ${ratio.headroom} · 상한 ${allowance.cap} · 사용 ${allowance.used}`
       + ` → 남은 ${allowance.remaining}건 · shadow ${shadowLimit}건`,
+  }
+}
+
+
+/**
+ * 🔴 **bootstrap 단계의 준비도.** ratio 는 계산하지 않는다 —
+ *    쓰지 않는 숫자를 같이 내보내면 다음 사람이 그것으로 판단한다.
+ */
+function bootstrapReadiness(f: ReadinessFacts, stage: CommentStage): ReadinessVerdict {
+  const powers = stagePowers(stage)
+  const budget = judgeBootstrapBudget(f.bootstrap ?? {
+    openSlots: Number.NaN, publishedToday: f.publishedToday, killSwitchOff: f.killSwitchOff,
+  })
+  const blockers = [...budget.blockers]
+  const canPublish = powers.publishAllowed && budget.remaining > 0
+  if (!powers.publishAllowed) blockers.push(`${stage} 단계다 — 공개 댓글을 발행하지 않는다`)
+
+  const wanted = f.shadowLimit ?? DEFAULT_SHADOW_LIMIT
+  const shadowLimit = Math.max(0, Math.min(isCount(wanted) ? wanted : 0, DEFAULT_SHADOW_LIMIT))
+  return {
+    allowance: { cap: budget.cap, used: budget.used, remaining: budget.remaining },
+    publicAllowedToday: budget.remaining,
+    shadowLimit,
+    canPublish,
+    blockers,
+    detail: `${stage} · ${budget.reason}`,
   }
 }

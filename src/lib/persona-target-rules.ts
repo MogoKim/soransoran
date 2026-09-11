@@ -39,13 +39,28 @@ export const canSetTarget = (status: CandidateStatus): boolean =>
  */
 export const MEMBER_COMMENT_LIMIT = 3
 
+/**
+ * 🔴 **한 글에 Persona 댓글은 최대 이만큼이다** (2026-09-11 정본 교체).
+ *
+ *    옛 계약은 **글당 1명**이었다. 그 규칙은 "봇끼리 상호작용 금지" 를 지키려 한 것인데,
+ *    실제로 막은 것은 상호작용이 아니라 **대화처럼 보이는 것 전부**였다.
+ *    댓글이 하나 달린 글은 대화가 아니라 통보다 — 사람은 그런 글에 끼어들지 않는다.
+ *
+ *    그래서 상한을 1 에서 5 로 올린다. 대신 **같은 Persona 가 같은 글에 두 번 달지 않는다** —
+ *    막아야 할 것은 "여럿이 말하는 것" 이 아니라 **"한 사람이 여럿인 척하는 것"** 이다.
+ *
+ * 🔴 하한은 강제하지 않는다. 붙일 Persona 가 하나뿐이면 1건이고, 그것으로 끝이다.
+ *    억지로 5건을 채우면 그것은 대화가 아니라 자동 응답기다.
+ */
+export const PERSONA_COMMENTS_PER_POST_MAX = 5
+
 export type TargetBlockCode =
   | 'CANDIDATE_STATUS'
   | 'ALREADY_PUBLISHED'
   | 'POST_ID_EMPTY'
   | 'POST_NOT_FOUND'
   | 'POST_NOT_PUBLISHED'
-  | 'POST_HAS_PERSONA_COMMENT'
+  | 'POST_PERSONA_COMMENTS_FULL'
   | 'POST_MEMBER_COMMENTS_FULL'
 
 export type TargetBlock = { code: TargetBlockCode; message: string }
@@ -85,11 +100,12 @@ export function judgeTargetPost(post: TargetPostFacts | null): TargetPostVerdict
     })
   }
 
-  // 🔴 같은 글에 페르소나는 1명이다. 1단계는 봇끼리 상호작용 전면 금지다 (§8)
-  if (post.personaComments > 0) {
+  // 🔴 한 글에 페르소나 댓글은 최대 5건이다. 자리가 남아 있으면 더 달 수 있다
+  if (post.personaComments >= PERSONA_COMMENTS_PER_POST_MAX) {
     blocks.push({
-      code: 'POST_HAS_PERSONA_COMMENT',
-      message: `이미 페르소나 댓글이 ${post.personaComments}건 있습니다 — 같은 글에 1명입니다`,
+      code: 'POST_PERSONA_COMMENTS_FULL',
+      message: `이미 페르소나 댓글이 ${post.personaComments}건 있습니다`
+        + ` — 한 글에 ${PERSONA_COMMENTS_PER_POST_MAX}건까지입니다`,
     })
   }
 

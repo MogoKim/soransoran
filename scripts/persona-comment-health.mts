@@ -12,8 +12,8 @@
 import { PrismaClient } from '@prisma/client'
 
 import {
-  judgeRatio, judgeReadiness, readRunMode, windowFromRows,
-  RATIO_WINDOW_DAYS, RELEASE_ENV_KEY, type CommentWindow,
+  judgeRatio, judgeReadiness, windowFromRows,
+  RATIO_WINDOW_DAYS, type CommentWindow,
 } from '../src/lib/persona-comment-governor'
 import {
   capabilitiesReady, judgeModelGate, judgeRelease,
@@ -23,6 +23,10 @@ import { judgeGateReport } from '../src/lib/persona-comment-gate-report'
 import { verifyProvenance } from '../src/lib/persona-comment-provenance'
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { COMMENT_RUNNER_LABEL, readRunnerState } from './lib/persona-comment-runner-template'
+import {
+  legacyRunModeFor, readCommentStage, stagePowers, COMMENT_STAGE_ENV,
+} from '../src/lib/persona-comment-stage'
+import { countManagedPostsToday } from '../src/lib/persona-comment-bootstrap-source'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const WANT_JSON = process.argv.includes('--json')
@@ -64,8 +68,23 @@ const killSwitchOff = await (async (): Promise<boolean | null> => {
  */
 const caps = capabilitiesReady(COMMENT_CAPABILITIES)
 
-const mode = readRunMode(process.env)
-const readiness = judgeReadiness({ window, mode: mode.mode, publishedToday, killSwitchOff })
+/**
+ * 🔴 **단계가 예산의 정본이다** (2026-09-11).
+ *    `bootstrap-*` 이면 실회원 댓글이 아니라 오늘 관리형 공개 글 수로 센다.
+ */
+const stage = readCommentStage(process.env)
+const powers = stagePowers(stage.stage)
+const managed = powers.budget === 'bootstrap'
+  ? await countManagedPostsToday(prisma, kstDayStart, now)
+  : null
+const readiness = judgeReadiness({
+  window, mode: legacyRunModeFor(stage.stage), stage: stage.stage, publishedToday, killSwitchOff,
+  bootstrap: {
+    // 🔴 조회 자체가 실패했으면 NaN 이다 — 0 으로 보정하지 않는다(fail-closed)
+    openSlots: managed?.openSlots ?? Number.NaN,
+    publishedToday, killSwitchOff,
+  },
+})
 
 // ── ② Queue 실측 ──
 const queue = await (async (): Promise<{ pending: number; approved: number; published: number; declined: number } | null> => {
@@ -168,7 +187,12 @@ const lastActivity = await (async (): Promise<{ at: string; gateStatus: string |
 })()
 
 const release = judgeRelease({
-  mode: mode.mode,
+  stage: stage.stage,
+  /**
+   * 🔴 레인 수준 점검이므로 "사람이 승인한 후보가 하나라도 있는가" 로 답한다.
+   *    후보 하나하나는 발행 경로에서 `recheckBeforePublish` 가 다시 본다.
+   */
+  humanApproved: (queue?.approved ?? 0) > 0,
   // 🔴 **남은 수량**이다. 총 상한이 아니다 — 이름을 갈라 둔 이유가 이것이다
   publicAllowedToday: readiness.allowance.remaining,
   modelGate,
@@ -185,8 +209,16 @@ const release = judgeRelease({
 /** 🔴 화면과 JSON 이 **이 객체 하나**를 쓴다 */
 const health = {
   ranAt: now.toISOString(),
-  mode: mode.mode,
-  modeReason: mode.reason,
+  mode: legacyRunModeFor(stage.stage),
+  modeReason: `단계 ${stage.stage} 에서 만든 옛 이름이다 — env 를 두 번 읽지 않는다`,
+  /** 🔴 health 와 governor 가 **같은 단계**를 말한다 */
+  stage: stage.stage,
+  stageReason: stage.reason,
+  stageLegacy: stage.legacy,
+  budgetSource: powers.budget,
+  managedPostsToday: managed?.eligible ?? null,
+  managedOpenSlotsToday: managed?.openSlots ?? null,
+  managedExcluded: managed?.excluded ?? null,
   publicAllowedToday: readiness.allowance.remaining,
   allowance: readiness.allowance,
   shadowLimit: readiness.shadowLimit,
@@ -234,10 +266,21 @@ if (WANT_JSON) {
   console.log(JSON.stringify(health, null, 2))
 } else {
   console.log('\n══ 댓글 release 준비도 (read-only · 발행 0) ══\n')
-  console.log(`  실행 모드   ${health.mode} — ${health.modeReason}`)
+  console.log(`  운영 단계   ${health.stage}${health.stageLegacy ? ' (옛 이름 호환)' : ''}`
+    + ` — ${health.stageReason}`)
+  console.log(`  예산 정본   ${health.budgetSource}`
+    + (health.budgetSource === 'bootstrap'
+      ? ` — 오늘 관리형 공개 글 ${health.managedPostsToday ?? '🔴 읽지 못함'}편`
+      : health.budgetSource === 'organic' ? ' — 실사용자 대비 30%' : ' — 없음(발행 0)'))
+  if (health.managedExcluded !== null && Object.keys(health.managedExcluded).length > 0) {
+    console.log(`              제외 ${Object.entries(health.managedExcluded)
+      .map(([k, v]) => `${k} ${v}`).join(' · ')}`)
+  }
+  console.log(`  실행 모드   ${health.mode} (🔴 옛 축 — 단계에서 만든 값이다)`)
   console.log(`  최근 ${RATIO_WINDOW_DAYS}일   실사용자 ${health.window.real} · Persona ${health.window.persona}`
     + `${health.window.measured ? '' : '  🔴 집계 실패'}`)
-  console.log(`  ratio       ${health.ratio}`)
+  console.log(`  ratio       ${health.ratio}`
+    + (health.budgetSource === 'organic' ? '' : ' (🔴 organic 단계에서만 쓰는 값이다)'))
   console.log(`  오늘 공개 허용 남은 ${health.allowance.remaining}건`
     + ` (상한 ${health.allowance.cap} · 사용 ${health.allowance.used}) · shadow ${health.shadowLimit}건`)
   console.log(`  오늘 발행   ${health.publishedToday ?? '🔴 세지 못했다'}`
@@ -259,7 +302,7 @@ if (WANT_JSON) {
   console.log(`  최근 발행   ${health.lastActivity === null ? '없음' : `${health.lastActivity.at} (gate ${health.lastActivity.gateStatus ?? '?'})`}`)
   console.log(`\n  ${health.release.summary}`)
   for (const b of health.release.blockers) console.log(`     · ${b}`)
-  console.log(`\n  🔴 ${RELEASE_ENV_KEY} 를 켜도 위 조건이 다 맞아야 공개된다`)
+  console.log(`\n  🔴 ${COMMENT_STAGE_ENV} 를 올려도 위 조건이 다 맞아야 공개된다`)
   console.log('  🔴 이 명령은 아무것도 바꾸지 않았다 — DB write 0 · 발행 0\n')
 }
 

@@ -520,10 +520,18 @@ jobs:
       #    회차 20260910-153254 은 닉네임 약 454건을 프롬프트에 실어 보냈다.
       #    코드에는 "댓글만 읽는다" 고 적혀 있었지만 실제 payload 를 아무도 열어 보지 않았다.
       #    🔴 외부 호출 0 · DB 0 — 프롬프트를 만들기만 하고 부르지 않는다.
-      #    자산은 gitignored 라 CI 에는 없다. 없으면 그 사실을 소리 내어 말하고
-      #    계약(스키마·digest·fail-closed)만 검증한다.
+      #
+      # 🔴 **`|| echo` 를 걷어냈다** (2026-09-11).
+      #    옛 줄은 `npm run persona:reference-preflight || echo "🟡 자산 없음 …"` 이었다.
+      #    그 `||` 는 **모든 실패**를 성공으로 바꿨다 — 자산이 없을 때뿐 아니라
+      #    payload 에 닉네임이 섞였을 때도, digest 가 어긋났을 때도 초록으로 지나갔다.
+      #    실제로 이 검사는 옛 합성 코드(S01~S10)를 들고 있어 **언제나 exit 1** 이었고,
+      #    `||` 가 그 사실을 가려 아무도 몰랐다.
+      #
+      #    이제 **자산 부재만** 스크립트가 `🟡 SKIP` 을 찍고 정상 종료한다.
+      #    자산이 있는데 검사가 실패하면(누출·digest 불일치·묶음 미성립) **CI 가 빨갛게 뜬다.**
       - name: provider payload preflight (호출 0)
-        run: npm run persona:reference-preflight || echo "🟡 자산 없음 — 계약 검증만 (로컬에서 실물 확인)"
+        run: npm run persona:reference-preflight
 
       # 🔴 **DB 에 연결하지 않는다.** 마이그레이션 판정을 순수 함수로 뽑아 두었으므로
       #    적용됨 / 일부만 / 못 읽음을 가짜 metadata 로 전부 시험한다.
