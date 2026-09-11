@@ -6,6 +6,8 @@
 
 import { readFileSync } from 'node:fs'
 
+import { THIN_82COOK_SLOTS } from '../src/lib/collect-schedule'
+
 import {
   FORBIDDEN_BODY_KEYS, buildReport, judgePublish, judgeSource, judgeSupply,
   logHintOf, perItemSkipCount, rollUpSources, worstOf, PUBLISH_GRACE_MS,
@@ -572,9 +574,12 @@ check('🔴 [10] 화면과 --json 이 같은 report 를 쓴다 — 두 번 계�
  */
 check('🔴 82cook 슬롯을 배열로 계산한다 — 첫 슬롯 하나만 보면 헛기다린다', (() => {
   const runner = readFileSync('scripts/supply-health.mts', 'utf-8')
-  const m = /id: '82cook'[\s\S]{0,200}?slots: \[([0-9, ]+)\]\.map/.exec(runner)
-  return m !== null
-    && m[1]!.split(',').length >= 4
+  /**
+   * 🔴 **시각을 관제에 베껴 적지 않는다** (2026-09-11). 정본은 `collect-schedule` 하나다 —
+   *    두 벌이면 일정을 고칠 때 한쪽만 바뀌고, 관제가 오지 않는 슬롯을 기다린다.
+   */
+  return /slots: THIN_82COOK_SLOTS\.map\(/.test(runner)
+    && THIN_82COOK_SLOTS.length >= 4
     && /logName: 'supply-collect-82cook-thin'/.test(runner)
     && /nextScheduled\(slots: readonly \[number, number\]\[\]/.test(runner)
 })())

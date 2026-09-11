@@ -28,7 +28,8 @@ import {
 
 import {
   planSlots, verifySchedule, verifyNoCrossOverlap, isolationOf, factsOf,
-  MAX_REQUESTS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, thin82cookCapPerRun,
+  MAX_REQUESTS_PER_DAY, RUNS_PER_DAY, SUPPLY_PROCESS_SLOTS,
+  THIN_82COOK_RUNS_PER_DAY, THIN_82COOK_SLOTS, requests82cookPerDay, thin82cookCapPerRun,
 } from '../src/lib/collect-schedule'
 
 const DIR = 'docs/operations/launchd'
@@ -80,7 +81,7 @@ const EXPECTED: Record<string, {
     label: 'com.soransoran.raw-collect-82cook',
     args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-collect-82cook.mts',
       '--list', '--pages=3', '--auto', '--auto-max=30', '--live'],
-    slots: [7, 9, 11, 13, 15, 17, 19, 21, 23, 1].map((h) => ({ hour: h, minute: 10 })),
+    slots: [...planSlots('82cook', 'start')],
     out: '__LOGDIR__/raw-collect-82cook.log',
     err: '__LOGDIR__/raw-collect-82cook-error.log',
   },
@@ -101,7 +102,7 @@ const EXPECTED: Record<string, {
     label: 'com.soransoran.supply-collect-82cook-thin',
     args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-82cook-thin-detail.mts',
       `--cap=${thin82cookCapPerRun()}`, '--live'],
-    slots: [1, 7, 13, 19].map((h) => ({ hour: h, minute: 40 })),
+    slots: [...THIN_82COOK_SLOTS],
     out: '__LOGDIR__/supply-collect-82cook-thin.log',
     err: '__LOGDIR__/supply-collect-82cook-thin-error.log',
   },
@@ -112,7 +113,7 @@ const EXPECTED: Record<string, {
   'com.soransoran.supply-process.plist.template': {
     label: 'com.soransoran.supply-process',
     args: ['__NPX__', 'tsx', '__REPO__/scripts/supply-process.mts', '--live'],
-    slots: [3, 7, 11, 15, 19, 23].map((h) => ({ hour: h, minute: 15 })),
+    slots: [...SUPPLY_PROCESS_SLOTS],
     out: '__LOGDIR__/supply-process.log',
     err: '__LOGDIR__/supply-process-error.log',
   },
@@ -177,7 +178,9 @@ check('🔴 네이버 카페 템플릿은 remonterrace · wgang 의 -multi 둘�
  */
 for (const cafe of ['remonterrace', 'wgang'] as const) {
   const many = EXPECTED[`com.soransoran.navercafe-collect-${cafe}-multi.plist.template`]!
-  check(`🔴 [${cafe}] 다회판이 하루 4회다`, many.slots.length === 4)
+  // 🔴 회차 수의 정본은 `RUNS_PER_DAY` 다 — 여기 숫자를 다시 적지 않는다
+  check(`🔴 [${cafe}] 다회판 회차가 정본과 같다`,
+    many.slots.length === RUNS_PER_DAY[`navercafe:${cafe}` as 'navercafe:remonterrace'].start)
   check(`🔴 [${cafe}] 다회판이 운영 경로다 — runner 를 부른다`,
     many.args.some((a) => a.includes('micro-seed-navercafe-run.mts')))
   check(`🔴 [${cafe}] 다회판에 --pages·--max 를 손으로 적지 않는다`,
@@ -202,13 +205,57 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
 {
   const thin = EXPECTED['com.soransoran.supply-collect-82cook-thin.plist.template']!
   const raw = EXPECTED['com.soransoran.raw-collect-82cook.plist.template']!
-  check('🔴 82cook 얇은 상세 회차 수가 정본과 같다', thin.slots.length === THIN_82COOK_RUNS_PER_DAY)
+  check('🔴 82cook 목록 회차가 5회다', raw.slots.length === 5
+    && raw.slots.length === RUNS_PER_DAY['82cook'].start)
+  check('🔴 82cook 본문 회차가 5회다', thin.slots.length === 5
+    && thin.slots.length === THIN_82COOK_RUNS_PER_DAY)
   check('🔴 82cook 두 job 의 시각이 겹치지 않는다',
     thin.slots.every((t) => !raw.slots.some((r) => r.hour === t.hour && r.minute === t.minute)))
-  check('🔴 82cook 하루 요청이 상한 안이다', (() => {
+  /**
+   * 🔴 **본문은 목록 40분 뒤다.** 목록이 먼저 쌓여야 열 대상이 생긴다 —
+   *    같은 분에 두면 빈 목록을 보고 0건으로 끝난다.
+   */
+  check('🔴 82cook 본문 슬롯이 목록 슬롯의 40분 뒤다',
+    thin.slots.every((t, i) => t.hour === raw.slots[i]!.hour && t.minute === raw.slots[i]!.minute + 40))
+  /** 🔴 확정 요청량 — 33×5 + 17×5 = 250 / 상한 400 */
+  check('🔴 82cook 하루 요청이 33×5 + 17×5 = 250 이다', (() => {
     const rawPerDay = factsOf('82cook').requestsPerRun * raw.slots.length
-    return rawPerDay + thin82cookCapPerRun() * thin.slots.length <= MAX_REQUESTS_PER_DAY['82cook']
+    const thinPerDay = thin82cookCapPerRun() * thin.slots.length
+    return rawPerDay === 165 && thinPerDay === 85
+      && requests82cookPerDay() === 250 && 250 <= MAX_REQUESTS_PER_DAY['82cook']
   })())
+}
+
+/**
+ * 🔴 **확정 운영 일정** (2026-09-11) — 노트북을 켜 두는 07:00~22:30 안에 둔다.
+ *    돌지 않는 슬롯은 능력이 아니다. 새벽 슬롯을 두면 예약만 있고 회차는 없다.
+ */
+{
+  const want: Record<string, string> = {
+    'com.soransoran.raw-collect-82cook.plist.template': '07:00 10:00 13:00 16:00 19:00',
+    'com.soransoran.supply-collect-82cook-thin.plist.template': '07:40 10:40 13:40 16:40 19:40',
+    'com.soransoran.navercafe-collect-remonterrace-multi.plist.template': '07:30 10:30 13:30 16:30 21:30',
+    'com.soransoran.navercafe-collect-wgang-multi.plist.template': '09:30 11:30 15:30 20:30',
+    'com.soransoran.supply-process.plist.template': '08:15 12:15 14:15 17:15 21:15 22:15',
+  }
+  const fmt = (a: readonly { hour: number; minute: number }[]): string =>
+    a.map((s2) => `${String(s2.hour).padStart(2, '0')}:${String(s2.minute).padStart(2, '0')}`).join(' ')
+  for (const [f, times] of Object.entries(want)) {
+    // 🔴 **render 한 실제 plist** 에서 읽는다 — 검사표가 아니라 설치될 파일을 본다
+    const got = fmt(calendarSlots(readFileSync(join(DIR, f), 'utf-8')))
+    check(`🔴 [${f.replace('com.soransoran.', '').replace('.plist.template', '')}] 시각이 확정 일정과 같다 (KST)`,
+      got === times)
+    // 🔴 같은 job 안에 같은 시각이 두 번 있으면 안 된다
+    const arr = calendarSlots(readFileSync(join(DIR, f), 'utf-8')).map((s2) => s2.hour * 60 + s2.minute)
+    check(`🔴 [${f.replace('com.soransoran.', '').replace('.plist.template', '')}] 중복 시각이 없다`,
+      new Set(arr).size === arr.length)
+  }
+  /** 🔴 노트북이 꺼져 있는 시간에 슬롯을 두지 않는다 */
+  for (const [f] of Object.entries(want)) {
+    const hs = calendarSlots(readFileSync(join(DIR, f), 'utf-8')).map((s2) => s2.hour)
+    check(`🔴 [${f.replace('com.soransoran.', '').replace('.plist.template', '')}] 전부 07~22시 안이다`,
+      hs.every((h) => h >= 7 && h <= 22))
+  }
 }
 /**
  * 🔴 **수집 job 과 처리 job 이 서로를 부르지 않는다** (2026-09-11).
@@ -326,7 +373,8 @@ check('🔴 remonterrace 와 wgang 의 실행 시각이 겹치지 않는다', ((
   const a = slots('remonterrace')
   const b = slots('wgang')
   const key = (x: { hour: number; minute: number }): string => `${x.hour}:${x.minute}`
-  return a.length === 4 && b.length === 4
+  // 🔴 회차 수는 카페마다 다르다(remonterrace 5 · wgang 4) — 겹침만 본다
+  return a.length > 0 && b.length > 0
     && a.every((x) => !b.some((y) => key(x) === key(y)))
 })())
 // 🔴 실행 가능한 옛 1회판 템플릿을 저장소에 남기지 않는다 — 남으면 누군가 load 한다
