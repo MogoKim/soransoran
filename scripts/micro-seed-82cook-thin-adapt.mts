@@ -32,8 +32,8 @@ import {
   DETAIL_KEYS, RAW_DETAIL_KEYS, SOURCE_AXIS, RAW_AXIS, SRN_AXIS,
   type ThinRow,
 } from '../src/lib/micro-seed-82cook-thin-adapt'
-// 🔴 처리 identity 는 공급 러너와 **같은 함수**를 쓴다 — 복제하면 한쪽만 고쳐진다
-import { adaptKeyOf } from '../src/lib/supply-autopilot'
+// 🔴 처리 identity 는 공급 처리기와 **같은 함수**를 쓴다 — 복제하면 한쪽만 고쳐진다
+import { adaptKeyOf } from '../src/lib/supply-process'
 
 const DATA_DIR = '.microseed-data'
 const argv = process.argv.slice(2)

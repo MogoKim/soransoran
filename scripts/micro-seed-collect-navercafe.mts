@@ -217,8 +217,23 @@ if (cafe!.stage === 'excluded') {
 }
 
 const QUOTA = slotQuota(CAFE_ID)
-// 🔴 scout(목록만)은 상세를 열지 않으므로 더 깊이 본다. detail 은 얕게 유지한다.
-const PAGE_CAP = maxPagesFor(SCOUT ? 'scout' : 'detail')
+/**
+ * 🔴 **승인된 게시판 범위가 곧 페이지 상한이다** (2026-09-11).
+ *
+ *    옛 판은 `detail` 모드를 언제나 `DETAIL_MAX_PAGES`(5)장으로 잘랐다. 그런데
+ *    `BOARD_TARGETS` 의 `remonterrace:jjong` 은 **2~16p(15장)** 이다 —
+ *    그 게시판을 계획대로 열면 `fail()` 로 죽는다. 계획은 코드에 있고 실행은 막혀 있었다.
+ *
+ *    `--board=` 로 **승인된 범위**를 지목했으면 그 범위가 상한이다. 무제한이 아니다 —
+ *    범위는 `BOARD_TARGETS` 가 정하고, 하루 총량은 `MAX_REQUESTS_PER_DAY` 가 막는다
+ *    (`navercafe-run-plan` 이 그 예산 안에서 회차·상세를 나눈다).
+ *
+ * 🔴 board 없이 부르는 옛 경로(`--cafe`/`--pages`)는 그대로 얕게 유지한다 —
+ *    그쪽은 임시 확인용이고 예산 계산을 거치지 않는다.
+ */
+const PAGE_CAP = BOARD !== null
+  ? pagesOf(BOARD).length
+  : maxPagesFor(SCOUT ? 'scout' : 'detail')
 let PAGE_LIST: number[]
 try {
   PAGE_LIST = pagesOf({ startPage: START_PAGE, endPage: END_PAGE })

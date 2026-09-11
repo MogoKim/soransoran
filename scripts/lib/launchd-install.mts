@@ -1,0 +1,126 @@
+/**
+ * launchd 설치 정본 — 🔴 **저장소 템플릿이 정본이다. 인자를 두 벌로 적지 않는다**
+ *
+ * 🔴 **왜 생겼나** (2026-09-11).
+ *
+ *    `runtime:deploy` 는 기존 설치 plist 를 `unload` 하고 그대로 다시 `load` 했다.
+ *    그래서 **저장소의 새 템플릿이 설치본에 닿지 못했다** — 배포를 몇 번 해도
+ *    네이버 job 은 옛 `micro-seed-collect-navercafe.mts --pages=1 --max=10` 을 계속 돌았고,
+ *    새로 만든 `supply-process` · `supply-collect-82cook-thin` 은 **영영 등록되지 않았다.**
+ *    창업자에게 `sed`·`plutil`·`launchctl` 을 손으로 치게 하는 절차만 README 에 남아 있었다.
+ *
+ * 🔴 **정본을 하나로 둔다.** 설치할 인자·시각·로그 경로는 `docs/operations/launchd/*.template`
+ *    안에만 있다. 배포기도, 격리 검사도, 템플릿 검사도 **같은 파일을 읽는다.**
+ *    여기에 인자를 다시 적으면 그 순간 두 벌이 되고, 언젠가 한쪽만 고쳐진다.
+ *
+ * 🔴 이 파일은 **파일만 다룬다.** `launchctl` 을 부르지 않는다 — 부르는 쪽의 일이다.
+ */
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+/** 저장소 안 템플릿 디렉터리 */
+export const TEMPLATE_DIR = 'docs/operations/launchd'
+
+/** 🔴 설치 스크립트가 반드시 치환해야 하는 것들 */
+export const PLACEHOLDERS = ['__NPX__', '__NODE__', '__REPO__', '__NODEBIN__', '__LOGDIR__'] as const
+
+export type RenderVars = {
+  npx: string
+  node: string
+  repo: string
+  nodebin: string
+  logdir: string
+}
+
+export const templateFileOf = (label: string): string => `${label}.plist.template`
+export const templatePathOf = (label: string, dir: string = TEMPLATE_DIR): string =>
+  join(dir, templateFileOf(label))
+export const plistFileOf = (label: string): string => `${label}.plist`
+
+/** 🔴 렌더링 — 설치 절차와 **같은 치환**이어야 의미가 있다 */
+export function render(xml: string, v: RenderVars): string {
+  return xml
+    .replaceAll('__NPX__', v.npx)
+    .replaceAll('__NODE__', v.node)
+    .replaceAll('__REPO__', v.repo)
+    .replaceAll('__NODEBIN__', v.nodebin)
+    .replaceAll('__LOGDIR__', v.logdir)
+}
+
+/** 치환하고도 남은 placeholder — 🔴 하나라도 남으면 launchd 가 그 경로를 찾지 못한다 */
+export function leftoverPlaceholders(rendered: string): string[] {
+  return [...new Set([...rendered.matchAll(/__[A-Z_]+__/g)].map((m) => m[0]))]
+}
+
+/** plist 한 벌에서 키의 값을 읽는다 — 🔴 파서를 쓰지 않는다. 문자열 그대로 본다 */
+export function valueOf(xml: string, key: string): string | null {
+  const re = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`)
+  const m = re.exec(xml)
+  return m === null ? null : m[1]!
+}
+
+export function programArguments(xml: string): string[] {
+  const m = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)
+  if (m === null) return []
+  return [...m[1]!.matchAll(/<string>([^<]*)<\/string>/g)].map((x) => x[1]!)
+}
+
+export function calendarSlots(xml: string): { hour: number; minute: number }[] {
+  const m = /<key>StartCalendarInterval<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)
+  if (m === null) return []
+  return [...m[1]!.matchAll(/<key>Hour<\/key><integer>(\d+)<\/integer><key>Minute<\/key><integer>(\d+)<\/integer>/g)]
+    .map((x) => ({ hour: Number(x[1]), minute: Number(x[2]) }))
+}
+
+/**
+ * 🔴 **인자를 값으로 대조한다.** 이어 붙여 비교하지 않는다 —
+ *    구분자로 쓸 문자를 고르는 순간 "그 문자가 인자에 들어 있으면?" 이 새 결함이 된다.
+ *    (앞선 판은 `join('\u0000')` 을 썼고, 소스에 실제 NUL 이 박혀 Git 이 이 파일을
+ *     binary 로 취급했다 — diff 가 보이지 않았다.)
+ */
+export function sameArgs(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i])
+}
+
+// ─────────────────────────────────────────────────────────
+// 설치 — 🔴 원자적으로 쓰고, 되돌릴 수 있게 원본을 먼저 읽는다
+// ─────────────────────────────────────────────────────────
+
+/** 설치된 plist 원문. 없으면 `null` — 🔴 "없다" 와 "못 읽었다" 를 구분해 던진다 */
+export function readInstalled(agentDir: string, label: string): string | null {
+  const p = join(agentDir, plistFileOf(label))
+  if (!existsSync(p)) return null
+  return readFileSync(p, 'utf-8')
+}
+
+/** 🔴 임시 파일 후 rename — 반쯤 쓰인 plist 를 launchd 가 읽지 않게 */
+export function writeInstalled(agentDir: string, label: string, xml: string): boolean {
+  const p = join(agentDir, plistFileOf(label))
+  const tmp = `${p}.tmp-${process.pid}`
+  try {
+    writeFileSync(tmp, xml, { encoding: 'utf-8', mode: 0o644 })
+    renameSync(tmp, p)
+    return true
+  } catch {
+    try { rmSync(tmp, { force: true }) } catch { /* 임시 파일 정리 실패는 삼킨다 */ }
+    return false
+  }
+}
+
+export function removeInstalled(agentDir: string, label: string): boolean {
+  try { rmSync(join(agentDir, plistFileOf(label)), { force: true }); return true } catch { return false }
+}
+
+/**
+ * 🔴 **퇴역 plist 는 지우지 않고 옮긴다.** 되돌릴 수 있어야 한다.
+ *    `launchctl unload` 만으로는 로그인·재부팅 때 다시 등록된다 —
+ *    그 자리에서 **파일이 없어야** 퇴역이다.
+ */
+export function retireInstalled(agentDir: string, rollbackDir: string, label: string): boolean {
+  const from = join(agentDir, plistFileOf(label))
+  if (!existsSync(from)) return true
+  try {
+    renameSync(from, join(rollbackDir, plistFileOf(label)))
+    return true
+  } catch { return false }
+}

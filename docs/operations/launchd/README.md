@@ -1,12 +1,15 @@
-# launchd 템플릿 — 🔴 등록되어 있지 않다
+# launchd 템플릿
 
 > 정본: [Raw 공급망 설계 §5](../2026-09-03-raw-supply-chain-design.md) ·
 > [헌법 §6-9-F](../../constitution/MICRO_SEED_LANE_CONSTITUTION.md)
 
-이 디렉터리의 `.plist.template` 은 **템플릿이다. `~/Library/LaunchAgents/` 에 복사되어 있지 않고
-`launchctl load` 되지도 않았다.**
+이 디렉터리에는 `.plist.template` 만 있다. **템플릿이 있다는 것과 job 이 돌고 있다는 것은
+다른 사실이다** — 템플릿은 "무엇을 · 언제 · 어떤 인자로 돌릴 것인가" 를 확정한 것이고,
+등록은 사람이 별도 절차로 한다.
 
 🔴 **"등록됐는가" 의 정본은 이 디렉터리가 아니라 `launchctl list` 와 `~/Library/LaunchAgents/` 다.**
+   이 문서에 "등록됨" 이라고 적지 않는다. 적는 순간 그 문장이 관측을 대신하게 되고,
+   실제로는 내려가 있는 job 을 며칠씩 돌고 있다고 믿게 된다(2026-09-11 이전 판이 그랬다).
 
 ```bash
 npx tsx -e "import {observeJobs} from './scripts/lib/launchd-observe.mjs'; console.log(observeJobs())"
@@ -28,6 +31,33 @@ required  그 capacity 단계가 요구하는 상세 요청 수
 🔴 **등록은 창업자 승인 후 별도 절차다.** 등록하는 순간 되돌리는 주체가 사람이 된다 —
 이 PR 은 "무엇을 등록할 것인가" 까지만 정한다.
 
+## 🔴 손으로 치지 않는다 — `runtime:deploy` 가 cutover 를 한다 (2026-09-11)
+
+아래 "등록 절차" 는 **첫 등록과 진단용**이다. 평소 전환은 배포가 한다.
+
+```bash
+npm run runtime:deploy                                  # 계획만 — 무엇을 설치·퇴역할지 찍는다
+npm run runtime:deploy -- --apply --target=<full sha>   # 🔴 실제 cutover
+```
+
+배포가 한 회차에 하는 일:
+
+```
+설치 plist 원문·loaded 상태 보존  →  예약 job + 퇴역 job unload
+  →  target SHA checkout · npm ci · prisma generate  →  offline 게이트
+  →  🔴 저장소 템플릿을 render 해 **설치 plist 로 쓴다**  →  plutil 검증
+  →  퇴역 job 의 설치본을 보관소로 이동  →  manifest·pin  →  job load
+  →  실제 ProgramArguments · WorkingDirectory 대조  →  격리 검사
+```
+
+🔴 **중간에 실패하면 SHA · plist 원문 · loaded 상태까지 되돌린다.**
+원래 없던 설치본은 지우고, 원래 내려가 있던 job 은 다시 내린다 — 어중간한 상태를 남기지 않는다.
+
+🔴 **이것이 없던 동안 무슨 일이 있었나.** 배포기는 기존 설치 plist 를 `unload` 하고 그대로
+다시 `load` 했다. 저장소의 새 템플릿이 설치본에 닿지 못해, 배포를 몇 번 해도 네이버 job 은
+옛 `micro-seed-collect-navercafe.mts --pages=1 --max=10` 을 계속 돌았고
+`BOARD_TARGETS` 의 2~16p 는 한 번도 열리지 않았다.
+
 ## 왜 템플릿까지만 두는가
 
 ```
@@ -40,7 +70,7 @@ required  그 capacity 단계가 요구하는 상세 요청 수
 
 ## 🔴 등록이 조용히 실패하는 두 가지 (2026-09-07 실측)
 
-supply-autopilot 을 처음 등록했을 때 job 은 `loaded` 인데 **exit 78 로 죽고 로그가 0바이트**였다.
+공급 job 을 처음 등록했을 때 job 은 `loaded` 인데 **exit 78 로 죽고 로그가 0바이트**였다.
 프로세스가 뜨기도 전에 죽어서 stdout·stderr 어디에도 원인이 남지 않는다 —
 사람 눈에는 "등록은 됐는데 아무 일도 안 일어나는" 상태로 보인다.
 
@@ -62,12 +92,12 @@ NODEBIN="$(dirname "$(which node)")"
 LOGDIR="$HOME/Library/Logs/soransoran"   # 🔴 Documents 밖이어야 한다
 # 🔴 JOB 하나가 **템플릿 파일명이자 launchd Label** 이다. 이 디렉터리의 템플릿은
 #    파일명과 Label 을 일치시켜 두었으므로, 아래 render·lint·load·print 가 전부 같은 것을 가리킨다.
-JOB=com.soransoran.raw-collect-82cook
+JOB=com.soransoran.supply-collect-82cook-thin
 
 # ── 1) 로그 디렉터리를 먼저 만든다 ──
 mkdir -p "$LOGDIR"
 
-# ── 2) 치환 ──
+# ── 2) 치환 — 🔴 평소에는 runtime:deploy 가 이 일을 대신한다 ──
 sed -e "s#__NODE__#$(which node)#g" \
     -e "s#__NPX__#${NPX}#g" \
     -e "s#__NODEBIN__#${NODEBIN}#g" \
@@ -97,61 +127,111 @@ grep -o '__[A-Z_]*__' "$HOME/Library/LaunchAgents/${JOB}.plist" || echo "남은 
 🔴 **`plutil -extract` 로 값을 볼 때는 `-o -` 를 붙여라.** 안 붙이면 **원본 파일을 덮어쓴다** —
 2026-09-07 에 등록된 plist 하나를 그렇게 날렸다. 읽기만 할 거면 `plutil -p` 를 쓴다.
 
-🔴 **`.env.local` 에 `SORAN_82COOK_COLLECT_ENABLED=true` 가 없으면 `--live` 는 무시된다.**
+🔴 **`.env.local` 에 그 job 의 스위치가 없으면 `--live` 는 무시된다.**
+(`raw-collect-82cook` → `SORAN_82COOK_COLLECT_ENABLED` ·
+ `supply-collect-82cook-thin` → `SORAN_82COOK_THIN_DETAIL_ENABLED`)
 kill switch 는 plist 가 아니라 환경변수다 — plist 를 지우지 않고도 멈출 수 있어야 한다.
 
 ## 되돌리기
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.soransoran.raw-collect-82cook.plist
-rm ~/Library/LaunchAgents/com.soransoran.raw-collect-82cook.plist
+launchctl unload ~/Library/LaunchAgents/com.soransoran.supply-collect-82cook-thin.plist
+rm ~/Library/LaunchAgents/com.soransoran.supply-collect-82cook-thin.plist
 ```
 
-또는 **더 빠르게**: `.env.local` 에서 `SORAN_82COOK_COLLECT_ENABLED` 를 `false` 로.
+또는 **더 빠르게**: `.env.local` 에서 그 job 의 스위치를 `false` 로.
 plist 는 계속 돌지만 수집이 일어나지 않는다.
 
-## 확정 수집원은 셋뿐이다
+## 확정 수집원은 셋뿐이고, 수집 job 은 서로 독립이다
+
+🔴 **한 source 의 실패가 다른 source 의 공급을 세우지 않는다.** 그래서 수집은 job 으로 나뉘어 있다 —
+세 source 를 한 회차에 묶어 돌리던 옛 구조에서는 82cook 하나가 `ECONNREFUSED` 이면
+이미 받아 둔 네이버 수집물까지 처리되지 못했다(2026-09-10 실측: 이틀간 신규 공급 0).
+그 구조의 폐기 경위는 [Raw 공급망 설계 §4-AU](../2026-09-03-raw-supply-chain-design.md) 에 있다.
 
 | 수집원 | Label / 템플릿 파일명 | 시각 (KST) | 명령 |
 |---|---|---|---|
-| 82cook | `com.soransoran.raw-collect-82cook` | 2시간 간격 10슬롯 (07:10~01:10) | `micro-seed-collect-82cook.mts --list --pages=3 --auto --auto-max=30 --live` |
-| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace` | **09:20** | `micro-seed-collect-navercafe.mts --cafe=remonterrace --pages=1 --max=10 --live` |
-| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang` | **13:20** | `micro-seed-collect-navercafe.mts --cafe=wgang --pages=1 --max=10 --live` |
+| 82cook (Raw Vault 레인) | `com.soransoran.raw-collect-82cook` | 2시간 간격 10슬롯 (07:10~01:10) | `micro-seed-collect-82cook.mts --list --pages=3 --auto --auto-max=30 --live` |
+| 82cook (공급 레인 · 얇은 상세) | `com.soransoran.supply-collect-82cook-thin` | **01:40 · 07:40 · 13:40 · 19:40** (4회) | `micro-seed-82cook-thin-detail.mts --cap=17 --live` |
+| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **04:20 · 10:20 · 16:20 · 22:20** (4회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
+| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **02:50 · 08:50 · 14:50 · 20:50** (4회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
+
+🔴 **82cook 은 두 레인이 같은 서버를 두드린다.** 하루 상한 400건을 나눠 쓴다 —
+raw 가 33×10=330건, 얇은 상세가 17×4=68건. `--cap` 의 정본은
+[`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의 `thin82cookCapPerRun()`
+이고, fixture 가 plist 인자와 대조한다.
+
+🔴 **네이버 두 카페는 `--pages` · `--max` 를 인자로 받지 않는다.** 회차가 읽을 게시판·페이지와
+회차당 상세 몫은 runner 가 `BOARD_TARGETS` · `RUNS_PER_DAY` · 하루 요청 상한에서 역산한다.
+무엇을 넘길지 보려면 `--live` 없이 돌린다 (네트워크 0 · DB 0):
+
+```bash
+npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
+```
 
 🟡 `dlxogns01` · `masanmam` · `goondae` · `yeowooya` 는 **미활성 장래 후보**다.
 수집기가 아는 카페일 뿐 확정 수집원도 현재 스케줄도 아니며, **실행 템플릿을 두지 않는다.**
 늘리려면 그때 승인을 받고 템플릿을 새로 만든다 — fixture 가 이 넷의 템플릿이 없는지 검사한다.
 
+## 🔴 운영 예약 job 은 다섯이다
+
+정본은 [`src/lib/runtime-isolation.ts`](../../../src/lib/runtime-isolation.ts) 의 `RUNTIME_JOBS` 다.
+격리 검사와 배포가 **이 목록과 실제 loaded 를 정확히 대조**한다.
+
+```
+① com.soransoran.navercafe-collect-remonterrace-multi   수집
+② com.soransoran.navercafe-collect-wgang-multi          수집
+③ com.soransoran.raw-collect-82cook                     수집 — 목록을 만든다
+④ com.soransoran.supply-collect-82cook-thin             수집 — ③의 목록을 소비한다
+⑤ com.soransoran.supply-process                         처리
+```
+
+🔴 **82cook 은 두 job 이 함께 있어야 한다.** ④는 목록을 스스로 만들지 않는다 —
+③이 없으면 열 대상이 0 이고, 82cook 공급은 조용히 0 이 된다.
+🔴 `raw-import`(Raw Vault 적재)는 이 목록에 없다. 공급 레인이 아니라 보관 레인이다.
+
 ## 목록
 
 | 템플릿 | 무엇을 | 환경 |
 |---|---|---|
-| `com.soransoran.raw-collect-82cook.plist.template` | 82cook 자동 수집 (2시간 간격 10슬롯) | 로컬 또는 GHA 대체 가능 |
+| `com.soransoran.raw-collect-82cook.plist.template` | 82cook Raw Vault 수집 (2시간 간격 10슬롯) | 로컬 또는 GHA 대체 가능 |
+| `com.soransoran.supply-collect-82cook-thin.plist.template` | 82cook 얇은 상세 수집 (4슬롯) | 로컬 또는 GHA 대체 가능 |
 | `com.soransoran.raw-import.plist.template` | 수집분 Raw Vault 적재 (하루 4슬롯) | 로컬 |
-| `com.soransoran.navercafe-collect-remonterrace.plist.template` | 레몬테라스 수집 (09:20 KST 1슬롯) | 🔴 **로컬 전용** |
-| `com.soransoran.navercafe-collect-wgang.plist.template` | 우아한 갱년기 수집 (13:20 KST 1슬롯) | 🔴 **로컬 전용** |
-| `com.soransoran.supply-autopilot.plist.template` | 공급 Autopilot v1 — 재고 14 미만일 때만 수집→판정→생성→적재 (21:10 KST 1슬롯) | 🔴 **로컬 전용** (§4-AU) |
+| `com.soransoran.navercafe-collect-remonterrace-multi.plist.template` | 레몬테라스 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
+| `com.soransoran.navercafe-collect-wgang-multi.plist.template` | 우아한 갱년기 수집 (4슬롯) | 🔴 **로컬 전용** (세션이 이 기계에만 있다) |
+| `com.soransoran.supply-process.plist.template` | 공급 처리(drain) — 미처리 입력을 변환→판정→초안→적재 (6슬롯) | 🔴 **로컬 전용** (§4-AU) |
 
-## 공급 Autopilot 등록 (승인 후)
+## 공급 처리(drain) 등록 (승인 후)
+
+🔴 **이 job 은 수집하지 않는다.** 수집 job 들이 남긴 **미처리 입력만** 비운다.
+그래서 어느 수집원이 실패했는지 묻지 않고, 반대로 수집 job 도 이 job 의 상태를 보지 않는다.
 
 ```bash
-# ── 0) 🔴 .env.local 에 스위치 둘. 하나라도 없으면 러너가 시작 전에 멈춘다 ──
-#    SORAN_SUPPLY_AUTOPILOT_ENABLED=true
-#    SORAN_82COOK_THIN_DETAIL_ENABLED=true
+# ── 0) 🔴 .env.local 에 스위치 하나 ──
+#    SORAN_SUPPLY_PROCESS_ENABLED=true
+#    🔴 수집 job 의 스위치는 따로다 (SORAN_82COOK_THIN_DETAIL_ENABLED ·
+#       SORAN_82COOK_COLLECT_ENABLED · SORAN_NAVERCAFE_COLLECT_ENABLED).
+#       한 스위치가 수집과 처리를 동시에 끄면, 82cook 을 멈추려다 공급 전체가 멈춘다.
 
 # ── 1) 첫 실행은 사람이 본다 — dry-run 은 네트워크 0 · LLM 0 · DB write 0 ──
-npm run supply:autopilot                        # 오늘 재고로 판정만
-npm run supply:autopilot -- --simulate-stock=5  # 부족했다면 무엇을 할지
+npm run supply:process                        # 무엇이 밀려 있는지 · 무엇을 할지
+npm run supply:process -- --simulate-stock=5  # 재고가 모자랐다면 무엇을 할지
 
 # ── 2) 위 "등록 절차" 의 0~5 를 JOB 만 바꿔 그대로 돌린다 ──
-JOB=com.soransoran.supply-autopilot
+JOB=com.soransoran.supply-process
 ```
 
-실행 시각은 **21:10 KST**, auto-publish(00:05 KST)보다 약 3시간 앞선다.
-재고가 목표(14건) 이상이면 그 한 번도 네트워크로 나가지 않는다.
+실행 시각은 **03:15 · 07:15 · 11:15 · 15:15 · 19:15 · 23:15 KST** 6회다.
+마지막 슬롯이 auto-publish(00:05 KST) 직전이라, 발행 직전에 재고를 한 번 더 채운다.
 
-🔴 **멈추는 가장 빠른 방법**은 `.env.local` 의 `SORAN_SUPPLY_AUTOPILOT_ENABLED` 를 지우는 것이다.
-job 은 계속 돌지만 재고만 읽고 끝난다 — 네트워크도 모델도 DB 도 건드리지 않는다.
+🔴 **미처리 입력이 없으면 정상 no-op 이다** — 네트워크 0 · LLM 0 · DB write 0.
+조용한 날이 실패로 보이지 않아야 진짜 실패가 눈에 띈다.
+
+🔴 **재고 700 은 APPROVED 버퍼 목표이지 수집 스위치가 아니다.** 재고가 700 이상이면
+파일 단계(얇은 변환 · 검수용 변환)만 돌고 모델과 DB 는 쉰다. **수집 job 은 영향받지 않는다.**
+
+🔴 **멈추는 가장 빠른 방법**은 `.env.local` 의 `SORAN_SUPPLY_PROCESS_ENABLED` 를 지우는 것이다.
+job 은 계속 돌지만 무엇이 밀려 있는지만 읽고 끝난다.
 
 ## 🔴 네이버 카페는 등록 전 선행 조건이 셋이다 (PR-S2-b-2)
 
@@ -200,13 +280,16 @@ job 은 계속 돌지만 재고만 읽고 끝난다 — 네트워크도 모델�
 
 **카페마다 plist 를 따로 둔다.** 한 카페를 연속으로 긁지 않고 시간대를 나눈다.
 
-🔴 **2026-09-10 정정 — Wave B 이후 두 카페 모두 하루 4회이고 `-multi` 가 정본이다.**
+두 카페 모두 하루 4회이고 `-multi` job 이 정본이다.
 
 ```
 remonterrace  04:20 · 10:20 · 16:20 · 22:20 KST
 wgang         02:50 · 08:50 · 14:50 · 20:50 KST
 ```
 
-옛 문구(`09:20 remonterrace` · `13:20 wgang` · 하루 2회 · 1회판 · 미등록)는
-더는 사실이 아니다. 🔴 **이 둘이 확정 수집원의 전부**이며,
-같은 시각에 돌지 않는 것을 fixture 가 검사한다.
+🔴 **카페는 이 둘이 전부**이며, 같은 시각에 돌지 않는 것을 fixture 가 검사한다.
+
+> 📜 **역사** — Wave B 이전에는 1회판 job 두 개(`09:20 remonterrace` · `13:20 wgang`)가 돌았다.
+> 그 job 도 템플릿도 지금은 없다. 아래 문서에 남은 09:20/13:20 표기는 **그때의 기록**이지
+> 운영 정본이 아니다: `2026-09-08-scale-foundation.md` · `2026-09-08-d10-activation-prep.md` ·
+> `2026-09-03-raw-supply-chain-design.md`.

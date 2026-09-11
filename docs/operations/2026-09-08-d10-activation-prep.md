@@ -4,7 +4,21 @@
 > [Raw 공급망](2026-09-03-raw-supply-chain-design.md)
 >
 > 🔴 이 PR 은 **준비와 dry-run 까지만** 한다.
+>
+> 📜 **역사 기록이다. 운영 정본이 아니다** (2026-09-11 표시).
+> 이 문서에 나오는 `supply-autopilot` 은 수집·판정·적재를 한 회차에 묶던 **폐기된 중앙 러너**다.
+> 지금은 수집 job 셋(`supply-collect-82cook-thin` · 카페 `-multi` 둘)과
+> 처리 job 하나(`supply-process`)로 나뉘어 있다 —
+> 현재 구조는 [Raw 공급망 §4-AU](2026-09-03-raw-supply-chain-design.md) 가 정본이다.
+> 아래의 시각 · label · 등록 상태는 **그때의 관측**이지 지금 상태가 아니다.
+
 > DB write · persona 생성·활성화 · launchd 등록 · GitHub Variables 변경 · cron 실제 변경 · 발행 **전부 0**.
+
+> 📜 **역사 문서다 — 운영 정본이 아니다** (표시 2026-09-11).
+> 여기 적힌 launchd 배치(`09:20 remonterrace` · `13:20 wgang` · 1회판)는 **그때의 기록**이다.
+> 지금은 `-multi` job 둘이 각각 하루 4회 돌고 1회판은 job 도 템플릿도 없다.
+> 현재 운영 정본: [`launchd/README.md`](launchd/README.md) ·
+> [`NORTH-STAR.md`](NORTH-STAR.md) · [`CURRENT-MILESTONE.md`](CURRENT-MILESTONE.md)
 
 ## §0 무엇이 준비됐나 — 한 장
 

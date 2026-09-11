@@ -563,10 +563,19 @@ check('🔴 [10] 화면과 --json 이 같은 report 를 쓴다 — 두 번 계�
   return built === 1 && exits === 2
 })())
 
-// 82cook 슬롯 — 🔴 하루 10번이다
-check('🔴 82cook 슬롯을 배열로 계산한다 — 07:10 하나만 보면 12시간을 헛기다린다', (() => {
+/**
+ * 82cook 슬롯 — 🔴 **배열이다.** 첫 슬롯 하나만 보면 "다음 실행" 을 내일로 잡아 헛기다린다.
+ *
+ * 🔴 보는 대상은 **공급 레인의 얇은 상세 job**(`supply-collect-82cook-thin`, 4회/day)이다.
+ *    `82cook-thin-*` 파일을 만드는 것이 그 job 이고, 관제가 신선도를 묻는 것도 그 파일이다.
+ *    Raw Vault 레인의 `raw-collect-82cook`(10회/day)은 다른 레인이다.
+ */
+check('🔴 82cook 슬롯을 배열로 계산한다 — 첫 슬롯 하나만 보면 헛기다린다', (() => {
   const runner = readFileSync('scripts/supply-health.mts', 'utf-8')
-  return /slots: \[7, 9, 11, 13, 15, 17, 19, 21, 23, 1\]/.test(runner)
+  const m = /id: '82cook'[\s\S]{0,200}?slots: \[([0-9, ]+)\]\.map/.exec(runner)
+  return m !== null
+    && m[1]!.split(',').length >= 4
+    && /logName: 'supply-collect-82cook-thin'/.test(runner)
     && /nextScheduled\(slots: readonly \[number, number\]\[\]/.test(runner)
 })())
 // 🔴 전문 유출은 디스크 전체를 본다
@@ -614,9 +623,16 @@ check('🔴 관제 본문은 자식 프로세스를 만들지 않는다',
 check('🔴 파일에 쓰지 않는다', !/writeFileSync|appendFileSync|rmSync|mkdirSync|renameSync/.test(code))
 check('🔴 env 를 고치지 않는다', !/process\.env\[[^\]]+\]\s*=/.test(code))
 check('🔴 본문·세션·키 값을 찍지 않는다', !/bodyHead|rawBody|storage-state|API_KEY|DATABASE_URL/.test(code))
+/**
+ * 🔴 잠금 판정 정본이 **러너와 같은 함수**여야 한다 (2026-09-11).
+ *    관제가 따로 판정하면 러너는 멈춰 있는데 화면은 초록인 상태가 생긴다.
+ *    처리기는 죽은 잠금을 **자동 회수하지 않으므로**, 관제가 내지 않으면 아무도 모른다.
+ */
 check('🔴 판정을 새로 만들지 않는다 — 기존 함수를 쓴다',
   /readStock/.test(code) && /queueProfileOf/.test(code) && /kstDayStart/.test(code)
-  && /lockDecision/.test(code) && /adaptKeyOf/.test(code))
+  && /processLockAnomaly/.test(code) && /adaptKeyOf/.test(code))
+check('🔴 관제가 잠금 정본(collect-lock)을 쓴다 — 사본을 만들지 않는다',
+  /from '\.\/lib\/collect-lock\.mjs'/.test(readFileSync('scripts/supply-health.mts', 'utf-8')))
 check('🔴 cap 을 자체 정의하지 않는다',
   /DAILY_PUBLISH_CAP/.test(code) && !/DAILY_PUBLISH_CAP\s*=/.test(code))
 check('🔴 금지 키 목록을 lib 과 공유한다', /FORBIDDEN_BODY_KEYS/.test(code))

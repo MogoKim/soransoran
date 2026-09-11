@@ -43,6 +43,8 @@ import {
   hasInformalSpeech, endsWithQuestion, hasRepetitiveWording, echoesTitleAtEnd,
   hasBannedWord, overlapOk,
 } from '../src/lib/micro-seed-auto-draft'
+// 🔴 재고 버퍼 목표의 정본 — 여기에 숫자를 적지 않는다
+import { STOCK_BANDS } from '../src/lib/supply-stock-plan'
 import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION }
   from '../src/lib/micro-seed-auto-judge'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
@@ -161,7 +163,16 @@ async function main(): Promise<void> {
   // 🔴 `loadEnvLocal()` 뒤에 설치한다. 내부 공급이므로 **capacity 단계**를 쓴다
   const scale = installFromEnv(process.env)
   const capD = deriveProfile(scale.capacityProfile)
+  /**
+   * 🔴 **적재 천장은 `STOCK_BANDS.target`(700) 하나다** (2026-09-11).
+   *
+   *    앞선 판은 여기에 `capD.stockTarget` 을 넣었다. capacity d3 에서 그 값은 **42** 이고,
+   *    재고가 42 에 닿는 순간 `judgeApply` 가 `room = 0` 으로 보고 적재를 거절했다 —
+   *    D100 의 재고 목표 100 → 300 → 700 은 그 산식 아래에서 **산술적으로 도달 불가능**했다.
+   *    capacity 목표는 **발행 쪽 눈금**이다. 경고·최소선으로는 그대로 쓰되, 버퍼 천장은 아니다.
+   */
   const LIMITS = { warn: capD.stockWarn, min: capD.stockMin, target: capD.stockTarget }
+  const BUFFER_TARGET = STOCK_BANDS.target
   const override = arg('input')
   const inputPaths = override !== null ? [override] : latestOfEach(DATA_DIR)
   if (inputPaths.length === 0) fail(`${DATA_DIR} 에 후보 파일이 없습니다`)
@@ -192,8 +203,9 @@ async function main(): Promise<void> {
   console.log(`  후보 파일  ${fileNote.join(' · ')} → 합계 ${candidates.length}건`)
   console.log(`  보류 목록  ${missing ? '🔴 없음' : `${HELD_FILE} · ${held.length}건`}`)
   console.log(`  규모 설정  ${describeScale(scale)}`)
-  console.log(`  재고 기준  경고 ${LIMITS.warn} 이하 · 최소 ${LIMITS.min} · 목표 ${LIMITS.target}`
+  console.log(`  재고 기준  경고 ${LIMITS.warn} 이하 · 최소 ${LIMITS.min} · capacity 목표 ${LIMITS.target}`
     + `  (capacity=${scale.capacityStage} 기준 · 안전 기본값은 ${STOCK_WARN}/${STOCK_MIN}/${STOCK_TARGET})`)
+  console.log(`  적재 천장  ${BUFFER_TARGET}건 (APPROVED 버퍼 목표 — 🔴 capacity 목표가 아니다)`)
   console.log('  🔴 이 도구는 발행하지 않는다 — Post · persona 배정 · ActivityLog 를 만들지 않는다\n')
 
   if (missing) {
@@ -317,7 +329,7 @@ async function main(): Promise<void> {
   if (nNull > 0) console.log('   🔴 profile 을 못 만든 건이 있다 — 그 건은 적재 단계에서 건너뛴다')
 
   // ── ④ 실행 판정 ──
-  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO, usable: stock.usable, target: LIMITS.target })
+  const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO, usable: stock.usable, target: BUFFER_TARGET })
   if (!gate.ok) {
     console.log(`\n④ 보충하지 않는다 — ${gate.reason}`)
     if (!APPLY) {
@@ -416,7 +428,7 @@ async function main(): Promise<void> {
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   })))
-  console.log(`   재고 ${stock.usable} → ${stockAfter.usable}건 (목표 ${LIMITS.target})`)
+  console.log(`   재고 ${stock.usable} → ${stockAfter.usable}건 (버퍼 목표 ${BUFFER_TARGET})`)
   console.log('\n   🔴 발행하지 않았다. 다음 발행은 auto-publish 러너가 스케줄에 따라 한다.\n')
   await prisma.$disconnect()
   process.exit(v.ok ? 0 : 1)

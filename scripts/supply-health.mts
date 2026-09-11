@@ -31,7 +31,9 @@ import {
   PUBLISH_GRACE_MS, type Finding, type HealthReport, type LogFacts,
 } from '../src/lib/supply-health'
 import { STOCK_TARGET, readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
-import { LOCK_FILE, LOCK_TTL_MS, adaptKeyOf, lockDecision } from '../src/lib/supply-autopilot'
+import { LOCK_FILE, LOCK_TTL_MS, RUN_FILE_RE, adaptKeyOf } from '../src/lib/supply-process'
+/** 🔴 잠금 판정 정본 하나 — 관제도 러너와 같은 함수로 본다 */
+import { lockAnomaly as processLockAnomaly } from './lib/collect-lock.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, slotLabel } from '../src/lib/scale-profile'
@@ -39,7 +41,7 @@ import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } fro
 import { SOURCE_FACTS, type SourceId } from '../src/lib/collect-schedule'
 import { guardSnapshot, rollBudgetDay, type GuardState } from '../src/lib/collect-guard'
 import { guardPath, kstDayOf } from './lib/collect-guard-store.mjs'
-import { planSupply, collectReadiness, onDemandPotentialPerDay } from '../src/lib/scale-supply-plan'
+import { planSupply, collectReadiness } from '../src/lib/scale-supply-plan'
 import { currentCapacity, preparedCapacity, describeInventory } from '../src/lib/collect-inventory'
 import { observeJobsSafe } from './lib/launchd-observe.mjs'
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -90,18 +92,18 @@ const SUPPLY_STALE_MS = 30 * 60 * 60 * 1000
  */
 const SOURCES: {
   id: string; filePrefix: string; logName: string; slots: [number, number][]
-  /** 🔴 예약 job 없이 autopilot 이 필요할 때만 여는 레인인가 */
+  /** 🔴 예약 job 이 아직 올라와 있지 않은 레인인가 — 돌지 않는 슬롯으로 stale 을 묻지 않는다 */
   onDemand?: boolean
 }[] = [
   {
     /**
-     * 🔴 **82cook 은 예약 job 이 없다.** 아래 슬롯은 *계획*(prepared)이고
-     *    실제로는 supply-autopilot 이 재고가 모자랄 때만 연다.
-     *    그래서 stale 임계를 이 슬롯에서 파생시키지 않는다 —
-     *    돌지 않는 슬롯으로 "왜 안 도느냐" 를 물으면 늘 빨갛다.
+     * 🔴 **82cook 얇은 상세 job 은 아직 등록돼 있지 않다.** 아래 슬롯은 *계획*(prepared)이다 —
+     *    그래서 stale 임계를 이 슬롯에서 파생시키지 않는다. 돌지 않는 슬롯으로
+     *    "왜 안 도느냐" 를 물으면 화면이 늘 빨갛고, 그러면 진짜 장애가 그 안에 묻힌다.
+     *    🔴 등록되면 `onDemand` 를 내린다 — 그때부터는 슬롯이 실제 약속이다.
      */
-    id: '82cook', filePrefix: '82cook-thin-', logName: 'raw-collect-82cook',
-    slots: [7, 9, 11, 13, 15, 17, 19, 21, 23, 1].map((h) => [h, 10] as [number, number]),
+    id: '82cook', filePrefix: '82cook-thin-', logName: 'supply-collect-82cook-thin',
+    slots: [1, 7, 13, 19].map((h) => [h, 40] as [number, number]),
     onDemand: true,
   },
   {
@@ -225,11 +227,16 @@ function historicRawNoop(): number {
 
 type CheckpointSummary = { running: number; failed: number; lastOkAt: Date | null }
 
+/**
+ * 공급 처리 회차 기록 — 🔴 **관제용이지 재개 근거가 아니다.**
+ *    `running` 인 채로 남은 것은 "처리기가 도중에 죽었다" 는 뜻이고,
+ *    다음 회차는 그 기록과 무관하게 **남아 있는 입력에서** 다시 시작한다.
+ */
 function checkpoints(): CheckpointSummary {
   let running = 0
   let failed = 0
   let lastOkAt: Date | null = null
-  for (const x of dataFiles().filter((y) => /^supply-autopilot-.*\.state\.json$/.test(y))) {
+  for (const x of dataFiles().filter((y) => RUN_FILE_RE.test(y))) {
     try {
       const cp = JSON.parse(readFileSync(join(DATA_DIR, x), 'utf-8')) as {
         status?: string; completedAt?: string | null
@@ -245,15 +252,17 @@ function checkpoints(): CheckpointSummary {
   return { running, failed, lastOkAt }
 }
 
+/**
+ * 🔴 **관제가 보는 잠금.** 판정 정본은 러너와 같은 `collect-lock` 하나다.
+ *
+ *    처리기는 죽은 잠금을 **자동으로 회수하지 않는다**(뺏으면 두 회차가 같이 들어간다).
+ *    그래서 남은 잠금은 조용히 풀리지 않고, 관제가 내지 않으면 공급이 멈춘 채로 남는다 —
+ *    `stale` 은 **사람이 봐야 할 운영 이상**이다.
+ */
 function lockState(now: Date): 'free' | 'busy' | 'stale' {
   const p = join(DATA_DIR, LOCK_FILE)
   if (!existsSync(p)) return 'free'
-  try {
-    const rec = JSON.parse(readFileSync(p, 'utf-8')) as { runId: string; pid: number; startedAt: string }
-    return lockDecision(rec, now, LOCK_TTL_MS)
-  } catch {
-    return 'stale'
-  }
+  return processLockAnomaly(p, now.getTime(), LOCK_TTL_MS) !== null ? 'stale' : 'busy'
 }
 
 type QueueRow = {
@@ -722,8 +731,6 @@ async function main(): Promise<void> {
       // 🔴 셋을 **따로** 낸다. 합치면 "템플릿을 만들었으니 능력이 늘었다" 가 된다
       capacity: {
         configuredPerDay: cur.effectivePerDay,
-        // 🔴 조건부로만 열리는 몫 — 보장 능력에 합치지 않는다
-        onDemandPotentialPerDay: onDemandPotentialPerDay(observed),
         preparedPerDay: prep.effectivePerDay,
         requiredPerDay: plan.detailPerDay,
         perSource: cur.perSource,
@@ -904,7 +911,6 @@ async function main(): Promise<void> {
   if (collect.observeProblem !== null) console.log(`   🔴 ${collect.observeProblem}`)
   // 🔴 **현재 · 준비 · 필요를 한 줄에 나란히** 적는다. 합치지 않는다
   console.log(`   수집 능력  설정 ${Math.round(collect.capacity.configuredPerDay)}건/day`
-    + ` · 조건부 +${Math.round(collect.capacity.onDemandPotentialPerDay)}건/day(autopilot · 재고 미달 시에만)`
     + ` · 준비 ${Math.round(collect.capacity.preparedPerDay)}건/day`
     + ` · 필요 ${collect.capacity.requiredPerDay}건/day`)
   for (const s2 of collect.capacity.perSource) {

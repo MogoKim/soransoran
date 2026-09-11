@@ -18,7 +18,7 @@
 import { derive, type ScaleProfile } from './scale-profile'
 import {
   RUNS_PER_DAY, SOURCE_FACTS, effectiveDetailPerDay, effectiveDetailPerDayOf,
-  factsOf, theoreticalDetailPerDay, verifySchedule,
+  factsOf, theoreticalDetailPerDay, thin82cookCapPerRun, verifySchedule,
   type Phase, type SourceId,
 } from './collect-schedule'
 import { BREAKER, FAILURE_CLASSES, breakerOf, budgetOf, type GuardState } from './collect-guard'
@@ -108,43 +108,47 @@ export type SourcePlan = {
   id: string
   /** launchd 템플릿 파일명 (fixture 가 이 파일을 읽어 아래 값을 대조한다) */
   template: string
-  /** 한 회차가 여는 최대 건수 — 템플릿 인자(`--max` / `--auto-max`) */
+  /**
+   * 한 회차가 여는 최대 상세 건수.
+   * 🔴 82cook 은 템플릿 인자(`--auto-max`)에서 온다.
+   * 🔴 네이버 두 카페는 인자에 없다 — runner 가 `BOARD_TARGETS` 와 하루 요청 상한에서
+   *    역산한 회차당 상세 몫이다(fixture 가 `planCafeRun` 과 대조한다).
+   */
   maxPerRun: number
   /** 템플릿에 적힌 하루 회차 수 (StartCalendarInterval 슬롯 수) */
   runsPerDay: number
-  /** 🔴 **launchctl 에 실제로 올라와 있는가** — 2026-09-08 `launchctl list` 실측 */
+  /** 🔴 **launchctl 에 실제로 올라와 있는가** — 2026-09-11 `launchctl list` 실측 */
   loaded: boolean
   note: string
 }
 
 /**
  * 🔴 확정 수집원 셋. `loaded` 는 실측값이다 —
- *    82cook 은 템플릿이 있는데도 **올라와 있지 않다.** 그래서 지금 82cook 상세는
- *    supply-autopilot(21:10, 하루 1회) 안에서만 열린다.
+ *    82cook 은 두 job(raw · 얇은 상세) 다 템플릿이 있는데도 **올라와 있지 않다.**
+ *    올라오기 전까지 82cook 이 여는 상세는 0 이다. 조건부로 열리던 옛 몫은 없다.
+ *
+ * 🔴 **네이버 두 카페의 정본은 `-multi` job 이다** (2026-09-11 실측).
+ *    1회판 job 과 그 템플릿은 없다 — 옛 09:20/13:20 · 하루 1회는 역사이지 현재가 아니다.
  */
 export const SOURCES: readonly SourcePlan[] = [
   {
     id: '82cook', template: 'com.soransoran.raw-collect-82cook.plist.template',
     maxPerRun: 30, runsPerDay: 10, loaded: false,
-    note: '🔴 템플릿만 있고 launchctl 미등록 — 지금은 supply-autopilot 안에서만 열린다',
+    note: '🔴 템플릿만 있고 launchctl 미등록 — 등록 전까지 82cook 상세는 0 이다',
   },
   {
-    id: 'navercafe:remonterrace', template: 'com.soransoran.navercafe-collect-remonterrace.plist.template',
-    maxPerRun: 10, runsPerDay: 1, loaded: true, note: 'launchd 09:20 KST',
+    id: 'navercafe:remonterrace',
+    template: 'com.soransoran.navercafe-collect-remonterrace-multi.plist.template',
+    maxPerRun: 12, runsPerDay: 4, loaded: true,
+    note: 'launchd -multi 4회/day (04:20 · 10:20 · 16:20 · 22:20 KST) · 회차당 상세 12건(jjong 10 + humor 2)',
   },
   {
-    id: 'navercafe:wgang', template: 'com.soransoran.navercafe-collect-wgang.plist.template',
-    maxPerRun: 10, runsPerDay: 1, loaded: true, note: 'launchd 13:20 KST',
+    id: 'navercafe:wgang',
+    template: 'com.soransoran.navercafe-collect-wgang-multi.plist.template',
+    maxPerRun: 10, runsPerDay: 4, loaded: true,
+    note: 'launchd -multi 4회/day (02:50 · 08:50 · 14:50 · 20:50 KST) · 회차당 상세 10건(all)',
   },
 ]
-
-/**
- * supply-autopilot 이 스스로 여는 몫 — 🔴 상한은 하위 스크립트 BATCH_CAP 이 정한다.
- *
- * 🔴 여기서 `supply-autopilot` 을 import 하지 않는다 — 그쪽이 이 파일의 `detailPerQueueItem`
- *    을 부르므로 순환이 된다. 대신 **fixture 가 `COLLECT_CAP` 과 같은지 대조**한다.
- */
-export const AUTOPILOT_COLLECT = { maxPerRun: 50, runsPerDay: 1, note: 'launchd 21:10 KST' } as const
 
 /**
  * 🔴 **원천 하나가 큐 한 줄이 되지 않는다.** 몇 배를 열어야 하는가.
@@ -165,22 +169,29 @@ export function detailPerQueueItem(): number {
  *      · 관측 기반 `currentCapacity(observed)` = 20/day  (collect-inventory)
  *      · 정적 `SOURCES[].loaded` 기반 `supplyCapacity()` = 60/day  (여기)
  *    `findBottlenecks` 는 뒤엣것을 썼다 — 아무도 등록하지 않은 job 과
- *    조건부로만 도는 autopilot 몫이 **지금 열리는 능력**으로 세어졌다.
+ *    조건부로만 도는 몫이 **지금 열리는 능력**으로 세어졌다.
  *
  *    이제 current 의 정본은 **관측 하나뿐**이다(`collect-inventory.currentCapacity`).
  *    `SOURCES[].loaded` 는 문서용 메모로만 남기고 판정에 쓰지 않는다.
  */
 
 /**
- * 🔴 **조건부로만 열리는 몫** — `supply-autopilot` 은 재고가 목표에 못 미칠 때만 수집한다.
- *    보장된 current 에 합치면 "재고가 찼을 때는 0인 능력" 을 상시 능력으로 세게 된다.
- *    그래서 **따로** 낸다. 이름이 곧 계약이다.
+ * 🔴 **82cook 얇은 상세 job 의 몫** (2026-09-11).
+ *
+ *    2026-09-11 이전에는 이 몫이 중앙 러너 안의 **조건부 수집**이었다 — 재고가 목표에
+ *    못 미칠 때만 열렸다. 그래서 "재고가 찼을 때는 0인 능력" 이 상시 능력으로 세어졌고,
+ *    화면은 초록인데 실제 신규는 며칠씩 0 이었다.
+ *
+ *    지금은 **예약 job** 이다. 조건이 없으므로 따로 셀 이유도 없다 —
+ *    `currentCapacity` 가 보는 관측에 그대로 들어간다. 이 함수는 그 job 하나만 본다.
  */
-export function onDemandPotentialPerDay(observed: readonly ObservedJob[]): number {
-  const on = observed.some((o) => o.loaded && o.label === 'com.soransoran.supply-autopilot')
-  if (!on) return 0
-  // 🔴 autopilot 이 여는 것은 82cook 상세다 — 그 성공률이 걸린다
-  return AUTOPILOT_COLLECT.maxPerRun * AUTOPILOT_COLLECT.runsPerDay * factsOf('82cook').detailSuccessRate.value
+export const THIN_82COOK_JOB = 'com.soransoran.supply-collect-82cook-thin'
+
+export function thin82cookDetailPerDay(observed: readonly ObservedJob[]): number {
+  const hit = observed.find((o) => o.loaded && o.label === THIN_82COOK_JOB)
+  if (hit === undefined) return 0
+  // 🔴 회차 수는 **실제 슬롯 수**다 — 계획한 수가 아니라 올라와 있는 수를 센다
+  return thin82cookCapPerRun() * hit.slots.length * factsOf('82cook').detailSuccessRate.value
 }
 
 // ─────────────────────────────────────────────────────────
@@ -333,7 +344,7 @@ export function findBottlenecks(plan: SupplyPlan, limits?: {
 }, observed: readonly ObservedJob[] = []): Bottleneck[] {
   /**
    * 🔴 **current 는 관측에서만 나온다.** 정적 `loaded` 를 쓰던 예전 판은
-   *    미등록 job 과 조건부 autopilot 몫까지 세어 60건이라고 말했다(실제 20건).
+   *    미등록 job 과 조건부 수집 몫까지 세어 60건이라고 말했다(실제 20건).
    */
   const cur = currentCapacity(observed)
   const collectCapacity = limits === undefined

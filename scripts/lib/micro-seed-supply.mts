@@ -187,8 +187,14 @@ export const AUTO_SKIP_LIST_FLAGS = ['politicalOrPublicFigure', 'politicalTopicL
  */
 export const AUTO_HOLD_DETAIL_FLAGS = ['medicalOrAdLikely', 'publicFigureMention'] as const
 
-/** 자동 선별 하한. 🔴 점수가 낮다고 파일에서 지우지 않는다 — 여는 순서와 범위만 정한다 */
-export const AUTO_MIN_SCORE = 20
+/**
+ * 🔴 **`AUTO_MIN_SCORE` 는 삭제했다** (2026-09-11).
+ *
+ *    점수 하한으로 본문을 열기 **전에** 후보를 버리던 값이다(20).
+ *    실측: remonterrace 후보 15 → 상세 4, wgang 후보 15 → 상세 2 —
+ *    상한이 10 인데 점수 때문에 빈손으로 끝났다. 점수는 `planAutoFetch` 안에서
+ *    **여는 순서**로만 쓴다. 품질은 본문을 읽은 뒤 safety·judge·draft 가 본다.
+ */
 
 export type AutoFetchInput = {
   sourceArticleId: string
@@ -198,7 +204,7 @@ export type AutoFetchInput = {
   alreadyInVault?: boolean
 }
 
-export type AutoSkipReason = 'ALREADY_IN_VAULT' | 'SKIP_FLAG' | 'BELOW_MIN_SCORE' | 'OVER_MAX'
+export type AutoSkipReason = 'ALREADY_IN_VAULT' | 'SKIP_FLAG' | 'OVER_MAX'
 
 export type AutoFetchPlan = {
   picked: string[]
@@ -213,10 +219,9 @@ export type AutoFetchPlan = {
  */
 export function planAutoFetch(
   rows: readonly AutoFetchInput[],
-  opts: { max?: number; minScore?: number } = {},
+  opts: { max?: number } = {},
 ): AutoFetchPlan {
   const max = opts.max ?? AUTO_FETCH_MAX
-  const minScore = opts.minScore ?? AUTO_MIN_SCORE
   const picked: string[] = []
   const skipped: AutoFetchPlan['skipped'] = []
 
@@ -232,10 +237,21 @@ export function planAutoFetch(
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'SKIP_FLAG', detail: `자동 제외 플래그 ${hit.join('·')} — 지정(--fetch)하면 열린다` })
       continue
     }
-    if (r.score < minScore) {
-      skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'BELOW_MIN_SCORE', detail: `점수 ${r.score} < ${minScore}` })
-      continue
-    }
+    /**
+     * 🔴 **점수는 순서이지 관문이 아니다** (2026-09-11).
+     *
+     *    옛 판은 `score < AUTO_MIN_SCORE` 면 **본문을 열기도 전에** 버렸다.
+     *    실측: remonterrace 목록 23 → 후보 15 → 상세 **4**, wgang 21 → 15 → 상세 **2**.
+     *    상한은 10 인데 점수 때문에 2~4 건만 열렸다 — 후보가 남아 있는데도 빈손으로 끝났다.
+     *
+     *    점수는 "무엇을 먼저 열까" 를 정하는 값이다. 이미 위에서 점수 내림차순으로
+     *    정렬했으므로 **좋은 것이 먼저 열린다.** 상한(`max`)이 그 뒤를 자른다.
+     *    품질은 본문을 읽은 뒤 safety·judge·draft 게이트가 판단한다 —
+     *    읽지도 않고 버리면 그 게이트들이 볼 것이 없다.
+     *
+     * 🔴 이것을 대신할 새 관문을 만들지 않는다. 하드 차단으로 남는 것은
+     *    위의 `ALREADY_IN_VAULT`(중복)와 `SKIP_FLAG`(공지·정치 등) 둘뿐이다.
+     */
     if (picked.length >= max) {
       skipped.push({ sourceArticleId: r.sourceArticleId, reason: 'OVER_MAX', detail: `한 실행 상한 ${max}건을 넘었다 — 다음 실행에서 열린다` })
       continue

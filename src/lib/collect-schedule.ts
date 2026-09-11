@@ -4,13 +4,12 @@
  * 🔴 왜 이 파일이 필요한가.
  *    d10 은 하루 상세 40건, 내부 100/day 목표면 **382건**을 읽어야 한다(`planSupply` 역산).
  *
- *    🔴 지금 열리는 것은 **하루 20건**이다 — `launchctl` 에 카페 1회 job 두 개뿐이고
- *       (10 × 1 × 성공률 1.0) × 2, 82cook job 은 미등록이라 0 이다.
- *       `supply-autopilot` 이 여는 82cook 상세는 **재고가 모자랄 때만** 도는 조건부 몫이라
- *       보장 능력에 합치지 않는다 — 따로 세면 +40건이다(50 × 1 × 0.8).
- *       이 셋을 한 숫자로 합치면 "아무도 등록하지 않은 job" 이 능력이 된다.
- *       정본 구분은 `collect-inventory`(current) · `preparedCapacity`(prepared) ·
- *       `onDemandPotentialPerDay`(조건부) 다.
+ *    🔴 지금 열리는 것은 카페 `-multi` job 둘뿐이다. 82cook 은 두 job(`raw-collect-82cook` ·
+ *       `supply-collect-82cook-thin`) 다 **템플릿만 있고 미등록**이라 0 이다.
+ *       🔴 **조건부 몫을 능력에 합치지 않는다.** 2026-09-11 이전에는 `supply-autopilot` 이
+ *       "재고가 모자랄 때만" 82cook 상세를 열었고, 그 몫이 능력으로 세어져 며칠씩 0 인 날에도
+ *       화면은 초록이었다. 지금 82cook 몫은 **예약 job 의 슬롯**에서 그대로 읽힌다.
+ *       정본 구분은 `collect-inventory`(current) · `preparedCapacity`(prepared) 다.
  *    회차를 늘려야 하는데, **아무 때나 더 돌리면 두 가지가 깨진다.**
  *
  *      ① 남의 서버 부담 — 같은 시각에 몰리면 한 세션이 연속으로 긁는 모양이 된다
@@ -21,6 +20,9 @@
  *
  * 🔴 이 파일은 계획만 만든다. 실제 job 등록은 사람이 한다(`docs/operations/launchd/README.md`).
  */
+
+// 🔴 한 회차 상한의 정본은 얇은 수집기 쪽이다 — 여기 숫자를 다시 적지 않는다
+import { BATCH_CAP } from './micro-seed-82cook-thin'
 
 export type SourceId = '82cook' | 'navercafe:remonterrace' | 'navercafe:wgang'
 
@@ -105,7 +107,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0, loaded: true,
-    note: 'launchd 09:20 KST 1회 · 상세 6/6 성공 · 세션 오류 0',
+    note: 'launchd -multi 4회/day (04:20·10:20·16:20·22:20 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
   {
     id: 'navercafe:wgang',
@@ -116,7 +118,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0, loaded: true,
-    note: 'launchd 13:20 KST 1회 · 상세 6/6 성공 · 세션 오류 0',
+    note: 'launchd -multi 4회/day (02:50·08:50·14:50·20:50 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
 ]
 
@@ -158,6 +160,30 @@ export const RUNS_PER_DAY: Readonly<Record<SourceId, Record<Phase, number>>> = {
   '82cook': { start: 10, stable: 10 },
   'navercafe:remonterrace': { start: 4, stable: 8 },
   'navercafe:wgang': { start: 4, stable: 8 },
+}
+
+/**
+ * 🔴 **82cook 얇은 상세 수집의 독립 job 몫** (2026-09-11).
+ *
+ *    82cook 은 두 job 으로 나뉜다. `raw-collect-82cook` 은 목록과 Raw Vault 용 상세를 열고,
+ *    `supply-collect-82cook-thin` 은 **D100 공급 레인이 먹는 얇은 상세**를 연다.
+ *    둘은 같은 서버를 두드리므로 **하루 상한(`MAX_REQUESTS_PER_DAY`)을 나눠 쓴다.**
+ *
+ *    🔴 옛 구조에서는 이 몫이 `supply-autopilot` 안의 **조건부 수집**이었다 —
+ *       재고가 모자랄 때만 열려서, 관제는 "능력이 있다" 고 말하는데 실제로는 며칠씩 0 이었다.
+ *       예약 job 으로 바꾸면 열리는 양이 스케줄에서 바로 읽힌다.
+ *
+ *    🔴 **숫자를 손으로 적지 않는다.** raw 수집이 쓰는 몫을 상한에서 빼고 남은 것을 회차로 나눈다.
+ */
+export const THIN_82COOK_RUNS_PER_DAY = 4
+
+export function thin82cookCapPerRun(): number {
+  const f = factsOf('82cook')
+  const rawPerDay = f.requestsPerRun * RUNS_PER_DAY['82cook'].start
+  const left = MAX_REQUESTS_PER_DAY['82cook'] - rawPerDay
+  if (left <= 0) return 0
+  // 🔴 하위 스크립트의 한 회차 상한(BATCH_CAP)을 넘지 않는다 — 그쪽도 다시 막지만 계획이 거짓이면 안 된다
+  return Math.max(0, Math.min(BATCH_CAP, Math.floor(left / THIN_82COOK_RUNS_PER_DAY)))
 }
 
 export type Slot = { hour: number; minute: number }
