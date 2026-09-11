@@ -38,7 +38,7 @@ import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, slotLabel } from '../src/lib/scale-profile'
 import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } from '../src/lib/scale-readiness'
-import { SOURCE_FACTS, type SourceId } from '../src/lib/collect-schedule'
+import { SOURCE_FACTS, THIN_82COOK_SLOTS, type SourceId } from '../src/lib/collect-schedule'
 import { guardSnapshot, rollBudgetDay, type GuardState } from '../src/lib/collect-guard'
 import { guardPath, kstDayOf } from './lib/collect-guard-store.mjs'
 import { planSupply, collectReadiness } from '../src/lib/scale-supply-plan'
@@ -87,8 +87,7 @@ const SUPPLY_STALE_MS = 30 * 60 * 60 * 1000
 /**
  * 확정 수집원 셋 — 🔴 §4-AV 와 같은 목록이다.
  *
- * 🔴 **슬롯은 배열이다.** 82cook 은 하루 10번 돈다 — 07:10 하나만 보면
- *    "다음 실행" 을 09:10 이 아니라 내일 07:10 으로 잡아 12시간을 헛기다린다.
+ * 🔴 **슬롯은 배열이다.** 첫 슬롯 하나만 보면 "다음 실행" 을 내일로 잡아 헛기다린다.
  */
 const SOURCES: {
   id: string; filePrefix: string; logName: string; slots: [number, number][]
@@ -103,7 +102,8 @@ const SOURCES: {
      *    🔴 등록되면 `onDemand` 를 내린다 — 그때부터는 슬롯이 실제 약속이다.
      */
     id: '82cook', filePrefix: '82cook-thin-', logName: 'supply-collect-82cook-thin',
-    slots: [1, 7, 13, 19].map((h) => [h, 40] as [number, number]),
+    // 🔴 시각 정본은 `collect-schedule` 하나다 — 여기 숫자를 다시 적지 않는다
+    slots: THIN_82COOK_SLOTS.map((x) => [x.hour, x.minute] as [number, number]),
     onDemand: true,
   },
   {

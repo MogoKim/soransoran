@@ -5012,15 +5012,23 @@ dry-run     collect --auto (네트워크 0) · import --raw-only (DB write 0)
 누군가 하루에 다섯 번 명령을 쳐야 큐가 채워졌다. 이 절은 그 다섯 번을 없앤다.
 
 ```
-[수집 — source 마다 독립 job]
-  82cook 얇은 상세        com.soransoran.supply-collect-82cook-thin   (4회/day)
-  navercafe:remonterrace  com.soransoran.navercafe-collect-remonterrace-multi (4회/day)
-  navercafe:wgang         com.soransoran.navercafe-collect-wgang-multi (4회/day)
+[수집 — source 마다 독립 job]  🔴 전부 KST (2026-09-11 확정)
+  82cook 목록             raw-collect-82cook           5회  07:00 10:00 13:00 16:00 19:00
+  82cook 본문(얇은 상세)   supply-collect-82cook-thin   5회  07:40 10:40 13:40 16:40 19:40
+  navercafe:remonterrace  navercafe-collect-…-multi    5회  07:30 10:30 13:30 16:30 21:30
+  navercafe:wgang         navercafe-collect-…-multi    4회  09:30 11:30 15:30 20:30
 
 [처리 — 독립 drain job]
-  com.soransoran.supply-process (6회/day)
+  com.soransoran.supply-process  6회  08:15 12:15 14:15 17:15 21:15 22:15
     source 별 (얇은 변환 → 검수용 변환) → 공통 (AI 판정 → AI 초안 → Queue 보충)
 ```
+
+🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 하루에 고르게 폈고,
+그래서 02:50 · 04:20 · 01:10 처럼 기계가 꺼져 있는 시각에 슬롯이 있었다 —
+예약은 있는데 회차는 돌지 않았다. **돌지 않는 슬롯은 능력이 아니다.**
+🔴 처리는 **수집 뒤에** 붙인다. 입력이 생긴 뒤에 비워야 대기 시간이 줄고,
+그만큼 APPROVED 순증이 빨라진다.
+🔴 본문은 목록의 **40분 뒤**다 — 목록이 먼저 쌓여야 열 대상이 생긴다.
 
 **끝점은 Queue 다. 발행이 아니다.** Post 는 auto-publish(§4-AL)가 00:05 KST 에 만든다.
 공급과 발행을 한 프로세스에 넣지 않는 이유는 §4-AL 과 같다 —
@@ -5347,7 +5355,7 @@ collect(82cook) → cafeThin(네이버 수집물 얇게) → adapt → judge →
 `cafeThin` 은 앞 단계에서 이어받는 것이 없으므로(launchd 수집물을 스스로 찾는다)
 네이버를 안 돌린 날에도 fail closed 가 되지 않는다.
 
-🔴 **재고가 차 있어도 수집물을 방치하지 않는다.** launchd 는 (당시 09:20·13:20, 지금은 `-multi` 4회/day) 계속 긁어 오는데
+🔴 **재고가 차 있어도 수집물을 방치하지 않는다.** launchd 는 (당시 09:20·13:20, 지금은 `-multi` 로 하루 4~5회) 계속 긁어 오는데
 재고가 넉넉하다는 이유로 변환을 미루면 파일이 쌓이기만 한다. 그래서 no-op 경로에서도
 미처리 수집물이 있으면 **변환만은** 수행한다 — 네트워크 0 · LLM 0 · DB 0 이라 미룰 이유가 없다.
 

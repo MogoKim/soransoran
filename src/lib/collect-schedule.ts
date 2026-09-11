@@ -107,7 +107,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0, loaded: true,
-    note: 'launchd -multi 4회/day (04:20·10:20·16:20·22:20 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
+    note: 'launchd -multi 5회/day (07:30·10:30·13:30·16:30·21:30 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
   {
     id: 'navercafe:wgang',
@@ -118,7 +118,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
     sessionErrors: 0, loaded: true,
-    note: 'launchd -multi 4회/day (02:50·08:50·14:50·20:50 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
+    note: 'launchd -multi 4회/day (09:30·11:30·15:30·20:30 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
 ]
 
@@ -155,11 +155,18 @@ export const MAX_REQUESTS_PER_DAY: Readonly<Record<SourceId, number>> = {
 
 export type Phase = 'start' | 'stable'
 
-/** 🔴 회차 수 — 시작은 보수적으로, 안정되면 올린다 */
+/**
+ * 🔴 **회차 수는 `SLOTS` 에서 나온다** (2026-09-11 운영 일정 확정).
+ *    여기 적힌 수는 그 길이와 반드시 같아야 한다 — `verifySchedule` 이 대조한다.
+ *
+ * 🔴 **안정 단계(stable)를 아직 늘리지 않았다.** 늘릴 시각이 정해지지 않았는데
+ *    수만 키우면 `planSlots` 가 없는 일정을 지어내게 된다. 정해지면 `SLOTS.stable` 에
+ *    시각을 적고 이 수를 함께 고친다.
+ */
 export const RUNS_PER_DAY: Readonly<Record<SourceId, Record<Phase, number>>> = {
-  '82cook': { start: 10, stable: 10 },
-  'navercafe:remonterrace': { start: 4, stable: 8 },
-  'navercafe:wgang': { start: 4, stable: 8 },
+  '82cook': { start: 5, stable: 5 },
+  'navercafe:remonterrace': { start: 5, stable: 5 },
+  'navercafe:wgang': { start: 4, stable: 4 },
 }
 
 /**
@@ -173,45 +180,100 @@ export const RUNS_PER_DAY: Readonly<Record<SourceId, Record<Phase, number>>> = {
  *       재고가 모자랄 때만 열려서, 관제는 "능력이 있다" 고 말하는데 실제로는 며칠씩 0 이었다.
  *       예약 job 으로 바꾸면 열리는 양이 스케줄에서 바로 읽힌다.
  *
- *    🔴 **숫자를 손으로 적지 않는다.** raw 수집이 쓰는 몫을 상한에서 빼고 남은 것을 회차로 나눈다.
+ *    🔴 회차 수는 `THIN_82COOK_SLOTS` 의 길이와 같아야 한다 — fixture 가 대조한다.
  */
-export const THIN_82COOK_RUNS_PER_DAY = 4
+export const THIN_82COOK_RUNS_PER_DAY = 5
+
+/**
+ * 🔴 **한 회차 상한은 17 로 고정한다** (2026-09-11).
+ *
+ *    앞선 판은 "하루 상한에서 raw 몫을 빼고 회차로 나눈다" 로 **역산**했다.
+ *    그때는 raw 가 10회여서 (400 − 330) / 4 = 17 이 나왔다.
+ *    일정이 raw 5회로 바뀌면 같은 산식이 (400 − 165) / 5 = **47** 을 낸다 —
+ *    하루 요청이 33×5 + 47×5 = **400**, 상한에 딱 붙어 여유가 0 이 된다.
+ *
+ *    🔴 **일정이 바뀔 때마다 상한이 따라 커지는 것은 안전장치가 아니다.**
+ *       관측(82cook 하루 신규 유입)이 아직 없으므로 **보수적으로 유지**한다:
+ *       33×5 + 17×5 = **250/day** (상한 400 대비 여유 150).
+ *       늘리려면 유입 관측을 근거로 들고 이 수 하나를 고친다.
+ */
+export const THIN_82COOK_CAP_PER_RUN = 17
 
 export function thin82cookCapPerRun(): number {
-  const f = factsOf('82cook')
-  const rawPerDay = f.requestsPerRun * RUNS_PER_DAY['82cook'].start
-  const left = MAX_REQUESTS_PER_DAY['82cook'] - rawPerDay
-  if (left <= 0) return 0
   // 🔴 하위 스크립트의 한 회차 상한(BATCH_CAP)을 넘지 않는다 — 그쪽도 다시 막지만 계획이 거짓이면 안 된다
-  return Math.max(0, Math.min(BATCH_CAP, Math.floor(left / THIN_82COOK_RUNS_PER_DAY)))
+  return Math.max(0, Math.min(BATCH_CAP, THIN_82COOK_CAP_PER_RUN))
+}
+
+/** 🔴 82cook 두 job 이 하루에 보내는 요청 합 — 상한 안에 드는지는 fixture 가 본다 */
+export function requests82cookPerDay(): number {
+  return factsOf('82cook').requestsPerRun * RUNS_PER_DAY['82cook'].start
+    + thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY
 }
 
 export type Slot = { hour: number; minute: number }
 
 /**
- * 🔴 **분(minute)을 소스마다 다르게 준다.** 같은 분에 겹치면 한 세션이 두 곳을
+ * 🔴 **한 source 안에서 분(minute)은 하나로 고정한다** — 이제 **검증용**이다.
+ *
+ *    시각은 `SLOTS` 가 정한다. 이 표는 "그 안에서 분이 섞이지 않았는가" 를 본다 —
+ *    분이 섞이면 사람이 손으로 고치다 흘린 것이다.
+ *    🔴 레인마다 분을 달리 두는 이유는 그대로다: 같은 분에 겹치면 한 세션이 두 곳을
  *    연속으로 긁는 모양이 되고, 차단은 그 모양을 본다.
  */
 export const SOURCE_MINUTE: Readonly<Record<SourceId, number>> = {
-  '82cook': 10,
-  'navercafe:remonterrace': 20,
-  'navercafe:wgang': 50,
+  '82cook': 0,
+  'navercafe:remonterrace': 30,
+  'navercafe:wgang': 30,
+}
+
+const at = (hour: number, minute: number): Slot => ({ hour, minute })
+
+/**
+ * 🔴 **운영 일정 정본 — 전부 KST** (2026-09-11 확정).
+ *
+ *    앞선 판은 `24 / 회차` 로 하루에 **고르게** 폈다. 그러면 02:50 · 04:20 처럼
+ *    **노트북이 꺼져 있는 새벽**에 슬롯이 놓인다 — 예약은 있는데 회차는 돌지 않는다.
+ *    실제로 그 구간의 회차가 통째로 비었다.
+ *
+ *    🔴 그래서 **사람이 노트북을 켜 두는 시간(07:00~22:30)** 안에 배치한다.
+ *       균등하지 않다. 균등함은 목표가 아니었다 — 도는 것이 목표다.
+ *
+ *    🔴 **분(minute)을 레인마다 다르게 준다.** 같은 분에 겹치면 한 세션이 두 곳을
+ *       연속으로 긁는 모양이 되고, 차단은 그 모양을 본다.
+ *       82cook 목록 :00 → 본문 :40(40분 뒤, 목록이 쌓인 뒤에 연다) ·
+ *       remonterrace :30 · wgang :30 (시(hour)가 겹치지 않아 실제 시각은 안 겹친다)
+ *
+ *    🔴 `stable` 은 아직 `start` 와 같다. 증설 시각이 정해지지 않았다.
+ */
+export const SLOTS: Readonly<Record<SourceId, Readonly<Record<Phase, readonly Slot[]>>>> = {
+  '82cook': {
+    start: [at(7, 0), at(10, 0), at(13, 0), at(16, 0), at(19, 0)],
+    stable: [at(7, 0), at(10, 0), at(13, 0), at(16, 0), at(19, 0)],
+  },
+  'navercafe:remonterrace': {
+    start: [at(7, 30), at(10, 30), at(13, 30), at(16, 30), at(21, 30)],
+    stable: [at(7, 30), at(10, 30), at(13, 30), at(16, 30), at(21, 30)],
+  },
+  'navercafe:wgang': {
+    start: [at(9, 30), at(11, 30), at(15, 30), at(20, 30)],
+    stable: [at(9, 30), at(11, 30), at(15, 30), at(20, 30)],
+  },
 }
 
 /**
- * 🔴 회차를 하루에 **고르게** 편다. 첫 시각은 소스마다 어긋나게 둔다 —
- *    같은 시(hour)에 세 소스가 몰리지 않게 하기 위해서다.
+ * 🔴 **82cook 본문(얇은 상세) 수집 슬롯** — 목록 슬롯의 **40분 뒤**.
+ *    목록이 먼저 쌓여야 열 대상이 생긴다. 같은 분에 두면 빈 목록을 보고 0건으로 끝난다.
  */
+export const THIN_82COOK_SLOTS: readonly Slot[] =
+  SLOTS['82cook'].start.map((s) => at(s.hour, s.minute + 40))
+
+/** 🔴 공급 처리(drain) 슬롯 — 수집 결과를 비운다. 수집 레인과 분이 겹치지 않게 :15 */
+export const SUPPLY_PROCESS_SLOTS: readonly Slot[] =
+  [at(8, 15), at(12, 15), at(14, 15), at(17, 15), at(21, 15), at(22, 15)]
+
+/** 🔴 계획은 **정본 테이블 그대로**다. 여기서 시각을 계산하지 않는다 */
 export function planSlots(id: SourceId, phase: Phase): Slot[] {
-  const runs = RUNS_PER_DAY[id][phase]
-  const minute = SOURCE_MINUTE[id]
-  const step = 24 / runs
-  // 소스마다 다른 시작 오프셋 — 82cook 1시, remonterrace 4시, wgang 2시
-  const offset = id === '82cook' ? 1 : id === 'navercafe:remonterrace' ? 4 : 2
-  return Array.from({ length: runs }, (_, i) => ({
-    hour: Math.floor((offset + i * step) % 24),
-    minute,
-  })).sort((a, b) => a.hour - b.hour)
+  return SLOTS[id][phase].map((s) => ({ ...s }))
 }
 
 export type ScheduleProblem = string

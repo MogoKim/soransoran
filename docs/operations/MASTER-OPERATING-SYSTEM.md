@@ -322,10 +322,11 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 | `SORAN_CAPACITY_STAGE` | **d3** (내부 3/day 기준 · Wave B, 2026-09-09) |
 | `SORAN_RELEASE_STAGE` | **d1** (공개 1/day) — 🔴 Wave B 에서도 올리지 않았다 |
 | 공개 발행 workflow | `5 15 * * *`, 1슬롯/day, `--limit=1` — 🔴 변경 없음 |
-| Naver remonterrace | launchd **4회/day** 04:20 · 10:20 · 16:20 · 22:20 KST |
-| Naver wgang | launchd **4회/day** 02:50 · 08:50 · 14:50 · 20:50 KST |
-| supply runner | launchd 21:10 KST |
-| 82cook 독립 job | 미등록 |
+| Naver remonterrace | launchd **5회/day** 07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST |
+| Naver wgang | launchd **4회/day** 09:30 · 11:30 · 15:30 · 20:30 KST |
+| 82cook 목록 | launchd **5회/day** 07:00 · 10:00 · 13:00 · 16:00 · 19:00 KST — 🔴 미등록 |
+| 82cook 본문 | launchd **5회/day** 07:40 · 10:40 · 13:40 · 16:40 · 19:40 KST (목록 40분 뒤) — 🔴 미등록 |
+| 공급 처리 | launchd **6회/day** 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST — 🔴 미등록 |
 
 🔴 **내부 capacity 와 공개 release 는 다른 손잡이다.** Wave B 는 내부만 d3 로 올렸다 —
 공개 발행량·cron·GitHub Variables 는 하나도 건드리지 않았다. 현재 운영 숫자는 §6.3.
@@ -811,6 +812,33 @@ Variables(`SORAN_82COOK_THIN_DETAIL_ENABLED`·`SORAN_SUPPLY_PROCESS_ENABLED`) �
 ④ supply-collect-82cook-thin             수집 — ③의 목록을 소비한다
 ⑤ supply-process                         처리
 ```
+
+### 🔴 확정 운영 일정 (2026-09-11 · 전부 KST)
+
+```
+82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
+82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
+remonterrace     07:30 10:30 13:30 16:30 21:30        5회
+wgang            09:30 11:30 15:30 20:30              4회
+supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 비운다
+```
+
+🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 `24 / 회차` 로 하루에 고르게 폈고,
+그래서 02:50 · 04:20 · 01:10 처럼 **기계가 꺼져 있는 시각**에 슬롯이 있었다 —
+예약은 있는데 회차는 돌지 않는다. **돌지 않는 슬롯은 능력이 아니다.**
+균등함은 목표가 아니었다. 도는 것이 목표다.
+
+🔴 **게시판·페이지는 바꾸지 않았다** (jjong 2~16p · humor 1p · wgang:all 1~5p).
+바뀐 것은 **언제 도는가** 하나다. 회차가 늘면서 하루 상한(150) 안에서 remonterrace 의
+회차당 상세만 12 → 11 로 재분배됐다 — 기존 산식(`planCafeRun`)의 자동 결과다.
+
+🔴 **82cook 요청량**: 목록 33×5 = 165 + 본문 17×5 = 85 → **250/day** (상한 400, 여유 150).
+한 회차 상한 17 은 **고정값**이다. 일정이 바뀔 때마다 상한이 따라 커지면 안전장치가 아니다 —
+82cook 유입 관측이 쌓이기 전까지 보수적으로 둔다.
+
+🔴 시각의 정본은 `src/lib/collect-schedule.ts` 의
+`SLOTS` · `THIN_82COOK_SLOTS` · `SUPPLY_PROCESS_SLOTS` 다.
+fixture 가 **render 한 실제 plist** 와 대조한다.
 
 정본은 `src/lib/runtime-isolation.ts` 의 `RUNTIME_JOBS` 하나다.
 🔴 **82cook 은 두 job 이 함께 있어야 한다.** ④는 목록을 스스로 만들지 않는다 —

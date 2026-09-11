@@ -44,7 +44,9 @@ import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-p
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { currentCapacity, preparedCapacity, type ObservedJob } from '../src/lib/collect-inventory'
 import { STOCK_TARGET, STOCK_MIN, STOCK_WARN } from '../src/lib/micro-seed-supply-autofill'
-import { THIN_82COOK_RUNS_PER_DAY, thin82cookCapPerRun } from '../src/lib/collect-schedule'
+import {
+  RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, THIN_82COOK_SLOTS, thin82cookCapPerRun,
+} from '../src/lib/collect-schedule'
 import {
   judgePublish, judgeManualLimit, MANUAL_PUBLISH_CAP, type PublishCandidate,
 } from '../src/lib/original-post-publish'
@@ -626,7 +628,7 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
       !existsSync(join('docs/operations/launchd', `com.soransoran.navercafe-collect-${cafe}.plist.template`)))
     check(`🔴 [${cafe}] SOURCES 가 -multi 를 가리킨다`,
       SOURCES.some((s) => s.id === `navercafe:${cafe}` && s.template.includes('-multi')
-        && s.runsPerDay === 4 && s.loaded))
+        && s.runsPerDay === RUNS_PER_DAY[`navercafe:${cafe}`].start && s.loaded))
   }
   check('🔴 SOURCES note 에 옛 09:20/13:20 1회 운영이 남아 있지 않다',
     SOURCES.every((s) => !s.note.includes('09:20') && !s.note.includes('13:20')))
@@ -650,7 +652,7 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
   check('🟢 등록되면 관측 슬롯 수 × 회차 상한 × 성공률로 센다', (() => {
     const on = [...OBSERVED, {
       label: THIN_82COOK_JOB,
-      slots: [1, 7, 13, 19].map((hour) => ({ hour, minute: 40 })),
+      slots: [...THIN_82COOK_SLOTS],
       loaded: true,
     }]
     return thin82cookDetailPerDay(on) === thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY * 0.8

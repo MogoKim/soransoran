@@ -33,6 +33,7 @@ import { judgeSourceOperations } from '../src/lib/collect-operations'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { RUN_FILE_RE } from '../src/lib/supply-process'
+import { SUPPLY_PROCESS_SLOTS, planSlots } from '../src/lib/collect-schedule'
 
 const WANT_PLAN = process.argv.includes('--plan')
 /** 🔴 Wave B 계약 — 두 카페 모두 하루 4회다 */
@@ -50,14 +51,13 @@ const LOG_OF: Readonly<Record<string, string>> = {
   'navercafe:remonterrace': 'navercafe-collect-remonterrace-multi.log',
   'navercafe:wgang': 'navercafe-collect-wgang-multi.log',
 }
-/** 🔴 Wave B 로 정한 예정 슬롯. 증거는 이 시각들에 하나씩 붙어야 한다 */
+/** 🔴 예정 슬롯 — 정본(`collect-schedule`)에서 온다. 증거는 이 시각들에 하나씩 붙어야 한다 */
 const SLOTS_OF: Readonly<Record<string, { hour: number; minute: number }[]>> = {
-  'navercafe:remonterrace': [{ hour: 4, minute: 20 }, { hour: 10, minute: 20 }, { hour: 16, minute: 20 }, { hour: 22, minute: 20 }],
-  'navercafe:wgang': [{ hour: 2, minute: 50 }, { hour: 8, minute: 50 }, { hour: 14, minute: 50 }, { hour: 20, minute: 50 }],
+  'navercafe:remonterrace': planSlots('navercafe:remonterrace', 'start'),
+  'navercafe:wgang': planSlots('navercafe:wgang', 'start'),
 }
-/** 🔴 공급 처리(supply-process)의 예약 슬롯 — launchd StartCalendarInterval 과 같아야 한다 */
-const SUPPLY_SLOTS: readonly { hour: number; minute: number }[] =
-  [3, 7, 11, 15, 19, 23].map((hour) => ({ hour, minute: 15 }))
+/** 🔴 공급 처리(supply-process)의 예약 슬롯 — 정본은 `collect-schedule` 하나다 */
+const SUPPLY_SLOTS: readonly { hour: number; minute: number }[] = SUPPLY_PROCESS_SLOTS
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')
 const MANIFEST_FILE = join(CANON_DIR, 'runtime-manifest.json')
 

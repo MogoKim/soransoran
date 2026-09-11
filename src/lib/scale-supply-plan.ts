@@ -128,25 +128,33 @@ export type SourcePlan = {
  *    올라오기 전까지 82cook 이 여는 상세는 0 이다. 조건부로 열리던 옛 몫은 없다.
  *
  * 🔴 **네이버 두 카페의 정본은 `-multi` job 이다** (2026-09-11 실측).
- *    1회판 job 과 그 템플릿은 없다 — 옛 09:20/13:20 · 하루 1회는 역사이지 현재가 아니다.
+ *    1회판 job 과 그 템플릿은 없다 — 옛 하루 1회 운영은 역사이지 현재가 아니다.
  */
 export const SOURCES: readonly SourcePlan[] = [
   {
     id: '82cook', template: 'com.soransoran.raw-collect-82cook.plist.template',
-    maxPerRun: 30, runsPerDay: 10, loaded: false,
-    note: '🔴 템플릿만 있고 launchctl 미등록 — 등록 전까지 82cook 상세는 0 이다',
+    // 🔴 회차 수의 정본은 `RUNS_PER_DAY` 다 — 여기 숫자를 다시 적지 않는다
+    maxPerRun: 30, runsPerDay: RUNS_PER_DAY['82cook'].start, loaded: false,
+    note: '🔴 템플릿만 있고 launchctl 미등록 — 등록 전까지 82cook 상세는 0 이다'
+      + ' · 5회/day (07:00 · 10:00 · 13:00 · 16:00 · 19:00 KST)',
   },
   {
     id: 'navercafe:remonterrace',
     template: 'com.soransoran.navercafe-collect-remonterrace-multi.plist.template',
-    maxPerRun: 12, runsPerDay: 4, loaded: true,
-    note: 'launchd -multi 4회/day (04:20 · 10:20 · 16:20 · 22:20 KST) · 회차당 상세 12건(jjong 10 + humor 2)',
+    /**
+     * 🔴 **회차당 상세는 runner 가 역산한다** — 게시판·페이지는 그대로이고
+     *    회차가 4→5 로 늘면서 하루 상한(150) 안에서 예산이 재분배됐다: 12 → 11.
+     *    fixture 가 `planCafeRun().detailPerRun` 과 이 값을 대조한다.
+     */
+    maxPerRun: 11, runsPerDay: RUNS_PER_DAY['navercafe:remonterrace'].start, loaded: true,
+    note: 'launchd -multi 5회/day (07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST)'
+      + ' · 회차당 상세 11건(jjong 10 + humor 1)',
   },
   {
     id: 'navercafe:wgang',
     template: 'com.soransoran.navercafe-collect-wgang-multi.plist.template',
-    maxPerRun: 10, runsPerDay: 4, loaded: true,
-    note: 'launchd -multi 4회/day (02:50 · 08:50 · 14:50 · 20:50 KST) · 회차당 상세 10건(all)',
+    maxPerRun: 10, runsPerDay: RUNS_PER_DAY['navercafe:wgang'].start, loaded: true,
+    note: 'launchd -multi 4회/day (09:30 · 11:30 · 15:30 · 20:30 KST) · 회차당 상세 10건(all)',
   },
 ]
 

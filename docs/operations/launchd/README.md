@@ -151,15 +151,17 @@ plist 는 계속 돌지만 수집이 일어나지 않는다.
 
 | 수집원 | Label / 템플릿 파일명 | 시각 (KST) | 명령 |
 |---|---|---|---|
-| 82cook (Raw Vault 레인) | `com.soransoran.raw-collect-82cook` | 2시간 간격 10슬롯 (07:10~01:10) | `micro-seed-collect-82cook.mts --list --pages=3 --auto --auto-max=30 --live` |
-| 82cook (공급 레인 · 얇은 상세) | `com.soransoran.supply-collect-82cook-thin` | **01:40 · 07:40 · 13:40 · 19:40** (4회) | `micro-seed-82cook-thin-detail.mts --cap=17 --live` |
-| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **04:20 · 10:20 · 16:20 · 22:20** (4회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
-| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **02:50 · 08:50 · 14:50 · 20:50** (4회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
+| 82cook 목록 | `com.soransoran.raw-collect-82cook` | **07:00 · 10:00 · 13:00 · 16:00 · 19:00** (5회) | `micro-seed-collect-82cook.mts --list --pages=3 --auto --auto-max=30 --live` |
+| 82cook 본문 (공급 레인) | `com.soransoran.supply-collect-82cook-thin` | **07:40 · 10:40 · 13:40 · 16:40 · 19:40** (5회 · 목록 40분 뒤) | `micro-seed-82cook-thin-detail.mts --cap=17 --live` |
+| navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **07:30 · 10:30 · 13:30 · 16:30 · 21:30** (5회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
+| navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **09:30 · 11:30 · 15:30 · 20:30** (4회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
 
-🔴 **82cook 은 두 레인이 같은 서버를 두드린다.** 하루 상한 400건을 나눠 쓴다 —
-raw 가 33×10=330건, 얇은 상세가 17×4=68건. `--cap` 의 정본은
-[`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의 `thin82cookCapPerRun()`
-이고, fixture 가 plist 인자와 대조한다.
+🔴 **82cook 은 두 job 이 같은 서버를 두드린다.** 하루 상한 400건을 나눠 쓴다 —
+목록 33×5 = 165 + 본문 17×5 = 85 → **250/day** (여유 150).
+🔴 본문은 목록의 **40분 뒤**다. 목록이 먼저 쌓여야 열 대상이 생긴다 —
+같은 분에 두면 빈 목록을 보고 0건으로 끝난다.
+`--cap` 의 정본은 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의
+`THIN_82COOK_CAP_PER_RUN` 이고, fixture 가 plist 인자와 대조한다.
 
 🔴 **네이버 두 카페는 `--pages` · `--max` 를 인자로 받지 않는다.** 회차가 읽을 게시판·페이지와
 회차당 상세 몫은 runner 가 `BOARD_TARGETS` · `RUNS_PER_DAY` · 하루 요청 상한에서 역산한다.
@@ -172,6 +174,27 @@ npx tsx scripts/micro-seed-navercafe-run.mts --cafe=remonterrace
 🟡 `dlxogns01` · `masanmam` · `goondae` · `yeowooya` 는 **미활성 장래 후보**다.
 수집기가 아는 카페일 뿐 확정 수집원도 현재 스케줄도 아니며, **실행 템플릿을 두지 않는다.**
 늘리려면 그때 승인을 받고 템플릿을 새로 만든다 — fixture 가 이 넷의 템플릿이 없는지 검사한다.
+
+## 🔴 확정 운영 일정 (2026-09-11 · 전부 KST)
+
+```
+82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
+82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
+remonterrace     07:30 10:30 13:30 16:30 21:30        5회
+wgang            09:30 11:30 15:30 20:30              4회
+supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 비운다
+```
+
+🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 하루에 고르게 폈고,
+그래서 02:50 · 04:20 · 01:10 처럼 **기계가 꺼져 있는 시각**에 슬롯이 있었다 —
+예약은 있는데 회차는 돌지 않는다. **돌지 않는 슬롯은 능력이 아니다.**
+
+🔴 **게시판·페이지 설정은 바꾸지 않았다** (jjong 2~16p · humor 1p · wgang:all 1~5p).
+바뀐 것은 **언제 도는가** 하나다.
+
+🔴 시각의 정본은 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의
+`SLOTS` · `THIN_82COOK_SLOTS` · `SUPPLY_PROCESS_SLOTS` 다.
+이 문서의 표는 그것을 옮겨 적은 것이고, fixture 가 **render 한 실제 plist** 와 대조한다.
 
 ## 🔴 운영 예약 job 은 다섯이다
 
@@ -221,8 +244,10 @@ npm run supply:process -- --simulate-stock=5  # 재고가 모자랐다면 무엇
 JOB=com.soransoran.supply-process
 ```
 
-실행 시각은 **03:15 · 07:15 · 11:15 · 15:15 · 19:15 · 23:15 KST** 6회다.
-마지막 슬롯이 auto-publish(00:05 KST) 직전이라, 발행 직전에 재고를 한 번 더 채운다.
+실행 시각은 **08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST** 6회다.
+🔴 **수집 슬롯 뒤에 붙인다** — 07:00/07:30/07:40 수집 → 08:15 처리, 21:30 수집 → 22:15 처리.
+입력이 생긴 뒤에 비워야 대기 시간이 줄고, 그만큼 APPROVED 순증이 빨라진다.
+🔴 22:15 가 마지막이다 — 노트북이 22:30 쯤 꺼지므로 그 앞에 한 번 더 비운다.
 
 🔴 **미처리 입력이 없으면 정상 no-op 이다** — 네트워크 0 · LLM 0 · DB write 0.
 조용한 날이 실패로 보이지 않아야 진짜 실패가 눈에 띈다.
@@ -280,11 +305,11 @@ job 은 계속 돌지만 무엇이 밀려 있는지만 읽고 끝난다.
 
 **카페마다 plist 를 따로 둔다.** 한 카페를 연속으로 긁지 않고 시간대를 나눈다.
 
-두 카페 모두 하루 4회이고 `-multi` job 이 정본이다.
+`-multi` job 이 정본이다. 시(hour)를 어긋나게 두어 두 카페가 같은 시각에 돌지 않는다.
 
 ```
-remonterrace  04:20 · 10:20 · 16:20 · 22:20 KST
-wgang         02:50 · 08:50 · 14:50 · 20:50 KST
+remonterrace  07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST (5회)
+wgang         09:30 · 11:30 · 15:30 · 20:30 KST (4회)
 ```
 
 🔴 **카페는 이 둘이 전부**이며, 같은 시각에 돌지 않는 것을 fixture 가 검사한다.

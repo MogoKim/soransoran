@@ -17,11 +17,13 @@
      Post · persona 배정 · ActivityLog 를 만들지 않는다.
      발행은 auto-publish(GHA, 매일 00:05 KST)가 한다.
 
-  🔴 하루 6회다
-     수집이 하루 4~10회 들어오므로 처리가 하루 1회면 입력이 반나절씩 묵는다.
-     첫 Persona 댓글 60분 목표와도 맞지 않는다. 4시간 간격 6슬롯으로 둔다.
-     분(:15)은 수집 job 들(:10 · :20 · :40 · :50)과 겹치지 않게 골랐다.
-     🔴 23:15 슬롯이 auto-publish(00:05) 직전이다 — 발행 직전에 재고를 한 번 더 채운다.
+  🔴 하루 6회다 — 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST (2026-09-11 확정)
+     수집이 하루 14회 들어오므로 처리가 하루 1회면 입력이 반나절씩 묵는다.
+     첫 Persona 댓글 60분 목표와도 맞지 않는다.
+     🔴 **수집 슬롯 뒤에 붙인다.** 07:00/07:30/07:40 수집 → 08:15 처리,
+        21:30 수집 → 22:15 처리. 입력이 생긴 뒤에 비워야 대기 시간이 줄어든다.
+     분(:15)은 수집 레인(:00 · :30 · :40)과 겹치지 않게 골랐다.
+     🔴 22:15 가 마지막이다 — 노트북이 22:30 쯤 꺼지므로 그 앞에 한 번 더 비운다.
 
   🔴 미처리 입력이 없으면 정상 no-op 이다
      네트워크 0 · LLM 0 · DB write 0. 조용한 날이 실패로 보이지 않는다.
@@ -71,12 +73,12 @@
 
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>15</integer></dict>
-    <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>15</integer></dict>
   </array>
 
   <!-- 🔴 RunAtLoad 를 쓰지 않는다. load 하는 순간 모델을 부르는 것은 의도가 아니다 -->

@@ -3,7 +3,8 @@
   네이버 카페 Raw 수집 — **remonterrace · 🔴 지금 도는 운영 정본**
 
   🔴 **이 job 이 현재 운영이다** (2026-09-11 `launchctl list` 실측).
-     com.soransoran.navercafe-collect-remonterrace-multi · 하루 **4회** · 04:20 · 10:20 · 16:20 · 22:20 KST
+     com.soransoran.navercafe-collect-remonterrace-multi · 하루 **5회**
+     07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST (2026-09-11 확정)
      1회판(com.soransoran.navercafe-collect-remonterrace)은 **등록돼 있지 않고
      템플릿도 저장소에서 지웠다** — 실행 가능한 옛 경로를 남기지 않는다.
 
@@ -13,11 +14,13 @@
   🔴 **회차와 간격의 근거** (2026-09-08 실측 · src/lib/collect-schedule.ts)
      목록 1p = 21건 · 신규 유입 하한 1건/h
        → 페이지가 넘어가는 시간 약 21h. 안전 상한은 그 절반인 10.5h 다
-     시작 4회/day (04:20 10:20 16:20 22:20) → 최대 간격 6h
-       안정되면 8회/day 까지 올린다 (fixture 가 두 단계를 모두 검사한다)
-     하루 요청 44건 · 상한 150건
+     5회/day (07:30 10:30 13:30 16:30 21:30) → 최대 간격 **10h**(21:30 → 다음날 07:30)
+       🔴 안전 상한 10.5h 안이다. 밤에 노트북이 꺼져 있어 그 구간에는 슬롯을 두지 않는다 —
+          돌지 않는 슬롯은 능력이 아니다.
+     하루 요청 55건 · 상한 150건
 
-  🔴 **분(minute)이 소스마다 다르다** — 82cook :10 · remonterrace :20 · wgang :50.
+  🔴 **분(minute)이 레인마다 다르다** — 82cook 목록 :00 · 82cook 본문 :40 ·
+     네이버 :30(두 카페는 시(hour)가 겹치지 않아 실제 시각이 안 겹친다) · 공급 처리 :15.
      같은 분에 겹치면 한 세션이 두 곳을 연속으로 긁는 모양이 되고, 차단은 그 모양을 본다.
 
   🔴 **한 소스가 죽어도 나머지는 돈다** — job 을 소스마다 따로 두는 이유가 이것이다.
@@ -56,9 +59,9 @@
      여러 카페·시간대에 얇게 분산한다 — 한 소스를 세게 긁지 않는다.
 
   🔴 **확정 수집원은 셋뿐이다** — 82cook · navercafe:remonterrace · navercafe:wgang.
-        두 카페 모두 하루 4회이고 `-multi` job 이 정본이다:
-           remonterrace  04:20 · 10:20 · 16:20 · 22:20 KST
-           wgang         02:50 · 08:50 · 14:50 · 20:50 KST
+        두 카페 모두 `-multi` job 이 정본이다:
+           remonterrace  07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST (5회)
+           wgang         09:30 · 11:30 · 15:30 · 20:30 KST (4회)
 
   🟡 dlxogns01 · masanmam · goondae · yeowooya 는 **미활성 장래 후보**다.
      수집기가 아는 카페일 뿐, 확정 수집원도 현재 스케줄도 아니다 —
@@ -103,10 +106,11 @@
 
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>20</integer></dict>
-    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>20</integer></dict>
-    <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>20</integer></dict>
-    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
   </array>
 
   <!-- 🔴 RunAtLoad 를 쓰지 않는다. load 하는 순간 브라우저가 뜨는 것은 의도가 아니다 -->
