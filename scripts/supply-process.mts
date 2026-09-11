@@ -47,8 +47,10 @@ import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
 import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
+import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 
-const DATA_DIR = '.microseed-data'
+/** 🔴 정본은 lib 하나다 — 여기서 문자열을 다시 쓰지 않는다 */
+const DATA_DIR = DATA_DIR_NAME
 const argv = process.argv.slice(2)
 const LIVE = argv.includes('--live')
 /**

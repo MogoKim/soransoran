@@ -23,6 +23,7 @@ import {
   runCommonPhase, runSourcePhase, runStatusOf, sourceOfDataFile, verifyRun,
   type ExecResult, type ProcessStage, type StagePlan, type SupplySourceId,
 } from '../src/lib/supply-process'
+import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { STOCK_BANDS } from '../src/lib/supply-stock-plan'
 /** 🔴 잠금 정본 — 러너와 **같은 함수**를 시험한다. 사본을 만들지 않는다 */
 import { acquireLock, lockAnomaly, releaseLock } from './lib/collect-lock.mjs'
@@ -79,10 +80,16 @@ const pendingAll = planPending(FILES_ALL)
  *    그것이 공통 국면(judge → draft → fill)의 입력이다.
  *    러너도 두 국면 사이에 다시 센다 — 계획을 미리 굳혀 두면 방금 만든 입력을 놓친다.
  */
+/**
+ * 🔴 **두 산출물이 한 짝이다.** detail 만 적어 두면 "한쪽만 있어도 완료" 라는
+ *    옛 결함을 시험 데이터가 되레 고정한다 (2026-09-11 Codex 리뷰).
+ */
 const FILES_AFTER_ADAPT = [
   ...FILES_ALL,
   '82cook-adapt-20260911-010000.detail.jsonl',
+  '82cook-adapt-20260911-010000.raw-detail.jsonl',
   '82cook-adapt-remonterrace-20260910-222000.detail.jsonl',
+  '82cook-adapt-remonterrace-20260910-222000.raw-detail.jsonl',
 ]
 const pendingAfter = planPending(FILES_AFTER_ADAPT)
 const FULL_BUFFER = judgeBuffer(120)
@@ -115,13 +122,36 @@ check('🔴 같은 runId 의 다른 카페가 서로를 막지 않는다', (() =
   return (p.rawCafe['navercafe:remonterrace'] ?? []).length === 0
     && (p.rawCafe['navercafe:wgang'] ?? []).length === 1
 })())
-check('🔴 adapt 산출물이 있으면 그 얇은 파일은 끝난 것이다', (() => {
-  const p = planPending([
-    '82cook-thin-20260911-010000.thin-detail.jsonl',
-    '82cook-adapt-20260911-010000.detail.jsonl',
-  ])
-  return (p.thin['82cook'] ?? []).length === 0
-})())
+/**
+ * 🔴 **완료 판정 경계** — 예약 실행이 실제로 지나가는 `planPending` 에서 본다.
+ *
+ *    어댑터를 직접 spawn 하는 시험은 이 경로를 지나가지 않는다.
+ *    옛 판은 `^82cook-adapt-(.+?)\.` 하나로 셌고, detail 만 있어도 완료였다.
+ */
+{
+  const THIN = '82cook-thin-20260911-010000.thin-detail.jsonl'
+  const D = '82cook-adapt-20260911-010000.detail.jsonl'
+  const R = '82cook-adapt-20260911-010000.raw-detail.jsonl'
+  const thinOf = (files: readonly string[]): string[] => planPending(files).thin['82cook'] ?? []
+  const adaptPlanned = (files: readonly string[]): boolean =>
+    planSourcePhase(planPending(files))
+      .some((sp) => sp.source === '82cook' && sp.stages.some((st) => st.stage === 'adapt'))
+
+  check('🔴 detail 만 있으면 아직 끝난 것이 아니다 — pending 1건',
+    thinOf([THIN, D]).length === 1)
+  check('🔴 detail 만 있으면 adapt 가 다시 계획된다', adaptPlanned([THIN, D]))
+  check('🔴 raw-detail 만 있어도 아직 끝난 것이 아니다 — pending 1건',
+    thinOf([THIN, R]).length === 1)
+  check('🔴 raw-detail 만 있어도 adapt 가 다시 계획된다', adaptPlanned([THIN, R]))
+  check('🔴 두 산출물이 다 있어야 끝난 것이다 — pending 0건',
+    thinOf([THIN, D, R]).length === 0)
+  check('🔴 두 산출물이 다 있으면 adapt 를 다시 계획하지 않는다',
+    !adaptPlanned([THIN, D, R]))
+  check('🔴 두 산출물이 다 있으면 공통 judge·draft·fill 이 선다', (() => {
+    const stages = planCommonPhase(planPending([THIN, D, R]), judgeBuffer(24)).map((x) => x.stage)
+    return stages.includes('judge') && stages.includes('draft') && stages.includes('fill')
+  })())
+}
 check('🔴 adaptKey 는 82cook 과 카페를 구분한다',
   adaptKeyOf('82cook-thin-A.thin-detail.jsonl') === 'A'
   && adaptKeyOf('navercafe-thin-wgang-A.thin-detail.jsonl') === 'wgang-A')
@@ -213,7 +243,9 @@ check('🔴 회차 기록 파일을 재개 근거로 읽지 않는다', (() => {
 check('🟢 adapt 는 끝났고 judge 가 끊긴 회차 — 다시 돌리면 adapt 는 건너뛰고 judge 부터다', (() => {
   const after = planPending([
     '82cook-thin-A.thin-detail.jsonl',
-    '82cook-adapt-A.detail.jsonl', // adapt 는 성공했다
+    // 🔴 adapt 성공은 **두 산출물이 다 난 것**이다 — 한쪽만으로는 성공이 아니다
+    '82cook-adapt-A.detail.jsonl',
+    '82cook-adapt-A.raw-detail.jsonl',
   ])
   const src = planSourcePhase(after)
   const common = planCommonPhase(after, FULL_BUFFER)
@@ -771,6 +803,48 @@ console.log('\n⑪ 발행하지 않는다')
   check('🔴 기본은 dry-run 이다', (() => {
     const v = judgeProcessRun({ live: false, killOpen: true, lock: 'free', hasWork: true })
     return !v.ok && v.code === 'DRY_RUN'
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
+// ─────────────────────────────────────────────────────────
+/**
+ * 🔴 **공급 처리 체인 안에서** `.microseed-data` 리터럴 선언은 lib 정본 하나뿐이다.
+ *
+ *    러너와 어댑터가 각자 문자열을 들고 있던 것이 2026-09-11 결함의 뿌리다 —
+ *    러너는 `readdirSync(DATA_DIR)` 가 준 맨 이름을 넘겼고 어댑터는 그것을
+ *    cwd 기준으로 열었다. 두 곳이 같은 값을 "따로" 알고 있으면 그런 어긋남이 생긴다.
+ *
+ *    🟡 이 가드의 범위는 **이 체인**이다. 저장소의 다른 스크립트들은 각자
+ *       자기 DATA_DIR 을 갖고 있고, 그것은 이 PR 의 범위가 아니다.
+ */
+{
+  const CHAIN = [
+    'scripts/supply-process.mts',
+    'scripts/micro-seed-82cook-thin-adapt.mts',
+    'src/lib/supply-process.ts',
+  ]
+  // 🔴 주석과 설명 문자열은 세지 않는다 — 결함을 원문으로 적어 둔 곳이 있다
+  const codeOf = (f: string): string => readFileSync(f, 'utf-8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n')
+  const LITERAL = /=\s*'\.microseed-data'/
+  for (const f of CHAIN) {
+    check(`🔴 ${f} 가 리터럴을 선언하지 않는다`, !LITERAL.test(codeOf(f)))
+  }
+  check('🔴 러너가 정본을 가져다 쓴다',
+    /DATA_DIR_NAME/.test(codeOf('scripts/supply-process.mts')))
+  check('🔴 어댑터가 정본을 가져다 쓴다',
+    /DATA_DIR_NAME/.test(codeOf('scripts/micro-seed-82cook-thin-adapt.mts')))
+  check('🔴 정본은 lib 한 곳뿐이다', (() => {
+    const lib = codeOf('src/lib/micro-seed-82cook-thin-adapt.ts')
+    return (lib.match(/=\s*'\.microseed-data'/g) ?? []).length === 1
+      && DATA_DIR_NAME === '.microseed-data'
+  })())
+  check('🔴 완료 판정도 정본 하나다 — planPending 이 정규식을 다시 쓰지 않는다', (() => {
+    const lib = codeOf('src/lib/supply-process.ts')
+    return /completedAdaptKeys\(/.test(lib) && !/82cook-adapt-\(\.\+\?\)/.test(lib)
   })())
 }
 

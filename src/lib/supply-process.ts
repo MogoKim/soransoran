@@ -25,6 +25,9 @@
  */
 
 import { STOCK_BANDS } from './supply-stock-plan'
+// 🔴 **사본 완료 판정은 어댑터와 같은 함수를 쓴다.** 여기서 정규식을 다시 쓰면
+//    한쪽만 고쳐진다 — 실제로 그랬다 (2026-09-11 Codex 리뷰).
+import { completedAdaptKeys } from './micro-seed-82cook-thin-adapt'
 
 /** 🔴 처리기 kill switch. plist 를 지우지 않고도 멈출 수 있어야 한다 */
 export const PROCESS_KILL_SWITCH_ENV = 'SORAN_SUPPLY_PROCESS_ENABLED'
@@ -155,12 +158,15 @@ export function planPending(files: readonly string[]): Pending {
   const names = files.map((f) => f.split('/').pop() ?? f)
   const out: Pending = { rawCafe: {}, thin: {}, detail: [], shadow: [], candidates: [] }
 
-  // adapt 가 이미 사본을 낸 키 — 산출물 이름에서 뽑는다
-  const adapted = new Set<string>()
-  for (const f of names) {
-    const m = /^82cook-adapt-(.+?)\./.exec(f)
-    if (m !== null) adapted.add(m[1]!)
-  }
+  /**
+   * adapt 가 이미 사본을 낸 키 — 🔴 **detail 과 raw-detail 이 둘 다 있어야 완료다.**
+   *
+   *    옛 판은 `^82cook-adapt-(.+?)\.` 하나로 셌다. detail 만 나고 raw-detail 이
+   *    없어도 "끝" 이 되어 그 얇은 파일이 다시는 계획되지 않았고,
+   *    raw-review 화면은 그 회차를 영영 보지 못했다.
+   *    한쪽만 난 회차는 pending 으로 남겨 다음 회차가 다시 만들게 한다.
+   */
+  const adapted = completedAdaptKeys(names)
   // cafeThin 이 이미 얇게 바꾼 키
   const thinned = new Set<string>()
   for (const f of names) {

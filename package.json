@@ -75,6 +75,7 @@
     "micro-seed:82cook-thin-check": "tsx scripts/micro-seed-82cook-thin-check.mts",
     "micro-seed:82cook-thin-adapt": "tsx scripts/micro-seed-82cook-thin-adapt.mts",
     "micro-seed:82cook-thin-adapt-check": "tsx scripts/micro-seed-82cook-thin-adapt-check.mts",
+    "micro-seed:adapt-input-check": "tsx scripts/micro-seed-adapt-input-check.mts",
     "micro-seed:navercafe-thin": "tsx scripts/micro-seed-navercafe-thin.mts",
     "micro-seed:navercafe-thin-check": "tsx scripts/micro-seed-navercafe-thin-check.mts",
     "micro-seed:auto-judge": "tsx scripts/micro-seed-auto-judge.mts",
