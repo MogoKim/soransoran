@@ -5006,196 +5006,164 @@ dry-run     collect --auto (네트워크 0) · import --raw-only (DB write 0)
 
 ---
 
-## §4-AU 🟢 공급 Autopilot v1 — 사람이 명령을 치지 않는다 (§4-AP → §4-AQ → §4-AR → §4-AS → §4-AN)
+## §4-AU 🟢 공급은 수집 job 셋과 처리 job 하나로 나뉜다 (§4-AP → §4-AQ → §4-AR → §4-AS → §4-AN)
 
 §4-AP~§4-AT 로 **부품은 다 만들어졌다.** 남은 것은 사람이었다 —
-누군가 하루에 다섯 번 명령을 쳐야 큐가 채워졌다. v1 은 그 다섯 번을 없앤다.
+누군가 하루에 다섯 번 명령을 쳐야 큐가 채워졌다. 이 절은 그 다섯 번을 없앤다.
 
 ```
-재고 확인 → (14 미만일 때만) 82cook thin 수집 → 검수용 변환
-        → AI 자동 판정 → AI 초안 생성·품질 게이트 → Queue 재고 보충
+[수집 — source 마다 독립 job]
+  82cook 얇은 상세        com.soransoran.supply-collect-82cook-thin   (4회/day)
+  navercafe:remonterrace  com.soransoran.navercafe-collect-remonterrace-multi (4회/day)
+  navercafe:wgang         com.soransoran.navercafe-collect-wgang-multi (4회/day)
+
+[처리 — 독립 drain job]
+  com.soransoran.supply-process (6회/day)
+    source 별 (얇은 변환 → 검수용 변환) → 공통 (AI 판정 → AI 초안 → Queue 보충)
 ```
 
 **끝점은 Queue 다. 발행이 아니다.** Post 는 auto-publish(§4-AL)가 00:05 KST 에 만든다.
 공급과 발행을 한 프로세스에 넣지 않는 이유는 §4-AL 과 같다 —
 **만드는 쪽과 내보내는 쪽이 같으면, 만든 것을 스스로 정당화한다.**
 
-### ① 🔴 새 판정도 새 생성도 만들지 않았다
+### ① 📜 폐기된 과거 구조 — 중앙 러너 `supply-autopilot` (2026-09-11)
 
-러너(`scripts/supply-autopilot.mts`)는 기존 다섯 스크립트를 **자식 프로세스로 순서대로 부른다.**
+이 자리에는 원래 **하나의 러너가 수집·변환·판정·생성·적재를 한 회차에 묶는** 구조가 있었다.
+그 구조에는 결함이 둘이었고, 둘 다 재시도 로직으로는 고쳐지지 않는 종류였다.
 
-| 단계 | 명령 | 밖으로 | 모델 | DB write |
-|---|---|---|---|---|
-| collect | `micro-seed-82cook-thin-detail --live --cap=N` | 🔴 예 | — | — |
-| adapt | `micro-seed-82cook-thin-adapt --apply` | — | — | — |
-| judge | `micro-seed-auto-judge --call --apply` | — | 🔴 예 | — |
-| draft | `micro-seed-auto-draft --call --apply` | — | 🔴 예 | — |
-| fill | `micro-seed-supply-autofill --apply --limit=부족분` | — | — | 🔴 예 |
+| 결함 | 실측 |
+|---|---|
+| **한 source 의 실패가 전체를 세운다** | `collect` 가 첫 단계라 82cook 의 `ECONNREFUSED` 하나로 09-10 21:10 회차가 멈췄고, 이미 받아 둔 네이버 thin 19건이 Raw 로 가지 못했다 — **이틀간 신규 공급 0** |
+| **한 숫자가 수집까지 멈춘다** | "재고가 목표면 no-op" 이 회차 전체의 게이트였다. 기본 목표는 capacity 프로필의 `stockTarget`(d3 에서 **42**)이라, D100 의 재고 목표 100 → 300 → 700 은 산술적으로 도달 불가능했다 |
 
-robots · 요청 간격 3~5초 · 상한 50건 · `bodyHead` 300자 · 전문 미저장 ·
-안전성 게이트 · 겹침 6자 · legacy 배제는 **전부 그 안에 이미 있다.**
-러너가 다시 구현하면 고칠 곳이 두 곳이 되고, 언젠가 한쪽만 고쳐진다.
-fixture 가 이것을 검사한다 — 러너 코드에 `post.create` · 큐 직접 write ·
-`safetyFilter` · `judgeOne` · pacing 상수 · 네이버 · Raw SQL 이 있으면 실패한다.
+거기에 owner 를 GHA 로 넘기기 위한 `--no-collect` 우회 플래그, 회차 재개용 checkpoint,
+여러 source 를 한 잠금으로 묶는 lock 이 얹혀 있었다. **묶음을 유지한 채 붙인 장치들이다.**
 
-### ② 🔴 재고가 스위치보다 앞이다
+🔴 **고친 방향은 장치를 더 붙이는 것이 아니라 묶음을 푸는 것이었다.**
+러너 · checkpoint · 재개 · `--no-collect` · 혼합 source lock 은 전부 지웠다.
+**수집기 · 변환기 · 판정기 · 초안기 · 적재기는 하나도 지우지 않았다** — 그대로 쓴다.
+
+### ② 🔴 새 판정도 새 생성도 만들지 않았다
+
+처리기(`scripts/supply-process.mts`)는 기존 스크립트를 **자식 프로세스로 부른다.**
+🔴 **이 표에 수집 스크립트가 없다.** 처리기는 남의 서버를 두드리지 않는다.
+
+| 단계 | 명령 | 몫 | 밖으로 | 모델 | DB write |
+|---|---|---|---|---|---|
+| cafeThin | `micro-seed-navercafe-thin --apply --cafe=<id>` | source 별 | — | — | — |
+| adapt | `micro-seed-82cook-thin-adapt --apply --input=<그 source 의 파일>` | source 별 | — | — | — |
+| judge | `micro-seed-auto-judge --call --apply` | 공통 | — | 🔴 예 | — |
+| draft | `micro-seed-auto-draft --call --apply` | 공통 | — | 🔴 예 | — |
+| fill | `micro-seed-supply-autofill --apply --up-to=<부족분>` | 공통 | — | — | 🔴 예 |
+
+robots · 요청 간격 3~5초 · 일 상한 · 403/429 차단기 · 세션 · `bodyHead` 300자 ·
+전문 미저장 · 안전성 게이트 · 겹침 6자 · legacy 배제는 **전부 그 안에 이미 있다.**
+처리기가 다시 구현하면 고칠 곳이 두 곳이 되고, 언젠가 한쪽만 고쳐진다.
+
+### ③ 🔴 입력이 회차를 정한다 — 재고가 아니라
 
 ```
-재고 ≥ 14  → no-op. --live 라도 네트워크 0 · LLM 0 · DB write 0
-재고 < 14  → --live + SORAN_SUPPLY_AUTOPILOT_ENABLED=true 둘 다 있어야 돈다
+미처리 입력 탐색 (.microseed-data 목록 하나에서 전부 유도)
+  → 없으면 정상 no-op (네트워크 0 · LLM 0 · DB write 0)
+  → 있으면 --live + SORAN_SUPPLY_PROCESS_ENABLED=true 둘 다 있어야 돈다
 ```
 
-**"매일 도는 것" 과 "매일 남의 서버를 두드리는 것" 은 다른 일이다.**
-스케줄은 매일이지만 수집은 재고가 빌 때만 일어난다.
+🔴 **조용한 날이 실패로 보이지 않아야 진짜 실패가 눈에 띈다.**
+입력이 없는 회차는 `NO_INPUT` 으로 끝나고 exit 0 이다.
 
-수집량은 부족분의 4배다(하한 10 · 상한 50). 2026-09-07 실측이 근거다 —
-열기 50 → AUTO_SEED 24 → 채택 16 → 적재 가능 9. **원천 하나가 큐 한 줄이 되지 않는다.**
+#### source 실패 격리
 
-### ③ 🔴 안전장치
+| 무엇이 실패하면 | 무엇이 계속 도는가 |
+|---|---|
+| 82cook 수집 job | 네이버 두 source 의 입력이 그대로 처리된다 |
+| remonterrace 의 `cafeThin` | wgang 의 단계가 이어서 돌고, 공통 단계도 돈다 |
+| wgang 의 `cafeThin` | remonterrace 도 공통 단계도 돈다 |
+| 공통 `judge` | 🔴 **`draft`·`fill` 로 가지 않는다.** 검증 안 된 것이 큐에 닿으면 안 된다 |
+
+🔴 **실패를 감추지 않는다.** 실패한 source 는 회차 기록에 `failed` 로 남고, 회차는 exit 1 이다.
+"계속 돈다" 는 "없던 일로 한다" 가 아니다.
+
+### ④ 🔴 재고 700 은 버퍼 목표이지 수집 스위치가 아니다
+
+| 재고 | 파일 단계 (cafeThin · adapt) | 모델 단계 (judge · draft) | 적재 (fill) |
+|---:|---|---|---|
+| < 700 | 🟢 | 🟢 | 🟢 상한 `700 − 재고` |
+| ≥ 700 | 🟢 | 🔴 쉰다 | 🔴 쉰다 |
+| 읽지 못함 | 🟢 | 🔴 쉰다 | 🔴 쉰다 |
+
+**어느 쪽이든 수집 job 은 이 판정을 보지 않는다.** 저마다 자기 스케줄로 돈다.
+🔴 적재 천장의 정본은 `STOCK_BANDS.target` 하나다 — capacity 프로필의 `stockTarget` 은
+**발행 쪽 눈금**이고, 그것을 천장으로 쓰면 700 에 닿을 수 없다(①의 두 번째 결함).
+
+### ⑤ 🔴 회복은 checkpoint 가 아니라 입력에서 온다
+
+중간에 끊긴 회차를 위해 "어디까지 했는지" 를 파일에 적어 둘 필요가 없다.
+**미처리 입력은 디스크에 그대로 남아 있고**, 산출물이 있으면 그 단계는 끝난 것이다.
+
+| 어디서 끊겼나 | 다음 회차가 하는 일 | 왜 다시 안 하나 |
+|---|---|---|
+| cafeThin | 그 카페의 cafeThin 부터 | 얇은 산출물이 없으니 여전히 미처리로 잡힌다 |
+| adapt | 그 source 의 adapt 부터 | `82cook-adapt-<key>.*` 가 없으니 여전히 미처리다 |
+| judge · draft · fill | 그 단계부터 | 각 스크립트의 dedup 이 이미 한 것을 건너뛴다 |
+
+🔴 **중복 방지는 러너가 아니라 하위 단계가 쥐고 있다.**
+
+| 단계 | 무엇으로 막나 |
+|---|---|
+| judge | 사람 판정 대조 + LLM 캐시(`id\|inputHash\|rule\|prompt\|model`) |
+| draft | `publish-candidates-*.json` 대조 · 원천당 1개 |
+| fill | **DB `provenanceKey` 대조 + `$transaction`** — RawContent 와 Queue 를 한 쌍으로 만든다 |
+
+그래서 **처리기 둘이 겹쳐 돌아도 같은 후보가 두 번 APPROVED 로 들어가지 않는다.**
+파일 잠금(`.microseed-data/supply-process.lock`)은 `wx` 획득 · token 대조 해제이고 **자동 회수를 하지 않는다**. 같은 기계 안의 겹침만 막는다 —
+기계 사이는 막지 못하고, 막을 필요도 없다.
+
+### ⑥ 🔴 안전장치
 
 | | 어떻게 |
 |---|---|
-| 전체 kill switch | `SORAN_SUPPLY_AUTOPILOT_ENABLED` — plist 를 지우지 않고 멈춘다 |
-| 하위 스위치 | `SORAN_82COOK_THIN_DETAIL_ENABLED` — **시작 전에** 본다. 수집만 하고 멈추는 반쪽 상태를 안 만든다 |
-| 기본 실행 | dry-run. 인자 없이 돌리면 재고만 읽고 계획을 찍는다 |
+| 처리 kill switch | `SORAN_SUPPLY_PROCESS_ENABLED` — plist 를 지우지 않고 멈춘다 |
+| 수집 kill switch | source 마다 따로 (`SORAN_82COOK_THIN_DETAIL_ENABLED` 등) — 🔴 **하나로 묶지 않는다.** 묶으면 82cook 을 멈추려다 공급 전체가 멈춘다 |
+| 기본 실행 | dry-run. 인자 없이 돌리면 무엇이 밀렸는지 읽고 계획을 찍는다 |
 | 이중 스위치 | `--live` 하나로는 열리지 않는다 |
-| 동시 실행 | `.microseed-data/supply-autopilot.lock` |
-| stale lock | 90분 TTL **또는** 기록된 pid 가 죽었으면 즉시 회수 |
-| checkpoint | `supply-autopilot-<runId>.state.json` — 임시 파일 후 rename |
-| 부분 실패 | 앞 단계가 실패하면 **뒤로 가지 않는다.** 검증 안 된 후보가 큐에 닿지 않는다 |
-| 재수집·재판정 방지 | 각 단계가 이미 처리한 원천을 건너뛴다(기존 멱등 계약 그대로) |
+| 동시 실행 | `.microseed-data/supply-process.lock` |
+| stale lock | 🔴 **자동 회수 없음.** 45분(TTL)이 지나도 뺏지 않는다 — 뺏으면 두 회차가 같이 들어간다. `STALE_HELD` 로 멈추고 **사람이 치운다**(관제가 운영 이상으로 낸다) |
+| 부분 실패 | source 안에서는 앞 단계 실패 시 뒤로 가지 않는다. source 사이는 격리된다 |
 | 모의 재고 | `--simulate-stock=N` 은 **dry-run 전용.** `--live` 와 함께 쓰면 거부한다 |
+| 자식이 뜨지 못하면 | `spawn` 의 `error` 와 `try/catch` 를 둘 다 받는다 — 안 받으면 Promise 가 끝나지 않고 lock 을 쥔 채 매달린다 |
 
-### ③-b 🔴 끊긴 자리에서 잇는다 — 무인 반복의 최소 조건
+### ⑦ 왜 로컬 launchd 인가 — GHA 가 아니라
 
-첫 판은 checkpoint 를 **쓰기만 하고 읽지 않았다.** 중간에서 끊긴 회차를 두고
-다음 회차가 새 collect 부터 시작하면, 앞 회차의 수집분 · 판정 결과 · 초안이 주인 없이 쌓인다.
-**남의 서버를 두 번 두드리고 모델을 두 번 부르고도 큐는 안 찬다.**
+**`.microseed-data/` 가 gitignore 라서다.** 수집분 · 판정 결과 · 생성 캐시가 전부 여기 있고,
+단계들은 **파일로 이어져 있다.** GHA 러너는 매 실행이 빈 디스크로 시작한다 —
+판정 캐시가 없으니 같은 원천을 다시 모델에 묻는다.
 
-```
-live 시작 → 미완료 회차(status: running) 탐색
-        → 있으면 새 수집보다 먼저 잇는다
-        → 성공한 단계 다음부터 (실패한 단계는 '끝난 것' 이 아니라 미완료다)
-```
+🔴 그래서 `supply-collect.yml` 은 **수집과 처리를 같은 러너의 두 step 으로** 둔다.
+수집만 하고 끝나면 그 파일은 회차와 함께 사라진다. 남는 것은 DB 의 APPROVED 재고 하나뿐이고,
+그것이 노트북과 만나는 유일한 지점이다.
+🔴 처리 step 은 `if: always()` 다 — **82cook 수집이 실패해도 이미 있는 입력은 처리된다.**
 
-| 어디서 끊겼나 | 다음 회차가 하는 일 | 다시 부르지 않는 것 |
-|---|---|---|
-| adapt | adapt 부터 | collect |
-| judge | judge 부터 | collect · adapt |
-| draft | draft 부터 | collect · adapt · judge |
-| fill | fill 부터 | **새 원천 수집 없음** |
-
-#### exact input — "가장 최근 파일" 에 맡기지 않는다
-
-하위 스크립트 대부분은 지정이 없으면 디렉터리에서 최신 파일을 집는다.
-재개할 때 그 습성에 맡기면 **앞 회차 산출물 대신 다른 회차의 것을 먹는다** —
-그러면 수집한 판과 판정한 판과 적재한 판이 서로 달라진다.
-
-그래서 checkpoint 는 단계마다 만든 파일 경로를 남기고, 다음 단계에 그것을 넘긴다.
-`adapt` 와 `supply-autofill` 은 이미 `--input` 을 받았고,
-`auto-judge` · `auto-draft` 에는 **이번에 최소 범위로 추가**했다 —
-지정이 없으면 종전대로 디렉터리 전체를 읽는다(기존 동작 불변).
-
-하위 스크립트가 자기 runId 로 파일명을 정하므로, 러너는 **단계 전후의 파일 목록 차이**로
-그 단계가 만든 것을 알아낸다.
-
-#### fail closed — 조용히 새 수집으로 넘어가지 않는다
-
-이어받을 파일이 사라졌으면 **멈춘다.** 새 수집으로 넘어가면 사람은 "이어서 돌았다" 고 읽고
-실제로는 처음부터 다시 돈 것이 된다. 그 착각 위에서 비용과 요청 수를 판단하게 된다.
-
-#### lock 과 checkpoint 는 다른 것이다
-
-`lock` 은 **지금 누가 돌고 있나**, `checkpoint` 는 **어디까지 됐나** 다.
-죽은 lock 은 걷어내되 **미완료 checkpoint 는 그대로 둔다** — 함께 지우면 재개 근거가 사라진다.
-
-#### terminal 상태
-
-모든 단계가 끝나면 `status: 'done'` · `completedAt` 을 남긴다.
-**done 인 회차는 재개하지 않는다** — 다시 열면 같은 후보를 두 번 적재한다.
-
-#### 🔴 attempt 경계 — 과거 실패는 감사 기록이지 중단 사유가 아니다
-
-첫 재개 구현에는 결함이 하나 더 있었다. 루프 첫 줄이 이랬다.
-
-```ts
-if (shouldStopRun(cp.stages)) break   // 🔴 cp.stages 에는 지난 회차의 failed 가 그대로 있다
-```
-
-그래서 `adapt` 에서 끊긴 회차를 이어받으면 **`adapt` 를 한 번도 부르지 않고 즉시 멈췄다.**
-재시도에 성공해도 과거 실패 때문에 status 가 계속 `running` 이고 exit 은 1 이라
-**완료 상태로 갈 수 없었다** — 재개한다고 해놓고 영영 재개되지 않는 구조였다.
-
-계약을 둘로 나눠 고쳤다.
-
-| 무엇을 판단하나 | 무엇을 보나 |
-|---|---|
-| 어느 단계를 돌릴까 (`nextStage`) | **전체 이력**의 `ok` — 성공한 단계는 다시 돌리지 않는다 |
-| 여기서 멈출까 (`shouldStopRun`) | **이번 attempt** 만 (`attemptOf(stages, attemptFrom)`) |
-| terminal status · exit code | **이번 attempt** 만 |
-
-`attemptFrom` 은 재개 시작 시점의 `stages.length` 다. 그 이후에 쌓인 기록만 "이번 실행" 이다.
-
-실측 — 지난 회차가 `adapt` 에서 끊긴 checkpoint 를 이어받았을 때:
-
-```
-shouldStopRun(전체 이력)   = true    ← 예전에 이걸 썼다
-shouldStopRun(attempt 몫)  = false   ← 이제 이것을 쓴다
-자식 단계 호출 순서         = adapt → judge → draft → fill
-collect 호출 횟수           = 0
-checkpoint 최종 status      = done · exit 0
-stage 기록                  = collect:ok · adapt:failed · adapt:ok · judge:ok · draft:ok · fill:ok
-                              🔴 과거 실패가 지워지지 않고 남는다
-```
-
-이 판정이 러너 안에 있으면 fixture 가 볼 수 없어서, 루프를 순수 함수 `runStages` 로 뺐다.
-가짜 실행기를 주입하면 **어떤 단계를 몇 번 불렀는지**까지 검사할 수 있다 —
-판정 함수만 보던 fixture 는 "이어받은 단계를 부르지 않는" 결함을 못 봤다.
-
-#### 재고가 먼저 찼는데 미완료 회차가 남았다면
-
-DB 를 다른 경로가 먼저 채운 경우다. 이어서 돌면 **목표를 넘겨 적재하고**,
-그냥 두면 **영구 `running` 기록**이 된다. 둘 다 나쁘므로 `superseded` 로 종결한다.
-산출물은 지우지 않는다 — 다음 회차가 다시 쓸 수 있다.
-
-#### 자식 프로세스가 뜨지 못하면
-
-`spawn` 의 `error` 를 받지 않으면 Promise 가 끝나지 않는다. 실행 파일이 없거나
-프로세스가 뜨지 못하면 `close` 가 오지 않고, 러너는 **lock 을 쥔 채 매달린다** —
-그러면 다음 회차가 90분 동안 "앞 회차가 돈다" 는 이유로 막힌다.
-그래서 `error` 와 `try/catch` 를 둘 다 받고, 시작 실패는 그 단계 `failed` 로 기록한다.
-
-### ④ 왜 로컬 launchd 인가 — GHA 가 아니라
-
-**`.microseed-data/` 가 gitignore 라서다.** 이 디렉터리에 수집분 · 판정 결과 · 생성 캐시가
-전부 들어 있고, 단계들은 **파일로 이어져 있다.** GHA 러너는 매 실행이 빈 디스크로 시작한다 —
-판정 캐시가 없으니 같은 원천을 다시 모델에 묻고, 이미 수집한 글을 다시 연다.
-그것을 고치려면 저장소 이전(캐시·수집분을 어디에 둘 것인가)이 선행되어야 하고,
-그것은 이 PR 의 범위가 아니다.
-
-기존 launchd 패턴(`docs/operations/launchd/`)이 이미 있고, kill switch 를 환경변수로 두는
-계약도 같다. **오늘 가동 가능한 것을 오늘 가동 가능한 방식으로 만든다.**
-
-**클라우드 이전 조건** (충족되면 GHA 로 옮긴다):
+**클라우드 전면 이전 조건**:
 1. `.microseed-data/` 의 영속 저장소 결정 (판정·생성 캐시 · 수집분 · 보류 목록)
 2. 같은 원천을 두 번 열지 않는 보장이 **파일이 아닌 곳**에 서기
 3. `ANTHROPIC_API_KEY` · `DATABASE_URL` 을 Secrets 로 옮기고 실측
-4. 로컬과 클라우드가 **동시에 돌지 않도록** 한쪽을 먼저 끄는 절차
+4. 82cook owner 를 한쪽만 두는 절차 (네이버는 세션 때문에 옮기지 않는다)
 
-### ⑤ 아직 자동화되지 않은 구간
+### ⑧ 아직 자동화되지 않은 구간
 
 | 구간 | 상태 |
 |---|---|
-| 82cook 목록 수집 (article id 재고) | 🔴 **별도 job** — Autopilot 은 이미 있는 목록에서 고른다 |
-| 네이버 카페 | 🔴 이번 범위 밖. 세션이 필요하다 |
-| 발행 | 🟢 auto-publish 가 한다 (00:05 KST) — Autopilot 은 발행하지 않는다 |
+| 82cook 목록 수집 (article id 재고) | 🔴 **별도 job**(`raw-collect-82cook`) — 얇은 상세 job 은 이미 있는 목록에서 고른다 |
+| 발행 | 🟢 auto-publish 가 한다 (00:05 KST) — 처리기는 발행하지 않는다 |
 | legacy 5건 | 🔴 자동 발행 대상이 아니다. 세기만 한다 |
-| launchd 등록 | 🔔 **창업자** — 이 PR 은 템플릿까지다 |
+| launchd 등록 | 🔔 **창업자** — 저장소는 템플릿까지다 |
 
-### ⑥ 관제
+### ⑨ 관제
 
-한 실행이 끝나면 재고 before/after · 구성(사람·기계·legacy) · 수집 · 판정 분포 ·
-채택 · 적재 · LLM 호출/캐시 · **Post 불변** · 단계별 exit code 가 한 화면에 나온다.
+한 실행이 끝나면 미처리 입력 · 버퍼 정책 · source 별 성패 · 단계별 exit code ·
+판정 분포 · 채택 · 적재 · LLM 호출/캐시 · **Post 불변** 이 한 화면에 나온다.
+회차 기록은 `supply-process-<runId>.run.json` 이고 `supply:health` 가 읽는다 —
+🔴 **재개 근거가 아니라 관제 근거다.** 이 파일을 읽고 무엇을 돌릴지 정하지 않는다.
 🔴 **못 센 값은 `0` 이 아니라 `—` 로 찍는다.** 모르는 것을 안다고 하지 않는다.
 
 ---
@@ -5379,7 +5347,7 @@ collect(82cook) → cafeThin(네이버 수집물 얇게) → adapt → judge →
 `cafeThin` 은 앞 단계에서 이어받는 것이 없으므로(launchd 수집물을 스스로 찾는다)
 네이버를 안 돌린 날에도 fail closed 가 되지 않는다.
 
-🔴 **재고가 차 있어도 수집물을 방치하지 않는다.** launchd 는 09:20·13:20 에 계속 긁어 오는데
+🔴 **재고가 차 있어도 수집물을 방치하지 않는다.** launchd 는 (당시 09:20·13:20, 지금은 `-multi` 4회/day) 계속 긁어 오는데
 재고가 넉넉하다는 이유로 변환을 미루면 파일이 쌓이기만 한다. 그래서 no-op 경로에서도
 미처리 수집물이 있으면 **변환만은** 수행한다 — 네트워크 0 · LLM 0 · DB 0 이라 미룰 이유가 없다.
 

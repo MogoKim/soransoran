@@ -32,6 +32,7 @@ import {
 import { judgeSourceOperations } from '../src/lib/collect-operations'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { RUN_FILE_RE } from '../src/lib/supply-process'
 
 const WANT_PLAN = process.argv.includes('--plan')
 /** 🔴 Wave B 계약 — 두 카페 모두 하루 4회다 */
@@ -54,8 +55,9 @@ const SLOTS_OF: Readonly<Record<string, { hour: number; minute: number }[]>> = {
   'navercafe:remonterrace': [{ hour: 4, minute: 20 }, { hour: 10, minute: 20 }, { hour: 16, minute: 20 }, { hour: 22, minute: 20 }],
   'navercafe:wgang': [{ hour: 2, minute: 50 }, { hour: 8, minute: 50 }, { hour: 14, minute: 50 }, { hour: 20, minute: 50 }],
 }
-/** 🔴 공급 회차(supply-autopilot)의 예약 슬롯 — launchd StartCalendarInterval 과 같아야 한다 */
-const SUPPLY_SLOTS: readonly { hour: number; minute: number }[] = [{ hour: 21, minute: 10 }]
+/** 🔴 공급 처리(supply-process)의 예약 슬롯 — launchd StartCalendarInterval 과 같아야 한다 */
+const SUPPLY_SLOTS: readonly { hour: number; minute: number }[] =
+  [3, 7, 11, 15, 19, 23].map((hour) => ({ hour, minute: 15 }))
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')
 const MANIFEST_FILE = join(CANON_DIR, 'runtime-manifest.json')
 
@@ -205,7 +207,7 @@ for (const id of Object.keys(NAVER_EXPECTED) as SourceId[]) {
 }
 
 /**
- * ── ④ 마지막 공급 회차 checkpoint — 🔴 **전환 이후의 done 이어야 한다**
+ * ── ④ 마지막 공급 처리 회차 — 🔴 **전환 이후의 done 이어야 한다**
  *
  *    옛 코드로 돈 회차의 `done` 을 증거로 쓰면, 지금 돌고 있는 것과 다른 것을 보고
  *    공개 발행량을 3배로 올리게 된다.
@@ -214,7 +216,7 @@ const dataDir = './.microseed-data'
 type CpFile = { status?: string; startedAt?: string; completedAt?: string | null; runtimeSha?: string }
 let cpFacts: { status: string | null; startedAt: string | null; completedAt: string | null; runtimeSha?: string | null } | null = null
 try {
-  const cps = readdirSync(dataDir).filter((f) => f.startsWith('supply-autopilot-') && f.endsWith('.state.json')).sort()
+  const cps = readdirSync(dataDir).filter((f) => RUN_FILE_RE.test(f)).sort()
   const latest = cps[cps.length - 1]
   if (latest !== undefined) {
     const j = JSON.parse(readFileSync(join(dataDir, latest), 'utf-8')) as CpFile

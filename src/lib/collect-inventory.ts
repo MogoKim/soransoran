@@ -4,9 +4,11 @@
  * 🔴 왜 이 파일이 필요한가.
  *
  *    `SOURCE_FACTS[].loaded` 라는 **정적 boolean** 이 "지금 돌고 있다" 의 정본 노릇을 했다.
- *    거기에 `RUNS_PER_DAY[id].start`(카페 4회)를 곱해 하루 40건을 **실제 능력**으로 셌다.
- *    그런데 `launchctl` 에 올라와 있는 것은 **1회짜리 job** 두 개뿐이다 — 실제 20건이다.
- *    템플릿이 저장소에 있다는 사실과 job 이 등록돼 있다는 사실이 다시 섞였다.
+ *    거기에 `RUNS_PER_DAY[id].start` 를 곱한 값이 **실제 능력**으로 세어졌다.
+ *    그런데 그때 `launchctl` 에 올라와 있던 것은 1회짜리 job 두 개뿐이었다 —
+ *    템플릿이 저장소에 있다는 사실과 job 이 등록돼 있다는 사실이 섞인 것이다.
+ *    (📜 그 1회판은 지금 없다. 2026-09-11 실측 기준 `-multi` 둘이 돈다.
+ *     🔴 그래도 이 파일은 **그 숫자를 알지 못한다** — 관측은 호출부가 넣는다.)
  *
  * 🔴 그래서 세 가지를 **다른 타입**으로 나눈다.
  *
@@ -20,7 +22,7 @@
  */
 
 import {
-  RUNS_PER_DAY, SOURCE_FACTS, factsOf,
+  RUNS_PER_DAY, SOURCE_FACTS,
   type Phase, type SourceFacts, type SourceId,
 } from './collect-schedule'
 
@@ -40,10 +42,16 @@ export type ObservedJob = {
  * 🔴 소스마다 **1회판 label 과 다회판 label 이 다르다.**
  *    다회 전환은 "같은 job 을 고치는 것" 이 아니라 **다른 job 을 올리고 1회판을 내리는 것**이다.
  *    그래서 label 로 무엇이 도는지 구분할 수 있다.
+ *
+ * 🔴 **`single` 은 실행 경로가 아니라 판정용 이름이다** (2026-09-11).
+ *    1회판 job 도 그 plist 템플릿도 저장소에 없다. 이 이름을 남기는 이유는 하나다 —
+ *    어떤 기계에 옛 job 이 남아 있으면 `currentCapacity` 가 그것을 **`kind: 'single'` 로
+ *    알아보고 "계획한 다회판이 아니다" 라고 말해야** 하기 때문이다.
+ *    이름을 지우면 그 job 은 미등록으로 보이고, 실제로는 돌면서 아무도 모르게 된다.
  */
 export const JOB_LABELS: Readonly<Record<SourceId, { single: string | null; multi: string }>> = {
   '82cook': {
-    // 🔴 82cook 은 1회판이 없다. 지금은 supply-autopilot 안에서만 열린다
+    // 🔴 82cook 은 1회판이 없다. Raw Vault 레인과 공급 레인이 각자 예약 job 을 갖는다
     single: null,
     multi: 'com.soransoran.raw-collect-82cook',
   },
@@ -225,10 +233,4 @@ export function describeInventory(observed: readonly ObservedJob[], phase: Phase
   // 🔴 **`설정`이다.** 등록된 슬롯 × 상한일 뿐 실제로 나오는 양이 아니다
   return `설정 ${Math.round(cur.effectivePerDay)}건/day (등록 ${cur.perSource.filter((s) => s.registered).length}/${SOURCE_FACTS.length})`
     + ` · 준비 ${Math.round(prep.effectivePerDay)}건/day`
-}
-
-/** 🔴 82cook 은 supply-autopilot 안에서도 상세를 연다 — 그 몫은 따로 적는다 */
-export function autopilotDetailPerDay(observed: readonly ObservedJob[], maxPerRun: number, runsPerDay: number): number {
-  const on = observed.some((o) => o.loaded && o.label === 'com.soransoran.supply-autopilot')
-  return on ? maxPerRun * runsPerDay * factsOf('82cook').detailSuccessRate.value : 0
 }

@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  공급 처리(drain) — 🔴 템플릿이다. 등록되어 있지 않다 (README.md 참조)
+
+  정본: docs/operations/2026-09-03-raw-supply-chain-design.md §4-AU
+
+  하는 일: 이미 디스크에 있는 **미처리 입력**을 source 별로 비운다.
+           얇은 변환 → 검수용 변환 → 자동 판정 → 초안 생성 → Queue 보충
+
+  🔴 이 job 은 수집하지 않는다
+     수집은 source 마다 독립 job 이다 — supply-collect-82cook-thin ·
+     navercafe-collect-remonterrace-multi · navercafe-collect-wgang-multi.
+     그중 누가 실패했는지 이 job 은 묻지 않는다. 있는 입력만 처리한다.
+     🔴 반대로 수집 job 도 이 job 의 상태를 보지 않는다 — 서로를 소유하지 않는다.
+
+  🔴 이 job 은 발행하지 않는다
+     Post · persona 배정 · ActivityLog 를 만들지 않는다.
+     발행은 auto-publish(GHA, 매일 00:05 KST)가 한다.
+
+  🔴 하루 6회다
+     수집이 하루 4~10회 들어오므로 처리가 하루 1회면 입력이 반나절씩 묵는다.
+     첫 Persona 댓글 60분 목표와도 맞지 않는다. 4시간 간격 6슬롯으로 둔다.
+     분(:15)은 수집 job 들(:10 · :20 · :40 · :50)과 겹치지 않게 골랐다.
+     🔴 23:15 슬롯이 auto-publish(00:05) 직전이다 — 발행 직전에 재고를 한 번 더 채운다.
+
+  🔴 미처리 입력이 없으면 정상 no-op 이다
+     네트워크 0 · LLM 0 · DB write 0. 조용한 날이 실패로 보이지 않는다.
+
+  🔴 재고 700 은 **버퍼 목표**이지 수집 스위치가 아니다
+     재고가 700 이상이면 파일 단계(얇은 변환 · 검수용 변환)만 돌고 모델과 DB 는 쉰다.
+     수집 job 은 이 판정을 보지 않는다.
+
+  🔴 kill switch 는 plist 가 아니라 환경변수다
+     .env.local 에 SORAN_SUPPLY_PROCESS_ENABLED=true 가 없으면 --live 는 무시된다.
+     plist 를 지우지 않고 멈출 수 있어야 한다.
+
+  🔴 동시 실행은 러너가 막는다
+     .microseed-data/supply-process.lock — `wx` 로 한 번만 생기고, 주인의 token 대조로만 풀린다.
+     🔴 **자동 회수를 하지 않는다.** 45분(TTL)이 지났어도 뺏지 않는다 —
+     뺏는 순간 관측→조작 창이 열리고 그 창이 두 회차를 동시에 들여보낸다.
+     시효가 지난 잠금은 STALE_HELD 로 **회차를 멈추고 사람 확인을 요구**한다.
+     관제(`npm run supply:health`)가 그것을 운영 이상으로 낸다.
+     🔴 이 잠금은 **한 기계 안**에서만 유효하다. 기계 사이의 중복 적재는
+     DB 쪽 dedup(provenanceKey + 트랜잭션)이 막는다.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.supply-process</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NPX__</string>
+    <string>tsx</string>
+    <string>__REPO__/scripts/supply-process.mts</string>
+    <string>--live</string>
+  </array>
+
+  <!-- 🔴 launchd 기본 PATH 는 /usr/bin:/bin:/usr/sbin:/sbin 뿐이다. nvm 의 node 가 없다.
+       npx 의 shebang 이 #!/usr/bin/env node 라 PATH 를 주지 않으면 프로세스가 뜨기도 전에
+       exit 78 로 죽는다 — stdout·stderr 어디에도 원인이 남지 않아 "등록은 됐는데 아무 일도
+       안 일어나는" 상태가 된다. 2026-09-07 첫 kickstart 에서 실측했다. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__NODEBIN__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+
+  <!-- 🔴 RunAtLoad 를 쓰지 않는다. load 하는 순간 모델을 부르는 것은 의도가 아니다 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- 🔴 로그를 ~/Documents 아래 두면 launchd 가 그 파일을 열지 못해 역시 exit 78 이다.
+       macOS 의 Documents 접근 보호(TCC) 때문이다. __LOGDIR__ 은 Documents 밖이어야 한다
+       (기본 $HOME/Library/Logs/soransoran). ~ 나 $HOME 은 plist 안에서 확장되지 않으므로
+       설치 스크립트가 **절대경로로 치환**한다. -->
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/supply-process.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/supply-process-error.log</string>
+</dict>
+</plist>

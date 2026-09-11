@@ -11,7 +11,7 @@
  *   ⑥ Gate ⑥-B        salt 를 loadEnvLocal 뒤에 만드는가 · **salt 가 판정을 실제로 바꾸는가**
  *   ⑦ advice/caution  이번 PR 에서 풀지 않았는가 · 다음 작업으로 문서에 남겼는가
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -56,7 +56,7 @@ import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 import { cardToPersona as toPersona } from '../src/lib/persona-pool-card'
 import { PROBE_TIMEOUT_MS } from '../src/lib/collect-guard'
 import { classifyNavigation } from './lib/collect-guard-store.mjs'
-import { findBottlenecks, onDemandPotentialPerDay } from '../src/lib/scale-supply-plan'
+import { findBottlenecks, thin82cookDetailPerDay } from '../src/lib/scale-supply-plan'
 import { checkNameCollision } from './lib/persona-gate-name-collision.mjs'
 import { planBatch, type BatchDraft } from '../src/lib/original-post-persona-match'
 
@@ -729,7 +729,8 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   const OBSERVED_NOW: readonly ObservedJob[] = [
     { label: 'com.soransoran.navercafe-collect-remonterrace', slots: [{ hour: 9, minute: 20 }], loaded: true },
     { label: 'com.soransoran.navercafe-collect-wgang', slots: [{ hour: 13, minute: 20 }], loaded: true },
-    { label: 'com.soransoran.supply-autopilot', slots: [{ hour: 21, minute: 10 }], loaded: true },
+    /** 🔴 공급 **처리** job 이다 — 수집하지 않으므로 수집 능력에 보태지 않는다 */
+    { label: 'com.soransoran.supply-process', slots: [{ hour: 23, minute: 15 }], loaded: true },
   ]
   const NOW_MS = Date.UTC(2026, 8, 8, 3, 0, 0)
 
@@ -833,14 +834,21 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
     && (hh.match(/collectReadiness\(\{/g) ?? []).length === 2)
   check('🔴 관측 실패를 "없음" 으로 읽지 않는다', /observeProblem/.test(hh))
 
-  // 🔴 다회 템플릿 — 등록하지 않았고, 1회판은 그대로다
+  /**
+   * 🔴 **다회 템플릿이 운영 경로다** (2026-09-11 정정).
+   *    이 PR 을 쓰던 시점에는 1회판이 돌고 있었고, 여기서 "1회판은 그대로 1슬롯" 을 지켰다.
+   *    지금은 `-multi` 둘이 등록돼 있고 1회판은 job 도 템플릿도 없다 —
+   *    사라진 파일을 붙잡고 있으면 검사가 옛 운영 형태를 되살리라고 요구하게 된다.
+   */
   for (const cafe of ['remonterrace', 'wgang'] as const) {
     check(`🔴 ${cafe} 다회 템플릿이 있다`,
       read(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}-multi.plist.template`).includes('multi'))
-    check(`🔴 ${cafe} 1회 템플릿은 그대로 1슬롯이다`, (() => {
-      const t = read(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}.plist.template`)
-      return (t.match(/<key>Hour<\/key>/g) ?? []).length === 1
+    check(`🔴 ${cafe} 다회 템플릿이 하루 4슬롯이다`, (() => {
+      const t = read(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}-multi.plist.template`)
+      return (t.match(/<key>Hour<\/key>/g) ?? []).length === 4
     })())
+    check(`🔴 ${cafe} 옛 1회 템플릿이 없다`,
+      !existsSync(`docs/operations/launchd/com.soransoran.navercafe-collect-${cafe}.plist.template`))
   }
 }
 
@@ -1873,17 +1881,17 @@ console.log('\n⑯ current 수집 능력의 정본은 관측 하나뿐')
   const OBS: readonly ObservedJob[] = [
     { label: 'com.soransoran.navercafe-collect-remonterrace', slots: [{ hour: 9, minute: 20 }], loaded: true },
     { label: 'com.soransoran.navercafe-collect-wgang', slots: [{ hour: 13, minute: 20 }], loaded: true },
-    { label: 'com.soransoran.supply-autopilot', slots: [{ hour: 21, minute: 10 }], loaded: true },
+    { label: 'com.soransoran.supply-process', slots: [{ hour: 23, minute: 15 }], loaded: true },
   ]
   check('🔴 current 는 20건/day 다 (60 이 아니다)', currentCapacity(OBS).effectivePerDay === 20)
   /**
-   * 🔴 **조건부 몫을 보장 능력에 합치지 않는다.** autopilot 은 재고가 목표에 못 미칠 때만
-   *    수집한다 — 재고가 차면 0이다. 그것을 상시 능력으로 세면 60건이 된다(예전 값).
+   * 🔴 **처리 job 은 수집 능력이 아니다** (2026-09-11).
+   *    옛 중앙 러너는 재고가 모자랄 때만 82cook 을 열었고, 그 조건부 몫까지 합쳐 60건이
+   *    "지금 열리는 능력" 으로 적혔다. 지금 82cook 몫은 예약 job 의 슬롯에서만 나온다.
    */
-  check('🔴 autopilot 몫은 onDemandPotential 로 따로 낸다',
-    onDemandPotentialPerDay(OBS) === 40 && currentCapacity(OBS).effectivePerDay + onDemandPotentialPerDay(OBS) === 60)
-  check('🔴 autopilot 이 안 올라와 있으면 조건부 몫도 0 이다',
-    onDemandPotentialPerDay(OBS.filter((o) => !o.label.includes('autopilot'))) === 0)
+  check('🔴 처리 job 이 올라와 있어도 수집 능력은 그대로다',
+    currentCapacity(OBS).effectivePerDay === 20)
+  check('🔴 82cook 얇은 상세 job 이 미등록이면 그 몫은 0 이다', thin82cookDetailPerDay(OBS) === 0)
   const p100 = planSupply(PROFILES.d10, 100)
   check('🔴 병목이 관측 능력(20)으로 BLOCK 을 적는다',
     findBottlenecks(p100, undefined, OBS).some((b) => b.stage === 'collect' && b.severity === 'BLOCK'
@@ -1892,9 +1900,10 @@ console.log('\n⑯ current 수집 능력의 정본은 관측 하나뿐')
     findBottlenecks(p100).some((b) => b.stage === 'collect' && b.severity === 'BLOCK' && b.detail.includes('0건')))
   // 🔴 화면·JSON 이 같은 정본을 쓴다
   const hh = codeOf('scripts/supply-health.mts')
-  check('🔴 health JSON 이 조건부 몫을 따로 낸다', /onDemandPotentialPerDay: onDemandPotentialPerDay\(observed\)/.test(hh))
-  check('🔴 화면도 그 값을 읽는다', /collect\.capacity\.onDemandPotentialPerDay/.test(hh))
-  check('🔴 화면이 "재고 미달 시에만" 이라고 적는다', read('scripts/supply-health.mts').includes('재고 미달 시에만'))
+  check('🔴 health 가 current 와 prepared 를 따로 낸다',
+    /configuredPerDay: cur\.effectivePerDay/.test(hh) && /preparedPerDay: prep\.effectivePerDay/.test(hh))
+  check('🔴 조건부 몫이라는 이름이 화면에서 사라졌다',
+    !/조건부|onDemandPotential/.test(read('scripts/supply-health.mts')))
 }
 
 // ── ⑰ 문서가 실제 계산과 어긋나지 않는다 (P2) ──
@@ -1906,20 +1915,19 @@ console.log('\n⑰ 문서 정합 — 낡은 숫자·낡은 절차를 남기지 �
 
   /**
    * 🔴 **주석의 수집량이 실제 계산과 같아야 한다.** 옛 주석은 "지금 등록된 것은 하루 70건"
-   *    이라고 적었는데, 그 70 은 미등록 job 과 조건부 autopilot 몫을 합치고 성공률도 곱하지 않은 값이다.
+   *    이라고 적었는데, 그 70 은 미등록 job 과 조건부 수집 몫을 합치고 성공률도 곱하지 않은 값이다.
    */
   check('🔴 collect-schedule 주석이 옛 70건을 말하지 않는다', !/하루 70건/.test(sched))
-  check('🔴 current 20건을 적는다', /하루 20건/.test(sched))
-  check('🔴 조건부 몫을 따로 적는다', /조건부 몫/.test(sched) && /\+40건/.test(sched))
+  check('🔴 조건부 몫을 능력으로 세지 않는다고 적는다', /조건부 몫을 능력에 합치지 않는다/.test(sched))
   check('🔴 required 382 를 적는다', /382건/.test(sched))
   check('🔴 그 숫자가 실제 계산과 같다', (() => {
     const OBS: readonly ObservedJob[] = [
       { label: 'com.soransoran.navercafe-collect-remonterrace', slots: [{ hour: 9, minute: 20 }], loaded: true },
       { label: 'com.soransoran.navercafe-collect-wgang', slots: [{ hour: 13, minute: 20 }], loaded: true },
-      { label: 'com.soransoran.supply-autopilot', slots: [{ hour: 21, minute: 10 }], loaded: true },
+      { label: 'com.soransoran.supply-process', slots: [{ hour: 23, minute: 15 }], loaded: true },
     ]
     return currentCapacity(OBS).effectivePerDay === 20
-      && onDemandPotentialPerDay(OBS) === 40
+      && thin82cookDetailPerDay(OBS) === 0
       && planSupply(PROFILES.d10, 100).detailPerDay === 382
   })())
 

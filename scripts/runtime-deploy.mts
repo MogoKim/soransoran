@@ -19,15 +19,25 @@
  */
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, openSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync, closeSync } from 'node:fs'
+import {
+  closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync,
+  unlinkSync, writeFileSync, writeSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import {
   DEPLOY_FORBIDDEN, DEPLOY_GATES, DEPLOY_STEPS, judgeDeploy, judgeDeployLock, judgeLockRelease,
   OFFLINE_GATES, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
-import { judgeJobState, parseLaunchctlPrint, type JobState } from '../src/lib/runtime-isolation'
+import {
+  JOB_ENV_REQUIREMENTS, judgeJobEnv, judgeJobState, parseLaunchctlPrint,
+  RETIRED_JOBS, RUNTIME_JOBS, type JobState,
+} from '../src/lib/runtime-isolation'
+import {
+  leftoverPlaceholders, plistFileOf, programArguments, readInstalled, removeInstalled,
+  render, retireInstalled, templatePathOf, writeInstalled,
+} from './lib/launchd-install.mjs'
 
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
 /** 🔴 예약 실행이 절대 물으면 안 되는 곳 — 개발 작업트리들 */
@@ -36,21 +46,39 @@ const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran'
 export const MANIFEST_FILE = join(CANON_DIR, 'runtime-manifest.json')
 const PIN_FILE = join(CANON_DIR, 'runtime-pinned-sha')
 const LOCK_FILE = join(CANON_DIR, 'runtime-deploy.lock')
-const JOBS = [
-  'com.soransoran.navercafe-collect-remonterrace-multi',
-  'com.soransoran.navercafe-collect-wgang-multi',
-  'com.soransoran.supply-autopilot',
-]
+/** 🔴 정본은 `RUNTIME_JOBS` 하나다 — 여기에 label 을 다시 적지 않는다 */
+const JOBS = RUNTIME_JOBS
 const AGENT_DIR = join(homedir(), 'Library', 'LaunchAgents')
+/** 🔴 퇴역 plist 보관소 — 지우지 않고 옮긴다. 되돌릴 수 있어야 한다 */
+const ROLLBACK_DIR = join(CANON_DIR, 'launchagents-rollback')
 const UID = process.getuid?.() ?? 0
+/**
+ * 🔴 **치환값.** 설치 절차(README)와 **같은 값**이어야 한다 —
+ *    두 벌이면 사람이 손으로 깐 것과 배포가 깐 것이 달라진다.
+ */
+const RENDER_VARS = {
+  npx: process.execPath.replace(/\/node$/, '/npx'),
+  node: process.execPath,
+  nodebin: dirname(process.execPath),
+  repo: RUNTIME_ROOT,
+  logdir: join(homedir(), 'Library', 'Logs', 'soransoran'),
+}
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
 const TARGET = (argv.find((a) => a.startsWith('--target='))?.split('=')[1] ?? '').trim() || null
 
-/** 🔴 성공하면 출력, 실패하면 null. **판단에 쓰는 읽기 전용 명령**에만 쓴다 */
+/**
+ * 🔴 성공하면 출력, 실패하면 null. **판단에 쓰는 읽기 전용 명령**에만 쓴다.
+ *
+ * 🔴 stderr 를 삼킨다 — 실패는 `null` 로 돌려주고, **무엇이 잘못됐는지는 호출부가 말한다.**
+ *    그러지 않으면 `git show` 의 `fatal: path ... does not exist` 가 화면에 섞여
+ *    우리가 낸 "🔴 템플릿 없음" 옆에 같은 사실이 두 번 다른 말로 찍힌다.
+ */
 const read = (cmd: string, args: readonly string[], cwd = RUNTIME_ROOT): string | null => {
-  try { return execFileSync(cmd, [...args], { cwd, encoding: 'utf-8' }).trim() } catch { return null }
+  try {
+    return execFileSync(cmd, [...args], { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch { return null }
 }
 /** 🔴 side-effect 는 **성공 여부를 돌려준다**. null 로 삼키지 않는다 */
 const act = (cmd: string, args: readonly string[], cwd = RUNTIME_ROOT): boolean => {
@@ -77,6 +105,55 @@ if (!APPLY) {
   console.log('\n  ── 게이트')
   for (const g of OFFLINE_GATES) console.log(`     · npm run ${g}   (job 이 내려가 있어도 돈다)`)
   console.log('     · npm run runtime:isolation-check -- --require-runtime   🔴 job 을 다시 올린 뒤에만')
+  /**
+   * 🔴 **계획도 target 의 템플릿으로 찍는다.**
+   *    지금 runtime 에 있는 파일로 찍으면 화면이 옛 인자를 보여주고,
+   *    사람은 그것이 설치될 것이라고 읽는다 — 실제로 설치될 것과 다르다.
+   */
+  const planTarget = TARGET ?? originMainDry
+  console.log(`\n  ── 설치될 job (🔴 정본은 **target commit 의** 템플릿이다)`)
+  if (planTarget === null) {
+    console.log('     🟡 target 을 모른다 — `--target=<full sha>` 를 주면 그 commit 의 계획을 찍는다')
+  } else {
+    console.log(`     기준 ${planTarget.slice(0, 7)}`)
+    let missing = 0
+    for (const l of JOBS) {
+      const xml = renderFromTarget(planTarget, l)
+      const args = xml === null ? [] : programArguments(xml)
+      if (args.length === 0) missing += 1
+      console.log(`     ${args.length === 0 ? '🔴 템플릿 없음' : '🟢'} ${l}`)
+      if (args.length > 0) console.log(`        ${args.join(' ')}`)
+    }
+    if (missing > 0) {
+      console.log(`\n     🔴 템플릿 없음 ${missing}건 — 이 target 으로는 배포가 render 에서 멈춘다`)
+    }
+  }
+  console.log('\n  ── 퇴역될 job (unload + 설치본을 보관소로 이동)')
+  for (const l of RETIRED_JOBS) {
+    console.log(`     ${existsSync(join(AGENT_DIR, plistFileOf(l))) ? '🟡 설치본 있음' : '🟢 없음'} ${l}`)
+  }
+  /**
+   * 🔴 **스위치를 함께 찍는다.** plist 가 올라가도 스위치가 닫혀 있으면 그 job 은
+   *    아무것도 하지 않는다 — "등록은 됐는데 공급이 0" 이 그렇게 만들어진다.
+   */
+  console.log('\n  ── 활성화 스위치 (🔴 배포는 이것을 고치지 않는다)')
+  {
+    const env = readRuntimeEnv()
+    const blockers = judgeJobEnv({ jobs: JOBS, env })
+    const keys = [...new Set(JOBS.map((l) => JOB_ENV_REQUIREMENTS[l]).filter((k): k is string => k !== undefined))]
+    for (const k of keys) {
+      const bad = blockers.find((b) => b.key === k)
+      console.log(`     ${bad === undefined ? '🟢' : '🔴'} ${k}${bad === undefined ? '=true' : ` — ${bad.detail}`}`)
+    }
+    if (blockers.length > 0) {
+      console.log(`\n     🔴 blocker ${blockers.length}건 — .env.local 을 사람이 켠 뒤 배포한다`)
+    }
+    // 🔴 퇴역 job 의 스위치는 blocker 가 아니다. 다만 남아 있으면 알려 준다
+    const deadSwitch = 'SORAN_SUPPLY_AUTOPILOT_ENABLED'
+    if (env[deadSwitch] !== undefined) {
+      console.log(`     🟡 ${deadSwitch} 가 남아 있다 — 퇴역 job 의 스위치다. 배포 뒤 지워도 된다`)
+    }
+  }
   console.log(`\n  🔴 배포가 하지 않는 것: ${DEPLOY_FORBIDDEN.join(' · ')}`)
   console.log(`\n  실제 배포: npm run runtime:deploy -- --apply --target=${originMainDry ?? '<full sha>'}\n`)
   process.exit(0)
@@ -132,6 +209,47 @@ const probePrint = (label: string): { exitCode: number | null; stdout: string; s
 }
 const stateOf = (label: string): JobState => judgeJobState(probePrint(label)).state
 
+/**
+ * 🔴 **target commit 에서 직접 읽는다.** 작업트리를 읽지 않는다.
+ *
+ *    배포 시점의 runtime 은 아직 **옛 SHA 에 checkout 되어 있다**.
+ *    거기서 템플릿을 읽으면 첫 cutover 가 구조적으로 불가능하다 —
+ *    실측(runtime 7049ddc): 새 job 2개 템플릿 없음, 네이버는
+ *    `micro-seed-collect-navercafe.mts --pages=1 --max=10`.
+ *    **설치할 것은 target 의 템플릿이지 지금 거기 있는 파일이 아니다.**
+ *
+ * 🔴 `git show <target>:<path>` 는 checkout 하지 않고 그 commit 의 blob 만 꺼낸다 —
+ *    job 을 내리기 전에 불러도 작업트리를 바꾸지 않는다.
+ */
+function renderFromTarget(target: string, label: string): string | null {
+  const raw = read('git', ['show', `${target}:${templatePathOf(label)}`])
+  if (raw === null || raw.trim() === '') return null
+  const out = render(raw, RENDER_VARS)
+  // 🔴 치환이 하나라도 남으면 쓰지 않는다 — launchd 는 `__REPO__` 를 경로로 알고 그대로 죽는다
+  return leftoverPlaceholders(out).length === 0 ? out : null
+}
+
+/**
+ * 🔴 runtime 의 `.env.local` — **읽기만 한다.** 배포는 스위치를 켜지 않는다.
+ *    코드가 켜면 "사람이 내려 둔 것" 과 "아직 안 켠 것" 을 구분할 수 없다.
+ */
+function readRuntimeEnv(): Record<string, string> {
+  const out: Record<string, string> = {}
+  const f = join(RUNTIME_ROOT, '.env.local')
+  if (!existsSync(f)) return out
+  try {
+    for (const line of readFileSync(f, 'utf-8').split('\n')) {
+      const t = line.trim()
+      if (t === '' || t.startsWith('#')) continue
+      const eq = t.indexOf('=')
+      if (eq <= 0) continue
+      // 🔴 값은 찍지 않는다 — 스위치 이름과 true 여부만 쓴다
+      out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
+    }
+  } catch { /* 못 읽으면 빈 것으로 — judgeJobEnv 가 unset 으로 막는다 */ }
+  return out
+}
+
 const fx: DeployEffects = {
   fetch: () => act('git', ['fetch', 'origin', 'main']),
   currentSha: () => read('git', ['rev-parse', 'HEAD']),
@@ -141,7 +259,8 @@ const fx: DeployEffects = {
   runningJobs: () => {
     const running: string[] = []
     const unknown: string[] = []
-    for (const l of JOBS) {
+    // 🔴 퇴역 job 도 본다 — 돌고 있는 옛 job 위로 배포하면 그 회차가 반쯤 잘린다
+    for (const l of [...JOBS, ...RETIRED_JOBS]) {
       const probe = probePrint(l)
       const { state } = judgeJobState(probe)
       // 🔴 못 본 job 을 "실행 중 아님" 으로 통과시키지 않는다
@@ -163,12 +282,26 @@ const fx: DeployEffects = {
     const a = g.split(' ')
     return act('npm', ['run', a[0]!, ...(a.length > 1 ? ['--', ...a.slice(1)] : [])])
   },
+
+  envBlockers: (jobs) => judgeJobEnv({ jobs, env: readRuntimeEnv() }),
+
+  // ── 🔴 plist cutover — **target commit 의** 템플릿을 실제 설치본으로 옮긴다 ──
+  readInstalledPlist: (l) => readInstalled(AGENT_DIR, l),
+  renderPlist: (target, l) => renderFromTarget(target, l),
+  argsOf: (xml) => programArguments(xml),
+  writePlist: (l, xml) => writeInstalled(AGENT_DIR, l, xml),
+  removePlist: (l) => removeInstalled(AGENT_DIR, l),
+  retirePlist: (l) => {
+    try { mkdirSync(ROLLBACK_DIR, { recursive: true }) } catch { return false }
+    return retireInstalled(AGENT_DIR, ROLLBACK_DIR, l)
+  },
+  lintPlist: (l) => act('plutil', ['-lint', join(AGENT_DIR, plistFileOf(l))], homedir()),
   /**
    * 🔴 실제 loaded 설정을 **정본 파서**로 뽑는다.
    *
    *    옛 판은 출력에서 soransoran 이 들어간 절대경로를 전부 모아 runtime 밑을 요구했다.
    *    그런데 정상 출력에는 plist(`~/Library/LaunchAgents/…`)와 로그(`~/Library/Logs/soransoran/…`)도
-   *    들어 있다 — **정상 job 3개가 전부 실패했다**(실측). 판정은 judgeLoadedConfig 가 한다.
+   *    들어 있다 — **정상 job 이 전부 실패했다**(실측). 판정은 judgeLoadedConfig 가 한다.
    */
   loadedConfig: (l) => parseLaunchctlPrint(probePrint(l).exitCode === 0 ? probePrint(l).stdout : null),
   isolationGate: () => act('npx', ['tsx', 'scripts/runtime-isolation-check.mts', '--require-runtime']),
@@ -190,7 +323,7 @@ const fx: DeployEffects = {
 }
 
 const result = await runDeploy({
-  target: TARGET ?? '', jobs: JOBS,
+  target: TARGET ?? '', jobs: JOBS, retiredJobs: RETIRED_JOBS,
   paths: { runtimeRoot: RUNTIME_ROOT, devRoots: DEV_ROOTS },
 }, fx)
 
@@ -208,7 +341,7 @@ console.error(`\n🔴 배포하지 않았다 — ${result.phase} 에서 멈췄�
 for (const p of result.problems) console.error(`   · ${p}`)
 if (result.rollback !== null) {
   console.error(result.rollback.complete
-    ? '   ✅ 직전 상태로 되돌렸고 job 3개가 다시 올라왔다'
+    ? '   ✅ 직전 상태로 되돌렸다 — SHA · plist 원문 · loaded 상태 전부'
     : '   🔴 되돌리지 못하고 남은 것:')
   for (const r of result.rollback.residual) console.error(`      · ${r}`)
 }

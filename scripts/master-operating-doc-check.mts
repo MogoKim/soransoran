@@ -283,9 +283,14 @@ check('단일 end-to-end 경로가 의도적으로 없다고 적는다',
     .filter((n) => n.endsWith('.template') || n === 'README.md')
   for (const n of launchdFiles) {
     const body = readFileSync(join(launchdDir, n), 'utf-8')
-    // 🔴 "더는 사실이 아니다" 라고 적어 둔 정정 문장은 제외하고 본다
+    /**
+     * 🔴 **역사라고 표시한 줄은 현재 주장이 아니다.**
+     *    정정문("더는 사실이 아니다")과 📜 로 시작하는 역사 블록을 빼고 본다 —
+     *    그 표시가 없는 줄만 "지금 이렇다" 는 주장으로 읽힌다.
+     */
     const claim = body.split('\n')
-      .filter((l) => !l.includes('더는 사실이 아니다') && !l.includes('옛 문구'))
+      .filter((l) => !l.includes('더는 사실이 아니다') && !l.includes('옛 문구')
+        && !l.includes('📜') && !l.includes('그때의 기록'))
       .join('\n')
     check(`🔴 ${n} 에 옛 슬롯 문구가 없다`,
       !/카페는 하루 2회/.test(claim)
@@ -811,6 +816,49 @@ check('🔴 이번 변경이 글을 올린 것이 아니라고 적는다',
   master.includes('글 자체를 100 으로 올린 것이 아니다'))
 check('🔴 runner 를 등록하지 않았다고 적는다',
   master.includes('runner 는 등록하지 않았다'))
+
+/**
+ * 🔴 **운영 정본을 두 지침이 모두 가리킨다** (2026-09-11).
+ *    한쪽만 가리키면 그 도구로 들어온 세션은 목적을 모른 채 일한다.
+ */
+for (const f of ['AGENTS.md', 'CLAUDE.md']) {
+  const g = readFileSync(f, 'utf-8')
+  check(`🔴 ${f} 가 NORTH-STAR 를 가리킨다`, g.includes('docs/operations/NORTH-STAR.md'))
+  check(`🔴 ${f} 가 CURRENT-MILESTONE 을 가리킨다`, g.includes('docs/operations/CURRENT-MILESTONE.md'))
+}
+/** 🔴 정본을 복제하지 않는다 — 복제하면 한쪽이 낡고 낡은 쪽이 먼저 읽힌다 */
+check('🔴 North Star 문장을 지침에 복제하지 않았다',
+  ['AGENTS.md', 'CLAUDE.md'].every((f) =>
+    !readFileSync(f, 'utf-8').includes('7일 안에 다시 방문해')))
+
+/**
+ * 🔴 **두 지침이 CURRENT-MILESTONE 과 반대말을 하지 않는다** (2026-09-11).
+ *
+ *    AGENTS.md 는 "정상 상태 봇 글·댓글 0건 · 봇으로 채우지 않는다" 라고 적고,
+ *    CLAUDE.md 는 "봇 글·댓글로 채우기" 를 금지 목록에 두고 있었다.
+ *    그런데 CURRENT-MILESTONE 의 승인된 단기 목표는 **관리형 공개 글 100/day 와
+ *    글당 Persona 댓글 1~5건**이다. 두 문서가 정반대를 말하면, 먼저 읽은 쪽이 이긴다 —
+ *    에이전트마다 다른 답을 내고, 그 차이를 아무도 못 본다.
+ *
+ * 🔴 막아야 할 것은 **없는 활동을 있는 것처럼 보이는 지표**이지 글과 댓글 자체가 아니다.
+ */
+for (const f of ['AGENTS.md', 'CLAUDE.md']) {
+  const g = readFileSync(f, 'utf-8')
+  check(`🔴 ${f} 에 "봇 글·댓글 0건" 류의 반대말이 없다`,
+    !g.includes('봇 글·댓글 0건')
+    && !g.includes('봇 글·댓글로 채우기')
+    && !g.includes('봇으로 채우지 않는다'))
+  check(`🟢 ${f} 가 가짜 지표 금지는 유지한다`,
+    g.includes('접속자 수') || g.includes('가짜 실시간 지표'))
+  check(`🟢 ${f} 가 실제 회원 원문 보호는 유지한다`, g.includes('실제 회원 원문'))
+  // 🔴 목표 수치는 CURRENT-MILESTONE 한 곳에만 — 복제하면 한쪽이 낡는다
+  check(`🔴 ${f} 가 목표 수치를 복제하지 않는다`,
+    !/100\s*(건)?\/day/.test(g) && !g.includes('1~5건'))
+}
+check('🔴 CURRENT-MILESTONE 이 그 목표의 단일 정본이다', (() => {
+  const m = readFileSync('docs/operations/CURRENT-MILESTONE.md', 'utf-8')
+  return m.includes('100건/day') && m.includes('1~5건')
+})())
 
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
 if (failed > 0) process.exit(1)
