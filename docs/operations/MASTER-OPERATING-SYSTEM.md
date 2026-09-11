@@ -297,7 +297,8 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 | 기능 | 구현 | runtime | 운영 검증 |
 |---|---|---|---|
 | 3개 source 수집기 · thin 공통 레일 | ✅ | 카페 2개만 job 등록 · 82cook 미등록 | 카페 ✅ · 82cook 🔴 |
-| 규칙 + Haiku judge/draft · Queue 자동 보충 | ✅ | ✅ autopilot 1회/day | 통과율 실측 없음 🔴 |
+| 수집 job 과 처리 job 의 분리 (source 독립 실패) | ✅ | 처리 job 템플릿만 · 미등록 | fixture ✅ · 운영 🔴 |
+| 규칙 + Haiku judge/draft · Queue 자동 보충 | ✅ | `supply-process` 6회/day 계획 · 미등록 | 통과율 실측 없음 🔴 |
 | Account 기준 실회원 차단 | ✅ | ✅ | ✅ |
 | 최대 매칭 · 기존 배정 복구 · 정합성 검사 | ✅ | ✅ | ✅ |
 | Persona 생성·seed·활성화 도구 | ✅ | Wave A 실행 완료 · 현재 인원은 §6.3 | ✅ |
@@ -321,10 +322,11 @@ API key가 설정돼 있다는 사실만으로 비용은 발생하지 않는다.
 | `SORAN_CAPACITY_STAGE` | **d3** (내부 3/day 기준 · Wave B, 2026-09-09) |
 | `SORAN_RELEASE_STAGE` | **d1** (공개 1/day) — 🔴 Wave B 에서도 올리지 않았다 |
 | 공개 발행 workflow | `5 15 * * *`, 1슬롯/day, `--limit=1` — 🔴 변경 없음 |
-| Naver remonterrace | launchd **4회/day** 04:20 · 10:20 · 16:20 · 22:20 KST |
-| Naver wgang | launchd **4회/day** 02:50 · 08:50 · 14:50 · 20:50 KST |
-| supply runner | launchd 21:10 KST |
-| 82cook 독립 job | 미등록 |
+| Naver remonterrace | launchd **5회/day** 07:30 · 10:30 · 13:30 · 16:30 · 21:30 KST |
+| Naver wgang | launchd **4회/day** 09:30 · 11:30 · 15:30 · 20:30 KST |
+| 82cook 목록 | launchd **5회/day** 07:00 · 10:00 · 13:00 · 16:00 · 19:00 KST — 🔴 미등록 |
+| 82cook 본문 | launchd **5회/day** 07:40 · 10:40 · 13:40 · 16:40 · 19:40 KST (목록 40분 뒤) — 🔴 미등록 |
+| 공급 처리 | launchd **6회/day** 08:15 · 12:15 · 14:15 · 17:15 · 21:15 · 22:15 KST — 🔴 미등록 |
 
 🔴 **내부 capacity 와 공개 release 는 다른 손잡이다.** Wave B 는 내부만 d3 로 올렸다 —
 공개 발행량·cron·GitHub Variables 는 하나도 건드리지 않았다. 현재 운영 숫자는 §6.3.
@@ -393,7 +395,7 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
-| 수집 능력 (configured) | 80건/day — remonterrace 4회 40 · wgang 4회 40 · 82cook 0 (예약 job 없음) |
+| 수집 능력 (configured) | 80건/day — remonterrace 4회 40 · wgang 4회 40 · 82cook 0 (두 job 다 미등록) |
 | 🔴 수집 능력 (observed) | **0건/day** — 등록 이후 성공 회차 0 (2026-09-10 복구 전) · 복구 후 재측정 대기 |
 
 `capacity=d3 · release=d1` (§6.2). 🔴 **공개 발행은 여전히 1/day 다.**
@@ -655,7 +657,7 @@ thin 이 0건일 수 있다 — 실패는 아니지만 재고를 늘리지도 �
 |---|---|---|---:|
 | ~~current~~ → **configured** | `launchctl`에 **올라와 있는** job의 슬롯 수 × 회차당 상세 × 가정 성공률 | 관측(`launchctl list` + 설치된 plist) | **20/day** |
 | prepared | 저장소에 템플릿·계획이 있고 계획이 성립하는 것 | `collect-schedule` 계획 | **320/day** |
-| on-demand potential | `supply-autopilot`이 **재고가 모자랄 때만** 여는 몫 | 관측 + 성공률 | **+40/day** (조건부) |
+| ~~on-demand potential~~ | 🔴 **폐기(2026-09-11)**. 중앙 러너가 "재고가 모자랄 때만" 열던 몫이다. 지금 82cook 얇은 상세는 **예약 job** 이므로 조건부 몫이 없다 | — | — |
 | required | 그 capacity 단계가 요구하는 상세 요청 수 | `planSupply` 역산 | **382/day** (내부 100/day) |
 
 🔴 **2026-09-10 정정 — 이 행을 `current` 라고 부르지 않는다.**
@@ -663,13 +665,17 @@ thin 이 0건일 수 있다 — 실패는 아니지만 재고를 늘리지도 �
 몇 건을 냈는지는 말하지 않는다. 실제 산출은 회차 기록의 `observed`(신규 고유 행)가
 답한다(§8.0-b). 등록을 능력으로 읽은 것이 Wave B 사고의 핵심이었다.
 
-🔴 **on-demand potential을 configured에 합치지 않는다.** 재고가 차 있으면 autopilot은 0건을 연다.
-합치면 "재고가 찼을 때는 0인 능력"을 상시 능력으로 세게 된다 — 그렇게 해서 60/day라는 수가 나왔었다.
+🔴 **2026-09-11 정정 — 조건부 몫이라는 칸 자체를 없앴다.**
+중앙 러너는 재고가 모자랄 때만 82cook 을 열었고, 재고가 차 있으면 0건이었다.
+그 몫을 상시 능력에 합쳐 60/day 라는 수가 나왔었다. 지금 82cook 몫은
+**예약 job(`com.soransoran.supply-collect-82cook-thin`)의 슬롯**에서만 나온다 —
+조건이 없으니 따로 셀 칸도 없다. 등록 전까지는 0 이다.
 
 - configured의 정본은 **관측**이다. 코드의 정적 `loaded: true` 플래그를 근거로 쓰지 않는다.
   🔴 그러나 관측된 **등록**은 `configured` 일 뿐 `observed` 가 아니다.
-- 🔴 **2026-09-10 정정**: 지금 등록된 것은 Naver 카페 **다회(`*-multi`) job 2개**와
-  `supply-autopilot` 이다. 82cook 은 여전히 예약 job 이 없고 autopilot 이 필요할 때만 연다.
+- 🔴 **2026-09-11 정정**: 지금 등록된 **수집** job 은 Naver 카페 **다회(`*-multi`) job 2개**뿐이다.
+  82cook 은 두 job(`raw-collect-82cook` · `supply-collect-82cook-thin`) 다 템플릿까지만 있다.
+  공급 **처리**(`supply-process`)는 수집하지 않으므로 이 표에 한 건도 보태지 않는다.
 - 🔴 **그런데 등록은 능력이 아니다.** 그 `-multi` 2개는 등록 이후 8회 전부 실패했고,
   그동안 관제는 "current 80/day" 라고 말했다. 지금은 `configured` 와
   `observed`(성공한 회차로 환산한 값)를 **따로** 낸다 — `judgeObservedCapacity`.
@@ -681,6 +687,177 @@ thin 이 0건일 수 있다 — 실패는 아니지만 재고를 늘리지도 �
 d1 운영 건강성과 d10 승격 준비도는 다른 질문이다. d1은 현재 job과 재고로 정상 운영될 수 있고,
 그 사실이 d10 준비 완료를 뜻하지 않는다. 승격 준비도는 **계획한 다회 job이 정확한 label과
 슬롯 수로 등록되어 있을 때만** READY가 될 수 있다.
+
+### 8.0-D100 공급 실측과 부족분 — 🔴 **정본은 "승인 가능 글 순증가"** (2026-09-11)
+
+🔴 **요청 수는 공급이 아니다.** 회차를 몇 번 돌렸는지·목록을 몇 행 읽었는지는
+남의 서버를 얼마나 두드렸는지일 뿐이다. 공급의 정본은
+**`OriginalPostApprovalQueue` 의 APPROVED 순증가/day** 하나다.
+
+#### 실측 (2026-09-11)
+
+| 축 | 24h | 7d |
+|---|---:|---:|
+| navercafe 회차(2 source) | 10회 (ok 8 · fail 2) | — |
+| 목록 행 | 220 | — |
+| 상세 요청 | 26 | — |
+| 신규 thin | **19** | — |
+| Raw 적재 | **0** | 30 |
+| Queue 신규 | **0** | 30 |
+| 승인 가능 순증가 | **0/day** | **4.3/day** |
+
+🔴 **09-09 12:14 이후 신규 Raw 0.** 수집 job 은 계속 돌았고 thin 도 계속 나왔지만,
+DB 로 넘어가는 전환이 멈춰 있었다.
+
+#### source 별 능력 — 🔴 **상한은 "새 글" 이지 "요청 수" 가 아니다**
+
+| source | 등록 | 하루 신규(24h 관측) | 회차×상세 | 정상 상태/day | 잔여 목록(1회성) |
+|---|---|---:|---:|---:|---:|
+| navercafe:remonterrace | ✅ | 8 | 4×10 | **8** | — |
+| navercafe:wgang | ✅ | 11 | 4×10 | **11** | — |
+| 82cook | 🔴 미등록 | 🔴 **미관측** | 1×50 | 🔴 **미확인** | 5 |
+| **관측 합** | | | | **19** | 5 |
+
+🔴 **82cook 의 5 는 하루 신규가 아니다.** 목록 1,367행 중 **지금 열 수 있는 잔여 대상** 수이고,
+유량이 아니라 재고다. 하루 회차가 1번뿐인데 그 회차가 `ECONNREFUSED` 로 실패해
+**유량을 잴 표본이 없다.** 그래서 능력 합계에 넣지 않는다 — 앞선 판은 이 5 를
+`freshPerDay` 로 적어 합계를 24 로 만들었다. 잘못된 수였다.
+
+🔴 **위 관측은 전부 "목록 1페이지만 읽던 회차" 의 값이다.**
+`BOARD_TARGETS` 에는 `jjong 2~16p` · `humor 1p` · `wgang:all 1~5p` 가 있는데
+launchd 가 `--pages=1` 로 돌아 **한 번도 열리지 않았다**(2026-09-11 배선).
+그래서 **"페이지·회차로는 더 늘릴 수 없다" 는 결론은 철회한다** — 계획대로 연 뒤에야
+유량을 말할 수 있다.
+
+🔴 **그리고 이 수는 신규 thin 이지 APPROVED 순증가가 아니다.**
+상태별 시점 스냅숏이 없어 순증가는 **미측정**이다. Queue 전체 생성 건수를
+순증가라고 부르지 않는다.
+
+#### 🔴 배선 후 계획 (2026-09-11) — `npm run micro-seed:navercafe-run -- --cafe=<id>`
+
+| source | 게시판 | 목록/회차 | 회차 | 상세/회차 | 하루 요청 | 상한 |
+|---|---|---:|---:|---:|---:|---:|
+| remonterrace | jjong 2~16p · humor 1p | 16 | 4 | 12 | **112** | 150 |
+| wgang | all 1~5p | 5 | 4 | 10 | **60** | 150 |
+| 82cook | 3p | 3 | 10 | 30 | **330** | 400 |
+
+게시판·페이지·회차·상한은 `BOARD_TARGETS`·`RUNS_PER_DAY`·`MAX_REQUESTS_PER_DAY` 가 정본이고,
+`navercafe-run-plan` 이 그 안에서 나눈다. **launchd 에 숫자를 손으로 적지 않는다.**
+
+#### 근본 병목 넷
+
+1. 🔴 **정지선이 42 였다.** `judgeRun` 이 `usable >= dailyTarget × 14`(capacity d3 → 42)에서
+   수집을 통째로 멈췄다. D100 재고 목표 **700** 은 그 산식 아래에서 도달 불가다.
+   → 정지선을 재고 밴드(`STOCK_BANDS.target` = 700)로 옮기고, 그 아래는 밴드가 속도를 정한다.
+2. 🔴 **한 source 의 전송 실패가 회차 전체를 죽였다.** 82cook `ECONNREFUSED` 하나로
+   09-10 21:10 회차가 멈췄고, 이미 모아 둔 네이버 thin 19건이 Raw 로 가지 못했다.
+   보호장치는 HTTP 응답이 있어야 기록을 남기는데 연결 거부는 응답이 없어
+   "우리 쪽 오류" 로 분류됐다. → 전송 계층 실패를 source 차단 증거로 인정한다(403·429 계약은 그대로).
+3. 🔴 **82cook 목록 재고 고갈.** 1,367행 중 열 대상 **5건** — 979행은 네이버(브라우저·세션이 들어
+   이 경로로는 못 연다), 241행은 댓글 5개 미만, 110행은 이미 읽음.
+   전용 목록 job 은 템플릿만 있고 **등록돼 있지 않다**.
+5. 🔴 **계획된 게시판이 runner 에 배선되지 않았다** (2026-09-11 해소).
+   `BOARD_TARGETS` 는 코드에 있는데 launchd 는 `--cafe=... --pages=1 --max=10` 으로 돌았다.
+   게다가 `DETAIL_MAX_PAGES=5` 가 `jjong 2~16p`(15장)를 `fail()` 로 죽였고,
+   `AUTO_MIN_SCORE=20` 이 **본문을 열기도 전에** 후보를 버려 상세가 2~4건에서 끝났다.
+4. 🔴 **전부 로컬 launchd.** 노트북이 꺼지면 그날 공급은 0 이다.
+
+#### 재고선 — 🔴 **runtime 은 한 선만 본다: 700 미만 수집, 이상 no-op**
+
+| 이름 | 재고 | 쓰임 |
+|---|---:|---|
+| `bootstrap` | 100 | 보고·승격 눈금 |
+| `min` | 300 | 보고·승격 눈금 |
+| `target` | **700** | 🔴 **runtime 정지선** |
+
+🔴 **밴드별 속도 배수는 지웠다** (2026-09-11). `critical ×1.5` 는 재고 687 이하 전 구간에서
+`collectCapFor` 가 상한 50 에 포화돼 ×1 과 결과가 **완전히 같았고**, `full ×0.25` 는
+`judgeRun` 이 700 에서 먼저 NOOP 을 내 **도달 자체가 불가능한 dead branch** 였다.
+돌지 않는 가속·감속을 코드에 두면 다음 사람이 그것을 능력으로 읽는다.
+
+#### 재고 도달 예상 (현재 29건 기준)
+
+🔴 **재고 도달 예상은 뺐다.** 그 표는 "신규 thin 1건 = APPROVED 1건" 을 가정한 값이었고,
+그 비율은 측정되지 않았다. 가정을 표로 만들면 다음 사람이 그것을 실측으로 읽는다.
+지금 값이 필요하면 `npm run supply:d100-plan` 이 **가정임을 밝히고** 계산해 준다.
+
+#### 컴퓨터 OFF 자동화
+
+`.github/workflows/supply-collect.yml` 을 두되 **cron 은 켜지 않았다**(수동 실행만).
+82cook 은 로그인 없는 fetch 라 러너에서 그대로 돈다. **네이버는 옮기지 않는다** —
+브라우저와 로그인 세션이 들고, 세션을 CI secret 으로 옮기는 것은 계정 자격을 러너에 두는 일이다.
+🔴 **수집의 동시 실행은 잠금으로 막지 못한다.** 잠금 파일은 `.microseed-data/` 안에 있고
+**각 기계에 따로** 있다 — 러너와 노트북은 서로의 잠금을 보지 못한다. 겹치지 않게 하는 방법은
+**82cook owner 를 한쪽만 두는 것** 하나뿐이다.
+🔴 반대로 **처리는 겹쳐도 중복 적재가 생기지 않는다** — 적재 단계가 `provenanceKey` 로
+DB 를 대조하고 트랜잭션 안에서 만든다. 잠금은 같은 기계 안의 겹침만 막는다.
+
+🔴 **지금 82cook owner 는 노트북이다** (2026-09-11). GHA `supply-collect` 의 `schedule` 은
+주석 그대로 두고 **수동 실행만** 남긴다 — owner 를 옮기는 것은 별도 결정이다.
+
+🔴 **GHA 로 owner 를 옮길 때의 순서** — ① 노트북에서
+`com.soransoran.supply-collect-82cook-thin` 을 내린다. 나머지 네 job 은 그대로 둔다 —
+**82cook owner 를 옮기는 것과 공급을 멈추는 것은 다른 일이다** →
+② Secrets(`DATABASE_URL`·`DIRECT_URL`·`ANTHROPIC_API_KEY`)와
+Variables(`SORAN_82COOK_THIN_DETAIL_ENABLED`·`SORAN_SUPPLY_PROCESS_ENABLED`) 등록 →
+③ `apply=false` 로 한 번 돌려 계획을 눈으로 확인 → ④ cron 주석 해제.
+**①을 건너뛰고 ④를 하면 두 기계가 같은 목록을 동시에 연다.**
+
+### 8.0-c 🔴 예약 job 은 다섯이고, 전환은 `runtime:deploy` 가 한다
+
+```
+① navercafe-collect-remonterrace-multi   수집
+② navercafe-collect-wgang-multi          수집
+③ raw-collect-82cook                     수집 — 목록을 만든다
+④ supply-collect-82cook-thin             수집 — ③의 목록을 소비한다
+⑤ supply-process                         처리
+```
+
+### 🔴 확정 운영 일정 (2026-09-11 · 전부 KST)
+
+```
+82cook 목록      07:00 10:00 13:00 16:00 19:00        5회
+82cook 본문      07:40 10:40 13:40 16:40 19:40        5회   ← 목록 40분 뒤
+remonterrace     07:30 10:30 13:30 16:30 21:30        5회
+wgang            09:30 11:30 15:30 20:30              4회
+supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 비운다
+```
+
+🔴 **노트북을 켜 두는 07:00~22:30 안에만 둔다.** 앞선 판은 `24 / 회차` 로 하루에 고르게 폈고,
+그래서 02:50 · 04:20 · 01:10 처럼 **기계가 꺼져 있는 시각**에 슬롯이 있었다 —
+예약은 있는데 회차는 돌지 않는다. **돌지 않는 슬롯은 능력이 아니다.**
+균등함은 목표가 아니었다. 도는 것이 목표다.
+
+🔴 **게시판·페이지는 바꾸지 않았다** (jjong 2~16p · humor 1p · wgang:all 1~5p).
+바뀐 것은 **언제 도는가** 하나다. 회차가 늘면서 하루 상한(150) 안에서 remonterrace 의
+회차당 상세만 12 → 11 로 재분배됐다 — 기존 산식(`planCafeRun`)의 자동 결과다.
+
+🔴 **82cook 요청량**: 목록 33×5 = 165 + 본문 17×5 = 85 → **250/day** (상한 400, 여유 150).
+한 회차 상한 17 은 **고정값**이다. 일정이 바뀔 때마다 상한이 따라 커지면 안전장치가 아니다 —
+82cook 유입 관측이 쌓이기 전까지 보수적으로 둔다.
+
+🔴 시각의 정본은 `src/lib/collect-schedule.ts` 의
+`SLOTS` · `THIN_82COOK_SLOTS` · `SUPPLY_PROCESS_SLOTS` 다.
+fixture 가 **render 한 실제 plist** 와 대조한다.
+
+정본은 `src/lib/runtime-isolation.ts` 의 `RUNTIME_JOBS` 하나다.
+🔴 **82cook 은 두 job 이 함께 있어야 한다.** ④는 목록을 스스로 만들지 않는다 —
+③이 없으면 열 대상이 0 이고 82cook 공급은 조용히 0 이 된다.
+82cook 을 "선택 사항" 으로 두면 네이버 둘로만 공급이 돌고, 100/day 는 그 구성에서 나오지 않는다.
+
+🔴 **plist 전환을 사람이 손으로 하지 않는다.** `npm run runtime:deploy -- --apply --target=<sha>` 가
+저장소 템플릿을 render 해 설치본으로 쓰고, `plutil` 로 검증하고, 퇴역 job 의 설치본을 보관소로
+옮기고, load 뒤에 **실제 `ProgramArguments` 와 `WorkingDirectory` 를 템플릿과 값으로 대조**한다.
+실패하면 SHA · plist 원문 · loaded 상태까지 되돌린다.
+
+🔴 **왜 이것이 필요했나.** 배포기가 기존 설치 plist 를 `unload` 하고 그대로 다시 `load` 했다.
+저장소의 새 템플릿이 설치본에 닿지 못해, 배포를 몇 번 해도 네이버 job 은 옛
+`micro-seed-collect-navercafe.mts --pages=1 --max=10` 을 계속 돌았다 —
+경로 검사는 전부 초록이었다(runtime 밑이 맞으니까). **무엇을 실행하는가는 인자가 말한다.**
+
+🔴 **지금 상태로는 "컴퓨터 OFF 에서도 공급된다" 고 말할 수 없다.**
+옮겨지는 것은 82cook(유량 미관측) 하나이고, **관측된 19/day 는 전부 네이버 몫이라
+노트북에 남는다.**
 
 ### 8.1 내부 100/day 역산
 
@@ -748,7 +925,7 @@ Naver 카페는 Playwright `page.goto`를 감싼 `guardedNavigate`다. 둘은 �
 쿨다운이 **그 실패 시각부터** 다시 시작한다. 처음 열린 시각을 유지하면 시험이 실패해도
 계속 half-open으로 남아 무한히 두드리게 된다.
 
-상태 파일은 82cook 독립 job과 `supply-autopilot`이 공유할 수 있으므로,
+상태 파일은 82cook 의 두 수집 job(raw · 얇은 상세)이 공유할 수 있으므로,
 읽기·판단·기록을 **파일 잠금 안에서 한 번에** 한다. 얻지 못하면 그 회차는 요청하지 않는다(fail-closed).
 
 ### 8.4 잠금 회수 계약 — 무엇을 뺏고 무엇을 뺏지 않는가

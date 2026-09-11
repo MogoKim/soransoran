@@ -8,7 +8,7 @@
  * 🔴 두 번째는 **실제 파일과 대조**하는 것이다. 손으로 적은 숫자끼리만 맞춰 보면
  *    launchd 템플릿·워크플로우가 바뀌어도 이 fixture 는 계속 통과한다.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,8 +22,8 @@ import {
   resolveScale, installFromEnv, activeScale, resetScale, describeScale, SAFEST_SCALE,
 } from '../src/lib/scale-runtime'
 import {
-  planSupply, findBottlenecks, requiredRuns, onDemandPotentialPerDay, estimateCost, readPricing,
-  YIELD, YIELD_EVIDENCE, ASSUMED_STAGES, SOURCES, AUTOPILOT_COLLECT, rateOf, COST_ENV,
+  planSupply, findBottlenecks, requiredRuns, estimateCost, readPricing,
+  YIELD, YIELD_EVIDENCE, ASSUMED_STAGES, SOURCES, THIN_82COOK_JOB, thin82cookDetailPerDay, rateOf, COST_ENV,
   detailPerQueueItem,
 } from '../src/lib/scale-supply-plan'
 import {
@@ -38,12 +38,15 @@ import {
   type CohortMemberState, type CohortId,
 } from '../src/lib/persona-cohort'
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
+import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { currentCapacity, preparedCapacity, type ObservedJob } from '../src/lib/collect-inventory'
 import { STOCK_TARGET, STOCK_MIN, STOCK_WARN } from '../src/lib/micro-seed-supply-autofill'
-import { COLLECT_CAP, COLLECT_MIN, collectCapFor } from '../src/lib/supply-autopilot'
+import {
+  RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, THIN_82COOK_SLOTS, thin82cookCapPerRun,
+} from '../src/lib/collect-schedule'
 import {
   judgePublish, judgeManualLimit, MANUAL_PUBLISH_CAP, type PublishCandidate,
 } from '../src/lib/original-post-publish'
@@ -250,7 +253,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     && activeScale().source === 'default-safest' && activeScale() === SAFEST_SCALE)
   // 🔴 운영 스크립트가 **loadEnvLocal 뒤에** 설치하는가 — 순서를 소스로 본다
   for (const f of ['scripts/original-post-auto-publish.mts',
-    'scripts/supply-autopilot.mts', 'scripts/micro-seed-supply-autofill.mts'] as const) {
+    'scripts/supply-process.mts', 'scripts/micro-seed-supply-autofill.mts'] as const) {
     // 🔴 주석 제거본으로 본다 — 주석 속 예시가 순서 검사를 통과시키면 안 된다
     const src = codeOf(f)
     const envAt = src.indexOf('await loadEnvLocal()')
@@ -336,7 +339,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     'supply-health': read('scripts/supply-health.mts'),
     planner: read('scripts/persona-capacity-planner.mts'),
     'auto-publish': read('scripts/original-post-auto-publish.mts'),
-    'supply-autopilot': read('scripts/supply-autopilot.mts'),
+    'supply-process': read('scripts/supply-process.mts'),
     'supply-autofill': read('scripts/micro-seed-supply-autofill.mts'),
   }
   for (const [name, src] of Object.entries(users)) {
@@ -358,7 +361,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
       && /planBatch\(autoDrafts, input\.personas, caps, \{/.test(lib)
   })())
   check('G 🔴 공급 러너는 capacity 프로필로 재고 기준을 만든다',
-    /scale\.capacityProfile/.test(users['supply-autopilot']) && /scale\.capacityProfile/.test(users['supply-autofill']))
+    /scale\.capacityProfile/.test(users['supply-process']) && /scale\.capacityProfile/.test(users['supply-autofill']))
   check('G 🔴 health 가 capacity 와 release 를 따로 보여 준다',
     /capacity: \{/.test(users['supply-health']) && /release: \{/.test(users['supply-health']))
   check('G 🔴 write 경로가 모듈 상수를 상한으로 쓰지 않는다',
@@ -570,49 +573,98 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
   /**
    * 🔴 **현재 능력의 정본은 관측 하나뿐이다** (2026-09-08).
    *    정적 `SOURCES[].loaded` 로 세던 `supplyCapacity()` 를 지웠다 —
-   *    아무도 등록하지 않은 job 과 조건부 autopilot 몫이 "지금 열리는 능력" 으로 세어졌다.
+   *    아무도 등록하지 않은 job 과 조건부로만 열리던 몫이 "지금 열리는 능력" 으로 세어졌다.
+   */
+  /**
+   * 🔴 **2026-09-11 `launchctl list` 실측.** 네이버 두 카페는 `-multi` 4슬롯이 돌고 있고
+   *    1회판 job 은 없다. 옛 판은 여기에 `09:20` · `13:20` 1슬롯을 적어 두어,
+   *    fixture 가 **이미 사라진 운영 형태**를 현재 능력으로 못박고 있었다.
    */
   const OBSERVED: readonly ObservedJob[] = [
-    { label: 'com.soransoran.navercafe-collect-remonterrace', slots: [{ hour: 9, minute: 20 }], loaded: true },
-    { label: 'com.soransoran.navercafe-collect-wgang', slots: [{ hour: 13, minute: 20 }], loaded: true },
-    { label: 'com.soransoran.supply-autopilot', slots: [{ hour: 21, minute: 10 }], loaded: true },
+    {
+      label: 'com.soransoran.navercafe-collect-remonterrace-multi',
+      slots: [{ hour: 4, minute: 20 }, { hour: 10, minute: 20 }, { hour: 16, minute: 20 }, { hour: 22, minute: 20 }],
+      loaded: true,
+    },
+    {
+      label: 'com.soransoran.navercafe-collect-wgang-multi',
+      slots: [{ hour: 2, minute: 50 }, { hour: 8, minute: 50 }, { hour: 14, minute: 50 }, { hour: 20, minute: 50 }],
+      loaded: true,
+    },
+    /** 🔴 공급 **처리** job 이다 — 수집하지 않으므로 수집 능력에 한 건도 보태지 않는다 */
+    { label: 'com.soransoran.supply-process', slots: [{ hour: 23, minute: 15 }], loaded: true },
   ]
   const cap = currentCapacity(OBSERVED)
   for (const s of SOURCES) {
     const t = read(join('docs/operations/launchd', s.template))
-    const maxArg = /--(?:auto-)?max=(\d+)/.exec(t)
-    check(`🔴 [${s.id}] 회차 상한이 템플릿과 같다`, Number(maxArg?.[1] ?? -1) === s.maxPerRun)
     const slots = (t.match(/<key>Hour<\/key>/g) ?? []).length
     check(`🔴 [${s.id}] 회차 수가 템플릿과 같다`, slots === s.runsPerDay)
+    /**
+     * 🔴 회차 상한의 출처가 소스마다 다르다 — **있지도 않은 인자를 찾지 않는다.**
+     *    82cook 은 템플릿 인자에 박혀 있고, 네이버는 runner 가 역산한다.
+     */
+    const cafe = /navercafe:(\w+)/.exec(s.id)?.[1]
+    // 🔴 **주석이 아니라 실제로 넘기는 인자만 본다.** XML 주석에는 옛 인자가 역사로 남아 있다
+    const passedArgs = (t.replace(/<!--[\s\S]*?-->/g, '').match(/<string>([^<]*)<\/string>/g) ?? []).join(' ')
+    if (cafe === undefined) {
+      const maxArg = /--(?:auto-)?max=(\d+)/.exec(passedArgs)
+      check(`🔴 [${s.id}] 회차 상한이 템플릿 인자와 같다`, Number(maxArg?.[1] ?? -1) === s.maxPerRun)
+    } else {
+      check(`🔴 [${s.id}] 회차 상한이 runner 역산값과 같다`,
+        planCafeRun({ cafeId: cafe, phase: 'start' }).detailPerRun === s.maxPerRun)
+      check(`🔴 [${s.id}] 실제 인자에 --max 숫자를 손으로 적지 않는다`, !/--max=/.test(passedArgs))
+    }
   }
   check('🔴 82cook 은 템플릿이 있어도 launchctl 미등록으로 기록돼 있다',
     SOURCES.some((s) => s.id === '82cook' && !s.loaded))
-  check('🔴 wgang 은 13:20 이다 (09:20 이 아니다)', (() => {
-    const t = read('docs/operations/launchd/com.soransoran.navercafe-collect-wgang.plist.template')
-    return /<integer>13<\/integer>/.test(t)
-      && SOURCES.some((s) => s.id === 'navercafe:wgang' && s.note.includes('13:20'))
-  })())
+  /**
+   * 🔴 **1회판은 운영 경로에서 사라졌다** (2026-09-11).
+   *    실행 가능한 옛 템플릿을 남겨 두면 누군가 그것을 load 한다.
+   *    `JOB_LABELS[].single` 만 남긴다 — 그건 "혹시 올라와 있으면 1회판이라고 부른다" 는
+   *    **호환 판정용 이름**이지 실행 경로가 아니다.
+   */
+  for (const cafe of ['remonterrace', 'wgang'] as const) {
+    check(`🔴 [${cafe}] 옛 1회판 템플릿이 저장소에 없다`,
+      !existsSync(join('docs/operations/launchd', `com.soransoran.navercafe-collect-${cafe}.plist.template`)))
+    check(`🔴 [${cafe}] SOURCES 가 -multi 를 가리킨다`,
+      SOURCES.some((s) => s.id === `navercafe:${cafe}` && s.template.includes('-multi')
+        && s.runsPerDay === RUNS_PER_DAY[`navercafe:${cafe}`].start && s.loaded))
+  }
+  check('🔴 SOURCES note 에 옛 09:20/13:20 1회 운영이 남아 있지 않다',
+    SOURCES.every((s) => !s.note.includes('09:20') && !s.note.includes('13:20')))
   check('🔴 현재 능력 < 준비 능력 — 둘을 합치지 않는다',
     cap.effectivePerDay < preparedCapacity('start').effectivePerDay)
   // 🔴 **관측된 슬롯 수**로 센다. 계획 회차(4·8회)로 세지 않는다
-  check('🔴 현재 능력은 등록된 것만 · 관측 슬롯 수로 센다', cap.effectivePerDay === 10 + 10)
-  check('🔴 조건부 autopilot 몫을 보장 능력에 합치지 않는다', (() => {
-    const onDemand = onDemandPotentialPerDay(OBSERVED)
-    // autopilot 은 재고가 모자랄 때만 돈다 — 별도 표시이지 current 가 아니다
-    return onDemand === AUTOPILOT_COLLECT.maxPerRun * AUTOPILOT_COLLECT.runsPerDay * 0.8
-      && cap.effectivePerDay < cap.effectivePerDay + onDemand
+  /** 🔴 관측 슬롯 수로 센다 — 카페 2곳 × 4회 × 회차당 상세 10건 × 성공률 1 */
+  check('🔴 현재 능력은 등록된 것만 · 관측 슬롯 수로 센다', cap.effectivePerDay === 40 + 40)
+  check('🔴 등록된 것은 -multi 로 읽힌다',
+    cap.perSource.filter((x) => x.kind === 'multi').length === 2
+    && cap.perSource.every((x) => x.kind !== 'single'))
+  /**
+   * 🔴 **처리 job 은 수집 능력이 아니다** (2026-09-11).
+   *    옛 중앙 러너는 "재고가 모자랄 때만" 82cook 을 열었고, 그 조건부 몫이 능력으로
+   *    세어져 화면은 초록인데 실제 신규는 며칠씩 0 이었다. 지금 처리 job 은 수집하지 않고,
+   *    82cook 몫은 **예약 job 의 슬롯**에서만 나온다.
+   */
+  check('🔴 처리 job 이 올라와 있어도 수집 능력은 늘지 않는다', cap.effectivePerDay === 40 + 40)
+  check('🔴 82cook 얇은 상세 job 이 미등록이면 그 몫은 0 이다',
+    thin82cookDetailPerDay(OBSERVED) === 0)
+  check('🟢 등록되면 관측 슬롯 수 × 회차 상한 × 성공률로 센다', (() => {
+    const on = [...OBSERVED, {
+      label: THIN_82COOK_JOB,
+      slots: [...THIN_82COOK_SLOTS],
+      loaded: true,
+    }]
+    return thin82cookDetailPerDay(on) === thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY * 0.8
   })())
   check('🔴 정적 loaded 계산기(supplyCapacity)가 사라졌다',
     !/export function supplyCapacity/.test(read('src/lib/scale-supply-plan.ts')))
   check('🔴 병목 판정도 관측을 쓴다',
     /const cur = currentCapacity\(observed\)/.test(read('src/lib/scale-supply-plan.ts')))
-  check('🔴 autopilot 상한은 하위 BATCH_CAP 과 같은 COLLECT_CAP 이다', AUTOPILOT_COLLECT.maxPerRun === COLLECT_CAP)
   // 🔴 수집 배수를 통과율에 연결했다 — 리터럴 4 를 지웠고, 값은 그대로 4 다 (회귀 0)
   check('🔴 수집 배수 = ceil(1 / (detail→judge × judge → draft × draft 통과))',
     detailPerQueueItem() === Math.ceil(1 / (YIELD.detailToJudge * YIELD.judgePass * YIELD.draftPass)))
   check('🔴 그 값은 여전히 4 다 (회귀 0)', detailPerQueueItem() === 4)
-  check('🔴 collectCapFor 회귀 0', collectCapFor(9) === 36 && collectCapFor(14) === COLLECT_CAP
-    && collectCapFor(1) === COLLECT_MIN && collectCapFor(0) === 0)
 
   // 🔴 필요 회차 — "몇 번 더 돌려야 하는가"
   const runs = requiredRuns(p100)
@@ -971,8 +1023,9 @@ console.log('\n⑩ 소스 계약')
     && /const idRows = await tx\.persona\.findMany\(\{ where: \{ code: \{ in: \[\.\.\.M\.codes\] \} \}/.test(tool))
   check('🔴 id 를 못 찾으면 전원 롤백한다 — 조용히 건너뛰지 않는다',
     /id 를 찾지 못했다/.test(tool))
-  check('🔴 supply-autopilot 에 배수 리터럴이 남아 있지 않다',
-    !/shortfall \* 4/.test(code('src/lib/supply-autopilot.ts')))
+  check('🔴 공급 계획에 배수 리터럴이 남아 있지 않다',
+    !/shortfall \* 4/.test(code('src/lib/scale-supply-plan.ts'))
+    && !/shortfall \* 4/.test(code('src/lib/supply-process.ts')))
   // 🔴 planner 가 낡은 문구를 쓰지 않는다
   const planner = code('scripts/persona-capacity-planner.mts')
   check('🔴 planner 에 "현재 5명" 이 없다', !/현재 5명/.test(planner))

@@ -10,6 +10,16 @@
 - Tailwind + CSS Variables semantic token / Pretendard Variable
 - `cn()` = clsx + tailwind-merge / 컴포넌트 PascalCase · 파일 kebab-case
 
+## 🔴 작업 시작 전 반드시 읽는다 — 운영 정본
+
+| 문서 | 무엇 |
+|---|---|
+| [`docs/operations/NORTH-STAR.md`](docs/operations/NORTH-STAR.md) | 고객 · 본질 · 장기 North Star · 판단 우선순위 · 영구 안전장치 · 임시 제한 |
+| [`docs/operations/CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) | 지금 분기 목표 · 지금 병목 · 임시 제한의 종료 조건 · 완료 지표 |
+
+🔴 **이 두 문서의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
+낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다.
+
 ## 🔴 이 저장소는 우나어가 아니다
 
 - **우나어(age-doesnt-matter) repo 를 fork 하지 않았다.** 구조와 패턴만 선별 참고했다.
@@ -91,10 +101,14 @@ unao-* localStorage 키
 ❌ 접속자 수 / "지금 N명이 보고 있어요"
 ❌ 실시간 활동 배지 · 총 게시글 수 · 회원 수
 ❌ 붉은 알림 도트 남발
-❌ 봇 글·댓글로 채우기
+❌ 실제 회원 원문을 건드리는 자동화
 ```
 
 초기에는 숫자가 작다. 숫자는 **실제로 커진 뒤에** 넣는다.
+
+🟢 **관리형 공개 글과 Persona 댓글은 여기 해당하지 않는다** — 승인된 단기 목표다.
+막는 것은 *없는 활동을 있는 것처럼 보이는 지표*이지, 읽을 글과 사람 같은 반응이 아니다.
+목표 수치는 [`CURRENT-MILESTONE.md`](docs/operations/CURRENT-MILESTONE.md) 하나에만 있다.
 
 ## 코딩 원칙
 

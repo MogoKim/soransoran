@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs'
 import {
   planSupplyMode, violatesSupplyInvariant, planAutoFetch, judgeAutoHold,
   judgeSourceSite, isNaverCafeSource, cafeIdOf, slotQuotaOf,
-  AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
+  AUTO_FETCH_MAX, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
   RAW_ONLY_BATCH_MAX, SHEET_LANE_LIMIT, SHEET_LANE_SOURCE_SITE, NAVERCAFE_PREFIX, SLOT_QUOTA,
   type SupplyModeInput,
 } from './lib/micro-seed-supply.mjs'
@@ -136,18 +136,25 @@ console.log('\n⑤ 자동 선별 — 자동 경로에는 사람이 없다')
   const p = planAutoFetch(rows)
   check('🔴 정치·실명은 자동으로 열지 않는다', !p.picked.includes('a2'))
   check('🔴 정치 주제도 자동으로 열지 않는다', !p.picked.includes('a5'))
-  check(`점수 ${AUTO_MIN_SCORE} 미만은 열지 않는다`, !p.picked.includes('a4'))
+  /**
+   * 🔴 **점수 하한을 없앴다** (2026-09-11). 낮은 점수는 **나중에** 열릴 뿐 버려지지 않는다 —
+   *    후보가 남아 있는데 상세가 0 으로 끝나던 것이 병목이었다(실측 후보 15 → 상세 2~4).
+   */
+  check('🟢 점수가 낮아도 자리가 남으면 열린다', p.picked.includes('a4'))
   check('이미 Vault 에 있으면 열지 않는다', !p.picked.includes('a6'))
-  check('나머지는 점수 순으로 열린다', p.picked.join(',') === 'a1,a3', p.picked.join(','))
+  check('점수 높은 순으로 열린다', p.picked.join(',') === 'a1,a3,a4', p.picked.join(','))
   check(
     '🔴 제외는 버려지지 않고 사유와 함께 남는다',
-    p.skipped.length === 4 && p.skipped.every((s) => s.detail.length > 0),
+    p.skipped.length === 3 && p.skipped.every((s) => s.detail.length > 0),
     JSON.stringify(p.skipped),
   )
-  // a2·a5 가 둘 다 SKIP_FLAG 라 제외 4건의 사유는 3종이다
+  /**
+   * a2·a5 가 둘 다 SKIP_FLAG 라 제외 3건의 사유는 2종이다.
+   * 🔴 `BELOW_MIN_SCORE` 는 사라졌다 — 하드 차단은 중복과 플래그 둘뿐이다.
+   */
   check(
     '제외 사유가 전부 코드로 분류된다',
-    [...new Set(p.skipped.map((s) => s.reason))].sort().join(',') === 'ALREADY_IN_VAULT,BELOW_MIN_SCORE,SKIP_FLAG',
+    [...new Set(p.skipped.map((s) => s.reason))].sort().join(',') === 'ALREADY_IN_VAULT,SKIP_FLAG',
     JSON.stringify(p.skipped.map((s) => s.reason)),
   )
   check(

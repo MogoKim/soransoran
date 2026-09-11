@@ -2,7 +2,7 @@
  * 네이버 카페 수집물 → 얇은 저장 (§4-AV)
  *
  * 🔴 **네트워크에 나가지 않는다.** 이미 수집된 `navercafe-*.jsonl` 을 읽어 형태만 바꾼다.
- *    수집은 launchd 가 하고(09:20 remonterrace · 13:20 wgang), 이 도구는 그 산출물을 받는다.
+ *    수집은 launchd `-multi` job 이 하고(두 카페 각 하루 4회), 이 도구는 그 산출물을 받는다.
  *
  * 왜 필요한가 — 2026-09-07 실측:
  *   · `auto-judge` 는 `.detail.jsonl` · `.raw-detail.jsonl` 만 읽는다.

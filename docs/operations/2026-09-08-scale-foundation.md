@@ -4,8 +4,22 @@
 > [lane 전략](2026-09-02-original-post-lane-strategy.md)
 >
 > 🔴 이 PR 은 **구조만** 만든다. 운영 DB write · 실제 발행 · env/launchd 활성화는 하지 않았다.
+>
+> 📜 **역사 기록이다. 운영 정본이 아니다** (2026-09-11 표시).
+> 이 문서에 나오는 `supply-autopilot` 은 수집·판정·적재를 한 회차에 묶던 **폐기된 중앙 러너**다.
+> 지금은 수집 job 셋(`supply-collect-82cook-thin` · 카페 `-multi` 둘)과
+> 처리 job 하나(`supply-process`)로 나뉘어 있다 —
+> 현재 구조는 [Raw 공급망 §4-AU](2026-09-03-raw-supply-chain-design.md) 가 정본이다.
+> 아래의 시각 · label · 등록 상태는 **그때의 관측**이지 지금 상태가 아니다.
+
 > 🔴 2026-09-08 개정 ① — 이전 판의 숫자 여러 개가 실측과 달랐다. §9 에 정정 내역을 남긴다.
 > 🔴 2026-09-08 개정 ② — Codex 가 **생산 경로를 직접 실행해** P0 3건을 찾았다. §10 참조.
+
+> 📜 **역사 문서다 — 운영 정본이 아니다** (표시 2026-09-11).
+> 여기 적힌 launchd 배치(`09:20 remonterrace` · `13:20 wgang` · 1회판)는 **그때의 기록**이다.
+> 지금은 `-multi` job 둘이 각각 하루 4회 돌고 1회판은 job 도 템플릿도 없다.
+> 현재 운영 정본: [`launchd/README.md`](launchd/README.md) ·
+> [`NORTH-STAR.md`](NORTH-STAR.md) · [`CURRENT-MILESTONE.md`](CURRENT-MILESTONE.md)
 > 🔴 2026-09-08 개정 ③ — 2차 실행 검토에서 2건 더 나왔다. §11 참조.
 >    수동 발행기가 준비도를 우회했고, supply-health 가 규모 확정 **전에** 판정하고 있었다.
 >    요약: 감속이 표시만이었고, capacity/release 분리가 실동작하지 않았으며,

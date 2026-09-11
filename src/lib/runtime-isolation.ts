@@ -16,12 +16,84 @@
  *    그래야 CI 가 fixture 로 이 규칙을 시험할 수 있다.
  */
 
-/** 🔴 예약 실행이 반드시 지나야 하는 job 세 개 */
+/**
+ * 🔴 **예약 실행이 반드시 지나야 하는 job 다섯 개** (2026-09-11).
+ *
+ *    수집 넷 + 처리 하나다. 82cook 은 **두 job 이 필요하다** —
+ *    `raw-collect-82cook` 이 목록(`82cook.list.jsonl`)을 만들고,
+ *    `supply-collect-82cook-thin` 이 그 목록을 소비해 얇은 상세를 연다.
+ *    thin 은 목록을 스스로 만들지 않으므로 raw 가 없으면 **열 대상이 0** 이다.
+ *
+ *    🔴 앞선 판은 82cook 두 job 을 "선택 사항" 으로 두고 셋만 요구했다.
+ *       그러면 82cook 이 등록되지 않은 채로도 격리 검사가 초록이고,
+ *       공급은 네이버 둘로만 돈다 — 100/day 는 그 구성으로 나오지 않는다.
+ *
+ *    🔴 `raw-import`(Raw Vault 적재)는 여기 없다. 공급 레인이 아니라 보관 레인이다.
+ */
 export const RUNTIME_JOBS: readonly string[] = [
   'com.soransoran.navercafe-collect-remonterrace-multi',
   'com.soransoran.navercafe-collect-wgang-multi',
-  'com.soransoran.supply-autopilot',
+  'com.soransoran.raw-collect-82cook',
+  'com.soransoran.supply-collect-82cook-thin',
+  'com.soransoran.supply-process',
 ]
+
+/**
+ * 🔴 **job 이 실제로 일하려면 켜져 있어야 하는 스위치** (2026-09-11).
+ *
+ *    plist 를 설치하고 load 해도 **kill switch 가 닫혀 있으면 그 job 은 아무것도 하지 않는다.**
+ *    파일이 있는지만 보고 "배포 완료" 라고 적으면, 며칠 뒤 "등록은 됐는데 공급이 0" 이 된다 —
+ *    이 저장소가 이미 두 번 겪은 모양이다.
+ *
+ *    실측(2026-09-11 runtime `.env.local`):
+ *      SORAN_NAVERCAFE_COLLECT_ENABLED=true · SORAN_82COOK_COLLECT_ENABLED=true
+ *      SORAN_82COOK_THIN_DETAIL_ENABLED=true · **SORAN_SUPPLY_PROCESS_ENABLED=unset**
+ *    → 처리 job 을 올려도 매 회차 재고만 읽고 끝난다. 배포 전에 막아야 한다.
+ *
+ * 🔴 **배포는 env 를 고치지 않는다.** 무엇이 없는지 정확히 말하고 멈춘다 —
+ *    스위치를 코드가 켜면 "사람이 내려 둔 것" 과 "아직 안 켠 것" 을 구분할 수 없다.
+ */
+export const JOB_ENV_REQUIREMENTS: Readonly<Record<string, string>> = {
+  'com.soransoran.navercafe-collect-remonterrace-multi': 'SORAN_NAVERCAFE_COLLECT_ENABLED',
+  'com.soransoran.navercafe-collect-wgang-multi': 'SORAN_NAVERCAFE_COLLECT_ENABLED',
+  'com.soransoran.raw-collect-82cook': 'SORAN_82COOK_COLLECT_ENABLED',
+  'com.soransoran.supply-collect-82cook-thin': 'SORAN_82COOK_THIN_DETAIL_ENABLED',
+  'com.soransoran.supply-process': 'SORAN_SUPPLY_PROCESS_ENABLED',
+}
+
+export type EnvBlocker = { job: string; key: string; detail: string }
+
+/**
+ * 예약 job 이 **일할 수 있는 상태인가** — 🔴 `true` 하나만 통과다.
+ *
+ *    `unset` 과 `false` 를 구분해 적는다. 사람이 내려 둔 것(false)과
+ *    아직 안 켠 것(unset)은 다음에 할 일이 다르다.
+ */
+export function judgeJobEnv(input: {
+  jobs: readonly string[]
+  /** runtime 의 `.env.local` 에서 읽은 값. 없는 키는 넣지 않는다 */
+  env: Readonly<Record<string, string | undefined>>
+}): EnvBlocker[] {
+  const out: EnvBlocker[] = []
+  const seen = new Set<string>()
+  for (const job of input.jobs) {
+    const key = JOB_ENV_REQUIREMENTS[job]
+    if (key === undefined) continue
+    // 🔴 같은 키를 두 job 이 쓰면 한 번만 적는다 — 같은 조치를 두 줄로 만들지 않는다
+    if (seen.has(key)) continue
+    const raw = input.env[key]
+    if (raw === undefined) {
+      seen.add(key)
+      out.push({ job, key, detail: `${key} 가 없다 (unset) — 이 job 은 올라가도 아무것도 하지 않는다` })
+      continue
+    }
+    if (raw.trim() !== 'true') {
+      seen.add(key)
+      out.push({ job, key, detail: `${key}=${raw.trim() || '(빈 값)'} — 'true' 여야 일한다` })
+    }
+  }
+  return out
+}
 
 /**
  * 🔴 **더는 loaded 되어 있으면 안 되는 옛 job.** Wave B 에서 다회로 바꾼 1회판이다.
@@ -30,6 +102,12 @@ export const RUNTIME_JOBS: readonly string[] = [
 export const RETIRED_JOBS: readonly string[] = [
   'com.soransoran.navercafe-collect-remonterrace',
   'com.soransoran.navercafe-collect-wgang',
+  /**
+   * 🔴 **중앙 공급 러너는 폐기됐다** (2026-09-11). 수집·판정·적재를 한 회차에 묶어서
+   *    82cook 하나의 장애가 세 source 의 공급을 세웠다. 지금은 수집 job 셋과
+   *    처리 job 하나로 나뉘어 있다 — 옛 job 이 아직 올라와 있으면 같은 원천을 두 번 연다.
+   */
+  'com.soransoran.supply-autopilot',
 ]
 
 /**
@@ -227,6 +305,12 @@ export type LoadedJobConfig = {
   /** arguments 중 `.mts` 로 끝나는 것 */
   programPath: string | null
   workingDirectory: string | null
+  /**
+   * 🔴 **인자 전부.** 경로만 보면 **옛 인자로 도는 job 이 통과한다** —
+   *    실제로 네이버 job 이 runtime 밑의 옛 수집기를 `--pages=1 --max=10` 으로 돌고 있었고
+   *    경로 검사는 전부 초록이었다. 무엇을 실행하는가는 인자가 말한다.
+   */
+  args: readonly string[]
 }
 
 /**
@@ -239,6 +323,12 @@ export function judgeLoadedConfig(input: {
   loaded: LoadedJobConfig
   runtimeRoot: string
   devRoots: readonly string[]
+  /**
+   * 🔴 저장소 템플릿을 render 한 **기대 인자**. 주면 값으로 대조한다.
+   *    주지 않으면 경로만 본다 — 그 경우 **옛 인자로 도는 job 을 잡지 못한다**는 뜻이고,
+   *    운영 경로(`--require-runtime`)는 반드시 준다.
+   */
+  expectedArgs?: readonly string[]
 }): PathVerdict {
   if (!input.loaded.readable) {
     return { ok: false, problems: [`${input.label}: launchctl 실제 설정을 읽지 못했다 — 통과시키지 않는다(fail-closed)`] }
@@ -250,12 +340,28 @@ export function judgeLoadedConfig(input: {
     runtimeRoot: input.runtimeRoot,
     devRoots: input.devRoots,
   })
-  return v
+  const problems = [...v.problems]
+  if (input.expectedArgs !== undefined) {
+    const want = [...input.expectedArgs]
+    const got = [...input.loaded.args]
+    if (want.length === 0) {
+      problems.push(`${input.label}(loaded): 기대 인자가 비어 있다 — 템플릿을 읽지 못했다(fail-closed)`)
+    } else if (want.length !== got.length || want.some((x, i) => x !== got[i])) {
+      problems.push(
+        `${input.label}(loaded): ProgramArguments 가 템플릿과 다르다`
+        + `\n        기대: ${want.join(' ')}`
+        + `\n        실제: ${got.join(' ')}`,
+      )
+    }
+  }
+  return { ok: problems.length === 0, problems }
 }
 
 /** `launchctl print` 원문에서 실제 설정을 뽑는다 — 🔴 순수 함수. 명령은 부르는 쪽이 돌린다 */
 export function parseLaunchctlPrint(out: string | null): LoadedJobConfig {
-  if (out === null || out.trim() === '') return { readable: false, programPath: null, workingDirectory: null }
+  if (out === null || out.trim() === '') {
+    return { readable: false, programPath: null, workingDirectory: null, args: [] }
+  }
   const argsBlock = /arguments = \{([\s\S]*?)\n\t\}/.exec(out)
   const args = argsBlock === null ? [] : argsBlock[1]!.split('\n').map((l) => l.trim()).filter((l) => l !== '')
   const wd = /working directory = (.+)/.exec(out)
@@ -263,6 +369,7 @@ export function parseLaunchctlPrint(out: string | null): LoadedJobConfig {
     readable: true,
     programPath: args.find((a) => a.endsWith('.mts')) ?? null,
     workingDirectory: wd === null ? null : wd[1]!.trim(),
+    args,
   }
 }
 

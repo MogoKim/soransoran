@@ -62,7 +62,7 @@ import {
 import { selectionScore, type QualityAssessment } from './lib/micro-seed-quality.mjs'
 import {
   planAutoFetch, judgeAutoHold,
-  AUTO_FETCH_MAX, AUTO_MIN_SCORE, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
+  AUTO_FETCH_MAX, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
 } from './lib/micro-seed-supply.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
 import { guardedGet, readGuard } from './lib/collect-guard-store.mjs'
@@ -231,7 +231,7 @@ async function main() {
   if (plannedList.length) console.log(`  목록 ${plannedList.length}페이지:\n${plannedList.map((u) => `     ${u}`).join('\n')}`)
   if (plannedArticles.length) console.log(`  상세 ${plannedArticles.length}건:\n${plannedArticles.map((u) => `     ${u}`).join('\n')}`)
   if (AUTO) {
-    console.log(`  상세: 🔴 자동 선별 — 목록에서 최대 ${AUTO_MAX}건 (점수 ${AUTO_MIN_SCORE} 이상)`)
+    console.log(`  상세: 🔴 자동 선별 — 목록에서 최대 ${AUTO_MAX}건 (점수 높은 순)`)
     console.log(`        ① 목록 단계 제외 (열기 전) : ${AUTO_SKIP_LIST_FLAGS.join(' · ')}`)
     console.log(`        ② 상세 단계 보류 (연 뒤)   : ${AUTO_HOLD_DETAIL_FLAGS.join(' · ')}`)
     console.log('        🔴 ②는 제목만으로 판정되지 않아 목록 단계에서 못 거른다 (2026-09-03 실측)')

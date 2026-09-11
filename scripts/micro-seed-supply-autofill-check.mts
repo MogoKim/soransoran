@@ -292,8 +292,8 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
     return !r.ok && r.reason.includes('잘라내지 않고 멈춘다')
   })())
   check('🔴 러너는 --up-to 로 부른다 — --limit 으로 부르지 않는다', (() => {
-    const lib = readFileSync('src/lib/supply-autopilot.ts', 'utf-8')
-    return /mk\('fill', \['--apply', `--up-to=\$\{input\.shortfall\}`\]\)/.test(lib)
+    const lib = readFileSync('src/lib/supply-process.ts', 'utf-8')
+    return /mk\('fill', \['--apply', `--up-to=\$\{policy\.upTo\}`\], null\)/.test(lib)
       && !/mk\('fill', \['--apply', `--limit=/.test(lib)
   })())
   check('🔴 autofill CLI 가 --up-to 를 실제로 판정부에 넘긴다', (() => {

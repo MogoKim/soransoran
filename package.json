@@ -112,7 +112,7 @@
     "micro-seed:publish-enqueue": "tsx scripts/micro-seed-publish-enqueue.mts",
     "micro-seed:publish-enqueue-check": "tsx scripts/micro-seed-publish-enqueue-check.mts",
     "original-post:id-target-check": "tsx scripts/original-post-id-target-check.mts",
-    "supply:autopilot": "tsx scripts/supply-autopilot.mts",
+    "supply:process": "tsx scripts/supply-process.mts",
     "wave-c:readiness": "tsx scripts/wave-c-readiness.mts",
     "runtime:deploy": "tsx scripts/runtime-deploy.mts",
     "runtime:isolation-check": "tsx scripts/runtime-isolation-check.mts",
@@ -130,10 +130,12 @@
     "collect:guard-lock-check": "tsx scripts/collect-guard-lock-check.mts",
     "collect:guard-status": "tsx scripts/collect-guard-clear.mts --status",
     "collect:guard-clear": "tsx scripts/collect-guard-clear.mts",
-    "supply:autopilot-lock-check": "tsx scripts/supply-autopilot-lock-check.mts",
-    "supply:autopilot-check": "tsx scripts/supply-autopilot-check.mts",
+    "supply:process-check": "tsx scripts/supply-process-check.mts",
     "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",
-    "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts"
+    "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts",
+    "supply:d100-plan": "tsx scripts/supply-d100-plan.mts",
+    "supply:d100-plan-check": "tsx scripts/supply-d100-plan-check.mts",
+    "micro-seed:navercafe-run": "tsx scripts/micro-seed-navercafe-run.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

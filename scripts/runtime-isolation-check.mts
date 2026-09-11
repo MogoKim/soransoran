@@ -20,6 +20,7 @@ import { join } from 'node:path'
 import { statSync } from 'node:fs'
 
 import {
+  JOB_ENV_REQUIREMENTS, judgeJobEnv,
   RUNTIME_JOBS, RETIRED_JOBS,
   judgeCanonicalMode, judgeJobPath, judgeJobState, judgeLoadedConfig, judgeLoadedJobs,
   judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists,
@@ -118,7 +119,7 @@ const DEV = '/Users/x/Documents/soransoran-m0'
 }
 
 {
-  check('🟢 예약 job 셋만 loaded 면 통과', judgeLoadedJobs({ loaded: [...RUNTIME_JOBS] }).ok)
+  check(`🟢 예약 job ${RUNTIME_JOBS.length}개만 loaded 면 통과`, judgeLoadedJobs({ loaded: [...RUNTIME_JOBS] }).ok)
   const retired = judgeLoadedJobs({ loaded: [...RUNTIME_JOBS, RETIRED_JOBS[0]!] })
   check('🔴 옛 1회판이 같이 loaded 면 FAIL', !retired.ok)
   check('🔴 그 이유를 "두 배로 두드린다" 로 말한다',
@@ -156,12 +157,12 @@ const DEV = '/Users/x/Documents/soransoran-m0'
 	arguments = {
 		/usr/bin/npx
 		tsx
-		${DEV}/scripts/supply-autopilot.mts
+		${DEV}/scripts/supply-process.mts
 		--live
 	}
 	working directory = ${DEV}
 `)
-  check('🔴 launchctl 원문에서 실제 경로를 뽑는다', devLoaded.readable && devLoaded.programPath === `${DEV}/scripts/supply-autopilot.mts`)
+  check('🔴 launchctl 원문에서 실제 경로를 뽑는다', devLoaded.readable && devLoaded.programPath === `${DEV}/scripts/supply-process.mts`)
   check('🔴 파일은 runtime 인데 loaded 가 개발 경로면 FAIL',
     !judgeLoadedConfig({ label: 'j', loaded: devLoaded, runtimeRoot: RT, devRoots: [DEV] }).ok)
   const rtLoaded = parseLaunchctlPrint(`	arguments = {\n\t\ttsx\n\t\t${RT}/scripts/a.mts\n\t}\nworking directory = ${RT}\n`)
@@ -174,7 +175,7 @@ const DEV = '/Users/x/Documents/soransoran-m0'
 
   // 🔴 runtime 손댐 (P1-1)
   check('🟢 추적 변경이 없으면 통과', judgeRuntimeClean({ porcelain: '' }).ok)
-  const dirty = judgeRuntimeClean({ porcelain: ' M scripts/supply-autopilot.mts' })
+  const dirty = judgeRuntimeClean({ porcelain: ' M scripts/supply-process.mts' })
   check('🔴 runtime 의 추적 파일이 바뀌면 FAIL', !dirty.ok)
   check('🔴 그 이유를 "손대졌다" 로 말한다', dirty.problems.some((x) => x.includes('손대졌다')))
   check('🔴 git 상태를 못 읽으면 FAIL (fail-closed)', !judgeRuntimeClean({ porcelain: null }).ok)
@@ -362,7 +363,7 @@ const DEV = '/Users/x/Documents/soransoran-m0'
   check('🔴 main 계보가 아니면 막는다 (feature branch)', !judgeDeploy({ ...base, targetOnMain: false }).ok)
   check('🔴 runtime 이 dirty 면 막는다', !judgeDeploy({ ...base, runtimeDirty: true }).ok)
   check('🔴 runtime 상태를 못 읽으면 막는다 (fail-closed)', !judgeDeploy({ ...base, runtimeDirty: null }).ok)
-  check('🔴 job 이 돌고 있으면 막는다', !judgeDeploy({ ...base, jobsRunning: ['supply-autopilot'] }).ok)
+  check('🔴 job 이 돌고 있으면 막는다', !judgeDeploy({ ...base, jobsRunning: ['supply-process'] }).ok)
   check('🔴 origin/main 을 못 읽으면 막는다', !judgeDeploy({ ...base, originMain: null }).ok)
 }
 
@@ -376,7 +377,8 @@ const DEV = '/Users/x/Documents/soransoran-m0'
 {
   // ── 🔴 옛 plist 재등록 방지 (2026-09-09) ──
   const files = RETIRED_JOBS.map((l) => `${l}.plist`)
-  const alive = ['com.soransoran.supply-autopilot.plist']
+  /** 🔴 지금 살아 있어야 하는 것 — 폐기 목록과 겹치면 안 된다 */
+  const alive = ['com.soransoran.supply-process.plist']
   check('🟢 옛 plist 가 LaunchAgents 에 없고 보관본이 있으면 통과',
     judgeRetiredPlists({ agentFiles: alive, rollbackFiles: files }).ok)
   /**
@@ -403,6 +405,8 @@ const DEV = '/Users/x/Documents/soransoran-m0'
 console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)')
 {
   const J = ['job-a', 'job-b', 'job-c']
+  /** 🔴 퇴역 job — unload 하고 설치본도 보관소로 옮겨야 한다 */
+  const RETIRED = ['job-old']
   // 🔴 40자리 **hex** 여야 한다 — judgeDeploy 가 축약·비-SHA 를 막는다
   const PREV = 'c'.repeat(40)
   const NEXT = 'd'.repeat(40)
@@ -458,15 +462,15 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
 
   // ── 🔴 실제 출력에서 계약을 뽑아 판정한다 ──
   {
-    const good = parseLaunchctlPrint(printSample('supply-autopilot', `${RTDIR}/scripts/supply-autopilot.mts`, RTDIR))
+    const good = parseLaunchctlPrint(printSample('supply-process', `${RTDIR}/scripts/supply-process.mts`, RTDIR))
     check('🟢 [E] 정상 출력에 plist·log 경로가 있어도 loaded 설정은 PASS',
       judgeLoadedConfig({ label: 'x', loaded: good, runtimeRoot: RTDIR, devRoots: [DEVDIR] }).ok)
     check('🔴 [E] 파서가 program 은 .mts, wd 는 working directory 만 본다',
-      good.programPath === `${RTDIR}/scripts/supply-autopilot.mts` && good.workingDirectory === RTDIR)
-    const devProgram = parseLaunchctlPrint(printSample('x', `${DEVDIR}/scripts/supply-autopilot.mts`, RTDIR))
+      good.programPath === `${RTDIR}/scripts/supply-process.mts` && good.workingDirectory === RTDIR)
+    const devProgram = parseLaunchctlPrint(printSample('x', `${DEVDIR}/scripts/supply-process.mts`, RTDIR))
     check('🔴 [F] program 이 개발 트리면 FAIL',
       !judgeLoadedConfig({ label: 'x', loaded: devProgram, runtimeRoot: RTDIR, devRoots: [DEVDIR] }).ok)
-    const devWd = parseLaunchctlPrint(printSample('x', `${RTDIR}/scripts/supply-autopilot.mts`, DEVDIR))
+    const devWd = parseLaunchctlPrint(printSample('x', `${RTDIR}/scripts/supply-process.mts`, DEVDIR))
     check('🔴 [F] WorkingDirectory 가 개발 트리면 FAIL',
       !judgeLoadedConfig({ label: 'x', loaded: devWd, runtimeRoot: RTDIR, devRoots: [DEVDIR] }).ok)
 
@@ -477,7 +481,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
      *    plist·stdout·stderr 경로 때문에 **정상 job 이 실패한다.** 실측으로 3개 모두 false 였다.
      *    이 두 줄은 같은 입력에서 두 규칙이 반대 답을 낸다는 사실 자체를 기록한다.
      */
-    const raw = printSample('supply-autopilot', `${RTDIR}/scripts/supply-autopilot.mts`, RTDIR)
+    const raw = printSample('supply-process', `${RTDIR}/scripts/supply-process.mts`, RTDIR)
     const adHoc = ((): boolean => {
       const paths = [...raw.matchAll(/(?:^|\s)(\/[^\s"]+)/g)].map((m) => m[1]!).filter((x) => x.includes('soransoran'))
       return paths.length > 0 && paths.every((x) => x.startsWith(RTDIR))
@@ -526,12 +530,56 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     initial?: Readonly<Record<string, JobState>>
     /** 실제 loaded 설정이 개발 트리를 가리키는 job */
     devPathJobs?: readonly string[]
+    // ── 🔴 plist cutover 결함 주입 ──
+    /** 템플릿을 render 하지 못하는 job (치환이 남았거나 파일이 없다) */
+    renderFail?: readonly string[]
+    /** 설치(write)가 실패하는 job */
+    plistWriteFail?: readonly string[]
+    /** plutil 검증이 실패하는 job */
+    lintFail?: readonly string[]
+    /** 퇴역 이동이 실패하는 job */
+    retireFail?: readonly string[]
+    /** 🔴 **배포 전에 설치본이 아예 없는** job — 첫 설치를 시험한다 */
+    noInstalledPlist?: readonly string[]
+    /** rollback 중 plist 복원이 실패하는 job */
+    restorePlistFail?: readonly string[]
+    /** loaded 인자가 템플릿과 다른 job (옛 인자로 도는 상태) */
+    staleArgsJobs?: readonly string[]
+    /**
+     * 🔴 **이전 runtime(옛 SHA)에 템플릿이 없는 job.**
+     *    첫 cutover 가 바로 이 상황이다 — 새 job 의 템플릿은 target 에만 있다.
+     */
+    missingInOldRuntime?: readonly string[]
+    /** 🔴 배포기가 **옛 runtime 작업트리**에서 읽도록 되돌린 상태(회귀 재주입) */
+    renderFromOldRuntime?: boolean
+    /** 활성화 스위치가 막는 job */
+    envBlocked?: readonly string[]
   }
   type World = {
     dir: string; manifestFile: string; pinFile: string
     sha: string; deps: string; state: Map<string, JobState>
+    /** 🔴 설치된 plist 원문 — 실제 파일처럼 다룬다 */
+    plists: Map<string, string>
+    /** 🔴 퇴역 보관소 */
+    retiredStore: Map<string, string>
     order: string[]; installs: number
     fx: DeployEffects
+  }
+  /** 🔴 **target** 템플릿을 render 한 결과 — 새 인자가 값으로 들어 있다 */
+  const ARGS_OF = (l: string): string[] => ['/nvm/bin/npx', 'tsx', `${RTDIR}/scripts/${l}.mts`, '--live']
+  const RENDERED = (l: string): string => `<plist>${l}:new:${ARGS_OF(l).join(' ')}</plist>`
+  /**
+   * 🔴 **옛 runtime 작업트리**의 템플릿을 render 한 결과 — 옛 인자다.
+   *    이것이 설치되면 배포는 "성공" 이라고 적으면서 아무것도 고치지 않은 것이다.
+   */
+  const OLD_ARGS_OF = (l: string): string[] =>
+    ['/nvm/bin/npx', 'tsx', `${RTDIR}/scripts/${l}.mts`, '--pages=1', '--max=10']
+  const OLD_RENDERED = (l: string): string => `<plist>${l}:stale:${OLD_ARGS_OF(l).join(' ')}</plist>`
+  const OLD_PLIST = (l: string): string => `<plist>${l}:old</plist>`
+  /** 설치본에서 인자를 되꺼낸다 — fixture 안의 `argsOf` 정본 */
+  const PARSE_ARGS = (xml: string): string[] => {
+    const m = /:(?:new|stale):([^<]*)</.exec(xml)
+    return m === null ? [] : m[1]!.split(' ').filter((x) => x !== '')
   }
 
   const worlds: string[] = []
@@ -543,10 +591,18 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     if (f.noPrevManifest !== true) writeFileSync(manifestFile, JSON.stringify({ sha: PREV }), 'utf-8')
     writeFileSync(pinFile, `${PREV}\n`, 'utf-8')
 
-    const state = new Map<string, JobState>(J.map((l) => [l, f.initial?.[l] ?? 'loaded']))
+    const state = new Map<string, JobState>(
+      [...J, ...RETIRED].map((l) => [l, f.initial?.[l] ?? (J.includes(l) ? 'loaded' : 'unloaded')]),
+    )
+    // 🔴 배포 전 설치본 — 옛 내용이 들어 있다. `noInstalledPlist` 면 아예 없다
+    const plists = new Map<string, string>()
+    for (const l of [...J, ...RETIRED]) {
+      if ((f.noInstalledPlist ?? []).includes(l)) continue
+      plists.set(l, OLD_PLIST(l))
+    }
     const w: World = {
       dir, manifestFile, pinFile,
-      sha: PREV, deps: PREV, state,
+      sha: PREV, deps: PREV, state, plists, retiredStore: new Map(),
       order: [], installs: 0, fx: {} as DeployEffects,
     }
     const rec = (m: string): void => { w.order.push(m) }
@@ -562,7 +618,11 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       originMain: () => NEXT,
       isAncestor: () => true,
       dirty: () => false,
-      runningJobs: () => ({ running: [], unknown: (f.probeUnknown ?? []).filter((l) => J.includes(l)) }),
+      // 🔴 실제 배포기와 같게 — 퇴역 job 도 본다 (돌고 있는 옛 job 위로 배포하지 않는다)
+      runningJobs: () => ({
+        running: [],
+        unknown: (f.probeUnknown ?? []).filter((l) => [...J, ...RETIRED].includes(l)),
+      }),
 
       unload: (l) => {
         rec(`unload:${l}`)
@@ -592,11 +652,60 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       generate: () => { rec('generate'); return true },
 
       offlineGate: (g) => { rec(`gate:${g}`); return f.gateFail !== g },
+
+      // ── 🔴 plist cutover ──
+      readInstalledPlist: (l) => plists.get(l) ?? null,
+      /**
+       * 🔴 **target 을 받는다.** `renderFromOldRuntime` 이면 옛 작업트리를 읽는 회귀를 재현한다 —
+       *    그때 새 job 은 템플릿이 없고, 옛 job 은 옛 인자가 나온다.
+       */
+      renderPlist: (target, l) => {
+        rec(`render:${l}`)
+        if ((f.renderFail ?? []).includes(l)) return null
+        if (f.renderFromOldRuntime === true) {
+          // 🔴 옛 runtime 에 없는 템플릿은 못 읽는다
+          if ((f.missingInOldRuntime ?? []).includes(l)) return null
+          return OLD_RENDERED(l)
+        }
+        // 🔴 target 에는 전부 있다 — 그것이 이 배포가 설치하려는 것이다
+        return target === NEXT ? RENDERED(l) : OLD_RENDERED(l)
+      },
+      argsOf: (xml) => PARSE_ARGS(xml),
+      envBlockers: (jobs) => (f.envBlocked ?? [])
+        .filter((l) => jobs.includes(l))
+        .map((l) => ({ job: l, key: `SWITCH_${l}`, detail: `SWITCH_${l} 가 없다 (unset)` })),
+      writePlist: (l, xml) => {
+        rec(`write-plist:${l}`)
+        // 🔴 rollback(옛 내용 복원)과 설치(새 내용)를 **따로** 실패시킬 수 있어야 한다
+        const restoring = xml !== RENDERED(l)
+        if (restoring && (f.restorePlistFail ?? []).includes(l)) return false
+        if (!restoring && (f.plistWriteFail ?? []).includes(l)) return false
+        plists.set(l, xml)
+        return true
+      },
+      removePlist: (l) => {
+        rec(`remove-plist:${l}`)
+        if ((f.restorePlistFail ?? []).includes(l)) return false
+        plists.delete(l); return true
+      },
+      retirePlist: (l) => {
+        rec(`retire:${l}`)
+        if ((f.retireFail ?? []).includes(l)) return false
+        const cur = plists.get(l)
+        if (cur !== undefined) { w.retiredStore.set(l, cur); plists.delete(l) }
+        return true
+      },
+      lintPlist: (l) => { rec(`lint:${l}`); return !(f.lintFail ?? []).includes(l) },
       // 🔴 실제 launchctl 출력 형태를 그대로 파싱한다
       loadedConfig: (l) => {
         rec(`loaded-config:${l}`)
         const dev = (f.devPathJobs ?? []).includes(l)
-        return parseLaunchctlPrint(printSample(l, `${dev ? DEVDIR : RTDIR}/scripts/${l}.mts`, RTDIR))
+        const base = parseLaunchctlPrint(printSample(l, `${dev ? DEVDIR : RTDIR}/scripts/${l}.mts`, RTDIR))
+        // 🔴 **인자까지 실어 준다.** 경로만 보면 옛 인자로 도는 job 이 통과한다
+        const args = (f.staleArgsJobs ?? []).includes(l)
+          ? ['/nvm/bin/npx', 'tsx', `${RTDIR}/scripts/${l}.mts`, '--pages=1', '--max=10']
+          : ARGS_OF(l)
+        return { ...base, args }
       },
       isolationGate: () => { rec('isolation-gate'); return f.isolation !== true },
 
@@ -610,7 +719,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
   }
   const deploy = async (w: World): Promise<Awaited<ReturnType<typeof runDeploy>>> =>
     runDeploy({
-      target: NEXT, jobs: J, paths: PATHS,
+      target: NEXT, jobs: J, retiredJobs: RETIRED, paths: PATHS,
       offlineGates: ['gate1', 'gate2'], now: () => '2026-09-09T00:00:00.000Z',
     }, w.fx)
   const idx = (w: World, m: string): number => w.order.findIndex((x) => x === m || x.startsWith(m))
@@ -622,26 +731,312 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     try { return (JSON.parse(readFileSync(w.manifestFile, 'utf-8')) as { sha?: string }).sha ?? null } catch { return null }
   }
 
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [P] plist cutover — **배포가 실제로 설치본을 바꾸는가**
+  //
+  //    2026-09-11 재현: 배포기는 기존 설치 plist 를 unload 하고 그대로 다시 load 했다.
+  //    그래서 저장소의 새 템플릿이 설치본에 닿지 못했고, 네이버 job 은 배포를 몇 번 해도
+  //    옛 `--pages=1 --max=10` 을 계속 돌았다. 새 job 은 영영 등록되지 않았다.
+  //    아래는 그 결함이 되살아나면 **전부 빨개지는** 자리다.
+  // ─────────────────────────────────────────────────────────
+  {
+    const w = makeWorld()
+    const r = await deploy(w)
+    check('🟢 [P] 정상 배포가 성공한다 (plist 설치 포함)', r.ok)
+    check('🔴 [P] 예약 job 의 설치본이 **템플릿 render 결과로 바뀐다**',
+      J.every((l) => w.plists.get(l) === RENDERED(l)))
+    check('🔴 [P] 옛 설치본이 남아 있지 않다',
+      J.every((l) => w.plists.get(l) !== OLD_PLIST(l)))
+    // 🔴 순서: 설치는 게이트 뒤, load 앞이어야 한다 — 순서가 뒤집히면 옛 plist 로 올라간다
+    check('🔴 [P] plist 설치가 offline 게이트 **뒤**, load **앞**이다',
+      J.every((l) => idx(w, `write-plist:${l}`) > idx(w, 'gate:gate2')
+        && idx(w, `write-plist:${l}`) < idx(w, 'load:job-a')))
+    check('🔴 [P] plutil 검증이 설치 **직후**에 돈다',
+      J.every((l) => idx(w, `lint:${l}`) > idx(w, `write-plist:${l}`)))
+    check('🔴 [P] render 는 unload **앞**에서 한다 — 설치할 것이 없으면 job 을 내리지 않는다',
+      J.every((l) => idx(w, `render:${l}`) < idx(w, 'unload:job-a')))
+    // 🔴 퇴역 — unload 만으로는 재부팅 때 되살아난다. 파일이 그 자리에 없어야 한다
+    check('🔴 [P] 퇴역 job 의 설치본이 사라진다', !w.plists.has('job-old'))
+    check('🔴 [P] 퇴역 설치본은 **보관소로 옮겨진다** (지우지 않는다)',
+      w.retiredStore.get('job-old') === OLD_PLIST('job-old'))
+  }
+
+  // ── [P-1] 🔴 **처음부터 설치본이 없던 job** — 첫 설치 ──
+  {
+    const w = makeWorld({ noInstalledPlist: ['job-b'], initial: { 'job-b': 'unloaded' } })
+    const r = await deploy(w)
+    check('🟢 [P-1] 설치본이 없던 job 도 배포가 설치한다', r.ok && w.plists.get('job-b') === RENDERED('job-b'))
+    check('🔴 [P-1] 없던 job 을 내리려 하지 않는다 — unload 를 부르지 않는다', idx(w, 'unload:job-b') === -1)
+    check('🟢 [P-1] 그 job 이 끝에는 올라와 있다', w.state.get('job-b') === 'loaded')
+  }
+
+  // ── [P-2] 🔴 템플릿을 render 하지 못하면 **job 을 내리기 전에** 멈춘다 ──
+  {
+    const w = makeWorld({ renderFail: ['job-c'] })
+    const r = await deploy(w)
+    check('🔴 [P-2] render 실패면 배포하지 않는다', !r.ok && r.phase === 'render')
+    check('🔴 [P-2] job 을 하나도 내리지 않았다', idx(w, 'unload:job-a') === -1)
+    check('🔴 [P-2] 설치본도 그대로다', J.every((l) => w.plists.get(l) === OLD_PLIST(l)))
+    check('🔴 [P-2] SHA 도 그대로다', w.sha === PREV)
+  }
+
+  // ── [P-3] 🔴 설치 도중 실패 → **plist 원문까지 되돌린다** ──
+  {
+    const w = makeWorld({ plistWriteFail: ['job-c'] })
+    const r = await deploy(w)
+    check('🔴 [P-3] 설치 실패면 배포하지 않는다', !r.ok && r.phase === 'plist-install')
+    check('🔴 [P-3] 이미 바꾼 설치본이 **옛 내용으로 복원된다**',
+      J.every((l) => w.plists.get(l) === OLD_PLIST(l)))
+    check('🔴 [P-3] SHA 가 이전으로 돌아간다', w.sha === PREV)
+    check('🔴 [P-3] 예약 job 이 다시 올라온다', allLoaded(w))
+    check('🟢 [P-3] 복구가 완전하다고 보고한다', r.rollback?.complete === true)
+  }
+
+  // ── [P-4] 🔴 plutil 이 거절하면 멈추고 되돌린다 ──
+  {
+    const w = makeWorld({ lintFail: ['job-b'] })
+    const r = await deploy(w)
+    check('🔴 [P-4] plutil 실패면 배포하지 않는다', !r.ok && r.phase === 'plist-lint')
+    check('🔴 [P-4] 문법이 깨진 설치본을 남기지 않는다',
+      J.every((l) => w.plists.get(l) === OLD_PLIST(l)))
+    check('🔴 [P-4] 예약 job 이 다시 올라온다', allLoaded(w))
+  }
+
+  // ── [P-5] 🔴 **원래 없던 설치본은 되돌릴 때 지운다** ──
+  {
+    const w = makeWorld({ noInstalledPlist: ['job-b'], initial: { 'job-b': 'unloaded' }, isolation: true })
+    const r = await deploy(w)
+    check('🔴 [P-5] post-load 게이트 실패면 배포하지 않는다', !r.ok)
+    check('🔴 [P-5] 원래 없던 설치본이 **지워진다** — 배포 안 했는데 파일이 남으면 안 된다',
+      !w.plists.has('job-b'))
+    check('🔴 [P-5] 원래 있던 것은 옛 내용으로 돌아간다',
+      w.plists.get('job-a') === OLD_PLIST('job-a') && w.plists.get('job-c') === OLD_PLIST('job-c'))
+    check('🔴 [P-5] 원래 내려가 있던 job 을 "복구" 한다며 올리지 않는다', w.state.get('job-b') === 'unloaded')
+  }
+
+  // ── [P-6] 🔴 **loaded 상태까지 원래대로** — 퇴역 job 이 원래 올라가 있었다면 되돌린다 ──
+  {
+    const w = makeWorld({ initial: { 'job-old': 'loaded' }, isolation: true })
+    const r = await deploy(w)
+    check('🔴 [P-6] 실패하면 퇴역 job 의 설치본도 되살린다',
+      !r.ok && w.plists.get('job-old') === OLD_PLIST('job-old'))
+    check('🔴 [P-6] 원래 loaded 였던 퇴역 job 이 다시 올라온다', w.state.get('job-old') === 'loaded')
+  }
+
+  // ── [P-7] 🔴 퇴역 job 이 돌고 있으면 **배포를 시작하지 않는다** ──
+  {
+    const w = makeWorld({ initial: { 'job-old': 'loaded' }, probeUnknown: ['job-old'] })
+    const r = await deploy(w)
+    check('🔴 [P-7] 퇴역 job 상태를 못 보면 시작하지 않는다(fail-closed)', !r.ok && r.phase === 'preflight')
+    check('🔴 [P-7] 아무것도 건드리지 않았다',
+      w.sha === PREV && J.every((l) => w.plists.get(l) === OLD_PLIST(l)))
+  }
+
+  // ── [P-8] 🔴 퇴역 이동이 실패하면 멈추고 되돌린다 ──
+  {
+    const w = makeWorld({ initial: { 'job-old': 'loaded' }, retireFail: ['job-old'] })
+    const r = await deploy(w)
+    check('🔴 [P-8] 퇴역 실패면 배포하지 않는다', !r.ok && r.phase === 'retire')
+    check('🔴 [P-8] 예약 job 설치본이 옛 내용으로 돌아간다',
+      J.every((l) => w.plists.get(l) === OLD_PLIST(l)))
+  }
+
+  // ── [P-9] 🔴 **옛 인자로 도는 job 을 잡는다** — 경로만 보면 통과한다 ──
+  {
+    const w = makeWorld({ staleArgsJobs: ['job-a'] })
+    const r = await deploy(w)
+    check('🔴 [P-9] loaded 인자가 템플릿과 다르면 실패한다', !r.ok && r.phase === 'post-load')
+    check('🔴 [P-9] 이유에 ProgramArguments 가 적힌다',
+      r.problems.some((x) => x.includes('ProgramArguments')))
+    /**
+     * 🔴 **대조군** — 인자를 대조하지 않으면 같은 상태가 통과한다.
+     *    이 줄이 초록이어야 위 검사에 검증력이 있다는 뜻이다.
+     */
+    const loose = judgeLoadedConfig({
+      label: 'job-a',
+      loaded: { ...parseLaunchctlPrint(printSample('job-a', `${RTDIR}/scripts/job-a.mts`, RTDIR)),
+        args: ['/nvm/bin/npx', 'tsx', `${RTDIR}/scripts/job-a.mts`, '--pages=1', '--max=10'] },
+      runtimeRoot: RTDIR, devRoots: [DEVDIR],
+    })
+    check('🔴 인자를 안 보면 옛 인자 job 이 통과한다 — 그래서 대조가 필요하다', loose.ok)
+  }
+
+  // ── [P-10] 🔴 rollback 중 plist 복원이 실패해도 **뒤 단계를 계속 시도**한다 ──
+  {
+    const w = makeWorld({ isolation: true, restorePlistFail: ['job-b'] })
+    const r = await deploy(w)
+    check('🔴 [P-10] 복구가 완전하지 않다고 보고한다', !r.ok && r.rollback?.complete === false)
+    check('🔴 [P-10] 남은 것에 그 job 이 적힌다',
+      (r.rollback?.residual ?? []).some((x) => x.includes('job-b')))
+    check('🔴 [P-10] 그래도 나머지 plist 는 복원했다',
+      w.plists.get('job-a') === OLD_PLIST('job-a') && w.plists.get('job-c') === OLD_PLIST('job-c'))
+    check('🔴 [P-10] 그래도 SHA 는 되돌렸다', w.sha === PREV)
+    check('🔴 [P-10] 그래도 job 은 다시 올렸다', allLoaded(w))
+  }
+
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [T] **첫 cutover** — target commit 의 템플릿을 읽는가
+  //
+  //    2026-09-11 실측 재현: 배포기가 `RUNTIME_ROOT` **작업트리**에서 템플릿을 읽었다.
+  //    그 시점 runtime 은 아직 옛 SHA(7049ddc)에 checkout 되어 있고, 거기에는
+  //      · `supply-process` · `supply-collect-82cook-thin` 템플릿이 **없고**
+  //      · 네이버 템플릿은 `micro-seed-collect-navercafe.mts --pages=1 --max=10` 이다.
+  //    → 새 job 은 render 에서 멈추고, 네이버는 **옛 인자를 그대로 다시 설치**한다.
+  //    **첫 cutover 가 구조적으로 불가능했다.**
+  // ─────────────────────────────────────────────────────────
+  {
+    // 🔴 이전 runtime 에 **새 템플릿이 하나도 없다** — 첫 cutover 의 실제 상황
+    const w = makeWorld({
+      missingInOldRuntime: J,
+      noInstalledPlist: ['job-b', 'job-c'],
+      initial: { 'job-b': 'unloaded', 'job-c': 'unloaded' },
+    })
+    const r = await deploy(w)
+    check('🟢 [T] 이전 runtime 에 새 템플릿이 0개여도 첫 cutover 가 성공한다', r.ok)
+    check('🔴 [T] 설치본이 **target 템플릿** 결과다 (옛 작업트리 것이 아니다)',
+      J.every((l) => w.plists.get(l) === RENDERED(l)))
+    check('🔴 [T] 옛 인자가 설치되지 않았다',
+      J.every((l) => w.plists.get(l) !== OLD_RENDERED(l)))
+    check('🟢 [T] 원래 없던 job 도 설치되고 올라온다',
+      w.plists.has('job-b') && w.state.get('job-b') === 'loaded'
+      && w.plists.has('job-c') && w.state.get('job-c') === 'loaded')
+  }
+
+  /**
+   * 🔴 **회귀 재주입** — 옛 runtime 작업트리를 읽도록 되돌리면 **이 fixture 가 실패해야 한다.**
+   *    그래야 이 검사가 결함을 실제로 잡는다는 뜻이다.
+   */
+  {
+    const w = makeWorld({ renderFromOldRuntime: true, missingInOldRuntime: J })
+    const r = await deploy(w)
+    check('🔴 [T-회귀] 옛 runtime 을 읽으면 첫 cutover 가 render 에서 멈춘다',
+      !r.ok && r.phase === 'render')
+    check('🔴 [T-회귀] 그때 job 을 하나도 내리지 않는다', idx(w, 'unload:job-a') === -1)
+    check('🔴 [T-회귀] 이유에 target 이 적힌다',
+      r.problems.some((x) => x.includes(NEXT.slice(0, 7))))
+  }
+  {
+    // 🔴 옛 runtime 에 템플릿이 **있는** 경우 — 더 나쁜 쪽이다. 조용히 옛 인자를 설치한다
+    const w = makeWorld({ renderFromOldRuntime: true })
+    const r = await deploy(w)
+    check('🔴 [T-회귀] 옛 템플릿이 있으면 **옛 인자로 설치되고** post-load 에서 잡힌다',
+      !r.ok && r.phase === 'post-load')
+    check('🔴 [T-회귀] 이유가 ProgramArguments 불일치다',
+      r.problems.some((x) => x.includes('ProgramArguments')))
+  }
+
+  /** 🔴 render 와 기대 인자가 **같은 문자열 하나**에서 나온다 — 두 번 읽지 않는다 */
+  {
+    const w = makeWorld()
+    const r = await deploy(w)
+    check('🟢 [T] render 결과와 대조 기준이 같은 target 산출물이다', r.ok
+      && J.every((l) => PARSE_ARGS(w.plists.get(l)!).join(' ') === ARGS_OF(l).join(' ')))
+    const src = readFileSync('src/lib/runtime-deploy.ts', 'utf-8')
+    check('🔴 대조 기준을 템플릿에서 **다시 읽지 않는다**',
+      /expectedArgs: fx\.argsOf\(rendered\.get\(l\)!\)/.test(src)
+      && !/expectedArgs: fx\.expectedArgs/.test(src))
+    check('🔴 배포기가 target 을 넘겨 render 한다',
+      /fx\.renderPlist\(input\.target, l\)/.test(src))
+  }
+
+  /** 🔴 실제 배포 도구가 **작업트리가 아니라 target commit** 에서 읽는지 소스로 본다 */
+  {
+    const tool = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
+    check('🔴 배포 도구가 git show <target>:<path> 로 읽는다',
+      /read\('git', \['show', `\$\{target\}:\$\{templatePathOf\(label\)\}`\]\)/.test(tool))
+    check('🔴 배포 도구가 RUNTIME_ROOT 의 템플릿 파일을 읽지 않는다',
+      !/readFileSync\(\s*join\(RUNTIME_ROOT, templatePathOf/.test(tool))
+    check('🔴 dry-run 계획도 target 템플릿으로 찍는다', /renderFromTarget\(planTarget, l\)/.test(tool))
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [E] 활성화 스위치 — **파일이 있는 것과 일하는 것은 다르다**
+  //
+  //    실측(runtime .env.local): SORAN_SUPPLY_PROCESS_ENABLED 가 **unset** 이다.
+  //    plist 를 올려도 처리기는 매 회차 재고만 읽고 끝난다.
+  // ─────────────────────────────────────────────────────────
+  {
+    const w = makeWorld({ envBlocked: ['job-c'] })
+    const r = await deploy(w)
+    check('🔴 [E] 스위치가 닫혀 있으면 배포하지 않는다', !r.ok && r.phase === 'preflight')
+    check('🔴 [E] **job 을 내리기 전에** 막는다 — 되돌릴 것이 없다',
+      idx(w, 'unload:job-a') === -1 && w.sha === PREV)
+    check('🔴 [E] 설치본도 건드리지 않는다', J.every((l) => w.plists.get(l) === OLD_PLIST(l)))
+    check('🔴 [E] 어떤 스위치인지 이름을 적는다', r.problems.some((x) => x.includes('SWITCH_job-c')))
+    check('🔴 [E] env 를 고치라고만 하고 스스로 고치지 않는다',
+      r.problems.some((x) => x.includes('배포가 env 를 고치지 않는다')))
+  }
+  {
+    // 🔴 하나씩 빠뜨려도 전부 막힌다
+    for (const l of J) {
+      const w = makeWorld({ envBlocked: [l] })
+      const r = await deploy(w)
+      check(`🔴 [E] ${l} 스위치 하나만 없어도 배포하지 않는다`, !r.ok && r.phase === 'preflight')
+    }
+  }
+  {
+    const w = makeWorld({ envBlocked: [] })
+    const r = await deploy(w)
+    check('🟢 [E] 스위치가 전부 열려 있으면 통과한다', r.ok)
+  }
+
+  /** 🔴 판정부 — `unset` 과 `false` 를 구분해 적는다. 다음에 할 일이 다르다 */
+  {
+    const JOBS5 = [...RUNTIME_JOBS]
+    const full: Record<string, string> = {}
+    for (const l of JOBS5) {
+      const k = JOB_ENV_REQUIREMENTS[l]
+      if (k !== undefined) full[k] = 'true'
+    }
+    check('🟢 [E] 5개 job 의 스위치가 전부 true 면 blocker 0',
+      judgeJobEnv({ jobs: JOBS5, env: full }).length === 0)
+    /** 🔴 실측 상태 그대로 — 처리기 스위치만 unset */
+    const measured = { ...full }
+    delete measured.SORAN_SUPPLY_PROCESS_ENABLED
+    const b = judgeJobEnv({ jobs: JOBS5, env: measured })
+    check('🔴 [E] 실측(.env.local)에서 처리기 스위치가 blocker 로 잡힌다',
+      b.length === 1 && b[0]!.key === 'SORAN_SUPPLY_PROCESS_ENABLED')
+    check('🔴 [E] unset 이라고 적는다', b[0]!.detail.includes('unset'))
+    const off = { ...full, SORAN_SUPPLY_PROCESS_ENABLED: 'false' }
+    const b2 = judgeJobEnv({ jobs: JOBS5, env: off })
+    check('🔴 [E] false 는 unset 과 다르게 적는다',
+      b2.length === 1 && b2[0]!.detail.includes('false') && !b2[0]!.detail.includes('unset'))
+    check('🔴 [E] 빈 값도 막는다',
+      judgeJobEnv({ jobs: JOBS5, env: { ...full, SORAN_SUPPLY_PROCESS_ENABLED: '' } }).length === 1)
+    check('🔴 [E] 같은 스위치를 쓰는 두 job 은 한 줄로만 적는다', (() => {
+      const noNaver = { ...full }
+      delete noNaver.SORAN_NAVERCAFE_COLLECT_ENABLED
+      return judgeJobEnv({ jobs: JOBS5, env: noNaver }).length === 1
+    })())
+    check('🔴 [E] 5개 job 전부 필요한 스위치가 정의돼 있다',
+      JOBS5.every((l) => JOB_ENV_REQUIREMENTS[l] !== undefined))
+    /** 🔴 퇴역 job 의 스위치는 요구하지 않는다 — 그 job 은 없어질 것이다 */
+    check('🔴 [E] 퇴역 job 의 스위치를 요구하지 않는다',
+      !Object.values(JOB_ENV_REQUIREMENTS).includes('SORAN_SUPPLY_AUTOPILOT_ENABLED'))
+  }
+
   // ── [A] 정상 배포 ──
   {
     const w = makeWorld()
     const r = await deploy(w)
     check('🟢 [A] 정상 배포가 성공한다', r.ok)
     // 🔴 실제로 부른 명령의 순서로 본다 — 상태 머신이 적어 준 이름이 아니라
-    check('🔴 [A] unload 3개가 checkout 보다 **먼저** 끝난다',
+    check('🔴 [A] 예약 job unload 가 checkout 보다 **먼저** 끝난다',
       J.every((l) => idx(w, `unload:${l}`) >= 0 && idx(w, `unload:${l}`) < idx(w, 'checkout')))
     check('🔴 [A] offline 게이트는 job 이 내려간 뒤·load 앞에서 돈다',
       idx(w, 'gate:gate1') > idx(w, 'unload:job-c') && idx(w, 'gate:gate2') < idx(w, 'load:job-a'))
     /**
      * 🔴 **이게 첫 판이 구조적으로 실패한 자리다.**
-     *    `runtime:isolation-check --require-runtime` 은 job 3개가 loaded 여야 통과한다.
+     *    `runtime:isolation-check --require-runtime` 은 예약 job 이 전부 loaded 여야 통과한다.
      *    그런데 옛 순서는 job 을 내려 둔 채 그것을 돌렸다 — 정상 배포가 항상 실패했다.
      */
     check('🔴 [A] 격리 검사는 job 을 **다시 올린 뒤에** 돈다',
       idx(w, 'isolation-gate') > idx(w, 'load:job-c'))
     check('🔴 [A] 실제 loaded 설정 대조가 격리 검사보다 앞에 있다',
       idx(w, 'loaded-config') > 0 && idx(w, 'loaded-config') < idx(w, 'isolation-gate'))
-    check('🔴 [A] 끝난 뒤 3개가 모두 올라와 있다', allLoaded(w))
+    check('🔴 [A] 끝난 뒤 예약 job 이 모두 올라와 있다', allLoaded(w))
     check('🔴 [A] SHA·의존성·manifest·pin 이 새 것이다',
       w.sha === NEXT && w.deps === NEXT && manifestSha(w) === NEXT && pinOf(w) === NEXT)
   }
@@ -653,7 +1048,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [B] fetch 가 실패하면 배포하지 않는다', !r.ok && r.phase === 'preflight')
     check('🔴 [B] unload 도 checkout 도 하지 않는다',
       idx(w, 'unload') === -1 && idx(w, 'checkout') === -1)
-    check('🔴 [B] job 3개가 그대로 올라와 있고 SHA·manifest 도 그대로다',
+    check('🔴 [B] 예약 job 이 그대로 올라와 있고 SHA·manifest 도 그대로다',
       allLoaded(w) && w.sha === PREV && manifestSha(w) === PREV)
   }
 
@@ -665,7 +1060,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     const r = await deploy(w)
     check('🔴 [C] unload 하나가 실패하면 배포하지 않는다', !r.ok && r.phase === 'unload')
     check('🔴 [C] 코드는 건드리지 않는다 (checkout 0)', idx(w, 'checkout') === -1)
-    check('🔴 [C] 이미 내린 job 을 **다시 올린다** — 3개가 올라와 있다', allLoaded(w))
+    check('🔴 [C] 이미 내린 job 을 **다시 올린다** — 전부 올라와 있다', allLoaded(w))
     check('🔴 [C] SHA·의존성은 직전 그대로다', w.sha === PREV && w.deps === PREV)
   }
 
@@ -676,7 +1071,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [D] 게이트가 실패하면 배포하지 않는다', !r.ok && r.phase === 'offline-gate')
     check('🔴 [D] 직전 SHA·의존성으로 되돌아간다', w.sha === PREV && w.deps === PREV)
     check('🔴 [D] 직전 manifest·pin 이 복원된다', manifestSha(w) === PREV && pinOf(w) === PREV)
-    check('🔴 [D] job 3개가 다시 올라온다', allLoaded(w))
+    check('🔴 [D] 예약 job 이 다시 올라온다', allLoaded(w))
     check('🔴 [D] 복구가 완전하다고 보고한다', r.rollback?.complete === true)
   }
 
@@ -685,7 +1080,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     const w = makeWorld({ loadFailAt: 2 })
     const r = await deploy(w)
     check('🔴 [E] load 가 실패하면 배포 완료가 아니다', !r.ok && r.phase === 'load')
-    check('🔴 [E] 되돌린 뒤 직전 job 3개가 올라와 있다', allLoaded(w))
+    check('🔴 [E] 되돌린 뒤 직전 예약 job 이 올라와 있다', allLoaded(w))
     check('🔴 [E] SHA·manifest 가 직전 것이다', w.sha === PREV && manifestSha(w) === PREV)
   }
 
@@ -712,7 +1107,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     check('🔴 [G] 새 manifest 를 쓴 뒤 실패했다', !r.ok && idx(w, 'write-manifest') >= 0)
     check('🔴 [G] 원래 manifest 가 없었으면 되돌린 뒤에도 **없다**', !existsSync(w.manifestFile))
     check('🔴 [G] 배포하지 않았는데 새 manifest 가 남지 않는다', manifestSha(w) === null)
-    check('🔴 [G] 그래도 job 3개는 다시 올라온다', allLoaded(w))
+    check('🔴 [G] 그래도 예약 job 은 다시 올라온다', allLoaded(w))
     const w2 = makeWorld({ noPrevManifest: true, gateFail: 'gate1' })
     await deploy(w2)
     check('🔴 [G] 게이트 단계에서 실패해도 manifest 는 생기지 않는다', !existsSync(w2.manifestFile))
@@ -763,7 +1158,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     const r = await deploy(w)
     check('🔴 [I] 올라온 설정이 개발 트리면 배포 완료가 아니다', !r.ok && r.phase === 'post-load')
     check('🔴 [I] 그때 격리 검사까지 가지 않는다', idx(w, 'isolation-gate') === -1)
-    check('🔴 [I] 되돌린 뒤 직전 SHA·manifest·job 3개다',
+    check('🔴 [I] 되돌린 뒤 직전 SHA·manifest·예약 job 이다',
       w.sha === PREV && manifestSha(w) === PREV && allLoaded(w))
     const w2 = makeWorld({ isolation: true })
     const r2 = await deploy(w2)
@@ -833,7 +1228,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
 
   // ── [실D] rollback 시작 시 일부 job 이 이미 loaded ──
   {
-    /** 🔴 게이트 실패는 unload 뒤라 3개가 다 내려가 있다. 그중 하나를 사람이 올려 둔 상황을 만든다 */
+    /** 🔴 게이트 실패는 unload 뒤라 예약 job 이 다 내려가 있다. 그중 하나를 사람이 올려 둔 상황을 만든다 */
     const w = makeWorld({ gateFail: 'gate1', unloadEffect: { 'job-c': 'keep' } })
     // job-c 는 unload 명령이 성공을 돌려주지만 실제로는 loaded 로 남는다 → unload 단계에서 잡힌다
     const r = await deploy(w)
@@ -930,7 +1325,7 @@ if (!existsSync(RUNTIME_ROOT)) {
   const loaded = loadedRaw.split('\n').map((l) => l.trim().split(/\s+/).pop() ?? '')
     .filter((l) => l.startsWith('com.soransoran.'))
   const jobs = judgeLoadedJobs({ loaded })
-  check('🔴 예약 job 셋만 loaded 다 — 옛 job·중복 0', jobs.ok)
+  check(`🔴 예약 job ${RUNTIME_JOBS.length}개만 loaded 다 — 옛 job·중복 0`, jobs.ok)
   for (const p of jobs.problems) console.log(`      ${p}`)
 
   // ── SHA 고정 ──
