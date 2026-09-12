@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   PROFILES, RELEASE_STAGES, SAFEST_STAGE, HORIZON_DAYS, CAPACITY_ENV, RELEASE_ENV,
-  nextSlotAnchor, kstMidnight, horizonStart, safeStageFor,
+  nextSlotAnchor, kstMidnight, horizonStart, safeStageFor, minuteOfDay,
 } from '../src/lib/scale-profile'
 import { resolveScale } from '../src/lib/scale-runtime'
 import {
@@ -109,14 +109,29 @@ console.log('① 준비도 시간축 (지평 ≠ 다음 발행 슬롯)')
   const tomorrow = mid.getTime() + 864e5
   check('KST 자정 계산', new Date(mid.getTime() + 9 * 3600e3).toISOString().startsWith('2026-09-08T00:00'))
 
-  // ── 다음 발행 슬롯 — 표시용. 단계마다 다르다 ──
-  check('🔴 d1 · 정오 → 내일 00:05',
-    nextSlotAnchor(PROFILES.d1, { now: noon, publishedToday: 0 }).getTime() === tomorrow + 5 * 60_000)
-  check('🔴 d10 · 오늘 10건 완료 → 내일 첫 슬롯(00:05)',
-    nextSlotAnchor(PROFILES.d10, { now: noon, publishedToday: 10 }).getTime() === tomorrow + 5 * 60_000)
-  check('🔴 d10 · 오늘 3건 → 오늘 13:25',
-    nextSlotAnchor(PROFILES.d10, { now: noon, publishedToday: 3 }).getTime()
-    === mid.getTime() + (13 * 60 + 25) * 60_000)
+  /**
+   * ── 다음 발행 슬롯 — 표시용. 단계마다 다르다 ──
+   *
+   * 🔴 **시각을 여기 적지 않는다** (2026-09-12). 옛 판은 `00:05` · `13:25` 를 손으로 박아 두어
+   *    `PROFILES` 의 슬롯을 댓글 운영 창 안으로 옮기자 통째로 깨졌다. 값은 정본에서 파생시킨다.
+   */
+  const firstOf = (p: typeof PROFILES.d1): number => Math.min(...p.slots.map(minuteOfDay))
+  const nextTodayAfter = (p: typeof PROFILES.d1, min: number): number | undefined =>
+    p.slots.map(minuteOfDay).sort((a, b) => a - b).find((m) => m > min)
+  const NOON_MIN = 12 * 60
+  // d1 은 슬롯이 오전 하나뿐이라 정오에는 오늘 몫이 남아 있지 않다 → 내일 첫 슬롯
+  check('🔴 d1 · 정오 → 내일 첫 슬롯',
+    nextSlotAnchor(PROFILES.d1, { now: noon, publishedToday: 0 }).getTime()
+    === tomorrow + firstOf(PROFILES.d1) * 60_000)
+  check('🔴 d10 · 오늘 상한을 다 채우면 → 내일 첫 슬롯',
+    nextSlotAnchor(PROFILES.d10, { now: noon, publishedToday: 10 }).getTime()
+    === tomorrow + firstOf(PROFILES.d10) * 60_000)
+  check('🔴 d10 · 오늘 여력이 남으면 → 오늘 남은 첫 슬롯', (() => {
+    const want = nextTodayAfter(PROFILES.d10, NOON_MIN)
+    return want !== undefined
+      && nextSlotAnchor(PROFILES.d10, { now: noon, publishedToday: 3 }).getTime()
+        === mid.getTime() + want * 60_000
+  })())
 
   /**
    * 🔴 **지평은 슬롯이 아니다.** 여기가 이번 수정의 핵심이다.
@@ -138,9 +153,12 @@ console.log('① 준비도 시간축 (지평 ≠ 다음 발행 슬롯)')
 
   check('🔴 두 값이 분리돼 있다 — 지평 ≠ 다음 슬롯',
     d10open.horizonStartAt.getTime() !== d10open.nextSlotAt.getTime())
-  check('🔴 오늘 여력이 남았을 때 그 차이가 실제로 벌어진다',
-    d10open.nextSlotAt.getTime() === mid.getTime() + (13 * 60 + 25) * 60_000
-    && d10open.horizonStartAt.getTime() === tomorrow)
+  check('🔴 오늘 여력이 남았을 때 그 차이가 실제로 벌어진다', (() => {
+    const want = nextTodayAfter(PROFILES.d10, NOON_MIN)
+    return want !== undefined
+      && d10open.nextSlotAt.getTime() === mid.getTime() + want * 60_000
+      && d10open.horizonStartAt.getTime() === tomorrow
+  })())
   check('🔴 오늘 발행 수는 **다음 슬롯만** 바꾼다',
     d10open.nextSlotAt.getTime() !== d10done.nextSlotAt.getTime()
     && d10open.horizonStartAt.getTime() === d10done.horizonStartAt.getTime())
@@ -155,7 +173,7 @@ console.log('① 준비도 시간축 (지평 ≠ 다음 발행 슬롯)')
     d10open.horizonStartAt.getTime() === kstMidnight(noon).getTime() + 864e5)
   check('🔴 지평 일수는 재고 지평과 같다', d10open.horizonDays === HORIZON_DAYS && d10open.horizonDays === 14)
 
-  // 🔴 **네 단계가 같은 창을 본다** — 예전 판은 d1 내일 00:05, d10 오늘 13:25 였다
+  // 🔴 **네 단계가 같은 창을 본다** — 예전 판은 단계마다 다른 창(조각 하루)을 봤다
   const rows = simulateAllStages({ queue: q(140), personas, axis: { now: noon, publishedToday: 3 } })
   check('🔴 네 단계의 지평이 같다', horizonMismatches(rows).length === 0)
   check('🔴 그 지평은 완전한 운영일이다 (KST 0시)',

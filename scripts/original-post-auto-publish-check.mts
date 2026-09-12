@@ -15,6 +15,9 @@ import {
 import { kstDayStart, DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { planMatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 
+/** 🔴 이 회차가 내 단계의 슬롯이다 — 슬롯 판정 자체는 scale-foundation-check 가 본다 */
+const MY_SLOT = { run: true, reason: '09:30 KST 는 이 단계의 슬롯이다' }
+
 let pass = 0
 let fail = 0
 const check = (label: string, ok: boolean): void => {
@@ -146,10 +149,10 @@ console.log('\n③ 줄 세우기 — 오래 기다린 것이 먼저다')
   check('입력 순서를 바꿔도 같다',
     selectAutoTargets([older, newer], allPass).targets.map((t) => t.id).join(',') === 'zzz,aaa')
   // 🔴 후보 2건이면 오래된 1건만 나간다
-  const g = judgeApply({ targets: r.targets, picked: r.targets[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false })
+  const g = judgeApply({ targets: r.targets, picked: r.targets[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT })
   check('🔴 후보 2건이면 오래된 1건을 고른다', g.ok && g.target.id === 'zzz')
   const t2 = selectAutoTargets([older, newer], allPass).targets
-  const g2 = judgeApply({ targets: t2, picked: t2[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false })
+  const g2 = judgeApply({ targets: t2, picked: t2[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT })
   check('🔴 입력 순서가 바뀌어도 같은 1건을 고른다', g2.ok && g2.target.id === 'zzz')
 
   check('decidedAt 이 없으면 createdAt 이 대신한다',
@@ -304,7 +307,7 @@ console.log('\n③-d 🔴 judgeApply membership — 줄 밖 행을 발행하지 
     ok({ id: 'a', decidedAt: D('2026-09-01T00:00:00Z'), createdAt: D('2026-09-01T00:00:00Z') }),
     ok({ id: 'b', decidedAt: D('2026-09-02T00:00:00Z'), createdAt: D('2026-09-02T00:00:00Z') }),
   ], allPass).targets
-  const g = { apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false }
+  const g = { apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT }
 
   check('🟢 줄 안의 행이면 통과', judgeApply({ ...g, targets: line, picked: line[0]! }).ok)
 
@@ -335,7 +338,7 @@ console.log('\n③-d 🔴 judgeApply membership — 줄 밖 행을 발행하지 
 console.log('\n④ 실행 게이트 — 하나라도 어긋나면 멈춘다')
 {
   const one = [ok()]
-  const base = { targets: one, picked: one[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false }
+  const base = { targets: one, picked: one[0]!, apply: true, limit: 1, publishedToday: 0, dailyCap: 1, killSwitchEnabled: false, slot: MY_SLOT }
   check('🟢 전부 맞으면 통과', judgeApply(base).ok)
   check('🔴 --apply 없으면 안 돈다', !judgeApply({ ...base, apply: false }).ok)
   check('🔴 --limit 없으면 안 돈다', !judgeApply({ ...base, limit: null }).ok)
@@ -357,6 +360,13 @@ console.log('\n④ 실행 게이트 — 하나라도 어긋나면 멈춘다')
   check('🔴 오늘 cap 을 채웠으면 안 돈다', !judgeApply({ ...base, publishedToday: 1 }).ok)
   check('🔴 cap 을 넘겼어도 안 돈다', !judgeApply({ ...base, publishedToday: 3 }).ok)
   check('🔴 kill switch 가 켜지면 안 돈다', !judgeApply({ ...base, killSwitchEnabled: true }).ok)
+  // 🔴 내 단계의 회차가 아니면 쓰기 문이 열리지 않는다 — DB write 0
+  check('🔴 내 단계의 슬롯이 아니면 안 돈다',
+    !judgeApply({ ...base, slot: { run: false, reason: '09:20 KST 는 d1 의 슬롯이 아니다' } }).ok)
+  check('🔴 막힌 이유를 슬롯 판정 그대로 말한다', (() => {
+    const r = judgeApply({ ...base, slot: { run: false, reason: '09:20 KST 는 d1 의 슬롯이 아니다' } })
+    return !r.ok && r.reason.includes('09:20')
+  })())
   check('통과하면 대상 1건을 돌려준다', (() => {
     const r = judgeApply(base)
     return r.ok && r.target.id === 'good1'

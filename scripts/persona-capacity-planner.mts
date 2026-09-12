@@ -26,6 +26,7 @@ import { parsePoolDoc, cardToPersona, type PoolCard } from '../src/lib/persona-p
 import {
   PROFILES, derive as deriveProfile, describeProfile,
   effectiveWeeklyCap, slotLabel, type ReleaseStage,
+  SAFEST_PROFILE,
 } from '../src/lib/scale-profile'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { simulateAllStages } from '../src/lib/scale-readiness'
@@ -128,7 +129,12 @@ const now = new Date()
 const todayCount = await prisma.personaActivityLog.count({
   where: { kind: 'post', createdAt: { gte: kstDayStart(now) } },
 })
-const startAt = nextScheduleAt({ now, publishedToday: todayCount, dailyCap: DAILY_PUBLISH_CAP })
+/**
+ * 🔴 다음 예약 — 시각은 `PROFILES` 가 정본이다. 여기서 계산하지 않는다.
+ *    이 화면은 `DAILY_PUBLISH_CAP`(= 안전 기본 profile) 기준으로 Pool 을 따지므로
+ *    그 profile 의 슬롯을 쓴다. 실제 운영 단계의 다음 예약은 관제(`supply:health`)가 낸다.
+ */
+const startAt = nextScheduleAt({ now, publishedToday: todayCount, profile: SAFEST_PROFILE })
 
 await prisma.$disconnect()
 

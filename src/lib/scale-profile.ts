@@ -93,27 +93,52 @@ export const SAFEST_STAGE: ReleaseStage = 'd1'
  *    Pool 19명·주 4건에서 14일 135/140 이었고, 주 5건에서 140/140 이 됐다.
  *    산술 하한(`ceil(70/4)=18명`)은 생활사 hardFilter 를 반영하지 못한다.
  */
+/**
+ * 🔴 **모든 슬롯은 댓글 운영 창(08:00~22:00) 안에 있다** (2026-09-12).
+ *
+ *    옛 판은 네 단계 전부 `00:05 KST` 를 포함했다. 러너의 하루 상한이 KST 자정에 열리므로
+ *    그 직후를 노린 것이었는데, §9.5-g 의 확정 계약과 충돌했다:
+ *    **새 관리형 글의 첫 댓글은 60분 안에** 붙어야 하고 댓글 runner 는 08:07~22:00 에만 돈다.
+ *    00:05 에 올린 글은 첫 댓글까지 **8시간 이상** 기다린다 — 계약 위반이고,
+ *    아침에 처음 온 사람은 "댓글 하나 없는 어제 글" 을 본다.
+ *
+ * 🔴 **지켜야 할 계약은 넷이다** — 포함 관계는 여기 없다.
+ *      ① 단계별 슬롯 수 = `dailyTarget`
+ *      ② 모든 슬롯이 댓글 운영 창 08:00~22:00 안
+ *      ③ 댓글 runner 가동 전제에서 다음 댓글 회차까지 60분 이하
+ *      ④ 워크플로우가 `allStageCronLines()` 를 빠짐없이 예약
+ *
+ * 🟢 **[현재값]** 지금 배치에서는 d1·d3·d5 가 마침 d10 의 부분집합이고 합집합이 10개다.
+ *    🔴 이것은 **관측이지 계약이 아니다.** 창 안이고 댓글 간격을 지키고 슬롯 수가 맞는
+ *    유효한 시간 조정이라면, 포함 관계가 깨져도 막지 않는다 — yml 만 함께 갱신하면 된다.
+ *
+ * 🔴 **첫 댓글 대기 실측**(`planRunnerSchedule(500)` 의 20개 슬롯과 대조):
+ *    최대 **43분** · 60분 초과 **0건** · 22시 넘어가는 글 **0건**. fixture 가 이것을 본다.
+ *    🔴 **예약표상 값이다** — 댓글 runner 가 등록·loaded 되고 그 stage 가 가동된다는 전제다.
+ *    현재 댓글 runner 는 **미등록**이므로 운영 SLA 달성 실적이 아니다.
+ */
 export const PROFILES: Readonly<Record<ReleaseStage, ScaleProfile>> = {
-  // 🔴 지금 운영 중 — `auto-publish.yml` 의 `5 15 * * *` = 00:05 KST 와 정확히 같다
-  d1: { dailyTarget: 1, postsPerWeek: 1, minDaysBetween: 5, slots: [{ hour: 0, minute: 5, count: 1 }] },
+  // 🔴 지금 운영 중 — 오전 한 편. 댓글 회차 09:35 가 5분 뒤에 받는다
+  d1: { dailyTarget: 1, postsPerWeek: 1, minDaysBetween: 5, slots: [{ hour: 9, minute: 30, count: 1 }] },
   d3: {
     dailyTarget: 3, postsPerWeek: 3, minDaysBetween: 2,
-    slots: [{ hour: 0, minute: 5, count: 1 }, { hour: 9, minute: 20, count: 1 }, { hour: 19, minute: 40, count: 1 }],
+    slots: [{ hour: 9, minute: 30, count: 1 }, { hour: 13, minute: 30, count: 1 }, { hour: 19, minute: 0, count: 1 }],
   },
   d5: {
     dailyTarget: 5, postsPerWeek: 4, minDaysBetween: 1,
     slots: [
-      { hour: 0, minute: 5, count: 1 }, { hour: 8, minute: 15, count: 1 }, { hour: 12, minute: 35, count: 1 },
-      { hour: 17, minute: 10, count: 1 }, { hour: 21, minute: 45, count: 1 },
+      { hour: 8, minute: 10, count: 1 }, { hour: 10, minute: 50, count: 1 }, { hour: 13, minute: 30, count: 1 },
+      { hour: 16, minute: 10, count: 1 }, { hour: 19, minute: 0, count: 1 },
     ],
   },
+  // 🔴 80~90분 간격 — 하루가 고르게 채워져야 "계속 사람이 있다" 로 보인다
   d10: {
     dailyTarget: 10, postsPerWeek: 5, minDaysBetween: 1,
     slots: [
-      { hour: 0, minute: 5, count: 1 }, { hour: 7, minute: 20, count: 1 }, { hour: 9, minute: 10, count: 1 },
-      { hour: 11, minute: 35, count: 1 }, { hour: 13, minute: 25, count: 1 }, { hour: 15, minute: 50, count: 1 },
-      { hour: 17, minute: 15, count: 1 }, { hour: 19, minute: 40, count: 1 }, { hour: 21, minute: 5, count: 1 },
-      { hour: 22, minute: 30, count: 1 },
+      { hour: 8, minute: 10, count: 1 }, { hour: 9, minute: 30, count: 1 }, { hour: 10, minute: 50, count: 1 },
+      { hour: 12, minute: 10, count: 1 }, { hour: 13, minute: 30, count: 1 }, { hour: 14, minute: 50, count: 1 },
+      { hour: 16, minute: 10, count: 1 }, { hour: 17, minute: 30, count: 1 }, { hour: 19, minute: 0, count: 1 },
+      { hour: 20, minute: 30, count: 1 },
     ],
   },
 }

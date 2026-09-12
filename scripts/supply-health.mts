@@ -36,7 +36,7 @@ import { LOCK_FILE, LOCK_TTL_MS, RUN_FILE_RE, adaptKeyOf } from '../src/lib/supp
 import { lockAnomaly as processLockAnomaly } from './lib/collect-lock.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
-import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, slotLabel } from '../src/lib/scale-profile'
+import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, minuteOfDay, slotLabel } from '../src/lib/scale-profile'
 import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } from '../src/lib/scale-readiness'
 import { SOURCE_FACTS, THIN_82COOK_SLOTS, type SourceId } from '../src/lib/collect-schedule'
 import { guardSnapshot, rollBudgetDay, type GuardState } from '../src/lib/collect-guard'
@@ -428,9 +428,6 @@ async function main(): Promise<void> {
   }).length
   const historicUnknownProfile = noProfile.length - legacyPublishedToday
 
-  // 🔴 00:05 KST + 유예. cron 은 정시에 돌지 않는다 — 유예 없이 경고하면 거짓 경보다
-  const scheduledPublishAt = new Date(dayStart.getTime() + 5 * 60_000)
-  const graceUntil = new Date(scheduledPublishAt.getTime() + PUBLISH_GRACE_MS)
   // 🔴 발행 판정도 규모 확정 뒤로 미룬다 — 상한이 release 프로필에서 나온다
 
   // ── ③-b 발행 여력 — 🔴 재고가 있어도 사람이 없으면 나가지 못한다 ──
@@ -563,6 +560,21 @@ async function main(): Promise<void> {
     minDaysBetween: resolved.releaseProfile.minDaysBetween,
   }
 
+  /**
+   * 🔴 **오늘의 첫 발행 예정 시각 + 유예.** cron 은 정시에 돌지 않는다 —
+   *    유예 없이 경고하면 거짓 경보다.
+   *
+   * 🔴 **시각을 여기서 계산하지 않는다** (2026-09-12). 옛 판은 `dayStart + 5분` 이었다.
+   *    발행 슬롯을 댓글 운영 창 안으로 옮긴 뒤에도 관제는 00:05 를 기준으로 삼아,
+   *    d1 의 첫 슬롯이 09:30 인데 **01:05 부터 "오늘 발행 0건" 경고**가 떴다.
+   *    기준은 지금 적용된 profile 의 **가장 이른 슬롯**이다.
+   */
+  const firstSlotMin = Math.min(
+    ...resolved.releaseProfile.slots.map(minuteOfDay),
+  )
+  const scheduledPublishAt = new Date(dayStart.getTime() + firstSlotMin * 60_000)
+  const graceUntil = new Date(scheduledPublishAt.getTime() + PUBLISH_GRACE_MS)
+
   // ── ③-d 규모가 정해진 뒤에 판정한다 ──
   const stock = readStock(mapped, CAPACITY_LIMITS)
   const legacyExcluded = live.length - stock.usable
@@ -581,8 +593,9 @@ async function main(): Promise<void> {
     candidates: stock.usable, now,
   })
 
-  // 🔴 오늘 이미 상한을 채웠으면 다음 예약은 **내일** 00:05 KST 다
-  const startAt = nextScheduleAt({ now, publishedToday: todayCount, dailyCap: RELEASE_DAILY_CAP })
+  // 🔴 다음 예약 — 지금 적용된 profile 의 **실제 다음 슬롯**이다.
+  //    오늘 상한을 채웠으면 내일 첫 슬롯, 아니면 오늘 남은 슬롯 중 첫 번째.
+  const startAt = nextScheduleAt({ now, publishedToday: todayCount, profile: resolved.releaseProfile })
   const fc = forecastPublishing({
     queue: forecastQueue,
     personas: personas as never, history, startAt, days: 14,

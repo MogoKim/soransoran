@@ -452,8 +452,11 @@ export function judgeSupply(input: SupplyInput): Finding[] {
 /**
  * 🔴 발행 예정 시각을 넘긴 뒤 **얼마나 기다렸다가** 경고할 것인가.
  *
- * GitHub Actions cron 은 정시를 보장하지 않는다 — 00:05 예약이 수십 분 밀린다.
- * 유예 없이 경고하면 매일 새벽 거짓 경보가 뜨고, 며칠이면 사람이 화면을 믿지 않는다.
+ * GitHub Actions cron 은 정시를 보장하지 않는다 — 예약이 수십 분 밀린다.
+ * 유예 없이 경고하면 매일 거짓 경보가 뜨고, 며칠이면 사람이 화면을 믿지 않는다.
+ *
+ * 🔴 **기준 시각은 지금 적용된 release profile 의 첫 슬롯**이다(관제가 그것을 넘긴다).
+ *    옛 판은 `00:05` 고정이라, 슬롯을 09:30 으로 옮긴 뒤에도 01:05 부터 경고가 떴다.
  */
 export const PUBLISH_GRACE_MS = 60 * 60 * 1000
 
@@ -464,9 +467,10 @@ export type PublishInput = {
   /**
    * 예정 시각 + **유예**가 지났는가.
    *
-   * 🔴 GitHub Actions cron 은 정시에 돌지 않는다. 00:05 KST 예약이 수십 분 늦는 일이 흔하다 —
-   *    00:05 직후 바로 경고하면 **정상 지연을 장애로 부른다.**
+   * 🔴 GitHub Actions cron 은 정시에 돌지 않는다. 예약이 수십 분 늦는 일이 흔하다 —
+   *    첫 슬롯 직후 바로 경고하면 **정상 지연을 장애로 부른다.**
    *    그래서 예정 시각과 경고 시각을 나눈다 (`PUBLISH_GRACE_MS`).
+   *    🔴 예정 시각은 호출부가 **profile 의 첫 슬롯**에서 만든다 — 여기에 상수를 두지 않는다.
    */
   afterPublishGrace: boolean
   /** 큐에서 PUBLISHED 인데 Post 가 없는 것 등 정합이 깨진 수 */

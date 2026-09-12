@@ -8,9 +8,10 @@ import {
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 import {
   planRunnerSchedule, FIRST_COMMENT_MAX_MINUTES,
+  RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
 } from './lib/persona-comment-runner-template'
 import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
-import { PROFILES } from '../src/lib/scale-profile'
+import { PROFILES, RELEASE_STAGES, derive, minuteOfDay } from '../src/lib/scale-profile'
 
 const MASTER = 'docs/operations/MASTER-OPERATING-SYSTEM.md'
 const INDEX = 'docs/operations/README.md'
@@ -447,10 +448,31 @@ check('Master의 Haiku 역할이 현재 코드와 일치한다',
 check('분석 모델과 생성 모델 결정을 구분한다', master.includes('분석 모델 선정은 `생성 모델` 선정을 의미하지 않는다'))
 
 const workflow = readFileSync('.github/workflows/auto-publish.yml', 'utf8')
-check('현재 workflow는 d1 단일 cron이다', /- cron: '5 15 \* \* \*'/.test(workflow))
-check('현재 scheduled publish는 회차당 1건이다', workflow.includes('original-post-auto-publish.mts --apply --limit=1'))
-check('Master가 workflow 1슬롯과 limit 1을 현재 상태로 기록한다',
-  master.includes('1슬롯/day, `--limit=1`'))
+/**
+ * 🔴 **문서와 코드가 갈라지지 않는가** — 모순만 잡는다 (2026-09-12).
+ *
+ *    옛 판은 `master.includes('1슬롯/day, --limit=1')` 로 **고장난 상태를 고정**하고 있었다.
+ *    워크플로우가 네 단계 슬롯을 예약하게 바뀌어도 문서가 "1슬롯/day" 라고 말하면
+ *    이 검사는 초록이었다. 검사가 낡은 사실의 편에 서 있었던 것이다.
+ *
+ *    🔴 문자열 개수를 늘려 부풀리지 않는다. **사실이 갈라지는 다섯 지점**만 본다.
+ */
+check('현재 scheduled publish는 회차당 1건이다',
+  /original-post-auto-publish\.mts --apply --limit=1\b/.test(workflow))
+check('🔴 workflow 상단이 "매일 한 번" 이라고 주장하지 않는다', !workflow.includes('매일 한 번'))
+check('🔴 Master 현재 상태에 workflow 1슬롯/day 가 남아 있지 않다', !master.includes('1슬롯/day'))
+check('🔴 Master 현재 병목에 workflow 1/10 슬롯이 남아 있지 않다', (() => {
+  // 취소선(~~…~~)으로 해소를 적은 줄은 역사 기록이다 — 현재 주장만 본다
+  const live = master.split('\n').filter((l) => !l.includes('~~'))
+  return !live.some((l) => l.includes('1/10 슬롯'))
+})())
+check('🔴 현재 설정을 "저장된 d1" 이라고 오기하지 않는다',
+  /`SORAN_CAPACITY_STAGE`\s*\|\s*🔴 \*\*Variable 없음\*\*/.test(master)
+  && /`SORAN_RELEASE_STAGE`\s*\|\s*🔴 \*\*Variable 없음\*\*/.test(master))
+check('🔴 d3 전환 안내에 capacity 와 release 가 둘 다 있다', (() => {
+  const m = /#### d3 로 올리는 절차[\s\S]*?(?=\n#{1,4} |$)/.exec(master)?.[0] ?? ''
+  return m.includes('SORAN_CAPACITY_STAGE=d3') && m.includes('SORAN_RELEASE_STAGE=d3')
+})())
 
 const historicalDocs = [
   'docs/operations/2026-08-26-soransoran-milestones.md',
@@ -794,8 +816,31 @@ check('🔴 운영 창을 08~22 로 못박는다',
   && master.includes('24시간으로 만들지 않는다'))
 check('🔴 글 발행도 같은 창 안에 배치해야 한다고 적는다',
   master.includes('관리형 글 발행도 같은 창 안에 배치해야 한다'))
-check('🔴 이번 PR 에서 글 100/day 로 확장하지 않는다고 적는다',
-  master.includes('이번 PR 에서 글 파이프라인을 100/day 로 확장하지 않는다'))
+check('🔴 글 100/day 확장은 별도 승인 대상이라고 적는다',
+  master.includes('글 파이프라인을 100/day 로 확장하는 것은 여전히 별도 승인 대상이다'))
+/**
+ * 🔴 **글 슬롯이 댓글 운영 창 안에 있는가** — 문서가 아니라 **코드**에 묻는다 (2026-09-12).
+ *
+ *    §9.5-g 는 "창 밖에 글을 내보내는 것이 계약 위반" 이라고 적어 두고도
+ *    `PROFILES` 는 네 단계 전부 `00:05` 를 갖고 있었다. 문서와 코드가 갈라진 것이다.
+ *    문자열을 세지 않고 **실제 슬롯과 실제 댓글 회차**를 대조한다.
+ */
+{
+  const commentMins = planRunnerSchedule(BOOTSTRAP_DAILY_MAX).slots
+    .map(minuteOfDay).sort((a, b) => a - b)
+  const winStart = RUNNER_WINDOW_START_HOUR * 60
+  const winEnd = RUNNER_WINDOW_END_HOUR * 60
+  const allPostMins = RELEASE_STAGES.flatMap((st) => PROFILES[st].slots.map(minuteOfDay))
+  check('🔴 모든 공개 슬롯이 댓글 운영 창 안이다 (코드 대조)',
+    allPostMins.length > 0 && allPostMins.every((m) => m >= winStart && m <= winEnd))
+  check('🔴 모든 공개 슬롯의 첫 댓글이 60분 안이다 (코드 대조)',
+    allPostMins.every((m) => {
+      const next = commentMins.find((c) => c >= m)
+      return next !== undefined && next - m <= FIRST_COMMENT_MAX_MINUTES
+    }))
+  check('🔴 00:05 슬롯이 어느 단계에도 남아 있지 않다',
+    !RELEASE_STAGES.some((st) => PROFILES[st].slots.some((s) => s.hour === 0 && s.minute === 5)))
+}
 /** 🔴 Persona 하루 1건 폐기를 기록으로 남긴다 */
 check('🔴 Persona 하루 1건 폐기를 역사로 남긴다',
   master.includes('Persona **하루 1건** bootstrap')
@@ -859,6 +904,28 @@ check('🔴 CURRENT-MILESTONE 이 그 목표의 단일 정본이다', (() => {
   const m = readFileSync('docs/operations/CURRENT-MILESTONE.md', 'utf-8')
   return m.includes('100건/day') && m.includes('1~5건')
 })())
+
+/**
+ * 🔴 **단계 진입 게이트는 `derive(profile).stockTarget` 하나다** (2026-09-12).
+ *
+ *    옛 판은 "재고 300 을 넘어야 d1 해제" 라고 적혀 있었다. 그런데 코드의 d3 재고 목표는
+ *    42 다 — 문서가 코드보다 7배 높은 별도 게이트를 만들어 두고 있었고, 그 수는
+ *    어디서도 계산되지 않았다. 재고 100·300·700 은 **성장 마일스톤**이지 진입 규제가 아니다.
+ *
+ *    🔴 문서가 그 값을 복제하므로 **코드에서 계산한 값과 같은지** 본다.
+ */
+{
+  const milestone = readFileSync('docs/operations/CURRENT-MILESTONE.md', 'utf-8')
+  for (const stage of ['d3', 'd5', 'd10'] as const) {
+    const want = derive(PROFILES[stage]).stockTarget
+    check(`🔴 CURRENT-MILESTONE 의 ${stage} 재고 목표가 코드(${want})와 같다`,
+      new RegExp(`\\| ${stage} \\| \\*\\*${want}\\*\\* \\|`).test(milestone))
+  }
+  check('🔴 재고 300 을 d3 진입 게이트로 쓰지 않는다',
+    !/재고\s*300\s*을?\s*(넘어야|이상이어야)/.test(milestone))
+  check('🔴 100·300·700 은 성장 마일스톤이라고 적는다',
+    milestone.includes('성장 마일스톤이지'))
+}
 
 console.log(`\nMaster 운영 문서 검사: ${passed} pass, ${failed} fail`)
 if (failed > 0) process.exit(1)

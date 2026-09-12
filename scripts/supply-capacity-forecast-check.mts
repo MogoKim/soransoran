@@ -18,6 +18,9 @@ import {
   type BatchDraft, type PersonaForMatch,
 } from '../src/lib/original-post-persona-match'
 import { pickPublishTarget } from '../src/lib/original-post-auto-publish'
+// 🔴 슬롯 시각은 여기 적지 않는다 — PROFILES 가 정본이고 이 파일은 파생만 한다
+import { PROFILES, minuteOfDay, slotLabel, type ReleaseStage } from '../src/lib/scale-profile'
+import { judgePublish, PUBLISH_GRACE_MS } from '../src/lib/supply-health'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 
@@ -55,20 +58,100 @@ check('🔴 표시에 KST 가 드러난다', kstStamp(NOW).endsWith('KST'))
 check('🔴 matchedAt UTC 13:38 은 KST 22:38 이다',
   kstStamp(utc('2026-09-02T13:38:00.000Z')).startsWith('09-02 22:38'))
 
-// ── ② 다음 예약 — 오늘 cap 을 채웠으면 내일 ──
-check('🔴 오늘 이미 1/1 이면 다음 예약은 **내일** 00:05 KST 다', (() => {
-  const at = nextScheduleAt({ now: NOW, publishedToday: 1, dailyCap: 1 })
-  return kstDateLabel(at) === '2026-09-08' && kstStamp(at).includes('00:05')
+/**
+ * ── ② 다음 예약 — 🔴 **시각은 `PROFILES` 가 정본이다** ──
+ *
+ * 🔴 옛 판은 `PUBLISH_HOUR_KST=0 · PUBLISH_MINUTE_KST=5` 로 "다음 발행은 00:05" 를
+ *    여기서 다시 계산했다. 발행 슬롯을 댓글 운영 창 안으로 옮긴 뒤에도 관제·예측은
+ *    00:05 를 가리켜, d3 에서 09:30 에 내고 나면 다음이 13:30 인데 "내일 00:05" 라고 했다.
+ *    이제 `nextSlotAnchor` 에 위임한다 — 시험도 시각을 적지 않고 profile 에서 파생시킨다.
+ */
+/** KST `HH:MM` 로 그 날짜의 UTC Date */
+const kstAt = (day: string, hhmm: string): Date => {
+  const [h, m] = hhmm.split(':').map(Number) as [number, number]
+  return new Date(`${day}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+09:00`)
+}
+const slotsOf = (st: ReleaseStage): string[] =>
+  [...PROFILES[st].slots].sort((a, b) => minuteOfDay(a) - minuteOfDay(b)).map(slotLabel)
+
+/** 🔴 **주석이 아니라 코드를 본다** — 이 저장소는 옛 결함을 원문으로 적어 둔다 */
+const codeOf = (f: string): string => readFileSync(f, 'utf-8')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n')
+
+check('🔴 00:05 고정 상수가 코드에서 사라졌다', (() => {
+  const src = codeOf('src/lib/supply-capacity-forecast.ts')
+  return !/PUBLISH_HOUR_KST/.test(src) && !/PUBLISH_MINUTE_KST/.test(src)
 })())
-check('🟢 오늘 예약 전이고 상한도 안 찼으면 오늘이다', (() => {
-  // KST 09-07 00:03 = UTC 09-06 15:03
-  const at = nextScheduleAt({ now: utc('2026-09-06T15:03:00.000Z'), publishedToday: 0, dailyCap: 1 })
-  return kstDateLabel(at) === '2026-09-07'
+check('🔴 nextScheduleAt 이 nextSlotAnchor 에 위임한다',
+  /return nextSlotAnchor\(input\.profile/.test(codeOf('src/lib/supply-capacity-forecast.ts')))
+check('🔴 관제가 첫 슬롯을 profile 에서 읽는다 — dayStart + 5분이 아니다', (() => {
+  const src = codeOf('scripts/supply-health.mts')
+  return /releaseProfile\.slots/.test(src) && !/dayStart\.getTime\(\) \+ 5 \* 60_000/.test(src)
 })())
-check('🔴 예약 시각이 지났으면 오늘 0건이어도 내일이다', (() => {
-  const at = nextScheduleAt({ now: NOW, publishedToday: 0, dailyCap: 1 })
-  return kstDateLabel(at) === '2026-09-08'
+
+// ⑤ d3 첫 발행 뒤 오전 → 다음 예약은 그날 두 번째 슬롯
+check('🔴 d3 · 첫 발행 뒤 오전 → 오늘 두 번째 슬롯', (() => {
+  const [first, second] = slotsOf('d3') as [string, string]
+  const at = nextScheduleAt({
+    now: new Date(kstAt('2026-09-07', first).getTime() + 30 * 60_000),
+    publishedToday: 1, profile: PROFILES.d3,
+  })
+  return kstDateLabel(at) === '2026-09-07' && kstStamp(at).includes(second)
 })())
+// ⑥ d3 오늘 상한 완료 → 내일 첫 슬롯
+check('🔴 d3 · 오늘 3건 완료 → 내일 첫 슬롯', (() => {
+  const first = slotsOf('d3')[0]!
+  const at = nextScheduleAt({
+    now: kstAt('2026-09-07', '20:00'), publishedToday: 3, profile: PROFILES.d3,
+  })
+  return kstDateLabel(at) === '2026-09-08' && kstStamp(at).includes(first)
+})())
+// ⑦ d5 · d10 도 자기 profile 슬롯에서 고른다
+for (const st of ['d1', 'd5', 'd10'] as const) {
+  check(`🔴 ${st} · 다음 예약이 자기 profile 슬롯이다`, (() => {
+    const at = nextScheduleAt({
+      now: kstAt('2026-09-07', '00:30'), publishedToday: 0, profile: PROFILES[st],
+    })
+    return slotsOf(st).some((lab) => kstStamp(at).includes(lab))
+  })())
+  check(`🔴 ${st} · 오늘 상한을 채우면 내일 첫 슬롯이다`, (() => {
+    const at = nextScheduleAt({
+      now: kstAt('2026-09-07', '12:00'),
+      publishedToday: PROFILES[st].dailyTarget, profile: PROFILES[st],
+    })
+    return kstDateLabel(at) === '2026-09-08' && kstStamp(at).includes(slotsOf(st)[0]!)
+  })())
+}
+check('🔴 어느 단계의 다음 예약도 00:05 가 아니다', (['d1', 'd3', 'd5', 'd10'] as const).every((st) => {
+  const at = nextScheduleAt({ now: kstAt('2026-09-07', '00:30'), publishedToday: 0, profile: PROFILES[st] })
+  return !kstStamp(at).includes('00:05')
+}))
+
+// ── ②-b 관제 경고 기준 — 🔴 첫 슬롯 + 유예 이후에만 운다 ──
+{
+  const firstMin = (st: ReleaseStage): number => Math.min(...PROFILES[st].slots.map(minuteOfDay))
+  const graceMin = PUBLISH_GRACE_MS / 60_000
+  const warns = (st: ReleaseStage, hhmm: string, todayCount: number): boolean => {
+    const now = kstAt('2026-09-07', hhmm)
+    const scheduled = new Date(kstDayStart(now).getTime() + firstMin(st) * 60_000)
+    const graceUntil = new Date(scheduled.getTime() + PUBLISH_GRACE_MS)
+    return judgePublish({
+      todayCount, dailyCap: PROFILES[st].dailyTarget,
+      afterPublishGrace: now.getTime() >= graceUntil.getTime(),
+      mismatched: 0, legacyPublishedToday: 0, historicUnknownProfile: 0,
+      candidates: 5, now,
+    }).some((x) => x.code === 'PUBLISH_NONE_TODAY')
+  }
+  const d1First = firstMin('d1')
+  const hm = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  check('① d1 · 첫 슬롯 1분 전 · 발행 0 → 경고 없음', !warns('d1', hm(d1First - 1), 0))
+  check('② d1 · 첫 슬롯 직후 → 유예 중, 경고 없음', !warns('d1', hm(d1First), 0))
+  check(`③ d1 · 유예(${graceMin}분) 1분 전 → 경고 없음`, !warns('d1', hm(d1First + graceMin - 1), 0))
+  check(`④ d1 · 유예 지남 · 발행 0 → WARNING`, warns('d1', hm(d1First + graceMin), 0))
+  check('🔴 옛 판이라면 01:05 에 이미 울었다 — 지금은 조용하다', !warns('d1', '01:05', 0))
+  check('🟢 발행이 있었으면 유예 뒤에도 조용하다', !warns('d1', hm(d1First + graceMin + 60), 1))
+}
 
 // ── ③ rolling 7일 경계 ──
 const h = (code: string, ...iso: string[]): PersonaHistory =>

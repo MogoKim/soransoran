@@ -6,6 +6,9 @@
 
 import { readFileSync } from 'node:fs'
 
+// 🔴 슬롯 시각은 PROFILES 가 정본이다 — 여기서 적지 않는다
+import { PROFILES, minuteOfDay } from '../src/lib/scale-profile'
+
 import { THIN_82COOK_SLOTS } from '../src/lib/collect-schedule'
 
 import {
@@ -518,29 +521,51 @@ check('🔴 [9] CRITICAL 이 있어도 숫자 요약은 남는다', (() => {
   const r = pub({ mismatched: 1 })
   return r.some((x) => x.level === 'CRITICAL') && r.some((x) => x.code === 'PUBLISH_OK')
 })())
-// ══ 🔴 발행 지연 유예 — cron 은 정시에 돌지 않는다 ══
+/**
+ * ══ 🔴 발행 지연 유예 — cron 은 정시에 돌지 않는다 ══
+ *
+ * 🔴 **기준 시각은 profile 의 첫 슬롯이다** (2026-09-12). 옛 판은 `DAY0 + 5분` 고정이라
+ *    d1 의 첫 슬롯이 09:30 으로 옮겨진 뒤에도 **01:05 부터** 경고가 떴다.
+ *    시각을 여기 적지 않고 `PROFILES` 에서 파생시킨다.
+ */
 const KST = 9 * HOUR
 const DAY0 = new Date('2026-09-08T00:00:00.000Z').getTime() - KST  // KST 00:00
+/** 지금 운영 단계(d1)의 첫 슬롯 — 분 */
+const FIRST_SLOT_MIN = Math.min(...PROFILES.d1.slots.map(minuteOfDay))
+const GRACE_MIN = PUBLISH_GRACE_MS / 60_000
 const atKst = (h: number, m: number, s2 = 0): boolean => {
   const t = DAY0 + h * HOUR + m * 60_000 + s2 * 1000
-  const graceUntil = DAY0 + 5 * 60_000 + PUBLISH_GRACE_MS
+  const graceUntil = DAY0 + FIRST_SLOT_MIN * 60_000 + PUBLISH_GRACE_MS
   return t >= graceUntil
 }
-check('🟢 [경계] 00:04:59 → 유예 전, 경고 없음', (() => {
-  const r = pub({ todayCount: 0, afterPublishGrace: atKst(0, 4, 59) })
+/** 첫 슬롯에서 `d` 분 떨어진 시각 */
+const offSlot = (d: number): { h: number; m: number } => {
+  const t = FIRST_SLOT_MIN + d
+  return { h: Math.floor(t / 60), m: t % 60 }
+}
+check('🟢 [경계] 첫 슬롯 1분 전 → 유예 전, 경고 없음', (() => {
+  const { h, m } = offSlot(-1)
+  const r = pub({ todayCount: 0, afterPublishGrace: atKst(h, m, 59) })
   return !r.some((x) => x.code === 'PUBLISH_NONE_TODAY')
 })())
-check('🟢 [경계] 00:05 정각 → 지연 허용, 경고 없음', (() => {
-  const r = pub({ todayCount: 0, afterPublishGrace: atKst(0, 5) })
+check('🟢 [경계] 첫 슬롯 정각 → 지연 허용, 경고 없음', (() => {
+  const { h, m } = offSlot(0)
+  const r = pub({ todayCount: 0, afterPublishGrace: atKst(h, m) })
   return !r.some((x) => x.code === 'PUBLISH_NONE_TODAY')
 })())
-check('🟢 [경계] 01:04:59 → 아직 유예 안, 경고 없음', (() => {
-  const r = pub({ todayCount: 0, afterPublishGrace: atKst(1, 4, 59) })
+check(`🟢 [경계] 유예(${GRACE_MIN}분) 1분 전 → 아직 경고 없음`, (() => {
+  const { h, m } = offSlot(GRACE_MIN - 1)
+  const r = pub({ todayCount: 0, afterPublishGrace: atKst(h, m, 59) })
   return !r.some((x) => x.code === 'PUBLISH_NONE_TODAY')
 })())
-check('🟡 [경계] 01:05 이후 0건 → WARNING', (() => {
-  const r = pub({ todayCount: 0, afterPublishGrace: atKst(1, 5) })
+check('🟡 [경계] 유예 지난 뒤 0건 → WARNING', (() => {
+  const { h, m } = offSlot(GRACE_MIN)
+  const r = pub({ todayCount: 0, afterPublishGrace: atKst(h, m) })
   return r.some((x) => x.code === 'PUBLISH_NONE_TODAY' && x.level === 'WARNING')
+})())
+check('🔴 [회귀] 옛 기준(00:05)이라면 01:05 에 울었다 — 지금은 조용하다', (() => {
+  const r = pub({ todayCount: 0, afterPublishGrace: atKst(1, 5) })
+  return !r.some((x) => x.code === 'PUBLISH_NONE_TODAY')
 })())
 check('🟢 [경계] 유예가 지나도 이미 1건이면 정상', (() => {
   const r = pub({ todayCount: 1, afterPublishGrace: atKst(2, 0) })
