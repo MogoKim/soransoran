@@ -19,12 +19,14 @@
  * 🔴 **DB · Sheet · LLM · 발행 · noindex · Raw Vault · 네이버 · 82cook 없음.**
  */
 import { safetyFilter, type SafetyResult } from './micro-seed-safety-filter.mjs'
+/**
+ * 🔴 **독창성 기준은 이 저장소에 한 벌뿐이다** (2026-09-13).
+ *    여기서 숫자를 다시 적으면 생성 쪽과 적재 쪽의 기준이 갈라진다 — 실제로 그랬다.
+ */
+import { measureOriginality, judgeCopy, type OriginalityMeasure } from '../../src/lib/draft-originality'
 
 /** 🔴 브랜드 규칙 — 이 낱말들은 어디에도 쓰지 않는다 */
 export const BANNED_HONORIFICS: readonly string[] = ['시니어', '어르신', '노인', '실버'] as const
-
-/** 🔴 원문 제목과 이만큼 연속으로 겹치면 '소재만 가져왔다' 가 아니다 */
-export const MAX_SOURCE_OVERLAP = 6
 
 /**
  * 🔴 원천 하나당 만드는 초안 수 — **2개다** (2026-09-06, 3개에서 줄였다).
@@ -411,22 +413,7 @@ export function findMaterial(title: string): Material {
   }
 }
 
-const norm = (s: string): string => s.replace(/\s+/g, '')
-
-/** 원문 제목과 가장 길게 연속으로 겹치는 조각 */
-export function longestOverlap(draft: string, sourceTitle: string): { len: number; frag: string } {
-  const A = norm(draft)
-  const B = norm(sourceTitle)
-  let best = { len: 0, frag: '' }
-  for (let i = 0; i < A.length; i++) {
-    for (let j = i + best.len + 1; j <= A.length; j++) {
-      const f = A.slice(i, j)
-      if (!B.includes(f)) break
-      if (f.length > best.len) best = { len: f.length, frag: f }
-    }
-  }
-  return best
-}
+// 🔴 겹침을 재는 함수는 여기 두지 않는다 — `src/lib/draft-originality.ts` 하나다.
 
 export type Draft = {
   draftNo: number
@@ -440,8 +427,8 @@ export type Draft = {
    */
   generatedAt: string
   safety: SafetyResult
-  overlap: number
-  overlapFragment: string
+  /** 🔴 **잰 값이지 판정이 아니다.** 기준은 `src/lib/draft-originality.ts` 한 곳에 있다 */
+  originality: OriginalityMeasure
   /** 🔴 버려야 할 원문 낱말이 초안에 남았는가 — 남으면 초안이 아니라 복붙이다 */
   leakedTokens: string[]
   bannedHonorifics: string[]
@@ -528,7 +515,7 @@ export function expandSeed(
     const dTitle = t.title(m)
     const dBody = t.body(m)
     const full = `${dTitle}\n${dBody}`
-    const ov = longestOverlap(full, title)
+    const originality = measureOriginality(full, title)
     const safety = safetyFilter({
       title: dTitle, body: dBody, comments: [], qualityFlags: [], imageCount: 0, accessStatus: 'ok',
     })
@@ -539,9 +526,10 @@ export function expandSeed(
       draftNo: i + 1,
       title: dTitle, body: dBody, bodyLength: [...dBody].length,
       generatedAt,
-      safety, overlap: ov.len, overlapFragment: ov.frag,
+      safety, originality,
       leakedTokens: leaked, bannedHonorifics: banned,
-      ok: safety.verdict === 'pass' && ov.len < MAX_SOURCE_OVERLAP && leaked.length === 0 && banned.length === 0,
+      ok: safety.verdict === 'pass' && !judgeCopy(originality).copied
+        && leaked.length === 0 && banned.length === 0,
     }
   })
 
@@ -568,7 +556,7 @@ export function expandSeed(
 export const DRY_RUN_COLUMNS: readonly string[] = [
   'sourceArticleId', 'sourceTitle', 'topic', 'material', 'matched', 'generalized', 'direction',
   'draftNo', 'title', 'body', 'bodyLength',
-  'safetyVerdict', 'safetyReasons', 'maxOverlapWithSourceTitle', 'leakedTokens', 'ok', 'note',
+  'safetyVerdict', 'safetyReasons', 'originality', 'leakedTokens', 'ok', 'note',
   // 🔴 §4-AC 간극 보강 (2026-09-05). **앞 17개 위치는 그대로** —
   //    TSV 를 위치로 읽는 쪽이 있어서 중간 삽입은 조용한 오독이 된다.
   'sourceSite', 'generatedAt',

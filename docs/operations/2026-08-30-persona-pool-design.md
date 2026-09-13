@@ -221,6 +221,55 @@ menopause       전 4 · 진행중 8 · 후 8
 
 ---
 
+## §4-1 🔴 정본 셋의 역할 — 무엇이 무엇을 정하는가 (2026-09-13 확정)
+
+같은 Persona 를 세 곳이 들고 있다. **역할이 다르다.** 헷갈리면 한쪽만 고쳐진다.
+
+| 정본 | 무엇 | 코드 근거 | 누가 읽나 |
+|---|---|---|---|
+| **이 문서 §5 카드** | Persona **정체성 원본** — 결혼·자녀·돌봄·갱년기·말투 | `persona-pool-card.parsePoolDoc` → `cardToPersona` | **생성 전** 선택 (`voice-persona-plan.planVoicePersonas`) |
+| **production cohort** | 실제로 쓰는 **code universe** (24명) | `src/lib/persona-cohort.ts` `PRODUCTION_PERSONA_CODES` | 말투 자산 배정 (`planBundles`) |
+| **운영 DB `Persona.identity`** | 발행 시점의 **집행 정본** — 여기에 없으면 발행되지 않는다 | `scripts/original-post-auto-publish.mts` `identity.childrenCount` 등 **top-level** | **발행 직전** `hardFilter` |
+
+### 🔴 한 줄 원칙
+
+```
+카드 = 누구인가            (생성이 본다)
+cohort = 누가 나가는가      (자산이 본다)
+DB   = 지금 무엇으로 발행되는가 (발행이 본다)
+```
+
+`P09` 는 카드에는 있으나 cohort·DB 에 없다 — `persona-cohort.EXCLUDED_CODES` 에 이유가 적혀 있다.
+
+### 🔴 밴드는 **두 가지 뜻**으로 쓰인다 — 대조할 때 섞지 않는다
+
+| 어디 | 무엇을 담나 | 예 (P17) |
+|---|---|---|
+| **카드 파서** `readChildren` | 매칭이 쓸 **고유 밴드 집합** — 중복 없이 모은다 | `['성인']` |
+| **운영 DB** `identity.childrenAgeBands` | **자녀 한 명당 한 칸** — 몇 명이 어느 나이대인지 | `['성인','성인']` = 성인 자녀 2명 |
+
+`['성인','성인']` 은 **오류 중복이 아니다.** 지우면 자녀 수 정보가 사라진다.
+두 정본을 맞대 볼 때는 **고유 밴드 집합끼리** 비교한다 —
+`hardFilter` 도 `bands.includes(...)` 로 포함 여부만 보므로 중복은 판정을 바꾸지 않는다.
+
+자녀 나이대의 확정 정본은 **`scripts/persona-children-age-bands.mts` (2026-09-02 창업자 확정)** 이다.
+2026-09-13 대조에서 P05 카드가 `중고생·초등` 으로 어긋나 있어 **카드를 확정값에 맞춰 고쳤다**
+(`대학생·중고생`). DB 는 건드리지 않았다.
+
+### 🔴 `identity` 는 **평평하다**
+
+```
+identity.childrenCount      ✅  identity.children.count     ❌ 없는 경로
+identity.childrenAgeBands   ✅  identity.children.ageBands  ❌ 없는 경로
+```
+
+중첩으로 읽으면 **전원이 무자녀로 판정된다.** 2026-09-07 에 P10·P17 이 이렇게 부당 차단됐고,
+2026-09-13 검증 중 임시 스크립트가 같은 실수를 반복해 "DB 24명 전원 무자녀" 라는
+잘못된 결론을 냈다. 생산 경로 3곳(`original-post-auto-publish` · `persona-capacity-planner` ·
+`supply-health`)은 **전부 평평하게 읽고 있다** — 코드로 확인했다.
+
+---
+
 ## §5 Persona 카드 25명
 
 > 🔴 **문서 내부 불일치 보정 (2026-09-08)**
@@ -340,7 +389,7 @@ noGo 자녀 있는 척 · "우리 애도" 류 발화 · 무자녀를 화제로 �
 ### P05 — 시어머니 모시는 집
 
 ```
-ageBand 40대 후반 · 읍면 · 기혼(원만) · 자녀 2(중고생·초등, 동거) · 자녀관계 가까움
+ageBand 40대 후반 · 읍면 · 기혼(원만) · 자녀 2(대학생·중고생, 동거) · 자녀관계 가까움
 전업 · 보통 · 자가 · 갱년기 전 · 🔴 간병 상시
 성격    무던함 · 참을성 · 속정 깊음 · 표현 서툼 · 성실
 voiceCore  구어체 · 짧고 툭툭 · "~네요" · 이모티콘 가끔 · 띄어쓰기 불규칙

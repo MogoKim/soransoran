@@ -120,7 +120,7 @@ console.log('\n③ 조합 탐색 규칙 (synthetic)')
 {
   const draft = (n: number, title = '오늘', body = '국수를 삶았어요.'): QueueCandidate =>
     ({ queueId: `q${n}`, title, body, gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null,
-      capturedAt: new Date('2026-09-08T00:00:00Z') })
+      voice: null, profile: 'human' as const, capturedAt: new Date('2026-09-08T00:00:00Z') })
   // 🔴 `as never` 를 쓰지 않는다 — 카드에 필드가 늘었을 때 컴파일러가 잡아야 한다.
   //    실측: 캐스팅 때문에 `noGoTopics` 누락이 런타임 오류로만 드러났다
   const card = (code: string, over: Partial<PoolCard> = {}): PersonaForMatch =>
@@ -232,8 +232,8 @@ noGo ${noGo}
     cardToPersona(c).noGoTopics.join(',') === '시어머니 험담,며느리 훈계')
 
   // 🔴 실제로 hardFilter 가 막는가 — 넘기기만 하고 안 걸리면 의미가 없다
-  const hit: BatchDraft = { queueId: 'q0', title: '오늘', body: '시어머니 험담을 좀 했어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null }
-  const miss: BatchDraft = { queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null }
+  const hit: BatchDraft = { queueId: 'q0', title: '오늘', body: '시어머니 험담을 좀 했어요.', gateVerdict: 'PASS', createdAt: 0, voice: null, profile: 'human' as const, assignedPersonaCode: null }
+  const miss: BatchDraft = { queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, voice: null, profile: 'human' as const, assignedPersonaCode: null }
   check('🔴 noGo 소재 글은 그 사람에게 가지 않는다', planBatch([hit], [cardToPersona(c)]).assignments[0]!.assigned === null)
   check('그 밖의 글은 정상 배정된다', planBatch([miss], [cardToPersona(c)]).assignments[0]!.assigned === 'P99')
   check('🔴 차단 사유가 NOGO_TOPIC 이다',

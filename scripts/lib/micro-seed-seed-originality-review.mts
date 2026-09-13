@@ -11,6 +11,10 @@
  *
  * 🔴 **DB · Sheet · LLM · 발행 · noindex · Raw Vault · 네이버 · 82cook 없음.**
  */
+import { describeOriginality, readMeasure } from '../../src/lib/draft-originality'
+
+/** 🔴 잰 값이 없을 때의 자리 — "0" 이지 "통과" 가 아니다. 판정은 `judgeCopy` 가 따로 한다 */
+const ZERO_MEASURE = { runWords: 0, runChars: 0, coverRatio: 0 }
 
 /** 사람이 누를 수 있는 것 — 🔴 여기에 '발행' 이 없다는 것이 계약이다 */
 export const REVIEW_DECISIONS: readonly (readonly [string, string])[] = [
@@ -33,8 +37,8 @@ export type DraftIn = {
   body?: string
   bodyLength?: number
   safety?: { verdict?: string; reasons?: { code?: string }[]; summary?: string }
-  overlap?: number
-  overlapFragment?: string
+  /** 🔴 잰 값. 판정은 `draft-originality.ts` 가 한다 */
+  originality?: unknown
   leakedTokens?: string[]
   bannedHonorifics?: string[]
   ok?: boolean
@@ -72,8 +76,9 @@ export type DraftCard = {
   safetyReasons: string
   safetySummary: string
   /** 🔴 원문 복붙 금지 검증 결과 — 화면이 그대로 보여준다 */
-  maxOverlap: number
-  overlapFragment: string
+  originality: string
+  /** 🔴 권장 초안을 고를 때 쓰는 잰 값 — 낮을수록 원문에서 멀다 */
+  originalityRunChars: number
   leakedTokens: string[]
   bannedHonorifics: string[]
   /** 🟢 위 셋이 모두 깨끗한가 */
@@ -112,8 +117,8 @@ export function pickRecommended(drafts: readonly DraftCard[]): string | null {
   if (clean.length === 0) return null
   let best = clean[0]!
   for (const d of clean.slice(1)) {
-    if (d.maxOverlap < best.maxOverlap) best = d
-    else if (d.maxOverlap === best.maxOverlap && d.draftNo < best.draftNo) best = d
+    if (d.originalityRunChars < best.originalityRunChars) best = d
+    else if (d.originalityRunChars === best.originalityRunChars && d.draftNo < best.draftNo) best = d
   }
   return best.key
 }
@@ -140,8 +145,8 @@ export function toGroups(expansions: readonly ExpansionIn[]): SourceGroup[] {
         safetyVerdict: verdict,
         safetyReasons: (d.safety?.reasons ?? []).map((r) => String(r.code ?? '')).filter(Boolean).join('/'),
         safetySummary: String(d.safety?.summary ?? ''),
-        maxOverlap: Number(d.overlap ?? 0),
-        overlapFragment: String(d.overlapFragment ?? ''),
+        originality: describeOriginality(readMeasure(d.originality) ?? ZERO_MEASURE),
+        originalityRunChars: (readMeasure(d.originality) ?? ZERO_MEASURE).runChars,
         leakedTokens: leaked,
         bannedHonorifics: banned,
         clean: verdict === 'pass' && leaked.length === 0 && banned.length === 0 && d.ok === true,
@@ -172,7 +177,7 @@ export function toGroups(expansions: readonly ExpansionIn[]): SourceGroup[] {
 export const REVIEW_COLUMNS: readonly string[] = [
   'decision', 'sourceArticleId', 'draftNo', 'topic', 'material', 'generalized', 'direction',
   'title', 'body', 'bodyLength',
-  'safetyVerdict', 'safetyReasons', 'maxOverlap', 'leakedTokens', 'clean', 'recommended',
+  'safetyVerdict', 'safetyReasons', 'originality', 'leakedTokens', 'clean', 'recommended',
   'memo', 'note',
   // 🔴 §4-AC 간극 보강 (2026-09-05). **앞 18개 위치는 그대로.**
   //    이 셋이 있어야 export 파일 한 줄만으로 출처·시각을 추적할 수 있다.
@@ -185,7 +190,7 @@ export type ReviewRow = {
   decision: string; sourceArticleId: string; draftNo: number
   topic: string; material: string; generalized: string; direction: string
   title: string; body: string; bodyLength: number
-  safetyVerdict: string; safetyReasons: string; maxOverlap: number
+  safetyVerdict: string; safetyReasons: string; originality: string
   leakedTokens: string; clean: string; recommended: string
   memo: string; note: string
   sourceSite: string; generatedAt: string; reviewedAt: string
@@ -224,7 +229,7 @@ export function reviewRows(
         bodyLength: d.bodyLength,
         safetyVerdict: d.safetyVerdict,
         safetyReasons: d.safetyReasons,
-        maxOverlap: d.maxOverlap,
+        originality: d.originality,
         leakedTokens: d.leakedTokens.join('/'),
         clean: d.clean ? 'clean' : 'check',
         recommended: d.recommended ? 'recommended' : '',

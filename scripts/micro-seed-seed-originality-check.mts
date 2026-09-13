@@ -13,12 +13,13 @@
  *    ⑧ DB·Sheet·LLM·발행·네이버·82cook 이 들어오는 것
  */
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { judgeCopy, measureOriginality } from '../src/lib/draft-originality'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  expandSeed, findMaterial, longestOverlap, tokenize, stems,
+  expandSeed, findMaterial, tokenize, stems,
   TOPIC_RULES, TEMPLATES, TOPIC_LABEL, COMMON_WORDS,
-  BANNED_HONORIFICS, MAX_SOURCE_OVERLAP, DRAFTS_PER_SOURCE, DRY_RUN_COLUMNS, DRY_RUN_NOTE,
+  BANNED_HONORIFICS, DRAFTS_PER_SOURCE, DRY_RUN_COLUMNS, DRY_RUN_NOTE,
   type TopicKey,
   hasBatchim, josa,
 } from './lib/micro-seed-seed-originality.mjs'
@@ -113,7 +114,8 @@ check('topic 이 붙는다', ex.topic === 'household')
 check('🔴 브랜드명이 초안에 없다', !ex.drafts.some((d) => `${d.title}${d.body}`.includes('핀일로')))
 check('🟢 소재어는 초안에 쓰인다', ex.drafts.some((d) => d.title.includes('후라이팬')))
 check('🔴 유출 낱말 0', ex.drafts.every((d) => d.leakedTokens.length === 0))
-check('🔴 원문 연속 겹침 6자 미만', ex.drafts.every((d) => d.overlap < MAX_SOURCE_OVERLAP))
+check('🔴 템플릿 초안은 원문을 실질 복제하지 않는다',
+  ex.drafts.every((d) => !judgeCopy(d.originality).copied))
 check('🔴 금지 호칭 0', ex.drafts.every((d) => d.bannedHonorifics.length === 0))
 check('🟢 safety pass', ex.drafts.every((d) => d.safety.verdict === 'pass'))
 check('🟢 전부 ok', ex.drafts.every((d) => d.ok))
@@ -157,17 +159,17 @@ check('🟢 모든 토픽 초안이 safety pass',
     .drafts.every((d) => d.safety.verdict === 'pass')))
 
 console.log('\n⑧ 겹침 계산')
-check('완전히 다른 문장은 겹침 0~1', longestOverlap('가나다라마', '바사아자차').len === 0)
+check('완전히 다른 문장은 겹침 0', measureOriginality('가나다라마', '바사아자차').runChars === 0)
 // 🔴 공백을 지우고 세므로 "후라이팬 어때요" 는 7자다
-check('같은 문장은 공백 제외 길이만큼 겹친다', longestOverlap('후라이팬 어때요', '후라이팬 어때요').len === 7)
-check('부분 일치를 잡는다', longestOverlap('오늘 후라이팬 샀어요', '후라이팬 어때요').len >= 4)
+check('같은 문장은 공백 제외 길이만큼 겹친다', measureOriginality('후라이팬 어때요', '후라이팬 어때요').runChars === 7)
+check('부분 일치를 잡는다', measureOriginality('오늘 후라이팬 샀어요', '후라이팬 어때요').runChars >= 4)
 check('낱말 쪼개기는 2글자 이상만', !tokenize('나 는 후라이팬').includes('나'))
 
 console.log('\n⑨ 산출물 계약')
 const EXPECTED = [
   'sourceArticleId', 'sourceTitle', 'topic', 'material', 'matched', 'generalized', 'direction',
   'draftNo', 'title', 'body', 'bodyLength',
-  'safetyVerdict', 'safetyReasons', 'maxOverlapWithSourceTitle', 'leakedTokens', 'ok', 'note',
+  'safetyVerdict', 'safetyReasons', 'originality', 'leakedTokens', 'ok', 'note',
   // 🔴 §4-AC 간극 보강 — 맨 뒤에만 붙었다
   'sourceSite', 'generatedAt',
   // 🔴 §4-AD ⑧ 입력이 둘이 됨 — 역시 맨 뒤에만
@@ -256,8 +258,8 @@ for (const w of ['간병인 추천', '간병인 소개', '구합니다', '알선
 for (const w of ['치료', '완치', '효과가', '드시면 좋', '처방', '진단', '증상']) {
   check(`🔴 간병 초안에 의료 단정 "${w}" 없음`, !careText.includes(w))
 }
-check('🟢 간병 초안 safety pass · 유출 0 · 겹침 6자 미만',
-  care2.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0 && d.overlap < MAX_SOURCE_OVERLAP))
+check('🟢 간병 초안 safety pass · 유출 0 · 실질 복제 아님',
+  care2.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0 && !judgeCopy(d.originality).copied))
 
 const morn = expandSeed({ sourceArticleId: 'k2', sourceSite: 'navercafe:remonterrace', title: '스벅 견과류 아침에 먹기 어때요?' })
 check('🟢 아침 유형 → 초안 생성', morn.drafts.length === DRAFTS_PER_SOURCE && morn.needsHuman === false)
@@ -267,8 +269,8 @@ const mornText = morn.drafts.map((d) => `${d.title} ${d.body}`).join(' ')
 for (const w of ['스벅', '스타벅스', '견과류']) {
   check(`🔴 아침 초안에 "${w}" 없음`, !mornText.includes(w))
 }
-check('🟢 아침 초안 safety pass · 유출 0 · 겹침 6자 미만',
-  morn.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0 && d.overlap < MAX_SOURCE_OVERLAP))
+check('🟢 아침 초안 safety pass · 유출 0 · 실질 복제 아님',
+  morn.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0 && !judgeCopy(d.originality).copied))
 
 console.log('\n⑰ 🔴 확장이 넓어지지 않았나 · 회귀 없나')
 // 🔴 '요양' 단독·'입원' 은 일부러 뺐다 — 요양원 홍보글과 의료 상황을 물지 않게
@@ -312,10 +314,10 @@ const FIVE: [string, string][] = [
 ]
 for (const [title, topic] of FIVE) {
   const e = expandSeed({ sourceArticleId: 'p', sourceSite: 'navercafe:test', title })
-  check(`🟢 ${topic}: 초안 ${DRAFTS_PER_SOURCE}개 · safety pass · 유출 0 · 겹침 ${MAX_SOURCE_OVERLAP}자 미만`,
+  check(`🟢 ${topic}: 초안 ${DRAFTS_PER_SOURCE}개 · safety pass · 유출 0 · 실질 복제 아님`,
     e.topic === topic && e.drafts.length === DRAFTS_PER_SOURCE
     && e.drafts.every((d) => d.safety.verdict === 'pass' && d.leakedTokens.length === 0
-      && d.overlap < MAX_SOURCE_OVERLAP && d.bannedHonorifics.length === 0),
+      && !judgeCopy(d.originality).copied && d.bannedHonorifics.length === 0),
     `${e.topic}/${e.drafts.length}`)
   check(`  🔴 ${topic}: 두 초안의 제목이 서로 다르다`,
     new Set(e.drafts.map((d) => d.title)).size === DRAFTS_PER_SOURCE)
@@ -426,7 +428,7 @@ check('🔴 household 1번 본문이 "낡은" 을 전제하지 않는다',
   !TEMPLATES.household[0]!.body('조미료').includes('낡은'))
 check('🟢 household 1번 제목은 그대로 (후라이팬 초안이 살아 있다)',
   TEMPLATES.household[0]!.title('후라이팬') === '후라이팬 언제 바꾸세요?')
-check('🟢 11소재 전부 초안 2건 · safety pass · 유출 0 · 겹침 6자 미만',
+check('🟢 11소재 전부 초안 2건 · safety pass · 유출 0 · 실질 복제 아님',
   ([['통영분들^^ 맛집 추천 좀 부탁드려요', 'travelFood'], ['핀일로 후라이팬 어때요??', 'household'],
     ['초고 아이랑 갈만한 리조트나 호텔  추천부탁드려요', 'travelStay'], ['간병인 추천 부탁드립니다.', 'careParent'],
     ['스벅 견과류 아침에 먹기 어때요?', 'morningBite'], ['손주 데리고 어디 갈까요', 'family'],
@@ -439,7 +441,7 @@ check('🟢 11소재 전부 초안 2건 · safety pass · 유출 0 · 겹침 6�
       const e = expandSeed({ sourceArticleId: 'w', title: t })
       return e.topic === topic && e.drafts.length === DRAFTS_PER_SOURCE
         && e.drafts.every((d) => d.ok && d.safety.verdict === 'pass'
-          && d.leakedTokens.length === 0 && d.overlap < MAX_SOURCE_OVERLAP)
+          && d.leakedTokens.length === 0 && !judgeCopy(d.originality).copied)
     }))
 
 console.log('\n⑩ 경로 가드 — 🔴 .microseed-data/ 밖으로 나가지 않는다')
@@ -586,7 +588,7 @@ console.log('\n이미 초안화한 원천 제외')
   const exps = seeds.map((r) => expandSeed({
     sourceArticleId: String(r.sourceArticleId ?? ''), title: String(r.title ?? ''),
   }))
-  check('🔴 모든 초안 유출 0 · 겹침 6자 미만 · safety pass',
+  check('🔴 모든 초안 유출 0 · 실질 복제 아님 · safety pass',
     exps.every((e) => e.drafts.every((d) => d.ok)))
   check('🔴 원문 고유명사가 초안에 없다',
     !exps.some((e) => e.drafts.some((d) => /통영|핀일로|초고/.test(`${d.title}${d.body}`))))

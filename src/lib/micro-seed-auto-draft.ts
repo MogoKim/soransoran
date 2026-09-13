@@ -16,6 +16,14 @@
  *    같은 소재에서 나온 두 글이 연달아 나가면 결이 겹쳐 보인다(§4-AN 형제 검사와 같은 이유).
  */
 
+import {
+  judgeCopy, COPY_REASON_LABEL,
+  type OriginalityMeasure, type CopyReason,
+} from './draft-originality'
+// 🔴 위해 축의 정본은 판정 단계다. 초안 단계가 목록을 따로 갖지 않는다
+import { SEMANTIC_DROP } from './micro-seed-auto-judge'
+import type { PersonaForMatch } from './original-post-persona-match'
+
 export const AUTO_DRAFT_DECISIONS = ['AUTO_ADOPT', 'AUTO_HOLD', 'AUTO_DROP'] as const
 export type AutoDraftDecision = (typeof AUTO_DRAFT_DECISIONS)[number]
 
@@ -25,11 +33,22 @@ export const HUMAN_DRAFT_PROVENANCE = ['human-curated', 'founder'] as const
 
 // 🔴 v2 — 템플릿 + LLM fallback + semantic 품질 판정
 // 🔴 v3 — 존댓말 · 실제 질문 검사 추가. v2 캐시와 섞이지 않는다
-export const DRAFT_RULE_VERSION = 'auto-draft-v3'
-/** 생성 프롬프트 판 — 반말 금지 예시를 넣으면서 올렸다 */
-export const DRAFT_PROMPT_VERSION = 'draft-gen-v3'
+// 🔴 v5 — **판 값만 올리는 것으로는 부족했다** (2026-09-13).
+//    v4 는 voiceSamples 를 새로 넣었는데 `draft-gen-v4` 를 그대로 뒀다.
+//    cache key 가 판 값만 봤으므로 **말투 근거 없이 만든 옛 결과가 그대로 hit** 됐고,
+//    반말을 막던 옛 품질 판정도 같은 이유로 재사용됐다.
+//    이제 key 가 **실제 프롬프트와 실제 본문의 digest** 를 담는다 —
+//    판 값을 올리는 것을 잊어도 프롬프트가 바뀌면 자동으로 miss 다.
+// 🔴 v4 — **형식 강제를 걷어낸다** (2026-09-13).
+//    v3 은 존댓말 · 2~4문장 · 마지막 물음표를 하드 게이트로 세웠다.
+//    그 셋을 다 지키면 나오는 글은 한 종류뿐이다 — 실제로 한 종류만 나왔다.
+//    말투와 길이와 맺음은 **원문이 정한다**(source-profile). 기계는 안전만 잰다.
+//    독창성도 `6자 겹침` 에서 실질 복제 판정으로 바뀐다 → draft-originality.ts
+export const DRAFT_RULE_VERSION = 'auto-draft-v5'
+/** 🔴 생성 프롬프트 판 — v4 에서 형식 강제를 빼고 원문 프로파일을 넣었다. v3 캐시를 재사용하지 않는다 */
+export const DRAFT_PROMPT_VERSION = 'draft-gen-v5'
 /** 🔴 품질 판정 프롬프트 판 — **생성과 따로 센다**. 판정만 바뀔 때 생성을 다시 하지 않기 위해서다 */
-export const QUALITY_PROMPT_VERSION = 'draft-quality-v2'
+export const QUALITY_PROMPT_VERSION = 'draft-quality-v4'
 /** 🔴 사람 것과 겹치지 않는다. 기계가 **만든** 글이라는 표시 */
 export const DRAFT_PROVENANCE = 'machine-generated'
 /** 초안을 어디서 만들었나 */
@@ -38,53 +57,58 @@ export type DraftSource = (typeof DRAFT_SOURCES)[number]
 /** 원천 하나당 만들 초안 상한 */
 export const MAX_DRAFTS_PER_SOURCE = 2
 
-/** 🔴 원문과 이만큼 이어 붙으면 베낀 것으로 본다. 기존 상수와 같은 값이다 */
-export const MAX_OVERLAP = 6
-
 /** 🔴 제품 금지어 — CLAUDE.md 규칙. 초안에 있으면 버린다 */
 export const BANNED_WORDS: readonly string[] = ['시니어', '어르신', '노인', '실버'] as const
 
 export type DraftReason =
   | 'ok'
   | 'noDraft' | 'emptyTitle' | 'emptyBody'
-  | 'safetyNotPass' | 'bannedWord' | 'overlapTooLong'
+  | 'safetyNotPass' | 'bannedWord' | 'copiedFromSource'
   | 'duplicateTitle' | 'duplicateBody'
-  | 'titleBodyMismatch' | 'sourceAlreadyUsed'
+  | 'sourceAlreadyUsed'
   | 'notAutoSeed' | 'laneRisk'
-  | 'repetitiveWording' | 'titleEchoedInBody' | 'genericWithoutSourceAngle'
-  | 'informalSpeech' | 'missingAnswerableQuestion'
+  | 'titleEchoedInBody' | 'genericWithoutSourceAngle'
   | 'semanticUnavailable' | 'semanticHold' | 'semanticDrop' | 'lowConfidence'
+  | 'qualitySchemaMismatch'
+  /** 🔴 다 쓴 글이 그 Persona 의 삶과 명백히 어긋난다 — 다시 써도 그대로였다 */
+  | 'lifeHistoryConflict' | 'generatedHarm'
 
 export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
+  lifeHistoryConflict: '글쓴이의 삶과 어긋나는 1인칭 경험',
   ok: '통과',
   noDraft: '템플릿이 초안을 만들지 못했다 (소재를 못 찾음)',
   emptyTitle: '제목이 비었다',
   emptyBody: '본문이 비었다',
   safetyNotPass: 'safety 가 pass 가 아니다',
   bannedWord: '🔴 금지어가 들어갔다 (시니어 · 어르신 · 노인 · 실버)',
-  overlapTooLong: `🔴 원문과 ${MAX_OVERLAP}자 이상 이어 붙는다 — 베낀 것이다`,
+  copiedFromSource: '🔴 원문을 실질적으로 옮겼다',
   duplicateTitle: '같은 제목이 이미 있다',
   duplicateBody: '같은 본문이 이미 있다',
-  titleBodyMismatch: '🔴 제목과 본문이 서로 다른 이야기다',
   sourceAlreadyUsed: '이 원천에서 이미 하나를 골랐다',
   notAutoSeed: '🔴 AUTO_SEED 가 아니다 — 판정을 통과한 소재만 초안화한다',
-  laneRisk: '🔴 연예 · 정치 · 의료 레인 위험이 남아 있다',
-  repetitiveWording: '🔴 제목에서 같은 낱말이 반복된다 ("여행 가면 여행 어떻게")',
+  laneRisk: '🔴 위해 판정이 남아 있다 (개인 특정 · 명예훼손 · 위협 · 위험한 의료 지시 · 정치 선동)',
   titleEchoedInBody: '🔴 제목을 본문 끝에 그대로 되풀이한다',
   genericWithoutSourceAngle: '🔴 소재가 사라진 일반론이다',
-  informalSpeech: '🔴 반말이다 — 우리 게시판은 존댓말이다',
-  missingAnswerableQuestion: '🔴 본문 마지막이 물음표로 끝나지 않는다 — 답할 질문이 없다',
   semanticUnavailable: '품질 판정을 받지 못했다',
   semanticHold: '품질 판정이 사람에게 넘겼다',
   semanticDrop: '🔴 품질 판정이 버리라고 했다',
   lowConfidence: '모델이 확신하지 못했다',
+  qualitySchemaMismatch: '🔴 품질 판정이 우리 축이 아닌 이름만 돌려줬다 — 다시 물어도 같았다',
+  generatedHarm: '🔴 생성된 글에 위해가 있다 (개인 특정 · 명예훼손 · 위협 · 위험한 의료 지시)',
 }
 
-/** 🔴 판정 단계에서 이 위험이 붙었으면 초안화하지 않는다 */
-export const BLOCKING_RISKS: readonly string[] = [
-  'celebrityOrBroadcast', 'politicsOrPublicFigure', 'medicalAdvice',
-  'healthScheduleOrMedicalAdvice', 'hostilityOrConflictBait', 'personalSpecificity',
-] as const
+/** 왜 복제로 봤는지 한 줄 — 🔴 사유 이름을 여기서 다시 적지 않는다 */
+export const copyReasonLabel = (r: CopyReason): string => COPY_REASON_LABEL[r]
+
+/**
+ * 🔴 판정 단계에서 이 위험이 붙었으면 초안화하지 않는다.
+ *
+ * 🔴 **소재가 아니라 위해다** (2026-09-13). 목록의 정본은 `micro-seed-auto-judge` 의
+ *    `SEMANTIC_DROP` 이다 — 여기서 다시 적으면 두 단계의 기준이 갈라진다.
+ *    실제로 갈라져 있었다: judge 는 연예 소재를 HOLD 로 보존했는데
+ *    draft 는 같은 축을 DROP 으로 버렸다.
+ */
+export const BLOCKING_RISKS: readonly string[] = SEMANTIC_DROP
 
 export type DraftCandidate = {
   sourceArticleId: string
@@ -92,7 +116,8 @@ export type DraftCandidate = {
   title: string
   body: string
   safetyVerdict: string
-  overlap: number
+  /** 🔴 원문과 얼마나 겹치는지 **잰 값**. 통과선은 draft-originality.ts 가 갖는다 */
+  originality: OriginalityMeasure
   generatedAt: string
 }
 
@@ -110,42 +135,22 @@ export function normalize(s: string): string {
 }
 
 /**
- * 제목과 본문이 같은 이야기인가 — 🔴 **템플릿이 어긋나게 조합될 수 있다.**
+ * 🔴 **제목·본문 일치를 낱말 포함으로 재지 않는다** (2026-09-13 제거).
  *
- * 소재 낱말이 제목에만 있고 본문에 없으면, 읽는 사람은 "제목과 다른 글" 로 느낀다.
- * 완벽한 판정은 못 하지만 **소재 낱말이 양쪽에 다 있는지**는 볼 수 있다.
+ *    옛 `titleMatchesBody` 는 "소재 낱말이 제목과 본문 양쪽에 **문자열로** 있는가" 를 봤다.
+ *    같은 이야기를 다른 말로 풀면 — 사람이 늘 그렇게 쓴다 — 이 검사는 떨어진다.
+ *    실측(2026-09-11~12)에서 초안 최종 HOLD 15건 중 7건이 이 사유였고,
+ *    읽어 보면 제목과 본문이 어긋난 글이 아니었다.
+ *    제목·본문이 정말 다른 이야기인지는 품질 축 `titleBodyCoherence` 가 본다.
  */
-export function titleMatchesBody(title: string, body: string, material: string): boolean {
-  const m = normalize(material)
-  // 🔴 **소재를 모르면 통과가 아니다.** v1 은 여기서 `true` 를 돌려줬는데,
-  //    그건 "검사를 안 한다" 가 아니라 "검사를 통과했다" 가 되어 버렸다.
-  //    소재를 모르는 글은 semantic 품질 판정을 받아야 한다 — 여기서 통과시키지 않는다.
-  if (m === '') return false
-  return normalize(title).includes(m) && normalize(body).includes(m)
-}
-
-/** 낱말로 쪼갠다 — 조사·기호를 떼고 2자 이상만 본다 */
-export function words(s: string): string[] {
-  return S(s)
-    .replace(/[?!.,~…"'"'()\[\]]/g, ' ')
-    .split(/\s+/)
-    .map((w) => w.replace(/(을|를|이|가|은|는|에|에서|으로|로|와|과|도|만|의)$/, ''))
-    .filter((w) => w.length >= 2)
-}
 
 /**
- * 🔴 **제목에서 같은 낱말이 되풀이되는가.**
+ * 🔴 **제목 낱말 반복을 하드 게이트로 막지 않는다** (2026-09-13 제거).
  *
- * 2026-09-07 에 템플릿이 "여행 가면 여행 어떻게 고르세요?" 를 만들었다.
- * 소재 낱말이 템플릿 자리 둘에 동시에 들어가면 이렇게 된다.
- * 사람은 한 번 보면 아는데 기계는 안 막으면 그대로 내보낸다.
+ *    "여행 가면 여행 어떻게 고르세요?" 같은 템플릿 사고를 막으려고 넣은 것인데,
+ *    사람이 쓴 자연스러운 제목도 낱말을 되풀이한다("김치 담글 때 김치통 뭐 쓰세요").
+ *    어색한 되풀이인지 아닌지는 품질 축 `repetitiveWording` 이 본다.
  */
-export function hasRepetitiveWording(title: string): boolean {
-  const ws = words(title)
-  const seen = new Map<string, number>()
-  for (const w of ws) seen.set(w, (seen.get(w) ?? 0) + 1)
-  return [...seen.values()].some((n) => n >= 2)
-}
 
 /**
  * 🔴 **제목을 본문 끝에 그대로 되풀이하는가.**
@@ -161,116 +166,176 @@ export function echoesTitleAtEnd(title: string, body: string): boolean {
 }
 
 /**
- * 따옴표 안을 지운다 — 🔴 **인용문은 반말이어도 된다.**
+ * 🔴 **말투·맺음을 기계가 강제하지 않는다** (2026-09-13 제거).
  *
- * "내 단점을 솔직하게 말해 줄 수 있어?" 처럼 남이 한 말을 옮긴 것은
- * 글쓴이가 반말을 쓴 것이 아니다.
- */
-export function stripQuoted(text: string): string {
-  return S(text)
-    .replace(/"[^"]*"/g, ' ')
-    .replace(/'[^']*'/g, ' ')
-    .replace(/"[^"]*"/g, ' ')
-    .replace(/'[^']*'/g, ' ')
-    .replace(/「[^」]*」/g, ' ')
-}
-
-/** 문장으로 쪼갠다 — 종결부호와 줄바꿈 기준 */
-export function sentences(text: string): string[] {
-  return stripQuoted(text)
-    .split(/[.!?。\n]+/)
-    .map((x) => x.trim())
-    .filter((x) => x !== '')
-}
-
-/**
- * 🔴 **존댓말 종결인가.**
+ *    v3 은 세 가지를 하드 게이트로 세웠다 —
+ *      · `hasInformalSpeech`  본문 모든 문장이 존댓말 종결이어야 한다
+ *      · `endsWithQuestion`   본문 마지막 글자가 물음표여야 한다
+ *      · 생성 프롬프트의 "본문 2~4문장"
+ *    셋을 동시에 지키면 나올 수 있는 글은 한 종류뿐이다.
+ *    그리고 실제로 한 종류만 나왔다 — 그것이 "AI 티" 의 정체였다.
  *
- * 우리 게시판은 존댓말이다. 2026-09-07 에 반말 초안 3건이 통과했다 —
- * "신기하네" · "말이야" · "몰라" · "영향을 주는 걸까?".
- * 모델에게 문체를 일러도 원문 말투를 따라간다. 그래서 기계가 직접 잰다.
- */
-export function isPoliteEnding(sentence: string): boolean {
-  const t = sentence.trim().replace(/[~…\s]+$/, '')
-  if (t === '') return true
-  return /(요|죠|니다|랍니다|습니다|십시오|세요|어요|아요|네요|가요|까요|은가요|나요|더라고요|거든요)$/.test(t)
-}
-
-/**
- * 🔴 **본문에 사람에게 직접 하는 반말이 있는가.**
+ *    커뮤니티에는 반말도 있고, 존댓말과 반말이 섞인 글도 있고,
+ *    묻지 않고 그냥 털어놓고 끝나는 글도 있다. 그게 사람이 쓴 게시판이다.
+ *    **무엇으로 닫을지는 원문이 정한다** — `source-profile.ts` 의 `closingIntent`.
  *
- * 제목은 명사형("돌담 아래서 마신 맥주")이 자연스러우므로 제목은 보지 않는다.
- * 본문 문장 중 하나라도 존댓말 종결이 아니면 반말로 본다 — 보수적으로 잡는다.
+ * 🔴 대신 남긴 것: 개인정보 · 금지어 · 실질 복제 · 안전성. 그것이 전부다.
  */
-export function hasInformalSpeech(body: string): boolean {
-  const ss = sentences(body)
-  if (ss.length === 0) return false
-  return ss.some((x) => !isPoliteEnding(x))
-}
-
-/**
- * 🔴 **본문 마지막에 답할 질문이 있는가.**
- *
- * 이 레인의 계약은 "본문 마지막에 답하기 쉬운 질문 하나" 다.
- * `intendedQuestion` 필드가 있다고 본문에 질문이 있는 것이 아니다 —
- * 448113 은 그 필드만 있고 본문은 회고뿐이었다.
- */
-export function endsWithQuestion(body: string): boolean {
-  const t = S(body).replace(/[\s]+$/, '')
-  if (t === '') return false
-  // 🔴 **물음표를 요구한다.** "궁금해요." 는 완곡한 표현이지 질문이 아니다 —
-  //    2026-09-07 에 그 글이 통과했고, 읽는 사람은 무엇을 답해야 할지 알 수 없었다.
-  //    이 레인의 계약은 "마지막에 답하기 쉬운 **질문** 하나" 다.
-  const q = t.lastIndexOf('?')
-  if (q < 0) return false
-  // 물음표 뒤에 남은 것이 마침표·따옴표 정도면 마지막 문장이 질문이다
-  return /^["'"'.\s]*$/.test(t.slice(q + 1))
-}
-
-/** 원문과 가장 길게 이어 붙는 조각 — 🔴 기존 `longestOverlap` 과 같은 뜻이다 */
-export function overlapOk(overlap: number): boolean {
-  return overlap < MAX_OVERLAP
-}
 
 export function hasBannedWord(text: string): boolean {
   return BANNED_WORDS.some((w) => text.includes(w))
 }
 
 /** 🔴 초안 품질 축 — auto-judge 의 위험 축과 **분리돼 있다** (거기는 소재, 여기는 글) */
+/**
+ * 🔴 **선택된 Persona 의 생활사** — 생성과 검수가 **같은 것**을 본다 (2026-09-13).
+ *
+ *    정본은 Pool 카드다(`persona-pool-card.parsePoolDoc` → `cardToPersona`).
+ *    여기서 복제본을 만들지 않는다 — 기존 `PersonaForMatch` 에서 필요한 칸만 고른다.
+ *
+ * 🔴 **왜 필요한가.** 원문에서 생활사를 읽어 후보를 좁히는 방식(`readPostRequirements`)은
+ *    한국어의 생략 때문에 반드시 샌다. `어제 남편이 늦게 들어왔어요` 에는 임자가 없어
+ *    조건이 서지 않는다. 그리고 발행 직전 `hardFilter` 는 **같은 함수의 출력**을 받으므로
+ *    거기서 다시 잡히지도 않는다 — "발행 때 걸린다" 는 말은 사실이 아니었다.
+ *    막을 수 있는 자리는 하나뿐이다: **글을 쓰는 사람에게 자기가 누구인지 알려 주는 것**,
+ *    그리고 **다 쓴 글이 그 사람의 삶과 어긋나는지 보는 것**.
+ */
+// 🔴 이 파일에는 `Pick` 이라는 지역 타입이 따로 있다 — 내장 `Pick` 을 쓸 수 없다.
+//    그래서 필요한 칸만 **`PersonaForMatch` 의 필드 타입 그대로** 적는다 (복제 상수 아님).
+export type PersonaLifeHistory = {
+  code: PersonaForMatch['code']
+  maritalStatus?: PersonaForMatch['maritalStatus']
+  childrenCount?: PersonaForMatch['childrenCount']
+  childrenAgeBands?: PersonaForMatch['childrenAgeBands']
+  parentCare?: PersonaForMatch['parentCare']
+  menopauseStatus?: PersonaForMatch['menopauseStatus']
+}
+
+/** 🔴 사람이 읽는 문장으로 — 생성 프롬프트와 검수 프롬프트가 **같은 줄**을 본다 */
+export function lifeHistoryLines(p: PersonaLifeHistory): string[] {
+  const kids = p.childrenCount ?? null
+  const bands = p.childrenAgeBands ?? null
+  return [
+    `- 혼인: ${p.maritalStatus ?? '알려지지 않음'}`,
+    `- 자녀: ${kids === null ? '알려지지 않음' : kids === 0 ? '없음'
+      : `${kids}명${bands !== null && bands.length > 0 ? ` (${[...new Set(bands)].join(' · ')})` : ''}`}`,
+    `- 부모 돌봄: ${p.parentCare ?? '알려지지 않음'}`,
+    `- 갱년기: ${p.menopauseStatus ?? '알려지지 않음'}`,
+  ]
+}
+
+/**
+ * 🔴 **근거는 글에 실제로 있어야 한다** (2026-09-13).
+ *
+ *    옛 판은 `conflict=true` 와 빈 문자열이 아닌 `evidence` 만 보면 막았다.
+ *    모델이 초안에 없는 문장을 지어내도 그것이 차단 근거가 됐다 —
+ *    실측: 초안이 `오늘 김치를 담갔어요` 여도 `"우리 남편이 어제 술 먹고"` 라는
+ *    지어낸 근거로 `lifeHistoryConflict` 가 섰다.
+ *
+ * 🔴 **공백과 흔한 문장부호만 턴다.** 그 이상 손대면 서로 다른 문장이 같아진다.
+ */
+export function evidenceFoundIn(evidence: string, draftText: string): boolean {
+  const flat = (x: string): string => x.replace(/\s+/g, '')
+    .replace(/[.,!?;:'"()\[\]{}·…~\-—‘’“”`]/g, '')
+  const e = flat(evidence)
+  return e !== '' && flat(draftText).includes(e)
+}
+
+/** 🔴 다 쓴 글이 그 사람의 삶과 **명백히** 어긋나는가 — 근거를 함께 받는다 */
+export type LifeConflict = { conflict: boolean; evidence: string }
+
+/** 🔴 schema 불일치 사유 — 콘텐츠 결함이 아니라 **답을 못 받은 것**이다 */
+export const LIFE_CONFLICT_MISSING = 'lifeConflict:missing'
+export const LIFE_EVIDENCE_NOT_FOUND = 'lifeConflict:evidenceNotFound'
+
 export const DRAFT_QUALITY_AXES = [
-  'informalSpeech',
+  // 🔴 `informalSpeech` · `answerableQuestion` 을 뺐다 (2026-09-13).
+  //    반말도 우리 게시판의 말이고, 묻지 않고 끝나는 글도 게시판 글이다.
+  //    그 둘을 축으로 두면 모델이 매번 같은 모양으로 수렴한다.
   'naturalKorean',
   'titleBodyCoherence',
   'communityFit4050',
-  'answerableQuestion',
   'repetitiveWording',
   'genericWithoutSourceAngle',
   'medicalOrConflictRisk',
 ] as const
 export type DraftQualityAxis = (typeof DRAFT_QUALITY_AXES)[number]
 
+/**
+ * 🔴 **품질 프롬프트를 이 표에서 만든다** (2026-09-13).
+ *
+ *    옛 판은 프롬프트 문자열과 축 목록이 **따로** 있었다. 그래서 축에서
+ *    `informalSpeech` · `answerableQuestion` 을 뺐는데 프롬프트는 그대로 남아,
+ *    모델이 프롬프트가 시킨 대로 `informalSpeech` 를 돌려주면
+ *    parser 가 그것을 `genericWithoutSourceAngle` 로 바꿔 HOLD 시켰다.
+ *    **반말 허용이 코드에만 있고 실제 경로에는 없었다.**
+ *
+ *    이제 프롬프트는 이 표를 순회해 만든다. 사람이 두 목록을 따로 적을 자리가 없다.
+ */
+export const DRAFT_QUALITY_AXIS_PROMPT: Record<DraftQualityAxis, string> = {
+  naturalKorean: '한국어가 어색하다 · 번역투 · 기계가 쓴 티가 난다',
+  titleBodyCoherence: '제목과 본문이 **정말로** 다른 이야기다 (말만 다르게 푼 것은 해당하지 않는다)',
+  communityFit4050: '40~60대 여성이 읽을 이야기가 아니다',
+  repetitiveWording: '같은 말이 **읽기 어려울 만큼** 되풀이된다',
+  genericWithoutSourceAngle: '소재가 사라진 일반론이다 — 어떤 글을 읽고 썼는지 알 수 없다',
+  medicalOrConflictRisk: '약 · 용량 · 진단 · 치료를 **확정적으로 지시**한다 (경험담은 해당하지 않는다)',
+}
+
 /** 🔴 이게 붙으면 버린다 */
 export const QUALITY_DROP: readonly DraftQualityAxis[] = ['medicalOrConflictRisk'] as const
 /** 🟡 이게 붙으면 사람에게 넘긴다 — 글이 나빴을 뿐 소재는 살아 있다 */
 export const QUALITY_HOLD: readonly DraftQualityAxis[] = [
-  // 🔴 informalSpeech 가 맨 앞이다 — 2026-09-07 에 반말 3건이 통과했다
-  'informalSpeech',
   'naturalKorean', 'titleBodyCoherence', 'communityFit4050',
-  'answerableQuestion', 'repetitiveWording', 'genericWithoutSourceAngle',
+  'repetitiveWording', 'genericWithoutSourceAngle',
 ] as const
 
 export const DRAFT_MIN_CONFIDENCE = 0.7
 
 export type DraftQualityVerdict = {
+  /** 🔴 선택 Persona 의 생활사와 어긋나는가 — 검수 프롬프트가 함께 답한다 */
+  lifeConflict: LifeConflict | null
   decision: AutoDraftDecision
   confidence: number
   issues: DraftQualityAxis[]
+  /**
+   * 🔴 **우리 축이 아닌 이름.** 판정에 쓰지 않고 **그대로 드러낸다** (2026-09-13).
+   *
+   *    옛 판은 이것을 `genericWithoutSourceAngle` 로 바꿨다. 그래서
+   *    모델이 `informalSpeech` 라고 답하면 화면에는 "소재가 사라진 일반론" 이 찍혔다 —
+   *    사람이 로그를 읽어도 진짜 이유를 알 수 없었고, 반말 초안이 조용히 막혔다.
+   *    schema 불일치는 schema 불일치로 남긴다.
+   */
+  unknownIssues: string[]
+  /**
+   * 🔴 **생성된 글 자체의 위해** (2026-09-13).
+   *
+   *    판정 단계(`auto-judge`)는 **원문**의 위해를 본다. 그런데 모델은
+   *    원문에 없던 것을 지어낼 수 있다 — 실측(재현)에서
+   *    "확인 안 된 불륜 단정" 과 "비공개 개인 특정" 이 `safetyFilter` 를 그대로 통과해
+   *    `AUTO_ADOPT` 까지 갔다. deterministic 정규식만으로는 못 잡는다.
+   *
+   * 🔴 **새 안전 목록을 만들지 않는다.** 축 이름은 `SEMANTIC_DROP` 정본 그대로다.
+   */
+  harms: string[]
 }
 
 /**
  * 모델 응답을 읽는다 — 🔴 **모르는 것은 통과가 아니다.**
  */
-export function parseQuality(rawText: string): DraftQualityVerdict | null {
+/**
+ * 🔴 검수 응답을 **무엇을 물었는지와 함께** 읽는다 (2026-09-13).
+ *    Persona 를 넘겨 물었으면 `lifeConflict` 는 **필수 답**이다.
+ *    빠졌거나 형식이 다르면 "충돌 없음" 이 아니라 **schema 불일치** 다 —
+ *    물어본 적 없는 것처럼 통과시키지 않는다.
+ */
+export type QualityAskContext = {
+  /** 이 글을 쓴 사람의 생활사. 넘겼으면 `lifeConflict` 를 반드시 받아야 한다 */
+  persona?: PersonaLifeHistory
+  /** 판정 대상 초안 — 🔴 근거가 **이 글에** 있는지 대조한다 */
+  draftText?: string
+}
+
+export function parseQuality(rawText: string, ctx: QualityAskContext = {}): DraftQualityVerdict | null {
   let j: Record<string, unknown>
   try {
     const t = rawText.trim()
@@ -283,12 +348,47 @@ export function parseQuality(rawText: string): DraftQualityVerdict | null {
   const raw = Array.isArray(j.issues) ? j.issues.map(String)
     : Array.isArray(j.axes) ? j.axes.map(String) : []
   const issues: DraftQualityAxis[] = []
+  const unknownIssues: string[] = []
   for (const x of raw) {
-    // 🔴 모르는 축 이름은 버리지 않고 "일반론" 으로 읽는다 — 통과시키지는 않는다
+    // 🔴 **모르는 축을 다른 축으로 바꾸지 않는다.** 축은 우리가 정한다 —
+    //    우리 축이 아닌 이름은 판정 근거가 아니고, 그렇다고 숨기지도 않는다
     if ((DRAFT_QUALITY_AXES as readonly string[]).includes(x)) issues.push(x as DraftQualityAxis)
-    else issues.push('genericWithoutSourceAngle')
+    else unknownIssues.push(x)
   }
-  return { decision: d as AutoDraftDecision, confidence: c, issues: [...new Set(issues)] }
+  // 🔴 위해 축은 **판정 단계 정본**으로만 읽는다. 모르는 이름은 위해로 세지 않는다
+  const rawHarm = Array.isArray(j.harms) ? j.harms.map(String) : []
+  const harms = rawHarm.filter((x) => (SEMANTIC_DROP as readonly string[]).includes(x))
+  const unknownHarm = rawHarm.filter((x) => !(SEMANTIC_DROP as readonly string[]).includes(x))
+  // 🔴 **모르면 null 이다.** 모델이 답하지 않은 것을 "충돌 없음" 으로 읽지 않는다
+  const lc = j.lifeConflict
+  let lifeConflict: LifeConflict | null =
+    lc !== null && typeof lc === 'object' && typeof (lc as Record<string, unknown>).conflict === 'boolean'
+      ? {
+          conflict: (lc as { conflict: boolean }).conflict,
+          evidence: String((lc as Record<string, unknown>).evidence ?? '').trim(),
+        }
+      : null
+  // 🔴 Persona 를 넘겨 물었는데 답이 없다 — 판정을 받은 것이 아니다
+  if (ctx.persona !== undefined && lifeConflict === null) {
+    unknownIssues.push(LIFE_CONFLICT_MISSING)
+  }
+  /**
+   * 🔴 **지어낸 근거로 막지 않는다.** 초안에 없는 문장은 판정 근거가 아니다.
+   *    콘텐츠 사유(`lifeHistoryConflict`)로 둔갑시키지 않고 schema 불일치로 남긴다 —
+   *    `askQuality` 가 형식을 한 번 다시 일러 주고, 그래도 없으면 기술적 HOLD 다.
+   */
+  if (lifeConflict !== null && lifeConflict.conflict && ctx.draftText !== undefined
+    && !evidenceFoundIn(lifeConflict.evidence, ctx.draftText)) {
+    unknownIssues.push(LIFE_EVIDENCE_NOT_FOUND)
+    lifeConflict = { conflict: false, evidence: '' }
+  }
+  return {
+    lifeConflict,
+    decision: d as AutoDraftDecision, confidence: c,
+    issues: [...new Set(issues)],
+    unknownIssues: [...new Set([...unknownIssues, ...unknownHarm])],
+    harms: [...new Set(harms)],
+  }
 }
 
 /**
@@ -297,10 +397,76 @@ export function parseQuality(rawText: string): DraftQualityVerdict | null {
  * 모델이 통과라 해도 축이 붙어 있으면 통과가 아니고,
  * 모델이 버리라 해도 버릴 축이 없으면 사람에게 넘긴다.
  */
+/**
+ * 품질 판정을 결정으로 옮긴다 — 🔴 **정책이 모델 답을 이긴다**.
+ *
+ * 🔴 **모르는 축을 통과시키지 않는다** (2026-09-13 정정).
+ *
+ *    앞선 판은 모르는 축을 **다른 품질 사유로 바꿨고**(둔갑), 그것을 고치면서
+ *    이번에는 **무시**했다 — 그래서 `issues: ["bannedTopic"]` 만 온 응답이
+ *    `AUTO_ADOPT/ok` 까지 갔다. 둘 다 틀렸다.
+ *    schema 불일치는 **schema 불일치로 막는다.** 콘텐츠 결함으로 위장하지 않는다.
+ *    다시 물어보는 것은 부르는 쪽(`askQuality`)이 한 번만 한다.
+ */
+/**
+ * 🔴 **생활사 재생성이 실제로 확인됐는가** — 집계 정본 (2026-09-13).
+ *
+ *    옛 판은 `verdict !== null` 이면 확인한 것으로 쳤다. 그래서
+ *    `lifeConflict` 가 빠졌거나(schema 불일치) 모델이 근거를 지어낸 결과까지
+ *    **"고쳐졌다"(fixed)** 로 셌다 — 확인한 적이 없는 것을 성공으로 보고한 것이다.
+ *
+ * 🔴 **이것은 집계일 뿐 채택 판정이 아니다.** 채택은 `applyQuality` 가
+ *    지금처럼 fail-closed 로 막는다. 여기서는 "생활사가 풀렸는지" 만 센다 —
+ *    생활사가 풀렸어도 위해·품질로 HOLD 되는 글은 있다. 두 숫자를 섞지 않는다.
+ */
+export type LifeRetryOutcome = 'fixed' | 'held' | 'unverified'
+
+/**
+ * 🔴 **생활사 축 하나만 읽는다** — `applyQuality` 를 부르지 않는다 (2026-09-14).
+ *
+ *    `applyQuality` 는 **위해를 먼저** 돌려준다. 그래서 위해가 함께 있는
+ *    명백한 생활사 충돌이 `generatedHarm` 으로 덮여 집계에서 `unverified` 가 됐다 —
+ *    확인한 것을 확인 못 한 것으로 센 셈이다. 채택 판정과 축별 집계는 다른 일이다.
+ */
+const lifeAxisOf = (v: DraftQualityVerdict): 'clear' | 'conflict' | 'unknown' => {
+  // 🔴 생활사 축의 schema 문제 — 답이 없거나 근거가 초안에 없었다
+  if (v.lifeConflict === null) return 'unknown'
+  if (v.unknownIssues.includes(LIFE_CONFLICT_MISSING)) return 'unknown'
+  if (v.unknownIssues.includes(LIFE_EVIDENCE_NOT_FOUND)) return 'unknown'
+  return v.lifeConflict.conflict ? 'conflict' : 'clear'
+}
+
+export function judgeLifeRetry(
+  verdicts: readonly (DraftQualityVerdict | null)[],
+): LifeRetryOutcome {
+  const axes = verdicts.filter((v): v is DraftQualityVerdict => v !== null).map(lifeAxisOf)
+  // ① 하나라도 **명시적으로** "어긋나지 않았다" 를 받았으면 풀린 것이다
+  if (axes.includes('clear')) return 'fixed'
+  // ② 유효하게 판정받은 것이 있고, 그것들이 전부 근거 확인된 충돌이면 막힌 것이다
+  //    🔴 위해·품질 축은 여기 끼어들지 않는다. 채택은 `applyQuality` 가 따로 막는다
+  const judged = axes.filter((a) => a !== 'unknown')
+  if (judged.length > 0 && judged.every((a) => a === 'conflict')) return 'held'
+  // ③ 그 밖은 전부 **확인하지 못한 것**이다 —
+  //    응답 없음 · lifeConflict 누락 · 지어낸 근거 · 생활사 schema 불일치
+  return 'unverified'
+}
+
 export function applyQuality(v: DraftQualityVerdict | null): DraftReason {
   if (v === null) return 'semanticUnavailable'
+  // 🔴 **위해가 먼저다.** 품질보다 앞이고 모델의 decision 보다 앞이다
+  if (v.harms.length > 0) return 'generatedHarm'
+  /**
+   * 🔴 **명백한 1인칭 생활사 모순** — 근거 문장이 함께 왔을 때만 센다 (2026-09-13).
+   *    근거가 없으면 판정을 받은 것이 아니므로 막지 않는다. 애매한 표현은 차단하지 않는다.
+   *    러너는 이 사유를 받으면 **예산 안에서 한 번 다시 쓰게 한다** — 소재는 멀쩡하다.
+   */
+  if (v.lifeConflict !== null && v.lifeConflict.conflict && v.lifeConflict.evidence !== '') {
+    return 'lifeHistoryConflict'
+  }
   if (v.issues.some((x) => QUALITY_DROP.includes(x))) return 'semanticDrop'
   if (v.issues.some((x) => QUALITY_HOLD.includes(x))) return 'semanticHold'
+  // 🔴 우리 축이 하나도 없는데 모르는 이름만 왔다 — 판정을 받은 것이 아니다
+  if (v.unknownIssues.length > 0) return 'qualitySchemaMismatch'
   if (v.decision === 'AUTO_DROP' || v.decision === 'AUTO_HOLD') return 'semanticHold'
   if (v.confidence < DRAFT_MIN_CONFIDENCE) return 'lowConfidence'
   return 'ok'
@@ -309,7 +475,6 @@ export function applyQuality(v: DraftQualityVerdict | null): DraftReason {
 export type PickInput = {
   judgement: Judgement
   drafts: readonly DraftCandidate[]
-  material: string
   /** 이미 채택된 제목·본문 (정규화된 것) */
   seenTitles: ReadonlySet<string>
   seenBodies: ReadonlySet<string>
@@ -373,22 +538,13 @@ export function checkDraft(d: DraftCandidate, input: PickInput): DraftReason {
   if (S(d.body) === '') return 'emptyBody'
   if (S(d.safetyVerdict) !== 'pass') return 'safetyNotPass'
   if (hasBannedWord(d.title) || hasBannedWord(d.body)) return 'bannedWord'
-  if (!overlapOk(d.overlap)) return 'overlapTooLong'
-  if (hasRepetitiveWording(d.title)) return 'repetitiveWording'
+  // 🔴 실질 복제 — 기준은 draft-originality.ts 하나다. 여기서 숫자를 적지 않는다
+  if (judgeCopy(d.originality).copied) return 'copiedFromSource'
   if (echoesTitleAtEnd(d.title, d.body)) return 'titleEchoedInBody'
-  // 🔴 2026-09-07 에 반말 3건 · 질문 없는 글 1건이 통과했다. 기계가 직접 잰다
-  if (hasInformalSpeech(d.body)) return 'informalSpeech'
-  if (!endsWithQuestion(d.body)) return 'missingAnswerableQuestion'
   if (input.seenTitles.has(normalize(d.title))) return 'duplicateTitle'
   if (input.seenBodies.has(normalize(d.body))) return 'duplicateBody'
 
-  // ── ② 소재를 아는 경우에만 낱말 일치를 본다 ──
-  //    🔴 모르면 통과가 아니라 semantic 판정으로 넘어간다(아래). 여기서 true 를 주지 않는다
-  if (S(input.material) !== '' && !titleMatchesBody(d.title, d.body, input.material)) {
-    return 'titleBodyMismatch'
-  }
-
-  // ── ③ semantic 품질 — 🔴 판정을 못 받았으면 통과가 아니다 ──
+  // ── ② semantic 품질 — 🔴 판정을 못 받았으면 통과가 아니다 ──
   if (input.quality === undefined) return 'semanticUnavailable'
   return applyQuality(input.quality.get(d.draftNo) ?? null)
 }

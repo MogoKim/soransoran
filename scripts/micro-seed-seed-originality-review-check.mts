@@ -37,7 +37,8 @@ const check = (l: string, ok: boolean, why = ''): void => {
 const draft = (n: number, o: Record<string, unknown> = {}): Record<string, unknown> => ({
   draftNo: n, title: `초안 ${n}`, body: '본문이에요.\n어떠세요?', bodyLength: 14,
   safety: { verdict: 'pass', reasons: [], summary: 'pass' },
-  overlap: n, overlapFragment: '', leakedTokens: [], bannedHonorifics: [], ok: true,
+  originality: { runWords: 0, runChars: n, coverRatio: 0 },
+  leakedTokens: [], bannedHonorifics: [], ok: true,
   ...o,
 })
 const exp = (id: string, drafts: Record<string, unknown>[]): ExpansionIn => ({
@@ -62,10 +63,10 @@ check('초안 0건 그룹도 남는다 (needsHuman 을 보여야 한다)',
   toGroups([{ sourceArticleId: 'c', drafts: [], needsHuman: true }])[0]?.needsHuman === true)
 
 console.log('\n② 권장 — 🔴 결정적이어야 한다')
-const g1 = toGroups([exp('a', [draft(1, { overlap: 5 }), draft(2, { overlap: 2 }), draft(3, { overlap: 9 })])])[0]!
+const g1 = toGroups([exp('a', [draft(1, { originality: { runWords: 0, runChars: 5, coverRatio: 0 } }), draft(2, { originality: { runWords: 0, runChars: 2, coverRatio: 0 } }), draft(3, { originality: { runWords: 0, runChars: 9, coverRatio: 0 } })])])[0]!
 check('겹침이 가장 작은 것이 권장', g1.drafts.find((d) => d.recommended)?.draftNo === 2)
 check('🔴 그룹당 권장은 1개', g1.drafts.filter((d) => d.recommended).length === 1)
-const g2 = toGroups([exp('a', [draft(3, { overlap: 2 }), draft(1, { overlap: 2 })])])[0]!
+const g2 = toGroups([exp('a', [draft(3, { originality: { runWords: 0, runChars: 2, coverRatio: 0 } }), draft(1, { originality: { runWords: 0, runChars: 2, coverRatio: 0 } })])])[0]!
 check('동률이면 draftNo 작은 쪽', g2.drafts.find((d) => d.recommended)?.draftNo === 1)
 check('🔴 두 번 돌려도 같다',
   pickRecommended(g1.drafts) === pickRecommended(g1.drafts))
@@ -99,7 +100,7 @@ check('원천·번호가 함께 나간다', rows[0]?.sourceArticleId === 'a' && 
 check('메모 반영', rows[0]?.memo === '이걸로')
 check('모든 행에 발행 아님 문구', rows.every((r) => r.note === NOT_PUBLISH_NOTE))
 check('복붙 검증 결과가 export 에도 실린다',
-  typeof rows[0]?.maxOverlap === 'number' && rows[0]?.clean === 'clean')
+  typeof rows[0]?.originality === 'string' && rows[0]?.clean === 'clean')
 
 console.log('\n⑤ 다중 채택 — 🟡 막지 않고 알린다')
 const many = { 'a#1': { v: 'ADOPT' }, 'a#2': { v: 'ADOPT' } }
@@ -114,7 +115,7 @@ console.log('\n⑥ 컬럼 계약 — 🔴 순서 고정')
 const EXPECTED = [
   'decision', 'sourceArticleId', 'draftNo', 'topic', 'material', 'generalized', 'direction',
   'title', 'body', 'bodyLength',
-  'safetyVerdict', 'safetyReasons', 'maxOverlap', 'leakedTokens', 'clean', 'recommended',
+  'safetyVerdict', 'safetyReasons', 'originality', 'leakedTokens', 'clean', 'recommended',
   'memo', 'note',
   // 🔴 §4-AC 간극 보강 — 맨 뒤에만 붙었다
   'sourceSite', 'generatedAt', 'reviewedAt',

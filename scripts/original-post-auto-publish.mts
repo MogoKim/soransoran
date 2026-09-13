@@ -33,6 +33,10 @@ import {
 } from '../src/lib/original-post-auto-publish'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { planBatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
+// 🔴 생성 말투 → 최종 author. 러너 · 관제 · 예측 · 준비도가 이 함수 하나를 쓴다
+import { voiceInputOf } from '../src/lib/original-post-auto-publish'
+// 🔴 생성 말투 → 최종 author. 여기서 읽지 않으면 연결이 끊긴다
+
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
@@ -176,6 +180,8 @@ const queueCandidates: QueueCandidate[] = targets.map((t, i) => ({
   assignedPersonaCode: t.matchedPersonaId === null
     ? null
     : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+  // 🔴 말투·profile 은 **정본 한 함수**가 만든다. 호출부마다 따로 부르면 한 곳이 빠진다
+  ...voiceInputOf(t),
   capturedAt: capturedAtOf.get(t.id) ?? null,
 }))
 

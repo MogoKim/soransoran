@@ -82,6 +82,7 @@
     "micro-seed:auto-judge-check": "tsx scripts/micro-seed-auto-judge-check.mts",
     "micro-seed:auto-draft": "tsx scripts/micro-seed-auto-draft.mts",
     "micro-seed:auto-draft-check": "tsx scripts/micro-seed-auto-draft-check.mts",
+    "draft-originality-check": "tsx scripts/draft-originality-check.mts",
     "micro-seed:collect-navercafe": "tsx scripts/micro-seed-collect-navercafe.mts",
     "micro-seed:navercafe-check": "tsx scripts/micro-seed-navercafe-check.mts",
     "navercafe:session-setup": "tsx scripts/navercafe-session-setup.mts",

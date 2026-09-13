@@ -22,6 +22,7 @@
  *   npx tsx scripts/micro-seed-seed-originality-dry-run.mts --in=.microseed-data/srn-approvals-20260905.json
  *   npx tsx scripts/micro-seed-seed-originality-dry-run.mts --include-drafted   # 이미 초안 있는 원천도 다시
  */
+import { describeOriginality } from '../src/lib/draft-originality'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve, relative, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -219,7 +220,7 @@ export function toTsv(exps: readonly Expansion[]): string {
         draftNo: d.draftNo, title: d.title, body: d.body, bodyLength: d.bodyLength,
         safetyVerdict: d.safety.verdict,
         safetyReasons: d.safety.reasons.map((r) => r.code).join('/'),
-        maxOverlapWithSourceTitle: d.overlap,
+        originality: describeOriginality(d.originality),
         leakedTokens: d.leakedTokens.join('/'),
         ok: d.ok ? 'ok' : 'check',
         note: DRY_RUN_NOTE,
@@ -319,7 +320,7 @@ function main(): void {
       drafts++
       if (!d.ok) flagged++
       console.log(`   [${d.draftNo}] ${d.title}`)
-      console.log(`       본문 ${d.bodyLength}자 · safety ${d.safety.verdict} · 원문 최대겹침 ${d.overlap}자` +
+      console.log(`       본문 ${d.bodyLength}자 · safety ${d.safety.verdict} · ${describeOriginality(d.originality)}` +
         `${d.leakedTokens.length ? ` · 🔴 원문 낱말 ${d.leakedTokens.join('/')}` : ''}${d.ok ? '' : '  🔴 확인 필요'}`)
     }
   }

@@ -101,7 +101,7 @@ console.log('\n①-b 🔴 기계 profile — 통째로 맞아야 발행 후보�
   check('🔴 gateResults 표시가 없으면 기계가 아니다',
     selectAutoTargets([m({ gateResults: { holds: [], blocks: [] } })], allPass).targets.length === 0)
   check('🔴 gateResults 가 옛 판이면 제외', selectAutoTargets([m({
-    gateResults: { autoDraft: { ...MACHINE_GATE_MARKS, draftRuleVersion: 'auto-draft-v2' } },
+    gateResults: { autoDraft: { ...MACHINE_GATE_MARKS, draftRuleVersion: 'auto-draft-옛판' } },
   })], allPass).targets.length === 0)
   check('🔴 provenance 가 사람이면 제외', selectAutoTargets([m({
     gateResults: { autoDraft: { ...MACHINE_GATE_MARKS, provenance: 'human-curated' } },
@@ -459,8 +459,8 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
     { ...base, code: 'P10' }, { ...base, code: 'P17' }, { ...base, code: 'P15' },
   ] as never[]
 
-  const planWith = planMatch({ queueId: 'q', title: KID_TITLE, body: KID_BODY, personas: withKids })
-  const planWithout = planMatch({ queueId: 'q', title: KID_TITLE, body: KID_BODY, personas: withoutKids })
+  const planWith = planMatch({ queueId: 'q', title: KID_TITLE, body: KID_BODY, personas: withKids, voice: null, profile: 'human' })
+  const planWithout = planMatch({ queueId: 'q', title: KID_TITLE, body: KID_BODY, personas: withoutKids, voice: null, profile: 'human' })
 
   check('🔴 [회귀] childrenCount 를 넘기면 자녀 있는 persona 가 eligible 이다', (() => {
     const codes = planWith.eligible.map((c) => c.code).sort().join(' ')

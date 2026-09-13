@@ -35,6 +35,8 @@ import { LOCK_FILE, LOCK_TTL_MS, RUN_FILE_RE, adaptKeyOf } from '../src/lib/supp
 /** 🔴 잠금 판정 정본 하나 — 관제도 러너와 같은 함수로 본다 */
 import { lockAnomaly as processLockAnomaly } from './lib/collect-lock.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
+// 🔴 말투·profile 의 정본 — 러너와 같은 함수를 쓴다
+import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, minuteOfDay, slotLabel } from '../src/lib/scale-profile'
 import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } from '../src/lib/scale-readiness'
@@ -527,6 +529,8 @@ async function main(): Promise<void> {
       : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
     // 🔴 나이를 굳히지 않는다 — 예측이 매일 다시 잰다
     capturedAt: capturedAtOfHealth.get(t.id) ?? null,
+    // 🔴 러너와 **같은 함수**로 말투·profile 을 넣는다. 여기서 빠지면 관제가 다른 답을 낸다
+    ...voiceInputOf(t),
   }))
   const prepared = prepareCandidates({ candidates: queueCandidates, personas: personas as never, at: now })
   /**

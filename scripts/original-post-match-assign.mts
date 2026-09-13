@@ -30,6 +30,8 @@ import {
   planBatch, BLOCK_LABEL,
   type PersonaForMatch, type BatchDraft, type BlockCode, type ChildAgeBand,
 } from '../src/lib/original-post-persona-match'
+// 🔴 말투·profile 의 정본 — 러너 · 관제 · 예측과 같은 함수를 쓴다
+import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import {
   planStore, assertMatchMeta, assertMatchWrite, RULE_VERSION,
   type QueueStatus,
@@ -106,7 +108,9 @@ const allRows = await prisma.originalPostApprovalQueue.findMany({
     id: true, status: true, gateVerdict: true, createdAt: true, createdPostId: true,
     draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
     matchedPersonaId: true,
-    rawContent: { select: { sourceArticleId: true } },
+    // 🔴 말투·profile 판정에 필요한 필드 — 러너와 같은 함수를 쓰려면 같은 것을 읽어야 한다
+    promptVersion: true, model: true, gateResults: true,
+    rawContent: { select: { sourceArticleId: true, sourceSite: true } },
   },
   orderBy: { createdAt: 'asc' },
 })
@@ -121,12 +125,24 @@ if (missing.length > 0) {
 console.log(`  대상 ${rows.length}건 (APPROVED · EDITED · 발행 전)\n`)
 
 // 🔴 수정본이 있으면 그것이 발행될 글이다
+/**
+ * 🔴 **수동 배정도 같은 규칙을 지난다** (2026-09-13).
+ *    이 도구는 `--apply` 로 실제 `matchedPersonaId` 를 저장한다.
+ *    여기만 말투 검사를 건너뛰면 사람이 손으로 우회할 수 있는 문이 하나 남는다.
+ */
 const drafts: BatchDraft[] = rows.map((r) => ({
   queueId: r.id,
   title: r.editedTitle ?? r.draftTitle,
   body: r.editedBody ?? r.draftBody,
   gateVerdict: r.gateVerdict,
   createdAt: r.createdAt.getTime(),
+  ...voiceInputOf({
+    id: r.id, status: r.status, createdPostId: r.createdPostId, gateVerdict: r.gateVerdict,
+    promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
+    gateResults: r.gateResults,
+    title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
+    sourceSite: r.rawContent?.sourceSite ?? '',
+  } as never),
 }))
 const batch = planBatch(drafts, personas)
 const byId = new Map(batch.assignments.map((a) => [a.queueId, a]))

@@ -2185,6 +2185,18 @@ Claude 또는 Codex의 보고는 항상 이 다섯 칸을 분리한다.
 - DB 모델: `prisma/schema.prisma`
 - AI adapter: `scripts/lib/voice-m3-provider.mts`
 - 자동 judge/draft: `scripts/micro-seed-auto-judge.mts`, `scripts/micro-seed-auto-draft.mts`
+- 독창성 정본(한 벌): `src/lib/draft-originality.ts` — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다
+- 글 목소리 정본: `scripts/lib/source-profile.ts`, `scripts/lib/original-post-prompt.ts`
+  — 두 글 레인(Original Post · 마이크로시드 자동 초안)이 같은 블록을 공유한다
+- 말투 근거 자산: `scripts/lib/persona-reference-store.mts` (`loadCanonAsset` · `planBundles`)
+  — 🔴 댓글 레인과 **같은 자산**이다. 자동 초안은 정본 universe 의 Persona 에 묶는다
+- 생성 말투 ↔ 발행 author: `src/lib/original-post-voice-match.ts`
+  — 🔴 `생성 → 후보 → 큐 gateResults → planMatch → 최종 author` 가 이 파일 하나로 이어진다.
+    호환 단위는 matcher 와 같은 길이 밴드다
+- 위해 축 정본: `src/lib/micro-seed-auto-judge.ts` (`SEMANTIC_RISKS` · `SEMANTIC_DROP`)
+  — 🔴 초안 단계 `BLOCKING_RISKS` 가 이것을 그대로 쓴다. 주제가 아니라 위해다
+- 품질 축 정본: `src/lib/micro-seed-auto-draft.ts` (`DRAFT_QUALITY_AXES` · `DRAFT_QUALITY_AXIS_PROMPT`)
+  — 🔴 품질 프롬프트는 이 표에서 **생성**한다. 사람이 두 목록을 따로 적지 않는다
 - publish: `scripts/original-post-auto-publish.mts`, `.github/workflows/auto-publish.yml`
 - health: `scripts/supply-health.mts`
 - 기준 DB 스냅샷: 2026-09-08 read-only 직접 조회

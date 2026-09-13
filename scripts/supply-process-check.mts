@@ -337,7 +337,10 @@ const CAND = (o: Partial<Candidate> = {}): Candidate => ({
   sourceSite: 'navercafe:remonterrace', sourceInput: 'navercafe:remonterrace',
   sourceDecision: 'ADOPT', title: '아이랑 같이 갈 숙소, 뭐 보고 고르세요?',
   body: '숙소 고를 때 뭘 먼저 보시는지 궁금해요.',
-  safetyVerdict: 'pass', maxOverlap: 3, leakedTokens: '', reviewedAt: '2026-09-06T11:00:00Z', ...o,
+  safetyVerdict: 'pass',
+  // 🔴 잰 값이다. 통과·탈락은 `draft-originality.ts` 가 정한다
+  originality: { runWords: 3, runChars: 8, coverRatio: 0 },
+  leakedTokens: '', reviewedAt: '2026-09-06T11:00:00Z', ...o,
 })
 check('🔴 같은 입력을 다시 돌려도 이미 올린 것은 적재되지 않는다', (() => {
   const c = CAND()

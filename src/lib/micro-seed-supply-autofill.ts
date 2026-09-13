@@ -17,6 +17,11 @@
  */
 
 import { derive, SAFEST_PROFILE } from './scale-profile'
+/** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
+import { judgeCopy, readMeasure, describeOriginality } from './draft-originality'
+import { readVoiceProvenance } from './original-post-voice-match'
+// 🔴 판 값의 정본은 초안 lib 하나다 — 여기서 다시 적으면 올릴 때마다 갈라진다
+import { DRAFT_RULE_VERSION, DRAFT_PROMPT_VERSION, DRAFT_PROVENANCE } from './micro-seed-auto-draft'
 
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
@@ -54,9 +59,17 @@ export const REQUIRED_DECISION: Readonly<Record<string, string>> = {
  */
 export const MACHINE_PROFILE = {
   /** 파일 봉투(envelope)의 값 — 🔴 행만 읽고 봉투를 버리면 안 된다 */
-  envelopeProvenance: 'machine-generated',
-  envelopeRuleVersion: 'auto-draft-v3',
-  envelopePromptVersion: 'draft-gen-v3',
+  envelopeProvenance: DRAFT_PROVENANCE,
+  /**
+   * 🔴 **판 값을 여기 다시 적지 않는다** (2026-09-13 정정).
+   *
+   *    옛 판은 `'auto-draft-v3'` 를 손으로 적어 두었다. 초안 쪽이 v4 · v5 로 올라가는 동안
+   *    이 값은 그대로였고, 그래서 **새로 만든 기계 후보가 전부 `PROFILE` 로 제외**됐다 —
+   *    공급이 조용히 0 이 되는 모양이다. 실측으로 확인했다.
+   *    판 값은 초안 lib 하나가 정한다. 여기서는 가져다 쓴다.
+   */
+  envelopeRuleVersion: DRAFT_RULE_VERSION,
+  envelopePromptVersion: DRAFT_PROMPT_VERSION,
   envelopeModel: 'claude-haiku-4.5',
   /** 행의 값 */
   sourceDecision: 'AUTO_ADOPT',
@@ -67,7 +80,12 @@ export const MACHINE_PROFILE = {
 /** 🔴 기계 후보가 큐에 남길 표시 — 사람 것과 한 글자도 겹치지 않는다 */
 export const MACHINE_PROMPT_VERSION = 'publish-candidate-auto-v1'
 export const MACHINE_MODEL = 'claude-haiku-4.5'
-export const MACHINE_DECIDED_BY = 'machine:auto-draft-v3'
+/**
+ * 🔴 큐에 남기는 "누가 정했나" 표시 — **판 값을 여기 다시 적지 않는다** (2026-09-13).
+ *    옛 판은 `'machine:auto-draft-v3'` 로 굳어 있어서, 초안이 v5 인데도 v3 이라고 적었다.
+ *    이 값은 기록일 뿐 판정에 쓰이지 않지만, **틀린 기록은 나중에 원인을 못 찾게 만든다.**
+ */
+export const MACHINE_DECIDED_BY = `machine:${DRAFT_RULE_VERSION}`
 export const MACHINE_SITE_PREFIX = 'publish-candidate:auto:'
 
 /** 🔴 사람 값 — 기계 경로가 이 값을 쓰면 안 된다 */
@@ -102,11 +120,17 @@ export function machineProfileMismatch(
   eq(c.sourceInput, MACHINE_PROFILE.sourceInput, 'sourceInput')
   eq(c.candidateType, MACHINE_PROFILE.candidateType, 'candidateType')
   eq(c.safetyVerdict, 'pass', 'safetyVerdict')
-  // 🔴 **숫자로 존재해야 한다.** 없으면 `?? 0` 이 0 을 만들어 통과시킨다 —
-  //    "재지 않았다" 가 "겹침 0" 이 되는 것이 provenance 세탁의 시작이다
-  const ov = c.maxOverlap
-  if (typeof ov !== 'number' || !Number.isFinite(ov)) bad.push('maxOverlap 이 숫자가 아니다')
-  else if (ov < 0 || ov >= MAX_ALLOWED_OVERLAP) bad.push(`maxOverlap=${ov} (0~${MAX_ALLOWED_OVERLAP - 1})`)
+  // 🔴 **재 둔 값이 있어야 한다.** 없으면 `?? 0` 이 0 을 만들어 통과시킨다 —
+  //    "재지 않았다" 가 "겹침 없음" 이 되는 것이 provenance 세탁의 시작이다
+  const m = readMeasure(c.originality)
+  if (m === null) bad.push('originality 를 재지 않았다')
+  else if (judgeCopy(m).copied) bad.push(`originality=${describeOriginality(m)}`)
+  /**
+   * 🔴 **기계 후보는 말투 근거가 필수다** (2026-09-13).
+   *    없으면 발행 단계가 "사람이 쓴 글" 과 구분하지 못해 **아무 Persona 이름으로나** 나간다.
+   *    사람 후보에는 이 값이 없고, 그쪽은 이 함수를 통과하지 않는다.
+   */
+  if (readVoiceProvenance(c.voiceProvenance) === null) bad.push('voiceProvenance 가 없거나 깨졌다')
   if (S(c.leakedTokens) !== '') bad.push(`leakedTokens=${S(c.leakedTokens)}`)
   return bad
 }
@@ -159,14 +183,12 @@ export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
 }
 
 /**
- * 원문이 새지 않았다고 볼 수 있는 선 — 후보 파일이 이미 재는 값이다.
+ * 🔴 **독창성 기준을 여기서 다시 적지 않는다** (2026-09-13).
  *
- * 🔴 **6자 "미만" 이다.** 이 파일은 `> MAX_ALLOWED_OVERLAP` 으로 재고 있어서
- *    정확히 6자가 통과했다(2026-09-07 실측). 초안 생성 쪽(`micro-seed-auto-draft`)은
- *    `overlap < MAX_OVERLAP` 으로 6자를 막고 있었으므로 **두 곳의 기준이 어긋나 있었다.**
- *    통과선을 느슨한 쪽에 맞추면 엄한 쪽 검사가 무의미해진다.
+ *    옛 판은 이 파일이 `>= 6`, 생성 쪽이 `< 6` 을 따로 갖고 있어서
+ *    정확히 6자인 초안의 운명이 어느 단계를 지나느냐에 따라 달랐다(2026-09-07 실측).
+ *    기준이 두 벌이면 반드시 그런 날이 온다. 이제 `draft-originality.ts` 하나가 판정한다.
  */
-export const MAX_ALLOWED_OVERLAP = 6
 
 /** 재고 기준선 (§4-AN) */
 /**
@@ -223,7 +245,13 @@ export type Candidate = {
   title?: string
   body?: string
   safetyVerdict?: string
-  maxOverlap?: number
+  /** 🔴 잰 값. 판정은 `draft-originality.ts` 가 한다 */
+  originality?: unknown
+  /**
+   * 🔴 **어떤 Persona 의 말투로 썼는가** (2026-09-13).
+   *    기록만 하던 값이 아니다 — 발행 matcher 가 이것으로 author 를 고른다.
+   */
+  voiceProvenance?: unknown
   leakedTokens?: string
   reviewedAt?: string
   provenanceNote?: string
@@ -233,7 +261,7 @@ export type Candidate = {
 export type HeldEntry = { sourceArticleId: string; title: string; reason?: string }
 
 export type SkipCode =
-  | 'TYPE' | 'DECISION' | 'SAFETY' | 'OVERLAP' | 'LEAK' | 'EMPTY'
+  | 'TYPE' | 'DECISION' | 'SAFETY' | 'COPIED' | 'UNMEASURED' | 'LEAK' | 'EMPTY'
   | 'ALREADY' | 'HELD' | 'SIBLING'
   | 'PROFILE' | 'IMPERSONATION'
 
@@ -241,7 +269,8 @@ export const SKIP_LABEL: Record<SkipCode, string> = {
   TYPE: 'seedOriginality · rawOriginality 가 아니다 (SRN 은 경로가 다르다)',
   DECISION: '사람이 채택한 표시가 없다 (Seed=ADOPT · Raw=SAVE)',
   SAFETY: 'safety 가 pass 가 아니다',
-  OVERLAP: `원문 겹침이 ${MAX_ALLOWED_OVERLAP}자 이상이다 (${MAX_ALLOWED_OVERLAP}자 미만이어야 한다)`,
+  COPIED: '🔴 원문을 실질적으로 옮겼다',
+  UNMEASURED: '🔴 독창성을 재지 않았다 — 옛 판(v3) 후보다',
   LEAK: '유출 토큰이 있다',
   EMPTY: '제목이나 본문이 비었다',
   ALREADY: '이미 큐에 올라갔다',
@@ -349,8 +378,10 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
     // 🔴 기계 후보가 사람 값을 쓰고 있으면 거절한다 — 사칭이다
     if (isMachineShape && impersonatesHuman(env, c)) { push(title, 'IMPERSONATION'); continue }
     if (S(c.safetyVerdict) !== 'pass') { push(title, 'SAFETY'); continue }
-    // 🔴 `>=` 다. `>` 였을 때 정확히 6자가 통과했다
-    if (Number(c.maxOverlap ?? 0) >= MAX_ALLOWED_OVERLAP) { push(title, 'OVERLAP'); continue }
+    // 🔴 **생성 때와 같은 함수로 다시 판정한다.** 여기서 숫자를 적으면 기준이 두 벌이 된다
+    const measure = readMeasure(c.originality)
+    if (measure === null) { push(title, 'UNMEASURED'); continue }
+    if (judgeCopy(measure).copied) { push(title, 'COPIED'); continue }
     if (S(c.leakedTokens) !== '') { push(title, 'LEAK'); continue }
     if (title === '' || S(c.body) === '') { push(title, 'EMPTY'); continue }
     if (input.existing.has(provenanceKeyOf(id, title))) { push(title, 'ALREADY'); continue }
@@ -506,7 +537,7 @@ export function buildQueuePayload(input: {
           candidateType: S(c.candidateType),
           sourceDecision: S(c.sourceDecision),
           safetyVerdict: S(c.safetyVerdict),
-          maxOverlap: Number(c.maxOverlap ?? 0),
+          originality: readMeasure(c.originality),
           sourceInput: S(c.sourceInput),
           filledAt: input.now,
         },
@@ -518,7 +549,9 @@ export function buildQueuePayload(input: {
           model: S(env.model),
           draftFrom: S((c as unknown as Record<string, unknown>).draftFrom),
           safetyVerdict: S(c.safetyVerdict),
-          maxOverlap: Number(c.maxOverlap ?? 0),
+          originality: readMeasure(c.originality),
+          // 🔴 발행 matcher 가 읽는다. 여기서 끊기면 말투와 이름이 어긋난다
+          voice: readVoiceProvenance(c.voiceProvenance),
           queuedAt: input.now,
         },
         // 🔴 상수가 아니라 **후보에 실려 온 값**이다. 그 판에서 만들어졌다는 증거다
@@ -550,7 +583,7 @@ export function buildQueuePayload(input: {
         candidateType: type,
         sourceDecision: S(c.sourceDecision),
         safetyVerdict: S(c.safetyVerdict),
-        maxOverlap: Number(c.maxOverlap ?? 0),
+        originality: readMeasure(c.originality),
         sourceInput: S(c.sourceInput),
         provenanceNote: S(c.provenanceNote),
         filledAt: input.now,

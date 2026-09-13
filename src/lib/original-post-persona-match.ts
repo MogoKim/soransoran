@@ -27,6 +27,15 @@
  */
 
 import { judgeRealMember } from './real-member-gate'
+/**
+ * 🔴 **생성 말투와 최종 author 를 잇는다** (2026-09-13).
+ *    자동 초안이 어떤 Persona 의 말투 근거로 쓰였는지가 후보에 남는데,
+ *    여기서 읽지 않으면 반말로 쓴 글이 존댓말 Persona 이름으로 나간다.
+ */
+import {
+  judgeVoiceMatch, VOICE_MATCH_LABEL,
+  type VoiceProvenance, type CandidateProfile,
+} from './original-post-voice-match'
 import { effectiveWeeklyCap, SAFEST_PROFILE } from './scale-profile'
 
 // ─────────────────────────────────────────────────────────
@@ -72,7 +81,24 @@ const EX_SPOUSE_RE = /전남편|옛남편|헤어진 남편|이혼한 남편|남�
 const SPOUSE_RE = /남편|신랑|애들아빠|아이아빠/g
 
 const CHILDREN_RE = /딸|아들|애들|아이들|큰애|작은애|자식|우리 애/g
-const PARENT_CARE_RE = /친정|엄마가|아버지가|어머니가|요양|치매|병간호|모시고/g
+/**
+ * 🔴 **돌봄은 '행위' 다. 부모가 있다는 사실이 아니다** (2026-09-13).
+ *    옛 판은 `친정` · `엄마가` 만 나와도 "부모 돌봄 경험" 을 요구했다. 실측:
+ *    `친정엄마와 제가 여행 중이었는데` 라는 조카 결혼 이야기가 돌봄 조건을 세워
+ *    18명 중 12명이 밀려났다. 부모 이야기를 하는 글은 이 커뮤니티에 아주 많다.
+ *    누가 나왔는지가 아니라 **무엇을 하고 있는지**로 읽는다.
+ */
+/** 🔴 **상태** — 돌봄 대상 쪽 말이다. 그래서 **대상의 임자**를 본다 */
+const CARE_STATE_RE = /요양|치매|편찮/g
+/**
+ * 🔴 **행위** — 돌보는 사람 쪽 말이다. 그래서 **행위자**를 본다.
+ *
+ *    `제가 이모 병간호를 하고 있어요` 는 **내 돌봄 경험**이다. 대상이 이모일 뿐이다.
+ *    대상의 임자로 읽으면 `이모` 때문에 남의 일이 되어 버린다 (2026-09-13 실측).
+ */
+const CARE_ACT_RE = /병간호|간병|모시고|돌보/g
+/** 🔴 이 문장의 행위자가 화자인가 */
+const FIRST_PERSON_ACTOR_RE = /제가|내가|저는|나는|나도|저도/
 const MENOPAUSE_RE = /갱년기|폐경|호르몬|열이 확|안면홍조/g
 
 /** 글에 나온 말 → 자녀 나이대 밴드 */
@@ -98,19 +124,178 @@ export type PostRequirements = {
 
 const has = (text: string, re: RegExp): boolean => (text.match(re) ?? []).length > 0
 
+// ─────────────────────────────────────────────────────────
+// 🔴 소재 언급 · 남의 이야기 · 내 이야기 (2026-09-13)
+// ─────────────────────────────────────────────────────────
+//
+// 옛 판은 **글 전체에서 낱말 하나**만 찾으면 조건을 세웠다. 그래서
+// `요즘 세대도 아들.딸 차별을 하나요?` 라는 일반 논의가 "자녀 있음" 을 요구했고,
+// 자녀 없는 Persona 전원이 이 소재에서 밀려났다. 가족 · 자녀 · 배우자 · 갱년기 ·
+// 돌봄은 이 커뮤니티가 가장 활발하게 이야기하는 소재다. 막는 것은 손해다.
+//
+// 🔴 그 뒤 두 판이 더 틀렸다. **둘 다 구조가 문제였지 낱말이 모자란 게 아니었다.**
+//
+//    ① 2분류(자기/일반) — "일반론 낱말이 없으면 자기 이야기" 라서
+//       `언니 남편` 도 `이모가 갱년기` 도 전부 내 조건이 됐다.
+//    ② 사람 명사 **목록**(`친구|언니|이모…`)으로 남의 것을 가렸다.
+//       목록에 없는 사람은 전부 화자의 가족이 됐다 —
+//       `아는 분 딸` · `회사 사람 딸` · `선생님 남편`.
+//       게다가 문장 **전체**의 마지막 표지로 모든 소재를 판정해서
+//       앞 절의 임자가 뒤 절까지 번졌다 (`친구 딸은 고3이고 남편은 출장 갔어요`).
+//
+//    🔴 목록을 늘리는 것은 고치는 것이 아니다. 늘릴수록 목록 밖이 새고,
+//       그 구조가 바로 우리가 없애려는 과잉 규제다.
+//
+// 🔴 **지금 판은 목록을 쓰지 않는다.** 확실한 자기 생활사만 꺼내는
+//    **보수적 extractor** 다. 사람 이름을 알아야 할 이유가 없다.
+//
+//    ┌ 판정 단위 ─────────────────────────────────────────────┐
+//    │ 문장 → **절**. 앞 절의 임자가 뒤 절로 번지지 않는다.       │
+//    └────────────────────────────────────────────────────────┘
+//
+//    소재 낱말 **바로 앞 한 어절**만 본다.
+//      · 1인칭 한정사·주어(`우리` · `제` · `내` · `제가` · `저는`)  → 내 것
+//      · 소재 낱말 자체가 이미 내 것(`우리 애` · `친정`)            → 내 것
+//      · 앞이 비어 있다(절 시작)                                  → 내 것
+//        한국어는 1인칭을 생략한다. `남편은 출장 갔어요` 는 내 남편이다.
+//      · 앞이 **다른 소재어**다(`고3 딸`)                          → 임자가 아니다. 한 칸 더 본다
+//      · 그 밖에 **무엇이든 앞에 서 있다**                         → 임자를 모른다 → 조건 세우지 않음
+//
+//    마지막 줄이 핵심이다. `친구` 인지 `아는 분` 인지 `회사 사람` 인지 알 필요가 없다.
+//    **누군가가 앞에 서 있다는 사실만으로 충분히 모호하다.**
+//
+// 🔴 **모호하면 조건을 세우지 않는다.** 과차단보다 놓치는 쪽을 택한다 —
+//    발행할 수 있는 좋은 소재를 죽이지 않는 것이 North Star 에 더 중요하다.
+//
+// 🔴 **그래서 이것은 관문이 아니다** (2026-09-13). 한동안 "놓쳐도 발행 직전
+//    `hardFilter` 가 잡는다" 고 적혀 있었는데 **거짓이었다** — `hardFilter` 는
+//    이 함수의 출력을 **인자로 받는다.** 여기서 놓친 것은 거기서도 놓친다.
+//    실측: 비혼 Persona + `어제 남편이 늦게 들어왔어요` → 차단 사유 0건.
+//
+//    이 함수의 역할은 하나다: **생성 전에 잘 맞는 Persona 에게 우선권을 주는 고확신 보조.**
+//    실제 1인칭 모순은 **다 쓴 글**에서 본다 —
+//    `micro-seed-auto-draft` 가 Persona 의 생활사를 생성 프롬프트에 넣고,
+//    검수가 `lifeConflict` 를 근거와 함께 판정한다.
+
+/** 🔴 이 문장은 세상 이야기다 — 특정한 누구의 생활사도 아니다 */
+const GENERAL_FRAME_RE =
+  /다들|남들|사람들|분들|세상|세대|우리\s*나이|또래|보통은|일반적|다른 집|남의 집|보니까|들어보니|뉴스|기사|방송|프로그램|드라마|예능|유튜브|어떻게 생각|어떠세요|어떤가요|계신가요/
+/** 🔴 묻는 문장은 **주장이 아니다** — `아들.딸 차별을 하나요?` 는 자기 자녀 이야기가 아니다 */
+const ASKING_RE = /[?？]\s*$/
+
+/** 🔴 한정사가 필요 없는 말 — 그 말 자체가 이미 '내 것' 이다 */
+const SELF_OWNED_RE = /친정|애들아빠|아이아빠/
+/** 🔴 소재 낱말이 한정사를 **달고 잡힌** 경우 — `우리 애` 는 통째로 하나의 소재다 */
+const SELF_LEADING_RE = /^(?:우리|저희|울|제|내)\s?/
+/**
+ * 🔴 소재 **바로 앞 한 어절**이 이것이면 내 것이다.
+ *    `제` · `내` 는 어절 전체와 같아야 한다 — 그러지 않으면 `제일` · `내일` 이 잡힌다.
+ */
+const SELF_WORD_RE = /^(?:우리|저희|제|내|제가|내가|저는|나는|나도|저도)$/
+
+/**
+ * 절 경계 — 🔴 **앞 절의 임자가 뒤 절로 번지지 않게** 자른다.
+ *    `친구 딸은 고3이고 · 남편은 출장 갔어요` 는 서로 다른 사람 이야기다.
+ */
+const CLAUSE_SPLIT_RE = /(?<=고|지만|는데|면서|라서|어서|아서|으며|이며|니까)\s+|[,，]\s*/
+/** 문장 경계 — 마침표 없이 쓰는 글이 많아 줄바꿈도 경계로 본다 */
+const SENTENCE_SPLIT_RE = /(?<=[.!?？。])\s+|\n+/
+
+/**
+ * 이 소재가 누구 이야기인가 — 🔴 `unknown` 은 **조건을 세우지 않는다**는 뜻이다.
+ *
+ *    `self-explicit` 과 `self-elided` 를 나누는 이유: 세상 이야기 틀은
+ *    **생략된 1인칭만** 덮는다. `우리 남편` 은 `다들` 이 있어도 내 남편이다.
+ */
+type MentionOwner = 'self-explicit' | 'self-elided' | 'unknown'
+
+/**
+ * 🔴 **부사격 조사로 끝나는 어절은 임자가 아니다.**
+ *    `이번에 애들이랑 갈 숙소` 의 `이번에` 는 때를 말할 뿐 애들의 임자가 아니다.
+ *    임자가 되려면 주격·관형격·목적격이거나 조사가 없어야 한다 (`친구 딸` · `이모가 갱년기`).
+ *    낱말이 아니라 **조사**를 보는 것이라 목록이 자라지 않는다.
+ */
+const ADVERBIAL_RE = /(?:에|에서|으로|로|부터|까지|처럼|만큼|보다|마다|이나|나)$/
+
+/** 🔴 임자 자리에 설 수 없는 말 — 소재 사전에 이미 있는 낱말이다 (`고3 딸` 의 `고3`) */
+const TOPIC_WORD_RES: readonly RegExp[] = [
+  SPOUSE_RE, CHILDREN_RE, MENOPAUSE_RE, ...CHILD_AGE_TOKENS.map((x) => x.re),
+]
+
+/**
+ * 🔴 소재 바로 앞 어절들을 훑어 **임자**를 가린다.
+ *    소재어가 이어지면 건너뛴다 — `요양` 앞의 `치매라` 는 임자가 아니다.
+ */
+const ownerOfPrefix = (before: string): MentionOwner => {
+  const words = before.trim().split(/\s+/).filter((w) => w !== '')
+  for (let k = words.length - 1; k >= 0; k -= 1) {
+    const w = words[k]!
+    if (SELF_WORD_RE.test(w) || SELF_OWNED_RE.test(w)) return 'self-explicit'
+    // 소재어 · 부사구는 임자가 아니다 — 한 칸 더 앞을 본다
+    if (TOPIC_WORD_RES.some((re) => has(w, re)) || CARE_STATE_RE.test(w) || CARE_ACT_RE.test(w)) continue
+    if (ADVERBIAL_RE.test(w)) continue
+    // 🔴 **누군가가 앞에 서 있다.** 누구인지 알 필요 없이 이미 모호하다
+    return 'unknown'
+  }
+  // 앞이 비었거나 소재어뿐이다 — 한국어는 1인칭을 생략한다
+  return 'self-elided'
+}
+
+/**
+ * 🔴 이 절에서 이 소재가 **글쓴이 자신의 것**으로 등장하는가.
+ *
+ *    `general` 은 이 문장이 세상 이야기 틀이라는 뜻이다. 그 틀은
+ *    **생략된 1인칭만** 덮는다 — `우리 남편` 처럼 **명시된 자기 근거**는 덮지 못한다.
+ *    `다들 그렇겠지만 우리 남편이 어제도 늦게 들어왔어요` 는 내 이야기다.
+ */
+const ownsInClause = (clause: string, re: RegExp, general: boolean): boolean => {
+  for (const m of clause.matchAll(new RegExp(re.source, 'g'))) {
+    // ① 소재 낱말 자체가 내 것 — 세상 이야기 틀보다 세다
+    if (SELF_OWNED_RE.test(m[0]) || SELF_LEADING_RE.test(m[0])) return true
+    const owner = ownerOfPrefix(clause.slice(0, m.index ?? 0))
+    // ② 바로 앞 어절이 1인칭 — 이것도 명시된 근거다
+    if (owner === 'self-explicit') return true
+    // ③ 생략된 1인칭 — 세상 이야기 틀 안에서는 세우지 않는다
+    if (owner === 'self-elided' && !general) return true
+  }
+  return false
+}
+
 /** 🔴 판정만 한다. 원문도 초안도 저장하지 않는다 */
 export function readPostRequirements(title: string, body: string): PostRequirements {
-  const t = `${title}\n${body}`
+  let needsCurrentSpouse = false
+  let needsChildren = false
+  let needsParentCare = false
+  let needsMenopauseExperience = false
+  const bandSet = new Set<ChildAgeBand>()
 
-  // 🔴 전남편 언급을 먼저 지운다. 지우지 않으면 "전남편" 의 "남편" 이 현재형으로 잡힌다
-  const withoutEx = t.replace(EX_SPOUSE_RE, ' ')
-  const needsCurrentSpouse = has(withoutEx, SPOUSE_RE)
+  for (const sentence of `${title}\n${body}`.split(SENTENCE_SPLIT_RE)) {
+    if (sentence.trim() === '') continue
+    // 🔴 세상 이야기 틀 — 물음표는 문장 끝에만 있으므로 **문장 단위**로 읽는다
+    const general = GENERAL_FRAME_RE.test(sentence) || ASKING_RE.test(sentence.trim())
 
-  const bands = CHILD_AGE_TOKENS.filter((x) => has(t, x.re)).map((x) => x.band)
-  const needsChildAgeBands = [...new Set(bands)]
-  const needsChildren = has(t, CHILDREN_RE) || needsChildAgeBands.length > 0
-  const needsParentCare = has(t, PARENT_CARE_RE)
-  const needsMenopauseExperience = has(t, MENOPAUSE_RE)
+    for (const clause of sentence.split(CLAUSE_SPLIT_RE)) {
+      if (clause.trim() === '') continue
+      // 🔴 전남편 언급을 먼저 지운다. 지우지 않으면 "전남편" 의 "남편" 이 현재형으로 잡힌다
+      if (ownsInClause(clause.replace(EX_SPOUSE_RE, ' '), SPOUSE_RE, general)) needsCurrentSpouse = true
+      if (ownsInClause(clause, MENOPAUSE_RE, general)) needsMenopauseExperience = true
+      // 🔴 돌봄 — 상태(`치매`)는 **대상**이, 행위(`병간호`)는 **행위자**가 화자여야 한다
+      if (ownsInClause(clause, CARE_STATE_RE, general) || ownsInClause(clause, CARE_ACT_RE, general)) needsParentCare = true
+
+      // 🔴 자녀와 나이대는 **같은 절 안에서만** 이어 붙인다 (원칙: 국소 연결)
+      const ownChild = ownsInClause(clause, CHILDREN_RE, general)
+      const mentionsChild = has(clause, CHILDREN_RE)
+      if (ownChild) needsChildren = true
+      for (const x of CHILD_AGE_TOKENS) {
+        if (!has(clause, x.re)) continue
+        // 자녀가 이 절에 나왔다면 그 자녀가 **내 아이일 때만** 나이대가 붙는다
+        if (mentionsChild ? !ownChild : !ownsInClause(clause, x.re, general)) continue
+        bandSet.add(x.band)
+        needsChildren = true
+      }
+    }
+  }
+  const needsChildAgeBands = [...bandSet]
 
   const labels: string[] = []
   if (needsCurrentSpouse) labels.push('기혼(현재형 배우자)')
@@ -175,6 +360,7 @@ export type PersonaForMatch = {
 }
 
 export const BLOCK_CODES = [
+  'VOICE_MISMATCH',
   'NOT_ACTIVE',
   'REAL_MEMBER',
   'NO_CHILDREN',
@@ -190,6 +376,7 @@ export const BLOCK_CODES = [
 export type BlockCode = (typeof BLOCK_CODES)[number]
 
 export const BLOCK_LABEL: Record<BlockCode, string> = {
+  VOICE_MISMATCH: '🔴 이 글을 쓴 Persona 가 아니다 — 남의 이름으로 내지 않는다',
   NOT_ACTIVE: 'active 가 아니다',
   REAL_MEMBER: '🔴 실회원 계정이다 (Account 연결 또는 판별 불가)',
   NO_CHILDREN: '자녀가 없는데 자녀 글이다',
@@ -484,6 +671,14 @@ export type MatchPlan = {
 }
 
 export type MatchInput = {
+  /** 🔴 **이 글이 어떤 Persona 의 말투로 쓰였는가** — 기계 글이면 반드시 있어야 한다 */
+  voice: VoiceProvenance | null
+  /**
+   * 🔴 **누가 만든 후보인가 — 필수다** (2026-09-13 2차 정정).
+   *    `voice` 유무로 추측하지 않고, 기본값으로 조용히 떨어뜨리지도 않는다.
+   *    optional 이던 때 중간 단계가 이 값을 떨어뜨려도 아무도 몰랐다.
+   */
+  profile: CandidateProfile
   /** seed. 같은 글은 언제 돌려도 같은 추천이 나온다 */
   queueId: string
   title: string
@@ -503,15 +698,39 @@ export function planMatch(input: MatchInput): MatchPlan {
   for (const p of input.personas) {
     const reasons = hardFilter(p, req, input.title, input.body, input.caps ?? {})
     if (reasons.length > 0) { blocked.push({ code: p.code, reasons }); continue }
+    /**
+     * 🔴 **말투가 맞지 않으면 이 사람 이름으로 내지 않는다.**
+     *    호환 Persona 가 하나도 없으면 `eligible` 이 비고, 그러면 이번 회차에 안 나간다 —
+     *    임의의 사람으로 채우지 않는다. 한 사람의 글 목록이 회차마다 다른 목소리를 내면
+     *    그 Persona 는 사람이 아니게 된다.
+     */
+    const v = judgeVoiceMatch({
+      voice: input.voice, personaCode: p.code, profile: input.profile,
+    })
+    if (!v.ok) {
+      blocked.push({ code: p.code, reasons: [{ code: 'VOICE_MISMATCH', detail: BLOCK_LABEL.VOICE_MISMATCH }] })
+      continue
+    }
     eligible.push({ code: p.code, score: scoreMatch(p, req, chars) })
   }
 
   // 🔴 동점이면 code 순 — 정렬이 흔들리면 dry-run 이 재현되지 않는다
   eligible.sort((a, b) => b.score.total - a.score.total || a.code.localeCompare(b.code))
   const top = eligible.slice(0, TOP_CANDIDATES)
-  const recommended = top.length === 0
-    ? null
-    : top[seededPick(input.queueId, top.map((c) => c.score.total))]!.code
+  /**
+   * 🔴 **글을 쓴 말투의 Persona 가 쓸 수 있으면 그 사람이 쓴다** (2026-09-13).
+   *
+   *    호환 밴드로 넓혀 두면 "쓸 수는 있는 사람" 이 여럿 남는데, 그중 아무나 고르면
+   *    한 사람의 글 목록이 회차마다 다른 목소리를 낸다.
+   *    자기 자신이 후보에 있으면 그 사람이 먼저다 — 점수로 흔들지 않는다.
+   */
+  const own = input.voice?.personaCode ?? null
+  const ownEligible = own !== null && eligible.some((c) => c.code === own)
+  const recommended = ownEligible
+    ? own
+    : top.length === 0
+      ? null
+      : top[seededPick(input.queueId, top.map((c) => c.score.total))]!.code
 
   return { requirements: req, eligible, top, recommended, blocked, publishable: top.length > 0 }
 }
@@ -569,6 +788,13 @@ export type BatchDraft = {
    * 여기서 또 빼면 한 건이 두 번 센 것이 된다.
    */
   assignedPersonaCode?: string | null
+  /** 🔴 이 글이 어떤 Persona 의 말투로 쓰였는가 — `gateResults.autoDraft.voice` */
+  voice: VoiceProvenance | null
+  /**
+   * 🔴 **필수다.** optional + `?? 'human'` 이던 때 `draftOf()` 가 이 값을 떨어뜨렸고,
+   *    기계 후보가 사람 후보처럼 통과했다. 호출자가 반드시 밝힌다.
+   */
+  profile: CandidateProfile
 }
 
 export type BatchAssignment = {
@@ -701,6 +927,15 @@ export function planBatch(
     if (real.real) return `배정된 persona ${code} — ${real.reason}`
     return null
   }
+  /** 🔴 이미 배정된 행도 말투가 맞아야 한다 — 배정 뒤에 말투 근거가 바뀔 수 있다 */
+  const voiceProblemOf = (d: BatchDraft, code: string): string | null => {
+    const p = byCode.get(code)
+    if (p === undefined) return null
+    const v = judgeVoiceMatch({
+      voice: d.voice, personaCode: code, profile: d.profile,
+    })
+    return v.ok ? null : `배정된 persona ${code} — ${VOICE_MATCH_LABEL[v.code]}`
+  }
 
   const pinned = drafts.filter((d) => pinnedCodeOf(d) !== null)
   const fresh = drafts.filter((d) => pinnedCodeOf(d) === null)
@@ -708,7 +943,10 @@ export function planBatch(
   // ── ② 각 초안의 후보를 먼저 구한다 (여력 무시) ──
   const base = fresh.map((d) => ({
     draft: d,
-    plan: planMatch({ queueId: d.queueId, title: d.title, body: d.body, personas, caps }),
+    plan: planMatch({
+      queueId: d.queueId, title: d.title, body: d.body, personas, caps,
+      voice: d.voice, profile: d.profile,
+    }),
   }))
 
   // ── ③ 🔴 희소한 글부터 자리를 보장한다. 총량은 최대 매칭이 정하므로 순서로 흔들리지 않는다 ──
@@ -794,7 +1032,7 @@ export function planBatch(
   // ── ⑥ 🔴 기존 배정 행 — 재계산하지 않는다. 요건만 읽어 화면에 보여준다 ──
   for (const d of pinned) {
     const code = pinnedCodeOf(d)!
-    const problem = recoveryProblemOf(code)
+    const problem = recoveryProblemOf(code) ?? voiceProblemOf(d, code)
     out.set(d.queueId, {
       queueId: d.queueId,
       // 🔴 쓸 수 없는 배정이면 null 이다. 다른 사람을 넣지 않는다 — 부르는 쪽이 멈춘다

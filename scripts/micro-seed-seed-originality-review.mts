@@ -242,7 +242,7 @@ function rows(at){
         topic: g.topic, material: g.material, generalized: g.generalized, direction: g.direction,
         title: d.title, body: d.body, bodyLength: d.bodyLength,
         safetyVerdict: d.safetyVerdict, safetyReasons: d.safetyReasons,
-        maxOverlap: d.maxOverlap, leakedTokens: d.leakedTokens.join('/'),
+        originality: d.originality, leakedTokens: d.leakedTokens.join('/'),
         clean: d.clean ? 'clean' : 'check',
         recommended: d.recommended ? 'recommended' : '',
         memo: st.memo || '', note: NOTE,
@@ -335,7 +335,7 @@ function render(){
         '<span class="tag">초안 ' + d.draftNo + '</span>' +
         (d.recommended ? '<span class="tag rec">권장</span>' : '') +
         '<span class="tag ' + (d.clean ? 'clean' : 'flag') + '">' + (d.clean ? '복붙 검증 통과' : '확인 필요') + '</span>' +
-        '<span class="tag">원문 겹침 ' + d.maxOverlap + '자' + (d.overlapFragment ? ' ("' + esc(d.overlapFragment) + '")' : '') + '</span>' +
+        '<span class="tag">원문 겹침 ' + esc(d.originality) + '</span>' +
         '<span class="tag">safety ' + esc(d.safetyVerdict) + '</span>' +
         '<span class="tag">본문 ' + d.bodyLength + '자</span>' +
         '</div>' +

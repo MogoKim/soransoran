@@ -874,7 +874,7 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
     body: `${NEUTRAL[i % NEUTRAL.length]}\n\n있었던 소소한 이야기를 적어 봅니다. ${i}번째 글이에요.`,
     gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
     // 🔴 나이는 계획 시점마다 다시 잰다 — 갓 수집된 글로 둔다
-    capturedAt: START,
+    voice: null, profile: 'human' as const, capturedAt: START,
   }))
   const q140 = q(140)
   check('🔴 queue id 140개가 전부 다르다', new Set(q140.map((x) => x.queueId)).size === 140)
@@ -941,7 +941,7 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
     // 🔴 현재성 낱말을 넣지 않는다 — 이 큐가 재는 것은 **생활사 축 쏠림**이다
     title: `중학생 아이 시험 때문에 잠을 못 잡니다 (${i})`,
     body: `중학생 아이 시험 준비로 온 집이 예민해요. 저녁마다 학원 데려다주고 오면 하루가 다 갑니다. ${i}`,
-    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, capturedAt: START,
+    gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START,
   }))
   const kidDiverse = sim('d10', personas, kidQ)
   check('🔴 큐가 한 축으로 쏠리면 19명이어도 40/140 뿐이다', kidDiverse.in14 === 40 && kidDiverse.gaps === 4)

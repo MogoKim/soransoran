@@ -505,6 +505,73 @@ function readStructure(title: string, body: string, tone: EmotionTone): Structur
  */
 export const CLOSING_TAIL_LINES = 3
 
+/**
+ * 🔴 **제목이 묻는 글은 제목으로 안다** (2026-09-13).
+ *
+ *    옛 판은 `input.title` 을 **한 번도 읽지 않았다.** 본문 마지막 3줄만 봤다.
+ *    그래서 아래가 전부 `no_call` 이 됐고, 생성 글에서 묻는 의도가 통째로 사라졌다 —
+ *      "동네 소주한잔하자는 할머니 어찌대응하세요?"
+ *      "진상맘인지 들어주세요🥲"
+ *      "스케일링 몇 년에 한 번씩 받으세요?"
+ *    게시판에서는 **묻는 말이 제목에 오는 것이 오히려 흔하다.**
+ *
+ * 🔴 **모든 글에 질문을 붙이는 규칙이 아니다.** 제목에 부르는 말이 없으면 그대로 `no_call` 이다.
+ *    판단 기준은 본문과 같은 목록을 쓰고, 제목에만 있는 요청 표현을 더한다.
+ */
+export function readTitleIntent(title: string): ClosingIntent | null {
+  const t = title.trim()
+  if (t === '') return null
+  if (hasAny(t, EXPERIENCE_CALL_WORDS)) return 'experience_call'
+  if (TITLE_ADVICE_RE.test(t)) return 'advice_request'
+  // 🔴 "들어주세요" · "봐주세요" 는 묻는 것이 아니라 **들어달라는 것**이다.
+  //    본문 쪽은 하소연 계열 tone 에서만 봤지만, 제목에 이렇게 적었으면 그것이 의도다
+  if (TITLE_LISTEN_RE.test(t)) return 'vent_to_audience'
+  if (/[?？]/.test(t) || /[가-힣](가요|나요|까요|런지요|는지요|ㄹ까)/.test(t)
+    || TITLE_ASK_RE.test(t)) return 'explicit_question'
+  return null
+}
+
+/** 🔴 겪어본 사람을 찾는 말 — 제목과 본문이 **같은 목록**을 본다 */
+const EXPERIENCE_CALL_WORDS: readonly string[] = [
+  '계신가요', '계실까', '있으신가요', '겪어보신', '써보신', '해보신',
+  '저만 그런', '저 같은', '아시는 분', '경험 있으신',
+]
+/** 🔴 조언을 청하는 말 */
+const ADVICE_REQUEST_WORDS: readonly string[] = [
+  '추천', '조언', '알려주세요', '어떻게 해야', '어떤 걸', '어떤게',
+  '뭐가 나은', '도와주세요',
+]
+/**
+ * 🔴 **낱말 하나로 판정하지 않는다 — 요청형 문맥을 본다** (2026-09-13 정정).
+ *
+ *    첫 판은 `어찌` · `어쩌나` · `추천` 을 **단독 부분 문자열**로 봤다. 그래서 오판정이 났다 —
+ *      "어찌나 웃기던지"          → 묻는 글 🔴
+ *      "세월이 어찌 이렇게 빠른지"  → 묻는 글 🔴
+ *      "어쩌나 저쩌나 그냥 살죠"    → 묻는 글 🔴
+ *      "이번 주 추천 드라마"       → 조언 요청 🔴
+ *    네 개 다 그냥 하는 말이다. 낱말이 아니라 **그 낱말이 요청·의문으로 맺히는가**를 본다.
+ *
+ * 🔴 새 금지 목록이 아니다. 판정 조건을 좁힌 것뿐이고, 못 잡으면 `no_call` 로 남는다.
+ */
+
+/** 들어달라는 말 — 🔴 `주세요` 형태여야 한다. `들어주` 만으로는 "들어주는 사람" 도 걸린다 */
+const TITLE_LISTEN_RE = /(들어|봐|읽어)\s?주(세요|실래요|시면|시겠)/
+
+/**
+ * 조언 요청 — 🔴 `추천` 뒤에 **청하는 말**이 와야 한다.
+ *    "추천 드라마" 는 소재이고 "추천해 주세요" 가 요청이다.
+ */
+const TITLE_ADVICE_RE =
+  /(추천|조언)\s?(해\s?)?(주세요|주실|부탁|좀\s?(해|부탁)|바랍니다|하세요|하시나요|하나요|할까요)|알려\s?주세요|도와\s?주세요/
+
+/**
+ * 제목에서만 쓰는 물음 — 🔴 물음표 없이도 묻는 한국어.
+ *    `어찌`·`어쩌`·`어떡` 은 **의문·요청 어미가 붙을 때만** 본다.
+ *    "어찌나" · "어찌 이렇게" 처럼 감탄·서술로 쓰이는 자리를 빼기 위해서다.
+ */
+const TITLE_ASK_RE =
+  /(어떡|어쩌|어찌)\s?(하죠|하나요|하세요|할까요|해야|해요|합니까|하면\s?되|한대요)|뭐가\s?맞|맞나요/
+
 export function readClosingIntent(input: {
   title: string
   body: string
@@ -512,13 +579,12 @@ export function readClosingIntent(input: {
 }): ClosingIntent {
   const lines = input.body.split('\n').map((l) => l.trim()).filter((l) => l !== '')
   const tail = lines.slice(-CLOSING_TAIL_LINES).join('\n')
-  if (tail === '') return 'no_call'
+  // 🔴 본문이 비어도 제목은 본다
+  if (tail === '') return readTitleIntent(input.title) ?? 'no_call'
 
   // 🔴 순서가 곧 우선순위다. 구체적인 것부터 본다
-  if (hasAny(tail, ['계신가요', '계실까', '있으신가요', '겪어보신', '써보신', '해보신',
-                    '저만 그런', '저 같은', '아시는 분', '경험 있으신'])) return 'experience_call'
-  if (hasAny(tail, ['추천', '조언', '알려주세요', '어떻게 해야', '어떤 걸', '어떤게',
-                    '뭐가 나은', '도와주세요'])) return 'advice_request'
+  if (hasAny(tail, EXPERIENCE_CALL_WORDS)) return 'experience_call'
+  if (hasAny(tail, ADVICE_REQUEST_WORDS)) return 'advice_request'
   // 물음표는 **끝부분에 있을 때만** 센다.
   // 🔴 어미는 낱말 목록이 아니라 규칙으로 본다 — `건가요`·`런가요`처럼 앞말이 붙으면
   //    목록 방식은 놓친다(9판 실측). 한글 뒤에 오는 의문 어미를 통째로 잡는다
@@ -530,8 +596,28 @@ export function readClosingIntent(input: {
        || input.tone === 'panic')
       && hasAny(tail, ['하소연', '넋두리', '답답', '속상', '털어놓', '그냥 써', '적어봤',
                        '읽어주', '들어주'])) return 'vent_to_audience'
-  // 🔴 나머지는 부르지 않는다. 여기에 호칭이나 질문을 붙이면 그것이 AI 티다
-  return 'no_call'
+  // 🔴 본문이 부르지 않으면 **제목을 본다.** 게시판은 묻는 말을 제목에 두는 일이 흔하다
+  return readTitleIntent(input.title) ?? 'no_call'
+}
+
+/**
+ * 🔴 **묻는 글로 끝났는가 — 관측이지 게이트가 아니다** (2026-09-13).
+ *
+ *    묻는 의도를 살리라고 했을 때 결과가 실제로 묻는 모양인지 본다.
+ *    "궁금할까요." 처럼 종결은 의문인데 부호가 마침표이거나,
+ *    물음표가 글 한가운데에만 있는 경우를 가른다.
+ *
+ * 🔴 **이 함수로 초안을 막지 않는다.** 막기 시작하면 다시 형식 강제가 된다 —
+ *    보고와 fixture 가 읽는 관측값이다.
+ */
+export function endsNaturallyAsQuestion(body: string): boolean {
+  const t = body.trim().replace(/["'\u201c\u201d\u2018\u2019\s]+$/, '')
+  if (t === '') return false
+  if (!/[?？]$/.test(t)) return false
+  // 🔴 마지막 문장이 실제로 의문형인가 — 물음표만 찍고 평서문이면 어색하다
+  const last = t.split(/[.!?？\n]+/).filter((x) => x.trim() !== '').pop() ?? t
+  return /[가-힣](가요|나요|까요|런지요|는지요|세요|은지|는지|ㄹ까|니|냐)$/.test(last.trim())
+    || /[?？]/.test(t.slice(-1))
 }
 
 function readInteraction(title: string, body: string, tone: EmotionTone): InteractionNeed {

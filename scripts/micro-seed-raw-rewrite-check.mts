@@ -12,7 +12,7 @@ import {
   rewriteRunId, isInsideDataDir, REWRITE_COLUMNS, REWRITE_DECISIONS, NOT_PUBLISH_NOTE,
   type ApprovalRow,
 } from './micro-seed-raw-rewrite.mjs'
-import { MAX_SOURCE_OVERLAP } from './lib/micro-seed-seed-originality.mjs'
+import { COPY_RUN_CHARS } from '../src/lib/draft-originality'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 
 let pass = 0
@@ -85,7 +85,7 @@ console.log('\n③ 산출 — 🔴 원문이 파일에 들어가지 않는다')
 console.log('\n④ 화면')
 {
   const { cards, rejected } = selectRewriteCards([row({ sourceArticleId: 'raw1', bodyLength: 900 })])
-  const html = renderHtml(cards, rejected, { bodyHeadChars: BODY_HEAD_CHARS, maxOverlap: MAX_SOURCE_OVERLAP })
+  const html = renderHtml(cards, rejected, { bodyHeadChars: BODY_HEAD_CHARS, maxOverlap: COPY_RUN_CHARS })
   for (const k of REWRITE_DECISIONS.map(([x]) => x)) check(`버튼 ${k} 가 있다`, html.includes(`data-k="${k}"`) || html.includes(`['${k}',`))
   for (const k of ['ADOPT', 'APPROVE', 'PUBLISH']) {
     check(`🔴 ${k} 버튼이 없다`, !html.includes(`data-k="${k}"`) && !html.includes(`['${k}',`))
@@ -95,7 +95,7 @@ console.log('\n④ 화면')
     ['class="angle"', 'class="avoid"', 'class="dtitle"', 'class="body"'].every((s) => html.includes(s)))
   check('🟡 전문이 아님을 화면이 말한다', html.includes('전문이 아니다'))
   check('🔴 원문 문장을 옮기지 말라고 말한다', html.includes('원문 문장을 옮기지 않는다'))
-  check('겹침 경고 기준이 화면에 들어간다', html.includes(String(MAX_SOURCE_OVERLAP)))
+  check('겹침 경고 기준이 화면에 들어간다', html.includes(String(COPY_RUN_CHARS)))
   check('겹침을 실시간으로 잰다', html.includes('function longestOverlap'))
   check('LLM 이 아니라 사람이 쓰는 자리임을 밝힌다', html.includes('사람이 쓰는 자리'))
   check('미작업만 보기 필터', html.includes('UNDECIDED'))

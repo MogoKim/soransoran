@@ -28,6 +28,11 @@ export const AUTO_GATE_VERDICT = 'PASS'
 import { queueProfileOf } from './micro-seed-supply-autofill'
 // 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
 export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
+// 🔴 판 값의 정본은 초안 lib 하나다
+import { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } from './micro-seed-auto-draft'
+import {
+  voiceOfGateResults, type VoiceProvenance, type CandidateProfile,
+} from './original-post-voice-match'
 
 /**
  * 🔴 **기계가 만든 글도 발행한다 — 다만 profile 을 통째로 맞을 때만** (§4-AT)
@@ -42,11 +47,18 @@ export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
 export const MACHINE_PROMPT_VERSION = 'publish-candidate-auto-v1'
 export const MACHINE_MODEL = 'claude-haiku-4.5'
 export const MACHINE_SITE_PREFIX = 'publish-candidate:auto:'
-/** gateResults 에 남아야 하는 표시 */
+/**
+ * gateResults 에 남아야 하는 표시.
+ *
+ * 🔴 **판 값을 여기 다시 적지 않는다** (2026-09-13 정정).
+ *    옛 판은 `'auto-draft-v3'` 를 손으로 적어 두었고, 초안 쪽이 v4 · v5 로 올라가는 동안
+ *    이 값만 남아 **새 기계 행이 발행 후보에서 통째로 빠졌다.**
+ *    같은 문자열이 세 곳(여기 · `MACHINE_PROFILE` · 초안 lib)에 있었다.
+ */
 export const MACHINE_GATE_MARKS = {
-  provenance: 'machine-generated',
+  provenance: DRAFT_PROVENANCE,
   sourceDecision: 'AUTO_ADOPT',
-  draftRuleVersion: 'auto-draft-v3',
+  draftRuleVersion: DRAFT_RULE_VERSION,
 } as const
 
 export type PublishProfile = 'human' | 'machine'
@@ -110,6 +122,27 @@ export function profileOf(r: AutoRow): PublishProfile | null {
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.sourceSite, gateResults: r.gateResults,
   })
+}
+
+/**
+ * 🔴 **큐 행 → 계획 입력의 말투 부분** — 한 함수다 (2026-09-13).
+ *
+ *    러너 · 관제 · 예측 · 준비도가 각자 `profileOf` 와 `voiceOfGateResults` 를 부르면
+ *    한 곳이 빠뜨려도 아무도 모른다. 실제로 `supply-candidates.draftOf()` 가
+ *    둘 다 떨어뜨리고 있었고, **P01 이 쓴 글이 P02 이름으로 배정**됐다.
+ *
+ * 🔴 `profileOf` 가 `null` 이면 `machine` 으로 본다 — 모르는 행을 사람 쪽으로 보내면
+ *    말투 검사를 통째로 건너뛴다. 모르면 **엄한 쪽**이다.
+ *    (실제로는 `selectAutoTargets` 가 `profile === null` 을 이미 걸러 낸다.)
+ */
+export function voiceInputOf(r: AutoRow): {
+  voice: VoiceProvenance | null
+  profile: CandidateProfile
+} {
+  return {
+    voice: voiceOfGateResults(r.gateResults),
+    profile: profileOf(r) === 'human' ? 'human' : 'machine',
+  }
 }
 
 export function selectAutoTargets(
