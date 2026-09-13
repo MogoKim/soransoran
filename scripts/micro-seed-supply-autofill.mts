@@ -39,10 +39,9 @@ import {
   type Envelope, type AutoJudgeProvenance,
 } from '../src/lib/micro-seed-supply-autofill'
 // 🔴 적재 직전 재검증 — 새 판정을 만들지 않고 §4-AS 의 함수를 그대로 쓴다
-import {
-  hasInformalSpeech, endsWithQuestion, hasRepetitiveWording, echoesTitleAtEnd,
-  hasBannedWord, overlapOk,
-} from '../src/lib/micro-seed-auto-draft'
+import { echoesTitleAtEnd, hasBannedWord } from '../src/lib/micro-seed-auto-draft'
+/** 🔴 독창성 정본 — 생성 · 적재 · 여기가 같은 함수를 쓴다 */
+import { judgeCopy, readMeasure, describeOriginality } from '../src/lib/draft-originality'
 // 🔴 재고 버퍼 목표의 정본 — 여기에 숫자를 적지 않는다
 import { STOCK_BANDS } from '../src/lib/supply-stock-plan'
 import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_PROMPT_VERSION }
@@ -136,16 +135,16 @@ function isOurSite(site: string): boolean {
  * 파일과 DB 사이에 시간이 흐른다. 그 사이 무엇이 바뀔지 모르므로 여기서 한 번 더 잰다.
  * 두 곳이 다른 기준을 쓰면 어느 쪽이 맞는지 알 수 없게 되므로 **같은 함수**를 쓴다.
  */
-function recheck(title: string, body: string, overlap: number): string[] {
+function recheck(title: string, body: string, originality: unknown): string[] {
   const bad: string[] = []
   if (title === '' || body === '') bad.push('제목이나 본문이 비었다')
   if (safetyFilter({ title, body }).verdict !== 'pass') bad.push('safety 가 pass 가 아니다')
   if (hasBannedWord(`${title}${body}`)) bad.push('🔴 금지어가 있다')
-  if (!overlapOk(overlap)) bad.push(`🔴 원문 겹침 ${overlap}자`)
-  if (hasRepetitiveWording(title)) bad.push('🔴 제목 낱말이 반복된다')
+  // 🔴 생성 · 적재 · 여기가 **같은 함수**를 쓴다. 기준을 여기서 다시 적지 않는다
+  const m = readMeasure(originality)
+  if (m === null) bad.push('🔴 독창성을 재지 않았다')
+  else if (judgeCopy(m).copied) bad.push(`🔴 원문을 옮겼다 (${describeOriginality(m)})`)
   if (echoesTitleAtEnd(title, body)) bad.push('🔴 제목을 본문 끝에 되풀이한다')
-  if (hasInformalSpeech(body)) bad.push('🔴 반말이다')
-  if (!endsWithQuestion(body)) bad.push('🔴 마지막이 물음표가 아니다')
   return bad
 }
 
@@ -279,7 +278,7 @@ async function main(): Promise<void> {
   for (const t of targets) {
     console.log(`   · [${S(t.candidateType)}] ${S(t.title).slice(0, 24)}`)
     console.log(`       ${S(t.sourceSite)}:${S(t.sourceArticleId)} · 본문 ${S(t.body).length}자`
-      + ` · 겹침 ${Number(t.maxOverlap ?? 0)}자`)
+      + ` · ${(() => { const m = readMeasure(t.originality); return m === null ? '🔴 안 잼' : describeOriginality(m) })()}`)
   }
   if (targets.length === 0) console.log('   (없음)')
 
@@ -354,7 +353,7 @@ async function main(): Promise<void> {
     const body = S(c.body)
     const at = S(c.reviewedAt) !== '' ? new Date(S(c.reviewedAt)) : new Date()
     // 🔴 적재 직전 마지막 관문 — 하나라도 어긋나면 이 건만 건너뛴다
-    const bad = recheck(title, body, Number(c.maxOverlap ?? 0))
+    const bad = recheck(title, body, c.originality)
     if (bad.length > 0) {
       console.log(`   ⏭ 건너뜀 ${title.slice(0, 20)} — ${bad.join(' · ')}`)
       continue

@@ -27,7 +27,11 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { MAX_SOURCE_OVERLAP } from './lib/micro-seed-seed-originality.mjs'
+/**
+ * 🔴 화면 경고선도 **정본에서 가져온다** (2026-09-13).
+ *    이 화면의 겹침 계산은 공백을 살린 글자 나열이므로 글자 연속 기준과 같은 눈이다.
+ */
+import { COPY_RUN_CHARS } from '../src/lib/draft-originality'
 import { BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 
 export const REWRITE_DATA_DIR = '.microseed-data'
@@ -218,7 +222,7 @@ function main(): void {
 
   const meta = {
     note: NOT_PUBLISH_NOTE, generatedAt: new Date().toISOString(),
-    files, bodyHeadChars: BODY_HEAD_CHARS, maxOverlap: MAX_SOURCE_OVERLAP,
+    files, bodyHeadChars: BODY_HEAD_CHARS, maxOverlap: COPY_RUN_CHARS,
     handled: [...handled.keys()],
   }
   writeFileSync(out, renderHtml(cards, rejected, meta), 'utf-8')
@@ -302,7 +306,7 @@ td,th{border:1px solid var(--line);padding:4px 8px;text-align:left}
 여기서 고르는 것은 <code>SAVE</code>(초안을 남긴다) 뿐이다.<br>
 🟡 <b>아래 원문은 전문이 아니다</b> — 앞 ${BODY_HEAD_CHARS}자다. 재접속하지 않는다.
 줄거리를 잡는 데 쓰고, <b>문장은 보지 말고 쓴다.</b><br>
-🔴 <b>원문 문장을 옮기지 않는다.</b> 연속 ${MAX_SOURCE_OVERLAP}자 이상 겹치면 화면이 빨갛게 알린다 —
+🔴 <b>원문 문장을 옮기지 않는다.</b> 연속 ${COPY_RUN_CHARS}자 이상 겹치면 화면이 빨갛게 알린다 —
 그건 다시 쓴 글이 아니라 인용이다.<br>
 🔴 산출 파일에는 <b>원문이 들어가지 않는다.</b> 사람이 쓴 것만 남는다.<br>
 🔴 저장은 이 브라우저 <b>localStorage</b> 까지다.

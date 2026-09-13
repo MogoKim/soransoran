@@ -32,6 +32,8 @@ import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { simulateAllStages } from '../src/lib/scale-readiness'
 import type { PersonaForMatch } from '../src/lib/original-post-persona-match'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
+// 🔴 말투·profile 의 정본 — 러너 · 관제와 같은 함수를 쓴다
+import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -164,6 +166,8 @@ const queue: QueueCandidate[] = targets.map((t) => ({
     ? null
     : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
   capturedAt: (t as { capturedAt?: Date | null }).capturedAt ?? null,
+  // 🔴 러너 · 관제와 같은 함수다 — 셋이 다른 답을 내면 계획이 거짓이 된다
+  ...voiceInputOf(t),
 }))
 
 export type ComboResult = {

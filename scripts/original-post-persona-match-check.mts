@@ -17,7 +17,7 @@ import {
   isChildAgeBand, CHILD_AGE_BANDS, BLOCK_CODES, BLOCK_LABEL, SCORE_WEIGHTS,
   CARE_FIT, MENOPAUSE_FIT,
   POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS, TOP_CANDIDATES,
-  type PersonaForMatch, type ChildAgeBand, type BlockCode, type BatchDraft,
+  type PersonaForMatch, type ChildAgeBand, type BlockCode, type BatchDraft, type PostRequirements,
 } from '../src/lib/original-post-persona-match'
 import { judgeRealMember } from '../src/lib/real-member-gate'
 
@@ -168,13 +168,14 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
   const none = planMatch({
     queueId: 'q1', title: '고3 딸', body: '수능이 코앞이에요.',
     personas: [P({ code: 'A', childrenCount: 0, childrenAgeBands: [] }), P({ code: 'B', status: 'draft' })],
+    voice: null, profile: 'human',
   })
   if (none.publishable) offenders.push('🔴 후보가 없는데 발행 가능')
   if (none.recommended !== null) offenders.push('🔴 후보가 없는데 추천이 나옴')
   if (none.eligible.length !== 0) offenders.push('후보가 잘못 잡힘')
   if (none.blocked.length !== 2) offenders.push(`차단 기록 ${none.blocked.length} (기대 2)`)
 
-  const empty = planMatch({ queueId: 'q2', title: 'x', body: 'y', personas: [] })
+  const empty = planMatch({ queueId: 'q2', title: 'x', body: 'y', personas: [] , voice: null, profile: 'human' })
   if (empty.publishable || empty.recommended !== null) offenders.push('🔴 페르소나 0명인데 발행 가능')
 
   if (offenders.length) bad('🔴 실패 시 발행 불가', offenders.join(' / '))
@@ -185,7 +186,7 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
 {
   const offenders: string[] = []
   const many = Array.from({ length: 6 }, (_, i) => P({ code: `P${i}`, daysSinceLastPost: i * 3 }))
-  const plan = planMatch({ queueId: 'seed-a', title: '오늘', body: '국수를 삶았어요.', personas: many })
+  const plan = planMatch({ queueId: 'seed-a', title: '오늘', body: '국수를 삶았어요.', personas: many , voice: null, profile: 'human' })
   if (plan.top.length !== TOP_CANDIDATES) offenders.push(`top ${plan.top.length} (기대 ${TOP_CANDIDATES})`)
   if (plan.recommended === null || !plan.top.some((c) => c.code === plan.recommended)) offenders.push('🔴 추천이 상위 밖')
   // 점수 내림차순인가
@@ -193,11 +194,11 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
     if (plan.eligible[i - 1]!.score.total < plan.eligible[i]!.score.total) offenders.push('정렬 깨짐')
   }
   // 🔴 재현성 — 같은 queueId 는 같은 답
-  const again = planMatch({ queueId: 'seed-a', title: '오늘', body: '국수를 삶았어요.', personas: many })
+  const again = planMatch({ queueId: 'seed-a', title: '오늘', body: '국수를 삶았어요.', personas: many , voice: null, profile: 'human' })
   if (again.recommended !== plan.recommended) offenders.push('🔴 같은 seed 인데 답이 달라짐')
   // 🔴 최고점 고정이 아님 — seed 를 바꾸면 다른 답이 나올 수 있어야 한다
   const seeds = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8']
-    .map((s) => planMatch({ queueId: s, title: '오늘', body: '국수를 삶았어요.', personas: many }).recommended)
+    .map((s) => planMatch({ queueId: s, title: '오늘', body: '국수를 삶았어요.', personas: many , voice: null, profile: 'human' }).recommended)
   if (new Set(seeds).size < 2) offenders.push('🔴 seed 를 바꿔도 항상 같은 1명 — 최고점 고정이다')
 
   if (offenders.length) bad('상위 3명 · 가중 무작위', offenders.join(' / '))
@@ -249,8 +250,18 @@ console.log('\n══ Persona 매칭 규칙 fixture ══\n')
    *    그 lib 을 불러야 하는데, import 를 전부 막으면 **판정을 복붙하게 된다** —
    *    그쪽이 훨씬 나쁘다. 허용 목록을 좁게 두고, 새 import 는 여기서 걸린다.
    */
-  // 🔴 둘 다 순수 lib 이다 — DB · 네트워크 · env · 난수 0
-  const ALLOWED_IMPORTS = ['./real-member-gate', './scale-profile', './scale-runtime'] as const
+  // 🔴 전부 순수 lib 이다 — DB · 네트워크 · env · 난수 0
+  //    `original-post-voice-match` 는 2026-09-13 에 더했다. 생성 말투와 최종 author 를 잇는데,
+  //    판정을 여기로 복붙하면 두 벌이 되므로 부른다. 아래 검사가 그 파일의 순수성도 본다.
+  const ALLOWED_IMPORTS = [
+    './real-member-gate', './scale-profile', './scale-runtime', './original-post-voice-match',
+  ] as const
+  // 🔴 부르는 쪽이 순수해도 불린 쪽이 더러우면 의미가 없다
+  {
+    const vm = readFileSync('src/lib/original-post-voice-match.ts', 'utf-8')
+    if (/from '(node:|@prisma)/.test(vm)) offenders.push('🔴 original-post-voice-match 가 순수하지 않다')
+    if (/Date\.now|Math\.random|process\.env/.test(vm)) offenders.push('🔴 voice-match 가 시각·난수·env 를 본다')
+  }
   for (const line of code.split('\n')) {
     const m = /^import .*from '([^']+)'/.exec(line.trim())
     if (m === null) continue
@@ -358,7 +369,7 @@ function always0Diff(): number {
   const offenders: string[] = []
   // 조건 없는 글 5건 · 페르소나 3명 → 주 1건이면 3건만 배정되어야 한다
   const ds: BatchDraft[] = Array.from({ length: 5 }, (_, i) =>
-    ({ queueId: `q${i}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i }))
+    ({ queueId: `q${i}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i , voice: null, profile: 'human' as const}))
   const ps = ['A', 'B', 'C'].map((c) => P({ code: c }))
   const plan = planBatch(ds, ps)
   const assigned = plan.assignments.filter((a) => a.assigned !== null)
@@ -385,9 +396,9 @@ function always0Diff(): number {
   const offenders: string[] = []
   // 고3 글은 A 만 가능 · 조건 없는 글은 누구나
   const ds: BatchDraft[] = [
-    { queueId: 'open1', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0 },
-    { queueId: 'open2', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 },
-    { queueId: 'rare', title: '고3 딸', body: '수능이 코앞이에요.', gateVerdict: 'HOLD', createdAt: 2 },
+    { queueId: 'open1', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0 , voice: null, profile: 'human' as const},
+    { queueId: 'open2', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 , voice: null, profile: 'human' as const},
+    { queueId: 'rare', title: '고3 딸', body: '수능이 코앞이에요.', gateVerdict: 'HOLD', createdAt: 2 , voice: null, profile: 'human' as const},
   ]
   const ps = [
     P({ code: 'A', childrenAgeBands: ['중고등'] }),
@@ -478,10 +489,10 @@ function always0Diff(): number {
   const offenders: string[] = []
   // 자녀 중고등 글 1건(A 만 가능) + 조건 없는 글 3건
   const ds: BatchDraft[] = [
-    { queueId: 'kid', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 0 },
-    { queueId: 'open1', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 },
-    { queueId: 'open2', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 2 },
-    { queueId: 'open3', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 3 },
+    { queueId: 'kid', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 0 , voice: null, profile: 'human' as const},
+    { queueId: 'open1', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 , voice: null, profile: 'human' as const},
+    { queueId: 'open2', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 2 , voice: null, profile: 'human' as const},
+    { queueId: 'open3', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 3 , voice: null, profile: 'human' as const},
   ]
   const A = P({ code: 'A', childrenCount: 1, childrenAgeBands: ['중고등'] })
   const B = P({ code: 'B', childrenCount: 0, childrenAgeBands: [] })
@@ -523,8 +534,8 @@ function always0Diff(): number {
   const offenders: string[] = []
   // 고전적 함정: 조건 없는 글이 먼저 처리되면 희소 persona 를 먹어 희소 글이 굶는다
   const ds: BatchDraft[] = [
-    { queueId: 'open', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0 },
-    { queueId: 'kid', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 1 },
+    { queueId: 'open', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0 , voice: null, profile: 'human' as const},
+    { queueId: 'kid', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 1 , voice: null, profile: 'human' as const},
   ]
   // A 만 자녀 중고등 · B 는 무자녀(조건 없는 글만)
   const ps = [P({ code: 'A', childrenCount: 1, childrenAgeBands: ['중고등'] }), P({ code: 'B', childrenCount: 0, childrenAgeBands: [] })]
@@ -552,7 +563,7 @@ function always0Diff(): number {
 {
   const offenders: string[] = []
   const ds: BatchDraft[] = Array.from({ length: 4 }, (_, i) =>
-    ({ queueId: `q${i}`, title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: i }))
+    ({ queueId: `q${i}`, title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: i , voice: null, profile: 'human' as const}))
 
   // 🔴 생활사: 무자녀 persona 밖에 없으면 배정 0 — 매칭이 급해도 뚫지 않는다
   const noKid = planBatch(ds, [P({ code: 'A', childrenCount: 0, childrenAgeBands: [] })])
@@ -600,8 +611,8 @@ function always0Diff(): number {
   const A = P({ code: 'A', postsThisWeek: POST_CAP_PER_WEEK })
   const B = P({ code: 'B' })
   const ds: BatchDraft[] = [
-    { queueId: 'stuck', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'A' },
-    { queueId: 'fresh', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 },
+    { queueId: 'stuck', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, voice: null, profile: 'human' as const, assignedPersonaCode: 'A' },
+    { queueId: 'fresh', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1 , voice: null, profile: 'human' as const},
   ]
   const plan = planBatch(ds, [A, B])
   const stuck = plan.assignments.find((a) => a.queueId === 'stuck')!
@@ -643,7 +654,7 @@ function always0Diff(): number {
 
   // 🔴 기존 배정 행은 생활사 조건과 무관하게 그대로다 — 재판정하지 않는다
   const kidStuck = planBatch(
-    [{ queueId: 'k', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'E' }],
+    [{ queueId: 'k', title: '중학생 딸', body: '딸이 사춘기라 힘들어요.', gateVerdict: 'PASS', createdAt: 0, voice: null, profile: 'human' as const, assignedPersonaCode: 'E' }],
     [P({ code: 'E', childrenCount: 0, childrenAgeBands: [] })],
   ).assignments[0]!
   if (kidStuck.assigned !== 'E') offenders.push('🔴 기존 배정 행이 재판정으로 뒤집혔다')
@@ -657,7 +668,7 @@ function always0Diff(): number {
   const offenders: string[] = []
   // 조건 없는 글 4건 · persona 4명 → 자리가 겹치므로 누군가는 상위 3명 밖으로 내려가야 한다
   const ds: BatchDraft[] = Array.from({ length: 4 }, (_, i) =>
-    ({ queueId: `q${i}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i }))
+    ({ queueId: `q${i}`, title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i , voice: null, profile: 'human' as const}))
   const ps = ['A', 'B', 'C', 'D'].map((c) => P({ code: c }))
   const plan = planBatch(ds, ps)
   const assigned = plan.assignments.filter((a) => a.assigned !== null)
@@ -676,7 +687,7 @@ function always0Diff(): number {
     }
   }
   // 🔴 단건 추천은 여전히 상위 3명 안에서만 뽑는다
-  const single = planMatch({ queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', personas: ps })
+  const single = planMatch({ queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', personas: ps , voice: null, profile: 'human' })
   if (single.recommended !== null && !single.top.some((t) => t.code === single.recommended)) {
     offenders.push('🔴 단건 추천이 상위 3명 밖으로 나갔다')
   }
@@ -709,7 +720,7 @@ function always0Diff(): number {
 //    즉 실회원 3명이 있는데 가드는 아무도 막지 못하는 상태였다.
 {
   const offenders: string[] = []
-  const q: BatchDraft[] = [{ queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null }]
+  const q: BatchDraft[] = [{ queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, voice: null, profile: 'human' as const, assignedPersonaCode: null }]
   const assignedOf = (p: PersonaForMatch): string | null => planBatch(q, [p]).assignments[0]!.assigned
   const blockedOf = (p: PersonaForMatch): string[] =>
     planBatch(q, [p]).assignments[0]!.blocked.flatMap((b) => b.reasons.map((r) => r.code))
@@ -743,8 +754,8 @@ function always0Diff(): number {
 
   // 🔴 **복구 경로도 같은 판정을 쓴다** — 배정 때 통과했어도 그 사이에 계정이 붙을 수 있다
   {
-    const stuck: BatchDraft = { queueId: 'stuck', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'PXX' }
-    const fresh: BatchDraft = { queueId: 'fresh', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1, assignedPersonaCode: null }
+    const stuck: BatchDraft = { queueId: 'stuck', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, voice: null, profile: 'human' as const, assignedPersonaCode: 'PXX' }
+    const fresh: BatchDraft = { queueId: 'fresh', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1, voice: null, profile: 'human' as const, assignedPersonaCode: null }
     const recOf = (acc: number | null, prov: string | null = null) =>
       planBatch([stuck, fresh], [P({ accountCount: acc, providerId: prov }), P({ code: 'OK', accountCount: 0 })])
         .assignments.find((a) => a.queueId === 'stuck')!
@@ -893,7 +904,7 @@ export function hasDirectAccountCompare(src: string): boolean {
   if (!one.real || one.unknown) offenders.push('Account 1건이 unknown 으로 잘못 표시됐다')
 
   // 🔴 **배정과 발행이 같은 답을 내는가** — 두 게이트가 갈라지면 그날 사고가 난다
-  const q: BatchDraft[] = [{ queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null }]
+  const q: BatchDraft[] = [{ queueId: 'q0', title: '오늘', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 0, voice: null, profile: 'human' as const, assignedPersonaCode: null }]
   for (const [label, acc] of [
     ['0', 0], ['1', 1], ['null', null], ['NaN', Number.NaN], ['음수', -1], ['소수', 0.5],
   ] as const) {
@@ -936,6 +947,357 @@ export function hasDirectAccountCompare(src: string): boolean {
 
   if (offenders.length) bad('🔴 실회원 정본 — 유효하지 않은 count', offenders.join(' / '))
   else ok('🔴 실회원 정본 — 유효하지 않은 count', 'NaN·±Infinity·음수·소수·문자열·불리언 차단 · 배정=발행 · 복붙 탐지기 9종 검출 · 7종 오탐 0')
+}
+
+// ── ㉖ 🔴 소재 언급 ≠ 1인칭 생활사 주장 (2026-09-13) ──
+//
+//    실측 사고: 원천 제목 `요즘 세대도 아들.딸 차별을 하나요?` 가 "자녀 있음" 을
+//    요구했다. 일반 논의 제목 하나로 자녀 없는 Persona 전원이 이 소재에서 밀려났다.
+//    가족 · 자녀 · 배우자 · 갱년기 · 돌봄은 이 커뮤니티가 가장 많이 이야기하는 소재다.
+//    🔴 **막는 것은 명백한 1인칭 모순뿐이다. 소재 자체는 적극적으로 살린다.**
+{
+  const offenders: string[] = []
+
+  /** 🟢 일반 논의 — 소재를 말할 뿐 자기 생활사를 주장하지 않는다. 조건이 서면 안 된다 */
+  const GENERAL: [string, string, string][] = [
+    // 🔴 실제 원천 34999062 본문이다 — 마지막 줄은 **묻는 문장**뿐이라 일반화 낱말이 없다
+    ['세대 일반론(실측 원천)', '요즘 세대도 아들.딸 차별을 하나요?',
+      '부모님 세대는 아들.딸 차별 하는 분들도 있는걸로 알아요.\n아들.딸 차별을 하나요?'],
+    ['남의 집 이야기', '요즘 남편들은 집안일 얼마나 하나요?',
+      '사람들 얘기 들어보니 집집마다 다르더라고요. 보통은 어느 정도 하나요?'],
+    ['방송 소재', '미우새 보니까 갱년기 이야기가 나오네요',
+      '방송에서 갱년기 얘기가 나오는데 요즘은 이런 주제도 예능에서 다루는구나 싶었어요.'],
+    ['사회 쟁점', '치매 부모 돌봄 문제, 다들 어떻게 생각하세요?',
+      '뉴스에서 요양 시설 기사를 봤어요. 사람들 의견이 많이 갈리더라고요.'],
+  ]
+  for (const [label, title, body] of GENERAL) {
+    const r = readPostRequirements(title, body)
+    const on = r.labels
+    if (on.length > 0) offenders.push(`🔴 일반 논의인데 조건이 섰다 — ${label}: ${on.join('·')}`)
+  }
+
+  /** 🔴 자기 경험 — 1인칭 생활사 주장이다. 조건이 서야 한다 */
+  const SELF: [string, string, string, keyof ReturnType<typeof readPostRequirements>][] = [
+    ['내 배우자', '우리 남편이 또 늦게 들어왔어요',
+      '우리 남편이 어제도 새벽에 들어왔어요. 말을 해도 그때뿐이네요.', 'needsCurrentSpouse'],
+    ['내 아이', '우리 애 중학교 들어가고 나서',
+      '우리 애가 중학생이 되니 말수가 줄었어요. 담임 선생님 상담도 다녀왔고요.', 'needsChildren'],
+    ['내 부모 돌봄', '친정엄마 병간호 다녀왔어요',
+      '친정엄마가 요양병원에 계셔서 주말마다 갑니다. 모시고 다니는 게 쉽지 않네요.', 'needsParentCare'],
+    ['내 갱년기', '제가 갱년기가 와서 잠을 못 자요',
+      '제가 새벽 세 시에 눈이 떠져요. 열이 확 오르고 안면홍조도 있고요.', 'needsMenopauseExperience'],
+  ]
+  for (const [label, title, body, field] of SELF) {
+    const r = readPostRequirements(title, body)
+    if (r[field] !== true) offenders.push(`🔴 자기 경험인데 조건이 서지 않았다 — ${label}(${String(field)})`)
+  }
+
+  /** 🔴 제목이 일반론이어도 **본문의 자기 경험 문장**은 살아난다 — 판정 단위가 문장이다 */
+  {
+    const r = readPostRequirements('요즘 세대도 아들.딸 차별을 하나요?',
+      '우리 세대도 다들 그런 것 같아요.\n아들 둘을 키우다 보니 저도 느끼는 게 있어요.')
+    if (!r.needsChildren) offenders.push('🔴 본문의 1인칭 자녀 문장을 놓쳤다')
+  }
+
+  /** 🔴 나이대는 내 아이일 때만 — 남의 집 아이 나이는 조건이 아니다 */
+  {
+    const mine = readPostRequirements('우리 애 수능이 코앞', '우리 애가 고3인데 공부를 안 해요.')
+    if (!mine.needsChildAgeBands.includes('중고등')) offenders.push('🔴 내 아이 나이대를 놓쳤다')
+    const theirs = readPostRequirements('요즘 고등학생들 학원비 얼마나 드나요?',
+      '사람들 얘기 들어보니 과목마다 다르다네요.')
+    if (theirs.needsChildAgeBands.length > 0) offenders.push('🔴 남의 집 아이 나이대로 조건을 세웠다')
+  }
+
+  /**
+   * 🔴 **남의 이야기 ≠ 내 이야기** — 2026-09-13 실측 9건 중 5건 오판정.
+   *    옛 판은 "일반론 낱말이 없으면 자기 이야기" 였다. 임자를 보지 않았다.
+   *    남의 남편 · 이모의 갱년기 · 친구 엄마의 치매가 전부 내 조건이 됐고,
+   *    반대로 `요즘` 한 낱말이 **내 딸 · 내 아이**를 덮었다.
+   */
+  {
+    /** 🔴 임자가 밝혀졌거나 전해 들은 말 — 조건이 서면 안 된다 */
+    const OTHERS: [string, keyof PostRequirements][] = [
+      ['친구 딸이 고3이라 요즘 힘들대요', 'needsChildren'],
+      ['언니 남편이 집안일을 전혀 안 한대요', 'needsCurrentSpouse'],
+      ['이모가 갱년기라 잠을 못 잔대요', 'needsMenopauseExperience'],
+      ['친구 엄마가 치매라 병원에 다녀왔대요', 'needsParentCare'],
+    ]
+    for (const [text, field] of OTHERS) {
+      if (readPostRequirements(text, '')[field] === true) {
+        offenders.push(`🔴 남의 이야기인데 조건이 섰다 — ${text}`)
+      }
+    }
+    /** 🔴 내 이야기 — 1인칭이 생략돼도 임자 자리는 화자다 */
+    const SELF_SENTENCES: [string, keyof PostRequirements][] = [
+      ['요즘 우리 애가 중학생이 돼서 말수가 줄었어요', 'needsChildren'],
+      ['남편이 어제도 늦게 들어왔어요', 'needsCurrentSpouse'],
+      ['딸이 고3이라 요즘 예민해졌어요', 'needsChildren'],
+      ['제가 갱년기라 잠을 못 자요', 'needsMenopauseExperience'],
+      ['친정엄마를 제가 병간호하고 있어요', 'needsParentCare'],
+    ]
+    for (const [text, field] of SELF_SENTENCES) {
+      if (readPostRequirements(text, '')[field] !== true) {
+        offenders.push(`🔴 내 이야기인데 조건이 서지 않았다 — ${text}`)
+      }
+    }
+    /**
+     * 🔴 **전언 어미에 기대지 않는다** — `~대요` 를 지워도 임자만으로 가려야 한다.
+     *    한국어는 내 가족의 말을 옮길 때도 `딸이 결혼한대요` 라고 쓴다.
+     */
+    const OTHERS_PLAIN: [string, keyof PostRequirements][] = [
+      ['언니 남편은 집안일을 전혀 안 해요', 'needsCurrentSpouse'],
+      ['친구 딸은 올해 고3이에요', 'needsChildren'],
+      ['이모는 갱년기가 심해서 병원에 다녀요', 'needsMenopauseExperience'],
+      ['친구 엄마가 치매라 요양병원에 계세요', 'needsParentCare'],
+    ]
+    for (const [text, field] of OTHERS_PLAIN) {
+      if (readPostRequirements(text, '')[field] === true) {
+        offenders.push(`🔴 임자가 밝혀진 남의 이야기인데 조건이 섰다 — ${text}`)
+      }
+    }
+    /** 🔴 내 것 표지가 가장 세다 — 일반화 낱말이 같이 있어도 내 이야기가 이긴다 */
+    if (readPostRequirements('다들 그렇겠지만 우리 남편이 어제도 늦게 들어왔어요', '')
+      .needsCurrentSpouse !== true) {
+      offenders.push('🔴 `다들` 이 `우리 남편` 을 덮었다')
+    }
+    if (readPostRequirements('사람들 얘기 들어보니 우리 애가 유별난 건 아니더라고요', '')
+      .needsChildren !== true) {
+      offenders.push('🔴 `사람들` 이 `우리 애` 를 덮었다')
+    }
+    /** 🔴 전언 어미로 가르지 않는다 — 내 가족의 말을 옮기는 것도 내 이야기다 */
+    {
+      const src = readFileSync(RULES, 'utf-8')
+      if (/HEARSAY|대요\|/.test(src)) offenders.push('🔴 전언 어미 판정이 다시 들어갔다')
+      if (readPostRequirements('딸이 올해 결혼한대요', '').needsChildren !== true) {
+        offenders.push('🔴 내 딸의 말을 옮긴 문장을 남의 이야기로 읽었다')
+      }
+    }
+
+    /**
+     * 🔴 **사람 명사 목록으로는 못 가린다** — 실측 오판정 7건 (2026-09-13).
+     *    `친구|언니|이모…` 목록 방식은 목록 **밖**의 사람을 전부 화자의 가족으로 읽었다.
+     *    그리고 문장 전체의 마지막 표지로 판정해 앞 절의 임자가 뒤 절까지 번졌다.
+     *    지금 판은 목록을 쓰지 않는다 — **소재 바로 앞 한 어절**만 보고,
+     *    누군가 서 있으면 누구인지 몰라도 조건을 세우지 않는다.
+     */
+    {
+      const HOLDER: [string, keyof PostRequirements, boolean][] = [
+        // 임자가 남 — 조건이 서면 안 된다
+        ['저는 언니가 시어머니를 간병하는 게 걱정돼요', 'needsParentCare', false],
+        ['저는 친구 엄마를 병간호하는 언니가 대단해 보여요', 'needsParentCare', false],
+        ['아는 분 딸이 고3이라 힘들대요', 'needsChildren', false],
+        ['회사 사람 딸이 대학생이래요', 'needsChildren', false],
+        ['선생님 남편이 아프대요', 'needsCurrentSpouse', false],
+        // 🔴 목록에 **없는** 사람도 똑같이 남이다 — 여기가 옛 판이 샌 자리다
+        ['앞집 아주머니 남편이 갱년기래요', 'needsCurrentSpouse', false],
+        ['거래처 과장님 딸이 대학생이에요', 'needsChildren', false],
+        ['같은 반 엄마가 치매 시어머니를 모시고 산대요', 'needsParentCare', false],
+        // 앞 절이 남이어도 뒤 절의 내 이야기는 살아난다
+        ['친구 딸은 고3이고 남편은 출장 갔어요', 'needsCurrentSpouse', true],
+        ['언니 남편은 집안일을 잘하고 딸은 고3이에요', 'needsChildren', true],
+        // 🔴 절 순서를 뒤집어도 같다
+        ['남편은 출장 갔고 친구 딸은 고3이에요', 'needsCurrentSpouse', true],
+        ['딸은 고3이고 언니 남편은 집안일을 잘해요', 'needsChildren', true],
+        // 명시된 1인칭 한정사
+        ['제 딸이 고3이에요', 'needsChildren', true],
+        ['내 아들이 대학생이에요', 'needsChildren', true],
+      ]
+      for (const [text, field, want] of HOLDER) {
+        if ((readPostRequirements(text, '')[field] === true) !== want) {
+          offenders.push(`🔴 임자 판정 오류 — ${text} (${String(field)} 정답 ${want})`)
+        }
+      }
+      /** 🔴 나이대는 **같은 절의 내 자녀**에만 붙는다 */
+      const BANDS: [string, string[]][] = [
+        ['친구 딸은 고3이고 남편은 출장 갔어요', []],
+        ['언니 남편은 집안일을 잘하고 딸은 고3이에요', ['중고등']],
+        ['딸은 고3이고 언니 남편은 집안일을 잘해요', ['중고등']],
+        ['우리 딸은 고3이고 친구 딸은 대학생이에요', ['중고등']],
+        ['친구 딸은 고3이고 우리 딸은 대학생이에요', ['대학·취준']],
+        ['아는 분 딸이 고3이라 힘들대요', []],
+      ]
+      for (const [text, want] of BANDS) {
+        const got = [...readPostRequirements(text, '').needsChildAgeBands].sort().join(',')
+        if (got !== [...want].sort().join(',')) {
+          offenders.push(`🔴 나이대 국소 연결 오류 — ${text} (${got || '없음'})`)
+        }
+      }
+      /**
+       * 🔴 **부사구는 임자가 아니다** (2026-09-13 실측 회귀).
+       *    `이번에 애들이랑 같이 가려는데` 에서 `이번에` 를 임자로 읽어
+       *    #468 회귀 fixture(자녀 글에 P10·P17 이 eligible)가 깨졌다.
+       *    낱말이 아니라 **조사**로 가른다 — 목록이 자라지 않는다.
+       */
+      const ADVERB: [string, keyof PostRequirements, boolean][] = [
+        ['이번에 애들이랑 같이 가려는데 숙소를 못 고르겠어요', 'needsChildren', true],
+        ['집에서 딸이 공부를 안 해요', 'needsChildren', true],
+        ['요즘에 딸이 예민해졌어요', 'needsChildren', true],
+        /**
+         * 🔴 **여기는 놓친다.** `어제` 는 조사가 없어 `친구` 와 구분할 방법이 없다.
+         *    부사 목록을 만들면 목록 밖이 또 새고, 그 구조가 과잉 규제의 씨앗이다.
+         *
+         * 🔴 **"발행 직전 `hardFilter` 가 잡는다" 는 거짓이었다** (2026-09-13).
+         *    `hardFilter` 는 이 함수의 출력을 **인자로 받는다.** 여기서 놓친 것은
+         *    거기서도 놓친다. 실측: 비혼 Persona + `어제 남편이 늦게 들어왔어요` →
+         *    초안 본문으로 다시 읽어도 차단 사유 0건.
+         *    그래서 안전망을 **다른 자리**에 두었다 —
+         *    생성 프롬프트가 Persona 의 생활사를 알려 주고(`personaLifeDirectives`),
+         *    검수가 **다 쓴 글**에서 1인칭 모순을 근거와 함께 본다(`lifeConflict`).
+         *    이 extractor 는 후보를 좁히는 **고확신 보조**일 뿐 관문이 아니다.
+         */
+        ['어제 남편이 늦게 들어왔어요', 'needsCurrentSpouse', false],
+        // 🔴 조사가 붙어도 **사람**이면 여전히 임자다
+        ['이모가 갱년기라 잠을 못 잔대요', 'needsMenopauseExperience', false],
+        ['언니가 시어머니를 간병해요', 'needsParentCare', false],
+      ]
+      for (const [text, field, want] of ADVERB) {
+        if ((readPostRequirements(text, '')[field] === true) !== want) {
+          offenders.push(`🔴 부사구/임자 구분 오류 — ${text} (${String(field)} 정답 ${want})`)
+        }
+      }
+
+      /**
+       * 🔴 **거짓 안전망 주장이 다시 들어오면 실패한다** (2026-09-13).
+       *    `hardFilter` 는 `readPostRequirements` 의 출력을 **인자로 받는다.**
+       *    "여기서 놓쳐도 발행 때 hardFilter 가 잡는다" 는 말은 구조적으로 성립하지 않는다.
+       *    그 말이 주석에 남아 있으면 다음 사람이 또 그 위에 설계를 쌓는다.
+       */
+      for (const f of [RULES, join(HERE, 'original-post-persona-match-check.mts')]) {
+        for (const line of readFileSync(f, 'utf-8').split('\n')) {
+          if (!line.includes('hardFilter')) continue
+          if (!/잡는다|막는다|걸러/.test(line)) continue
+          // 부정문 · 거짓임을 밝히는 문장은 통과한다
+          if (/않|아니|거짓|못/.test(line)) continue
+          offenders.push(`🔴 거짓 안전망 주장이 있다 — ${line.trim().slice(0, 50)}`)
+        }
+      }
+
+      /** 🔴 사람 명사 목록이 다시 생기면 안 된다 — 목록 밖이 새는 구조다 */
+      {
+        // 🔴 주석의 과거 기록은 세지 않는다 — **코드**에 목록이 살아났는지만 본다
+        const code = readFileSync(RULES, 'utf-8')
+          .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+        if (/OTHER_HOLDER|OTHER_MARK|친구\||언니\||이모\|/.test(code)) {
+          offenders.push('🔴 사람 명사 목록이 다시 들어갔다')
+        }
+      }
+    }
+
+    /**
+     * 🔴 **한 문장에 임자가 둘 섞인다** — 실측 오판정 2건 (2026-09-13).
+     *    `저는` 이 문장 어디에 있든 문장 전체를 내 이야기로 만들던 판이
+     *    남의 딸을 내 딸로 읽었다. 나이대는 더 나빴다 — 남의 고3과 내 대학생이
+     *    한 문장에 있으면 **둘 다** 내 조건이 됐다.
+     */
+    {
+      const mixed: [string, boolean, string[]][] = [
+        // 문장, 내 자녀인가, 내 자녀 나이대
+        ['저는 친구 딸이 고3이라 걱정돼요', false, []],
+        ['친구 딸은 고3이고 우리 딸은 대학생이에요', true, ['대학·취준']],
+        ['우리 딸은 고3이고 친구 딸은 대학생이에요', true, ['중고등']],
+        ['저는 언니 남편이 부러워요', false, []],
+        ['제가 이모 병간호를 하고 있어요', false, []],
+      ]
+      for (const [text, wantChild, wantBands] of mixed) {
+        const r = readPostRequirements(text, '')
+        if (r.needsChildren !== wantChild) {
+          offenders.push(`🔴 자녀 임자 오판 — ${text} (needsChildren=${r.needsChildren})`)
+        }
+        if ([...r.needsChildAgeBands].sort().join(',') !== [...wantBands].sort().join(',')) {
+          offenders.push(`🔴 나이대 임자 오판 — ${text} (${r.needsChildAgeBands.join(',') || '없음'})`)
+        }
+      }
+      /**
+       * 🔴 **여기도 놓친다.** `제가 이모 병간호를 하고 있어요` 는 내 돌봄이지만,
+       *    돌봄 낱말 바로 앞이 목적어(`이모`)라 임자가 모호하다. 문장 어딘가의
+       *    `제가` 를 끌어다 쓰면 `저는 친구 엄마를 병간호하는 언니가 대단해 보여요` 까지
+       *    내 돌봄이 된다.
+       *
+       * 🔴 이것을 "안전하다" 고 주장하지 않는다 — 이 extractor 는 관문이 아니다.
+       *    돌봄 경험이 없는 Persona 가 이 소재를 받으면 생성 프롬프트가
+       *    **곁에서 본 이야기 · 묻는 글**로 자리를 바꿔 쓰게 하고,
+       *    그래도 자기 일로 말하면 `lifeConflict` 가 근거와 함께 잡는다.
+       */
+      // 🔴 흔한 자기 돌봄 표현은 그대로 선다
+      for (const t of ['친정엄마 병간호를 하고 있어요', '친정엄마를 제가 병간호하고 있어요']) {
+        if (!readPostRequirements(t, '').needsParentCare) {
+          offenders.push(`🔴 자기 돌봄인데 조건이 서지 않았다 — ${t}`)
+        }
+      }
+      if (readPostRequirements('언니가 시어머니를 간병해요', '').needsParentCare) {
+        offenders.push('🔴 남이 하는 돌봄을 내 경험으로 읽었다')
+      }
+      if (readPostRequirements('친구 엄마가 치매라 요양병원에 계세요', '').needsParentCare) {
+        offenders.push('🔴 남의 부모 상태를 내 돌봄 경험으로 읽었다')
+      }
+      // 🔴 문장 전체를 덮는 1인칭 주어가 다시 생기면 안 된다
+      const src = readFileSync(RULES, 'utf-8')
+      if (/SELF_SUBJECT_RE\.test\(sentence\)/.test(src)) {
+        offenders.push('🔴 문장 전체를 덮는 1인칭 주어 판정이 다시 들어갔다')
+      }
+    }
+
+    /** 🔴 `요즘` 은 시간 부사다 — 일반화 표지 목록에서 뺐다 */
+    {
+      const src = readFileSync(RULES, 'utf-8')
+      const line = /const GENERAL_FRAME_RE[\s\S]*?\/\n/.exec(src)?.[0] ?? ''
+      if (line.includes('요즘')) offenders.push('🔴 `요즘` 이 다시 일반화 표지로 들어갔다')
+    }
+  }
+
+  /** 🔴 묻는 것은 주장이 아니다 — 같은 낱말이라도 서술이면 조건이 선다 */
+  {
+    const asked = readPostRequirements('아들.딸 차별을 하나요?', '아들.딸 차별을 하나요?')
+    if (asked.needsChildren) offenders.push('🔴 묻는 문장을 1인칭 주장으로 읽었다')
+    const told = readPostRequirements('아들 둘 키우다 보니 느끼는 것',
+      '아들 둘을 키우다 보니 느끼는 게 있어요.')
+    if (!told.needsChildren) offenders.push('🔴 자기 자녀 서술을 놓쳤다')
+  }
+
+  /**
+   * 🔴 **부모가 있다 ≠ 부모를 돌본다** — 실측 사고.
+   *    `친정엄마(외할머니)와 제가 여행 중이었는데` 로 시작하는 조카 결혼 이야기가
+   *    "부모 돌봄 경험" 을 요구해 18명 중 12명이 밀려났다.
+   */
+  {
+    const trip = readPostRequirements('조카가 신부감 인사시킨다네요',
+      '오늘 친정엄마와 제가 여행 중이었는데 조카한테 연락이 왔어요. 친정엄마가 걱정하시더라고요.')
+    if (trip.needsParentCare) offenders.push('🔴 부모가 등장했을 뿐인데 돌봄 경험을 요구했다')
+    const care = readPostRequirements('친정엄마 병간호',
+      '친정엄마 병간호를 하고 있어요. 요양병원에 주말마다 갑니다.')
+    if (!care.needsParentCare) offenders.push('🔴 실제 돌봄 글에서 조건이 서지 않았다')
+  }
+
+  /**
+   * 🔴 **`identity` 는 평평하다** — 중첩으로 읽으면 전원 무자녀가 된다.
+   *    2026-09-07 P10·P17 부당 차단 · 2026-09-13 검증 스크립트가 같은 실수를 반복했다.
+   *    생산 경로 전부를 여기서 지킨다.
+   */
+  {
+    const SITES = [
+      'scripts/original-post-auto-publish.mts',
+      'scripts/persona-capacity-planner.mts',
+      'scripts/supply-health.mts',
+    ]
+    for (const f of SITES) {
+      const src = readFileSync(join(HERE, '..', f), 'utf-8')
+      if (/identity\.children\.|\bkids\.count\b|\bkids\.ageBands\b/.test(src)) {
+        offenders.push(`🔴 ${f} 가 identity 를 중첩으로 읽는다`)
+      }
+      if (!src.includes('id.childrenCount')) offenders.push(`🔴 ${f} 가 childrenCount 를 넘기지 않는다`)
+    }
+  }
+
+  /** 🔴 낱말 금지목록을 새로 만들지 않았다 — 소재는 그대로 읽는다 */
+  {
+    const src = readFileSync(RULES, 'utf-8')
+    for (const gone of ['DROP_WORDS', 'BANNED_WORDS', 'FORBIDDEN_TOPIC', 'TOPIC_BLOCK']) {
+      if (src.includes(gone)) offenders.push(`🔴 새 금지목록이 생겼다 — ${gone}`)
+    }
+  }
+
+  if (offenders.length) bad('🔴 소재 언급 ≠ 1인칭 생활사', offenders.join(' / '))
+  else ok('🔴 소재 언급 ≠ 1인칭 생활사', '거짓 안전망 주장 0 · 임자 판정 14건 · 부사구 5건 · 나이대 국소 6건 · 사람 목록 0 · 남 8건 조건 0 · 내 것 표지 우선 2건 · 임자 혼재 5건 · 나 5건 조건 성립 · 일반 논의 4건 조건 0 · 자기 경험 4건 조건 성립 · 문장 단위 · 나이대 소유 구분 · 부모 존재≠돌봄 · identity 평평 읽기 3곳 · 새 금지목록 0')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL\n`)

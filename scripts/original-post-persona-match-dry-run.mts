@@ -36,6 +36,8 @@ import {
   POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS, TOP_CANDIDATES,
   type PersonaForMatch, type ChildAgeBand, type BlockCode, type BatchDraft,
 } from '../src/lib/original-post-persona-match'
+// 🔴 말투·profile 의 정본 — 러너 · 관제 · 예측과 같은 함수를 쓴다
+import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const argv = process.argv.slice(2)
@@ -149,9 +151,11 @@ for (const p of personas) {
 const drafts = await prisma.originalPostApprovalQueue.findMany({
   where: { status: { in: ['APPROVED', 'EDITED'] } },
   select: {
-    id: true, status: true, gateVerdict: true, createdAt: true,
+    id: true, status: true, gateVerdict: true, createdAt: true, createdPostId: true,
     draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-    rawContent: { select: { sourceArticleId: true } },
+    // 🔴 말투·profile 판정에 필요한 필드 — dry-run 이 러너와 다른 답을 내면 안 된다
+    promptVersion: true, model: true, gateResults: true, matchedPersonaId: true,
+    rawContent: { select: { sourceArticleId: true, sourceSite: true } },
   },
   orderBy: { createdAt: 'asc' },
 })
@@ -164,6 +168,14 @@ const batchDrafts: BatchDraft[] = drafts.map((d) => ({
   body: d.editedBody ?? d.draftBody,
   gateVerdict: d.gateVerdict,
   createdAt: d.createdAt.getTime(),
+  // 🔴 러너와 같은 함수다 — dry-run 이 다른 답을 내면 읽는 사람을 속이는 것이다
+  ...voiceInputOf({
+    id: d.id, status: d.status, createdPostId: d.createdPostId, gateVerdict: d.gateVerdict,
+    promptVersion: d.promptVersion, model: d.model, matchedPersonaId: d.matchedPersonaId,
+    gateResults: d.gateResults,
+    title: d.editedTitle ?? d.draftTitle, body: d.editedBody ?? d.draftBody,
+    sourceSite: d.rawContent?.sourceSite ?? '',
+  } as never),
 }))
 const batch = planBatch(batchDrafts, personas)
 const byId = new Map(batch.assignments.map((a) => [a.queueId, a]))

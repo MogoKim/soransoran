@@ -237,55 +237,65 @@ console.log('\n②-d 🔴 위험 축 — v1 이 못 잡던 것들')
   for (const r of SEMANTIC_HOLD) {
     check(`🟡 ${r} → AUTO_HOLD`, j({}, okSem({ risks: [r] })).decision === 'AUTO_HOLD')
   }
-  check('위험 축이 9종', SEMANTIC_RISKS.length === 9)
+  check('위험 축이 8종', SEMANTIC_RISKS.length === 8)
 
-  // 🔴 2026-09-07 감사에서 실제로 통과해 버린 두 건을 여기 못박는다
-  check('🔴 447520 연예·아이돌 소재 → 반드시 AUTO_HOLD',
-    j({}, okSem({ risks: ['celebrityOrBroadcast'] })).decision === 'AUTO_HOLD')
-  check('   🔴 버리지 않는다 — Growth Issue 레인 후보로 보존된다 (§4-C)',
-    j({}, okSem({ risks: ['celebrityOrBroadcast'] })).decision !== 'AUTO_DROP')
-  check('   celebrityOrBroadcast 가 DROP 축이 아니다', !SEMANTIC_DROP.includes('celebrityOrBroadcast'))
-  check('   HOLD 축에 있다', SEMANTIC_HOLD.includes('celebrityOrBroadcast'))
-  check('🔴 447509 검사·시술 주기 질문 → AUTO_DROP (§4-J)',
-    j({}, okSem({ risks: ['healthScheduleOrMedicalAdvice'] })).decision === 'AUTO_DROP')
-  check('두 축이 사유로 남는다',
-    j({}, okSem({ risks: ['celebrityOrBroadcast'] })).reasonCodes.includes('celebrityOrBroadcast')
-    && j({}, okSem({ risks: ['healthScheduleOrMedicalAdvice'] })).reasonCodes.includes('healthScheduleOrMedicalAdvice'))
-  check('🔴 어떤 confidence 로도 통과하지 않는다', (() => {
-    for (const c of [0.71, 0.9, 1]) {
-      if (j({}, okSem({ risks: ['celebrityOrBroadcast'], confidence: c })).decision !== 'AUTO_HOLD') return false
-      if (j({}, okSem({ risks: ['healthScheduleOrMedicalAdvice'], confidence: c })).decision !== 'AUTO_DROP') return false
-    }
-    return true
-  })())
-  check('프롬프트가 두 축을 설명한다', (() => {
+  /**
+   * 🔴 **옛 판은 "연예 소재는 HOLD · 검사 주기 질문은 DROP" 을 계약으로 박고 있었다**
+   *    (2026-09-13 교체). 그 계약 때문에 40~60대 여성이 실제로 쓰는 이야기가
+   *    통째로 막혔고, fixture 를 먼저 깨지 않으면 고칠 수 없었다.
+   *    이제 **소재가 아니라 위해**를 본다.
+   */
+  for (const topic of ['연예·방송', '건강·갱년기', '부부 갈등', '검사·시술 주기 질문'] as const) {
+    check(`🟢 ${topic} 은 이제 위험 축이 아니다 — 이름 자체가 없다`,
+      !(SEMANTIC_RISKS as readonly string[]).some((r) =>
+        ['celebrityOrBroadcast', 'healthScheduleOrMedicalAdvice',
+          'hostilityOrConflictBait', 'medicalAdvice', 'politicsOrPublicFigure',
+          'personalSpecificity'].includes(r)))
+  }
+  check('🟢 위험이 없으면 소재가 무엇이든 AUTO_SEED',
+    j({}, okSem({ risks: [] })).decision === 'AUTO_SEED')
+
+  // 🔴 위해 축은 버린다 — 소재가 무엇이든
+  for (const risk of ['identifiablePrivatePerson', 'unverifiedDefamation',
+    'targetedHarassmentOrThreat', 'dangerousMedicalInstruction', 'politicalCampaigning'] as const) {
+    check(`🔴 ${risk} → AUTO_DROP`, j({}, okSem({ risks: [risk] })).decision === 'AUTO_DROP')
+    check(`   사유가 남는다`, j({}, okSem({ risks: [risk] })).reasonCodes.includes(risk))
+    check(`   어떤 confidence · 어떤 decision 으로도 통과하지 않는다`, (() => {
+      for (const c of [0.71, 0.9, 1]) {
+        for (const d of ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const) {
+          if (j({}, okSem({ risks: [risk], confidence: c, decision: d })).decision !== 'AUTO_DROP') return false
+        }
+      }
+      return true
+    })())
+  }
+  for (const risk of ['purchaseOrSellerRequest', 'brandListBait', 'insufficientContext'] as const) {
+    check(`🟡 ${risk} → AUTO_HOLD (버리지 않는다)`,
+      j({}, okSem({ risks: [risk] })).decision === 'AUTO_HOLD')
+  }
+  check('🔴 몸·건강 축으로 격리하지 않는다 — 그 소재가 우리 고객의 이야기다',
+    HOLD_ASSET_AXES.length === 0
+    && j({ assetAxes: '몸·건강' }, okSem({ risks: [] })).decision === 'AUTO_SEED')
+  check('프롬프트가 소재를 막지 않는다고 말한다', (() => {
     const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
-    return /celebrityOrBroadcast/.test(r) && /healthScheduleOrMedicalAdvice/.test(r)
+    return /소재를 막지 않는다/.test(r)
+      && !/celebrityOrBroadcast/.test(r) && !/healthScheduleOrMedicalAdvice/.test(r)
+  })())
+  check('프롬프트가 위해 축을 설명한다', (() => {
+    const r = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
+    return SEMANTIC_RISKS.every((x) => r.includes(x))
   })())
   check('🔴 DROP 축과 HOLD 축이 겹치지 않는다',
     SEMANTIC_DROP.every((r) => !SEMANTIC_HOLD.includes(r)))
-  // 🔴 **정책 taxonomy 가 모델 decision 을 이긴다** (v2 에서 447520 이 이것 때문에 폐기됐다)
+  check('🔴 모든 위험 축이 DROP 이거나 HOLD 다 — 어디에도 없는 축을 만들지 않는다',
+    SEMANTIC_RISKS.every((r) => SEMANTIC_DROP.includes(r) || SEMANTIC_HOLD.includes(r)))
+  // 🔴 **정책 taxonomy 가 모델 decision 을 이긴다**
   check('🔴 모델이 AUTO_DROP 인데 버릴 사유가 없으면 HOLD',
     j({}, okSem({ decision: 'AUTO_DROP', risks: [] })).decision === 'AUTO_HOLD')
   check('사유가 unexplainedModelDrop',
     j({}, okSem({ decision: 'AUTO_DROP', risks: [] })).reasonCodes.includes('unexplainedModelDrop'))
-  check('🔴 모델이 AUTO_DROP 이어도 celebrity 만 있으면 HOLD — Growth Issue 후보로 남긴다',
-    j({}, okSem({ decision: 'AUTO_DROP', risks: ['celebrityOrBroadcast'] })).decision === 'AUTO_HOLD')
-  check('   그때도 celebrityOrBroadcast 사유가 남는다',
-    j({}, okSem({ decision: 'AUTO_DROP', risks: ['celebrityOrBroadcast'] }))
-      .reasonCodes.includes('celebrityOrBroadcast'))
-  check('🔴 DROP 축이 있으면 모델이 통과라 해도 버린다',
-    j({}, okSem({ decision: 'AUTO_SEED', risks: ['healthScheduleOrMedicalAdvice'] })).decision === 'AUTO_DROP')
   check('🔴 모델이 AUTO_HOLD 라 하면 격리한다',
     j({}, okSem({ decision: 'AUTO_HOLD' })).decision === 'AUTO_HOLD')
-  check('🔴 모델이 taxonomy 를 덮어쓸 수 없다', (() => {
-    // 어떤 decision 을 답해도 celebrity 는 HOLD, health 는 DROP 이다
-    for (const d of ['AUTO_SEED', 'AUTO_RAW', 'AUTO_HOLD', 'AUTO_DROP'] as const) {
-      if (j({}, okSem({ decision: d, risks: ['celebrityOrBroadcast'] })).decision !== 'AUTO_HOLD') return false
-      if (j({}, okSem({ decision: d, risks: ['healthScheduleOrMedicalAdvice'] })).decision !== 'AUTO_DROP') return false
-    }
-    return true
-  })())
   check('축이 어긋나면 axisMismatch',
     j({}, okSem({ decision: 'AUTO_RAW' })).reasonCodes.includes('axisMismatch'))
 }

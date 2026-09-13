@@ -10,7 +10,7 @@ import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import {
   planRefill, judgeApply, readStock, verifyAfterRefill, isHeld, hasPendingSibling,
   provenanceKeyOf, baseArticleId,
-  STOCK_TARGET, STOCK_MIN, STOCK_WARN, MAX_ALLOWED_OVERLAP,
+  STOCK_TARGET, STOCK_MIN, STOCK_WARN,
   AUTOFILL_ALLOWED_TYPES, REQUIRED_DECISION, SKIP_LABEL,
   type Candidate, type HeldEntry, type QueueRow,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY,
@@ -21,6 +21,13 @@ import {
 } from '../src/lib/micro-seed-supply-autofill'
 
 const NOW = '2026-09-07T12:00:00.000Z'
+/**
+ * 🔴 후보 행이 싣는 것은 **잰 값**이다. 통과·탈락은 `draft-originality.ts` 가 정한다.
+ *    `CLEAN` 은 옛 6자 기준이라면 막혔을 값이다 — 그게 이 판의 요점이다.
+ */
+const CLEAN = { runWords: 3, runChars: 8, coverRatio: 0 }
+const COPIED = { runWords: 9, runChars: 31, coverRatio: 0.8 }
+
 let pass = 0
 let fail = 0
 const check = (label: string, ok: boolean): void => {
@@ -33,7 +40,10 @@ const ok = (o: Partial<Candidate> = {}): Candidate => ({
   sourceSite: 'navercafe:remonterrace', sourceInput: 'navercafe:remonterrace',
   sourceDecision: 'ADOPT', title: '아이랑 같이 갈 숙소, 뭐 보고 고르세요?',
   body: '숙소 고를 때 뭘 먼저 보시는지 궁금해요.',
-  safetyVerdict: 'pass', maxOverlap: 3, leakedTokens: '', reviewedAt: '2026-09-06T11:00:00Z', ...o,
+  safetyVerdict: 'pass', originality: CLEAN, leakedTokens: '', reviewedAt: '2026-09-06T11:00:00Z',
+  // 🔴 기계 후보는 말투 근거가 필수다 (2026-09-13)
+  voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' },
+  ...o,
 })
 const base = { held: [] as HeldEntry[], existing: new Set<string>(), queue: [] as QueueRow[], usable: 5 }
 
@@ -117,7 +127,8 @@ console.log('\n④ 값이 어긋난 후보를 거른다')
     ['Raw 인데 SAVE 가 아니다', { candidateType: 'rawOriginality', sourceDecision: 'ADOPT' }, 'PROFILE'],
     ['safety hold', { safetyVerdict: 'hold' }, 'SAFETY'],
     ['safety 없음', { safetyVerdict: '' }, 'SAFETY'],
-    ['겹침 초과', { maxOverlap: MAX_ALLOWED_OVERLAP + 1 }, 'OVERLAP'],
+    ['원문을 옮김', { originality: COPIED }, 'COPIED'],
+    ['독창성을 재지 않음', { originality: undefined }, 'UNMEASURED'],
     ['유출 토큰', { leakedTokens: '연락처' }, 'LEAK'],
     ['제목 빔', { title: '  ' }, 'EMPTY'],
     ['본문 빔', { body: '' }, 'EMPTY'],
@@ -129,17 +140,22 @@ console.log('\n④ 값이 어긋난 후보를 거른다')
   check('🟢 Raw 는 SAVE 면 통과', planRefill({ ...base, candidates: [
     ok({ candidateType: 'rawOriginality', sourceDecision: 'SAVE' }),
   ] }).targets.length === 1)
-  // 🔴 경계값은 통과가 아니다 — 정책은 6자 **미만**이다
-  check(`🔴 겹침이 ${MAX_ALLOWED_OVERLAP}자면 거절`, planRefill({ ...base, candidates: [
-    ok({ maxOverlap: MAX_ALLOWED_OVERLAP }),
-  ] }).targets.length === 0)
-  check(`🟢 ${MAX_ALLOWED_OVERLAP - 1}자는 통과`, planRefill({ ...base, candidates: [
-    ok({ maxOverlap: MAX_ALLOWED_OVERLAP - 1 }),
-  ] }).targets.length === 1)
+  /**
+   * 🔴 **생성 쪽과 같은 함수로 판정한다.** 옛 판은 이 파일이 `>= 6`,
+   *    생성 쪽이 `< 6` 을 따로 가져서 정확히 6자짜리의 운명이 단계마다 달랐다.
+   *    이제 기준선 증명은 `draft-originality-check.mts` 한 곳이 한다.
+   */
+  check('🔴 실질 복제는 여기서도 거절된다',
+    planRefill({ ...base, candidates: [ok({ originality: COPIED })] }).targets.length === 0)
+  check('🟢 흔한 표현만 겹치는 것은 여기서도 통과한다',
+    planRefill({ ...base, candidates: [ok({ originality: CLEAN })] }).targets.length === 1)
+  check('🔴 옛 6자 기준이라면 막혔을 값이 지금은 통과한다',
+    CLEAN.runChars >= 6
+    && planRefill({ ...base, candidates: [ok({ originality: CLEAN })] }).targets.length === 1)
   check('허용 유형은 둘뿐', AUTOFILL_ALLOWED_TYPES.length === 2)
   check('유형마다 요구 결정이 다르다',
     REQUIRED_DECISION.seedOriginality === 'ADOPT' && REQUIRED_DECISION.rawOriginality === 'SAVE')
-  check('제외 사유에 라벨이 있다', Object.keys(SKIP_LABEL).length === 11)
+  check('제외 사유에 라벨이 하나씩 있다', Object.keys(SKIP_LABEL).length === 12)
 }
 
 console.log('\n⑤ 재고 계산 — 🔴 발행 러너가 인정하는 행만 센다')
@@ -197,7 +213,10 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   }
   const mc = ok({
     sourceDecision: 'AUTO_ADOPT', sourceInput: 'auto-judge',
-    candidateType: 'seedOriginality', maxOverlap: 4, leakedTokens: '',
+    candidateType: 'seedOriginality', originality: CLEAN, leakedTokens: '',
+  // 🔴 기계 후보는 말투 근거가 필수다 (2026-09-13)
+  voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' },
+
   })
   const aj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
     model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
@@ -237,8 +256,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
       buildQueuePayload({ envelope: { ...mEnv, ...patch }, candidate: mc, autoJudge: aj, now: NOW }) === null)
   }
   for (const [label, patch] of [
-    ['maxOverlap 이 없음', { maxOverlap: undefined }],
-    ['maxOverlap 6', { maxOverlap: 6 }],
+    ['독창성을 재지 않음', { originality: undefined }],
+    ['실질 복제', { originality: COPIED }],
     ['safety 미통과', { safetyVerdict: 'hold' }],
     ['leakedTokens 있음', { leakedTokens: '연락처' }],
   ] as const) {

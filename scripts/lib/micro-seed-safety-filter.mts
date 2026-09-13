@@ -154,17 +154,20 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
     add('noticeSlot', label !== '' ? `고정 슬롯(${label})` : '공지·필독·추천', 'hardExclude')
   }
 
-  // ③ 실명 · 개인정보
+  // ③ 개인정보 — 🔴 **비공개 개인이 특정되는 것만 본다** (2026-09-13 정정)
+  //    옛 판은 `publicFigure` · `publicFigureMention` 도 같은 사유로 hold 했다.
+  //    그건 위해가 아니라 **소재**다 — 공개 인물 이름이 나왔다는 사실뿐이고,
+  //    그 이름이 제목에 남아 있어야 사람이 검색으로 들어온다.
+  //    `PERSONAL_IDENTITY` 는 주민번호·계좌·연락처·신상털기만 잡는다. 그것이 위해다.
   const ident = has(PERSONAL_IDENTITY, title, body, cmtText)
-  if (ident || input.sourceExcludeReason === 'publicFigure' || flags.includes('publicFigureMention')) {
-    add('personalIdentity', ident ? '개인정보 노출 표현' : '공인·실명 언급', 'hold')
-  }
+  if (ident) add('personalIdentity', '개인정보 노출 표현', 'hold')
 
   // ④ 의료 — 🔴 주제가 아니라 단정·시술 유도를 본다 (§4-J)
+  //    🔴 `medicalOrAdLikely` 플래그만으로는 막지 않는다 (2026-09-13 정정).
+  //    그 플래그는 "의료 **또는** 광고" 라서 갱년기·불면 경험담까지 물었다.
+  //    광고는 아래 ⑤ PROMOTION 이 따로 본다.
   const med = has(MEDICAL_CLAIM, title, body, cmtText)
-  if (med || flags.includes('medicalOrAdLikely')) {
-    add('medicalClaim', med ? `의료 단정·시술(${med})` : '의료·광고 가능성', 'hold')
-  }
+  if (med) add('medicalClaim', `의료 단정·시술(${med})`, 'hold')
 
   // ⑤ 광고 · 홍보
   const promo = has(PROMOTION, title, body, cmtText)

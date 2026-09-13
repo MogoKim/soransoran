@@ -19,6 +19,7 @@
  * 🔴 순수 함수다. DB · 네트워크 · 시각 조회 0 — 기준 시각은 인자로 받는다.
  */
 
+import type { VoiceProvenance, CandidateProfile } from './original-post-voice-match'
 import {
   judgeCandidate, orderForPublish,
   type FreshCandidate, type FreshVerdict, type HoldReason,
@@ -45,6 +46,20 @@ export type QueueCandidate = {
   assignedPersonaCode: string | null
   /** 🔴 원문 관측 시각. 모르면 null → 그 시점에 `AGE_UNKNOWN` 으로 hold */
   capturedAt: Date | null
+  /**
+   * 🔴 **이 글을 어떤 Persona 의 말투로 썼는가** (2026-09-13).
+   *    자동 초안이 남긴 근거. `profile: 'machine'` 이면 반드시 있어야 한다.
+   */
+  voice: VoiceProvenance | null
+  /**
+   * 🔴 **누가 만든 후보인가 — 필수다** (2026-09-13 2차 정정).
+   *
+   *    optional 로 두고 `?? 'human'` 으로 떨어뜨렸더니, `draftOf()` 가 이 값을
+   *    옮기지 않는 것을 아무도 눈치채지 못했다 — 기계 후보가 사람 후보처럼 통과했고
+   *    **P01 이 쓴 글이 P02 이름으로 배정됐다**(실측).
+   *    타입을 필수로 두면 새 호출부가 생길 때 컴파일러가 묻는다.
+   */
+  profile: CandidateProfile
 }
 
 /** 🔴 그 시점의 나이 (일). 모르면 null */
@@ -127,10 +142,16 @@ export function prepareCandidates(input: {
     else held.push({ queueId: c.queueId, hold: v.hold!, reason: v.reason })
   }
 
+  /**
+   * 🔴 **`voice` 와 `profile` 을 반드시 옮긴다** (2026-09-13 정정).
+   *    여기서 떨어뜨리면 matcher 는 그 글이 기계 글인지조차 모른다 —
+   *    실제로 그랬고, P01 이 쓴 글이 P02 이름으로 배정됐다.
+   */
   const draftOf = (c: QueueCandidate): BatchDraft => ({
     queueId: c.queueId, title: c.title, body: c.body,
     gateVerdict: c.gateVerdict, createdAt: c.createdAt,
     assignedPersonaCode: c.assignedPersonaCode,
+    voice: c.voice, profile: c.profile,
   })
 
   // ── ② 1차 매칭 — 상시 순서의 근거가 되는 점수 ──

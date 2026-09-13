@@ -97,7 +97,8 @@ const CAPTURED = new Date('2026-09-08T00:00:00+09:00')
 const q = (n: number, capturedAt: Date = CAPTURED): QueueCandidate[] => Array.from({ length: n }, (_, i) => ({
   queueId: `q-${String(i).padStart(3, '0')}`, title: `${N[i % N.length]} (${i})`,
   body: `${N[i % N.length]}\n\n있었던 소소한 이야기를 적어 봅니다. ${i}번째 글이에요.`,
-  gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, capturedAt,
+  gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
+  voice: null, profile: 'human' as const, capturedAt,
 }))
 
 // ── ① 준비도 시간축 ──
@@ -264,7 +265,16 @@ console.log('\n② persona 24명 (얇은 축 측정) · 닉네임 정본 두세 
   check('🔴 얇은 축 수가 줄었다', thinAfter.length < thinBefore.length)
 
   const gains = new Map(gainOf(before, after, 3).map((g) => [g.axis, g]))
-  for (const axis of ['이혼', '사별', '비혼', '자녀 초등', '자녀 대학·취준', '일: 직장'] as const) {
+  /**
+   * 🔴 `자녀 대학·취준` 은 이 목록에 없다 (2026-09-13).
+   *    P05 카드가 `중고생·초등` 으로 적혀 있었는데, 자녀 나이대 정본은
+   *    `persona-children-age-bands.PLANNED` (2026-09-02 창업자 확정) 의 `중고등·대학·취준` 이다.
+   *    카드를 확정값에 맞추자 **20장 시점에 이미 3명(P05·P06·P07)** 이 되어
+   *    "새 카드가 메운 축" 이 아니게 됐다. 옛 관측은 카드 오기재 위에 서 있었다.
+   */
+  check('🔴 자녀 대학·취준 은 새 카드 없이 이미 두터웠다 (P05 확정값 반영)',
+    coverageOf(before).find((c) => c.axis === '자녀 대학·취준')?.holders.length === 3)
+  for (const axis of ['이혼', '사별', '비혼', '자녀 초등', '일: 직장'] as const) {
     const g = gains.get(axis)
     check(`🔴 ${axis} 가 두터워졌다 (${g?.before} → ${g?.after})`, g !== undefined && g.after > g.before && g.fixed)
   }
@@ -1150,7 +1160,7 @@ console.log('\n⑨ freshness — 러너 · 관제 · 예측 · 준비도가 같�
     //    본문에 `오늘` 이 들어가면 모든 후보가 timely 가 되어 무엇을 재는지 흐려진다
     queueId: id, title, body: `${title}\n\n있었던 소소한 이야기를 적어 봅니다.`,
     gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: assigned,
-    capturedAt: age === null ? null : new Date(AT.getTime() - age * 864e5),
+    voice: null, profile: 'human' as const, capturedAt: age === null ? null : new Date(AT.getTime() - age * 864e5),
   })
 
   /**
@@ -1205,8 +1215,8 @@ console.log('\n⑨ freshness — 러너 · 관제 · 예측 · 준비도가 같�
   const EV_BODY = '아침에 산책을 다녀왔습니다. 커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
   const HOT_BODY = '요즘 날씨가 부쩍 서늘해졌어요. 커피 한 잔 마시며 쉬는 중이에요. 소소한 이야기를 적어 봅니다.'
   const race: QueueCandidate[] = [
-    { queueId: 'a-ever', title: '아침에 산책을 다녀왔습니다', body: EV_BODY, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
-    { queueId: 'z-hot', title: '요즘 날씨가 부쩍 서늘해졌어요', body: HOT_BODY, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: AT },
+    { queueId: 'a-ever', title: '아침에 산책을 다녀왔습니다', body: EV_BODY, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
+    { queueId: 'z-hot', title: '요즘 날씨가 부쩍 서늘해졌어요', body: HOT_BODY, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: AT },
   ]
   const raced = prepareCandidates({ candidates: race, personas: onePersona, caps: CAP1, at: AT })
   check('🔴 둘 다 자동 대상이다 — 진짜 자리 경쟁이다', raced.auto.length === 2)
@@ -1244,9 +1254,9 @@ console.log('\n⑨ freshness — 러너 · 관제 · 예측 · 준비도가 같�
     const long = `${EV_BODY} ${'커피 한 잔 마시며 쉬는 중이에요. '.repeat(10)}`
     const evergreens: QueueCandidate[] = [
       // seq 0 · 점수 낮음(긴 본문)
-      { queueId: 'ev-low', title: '아침에 산책을 다녀왔습니다', body: long, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
+      { queueId: 'ev-low', title: '아침에 산책을 다녀왔습니다', body: long, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
       // seq 1 · 점수 높음(짧은 본문)
-      { queueId: 'ev-high', title: '아침에 산책을 다녀왔습니다', body: EV_BODY, gateVerdict: 'PASS', createdAt: 1, assignedPersonaCode: null, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
+      { queueId: 'ev-high', title: '아침에 산책을 다녀왔습니다', body: EV_BODY, gateVerdict: 'PASS', createdAt: 1, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(AT.getTime() - 10 * 864e5) },
     ]
     const pr = prepareCandidates({ candidates: evergreens, personas: onePersona, caps: { postsPerWeek: 5, minDaysBetween: 1 }, at: AT })
     if (pr.auto.length !== 2) return false
@@ -1460,8 +1470,8 @@ console.log('\n⑫ 러너와 예측이 같은 글·같은 persona 를 고르는�
    *    그래야 "우선권이 실제로 작동하는가" 를 이 검사 하나가 가른다.
    */
   const race: QueueCandidate[] = [
-    { queueId: 'a-ever', title: '아침에 산책을 다녀왔습니다', body: EV, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: new Date(START.getTime() - 10 * 864e5) },
-    { queueId: 'z-hot', title: '요즘 날씨가 부쩍 서늘해졌어요', body: HOT, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: START },
+    { queueId: 'a-ever', title: '아침에 산책을 다녀왔습니다', body: EV, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date(START.getTime() - 10 * 864e5) },
+    { queueId: 'z-hot', title: '요즘 날씨가 부쩍 서늘해졌어요', body: HOT, gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START },
   ]
   const runner = prepareCandidates({ candidates: race, personas: one, caps: CAP1, at: START })
   const runnerPick = runner.batch.assignments.filter((a2) => a2.assigned !== null)
@@ -1500,7 +1510,7 @@ console.log('\n⑫ 러너와 예측이 같은 글·같은 persona 를 고르는�
   check('🔴 d10 준비도의 선택이 d10 실제 계획과 같다', (() => {
     const many = Array.from({ length: 6 }, (_, i) => ({
       queueId: `m-${i}`, title: `아침에 산책을 다녀왔습니다 ${i}`, body: EV,
-      gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, capturedAt: START,
+      gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START,
     }))
     const d10caps = { postsPerWeek: PROFILES.d10.postsPerWeek, minDaysBetween: PROFILES.d10.minDaysBetween }
     const plan = prepareCandidates({ candidates: many, personas: one, caps: d10caps, at: START })
@@ -1523,7 +1533,7 @@ console.log('\n⑫ 러너와 예측이 같은 글·같은 persona 를 고르는�
   check('🔴 같은 큐·같은 인원인데 단계마다 결과가 다르다 — cap 이 실제로 주입된다', (() => {
     const many: QueueCandidate[] = Array.from({ length: 30 }, (_, i) => ({
       queueId: `s-${i}`, title: `아침에 산책을 다녀왔습니다 ${i}`, body: EV,
-      gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, capturedAt: START,
+      gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: START,
     }))
     const axis = { now: START, publishedToday: 0 }
     const d1 = simulateStage({ stage: 'd1', queue: many, personas: one, axis })
@@ -1537,7 +1547,7 @@ console.log('\n⑫ 러너와 예측이 같은 글·같은 persona 를 고르는�
   check('🔴 준비도의 재고도 그 단계 기준이다 — 필터 전 큐 길이가 아니다', (() => {
     const withUnknown: QueueCandidate[] = [
       ...race,
-      { queueId: 'unknown', title: '아침에 산책을 다녀왔습니다', body: EV, gateVerdict: 'PASS', createdAt: 2, assignedPersonaCode: null, capturedAt: null },
+      { queueId: 'unknown', title: '아침에 산책을 다녀왔습니다', body: EV, gateVerdict: 'PASS', createdAt: 2, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: null },
     ]
     return simulateStage({ stage: 'd1', queue: withUnknown, personas: one, axis: { now: AT, publishedToday: 0 } }).stock === 2
   })())
@@ -1555,7 +1565,7 @@ console.log('\n⑬ 예측일마다 나이를 다시 잰다')
   const timely14: QueueCandidate[] = Array.from({ length: 14 }, (_, i) => ({
     queueId: `t-${i}`, title: `요즘 날씨가 부쩍 서늘해졌어요 ${i}`, body: TIMELY_BODY,
     gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
-    capturedAt: new Date(START.getTime() - 2 * 864e5),
+    voice: null, profile: 'human' as const, capturedAt: new Date(START.getTime() - 2 * 864e5),
   }))
   check('🔴 지금은 14건 전부 자동 대상이다',
     prepareCandidates({ candidates: timely14, personas, at: START }).auto.length === 14)
@@ -1580,7 +1590,7 @@ console.log('\n⑬ 예측일마다 나이를 다시 잰다')
   const ever: QueueCandidate[] = Array.from({ length: 14 }, (_, i) => ({
     queueId: `e-${i}`, title: `아침에 산책을 다녀왔습니다 ${i}`, body: EVER_BODY,
     gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null,
-    capturedAt: new Date(START.getTime() - 25 * 864e5),
+    voice: null, profile: 'human' as const, capturedAt: new Date(START.getTime() - 25 * 864e5),
   }))
   const fe = forecastPublishing({
     queue: ever, personas, history: hist, startAt: START, days: 14, dailyCap: 1,
@@ -1591,7 +1601,7 @@ console.log('\n⑬ 예측일마다 나이를 다시 잰다')
   /** 🔴 시각 미상은 첫날부터 빠진다 */
   const unknown: QueueCandidate[] = [{
     queueId: 'u', title: '아침에 산책을 다녀왔습니다', body: EVER_BODY,
-    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, capturedAt: null,
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: null,
   }]
   check('🔴 시각 미상은 예측 첫날부터 빠진다', forecastPublishing({
     queue: unknown, personas, history: hist, startAt: START, days: 3, dailyCap: 1,

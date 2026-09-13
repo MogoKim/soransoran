@@ -83,13 +83,12 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   semanticHold: '의미 판정이 사람에게 넘겼다',
   purchaseOrSellerRequest: '🔴 구매처 · 판매처를 묻는 글',
   brandListBait: '🔴 댓글이 브랜드 나열로 흐를 소재',
-  medicalAdvice: '🔴 약 · 치료 조언 (§4-J)',
-  politicsOrPublicFigure: '🔴 정치 · 공인',
-  hostilityOrConflictBait: '🔴 갈등 유도 · 편 가르기',
-  personalSpecificity: '🔴 특정 개인을 알아볼 수 있다',
   insufficientContext: '판단할 만큼 내용이 없다',
-  celebrityOrBroadcast: '🔴 연예 · 방송 · 셀럽 — 생활 레인이 아니라 Growth Issue 레인이다 (§4-C)',
-  healthScheduleOrMedicalAdvice: '🔴 검사 · 시술 · 약 주기를 묻는 글 (§4-J)',
+  identifiablePrivatePerson: '🔴 비공개 개인을 알아볼 수 있다 (공인은 해당하지 않는다)',
+  unverifiedDefamation: '🔴 확인되지 않은 범죄 · 불륜 · 질병을 사실로 단정한다',
+  targetedHarassmentOrThreat: '🔴 특정인을 향한 위협 · 괴롭힘 · 혐오 선동',
+  dangerousMedicalInstruction: '🔴 약 · 용량 · 진단 · 치료를 확정적으로 지시한다 (경험담은 해당하지 않는다)',
+  politicalCampaigning: '🔴 정치 · 진영 선동 (§4-K)',
   semanticFailed: '의미 판정 호출이 실패했다',
   unexplainedModelDrop: '🔴 모델이 버리라 했는데 버릴 사유를 대지 못했다 — 사람에게 넘긴다',
   axisMismatch: '모델이 다른 축을 말했다 — 축은 우리가 정한다',
@@ -102,7 +101,9 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
 export const HARD_BLOCK: readonly ReasonCode[] = [
   'politics', 'personalIdentity', 'medicalClaim', 'promotion', 'hostility',
   'hardExclude', 'dropAxis',
-  'semanticDrop', 'medicalAdvice', 'politicsOrPublicFigure', 'hostilityOrConflictBait',
+  'semanticDrop',
+  'identifiablePrivatePerson', 'unverifiedDefamation',
+  'targetedHarassmentOrThreat', 'dangerousMedicalInstruction', 'politicalCampaigning',
 ] as const
 
 /**
@@ -116,7 +117,7 @@ export const HOLD_REASONS: readonly ReasonCode[] = [
   'medicalOrAd', 'noTitle', 'noBodyHead', 'bodyHeadTooLong',
   'semanticUnavailable', 'lowConfidence', 'semanticHold', 'semanticFailed',
   'unexplainedModelDrop', 'axisMismatch',
-  'purchaseOrSellerRequest', 'brandListBait', 'personalSpecificity', 'insufficientContext',
+  'purchaseOrSellerRequest', 'brandListBait', 'insufficientContext',
 ] as const
 
 /**
@@ -127,8 +128,16 @@ export const HOLD_REASONS: readonly ReasonCode[] = [
  */
 export const PROVEN_LANES: readonly string[] = ['originalRaw', 'microSeedQuestion'] as const
 
-/** 🔴 몸·건강 소재는 §4-J 진단·처방으로 흐를 수 있다. 사람이 실제로 그 이유로 막았다 */
-export const HOLD_ASSET_AXES: readonly string[] = ['몸·건강'] as const
+/**
+ * 🔴 **소재 축으로 격리하지 않는다** (2026-09-13, 창업자 결정).
+ *
+ *    옛 판은 `몸·건강` 축이 붙었다는 이유만으로 HOLD 했다.
+ *    갱년기 · 불면 · 관절은 우리 고객이 가장 많이 쓰는 이야기다 —
+ *    그 축을 통째로 격리하면 타겟 핏이 가장 높은 소재가 통째로 사라진다.
+ *    위험한 것은 **약·용량·진단·치료를 확정적으로 지시하는 것**이고,
+ *    그건 `dangerousMedicalInstruction` 이 본다.
+ */
+export const HOLD_ASSET_AXES: readonly string[] = [] as const
 
 /**
  * 🔴 **v1 의 오진 기록 (2026-09-07).**
@@ -142,18 +151,39 @@ export const HOLD_ASSET_AXES: readonly string[] = ['몸·건강'] as const
  * v2 는 제목 + `bodyHead` 로 의미를 본다.
  */
 
-/** 🔴 위험 축 — semantic judge 가 이 이름으로 답한다 */
+/**
+ * 🔴 위험 축 — semantic judge 가 이 이름으로 답한다.
+ *
+ * 🔴 **주제를 막지 않는다. 위해 행동을 막는다** (2026-09-13, 창업자 결정).
+ *
+ *    옛 판은 `celebrityOrBroadcast` · `healthScheduleOrMedicalAdvice` 처럼
+ *    **소재 자체**를 위험으로 봤다. 그래서 이런 글이 전부 막혔다 —
+ *      "미우새 보다가 남편이랑 또 말다툼했어요"
+ *      "갱년기 때문에 잠을 못 자는데 다들 어떤가요"
+ *      "스케일링 몇 년에 한 번씩 받으세요?"
+ *    전부 40~60대 여성이 실제로 쓰는 글이고, 검색으로 사람이 들어오는 글이다.
+ *    막을 이유가 없는 것을 막으면 남는 것은 **안전하지만 아무도 안 읽는 글**뿐이다.
+ *
+ *    바꾼 기준은 하나다 — **누군가에게 해가 되는가.**
+ *      · 비공개 개인이 특정되는가
+ *      · 확인되지 않은 것을 사실로 단정해 명예를 훼손하는가
+ *      · 특정인을 향한 위협·괴롭힘·혐오 선동인가
+ *      · 약·용량·진단·치료를 확정적으로 지시하는가
+ *
+ * 🔴 **정치는 그대로 막는다.** 허용 목록에 없고 헌법(§4-K)이 hardExclude 로 둔다.
+ *    다만 옛 `politicsOrPublicFigure` 는 정치와 **공인 언급**을 한 이름에 묶고 있었다 —
+ *    공인 이름이 나왔다는 이유로 막히던 것이 이 축이다. 둘을 갈랐다.
+ */
 export const SEMANTIC_RISKS = [
   'purchaseOrSellerRequest',
   'brandListBait',
-  'medicalAdvice',
-  'politicsOrPublicFigure',
-  'hostilityOrConflictBait',
-  'personalSpecificity',
   'insufficientContext',
-  // 🔴 2026-09-07 감사에서 실제로 통과해 버린 두 종류다 (447520 · 447509)
-  'celebrityOrBroadcast',
-  'healthScheduleOrMedicalAdvice',
+  // 🔴 여기부터가 **위해** 축이다. 소재가 아니라 행동을 본다
+  'identifiablePrivatePerson',
+  'unverifiedDefamation',
+  'targetedHarassmentOrThreat',
+  'dangerousMedicalInstruction',
+  'politicalCampaigning',
 ] as const
 export type SemanticRisk = (typeof SEMANTIC_RISKS)[number]
 
@@ -163,16 +193,15 @@ export type SemanticRisk = (typeof SEMANTIC_RISKS)[number]
  * 앞 다섯은 사람이 실제로 그 이유로 막았다(2026-09-07 memo 실측).
  * `insufficientContext` 는 "모르겠다" 이므로 버리지 않고 사람에게 남긴다.
  */
+/** 🔴 **위해다. 버린다.** 소재가 무엇이든 여기 걸리면 쓰지 않는다 */
 export const SEMANTIC_DROP: readonly SemanticRisk[] = [
-  'medicalAdvice', 'politicsOrPublicFigure', 'hostilityOrConflictBait',
-  // 🔴 검사·시술·약 주기를 묻는 글. 사람이 §4-J 로 막았던 종류다
-  'healthScheduleOrMedicalAdvice',
+  'identifiablePrivatePerson', 'unverifiedDefamation',
+  'targetedHarassmentOrThreat', 'dangerousMedicalInstruction',
+  'politicalCampaigning',
 ] as const
+/** 🟡 위해는 아니지만 그대로 쓰기 어려운 것 — 사람에게 넘긴다 */
 export const SEMANTIC_HOLD: readonly SemanticRisk[] = [
-  'purchaseOrSellerRequest', 'brandListBait', 'personalSpecificity', 'insufficientContext',
-  // 🔴 연예·방송은 **버리지 않는다** — Growth Issue 레인이 따로 있다(§4-C).
-  //    다만 생활 Original 레인으로는 통과시키지 않는다. 레인을 섞는 것이 금지다(§13)
-  'celebrityOrBroadcast',
+  'purchaseOrSellerRequest', 'brandListBait', 'insufficientContext',
 ] as const
 
 /** 🔴 이 아래면 통과시키지 않는다 — 모델이 스스로 흔들린다고 말한 것이다 */

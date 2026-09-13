@@ -208,7 +208,7 @@ const draft = (id: string): QueueCandidate =>
   ({ queueId: id, title: '저녁 뭐 드세요', body: '반찬이 마땅치 않아서요. 다들 어떻게 하세요?',
     gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null,
     // 🔴 예측일마다 나이를 다시 잰다 — 여기서는 늘 갓 수집된 글로 둔다
-    capturedAt: START })
+    voice: null, profile: 'human' as const, capturedAt: START })
 
 
 check('🟢 여유 persona 가 있으면 첫날 발행한다', (() => {
@@ -337,6 +337,7 @@ check('🟢 차단이 없으면 비율 0', splitBlockReasons({}).lifeRate === 0)
   const withKids = planMatch({
     queueId: 'q2', title: KID_TITLE, body: KID_BODY,
     personas: [kidPersona('P10', 1), kidPersona('P17', 2), kidPersona('P15', 0)] as never,
+    voice: null, profile: 'human',
   })
   check('🔴 [#468] 자녀 글에 P10·P17 이 eligible 이다',
     withKids.eligible.map((c) => c.code).sort().join(' ') === 'P10 P17')
@@ -346,6 +347,7 @@ check('🟢 차단이 없으면 비율 0', splitBlockReasons({}).lifeRate === 0)
   const missing = planMatch({
     queueId: 'q2', title: KID_TITLE, body: KID_BODY,
     personas: [kidPersona('P10', null), kidPersona('P17', null)] as never,
+    voice: null, profile: 'human',
   })
   check('🔴 [#468 회귀] childrenCount 를 넘기지 않으면 전원 잘못 막힌다',
     missing.eligible.length === 0
@@ -594,7 +596,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
 
 // ③ 🔴 예측과 러너가 **같은 글**을 고른다 — 두 화면이 다른 말을 하면 안 된다
 {
-  const D = (n: number): QueueCandidate => ({ queueId: `q${n}`, title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null, capturedAt: new Date('2026-09-07T15:05:00.000Z') })
+  const D = (n: number): QueueCandidate => ({ queueId: `q${n}`, title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: n, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date('2026-09-07T15:05:00.000Z') })
   const queue = [D(0), D(1), D(2)]
   // q0 만 자녀 글로 바꿔 아무도 못 맡게 한다 → 예측도 러너도 q1 을 골라야 한다
   const blockedHead: QueueCandidate = { ...D(0), title: '중학생 딸', body: '딸이 사춘기라 힘들어요.' }
@@ -653,9 +655,9 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
   const already = new Date('2026-09-08T00:00:00.000Z')
   const stuck: QueueCandidate = {
     queueId: 'stuck', title: '국수', body: '국수를 삶았어요.',
-    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'A', capturedAt: new Date('2026-09-07T15:05:00.000Z'),
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: 'A', voice: null, profile: 'human' as const, capturedAt: new Date('2026-09-07T15:05:00.000Z'),
   }
-  const fresh: QueueCandidate = { queueId: 'fresh', title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1, assignedPersonaCode: null, capturedAt: new Date('2026-09-07T15:05:00.000Z') }
+  const fresh: QueueCandidate = { queueId: 'fresh', title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: 1, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date('2026-09-07T15:05:00.000Z') }
 
   const f = forecastPublishing({
     queue: [stuck, fresh], personas: [persona],
@@ -706,7 +708,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
   const asHealthDoes = (rows: readonly { id: string; matchedPersonaId: string | null; title?: string }[]): QueueCandidate[] =>
     rows.map((r, i) => ({
       queueId: r.id, title: r.title ?? '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i,
-      capturedAt: new Date('2026-09-07T15:05:00.000Z'),
+      voice: null, profile: 'human' as const, capturedAt: new Date('2026-09-07T15:05:00.000Z'),
       assignedPersonaCode: r.matchedPersonaId === null
         ? null
         : (codeOfId.get(r.matchedPersonaId) ?? `__unknown:${r.matchedPersonaId}`),
@@ -804,7 +806,7 @@ check('🔴 [stale] lib 주석에 특정 공백 일수를 박아 두지 않는�
     //    그 필드가 아예 없는 옛 모양이 **같은 결과**여야 한다
     const withField = forecastPublishing({ queue: asHealthDoes(rows), personas, history, startAt: START, days: 14, dailyCap: 1 })
     const withoutField = forecastPublishing({
-      queue: rows.map((r, i) => ({ queueId: r.id, title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, capturedAt: new Date('2026-09-07T15:05:00.000Z') })),
+      queue: rows.map((r, i) => ({ queueId: r.id, title: '국수', body: '국수를 삶았어요.', gateVerdict: 'PASS', createdAt: i, assignedPersonaCode: null, voice: null, profile: 'human' as const, capturedAt: new Date('2026-09-07T15:05:00.000Z') })),
       personas, history, startAt: START, days: 14, dailyCap: 1,
     })
     const sig = (f: typeof withField): string =>
