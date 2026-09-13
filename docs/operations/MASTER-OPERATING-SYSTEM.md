@@ -2198,7 +2198,10 @@ Claude 또는 Codex의 보고는 항상 이 다섯 칸을 분리한다.
 - 품질 축 정본: `src/lib/micro-seed-auto-draft.ts` (`DRAFT_QUALITY_AXES` · `DRAFT_QUALITY_AXIS_PROMPT`)
   — 🔴 품질 프롬프트는 이 표에서 **생성**한다. 사람이 두 목록을 따로 적지 않는다
 - publish: `scripts/original-post-auto-publish.mts`, `.github/workflows/auto-publish.yml`
-- health: `scripts/supply-health.mts`
+- health: `scripts/supply-health.mts` — 🔴 슬롯·등록여부·완료판정을 **정본에서만** 읽는다(2026-09-13)
+- 수집 시각 정본: `src/lib/collect-schedule.ts` (`SLOTS`) — 관제·설치·fixture 가 같은 표를 본다
+- 카페별 회차 상한: `scripts/lib/micro-seed-supply.mts` (`CAFE_SLOT_QUOTA`)
+  — 🔴 숫자가 아니라 "그 카페의 하루 요청 상한 안에 드는가" 가 계약이다
 - 기준 DB 스냅샷: 2026-09-08 read-only 직접 조회
 - 82cook: 로컬 DNS/TCP/HTTP 진단과 외부 게시판 응답 대조
 

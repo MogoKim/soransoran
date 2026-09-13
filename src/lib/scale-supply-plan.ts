@@ -18,7 +18,7 @@
 import { derive, type ScaleProfile } from './scale-profile'
 import {
   RUNS_PER_DAY, SOURCE_FACTS, effectiveDetailPerDay, effectiveDetailPerDayOf,
-  factsOf, theoreticalDetailPerDay, thin82cookCapPerRun, verifySchedule,
+  factsOf, theoreticalDetailPerDay, thin82cookCapPerRun, verifySchedule, THIN_82COOK_RUNS_PER_DAY,
   type Phase, type SourceId,
 } from './collect-schedule'
 import { BREAKER, FAILURE_CLASSES, breakerOf, budgetOf, type GuardState } from './collect-guard'
@@ -123,20 +123,29 @@ export type SourcePlan = {
 }
 
 /**
- * 🔴 확정 수집원 셋. `loaded` 는 실측값이다 —
- *    82cook 은 두 job(raw · 얇은 상세) 다 템플릿이 있는데도 **올라와 있지 않다.**
- *    올라오기 전까지 82cook 이 여는 상세는 0 이다. 조건부로 열리던 옛 몫은 없다.
+ * 🔴 확정 수집원 셋 — **D100 공급 경로에 실제로 들어가는 job 만 적는다.**
+ *
+ * 🔴 **82cook 항목이 가리키는 job 을 바꿨다** (2026-09-13 정정).
+ *
+ *    옛 판은 `raw-collect-82cook`(목록 job)을 가리키며 `maxPerRun: 30` 이라고 적었다.
+ *    그 30 은 목록 job 의 `--auto-max=30` 이었고, 그것이 여는 본문은
+ *    `.microseed-data/82cook.jsonl` 로 떨어진다 — D100 처리기는 그 파일을 읽지 않는다.
+ *    즉 **공급에 한 건도 들어가지 않는 수를 82cook 의 상세 능력으로 세고 있었다.**
+ *    실제로 D100 상세를 여는 것은 `supply-collect-82cook-thin` 이고 회차당 17건이다.
+ *
+ * 🔴 `loaded` 는 실측값이다 — 세 job 모두 2026-09-11 에 등록돼 돌고 있다.
+ *    (옛 판은 82cook 을 `false` 로 두고 있었다. 등록한 날 이 메모가 낡았다.)
  *
  * 🔴 **네이버 두 카페의 정본은 `-multi` job 이다** (2026-09-11 실측).
  *    1회판 job 과 그 템플릿은 없다 — 옛 하루 1회 운영은 역사이지 현재가 아니다.
  */
 export const SOURCES: readonly SourcePlan[] = [
   {
-    id: '82cook', template: 'com.soransoran.raw-collect-82cook.plist.template',
-    // 🔴 회차 수의 정본은 `RUNS_PER_DAY` 다 — 여기 숫자를 다시 적지 않는다
-    maxPerRun: 30, runsPerDay: RUNS_PER_DAY['82cook'].start, loaded: false,
-    note: '🔴 템플릿만 있고 launchctl 미등록 — 등록 전까지 82cook 상세는 0 이다'
-      + ' · 5회/day (07:00 · 10:00 · 13:00 · 16:00 · 19:00 KST)',
+    id: '82cook', template: 'com.soransoran.supply-collect-82cook-thin.plist.template',
+    // 🔴 회차·상한의 정본은 `collect-schedule` 이다 — 여기 숫자를 다시 적지 않는다
+    maxPerRun: thin82cookCapPerRun(), runsPerDay: THIN_82COOK_RUNS_PER_DAY, loaded: true,
+    note: 'launchd 얇은 상세 5회/day (07:40 · 10:40 · 13:40 · 16:40 · 19:40 KST)'
+      + ' · 🔴 목록 job(raw-collect-82cook)은 목록만 만든다 — 상세를 열지 않는다',
   },
   {
     id: 'navercafe:remonterrace',
@@ -153,7 +162,12 @@ export const SOURCES: readonly SourcePlan[] = [
   {
     id: 'navercafe:wgang',
     template: 'com.soransoran.navercafe-collect-wgang-multi.plist.template',
-    maxPerRun: 10, runsPerDay: RUNS_PER_DAY['navercafe:wgang'].start, loaded: true,
+    /**
+     * 🔴 **10 → 16** (2026-09-13). 게시판이 하나뿐이라 회차당 10건에 눌려 있었고,
+     *    하루 요청은 60/150 으로 예산의 40% 만 썼다. (5+16)×4 = 84/150 —
+     *    간격 · 차단기 · 세션 처리는 그대로다. fixture 가 `planCafeRun` 과 대조한다.
+     */
+    maxPerRun: 16, runsPerDay: RUNS_PER_DAY['navercafe:wgang'].start, loaded: true,
     note: 'launchd -multi 4회/day (09:30 · 11:30 · 15:30 · 20:30 KST) · 회차당 상세 10건(all)',
   },
 ]
@@ -255,8 +269,16 @@ export type RunRequirement = {
   loaded: boolean
 }
 
-export function requiredRuns(plan: SupplyPlan): RunRequirement[] {
-  return SOURCES.map((s) => ({
+/**
+ * 🔴 `sources` 를 받는 이유는 **fixture 가 동작을 증명하기 위해서**다 (2026-09-13).
+ *    "미등록이면 0 회차" 를 특정 수집원이 미등록이라는 사실에 기대 증명하면,
+ *    그 수집원을 등록한 날 검사가 깨진다 — 실제로 깨졌다.
+ */
+export function requiredRuns(
+  plan: SupplyPlan,
+  sources: readonly Pick<SourcePlan, 'id' | 'maxPerRun' | 'runsPerDay' | 'loaded'>[] = SOURCES,
+): RunRequirement[] {
+  return sources.map((s) => ({
     id: s.id, maxPerRun: s.maxPerRun, loaded: s.loaded,
     runsNow: s.loaded ? s.runsPerDay : 0,
     runsNeededAlone: Math.ceil(plan.detailPerDay / s.maxPerRun),

@@ -723,6 +723,36 @@ check('🟢 목표 재고는 lib 상수를 쓴다', STOCK_TARGET === 14 && STOCK
   check('🔴 [12] 레인 전체 등급이 CRITICAL 이 된다', rep.level === 'CRITICAL')
 }
 
+/**
+ * 🔴 **관제가 스스로 사실을 적어 두지 않는다** (2026-09-13).
+ *
+ *    2026-09-11~12 24시간 관측에서 82cook 이 8회 시도 중 6회 거절됐는데
+ *    관제 화면은 그것을 잡지 못했다. 원인은 관제가 들고 있던 **네 가지 상수**였다 —
+ *      ① 네이버 슬롯 표가 실제와 한 자리도 맞지 않았다
+ *      ② 82cook 얇은 상세를 "미등록" 으로 박아 두고 판정에서 통째로 건너뛰었다
+ *      ③ 등록 여부를 그 레인이 아닌 **다른 job** 의 plist 로 물었다
+ *      ④ 완료 판정 정규식이 러너와 달라 `detail` 한쪽만 있어도 끝난 것으로 봤다
+ *    넷 다 "관제가 자기 사실을 갖는" 모양이다. 정본을 보게 고쳤다.
+ */
+console.log('\n⑬ 🔴 관제는 사실을 따로 갖지 않는다')
+{
+  const code = readFileSync('scripts/supply-health.mts', 'utf-8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+
+  check('🔴 ① 슬롯을 손으로 적지 않는다 — 정본에서 파생한다',
+    /planSlots\('navercafe:remonterrace'/.test(code)
+    && /planSlots\('navercafe:wgang'/.test(code)
+    && !/slots: \[\[\d/.test(code))
+  check('🔴 ② 등록 여부를 상수로 적지 않는다 — plist 를 실제로 본다',
+    !/onDemand/.test(code) && /jobRegisteredAt\(labelOf\(s\.logName\)\)/.test(code))
+  check('🔴 ③ 그 레인 자신의 job 을 본다 — 다른 job 의 plist 로 묻지 않는다',
+    !/raw-collect-82cook/.test(code) && /const labelOf =/.test(code))
+  check('🔴 ④ 완료 판정은 러너와 같은 함수다 — 정규식을 다시 쓰지 않는다',
+    /completedAdaptKeys\(files\)/.test(code) && !/82cook-adapt-\(\.\+\?\)/.test(code))
+  check('🔴 판정에서 뺀 레인을 화면에 적는다 — 조용히 빼지 않는다',
+    /NOT_REGISTERED/.test(code) && /예약 job 이 등록돼 있지 않다/.test(code))
+}
+
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
 process.exit(failN === 0 ? 0 : 1)

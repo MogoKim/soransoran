@@ -12,12 +12,13 @@
  *
  * 사용법: npx tsx scripts/micro-seed-supply-check.mts
  */
+import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { readFileSync } from 'node:fs'
 import {
   planSupplyMode, violatesSupplyInvariant, planAutoFetch, judgeAutoHold,
   judgeSourceSite, isNaverCafeSource, cafeIdOf, slotQuotaOf,
   AUTO_FETCH_MAX, AUTO_SKIP_LIST_FLAGS, AUTO_HOLD_DETAIL_FLAGS,
-  RAW_ONLY_BATCH_MAX, SHEET_LANE_LIMIT, SHEET_LANE_SOURCE_SITE, NAVERCAFE_PREFIX, SLOT_QUOTA,
+  RAW_ONLY_BATCH_MAX, SHEET_LANE_LIMIT, SHEET_LANE_SOURCE_SITE, NAVERCAFE_PREFIX, SLOT_QUOTA, CAFE_SLOT_QUOTA,
   type SupplyModeInput,
 } from './lib/micro-seed-supply.mjs'
 import { computeDedupKey } from './lib/micro-seed-82cook.mjs'
@@ -411,7 +412,10 @@ console.log('\n⑤-E sourceSite 계약 — 82cook 과 네이버는 양대 주요
 
   // ── 소스별 슬롯 quota ──
   check(`82cook 슬롯 quota ${SLOT_QUOTA['82cook']}`, slotQuotaOf('82cook') === SLOT_QUOTA['82cook'])
-  check(`navercafe 슬롯 quota ${SLOT_QUOTA.navercafe}`, slotQuotaOf('navercafe:wgang') === SLOT_QUOTA.navercafe)
+  check('🔴 네이버는 카페마다 상한이 다르다 — 게시판 수와 예산이 다르기 때문이다',
+    slotQuotaOf('navercafe:wgang') !== slotQuotaOf('navercafe:remonterrace'))
+  check('🔴 모르는 카페는 기본값(가장 보수적)으로 떨어진다',
+    slotQuotaOf('navercafe:모르는카페') === SLOT_QUOTA.navercafe)
   check(
     '🔴 네이버 quota 가 82cook 보다 작다',
     SLOT_QUOTA.navercafe < SLOT_QUOTA['82cook'],
@@ -423,9 +427,25 @@ console.log('\n⑤-E sourceSite 계약 — 82cook 과 네이버는 양대 주요
   )
   check(
     '🔴 우나어의 카페당 80건을 그대로 쓰지 않는다',
-    SLOT_QUOTA.navercafe <= 10,
+    Math.max(...Object.values(CAFE_SLOT_QUOTA)) < SLOT_QUOTA['82cook'],
     '한 소스를 세게 긁지 않는다 — 여러 카페·시간대에 얇게 분산한다',
   )
+  /**
+   * 🔴 **숫자가 아니라 계약을 본다** (2026-09-13).
+   *    "wgang 은 16" 을 fixture 에 박으면 예산이 바뀔 때 숫자를 따라 고치게 된다.
+   *    지켜야 하는 것은 **그 카페의 하루 요청 상한 안에 드는가** 하나다.
+   */
+  for (const cafeId of Object.keys(CAFE_SLOT_QUOTA)) {
+    const plan = planCafeRun({ cafeId })
+    check(
+      `🔴 ${cafeId} 회차 계획이 하루 요청 상한 안에 든다 (${plan.requestsPerDay}/${plan.limitPerDay})`,
+      plan.withinLimit && plan.requestsPerDay <= plan.limitPerDay,
+    )
+    check(
+      `🟢 ${cafeId} 상세 몫이 0 이 아니다 — 조용한 0건을 만들지 않는다`,
+      plan.detailPerRun > 0,
+    )
+  }
 
   // ── 🔴 sourceSite 는 운영 단위이지 주제 라벨이 아니다 ──
   {

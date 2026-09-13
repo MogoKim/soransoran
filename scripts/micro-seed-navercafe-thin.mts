@@ -29,7 +29,7 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { toThinRow, violatesStorage } from '../src/lib/micro-seed-82cook-thin'
 import {
   SKIP_LABEL, CAFE_BODY_HEAD_CHARS, planCafeThin, keepAfterClassify, outPathOf,
-  statsOf, verifyThinRun, dedupKeyOf, type CafeRow, type SkipCode,
+  statsOf, verifyThinRun, dedupKeyOf, uniqueSourceCount, type CafeRow, type SkipCode,
 } from '../src/lib/micro-seed-navercafe-thin'
 
 const DATA_DIR = '.microseed-data'
@@ -137,11 +137,19 @@ async function main(): Promise<void> {
       },
     },
   })
-  console.log(`\n② 행 ${rows.length}건 → 옮길 대상 ${plan.targets.length}건`)
-  if (plan.skipped.length > 0) {
+  /**
+   * 🔴 **네 갈래를 섞지 않는다** (2026-09-13).
+   *    "제외" 한 덩어리로 찍으면 버린 것과 미룬 것이 같아 보인다 —
+   *    실제로 2026-09-11~12 관측에서 1,384건이 "제외" 로 보였는데 대부분 **이월**이었다.
+   */
+  console.log(`\n② 행 ${rows.length}건 (고유 원천 ${uniqueSourceCount(rows)}건)`)
+  console.log(`   🟢 이번 회차 처리   ${plan.targets.length}건`)
+  console.log(`   🟡 다음 회차로 이월 ${plan.deferred.length}건  — 회차 상한 때문이다. 버린 것이 아니다`)
+  console.log(`   ⚪ 이미 읽음        ${plan.alreadyRead.length}건`)
+  console.log(`   🔴 안 가져옴        ${plan.rejected.length}건`)
+  if (plan.rejected.length > 0) {
     const byCode = new Map<string, number>()
-    for (const s of plan.skipped) byCode.set(s.code, (byCode.get(s.code) ?? 0) + 1)
-    console.log(`   제외 ${plan.skipped.length}건`)
+    for (const s of plan.rejected) byCode.set(s.code, (byCode.get(s.code) ?? 0) + 1)
     for (const [code, n] of [...byCode.entries()].sort((a, b) => b[1] - a[1])) {
       console.log(`     ${String(n).padStart(4)}건  ${SKIP_LABEL[code as SkipCode]}`)
     }

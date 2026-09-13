@@ -79,8 +79,10 @@ const EXPECTED: Record<string, {
 }> = {
   'com.soransoran.raw-collect-82cook.plist.template': {
     label: 'com.soransoran.raw-collect-82cook',
+    // 🔴 **목록 전용이다** (2026-09-13). `--auto --auto-max=30` 을 뺐다 —
+    //    그 30건은 `82cook.jsonl` 로 떨어지고 D100 처리기는 그 파일을 읽지 않는다.
     args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-collect-82cook.mts',
-      '--list', '--pages=3', '--auto', '--auto-max=30', '--live'],
+      '--list', '--pages=3', '--live'],
     slots: [...planSlots('82cook', 'start')],
     out: '__LOGDIR__/raw-collect-82cook.log',
     err: '__LOGDIR__/raw-collect-82cook-error.log',
@@ -217,6 +219,12 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
    */
   check('🔴 82cook 본문 슬롯이 목록 슬롯의 40분 뒤다',
     thin.slots.every((t, i) => t.hour === raw.slots[i]!.hour && t.minute === raw.slots[i]!.minute + 40))
+  /**
+   * 🔴 **목록 job 이 본문을 열지 않는다** (2026-09-13).
+   *    열면 아래 요청량 계산이 거짓이 된다 — 실제로 거짓이었다(세지 않은 30×5 = 150).
+   */
+  check('🔴 82cook 목록 job 이 본문을 열지 않는다',
+    !raw.args.includes('--auto') && !raw.args.some((a) => a.startsWith('--auto-max')))
   /** 🔴 확정 요청량 — 33×5 + 17×5 = 250 / 상한 400 */
   check('🔴 82cook 하루 요청이 33×5 + 17×5 = 250 이다', (() => {
     const rawPerDay = factsOf('82cook').requestsPerRun * raw.slots.length

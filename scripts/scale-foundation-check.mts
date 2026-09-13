@@ -756,7 +756,8 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
     // 🔴 **주석이 아니라 실제로 넘기는 인자만 본다.** XML 주석에는 옛 인자가 역사로 남아 있다
     const passedArgs = (t.replace(/<!--[\s\S]*?-->/g, '').match(/<string>([^<]*)<\/string>/g) ?? []).join(' ')
     if (cafe === undefined) {
-      const maxArg = /--(?:auto-)?max=(\d+)/.exec(passedArgs)
+      // 🔴 82cook 얇은 상세 job 은 `--cap=` 으로 받는다. 인자 이름을 여기서 지어내지 않는다
+      const maxArg = /--(?:auto-max|max|cap)=(\d+)/.exec(passedArgs)
       check(`🔴 [${s.id}] 회차 상한이 템플릿 인자와 같다`, Number(maxArg?.[1] ?? -1) === s.maxPerRun)
     } else {
       check(`🔴 [${s.id}] 회차 상한이 runner 역산값과 같다`,
@@ -764,8 +765,20 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
       check(`🔴 [${s.id}] 실제 인자에 --max 숫자를 손으로 적지 않는다`, !/--max=/.test(passedArgs))
     }
   }
-  check('🔴 82cook 은 템플릿이 있어도 launchctl 미등록으로 기록돼 있다',
-    SOURCES.some((s) => s.id === '82cook' && !s.loaded))
+  /**
+   * 🔴 **옛 판은 "82cook 은 미등록" 을 계약으로 박고 있었다** (2026-09-13 교체).
+   *
+   *    2026-09-11 에 세 job 이 모두 등록됐는데 이 fixture 때문에 메모를 고칠 수 없었다 —
+   *    고치면 CI 가 깨지는 구조였다. **관측이 바뀌면 메모도 바뀌어야 한다.**
+   *    지켜야 하는 계약은 "정적 메모를 판정 근거로 쓰지 않는다" 다.
+   */
+  check('🔴 D100 수집원은 실제로 D100 경로에 들어가는 job 을 가리킨다',
+    SOURCES.every((s) => s.template.includes('supply-collect') || s.template.includes('navercafe-collect')))
+  check('🔴 82cook 항목이 목록 job 이 아니라 얇은 상세 job 이다', (() => {
+    const c = SOURCES.find((s) => s.id === '82cook')
+    return c !== undefined && c.template.includes('supply-collect-82cook-thin')
+      && !c.template.includes('raw-collect')
+  })())
   /**
    * 🔴 **1회판은 운영 경로에서 사라졌다** (2026-09-11).
    *    실행 가능한 옛 템플릿을 남겨 두면 누군가 그것을 load 한다.
@@ -819,7 +832,17 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
   const runs = requiredRuns(p100)
   check('🔴 수집원별 필요 회차를 낸다', runs.length === SOURCES.length
     && runs.every((r) => r.runsNeededAlone === Math.ceil(p100.detailPerDay / r.maxPerRun)))
-  check('🔴 지금 회차는 등록된 것만 센다', runs.find((r) => r.id === '82cook')!.runsNow === 0)
+  /**
+   * 🔴 **동작을 본다 — 특정 source 가 미등록이라는 사실에 기대지 않는다** (2026-09-13).
+   *    옛 판은 82cook 이 `loaded: false` 인 것을 빌려 이 규칙을 증명했다.
+   *    그래서 82cook 을 등록한 날 이 검사가 깨졌고, 고치려면 사실을 되돌려야 했다.
+   */
+  check('🔴 등록된 수집원은 자기 회차 수를 센다',
+    runs.filter((r) => SOURCES.find((s) => s.id === r.id)?.loaded === true)
+      .every((r) => r.runsNow > 0))
+  check('🔴 등록되지 않은 수집원은 0 회차다', requiredRuns(p100, [
+    { id: 'synthetic:unloaded', maxPerRun: 10, runsPerDay: 5, loaded: false },
+  ]).every((r) => r.runsNow === 0))
 
   // 🔴 병목 — limits 를 넘기지 않으면 **실제 상수**로 본다
   const now = findBottlenecks(p100, undefined, OBSERVED)
