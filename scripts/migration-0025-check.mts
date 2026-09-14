@@ -1046,6 +1046,130 @@ check('SQL 계약과 적용 후 관측이 같은 인덱스 수를 말한다',
   EXPECTED_INDEX_SPECS.length === afterApply(true).indexes.length)
 
 
+
+// ══════════════════════════════════════════════════════════
+// 🔴 production --apply 실패의 확정 원인 (2026-09-14)
+//
+//    `pg_attribute.attname` 은 PostgreSQL 의 `name` 타입이다.
+//    캐스팅 없이 집계하면 결과가 name[](OID 1003)이 되고,
+//    Node `pg` 드라이버는 그 OID 에 배열 파서를 등록하지 않아
+//    문자열 "{endsAt}" 를 그대로 돌려준다.
+//    판정기의 Array.isArray 검사가 그것을 잡아 COMMIT 전에 ROLLBACK 했다.
+//
+//    🔴 기존 추정("같은 트랜잭션이라 아직 안 보였다")은 폐기됐다 —
+//       PGlite 트랜잭션 안에서 인덱스 4개가 전부 보인다(§7 통합 검증).
+//
+//    두 검사는 서로 다른 문제를 담당한다:
+//      · pg types 파서 재현  → 드라이버의 OID decoding (여기)
+//      · PGlite 트랜잭션 검증 → 트랜잭션 안 visibility (scratchpad 통합 검증)
+// ══════════════════════════════════════════════════════════
+console.log('── ㉝ pg 배열 decoding (production 실패 원인)')
+
+// ── A. 실제 pg 타입 파서 재현 — 저장소의 실제 pg 모듈을 쓴다 ──
+const { types: pgTypes } = (await import('pg')).default
+const NAME_ARRAY_OID = 1003
+const TEXT_ARRAY_OID = 1009
+
+const decodeAs = (oid: number, raw: string): unknown =>
+  pgTypes.getTypeParser(oid, 'text')(raw)
+
+const asName = decodeAs(NAME_ARRAY_OID, '{endsAt}')
+const asText = decodeAs(TEXT_ARRAY_OID, '{endsAt}')
+
+check('🔴 name[](OID 1003) 은 배열이 아니다 — 이것이 production 실패 원인',
+  !Array.isArray(asName))
+check('🔴 name[] 은 문자열 "{endsAt}" 로 온다', asName === '{endsAt}')
+check('🔴 text[](OID 1009) 는 JavaScript 배열이다', Array.isArray(asText))
+check('🔴 text[] 는 ["endsAt"] 로 온다',
+  JSON.stringify(asText) === JSON.stringify(['endsAt']))
+
+const multiName = decodeAs(NAME_ARRAY_OID, '{isActive,archivedAt,sortOrder}')
+const multiText = decodeAs(TEXT_ARRAY_OID, '{isActive,archivedAt,sortOrder}')
+check('복합 인덱스도 name[] 이면 문자열이다', !Array.isArray(multiName))
+check('🔴 복합 인덱스는 text[] 에서 값과 순서가 그대로다',
+  JSON.stringify(multiText) === JSON.stringify(['isActive', 'archivedAt', 'sortOrder']))
+check('빈 배열도 text[] 면 배열이다', Array.isArray(decodeAs(TEXT_ARRAY_OID, '{}')))
+check('빈 배열 text[] 는 길이 0', (decodeAs(TEXT_ARRAY_OID, '{}') as unknown[]).length === 0)
+check('원소가 전부 문자열이다',
+  (decodeAs(TEXT_ARRAY_OID, '{a,b}') as unknown[]).every((x) => typeof x === 'string'))
+
+// ── B. 쿼리 계약 ──
+console.log('── ㉞ 인덱스 쿼리 계약')
+
+check('🔴 a.attname::text 로 캐스팅한다', /array_agg\(a\.attname::text ORDER BY k\.ord\)/.test(cliCode))
+check('🔴 빈 배열도 ARRAY[]::text[] 다', /ARRAY\[\]::text\[\]/.test(cliCode))
+check('🔴 ARRAY[]::name[] 잔존 0', !/ARRAY\[\]::name\[\]/.test(cliCode))
+check('🔴 cast 없는 array_agg(a.attname ORDER BY ...) 잔존 0',
+  !/array_agg\(a\.attname ORDER BY/.test(cliCode))
+check('ORDER BY k.ord 로 컬럼 순서를 유지한다', /array_agg\([^)]*ORDER BY k\.ord\)/.test(cliCode))
+check('FILTER (WHERE a.attname IS NOT NULL) 을 유지한다',
+  /FILTER \(WHERE a\.attname IS NOT NULL\)/.test(cliCode))
+check('표현식 인덱스 관측을 유지한다 (LEFT JOIN · attnum <> 0)',
+  /LEFT JOIN pg_attribute a/.test(cliCode) && /k\.attnum <> 0/.test(cliCode))
+check('부분 인덱스 관측을 유지한다', /i\.indpred\s+IS NOT NULL/.test(cliCode))
+check('access method 관측을 유지한다', /am\.amname\s+AS "accessMethod"/.test(cliCode))
+check('INCLUDE 관측을 유지한다', /i\.indnatts > i\.indnkeyatts/.test(cliCode))
+check('valid·ready·live 관측을 유지한다',
+  /i\.indisvalid/.test(cliCode) && /i\.indisready/.test(cliCode) && /i\.indislive/.test(cliCode))
+
+// ── C. 판정 강도 유지 — 🔴 문자열 fallback 을 만들지 않았다 ──
+console.log('── ㉟ 판정 강도 (fallback 금지)')
+
+check('정상 string[] 은 통과한다', state(applied()) === 'APPLIED_AND_VALID')
+check('🔴 문자열 "{endsAt}" 은 OBSERVATION_FAILED — 허용하지 않는다',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name === 'HeroBanner_endsAt_idx' ? { ...i, columns: '{endsAt}' } : i),
+  })) === 'OBSERVATION_FAILED')
+check('🔴 복합 인덱스의 문자열 표기도 OBSERVATION_FAILED',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name.includes('isActive') ? { ...i, columns: '{isActive,archivedAt,sortOrder}' } : i),
+  })) === 'OBSERVATION_FAILED')
+check('숫자 배열은 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, columns: [1, 2] })) })) === 'OBSERVATION_FAILED')
+check('혼합 배열은 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, columns: ['a', 2] })) })) === 'OBSERVATION_FAILED')
+/**
+ * 🔴 **DB 관측 판정 영역만** 본다.
+ *    SQL 텍스트 계약(judgeMigration0025Sql 이하)은 `CREATE INDEX ... (a, b)` 를
+ *    읽으려고 당연히 split 을 쓴다 — 그것은 파일을 파싱하는 일이지
+ *    드라이버가 준 관측값을 문자열로 받아 주는 fallback 이 아니다.
+ */
+check('🔴 관측 판정기가 columns 문자열을 split 하지 않는다', (() => {
+  const src = readFileSync('scripts/lib/migration-0025-state.mjs', 'utf-8')
+  const cut = src.indexOf('export function judgeMigration0025Sql')
+  const judgeArea = (cut > 0 ? src.slice(0, cut) : src)
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//') && !l.trim().startsWith('/*'))
+    .join('\n')
+  return !/\.columns[^\n]*\.split\(/.test(judgeArea) && !/typeof i\.columns === 'string'/.test(judgeArea)
+})())
+check('🔴 판정기가 여전히 Array.isArray 로 막는다', (() => {
+  const src = readFileSync('scripts/lib/migration-0025-state.mjs', 'utf-8')
+  return /!Array\.isArray\(i\.columns\)/.test(src)
+})())
+
+console.log('   — 나머지 판정 강도가 그대로인가')
+check('컬럼 순서가 다르면 PARTIAL_OR_INVALID',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name.includes('isActive') ? { ...i, columns: ['archivedAt', 'isActive', 'sortOrder'] } : i),
+  })) === 'PARTIAL_OR_INVALID')
+check('표현식 인덱스 차단 유지',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, isExpression: true })) })) === 'PARTIAL_OR_INVALID')
+check('부분 인덱스 차단 유지',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, hasPredicate: true })) })) === 'PARTIAL_OR_INVALID')
+check('hash 인덱스 차단 유지',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, accessMethod: 'hash' })) })) === 'PARTIAL_OR_INVALID')
+check('INCLUDE 차단 유지',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, hasIncludedColumns: true })) })) === 'PARTIAL_OR_INVALID')
+for (const f of ['isValid', 'isReady', 'isLive']) {
+  check(`${f}=false 차단 유지`,
+    state(applied({ indexes: goodIndexes().map((i) => ({ ...i, [f]: false })) })) === 'PARTIAL_OR_INVALID')
+}
+
+
 console.log(`\n  ${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('  🔴 이 검사는 DB 에 연결하지 않았다 — 연결 0 · write 0\n')
 process.exit(fail === 0 ? 0 : 1)

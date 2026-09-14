@@ -200,6 +200,21 @@ async function state() {
    * 🔴 access method · 부분 조건(indpred) · 표현식(indexprs) · INCLUDE 컬럼
    *    (indnatts > indnkeyatts)까지 함께 읽는다. 넷 다 "이름과 컬럼은 같은데
    *    조회가 타지 못하는" 인덱스를 만든다.
+   *
+   * 🔴 **`a.attname::text` 로 캐스팅한다** (2026-09-14 · production 실패 정정).
+   *
+   *    `pg_attribute.attname` 은 PostgreSQL 의 `name` 타입이다. 캐스팅 없이
+   *    집계하면 결과가 `name[]`(OID 1003)이 되고, **Node `pg` 드라이버는 그 OID 에
+   *    배열 파서를 등록하지 않아 문자열 `"{endsAt}"` 를 그대로 돌려준다.**
+   *    판정기의 `Array.isArray(i.columns)` 가 그것을 정확히 잡아
+   *    production `--apply` 가 COMMIT 전에 ROLLBACK 했다(COMMIT 0 · ROLLBACK 1).
+   *
+   *    `text[]`(OID 1009)에는 파서가 있어 `["endsAt"]` 로 온다.
+   *    빈 배열도 `ARRAY[]::text[]` 여야 같은 OID 를 유지한다.
+   *
+   * 🔴 판정기에 문자열을 허용하거나 직접 split 하는 fallback 을 만들지 않는다.
+   *    관측이 올바른 구조를 돌려주는 것이 계약이다 — 판정을 느슨하게 하면
+   *    "배열을 못 읽었다" 는 진짜 사고를 다시는 잡지 못한다.
    */
   const { rows: idx } = await client.query(
     `SELECT c.relname                       AS name,
@@ -214,9 +229,9 @@ async function state() {
             i.indisready                    AS "isReady",
             i.indislive                     AS "isLive",
             COALESCE(
-              array_agg(a.attname ORDER BY k.ord)
+              array_agg(a.attname::text ORDER BY k.ord)
                 FILTER (WHERE a.attname IS NOT NULL),
-              ARRAY[]::name[]
+              ARRAY[]::text[]
             )                               AS columns
        FROM pg_index i
        JOIN pg_class c  ON c.oid = i.indexrelid
