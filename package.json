@@ -139,7 +139,8 @@
     "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts",
     "supply:d100-plan": "tsx scripts/supply-d100-plan.mts",
     "supply:d100-plan-check": "tsx scripts/supply-d100-plan-check.mts",
-    "micro-seed:navercafe-run": "tsx scripts/micro-seed-navercafe-run.mts"
+    "micro-seed:navercafe-run": "tsx scripts/micro-seed-navercafe-run.mts",
+    "publish:machine-review": "tsx scripts/original-post-machine-review.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

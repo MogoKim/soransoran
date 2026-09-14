@@ -22,6 +22,7 @@ import {
   buildGenSystemPrompt, buildQualitySystemPrompt, retryDirective, callBudgetOf,
   CallBudget, HARM_BANS, MAX_ORIGINALITY_RETRIES,
   CALL_ALLOWANCE_PER_SOURCE, CALL_EXPECTED_PATH_PER_SOURCE, HARM_PROMPT, digest16,
+  buildAgeCheckSystemPrompt, parseAgeCheck,
 } from './micro-seed-auto-draft.mjs'
 import {
   readSourceProfile, readClosingIntent, readTitleIntent, endsNaturallyAsQuestion,
@@ -33,7 +34,10 @@ import { planVoicePersonas, loadSpread } from '../src/lib/voice-persona-plan'
 import {
   lifeConflictDirective, MAX_LIFE_CONFLICT_RETRIES, schemaRetryDirective,
 } from './micro-seed-auto-draft.mjs'
-import { judgeLifeRetry } from '../src/lib/micro-seed-auto-draft'
+import {
+  judgeLifeRetry, mergeLifeConflict, AGE_CHECK_MODEL_TRIAL, AGE_CHECK_QUALIFIED_MODEL,
+  MACHINE_AGE_HUMAN_REVIEW_REQUIRED, MACHINE_AGE_HUMAN_REVIEW_NOTE,
+} from '../src/lib/micro-seed-auto-draft'
 import {
   lifeHistoryLines, evidenceFoundIn, LIFE_CONFLICT_MISSING, LIFE_EVIDENCE_NOT_FOUND,
   type PersonaLifeHistory,
@@ -688,8 +692,9 @@ console.log('\n⑬ 🔴 cache 가 실제 프롬프트와 실제 본문을 본다
     digest16('제목\n본문A') !== digest16('제목\n본문B'))
   check('🔴 판 값이 올라갔다 — 옛 회차와 섞이지 않는다',
     DRAFT_RULE_VERSION === 'auto-draft-v5'
-    && DRAFT_PROMPT_VERSION === 'draft-gen-v5'
-    && QUALITY_PROMPT_VERSION === 'draft-quality-v4')
+    // 🔴 2026-09-14 — 나이대를 프롬프트에 넣었다. 옛 캐시를 재사용하지 않는다
+    && DRAFT_PROMPT_VERSION === 'draft-gen-v6'
+    && QUALITY_PROMPT_VERSION === 'draft-quality-v5')
   check('🔴 옛 cache 를 지우지 않고 무시할 수 있다 (--no-cache)',
     /const NO_CACHE = argv\.includes\('--no-cache'\)/.test(runner)
     && /if \(NO_CACHE\) return new Map\(\)/.test(runner))
@@ -1534,6 +1539,214 @@ console.log('\n⑳ 🔴 생활사 재생성 집계 — 확인하지 못한 것�
       && /이 수를 넘을 수 있다/.test(src)
       && !/CALL_WORST_PATH/.test(src)
   })())
+}
+
+console.log('\n㉑ 🔴 나이·세대 관점 — 글쓴이 나이를 생성과 검수가 함께 본다 (2026-09-14)')
+{
+  /**
+   * 🔴 **실측 결함.** 공개 Post `cmu0sjyll…` · Queue `cmu0ov5b3…` · 원천 34998885.
+   *    40대 후반 P03 이 `우리 언니가 요즘 그 나이대(30~32)에 결혼 준비 중` 을 썼고
+   *    `lifeConflict=false` 로 통과했다. 40대 후반의 **언니**가 30대 초반일 수는 없다.
+   *
+   *    원인은 하나였다 — `PersonaLifeHistory` 에 `ageBand` 가 없었다.
+   *    생성 프롬프트도 검수 프롬프트도 **글쓴이가 몇 살인지 보지 못했다.**
+   */
+  const P03_LIKE: PersonaLifeHistory = {
+    code: 'P03', ageBand: '40대 후반', maritalStatus: '기혼',
+    childrenCount: 2, childrenAgeBands: ['중고등'], parentCare: '없음', menopauseStatus: '전',
+  }
+
+  // ── ① 정본이 실제로 흘러오는가 — 캐스트를 믿지 않고 값으로 본다 ──
+  const cards = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8')).cards
+  check('🔴 [회귀] cardToPersona 가 ageBand 를 실어 보낸다 (as 캐스트가 숨기던 자리)',
+    cards.length > 0 && cards.every((c) => {
+      const v = cardToPersona(c).ageBand
+      return typeof v === 'string' && v.trim() !== ''
+    }))
+  check('🟢 정본 카드의 ageBand 를 그대로 옮긴다 — 보정하지 않는다',
+    cards.every((c) => cardToPersona(c).ageBand === c.ageBand))
+  check('🔴 [회귀] 러너의 lifeOf 가 ageBand 를 넘긴다',
+    /code: card\.code, ageBand: card\.ageBand/.test(codeOf('scripts/micro-seed-auto-draft.mts')))
+
+  // ── ② 두 프롬프트가 같은 줄을 본다 ──
+  const lines = lifeHistoryLines(P03_LIKE)
+  check('🔴 생활사 줄 맨 앞이 나이대다', lines[0] === '- 나이대: 40대 후반')
+  const gen = buildGenSystemPrompt({
+    title: '결혼 준비 이야기', bodyHead: '요즘 결혼 준비가 만만치 않네요',
+    voiceSamples: ['그러게 말이야'], persona: P03_LIKE,
+  })
+  const qual = buildQualitySystemPrompt(P03_LIKE)
+  check('🔴 생성 프롬프트가 나이대를 담는다', gen.includes('- 나이대: 40대 후반'))
+  check('🔴 검수 프롬프트가 나이대를 담는다', qual.includes('- 나이대: 40대 후반'))
+  check('🔴 [회귀] 생활사가 없으면 검수 프롬프트에 나이 절이 없다',
+    !buildQualitySystemPrompt(undefined).includes('나이대'))
+
+  // ── ③ 🔴 막는 것은 **관계의 나이 모순** 하나다 ──
+  check('🔴 생성 프롬프트가 나올 수 없는 가족 관계를 막는다',
+    gen.includes('당신 나이에서 나올 수 없는 가족 관계를 지어내지 않습니다'))
+  // 🔴 나이는 **큰 검수가 아니라 집중 호출**이 본다 (2026-09-14 · shadow 2/2 실패 뒤 분리)
+  check('🔴 [계약] 큰 품질 프롬프트에 나이 절차를 덧붙이지 않는다 — 비싸지고 묻힌다',
+    !qual.includes('아래 순서로만 본다') && !qual.includes('우리 언니가 서른 하나'))
+  check('🟢 큰 검수는 나이대를 **맥락으로만** 담는다', qual.includes('- 나이대: 40대 후반'))
+
+  // ── ④ 🟢 반드시 허용해야 하는 것 — 프롬프트가 명시로 열어 둔다 ──
+  const age = buildAgeCheckSystemPrompt('40대 후반')
+  const allowed: [string, string][] = [
+    ['일반적인 30대 결혼 이야기', '요즘 서른 넘어 결혼하는 사람이 많다'],
+    ['자녀/조카/후배 세대', '"조카" · "후배" · "아는 집 딸" · "우리 애 또래"'],
+    ['주변 관찰', '"주변 30대가" — 관찰이다'],
+    ['실제 가능한 연상·연하', '"우리 언니가 쉰 넷"'],
+    ['나이를 말하지 않은 가족 이야기', '모르면 어긋난 것이 아니다'],
+  ]
+  for (const [label, needle] of allowed) {
+    check(`🟢 [허용] ${label} — 집중 검수가 conflict=false 로 열어 둔다`, age.includes(needle))
+  }
+  check('🔴 집중 검수는 나이 하나만 본다 — 소재·말투를 보지 않는다',
+    age.includes('**소재 · 말투 · 재미 · 갈등은 보지 않는다.**'))
+  check('🔴 집중 검수가 글쓴이 나이대를 직접 받는다', age.includes('글쓴이는 **40대 후반** 여성이다'))
+  check('🔴 "그 나이대" 처럼 앞 문장을 받는 말도 나이 명시로 센다',
+    age.includes('앞 문장을 받는 "그 나이대"'))
+  check('🔴 ① 또는 ② 가 없으면 추측하지 않는다', age.includes('추측해서 세지 않는다'))
+  check('🟢 집중 프롬프트는 짧다 — 큰 검수보다 작다', age.length < qual.length)
+  check('🟢 [허용] 생성 프롬프트도 같은 것을 열어 둔다',
+    gen.includes('나이 이야기를 못 한다는 뜻이 아닙니다')
+    && gen.includes('아래 세대 이야기')
+    && gen.includes('세대 차이에 대한 생각'))
+
+  // ── ⑤ 🔴 소재·말투 규제가 늘지 않았다 ──
+  check('🔴 [계약] 품질 축이 늘지 않았다 — 새 차단 축을 만들지 않는다',
+    DRAFT_QUALITY_AXES.length === 6 && !DRAFT_QUALITY_AXES.some((a) => /age|generation|나이/i.test(a)))
+  check('🔴 [계약] 사람 관계 낱말 목록·정규식을 만들지 않았다',
+    !/RELATION_WORDS|FAMILY_WORDS|AGE_BAN|언니\|누나\|오빠/.test(codeOf('src/lib/micro-seed-auto-draft.ts')))
+  check('🟢 [계약] 반말·혼합 말투는 그대로 허용된다',
+    qual.includes('반말도 · 존댓말과 섞인 말투도'))
+  check('🟢 [계약] 결혼·연예·방송·건강·갈등 소재는 그대로 허용된다',
+    qual.includes('결혼 · 연예 · 방송 · 병원')
+    && qual.includes('연예인 · 방송 · 드라마 · 건강 · 갱년기 · 병원 경험'))
+
+  // ── ⑥ 모순이면 **소재를 버리지 않고 세대를 옮긴다** ──
+  const dir = lifeConflictDirective(P03_LIKE, ['우리 언니가 요즘 그 나이대(30~32)에 결혼 준비 중'])
+  check('🔴 재생성 지시가 나이대를 함께 보여 준다', dir.includes('- 나이대: 40대 후반'))
+  check('🟢 재생성 지시가 소재를 버리라고 하지 않는다', dir.includes('**소재는 그대로 씁니다.**'))
+  check('🟢 재생성 지시가 세대 전환을 제시한다',
+    dir.includes('세대를 옮깁니다') && dir.includes('자녀 세대 이야기로')
+    && dir.includes('조카/후배 이야기로') && dir.includes('주변에서 본 사례로'))
+  check('🔴 재생성 지시가 근거 문장을 그대로 보여 준다', dir.includes('30~32'))
+
+  // ── ⑦ 판정 경로 — 같은 lifeConflict 축을 그대로 쓴다 ──
+  const DRAFT_BAD = '우리 언니가 요즘 그 나이대(30~32)에 결혼 준비 중이라 정신이 없어요.'
+  const conflictJson = '{"decision":"AUTO_ADOPT","confidence":0.9,"issues":[],"harms":[],'
+    + '"lifeConflict":{"conflict":true,"evidence":"우리 언니가 요즘 그 나이대(30~32)에 결혼 준비 중"}}'
+  const vBad = parseQuality(conflictJson, { persona: P03_LIKE, draftText: DRAFT_BAD })
+  /**
+   * 🔴 **이 검사는 "모델이 잡는가" 가 아니다.** 검수 모델이 `conflict=true` 를 돌려줬을 때
+   *    판정 경로가 그것을 재생성으로 잇는가만 본다.
+   *    🔴 실제 모델(claude-haiku-4.5)이 이 사례를 잡는지는 **shadow 로만 확인된다** —
+   *    2026-09-14 실측에서 보강 전후 2회 모두 **잡지 못했다**(§ PR 본문 · 설계 문서).
+   */
+  check('🔴 [판정 경로] conflict=true + 근거 확인 → lifeHistoryConflict',
+    vBad !== null && applyQuality(vBad) === 'lifeHistoryConflict')
+  check('🔴 그 회차는 재생성/HOLD 로 간다 (버리지 않는다)',
+    vBad !== null && judgeLifeRetry([vBad]) === 'held')
+
+  const okJson = '{"decision":"AUTO_ADOPT","confidence":0.9,"issues":[],"harms":[],'
+    + '"lifeConflict":{"conflict":false,"evidence":""}}'
+  for (const [label, draft] of [
+    ['요즘 서른 넘어 결혼하는 사람이 많다', '요즘은 서른 넘어 결혼하는 사람이 많더라고요.'],
+    ['주변 30대가 결혼을 준비한다', '주변 30대가 결혼을 준비하는 걸 보니 세상이 참 달라졌어요.'],
+    ['자녀 세대 결혼 이야기', '우리 애 또래가 슬슬 결혼 이야기를 하네요.'],
+    ['조카 세대 결혼 이야기', '조카가 서른 하나인데 결혼 준비를 한대요.'],
+  ] as [string, string][]) {
+    const v = parseQuality(okJson, { persona: P03_LIKE, draftText: draft })
+    check(`🟢 [판정 경로 · 통과] ${label}`,
+      v !== null && applyQuality(v) === 'ok' && judgeLifeRetry([v]) === 'fixed')
+  }
+
+  // 🔴 모순을 관점 변경으로 고치면 통과한다 — 한 번 다시 쓴 결과가 clear 면 fixed
+  const FIXED = '조카가 요즘 그 나이대라 결혼 준비하는 걸 옆에서 보고 있어요.'
+  const vFixed = parseQuality(okJson, { persona: P03_LIKE, draftText: FIXED })
+  check('🟢 [판정 경로 · 재생성 성공] 모순을 세대 전환으로 고치면 통과한다',
+    vBad !== null && vFixed !== null
+    && judgeLifeRetry([vBad, vFixed]) === 'fixed' && applyQuality(vFixed) === 'ok')
+
+  // 🔴 지어낸 근거로는 막지 않는다 (기존 계약 유지)
+  const vFake = parseQuality(
+    '{"decision":"AUTO_ADOPT","confidence":0.9,"issues":[],"harms":[],'
+    + '"lifeConflict":{"conflict":true,"evidence":"초안에 없는 문장"}}',
+    { persona: P03_LIKE, draftText: DRAFT_BAD },
+  )
+  check('🔴 [계약] 초안에 없는 근거로는 막지 않는다',
+    vFake !== null && vFake.unknownIssues.includes(LIFE_EVIDENCE_NOT_FOUND))
+
+  // ── ⑧ 캐시 — 옛 프롬프트 결과가 hit 되지 않는다 ──
+  const runnerSrc = codeOf('scripts/micro-seed-auto-draft.mts')
+  check('🔴 생성 cache key 가 실제 프롬프트 digest 를 담는다',
+    /genKey = `gen\|.*\|\$\{DRAFT_PROMPT_VERSION\}`/.test(runnerSrc)
+    && /\+ `\|\$\{DRAFT_MODEL\}\|\$\{digest16\(genSystem\)\}`/.test(runnerSrc))
+  check('🔴 품질 cache key 가 실제 프롬프트 digest 를 담는다',
+    /qSystemDigest = digest16\(buildQualitySystemPrompt\(persona\)\)/.test(runnerSrc))
+  check('🔴 [회귀] 나이대가 빠지면 프롬프트 digest 가 달라진다 — 옛 캐시가 hit 되지 않는다',
+    digest16(buildQualitySystemPrompt(P03_LIKE))
+    !== digest16(buildQualitySystemPrompt({ ...P03_LIKE, ageBand: undefined })))
+  check('🔴 [회귀] 생성 프롬프트도 나이대가 빠지면 digest 가 달라진다', (() => {
+    const t = { title: 'x', bodyHead: 'y', voiceSamples: ['z'] }
+    return digest16(buildGenSystemPrompt({ ...t, persona: P03_LIKE }))
+      !== digest16(buildGenSystemPrompt({ ...t, persona: { ...P03_LIKE, ageBand: undefined } }))
+  })())
+
+  // ── ⑩ 🔴 집중 나이 검수 — 기존 lifeConflict 칸으로 합쳐진다 (새 축 아님) ──
+  check('🔴 [계약] 품질 축은 여전히 6개다', DRAFT_QUALITY_AXES.length === 6)
+  check('🟢 근거 확인된 나이 충돌이 lifeConflict 로 합쳐진다',
+    mergeLifeConflict(null, { conflict: true, evidence: '우리 언니가 서른 하나' })?.conflict === true)
+  check('🟢 큰 검수가 이미 충돌이면 그대로 둔다',
+    mergeLifeConflict({ conflict: true, evidence: 'a' }, { conflict: false, evidence: '' })?.evidence === 'a')
+  check('🔴 근거 없는 나이 주장은 합치지 않는다',
+    mergeLifeConflict({ conflict: false, evidence: '' }, { conflict: true, evidence: '' })?.conflict === false)
+  check('🔴 둘 다 판정이 없으면 모른다(null) 그대로', mergeLifeConflict(null, null) === null)
+
+  const AGE_DRAFT = '우리 언니가 서른 하나인데 결혼 준비 중이에요.'
+  check('🟢 나이 검수 응답을 읽는다', (() => {
+    const v = parseAgeCheck('{"conflict":true,"evidence":"우리 언니가 서른 하나"}', AGE_DRAFT)
+    return v?.conflict === true && v.evidence === '우리 언니가 서른 하나'
+  })())
+  check('🔴 [계약] 초안에 없는 근거로는 막지 않는다 (지어낸 문장)',
+    parseAgeCheck('{"conflict":true,"evidence":"초안에 없는 문장"}', AGE_DRAFT)?.conflict === false)
+  check('🔴 JSON 이 아니면 null — 통과로 세지 않는다', parseAgeCheck('설명만 있다', AGE_DRAFT) === null)
+  check('🔴 conflict 가 boolean 이 아니면 null', parseAgeCheck('{"conflict":"yes"}', AGE_DRAFT) === null)
+  check('🔴 러너가 집중 호출을 붙이고 결과를 합친다',
+    /buildAgeCheckSystemPrompt\(persona\.ageBand\)/.test(runnerSrc)
+    && /mergeLifeConflict\(q\.value\.lifeConflict, age\)/.test(runnerSrc))
+  check('🔴 집중 호출은 작은 토큰 상한을 쓴다', /AGE_CHECK_MAX_TOKENS/.test(runnerSrc))
+
+  // ── ⑪ 🔴 ageBand 필수 — provider 호출 전에 멈춘다 ──
+  check('🔴 [회귀] cardToPersona 가 `as PersonaForMatch` 캐스트를 쓰지 않는다',
+    !/\} as PersonaForMatch/.test(codeOf('src/lib/persona-pool-card.ts')))
+  check('🔴 ageBand 없는 Persona 는 생성 후보에서 빠진다',
+    /const usable = withVoice\.filter\(hasAge\)/.test(runnerSrc))
+  check('🔴 ageBand 있는 Persona 가 0명이면 provider 호출 전에 멈춘다',
+    /blocked\('personaAgeBandMissing'/.test(runnerSrc)
+    && runnerSrc.indexOf("blocked('personaAgeBandMissing'") < runnerSrc.indexOf('const { picks, load } = planVoicePersonas'))
+  check('🔴 제외된 Persona 를 조용히 줄이지 않고 이름을 남긴다',
+    /나이대\(ageBand\) 없어 제외/.test(runnerSrc))
+  check('🟢 정본 카드 25명 전원 ageBand 가 있다', cards.every((c) => c.ageBand.trim() !== ''))
+
+  // ── ⑫ 🔴 실측 — 합격한 모델이 없다. 사람 확인이 필요하다 ──
+  check('🔴 합격 모델이 없다고 값으로 적혀 있다', AGE_CHECK_QUALIFIED_MODEL === null)
+  check('🔴 세 모델 실측이 기록돼 있다',
+    AGE_CHECK_MODEL_TRIAL.results.length === 3
+    && AGE_CHECK_MODEL_TRIAL.results.every((r) => r.defects < 3))
+  check('🔴 자동 발행 전 사람 확인이 필요하다고 명시돼 있다',
+    MACHINE_AGE_HUMAN_REVIEW_REQUIRED === true
+    && MACHINE_AGE_HUMAN_REVIEW_NOTE.includes('자동 발행 전 사람 확인'))
+  check('🔴 러너가 회차마다 그 문장을 찍는다', /MACHINE_AGE_HUMAN_REVIEW_NOTE/.test(runnerSrc))
+
+  // ── ⑨ 생성 voice 와 최종 author 동일성 ──
+  check('🔴 [계약] 말투 근거 Persona 와 lifeOf 가 **같은 코드**를 본다',
+    /const c = byId\.get\(id\)\?\.personaCode/.test(runnerSrc)
+    && /const card = usable\.find\(\(x\) => x\.code === c\)/.test(runnerSrc))
+  check('🔴 [계약] 최종 author 는 생성 말투와 이어진다 (voiceProvenance)',
+    /voiceProvenance: voice\.provenanceFor\(a\.pick\.sourceArticleId\)/.test(runnerSrc)
+    && /personaCode: c, comments: texts\.length/.test(runnerSrc))
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

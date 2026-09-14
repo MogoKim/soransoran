@@ -35,8 +35,11 @@ import {
   LIFE_CONFLICT_MISSING, LIFE_EVIDENCE_NOT_FOUND,
   QUALITY_PROMPT_VERSION, BANNED_WORDS,
   lifeHistoryLines, applyQuality, judgeLifeRetry,
+  MACHINE_AGE_HUMAN_REVIEW_NOTE, AGE_CHECK_MODEL_TRIAL, AGE_CHECK_QUALIFIED_MODEL,
   type DraftCandidate, type Judgement, type Pick, type DraftQualityVerdict,
   type PersonaLifeHistory,
+  evidenceFoundIn, mergeLifeConflict,
+  type LifeConflict,
 } from '../src/lib/micro-seed-auto-draft'
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import {
@@ -203,6 +206,8 @@ function seenFromCandidates(): { titles: Set<string>; bodies: Set<string> } {
 }
 
 export const DRAFT_MODEL: ProviderModel = 'claude-haiku-4.5'
+/** 🔴 나이 검수는 JSON 한 줄만 받는다 — 큰 검수와 같은 상한을 쓰지 않는다 */
+export const AGE_CHECK_MAX_TOKENS = 200
 export const DRAFT_TIMEOUT_MS = 25000
 export const DRAFT_MAX_TOKENS = 1200
 export const MAX_ATTEMPTS = 2
@@ -250,6 +255,10 @@ export function lifeConflictDirective(p: PersonaLifeHistory, evidence: readonly 
     '', '🔴 **소재는 그대로 씁니다.** 재미있고 할 말이 있는 소재라는 사실은 변하지 않습니다.',
     '   바꾸는 것은 **당신이 서 있는 자리**입니다 —',
     '   곁에서 본 이야기로 · 궁금해서 묻는 글로 · 읽고 든 생각으로 · 비슷한 다른 경험으로.',
+    // 🔴 2026-09-14 — 나이가 안 맞으면 버릴 것이 아니라 **세대를 옮기면 된다**
+    '   나이가 맞지 않으면 **세대를 옮깁니다** —',
+    '   자녀 세대 이야기로 · 조카/후배 이야기로 · 주변에서 본 사례로 ·',
+    '   세대 차이에 대한 생각으로 · 내가 그 나이였을 때와 비교하는 글로.',
     '   없는 가족을 지어내지도, 새 개인 사정을 만들지도 않습니다.',
   ].join('\n')
 }
@@ -328,11 +337,20 @@ function personaLifeDirectives(p?: PersonaLifeHistory): string[] {
     '## 🔴 당신은 이런 사람입니다',
     ...lifeHistoryLines(p),
     '',
-    '위 네 가지는 **당신의 실제 삶**입니다. 글에서 1인칭으로 말할 때 이것과 어긋나지 않습니다.',
+    '위 다섯 가지는 **당신의 실제 삶**입니다. 글에서 1인칭으로 말할 때 이것과 어긋나지 않습니다.',
     '- 혼인 상태에 없는 배우자를 "우리 남편" 이라고 부르지 않습니다.',
     '- 없는 자녀를, 다른 나이대의 자녀를 자기 아이처럼 말하지 않습니다.',
     '- 해 본 적 없는 부모 돌봄을 자기 경험으로 말하지 않습니다.',
     '- 아직 오지 않은 갱년기를 자기 증상으로 말하지 않습니다.',
+    // 🔴 2026-09-14 — 나이를 안 넘겨서 `우리 언니(30~32)` 가 나왔다. 관계의 **나이**를 본다
+    '- 당신 나이에서 나올 수 없는 가족 관계를 지어내지 않습니다.',
+    '  (예: 40대 후반인데 "우리 언니가 서른 하나" · 50대인데 "우리 엄마가 예순 하나")',
+    '',
+    '🔴 **나이 이야기를 못 한다는 뜻이 아닙니다.** 다음은 전부 자연스럽습니다 —',
+    '   · "요즘은 서른 넘어 결혼하는 사람이 많더라" 처럼 **일반적인 이야기**',
+    '   · "우리 애 또래가" · "조카가" · "후배가" · "아는 집 딸이" 처럼 **아래 세대 이야기**',
+    '   · 실제로 있을 수 있는 연상·연하 관계 (언니가 쉰 넷 · 동생이 마흔 둘)',
+    '   · 세대 차이에 대한 생각, 내가 그 나이였을 때와의 비교',
     '',
     '🔴 **[소재] 는 남이 쓴 글입니다. 당신이 겪은 일이 아닙니다.**',
     '   소재의 사연이 당신 삶과 다르면 **소재를 버리지 말고 자리를 바꿔 씁니다** —',
@@ -513,6 +531,71 @@ export class CallBudget {
  *    프롬프트에는 그대로 남아 있었다 — 모델은 프롬프트를 따르고, parser 는 그 답을
  *    다른 사유로 바꿔 HOLD 시켰다. 반말 허용이 실제 경로에 없었다.
  */
+/**
+ * 🔴 **나이·가족·세대 정합만 보는 짧은 검수 프롬프트** (2026-09-14).
+ *
+ *    큰 품질 프롬프트에 절차를 덧붙였더니 모델이 실측 결함을 **2/2 통과**시켰다.
+ *    프롬프트가 길수록 뒤에 붙인 지시는 묻힌다. 그래서 **이 하나만 묻는 호출**을 따로 둔다.
+ *
+ * 🔴 이것은 **새 차단 축이 아니다.** 답은 기존 `lifeConflict` 칸으로 합쳐진다
+ *    (`mergeLifeConflict`). 소재·말투·위해는 이 호출이 보지 않는다 — 큰 검수가 그대로 본다.
+ */
+export function buildAgeCheckSystemPrompt(ageBand: string): string {
+  return [
+    '너는 글 한 편을 읽고 **딱 하나만** 판정한다.',
+    '',
+    `글쓴이는 **${ageBand}** 여성이다.`,
+    '',
+    '🔴 **질문: 글이 자기 가족을 말하면서, 그 가족의 나이가 글쓴이 나이와 모순되는가?**',
+    '',
+    '이 순서로 센다:',
+    '  ① 글에 "우리 ○○" · "내 ○○" 같은 **자기 가족**이 나오는가',
+    '     (언니 · 오빠 · 형 · 누나 · 동생 · 엄마 · 아빠 · 딸 · 아들 · 시부모)',
+    '  ② 그 가족의 나이나 세대가 **글 안에** 적혀 있는가',
+    '     (숫자 · "서른 하나" · 앞 문장을 받는 "그 나이대" · "저 나이" 도 포함한다)',
+    '  ③ ①②가 모두 있으면, 글쓴이 나이와 견주어 **가능한 관계인지** 센다',
+    `     · 언니 · 오빠 · 형 · 누나 → ${ageBand} 보다 **많아야** 한다`,
+    `     · 엄마 · 아빠 · 시부모 → ${ageBand} 보다 **한 세대 많아야** 한다`,
+    `     · 딸 · 아들 → ${ageBand} 보다 **한 세대 적어야** 한다`,
+    '  ④ 불가능하면 conflict=true 이고, **글에 있는 그 문장을 그대로** evidence 에 옮긴다',
+    '',
+    '🔴 **①이나 ②가 없으면 conflict=false 다. 추측해서 세지 않는다.**',
+    '',
+    '🔴 아래는 전부 conflict=false 다:',
+    '  · "요즘 서른 넘어 결혼하는 사람이 많다" — 자기 가족이 아니다',
+    '  · "조카" · "후배" · "아는 집 딸" · "우리 애 또래" — 아래 세대다',
+    '  · "주변 30대가" — 관찰이다',
+    `  · "우리 언니가 쉰 넷" — ${ageBand} 보다 많으니 가능하다`,
+    '  · 나이를 말하지 않은 가족 이야기 — 모르면 어긋난 것이 아니다',
+    '',
+    '🔴 **소재 · 말투 · 재미 · 갈등은 보지 않는다.** 반말도 · 연예 · 방송 · 건강 · 시댁 ·',
+    '   부부 갈등 이야기도 여기서는 전부 상관없다. 나이 모순 하나만 본다.',
+    '',
+    'JSON 만 답한다:',
+    '{"conflict":true|false,"evidence":"모순으로 읽히는 글의 문장 그대로. 없으면 빈 문자열"}',
+  ].join('\n')
+}
+
+/**
+ * 🔴 나이 검수 응답을 읽는다 — **근거가 글에 실제로 있어야 한다**(기존 계약 그대로).
+ *    지어낸 문장으로는 막지 않는다.
+ */
+export function parseAgeCheck(raw: string, draftText: string): LifeConflict | null {
+  let j: Record<string, unknown>
+  try {
+    const t = raw.trim()
+    const a = t.indexOf('{')
+    const b = t.lastIndexOf('}')
+    if (a === -1 || b === -1) return null
+    j = JSON.parse(t.slice(a, b + 1)) as Record<string, unknown>
+  } catch { return null }
+  if (typeof j.conflict !== 'boolean') return null
+  const ev = typeof j.evidence === 'string' ? j.evidence.trim() : ''
+  if (!j.conflict) return { conflict: false, evidence: '' }
+  // 🔴 근거가 초안에 없으면 충돌로 세지 않는다 — 지어낸 문장으로 막지 않는다
+  return evidenceFoundIn(ev, draftText) ? { conflict: true, evidence: ev } : { conflict: false, evidence: '' }
+}
+
 export function buildQualitySystemPrompt(persona?: PersonaLifeHistory): string {
   return [
     '너는 40대 중반~60대 중반 여성 커뮤니티의 글 검수자다.',
@@ -543,7 +626,11 @@ export function buildQualitySystemPrompt(persona?: PersonaLifeHistory): string {
       '   글이 **자기 일로** 말하는 것이 위와 명백히 어긋날 때만 conflict=true 다.',
       '   예: 비혼인데 "우리 남편이" · 무자녀인데 "우리 애가" ·',
       '       갱년기 전인데 "내가 요즘 갱년기라" · 돌봄 없음인데 "내가 간병하느라".',
-      '   🔴 **소재로 판단하지 않는다.** 남편 · 자녀 · 갱년기 · 돌봄 · 연예 · 방송 · 병원',
+      // 🔴 **나이·세대는 여기서 묻지 않는다** (2026-09-14). 큰 프롬프트에 절차를 덧붙였더니
+      //    모델이 실측 결함을 그대로 통과시켰고(2/2), 프롬프트만 비싸졌다.
+      //    나이는 `buildAgeCheckSystemPrompt` 가 **짧고 집중된 호출 하나**로 따로 본다.
+      '',
+      '   🔴 **소재로 판단하지 않는다.** 남편 · 자녀 · 갱년기 · 돌봄 · 결혼 · 연예 · 방송 · 병원',
       '      이야기를 하는 것 자체는 어긋남이 아니다. 남의 이야기 · 관찰 · 질문 · 공감은',
       '      전부 정상이다. 애매하면 conflict=false 다.',
       '   conflict=true 면 **글에서 그렇게 읽히는 부분을 그대로** evidence 에 옮긴다.',
@@ -726,6 +813,32 @@ async function askQuality(
       statusCount.set(`schemaRetry:${retry.status}`, (statusCount.get(`schemaRetry:${retry.status}`) ?? 0) + 1)
       if (retry.value !== null) q = retry
     }
+    /**
+     * 🔴 **나이·가족·세대만 보는 짧은 호출 하나를 덧붙인다** (2026-09-14).
+     *
+     *    큰 품질 프롬프트에 절차를 넣었더니 실측 결함을 2/2 통과시켰다.
+     *    그래서 **길게 만들지 않고 따로 묻는다** — 이 호출은 나이 하나만 본다.
+     *    답은 새 축이 아니라 **기존 `lifeConflict` 칸**으로 합쳐진다(`mergeLifeConflict`).
+     *
+     * 🔴 `ageBand` 가 없으면 부르지 않는다 — 정본이 없으면 애초에 여기 오지 못한다(§ loadVoice).
+     */
+    if (q.value !== null && persona?.ageBand != null && persona.ageBand.trim() !== '') {
+      ageCalls += 1
+      const ageRes = await callProvider({
+        model: DRAFT_MODEL,
+        systemPrompt: buildAgeCheckSystemPrompt(persona.ageBand),
+        userPayload: payload, maxOutputTokens: AGE_CHECK_MAX_TOKENS, timeoutMs: DRAFT_TIMEOUT_MS,
+      })
+      const age: LifeConflict | null = ageRes.ok && !ageRes.maxTokensReached
+        ? parseAgeCheck(ageRes.rawText, ctx.draftText)
+        : null
+      if (age === null) ageUnread += 1
+      const merged = mergeLifeConflict(q.value.lifeConflict, age)
+      if (merged !== q.value.lifeConflict) {
+        q = { ...q, value: { ...q.value, lifeConflict: merged } }
+        if (merged?.conflict === true) ageCaught += 1
+      }
+    }
     out.set(d.draftNo, q.value)
     for (const u of q.value?.unknownIssues ?? []) unknownAxis.set(u, (unknownAxis.get(u) ?? 0) + 1)
     if (q.value !== null) {
@@ -801,6 +914,10 @@ export function callBudgetOf(sources: number): number {
 /** 🔴 요청을 종류별로 센다 — 어디서 새는지 모르면 줄일 수 없다 */
 const callKind = new Map<string, number>()
 let schemaRetry = 0
+/** 🔴 나이 검수 호출 수 · 잡은 수 · 못 읽은 수 — 회차 로그에 그대로 찍는다 */
+let ageCalls = 0
+let ageCaught = 0
+let ageUnread = 0
 /** 🔴 생활사 충돌로 다시 쓴 원천 · 고쳐진 수 · 그래도 어긋나 사람에게 넘긴 수 */
 let lifeRetried = 0
 let lifeFixed = 0
@@ -879,10 +996,25 @@ function loadVoice(sources: readonly { sourceArticleId: string; title: string; b
   } catch {
     return blocked('personaCanonMissing', `Persona 정본 카드를 읽지 못했다 (${PERSONA_POOL_DOC})`)
   }
-  // 말투 근거가 **선** 사람만 후보다
-  const usable = cards.filter((p) => bundleOf.has(p.code))
-  if (usable.length === 0) {
+  /**
+   * 🔴 **말투 근거가 선 사람 + 나이대가 있는 사람만 후보다** (2026-09-14).
+   *
+   *    `ageBand` 가 없으면 생성 프롬프트도 나이 검수도 글쓴이가 몇 살인지 모른다 —
+   *    그 상태로 provider 를 부르면 실측 결함(`40대 후반의 언니가 30대 초반`)이 그대로 난다.
+   *    🔴 **호출 전에 멈춘다.** 모르는 채로 돈을 쓰고 글을 만들지 않는다.
+   */
+  const withVoice = cards.filter((p) => bundleOf.has(p.code))
+  const hasAge = (p: { ageBand?: string | null }): boolean =>
+    typeof p.ageBand === 'string' && p.ageBand.trim() !== ''
+  const usable = withVoice.filter(hasAge)
+  const noAge = withVoice.filter((p) => !hasAge(p))
+  if (withVoice.length === 0) {
     return blocked('noUsablePersona', '말투 근거가 선 Persona 가 0명이다')
+  }
+  if (usable.length === 0) {
+    return blocked('personaAgeBandMissing',
+      `정본 나이대(ageBand)가 있는 Persona 가 0명이다 — provider 를 부르지 않는다`
+      + ` (말투 근거는 ${withVoice.length}명이 섰다)`)
   }
   const { picks, load } = planVoicePersonas({ sources, personas: usable })
   const byId = new Map(picks.map((x) => [x.sourceArticleId, x]))
@@ -891,7 +1023,8 @@ function loadVoice(sources: readonly { sourceArticleId: string; title: string; b
   const spread = loadSpread(load)
   const used = Object.entries(load).filter(([, n]) => n > 0)
   return {
-    describe: `  🟢 말투 근거 ${usable.length}명 · 이번 회차 배정 ${used.length}명`
+    describe: `  🟢 말투 근거·나이대 모두 선 ${usable.length}명 · 이번 회차 배정 ${used.length}명`
+      + (noAge.length > 0 ? `\n     🔴 나이대(ageBand) 없어 제외 ${noAge.length}명: ${noAge.map((x) => x.code).join(' · ')}` : '')
       + ` (편차 ${spread}) · 자산 ${asset.sourceDigest ?? '?'}${cardNote}`
       + (plan.blocks.length > 0 ? `\n     🟡 ${plan.blocks.slice(0, 2).join(' · ')}` : ''),
     samplesFor: (id) => {
@@ -914,7 +1047,8 @@ function loadVoice(sources: readonly { sourceArticleId: string; title: string; b
       if (card === undefined) return undefined
       // 🔴 정본 카드에서 **필요한 칸만** 옮긴다. 복제본을 만들지 않는다
       return {
-        code: card.code, maritalStatus: card.maritalStatus,
+        // 🔴 `ageBand` 는 정본 카드의 값 그대로다 — 여기서 지어내거나 보정하지 않는다
+        code: card.code, ageBand: card.ageBand, maritalStatus: card.maritalStatus,
         childrenCount: card.childrenCount, childrenAgeBands: card.childrenAgeBands,
         parentCare: card.parentCare, menopauseStatus: card.menopauseStatus,
       }
@@ -942,6 +1076,11 @@ async function main(): Promise<void> {
   const mode = !CALL ? '오프라인 계획' : APPLY ? '생성 + 파일' : '생성 (파일 write 0 · cache write 있음)'
   console.log(`\n══ ${mode} ══\n`)
   console.log(`  규칙 ${DRAFT_RULE_VERSION} · 프롬프트 ${DRAFT_PROMPT_VERSION} · provenance ${DRAFT_PROVENANCE}`)
+  // 🔴 회차마다 찍는다 — 문서에만 적으면 아무도 읽지 않는다
+  console.log(`  ${MACHINE_AGE_HUMAN_REVIEW_NOTE}`)
+  console.log(`     실측 ${AGE_CHECK_MODEL_TRIAL.ranAt} · 합격선 ${AGE_CHECK_MODEL_TRIAL.bar} · 합격 모델 `
+    + `${AGE_CHECK_QUALIFIED_MODEL ?? '없음'}`
+    + ` (${AGE_CHECK_MODEL_TRIAL.results.map((r) => `${r.model} ${r.defects}/3`).join(' · ')})`)
   console.log('  🔴 사람의 ADOPT 를 사칭하지 않는다')
   console.log(`  🔴 DB 0 · 큐 0 · 발행 0 · Sheet 0${CALL ? '' : ' · LLM 0 · 네트워크 0 · 파일 write 0'}\n`)
 

@@ -339,6 +339,17 @@ export type PersonaForMatch = {
    *    생산 경로가 이 필드를 넘기지 않았다는 뜻이다. 모르는 채로 남의 이름으로 발행하느니 멈춘다.
    */
   accountCount: number | null
+  /**
+   * 🔴 **글쓴이의 나이대** — Pool 카드·운영 Persona 의 기존 정본 값 그대로다 (2026-09-14).
+   *
+   *    없어서 사고가 났다. `PersonaLifeHistory` 에 혼인·자녀·돌봄·갱년기만 있었고,
+   *    생성 프롬프트도 완성본 검수도 **글쓴이가 몇 살인지 보지 못했다.**
+   *    실측: 40대 후반 P03 이 `우리 언니가 요즘 그 나이대(30~32)에 결혼 준비 중` 이라고 썼고
+   *    `lifeConflict=false` 로 통과했다 — 40대 후반의 언니가 30대 초반일 수는 없다.
+   *
+   *    🔴 새 상수도 복제본도 만들지 않는다. `Persona.ageBand` · Pool 카드의 `ageBand` 를 그대로 옮긴다.
+   */
+  ageBand?: string | null
   maritalStatus?: string | null
   childrenCount?: number | null
   /** 🔴 undefined 와 [] 는 다르다. undefined = 미기재(모름) · [] = 무자녀(앎) */
