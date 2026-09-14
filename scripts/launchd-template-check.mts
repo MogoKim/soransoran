@@ -30,6 +30,7 @@ import {
   planSlots, verifySchedule, verifyNoCrossOverlap, isolationOf, factsOf,
   MAX_REQUESTS_PER_DAY, RUNS_PER_DAY, SUPPLY_PROCESS_SLOTS,
   THIN_82COOK_RUNS_PER_DAY, THIN_82COOK_SLOTS, requests82cookPerDay, thin82cookCapPerRun,
+  requestsPerRunOf, thin82cookRequestsPerRun, ROBOTS_REQUESTS_PER_RUN,
 } from '../src/lib/collect-schedule'
 
 const DIR = 'docs/operations/launchd'
@@ -225,12 +226,32 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
    */
   check('🔴 82cook 목록 job 이 본문을 열지 않는다',
     !raw.args.includes('--auto') && !raw.args.some((a) => a.startsWith('--auto-max')))
-  /** 🔴 확정 요청량 — 33×5 + 17×5 = 250 / 상한 400 */
-  check('🔴 82cook 하루 요청이 33×5 + 17×5 = 250 이다', (() => {
-    const rawPerDay = factsOf('82cook').requestsPerRun * raw.slots.length
-    const thinPerDay = thin82cookCapPerRun() * thin.slots.length
-    return rawPerDay === 165 && thinPerDay === 85
-      && requests82cookPerDay() === 250 && 250 <= MAX_REQUESTS_PER_DAY['82cook']
+  /**
+   * 🔴 **요청량을 손으로 적지 않는다** (2026-09-14).
+   *    옛 fixture 는 `33×5 + 17×5 = 250` 을 상수로 잠갔다. 그런데 `--auto` 를 떼어
+   *    상세를 안 여는데도 그 수가 그대로 남아 **없는 요청 150건을 보고**했다.
+   *    이제 실제 인자에서 파생한다 — 템플릿이 바뀌면 이 수도 따라 바뀐다.
+   *
+   * 🔴 **robots 도 센다.** 두 job 모두 실행마다 robots.txt 를 한 번 읽는다.
+   */
+  check('🔴 요청량이 템플릿 인자에서 파생된다 — 손으로 적은 수가 아니다', (() => {
+    const pages = Number(/--pages=(\d+)/.exec(raw.args.join(' '))?.[1] ?? -1)
+    return pages === factsOf('82cook').listPagesPerRun.value
+      && requestsPerRunOf('82cook') === ROBOTS_REQUESTS_PER_RUN + pages + 0
+  })())
+  check('🔴 raw 한 회차 = robots 1 + 목록 3 = 4', requestsPerRunOf('82cook') === 4)
+  check('🔴 thin 한 회차 = robots 1 + 상세 17 = 18', thin82cookRequestsPerRun() === 18)
+  check('🔴 82cook 하루 요청 = 4×5 + 18×5 = 110 ≤ 상한 400', (() => {
+    const rawPerDay = requestsPerRunOf('82cook') * raw.slots.length
+    const thinPerDay = thin82cookRequestsPerRun() * thin.slots.length
+    return rawPerDay === 20 && thinPerDay === 90
+      && requests82cookPerDay() === 110 && 110 <= MAX_REQUESTS_PER_DAY['82cook']
+  })())
+  /** 🔴 옛 계산(250/day)이 코드로 돌아오면 실패한다 */
+  check('🔴 옛 250/day 계산이 남아 있지 않다', (() => {
+    const sched = readFileSync('src/lib/collect-schedule.ts', 'utf-8')
+    return !/requestsPerRun: *33/.test(sched) && !/33×5 \+ 17×5 = \*\*250/.test(sched)
+      && !/detailPerRun: *30/.test(sched)
   })())
 }
 

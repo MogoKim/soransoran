@@ -419,7 +419,7 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
-| 수집 능력 (configured) | 210건/day — 82cook 5회 120 · remonterrace 5회 50 · wgang 4회 40 (🟢 4 job 전부 등록) |
+| 수집 능력 (configured) | 158건/day — 82cook thin 5회 68 · remonterrace 5회 50 · wgang 4회 40 (🔴 raw 목록 job 은 상세를 열지 않는다 — 옛 210 은 죽은 raw 상세 120 을 세고 thin 68 을 빼고 있었다) |
 | 🔴 수집 능력 (observed) | **0건/day** — 등록 이후 성공 회차 0 (2026-09-10 복구 전) · 복구 후 재측정 대기 |
 
 `capacity=d3 · release=d1` (§6.2). 🔴 **공개 발행은 여전히 1/day 다.**

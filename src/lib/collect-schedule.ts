@@ -61,10 +61,16 @@ export type SourceFacts = {
   listPageSize: Evidence<number>
   /** 🔴 한 회차가 **몇 페이지**를 읽는가 — 템플릿 인자(`--pages`). 놓침 창은 이만큼 넓어진다 */
   listPagesPerRun: Evidence<number>
-  /** 한 회차가 여는 상세 최대 건수 (템플릿 인자) */
+  /**
+   * 한 회차가 여는 상세 최대 건수 (템플릿 인자).
+   * 🔴 목록 전용 job 은 **0** 이다 — 상세를 열지 않는다.
+   */
   detailPerRun: number
-  /** 한 회차가 보내는 요청 수 (목록 페이지 + 상세) */
-  requestsPerRun: number
+  /**
+   * 🔴 **한 회차가 실제로 보내는 요청 수 — `requestsPerRunOf()` 가 계산한다.**
+   *    손으로 적지 않는다. 템플릿 인자가 바뀌면 이 수도 따라 바뀌어야 한다.
+   */
+  readonly requestsPerRun?: never
   /** 🔴 새 글 유입 (건/시간). **모르면 null** — 놓침 상한을 계산할 수 없다는 뜻이다 */
   newPerHourFloor: Evidence<number> | null
   /** 목록 요청 간격 ms (실측) */
@@ -89,7 +95,13 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
         + ' + 82cook-verify.list.jsonl(--pages=1) 25건',
     },
     listPagesPerRun: { value: 3, when: '2026-09-08', how: 'raw-collect-82cook.plist.template 의 --pages=3' },
-    detailPerRun: 30, requestsPerRun: 33,
+    /**
+     * 🔴 **0 이다** (2026-09-14). raw job 은 목록 전용으로 바뀌었다 —
+     *    템플릿 인자는 `--list --pages=3 --live` 뿐이고 `--auto --auto-max=30` 은 없다.
+     *    그런데 여기만 `30` 으로 남아 하루 요청을 33×5 로 보고했다.
+     *    실제는 robots 1 + 목록 3 = 4 회/회차다.
+     */
+    detailPerRun: 0,
     // 🔴 **미측정이다.** 예전 판의 `20건/h` 는 "페이지 3장(약 120건)" 이라는 어림에서 나온 값이고
     //    근거가 없었다. 근거 없는 수로 안전 간격을 계산하면 그 계산 전체가 거짓이다
     newPerHourFloor: null,
@@ -102,7 +114,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     id: 'navercafe:remonterrace',
     listPageSize: { value: 21, when: '2026-09-08', how: 'navercafe-collect-remonterrace.log "목록 1p → 누적 21건"' },
     listPagesPerRun: { value: 1, when: '2026-09-08', how: '템플릿 인자 --pages=1' },
-    detailPerRun: 10, requestsPerRun: 11,
+    detailPerRun: 10,
     newPerHourFloor: { value: 1.0, when: '2026-09-08', how: '목록 JSONL 대조 09-07 17:55→09-08 09:20 신규 16/21 (하한)' },
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
@@ -113,7 +125,7 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     id: 'navercafe:wgang',
     listPageSize: { value: 21, when: '2026-09-08', how: 'navercafe-collect-wgang.log "목록 1p → 누적 21건"' },
     listPagesPerRun: { value: 1, when: '2026-09-08', how: '템플릿 인자 --pages=1' },
-    detailPerRun: 10, requestsPerRun: 11,
+    detailPerRun: 10,
     newPerHourFloor: { value: 0.8, when: '2026-09-08', how: '목록 JSONL 대조 09-07 17:56→09-08 13:20 신규 15/21 (하한)' },
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
@@ -194,8 +206,11 @@ export const THIN_82COOK_RUNS_PER_DAY = 5
  *
  *    🔴 **일정이 바뀔 때마다 상한이 따라 커지는 것은 안전장치가 아니다.**
  *       관측(82cook 하루 신규 유입)이 아직 없으므로 **보수적으로 유지**한다:
- *       33×5 + 17×5 = **250/day** (상한 400 대비 여유 150).
- *       늘리려면 유입 관측을 근거로 들고 이 수 하나를 고친다.
+ *       thin 은 17건/회차를 유지한다. 늘리려면 유입 관측을 근거로 들고 이 수 하나를 고친다.
+ *
+ * 🔴 **하루 요청은 여기 적지 않는다** (2026-09-14). `requests82cookPerDay()` 가
+ *    실제 인자에서 파생한다 — 문서에 적어 두면 인자가 바뀔 때 한쪽만 낡는다.
+ *    실제로 `--auto` 를 뗀 뒤에도 `33×5 + 17×5 = 250` 이 남아 있었다.
  */
 export const THIN_82COOK_CAP_PER_RUN = 17
 
@@ -205,9 +220,31 @@ export function thin82cookCapPerRun(): number {
 }
 
 /** 🔴 82cook 두 job 이 하루에 보내는 요청 합 — 상한 안에 드는지는 fixture 가 본다 */
+/**
+ * 🔴 **robots 요청을 뺀 계산은 거짓이다** (2026-09-14).
+ *    두 job 모두 **실행마다** robots.txt 를 한 번 읽는다
+ *    (`micro-seed-collect-82cook.mts` · `micro-seed-82cook-thin-detail.mts`).
+ *    그 요청도 같은 도메인으로 나가고 같은 예산을 쓴다.
+ */
+export const ROBOTS_REQUESTS_PER_RUN = 1
+
+/**
+ * 🔴 **한 회차 요청 수를 실제 인자에서 파생한다.** 손으로 적은 수를 믿지 않는다 —
+ *    `--auto` 를 뗐는데 `requestsPerRun=33` 이 남아 하루 250 을 보고하던 일이 있었다.
+ */
+export function requestsPerRunOf(id: SourceId): number {
+  const f = factsOf(id)
+  return ROBOTS_REQUESTS_PER_RUN + f.listPagesPerRun.value + f.detailPerRun
+}
+
+/** 🔴 thin 한 회차 요청 수 — robots + 상세 cap */
+export function thin82cookRequestsPerRun(): number {
+  return ROBOTS_REQUESTS_PER_RUN + thin82cookCapPerRun()
+}
+
 export function requests82cookPerDay(): number {
-  return factsOf('82cook').requestsPerRun * RUNS_PER_DAY['82cook'].start
-    + thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY
+  return requestsPerRunOf('82cook') * RUNS_PER_DAY['82cook'].start
+    + thin82cookRequestsPerRun() * THIN_82COOK_RUNS_PER_DAY
 }
 
 export type Slot = { hour: number; minute: number }
@@ -299,7 +336,7 @@ export function verifySchedule(id: SourceId, phase: Phase): ScheduleProblem[] {
       + ` — 목록 ${f.listPageSize.value * f.listPagesPerRun.value}건이 ${pageWindowHours(f)!.toFixed(1)}h 만에 넘어간다`)
   }
   // ② 부하 — 하루 요청 수
-  const perDay = slots.length * f.requestsPerRun
+  const perDay = slots.length * requestsPerRunOf(f.id)
   if (perDay > MAX_REQUESTS_PER_DAY[id]) {
     out.push(`하루 요청 ${perDay}건이 상한 ${MAX_REQUESTS_PER_DAY[id]}건을 넘는다`)
   }
@@ -353,12 +390,27 @@ export function isolationOf(down: readonly SourceId[]): {
  *    🔴 공급 능력 판정에 이 값을 쓰지 않는다. 아래 `effectiveDetailPerDay` 가 정본이다.
  */
 export function theoreticalDetailPerDay(phase: Phase): number {
-  return SOURCE_FACTS.reduce((n, f) => n + f.detailPerRun * RUNS_PER_DAY[f.id][phase], 0)
+  return SOURCE_FACTS.reduce((n, f) => n + detailPerDayOf(f, phase), 0)
 }
 
 /** 소스 하나의 **유효** 하루 상세 처리량 — 성공률을 곱한다 */
+/**
+ * 🔴 **하루에 여는 상세 건수 — 상세를 실제로 여는 job 을 전부 센다** (2026-09-14).
+ *
+ *    82cook 은 raw 목록 job 이 상세를 열지 않는다(`detailPerRun: 0`).
+ *    대신 **thin 상세 job** 이 회차마다 `thin82cookCapPerRun()` 건을 연다.
+ *    옛 계산은 raw 의 죽은 상세(30×5)를 세고 thin 을 빼서 두 번 틀렸다 —
+ *    없는 처리량을 보고하고, 있는 처리량은 보고하지 않았다.
+ *
+ * 🔴 이론값과 유효값이 **같은 함수**에서 갈린다. 두 군데에 적으면 한쪽만 낡는다.
+ */
+export function detailPerDayOf(f: SourceFacts, phase: Phase): number {
+  const own = f.detailPerRun * RUNS_PER_DAY[f.id][phase]
+  return f.id === '82cook' ? own + thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY : own
+}
+
 export function effectiveDetailPerDayOf(f: SourceFacts, phase: Phase): number {
-  return f.detailPerRun * RUNS_PER_DAY[f.id][phase] * f.detailSuccessRate.value
+  return detailPerDayOf(f, phase) * f.detailSuccessRate.value
 }
 
 /**

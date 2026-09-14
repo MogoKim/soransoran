@@ -35,8 +35,9 @@ import { parsePoolDoc, cardToPersona, type PoolCard } from '../src/lib/persona-p
 import { thinAxes, gainOf, coverageOf, THIN_THRESHOLD, type AxisSubject } from '../src/lib/persona-axis-coverage'
 import { verifyNamePolicy, candidatesFor, assignCandidates, NAME_LENGTH } from '../src/lib/persona-nickname-candidates'
 import {
-  SOURCE_FACTS, RUNS_PER_DAY, planSlots, verifySchedule, verifyNoCrossOverlap,
+  requestsPerRunOf, effectiveDetailPerDayOf, detailPerDayOf, SOURCE_FACTS, RUNS_PER_DAY, planSlots, verifySchedule, verifyNoCrossOverlap,
   isolationOf, maxSafeGapHours, pageWindowHours, factsOf, MAX_REQUESTS_PER_DAY,
+  thin82cookCapPerRun, THIN_82COOK_RUNS_PER_DAY,
   effectiveDetailPerDay, theoreticalDetailPerDay,
 } from '../src/lib/collect-schedule'
 import {
@@ -76,10 +77,14 @@ const check = (n: string, ok: boolean): void => {
  *    일정이 바뀌면 회차가 바뀌고 이 수도 따라 바뀐다. 베껴 적으면 일정을 고칠 때마다
  *    fixture 가 먼저 깨지고, 그러면 사람이 fixture 를 고치는 데 시간을 쓴다.
  */
+/**
+ * 🔴 **정본을 부른다** (2026-09-14). 여기서 산식을 다시 적던 판은
+ *    82cook 의 thin 상세 경로를 몰라 죽은 raw 상세를 세고 있었다.
+ */
 const wantTheoretical = (ph: 'start' | 'stable'): number =>
-  SOURCE_FACTS.reduce((n, f) => n + f.detailPerRun * RUNS_PER_DAY[f.id][ph], 0)
+  SOURCE_FACTS.reduce((n, f) => n + detailPerDayOf(f, ph), 0)
 const wantEffective = (ph: 'start' | 'stable'): number =>
-  SOURCE_FACTS.reduce((n, f) => n + f.detailPerRun * RUNS_PER_DAY[f.id][ph] * f.detailSuccessRate.value, 0)
+  SOURCE_FACTS.reduce((n, f) => n + detailPerDayOf(f, ph) * f.detailSuccessRate.value, 0)
 
 console.log('\n══ d10 activation preparation fixture ══\n')
 
@@ -566,7 +571,7 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
     check(`🔴 [${phase}] 소스끼리 겹치지 않는다`, verifyNoCrossOverlap(phase).length === 0)
   }
   for (const f of SOURCE_FACTS) {
-    const perDay = planSlots(f.id, 'stable').length * f.requestsPerRun
+    const perDay = planSlots(f.id, 'stable').length * requestsPerRunOf(f.id)
     check(`🔴 ${f.id} 하루 요청 ${perDay} ≤ 상한 ${MAX_REQUESTS_PER_DAY[f.id]}`, perDay <= MAX_REQUESTS_PER_DAY[f.id])
   }
   check('🔴 상한을 넘기면 verifySchedule 이 잡는다', (() => {
@@ -609,11 +614,24 @@ console.log('\n④ 수집원 다회 운영 · 보호장치 (예산 · backoff ·
     effectiveDetailPerDay('start') === wantEffective('start')
     && effectiveDetailPerDay('stable') === wantEffective('stable'))
   /** 🔴 확정 일정에서의 실측값 — 82cook 30×5×0.8 + remonterrace 10×5 + wgang 10×4 */
-  check('🔴 확정 일정의 유효 처리량은 210건/day 다', effectiveDetailPerDay('start') === 210)
+  /**
+   * 🔴 **158 = 82cook thin 68 + remonterrace 50 + wgang 40** (2026-09-14 정정).
+   *    옛 값 210 은 두 번 틀렸다 — raw 목록 job 의 **죽은 상세 120건**을 세고,
+   *    실제로 상세를 여는 **thin 68건**은 빼고 있었다.
+   */
+  check('🔴 확정 일정의 유효 처리량은 158건/day 다', effectiveDetailPerDay('start') === 158)
+  check('🔴 raw 목록 job 은 유효 처리량에 0 을 보탠다 — 상세를 열지 않는다',
+    factsOf('82cook').detailPerRun === 0)
+  check('🔴 82cook 몫은 thin 경로에서 나온다 — 17×5×0.8 = 68', (() => {
+    const f = SOURCE_FACTS.find((x) => x.id === '82cook')!
+    return effectiveDetailPerDayOf(f, 'start') === 68
+  })())
   check('🔴 성공률을 곱하지 않으면 두 값이 같아진다 (그것이 예전 계산이다)',
     effectiveDetailPerDay('start') < theoreticalDetailPerDay('start'))
   check('🔴 격리 보고도 유효 처리량으로 적는다', (() => {
-    const alive = wantEffective('start') - 30 * RUNS_PER_DAY['82cook'].start * 0.8
+    // 🔴 정본에서 뺀다 — 여기서 산식을 다시 적지 않는다
+    const f82 = SOURCE_FACTS.find((x) => x.id === '82cook')!
+    const alive = wantEffective('start') - effectiveDetailPerDayOf(f82, 'start')
     const lost = 10 * RUNS_PER_DAY['navercafe:remonterrace'].start
     return isolationOf(['82cook']).aliveDetailPerDay === alive
       && isolationOf(['navercafe:remonterrace']).lostDetailPerDay === lost
@@ -801,7 +819,7 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
     cur.perSource.filter((x) => x.id !== '82cook').every((x) => x.runsPerDay === 1 && x.kind === 'single'))
   check('🔴 그래서 current 는 20건/day 다 (계획 320 이 아니다)', cur.effectivePerDay === 20)
   check('🔴 prepared 는 정본 계획값이다 — current 와 합치지 않는다',
-    prep.effectivePerDay === effectiveDetailPerDay('start') && prep.effectivePerDay === 210)
+    prep.effectivePerDay === effectiveDetailPerDay('start') && prep.effectivePerDay === 158)
   check('🔴 82cook 은 미등록이라 current 기여가 0 이다',
     cur.perSource.find((x) => x.id === '82cook')!.effectivePerDay === 0)
 
@@ -844,14 +862,14 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
   check('🔴 시작 단계 수집 준비도는 BLOCKED 다', readyStart.status === 'BLOCKED')
   check('🔴 안정 단계도 BLOCKED 다', readyStable.status === 'BLOCKED')
   check('🔴 current · prepared · required 를 각각 낸다',
-    readyStart.configuredPerDay === 20 && readyStart.preparedPerDay === 210
+    readyStart.configuredPerDay === 20 && readyStart.preparedPerDay === 158
     && readyStart.requiredPerDay === 382)
   check('🔴 지금 열리는 것이 모자란다고 숫자로 적는다',
     // 🔴 이름을 `설정된 것` 으로 바꿨다 — 등록은 능력이 아니다(2026-09-10)
     readyStart.reasons.some((r) => r.includes('설정된 것 20건/day') && r.includes('362건 모자란다')))
   check('🔴 전부 올려도 모자란다는 것을 따로 적는다',
     readyStart.reasons.some((r) => r.includes('전부 올려도')
-      && r.includes(`${382 - 210}건 모자란다`)))
+      && r.includes(`${382 - 158}건 모자란다`)))
   check('🔴 판정은 이론 최대로 하지 않는다',
     readyStart.theoreticalPerDay === wantTheoretical('start')
     && readyStart.theoreticalPerDay > readyStart.preparedPerDay)
@@ -878,8 +896,23 @@ console.log('\n⑤ d10 dry-run 준비도 · 수집 준비도 (BLOCKED 여야 한
     }))
     const guards = Object.fromEntries(SOURCE_FACTS.map((f) => [f.id, newGuardState(f.id, '2026-09-08')]))
     const r3 = collectReadiness({ phase: 'start', plan: p100, nowMs: NOW_MS, observed: allMulti, guards })
-    return r3.status === 'BLOCKED' && r3.configuredPerDay === wantEffective('start')
+    /**
+     * 🔴 **raw 목록 job 을 올려도 82cook 상세 기여는 0 이다** (2026-09-14).
+     *    상세를 여는 것은 thin job 이고, 그 job 은 `JOB_LABELS` 에 없어
+     *    관측(current)에 잡히지 않는다. `--auto` 를 뗀 뒤의 실제 모습이다 —
+     *    옛 fixture 는 여기서 raw 가 상세 120건을 연다고 기대하고 있었다.
+     */
+    const only82 = currentCapacity(allMulti).perSource.find((x) => x.id === '82cook')!
+    return r3.status === 'BLOCKED' && only82.effectivePerDay === 0
+      && r3.configuredPerDay === wantEffective('start') - effectiveDetailPerDayOf(
+        SOURCE_FACTS.find((x) => x.id === '82cook')!, 'start')
       && r3.reasons.some((x) => x.includes('전부 올려도'))
+  })())
+  /** 🔴 82cook 상세를 여는 것은 thin job 이다 — raw 목록 job 이 아니다 */
+  check('🔴 82cook 상세 몫은 raw 목록 job 이 아니라 thin job 에서 나온다', (() => {
+    const f = SOURCE_FACTS.find((x) => x.id === '82cook')!
+    return f.detailPerRun === 0
+      && detailPerDayOf(f, 'start') === thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY
   })())
   check('🔴 current d1 운영과 d10 승격 준비도를 섞지 않는다 — d1 필요량은 지금 능력으로 충분하다', (() => {
     const p1 = planSupply(PROFILES.d1)
