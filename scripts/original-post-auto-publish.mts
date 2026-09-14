@@ -40,7 +40,7 @@ import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
-import { judgeSlotRun } from '../src/lib/scale-workflow-render'
+import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts } from '../src/lib/scale-readiness'
 import { effectiveWeeklyCap } from '../src/lib/scale-profile'
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
@@ -53,11 +53,24 @@ const limitRaw = argv.find((a) => a.startsWith('--limit='))?.slice(8)
 const LIMIT = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10)
 /**
  * 🔴 **이 run 을 띄운 예약 그 자체.** 워크플로우가 `github.event.schedule` 을 그대로 넘긴다.
- *    시계로 "지금 몇 시니까 어느 슬롯" 을 추측하지 않는다 — GitHub Actions 는 수십 분 늦게
- *    시작하고, 그러면 00:05 회차가 다른 슬롯으로 둔갑하거나 아무 슬롯도 아니게 된다.
  *    수동 실행에는 이 값이 없고, 없으면 발행하지 않는다(dry-run 이므로 어차피 막힌다).
+ *
+ * 🔴 **이제 이 값이 "발행 여부" 를 혼자 정하지 않는다** (2026-09-14).
+ *    옛 판은 "이 cron 이 내 슬롯인가" 만 물었다. 그래서 예약 하나가 배달되지 않으면
+ *    (2026-09-14 `30 0 * * *` 실측) 그날이 통째로 비었다. 지금은 `judgeCatchUp` 이
+ *    **도래한 슬롯 수 − 오늘 발행 수** 로 판정하고, 이 값은 트리거 정체성과 로그에 쓰인다.
  */
 const SLOT_CRON = argv.find((a) => a.startsWith('--slot-cron='))?.slice(12) ?? null
+/**
+ * 🔴 **누가 이 회차를 불렀는가** — `schedule`(GitHub 예약) · `local`(launchd 정시) · `manual`.
+ *    주지 않으면 예약 문자열이 있을 때만 `schedule` 이고, 그 밖에는 `manual` 이다(fail-closed).
+ */
+const TRIGGER: TriggerKind = ((): TriggerKind => {
+  const raw = argv.find((a) => a.startsWith('--trigger='))?.slice(10)?.trim()
+  if (raw === 'schedule' || raw === 'local' || raw === 'manual') return raw
+  if (raw !== undefined && raw !== '') return 'manual'
+  return SLOT_CRON === null ? 'manual' : 'schedule'
+})()
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const kst = (d: Date): string =>
   `${new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} KST`
@@ -333,9 +346,27 @@ const killed = sw?.enabled === true
 console.log(`\n④ 오늘(${kst(new Date())}) 발행 ${publishedToday} / ${RELEASE_DAILY_CAP}건 · 전체 중지 ${killed ? '🔴 켜짐' : '꺼짐'}`)
 
 // ── ⑤ 실행 판정 ──
-// 🔴 어느 회차인가 — 예약 cron 이 정본이다 (wall clock 아님)
-const slot = judgeSlotRun({ stage: scale.releaseStage, cron: SLOT_CRON })
-console.log(`   회차 ${slot.kst ?? '(모름)'} — ${slot.reason}`)
+/**
+ * 🔴 **"이 회차가 내 슬롯인가" 가 아니라 "밀린 슬롯이 있는가" 를 묻는다** (2026-09-14).
+ *
+ *    예약 하나가 배달되지 않으면 옛 질문으로는 그 사실을 영원히 알 수 없다 —
+ *    물어볼 run 자체가 없기 때문이다. 실측으로 2026-09-14 에 그렇게 하루가 비었다.
+ *    지금은 어느 run 이 오든 **도래한 슬롯 − 오늘 발행 수**를 보고 밀린 것을 메운다.
+ */
+const catchUp = judgeCatchUp({
+  stage: scale.releaseStage,
+  now: new Date(),
+  trigger: TRIGGER,
+  cron: SLOT_CRON,
+  publishedToday,
+})
+const slot = { run: catchUp.run, reason: catchUp.reason }
+console.log(`   트리거 ${TRIGGER} · 회차 ${catchUp.slotKst ?? '(정시)'}`
+  + ` · 도래 ${catchUp.dueCount}건 · 발행 ${catchUp.publishedToday}건 · 밀림 ${catchUp.backlog}건`)
+console.log(`   판정 ${catchUp.reason}`)
+if (catchUp.due.length > 0) {
+  console.log(`   도래한 슬롯  ${catchUp.due.map((d) => d.kst).join(' · ')}`)
+}
 
 const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: RELEASE_DAILY_CAP, killSwitchEnabled: killed, slot })
 if (!gate.ok) {

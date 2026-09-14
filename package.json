@@ -139,7 +139,9 @@
     "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts",
     "supply:d100-plan": "tsx scripts/supply-d100-plan.mts",
     "supply:d100-plan-check": "tsx scripts/supply-d100-plan-check.mts",
+    "publish:catchup-check": "tsx scripts/publish-slot-catchup-check.mts",
     "micro-seed:navercafe-run": "tsx scripts/micro-seed-navercafe-run.mts",
+    "publish:trigger-preflight": "tsx scripts/publish-trigger-preflight.mts",
     "publish:machine-review": "tsx scripts/original-post-machine-review.mts"
   },
   "dependencies": {

@@ -180,15 +180,26 @@ jobs:
       #    발행 뒤 정합(Queue·Post·ActivityLog)이 어긋나면 **exit 1** 로 여기서 빨갛게 뜬다.
       # 🔴 **어느 회차인지는 시계가 아니라 예약이 말한다.**
       #    `github.event.schedule` 은 이 run 을 띄운 cron 문자열 그대로다.
-      #    Actions 가 40분 늦게 시작해도 값은 변하지 않는다 — 그래서 지연에 안전하다.
-      #    러너는 이 값이 지금 단계의 슬롯인지 보고, 아니면 **아무것도 하지 않고 exit 0** 한다.
+      #    Actions 가 몇 시간 늦게 시작해도 값은 변하지 않는다 — 그래서 지연에 안전하다.
+      #
+      # 🔴 **그러나 예약이 아예 오지 않으면 그 값도 없다** (2026-09-14 실측).
+      #    `30 0 * * *`(09:30 KST · d1 의 유일한 슬롯)이 배달되지 않았고, 도착한 08:10 회차는
+      #    "내 슬롯이 아니다" 로 쉬었다. 재고·배정·cap·kill switch 가 전부 준비된 채 그날 0편.
+      #
+      #    🔴 **그래서 예약을 더 늘리지 않는다.** 늘려도 같은 큐에서 같이 늦는다.
+      #       러너가 `judgeCatchUp` 으로 **도래한 슬롯 − 오늘 발행 수**를 보고 밀린 것을 메운다.
+      #       어느 회차가 오든 그날 몫이 채워지고, 두 번 오면 두 번째는 0건이다.
+      #       상한은 여전히 러너의 DB 카운트(dailyCap)와 Serializable 트랜잭션이 지킨다.
+      #
+      # 🔴 `--trigger=schedule` 은 **"늦게 오는 트리거"** 라는 선언이다. 정시 트리거(launchd)는
+      #    `--trigger=local` 로 부른다. 둘이 겹쳐도 중복 발행은 0 이다.
       - name: 자동 발행 (apply — 스케줄)
         if: github.event_name == 'schedule'
         env:
           SLOT_CRON: ${{ github.event.schedule }}
         run: |
           set -o pipefail
-          npx tsx scripts/original-post-auto-publish.mts --apply --limit=1 --slot-cron="$SLOT_CRON" 2>&1 | tee /tmp/out.txt
+          npx tsx scripts/original-post-auto-publish.mts --apply --limit=1 --trigger=schedule --slot-cron="$SLOT_CRON" 2>&1 | tee /tmp/out.txt
           {
             echo "## 자동 발행 — $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST')"
             echo '```'
