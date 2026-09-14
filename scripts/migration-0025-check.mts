@@ -34,6 +34,7 @@ import {
   SQL_CREATE_INDEX_SPECS,
   EXPECTED_CONSTRAINTS,
   EXPECTED_PRIMARY_KEY,
+  INDEX_COMMON_CONTRACT,
   judgeMigration0025ApplyState,
   judgeMigration0025Sql,
   judgeMigration0025State,
@@ -91,6 +92,11 @@ function goodIndexes() {
     columns: [...i.columns],
     isPrimary: i.primary,
     isUnique: i.unique,
+    // 🔴 네 인덱스가 모두 지켜야 하는 성질 — 표현식·부분·access method·INCLUDE
+    accessMethod: INDEX_COMMON_CONTRACT.accessMethod,
+    hasPredicate: INDEX_COMMON_CONTRACT.hasPredicate,
+    isExpression: INDEX_COMMON_CONTRACT.isExpression,
+    hasIncludedColumns: INDEX_COMMON_CONTRACT.hasIncludedColumns,
   }))
 }
 
@@ -524,7 +530,8 @@ check('🔴 다른 테이블의 인덱스가 섞이면 관측 실패다',
 check('🔴 예상 밖 인덱스가 있으면 잡는다',
   state(applied({
     indexes: [...goodIndexes(),
-      { name: 'HeroBanner_name_idx', table: NEW_TABLE, columns: ['name'], isPrimary: false, isUnique: false }],
+      { name: 'HeroBanner_name_idx', table: NEW_TABLE, columns: ['name'], isPrimary: false, isUnique: false,
+        accessMethod: 'btree', hasPredicate: false, isExpression: false, hasIncludedColumns: false }],
   })) === 'PARTIAL_OR_INVALID')
 check('인덱스 metadata 모양이 아니면 OBSERVATION_FAILED',
   state(applied({ indexes: [{ name: 'x' }] })) === 'OBSERVATION_FAILED')
@@ -777,6 +784,143 @@ check('SQL 검사가 여전히 DB 연결보다 먼저다', (() => {
   const connectAt = cliCode.indexOf('client.connect()')
   return sqlAt > 0 && connectAt > sqlAt
 })())
+
+
+
+// ══════════════════════════════════════════════════════════
+// 🔴 Codex [1] 3차 검증이 잡은 차단 결함 3건 (2026-09-14)
+// ══════════════════════════════════════════════════════════
+
+// ── ㉖ 결함 A — 컬럼 정의 뒤 절이 DEFAULT 에 삼켜졌다 ──
+console.log('── ㉖ 결함 A · 컬럼 내부 제약 우회')
+
+check('🔴 실제 SQL 은 여전히 통과한다', judgeMigration0025Sql(realSql).ok)
+
+check('🔴 DEFAULT false CHECK (false) 를 막는다 — 어떤 INSERT 도 통과하지 못하게 된다',
+  !mutate('"isActive" BOOLEAN NOT NULL DEFAULT false,',
+          '"isActive" BOOLEAN NOT NULL DEFAULT false CHECK (false),'))
+check("🔴 DEFAULT 'NONE' UNIQUE 를 막는다",
+  !mutate(`"linkKind" "HeroBannerLinkKind" NOT NULL DEFAULT 'NONE',`,
+          `"linkKind" "HeroBannerLinkKind" NOT NULL DEFAULT 'NONE' UNIQUE,`))
+check('🔴 DEFAULT CURRENT_TIMESTAMP CHECK (false) 를 막는다',
+  !mutate('"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,',
+          '"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP CHECK (false),'))
+check('🔴 컬럼에 REFERENCES 를 붙이면 막는다',
+  !mutate('"linkUrl" TEXT,', '"linkUrl" TEXT REFERENCES "User"("id"),'))
+check('🔴 컬럼에 COLLATE 를 붙이면 막는다',
+  !mutate('"name" TEXT NOT NULL,', '"name" TEXT NOT NULL COLLATE "C",'))
+check('🔴 컬럼에 GENERATED 를 붙이면 막는다',
+  !mutate('"sortOrder" INTEGER NOT NULL,',
+          '"sortOrder" INTEGER NOT NULL GENERATED ALWAYS AS (1) STORED,'))
+check('🔴 닫는 괄호 뒤 table option 을 막는다',
+  !mutate('  CONSTRAINT "HeroBanner_pkey" PRIMARY KEY ("id")\n);',
+          '  CONSTRAINT "HeroBanner_pkey" PRIMARY KEY ("id")\n) WITH (fillfactor=10);'))
+check('🔴 닫는 괄호 뒤 TABLESPACE 를 막는다',
+  !mutate('  CONSTRAINT "HeroBanner_pkey" PRIMARY KEY ("id")\n);',
+          '  CONSTRAINT "HeroBanner_pkey" PRIMARY KEY ("id")\n) TABLESPACE fast;'))
+check('🔴 DEFAULT 값 자체가 바뀌면 막는다 (false → true)',
+  !mutate('DEFAULT false,', 'DEFAULT true,'))
+check("🔴 DEFAULT 값이 바뀌면 막는다 ('NONE' → 'EXTERNAL')",
+  !mutate(`DEFAULT 'NONE',`, `DEFAULT 'EXTERNAL',`))
+check('🔴 DEFAULT 를 now() 로 바꾸면 막는다',
+  !mutate('DEFAULT CURRENT_TIMESTAMP,', 'DEFAULT now(),'))
+
+console.log('   — 주석·공백 차이는 허용한다 (hash 비교가 아니다)')
+check('주석을 한 줄 더해도 통과한다',
+  judgeMigration0025Sql(`-- 설명을 덧붙인다\n${realSql}`).ok)
+check('컬럼 줄의 들여쓰기가 달라도 통과한다',
+  mutate('    "name" TEXT NOT NULL,', '        "name"    TEXT   NOT NULL,'))
+check('줄바꿈이 섞여도 통과한다',
+  mutate('"sortOrder" INTEGER NOT NULL,', '"sortOrder"\n      INTEGER\n      NOT NULL,'))
+check('세 가지 DEFAULT 가 모두 통과한다',
+  EXPECTED_COLUMNS.filter((c) => c.sqlDefault !== null).length === 3 && judgeMigration0025Sql(realSql).ok)
+
+// ── ㉗ 결함 B — 표현식·부분 인덱스를 관측조차 못 했다 ──
+console.log('── ㉗ 결함 B · 표현식·부분 인덱스')
+
+check('인덱스 공통 계약이 btree 다', INDEX_COMMON_CONTRACT.accessMethod === 'btree')
+check('인덱스 공통 계약이 predicate·expression·INCLUDE 를 모두 금지한다',
+  INDEX_COMMON_CONTRACT.hasPredicate === false &&
+  INDEX_COMMON_CONTRACT.isExpression === false &&
+  INDEX_COMMON_CONTRACT.hasIncludedColumns === false)
+
+const bendIndex = (name: string, patch: Record<string, unknown>) =>
+  goodIndexes().map((i) => (i.name === name ? { ...i, ...patch } : i))
+
+check('🔴 기대 인덱스에 부분 조건이 붙으면 PARTIAL_OR_INVALID — 조건 밖 행을 덮지 않는다',
+  state(applied({ indexes: bendIndex('HeroBanner_startsAt_idx', { hasPredicate: true }) })) === 'PARTIAL_OR_INVALID')
+check('🔴 기대 인덱스가 표현식 인덱스면 PARTIAL_OR_INVALID',
+  state(applied({ indexes: bendIndex('HeroBanner_endsAt_idx', { isExpression: true }) })) === 'PARTIAL_OR_INVALID')
+check('🔴 access method 가 hash 면 PARTIAL_OR_INVALID — 범위 조회를 못 탄다',
+  state(applied({ indexes: bendIndex('HeroBanner_startsAt_idx', { accessMethod: 'hash' }) })) === 'PARTIAL_OR_INVALID')
+check('gin 도 막는다',
+  state(applied({ indexes: bendIndex('HeroBanner_endsAt_idx', { accessMethod: 'gin' }) })) === 'PARTIAL_OR_INVALID')
+check('🔴 INCLUDE 컬럼이 붙으면 PARTIAL_OR_INVALID',
+  state(applied({ indexes: bendIndex('HeroBanner_isActive_archivedAt_sortOrder_idx', { hasIncludedColumns: true }) })) === 'PARTIAL_OR_INVALID')
+check('PK 에 부분 조건이 붙어도 막는다',
+  state(applied({ indexes: bendIndex('HeroBanner_pkey', { hasPredicate: true }) })) === 'PARTIAL_OR_INVALID')
+
+/** 🔴 표현식 인덱스가 **추가로** 있는 경우 — 관측에서 사라지면 안 된다 */
+const exprIndex = {
+  name: 'HeroBanner_lower_name_idx', table: NEW_TABLE, columns: [],
+  isPrimary: false, isUnique: false,
+  accessMethod: 'btree', hasPredicate: false, isExpression: true, hasIncludedColumns: false,
+}
+check('🔴 추가 표현식 인덱스는 예상 밖으로 잡힌다 (컬럼이 비어도 관측된다)',
+  state(applied({ indexes: [...goodIndexes(), exprIndex] })) === 'PARTIAL_OR_INVALID')
+const partialIndex = {
+  name: 'HeroBanner_active_partial_idx', table: NEW_TABLE, columns: ['isActive'],
+  isPrimary: false, isUnique: false,
+  accessMethod: 'btree', hasPredicate: true, isExpression: false, hasIncludedColumns: false,
+}
+check('🔴 추가 부분 인덱스도 예상 밖으로 잡힌다',
+  state(applied({ indexes: [...goodIndexes(), partialIndex] })) === 'PARTIAL_OR_INVALID')
+
+console.log('   — 관측값이 없으면 판정하지 않는다')
+for (const field of ['accessMethod', 'hasPredicate', 'isExpression', 'hasIncludedColumns']) {
+  check(`🔴 ${field} 가 없으면 OBSERVATION_FAILED`,
+    state(applied({ indexes: dropField(field) })) === 'OBSERVATION_FAILED')
+}
+check('accessMethod 가 boolean 이면 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, accessMethod: true })) })) === 'OBSERVATION_FAILED')
+check('hasPredicate 가 문자열이면 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, hasPredicate: 'false' })) })) === 'OBSERVATION_FAILED')
+check('isExpression 이 0 이면 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, isExpression: 0 })) })) === 'OBSERVATION_FAILED')
+
+console.log('   — 관측 쿼리가 한 행도 빠뜨리지 않는가')
+/**
+ * 🔴 **인덱스 조회 블록 안에서만** 본다.
+ *    FK 조회도 `JOIN pg_attribute` 를 쓰는데 그쪽은 제약의 컬럼 이름을 읽는
+ *    정상 조인이다 — 파일 전체를 훑으면 그것까지 위반으로 잡힌다.
+ */
+const indexQuery = /FROM pg_index[\s\S]*?ORDER BY c\.relname/.exec(cliCode)?.[0] ?? ''
+check('인덱스 조회 블록을 찾았다', indexQuery.length > 0)
+check('🔴 인덱스 조회가 INNER JOIN pg_attribute 를 쓰지 않는다 — 표현식 인덱스가 사라진다',
+  !/\bJOIN pg_attribute\b/.test(indexQuery.replace(/LEFT JOIN pg_attribute/g, '')))
+check('🔴 LEFT JOIN 으로 인덱스 행을 보존한다', /LEFT JOIN pg_attribute a/.test(cliCode))
+check('indkey 0(표현식)을 컬럼 조인에서 제외한다', /k\.attnum <> 0/.test(cliCode))
+check('컬럼이 없어도 빈 배열로 남긴다', /FILTER \(WHERE a\.attname IS NOT NULL\)/.test(cliCode))
+check('access method 를 읽는다', /JOIN pg_am\s+am ON am\.oid = c\.relam/.test(cliCode))
+check('부분 조건을 읽는다', /i\.indpred\s+IS NOT NULL/.test(cliCode))
+check('표현식 여부를 읽는다', /i\.indexprs\s+IS NOT NULL/.test(cliCode))
+check('INCLUDE 컬럼을 읽는다', /i\.indnatts > i\.indnkeyatts/.test(cliCode))
+
+// ── ㉘ 결함 C — 잘못된 row 요약 ──
+console.log('── ㉘ 결함 C · row 요약')
+
+for (const n of [0, 1, 99]) {
+  const v = verdictOf(applied({ rowCount: n }))
+  check(`🔴 rowCount ${n} · 스키마 판정은 APPLIED_AND_VALID`, v.state === 'APPLIED_AND_VALID')
+  check(`🔴 rowCount ${n} · summary 가 실제 행 수를 말한다`, v.summary.includes(`${n}행`))
+}
+check('🔴 99행일 때 summary 가 "0행" 이라고 말하지 않는다',
+  !verdictOf(applied({ rowCount: 99 })).summary.includes('· 0행'))
+check('apply 전용 판정만 0행을 요구한다',
+  judgeMigration0025ApplyState(applied({ rowCount: 0 }) as never).summary.includes('0행') &&
+  judgeMigration0025ApplyState(applied({ rowCount: 1 }) as never).state === 'PARTIAL_OR_INVALID')
+check('apply 전용 판정의 실패 사유가 행 수를 말한다',
+  judgeMigration0025ApplyState(applied({ rowCount: 7 }) as never).summary.includes('7행'))
 
 
 console.log(`\n  ${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

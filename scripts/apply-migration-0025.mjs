@@ -183,27 +183,48 @@ async function state() {
       WHERE table_schema='public' AND table_name=$1
       ORDER BY column_name`, [NEW_TABLE])
   /**
-   * 인덱스 — 🔴 **이름만 읽지 않는다** (결함 B 정정).
+   * 인덱스 — 🔴 **이름만 읽지 않는다. 그리고 한 행도 빠뜨리지 않는다.**
    *
    *    `pg_indexes.indexname` 만 보면 같은 이름으로 **다른 컬럼**에 걸린 인덱스가
    *    통과한다. 이름은 맞는데 홈 조회가 그 인덱스를 타지 못해 조용히 느려진다.
    *
+   * 🔴 **LEFT JOIN 이어야 한다** (2026-09-14 정정).
+   *    표현식 인덱스는 `indkey` 에 **0** 이 들어간다. INNER JOIN pg_attribute 면
+   *    그 행이 결과에서 **통째로 사라져**, "예상 밖 인덱스" 로 잡혀야 할 것이
+   *    아예 보이지 않았다. 컬럼을 못 읽어도 인덱스 자체는 관측돼야 한다 —
+   *    그래야 `isExpression` 이 그것을 차단할 수 있다.
+   *
    * 🔴 컬럼 순서는 `ORDER BY k.ord` 로 인덱스 정의 순서 그대로 읽는다 —
    *    복합 인덱스는 앞 컬럼부터 쓰이므로 순서가 곧 성능이다.
+   *
+   * 🔴 access method · 부분 조건(indpred) · 표현식(indexprs) · INCLUDE 컬럼
+   *    (indnatts > indnkeyatts)까지 함께 읽는다. 넷 다 "이름과 컬럼은 같은데
+   *    조회가 타지 못하는" 인덱스를 만든다.
    */
   const { rows: idx } = await client.query(
-    `SELECT c.relname                          AS name,
-            t.relname                          AS "table",
-            i.indisprimary                     AS "isPrimary",
-            i.indisunique                      AS "isUnique",
-            array_agg(a.attname ORDER BY k.ord) AS columns
+    `SELECT c.relname                       AS name,
+            t.relname                       AS "table",
+            i.indisprimary                  AS "isPrimary",
+            i.indisunique                   AS "isUnique",
+            am.amname                       AS "accessMethod",
+            (i.indpred   IS NOT NULL)       AS "hasPredicate",
+            (i.indexprs  IS NOT NULL)       AS "isExpression",
+            (i.indnatts > i.indnkeyatts)    AS "hasIncludedColumns",
+            COALESCE(
+              array_agg(a.attname ORDER BY k.ord)
+                FILTER (WHERE a.attname IS NOT NULL),
+              ARRAY[]::name[]
+            )                               AS columns
        FROM pg_index i
-       JOIN pg_class c   ON c.oid = i.indexrelid
-       JOIN pg_class t   ON t.oid = i.indrelid
-       JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
-       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+       JOIN pg_class c  ON c.oid = i.indexrelid
+       JOIN pg_class t  ON t.oid = i.indrelid
+       JOIN pg_am    am ON am.oid = c.relam
+       LEFT JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+       LEFT JOIN pg_attribute a
+              ON a.attrelid = i.indrelid AND a.attnum = k.attnum AND k.attnum <> 0
       WHERE i.indrelid = to_regclass($1)
-      GROUP BY c.relname, t.relname, i.indisprimary, i.indisunique
+      GROUP BY c.relname, t.relname, i.indisprimary, i.indisunique,
+               am.amname, i.indpred, i.indexprs, i.indnatts, i.indnkeyatts
       ORDER BY c.relname`, [`public."${NEW_TABLE}"`])
 
   // FK — 🔴 참조 대상과 ON DELETE / ON UPDATE 동작까지 읽는다

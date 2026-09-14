@@ -128,6 +128,26 @@ export const EXPECTED_INDEX_SPECS = [
 export const EXPECTED_INDEXES = EXPECTED_INDEX_SPECS.map((i) => i.name)
 
 /**
+ * 네 인덱스가 **모두** 지켜야 하는 성질 — 🔴 이름·컬럼만으로는 부족하다.
+ *
+ *    · accessMethod 'btree'  — hash 인덱스는 범위 조회를 못 탄다. 홈은 시각 범위를 본다
+ *    · hasPredicate false    — 부분 인덱스는 **조건 밖 행을 아예 덮지 않는다.**
+ *                              이름과 컬럼이 같아도 조회가 인덱스를 못 탄다
+ *    · isExpression false    — 표현식 인덱스는 컬럼 조회에 쓰이지 않는다
+ *    · INCLUDE 없음          — indnatts === indnkeyatts
+ *
+ * 🔴 표현식 인덱스는 `pg_index.indkey` 에 **0** 이 들어간다. 관측 쿼리가
+ *    `JOIN pg_attribute` (INNER) 면 그 행이 결과에서 **통째로 사라진다** —
+ *    "예상 밖 인덱스" 로 잡혀야 할 것이 아예 보이지 않게 된다.
+ */
+export const INDEX_COMMON_CONTRACT = {
+  accessMethod: 'btree',
+  hasPredicate: false,
+  isExpression: false,
+  hasIncludedColumns: false,
+}
+
+/**
  * SQL 이 `CREATE INDEX` 로 직접 만드는 것 — PK 는 제약(PRIMARY KEY)이 대신 만든다.
  * 🔴 그래서 SQL 계약에서 세는 수(3)와 DB 에서 보이는 수(4)가 다르다.
  */
@@ -256,6 +276,13 @@ function judgeObservation(input) {
       }
       if (typeof i.isPrimary !== 'boolean') return `인덱스 ${i.name} 의 primary 여부를 읽지 못했다`
       if (typeof i.isUnique !== 'boolean') return `인덱스 ${i.name} 의 unique 여부를 읽지 못했다`
+      // 🔴 표현식·부분 인덱스와 access method 를 읽지 못하면 관측이 아니다
+      if (typeof i.accessMethod !== 'string') return `인덱스 ${i.name} 의 access method 를 읽지 못했다`
+      if (typeof i.hasPredicate !== 'boolean') return `인덱스 ${i.name} 의 부분 조건 여부를 읽지 못했다`
+      if (typeof i.isExpression !== 'boolean') return `인덱스 ${i.name} 의 표현식 여부를 읽지 못했다`
+      if (typeof i.hasIncludedColumns !== 'boolean') {
+        return `인덱스 ${i.name} 의 INCLUDE 컬럼 여부를 읽지 못했다`
+      }
     }
 
     if (!Array.isArray(input.foreignKeys)) return '테이블은 있는데 FK 를 읽지 못했다'
@@ -532,6 +559,19 @@ export function judgeMigration0025State(input) {
     if (!sameColumns) why.push(`컬럼 [${(got.columns ?? []).join(', ')}] (기대 [${spec.columns.join(', ')}])`)
     if (got.isPrimary !== spec.primary) why.push(`primary=${got.isPrimary}`)
     if (got.isUnique !== spec.unique) why.push(`unique=${got.isUnique}`)
+    // 🔴 네 인덱스가 모두 지켜야 하는 성질
+    if (got.accessMethod !== INDEX_COMMON_CONTRACT.accessMethod) {
+      why.push(`access method ${got.accessMethod} (기대 ${INDEX_COMMON_CONTRACT.accessMethod})`)
+    }
+    if (got.hasPredicate !== INDEX_COMMON_CONTRACT.hasPredicate) {
+      why.push('부분 인덱스다 — 조건 밖 행을 덮지 않는다')
+    }
+    if (got.isExpression !== INDEX_COMMON_CONTRACT.isExpression) {
+      why.push('표현식 인덱스다 — 컬럼 조회에 쓰이지 않는다')
+    }
+    if (got.hasIncludedColumns !== INDEX_COMMON_CONTRACT.hasIncludedColumns) {
+      why.push('INCLUDE 컬럼이 있다')
+    }
 
     findings.push({
       code: `INDEX:${spec.name}`,
@@ -634,7 +674,7 @@ export function judgeMigration0025State(input) {
     return verdictOf(
       'APPLIED_AND_VALID',
       findings,
-      `적용 완료 — enum 1 · 테이블 1 · 컬럼 ${EXPECTED_COLUMNS.length} · 인덱스 ${EXPECTED_INDEXES.length} · FK ${EXPECTED_FOREIGN_KEYS.length} · 0행`,
+      `적용 완료 — enum 1 · 테이블 1 · 컬럼 ${EXPECTED_COLUMNS.length} · 인덱스 ${EXPECTED_INDEXES.length} · FK ${EXPECTED_FOREIGN_KEYS.length} · ${input.rowCount}행`,
       0,
     )
   }
@@ -678,6 +718,30 @@ function splitTopLevel(body) {
 const CONSTRAINT_HEAD = /^(CONSTRAINT|PRIMARY\s+KEY|UNIQUE|CHECK|EXCLUDE|FOREIGN\s+KEY)\b/i
 
 /**
+ * 컬럼 정의에 붙으면 안 되는 절 — 🔴 **DEFAULT 뒤에 숨는다.**
+ *
+ *    `"isActive" BOOLEAN NOT NULL DEFAULT false CHECK (false)` 가 실제로 통과했다.
+ *    앞선 판은 DEFAULT 값을 `includes('false')` 로 봐서, 뒤에 붙은 `CHECK (false)` 가
+ *    default 문자열 안에 통째로 삼켜졌다 — 그 한 줄이면 **어떤 INSERT 도 통과하지 못한다.**
+ */
+const FORBIDDEN_COLUMN_CLAUSE =
+  /\b(CHECK|UNIQUE|REFERENCES|COLLATE|GENERATED|PRIMARY\s+KEY|CONSTRAINT|IDENTITY)\b/i
+
+/**
+ * 계약이 말하는 컬럼 정의를 **글자 그대로** 만든다.
+ *
+ * 🔴 파일 전체 hash 가 아니다. 이름·타입·NOT NULL·DEFAULT 네 가지 **의미 요소**로
+ *    조립한 한 줄이라, 주석·줄바꿈·들여쓰기·대소문자가 달라도 통과한다.
+ *    대신 그 넷 말고 **무엇이든 더 붙으면** 어긋난다 — 그것이 이 비교의 목적이다.
+ */
+function canonicalColumnDef(spec) {
+  let out = `"${spec.name}" ${spec.sqlType}`
+  if (!spec.nullable) out += ' NOT NULL'
+  if (spec.sqlDefault !== null) out += ` DEFAULT ${spec.sqlDefault}`
+  return out
+}
+
+/**
  * 🔴 **`CREATE TABLE` 내부 계약** (결함 A 정정).
  *
  *    앞선 판은 테이블 **이름만** 봤다. 그래서 이런 것들이 전부 통과했다 —
@@ -707,6 +771,15 @@ function judgeCreateTableBody(statement) {
     add('TABLE_BODY', false, '🔴 CREATE TABLE 의 괄호를 읽지 못했다')
     return findings
   }
+  /**
+   * 🔴 닫는 괄호 **뒤에는 아무것도 없어야 한다.**
+   *    `) WITH (fillfactor=10)` · `) TABLESPACE x` · `) PARTITION BY ...` 같은
+   *    테이블 옵션이 붙어도 컬럼 정의는 그대로라 다른 검사에 걸리지 않는다.
+   */
+  const trailing = statement.slice(close + 1).trim()
+  add('TABLE_NO_TRAILING_OPTION', trailing === '',
+    trailing === '' ? '닫는 괄호 뒤 옵션 0' : `🔴 닫는 괄호 뒤에 옵션이 붙었다: ${trailing}`)
+
   const items = splitTopLevel(statement.slice(open + 1, close))
   const columnItems = items.filter((i) => !CONSTRAINT_HEAD.test(i))
   const constraintItems = items.filter((i) => CONSTRAINT_HEAD.test(i))
@@ -726,7 +799,14 @@ function judgeCreateTableBody(statement) {
     const sqlDefault = defMatch === null ? null : defMatch[1].trim()
     // 타입은 NOT NULL · DEFAULT 앞까지다
     rest = rest.replace(/\bNOT\s+NULL\b/i, ' ').replace(/\bDEFAULT\s+.+$/i, ' ')
-    return { name: m[1], sqlType: rest.replace(/\s+/g, ' ').trim(), notNull, sqlDefault }
+    return {
+      name: m[1],
+      sqlType: rest.replace(/\s+/g, ' ').trim(),
+      notNull,
+      sqlDefault,
+      // 🔴 원문을 들고 간다 — 계약에 없는 절이 붙었는지 통째로 견주기 위해서다
+      raw: item.replace(/\s+/g, ' ').trim(),
+    }
   })
   add('TABLE_COLUMN_SHAPE', parsed.every((p) => p !== null),
     parsed.every((p) => p !== null) ? '컬럼 정의의 모양이 맞다' : '🔴 읽지 못한 컬럼 정의가 있다')
@@ -745,10 +825,23 @@ function judgeCreateTableBody(statement) {
     if (got.notNull !== !spec.nullable) {
       why.push(got.notNull ? 'NOT NULL 인데 nullable 이어야 한다' : 'NOT NULL 이 빠졌다')
     }
+    // 🔴 DEFAULT 는 **정확히** 같아야 한다. includes 로 보면 뒤에 붙은 절이 삼켜진다.
     if (spec.sqlDefault === null) {
       if (got.sqlDefault !== null) why.push(`default ${got.sqlDefault} (없어야 한다)`)
-    } else if (got.sqlDefault === null || !got.sqlDefault.toUpperCase().includes(spec.sqlDefault.toUpperCase())) {
+    } else if (got.sqlDefault === null || got.sqlDefault.toUpperCase() !== spec.sqlDefault.toUpperCase()) {
       why.push(`default ${got.sqlDefault ?? '없음'} (기대 ${spec.sqlDefault})`)
+    }
+    // 🔴 계약에 없는 절이 붙었는가 — CHECK · UNIQUE · REFERENCES · COLLATE · GENERATED
+    if (FORBIDDEN_COLUMN_CLAUSE.test(got.raw)) {
+      why.push(`계약에 없는 절이 붙었다: ${got.raw}`)
+    }
+    /**
+     * 🔴 마지막으로 **정본 한 줄과 통째로** 견준다.
+     *    위 검사들이 놓치는 자리가 생겨도 여기서 걸린다 — 두 겹으로 둔다.
+     */
+    const canonical = canonicalColumnDef(spec)
+    if (got.raw.replace(/\s+/g, ' ').trim().toUpperCase() !== canonical.toUpperCase()) {
+      why.push(`정의가 계약과 다르다 — "${got.raw}" (기대 "${canonical}")`)
     }
     add(`TABLE_COL:${spec.name}`, why.length === 0,
       why.length === 0 ? `${spec.name} ${spec.sqlType}` : `🔴 ${spec.name} — ${why.join(' · ')}`)
