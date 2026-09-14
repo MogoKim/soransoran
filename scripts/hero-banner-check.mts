@@ -37,15 +37,19 @@ import {
   HERO_BANNER_RATIO_TOLERANCE,
   HERO_BANNER_ROTATION_MS,
   HERO_BANNER_TARGET_STORED_BYTES,
+  HERO_BANNER_KEY_PREFIX,
   canActivateHeroBanner,
   formatKstDateTimeLocal,
   isHeroBannerLive,
   isHeroBannerRuleFailure,
-  parseKstDateTimeLocal,
+  parseKstDateTimeLocalInput,
   pickLiveHeroBanners,
   resolveHeroBannerLink,
+  resolveHeroBannerScheduleInput,
   sortHeroBanners,
   validateHeroBannerCapacity,
+  validateHeroBannerDraft,
+  validateHeroBannerImageKey,
   validateHeroBannerImageMetadata,
   validateHeroBannerSchedule,
   type HeroBannerCapacityInput,
@@ -84,6 +88,7 @@ type Banner = HeroBannerCapacityInput & HeroBannerOrderInput
 function banner(overrides: Partial<Banner> = {}): Banner {
   return {
     id: 'b0',
+    name: '가을 갱년기톡 안내',
     alt: '또래 셋이 웃으며 이야기하는 사진. "같이 이야기해요"',
     mobileImageKey: 'hero-banners/2026/aaa-mobile.webp',
     desktopImageKey: 'hero-banners/2026/aaa-desktop.webp',
@@ -96,6 +101,35 @@ function banner(overrides: Partial<Banner> = {}): Banner {
     archivedAt: null,
     ...overrides,
   }
+}
+
+/**
+ * 아직 이미지를 올리지 않은 비활성 초안.
+ *
+ * 🔴 이것이 저장 가능해야 한다. 첫 장만 올리고 저장하지 못하면
+ *    R2 에 주인 없는 파일이 확정적으로 남는다.
+ */
+function incompleteDraft(overrides: Partial<Banner> = {}): Banner {
+  return banner({
+    id: 'draft',
+    isActive: false,
+    alt: '',
+    mobileImageKey: null,
+    desktopImageKey: null,
+    ...overrides,
+  })
+}
+
+/**
+ * 예약 입력칸 하나를 읽은 결과를 한 줄로 만든다.
+ *
+ * 🔴 **비운 것과 잘못 적은 것이 다른 값으로 나와야 한다.**
+ *    둘 다 null 이던 것이 결함 A 였다 — 잘못 적은 날짜가 "예약 없음" 으로 저장됐다.
+ */
+function readSchedule(raw: string | null | undefined): string {
+  const result = parseKstDateTimeLocalInput(raw, '시작')
+  if (isHeroBannerRuleFailure(result)) return 'ERROR'
+  return result.value === null ? 'EMPTY' : result.value.toISOString()
 }
 
 /** 상시 노출 배너 n 장. 전부 조건을 갖추고 기간 제한이 없다. */
@@ -482,39 +516,88 @@ expect(
 // ══════════════════════════════════════════════════════════
 console.log('\n══════ KST 입력 → UTC 저장')
 
-expect(
-  '2026-09-20 14:00 KST = 05:00 UTC 같은 날',
-  parseKstDateTimeLocal('2026-09-20T14:00')?.toISOString(),
-  '2026-09-20T05:00:00.000Z',
-)
-expect(
-  '🔴 한국 아침 08:00 은 UTC 로 전날 23:00 이다',
-  parseKstDateTimeLocal('2026-09-20T08:00')?.toISOString(),
-  '2026-09-19T23:00:00.000Z',
-)
-expect(
-  '한국 자정 00:00 은 UTC 로 전날 15:00',
-  parseKstDateTimeLocal('2026-09-20T00:00')?.toISOString(),
-  '2026-09-19T15:00:00.000Z',
-)
-expect(
-  '초까지 준 경우도 읽는다',
-  parseKstDateTimeLocal('2026-09-20T14:00:30')?.toISOString(),
-  '2026-09-20T05:00:30.000Z',
-)
-expect('윤년 2월 29일은 읽는다', parseKstDateTimeLocal('2028-02-29T12:00') !== null, true)
-expect('🔴 2026-02-30 은 거부 — 3월로 미끄러지지 않는다', parseKstDateTimeLocal('2026-02-30T12:00'), null)
-expect('2026-02-29(평년) 거부', parseKstDateTimeLocal('2026-02-29T12:00'), null)
-expect('13월 거부', parseKstDateTimeLocal('2026-13-01T12:00'), null)
-expect('25시 거부', parseKstDateTimeLocal('2026-09-20T25:00'), null)
-expect('60분 거부', parseKstDateTimeLocal('2026-09-20T12:60'), null)
-expect('형식이 다르면 거부', parseKstDateTimeLocal('2026/09/20 12:00'), null)
-expect('빈 값은 null', parseKstDateTimeLocal(''), null)
-expect('null 은 null', parseKstDateTimeLocal(null), null)
+// 🔴 기존 UTC 결과는 그대로 유지한다. 바뀐 것은 "빈 값" 과 "잘못된 값" 의 구분뿐이다.
+expect('2026-09-20 14:00 KST = 05:00 UTC 같은 날', readSchedule('2026-09-20T14:00'), '2026-09-20T05:00:00.000Z')
+expect('🔴 한국 아침 08:00 은 UTC 로 전날 23:00 이다', readSchedule('2026-09-20T08:00'), '2026-09-19T23:00:00.000Z')
+expect('한국 자정 00:00 은 UTC 로 전날 15:00', readSchedule('2026-09-20T00:00'), '2026-09-19T15:00:00.000Z')
+expect('초까지 준 경우도 읽는다', readSchedule('2026-09-20T14:00:30'), '2026-09-20T05:00:30.000Z')
+expect('윤년 2월 29일은 읽는다', readSchedule('2028-02-29T12:00'), '2028-02-29T03:00:00.000Z')
 
+console.log('\n── 🔴 빈 값과 잘못된 값은 다른 결과다 (결함 A)')
+expect('빈 문자열은 "안 골랐다"', readSchedule(''), 'EMPTY')
+expect('공백뿐인 값도 "안 골랐다"', readSchedule('   '), 'EMPTY')
+expect('null 은 "안 골랐다"', readSchedule(null), 'EMPTY')
+expect('undefined 는 "안 골랐다"', readSchedule(undefined), 'EMPTY')
+expect('🔴 2026-02-30 은 오류다 — 3월로 미끄러지지도, 예약 없음이 되지도 않는다', readSchedule('2026-02-30T12:00'), 'ERROR')
+expect('2026-02-29(평년) 오류', readSchedule('2026-02-29T12:00'), 'ERROR')
+expect('13월 오류', readSchedule('2026-13-01T12:00'), 'ERROR')
+expect('25시 오류', readSchedule('2026-09-20T25:00'), 'ERROR')
+expect('60분 오류', readSchedule('2026-09-20T12:60'), 'ERROR')
+expect('형식이 다르면 오류', readSchedule('2026/09/20 12:00'), 'ERROR')
+expect('숫자가 아닌 값은 오류', readSchedule('내일 오후'), 'ERROR')
+expect(
+  '🔴 잘못된 값과 빈 값이 같은 결과가 아니다',
+  readSchedule('2026-02-30T12:00') === readSchedule(''),
+  false,
+)
+
+console.log('\n── 시작·종료 원시 입력을 한 번에 읽는다')
+const bothEmpty = resolveHeroBannerScheduleInput({ startsAt: '', endsAt: null })
+expect(
+  '둘 다 비우면 예약 없음',
+  isHeroBannerRuleFailure(bothEmpty) ? 'ERROR' : [bothEmpty.startsAt, bothEmpty.endsAt],
+  [null, null],
+)
+const bothSet = resolveHeroBannerScheduleInput({
+  startsAt: '2026-09-20T14:00',
+  endsAt: '2026-09-25T09:00',
+})
+expect(
+  '둘 다 주면 UTC 로 바뀐다',
+  isHeroBannerRuleFailure(bothSet)
+    ? 'ERROR'
+    : [bothSet.startsAt?.toISOString(), bothSet.endsAt?.toISOString()],
+  ['2026-09-20T05:00:00.000Z', '2026-09-25T00:00:00.000Z'],
+)
+expect(
+  '🔴 시작이 잘못되면 그 자리에서 멈춘다 — null 로 바꿔 넘기지 않는다',
+  denied(resolveHeroBannerScheduleInput({ startsAt: '2026-02-30T12:00', endsAt: null })),
+  true,
+)
+expect(
+  '종료가 잘못되면 오류',
+  denied(resolveHeroBannerScheduleInput({ startsAt: null, endsAt: '2026-13-01T00:00' })),
+  true,
+)
+expect(
+  '시작과 종료가 같으면 오류',
+  denied(
+    resolveHeroBannerScheduleInput({ startsAt: '2026-09-20T14:00', endsAt: '2026-09-20T14:00' }),
+  ),
+  true,
+)
+expect(
+  '종료가 시작보다 앞서면 오류',
+  denied(
+    resolveHeroBannerScheduleInput({ startsAt: '2026-09-25T14:00', endsAt: '2026-09-20T14:00' }),
+  ),
+  true,
+)
+expect(
+  '시작만 주어도 통과',
+  isHeroBannerRuleFailure(resolveHeroBannerScheduleInput({ startsAt: '2026-09-20T14:00', endsAt: '' })),
+  false,
+)
+expect(
+  '종료만 주어도 통과',
+  isHeroBannerRuleFailure(resolveHeroBannerScheduleInput({ startsAt: null, endsAt: '2026-09-25T09:00' })),
+  false,
+)
+
+const roundTrip = parseKstDateTimeLocalInput('2026-09-20T14:00', '시작')
 expect(
   '되돌려 적으면 같은 한국 시각이 나온다',
-  formatKstDateTimeLocal(parseKstDateTimeLocal('2026-09-20T14:00')),
+  isHeroBannerRuleFailure(roundTrip) ? 'ERROR' : formatKstDateTimeLocal(roundTrip.value),
   '2026-09-20T14:00',
 )
 expect(
@@ -685,6 +768,203 @@ expect(
       ),
     }),
   ),
+  true,
+)
+
+// ══════════════════════════════════════════════════════════
+console.log('\n══════ 🔴 비활성 초안은 capacity 에 막히지 않는다 (결함 B)')
+
+expect(
+  '비활성 + 이미지 없음 + alt 없음 → capacity 통과',
+  allowed(validateHeroBannerCapacity({ candidate: incompleteDraft(), others: [] })),
+  true,
+)
+expect(
+  '비활성 초안 + 기존 활성 5장 → capacity 통과',
+  allowed(validateHeroBannerCapacity({ candidate: incompleteDraft(), others: alwaysOn(5) })),
+  true,
+)
+expect(
+  '비활성 초안 + 겹치는 미래 예약 5장 → capacity 통과',
+  allowed(
+    validateHeroBannerCapacity({
+      candidate: incompleteDraft({ startsAt: T1, endsAt: T2 }),
+      others: Array.from({ length: 5 }, (_, i) =>
+        banner({ id: `future${i}`, startsAt: T1, endsAt: T2 }),
+      ),
+    }),
+  ),
+  true,
+)
+expect(
+  '이미 켜진 배너를 끄는 경우도 capacity 를 막지 않는다',
+  allowed(
+    validateHeroBannerCapacity({
+      candidate: banner({ id: 'turning-off', isActive: false }),
+      others: alwaysOn(5),
+    }),
+  ),
+  true,
+)
+expect(
+  '🔴 같은 후보를 활성 상태로 바꾸면 이미지 누락으로 차단된다',
+  denied(
+    validateHeroBannerCapacity({ candidate: incompleteDraft({ isActive: true }), others: [] }),
+  ),
+  true,
+)
+expect(
+  '🔴 이미지·alt 를 채워 활성화하면 이제 6장 겹침으로 차단된다',
+  denied(
+    validateHeroBannerCapacity({
+      candidate: banner({ id: 'filled', isActive: true }),
+      others: alwaysOn(5),
+    }),
+  ),
+  true,
+)
+
+console.log('\n── 세 질문이 분리되어 있다')
+expect('초안 저장은 가능하다', allowed(validateHeroBannerDraft(incompleteDraft())), true)
+expect('그러나 켤 수는 없다', denied(canActivateHeroBanner(incompleteDraft())), true)
+expect('그리고 자리는 차지하지 않는다', allowed(validateHeroBannerCapacity({ candidate: incompleteDraft(), others: alwaysOn(5) })), true)
+
+// ══════════════════════════════════════════════════════════
+console.log('\n══════ 🔴 R2 이미지 key 검증 (결함 C)')
+
+expect('key prefix 는 hero-banners/ 다', HERO_BANNER_KEY_PREFIX, 'hero-banners/')
+expect(
+  '정상 모바일 key 통과',
+  allowed(validateHeroBannerImageKey('mobile', 'hero-banners/2026/ab12_CD-mobile.webp')),
+  true,
+)
+expect(
+  '정상 데스크탑 key 통과',
+  allowed(validateHeroBannerImageKey('desktop', 'hero-banners/2026/ab12_CD-desktop.webp')),
+  true,
+)
+expect(
+  '🔴 회원 사진 자리(posts/) 차단',
+  denied(validateHeroBannerImageKey('mobile', 'posts/user/image-mobile.webp')),
+  true,
+)
+expect(
+  '🔴 상위로 빠져나가는 경로 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/../other-mobile.webp')),
+  true,
+)
+expect('점 두 개만 있어도 차단', denied(validateHeroBannerImageKey('mobile', '../other-mobile.webp')), true)
+expect(
+  '🔴 앞 슬래시 차단',
+  denied(validateHeroBannerImageKey('mobile', '/hero-banners/2026/a-mobile.webp')),
+  true,
+)
+expect(
+  '🔴 역슬래시 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners\\2026\\a-mobile.webp')),
+  true,
+)
+expect(
+  '🔴 query 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/a-mobile.webp?x=1')),
+  true,
+)
+expect(
+  '🔴 hash 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/a-mobile.webp#a')),
+  true,
+)
+expect(
+  '🔴 제어문자 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/a\u0000-mobile.webp')),
+  true,
+)
+expect(
+  '탭 문자 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/a\tb-mobile.webp')),
+  true,
+)
+expect(
+  '앞뒤 공백이 붙은 key 차단',
+  denied(validateHeroBannerImageKey('mobile', ' hero-banners/2026/a-mobile.webp ')),
+  true,
+)
+expect(
+  '🔴 데스크탑 key 를 모바일 슬롯에 넣으면 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/a-desktop.webp')),
+  true,
+)
+expect(
+  '🔴 모바일 key 를 데스크탑 슬롯에 넣으면 차단',
+  denied(validateHeroBannerImageKey('desktop', 'hero-banners/2026/a-mobile.webp')),
+  true,
+)
+expect(
+  '🔴 저장 확장자가 .jpg 면 차단 — 저장 결과는 언제나 WebP 다',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/a-mobile.jpg')),
+  true,
+)
+expect(
+  '.png 도 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/a-mobile.png')),
+  true,
+)
+expect(
+  '연도 자리가 없으면 차단',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/a-mobile.webp')),
+  true,
+)
+expect(
+  '원본 파일명이 섞이면 차단 (한글·공백)',
+  denied(validateHeroBannerImageKey('mobile', 'hero-banners/2026/내 사진-mobile.webp')),
+  true,
+)
+expect('빈 key 차단', denied(validateHeroBannerImageKey('mobile', '')), true)
+expect('null key 차단', denied(validateHeroBannerImageKey('mobile', null)), true)
+expect('공백뿐인 key 차단', denied(validateHeroBannerImageKey('mobile', '   ')), true)
+
+console.log('\n── 활성화가 key 검증을 실제로 쓴다')
+expect(
+  '🔴 posts/ key 로는 켤 수 없다',
+  denied(canActivateHeroBanner(banner({ mobileImageKey: 'posts/user/a.webp' }))),
+  true,
+)
+expect(
+  '🔴 슬롯이 뒤바뀐 key 로는 켤 수 없다',
+  denied(canActivateHeroBanner(banner({ mobileImageKey: 'hero-banners/2026/a-desktop.webp' }))),
+  true,
+)
+expect(
+  '잘못된 key 인 배너는 지금 나가지도 않는다',
+  isHeroBannerLive(banner({ desktopImageKey: '../x-desktop.webp' }), T0),
+  false,
+)
+
+// ══════════════════════════════════════════════════════════
+console.log('\n══════ 🔴 운영용 이름 (결함 D)')
+
+expect('이름이 있으면 초안 저장 가능', allowed(validateHeroBannerDraft(banner())), true)
+expect('🔴 빈 이름은 초안도 저장할 수 없다', denied(validateHeroBannerDraft(banner({ name: '' }))), true)
+expect('공백뿐인 이름 차단', denied(validateHeroBannerDraft(banner({ name: '   ' }))), true)
+expect(
+  '이름만 있고 이미지가 없는 비활성 초안은 저장 가능',
+  allowed(validateHeroBannerDraft(incompleteDraft({ name: '10월 배너 준비중' }))),
+  true,
+)
+expect('🔴 이름 없는 배너는 켤 수 없다', denied(canActivateHeroBanner(banner({ name: '' }))), true)
+expect(
+  '이름 없는 배너는 지금 나가지도 않는다',
+  isHeroBannerLive(banner({ name: '  ' }), T0),
+  false,
+)
+expect(
+  '초안 단계에서도 잘못된 링크는 막는다',
+  denied(validateHeroBannerDraft(banner({ linkKind: 'INTERNAL', linkUrl: '//evil.com' }))),
+  true,
+)
+expect(
+  '초안 단계에서도 뒤집힌 예약은 막는다',
+  denied(validateHeroBannerDraft(banner({ startsAt: T2, endsAt: T1 }))),
   true,
 )
 
@@ -873,6 +1153,18 @@ function typeContracts(): void {
 
   // @ts-expect-error others 에도 id 가 있어야 한다
   validateHeroBannerCapacity({ candidate: banner(), others: [{ ...banner(), id: undefined }] })
+
+  // @ts-expect-error 초안에도 운영용 이름이 있어야 한다 — 목록에서 구분할 수 없다
+  validateHeroBannerDraft({ ...banner(), name: undefined })
+
+  // @ts-expect-error 이미지 key 도 슬롯이 mobile · desktop 둘뿐이다
+  validateHeroBannerImageKey('tablet', 'hero-banners/2026/a-mobile.webp')
+
+  // @ts-expect-error 원시 입력은 문자열이다 — Date 를 넣는 자리가 아니다
+  parseKstDateTimeLocalInput(new Date(), '시작')
+
+  // @ts-expect-error 시작·종료 원시 입력은 둘 다 넘겨야 한다
+  resolveHeroBannerScheduleInput({ startsAt: '2026-09-20T14:00' })
 }
 void typeContracts
 

@@ -84,6 +84,33 @@ export const HERO_BANNER_MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 export const HERO_BANNER_TARGET_STORED_BYTES = 300 * 1024
 
 /**
+ * R2 object key 의 앞자리.
+ *
+ * 🔴 회원 사진(`posts/`)과 절대 섞이지 않는다. 정리 정책도, 지우는 기준도 다르다.
+ */
+export const HERO_BANNER_KEY_PREFIX = 'hero-banners/'
+
+/**
+ * 저장된 이미지의 key 모양.
+ *
+ *   hero-banners/{YYYY}/{safe-id}-mobile.webp
+ *   hero-banners/{YYYY}/{safe-id}-desktop.webp
+ *
+ * 🔴 safe-id 는 **서버가 만든다.** 올린 사람의 파일명은 key 에 들어가지 않는다.
+ *    영문·숫자·`-`·`_` 만 허용한다 — 그 밖의 글자는 전부 조작으로 본다.
+ *
+ * 🔴 확장자는 `.webp` 하나다. 업로드는 JPG·PNG·WebP 를 받지만
+ *    저장 결과는 WebP 로 변환되므로(PR 2), DB 에 남는 key 는 언제나 .webp 다.
+ *
+ * 🔴 슬롯 이름이 key 안에 들어간다. 모바일 자리에 데스크탑 이미지가 들어가면
+ *    좁은 화면에서 글자가 잘려 나가는데 화면 어디에도 오류가 뜨지 않는다.
+ */
+const HERO_BANNER_KEY_SHAPE: Record<HeroBannerSlot, RegExp> = {
+  mobile: /^hero-banners\/\d{4}\/[A-Za-z0-9_-]+-mobile\.webp$/,
+  desktop: /^hero-banners\/\d{4}\/[A-Za-z0-9_-]+-desktop\.webp$/,
+}
+
+/**
  * 받는 형식.
  *
  * 🔴 GIF · HEIC · HEIF 를 받지 않는다. 회원 사진 업로드와 다른 판단이다 —
@@ -118,6 +145,16 @@ export type HeroBannerLink =
 /** 규칙에 걸렸을 때. 🔴 error 는 운영자가 그대로 읽는 문장이다. */
 export type HeroBannerRuleFailure = { error: string }
 
+/**
+ * 예약 시각 입력칸 하나를 읽은 결과.
+ *
+ * 🔴 `Date | null` 하나로 돌려주지 않는다. 그러면 null 이 두 가지를 뜻하게 된다 —
+ *    "비워 뒀다" 와 "적었는데 못 읽었다". 둘을 섞으면 잘못 적은 날짜가
+ *    오류 없이 "예약 없음" 으로 저장된다.
+ *    `value` 가 있으면 읽은 것이고, 없으면 `error` 가 이유를 말한다.
+ */
+export type HeroBannerDateTimeResult = { value: Date | null } | HeroBannerRuleFailure
+
 export type HeroBannerImageMetadata = {
   width: number
   height: number
@@ -130,13 +167,42 @@ export type HeroBannerScheduleInput = {
   endsAt: Date | null
 }
 
-/** 활성화할 수 있는지 묻는 데 필요한 최소치. */
-export type HeroBannerActivationInput = HeroBannerScheduleInput & {
+/**
+ * 🔴 세 질문을 한 타입에 섞지 않는다. 물어보는 때가 다르다.
+ *
+ *   ① 초안으로 저장해도 되는가   HeroBannerDraftInput      · validateHeroBannerDraft
+ *   ② 켜도 되는가                HeroBannerActivationInput · canActivateHeroBanner
+ *   ③ 같은 시각에 몇 장이 겹치는가 HeroBannerCapacityInput   · validateHeroBannerCapacity
+ *
+ *    한 함수가 셋을 함께 답하면 "이미지를 아직 안 올린 초안" 이 저장조차 되지 않는다.
+ */
+
+/**
+ * 초안으로 저장하는 데 필요한 최소치.
+ *
+ * 🔴 이미지와 alt 는 여기 없다. 두 장을 다 올리기 전에도 저장할 수 있어야 한다 —
+ *    첫 장만 올리고 저장하지 못하면 R2 에 주인 없는 파일이 확정적으로 남는다.
+ */
+export type HeroBannerDraftInput = {
+  /**
+   * 운영용 이름.
+   *
+   * 🔴 사용자 화면에 나가지 않는다. 어드민 목록에서 배너를 **구분하는 값**이다.
+   *    이름이 없으면 운영자가 목록에서 어느 줄이 무엇인지 알 수 없어,
+   *    끄고 켜는 조작이 그대로 사고가 된다. 그래서 초안 단계부터 필수다.
+   */
+  name: string
+  linkKind: HeroBannerLinkKind
+  linkUrl: string | null
+  startsAt: Date | null
+  endsAt: Date | null
+}
+
+/** 활성화할 수 있는지 묻는 데 필요한 최소치 — 초안 조건에 이미지·alt·보관을 더한다. */
+export type HeroBannerActivationInput = HeroBannerDraftInput & {
   alt: string
   mobileImageKey: string | null
   desktopImageKey: string | null
-  linkKind: HeroBannerLinkKind
-  linkUrl: string | null
   archivedAt: Date | null
 }
 
@@ -166,6 +232,14 @@ export function isHeroBannerRuleFailure(
 function isFilled(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
+
+/**
+ * key 에 섞이면 안 되는 글자.
+ *
+ * 🔴 url-policy 의 같은 검사와 목적이 다르다. 저쪽은 URL 파서가 조용히 지우는 것을 막고,
+ *    여기는 S3 key 에 그대로 실려 나가는 것을 막는다. 합치지 않는다.
+ */
+const KEY_CONTROL_CHARS = /[\u0000-\u001F\u007F]/
 
 function isUsableDate(value: Date): boolean {
   return Number.isFinite(value.getTime())
@@ -239,6 +313,11 @@ const DATETIME_LOCAL = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
 /**
  * 어드민이 고른 한국 시각 → 저장할 UTC Date. 못 읽으면 null.
  *
+ * 🔴 **이 함수를 서버 액션이 직접 쓰지 않는다.** export 하지 않는 이유가 그것이다.
+ *    돌려주는 null 이 "안 골랐다" 와 "잘못 골랐다" 를 구분하지 못해서,
+ *    운영자가 2026-02-30 을 넣으면 오류 없이 **"예약 없음" 으로 저장**된다.
+ *    바깥에서 쓰는 문은 parseKstDateTimeLocalInput 하나다.
+ *
  * 🔴 브라우저의 시간대를 믿지 않는다. `new Date('2026-09-20T14:00')` 은
  *    **그 PC 의 시간대**로 해석된다 — 운영자가 해외에 있으면 몇 시간씩 어긋난다.
  *    그래서 입력 문자열을 그대로 받아 한국 시각으로 읽고 여기서 UTC 로 옮긴다.
@@ -247,7 +326,7 @@ const DATETIME_LOCAL = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
  * 🔴 2026-02-30 같은 날짜를 막는다. Date.UTC 는 그것을 3월 2일로 넘겨 **조용히 통과**시킨다.
  *    만든 값을 되돌려 읽어 입력과 같은지 확인한다.
  */
-export function parseKstDateTimeLocal(value: string | null | undefined): Date | null {
+function parseKstDateTimeLocal(value: string | null | undefined): Date | null {
   if (!value) return null
   const matched = DATETIME_LOCAL.exec(value.trim())
   if (!matched) return null
@@ -274,6 +353,63 @@ export function parseKstDateTimeLocal(value: string | null | undefined): Date | 
   }
 
   return new Date(asKstWallClock - KST_OFFSET_MS)
+}
+
+/**
+ * 어드민 입력칸의 원시 문자열 하나를 읽는다.
+ *
+ * 🔴 **비운 것과 잘못 적은 것을 타입으로 가른다.**
+ *    둘 다 null 로 돌려주면 "2026-02-30" 이 오류 없이 "예약 없음" 으로 저장된다 —
+ *    운영자는 예약을 걸었다고 믿고, 배너는 곧바로 나가 버린다.
+ *
+ *   비움(null · undefined · '' · 공백뿐)  → { value: null }
+ *   제대로 된 한국 시각                    → { value: Date }
+ *   그 밖의 모든 것                        → { error }
+ *
+ * @param label 오류 문장에 들어갈 이름. '시작' · '종료' 처럼 운영자가 보는 말을 넘긴다.
+ */
+export function parseKstDateTimeLocalInput(
+  raw: string | null | undefined,
+  label: string,
+): HeroBannerDateTimeResult {
+  if (raw === null || raw === undefined) return { value: null }
+  const trimmed = raw.trim()
+  if (trimmed.length === 0) return { value: null }
+
+  const parsed = parseKstDateTimeLocal(trimmed)
+  if (!parsed) {
+    return { error: `${label} 시각을 읽지 못했습니다. 달력에서 다시 골라 주세요. (한국 시간)` }
+  }
+  return { value: parsed }
+}
+
+/**
+ * 어드민 폼이 보낸 시작·종료 원시 문자열을 한 번에 읽고 검사한다.
+ *
+ * 🔴 서버 액션이 쓰는 문은 여기 하나다. 파싱과 앞뒤 검사를 한 함수가 끝내므로
+ *    중간 단계를 빠뜨릴 자리가 없다 — 두 문을 두면 한쪽만 부르는 날이 온다.
+ *
+ * 🔴 한쪽이라도 잘못됐으면 그 자리에서 멈춘다. 잘못된 값을 null 로 바꿔 넘기지 않는다.
+ */
+export function resolveHeroBannerScheduleInput(input: {
+  startsAt: string | null | undefined
+  endsAt: string | null | undefined
+}): HeroBannerScheduleInput | HeroBannerRuleFailure {
+  const startsAt = parseKstDateTimeLocalInput(input.startsAt, '시작')
+  if (isHeroBannerRuleFailure(startsAt)) return startsAt
+
+  const endsAt = parseKstDateTimeLocalInput(input.endsAt, '종료')
+  if (isHeroBannerRuleFailure(endsAt)) return endsAt
+
+  const schedule: HeroBannerScheduleInput = {
+    startsAt: startsAt.value,
+    endsAt: endsAt.value,
+  }
+
+  const invalid = validateHeroBannerSchedule(schedule)
+  if (invalid) return invalid
+
+  return schedule
 }
 
 /**
@@ -374,9 +510,79 @@ export function validateHeroBannerImageMetadata(
 // ─────────── 활성화와 노출 ───────────
 
 /**
+ * 올라간 이미지의 R2 key 가 우리가 만든 것인가.
+ *
+ * 🔴 "비어 있지 않다" 로 끝내지 않는다. 이 값은 어드민 폼의 hidden input 을 타고 오고,
+ *    서버 액션은 주소만 알면 누구나 부를 수 있다. 보내는 쪽을 믿지 않는다.
+ *
+ * 막는 것
+ *   posts/...                      회원 사진 자리 — 정리 정책도 지우는 기준도 다르다
+ *   ../other.webp                  상위로 빠져나가는 경로
+ *   /hero-banners/a.webp           앞 슬래시 — bucket 루트를 가리킨다
+ *   hero-banners\2026\a-mobile.webp 역슬래시
+ *   ...?x=1 · ...#a                 query · hash
+ *   제어문자 포함
+ *   hero-banners/2026/a-desktop.webp 를 **모바일 슬롯**에
+ *   ...-mobile.jpg                 저장 결과는 언제나 .webp 다
+ *
+ * 🔴 금지 항목을 먼저 낱낱이 본 뒤 모양을 맞춘다. 정규식 하나로도 전부 걸리지만,
+ *    나중에 key 구조를 바꾸는 사람이 정규식만 고치면 금지 규칙이 조용히 사라진다.
+ */
+export function validateHeroBannerImageKey(
+  slot: HeroBannerSlot,
+  key: string | null | undefined,
+): HeroBannerRuleFailure | null {
+  const spec = HERO_BANNER_IMAGE_SPEC[slot]
+
+  if (!isFilled(key)) return { error: `${spec.label} 이미지를 올려 주세요.` }
+
+  const wrong: HeroBannerRuleFailure = {
+    error: `${spec.label} 이미지 정보가 올바르지 않습니다. 이미지를 다시 올려 주세요.`,
+  }
+
+  // 앞뒤 공백이 붙은 key 는 우리가 만든 것이 아니다 — trim 해서 받아 주지 않는다.
+  if (key !== key.trim()) return wrong
+  if (KEY_CONTROL_CHARS.test(key)) return wrong
+  if (key.includes('\\')) return wrong
+  if (key.startsWith('/')) return wrong
+  if (key.includes('..')) return wrong
+  if (key.includes('?') || key.includes('#')) return wrong
+  if (!key.startsWith(HERO_BANNER_KEY_PREFIX)) return wrong
+  if (!HERO_BANNER_KEY_SHAPE[slot].test(key)) return wrong
+
+  return null
+}
+
+/**
+ * 초안으로 저장해도 되는가. 저장해도 되면 null, 아니면 이유.
+ *
+ * 🔴 이미지와 alt 를 보지 않는다. 두 장을 다 올리기 전에도 저장할 수 있어야 한다 —
+ *    첫 장만 올리고 저장하지 못하면 R2 에 주인 없는 파일이 확정적으로 남는다.
+ *
+ * 🔴 그러나 이름·링크·예약은 초안에서도 본다. 셋 다 저장된 뒤에 고치는 것이 아니라
+ *    **저장되는 값 자체**라, 잘못된 채로 들어가면 나중에 켤 때가 아니라
+ *    지금 목록이 먼저 망가진다.
+ */
+export function validateHeroBannerDraft(
+  draft: HeroBannerDraftInput,
+): HeroBannerRuleFailure | null {
+  if (!isFilled(draft.name)) {
+    return { error: '운영용 배너 이름을 입력해 주세요. 목록에서 구분하는 이름이라 화면에는 나가지 않습니다.' }
+  }
+
+  const link = resolveHeroBannerLink(draft.linkKind, draft.linkUrl)
+  if (isHeroBannerRuleFailure(link)) return link
+
+  return validateHeroBannerSchedule(draft)
+}
+
+/**
  * 켤 수 있는 배너인가. 켤 수 있으면 null, 아니면 이유.
  *
+ * 초안 조건을 모두 지킨 위에 세 가지를 더 본다.
+ *
  * 🔴 이미지 두 장이 **모두** 있어야 한다. 한 장만으로 켜면 반대쪽 화면이 빈다.
+ *    그리고 그 key 가 우리가 만든 것인지까지 본다 — validateHeroBannerImageKey.
  * 🔴 alt 가 없으면 켜지 않는다. 카피가 이미지 안에 들어가 있어서,
  *    alt 가 비면 화면을 읽어 주는 사람에게는 배너가 통째로 없는 것과 같다.
  * 🔴 보관한 배너는 켜지 않는다. 보관은 "이제 안 쓴다" 는 뜻이다.
@@ -388,14 +594,21 @@ export function canActivateHeroBanner(
   banner: HeroBannerActivationInput,
 ): HeroBannerRuleFailure | null {
   if (banner.archivedAt) return { error: '보관한 배너는 켤 수 없습니다. 먼저 보관을 풀어 주세요.' }
-  if (!isFilled(banner.mobileImageKey)) return { error: '모바일 이미지를 올려 주세요.' }
-  if (!isFilled(banner.desktopImageKey)) return { error: '데스크탑 이미지를 올려 주세요.' }
-  if (!isFilled(banner.alt)) return { error: '이미지 설명을 입력해 주세요. 이미지 안의 글을 그대로 적어 주세요.' }
 
-  const link = resolveHeroBannerLink(banner.linkKind, banner.linkUrl)
-  if (isHeroBannerRuleFailure(link)) return link
+  const draft = validateHeroBannerDraft(banner)
+  if (draft) return draft
 
-  return validateHeroBannerSchedule(banner)
+  const mobile = validateHeroBannerImageKey('mobile', banner.mobileImageKey)
+  if (mobile) return mobile
+
+  const desktop = validateHeroBannerImageKey('desktop', banner.desktopImageKey)
+  if (desktop) return desktop
+
+  if (!isFilled(banner.alt)) {
+    return { error: '이미지 설명을 입력해 주세요. 이미지 안의 글을 그대로 적어 주세요.' }
+  }
+
+  return null
 }
 
 /**
@@ -528,7 +741,12 @@ function peakOverlap(intervals: readonly Interval[]): number {
  *      · raw SQL · advisory lock 을 쓰지 않는다 (Raw SQL 금지 · CLAUDE.md)
  *    밖에서 세고 안에서 쓰면 두 운영자가 동시에 켤 때 6장이 나간다.
  *
- * @param candidate 켜려는(또는 기간을 바꾸려는) 배너. 바뀐 뒤의 값으로 넘긴다.
+ * 🔴 **꺼진 배너에는 아무 말도 하지 않는다.** 이 함수가 답하는 질문은 하나다 —
+ *    "이 배너가 켜지면 어느 시각엔가 6장이 겹치는가".
+ *    초안을 저장해도 되는지는 validateHeroBannerDraft 가,
+ *    켤 수 있는 상태인지는 canActivateHeroBanner 가 따로 답한다. 셋을 섞지 않는다.
+ *
+ * @param candidate 켜려는(또는 기간을 바꾸려는) 배너. **바뀐 뒤의 값**으로 넘긴다.
  * @param others    나머지 배너 전부. 여기서 자격 없는 것을 걸러 낸다.
  */
 export function validateHeroBannerCapacity(input: {
@@ -537,6 +755,18 @@ export function validateHeroBannerCapacity(input: {
   max?: number
 }): HeroBannerRuleFailure | null {
   const max = input.max ?? HERO_BANNER_MAX_CONCURRENT
+
+  /**
+   * 🔴 꺼진 배너는 자리를 차지하지 않는다 — 여기서 바로 끝낸다.
+   *
+   *    이 줄이 없으면 "이미지를 아직 안 올린 비활성 초안" 이
+   *    "모바일 이미지를 올려 주세요" 로 막힌다. 저장도 못 하는데 이미지를 올리라는 말이라
+   *    운영자는 빠져나갈 길이 없다. 초안이 저장 가능한지는 validateHeroBannerDraft 가 답한다.
+   *
+   *    🔴 candidate 는 **바뀐 뒤의 상태**다. 지금 켜져 있어도 이번에 끄는 것이라면
+   *    isActive=false 로 넘어오고, 그러면 자리를 비우는 것이 맞다.
+   */
+  if (!input.candidate.isActive) return null
 
   // 켤 수 없는 배너면 상한을 따지기 전에 그 이유가 먼저다.
   const blocked = canActivateHeroBanner(input.candidate)
