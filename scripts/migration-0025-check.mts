@@ -35,6 +35,7 @@ import {
   EXPECTED_CONSTRAINTS,
   EXPECTED_PRIMARY_KEY,
   INDEX_COMMON_CONTRACT,
+  IGNORED_CONSTRAINT_TYPES,
   judgeMigration0025ApplyState,
   judgeMigration0025Sql,
   judgeMigration0025State,
@@ -92,11 +93,12 @@ function goodIndexes() {
     columns: [...i.columns],
     isPrimary: i.primary,
     isUnique: i.unique,
-    // 🔴 네 인덱스가 모두 지켜야 하는 성질 — 표현식·부분·access method·INCLUDE
-    accessMethod: INDEX_COMMON_CONTRACT.accessMethod,
-    hasPredicate: INDEX_COMMON_CONTRACT.hasPredicate,
-    isExpression: INDEX_COMMON_CONTRACT.isExpression,
-    hasIncludedColumns: INDEX_COMMON_CONTRACT.hasIncludedColumns,
+    /**
+     * 🔴 네 인덱스가 모두 지켜야 하는 성질을 **통째로** 펼친다.
+     *    개별 나열이면 계약에 값이 늘 때마다 fixture 가 낡는다 —
+     *    실제로 isValid·isReady·isLive 를 더했을 때 그 일이 났다.
+     */
+    ...INDEX_COMMON_CONTRACT,
   }))
 }
 
@@ -113,7 +115,17 @@ function goodForeignKeys() {
 
 /** 제약 관측값 — 🔴 PK 1 + FK 2, 정확히 셋. */
 function goodConstraints() {
-  return EXPECTED_CONSTRAINTS.map((c) => ({ name: c.name, type: c.type }))
+  return EXPECTED_CONSTRAINTS.map((c) => ({ name: c.name, type: c.type, validated: true }))
+}
+
+/**
+ * PostgreSQL 18 이 `pg_constraint` 에 함께 내놓는 NOT NULL 행.
+ * 🔴 17 이하에는 없다. 둘 다 같은 판정이 나와야 한다.
+ */
+function pg18NotNullConstraints() {
+  return EXPECTED_COLUMNS
+    .filter((c) => !c.nullable)
+    .map((c) => ({ name: `HeroBanner_${c.name}_not_null`, type: 'n' }))
 }
 
 /** 완전히 적용된 상태. `over` 로 한 부분만 바꿔 실패 사례를 만든다. */
@@ -530,8 +542,8 @@ check('🔴 다른 테이블의 인덱스가 섞이면 관측 실패다',
 check('🔴 예상 밖 인덱스가 있으면 잡는다',
   state(applied({
     indexes: [...goodIndexes(),
-      { name: 'HeroBanner_name_idx', table: NEW_TABLE, columns: ['name'], isPrimary: false, isUnique: false,
-        accessMethod: 'btree', hasPredicate: false, isExpression: false, hasIncludedColumns: false }],
+      { name: 'HeroBanner_name_idx', table: NEW_TABLE, columns: ['name'],
+        isPrimary: false, isUnique: false, ...INDEX_COMMON_CONTRACT }],
   })) === 'PARTIAL_OR_INVALID')
 check('인덱스 metadata 모양이 아니면 OBSERVATION_FAILED',
   state(applied({ indexes: [{ name: 'x' }] })) === 'OBSERVATION_FAILED')
@@ -676,15 +688,15 @@ check('constraints 가 배열이 아니면 OBSERVATION_FAILED',
 check('제약 metadata 모양이 아니면 OBSERVATION_FAILED',
   state(applied({ constraints: [{ name: 'x' }] })) === 'OBSERVATION_FAILED')
 check('🔴 예상 밖 CHECK 제약이 있으면 PARTIAL_OR_INVALID',
-  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_never', type: 'c' }] })) === 'PARTIAL_OR_INVALID')
+  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_never', type: 'c', validated: true }] })) === 'PARTIAL_OR_INVALID')
 check('🔴 예상 밖 UNIQUE 제약이 있으면 PARTIAL_OR_INVALID',
-  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_name_key', type: 'u' }] })) === 'PARTIAL_OR_INVALID')
+  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_name_key', type: 'u', validated: true }] })) === 'PARTIAL_OR_INVALID')
 check('제약이 빠지면 PARTIAL_OR_INVALID',
   state(applied({ constraints: goodConstraints().slice(0, 2) })) === 'PARTIAL_OR_INVALID')
 check('제약 종류가 다르면 PARTIAL_OR_INVALID',
   state(applied({ constraints: goodConstraints().map((c) => c.name === 'HeroBanner_pkey' ? { ...c, type: 'u' } : c) })) === 'PARTIAL_OR_INVALID')
 check('그때 사유에 "CHECK (false)" 경고가 남는다',
-  verdictOf(applied({ constraints: [...goodConstraints(), { name: 'x', type: 'c' }] })).summary.includes('INSERT'))
+  verdictOf(applied({ constraints: [...goodConstraints(), { name: 'x', type: 'c', validated: true }] })).summary.includes('INSERT'))
 
 const bendPrecision = (name: string, value: unknown) =>
   goodColumns().map((c) => (c.column_name === name ? { ...c, datetime_precision: value } : c))
@@ -863,15 +875,13 @@ check('PK 에 부분 조건이 붙어도 막는다',
 /** 🔴 표현식 인덱스가 **추가로** 있는 경우 — 관측에서 사라지면 안 된다 */
 const exprIndex = {
   name: 'HeroBanner_lower_name_idx', table: NEW_TABLE, columns: [],
-  isPrimary: false, isUnique: false,
-  accessMethod: 'btree', hasPredicate: false, isExpression: true, hasIncludedColumns: false,
+  isPrimary: false, isUnique: false, ...INDEX_COMMON_CONTRACT, isExpression: true,
 }
 check('🔴 추가 표현식 인덱스는 예상 밖으로 잡힌다 (컬럼이 비어도 관측된다)',
   state(applied({ indexes: [...goodIndexes(), exprIndex] })) === 'PARTIAL_OR_INVALID')
 const partialIndex = {
   name: 'HeroBanner_active_partial_idx', table: NEW_TABLE, columns: ['isActive'],
-  isPrimary: false, isUnique: false,
-  accessMethod: 'btree', hasPredicate: true, isExpression: false, hasIncludedColumns: false,
+  isPrimary: false, isUnique: false, ...INDEX_COMMON_CONTRACT, hasPredicate: true,
 }
 check('🔴 추가 부분 인덱스도 예상 밖으로 잡힌다',
   state(applied({ indexes: [...goodIndexes(), partialIndex] })) === 'PARTIAL_OR_INVALID')
@@ -921,6 +931,119 @@ check('apply 전용 판정만 0행을 요구한다',
   judgeMigration0025ApplyState(applied({ rowCount: 1 }) as never).state === 'PARTIAL_OR_INVALID')
 check('apply 전용 판정의 실패 사유가 행 수를 말한다',
   judgeMigration0025ApplyState(applied({ rowCount: 7 }) as never).summary.includes('7행'))
+
+
+
+// ══════════════════════════════════════════════════════════
+// 🔴 Codex [1] 4차 검증 — 임시 PostgreSQL 18 실측이 잡은 것 (2026-09-14)
+// ══════════════════════════════════════════════════════════
+
+// ── ㉙ PostgreSQL 18 의 NOT NULL 제약 ──
+console.log('── ㉙ PostgreSQL 18 호환')
+
+check('NOT NULL 컬럼은 8개다', EXPECTED_COLUMNS.filter((c) => !c.nullable).length === 8)
+check('🔴 세지 않는 제약 종류는 n 하나뿐이다',
+  IGNORED_CONSTRAINT_TYPES.length === 1 && IGNORED_CONSTRAINT_TYPES[0] === 'n')
+
+check('🔴 pg17 — 제약 3개만 있으면 APPLIED_AND_VALID',
+  state(applied({ constraints: goodConstraints() })) === 'APPLIED_AND_VALID')
+check('🔴 pg18 — 제약 3개 + NOT NULL 8개도 APPLIED_AND_VALID',
+  state(applied({ constraints: [...goodConstraints(), ...pg18NotNullConstraints()] })) === 'APPLIED_AND_VALID')
+check('pg18 관측이 11행이다', [...goodConstraints(), ...pg18NotNullConstraints()].length === 11)
+check('NOT NULL 이 하나만 와도 통과한다',
+  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_id_not_null', type: 'n' }] })) === 'APPLIED_AND_VALID')
+check('NOT NULL 행에 validated 가 없어도 관측 실패가 아니다',
+  state(applied({ constraints: [...goodConstraints(), ...pg18NotNullConstraints()] })) !== 'OBSERVATION_FAILED')
+
+console.log('   — 그래도 막아야 하는 것은 그대로 막는다')
+for (const [label, type] of [['CHECK', 'c'], ['UNIQUE', 'u'], ['EXCLUDE', 'x'], ['constraint trigger', 't']] as [string, string][]) {
+  check(`🔴 추가 ${label}(${type}) 는 pg18 에서도 차단된다`,
+    state(applied({
+      constraints: [...goodConstraints(), ...pg18NotNullConstraints(),
+        { name: `HeroBanner_extra_${type}`, type, validated: true }],
+    })) === 'PARTIAL_OR_INVALID')
+}
+check('🔴 예상 밖 FK 도 차단된다',
+  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_x_fkey', type: 'f', validated: true }] })) === 'PARTIAL_OR_INVALID')
+check('🔴 예상 밖 PK 도 차단된다',
+  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_x_pkey', type: 'p', validated: true }] })) === 'PARTIAL_OR_INVALID')
+
+// ── ㉚ 제약과 인덱스의 실제 유효 상태 ──
+console.log('── ㉚ 유효 상태')
+
+check('🔴 FK 가 NOT VALID 면 PARTIAL_OR_INVALID — 기존 행을 검사하지 않는다',
+  state(applied({ constraints: goodConstraints().map((c) => (c.type === 'f' ? { ...c, validated: false } : c)) })) === 'PARTIAL_OR_INVALID')
+check('🔴 PK 가 NOT VALID 면 PARTIAL_OR_INVALID',
+  state(applied({ constraints: goodConstraints().map((c) => (c.type === 'p' ? { ...c, validated: false } : c)) })) === 'PARTIAL_OR_INVALID')
+check('🔴 계약 제약에 validated 가 없으면 OBSERVATION_FAILED',
+  state(applied({ constraints: goodConstraints().map(({ validated, ...r }) => r) })) === 'OBSERVATION_FAILED')
+check('validated 가 문자열이면 OBSERVATION_FAILED',
+  state(applied({ constraints: goodConstraints().map((c) => ({ ...c, validated: 'true' })) })) === 'OBSERVATION_FAILED')
+
+check('인덱스 공통 계약이 valid·ready·live 를 요구한다',
+  INDEX_COMMON_CONTRACT.isValid === true &&
+  INDEX_COMMON_CONTRACT.isReady === true &&
+  INDEX_COMMON_CONTRACT.isLive === true)
+for (const field of ['isValid', 'isReady', 'isLive']) {
+  check(`🔴 ${field}=false 면 PARTIAL_OR_INVALID — 이름은 맞는데 플래너가 쓰지 않는다`,
+    state(applied({ indexes: goodIndexes().map((i) => ({ ...i, [field]: false })) })) === 'PARTIAL_OR_INVALID')
+  check(`🔴 ${field} 가 없으면 OBSERVATION_FAILED`,
+    state(applied({ indexes: dropField(field) })) === 'OBSERVATION_FAILED')
+  check(`${field} 가 문자열이면 OBSERVATION_FAILED`,
+    state(applied({ indexes: goodIndexes().map((i) => ({ ...i, [field]: 'true' })) })) === 'OBSERVATION_FAILED')
+}
+check('PK 만 죽어 있어도 잡는다',
+  state(applied({ indexes: goodIndexes().map((i) => (i.isPrimary ? { ...i, isValid: false } : i)) })) === 'PARTIAL_OR_INVALID')
+
+console.log('   — CLI 조회가 그 값들을 읽는가')
+check('🔴 인덱스 조회가 indisvalid 를 읽는다', /i\.indisvalid\s+AS "isValid"/.test(cliCode))
+check('🔴 인덱스 조회가 indisready 를 읽는다', /i\.indisready\s+AS "isReady"/.test(cliCode))
+check('🔴 인덱스 조회가 indislive 를 읽는다', /i\.indislive\s+AS "isLive"/.test(cliCode))
+check('세 값이 GROUP BY 에 들어 있다',
+  /GROUP BY[\s\S]{0,300}i\.indisvalid, i\.indisready, i\.indislive/.test(cliCode))
+check('🔴 제약 조회가 convalidated 를 읽는다', /convalidated AS validated/.test(cliCode))
+check('🔴 제약 조회는 NOT NULL 도 다 읽는다 — 거르는 일은 판정이 한다',
+  !/contype\s*(<>|!=)\s*'n'/.test(cliCode) && !/contype IN \(/.test(cliCode))
+
+// ── ㉛ apply summary 중복 ──
+console.log('── ㉛ apply summary')
+
+const applySummary = judgeMigration0025ApplyState(applied({ rowCount: 0 }) as never).summary
+check('🔴 "0행" 이 한 번만 나온다', (applySummary.match(/0행/g) ?? []).length === 1)
+check('apply summary 가 스키마 요약을 그대로 쓴다',
+  applySummary === verdictOf(applied({ rowCount: 0 })).summary)
+check('스키마 판정 summary 는 그대로 1회', (verdictOf(applied({ rowCount: 0 })).summary.match(/0행/g) ?? []).length === 1)
+check('행이 있을 때 apply 실패 사유는 중복되지 않는다',
+  (judgeMigration0025ApplyState(applied({ rowCount: 5 }) as never).summary.match(/5행/g) ?? []).length === 1)
+
+// ── ㉜ 실제 SQL 을 적용한 뒤의 관측을 재현한다 ──
+console.log('── ㉜ 적용 후 관측 재현 (pg17 · pg18 양쪽)')
+
+/**
+ * 🔴 **실제 DB 에 연결하지 않는다.** migration SQL 이 만들 스키마를 계약에서
+ *    되짚어 조립하고, 그것을 판정에 넣는다 — 임시 DB 에서 읽은 metadata 와
+ *    같은 모양이다. Codex [1] 의 임시 PostgreSQL 실측이 이 fixture 와 맞는지를
+ *    재검증에서 대조한다.
+ */
+const afterApply = (pg18: boolean) => applied({
+  rowCount: 0,
+  constraints: pg18 ? [...goodConstraints(), ...pg18NotNullConstraints()] : goodConstraints(),
+})
+check('🔴 pg17 적용 직후 — 스키마 판정 APPLIED_AND_VALID',
+  state(afterApply(false)) === 'APPLIED_AND_VALID')
+check('🔴 pg18 적용 직후 — 스키마 판정 APPLIED_AND_VALID',
+  state(afterApply(true)) === 'APPLIED_AND_VALID')
+check('🔴 pg17 적용 직후 — apply 전용 판정도 APPLIED_AND_VALID',
+  applyState(afterApply(false)) === 'APPLIED_AND_VALID')
+check('🔴 pg18 적용 직후 — apply 전용 판정도 APPLIED_AND_VALID',
+  applyState(afterApply(true)) === 'APPLIED_AND_VALID')
+check('두 판정의 exit 가 0 이다',
+  verdictOf(afterApply(true)).exitCode === 0 &&
+  judgeMigration0025ApplyState(afterApply(true) as never).exitCode === 0)
+check('SQL 계약과 적용 후 관측이 같은 컬럼 수를 말한다',
+  EXPECTED_COLUMNS.length === afterApply(true).columns.length)
+check('SQL 계약과 적용 후 관측이 같은 인덱스 수를 말한다',
+  EXPECTED_INDEX_SPECS.length === afterApply(true).indexes.length)
 
 
 console.log(`\n  ${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

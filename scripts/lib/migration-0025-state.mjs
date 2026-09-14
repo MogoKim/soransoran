@@ -96,6 +96,22 @@ export const EXPECTED_CONSTRAINTS = [
   { name: 'HeroBanner_updatedByUserId_fkey', type: 'f' },
 ]
 
+/**
+ * 🔴 **예상 밖 제약을 셀 때 빼는 종류** (PostgreSQL 18 호환 · 2026-09-14).
+ *
+ *    PostgreSQL 18 부터 relation 의 NOT NULL 이 `pg_constraint` 에
+ *    `contype='n'` 으로 **실제 행으로 나타난다.** 17 이하에는 없던 행이다.
+ *    그래서 "제약은 정확히 3개" 라는 가정이 18 에서는
+ *    **정상 NOT NULL 8개를 예상 밖 제약으로 차단**했다 — 임시 DB 실측으로 재현했다.
+ *
+ * 🔴 nullable 계약은 `information_schema.columns.is_nullable` 이 이미 본다.
+ *    같은 사실을 두 곳에서 세면 한쪽이 DB 판올림에 부서진다.
+ *
+ * 🔴 **빼는 것은 'n' 하나뿐이다.** c(CHECK) · u(UNIQUE) · x(EXCLUDE) ·
+ *    t(constraint trigger) · 예상 밖 p/f 는 그대로 차단한다.
+ */
+export const IGNORED_CONSTRAINT_TYPES = ['n']
+
 /** CREATE TABLE 안에 들어가는 PK 제약 이름과 컬럼 */
 export const EXPECTED_PRIMARY_KEY = { name: 'HeroBanner_pkey', columns: ['id'] }
 
@@ -145,6 +161,19 @@ export const INDEX_COMMON_CONTRACT = {
   hasPredicate: false,
   isExpression: false,
   hasIncludedColumns: false,
+  /**
+   * 🔴 **인덱스가 실제로 쓰이는 상태인가.**
+   *
+   *    `CREATE INDEX CONCURRENTLY` 가 중간에 실패하면 인덱스는 **남지만 죽어 있다** —
+   *    이름도 컬럼도 맞는데 플래너가 쓰지 않는다. 조회는 조용히 느려지고
+   *    화면 어디에도 이유가 뜨지 않는다.
+   *      indisvalid  조회에 쓸 수 있는가
+   *      indisready  INSERT·UPDATE 를 따라가는가
+   *      indislive   살아 있는가(삭제 중이 아닌가)
+   */
+  isValid: true,
+  isReady: true,
+  isLive: true,
 }
 
 /**
@@ -283,6 +312,10 @@ function judgeObservation(input) {
       if (typeof i.hasIncludedColumns !== 'boolean') {
         return `인덱스 ${i.name} 의 INCLUDE 컬럼 여부를 읽지 못했다`
       }
+      // 🔴 죽은 인덱스는 이름과 컬럼이 맞아도 플래너가 쓰지 않는다
+      if (typeof i.isValid !== 'boolean') return `인덱스 ${i.name} 의 valid 여부를 읽지 못했다`
+      if (typeof i.isReady !== 'boolean') return `인덱스 ${i.name} 의 ready 여부를 읽지 못했다`
+      if (typeof i.isLive !== 'boolean') return `인덱스 ${i.name} 의 live 여부를 읽지 못했다`
     }
 
     if (!Array.isArray(input.foreignKeys)) return '테이블은 있는데 FK 를 읽지 못했다'
@@ -297,6 +330,14 @@ function judgeObservation(input) {
     for (const c of input.constraints) {
       if (c === null || typeof c !== 'object' || typeof c.name !== 'string' || typeof c.type !== 'string') {
         return '제약 metadata 의 모양이 아니다'
+      }
+      /**
+       * 🔴 NOT VALID 로 만든 제약은 **기존 행을 검사하지 않는다.**
+       *    있는데 지키지 않는 상태라, 있다는 사실만으로는 계약이 아니다.
+       *    🔴 NOT NULL(n) 행에는 이 값이 없을 수 있어 계약 대상만 본다.
+       */
+      if (!IGNORED_CONSTRAINT_TYPES.includes(c.type) && typeof c.validated !== 'boolean') {
+        return `제약 ${c.name} 의 validated 여부를 읽지 못했다`
       }
     }
 
@@ -358,7 +399,8 @@ export function judgeMigration0025ApplyState(input) {
       ...base.findings,
       { code: 'APPLY_EMPTY_TABLE', ok: true, detail: `${NEW_TABLE} 0행 (적용 직후)` },
     ],
-    summary: `${base.summary} · 0행`,
+    // 🔴 base.summary 가 이미 실제 행 수를 말한다 — "0행" 을 또 붙이지 않는다
+    summary: base.summary,
     exitCode: 0,
   }
 }
@@ -572,6 +614,16 @@ export function judgeMigration0025State(input) {
     if (got.hasIncludedColumns !== INDEX_COMMON_CONTRACT.hasIncludedColumns) {
       why.push('INCLUDE 컬럼이 있다')
     }
+    // 🔴 죽은 인덱스 — 이름도 컬럼도 맞는데 플래너가 쓰지 않는다
+    if (got.isValid !== INDEX_COMMON_CONTRACT.isValid) {
+      why.push('valid=false — 조회에 쓰이지 않는다 (CONCURRENTLY 실패 흔적)')
+    }
+    if (got.isReady !== INDEX_COMMON_CONTRACT.isReady) {
+      why.push('ready=false — 새 행을 따라가지 않는다')
+    }
+    if (got.isLive !== INDEX_COMMON_CONTRACT.isLive) {
+      why.push('live=false — 삭제 중이다')
+    }
 
     findings.push({
       code: `INDEX:${spec.name}`,
@@ -621,26 +673,40 @@ export function judgeMigration0025State(input) {
   const constraints = input.constraints ?? []
   for (const spec of EXPECTED_CONSTRAINTS) {
     const got = constraints.find((c) => c.name === spec.name)
+    if (got === undefined) {
+      findings.push({ code: `CONSTRAINT:${spec.name}`, ok: false, detail: `🔴 제약 ${spec.name} 이 없다` })
+      continue
+    }
+    const why = []
+    if (got.type !== spec.type) why.push(`종류가 ${got.type} 다 (기대 ${spec.type})`)
+    // 🔴 NOT VALID 제약은 기존 행을 검사하지 않는다 — 있는데 지키지 않는 상태다
+    if (got.validated !== true) why.push('NOT VALID 다 — 기존 행을 검사하지 않는다')
     findings.push({
       code: `CONSTRAINT:${spec.name}`,
-      ok: got !== undefined && got.type === spec.type,
+      ok: why.length === 0,
       detail:
-        got === undefined
-          ? `🔴 제약 ${spec.name} 이 없다`
-          : got.type === spec.type
-            ? `${spec.name} (${spec.type === 'p' ? 'PRIMARY KEY' : 'FOREIGN KEY'})`
-            : `🔴 ${spec.name} 의 종류가 ${got.type} 다 (기대 ${spec.type})`,
+        why.length === 0
+          ? `${spec.name} (${spec.type === 'p' ? 'PRIMARY KEY' : 'FOREIGN KEY'} · validated)`
+          : `🔴 ${spec.name} — ${why.join(' · ')}`,
     })
   }
+  /**
+   * 🔴 **NOT NULL(contype='n')은 세지 않는다** — PostgreSQL 18 호환.
+   *    18 부터 relation 의 NOT NULL 이 pg_constraint 에 행으로 나타난다.
+   *    nullable 계약은 information_schema.columns 가 이미 본다.
+   *    c·u·x·t 와 예상 밖 p·f 는 그대로 차단한다.
+   */
   const extraConstraints = constraints.filter(
-    (c) => !EXPECTED_CONSTRAINTS.some((s) => s.name === c.name),
+    (c) =>
+      !IGNORED_CONSTRAINT_TYPES.includes(c.type) &&
+      !EXPECTED_CONSTRAINTS.some((s) => s.name === c.name),
   )
   findings.push({
     code: 'CONSTRAINT_SET',
     ok: extraConstraints.length === 0,
     detail:
       extraConstraints.length === 0
-        ? `제약 ${EXPECTED_CONSTRAINTS.length}개 · 예상 밖 0 (CHECK·UNIQUE 없음)`
+        ? `제약 ${EXPECTED_CONSTRAINTS.length}개 · 예상 밖 0 (CHECK·UNIQUE·EXCLUDE 없음 · NOT NULL 은 세지 않는다)`
         : `🔴 예상 밖 제약: ${extraConstraints.map((c) => `${c.name}(${c.type})`).join(', ')} — CHECK (false) 하나면 어떤 INSERT 도 통과하지 못한다`,
   })
 

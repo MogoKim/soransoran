@@ -210,6 +210,9 @@ async function state() {
             (i.indpred   IS NOT NULL)       AS "hasPredicate",
             (i.indexprs  IS NOT NULL)       AS "isExpression",
             (i.indnatts > i.indnkeyatts)    AS "hasIncludedColumns",
+            i.indisvalid                    AS "isValid",
+            i.indisready                    AS "isReady",
+            i.indislive                     AS "isLive",
             COALESCE(
               array_agg(a.attname ORDER BY k.ord)
                 FILTER (WHERE a.attname IS NOT NULL),
@@ -224,7 +227,8 @@ async function state() {
               ON a.attrelid = i.indrelid AND a.attnum = k.attnum AND k.attnum <> 0
       WHERE i.indrelid = to_regclass($1)
       GROUP BY c.relname, t.relname, i.indisprimary, i.indisunique,
-               am.amname, i.indpred, i.indexprs, i.indnatts, i.indnkeyatts
+               am.amname, i.indpred, i.indexprs, i.indnatts, i.indnkeyatts,
+               i.indisvalid, i.indisready, i.indislive
       ORDER BY c.relname`, [`public."${NEW_TABLE}"`])
 
   // FK — 🔴 참조 대상과 ON DELETE / ON UPDATE 동작까지 읽는다
@@ -245,9 +249,16 @@ async function state() {
    * 🔴 **모든 제약을 읽는다** (결함 B 정정).
    *    FK 만 보면 나중에 손으로 붙인 `CHECK (false)` 를 못 본다 —
    *    스키마 검사는 "정상" 인데 운영자는 배너를 한 건도 저장할 수 없다.
+   *
+   * 🔴 `convalidated` 도 읽는다. NOT VALID 제약은 기존 행을 검사하지 않아,
+   *    있다는 사실만으로는 계약이 아니다.
+   *
+   * 🔴 PostgreSQL 18 부터 relation 의 NOT NULL 이 여기 `contype='n'` 으로 나온다.
+   *    걸러 내는 일은 판정(IGNORED_CONSTRAINT_TYPES)이 한다 — 조회는 **다 읽는다.**
+   *    조회에서 빼 버리면 18 과 17 의 관측이 서로 달라져 재현이 안 된다.
    */
   const { rows: cons } = await client.query(
-    `SELECT conname AS name, contype AS type
+    `SELECT conname AS name, contype AS type, convalidated AS validated
        FROM pg_constraint
       WHERE conrelid = to_regclass($1)
       ORDER BY conname`, [`public."${NEW_TABLE}"`])
