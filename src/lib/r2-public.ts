@@ -41,6 +41,25 @@ export function isOwnPublicUrl(url: string): boolean {
   }
 }
 
+/**
+ * bucket key → 공개 URL. 미설정이면 null.
+ *
+ * 🔴 toR2Key 의 반대 방향이다. DB 에는 **key 만** 저장하므로
+ *    (URL 을 저장하면 도메인을 바꾸는 날 전부 깨진다) 화면에 보여 줄 때 여기서 조립한다.
+ *
+ * 🔴 key 를 믿지 않는다. 앞 슬래시·역슬래시·`..` 가 섞인 값이 오면
+ *    origin 밖을 가리킬 수 있다 — 그런 key 로는 주소를 만들지 않는다.
+ */
+export function publicUrlFromKey(key: string | null | undefined): string | null {
+  if (!PUBLIC_URL || !key) return null
+  const trimmed = key.trim()
+  if (trimmed !== key) return null
+  if (trimmed === '' || trimmed.startsWith('/') || trimmed.includes('\\')) return null
+  if (trimmed.includes('..') || trimmed.includes('?') || trimmed.includes('#')) return null
+  const url = `${PUBLIC_URL}/${trimmed}`
+  return isOwnPublicUrl(url) ? url : null
+}
+
 /** 우리 공개 주소 → bucket key. 우리 것이 아니면 null. */
 export function toR2Key(url: string): string | null {
   if (!isOwnPublicUrl(url)) return null
