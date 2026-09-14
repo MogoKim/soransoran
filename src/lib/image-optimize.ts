@@ -26,11 +26,32 @@ export type OptimizedImage = {
   height: number
 }
 
-export async function optimizeImage(input: Buffer): Promise<OptimizedImage> {
+/**
+ * 회원 사진과 다른 크기가 필요한 자리를 위한 선택 인자.
+ *
+ * 🔴 **기본값을 바꾸지 않는다.** 인자를 주지 않으면 예전과 똑같이 1200/80 이다 —
+ *    회원 사진 업로드(/api/uploads)는 이 파일을 인자 없이 부르고, 그 동작은 그대로다.
+ *
+ * 🔴 히어로 배너는 1536/82 를 쓴다. 배너는 폭 전체를 덮는 제작물이라
+ *    1200 으로 줄이면 권장 규격(1536)보다 작아져 글자가 흐려진다.
+ *    품질을 2 올리는 것도 같은 이유다 — 배너 안의 글자는 압축 흔적이 바로 보인다.
+ */
+export type OptimizeOptions = {
+  maxEdge?: number
+  quality?: number
+}
+
+export async function optimizeImage(
+  input: Buffer,
+  options: OptimizeOptions = {},
+): Promise<OptimizedImage> {
+  const maxEdge = options.maxEdge ?? MAX_EDGE
+  const quality = options.quality ?? QUALITY
+
   const output = await sharp(input)
     .rotate()
-    .resize(MAX_EDGE, MAX_EDGE, { fit: 'inside', withoutEnlargement: true })
-    .webp({ quality: QUALITY })
+    .resize(maxEdge, maxEdge, { fit: 'inside', withoutEnlargement: true })
+    .webp({ quality })
     .toBuffer({ resolveWithObject: true })
 
   return {

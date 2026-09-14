@@ -88,6 +88,26 @@ export const HERO_BANNER_TARGET_STORED_BYTES = 300 * 1024
  *
  * 🔴 회원 사진(`posts/`)과 절대 섞이지 않는다. 정리 정책도, 지우는 기준도 다르다.
  */
+/**
+ * 운영용 이름의 최대 길이.
+ *
+ * 🔴 80자다. 이 값은 어드민 목록 한 줄에서 잘리지 않고 읽히는 길이다 —
+ *    이름은 화면에 나가지 않고 **운영자가 목록에서 배너를 고르는 단 하나의 단서**라,
+ *    잘려 보이면 두 배너를 혼동해 엉뚱한 것을 끈다.
+ */
+export const HERO_BANNER_MAX_NAME_LENGTH = 80
+
+/**
+ * 이미지 설명(alt)의 최대 길이.
+ *
+ * 🔴 150자다. 이미지 안의 카피를 그대로 옮기는 자리인데,
+ *    화면을 읽어 주는 프로그램은 alt 를 끊지 않고 한 번에 읽는다.
+ *    너무 길면 듣는 사람이 앞을 잊는다.
+ *
+ * 🔴 길이만 본다. "카피를 그대로 옮겼는가" 는 기계가 판정할 수 없다.
+ */
+export const HERO_BANNER_MAX_ALT_LENGTH = 150
+
 export const HERO_BANNER_KEY_PREFIX = 'hero-banners/'
 
 /**
@@ -563,12 +583,45 @@ export function validateHeroBannerImageKey(
  *    **저장되는 값 자체**라, 잘못된 채로 들어가면 나중에 켤 때가 아니라
  *    지금 목록이 먼저 망가진다.
  */
+/**
+ * 운영용 이름이 저장 가능한가.
+ *
+ * 🔴 길이를 **초안 단계에서** 본다. 켤 때 보면 이미 목록이 망가진 뒤다 —
+ *    이름은 저장되는 값 자체이지 켤 때 붙는 값이 아니다.
+ *
+ * 🔴 trim 한 길이로 센다. 뒤에 붙은 공백 때문에 거부당하면
+ *    운영자는 무엇이 길었는지 알 수 없다.
+ */
+export function validateHeroBannerName(raw: string | null | undefined): HeroBannerRuleFailure | null {
+  if (!isFilled(raw)) {
+    return { error: '운영용 배너 이름을 입력해 주세요. 목록에서 구분하는 이름이라 화면에는 나가지 않습니다.' }
+  }
+  if (raw.trim().length > HERO_BANNER_MAX_NAME_LENGTH) {
+    return { error: `배너 이름은 ${HERO_BANNER_MAX_NAME_LENGTH}자까지 쓸 수 있습니다.` }
+  }
+  return null
+}
+
+/**
+ * 이미지 설명이 저장 가능한가.
+ *
+ * 🔴 **비어 있어도 통과한다.** 이 함수는 "저장해도 되는가" 만 답한다 —
+ *    이미지를 아직 안 올린 초안에는 설명을 적을 근거가 없다.
+ *    켤 때 반드시 있어야 한다는 것은 canActivateHeroBanner 가 따로 본다.
+ */
+export function validateHeroBannerAlt(raw: string | null | undefined): HeroBannerRuleFailure | null {
+  if (raw === null || raw === undefined) return null
+  if (raw.trim().length > HERO_BANNER_MAX_ALT_LENGTH) {
+    return { error: `이미지 설명은 ${HERO_BANNER_MAX_ALT_LENGTH}자까지 쓸 수 있습니다.` }
+  }
+  return null
+}
+
 export function validateHeroBannerDraft(
   draft: HeroBannerDraftInput,
 ): HeroBannerRuleFailure | null {
-  if (!isFilled(draft.name)) {
-    return { error: '운영용 배너 이름을 입력해 주세요. 목록에서 구분하는 이름이라 화면에는 나가지 않습니다.' }
-  }
+  const name = validateHeroBannerName(draft.name)
+  if (name) return name
 
   const link = resolveHeroBannerLink(draft.linkKind, draft.linkUrl)
   if (isHeroBannerRuleFailure(link)) return link
@@ -607,6 +660,8 @@ export function canActivateHeroBanner(
   if (!isFilled(banner.alt)) {
     return { error: '이미지 설명을 입력해 주세요. 이미지 안의 글을 그대로 적어 주세요.' }
   }
+  const alt = validateHeroBannerAlt(banner.alt)
+  if (alt) return alt
 
   return null
 }

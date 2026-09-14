@@ -52,9 +52,14 @@ import {
   validateHeroBannerImageKey,
   validateHeroBannerImageMetadata,
   validateHeroBannerSchedule,
+  validateHeroBannerAlt,
+  validateHeroBannerName,
+  HERO_BANNER_MAX_ALT_LENGTH,
+  HERO_BANNER_MAX_NAME_LENGTH,
   type HeroBannerCapacityInput,
   type HeroBannerOrderInput,
 } from '../src/lib/hero-banner-rules'
+import { HERO_BANNER_IMAGE_HOST } from '../src/lib/hero-banner-image'
 import { safeHttpsUrl, safeInternalPath } from '../src/lib/url-policy'
 
 let pass = 0
@@ -1122,6 +1127,487 @@ expect(
   '규칙 파일도 server-only 가 아니다',
   /^import 'server-only'/m.test(readFileSync(join(ROOT, 'src/lib/hero-banner-rules.ts'), 'utf8')),
   false,
+)
+
+// ══════════════════════════════════════════════════════════
+/**
+ * 어드민 운영 계약 (PR 2).
+ *
+ * 🔴 순수 함수로 확인되는 것은 함수로 확인한다. 그러나 서버 액션·API 라우트는
+ *    Next 런타임 밖에서 부를 수 없다(prisma · server-only · next/cache).
+ *    그래서 **소스 문자열**로 계약을 지킨다 — 지키려는 것이
+ *    "무엇을 부르는가 / 무엇을 절대 부르지 않는가" 이기 때문이다.
+ *
+ * 🔴 주석을 지운 뒤에 본다. 이 저장소의 주석에는 "삭제하지 않는다" 처럼
+ *    금지어가 그대로 적혀 있어서, 지우지 않으면 설명문이 위반으로 잡힌다.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('//'))
+    .join('\n')
+}
+
+const ACTIONS_SRC = readFileSync(join(ROOT, 'src/lib/actions/admin-hero-banner.ts'), 'utf8')
+const ACTIONS = stripComments(ACTIONS_SRC)
+const UPLOAD_SRC = readFileSync(
+  join(ROOT, 'src/app/api/admin/hero-banners/upload/route.ts'),
+  'utf8',
+)
+const UPLOAD = stripComments(UPLOAD_SRC)
+const MEMBER_UPLOAD = stripComments(
+  readFileSync(join(ROOT, 'src/app/api/uploads/route.ts'), 'utf8'),
+)
+const OPTIMIZE = stripComments(readFileSync(join(ROOT, 'src/lib/image-optimize.ts'), 'utf8'))
+const NAV = stripComments(readFileSync(join(ROOT, 'src/components/admin/AdminOpsNav.tsx'), 'utf8'))
+const NEXT_CONFIG = readFileSync(join(ROOT, 'next.config.js'), 'utf8')
+const ENV_EXAMPLE = readFileSync(join(ROOT, '.env.example'), 'utf8')
+const HOME_PAGE = stripComments(readFileSync(join(ROOT, 'src/app/page.tsx'), 'utf8'))
+
+console.log('\n══════ 이름 · 설명 길이')
+
+expect('이름 상한은 80자다', HERO_BANNER_MAX_NAME_LENGTH, 80)
+expect('설명 상한은 150자다', HERO_BANNER_MAX_ALT_LENGTH, 150)
+expect('보통 이름은 통과한다', allowed(validateHeroBannerName('10월 갱년기톡 안내')), true)
+expect('빈 이름은 막힌다', denied(validateHeroBannerName('')), true)
+expect('공백뿐인 이름은 막힌다', denied(validateHeroBannerName('   ')), true)
+expect('80자 이름은 통과한다', allowed(validateHeroBannerName('가'.repeat(80))), true)
+expect('81자 이름은 막힌다', denied(validateHeroBannerName('가'.repeat(81))), true)
+expect(
+  '앞뒤 공백은 길이에서 빠진다 — 공백 때문에 거부되지 않는다',
+  allowed(validateHeroBannerName(`  ${'가'.repeat(80)}  `)),
+  true,
+)
+expect('초안 이름이 81자면 저장도 막힌다', denied(validateHeroBannerDraft(banner({ name: '가'.repeat(81) }))), true)
+
+expect('빈 설명은 저장 가능하다 — 초안에는 적을 근거가 없다', allowed(validateHeroBannerAlt('')), true)
+expect('설명 null 도 저장 가능하다', allowed(validateHeroBannerAlt(null)), true)
+expect('150자 설명은 통과한다', allowed(validateHeroBannerAlt('가'.repeat(150))), true)
+expect('151자 설명은 막힌다', denied(validateHeroBannerAlt('가'.repeat(151))), true)
+expect(
+  '설명이 151자면 켤 수 없다',
+  denied(canActivateHeroBanner(banner({ alt: '가'.repeat(151) }))),
+  true,
+)
+expect(
+  '설명이 150자면 켤 수 있다',
+  allowed(canActivateHeroBanner(banner({ alt: '가'.repeat(150) }))),
+  true,
+)
+expect(
+  '설명이 비면 여전히 켤 수 없다 — 길이 규칙이 빈 값 규칙을 덮지 않는다',
+  denied(canActivateHeroBanner(banner({ alt: '' }))),
+  true,
+)
+
+console.log('\n══════ 어드민 권한 (우회 차단)')
+
+/** export 된 서버 액션 이름 전부. 하나라도 빠지면 검사 자체가 헐거워진다. */
+const ACTION_NAMES = [
+  'createHeroBanner',
+  'updateHeroBanner',
+  'activateHeroBanner',
+  'deactivateHeroBanner',
+  'archiveHeroBanner',
+  'restoreHeroBanner',
+  'moveHeroBanner',
+  'setHeroBannerImageKey',
+]
+
+const exported = [...ACTIONS.matchAll(/export async function (\w+)\(/g)].map((m) => m[1])
+expect('알려진 액션 외에 export 된 함수가 없다', exported.sort(), [...ACTION_NAMES].sort())
+
+for (const name of ACTION_NAMES) {
+  /**
+   * 🔴 함수 본문의 **첫 문장**이 requireAdmin 인지 본다.
+   *    "어딘가에서 부른다" 로는 부족하다 — 조회를 먼저 하고 권한을 나중에 보면
+   *    권한 없는 사람이 배너 존재 여부를 알아낼 수 있다.
+   */
+  const body = ACTIONS.split(`export async function ${name}(`)[1] ?? ''
+  const firstStatement = body.slice(0, body.indexOf('\n\n') + 1)
+  expect(
+    `${name} 는 requireAdmin 을 가장 먼저 부른다`,
+    /\{[\s\S]{0,200}?const \{ ok \} = await requireAdmin\(\)\s*\n\s*if \(!ok\) return DENIED/.test(
+      firstStatement,
+    ),
+    true,
+  )
+}
+
+expect(
+  '업로드 라우트도 requireAdmin 을 가장 먼저 부른다 — 본문을 읽기 전이다',
+  /export async function POST\(request: Request\) \{\s*const \{ ok \} = await requireAdmin\(\)\s*\n\s*if \(!ok\) return bad\(/.test(
+    UPLOAD,
+  ),
+  true,
+)
+expect(
+  '업로드 라우트가 requireAdmin 앞에서 formData 를 읽지 않는다',
+  UPLOAD.indexOf('requireAdmin') < UPLOAD.indexOf('request.formData'),
+  true,
+)
+expect(
+  '업로드 라우트는 회원 경로(auth 세션)만으로 통과시키지 않는다',
+  /from '@\/lib\/auth'/.test(UPLOAD),
+  false,
+)
+expect('업로드는 nodejs 런타임이다 — sharp 가 edge 에서 돌지 않는다', /runtime = 'nodejs'/.test(UPLOAD), true)
+
+console.log('\n══════ hard delete · R2 삭제 금지')
+
+expect('액션에 prisma delete 가 없다', /\.delete\(|\.deleteMany\(/.test(ACTIONS), false)
+expect('액션에 deleteFromR2 호출이 없다', /deleteFromR2/.test(ACTIONS), false)
+expect('업로드 라우트에 deleteFromR2 호출이 없다', /deleteFromR2/.test(UPLOAD), false)
+expect('업로드 라우트에 prisma delete 가 없다', /\.delete\(|\.deleteMany\(/.test(UPLOAD), false)
+expect(
+  '보관은 archivedAt 로 한다',
+  /archivedAt: new Date\(\)/.test(ACTIONS) && /isActive: false/.test(ACTIONS),
+  true,
+)
+expect('복원은 archivedAt 를 null 로 되돌린다', /archivedAt: null/.test(ACTIONS), true)
+expect(
+  '복원해도 자동으로 켜지 않는다 — isActive 를 true 로 되돌리지 않는다',
+  /archivedAt: null, isActive: false/.test(ACTIONS),
+  true,
+)
+
+console.log('\n══════ 동시성 (5장 · 순서)')
+
+expect('활성화는 Serializable 트랜잭션을 쓴다', /isolationLevel: 'Serializable'/.test(ACTIONS), true)
+expect('충돌(P2034)만 다시 시도한다', /error\.code === 'P2034'/.test(ACTIONS), true)
+expect('재시도 횟수에 상한이 있다', /const SERIALIZABLE_RETRY = \d+/.test(ACTIONS), true)
+expect(
+  '상한 판정은 트랜잭션 client(tx)로 읽는다 — 전역 prisma 로 읽지 않는다',
+  /async function assertCapacity\([\s\S]{0,400}?tx\.heroBanner\.findMany/.test(ACTIONS),
+  true,
+)
+expect(
+  '활성화가 capacity 를 센다',
+  /activateHeroBanner[\s\S]*?await assertCapacity\(tx, candidate\)/.test(ACTIONS),
+  true,
+)
+expect(
+  '수정도 capacity 를 센다 — 기간을 넓혀 6장이 되는 길을 막는다',
+  /updateHeroBanner[\s\S]*?await assertCapacity\(tx, candidate\)/.test(ACTIONS),
+  true,
+)
+expect(
+  '순서 이동은 0..n-1 로 다시 매긴다 — 동점이면 맞바꿔도 아무 일이 없다',
+  /for \(const \[position, row\] of swapped\.entries\(\)\)/.test(ACTIONS),
+  true,
+)
+expect(
+  '순서 이동은 화면과 같은 정렬(sortHeroBanners)로 이웃을 고른다',
+  /const ordered = sortHeroBanners\(rows\)/.test(ACTIONS),
+  true,
+)
+
+console.log('\n══════ 이미지 업로드 계약')
+
+expect('업로드는 R2 미설정이면 503 이다', /isR2Configured[\s\S]{0,300}?503/.test(UPLOAD), true)
+expect('보관된 배너 업로드는 409 로 막는다', /archivedAt[\s\S]{0,200}?409/.test(UPLOAD), true)
+expect('4MB 상한을 규칙 상수에서 가져온다', /HERO_BANNER_MAX_UPLOAD_BYTES/.test(UPLOAD), true)
+expect('허용 형식을 규칙 상수에서 가져온다', /HERO_BANNER_ALLOWED_MIME_TYPES/.test(UPLOAD), true)
+expect('규격 판정을 규칙 함수에 맡긴다', /validateHeroBannerImageMetadata\(slot,/.test(UPLOAD), true)
+expect(
+  '선언 MIME 이 아니라 sharp 가 읽은 실제 형식으로 판정한다',
+  /sharp\(raw\)\.metadata\(\)/.test(UPLOAD) && /FORMAT_TO_MIME\[probe\.format\]/.test(UPLOAD),
+  true,
+)
+expect(
+  'EXIF 회전을 반영해 가로·세로를 잰다 — 세로로 찍은 사진이 비율에서 뒤집히지 않는다',
+  /probe\.orientation/.test(UPLOAD),
+  true,
+)
+/**
+ * 🔴 import 줄이 아니라 **호출부** 순서를 본다.
+ *    파일 첫머리의 import 는 언제나 맨 앞이라, 파일 전체에서 위치를 재면
+ *    이 검사는 무엇을 하든 통과한다 — 그러면 검사가 있는 척만 하는 것이다.
+ */
+const UPLOAD_BODY = UPLOAD.split('export async function POST')[1] ?? ''
+expect(
+  '규격은 원본으로 잰다 — optimize 뒤에 재면 최소 크기 검사가 무의미해진다',
+  UPLOAD_BODY.indexOf('validateHeroBannerImageMetadata(slot,') <
+    UPLOAD_BODY.indexOf('await optimizeImage(raw,'),
+  true,
+)
+expect(
+  '두 호출이 모두 본문에 실제로 있다 — 없으면 위 비교가 -1 끼리라 의미가 없다',
+  UPLOAD_BODY.includes('validateHeroBannerImageMetadata(slot,') &&
+    UPLOAD_BODY.includes('await optimizeImage(raw,'),
+  true,
+)
+expect('배너는 1536 / 82 로 저장한다', /STORED_MAX_EDGE = 1536/.test(UPLOAD) && /STORED_QUALITY = 82/.test(UPLOAD), true)
+expect(
+  'optimizeImage 에 배너 전용 값을 넘긴다',
+  /optimizeImage\(raw, \{\s*maxEdge: STORED_MAX_EDGE,\s*quality: STORED_QUALITY,\s*\}\)/.test(UPLOAD),
+  true,
+)
+expect(
+  'key 는 hero-banners/{YYYY}/{uuid}-{slot}.webp 다',
+  /`hero-banners\/\$\{new Date\(\)\.getUTCFullYear\(\)\}\/\$\{randomUUID\(\)\}-\$\{slot\}\.webp`/.test(
+    UPLOAD,
+  ),
+  true,
+)
+expect('만든 key 를 규칙 함수로 한 번 더 본다', /validateHeroBannerImageKey\(slot, key\)/.test(UPLOAD), true)
+expect('올린 파일명을 key 에 쓰지 않는다', /file\.name/.test(UPLOAD), false)
+expect('업로드 성공 뒤 DB 에 key 를 반영한다', /setHeroBannerImageKey\(bannerId, slot, key\)/.test(UPLOAD), true)
+expect('실패 원문을 화면에 넘기지 않는다', /error: \(error as Error\)\.message/.test(UPLOAD), false)
+expect('실패 원인은 로그로만 남긴다', /console\.error\('\[hero-banner-upload\]/.test(UPLOAD), true)
+
+console.log('\n══════ 회원 사진 업로드 무회귀')
+
+expect('회원 기본 최대 변은 1200 이다', /const MAX_EDGE = 1200/.test(OPTIMIZE), true)
+expect('회원 기본 품질은 80 이다', /const QUALITY = 80/.test(OPTIMIZE), true)
+expect(
+  '인자를 주지 않으면 기본값을 쓴다',
+  /const maxEdge = options\.maxEdge \?\? MAX_EDGE/.test(OPTIMIZE) &&
+    /const quality = options\.quality \?\? QUALITY/.test(OPTIMIZE),
+  true,
+)
+expect(
+  '회원 업로드는 optimizeImage 를 인자 없이 부른다 — 동작이 그대로다',
+  /await optimizeImage\(raw\)/.test(MEMBER_UPLOAD),
+  true,
+)
+expect('회원 업로드 key 자리는 그대로 posts/ 다', /`posts\/\$\{userId\}\//.test(MEMBER_UPLOAD), true)
+expect('회원 업로드는 여전히 세션 로그인을 본다', /const session = await auth\(\)/.test(MEMBER_UPLOAD), true)
+
+console.log('\n══════ 어드민 메뉴 · 경로')
+
+expect("메뉴에 '/admin/banners' 가 있다", /href: '\/admin\/banners', label: '배너 관리'/.test(NAV), true)
+expect('메뉴는 6개다', [...NAV.matchAll(/\{ href: '\/admin/g)].length, 6)
+expect("메뉴에 '/admin/home' 이 그대로 있다", /href: '\/admin\/home'/.test(NAV), true)
+
+console.log('\n══════ R2 공개 host · env')
+
+expect(
+  'next.config.js 와 코드가 같은 host 를 쓴다',
+  NEXT_CONFIG.includes(`hostname: '${HERO_BANNER_IMAGE_HOST}'`),
+  true,
+)
+expect(
+  'pathname 을 /hero-banners/** 로 좁힌다',
+  /pathname: '\/hero-banners\/\*\*'/.test(NEXT_CONFIG),
+  true,
+)
+expect('와일드카드 host 를 쓰지 않는다', /hostname: '\*/.test(NEXT_CONFIG), false)
+for (const key of [
+  'CLOUDFLARE_ACCOUNT_ID',
+  'CLOUDFLARE_R2_ACCESS_KEY',
+  'CLOUDFLARE_R2_SECRET_KEY',
+  'CLOUDFLARE_R2_BUCKET',
+  'NEXT_PUBLIC_R2_PUBLIC_URL',
+]) {
+  expect(`.env.example 에 ${key} 가 값 없이 있다`, new RegExp(`^${key}=$`, 'm').test(ENV_EXAMPLE), true)
+}
+
+console.log('\n══════ 홈 미연동 문구 (보정 A)')
+
+const BANNER_LIST = readFileSync(join(ROOT, 'src/app/admin/(ops)/banners/page.tsx'), 'utf8')
+const BANNER_DETAIL = readFileSync(join(ROOT, 'src/app/admin/(ops)/banners/[id]/page.tsx'), 'utf8')
+const ACTIVATION_SRC = readFileSync(
+  join(ROOT, 'src/components/admin/HeroBannerActivation.tsx'),
+  'utf8',
+)
+const SLOT_SRC = readFileSync(join(ROOT, 'src/components/admin/HeroBannerImageSlot.tsx'), 'utf8')
+const EDIT_FORM_SRC = readFileSync(join(ROOT, 'src/components/admin/HeroBannerEditForm.tsx'), 'utf8')
+const ROW_CONTROLS_SRC = readFileSync(
+  join(ROOT, 'src/components/admin/HeroBannerRowControls.tsx'),
+  'utf8',
+)
+
+/**
+ * 운영자가 **읽는 글자**만 모은다.
+ *
+ * 🔴 주석을 지우고 본다. 이 저장소의 주석은 "왜 그렇게 쓰지 않는가" 를 설명하느라
+ *    금지 문구를 그대로 인용하게 되는데, 그것까지 위반으로 잡으면
+ *    설명을 지워야 통과하는 검사가 된다 — 그러면 규칙의 이유가 코드에서 사라진다.
+ */
+const ADMIN_BANNER_UI = [
+  BANNER_LIST,
+  BANNER_DETAIL,
+  ACTIVATION_SRC,
+  SLOT_SRC,
+  EDIT_FORM_SRC,
+  ROW_CONTROLS_SRC,
+]
+  .map(stripComments)
+  .join('\n')
+
+/**
+ * 🔴 PR 2 에서 홈(/)은 HeroBanner 를 읽지 않는다.
+ *    그러므로 어드민 화면은 "지금 나가고 있다" 고 말할 수 없다.
+ *    한 화면에서 노출을 단정하는 말과 "아직 반영되지 않습니다" 가 함께 보이면
+ *    운영자는 둘 중 어느 쪽을 믿어야 할지 알 수 없다.
+ */
+const EXPOSURE_CLAIMS = [
+  '지금 나갈 배너',
+  '나가는 중',
+  '홈 노출',
+  '홈에 나갑니다',
+  '홈에서 내려갑니다',
+  '홈에 나가지 않습니다',
+  '홈에 내보낸다',
+  '홈에 뜹니다',
+  '홈에 보입니다',
+]
+for (const claim of EXPOSURE_CLAIMS) {
+  expect(`어드민 배너 화면에 '${claim}' 이 없다`, ADMIN_BANNER_UI.includes(claim), false)
+}
+
+expect(
+  '켜 둔 상태를 "설정이 저장된 상태" 로 말한다',
+  /켜 둠 — 설정이 저장된 상태입니다/.test(ACTIVATION_SRC),
+  true,
+)
+expect(
+  '홈 연결이 다음 단계임을 목록과 상세 양쪽에 적는다',
+  /홈 화면 연결은 다음 단계입니다/.test(BANNER_LIST) &&
+    /홈 화면 연결은 다음 단계입니다/.test(BANNER_DETAIL),
+  true,
+)
+expect(
+  '예약 구간 안 여부는 안내한다 — 그것은 노출 주장이 아니다',
+  /켬 · 구간 안/.test(BANNER_LIST) && /켬 · 구간 밖/.test(BANNER_LIST),
+  true,
+)
+expect(
+  '상세 배지도 목록과 같은 말을 쓴다 — 두 화면이 다른 말을 하지 않는다',
+  /켬 · 구간 안/.test(BANNER_DETAIL) && /켬 · 구간 밖/.test(BANNER_DETAIL),
+  true,
+)
+
+console.log('\n══════ 실패한 이미지 미리보기 (보정 B)')
+
+expect(
+  '실패 통로가 하나다 — failWith 가 사진을 놓고 이유만 남긴다',
+  /const failWith = \(message: string\) => \{\s*releasePick\(\)\s*setUploaded\(null\)\s*setError\(message\)\s*\}/.test(
+    SLOT_SRC,
+  ),
+  true,
+)
+expect(
+  'releasePick 이 revoke · localUrl 비우기 · input 초기화를 한 번에 한다',
+  /const releasePick = useCallback\(\(\) => \{[\s\S]*?URL\.revokeObjectURL\(objectUrlRef\.current\)[\s\S]*?setLocalUrl\(null\)[\s\S]*?inputRef\.current\.value = ''[\s\S]*?\}, \[\]\)/.test(
+    SLOT_SRC,
+  ),
+  true,
+)
+
+/** 🔴 세 갈래(브라우저 규격 · 서버 응답 · 네트워크) 모두 failWith 로 끝나야 한다. */
+const SLOT_CODE = stripComments(SLOT_SRC)
+expect('브라우저 규격 실패가 failWith 로 간다', /if \(invalid\) \{\s*failWith\(invalid\.error\)/.test(SLOT_CODE), true)
+expect('서버 응답 실패가 failWith 로 간다', /failWith\(message\)/.test(SLOT_CODE), true)
+expect('네트워크 실패가 failWith 로 간다', /\} catch \{\s*failWith\(/.test(SLOT_CODE), true)
+/**
+ * 🔴 실패 경로가 **정확히 셋**이어야 한다 — 브라우저 규격 · 서버 응답 · 네트워크.
+ *    넷째 경로가 생기면(예: 타임아웃) 그것도 failWith 를 지나는지 여기서 다시 본다.
+ *    정의부는 `failWith = (` 라 이 정규식에 걸리지 않는다 — 세는 것은 호출뿐이다.
+ */
+expect('failWith 호출이 정확히 3개다', [...SLOT_CODE.matchAll(/failWith\(/g)].length, 3)
+expect(
+  '성공해도 blob 을 들고 있지 않는다',
+  /setUploaded\(\{ \.\.\.result, url: heroBannerImageUrl\(result\.key\) \}\)\s*\n\s*\n?\s*releasePick\(\)/.test(
+    SLOT_CODE,
+  ),
+  true,
+)
+expect('화면을 떠날 때도 revoke 한다', /return \(\) => \{\s*if \(objectUrlRef\.current\) \{\s*URL\.revokeObjectURL/.test(SLOT_CODE), true)
+expect(
+  '고른 사진과 저장된 사진을 한 변수로 섞지 않는다',
+  /const pendingPreview = localUrl/.test(SLOT_CODE) &&
+    /const storedPreview = uploaded\?\.url \?\? storedUrl/.test(SLOT_CODE),
+  true,
+)
+expect(
+  '올림 배지는 저장된 key 만 본다 — 고른 사진은 세지 않는다',
+  /const ready = Boolean\(uploaded\?\.key \?\? storedKey\)/.test(SLOT_CODE),
+  true,
+)
+expect('옛 preview 변수가 남아 있지 않다', /const preview = /.test(SLOT_CODE), false)
+
+console.log('\n══════ 순서 변경 감사 기록 (보정 C)')
+
+expect(
+  'sortOrder 를 고치는 행에 updatedByUserId 를 함께 쓴다',
+  /data: \{ sortOrder: position, updatedByUserId: userId \}/.test(ACTIONS),
+  true,
+)
+expect(
+  'sortOrder 만 쓰는 update 가 남아 있지 않다',
+  /data: \{ sortOrder: position \}/.test(ACTIONS),
+  false,
+)
+expect(
+  '반복에서 안 닿은 요청 대상도 기록한다 — 동점이면 번호가 그대로라 건너뛴다',
+  /if \(!movedTouched\) \{\s*await tx\.heroBanner\.update\(\{ where: \{ id \}, data: \{ updatedByUserId: userId \} \}\)/.test(
+    ACTIONS,
+  ),
+  true,
+)
+expect(
+  '이미 기록한 행을 두 번 쓰지 않는다',
+  /if \(row\.id === id\) movedTouched = true/.test(ACTIONS),
+  true,
+)
+expect('Serializable 구조를 유지한다', /moveHeroBanner[\s\S]*?await inSerializableTx\(/.test(ACTIONS), true)
+expect('0..n-1 재정렬 구조를 유지한다', /for \(const \[position, row\] of swapped\.entries\(\)\)/.test(ACTIONS), true)
+
+console.log('\n══════ 활성화 불가 잠금 (보정 D)')
+
+expect(
+  'blockedReason 이 있으면 켜기 버튼을 잠근다',
+  /disabled=\{pending \|\| Boolean\(blockedReason\)\}/.test(ACTIVATION_SRC),
+  true,
+)
+expect(
+  '끄기 버튼에는 이 잠금을 걸지 않는다',
+  /deactivateHeroBanner\(bannerId\)/.test(ACTIVATION_SRC) &&
+    [...stripComments(ACTIVATION_SRC).matchAll(/disabled=\{pending\}/g)].length === 1,
+  true,
+)
+expect(
+  '잠근 이유를 버튼 가까이에 계속 보여 준다',
+  /아직 켤 수 없습니다 — \{blockedReason\}/.test(ACTIVATION_SRC),
+  true,
+)
+expect(
+  '이미지 업로드가 끝나면 화면을 다시 그린다 — 조건이 풀리면 버튼이 열린다',
+  /router\.refresh\(\)/.test(SLOT_CODE),
+  true,
+)
+expect(
+  '내용 저장이 끝나도 화면을 다시 그린다',
+  /useEffect\(\(\) => \{\s*if \(state\.ok\) router\.refresh\(\)\s*\}, \[state, router\]\)/.test(
+    stripComments(EDIT_FORM_SRC),
+  ),
+  true,
+)
+expect(
+  '서버는 여전히 최종 권위자다 — 액션이 canActivateHeroBanner 를 다시 본다',
+  /const blocked = canActivateHeroBanner\(candidate\)/.test(ACTIONS),
+  true,
+)
+
+console.log('\n══════ 홈 · 다른 화면 무변경')
+
+expect('액션이 / 를 revalidate 하지 않는다', /revalidatePath\('\/'\)/.test(ACTIONS), false)
+expect('액션이 /best 를 revalidate 하지 않는다', /revalidatePath\('\/best'\)/.test(ACTIONS), false)
+expect(
+  '액션은 /admin/banners 만 revalidate 한다',
+  [...ACTIONS.matchAll(/revalidatePath\(([^)]+)\)/g)].map((m) => m[1]).sort(),
+  ["'/admin/banners'", '`/admin/banners/${id}`'],
+)
+expect('홈 page 가 배너 조회를 부르지 않는다', /hero-banner/i.test(HOME_PAGE), false)
+expect('액션이 Post 를 건드리지 않는다', /prisma\.post\.|tx\.post\./.test(ACTIONS), false)
+expect('액션이 User 를 건드리지 않는다', /prisma\.user\.|tx\.user\./.test(ACTIONS), false)
+expect(
+  '액션이 다루는 테이블은 heroBanner 하나다',
+  [...new Set([...ACTIONS.matchAll(/(?:prisma|tx)\.(\w+)\./g)].map((m) => m[1]))],
+  ['heroBanner'],
 )
 
 // ══════════════════════════════════════════════════════════
