@@ -32,6 +32,9 @@ import {
   NEW_TABLE,
   PROTECTED_TABLES,
   SQL_CREATE_INDEX_SPECS,
+  EXPECTED_CONSTRAINTS,
+  EXPECTED_PRIMARY_KEY,
+  judgeMigration0025ApplyState,
   judgeMigration0025Sql,
   judgeMigration0025State,
   judgeProtectedCounts,
@@ -55,6 +58,7 @@ type ColumnMeta = {
   udt_name?: string
   is_nullable: string
   column_default: string | null
+  datetime_precision?: number | null
 }
 
 /** 계약 그대로인 컬럼 16개. 테스트마다 한 곳만 어긋뜨린다. */
@@ -64,6 +68,7 @@ function goodColumns(): ColumnMeta[] {
     data_type: c.dataType,
     udt_name: c.udtName ?? c.dataType,
     is_nullable: c.nullable ? 'YES' : 'NO',
+    datetime_precision: c.datetimePrecision,
     column_default:
       c.defaultContains === null
         ? null
@@ -100,6 +105,11 @@ function goodForeignKeys() {
   }))
 }
 
+/** 제약 관측값 — 🔴 PK 1 + FK 2, 정확히 셋. */
+function goodConstraints() {
+  return EXPECTED_CONSTRAINTS.map((c) => ({ name: c.name, type: c.type }))
+}
+
 /** 완전히 적용된 상태. `over` 로 한 부분만 바꿔 실패 사례를 만든다. */
 function applied(over: Record<string, unknown> = {}) {
   return {
@@ -108,6 +118,7 @@ function applied(over: Record<string, unknown> = {}) {
     columns: goodColumns(),
     indexes: goodIndexes(),
     foreignKeys: goodForeignKeys(),
+    constraints: goodConstraints(),
     rowCount: 0,
     ...over,
   }
@@ -115,11 +126,15 @@ function applied(over: Record<string, unknown> = {}) {
 
 const NOTHING = {
   table: null, enumLabels: null, columns: null,
-  indexes: null, foreignKeys: null, rowCount: null,
+  indexes: null, foreignKeys: null, constraints: null, rowCount: null,
 }
 
 const state = (input: unknown): string =>
   judgeMigration0025State(input as Parameters<typeof judgeMigration0025State>[0]).state
+
+/** 🔴 적용 직후 전용 판정 — 스키마 위에 "빈 테이블" 까지 요구한다 */
+const applyState = (input: unknown): string =>
+  judgeMigration0025ApplyState(input as Parameters<typeof judgeMigration0025ApplyState>[0]).state
 
 // ── ① 네 상태가 전부 나온다 ──
 console.log('── ① 네 상태')
@@ -227,8 +242,9 @@ check('예상 밖 FK 가 있으면 잡는다',
 // ── ⑧ 빈 테이블로 만들어졌는가 ──
 console.log('── ⑧ 행 수')
 check('0행이면 통과', state(applied({ rowCount: 0 })) === 'APPLIED_AND_VALID')
-check('🔴 행이 있으면 잡는다 — 이 마이그레이션은 행을 만들지 않는다',
-  state(applied({ rowCount: 1 })) === 'PARTIAL_OR_INVALID')
+// 🔴 결함 D 정정 — "빈 테이블" 은 적용 직후에만 참인 조건이라 apply 전용 판정으로 옮겼다
+check('🔴 적용 직후 판정은 행이 있으면 잡는다 — 이 마이그레이션은 행을 만들지 않는다',
+  applyState(applied({ rowCount: 1 })) === 'PARTIAL_OR_INVALID')
 check('행 수를 못 읽으면 OBSERVATION_FAILED',
   state(applied({ rowCount: 'many' })) === 'OBSERVATION_FAILED')
 
@@ -268,7 +284,9 @@ check('CLI 가 프로젝트 판별을 정본에 맡긴다', cliCode.includes('ju
 check('CLI 가 트랜잭션 제어를 정본에 맡긴다', cliCode.includes('applyWithVerification('))
 check('🔴 CLI 가 BEGIN·COMMIT 을 직접 쓰지 않는다',
   !/client\.query\(\s*['"`](BEGIN|COMMIT|ROLLBACK)/i.test(cliCode))
-check('🔴 CLI 가 0025 판정을 주입한다', /judge:\s*judgeMigration0025State/.test(cliCode))
+// 🔴 적용 경로는 **apply 전용** 판정을 주입한다 — 빈 테이블까지 요구하는 쪽이다
+check('🔴 CLI 가 적용 경로에 apply 전용 판정을 주입한다',
+  /judge:\s*judgeMigration0025ApplyState/.test(cliCode))
 check('CLI 가 잡히지 않은 오류로 끝나지 않게 한다', cliCode.includes('unhandledRejection'))
 check('--apply 없이는 어떤 쓰기도 하지 않는다', (() => {
   const applyAt = cliCode.indexOf('if (!APPLY)')
@@ -340,7 +358,7 @@ async function runFake(opts: FakeOpts = {}) {
     },
     countTables: async () => opts.afterCounts ?? { ...BEFORE_COUNTS },
     beforeCounts: { ...BEFORE_COUNTS },
-    judge: judgeMigration0025State as never,
+    judge: judgeMigration0025ApplyState as never,
   })
   return { ...result, execCalls: calls }
 }
@@ -497,11 +515,12 @@ check('🔴 PK 가 다른 컬럼이면 잡는다',
     indexes: goodIndexes().map((i) =>
       i.name === 'HeroBanner_pkey' ? { ...i, columns: ['name'] } : i),
   })) === 'PARTIAL_OR_INVALID')
-check('🔴 다른 테이블의 인덱스가 섞이면 잡는다',
+// 🔴 이제 관측 단계에서 걸린다 — 남의 테이블 인덱스를 우리 것으로 셀 수 없다
+check('🔴 다른 테이블의 인덱스가 섞이면 관측 실패다',
   state(applied({
     indexes: goodIndexes().map((i) =>
       i.name === 'HeroBanner_endsAt_idx' ? { ...i, table: 'User' } : i),
-  })) === 'PARTIAL_OR_INVALID')
+  })) === 'OBSERVATION_FAILED')
 check('🔴 예상 밖 인덱스가 있으면 잡는다',
   state(applied({
     indexes: [...goodIndexes(),
@@ -526,7 +545,8 @@ check('🔴 rowCount 가 음수면 관측 실패',
 check('rowCount 가 소수면 관측 실패',
   state(applied({ rowCount: 0.5 })) === 'OBSERVATION_FAILED')
 check('rowCount 0 은 정상', state(applied({ rowCount: 0 })) === 'APPLIED_AND_VALID')
-check('rowCount 1 은 PARTIAL_OR_INVALID', state(applied({ rowCount: 1 })) === 'PARTIAL_OR_INVALID')
+check('rowCount 1 은 적용 직후 판정에서 PARTIAL_OR_INVALID',
+  applyState(applied({ rowCount: 1 })) === 'PARTIAL_OR_INVALID')
 check('테이블이 없으면 rowCount:null 이어도 NOT_APPLIED 다',
   state(NOTHING) === 'NOT_APPLIED')
 
@@ -558,7 +578,7 @@ async function runCountFail() {
     observe: async () => applied() as never,
     countTables: async () => { throw new Error('보호 테이블 User 가 없다') },
     beforeCounts: { ...BEFORE_COUNTS },
-    judge: judgeMigration0025State as never,
+    judge: judgeMigration0025ApplyState as never,
   })
 }
 const countFail = await runCountFail()
@@ -583,6 +603,180 @@ check('인덱스 조회가 컬럼 순서를 읽는다', /ORDER BY k\.ord/.test(c
 check('인덱스 조회가 primary·unique 를 읽는다',
   cliCode.includes('indisprimary') && cliCode.includes('indisunique'))
 check('CLI 가 인라인 화이트리스트를 다시 적지 않는다', !/const ALLOWED = /.test(cliCode))
+
+
+
+// ══════════════════════════════════════════════════════════
+// 🔴 Codex [1] 2차 검증이 잡은 차단 결함 4건 (2026-09-14)
+// ══════════════════════════════════════════════════════════
+
+// ── ㉑ 결함 A — CREATE TABLE 내부가 열려 있었다 ──
+console.log('── ㉑ 결함 A · CREATE TABLE 내부 계약')
+
+check('🔴 실제 0025 SQL 이 내부 계약까지 통과한다', judgeMigration0025Sql(realSql).ok)
+
+/** 실제 SQL 의 한 조각을 바꿔 계약이 실제로 그 값을 보는지 확인한다 */
+const mutate = (from: string, to: string): boolean =>
+  judgeMigration0025Sql(realSql.replace(from, to)).ok
+
+check('🔴 CHECK (false) 를 끼워 넣으면 막는다 — 어떤 INSERT 도 통과하지 못하게 된다',
+  !mutate('"alt" TEXT NOT NULL,',
+          '"alt" TEXT NOT NULL, CONSTRAINT "HeroBanner_never_insert" CHECK (false),'))
+check('🔴 UNIQUE 제약을 더하면 막는다',
+  !mutate('"name" TEXT NOT NULL,',
+          '"name" TEXT NOT NULL, CONSTRAINT "HeroBanner_name_key" UNIQUE ("name"),'))
+check('🔴 TIMESTAMP(3) → TIMESTAMP(6) 을 막는다',
+  !mutate('"startsAt" TIMESTAMP(3)', '"startsAt" TIMESTAMP(6)'))
+check('🔴 createdAt 의 precision 변조도 막는다',
+  !mutate('"createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP',
+          '"createdAt" TIMESTAMP(0) NOT NULL DEFAULT CURRENT_TIMESTAMP'))
+check('🔴 컬럼 하나를 지우면 막는다',
+  !judgeMigration0025Sql(realSql.replace('    "linkUrl" TEXT,\n', '')).ok)
+check('🔴 NOT NULL 을 떼면 막는다', !mutate('"name" TEXT NOT NULL,', '"name" TEXT,'))
+check('🔴 nullable 컬럼에 NOT NULL 을 붙이면 막는다',
+  !mutate('"mobileImageKey" TEXT,', '"mobileImageKey" TEXT NOT NULL,'))
+check('🔴 linkKind 의 DEFAULT 를 떼면 막는다',
+  !mutate(`"linkKind" "HeroBannerLinkKind" NOT NULL DEFAULT 'NONE',`,
+          '"linkKind" "HeroBannerLinkKind" NOT NULL,'))
+check('🔴 isActive 의 DEFAULT 가 true 면 막는다 — 만들자마자 노출된다',
+  !mutate('"isActive" BOOLEAN NOT NULL DEFAULT false,', '"isActive" BOOLEAN NOT NULL DEFAULT true,'))
+check('🔴 타입을 바꾸면 막는다 (sortOrder INTEGER → TEXT)',
+  !mutate('"sortOrder" INTEGER NOT NULL,', '"sortOrder" TEXT NOT NULL,'))
+check('🔴 예상 밖 컬럼을 더하면 막는다',
+  !mutate('"alt" TEXT NOT NULL,', '"alt" TEXT NOT NULL, "campaignId" TEXT,'))
+check('🔴 PK 컬럼을 바꾸면 막는다', !mutate('PRIMARY KEY ("id")', 'PRIMARY KEY ("name")'))
+check('🔴 PK 이름을 바꾸면 막는다',
+  !mutate('CONSTRAINT "HeroBanner_pkey" PRIMARY KEY', 'CONSTRAINT "HeroBanner_pk" PRIMARY KEY'))
+check('PK 계약이 id 한 컬럼이다',
+  EXPECTED_PRIMARY_KEY.columns.length === 1 && EXPECTED_PRIMARY_KEY.columns[0] === 'id')
+check('컬럼마다 SQL 표기가 정의돼 있다',
+  EXPECTED_COLUMNS.every((c) => typeof c.sqlType === 'string' && c.sqlType.length > 0))
+check('timestamp 컬럼 5개에 precision 3 이 정의돼 있다',
+  EXPECTED_COLUMNS.filter((c) => c.datetimePrecision === 3).length === 5)
+
+// ── ㉒ 결함 B — DB 관측이 제약·precision 을 놓쳤다 ──
+console.log('── ㉒ 결함 B · 실제 DB metadata')
+
+check('제약 계약은 정확히 3개다', EXPECTED_CONSTRAINTS.length === 3)
+check('PK 1개 · FK 2개다',
+  EXPECTED_CONSTRAINTS.filter((c) => c.type === 'p').length === 1 &&
+  EXPECTED_CONSTRAINTS.filter((c) => c.type === 'f').length === 2)
+
+check('🔴 관측에 constraints 가 없으면 OBSERVATION_FAILED',
+  state(applied({ constraints: undefined })) === 'OBSERVATION_FAILED')
+check('constraints 가 배열이 아니면 OBSERVATION_FAILED',
+  state(applied({ constraints: 'none' })) === 'OBSERVATION_FAILED')
+check('제약 metadata 모양이 아니면 OBSERVATION_FAILED',
+  state(applied({ constraints: [{ name: 'x' }] })) === 'OBSERVATION_FAILED')
+check('🔴 예상 밖 CHECK 제약이 있으면 PARTIAL_OR_INVALID',
+  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_never', type: 'c' }] })) === 'PARTIAL_OR_INVALID')
+check('🔴 예상 밖 UNIQUE 제약이 있으면 PARTIAL_OR_INVALID',
+  state(applied({ constraints: [...goodConstraints(), { name: 'HeroBanner_name_key', type: 'u' }] })) === 'PARTIAL_OR_INVALID')
+check('제약이 빠지면 PARTIAL_OR_INVALID',
+  state(applied({ constraints: goodConstraints().slice(0, 2) })) === 'PARTIAL_OR_INVALID')
+check('제약 종류가 다르면 PARTIAL_OR_INVALID',
+  state(applied({ constraints: goodConstraints().map((c) => c.name === 'HeroBanner_pkey' ? { ...c, type: 'u' } : c) })) === 'PARTIAL_OR_INVALID')
+check('그때 사유에 "CHECK (false)" 경고가 남는다',
+  verdictOf(applied({ constraints: [...goodConstraints(), { name: 'x', type: 'c' }] })).summary.includes('INSERT'))
+
+const bendPrecision = (name: string, value: unknown) =>
+  goodColumns().map((c) => (c.column_name === name ? { ...c, datetime_precision: value } : c))
+for (const col of ['startsAt', 'endsAt', 'archivedAt', 'createdAt', 'updatedAt']) {
+  check(`🔴 ${col} 의 precision 이 6 이면 잡는다`,
+    state(applied({ columns: bendPrecision(col, 6) })) === 'PARTIAL_OR_INVALID')
+}
+check('🔴 precision 이 없으면 잡는다',
+  state(applied({ columns: bendPrecision('startsAt', undefined) })) === 'PARTIAL_OR_INVALID')
+check('precision 이 문자열이면 잡는다',
+  state(applied({ columns: bendPrecision('startsAt', '3') })) === 'PARTIAL_OR_INVALID')
+check('precision 이 null 이면 잡는다',
+  state(applied({ columns: bendPrecision('endsAt', null) })) === 'PARTIAL_OR_INVALID')
+check('timestamp 가 아닌 컬럼의 precision 은 보지 않는다',
+  state(applied({ columns: bendPrecision('name', 99) })) === 'APPLIED_AND_VALID')
+
+// ── ㉓ 결함 C — 인덱스 metadata 누락을 기본값으로 통과시켰다 ──
+console.log('── ㉓ 결함 C · 인덱스 metadata 엄격')
+
+const dropField = (field: string) =>
+  goodIndexes().map((i) => {
+    const copy: Record<string, unknown> = { ...i }
+    delete copy[field]
+    return copy
+  })
+
+check('🔴 table 이 없으면 OBSERVATION_FAILED (앞선 판은 APPLIED_AND_VALID 였다)',
+  state(applied({ indexes: dropField('table') })) === 'OBSERVATION_FAILED')
+check('🔴 isPrimary 가 없으면 OBSERVATION_FAILED',
+  state(applied({ indexes: dropField('isPrimary') })) === 'OBSERVATION_FAILED')
+check('🔴 isUnique 가 없으면 OBSERVATION_FAILED',
+  state(applied({ indexes: dropField('isUnique') })) === 'OBSERVATION_FAILED')
+check('columns 가 없으면 OBSERVATION_FAILED',
+  state(applied({ indexes: dropField('columns') })) === 'OBSERVATION_FAILED')
+check('name 이 없으면 OBSERVATION_FAILED',
+  state(applied({ indexes: dropField('name') })) === 'OBSERVATION_FAILED')
+check('🔴 isUnique 가 문자열 "false" 면 OBSERVATION_FAILED — boolean 이어야 한다',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, isUnique: 'false' })) })) === 'OBSERVATION_FAILED')
+check('isPrimary 가 0 이면 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, isPrimary: 0 })) })) === 'OBSERVATION_FAILED')
+check('🔴 columns 에 문자열 아닌 값이 섞이면 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, columns: [1, 'x'] })) })) === 'OBSERVATION_FAILED')
+check('🔴 대상 테이블이 다르면 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, table: 'User' })) })) === 'OBSERVATION_FAILED')
+check('table 이 숫자면 OBSERVATION_FAILED',
+  state(applied({ indexes: goodIndexes().map((i) => ({ ...i, table: 1 })) })) === 'OBSERVATION_FAILED')
+// 🔴 주석은 그 fallback 이 왜 없어졌는지 설명하므로, **실행되는 줄**만 본다
+check('관대한 fallback 이 코드에서 사라졌다', (() => {
+  const src = readFileSync('scripts/lib/migration-0025-state.mjs', 'utf-8')
+  const code = src.split('\n')
+    .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//') && !l.trim().startsWith('/*'))
+    .join('\n')
+  return !code.includes('got.table ?? NEW_TABLE')
+})())
+
+// ── ㉔ 결함 D — 스키마 판정과 "빈 테이블" 을 섞었다 ──
+console.log('── ㉔ 결함 D · schema check 와 apply postcondition 분리')
+
+check('🔴 스키마 판정은 배너가 1건 있어도 APPLIED_AND_VALID',
+  state(applied({ rowCount: 1 })) === 'APPLIED_AND_VALID')
+check('🔴 배너가 99건 있어도 스키마는 정상',
+  state(applied({ rowCount: 99 })) === 'APPLIED_AND_VALID')
+check('스키마 판정은 exit 0', verdictOf(applied({ rowCount: 5 })).exitCode === 0)
+check('🔴 적용 직후 판정은 1건만 있어도 실패',
+  applyState(applied({ rowCount: 1 })) === 'PARTIAL_OR_INVALID')
+check('적용 직후 판정은 0행이면 통과',
+  applyState(applied({ rowCount: 0 })) === 'APPLIED_AND_VALID')
+check('적용 직후 판정의 exit 도 1',
+  judgeMigration0025ApplyState(applied({ rowCount: 3 }) as never).exitCode === 1)
+check('적용 직후 판정도 스키마가 깨지면 그 사유를 먼저 말한다',
+  applyState(applied({ rowCount: 0, foreignKeys: [] })) === 'PARTIAL_OR_INVALID')
+check('적용 직후 판정도 관측 실패를 그대로 전한다',
+  applyState(applied({ rowCount: null })) === 'OBSERVATION_FAILED')
+check('🔴 optional flag 가 아니라 별도 함수다 — 인자를 빠뜨려 약해질 수 없다',
+  typeof judgeMigration0025ApplyState === 'function' &&
+  judgeMigration0025ApplyState.length === 1)
+
+/** 트랜잭션 안에서 행이 있으면 되돌리는가 */
+const rowsPresent = await runFake({ observed: applied({ rowCount: 1 }) })
+check('🔴 적용 중 행이 1건이면 COMMIT 0 · ROLLBACK 1',
+  !rowsPresent.ok && rowsPresent.committed === 0 && rowsPresent.rolledBack === 1)
+check('그때 상태가 PARTIAL_OR_INVALID', rowsPresent.state === 'PARTIAL_OR_INVALID')
+
+// ── ㉕ CLI 배선 (2차) ──
+console.log('── ㉕ CLI 배선 (2차)')
+check('🔴 --check 는 일반 스키마 판정을 쓴다',
+  /const verdict = judgeMigration0025State\(before\)/.test(cliCode))
+check('🔴 COMMIT 뒤 최종 확인은 apply 전용 판정을 쓴다',
+  /judgeMigration0025ApplyState\(await state\(\)\)/.test(cliCode))
+check('🔴 컬럼 조회가 datetime_precision 을 읽는다', cliCode.includes('datetime_precision'))
+check('🔴 제약 전체를 관측한다', /FROM pg_constraint[\s\S]{0,200}conrelid = to_regclass/.test(cliCode))
+check('제약 관측이 contype 을 읽는다', cliCode.includes('contype AS type'))
+check('state() 가 constraints 를 넘긴다', /constraints: cons,/.test(cliCode))
+check('테이블이 없을 때도 constraints 자리를 채운다', /constraints: null/.test(cliCode))
+check('SQL 검사가 여전히 DB 연결보다 먼저다', (() => {
+  const sqlAt = cliCode.indexOf('judgeMigration0025Sql(')
+  const connectAt = cliCode.indexOf('client.connect()')
+  return sqlAt > 0 && connectAt > sqlAt
+})())
 
 
 console.log(`\n  ${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

@@ -36,6 +36,7 @@ import {
   NEW_ENUM,
   NEW_TABLE,
   PROTECTED_TABLES,
+  judgeMigration0025ApplyState,
   judgeMigration0025Sql,
   judgeMigration0025State,
   judgeProtectedCounts,
@@ -172,11 +173,12 @@ async function state() {
   const enumLabels = labels.length > 0 ? labels.map((r) => r.label) : null
 
   if (!hasTable) {
-    return { table: null, enumLabels, columns: null, indexes: null, foreignKeys: null, rowCount: null }
+    return { table: null, enumLabels, columns: null, indexes: null, foreignKeys: null, constraints: null, rowCount: null }
   }
 
   const { rows: cols } = await client.query(
-    `SELECT column_name, data_type, udt_name, is_nullable, column_default
+    `SELECT column_name, data_type, udt_name, is_nullable, column_default,
+            datetime_precision
        FROM information_schema.columns
       WHERE table_schema='public' AND table_name=$1
       ORDER BY column_name`, [NEW_TABLE])
@@ -218,6 +220,17 @@ async function state() {
       WHERE c.conrelid = to_regclass($1) AND c.contype='f'
       ORDER BY c.conname`, [`public."${NEW_TABLE}"`])
 
+  /**
+   * 🔴 **모든 제약을 읽는다** (결함 B 정정).
+   *    FK 만 보면 나중에 손으로 붙인 `CHECK (false)` 를 못 본다 —
+   *    스키마 검사는 "정상" 인데 운영자는 배너를 한 건도 저장할 수 없다.
+   */
+  const { rows: cons } = await client.query(
+    `SELECT conname AS name, contype AS type
+       FROM pg_constraint
+      WHERE conrelid = to_regclass($1)
+      ORDER BY conname`, [`public."${NEW_TABLE}"`])
+
   const { rows: n } = await client.query(`SELECT COUNT(*)::int AS n FROM "${NEW_TABLE}"`)
 
   return {
@@ -226,7 +239,8 @@ async function state() {
     columns: cols,
     indexes: idx,
     foreignKeys: fks,
-    rowCount: n[0].n,
+    constraints: cons,
+    rowCount: n[0]?.n,
   }
 }
 
@@ -309,7 +323,8 @@ const applied = await applyWithVerification({
   observe: state,
   countTables: counts,
   beforeCounts,
-  judge: judgeMigration0025State,
+  // 🔴 적용 직후에는 **빈 테이블까지** 요구한다 — 행이 있으면 이번 실행의 결과가 아니다
+  judge: judgeMigration0025ApplyState,
 })
 
 console.log(`   호출 순서  ${applied.calls.join(' → ')}`)
@@ -325,7 +340,7 @@ ok(applied.reason)
 // ── 🔴 COMMIT 뒤 read-only 최종 확인 ──
 const finalVerdict = await (async () => {
   try {
-    return judgeMigration0025State(await state())
+    return judgeMigration0025ApplyState(await state())
   } catch {
     return null
   }

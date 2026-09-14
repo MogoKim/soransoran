@@ -46,34 +46,58 @@ export const ENUM_LABELS = ['NONE', 'INTERNAL', 'EXTERNAL']
  * 통째로 비교하지 않는다. null 이면 "default 가 없어야 한다" 는 뜻이다.
  */
 export const EXPECTED_COLUMNS = [
-  { name: 'id', dataType: 'text', nullable: false, defaultContains: null },
-  { name: 'name', dataType: 'text', nullable: false, defaultContains: null },
-  { name: 'alt', dataType: 'text', nullable: false, defaultContains: null },
-  { name: 'mobileImageKey', dataType: 'text', nullable: true, defaultContains: null },
-  { name: 'desktopImageKey', dataType: 'text', nullable: true, defaultContains: null },
+  { name: 'id', dataType: 'text', sqlType: 'TEXT', nullable: false, defaultContains: null, sqlDefault: null, datetimePrecision: null },
+  { name: 'name', dataType: 'text', sqlType: 'TEXT', nullable: false, defaultContains: null, sqlDefault: null, datetimePrecision: null },
+  { name: 'alt', dataType: 'text', sqlType: 'TEXT', nullable: false, defaultContains: null, sqlDefault: null, datetimePrecision: null },
+  { name: 'mobileImageKey', dataType: 'text', sqlType: 'TEXT', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: null },
+  { name: 'desktopImageKey', dataType: 'text', sqlType: 'TEXT', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: null },
   {
     name: 'linkKind',
     dataType: 'USER-DEFINED',
     udtName: NEW_ENUM,
+    sqlType: '"HeroBannerLinkKind"',
     nullable: false,
     defaultContains: 'NONE',
+    sqlDefault: "'NONE'",
+    datetimePrecision: null,
   },
-  { name: 'linkUrl', dataType: 'text', nullable: true, defaultContains: null },
-  { name: 'sortOrder', dataType: 'integer', nullable: false, defaultContains: null },
-  { name: 'isActive', dataType: 'boolean', nullable: false, defaultContains: 'false' },
-  { name: 'startsAt', dataType: 'timestamp without time zone', nullable: true, defaultContains: null },
-  { name: 'endsAt', dataType: 'timestamp without time zone', nullable: true, defaultContains: null },
-  { name: 'archivedAt', dataType: 'timestamp without time zone', nullable: true, defaultContains: null },
-  { name: 'createdByUserId', dataType: 'text', nullable: true, defaultContains: null },
-  { name: 'updatedByUserId', dataType: 'text', nullable: true, defaultContains: null },
+  { name: 'linkUrl', dataType: 'text', sqlType: 'TEXT', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: null },
+  { name: 'sortOrder', dataType: 'integer', sqlType: 'INTEGER', nullable: false, defaultContains: null, sqlDefault: null, datetimePrecision: null },
+  { name: 'isActive', dataType: 'boolean', sqlType: 'BOOLEAN', nullable: false, defaultContains: 'false', sqlDefault: 'false', datetimePrecision: null },
+  { name: 'startsAt', dataType: 'timestamp without time zone', sqlType: 'TIMESTAMP(3)', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: 3 },
+  { name: 'endsAt', dataType: 'timestamp without time zone', sqlType: 'TIMESTAMP(3)', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: 3 },
+  { name: 'archivedAt', dataType: 'timestamp without time zone', sqlType: 'TIMESTAMP(3)', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: 3 },
+  { name: 'createdByUserId', dataType: 'text', sqlType: 'TEXT', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: null },
+  { name: 'updatedByUserId', dataType: 'text', sqlType: 'TEXT', nullable: true, defaultContains: null, sqlDefault: null, datetimePrecision: null },
   {
     name: 'createdAt',
     dataType: 'timestamp without time zone',
+    sqlType: 'TIMESTAMP(3)',
     nullable: false,
     defaultContains: 'CURRENT_TIMESTAMP',
+    sqlDefault: 'CURRENT_TIMESTAMP',
+    datetimePrecision: 3,
   },
-  { name: 'updatedAt', dataType: 'timestamp without time zone', nullable: false, defaultContains: null },
+  { name: 'updatedAt', dataType: 'timestamp without time zone', sqlType: 'TIMESTAMP(3)', nullable: false, defaultContains: null, sqlDefault: null, datetimePrecision: 3 },
 ]
+
+/**
+ * 테이블에 있어야 하는 제약 — 🔴 **정확히 이 셋뿐이다.**
+ *
+ *    CHECK · UNIQUE · EXCLUDE 가 하나라도 더 있으면 안 된다.
+ *    `CHECK (false)` 하나면 어떤 INSERT 도 통과하지 못한다 — 스키마는 "정상" 인데
+ *    운영자는 배너를 한 건도 저장할 수 없고, 화면 어디에도 이유가 뜨지 않는다.
+ *
+ * `type` 은 pg_constraint.contype: p=PRIMARY KEY · f=FOREIGN KEY
+ */
+export const EXPECTED_CONSTRAINTS = [
+  { name: 'HeroBanner_pkey', type: 'p' },
+  { name: 'HeroBanner_createdByUserId_fkey', type: 'f' },
+  { name: 'HeroBanner_updatedByUserId_fkey', type: 'f' },
+]
+
+/** CREATE TABLE 안에 들어가는 PK 제약 이름과 컬럼 */
+export const EXPECTED_PRIMARY_KEY = { name: 'HeroBanner_pkey', columns: ['id'] }
 
 /**
  * 인덱스 계약 — 🔴 **이름만으로는 부족하다.**
@@ -209,15 +233,45 @@ function judgeObservation(input) {
       }
     }
 
+    /**
+     * 🔴 **인덱스 metadata 는 다섯 값이 모두 있어야 한다** (결함 C 정정).
+     *
+     *    앞선 판은 이름과 columns 만 봤다. 그래서
+     *      · `isPrimary` · `isUnique` 가 **없어도** `Boolean(undefined) === false` 라
+     *        일반 인덱스로 통과했고,
+     *      · `table` 이 없어도 판정이 `got.table ?? NEW_TABLE` 로 메워
+     *        **HeroBanner 의 인덱스인 것처럼** 다뤘다.
+     *    빠진 값을 기본값으로 채우는 관측은 관측이 아니다.
+     */
     if (!Array.isArray(input.indexes)) return '테이블은 있는데 인덱스를 읽지 못했다'
     for (const i of input.indexes) {
-      if (i === null || typeof i !== 'object' || typeof i.name !== 'string' || !Array.isArray(i.columns)) {
-        // 🔴 이름 문자열만 넘어오면 여기서 걸린다. 컬럼을 못 보는 관측은 관측이 아니다.
-        return '인덱스 metadata 의 모양이 아니다 — 이름·컬럼·primary·unique 가 필요하다'
+      if (i === null || typeof i !== 'object') return '인덱스 metadata 의 모양이 아니다'
+      if (typeof i.name !== 'string') return '인덱스 이름을 읽지 못했다'
+      if (typeof i.table !== 'string') return `인덱스 ${String(i.name)} 의 대상 테이블을 읽지 못했다`
+      if (i.table !== NEW_TABLE) {
+        return `인덱스 ${i.name} 이 다른 테이블(${i.table})의 것이다 — 기대 ${NEW_TABLE}`
       }
+      if (!Array.isArray(i.columns) || i.columns.some((c) => typeof c !== 'string')) {
+        return `인덱스 ${i.name} 의 컬럼을 읽지 못했다`
+      }
+      if (typeof i.isPrimary !== 'boolean') return `인덱스 ${i.name} 의 primary 여부를 읽지 못했다`
+      if (typeof i.isUnique !== 'boolean') return `인덱스 ${i.name} 의 unique 여부를 읽지 못했다`
     }
 
     if (!Array.isArray(input.foreignKeys)) return '테이블은 있는데 FK 를 읽지 못했다'
+
+    /**
+     * 🔴 **제약 목록도 관측해야 한다** (결함 B 정정).
+     *    FK 만 보면 나중에 누가 손으로 붙인 `CHECK (false)` 를 못 본다.
+     */
+    if (!Array.isArray(input.constraints)) {
+      return '테이블은 있는데 제약 목록을 읽지 못했다 — CHECK·UNIQUE 를 볼 수 없다'
+    }
+    for (const c of input.constraints) {
+      if (c === null || typeof c !== 'object' || typeof c.name !== 'string' || typeof c.type !== 'string') {
+        return '제약 metadata 의 모양이 아니다'
+      }
+    }
 
     /**
      * 🔴 **행 수는 반드시 0 이상의 정수다** (2026-09-14 정정).
@@ -235,6 +289,51 @@ function judgeObservation(input) {
   }
 
   return null
+}
+
+/**
+ * 🔴 **적용 직후 전용 판정** — 스키마가 맞고 **그 위에 빈 테이블**까지 요구한다 (결함 D).
+ *
+ *    두 질문을 한 함수에 섞지 않는다.
+ *
+ *      judgeMigration0025State       "스키마가 계약대로인가"
+ *                                    → 배너가 몇 건 있든 상관없다. `--check` 가 쓴다.
+ *      judgeMigration0025ApplyState  "방금 이 마이그레이션이 만든 상태가 맞는가"
+ *                                    → 이번 SQL 은 행을 하나도 만들지 않으므로 0행이어야 한다.
+ *                                       COMMIT 전 검증과 COMMIT 직후 최종 확인이 쓴다.
+ *
+ * 🔴 optional flag 로 만들지 않았다. `judge(input, { requireEmpty: true })` 였다면
+ *    부르는 쪽이 인자를 빠뜨리는 순간 검사가 조용히 약해진다 —
+ *    함수 이름이 다르면 빠뜨릴 수 없다.
+ *
+ * 🔴 행이 있다는 것은 이번 실행의 결과가 아니라는 뜻이다. 되돌린다.
+ *
+ * @param {Parameters<typeof judgeMigration0025State>[0]} input
+ * @returns {MigrationVerdict}
+ */
+export function judgeMigration0025ApplyState(input) {
+  const base = judgeMigration0025State(input)
+  if (base.state !== 'APPLIED_AND_VALID') return base
+
+  if (input.rowCount !== 0) {
+    const detail = `🔴 ${NEW_TABLE} 에 ${input.rowCount}행이 있다 — 이 마이그레이션은 행을 만들지 않는다`
+    return {
+      state: 'PARTIAL_OR_INVALID',
+      findings: [...base.findings, { code: 'APPLY_EMPTY_TABLE', ok: false, detail }],
+      summary: detail,
+      exitCode: 1,
+    }
+  }
+
+  return {
+    state: 'APPLIED_AND_VALID',
+    findings: [
+      ...base.findings,
+      { code: 'APPLY_EMPTY_TABLE', ok: true, detail: `${NEW_TABLE} 0행 (적용 직후)` },
+    ],
+    summary: `${base.summary} · 0행`,
+    exitCode: 0,
+  }
 }
 
 /**
@@ -392,9 +491,20 @@ export function judgeMigration0025State(input) {
         ? rawDefault === null
         : rawDefault !== null && rawDefault.includes(spec.defaultContains)
 
-    const ok = typeOk && nullableOk && defaultOk
+    /**
+     * 🔴 **TIMESTAMP 의 precision 까지 본다** (결함 B 정정).
+     *    `data_type` 은 `TIMESTAMP(3)` 과 `TIMESTAMP(6)` 을 똑같이
+     *    `timestamp without time zone` 이라고 말한다 — 구분이 사라진다.
+     */
+    let precisionOk = true
+    if (spec.datetimePrecision !== null) {
+      precisionOk = got.datetime_precision === spec.datetimePrecision
+    }
+
+    const ok = typeOk && nullableOk && defaultOk && precisionOk
     const why = []
     if (!typeOk) why.push(`타입 ${got.data_type}${got.udt_name ? `/${got.udt_name}` : ''} (기대 ${spec.dataType}${spec.udtName ? `/${spec.udtName}` : ''})`)
+    if (!precisionOk) why.push(`precision ${String(got.datetime_precision)} (기대 ${spec.datetimePrecision})`)
     if (!nullableOk) why.push(`nullable ${got.is_nullable} (기대 ${spec.nullable ? 'YES' : 'NO'})`)
     if (!defaultOk) why.push(`default ${rawDefault ?? '없음'} (기대 ${spec.defaultContains ?? '없음'})`)
 
@@ -413,15 +523,15 @@ export function judgeMigration0025State(input) {
       continue
     }
     const why = []
-    if (String(got.table ?? NEW_TABLE) !== NEW_TABLE) why.push(`대상 테이블 ${got.table}`)
+    // 🔴 table 은 관측 단계에서 이미 검증했다 — 여기서 기본값으로 메우지 않는다
     // 🔴 순서까지 본다 — 복합 인덱스는 앞 컬럼부터 쓰인다
     const sameColumns =
       Array.isArray(got.columns) &&
       got.columns.length === spec.columns.length &&
       spec.columns.every((c, i) => got.columns[i] === c)
     if (!sameColumns) why.push(`컬럼 [${(got.columns ?? []).join(', ')}] (기대 [${spec.columns.join(', ')}])`)
-    if (Boolean(got.isPrimary) !== spec.primary) why.push(`primary=${Boolean(got.isPrimary)}`)
-    if (Boolean(got.isUnique) !== spec.unique) why.push(`unique=${Boolean(got.isUnique)}`)
+    if (got.isPrimary !== spec.primary) why.push(`primary=${got.isPrimary}`)
+    if (got.isUnique !== spec.unique) why.push(`unique=${got.isUnique}`)
 
     findings.push({
       code: `INDEX:${spec.name}`,
@@ -467,6 +577,33 @@ export function judgeMigration0025State(input) {
     })
   }
 
+  // ── 🔴 제약 목록 — 정확히 셋뿐이다 (결함 B) ──
+  const constraints = input.constraints ?? []
+  for (const spec of EXPECTED_CONSTRAINTS) {
+    const got = constraints.find((c) => c.name === spec.name)
+    findings.push({
+      code: `CONSTRAINT:${spec.name}`,
+      ok: got !== undefined && got.type === spec.type,
+      detail:
+        got === undefined
+          ? `🔴 제약 ${spec.name} 이 없다`
+          : got.type === spec.type
+            ? `${spec.name} (${spec.type === 'p' ? 'PRIMARY KEY' : 'FOREIGN KEY'})`
+            : `🔴 ${spec.name} 의 종류가 ${got.type} 다 (기대 ${spec.type})`,
+    })
+  }
+  const extraConstraints = constraints.filter(
+    (c) => !EXPECTED_CONSTRAINTS.some((s) => s.name === c.name),
+  )
+  findings.push({
+    code: 'CONSTRAINT_SET',
+    ok: extraConstraints.length === 0,
+    detail:
+      extraConstraints.length === 0
+        ? `제약 ${EXPECTED_CONSTRAINTS.length}개 · 예상 밖 0 (CHECK·UNIQUE 없음)`
+        : `🔴 예상 밖 제약: ${extraConstraints.map((c) => `${c.name}(${c.type})`).join(', ')} — CHECK (false) 하나면 어떤 INSERT 도 통과하지 못한다`,
+  })
+
   const extraFk = foreignKeys.filter((f) => !EXPECTED_FOREIGN_KEYS.some((s) => s.name === f.conname))
   findings.push({
     code: 'FK_SET',
@@ -477,17 +614,21 @@ export function judgeMigration0025State(input) {
         : `🔴 예상 밖 FK: ${extraFk.map((f) => f.conname).join(', ')}`,
   })
 
-  // ── 빈 테이블로 만들어졌는가 ──
-  if (input.rowCount !== null) {
-    findings.push({
-      code: 'ROW_COUNT',
-      ok: input.rowCount === 0,
-      detail:
-        input.rowCount === 0
-          ? `${NEW_TABLE} 0행 (빈 테이블)`
-          : `🔴 ${NEW_TABLE} 에 ${input.rowCount}행이 있다 — 이 마이그레이션은 행을 만들지 않는다`,
-    })
-  }
+  /**
+   * 🔴 **행 수는 스키마 판정에 넣지 않는다** (결함 D 정정).
+   *
+   *    앞선 판은 `rowCount > 0` 이면 언제나 `PARTIAL_OR_INVALID` 였다.
+   *    그러면 PR 2 이후 운영자가 배너를 **한 건만 등록해도** 스키마는 멀쩡한데
+   *    `--check` 가 실패한다 — 그때부터 아무도 그 검사를 믿지 않게 된다.
+   *
+   *    "빈 테이블" 은 **이번 마이그레이션 직후에만** 참인 조건이다.
+   *    그 요구는 judgeMigration0025ApplyState 가 따로 맡는다.
+   */
+  findings.push({
+    code: 'ROW_COUNT_READ',
+    ok: true,
+    detail: `${NEW_TABLE} ${input.rowCount}행 (스키마 판정에는 영향 없음)`,
+  })
 
   if (findings.every((f) => f.ok)) {
     return verdictOf(
@@ -508,6 +649,156 @@ export function judgeMigration0025State(input) {
 }
 
 // ─────────── SQL 계약 (결함 A) ───────────
+
+/**
+ * `CREATE TABLE` 괄호 안을 **최상위 콤마**로 가른다.
+ *
+ * 🔴 그냥 `split(',')` 하면 `TIMESTAMP(3)` · `CHECK (a, b)` · `PRIMARY KEY ("id")`
+ *    안의 콤마까지 잘라서 항목이 뒤섞인다. 괄호 깊이를 세어 가른다.
+ */
+function splitTopLevel(body) {
+  const parts = []
+  let depth = 0
+  let cur = ''
+  for (const ch of body) {
+    if (ch === '(') depth += 1
+    if (ch === ')') depth -= 1
+    if (ch === ',' && depth === 0) {
+      parts.push(cur.trim())
+      cur = ''
+      continue
+    }
+    cur += ch
+  }
+  if (cur.trim() !== '') parts.push(cur.trim())
+  return parts.filter((p) => p !== '')
+}
+
+/** 제약 정의로 시작하는 항목인가 — 나머지는 컬럼 정의다. */
+const CONSTRAINT_HEAD = /^(CONSTRAINT|PRIMARY\s+KEY|UNIQUE|CHECK|EXCLUDE|FOREIGN\s+KEY)\b/i
+
+/**
+ * 🔴 **`CREATE TABLE` 내부 계약** (결함 A 정정).
+ *
+ *    앞선 판은 테이블 **이름만** 봤다. 그래서 이런 것들이 전부 통과했다 —
+ *      · `CONSTRAINT "..." CHECK (false)` 를 끼워 넣기
+ *        (스키마는 "정상" 인데 **어떤 INSERT 도 통과하지 못한다**)
+ *      · `TIMESTAMP(3)` → `TIMESTAMP(6)`
+ *      · `UNIQUE` 제약 추가
+ *      · 컬럼 하나 삭제
+ *      · `NOT NULL` 제거
+ *
+ *    실행문 수와 테이블 이름은 그대로라서 아무 검사에도 걸리지 않았다.
+ *
+ * 🔴 SQL 전체를 hash 로 비교하지 않는다. 그러면 주석 한 줄·공백 하나만 바뀌어도
+ *    "위험 변경" 이 되어, 정작 위험한 변경과 구분이 사라진다.
+ *    **의미 단위**로 읽어 컬럼·타입·nullable·default·제약을 각각 본다.
+ *
+ * @param {string} statement 공백이 눌린 `CREATE TABLE ...` 한 문장
+ * @returns {{code:string, ok:boolean, detail:string}[]}
+ */
+function judgeCreateTableBody(statement) {
+  const findings = []
+  const add = (code, ok, detail) => findings.push({ code, ok, detail })
+
+  const open = statement.indexOf('(')
+  const close = statement.lastIndexOf(')')
+  if (open < 0 || close < open) {
+    add('TABLE_BODY', false, '🔴 CREATE TABLE 의 괄호를 읽지 못했다')
+    return findings
+  }
+  const items = splitTopLevel(statement.slice(open + 1, close))
+  const columnItems = items.filter((i) => !CONSTRAINT_HEAD.test(i))
+  const constraintItems = items.filter((i) => CONSTRAINT_HEAD.test(i))
+
+  // ── 컬럼 16개 ──
+  add('TABLE_COLUMN_COUNT', columnItems.length === EXPECTED_COLUMNS.length,
+    columnItems.length === EXPECTED_COLUMNS.length
+      ? `컬럼 정의 ${EXPECTED_COLUMNS.length}개`
+      : `🔴 컬럼 정의가 ${columnItems.length}개다 (기대 ${EXPECTED_COLUMNS.length})`)
+
+  const parsed = columnItems.map((item) => {
+    const m = /^"([A-Za-z0-9_]+)"\s+(.+)$/.exec(item)
+    if (m === null) return null
+    let rest = m[2].trim()
+    const notNull = /\bNOT\s+NULL\b/i.test(rest)
+    const defMatch = /\bDEFAULT\s+(.+)$/i.exec(rest)
+    const sqlDefault = defMatch === null ? null : defMatch[1].trim()
+    // 타입은 NOT NULL · DEFAULT 앞까지다
+    rest = rest.replace(/\bNOT\s+NULL\b/i, ' ').replace(/\bDEFAULT\s+.+$/i, ' ')
+    return { name: m[1], sqlType: rest.replace(/\s+/g, ' ').trim(), notNull, sqlDefault }
+  })
+  add('TABLE_COLUMN_SHAPE', parsed.every((p) => p !== null),
+    parsed.every((p) => p !== null) ? '컬럼 정의의 모양이 맞다' : '🔴 읽지 못한 컬럼 정의가 있다')
+
+  for (const spec of EXPECTED_COLUMNS) {
+    const got = parsed.find((p) => p !== null && p.name === spec.name)
+    if (got === undefined) {
+      add(`TABLE_COL:${spec.name}`, false, `🔴 컬럼 ${spec.name} 을 만들지 않는다`)
+      continue
+    }
+    const why = []
+    // 🔴 TIMESTAMP(3) 의 precision 까지 글자 그대로 본다
+    if (got.sqlType.toUpperCase() !== spec.sqlType.toUpperCase()) {
+      why.push(`타입 ${got.sqlType} (기대 ${spec.sqlType})`)
+    }
+    if (got.notNull !== !spec.nullable) {
+      why.push(got.notNull ? 'NOT NULL 인데 nullable 이어야 한다' : 'NOT NULL 이 빠졌다')
+    }
+    if (spec.sqlDefault === null) {
+      if (got.sqlDefault !== null) why.push(`default ${got.sqlDefault} (없어야 한다)`)
+    } else if (got.sqlDefault === null || !got.sqlDefault.toUpperCase().includes(spec.sqlDefault.toUpperCase())) {
+      why.push(`default ${got.sqlDefault ?? '없음'} (기대 ${spec.sqlDefault})`)
+    }
+    add(`TABLE_COL:${spec.name}`, why.length === 0,
+      why.length === 0 ? `${spec.name} ${spec.sqlType}` : `🔴 ${spec.name} — ${why.join(' · ')}`)
+  }
+
+  const extraCols = parsed.filter(
+    (p) => p !== null && !EXPECTED_COLUMNS.some((c) => c.name === p.name),
+  )
+  add('TABLE_COL_SET', extraCols.length === 0,
+    extraCols.length === 0 ? '예상 밖 컬럼 0'
+      : `🔴 예상 밖 컬럼: ${extraCols.map((p) => p.name).join(', ')}`)
+
+  // ── 제약 — 🔴 PK 하나뿐이다 ──
+  add('TABLE_CONSTRAINT_COUNT', constraintItems.length === 1,
+    constraintItems.length === 1
+      ? '테이블 제약 1개 (PRIMARY KEY)'
+      : `🔴 테이블 제약이 ${constraintItems.length}개다 (기대 1 — PRIMARY KEY 뿐)`)
+
+  const pk = constraintItems.find((i) => /PRIMARY\s+KEY/i.test(i))
+  if (pk === undefined) {
+    add('TABLE_PK', false, '🔴 PRIMARY KEY 가 없다')
+  } else {
+    const m = /^CONSTRAINT "([A-Za-z0-9_]+)" PRIMARY KEY \(([^)]*)\)$/i.exec(pk)
+    if (m === null) {
+      add('TABLE_PK', false, '🔴 PRIMARY KEY 구문의 모양이 아니다')
+    } else {
+      const cols = m[2].split(',').map((c) => c.trim().replace(/"/g, ''))
+      const same =
+        m[1] === EXPECTED_PRIMARY_KEY.name &&
+        cols.length === EXPECTED_PRIMARY_KEY.columns.length &&
+        EXPECTED_PRIMARY_KEY.columns.every((c, i) => cols[i] === c)
+      add('TABLE_PK', same,
+        same ? `${EXPECTED_PRIMARY_KEY.name} (${EXPECTED_PRIMARY_KEY.columns.join(', ')})`
+             : `🔴 PK 가 다르다 — ${m[1]} (${cols.join(', ')})`)
+    }
+  }
+
+  /**
+   * 🔴 **CHECK · UNIQUE · EXCLUDE 는 하나도 없어야 한다.**
+   *    `CHECK (false)` 하나면 어떤 INSERT 도 통과하지 못한다 —
+   *    스키마 검사는 "정상" 이라고 말하는데 운영자는 배너를 저장할 수 없다.
+   */
+  const forbidden = constraintItems.filter((i) => /\b(CHECK|UNIQUE|EXCLUDE|FOREIGN\s+KEY)\b/i.test(i))
+  add('TABLE_NO_EXTRA_CONSTRAINT', forbidden.length === 0,
+    forbidden.length === 0
+      ? 'CHECK · UNIQUE · EXCLUDE 0'
+      : `🔴 허용하지 않는 제약 ${forbidden.length}건: ${forbidden.map((i) => i.slice(0, 50)).join(' / ')}`)
+
+  return findings
+}
 
 /**
  * 🔴 **SQL 이 계약 그대로인가** — 구문의 *시작*만 보지 않는다.
@@ -575,7 +866,7 @@ export function judgeMigration0025Sql(sqlText) {
     }
   }
 
-  // ── CREATE TABLE ──
+  // ── CREATE TABLE — 🔴 이름만 보지 않는다. 내부를 의미 단위로 읽는다 ──
   const tables = statements.filter((s) => /^CREATE TABLE\b/i.test(s))
   add('CREATE_TABLE_COUNT', tables.length === 1,
     tables.length === 1 ? 'CREATE TABLE 1개' : `🔴 CREATE TABLE 이 ${tables.length}개다`)
@@ -584,6 +875,10 @@ export function judgeMigration0025Sql(sqlText) {
     tableNames.every((n) => n === NEW_TABLE)
       ? `테이블 ${NEW_TABLE} 하나만 만든다`
       : `🔴 다른 테이블을 만든다: ${tableNames.filter((n) => n !== NEW_TABLE).join(', ')}`)
+
+  if (tables.length === 1 && tableNames[0] === NEW_TABLE) {
+    for (const f of judgeCreateTableBody(tables[0])) findings.push(f)
+  }
 
   // ── CREATE INDEX — 🔴 이름·대상·컬럼 순서까지 ──
   const idxStatements = statements.filter((s) => /^CREATE (UNIQUE )?INDEX\b/i.test(s))
