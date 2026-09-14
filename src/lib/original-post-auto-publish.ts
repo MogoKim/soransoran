@@ -25,6 +25,7 @@ export const AUTO_SITE_PREFIX = 'publish-candidate:'
 export const AUTO_GATE_VERDICT = 'PASS'
 
 // 🔴 profile 판정의 단일 지점 — 적재기(§4-AN)와 같은 함수를 쓴다
+import { titleKey } from './draft-originality'
 import { queueProfileOf } from './micro-seed-supply-autofill'
 // 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
 export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
@@ -76,6 +77,13 @@ export type AutoRow = {
   title: string
   body: string
   sourceSite: string
+  /**
+   * 🔴 **초안 제목.** `title` 은 `editedTitle ?? draftTitle` 이라 둘을 가를 수 없다 —
+   *    "사람이 실제로 다른 제목을 넣었는가" 를 물으려면 두 값이 따로 있어야 한다.
+   */
+  draftTitle?: string
+  /** 🔴 사람이 고친 제목. 없으면 `null` */
+  editedTitle?: string | null
   /** 🔴 기계 후보 확인용 — 큐에 남긴 표시를 다시 본다 */
   gateResults?: unknown
   /**
@@ -151,7 +159,7 @@ export function machineReviewedByHuman(decidedBy: string | null | undefined): bo
 
 export type RejectCode =
   | 'STATUS' | 'ALREADY_PUBLISHED' | 'GATE' | 'PROMPT_VERSION' | 'MODEL' | 'SITE' | 'SAFETY' | 'EMPTY'
-  | 'PROFILE' | 'HUMAN_REVIEW_REQUIRED'
+  | 'PROFILE' | 'HUMAN_REVIEW_REQUIRED' | 'TITLE_COPIES_SOURCE'
 
 export const REJECT_LABEL: Record<RejectCode, string> = {
   STATUS: 'APPROVED · EDITED 가 아니다',
@@ -164,6 +172,10 @@ export const REJECT_LABEL: Record<RejectCode, string> = {
   HUMAN_REVIEW_REQUIRED:
     '🔴 기계가 만든 글인데 사람이 확인하지 않았다 — 나이·세대 모순을 잡는 검수 모델이 없다'
     + ' (npm run publish:machine-review 로 확인한다)',
+  TITLE_COPIES_SOURCE:
+    '🔴 생성 시점 대조에서 제목이 외부 원문 제목과 같았다 — 소재가 아니라 제목을 옮긴 것이다.'
+    + ' 글은 버리지 않는다. 사람이 제목만 다시 지어 저장하면 그대로 나간다'
+    + ' (공백·문장부호만 바꾼 것은 바꾼 것이 아니다)',
   SAFETY: 'safety 재판정이 pass 가 아니다',
   EMPTY: '제목이나 본문이 비었다',
 }
@@ -216,6 +228,63 @@ export function voiceInputOf(r: AutoRow): {
   }
 }
 
+/**
+ * 🔴 **원문 제목 대조는 생성 시점에서 끝나고, 남는 것은 판정뿐이다** (2026-09-14).
+ *
+ * 🔴 **원문 제목도 그 해시도 저장하지 않는다.**
+ *    앞선 판은 제목의 sha256 을 `gateResults` 에 적고 "복원할 수 없다" 고 적었다.
+ *    제목은 짧고 예측 가능해서 후보 제목을 대입해 맞춰볼 수 있다 — 소금도 없었다.
+ *    원문 제목을 쌓지 않기로 한 계약(§4-AF ⑤)의 목적에 견주면 위험만 남는다.
+ *
+ * 🔴 그래서 생성기가 **메모리 안에서** 대조하고, 적재기는 결과 세 값만 남긴다:
+ *    `sourceTitleChecked` · `sourceTitleCopied` · `sourceTitleCheckVersion`.
+ *
+ * 🔴 **`rawContent.rawTitle` 을 원문으로 읽지 않는다.** 두 적재기가 합성 raw 를 만들며
+ *    거기에 **후보 제목의 사본**을 넣기 때문이다(실측: 대기열 114건 중 109건).
+ *    게다가 두 profile 모두 `sourceSite` 가 `publish-candidate:` 로 시작해야 통과하므로,
+ *    raw 를 근거로 삼는 검사는 영영 걸리지 않는 죽은 코드가 된다.
+ *
+ * 🔴 **기록이 없으면 "대조하지 않았다"** 다. legacy 행에 기록이 없다는 이유로
+ *    새 HOLD 를 만들지 않는다 — 그러면 막으려던 것은 복제인데 멎는 것은 공급이다.
+ */
+export type SourceTitleCheck = {
+  /** 🔴 외부 원문과 대조**했는가**. `false` 면 대조할 원문이 없었다는 뜻이다 */
+  checked: boolean
+  /** 🔴 대조한 결과 **같았는가**. `checked` 가 false 면 의미 없다 */
+  copied: boolean
+  /** 어느 판의 검사였나 — 규칙이 바뀌면 옛 기록과 구분한다 */
+  version: string
+}
+
+/** 🔴 기록이 없으면 "대조하지 않았다" 다 — 새 HOLD 를 만들지 않는다 */
+export const NO_SOURCE_TITLE_CHECK: SourceTitleCheck = { checked: false, copied: false, version: '' }
+
+export function sourceTitleCheckOf(gateResults: unknown): SourceTitleCheck {
+  if (gateResults === null || typeof gateResults !== 'object') return NO_SOURCE_TITLE_CHECK
+  const fill = (gateResults as Record<string, unknown>).autofill
+  if (fill === null || typeof fill !== 'object') return NO_SOURCE_TITLE_CHECK
+  const f = fill as Record<string, unknown>
+  if (f.sourceTitleChecked !== true) return NO_SOURCE_TITLE_CHECK
+  return {
+    checked: true,
+    copied: f.sourceTitleCopied === true,
+    version: String(f.sourceTitleCheckVersion ?? ''),
+  }
+}
+
+/**
+ * 🔴 **사람이 제목을 실제로 다시 지었는가.**
+ *
+ *    `editedTitle` 이 없으면 아직 아무도 손대지 않은 것이다.
+ *    공백·문장부호만 다른 것은 **바꾼 것이 아니다** — 그걸 통과시키면
+ *    검사가 그 자리에서 무력해진다(`titleKey` 가 그 판정 정본이다).
+ */
+export function founderRetitled(r: { draftTitle?: string; editedTitle?: string | null }): boolean {
+  const edited = (r.editedTitle ?? '').trim()
+  if (edited === '') return false
+  return titleKey(edited) !== titleKey((r.draftTitle ?? '').trim())
+}
+
 export function selectAutoTargets(
   rows: readonly AutoRow[], safetyOf: SafetyVerdictOf,
 ): { targets: AutoRow[]; rejected: Reject[] } {
@@ -245,6 +314,24 @@ export function selectAutoTargets(
       push(r.id, 'HUMAN_REVIEW_REQUIRED'); continue
     }
     if (r.title.trim() === '' || r.body.trim() === '') { push(r.id, 'EMPTY'); continue }
+    /**
+     * 🔴 **생성기가 "원문 제목과 같다" 고 적어 둔 글만 막는다** (2026-09-14).
+     *
+     *    본문 기준(연속 어절·글자·덮인 비율)은 짧은 제목에 닿지 않는다 —
+     *    제목만 통째로 같아도 세 기준을 전부 지나간다. 제목은 글 하나에 하나뿐이라
+     *    같으면 그 자체가 복제다. 그 판정은 원문을 손에 들고 있는 **생성 시점**이 한다.
+     *
+     *    🔴 **대조하지 않은 글은 건드리지 않는다** — 외부 원문이 없는 합성 seed ·
+     *       사람이 고른 글 · 기록이 없던 legacy 행. 기존 동작 그대로다.
+     *    🔴 **글도 소재도 버리지 않는다.** 큐에 그대로 두고 자동 발행에서만 뺀다.
+     *    🔴 사람이 **실제로 다른 제목**을 넣으면 통과한다. 공백·문장부호만 바꾼 것은
+     *       바꾼 것이 아니다 — 그걸 통과시키면 검사가 그 자리에서 무력해진다.
+     *    🔴 profile 을 가리지 않는다 — 사람이 고른 글도 기계 글도 같은 검사를 받는다.
+     */
+    const titleCheck = sourceTitleCheckOf(r.gateResults)
+    if (titleCheck.checked && titleCheck.copied && !founderRetitled(r)) {
+      push(r.id, 'TITLE_COPIES_SOURCE'); continue
+    }
     if (safetyOf(r.title, r.body) !== 'pass') { push(r.id, 'SAFETY'); continue }
     targets.push(r)
   }

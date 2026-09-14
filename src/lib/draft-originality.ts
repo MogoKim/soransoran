@@ -83,6 +83,57 @@ export type OriginalityMeasure = {
   coverRatio: number
 }
 
+/**
+ * 🔴 **제목 비교용 정규화** (2026-09-14).
+ *
+ *    본문 기준(연속 6어절 · 25자 · 덮인 비율)은 **짧은 제목에 닿지 않는다.**
+ *    "후라이팬 언제 바꾸세요?" 는 3어절 10자다 — 원문 제목을 통째로 옮겨도
+ *    세 기준 전부 한참 아래로 지나간다. 제목은 글 하나에 하나뿐이라
+ *    통째로 같으면 그 자체가 복제이고, 길이로는 영영 잡히지 않는다.
+ *
+ * 🔴 **지우는 것은 공백과 일반 문장부호뿐이다.** 낱말을 바꾸거나 지우지 않는다 —
+ *    조사·어미를 건드리기 시작하면 "비슷한 제목" 을 재는 도구가 되고,
+ *    그것은 같은 소재의 다른 질문을 막는다. 여기서 재는 것은 **같은가** 하나다.
+ */
+export function titleKey(s: string): string {
+  return s.normalize('NFKC')
+    .replace(/\s+/g, '')
+    // 🔴 목록을 늘리지 않는다. 흔한 마침·인용·묶음 부호까지다
+    .replace(/[.,!?;:~…·・'"'"\u201c\u201d\u2018\u2019()\[\]{}<>\u300c\u300d\u300e\u300f\u300a\u300b\-\u2014\u2013_/\\|]/g, '')
+    .toLowerCase()
+}
+
+/**
+ * 🔴 **외부 원문 제목을 그대로 쓴 글인가** — 🔴 **원문을 손에 들고 있는 동안(메모리)만** 쓴다.
+ *
+ * 🔴 **이 비교는 생성 시점에서 끝난다** (2026-09-14 정정).
+ *    원문 제목도, 그 해시도 **DB 에 남기지 않는다.** 남는 것은 판정 결과뿐이다.
+ *
+ *    앞선 판은 제목의 sha256 을 `gateResults` 에 적고 "해시라 원문을 복원할 수 없다" 고
+ *    적었다. **그 설명이 틀렸다** — 제목은 짧고 예측 가능해서, 후보 제목을 대입해
+ *    같은 해시가 나오는지 보면 그만이다. 소금도 없었다. 원문 제목을 저장하지 않기로 한
+ *    계약(§4-AF ⑤)의 목적에 견주면 얻는 것 없이 위험만 남는다.
+ *
+ *    `sourceTitle` 이 `null` 이면 **비교할 외부 원문이 없다는 뜻**이다 —
+ *    내부 사람이 직접 쓴 글, 소재 사전과 템플릿으로 만든 글이 그렇다.
+ *    🔴 모르는 것을 복제라고 적지 않는다. 없으면 `false` 다(기존 동작 유지).
+ *
+ * 🔴 소재가 같은 것은 복제가 아니다. 제목이 **같을 때만** true 다.
+ */
+/**
+ * 🔴 **제목 대조의 판** — 규칙이 바뀌면 올린다.
+ *    옛 기록과 새 기록을 구분할 수 있어야, 나중에 "무슨 규칙으로 통과했나" 를 물을 수 있다.
+ */
+export const SOURCE_TITLE_CHECK_VERSION = 'source-title-v1'
+
+export function copiesSourceTitle(sourceTitle: string | null | undefined, finalTitle: string): boolean {
+  const src = (sourceTitle ?? '').trim()
+  const fin = finalTitle.trim()
+  if (src === '' || fin === '') return false
+  return titleKey(src) === titleKey(fin)
+}
+
+
 export const COPY_REASONS = ['ok', 'runWords', 'runChars', 'cover'] as const
 export type CopyReason = (typeof COPY_REASONS)[number]
 

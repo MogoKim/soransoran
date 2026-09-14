@@ -110,6 +110,10 @@ const rows: AutoRow[] = raw.map((r) => ({
   title: r.editedTitle ?? r.draftTitle,
   body: r.editedBody ?? r.draftBody,
   sourceSite: r.rawContent.sourceSite,
+  // 🔴 제목 복제 판정은 gateResults 의 **기록**이 한다 — 원문 제목도 해시도 저장하지 않는다.
+  //    여기서는 "사람이 실제로 다시 지었는가" 를 물을 두 값만 넘긴다
+  draftTitle: r.draftTitle,
+  editedTitle: r.editedTitle,
   decidedBy: r.decidedBy,
   decidedAt: r.decidedAt, createdAt: r.createdAt,
 }))

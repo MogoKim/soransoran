@@ -5,8 +5,10 @@
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
 import { readFileSync } from 'node:fs'
+import { SOURCE_TITLE_CHECK_VERSION } from '../src/lib/draft-originality'
 import {
   selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, queueOrderKey, compareAutoRow,
+  sourceTitleCheckOf, founderRetitled,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT, REJECT_LABEL,
   type AutoRow,
   profileOf, machineMarksOk,
@@ -74,8 +76,9 @@ console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
     return seen === 'T|B'
   })())
   check('EDITED 도 대상이다', selectAutoTargets([ok({ status: 'EDITED' })], allPass).targets.length === 1)
-  // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED 를 더해 10개다. 코드와 라벨이 1:1 이어야 한다
-  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 10)
+  // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED · TITLE_COPIES_SOURCE 를 더해 11개다.
+  //    코드와 라벨이 1:1 이어야 한다
+  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 11)
 }
 
 console.log('\n①-b 🔴 기계 profile — 통째로 맞아야 발행 후보다')
@@ -743,6 +746,151 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
   check('🟢 [계약] human profile 은 여전히 decidedBy 와 무관하게 통과',
     selectAutoTargets([ok({ decidedBy: null })], allPass).targets.length === 1)
 }
+
+console.log('\n⑧ 🔴 외부 원문 제목 복제 — 생성 시점 대조 결과만으로 막는다')
+{
+  const pubLib = readFileSync('src/lib/original-post-auto-publish.ts', 'utf-8')
+  const RUNNER = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  const AUTOFILL = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
+  const GEN = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  const goodGate = { holds: [], blocks: [], autoDraft: { ...MACHINE_GATE_MARKS } }
+  /** 🔴 적재기가 남기는 모양 그대로 — **원문 제목도 해시도 없다** */
+  const withCheck = (copied: boolean): Record<string, unknown> => ({
+    ...goodGate,
+    autofill: {
+      sourceTitleChecked: true, sourceTitleCopied: copied,
+      sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
+    },
+  })
+  const mach = (o: Partial<AutoRow> = {}, gate: unknown = goodGate): AutoRow => ok({
+    promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+    sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`,
+    gateResults: gate, decidedBy: MACHINE_REVIEWED_BY,
+    draftTitle: '원문과 똑같은 제목', editedTitle: null,
+    title: '원문과 똑같은 제목', ...o,
+  })
+
+  // ── ① 실제 외부 원문이 있고 제목이 같았던 글 ──
+  check('🔴 [T] 대조에서 같았던 글(copied=true)은 자동 발행 대상이 아니다', (() => {
+    const r = selectAutoTargets([mach({}, withCheck(true))], allPass)
+    return r.targets.length === 0 && r.rejected[0]?.code === 'TITLE_COPIES_SOURCE'
+  })())
+  check('🟢 [T] 대조했지만 달랐던 글(copied=false)은 통과한다',
+    selectAutoTargets([mach({}, withCheck(false))], allPass).targets.length === 1)
+
+  // ── ② 사람이 제목을 다시 지었는가 ──
+  check('🔴 [T] copied=true 인데 editedTitle 이 없으면 계속 차단', (() => {
+    const r = selectAutoTargets([mach({ editedTitle: null }, withCheck(true))], allPass)
+    return r.targets.length === 0 && r.rejected[0]?.code === 'TITLE_COPIES_SOURCE'
+  })())
+  check('🔴 [T] 공백·문장부호만 바꾼 editedTitle 은 바꾼 것이 아니다 — 계속 차단', (() => {
+    const r = selectAutoTargets([mach({
+      draftTitle: '후라이팬 언제 바꾸세요?',
+      editedTitle: ' 후라이팬  언제 바꾸세요 ',
+      title: ' 후라이팬  언제 바꾸세요 ',
+    }, withCheck(true))], allPass)
+    return r.targets.length === 0 && r.rejected[0]?.code === 'TITLE_COPIES_SOURCE'
+  })())
+  check('🟢 [T] founder 가 실제로 다른 제목을 넣으면 통과한다',
+    selectAutoTargets([mach({
+      draftTitle: '후라이팬 언제 바꾸세요?',
+      editedTitle: '멀쩡해 보이는 후라이팬, 언제 바꾸세요?',
+      title: '멀쩡해 보이는 후라이팬, 언제 바꾸세요?',
+    }, withCheck(true))], allPass).targets.length === 1)
+  check('🔴 [T] founderRetitled 판정 — 없음·부호만·실제 변경', (() => {
+    const d = '후라이팬 언제 바꾸세요?'
+    return !founderRetitled({ draftTitle: d, editedTitle: null })
+      && !founderRetitled({ draftTitle: d, editedTitle: ' 후라이팬  언제 바꾸세요 ' })
+      && founderRetitled({ draftTitle: d, editedTitle: '후라이팬, 다들 몇 년 쓰세요?' })
+  })())
+
+  // ── ③ 외부 원문이 없는 후보 · legacy — 기존 동작 유지 ──
+  check('🟢 [T] 외부 원문이 없는 합성 seed 는 대조 기록이 없고 그대로 통과한다',
+    selectAutoTargets([mach({}, goodGate)], allPass).targets.length === 1
+    && sourceTitleCheckOf(goodGate).checked === false)
+  check('🟢 [T] legacy 행(기록 없음)에 새 HOLD 를 만들지 않는다',
+    selectAutoTargets([ok()], allPass).targets.length === 1
+    && sourceTitleCheckOf(undefined).checked === false
+    && sourceTitleCheckOf(null).checked === false
+    && sourceTitleCheckOf({ holds: [], blocks: [] }).checked === false)
+  check('🔴 [T] checked=false 면 copied 값이 있어도 막지 않는다', (() => {
+    const gate = { ...goodGate, autofill: { sourceTitleCopied: true } }
+    return sourceTitleCheckOf(gate).checked === false
+      && selectAutoTargets([mach({}, gate)], allPass).targets.length === 1
+  })())
+
+  // ── ④ 🔴 실제 후라이팬 후보(human-curated · 합성 raw · 기록 없음)는 영향을 받지 않는다 ──
+  check('🟢 [T] 실제 후라이팬 후보는 이 변경의 영향을 받지 않는다 (사람이 고른 글 · 대조 기록 없음)', (() => {
+    const real = ok({
+      id: 'cmtqhtwa400072yd2kwv1xsjh',
+      promptVersion: 'publish-candidate-v1', model: 'human-curated',
+      sourceSite: 'publish-candidate:navercafe:remonterrace',
+      draftTitle: '후라이팬 언제 바꾸세요?', editedTitle: null,
+      title: '후라이팬 언제 바꾸세요?',
+      body: '슬슬 낡은 것 같은데 아직 쓸 만해 보여서 계속 쓰고 있어요.',
+      gateResults: { holds: [], blocks: [], bridge: { candidateType: 'seedOriginality' } },
+    })
+    const r = selectAutoTargets([real], allPass)
+    return r.targets.length === 1 && sourceTitleCheckOf(real.gateResults).checked === false
+  })())
+
+  // ── ⑤ 🔴 저장되는 값 — 원문 제목도 해시도 없다 ──
+  check('🔴 [T] gateResults 에 원문 제목이 저장되지 않는다', (() => {
+    const json = JSON.stringify(withCheck(true))
+    return !json.includes('후라이팬') && !json.includes('sourceTitle"')
+      && !/[0-9a-f]{64}/.test(json)
+  })())
+  check('🔴 [T] 저장되는 것은 세 값뿐이다', (() => {
+    const keys = Object.keys((withCheck(true).autofill as Record<string, unknown>))
+    return keys.length === 3
+      && keys.includes('sourceTitleChecked') && keys.includes('sourceTitleCopied')
+      && keys.includes('sourceTitleCheckVersion')
+  })())
+  check('🔴 [회귀] 원문 제목 해시 저장 경로가 저장소에 없다',
+    !/titleKeyHash|sourceTitleHash|source-title-fingerprint/.test(pubLib + RUNNER + AUTOFILL + GEN))
+  check('🔴 [회귀] 적재기가 원문 제목 전문을 받지 않는다',
+    !/sourceTitle: S\(c\.sourceTitle\)/.test(AUTOFILL))
+
+  // ── ⑥ 길이 · 소재 · 말투로 막지 않는다 ──
+  check('🟢 [T] 짧은 후라이팬 생활 질문은 길이·소재 사유로 막히지 않는다',
+    selectAutoTargets([mach({
+      draftTitle: '후라이팬 코팅 벗겨지면 어떻게 하세요?',
+      title: '후라이팬 코팅 벗겨지면 어떻게 하세요?', body: '궁금해서요.',
+    }, withCheck(false))], allPass).targets.length === 1)
+  check('🟢 [T] 반말 일상 질문도 막지 않는다',
+    selectAutoTargets([mach({
+      draftTitle: '다들 후라이팬 언제 바꿔?', title: '다들 후라이팬 언제 바꿔?', body: '난 아직 써.',
+    }, withCheck(false))], allPass).targets.length === 1)
+  check('🔴 [T] 최소 글자 수·금지어·의미 유사도 규칙이 없다',
+    !/minLength|MIN_BODY_CHARS|최소 글자|BANNED_TITLE|similarity|유사도/.test(pubLib))
+
+  // ── ⑦ 판정만 한다 ──
+  check('🔴 [T] 판정이 입력 행을 바꾸지 않는다 (본문·status·persona·provenance 불변)', (() => {
+    const row = mach({}, withCheck(true))
+    const snap = JSON.stringify(row)
+    selectAutoTargets([row], allPass)
+    return JSON.stringify(row) === snap
+  })())
+  check('🔴 [T] 거절 라벨이 "글을 버리지 않는다" 를 말한다',
+    REJECT_LABEL.TITLE_COPIES_SOURCE.includes('제목만 다시 지어'))
+
+  // ── ⑧ 연결이 끊기면 빨개진다 ──
+  check('🔴 [회귀] 발행 판정이 대조 기록을 실제로 읽는다',
+    /sourceTitleCheckOf\(r\.gateResults\)/.test(pubLib)
+    && /titleCheck\.checked && titleCheck\.copied && !founderRetitled\(r\)/.test(pubLib))
+  check('🔴 [회귀] 러너가 draftTitle·editedTitle 을 넘긴다',
+    /draftTitle: r\.draftTitle/.test(RUNNER) && /editedTitle: r\.editedTitle/.test(RUNNER))
+  check('🔴 [회귀] 러너가 rawTitle 을 select 하지 않는다', !/rawTitle: true/.test(RUNNER))
+  check('🔴 [회귀] 적재기가 세 값을 남긴다',
+    /sourceTitleChecked: c\.sourceTitleChecked === true/.test(AUTOFILL)
+    && /sourceTitleCopied: c\.sourceTitleCopied === true/.test(AUTOFILL))
+  check('🔴 [회귀] 생성기가 메모리에서 대조하고 결과만 싣는다',
+    /sourceTitleCopied: copiesSourceTitle\(a\.meta\.title, a\.draft\.title\)/.test(GEN))
+  check('🔴 [회귀] 생성기가 원문 제목을 후보 파일에 싣지 않는다',
+    !/sourceTitle: a\.meta\.title/.test(GEN))
+}
+
+
 
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${fail === 0 ? '✅' : '❌'} ${pass} pass · ${fail} fail\n`)
