@@ -64,6 +64,42 @@ export const JOB_ENV_REQUIREMENTS: Readonly<Record<string, string>> = {
 export type EnvBlocker = { job: string; key: string; detail: string }
 
 /**
+ * 🔴 **사람이 내려 둔 job 과 아직 안 켠 job 은 다르다** (2026-09-14 실측).
+ *
+ *    82cook 두 job 은 수집 중단 결정에 따라 `false` 로 내려 두고 unload 해 두었다.
+ *    그런데 배포 preflight 는 `RUNTIME_JOBS` 다섯 개 **전부** `true` 를 요구했다 —
+ *    그래서 정상 운영 상태인데 `ENV_NOT_READY` 로 **배포 자체가 막혔다.**
+ *    82cook 을 다시 켜는 것 말고는 통과할 길이 없었다(그것은 결정을 뒤집는 일이다).
+ *
+ * 🔴 그래서 `false` **하나만** "의도적으로 내려 둔 것" 으로 읽는다.
+ *    `unset` · 빈 값 · 오타는 전부 active 로 남긴다 — `judgeJobEnv` 가 그대로 막는다.
+ *    "아직 안 켠 것" 을 조용히 disabled 로 넘기면 공급이 0 인 채로 초록이 된다.
+ *
+ * 🔴 이 함수는 **나누기만 한다.** 스위치를 켜지도, launchctl 을 내리지도 않는다.
+ */
+export type JobEnvPartition = {
+  /** 스위치가 꺼져 있지 않은 job — 🔴 기존 배포 검증을 그대로 받는다 */
+  active: string[]
+  /** 🔴 `false` 로 내려 둔 job — 설치하지 않고, **unloaded 여야 정상**이다 */
+  disabled: string[]
+}
+
+export function partitionJobsByEnv(input: {
+  jobs: readonly string[]
+  env: Readonly<Record<string, string | undefined>>
+}): JobEnvPartition {
+  const active: string[] = []
+  const disabled: string[] = []
+  for (const job of input.jobs) {
+    const key = JOB_ENV_REQUIREMENTS[job]
+    const raw = key === undefined ? undefined : input.env[key]
+    if (raw !== undefined && raw.trim().toLowerCase() === 'false') disabled.push(job)
+    else active.push(job)
+  }
+  return { active, disabled }
+}
+
+/**
  * 예약 job 이 **일할 수 있는 상태인가** — 🔴 `true` 하나만 통과다.
  *
  *    `unset` 과 `false` 를 구분해 적는다. 사람이 내려 둔 것(false)과
@@ -237,6 +273,12 @@ export function judgeLoadedJobs(input: {
   loaded: readonly string[]
   expected?: readonly string[]
   retired?: readonly string[]
+  /**
+   * 🔴 **의도적으로 스위치를 내려 둔 job.** 올라와 있으면 실패다 —
+   *    "수집하지 않기로 했다" 는 결정이 실제로는 지켜지지 않고 있다는 뜻이다.
+   *    빠져 있는 것은 실패가 아니다. 그것이 계약이다.
+   */
+  disabled?: readonly string[]
 }): JobsVerdict {
   const expected = input.expected ?? RUNTIME_JOBS
   const retired = input.retired ?? RETIRED_JOBS
@@ -245,6 +287,11 @@ export function judgeLoadedJobs(input: {
 
   for (const r of retired) {
     if (loaded.includes(r)) problems.push(`🔴 옛 job 이 아직 loaded 다 — ${r} (같은 source 를 두 배로 두드린다)`)
+  }
+  for (const d of input.disabled ?? []) {
+    if (loaded.includes(d)) {
+      problems.push(`🔴 내려 두기로 한 job 이 loaded 다 — ${d} (스위치는 false 인데 job 이 돈다)`)
+    }
   }
   for (const e of expected) {
     if (!loaded.includes(e)) problems.push(`예약 job 이 loaded 가 아니다 — ${e}`)

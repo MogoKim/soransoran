@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { statSync } from 'node:fs'
 
 import {
-  JOB_ENV_REQUIREMENTS, judgeJobEnv,
+  JOB_ENV_REQUIREMENTS, judgeJobEnv, partitionJobsByEnv,
   RUNTIME_JOBS, RETIRED_JOBS,
   judgeCanonicalMode, judgeJobPath, judgeJobState, judgeLoadedConfig, judgeLoadedJobs,
   judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists,
@@ -34,6 +34,7 @@ import {
 } from '../src/lib/runtime-deploy'
 /** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
 import { rollbackDirOf } from './lib/launchd-install.mjs'
+import { readRuntimeEnv } from './lib/runtime-env.mjs'
 
 /** 🔴 예약 실행 전용 worktree — 개발 작업트리와 **다른 곳**이다 */
 export const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
@@ -769,9 +770,13 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     }
     return w
   }
-  const deploy = async (w: World): Promise<Awaited<ReturnType<typeof runDeploy>>> =>
+  const deploy = async (
+    w: World, disabledJobs: readonly string[] = [],
+  ): Promise<Awaited<ReturnType<typeof runDeploy>>> =>
     runDeploy({
-      target: NEXT, jobs: J, retiredJobs: RETIRED, paths: PATHS,
+      // 🔴 내려 둔 job 은 배포 대상에서 빠진다 — 실제 배포기가 넘기는 모양 그대로다
+      target: NEXT, jobs: J.filter((l) => !disabledJobs.includes(l)),
+      retiredJobs: RETIRED, disabledJobs, paths: PATHS,
       offlineGates: ['gate1', 'gate2'], now: () => '2026-09-09T00:00:00.000Z',
     }, w.fx)
   const idx = (w: World, m: string): number => w.order.findIndex((x) => x === m || x.startsWith(m))
@@ -1041,6 +1046,124 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     const w = makeWorld({ envBlocked: [] })
     const r = await deploy(w)
     check('🟢 [E] 스위치가 전부 열려 있으면 통과한다', r.ok)
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [D] 의도적으로 내려 둔 job — **없는 것이 정상이다**
+  //
+  //    2026-09-14 실측: 82cook 두 job 을 수집 중단 결정에 따라 `false` 로 내려 두고
+  //    unload 했다. 그런데 preflight 가 `RUNTIME_JOBS` 다섯 개 전부에 `true` 를
+  //    요구해 `ENV_NOT_READY` 로 **배포가 막혔다** — 82cook 을 다시 켜는 것 말고는
+  //    통과할 길이 없었다. 아래는 그 오판정이 되살아나면 전부 빨개지는 자리다.
+  // ─────────────────────────────────────────────────────────
+  {
+    /** 🔴 job-c 를 "내려 둔 job" 으로 둔다 — 스위치 false + 이미 unloaded */
+    const DIS = ['job-c']
+    const ACT = J.filter((l) => !DIS.includes(l))
+
+    // ① false + unloaded → 배포는 통과해야 한다
+    {
+      const w = makeWorld({ initial: { 'job-c': 'unloaded' }, envBlocked: DIS })
+      const r = await deploy(w, DIS)
+      check('🟢 [D] 내려 둔 job 이 unloaded 면 배포가 통과한다', r.ok)
+      check('🔴 [D] 내려 둔 job 을 설치하지 않는다',
+        w.plists.get('job-c') !== RENDERED('job-c'))
+      check('🔴 [D] 내려 둔 job 을 render 조차 하지 않는다', idx(w, 'render:job-c') === -1)
+      check('🔴 [D] 내려 둔 job 을 load 하지 않는다', idx(w, 'load:job-c') === -1)
+      check('🔴 [D] 내려 둔 job 을 bootout 하지 않는다', idx(w, 'bootout:job-c') === -1)
+      check('🔴 [D] 내려 둔 job 을 unload 하지도 않는다', idx(w, 'unload:job-c') === -1)
+      check('🔴 [D] 배포 뒤에도 내려 둔 job 은 unloaded 그대로다',
+        w.state.get('job-c') === 'unloaded')
+      // 🔴 활성 job 의 기존 검증은 그대로여야 한다
+      check('🔴 [D] 활성 job 은 전부 새 설치본으로 바뀐다',
+        ACT.every((l) => w.plists.get(l) === RENDERED(l)))
+      check('🔴 [D] 활성 job 은 전부 loaded 다',
+        ACT.every((l) => w.state.get(l) === 'loaded'))
+      check('🔴 [D] 활성 job 마다 lint 를 거친다',
+        ACT.every((l) => idx(w, `lint:${l}`) !== -1))
+      check('🔴 [D] offline 게이트는 그대로 돈다',
+        idx(w, 'gate:gate1') !== -1 && idx(w, 'gate:gate2') !== -1)
+      check('🔴 [D] 격리 게이트도 그대로 돈다', idx(w, 'isolation-gate') !== -1)
+      check('🔴 [D] pin·manifest 는 target 으로 간다',
+        pinOf(w) === NEXT && manifestSha(w) === NEXT)
+    }
+
+    // ② false + loaded → FAIL (배포가 대신 내리지 않는다)
+    {
+      const w = makeWorld({ initial: { 'job-c': 'loaded' }, envBlocked: DIS })
+      const r = await deploy(w, DIS)
+      check('🔴 [D] 내려 둔 job 이 loaded 면 배포를 막는다', !r.ok)
+      check('🔴 [D] preflight 에서 막는다 — 되돌릴 것이 없다', r.phase === 'preflight')
+      check('🔴 [D] 이유를 DISABLED_JOB_LOADED 로 적는다',
+        r.problems.some((x) => x.includes('DISABLED_JOB_LOADED')))
+      check('🔴 [D] 막을 때도 launchctl 을 대신 내리지 않는다',
+        idx(w, 'bootout:job-c') === -1 && idx(w, 'unload:job-c') === -1
+        && w.state.get('job-c') === 'loaded')
+      check('🔴 [D] 막을 때 코드도 건드리지 않는다 (checkout 0)',
+        idx(w, 'checkout:target') === -1)
+    }
+
+    // ③ 관측 불가는 통과시키지 않는다 (fail-closed)
+    {
+      const w = makeWorld({ initial: { 'job-c': 'unloaded' }, probeUnknown: ['job-c'], envBlocked: DIS })
+      const r = await deploy(w, DIS)
+      check('🔴 [D] 내려 둔 job 의 상태를 못 보면 통과시키지 않는다', !r.ok)
+    }
+
+    // ④ 판정부 — 정본 스위치 이름으로 82cook 만 갈린다
+    {
+      const env: Record<string, string> = {
+        SORAN_NAVERCAFE_COLLECT_ENABLED: 'true',
+        SORAN_SUPPLY_PROCESS_ENABLED: 'true',
+        SORAN_82COOK_COLLECT_ENABLED: 'false',
+        SORAN_82COOK_THIN_DETAIL_ENABLED: 'false',
+      }
+      const part = partitionJobsByEnv({ jobs: RUNTIME_JOBS, env })
+      check('🔴 [D] 실측 env 에서 82cook 두 job 만 내려 둔 것으로 갈린다',
+        part.disabled.length === 2
+        && part.disabled.every((l) => l.includes('82cook'))
+        && part.active.length === 3)
+      check('🔴 [D] 내려 둔 job 을 뺀 나머지는 blocker 0 — 배포가 열린다',
+        judgeJobEnv({ jobs: part.active, env }).length === 0)
+      /** 🔴 `unset` 을 disabled 로 넘기면 "등록만 되고 공급 0" 이 초록이 된다 */
+      const unset = { ...env }
+      delete unset.SORAN_SUPPLY_PROCESS_ENABLED
+      const p2 = partitionJobsByEnv({ jobs: RUNTIME_JOBS, env: unset })
+      check('🔴 [D] unset 은 disabled 가 아니다 — 그대로 blocker 로 막힌다',
+        p2.disabled.length === 2
+        && judgeJobEnv({ jobs: p2.active, env: unset }).length === 1)
+      check('🔴 [D] 빈 값도 disabled 가 아니다',
+        partitionJobsByEnv({
+          jobs: RUNTIME_JOBS, env: { ...env, SORAN_SUPPLY_PROCESS_ENABLED: '' },
+        }).disabled.length === 2)
+      check('🔴 [D] 오타(FALSEY)는 disabled 가 아니다',
+        partitionJobsByEnv({
+          jobs: RUNTIME_JOBS, env: { ...env, SORAN_SUPPLY_PROCESS_ENABLED: 'FALSEY' },
+        }).disabled.length === 2)
+      check('🔴 [D] 대소문자는 가리지 않는다 (False)',
+        partitionJobsByEnv({
+          jobs: RUNTIME_JOBS, env: { ...env, SORAN_SUPPLY_PROCESS_ENABLED: 'False' },
+        }).disabled.length === 3)
+      /** 🔴 격리 검사도 같은 계약이어야 한다 — 활성만 loaded 를 요구한다 */
+      check('🔴 [D] 활성 3개만 loaded 면 격리 판정이 통과한다',
+        judgeLoadedJobs({ loaded: part.active, expected: part.active }).ok)
+      check('🔴 [D] 내려 둔 job 이 올라와 있으면 격리 판정이 막는다',
+        !judgeLoadedJobs({
+          loaded: [...part.active, part.disabled[0]!],
+          expected: part.active, disabled: part.disabled,
+        }).ok)
+      check('🔴 [D] 내려 둔 job 이 빠져 있는 것은 실패가 아니다',
+        judgeLoadedJobs({ loaded: part.active, expected: part.active, disabled: part.disabled }).ok)
+    }
+
+    // ⑤ 🔴 배포 전체에서 **82cook 쪽으로 나가는 요청이 0** 이다
+    {
+      const w = makeWorld({ initial: { 'job-c': 'unloaded' }, envBlocked: DIS })
+      const r = await deploy(w, DIS)
+      check('🟢 [D] 배포는 성공하고', r.ok)
+      check('🔴 [D] 내려 둔 job 이름이 실행 기록 어디에도 없다',
+        w.order.every((x) => !x.endsWith(':job-c')))
+    }
   }
 
   /** 🔴 판정부 — `unset` 과 `false` 를 구분해 적는다. 다음에 할 일이 다르다 */
@@ -1467,8 +1590,22 @@ if (!existsSync(RUNTIME_ROOT)) {
   console.log(`   runtime  ${RUNTIME_ROOT}`)
   console.log(`   개발 트리 ${DEV_ROOTS.length}개 — 이 중 어느 것도 실행되면 안 된다`)
 
+  /**
+   * 🔴 **내려 둔 job 은 "없어야 정상" 이다** (2026-09-14).
+   *    앞선 판은 `RUNTIME_JOBS` 다섯 개가 전부 loaded 여야 통과했다. 그래서
+   *    82cook 을 결정에 따라 내려 둔 정상 상태가 **격리 실패**로 찍혔고,
+   *    같은 이유로 배포 preflight 도 막혔다. 스위치가 `false` 인 job 은
+   *    **등록되지 않은 것이 계약**이고, 올라와 있으면 그때가 실패다.
+   */
+  const RT_ENV = readRuntimeEnv(RUNTIME_ROOT)
+  const { active: ACTIVE_JOBS, disabled: DISABLED_JOBS } = partitionJobsByEnv({
+    jobs: RUNTIME_JOBS, env: RT_ENV,
+  })
+  console.log(`   예약 job  활성 ${ACTIVE_JOBS.length}개`
+    + (DISABLED_JOBS.length > 0 ? ` · 🟡 내려 둠 ${DISABLED_JOBS.length}개 (${DISABLED_JOBS.join(' · ')})` : ''))
+
   // ── 경로 ──
-  for (const label of RUNTIME_JOBS) {
+  for (const label of ACTIVE_JOBS) {
     const plist = join(AGENT_DIR, `${label}.plist`)
     if (!existsSync(plist)) { check(`🔴 ${label} plist 가 있다`, false); continue }
     const xml = readFileSync(plist, 'utf-8')
@@ -1481,7 +1618,7 @@ if (!existsSync(RUNTIME_ROOT)) {
   }
 
   // ── 🔴 실제 loaded 설정 대조 (파일만 고치고 load 를 안 한 상태를 잡는다) ──
-  for (const label of RUNTIME_JOBS) {
+  for (const label of ACTIVE_JOBS) {
     const out = ((): string | null => {
       try { return execFileSync('launchctl', ['print', `gui/${process.getuid?.() ?? 0}/${label}`], { encoding: 'utf-8' }) }
       catch { return null }
@@ -1502,8 +1639,9 @@ if (!existsSync(RUNTIME_ROOT)) {
   const loadedRaw = ((): string => { try { return execFileSync('launchctl', ['list'], { encoding: 'utf-8' }) } catch { return '' } })()
   const loaded = loadedRaw.split('\n').map((l) => l.trim().split(/\s+/).pop() ?? '')
     .filter((l) => l.startsWith('com.soransoran.'))
-  const jobs = judgeLoadedJobs({ loaded })
-  check(`🔴 예약 job ${RUNTIME_JOBS.length}개만 loaded 다 — 옛 job·중복 0`, jobs.ok)
+  // 🔴 내려 둔 job 은 **올라와 있으면 실패**다 — 같은 판정부가 함께 본다
+  const jobs = judgeLoadedJobs({ loaded, expected: ACTIVE_JOBS, disabled: DISABLED_JOBS })
+  check(`🔴 활성 예약 job ${ACTIVE_JOBS.length}개만 loaded 다 — 옛 job·내려 둔 job·중복 0`, jobs.ok)
   for (const p of jobs.problems) console.log(`      ${p}`)
 
   // ── SHA 고정 ──

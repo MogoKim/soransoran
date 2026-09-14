@@ -32,8 +32,9 @@ import {
 } from '../src/lib/runtime-deploy'
 import {
   JOB_ENV_REQUIREMENTS, judgeJobEnv, judgeJobState, parseLaunchctlPrint,
-  RETIRED_JOBS, RUNTIME_JOBS, type JobState,
+  partitionJobsByEnv, RETIRED_JOBS, RUNTIME_JOBS, type JobState,
 } from '../src/lib/runtime-isolation'
+import { readRuntimeEnv as readEnvFile } from './lib/runtime-env.mjs'
 import {
   leftoverPlaceholders, plistFileOf, programArguments, readInstalled, removeInstalled,
   render, retireInstalled, rollbackDirOf, templatePathOf, unretireInstalled, writeInstalled,
@@ -94,6 +95,29 @@ console.log(`\n══ runtime 배포 — ${APPLY ? '🔴 실제 적용' : 'dry-r
 console.log(`  runtime  ${RUNTIME_ROOT}`)
 if (!existsSync(RUNTIME_ROOT)) fail(`runtime worktree 가 없다 — ${RUNTIME_ROOT}`)
 
+/**
+ * 🔴 launchctl 이 **지금 물고 있는** 설정을 본다 — plist 파일이 아니라.
+ *    실패도 그대로 돌려준다. exit code 와 stderr 가 있어야
+ *    "확실히 내려가 있다" 와 "못 봤다" 를 가를 수 있다.
+ */
+const probePrint = (label: string): { exitCode: number | null; stdout: string; stderr: string } => {
+  try {
+    // 🔴 stderr 를 **잡아서** 판정에 넘긴다 — 흘리면 "Could not find service" 가
+    //    우리가 낸 🟢 줄 옆에 섞여, 정상 상태가 사고처럼 읽힌다
+    const out = execFileSync('launchctl', ['print', `gui/${UID}/${label}`], {
+      cwd: homedir(), encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return { exitCode: 0, stdout: out, stderr: '' }
+  } catch (e) {
+    const x = e as { status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer }
+    return {
+      exitCode: typeof x.status === 'number' ? x.status : null,
+      stdout: String(x.stdout ?? ''), stderr: String(x.stderr ?? ''),
+    }
+  }
+}
+const stateOf = (label: string): JobState => judgeJobState(probePrint(label)).state
+
 // ── dry-run 이면 여기서 계획만 보여 주고 끝낸다 (fetch 도 하지 않는다) ──
 if (!APPLY) {
   const originMainDry = read('git', ['rev-parse', 'origin/main'])
@@ -121,7 +145,7 @@ if (!APPLY) {
   } else {
     console.log(`     기준 ${planTarget.slice(0, 7)}`)
     let missing = 0
-    for (const l of JOBS) {
+    for (const l of partitionJobsByEnv({ jobs: JOBS, env: readRuntimeEnv() }).active) {
       const xml = renderFromTarget(planTarget, l)
       const args = xml === null ? [] : programArguments(xml)
       if (args.length === 0) missing += 1
@@ -143,14 +167,28 @@ if (!APPLY) {
   console.log('\n  ── 활성화 스위치 (🔴 배포는 이것을 고치지 않는다)')
   {
     const env = readRuntimeEnv()
-    const blockers = judgeJobEnv({ jobs: JOBS, env })
-    const keys = [...new Set(JOBS.map((l) => JOB_ENV_REQUIREMENTS[l]).filter((k): k is string => k !== undefined))]
+    const { active, disabled } = partitionJobsByEnv({ jobs: JOBS, env })
+    // 🔴 스위치 요구는 **active job 에만** 건다 — 내려 둔 job 은 내려가 있는 것이 정상이다
+    const blockers = judgeJobEnv({ jobs: active, env })
+    const keys = [...new Set(active.map((l) => JOB_ENV_REQUIREMENTS[l]).filter((k): k is string => k !== undefined))]
     for (const k of keys) {
       const bad = blockers.find((b) => b.key === k)
       console.log(`     ${bad === undefined ? '🟢' : '🔴'} ${k}${bad === undefined ? '=true' : ` — ${bad.detail}`}`)
     }
     if (blockers.length > 0) {
       console.log(`\n     🔴 blocker ${blockers.length}건 — .env.local 을 사람이 켠 뒤 배포한다`)
+    }
+    /**
+     * 🔴 **내려 둔 job 을 숨기지 않는다.** 화면에서 사라지면 "왜 3개만 도는가" 를
+     *    다음 사람이 다시 조사하게 된다. 배포가 무엇을 하지 않는지 함께 적는다.
+     */
+    if (disabled.length > 0) {
+      console.log('\n  ── 내려 둔 job (🔴 설치·load 하지 않는다 · 스위치도 launchctl 도 건드리지 않는다)')
+      for (const l of disabled) {
+        const st = stateOf(l)
+        console.log(`     ${st === 'unloaded' ? '🟢' : st === 'loaded' ? '🔴 아직 loaded' : '🟡 관측 불가'} ${l}`
+          + ` — ${JOB_ENV_REQUIREMENTS[l] ?? '(스위치 없음)'}=false`)
+      }
     }
     // 🔴 퇴역 job 의 스위치는 blocker 가 아니다. 다만 남아 있으면 알려 준다
     const deadSwitch = 'SORAN_SUPPLY_AUTOPILOT_ENABLED'
@@ -194,24 +232,6 @@ process.on('exit', releaseLock)
 
 const plistOf = (label: string): string => join(AGENT_DIR, `${label}.plist`)
 
-/**
- * 🔴 launchctl 이 **지금 물고 있는** 설정을 본다 — plist 파일이 아니라.
- *    실패도 그대로 돌려준다. exit code 와 stderr 가 있어야
- *    "확실히 내려가 있다" 와 "못 봤다" 를 가를 수 있다.
- */
-const probePrint = (label: string): { exitCode: number | null; stdout: string; stderr: string } => {
-  try {
-    const out = execFileSync('launchctl', ['print', `gui/${UID}/${label}`], { cwd: homedir(), encoding: 'utf-8' })
-    return { exitCode: 0, stdout: out, stderr: '' }
-  } catch (e) {
-    const x = e as { status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer }
-    return {
-      exitCode: typeof x.status === 'number' ? x.status : null,
-      stdout: String(x.stdout ?? ''), stderr: String(x.stderr ?? ''),
-    }
-  }
-}
-const stateOf = (label: string): JobState => judgeJobState(probePrint(label)).state
 
 /**
  * 🔴 **target commit 에서 직접 읽는다.** 작업트리를 읽지 않는다.
@@ -238,20 +258,7 @@ function renderFromTarget(target: string, label: string): string | null {
  *    코드가 켜면 "사람이 내려 둔 것" 과 "아직 안 켠 것" 을 구분할 수 없다.
  */
 function readRuntimeEnv(): Record<string, string> {
-  const out: Record<string, string> = {}
-  const f = join(RUNTIME_ROOT, '.env.local')
-  if (!existsSync(f)) return out
-  try {
-    for (const line of readFileSync(f, 'utf-8').split('\n')) {
-      const t = line.trim()
-      if (t === '' || t.startsWith('#')) continue
-      const eq = t.indexOf('=')
-      if (eq <= 0) continue
-      // 🔴 값은 찍지 않는다 — 스위치 이름과 true 여부만 쓴다
-      out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim().replace(/^["']|["']$/g, '')
-    }
-  } catch { /* 못 읽으면 빈 것으로 — judgeJobEnv 가 unset 으로 막는다 */ }
-  return out
+  return readEnvFile(RUNTIME_ROOT)
 }
 
 const fx: DeployEffects = {
@@ -333,8 +340,19 @@ const fx: DeployEffects = {
   log: (m) => console.log(`   ${m}`),
 }
 
+/**
+ * 🔴 **내려 둔 job 은 배포 대상이 아니다.** 설치도 load 도 하지 않고,
+ *    `runDeploy` 는 그것이 **아직 내려가 있는지만** 확인한다.
+ */
+const { active: ACTIVE_JOBS, disabled: DISABLED_JOBS } = partitionJobsByEnv({
+  jobs: JOBS, env: readRuntimeEnv(),
+})
+if (DISABLED_JOBS.length > 0) {
+  console.log(`\n  🟡 내려 둔 job ${DISABLED_JOBS.length}개는 건드리지 않는다 — ${DISABLED_JOBS.join(' · ')}`)
+}
 const result = await runDeploy({
-  target: TARGET ?? '', jobs: JOBS, retiredJobs: RETIRED_JOBS,
+  target: TARGET ?? '', jobs: ACTIVE_JOBS, retiredJobs: RETIRED_JOBS,
+  disabledJobs: DISABLED_JOBS,
   paths: { runtimeRoot: RUNTIME_ROOT, devRoots: DEV_ROOTS },
 }, fx)
 
