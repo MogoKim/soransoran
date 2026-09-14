@@ -46,6 +46,7 @@
     "persona:comment-canon": "tsx scripts/persona-comment-canon.mts",
     "persona:comment-decide": "tsx scripts/persona-comment-decide.mts",
     "check:migration-0024": "tsx scripts/migration-0024-check.mts",
+    "check:migration-0025": "tsx scripts/migration-0025-check.mts",
     "collect:lock-check": "tsx scripts/collect-lock-check.mts",
     "persona:comment-runner": "tsx scripts/persona-comment-runner.mts",
     "persona:comment-gate-check": "tsx scripts/persona-comment-check.mts",
