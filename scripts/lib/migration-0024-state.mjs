@@ -254,12 +254,22 @@ export function judgeProjectRef(url, expectedRef) {
  * 🔴 실행기를 주입받는다 — 가짜 client 로 COMMIT/ROLLBACK 횟수를 셀 수 있어야 한다.
  *    실제 DB 에 쓰지 않고 실패 경로를 전부 시험하는 유일한 방법이다.
  *
+ * 🔴 **판정도 주입받는다** (2026-09-14 · 0025 를 위해 더함).
+ *    앞선 판은 `judgeMigrationState`(0024 전용)를 본문에서 직접 불렀다.
+ *    그래서 다른 마이그레이션은 이 실행기를 쓸 수 없었고,
+ *    쓰려면 트랜잭션 제어를 **복제**해야 했다 — 순서가 두 곳이 되는 순간
+ *    한쪽만 고쳐지는 날이 온다(운영 정본 §9.5-d3: "트랜잭션 제어는 한 곳에만").
+ *
+ *    `judge` 를 주지 않으면 예전 그대로 0024 판정을 쓴다.
+ *    기존 호출부는 한 글자도 바뀌지 않는다.
+ *
  * @param {{
  *   exec: (sql: string, label: string) => Promise<unknown>,
  *   sql: string,
  *   observe: () => Promise<{ table: string|null, columns: unknown, indexes: unknown }>,
  *   countTables: () => Promise<Record<string, number|null>>,
  *   beforeCounts: Record<string, number|null>,
+ *   judge?: (observed: unknown) => { state: string, summary: string },
  * }} io
  */
 export async function applyWithVerification(io) {
@@ -314,7 +324,9 @@ export async function applyWithVerification(io) {
     return done(`검증 관측 실패 — 되돌렸다: ${e?.message ?? e}`, 'OBSERVATION_FAILED')
   }
 
-  const verdict = judgeMigrationState(after)
+  // 🔴 주지 않으면 0024 판정이 기본이다 — 기존 호출부의 동작은 그대로다
+  const judge = io.judge ?? judgeMigrationState
+  const verdict = judge(after)
   if (verdict.state !== 'APPLIED_AND_VALID') {
     await rollback()
     return done(`COMMIT 전 검증 실패 — 되돌렸다: ${verdict.summary}`, verdict.state)
