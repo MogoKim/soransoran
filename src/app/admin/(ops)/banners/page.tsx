@@ -13,14 +13,17 @@ import HeroBannerRowControls from '@/components/admin/HeroBannerRowControls'
 import { AdminPageHeader, AdminSection, AdminBadge, AdminEmptyState } from '@/components/admin/AdminUi'
 
 /**
- * 배너 관리 — 지금 무엇이 나가는지 보고, 순서를 바꾸고, 보관한다.
+ * 배너 관리 — 무엇을 켜 두었는지 보고, 순서를 바꾸고, 보관한다.
  *
  * 🔴 /admin/home 과 섞지 않는다. 저쪽은 **이미 있는 글**을 홈에 올리고 내리는 일이고,
  *    여기는 운영자가 만든 이미지를 새로 올리는 일이다. 한 화면에 두면
  *    "글을 고정했다" 와 "배너를 켰다" 가 구분되지 않는다.
  *
- * 🔴 홈(/)은 아직 이 배너를 읽지 않는다. 켜도 고객 화면은 그대로다 —
- *    그 사실을 화면에 적는다. 적지 않으면 운영자가 "켰는데 왜 안 나오지" 로 헤맨다.
+ * 🔴 홈(/)은 아직 이 배너를 읽지 않는다. 켜도 고객 화면은 그대로다.
+ *    그래서 이 화면은 **"지금 나가고 있다" 고 말하지 않는다.** 말할 수 있는 것은
+ *    "켜 두었다" 와 "지금이 예약 구간 안이다" 두 가지뿐이다 —
+ *    한 화면에서 노출을 단정하는 배지와 "아직 반영되지 않습니다" 가 함께 보이면
+ *    운영자는 둘 중 어느 쪽을 믿어야 할지 알 수 없다.
  *    홈 동적 노출은 PR 3 이다.
  *
  * 🔴 목록에서 켜지 않는다. 켤 수 없는 이유(이미지 없음·5장 초과)를 설명할 자리가
@@ -62,7 +65,7 @@ export default async function AdminHeroBannersPage() {
       {/* 상단 요약 — 상태와 범위를 한 줄로. 큰 박스를 두지 않는다. */}
       <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
         <span className="text-content-primary">
-          지금 나갈 배너 <strong>{liveCount}</strong> / {HERO_BANNER_MAX_CONCURRENT} · 켜 둠{' '}
+          지금 예약 구간 안 <strong>{liveCount}</strong> / {HERO_BANNER_MAX_CONCURRENT} · 켜 둠{' '}
           <strong>{activeCount}</strong>
         </span>
         {incomplete > 0 ? (
@@ -71,7 +74,7 @@ export default async function AdminHeroBannersPage() {
           <span className="text-content-muted">준비 중인 초안 없음</span>
         )}
         <span className="text-content-muted">
-          아직 홈 화면에는 반영되지 않습니다 · 홈 노출은 다음 단계에서 켭니다
+          여기서 켜도 지금은 홈 화면이 바뀌지 않습니다 · 홈 화면 연결은 다음 단계입니다
         </span>
       </p>
 
@@ -87,7 +90,7 @@ export default async function AdminHeroBannersPage() {
       {/* ── 배너 목록 ────────────────────────────────── */}
       <AdminSection
         title={`배너 ${banners.length}장`}
-        description={`위에 있을수록 앞에 보입니다. 같은 시간에 나갈 수 있는 배너는 ${HERO_BANNER_MAX_CONCURRENT}장까지입니다.`}
+        description={`위에 있을수록 앞 순서입니다. 예약 구간이 겹치는 배너는 ${HERO_BANNER_MAX_CONCURRENT}장까지 켤 수 있습니다.`}
         className="mt-6"
       >
         {banners.length === 0 ? (
@@ -128,9 +131,9 @@ export default async function AdminHeroBannersPage() {
 
                     <span className="mt-1 block lg:mt-0">
                       {live ? (
-                        <AdminBadge tone="success">나가는 중</AdminBadge>
+                        <AdminBadge tone="success">켬 · 구간 안</AdminBadge>
                       ) : banner.isActive ? (
-                        <AdminBadge tone="neutral">켬 · 기간 밖</AdminBadge>
+                        <AdminBadge tone="neutral">켬 · 구간 밖</AdminBadge>
                       ) : (
                         <AdminBadge tone="neutral">꺼짐</AdminBadge>
                       )}

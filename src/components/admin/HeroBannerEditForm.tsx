@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useFormState, useFormStatus } from 'react-dom'
 import { updateHeroBanner, type HeroBannerActionState } from '@/lib/actions/admin-hero-banner'
 import {
@@ -16,7 +17,7 @@ import {
  *    (그래야 실패한 업로드가 폼 상태를 붙잡지 않는다), 여기는 글자만 맡는다.
  *
  * 🔴 켜기·끄기도 이 폼에 없다. 저장과 켜기를 한 버튼에 묶으면
- *    "저장만 하려던" 운영자가 배너를 홈에 내보낸다.
+ *    "저장만 하려던" 운영자가 배너를 켜 버린다.
  *
  * 🔴 예약은 한국 시간으로 적고 UTC 로 저장된다. 입력칸 옆에 그 사실을 적는다 —
  *    적지 않으면 9시간 어긋난 예약이 조용히 들어간다.
@@ -58,8 +59,23 @@ export default function HeroBannerEditForm({
   /** 보관한 배너는 고칠 수 없다 — 먼저 복원해야 한다. */
   disabled?: boolean
 }) {
+  const router = useRouter()
   const [state, formAction] = useFormState<HeroBannerActionState, FormData>(updateHeroBanner, {})
   const [linkKind, setLinkKind] = useState<HeroBannerLinkKind>(defaults.linkKind)
+
+  /**
+   * 🔴 저장이 끝나면 서버 컴포넌트를 다시 그린다.
+   *    켤 수 있는지(canActivateHeroBanner)는 여기서 저장한 값에 달려 있는데,
+   *    revalidatePath 만으로는 지금 보고 있는 화면이 바뀌지 않는다 —
+   *    설명을 채워 넣고도 켜기 버튼이 계속 잠겨 보이면 운영자는 길이 막힌다.
+   *
+   * 🔴 deps 에 state 객체를 통째로 넣는다. useFormState 는 제출마다
+   *    액션의 반환값을 새 객체로 주므로, 같은 { ok: true } 라도 다시 실행된다 —
+   *    state.ok 만 보면 두 번째 저장에서는 화면이 갱신되지 않는다.
+   */
+  useEffect(() => {
+    if (state.ok) router.refresh()
+  }, [state, router])
 
   return (
     <form action={formAction} className="mt-2 flex flex-col gap-4">
@@ -149,7 +165,7 @@ export default function HeroBannerEditForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="banner-starts" className={LABEL}>
-            노출 시작
+            예약 시작
           </label>
           <input
             id="banner-starts"
@@ -159,11 +175,11 @@ export default function HeroBannerEditForm({
             disabled={disabled}
             className={`${FIELD} mt-1`}
           />
-          <p className={HINT}>비워 두면 켜는 즉시 나갑니다 · 한국 시간</p>
+          <p className={HINT}>비워 두면 시작 제한이 없습니다 · 한국 시간으로 적습니다</p>
         </div>
         <div>
           <label htmlFor="banner-ends" className={LABEL}>
-            노출 종료
+            예약 종료
           </label>
           <input
             id="banner-ends"
@@ -173,7 +189,7 @@ export default function HeroBannerEditForm({
             disabled={disabled}
             className={`${FIELD} mt-1`}
           />
-          <p className={HINT}>비워 두면 끌 때까지 나갑니다 · 종료 시각에는 나가지 않습니다</p>
+          <p className={HINT}>비워 두면 종료 제한이 없습니다 · 종료 시각은 구간에 넣지 않습니다</p>
         </div>
       </div>
 

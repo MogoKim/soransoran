@@ -479,16 +479,33 @@ export async function moveHeroBanner(
       swapped[index] = neighbour
       swapped[target] = moving
 
-      // 0..n-1 로 다시 매긴다 — 동점이 남아 있으면 다음 이동도 조용히 실패한다.
+      /**
+       * 0..n-1 로 다시 매긴다 — 동점이 남아 있으면 다음 이동도 조용히 실패한다.
+       *
+       * 🔴 sortOrder 를 고치는 행에는 updatedByUserId 를 **함께** 쓴다.
+       *    updatedAt 은 @updatedAt 이라 저절로 지금 시각이 되는데,
+       *    updatedByUserId 를 빼면 "방금 바뀌었는데 바꾼 사람은 옛날 사람" 인 행이 남는다.
+       *    감사 기록이 그런 모양이면 없는 것보다 나쁘다 — 엉뚱한 사람을 가리킨다.
+       */
+      let movedTouched = false
       for (const [position, row] of swapped.entries()) {
         if (row.sortOrder === position) continue
         await tx.heroBanner.update({
           where: { id: row.id },
-          data: { sortOrder: position },
+          data: { sortOrder: position, updatedByUserId: userId },
         })
+        if (row.id === id) movedTouched = true
       }
 
-      await tx.heroBanner.update({ where: { id }, data: { updatedByUserId: userId } })
+      /**
+       * 🔴 움직임을 요청한 배너가 위 반복에서 안 닿을 수 있다.
+       *    동점(예: 전부 sortOrder 0)에서 한 칸 올리면 새 자리의 번호가
+       *    원래 값과 같아 건너뛰어진다 — 그래도 운영자는 조작을 한 것이므로 기록을 남긴다.
+       *    이미 닿았다면 다시 쓰지 않는다. 같은 행을 두 번 쓸 이유가 없다.
+       */
+      if (!movedTouched) {
+        await tx.heroBanner.update({ where: { id }, data: { updatedByUserId: userId } })
+      }
     })
 
     revalidateBanners(id)

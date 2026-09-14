@@ -1404,6 +1404,194 @@ for (const key of [
   expect(`.env.example 에 ${key} 가 값 없이 있다`, new RegExp(`^${key}=$`, 'm').test(ENV_EXAMPLE), true)
 }
 
+console.log('\n══════ 홈 미연동 문구 (보정 A)')
+
+const BANNER_LIST = readFileSync(join(ROOT, 'src/app/admin/(ops)/banners/page.tsx'), 'utf8')
+const BANNER_DETAIL = readFileSync(join(ROOT, 'src/app/admin/(ops)/banners/[id]/page.tsx'), 'utf8')
+const ACTIVATION_SRC = readFileSync(
+  join(ROOT, 'src/components/admin/HeroBannerActivation.tsx'),
+  'utf8',
+)
+const SLOT_SRC = readFileSync(join(ROOT, 'src/components/admin/HeroBannerImageSlot.tsx'), 'utf8')
+const EDIT_FORM_SRC = readFileSync(join(ROOT, 'src/components/admin/HeroBannerEditForm.tsx'), 'utf8')
+const ROW_CONTROLS_SRC = readFileSync(
+  join(ROOT, 'src/components/admin/HeroBannerRowControls.tsx'),
+  'utf8',
+)
+
+/**
+ * 운영자가 **읽는 글자**만 모은다.
+ *
+ * 🔴 주석을 지우고 본다. 이 저장소의 주석은 "왜 그렇게 쓰지 않는가" 를 설명하느라
+ *    금지 문구를 그대로 인용하게 되는데, 그것까지 위반으로 잡으면
+ *    설명을 지워야 통과하는 검사가 된다 — 그러면 규칙의 이유가 코드에서 사라진다.
+ */
+const ADMIN_BANNER_UI = [
+  BANNER_LIST,
+  BANNER_DETAIL,
+  ACTIVATION_SRC,
+  SLOT_SRC,
+  EDIT_FORM_SRC,
+  ROW_CONTROLS_SRC,
+]
+  .map(stripComments)
+  .join('\n')
+
+/**
+ * 🔴 PR 2 에서 홈(/)은 HeroBanner 를 읽지 않는다.
+ *    그러므로 어드민 화면은 "지금 나가고 있다" 고 말할 수 없다.
+ *    한 화면에서 노출을 단정하는 말과 "아직 반영되지 않습니다" 가 함께 보이면
+ *    운영자는 둘 중 어느 쪽을 믿어야 할지 알 수 없다.
+ */
+const EXPOSURE_CLAIMS = [
+  '지금 나갈 배너',
+  '나가는 중',
+  '홈 노출',
+  '홈에 나갑니다',
+  '홈에서 내려갑니다',
+  '홈에 나가지 않습니다',
+  '홈에 내보낸다',
+  '홈에 뜹니다',
+  '홈에 보입니다',
+]
+for (const claim of EXPOSURE_CLAIMS) {
+  expect(`어드민 배너 화면에 '${claim}' 이 없다`, ADMIN_BANNER_UI.includes(claim), false)
+}
+
+expect(
+  '켜 둔 상태를 "설정이 저장된 상태" 로 말한다',
+  /켜 둠 — 설정이 저장된 상태입니다/.test(ACTIVATION_SRC),
+  true,
+)
+expect(
+  '홈 연결이 다음 단계임을 목록과 상세 양쪽에 적는다',
+  /홈 화면 연결은 다음 단계입니다/.test(BANNER_LIST) &&
+    /홈 화면 연결은 다음 단계입니다/.test(BANNER_DETAIL),
+  true,
+)
+expect(
+  '예약 구간 안 여부는 안내한다 — 그것은 노출 주장이 아니다',
+  /켬 · 구간 안/.test(BANNER_LIST) && /켬 · 구간 밖/.test(BANNER_LIST),
+  true,
+)
+expect(
+  '상세 배지도 목록과 같은 말을 쓴다 — 두 화면이 다른 말을 하지 않는다',
+  /켬 · 구간 안/.test(BANNER_DETAIL) && /켬 · 구간 밖/.test(BANNER_DETAIL),
+  true,
+)
+
+console.log('\n══════ 실패한 이미지 미리보기 (보정 B)')
+
+expect(
+  '실패 통로가 하나다 — failWith 가 사진을 놓고 이유만 남긴다',
+  /const failWith = \(message: string\) => \{\s*releasePick\(\)\s*setUploaded\(null\)\s*setError\(message\)\s*\}/.test(
+    SLOT_SRC,
+  ),
+  true,
+)
+expect(
+  'releasePick 이 revoke · localUrl 비우기 · input 초기화를 한 번에 한다',
+  /const releasePick = useCallback\(\(\) => \{[\s\S]*?URL\.revokeObjectURL\(objectUrlRef\.current\)[\s\S]*?setLocalUrl\(null\)[\s\S]*?inputRef\.current\.value = ''[\s\S]*?\}, \[\]\)/.test(
+    SLOT_SRC,
+  ),
+  true,
+)
+
+/** 🔴 세 갈래(브라우저 규격 · 서버 응답 · 네트워크) 모두 failWith 로 끝나야 한다. */
+const SLOT_CODE = stripComments(SLOT_SRC)
+expect('브라우저 규격 실패가 failWith 로 간다', /if \(invalid\) \{\s*failWith\(invalid\.error\)/.test(SLOT_CODE), true)
+expect('서버 응답 실패가 failWith 로 간다', /failWith\(message\)/.test(SLOT_CODE), true)
+expect('네트워크 실패가 failWith 로 간다', /\} catch \{\s*failWith\(/.test(SLOT_CODE), true)
+/**
+ * 🔴 실패 경로가 **정확히 셋**이어야 한다 — 브라우저 규격 · 서버 응답 · 네트워크.
+ *    넷째 경로가 생기면(예: 타임아웃) 그것도 failWith 를 지나는지 여기서 다시 본다.
+ *    정의부는 `failWith = (` 라 이 정규식에 걸리지 않는다 — 세는 것은 호출뿐이다.
+ */
+expect('failWith 호출이 정확히 3개다', [...SLOT_CODE.matchAll(/failWith\(/g)].length, 3)
+expect(
+  '성공해도 blob 을 들고 있지 않는다',
+  /setUploaded\(\{ \.\.\.result, url: heroBannerImageUrl\(result\.key\) \}\)\s*\n\s*\n?\s*releasePick\(\)/.test(
+    SLOT_CODE,
+  ),
+  true,
+)
+expect('화면을 떠날 때도 revoke 한다', /return \(\) => \{\s*if \(objectUrlRef\.current\) \{\s*URL\.revokeObjectURL/.test(SLOT_CODE), true)
+expect(
+  '고른 사진과 저장된 사진을 한 변수로 섞지 않는다',
+  /const pendingPreview = localUrl/.test(SLOT_CODE) &&
+    /const storedPreview = uploaded\?\.url \?\? storedUrl/.test(SLOT_CODE),
+  true,
+)
+expect(
+  '올림 배지는 저장된 key 만 본다 — 고른 사진은 세지 않는다',
+  /const ready = Boolean\(uploaded\?\.key \?\? storedKey\)/.test(SLOT_CODE),
+  true,
+)
+expect('옛 preview 변수가 남아 있지 않다', /const preview = /.test(SLOT_CODE), false)
+
+console.log('\n══════ 순서 변경 감사 기록 (보정 C)')
+
+expect(
+  'sortOrder 를 고치는 행에 updatedByUserId 를 함께 쓴다',
+  /data: \{ sortOrder: position, updatedByUserId: userId \}/.test(ACTIONS),
+  true,
+)
+expect(
+  'sortOrder 만 쓰는 update 가 남아 있지 않다',
+  /data: \{ sortOrder: position \}/.test(ACTIONS),
+  false,
+)
+expect(
+  '반복에서 안 닿은 요청 대상도 기록한다 — 동점이면 번호가 그대로라 건너뛴다',
+  /if \(!movedTouched\) \{\s*await tx\.heroBanner\.update\(\{ where: \{ id \}, data: \{ updatedByUserId: userId \} \}\)/.test(
+    ACTIONS,
+  ),
+  true,
+)
+expect(
+  '이미 기록한 행을 두 번 쓰지 않는다',
+  /if \(row\.id === id\) movedTouched = true/.test(ACTIONS),
+  true,
+)
+expect('Serializable 구조를 유지한다', /moveHeroBanner[\s\S]*?await inSerializableTx\(/.test(ACTIONS), true)
+expect('0..n-1 재정렬 구조를 유지한다', /for \(const \[position, row\] of swapped\.entries\(\)\)/.test(ACTIONS), true)
+
+console.log('\n══════ 활성화 불가 잠금 (보정 D)')
+
+expect(
+  'blockedReason 이 있으면 켜기 버튼을 잠근다',
+  /disabled=\{pending \|\| Boolean\(blockedReason\)\}/.test(ACTIVATION_SRC),
+  true,
+)
+expect(
+  '끄기 버튼에는 이 잠금을 걸지 않는다',
+  /deactivateHeroBanner\(bannerId\)/.test(ACTIVATION_SRC) &&
+    [...stripComments(ACTIVATION_SRC).matchAll(/disabled=\{pending\}/g)].length === 1,
+  true,
+)
+expect(
+  '잠근 이유를 버튼 가까이에 계속 보여 준다',
+  /아직 켤 수 없습니다 — \{blockedReason\}/.test(ACTIVATION_SRC),
+  true,
+)
+expect(
+  '이미지 업로드가 끝나면 화면을 다시 그린다 — 조건이 풀리면 버튼이 열린다',
+  /router\.refresh\(\)/.test(SLOT_CODE),
+  true,
+)
+expect(
+  '내용 저장이 끝나도 화면을 다시 그린다',
+  /useEffect\(\(\) => \{\s*if \(state\.ok\) router\.refresh\(\)\s*\}, \[state, router\]\)/.test(
+    stripComments(EDIT_FORM_SRC),
+  ),
+  true,
+)
+expect(
+  '서버는 여전히 최종 권위자다 — 액션이 canActivateHeroBanner 를 다시 본다',
+  /const blocked = canActivateHeroBanner\(candidate\)/.test(ACTIONS),
+  true,
+)
+
 console.log('\n══════ 홈 · 다른 화면 무변경')
 
 expect('액션이 / 를 revalidate 하지 않는다', /revalidatePath\('\/'\)/.test(ACTIONS), false)

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { heroBannerImageUrl } from '@/lib/hero-banner-image'
@@ -28,6 +28,13 @@ import {
  *
  * 🔴 objectURL 을 반드시 revoke 한다. 배너 편집 화면은 한 번 열고 오래 머무는 자리라
  *    고를 때마다 blob 이 쌓이면 메모리를 그대로 먹는다.
+ *    성공이든 실패든 **끝나는 즉시** 놓는다 — 화면이 닫힐 때까지 들고 있지 않는다.
+ *
+ * 🔴 **실패한 사진은 미리보기에 남기지 않는다.** 규격 검사·서버 응답·네트워크 중
+ *    무엇이 실패하든 고른 사진을 지우고 이전 상태로 되돌린다.
+ *    남겨 두면 기존 이미지가 있는 배너에서 "올림" 배지 옆에 **올라가지도 않은 새 사진**이
+ *    보인다 — 운영자는 교체가 끝난 줄 알고 화면을 떠난다.
+ *    오류 문구는 남긴다. 사라지는 것은 사진뿐이다.
  */
 type UploadResult = { key: string; url: string | null; width: number; height: number }
 
@@ -50,16 +57,35 @@ export default function HeroBannerImageSlot({
   const spec = HERO_BANNER_IMAGE_SPEC[slot]
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
+  /**
+   * 🔴 지금 살아 있는 objectURL. state 와 따로 ref 로도 들고 있는다 —
+   *    state 는 다음 렌더에야 바뀌는데 revoke 는 지금 해야 한다.
+   */
+  const objectUrlRef = useRef<string | null>(null)
   const [localUrl, setLocalUrl] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploaded, setUploaded] = useState<UploadResult | null>(null)
 
+  /** 고른 사진을 놓는다 — blob 을 돌려주고 미리보기와 input 을 비운다. */
+  const releasePick = useCallback(() => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = null
+    }
+    setLocalUrl(null)
+    if (inputRef.current) inputRef.current.value = ''
+  }, [])
+
+  // 🔴 화면을 떠날 때 남은 blob 도 반드시 놓는다.
   useEffect(() => {
     return () => {
-      if (localUrl) URL.revokeObjectURL(localUrl)
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current)
+        objectUrlRef.current = null
+      }
     }
-  }, [localUrl])
+  }, [])
 
   /** 고른 파일의 실제 픽셀 크기. 못 읽으면 null — 그때는 서버 판정에 맡긴다. */
   function readSize(objectUrl: string): Promise<{ width: number; height: number } | null> {
@@ -76,10 +102,19 @@ export default function HeroBannerImageSlot({
     const file = event.target.files?.[0]
     if (!file) return
 
-    if (localUrl) URL.revokeObjectURL(localUrl)
+    // 앞서 고른 사진이 남아 있으면 먼저 놓는다 — blob 이 쌓이지 않는다.
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
     const objectUrl = URL.createObjectURL(file)
+    objectUrlRef.current = objectUrl
     setLocalUrl(objectUrl)
     setUploaded(null)
+
+    /** 실패 — 고른 사진을 지우고 이유만 남긴다. */
+    const failWith = (message: string) => {
+      releasePick()
+      setUploaded(null)
+      setError(message)
+    }
 
     const size = await readSize(objectUrl)
     if (size) {
@@ -91,7 +126,7 @@ export default function HeroBannerImageSlot({
         mimeType: file.type,
       })
       if (invalid) {
-        setError(invalid.error)
+        failWith(invalid.error)
         return
       }
     }
@@ -111,7 +146,7 @@ export default function HeroBannerImageSlot({
           data && typeof data === 'object' && 'error' in data
             ? String((data as { error: unknown }).error)
             : '사진을 올리지 못했습니다.'
-        setError(message)
+        failWith(message)
         return
       }
 
@@ -119,19 +154,30 @@ export default function HeroBannerImageSlot({
       //    등록되지 않은 host 를 넘기면 렌더 중에 던져 화면 전체가 하얘진다.
       const result = data as UploadResult
       setUploaded({ ...result, url: heroBannerImageUrl(result.key) })
+
+      // 🔴 성공해도 blob 을 들고 있지 않는다. 저장된 이미지가 미리보기를 맡는다.
+      releasePick()
+
       // 저장된 key 가 서버 컴포넌트 쪽에도 반영되도록 화면을 다시 그린다.
       router.refresh()
     } catch {
       // 🔴 원인을 그대로 보여 주지 않는다 — 네트워크 오류 문구에 내부 주소가 섞인다.
-      setError('사진을 올리지 못했습니다. 잠시 후 다시 시도해 주세요.')
+      failWith('사진을 올리지 못했습니다. 잠시 후 다시 시도해 주세요.')
     } finally {
       setBusy(false)
-      if (inputRef.current) inputRef.current.value = ''
     }
   }
 
-  const preview = uploaded?.url ?? localUrl ?? storedUrl
-  const previewIsStored = !localUrl && !uploaded && Boolean(storedUrl)
+  /**
+   * 🔴 "방금 고른 사진" 과 "서버에 저장된 사진" 을 하나의 변수로 섞지 않는다.
+   *    섞으면 실패한 blob 이 저장된 이미지 자리를 차지하고, 그 옆에서는
+   *    storedKey 때문에 "올림" 배지가 그대로 켜져 있다 — 가장 헷갈리는 상태다.
+   *
+   * 🔴 pendingPreview 는 **올리는 중일 때만** 값이 있다.
+   *    성공하면 releasePick 이, 실패해도 failWith 가 즉시 비운다.
+   */
+  const pendingPreview = localUrl
+  const storedPreview = uploaded?.url ?? storedUrl
   const ready = Boolean(uploaded?.key ?? storedKey)
 
   return (
@@ -154,24 +200,22 @@ export default function HeroBannerImageSlot({
         className="relative mt-2 w-full max-w-full overflow-hidden rounded-lg bg-surface-soft"
         style={{ aspectRatio: `${spec.recommendedWidth} / ${spec.recommendedHeight}` }}
       >
-        {preview ? (
-          previewIsStored || uploaded?.url ? (
-            <Image
-              src={preview}
-              alt={`${spec.label} 배너 미리보기`}
-              fill
-              sizes="(max-width: 1023px) 100vw, 480px"
-              className="object-cover"
-            />
-          ) : (
-            // 로컬 blob: 은 next/image 가 다루지 않는다 — 고른 직후의 임시 미리보기다.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={preview}
-              alt={`${spec.label} 배너 미리보기 (아직 올리지 않음)`}
-              className="absolute inset-0 h-full w-full object-cover"
-            />
-          )
+        {pendingPreview ? (
+          // 로컬 blob: 은 next/image 가 다루지 않는다 — 올리는 중인 임시 미리보기다.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={pendingPreview}
+            alt={`${spec.label} 배너 미리보기 (아직 올리지 않음)`}
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : storedPreview ? (
+          <Image
+            src={storedPreview}
+            alt={`${spec.label} 배너 미리보기`}
+            fill
+            sizes="(max-width: 1023px) 100vw, 480px"
+            className="object-cover"
+          />
         ) : (
           <span className="absolute inset-0 flex items-center justify-center text-xs text-content-muted">
             아직 올린 이미지가 없습니다
@@ -179,9 +223,9 @@ export default function HeroBannerImageSlot({
         )}
       </div>
 
-      {localUrl && !uploaded && !error ? (
+      {pendingPreview ? (
         <p className="m-0 mt-1 text-xs text-content-muted">
-          고른 사진입니다. 올리는 중이거나 아직 저장되지 않았습니다.
+          방금 고른 사진입니다. 아직 저장되지 않았습니다.
         </p>
       ) : null}
 

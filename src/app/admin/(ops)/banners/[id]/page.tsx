@@ -97,16 +97,16 @@ export default async function AdminHeroBannerDetailPage({
             {archived ? (
               <AdminBadge tone="neutral">보관됨</AdminBadge>
             ) : live ? (
-              <AdminBadge tone="success">나가는 중</AdminBadge>
+              <AdminBadge tone="success">켬 · 구간 안</AdminBadge>
             ) : banner.isActive ? (
-              <AdminBadge tone="neutral">켬 · 기간 밖</AdminBadge>
+              <AdminBadge tone="neutral">켬 · 구간 밖</AdminBadge>
             ) : (
               <AdminBadge tone="neutral">꺼짐</AdminBadge>
             )}
             <AdminBadge tone="neutral">순서 {banner.sortOrder + 1}</AdminBadge>
           </>
         }
-        description="아직 홈 화면에는 반영되지 않습니다. 홈 노출은 다음 단계에서 켭니다."
+        description="여기서 켜도 지금은 홈 화면이 바뀌지 않습니다. 홈 화면 연결은 다음 단계입니다."
       />
 
       {/* ── 켜기 · 끄기 ─────────────────────────────── */}
@@ -123,8 +123,8 @@ export default async function AdminHeroBannerDetailPage({
         </AdminSection>
       ) : (
         <AdminSection
-          title="홈 노출"
-          description={`같은 시간에 나갈 수 있는 배너는 ${HERO_BANNER_MAX_CONCURRENT}장까지입니다.`}
+          title="켜기 · 끄기"
+          description={`예약 구간이 겹치는 배너는 ${HERO_BANNER_MAX_CONCURRENT}장까지 켤 수 있습니다.`}
           className="mt-5"
         >
           <div className="mt-2">
