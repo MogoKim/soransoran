@@ -22,7 +22,7 @@
  */
 
 import {
-  RUNS_PER_DAY, SOURCE_FACTS,
+  RUNS_PER_DAY, SOURCE_FACTS, detailPerDayOf,
   type Phase, type SourceFacts, type SourceId,
 } from './collect-schedule'
 
@@ -153,7 +153,8 @@ export function preparedCapacity(phase: Phase): {
 } {
   const perSource = SOURCE_FACTS.map((f: SourceFacts): PreparedSource => {
     const runs = RUNS_PER_DAY[f.id][phase]
-    const theoretical = f.detailPerRun * runs
+    // 🔴 산식 정본은 `detailPerDayOf` 하나다 — 여기서 다시 적으면 82cook thin 경로를 놓친다
+    const theoretical = detailPerDayOf(f, phase)
     return {
       id: f.id, label: JOB_LABELS[f.id].multi, runsPerDay: runs,
       theoreticalPerDay: theoretical,

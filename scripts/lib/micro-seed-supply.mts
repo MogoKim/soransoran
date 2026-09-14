@@ -117,14 +117,41 @@ export function judgeSourceSite(sourceSite: string, mode: SupplyMode): SourceVer
  */
 export const SLOT_QUOTA: Record<string, number> = {
   '82cook': 30,
-  /** 🔴 네이버 카페 — 슬롯당 10건. 우나어의 카페당 80건과 의도적으로 다르다 */
+  /** 🔴 네이버 카페 기본값 — 슬롯당 10건. 우나어의 카페당 80건과 의도적으로 다르다 */
   navercafe: 10,
+}
+
+/**
+ * 🔴 **카페마다 다른 상한** (2026-09-13).
+ *
+ *    옛 판은 네이버 두 카페가 `navercafe: 10` 하나를 나눠 썼다.
+ *    그 값은 게시판 **하나당** 적용되는데 카페마다 게시판 수가 달라서,
+ *    같은 "10" 이 remonterrace 에는 회차당 11건(게시판 2개), wgang 에는 10건이 됐다.
+ *    실측(2026-09-11~12) 하루 요청은 remonterrace 135/150 · wgang **60/150** —
+ *    wgang 은 예산의 40% 만 쓰면서 상한에 눌려 있었다.
+ *
+ * 🔴 **막는 장치를 푸는 것이 아니라 카페별로 재는 것이다.**
+ *    요청 간격 · 일 요청 상한 · 403/429 차단기 · 세션 처리는 그대로다.
+ *    바뀌는 것은 "한 회차에 몇 건을 여는가" 하나이고, 그 수는
+ *    그 카페의 **자기 하루 상한 안에서** 정해진다.
+ *
+ * 🔴 값을 여기 영구히 박지 않는다 — 예산이 바뀌면 다시 잰다.
+ *    fixture 는 "상한 안에 드는가" 를 보지 "16이 맞는가" 를 보지 않는다.
+ */
+export const CAFE_SLOT_QUOTA: Record<string, number> = {
+  /** 게시판 2개(jjong 15p + humor 1p)로 이미 135/150 을 쓴다 — 올릴 자리가 없다 */
+  remonterrace: 10,
+  /** 게시판 1개(all 5p) · 60/150 — 여유가 크다. (5+16)×4 = 84/150 */
+  wgang: 16,
 }
 
 /** 이 소스의 한 슬롯 상한. 모르는 소스는 가장 보수적인 값을 준다 */
 export function slotQuotaOf(sourceSite: string): number {
   if (sourceSite === SHEET_LANE_SOURCE_SITE) return SLOT_QUOTA['82cook']
-  if (isNaverCafeSource(sourceSite)) return SLOT_QUOTA.navercafe
+  if (isNaverCafeSource(sourceSite)) {
+    const cafe = sourceSite.replace(/^navercafe:/, '')
+    return CAFE_SLOT_QUOTA[cafe] ?? SLOT_QUOTA.navercafe
+  }
   return Math.min(...Object.values(SLOT_QUOTA))
 }
 

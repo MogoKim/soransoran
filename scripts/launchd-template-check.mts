@@ -30,7 +30,10 @@ import {
   planSlots, verifySchedule, verifyNoCrossOverlap, isolationOf, factsOf,
   MAX_REQUESTS_PER_DAY, RUNS_PER_DAY, SUPPLY_PROCESS_SLOTS,
   THIN_82COOK_RUNS_PER_DAY, THIN_82COOK_SLOTS, requests82cookPerDay, thin82cookCapPerRun,
+  requestsPerRunOf, thin82cookRequestsPerRun, ROBOTS_REQUESTS_PER_RUN,
+  detailPerDayOf, configuredDetailCeilingPerDay, evidenceAdjustedDetailPerDay,
 } from '../src/lib/collect-schedule'
+import { planCafeRun } from './lib/navercafe-run-plan.mjs'
 
 const DIR = 'docs/operations/launchd'
 
@@ -79,8 +82,10 @@ const EXPECTED: Record<string, {
 }> = {
   'com.soransoran.raw-collect-82cook.plist.template': {
     label: 'com.soransoran.raw-collect-82cook',
+    // 🔴 **목록 전용이다** (2026-09-13). `--auto --auto-max=30` 을 뺐다 —
+    //    그 30건은 `82cook.jsonl` 로 떨어지고 D100 처리기는 그 파일을 읽지 않는다.
     args: ['__NPX__', 'tsx', '__REPO__/scripts/micro-seed-collect-82cook.mts',
-      '--list', '--pages=3', '--auto', '--auto-max=30', '--live'],
+      '--list', '--pages=3', '--live'],
     slots: [...planSlots('82cook', 'start')],
     out: '__LOGDIR__/raw-collect-82cook.log',
     err: '__LOGDIR__/raw-collect-82cook-error.log',
@@ -217,13 +222,94 @@ for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
    */
   check('🔴 82cook 본문 슬롯이 목록 슬롯의 40분 뒤다',
     thin.slots.every((t, i) => t.hour === raw.slots[i]!.hour && t.minute === raw.slots[i]!.minute + 40))
-  /** 🔴 확정 요청량 — 33×5 + 17×5 = 250 / 상한 400 */
-  check('🔴 82cook 하루 요청이 33×5 + 17×5 = 250 이다', (() => {
-    const rawPerDay = factsOf('82cook').requestsPerRun * raw.slots.length
-    const thinPerDay = thin82cookCapPerRun() * thin.slots.length
-    return rawPerDay === 165 && thinPerDay === 85
-      && requests82cookPerDay() === 250 && 250 <= MAX_REQUESTS_PER_DAY['82cook']
+  /**
+   * 🔴 **목록 job 이 본문을 열지 않는다** (2026-09-13).
+   *    열면 아래 요청량 계산이 거짓이 된다 — 실제로 거짓이었다(세지 않은 30×5 = 150).
+   */
+  check('🔴 82cook 목록 job 이 본문을 열지 않는다',
+    !raw.args.includes('--auto') && !raw.args.some((a) => a.startsWith('--auto-max')))
+  /**
+   * 🔴 **요청량을 손으로 적지 않는다** (2026-09-14).
+   *    옛 fixture 는 `33×5 + 17×5 = 250` 을 상수로 잠갔다. 그런데 `--auto` 를 떼어
+   *    상세를 안 여는데도 그 수가 그대로 남아 **없는 요청 150건을 보고**했다.
+   *    이제 실제 인자에서 파생한다 — 템플릿이 바뀌면 이 수도 따라 바뀐다.
+   *
+   * 🔴 **robots 도 센다.** 두 job 모두 실행마다 robots.txt 를 한 번 읽는다.
+   */
+  check('🔴 요청량이 템플릿 인자에서 파생된다 — 손으로 적은 수가 아니다', (() => {
+    const pages = Number(/--pages=(\d+)/.exec(raw.args.join(' '))?.[1] ?? -1)
+    return pages === factsOf('82cook').listPagesPerRun.value
+      && requestsPerRunOf('82cook') === ROBOTS_REQUESTS_PER_RUN + pages + 0
   })())
+  check('🔴 raw 한 회차 = robots 1 + 목록 3 = 4', requestsPerRunOf('82cook') === 4)
+  check('🔴 thin 한 회차 = robots 1 + 상세 17 = 18', thin82cookRequestsPerRun() === 18)
+  check('🔴 82cook 하루 요청 = 4×5 + 18×5 = 110 ≤ 상한 400', (() => {
+    const rawPerDay = requestsPerRunOf('82cook') * raw.slots.length
+    const thinPerDay = thin82cookRequestsPerRun() * thin.slots.length
+    return rawPerDay === 20 && thinPerDay === 90
+      && requests82cookPerDay() === 110 && 110 <= MAX_REQUESTS_PER_DAY['82cook']
+  })())
+  /**
+   * 🔴 **네이버 요청량은 `planCafeRun` 정본과 같아야 한다** (2026-09-14).
+   *    옛 `SOURCE_FACTS`(1페이지·10건)로 계산하면 remonterrace 60 · wgang 48 이 나왔다 —
+   *    실제는 135 · 84 다. 값을 여기 다시 적지 않고 **정본과 대조**한다.
+   */
+  for (const cafeId of ['remonterrace', 'wgang'] as const) {
+    const cp = planCafeRun({ cafeId })
+    check(`🔴 ${cafeId} 요청량이 planCafeRun 정본과 같다 (${cp.requestsPerDay}/day)`,
+      requestsPerRunOf(cp.source) * cp.runsPerDay === cp.requestsPerDay)
+    check(`🔴 ${cafeId} 상세 상한이 정본과 같다 (${cp.detailPerRun * cp.runsPerDay}/day)`,
+      detailPerDayOf(factsOf(cp.source), 'start') === cp.detailPerRun * cp.runsPerDay)
+  }
+  check('🔴 네이버는 robots 요청을 하지 않는다 — 82cook 에만 더한다', (() => {
+    const rm = planCafeRun({ cafeId: 'remonterrace' })
+    return requestsPerRunOf('navercafe:remonterrace') === rm.listPerRun + rm.detailPerRun
+      && requestsPerRunOf('82cook') === ROBOTS_REQUESTS_PER_RUN + 3 + 0
+  })())
+  /** 🔴 configured detail ceiling — 82cook 85 + remonterrace 55 + wgang 64 */
+  check('🔴 설정된 상세 상한은 204/day 다', configuredDetailCeilingPerDay('start') === 204)
+  check('🔴 근거 보정 추정치는 상한과 다른 이름이다 — 관측 생산량이 아니다', (() => {
+    const src = readFileSync('src/lib/collect-schedule.ts', 'utf-8')
+    return evidenceAdjustedDetailPerDay('start') === 187
+      && /evidence-adjusted planning estimate/.test(src)
+      && !/export function effectiveDetailPerDay/.test(src)
+  })())
+
+  /** 🔴 옛 계산(250/day)이 코드로 돌아오면 실패한다 */
+  check('🔴 옛 250/day 계산이 남아 있지 않다', (() => {
+    const sched = readFileSync('src/lib/collect-schedule.ts', 'utf-8')
+    return !/requestsPerRun: *33/.test(sched) && !/33×5 \+ 17×5 = \*\*250/.test(sched)
+      && !/detailPerRun: *30/.test(sched)
+      // 🔴 옛 1페이지·10건으로 현재 실행량을 계산하면 실패한다
+      && !/detailPerRun: *10,/.test(sched) && !/listPagesPerRun: \{ value: 1,/.test(sched)
+  })())
+
+  /**
+   * 🔴 **현재형 문서가 낡은 숫자를 말하면 실패한다** (2026-09-14).
+   *    과거 기록은 날짜와 과거형이 분명할 때만 남긴다.
+   */
+  {
+    const CURRENT_DOCS = [
+      'docs/operations/MASTER-OPERATING-SYSTEM.md',
+      'docs/operations/CURRENT-MILESTONE.md',
+      'docs/operations/launchd/README.md',
+      'docs/operations/launchd/com.soransoran.raw-collect-82cook.plist.template',
+      'docs/operations/launchd/com.soransoran.supply-collect-82cook-thin.plist.template',
+    ]
+    for (const d of CURRENT_DOCS) {
+      if (!existsSync(d)) continue
+      const t = readFileSync(d, 'utf-8')
+      const stale = t.split('\n').filter((line) =>
+        /250\s*(?:건|요청)?\s*\/\s*day|250건\/day|configured\D{0,12}158/.test(line)
+        // 과거형 기록은 남긴다 — 날짜나 "옛/전에는" 이 같은 줄에 있어야 한다
+        && !/20\d\d-\d\d-\d\d|옛 |전에는|이었다|였다/.test(line))
+      check(`🔴 ${d} 에 낡은 현재형 숫자가 없다`, stale.length === 0)
+      if (d.endsWith('README.md')) {
+        check('🔴 README raw 명령에 --auto 가 없다',
+          !/--auto(?:-max)?/.test(t.replace(/^.*(?:20\d\d-\d\d-\d\d|전에는|옛 ).*$/gm, '')))
+      }
+    }
+  }
 }
 
 /**

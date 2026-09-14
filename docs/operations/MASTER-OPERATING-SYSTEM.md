@@ -419,7 +419,8 @@ GitHub Actions cron은 정확한 시각을 보장하지 않는다. 실제 00:05 
 | Memory | Self 0, Relationship 0, Community 0, Mood 0, Negative 1 |
 | VoiceSource / VoiceDerived | 9,674 / 9,674 |
 | VoiceCommentSignal | 59,252 |
-| 수집 능력 (configured) | 210건/day — 82cook 5회 120 · remonterrace 5회 50 · wgang 4회 40 (🟢 4 job 전부 등록) |
+| 설정된 상세 상한 (configured ceiling) | **204건/day** — 82cook thin 85 · remonterrace 55 · wgang 64 (🔴 raw 목록 job 은 상세를 열지 않는다) |
+| 근거 보정 계획 추정치 | 187건/day — 위 상한 × 실측 성공률. 🔴 **관측된 생산량이 아니다** — 계획용 추정치다 |
 | 🔴 수집 능력 (observed) | **0건/day** — 등록 이후 성공 회차 0 (2026-09-10 복구 전) · 복구 후 재측정 대기 |
 
 `capacity=d3 · release=d1` (§6.2). 🔴 **공개 발행은 여전히 1/day 다.**
@@ -861,7 +862,8 @@ supply-process   08:15 12:15 14:15 17:15 21:15 22:15  6회   ← 수집 뒤에 �
 바뀐 것은 **언제 도는가** 하나다. 회차가 늘면서 하루 상한(150) 안에서 remonterrace 의
 회차당 상세만 12 → 11 로 재분배됐다 — 기존 산식(`planCafeRun`)의 자동 결과다.
 
-🔴 **82cook 요청량**: 목록 33×5 = 165 + 본문 17×5 = 85 → **250/day** (상한 400, 여유 150).
+🔴 **82cook 요청량**: 목록 job 4×5 = 20 + 본문 job 18×5 = 90 → **110/day** (상한 400, 여유 290).
+   robots.txt 요청도 회차마다 1건씩 센다.
 한 회차 상한 17 은 **고정값**이다. 일정이 바뀔 때마다 상한이 따라 커지면 안전장치가 아니다 —
 82cook 유입 관측이 쌓이기 전까지 보수적으로 둔다.
 
@@ -2198,7 +2200,10 @@ Claude 또는 Codex의 보고는 항상 이 다섯 칸을 분리한다.
 - 품질 축 정본: `src/lib/micro-seed-auto-draft.ts` (`DRAFT_QUALITY_AXES` · `DRAFT_QUALITY_AXIS_PROMPT`)
   — 🔴 품질 프롬프트는 이 표에서 **생성**한다. 사람이 두 목록을 따로 적지 않는다
 - publish: `scripts/original-post-auto-publish.mts`, `.github/workflows/auto-publish.yml`
-- health: `scripts/supply-health.mts`
+- health: `scripts/supply-health.mts` — 🔴 슬롯·등록여부·완료판정을 **정본에서만** 읽는다(2026-09-13)
+- 수집 시각 정본: `src/lib/collect-schedule.ts` (`SLOTS`) — 관제·설치·fixture 가 같은 표를 본다
+- 카페별 회차 상한: `scripts/lib/micro-seed-supply.mts` (`CAFE_SLOT_QUOTA`)
+  — 🔴 숫자가 아니라 "그 카페의 하루 요청 상한 안에 드는가" 가 계약이다
 - 기준 DB 스냅샷: 2026-09-08 read-only 직접 조회
 - 82cook: 로컬 DNS/TCP/HTTP 진단과 외부 게시판 응답 대조
 

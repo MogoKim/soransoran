@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 
 import {
   SKIP_LABEL, CAFE_BODY_HEAD_CHARS, planCafeThin, keepAfterClassify, outPathOf,
-  isNaverCafeRow, statsOf, verifyThinRun, dedupKeyOf, type CafeRow,
+  isNaverCafeRow, statsOf, verifyThinRun, dedupKeyOf, uniqueSourceCount, type CafeRow,
 } from '../src/lib/micro-seed-navercafe-thin'
 import { THIN_COLUMNS, FORBIDDEN_COLUMNS, toThinRow, violatesStorage } from '../src/lib/micro-seed-82cook-thin'
 
@@ -301,6 +301,49 @@ check('🔴 .microseed-data 밖으로 쓰지 않는다', /isInsideDataDir/.test(
 check('🔴 기본 실행은 쓰지 않는다', /APPLY = argv\.includes\('--apply'\)/.test(code))
 check('🔴 목록 파일(.list.jsonl)을 상세로 착각하지 않는다',
   /navercafe-\[a-z0-9\]\+-\[0-9-\]\+\\\.jsonl/.test(code) || /\.list\.jsonl/.test(code))
+
+/**
+ * 🔴 **"제외" 를 네 갈래로 나눈다** (2026-09-13).
+ *
+ *    관측(2026-09-11~12)에서 후보 1,479건 중 95건만 열렸고 나머지 1,384건이
+ *    "제외" 로 보였다. 대부분은 버린 것이 아니라 **회차 상한 때문에 미룬 것**이었다.
+ *    섞여 있으면 "왜 이렇게 많이 거르나" 라는 틀린 물음을 하게 된다.
+ */
+console.log('\n⑨ 🔴 제외를 네 갈래로 나눈다')
+{
+  const rows = [
+    row({ sourceArticleId: '1' }),
+    row({ sourceArticleId: '2' }),
+    row({ sourceArticleId: '3' }),
+    row({ sourceArticleId: '4', rawBody: '' }),          // 🔴 안 가져옴
+    row({ sourceArticleId: '5' }),                        // ⚪ 이미 읽음
+  ]
+  const p = planCafeThin({
+    rows, cap: 2,
+    seen: new Set([dedupKeyOf('navercafe:remonterrace', '5')]),
+  })
+  check('🟢 이번 회차 처리는 상한만큼이다', p.targets.length === 2)
+  check('🟡 상한에 밀린 것은 **이월**이다 — 제외가 아니다', p.deferred.length === 1)
+  check('⚪ 이미 읽은 것은 따로 센다', p.alreadyRead.length === 1 && p.alreadyRead[0]!.code === 'ALREADY')
+  check('🔴 안 가져오는 것도 따로 센다', p.rejected.length === 1 && p.rejected[0]!.code === 'NO_BODY')
+  check('🔴 이월은 skipped 에 들어가지 않는다 — 옛 이름으로 세도 부풀지 않는다',
+    p.skipped.length === 2 && !p.skipped.some((x) => x.id === '3'))
+  check('🔴 네 갈래의 합이 입력과 같다 — 조용히 사라지는 행이 없다',
+    p.targets.length + p.deferred.length + p.alreadyRead.length + p.rejected.length === rows.length)
+  check('🔴 이월된 것은 다음 회차에 다시 후보가 된다', (() => {
+    const again = planCafeThin({ rows: p.deferred, seen: NONE, cap: 10 })
+    return again.targets.length === 1
+  })())
+}
+
+console.log('\n⑩ 🔴 후보 수를 고유 원천 수로 오해하지 않는다')
+{
+  // 같은 글이 페이지를 걸쳐 두 번 나오는 것은 흔하다 — 행 수는 원천 수가 아니다
+  const dup = [row({ sourceArticleId: '9' }), row({ sourceArticleId: '9' }), row({ sourceArticleId: '8' })]
+  check('🔴 행 3건이지만 고유 원천은 2건이다', dup.length === 3 && uniqueSourceCount(dup) === 2)
+  check('🔴 같은 번호라도 카페가 다르면 다른 글이다',
+    uniqueSourceCount([row({ sourceArticleId: '9' }), row({ sourceArticleId: '9', sourceSite: 'navercafe:wgang' })]) === 2)
+}
 
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)

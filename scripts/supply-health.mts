@@ -32,6 +32,8 @@ import {
 } from '../src/lib/supply-health'
 import { STOCK_TARGET, readStock, queueProfileOf } from '../src/lib/micro-seed-supply-autofill'
 import { LOCK_FILE, LOCK_TTL_MS, RUN_FILE_RE, adaptKeyOf } from '../src/lib/supply-process'
+// 🔴 완료 판정은 러너·어댑터와 **같은 함수**를 쓴다. 여기서 정규식을 다시 쓰지 않는다
+import { completedAdaptKeys } from '../src/lib/micro-seed-82cook-thin-adapt'
 /** 🔴 잠금 판정 정본 하나 — 관제도 러너와 같은 함수로 본다 */
 import { lockAnomaly as processLockAnomaly } from './lib/collect-lock.mjs'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
@@ -40,7 +42,13 @@ import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { PROFILES, derive as deriveProfile, effectiveWeeklyCap, minuteOfDay, slotLabel } from '../src/lib/scale-profile'
 import { simulateAllStages, promotionPlan, highestReady, horizonMismatches } from '../src/lib/scale-readiness'
-import { SOURCE_FACTS, THIN_82COOK_SLOTS, type SourceId } from '../src/lib/collect-schedule'
+import { SOURCE_FACTS, THIN_82COOK_SLOTS, planSlots, type SourceId, type Phase } from '../src/lib/collect-schedule'
+
+/** 🔴 지금 운영 중인 단계. 시각 정본이 단계별 표를 갖고 있으므로 어느 단계인지 한 번만 적는다 */
+const COLLECT_PHASE: Phase = 'start'
+
+/** 🔴 예약이 올라와 있지 않아 판정에서 뺀 레인 — **조용히 빼지 않고 화면에 적는다** */
+const NOT_REGISTERED: SourceId[] = []
 import { guardSnapshot, rollBudgetDay, type GuardState } from '../src/lib/collect-guard'
 import { guardPath, kstDayOf } from './lib/collect-guard-store.mjs'
 import { planSupply, collectReadiness } from '../src/lib/scale-supply-plan'
@@ -90,39 +98,41 @@ const SUPPLY_STALE_MS = 30 * 60 * 60 * 1000
  * 확정 수집원 셋 — 🔴 §4-AV 와 같은 목록이다.
  *
  * 🔴 **슬롯은 배열이다.** 첫 슬롯 하나만 보면 "다음 실행" 을 내일로 잡아 헛기다린다.
+ *
+ * 🔴 **슬롯을 여기 적지 않는다** (2026-09-13 정정).
+ *
+ *    옛 판은 네이버 두 카페의 슬롯을 손으로 적어 두고 있었다 —
+ *    `remonterrace [[4,20],[10,20],[16,20],[22,20]]` · `wgang [[2,50],[8,50],[14,50],[20,50]]`.
+ *    실제로 도는 시각은 `remonterrace 07:30·10:30·13:30·16:30·21:30`(5회) ·
+ *    `wgang 09:30·11:30·15:30·20:30`(4회) 다. **한 자리도 맞지 않았다.**
+ *    그래서 관제는 "돌아야 할 시각" 을 틀리게 알고 있었고,
+ *    2026-09-11~12 24시간 관측에서 82cook 6회 실패를 화면이 잡지 못했다.
+ *
+ *    시각 정본은 `collect-schedule.ts` 의 `SLOTS` 하나다. 여기서는 파생만 한다.
+ *
+ * 🔴 **`onDemand` 는 실측이다** (2026-09-13 정정).
+ *    옛 판은 82cook 얇은 상세를 "아직 등록 안 됨" 으로 못박아 두고 stale 판정에서
+ *    통째로 건너뛰었다(`continue`). 그 job 은 2026-09-11 에 등록돼 5회/day 로 돌고 있다.
+ *    등록 여부를 상수로 적으면 등록한 날 관제가 눈을 감는다 —
+ *    **plist 존재를 실제로 본다.**
  */
 const SOURCES: {
-  id: string; filePrefix: string; logName: string; slots: [number, number][]
-  /** 🔴 예약 job 이 아직 올라와 있지 않은 레인인가 — 돌지 않는 슬롯으로 stale 을 묻지 않는다 */
-  onDemand?: boolean
+  id: SourceId; filePrefix: string; logName: string; slots: [number, number][]
 }[] = [
   {
-    /**
-     * 🔴 **82cook 얇은 상세 job 은 아직 등록돼 있지 않다.** 아래 슬롯은 *계획*(prepared)이다 —
-     *    그래서 stale 임계를 이 슬롯에서 파생시키지 않는다. 돌지 않는 슬롯으로
-     *    "왜 안 도느냐" 를 물으면 화면이 늘 빨갛고, 그러면 진짜 장애가 그 안에 묻힌다.
-     *    🔴 등록되면 `onDemand` 를 내린다 — 그때부터는 슬롯이 실제 약속이다.
-     */
     id: '82cook', filePrefix: '82cook-thin-', logName: 'supply-collect-82cook-thin',
-    // 🔴 시각 정본은 `collect-schedule` 하나다 — 여기 숫자를 다시 적지 않는다
+    // 🔴 목록 슬롯의 40분 뒤 — 정본이 그렇게 파생시킨다
     slots: THIN_82COOK_SLOTS.map((x) => [x.hour, x.minute] as [number, number]),
-    onDemand: true,
   },
   {
-    /**
-     * 🔴 **Wave B 이후 다회 job 이 정본이다** (2026-09-10 정정).
-     *    옛 판은 1회 슬롯(`[[9,20]]`)과 1회판 로그 이름을 보고 있었다 —
-     *    실제로 도는 `-multi` job 의 로그를 **한 번도 읽지 않았고**,
-     *    그래서 8회 연속 `SESSION_FILE_MISSING` 을 놓쳤다.
-     */
     id: 'navercafe:remonterrace', filePrefix: 'navercafe-thin-remonterrace-',
     logName: 'navercafe-collect-remonterrace-multi',
-    slots: [[4, 20], [10, 20], [16, 20], [22, 20]],
+    slots: planSlots('navercafe:remonterrace', COLLECT_PHASE).map((x) => [x.hour, x.minute] as [number, number]),
   },
   {
     id: 'navercafe:wgang', filePrefix: 'navercafe-thin-wgang-',
     logName: 'navercafe-collect-wgang-multi',
-    slots: [[2, 50], [8, 50], [14, 50], [20, 50]],
+    slots: planSlots('navercafe:wgang', COLLECT_PHASE).map((x) => [x.hour, x.minute] as [number, number]),
   },
 ]
 
@@ -198,20 +208,26 @@ function nextScheduled(slots: readonly [number, number][], now: Date): Date {
   return cands.reduce((a, b) => (a.getTime() <= b.getTime() ? a : b))
 }
 
+/** 🔴 job 이름 → launchd label. 한 줄이지만 두 곳이 각자 지으면 갈라진다 */
+const labelOf = (logName: string): string => `com.soransoran.${logName}`
+
 /** job 이 등록된 시각 — plist mtime. 없으면 null(등록 안 됨) */
 function jobRegisteredAt(label: string): Date | null {
   const p = join(homedir(), 'Library', 'LaunchAgents', `${label}.plist`)
   return existsSync(p) ? statSync(p).mtime : null
 }
 
-/** 아직 adapt 되지 않은 얇은 파일 수 — 🔴 공급 러너와 같은 키로 센다 */
+/**
+ * 아직 adapt 되지 않은 얇은 파일 수 — 🔴 **공급 러너와 같은 함수로 센다.**
+ *
+ * 🔴 옛 판은 `/^82cook-adapt-(.+?)\./` 정규식을 여기서 다시 썼다.
+ *    그 정규식은 `detail` 한쪽만 있어도 "완료" 로 봤다 — 2026-09-11 Codex 리뷰가
+ *    러너 쪽에서 같은 결함을 잡아 `completedAdaptKeys` 로 고쳤는데,
+ *    관제는 옛 판정을 그대로 들고 있어서 **러너는 밀렸다고 보는 것을 관제는 끝났다고 봤다.**
+ */
 function pendingThinCount(): number {
   const files = dataFiles()
-  const done = new Set<string>()
-  for (const x of files.filter((y) => y.startsWith('82cook-adapt-'))) {
-    const m = /^82cook-adapt-(.+?)\./.exec(x)
-    if (m !== null) done.add(m[1])
-  }
+  const done = completedAdaptKeys(files)
   return files.filter((x) => x.endsWith('.thin-detail.jsonl')).filter((x) => !done.has(adaptKeyOf(x))).length
 }
 
@@ -292,7 +308,12 @@ async function main(): Promise<void> {
   })()
   const OPS: Record<string, ReturnType<typeof judgeSourceOperations>> = {}
   for (const s of SOURCES) {
-    if (s.onDemand === true) continue
+    // 🔴 **등록되지 않은 job 의 슬롯으로 "왜 안 도느냐" 를 묻지 않는다.**
+    //    다만 등록 여부는 상수가 아니라 plist 실측이다 — 등록한 날 눈을 감지 않게.
+    if (jobRegisteredAt(labelOf(s.logName)) === null) {
+      NOT_REGISTERED.push(s.id)
+      continue
+    }
     OPS[s.id] = judgeSourceOperations({
       sourceId: s.id,
       records: readRunRecords(s.id),
@@ -309,10 +330,15 @@ async function main(): Promise<void> {
   const sources = SOURCES.map((s) => {
     const art = lastArtifact(s.filePrefix)
     const logs = logFacts(s.logName, art.at)
-    // 🔴 job 이 방금 등록됐다면 첫 예정 시각이 아직 안 왔을 수 있다
-    const label = s.id === '82cook' ? 'com.soransoran.raw-collect-82cook'
-      : `com.soransoran.navercafe-collect-${s.id.replace('navercafe:', '')}`
-    const registered = jobRegisteredAt(label)
+    /**
+     * 🔴 job 이 방금 등록됐다면 첫 예정 시각이 아직 안 왔을 수 있다.
+     *
+     * 🔴 **그 레인 자신의 job 을 본다** (2026-09-13 정정).
+     *    옛 판은 82cook **얇은 상세** 레인의 등록 여부를 `raw-collect-82cook`(목록 job)
+     *    의 plist 로 물었다. 둘은 다른 job 이고 다른 날 등록됐다 —
+     *    한쪽이 죽어도 다른 쪽 plist 가 있으면 "등록됨" 으로 보였다.
+     */
+    const registered = jobRegisteredAt(labelOf(s.logName))
     const firstScheduledAt = registered === null ? null : nextScheduled(s.slots, registered)
     return {
       sourceId: s.id,
@@ -328,9 +354,9 @@ async function main(): Promise<void> {
          * 🔴 **남은 죽은 락은 회차 기록과 별개로 관측한다.**
          *    회차가 아예 못 돌아 기록이 없을 수도 있다 — 그때도 사람이 알아야 한다.
          */
-        lockStale: s.onDemand === true ? null : lockAnomaly(LOCK_PATH, now.getTime(), LOCK_MAX_AGE_MS),
+        lockStale: registered ? lockAnomaly(LOCK_PATH, now.getTime(), LOCK_MAX_AGE_MS) : null,
         // 🔴 그 source 의 실제 슬롯 간격에서 파생한다 — 상수를 쓰지 않는다
-        now, staleAfterMs: staleAfterFromSlots(s.onDemand === true ? [] : s.slots),
+        now, staleAfterMs: staleAfterFromSlots(registered ? s.slots : []),
       }),
     }
   })
@@ -829,6 +855,10 @@ async function main(): Promise<void> {
   console.log('  🔴 read-only — DB write 0 · 네트워크 0 · LLM 0 · 수집 0 · 발행 0\n')
 
   console.log('① 수집원')
+  // 🔴 **판정에서 뺀 레인을 조용히 빼지 않는다.** 안 보이면 "정상" 으로 읽힌다
+  for (const id of NOT_REGISTERED) {
+    console.log(`   🟡 ${id} — 예약 job 이 등록돼 있지 않다. 슬롯 판정에서 뺐다`)
+  }
   for (const s of report.sources) {
     for (const x of s.findings) console.log(`   ${mark(x)} ${x.message}`)
   }

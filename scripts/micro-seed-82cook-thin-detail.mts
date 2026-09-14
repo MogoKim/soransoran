@@ -39,6 +39,9 @@ import { judgePoliticsTitle } from './lib/micro-seed-navercafe.mjs'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { runIdOf } from './micro-seed-detail-fetch.mjs'
 import { loadEnvLocal, kstString } from './lib/micro-seed-time.mjs'
+// 🔴 raw 목록 job 과 **같은 차단기 정본**을 쓴다 — 두 번째 guard 를 만들지 않는다
+import { guardedGet } from './lib/collect-guard-store.mjs'
+import type { SourceId } from '../src/lib/collect-guard'
 import {
   planThinFetch, toThinRow, violatesStorage, judgeLive, paceMs,
   THIN_COLUMNS, SKIP_LABEL, BATCH_CAP, PACE_MIN_MS, PACE_MAX_MS,
@@ -118,10 +121,28 @@ function seenBodyIds(): Set<string> {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms) })
 
+/**
+ * 🔴 **raw 목록 job 과 같은 차단기를 쓴다** (2026-09-14).
+ *
+ *    전에는 여기서 `fetch` 를 직접 불렀다. 그래서 raw 가 NETWORK 차단기를 연 뒤에도
+ *    40분 뒤 이 job 이 **같은 IP 로 같은 도메인을 다시 두드렸다** — 차단기가 있으나
+ *    한쪽만 보고 있었던 것이다.
+ *
+ * 🔴 **두 번째 guard 를 만들지 않는다.** `source: '82cook'` 하나로 raw 와
+ *    예산 · 잠금 · 차단기 상태를 전부 공유한다. 새 상태 파일도 새 추상화도 없다.
+ */
+const GUARD_SOURCE: SourceId = '82cook'
+
 async function get(url: string): Promise<string> {
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' } })
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`)
-  return res.text()
+  // 🔴 예약·기록은 `guardedGet` 이 **파일 잠금 안에서** 한다 — 상태를 들고 다니지 않는다
+  const r = await guardedGet({
+    url,
+    source: GUARD_SOURCE,
+    now: () => new Date(),
+    headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
+    log: (m) => console.log(m),
+  })
+  return r.text
 }
 
 function toTsv(rows: readonly ThinRow[]): string {

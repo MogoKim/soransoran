@@ -4,7 +4,18 @@
  *
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  guardedGet, guardPath, guardRoot, setGuardRoot, writeGuardAtomic, readGuard, kstDayOf,
+} from './lib/collect-guard-store.mjs'
+import {
+  newGuardState, recordRequest, recordFailure, breakerOf, BREAKER, type SourceId,
+} from '../src/lib/collect-guard'
+import {
+  requestsPerRunOf, thin82cookRequestsPerRun, ROBOTS_REQUESTS_PER_RUN, factsOf,
+} from '../src/lib/collect-schedule'
 import {
   planThinFetch, toThinRow, violatesStorage, judgeLive, paceMs, flagsOf,
   THIN_COLUMNS, FORBIDDEN_COLUMNS, SKIP_LABEL,
@@ -239,6 +250,129 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
     /export const DELAY_MS = 2000\b/.test(readFileSync('scripts/lib/micro-seed-82cook.mts', 'utf-8')))
   check(`🔴 BODY_HEAD_CHARS = ${BODY_HEAD_CHARS} 그대로`,
     /export const BODY_HEAD_CHARS = 300\b/.test(readFileSync('scripts/lib/micro-seed-raw-originality.mts', 'utf-8')))
+}
+
+/**
+ * 🔴 **raw 목록 job 과 thin 상세 job 이 같은 차단기를 쓴다** (2026-09-14).
+ *
+ *    전에는 thin 이 `fetch` 를 직접 불렀다. 그래서 raw 가 NETWORK 차단기를 연 뒤에도
+ *    40분 뒤 thin 이 **같은 IP 로 같은 도메인을 다시 두드렸다.**
+ *    두 번째 guard 도 두 번째 상태 파일도 만들지 않았다 — `source: '82cook'` 하나를 공유한다.
+ */
+console.log('\n⑨ 🔴 82cook 두 job 이 차단기·예산·잠금을 공유한다')
+{
+  const RAW = 'scripts/micro-seed-collect-82cook.mts'
+  const THIN = 'scripts/micro-seed-82cook-thin-detail.mts'
+  const rawSrc = readFileSync(RAW, 'utf-8')
+  const thinSrc = readFileSync(THIN, 'utf-8')
+
+  check('🔴 thin 이 직접 fetch 하지 않는다 — guardedGet 정본을 쓴다',
+    /guardedGet\(/.test(thinSrc)
+    && !/await fetch\(/.test(thinSrc.replace(/\/\*[\s\S]*?\*\//g, '')))
+  check('🔴 raw 도 같은 정본을 쓴다', /guardedGet\(/.test(rawSrc))
+  check('🔴 두 job 이 같은 source id 를 쓴다 — 별도 차단기가 아니다', (() => {
+    const idOf = (src: string): string | null =>
+      /const GUARD_SOURCE: SourceId = '([^']+)'/.exec(src)?.[1] ?? null
+    return idOf(rawSrc) === '82cook' && idOf(thinSrc) === '82cook'
+  })())
+  /** 🔴 **두 runner 의 실제 source id 를 읽어** 같은 경로가 되는지 본다 — 자기 비교가 아니다 */
+  check('🔴 두 job 이 같은 guard 파일을 본다', (() => {
+    const idOf = (src: string): string | null =>
+      /const GUARD_SOURCE: SourceId = '([^']+)'/.exec(src)?.[1] ?? null
+    const a = idOf(rawSrc)
+    const b = idOf(thinSrc)
+    if (a === null || b === null) return false
+    return guardPath(a as SourceId) === guardPath(b as SourceId)
+      && /collect-guard-82cook\.json$/.test(guardPath(a as SourceId))
+  })())
+  check('🔴 새 guard 추상화·별도 상태 파일을 만들지 않았다',
+    !/collect-guard-82cook-thin|thin-guard|ThinGuard/.test(thinSrc))
+  /** 🔴 프록시 · IP 교체 · UA 위장 · CAPTCHA 우회를 쓰지 않는다 */
+  check('🔴 차단 우회 수단이 없다', (() => {
+    const both = `${rawSrc}\n${thinSrc}`
+    return !/proxy|Proxy|HttpsProxyAgent|rotate|CAPTCHA|captcha|puppeteer|playwright/.test(both)
+      && !/Mozilla\/5\.0/.test(both)
+  })())
+
+  /**
+   * 🔴 **차단기가 열리면 양쪽 다 멈춘다** — 실제 동작으로 확인한다.
+   *    임시 디렉토리에서만 돌리고 실제 수집 상태 파일은 건드리지 않는다.
+   *    `fetchImpl` 을 주입해 **외부 요청 0** 으로 검사한다.
+   */
+  {
+    const tmp = mkdtempSync(join(tmpdir(), 'guard-82cook-'))
+    const saved = guardRoot()
+    setGuardRoot(tmp)
+    try {
+      const now = new Date('2026-09-14T09:00:00+09:00')
+      // 한쪽 job 이 NETWORK 실패를 임계치까지 쌓아 차단기를 연다
+      let st = newGuardState('82cook', kstDayOf(now))
+      for (let i = 0; i < BREAKER.NETWORK.threshold; i += 1) {
+        st = recordRequest(st, now.getTime())
+        st = recordFailure(st, 'NETWORK', now.getTime())
+      }
+      writeGuardAtomic(st)
+      check('🔴 NETWORK 차단기가 열렸다',
+        breakerOf(readGuard('82cook', now), 'NETWORK', now.getTime()) === 'open')
+
+      // 🔴 다른 job 이 같은 source 로 나가려 하면 **외부 요청 전에** 막힌다
+      let calls = 0
+      const spy: typeof fetch = async () => { calls += 1; return new Response('x', { status: 200 }) }
+      let blocked = false
+      await guardedGet({
+        url: 'https://www.82cook.com/entiz/read.php?num=1', source: '82cook',
+        now: () => now, headers: {}, fetchImpl: spy,
+      }).catch(() => { blocked = true })
+      check('🔴 한쪽이 차단기를 열면 다른 쪽도 외부 요청 0 건으로 멈춘다', blocked && calls === 0)
+
+      /**
+       * 🔴 **40분 뒤에도 막혀 있나 — 실제로 재 본다** (2026-09-14).
+       *    thin job 은 raw 회차 40분 뒤에 돈다. 그때 상태를 그대로 물어본다.
+       *
+       * 🔴 **현 정책을 그대로 적는다.** NETWORK 쿨다운은 **10분**이고
+       *    `requiresHuman` 이 아니므로, 10분이 지나면 `half-open` 이 되어
+       *    **시험 요청 1건**이 나간다. 40분 뒤 thin 회차는 그 1건에 해당한다.
+       *    이번 수정에서 쿨다운을 늘리거나 새 규제를 만들지 않았다 —
+       *    고친 것은 "thin 이 차단기를 아예 보지 않던 것" 이다.
+       */
+      const at = (ms: number): Date => new Date(now.getTime() + ms)
+      check('🔴 차단 직후·5분 뒤에는 여전히 open',
+        breakerOf(readGuard('82cook', now), 'NETWORK', now.getTime()) === 'open'
+        && breakerOf(readGuard('82cook', at(5 * 60_000)), 'NETWORK', at(5 * 60_000).getTime()) === 'open')
+      check('🔴 40분 뒤에는 half-open 이다 — 시험 요청 1건이 허용된다 (쿨다운 10분)', (() => {
+        const t40 = at(40 * 60_000)
+        return BREAKER.NETWORK.cooldownMs === 600_000 && !BREAKER.NETWORK.requiresHuman
+          && breakerOf(readGuard('82cook', t40), 'NETWORK', t40.getTime()) === 'half-open'
+      })())
+      check('🔴 시험 요청이 이미 나가 있으면 또 보내지 않는다 — half-open 은 1건뿐이다', (() => {
+        const t40 = at(40 * 60_000)
+        const probing = { ...st, failures: { ...st.failures,
+          NETWORK: { ...st.failures.NETWORK, probeStartedAt: t40.getTime() } } }
+        return breakerOf(probing, 'NETWORK', t40.getTime() + 1_000) === 'open'
+      })())
+
+      // 🔴 다른 source 는 막히지 않는다 — 한 곳 실패가 전체를 세우지 않는다
+      let naver = 0
+      const spy2: typeof fetch = async () => { naver += 1; return new Response('ok', { status: 200 }) }
+      const r = await guardedGet({
+        url: 'https://cafe.naver.com/x', source: 'navercafe:remonterrace',
+        now: () => now, headers: {}, fetchImpl: spy2,
+      })
+      check('🟢 네이버 source 는 영향을 받지 않는다', naver === 1 && r.text === 'ok')
+      check('🟢 supply-process 는 수집 차단기와 무관하다 — guard 를 부르지 않는다',
+        !/guardedGet\(/.test(readFileSync('scripts/supply-process.mts', 'utf-8')))
+    } finally {
+      setGuardRoot(saved)
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  }
+
+  /** 🔴 요청량은 실제 인자에서 파생된다 — robots 를 포함한다 */
+  check('🔴 raw 한 회차 = robots 1 + 목록 3 = 4', requestsPerRunOf('82cook') === 4)
+  check('🔴 thin 한 회차 = robots 1 + 상세 cap = 18', thin82cookRequestsPerRun() === 18)
+  check('🔴 robots 도 요청으로 센다', ROBOTS_REQUESTS_PER_RUN === 1
+    && /robots/i.test(rawSrc) && /robots/i.test(thinSrc))
+  check('🔴 목록 전용 job 은 상세를 0건 연다', factsOf('82cook').detailPerRun === 0)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

@@ -64,7 +64,31 @@ export type PlanInput = {
   cap?: number
 }
 
-export type Plan = { targets: CafeRow[]; skipped: Skip[] }
+/**
+ * 🔴 **"제외" 를 네 갈래로 나눈다** (2026-09-13).
+ *
+ *    옛 판은 `targets.slice(0, cap)` 으로 잘라낸 행을 **아무 데도 적지 않았다.**
+ *    화면에는 "제외 N건" 만 남았고, 그 안에는
+ *    ① 안전상 영영 안 가져올 것, ② 이미 읽은 것, ③ 이번 회차 상한 때문에 미룬 것이
+ *    한 덩어리로 섞여 있었다. 2026-09-11~12 관측에서 후보 1,479건 중 95건만 열렸는데,
+ *    나머지 1,384건이 "제외" 로 보였다 — 실제로는 **버린 것이 아니라 다음 회차로 미룬 것**이다.
+ *    섞어 놓으면 "왜 이렇게 많이 거르나" 라는 틀린 물음을 하게 된다.
+ */
+export type Plan = {
+  /** 이번 회차에 실제로 옮길 것 */
+  targets: CafeRow[]
+  /** 🔴 안전·형식상 **영영 가져오지 않는 것** */
+  rejected: Skip[]
+  /** 🔴 **이미 읽은 것** — 버린 것이 아니라 지난 회차에 이미 처리했다 */
+  alreadyRead: Skip[]
+  /** 🔴 **이번 회차 상한 때문에 미룬 것** — 다음 회차에 다시 후보가 된다 */
+  deferred: CafeRow[]
+  /**
+   * 🔴 옛 이름. `rejected + alreadyRead` 다 — **이월(`deferred`)은 여기 들어가지 않는다.**
+   *    부르는 쪽이 옛 뜻으로 쓰더라도 이월을 제외로 세지 않게 한다.
+   */
+  skipped: Skip[]
+}
 
 /** 🔴 `navercafe:` 로 시작하는 것만 이 레인이 다룬다 */
 export function isNaverCafeRow(r: CafeRow): boolean {
@@ -101,7 +125,19 @@ export function planCafeThin(input: PlanInput): Plan {
   // 🔴 순서를 고정한다 — 같은 입력이면 같은 것을 고른다
   targets.sort((a, b) => S(a.sourceArticleId).localeCompare(S(b.sourceArticleId)))
   const cap = input.cap ?? targets.length
-  return { targets: targets.slice(0, cap), skipped }
+  const alreadyRead = skipped.filter((x) => x.code === 'ALREADY')
+  const rejected = skipped.filter((x) => x.code !== 'ALREADY')
+  return {
+    targets: targets.slice(0, cap),
+    // 🔴 **잘라낸 것을 이름 붙여 돌려준다.** 조용히 사라지면 관측이 거짓말을 한다
+    deferred: targets.slice(cap),
+    rejected, alreadyRead, skipped,
+  }
+}
+
+/** 고유 원천 수 — 🔴 **행 수가 아니다.** 같은 글이 여러 페이지에 걸쳐 두 번 나올 수 있다 */
+export function uniqueSourceCount(rows: readonly CafeRow[]): number {
+  return new Set(rows.map((r) => dedupKeyOf(r.sourceSite, r.sourceArticleId))).size
 }
 
 /**

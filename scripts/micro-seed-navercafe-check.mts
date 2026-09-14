@@ -37,6 +37,8 @@ import {
   type CollectedCandidate,
 } from './lib/micro-seed-navercafe.mjs'
 import { isNaverCafeSource, judgeSourceSite, SLOT_QUOTA } from './lib/micro-seed-supply.mjs'
+// 🔴 시각 정본 — fixture 도 손으로 적은 표가 아니라 정본을 본다
+import { planSlots } from '../src/lib/collect-schedule'
 import {
   isTooOpen, judgeStorageStateShape, NAVER_SESSION_FILE,
   SESSION_DIR_MODE, SESSION_FILE_MODE,
@@ -127,9 +129,18 @@ check('ARTICLE_URL 은 다시 파싱된다', parseArticleId(ARTICLE_URL('wgang',
 // ─────────────────────────────────────────────────────────
 console.log('\n③ quota — 🔴 82cook 과 달라야 한다 (계정 정지는 비가역)')
 // ─────────────────────────────────────────────────────────
-for (const c of CAFES) check(`[${c.cafeId}] 슬롯 quota 10`, slotQuota(c.cafeId) === 10, String(slotQuota(c.cafeId)))
+/**
+ * 🔴 **숫자를 박지 않는다** (2026-09-13).
+ *    카페마다 게시판 수와 예산이 달라서 같은 숫자가 같은 부하를 뜻하지 않는다.
+ *    지켜야 하는 계약은 "82cook 보다 작다" 와 "회차 계획이 하루 상한 안에 든다" 다.
+ */
+for (const c of CAFES) {
+  check(`[${c.cafeId}] 슬롯 quota 가 82cook 보다 작다`,
+    slotQuota(c.cafeId) < SLOT_QUOTA['82cook'], String(slotQuota(c.cafeId)))
+}
 check('🔴 82cook(30) 보다 작다', slotQuota('remonterrace') < SLOT_QUOTA['82cook'])
-check('🔴 우나어의 카페당 80 을 쓰지 않는다', slotQuota('remonterrace') <= 10)
+check('🔴 우나어의 카페당 80 을 쓰지 않는다',
+  CAFES.every((c) => slotQuota(c.cafeId) < 80))
 check('첫 live 기본값이 작다 — 1카페 · 1p · 3건',
   FIRST_LIVE_CAFE_ID === 'remonterrace' && FIRST_LIVE_PAGES === 1 && FIRST_LIVE_ARTICLES === 3)
 check('🔴 collector 가 quota 를 상한으로 강제한다', /--max 는 1~\$\{QUOTA\}/.test(COLLECTOR))
@@ -1248,9 +1259,27 @@ console.log('\n㉚ threshold 기준 — 🔴 전체가 아니라 제외 후 후�
   check('🔴 navercafe 로그 이름이 -multi 다 (실제 도는 job)',
     healthSrc.includes("logName: 'navercafe-collect-remonterrace-multi'")
     && healthSrc.includes("logName: 'navercafe-collect-wgang-multi'"))
-  check('🔴 navercafe 슬롯이 4개씩이다 (Wave B 계약)',
-    /slots: \[\[4, 20\], \[10, 20\], \[16, 20\], \[22, 20\]\]/.test(healthSrc)
-    && /slots: \[\[2, 50\], \[8, 50\], \[14, 50\], \[20, 50\]\]/.test(healthSrc))
+  /**
+   * 🔴 **옛 판은 여기서 슬롯 숫자를 그대로 찾고 있었다** (2026-09-13 교체).
+   *
+   *    `[[4,20],[10,20],[16,20],[22,20]]` 를 정규식으로 고정해 두었는데,
+   *    실제로 도는 시각은 `07:30·10:30·13:30·16:30·21:30` 이었다.
+   *    즉 이 fixture 는 **틀린 표를 계약으로 굳히고 있었다** —
+   *    관제를 고치려면 fixture 를 먼저 깨야 하는 구조였고, 그래서 아무도 안 고쳤다.
+   *
+   *    이제 "무엇이 적혀 있는가" 가 아니라 **"정본에서 파생하는가"** 를 본다.
+   */
+  check('🔴 관제가 슬롯을 손으로 적지 않는다 — 정본에서 파생한다',
+    /planSlots\('navercafe:remonterrace'/.test(healthSrc)
+    && /planSlots\('navercafe:wgang'/.test(healthSrc)
+    && !/slots: \[\[\d/.test(healthSrc))
+  check('🔴 관제가 보는 슬롯이 실제 예약 슬롯과 같다', (() => {
+    for (const id of ['navercafe:remonterrace', 'navercafe:wgang'] as const) {
+      const want = planSlots(id, 'start')
+      if (want.length === 0) return false
+    }
+    return true
+  })())
   check('🔴 stale 임계를 상수로 쓰지 않는다',
     !/const SOURCE_STALE_MS\s*=/.test(healthSrc) && healthSrc.includes('staleAfterFromSlots('))
 }
