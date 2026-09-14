@@ -242,6 +242,14 @@ export type Candidate = {
   sourceSite?: string
   sourceInput?: string
   sourceDecision?: string
+  /**
+   * 🔴 **원문 제목 대조 결과** (2026-09-14). 생성기가 메모리 안에서 재고 **판정만** 넘긴다.
+   *    🔴 원문 제목도 그 해시도 받지 않는다 — 짧은 제목의 무염 해시는 대입해 맞춰볼 수 있다.
+   *    외부 원문이 없는 후보는 `checked` 가 오지 않는다(기존 동작 유지).
+   */
+  sourceTitleChecked?: boolean
+  sourceTitleCopied?: boolean
+  sourceTitleCheckVersion?: string
   title?: string
   body?: string
   safetyVerdict?: string
@@ -538,6 +546,11 @@ export function buildQueuePayload(input: {
           sourceDecision: S(c.sourceDecision),
           safetyVerdict: S(c.safetyVerdict),
           originality: readMeasure(c.originality),
+          // 🔴 **대조 결과만 남긴다.** 발행 판정이 제목 복제를 물을 유일한 근거다.
+          //    🔴 원문 제목도 해시도 여기 오지 않는다(§4-AF ⑤)
+          sourceTitleChecked: c.sourceTitleChecked === true,
+          sourceTitleCopied: c.sourceTitleCopied === true,
+          sourceTitleCheckVersion: S(c.sourceTitleCheckVersion),
           sourceInput: S(c.sourceInput),
           filledAt: input.now,
         },

@@ -44,6 +44,7 @@ import {
 /** 🔴 독창성 정본 — 생성 · 적재 · 발행 전 재검사가 같은 함수를 쓴다 */
 import {
   measureOriginality, judgeCopy, describeOriginality, COPY_REASON_LABEL,
+  copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION,
 } from '../src/lib/draft-originality'
 /**
  * 🔴 **말투 자산을 새로 만들지 않는다** (2026-09-13).
@@ -1187,7 +1188,9 @@ async function main(): Promise<void> {
     const deterministicOk = drafts.some((d) =>
       S(d.title) !== '' && S(d.body) !== '' && S(d.safetyVerdict) === 'pass'
       && !hasBannedWord(d.title + d.body) && !judgeCopy(d.originality).copied
-      && !echoesTitleAtEnd(d.title, d.body))
+      && !echoesTitleAtEnd(d.title, d.body)
+      // 🔴 원문 제목을 그대로 쓴 초안은 통과로 치지 않는다 — 소재가 아니라 제목을 옮긴 것이다
+      && !copiesSourceTitle(meta.title, d.title))
 
     const hash = inputHashOf({ title: meta.title, bodyHead: meta.bodyHead, axis: meta.axis, lane: meta.lane })
     // 🔴 **생성 캐시와 품질 캐시를 나눈다.** 한 덩어리로 두면 품질 판정만 바꿔도
@@ -1238,8 +1241,16 @@ async function main(): Promise<void> {
         statusCount.set(g.status, (statusCount.get(g.status) ?? 0) + 1)
         for (let retry = 0; retry < MAX_ORIGINALITY_RETRIES; retry += 1) {
           if (g.value === null) break
+          /**
+           * 🔴 **제목 복제도 다시 쓸 이유다** (2026-09-14).
+           *    본문 기준(어절·글자·덮임)은 짧은 제목에 닿지 않는다 —
+           *    원문 제목을 통째로 옮겨도 세 기준을 전부 지나간다.
+           *    🔴 글이나 소재를 버리지 않는다. **제목만 다시 쓰게** 한다.
+           */
           const worst = g.value
-            .map((d) => judgeCopy(measureOriginality(`${d.title}\n${d.body}`, sourceText)))
+            .map((d) => copiesSourceTitle(meta.title, d.title)
+              ? { copied: true, reason: 'runWords' as const }
+              : judgeCopy(measureOriginality(`${d.title}\n${d.body}`, sourceText)))
             .filter((v) => v.copied)
           // 하나라도 원문을 옮기지 않은 초안이 있으면 다시 쓰지 않는다
           if (worst.length < g.value.length) break
@@ -1417,6 +1428,15 @@ async function main(): Promise<void> {
       candidateType: 'seedOriginality',
       sourceArticleId: a.pick.sourceArticleId,
       sourceSite: a.meta.site,
+      /**
+       * 🔴 **대조 결과만 싣는다** (2026-09-14).
+       *    원문 제목은 바로 위 `a.meta.title` 에 **메모리로만** 있다 —
+       *    전문도 해시도 파일·DB 어디에도 남기지 않는다(§4-AF ⑤).
+       *    🔴 `copied` 는 **제목을 다시 쓴 뒤에도 같았다**는 뜻이다.
+       */
+      sourceTitleChecked: true,
+      sourceTitleCopied: copiesSourceTitle(a.meta.title, a.draft.title),
+      sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
       sourceInput: 'auto-judge',
       sourceDecision: 'AUTO_ADOPT',
       draftFrom: a.from,
