@@ -44,6 +44,12 @@ export function judgeDeploy(input: {
    *    "파일이 있다" 를 "일한다" 로 읽으면 며칠 뒤 공급이 0 인 걸 발견하게 된다.
    */
   envBlockers?: readonly EnvBlocker[]
+  /**
+   * 🔴 **내려 두기로 한 job 중 아직 loaded 인 것.** 비어 있어야 통과다.
+   *    스위치는 `false` 인데 job 이 올라와 있으면 둘 중 하나가 거짓이다 —
+   *    어느 쪽이 참인지 코드가 고르면 안 된다. 멈추고 사람에게 말한다.
+   */
+  disabledLoaded?: readonly string[]
 }): DeployGate {
   if (!input.apply) return { ok: false, code: 'DRY_RUN', reason: 'dry-run — --apply 가 없다' }
   if (input.target === null || input.target.trim() === '') {
@@ -87,6 +93,18 @@ export function judgeDeploy(input: {
       ok: false, code: 'ENV_NOT_READY',
       reason: `활성화 스위치가 준비되지 않았다 — ${blockers.map((b) => b.detail).join(' / ')}`
         + '  🔴 배포가 env 를 고치지 않는다. .env.local 을 사람이 켠 뒤 다시 돌린다',
+    }
+  }
+  /**
+   * 🔴 **내려 두기로 한 job 이 올라와 있으면 사고다.**
+   *    배포가 대신 내리지 않는다 — 그러면 "사람이 올려 둔 것" 을 코드가 말없이 되돌린다.
+   */
+  const strayed = input.disabledLoaded ?? []
+  if (strayed.length > 0) {
+    return {
+      ok: false, code: 'DISABLED_JOB_LOADED',
+      reason: `스위치를 내려 둔 job 이 아직 loaded 다 — ${strayed.join(' · ')}`
+        + '  🔴 배포가 launchctl 을 대신 내리지 않는다. 사람이 내린 뒤 다시 돌린다',
     }
   }
   return { ok: true }
@@ -287,6 +305,12 @@ export async function runDeploy(input: {
   jobs: readonly string[]
   /** 🔴 내려가 있어야 하고 설치본도 없어야 하는 옛 job */
   retiredJobs?: readonly string[]
+  /**
+   * 🔴 **의도적으로 스위치를 내려 둔 job** — 설치도 load 도 하지 않는다.
+   *    배포는 이들의 plist 도 launchctl 상태도 건드리지 않는다.
+   *    확인하는 것은 하나뿐이다: **아직 unloaded 인가.**
+   */
+  disabledJobs?: readonly string[]
   /** 🔴 실제 loaded 경로를 판정할 기준 — runtime 안이어야 하는 것은 program 과 WorkingDirectory 뿐이다 */
   paths: PathContract
   offlineGates?: readonly string[]
@@ -297,6 +321,8 @@ export async function runDeploy(input: {
   const gates = input.offlineGates ?? OFFLINE_GATES
   const now = input.now ?? ((): string => new Date().toISOString())
   const retired = input.retiredJobs ?? []
+  /** 🔴 내려 둔 job — `allJobs` 에 넣지 않는다. unload·plist 복원·load 어디에도 끼지 않는다 */
+  const disabled = input.disabledJobs ?? []
   /** unload 대상 — 🔴 퇴역 job 도 내린다. 남겨 두면 같은 원천을 두 번 연다 */
   const allJobs = [...input.jobs, ...retired]
 
@@ -319,12 +345,33 @@ export async function runDeploy(input: {
       rollback: null,
     }
   }
+  /**
+   * 🔴 **내려 둔 job 은 관측만 한다.** 올라와 있으면 멈추고, 아니면 그대로 둔다.
+   *    관측하지 못한 것을 "내려가 있다" 로 통과시키지 않는다(fail-closed).
+   */
+  const disabledLoaded: string[] = []
+  const disabledUnknown: string[] = []
+  for (const l of disabled) {
+    const st = fx.probeJob(l)
+    if (st === 'loaded') disabledLoaded.push(l)
+    else if (st === 'unknown') disabledUnknown.push(l)
+  }
+  if (disabledUnknown.length > 0) {
+    return {
+      ok: false, phase: 'preflight', steps,
+      problems: [`내려 둔 job 의 상태를 확인하지 못했다(${disabledUnknown.join(' · ')}) — 통과시키지 않는다(fail-closed)`],
+      rollback: null,
+    }
+  }
   const gate = judgeDeploy({
     apply: true, target: input.target, originMain: fx.originMain(),
     targetOnMain: input.target === '' ? null : fx.isAncestor(input.target),
     runtimeDirty: fx.dirty(), jobsRunning: running.running,
     // 🔴 **job 을 내리기 전에** 본다 — 여기서 막으면 되돌릴 것이 없다
+    //    🔴 스위치 요구는 **active job 에만** 건다. 내려 둔 job 에 true 를 요구하면
+    //       정상 운영 상태(내려 둠)가 배포를 영영 막는다 (2026-09-14 실측).
     envBlockers: fx.envBlockers(input.jobs),
+    disabledLoaded,
   })
   steps.push('preflight')
   if (!gate.ok) {
@@ -656,6 +703,15 @@ export async function runDeploy(input: {
   // 🔴 퇴역 job 이 아직 올라와 있으면 실패다 — 같은 원천을 두 번 연다
   for (const l of retired) {
     if (fx.probeJob(l) === 'loaded') return failWith('post-load', `퇴역 job 이 아직 loaded 다 — ${l}`)
+  }
+  /**
+   * 🔴 **내려 둔 job 은 배포 뒤에도 내려가 있어야 한다.**
+   *    배포가 건드리지 않았다는 것을 말로만 적지 않고 **다시 관측해서** 확인한다.
+   */
+  for (const l of disabled) {
+    if (fx.probeJob(l) === 'loaded') {
+      return failWith('post-load', `내려 둔 job 이 배포 뒤 loaded 가 됐다 — ${l}`)
+    }
   }
   steps.push('isolation-gate')
   if (!fx.isolationGate()) return failWith('post-load', 'runtime:isolation-check --require-runtime 실패')
