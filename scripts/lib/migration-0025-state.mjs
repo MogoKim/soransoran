@@ -75,13 +75,39 @@ export const EXPECTED_COLUMNS = [
   { name: 'updatedAt', dataType: 'timestamp without time zone', nullable: false, defaultContains: null },
 ]
 
-/** 🔴 PK 를 포함해 4개다. pkey 를 빼고 세면 "인덱스 3개" 가 되어 계약이 어긋난다. */
-export const EXPECTED_INDEXES = [
-  'HeroBanner_pkey',
-  'HeroBanner_isActive_archivedAt_sortOrder_idx',
-  'HeroBanner_startsAt_idx',
-  'HeroBanner_endsAt_idx',
+/**
+ * 인덱스 계약 — 🔴 **이름만으로는 부족하다.**
+ *
+ *    앞선 판은 이름 문자열만 봤다. 그래서 같은 이름으로 **다른 컬럼**에 걸린
+ *    인덱스가 통과했다. `HeroBanner_isActive_archivedAt_sortOrder_idx` 라는
+ *    이름이 붙어 있어도 실제로 `(sortOrder)` 하나만 덮고 있으면
+ *    홈 조회는 그 인덱스를 타지 못한다 — 이름은 맞는데 느려진다.
+ *
+ * 🔴 컬럼 **순서**도 계약이다. 복합 인덱스는 앞 컬럼부터 쓰이므로
+ *    `(archivedAt, isActive, sortOrder)` 는 같은 세 컬럼이라도 다른 인덱스다.
+ *
+ * 🔴 PK 를 포함해 4개다. pkey 를 빼고 세면 "인덱스 3개" 가 되어 계약이 어긋난다.
+ */
+export const EXPECTED_INDEX_SPECS = [
+  { name: 'HeroBanner_pkey', columns: ['id'], primary: true, unique: true },
+  {
+    name: 'HeroBanner_isActive_archivedAt_sortOrder_idx',
+    columns: ['isActive', 'archivedAt', 'sortOrder'],
+    primary: false,
+    unique: false,
+  },
+  { name: 'HeroBanner_startsAt_idx', columns: ['startsAt'], primary: false, unique: false },
+  { name: 'HeroBanner_endsAt_idx', columns: ['endsAt'], primary: false, unique: false },
 ]
+
+/** 이름만 필요한 자리를 위해 파생한다 — 🔴 목록을 두 벌 적지 않는다. */
+export const EXPECTED_INDEXES = EXPECTED_INDEX_SPECS.map((i) => i.name)
+
+/**
+ * SQL 이 `CREATE INDEX` 로 직접 만드는 것 — PK 는 제약(PRIMARY KEY)이 대신 만든다.
+ * 🔴 그래서 SQL 계약에서 세는 수(3)와 DB 에서 보이는 수(4)가 다르다.
+ */
+export const SQL_CREATE_INDEX_SPECS = EXPECTED_INDEX_SPECS.filter((i) => !i.primary)
 
 /**
  * FK 2개 — 🔴 **삭제·갱신 동작까지 계약이다.**
@@ -182,12 +208,66 @@ function judgeObservation(input) {
         return '컬럼 metadata 의 모양이 아니다'
       }
     }
-    if (input.rowCount !== null && !Number.isInteger(input.rowCount)) {
-      return '행 수를 읽지 못했다'
+
+    if (!Array.isArray(input.indexes)) return '테이블은 있는데 인덱스를 읽지 못했다'
+    for (const i of input.indexes) {
+      if (i === null || typeof i !== 'object' || typeof i.name !== 'string' || !Array.isArray(i.columns)) {
+        // 🔴 이름 문자열만 넘어오면 여기서 걸린다. 컬럼을 못 보는 관측은 관측이 아니다.
+        return '인덱스 metadata 의 모양이 아니다 — 이름·컬럼·primary·unique 가 필요하다'
+      }
+    }
+
+    if (!Array.isArray(input.foreignKeys)) return '테이블은 있는데 FK 를 읽지 못했다'
+
+    /**
+     * 🔴 **행 수는 반드시 0 이상의 정수다** (2026-09-14 정정).
+     *
+     *    앞선 판은 `rowCount !== null` 일 때만 정수인지 봤다. 그래서
+     *    `rowCount: null` 이 **관측 실패가 아니라 "검사 생략"** 으로 흘러
+     *    `APPLIED_AND_VALID` · exit 0 이 나왔다 — 실측으로 재현했다.
+     *    COUNT 를 못 읽었는데 "빈 테이블이 맞다" 고 말한 셈이다.
+     *
+     *    테이블이 있으면 COUNT 는 언제나 읽힌다. 안 읽혔으면 권한이나 연결 문제다.
+     */
+    if (!Number.isInteger(input.rowCount) || input.rowCount < 0) {
+      return `행 수를 읽지 못했다 (${String(input.rowCount)}) — 테이블이 있으면 0 이상의 정수여야 한다`
     }
   }
 
   return null
+}
+
+/**
+ * 🔴 **보호 테이블의 행 수를 읽었는가** (결함 D).
+ *
+ *    CLI 의 `counts()` 는 테이블이 없으면 null 을 넣었다. 그러면 적용 전후가
+ *    **둘 다 null** 이라 "변하지 않았다" 로 통과한다 — 실제로는 그 테이블을
+ *    한 번도 못 본 것이다. 보호하겠다고 적어 둔 목록이 보호를 하지 않는다.
+ *
+ *    없어야 할 테이블이 아니다. `User` · `Post` 는 반드시 있다.
+ *    없다면 다른 DB 를 보고 있거나 권한이 없는 것이고, 둘 다 진행하면 안 되는 상황이다.
+ *
+ * @param {Record<string, number|null|undefined>} counts
+ * @returns {{ ok: boolean, reason: string }}
+ */
+export function judgeProtectedCounts(counts) {
+  if (counts === null || typeof counts !== 'object') {
+    return { ok: false, reason: '보호 테이블 행 수를 읽지 못했다' }
+  }
+  const missing = PROTECTED_TABLES.filter((t) => !(t in counts))
+  if (missing.length > 0) {
+    return { ok: false, reason: `보호 테이블이 관측에서 빠졌다: ${missing.join(', ')}` }
+  }
+  const unreadable = PROTECTED_TABLES.filter(
+    (t) => !Number.isInteger(counts[t]) || Number(counts[t]) < 0,
+  )
+  if (unreadable.length > 0) {
+    return {
+      ok: false,
+      reason: `보호 테이블의 행 수가 정수가 아니다: ${unreadable.map((t) => `${t}=${String(counts[t])}`).join(', ')}`,
+    }
+  }
+  return { ok: true, reason: `보호 테이블 ${PROTECTED_TABLES.length}개 전부 행 수를 읽었다` }
 }
 
 function verdictOf(state, findings, summary, exitCode) {
@@ -325,15 +405,42 @@ export function judgeMigration0025State(input) {
     })
   }
 
-  // ── 인덱스 4개 (PK 포함) ──
-  const missingIdx = EXPECTED_INDEXES.filter((i) => !indexes.includes(i))
+  // ── 인덱스 4개 (PK 포함) — 🔴 이름·컬럼·순서·primary·unique 전부 ──
+  for (const spec of EXPECTED_INDEX_SPECS) {
+    const got = indexes.find((i) => i.name === spec.name)
+    if (got === undefined) {
+      findings.push({ code: `INDEX:${spec.name}`, ok: false, detail: `🔴 인덱스 ${spec.name} 이 없다` })
+      continue
+    }
+    const why = []
+    if (String(got.table ?? NEW_TABLE) !== NEW_TABLE) why.push(`대상 테이블 ${got.table}`)
+    // 🔴 순서까지 본다 — 복합 인덱스는 앞 컬럼부터 쓰인다
+    const sameColumns =
+      Array.isArray(got.columns) &&
+      got.columns.length === spec.columns.length &&
+      spec.columns.every((c, i) => got.columns[i] === c)
+    if (!sameColumns) why.push(`컬럼 [${(got.columns ?? []).join(', ')}] (기대 [${spec.columns.join(', ')}])`)
+    if (Boolean(got.isPrimary) !== spec.primary) why.push(`primary=${Boolean(got.isPrimary)}`)
+    if (Boolean(got.isUnique) !== spec.unique) why.push(`unique=${Boolean(got.isUnique)}`)
+
+    findings.push({
+      code: `INDEX:${spec.name}`,
+      ok: why.length === 0,
+      detail:
+        why.length === 0
+          ? `${spec.name} (${spec.columns.join(', ')})${spec.primary ? ' · PK' : ''}`
+          : `🔴 ${spec.name} — ${why.join(' · ')}`,
+    })
+  }
+
+  const extraIdx = indexes.filter((i) => !EXPECTED_INDEX_SPECS.some((s) => s.name === i.name))
   findings.push({
-    code: 'INDEXES',
-    ok: missingIdx.length === 0,
+    code: 'INDEX_SET',
+    ok: extraIdx.length === 0,
     detail:
-      missingIdx.length === 0
-        ? `인덱스 ${EXPECTED_INDEXES.length}/${EXPECTED_INDEXES.length} (PK 포함)`
-        : `🔴 인덱스 누락 ${missingIdx.length}종: ${missingIdx.join(', ')}`,
+      extraIdx.length === 0
+        ? `인덱스 ${EXPECTED_INDEX_SPECS.length}/${EXPECTED_INDEX_SPECS.length} (PK 포함) · 예상 밖 0`
+        : `🔴 예상 밖 인덱스: ${extraIdx.map((i) => i.name).join(', ')}`,
   })
 
   // ── FK 2개 · 참조 대상과 삭제 동작까지 ──
@@ -398,4 +505,205 @@ export function judgeMigration0025State(input) {
     `🔴 일부만 적용됐거나 모양이 다르다 — ${why.join(' / ')}`,
     1,
   )
+}
+
+// ─────────── SQL 계약 (결함 A) ───────────
+
+/**
+ * 🔴 **SQL 이 계약 그대로인가** — 구문의 *시작*만 보지 않는다.
+ *
+ *    앞선 판의 화이트리스트는 `^CREATE TABLE` 인지만 봤다. 그래서
+ *    `CREATE TABLE "Evil" (...)` 도, `CREATE INDEX ... ON "User"(...)` 도
+ *    통과한다. 파일을 고치는 사람이 한 줄 더 붙여도 아무도 막지 못한다.
+ *
+ *    여기서는 **무엇이 몇 개 있고 각각 무엇을 가리키는지**까지 못박는다.
+ *    실행문 7개 — enum 1 · 테이블 1 · 인덱스 3 · FK 2.
+ *
+ * 🔴 이 검사는 **DB 에 연결하기 전에** 돈다. 잘못된 SQL 때문에
+ *    production 에 접속조차 하지 않게 하려는 것이다.
+ *
+ * 🔴 순수 함수다 — 파일을 읽지 않고 **읽어 온 문자열**을 받는다.
+ *    그래야 fixture 가 가짜 SQL 로 차단 경로를 전부 시험할 수 있다.
+ *
+ * @param {string} sqlText migration.sql 원문
+ * @returns {{ ok: boolean, findings: {code:string, ok:boolean, detail:string}[], summary: string }}
+ */
+export function judgeMigration0025Sql(sqlText) {
+  /** @type {{code:string, ok:boolean, detail:string}[]} */
+  const findings = []
+  const add = (code, ok, detail) => findings.push({ code, ok, detail })
+
+  if (typeof sqlText !== 'string' || sqlText.trim() === '') {
+    return {
+      ok: false,
+      findings: [{ code: 'SQL', ok: false, detail: '🔴 SQL 을 읽지 못했다' }],
+      summary: '🔴 SQL 을 읽지 못했다',
+    }
+  }
+
+  // 주석을 걷어 내고 공백을 눌러 한 줄로 만든다 — 구문이 여러 줄에 걸쳐 있다
+  const body = sqlText
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('--'))
+    .join('\n')
+  const statements = body
+    .split(';')
+    .map((s) => s.replace(/\s+/g, ' ').trim())
+    .filter((s) => s !== '')
+
+  add('STATEMENT_COUNT', statements.length === 7,
+    statements.length === 7
+      ? '실행문 7개'
+      : `🔴 실행문이 ${statements.length}개다 (기대 7) — enum 1 · 테이블 1 · 인덱스 3 · FK 2`)
+
+  // ── CREATE TYPE ──
+  const types = statements.filter((s) => /^CREATE TYPE\b/i.test(s))
+  add('CREATE_TYPE_COUNT', types.length === 1,
+    types.length === 1 ? 'CREATE TYPE 1개' : `🔴 CREATE TYPE 이 ${types.length}개다`)
+  if (types.length === 1) {
+    const m = /^CREATE TYPE "([A-Za-z0-9_]+)" AS ENUM \(([^)]*)\)$/i.exec(types[0])
+    if (m === null) {
+      add('ENUM_SHAPE', false, `🔴 CREATE TYPE 구문의 모양이 아니다`)
+    } else {
+      add('ENUM_NAME', m[1] === NEW_ENUM,
+        m[1] === NEW_ENUM ? `enum 이름 ${NEW_ENUM}` : `🔴 enum 이름이 ${m[1]} 이다`)
+      const labels = m[2].split(',').map((s) => s.trim().replace(/^'|'$/g, ''))
+      const same = labels.length === ENUM_LABELS.length && ENUM_LABELS.every((l, i) => labels[i] === l)
+      add('ENUM_LABELS', same,
+        same ? `enum 라벨 ${ENUM_LABELS.join(' · ')} (순서 일치)`
+             : `🔴 enum 라벨이 다르다 — ${labels.join(' · ')}`)
+    }
+  }
+
+  // ── CREATE TABLE ──
+  const tables = statements.filter((s) => /^CREATE TABLE\b/i.test(s))
+  add('CREATE_TABLE_COUNT', tables.length === 1,
+    tables.length === 1 ? 'CREATE TABLE 1개' : `🔴 CREATE TABLE 이 ${tables.length}개다`)
+  const tableNames = tables.map((s) => /^CREATE TABLE "([A-Za-z0-9_]+)"/i.exec(s)?.[1] ?? '?')
+  add('CREATE_TABLE_TARGET', tableNames.every((n) => n === NEW_TABLE),
+    tableNames.every((n) => n === NEW_TABLE)
+      ? `테이블 ${NEW_TABLE} 하나만 만든다`
+      : `🔴 다른 테이블을 만든다: ${tableNames.filter((n) => n !== NEW_TABLE).join(', ')}`)
+
+  // ── CREATE INDEX — 🔴 이름·대상·컬럼 순서까지 ──
+  const idxStatements = statements.filter((s) => /^CREATE (UNIQUE )?INDEX\b/i.test(s))
+  add('CREATE_INDEX_COUNT', idxStatements.length === SQL_CREATE_INDEX_SPECS.length,
+    idxStatements.length === SQL_CREATE_INDEX_SPECS.length
+      ? `CREATE INDEX ${SQL_CREATE_INDEX_SPECS.length}개 (PK 는 제약이 만든다)`
+      : `🔴 CREATE INDEX 가 ${idxStatements.length}개다 (기대 ${SQL_CREATE_INDEX_SPECS.length})`)
+
+  const parsedIdx = idxStatements.map((s) => {
+    const m = /^CREATE (UNIQUE )?INDEX "([A-Za-z0-9_]+)" ON "([A-Za-z0-9_]+)" ?\(([^)]*)\)$/i.exec(s)
+    if (m === null) return null
+    return {
+      unique: m[1] !== undefined,
+      name: m[2],
+      table: m[3],
+      columns: m[4].split(',').map((c) => c.trim().replace(/"/g, '')),
+    }
+  })
+  add('INDEX_SHAPE', parsedIdx.every((p) => p !== null),
+    parsedIdx.every((p) => p !== null) ? 'CREATE INDEX 구문의 모양이 맞다' : '🔴 읽지 못한 CREATE INDEX 가 있다')
+
+  const badTarget = parsedIdx.filter((p) => p !== null && p.table !== NEW_TABLE)
+  add('INDEX_TARGET', badTarget.length === 0,
+    badTarget.length === 0
+      ? `인덱스 대상이 전부 ${NEW_TABLE}`
+      : `🔴 다른 테이블에 인덱스를 만든다: ${badTarget.map((p) => `${p.name}→${p.table}`).join(', ')}`)
+
+  for (const spec of SQL_CREATE_INDEX_SPECS) {
+    const got = parsedIdx.find((p) => p !== null && p.name === spec.name)
+    if (got === undefined) {
+      add(`INDEX_SQL:${spec.name}`, false, `🔴 인덱스 ${spec.name} 을 만들지 않는다`)
+      continue
+    }
+    const sameCols =
+      got.columns.length === spec.columns.length && spec.columns.every((c, i) => got.columns[i] === c)
+    add(`INDEX_SQL:${spec.name}`, sameCols && got.unique === spec.unique,
+      sameCols && got.unique === spec.unique
+        ? `${spec.name} (${spec.columns.join(', ')})`
+        : `🔴 ${spec.name} — 컬럼 [${got.columns.join(', ')}] (기대 [${spec.columns.join(', ')}])${got.unique !== spec.unique ? ` · unique=${got.unique}` : ''}`)
+  }
+  const extraIdxSql = parsedIdx.filter(
+    (p) => p !== null && !SQL_CREATE_INDEX_SPECS.some((s) => s.name === p.name),
+  )
+  add('INDEX_SQL_SET', extraIdxSql.length === 0,
+    extraIdxSql.length === 0 ? '예상 밖 인덱스 0'
+      : `🔴 예상 밖 인덱스를 만든다: ${extraIdxSql.map((p) => p.name).join(', ')}`)
+
+  // ── ALTER TABLE — FK 2개만 ──
+  const alters = statements.filter((s) => /^ALTER TABLE\b/i.test(s))
+  add('ALTER_COUNT', alters.length === EXPECTED_FOREIGN_KEYS.length,
+    alters.length === EXPECTED_FOREIGN_KEYS.length
+      ? `ALTER TABLE ${EXPECTED_FOREIGN_KEYS.length}개 (FK 추가)`
+      : `🔴 ALTER TABLE 이 ${alters.length}개다 (기대 ${EXPECTED_FOREIGN_KEYS.length})`)
+
+  const parsedFk = alters.map((s) => {
+    const m = /^ALTER TABLE "([A-Za-z0-9_]+)" ADD CONSTRAINT "([A-Za-z0-9_]+)" FOREIGN KEY \("([A-Za-z0-9_]+)"\) REFERENCES "([A-Za-z0-9_]+)"\("([A-Za-z0-9_]+)"\) ON DELETE ([A-Z ]+) ON UPDATE ([A-Z]+)$/i.exec(s)
+    if (m === null) return null
+    return {
+      table: m[1], name: m[2], column: m[3],
+      referencedTable: m[4], referencedColumn: m[5],
+      onDelete: m[6].trim().toUpperCase(), onUpdate: m[7].trim().toUpperCase(),
+    }
+  })
+  add('ALTER_SHAPE', parsedFk.every((p) => p !== null),
+    parsedFk.every((p) => p !== null)
+      ? 'ALTER TABLE 이 전부 FK 추가다'
+      : '🔴 FK 추가가 아닌 ALTER TABLE 이 있다')
+
+  const badAlterTarget = parsedFk.filter((p) => p !== null && p.table !== NEW_TABLE)
+  add('ALTER_TARGET', badAlterTarget.length === 0,
+    badAlterTarget.length === 0
+      ? `ALTER 대상이 ${NEW_TABLE} 뿐`
+      : `🔴 다른 테이블을 ALTER 한다: ${badAlterTarget.map((p) => p.table).join(', ')}`)
+
+  for (const spec of EXPECTED_FOREIGN_KEYS) {
+    const got = parsedFk.find((p) => p !== null && p.name === spec.name)
+    if (got === undefined) {
+      add(`FK_SQL:${spec.name}`, false, `🔴 FK ${spec.name} 을 만들지 않는다`)
+      continue
+    }
+    const why = []
+    if (got.column !== spec.column) why.push(`컬럼 ${got.column}`)
+    if (got.referencedTable !== spec.referencedTable) why.push(`참조 ${got.referencedTable}`)
+    if (got.referencedColumn !== spec.referencedColumn) why.push(`참조 컬럼 ${got.referencedColumn}`)
+    if (got.onDelete !== 'SET NULL') why.push(`ON DELETE ${got.onDelete}`)
+    if (got.onUpdate !== 'CASCADE') why.push(`ON UPDATE ${got.onUpdate}`)
+    add(`FK_SQL:${spec.name}`, why.length === 0,
+      why.length === 0
+        ? `${spec.name} → ${spec.referencedTable}.${spec.referencedColumn} · SET NULL · CASCADE`
+        : `🔴 ${spec.name} — ${why.join(' · ')}`)
+  }
+  const extraFkSql = parsedFk.filter(
+    (p) => p !== null && !EXPECTED_FOREIGN_KEYS.some((s) => s.name === p.name),
+  )
+  add('FK_SQL_SET', extraFkSql.length === 0,
+    extraFkSql.length === 0 ? '예상 밖 FK 0'
+      : `🔴 예상 밖 FK 를 만든다: ${extraFkSql.map((p) => p.name).join(', ')}`)
+
+  // ── 🔴 그 밖의 구문은 하나도 없어야 한다 ──
+  const others = statements.filter(
+    (s) => !/^(CREATE TYPE|CREATE TABLE|CREATE (UNIQUE )?INDEX|ALTER TABLE)\b/i.test(s),
+  )
+  add('NO_OTHER_STATEMENTS', others.length === 0,
+    others.length === 0 ? '허용 밖 구문 0'
+      : `🔴 허용 밖 구문 ${others.length}건: ${others.map((s) => s.slice(0, 40)).join(' / ')}`)
+
+  // ── 계약에 없는 컬럼 이름 ──
+  add('NO_URL_COLUMN', !/"(mobileImageUrl|desktopImageUrl|imageUrl)"/i.test(body),
+    !/"(mobileImageUrl|desktopImageUrl|imageUrl)"/i.test(body)
+      ? '공개 URL 컬럼 0' : '🔴 공개 이미지 URL 컬럼이 있다 — R2 object key 만 담는다')
+  add('NO_POPUP_TYPE', !/"(type|bannerType|campaignId)" /i.test(body),
+    !/"(type|bannerType|campaignId)" /i.test(body)
+      ? 'popup type · campaignId 0' : '🔴 popup type 또는 campaignId 컬럼이 있다')
+
+  const ok = findings.every((f) => f.ok)
+  return {
+    ok,
+    findings,
+    summary: ok
+      ? `SQL 계약 일치 — 실행문 7개 (enum 1 · 테이블 1 · 인덱스 ${SQL_CREATE_INDEX_SPECS.length} · FK ${EXPECTED_FOREIGN_KEYS.length})`
+      : `🔴 SQL 이 계약과 다르다 — ${findings.filter((f) => !f.ok).map((f) => f.detail).join(' / ')}`,
+  }
 }

@@ -31,12 +31,14 @@ import { applyWithVerification, judgeProjectRef } from './lib/migration-0024-sta
 import {
   EXPECTED_COLUMNS,
   EXPECTED_FOREIGN_KEYS,
-  EXPECTED_INDEXES,
+  EXPECTED_INDEX_SPECS,
   MIGRATION_ID,
   NEW_ENUM,
   NEW_TABLE,
   PROTECTED_TABLES,
+  judgeMigration0025Sql,
   judgeMigration0025State,
+  judgeProtectedCounts,
 } from './lib/migration-0025-state.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -73,6 +75,25 @@ if (existsSync(envPath)) {
     if (process.env[m[1]] === undefined) process.env[m[1]] = v
   }
 }
+// ══ SQL 계약 — 🔴 **DB 에 연결하기 전에 본다** ══
+/**
+ * 🔴 순서가 계약이다. 잘못된 SQL 때문에 production DB 에 **연결조차 하지 않는다** —
+ *    연결한 뒤에 보면, 그 사이에 무엇이 열렸는지를 설명해야 한다.
+ *
+ * 🔴 구문의 *시작*만 보지 않는다. 앞선 판의 화이트리스트는 `^CREATE TABLE` 인지만
+ *    봐서 `CREATE TABLE "Evil"` 도, `CREATE INDEX ... ON "User"` 도 통과했다.
+ *    판정은 순수 함수(judgeMigration0025Sql)가 하고, fixture 가 차단 경로를 시험한다.
+ */
+const sql = readFileSync(SQL_PATH, 'utf-8')
+const sqlVerdict = judgeMigration0025Sql(sql)
+for (const f of sqlVerdict.findings) {
+  if (!f.ok) console.error(`   ❌ ${f.detail}`)
+}
+if (!sqlVerdict.ok) fail(`${sqlVerdict.summary}\n   🔴 DB 에 연결하지 않았습니다.`)
+ok(sqlVerdict.summary)
+
+const body = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
+
 const directUrl = process.env.DIRECT_URL?.trim()
 if (!directUrl) fail('DIRECT_URL 이 없습니다.')
 
@@ -102,15 +123,33 @@ process.on('unhandledRejection', (e) => {
   process.exit(1)
 })
 
+/**
+ * 보호 테이블의 행 수 — 🔴 **하나라도 못 읽으면 던진다** (결함 D 정정).
+ *
+ *    앞선 판은 테이블이 없으면 `null` 을 넣었다. 그러면 적용 전후가 **둘 다 null**
+ *    이라 "변하지 않았다" 로 통과한다 — 실제로는 그 테이블을 한 번도 못 본 것이다.
+ *    보호하겠다고 적어 둔 목록이 보호를 하지 않는 상태였다.
+ *
+ * 🔴 `User` · `Post` 는 반드시 있다. 없다면 다른 DB 를 보고 있거나 권한이 없는 것이고,
+ *    둘 다 진행하면 안 되는 상황이다 — 조용히 넘기지 않고 멈춘다.
+ *
+ * 🔴 던지는 것이 계약이다. 트랜잭션 **안**에서 불릴 때는 이 throw 가 곧 ROLLBACK 이다
+ *    (applyWithVerification 이 관측 실패를 되돌림으로 다룬다).
+ */
 async function counts() {
   const out = {}
   for (const t of PROTECTED_TABLES) {
     const { rows } = await client.query(
       `SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=$1`, [t])
-    if (rows.length === 0) { out[t] = null; continue }
+    if (rows.length === 0) {
+      throw new Error(`보호 테이블 ${t} 가 없다 — 다른 DB 를 보고 있거나 권한이 없다`)
+    }
     const { rows: c } = await client.query(`SELECT COUNT(*)::int AS n FROM "${t}"`)
-    out[t] = c[0].n
+    out[t] = c[0]?.n
   }
+  // 🔴 판정은 순수 함수가 한다 — fixture 가 같은 규칙을 DB 없이 시험할 수 있어야 한다
+  const verdict = judgeProtectedCounts(out)
+  if (!verdict.ok) throw new Error(verdict.reason)
   return out
 }
 
@@ -141,8 +180,29 @@ async function state() {
        FROM information_schema.columns
       WHERE table_schema='public' AND table_name=$1
       ORDER BY column_name`, [NEW_TABLE])
+  /**
+   * 인덱스 — 🔴 **이름만 읽지 않는다** (결함 B 정정).
+   *
+   *    `pg_indexes.indexname` 만 보면 같은 이름으로 **다른 컬럼**에 걸린 인덱스가
+   *    통과한다. 이름은 맞는데 홈 조회가 그 인덱스를 타지 못해 조용히 느려진다.
+   *
+   * 🔴 컬럼 순서는 `ORDER BY k.ord` 로 인덱스 정의 순서 그대로 읽는다 —
+   *    복합 인덱스는 앞 컬럼부터 쓰이므로 순서가 곧 성능이다.
+   */
   const { rows: idx } = await client.query(
-    `SELECT indexname FROM pg_indexes WHERE schemaname='public' AND tablename=$1 ORDER BY indexname`, [NEW_TABLE])
+    `SELECT c.relname                          AS name,
+            t.relname                          AS "table",
+            i.indisprimary                     AS "isPrimary",
+            i.indisunique                      AS "isUnique",
+            array_agg(a.attname ORDER BY k.ord) AS columns
+       FROM pg_index i
+       JOIN pg_class c   ON c.oid = i.indexrelid
+       JOIN pg_class t   ON t.oid = i.indrelid
+       JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+      WHERE i.indrelid = to_regclass($1)
+      GROUP BY c.relname, t.relname, i.indisprimary, i.indisunique
+      ORDER BY c.relname`, [`public."${NEW_TABLE}"`])
 
   // FK — 🔴 참조 대상과 ON DELETE / ON UPDATE 동작까지 읽는다
   const { rows: fks } = await client.query(
@@ -164,7 +224,7 @@ async function state() {
     table: NEW_TABLE,
     enumLabels,
     columns: cols,
-    indexes: idx.map((i) => i.indexname),
+    indexes: idx,
     foreignKeys: fks,
     rowCount: n[0].n,
   }
@@ -176,43 +236,7 @@ try {
   fail(`DB 에 연결하지 못했습니다 [OBSERVATION_FAILED] — ${e.message}`)
 }
 
-// ══ SQL 읽기 · 구문 가드 ══
-const sql = readFileSync(SQL_PATH, 'utf-8')
-const body = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')
-
-// 🔴 ALTER 대상이 신규 테이블 하나뿐인가
-const altered = [...body.matchAll(/ALTER TABLE\s+"([A-Za-z]+)"/g)].map((m) => m[1])
-const badAlter = [...new Set(altered)].filter((t) => t !== NEW_TABLE)
-if (badAlter.length > 0) { await client.end(); fail(`${NEW_TABLE} 밖 ALTER 가 있습니다: ${badAlter.join(', ')}`) }
-// 🔴 기존 테이블은 이름만으로도 ALTER 대상에 없어야 한다 — User 는 FK 로 참조만 한다
-for (const t of ['User', 'Post', 'Comment', 'Persona', 'MicroSeedRawContent', 'MicroSeedCandidate', 'HomeExposureOverride']) {
-  if (new RegExp(`ALTER TABLE\\s+"${t}"`).test(body)) { await client.end(); fail(`🔴 ${t} 를 ALTER 합니다`) }
-}
-ok(`ALTER 대상 ${NEW_TABLE} 하나뿐 · User 는 참조만`)
-
-// 🔴 허용 구문 화이트리스트
-const statements = body.split(';').map((s) => s.trim()).filter((s) => s !== '')
-const ALLOWED = /^(CREATE TYPE|CREATE TABLE|CREATE UNIQUE INDEX|CREATE INDEX|ALTER TABLE)\b/i
-const notAllowed = statements.filter((s) => !ALLOWED.test(s))
-if (notAllowed.length > 0) {
-  await client.end()
-  fail(`허용 구문만(CREATE TYPE · CREATE TABLE · CREATE INDEX · ALTER TABLE) 사용할 수 있습니다 — ${notAllowed.length}건 발견`)
-}
-const destructive = statements.filter((s) => /^(DROP|TRUNCATE|DELETE|UPDATE|INSERT)\b/i.test(s))
-if (destructive.length > 0) { await client.end(); fail(`파괴 구문이 있습니다: ${destructive.length}건`) }
-if (/DROP\s+(TABLE|TYPE|COLUMN|CONSTRAINT|INDEX)/i.test(body)) { await client.end(); fail('DROP 이 있습니다 — 되돌리기는 배너를 끄는 것으로 한다') }
-ok(`구문 ${statements.length}건 · 전부 허용 구문 · 파괴 구문 0 · DROP 0`)
-
-// 🔴 계약에 없는 컬럼을 만들지 않는가
-if (/"(mobileImageUrl|desktopImageUrl|imageUrl)"/i.test(body)) {
-  await client.end()
-  fail('공개 이미지 URL 컬럼이 있습니다 — R2 object key 만 담습니다.')
-}
-if (/"(type|bannerType|campaignId)"\s/i.test(body)) {
-  await client.end()
-  fail('팝업용 type 또는 campaignId 컬럼이 있습니다 — 히어로 한 자리만 맡습니다.')
-}
-ok('URL 컬럼 0 · popup type 0 · campaignId 0')
+// 🔴 SQL 계약은 연결 전에 이미 통과했다 (위 §SQL 계약). 여기서 다시 보지 않는다.
 
 // ── 관측 ──
 const observed = await (async () => {
@@ -267,7 +291,7 @@ if (!APPLY) {
   await client.end()
   console.log('\n🟡 dry-run 입니다. DB 변경 0 · 적용하려면 --apply 를 붙이세요.\n')
   console.log(`   적용 예정: enum ${NEW_ENUM} 1개 · 테이블 ${NEW_TABLE} 1개`)
-  console.log(`             컬럼 ${EXPECTED_COLUMNS.length}개 · 인덱스 ${EXPECTED_INDEXES.length}개(PK 포함) · FK ${EXPECTED_FOREIGN_KEYS.length}개(SET NULL)`)
+  console.log(`             컬럼 ${EXPECTED_COLUMNS.length}개 · 인덱스 ${EXPECTED_INDEX_SPECS.length}개(PK 포함) · FK ${EXPECTED_FOREIGN_KEYS.length}개(SET NULL)`)
   console.log('   🔴 신규 생성만 합니다. 기존 테이블은 어떤 것도 ALTER 하지 않습니다.\n')
   process.exit(0)
 }

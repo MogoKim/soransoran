@@ -25,12 +25,16 @@ import {
   EXPECTED_COLUMNS,
   EXPECTED_FOREIGN_KEYS,
   EXPECTED_INDEXES,
+  EXPECTED_INDEX_SPECS,
   MIGRATION_ID,
   MIGRATION_STATES,
   NEW_ENUM,
   NEW_TABLE,
   PROTECTED_TABLES,
+  SQL_CREATE_INDEX_SPECS,
+  judgeMigration0025Sql,
   judgeMigration0025State,
+  judgeProtectedCounts,
 } from './lib/migration-0025-state.mjs'
 
 let pass = 0
@@ -71,6 +75,20 @@ function goodColumns(): ColumnMeta[] {
   }))
 }
 
+/**
+ * 인덱스 관측값 — 🔴 이름뿐 아니라 컬럼·순서·primary·unique 까지.
+ *    앞선 판은 이름 문자열 배열이었다. 그래서 같은 이름·다른 컬럼이 통과했다.
+ */
+function goodIndexes() {
+  return EXPECTED_INDEX_SPECS.map((i) => ({
+    name: i.name,
+    table: NEW_TABLE,
+    columns: [...i.columns],
+    isPrimary: i.primary,
+    isUnique: i.unique,
+  }))
+}
+
 function goodForeignKeys() {
   return EXPECTED_FOREIGN_KEYS.map((f) => ({
     conname: f.name,
@@ -88,7 +106,7 @@ function applied(over: Record<string, unknown> = {}) {
     table: NEW_TABLE,
     enumLabels: [...ENUM_LABELS],
     columns: goodColumns(),
-    indexes: [...EXPECTED_INDEXES],
+    indexes: goodIndexes(),
     foreignKeys: goodForeignKeys(),
     rowCount: 0,
     ...over,
@@ -183,7 +201,7 @@ check('🔴 인덱스 계약은 PK 포함 4개다', EXPECTED_INDEXES.length === 
 check('PK 가 목록에 있다', EXPECTED_INDEXES.includes('HeroBanner_pkey'))
 for (const i of EXPECTED_INDEXES) {
   check(`인덱스 하나(${i})가 없으면 PARTIAL_OR_INVALID`,
-    state(applied({ indexes: EXPECTED_INDEXES.filter((x) => x !== i) })) === 'PARTIAL_OR_INVALID')
+    state(applied({ indexes: goodIndexes().filter((x) => x.name !== i) })) === 'PARTIAL_OR_INVALID')
 }
 
 // ── ⑦ FK 2개 · 참조와 삭제 동작 ──
@@ -359,7 +377,7 @@ const enumOnly = await runFake({ observed: { ...NOTHING, enumLabels: [...ENUM_LA
 check('🔴 enum 만 생겼으면 COMMIT 하지 않는다',
   !enumOnly.ok && enumOnly.committed === 0 && enumOnly.rolledBack === 1)
 
-const idxFail = await runFake({ observed: applied({ indexes: ['HeroBanner_pkey'] }) })
+const idxFail = await runFake({ observed: applied({ indexes: goodIndexes().slice(0, 1) }) })
 check('🔴 인덱스가 덜 생겼으면 COMMIT 하지 않는다',
   !idxFail.ok && idxFail.committed === 0 && idxFail.rolledBack === 1)
 
@@ -391,6 +409,181 @@ check('🔴 판정 모듈이 파일을 읽지 않는다', !/readFileSync|node:fs
 check('🔴 판정 모듈이 네트워크를 쓰지 않는다', !/fetch\(|node:http/.test(stateSrc))
 check('판정이 같은 입력에 같은 답을 준다',
   state(applied()) === state(applied()) && state(NOTHING) === state(NOTHING))
+
+
+// ══════════════════════════════════════════════════════════
+// 🔴 Codex [1] 검증이 잡은 차단 결함 4건 (2026-09-14)
+// ══════════════════════════════════════════════════════════
+
+// ── ⑯ 결함 A — SQL 대상이 열려 있었다 ──
+console.log('── ⑯ 결함 A · SQL 계약')
+
+const realSql = readFileSync(`prisma/migrations/${MIGRATION_ID}/migration.sql`, 'utf-8')
+check('🔴 실제 0025 SQL 이 계약을 통과한다', judgeMigration0025Sql(realSql).ok)
+check('SQL 계약 요약이 실행문 수를 말한다', judgeMigration0025Sql(realSql).summary.includes('7개'))
+check('SQL 을 못 읽으면 실패', !judgeMigration0025Sql('').ok)
+check('문자열이 아니면 실패', !judgeMigration0025Sql(null as never).ok)
+
+/** 실제 SQL 에 한 줄 덧붙여 차단되는지 본다 — 🔴 migration SQL 자체는 고치지 않는다 */
+const plus = (extra: string): boolean => judgeMigration0025Sql(`${realSql}\n${extra}`).ok
+
+check('🔴 추가 CREATE TABLE 을 막는다',
+  !plus('CREATE TABLE "Evil" ("id" TEXT NOT NULL);'))
+check('🔴 추가 CREATE TYPE 을 막는다',
+  !plus(`CREATE TYPE "OtherEnum" AS ENUM ('A');`))
+check('🔴 User 대상 CREATE INDEX 를 막는다',
+  !plus('CREATE INDEX "User_email_idx" ON "User"("email");'))
+check('🔴 HeroBanner 에 예상 밖 인덱스를 더해도 막는다',
+  !plus('CREATE INDEX "HeroBanner_name_idx" ON "HeroBanner"("name");'))
+check('🔴 추가 ALTER TABLE 을 막는다',
+  !plus('ALTER TABLE "User" ADD COLUMN "x" TEXT;'))
+check('🔴 8번째 문장이면 막는다 — 개수 자체가 계약이다',
+  !plus('CREATE INDEX "HeroBanner_alt_idx" ON "HeroBanner"("alt");'))
+check('🔴 INSERT 를 막는다', !plus(`INSERT INTO "HeroBanner" ("id") VALUES ('x');`))
+check('🔴 DROP 을 막는다', !plus('DROP TABLE "HeroBanner";'))
+check('🔴 GRANT 같은 허용 밖 구문을 막는다', !plus('GRANT ALL ON "HeroBanner" TO PUBLIC;'))
+
+/** 실제 SQL 의 한 조각을 바꿔치기해 계약이 실제로 값을 보는지 확인한다 */
+const swapped = (from: string, to: string): boolean =>
+  judgeMigration0025Sql(realSql.replace(from, to)).ok
+
+check('🔴 enum 이름이 바뀌면 막는다',
+  !swapped('CREATE TYPE "HeroBannerLinkKind"', 'CREATE TYPE "OtherKind"'))
+check('🔴 enum 라벨 순서가 바뀌면 막는다',
+  !swapped(`ENUM ('NONE', 'INTERNAL', 'EXTERNAL')`, `ENUM ('INTERNAL', 'NONE', 'EXTERNAL')`))
+check('🔴 테이블 이름이 바뀌면 막는다',
+  !swapped('CREATE TABLE "HeroBanner"', 'CREATE TABLE "HeroBanners"'))
+check('🔴 복합 인덱스 컬럼 순서가 바뀌면 막는다',
+  !swapped('("isActive", "archivedAt", "sortOrder")', '("archivedAt", "isActive", "sortOrder")'))
+check('🔴 인덱스 대상 테이블이 바뀌면 막는다',
+  !swapped('ON "HeroBanner"("startsAt")', 'ON "User"("startsAt")'))
+check('🔴 FK 가 CASCADE 로 바뀌면 막는다 — 운영자 탈퇴가 배너를 지운다',
+  !swapped('REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;\n\nALTER TABLE "HeroBanner"\n  ADD CONSTRAINT "HeroBanner_updatedByUserId_fkey"',
+           'REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;\n\nALTER TABLE "HeroBanner"\n  ADD CONSTRAINT "HeroBanner_updatedByUserId_fkey"'))
+check('🔴 FK 참조 테이블이 바뀌면 막는다',
+  !swapped('FOREIGN KEY ("createdByUserId") REFERENCES "User"("id")',
+           'FOREIGN KEY ("createdByUserId") REFERENCES "Post"("id")'))
+check('SQL 계약이 CREATE INDEX 를 3개로 센다 (PK 는 제약이 만든다)',
+  SQL_CREATE_INDEX_SPECS.length === 3)
+
+// ── ⑰ 결함 B — 인덱스를 이름만 봤다 ──
+console.log('── ⑰ 결함 B · 인덱스 컬럼과 순서')
+
+check('🔴 이름 문자열 배열은 이제 관측 실패다 — 컬럼을 볼 수 없다',
+  state(applied({ indexes: [...EXPECTED_INDEXES] })) === 'OBSERVATION_FAILED')
+check('🔴 같은 이름·다른 컬럼이면 잡는다',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name === 'HeroBanner_isActive_archivedAt_sortOrder_idx' ? { ...i, columns: ['sortOrder'] } : i),
+  })) === 'PARTIAL_OR_INVALID')
+check('🔴 복합 인덱스 컬럼 순서가 다르면 잡는다',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name === 'HeroBanner_isActive_archivedAt_sortOrder_idx'
+        ? { ...i, columns: ['archivedAt', 'isActive', 'sortOrder'] } : i),
+  })) === 'PARTIAL_OR_INVALID')
+check('🔴 PK 가 일반 인덱스면 잡는다',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name === 'HeroBanner_pkey' ? { ...i, isPrimary: false, isUnique: false } : i),
+  })) === 'PARTIAL_OR_INVALID')
+check('🔴 일반 인덱스가 unique 면 잡는다',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name === 'HeroBanner_startsAt_idx' ? { ...i, isUnique: true } : i),
+  })) === 'PARTIAL_OR_INVALID')
+check('🔴 PK 가 다른 컬럼이면 잡는다',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name === 'HeroBanner_pkey' ? { ...i, columns: ['name'] } : i),
+  })) === 'PARTIAL_OR_INVALID')
+check('🔴 다른 테이블의 인덱스가 섞이면 잡는다',
+  state(applied({
+    indexes: goodIndexes().map((i) =>
+      i.name === 'HeroBanner_endsAt_idx' ? { ...i, table: 'User' } : i),
+  })) === 'PARTIAL_OR_INVALID')
+check('🔴 예상 밖 인덱스가 있으면 잡는다',
+  state(applied({
+    indexes: [...goodIndexes(),
+      { name: 'HeroBanner_name_idx', table: NEW_TABLE, columns: ['name'], isPrimary: false, isUnique: false }],
+  })) === 'PARTIAL_OR_INVALID')
+check('인덱스 metadata 모양이 아니면 OBSERVATION_FAILED',
+  state(applied({ indexes: [{ name: 'x' }] })) === 'OBSERVATION_FAILED')
+
+// ── ⑱ 결함 C — rowCount null 이 통과했다 ──
+console.log('── ⑱ 결함 C · rowCount')
+
+check('🔴 rowCount:null 은 관측 실패다 (앞선 판은 APPLIED_AND_VALID 였다)',
+  state(applied({ rowCount: null })) === 'OBSERVATION_FAILED')
+check('🔴 그때 exit 가 0 이 아니다',
+  verdictOf(applied({ rowCount: null })).exitCode === 1)
+check('rowCount:undefined 도 관측 실패',
+  state(applied({ rowCount: undefined })) === 'OBSERVATION_FAILED')
+check('rowCount 가 문자열이면 관측 실패',
+  state(applied({ rowCount: '0' })) === 'OBSERVATION_FAILED')
+check('🔴 rowCount 가 음수면 관측 실패',
+  state(applied({ rowCount: -1 })) === 'OBSERVATION_FAILED')
+check('rowCount 가 소수면 관측 실패',
+  state(applied({ rowCount: 0.5 })) === 'OBSERVATION_FAILED')
+check('rowCount 0 은 정상', state(applied({ rowCount: 0 })) === 'APPLIED_AND_VALID')
+check('rowCount 1 은 PARTIAL_OR_INVALID', state(applied({ rowCount: 1 })) === 'PARTIAL_OR_INVALID')
+check('테이블이 없으면 rowCount:null 이어도 NOT_APPLIED 다',
+  state(NOTHING) === 'NOT_APPLIED')
+
+// ── ⑲ 결함 D — 보호 테이블 누락 ──
+console.log('── ⑲ 결함 D · 보호 테이블')
+
+const fullCounts = Object.fromEntries(PROTECTED_TABLES.map((t) => [t, 3]))
+check('전부 읽으면 통과', judgeProtectedCounts(fullCounts).ok)
+check('🔴 보호 테이블이 하나 빠지면 실패', (() => {
+  const { User: _omit, ...rest } = fullCounts
+  return !judgeProtectedCounts(rest).ok
+})())
+check('🔴 행 수가 null 이면 실패 — 앞선 판은 "변경 없음" 으로 통과했다',
+  !judgeProtectedCounts({ ...fullCounts, User: null }).ok)
+check('행 수가 문자열이면 실패',
+  !judgeProtectedCounts({ ...fullCounts, Post: '3' as never }).ok)
+check('행 수가 음수면 실패', !judgeProtectedCounts({ ...fullCounts, Post: -1 }).ok)
+check('counts 자체가 null 이면 실패', !judgeProtectedCounts(null as never).ok)
+check('실패 사유에 어느 테이블인지 남는다',
+  judgeProtectedCounts({ ...fullCounts, Comment: null }).reason.includes('Comment'))
+check('보호 목록이 9개다', PROTECTED_TABLES.length === 9)
+
+/** 트랜잭션 안에서 count 가 던지면 ROLLBACK 인가 */
+async function runCountFail() {
+  const callsSeen: string[] = []
+  return applyWithVerification({
+    exec: async (_sql: string, label: string) => { callsSeen.push(label); return undefined },
+    sql: 'CREATE TABLE "HeroBanner" ();',
+    observe: async () => applied() as never,
+    countTables: async () => { throw new Error('보호 테이블 User 가 없다') },
+    beforeCounts: { ...BEFORE_COUNTS },
+    judge: judgeMigration0025State as never,
+  })
+}
+const countFail = await runCountFail()
+check('🔴 트랜잭션 안 count 실패 → COMMIT 0 · ROLLBACK 1',
+  !countFail.ok && countFail.committed === 0 && countFail.rolledBack === 1)
+check('그때 상태가 OBSERVATION_FAILED', countFail.state === 'OBSERVATION_FAILED')
+
+// ── ⑳ CLI 가 새 계약을 실제로 쓰는가 ──
+console.log('── ⑳ CLI 배선')
+check('🔴 CLI 가 SQL 계약을 순수 함수에 맡긴다', cliCode.includes('judgeMigration0025Sql('))
+check('🔴 CLI 가 SQL 검사를 DB 연결보다 먼저 한다', (() => {
+  const sqlAt = cliCode.indexOf('judgeMigration0025Sql(')
+  const connectAt = cliCode.indexOf('client.connect()')
+  return sqlAt > 0 && connectAt > sqlAt
+})())
+check('🔴 SQL 이 틀리면 연결하지 않는다고 말한다', cliCode.includes('DB 에 연결하지 않았습니다'))
+check('🔴 CLI 가 보호 테이블 판정을 순수 함수에 맡긴다', cliCode.includes('judgeProtectedCounts('))
+check('🔴 counts 가 null 을 넣지 않는다', !/out\[t\] = null/.test(cliCode))
+check('🔴 counts 가 없는 테이블에서 던진다', /보호 테이블 \$\{t\} 가 없다/.test(cliCode))
+check('🔴 인덱스를 이름만 읽지 않는다', !/indexes: idx\.map\(\(i\) => i\.indexname\)/.test(cliCode))
+check('인덱스 조회가 컬럼 순서를 읽는다', /ORDER BY k\.ord/.test(cliCode))
+check('인덱스 조회가 primary·unique 를 읽는다',
+  cliCode.includes('indisprimary') && cliCode.includes('indisunique'))
+check('CLI 가 인라인 화이트리스트를 다시 적지 않는다', !/const ALLOWED = /.test(cliCode))
+
 
 console.log(`\n  ${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('  🔴 이 검사는 DB 에 연결하지 않았다 — 연결 0 · write 0\n')
