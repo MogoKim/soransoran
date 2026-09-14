@@ -17,24 +17,65 @@
  * 🔴 **조건부 UPDATE 다.** count 0 이면 throw 해서 Post 까지 롤백한다.
  *    글만 생기고 대기열은 그대로인 상태를 만들지 않는다.
  *
+ * 🔴 **하루 상한은 트랜잭션 **안에서** 다시 센다** (2026-09-14 정정).
+ *
+ *    옛 판은 호출부가 밖에서 센 `publishedToday` 를 그대로 판정에 썼고, 격리 수준도
+ *    기본값(Read Committed)이었다. 그러면 **서로 다른 후보의 두 트랜잭션이 같은 스냅샷을
+ *    읽는다** — 둘 다 `publishedToday=0` 을 보고 둘 다 통과한다. 상한이 1인데 2건이 나간다.
+ *    조건부 `updateMany` 는 **같은 후보**의 경쟁만 막는다. 다른 후보끼리는 막을 것이 없었다.
+ *
+ *    댓글 레인(`persona-publish-tx`)이 2026-09-09 에 같은 결함을 고쳤다. 이쪽은 남아 있었고,
+ *    catch-up 도입으로 **여러 run 이 동시에 "밀린 1건" 을 보게 되면서** 실제 위험이 됐다.
+ *    그래서 같은 처방을 쓴다 — Serializable + 트랜잭션 안 재counting.
+ *
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
-  buildOriginalPostData, assertOriginalPostData, judgePublish,
+  buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
   type PublishBlockCode,
 } from './original-post-publish'
 
 const QUEUE_RACE = 'ORIGINAL_POST_QUEUE_RACE'
 
+/**
+ * 🔴 Serializable 트랜잭션의 시간 손잡이 — `persona-publish-tx` 와 같은 값이다.
+ *    `maxWait` 는 잠금을 기다리는 시간, `timeout` 은 트랜잭션 자체의 상한이다.
+ *    이 트랜잭션은 판정 쿼리가 여럿이라 기본 5초로는 부하가 있을 때 판정 도중 잘린다.
+ */
+export const TX_MAX_WAIT_MS = 20_000
+export const TX_TIMEOUT_MS = 30_000
+
+/**
+ * 🔴 직렬화 충돌인가. Prisma 는 `P2034` 로 준다.
+ *    코드가 없는 드라이버 오류도 있으므로 메시지도 함께 본다 — 모르면 충돌로 보지 않는다.
+ */
+export function isSerializationConflict(err: unknown): boolean {
+  if (err === null || typeof err !== 'object') return false
+  const e = err as { code?: unknown; message?: unknown }
+  if (e.code === 'P2034') return true
+  return typeof e.message === 'string'
+    && /could not serialize|serialization failure|write conflict|deadlock detected/i.test(e.message)
+}
+
 export type PublishResult =
-  | { kind: 'published'; postId: string; personaCode: string; boardType: string }
-  | { kind: 'blocked'; code: PublishBlockCode; detail: string }
+  | {
+      kind: 'published'; postId: string; personaCode: string; boardType: string
+      /** 🔴 트랜잭션 안에서 다시 센 오늘 발행 수 — 밖의 값과 다르면 경쟁이 있었다 */
+      publishedTodayInTx?: number
+    }
+  | { kind: 'blocked'; code: PublishBlockCode; detail: string; publishedTodayInTx?: number }
   | { kind: 'error'; message: string }
 
 export type PublishTxInput = {
   queueId: string
-  /** 오늘(KST) 이미 발행된 수 — 부르는 쪽이 센다 */
+  /**
+   * 오늘(KST) 이미 발행된 수 — 부르는 쪽이 센 값이다.
+   *
+   * 🔴 **판정에 쓰지 않는다.** 이 값은 밖에서 센 그 순간의 사진이라, 그 사이 다른 run 이
+   *    가져간 자리를 모른다. 판정은 트랜잭션 안에서 다시 센 값으로 한다 —
+   *    이 필드는 **로그 대조용**으로만 남는다(밖과 안이 다르면 경쟁이 있었다는 뜻이다).
+   */
   publishedToday: number
   /**
    * 🔴 **하루 상한을 주입받는다** (2026-09-08).
@@ -78,6 +119,18 @@ export async function publishOriginalPostTx(
         select: { enabled: true },
       })
 
+      /**
+       * 🔴 **오늘 발행 수를 이 트랜잭션 안에서 다시 센다** (2026-09-14).
+       *
+       *    밖에서 센 값(`input.publishedToday`)은 그 순간의 사진이다. catch-up 이 들어오면
+       *    여러 run 이 같은 "밀린 1건" 을 동시에 보게 되고, 그때 밖의 사진을 믿으면
+       *    둘 다 통과한다. cap 의 정본은 `PersonaActivityLog(kind='post')` 이고,
+       *    러너·화면·이 트랜잭션이 **같은 표를 같은 경계(KST 자정)로** 세야 한다.
+       */
+      const publishedTodayInTx = await tx.personaActivityLog.count({
+        where: { kind: 'post', createdAt: { gte: kstDayStart(new Date()) } },
+      })
+
       // 🔴 트랜잭션 안에서 다시 판정한다. 배정 시점의 판정을 믿지 않는다
       const verdict = judgePublish(
         {
@@ -93,12 +146,15 @@ export async function publishOriginalPostTx(
         },
         {
           killSwitchEnabled: sw?.enabled === true,
-          publishedToday: input.publishedToday,
+          // 🔴 **트랜잭션 안에서 다시 센 값**이다. 밖에서 받은 사진을 쓰지 않는다
+          publishedToday: publishedTodayInTx,
           // 🔴 주입값이다. 트랜잭션 안에서 다시 판정할 때도 같은 상한을 쓴다
           dailyCap: input.dailyCap,
         },
       )
-      if (!verdict.ok) return { kind: 'blocked', code: verdict.code, detail: verdict.detail }
+      if (!verdict.ok) {
+        return { kind: 'blocked', code: verdict.code, detail: verdict.detail, publishedTodayInTx }
+      }
 
       const persona = row.matchedPersona!
 
@@ -138,11 +194,33 @@ export async function publishOriginalPostTx(
         },
       })
 
-      return { kind: 'published', postId: post.id, personaCode: persona.code, boardType: post.boardType }
+      return {
+        kind: 'published', postId: post.id, personaCode: persona.code,
+        boardType: post.boardType, publishedTodayInTx,
+      }
+    }, {
+      /**
+       * 🔴 **Serializable 이어야 하는 이유.**
+       *    글로벌 일일 상한은 "이 후보가 몇 번째인가" 로 판정한다. 기본 격리에서는 서로 다른
+       *    후보의 두 트랜잭션이 같은 스냅샷을 읽어 둘 다 통과한다. Serializable 에서
+       *    두 번째 트랜잭션은 직렬화 실패(P2034)로 되돌아간다.
+       */
+      isolationLevel: 'Serializable',
+      maxWait: TX_MAX_WAIT_MS,
+      timeout: TX_TIMEOUT_MS,
     })
   } catch (err) {
     if (err instanceof Error && err.message === QUEUE_RACE) {
       return { kind: 'error', message: '이미 발행된 후보입니다. 다시 확인해 주세요.' }
+    }
+    /**
+     * 🔴 **직렬화 실패는 실패다. 재시도하지 않는다.**
+     *    P2034 는 "다른 트랜잭션이 먼저 자리를 가져갔다" 는 뜻이다. 여기서 재시도하면
+     *    상한을 넘기려고 다시 시도하는 셈이 된다 — 막으려던 바로 그 일이다.
+     *    이 회차는 그냥 지고, 공개 write 는 남지 않는다. 밀린 것은 다음 run 이 본다.
+     */
+    if (isSerializationConflict(err)) {
+      return { kind: 'error', message: '다른 발행이 먼저 진행됐습니다. 잠시 후 다시 확인해 주세요.' }
     }
     // 🔴 예외 원문을 호출부로 흘리지 않는다
     return { kind: 'error', message: '발행하지 못했습니다.' }
