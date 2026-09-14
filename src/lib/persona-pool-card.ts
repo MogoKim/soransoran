@@ -265,6 +265,17 @@ export function cardToPersona(card: PoolCard): PersonaForMatch {
     //    카드는 **아직 DB 에 없는 사람**이므로 Account 도 0 이다 — 만들 때 로그인 수단을 붙이지 않는다
     providerId: null,
     accountCount: 0,
+    /**
+     * 🔴 **나이대를 빠뜨리면 글쓴이가 몇 살인지 모르는 채로 글이 만들어진다** (2026-09-14).
+     *
+     *    이 함수는 `as PersonaForMatch` 캐스트로 끝난다 — 필드를 빠뜨려도 **typecheck 가 잡지 않는다.**
+     *    실제로 `ageBand` 가 빠져 있었고, 그래서 생성·검수 프롬프트가 나이를 보지 못했다.
+     *    실측: 40대 후반 P03 이 `우리 언니가 요즘 그 나이대(30~32)에 결혼 준비 중` 을 쓰고
+     *    `lifeConflict=false` 로 통과했다.
+     *
+     *    🔴 fixture 는 캐스트를 믿지 않고 **값으로** 확인한다.
+     */
+    ageBand: card.ageBand,
     maritalStatus: card.maritalStatus,
     childrenCount: card.childrenCount,
     childrenAgeBands: card.childrenAgeBands,
@@ -279,7 +290,13 @@ export function cardToPersona(card: PoolCard): PersonaForMatch {
     voiceLength: card.voiceLength,
     postsThisWeek: 0,
     daysSinceLastPost: null,
-  } as PersonaForMatch
+  }
+  /**
+   * 🔴 **`as PersonaForMatch` 캐스트를 없앴다** (2026-09-14).
+   *    캐스트가 있으면 필드를 빠뜨려도 typecheck 가 잡지 않는다 —
+   *    실제로 `ageBand` 가 빠져 있었고, 생성·검수가 글쓴이 나이를 못 본 채로 돌았다.
+   *    이제 반환 타입 검사로 누락이 **컴파일에서** 잡힌다.
+   */
 }
 
 /** 🔴 매칭이 아는 밴드인지 — 카드 파싱 결과를 믿지 않고 다시 본다 */

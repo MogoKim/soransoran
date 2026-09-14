@@ -29,7 +29,9 @@ import { queueProfileOf } from './micro-seed-supply-autofill'
 // 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
 export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
 // 🔴 판 값의 정본은 초안 lib 하나다
-import { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } from './micro-seed-auto-draft'
+import {
+  DRAFT_RULE_VERSION, DRAFT_PROVENANCE, MACHINE_AGE_HUMAN_REVIEW_REQUIRED,
+} from './micro-seed-auto-draft'
 import {
   voiceOfGateResults, type VoiceProvenance, type CandidateProfile,
 } from './original-post-voice-match'
@@ -76,14 +78,80 @@ export type AutoRow = {
   sourceSite: string
   /** 🔴 기계 후보 확인용 — 큐에 남긴 표시를 다시 본다 */
   gateResults?: unknown
+  /**
+   * 🔴 **누가 이 후보를 승인했는가** (2026-09-14).
+   *
+   *    기계 후보는 자동 보충기가 `machine:auto-draft-*` 를 찍는다 — 사람이 본 적이 없다는 뜻이다.
+   *    사람이 검토한 뒤에만 `founder` 가 된다.
+   *
+   *    🔴 이 값이 **발행 판정에 쓰인다.** 상수를 두고 읽지 않던 것이 앞선 결함이었다 —
+   *    `MACHINE_AGE_HUMAN_REVIEW_REQUIRED` 가 로그에만 찍히고 `selectAutoTargets` 는
+   *    그 값을 보지 않아, 사람이 확인하지 않은 기계 글이 그대로 자동 발행 대상이었다(실측 41건).
+   */
+  decidedBy: string | null
   /** 승인 시각 — 없으면 `createdAt` 이 대신한다. 🔴 줄 세우기의 근거다 */
   decidedAt: Date | null
   createdAt: Date
 }
 
+/**
+ * 🔴 **사람이 검토했다는 유일한 표시.**
+ *    새 컬럼을 만들지 않는다 — 큐에 이미 있는 `decidedBy` 를 쓴다.
+ *    `machine:*` · `null` · 모르는 값은 전부 "사람이 본 적 없다" 다(fail-closed).
+ */
+export const MACHINE_REVIEWED_BY = 'founder'
+
+/**
+ * 🔴 **사람이 본 그 글이 맞는가** — 검토 완료 표시를 붙이기 전후로 대조한다 (2026-09-14).
+ *
+ *    사람이 읽고 나서 `decidedBy` 를 바꾸기까지 시간이 흐른다. 그 사이에 본문이 바뀌거나
+ *    상태가 움직였으면, `founder` 표시는 **읽지 않은 글에 붙은 도장**이 된다.
+ *
+ * 🔴 **발행 문안으로 비교한다.** `editedTitle ?? draftTitle` · `editedBody ?? draftBody` —
+ *    실제로 나갈 글이 그것이기 때문이다. draft 만 비교하면 수정본이 바뀐 것을 놓친다.
+ */
+export type ReviewSnapshot = {
+  status: string
+  createdPostId: string | null
+  decidedBy: string | null
+  /** 🔴 낙관적 잠금의 근거 — 행이 한 번이라도 쓰이면 바뀐다 */
+  updatedAt: Date
+  /** 🔴 발행 문안 (edited ?? draft) */
+  title: string
+  body: string
+  promptVersion: string
+  model: string
+  gateResults: unknown
+}
+
+export type SnapshotVerdict = { ok: boolean; changed: string[] }
+
+/**
+ * 🔴 **검토한 스냅샷과 지금이 같은가.** 하나라도 다르면 `founder` 표시를 붙이지 않는다.
+ *    `decidedBy` · `decidedAt` 은 이 함수가 비교하지 않는다 — **바뀌라고 쓴 칸**이다.
+ */
+export function judgeReviewSnapshot(before: ReviewSnapshot, after: ReviewSnapshot): SnapshotVerdict {
+  const changed: string[] = []
+  if (before.status !== after.status) changed.push(`status ${before.status} → ${after.status}`)
+  if (before.createdPostId !== after.createdPostId) changed.push('createdPostId — 그 사이 발행됐다')
+  if (before.title !== after.title) changed.push('제목(발행 문안)이 바뀌었다')
+  if (before.body !== after.body) changed.push('본문(발행 문안)이 바뀌었다')
+  if (before.promptVersion !== after.promptVersion) changed.push('promptVersion 이 바뀌었다')
+  if (before.model !== after.model) changed.push('model 이 바뀌었다')
+  if (JSON.stringify(before.gateResults) !== JSON.stringify(after.gateResults)) {
+    changed.push('gateResults — 기계 생성 provenance 가 바뀌었다')
+  }
+  return { ok: changed.length === 0, changed }
+}
+
+/** 🔴 이 기계 후보를 사람이 검토했는가 — 모르면 아니다 */
+export function machineReviewedByHuman(decidedBy: string | null | undefined): boolean {
+  return (decidedBy ?? '').trim() === MACHINE_REVIEWED_BY
+}
+
 export type RejectCode =
   | 'STATUS' | 'ALREADY_PUBLISHED' | 'GATE' | 'PROMPT_VERSION' | 'MODEL' | 'SITE' | 'SAFETY' | 'EMPTY'
-  | 'PROFILE'
+  | 'PROFILE' | 'HUMAN_REVIEW_REQUIRED'
 
 export const REJECT_LABEL: Record<RejectCode, string> = {
   STATUS: 'APPROVED · EDITED 가 아니다',
@@ -93,6 +161,9 @@ export const REJECT_LABEL: Record<RejectCode, string> = {
   MODEL: '허용된 모델이 아니다',
   SITE: '허용된 출처가 아니다',
   PROFILE: '🔴 사람 profile 도 기계 profile 도 아니다 — 일부만 섞인 행은 받지 않는다',
+  HUMAN_REVIEW_REQUIRED:
+    '🔴 기계가 만든 글인데 사람이 확인하지 않았다 — 나이·세대 모순을 잡는 검수 모델이 없다'
+    + ' (npm run publish:machine-review 로 확인한다)',
   SAFETY: 'safety 재판정이 pass 가 아니다',
   EMPTY: '제목이나 본문이 비었다',
 }
@@ -160,6 +231,19 @@ export function selectAutoTargets(
     // 🔴 두 profile 중 하나를 **통째로** 만족해야 한다. 일부만 섞인 행은 거절이다
     const profile = profileOf(r)
     if (profile === null) { push(r.id, 'PROFILE'); continue }
+    /**
+     * 🔴 **기계 글은 사람이 확인한 것만 자동 발행 대상이다** (2026-09-14).
+     *
+     *    나이·세대 모순을 3/3 잡는 검수 모델이 없다(실측). 그 사실을 상수로만 적어 두고
+     *    여기서 읽지 않으면 아무것도 막지 못한다 — 실제로 그랬다(미확인 41건이 통과).
+     *
+     *    🔴 **사람 profile 은 건드리지 않는다.** 사람이 고른 글의 동작은 그대로다.
+     *    🔴 모르는 값·`null` 은 "확인하지 않았다" 다(fail-closed).
+     */
+    if (MACHINE_AGE_HUMAN_REVIEW_REQUIRED && profile === 'machine'
+      && !machineReviewedByHuman(r.decidedBy)) {
+      push(r.id, 'HUMAN_REVIEW_REQUIRED'); continue
+    }
     if (r.title.trim() === '' || r.body.trim() === '') { push(r.id, 'EMPTY'); continue }
     if (safetyOf(r.title, r.body) !== 'pass') { push(r.id, 'SAFETY'); continue }
     targets.push(r)
@@ -176,6 +260,11 @@ export function selectAutoTargets(
  * dry-run 에서 본 것이 실제로 나간다.
  */
 export function queueOrderKey(r: AutoRow): number {
+  /**
+   * 🔴 **기계 후보의 `decidedAt` 은 사람이 검토한 시각이다** (2026-09-14).
+   *    검토 완료가 `decidedBy` 와 `decidedAt` 을 **함께** 바꾸므로, 이 정렬은
+   *    자동으로 **실제 사람 검토 순서**가 된다 — 기계 적재 시각이 아니다.
+   */
   return (r.decidedAt ?? r.createdAt).getTime()
 }
 export function compareAutoRow(a: AutoRow, b: AutoRow): number {

@@ -11,7 +11,10 @@ import {
   type AutoRow,
   profileOf, machineMarksOk,
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_GATE_MARKS,
+  MACHINE_REVIEWED_BY, machineReviewedByHuman, judgeReviewSnapshot, type ReviewSnapshot,
 } from '../src/lib/original-post-auto-publish'
+import { DRAFT_PROVENANCE, DRAFT_RULE_VERSION } from '../src/lib/micro-seed-auto-draft'
+import { MACHINE_DECIDED_BY, HUMAN_ONLY_VALUES } from '../src/lib/micro-seed-supply-autofill'
 import { kstDayStart, DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import { planMatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 
@@ -29,6 +32,8 @@ const ok = (o: Partial<AutoRow> = {}): AutoRow => ({
   promptVersion: AUTO_PROMPT_VERSION, model: AUTO_MODEL, matchedPersonaId: null,
   title: '집에 늘 두고 드시는 간식이 있으세요?', body: '떨어지면 허전해서…',
   sourceSite: `${AUTO_SITE_PREFIX}navercafe:remonterrace`,
+  // 🔴 이 표본은 **사람 profile** 이다 — `decidedBy` 는 사람 경로가 찍는 값 그대로
+  decidedBy: 'founder',
   decidedAt: new Date('2026-09-06T00:00:00Z'), createdAt: new Date('2026-09-06T00:00:00Z'), ...o,
 })
 /** 실제 대기열에 사는 legacy 글 — 🔴 절대 대상이 아니다 */
@@ -69,7 +74,8 @@ console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
     return seen === 'T|B'
   })())
   check('EDITED 도 대상이다', selectAutoTargets([ok({ status: 'EDITED' })], allPass).targets.length === 1)
-  check('제외 사유에 라벨이 있다', Object.keys(REJECT_LABEL).length === 9)
+  // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED 를 더해 10개다. 코드와 라벨이 1:1 이어야 한다
+  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 10)
 }
 
 console.log('\n①-b 🔴 기계 profile — 통째로 맞아야 발행 후보다')
@@ -485,6 +491,257 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
     const fields = ['childrenCount', 'childrenAgeBands', 'maritalStatus', 'parentCare', 'menopauseStatus', 'noGoTopics']
     return fields.every((f) => src.includes(f) && assign.includes(f))
   })())
+}
+
+console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발행 대상이다 (2026-09-14)')
+{
+  /**
+   * 🔴 **실측 결함.** `MACHINE_AGE_HUMAN_REVIEW_REQUIRED=true` 가 로그에만 찍히고
+   *    `selectAutoTargets` 는 그 값을 보지 않았다 — 사람이 확인하지 않은 기계 글
+   *    **41건**이 그대로 자동 발행 대상이었다(운영 DB 실측).
+   *
+   * 🔴 새 DB 컬럼도 migration 도 만들지 않았다. 큐의 `decidedBy` 하나를 쓴다.
+   */
+  const MACHINE_GATE = {
+    provenance: DRAFT_PROVENANCE, sourceDecision: 'AUTO_ADOPT', draftRuleVersion: DRAFT_RULE_VERSION,
+  }
+  /** 기계 후보 표본 — profile=machine 이 되는 네 축을 통째로 만족시킨다 */
+  const mach = (o: Partial<AutoRow> = {}): AutoRow => ok({
+    id: 'm1', promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+    sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`,
+    gateResults: { autoDraft: MACHINE_GATE },
+    decidedBy: `machine:${DRAFT_RULE_VERSION}`, ...o,
+  })
+  const sel = (rows: AutoRow[]): ReturnType<typeof selectAutoTargets> => selectAutoTargets(rows, allPass)
+
+  check('🟢 [전제] 표본이 machine profile 로 읽힌다', profileOf(mach()) === 'machine')
+  check('🟢 [전제] 사람 표본은 human profile 이다', profileOf(ok()) === 'human')
+
+  // ── ① 미검토 machine → 자동 발행 차단 ──
+  check('🔴 [실측 재현] 미검토 machine APPROVED 는 자동 발행 대상이 아니다', (() => {
+    const r = sel([mach()])
+    return r.targets.length === 0 && r.rejected[0]?.code === 'HUMAN_REVIEW_REQUIRED'
+  })())
+  check('🔴 decidedBy 가 null 이어도 막힌다 (모르면 확인 안 한 것)',
+    sel([mach({ decidedBy: null })]).targets.length === 0)
+  check('🔴 모르는 값이어도 막힌다', sel([mach({ decidedBy: 'someone' })]).targets.length === 0)
+  check('🔴 옛 판 표시(machine:auto-draft-v3)도 막힌다',
+    sel([mach({ decidedBy: 'machine:auto-draft-v3' })]).targets.length === 0)
+  check('🔴 차단 사유가 사람이 읽을 문구로 남는다',
+    REJECT_LABEL.HUMAN_REVIEW_REQUIRED.includes('사람이 확인하지 않았다'))
+
+  // ── ② founder 검토 machine → 통과 ──
+  check('🟢 founder 가 확인한 machine 은 통과한다',
+    sel([mach({ decidedBy: MACHINE_REVIEWED_BY })]).targets.length === 1)
+  check('🟢 판정 함수가 값 하나로 답한다',
+    machineReviewedByHuman('founder') && !machineReviewedByHuman('machine:auto-draft-v5')
+    && !machineReviewedByHuman(null) && !machineReviewedByHuman(undefined)
+    && !machineReviewedByHuman(' Founder '))
+
+  // ── ③ human profile 은 기존 동작 그대로 ──
+  check('🟢 [계약] human profile 은 decidedBy 와 무관하게 기존대로 통과',
+    sel([ok({ decidedBy: null })]).targets.length === 1
+    && sel([ok({ decidedBy: 'machine:auto-draft-v5' })]).targets.length === 1
+    && sel([ok({ decidedBy: 'founder' })]).targets.length === 1)
+
+  // ── ④ 줄 순서 — 오래된 미검토가 앞에 있어도 뒤의 검토 완료본을 고른다 ──
+  check('🟢 오래된 미검토가 앞에 있어도 뒤의 검토 완료 후보가 선택된다', (() => {
+    const oldUnreviewed = mach({ id: 'm-old', decidedAt: new Date('2026-09-01T00:00:00Z') })
+    const newReviewed = mach({ id: 'm-new', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-10T00:00:00Z') })
+    const r = sel([oldUnreviewed, newReviewed])
+    return r.targets.length === 1 && r.targets[0]!.id === 'm-new'
+      && r.rejected.some((x) => x.id === 'm-old' && x.code === 'HUMAN_REVIEW_REQUIRED')
+  })())
+  check('🟢 검토 완료본이 여럿이면 오래 기다린 것이 먼저다', (() => {
+    const a = mach({ id: 'm-a', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-02T00:00:00Z') })
+    const b = mach({ id: 'm-b', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-05T00:00:00Z') })
+    return sel([b, a]).targets[0]!.id === 'm-a'
+  })())
+
+  // ── ⑤ 🔴 게이트를 떼면 fixture 가 깨진다 ──
+  const codeOf = (f: string): string => readFileSync(f, 'utf-8')
+  const pubLib = codeOf('src/lib/original-post-auto-publish.ts')
+  check('🔴 [회귀] 발행 판정이 MACHINE_AGE_HUMAN_REVIEW_REQUIRED 를 실제로 읽는다',
+    /MACHINE_AGE_HUMAN_REVIEW_REQUIRED && profile === 'machine'/.test(pubLib))
+  check('🔴 [회귀] AutoRow 에 decidedBy 가 있다', /decidedBy: string \| null/.test(pubLib))
+  check('🔴 [회귀] 러너 select 가 decidedBy 를 읽고 넘긴다', (() => {
+    const runner = codeOf('scripts/original-post-auto-publish.mts')
+    return /decidedBy: true,/.test(runner) && /decidedBy: r\.decidedBy,/.test(runner)
+  })())
+  check('🔴 [회귀] 예측기도 같은 게이트를 본다', (() => {
+    const planner = codeOf('scripts/persona-capacity-planner.mts')
+    return /decidedBy: true,/.test(planner) && /decidedBy: r\.decidedBy,/.test(planner)
+  })())
+
+  // ── ⑥ 🔴 자동 보충기는 founder 를 찍지 못한다 ──
+  const autofill = codeOf('src/lib/micro-seed-supply-autofill.ts')
+  const machineBlock = autofill.slice(autofill.indexOf("profile: 'machine'"), autofill.indexOf("// 사람 경로 — 기존 그대로"))
+  check('🔴 [계약] 자동 보충기의 machine 경로가 decidedBy 에 MACHINE_DECIDED_BY 를 쓴다',
+    /decidedBy: MACHINE_DECIDED_BY,/.test(machineBlock))
+  check('🔴 [계약] 자동 보충기의 machine 경로가 founder 를 찍지 않는다',
+    !/decidedBy: 'founder'/.test(machineBlock))
+  check('🔴 [계약] 기계 표시는 machine: 접두를 유지한다',
+    MACHINE_DECIDED_BY.startsWith('machine:')
+    && (MACHINE_DECIDED_BY as string) !== (MACHINE_REVIEWED_BY as string))
+  check('🔴 [계약] founder 는 사람 전용 값 목록에 있다', HUMAN_ONLY_VALUES.includes(MACHINE_REVIEWED_BY))
+
+  // ── ⑦ 🔴 검토 명령 — 기본 read-only · 근거 없으면 거부 ──
+  const rev = codeOf('scripts/original-post-machine-review.mts')
+  check('🔴 검토 명령은 --apply 없이 DB write 0 으로 끝난다',
+    /if \(!APPLY\) \{/.test(rev) && rev.indexOf('if (!APPLY) {') < rev.indexOf('updateMany('))
+  check('🔴 --apply 는 --id 와 --limit=1 을 함께 요구한다',
+    /--apply 는 --id 와 함께만 씁니다/.test(rev) && /LIMIT !== 1/.test(rev))
+  check('🔴 Persona·나이대 근거가 없으면 검토 완료를 거부한다',
+    /if \(!g\.ok\) \{/.test(rev) && /검토 완료할 수 없습니다/.test(rev))
+  check('🔴 사람 후보의 decidedBy 는 바꾸지 않는다',
+    /profileOf\(target\) !== 'machine'/.test(rev))
+  // 🔴 2026-09-14 — 낙관적 잠금으로 바뀌었다. 자세한 계약은 ㉑ 이 본다
+  check('🔴 조건부 UPDATE — 스냅샷이 바뀌었으면 멈춘다',
+    /createdPostId: null,/.test(rev) && /updatedAt: before\.updatedAt,/.test(rev))
+  check('🔴 바꾸는 컬럼은 decidedBy · decidedAt 둘뿐이다',
+    /data: \{ decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt \}/.test(rev))
+  check('🔴 [계약] 검토 명령이 Post·Comment·Persona 를 쓰지 않는다',
+    !/prisma\.(post|comment|persona)\.(create|update|updateMany|delete)/.test(rev))
+  check('🔴 [계약] 검토 명령이 본문·status·gateResults 를 쓰지 않는다', (() => {
+    // 🔴 **update 의 `data` 객체만** 본다. select 에 있는 필드 이름을 write 로 세지 않는다
+    const i = rev.indexOf('data: { decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt }')
+    if (i === -1) return false
+    const dataObj = rev.slice(i, rev.indexOf('}', i) + 1)
+    return !/draftTitle|draftBody|editedTitle|editedBody|status|gateResults/.test(dataObj)
+  })())
+  check('🔴 [계약] 검토 명령이 provider 를 부르지 않는다',
+    !/callProvider|anthropic|openai|fetch\(/.test(rev))
+  check('🔴 기계 생성 provenance 보존을 확인한다 — read-back 대조',
+    /judgeReviewSnapshot\(before, after\)/.test(rev))
+}
+
+console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
+{
+  const rev = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+  const MACHINE_GATE2 = {
+    provenance: DRAFT_PROVENANCE, sourceDecision: 'AUTO_ADOPT', draftRuleVersion: DRAFT_RULE_VERSION,
+  }
+  const m2 = (o: Partial<AutoRow> = {}): AutoRow => ok({
+    id: 'mm', promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+    sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`,
+    gateResults: { autoDraft: MACHINE_GATE2 },
+    decidedBy: `machine:${DRAFT_RULE_VERSION}`, ...o,
+  })
+
+  // ── ① decidedBy 와 decidedAt 을 **함께** 쓴다 ──
+  check('🔴 검토 완료 UPDATE 가 decidedBy 와 decidedAt 을 함께 기록한다',
+    /data: \{ decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt \}/.test(rev))
+  check('🔴 검토 시각은 실제 검토 완료 시각이다 (적재 시각이 아니다)',
+    /const reviewedAt = new Date\(\)/.test(rev))
+  check('🔴 [회귀] decidedBy 만 바꾸던 옛 판이 아니다',
+    !/data: \{ decidedBy: MACHINE_REVIEWED_BY \}/.test(rev))
+  check('🔴 read-back 이 decidedAt 까지 확인한다',
+    /back\.decidedAt\.getTime\(\) === reviewedAt\.getTime\(\)/.test(rev))
+
+  // ── ② 자동 발행 정렬이 **실제 사람 검토 순서**를 쓴다 ──
+  check('🟢 정렬 근거가 decidedAt 이다', (() => {
+    const machineLoaded = m2({ id: 'old-load', decidedAt: new Date('2026-09-01T00:00:00Z') })
+    // 🔴 같은 행이 사람 검토로 decidedAt 이 갱신된 모습
+    const afterReview = m2({ id: 'old-load', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-14T09:00:00Z') })
+    return queueOrderKey(machineLoaded) !== queueOrderKey(afterReview)
+      && queueOrderKey(afterReview) === new Date('2026-09-14T09:00:00Z').getTime()
+  })())
+  check('🟢 [요구] 오래된 기계 적재 시각이 founder 검토 시각으로 교체되면 줄 뒤로 간다', (() => {
+    // A: 기계 적재 09-01 → 사람이 09-14 에 검토 → decidedAt 09-14
+    const a = m2({ id: 'm-a', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-14T09:00:00Z') })
+    // B: 기계 적재 09-05 → 사람이 09-10 에 검토 → decidedAt 09-10
+    const b = m2({ id: 'm-b', decidedBy: MACHINE_REVIEWED_BY, decidedAt: new Date('2026-09-10T09:00:00Z') })
+    const r = selectAutoTargets([a, b], allPass)
+    // 🔴 적재 순서(A 가 먼저)가 아니라 **검토 순서**(B 가 먼저)로 나간다
+    return r.targets.length === 2 && r.targets[0]!.id === 'm-b'
+  })())
+
+  // ── ③ 스냅샷 보호 — 하나라도 바뀌면 founder 를 붙이지 않는다 ──
+  const base: ReviewSnapshot = {
+    status: 'APPROVED', createdPostId: null, decidedBy: `machine:${DRAFT_RULE_VERSION}`,
+    updatedAt: new Date('2026-09-14T00:00:00Z'),
+    title: '제목', body: '본문', promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+    gateResults: { autoDraft: MACHINE_GATE2 },
+  }
+  check('🟢 [요구] 정확한 스냅샷이면 통과', judgeReviewSnapshot(base, { ...base }).ok)
+  check('🔴 [요구] 조회 후 본문이 바뀌면 founder 표시 불가', (() => {
+    const v = judgeReviewSnapshot(base, { ...base, body: '바뀐 본문' })
+    return !v.ok && v.changed.some((x) => x.includes('본문'))
+  })())
+  check('🔴 조회 후 제목(발행 문안)이 바뀌면 불가',
+    !judgeReviewSnapshot(base, { ...base, title: '바뀐 제목' }).ok)
+  check('🔴 [요구] 조회 후 status 가 바뀌면 불가',
+    !judgeReviewSnapshot(base, { ...base, status: 'DECLINED' }).ok)
+  check('🔴 그 사이 발행됐으면 불가',
+    !judgeReviewSnapshot(base, { ...base, createdPostId: 'p1' }).ok)
+  check('🔴 gateResults(기계 provenance)가 바뀌면 불가',
+    !judgeReviewSnapshot(base, { ...base, gateResults: { autoDraft: {} } }).ok)
+  check('🔴 promptVersion · model 이 바뀌면 불가',
+    !judgeReviewSnapshot(base, { ...base, promptVersion: 'x' }).ok
+    && !judgeReviewSnapshot(base, { ...base, model: 'y' }).ok)
+  check('🟢 decidedBy·decidedAt 은 대조에 넣지 않는다 — 바뀌라고 쓴 칸이다',
+    judgeReviewSnapshot(base, { ...base, decidedBy: MACHINE_REVIEWED_BY }).ok)
+
+  // ── ④ 🔴 updatedAt 낙관적 잠금이 where 에 있다 ──
+  check('🔴 [요구] 조회 시 updatedAt 을 읽는다', /updatedAt: true,/.test(rev))
+  check('🔴 [요구] 조건부 UPDATE where 에 id·status·createdPostId·decidedBy·updatedAt 이 있다', (() => {
+    const i = rev.indexOf('const res = await prisma.originalPostApprovalQueue.updateMany({')
+    if (i === -1) return false
+    const w = rev.slice(i, rev.indexOf('data: {', i))
+    return /id: target\.id,/.test(w) && /status: rawById\.get\(target\.id\)!\.status,/.test(w)
+      && /createdPostId: null,/.test(w) && /decidedBy: before\.decidedBy,/.test(w)
+      && /updatedAt: before\.updatedAt,/.test(w)
+  })())
+  check('🔴 [요구] update 0건이면 멈춘다',
+    /if \(res\.count !== 1\) \{/.test(rev) && /검토한 뒤 그 사이에 후보가 바뀌었습니다/.test(rev))
+  check('🔴 read-back 이 발행 문안(edited ?? draft)으로 대조한다',
+    /title: back\.editedTitle \?\? back\.draftTitle,/.test(rev)
+    && /body: back\.editedBody \?\? back\.draftBody,/.test(rev))
+  check('🔴 read-back 이 judgeReviewSnapshot 으로 판정한다',
+    /judgeReviewSnapshot\(before, after\)/.test(rev))
+  check('🔴 스냅샷이 어긋나면 exit 1', /process\.exit\(snap\.ok && stampOk \? 0 : 1\)/.test(rev))
+
+  // ── ⑤ 🔴 write 범위가 넓어지지 않았다 ──
+  check('🔴 [계약] 바꾸는 컬럼은 decidedBy · decidedAt 둘뿐이다', (() => {
+    const i = rev.indexOf('data: { decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt }')
+    if (i === -1) return false
+    const d = rev.slice(i, rev.indexOf('}', i) + 1)
+    return !/draftTitle|draftBody|editedTitle|editedBody|status|gateResults|promptVersion|model/.test(d)
+  })())
+  check('🔴 [계약] Post·Comment·Persona write 0',
+    !/prisma\.(post|comment|persona)\.(create|update|updateMany|delete|deleteMany|upsert)/.test(rev))
+  check('🔴 [계약] Queue 의 다른 컬럼을 쓰는 두 번째 write 가 없다',
+    (rev.match(/originalPostApprovalQueue\.(update|updateMany|create|delete)/g) ?? []).length === 1)
+  check('🔴 [계약] provider 호출 0', (() => {
+    // 🔴 주석은 설명문이다 — 모델 이름이 "왜 필요한가" 로 적혀 있을 수 있다
+    const code = rev.split('\n')
+      .filter((l) => { const t = l.trim(); return !t.startsWith('*') && !t.startsWith('//') && !t.startsWith('/**') })
+      .join('\n')
+    return !/callProvider|anthropic|openai|gemini|fetch\(/.test(code)
+  })())
+  check('🔴 [계약] read-only 경로가 여전히 먼저다',
+    rev.indexOf('if (!APPLY) {') < rev.indexOf('updateMany('))
+
+  // ── ⑥ 🔴 화면 문구가 실제 write 범위와 같은 말을 한다 ──
+  /**
+   * 🔴 **문구가 코드보다 좁으면 그것도 거짓이다** (2026-09-14).
+   *    실제로는 `decidedBy`·`decidedAt` 둘을 쓰는데 화면은 "decidedBy 하나뿐" 이라고 적혀 있었다.
+   *    사람이 그 문장을 읽고 "시각은 안 바뀌는구나" 로 이해하면, 바뀐 순서를 설명할 수 없다.
+   */
+  check('🔴 [회귀] "decidedBy 하나뿐" 이라는 낡은 문구가 돌아오지 않는다',
+    !/decidedBy` ?하나뿐|decidedBy ?하나뿐/.test(rev))
+  check('🟢 화면 문구가 두 칸을 말한다',
+    /바꾸는 것은 decidedBy·decidedAt 두 칸뿐이다/.test(rev))
+  check('🟢 헤더 주석도 두 칸을 말한다',
+    /\*\*바꾸는 것은 `decidedBy`·`decidedAt` 두 칸뿐이다\.\*\*/.test(rev))
+
+  // ── ⑥ 🔴 기존 Gate 와 human 동작은 그대로다 ──
+  check('🟢 [계약] 미검토 machine 은 여전히 차단된다',
+    selectAutoTargets([m2()], allPass).rejected[0]?.code === 'HUMAN_REVIEW_REQUIRED')
+  check('🟢 [계약] founder 검토 machine 은 여전히 통과',
+    selectAutoTargets([m2({ decidedBy: MACHINE_REVIEWED_BY })], allPass).targets.length === 1)
+  check('🟢 [계약] human profile 은 여전히 decidedBy 와 무관하게 통과',
+    selectAutoTargets([ok({ decidedBy: null })], allPass).targets.length === 1)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

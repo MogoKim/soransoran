@@ -68,7 +68,9 @@ const queueRows = await prisma.originalPostApprovalQueue.findMany({
   select: {
     id: true, status: true, createdPostId: true, gateVerdict: true, promptVersion: true,
     model: true, matchedPersonaId: true, draftTitle: true, draftBody: true,
-    editedTitle: true, editedBody: true, gateResults: true, decidedAt: true, createdAt: true,
+    editedTitle: true, editedBody: true, gateResults: true,
+    // 🔴 발행 판정이 이 값을 본다 — 예측도 같은 게이트를 봐야 실제와 어긋나지 않는다
+    decidedBy: true, decidedAt: true, createdAt: true,
     // 🔴 freshness 근거 — 러너·관제와 같은 필드다. 없으면 나이를 모르므로 hold 로 간다
     rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
   },
@@ -79,7 +81,8 @@ const { targets } = selectAutoTargets(
     id: r.id, status: r.status, createdPostId: r.createdPostId, gateVerdict: r.gateVerdict,
     promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
     gateResults: r.gateResults, title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
-    sourceSite: r.rawContent.sourceSite, decidedAt: r.decidedAt, createdAt: r.createdAt,
+    sourceSite: r.rawContent.sourceSite,
+    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt,
     capturedAt: r.rawContent.sourceCapturedAt ?? null,
   })),
   (t, b) => safetyFilter({ title: t, body: b }).verdict,

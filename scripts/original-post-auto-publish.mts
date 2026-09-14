@@ -81,6 +81,8 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
     // 🔴 기계 profile 은 게이트 기록까지 본다 — 큐 컬럼 셋만으로는 손으로 넣을 수 있다
     gateResults: true,
+    // 🔴 **발행 판정이 이 값을 본다** — 기계 후보는 사람이 확인한 것만 나간다
+    decidedBy: true,
     decidedAt: true, createdAt: true,
     // 🔴 신선도 판정 근거 — 원문을 언제 봤는가
     rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
@@ -95,6 +97,7 @@ const rows: AutoRow[] = raw.map((r) => ({
   title: r.editedTitle ?? r.draftTitle,
   body: r.editedBody ?? r.draftBody,
   sourceSite: r.rawContent.sourceSite,
+  decidedBy: r.decidedBy,
   decidedAt: r.decidedAt, createdAt: r.createdAt,
 }))
 

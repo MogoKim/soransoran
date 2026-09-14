@@ -45,10 +45,18 @@ export const HUMAN_DRAFT_PROVENANCE = ['human-curated', 'founder'] as const
 //    말투와 길이와 맺음은 **원문이 정한다**(source-profile). 기계는 안전만 잰다.
 //    독창성도 `6자 겹침` 에서 실질 복제 판정으로 바뀐다 → draft-originality.ts
 export const DRAFT_RULE_VERSION = 'auto-draft-v5'
-/** 🔴 생성 프롬프트 판 — v4 에서 형식 강제를 빼고 원문 프로파일을 넣었다. v3 캐시를 재사용하지 않는다 */
-export const DRAFT_PROMPT_VERSION = 'draft-gen-v5'
-/** 🔴 품질 판정 프롬프트 판 — **생성과 따로 센다**. 판정만 바뀔 때 생성을 다시 하지 않기 위해서다 */
-export const QUALITY_PROMPT_VERSION = 'draft-quality-v4'
+/**
+ * 🔴 생성 프롬프트 판.
+ *    v6 — **글쓴이의 나이대를 넘긴다** (2026-09-14). v5 는 나이를 보지 못해
+ *    40대 후반 Persona 가 `우리 언니(30~32)` 라는 없는 관계를 지어냈다.
+ *    🔴 v5 캐시를 재사용하지 않는다 — key 는 판 값과 **실제 프롬프트 digest** 를 함께 본다.
+ */
+export const DRAFT_PROMPT_VERSION = 'draft-gen-v6'
+/**
+ * 🔴 품질 판정 프롬프트 판 — **생성과 따로 센다**. 판정만 바뀔 때 생성을 다시 하지 않기 위해서다.
+ *    v5 — 같은 `lifeConflict` 축에서 **나이·세대 모순**을 함께 본다. v4 캐시를 재사용하지 않는다.
+ */
+export const QUALITY_PROMPT_VERSION = 'draft-quality-v5'
 /** 🔴 사람 것과 겹치지 않는다. 기계가 **만든** 글이라는 표시 */
 export const DRAFT_PROVENANCE = 'machine-generated'
 /** 초안을 어디서 만들었나 */
@@ -204,6 +212,8 @@ export function hasBannedWord(text: string): boolean {
 //    그래서 필요한 칸만 **`PersonaForMatch` 의 필드 타입 그대로** 적는다 (복제 상수 아님).
 export type PersonaLifeHistory = {
   code: PersonaForMatch['code']
+  /** 🔴 나이대 — Pool 카드/운영 Persona 의 기존 정본 값이다. 새 상수를 만들지 않는다 */
+  ageBand?: PersonaForMatch['ageBand']
   maritalStatus?: PersonaForMatch['maritalStatus']
   childrenCount?: PersonaForMatch['childrenCount']
   childrenAgeBands?: PersonaForMatch['childrenAgeBands']
@@ -216,6 +226,8 @@ export function lifeHistoryLines(p: PersonaLifeHistory): string[] {
   const kids = p.childrenCount ?? null
   const bands = p.childrenAgeBands ?? null
   return [
+    // 🔴 **맨 앞이다.** 뒤에 두면 모델이 혼인·자녀만 맞추고 나이를 흘린다(실측 결함)
+    `- 나이대: ${p.ageBand ?? '알려지지 않음'}`,
     `- 혼인: ${p.maritalStatus ?? '알려지지 않음'}`,
     `- 자녀: ${kids === null ? '알려지지 않음' : kids === 0 ? '없음'
       : `${kids}명${bands !== null && bands.length > 0 ? ` (${[...new Set(bands)].join(' · ')})` : ''}`}`,
@@ -243,6 +255,76 @@ export function evidenceFoundIn(evidence: string, draftText: string): boolean {
 
 /** 🔴 다 쓴 글이 그 사람의 삶과 **명백히** 어긋나는가 — 근거를 함께 받는다 */
 export type LifeConflict = { conflict: boolean; evidence: string }
+
+/**
+ * 🔴 **나이 검수를 따로 부르고, 결과는 같은 칸에 합친다** (2026-09-14).
+ *
+ *    🔴 왜 큰 품질 프롬프트에 넣지 않는가 — **넣어 봤고 안 됐다.**
+ *       실측 결함(`우리 언니가 그 나이대에… 서른 하나 둘` · P03 40대 후반)을
+ *       기준만 적었을 때도, 세는 순서를 적었을 때도 모델이 **2/2 통과**시켰다.
+ *       프롬프트가 길어질수록 뒤에 붙인 지시는 묻히고 토큰만 는다.
+ *
+ *    🔴 그래서 **짧고 집중된 호출 하나**를 따로 둔다. 그 호출은 나이·가족·세대만 본다.
+ *       결과는 **새 축이 아니라** 기존 `lifeConflict` 칸에 합쳐진다 —
+ *       판정·재생성·HOLD 경로는 하나 그대로다.
+ *
+ * 🔴 **둘 중 하나라도 근거가 확인된 충돌이면 충돌이다.** 근거 없는 주장은 세지 않는다
+ *    (`applyQuality` 가 `evidence !== ''` 를 요구하는 계약 그대로다).
+ */
+/**
+ * 🔴 **나이 검수 모델 실측 — 통과한 모델이 없다** (2026-09-14).
+ *
+ *    같은 집중 프롬프트로 세 모델을 같은 결함·허용 경계에 걸었다.
+ *    합격선은 **결함 3/3 검출 + 허용 3/3 통과**였고, **아무도 넘지 못했다.**
+ *
+ *      claude-haiku-4.5   결함 1/3 · 허용 3/3
+ *      gpt-5-mini         결함 0/3 · 허용 3/3
+ *      gemini-3.7-flash   결함 2/3 · 허용 3/3   ← 가장 나았지만 합격은 아니다
+ *
+ *    세 모델이 **공통으로 놓친 것**은 실측 결함 그 자체다 —
+ *    `우리 언니가 요즘 그 나이대에 결혼 준비 중` (나이는 제목의 `30 32` 를 받는 지시어).
+ *
+ * 🔴 **그래서 프롬프트를 더 덧붙이지 않는다.** 두 번 덧붙였고 두 번 다 통과되지 않았다.
+ *    길이를 늘리면 토큰만 늘고 뒤에 붙인 지시는 묻힌다.
+ */
+export const AGE_CHECK_MODEL_TRIAL = Object.freeze({
+  ranAt: '2026-09-14',
+  bar: '결함 3/3 검출 + 허용 3/3 통과',
+  results: Object.freeze([
+    Object.freeze({ model: 'claude-haiku-4.5', defects: 1, allows: 3 }),
+    Object.freeze({ model: 'gpt-5-mini', defects: 0, allows: 3 }),
+    Object.freeze({ model: 'gemini-3.7-flash', defects: 2, allows: 3 }),
+  ]),
+})
+
+/** 🔴 합격한 모델이 없다. `null` 은 "아직 고르지 않았다" 가 아니라 **"없다"** 다 */
+export const AGE_CHECK_QUALIFIED_MODEL: string | null = null
+
+/**
+ * 🔴 **그러므로 기계 생성 글은 자동 발행 전에 사람이 본다.**
+ *
+ *    나이 검수 호출은 **보조 탐지**다 — 게이트가 아니다.
+ *    잡으면 재생성으로 잇고(기존 `lifeConflict` 경로), 못 잡아도 통과시키는 것이
+ *    아니라 **사람 승인 단계가 남아 있다**는 뜻이다.
+ *
+ * 🔴 이 값은 새 차단 축이 아니다. 운영자가 읽는 **사실 기록**이고,
+ *    러너가 회차마다 이 문장을 찍는다.
+ */
+export const MACHINE_AGE_HUMAN_REVIEW_REQUIRED = true
+export const MACHINE_AGE_HUMAN_REVIEW_NOTE =
+  '🔴 나이·세대 모순을 3/3 잡는 모델이 없다(2026-09-14 실측). 나이 검수는 보조 탐지이고,'
+  + ' 기계 생성 글은 **자동 발행 전 사람 확인**이 필요하다.'
+
+export function mergeLifeConflict(
+  base: LifeConflict | null,
+  age: LifeConflict | null,
+): LifeConflict | null {
+  const real = (x: LifeConflict | null): boolean => x !== null && x.conflict && x.evidence !== ''
+  if (real(base)) return base
+  if (real(age)) return age
+  // 🔴 둘 다 충돌이 아니다 — **판정을 받은 쪽**을 남긴다. 둘 다 없으면 null(모른다)
+  return base ?? age
+}
 
 /** 🔴 schema 불일치 사유 — 콘텐츠 결함이 아니라 **답을 못 받은 것**이다 */
 export const LIFE_CONFLICT_MISSING = 'lifeConflict:missing'
