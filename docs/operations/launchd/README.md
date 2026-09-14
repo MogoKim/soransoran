@@ -151,13 +151,16 @@ plist 는 계속 돌지만 수집이 일어나지 않는다.
 
 | 수집원 | Label / 템플릿 파일명 | 시각 (KST) | 명령 |
 |---|---|---|---|
-| 82cook 목록 | `com.soransoran.raw-collect-82cook` | **07:00 · 10:00 · 13:00 · 16:00 · 19:00** (5회) | `micro-seed-collect-82cook.mts --list --pages=3 --auto --auto-max=30 --live` |
+| 82cook 목록 | `com.soransoran.raw-collect-82cook` | **07:00 · 10:00 · 13:00 · 16:00 · 19:00** (5회) | `micro-seed-collect-82cook.mts --list --pages=3 --live` |
 | 82cook 본문 (공급 레인) | `com.soransoran.supply-collect-82cook-thin` | **07:40 · 10:40 · 13:40 · 16:40 · 19:40** (5회 · 목록 40분 뒤) | `micro-seed-82cook-thin-detail.mts --cap=17 --live` |
 | navercafe:remonterrace (레몬테라스) | `com.soransoran.navercafe-collect-remonterrace-multi` | **07:30 · 10:30 · 13:30 · 16:30 · 21:30** (5회) | `micro-seed-navercafe-run.mts --cafe=remonterrace --phase=start --thin --live` |
 | navercafe:wgang (우아한 갱년기) | `com.soransoran.navercafe-collect-wgang-multi` | **09:30 · 11:30 · 15:30 · 20:30** (4회) | `micro-seed-navercafe-run.mts --cafe=wgang --phase=start --thin --live` |
 
 🔴 **82cook 은 두 job 이 같은 서버를 두드린다.** 하루 상한 400건을 나눠 쓴다 —
-목록 33×5 = 165 + 본문 17×5 = 85 → **250/day** (여유 150).
+목록 job = robots 1 + 목록 3 = **4/회차** × 5 = 20
+본문 job = robots 1 + 상세 17 = **18/회차** × 5 = 90
+→ **110/day** (상한 400, 여유 290).
+🔴 목록 job 은 본문을 열지 않는다 — `--auto --auto-max=30` 은 2026-09-13 에 뗐다.
 🔴 본문은 목록의 **40분 뒤**다. 목록이 먼저 쌓여야 열 대상이 생긴다 —
 같은 분에 두면 빈 목록을 보고 0건으로 끝난다.
 `--cap` 의 정본은 [`src/lib/collect-schedule.ts`](../../../src/lib/collect-schedule.ts) 의

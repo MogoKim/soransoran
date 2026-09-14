@@ -17,8 +17,8 @@
 
 import { derive, type ScaleProfile } from './scale-profile'
 import {
-  RUNS_PER_DAY, SOURCE_FACTS, effectiveDetailPerDay, effectiveDetailPerDayOf,
-  factsOf, theoreticalDetailPerDay, thin82cookCapPerRun, verifySchedule, THIN_82COOK_RUNS_PER_DAY,
+  RUNS_PER_DAY, SOURCE_FACTS, evidenceAdjustedDetailPerDay, evidenceAdjustedDetailPerDayOf,
+  factsOf, configuredDetailCeilingPerDay, thin82cookCapPerRun, verifySchedule, THIN_82COOK_RUNS_PER_DAY,
   type Phase, type SourceId,
 } from './collect-schedule'
 import { BREAKER, FAILURE_CLASSES, breakerOf, budgetOf, type GuardState } from './collect-guard'
@@ -168,7 +168,7 @@ export const SOURCES: readonly SourcePlan[] = [
      *    간격 · 차단기 · 세션 처리는 그대로다. fixture 가 `planCafeRun` 과 대조한다.
      */
     maxPerRun: 16, runsPerDay: RUNS_PER_DAY['navercafe:wgang'].start, loaded: true,
-    note: 'launchd -multi 4회/day (09:30 · 11:30 · 15:30 · 20:30 KST) · 회차당 상세 10건(all)',
+    note: 'launchd -multi 4회/day (09:30 · 11:30 · 15:30 · 20:30 KST) · 회차당 상세 16건(all)',
   },
 ]
 
@@ -580,7 +580,7 @@ export function collectReadiness(input: {
     requiredWithMargin: withMargin,
     configuredPerDay: cur.effectivePerDay,
     preparedPerDay: prep.effectivePerDay,
-    theoreticalPerDay: theoreticalDetailPerDay(input.phase),
+    theoreticalPerDay: configuredDetailCeilingPerDay(input.phase),
     mismatches: inventoryMismatches(input.observed, input.phase),
     perSource, reasons,
   }

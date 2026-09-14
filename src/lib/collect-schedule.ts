@@ -81,11 +81,16 @@ export type SourceFacts = {
   detailSuccessRate: Evidence<number>
   /** 세션 오류 건수 (실측) */
   sessionErrors: number
-  /** 🔴 launchctl 에 올라와 있는가 */
-  loaded: boolean
   note: string
 }
 
+/**
+ * 🔴 **`loaded` 필드를 없앴다** (2026-09-14).
+ *    정적 boolean 이 "지금 돌고 있다" 를 말하는 척했지만 판정에 쓰이지 않는 죽은 값이었고,
+ *    실제로 82cook 은 `loaded: false` 인 채 등록돼 있었다.
+ *    **지금 올라와 있는지의 정본은 `launchctl` 관측 하나뿐이다**
+ *    (`collect-inventory.currentCapacity` 가 관측을 받는다).
+ */
 export const SOURCE_FACTS: readonly SourceFacts[] = [
   {
     id: '82cook',
@@ -107,30 +112,38 @@ export const SOURCE_FACTS: readonly SourceFacts[] = [
     newPerHourFloor: null,
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 0.8, when: '2026-09-08', how: '상세 8/10 성공 (창업자 실측 보고)' },
-    sessionErrors: 0, loaded: false,
-    note: '🔴 템플릿(10회/day)은 있으나 launchctl 미등록 · 신규 유입 미측정 · 상세 성공률 0.8',
+    sessionErrors: 0,
+    note: '목록 전용 job 5회/day + thin 상세 job 5회/day · 신규 유입 미측정 · 상세 성공률 0.8',
   },
   {
     id: 'navercafe:remonterrace',
     listPageSize: { value: 21, when: '2026-09-08', how: 'navercafe-collect-remonterrace.log "목록 1p → 누적 21건"' },
-    listPagesPerRun: { value: 1, when: '2026-09-08', how: '템플릿 인자 --pages=1' },
-    detailPerRun: 10,
+    listPagesPerRun: {
+      value: 16, when: '2026-09-14',
+      how: 'planCafeRun("remonterrace").listPerRun — BOARD_TARGETS 페이지 합 (fixture 가 동등성을 잠근다)',
+    },
+    detailPerRun: 11,
     newPerHourFloor: { value: 1.0, when: '2026-09-08', how: '목록 JSONL 대조 09-07 17:55→09-08 09:20 신규 16/21 (하한)' },
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
-    sessionErrors: 0, loaded: true,
-    note: 'launchd -multi 5회/day (07:30·10:30·13:30·16:30·21:30 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
+    sessionErrors: 0,
+    note: 'launchd -multi 5회/day (07:30·10:30·13:30·16:30·21:30 KST) · 회차당 상세 11건'
+      + ' · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
   {
     id: 'navercafe:wgang',
     listPageSize: { value: 21, when: '2026-09-08', how: 'navercafe-collect-wgang.log "목록 1p → 누적 21건"' },
-    listPagesPerRun: { value: 1, when: '2026-09-08', how: '템플릿 인자 --pages=1' },
-    detailPerRun: 10,
+    listPagesPerRun: {
+      value: 5, when: '2026-09-14',
+      how: 'planCafeRun("wgang").listPerRun — BOARD_TARGETS 페이지 합 (fixture 가 동등성을 잠근다)',
+    },
+    detailPerRun: 16,
     newPerHourFloor: { value: 0.8, when: '2026-09-08', how: '목록 JSONL 대조 09-07 17:56→09-08 13:20 신규 15/21 (하한)' },
     listPaceMs: 4000, detailPaceMs: 3000,
     detailSuccessRate: { value: 1, when: '2026-09-08', how: '상세 6/6 성공 · 에러 로그 0B' },
-    sessionErrors: 0, loaded: true,
-    note: 'launchd -multi 4회/day (09:30·11:30·15:30·20:30 KST) · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
+    sessionErrors: 0,
+    note: 'launchd -multi 4회/day (09:30·11:30·15:30·20:30 KST) · 회차당 상세 16건'
+      + ' · 상세 6/6 성공(2026-09-08) · 세션 오류 0',
   },
 ]
 
@@ -234,7 +247,10 @@ export const ROBOTS_REQUESTS_PER_RUN = 1
  */
 export function requestsPerRunOf(id: SourceId): number {
   const f = factsOf(id)
-  return ROBOTS_REQUESTS_PER_RUN + f.listPagesPerRun.value + f.detailPerRun
+  // 🔴 **robots 를 읽는 것은 82cook 두 job 뿐이다** (2026-09-14).
+  //    네이버 러너는 robots.txt 를 요청하지 않는다 — 모든 source 에 더하면 그쪽 계산이 틀어진다
+  const robots = id === '82cook' ? ROBOTS_REQUESTS_PER_RUN : 0
+  return robots + f.listPagesPerRun.value + f.detailPerRun
 }
 
 /** 🔴 thin 한 회차 요청 수 — robots + 상세 cap */
@@ -375,7 +391,7 @@ export function isolationOf(down: readonly SourceId[]): {
 } {
   const alive = SOURCE_FACTS.filter((f) => !down.includes(f.id))
   // 🔴 격리 보고도 **유효 처리량**으로 적는다 — 이론 최대로 적으면 남은 능력을 부풀린다
-  const per = (f: SourceFacts): number => effectiveDetailPerDayOf(f, 'start')
+  const per = (f: SourceFacts): number => evidenceAdjustedDetailPerDayOf(f, 'start')
   return {
     alive: alive.map((f) => f.id),
     lostDetailPerDay: SOURCE_FACTS.filter((f) => down.includes(f.id)).reduce((n, f) => n + per(f), 0),
@@ -387,9 +403,13 @@ export function isolationOf(down: readonly SourceId[]): {
 
 /**
  * 🔴 **이론 최대**다 — 회차 × 회차당 상한. 요청이 전부 성공했을 때의 수다.
- *    🔴 공급 능력 판정에 이 값을 쓰지 않는다. 아래 `effectiveDetailPerDay` 가 정본이다.
+ *    🔴 공급 능력 판정에 이 값을 쓰지 않는다. 아래 `evidenceAdjustedDetailPerDay` 가 정본이다.
  */
-export function theoreticalDetailPerDay(phase: Phase): number {
+/**
+ * 🔴 **설정된 상한** — 계획대로 전부 돌았을 때 하루에 열 수 있는 상세 최대치.
+ *    성공률을 곱하지 않는다. 실제 산출이 아니라 **상한**이다.
+ */
+export function configuredDetailCeilingPerDay(phase: Phase): number {
   return SOURCE_FACTS.reduce((n, f) => n + detailPerDayOf(f, phase), 0)
 }
 
@@ -409,7 +429,15 @@ export function detailPerDayOf(f: SourceFacts, phase: Phase): number {
   return f.id === '82cook' ? own + thin82cookCapPerRun() * THIN_82COOK_RUNS_PER_DAY : own
 }
 
-export function effectiveDetailPerDayOf(f: SourceFacts, phase: Phase): number {
+/**
+ * 🔴 **근거 보정 계획 추정치**(evidence-adjusted planning estimate) — 2026-09-14 개명.
+ *
+ *    설정 상한에 **실측 성공률**을 곱한 값이다. 계획을 세울 때 쓰는 추정치이지
+ *    **관측된 실제 생산량이 아니다.** 옛 이름(`effective…`)은 "실제로 나온 것" 처럼
+ *    읽혀서 화면과 문서가 설정값과 산출량을 섞어 말하게 했다.
+ *    실제 생산량의 정본은 관측(`collect-inventory.currentCapacity`)이다.
+ */
+export function evidenceAdjustedDetailPerDayOf(f: SourceFacts, phase: Phase): number {
   return detailPerDayOf(f, phase) * f.detailSuccessRate.value
 }
 
@@ -421,8 +449,8 @@ export function effectiveDetailPerDayOf(f: SourceFacts, phase: Phase): number {
  *    그 두 건은 계획에서 사라지지 않고, 큐가 채워지지 않는 형태로 나중에 드러난다.
  *    그래서 능력은 처음부터 성공률을 곱한 값으로 말한다.
  */
-export function effectiveDetailPerDay(phase: Phase): number {
-  return SOURCE_FACTS.reduce((n, f) => n + effectiveDetailPerDayOf(f, phase), 0)
+export function evidenceAdjustedDetailPerDay(phase: Phase): number {
+  return SOURCE_FACTS.reduce((n, f) => n + evidenceAdjustedDetailPerDayOf(f, phase), 0)
 }
 
 /** 🔴 cron 문자열 (KST). launchd 템플릿과 대조한다 */

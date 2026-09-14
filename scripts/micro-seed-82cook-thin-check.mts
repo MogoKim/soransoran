@@ -11,7 +11,7 @@ import {
   guardedGet, guardPath, guardRoot, setGuardRoot, writeGuardAtomic, readGuard, kstDayOf,
 } from './lib/collect-guard-store.mjs'
 import {
-  newGuardState, recordRequest, recordFailure, breakerOf, BREAKER,
+  newGuardState, recordRequest, recordFailure, breakerOf, BREAKER, type SourceId,
 } from '../src/lib/collect-guard'
 import {
   requestsPerRunOf, thin82cookRequestsPerRun, ROBOTS_REQUESTS_PER_RUN, factsOf,
@@ -275,8 +275,16 @@ console.log('\n⑨ 🔴 82cook 두 job 이 차단기·예산·잠금을 공유�
       /const GUARD_SOURCE: SourceId = '([^']+)'/.exec(src)?.[1] ?? null
     return idOf(rawSrc) === '82cook' && idOf(thinSrc) === '82cook'
   })())
-  check('🔴 두 job 이 같은 guard 파일을 본다', guardPath('82cook') === guardPath('82cook')
-    && /collect-guard-82cook\.json$/.test(guardPath('82cook')))
+  /** 🔴 **두 runner 의 실제 source id 를 읽어** 같은 경로가 되는지 본다 — 자기 비교가 아니다 */
+  check('🔴 두 job 이 같은 guard 파일을 본다', (() => {
+    const idOf = (src: string): string | null =>
+      /const GUARD_SOURCE: SourceId = '([^']+)'/.exec(src)?.[1] ?? null
+    const a = idOf(rawSrc)
+    const b = idOf(thinSrc)
+    if (a === null || b === null) return false
+    return guardPath(a as SourceId) === guardPath(b as SourceId)
+      && /collect-guard-82cook\.json$/.test(guardPath(a as SourceId))
+  })())
   check('🔴 새 guard 추상화·별도 상태 파일을 만들지 않았다',
     !/collect-guard-82cook-thin|thin-guard|ThinGuard/.test(thinSrc))
   /** 🔴 프록시 · IP 교체 · UA 위장 · CAPTCHA 우회를 쓰지 않는다 */
@@ -316,6 +324,32 @@ console.log('\n⑨ 🔴 82cook 두 job 이 차단기·예산·잠금을 공유�
         now: () => now, headers: {}, fetchImpl: spy,
       }).catch(() => { blocked = true })
       check('🔴 한쪽이 차단기를 열면 다른 쪽도 외부 요청 0 건으로 멈춘다', blocked && calls === 0)
+
+      /**
+       * 🔴 **40분 뒤에도 막혀 있나 — 실제로 재 본다** (2026-09-14).
+       *    thin job 은 raw 회차 40분 뒤에 돈다. 그때 상태를 그대로 물어본다.
+       *
+       * 🔴 **현 정책을 그대로 적는다.** NETWORK 쿨다운은 **10분**이고
+       *    `requiresHuman` 이 아니므로, 10분이 지나면 `half-open` 이 되어
+       *    **시험 요청 1건**이 나간다. 40분 뒤 thin 회차는 그 1건에 해당한다.
+       *    이번 수정에서 쿨다운을 늘리거나 새 규제를 만들지 않았다 —
+       *    고친 것은 "thin 이 차단기를 아예 보지 않던 것" 이다.
+       */
+      const at = (ms: number): Date => new Date(now.getTime() + ms)
+      check('🔴 차단 직후·5분 뒤에는 여전히 open',
+        breakerOf(readGuard('82cook', now), 'NETWORK', now.getTime()) === 'open'
+        && breakerOf(readGuard('82cook', at(5 * 60_000)), 'NETWORK', at(5 * 60_000).getTime()) === 'open')
+      check('🔴 40분 뒤에는 half-open 이다 — 시험 요청 1건이 허용된다 (쿨다운 10분)', (() => {
+        const t40 = at(40 * 60_000)
+        return BREAKER.NETWORK.cooldownMs === 600_000 && !BREAKER.NETWORK.requiresHuman
+          && breakerOf(readGuard('82cook', t40), 'NETWORK', t40.getTime()) === 'half-open'
+      })())
+      check('🔴 시험 요청이 이미 나가 있으면 또 보내지 않는다 — half-open 은 1건뿐이다', (() => {
+        const t40 = at(40 * 60_000)
+        const probing = { ...st, failures: { ...st.failures,
+          NETWORK: { ...st.failures.NETWORK, probeStartedAt: t40.getTime() } } }
+        return breakerOf(probing, 'NETWORK', t40.getTime() + 1_000) === 'open'
+      })())
 
       // 🔴 다른 source 는 막히지 않는다 — 한 곳 실패가 전체를 세우지 않는다
       let naver = 0

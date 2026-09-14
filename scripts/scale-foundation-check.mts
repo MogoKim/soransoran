@@ -796,9 +796,22 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
     SOURCES.every((s) => !s.note.includes('09:20') && !s.note.includes('13:20')))
   check('🔴 현재 능력 < 준비 능력 — 둘을 합치지 않는다',
     cap.effectivePerDay < preparedCapacity('start').effectivePerDay)
-  // 🔴 **관측된 슬롯 수**로 센다. 계획 회차(4·8회)로 세지 않는다
-  /** 🔴 관측 슬롯 수로 센다 — 카페 2곳 × 4회 × 회차당 상세 10건 × 성공률 1 */
-  check('🔴 현재 능력은 등록된 것만 · 관측 슬롯 수로 센다', cap.effectivePerDay === 40 + 40)
+  /**
+   * 🔴 **관측된 슬롯 수 × 정본 상세량**으로 센다 (2026-09-14).
+   *    옛 fixture 는 `회차당 10건` 을 손으로 적었다. 실제는 `planCafeRun` 정본이
+   *    remonterrace 11 · wgang 16 을 낸다 — 옛 값으로 현재 능력을 계산하지 않는다.
+   */
+  const wantObservedCap = (): number => {
+    let n = 0
+    for (const cafeId of ['remonterrace', 'wgang'] as const) {
+      const cp = planCafeRun({ cafeId })
+      const slots = OBSERVED.filter((o) => o.loaded && o.label.includes(`collect-${cafeId}`))
+        .reduce((a, o) => a + o.slots.length, 0)
+      n += cp.detailPerRun * slots
+    }
+    return n
+  }
+  check('🔴 현재 능력은 등록된 것만 · 관측 슬롯 수로 센다', cap.effectivePerDay === wantObservedCap())
   check('🔴 등록된 것은 -multi 로 읽힌다',
     cap.perSource.filter((x) => x.kind === 'multi').length === 2
     && cap.perSource.every((x) => x.kind !== 'single'))
@@ -808,7 +821,7 @@ console.log('\n⑤ 공급 역산 · 수집원 · 비용')
    *    세어져 화면은 초록인데 실제 신규는 며칠씩 0 이었다. 지금 처리 job 은 수집하지 않고,
    *    82cook 몫은 **예약 job 의 슬롯**에서만 나온다.
    */
-  check('🔴 처리 job 이 올라와 있어도 수집 능력은 늘지 않는다', cap.effectivePerDay === 40 + 40)
+  check('🔴 처리 job 이 올라와 있어도 수집 능력은 늘지 않는다', cap.effectivePerDay === wantObservedCap())
   check('🔴 82cook 얇은 상세 job 이 미등록이면 그 몫은 0 이다',
     thin82cookDetailPerDay(OBSERVED) === 0)
   check('🟢 등록되면 관측 슬롯 수 × 회차 상한 × 성공률로 센다', (() => {

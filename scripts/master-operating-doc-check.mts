@@ -234,7 +234,9 @@ check('단일 end-to-end 경로가 의도적으로 없다고 적는다',
     /Wave B 는 구현·설정은 끝났고 운영 성공은/.test(master))
 
   /** 🔴 수집 능력은 configured 와 observed 를 따로 적는다 */
-  check('🔴 수집 능력에 configured 행이 있다', /수집 능력 \(configured\)/.test(master))
+  // 🔴 행 이름이 `설정된 상세 상한 (configured ceiling)` 으로 바뀌었다 (2026-09-14) —
+  //    보는 것은 "설정값 행이 따로 있는가" 이지 특정 문구가 아니다
+  check('🔴 수집 능력에 configured 행이 있다', /\(configured[^)]*\)/.test(master))
   check('🔴 수집 능력에 observed 행이 있다', /수집 능력 \(observed\)/.test(master))
   check('🔴 둘을 한 행으로 합치지 않는다',
     !lines.some((l) => /^\| 수집 능력 \(현재\) \|/.test(l)))
