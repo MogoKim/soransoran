@@ -1,6 +1,7 @@
 import 'server-only'
 import sanitize from 'sanitize-html'
 import { isOwnPublicUrl } from '@/lib/r2-public'
+import { safeHttpsUrl } from '@/lib/url-policy'
 import { isHtmlContent, plainTextToHtml } from '@/lib/post-content-format'
 
 export { isHtmlContent, plainTextToHtml, toEditorHtml } from '@/lib/post-content-format'
@@ -54,15 +55,14 @@ const LINK_TARGET = '_blank'
  *    "https:/\/evil.com" 이나 " javascript:alert(1)" 처럼 눈으로 거르기 어려운 것들이 있다.
  * 🔴 상대경로·빈 값은 파서가 던진다. javascript:·data:·blob: 은 파서를 지나므로
  *    protocol 을 직접 본다.
+ *
+ * 🔴 판정 자체는 url-policy.safeHttpsUrl 로 옮겼다. **동작은 그대로다** —
+ *    이 파일은 server-only 라 브라우저가 부를 수 없는데, 히어로 배너 링크는
+ *    어드민 입력칸(브라우저)과 서버가 같은 답을 봐야 한다.
+ *    이 이름과 시그니처는 그대로 둔다 — 본문 sanitize 가 여기에 걸려 있다.
  */
 export function safeLinkHref(href: string | undefined): string | null {
-  if (!href) return null
-  try {
-    const url = new URL(href)
-    return url.protocol === 'https:' ? url.href : null
-  } catch {
-    return null
-  }
+  return safeHttpsUrl(href)
 }
 
 /** 유튜브 임베드만 허용한다. 타사 영상·임의 embed 는 1차 범위 밖이다. */
