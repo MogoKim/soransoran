@@ -28,6 +28,7 @@
  * 종료 코드: FAIL 이 있으면 1
  */
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import {
   HERO_BANNER_ALLOWED_MIME_TYPES,
@@ -59,7 +60,8 @@ import {
   type HeroBannerCapacityInput,
   type HeroBannerOrderInput,
 } from '../src/lib/hero-banner-rules'
-import { HERO_BANNER_IMAGE_HOST } from '../src/lib/hero-banner-image'
+import { HERO_BANNER_IMAGE_HOSTS, HERO_BANNER_IMAGE_PATH_PREFIX, heroBannerImageUrl } from '../src/lib/hero-banner-image'
+import { ALLOWED_PUBLIC_ORIGINS, isOwnPublicUrl, toR2Key } from '../src/lib/r2-public'
 import { safeHttpsUrl, safeInternalPath } from '../src/lib/url-policy'
 
 let pass = 0
@@ -1384,8 +1386,8 @@ expect("메뉴에 '/admin/home' 이 그대로 있다", /href: '\/admin\/home'/.t
 console.log('\n══════ R2 공개 host · env')
 
 expect(
-  'next.config.js 와 코드가 같은 host 를 쓴다',
-  NEXT_CONFIG.includes(`hostname: '${HERO_BANNER_IMAGE_HOST}'`),
+  'next.config.js 와 코드가 같은 host 목록을 쓴다',
+  HERO_BANNER_IMAGE_HOSTS.every((h) => NEXT_CONFIG.includes(`hostname: '${h}'`)),
   true,
 )
 expect(
@@ -1403,6 +1405,220 @@ for (const key of [
 ]) {
   expect(`.env.example 에 ${key} 가 값 없이 있다`, new RegExp(`^${key}=$`, 'm').test(ENV_EXAMPLE), true)
 }
+
+// ══════════════════════════════════════════════════════════
+/**
+ * R2 공개 주소 전환 (dual-host).
+ *
+ * 🔴 지키려는 것은 하나다 — **이미 저장된 글의 사진이 사라지지 않는 것.**
+ *    본문에는 옛 r2.dev 절대 URL 이 박혀 있고, 허용 주소를 새 것 하나로 바꾸면
+ *    sanitize 가 `<img>` 를 태그째 지우고 thumbnailUrl 까지 비운다.
+ *
+ * 🔴 env 에 따라 달라지는 동작(publicUrlFromKey)은 **자식 프로세스**로 확인한다.
+ *    모듈이 로드 시점에 환경변수를 읽으므로, 같은 프로세스 안에서는
+ *    두 상태를 함께 볼 수 없다 — 그것을 피하려고 env 를 바꿔 tsx 를 다시 띄운다.
+ */
+const OLD_ORIGIN = 'https://pub-a1dbda7462b84a98a36e29bd46ca7434.r2.dev'
+const NEW_ORIGIN = 'https://img.soransoran.com'
+
+console.log('\n══════ R2 공개 주소 전환 — 허용 origin')
+
+expect('허용 origin 은 정확히 2개다', ALLOWED_PUBLIC_ORIGINS.length, 2)
+expect('옛 r2.dev origin 이 목록에 있다', ALLOWED_PUBLIC_ORIGINS.includes(OLD_ORIGIN as never), true)
+expect('새 img origin 이 목록에 있다', ALLOWED_PUBLIC_ORIGINS.includes(NEW_ORIGIN as never), true)
+expect(
+  '와일드카드를 origin 문자열에 쓰지 않는다',
+  ALLOWED_PUBLIC_ORIGINS.some((o) => o.includes('*')),
+  false,
+)
+
+console.log('\n── isOwnPublicUrl · toR2Key 는 두 origin 을 모두 받는다')
+
+const OLD_POST = `${OLD_ORIGIN}/posts/cmtabc/11111111-2222-3333-4444-555555555555.webp`
+const NEW_POST = `${NEW_ORIGIN}/posts/cmtabc/11111111-2222-3333-4444-555555555555.webp`
+const OLD_HERO = `${OLD_ORIGIN}/hero-banners/2026/aaa-mobile.webp`
+const NEW_HERO = `${NEW_ORIGIN}/hero-banners/2026/aaa-mobile.webp`
+
+expect('옛 posts URL 을 우리 것으로 본다', isOwnPublicUrl(OLD_POST), true)
+expect('새 posts URL 을 우리 것으로 본다', isOwnPublicUrl(NEW_POST), true)
+expect('옛 hero URL 을 우리 것으로 본다', isOwnPublicUrl(OLD_HERO), true)
+expect('새 hero URL 을 우리 것으로 본다', isOwnPublicUrl(NEW_HERO), true)
+expect('옛 URL 에서 key 를 뽑는다', toR2Key(OLD_POST), 'posts/cmtabc/11111111-2222-3333-4444-555555555555.webp')
+expect('새 URL 에서 같은 key 를 뽑는다', toR2Key(NEW_POST), 'posts/cmtabc/11111111-2222-3333-4444-555555555555.webp')
+expect('두 host 의 key 가 동일하다', toR2Key(OLD_POST) === toR2Key(NEW_POST), true)
+
+console.log('\n── 거부해야 하는 주소')
+
+/**
+ * 🔴 여기 한 줄이라도 통과하면 남의 서버 이미지가 우리 글에 박히거나,
+ *    우리가 지울 수 없는 주소가 대표 사진이 된다.
+ */
+const MUST_REJECT: ReadonlyArray<readonly [string, string]> = [
+  ['http (평문)', 'http://img.soransoran.com/posts/a.webp'],
+  ['http (옛 host)', 'http://pub-a1dbda7462b84a98a36e29bd46ca7434.r2.dev/posts/a.webp'],
+  ['다른 port', 'https://img.soransoran.com:8443/posts/a.webp'],
+  ['하위 위장 도메인', 'https://img.soransoran.com.evil.io/posts/a.webp'],
+  ['접두 위장', 'https://evil-img.soransoran.com/posts/a.webp'],
+  ['서브도메인 추가', 'https://a.img.soransoran.com/posts/a.webp'],
+  ['apex 자체', 'https://soransoran.com/posts/a.webp'],
+  ['www', 'https://www.soransoran.com/posts/a.webp'],
+  ['다른 r2.dev bucket', 'https://pub-0000000000000000000000000000000.r2.dev/posts/a.webp'],
+  ['r2.dev 위장', 'https://pub-a1dbda7462b84a98a36e29bd46ca7434.r2.dev.evil.io/posts/a.webp'],
+  ['외부 host', 'https://example.com/posts/a.webp'],
+  ['data:', 'data:image/png;base64,iVBORw0KGgo='],
+  ['blob:', 'blob:https://img.soransoran.com/abc'],
+  ['상대경로', '/posts/a.webp'],
+  ['빈 문자열', ''],
+]
+for (const [label, url] of MUST_REJECT) {
+  expect(`거부: ${label}`, isOwnPublicUrl(url), false)
+  expect(`거부(key 추출): ${label}`, toR2Key(url), null)
+}
+
+console.log('\n── heroBannerImageUrl 은 두 host 를 받되 경로를 좁힌다')
+
+expect('hero 경로 접두는 /hero-banners/ 다', HERO_BANNER_IMAGE_PATH_PREFIX, '/hero-banners/')
+expect('hero host 는 정확히 2개다', HERO_BANNER_IMAGE_HOSTS.length, 2)
+expect(
+  'hero host 목록과 허용 origin 의 host 가 같다',
+  HERO_BANNER_IMAGE_HOSTS.map((h) => `https://${h}`).sort(),
+  [...ALLOWED_PUBLIC_ORIGINS].sort(),
+)
+expect('와일드카드 host 를 쓰지 않는다 (hero)', HERO_BANNER_IMAGE_HOSTS.some((h) => h.includes('*')), false)
+
+/**
+ * 🔴 heroBannerImageUrl 은 env 기반 publicUrlFromKey 를 거친다.
+ *    그래서 env 가 비어 있는 CI 에서는 **무엇을 넣어도 null** 이다 —
+ *    그 상태에서 "posts/ 는 null 이다" 를 확인하면 아무것도 검사하지 않는 셈이다.
+ *    (실제로 경로 제한을 지웠는데 통과하는 것을 변이 테스트로 확인했다.)
+ *    그래서 env 를 실제로 채운 자식 프로세스에서 확인한다.
+ */
+function heroUrlUnderEnv(publicUrl: string, key: string): string {
+  const probe = `import('./src/lib/hero-banner-image.ts').then(m=>console.log(JSON.stringify(m.heroBannerImageUrl(${JSON.stringify(key)}))))`
+  const r = spawnSync('npx', ['tsx', '-e', probe], {
+    cwd: ROOT,
+    env: { ...process.env, NEXT_PUBLIC_R2_PUBLIC_URL: publicUrl },
+    encoding: 'utf8',
+  })
+  const line = (r.stdout || '').trim().split('\n').pop() ?? ''
+  try {
+    return JSON.parse(line) as string
+  } catch {
+    return `PARSE_FAIL(${line.slice(0, 60)})`
+  }
+}
+
+for (const [label, origin] of [['옛 host', OLD_ORIGIN], ['새 host', NEW_ORIGIN]] as const) {
+  expect(
+    `${label}: hero key 는 주소를 만든다`,
+    heroUrlUnderEnv(origin, 'hero-banners/2026/aaa-mobile.webp'),
+    `${origin}/hero-banners/2026/aaa-mobile.webp`,
+  )
+  // 🔴 같은 bucket 의 회원 사진이 next/image 경로로 새지 않는지 — 이 검사가 핵심이다
+  expect(`${label}: posts/ key 는 hero 주소로 만들지 않는다`, heroUrlUnderEnv(origin, 'posts/cmt/a.webp'), null)
+  expect(`${label}: 앞 슬래시 key 거부`, heroUrlUnderEnv(origin, '/hero-banners/2026/a-mobile.webp'), null)
+  expect(`${label}: 상위 경로 key 거부`, heroUrlUnderEnv(origin, 'hero-banners/../posts/a.webp'), null)
+}
+
+// 🔴 소스에도 경로 제한이 남아 있는지 이중으로 못 박는다.
+const heroImageSrc = readFileSync(join(ROOT, 'src/lib/hero-banner-image.ts'), 'utf8')
+expect(
+  'heroBannerImageUrl 이 경로 접두를 검사한다',
+  /if \(!parsed\.pathname\.startsWith\(HERO_BANNER_IMAGE_PATH_PREFIX\)\) return null/.test(heroImageSrc),
+  true,
+)
+expect(
+  'host 비교가 정확히 일치다 (endsWith\u00b7includes 아님)',
+  /hosts\.includes\(parsed\.hostname\)/.test(heroImageSrc),
+  true,
+)
+
+console.log('\n── env 별 URL 생성 (자식 프로세스)')
+
+/**
+ * 🔴 읽기는 둘, 쓰기는 하나. 새 URL 은 env 가 가리키는 한 곳으로만 만든다.
+ */
+function urlUnderEnv(publicUrl: string, key: string): string {
+  const probe = `import('./src/lib/r2-public.ts').then(m=>console.log(JSON.stringify(m.publicUrlFromKey(${JSON.stringify(key)}))))`
+  const r = spawnSync('npx', ['tsx', '-e', probe], {
+    cwd: ROOT,
+    env: { ...process.env, NEXT_PUBLIC_R2_PUBLIC_URL: publicUrl },
+    encoding: 'utf8',
+  })
+  const line = (r.stdout || '').trim().split('\n').pop() ?? ''
+  try {
+    return JSON.parse(line) as string
+  } catch {
+    return `PARSE_FAIL(${line.slice(0, 60)})`
+  }
+}
+
+const HERO_KEY = 'hero-banners/2026/aaa-mobile.webp'
+const POST_KEY = 'posts/cmtabc/11111111-2222-3333-4444-555555555555.webp'
+
+expect('env=옛 host → 옛 URL 생성 (hero)', urlUnderEnv(OLD_ORIGIN, HERO_KEY), `${OLD_ORIGIN}/${HERO_KEY}`)
+expect('env=새 host → 새 URL 생성 (hero)', urlUnderEnv(NEW_ORIGIN, HERO_KEY), `${NEW_ORIGIN}/${HERO_KEY}`)
+expect('env=옛 host → 옛 URL 생성 (posts)', urlUnderEnv(OLD_ORIGIN, POST_KEY), `${OLD_ORIGIN}/${POST_KEY}`)
+expect('env=새 host → 새 URL 생성 (posts)', urlUnderEnv(NEW_ORIGIN, POST_KEY), `${NEW_ORIGIN}/${POST_KEY}`)
+expect('env=허용 목록 밖 → 만들지 않는다 (fail closed)', urlUnderEnv('https://evil.example.com', HERO_KEY), null)
+expect('env=http → 만들지 않는다', urlUnderEnv('http://img.soransoran.com', HERO_KEY), null)
+expect('env=미설정 → 만들지 않는다', urlUnderEnv('', HERO_KEY), null)
+
+console.log('\n── 저장된 본문 보존 (sanitize 회귀)')
+
+/**
+ * 🔴 post-html.ts 는 server-only 라 여기서 import 하지 않는다.
+ *    대신 판정 알맹이(isOwnPublicUrl)가 두 host 를 모두 통과시키는지 보고,
+ *    sanitize 가 그 함수를 쓰고 있는지를 소스로 확인한다.
+ *    두 겹이 모두 참이면 저장된 본문의 `<img>` 는 살아남는다.
+ */
+const postHtmlSrc = readFileSync(join(ROOT, 'src/lib/post-html.ts'), 'utf8')
+expect(
+  'sanitize 가 isOwnPublicUrl 로 이미지를 거른다',
+  /return !src \|\| !isOwnPublicUrl\(src\)/.test(postHtmlSrc),
+  true,
+)
+expect(
+  'sanitize 가 r2-public 을 직접 쓴다 (판정을 복제하지 않는다)',
+  /import \{ isOwnPublicUrl \} from '@\/lib\/r2-public'/.test(postHtmlSrc),
+  true,
+)
+expect('옛 본문 이미지가 살아남는다', isOwnPublicUrl(OLD_POST), true)
+expect('새 본문 이미지도 살아남는다', isOwnPublicUrl(NEW_POST), true)
+expect('외부 이미지는 여전히 제거 대상이다', isOwnPublicUrl('https://example.com/x.webp'), false)
+
+const postMediaSrc = readFileSync(join(ROOT, 'src/lib/post-media.ts'), 'utf8')
+expect(
+  '대표 사진(thumbnailUrl) 추출도 같은 판정을 쓴다',
+  /import \{ toR2Key, isOwnPublicUrl \} from '@\/lib\/r2-public'/.test(postMediaSrc),
+  true,
+)
+
+console.log('\n── next.config.js remotePatterns')
+
+const patternHosts = [...NEXT_CONFIG.matchAll(/hostname: '([^']+)'/g)].map((m) => m[1])
+expect('remotePatterns host 가 정확히 2개다', patternHosts.length, 2)
+expect('remotePatterns host 목록이 코드와 같다', patternHosts.sort(), [...HERO_BANNER_IMAGE_HOSTS].sort())
+expect(
+  '모든 remotePattern 이 /hero-banners/** 로 좁혀져 있다',
+  [...NEXT_CONFIG.matchAll(/pathname: '([^']+)'/g)].map((m) => m[1]),
+  ['/hero-banners/**', '/hero-banners/**'],
+)
+expect('posts 경로를 next/image 에 열지 않는다', /pathname: '\/posts/.test(NEXT_CONFIG), false)
+expect('protocol 은 둘 다 https 다', [...NEXT_CONFIG.matchAll(/protocol: '([^']+)'/g)].map((m) => m[1]), ['https', 'https'])
+
+console.log('\n── 업로드 응답은 primary env 주소를 쓴다')
+
+expect(
+  '업로드 API 가 publicUrlFromKey 로 url 을 만든다',
+  /url: publicUrlFromKey\(key\)/.test(UPLOAD),
+  true,
+)
+expect(
+  '업로드 API 가 host 문자열을 직접 적지 않는다',
+  /r2\.dev|img\.soransoran\.com/.test(UPLOAD),
+  false,
+)
 
 console.log('\n══════ 홈 미연동 문구 (보정 A)')
 
