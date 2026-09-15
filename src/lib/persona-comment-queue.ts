@@ -87,6 +87,8 @@ export type EnqueuePlan = {
   /** 🔴 중복 방지 열쇠 — DB 의 `dedupKey @unique` 에 들어간다 */
   dedupKey: string
   report: GateReport
+  /** 🔴 관문별 결과 원본 — 실패를 버리기 전에 사람이 볼 수 있어야 한다 */
+  gates: readonly GateLine[]
   blocks: EnqueueBlock[]
   /** 사람이 읽을 한 줄 */
   summary: string
@@ -210,6 +212,8 @@ export function planEnqueue(f: EnqueueFacts): EnqueuePlan {
     status: ENQUEUE_STATUS,
     dedupKey,
     report,
+    // 🔴 관문별 결과를 그대로 싣는다 — 버리기 전에 사람이 본다
+    gates: f.gates,
     blocks,
     summary: ok
       ? `${ENQUEUE_STATUS} 로 적재 — ${bootstrapReal ? '🔴 사람 승인 전용(bootstrap)' : '9관문 통과'}`

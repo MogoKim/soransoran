@@ -43,7 +43,9 @@ import { join } from 'node:path'
 import {
   BOOTSTRAP_DAILY_MAX, countManagedPosts, judgeBootstrapBudget,
 } from '../src/lib/persona-comment-bootstrap-budget'
-import { isGateEightColdStart } from '../src/lib/persona-comment-gate-report'
+import {
+  isGateEightColdStart, GATE_NAMES,
+} from '../src/lib/persona-comment-gate-report'
 import { rarityOf } from './lib/persona-gate-234.mjs'
 import { FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template'
 import {
@@ -5166,6 +5168,100 @@ console.log('㊼ Gate ⑧ cold-start — bootstrap-auto 만 연다')
   check('🔴 ⑧ 이 돌았으면 cold-start 가 아니다',
     !isGateEightColdStart(g({ '⑧': 'pass' }),
       judgeGateReport({ gates: g({ '⑧': 'pass' }), status: 'pass' })))
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [G] 선택 관문(⑨)이 cold-start 판정을 뒤집지 않는다
+  //
+  //    2026-09-15 실측: 대상 글 1건이 provider 1회까지 갔는데
+  //    `BOOTSTRAP_CLAIM_INVALID` 로 적재 0 이었다. 미실행 필수 관문은 ⑧ 하나뿐이었다.
+  //    옛 `isGateEightColdStart` 가 `GATE_CODES` 에서 ⑧ 만 빼고 **⑨ 까지 pass** 를
+  //    요구했기 때문이다 — ⑨ 는 정본에서 필수가 아니다:
+  //      · `REQUIRED_GATES` 에 ⑨ 가 없다
+  //      · 운영 정본: "⑨ 만 필수에서 뺀다 … 명시하지 않으면 ⑨ 도 notRun 이 된다"
+  //      · 같은 파일 `fullGatePass` 는 이미 `required` 만 본다
+  // ─────────────────────────────────────────────────────────
+  {
+    const rep = (over: Record<string, string> = {}): ReturnType<typeof judgeGateReport> =>
+      judgeGateReport({ gates: g(over), status: 'pass' })
+
+    // ① 필수 전부 pass + ⑧ cold-start + ⑨ notRun → bootstrap 가능
+    check('🟢 [G] 선택 관문 ⑨ 가 notRun 이어도 cold-start 다',
+      isGateEightColdStart(g({ '⑨': 'notRun' }), rep({ '⑨': 'notRun' })))
+    check('🟢 [G] ⑨ 가 pass 면 당연히 cold-start 다',
+      isGateEightColdStart(g(), rep()))
+
+    // ② 선택 관문이어도 **돌아서 실패**했으면 막는다 — 느슨해지지 않는다
+    for (const bad of ['review', 'regenerate', 'reject']) {
+      check(`🔴 [G] ⑨ 가 ${bad} 면 cold-start 가 아니다 — 돌아서 실패한 것이다`,
+        !isGateEightColdStart(g({ '⑨': bad }), rep({ '⑨': bad })))
+    }
+
+    // ③ 필수 관문은 그대로 엄격하다
+    check('🔴 [G] 필수 관문 fail 은 그대로 차단', (() => {
+      for (const c of ['①', '②', '③', '④', '⑤', '⑥', '⑦']) {
+        if (isGateEightColdStart(g({ [c]: 'reject' }), rep({ [c]: 'reject' }))) return false
+      }
+      return true
+    })())
+    check('🔴 [G] 허용되지 않은 필수 관문 notRun 은 그대로 차단', (() => {
+      for (const c of ['①', '②', '③', '④', '⑤', '⑥', '⑦']) {
+        if (isGateEightColdStart(g({ [c]: 'notRun' }), rep({ [c]: 'notRun' }))) return false
+      }
+      return true
+    })())
+    check('🔴 [G] ⑧ 이 돌았으면 여전히 cold-start 가 아니다',
+      !isGateEightColdStart(g({ '⑧': 'pass' }), rep({ '⑧': 'pass' })))
+
+    // ④ 선택 관문 상태가 **필수 판정**을 뒤집지 않는다
+    check('🔴 [G] ⑨ 상태가 fullGatePass 를 바꾸지 않는다', (() => {
+      const a1 = judgeGateReport({ gates: g({ '⑧': 'pass', '⑨': 'notRun' }), status: 'pass' })
+      const b1 = judgeGateReport({ gates: g({ '⑧': 'pass', '⑨': 'pass' }), status: 'pass' })
+      return a1.fullGatePass === true && b1.fullGatePass === true
+    })())
+    check('🔴 [G] ⑨ 는 REQUIRED_GATES 에 없다 — 정본 그대로',
+      !(REQUIRED_GATES as readonly string[]).includes('⑨')
+      && (REQUIRED_GATES as readonly string[]).length === 8)
+    check('🔴 [G] 판정이 REQUIRED_GATES 정본을 쓴다 — GATE_CODES 를 무조건 요구하지 않는다', (() => {
+      const src = readFileSync('src/lib/persona-comment-gate-report.ts', 'utf-8')
+      const fn = src.slice(src.indexOf('export function isGateEightColdStart'))
+      return /REQUIRED_GATES\.filter/.test(fn)
+        && !/GATE_CODES\.filter\(\(c\) => c !== '⑧'\)\.every/.test(fn)
+    })())
+
+    // ⑤ 다른 안전장치는 그대로
+    check('🔴 [G] 경험 근거·자기 글 안전장치는 그대로다', (() => {
+      const input = readFileSync('src/lib/persona-comment-input.ts', 'utf-8')
+      const planner = readFileSync('src/lib/persona-comment-planner.ts', 'utf-8')
+      return /EXPERIENCE_WITHOUT_GROUND/.test(input) && /PERSONA_OWN_POST/.test(planner)
+    })())
+    check('🔴 [G] 중복 Queue 차단은 그대로다', (() => {
+      const q = readFileSync('src/lib/persona-comment-queue.ts', 'utf-8')
+      return /DUPLICATE_QUEUE/.test(q)
+    })())
+
+    // ⑥ 🔴 관문별 결과를 버리기 전에 찍는다 — provider·DB 없이 재현 가능
+    check('🔴 [G] 적재 계획이 관문별 결과를 그대로 싣는다', (() => {
+      const q = readFileSync('src/lib/persona-comment-queue.ts', 'utf-8')
+      return /gates: readonly GateLine\[\]/.test(q) && /gates: f\.gates,/.test(q)
+    })())
+    check('🔴 [G] 회차 출력이 관문 번호·이름·결과·차단 코드를 찍는다', (() => {
+      const run = readFileSync('scripts/persona-comment-queue.mts', 'utf-8')
+      return /GATE_NAMES/.test(run) && /o\.plan\?\.gates/.test(run)
+        && /차단 \$\{b\.code\}/.test(run) && /bootstrap 인정 실패/.test(run)
+    })())
+    check('🔴 [G] 출력이 생성 텍스트를 찍지 않는다', (() => {
+      const run = readFileSync('scripts/persona-comment-queue.mts', 'utf-8')
+      const blk = run.slice(run.indexOf('for (const o of result.outcomes)'))
+      return !/o\.plan\?\.text|\btext\b/.test(blk.slice(0, 1400))
+    })())
+    check('🔴 [G] 관문 이름이 9개 다 있다',
+      (Object.keys(GATE_NAMES) as string[]).length === 9)
+    check('🔴 [G] --run-limit 계약은 그대로다', (() => {
+      const run = readFileSync('scripts/persona-comment-queue.mts', 'utf-8')
+      return /providerCallLimit: WANT_CALL \? RUN_LIMIT : 0,/.test(run)
+        && /limit: WANT_APPLY \? RUN_LIMIT : 0,/.test(run)
+    })())
+  }
 
   /** 🔴 ② bootstrap-auto 에서 자동 경로가 열린다 — 이것이 이번 변경의 핵심이다 */
   check('🟢 bootstrap-auto 에서 ⑧ 만 notRun 인 후보는 자동으로 나간다', tx({}).ok)
