@@ -46,12 +46,23 @@ import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { dedupKeyOf, OPEN_STATUSES } from '../src/lib/persona-comment-queue'
 import { EVAL_ROOT } from './lib/persona-comment-eval-store'
 import { MODEL_CANON_FILE } from '../src/lib/persona-comment-provenance'
-import { judgeQueueFlags } from './lib/persona-comment-run-flags'
+import { judgeQueueFlags, judgeRunLimit } from './lib/persona-comment-run-flags'
 import { legacyRunModeFor, readCommentStage, stagePowers } from '../src/lib/persona-comment-stage'
 import { countManagedPostsToday } from '../src/lib/persona-comment-bootstrap-source'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 /** 🔴 모드 판정은 순수 함수가 한다 — 스크립트 안의 `if` 는 fixture 가 볼 수 없다 */
+/**
+ * 🔴 **회차 수 상한** — `--run-limit=N`. 여기서는 **문법만** 본다.
+ *    예산에서 나오는 회차 상한과의 비교는 그 값을 알게 된 뒤 한 번 더 한다(⑤).
+ *    🔴 어느 쪽이든 provider·DB 앞이다.
+ */
+const runLimitSyntax = judgeRunLimit(process.argv)
+if (!runLimitSyntax.ok) {
+  console.error(`\n🔴 ${runLimitSyntax.reason}`)
+  console.error('   🔴 provider 호출 0 · DB write 0 — 부르기도 쓰기도 전에 멈췄다\n')
+  process.exit(1)
+}
 const flags = judgeQueueFlags(process.argv)
 if (!flags.ok) {
   console.error(`\n🔴 ${flags.reason}`)
@@ -174,7 +185,19 @@ const readiness = judgeReadiness({
   },
 })
 /** 🔴 유료 호출과 write 가 함께 묶이는 상한 */
-const RUN_LIMIT = Math.min(QUEUE_RUN_MAX, readiness.allowance.remaining)
+const BUDGET_RUN_LIMIT = Math.min(QUEUE_RUN_MAX, readiness.allowance.remaining)
+/**
+ * 🔴 **`--run-limit` 은 줄이기만 한다.** 예산·일일 cap 을 늘리지 않는다 —
+ *    범위를 넘으면 여기서 멈춘다. provider 도 DB 도 아직 건드리지 않았다.
+ */
+const runLimit = judgeRunLimit(process.argv, BUDGET_RUN_LIMIT)
+if (!runLimit.ok) {
+  console.error(`\n🔴 ${runLimit.reason}`)
+  console.error('   🔴 provider 호출 0 · DB write 0 — 부르기도 쓰기도 전에 멈췄다\n')
+  process.exit(1)
+}
+/** 🔴 planner · materialize · provider · write 가 **같은 수**를 본다 */
+const RUN_LIMIT = runLimit.value === null ? BUDGET_RUN_LIMIT : Math.min(BUDGET_RUN_LIMIT, runLimit.value)
 const TARGET_LIMIT = WANT_CALL ? RUN_LIMIT : PREVIEW_LIMIT
 console.log(`  예산  ${powers.budget} — ${readiness.detail}`)
 if (powers.budget === 'bootstrap') {
@@ -182,7 +205,8 @@ if (powers.budget === 'bootstrap') {
     + ` · 열린 댓글 자리 ${managed?.openSlots ?? '🔴 읽지 못함'}개`)
 }
 console.log(`  회차 상한  ${TARGET_LIMIT}건`
-  + ` (하루 남은 ${readiness.allowance.remaining} · 회차 상한 ${QUEUE_RUN_MAX})`)
+  + ` (하루 남은 ${readiness.allowance.remaining} · 회차 상한 ${QUEUE_RUN_MAX}`
+  + `${runLimit.value === null ? '' : ` · --run-limit=${runLimit.value}`})`)
 
 /**
  * 🔴 **대상은 공유 materializer 가 만든다.**

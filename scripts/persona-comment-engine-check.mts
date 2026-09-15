@@ -82,7 +82,7 @@ import {
   type SourcePersona, type SourcePost, type TargetSource,
 } from './lib/persona-comment-targets'
 import { makeDbTargetSource } from './lib/persona-comment-source-db'
-import { judgeQueueFlags } from './lib/persona-comment-run-flags'
+import { judgeQueueFlags, judgeRunLimit } from './lib/persona-comment-run-flags'
 import {
   applyWithVerification, judgeMigrationState, judgeProjectRef,
   BASELINE_COLUMNS, BASELINE_INDEXES,
@@ -4004,6 +4004,91 @@ console.log('㊵ 실행 모드 · 상한 · 배치 진행')
     const f = judgeQueueFlags(['--apply'])
     return !f.ok && !f.providerAllowed && !f.writeAllowed && f.reason.includes('--call')
   })())
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [R] --run-limit — 회차 수를 **줄이기만** 한다
+  //
+  //    2026-09-15 실측: `--call --apply` 가 provider **5회** · 다른 글 **4편** 적재로
+  //    이어졌다. 승인이 1건인데 명령이 5건이면 사람이 할 수 있는 선택은
+  //    "전부" 아니면 "안 함" 뿐이다.
+  // ─────────────────────────────────────────────────────────
+  {
+    const codeOfQ = (f: string): string => readFileSync(f, 'utf-8')
+    const q = codeOfQ('scripts/persona-comment-queue.mts')
+
+    // ① 생략하면 기존 동작
+    check('🟢 [R] 플래그를 생략하면 null — 기존 회차 수 그대로', (() => {
+      const v = judgeRunLimit([])
+      return v.ok && v.value === null
+    })())
+    check('🟢 [R] 생략 시 예산 상한을 그대로 쓴다 (코드 계약)',
+      /RUN_LIMIT = runLimit\.value === null \? BUDGET_RUN_LIMIT/.test(q))
+
+    // ② 정상값
+    check('🟢 [R] --run-limit=1 은 1 이다', (() => {
+      const v = judgeRunLimit(['--run-limit=1'])
+      return v.ok && v.value === 1
+    })())
+    check('🟢 [R] 회차 상한 이하이면 통과', (() => {
+      const v = judgeRunLimit(['--run-limit=3'], 5)
+      return v.ok && v.value === 3
+    })())
+
+    // ③ 잘못된 값 — 전부 실패 (부르기도 쓰기도 전에)
+    for (const bad of ['--run-limit=0', '--run-limit=-1', '--run-limit=1.5', '--run-limit=abc',
+      '--run-limit=', '--run-limit']) {
+      check(`🔴 [R] ${bad} → 실패`, !judgeRunLimit([bad]).ok)
+    }
+    check('🔴 [R] 회차 상한을 넘으면 실패 — 늘리지 않는다',
+      !judgeRunLimit(['--run-limit=9'], 5).ok)
+    check('🔴 [R] 두 번 주면 실패 — 어느 것이 뜻인지 모른다',
+      !judgeRunLimit(['--run-limit=1', '--run-limit=2']).ok)
+    check('🔴 [R] 잘못된 값이면 provider·DB 앞에서 exit 1 한다 (코드 계약)', (() => {
+      const before = q.indexOf('runLimitSyntax')
+      const provider = q.indexOf('runEnqueuePipeline({')
+      return before > 0 && provider > before
+        && /provider 호출 0 · DB write 0 — 부르기도 쓰기도 전에 멈췄다/.test(q)
+    })())
+
+    // ④ 🔴 네 자리가 **같은 수**를 본다 — 하나라도 어긋나면 초과 호출·초과 적재가 된다
+    check('🔴 [R] planner·materialize 대상 수가 RUN_LIMIT 을 따른다',
+      /const TARGET_LIMIT = WANT_CALL \? RUN_LIMIT : PREVIEW_LIMIT/.test(q)
+      && /limit: TARGET_LIMIT,/.test(q))
+    check('🔴 [R] provider 호출 총수가 RUN_LIMIT 을 따른다',
+      /providerCallLimit: WANT_CALL \? RUN_LIMIT : 0,/.test(q))
+    check('🔴 [R] Queue write 행 수가 RUN_LIMIT 을 따른다',
+      /limit: WANT_APPLY \? RUN_LIMIT : 0,/.test(q))
+    check('🔴 [R] 파이프라인이 두 상한을 각각 센다 — 초과 호출 0', (() => {
+      const pipe = codeOfQ('scripts/lib/persona-comment-pipeline.ts')
+      return /if \(providerCalls >= args\.providerCallLimit\) break/.test(pipe)
+        && /providerCalls \+= 1/.test(pipe)
+        && /created >= args\.limit\) break/.test(pipe)
+    })())
+    check('🔴 [R] provider 한 번에 한 번만 부른다 — 내부 재시도 루프가 없다', (() => {
+      const prov = codeOfQ('scripts/lib/voice-m3-provider.mts')
+      return !/for \(let|while \(|retry|retries/.test(prov)
+    })())
+
+    // ⑤ 🔴 예산·cap·분산·안전장치를 건드리지 않는다
+    check('🔴 [R] 예산·일일 cap 을 늘리지 않는다 — 줄이기만 한다',
+      /Math\.min\(BUDGET_RUN_LIMIT, runLimit\.value\)/.test(q))
+    check('🔴 [R] 대상·역할 강제 지정 플래그를 만들지 않았다',
+      !/--post-id|--persona|--role|--reaction-role/.test(q))
+    check('🔴 [R] 특정 Post·Persona·역할 하드코딩 0',
+      !/cmu1zot9u|후라이팬|'P0[0-9]'|reactionRole === '/.test(q))
+    check('🔴 [R] 근거 없는 경험 주장 안전장치는 그대로다', (() => {
+      const input = codeOfQ('src/lib/persona-comment-input.ts')
+      return /EXPERIENCE_WITHOUT_GROUND/.test(input) && /judgeExperienceEligibility/.test(input)
+    })())
+    check('🔴 [R] 자기 글 댓글 차단은 그대로다', (() => {
+      const planner = codeOfQ('src/lib/persona-comment-planner.ts')
+      return /PERSONA_OWN_POST/.test(planner)
+    })())
+    check('🔴 [R] 같은 글 feasible fallback 은 그대로다', (() => {
+      const planner = codeOfQ('src/lib/persona-comment-planner.ts')
+      return /input\.feasible\?\.\(/.test(planner)
+    })())
+  }
 
   const gline = (gate: string, outcome: string): { gate: string; outcome: string } => ({ gate, outcome })
   const txFacts = (over: Partial<TxRecheckFacts> = {}): TxRecheckFacts => ({
