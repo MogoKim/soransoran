@@ -44,6 +44,29 @@ import {
 } from '../../src/lib/scale-profile'
 import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
 
+/**
+ * 🔴 **PATH 정본은 `launchd-template-check.mts` 의 `PATH_VALUE` 하나다.**
+ *    예약 job 5개의 plist 템플릿이 쓰는 값과 **같은 형태**여야 한다 —
+ *    두 벌이면 한쪽만 고쳐지고, 고쳐지지 않은 쪽이 밤에 죽는다.
+ */
+export const RUNNER_SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
+
+/**
+ * 🔴 **launchd 가 줄 PATH.** 앞에 node 디렉터리, 뒤에 시스템 기본.
+ *
+ * 🔴 **왜 필요한가** (2026-09-15 실측 — 이 러너에서 재발).
+ *    launchd 기본 PATH 는 `/usr/bin:/bin:/usr/sbin:/sbin` 뿐이라 nvm 의 node 가 없다.
+ *    `npx` 는 절대경로로 불러도 shebang 이 `#!/usr/bin/env node` 라
+ *    **프로세스가 뜨기도 전에** `env: node: No such file or directory` 로 죽는다.
+ *    실측: 08:10 · 09:30 두 슬롯 모두 **exit 127** · stdout 0 bytes · 발행 0건.
+ *
+ *    예약 job 5개의 템플릿은 이 값을 이미 담고 있었다. **이 러너만 빠져 있었다** —
+ *    그 러너는 템플릿이 아니라 이 파일이 문자열로 만들기 때문이다.
+ */
+export function runnerPathValue(nodeBinDir: string): string {
+  return `${nodeBinDir}:${RUNNER_SYSTEM_PATH}`
+}
+
 export const PUBLISH_RUNNER_LABEL = 'com.soransoran.original-post-runner'
 
 /**
@@ -104,6 +127,11 @@ export function renderPublishRunnerPlist(input: {
   /** npx 절대 경로 */
   npxPath: string
   logDir: string
+  /**
+   * 🔴 **지금 돌고 있는 node 의 bin 디렉터리** — `dirname(process.execPath)`.
+   *    🔴 버전 문자열을 박지 않는다. nvm 을 올리면 그 순간 예약 실행이 죽는다.
+   */
+  nodeBinDir: string
 }): string {
   const args = [
     `        <string>${input.npxPath}</string>`,
@@ -123,6 +151,10 @@ export function renderPublishRunnerPlist(input: {
     <array>
 ${args}
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>${runnerPathValue(input.nodeBinDir)}</string>
+    </dict>
     <key>WorkingDirectory</key><string>${input.runtimeRoot}</string>
     <key>StartCalendarInterval</key>
     <array>
@@ -134,6 +166,82 @@ ${slots}
 </dict>
 </plist>
 `
+}
+
+/**
+ * 🔴 **등록한 러너가 실제로 돌 수 있는 상태인가** — 순수 판정.
+ *
+ *    관측(파일 읽기 · launchctl · node 존재 확인)은 부르는 쪽이 해서 넘긴다.
+ *    🔴 "등록됐다" 를 "돈다" 로 읽지 않는다 — 2026-09-15 에 그렇게 이틀치 슬롯을 잃었다.
+ */
+export type RunnerEnvVerdict = { ok: boolean; problems: string[] }
+
+export function judgeRunnerEnv(input: {
+  /** 설치된 plist 의 `EnvironmentVariables.PATH`. 없으면 null */
+  installedPath: string | null
+  /** launchctl 이 **실제로 물고 있는** PATH. 관측 못 했으면 null */
+  loadedPath?: string | null
+  /** 지금 돌고 있는 node 의 bin 디렉터리 */
+  nodeBinDir: string
+  /** 그 PATH 안에서 `node` 실행 파일을 찾았는가 — 부르는 쪽이 실측 */
+  nodeFound: boolean
+  /** 절대 npx 를 그 PATH 로 실행해 봤는가 (shebang `#!/usr/bin/env node` 가 뜨는가) */
+  npxRunnable?: boolean | null
+}): RunnerEnvVerdict {
+  const problems: string[] = []
+  const want = runnerPathValue(input.nodeBinDir)
+  if (input.installedPath === null || input.installedPath.trim() === '') {
+    problems.push(
+      '🔴 설치된 plist 에 EnvironmentVariables.PATH 가 없다'
+      + ' — npx shebang(#!/usr/bin/env node)이 뜨기도 전에 exit 127 로 죽는다',
+    )
+  } else {
+    if (!input.installedPath.split(':').includes(input.nodeBinDir)) {
+      problems.push(`🔴 PATH 에 지금 node 의 bin 이 없다 — ${input.installedPath}`)
+    }
+    for (const sys of RUNNER_SYSTEM_PATH.split(':')) {
+      if (!input.installedPath.split(':').includes(sys)) {
+        problems.push(`🔴 표준 시스템 경로가 빠졌다 — ${sys}`)
+      }
+    }
+    if (input.installedPath !== want) {
+      problems.push(`🟡 PATH 가 렌더 결과와 다르다 — 설치 ${input.installedPath} · 렌더 ${want}`)
+    }
+  }
+  if (!input.nodeFound) {
+    problems.push('🔴 그 PATH 안에서 node 실행 파일을 찾지 못했다')
+  }
+  // 🔴 못 본 것은 통과시키지 않는다. 다만 "실행해 보지 않았다" 와 "실패했다" 는 다르게 적는다
+  if (input.npxRunnable === false) {
+    problems.push('🔴 절대 npx 를 그 PATH 로 실행하지 못했다 — shebang 이 node 를 못 찾는다')
+  }
+  if (input.loadedPath !== undefined) {
+    if (input.loadedPath === null || input.loadedPath.trim() === '') {
+      problems.push('🔴 launchctl 에 등록된 PATH 를 확인하지 못했다(fail-closed)')
+    } else if (input.installedPath !== null && input.loadedPath !== input.installedPath) {
+      problems.push(
+        `🔴 실제 등록된 PATH 가 설치본과 다르다 — load ${input.loadedPath} · 파일 ${input.installedPath}`,
+      )
+    }
+  }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
+ * 🔴 **비밀값을 plist 에 담지 않는다.** launchd plist 는 평문이고 백업에도 남는다.
+ *    DATABASE_URL · API key 는 runtime `.env.local` 에서 프로세스가 직접 읽는다.
+ */
+export const RUNNER_FORBIDDEN_ENV_KEYS: readonly string[] = [
+  'DATABASE_URL', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY',
+  'NEXTAUTH_SECRET', 'KAKAO_CLIENT_SECRET', 'R2_SECRET_ACCESS_KEY',
+]
+
+/** plist 원문에 비밀 키 이름이 등장하면 실패다 */
+export function judgeRunnerSecrets(xml: string): RunnerEnvVerdict {
+  const problems = RUNNER_FORBIDDEN_ENV_KEYS
+    .filter((k) => xml.includes(k))
+    .map((k) => `🔴 plist 에 비밀값 키가 있다 — ${k}`)
+  return { ok: problems.length === 0, problems }
 }
 
 /** 🔴 등록 절차를 코드가 아니라 **사람이 읽는 순서**로 남긴다 */
@@ -148,6 +256,9 @@ export const PUBLISH_RUNNER_INSTALL_STEPS: readonly string[] = [
   `⑤ plist 를 ~/Library/LaunchAgents/${PUBLISH_RUNNER_LABEL}.plist 로 쓴다`,
   '⑥ plutil -lint 로 문법을 확인한다',
   '⑦ launchctl load 로 올리고 launchctl print 로 실제 경로가 runtime 인지 대조한다',
+  '🔴 ⑦-b **PATH 를 대조한다** — 설치본·launchctl·렌더 결과가 같고,'
+  + ' 그 PATH 에서 node 가 보이고, 절대 npx 가 실제로 실행되는지까지 본다(`judgeRunnerEnv`).'
+  + ' 2026-09-15: 이 검사가 없어 08:10·09:30 두 슬롯이 exit 127 로 죽었다',
   '🔴 ⑧ GitHub 예약은 **끄지 않는다.** 맥이 꺼져 있으면 launchd 는 아무것도 하지 않는다 —',
   '      그때 남는 것은 GitHub 예약뿐이다. 둘이 겹쳐도 catch-up + Serializable 이 막는다',
   '🔴 ⑨ 이것은 **단기 임시 bridge** 다. 맥 전원과 무관한 정시성이 필요해지면 다른 것으로 바꾼다',
