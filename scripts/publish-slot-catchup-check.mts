@@ -27,6 +27,7 @@ import {
   PUBLISH_RUNNER_ARGS, publishRunnerSlots, verifyRunnerSlotsInWindow,
   renderPublishRunnerPlist, PUBLISH_RUNNER_LABEL, PUBLISH_RUNNER_INSTALL_STEPS,
   judgeTriggerParity, describeTriggers, readCanonicalStages, parseCanonicalStages,
+  RUNNER_SYSTEM_PATH, runnerPathValue, judgeRunnerEnv, judgeRunnerSecrets,
 } from './lib/original-post-runner-template'
 
 let pass = 0
@@ -271,13 +272,84 @@ console.log('\n⑩ 정시 트리거 템플릿 — 🔴 등록하지 않는다')
   check('🔴 모든 슬롯이 운영 창 안이다', verifyRunnerSlotsInWindow(slots).length === 0)
   check('🔴 인자에 --trigger=local 이 있다', PUBLISH_RUNNER_ARGS.includes('--trigger=local'))
   check('🔴 인자에 --limit=1 이 그대로 있다', PUBLISH_RUNNER_ARGS.includes('--limit=1'))
+  const NODEBIN = '/Users/x/.nvm/versions/node/v24.14.0/bin'
   const plist = renderPublishRunnerPlist({
     runtimeRoot: '/Users/x/Documents/soransoran-runtime', npxPath: '/usr/local/bin/npx', logDir: '/tmp',
+    nodeBinDir: NODEBIN,
   })
   check('🔴 plist 가 runtime 을 가리킨다', plist.includes('<string>/Users/x/Documents/soransoran-runtime</string>'))
   check('🔴 plist 가 RunAtLoad 를 켜지 않는다', plist.includes('<key>RunAtLoad</key><false/>'))
   check('🟢 plist 에 슬롯 10개가 들어간다', (plist.match(/<key>Hour<\/key>/g) ?? []).length === 10)
   check('🔴 label 이 기존 job 과 겹치지 않는다', PUBLISH_RUNNER_LABEL === 'com.soransoran.original-post-runner')
+  /**
+   * 🔴 **[P0 재현] PATH 가 빠지면 예약 실행이 뜨기도 전에 죽는다** (2026-09-15 실측).
+   *    08:10 · 09:30 두 슬롯 모두 `exit 127` · stdout 0 bytes ·
+   *    stderr `env: node: No such file or directory` · 발행 0건.
+   *    plist 에 `EnvironmentVariables.PATH` 가 없었다 — 예약 job 5개 템플릿에는 있었다.
+   */
+  check('🔴 [P0] plist 에 EnvironmentVariables.PATH 가 있다',
+    plist.includes('<key>EnvironmentVariables</key>') && plist.includes('<key>PATH</key>'))
+  check('🔴 [P0] PATH 앞에 지금 node 의 bin 이 온다',
+    plist.includes(`<string>${NODEBIN}:/usr/bin:/bin:/usr/sbin:/sbin</string>`))
+  check('🔴 [P0] 표준 시스템 경로가 그대로 남는다',
+    RUNNER_SYSTEM_PATH === '/usr/bin:/bin:/usr/sbin:/sbin'
+    && ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].every((d) => runnerPathValue(NODEBIN).split(':').includes(d)))
+  check('🔴 [P0] node 버전을 문자열로 박지 않는다 — 인자로 받는다', (() => {
+    const t = codeOf('scripts/lib/original-post-runner-template.ts')
+    return !/v\d+\.\d+\.\d+/.test(t) && /nodeBinDir/.test(t)
+  })())
+  check('🔴 [P0] PATH 정본이 예약 job 템플릿 검사와 같은 형태다',
+    codeOf('scripts/launchd-template-check.mts')
+      .includes(`PATH_VALUE = '${runnerPathValue('__NODEBIN__')}'`))
+  check('🔴 [P0] PATH 누락 → FAIL', (() => {
+    const v = judgeRunnerEnv({ installedPath: null, nodeBinDir: NODEBIN, nodeFound: false })
+    return !v.ok && v.problems.some((x) => x.includes('EnvironmentVariables.PATH 가 없다'))
+  })())
+  check('🔴 [P0] 시스템 경로만 있는 PATH → FAIL (실측 장애 상태)',
+    !judgeRunnerEnv({
+      installedPath: '/usr/bin:/bin:/usr/sbin:/sbin', nodeBinDir: NODEBIN, nodeFound: false,
+    }).ok)
+  check('🔴 [P0] 엉뚱한 node 경로 → FAIL',
+    !judgeRunnerEnv({
+      installedPath: `/opt/other/bin:${RUNNER_SYSTEM_PATH}`, nodeBinDir: NODEBIN, nodeFound: true,
+    }).ok)
+  check('🔴 [P0] 표준 시스템 경로가 빠지면 FAIL',
+    !judgeRunnerEnv({ installedPath: NODEBIN, nodeBinDir: NODEBIN, nodeFound: true }).ok)
+  check('🟢 [P0] 지금 node bin + 시스템 경로 → PASS',
+    judgeRunnerEnv({
+      installedPath: runnerPathValue(NODEBIN), loadedPath: runnerPathValue(NODEBIN),
+      nodeBinDir: NODEBIN, nodeFound: true, npxRunnable: true,
+    }).ok)
+  check('🔴 [P0] launchctl 실제 PATH 가 설치본과 다르면 FAIL',
+    !judgeRunnerEnv({
+      installedPath: runnerPathValue(NODEBIN), loadedPath: '/usr/bin:/bin:/usr/sbin:/sbin',
+      nodeBinDir: NODEBIN, nodeFound: true, npxRunnable: true,
+    }).ok)
+  check('🔴 [P0] launchctl 관측 실패는 통과시키지 않는다(fail-closed)',
+    !judgeRunnerEnv({
+      installedPath: runnerPathValue(NODEBIN), loadedPath: null,
+      nodeBinDir: NODEBIN, nodeFound: true, npxRunnable: true,
+    }).ok)
+  check('🔴 [P0] npx 가 실제로 안 뜨면 FAIL',
+    !judgeRunnerEnv({
+      installedPath: runnerPathValue(NODEBIN), nodeBinDir: NODEBIN, nodeFound: true, npxRunnable: false,
+    }).ok)
+  check('🔴 [P0] plist 에 비밀값이 없다', judgeRunnerSecrets(plist).ok)
+  check('🔴 [P0] 비밀 키가 섞이면 잡는다', !judgeRunnerSecrets(`${plist}<key>DATABASE_URL</key>`).ok)
+  check('🔴 [P0] EnvironmentVariables 에 PATH 말고 다른 키를 넣지 않는다', (() => {
+    const dict = plist.slice(
+      plist.indexOf('<key>EnvironmentVariables</key>'), plist.indexOf('<key>WorkingDirectory</key>'))
+    return (dict.match(/<key>/g) ?? []).length === 2
+  })())
+  check('🔴 [P0] 인자가 그대로다 (--apply --limit=1 --trigger=local)',
+    PUBLISH_RUNNER_ARGS.join(' ') === '--apply --limit=1 --trigger=local')
+  check('🔴 [P0] RunAtLoad 는 여전히 false 다', plist.includes('<key>RunAtLoad</key><false/>'))
+  check('🔴 [P0] 슬롯은 여전히 10개다', (plist.match(/<key>Hour<\/key>/g) ?? []).length === 10)
+  check('🔴 [P0] WorkingDirectory 가 runtime 그대로다',
+    plist.includes('<key>WorkingDirectory</key><string>/Users/x/Documents/soransoran-runtime</string>'))
+  check('🔴 [P0] 등록 절차가 PATH 대조를 요구한다',
+    PUBLISH_RUNNER_INSTALL_STEPS.some((x) => x.includes('PATH 를 대조한다')))
+
   const tpl = codeOf('scripts/lib/original-post-runner-template.ts')
   check('🔴 템플릿이 파일을 쓰지 않는다', !/writeFileSync|mkdirSync|execFileSync|execSync/.test(tpl))
   check('🔴 템플릿이 GitHub 예약을 끄라고 말하지 않는다',
