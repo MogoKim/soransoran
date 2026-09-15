@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  매거진 producer — 매일 00:10 KST · 🔴 템플릿이다. 이 파일 자체는 등록되지 않는다.
+
+  설치: npm run magazine:launchd-install -- --apply
+  정본: docs/operations/magazine-automation-runbook.md
+
+  ─────────────────────────────────────────────────────────────
+  🔴 **이 job 은 4단계다.** (2026-09-15 정정)
+
+     옛 plist 주석은 plan + notify 2단계라고 적어 두었다. 실제 코드
+     (`scripts/magazine-producer-run.mjs`)는 처음부터 4단계였고, 그 차이 때문에
+     "원고 회수는 사람이 한다" 고 잘못 읽혔다.
+
+     ① magazine-producer-plan.mjs        오늘 무엇을 만들지 선정 · _runs/{date}/ 패키지 · lock
+     ② magazine-brief-auto.mjs --write   선정분의 brief.md · review.ts 생성 (claude CLI 자식 프로세스)
+     ③ magazine-webui-runner.mjs --fetch-run
+                                         ChatGPT 웹 UI 에서 원고를 받아 **관문을 통과한 것만**
+                                         draft.md 로 저장 (lib/magazine-manuscript-guard.mjs)
+     ④ magazine-producer-notify.mjs --send   알릴 것이 있을 때만 Slack
+
+  🔴 **하지 않는 일** — 여기는 정확했다.
+     articles.ts 등록 · hero 생성 · 공개 · commit · push.
+     등록과 PR 은 02:00 의 magazine-auto-register 가 한다.
+
+  ─────────────────────────────────────────────────────────────
+  🔴 **plist 를 symlink 로 깔지 않는다.** (2026-09-15 장애의 근인)
+
+     옛 설치 절차는 ~/Library/LaunchAgents 에 이 저장소를 가리키는 symlink 를 두었다.
+     macOS 의 Documents 접근 보호(TCC)가 `smd` 의 plist 읽기를 거부한다:
+
+       kernel [com.apple.sandbox.reporting:violation]
+       System Policy: smd(…) deny(1) file-read-data
+       /Users/…/Documents/soransoran/launchd/com.soransoran.magazine-producer.plist
+
+     읽지 못하니 **서비스 등록 자체가 되지 않는다.** 2026-09-03 재부팅 이후
+     이 job 과 auto-register 가 12일간 한 번도 돌지 않은 이유가 이것이다.
+     설치기가 **실제 파일**을 쓴다 (`lib/launchd-install.mts` 의 writeInstalled).
+
+  🔴 **WorkingDirectory 는 전용 runtime worktree 다.**
+     개발 작업트리를 가리키면 그날 누가 브랜치를 바꿨는지에 따라 결과가 달라진다.
+     실제로 진단 시점의 대상 저장소는 `fix/write-guest-start-flow` 였고,
+     write 가 켜져 있었다면 매일 NOT_ON_MAIN 으로 멈췄다.
+
+  🔴 **node 를 직접 실행한다.** ProgramArguments[0] 에 셸을 쓰지 않는다 —
+     launchd 의 셸은 Documents 접근 미승인이라 exit 126 으로 죽는다. node 는 승인돼 있다.
+
+  🔴 **KeepAlive 를 넣지 않는다.** 실패 시 재시도하면 폭주한다.
+     producer 자체도 재시도하지 않는다 (죽은 lock 은 ABORTED 로 기록만 한다).
+
+  🔴 **PATH 는 설치기가 통째로 치환한다.** launchd 는 셸 프로필을 읽지 않는다.
+     claude(~/.local/bin)가 빠지면 ② 가 spawn 단계에서 ENOENT 로 죽는다
+     (2026-08-27 01:00 · GEN_FAILED 3건).
+
+  🔴 **secret 을 모른다.** webhook 은 notify 가 ~/.config/soransoran/slack.env 에서 직접 읽는다.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.magazine-producer</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/scripts/magazine-producer-run.mjs</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <!--
+    00:10 KST.
+    🔴 자정 직후에 두는 이유는 날짜 경계다 — producer 는 자기가 뜬 날짜로 _runs/{date}/ 를 잡는다.
+       23시대에 두면 자정을 넘기는 회차의 날짜가 갈라진다.
+    🔴 00:00 정각을 피한다. 자정에 도는 다른 작업과 겹치면 느려질 뿐이다.
+    시스템 timezone 이 Asia/Seoul 이라 그대로 KST 다.
+  -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>10</integer></dict>
+  </array>
+
+  <!-- 등록하는 순간 돌지 않는다. 검증은 supervised 실행으로 한다 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- 🔴 로그는 Documents 밖이어야 한다 (TCC). __LOGDIR__ 은 절대경로로 치환된다 -->
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/magazine-producer.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/magazine-producer.log</string>
+</dict>
+</plist>

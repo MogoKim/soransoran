@@ -645,4 +645,15 @@ function report(run) {
   return L.join('\n') + '\n'
 }
 
-main()
+/**
+ * 🔴 **직접 실행할 때만 돈다.**
+ *
+ *    2026-09-15 진단에서 드러났다 — 이 파일은 `selectItems` 를 export 하는데
+ *    `main()` 이 무방비로 최상단에 있었다. 그래서 **선정 결과만 계산하려고
+ *    import 한 쪽이 실제 회차를 돌려 버렸다.** `_runs/{date}/` 가 통째로 생기고
+ *    lock 까지 잡혔다. 판정 함수를 빌려 쓰는 것과 회차를 실행하는 것은 다른 일이다.
+ *
+ *    같은 저장소의 다른 스크립트들이 이미 쓰는 형태를 그대로 따른다
+ *    (`magazine-auto-register.mjs` · `magazine-auto-register-ready.mjs`).
+ */
+if (process.argv[1] && process.argv[1].endsWith('magazine-producer-plan.mjs')) main()

@@ -2,6 +2,24 @@
 
 작성: 2026-09-02 · 대상: 매거진 자동 재고 보충 1차
 
+> 🔴 **2026-09-15 갱신 — 아래 §"왜 지금 `--write --pr` 을 켜지 않나" 와 §"다음 단계에서
+> 무엇을 보고 켜나" 는 폐기됐다.**
+>
+> 경영 결정으로 **자동 PR 을 연다.** "연속 5회 회수 + 창업자 판정 + 오탐 0" 조건은
+> 없어졌고, 활성화 게이트는 **supervised 1회 end-to-end 성공**(PR 이 실제로 열림) 하나다.
+> 원고 품질 통제는 회수 시점이 아니라 **PR merge 전의 CI 와 사람 검수**가 맡는다.
+> **자동 merge 와 자동 공개는 여전히 하지 않는다** — 그 경계는 그대로다.
+>
+> 그리고 이 문서의 **"켤 때 고치는 것은 plist 한 줄" 은 사실이 아니었다.**
+> 실제로는 넷이 더 필요했다 —
+> ① plist 가 symlink 면 TCC 때문에 등록조차 되지 않았고(2026-09-03 이후 12일 정지),
+> ② `gh` 가 launchd PATH 에 없어 **push 뒤에** PR 실패를 알게 되는 순서였고,
+> ③ main 복귀 코드가 없어 첫 성공 회차 뒤 매일 `NOT_ON_MAIN` 으로 멈췄고,
+> ④ write 실패가 `exit 0` 으로 숨겨졌다.
+>
+> 절차 정본은 [`docs/operations/magazine-automation-runbook.md`](../operations/magazine-automation-runbook.md) 하나다.
+> 아래 §"관문이 막는 것" 과 §"일부러 넣지 않은 규칙" 은 지금도 유효하다.
+
 ## 무엇이 달라졌나
 
 원고 회수(`brief.md` → ChatGPT → `draft.md`)에 **관문**이 생겼다.
@@ -80,20 +98,29 @@
 2. **사람 판정** — 그렇게 받은 원고를 창업자가 읽고 "이대로 나가도 된다" 고 했다
 3. **관문 오탐 0** — 쓸 만한 원고가 막힌 적이 없다
 
-켤 때 고치는 것은 plist 한 줄이다.
+🔴 **아래 문단은 2026-09-15 에 폐기됐다. 남겨 두는 이유는 무엇을 잘못 알았는지 보이기 위해서다.**
 
-```xml
-<key>ProgramArguments</key>
-<array>
-  <string>…/node</string>
-  <string>…/scripts/magazine-auto-register-run.mjs</string>
-  <string>--write</string>   <!-- 이 두 줄 -->
-  <string>--pr</string>
-</array>
-```
+> ~~켤 때 고치는 것은 plist 한 줄이다.~~
+>
+> ```xml
+> <key>ProgramArguments</key>
+> <array>
+>   <string>…/node</string>
+>   <string>…/scripts/magazine-auto-register-run.mjs</string>
+>   <string>--write</string>   <!-- 이 두 줄 -->
+>   <string>--pr</string>
+> </array>
+> ```
+>
+> ~~`magazine-auto-register-check.mjs` 가 이 두 줄이 **없는 것** 을 PASS 로 검사한다.~~
 
-`magazine-auto-register-check.mjs` 가 이 두 줄이 **없는 것** 을 PASS 로 검사한다.
-누가 몰래 켜면 회귀 테스트에서 FAIL 이 난다.
+**틀린 이유**: 그 두 줄을 넣어도 job 이 돌지 않았다. plist 가 symlink 라 TCC 가
+읽기를 거부했고(등록 자체가 안 됨), `gh` 가 PATH 에 없었고, main 복귀가 없었고,
+실패가 exit 0 으로 숨겨졌다. **"한 줄" 이라는 말이 점검을 건너뛰게 만들었다.**
+
+지금 절차는 [`docs/operations/magazine-automation-runbook.md`](../operations/magazine-automation-runbook.md) 에 있다.
+회귀 테스트도 뒤집혔다 — 이제 템플릿에 `--write --pr` 이 **있는 것**을 PASS 로 보고,
+대신 **자동 merge 인자가 없는 것**과 **supervised 영수증 없이는 설치되지 않는 것**을 검사한다.
 
 ## 비용
 

@@ -115,6 +115,28 @@ ${REQUIRED_SECTIONS.map((s) => `   - \`## ${s}\``).join('\n')}
 
 8. TODO 주석을 남기지 않는다. \`<!-- TODO\` 가 하나라도 남으면 실패다.
 
+9. 🔴 **이 글의 imageMode 는 ${queueItem?.imageMode ?? '미상'} 이다.**${
+  queueItem?.imageMode === 'REQUIRED'
+    ? `
+   REQUIRED 이므로 review.ts 에 \`hero\` 블록을 **반드시** 넣는다.
+   자동 레인이 이 값을 읽어 대표 이미지를 만든다 — 없으면 그 글은 등록되지 못한다.
+
+   hero: {
+     alt: '…여성',      // 스크린리더가 읽는 문장. 화면에 무엇이 보이는지 한 문장으로
+     scene: '…',        // 이미지 생성에 쓸 장면 서술 (10~200자)
+   }
+
+   - alt 는 10~120자이고 반드시 **"여성" 으로 끝낸다** (등록분 17건이 전부 그 형태다).
+     예: '아침 세면대 거울 앞에서 손으로 가르마를 넘겨 보는 40대 후반 한국 여성'
+   - alt 에 ${BANNED_WORDS.map((w) => `"${w}"`).join(' ')} 를 쓰지 않는다.
+   - scene 에 "병원 · 진료실 · 의사 · 가운 · 청진기 · 주사 · 약 · 눈물 · 고통" 을 쓰지 않는다.
+     매거진 이미지는 **집·동네의 평범한 낮**이다. 의료 광고처럼 보이면 안 된다.
+   - 증상을 전시하지 않는다. 표정은 담담하게.`
+    : `
+   REQUIRED 가 아니므로 review.ts 에 \`hero\` 블록을 **넣지 않는다.**
+   자동 레인은 OPTIONAL 이미지를 만들지 않는다 (사람이 --allow-optional 로만 연다).`
+}
+
 # 이미 나온 글 (같은 cluster: ${cluster})
 
 ${siblings.length ? siblings.join('\n') : '- 없음 (이 cluster 첫 글)'}
@@ -149,7 +171,9 @@ ${REVIEW_MARK}
   preparedAt      '${today}'  ← 이 날짜를 그대로 쓴다. 다른 날짜를 지어내지 않는다.
   preparedBy      'Claude Code'
   notes           이 글을 검수할 때 특히 볼 것을 한두 문장으로. 비울 수 없다.
-
+${queueItem?.imageMode === 'REQUIRED'
+  ? `  hero            { alt, scene } — 위 9번 규칙대로. imageMode=REQUIRED 라 **필수**다.\n`
+  : ''}
 🔴 위 목록에 **없는 필드를 넣지 않는다.** riskLevel · reviewMode 같은 것을 만들어 넣으면
    타입이 맞지 않아 결과가 통째로 버려진다. 등급은 risk 안에만 있다.
 
@@ -463,4 +487,9 @@ async function main() {
   process.exit(failed ? 1 : 0)
 }
 
-main()
+/**
+ * 🔴 **직접 실행할 때만 돈다.** 이 파일은 파일을 쓴다 —
+ *    판정 함수를 빌리려고 import 한 쪽이 실제 회차를 돌리면 안 된다.
+ *    (2026-09-15: magazine-producer-plan.mjs 가 그 상태로 _runs 를 통째로 만들었다)
+ */
+if (process.argv[1] && process.argv[1].endsWith('magazine-brief-auto.mjs')) main()

@@ -145,7 +145,7 @@ export const GATES = {
  *    타입을 고치면 이 목록도 같이 고친다.
  */
 const REVIEW_REQUIRED = ['slug', 'summary', 'risk', 'factsToVerify', 'preparedAt', 'preparedBy', 'notes']
-const REVIEW_OPTIONAL = ['riskSentences', 'forbiddenPatterns']
+const REVIEW_OPTIONAL = ['riskSentences', 'forbiddenPatterns', 'hero']
 
 /**
  * review 객체가 ReviewData 로 쓸 수 있는 모양인가.
@@ -191,6 +191,22 @@ export function verifyReviewShape(review) {
 
   if ('notes' in review && (typeof review.notes !== 'string' || !review.notes.trim())) {
     problems.push('notes 가 비어 있다')
+  }
+
+  // 🔴 hero 는 **모양만** 본다. alt 의 내용 규칙(길이·"…여성" 종결·금지 호칭)은
+  //    `lib/magazine-hero-brief.mjs` 가 정본이다 — 여기에 다시 적으면 두 벌이 된다.
+  //    (G7 은 "tsc 가 막을 모양인가" 를 보는 자리다)
+  if ('hero' in review) {
+    const h = review.hero
+    if (!h || typeof h !== 'object' || Array.isArray(h)) {
+      problems.push('hero 가 객체가 아니다')
+    } else {
+      if (typeof h.alt !== 'string' || !h.alt.trim()) problems.push('hero.alt 가 비어 있다')
+      if ('scene' in h && (typeof h.scene !== 'string' || !h.scene.trim())) problems.push('hero.scene 이 비어 있다')
+      for (const key of Object.keys(h)) {
+        if (!['alt', 'scene'].includes(key)) problems.push(`hero 에 스키마에 없는 필드다: ${key}`)
+      }
+    }
   }
 
   return problems
