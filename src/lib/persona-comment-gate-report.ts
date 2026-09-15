@@ -36,6 +36,22 @@ export type GateLine = { gate: string; outcome: string; detail?: string }
  */
 export const REQUIRED_GATES: readonly GateCode[] = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧']
 
+/**
+ * 🔴 **관문 이름** — 번호만 찍으면 무엇이 막았는지 사람이 알 수 없다.
+ *    판정에 쓰지 않는다. 화면에만 쓴다.
+ */
+export const GATE_NAMES: Readonly<Record<GateCode, string>> = Object.freeze({
+  '①': '원문 연속 유출',
+  '②': '고유 표현 · 특이 조어',
+  '③': '식별 디테일 결합',
+  '④': '구조 과복제',
+  '⑤': '금지 호칭 · 조언 제한',
+  '⑥': '닉네임 혼입',
+  '⑦': 'Persona 설정 모순 · 금지 역할',
+  '⑧': 'Voice Fingerprint',
+  '⑨': '출처 커뮤니티 marker',
+})
+
 export type GateReport = {
   /** 9개 결과가 빠짐없이 왔는가 — 반환값의 형식 계약 */
   shaped: boolean
@@ -131,8 +147,21 @@ export function judgeGateReport(input: {
  *    발행 쪽은 `missingRequired` 만 봤다 — 즉 ① 유출이 `reject` 여도 발행 쪽 재검사에서는
  *    cold-start 로 보였다. 예외는 좁아야 하고, 좁은 예외는 한 곳에만 있어야 한다.
  *
- * 🔴 **`notRun` 인 필수 관문은 ⑧ 하나**여야 하고, **나머지 여덟은 전부 `pass`** 여야 한다.
+ * 🔴 **`notRun` 인 필수 관문은 ⑧ 하나**여야 하고, **나머지 필수 관문은 전부 `pass`** 여야 한다.
  *    하나라도 review·regenerate·reject 면 그것은 cold-start 가 아니라 **Gate 실패**다.
+ *
+ * 🔴 **선택 관문(⑨)에 `pass` 를 요구하지 않는다** (2026-09-15 정정).
+ *
+ *    옛 판은 `GATE_CODES` 에서 ⑧ 만 빼고 **⑨ 까지 `pass`** 를 요구했다.
+ *    그런데 ⑨ 는 정본에서 필수가 아니다 —
+ *      · `REQUIRED_GATES` 에 ⑨ 가 없다(이 파일 위쪽)
+ *      · 운영 정본: "⑨(카페 운영 문맥)만 필수에서 뺀다 — 출처가 카페일 때만 의미가 있다.
+ *        다만 `sourceIsCafeOperational` 을 명시하지 않으면 ⑨ 도 `notRun` 이 된다"
+ *    그래서 ⑨ 가 정상적으로 `notRun` 인 회차가 cold-start 로 인정되지 못했다.
+ *    같은 파일의 `fullGatePass` 는 이미 `required` 만 본다 — 두 판정이 어긋나 있었다.
+ *
+ * 🔴 **느슨해지지 않는다.** 선택 관문도 **돌아서 실패했으면 실패다** —
+ *    허용하는 것은 `notRun`(보지 않았다) 하나뿐이다.
  */
 export function isGateEightColdStart(
   gates: readonly GateLine[], report: GateReport,
@@ -140,7 +169,15 @@ export function isGateEightColdStart(
   if (!report.shaped) return false
   if (!(report.missingRequired.length === 1 && report.missingRequired[0] === '⑧')) return false
   const byCode = new Map(gates.map((g) => [g.gate, g.outcome]))
-  return GATE_CODES.filter((c) => c !== '⑧').every((c) => byCode.get(c) === 'pass')
+  // 🔴 필수 관문 중 ⑧ 을 뺀 나머지는 **전부 pass** 여야 한다
+  if (!REQUIRED_GATES.filter((c) => c !== '⑧').every((c) => byCode.get(c) === 'pass')) return false
+  /**
+   * 🔴 선택 관문은 **돌지 않았을 수 있다**(정본). 다만 돌아서 실패했으면 그것은 실패다 —
+   *    `review` · `regenerate` · `reject` 는 여기서도 막힌다.
+   */
+  return GATE_CODES
+    .filter((c) => !REQUIRED_GATES.includes(c))
+    .every((c) => { const o = byCode.get(c); return o === 'pass' || o === 'notRun' })
 }
 
 /**

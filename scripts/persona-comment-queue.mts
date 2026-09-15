@@ -28,7 +28,9 @@ import { PrismaClient } from '@prisma/client'
 import type { Prisma } from '@prisma/client'
 
 import { judgeModelGate } from '../src/lib/persona-comment-release'
-import { judgeGateReport } from '../src/lib/persona-comment-gate-report'
+import {
+  judgeGateReport, GATE_CODES, GATE_NAMES, REQUIRED_GATES,
+} from '../src/lib/persona-comment-gate-report'
 import {
   judgeReadiness, windowFromRows, RATIO_WINDOW_DAYS,
 } from '../src/lib/persona-comment-governor'
@@ -352,7 +354,34 @@ const result = await runEnqueuePipeline({
 
 console.log(`\n  provider 호출 ${result.providerCalls}회 · 적재 ${result.created}건`)
 if (result.stoppedReason !== null) console.log(`  멈춘 이유  ${result.stoppedReason}`)
-for (const o of result.outcomes) console.log(`     ${o.personaCode} ${o.step} — ${o.reason}`)
+/**
+ * 🔴 **버리기 전에 관문별 결과를 찍는다** (2026-09-15).
+ *
+ *    옛 판은 `step — reason` 한 줄만 찍었다. 그래서 "bootstrap 이 아니라 Gate 실패다" 까지만
+ *    보이고 **어느 관문이 막았는지** 알 수 없었다 — 다시 보려면 provider 를 또 불러야 했다.
+ *    유료 회차의 결과를 한 줄로 버리지 않는다.
+ *
+ * 🔴 **생성 텍스트는 찍지도 저장하지도 않는다.** 남기는 것은 관문 번호·결과·사유뿐이다.
+ */
+for (const o of result.outcomes) {
+  console.log(`     ${o.personaCode} ${o.step} — ${o.reason}`)
+  const rep = o.plan?.report
+  if (rep === undefined) continue
+  console.log(`        관문  돌아간 ${rep.ran}/${GATE_CODES.length} · pass ${rep.passed}`
+    + ` · 미실행 ${rep.notRun.join('') || '없음'}`
+    + ` · 필수 미실행 ${rep.missingRequired.join('') || '없음'}`)
+  for (const g of o.plan?.gates ?? []) {
+    const mark = g.outcome === 'pass' ? '🟢' : g.outcome === 'notRun' ? '⚪' : '🔴'
+    const req = (REQUIRED_GATES as readonly string[]).includes(g.gate) ? '필수' : '선택'
+    const name = (GATE_NAMES as Readonly<Record<string, string>>)[g.gate] ?? ''
+    console.log(`        ${mark} ${g.gate} ${name} (${req}) — ${g.outcome}`
+      + `${g.detail === undefined || g.detail === '' ? '' : ` · ${g.detail}`}`)
+  }
+  for (const b of o.plan?.blocks ?? []) console.log(`        🔴 차단 ${b.code} — ${b.message}`)
+  if (!rep.fullGatePass) {
+    console.log(`        🔴 bootstrap 인정 실패 — ${rep.reason}`)
+  }
+}
 console.log(`\n  🔴 이 회차 provider 호출 ${result.providerCalls}회 · DB write ${result.created}건\n`)
 await prisma.$disconnect()
 process.exit(0)
