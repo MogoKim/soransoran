@@ -17,6 +17,7 @@
     "check:brand-assets": "node scripts/check-brand-assets.mjs",
     "check:visibility": "node scripts/check-post-visibility.mjs",
     "check:home-exposure": "tsx scripts/home-exposure-check.mts",
+    "check:workflow-budget": "tsx --tsconfig tsconfig.ops.json scripts/workflow-budget-check.mts",
     "check:hero-banner": "tsx --tsconfig tsconfig.ops.json scripts/hero-banner-check.mts",
     "check:ga4-events": "tsx scripts/ga4-participation-events-check.mts",
     "check:content-guard": "tsx scripts/content-guard-feedback-check.mts",

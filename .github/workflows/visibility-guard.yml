@@ -8,16 +8,53 @@
 #   여러 세션(매거진 트랙 · Micro Seed 트랙)이 병렬로 main 에 들어오는 구조라
 #   "각자 로컬에서 돌렸겠지" 를 전제할 수 없다.
 #
-# main push 에서도 도는 이유:
+# main 통합을 따로 보는 이유:
 #   PR 두 개가 각각 통과해도 합쳐지면 깨지는 semantic conflict 가 있다.
 #   예: A 가 홈 쿼리를 바꾸고 B 가 게이트 함수명을 바꾸면 각 PR 은 녹색이지만 main 은 빨갛다.
-#   merge 후 한 번 더 돌려야 그걸 잡는다.
+#   그래서 merge 된 main 을 **한 번 더** 봐야 한다.
+#
+#   🔴 옛 판은 `push: branches: [main]` 이었다 — merge 마다 전체가 다시 돌았다.
+#      2026-09 실측: 702 회 중 265 회(38%)가 그 재실행이었고 약 700 분을 썼다.
+#      같은 트리를 PR 에서 한 번, merge 직후 또 한 번 본 것이다.
+#      semantic conflict 는 "merge 직후 1 분 안에" 잡아야 하는 종류가 아니다 —
+#      **매일 1 회 nightly** 로 충분하고, 급하면 workflow_dispatch 로 즉시 돌린다.
+#
+# 🔴 **비용이 이 워크플로우를 멈춘 적이 있다** (2026-09-15).
+#    Actions 무료 2,000 분이 소진되어 auto-publish 가 러너를 배정받지 못했다
+#    (run 34931463988 · steps=0). CI 비용이 발행을 멈추는 구조였다.
+#    그래서 이 파일은 두 가지를 줄인다 — **검사를 빼는 방식이 아니라** 중복과 낭비를 줄인다:
+#      ① 실행 횟수 — merge 마다 돌던 전체 재실행을 nightly 1 회로. (절감의 대부분이 여기다)
+#      ② 실행 시간 — **진짜 화면 전용 PR** 에서만 무거운 fixture 5 개를 건너뛴다.
+#
+#    🔴 **경로로 run 을 띄우지 않는 길은 없다.** paths-ignore 를 쓰지 않는다.
+#       어떤 PR 이든 워크플로우는 뜨고, 필수 게이트는 전부 돈다.
+#       docs · 서버 경로 · 판정 불가는 모두 heavy=true 로 **전체 검사**다 —
+#       이 저장소의 문서는 장식이 아니라 검사 대상이기 때문이다(아래 on: 주석 참조).
+#       화면 전용으로 내려가는 것은 9 월 실측 기준 241 커밋 중 20 건(8%) 뿐이다.
+#
+#    이 둘이 사라지면 scripts/workflow-budget-check.mts 가 CI 에서 막는다.
 name: visibility-guard
 
 on:
+  # 🔴 **경로로 거르지 않는다.** 옛 판은 `paths-ignore: docs/** · **/*.md` 였다.
+  #    틀렸다 — 이 저장소의 문서는 장식이 아니라 **검사 대상**이다.
+  #
+  #    실측(2026-09-15): `docs/operations/CURRENT-MILESTONE.md` 의 `| d3 | **42** |`
+  #    한 줄만 고쳐도 `master:doc-check` 가 exit 1 이다. 그 값은 코드
+  #    `derive(PROFILES.d3).stockTarget` 과 같아야 하기 때문이다.
+  #    paths-ignore 로 걸렀다면 그 회차는 **초록도 빨강도 아닌 무음**이 됐다.
+  #
+  #    master:doc-check 하나가 docs 14 개를 읽는다. 문서 전용 PR 도 워크플로우는 뜬다.
   pull_request:
-  push:
-    branches: [main]
+
+  # 🔴 main 통합 검증 — 매일 1 회. UTC 18:00 = KST 03:00 (다음 날).
+  #    발행 슬롯(08:10~20:30 KST)과 겹치지 않는 시간을 골랐다 —
+  #    러너가 몰리면 auto-publish 가 밀린다.
+  schedule:
+    - cron: '0 18 * * *'
+
+  # 🔴 급할 때 손으로 돌린다. merge 직후 확인이 필요하면 이 경로를 쓴다.
+  workflow_dispatch:
 
 # 같은 PR 에 연속 push 하면 이전 run 을 취소한다 — 러너 시간 낭비를 막는다.
 concurrency:
@@ -33,6 +70,93 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 🔴 변경 경로를 판정하려면 base 커밋이 있어야 한다. depth 1 로는 diff 를 낼 수 없다.
+          #    저장소 pack 이 10MB 미만이라 전량 fetch 가 몇 초다.
+          fetch-depth: 0
+
+      # ─────────────────────────────────────────────────────────
+      # 🔴 **무거운 운영 fixture 를 이 회차에서 돌릴 것인가** — fail-closed
+      #
+      #    기본값이 heavy=true 다. **아래 좁은 조건을 전부 통과할 때만** false 로 내려간다:
+      #      ① pull_request 이벤트이고
+      #      ② base 커밋을 실제로 읽을 수 있고
+      #      ③ 변경 파일 목록이 비어 있지 않고
+      #      ④ 그 전부가 화면 전용 경로다
+      #
+      #    schedule · workflow_dispatch · base 없음 · diff 실패 · 목록 없음은
+      #    **전부 heavy 로 남는다.** 모르면 돌린다 — 모를 때 건너뛰면 그 회차가 구멍이다.
+      #
+      #    🔴 화면 전용 경로는 **열거한 것만**이다. src/lib · scripts · prisma ·
+      #       package-lock · tsconfig · .github 는 전부 heavy 다 —
+      #       이들은 영향 범위가 넓어서 어느 fixture 가 깨질지 미리 말할 수 없다.
+      # ─────────────────────────────────────────────────────────
+      - name: 변경 경로 판정 (fail-closed)
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # 🔴 set -e 를 쓰지 않는다. 판정에 실패하면 job 을 죽이는 게 아니라
+          #    heavy 로 남겨야 한다 — 그것이 fail-closed 다.
+          heavy=true
+          reason='기본값 — 모르면 돌린다'
+
+          if [ "$EVENT" = "pull_request" ] && [ -n "$BASE_SHA" ] \
+             && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null)"
+            if [ -z "$files" ]; then
+              reason='변경 파일 목록이 비어 있다 — 판정할 수 없다'
+            else
+              # 🔴 **허용 목록과 금지 목록을 둘 다 본다.** 허용만으로는 부족하다 —
+              #    `src/app/` 아래에 API·어드민·server action 이 같이 산다.
+              #
+              #    ALLOW  화면을 그리는 자리. 여기 없으면 무겁다.
+              #    DENY   그 안에 섞여 있는 서버·쓰기 경로. 하나라도 걸리면 무겁다.
+              #           실측(2026-09-15): route.ts 5 개가 전부 src/app/api/ 아래이고,
+              #           `'use server'` 는 src/lib/actions/ 말고도
+              #           src/app/admin/(ops)/**/page.tsx · src/components/admin/ 에 있다.
+              #
+              #    🔴 docs/ 는 ALLOW 에 넣지 않는다. 무거운 fixture 가 문서를 읽는다 —
+              #       d10:prep-check → MASTER-OPERATING-SYSTEM.md · persona-pool-design.md
+              #       supply:process-check → launchd/README.md
+              #       scale:foundation-check → persona-pool-design.md
+              #       문서만 고쳤다고 건너뛰면 **그 문서를 읽는 검사**를 건너뛴다.
+              ALLOW='^(src/app/|src/components/|src/styles/|src/content/|public/)'
+              DENY='(^|/)(api|admin|auth|uploads?)/|(^|/)(route|middleware|actions?)\.ts$|(^|/)actions/'
+
+              # 🔴 **`grep -qv` 를 쓰지 않는다.** `-q` 와 `-v` 를 함께 준 결과는 구현마다 다르다 —
+              #    GNU grep 은 "매치되지 않는 줄이 하나라도 있으면 0", ugrep 은 파일 단위로 뒤집는다.
+              #    fail-closed 게이트가 러너에 깔린 grep 종류에 좌우되면 안 된다.
+              #    그래서 **세어서 비교한다** — `-c` 의 뜻은 어느 구현에서나 같다.
+              total="$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
+              allowed="$(printf '%s\n' "$files" | grep -cE "$ALLOW" || true)"
+              risky="$(printf '%s\n' "$files" | grep -cE "$DENY" || true)"
+              allowed="${allowed:-0}"
+              risky="${risky:-0}"
+              if [ "$total" -gt 0 ] && [ "$total" = "$allowed" ] && [ "$risky" = '0' ]; then
+                heavy=false
+                reason="화면 전용 변경만 있다 ($allowed/$total · 서버 경로 0)"
+              elif [ "$risky" != '0' ]; then
+                reason="서버·쓰기 경로가 ${risky}건 있다 (api · admin · auth · upload · route · action)"
+              else
+                reason="화면 전용이 아닌 경로가 있다 ($allowed/$total 만 화면)"
+              fi
+            fi
+          elif [ "$EVENT" != "pull_request" ]; then
+            reason="$EVENT 회차 — 전체를 본다"
+          else
+            reason='base 커밋을 읽을 수 없다'
+          fi
+
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+          echo "무거운 fixture 실행: $heavy ($reason)"
+          {
+            echo "## 변경 경로 판정"
+            echo "- 이벤트: \`$EVENT\`"
+            echo "- 무거운 fixture 실행: \`$heavy\`"
+            echo "- 근거: $reason"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-node@v4
         with:
@@ -142,6 +266,14 @@ jobs:
       #
       #    콘텐츠 가드 옆에 둔다. 셋 다 "동작은 멀쩡한데 약속이 깨진" 회귀를 잡는 검사다.
       #    DB · 네트워크 · R2 접근이 없다 — 순수 규칙과 스키마 파일만 읽는다.
+      # 🔴 **이 워크플로우가 스스로의 비용을 지킨다.**
+      #    2026-09-15 무료 한도 소진으로 발행이 멈춘 뒤 세웠다.
+      #    무거운 fixture 가 경로 조건 밖으로 나오거나, 무조건 실행 step 이 말없이 늘거나,
+      #    PR·nightly 트리거가 사라지면 여기서 빨갛게 뜬다.
+      #    순수 파일 파싱이라 Prisma 없이 1 초 미만이다.
+      - name: 워크플로우 실행 예산 가드
+        run: npm run check:workflow-budget
+
       - name: 히어로 배너 계약 가드
         run: npm run check:hero-banner
 
@@ -377,6 +509,7 @@ jobs:
       #    누구의 락인지 묻지 않는다는 것은 두 프로세스를 실제로 붙여야 드러난다.
       #    🔴 /tmp 임시 경로만 쓴다. 운영 락은 건드리지 않는다.
       - name: 수집 락 (실제 프로세스 경쟁)
+        if: steps.scope.outputs.heavy == 'true'
         run: npm run collect:lock-check
 
       # 기계 판정이 사람 값을 사칭하지 않는지 · 위험 글이 통과하지 않는지 본다 (§4-AR)
@@ -410,6 +543,7 @@ jobs:
       #
       # 🔴 네트워크 0 · LLM 0 · DB 0 — 순수 판정만 검사한다.
       - name: 공급 처리 (수집 금지 · 발행 금지 · source 독립 실패 · lock 게이트)
+        if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:process-check
       - name: D100 공급 계획 (게시판 배선 · 요청 상한)
         run: npm run supply:d100-plan-check
@@ -467,6 +601,7 @@ jobs:
       #    cohort manifest · 단계 fail-closed · 공급 역산 · 병목도 함께 본다.
       #    DB 0 · 네트워크 0 · LLM 0.
       - name: Scale Foundation (회귀 0 · cohort · 공급 역산 · 병목)
+        if: steps.scope.outputs.heavy == 'true'
         run: npm run scale:foundation-check
 
       # 목적·North Star·Lane·AI 모델·현재 운영 상태의 단일 진입점.
@@ -477,12 +612,14 @@ jobs:
         run: npm run master:doc-check
 
       - name: d10 activation preparation fixture
+        if: steps.scope.outputs.heavy == 'true'
         run: npm run d10:prep-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
       # mkdtemp 안에서만 돌고 저장소 .microseed-data 는 건드리지 않는다.
       - name: 수집 차단기 잠금 (실제 프로세스 경쟁)
+        if: steps.scope.outputs.heavy == 'true'
         run: npm run collect:guard-lock-check
 
       # launchd 템플릿이 틀리면 **조용히 아무 일도 안 일어난다** (§4-AU ④-b).
