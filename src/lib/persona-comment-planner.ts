@@ -273,6 +273,23 @@ export type PlanInput = {
   posts: readonly PlannerPost[]
   personas: readonly PlannerPersona[]
   /**
+   * 🔴 **이 조합으로 실제 입력을 만들 수 있는가** (2026-09-15).
+   *
+   *    planner 는 "누가 어느 역할로 말할 자격이 있는가" 만 안다. 그런데 자격이 있어도
+   *    **입력을 만들 수 없는 조합**이 있다 — 겪은 일을 들려주는 역할인데 그 사람에게
+   *    들려줄 근거가 없는 경우가 그렇다. 🔴 그 규칙은 입력 생성기가 갖는다.
+   *    여기에 이름조차 적지 않는다 — 적는 순간 규칙이 두 곳에 생긴다.
+   *
+   *    🔴 실측(2026-09-15): 관리형 글 1편이 1순위로 뽑혔는데, 역할 분산이 그 자리에
+   *       `experience` 를 놓았고 근거가 없어 입력이 0건이 됐다. planner 는 그 사실을
+   *       모른 채 **그 글을 통째로 포기**했다 — 같은 글에 가능한 다른 조합이 있었는데도.
+   *
+   *    🔴 그래서 "만들 수 있는가" 를 **고르는 순간에** 묻는다. 규칙을 여기 복제하지 않는다 —
+   *       판정은 부르는 쪽이 실제 입력 생성기로 하고, 그 결과만 넘긴다.
+   *    🔴 생략하면 옛 동작 그대로다(전부 가능하다고 본다).
+   */
+  feasible?: (combo: { postId: string; personaCode: string; reactionRole: string }) => PlanBlock[]
+  /**
    * 붙일 수 있는 반응 역할들. 🔴 생략하면 정본(`COMMENT_REACTION_ROLES`)을 쓴다 —
    * 호출부가 제 낱말을 지어내면 생성기가 그것을 거부한다(`share` 사례).
    */
@@ -367,6 +384,16 @@ export function planCommentDistribution(input: PlanInput): PlanResult {
         if (taken.has(persona.code)) continue
         const personaBlocks = judgePlannerPersona(persona, post, role)
         if (personaBlocks.length > 0) { blocks.push(...personaBlocks); continue }
+        /**
+         * 🔴 **자격이 있어도 만들 수 없으면 고르지 않는다.**
+         *    순서는 그대로다 — 분산 규칙이 정한 차례대로 물어보고,
+         *    만들 수 없는 조합만 건너뛴다. 같은 글의 **다음 조합**으로 이어진다.
+         *    🔴 안전장치를 무르지 않는다. 막힌 조합을 **고르지 않을** 뿐이다.
+         */
+        const notBuildable = input.feasible?.({
+          postId: post.id, personaCode: persona.code, reactionRole: role,
+        }) ?? []
+        if (notBuildable.length > 0) { blocks.push(...notBuildable); continue }
         const total = post.memberComments + post.personaComments
         return {
           postId: post.id, personaCode: persona.code, reactionRole: role,

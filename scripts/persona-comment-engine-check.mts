@@ -17,6 +17,7 @@ import {
 } from '../src/lib/persona-comment-governor'
 import {
   judgePlannerPersona, judgePlannerPost, planCommentDistribution, priorityOf,
+  type PlanBlock,
   FRESHNESS_MAX_DAYS, type PlannerPersona, type PlannerPost,
 } from '../src/lib/persona-comment-planner'
 import {
@@ -366,6 +367,122 @@ console.log('③ 댓글 분산 planner')
       recentRoleCounts: { other: 0, empathy: 9, experience: 9, question: 9 },
     })
     check('🟢 other 도 planner 가 배정한다', r4.items[0]?.reactionRole === 'other')
+  }
+
+  const codeOf = (f: string): string => readFileSync(f, 'utf-8')
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [F] 만들 수 없는 조합은 고르지 않는다 — 같은 글에서 다음 조합으로
+  //
+  //    2026-09-15 실측: 관리형 글 1편이 1순위로 뽑혔는데 역할 분산이 그 자리에
+  //    `experience` 를 놓았고, 그 Persona 에게 근거가 없어 입력이 0건이 됐다.
+  //    planner 는 그 사실을 모른 채 **그 글을 통째로 포기**했다 —
+  //    같은 글에 가능한 다른 조합(`empathy`)이 있었는데도.
+  //
+  //    🔴 안전장치는 그대로다. 막힌 조합을 **고르지 않을** 뿐이다.
+  // ─────────────────────────────────────────────────────────
+  {
+    /** 🔴 특정 글·Persona·소재를 박지 않는다. 역할 이름만으로 판정한다 */
+    const noExperience = (c: { reactionRole: string }): PlanBlock[] =>
+      c.reactionRole === 'experience'
+        ? [{ code: 'EXPERIENCE_WITHOUT_GROUND' as never, message: '근거 없음' }]
+        : []
+    /** 최근 사용량 때문에 `experience` 가 1순위가 되는 상황을 만든다 */
+    const LEAST_EXPERIENCE = { other: 9, empathy: 5, question: 9, experience: 0 }
+    const one = (o: {
+      feasible?: (c: { postId: string; personaCode: string; reactionRole: string }) => PlanBlock[]
+      personas?: PlannerPersona[]
+      posts?: PlannerPost[]
+      limit?: number
+      recentRoleCounts?: Record<string, number>
+    } = {}): ReturnType<typeof planCommentDistribution> => planCommentDistribution({
+      posts: o.posts ?? [post({ id: 'a' })],
+      personas: o.personas ?? [persona({ code: 'P02' })],
+      reactionRoles: ROLES, limit: o.limit ?? 1, nowMs: NOW,
+      recentRoleCounts: o.recentRoleCounts ?? LEAST_EXPERIENCE,
+      feasible: o.feasible,
+    })
+
+    // 🔴 수정 전 동작 재현 — feasible 을 주지 않으면 experience 가 확정된다
+    check('🔴 [F] 예판정이 없으면 experience 가 그대로 확정된다 (수정 전 경로)',
+      one().items[0]?.reactionRole === 'experience')
+
+    // ① 근거 없음 + empathy 가능 → 같은 글에서 empathy
+    {
+      const r = one({ feasible: noExperience })
+      check('🟢 [F] experience 가 불가능하면 같은 글에서 다음 역할을 고른다',
+        r.items.length === 1 && r.items[0]?.postId === 'a'
+        && r.items[0]?.reactionRole !== 'experience')
+      check('🟢 [F] 분산 순서는 그대로다 — 남은 역할 중 가장 적게 쓰인 것',
+        r.items[0]?.reactionRole === 'empathy')
+    }
+
+    // ② 근거가 있으면 기존대로 experience
+    check('🟢 [F] 근거가 있으면 experience 를 그대로 고른다',
+      one({ feasible: () => [] }).items[0]?.reactionRole === 'experience')
+
+    // ③ 모든 역할 불가능 → 글이 차단되고 사유가 남는다
+    {
+      const r = one({ feasible: () => [{ code: 'EXPERIENCE_WITHOUT_GROUND' as never, message: '전부 불가' }] })
+      check('🔴 [F] 모든 조합이 불가능하면 그 글은 뽑히지 않는다', r.items.length === 0)
+      check('🔴 [F] 사유가 조용히 사라지지 않는다',
+        r.skipped.some((x) => x.postId === 'a' && x.blocks.length > 0))
+    }
+
+    // ④ 작성자 == commenter 는 여전히 제외
+    {
+      const r = one({
+        posts: [post({ id: 'a', authorPersonaCode: 'P02' })],
+        personas: [persona({ code: 'P02' })],
+        feasible: () => [],
+      })
+      check('🔴 [F] 글 작성자는 자기 글에 댓글을 달지 않는다 (feasible 과 무관)',
+        r.items.length === 0)
+    }
+
+    // ⑤ 역할 분산 점수는 유지된다
+    check('🔴 [F] 최근에 적게 쓰인 역할이 여전히 먼저다 (전부 가능할 때)',
+      one({ recentRoleCounts: { other: 12, empathy: 9, experience: 3, question: 0 }, feasible: () => [] })
+        .items[0]?.reactionRole === 'question')
+
+    // ⑥ limit=1 이면 다른 글로 넘어가기 전에 같은 글에서 먼저 찾는다
+    {
+      const r = one({
+        posts: [post({ id: 'first' }), post({ id: 'second', memberComments: 3 })],
+        personas: [persona({ code: 'P02' }), persona({ code: 'P03' })],
+        limit: 1, feasible: noExperience,
+      })
+      check('🟢 [F] limit=1 이면 1순위 글에서 가능한 조합을 찾는다 — 다른 글로 넘어가지 않는다',
+        r.items.length === 1 && r.items[0]?.postId === 'first')
+    }
+
+    // ⑦ 🔴 예판정은 provider 를 부르기 **전**에 끝난다 — planner 는 순수 함수다
+    check('🔴 [F] planner 는 provider 를 모른다 (순수 함수)', (() => {
+      const src = codeOf('src/lib/persona-comment-planner.ts')
+      return !/callProvider|fetch\(|PrismaClient|await /.test(src)
+    })())
+
+    // ⑧ 🔴 안전장치를 없애면 이 절이 무너진다
+    check('🔴 [F] EXPERIENCE_WITHOUT_GROUND 안전장치가 그대로 있다', (() => {
+      const input = codeOf('src/lib/persona-comment-input.ts')
+      return /EXPERIENCE_WITHOUT_GROUND/.test(input)
+        && /judgeExperienceEligibility/.test(input)
+    })())
+    check('🔴 [F] planner 가 그 규칙을 복제하지 않는다 — 부르는 쪽이 판정해 넘긴다', (() => {
+      const src = codeOf('src/lib/persona-comment-planner.ts')
+      return !/EXPERIENCE_WITHOUT_GROUND|hasLifeGround|judgeExperienceEligibility/.test(src)
+    })())
+    check('🔴 [F] materializer 가 **같은 입력 생성기**로 예판정한다', (() => {
+      const t = codeOf('scripts/lib/persona-comment-targets.ts')
+      return /feasible: \(combo\)/.test(t) && /buildFor\(pr, pe, combo\.reactionRole\)/.test(t)
+    })())
+
+    // ⑨ 🔴 특정 글·Persona·소재를 박지 않았다
+    check('🔴 [F] 하드코딩 0 — 특정 Post id · Persona · 소재 · 역할이 코드에 없다', (() => {
+      const src = codeOf('src/lib/persona-comment-planner.ts')
+        + codeOf('scripts/lib/persona-comment-targets.ts')
+      return !/cmu1zot9u|후라이팬|'P02'|"P02"/.test(src)
+        && !/reactionRole === 'empathy'|reactionRole === 'experience'/.test(src)
+    })())
   }
 
   // ── 상한 ──

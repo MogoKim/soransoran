@@ -342,6 +342,39 @@ export async function materializeTargets(args: {
     life: { ...lifeOf(pe.identity), noGoTopics: pe.noGoTopics },
   }))
 
+  const postById = new Map(posts.map((p) => [p.id, p]))
+  const personaByCode = new Map(personas.map((p) => [p.code, p]))
+
+  /**
+   * 🔴 **입력 생성은 한 함수다** (2026-09-15).
+   *    planner 의 "만들 수 있는가" 예판정과 아래 본 루프가 **같은 함수**를 쓴다.
+   *    두 벌이면 한쪽만 낡아, 고를 때는 된다고 하고 만들 때는 안 되는 상태가 온다.
+   */
+  const buildFor = (
+    pr: (typeof posts)[number], pe: (typeof personas)[number], reactionRole: string,
+  ): ReturnType<typeof buildCommentInput> => buildCommentInput({
+    persona: {
+      code: pe.code, ageBand: pe.ageBand, region: pe.region, lifeStage: pe.lifeStage,
+      identity: pe.identity, voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations,
+      noGoTopics: pe.noGoTopics, noGoExpressions: pe.noGoExpressions,
+      forbiddenReactionRoles: pe.forbiddenReactionRoles,
+    },
+    post: {
+      id: pr.id,
+      title: pr.title,
+      // 🔴 원문 앞부분이다. 개인정보 판정을 통과한 글만 provider 로 간다
+      bodyDigest: pr.content.slice(0, digestChars),
+      boardLabel: pr.boardType,
+      existingCommentDigests: pr.comments.map((c) => c.content.slice(0, commentDigestChars)),
+    },
+    reactionRole,
+    voice: voiceEvidenceFromAssets({
+      voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations,
+      recentTexts: pe.comments.map((c) => c.content),
+    }),
+    memory: { has: false, note: '' },
+  })
+
   const plan = planCommentDistribution({
     posts: plannerPosts,
     personas: plannerPersonas,
@@ -350,10 +383,21 @@ export async function materializeTargets(args: {
     nowMs: args.nowMs,
     // 🔴 못 읽었으면 빈 값으로 계획은 세우되, 위에서 이미 유료 호출을 막아 두었다
     recentRoleCounts: recentRoleCounts ?? {},
+    /**
+     * 🔴 **고르는 순간에 "만들 수 있는가" 를 묻는다.**
+     *    자격은 있는데 입력이 안 만들어지는 조합(예: 근거 없는 `experience`)을
+     *    고르고 나서 버리면, 그 글에 가능한 다른 조합이 있어도 통째로 사라진다.
+     *    🔴 provider 를 부르기 **전**이다 — 돈을 쓰기 전에 확정된다.
+     */
+    feasible: (combo) => {
+      const pr = postById.get(combo.postId)
+      const pe = personaByCode.get(combo.personaCode)
+      // 🔴 모르면 "만들 수 있다" 고 하지 않는다 — 본 루프가 어차피 걸러낸다
+      if (pr === undefined || pe === undefined) return []
+      const probe = buildFor(pr, pe, combo.reactionRole)
+      return probe.ok ? [] : probe.blocks.map((b) => ({ code: b.code as never, message: b.message }))
+    },
   })
-
-  const postById = new Map(posts.map((p) => [p.id, p]))
-  const personaByCode = new Map(personas.map((p) => [p.code, p]))
   const targets: MaterializedTarget[] = []
   const blockedInputs: string[] = []
 
@@ -363,27 +407,8 @@ export async function materializeTargets(args: {
     if (pr === undefined || pe === undefined) continue
 
     const recentTexts = pe.comments.map((c) => c.content)
-    const built = buildCommentInput({
-      persona: {
-        code: pe.code, ageBand: pe.ageBand, region: pe.region, lifeStage: pe.lifeStage,
-        identity: pe.identity, voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations,
-        noGoTopics: pe.noGoTopics, noGoExpressions: pe.noGoExpressions,
-        forbiddenReactionRoles: pe.forbiddenReactionRoles,
-      },
-      post: {
-        id: pr.id,
-        title: pr.title,
-        // 🔴 원문 앞부분이다. 개인정보 판정을 통과한 글만 provider 로 간다
-        bodyDigest: pr.content.slice(0, digestChars),
-        boardLabel: pr.boardType,
-        existingCommentDigests: pr.comments.map((c) => c.content.slice(0, commentDigestChars)),
-      },
-      reactionRole: item.reactionRole,
-      voice: voiceEvidenceFromAssets({
-        voiceCore: pe.voiceCore, voiceVariations: pe.voiceVariations, recentTexts,
-      }),
-      memory: { has: false, note: '' },
-    })
+    // 🔴 planner 예판정과 **같은 함수**다
+    const built = buildFor(pr, pe, item.reactionRole)
     if (!built.ok) {
       for (const b of built.blocks) blockedInputs.push(b.code)
       continue
