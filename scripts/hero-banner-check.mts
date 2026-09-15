@@ -1493,9 +1493,23 @@ expect('와일드카드 host 를 쓰지 않는다 (hero)', HERO_BANNER_IMAGE_HOS
  *    (실제로 경로 제한을 지웠는데 통과하는 것을 변이 테스트로 확인했다.)
  *    그래서 env 를 실제로 채운 자식 프로세스에서 확인한다.
  */
-function heroUrlUnderEnv(publicUrl: string, key: string): string {
-  const probe = `import('./src/lib/hero-banner-image.ts').then(m=>console.log(JSON.stringify(m.heroBannerImageUrl(${JSON.stringify(key)}))))`
-  const r = spawnSync('npx', ['tsx', '-e', probe], {
+/**
+ * 🔴 `npx tsx` 를 쓰지 않는다. CI 에서 아무것도 출력하지 않아
+ *    15건이 통째로 PARSE_FAIL 로 떨어졌다(run 34920042324) —
+ *    npx 가 실행 파일을 찾는 방식이 로컬과 CI 에서 달랐다.
+ *    npm ci 가 반드시 놓아 두는 저장소 안 바이너리를 직접 가리킨다.
+ *
+ * 🔴 실패하면 stderr 를 함께 돌려준다. 빈 PARSE_FAIL() 만 남으면
+ *    무엇이 잘못됐는지 로그만 보고는 알 수 없다 — 실제로 그래서 한 번 헤맸다.
+ */
+/**
+ * 🔴 `node_modules/.bin/tsx` 는 `#!/usr/bin/env node` shim 이라 PATH 에 node 가 있어야 돈다.
+ *    지금 돌고 있는 node 실행 파일로 CLI 를 직접 부르면 PATH 에 기대지 않는다.
+ */
+const TSX_CLI = join(ROOT, 'node_modules/tsx/dist/cli.mjs')
+
+function evalUnderEnv(publicUrl: string, probe: string): string {
+  const r = spawnSync(process.execPath, [TSX_CLI, '-e', probe], {
     cwd: ROOT,
     env: { ...process.env, NEXT_PUBLIC_R2_PUBLIC_URL: publicUrl },
     encoding: 'utf8',
@@ -1504,8 +1518,23 @@ function heroUrlUnderEnv(publicUrl: string, key: string): string {
   try {
     return JSON.parse(line) as string
   } catch {
-    return `PARSE_FAIL(${line.slice(0, 60)})`
+    const why = (r.error && r.error.message) || (r.stderr || '').trim().split('\n').pop() || `exit ${r.status}`
+    return `PARSE_FAIL(out=${JSON.stringify(line.slice(0, 40))} err=${why.slice(0, 80)})`
   }
+}
+
+function urlUnderEnv(publicUrl: string, key: string): string {
+  return evalUnderEnv(
+    publicUrl,
+    `import('./src/lib/r2-public.ts').then(m=>console.log(JSON.stringify(m.publicUrlFromKey(${JSON.stringify(key)}))))`,
+  )
+}
+
+function heroUrlUnderEnv(publicUrl: string, key: string): string {
+  return evalUnderEnv(
+    publicUrl,
+    `import('./src/lib/hero-banner-image.ts').then(m=>console.log(JSON.stringify(m.heroBannerImageUrl(${JSON.stringify(key)}))))`,
+  )
 }
 
 for (const [label, origin] of [['옛 host', OLD_ORIGIN], ['새 host', NEW_ORIGIN]] as const) {
@@ -1536,22 +1565,19 @@ expect(
 console.log('\n── env 별 URL 생성 (자식 프로세스)')
 
 /**
+ * 🔴 자식 실행기가 살아 있는지 먼저 본다.
+ *    이 줄이 없으면 실행기가 통째로 죽었을 때도 "null 을 기대한" 검사들이
+ *    우연히 통과해 버린다 — 검사가 있는 척만 하게 된다.
+ */
+expect(
+  '자식 프로세스 실행기가 동작한다',
+  evalUnderEnv('https://img.soransoran.com', "console.log(JSON.stringify('PROBE_OK'))"),
+  'PROBE_OK',
+)
+
+/**
  * 🔴 읽기는 둘, 쓰기는 하나. 새 URL 은 env 가 가리키는 한 곳으로만 만든다.
  */
-function urlUnderEnv(publicUrl: string, key: string): string {
-  const probe = `import('./src/lib/r2-public.ts').then(m=>console.log(JSON.stringify(m.publicUrlFromKey(${JSON.stringify(key)}))))`
-  const r = spawnSync('npx', ['tsx', '-e', probe], {
-    cwd: ROOT,
-    env: { ...process.env, NEXT_PUBLIC_R2_PUBLIC_URL: publicUrl },
-    encoding: 'utf8',
-  })
-  const line = (r.stdout || '').trim().split('\n').pop() ?? ''
-  try {
-    return JSON.parse(line) as string
-  } catch {
-    return `PARSE_FAIL(${line.slice(0, 60)})`
-  }
-}
 
 const HERO_KEY = 'hero-banners/2026/aaa-mobile.webp'
 const POST_KEY = 'posts/cmtabc/11111111-2222-3333-4444-555555555555.webp'
