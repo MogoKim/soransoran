@@ -60,7 +60,22 @@ import {
   type HeroBannerOrderInput,
 } from '../src/lib/hero-banner-rules'
 import { HERO_BANNER_IMAGE_HOSTS, HERO_BANNER_IMAGE_PATH_PREFIX, heroBannerImageUrl } from '../src/lib/hero-banner-image'
-import { ALLOWED_PUBLIC_ORIGINS, isOwnPublicUrl, publicUrlFromKey, toR2Key } from '../src/lib/r2-public'
+import {
+  ALLOWED_PUBLIC_ORIGINS,
+  isOwnPublicUrl,
+  primaryPublicOrigin,
+  publicUrlFromKey,
+  toR2Key,
+} from '../src/lib/r2-public'
+/**
+ * 🔴 post-html 은 `server-only` 를 부른다. 그 패키지는 설치돼 있지 않고
+ *    Next 가 빌드 때 이어 준다 — 그래서 평범한 스크립트에서 import 하면 죽는다.
+ *    tsconfig.ops.json 이 그것을 빈 파일로 이어 준다(scripts/lib/server-only-shim.ts).
+ *    앱이 보는 tsconfig.json 은 건드리지 않았다. 그쪽에 넣으면 진짜 가드가 꺼진다.
+ *    그래서 이 스크립트는 `tsx --tsconfig tsconfig.ops.json` 으로 돈다(package.json).
+ */
+import { sanitizePostHtml } from '../src/lib/post-html'
+import { extractOwnImageKeys, firstImageUrl } from '../src/lib/post-media'
 import { safeHttpsUrl, safeInternalPath } from '../src/lib/url-policy'
 
 let pass = 0
@@ -1884,6 +1899,193 @@ function typeContracts(): void {
   resolveHeroBannerScheduleInput({ startsAt: '2026-09-20T14:00' })
 }
 void typeContracts
+
+
+console.log('\n── primary env 는 허용 origin 과 정확히 같아야 한다')
+
+/**
+ * 🔴 여기서 막지 못하면 **글은 저장되는데 사진만 안 뜨는** 상태가 된다.
+ *    origin 만 견주면 경로·query·fragment·userinfo 가 붙은 값이 전부 통과하고,
+ *    그 값으로 `${env}/${key}` 를 이으면 객체가 없는 주소가 DB 에 박힌다.
+ *    본문에 한 번 저장되면 나중에 되돌릴 근거가 없다.
+ */
+const BAD_PRIMARY_ENVS: readonly (readonly [string, string])[] = [
+  ['경로가 붙은 값', `${NEW_ORIGIN}/thumbs`],
+  ['경로 한 칸', `${NEW_ORIGIN}/`.replace(/\/$/, '/a')],
+  ['옛 host 에 경로', `${OLD_ORIGIN}/x`],
+  ['query', `${NEW_ORIGIN}?x=1`],
+  ['옛 host 에 query', `${OLD_ORIGIN}?a=1`],
+  ['fragment', `${NEW_ORIGIN}#a`],
+  ['userinfo', 'https://u:p@img.soransoran.com'],
+  ['다른 port', 'https://img.soransoran.com:8443'],
+  ['기본 port 를 적은 값', 'https://img.soransoran.com:443'],
+  ['http', 'http://img.soransoran.com'],
+  ['닮은 호스트(접두)', 'https://evil-img.soransoran.com'],
+  ['닮은 호스트(접미)', 'https://img.soransoran.com.evil.io'],
+  ['목록 밖 host', 'https://evil.example.com'],
+  ['주소가 아닌 값', 'img.soransoran.com'],
+  ['빈 값', ''],
+  ['공백만', '   '],
+]
+
+for (const [why, value] of BAD_PRIMARY_ENVS) {
+  expect(`잘못된 env(${why}) → primary 없음`, withPublicUrl(value, () => primaryPublicOrigin()), null)
+  expect(`잘못된 env(${why}) → URL 을 만들지 않는다`, withPublicUrl(value, () => publicUrlFromKey(POST_KEY)), null)
+}
+
+for (const [why, value, want] of [
+  ['옛 host', OLD_ORIGIN, OLD_ORIGIN],
+  ['새 host', NEW_ORIGIN, NEW_ORIGIN],
+  ['끝 슬래시 하나', `${OLD_ORIGIN}/`, OLD_ORIGIN],
+  ['끝 슬래시 셋', `${NEW_ORIGIN}///`, NEW_ORIGIN],
+  ['앞뒤 공백', `  ${NEW_ORIGIN}  `, NEW_ORIGIN],
+] as const) {
+  expect(`정상 env(${why}) → primary 있음`, withPublicUrl(value, () => primaryPublicOrigin()), want)
+  expect(`정상 env(${why}) → URL 을 만든다`, withPublicUrl(value, () => publicUrlFromKey(POST_KEY)), `${want}/${POST_KEY}`)
+}
+
+console.log('\n── 회원 업로드도 어드민과 같은 정본을 쓴다')
+
+/**
+ * 🔴 전에는 r2.ts 가 env 를 따로 읽어 `${PUBLIC_URL}/${key}` 를 이어 붙였다.
+ *    그래서 어드민 배너는 검증을 지난 주소를, 회원 사진은 지나지 않은 주소를 받았다.
+ *    같은 bucket 에 규칙이 둘이면 언제나 한쪽만 고쳐진다.
+ */
+const R2_SRC = readFileSync(join(ROOT, 'src/lib/r2.ts'), 'utf8')
+const URL_CALC_AT = R2_SRC.indexOf('const url = publicUrlFromKey(key)')
+const PUT_AT = R2_SRC.indexOf('new PutObjectCommand')
+
+expect('r2.ts 가 공개 env 를 따로 읽지 않는다', /NEXT_PUBLIC_R2_PUBLIC_URL/.test(R2_SRC), false)
+expect('r2.ts 가 주소를 문자열로 잇지 않는다', /url: `\$\{[A-Za-z_$]+\}\/\$\{key\}`/.test(R2_SRC), false)
+expect('r2.ts 가 publicUrlFromKey 로 주소를 만든다', URL_CALC_AT >= 0, true)
+expect('r2.ts 에 PutObjectCommand 가 있다', PUT_AT >= 0, true)
+// 🔴 두 문자열이 모두 있을 때만 의미가 있다 — 위 두 줄이 그것을 먼저 못 박는다.
+expect('주소 계산이 PutObjectCommand 보다 앞선다', URL_CALC_AT >= 0 && PUT_AT >= 0 && URL_CALC_AT < PUT_AT, true)
+expect('돌려주는 주소가 그 값이다', /return \{ key, url \}/.test(R2_SRC), true)
+
+const ADMIN_UPLOAD_SRC = readFileSync(join(ROOT, 'src/app/api/admin/hero-banners/upload/route.ts'), 'utf8')
+const MEMBER_UPLOAD_SRC = readFileSync(join(ROOT, 'src/app/api/uploads/route.ts'), 'utf8')
+expect('어드민 업로드가 publicUrlFromKey 를 쓴다', /publicUrlFromKey\(key\)/.test(ADMIN_UPLOAD_SRC), true)
+expect('회원 업로드가 uploadToR2 가 돌려준 주소를 쓴다', /url: stored\.url/.test(MEMBER_UPLOAD_SRC), true)
+expect('회원 업로드가 env 를 따로 읽지 않는다', /NEXT_PUBLIC_R2_PUBLIC_URL/.test(MEMBER_UPLOAD_SRC), false)
+
+/**
+ * 🔴 여기서부터는 r2.ts 를 **실제로 불러** 동작을 본다.
+ *    자격증명은 가짜다. 아래 검사는 전부 네트워크에 닿기 **전에** 끝나는 경로만 고른다 —
+ *    올라가는 경로를 부르면 CI 가 Cloudflare 로 진짜 요청을 보낸다.
+ */
+process.env.CLOUDFLARE_ACCOUNT_ID = 'check-only-account'
+process.env.CLOUDFLARE_R2_ACCESS_KEY = 'check-only-access'
+process.env.CLOUDFLARE_R2_SECRET_KEY = 'check-only-secret'
+process.env.CLOUDFLARE_R2_BUCKET = 'check-only-bucket'
+const r2 = await import('../src/lib/r2')
+
+expect('정상 env → 업로드가 켜진다', withPublicUrl(NEW_ORIGIN, () => r2.isR2Configured()), true)
+expect('옛 env 도 켜진다', withPublicUrl(OLD_ORIGIN, () => r2.isR2Configured()), true)
+for (const [why, value] of BAD_PRIMARY_ENVS) {
+  expect(`잘못된 env(${why}) → 업로드가 꺼진다`, withPublicUrl(value, () => r2.isR2Configured()), false)
+}
+
+/** env 를 잠깐 바꿔 끼우고 업로드를 부른다 — 던진 말을 돌려준다. */
+async function uploadOutcome(publicUrl: string, key: string): Promise<string> {
+  const before = process.env.NEXT_PUBLIC_R2_PUBLIC_URL
+  process.env.NEXT_PUBLIC_R2_PUBLIC_URL = publicUrl
+  try {
+    await r2.uploadToR2(Buffer.from('not-a-real-image'), key, 'image/webp')
+    return 'NO_THROW'
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  } finally {
+    if (before === undefined) delete process.env.NEXT_PUBLIC_R2_PUBLIC_URL
+    else process.env.NEXT_PUBLIC_R2_PUBLIC_URL = before
+  }
+}
+
+/**
+ * 🔴 이 두 줄이 "주소 계산이 먼저" 를 **동작으로** 증명한다.
+ *    PutObject 가 먼저 돌았다면 가짜 자격증명 때문에 AWS/네트워크 오류가 났을 것이다 —
+ *    우리 문구가 돌아온다는 것은 R2 에 닿기 전에 멈췄다는 뜻이다.
+ */
+expect('정상 env + 상위 경로 key → R2 에 쓰기 전에 멈춘다', await uploadOutcome(NEW_ORIGIN, 'posts/../evil.webp'), 'R2 공개 주소를 만들 수 없다')
+expect('정상 env + 앞 슬래시 key → R2 에 쓰기 전에 멈춘다', await uploadOutcome(OLD_ORIGIN, '/posts/a.webp'), 'R2 공개 주소를 만들 수 없다')
+expect('잘못된 env(경로 붙음) → 아예 미설정으로 멈춘다', await uploadOutcome(`${NEW_ORIGIN}/thumbs`, 'posts/a.webp'), 'R2 미설정')
+expect('잘못된 env(userinfo) → 아예 미설정으로 멈춘다', await uploadOutcome('https://u:p@img.soransoran.com', 'posts/a.webp'), 'R2 미설정')
+expect('잘못된 env(다른 port) → 아예 미설정으로 멈춘다', await uploadOutcome('https://img.soransoran.com:8443', 'posts/a.webp'), 'R2 미설정')
+expect('미설정 env → 아예 미설정으로 멈춘다', await uploadOutcome('', 'posts/a.webp'), 'R2 미설정')
+
+console.log('\n── 실제 sanitize 회귀 (저장된 글의 사진)')
+
+/**
+ * 🔴 소스 정규식이 아니라 **진짜 sanitizePostHtml 을 돌린다.**
+ *    이 PR 이 지키려는 것이 정확히 이 동작 하나다 —
+ *    허용 주소를 새 것 하나로 줄이면 exclusiveFilter 가 `<img>` 를 태그째 지우고,
+ *    그 글을 한 번 수정하는 순간 사진이 영구히 사라진다.
+ */
+const OLD_IMG = `${OLD_ORIGIN}/posts/cmtold/11111111-2222-3333-4444-555555555555.webp`
+const NEW_IMG = `${NEW_ORIGIN}/posts/cmtnew/66666666-7777-8888-9999-000000000000.webp`
+const imgTag = (src: string): string => `<img src="${src}" />`
+
+expect('옛 r2.dev 사진이 살아남는다', sanitizePostHtml(`<p>글자</p>${imgTag(OLD_IMG)}`).includes(OLD_IMG), true)
+expect('새 img 사진이 살아남는다', sanitizePostHtml(`<p>글자</p>${imgTag(NEW_IMG)}`).includes(NEW_IMG), true)
+
+const MIXED = sanitizePostHtml(`<p>앞</p>${imgTag(OLD_IMG)}<p>뒤</p>${imgTag(NEW_IMG)}`)
+expect('섞인 본문 — 옛 사진 보존', MIXED.includes(OLD_IMG), true)
+expect('섞인 본문 — 새 사진 보존', MIXED.includes(NEW_IMG), true)
+expect('섞인 본문 — 사진 두 장 그대로', (MIXED.match(/<img/g) ?? []).length, 2)
+expect('섞인 본문 — 글자도 그대로', MIXED.includes('앞') && MIXED.includes('뒤'), true)
+
+for (const [why, src] of [
+  ['외부 이미지', 'https://evil.example.com/a.webp'],
+  ['http', 'http://img.soransoran.com/posts/a.webp'],
+  ['닮은 호스트(접두)', 'https://evil-img.soransoran.com/posts/a.webp'],
+  ['닮은 호스트(접미)', 'https://img.soransoran.com.evil.io/posts/a.webp'],
+  ['다른 port', 'https://img.soransoran.com:8443/posts/a.webp'],
+  ['userinfo', 'https://u:p@img.soransoran.com/posts/a.webp'],
+  ['상대경로', '/posts/a.webp'],
+  ['blob', 'blob:https://soransoran.com/abcdef'],
+  ['data', 'data:image/webp;base64,AAAA'],
+] as const) {
+  const out = sanitizePostHtml(`<p>글자</p>${imgTag(src)}`)
+  expect(`${why} 사진은 태그째 사라진다`, /<img/.test(out), false)
+  expect(`${why} 를 지워도 글자는 남는다`, out.includes('글자'), true)
+}
+
+/**
+ * 🔴 전환의 핵심 — **새 주소로 배포한 뒤에도** 옛 주소가 박힌 옛 글이 살아야 한다.
+ *    반대 방향도 본다. 어느 쪽으로 배포돼 있든 저장된 본문은 그대로여야 한다.
+ */
+expect(
+  '새 env 로 배포해도 옛 URL 본문은 보존된다',
+  withPublicUrl(NEW_ORIGIN, () => sanitizePostHtml(`<p>글자</p>${imgTag(OLD_IMG)}`)).includes(OLD_IMG),
+  true,
+)
+expect(
+  '옛 env 로 배포해도 새 URL 본문은 보존된다',
+  withPublicUrl(OLD_ORIGIN, () => sanitizePostHtml(`<p>글자</p>${imgTag(NEW_IMG)}`)).includes(NEW_IMG),
+  true,
+)
+
+const BOTH_BODY = `<p>앞</p>${imgTag(OLD_IMG)}${imgTag(NEW_IMG)}`
+const OLD_IMG_KEY = 'posts/cmtold/11111111-2222-3333-4444-555555555555.webp'
+const NEW_IMG_KEY = 'posts/cmtnew/66666666-7777-8888-9999-000000000000.webp'
+
+for (const [label, origin] of [['옛 env', OLD_ORIGIN], ['새 env', NEW_ORIGIN]] as const) {
+  expect(`${label}: firstImageUrl 이 옛 주소를 대표로 살린다`, withPublicUrl(origin, () => firstImageUrl(BOTH_BODY)), OLD_IMG)
+  expect(`${label}: extractOwnImageKeys 가 두 주소를 모두 센다`, withPublicUrl(origin, () => extractOwnImageKeys(BOTH_BODY)), [
+    OLD_IMG_KEY,
+    NEW_IMG_KEY,
+  ])
+  expect(
+    `${label}: firstImageUrl 은 외부 사진을 대표로 세우지 않는다`,
+    withPublicUrl(origin, () => firstImageUrl(`${imgTag('https://evil.example.com/a.webp')}${imgTag(NEW_IMG)}`)),
+    NEW_IMG,
+  )
+  expect(
+    `${label}: extractOwnImageKeys 가 userinfo 주소를 세지 않는다`,
+    withPublicUrl(origin, () => extractOwnImageKeys(imgTag('https://u:p@img.soransoran.com/posts/a.webp'))),
+    [],
+  )
+}
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 process.exit(fail === 0 ? 0 : 1)

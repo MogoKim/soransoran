@@ -63,7 +63,7 @@ export async function POST(request: Request) {
   const { ok } = await requireAdmin()
   if (!ok) return bad('권한이 없습니다.', 403)
 
-  if (!isR2Configured) {
+  if (!isR2Configured()) {
     console.error('[hero-banner-upload] R2 환경변수가 채워지지 않았다 — 업로드를 받지 않는다')
     return bad('이미지 저장소가 아직 설정되지 않았습니다. 관리자에게 알려 주세요.', 503)
   }

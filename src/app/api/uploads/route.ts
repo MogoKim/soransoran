@@ -48,7 +48,7 @@ export async function POST(request: Request) {
   const userId = session?.user?.id
   if (!userId) return bad('로그인이 필요합니다.', 401)
 
-  if (!isR2Configured) {
+  if (!isR2Configured()) {
     console.error('[uploads] R2 환경변수가 채워지지 않았다 — 업로드를 받지 않는다')
     return bad(IMAGE_UPLOAD_OFF, 503)
   }

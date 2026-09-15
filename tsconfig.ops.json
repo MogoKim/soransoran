@@ -3,7 +3,11 @@
   "compilerOptions": {
     "noEmit": true,
     "incremental": false,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "server-only": ["./scripts/lib/server-only-shim.ts"]
+    }
   },
   "include": ["scripts/**/*.ts", "scripts/**/*.mts"],
   "exclude": ["node_modules"]

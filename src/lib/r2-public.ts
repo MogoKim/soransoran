@@ -45,31 +45,43 @@ export const ALLOWED_PUBLIC_ORIGINS = [
 ] as const
 
 /**
- * 새 URL 을 만들 때 쓰는 주소. 환경변수 하나가 정한다.
+ * 새 URL 을 만들 때 쓰는 **한 곳**. 환경변수가 고르되, 아무 값이나 받지 않는다.
  *
  * 🔴 허용 목록과 역할이 다르다. 목록은 "읽을 때 받아 주는 범위",
  *    이 값은 "쓸 때 고르는 한 곳" 이다. 전환 스위치가 여기다.
  *
+ * 🔴 끝의 `/` 만 정리한 뒤 허용 목록과 **문자열이 정확히 같아야** 유효하다.
+ *    만든 URL 의 origin 만 되보는 것으로는 부족하다 — 다음이 전부 새어 든다.
+ *      · https://img.soransoran.com/thumbs    경로가 붙은 값
+ *      · https://img.soransoran.com?x=1       query
+ *      · https://img.soransoran.com#a         fragment
+ *      · https://u:p@img.soransoran.com       userinfo
+ *    앞의 넷은 **origin 이 같아서** 통과해 버린다. 그 값으로 `${env}/${key}` 를
+ *    이으면 `…/thumbs/posts/a.webp` 나 `…?x=1/posts/a.webp` 처럼
+ *    객체가 없는 주소가 DB 에 남는다 — 글은 저장되는데 사진만 안 뜬다.
+ *    userinfo 는 자격증명을 URL 에 실어 본문·로그·공유 카드로 흘린다.
+ *    다른 port · http · 닮은 호스트 · 목록 밖 호스트도 같은 자리에서 걸린다.
+ *
+ * 🔴 fail closed. 오타 하나면 주소를 만들지 않는다 —
+ *    잘못된 주소를 DB 에 남기는 것보다 업로드가 멈추는 편이 낫다.
+ *
  * 🔴 **부를 때마다 읽는다. 모듈을 읽어 들이는 순간에 붙잡아 두지 않는다.**
- *    NEXT_PUBLIC_ 값은 브라우저 번들에서 빌드 때 이 자리에 글자로 박히므로
- *    함수 안에 두어도 브라우저 동작은 같다. 대신 서버에서는 env 를 바꿔 끼운
- *    그대로 즉시 반영되고, 그래서 검증 스크립트가 **한 프로세스 안에서**
- *    전환 전/후를 모두 시험할 수 있다.
- *    (붙잡아 두던 때에는 자식 프로세스를 띄워야 했고, 그 실행기가
- *     Node 20 CI 에서 통째로 죽어 15건이 한꺼번에 떨어졌다 — run 34920299500.)
+ *
+ *    🔴 이것은 운영 중 스위치가 아니다. NEXT_PUBLIC_ 값은 배포된 번들에
+ *       **빌드 시점에 글자로 박힌다.** 주소를 바꾸려면 env 를 바꾸고
+ *       다시 배포해야 한다 — 돌고 있는 production 이 즉시 따라오지 않는다.
+ *
+ *    부를 때마다 읽는 이유는 하나다. 검증 스크립트가 두 빌드 설정
+ *    (옛 주소로 빌드한 것 · 새 주소로 빌드한 것)의 동작을 한 프로세스 안에서
+ *    확인할 수 있게 하려는 것이다. 붙잡아 두던 때에는 자식 프로세스를 띄워야 했고,
+ *    그 실행기가 Node 20 CI 에서 통째로 죽어 15건이 한꺼번에 떨어졌다
+ *    (run 34920299500). env 교체는 **검사용 장치**이지 운영 스위치가 아니다.
  */
-function publicBase(): string {
-  return (process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? '').trim().replace(/\/+$/, '')
-}
-
-/** 미설정이면 주소를 만들지 않는다 — 열어 두는 쪽이 훨씬 위험하다. */
-function publicOrigin(base: string): string | null {
-  if (!base) return null
-  try {
-    return new URL(base).origin
-  } catch {
-    return null
-  }
+export function primaryPublicOrigin(): string | null {
+  const raw = (process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? '').trim().replace(/\/+$/, '')
+  if (!raw) return null
+  const allowed: readonly string[] = ALLOWED_PUBLIC_ORIGINS
+  return allowed.includes(raw) ? raw : null
 }
 
 /**
@@ -83,6 +95,9 @@ function publicOrigin(base: string): string | null {
  * 🔴 허용 목록과 **정확히 일치**할 때만 통과시킨다. 부분 문자열·접미사 비교를 쓰면
  *    `img.soransoran.com.evil.io` 나 `evil-img.soransoran.com` 이 새어 들어온다.
  *
+ * 🔴 userinfo(`https://u:p@…`)를 따로 막는다. origin 이 그것을 지워 버리기 때문에
+ *    origin 비교만으로는 잡히지 않는다.
+ *
  * 🔴 이 판정은 **환경변수를 보지 않는다.** env 가 어느 쪽을 가리키든
  *    이미 저장된 두 주소를 모두 읽을 수 있어야 하기 때문이다.
  */
@@ -90,6 +105,11 @@ export function isOwnPublicUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
     if (parsed.protocol !== 'https:') return false
+    // 🔴 origin 은 userinfo 를 **벗겨 낸다.** 그래서 이 줄이 없으면
+    //    `https://u:p@img.soransoran.com/posts/a.webp` 가 우리 주소로 통과하고,
+    //    그 <img> 가 본문에 남아 글을 여는 사람마다 자격증명을 우리 도메인으로
+    //    실어 보낸다. origin 을 견주기 전에 막는다.
+    if (parsed.username || parsed.password) return false
     const allowed: readonly string[] = ALLOWED_PUBLIC_ORIGINS
     return allowed.includes(parsed.origin)
   } catch {
@@ -114,13 +134,15 @@ export function isOwnPublicUrl(url: string): boolean {
  *    origin 밖을 가리킬 수 있다 — 그런 key 로는 주소를 만들지 않는다.
  */
 export function publicUrlFromKey(key: string | null | undefined): string | null {
-  const base = publicBase()
-  if (!base || !publicOrigin(base) || !key) return null
+  const origin = primaryPublicOrigin()
+  if (!origin || !key) return null
   const trimmed = key.trim()
   if (trimmed !== key) return null
   if (trimmed === '' || trimmed.startsWith('/') || trimmed.includes('\\')) return null
   if (trimmed.includes('..') || trimmed.includes('?') || trimmed.includes('#')) return null
-  const url = `${base}/${trimmed}`
+  const url = `${origin}/${trimmed}`
+  // 🔴 만든 주소를 한 번 더 견준다. primaryPublicOrigin 이 이미 걸렀지만,
+  //    둘 중 하나를 고치는 사람이 나머지 한 겹을 함께 보게 된다.
   return isOwnPublicUrl(url) ? url : null
 }
 
