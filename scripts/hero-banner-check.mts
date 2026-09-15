@@ -28,7 +28,6 @@
  * 종료 코드: FAIL 이 있으면 1
  */
 import { readFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import {
   HERO_BANNER_ALLOWED_MIME_TYPES,
@@ -61,7 +60,7 @@ import {
   type HeroBannerOrderInput,
 } from '../src/lib/hero-banner-rules'
 import { HERO_BANNER_IMAGE_HOSTS, HERO_BANNER_IMAGE_PATH_PREFIX, heroBannerImageUrl } from '../src/lib/hero-banner-image'
-import { ALLOWED_PUBLIC_ORIGINS, isOwnPublicUrl, toR2Key } from '../src/lib/r2-public'
+import { ALLOWED_PUBLIC_ORIGINS, isOwnPublicUrl, publicUrlFromKey, toR2Key } from '../src/lib/r2-public'
 import { safeHttpsUrl, safeInternalPath } from '../src/lib/url-policy'
 
 let pass = 0
@@ -1414,9 +1413,9 @@ for (const key of [
  *    본문에는 옛 r2.dev 절대 URL 이 박혀 있고, 허용 주소를 새 것 하나로 바꾸면
  *    sanitize 가 `<img>` 를 태그째 지우고 thumbnailUrl 까지 비운다.
  *
- * 🔴 env 에 따라 달라지는 동작(publicUrlFromKey)은 **자식 프로세스**로 확인한다.
- *    모듈이 로드 시점에 환경변수를 읽으므로, 같은 프로세스 안에서는
- *    두 상태를 함께 볼 수 없다 — 그것을 피하려고 env 를 바꿔 tsx 를 다시 띄운다.
+ * 🔴 env 에 따라 달라지는 동작(publicUrlFromKey)은 env 를 잠깐 바꿔 끼워 확인한다.
+ *    r2-public 이 **부를 때마다** 환경변수를 읽으므로 한 프로세스 안에서
+ *    전환 전/후를 모두 볼 수 있다(withPublicUrl).
  */
 const OLD_ORIGIN = 'https://pub-a1dbda7462b84a98a36e29bd46ca7434.r2.dev'
 const NEW_ORIGIN = 'https://img.soransoran.com'
@@ -1491,50 +1490,38 @@ expect('와일드카드 host 를 쓰지 않는다 (hero)', HERO_BANNER_IMAGE_HOS
  *    그래서 env 가 비어 있는 CI 에서는 **무엇을 넣어도 null** 이다 —
  *    그 상태에서 "posts/ 는 null 이다" 를 확인하면 아무것도 검사하지 않는 셈이다.
  *    (실제로 경로 제한을 지웠는데 통과하는 것을 변이 테스트로 확인했다.)
- *    그래서 env 를 실제로 채운 자식 프로세스에서 확인한다.
+ *    그래서 env 를 실제로 채운 상태에서 확인한다(withPublicUrl).
  */
 /**
- * 🔴 `npx tsx` 를 쓰지 않는다. CI 에서 아무것도 출력하지 않아
- *    15건이 통째로 PARSE_FAIL 로 떨어졌다(run 34920042324) —
- *    npx 가 실행 파일을 찾는 방식이 로컬과 CI 에서 달랐다.
- *    npm ci 가 반드시 놓아 두는 저장소 안 바이너리를 직접 가리킨다.
+ * env 를 잠깐 바꿔 끼우고 한 번 부른 뒤 되돌린다.
  *
- * 🔴 실패하면 stderr 를 함께 돌려준다. 빈 PARSE_FAIL() 만 남으면
- *    무엇이 잘못됐는지 로그만 보고는 알 수 없다 — 실제로 그래서 한 번 헤맸다.
+ * 🔴 자식 프로세스를 띄우지 않는다. 전에는 r2-public 이 모듈을 읽어 들이는
+ *    순간에 env 를 붙잡아 두어서, 값을 바꿔 시험하려면 새 프로세스가 필요했다.
+ *    그 실행기(`tsx -e`)가 Node 20 CI 에서 통째로 죽어 15건이 한꺼번에
+ *    떨어졌다(run 34920299500 · 로컬 Node 24 에서는 재현되지 않았다).
+ *    이제 r2-public 이 부를 때마다 읽으므로 같은 프로세스에서 시험한다 —
+ *    실행기·PATH·Node 판본에 기대는 구석이 없다.
+ *
+ * 🔴 try/finally 로 반드시 되돌린다. 하나가 새면 뒤따르는 검사가
+ *    엉뚱한 env 위에서 돌아 조용히 틀린 답을 내놓는다.
  */
-/**
- * 🔴 `node_modules/.bin/tsx` 는 `#!/usr/bin/env node` shim 이라 PATH 에 node 가 있어야 돈다.
- *    지금 돌고 있는 node 실행 파일로 CLI 를 직접 부르면 PATH 에 기대지 않는다.
- */
-const TSX_CLI = join(ROOT, 'node_modules/tsx/dist/cli.mjs')
-
-function evalUnderEnv(publicUrl: string, probe: string): string {
-  const r = spawnSync(process.execPath, [TSX_CLI, '-e', probe], {
-    cwd: ROOT,
-    env: { ...process.env, NEXT_PUBLIC_R2_PUBLIC_URL: publicUrl },
-    encoding: 'utf8',
-  })
-  const line = (r.stdout || '').trim().split('\n').pop() ?? ''
+function withPublicUrl<T>(publicUrl: string, run: () => T): T {
+  const before = process.env.NEXT_PUBLIC_R2_PUBLIC_URL
+  process.env.NEXT_PUBLIC_R2_PUBLIC_URL = publicUrl
   try {
-    return JSON.parse(line) as string
-  } catch {
-    const why = (r.error && r.error.message) || (r.stderr || '').trim().split('\n').pop() || `exit ${r.status}`
-    return `PARSE_FAIL(out=${JSON.stringify(line.slice(0, 40))} err=${why.slice(0, 80)})`
+    return run()
+  } finally {
+    if (before === undefined) delete process.env.NEXT_PUBLIC_R2_PUBLIC_URL
+    else process.env.NEXT_PUBLIC_R2_PUBLIC_URL = before
   }
 }
 
-function urlUnderEnv(publicUrl: string, key: string): string {
-  return evalUnderEnv(
-    publicUrl,
-    `import('./src/lib/r2-public.ts').then(m=>console.log(JSON.stringify(m.publicUrlFromKey(${JSON.stringify(key)}))))`,
-  )
+function urlUnderEnv(publicUrl: string, key: string): string | null {
+  return withPublicUrl(publicUrl, () => publicUrlFromKey(key))
 }
 
-function heroUrlUnderEnv(publicUrl: string, key: string): string {
-  return evalUnderEnv(
-    publicUrl,
-    `import('./src/lib/hero-banner-image.ts').then(m=>console.log(JSON.stringify(m.heroBannerImageUrl(${JSON.stringify(key)}))))`,
-  )
+function heroUrlUnderEnv(publicUrl: string, key: string): string | null {
+  return withPublicUrl(publicUrl, () => heroBannerImageUrl(key))
 }
 
 for (const [label, origin] of [['옛 host', OLD_ORIGIN], ['새 host', NEW_ORIGIN]] as const) {
@@ -1562,17 +1549,19 @@ expect(
   true,
 )
 
-console.log('\n── env 별 URL 생성 (자식 프로세스)')
+console.log('\n── env 별 URL 생성')
 
 /**
- * 🔴 자식 실행기가 살아 있는지 먼저 본다.
- *    이 줄이 없으면 실행기가 통째로 죽었을 때도 "null 을 기대한" 검사들이
- *    우연히 통과해 버린다 — 검사가 있는 척만 하게 된다.
+ * 🔴 env 교체가 **실제로 결과를 바꾸는지** 먼저 못 박는다.
+ *    r2-public 이 다시 모듈 로드 시점에 값을 붙잡아 두면 여기서 걸린다 —
+ *    그렇지 않으면 뒤따르는 "null 을 기대한" 검사들이 우연히 통과해
+ *    검사가 있는 척만 하게 된다.
  */
 expect(
-  '자식 프로세스 실행기가 동작한다',
-  evalUnderEnv('https://img.soransoran.com', "console.log(JSON.stringify('PROBE_OK'))"),
-  'PROBE_OK',
+  'env 교체가 결과를 바꾼다 (모듈 로드 때 붙잡아 두지 않는다)',
+  withPublicUrl(OLD_ORIGIN, () => publicUrlFromKey('hero-banners/2026/probe.webp')) !==
+    withPublicUrl(NEW_ORIGIN, () => publicUrlFromKey('hero-banners/2026/probe.webp')),
+  true,
 )
 
 /**

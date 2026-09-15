@@ -49,20 +49,28 @@ export const ALLOWED_PUBLIC_ORIGINS = [
  *
  * 🔴 허용 목록과 역할이 다르다. 목록은 "읽을 때 받아 주는 범위",
  *    이 값은 "쓸 때 고르는 한 곳" 이다. 전환 스위치가 여기다.
+ *
+ * 🔴 **부를 때마다 읽는다. 모듈을 읽어 들이는 순간에 붙잡아 두지 않는다.**
+ *    NEXT_PUBLIC_ 값은 브라우저 번들에서 빌드 때 이 자리에 글자로 박히므로
+ *    함수 안에 두어도 브라우저 동작은 같다. 대신 서버에서는 env 를 바꿔 끼운
+ *    그대로 즉시 반영되고, 그래서 검증 스크립트가 **한 프로세스 안에서**
+ *    전환 전/후를 모두 시험할 수 있다.
+ *    (붙잡아 두던 때에는 자식 프로세스를 띄워야 했고, 그 실행기가
+ *     Node 20 CI 에서 통째로 죽어 15건이 한꺼번에 떨어졌다 — run 34920299500.)
  */
-const PUBLIC_URL = (process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? '').trim().replace(/\/+$/, '')
+function publicBase(): string {
+  return (process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? '').trim().replace(/\/+$/, '')
+}
 
 /** 미설정이면 주소를 만들지 않는다 — 열어 두는 쪽이 훨씬 위험하다. */
-function publicOrigin(): string | null {
-  if (!PUBLIC_URL) return null
+function publicOrigin(base: string): string | null {
+  if (!base) return null
   try {
-    return new URL(PUBLIC_URL).origin
+    return new URL(base).origin
   } catch {
     return null
   }
 }
-
-const ORIGIN = publicOrigin()
 
 /**
  * 우리 R2 의 공개 주소인가.
@@ -106,12 +114,13 @@ export function isOwnPublicUrl(url: string): boolean {
  *    origin 밖을 가리킬 수 있다 — 그런 key 로는 주소를 만들지 않는다.
  */
 export function publicUrlFromKey(key: string | null | undefined): string | null {
-  if (!PUBLIC_URL || !ORIGIN || !key) return null
+  const base = publicBase()
+  if (!base || !publicOrigin(base) || !key) return null
   const trimmed = key.trim()
   if (trimmed !== key) return null
   if (trimmed === '' || trimmed.startsWith('/') || trimmed.includes('\\')) return null
   if (trimmed.includes('..') || trimmed.includes('?') || trimmed.includes('#')) return null
-  const url = `${PUBLIC_URL}/${trimmed}`
+  const url = `${base}/${trimmed}`
   return isOwnPublicUrl(url) ? url : null
 }
 
