@@ -1871,6 +1871,59 @@ expect(
   false,
 )
 
+
+const GIT = await import('./lib/magazine-auto-git.mjs')
+const OUT = await import('./lib/magazine-outstanding.mjs')
+console.log('\n══════ 복귀 — 🔴 빈 자동 브랜치가 다음 회차를 막지 않는다')
+/**
+ * 🔴 **2026-09-16 supervised 실측에서 나온 결함.**
+ *
+ *    후보가 전부 QA 에 막히면 register 가 아무것도 쓰지 않는다. 그런데 PR 브랜치는
+ *    register **앞에서** 만들어지므로 커밋 0건 브랜치가 남고, 다음 회차의
+ *    `judgeOutstanding` 이 그것을 `ORPHAN_LOCAL_BRANCH`(FAILURE)로 본다 —
+ *    **"오늘 통과한 후보가 없다" 는 정상 결과가 다음 날 회차를 막는다.**
+ */
+const AUTO_B = `${MG.AUTO_BRANCH_PREFIX}2026-09-16-205620`
+const gitFake = ({ branch, ahead, delOk = true }) => {
+  const seen = []
+  const exec = (cmd, args) => {
+    seen.push([cmd, ...args].join(' '))
+    const a = args.join(' ')
+    if (a === 'rev-parse --abbrev-ref HEAD') return { code: 0, out: seen.filter((s) => s === 'git switch main').length > 0 ? 'main' : branch, err: '' }
+    if (a.startsWith('status --porcelain')) return { code: 0, out: '', err: '' }
+    if (a === 'switch main') return { code: 0, out: '', err: '' }
+    if (a.startsWith('rev-list --count')) return { code: 0, out: String(ahead), err: '' }
+    if (a.startsWith('branch -D')) return { code: delOk ? 0 : 1, out: '', err: delOk ? '' : '실패' }
+    return { code: 0, out: '', err: '' }
+  }
+  return { exec, seen }
+}
+
+const g1 = gitFake({ branch: AUTO_B, ahead: 0 })
+const r1 = GIT.returnToMain({ exec: g1.exec })
+expect('🔴 커밋 0건인 자동 브랜치는 지운다', r1.code, 'RETURNED_EMPTY_CLEANED')
+expect('🔴 실제로 지우는 명령을 부른다', g1.seen.some((s) => s === `git branch -D ${AUTO_B}`), true)
+expect('회차 판정은 성공 그대로다', r1.ok, true)
+
+const g2 = gitFake({ branch: AUTO_B, ahead: 2 })
+const r2 = GIT.returnToMain({ exec: g2.exec })
+expect('🔴 커밋이 있으면 남긴다 — 원고가 그 안에 있을 수 있다', r2.code, 'RETURNED')
+expect('🔴 지우지 않는다', g2.seen.some((s) => s.startsWith('git branch -D')), false)
+
+const g3 = gitFake({ branch: 'feat/사람이-만든-브랜치', ahead: 0 })
+const r3 = GIT.returnToMain({ exec: g3.exec })
+expect('🔴 자동 레인 브랜치가 아니면 건드리지 않는다', g3.seen.some((s) => s.startsWith('git branch -D')), false)
+expect('그래도 복귀는 한다', r3.ok, true)
+
+const g4 = gitFake({ branch: AUTO_B, ahead: 0, delOk: false })
+const r4 = GIT.returnToMain({ exec: g4.exec })
+expect('🔴 못 지워도 회차를 실패로 만들지 않는다', r4.ok, true)
+expect('🔴 다음 회차가 막힐 수 있다고 적는다', r4.message.includes('막힐 수 있다'), true)
+
+// 🔴 접두가 한 벌인가 — 갈라지면 자기가 만든 브랜치를 자기가 못 알아본다
+expect('branchName 이 자동 레인 접두를 쓴다', GIT.branchName(Date.parse('2026-09-17T01:00:00+09:00')).startsWith(MG.AUTO_BRANCH_PREFIX), true)
+expect('그 이름을 isAutoBranch 가 알아본다', OUT.isAutoBranch(GIT.branchName(Date.now())), true)
+
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')
 expect('fixture 가 추적돼 있다', existsSync(FIXTURE_DRAFT), true)
