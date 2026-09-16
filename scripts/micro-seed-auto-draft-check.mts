@@ -17,6 +17,7 @@ import {
   type DraftCandidate, type PickInput,
 } from '../src/lib/micro-seed-auto-draft'
 import { measureOriginality, judgeCopy, COPY_RUN_WORDS } from '../src/lib/draft-originality'
+import { parseAgeBand, judgeSelfAgeConflict } from '../src/lib/persona-self-age'
 import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 import {
   buildGenSystemPrompt, buildQualitySystemPrompt, retryDirective, callBudgetOf,
@@ -1747,6 +1748,306 @@ console.log('\n㉑ 🔴 나이·세대 관점 — 글쓴이 나이를 생성과 
   check('🔴 [계약] 최종 author 는 생성 말투와 이어진다 (voiceProvenance)',
     /voiceProvenance: voice\.provenanceFor\(a\.pick\.sourceArticleId\)/.test(runnerSrc)
     && /personaCode: c, comments: texts\.length/.test(runnerSrc))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정론 판정')
+// ─────────────────────────────────────────────────────────
+//
+//    2026-09-16 실측: 나이 검수 호출은 **자기 가족의 나이**만 물었다.
+//    그래서 `60대 초반` Persona 가 본문 첫 줄에 "40대 후반이고 …" 라고 쓴 초안과
+//    `50대 후반` Persona 가 "내가 서른 대 중반쯤 될 때" 라고 쓴 초안이
+//    gate PASS 로 큐까지 올라왔다. 화자 자신의 나이가 물음 밖이었다.
+{
+  // ── 밴드 파서 — 정본 문자열 그대로 읽는다 ──
+  check('🟢 [S] 밴드를 구간으로 읽는다', (() => {
+    const a1 = parseAgeBand('40대 후반')
+    const b1 = parseAgeBand('50대 초반')
+    const c1 = parseAgeBand('60대')
+    return a1?.from === 47 && a1.to === 49
+      && b1?.from === 50 && b1.to === 53
+      && c1?.from === 60 && c1.to === 69
+  })())
+  check('🔴 [S] 못 읽은 밴드는 null 이다 — 넓혀서 통과시키지 않는다',
+    parseAgeBand('') === null && parseAgeBand('알 수 없음') === null
+    && parseAgeBand(undefined) === null)
+
+  // ── 🔴 실측 결함 모양 — 차단되어야 한다 ──
+  check('🔴 [S] 밴드 밖의 자기 나이를 문장 첫머리에 말하면 막는다', (() => {
+    const v = judgeSelfAgeConflict({
+      ageBand: '60대 초반',
+      text: '40대 후반이고 더는 미룰 수 없을 것 같아서 결정했어요.\n\n여기에 더 적습니다.',
+    })
+    return v?.conflict === true && v.evidence.includes('40대 후반')
+  })())
+  check('🔴 [S] 1인칭 표지와 함께 말해도 막는다', (() => {
+    const v = judgeSelfAgeConflict({
+      ageBand: '50대 후반',
+      text: '내가 서른 대 중반쯤 될 때 일이에요. 그때는 그랬어요.',
+    })
+    return v?.conflict === true && v.evidence.includes('서른 대 중반')
+  })())
+  check('🔴 [S] 한글 수사로 말해도 막는다',
+    judgeSelfAgeConflict({ ageBand: '60대 초반', text: '저는 올해 마흔 둘이에요.' })?.conflict === true)
+
+  // ── 🟢 통과해야 하는 것 ──
+  check('🟢 [S] 밴드와 겹치는 자기 나이는 통과한다', (() => {
+    const a1 = judgeSelfAgeConflict({ ageBand: '40대 후반', text: '저는 40대 후반이고 요즘 이래요.' })
+    // 🔴 1인칭 표지가 명확할 때만 판정한다 — `올해` 만으로는 세지 않는다
+    const b1 = judgeSelfAgeConflict({ ageBand: '50대 초반', text: '올해 쉰 둘인 저는 아직도 그래요.' })
+    return a1?.conflict === false && b1?.conflict === false
+  })())
+  check('🔴 [S] bare `올해` 는 1인칭 표지가 아니다',
+    judgeSelfAgeConflict({ ageBand: '50대 초반', text: '올해 쉰 둘인데 아직도 그래요.' }) === null)
+  check('🟢 [S] 밴드 안쪽 어디인지까지 따지지 않는다 — 겹치면 통과',
+    judgeSelfAgeConflict({ ageBand: '50대', text: '저는 50대 후반이에요.' })?.conflict === false)
+
+  // ── 🔴 남의 나이를 자기 나이로 오판하지 않는다 ──
+  check('🔴 [S] 타인의 나이는 자기 나이로 세지 않는다', (() => {
+    const others = [
+      '주변 40대가 다들 그러더라고요.',
+      '30대 후배가 그런 얘기를 했어요.',
+      '우리 언니가 쉰 넷이에요.',
+      '같이 일하는 분이 50대 여자분인데 참 좋으세요.',
+      '조카가 스물 셋이래요.',
+      '아는 집 딸이 서른 하나라고 하네요.',
+      '제빵기사분은 30대 후반 여자분이고요.',
+    ]
+    return others.every((t) =>
+      judgeSelfAgeConflict({ ageBand: '60대 초반', text: t }) === null)
+  })())
+  // ── 🔴 알려진 실측 결함 2건 — 둘 다 잡아야 한다 ──
+  check('🔴 [S] 자기 나이와 가족 나이가 **같은 문장**에 와도 자기 나이를 잡는다',
+    judgeSelfAgeConflict({
+      ageBand: '50대 후반', text: '내가 서른 대 중반쯤 될 때 엄마는 예순이 넘었어요.',
+    })?.conflict === true)
+  check('🔴 [S] 1인칭 자기 나이 + 자녀 언급이 같은 문장이어도 잡는다',
+    judgeSelfAgeConflict({
+      ageBand: '60대 초반', text: '저는 40대 후반이고 딸은 대학생이에요.',
+    })?.conflict === true)
+
+  // ── 🔴 일반 진술을 자기 나이로 오판하지 않는다 ──
+  check('🔴 [S] "올해 40대 지원자가…" 는 자기 나이가 아니다',
+    judgeSelfAgeConflict({ ageBand: '60대 초반', text: '올해 40대 지원자가 많이 늘었어요.' }) === null)
+  check('🔴 [S] "40대 직장인이…" 는 자기 나이가 아니다',
+    judgeSelfAgeConflict({
+      ageBand: '60대 초반', text: '40대 직장인이 다시 취업할 때 고민이 많더라고요.',
+    }) === null)
+  // 🔴 저장된 후보 139건 재평가에서 **실제로 헛되이 막혔던** 2건 — 다시 막히면 FAIL
+  check('🔴 [S] 남을 두고 하는 짐작은 자기 나이가 아니다 — 전언·추측 표지', (() => {
+    const t = '동대문역 근처, 60대 일본 부부 저녁밥 어디서 할까요\n'
+      + '일본에서 친구 부부가 놀러 와요. 60대 초반 정도인 것 같은데 자주 한국 오는 분들이라더라고요.'
+    return judgeSelfAgeConflict({ ageBand: '50대 후반', text: t }) === null
+  })())
+  check('🔴 [S] 나이가 다른 서술의 주어면 자기 나이가 아니다', (() => {
+    const t = '결혼이 늦은 건가 빠른 건가 하는 생각\n'
+      + '내가 결혼할 때만 해도 20대 후반이 일반적이었는데\n지금은 확 밀려났다고들 하고'
+    return judgeSelfAgeConflict({ ageBand: '50대 초반', text: t }) === null
+  })())
+  // 🔴 두 가드를 **따로** 고정한다 — 하나만 지워도 FAIL 이어야 한다
+  // 🔴 서술은 확실한데 **전언 표지**가 있는 꼴 — 이 가드만 지워도 FAIL 이어야 한다
+  check('🔴 [S] 전언·추측 표지 하나만으로도 첫머리 규칙을 멈춘다',
+    judgeSelfAgeConflict({
+      ageBand: '40대 후반', text: '60대 초반이래요. 확실하진 않아요.',
+    }) === null)
+  check('🔴 [S] 줄 첫 절이 아니면 첫머리 규칙을 쓰지 않는다',
+    judgeSelfAgeConflict({
+      ageBand: '60대 초반', text: '어제 그 얘길 들었어요. 40대 후반이었어요.',
+    }) === null)
+
+  check('🔴 [S] 나이가 다른 명사를 꾸미면 세지 않는다', (() => {
+    const cases = ['50대 주부들이 많이 온대요.', '60대 어르신 대상 강의예요.', '30대 엄마들이 그러더라고요.']
+    return cases.every((t) => judgeSelfAgeConflict({ ageBand: '40대 후반', text: t }) === null)
+  })())
+
+  // ── 🔴 근사 표현(`쯤`·`무렵`·`께`·`정도`)은 1인칭 표지 없이 자기 나이의 근거가 못 된다 ──
+  check('🔴 [S] 대상 연령을 자기 나이로 읽지 않는다 — "40대 정도를 대상으로"',
+    judgeSelfAgeConflict({ ageBand: '60대 초반', text: '40대 정도를 대상으로 한 강의예요.' }) === null)
+  check('🔴 [S] "50대쯤 많이 찾는 상품" 은 자기 나이가 아니다',
+    judgeSelfAgeConflict({ ageBand: '60대 초반', text: '50대쯤 많이 찾는 상품이래요.' }) === null)
+  check('🔴 [S] 그래도 확실한 서술은 계속 잡는다 — "40대 후반이고"',
+    judgeSelfAgeConflict({
+      ageBand: '60대 초반', text: '40대 후반이고 더는 미룰 수 없었어요.',
+    })?.conflict === true)
+  check('🔴 [S] "50대 초반이라" 는 그 Persona 와 대조한다', (() => {
+    const t = '50대 초반이라 요즘 체력이 달라요.'
+    return judgeSelfAgeConflict({ ageBand: '50대 초반', text: t })?.conflict === false
+      && judgeSelfAgeConflict({ ageBand: '60대 초반', text: t })?.conflict === true
+  })())
+  // 🔴 1인칭 표지가 있으면 근사 표현도 근거가 된다 — 실측 결함이 이 모양이었다
+  check('🔴 [S] 1인칭 표지가 있으면 `쯤` 도 근거가 된다',
+    judgeSelfAgeConflict({
+      ageBand: '50대 후반', text: '내가 서른 대 중반쯤 될 때 엄마는 예순이 넘었어요.',
+    })?.conflict === true)
+
+  // ── 🔴 숫자로 정확히 밝힌 자기 나이 ──
+  check('🔴 [S] `48살` · `48세` · `만 48세` 를 자기 나이로 읽는다', (() => {
+    const cases = ['저는 올해 48살이에요.', '저는 만 48세예요.', '저는 48 세예요.', '제가 만48세입니다.']
+    return cases.every((t) => judgeSelfAgeConflict({ ageBand: '60대 초반', text: t })?.conflict === true)
+  })())
+  check('🟢 [S] 숫자 나이가 밴드와 겹치면 통과한다',
+    judgeSelfAgeConflict({ ageBand: '40대 후반', text: '저는 올해 48살이에요.' })?.conflict === false)
+  check('🔴 [S] 숫자 나이가 남의 것이면 세지 않는다', (() => {
+    const cases = ['48세 엄마가 그러시더라고요.', '만 48세인 지원자가 왔어요.',
+      '48세 대상 강의를 들었어요.', '주변에 48세 친구가 있어요.']
+    return cases.every((t) => judgeSelfAgeConflict({ ageBand: '60대 초반', text: t }) === null)
+  })())
+  // 🔴 저장된 후보 139건 재평가에서 숫자 나이 지원이 새로 만든 과잉 차단 — 다시 막히면 FAIL
+  check('🔴 [S] 시점 조사가 붙은 나이는 현재 나이가 아니다 — "22살부터"',
+    judgeSelfAgeConflict({
+      ageBand: '40대 후반', text: '22살부터 내가 챙기던 보험료였어요.',
+    }) === null)
+  check('🔴 [S] 과거 시점 나이를 현재 나이로 읽지 않는다', (() => {
+    const cases = ['저는 30살에 결혼했어요.', '제가 서른 둘 때 시작한 일이에요.', '48세까지는 몰랐어요.']
+    return cases.every((t) => judgeSelfAgeConflict({ ageBand: '60대 초반', text: t }) === null)
+  })())
+
+  check('🔴 [S] `48세대` 는 나이가 아니다',
+    judgeSelfAgeConflict({ ageBand: '60대 초반', text: '저는 48세대 아파트에 살아요.' }) === null)
+
+  // 🔴 여러 표현이 있으면 **먼저 나온 것**과 그 수식 대상으로 판정한다 — 정규식 종류 순서가 아니다
+  check('🔴 [S] 절 안에 표현이 여럿이면 먼저 나온 표현을 쓴다', (() => {
+    // 먼저 나온 `40대` 가 `지원자` 를 꾸민다 → 뒤의 `48살` 로 넘어가 억지로 잡지 않는다
+    const a1 = judgeSelfAgeConflict({ ageBand: '60대 초반', text: '40대 지원자가 48살이래요.' })
+    // 먼저 나온 것이 자기 나이면 그대로 잡는다
+    const b1 = judgeSelfAgeConflict({ ageBand: '60대 초반', text: '저는 48살이고 40대 지원자를 봤어요.' })
+    return a1 === null && b1?.conflict === true
+  })())
+  /**
+   * 🔴 **한 절에 두 표현이 있을 때** 정규식 종류 순서로 고르면 뒤엣것을 자기 나이로 읽는다.
+   *    `48살` 이 먼저 나왔으니 밴드와 겹쳐 **통과**여야 한다 — `60대` 를 잡으면 헛되이 막는다.
+   */
+  check('🔴 [S] 한 절에서도 등장 순서로 고른다 — 정규식 종류 순서가 아니다',
+    judgeSelfAgeConflict({
+      ageBand: '40대 후반', text: '저는 48살이라 60대 모임에 나가요.',
+    })?.conflict === false)
+  check('🔴 [S] 1인칭 표지가 있어도 `…인 <남>` 은 그 사람의 나이다',
+    judgeSelfAgeConflict({
+      ageBand: '60대 초반', text: '저는 만 48세인 지원자가 부러워요.',
+    }) === null)
+
+  check('🔴 [S] 모호하면 판정하지 않는다 — null (억지로 잡지 않는다)', (() => {
+    // 문장 첫머리도 아니고 1인칭 표지도 없다
+    const v = judgeSelfAgeConflict({
+      ageBand: '60대 초반', text: '그때 마침 40대 후반 무렵이었다고 하더라고요.',
+    })
+    return v === null
+  })())
+  check('🔴 [S] 자기 나이를 밝히지 않으면 null 이다',
+    judgeSelfAgeConflict({ ageBand: '50대 초반', text: '오늘 김치를 담갔어요. 맛있네요.' }) === null)
+  check('🔴 [S] 밴드를 모르면 판정하지 않는다',
+    judgeSelfAgeConflict({ ageBand: null, text: '저는 40대 후반이에요.' }) === null)
+  check('🔴 [S] `쉰 김치` 같은 말을 나이로 읽지 않는다',
+    judgeSelfAgeConflict({ ageBand: '60대 초반', text: '쉰 김치를 볶아 먹었어요.' }) === null)
+  check('🔴 [S] 근거는 글에 있는 문장 그대로다 — 지어내지 않는다', (() => {
+    const text = '50대 초반이라 아직은 괜찮아요.'
+    const v = judgeSelfAgeConflict({ ageBand: '60대 초반', text })
+    return v?.conflict === true && text.includes(v.evidence)
+  })())
+
+  // ── 🔴 생성·검수 프롬프트가 이 계약을 말한다 ──
+  check('🔴 [S] 생성 프롬프트가 자기 나이 계약을 적는다', (() => {
+    const g = buildGenSystemPrompt({
+      title: 'ㅇㅇ', bodyHead: 'ㅇㅇ',
+      persona: { code: 'PXX', ageBand: '50대 초반' } as never,
+    })
+    return /\*\*자기 나이를 직접 말할 때\*\*/.test(g) && g.includes('50대 초반')
+  })())
+  check('🔴 [S] 나이 검수 프롬프트가 자기 나이를 먼저 묻는다', (() => {
+    const a1 = buildAgeCheckSystemPrompt('50대 초반')
+    return /글쓴이가 자기 나이를 직접 말하는데/.test(a1)
+      && /\*\*남의 나이\*\*는 세지 않는다/.test(a1)
+  })())
+  check('🔴 [S] 검수 프롬프트가 자기 자녀 학령도 함께 본다', (() => {
+    const a1 = buildAgeCheckSystemPrompt('50대 초반')
+    return /자기 자녀의 학령/.test(a1) && /조카/.test(a1)
+  })())
+
+  // ── 🔴 기존 안전장치 회귀 ──
+  check('🔴 [S] 가족 상대 나이 검사는 그대로 있다', (() => {
+    const a1 = buildAgeCheckSystemPrompt('40대 후반')
+    return /자기 가족을 말하면서/.test(a1) && /언니 · 오빠 · 형 · 누나/.test(a1)
+  })())
+  check('🔴 [S] 사람 검수 안전장치가 그대로다',
+    MACHINE_AGE_HUMAN_REVIEW_REQUIRED === true)
+  /**
+   * 🔴 **배선 회귀** — 이 절을 지우면 캐시 hit 가 새 판정을 그대로 건너뛴다(2026-09-16 실측).
+   */
+  check('🔴 [S] 자기 나이 판정이 캐시 조회보다 **먼저** 온다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const guard = src.indexOf('const selfAge = persona?.ageBand == null')
+    const cacheGet = src.indexOf('const c = cache.get(k)')
+    return guard > 0 && cacheGet > 0 && guard < cacheGet
+  })())
+  check('🔴 [S] 충돌이면 품질·나이 provider 를 부르지 않고 끝낸다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const guard = src.indexOf('if (selfAge !== null && selfAge.conflict)')
+    const block = src.slice(guard, guard + 700)
+    return guard > 0 && /continue/.test(block) && !/callProvider|callJson/.test(block)
+  })())
+  check('🔴 [S] 충돌은 기존 lifeConflict 칸으로 나간다 — 새 축을 만들지 않는다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return /lifeConflict: \{ conflict: true, evidence: selfAge\.evidence \}/.test(src)
+  })())
+  check('🔴 [S] 판정 불가·비충돌이면 기존 품질·나이 경로를 그대로 탄다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const guard = src.indexOf('if (selfAge !== null && selfAge.conflict)')
+    const after = src.slice(guard)
+    // 🔴 가드 뒤에 캐시·품질 호출·나이 호출이 모두 남아 있어야 한다
+    return /const c = cache\.get\(k\)/.test(after)
+      && /buildQualitySystemPrompt\(persona\)/.test(after)
+      && /buildAgeCheckSystemPrompt\(persona\.ageBand\)/.test(after)
+  })())
+  /**
+   * 🔴 **운영 로그 분류** — `statusCount` 는 provider 응답 칸이고 `kindOf` 의 기본값이
+   *    `provider` 다. 로컬 결정론 판정을 거기 넣으면 부르지도 않은 호출이 응답 수로 잡힌다.
+   */
+  check('🔴 [S] `kindOf` 의 기본값은 여전히 provider 다 — 그래서 넣으면 안 된다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return /\? 'budget' : 'provider'/.test(src)
+  })())
+  check('🔴 [S] 결정론 판정을 provider 응답 칸에 넣지 않는다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return !/statusCount\.set\(\s*'selfAge'/.test(src)
+  })())
+  check('🔴 [S] 충돌 블록은 statusCount 를 건드리지 않고 selfAgeCaught 만 올린다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const i = src.indexOf('if (selfAge !== null && selfAge.conflict)')
+    const block = src.slice(i, src.indexOf('const k = qKey(d)', i))
+    return i > 0 && /selfAgeCaught \+= 1/.test(block) && !/statusCount\.set/.test(block)
+  })())
+  check('🔴 [S] 결정론 집계는 전용 줄로 따로 보고한다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return /나이 자기모순\(결정론\) \$\{selfAgeCaught\}건/.test(src)
+  })())
+
+  check('🔴 [S] 캐시 key 가 나이 판정 계약을 담는다 — 옛 캐시를 재사용하지 않는다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return /ageContractDigest/.test(src)
+      && /SELF_AGE_RULE_VERSION/.test(src)
+      && /\$\{qSystemDigest\}\|\$\{ageContractDigest\}/.test(src)
+  })())
+  check('🔴 [S] 운영 캐시 파일을 지우는 코드를 넣지 않았다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return !/rmSync\([^)]*cache|unlinkSync\([^)]*cache/.test(src)
+  })())
+  check('🔴 [S] 새 차단 축을 만들지 않았다', (() => {
+    const src = readFileSync('src/lib/persona-self-age.ts', 'utf-8')
+    return !/DRAFT_QUALITY_AXES|SEMANTIC_DROP|QUALITY_DROP/.test(src)
+  })())
+  check('🔴 [S] 판정부는 순수 함수다 — 파일·DB·네트워크 없음', (() => {
+    const src = readFileSync('src/lib/persona-self-age.ts', 'utf-8')
+    return !/from 'node:|PrismaClient|fetch\(|await /.test(src)
+  })())
+  check('🔴 [S] 연령 밴드 정책을 복제하지 않는다 — 카드 문자열을 그대로 읽는다', (() => {
+    const src = readFileSync('src/lib/persona-self-age.ts', 'utf-8')
+    return !/CHILD_AGE_BANDS|PERSONA_AGE_BANDS\s*=/.test(src)
+  })())
+  check('🔴 [S] 특정 Queue id · Persona id · 제목을 박지 않았다', (() => {
+    const src = readFileSync('src/lib/persona-self-age.ts', 'utf-8')
+      + readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return !/cmu[0-9a-z]{20,}|후라이팬|요실금/.test(src)
+  })())
 }
 
 console.log('\n─────────────────────────────────────────────────────────')
