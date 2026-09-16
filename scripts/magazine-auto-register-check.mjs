@@ -1220,12 +1220,46 @@ expect(
   jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-16T10:30:00+09:00', httpStatus: 200 }] }).ok,
   true,
 )
-const mergeSrc = readFileSync(join('scripts', 'magazine-auto-merge.mjs'), 'utf8')
-expect('🔴 CI 관찰에 제한 시간이 있다', /CI_OBSERVE_MS/.test(mergeSrc), true)
-expect('무한 대기하지 않는다 (waitedMs >= maxMs)', /waitedMs >= maxMs/.test(mergeSrc), true)
-expect('🔴 재실행 손잡이가 없다', /rerun|--admin|workflow run/.test(mergeSrc), false)
-expect('고정 SHA 를 관찰한다', /observeChecks\(pr\.headRefOid\)/.test(mergeSrc), true)
-expect('🔴 등급을 main 큐에서 읽는다', /origin\/main:drafts\/magazine\/topic-queue\.ts/.test(mergeSrc), true)
+/**
+ * 🔴 **404 만이 "안 나갔다" 를 확인한 것이다** (2026-09-16 검토).
+ *    직전 판은 `code !== 200` 이면 전부 "숨겨졌다" 로 봤다. 그러면 사이트가
+ *    500 을 내뱉는 중이거나 인증 리다이렉트가 걸린 순간에도 **성공으로 끝난다** —
+ *    즉 배포가 망가진 날 자동 병합이 가장 자신 있게 초록을 보고하게 된다.
+ */
+expect(
+  '🔴 500 을 비공개로 오인하지 않는다',
+  jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-25T10:30:00+09:00', httpStatus: 500 }] }).blockedBy[0].code,
+  'HIDDEN_UNCONFIRMED',
+)
+expect(
+  '🔴 인증 리다이렉트(302)도 비공개 확인이 아니다',
+  jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-25T10:30:00+09:00', httpStatus: 302 }] }).blockedBy[0].code,
+  'HIDDEN_UNCONFIRMED',
+)
+expect(
+  '🔴 네트워크 실패(status 없음)는 성공이 아니다',
+  jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-25T10:30:00+09:00', httpStatus: null }] }).blockedBy[0].code,
+  'CHECK_UNREACHABLE',
+)
+expect('🔴 배포 조회 실패(unknown)도 막는다', jd({ deployState: 'unknown' }).blockedBy[0].code, 'DEPLOY_NOT_READY')
+expect('🔴 배포가 실패로 끝나도 막는다', jd({ deployState: 'failure' }).ok, false)
+
+// ── publishAt 이후 감시 — 본문·이미지·목록 세 곳 ───────────
+// 🔴 상세만 200 이면 모자라다. 목록에 없으면 독자가 찾아오지 못한다.
+const wRow = (over) => [{ slug: 'x', publishAt: '2026-09-16T10:30:00+09:00', article: 200, image: 200, inList: true, ...over }]
+const jw = (over) => AM.judgeWatch({ rows: wRow(over), now: DNOW })
+expect('공개 뒤 본문·이미지·목록이 다 있으면 통과', jw({}).ok, true)
+expect('🔴 본문이 없으면 막는다', jw({ article: 404 }).blockedBy[0].code, 'ARTICLE_MISSING')
+expect('🔴 대표 이미지가 깨지면 막는다', jw({ image: 404 }).blockedBy[0].code, 'IMAGE_MISSING')
+expect('🔴 목록에 없으면 막는다 — 독자가 찾아오지 못한다', jw({ inList: false }).blockedBy[0].code, 'LIST_MISSING')
+expect(
+  '아직 예약 전인 글은 감시 대상이 아니다',
+  AM.judgeWatch({ rows: [{ slug: 'later', publishAt: '2026-09-25T10:30:00+09:00', article: 404, image: 404, inList: false }], now: DNOW }).ok,
+  true,
+)
+expect('🔴 CI 관찰에 제한 시간이 있다', Number.isFinite(AM.CI_OBSERVE_MS) && AM.CI_OBSERVE_MS > 0, true)
+expect('🔴 배포 관찰에 제한 시간이 있다', Number.isFinite(AM.DEPLOY_OBSERVE_MS) && AM.DEPLOY_OBSERVE_MS > 0, true)
+expect('🔴 mergeable 관찰에 제한 시간이 있다', Number.isFinite(AM.MERGEABLE_OBSERVE_MS) && AM.MERGEABLE_OBSERVE_MS > 0, true)
 
 console.log('\n══════ 운영연결 ⑥ 이미지 생성의 CDP 제한')
 const heroSrc = readFileSync(join('scripts', 'magazine-hero-runner.mjs'), 'utf8')
@@ -1235,30 +1269,378 @@ expect('두 곳 모두 바뀌었다', (heroSrc.match(/timeout: CDP_CONNECT_TIMEO
 const sessSrc = readFileSync(join('scripts', 'lib', 'chatgpt-session.mjs'), 'utf8')
 expect('저장소 전체에 15초 CDP 제한이 없다', /connectOverCDP\([^)]*timeout: 15000/.test(sessSrc + heroSrc), false)
 
-console.log('\n══════ 운영연결 ⑦ 실행기 연결 — 가짜 git/gh 응답')
+console.log('\n══════ 운영연결 ⑦ 파싱은 한 벌이다 — 실제 큐 전체를 공용 로더와 대조')
 /**
- * 🔴 순수 판정만 시험하면 **연결**을 못 본다. 파서가 실제 파일 모양을 읽는지,
- *    등록분을 main 대비로 뽑는지를 가짜 응답으로 확인한다.
+ * 🔴 **왜 생겼나** (2026-09-16 Codex 재검토).
+ *
+ *    자동 병합이 등급을 "slug 문자열 뒤 900자" 라는 창에서 정규식으로 긁고 있었다.
+ *    항목 하나가 900자를 넘거나 인접 항목이 가까우면 **옆 항목의 등급을 집어 온다.**
+ *    `autoEligible: false` 바로 뒤에 `true` 항목이 오면 false 가 true 로 읽힌다 —
+ *    즉 **민감 주제를 자동으로 병합**하게 된다. 창 기반 파싱은 여기서 없앴다.
+ *
+ *    그래서 두 가지를 본다. ① 실제 큐 **전체**가 공용 로더와 한 글자도 다르지 않은가.
+ *    ② 인접한 false/true 항목이 서로 섞이지 않는가.
  */
-const fakeMainArticles = ["const R = {", "  'live-one': {", "    publishedAt: '2026-09-20',", "      publishAt: '2026-09-20T10:30:00+09:00',", "  },", "}"].join('\n')
-const fakeBranchArticles = ["const R = {", "  'live-one': {", "    publishedAt: '2026-09-20',", "      publishAt: '2026-09-20T10:30:00+09:00',", "  },", "  'new-one': {", "    publishedAt: '2026-09-21',", "      status: 'SCHEDULED',", "      publishAt: '2026-09-21T10:30:00+09:00',", "  },", "}"].join('\n')
-const mainParsed = AM.parseArticles(fakeMainArticles)
-const branchParsed = AM.parseArticles(fakeBranchArticles)
-expect('main 에서 기존 글을 읽는다', mainParsed.map((r) => r.slug), ['live-one'])
-expect('브랜치에서 새 글까지 읽는다', branchParsed.map((r) => r.slug), ['live-one', 'new-one'])
-const mainSet = new Set(mainParsed.map((r) => r.slug))
-const newlyAdded = branchParsed.filter((r) => !mainSet.has(r.slug))
-expect('🔴 등록분만 뽑는다 (main 대비 차집합)', newlyAdded.map((r) => r.slug), ['new-one'])
-expect('예약 시각을 읽는다', newlyAdded[0].publishAt, '2026-09-21T10:30:00+09:00')
-const fakeQueue = ["export const Q = [", "  { slug: 'x-slug', riskLevel: 'MEDIUM', autoEligible: true },", "  { slug: 'hi-slug', riskLevel: 'HIGH', autoEligible: false },", "]"].join('\n')
-const parsedQ = AM.parseQueue(fakeQueue)
-expect('큐 파서가 등급을 읽는다', parsedQ['x-slug'], { riskLevel: 'MEDIUM', autoEligible: true })
-expect('🔴 HIGH·비자격도 정확히 읽는다', parsedQ['hi-slug'], { riskLevel: 'HIGH', autoEligible: false })
-// 연결: 파서 → 관문
+const L = await import('./lib/magazine-load.mjs')
+
+// ── ① 실제 재고 전체 대조 ────────────────────────────────
+const realQueueSrc = readFileSync(join('drafts', 'magazine', 'topic-queue.ts'), 'utf8')
+const realArticlesSrc = readFileSync(join('src', 'content', 'magazine', 'articles.ts'), 'utf8')
+const viaSource = L.parseQueueSource(realQueueSrc, 'topic-queue.ts')
+const viaLoader = L.loadQueue()
+expect('실제 큐를 읽었다 (비어 있지 않다)', viaSource.length > 0, true)
+expect('🔴 실제 큐 전체가 공용 로더와 같다', JSON.stringify(viaSource), JSON.stringify(viaLoader))
 expect(
-  '파서 결과로 관문이 HIGH 를 막는다',
-  MG.judgeAutoMerge({ ...mBase, registered: [{ slug: 'hi-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }], queueBySlug: parsedQ, branchQueueBySlug: null }).blockedBy.map((b) => b.code).includes('RISK_LEVEL'),
+  '🔴 실제 articles 전체가 공용 로더와 같다',
+  JSON.stringify(L.parseArticlesSource(realArticlesSrc, 'articles.ts')),
+  JSON.stringify(L.loadArticles()),
+)
+// 🔴 등급 필드가 전 항목에 실제로 있는가 — 없으면 관문이 NOT_IN_QUEUE 로 막는다
+expect(
+  '실제 큐 전 항목이 riskLevel 을 갖는다',
+  viaSource.every((q) => typeof q.riskLevel === 'string' && q.riskLevel.length > 0),
   true,
+)
+
+// ── ② 인접 false/true — 옛 900자 창 결함의 재현 ───────────
+/**
+ * 🔴 **창 방식이 왜 틀리는가.** 창은 "slug 문자열이 나온 자리에서 앞으로 900자" 다.
+ *    그런데 객체 안의 필드 순서는 정해져 있지 않다. `slug` 가 뒤쪽에 오면
+ *    그 창 안에서 **가장 먼저 만나는 `autoEligible`** 은 자기 것이 아니라
+ *    **다음 항목의 것**이다. 아래 모양에서 창은 `false` 를 `true` 로 읽는다 —
+ *    즉 **민감 주제가 자동 병합 대상이 된다.**
+ */
+const ADJACENT = [
+  'export const TOPIC_QUEUE: TopicQueueItem[] = [',
+  '  {',
+  "    riskLevel: 'HIGH',",
+  '    autoEligible: false,',
+  `    note: '${'긴설명 '.repeat(120)}',`,
+  "    slug: 'sensitive-one',",
+  '  },',
+  "  { slug: 'safe-one', riskLevel: 'LOW', autoEligible: true },",
+  ']',
+].join('\n')
+const adj = Object.fromEntries(L.parseQueueSource(ADJACENT, 'adj').map((q) => [q.slug, q]))
+expect('🔴 경계 파서는 인접 항목의 값을 집어 오지 않는다', adj['sensitive-one'].autoEligible, false)
+expect('🔴 등급도 자기 것을 지킨다', adj['sensitive-one'].riskLevel, 'HIGH')
+expect('뒤 항목도 정확히 읽는다', adj['safe-one'].autoEligible, true)
+expect('뒤 항목의 등급도 정확하다', adj['safe-one'].riskLevel, 'LOW')
+
+// 옛 결함 재현 — 같은 소스를 "slug 뒤 900자" 창으로 읽으면 옆 값을 집어 온다
+const windowRead = (src, slug) => {
+  const at = src.indexOf(`'${slug}'`)
+  const win = src.slice(at, at + 900)
+  return {
+    riskLevel: (win.match(/riskLevel:\s*'([A-Z]+)'/) ?? [, null])[1],
+    autoEligible: (win.match(/autoEligible:\s*(true|false)/) ?? [, null])[1],
+  }
+}
+expect(
+  '🔴 옛 900자 창은 민감 항목을 자동 가능으로 읽었다 (재현)',
+  windowRead(ADJACENT, 'sensitive-one').autoEligible,
+  'true',
+)
+expect(
+  '🔴 등급도 옆 항목 것을 집어 왔다 (재현)',
+  windowRead(ADJACENT, 'sensitive-one').riskLevel,
+  'LOW',
+)
+expect(
+  '🔴 그래서 관문이 HIGH 를 막지 못했을 것이다',
+  MG.judgeAutoMerge({
+    ...mBase,
+    registered: [{ slug: 'sensitive-one', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }],
+    queueBySlug: { 'sensitive-one': { riskLevel: 'LOW', autoEligible: true } },
+    branchQueueBySlug: null,
+  }).blockedBy.map((b) => b.code).includes('RISK_LEVEL'),
+  false,
+)
+expect(
+  '🔴 경계 파서로 읽으면 관문이 막는다',
+  MG.judgeAutoMerge({
+    ...mBase,
+    registered: [{ slug: 'sensitive-one', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }],
+    queueBySlug: { 'sensitive-one': adj['sensitive-one'] },
+    branchQueueBySlug: null,
+  }).blockedBy.map((b) => b.code).includes('RISK_LEVEL'),
+  true,
+)
+
+console.log('\n══════ 운영연결 ⑧ 자동 병합 실행 함수 — 가짜 git·gh·배포·HTTP 로 통째 실행')
+/**
+ * 🔴 **파서→판정 조합을 시험하는 것으로는 "실제로 이어지는가" 를 못 본다** (2026-09-16 검토).
+ *    여기서는 `runAutoMerge` **전체**를 돌린다. git·gh·배포·HTTP 는 전부 가짜다 —
+ *    네트워크도, 실제 저장소도 건드리지 않는다. 시각과 sleep 도 주입이라 즉시 끝난다.
+ */
+const BASE = 'a'.repeat(40)
+const HEAD = 'b'.repeat(40)
+const MERGED = 'c'.repeat(40)
+const NOW8 = Date.parse('2026-09-17T12:00:00+09:00')
+
+const ART = (rows) => [
+  'export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = {',
+  ...rows.map((r) => `  '${r.slug}': { title: ${JSON.stringify(r.title ?? r.slug)}, publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}' },`),
+  '}',
+].join('\n')
+const QUE = (rows) => [
+  'export const TOPIC_QUEUE: TopicQueueItem[] = [',
+  ...rows.map((r) => `  { slug: '${r.slug}', riskLevel: '${r.riskLevel}', autoEligible: ${r.autoEligible} },`),
+  ']',
+].join('\n')
+
+const MAIN_ART = [{ slug: 'old-one', publishAt: '2026-09-20T10:30:00+09:00' }]
+const BRANCH_ART = [...MAIN_ART, { slug: 'new-one', publishAt: '2026-09-19T10:30:00+09:00' }]
+const MAIN_Q = [{ slug: 'new-one', riskLevel: 'LOW', autoEligible: true }, { slug: 'keep-one', riskLevel: 'MEDIUM', autoEligible: true }]
+const BRANCH_Q = [{ slug: 'keep-one', riskLevel: 'MEDIUM', autoEligible: true }]
+const PR8 = { number: 77, url: 'https://example/77', headRefName: `${MG.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: HEAD, baseRefName: 'main', state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
+const FILES8 = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/new-one/draft.md', 'public/magazine/new-one/hero.webp']
+const CHECKS8 = [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }]
+
+const mergeDeps = (over = {}) => {
+  let t = NOW8
+  const calls = []
+  return {
+    calls,
+    log: () => {},
+    now: () => t,
+    sleep: async (ms) => { t += ms },
+    fetchMain: () => { calls.push('fetchMain'); return true },
+    readBaseSha: () => BASE,
+    showFile: (sha, path) => {
+      calls.push(`show:${sha === BASE ? 'main' : 'pr'}:${path}`)
+      const main = sha === BASE
+      if (path.endsWith('articles.ts')) return ART(main ? MAIN_ART : BRANCH_ART)
+      return QUE(main ? MAIN_Q : BRANCH_Q)
+    },
+    listAutoPrs: () => ({ ok: true, prs: [{ ...PR8 }] }),
+    getPr: () => ({ ...PR8 }),
+    listPrFiles: () => FILES8,
+    getChecks: () => ({ ok: true, ciState: 'success', checks: CHECKS8 }),
+    mergePr: (n, sha) => { calls.push(`merge:${n}:${sha.slice(0, 4)}`); return { ok: true, mergeCommit: MERGED } },
+    getDeployState: () => 'success',
+    httpStatus: () => 404,
+    httpBody: () => '',
+    ...over,
+  }
+}
+const codes8 = (r) => r.blockedBy.map((b) => b.code)
+
+// ── 검증만 (--apply 없음) ────────────────────────────────
+const dryDeps = mergeDeps()
+const dry = await AM.runAutoMerge({ apply: false, deps: dryDeps })
+expect('검증 회차가 막힘 없이 끝난다', codes8(dry), [])
+expect('🔴 --apply 없이는 merge 를 부르지 않는다', dryDeps.calls.some((c) => c.startsWith('merge:')), false)
+expect('기준 origin/main SHA 를 기록한다', dry.baseSha, BASE)
+expect('대상 PR 을 기록한다', dry.pr.number, 77)
+expect('🔴 지정 SHA 로 소스를 읽는다 (main·PR 양쪽)', dryDeps.calls.filter((c) => c.startsWith('show:')).length, 4)
+expect('등록분만 뽑는다', dry.registered.map((r) => r.slug), ['new-one'])
+
+// ── 실제 merge → 배포 → 예약 비공개 ──────────────────────
+const applyDeps = mergeDeps()
+const applied = await AM.runAutoMerge({ apply: true, deps: applyDeps })
+expect('merge 했다', applied.merged, true)
+expect('🔴 검증한 그 SHA 로만 merge 한다', applyDeps.calls.includes(`merge:77:${HEAD.slice(0, 4)}`), true)
+expect('배포까지 확인하고 끝난다', applied.deploy.state, 'success')
+expect('막힌 항목 없음', codes8(applied), [])
+
+// ── 🔴 배포 조회 실패 → 성공으로 끝내지 않는다 ────────────
+const noDeploy = await AM.runAutoMerge({ apply: true, deps: mergeDeps({ getDeployState: () => 'unknown' }) })
+expect('merge 는 됐다', noDeploy.merged, true)
+expect('🔴 배포를 확인하지 못하면 성공 종료가 아니다', codes8(noDeploy).includes('DEPLOY_NOT_READY'), true)
+expect('🔴 그래서 종료 코드가 0 이 아니다', noDeploy.blockedBy.length > 0, true)
+
+// ── 🔴 공개 여부 조회 실패 → 성공으로 끝내지 않는다 ───────
+const noHttp = await AM.runAutoMerge({ apply: true, deps: mergeDeps({ httpStatus: () => null }) })
+expect('🔴 사이트에 닿지 못하면 비공개 성공이 아니다', codes8(noHttp).includes('CHECK_UNREACHABLE'), true)
+
+// ── 🔴 예약 글이 미리 나갔다 → 사고로 보고한다 ────────────
+const early = await AM.runAutoMerge({ apply: true, deps: mergeDeps({ httpStatus: () => 200 }) })
+expect('🔴 merge 직후 공개돼 있으면 사고다', codes8(early).includes('PUBLISHED_EARLY'), true)
+
+// ── CI 가 안 끝났다 → merge 하지 않는다 ───────────────────
+const pendingDeps = mergeDeps({ getChecks: () => ({ ok: true, ciState: 'pending', checks: [{ name: 'Micro Seed 3축 게이트', status: 'in_progress', conclusion: null }] }) })
+const pending = await AM.runAutoMerge({ apply: true, deps: pendingDeps })
+expect('🔴 CI 가 안 끝나면 막는다', codes8(pending).includes('CI_NOT_GREEN'), true)
+expect('🔴 그리고 merge 를 부르지 않는다', pendingDeps.calls.some((c) => c.startsWith('merge:')), false)
+expect('🔴 무한 대기하지 않는다 — 제한 시간에서 끊는다', pending.merged, false)
+
+// ── 필수 검사 **등록이 늦다** → 제한 시간 안에서 기다린다 ──
+let late = 0
+const lateDeps = mergeDeps({
+  getChecks: () => {
+    late += 1
+    return late < 4 ? { ok: true, ciState: 'pending', checks: [] } : { ok: true, ciState: 'success', checks: CHECKS8 }
+  },
+})
+const lateRun = await AM.runAutoMerge({ apply: true, deps: lateDeps })
+expect('🔴 검사 등록이 늦어도 기다렸다가 통과한다', codes8(lateRun), [])
+expect('실제로 여러 번 관찰했다', late >= 4, true)
+expect('그래도 merge 는 한 번뿐이다', lateDeps.calls.filter((c) => c.startsWith('merge:')).length, 1)
+
+// ── 검사가 끝내 안 붙는다 → 빈 목록을 통과시키지 않는다 ────
+const neverDeps = mergeDeps({ getChecks: () => ({ ok: true, ciState: 'pending', checks: [] }) })
+const never = await AM.runAutoMerge({ apply: true, deps: neverDeps })
+expect('🔴 검사 목록이 끝내 비면 막는다', codes8(never).includes('CHECKS_EMPTY'), true)
+expect('🔴 merge 하지 않는다', neverDeps.calls.some((c) => c.startsWith('merge:')), false)
+
+// ── mergeable UNKNOWN → 정해질 때까지 유한하게 본다 ────────
+let mq = 0
+const unknownThenOk = await AM.runAutoMerge({
+  apply: true,
+  deps: mergeDeps({ getPr: () => { mq += 1; return { ...PR8, mergeable: mq < 3 ? 'UNKNOWN' : 'MERGEABLE' } } }),
+})
+expect('🔴 UNKNOWN 을 그대로 막지 않고 관찰한다', codes8(unknownThenOk), [])
+expect('실제로 다시 조회했다', mq >= 3, true)
+
+const alwaysUnknownDeps = mergeDeps({ getPr: () => ({ ...PR8, mergeable: 'UNKNOWN' }) })
+const alwaysUnknown = await AM.runAutoMerge({ apply: true, deps: alwaysUnknownDeps })
+expect('🔴 끝내 UNKNOWN 이면 막는다', codes8(alwaysUnknown).includes('NOT_MERGEABLE'), true)
+expect('🔴 merge 하지 않는다', alwaysUnknownDeps.calls.some((c) => c.startsWith('merge:')), false)
+
+// ── 🔴 마지막 재조회에서 HEAD 가 움직였다 → merge 하지 않는다 ──
+let seen = 0
+const driftDeps = mergeDeps({
+  getPr: () => { seen += 1; return { ...PR8, headRefOid: seen >= 2 ? 'd'.repeat(40) : HEAD } },
+})
+const drift = await AM.runAutoMerge({ apply: true, deps: driftDeps })
+expect('🔴 검증 뒤에 커밋이 붙으면 막는다', codes8(drift).some((c) => c === 'SHA_DRIFTED' || c === 'SHA_DRIFTED_LATE'), true)
+expect('🔴 merge 하지 않는다', driftDeps.calls.some((c) => c.startsWith('merge:')), false)
+
+const baseDeps = mergeDeps({ getPr: () => ({ ...PR8, baseRefName: 'develop' }) })
+const wrongBase = await AM.runAutoMerge({ apply: true, deps: baseDeps })
+expect('🔴 base 가 main 이 아니면 막는다', codes8(wrongBase).includes('BASE_NOT_MAIN'), true)
+
+// ── 🔴 기존 글을 건드렸다 → 막는다 (더하기만 한다) ────────
+const editedDeps = mergeDeps({
+  showFile: (sha, path) => {
+    if (path.endsWith('articles.ts')) {
+      return sha === BASE ? ART(MAIN_ART) : ART([{ slug: 'old-one', publishAt: '2026-09-20T10:30:00+09:00', title: '제목을 몰래 바꿨다' }, BRANCH_ART[1]])
+    }
+    return QUE(sha === BASE ? MAIN_Q : BRANCH_Q)
+  },
+})
+const edited = await AM.runAutoMerge({ apply: true, deps: editedDeps })
+expect('🔴 기존 글 수정은 자동 레인의 일이 아니다', codes8(edited).includes('EXISTING_ARTICLE_TOUCHED'), true)
+expect('🔴 merge 하지 않는다', editedDeps.calls.some((c) => c.startsWith('merge:')), false)
+
+const deletedDeps = mergeDeps({
+  showFile: (sha, path) => {
+    if (path.endsWith('articles.ts')) return sha === BASE ? ART(MAIN_ART) : ART([BRANCH_ART[1]])
+    return QUE(sha === BASE ? MAIN_Q : BRANCH_Q)
+  },
+})
+const deleted = await AM.runAutoMerge({ apply: true, deps: deletedDeps })
+expect('🔴 기존 글 삭제는 더 위험하다 — 막는다', codes8(deleted).includes('EXISTING_ARTICLE_TOUCHED'), true)
+expect('🔴 merge 하지 않는다', deletedDeps.calls.some((c) => c.startsWith('merge:')), false)
+
+// ── 🔴 큐를 건드렸다 → 막는다 ────────────────────────────
+const queueEditDeps = mergeDeps({
+  showFile: (sha, path) => {
+    if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
+    return sha === BASE ? QUE(MAIN_Q) : QUE([{ slug: 'keep-one', riskLevel: 'LOW', autoEligible: true }])
+  },
+})
+expect(
+  '🔴 PR 이 남은 항목의 등급을 낮추면 막는다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: queueEditDeps })).includes('QUEUE_GRADE_CHANGED'),
+  true,
+)
+const queueDropDeps = mergeDeps({
+  showFile: (sha, path) => {
+    if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
+    return sha === BASE ? QUE(MAIN_Q) : QUE([])
+  },
+})
+expect(
+  '🔴 등록하지 않은 항목이 큐에서 빠지면 막는다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: queueDropDeps })).includes('QUEUE_UNEXPECTED_REMOVAL'),
+  true,
+)
+
+// ── 🔴 무관한 파일이 섞였다 → 막는다 ─────────────────────
+const strayDeps = mergeDeps({ listPrFiles: () => [...FILES8, 'scripts/magazine-auto-merge.mjs'] })
+expect(
+  '🔴 소스 코드가 섞이면 막는다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: strayDeps })).includes('UNEXPECTED_FILES'),
+  true,
+)
+
+// ── 조회 자체가 실패했다 → 조용히 성공하지 않는다 ─────────
+expect('🔴 fetch 실패는 막는다', codes8(await AM.runAutoMerge({ apply: true, deps: mergeDeps({ fetchMain: () => false }) })), ['FETCH_FAILED'])
+expect('🔴 기준 SHA 를 못 읽으면 막는다', codes8(await AM.runAutoMerge({ apply: true, deps: mergeDeps({ readBaseSha: () => null }) })), ['BASE_SHA_UNKNOWN'])
+expect('🔴 PR 조회 실패는 막는다', codes8(await AM.runAutoMerge({ apply: true, deps: mergeDeps({ listAutoPrs: () => ({ ok: false, reason: 'gh 실패' }) })})), ['PR_LOOKUP_FAILED'])
+expect('🔴 소스를 못 읽으면 막는다', codes8(await AM.runAutoMerge({ apply: true, deps: mergeDeps({ showFile: () => { throw new Error('없다') } }) })), ['SOURCE_PARSE_FAILED'])
+expect(
+  '🔴 자동 PR 이 둘이면 고르지 않는다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: mergeDeps({ listAutoPrs: () => ({ ok: true, prs: [{ ...PR8 }, { ...PR8, number: 78 }] }) }) })),
+  ['MULTIPLE_AUTO_PRS'],
+)
+const emptyDeps = mergeDeps({ listAutoPrs: () => ({ ok: true, prs: [] }) })
+const empty = await AM.runAutoMerge({ apply: true, deps: emptyDeps })
+expect('자동 PR 이 없으면 조용히 끝난다', codes8(empty), [])
+expect('🔴 그때도 merge 는 없다', emptyDeps.calls.some((c) => c.startsWith('merge:')), false)
+
+// ── merge 자체가 실패했다 ────────────────────────────────
+expect(
+  '🔴 merge 실패를 성공으로 보고하지 않는다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: mergeDeps({ mergePr: () => ({ ok: false, reason: '보호 규칙' }) }) })),
+  ['MERGE_FAILED'],
+)
+
+// ── 🔴 HIGH·비자격 주제는 실행 경로에서도 막힌다 ──────────
+const highDeps = mergeDeps({
+  showFile: (sha, path) => {
+    if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
+    return sha === BASE
+      ? QUE([{ slug: 'new-one', riskLevel: 'HIGH', autoEligible: true }, ...BRANCH_Q])
+      : QUE(BRANCH_Q)
+  },
+})
+const high = await AM.runAutoMerge({ apply: true, deps: highDeps })
+expect('🔴 HIGH 는 실행 경로에서도 막힌다', codes8(high).includes('RISK_LEVEL'), true)
+expect('🔴 merge 하지 않는다', highDeps.calls.some((c) => c.startsWith('merge:')), false)
+const ineligibleDeps = mergeDeps({
+  showFile: (sha, path) => {
+    if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
+    return sha === BASE
+      ? QUE([{ slug: 'new-one', riskLevel: 'LOW', autoEligible: false }, ...BRANCH_Q])
+      : QUE(BRANCH_Q)
+  },
+})
+expect(
+  '🔴 autoEligible=false 는 실행 경로에서도 막힌다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: ineligibleDeps })).includes('AUTO_INELIGIBLE'),
+  true,
+)
+
+// ── 감시 작업도 통째로 돈다 ──────────────────────────────
+const watchOk = await AM.runWatch({
+  deps: {
+    now: () => Date.parse('2026-09-21T12:00:00+09:00'),
+    fetchMain: () => true,
+    readBaseSha: () => BASE,
+    showFile: () => ART([{ slug: 'old-one', publishAt: '2026-09-20T10:30:00+09:00' }]),
+    httpStatus: () => 200,
+    httpBody: () => '<a href="/magazine/old-one">old-one</a>',
+  },
+})
+expect('공개 뒤 본문·목록이 확인되면 통과', watchOk.ok, true)
+const watchBad = await AM.runWatch({
+  deps: {
+    now: () => Date.parse('2026-09-21T12:00:00+09:00'),
+    fetchMain: () => true,
+    readBaseSha: () => BASE,
+    showFile: () => ART([{ slug: 'old-one', publishAt: '2026-09-20T10:30:00+09:00' }]),
+    httpStatus: () => 200,
+    httpBody: () => '<p>목록이 비었다</p>',
+  },
+})
+expect('🔴 목록에서 빠지면 감시가 잡는다', watchBad.blockedBy.map((b) => b.code), ['LIST_MISSING'])
+expect(
+  '🔴 감시도 fetch 실패를 성공으로 보지 않는다',
+  (await AM.runWatch({ deps: { now: () => NOW8, fetchMain: () => false, readBaseSha: () => BASE, showFile: () => '', httpStatus: () => 200, httpBody: () => '' } })).ok,
+  false,
 )
 
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
@@ -1377,6 +1759,23 @@ expect(
   true,
 )
 expect('KeepAlive 를 쓰지 않는다', /<key>KeepAlive<\/key>/.test(regTplText + prodTplText), false)
+
+/**
+ * 🔴 **공개 확인 job — 읽기만 한다** (2026-09-16 · 완전 무인 운영).
+ *    01:00 병합은 "아직 안 나왔는가"(404)까지만 본다. **10:30 에 실제로 나왔는가**
+ *    를 보는 자리가 비어 있으면, 안 나온 사실을 제일 먼저 아는 사람이 독자가 된다.
+ */
+const watchTpl = join(TPL_DIR, 'com.soransoran.magazine-watch.plist.template')
+expect('공개 확인 템플릿이 있다', existsSync(watchTpl), true)
+const watchTplText = readFileSync(watchTpl, 'utf8')
+const watchArgs = (watchTplText.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/) ?? [, ''])[1]
+expect('감시 인자를 넘긴다 (--watch)', watchArgs.includes('--watch'), true)
+expect('🔴 감시 경로에 --apply 가 없다 — merge 하지 않는다', watchArgs.includes('--apply'), false)
+expect('🔴 감시 경로에 --write·--pr 이 없다', /--write|--pr\b/.test(watchArgs), false)
+expect('실패를 알린다 (--notify-send)', watchArgs.includes('--notify-send'), true)
+expect('🔴 공개(10:30) 뒤에 본다 — 11:00', /<key>Hour<\/key><integer>11<\/integer>/.test(watchTplText), true)
+expect('🔴 감시도 KeepAlive 를 쓰지 않는다', /<key>KeepAlive<\/key>/.test(watchTplText), false)
+expect('감시 로그도 Documents 밖이다 (TCC)', /__LOGDIR__\/magazine-watch\.log/.test(watchTplText), true)
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL\n`)
 console.log('  상태: 자동 PR 경로 구현됨 · launchd 설치는 supervised 1회 성공 뒤에만 열린다\n')

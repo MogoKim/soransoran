@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  매거진 공개 확인 — 매일 11:00 KST · 🔴 템플릿이다. 이 파일 자체는 등록되지 않는다.
+
+  설치: npm run magazine:launchd-install -- --apply
+  정본: docs/operations/magazine-automation-runbook.md
+
+  ─────────────────────────────────────────────────────────────
+  🔴 **왜 이 job 이 필요한가** (2026-09-16 검토).
+
+     01:00 자동 병합은 merge 직후에 "아직 안 나왔는가"(404)만 확인한다.
+     그것으로 확인되는 것은 **예약이 지켜졌다** 까지다.
+     정작 중요한 **10:30 에 실제로 나왔는가** 는 아무도 보지 않았다.
+
+     무인 운영에서 그 자리를 비워 두면, 글이 안 나온 사실을 제일 먼저 아는 사람이
+     **독자**가 된다. 그래서 공개 30분 뒤에 한 번 본다.
+
+  🔴 **보는 것은 세 가지다.** 본문(200) · 대표 이미지(200) · /magazine 목록에 노출.
+     상세만 열리면 모자라다 — 목록에 없으면 독자가 찾아오지 못한다.
+
+  🔴 **고치지 않는다. 알리기만 한다.**
+     재배포도 재시도도 하지 않는다. 자동 복구는 원인을 덮는다.
+     실패하면 Slack 으로 알리고 non-zero 로 끝난다 — 판단은 사람이 한다.
+
+  🔴 **읽기만 한다.** git write · PR · merge · DB · R2 어느 것도 건드리지 않는다.
+     `--watch` 경로에는 `--apply` 가 없다.
+
+  🔴 **KeepAlive 를 넣지 않는다.** non-zero 는 기록이지 재시도 신호가 아니다.
+
+  🔴 **11:00 인 이유.** 예약 공개는 10:30 KST 다. 30분이면 Vercel 배포와
+     ISR 재생성이 끝난다. 더 앞이면 정상인데도 실패로 알린다.
+
+  회귀: node scripts/magazine-auto-register-check.mjs · npm run magazine:launchd-check
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.soransoran.magazine-watch</string>
+
+  <!-- 🔴 --watch 만이다. --apply 는 이 경로에 없다 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/scripts/magazine-auto-merge.mjs</string>
+    <string>--watch</string>
+    <string>--notify-send</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- 🔴 로그는 Documents 밖이어야 한다 (TCC) -->
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/magazine-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/magazine-watch.log</string>
+</dict>
+</plist>

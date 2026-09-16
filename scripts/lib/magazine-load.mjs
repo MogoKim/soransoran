@@ -80,22 +80,41 @@ export function evalLiteral(literal, label) {
  * articles.ts 전량. 공개·예약(SCHEDULED)·차단(BLOCKED)·초안(DRAFT)을 **가리지 않는다**.
  * 🔴 상태로 거르면 이미 예약한 글을 다시 뽑는다. 중복 판정은 항상 전량 기준이다.
  */
-export function loadArticles() {
-  const src = readFileSync(ARTICLES_TS, 'utf8')
-  const anchor = src.indexOf('MAGAZINE_ARTICLE_RECORD')
-  if (anchor === -1) throw new Error('articles.ts 에서 MAGAZINE_ARTICLE_RECORD 를 찾지 못했다')
+/**
+ * **소스 문자열**에서 글 목록을 읽는다 — 디스크가 아니라 넘겨받은 내용으로.
+ *
+ * 🔴 **왜 필요한가** (2026-09-16 검토).
+ *    자동 병합은 `git show <sha>:...` 로 받은 **다른 커밋의 소스**를 읽어야 한다.
+ *    그때 정규식으로 대충 훑으면 객체 경계를 놓친다 — 실제로 자동 병합의
+ *    `parseQueue` 가 "slug 뒤 900자" 라는 창으로 등급을 읽고 있었고,
+ *    항목이 900자를 넘거나 인접 항목이 가까우면 **옆 항목의 값을 집어 온다.**
+ *
+ *    파싱은 한 벌이어야 한다. `loadArticles`/`loadQueue` 와 **같은 함수**를 쓴다.
+ */
+export function parseArticlesSource(src, label = 'articles.ts') {
+  const anchor = String(src ?? '').indexOf('MAGAZINE_ARTICLE_RECORD')
+  if (anchor === -1) throw new Error(`${label} 에서 MAGAZINE_ARTICLE_RECORD 를 찾지 못했다`)
   const literal = sliceLiteral(src, src.indexOf('=', anchor), '{', '}')
-  const record = evalLiteral(literal, 'articles.ts')
+  const record = evalLiteral(literal, label)
   return Object.entries(record).map(([slug, article]) => ({ slug, ...article }))
+}
+
+/** 소스 문자열에서 큐를 읽는다. `loadQueue` 와 같은 경계 판정이다 */
+export function parseQueueSource(src, label = 'topic-queue.ts') {
+  const text = String(src ?? '')
+  const anchor = text.indexOf('export const TOPIC_QUEUE')
+  if (anchor === -1) return []
+  // 타입 주석의 대괄호(TopicQueueItem[])를 잡지 않도록 대입 기호 뒤에서 찾는다.
+  const assign = text.indexOf('=', anchor)
+  const literal = assign === -1 ? null : sliceLiteral(text, assign, '[', ']')
+  return literal ? evalLiteral(literal, label) : []
+}
+
+export function loadArticles() {
+  return parseArticlesSource(readFileSync(ARTICLES_TS, 'utf8'), 'articles.ts')
 }
 
 export function loadQueue() {
   if (!existsSync(QUEUE_TS)) return []
-  const src = readFileSync(QUEUE_TS, 'utf8')
-  const anchor = src.indexOf('export const TOPIC_QUEUE')
-  if (anchor === -1) return []
-  // 타입 주석의 대괄호(TopicQueueItem[])를 잡지 않도록 대입 기호 뒤에서 찾는다.
-  const assign = src.indexOf('=', anchor)
-  const literal = assign === -1 ? null : sliceLiteral(src, assign, '[', ']')
-  return literal ? evalLiteral(literal, 'topic-queue.ts') : []
+  return parseQueueSource(readFileSync(QUEUE_TS, 'utf8'), 'topic-queue.ts')
 }

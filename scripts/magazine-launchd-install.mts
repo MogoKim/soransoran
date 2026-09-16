@@ -65,9 +65,16 @@ export const FORBIDDEN_ROOTS = [
   join(homedir(), 'Documents', 'soransoran-runtime'),
 ]
 
+/**
+ * 🔴 **세 번째 job 은 아무것도 쓰지 않는다** (2026-09-16 · 완전 무인 운영).
+ *    `magazine-watch` 는 11:00 에 사이트를 읽고 알리기만 한다 —
+ *    예약한 글이 실제로 나왔는지 볼 눈이 없으면, 안 나온 사실을
+ *    제일 먼저 아는 사람이 독자가 된다.
+ */
 export const MAGAZINE_JOBS = [
   'com.soransoran.magazine-producer',
   'com.soransoran.magazine-auto-register',
+  'com.soransoran.magazine-watch',
 ] as const
 
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')

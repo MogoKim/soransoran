@@ -1,6 +1,6 @@
 # 매거진 자동화 운영 runbook
 
-작성 2026-09-15 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register`
+작성 2026-09-15 · 대상: `com.soransoran.magazine-producer` · `com.soransoran.magazine-auto-register` · `com.soransoran.magazine-watch`
 
 이 문서가 **설치·가동·롤백의 정본**이다. 다른 곳에 절차를 다시 적지 않는다.
 
@@ -202,8 +202,21 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 01:00 KST  auto-register   ① producer 완료 신호·lock 을 최대 40분 기다린다 (재시도 없음)
                            ② 미해결 자동 PR 확인 → ③ 변환·QA·hero·batch-qa·register
                            ④ PR 생성 → ⑤ 자동 병합(--merge) → main
+                           ⑥ merge SHA 의 Production 배포 확인 → 예약 글이 **아직 안 나왔는지**(404)
 10:30 KST  (해당일)        publishAt 도달 → 예약 글이 공개된다
+11:00 KST  magazine-watch  본문·대표 이미지·/magazine 목록 노출 확인 → 실패면 Slack
 ```
+
+🔴 **01:00 의 확인과 11:00 의 확인은 서로 다른 것을 본다.**
+   01:00 은 "**아직 안 나왔는가**"(404) — 예약이 지켜졌는지.
+   11:00 은 "**이제 나왔는가**"(본문·이미지·목록 전부 200/노출) — 공개가 됐는지.
+   앞의 것만 있으면, 글이 끝내 안 나온 사실을 제일 먼저 아는 사람이 **독자**가 된다.
+
+🔴 **404 만이 "안 나갔다" 를 확인한 것이다.** 500·인증 리다이렉트·네트워크 실패는
+   비공개 확인이 아니라 **확인 실패**다 — 즉 배포가 망가진 날 자동 병합이
+   가장 자신 있게 초록을 보고하는 일을 만들지 않는다.
+
+🔴 **magazine-watch 는 고치지 않는다.** 재배포도 재시도도 없다. 알리고 non-zero 로 끝난다.
 
 🔴 **producer 가 실패해도 등록은 진행한다.** 이미 준비된 후보로 돈다 — 공급이 목적이다.
 🔴 **막힌 후보는 격리된다.** 2회 연속 QA 에 막히면 7일간 비켜 주고 **다음 후보가 진행**한다.
