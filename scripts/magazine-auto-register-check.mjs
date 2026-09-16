@@ -1562,6 +1562,84 @@ expect('🔴 실패 사유가 그대로 남는다', codes8(failedRun).includes('
 expect('🔴 실패는 기다리지 않는다 — 곧장 끝낸다', failedRun.ci.waitedMs, 0)
 expect('🔴 merge 하지 않는다', failedDeps.calls.some((c) => c.startsWith('merge:')), false)
 
+/**
+ * 🔴 **필수 검사는 completed + success 하나뿐이다** (2026-09-16 재검토).
+ *
+ *    워크플로에 경로 필터(`paths:`)나 조건(`if:`)이 붙으면 검사는 **돌지 않고
+ *    skipped 로 완료**된다. 그것을 통과로 세면 "필수 검사를 확인했다" 는 말이
+ *    **한 번도 돌지 않은 검사**를 가리킨다 — 필수로 정해 둔 이유가 통째로 사라진다.
+ */
+const skippedDeps = mergeDeps({
+  getChecks: () => ({ ok: true, ciState: 'success', checks: [...FAST_CHECK, { name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'skipped' }] }),
+})
+const skippedRun = await AM.runAutoMerge({ apply: true, deps: skippedDeps })
+expect('🔴 필수 검사가 skipped 면 막는다', codes8(skippedRun).includes('REQUIRED_CHECK_MISSING'), true)
+expect('🔴 merge 하지 않는다', skippedDeps.calls.some((c) => c.startsWith('merge:')), false)
+expect('🔴 결론까지 적는다 (skipped)', skippedRun.blockedBy.find((b) => b.code === 'REQUIRED_CHECK_MISSING').message.includes('skipped'), true)
+expect('🔴 기다리지 않는다 — 결론이 났다', skippedRun.ci.outcome, 'FAILED')
+
+const neutralDeps = mergeDeps({
+  getChecks: () => ({ ok: true, ciState: 'success', checks: [...FAST_CHECK, { name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'neutral' }] }),
+})
+expect(
+  '🔴 필수 검사가 neutral 이어도 막는다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: neutralDeps })).includes('REQUIRED_CHECK_MISSING'),
+  true,
+)
+expect('🔴 merge 하지 않는다', neutralDeps.calls.some((c) => c.startsWith('merge:')), false)
+// 🔴 부수 검사의 skipped 는 그대로 통과한다 — 막을 이유가 없고, 막으면 매 회차 시끄럽다
+expect(
+  '부수 검사가 skipped 인 것은 통과한다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: mergeDeps({ getChecks: () => ({ ok: true, ciState: 'success', checks: [{ name: 'Vercel Preview Comments', status: 'completed', conclusion: 'skipped' }, ...CHECKS8] }) }) })),
+  [],
+)
+
+/**
+ * 🔴 **check-run 이 다 끝나도 합산 status 가 pending 일 수 있다** (2026-09-16 재검토).
+ *    두 값은 다른 곳에서 온다 — check-run 은 Actions 가, 합산은 Commit Status API 를
+ *    쓰는 것들(Vercel 등)이 올린다. 그 순간 관찰을 끝내면 관문이 `CI_NOT_GREEN` 으로
+ *    막는다. **정상 회차가 실패한다.**
+ */
+let ciq = 0
+const pendingThenGreen = mergeDeps({
+  getChecks: () => {
+    ciq += 1
+    // 1회차: check-run 은 전부 completed·success 인데 합산만 아직 pending
+    return { ok: true, ciState: ciq === 1 ? 'pending' : 'success', checks: [...FAST_CHECK, ...CHECKS8] }
+  },
+})
+const ptg = await AM.runAutoMerge({ apply: true, deps: pendingThenGreen })
+expect('🔴 검사가 다 끝나도 합산이 pending 이면 기다린다', codes8(ptg), [])
+expect('🔴 두 번째 조회까지 기다렸다', ciq >= 2, true)
+expect('그리고 SETTLED 로 끝난다', ptg.ci.outcome, 'SETTLED')
+expect('실제로 merge 한다', ptg.merged, true)
+
+const ciFailDeps = mergeDeps({ getChecks: () => ({ ok: true, ciState: 'failure', checks: [...FAST_CHECK, ...CHECKS8] }) })
+const ciFail = await AM.runAutoMerge({ apply: true, deps: ciFailDeps })
+expect('🔴 합산 status 가 failure 면 실패다', ciFail.ci.outcome, 'FAILED')
+expect('🔴 기다리지 않는다', ciFail.ci.waitedMs, 0)
+expect('🔴 merge 하지 않는다', ciFailDeps.calls.some((c) => c.startsWith('merge:')), false)
+expect(
+  '🔴 error 도 실패다',
+  (await AM.runAutoMerge({ apply: true, deps: mergeDeps({ getChecks: () => ({ ok: true, ciState: 'error', checks: [...FAST_CHECK, ...CHECKS8] }) }) })).ci.outcome,
+  'FAILED',
+)
+
+// 🔴 unknown · 조회 실패를 성공으로 취급하지 않는다
+const unknownDeps = mergeDeps({ getChecks: () => ({ ok: true, ciState: 'unknown', checks: [...FAST_CHECK, ...CHECKS8] }) })
+const unknownRun = await AM.runAutoMerge({ apply: true, deps: unknownDeps })
+expect('🔴 합산 status 가 unknown 이면 성공이 아니다', unknownRun.ci.outcome, 'TIMEOUT')
+expect('🔴 merge 하지 않는다', unknownDeps.calls.some((c) => c.startsWith('merge:')), false)
+expect(
+  '🔴 검사는 끝났는데 합산이 안 붙었다고 적는다',
+  unknownRun.blockedBy.find((b) => b.code === 'CI_OBSERVE_TIMEOUT').message.includes('합산 status 가 success 가 아니다'),
+  true,
+)
+const queryFailDeps = mergeDeps({ getChecks: () => ({ ok: false, ciState: 'unknown', checks: [] }) })
+const queryFail = await AM.runAutoMerge({ apply: true, deps: queryFailDeps })
+expect('🔴 조회 실패도 성공이 아니다', queryFail.ci.outcome, 'TIMEOUT')
+expect('🔴 merge 하지 않는다', queryFailDeps.calls.some((c) => c.startsWith('merge:')), false)
+
 const timeoutDeps = mergeDeps({ getChecks: () => ({ ok: true, ciState: 'pending', checks: FAST_CHECK }) })
 const timeoutRun = await AM.runAutoMerge({ apply: true, deps: timeoutDeps })
 expect('🔴 필수 검사가 끝내 안 붙으면 TIMEOUT 이다', timeoutRun.ci.outcome, 'TIMEOUT')

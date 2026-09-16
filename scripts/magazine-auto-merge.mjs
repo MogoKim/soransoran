@@ -28,7 +28,7 @@ import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
-import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, REQUIRED_CHECKS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
+import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -204,11 +204,14 @@ export async function runAutoMerge({ apply = false, deps }) {
   if (ci.outcome === 'TIMEOUT') {
     const pendingNames = ci.checks.filter((c) => c.status !== 'completed').map((c) => c.name)
     const missingNames = REQUIRED_CHECKS.filter((n) => !ci.checks.some((c) => c.name === n))
+    const settledButNotGreen = missingNames.length === 0 && pendingNames.length === 0
     report.blockedBy.push({
       code: 'CI_OBSERVE_TIMEOUT',
-      message: `${Math.round(CI_OBSERVE_MS / 60000)}분 안에 검사가 끝나지 않았다`
+      message: `${Math.round(CI_OBSERVE_MS / 60000)}분 안에 CI 가 초록이 되지 않았다 (합산 status=${ci.ciState})`
         + `${missingNames.length > 0 ? ` · 필수 검사 미등록: ${missingNames.join(', ')}` : ''}`
         + `${pendingNames.length > 0 ? ` · 아직 도는 중: ${pendingNames.join(', ')}` : ''}`
+        // 🔴 check-run 은 다 끝났는데 합산이 안 붙는 경우 — 원인이 다르므로 따로 적는다
+        + `${settledButNotGreen ? ' · 검사는 전부 끝났으나 합산 status 가 success 가 아니다' : ''}`
         + ' — 재실행하지 않는다',
     })
   }
@@ -314,15 +317,24 @@ export async function runAutoMerge({ apply = false, deps }) {
  * 검사가 **다 끝날 때까지** — 🔴 유한하게. 재실행하지 않는다.
  *
  * 🔴 **종료 조건에 필수 검사가 들어간다** (2026-09-16 재검토).
- *    직전 판은 "목록이 비어 있지 않고 전부 completed" 면 끝냈다. 그런데 GitHub 은
- *    검사를 **한꺼번에 등록하지 않는다.** 빠른 검사(Vercel Preview Comments 등)가
+ *    GitHub 은 검사를 **한꺼번에 등록하지 않는다.** 빠른 검사(Vercel Preview Comments 등)가
  *    먼저 붙어 완료되면, 그 순간 목록은 "비어 있지 않고 전부 completed" 다.
  *    아직 필수 검사가 **등록조차 안 됐는데** 관찰을 끝내고
  *    `REQUIRED_CHECK_MISSING` 으로 막았다 — 정상 회차가 매번 실패한다.
  *
+ * 🔴 **check-run 이 다 끝나도 합산 status 가 pending 이면 기다린다** (2026-09-16 재검토).
+ *    두 값은 다른 곳에서 온다. check-run 은 Actions 가, 합산 status 는 그 밖의
+ *    Commit Status API 를 쓰는 것들(Vercel 등)이 올린다.
+ *    check-run 이 전부 끝난 순간에도 합산은 아직 pending 일 수 있다.
+ *    그때 관찰을 끝내면 관문이 `CI_NOT_GREEN` 으로 막는다 — **정상 회차가 실패한다.**
+ *    그래서 `success` 를 볼 때까지 기다린다. 유한하게.
+ *
+ *    pending → success  진행
+ *    failure · error     실패 (기다리지 않는다 — 이미 결론이 났다)
+ *    unknown · 조회 실패  🔴 **성공이 아니다.** 계속 보다가 시간이 다하면 TIMEOUT
+ *
  * 🔴 **실패와 시간 초과를 구분한다.** 둘 다 "merge 안 함" 이지만 사람이 할 일이 다르다.
  *    FAILED 는 검사를 고쳐야 하고, TIMEOUT 은 아직 도는 중일 수 있다.
- *    실패는 기다리지 않는다 — 이미 결론이 났다.
  *
  * @returns {{ciState:string, checks:object[], waitedMs:number, outcome:'SETTLED'|'FAILED'|'TIMEOUT'}}
  */
@@ -337,19 +349,31 @@ async function observeCi({ sha, deps, now, sleep, log }) {
       snap = { ciState: r.ciState, checks: r.checks }
       const byName = new Map(r.checks.map((c) => [c.name, c]))
       const failed = r.checks.filter((c) => c.status === 'completed' && !OK_CONCLUSIONS.includes(c.conclusion ?? ''))
+      // 🔴 필수 검사가 skipped·neutral 로 끝난 것도 결론이다 — 기다려도 바뀌지 않는다
+      const requiredBad = REQUIRED_CHECKS.filter((n) => {
+        const c = byName.get(n)
+        return c && c.status === 'completed' && !REQUIRED_CONCLUSIONS.includes(c.conclusion ?? '')
+      })
       // 🔴 실패는 기다릴 이유가 없다
-      if (failed.length > 0) return { ...snap, waitedMs, outcome: 'FAILED' }
+      if (failed.length > 0 || requiredBad.length > 0) return { ...snap, waitedMs, outcome: 'FAILED' }
+      if (r.ciState === 'failure' || r.ciState === 'error') return { ...snap, waitedMs, outcome: 'FAILED' }
 
       const requiredSettled = REQUIRED_CHECKS.every((n) => byName.get(n)?.status === 'completed')
       const allSettled = r.checks.length > 0 && r.checks.every((c) => c.status === 'completed')
-      if (requiredSettled && allSettled) return { ...snap, waitedMs, outcome: 'SETTLED' }
+      // 🔴 합산 status 가 success 일 때만 끝낸다. pending·unknown 은 아직 모르는 것이다.
+      if (requiredSettled && allSettled && r.ciState === 'success') return { ...snap, waitedMs, outcome: 'SETTLED' }
     }
     if (waitedMs >= CI_OBSERVE_MS) return { ...snap, waitedMs, outcome: 'TIMEOUT' }
 
-    const missing = REQUIRED_CHECKS.filter((n) => !(r.ok ? r.checks : []).some((c) => c.name === n))
-    const note = r.ok
-      ? `${r.ciState} · 검사 ${r.checks.length}개${missing.length > 0 ? ` · 필수 미등록 ${missing.join(', ')}` : ''}`
-      : '조회 실패'
+    let note
+    if (!r.ok) note = '조회 실패 — 성공으로 보지 않는다'
+    else {
+      const missing = REQUIRED_CHECKS.filter((n) => !r.checks.some((c) => c.name === n))
+      const pending = r.checks.filter((c) => c.status !== 'completed')
+      if (missing.length > 0) note = `${r.ciState} · 검사 ${r.checks.length}개 · 필수 미등록 ${missing.join(', ')}`
+      else if (pending.length > 0) note = `${r.ciState} · 아직 도는 중 ${pending.map((c) => c.name).join(', ')}`
+      else note = `검사는 전부 끝났는데 합산 status 가 ${r.ciState} 다 — success 를 기다린다`
+    }
     if (note !== last) { log(`CI 관찰: ${note}`); last = note }
     await sleep(CI_POLL_MS)
   }

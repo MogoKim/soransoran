@@ -36,8 +36,25 @@ export const MERGE_RISK = new Set(['LOW', 'MEDIUM'])
  */
 export const REQUIRED_CHECKS = ['Micro Seed 3축 게이트']
 
-/** 검사가 "끝났고 괜찮다" 로 인정되는 결론 */
+/**
+ * **그 밖의** 검사가 "끝났고 괜찮다" 로 인정되는 결론.
+ *
+ * 🔴 여기에 `skipped`·`neutral` 이 있는 것은 부수 검사에 한해서다.
+ *    필수 검사에는 쓰지 않는다 — 아래 `REQUIRED_CONCLUSIONS` 를 본다.
+ */
 export const OK_CONCLUSIONS = ['success', 'skipped', 'neutral']
+
+/**
+ * 🔴 **필수 검사는 `success` 하나뿐이다** (2026-09-16 재검토).
+ *
+ *    직전 판은 필수 검사에도 `skipped`·`neutral` 을 인정했다. 그런데 워크플로에
+ *    경로 필터(`paths:`)나 조건(`if:`)이 붙으면 검사는 **돌지 않고 skipped 로 완료**된다.
+ *    그 상태를 통과로 세면 "필수 검사를 확인했다" 는 말이 **한 번도 돌지 않은 검사**를
+ *    가리키게 된다. 필수로 정해 둔 이유가 통째로 사라진다.
+ *
+ *    부수 검사의 skipped 는 그대로 둔다 — 막을 이유가 없고, 막으면 매 회차 시끄럽다.
+ */
+export const REQUIRED_CONCLUSIONS = ['success']
 
 /**
  * 자동 PR 이 바꿔도 되는 파일.
@@ -188,11 +205,19 @@ export function judgeAutoMerge({
 
     // 🔴 **있어야 할 검사가 실제로 있었는가.** 이름으로 확인한다.
     const byName = new Map(checks.map((c) => [c.name, c]))
+    // 🔴 필수 검사는 **completed + success** 만이다. skipped·neutral 은 인정하지 않는다.
     const missing = REQUIRED_CHECKS.filter((n) => {
       const c = byName.get(n)
-      return !c || c.status !== 'completed' || !OK_CONCLUSIONS.includes(c.conclusion ?? '')
+      return !c || c.status !== 'completed' || !REQUIRED_CONCLUSIONS.includes(c.conclusion ?? '')
     })
-    if (missing.length > 0) block('REQUIRED_CHECK_MISSING', `필수 검사가 완료·성공이 아니다: ${missing.join(', ')}`)
+    if (missing.length > 0) {
+      block('REQUIRED_CHECK_MISSING', `필수 검사가 완료·성공이 아니다: ${missing.map((n) => {
+        const c = byName.get(n)
+        if (!c) return `${n}(등록 안 됨)`
+        if (c.status !== 'completed') return `${n}(${c.status})`
+        return `${n}(${c.conclusion ?? '결론 없음'})`
+      }).join(', ')}`)
+    }
     else pass(`검사 ${checks.length}개 완료 (필수 ${REQUIRED_CHECKS.length}개 포함)`)
   }
 

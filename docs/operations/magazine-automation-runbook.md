@@ -212,6 +212,16 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
    11:00 은 "**이제 나왔는가**"(본문·이미지·목록 전부 200/노출) — 공개가 됐는지.
    앞의 것만 있으면, 글이 끝내 안 나온 사실을 제일 먼저 아는 사람이 **독자**가 된다.
 
+🔴 **필수 검사는 `completed` + `success` 하나뿐이다.** `skipped`·`neutral` 은 인정하지 않는다 —
+   워크플로에 경로 필터나 조건이 붙으면 검사는 돌지 않고 skipped 로 완료된다.
+   그것을 통과로 세면 "필수 검사를 확인했다" 가 **한 번도 돌지 않은 검사**를 가리키게 된다.
+   부수 검사의 skipped 는 그대로 둔다 — 막을 이유가 없고, 막으면 매 회차 시끄럽다.
+
+🔴 **check-run 이 다 끝나도 합산 status 가 pending 이면 기다린다.** 두 값은 다른 곳에서 온다 —
+   check-run 은 Actions 가, 합산은 Commit Status API 를 쓰는 것들(Vercel 등)이 올린다.
+   `pending → success` 진행 · `failure`·`error` 실패 · `unknown`·조회 실패는
+   **성공이 아니다**(계속 보다가 시간이 다하면 `CI_OBSERVE_TIMEOUT`).
+
 🔴 **커밋 합산 status 를 배포 확인으로 쓰지 않는다.** 그것은 CI 판정에 쓰는 바로 그 값이라
    검사가 전부 초록이면 success 가 된다 — **운영 도메인이 아직 옛 빌드를 서빙해도 success 다.**
    대신 세 가지를 따로 본다.
