@@ -28,6 +28,15 @@ export const AUTO_BRANCH_PREFIX = 'feat/magazine-auto-register-'
 export const MERGE_RISK = new Set(['LOW', 'MEDIUM'])
 
 /**
+ * 🔴 **이 검사가 초록이 아니면 merge 하지 않는다.**
+ *
+ *    "실패한 검사가 없다" 로는 부족하다 — 검사가 **아예 안 돌았을 때도** 그 조건은 참이다.
+ *    2026-09-16 검토에서 빈 목록이 통과하는 구멍이 확인됐다.
+ *    이름으로 **있어야 할 것**을 적어 두고, 그것이 완료·성공인지 본다.
+ */
+export const REQUIRED_CHECKS = ['Micro Seed 3축 게이트']
+
+/**
  * 자동 PR 이 바꿔도 되는 파일.
  *
  * 🔴 **목록이 아니라 모양으로 본다.** slug 는 회차마다 다르다.
@@ -52,7 +61,8 @@ export const isAllowedFile = (path) => ALLOWED_FILE_PATTERNS.some((re) => re.tes
  * @param {string} p.ciState              GitHub combined status (success/pending/failure)
  * @param {{name:string, conclusion:string|null, status:string}[]} p.checks
  * @param {{slug:string, publishAt:string, publishedAt:string, status:string}[]} p.registered  이 PR 이 등록하는 글
- * @param {Map<string,object>|object} p.queueBySlug   topic-queue 정본 (등급)
+ * @param {object} p.queueBySlug        🔴 **등록 전 큐(최신 main)** — 등급 정본
+ * @param {object} p.branchQueueBySlug  PR 브랜치의 큐 — 등급을 낮췄는지 대조용
  * @param {Set<string>} p.mainSlugs       현재 main 의 slug
  * @param {Set<string>} p.mainDates       현재 main 의 예약 날짜
  * @param {number} p.now                  판정 시각 (ms)
@@ -60,7 +70,7 @@ export const isAllowedFile = (path) => ALLOWED_FILE_PATTERNS.some((re) => re.tes
  */
 export function judgeAutoMerge({
   pr, expectedSha, files, ciState, checks = [],
-  registered, queueBySlug, mainSlugs, mainDates, now,
+  registered, queueBySlug, branchQueueBySlug = null, mainSlugs, mainDates, now,
 }) {
   const blockedBy = []
   const checked = []
@@ -103,11 +113,26 @@ export function judgeAutoMerge({
   if (ciState !== 'success') block('CI_NOT_GREEN', `CI 상태가 ${ciState} 다`)
   else pass('CI success')
 
-  const badChecks = checks.filter((c) => c.status === 'completed' && !['success', 'skipped', 'neutral'].includes(c.conclusion ?? ''))
-  const pendingChecks = checks.filter((c) => c.status !== 'completed')
-  if (badChecks.length > 0) block('CHECK_FAILED', `실패한 검사: ${badChecks.map((c) => c.name).join(', ')}`)
-  else if (pendingChecks.length > 0) block('CHECK_PENDING', `아직 도는 검사: ${pendingChecks.map((c) => c.name).join(', ')}`)
-  else if (checks.length > 0) pass(`검사 ${checks.length}개 완료`)
+  // 🔴 **빈 목록을 통과시키지 않는다** (2026-09-16 검토).
+  //    "실패한 검사가 없다" 는 검사가 아예 안 돌았을 때도 참이다.
+  //    조회에 실패했는지, 정말 없는지 구분할 수 없으면 막는다 — fail closed.
+  if (!Array.isArray(checks) || checks.length === 0) {
+    block('CHECKS_EMPTY', '검사 목록이 비었다 — 조회에 실패했거나 아직 등록되지 않았다 (확정할 수 없으면 막는다)')
+  } else {
+    const badChecks = checks.filter((c) => c.status === 'completed' && !['success', 'skipped', 'neutral'].includes(c.conclusion ?? ''))
+    const pendingChecks = checks.filter((c) => c.status !== 'completed')
+    if (badChecks.length > 0) block('CHECK_FAILED', `실패한 검사: ${badChecks.map((c) => c.name).join(', ')}`)
+    else if (pendingChecks.length > 0) block('CHECK_PENDING', `아직 도는 검사: ${pendingChecks.map((c) => c.name).join(', ')}`)
+
+    // 🔴 **있어야 할 검사가 실제로 있었는가.** 이름으로 확인한다.
+    const byName = new Map(checks.map((c) => [c.name, c]))
+    const missing = REQUIRED_CHECKS.filter((n) => {
+      const c = byName.get(n)
+      return !c || c.status !== 'completed' || !['success', 'skipped', 'neutral'].includes(c.conclusion ?? '')
+    })
+    if (missing.length > 0) block('REQUIRED_CHECK_MISSING', `필수 검사가 완료·성공이 아니다: ${missing.join(', ')}`)
+    else pass(`검사 ${checks.length}개 완료 (필수 ${REQUIRED_CHECKS.length}개 포함)`)
+  }
 
   // ── ⑤ 등록 내용 ──────────────────────────────────────────
   const rows = registered ?? []
@@ -116,6 +141,29 @@ export function judgeAutoMerge({
     return { ok: blockedBy.length === 0, blockedBy, checked }
   }
 
+  // ── ⑤-0 큐 무결성 — 🔴 **PR 이 자기 등급을 고쳐 통과할 수 없다**
+  //
+  //    등급 정본은 **등록 전 큐(최신 main)** 다. PR 브랜치의 큐는 등록하면서
+  //    그 slug 가 **삭제된** 상태라 애초에 등급을 찾을 수 없고(2026-09-16 실측),
+  //    남아 있는 항목의 등급이 바뀌었다면 그것은 자동 레인이 할 일이 아니다.
+  if (branchQueueBySlug) {
+    const registeredSlugs = new Set(rows.map((r) => r.slug))
+    for (const [slug, item] of Object.entries(branchQueueBySlug)) {
+      const base = queueBySlug?.[slug]
+      if (!base) { block('QUEUE_ADDED', `PR 이 큐에 ${slug} 를 더했다 — 자동 레인은 큐에 항목을 추가하지 않는다`); continue }
+      if (item.riskLevel !== base.riskLevel || item.autoEligible !== base.autoEligible) {
+        block('QUEUE_GRADE_CHANGED', `PR 이 ${slug} 의 등급·자격을 바꿨다 (${base.riskLevel}/${base.autoEligible} → ${item.riskLevel}/${item.autoEligible})`)
+      }
+    }
+    const removed = Object.keys(queueBySlug ?? {}).filter((s) => !(s in branchQueueBySlug))
+    const unexpectedRemoval = removed.filter((s) => !registeredSlugs.has(s))
+    if (unexpectedRemoval.length > 0) {
+      block('QUEUE_UNEXPECTED_REMOVAL', `등록하지 않은 항목이 큐에서 빠졌다: ${unexpectedRemoval.join(', ')}`)
+    }
+    if (blockedBy.length === 0) pass('큐 무결성 — 등급 변경 0 · 삭제는 등록분뿐')
+  }
+
+  // 🔴 등급은 **등록 전 큐**에서 본다. PR 의 큐에는 그 slug 가 없다.
   const lookup = (slug) => (queueBySlug instanceof Map ? queueBySlug.get(slug) : queueBySlug?.[slug])
   const seenSlug = new Set()
   const seenDate = new Set()
@@ -124,7 +172,7 @@ export function judgeAutoMerge({
     // 위험 등급 — 🔴 큐가 정본이다
     const item = lookup(r.slug)
     if (!item) {
-      block('NOT_IN_QUEUE', `${r.slug} 가 topic-queue 에 없다 — 등급을 확인할 정본이 없다`)
+      block('NOT_IN_QUEUE', `${r.slug} 가 **등록 전 큐(main)** 에 없다 — 등급을 확인할 정본이 없다`)
     } else if (!MERGE_RISK.has(item.riskLevel)) {
       block('RISK_LEVEL', `${r.slug} 는 riskLevel=${item.riskLevel} — 자동 병합은 LOW/MEDIUM 만 한다`)
     } else if (item.autoEligible !== true) {

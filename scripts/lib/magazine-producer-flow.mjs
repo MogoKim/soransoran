@@ -78,6 +78,16 @@ export async function runProducerFlow({ dryRun = false, deps }) {
 
   // ── 시작 전 검사 — 🔴 **파일도 AI 도 건드리기 전에** ──────
   if (!dryRun) {
+    // 🔴 **잠금이 맨 앞이다.** 다른 회차가 돌고 있으면 도구·git 조회조차 하지 않는다.
+    //    그리고 이 경로도 finalize 를 지난다 — 잠금 실패도 Slack 으로 알린다.
+    //    (2026-09-16: 잠금을 flow 밖에서 process.exit 로 처리했다가
+    //     "모든 종료 경로가 단일 finalizer 를 지난다" 계약을 스스로 깼다)
+    const lock = deps.checkLock ? deps.checkLock() : { ok: true }
+    if (!lock.ok) {
+      log(`🔒 ${lock.code}: ${lock.message}`)
+      return finalize({ preflight: { ok: false, stage: 'lock', blockedBy: [{ code: lock.code, message: lock.message }] } })
+    }
+
     const tools = deps.checkTools()
     if (!tools.ok) {
       for (const b of tools.blockedBy ?? []) log(`🔴 ${b.code}: ${b.message}`)

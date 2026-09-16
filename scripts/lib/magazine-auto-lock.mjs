@@ -32,6 +32,19 @@ import { DRAFTS_DIR } from './magazine-load.mjs'
 export const LOCK_PATH = join(DRAFTS_DIR, '_runs', '.auto-register.lock')
 
 /**
+ * producer **회차 전체**의 잠금.
+ *
+ * 🔴 **왜 따로 필요한가** (2026-09-16 검토).
+ *    `magazine-producer-plan.mjs` 에도 lock 이 있지만 그것은 **선정 구간만** 덮는다 —
+ *    plan 이 끝나면서 풀린다. 그 뒤로 brief 생성(claude)과 원고 회수(ChatGPT)가
+ *    수십 분 더 돈다. 등록이 01:00 으로 당겨졌으므로 **그 구간이 정확히 겹친다.**
+ *    같은 `drafts/{slug}/` 를 한쪽은 쓰고 한쪽은 읽게 된다.
+ *
+ * 🔴 날짜를 넣지 않는다. 자정을 넘겨 도는 회차가 두 개의 lock 을 잡게 된다.
+ */
+export const PRODUCER_LOCK_PATH = join(DRAFTS_DIR, '_runs', '.producer.lock')
+
+/**
  * 이 시간이 지난 lock 은 죽은 것으로 본다.
  *
  * 🔴 pid 확인만으로는 모자라다. pid 는 재사용되고, 맥이 잠들었다 깨면

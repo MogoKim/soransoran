@@ -36,7 +36,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
 import { readHandoff, waitForProducer } from './lib/magazine-handoff.mjs'
-import { LOCK_PATH as AR_LOCK, defaultPidAlive, readLock } from './lib/magazine-auto-lock.mjs'
+import { PRODUCER_LOCK_PATH, defaultPidAlive, readLock } from './lib/magazine-auto-lock.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -77,12 +77,12 @@ line(`매거진 자동 레인 시작${write ? '' : ' (dry-run)'}`)
  */
 if (write) {
   const kst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
-  const producerLockPath = AR_LOCK.replace('.auto-register.lock', '.lock')
   const handoff = await waitForProducer({
     getHandoff: () => readHandoff(kst()),
+    // 🔴 producer **회차 전체**의 lock 을 본다 (선정 구간만 덮던 옛 lock 이 아니다).
+    //    살아 있는 pid 일 때만 "도는 중" 이다 — 죽은 lock 에 영원히 붙잡히지 않는다.
     isProducerLockHeld: () => {
-      // producer 는 _runs/{date}/.lock 을 쓴다. 살아 있는 pid 일 때만 "도는 중" 이다
-      const l = readLock(producerLockPath.replace('_runs/', `_runs/${kst()}/`))
+      const l = readLock(PRODUCER_LOCK_PATH)
       return Boolean(l?.pid && defaultPidAlive(l.pid))
     },
     sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
@@ -123,15 +123,27 @@ line(reason)
  */
 let finalCode = code
 if (write && passthrough.includes('--merge')) {
-  if (code !== 0) {
-    line('등록 회차가 실패해 자동 병합을 건너뛴다')
-  } else {
-    const mergeArgs = [MERGE, '--apply', '--notify-send']
-    const m = spawnSync(NODE, mergeArgs, { cwd: ROOT, stdio: 'inherit' })
-    if (m.error) { line(`자동 병합을 띄우지 못했다 (${m.error.code ?? m.error.name})`); finalCode = 1 }
-    else if (m.status !== 0) { line(`자동 병합이 막혔다 (종료 코드 ${m.status})`); finalCode = m.status ?? 1 }
-    else line('자동 병합 완료')
-  }
+  /**
+   * 🔴 **후보 실패와 정상 PR 의 병합 가능 여부는 다른 문제다** (2026-09-16 검토).
+   *
+   *    옛 판은 `code !== 0` 이면 병합을 건너뛰었다. 그런데 등록 회차의 종료 코드는
+   *    **후보 하나라도 BLOCKED 면 1** 이다. 실제로 그런 회차가 있었다 —
+   *    3건 중 2건 QA_FAIL · 1건 DONE. 그 1건은 멀쩡한 PR 인데 병합이 건너뛰어진다.
+   *
+   *    그래서 **PR 자체를 독립으로 검증**한다. 병합기가 그 PR 의 SHA·파일·CI·등급을
+   *    처음부터 다시 보므로, 회차의 부분 실패는 병합 판정에 끼어들 자리가 없다.
+   *
+   * 🔴 그러나 **부분 실패를 숨기지 않는다.** 병합이 성공해도 회차 코드는 그대로 남는다.
+   */
+  if (code !== 0) line(`회차에 막힌 후보가 있다 (종료 코드 ${code}) — 정상 PR 은 독립으로 검증한다`)
+
+  const m = spawnSync(NODE, [MERGE, '--apply', '--notify-send'], { cwd: ROOT, stdio: 'inherit' })
+  if (m.error) { line(`자동 병합을 띄우지 못했다 (${m.error.code ?? m.error.name})`); finalCode = Math.max(finalCode, 1) }
+  else if (m.status !== 0) { line(`자동 병합이 막혔다 (종료 코드 ${m.status})`); finalCode = Math.max(finalCode, m.status ?? 1) }
+  else line('자동 병합 완료')
+
+  // 🔴 회차의 부분 실패는 병합 성공이 덮지 않는다 — 둘 중 나쁜 쪽이 남는다
+  if (code !== 0) line(`회차 판정은 그대로 ${code} 다 (막힌 후보를 숨기지 않는다)`)
 }
 
 line(`종료 (코드 ${finalCode})`)

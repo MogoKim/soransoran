@@ -1040,7 +1040,7 @@ const okReg = [{ slug: 'x-slug', publishAt: '2026-09-20T10:30:00+09:00', publish
 const okQueue = { 'x-slug': { riskLevel: 'LOW', autoEligible: true } }
 const base = {
   pr: okPr, expectedSha: SHA, files: okFiles, ciState: 'success',
-  checks: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+  checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
   registered: okReg, queueBySlug: okQueue, mainSlugs: new Set(), mainDates: new Set(), now: Date.parse('2026-09-17T00:00:00+09:00'),
 }
 const jm = (over) => M.judgeAutoMerge({ ...base, ...over })
@@ -1087,6 +1087,179 @@ expect('자동 공개가 아님을 명시한다', /merge 해도 공개는 아니
 const runbook = readFileSync(join('docs', 'operations', 'magazine-automation-runbook.md'), 'utf8')
 expect('runbook 도 01:00 이다', /01:00/.test(runbook), true)
 expect('runbook 에 02:00 이 남아 있지 않다', /02:00/.test(runbook), false)
+
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ 운영연결 ① 등록 후 삭제된 큐 — 등급은 등록 전 main 에서 본다')
+/**
+ * 🔴 **실측 재현** (2026-09-16). `register.mjs` 는 등록하면서 그 slug 를 큐에서 **뺀다.**
+ *    #524 의 diff 가 그것을 보여준다 — `-slug: 'after-menopause-body'` (19줄 삭제).
+ *    그래서 PR 브랜치의 큐에서 등급을 찾으면 **언제나 NOT_IN_QUEUE** 로 막힌다.
+ *    더 나쁜 것은, 찾을 수 있게 만들면 **PR 이 자기 등급을 낮춰 통과**할 수 있다는 점이다.
+ */
+const MG = await import('./lib/magazine-merge-gate.mjs')
+const MSHA = 'a'.repeat(40)
+const mPr = { number: 9, url: 'u', headRefName: `${MG.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: MSHA, state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
+const mFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/x-slug/draft.md']
+const mReg = [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }]
+const okChecks = [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }]
+// 🔴 등록 전 큐(main): slug 가 **있다** · 등록 후 큐(PR): slug 가 **없다**
+const MAIN_QUEUE = { 'x-slug': { riskLevel: 'MEDIUM', autoEligible: true }, 'other': { riskLevel: 'LOW', autoEligible: true } }
+const BRANCH_QUEUE = { 'other': { riskLevel: 'LOW', autoEligible: true } }
+const mBase = {
+  pr: mPr, expectedSha: MSHA, files: mFiles, ciState: 'success', checks: okChecks,
+  registered: mReg, queueBySlug: MAIN_QUEUE, branchQueueBySlug: BRANCH_QUEUE,
+  mainSlugs: new Set(['other-live']), mainDates: new Set(['2026-09-24']),
+  now: Date.parse('2026-09-17T00:00:00+09:00'),
+}
+const jmg = (over) => MG.judgeAutoMerge({ ...mBase, ...over })
+const mCodes = (v) => v.blockedBy.map((b) => b.code)
+
+expect('🔴 등록으로 큐에서 빠져도 통과한다 (등급은 main 에서)', jmg().ok, true)
+expect('큐 무결성을 확인했다고 남긴다', jmg().checked.some((c) => c.includes('큐 무결성')), true)
+// 🔴 옛 방식(PR 큐에서 등급 조회)이었다면 막혔을 것 — 그 회귀를 고정한다
+expect('🔴 PR 큐를 정본으로 쓰면 막힌다 (옛 결함 재현)', mCodes(MG.judgeAutoMerge({ ...mBase, queueBySlug: BRANCH_QUEUE })).includes('NOT_IN_QUEUE'), true)
+// 🔴 PR 이 등급을 낮춰 통과할 수 없다
+expect(
+  '🔴 PR 이 등급을 낮추면 막는다',
+  mCodes(jmg({ branchQueueBySlug: { other: { riskLevel: 'LOW', autoEligible: true }, 'y': { riskLevel: 'LOW', autoEligible: true } } })).includes('QUEUE_ADDED'),
+  true,
+)
+expect(
+  '🔴 남은 항목의 등급을 바꾸면 막는다',
+  mCodes(jmg({ branchQueueBySlug: { other: { riskLevel: 'HIGH', autoEligible: true } } })).includes('QUEUE_GRADE_CHANGED'),
+  true,
+)
+expect(
+  '🔴 자격을 바꿔도 막는다',
+  mCodes(jmg({ branchQueueBySlug: { other: { riskLevel: 'LOW', autoEligible: false } } })).includes('QUEUE_GRADE_CHANGED'),
+  true,
+)
+expect(
+  '🔴 등록하지 않은 항목을 큐에서 빼면 막는다',
+  mCodes(jmg({ branchQueueBySlug: {} })).includes('QUEUE_UNEXPECTED_REMOVAL'),
+  true,
+)
+// 등급 자체는 여전히 main 기준으로 막힌다
+expect('main 큐가 HIGH 면 막는다', mCodes(jmg({ queueBySlug: { ...MAIN_QUEUE, 'x-slug': { riskLevel: 'HIGH', autoEligible: true } } })).includes('RISK_LEVEL'), true)
+
+console.log('\n══════ 운영연결 ② CI 조회 실패 · 빈 목록 · 필수 검사 누락')
+expect('🔴 빈 검사 목록은 막는다', mCodes(jmg({ checks: [] })).includes('CHECKS_EMPTY'), true)
+expect('🔴 조회 실패(unknown)도 막는다', mCodes(jmg({ ciState: 'unknown' })).includes('CI_NOT_GREEN'), true)
+expect(
+  '🔴 필수 검사가 없으면 막는다',
+  mCodes(jmg({ checks: [{ name: '엉뚱한 검사', status: 'completed', conclusion: 'success' }] })).includes('REQUIRED_CHECK_MISSING'),
+  true,
+)
+expect(
+  '필수 검사가 실패면 막는다',
+  mCodes(jmg({ checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'failure' }] })).includes('CHECK_FAILED'),
+  true,
+)
+expect(
+  '필수 검사가 아직 돌면 막는다',
+  mCodes(jmg({ checks: [{ name: 'Micro Seed 3축 게이트', status: 'in_progress', conclusion: null }] })).includes('CHECK_PENDING'),
+  true,
+)
+expect('필수 검사 목록이 비어 있지 않다', MG.REQUIRED_CHECKS.length > 0, true)
+
+console.log('\n══════ 운영연결 ③ 부분 실패와 병합 가능 여부는 다르다')
+/**
+ * 🔴 실측: 3건 중 2건 QA_FAIL · 1건 DONE → 회차 종료 코드 1.
+ *    옛 판은 그 1 때문에 **멀쩡한 PR 의 병합을 건너뛰었다.**
+ */
+const runSrc = readFileSync(join('scripts', 'magazine-auto-register-run.mjs'), 'utf8')
+expect('🔴 회차가 실패해도 병합을 건너뛰지 않는다', /if \(code !== 0\) line\(`회차에 막힌 후보가 있다/.test(runSrc), true)
+expect('옛 건너뛰기 코드가 없다', /등록 회차가 실패해 자동 병합을 건너뛴다/.test(runSrc), false)
+expect('🔴 부분 실패를 숨기지 않는다', /회차 판정은 그대로 \$\{code\} 다/.test(runSrc), true)
+expect('병합 성공이 회차 실패를 덮지 않는다 (Math.max)', /finalCode = Math\.max\(finalCode/.test(runSrc), true)
+// 정상 PR 은 독립으로 검증된다 — 회차 결과가 판정에 들어가지 않는다
+expect('병합 관문 입력에 회차 결과가 없다', Object.keys(mBase).includes('runVerdict'), false)
+
+console.log('\n══════ 운영연결 ④ producer 회차 전체 잠금')
+const lockMod = await import('./lib/magazine-auto-lock.mjs')
+expect('producer 회차 lock 경로가 따로 있다', typeof lockMod.PRODUCER_LOCK_PATH, 'string')
+expect('auto-register lock 과 다른 파일이다', lockMod.PRODUCER_LOCK_PATH === lockMod.LOCK_PATH, false)
+expect('날짜가 들어가지 않는다 (자정 넘김)', /\d{4}-\d{2}-\d{2}/.test(lockMod.PRODUCER_LOCK_PATH), false)
+const prodSrc = readFileSync(join('scripts', 'magazine-producer-run.mjs'), 'utf8')
+expect('🔴 producer 가 회차 전체를 잠근다', /checkLock: \(\) => \{ producerLock = acquireLock\(\{ path: PRODUCER_LOCK_PATH/.test(prodSrc), true)
+expect('🔴 잠금 실패도 단일 finalizer 를 지난다 (Slack 이 나간다)', /checkLock/.test(readFileSync(join('scripts','lib','magazine-producer-flow.mjs'),'utf8')), true)
+expect('🔴 신호를 먼저 쓰고 그다음 잠금을 푼다', prodSrc.indexOf('writeHandoff({') < prodSrc.indexOf('producerLock.release()'), true)
+expect('dry-run 은 잠그지 않는다 (flow 가 !dryRun 에서만 checkLock 을 부른다)', /if \(!dryRun\) \{/.test(readFileSync(join('scripts','lib','magazine-producer-flow.mjs'),'utf8')), true)
+expect('🔴 등록이 회차 전체 lock 을 본다', /readLock\(PRODUCER_LOCK_PATH\)/.test(runSrc), true)
+expect('죽은 pid 에 붙잡히지 않는다', /defaultPidAlive\(l\.pid\)/.test(runSrc), true)
+// 선정 완료 후에도 brief·회수가 계속되는 상황 = lock 이 살아 있다
+expect(
+  '선정 뒤에도 잠금이 유지된다 (release 가 flow 뒤에 있다)',
+  prodSrc.indexOf('runProducerFlow({') < prodSrc.indexOf('producerLock.release()'),
+  true,
+)
+
+console.log('\n══════ 운영연결 ⑤ 배포 · 예약 상태 실제 확인')
+const AM = await import('./magazine-auto-merge.mjs')
+const DNOW = Date.parse('2026-09-17T12:00:00+09:00')
+const jd = (over) => AM.judgeDeploy({ deployState: 'success', slugStatuses: [], now: DNOW, ...over })
+expect('배포 성공 + 확인할 글 없음 → 통과', jd().ok, true)
+expect('🔴 배포가 안 됐으면 막는다', jd({ deployState: 'pending' }).blockedBy[0].code, 'DEPLOY_NOT_READY')
+expect(
+  '🔴 예약 글이 미리 공개되면 막는다',
+  jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-25T10:30:00+09:00', httpStatus: 200 }] }).blockedBy[0].code,
+  'PUBLISHED_EARLY',
+)
+expect(
+  '예약 전에는 404 가 정상이다',
+  jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-25T10:30:00+09:00', httpStatus: 404 }] }).ok,
+  true,
+)
+expect(
+  '🔴 예약일이 지났는데 안 보이면 막는다',
+  jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-16T10:30:00+09:00', httpStatus: 404 }] }).blockedBy[0].code,
+  'NOT_PUBLISHED',
+)
+expect(
+  '예약일이 지나 200 이면 통과',
+  jd({ slugStatuses: [{ slug: 'x', publishAt: '2026-09-16T10:30:00+09:00', httpStatus: 200 }] }).ok,
+  true,
+)
+const mergeSrc = readFileSync(join('scripts', 'magazine-auto-merge.mjs'), 'utf8')
+expect('🔴 CI 관찰에 제한 시간이 있다', /CI_OBSERVE_MS/.test(mergeSrc), true)
+expect('무한 대기하지 않는다 (waitedMs >= maxMs)', /waitedMs >= maxMs/.test(mergeSrc), true)
+expect('🔴 재실행 손잡이가 없다', /rerun|--admin|workflow run/.test(mergeSrc), false)
+expect('고정 SHA 를 관찰한다', /observeChecks\(pr\.headRefOid\)/.test(mergeSrc), true)
+expect('🔴 등급을 main 큐에서 읽는다', /origin\/main:drafts\/magazine\/topic-queue\.ts/.test(mergeSrc), true)
+
+console.log('\n══════ 운영연결 ⑥ 이미지 생성의 CDP 제한')
+const heroSrc = readFileSync(join('scripts', 'magazine-hero-runner.mjs'), 'utf8')
+expect('🔴 15초 제한이 남아 있지 않다', /timeout: 15000/.test(heroSrc), false)
+expect('공통 정책 상수를 쓴다', /timeout: CDP_CONNECT_TIMEOUT_MS/.test(heroSrc), true)
+expect('두 곳 모두 바뀌었다', (heroSrc.match(/timeout: CDP_CONNECT_TIMEOUT_MS/g) ?? []).length, 2)
+const sessSrc = readFileSync(join('scripts', 'lib', 'chatgpt-session.mjs'), 'utf8')
+expect('저장소 전체에 15초 CDP 제한이 없다', /connectOverCDP\([^)]*timeout: 15000/.test(sessSrc + heroSrc), false)
+
+console.log('\n══════ 운영연결 ⑦ 실행기 연결 — 가짜 git/gh 응답')
+/**
+ * 🔴 순수 판정만 시험하면 **연결**을 못 본다. 파서가 실제 파일 모양을 읽는지,
+ *    등록분을 main 대비로 뽑는지를 가짜 응답으로 확인한다.
+ */
+const fakeMainArticles = ["const R = {", "  'live-one': {", "    publishedAt: '2026-09-20',", "      publishAt: '2026-09-20T10:30:00+09:00',", "  },", "}"].join('\n')
+const fakeBranchArticles = ["const R = {", "  'live-one': {", "    publishedAt: '2026-09-20',", "      publishAt: '2026-09-20T10:30:00+09:00',", "  },", "  'new-one': {", "    publishedAt: '2026-09-21',", "      status: 'SCHEDULED',", "      publishAt: '2026-09-21T10:30:00+09:00',", "  },", "}"].join('\n')
+const mainParsed = AM.parseArticles(fakeMainArticles)
+const branchParsed = AM.parseArticles(fakeBranchArticles)
+expect('main 에서 기존 글을 읽는다', mainParsed.map((r) => r.slug), ['live-one'])
+expect('브랜치에서 새 글까지 읽는다', branchParsed.map((r) => r.slug), ['live-one', 'new-one'])
+const mainSet = new Set(mainParsed.map((r) => r.slug))
+const newlyAdded = branchParsed.filter((r) => !mainSet.has(r.slug))
+expect('🔴 등록분만 뽑는다 (main 대비 차집합)', newlyAdded.map((r) => r.slug), ['new-one'])
+expect('예약 시각을 읽는다', newlyAdded[0].publishAt, '2026-09-21T10:30:00+09:00')
+const fakeQueue = ["export const Q = [", "  { slug: 'x-slug', riskLevel: 'MEDIUM', autoEligible: true },", "  { slug: 'hi-slug', riskLevel: 'HIGH', autoEligible: false },", "]"].join('\n')
+const parsedQ = AM.parseQueue(fakeQueue)
+expect('큐 파서가 등급을 읽는다', parsedQ['x-slug'], { riskLevel: 'MEDIUM', autoEligible: true })
+expect('🔴 HIGH·비자격도 정확히 읽는다', parsedQ['hi-slug'], { riskLevel: 'HIGH', autoEligible: false })
+// 연결: 파서 → 관문
+expect(
+  '파서 결과로 관문이 HIGH 를 막는다',
+  MG.judgeAutoMerge({ ...mBase, registered: [{ slug: 'hi-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }], queueBySlug: parsedQ, branchQueueBySlug: null }).blockedBy.map((b) => b.code).includes('RISK_LEVEL'),
+  true,
+)
 
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')

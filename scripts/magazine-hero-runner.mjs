@@ -39,7 +39,7 @@
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { loadQueue } from './lib/magazine-load.mjs'
-import { CDP_URL, ensurePageTarget } from './lib/chatgpt-session.mjs'
+import { CDP_URL, ensurePageTarget, CDP_CONNECT_TIMEOUT_MS } from './lib/chatgpt-session.mjs'
 import {
   planHero, buildPrompt, injectHeroImage, verifyHeroFile,
   heroFilePath, heroPublicPath, HERO_WIDTH, HERO_HEIGHT,
@@ -66,7 +66,7 @@ async function generateImage(prompt) {
   const tab = await ensurePageTarget()
   if (!tab.ok) return { ok: false, why: 'CHROME_NOT_RUNNING — magazine-webui-runner.mjs --login 으로 창을 띄운다' }
 
-  const browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: 15000 })
+  const browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: CDP_CONNECT_TIMEOUT_MS })
   const ctx = browser.contexts()[0]
   if (!ctx) return { ok: false, why: 'no_context' }
   const page = await ctx.newPage()
@@ -108,7 +108,7 @@ async function generateImage(prompt) {
 
 /** PNG 버퍼 → 1200×675 webp 버퍼. Chrome 내장 인코더를 쓴다 */
 async function toHeroWebp(pngBuffer) {
-  const browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: 15000 })
+  const browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: CDP_CONNECT_TIMEOUT_MS })
   const ctx = browser.contexts()[0]
   const page = await ctx.newPage()
   try {

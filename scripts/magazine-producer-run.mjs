@@ -54,6 +54,7 @@ import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
 import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
 import { writeHandoff } from './lib/magazine-handoff.mjs'
+import { acquireLock, PRODUCER_LOCK_PATH } from './lib/magazine-auto-lock.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -123,10 +124,25 @@ async function notifyOnce({ verdict, outstanding, preflight: pf, dryRun: isDry }
 
 line(`매거진 producer 시작${dryRun ? ' (dry-run)' : ''}`)
 
+/**
+ * 🔴 **회차 전체를 잠근다** (2026-09-16 검토).
+ *
+ *    plan 의 lock 은 선정 구간만 덮는다 — brief 생성과 원고 회수는 그 밖이다.
+ *    등록이 01:00 으로 당겨졌으므로 그 구간이 겹칠 수 있다.
+ *    이 lock 은 **선정 시작부터 회수 끝까지** 살아 있고, 01:00 등록이 그것을 본다.
+ *
+ * 🔴 dry-run 은 잠그지 않는다. 아무것도 쓰지 않는다.
+ * 🔴 재시도하지 않는다. 다른 회차가 돌고 있으면 그대로 끝낸다.
+ */
+let producerLock = { ok: true, release: () => {} }
+
 const result = await runProducerFlow({
   dryRun,
   deps: {
     log: line,
+    // 🔴 회차 전체를 잠근다 — 선정 구간만 덮던 plan 의 lock 과 다르다.
+    //    실패해도 finalize 를 지나므로 Slack 이 나간다.
+    checkLock: () => { producerLock = acquireLock({ path: PRODUCER_LOCK_PATH, label: 'producer' }); return producerLock },
     // 🔴 gh 가 없으면 미해결 판정을 할 수 없다. "없다" 가 아니라 "모른다" 이므로 멈춘다.
     checkTools: () => preflightTools({ exec }),
     // 🔴 producer 는 drafts/magazine/{slug}/ 에 **추적 파일**을 쓴다.
@@ -150,6 +166,10 @@ if (!dryRun) {
     line(`인계 신호를 남기지 못했다 — 판정에 반영하지 않는다 (${e?.message ?? e})`)
   }
 }
+
+// 🔴 신호를 먼저 쓰고 그다음 잠금을 푼다.
+//    순서를 뒤집으면 등록이 "lock 없음 + 신호 없음" 을 보고 먼저 출발한다.
+producerLock.release()
 
 if (result.failures?.length) for (const f of result.failures) line(`🔴 ${f}`)
 line(`판정: ${result.verdict} — ${result.reason}`)
