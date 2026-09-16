@@ -47,7 +47,23 @@ export const stage = (name, { spawnError = null, status = null, skipped = false,
  * @param {{code:string, severity:string}|null} [p.outstanding]  HOLD/FAILURE 판정 (있으면 그것이 먼저다)
  * @returns {{code:number, verdict:'OK'|'HOLD'|'CONTENT'|'SYSTEM', reason:string, failures:string[]}}
  */
-export function judgeProducerRun({ plan, brief, fetch, outstanding = null }) {
+export function judgeProducerRun({ plan, brief, fetch, outstanding = null, preflight = null }) {
+  // ── 시작 전 검사가 막혔으면 그것이 먼저다 ────────────────
+  //
+  // 🔴 도구 부재(claude·gh)와 git 상태(NOT_ON_MAIN·DIRTY_TREE)는 **시스템 실패**다.
+  //    이 판정을 여기 두는 이유는 하나다 — 그래야 종료 경로가 하나로 모이고,
+  //    그 하나에 Slack 알림이 달린다. 옛 판은 이 둘이 `process.exit(1)` 로 빠져나가
+  //    "실패 회차에서도 알린다" 는 계약이 실제로는 성립하지 않았다 (2026-09-16 재검토).
+  if (preflight && !preflight.ok) {
+    const codes = (preflight.blockedBy ?? []).map((b) => b.code)
+    return {
+      code: 1,
+      verdict: 'SYSTEM',
+      reason: (preflight.blockedBy ?? []).map((b) => `${b.code}: ${b.message}`).join(' / ') || 'preflight 실패',
+      failures: codes.length ? codes : ['PREFLIGHT_FAILED'],
+    }
+  }
+
   // ── 미해결 작업이 있으면 그 판정이 먼저다 ──────────────────
   if (outstanding && outstanding.severity === 'FAILURE') {
     return { code: 1, verdict: 'SYSTEM', reason: outstanding.code, failures: [outstanding.code] }

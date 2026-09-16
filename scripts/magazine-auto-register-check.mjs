@@ -33,6 +33,7 @@ import {
   AUTO_BRANCH_PREFIX, isAutoBranch, judgeOutstanding, readOutstanding, SEVERITY,
 } from './lib/magazine-outstanding.mjs'
 import { judgeProducerRun, stage } from './lib/magazine-producer-exit.mjs'
+import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
 import { parseHeroBlock, validateHeroBrief } from './lib/magazine-hero-brief.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
@@ -592,23 +593,26 @@ expect('날짜는 10:30 KST 로 굳는다', normalizePublishAt(picked[0]).publis
 // 실제 재고와 겹치지 않는다 — 9/17 까지 차 있으므로 9/18 부터가 맞다
 expect('이미 찬 날짜는 건너뛴다', slotAllocator('2026-09-10')(), '2026-09-18')
 
+/**
+ * 🔴 **순서는 소스 위치가 아니라 흐름으로 시험한다** (2026-09-16 재검토에서 배운 것).
+ *
+ *    옛 판은 `indexOf('readOutstanding') < indexOf('spawnSync(NODE, [PLAN]')` 같은
+ *    문자열 위치 비교로 "앞이다" 를 확인했다. 그 방식은 **도달 여부를 보지 못한다** —
+ *    실제로 `runNotify()` 는 소스상 앞에 있었는데 두 경로가 그 줄에 닿지 못했다.
+ *
+ *    그래서 "무엇이 앞이다" 는 위의 `P0-3 알림 계약` 묶음이 **주입한 흐름을 돌려서**
+ *    증명한다 — HOLD·NOT_ON_MAIN·TOOL_MISSING 에서 `calls.plan/brief/fetch` 가 0 이다.
+ *    여기서는 **배선만** 본다: producer-run 이 그 흐름에 실제로 연결돼 있는가.
+ */
 const producerSrc = readFileSync(join('scripts', 'magazine-producer-run.mjs'), 'utf8')
-expect('producer 가 같은 판정을 쓴다', producerSrc.includes("from './lib/magazine-outstanding.mjs'"), true)
-expect(
-  'producer 는 plan(첫 write) 보다 앞에서 본다',
-  producerSrc.indexOf('readOutstanding({ exec })') < producerSrc.indexOf('spawnSync(NODE, [PLAN]'),
-  true,
-)
-expect(
-  'producer 는 git 상태도 첫 write 전에 본다',
-  producerSrc.indexOf('preflight({ exec })') < producerSrc.indexOf('spawnSync(NODE, [PLAN]'),
-  true,
-)
-expect(
-  'producer 는 brief(AI 호출) 보다 앞에서 본다',
-  producerSrc.indexOf('readOutstanding({ exec })') < producerSrc.indexOf('spawnSync(NODE, [BRIEF_AUTO'),
-  true,
-)
+expect('producer 가 같은 미해결 판정을 쓴다', producerSrc.includes("from './lib/magazine-outstanding.mjs'"), true)
+expect('producer 가 단일 finalizer 흐름에 연결돼 있다', producerSrc.includes('runProducerFlow({'), true)
+expect('producer 가 흐름에 checkTools 를 준다', /checkTools: \(\) => preflightTools/.test(producerSrc), true)
+expect('producer 가 흐름에 checkGit 을 준다', /checkGit: \(\) => preflight\(/.test(producerSrc), true)
+expect('producer 가 흐름에 checkOutstanding 을 준다', /checkOutstanding: \(\) => readOutstanding/.test(producerSrc), true)
+expect('producer 가 흐름에 notify 를 준다', /notify: notifyOnce/.test(producerSrc), true)
+// 🔴 옛 결함의 화석 — 시작 전 검사의 중간 exit 가 되살아나면 알림 계약이 다시 깨진다
+expect('시작 전 검사에 중간 process.exit 가 없다', /process\.exit\(1\)/.test(producerSrc), false)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ P0-2 producer 종료 코드 — 실패를 성공으로 숨기지 않는다')
@@ -680,17 +684,200 @@ expect(
 
 // 🔴 Slack 은 판정에 없다 — 알림 실패가 원래 실패를 성공으로 바꾸지 못한다
 expect('판정 입력에 slack 이 없다', Object.keys(allOk).includes('slack'), false)
-expect(
-  '알림 단계는 판정에 반영하지 않는다고 적혀 있다',
-  /알림 단계 실행 실패 — 판정에 반영하지 않는다/.test(producerSrc),
-  true,
-)
-// 🔴 알림은 **판정보다 먼저** 무조건 돈다. 실패 회차라고 건너뛰면 사람이 모른다.
-expect('실패 회차에서도 알림을 시도한다', producerSrc.indexOf('\nrunNotify()') < producerSrc.indexOf('const verdict = judgeProducerRun'), true)
-expect('알림은 조건 없이 불린다', /\nrunNotify\(\)\n/.test(producerSrc), true)
-expect('HOLD 회차에서도 알림을 시도한다', producerSrc.indexOf('runNotify()') < producerSrc.indexOf('const v = judgeProducerRun'), true)
-expect('판정 결과로 종료한다 (planCode 가 아니다)', /process\.exit\(verdict\.code\)/.test(producerSrc), true)
+// 🔴 "알림을 반드시 시도한다 · 알림이 판정을 바꾸지 않는다" 는 아래 `P0-3` 묶음이
+//    주입한 흐름을 돌려서 증명한다 (calls.notify === 1 · Slack 실패에도 exit 유지).
+//    여기서는 종료가 판정 결과로 이뤄지는지만 본다.
+expect('판정 결과로 종료한다 (planCode 가 아니다)', /process\.exit\(result\.code\)/.test(producerSrc), true)
 expect('planCode 를 그대로 반환하던 코드가 없다', /process\.exit\(planCode\)/.test(producerSrc), false)
+expect('종료 경로가 하나다', (producerSrc.match(/process\.exit\(/g) ?? []).length, 1)
+
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ P0-3 알림 계약 — 흐름을 실제로 돌려서 시험한다')
+/**
+ * 🔴 **왜 이 묶음이 생겼나** (2026-09-16 Codex 재검토).
+ *
+ *    직전 판은 "실패 회차에서도 Slack 을 반드시 시도한다" 고 적고, 정작
+ *    `preflightTools` 실패와 `git preflight` 실패가 그 앞에서 `process.exit(1)` 했다.
+ *    회귀 테스트는 있었지만 **소스에서 `runNotify()` 의 위치만** 봤다 —
+ *    그 줄에 **도달하지 못하는 경로**는 아무도 보지 않았다.
+ *
+ *    그래서 여기서는 위치를 보지 않는다. **주입한 흐름을 실제로 돌리고**
+ *    무엇이 불렸는지·무엇이 안 불렸는지·종료 코드가 무엇인지를 본다.
+ */
+const OK_STAGE = { spawnError: null, status: 0 }
+
+/** 호출을 기록하는 가짜 deps. 🔴 실제 git·gh·claude·브라우저·Slack 을 부르지 않는다 */
+function makeDeps(over = {}) {
+  const calls = { notify: 0, plan: 0, brief: 0, fetch: 0 }
+  const sent = []
+  const deps = {
+    log: () => {},
+    checkTools: () => ({ ok: true }),
+    checkGit: () => ({ ok: true }),
+    checkOutstanding: () => ({ ok: true, code: 'CLEAR', message: '없음' }),
+    runPlan: () => { calls.plan += 1; return OK_STAGE },
+    runBrief: () => { calls.brief += 1; return OK_STAGE },
+    runFetch: () => { calls.fetch += 1; return OK_STAGE },
+    notify: (ctx) => { calls.notify += 1; sent.push(ctx); return { ok: true } },
+    ...over,
+  }
+  return { deps, calls, sent }
+}
+
+const TOOLS_FAIL = { ok: false, blockedBy: [{ code: 'TOOL_MISSING', message: 'claude 를 실행할 수 없다 (producer 의 brief 생성) — launchd PATH 에 없다' }] }
+const NOT_ON_MAIN = { ok: false, blockedBy: [{ code: 'NOT_ON_MAIN', message: '현재 브랜치가 feat/x 다 — write 는 main 에서만 시작한다' }] }
+const DIRTY = { ok: false, blockedBy: [{ code: 'DIRTY_TREE', message: '추적 파일 변경 3건 — write 는 깨끗한 트리에서만 시작한다' }] }
+
+// ── ① claude·gh 누락 ────────────────────────────────────
+{
+  const { deps, calls } = makeDeps({ checkTools: () => TOOLS_FAIL })
+  const r = await runProducerFlow({ deps })
+  expect('도구 누락: exit 1', r.code, 1)
+  expect('도구 누락: SYSTEM', r.verdict, 'SYSTEM')
+  expect('🔴 도구 누락: Slack 을 한 번 시도한다', calls.notify, 1)
+  expect('도구 누락: plan(파일 write) 0회', calls.plan, 0)
+  expect('도구 누락: brief(AI 호출) 0회', calls.brief, 0)
+  expect('도구 누락: fetch(브라우저) 0회', calls.fetch, 0)
+  expect('도구 누락: 실행한 단계 0개', r.ran, [])
+  expect('도구 누락: 사유를 보존한다', r.failures, ['TOOL_MISSING'])
+}
+
+// ── ② NOT_ON_MAIN ───────────────────────────────────────
+{
+  const { deps, calls, sent } = makeDeps({ checkGit: () => NOT_ON_MAIN })
+  const r = await runProducerFlow({ deps })
+  expect('NOT_ON_MAIN: exit 1', r.code, 1)
+  expect('🔴 NOT_ON_MAIN: Slack 을 한 번 시도한다', calls.notify, 1)
+  expect('NOT_ON_MAIN: write·AI 0회', [calls.plan, calls.brief, calls.fetch], [0, 0, 0])
+  expect('NOT_ON_MAIN: 판정을 알림에 넘긴다', sent[0].verdict.code, 1)
+  expect('NOT_ON_MAIN: preflight 단계를 알림에 넘긴다', sent[0].preflight.stage, 'git')
+  expect('NOT_ON_MAIN: 사유를 보존한다', r.failures, ['NOT_ON_MAIN'])
+}
+
+// ── ③ DIRTY_TREE ────────────────────────────────────────
+{
+  const { deps, calls } = makeDeps({ checkGit: () => DIRTY })
+  const r = await runProducerFlow({ deps })
+  expect('DIRTY_TREE: exit 1', r.code, 1)
+  expect('🔴 DIRTY_TREE: Slack 을 한 번 시도한다', calls.notify, 1)
+  expect('DIRTY_TREE: write·AI 0회', [calls.plan, calls.brief, calls.fetch], [0, 0, 0])
+  expect('DIRTY_TREE: 사유를 보존한다', r.failures, ['DIRTY_TREE'])
+}
+
+// ── ④ Slack 자체 실패 → 원래 exit code 유지 ──────────────
+{
+  const { deps, calls } = makeDeps({
+    checkGit: () => NOT_ON_MAIN,
+    notify: () => { calls0.notify += 1; return { ok: false, reason: 'webhook 500' } },
+  })
+  const calls0 = calls
+  const r = await runProducerFlow({ deps })
+  expect('🔴 Slack 실패해도 exit 1 그대로', r.code, 1)
+  expect('Slack 실패를 기록한다', r.notify.ok, false)
+  expect('Slack 실패가 판정을 바꾸지 않는다', r.verdict, 'SYSTEM')
+}
+{
+  // 알림이 **던져도** 회차 판정은 그대로다
+  const { deps } = makeDeps({ checkGit: () => NOT_ON_MAIN, notify: () => { throw new Error('ENOTFOUND') } })
+  const r = await runProducerFlow({ deps })
+  expect('🔴 Slack 이 예외를 던져도 exit 1 그대로', r.code, 1)
+  expect('예외를 삼키고 사유를 남긴다', /ENOTFOUND/.test(r.notify.reason), true)
+}
+{
+  // 반대 방향 — 알림 실패가 성공 회차를 실패로 만들지 않는다
+  const { deps } = makeDeps({ notify: () => ({ ok: false, reason: 'webhook 500' }) })
+  const r = await runProducerFlow({ deps })
+  expect('🔴 Slack 실패가 성공 회차를 실패로 만들지 않는다', r.code, 0)
+}
+
+// ── ⑤ OUTSTANDING_PR → exit 0 HOLD · PR URL 포함 ─────────
+const HOLD_PR = { number: 521, url: 'https://github.com/MogoKim/soransoran/pull/521', headRefName: `${PRE}2026-09-16-020000`, state: 'OPEN' }
+const HOLD = { ok: false, code: 'OUTSTANDING_PR', severity: SEVERITY.HOLD, pr: HOLD_PR, message: `자동 PR #521 이 아직 열려 있다 (${HOLD_PR.url})` }
+{
+  const { deps, calls, sent } = makeDeps({ checkOutstanding: () => HOLD })
+  const r = await runProducerFlow({ deps })
+  expect('HOLD: exit 0 (정상)', r.code, 0)
+  expect('HOLD: 판정이 HOLD', r.verdict, 'HOLD')
+  expect('🔴 HOLD: Slack 을 한 번 시도한다', calls.notify, 1)
+  expect('HOLD: write·AI 0회', [calls.plan, calls.brief, calls.fetch], [0, 0, 0])
+
+  const msg = composeProducerMessage(sent[0])
+  expect('🔴 HOLD 문구에 PR 번호가 있다', msg.title.includes('#521'), true)
+  expect('🔴 HOLD 문구에 PR URL 이 있다', msg.next, HOLD_PR.url)
+  expect('🔴 HOLD 문구에 "merge 또는 명시적 폐기" 가 있다', /merge 또는 명시적 폐기 전 다음 생산 HOLD/.test(msg.reason), true)
+  expect('HOLD 는 ERROR 로 보내지 않는다', msg.severity, 'INFO')
+}
+{
+  // orphan 은 HOLD 가 아니라 실패다
+  const ORPHAN = { ok: false, code: 'ORPHAN_REMOTE_BRANCH', severity: SEVERITY.FAILURE, pr: null, message: 'origin 에 PR 없는 자동 브랜치가 있다' }
+  const { deps, calls, sent } = makeDeps({ checkOutstanding: () => ORPHAN })
+  const r = await runProducerFlow({ deps })
+  expect('orphan: exit 1', r.code, 1)
+  expect('orphan: Slack 을 한 번 시도한다', calls.notify, 1)
+  expect('orphan 문구는 ERROR', composeProducerMessage(sent[0]).severity, 'ERROR')
+}
+
+// ── ⑥ 정상 회차 — 기존 동작 유지 ─────────────────────────
+{
+  const { deps, calls } = makeDeps()
+  const r = await runProducerFlow({ deps })
+  expect('정상: exit 0', r.code, 0)
+  expect('정상: 판정 OK', r.verdict, 'OK')
+  expect('정상: plan·brief·fetch 를 전부 돈다', [calls.plan, calls.brief, calls.fetch], [1, 1, 1])
+  expect('정상: 알림도 한 번', calls.notify, 1)
+  expect('정상: 실행 단계를 기록한다', r.ran, ['plan', 'brief', 'fetch'])
+}
+{
+  // 회수기 전역 실패 — 단계는 돌았고, 실패는 실패다
+  const { deps, calls } = makeDeps({ runFetch: () => ({ spawnError: null, status: 1 }) })
+  const r = await runProducerFlow({ deps })
+  expect('회수 전역 실패: exit 1', r.code, 1)
+  expect('회수 전역 실패: 알림 한 번', calls.notify, 1)
+  expect('ChatGPT·브라우저를 지목한다', /ChatGPT|브라우저/.test(r.reason), true)
+}
+{
+  // 일부만 게이트에 막힘 — 실패가 아니다
+  const { deps } = makeDeps({ runBrief: () => ({ spawnError: null, status: 1 }) })
+  const r = await runProducerFlow({ deps })
+  expect('일부 게이트 차단: exit 0', r.code, 0)
+  expect('일부 게이트 차단: CONTENT', r.verdict, 'CONTENT')
+}
+{
+  // plan 이 실패하면 brief·fetch 를 돌리지 않는다
+  const { deps, calls } = makeDeps({ runPlan: () => ({ spawnError: null, status: 1 }) })
+  const r = await runProducerFlow({ deps })
+  expect('plan 실패: exit 1', r.code, 1)
+  expect('plan 실패: brief·fetch 를 돌리지 않는다', [calls.brief, calls.fetch], [0, 0])
+  expect('plan 실패: 알림 한 번', calls.notify, 1)
+}
+
+// ── ⑦ dry-run — 검사도 단계도 돌지 않고, 알림은 dry 로 넘어간다 ──
+{
+  const { deps, calls, sent } = makeDeps({
+    checkTools: () => { throw new Error('dry-run 에서 불리면 안 된다') },
+    checkGit: () => { throw new Error('dry-run 에서 불리면 안 된다') },
+    checkOutstanding: () => { throw new Error('dry-run 에서 불리면 안 된다') },
+  })
+  const r = await runProducerFlow({ dryRun: true, deps })
+  expect('dry-run: exit 0', r.code, 0)
+  expect('dry-run: 단계를 하나도 돌지 않는다', [calls.plan, calls.brief, calls.fetch], [0, 0, 0])
+  expect('dry-run: 알림은 한 번 시도', calls.notify, 1)
+  expect('🔴 dry-run 임을 알림에 넘긴다 (실제 발송 금지)', sent[0].dryRun, true)
+}
+
+// ── ⑧ 종료 경로는 하나다 — 알림은 회차당 정확히 한 번 ────
+{
+  const { deps, calls } = makeDeps({ checkTools: () => TOOLS_FAIL })
+  await runProducerFlow({ deps })
+  expect('중단 회차에서도 알림은 정확히 1회', calls.notify, 1)
+}
+
+console.log('\n══════ P0-3 auto-register HOLD 알림 — PR URL 을 포함한다')
+expect('HOLD 알림이 PR 을 지목한다', readySrc.includes('report.outstanding?.pr'), true)
+expect('HOLD 알림 제목에 PR 번호가 들어간다', /자동 PR #\$\{holdPr\.number\}/.test(readySrc), true)
+expect('HOLD 알림 next 가 PR URL 이다', /next: holdPr\.url/.test(readySrc), true)
+expect('HOLD 알림에 "merge 또는 명시적 폐기" 문구', /merge 또는 명시적 폐기 전 다음 생산 HOLD/.test(readySrc), true)
+expect('dry-run 은 실제로 보내지 않는다', /send\(msg, \{ dryRun: !actuallySend \}\)/.test(readySrc), true)
 
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')

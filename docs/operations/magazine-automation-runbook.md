@@ -195,6 +195,34 @@ ChatGPT 로그인이 만료돼 원고를 한 건도 못 받아도 `exit 0` 이�
 🔴 Slack 은 판정을 바꾸지 않는다 — 양방향으로. 알림이 실패해도 원래 실패는 실패이고,
 실패 회차에서도 알림은 **반드시 시도한다**.
 
+### 알림 계약 — 종료 경로는 하나다
+
+🔴 non-dry-run producer 의 **모든** 종료 경로가 단일 finalizer 를 지난다
+(`scripts/lib/magazine-producer-flow.mjs`). 알림은 거기 한 곳에만 있고 **회차당 정확히 한 번** 돈다.
+
+| 중단 사유 | exit | Slack | write·AI |
+|---|---|---|---|
+| `TOOL_MISSING` (claude·gh 부재) | 1 | ✅ 1회 | 0 |
+| `NOT_ON_MAIN` · `DIRTY_TREE` | 1 | ✅ 1회 | 0 |
+| `OUTSTANDING_PR` (HOLD) | 0 | ✅ 1회 — **PR 번호·URL 포함** | 0 |
+| `ORPHAN_*` · `GITHUB_QUERY_FAILED` | 1 | ✅ 1회 | 0 |
+| plan·brief·fetch 실패 | 1 | ✅ 1회 | 실행된 단계까지 |
+| 정상 | 0 | ✅ 1회 | 전부 |
+
+🔴 **알림을 보내려고 파일을 쓰거나 AI 를 부르지 않는다.** 중단 경로에서는
+`plan`·`brief`·`fetch` 를 **한 번도 호출하지 않는다** — 회귀가 호출 횟수로 증명한다.
+
+🔴 **HOLD 알림에는 PR 번호와 URL 이 반드시 들어간다.**
+로그에만 있고 Slack 에 없으면 창업자는 무엇을 merge 해야 하는지 모른 채
+"또 HOLD 네" 만 보게 된다. auto-register 의 HOLD 알림도 같은 PR 을 지목한다.
+
+🔴 **dry-run 은 실제로 보내지 않는다.**
+
+> **2026-09-16 에 배운 것** — 직전 판은 이 계약을 문서와 주석에 적어 두고도
+> 두 경로가 `process.exit(1)` 로 빠져나가 실제로는 성립하지 않았다.
+> 회귀는 있었지만 **소스에서 `runNotify()` 의 위치만** 봤다. 위치는 도달 여부를 보지 못한다.
+> 지금 회귀는 주입한 흐름을 **실제로 돌려** 호출 횟수와 종료 코드를 본다.
+
 | 무엇 | 어디 |
 |---|---|
 | producer 로그 | `~/Library/Logs/soransoran/magazine-producer.log` |

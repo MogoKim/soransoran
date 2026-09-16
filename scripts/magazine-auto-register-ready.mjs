@@ -233,9 +233,26 @@ async function notifySlack(report, { actuallySend, dryRunLane }) {
   //    아무 흔적 없이 지나가면, 사고가 났을 때 "언제부터" 를 되짚을 수 없다.
   if (done === 0 && blocked === 0 && dryRunLane) return { composed: false, sent: false, reason: '알릴 것 없음' }
 
+  // 🔴 **미해결 PR 로 HOLD 한 회차는 그 PR 을 지목한다** (2026-09-16 재검토).
+  //    "막힘 1건" 만 보내면 창업자는 무엇을 merge 해야 하는지 모른다.
+  //    로그에만 URL 이 있고 Slack 에 없으면, 그 알림은 읽히지 않는 알림이 된다.
+  const holdPr = report.outstanding?.pr ?? null
+  if (holdPr) {
+    const msg = buildMessage({
+      severity: 'INFO',
+      title: `매거진 자동 레인 HOLD — 자동 PR #${holdPr.number} 이 열려 있다`,
+      reason: `${report.outstanding.code} · merge 또는 명시적 폐기 전 다음 생산 HOLD`,
+      next: holdPr.url,
+      logPath: report.reportPath ?? null,
+    })
+    const r = await send(msg, { dryRun: !actuallySend })
+    return { composed: true, sent: r.sent, reason: r.reason }
+  }
+
   const severity = blocked > 0 ? 'WARN' : 'INFO'
   const reasons = []
   if (blocked) reasons.push(report.blocked.map((b) => `${b.slug}: ${b.blockedBy[0]?.code ?? '-'}`).join(' / '))
+  if (report.outstanding && !report.outstanding.ok) reasons.push(report.outstanding.message)
   if (report.leftOnBranch) reasons.push(`남은 브랜치 ${report.leftOnBranch}`)
 
   const next = report.pr?.made
