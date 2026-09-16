@@ -177,8 +177,14 @@ console.log('\n⑥ 실명 · 개인정보 → hold')
   check('🟡 주민번호 언급 → hold', verdict({ title: '주민번호 알려달래요' }) === 'hold')
   check('🟡 계좌번호 언급 → hold', verdict({ title: '계좌번호 보내라는데' }) === 'hold')
   check('🟡 신상 털기 → hold', verdict({ title: '신상 털어서 올렸더라구요' }) === 'hold')
-  check('🟡 publicFigureMention 플래그 → hold',
-    verdict({ title: '평범한 제목', qualityFlags: ['publicFigureMention'] }) === 'hold')
+  /**
+   * 🔴 **공개 인물 언급은 위해가 아니라 소재다** (2026-09-13 정정).
+   *    필터는 그때 `publicFigure` · `publicFigureMention` 을 사유에서 뺐는데
+   *    이 fixture 만 옛 계약을 그대로 들고 있었다 — 그래서 **2026-09-16 현재까지
+   *    이 검사는 1건 실패 상태로 서 있었다.** 아무도 못 본 이유는 아래 ⑫ 에 적는다.
+   */
+  check('🟢 publicFigureMention 플래그만으로는 막지 않는다 — 위해가 아니라 소재다',
+    verdict({ title: '평범한 제목', qualityFlags: ['publicFigureMention'] }) === 'pass')
   check('🔴 사유 코드가 personalIdentity 다', codes({ title: '주민번호 알려달래요' }).includes('personalIdentity'))
 }
 
@@ -258,12 +264,140 @@ console.log('\n⑪ 이 필터가 하지 않는 것 — 🔴 발행·fetch·DB·S
     [/publish|noindex|develop|배포/i, '발행·배포'],
   ]
   for (const [re, label] of BANNED) check(`🔴 ${label} 없음`, !re.test(CODE))
-  check('🟢 import 는 quality lib 하나뿐이다',
-    (CODE.match(/^import /gm) ?? []).length === 1, `${(CODE.match(/^import /gm) ?? []).length}개`)
+  // 🔴 2026-09-16 — 위기 신호 판정부를 정본 순수 모듈 하나에서 가져온다(규칙 복제 금지)
+  check('🟢 import 는 quality lib · 안전 신호 판정부 둘뿐이다',
+    (CODE.match(/^import /gm) ?? []).length === 2, `${(CODE.match(/^import /gm) ?? []).length}개`)
+  check('🔴 위기·의료 판정 규칙을 필터가 다시 쓰지 않는다',
+    !/자살|자해|미레나|무리가 ?없/.test(CODE))
   // 🔴 100자 판정도 레인 배정도 여기서 하지 않는다
   check('🔴 100자 기준을 여기서 정하지 않는다', !/100|shortRaw|SHORT_RAW/.test(CODE))
   check('🔴 레인 이름을 여기서 배정하지 않는다',
     !/seedOriginality|rawOriginality|Short Raw Noindex/.test(CODE))
+}
+
+
+/**
+ * ─────────────────────────────────────────────────────────
+ * 🔴 ⑨⑩⑪ 위기 신호 · 의료 판단 요청 · 건강 효능 주장 (2026-09-16 실측)
+ *
+ *    정본 §4 는 자해·자살을 **생성 전 선행 차단**(`crisis_hold`)으로 못박았는데
+ *    코드에는 그 축이 한 줄도 없었다. 아래 세 글이 `verdict=pass` 로 통과했다.
+ * ─────────────────────────────────────────────────────────
+ */
+{
+  console.log('\n🔴 ⑨⑩⑪ 위기 신호 · 의료 판단 요청 · 건강 효능 주장')
+  const v = (title: string, body: string): SafetyVerdict => safetyFilter({ title, body }).verdict
+  const codes = (title: string, body: string): string[] =>
+    safetyFilter({ title, body }).reasons.map((r) => r.code)
+
+  // ① 🔴 실측 결함 — 위기 암시 글이 통과했다
+  const crisis = {
+    title: '오늘 아침부터 자꾸만 그런 생각이',
+    body: '어제 밤은 괜찮았는데 오늘 아침 눈을 뜨자마자 그 생각이 들었다\n'
+      + '친하던 친구한테 문자를 쳤다\n"갑자기 오랜만에 그런 생각이 들어\n'
+      + '우리 애들 좀 봐 줄 수 있어?"\n"쓸데없는 소리하지 말고 출근이나 해"\n다들 이런 아침도 있어?',
+  }
+  check('🔴 위기 암시 글이 통과하지 않는다', v(crisis.title, crisis.body) !== 'pass')
+  check('🔴 사유를 crisisSignal 로 적는다', codes(crisis.title, crisis.body).includes('crisisSignal'))
+  check('🔴 버리지 않고 사람에게 넘긴다 (hold)', v(crisis.title, crisis.body) === 'hold')
+
+  // ② 🔴 과잉 차단 금지 — 간접 표현 **하나만** 으로는 막지 않는다
+  check('🟢 "그런 생각이 들었다" 단독은 막지 않는다',
+    v('요즘 드는 생각', '문득 그런 생각이 들었어요. 나만 뒤처지나 싶고.') === 'pass')
+  check('🟢 "아이들 좀 봐줘" 단독은 막지 않는다',
+    v('급한 부탁', '내일 일이 생겨서 아이들 좀 봐 줄 수 있어? 하고 언니한테 물었어요.') === 'pass')
+  check('🔴 간접 신호가 둘 이상 겹치면 막는다',
+    v('요즘 마음이', '자꾸 그런 생각이 들어요. 내가 없으면 애들은 누가 챙기나 싶고.') !== 'pass')
+  check('🔴 명시 표현은 하나만 있어도 막는다',
+    v('힘든 밤', '요즘 살기 싫다는 마음이 들어요.') !== 'pass')
+
+  // ③ 🔴 실측 결함 — 의료 판단 요청이 통과했다
+  const med = {
+    title: '미레나 5년 채워야 한다고들 하는데, 진짜 그럼?',
+    body: '2022년에 미레나 했어요. 다만 냉 분비물이 많아졌어요. 미레나 부작용일 수도 있겠다는 '
+      + '생각은 들고요. 내년이면 딱 5년이 차는데 다들 5년 되면 꼭 교체해야 한다고 하더라고요. '
+      + '계속 써도 괜찮은 건 아닐까요?',
+  }
+  check('🔴 부작용·교체·계속 사용 판단 요청은 HOLD', v(med.title, med.body) === 'hold')
+  check('🔴 사유를 medicalDecisionRequest 로 적는다',
+    codes(med.title, med.body).includes('medicalDecisionRequest'))
+
+  // ④ 🔴 실측 결함 — 전언형 효능 주장이 통과했다
+  const eff = {
+    title: '무릎 안 아프고 숨 안 차는 운동 찾다가',
+    body: '걸음으로 뛰니까 무릎에 무리가 없다고 하고, 숨도 그렇게 차지 않으면서 운동 효과는 본다고.',
+  }
+  check('🔴 전언형이어도 건강 효능 주장은 HOLD', v(eff.title, eff.body) === 'hold')
+  check('🔴 사유를 healthEfficacyClaim 으로 적는다',
+    codes(eff.title, eff.body).includes('healthEfficacyClaim'))
+
+  /**
+   * ⑤ 🔴 **소재를 막지 않는다** (§4-J). 갱년기 · 병원 경험 · 영양제 습관 ·
+   *    예방 관리는 타겟 핏이 높은 생활 주제다. 여기가 닫히면 쓸 글이 없다.
+   */
+  check('🟢 갱년기 수면 경험 질문은 통과한다',
+    v('갱년기 때문에 잠을 못 자는데 다들 어떤가요', '요즘 새벽에 자꾸 깨요. 다들 어떻게 지내세요?') === 'pass')
+  check('🟢 스케일링 주기 질문은 기존 정본대로 통과한다',
+    v('스케일링 몇 년에 한 번 받으세요?', '저는 작년에 받고 아직인데 다들 주기가 어떻게 되세요?') === 'pass')
+  check('🟢 영양제 챙기는 습관 질문은 통과한다',
+    v('영양제 챙겨 먹는 게 진짜 어렵네',
+      '요즘 아침에 비타민 B, 루테인, 칼슘 이렇게 세 가지를 먹으려고 하는데 계속 까먹어요. '
+      + '약통에 다 담아 놨는데도 자꾸 건너뛰게 되고. 다른 분들은 어떻게 습관 들이셨어요?') === 'pass')
+  check('🟢 병원에 다녀온 경험 자체는 통과한다',
+    v('건강검진 다녀왔어요', '아침 일찍 병원 가서 검진 받고 왔어요. 사람이 참 많더라고요.') === 'pass')
+  // 🔴 제품명만 나오고 판단을 묻지 않으면 오탐이다
+  check('🟢 의료 제품명만 등장하면 막지 않는다',
+    v('친구가 미레나 했대요', '오랜만에 만난 친구가 미레나 했다고 하더라고요. 요즘 다들 그러나 봐요.') === 'pass')
+  check('🟢 건강 대상어만 있고 효능 주장이 없으면 막지 않는다',
+    v('무릎이 시큰거려요', '계단 내려올 때 무릎이 좀 시큰해요. 다들 어떠세요?') === 'pass')
+
+  /**
+   * ⑥ 🔴 **대상과 판단·효능 표현의 문장 관계를 본다** (2026-09-16 정정).
+   *    낱말이 글 어딘가에 있다는 것만으로는 세지 않는다 —
+   *    그러면 겪은 이야기와 무관한 문장까지 막힌다.
+   */
+  check('🟢 부작용 때문에 병원에 간 **경험담**은 판단 요청이 아니다',
+    v('병원 다녀왔어요', '미레나 부작용 때문에 병원에 갔어요. 의사에게 설명 듣고 왔습니다.') === 'pass')
+  check('🟢 건강 대상어와 무관한 문장의 "좋아져" 는 효능 주장이 아니다',
+    v('무릎이 시큰거려요', '무릎이 시큰거려요. 그런데 날씨는 좋아져서 창문을 열었어요.') === 'pass')
+  // 🔴 그렇다고 모든 부작용 경험을 허용하지도, 모든 건강 소재를 막지도 않는다
+  check('🔴 같은 문장에서 판단을 물으면 그대로 막는다',
+    v('인공관절 수술 얘기', '작년에 인공관절 수술 받았는데요. 계속 써도 괜찮을까요?') === 'hold')
+  check('🔴 같은 문장의 효능 단정은 그대로 막는다',
+    v('혈압에 좋다는 차', '이 차 마시면 혈압이 좋아진다고 하더라고요.') === 'hold')
+  /**
+   * 🔴 수술 **경험담**은 새 축(판단 요청)이 잡지 않는다.
+   *    다만 기존 ④ `medicalClaim` 이 `수술 받` 을 이미 hold 로 본다 — 그것은 별개 축이고
+   *    이 PR 이 바꾸지 않았다. 여기서는 **새 축이 더해지지 않았다**는 것만 확인한다.
+   */
+  check('🟢 수술 경험담에 새 축(판단 요청·효능 주장)이 붙지 않는다', (() => {
+    const c = codes('인공관절 수술 받았어요', '작년에 수술 받고 재활 중이에요. 요즘 걷기 좋네요.')
+    return !c.includes('medicalDecisionRequest') && !c.includes('healthEfficacyClaim')
+  })())
+}
+
+/**
+ * ─────────────────────────────────────────────────────────
+ * 🔴 ⑫ 이 검사가 **실제로 돌고 있는가**
+ *
+ *    2026-09-16 실측: `micro-seed:safety-check` 는 `visibility-guard.yml` 에 없다.
+ *    그래서 위 fixture 들은 **CI 에서 한 번도 돌지 않았고**, ⑥ 의 낡은 계약이
+ *    실패한 채로 남아 있었다. 핵심 계약은 CI 에 있는 검사에도 함께 고정한다
+ *    (`micro-seed:auto-draft-check` 의 [SG] 절) — 그래도 이 줄은 남겨 둔다.
+ * ─────────────────────────────────────────────────────────
+ */
+{
+  console.log('\n🔴 ⑫ CI 배선')
+  const wf = ((): string => {
+    try { return readFileSync('.github/workflows/visibility-guard.yml', 'utf-8') } catch { return '' }
+  })()
+  const wired = /npm run micro-seed:safety-check/.test(wf)
+  if (!wired) {
+    console.log('  🟡 micro-seed:safety-check 가 CI 에 배선되어 있지 않다 —'
+      + ' 이 검사는 사람이 직접 돌릴 때만 돈다 (운영 판단 필요)')
+  } else {
+    check('🟢 micro-seed:safety-check 가 CI 에 있다', true)
+  }
 }
 
 console.log(`\n${'─'.repeat(57)}`)

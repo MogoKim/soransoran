@@ -16,6 +16,9 @@
  *    `findPoliticalTopicHit` 하나를 쓴다 — 두 곳에서 판정하면 언젠가 갈라진다 (§4-K).
  */
 import { findPoliticalTopicHit } from './micro-seed-quality.mjs'
+// 🔴 위기 신호·의료 판단 요청·건강 효능 주장의 정본은 순수 판정 하나다 —
+//    여기서 정규식을 다시 적으면 semantic 판정과 갈라진다
+import { judgeSafetySignals } from '../../src/lib/micro-seed-safety-signals'
 
 /** 🔴 판정 5종. `pass` 만 다음 단계로 간다 */
 export type SafetyVerdict = 'pass' | 'hold' | 'drop' | 'access' | 'hardExclude'
@@ -34,6 +37,15 @@ export type SafetyReasonCode =
   | 'visualDependent'     // ⑦ 이미지 의존
   | 'access'              // ⑧ Access · deletedOrExpired
   | 'volatile'            // 🟡 펑 · 삭제예정 — Drop 이 아니다
+  /**
+   * 🔴 ⑨ 자해 · 자살 위기 신호 — 정본 §4 가 **선행 차단**으로 못박은 축이다.
+   *    2026-09-16 까지 코드에 한 줄도 없었다.
+   */
+  | 'crisisSignal'
+  /** 🔴 ⑩ 치료·기기·약물의 부작용·교체·중단·계속 사용 판단을 커뮤니티에 요청 */
+  | 'medicalDecisionRequest'
+  /** 🔴 ⑪ 건강 효능 주장 — 전언형(*"~라고 한다"*)도 면제하지 않는다 */
+  | 'healthEfficacyClaim'
 
 export type SafetyReason = { code: SafetyReasonCode; note: string }
 
@@ -183,6 +195,17 @@ export function safetyFilter(input: SafetyInput): SafetyResult {
   const imageOnly = (input.imageCount ?? 0) > 0 && body.trim().length > 0 && body.trim().length < 30
   if (visual || imageOnly || flags.includes('imageLikelyBody')) {
     add('visualDependent', visual ? '이미지 의존 표현' : '본문이 거의 없고 이미지 중심', 'drop')
+  }
+
+  /**
+   * ⑨⑩⑪ 🔴 **위기 신호 · 의료 판단 요청 · 건강 효능 주장** (2026-09-16 추가).
+   *
+   *    셋 다 `hold` 다 — 버리지 않고 **사람에게 넘긴다.** 정본 §4 의 `crisis_hold`
+   *    가 "운영자 알림 → 필요 시 사람이 수동 대응" 이라고 적은 그 자리다.
+   *    🔴 판정은 `judgeSafetySignals` 하나가 한다. 여기서 규칙을 다시 쓰지 않는다.
+   */
+  for (const sig of judgeSafetySignals({ title, body, comments })) {
+    add(sig.code, sig.note, 'hold')
   }
 
   // 🟡 volatile — 🔴 verdict 를 바꾸지 않는다. 사유로만 남긴다

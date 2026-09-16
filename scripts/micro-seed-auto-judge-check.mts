@@ -14,6 +14,7 @@ import {
   SEMANTIC_STATUSES, PROMPT_VERSION, inputHashOf, SKIPPED,
   type JudgeInput, type SemanticVerdict, type SemanticOutcome,
 } from '../src/lib/micro-seed-auto-judge'
+import { SAFETY_SIGNAL_CODES } from '../src/lib/micro-seed-safety-signals'
 import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 
@@ -237,7 +238,13 @@ console.log('\n②-d 🔴 위험 축 — v1 이 못 잡던 것들')
   for (const r of SEMANTIC_HOLD) {
     check(`🟡 ${r} → AUTO_HOLD`, j({}, okSem({ risks: [r] })).decision === 'AUTO_HOLD')
   }
-  check('위험 축이 8종', SEMANTIC_RISKS.length === 8)
+  // 🔴 2026-09-16 — 위기 신호 · 의료 판단 요청 · 건강 효능 주장 3종을 더했다
+  check('위험 축이 11종', SEMANTIC_RISKS.length === 11)
+  check('🔴 deterministic 축 이름과 semantic 축 이름이 같다',
+    SAFETY_SIGNAL_CODES.every((c) => (SEMANTIC_RISKS as readonly string[]).includes(c)))
+  check('🔴 위기 신호는 버리지 않고 사람에게 넘긴다 (정본 §4)',
+    (SEMANTIC_HOLD as readonly string[]).includes('crisisSignal')
+    && !(SEMANTIC_DROP as readonly string[]).includes('crisisSignal'))
 
   /**
    * 🔴 **옛 판은 "연예 소재는 HOLD · 검사 주기 질문은 DROP" 을 계약으로 박고 있었다**
@@ -352,7 +359,7 @@ console.log('\n④ 🔴 모르는 사유는 통과가 아니라 격리다')
   check('🔴 모르는 사유 → AUTO_HOLD', r.decision === 'AUTO_HOLD')
   check('unknownReason 으로 기록된다', r.reasonCodes.includes('unknownReason'))
   check('🔴 규칙이 모르는 위험이 통과하지 않는다', r.decision !== 'AUTO_SEED')
-  check('아는 사유 목록이 9종', KNOWN_SAFETY_CODES.length === 9)
+  check('아는 사유 목록이 12종', KNOWN_SAFETY_CODES.length === 12)
   check('🟡 격리 사유는 버리지 않는다 — 사람이 보면 통과할 수도 있다',
     j({ safetyReasons: 'visualDependent' }).decision === 'AUTO_HOLD')
   check('volatile 도 격리 (drop 아님)',
