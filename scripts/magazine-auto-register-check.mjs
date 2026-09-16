@@ -940,6 +940,154 @@ expect('HOLD 알림 next 가 PR URL 이다', /next: holdPr\.url/.test(readySrc),
 expect('HOLD 알림에 "merge 또는 명시적 폐기" 문구', /merge 또는 명시적 폐기 전 다음 생산 HOLD/.test(readySrc), true)
 expect('dry-run 은 실제로 보내지 않는다', /send\(msg, \{ dryRun: !actuallySend \}\)/.test(readySrc), true)
 
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ 무인 ① 인계 — producer 완료 신호와 잠금')
+/**
+ * 🔴 등록이 02:00 → 01:00 으로 당겨졌다. 간격이 50분이라 **시간에 기대지 않는다.**
+ *    제한된 대기 · 재시도 없음 · producer 실패가 공급을 멈추지 않는다.
+ */
+const { judgeHandoff, waitForProducer, MAX_WAIT_MS } = await import('./lib/magazine-handoff.mjs')
+const H = (over) => judgeHandoff({ handoff: null, producerLockHeld: false, waitedMs: 0, ...over })
+
+expect('producer 가 돌면 기다린다', H({ producerLockHeld: true }).wait, true)
+expect('제한 시간 전에는 기다린다', H({ waitedMs: MAX_WAIT_MS - 1 }).wait, true)
+expect('🔴 제한 시간이 지나면 기다리지 않는다', H({ waitedMs: MAX_WAIT_MS }).wait, false)
+expect('🔴 producer 가 갇혀 있으면 이번 회차를 건너뛴다', H({ producerLockHeld: true, waitedMs: MAX_WAIT_MS }).code, 'PRODUCER_STUCK')
+expect('갇힌 producer 에게서 뺏지 않는다 (ready=false)', H({ producerLockHeld: true, waitedMs: MAX_WAIT_MS }).ready, false)
+expect('🔴 신호가 없어도 준비된 후보로 진행한다', H({ waitedMs: MAX_WAIT_MS }).ready, true)
+expect('그 사유를 남긴다', H({ waitedMs: MAX_WAIT_MS }).code, 'HANDOFF_ABSENT_PROCEED')
+expect('정상 신호면 바로 진행', H({ handoff: { verdict: 'OK', finishedAt: 'x' } }).code, 'HANDOFF_OK')
+expect('🔴 producer 가 실패해도 진행한다 (공급이 목적)', H({ handoff: { verdict: 'SYSTEM', finishedAt: 'x' } }).ready, true)
+expect('그 사실을 구분해 남긴다', H({ handoff: { verdict: 'SYSTEM', finishedAt: 'x' } }).code, 'PRODUCER_FAILED_PROCEED')
+expect('깨진 신호도 진행한다', H({ handoff: {} }).code, 'HANDOFF_CORRUPT_PROCEED')
+
+// 🔴 실제로 기다리지 않는다 — 시계를 민다
+{
+  let t0 = 0
+  let polls = 0
+  let running = true
+  const r = await waitForProducer({
+    getHandoff: () => (running ? null : { verdict: 'OK', finishedAt: 'x' }),
+    isProducerLockHeld: () => running,
+    sleep: async () => { t0 += 60_000; polls += 1; if (polls === 3) running = false },
+    now: () => t0,
+    log: () => {},
+  })
+  expect('producer 가 끝나면 대기를 멈춘다', r.ready, true)
+  expect('무한 대기하지 않는다 (폴링 횟수 유한)', polls < 10, true)
+}
+{
+  // 영원히 안 끝나면 제한 시간에서 포기한다
+  let t0 = 0
+  const r = await waitForProducer({
+    getHandoff: () => null,
+    isProducerLockHeld: () => true,
+    sleep: async () => { t0 += 5 * 60_000 },
+    now: () => t0,
+    log: () => {},
+  })
+  expect('🔴 제한 시간에서 포기한다', r.code, 'PRODUCER_STUCK')
+  expect('포기해도 재시도하지 않는다 (ready=false 로 끝)', r.ready, false)
+}
+
+console.log('\n══════ 무인 ② 격리 — 막힌 후보가 공급을 막지 않는다')
+/**
+ * 🔴 실측: 3건 중 2건이 QA 에 막혔다. 막힌 것은 정상이지만 **다음 날도 같은 후보가
+ *    앞자리를 차지**하면 뒤의 멀쩡한 후보가 limit 에 밀린다. 비켜 주되 고치지 않는다.
+ */
+const QT = await import('./lib/magazine-quarantine.mjs')
+const QNOW = 1_800_000_000_000
+const jq = (over) => QT.judgeQuarantine({ entry: null, fingerprint: null, now: QNOW, ...over })
+
+expect('기록이 없으면 진행', jq().skip, false)
+expect('1회 실패는 다시 시도한다', jq({ entry: { attempts: 1, lastAt: QNOW } }).code, 'RETRYING')
+expect('🔴 2회 막히면 비켜 준다', jq({ entry: { attempts: 2, lastAt: QNOW } }).skip, true)
+expect('사유를 남긴다', /다시 본다/.test(jq({ entry: { attempts: 2, lastAt: QNOW, reasons: ['QA_FAIL: x'] } }).message), true)
+expect('냉각이 지나면 다시 본다', jq({ entry: { attempts: 2, lastAt: QNOW - QT.COOLDOWN_MS } }).code, 'COOLED')
+expect('🔴 원고가 바뀌면 즉시 푼다', jq({ entry: { attempts: 9, lastAt: QNOW, fingerprint: 'a' }, fingerprint: 'b' }).skip, false)
+expect('그 사유가 CHANGED', jq({ entry: { attempts: 9, lastAt: QNOW, fingerprint: 'a' }, fingerprint: 'b' }).code, 'CHANGED')
+
+const rec = QT.recordFailure({ entry: { attempts: 1, fingerprint: 'a' }, fingerprint: 'a', now: QNOW, reasons: ['QA_FAIL'] })
+expect('실패를 센다', rec.attempts, 2)
+expect('사유를 보관한다', rec.reasons, ['QA_FAIL'])
+expect('🔴 원고가 바뀌면 횟수를 처음부터 센다', QT.recordFailure({ entry: { attempts: 5, fingerprint: 'a' }, fingerprint: 'b', now: QNOW }).attempts, 1)
+expect('성공하면 기록을 지운다', QT.clearEntry({ a: 1, b: 2 }, 'a'), { b: 2 })
+expect('깨진 저장소는 빈 것으로 본다 (회차를 막지 않는다)', typeof QT.loadQuarantine('/nonexistent/path.json'), 'object')
+// 🔴 저장소는 repo 밖이어야 한다 — 추적 파일이면 DIRTY_TREE 로 레인이 멈춘다
+expect('🔴 격리 기록은 저장소 밖에 쓴다', QT.QUARANTINE_PATH.includes('/Documents/soransoran'), false)
+expect('scan 이 격리를 건너뛴다', /judgeQuarantine\(\{ entry: store\[slug\]/.test(readySrc), true)
+expect('write 회차만 기록을 고친다', /if \(write && storeChanged\) saveQuarantine\(store\)/.test(readySrc), true)
+expect('등록 성공 시 기록을 지운다', /clearEntry\(store, r\.slug\)/.test(readySrc), true)
+
+console.log('\n══════ 무인 ③ 제목 ↔ 본문 일치')
+const { checkTitleBodyMatch } = await import('./lib/magazine-editorial.mjs')
+expect('제목 핵심어가 본문에 있으면 통과', checkTitleBodyMatch('갱년기 관절이 아픈데 운동해도 되나요', '갱년기에는 관절이 아플 수 있습니다. 운동은 …').level, null)
+expect('🔴 핵심어가 하나도 없으면 FAIL', checkTitleBodyMatch('국민연금 조기수령 유리한가요', '오늘은 잠에 대해 이야기합니다. 수면 위생과 낮잠.').level, 'FAIL')
+expect('절반 이상 없으면 WARN', checkTitleBodyMatch('잠자리 습관 2주 바꾸기 기록', '기록은 남겼습니다.').level, 'WARN')
+expect('조사·어미가 달라도 같은 말로 본다', checkTitleBodyMatch('50대 걷기 하루 몇 분이 적당할까요', '50대에 걷는 시간은 하루 몇 분이 적당한지 사람마다 다릅니다').level, null)
+expect('QA 가 이 검사를 부른다', readFileSync(join('scripts', 'magazine-qa.mjs'), 'utf8').includes('checkTitleBodyMatch('), true)
+
+console.log('\n══════ 무인 ④ 자동 병합 관문')
+/**
+ * 🔴 경계가 바뀌었다 — merge 도 자동이다. 그러나 **자동 공개는 아니다.**
+ *    사람이 PR 에서 보던 것을 이 관문이 하나씩 다시 본다. 모르면 막는다.
+ */
+const M = await import('./lib/magazine-merge-gate.mjs')
+const SHA = 'a'.repeat(40)
+const okPr = { number: 9, url: 'u', headRefName: `${M.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: SHA, state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
+const okFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/x-slug/draft.md', 'public/magazine/x-slug/hero.webp']
+const okReg = [{ slug: 'x-slug', publishAt: '2026-09-20T10:30:00+09:00', publishedAt: '2026-09-20', status: 'SCHEDULED' }]
+const okQueue = { 'x-slug': { riskLevel: 'LOW', autoEligible: true } }
+const base = {
+  pr: okPr, expectedSha: SHA, files: okFiles, ciState: 'success',
+  checks: [{ name: 'ci', status: 'completed', conclusion: 'success' }],
+  registered: okReg, queueBySlug: okQueue, mainSlugs: new Set(), mainDates: new Set(), now: Date.parse('2026-09-17T00:00:00+09:00'),
+}
+const jm = (over) => M.judgeAutoMerge({ ...base, ...over })
+const codesOf = (v) => v.blockedBy.map((b) => b.code)
+
+expect('전부 맞으면 통과', jm().ok, true)
+expect('무엇을 확인했는지 남긴다', jm().checked.length > 4, true)
+expect('🔴 사람 PR 은 자동 merge 하지 않는다', codesOf(jm({ pr: { ...okPr, headRefName: 'fix/human' } })).includes('NOT_AUTO_BRANCH'), true)
+expect('🔴 SHA 가 바뀌면 막는다', codesOf(jm({ expectedSha: 'b'.repeat(40) })).includes('SHA_DRIFTED'), true)
+expect('🔴 예상 밖 파일이 있으면 막는다', codesOf(jm({ files: [...okFiles, 'src/app/page.tsx'] })).includes('UNEXPECTED_FILES'), true)
+expect('🔴 CI 가 초록이 아니면 막는다', codesOf(jm({ ciState: 'pending' })).includes('CI_NOT_GREEN'), true)
+expect('🔴 검사가 실패하면 막는다', codesOf(jm({ checks: [{ name: 'x', status: 'completed', conclusion: 'failure' }] })).includes('CHECK_FAILED'), true)
+expect('아직 도는 검사가 있으면 막는다', codesOf(jm({ checks: [{ name: 'x', status: 'in_progress', conclusion: null }] })).includes('CHECK_PENDING'), true)
+expect('🔴 HIGH 는 막는다', codesOf(jm({ queueBySlug: { 'x-slug': { riskLevel: 'HIGH', autoEligible: true } } })).includes('RISK_LEVEL'), true)
+expect('🔴 autoEligible=false 는 막는다', codesOf(jm({ queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: false } } })).includes('AUTO_INELIGIBLE'), true)
+expect('🔴 큐에 없으면 막는다 (등급 정본이 없다)', codesOf(jm({ queueBySlug: {} })).includes('NOT_IN_QUEUE'), true)
+expect('🔴 중복 slug 를 막는다', codesOf(jm({ mainSlugs: new Set(['x-slug']) })).includes('DUPLICATE_SLUG_IN_MAIN'), true)
+expect('🔴 중복 예약일을 막는다', codesOf(jm({ mainDates: new Set(['2026-09-20']) })).includes('DUPLICATE_DATE_IN_MAIN'), true)
+expect('🔴 10:30 이 아니면 막는다', codesOf(jm({ registered: [{ ...okReg[0], publishAt: '2026-09-20T09:00:00+09:00' }] })).includes('PUBLISH_AT_SHAPE'), true)
+expect('publishedAt 과 어긋나면 막는다', codesOf(jm({ registered: [{ ...okReg[0], publishedAt: '2026-09-21' }] })).includes('DATE_MISMATCH'), true)
+// 🔴 이것이 "merge 했는데 즉시 공개" 를 막는 자리다
+expect('🔴 이미 지난 예약일은 막는다 (merge 즉시 공개)', codesOf(jm({ now: Date.parse('2026-09-25T00:00:00+09:00') })).includes('PUBLISH_AT_PAST'), true)
+expect('draft PR 은 막는다', codesOf(jm({ pr: { ...okPr, isDraft: true } })).includes('IS_DRAFT'), true)
+expect('충돌이 있으면 막는다', codesOf(jm({ pr: { ...okPr, mergeable: 'CONFLICTING' } })).includes('NOT_MERGEABLE'), true)
+expect('PR 이 없으면 막는다', codesOf(jm({ pr: null })).includes('NO_PR'), true)
+expect('허용 파일 모양 — 본문/큐/원고/hero', okFiles.every(M.isAllowedFile), true)
+expect('🔴 소스 코드 변경은 허용하지 않는다', M.isAllowedFile('scripts/magazine-auto-merge.mjs'), false)
+expect('🔴 워크플로 변경은 허용하지 않는다', M.isAllowedFile('.github/workflows/visibility-guard.yml'), false)
+expect('MERGE_RISK 는 LOW/MEDIUM 뿐', [...M.MERGE_RISK].sort(), ['LOW', 'MEDIUM'])
+
+console.log('\n══════ 무인 ⑤ 시각 일치 — 템플릿 · 문서 · 테스트')
+const regTpl = readFileSync(join('docs', 'operations', 'launchd', 'magazine', 'com.soransoran.magazine-auto-register.plist.template'), 'utf8')
+const prodTpl2 = readFileSync(join('docs', 'operations', 'launchd', 'magazine', 'com.soransoran.magazine-producer.plist.template'), 'utf8')
+const hourOf = (x) => (x.match(/<key>Hour<\/key><integer>(\d+)<\/integer>/) ?? [])[1]
+expect('producer 는 00:10 그대로', hourOf(prodTpl2), '0')
+expect('🔴 등록은 01:00 이다', hourOf(regTpl), '1')
+expect('템플릿 설명도 01:00 이다', /01:00 KST/.test(regTpl), true)
+// 🔴 **실행 시각**만 본다. 주석의 변경 이력("02:00 → 01:00")은 남아 있어야 한다 —
+//    무엇이 언제 왜 바뀌었는지가 지워지면 다음 사람이 같은 자리를 다시 판다.
+expect('예약 블록에 옛 시각이 없다', /<key>Hour<\/key><integer>2<\/integer>/.test(regTpl), false)
+expect('변경 이력은 주석에 남아 있다', /02:00 → 01:00/.test(regTpl), true)
+expect('🔴 --merge 가 켜져 있다', /<string>--merge<\/string>/.test(regTpl), true)
+expect('자동 공개가 아님을 명시한다', /merge 해도 공개는 아니다|publishAt.*전까지 안 나간다/.test(regTpl), true)
+const runbook = readFileSync(join('docs', 'operations', 'magazine-automation-runbook.md'), 'utf8')
+expect('runbook 도 01:00 이다', /01:00/.test(runbook), true)
+expect('runbook 에 02:00 이 남아 있지 않다', /02:00/.test(runbook), false)
+
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')
 expect('fixture 가 추적돼 있다', existsSync(FIXTURE_DRAFT), true)
@@ -1043,7 +1191,10 @@ expect('자동 PR 이 켜져 있다 (--write)', regArgs.includes('--write'), tru
 expect('자동 PR 이 켜져 있다 (--pr)', regArgs.includes('--pr'), true)
 // 🔴 자동 merge 는 어디에도 없어야 한다 — 이 경계가 이 레인의 전부다
 // 🔴 인자 배열만 본다. 주석에는 "--founder-approved 는 이 경로에 없다" 같은 설명이 있다
-expect('자동 merge 인자가 없다', /--merge|--auto-merge|--admin|--squash/.test(regArgs), false)
+// 🔴 경계가 바뀌었다 (2026-09-16 · 완전 무인 운영) — `--merge` 는 이제 정상이다.
+//    그러나 **자동 공개는 아니다.** merge 해도 publishAt(10:30) 전까지 글이 안 나간다.
+//    `--admin` 은 여전히 금지다 — 보호 규칙과 CI 를 우회하는 손잡이다.
+expect('🔴 CI·보호규칙 우회 인자는 없다', /--admin|--auto/.test(regArgs), false)
 expect('--founder-approved 를 넘기지 않는다', regArgs.includes('--founder-approved'), false)
 expect('auto-register PATH 가 통째로 치환된다', (regTplText.match(/<key>PATH<\/key>\s*<string>([^<]*)<\/string>/) ?? [, ''])[1], '__PATH__')
 expect('producer 도 runtime worktree 를 쓴다', prodTplText.includes('__REPO__/scripts/magazine-producer-run.mjs'), true)

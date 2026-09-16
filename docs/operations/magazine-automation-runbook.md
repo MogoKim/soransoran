@@ -15,18 +15,35 @@
 | 변환 · QA · hero · batch-qa | ✅ auto-register | |
 | `articles.ts` 등록 (**PR 브랜치 위에서**) | ✅ auto-register | |
 | **PR 생성** (`[merge 금지]`) | ✅ auto-register | |
-| **merge** | 🔴 절대 안 함 | 사람 |
-| **production 공개** | 🔴 절대 안 함 | merge 후 `publishAt` 도달 시 |
+| **PR merge** | ✅ auto-merge (검증 통과 시) | |
+| **production 공개** | 🔴 **절대 안 함** | `publishAt`(10:30 KST) 도달 시 자동 |
 
-🔴 **자동화는 PR 까지다.** merge 와 공개는 사람이 한다.
-원고 품질 통제 지점은 **PR merge 전의 CI 와 사람 검수**다.
+🔴 **2026-09-16 경영 결정 — 목표는 완전 무인 운영이다.** merge 도 자동이 됐다.
 
-🔴 **이것은 "완전 자동 공개" 가 아니다.** 매일 생기는 PR 을 사람이 읽고 merge 해야
-글이 나간다. merge 하지 않으면 그날부터 재고가 늘지 않는다 — 아래 §0.1 때문이다.
+🔴 **그러나 자동 "공개" 는 아니다.** merge 해도 글은 `publishAt` 전까지 어디에도 안 나온다.
+사람이 사라진 자리는 "PR 을 읽는 눈" 이고, 그 자리를 `lib/magazine-merge-gate.mjs` 가 대신한다.
+**모르면 막는다** — 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
+
+### 0.0 자동 병합이 확인하는 것
+
+| 확인 | 막는 것 |
+|---|---|
+| 브랜치 접두 | 사람 PR 을 자동 merge 하지 않는다 |
+| **SHA 고정** | 검증 뒤 커밋이 붙으면 `SHA_DRIFTED` |
+| 변경 파일 **모양** | `articles.ts` · `topic-queue.ts` · `drafts/{slug}/*` · `hero.webp` 밖이면 막는다 (소스·워크플로 변경 불가) |
+| CI · check-runs | 하나라도 실패·진행 중이면 막는다 |
+| **위험 등급** | `topic-queue` 정본 · LOW/MEDIUM · `autoEligible=true` 만 |
+| 중복 slug | PR 안 · main 양쪽 |
+| 예약일 | 10:30 KST 형태 · `publishedAt` 일치 · 중복 없음 |
+| **과거 날짜** | `PUBLISH_AT_PAST` — merge 즉시 공개되는 것을 막는다 |
+
+🔴 `--admin` 을 쓰지 않는다. 보호 규칙과 CI 를 우회하는 손잡이는 이 경로에 없다.
 
 ### 0.1 미해결 자동 PR 은 **한 번에 하나**
 
-🔴 **이전 PR 을 merge 하거나 명시적으로 폐기하기 전에는 다음 생산 회차가 HOLD 한다.**
+🔴 **이전 PR 이 처리되기 전에는 다음 생산 회차가 HOLD 한다.**
+무인 운영에서는 **같은 회차의 자동 병합이 그것을 푼다** — 01:00 등록 직후 merge 까지 간다.
+자동 병합이 막힌 회차만 다음 날 HOLD 로 남고, 그때는 Slack 이 사유를 말한다.
 
 왜 그런가 — 자동 PR 을 만든 뒤 runtime 은 main 으로 돌아온다. 그 main 의
 `articles.ts` 에는 **그 등록이 아직 없다**(PR 안에만 있다). 그대로 다음 날 회차가 돌면
@@ -43,7 +60,7 @@ Day 2  main 의 articles.ts 를 읽는다 → autumn-low-mood 가 없다
 
 | 상태 | 판정 | 종료 코드 | 사람이 할 일 |
 |---|---|---|---|
-| OPEN 자동 PR 있음 | `OUTSTANDING_PR` · **HOLD** | 0 (정상) | PR 을 읽고 merge 한다 |
+| OPEN 자동 PR 있음 | `OUTSTANDING_PR` · **HOLD** | 0 (정상) | 보통은 자동 병합이 같은 회차에 푼다. 막혔으면 사유를 본다 |
 | CLOSED(미merge) + 브랜치 잔존 | `ABANDONED_PR_BRANCH` · **HOLD** | 0 (정상) | **브랜치를 지운다** = 명시적 폐기 |
 | push 됐는데 PR 없음 | `ORPHAN_REMOTE_BRANCH` · 🔴 실패 | 1 | PR 을 열거나 브랜치를 지운다 |
 | 로컬에만 남은 자동 브랜치 | `ORPHAN_LOCAL_BRANCH` · 🔴 실패 | 1 | 내용 확인 후 살리거나 지운다 |
@@ -83,7 +100,7 @@ macOS 의 Documents 접근 보호가 `smd` 의 plist 읽기를 거부한다 —
 | `gh` 가 launchd PATH 에 없음 | `add → commit → push → gh pr create` 순서라 **push 뒤에** gh 부재를 안다. PR 없는 브랜치가 origin 에 조용히 올라간다 |
 | main 복귀 코드 없음 | 첫 성공 회차 뒤 저장소가 자동 브랜치에 남아 **다음 날부터 매일 `NOT_ON_MAIN`** |
 | exit 0 고정 + Slack 발송 0 | 실패가 종료 코드에도 Slack 에도 안 남는다 |
-| lock 없음 | 사람 수동 실행과 02:00 회차가 겹칠 수 있다 |
+| lock 없음 | 사람 수동 실행과 01:00 회차가 겹칠 수 있다 |
 | `imageMode=REQUIRED` | 호출부가 `alt: null` 고정 → **구조적으로 언제나 BLOCKED** |
 | 대상 저장소가 개발 작업트리 | 진단 시점 브랜치가 `fix/write-guest-start-flow` |
 
@@ -125,7 +142,7 @@ git -C ~/Documents/soransoran worktree add ~/Documents/soransoran-magazine-runti
 {
   "result": "SUCCESS",
   "prUrl": "https://github.com/MogoKim/soransoran/pull/NNN",
-  "ranAt": "2026-09-16T02:00:00+09:00"
+  "ranAt": "2026-09-16T01:00:00+09:00"
 }
 ```
 
@@ -176,6 +193,25 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 ```
 
 ---
+
+## 4.5 무인 운영 — 하루의 흐름
+
+```
+00:10 KST  producer        선정 → brief(claude) → 원고 회수(ChatGPT) → 관문 → 알림
+                           끝나면 _runs/{date}/producer-handoff.json 을 남긴다
+01:00 KST  auto-register   ① producer 완료 신호·lock 을 최대 40분 기다린다 (재시도 없음)
+                           ② 미해결 자동 PR 확인 → ③ 변환·QA·hero·batch-qa·register
+                           ④ PR 생성 → ⑤ 자동 병합(--merge) → main
+10:30 KST  (해당일)        publishAt 도달 → 예약 글이 공개된다
+```
+
+🔴 **producer 가 실패해도 등록은 진행한다.** 이미 준비된 후보로 돈다 — 공급이 목적이다.
+🔴 **막힌 후보는 격리된다.** 2회 연속 QA 에 막히면 7일간 비켜 주고 **다음 후보가 진행**한다.
+   원고를 고치면(파일이 바뀌면) 냉각을 기다리지 않고 즉시 다시 후보가 된다.
+   🔴 자동화가 원고를 고쳐 주지 않는다 — 비켜 줄 뿐이다.
+🔴 **API 를 새로 붙이지 않는다.** brief 는 claude CLI(구독), 원고·이미지는 ChatGPT 웹 UI.
+   생성 경로의 제한(로그인 만료·Cloudflare·한도)은 **숨기지 않고 그대로 실패로 낸다.**
+   우회하지 않는다.
 
 ## 5. 감시
 
@@ -245,7 +281,7 @@ tail -40 ~/Library/Logs/soransoran/magazine-auto-register.log
 ## 6. 상태도 — 성공 · 실패 · 복귀
 
 ```
-02:00 회차 시작
+01:00 회차 시작
   │
   ├─ lock 잡기 ────────── 실패(LOCK_HELD/STUCK/CORRUPT) ─→ exit 1 · main 복귀 안 함(남의 회차)
   │                                                        🔴 재시도하지 않는다

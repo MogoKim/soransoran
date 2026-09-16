@@ -27,6 +27,7 @@ import { isPublic, statusLabel, assertGateInSync } from './lib/magazine-gate.mjs
 import {
   checkFirstPerson,
   checkTitleForm,
+  checkTitleBodyMatch,
   checkCareAdvice,
   checkDepartmentDirective,
   checkTreatmentDirective,
@@ -411,6 +412,12 @@ function checkArticle(article, context, report) {
   // 20 · 제목 형태 (M-AUTO-2 · D2)
   const titleForm = checkTitleForm(article.title)
   if (titleForm.level === 'FAIL') report.fail(id, titleForm.reason)
+
+  // 20-B · 제목 ↔ 본문 일치 (2026-09-16 · 무인 운영)
+  //        형태만 맞고 본문이 다른 것을 말하면 검색해 들어온 독자가 답을 못 찾는다
+  const titleBody = checkTitleBodyMatch(article.title, fullText)
+  if (titleBody.level === 'FAIL') report.fail(id, titleBody.reason)
+  else if (titleBody.level === 'WARN') report.warn(id, titleBody.reason)
 
   // 21 · 진료 권고 문장 (M-AUTO-2 · D4-A) — §4.4 의 필수 조건이라 FAIL 이다
   const care = checkCareAdvice(fullText, article.medical)

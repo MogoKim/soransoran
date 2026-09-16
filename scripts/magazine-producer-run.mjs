@@ -53,6 +53,7 @@ import { fileURLToPath } from 'node:url'
 import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
 import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
+import { writeHandoff } from './lib/magazine-handoff.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -137,6 +138,18 @@ const result = await runProducerFlow({
     notify: notifyOnce,
   },
 })
+
+// 🔴 **완료 신호를 남긴다** — 01:00 등록이 이것을 보고 시작한다 (무인 운영).
+//    실패한 회차도 남긴다. "안 돌았다" 와 "돌았는데 실패했다" 는 대응이 다르다.
+if (!dryRun) {
+  try {
+    const path = writeHandoff({ date: kstDate(), verdict: result.verdict, code: result.code, ran: result.ran ?? [] })
+    line(`인계 신호: ${path}`)
+  } catch (e) {
+    // 🔴 신호를 못 써도 회차 판정은 바꾸지 않는다. 등록은 제한 대기 후 진행한다.
+    line(`인계 신호를 남기지 못했다 — 판정에 반영하지 않는다 (${e?.message ?? e})`)
+  }
+}
 
 if (result.failures?.length) for (const f of result.failures) line(`🔴 ${f}`)
 line(`판정: ${result.verdict} — ${result.reason}`)

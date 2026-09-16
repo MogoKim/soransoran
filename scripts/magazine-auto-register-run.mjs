@@ -35,11 +35,14 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
+import { readHandoff, waitForProducer } from './lib/magazine-handoff.mjs'
+import { LOCK_PATH as AR_LOCK, defaultPidAlive, readLock } from './lib/magazine-auto-lock.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 const NODE = process.execPath
 const READY = join(ROOT, 'scripts/magazine-auto-register-ready.mjs')
+const MERGE = join(ROOT, 'scripts/magazine-auto-merge.mjs')
 
 function stamp() {
   return new Date(Date.now() + 9 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' KST'
@@ -62,6 +65,37 @@ const notifyFlag = write ? '--notify-send' : '--notify'
 const args = [READY, ...(write ? passthrough : ['--dry-run', ...passthrough]), notifyFlag]
 
 line(`매거진 자동 레인 시작${write ? '' : ' (dry-run)'}`)
+
+/**
+ * 🔴 **producer 가 끝나기를 기다린다** (2026-09-16 무인 운영).
+ *
+ *    등록이 02:00 → 01:00 으로 당겨져 producer(00:10)와 50분 간격이다.
+ *    시간 간격에 기대지 않고 **완료 신호와 잠금**을 본다.
+ *    제한 시간까지만 기다리고, 재시도하지 않는다.
+ *
+ * 🔴 dry-run 은 기다리지 않는다. 아무것도 쓰지 않으므로 겹쳐도 안전하다.
+ */
+if (write) {
+  const kst = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+  const producerLockPath = AR_LOCK.replace('.auto-register.lock', '.lock')
+  const handoff = await waitForProducer({
+    getHandoff: () => readHandoff(kst()),
+    isProducerLockHeld: () => {
+      // producer 는 _runs/{date}/.lock 을 쓴다. 살아 있는 pid 일 때만 "도는 중" 이다
+      const l = readLock(producerLockPath.replace('_runs/', `_runs/${kst()}/`))
+      return Boolean(l?.pid && defaultPidAlive(l.pid))
+    },
+    sleep: (ms) => new Promise((res) => setTimeout(res, ms)),
+    log: (m) => line(m),
+  })
+  line(`인계: ${handoff.code} — ${handoff.message}`)
+  if (!handoff.ready) {
+    // 🔴 재시도하지 않는다. 이번 회차는 여기서 끝이다.
+    line('종료 (코드 1)')
+    process.exit(1)
+  }
+}
+
 const r = spawnSync(NODE, args, { cwd: ROOT, stdio: 'inherit' })
 
 /**
@@ -77,5 +111,28 @@ const r = spawnSync(NODE, args, { cwd: ROOT, stdio: 'inherit' })
 if (r.error) line(`실행 실패 — ${r.error.code ?? r.error.name}`)
 const { code, reason } = exitCodeFor({ write, spawnError: r.error ?? null, childStatus: r.status ?? null })
 line(reason)
-line(`종료 (코드 ${code})`)
-process.exit(code)
+
+/**
+ * 🔴 **자동 병합** (2026-09-16 · 완전 무인 운영).
+ *
+ *    `--merge` 를 줬을 때만 돈다. 등록이 실패한 회차에서는 부르지 않는다 —
+ *    merge 할 것이 없거나, 있어도 그 회차의 판정을 신뢰할 수 없다.
+ *
+ * 🔴 병합 실패가 등록 회차의 판정을 덮지 않는다. 둘 중 나쁜 쪽을 남긴다.
+ * 🔴 재시도하지 않는다.
+ */
+let finalCode = code
+if (write && passthrough.includes('--merge')) {
+  if (code !== 0) {
+    line('등록 회차가 실패해 자동 병합을 건너뛴다')
+  } else {
+    const mergeArgs = [MERGE, '--apply', '--notify-send']
+    const m = spawnSync(NODE, mergeArgs, { cwd: ROOT, stdio: 'inherit' })
+    if (m.error) { line(`자동 병합을 띄우지 못했다 (${m.error.code ?? m.error.name})`); finalCode = 1 }
+    else if (m.status !== 0) { line(`자동 병합이 막혔다 (종료 코드 ${m.status})`); finalCode = m.status ?? 1 }
+    else line('자동 병합 완료')
+  }
+}
+
+line(`종료 (코드 ${finalCode})`)
+process.exit(finalCode)

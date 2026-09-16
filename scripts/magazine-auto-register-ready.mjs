@@ -36,7 +36,7 @@
  * 종료 코드: BLOCKED 가 있으면 1, 아니면 0
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadQueue, loadArticles, DRAFTS_DIR } from './lib/magazine-load.mjs'
@@ -44,6 +44,9 @@ import { gate, progress, paths } from './lib/magazine-auto-lane.mjs'
 import { branchName, writePreflight, createBranch, assertOnBranch, stageCheck, returnToMain } from './lib/magazine-auto-git.mjs'
 import { acquireLock } from './lib/magazine-auto-lock.mjs'
 import { readOutstanding, SEVERITY } from './lib/magazine-outstanding.mjs'
+import {
+  clearEntry, fingerprintOf, judgeQuarantine, loadQuarantine, recordFailure, saveQuarantine,
+} from './lib/magazine-quarantine.mjs'
 import { drive } from './magazine-auto-register.mjs'
 import { buildMessage, send, webhookStatus } from './lib/slack-notify.mjs'
 
@@ -167,20 +170,47 @@ function slugsFromRun(date) {
   }
 }
 
+/** 원고가 바뀌었는지 보는 값 — 사람이 고치면 격리가 즉시 풀린다 */
+function draftFingerprint(slug) {
+  try {
+    const s = statSync(paths(slug).articleTs)
+    return fingerprintOf({ size: s.size, mtimeMs: s.mtimeMs })
+  } catch {
+    try {
+      const s = statSync(paths(slug).draftMd)
+      return fingerprintOf({ size: s.size, mtimeMs: s.mtimeMs })
+    } catch { return null }
+  }
+}
+
 /** 자동 레인 후보 — gate 를 통과하고 brief 가 이미 있는 것만 */
 export function scan({ runDate = null } = {}) {
   const queue = loadQueue()
   const fromRun = runDate ? slugsFromRun(runDate) : null
   const pool = fromRun ?? queue.map((q) => q.slug)
 
+  const store = loadQuarantine()
+  const now = Date.now()
+
   const eligible = []
   const skipped = []
+  const quarantined = []
   for (const slug of pool) {
     const g = gate(slug, queue)
-    if (g.ok) eligible.push({ slug, item: g.item, progress: progress(slug) })
-    else skipped.push({ slug, riskLevel: g.item?.riskLevel ?? null, blockedBy: g.blockedBy })
+    if (!g.ok) {
+      skipped.push({ slug, riskLevel: g.item?.riskLevel ?? null, blockedBy: g.blockedBy })
+      continue
+    }
+    // 🔴 격리된 후보는 **건너뛴다.** 그래야 뒤의 멀쩡한 후보가 limit 안에 들어온다.
+    //    막힌 것을 고쳐 주지 않는다 — 비켜 줄 뿐이다.
+    const q = judgeQuarantine({ entry: store[slug], fingerprint: draftFingerprint(slug), now })
+    if (q.skip) {
+      quarantined.push({ slug, code: q.code, message: q.message })
+      continue
+    }
+    eligible.push({ slug, item: g.item, progress: progress(slug) })
   }
-  return { source: fromRun ? `run:${runDate}` : 'queue', pool: pool.length, eligible, skipped }
+  return { source: fromRun ? `run:${runDate}` : 'queue', pool: pool.length, eligible, skipped, quarantined }
 }
 
 // ── PR ─────────────────────────────────────────────────────
@@ -483,6 +513,10 @@ async function main() {
   const done = []
   const blocked = []
   const results = []
+  // 🔴 격리 기록은 **write 회차만** 고친다. dry-run 은 아무것도 남기지 않는다.
+  let store = loadQuarantine()
+  let storeChanged = false
+
   for (const cand of scanned.eligible.slice(0, limit)) {
     // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
     const publishAt = slots.peek()
@@ -491,9 +525,27 @@ async function main() {
     // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
     if (CONSUMES_SLOT.has(r.verdict)) slots.commit()
     results.push(r)
-    if (r.verdict === 'BLOCKED') blocked.push(r)
-    else if (r.verdict === 'DONE') done.push(r)
+
+    if (r.verdict === 'BLOCKED') {
+      blocked.push(r)
+      // 🔴 실패를 센다. 정해진 횟수를 넘으면 다음 회차부터 비켜 준다 —
+      //    고쳐 주지는 않는다. 같은 후보가 매일 앞자리를 차지하면 재고가 멈춘다.
+      if (write) {
+        store = { ...store, [r.slug]: recordFailure({
+          entry: store[r.slug],
+          fingerprint: draftFingerprint(r.slug),
+          now: Date.now(),
+          reasons: (r.blockedBy ?? []).map((b) => `${b.code}: ${b.message}`),
+        }) }
+        storeChanged = true
+      }
+    } else if (r.verdict === 'DONE') {
+      done.push(r)
+      // 🔴 등록에 성공하면 기록을 지운다. 옛 실패를 남겨 두면 다음에 오해한다.
+      if (write && store[r.slug]) { store = clearEntry(store, r.slug); storeChanged = true }
+    }
   }
+  if (write && storeChanged) saveQuarantine(store)
 
   Object.assign(report, {
     source: scanned.source,
@@ -505,6 +557,7 @@ async function main() {
     dryRunOk: results.filter((r) => r.verdict === 'DRY_RUN_OK').map((r) => r.slug),
     dryRunIncomplete: results.filter((r) => r.verdict === 'DRY_RUN_INCOMPLETE').map((r) => r.slug),
     gateSkipped: scanned.skipped.map((s) => ({ slug: s.slug, riskLevel: s.riskLevel, codes: s.blockedBy.map((b) => b.code) })),
+    quarantined: scanned.quarantined ?? [],
     steps: results.map((r) => ({ slug: r.slug, verdict: r.verdict, steps: r.steps })),
   })
 
@@ -559,6 +612,11 @@ function printHuman(report, { write }) {
   if (report.gateSkipped) {
     const gradeSkipped = report.gateSkipped.filter((s) => s.codes.includes('RISK_LEVEL') || s.codes.includes('AUTO_INELIGIBLE'))
     console.log(`  gate 제외 ${report.gateSkipped.length}건 (등급·민감 사유 ${gradeSkipped.length}건)`)
+  }
+  if (report.quarantined?.length) {
+    // 🔴 비켜 준 후보를 반드시 남긴다. 조용히 빠지면 왜 안 도는지 아무도 모른다
+    console.log(`  격리 ${report.quarantined.length}건 (공급을 막지 않게 비켜 둔다)`)
+    for (const q of report.quarantined) console.log(`     · ${q.slug} — ${q.message}`)
   }
   if (report.done?.length) console.log(`  등록: ${report.done.map((d) => `${d.slug}(${d.publishAt})`).join(' · ')}`)
   if (report.pr) console.log(`  PR: ${report.pr.made ? report.pr.url : `🔴 만들지 않음 — ${report.pr.reason}`}`)
