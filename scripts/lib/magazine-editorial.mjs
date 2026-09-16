@@ -159,6 +159,66 @@ export function checkTitleForm(title) {
   }
 }
 
+/**
+ * 제목이 본문과 같은 것을 말하는가 (2026-09-16 · 무인 운영).
+ *
+ * 🔴 **왜 필요했나.** `sleep-habit-two-weeks` 는 slug 와 제목이 "2주" 인데
+ *    본문은 "며칠로 잘라 말하기 어렵다" 며 기간을 명시적으로 거부했다.
+ *    "2주" 로 검색해 들어온 독자가 답을 못 얻는다. 형태 검사(`checkTitleForm`)는
+ *    말미만 보므로 이것을 잡지 못한다.
+ *
+ * 🔴 **핵심어가 본문에 실제로 있는가**만 본다. 의미 판정을 하지 않는다 —
+ *    기계가 "이 글이 제목에 답하는가" 를 판정하려 들면 오탐이 재고를 멈춘다.
+ *    관문의 오탐은 막지 못하는 것보다 나쁘다(원고 관문과 같은 원칙).
+ *
+ * 🔴 조사·말미 형태소를 떼고 본다. "걷기" 와 "걷는" 을 다른 말로 세면 전부 걸린다.
+ */
+
+/** 제목에서 빼는 말 — 검색어가 아니라 문장을 잇는 조각이다 */
+const TITLE_STOPWORDS = new Set([
+  '그', '이', '저', '것', '때', '뒤', '후', '중', '점', '법', '이유',
+  '무슨', '어떤', '어떻게', '얼마나', '언제', '왜', '몇', '하면', '해도', '하는',
+  '있는', '없는', '되나요', '인가요', '한가요', '까요', '나요', '될까요', '할까요',
+])
+
+/** 비교용으로 줄기만 남긴다 — 조사·어미를 떼고 2자 이상만 */
+function titleStems(text) {
+  return String(text ?? '')
+    .replace(/[^가-힣A-Za-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((w) => w.replace(/(은|는|이|가|을|를|에|의|도|만|과|와|로|으로|에서|부터|까지)$/, ''))
+    .filter((w) => w.length >= 2 && !TITLE_STOPWORDS.has(w))
+}
+
+/**
+ * @param {string} title
+ * @param {string} bodyText
+ * @returns {{ level: 'FAIL'|'WARN'|null, missing: string[], coverage: number, reason: string|null }}
+ */
+export function checkTitleBodyMatch(title, bodyText) {
+  const stems = [...new Set(titleStems(title))]
+  const body = String(bodyText ?? '')
+  if (stems.length === 0) return { level: null, missing: [], coverage: 1, reason: null }
+
+  // 🔴 줄기 그대로 또는 앞 2자로 본다 — "걷기" 가 본문에 "걷는" 으로 나와도 같은 말이다
+  const missing = stems.filter((s) => !body.includes(s) && !body.includes(s.slice(0, 2)))
+  const coverage = (stems.length - missing.length) / stems.length
+
+  // 🔴 하나도 안 걸리면 제목과 본문이 다른 글이다. 그것만 FAIL 로 둔다.
+  if (coverage === 0) {
+    return { level: 'FAIL', missing, coverage, reason: `제목의 핵심어가 본문에 하나도 없다 — ${missing.join(' · ')}` }
+  }
+  if (missing.length > 0 && coverage < 0.5) {
+    return {
+      level: 'WARN',
+      missing,
+      coverage,
+      reason: `제목의 핵심어 절반 이상이 본문에 없다 — ${missing.join(' · ')} (검색해 들어온 독자가 답을 못 찾는다)`,
+    }
+  }
+  return { level: null, missing, coverage, reason: null }
+}
+
 // ── D4-A · 진료 권고 문장 ──────────────────────────────────
 
 /**

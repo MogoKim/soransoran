@@ -126,6 +126,7 @@
     "chatgpt:session-check": "node scripts/chatgpt-session-check.mjs",
     "magazine:launchd-install": "tsx scripts/magazine-launchd-install.mts",
     "magazine:launchd-check": "tsx scripts/magazine-launchd-check.mts",
+    "magazine:auto-merge": "node scripts/magazine-auto-merge.mjs",
     "supply:health": "tsx scripts/supply-health.mts",
     "supply:health-check": "tsx scripts/supply-health-check.mts",
     "supply:forecast-check": "tsx scripts/supply-capacity-forecast-check.mts",

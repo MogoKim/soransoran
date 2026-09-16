@@ -21,7 +21,8 @@
 
   🔴 **하지 않는 일** — 여기는 정확했다.
      articles.ts 등록 · hero 생성 · 공개 · commit · push.
-     등록과 PR 은 02:00 의 magazine-auto-register 가 한다.
+     등록·PR·병합은 01:00 의 magazine-auto-register 가 한다.
+     🔴 회차 끝에 `_runs/{date}/producer-handoff.json` 을 남긴다 — 01:00 이 그것을 보고 시작한다.
 
   ─────────────────────────────────────────────────────────────
   🔴 **plist 를 symlink 로 깔지 않는다.** (2026-09-15 장애의 근인)
