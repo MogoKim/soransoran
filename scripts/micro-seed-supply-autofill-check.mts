@@ -4,7 +4,7 @@
  *
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import {
@@ -18,6 +18,7 @@ import {
   machineProfileMismatch, impersonatesHuman, buildQueuePayload, queueProfileOf,
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Envelope, type QueueProfileRow,
+  queueSourceTimesOf,
 } from '../src/lib/micro-seed-supply-autofill'
 
 const NOW = '2026-09-07T12:00:00.000Z'
@@ -403,6 +404,91 @@ console.log('\n⑨ 🔴 pacing 상수를 건드리지 않았다')
   const lib = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
   check('🔴 공급 lib 이 발행 상수를 재정의하지 않는다',
     !/DAILY_PUBLISH_CAP|POST_CAP_PER_WEEK|MIN_DAYS_BETWEEN_POSTS/.test(lib))
+}
+
+// ─────────────────────────────────────────────────────────
+// [ST] 적재가 읽을 원문 시각 — 🔴 **이 PR 은 아직 DB 에 쓰지 않는다**
+//
+//   `0026_raw_content_source_times` migration 을 적용한 뒤 별도 PR 에서 잇는다.
+//   지금 잇고 migration 을 안 하면 컬럼이 없어 적재 전체가 죽는다.
+// ─────────────────────────────────────────────────────────
+{
+  const POSTED = '2020-12-13T15:00:00.000Z'
+  const CAPTURED = '2026-09-17T00:00:00.000Z'
+
+  const t = queueSourceTimesOf({
+    sourcePostedAt: POSTED, sourceListedAt: CAPTURED, sourceCapturedAt: CAPTURED,
+  })
+  check('🔴 [ST] 게시 시각을 Date 로 읽는다', t.sourcePostedAt?.toISOString() === POSTED)
+  check('🔴 [ST] 세 칸이 서로 다른 값을 들 수 있다',
+    t.sourcePostedAt?.getTime() !== t.sourceCapturedAt?.getTime())
+
+  const none = queueSourceTimesOf({ sourceCapturedAt: CAPTURED })
+  check('🔴 [ST] 게시 시각이 없으면 null (모른다)', none.sourcePostedAt === null)
+  check('🔴 [ST] 🔴 가져온 시각으로 **메우지 않는다** — 옛 이슈가 새 글이 되는 길을 막는다',
+    none.sourcePostedAt === null && none.sourceCapturedAt !== null)
+  const bad = queueSourceTimesOf({ sourcePostedAt: '2020년 겨울쯤', sourceCapturedAt: CAPTURED })
+  check('🔴 [ST] 읽을 수 없는 값은 null 이다 — 지금 시각으로 바꾸지 않는다',
+    bad.sourcePostedAt === null)
+  check('🔴 [ST] 빈 문자열도 null 이다', queueSourceTimesOf({ sourcePostedAt: '' }).sourcePostedAt === null)
+
+  // 🔴 이번 PR 의 **정지선** — 적재가 아직 이 값을 쓰지 않는다
+  {
+    const runner = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
+    const create = runner.slice(runner.indexOf('microSeedRawContent.create'))
+      .slice(0, runner.slice(runner.indexOf('microSeedRawContent.create')).indexOf('select:'))
+    check('🔴 [ST] 적재가 아직 sourcePostedAt 을 쓰지 않는다 (migration 미적용)',
+      !create.includes('sourcePostedAt'))
+    check('🔴 [ST] 기존 sourceCapturedAt 적재는 그대로다', create.includes('sourceCapturedAt:'))
+  }
+
+  /**
+   * ── 🔴 **DB 변경 없이 배포 가능해야 한다** (2026-09-17 보정) ──
+   *
+   *    앞선 판은 활성 schema 에 컬럼을 올려 두고 migration 을 적용하지 않았다.
+   *    Prisma 의 `create()` 는 `select` 를 주지 않으면 **모든 스칼라 필드를 돌려주므로**
+   *    `RETURNING` 에 없는 컬럼이 들어가 그 자리에서 죽는다.
+   *    실측: `micro-seed-import-82cook-live.mts` 의 `create()` 두 곳이 `select` 가 없다.
+   *    그래서 schema 변경·migration 적용·적재 연결을 **한 작업으로 묶어** 별도 PR 로 뺀다.
+   */
+  {
+    const schema = readFileSync('prisma/schema.prisma', 'utf-8')
+    check('🔴 [ST] 활성 schema 에 sourcePostedAt 이 **없다** — DB 변경 없이 배포 가능해야 한다',
+      !/sourcePostedAt/.test(schema))
+    check('🔴 [ST] 활성 schema 에 sourceListedAt 이 **없다**', !/sourceListedAt/.test(schema))
+    check('🔴 [ST] 기존 sourceCapturedAt 은 그대로다',
+      /model MicroSeedRawContent[\s\S]*?sourceCapturedAt DateTime\n/.test(schema))
+    check('🔴 [ST] 적용 대기 migration 을 prisma/migrations 에 두지 않는다',
+      !existsSync('prisma/migrations/0026_raw_content_source_times'))
+
+    // 🔴 초안은 보존한다 — 다음 작업이 그대로 옮겨 쓴다
+    const mig = readFileSync(
+      'prisma/migrations-draft/0026_raw_content_source_times/migration.sql', 'utf-8')
+    check('🔴 [ST] 초안이 두 칸을 더한다', /ADD COLUMN "sourcePostedAt"/.test(mig)
+      && /ADD COLUMN "sourceListedAt"/.test(mig))
+    check('🔴 [ST] 초안이 기존 행을 가져온 시각으로 채우지 않는다',
+      !/UPDATE\s+"MicroSeedRawContent"/i.test(mig))
+    check('🔴 [ST] 초안이 기존 컬럼을 바꾸지 않는다', !/ALTER COLUMN|DROP COLUMN/i.test(mig))
+    check('🔴 [ST] 초안 디렉터리가 왜 따로인지 적어 둔다',
+      readFileSync('prisma/migrations-draft/README.md', 'utf-8').includes('select'))
+  }
+
+  /**
+   * 🔴 **호환성 근거 — 읽기 질의는 전부 `select` 를 준다.**
+   *    이 성질이 깨지면 다음에 컬럼을 더할 때 같은 사고가 난다.
+   */
+  {
+    const files = [
+      'scripts/micro-seed-publish-enqueue.mts', 'scripts/original-post-enqueue.mts',
+      'scripts/original-post-decide.mts', 'scripts/original-post-generate.mts',
+    ]
+    for (const f of files) {
+      const src = readFileSync(f, 'utf-8')
+      const calls = src.split('microSeedRawContent.find').slice(1)
+      check(`🔴 [ST] ${f} 의 읽기 질의가 select 를 준다`,
+        calls.every((c) => c.slice(0, 400).includes('select:')))
+    }
+  }
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

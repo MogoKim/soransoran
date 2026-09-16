@@ -173,6 +173,102 @@ console.log('\n⑥ 🔴 상수를 건드리지 않았다')
     /export const PACE_MIN_MS = 3000\b/.test(readFileSync('src/lib/micro-seed-82cook-thin.ts', 'utf-8')))
 }
 
+// ─────────────────────────────────────────────────────────
+// [ST] 원문 시각이 adapt 를 **통과한다** — 🔴 한 군데만 뚫어서는 길이 나지 않는다
+// ─────────────────────────────────────────────────────────
+{
+  const POSTED = '2020-12-13T15:00:00.000Z'
+  const LISTED = '2026-09-16T12:33:31.020Z'
+  const withTimes: ThinRow = {
+    sourceArticleId: '1', sourceSite: 'navercafe:remonterrace', url: 'https://x/1',
+    title: '제목', commentCount: 0, score: 0, bodyLength: 120, bodyHead: '본문',
+    axis: SOURCE_AXIS, safetyVerdict: 'pass', safetyReasons: '', reason: 'r',
+    runId: 'run', fetchedAt: LISTED,
+    sourcePostedAt: POSTED, sourceListedAt: LISTED, sourceCapturedAt: LISTED,
+  }
+  // 🔴 옛 얇은 파일에는 세 키가 아예 없다 — 그 경우도 깨지지 않아야 한다
+  const legacy: ThinRow = { ...withTimes }
+  delete (legacy as Record<string, unknown>).sourcePostedAt
+  delete (legacy as Record<string, unknown>).sourceListedAt
+  delete (legacy as Record<string, unknown>).sourceCapturedAt
+
+  for (const k of ['sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt']) {
+    check(`🔴 [ST] detail 계약에 ${k} 가 있다`, DETAIL_KEYS.includes(k))
+    check(`🔴 [ST] raw-detail 계약에 ${k} 가 있다`, RAW_DETAIL_KEYS.includes(k))
+  }
+
+  const d = toDetailRecord(withTimes)
+  check('🔴 [ST] detail 행이 게시 시각을 옮긴다', d.sourcePostedAt === POSTED)
+  check('🔴 [ST] detail 행이 목록 시각을 옮긴다', d.sourceListedAt === LISTED)
+  check('🔴 [ST] detail 행이 계약 관문을 통과한다',
+    violatesAdapt(d, DETAIL_KEYS, BODY_HEAD_CHARS).length === 0)
+  const r = toRawDetailRecord(withTimes)
+  check('🔴 [ST] raw-detail 행도 게시 시각을 옮긴다', r.sourcePostedAt === POSTED)
+  check('🔴 [ST] raw-detail 행이 계약 관문을 통과한다',
+    violatesAdapt(r, RAW_DETAIL_KEYS, BODY_HEAD_CHARS).length === 0)
+
+  const dl = toDetailRecord(legacy)
+  check('🔴 [ST] 옛 행은 빈 문자열이 된다 (모른다)', dl.sourcePostedAt === '')
+  check('🔴 [ST] 옛 행도 키는 있다 — 하류가 "키 없음" 을 따로 다루지 않아도 되게',
+    'sourcePostedAt' in dl && 'sourceListedAt' in dl && 'sourceCapturedAt' in dl)
+  check('🔴 [ST] 옛 행도 계약 관문을 통과한다',
+    violatesAdapt(dl, DETAIL_KEYS, BODY_HEAD_CHARS).length === 0)
+  check('🔴 [ST] 🔴 옛 행의 게시 시각을 가져온 시각으로 메우지 않는다',
+    dl.sourcePostedAt === '' && dl.sourceCapturedAt === '')
+
+  check('🔴 [ST] 전문 키는 여전히 나가지 않는다',
+    FORBIDDEN_KEYS.every((k) => !(k in d) && !(k in r)))
+}
+
+// ─────────────────────────────────────────────────────────
+// [SF] 🔴 **오래된 이슈 재수집 ≠ 오래된 상시 소재** — 이번 PR 은 판정을 바꾸지 않는다.
+//
+//   지금(`ageDays` = 가져온 시각 기준)은 둘이 **구분되지 않는다.** 아래 fixture 는
+//   그 사실을 못박고, 게시 시각을 기준으로 바꾸면 무엇이 갈라지는지 미리 적어 둔다.
+//   🔴 TTL 상수도 `judgeCandidate` 도 건드리지 않는다 — 준비만 한다.
+// ─────────────────────────────────────────────────────────
+{
+  const day = 86400000
+  const now = new Date('2026-09-17T00:00:00.000Z').getTime()
+  const ageFrom = (iso: string): number | null => {
+    if (iso === '') return null
+    const t = new Date(iso).getTime()
+    return Number.isNaN(t) ? null : Math.floor((now - t) / day)
+  }
+
+  // ① 오래된 **이슈**를 오늘 다시 수집했다 — 게시 2020년 · 수집 오늘
+  const restaleIssue = { posted: '2020-12-13T15:00:00.000Z', captured: '2026-09-17T00:00:00.000Z' }
+  // ② 오래된 **상시 소재** — 게시도 수집도 40일 전
+  const oldEvergreen = { posted: '2026-08-08T00:00:00.000Z', captured: '2026-08-08T00:00:00.000Z' }
+  // ③ 오늘 올라온 글
+  const freshToday = { posted: '2026-09-16T22:00:00.000Z', captured: '2026-09-17T00:00:00.000Z' }
+
+  check('🔴 [SF] 지금 기준(가져온 시각)으로는 ①과 ③이 **같아 보인다** — 이것이 결함이다',
+    ageFrom(restaleIssue.captured) === ageFrom(freshToday.captured))
+  check('🔴 [SF] 게시 시각 기준이면 ①이 2,000일 넘게 묵은 글로 갈린다',
+    (ageFrom(restaleIssue.posted) ?? 0) > 2000)
+  check('🔴 [SF] 게시 시각 기준이면 ③은 여전히 갓 올라온 글이다',
+    (ageFrom(freshToday.posted) ?? 999) <= 1)
+  check('🔴 [SF] 오래된 상시 소재는 두 기준이 같다 — 여기서는 달라지지 않는다',
+    ageFrom(oldEvergreen.posted) === ageFrom(oldEvergreen.captured))
+  check('🔴 [SF] 상시 소재 40일 — 현재성(7일)은 넘지만 상시(28일) 기준으로도 넘는다',
+    (ageFrom(oldEvergreen.posted) ?? 0) > 28)
+
+  // 🔴 미상·잘못된 시각
+  check('🔴 [SF] 게시 시각을 모르면 나이도 모른다 (null) — warm 으로 적지 않는다',
+    ageFrom('') === null)
+  check('🔴 [SF] 읽을 수 없는 값도 모른다 (null)', ageFrom('어제쯤') === null)
+
+  // 🔴 이번 PR 이 판정을 바꾸지 않았다는 증거
+  {
+    const src = readFileSync('src/lib/supply-freshness.ts', 'utf-8')
+    check('🔴 [SF] TTL 상수를 건드리지 않았다',
+      /hot:\s*2,/.test(src) && /timelyWarm:\s*7,/.test(src))
+    check('🔴 [SF] 신선도 판정이 아직 게시 시각을 읽지 않는다 — 별도 PR 이다',
+      !/sourcePostedAt/.test(src))
+  }
+}
+
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${fail === 0 ? '✅' : '❌'} ${pass} pass · ${fail} fail\n`)
 if (fail > 0) process.exit(1)

@@ -34,7 +34,7 @@ import {
   MAX_DRAFTS_PER_SOURCE, DRAFT_QUALITY_AXES, DRAFT_QUALITY_AXIS_PROMPT,
   LIFE_CONFLICT_MISSING, LIFE_EVIDENCE_NOT_FOUND,
   QUALITY_PROMPT_VERSION, BANNED_WORDS,
-  lifeHistoryLines, applyQuality, judgeSourceGate, judgeDraftGate,
+  lifeHistoryLines, lifeReferenceLines, noGoAvoidLines, applyQuality, judgeSourceGate, judgeDraftGate,
   pickDraftGated, judgeLifeRetry,
 } from '../src/lib/micro-seed-auto-draft'
 import { judgeSelfAgeConflict, SELF_AGE_RULE_VERSION } from '../src/lib/persona-self-age'
@@ -345,11 +345,23 @@ function personaLifeDirectives(p?: PersonaLifeHistory): string[] {
     '## 🔴 당신은 이런 사람입니다',
     ...lifeHistoryLines(p),
     '',
-    '위 다섯 가지는 **당신의 실제 삶**입니다. 글에서 1인칭으로 말할 때 이것과 어긋나지 않습니다.',
+    '위 항목은 **당신의 실제 삶**입니다. 글에서 1인칭으로 말할 때 이것과 어긋나지 않습니다.',
     '- 혼인 상태에 없는 배우자를 "우리 남편" 이라고 부르지 않습니다.',
     '- 없는 자녀를, 다른 나이대의 자녀를 자기 아이처럼 말하지 않습니다.',
     '- 해 본 적 없는 부모 돌봄을 자기 경험으로 말하지 않습니다.',
     '- 아직 오지 않은 갱년기를 자기 증상으로 말하지 않습니다.',
+    /**
+     * 🔴 2026-09-17 — **직업을 안 주고 "지어내지 말라" 고만 했다.**
+     *    실측: 카드가 `은퇴` 인 P14 가 *"우리 직장도 그런데"* 를 썼다.
+     *    이제 값을 주되, **가능한 생활사를 모순으로 단정하지 않는다** —
+     *    은퇴한 사람도 다시 일하고, 전업도 부업을 하고, 누구나 옛 직장 이야기를 한다.
+     */
+    '- 지금 하는 일을 **다른 것으로 바꿔 말하지 않습니다.**',
+    '  🔴 다만 다음은 전부 자연스럽습니다 — 막지 않습니다:',
+    '   · 은퇴한 뒤 다시 일을 찾거나 짧게 일하는 이야기 · 부업 · 봉사 · 소일거리',
+    '   · 예전에 다니던 직장 이야기 · 배우자나 자녀의 일 이야기',
+    '   · 남의 직장 이야기를 듣고 드는 생각',
+    '- 사는 곳을 다른 지역으로 바꿔 말하지 않습니다. 여행·방문 이야기는 자연스럽습니다.',
     // 🔴 2026-09-14 — 나이를 안 넘겨서 `우리 언니(30~32)` 가 나왔다. 관계의 **나이**를 본다
     '- 당신 나이에서 나올 수 없는 가족 관계를 지어내지 않습니다.',
     '  (예: 40대 후반인데 "우리 언니가 서른 하나" · 50대인데 "우리 엄마가 예순 하나")',
@@ -374,8 +386,19 @@ function personaLifeDirectives(p?: PersonaLifeHistory): string[] {
     '   곁에서 본 이야기로 · 궁금해서 묻는 글로 · 읽고 든 생각으로 · 비슷한 다른 경험으로.',
     '   그 소재가 재미있고 할 말이 있는 소재라는 사실은 변하지 않습니다.',
     '',
-    '🔴 위 네 가지 밖의 개인 사정(직업 · 사는 곳 · 병력 · 가족 구성)은 **지어내지 않습니다.**',
+    /**
+     * 🔴 2026-09-17 — 옛 문장은 *"직업 · 사는 곳 …은 지어내지 않습니다"* 였는데
+     *    **직업과 사는 곳을 주지 않았다.** 이제 위에서 준다. 그래서 여기 남는 것은
+     *    **끝내 주지 않는 것**(병력 · 가족 구성)뿐이다 — 지킬 수 있는 지시만 남긴다.
+     */
+    '🔴 위에 적히지 않은 개인 사정(병력 · 가족 구성 · 학력 · 재산)은 **지어내지 않습니다.**',
     '',
+    // 🔴 형편은 배경으로만 준다 — 본문에 드러내지 않는다(창업자 지정)
+    ...lifeReferenceLines(p),
+    ...(lifeReferenceLines(p).length > 0 ? [''] : []),
+    // 🔴 카드가 정한 회피 소재. 발행 쪽 hardFilter 는 글자 그대로만 보므로 여기가 유일한 자리다
+    ...noGoAvoidLines(p),
+    ...(noGoAvoidLines(p).length > 0 ? [''] : []),
   ]
 }
 
@@ -654,6 +677,17 @@ export function buildQualitySystemPrompt(persona?: PersonaLifeHistory): string {
       '   글이 **자기 일로** 말하는 것이 위와 명백히 어긋날 때만 conflict=true 다.',
       '   예: 비혼인데 "우리 남편이" · 무자녀인데 "우리 애가" ·',
       '       갱년기 전인데 "내가 요즘 갱년기라" · 돌봄 없음인데 "내가 간병하느라".',
+      /**
+       * 🔴 2026-09-17 — 하는 일·사는 곳을 검수에도 준다. 다만 **가능한 생활사를
+       *    모순으로 단정하지 않는다** — 은퇴한 사람이 다시 일하는 것은 흔한 일이고,
+       *    옛 직장 이야기와 지금 직장 이야기는 다르다. 좁게만 센다.
+       */
+      '',
+      '   🔴 **하는 일·사는 곳은 좁게 본다.** 지금 자기 신분을 **다르게 말할 때만** 충돌이다.',
+      '      충돌 아님: 은퇴한 뒤 다시 일하거나 부업·봉사를 하는 이야기 · 예전 직장 이야기 ·',
+      '                배우자나 자녀의 직장 이야기 · 남의 직장 이야기 · 여행·방문한 지역 이야기.',
+      '      충돌: 은퇴라고 적혀 있는데 지금 다니는 회사가 있는 것처럼 "우리 회사 사람들이" ·',
+      '            수도권인데 "여기 읍내는".',
       // 🔴 **나이·세대는 여기서 묻지 않는다** (2026-09-14). 큰 프롬프트에 절차를 덧붙였더니
       //    모델이 실측 결함을 그대로 통과시켰고(2/2), 프롬프트만 비싸졌다.
       //    나이는 `buildAgeCheckSystemPrompt` 가 **짧고 집중된 호출 하나**로 따로 본다.
@@ -910,8 +944,17 @@ async function askQuality(
   return out
 }
 
-/** 소재 메타 — 제목 · bodyHead · 판정이 남긴 한 줄 */
-type Meta = { title: string; site: string; bodyHead: string; axis: string; lane: string; angle: string }
+/**
+ * 소재 메타 — 제목 · bodyHead · 판정이 남긴 한 줄
+ *
+ * 🔴 **세 시각을 함께 들고 온다** (2026-09-17). 생성 산출물이 이 값을 싣지 않으면
+ *    적재가 다시 `sourceCapturedAt` 밖에 볼 것이 없다. 프롬프트에는 넣지 않는다 —
+ *    **글을 쓰는 데 쓰는 값이 아니라 뒤에 전달할 값**이다.
+ */
+type Meta = {
+  title: string; site: string; bodyHead: string; axis: string; lane: string; angle: string
+  sourcePostedAt: string; sourceListedAt: string; sourceCapturedAt: string
+}
 
 function loadMeta(): Map<string, Meta> {
   const out = new Map<string, Meta>()
@@ -924,6 +967,10 @@ function loadMeta(): Map<string, Meta> {
         out.set(id, {
           title: t, site: S(r.sourceSite), bodyHead: S(r.bodyHead),
           axis: S(r.axis), lane: S(r.lane), angle: '',
+          // 🔴 옛 파일에는 이 키가 없다 — 그러면 빈 문자열(모른다)이다
+          sourcePostedAt: S(r.sourcePostedAt),
+          sourceListedAt: S(r.sourceListedAt),
+          sourceCapturedAt: S(r.sourceCapturedAt),
         })
       }
     }
@@ -1113,12 +1160,25 @@ function loadVoice(sources: readonly { sourceArticleId: string; title: string; b
       if (c === undefined || c === null) return undefined
       const card = usable.find((x) => x.code === c)
       if (card === undefined) return undefined
-      // 🔴 정본 카드에서 **필요한 칸만** 옮긴다. 복제본을 만들지 않는다
+      /**
+       * 🔴 정본 카드에서 옮긴다. 복제본을 만들지 않는다.
+       *
+       * 🔴 **2026-09-17 — 여기가 누락 지점이었다.** `cardToPersona` 는 `workStatus` ·
+       *    `region` · `economicStatus` · `noGoTopics` 를 전부 채워 놓는데 이 함수가
+       *    7칸만 옮겨서 **생성 프롬프트에 닿지 못했다.** 카드에 있고 이미 읽어 둔 값이라
+       *    새로 만들 것이 없다 — 옮기기만 한다.
+       *
+       * 🔴 `voiceCore` · `voiceLength` 는 **옮기지 않는다.** 말투 지시를 프롬프트에 박으면
+       *    모든 글이 그 지시대로 균질해진다 — `NORTH-STAR.md` 가 경고한 실패 모드다.
+       *    말투 근거는 지금처럼 **익명 실제 댓글**이 맡는다.
+       */
       return {
         // 🔴 `ageBand` 는 정본 카드의 값 그대로다 — 여기서 지어내거나 보정하지 않는다
         code: card.code, ageBand: card.ageBand, maritalStatus: card.maritalStatus,
         childrenCount: card.childrenCount, childrenAgeBands: card.childrenAgeBands,
         parentCare: card.parentCare, menopauseStatus: card.menopauseStatus,
+        workStatus: card.workStatus, region: card.region,
+        economicStatus: card.economicStatus, noGoTopics: card.noGoTopics,
       }
     },
     /**
@@ -1607,6 +1667,16 @@ async function main(): Promise<void> {
       // 🔴 **어떤 말투 근거로 썼는지.** 텍스트도 작성자도 남기지 않는다 — 근거의 신원뿐이다
       voiceProvenance: voice.provenanceFor(a.pick.sourceArticleId),
       leakedTokens: '', reviewedAt: nowIso, writtenAt: a.draft.generatedAt,
+      /**
+       * 🔴 **원문 쪽 세 시각** (2026-09-17) — 적재가 신선도를 제대로 재려면 여기를 지나야 한다.
+       *
+       *    🔴 `sourcePostedAt` 은 **원문이 올라온 시각**이다. 사건·방송·발언 시각이 아니다.
+       *    🔴 `writtenAt`(= 우리가 초안을 쓴 시각)과 섞지 않는다. 재생성해도 원문 시각은 안 바뀐다.
+       *    🔴 모르면 빈 문자열이다 — 지금 시각으로 채우지 않는다.
+       */
+      sourcePostedAt: a.meta.sourcePostedAt,
+      sourceListedAt: a.meta.sourceListedAt,
+      sourceCapturedAt: a.meta.sourceCapturedAt,
       provenanceNote: `기계 생성 · ${DRAFT_RULE_VERSION} · ${DRAFT_PROVENANCE} · ${a.from}`,
       autoJudge: seedProv.get(a.pick.sourceArticleId) ?? null,
     })),

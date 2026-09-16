@@ -221,9 +221,36 @@ export type PersonaLifeHistory = {
   childrenAgeBands?: PersonaForMatch['childrenAgeBands']
   parentCare?: PersonaForMatch['parentCare']
   menopauseStatus?: PersonaForMatch['menopauseStatus']
+  /**
+   * 🔴 **직업 — 안 넘겨서 지킬 수 없는 지시가 됐다** (2026-09-17 실측).
+   *
+   *    프롬프트는 *"직업 · 사는 곳 · 병력 · 가족 구성은 지어내지 않습니다"* 라고 하면서
+   *    **직업을 알려주지 않았다.** 소재가 직장 이야기면 모델은 버리거나 지어낼 수밖에 없는데,
+   *    바로 위 줄이 *"소재를 버리지 말고 자리를 바꿔 씁니다"* 다 — 양쪽을 다 지킬 수 없다.
+   *    실측: 카드가 `은퇴` 인 P14 가 *"우리 직장도 그런데"* 를 쓰고 그대로 통과했다.
+   */
+  workStatus?: PersonaForMatch['workStatus']
+  /** 🔴 사는 곳 — `우리 지역` 류 1인칭 진술의 근거다. 같은 이유로 넘긴다 */
+  region?: PersonaForMatch['region']
+  /**
+   * 🔴 **형편 — 생활사 *참고*다. 본문에 드러내지 않는다** (창업자 지정).
+   *
+   *    그래서 `lifeHistoryLines` 에 **넣지 않는다.** 그 줄은 검수도 함께 읽는데,
+   *    검수는 글에 쓰지 않은 형편이 맞는지 확인할 방법이 없다 — 없는 것을 근거로 막게 된다.
+   *    생성 쪽 참고 줄(`lifeReferenceLines`)로만 간다.
+   */
+  economicStatus?: PersonaForMatch['economicStatus']
+  /** 🔴 카드가 정한 회피 **소재**. 표현(말버릇)이 아니다 — `PoolCard.noGoTopics` 그대로다 */
+  noGoTopics?: PersonaForMatch['noGoTopics']
 }
 
-/** 🔴 사람이 읽는 문장으로 — 생성 프롬프트와 검수 프롬프트가 **같은 줄**을 본다 */
+/**
+ * 🔴 사람이 읽는 문장으로 — 생성 프롬프트와 검수 프롬프트가 **같은 줄**을 본다
+ *
+ * 🔴 **여기 있는 것은 검수도 확인할 수 있는 사실뿐이다.** 형편·회피 소재는 들어가지 않는다 —
+ *    형편은 본문에 드러내지 않기로 한 값이고, 회피 소재는 사실이 아니라 지시다.
+ *    둘을 여기 넣으면 검수가 *글에 없는 것*을 근거로 충돌을 세운다.
+ */
 export function lifeHistoryLines(p: PersonaLifeHistory): string[] {
   const kids = p.childrenCount ?? null
   const bands = p.childrenAgeBands ?? null
@@ -235,6 +262,68 @@ export function lifeHistoryLines(p: PersonaLifeHistory): string[] {
       : `${kids}명${bands !== null && bands.length > 0 ? ` (${[...new Set(bands)].join(' · ')})` : ''}`}`,
     `- 부모 돌봄: ${p.parentCare ?? '알려지지 않음'}`,
     `- 갱년기: ${p.menopauseStatus ?? '알려지지 않음'}`,
+    `- 하는 일: ${p.workStatus ?? '알려지지 않음'}`,
+    `- 사는 곳: ${p.region ?? '알려지지 않음'}`,
+  ]
+}
+
+/**
+ * 🔴 **생성 쪽만 보는 참고 줄** — 검수는 읽지 않는다.
+ *
+ *    형편은 글에 **드러내지 않기로** 한 값이다(창업자 지정). 그래서
+ *    ① 생성에는 배경으로 주고 ② 본문에 쓰지 말라고 못박고 ③ 검수에는 주지 않는다.
+ *    검수에 주면 "형편이 안 드러났다" 를 충돌로 셀 길이 생긴다 — 그건 거꾸로다.
+ *
+ * 🔴 **막는 것은 "내 형편을 말하는 것" 하나다** (2026-09-17 보정).
+ *
+ *    앞선 판은 여기서 *"금액·수입·재산을 적지 않습니다"* 라고 **모든 Persona 에게**
+ *    말했다. 그러면 장 본 값 · 생활비 · 물가 이야기가 통째로 막힌다 —
+ *    그것은 우리 고객이 실제로 쓰는 이야기이고 `NORTH-STAR.md` 가 허용한 소재다.
+ *    카드의 `여유` · `빠듯` 은 **그 사람을 설명하는 말**이지 금액 금지령이 아니다.
+ *
+ *    금액 자체를 피해야 하는 사람은 **그 카드의 `noGoTopics` 가 말한다**
+ *    (P03 · P10 · P16 의 `금액 언급`). 그 판단은 `noGoAvoidLines` 가 한다 —
+ *    여기서 일괄로 걸면 카드마다 다른 규칙이 한 줄로 뭉개진다.
+ */
+export function lifeReferenceLines(p: PersonaLifeHistory): string[] {
+  const e = (p.economicStatus ?? '').trim()
+  if (e === '') return []
+  return [
+    `🔴 **형편(참고): ${e}** — 배경으로만 압니다.`,
+    '   **자기 형편을 본문에 드러내지 않습니다.** "우리는 여유가 있어서" ·',
+    '   "형편이 빠듯해서" 처럼 **자기 살림살이를 밝히는 말**을 쓰지 않습니다.',
+    '   수입·재산 규모를 밝히지 않습니다. 고르는 소재와 말의 결에만 남습니다.',
+    '',
+    '   🔴 **돈 이야기를 못 한다는 뜻이 아닙니다.** 다음은 전부 자연스럽습니다 —',
+    '    · 장 본 값 · 물가 · 생활비 · 요금제 · 중고 거래 값 · 가격 비교',
+    '    · "얼마쯤 하나요" 하고 묻는 글 · 남의 지출 이야기를 읽고 드는 생각',
+    '   (단, 아래 「피하는 소재」에 금액이 적혀 있으면 그 사람은 금액을 피합니다.)',
+  ]
+}
+
+/**
+ * 🔴 **카드가 정한 회피 소재** — 생성 쪽만 본다.
+ *
+ *    `PoolCard.noGoTopics` 는 소재 목록이다(`남의 형편 비교` · `금액 언급` · `이혼 권유`).
+ *    발행 쪽 `hardFilter` 는 이것을 **글자 그대로 포함하는지**만 보므로(`all.includes`)
+ *    다른 말로 풀어 쓰면 통과한다 — 막을 수 있는 자리는 **쓰기 전** 하나뿐이다.
+ *
+ * 🔴 **소재를 통째로 막지 않는다.** 그 소재로 글을 쓰지 말라는 것이지,
+ *    그 낱말이 스치기만 해도 버리라는 뜻이 아니다.
+ */
+export function noGoAvoidLines(p: PersonaLifeHistory): string[] {
+  const topics = (p.noGoTopics ?? []).map((x) => x.trim()).filter((x) => x !== '')
+  if (topics.length === 0) return []
+  return [
+    `🔴 **이 사람이 피하는 소재**: ${topics.join(' · ')}`,
+    '   이 소재를 글의 중심으로 삼지 않습니다. 스치듯 지나가는 것까지 막지는 않습니다.',
+    /**
+     * 🔴 **이 목록은 카드마다 다르다** (2026-09-17). 여기 `금액 언급` 이 있는 사람만
+     *    금액을 피한다. 없는 사람은 장 본 값도 생활비도 그대로 쓴다 —
+     *    형편(`여유`·`빠듯`)은 금액 금지령이 아니다.
+     */
+    '   🔴 위 목록에 **금액이 있으면 이 사람만** 금액을 피합니다.',
+    '      목록에 없으면 「형편(참고)」가 무엇이든 값·생활비 이야기를 그대로 씁니다.',
   ]
 }
 

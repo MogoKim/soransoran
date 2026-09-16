@@ -514,6 +514,57 @@ export type AutoJudgeProvenance = {
   provenance?: string
 }
 
+/**
+ * 🔴 **원문 쪽 세 시각 — 적재가 쓸 값** (2026-09-17).
+ *
+ *    `sourcePostedAt` 은 **원문이 올라온 시각**이다. 사건·방송·발언 시각이 아니고,
+ *    우리가 초안을 쓴 시각(`writtenAt`)도 아니다. 셋을 한 칸에 뭉치면
+ *    "오래된 이슈를 오늘 다시 수집한 것" 과 "오늘 올라온 글" 을 구분할 수 없게 된다.
+ *
+ * 🔴 **`null` 은 "모른다" 다.** 읽을 수 없는 값을 지금 시각이나 `sourceCapturedAt` 으로
+ *    메우지 않는다 — 그렇게 메우는 것이 지금 고치려는 결함 그 자체다.
+ *
+ * 🔴 **이 PR 은 이 값을 DB 에 쓰지 않는다. 활성 schema 에도 컬럼이 없다.**
+ *
+ *    초안은 `prisma/migrations-draft/0026_raw_content_source_times` 에 있다.
+ *    schema 에 컬럼만 올리고 DB 에 적용하지 않으면 **`select` 없는 `create()` 가
+ *    없는 컬럼을 RETURNING 하다가 죽는다** — 실측으로
+ *    `scripts/micro-seed-import-82cook-live.mts` 의 두 곳이 그렇다.
+ *    그래서 schema 변경·migration 적용·적재 연결을 **한 작업으로 묶어** 별도 PR 로 낸다.
+ *
+ * 🔴 그때까지 이 함수는 **파일에서 파일로** 흐르는 값을 읽는 순수 함수로만 쓰인다.
+ */
+export type QueueSourceTimes = {
+  sourcePostedAt: Date | null
+  sourceListedAt: Date | null
+  sourceCapturedAt: Date | null
+}
+
+/** 🔴 ISO 문자열 하나를 Date 로 — 빈 값도 못 읽는 값도 전부 `null`(모른다) 이다 */
+function isoOrNull(v: unknown): Date | null {
+  const s = typeof v === 'string' ? v.trim() : ''
+  if (s === '') return null
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/**
+ * 후보가 실어 온 세 시각을 적재용으로 읽는다 — 🔴 **순수 함수. 지어내지 않는다.**
+ *
+ * 🔴 `sourcePostedAt` 이 없다고 `sourceCapturedAt` 을 대신 쓰지 않는다.
+ *    둘은 서로 다른 것을 뜻하고, 대신 쓰는 순간 **오래된 이슈 재수집**이
+ *    **오늘 올라온 글**과 같아 보인다.
+ */
+export function queueSourceTimesOf(c: {
+  sourcePostedAt?: unknown; sourceListedAt?: unknown; sourceCapturedAt?: unknown
+}): QueueSourceTimes {
+  return {
+    sourcePostedAt: isoOrNull(c.sourcePostedAt),
+    sourceListedAt: isoOrNull(c.sourceListedAt),
+    sourceCapturedAt: isoOrNull(c.sourceCapturedAt),
+  }
+}
+
 export function buildQueuePayload(input: {
   envelope: Envelope
   candidate: Candidate
