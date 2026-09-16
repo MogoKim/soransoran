@@ -85,19 +85,59 @@ function kstDateAfter(date) {
 
 /**
  * 빈 슬롯을 앞에서부터 나눠 준다.
+ *
+ * 🔴 **고르는 것과 확정하는 것을 나눈다** (2026-09-16 실측 버그).
+ *
+ *    옛 판은 한 번 부를 때마다 날짜를 **소비**했다. 그래서 그 후보가 QA 에 막혀도
+ *    그 날짜는 이미 쓴 것이 됐다. 실제로 이렇게 됐다:
+ *
+ *      1) dinner-change-two-weeks  QA_FAIL  → 9/18 소비 🔴
+ *      2) after-menopause-body     DONE     → 9/19 배정
+ *      3) cold-weather-joint-pain  QA_FAIL  → 9/20 소비 🔴
+ *
+ *    등록된 것은 하나인데 **빈 날짜 셋이 사라졌다.** 9/18 이 비어 있는데도
+ *    성공한 글이 9/19 로 밀렸다 — 재고가 하루 더 비는 사고다.
+ *
+ *    `peek()` 은 "지금 비어 있는 첫 날" 을 **보기만** 한다.
+ *    `commit()` 은 실제로 등록되는 후보에만 부른다. 막힌 후보는 날짜를 건드리지 않는다.
+ *
  * 🔴 여기서 고른 날짜가 틀려도 안전하다 — register 가 슬롯을 다시 보고 BLOCKED 를 낸다.
+ *    그러나 "안전하다" 와 "재고를 낭비하지 않는다" 는 다른 이야기다.
  */
 export function slotAllocator(from) {
   const taken = takenDates()
   let cursor = from
-  return () => {
+
+  /** 지금 비어 있는 첫 날. **소비하지 않는다** — 몇 번을 불러도 같은 값이다 */
+  const peek = () => {
     while (taken.has(cursor)) cursor = kstDateAfter(cursor)
-    const picked = cursor
-    taken.add(picked)
-    cursor = kstDateAfter(cursor)
-    return picked
+    return cursor
+  }
+
+  return {
+    peek,
+    /**
+     * 그 날짜를 실제로 쓴다. 🔴 **등록되는 후보에만 부른다.**
+     * 인자를 받지 않는다 — peek 이 준 값 외의 날짜를 확정할 자리는 없다.
+     */
+    commit: () => {
+      const picked = peek()
+      taken.add(picked)
+      cursor = kstDateAfter(picked)
+      return picked
+    },
   }
 }
+
+/**
+ * 이 판정이 "실제로 예약 날짜를 쓴다" 는 뜻인가.
+ *
+ * 🔴 dry-run 의 `DRY_RUN_OK` 도 포함한다 — 그 회차가 write 였다면 등록됐을 후보다.
+ *    포함하지 않으면 dry-run 과 실제 write 의 날짜 배정이 어긋나, 사람이 dry-run 을 보고
+ *    "9/18 에 들어가겠군" 이라 판단한 뒤 실제로는 다른 날짜가 잡힌다.
+ * 🔴 `DRY_RUN_INCOMPLETE` 는 포함하지 않는다 — 아직 등록 가능 여부를 모른다.
+ */
+export const CONSUMES_SLOT = new Set(['DONE', 'DRY_RUN_OK'])
 
 /** producer 가 고른 것 (있으면) — 없으면 큐 전체를 훑는다 */
 function slugsFromRun(date) {
@@ -421,15 +461,18 @@ async function main() {
 
   // ── 처리 ─────────────────────────────────────────────────
   const scanned = scan({ runDate: arg('--run') })
-  const nextSlot = slotAllocator(kstDate(SLOT_START_OFFSET_DAYS))
+  const slots = slotAllocator(kstDate(SLOT_START_OFFSET_DAYS))
 
   const done = []
   const blocked = []
   const results = []
   for (const cand of scanned.eligible.slice(0, limit)) {
-    const publishAt = nextSlot()
+    // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
+    const publishAt = slots.peek()
     const r = drive(cand.slug, { write, pr: wantPr, publishAt, alt: null, allowOptional: false })
     r.publishAt = publishAt
+    // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
+    if (CONSUMES_SLOT.has(r.verdict)) slots.commit()
     results.push(r)
     if (r.verdict === 'BLOCKED') blocked.push(r)
     else if (r.verdict === 'DONE') done.push(r)
