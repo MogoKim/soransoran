@@ -3725,9 +3725,9 @@ const MAGAZINE_ARTICLE_RECORD = {
     description:
       '얼굴이 달아오르던 순간이 줄고 잠도 조금씩 자리를 잡기 시작한 뒤, 폐경 이후 몸에서 이어질 수 있는 변화와 살펴볼 점을 차분히 짚어봅니다.',
     cluster: 'menopause-symptom',
-    publishedAt: '2026-09-19',
+    publishedAt: '2026-09-18',
       status: 'SCHEDULED',
-      publishAt: '2026-09-19T10:30:00+09:00',
+      publishAt: '2026-09-18T10:30:00+09:00',
     medical: true,
     seriesId: 'menopause-basic',
     seriesOrder: 5,
