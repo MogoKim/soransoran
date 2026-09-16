@@ -34,7 +34,12 @@ export const HUMAN_PROVENANCE = ['human-curated', 'founder'] as const
 // 🔴 v3 — 정책 taxonomy 가 모델 decision 을 이긴다. v2 캐시와 섞이지 않는다
 export const RULE_VERSION = 'auto-judge-v3'
 /** 프롬프트를 고치면 올린다 — 같은 규칙판이라도 물음이 달라지면 답이 달라진다 */
-export const PROMPT_VERSION = 'semantic-shadow-v2b'
+/**
+ * 🔴 **v2c** (2026-09-16) — 위해 축에 `crisisSignal` · `medicalDecisionRequest` ·
+ *    `healthEfficacyClaim` 셋을 더했다. 프롬프트가 바뀌었으므로 판을 올린다 —
+ *    올리지 않으면 옛 판정이 캐시에서 그대로 hit 된다.
+ */
+export const PROMPT_VERSION = 'semantic-shadow-v2c'
 
 /** 🔴 이 값으로 기록한다. 사람 것과 한 글자도 겹치지 않는다 */
 export const AUTO_PROVENANCE = 'machine-shadow'
@@ -92,6 +97,10 @@ export const REASON_LABEL: Record<ReasonCode, string> = {
   semanticFailed: '의미 판정 호출이 실패했다',
   unexplainedModelDrop: '🔴 모델이 버리라 했는데 버릴 사유를 대지 못했다 — 사람에게 넘긴다',
   axisMismatch: '모델이 다른 축을 말했다 — 축은 우리가 정한다',
+  // 🔴 2026-09-16 — 정본 §4 위기 신호 · §5 조언 제한을 코드로 세운 축
+  crisisSignal: '자해·자살 위기 신호 — 재생성하지 않고 사람이 본다 (정본 §4)',
+  medicalDecisionRequest: '치료·기기·약물의 부작용·교체·중단·계속 사용 판단을 요청한다',
+  healthEfficacyClaim: '건강 효능 주장 — 전언형이어도 통과시키지 않는다',
 }
 
 /**
@@ -184,6 +193,14 @@ export const SEMANTIC_RISKS = [
   'targetedHarassmentOrThreat',
   'dangerousMedicalInstruction',
   'politicalCampaigning',
+  /**
+   * 🔴 **deterministic 판정과 같은 이름을 쓴다** (2026-09-16).
+   *    `micro-seed-safety-signals` 의 `SAFETY_SIGNAL_CODES` 와 짝이다 —
+   *    두 단계가 다른 이름을 쓰면 언젠가 한쪽만 고쳐진다.
+   */
+  'crisisSignal',
+  'medicalDecisionRequest',
+  'healthEfficacyClaim',
 ] as const
 export type SemanticRisk = (typeof SEMANTIC_RISKS)[number]
 
@@ -202,6 +219,23 @@ export const SEMANTIC_DROP: readonly SemanticRisk[] = [
 /** 🟡 위해는 아니지만 그대로 쓰기 어려운 것 — 사람에게 넘긴다 */
 export const SEMANTIC_HOLD: readonly SemanticRisk[] = [
   'purchaseOrSellerRequest', 'brandListBait', 'insufficientContext',
+  /**
+   * 🔴 **위기 신호는 버리지 않고 사람에게 넘긴다** (정본 §4).
+   *    `crisis_hold` 로 남기고 운영자가 본다 — 재생성하지 않는다(§8).
+   *    의료 판단 요청 · 건강 효능 주장도 소재 자체는 우리 주제라 버리지 않는다.
+   */
+  'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
+] as const
+
+/**
+ * 🔴 **초안 검수에서 묻는 위해 축** (2026-09-16).
+ *
+ *    버리는 축(`SEMANTIC_DROP`)에 **안전 신호 축 3종**을 더한 것이다.
+ *    목록을 새로 만들지 않는다 — 두 정본을 이어 붙이기만 한다.
+ *    🔴 DROP 인지 HOLD 인지는 여기서 정하지 않는다. `SEMANTIC_DROP` 소속 여부가 정한다.
+ */
+export const DRAFT_HARM_AXES: readonly SemanticRisk[] = [
+  ...SEMANTIC_DROP, 'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
 ] as const
 
 /** 🔴 이 아래면 통과시키지 않는다 — 모델이 스스로 흔들린다고 말한 것이다 */
@@ -211,6 +245,8 @@ export const MIN_CONFIDENCE = 0.7
 export const KNOWN_SAFETY_CODES: readonly string[] = [
   'politics', 'noticeSlot', 'personalIdentity', 'medicalClaim',
   'promotion', 'hostility', 'visualDependent', 'access', 'volatile',
+  // 🔴 2026-09-16 추가 — 여기 없으면 `unknownReason` 으로 잡힌다
+  'crisisSignal', 'medicalDecisionRequest', 'healthEfficacyClaim',
 ] as const
 
 export const SEED_AXIS = 'seedOriginality'

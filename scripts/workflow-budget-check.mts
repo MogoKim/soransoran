@@ -186,6 +186,12 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *      ② 가벼우면 실제로 재고 이 숫자를 **손으로** 올린다
  *    "일단 올리고 나중에 본다" 를 막으려고 헤드룸을 두지 않는다.
  *
+ * 🔴 66 → 67 (2026-09-16). 안전 필터 fixture 를 무조건 실행으로 더했다.
+ *    실측 0.30 초 (3 회 평균 · `micro-seed:safety-check`). DB·네트워크·write 0.
+ *    🔴 경로 조건 뒤로 보내지 않는다 — 안전 판정은 화면과 무관하고 어떤 PR 이든
+ *       깨뜨릴 수 있다. 실제로 이 검사가 CI 에 없어 fixture 1 건이 실패한 채로
+ *       서 있었고, 위기 신호 축이 통째로 빠진 것도 그때까지 드러나지 않았다.
+ *
  * 🔴 64 → 66 (2026-09-16). 매거진 자동 PR 레인 게이트 2 개를 무조건 실행으로 더했다.
  *    실측: `magazine:auto-check` 142ms · `chatgpt:session-check` 110ms.
  *    둘 다 DB·네트워크·브라우저·write 가 없는 순수 판정이라 경로 조건 뒤로 보내지 않는다 —
@@ -193,7 +199,7 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *    PR 도 articles.ts 재고를 바꿔** 그 게이트를 깨뜨릴 수 있다.
  *    실제로 #524 merge 뒤 13 건이 깨졌는데 CI 에 없어 아무도 몰랐다.
  */
-const MAX_UNCONDITIONAL_STEPS = 66
+const MAX_UNCONDITIONAL_STEPS = 67
 
 let total = 0
 let gated = 0
@@ -217,6 +223,27 @@ check('🔴 경로 조건 뒤에 있는 step 이 실제로 있다 (게이트가 
  *    거기서는 `|| echo` 하나가 preflight 의 **모든** 실패를 초록으로 바꿨다.
  */
 check('🔴 continue-on-error 가 없다', !/continue-on-error/.test(yml))
+
+/**
+ * 🔴 **생략하면 안 되는 검사** — 배선이 지워지거나 경로 조건 뒤로 밀리면 여기서 빨개진다.
+ *
+ *    2026-09-16 실측: `micro-seed:safety-check` 가 CI 에 **없었다.** 그래서 안전 필터
+ *    fixture 는 한 번도 돌지 않았고, 낡은 계약 1 건이 실패한 채로 서 있었으며
+ *    자해·자살 위기 신호 축이 통째로 빠진 것도 드러나지 않았다.
+ */
+const MUST_RUN_ALWAYS: readonly string[] = ['micro-seed:safety-check']
+for (const cmd of MUST_RUN_ALWAYS) {
+  const i = lines.findIndex((l) => l.includes(`npm run ${cmd}`))
+  check(`🔴 ${cmd} 가 워크플로우에 배선되어 있다`, i >= 0)
+  if (i < 0) continue
+  // 🔴 이 step 블록 안에 경로 조건이 있으면 heavy=false 회차에서 생략된다
+  const start = lines.slice(0, i).map((l, j) => ({ l, j }))
+    .filter((x) => /^      - (name|uses):/.test(x.l)).pop()?.j ?? 0
+  const end = lines.findIndex((l, j) => j > i && /^      - (name|uses):/.test(l))
+  const block = lines.slice(start, end < 0 ? lines.length : end)
+  check(`🔴 ${cmd} 가 경로 조건 뒤에 있지 않다 (heavy=false 에서도 돈다)`,
+    !block.some((l) => l.includes(GATE)))
+}
 
 // ─────────────────────────────────────────────────────────
 console.log('\n⑤ 화면 전용 판정이 실제 경로에서 맞는다')
