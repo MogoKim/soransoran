@@ -21,6 +21,41 @@
 🔴 **자동화는 PR 까지다.** merge 와 공개는 사람이 한다.
 원고 품질 통제 지점은 **PR merge 전의 CI 와 사람 검수**다.
 
+🔴 **이것은 "완전 자동 공개" 가 아니다.** 매일 생기는 PR 을 사람이 읽고 merge 해야
+글이 나간다. merge 하지 않으면 그날부터 재고가 늘지 않는다 — 아래 §0.1 때문이다.
+
+### 0.1 미해결 자동 PR 은 **한 번에 하나**
+
+🔴 **이전 PR 을 merge 하거나 명시적으로 폐기하기 전에는 다음 생산 회차가 HOLD 한다.**
+
+왜 그런가 — 자동 PR 을 만든 뒤 runtime 은 main 으로 돌아온다. 그 main 의
+`articles.ts` 에는 **그 등록이 아직 없다**(PR 안에만 있다). 그대로 다음 날 회차가 돌면
+
+```
+Day 1  autumn-low-mood 선정 → PR #A (OPEN) → main 복귀
+Day 2  main 의 articles.ts 를 읽는다 → autumn-low-mood 가 없다
+       → 같은 slug 를 또 선정하고, 빈 슬롯도 같은 날짜를 고른다 → PR #B
+```
+
+`register.mjs` 의 중복 가드는 **main 만** 보므로 이것을 막지 못한다.
+그래서 producer 와 auto-register가 **시작 전에 같은 판정**을 본다
+(`scripts/lib/magazine-outstanding.mjs`).
+
+| 상태 | 판정 | 종료 코드 | 사람이 할 일 |
+|---|---|---|---|
+| OPEN 자동 PR 있음 | `OUTSTANDING_PR` · **HOLD** | 0 (정상) | PR 을 읽고 merge 한다 |
+| CLOSED(미merge) + 브랜치 잔존 | `ABANDONED_PR_BRANCH` · **HOLD** | 0 (정상) | **브랜치를 지운다** = 명시적 폐기 |
+| push 됐는데 PR 없음 | `ORPHAN_REMOTE_BRANCH` · 🔴 실패 | 1 | PR 을 열거나 브랜치를 지운다 |
+| 로컬에만 남은 자동 브랜치 | `ORPHAN_LOCAL_BRANCH` · 🔴 실패 | 1 | 내용 확인 후 살리거나 지운다 |
+| GitHub 을 못 읽음 | `GITHUB_QUERY_FAILED` · 🔴 실패 | 1 | 네트워크·gh 인증 확인 |
+| 미해결 0건 | `CLEAR` | — | 없음 (그냥 진행) |
+
+🔴 **merge 판정은 GitHub 의 PR state 가 정본이다.** commit ancestry 로 보지 않는다 —
+squash merge 는 PR 커밋을 main 에 남기지 않아 merge 된 PR 이 영원히 "미해결" 로 남는다.
+
+🔴 **모르면 멈춘다(fail closed).** GitHub 을 읽지 못하면 "미해결 없음" 이 아니라
+"확정할 수 없음" 이다. 확정하지 못한 채 새 PR 을 만들면 중복을 막을 길이 없다.
+
 ---
 
 ## 1. 무엇이 고장나 있었나 (2026-09-03 ~ 09-15)
@@ -97,6 +132,17 @@ git -C ~/Documents/soransoran worktree add ~/Documents/soransoran-magazine-runti
 영수증이 없거나 `result !== "SUCCESS"` 거나 PR URL 이 없으면
 `magazine:launchd-install --apply` 가 **아무것도 설치하지 않고 멈춘다.**
 
+### supervised 실행 중의 진행 규칙
+
+🔴 **gate 가 통과하면 중간에 창업자에게 "계속할까요" 를 다시 묻지 않는다.**
+producer → auto-register 검증까지 **이어서** 끝낸다. 매 단계 확인을 받으면
+그 자체가 새로운 병목이 되고, 무엇을 승인한 것인지도 흐려진다.
+판단이 필요한 자리는 이미 코드가 막는다 — gate · 관문 · preflight · 미해결 판정.
+
+🔴 **예외는 하나다 — ChatGPT 전용 프로필 로그인이 실제로 필요할 때.**
+`LOGIN_REQUIRED` · `CLOUDFLARE_BLOCKED` 처럼 사람이 화면에서 로그인해야만
+풀리는 상태면, 그때만 창업자에게 화면을 넘긴다. 그 밖의 실패는 보고하고 멈춘다.
+
 ---
 
 ## 4. 설치
@@ -132,6 +178,22 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
 ---
 
 ## 5. 감시
+
+### producer 종료 코드의 뜻
+
+🔴 옛 판은 brief·원고 회수 실패를 **삼키고** plan 의 코드만 돌려줬다.
+ChatGPT 로그인이 만료돼 원고를 한 건도 못 받아도 `exit 0` 이었다.
+지금은 `launchctl` 의 last exit status 만 봐도 구분된다.
+
+| 코드 | 판정 | 뜻 |
+|---|---|---|
+| 0 | `OK` | 정상 |
+| 0 | `CONTENT` | 일부 slug 가 brief 게이트에 막혔다 — **정상이다**. 관문이 일한 것 |
+| 0 | `HOLD` | 미해결 자동 PR 을 기다리는 중 — **정상이다** |
+| 1 | `SYSTEM` | plan 실패 · claude 부재 · **ChatGPT 접근 실패 · 브라우저 시작 실패** · 회수기 전역 실패 |
+
+🔴 Slack 은 판정을 바꾸지 않는다 — 양방향으로. 알림이 실패해도 원래 실패는 실패이고,
+실패 회차에서도 알림은 **반드시 시도한다**.
 
 | 무엇 | 어디 |
 |---|---|

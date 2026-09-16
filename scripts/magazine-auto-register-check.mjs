@@ -29,10 +29,15 @@ import {
   pushReady, returnToMain, stageCheck, writePreflight,
 } from './lib/magazine-auto-git.mjs'
 import { judgeLock, STALE_AFTER_MS } from './lib/magazine-auto-lock.mjs'
+import {
+  AUTO_BRANCH_PREFIX, isAutoBranch, judgeOutstanding, readOutstanding, SEVERITY,
+} from './lib/magazine-outstanding.mjs'
+import { judgeProducerRun, stage } from './lib/magazine-producer-exit.mjs'
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
 import { parseHeroBlock, validateHeroBrief } from './lib/magazine-hero-brief.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
 import { verifyReviewShape } from './lib/magazine-brief-policy.mjs'
+import { normalizePublishAt } from './magazine-register.mjs'
 
 let pass = 0
 let fail = 0
@@ -414,6 +419,278 @@ expect('예상 밖 staged 면 PR 을 만들지 않는다', unexpectedStaged.made
 expect('예상 밖 staged 면 commit 하지 않는다', stagedCalls.some((c) => c.startsWith('git commit')), false)
 expect('예상 밖 staged 는 되돌린다', stagedCalls.some((c) => c.startsWith('git restore --staged')), true)
 expect('등록된 건이 없으면 PR 을 만들지 않는다', finishPr('feat/x', [], { exec: fakeExec({}) }).made, false)
+
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ P0-1 미해결 자동 작업 — 동시에 최대 1개')
+/**
+ * 🔴 **Day 1 에 PR 을 만들고 main 으로 복귀하면, Day 2 는 main 의 articles.ts 를 읽는다.**
+ *    그 글은 아직 PR 안에만 있으므로 **같은 slug 를 같은 빈 슬롯으로 또 등록**한다.
+ *    `register.mjs` 의 중복 가드는 main 만 보므로 이것을 막지 못한다 (Codex P0-1).
+ */
+const PRE = AUTO_BRANCH_PREFIX
+const B1 = `${PRE}2026-09-16-020000`
+const B2 = `${PRE}2026-09-17-020000`
+
+// ① Day 1 — 미해결 0건이면 진행한다
+const day1 = judgeOutstanding({ queryOk: true, prs: [], remoteBranches: [], localBranches: [] })
+expect('Day1: 미해결이 없으면 진행', day1.ok, true)
+expect('Day1: 코드가 CLEAR', day1.code, 'CLEAR')
+
+// ② Day 2 — 그 PR 이 OPEN 이면 HOLD (정상)
+const openPr = { number: 521, url: 'https://github.com/MogoKim/soransoran/pull/521', headRefName: B1, state: 'OPEN' }
+const day2 = judgeOutstanding({ queryOk: true, prs: [openPr], remoteBranches: [B1], localBranches: [B1] })
+expect('Day2: OPEN PR 이 있으면 진행하지 않는다', day2.ok, false)
+expect('Day2: 코드가 OUTSTANDING_PR', day2.code, 'OUTSTANDING_PR')
+expect('Day2: 정상 HOLD 로 구분한다', day2.severity, SEVERITY.HOLD)
+expect('Day2: PR 번호를 남긴다', day2.pr.number, 521)
+expect('Day2: PR URL 을 메시지에 남긴다', day2.message.includes(openPr.url), true)
+
+// ③ 그 PR 이 MERGED 되면 다음 회차가 진행된다 — 🔴 squash merge 여도
+//    (commit ancestry 가 아니라 GitHub 의 state 를 본다. 로컬 브랜치가 남아 있어도 해소다)
+const day3 = judgeOutstanding({
+  queryOk: true,
+  prs: [{ ...openPr, state: 'MERGED' }],
+  remoteBranches: [],
+  localBranches: [B1], // squash merge 후에도 로컬 브랜치는 남는다 — 우리는 지우지 않는다
+})
+expect('Day3: MERGED 면 진행한다', day3.ok, true)
+expect('Day3: 로컬 잔존 브랜치를 오판하지 않는다', day3.code, 'CLEAR')
+expect('Day3: merge 건수를 말한다', day3.message.includes('1건'), true)
+
+// ④ push 성공 · PR 생성 실패 → 다음 날 차단 (운영 실패)
+const orphanRemote = judgeOutstanding({ queryOk: true, prs: [], remoteBranches: [B1], localBranches: [B1] })
+expect('push 됐는데 PR 이 없으면 차단', orphanRemote.ok, false)
+expect('사유가 ORPHAN_REMOTE_BRANCH', orphanRemote.code, 'ORPHAN_REMOTE_BRANCH')
+expect('🔴 운영 실패로 본다 (non-zero)', orphanRemote.severity, SEVERITY.FAILURE)
+expect('어떤 브랜치인지 말한다', orphanRemote.branches, [B1])
+
+// ⑤ push 조차 실패해 로컬에만 남은 브랜치
+const orphanLocal = judgeOutstanding({ queryOk: true, prs: [], remoteBranches: [], localBranches: [B1] })
+expect('로컬에만 남은 자동 브랜치도 차단', orphanLocal.code, 'ORPHAN_LOCAL_BRANCH')
+expect('로컬 orphan 도 운영 실패', orphanLocal.severity, SEVERITY.FAILURE)
+
+// ⑥ GitHub 을 못 읽으면 fail closed
+const blind = judgeOutstanding({ queryOk: false })
+expect('조회 실패면 진행하지 않는다 (fail closed)', blind.ok, false)
+expect('사유가 GITHUB_QUERY_FAILED', blind.code, 'GITHUB_QUERY_FAILED')
+expect('조회 실패는 운영 실패', blind.severity, SEVERITY.FAILURE)
+expect('🔴 "미해결 없음" 으로 넘기지 않는다', blind.code === 'CLEAR', false)
+
+// ⑦ CLOSED(미merge) 정책 — 브랜치가 남아 있으면 HOLD, 지우면 해소
+const closedWithBranch = judgeOutstanding({
+  queryOk: true,
+  prs: [{ ...openPr, state: 'CLOSED' }],
+  remoteBranches: [B1],
+  localBranches: [],
+})
+expect('CLOSED 인데 브랜치가 남으면 HOLD', closedWithBranch.code, 'ABANDONED_PR_BRANCH')
+expect('CLOSED 잔존은 정상 HOLD', closedWithBranch.severity, SEVERITY.HOLD)
+expect('브랜치를 지우라고 말한다', /브랜치를 지운다/.test(closedWithBranch.message), true)
+const closedNoBranch = judgeOutstanding({
+  queryOk: true,
+  prs: [{ ...openPr, state: 'CLOSED' }],
+  remoteBranches: [],
+  localBranches: [],
+})
+expect('CLOSED + 브랜치 삭제 = 명시적 폐기로 해소', closedNoBranch.ok, true)
+
+// ⑧ 자동 레인 브랜치만 본다 — 사람 브랜치는 무시
+const humanBranch = judgeOutstanding({
+  queryOk: true,
+  prs: [{ number: 9, url: 'u', headRefName: 'fix/something-else', state: 'OPEN' }],
+  remoteBranches: ['fix/something-else'],
+  localBranches: ['main', 'fix/something-else'],
+})
+expect('사람 브랜치·PR 은 레인을 막지 않는다', humanBranch.ok, true)
+expect('접두 판정이 정확하다', isAutoBranch(B2) && !isAutoBranch('feat/other'), true)
+
+// ⑨ 여러 자동 PR 중 OPEN 이 하나라도 있으면 HOLD
+const mixed = judgeOutstanding({
+  queryOk: true,
+  prs: [{ ...openPr, state: 'MERGED' }, { number: 522, url: 'u2', headRefName: B2, state: 'OPEN' }],
+  remoteBranches: [B2],
+  localBranches: [B1, B2],
+})
+expect('MERGED 가 있어도 OPEN 하나면 HOLD', mixed.code, 'OUTSTANDING_PR')
+expect('그 OPEN PR 을 지목한다', mixed.pr.number, 522)
+
+console.log('\n══════ P0-1 reader — gh 조회 실패는 fail closed')
+/** 🔴 실제 gh·git 을 부르지 않는다 */
+const ghList = 'gh pr list'
+expect(
+  'gh 가 실패하면 조회 실패로 넘긴다',
+  readOutstanding({ exec: fakeExec({ [ghList]: { code: 1, err: 'HTTP 503' } }) }).code,
+  'GITHUB_QUERY_FAILED',
+)
+expect(
+  'gh 출력이 JSON 이 아니면 조회 실패',
+  readOutstanding({ exec: fakeExec({ [ghList]: { out: 'not json' } }) }).code,
+  'GITHUB_QUERY_FAILED',
+)
+expect(
+  'ls-remote 실패도 조회 실패',
+  readOutstanding({ exec: fakeExec({ [ghList]: { out: '[]' }, 'git ls-remote': { code: 128 } }) }).code,
+  'GITHUB_QUERY_FAILED',
+)
+expect(
+  'git branch --list 실패도 조회 실패',
+  readOutstanding({ exec: fakeExec({ [ghList]: { out: '[]' }, 'git branch --list': { code: 128 } }) }).code,
+  'GITHUB_QUERY_FAILED',
+)
+const readOk = readOutstanding({
+  exec: fakeExec({ [ghList]: { out: JSON.stringify([{ ...openPr, state: 'MERGED' }]) } }),
+})
+expect('전부 읽히면 판정이 나온다', readOk.code, 'CLEAR')
+const readOpen = readOutstanding({
+  exec: fakeExec({
+    [ghList]: { out: JSON.stringify([openPr]) },
+    'git ls-remote': { out: `abc123\trefs/heads/${B1}` },
+    'git branch --list': { out: B1 },
+  }),
+})
+expect('열린 PR 을 실제로 잡는다', readOpen.code, 'OUTSTANDING_PR')
+// 🔴 --state all 이어야 MERGED 를 해소로 볼 수 있다
+let ghArgs = []
+readOutstanding({ exec: (cmd, args) => { if (cmd === 'gh') ghArgs = args; return { code: 0, out: '[]', err: '' } } })
+expect('gh 를 --state all 로 부른다', ghArgs.includes('--state') && ghArgs[ghArgs.indexOf('--state') + 1] === 'all', true)
+expect('PR state 를 받아온다', ghArgs.join(' ').includes('state'), true)
+
+console.log('\n══════ P0-1 배선 — 쓰기·AI 호출·브랜치보다 앞이다')
+expect('auto-register 가 같은 판정을 쓴다', readySrc.includes("from './lib/magazine-outstanding.mjs'"), true)
+// 🔴 outstanding 검사가 createBranch 보다 **앞**이어야 한다
+expect(
+  'outstanding 이 브랜치 생성보다 앞이다',
+  readySrc.indexOf('readOutstanding({ exec })') < readySrc.indexOf('createBranch(branchName()'),
+  true,
+)
+expect(
+  'outstanding 이 drive() 호출보다 앞이다',
+  readySrc.indexOf('readOutstanding({ exec })') < readySrc.indexOf('drive(cand.slug'),
+  true,
+)
+expect('HOLD 는 종료 코드 0 으로 낸다', /finish\(out\.severity === SEVERITY\.HOLD \? 0 : 1\)/.test(readySrc), true)
+// 🔴 **슬롯 계산이 열린 PR 을 무시한 채 돌 수 없어야 한다.**
+//    HOLD 면 slotAllocator 에 닿기 전에 회차가 끝난다.
+expect(
+  'outstanding 이 슬롯 계산보다 앞이다',
+  readySrc.indexOf('readOutstanding({ exec })') < readySrc.indexOf('slotAllocator(kstDate('),
+  true,
+)
+
+console.log('\n══════ P0-1 슬롯 — merge 된 뒤에는 다음 빈 10:30 KST 로 간다')
+/**
+ * 🔴 Day 1 PR 이 merge 되면 main 의 articles.ts 에 그 날짜가 들어간다.
+ *    그러면 다음 회차의 슬롯 계산이 **그 날을 건너뛴다.** merge 전에는 건너뛰지 못하고,
+ *    그래서 HOLD 로 아예 시작하지 않는 것이다.
+ */
+const { slotAllocator } = await import('./magazine-auto-register-ready.mjs')
+const nextFree = slotAllocator('2026-09-18')
+const picked = [nextFree(), nextFree(), nextFree()]
+expect('빈 날짜를 앞에서부터 하루씩 나눠 준다', picked, ['2026-09-18', '2026-09-19', '2026-09-20'])
+expect('같은 날짜를 두 번 주지 않는', new Set(picked).size, picked.length)
+expect('날짜는 10:30 KST 로 굳는다', normalizePublishAt(picked[0]).publishAt, '2026-09-18T10:30:00+09:00')
+// 실제 재고와 겹치지 않는다 — 9/17 까지 차 있으므로 9/18 부터가 맞다
+expect('이미 찬 날짜는 건너뛴다', slotAllocator('2026-09-10')(), '2026-09-18')
+
+const producerSrc = readFileSync(join('scripts', 'magazine-producer-run.mjs'), 'utf8')
+expect('producer 가 같은 판정을 쓴다', producerSrc.includes("from './lib/magazine-outstanding.mjs'"), true)
+expect(
+  'producer 는 plan(첫 write) 보다 앞에서 본다',
+  producerSrc.indexOf('readOutstanding({ exec })') < producerSrc.indexOf('spawnSync(NODE, [PLAN]'),
+  true,
+)
+expect(
+  'producer 는 git 상태도 첫 write 전에 본다',
+  producerSrc.indexOf('preflight({ exec })') < producerSrc.indexOf('spawnSync(NODE, [PLAN]'),
+  true,
+)
+expect(
+  'producer 는 brief(AI 호출) 보다 앞에서 본다',
+  producerSrc.indexOf('readOutstanding({ exec })') < producerSrc.indexOf('spawnSync(NODE, [BRIEF_AUTO'),
+  true,
+)
+
+// ─────────────────────────────────────────────────────────
+console.log('\n══════ P0-2 producer 종료 코드 — 실패를 성공으로 숨기지 않는다')
+/**
+ * 🔴 옛 판은 brief·fetch 실패를 삼키고 planCode 만 돌려줬다.
+ *    ChatGPT 로그인이 만료돼 원고를 한 건도 못 받아도 exit 0 이었다 (Codex P0-2).
+ */
+const okStage = (name) => stage(name, { status: 0 })
+const allOk = { plan: okStage('plan'), brief: okStage('brief'), fetch: okStage('fetch') }
+expect('전부 정상이면 0', judgeProducerRun(allOk).code, 0)
+expect('판정이 OK', judgeProducerRun(allOk).verdict, 'OK')
+
+// 원고 회수 전역 실패 = ChatGPT 접근 실패 · 브라우저 시작 실패
+const fetchFatal = judgeProducerRun({ ...allOk, fetch: stage('fetch', { status: 1 }) })
+expect('🔴 원고 회수 전역 실패는 exit 1', fetchFatal.code, 1)
+expect('SYSTEM 으로 분류한다', fetchFatal.verdict, 'SYSTEM')
+expect('ChatGPT·브라우저를 지목한다', /ChatGPT|브라우저/.test(fetchFatal.reason), true)
+
+expect(
+  '🔴 회수기를 띄우지 못해도 exit 1',
+  judgeProducerRun({ ...allOk, fetch: stage('fetch', { spawnError: 'ENOENT' }) }).code,
+  1,
+)
+expect(
+  '🔴 brief 생성을 실행하지 못하면 exit 1 (claude 부재)',
+  judgeProducerRun({ ...allOk, brief: stage('brief', { spawnError: 'ENOENT' }) }).code,
+  1,
+)
+expect(
+  'brief 사용법/시스템 오류(2)도 exit 1',
+  judgeProducerRun({ ...allOk, brief: stage('brief', { status: 2 }) }).code,
+  1,
+)
+expect('plan 실패는 exit 1', judgeProducerRun({ ...allOk, plan: stage('plan', { status: 1 }) }).code, 1)
+// 🔴 dry-run 은 세 단계를 전부 건너뛴다 — status 가 null 이지만 실패가 아니다.
+//    이 가드가 없으면 dry-run 이 매 회차 SYSTEM 으로 붉게 뜬다 (실제로 그랬다).
+const allSkipped = { plan: stage('plan', { skipped: true }), brief: stage('brief', { skipped: true }), fetch: stage('fetch', { skipped: true }) }
+expect('dry-run(전부 skip)은 0', judgeProducerRun(allSkipped).code, 0)
+expect('dry-run 은 OK 로 본다', judgeProducerRun(allSkipped).verdict, 'OK')
+expect('skip 을 실패로 세지 않는다', judgeProducerRun(allSkipped).failures, [])
+expect(
+  'plan 을 띄우지 못해도 exit 1',
+  judgeProducerRun({ ...allOk, plan: stage('plan', { spawnError: 'ENOENT' }) }).code,
+  1,
+)
+
+// 🔴 일부 slug 만 게이트에 막힌 것은 **실패가 아니다** — 매일 붉은 불이 켜지면 의미가 사라진다
+const contentOnly = judgeProducerRun({ ...allOk, brief: stage('brief', { status: 1 }) })
+expect('일부 건이 게이트에 막힌 것은 0', contentOnly.code, 0)
+expect('CONTENT 로 구분한다', contentOnly.verdict, 'CONTENT')
+expect('시스템 실패와 섞지 않는다', contentOnly.failures, [])
+
+// 미해결 판정이 먼저다
+expect(
+  'HOLD 는 실패가 아니다 (exit 0)',
+  judgeProducerRun({ ...allOk, outstanding: { code: 'OUTSTANDING_PR', severity: SEVERITY.HOLD } }).code,
+  0,
+)
+expect(
+  'HOLD 판정을 그대로 남긴다',
+  judgeProducerRun({ ...allOk, outstanding: { code: 'OUTSTANDING_PR', severity: SEVERITY.HOLD } }).verdict,
+  'HOLD',
+)
+expect(
+  '조회 실패·orphan 은 exit 1',
+  judgeProducerRun({ ...allOk, outstanding: { code: 'GITHUB_QUERY_FAILED', severity: SEVERITY.FAILURE } }).code,
+  1,
+)
+
+// 🔴 Slack 은 판정에 없다 — 알림 실패가 원래 실패를 성공으로 바꾸지 못한다
+expect('판정 입력에 slack 이 없다', Object.keys(allOk).includes('slack'), false)
+expect(
+  '알림 단계는 판정에 반영하지 않는다고 적혀 있다',
+  /알림 단계 실행 실패 — 판정에 반영하지 않는다/.test(producerSrc),
+  true,
+)
+// 🔴 알림은 **판정보다 먼저** 무조건 돈다. 실패 회차라고 건너뛰면 사람이 모른다.
+expect('실패 회차에서도 알림을 시도한다', producerSrc.indexOf('\nrunNotify()') < producerSrc.indexOf('const verdict = judgeProducerRun'), true)
+expect('알림은 조건 없이 불린다', /\nrunNotify\(\)\n/.test(producerSrc), true)
+expect('HOLD 회차에서도 알림을 시도한다', producerSrc.indexOf('runNotify()') < producerSrc.indexOf('const v = judgeProducerRun'), true)
+expect('판정 결과로 종료한다 (planCode 가 아니다)', /process\.exit\(verdict\.code\)/.test(producerSrc), true)
+expect('planCode 를 그대로 반환하던 코드가 없다', /process\.exit\(planCode\)/.test(producerSrc), false)
 
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')

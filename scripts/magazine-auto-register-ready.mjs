@@ -43,6 +43,7 @@ import { loadQueue, loadArticles, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import { gate, progress, paths } from './lib/magazine-auto-lane.mjs'
 import { branchName, writePreflight, createBranch, assertOnBranch, stageCheck, returnToMain } from './lib/magazine-auto-git.mjs'
 import { acquireLock } from './lib/magazine-auto-lock.mjs'
+import { readOutstanding, SEVERITY } from './lib/magazine-outstanding.mjs'
 import { drive } from './magazine-auto-register.mjs'
 import { buildMessage, send, webhookStatus } from './lib/slack-notify.mjs'
 
@@ -86,7 +87,7 @@ function kstDateAfter(date) {
  * 빈 슬롯을 앞에서부터 나눠 준다.
  * 🔴 여기서 고른 날짜가 틀려도 안전하다 — register 가 슬롯을 다시 보고 BLOCKED 를 낸다.
  */
-function slotAllocator(from) {
+export function slotAllocator(from) {
   const taken = takenDates()
   let cursor = from
   return () => {
@@ -304,6 +305,7 @@ async function main() {
     mode: write ? 'write' : 'dry-run',
     lock: null,
     tools: null,
+    outstanding: null,
     git: null,
     branch: null,
     done: [],
@@ -372,7 +374,22 @@ async function main() {
       return finish(1)
     }
 
-    // ③ register write 앞에 브랜치를 만든다. 실패하면 아무것도 쓰지 않고 끝난다.
+    // ③ 미해결 자동 작업 — 🔴 **브랜치 생성·원고 회수(AI 호출)보다 앞이다.**
+    //
+    //    PR 이 아직 merge 되지 않았는데 다음 회차가 돌면, main 의 articles.ts 에는
+    //    그 등록이 없으므로 **같은 slug 를 같은 빈 슬롯으로 또 등록**한다.
+    //    `register.mjs` 의 중복 가드는 main 만 보므로 이것을 막지 못한다.
+    //    producer 와 **같은 함수**를 쓴다 (lib/magazine-outstanding.mjs).
+    const out = readOutstanding({ exec })
+    report.outstanding = { ok: out.ok, code: out.code, severity: out.severity, message: out.message, pr: out.pr }
+    if (!out.ok) {
+      report.blocked.push({ slug: '(outstanding)', blockedBy: [{ code: out.code, message: out.message }] })
+      // 🔴 HOLD 는 정상이다 — 사람이 PR 을 처리하기를 기다릴 뿐이라 종료 코드 0.
+      //    ORPHAN·조회 실패는 운영 이상이므로 non-zero 로 남긴다.
+      return finish(out.severity === SEVERITY.HOLD ? 0 : 1)
+    }
+
+    // ④ register write 앞에 브랜치를 만든다. 실패하면 아무것도 쓰지 않고 끝난다.
     if (wantPr) {
       const made = createBranch(branchName(), { exec })
       report.branch = made.name
@@ -437,6 +454,12 @@ function printHuman(report, { write }) {
   console.log('')
   console.log(`  매거진 자동 레인 — ${report.mode}${report.source ? ` · 출처 ${report.source}` : ''}`)
   if (report.lock && !report.lock.ok) console.log(`  🔒 ${report.lock.code}: ${report.lock.message}`)
+  if (report.outstanding) {
+    // 🔴 PR 번호·URL 을 로그에 남긴다. 사람이 그것을 처리해야 다음 회차가 돈다
+    const o = report.outstanding
+    console.log(`  미해결 자동 작업: ${o.ok ? '없음' : `${o.severity} ${o.code}`}${o.pr ? ` — PR #${o.pr.number} ${o.pr.url}` : ''}`)
+    if (!o.ok) console.log(`     ${o.message}`)
+  }
   if (report.tools) {
     const missing = Object.entries(report.tools).filter(([, v]) => v === null).map(([k]) => k)
     console.log(`  실행 의존성: ${missing.length === 0 ? '전부 확인' : `🔴 없음 — ${missing.join(', ')}`}`)
