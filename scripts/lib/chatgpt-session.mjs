@@ -63,9 +63,10 @@ export function chromeArgs() {
  *   cloudflare_blocked 봇 감지. 재시도하면 악화된다 — 즉시 중단
  *   browser_missing    Chrome 이 없거나 경로가 바뀌었다
  *   permission_blocked 브라우저 실행이 정책에 막혔다
- *   chrome_not_running 전용 Chrome 이 안 떠 있다. CDP 로 붙을 대상이 없다
- *   protocol_error     붙기는 했는데 CDP 명령이 거부됐다. Chrome 은 살아 있다
- *   unknown            위 어디도 아니다. UI 가 바뀌었을 수 있다
+ *   chrome_not_running  전용 Chrome 이 안 떠 있다. CDP 로 붙을 대상이 없다
+ *   cdp_connect_timeout CDP 는 살아 있는데 연결이 제한 시간 안에 끝나지 않았다
+ *   protocol_error      붙기는 했는데 CDP 명령이 거부됐다. Chrome 은 살아 있다
+ *   unknown             위 어디도 아니다. UI 가 바뀌었을 수 있다
  */
 export const STATUS = {
   OK: 'ok',
@@ -74,9 +75,24 @@ export const STATUS = {
   BROWSER_MISSING: 'browser_missing',
   PERMISSION_BLOCKED: 'permission_blocked',
   CHROME_NOT_RUNNING: 'chrome_not_running',
+  CDP_CONNECT_TIMEOUT: 'cdp_connect_timeout',
   PROTOCOL_ERROR: 'protocol_error',
   UNKNOWN: 'unknown',
 }
+
+/**
+ * `connectOverCDP` 제한 시간.
+ *
+ * 🔴 **15초는 현실과 맞지 않았다** (2026-09-16 실측).
+ *    탭이 여러 개 열린 실제 창에 붙는 데 **45,418ms** 가 걸렸다.
+ *    Playwright 는 붙으면서 모든 타깃의 컨텍스트를 만드므로 탭이 많을수록 길어진다.
+ *    15초에서 끊긴 뒤 그 실패가 `chrome_not_running` 으로 분류돼
+ *    **살아 있는 Chrome 을 죽은 것으로 보고**했다 — 원고 회수가 통째로 막혔다.
+ *
+ * 🔴 넉넉히 잡아도 손해가 없다. 진짜로 안 떠 있으면 HTTP 확인(`cdpAvailable`)이
+ *    먼저 걸러 내므로, 이 시간을 늘려도 "없는 Chrome" 을 오래 기다리지 않는다.
+ */
+export const CDP_CONNECT_TIMEOUT_MS = 90_000
 
 /** Slack 알림 등급. 정상은 알리지 않는다 — 매일 오는 알림은 아무도 안 본다 */
 export const SEVERITY = {
@@ -86,6 +102,7 @@ export const SEVERITY = {
   [STATUS.BROWSER_MISSING]: 'ERROR',
   [STATUS.PERMISSION_BLOCKED]: 'ERROR',
   [STATUS.CHROME_NOT_RUNNING]: 'BLOCKED',
+  [STATUS.CDP_CONNECT_TIMEOUT]: 'ERROR',
   [STATUS.PROTOCOL_ERROR]: 'ERROR',
   [STATUS.UNKNOWN]: 'ERROR',
 }
@@ -98,6 +115,7 @@ export const MESSAGE = {
   [STATUS.BROWSER_MISSING]: 'Chrome 을 찾지 못했다',
   [STATUS.PERMISSION_BLOCKED]: '브라우저 실행이 막혔다',
   [STATUS.CHROME_NOT_RUNNING]: '전용 Chrome 이 떠 있지 않다 — --login 으로 띄워 두어야 한다',
+  [STATUS.CDP_CONNECT_TIMEOUT]: 'Chrome 은 살아 있는데 CDP 연결이 제한 시간을 넘겼다 — 탭이 많으면 오래 걸린다',
   [STATUS.PROTOCOL_ERROR]: 'Chrome 에 붙었지만 CDP 명령이 거부됐다 — 로그의 원문을 본다',
   [STATUS.UNKNOWN]: 'ChatGPT 화면을 판정하지 못했다 — UI 가 바뀌었을 수 있다',
 }
@@ -204,15 +222,61 @@ export async function ensurePageTarget(timeoutMs = 10000) {
  *
  * 소켓이 실제로 안 붙은 경우만 chrome_not_running 이다.
  * 붙었는데 명령이 거부된 것은 protocol_error 로 따로 둔다 — 대응이 다르다.
+ *
+ * 🔴 **timeout 을 chrome_not_running 으로 보내지 않는다** (2026-09-16 실측).
+ *    CDP HTTP 엔드포인트가 200 을 주는데 `connectOverCDP` 만 제한 시간을 넘긴 경우가 있다.
+ *    탭이 많으면 연결이 길어진다 — 실측 **45,418ms**. 15초 제한에서 끊긴 뒤
+ *    그 실패가 "Chrome 이 안 떠 있다" 로 둔갑해 원고 회수가 통째로 막혔다.
+ *    2026-08-27 에 한 번 겪은 오분류가 **다른 문구로 다시 들어온 것**이다.
+ *
+ *    그래서 `cdpAlive` 를 받아 가른다.
+ *      CDP 살아 있음 + timeout → `cdp_connect_timeout` (Chrome 은 살아 있다)
+ *      CDP 없음     + timeout → `chrome_not_running`  (붙을 대상이 없다)
+ *
+ * @param {unknown} err
+ * @param {{cdpAlive?: boolean}} [ctx] CDP HTTP 엔드포인트가 응답했는가
  */
-function classifyConnectError(err) {
+export function classifyConnectError(err, { cdpAlive = false } = {}) {
   const m = String(err?.message ?? '').toLowerCase()
-  if (/econnrefused|econnreset|socket hang up|connection (refused|closed)|timeout \d+ms exceeded/.test(m)) {
+  const isTimeout = /timeout \d+ms exceeded|timed? ?out/.test(m)
+
+  if (isTimeout) {
+    return cdpAlive ? STATUS.CDP_CONNECT_TIMEOUT : STATUS.CHROME_NOT_RUNNING
+  }
+  if (/econnrefused|econnreset|socket hang up|connection (refused|closed)/.test(m)) {
+    // 🔴 소켓이 실제로 끊긴 것이다. CDP 가 살아 있다면 그 사이 죽은 것이므로 그대로 둔다.
     return STATUS.CHROME_NOT_RUNNING
   }
   if (m.includes('permission') || m.includes('eacces') || m.includes('denied')) return STATUS.PERMISSION_BLOCKED
   if (m.includes('protocol error')) return STATUS.PROTOCOL_ERROR
   return STATUS.UNKNOWN
+}
+
+/**
+ * CDP 에 붙는다. **연결만 한다** — 판정도 페이지 조작도 하지 않는다.
+ *
+ * 🔴 실행기(`connector`)와 시계(`now`)를 주입받는다.
+ *    45초를 실제로 기다리는 테스트는 만들 수 없다. 느린 연결·제한 시간 초과를
+ *    **가짜 connector 로** 시험해야 이 경로에 회귀가 붙는다.
+ *
+ * @returns {Promise<{ok:boolean, browser?:object, status?:string, elapsedMs:number}>}
+ */
+export async function connectCdp({
+  connector,
+  timeoutMs = CDP_CONNECT_TIMEOUT_MS,
+  isCdpAlive = cdpAvailable,
+  now = () => Date.now(),
+} = {}) {
+  const started = now()
+  try {
+    const browser = await connector({ url: CDP_URL, timeout: timeoutMs })
+    return { ok: true, browser, elapsedMs: now() - started }
+  } catch (err) {
+    // 🔴 실패한 **그 순간** CDP 가 살아 있었는지 다시 본다.
+    //    연결 시도 전 값을 쓰면, 그 사이 Chrome 이 죽은 경우를 놓친다.
+    const alive = await isCdpAlive()
+    return { ok: false, status: classifyConnectError(err, { cdpAlive: alive }), elapsedMs: now() - started }
+  }
 }
 
 /**
@@ -304,7 +368,13 @@ export async function ensureChrome({ waitMs = 30000, pollMs = 1000 } = {}) {
   return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING }
 }
 
-export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoStart = false } = {}) {
+export async function probe({
+  timeoutMs = 45000,
+  composerWaitMs = 20000,
+  autoStart = false,
+  // 🔴 주입 가능하게 둔다. 정본은 CDP_CONNECT_TIMEOUT_MS 하나다
+  connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
+} = {}) {
   // launched 가 아니라 connected 다 — 이 코드는 브라우저를 띄우지 않는다
   const out = { connected: false, httpStatus: null, profileExists: profileExists(), via: 'cdp' }
 
@@ -334,7 +404,7 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
   let browser = null
 
   try {
-    browser = await chromium.connectOverCDP(CDP_URL, { timeout: 15000 })
+    browser = await chromium.connectOverCDP(CDP_URL, { timeout: connectTimeoutMs })
     out.connected = true
 
     const ctx = browser.contexts()[0]
@@ -374,7 +444,10 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
     out.status = classifyPage({ httpStatus: out.httpStatus, ...seen })
     out.signals = seen.signals
   } catch (err) {
-    out.status = out.connected ? STATUS.UNKNOWN : classifyConnectError(err)
+    // 🔴 실패한 그 순간 CDP 가 살아 있었는지 다시 본다 — timeout 오분류를 막는다
+    out.status = out.connected
+      ? STATUS.UNKNOWN
+      : classifyConnectError(err, { cdpAlive: await cdpAvailable() })
     out.errorName = err?.name ?? 'Error'
     // 🔴 원문 앞머리를 남긴다. 상태 코드만 남기면 무엇이 거부됐는지 영영 모른다.
     //    Protocol error 문구에는 URL·계정·쿠키가 실리지 않는다 — 첫 줄만 자른다.
@@ -412,7 +485,10 @@ export async function probe({ timeoutMs = 45000, composerWaitMs = 20000, autoSta
  * @param {(text: string) => { ok: boolean, reasons?: {code:string, why:string}[] }} [validate]
  * @returns {{ ok: boolean, reason?: string, length?: number, sent: boolean }}
  */
-export async function fetchManuscript({ briefPath, outPath, promptText, requiredMarkers = [], validate = null, timeoutMs = 300000 }) {
+export async function fetchManuscript({
+  briefPath, outPath, promptText, requiredMarkers = [], validate = null, timeoutMs = 300000,
+  connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
+}) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
   // probe 와 같은 이유로 탭을 먼저 확보한다 — 여기만 빠뜨리면 회수 단계에서 같은 실패가 난다
@@ -424,7 +500,7 @@ export async function fetchManuscript({ briefPath, outPath, promptText, required
   let sent = false
 
   try {
-    browser = await chromium.connectOverCDP(CDP_URL, { timeout: 15000 })
+    browser = await chromium.connectOverCDP(CDP_URL, { timeout: connectTimeoutMs })
     const ctx = browser.contexts()[0]
     if (!ctx) return { ok: false, reason: 'no_context', sent }
 
