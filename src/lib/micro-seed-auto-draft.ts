@@ -21,7 +21,9 @@ import {
   type OriginalityMeasure, type CopyReason,
 } from './draft-originality'
 // 🔴 위해 축의 정본은 판정 단계다. 초안 단계가 목록을 따로 갖지 않는다
-import { SEMANTIC_DROP } from './micro-seed-auto-judge'
+import { SEMANTIC_DROP, DRAFT_HARM_AXES } from './micro-seed-auto-judge'
+// 🔴 위기 판정의 정본은 안전 신호 모듈 하나다 — 여기서 규칙을 다시 쓰지 않는다
+import { judgeCrisisSignal } from './micro-seed-safety-signals'
 import type { PersonaForMatch } from './original-post-persona-match'
 
 export const AUTO_DRAFT_DECISIONS = ['AUTO_ADOPT', 'AUTO_HOLD', 'AUTO_DROP'] as const
@@ -439,8 +441,9 @@ export function parseQuality(rawText: string, ctx: QualityAskContext = {}): Draf
   }
   // 🔴 위해 축은 **판정 단계 정본**으로만 읽는다. 모르는 이름은 위해로 세지 않는다
   const rawHarm = Array.isArray(j.harms) ? j.harms.map(String) : []
-  const harms = rawHarm.filter((x) => (SEMANTIC_DROP as readonly string[]).includes(x))
-  const unknownHarm = rawHarm.filter((x) => !(SEMANTIC_DROP as readonly string[]).includes(x))
+  // 🔴 안전 신호 축도 **정상 사유**로 읽는다 — 모르는 이름으로 밀어내지 않는다 (2026-09-16)
+  const harms = rawHarm.filter((x) => (DRAFT_HARM_AXES as readonly string[]).includes(x))
+  const unknownHarm = rawHarm.filter((x) => !(DRAFT_HARM_AXES as readonly string[]).includes(x))
   // 🔴 **모르면 null 이다.** 모델이 답하지 않은 것을 "충돌 없음" 으로 읽지 않는다
   const lc = j.lifeConflict
   let lifeConflict: LifeConflict | null =
@@ -533,10 +536,74 @@ export function judgeLifeRetry(
   return 'unverified'
 }
 
+/**
+ * 🔴 **한 원천에 대해 생성을 시작해도 되는가** — 순수 판정 (2026-09-16).
+ *
+ *    정본 §4 는 위기 소재를 **④ Draft Generation 을 시작하지 않는다** 로 못박았다.
+ *    러너는 이 함수를 **생성 캐시 조회보다도 먼저** 부른다 — 그래야 옛 AUTO 판정이나
+ *    캐시가 있어도 새 안전 검사를 건너뛰지 못한다.
+ */
+export type SourceGate = { generate: boolean; reason: 'crisisSignal' | null }
+export function judgeSourceGate(input: { title: string; bodyHead: string }): SourceGate {
+  const crisis = judgeCrisisSignal({ title: input.title, body: input.bodyHead })
+  return crisis === null ? { generate: true, reason: null } : { generate: false, reason: 'crisisSignal' }
+}
+
+/**
+ * 🔴 **생성 결과를 받고 나서 — 다시 써도 되는가 · 채택해도 되는가** (2026-09-16).
+ *
+ *    결정론이 잡은 위기와 **모델이 잡은 위기**를 함께 본다.
+ *    위기면 복제 재생성 · 생활사 재생성 · 자동 채택 · 적재를 전부 멈춘다(§4 · §8).
+ */
+export type DraftGate = { regenerate: boolean; adopt: boolean; reason: 'crisisSignal' | null }
+export function judgeDraftGate(input: {
+  drafts: readonly { title: string; body: string }[]
+  /** 🔴 의미 판정이 돌려준 위해 — deterministic 이 놓친 것을 모델이 말했을 수 있다 */
+  qualityHarms?: readonly (readonly string[])[]
+  /** 생활사가 전부 어긋났는가 — 원래 재생성을 부르는 조건이다 */
+  allLifeConflict: boolean
+}): DraftGate {
+  const deterministic = input.drafts.some((d) =>
+    judgeCrisisSignal({ title: d.title, body: d.body }) !== null)
+  const semantic = (input.qualityHarms ?? []).some((h) => h.includes('crisisSignal'))
+  if (deterministic || semantic) return { regenerate: false, adopt: false, reason: 'crisisSignal' }
+  return { regenerate: input.allLifeConflict, adopt: true, reason: null }
+}
+
+/**
+ * 🔴 **위기로 멈춘 회차는 채택하지 않는다** — 정상 초안이 함께 있어도 마찬가지다.
+ *
+ *    같은 회차의 다른 초안으로 채택을 이어 가면, 위기 소재에서 나온 글이
+ *    그대로 Queue 에 올라간다. 회차 전체를 멈추는 것이 §4 다.
+ *    🔴 러너가 부르는 채택 입구는 여기 하나다.
+ */
+export function pickDraftGated(
+  input: PickInput & { crisisStop: 'crisisSignal' | null },
+  nowIso: string,
+): Pick {
+  if (input.crisisStop !== null) return pickDraft({ ...input, drafts: [] }, nowIso)
+  return pickDraft(input, nowIso)
+}
+
+/**
+ * 🔴 **의미 판정으로만 감지된 위기** — deterministic 이 놓친 것을 모델이 말했을 때다.
+ *    재생성 금지는 이 경우에도 걸려야 한다(§4 · §8).
+ */
+export function hasCrisisSignal(v: DraftQualityVerdict | null): boolean {
+  return v !== null && v.harms.includes('crisisSignal')
+}
+
 export function applyQuality(v: DraftQualityVerdict | null): DraftReason {
   if (v === null) return 'semanticUnavailable'
-  // 🔴 **위해가 먼저다.** 품질보다 앞이고 모델의 decision 보다 앞이다
-  if (v.harms.length > 0) return 'generatedHarm'
+  /**
+   * 🔴 **위해가 먼저다.** 품질보다 앞이고 모델의 decision 보다 앞이다.
+   *
+   * 🔴 **버리는 축과 넘기는 축을 가른다** (2026-09-16). 정책은 정본이 정한다 —
+   *    `SEMANTIC_DROP` 에 있으면 버리고, 안전 신호 축은 사람에게 넘긴다(§4).
+   *    여기서 이름을 다시 나열하지 않는다.
+   */
+  if (v.harms.some((x) => (SEMANTIC_DROP as readonly string[]).includes(x))) return 'generatedHarm'
+  if (v.harms.length > 0) return 'semanticHold'
   /**
    * 🔴 **명백한 1인칭 생활사 모순** — 근거 문장이 함께 왔을 때만 센다 (2026-09-13).
    *    근거가 없으면 판정을 받은 것이 아니므로 막지 않는다. 애매한 표현은 차단하지 않는다.

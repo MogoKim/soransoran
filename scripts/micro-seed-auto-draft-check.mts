@@ -13,11 +13,18 @@ import {
   DRAFT_PROMPT_VERSION, QUALITY_PROMPT_VERSION, MAX_DRAFTS_PER_SOURCE,
   AUTO_DRAFT_DECISIONS, HUMAN_DRAFT_DECISIONS, HUMAN_DRAFT_PROVENANCE,
   DRAFT_RULE_VERSION, DRAFT_PROVENANCE, BANNED_WORDS,
-  BLOCKING_RISKS, DRAFT_REASON_LABEL,
+  BLOCKING_RISKS, DRAFT_REASON_LABEL, judgeSourceGate, judgeDraftGate,
+  pickDraftGated,
   type DraftCandidate, type PickInput,
 } from '../src/lib/micro-seed-auto-draft'
+import { generateWithRetries } from '../src/lib/micro-seed-draft-run'
 import { measureOriginality, judgeCopy, COPY_RUN_WORDS } from '../src/lib/draft-originality'
 import { parseAgeBand, judgeSelfAgeConflict } from '../src/lib/persona-self-age'
+import {
+  judgeCrisisSignal, judgeMedicalDecisionRequest, judgeHealthEfficacyClaim,
+  judgeSafetySignals, SAFETY_SIGNAL_CODES,
+} from '../src/lib/micro-seed-safety-signals'
+import { SEMANTIC_RISKS, SEMANTIC_HOLD, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 import {
   buildGenSystemPrompt, buildQualitySystemPrompt, retryDirective, callBudgetOf,
@@ -1111,10 +1118,29 @@ console.log('\n⑮ 🔴 생성된 글에도 위해 판정을 다시 한다')
     applyQuality({ lifeConflict: null, decision: 'AUTO_ADOPT', confidence: 1, issues: [], unknownIssues: [],
       harms: ['unverifiedDefamation'],
     }) === 'generatedHarm')
+  /**
+   * 🔴 정본이 `SEMANTIC_DROP` 에서 `DRAFT_HARM_AXES`(= DROP 축 + 안전 신호 축)로 넓어졌다
+   *    (2026-09-16). 계약은 그대로다 — **이름을 새로 만들지 않는다.**
+   */
   check('🔴 위해 축 이름을 새로 만들지 않았다 — 판정 단계 정본 그대로다', (() => {
     const r = codeOf('scripts/micro-seed-auto-draft.mts')
-    return /\.\.\.SEMANTIC_DROP\.map/.test(r) && Object.keys(HARM_PROMPT).every((k) =>
-      (SEMANTIC_DROP as readonly string[]).includes(k))
+    return /\.\.\.DRAFT_HARM_AXES\.map/.test(r) && Object.keys(HARM_PROMPT).every((k) =>
+      (DRAFT_HARM_AXES as readonly string[]).includes(k))
+  })())
+  check('🔴 안전 신호 축 3종이 초안 검수 프롬프트에 설명된다',
+    SAFETY_SIGNAL_CODES.every((c) => (DRAFT_HARM_AXES as readonly string[]).includes(c)
+      && (HARM_PROMPT[c] ?? '') !== ''))
+  check('🔴 DROP 축은 버리고 안전 신호 축은 사람에게 넘긴다 — 정책을 복제하지 않는다', (() => {
+    const drop = parseQuality(JSON.stringify({
+      lifeConflict: null, decision: 'AUTO_ADOPT', confidence: 0.9,
+      harms: ['identifiablePrivatePerson'], issues: [],
+    }))
+    const hold = parseQuality(JSON.stringify({
+      lifeConflict: null, decision: 'AUTO_ADOPT', confidence: 0.9,
+      harms: ['crisisSignal'], issues: [],
+    }))
+    return applyQuality(drop) === 'generatedHarm' && applyQuality(hold) === 'semanticHold'
+      && hold !== null && hold.harms.includes('crisisSignal') && hold.unknownIssues.length === 0
   })())
   check('🔴 모르는 위해 이름은 위해로 세지 않고 schema 불일치로 남는다', (() => {
     const v = parseQuality(JSON.stringify({ lifeConflict: null, decision: 'AUTO_ADOPT', confidence: 0.9, harms: ['tooSpicy'], issues: [] }))
@@ -1397,7 +1423,8 @@ console.log('\n⑲ 🔴 검수 응답을 **무엇을 물었는지와 함께** �
     return /blockAllCode/.test(src)
       && /voiceAssetMissing/.test(src) && /personaCanonMissing/.test(src) && /noUsablePersona/.test(src)
       // 🔴 멈춤 판정이 **생성 호출보다 앞**에 있어야 한다
-      && src.indexOf('const voiceHold') < src.indexOf('await callJson(system, payload, parseGen)')
+      // 🔴 앵커가 `generateWithRetries` 안의 생성 호출로 옮겨졌다 (2026-09-16)
+      && src.indexOf('const voiceHold') < src.indexOf('const run = await generateWithRetries')
       && !/말투 근거 없이 씁니다|프로파일만으로 씁니다/.test(src)
   })())
   check('🔴 멈출 때 원천마다 같은 원인 코드를 남긴다', (() => {
@@ -2019,6 +2046,238 @@ console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정�
   check('🔴 [S] 결정론 집계는 전용 줄로 따로 보고한다', (() => {
     const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     return /나이 자기모순\(결정론\) \$\{selfAgeCaught\}건/.test(src)
+  })())
+
+  /**
+   * ─────────────────────────────────────────────────────────
+   * 🔴 [SGB] **행동 fixture — 러너가 쓰는 그 함수를 가짜 provider·cache 로 돌린다**
+   *
+   *    🔴 별도 모사를 만들지 않는다. `generateWithRetries` · `pickDraftGated` 는
+   *       러너가 실제로 부르는 입구다 — 여기서 호출 수와 채택 결과를 센다.
+   *
+   *    재현 대상 결함 둘:
+   *      ① 위기 생성 결과가 **복제 조건까지 만족**할 때 생성을 한 번 더 부른다
+   *      ② 위기 초안과 정상 초안이 함께 있을 때 **정상 초안을 채택**한다
+   * ─────────────────────────────────────────────────────────
+   */
+  {
+    const CRISIS_D = {
+      title: '그런 생각이 들어',
+      body: '자꾸 그런 생각이 들어요. 내가 없으면 애들은 누가 챙기나 싶고.',
+    }
+    const OK_D = { title: '오늘 저녁은 남은 반찬으로', body: '냉장고를 열어 어찌어찌 한 끼가 나온다.' }
+
+    /** 🔴 가짜 provider — 부른 횟수와 지시문을 그대로 기록한다 */
+    const stub = (out: (typeof OK_D)[], opts: { alwaysCopied?: boolean } = {}): {
+      fx: Parameters<typeof generateWithRetries>[1]; calls: () => number; reasons: () => string[]
+    } => {
+      let calls = 0
+      const reasons: string[] = []
+      return {
+        calls: () => calls,
+        reasons: () => reasons,
+        fx: {
+          generate: async (r) => { calls += 1; if (r !== null) reasons.push(r); return out },
+          allCopied: () => opts.alwaysCopied === true,
+          copyReason: () => 'runWords',
+        },
+      }
+    }
+
+    // ① 🔴 위기 + 복제 조건 — **생성을 한 번만 부른다**
+    {
+      const st = stub([CRISIS_D], { alwaysCopied: true })
+      const r = await generateWithRetries({ maxRetries: 3, cached: null }, st.fx)
+      check('🔴 [SGB] 위기 초안이 복제여도 복제 재생성을 부르지 않는다', st.calls() === 1)
+      check('🔴 [SGB] 복제 재시도 지시문이 나가지 않는다', st.reasons().length === 0)
+      check('🔴 [SGB] 위기 중단 사유가 남는다', r.crisisStop === 'crisisSignal')
+    }
+    // 🟢 대조군 — 위기가 아니면 복제 재생성은 종전대로 돈다
+    {
+      const st = stub([OK_D], { alwaysCopied: true })
+      const r = await generateWithRetries({ maxRetries: 3, cached: null }, st.fx)
+      check('🟢 [SGB] 위기가 아니면 복제 재생성은 그대로 돈다',
+        st.calls() === 4 && st.reasons().length === 3 && r.crisisStop === null)
+    }
+    // 🟢 정상 · 복제 아님 — 한 번만 부른다
+    {
+      const st = stub([OK_D])
+      const r = await generateWithRetries({ maxRetries: 3, cached: null }, st.fx)
+      check('🟢 [SGB] 정상 초안은 생성 1회 · 중단 없음',
+        st.calls() === 1 && r.crisisStop === null && r.fromCache === false)
+    }
+    // ② 🔴 캐시 경로 — 생성 0회인데도 위기를 잡는다
+    {
+      const st = stub([OK_D])
+      const r = await generateWithRetries({ maxRetries: 3, cached: [CRISIS_D] }, st.fx)
+      check('🔴 [SGB] 캐시로 받은 초안도 위기면 멈춘다',
+        st.calls() === 0 && r.fromCache && r.crisisStop === 'crisisSignal')
+    }
+
+    // ③ 🔴 위기 초안 + 정상 초안이 함께 있을 때 — **아무것도 채택하지 않는다**
+    {
+      const mixed: DraftCandidate[] = [CRISIS_D, OK_D].map((d, i2) => ({
+        sourceArticleId: 'src-1', draftNo: i2 + 1, title: d.title, body: d.body,
+        safetyVerdict: 'pass',
+        originality: { runChars: 3, runWords: 1, coverRatio: 0.01 },
+        generatedAt: NOW,
+      }))
+      // 🔴 품질 판정이 있어야 채택까지 간다 — 둘 다 통과로 둔다
+      const okQ: DraftQualityVerdict = {
+        lifeConflict: { conflict: false, evidence: '' }, decision: 'AUTO_ADOPT',
+        confidence: 0.95, issues: [], unknownIssues: [], harms: [],
+      }
+      const base = {
+        judgement: { sourceArticleId: 'src-1', decision: 'AUTO_SEED' as const, reasonCodes: [] },
+        drafts: mixed, seenTitles: new Set<string>(), seenBodies: new Set<string>(),
+        sourceUsed: false,
+        quality: new Map<number, DraftQualityVerdict | null>([[1, okQ], [2, okQ]]),
+      }
+      const stopped = pickDraftGated({ ...base, crisisStop: 'crisisSignal' }, NOW)
+      const open = pickDraftGated({ ...base, crisisStop: null }, NOW)
+      check('🔴 [SGB] 위기로 멈춘 회차는 정상 초안도 채택하지 않는다',
+        stopped.decision !== 'AUTO_ADOPT' && stopped.draftNo === null)
+      check('🟢 [SGB] 멈추지 않은 회차는 종전대로 채택한다',
+        open.decision === 'AUTO_ADOPT' && open.draftNo !== null)
+    }
+
+    // ④ 🔴 러너가 이 입구들을 실제로 쓴다
+    check('🔴 [SGB] 러너가 복제 재생성을 정본 함수로 돈다', (() => {
+      const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      return /const run = await generateWithRetries<GenDraft>\(\{/.test(src)
+        && !/for \(let retry = 0; retry < MAX_ORIGINALITY_RETRIES/.test(src)
+    })())
+    check('🔴 [SGB] 러너의 채택 입구가 게이트를 지난다', (() => {
+      const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      const gated = (src.match(/pickDraftGated\(\{/g) ?? []).length
+      // 🔴 LLM 경로와 템플릿 경로 둘 다다. 게이트 없는 pickDraft 호출이 남아 있으면 안 된다
+      return gated === 2 && !/\n      const p = pickDraft\(\{/.test(src)
+        && !/\n    const p = pickDraft\(\{/.test(src)
+    })())
+    check('🔴 [SGB] 생활사 재생성 루프가 위기에서 멈춘다', (() => {
+      const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      return /allConflict\(\) && crisisStop === null/.test(src)
+        && /allConflict\(\) && crisisStop === null; n \+= 1/.test(src)
+    })())
+    check('🔴 [SGB] orchestrator 는 스스로 I/O 를 하지 않는다 — 효과를 주입받는다', (() => {
+      const src = readFileSync('src/lib/micro-seed-draft-run.ts', 'utf-8')
+      return !/readFileSync|writeFileSync|fetch\(|PrismaClient|process\.env/.test(src)
+        // 🔴 provider 도 캐시도 직접 부르지 않는다
+        && !/callProvider|callJson|cache\./.test(src)
+        /**
+         * 🔴 위기 **정책**을 여기서 다시 만들지 않는다 — 판정은 `judgeDraftGate` 하나다.
+         *    `'crisisSignal'` 은 그 함수가 돌려주는 **타입 리터럴**이라 규칙 복제가 아니다.
+         */
+        && /judgeDraftGate\(/.test(src)
+        && !/자살|자해|그런 ?생각|애들/.test(
+          src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''))
+    })())
+    check('🔴 [SGB] 중단 사유를 명시적으로 남긴다', (() => {
+      const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      return (src.match(/위기 신호로 회차를 멈췄다/g) ?? []).length >= 3
+    })())
+  }
+
+  /**
+   * ─────────────────────────────────────────────────────────
+   * 🔴 [SG] 위기 신호 · 의료 판단 요청 · 건강 효능 주장 (2026-09-16 실측)
+   *
+   *    정본 §4 는 자해·자살을 생성 전 선행 차단으로 못박았는데 코드에 축이 없었다.
+   *    `micro-seed:safety-check` 는 CI 에 배선되어 있지 않으므로 **핵심 계약을
+   *    CI 에 있는 이 검사에도 고정한다.**
+   * ─────────────────────────────────────────────────────────
+   */
+  check('🔴 [SG] 위기 암시 글은 판정을 통과하지 않는다', (() => {
+    const body = '어제 밤은 괜찮았는데 오늘 아침 눈을 뜨자마자 그 생각이 들었다\n'
+      + '"갑자기 오랜만에 그런 생각이 들어\n우리 애들 좀 봐 줄 수 있어?"'
+    return judgeCrisisSignal({ title: '오늘 아침부터 자꾸만 그런 생각이', body }) !== null
+  })())
+  check('🔴 [SG] 간접 표현 하나만으로는 막지 않는다', (() => {
+    const a1 = judgeCrisisSignal({ title: '요즘 드는 생각', body: '문득 그런 생각이 들었어요.' })
+    const b1 = judgeCrisisSignal({ title: '급한 부탁', body: '내일 아이들 좀 봐 줄 수 있어?' })
+    return a1 === null && b1 === null
+  })())
+  check('🔴 [SG] 간접 신호가 둘 이상이면 막는다',
+    judgeCrisisSignal({
+      title: '요즘 마음이', body: '자꾸 그런 생각이 들어요. 내가 없으면 애들은 누가 챙기나 싶고.',
+    }) !== null)
+  check('🔴 [SG] 의료 판단 요청은 막고, 제품명만이면 막지 않는다', (() => {
+    const hit = judgeMedicalDecisionRequest({
+      title: '미레나 5년 채워야 한다고들 하는데',
+      body: '미레나 부작용일 수도 있고요. 계속 써도 괜찮은 건 아닐까요?',
+    })
+    const miss = judgeMedicalDecisionRequest({
+      title: '친구가 미레나 했대요', body: '오랜만에 만난 친구가 미레나 했다고 하더라고요.',
+    })
+    return hit !== null && miss === null
+  })())
+  check('🔴 [SG] 전언형 건강 효능 주장도 막는다',
+    judgeHealthEfficacyClaim({
+      title: '무릎 안 아프고 숨 안 차는 운동', body: '무릎에 무리가 없다고 하고, 운동 효과는 본다고.',
+    }) !== null)
+  /**
+   * 🔴 [SG] **과잉 차단 보완** — 대상과 판단·효능 표현의 **문장 관계**를 본다.
+   *    낱말 존재만으로 세면 겪은 이야기와 무관한 문장까지 막힌다 (2026-09-16 정정).
+   */
+  check('🟢 [SG] 부작용 경험담은 판단 요청이 아니다', (() => {
+    const t = { title: '병원 다녀왔어요', body: '미레나 부작용 때문에 병원에 갔어요. 의사에게 설명 듣고 왔습니다.' }
+    return judgeMedicalDecisionRequest(t) === null && judgeSafetySignals(t).length === 0
+  })())
+  check('🟢 [SG] 무관한 문장의 "좋아져" 는 효능 주장이 아니다', (() => {
+    const t = { title: '무릎이 시큰거려요', body: '무릎이 시큰거려요. 그런데 날씨는 좋아져서 창문을 열었어요.' }
+    return judgeHealthEfficacyClaim(t) === null && judgeSafetySignals(t).length === 0
+  })())
+  check('🔴 [SG] 그래도 같은 문장에서 묻거나 단정하면 막는다', (() => {
+    const ask = judgeMedicalDecisionRequest({
+      title: '인공관절 수술 얘기', body: '작년에 인공관절 수술 받았는데요. 계속 써도 괜찮을까요?',
+    })
+    const claim = judgeHealthEfficacyClaim({
+      title: '혈압에 좋다는 차', body: '이 차 마시면 혈압이 좋아진다고 하더라고요.',
+    })
+    return ask !== null && claim !== null
+  })())
+
+  check('🟢 [SG] 갱년기·영양제·스케일링 생활 질문은 그대로 통과한다', (() => {
+    const cases: { title: string; body: string }[] = [
+      { title: '갱년기 때문에 잠을 못 자는데 다들 어떤가요', body: '새벽에 자꾸 깨요.' },
+      { title: '스케일링 몇 년에 한 번 받으세요?', body: '다들 주기가 어떻게 되세요?' },
+      { title: '영양제 챙겨 먹는 게 진짜 어렵네',
+        body: '비타민 B, 루테인, 칼슘을 먹으려는데 약통에 담아 놔도 자꾸 까먹어요.' },
+    ]
+    return cases.every((c) => judgeSafetySignals(c).length === 0)
+  })())
+  check('🔴 [SG] deterministic 축 이름과 semantic 축 이름이 같다',
+    SAFETY_SIGNAL_CODES.every((c) => (SEMANTIC_RISKS as readonly string[]).includes(c)))
+  check('🔴 [SG] 위기 신호는 버리지 않고 사람에게 넘긴다 (정본 §4)',
+    (SEMANTIC_HOLD as readonly string[]).includes('crisisSignal'))
+  check('🔴 [SG] 안전 필터가 세 축을 실제로 배선했다', (() => {
+    const src = readFileSync('scripts/lib/micro-seed-safety-filter.mts', 'utf-8')
+    return /judgeSafetySignals\(\{ title, body, comments \}\)/.test(src)
+      && /add\(sig\.code, sig\.note, 'hold'\)/.test(src)
+  })())
+  check('🔴 [SG] 안전 필터가 규칙을 복제하지 않는다', (() => {
+    // 🔴 주석을 걷어내고 본다 — 축을 **설명하는** 주석이 잡히면 검사가 뜻을 잃는다
+    const code = readFileSync('scripts/lib/micro-seed-safety-filter.mts', 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    return !/자살|자해|미레나|무리가 ?없/.test(code)
+  })())
+  check('🔴 [SG] 위기 신호 회차는 재생성하지 않는다 (정본 §4 · §8)', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    // 🔴 생활사 재생성 진입과 루프 **둘 다** 위기에서 서야 한다
+    return /allConflict\(\) && crisisStop === null\)/.test(src)
+      && /allConflict\(\) && crisisStop === null; n \+= 1/.test(src)
+  })())
+  check('🔴 [SG] 캐시 key 가 안전 taxonomy 와 그 판을 담는다', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return /SAFETY_SIGNAL_VERSION/.test(src) && /\[\.\.\.SEMANTIC_RISKS\]\.join\(','\)/.test(src)
+  })())
+  check('🔴 [SG] 판정부는 순수 함수다 — 파일·DB·네트워크 없음', (() => {
+    const src = readFileSync('src/lib/micro-seed-safety-signals.ts', 'utf-8')
+    return !/from '(node:|@prisma)/.test(src) && !/fetch\(|readFileSync|process\.env/.test(src)
+  })())
+  check('🔴 [SG] 판정부에 특정 Queue id·Persona·제목을 박지 않았다', (() => {
+    const src = readFileSync('src/lib/micro-seed-safety-signals.ts', 'utf-8')
+    return !/cmu[a-z0-9]{10,}|P0[0-9]\b|P1[0-9]\b/.test(src)
   })())
 
   check('🔴 [S] 캐시 key 가 나이 판정 계약을 담는다 — 옛 캐시를 재사용하지 않는다', (() => {
