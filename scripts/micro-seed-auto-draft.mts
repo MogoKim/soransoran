@@ -35,6 +35,9 @@ import {
   LIFE_CONFLICT_MISSING, LIFE_EVIDENCE_NOT_FOUND,
   QUALITY_PROMPT_VERSION, BANNED_WORDS,
   lifeHistoryLines, applyQuality, judgeLifeRetry,
+} from '../src/lib/micro-seed-auto-draft'
+import { judgeSelfAgeConflict, SELF_AGE_RULE_VERSION } from '../src/lib/persona-self-age'
+import {
   MACHINE_AGE_HUMAN_REVIEW_NOTE, AGE_CHECK_MODEL_TRIAL, AGE_CHECK_QUALIFIED_MODEL,
   type DraftCandidate, type Judgement, type Pick, type DraftQualityVerdict,
   type PersonaLifeHistory,
@@ -346,6 +349,15 @@ function personaLifeDirectives(p?: PersonaLifeHistory): string[] {
     // 🔴 2026-09-14 — 나이를 안 넘겨서 `우리 언니(30~32)` 가 나왔다. 관계의 **나이**를 본다
     '- 당신 나이에서 나올 수 없는 가족 관계를 지어내지 않습니다.',
     '  (예: 40대 후반인데 "우리 언니가 서른 하나" · 50대인데 "우리 엄마가 예순 하나")',
+    /**
+     * 🔴 2026-09-16 — **자기 나이를 직접 말하는 경우가 빠져 있었다.**
+     *    실측: `60대 초반` 인데 본문 첫 줄이 *"40대 후반이고 …"*,
+     *    `50대 후반` 인데 *"내가 서른 대 중반쯤 될 때"*. 가족 관계는 맞는데
+     *    **화자 자신의 나이**가 어긋났고, 검수 프롬프트도 그것을 묻지 않았다.
+     */
+    `- 🔴 당신이 **자기 나이를 직접 말할 때**는 반드시 ${p.ageBand ?? '당신의 나이대'} 안이어야 합니다.`,
+    '  (예: "저는 40대 후반이고" · "올해 쉰 둘인데" · 문장 첫머리의 "50대 초반이라")',
+    '  당신 나이대 밖의 숫자로 자기를 소개하지 않습니다.',
     '',
     '🔴 **나이 이야기를 못 한다는 뜻이 아닙니다.** 다음은 전부 자연스럽습니다 —',
     '   · "요즘은 서른 넘어 결혼하는 사람이 많더라" 처럼 **일반적인 이야기**',
@@ -547,9 +559,16 @@ export function buildAgeCheckSystemPrompt(ageBand: string): string {
     '',
     `글쓴이는 **${ageBand}** 여성이다.`,
     '',
-    '🔴 **질문: 글이 자기 가족을 말하면서, 그 가족의 나이가 글쓴이 나이와 모순되는가?**',
+    '🔴 **두 가지를 본다.**',
     '',
-    '이 순서로 센다:',
+    `**(가) 글쓴이가 자기 나이를 직접 말하는데, 그 나이가 ${ageBand} 와 어긋나는가?**`,
+    '  · "저는 40대 후반이고" · "올해 쉰 둘인데" · 문장 첫머리의 "50대 초반이라" 처럼',
+    '    **자기를 가리키는** 나이 표현만 센다.',
+    '  · "주변 40대가" · "30대 후배" · "50대 언니" 처럼 **남의 나이**는 세지 않는다.',
+    '',
+    '**(나) 글이 자기 가족을 말하면서, 그 가족의 나이가 글쓴이 나이와 모순되는가?**',
+    '',
+    '(나) 는 이 순서로 센다:',
     '  ① 글에 "우리 ○○" · "내 ○○" 같은 **자기 가족**이 나오는가',
     '     (언니 · 오빠 · 형 · 누나 · 동생 · 엄마 · 아빠 · 딸 · 아들 · 시부모)',
     '  ② 그 가족의 나이나 세대가 **글 안에** 적혀 있는가',
@@ -560,7 +579,11 @@ export function buildAgeCheckSystemPrompt(ageBand: string): string {
     `     · 딸 · 아들 → ${ageBand} 보다 **한 세대 적어야** 한다`,
     '  ④ 불가능하면 conflict=true 이고, **글에 있는 그 문장을 그대로** evidence 에 옮긴다',
     '',
-    '🔴 **①이나 ②가 없으면 conflict=false 다. 추측해서 세지 않는다.**',
+    '🔴 **①이나 ②가 없으면 (나) 는 conflict=false 다. 추측해서 세지 않는다.**',
+    '',
+    '🔴 **(가) 는 자기 자녀의 학령이 당신 생활사와 어긋나는 경우도 본다.**',
+    '  · "우리 애 유치원" · "우리 아이 초등학교" 처럼 **자기 자녀**임이 분명할 때만이다.',
+    '  · "조카" · "이웃 애" · "아는 집 딸" 은 남의 아이다 — 세지 않는다.',
     '',
     '🔴 아래는 전부 conflict=false 다:',
     '  · "요즘 서른 넘어 결혼하는 사람이 많다" — 자기 가족이 아니다',
@@ -784,6 +807,33 @@ async function askQuality(
       || echoesTitleAtEnd(d.title, d.body)) {
       continue
     }
+    /**
+     * 🔴 **명백한 자기 나이 모순은 캐시 조회와 provider 호출보다 **먼저** 판정한다**
+     *    (2026-09-16 정정).
+     *
+     *    옛 판은 이 검사가 품질 호출 **뒤**에 있었고, 충돌을 잡고도 나이 호출을 또 했다.
+     *    그리고 캐시 hit 경로가 이 검사보다 먼저 `continue` 해서 **옛 판정이 그대로 재사용**됐다.
+     *    🔴 충돌이 확정된 초안은 여기서 끝낸다 — 품질·나이 provider 를 부르지 않는다.
+     *    🔴 새 축을 만들지 않는다. 기존 `lifeConflict` 칸으로 나가 재생성·HOLD 경로를 그대로 탄다.
+     */
+    const selfAge = persona?.ageBand == null || persona.ageBand.trim() === ''
+      ? null
+      : judgeSelfAgeConflict({ ageBand: persona.ageBand, text: `${d.title}\n${d.body}` })
+    if (selfAge !== null && selfAge.conflict) {
+      selfAgeCaught += 1
+      out.set(d.draftNo, {
+        lifeConflict: { conflict: true, evidence: selfAge.evidence },
+        decision: 'AUTO_HOLD', confidence: 1, issues: [], unknownIssues: [], harms: [],
+      })
+      /**
+       * 🔴 **`statusCount` 에 넣지 않는다** (2026-09-16 정정).
+       *    `statusCount` 는 **provider 응답**을 세는 칸이고, 아래 `kindOf` 가
+       *    모르는 이름을 전부 `provider` 로 분류한다. 로컬 결정론 판정을 거기 넣었더니
+       *    부르지도 않은 호출이 provider 응답 수로 잡혔다.
+       *    이 판정은 전용 집계 `selfAgeCaught` 로만 보고한다.
+       */
+      continue
+    }
     // 🔴 key 가 **이 글의 본문**을 담는다. 같은 draftNo 라도 글이 바뀌면 다시 묻는다
     const k = qKey(d)
     const c = cache.get(k)
@@ -917,6 +967,8 @@ const callKind = new Map<string, number>()
 let schemaRetry = 0
 /** 🔴 나이 검수 호출 수 · 잡은 수 · 못 읽은 수 — 회차 로그에 그대로 찍는다 */
 let ageCalls = 0
+/** 🔴 결정론 자기 나이 판정이 잡은 수 — 회차 로그에 그대로 찍는다 */
+let selfAgeCaught = 0
 let ageCaught = 0
 let ageUnread = 0
 /** 🔴 생활사 충돌로 다시 쓴 원천 · 고쳐진 수 · 그래도 어긋나 사람에게 넘긴 수 */
@@ -1209,9 +1261,19 @@ async function main(): Promise<void> {
       + `|${DRAFT_MODEL}|${digest16(genSystem)}`
     // 🔴 **본문 digest 를 담는다.** draftNo 만 보면 글이 바뀌어도 옛 판정이 재사용된다
     const qSystemDigest = digest16(buildQualitySystemPrompt(persona))
+    /**
+     * 🔴 **나이 판정 계약이 바뀌면 옛 캐시를 쓰지 않는다** (2026-09-16).
+     *
+     *    옛 key 는 품질 프롬프트 digest 만 담았다. 그래서 나이 검수 프롬프트와
+     *    자기 나이 판정이 바뀌어도 **옛 판정이 그대로 hit** 됐다.
+     *    운영 캐시 파일을 손으로 지우지 않는다 — key 가 계약을 담으면 저절로 miss 된다.
+     */
+    const ageContractDigest = digest16(
+      `${buildAgeCheckSystemPrompt(persona?.ageBand ?? '')}|${SELF_AGE_RULE_VERSION}`,
+    )
     const qKey = (d: DraftCandidate): string =>
       `q|${j.sourceArticleId}|${d.draftNo}|${QUALITY_PROMPT_VERSION}|${DRAFT_MODEL}`
-      + `|${qSystemDigest}|${digest16(`${d.title}\n${d.body}`)}`
+      + `|${qSystemDigest}|${ageContractDigest}|${digest16(`${d.title}\n${d.body}`)}`
 
     if (!deterministicOk) {
       from = 'llm'
@@ -1361,6 +1423,12 @@ async function main(): Promise<void> {
   }
   console.log(`      종류별 ${[...callKind.entries()].map(([k, n]) => `${k} ${n}`).join(' · ') || '없음'}`
     + ` · schema 재요청 ${schemaRetry}회`)
+  /**
+   * 🔴 **나이 판정을 결정론과 모델로 나눠 센다** (2026-09-16).
+   *    합쳐 세면 "모델이 잡았다" 와 "부르기 전에 잡았다" 가 구분되지 않는다.
+   */
+  console.log(`      나이 자기모순(결정론) ${selfAgeCaught}건`
+    + ` · 나이 검수 호출 ${ageCalls}회 (잡음 ${ageCaught} · 못 읽음 ${ageUnread})`)
   // 🔴 소재 차단 · 생활사 재생성 · 최종 HOLD 를 **따로** 센다 — 섞으면 어디가 막혔는지 모른다
   console.log(`   🔴 소재를 이유로 막은 원천 0건 (설계상 없음)`
     + ` · 생활사 충돌 재생성 ${lifeRetried}건`
