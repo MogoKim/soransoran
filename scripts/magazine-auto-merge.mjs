@@ -28,7 +28,7 @@ import { spawnSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
-import { AUTO_BRANCH_PREFIX, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
+import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, REQUIRED_CHECKS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -55,39 +55,85 @@ export const MERGEABLE_POLL_MS = 15 * 1000
 // ─────────────────────────────────────────────────────────
 
 /**
- * merge 한 SHA 가 **실제로 배포됐고**, 예약 글이 **아직 안 나왔는지** 본다.
+ * merge 한 SHA 가 **실제로 운영에 나갔고**, 예약 글이 **아직 안 나왔는지** 본다.
  *
- * 🔴 **200 이 아니라고 "숨겨졌다" 로 보지 않는다.**
- *    500 · 인증 리다이렉트(3xx) · 네트워크 실패(status:null)는 **확인 실패**다.
+ * ─────────────────────────────────────────────────────────
+ * 🔴 **커밋 합산 status 는 배포 확인이 아니다** (2026-09-16 재검토).
+ *
+ *    직전 판은 `commits/{sha}/status` 를 배포 상태로 썼다. 그것은 CI 판정에 쓰는
+ *    바로 그 값이다 — 검사가 다 초록이면 success 가 된다. **운영 도메인이 아직
+ *    옛 빌드를 서빙하고 있어도 success 다.** 즉 "배포를 확인했다" 고 적어 놓고
+ *    실제로는 CI 를 한 번 더 본 것이었다.
+ *
+ * 🔴 **그래서 세 가지를 따로 본다.**
+ *      ① Production 배포가 **그 SHA 로** 존재하는가   (GitHub Deployments API)
+ *      ② 그 배포가 **READY 인가**                      (deployment status = success)
+ *      ③ **운영 도메인이 그 배포를 서빙 중인가**        (soransoran.com 의 dpl_ 표식)
+ *
+ *    ③ 이 핵심이다. ①②만 보면 "배포는 됐는데 도메인은 구버전" 을 못 본다.
+ *    Vercel 은 `next/image` URL 에 `dpl=dpl_<id>` 를 심고, 같은 id 가 그 커밋의
+ *    Vercel status target_url 끝에 들어간다. 두 값을 맞춰 보면 도메인이 실제로
+ *    무엇을 서빙 중인지 **추측 없이** 알 수 있다.
+ *
+ * 🔴 **모르면 막는다.** 읽지 못한 값은 통과가 아니다.
+ * 🔴 500 · 인증 리다이렉트 · 네트워크 실패는 **"비공개 성공" 이 아니다.**
  *    비공개를 확인한 것은 오직 **404** 뿐이다.
+ *
+ * @param {object} p
+ * @param {{found:boolean, state:string|null, sha:string|null, deploymentId:string|null}} p.deployment
+ * @param {string|null} p.liveDeploymentId  운영 도메인이 서빙 중인 dpl_ id
+ * @param {string} p.expectedSha            merge 커밋 SHA
  */
-export function judgeDeploy({ deployState, slugStatuses, now }) {
+export function judgeDeploy({ deployment, liveDeploymentId, expectedSha, slugStatuses, now }) {
   const blockedBy = []
   const checked = []
+  const block = (code, message) => blockedBy.push({ code, message })
+  const d = deployment ?? { found: false }
 
-  if (deployState !== 'success') {
-    blockedBy.push({ code: 'DEPLOY_NOT_READY', message: `merge SHA 의 배포 상태가 ${deployState} 다 — 확인 전에 성공으로 끝내지 않는다` })
-  } else checked.push('Production 배포 완료')
+  // ── ① Production 배포가 그 SHA 로 있는가 ────────────────
+  if (!d.found) {
+    block('DEPLOY_NOT_FOUND', `merge SHA(${String(expectedSha).slice(0, 7)}) 의 Production 배포를 찾지 못했다`)
+  } else if (d.sha && expectedSha && d.sha !== expectedSha) {
+    block('DEPLOY_SHA_MISMATCH', `Production 배포의 SHA 가 ${String(d.sha).slice(0, 7)} 다 — merge 한 것은 ${String(expectedSha).slice(0, 7)} 다`)
+  } else checked.push(`Production 배포가 merge SHA 로 있다 (${String(expectedSha).slice(0, 7)})`)
 
+  // ── ② READY 인가 ───────────────────────────────────────
+  if (d.found) {
+    if (d.state !== 'success') {
+      block('DEPLOY_NOT_READY', `Production 배포 상태가 ${d.state ?? '알 수 없음'} 다 — 확인 전에 성공으로 끝내지 않는다`)
+    } else checked.push('Production 배포 READY')
+  }
+
+  // ── ③ 운영 도메인이 그 배포를 서빙 중인가 ────────────────
+  // 🔴 여기가 "커밋 status=success 인데 도메인은 구버전" 을 잡는 자리다.
+  if (!d.deploymentId) {
+    block('DEPLOY_ID_UNKNOWN', '배포 id 를 읽지 못했다 — 운영 도메인이 무엇을 서빙 중인지 대조할 수 없다')
+  } else if (!liveDeploymentId) {
+    block('PRODUCTION_UNVERIFIED', `${SITE} 에서 배포 표식을 읽지 못했다 — 운영 반영을 확인하지 못했다`)
+  } else if (liveDeploymentId !== d.deploymentId) {
+    block('PRODUCTION_STALE', `운영 도메인이 아직 다른 배포를 서빙 중이다 (도메인 ${liveDeploymentId} · merge ${d.deploymentId})`)
+  } else checked.push(`운영 도메인이 그 배포를 서빙 중이다 (${d.deploymentId})`)
+
+  // ── ④ 예약 글이 아직 안 나왔는가 ────────────────────────
   for (const s of slugStatuses ?? []) {
     const due = Date.parse(s.publishAt)
     const beforePublish = Number.isFinite(due) && due > now
     const code = s.httpStatus
 
     if (code === null || code === undefined) {
-      blockedBy.push({ code: 'CHECK_UNREACHABLE', message: `${s.slug} 의 공개 여부를 확인하지 못했다 (네트워크 실패) — 비공개 성공이 아니다` })
+      block('CHECK_UNREACHABLE', `${s.slug} 의 공개 여부를 확인하지 못했다 (네트워크 실패) — 비공개 성공이 아니다`)
       continue
     }
     if (beforePublish) {
       if (code === 200) {
         // 🔴 최악의 사고 — 예약 글이 미리 나갔다
-        blockedBy.push({ code: 'PUBLISHED_EARLY', message: `${s.slug} 가 publishAt(${s.publishAt}) 전에 공개됐다` })
+        block('PUBLISHED_EARLY', `${s.slug} 가 publishAt(${s.publishAt}) 전에 공개됐다`)
       } else if (code !== 404) {
         // 🔴 500·3xx 는 "숨겨짐" 이 아니다. 확인하지 못한 것이다.
-        blockedBy.push({ code: 'HIDDEN_UNCONFIRMED', message: `${s.slug} 가 HTTP ${code} 다 — 404 가 아니면 비공개를 확인한 것이 아니다` })
+        block('HIDDEN_UNCONFIRMED', `${s.slug} 가 HTTP ${code} 다 — 404 가 아니면 비공개를 확인한 것이 아니다`)
       } else checked.push(`${s.slug} 예약 비공개 확인 (404)`)
     } else if (code !== 200) {
-      blockedBy.push({ code: 'NOT_PUBLISHED', message: `${s.slug} 는 publishAt 이 지났는데 공개되지 않았다 (HTTP ${code})` })
+      block('NOT_PUBLISHED', `${s.slug} 는 publishAt 이 지났는데 공개되지 않았다 (HTTP ${code})`)
     } else checked.push(`${s.slug} 공개 확인 (200)`)
   }
   return { ok: blockedBy.length === 0, blockedBy, checked }
@@ -152,7 +198,20 @@ export async function runAutoMerge({ apply = false, deps }) {
   // ── ③ CI 를 제한 시간 안에서 관찰 ─────────────────────────
   //    🔴 필수 검사가 **등록되기까지** 늦을 수 있다. 그것도 기다린다 — 유한하게.
   const ci = await observeCi({ sha, deps, now, sleep, log })
-  log(`CI: ${ci.ciState} · 검사 ${ci.checks.length}개 (관찰 ${Math.round(ci.waitedMs / 1000)}초)`)
+  log(`CI: ${ci.outcome} · ${ci.ciState} · 검사 ${ci.checks.length}개 (관찰 ${Math.round(ci.waitedMs / 1000)}초)`)
+  report.ci = { outcome: ci.outcome, ciState: ci.ciState, waitedMs: ci.waitedMs, checks: ci.checks.length }
+  // 🔴 실패와 시간 초과를 섞지 않는다 — 사람이 할 일이 다르다
+  if (ci.outcome === 'TIMEOUT') {
+    const pendingNames = ci.checks.filter((c) => c.status !== 'completed').map((c) => c.name)
+    const missingNames = REQUIRED_CHECKS.filter((n) => !ci.checks.some((c) => c.name === n))
+    report.blockedBy.push({
+      code: 'CI_OBSERVE_TIMEOUT',
+      message: `${Math.round(CI_OBSERVE_MS / 60000)}분 안에 검사가 끝나지 않았다`
+        + `${missingNames.length > 0 ? ` · 필수 검사 미등록: ${missingNames.join(', ')}` : ''}`
+        + `${pendingNames.length > 0 ? ` · 아직 도는 중: ${pendingNames.join(', ')}` : ''}`
+        + ' — 재실행하지 않는다',
+    })
+  }
 
   // ── ③-b mergeable 이 정해지기를 기다린다 — 🔴 유한하게 ────
   //    GitHub 은 이것을 비동기로 계산한다. 목록 조회 직후에는 UNKNOWN 이 흔하다.
@@ -173,7 +232,8 @@ export async function runAutoMerge({ apply = false, deps }) {
     return fail('SOURCE_PARSE_FAILED', `소스를 읽지 못했다: ${e?.message ?? e}`)
   }
 
-  const byGrade = (rows) => Object.fromEntries(rows.map((q) => [q.slug, { riskLevel: q.riskLevel, autoEligible: q.autoEligible === true }]))
+  // 🔴 **전 필드를 넘긴다.** 관문이 남은 항목의 등급뿐 아니라 다른 필드까지 대조한다
+  const bySlug = (rows) => Object.fromEntries(rows.map((q) => [q.slug, { ...q, autoEligible: q.autoEligible === true }]))
   const mainBySlug = new Map(mainArticles.map((a) => [a.slug, a]))
   const registered = branchArticles.filter((a) => !mainBySlug.has(a.slug))
 
@@ -192,7 +252,7 @@ export async function runAutoMerge({ apply = false, deps }) {
   const verdict = judgeAutoMerge({
     pr, expectedSha: sha, files: deps.listPrFiles(pr0.number),
     ciState: ci.ciState, checks: ci.checks,
-    registered, queueBySlug: byGrade(mainQueue), branchQueueBySlug: byGrade(branchQueue),
+    registered, queueBySlug: bySlug(mainQueue), branchQueueBySlug: bySlug(branchQueue),
     mainSlugs: new Set(mainArticles.map((a) => a.slug)),
     mainDates: new Set(mainArticles.map((a) => String(a.publishAt ?? '').slice(0, 10)).filter(Boolean)),
     now: now(),
@@ -228,8 +288,21 @@ export async function runAutoMerge({ apply = false, deps }) {
   const slugStatuses = report.registered.map((r) => ({
     slug: r.slug, publishAt: r.publishAt, httpStatus: deps.httpStatus(`${SITE}/magazine/${r.slug}`),
   }))
-  const dv = judgeDeploy({ deployState: deploy.state, slugStatuses, now: now() })
-  report.deploy = { state: deploy.state, waitedMs: deploy.waitedMs, checked: dv.checked }
+  const dv = judgeDeploy({
+    deployment: deploy.deployment,
+    liveDeploymentId: deploy.live,
+    expectedSha: report.mergeCommit,
+    slugStatuses,
+    now: now(),
+  })
+  report.deploy = {
+    outcome: deploy.outcome,
+    state: deploy.deployment?.state ?? null,
+    deploymentId: deploy.deployment?.deploymentId ?? null,
+    live: deploy.live,
+    waitedMs: deploy.waitedMs,
+    checked: dv.checked,
+  }
   report.blockedBy.push(...dv.blockedBy)
   for (const c of dv.checked) log(`  ✅ ${c}`)
   for (const b of dv.blockedBy) log(`  ⛔ ${b.code}: ${b.message}`)
@@ -237,19 +310,46 @@ export async function runAutoMerge({ apply = false, deps }) {
   return report
 }
 
-/** 필수 검사가 등록되고 끝날 때까지 — 🔴 유한하게. 재실행하지 않는다 */
+/**
+ * 검사가 **다 끝날 때까지** — 🔴 유한하게. 재실행하지 않는다.
+ *
+ * 🔴 **종료 조건에 필수 검사가 들어간다** (2026-09-16 재검토).
+ *    직전 판은 "목록이 비어 있지 않고 전부 completed" 면 끝냈다. 그런데 GitHub 은
+ *    검사를 **한꺼번에 등록하지 않는다.** 빠른 검사(Vercel Preview Comments 등)가
+ *    먼저 붙어 완료되면, 그 순간 목록은 "비어 있지 않고 전부 completed" 다.
+ *    아직 필수 검사가 **등록조차 안 됐는데** 관찰을 끝내고
+ *    `REQUIRED_CHECK_MISSING` 으로 막았다 — 정상 회차가 매번 실패한다.
+ *
+ * 🔴 **실패와 시간 초과를 구분한다.** 둘 다 "merge 안 함" 이지만 사람이 할 일이 다르다.
+ *    FAILED 는 검사를 고쳐야 하고, TIMEOUT 은 아직 도는 중일 수 있다.
+ *    실패는 기다리지 않는다 — 이미 결론이 났다.
+ *
+ * @returns {{ciState:string, checks:object[], waitedMs:number, outcome:'SETTLED'|'FAILED'|'TIMEOUT'}}
+ */
 async function observeCi({ sha, deps, now, sleep, log }) {
   const started = now()
   let last = null
+  let snap = { ciState: 'unknown', checks: [] }
   for (;;) {
     const r = deps.getChecks(sha)
     const waitedMs = now() - started
-    // 🔴 completed/success 만 인정한다. 목록이 비었으면 아직 등록 전이다 — 기다린다.
-    const settled = r.ok && r.checks.length > 0 && r.checks.every((c) => c.status === 'completed') && r.ciState !== 'pending'
-    if (settled || waitedMs >= CI_OBSERVE_MS) {
-      return { ciState: r.ok ? r.ciState : 'unknown', checks: r.ok ? r.checks : [], waitedMs }
+    if (r.ok) {
+      snap = { ciState: r.ciState, checks: r.checks }
+      const byName = new Map(r.checks.map((c) => [c.name, c]))
+      const failed = r.checks.filter((c) => c.status === 'completed' && !OK_CONCLUSIONS.includes(c.conclusion ?? ''))
+      // 🔴 실패는 기다릴 이유가 없다
+      if (failed.length > 0) return { ...snap, waitedMs, outcome: 'FAILED' }
+
+      const requiredSettled = REQUIRED_CHECKS.every((n) => byName.get(n)?.status === 'completed')
+      const allSettled = r.checks.length > 0 && r.checks.every((c) => c.status === 'completed')
+      if (requiredSettled && allSettled) return { ...snap, waitedMs, outcome: 'SETTLED' }
     }
-    const note = `${r.ok ? r.ciState : 'query-failed'} · ${r.ok ? r.checks.length : 0}개`
+    if (waitedMs >= CI_OBSERVE_MS) return { ...snap, waitedMs, outcome: 'TIMEOUT' }
+
+    const missing = REQUIRED_CHECKS.filter((n) => !(r.ok ? r.checks : []).some((c) => c.name === n))
+    const note = r.ok
+      ? `${r.ciState} · 검사 ${r.checks.length}개${missing.length > 0 ? ` · 필수 미등록 ${missing.join(', ')}` : ''}`
+      : '조회 실패'
     if (note !== last) { log(`CI 관찰: ${note}`); last = note }
     await sleep(CI_POLL_MS)
   }
@@ -267,17 +367,28 @@ async function observeMergeable({ number, deps, now, sleep, log }) {
   }
 }
 
-/** merge SHA 의 Production 배포 — 🔴 유한하게 */
+/**
+ * merge SHA 의 **Production 배포가 READY 가 되고 운영 도메인에 붙을 때까지** — 🔴 유한하게.
+ *
+ * 🔴 커밋 합산 status 를 보지 않는다. 그것은 CI 다.
+ */
 async function observeDeploy({ sha, deps, now, sleep, log }) {
   const started = now()
   let last = null
+  let deployment = { found: false, state: null, sha: null, deploymentId: null }
+  let live = null
   for (;;) {
-    const state = sha ? deps.getDeployState(sha) : 'unknown'
+    deployment = deps.getProductionDeployment(sha) ?? { found: false, state: null, sha: null, deploymentId: null }
+    live = deps.liveDeploymentId()
     const waitedMs = now() - started
-    if (state === 'success' || state === 'failure' || state === 'error' || waitedMs >= DEPLOY_OBSERVE_MS) {
-      return { state, waitedMs }
+    const ready = deployment.found && deployment.state === 'success'
+    const served = ready && deployment.deploymentId && live === deployment.deploymentId
+    const dead = deployment.found && (deployment.state === 'failure' || deployment.state === 'error')
+    if (served || dead || waitedMs >= DEPLOY_OBSERVE_MS) {
+      return { deployment, live, waitedMs, outcome: served ? 'SERVED' : dead ? 'FAILED' : 'TIMEOUT' }
     }
-    if (state !== last) { log(`배포 관찰: ${state}`); last = state }
+    const note = `${deployment.found ? deployment.state : '배포 없음'} · 도메인 ${live ?? '읽지 못함'}`
+    if (note !== last) { log(`배포 관찰: ${note}`); last = note }
     await sleep(DEPLOY_POLL_MS)
   }
 }
@@ -362,9 +473,45 @@ export const realDeps = {
     const after = exec('gh', ['pr', 'view', String(number), '--json', 'mergeCommit', '--jq', '.mergeCommit.oid'])
     return { ok: true, mergeCommit: after.code === 0 ? after.out.trim() : null }
   },
-  getDeployState: (sha) => {
-    const r = exec('gh', ['api', `repos/{owner}/{repo}/commits/${sha}/status`, '--jq', '.state'])
-    return r.code === 0 ? r.out.trim() : 'unknown'
+  /**
+   * 🔴 **커밋 합산 status 를 쓰지 않는다.** 그것은 CI 다 — 검사가 초록이면
+   *    운영 도메인이 옛 빌드여도 success 가 된다.
+   *    GitHub **Deployments API** 로 그 SHA 의 Production 배포와 상태를 읽고,
+   *    Vercel status 의 target_url 에서 배포 id 를 뽑는다.
+   *    (둘 다 이미 쓰고 있는 `gh` 읽기 권한이다 — 새 토큰도 과금도 없다)
+   */
+  getProductionDeployment: (sha) => {
+    const miss = { found: false, state: null, sha: null, deploymentId: null }
+    if (!sha) return miss
+    const d = exec('gh', ['api', `repos/{owner}/{repo}/deployments?sha=${sha}&environment=Production&per_page=1`])
+    if (d.code !== 0) return miss
+    let dep
+    try { dep = JSON.parse(d.out || '[]')[0] } catch { return miss }
+    if (!dep) return miss
+
+    const st = exec('gh', ['api', `repos/{owner}/{repo}/deployments/${dep.id}/statuses?per_page=1`, '--jq', '.[0].state'])
+    const state = st.code === 0 ? st.out.trim() || null : null
+
+    // 배포 id — Vercel 커밋 status 의 target_url 끝 조각이 그것이다
+    const v = exec('gh', ['api', `repos/{owner}/{repo}/commits/${sha}/status`, '--jq', '.statuses[] | select(.context == "Vercel") | .target_url'])
+    const url = v.code === 0 ? v.out.trim().split('\n')[0] : ''
+    const tail = (url.match(/\/([A-Za-z0-9]{20,})\s*$/) ?? [, null])[1]
+    return { found: true, state, sha: dep.sha ?? null, deploymentId: tail ? `dpl_${tail}` : null }
+  },
+
+  /**
+   * 🔴 **운영 도메인이 지금 서빙 중인 배포.** 추측하지 않고 표식을 읽는다 —
+   *    Vercel 이 `next/image` URL 에 `dpl=dpl_<id>` 를 심는다.
+   *    못 읽으면 null 이다. 판정이 `PRODUCTION_UNVERIFIED` 로 막는다.
+   */
+  liveDeploymentId: () => {
+    for (const path of ['', '/magazine']) {
+      const r = exec('curl', ['-s', '-L', '--max-time', '25', `${SITE}${path}`])
+      if (r.code !== 0) continue
+      const m = r.out.match(/dpl_[A-Za-z0-9]+/)
+      if (m) return m[0]
+    }
+    return null
   },
   // 🔴 실패하면 null 이다. 404 로 속이지 않는다 — 판정이 CHECK_UNREACHABLE 로 막는다
   httpStatus: (url) => {

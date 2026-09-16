@@ -212,6 +212,22 @@ launchctl print gui/$(id -u)/com.soransoran.magazine-auto-register | head -20
    11:00 은 "**이제 나왔는가**"(본문·이미지·목록 전부 200/노출) — 공개가 됐는지.
    앞의 것만 있으면, 글이 끝내 안 나온 사실을 제일 먼저 아는 사람이 **독자**가 된다.
 
+🔴 **커밋 합산 status 를 배포 확인으로 쓰지 않는다.** 그것은 CI 판정에 쓰는 바로 그 값이라
+   검사가 전부 초록이면 success 가 된다 — **운영 도메인이 아직 옛 빌드를 서빙해도 success 다.**
+   대신 세 가지를 따로 본다.
+
+   | 보는 것 | 어디서 |
+   |---|---|
+   | Production 배포가 **그 SHA 로** 있는가 | GitHub Deployments API (`?sha=&environment=Production`) |
+   | 그 배포가 **READY 인가** | 그 deployment 의 status = `success` |
+   | **운영 도메인이 그 배포를 서빙 중인가** | `soransoran.com` HTML 의 `dpl_<id>` 표식 |
+
+   마지막 줄이 핵심이다. 앞의 둘만 보면 "배포는 됐는데 도메인은 구버전" 을 못 본다.
+   Vercel 이 `next/image` URL 에 `dpl=dpl_<id>` 를 심고, 같은 id 가 그 커밋의 Vercel
+   status `target_url` 끝에 들어간다 — 두 값을 맞추면 추측 없이 알 수 있다.
+   🔴 **새 토큰도 과금도 없다.** 이미 쓰고 있는 `gh` 읽기 권한과 공개 페이지 GET 뿐이다.
+   🔴 표식을 못 읽으면 `PRODUCTION_UNVERIFIED` 로 **막는다** — 모르면 통과가 아니다.
+
 🔴 **404 만이 "안 나갔다" 를 확인한 것이다.** 500·인증 리다이렉트·네트워크 실패는
    비공개 확인이 아니라 **확인 실패**다 — 즉 배포가 망가진 날 자동 병합이
    가장 자신 있게 초록을 보고하는 일을 만들지 않는다.

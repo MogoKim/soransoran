@@ -36,20 +36,57 @@ export const MERGE_RISK = new Set(['LOW', 'MEDIUM'])
  */
 export const REQUIRED_CHECKS = ['Micro Seed 3축 게이트']
 
+/** 검사가 "끝났고 괜찮다" 로 인정되는 결론 */
+export const OK_CONCLUSIONS = ['success', 'skipped', 'neutral']
+
 /**
  * 자동 PR 이 바꿔도 되는 파일.
  *
  * 🔴 **목록이 아니라 모양으로 본다.** slug 는 회차마다 다르다.
  *    그러나 **경로의 모양**은 고정이다 — 그 밖의 파일이 하나라도 있으면 막는다.
  */
-export const ALLOWED_FILE_PATTERNS = [
-  /^src\/content\/magazine\/articles\.ts$/,
-  /^drafts\/magazine\/topic-queue\.ts$/,
-  /^drafts\/magazine\/[a-z0-9-]+\/(draft\.md|article-draft\.ts|brief\.md|review\.ts)$/,
-  /^public\/magazine\/[a-z0-9-]+\/hero\.webp$/,
+/**
+ * 🔴 **모양만으로는 모자라다** (2026-09-16 재검토).
+ *
+ *    `drafts/magazine/<아무 slug>/draft.md` 는 모양이 맞다. 그래서 이 회차가
+ *    등록하지도 않은 **다른 글의 원고나 hero 를 고치거나 지워도** 통과했다.
+ *    자동 레인이 건드려도 되는 것은 **이번에 등록하는 slug 의 파일뿐**이다.
+ *
+ *    그래서 slug 를 잡아내고, 등록분 목록과 대조한다.
+ */
+export const ALLOWED_FILE_RULES = [
+  { re: /^src\/content\/magazine\/articles\.ts$/, slugGroup: 0 },
+  { re: /^drafts\/magazine\/topic-queue\.ts$/, slugGroup: 0 },
+  { re: /^drafts\/magazine\/([a-z0-9-]+)\/(draft\.md|article-draft\.ts|brief\.md|review\.ts)$/, slugGroup: 1 },
+  { re: /^public\/magazine\/([a-z0-9-]+)\/hero\.webp$/, slugGroup: 1 },
 ]
 
-export const isAllowedFile = (path) => ALLOWED_FILE_PATTERNS.some((re) => re.test(path))
+/** 옛 이름 — 모양만 본다. 실제 판정은 `judgeFile` 을 쓴다 */
+export const ALLOWED_FILE_PATTERNS = ALLOWED_FILE_RULES.map((r) => r.re)
+
+/**
+ * 이 파일을 자동 레인이 건드려도 되는가.
+ *
+ * @param {string} path
+ * @param {Set<string>|null} slugs  이번 회차가 등록하는 slug. null 이면 모양만 본다
+ * @returns {{ok:boolean, code?:string, slug?:string}}
+ */
+export function judgeFile(path, slugs = null) {
+  for (const rule of ALLOWED_FILE_RULES) {
+    const m = rule.re.exec(path)
+    if (!m) continue
+    if (rule.slugGroup === 0) return { ok: true }
+    const slug = m[rule.slugGroup]
+    // 🔴 등록분이 아니면 막는다 — 남의 글을 고치거나 지우는 통로를 열지 않는다
+    // 🔴 Set 일 때만 대조한다. `files.every(isAllowedFile)` 처럼 인덱스가 딸려 들어오는
+    //    호출에서 엉뚱한 값을 slug 목록으로 오인하지 않는다.
+    if (slugs instanceof Set && !slugs.has(slug)) return { ok: false, code: 'FOREIGN_SLUG_FILE', slug }
+    return { ok: true }
+  }
+  return { ok: false, code: 'UNEXPECTED_FILES' }
+}
+
+export const isAllowedFile = (path, slugs = null) => judgeFile(path, slugs).ok
 
 /**
  * 이 PR 을 자동으로 merge 해도 되는가.
@@ -68,6 +105,19 @@ export const isAllowedFile = (path) => ALLOWED_FILE_PATTERNS.some((re) => re.tes
  * @param {number} p.now                  판정 시각 (ms)
  * @returns {{ok:boolean, blockedBy:{code:string,message:string}[], checked:string[]}}
  */
+/**
+ * 키 순서에 흔들리지 않는 비교용 직렬화.
+ * 🔴 사람이 필드 순서만 바꿔 적은 것을 "내용이 바뀌었다" 로 보고하면 알림이 시끄러워지고,
+ *    시끄러운 알림은 곧 읽히지 않는 알림이 된다.
+ */
+function stableJson(v) {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v)
+}
+
 export function judgeAutoMerge({
   pr, expectedSha, files, ciState, checks = [],
   registered, queueBySlug, branchQueueBySlug = null, mainSlugs, mainDates, now,
@@ -102,12 +152,24 @@ export function judgeAutoMerge({
     block('SHA_DRIFTED', `HEAD 가 ${String(pr.headRefOid).slice(0, 7)} 로 바뀌었다 — 검증한 것은 ${String(expectedSha).slice(0, 7)} 다`)
   } else pass('SHA 일치')
 
-  // ── ③ 변경 파일 ──────────────────────────────────────────
-  const unexpected = (files ?? []).filter((f) => !isAllowedFile(f))
+  // ── ③ 변경 파일 — 🔴 **이번 등록분 slug 와 연결해서** 본다 ──
+  const registeredSlugSet = new Set((registered ?? []).map((r) => r.slug))
+  const verdicts = (files ?? []).map((f) => ({ path: f, v: judgeFile(f, registeredSlugSet) }))
+  const foreign = verdicts.filter((x) => x.v.code === 'FOREIGN_SLUG_FILE')
+  const unexpected = verdicts.filter((x) => x.v.code === 'UNEXPECTED_FILES')
   if ((files ?? []).length === 0) block('NO_FILES', '변경 파일이 없다')
-  else if (unexpected.length > 0) {
-    block('UNEXPECTED_FILES', `자동 레인이 건드릴 수 없는 파일이 있다: ${unexpected.join(', ')}`)
-  } else pass(`변경 파일 ${files.length}개 전부 허용 모양`)
+  else {
+    if (unexpected.length > 0) {
+      block('UNEXPECTED_FILES', `자동 레인이 건드릴 수 없는 파일이 있다: ${unexpected.map((x) => x.path).join(', ')}`)
+    }
+    // 🔴 등록하지도 않은 글의 원고·hero 를 고치거나 지우는 것은 자동 레인의 일이 아니다
+    if (foreign.length > 0) {
+      block('FOREIGN_SLUG_FILE', `이번에 등록하지 않는 글의 파일을 건드렸다: ${foreign.map((x) => `${x.path}(${x.v.slug})`).join(', ')}`)
+    }
+    if (unexpected.length === 0 && foreign.length === 0) {
+      pass(`변경 파일 ${files.length}개 — 전부 허용 모양이고 등록분 ${registeredSlugSet.size}건에 대응`)
+    }
+  }
 
   // ── ④ CI ────────────────────────────────────────────────
   if (ciState !== 'success') block('CI_NOT_GREEN', `CI 상태가 ${ciState} 다`)
@@ -119,7 +181,7 @@ export function judgeAutoMerge({
   if (!Array.isArray(checks) || checks.length === 0) {
     block('CHECKS_EMPTY', '검사 목록이 비었다 — 조회에 실패했거나 아직 등록되지 않았다 (확정할 수 없으면 막는다)')
   } else {
-    const badChecks = checks.filter((c) => c.status === 'completed' && !['success', 'skipped', 'neutral'].includes(c.conclusion ?? ''))
+    const badChecks = checks.filter((c) => c.status === 'completed' && !OK_CONCLUSIONS.includes(c.conclusion ?? ''))
     const pendingChecks = checks.filter((c) => c.status !== 'completed')
     if (badChecks.length > 0) block('CHECK_FAILED', `실패한 검사: ${badChecks.map((c) => c.name).join(', ')}`)
     else if (pendingChecks.length > 0) block('CHECK_PENDING', `아직 도는 검사: ${pendingChecks.map((c) => c.name).join(', ')}`)
@@ -128,7 +190,7 @@ export function judgeAutoMerge({
     const byName = new Map(checks.map((c) => [c.name, c]))
     const missing = REQUIRED_CHECKS.filter((n) => {
       const c = byName.get(n)
-      return !c || c.status !== 'completed' || !['success', 'skipped', 'neutral'].includes(c.conclusion ?? '')
+      return !c || c.status !== 'completed' || !OK_CONCLUSIONS.includes(c.conclusion ?? '')
     })
     if (missing.length > 0) block('REQUIRED_CHECK_MISSING', `필수 검사가 완료·성공이 아니다: ${missing.join(', ')}`)
     else pass(`검사 ${checks.length}개 완료 (필수 ${REQUIRED_CHECKS.length}개 포함)`)
@@ -153,6 +215,11 @@ export function judgeAutoMerge({
       if (!base) { block('QUEUE_ADDED', `PR 이 큐에 ${slug} 를 더했다 — 자동 레인은 큐에 항목을 추가하지 않는다`); continue }
       if (item.riskLevel !== base.riskLevel || item.autoEligible !== base.autoEligible) {
         block('QUEUE_GRADE_CHANGED', `PR 이 ${slug} 의 등급·자격을 바꿨다 (${base.riskLevel}/${base.autoEligible} → ${item.riskLevel}/${item.autoEligible})`)
+      } else if (stableJson(item) !== stableJson(base)) {
+        // 🔴 **등급만 보는 것으로는 모자라다** (2026-09-16 재검토).
+        //    제목·imageMode·메모 같은 다른 필드가 바뀌어도 자동 레인이 할 일이 아니다.
+        //    남은 항목은 **한 글자도** 그대로여야 한다.
+        block('QUEUE_ITEM_CHANGED', `PR 이 ${slug} 의 다른 필드를 바꿨다 — 남은 큐 항목은 그대로여야 한다`)
       }
     }
     const removed = Object.keys(queueBySlug ?? {}).filter((s) => !(s in branchQueueBySlug))
