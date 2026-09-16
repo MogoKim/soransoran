@@ -502,4 +502,9 @@ function main() {
   process.exit(0)
 }
 
-main()
+/**
+ * 🔴 **직접 실행할 때만 돈다.** 이 파일은 파일을 쓴다 —
+ *    판정 함수를 빌리려고 import 한 쪽이 실제 회차를 돌리면 안 된다.
+ *    (2026-09-15: magazine-producer-plan.mjs 가 그 상태로 _runs 를 통째로 만들었다)
+ */
+if (process.argv[1] && process.argv[1].endsWith('magazine-packet.mjs')) main()

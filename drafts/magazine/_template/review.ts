@@ -69,6 +69,28 @@ export type ReviewData = {
    */
   forbiddenPatterns?: string[]
 
+  /**
+   * 대표 이미지에 쓸 대체 텍스트와 장면. **`imageMode: 'REQUIRED'` 면 반드시 적는다.**
+   *
+   * 왜 여기 있는가
+   *   자동 레인은 alt 를 스스로 지어내지 않는다 — 화면에 무엇이 보이는지는
+   *   사람이 판단할 일이다. 그런데 그 판단을 적어 둘 자리가 없어서,
+   *   `imageMode=REQUIRED` 인 글은 자동 레인에서 **언제나** HERO_ALT_REQUIRED 로 막혔다
+   *   (2026-09-15 진단). 검수 데이터가 그 자리다.
+   *
+   *   alt   스크린리더가 읽는다. "{장소·행동} 여성" 형태로 끝낸다 (등록분 17건이 전부 그 형태다)
+   *   scene 이미지 생성 프롬프트에 들어갈 장면. 생략하면 cluster 기본 장면을 쓴다
+   *
+   * 🔴 alt 에 "시니어·어르신·노인·실버" 를 쓰지 않는다 — 본문과 같은 금지 호칭이다.
+   * 🔴 scene 에 병원·가운·약·눈물 같은 표현을 쓰지 않는다.
+   *    프롬프트의 금지 목록과 정면으로 다투게 된다.
+   * 🔴 이 값이 있다고 HIGH 나 autoEligible=false 가 통과하지 않는다. 등급 게이트는 그대로다.
+   */
+  hero?: {
+    alt: string
+    scene?: string
+  }
+
   /** YYYY-MM-DD */
   preparedAt: string
 
@@ -118,6 +140,12 @@ export const REVIEW: ReviewData = {
 
   // 이 주제에서만 위험한 표현. 해당 없으면 이 줄을 지운다.
   forbiddenPatterns: ['이 주제에서 쓰면 안 되는 진단명', '단정으로 읽히는 표현'],
+
+  // imageMode 가 REQUIRED 면 반드시 적는다. OPTIONAL·NO_IMAGE 면 이 블록을 지운다.
+  hero: {
+    alt: '창가에 앉아 잠시 바깥을 바라보는 50대 한국 여성',
+    scene: '집 거실 창가에 앉아 머그잔을 들고 바깥을 바라보는 낮 시간',
+  },
 
   preparedAt: '2026-08-24',
   preparedBy: 'Claude 채팅',

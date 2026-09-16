@@ -16,9 +16,10 @@
  *    import 가 아니라 자식 프로세스로 띄운다 — producer 가 죽어도 이 래퍼는 살아서
  *    "죽었다"는 사실을 알릴 수 있어야 한다.
  *
- * 🔴 Slack 이 안 돼도 producer 는 성공으로 남는다.
- *    알림은 부가 기능이다. 알림 하나 때문에 launchd 가 실패로 기록되면
- *    다음 날 판단이 흐려진다. notify 의 종료 코드는 이 래퍼의 결과에 반영하지 않는다.
+ * 🔴 Slack 은 회차 판정을 바꾸지 않는다 — **양방향으로**.
+ *    알림 하나 때문에 launchd 가 실패로 기록되면 다음 날 판단이 흐려진다.
+ *    반대로 **알림이 실패했다고 원래 실패가 성공이 되지도 않는다.**
+ *    notify 의 종료 코드는 판정에 넣지 않되, 실패 회차에서도 **반드시 시도한다.**
  *
  * 🔴 secret 을 다루지 않는다.
  *    webhook 은 notify 가 ~/.config/soransoran/slack.env 에서 직접 읽는다.
@@ -28,11 +29,31 @@
  *   node scripts/magazine-producer-run.mjs            producer + brief 생성 + 원고 회수 + 알림
  *   node scripts/magazine-producer-run.mjs --dry-run  producer 실행 없이 판정만 (발송 0)
  *
- * 종료 코드: producer 의 종료 코드를 그대로 넘긴다 (launchd last exit code 가 의미를 갖도록)
+ * 🔴 **종료 코드는 회차 전체의 판정이다** (2026-09-16 P0-2).
+ *
+ *    옛 판은 `planCode` 만 돌려줬다. brief 생성 실패와 원고 회수 실패를 **삼켰다.**
+ *    그래서 ChatGPT 로그인이 만료돼 원고를 한 건도 못 받아도 exit 0 이었고,
+ *    `launchctl print` 의 last exit status 만 보는 사람은 그것을 정상으로 읽었다.
+ *
+ *    지금은 plan · brief · fetch 의 결과를 각각 보존해
+ *    `lib/magazine-producer-exit.mjs` 가 판정한다.
+ *      0  정상 — 일부 slug 가 게이트에 막힌 것은 정상이다(CONTENT)
+ *      0  HOLD — 미해결 자동 PR 을 기다리는 중. 실패가 아니다
+ *      1  SYSTEM — 프로세스를 못 띄움 · 사용법 오류 · 회수기 전역 실패(ChatGPT·브라우저)
+ *
+ * 🔴 **미해결 자동 PR 이 있으면 아무것도 시작하지 않는다** (P0-1).
+ *    PR 이 merge 되기 전에 다음 회차가 돌면 같은 slug 를 다시 선정하고
+ *    같은 예약 슬롯으로 중복 PR 을 만든다 — main 의 articles.ts 에는 아직 없기 때문이다.
+ *    판정은 `lib/magazine-outstanding.mjs` 에 있고 auto-register 와 **같은 함수**를 쓴다.
  */
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
+import { readOutstanding } from './lib/magazine-outstanding.mjs'
+import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
+import { buildMessage, send } from './lib/slack-notify.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -58,76 +79,66 @@ function kstDate() {
 
 const dryRun = process.argv.includes('--dry-run')
 
+/** 판정에 쓰는 읽기 전용 실행기. stdout 을 잡아서 돌려준다 */
+const exec = (cmd, args) => {
+  const r = spawnSync(cmd, [...args], { cwd: ROOT, encoding: 'utf8' })
+  if (r.error) return { code: 1, out: '', err: String(r.error.message ?? r.error) }
+  return { code: r.status ?? 1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() }
+}
+
+/** 자식 한 벌을 띄우고 **결과를 삼키지 않고** 돌려준다 */
+const spawnStage = (args) => {
+  const r = spawnSync(NODE, args, { cwd: ROOT, stdio: 'inherit' })
+  return { spawnError: r.error ? (r.error.code ?? r.error.name) : null, status: r.status ?? null }
+}
+
+/**
+ * 🔴 **알림은 여기 하나뿐이다.** `runProducerFlow` 의 finalize 가 한 번만 부른다.
+ *
+ *    두 갈래로 나뉜다.
+ *      정상 회차   `magazine-producer-notify.mjs` 에 맡긴다 — run.json 을 읽어 판단한다
+ *      중단 회차   run.json 이 아예 없다(plan 을 돌리지 않았다). 그래서 **직접 문구를 만들어** 보낸다
+ *
+ *    🔴 중단 회차를 notify 자식에게 맡기면 "run.json 이 없다" 만 말하게 된다.
+ *       창업자가 알아야 하는 것은 **어느 PR 을 merge 해야 하는가** 다.
+ */
+async function notifyOnce({ verdict, outstanding, preflight: pf, dryRun: isDry }) {
+  const interrupted = Boolean((outstanding && !outstanding.ok) || (pf && !pf.ok))
+
+  if (!interrupted) {
+    const r = spawnSync(NODE, [NOTIFY, isDry ? '--dry-run' : '--send'], { cwd: ROOT, stdio: 'inherit' })
+    if (r.error) return { ok: false, reason: `notify 실행 실패 (${r.error.code ?? r.error.name})` }
+    line(r.status === 1 ? '알릴 것이 있었다' : '알릴 것 없음')
+    return { ok: true }
+  }
+
+  // 🔴 중단 회차 — PR 번호·URL 이 반드시 들어간다
+  const msg = buildMessage(composeProducerMessage({ verdict, outstanding, preflight: pf }))
+  // 🔴 dry-run 은 실제로 보내지 않는다
+  const sent = await send(msg, { dryRun: isDry })
+  line(sent.sent ? 'Slack 발송' : `Slack 미발송 — ${sent.reason}`)
+  return { ok: sent.sent || isDry, reason: sent.reason }
+}
+
 line(`매거진 producer 시작${dryRun ? ' (dry-run)' : ''}`)
 
-// ── 1) producer ────────────────────────────────────────────
-let planCode = 0
-if (dryRun) {
-  line('dry-run — producer 를 실행하지 않는다')
-} else {
-  const plan = spawnSync(NODE, [PLAN], { cwd: ROOT, stdio: 'inherit' })
-  planCode = plan.status ?? 1
-  if (plan.error) {
-    line(`producer 실행 자체가 실패했다: ${plan.error.code ?? plan.error.name}`)
-    planCode = 1
-  }
-  line(`producer 종료 코드 ${planCode}`)
-}
+const result = await runProducerFlow({
+  dryRun,
+  deps: {
+    log: line,
+    // 🔴 gh 가 없으면 미해결 판정을 할 수 없다. "없다" 가 아니라 "모른다" 이므로 멈춘다.
+    checkTools: () => preflightTools({ exec }),
+    // 🔴 producer 는 drafts/magazine/{slug}/ 에 **추적 파일**을 쓴다.
+    checkGit: () => preflight({ exec }),
+    checkOutstanding: () => readOutstanding({ exec }),
+    runPlan: () => spawnStage([PLAN]),
+    runBrief: () => spawnStage([BRIEF_AUTO, '--run', kstDate(), '--write']),
+    runFetch: () => spawnStage([WEBUI, '--fetch-run']),
+    notify: notifyOnce,
+  },
+})
 
-// ── 2) brief 생성 ──────────────────────────────────────────
-// 🔴 fetch 앞이다. brief.md 가 없으면 회수기가 brief_missing 으로 건너뛴다 —
-//    2026-08-26 첫 무인 실행이 선정 3건 전부 그렇게 멈췄다.
-//
-// 🔴 실패해도 삼킨다. 게이트를 통과한 건만 파일이 되고, 나머지는 그대로 없는 상태다.
-//    회수기가 알아서 건너뛰고 notify 가 brief_missing 으로 알린다.
-//    여기서 멈추면 이미 brief 가 있던 slug 의 원고까지 못 받는다.
-//
-// 🔴 --write 를 여기서 준다. 기본은 dry-run 이라 명시하지 않으면 아무것도 쓰지 않는다.
-if (dryRun) {
-  line('dry-run — brief 생성을 실행하지 않는다')
-} else if (planCode !== 0) {
-  line('producer 가 실패해 brief 생성을 건너뛴다')
-} else {
-  const briefAuto = spawnSync(NODE, [BRIEF_AUTO, '--run', kstDate(), '--write'], {
-    cwd: ROOT,
-    stdio: 'inherit',
-  })
-  if (briefAuto.error) {
-    line(`brief 생성 실행 실패 — 무시한다 (${briefAuto.error.code ?? briefAuto.error.name})`)
-  } else {
-    line(briefAuto.status === 0 ? 'brief 생성 완료' : 'brief 생성에 실패한 건이 있다 (Slack 이 알린다)')
-  }
-}
-
-// ── 3) 원고 회수 ───────────────────────────────────────────
-// producer 가 고른 것들의 원고를 받는다. Chrome 이 없으면 --auto-start 가 띄운다.
-// 🔴 producer 가 실패했으면 건너뛴다 — 선정 결과가 없으면 받을 대상도 없다.
-// 🔴 실패해도 삼킨다. 재고 계산은 이미 끝났고, 알림이 나가야 창업자가 원인을 안다.
-if (dryRun) {
-  line('dry-run — 원고 회수를 실행하지 않는다')
-} else if (planCode !== 0) {
-  line('producer 가 실패해 원고 회수를 건너뛴다')
-} else {
-  const fetchRun = spawnSync(NODE, [WEBUI, '--fetch-run'], { cwd: ROOT, stdio: 'inherit' })
-  if (fetchRun.error) {
-    line(`원고 회수 실행 실패 — 무시한다 (${fetchRun.error.code ?? fetchRun.error.name})`)
-  } else {
-    line(fetchRun.status === 0 ? '원고 회수 완료' : '원고 회수 중단 — 전역 실패 (Slack 이 알린다)')
-  }
-}
-
-// ── 4) notify ──────────────────────────────────────────────
-// producer 가 죽었어도 돌린다 — run.json 이 없으면 notify 가 "실행되지 않았다"로 잡는다.
-const notifyArgs = [NOTIFY, dryRun ? '--dry-run' : '--send']
-const notify = spawnSync(NODE, notifyArgs, { cwd: ROOT, stdio: 'inherit' })
-
-if (notify.error) {
-  // 🔴 삼킨다. 알림이 안 갔다고 producer 를 실패로 만들지 않는다.
-  line(`알림 단계 실행 실패 — 무시한다 (${notify.error.code ?? notify.error.name})`)
-} else {
-  // notify 는 알림 대상이 있으면 1 로 끝난다. 그것은 실패가 아니다.
-  line(notify.status === 1 ? '알릴 것이 있었다' : '알릴 것 없음')
-}
-
-line(`종료 (코드 ${planCode})`)
-process.exit(planCode)
+if (result.failures?.length) for (const f of result.failures) line(`🔴 ${f}`)
+line(`판정: ${result.verdict} — ${result.reason}`)
+line(`종료 (코드 ${result.code})`)
+process.exit(result.code)

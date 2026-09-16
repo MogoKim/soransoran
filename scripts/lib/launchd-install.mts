@@ -30,6 +30,16 @@ export type RenderVars = {
   repo: string
   nodebin: string
   logdir: string
+  /**
+   * 🔴 템플릿마다 더 필요한 치환 — 키는 `__NAME__` 형태 그대로 적는다.
+   *
+   *    매거진 레인이 `__PATH__` · `__HOME__` 을 쓴다. PATH 조각을 여러 placeholder 로
+   *    쪼개지 않고 **완성된 한 줄**로 넘긴다 — 조각으로 두면 설치기마다 순서가 달라지고,
+   *    `gh` 가 빠진 PATH 가 한 벌 더 생긴다(2026-09-15 장애의 한 축).
+   *
+   *    D100 배포기는 이 값을 쓰지 않는다. 비어 있으면 동작이 예전과 같다.
+   */
+  extra?: Readonly<Record<string, string>>
 }
 
 export const templateFileOf = (label: string): string => `${label}.plist.template`
@@ -39,12 +49,14 @@ export const plistFileOf = (label: string): string => `${label}.plist`
 
 /** 🔴 렌더링 — 설치 절차와 **같은 치환**이어야 의미가 있다 */
 export function render(xml: string, v: RenderVars): string {
-  return xml
+  let out = xml
     .replaceAll('__NPX__', v.npx)
     .replaceAll('__NODE__', v.node)
     .replaceAll('__REPO__', v.repo)
     .replaceAll('__NODEBIN__', v.nodebin)
     .replaceAll('__LOGDIR__', v.logdir)
+  for (const [key, value] of Object.entries(v.extra ?? {})) out = out.replaceAll(key, value)
+  return out
 }
 
 /** 치환하고도 남은 placeholder — 🔴 하나라도 남으면 launchd 가 그 경로를 찾지 못한다 */

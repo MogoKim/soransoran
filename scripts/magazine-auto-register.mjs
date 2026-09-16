@@ -36,6 +36,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadQueue } from './lib/magazine-load.mjs'
 import { gate, progress, heroPlan, paths } from './lib/magazine-auto-lane.mjs'
+import { resolveHeroBrief } from './lib/magazine-hero-brief.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -134,21 +135,36 @@ export function drive(slug, opts) {
 
   // ── ⑤ hero (REQUIRED) ─────────────────────────────────────
   // batch-qa 앞에 둔다. hero 가 없으면 batch-qa 가 HERO_MISSING 으로 막기 때문이다.
-  const hp = heroPlan(item, { alt, allowOptional })
+  //
+  // 🔴 **alt 는 review.ts 에서 온다** (2026-09-15 복구).
+  //    옛 판은 호출부가 `alt: null` 을 고정으로 넘겨 `imageMode=REQUIRED` 인 글이
+  //    구조적으로 언제나 HERO_ALT_REQUIRED 로 막혔다. alt 를 자동으로 **지어내지는 않는다** —
+  //    검수 단계에서 사람이 적어 둔 값을 읽을 뿐이다(lib/magazine-hero-brief.mjs).
+  //    `--alt` 를 직접 준 경우에는 그쪽이 이긴다. 사람이 그 자리에 서 있다는 뜻이다.
+  let heroBrief = { ok: true, alt: null, scene: null, reasons: [] }
+  if (!alt) heroBrief = resolveHeroBrief(slug)
+  const heroAlt = alt ?? heroBrief.alt
+
+  const hp = heroPlan(item, { alt: heroAlt, allowOptional })
   if (!hp.need) {
     add('hero', 'skip', hp.reason)
+  } else if (!heroAlt && !heroBrief.ok) {
+    // 🔴 "alt 가 없다" 보다 **왜 못 읽었는지**를 말한다. 그래야 사람이 review.ts 를 고친다.
+    return stop('hero', heroBrief.reasons[0]?.code ?? 'HERO_ALT_REQUIRED', heroBrief.reasons.map((r) => r.why).join(' · '))
   } else if (hp.blocked) {
     return stop('hero', hp.blocked.code, hp.blocked.message)
   } else if (!write) {
-    add('hero', 'skip', 'dry-run — hero 를 만들지 않는다')
+    add('hero', 'skip', `dry-run — hero 를 만들지 않는다 (alt 확보: ${alt ? '--alt' : 'review.ts'})`)
   } else {
     const args = ['--slug', slug, '--alt', hp.alt, '--write']
+    // 🔴 scene 은 선택이다. 없으면 hero runner 가 cluster 기본 장면을 고른다.
+    if (heroBrief.scene) args.push('--prompt', heroBrief.scene)
     if (hp.mode === 'OPTIONAL') args.push('--allow-optional')
     const r = run(HERO, args)
     if (r.code !== 0) {
       return stop('hero', 'HERO_FAILED', (r.stderr || r.stdout).trim().split('\n').slice(-2).join(' '))
     }
-    add('hero', 'ok', `hero 생성 (${hp.mode})`)
+    add('hero', 'ok', `hero 생성 (${hp.mode}${heroBrief.scene ? ' · review scene' : ' · 기본 장면'})`)
   }
 
   // ── ⑥ batch-qa ────────────────────────────────────────────
