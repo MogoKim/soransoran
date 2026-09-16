@@ -139,6 +139,8 @@ export function writePreflight({ exec }) {
   return { ok: true, stage: null, blockedBy: [], tools: tools.found, git }
 }
 
+import { AUTO_BRANCH_PREFIX, isAutoBranch } from './magazine-outstanding.mjs'
+
 // ─────────────────────────────────────────────────────────
 // 브랜치 이름
 // ─────────────────────────────────────────────────────────
@@ -148,7 +150,9 @@ export function branchName(now = Date.now()) {
   const kst = new Date(now + 9 * 3600 * 1000).toISOString()
   const date = kst.slice(0, 10)
   const hhmmss = kst.slice(11, 19).replace(/:/g, '')
-  return `feat/magazine-auto-register-${date}-${hhmmss}`
+  // 🔴 접두는 `magazine-outstanding.mjs` 의 AUTO_BRANCH_PREFIX 와 같아야 한다.
+  //    갈라지면 자기가 만든 브랜치를 자기가 못 알아본다.
+  return `${AUTO_BRANCH_PREFIX}${date}-${hhmmss}`
 }
 
 // ─────────────────────────────────────────────────────────
@@ -357,6 +361,43 @@ export function returnToMain({ exec }) {
       code: 'RETURN_MISMATCH',
       message: `복귀가 확인되지 않는다 (현재 ${after.out.trim() || '?'})`,
       leftOnBranch: current,
+    }
+  }
+
+  /**
+   * 🔴 **빈 브랜치는 우리가 치운다** (2026-09-16 supervised 실측).
+   *
+   *    후보가 전부 QA 에 막히면 register 가 아무것도 쓰지 않는다. 그런데 PR 브랜치는
+   *    register **앞에서** 만들어지므로, 커밋이 하나도 없는 브랜치가 남는다.
+   *    그 브랜치를 다음 회차의 `judgeOutstanding` 이 `ORPHAN_LOCAL_BRANCH`(FAILURE)로
+   *    본다 — **"오늘 통과한 후보가 없다" 는 정상 결과가 다음 날 회차를 막는다.**
+   *    실제로 2026-09-16 supervised 회차가 그 브랜치를 남겼고, 그대로 두면
+   *    그날 01:00 회차가 시작하지 못한다.
+   *
+   * 🔴 **커밋이 0건일 때만 지운다.** 하나라도 있으면 남긴다 —
+   *    그것은 "push 가 실패한 회차" 이고, 원고가 그 안에 있을 수 있다.
+   *    ORPHAN_LOCAL_BRANCH 가 잡아야 하는 것은 바로 그 경우다.
+   * 🔴 방금 이 회차가 만든 브랜치만 지운다. 이름이 자동 레인 모양이 아니면 건드리지 않는다.
+   */
+  if (isAutoBranch(current)) {
+    const ahead = exec('git', ['rev-list', '--count', `main..${current}`])
+    if (ahead.code === 0 && ahead.out.trim() === '0') {
+      const del = exec('git', ['branch', '-D', current])
+      if (del.code === 0) {
+        return {
+          ok: true,
+          code: 'RETURNED_EMPTY_CLEANED',
+          message: `main 으로 복귀했다 (빈 작업 브랜치 ${current} 는 지웠다 — 커밋 0건)`,
+          leftOnBranch: null,
+        }
+      }
+      // 🔴 못 지워도 회차 판정을 바꾸지 않는다. 다음 회차가 ORPHAN 으로 잡아 준다.
+      return {
+        ok: true,
+        code: 'RETURNED',
+        message: `main 으로 복귀했다 (빈 브랜치 ${current} 를 지우지 못했다 — 다음 회차가 막힐 수 있다)`,
+        leftOnBranch: null,
+      }
     }
   }
 
