@@ -67,7 +67,7 @@ function exec(cmd, args) {
 }
 
 /** 이미 잡힌 날짜. register.mjs 와 같은 규칙으로 읽는다 */
-function takenDates() {
+export function takenDates() {
   const taken = new Set()
   for (const a of loadArticles()) {
     const iso = a.publishAt ?? (a.publishedAt ? `${a.publishedAt}T10:30:00+09:00` : null)
@@ -103,9 +103,26 @@ function kstDateAfter(date) {
  *
  * 🔴 여기서 고른 날짜가 틀려도 안전하다 — register 가 슬롯을 다시 보고 BLOCKED 를 낸다.
  *    그러나 "안전하다" 와 "재고를 낭비하지 않는다" 는 다른 이야기다.
+ *
+ * 🔴 **점유 날짜를 주입할 수 있다** (2026-09-16 회귀 보정).
+ *
+ *    운영은 그대로 `takenDates()` 를 읽는다 — 기본값을 바꾸지 않는다.
+ *    바뀐 것은 테스트가 **자기 fixture 를 넘길 수 있다**는 것뿐이다.
+ *
+ *    왜 필요한가: 회귀 테스트가 실제 `articles.ts` 를 읽으면서 기대값을 9/18 로
+ *    하드코딩했다. #524 가 merge 되어 9/18 이 차는 순간 **13건이 무더기로 깨졌다.**
+ *    로직은 멀쩡한데 테스트만 깨진 것이다 — 재고는 매일 바뀌므로 그 테스트는
+ *    **내일도 모레도 깨진다.** 날짜를 시험하려면 날짜를 고정해야 한다.
+ *
+ * 🔴 넘겨받은 Set 을 **복사**한다. 그러지 않으면 한 테스트의 commit 이
+ *    다음 테스트의 fixture 를 오염시킨다.
+ *
+ * @param {string} from  이 날짜부터 훑는다 (YYYY-MM-DD)
+ * @param {{taken?: Set<string>|Iterable<string>|(() => Iterable<string>)}} [opts]
  */
-export function slotAllocator(from) {
-  const taken = takenDates()
+export function slotAllocator(from, { taken: takenInput } = {}) {
+  const source = typeof takenInput === 'function' ? takenInput() : takenInput
+  const taken = new Set(source ?? takenDates())
   let cursor = from
 
   /** 지금 비어 있는 첫 날. **소비하지 않는다** — 몇 번을 불러도 같은 값이다 */
