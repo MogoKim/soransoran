@@ -185,8 +185,15 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *      ① 무거우면 `if: steps.scope.outputs.heavy` 뒤로 보낸다 (상한을 안 쓴다)
  *      ② 가벼우면 실제로 재고 이 숫자를 **손으로** 올린다
  *    "일단 올리고 나중에 본다" 를 막으려고 헤드룸을 두지 않는다.
+ *
+ * 🔴 64 → 66 (2026-09-16). 매거진 자동 PR 레인 게이트 2 개를 무조건 실행으로 더했다.
+ *    실측: `magazine:auto-check` 142ms · `chatgpt:session-check` 110ms.
+ *    둘 다 DB·네트워크·브라우저·write 가 없는 순수 판정이라 경로 조건 뒤로 보내지 않는다 —
+ *    그 레인은 무인으로 articles.ts 를 고치고 PR 을 열고, **매거진 파일을 건드리지 않는
+ *    PR 도 articles.ts 재고를 바꿔** 그 게이트를 깨뜨릴 수 있다.
+ *    실제로 #524 merge 뒤 13 건이 깨졌는데 CI 에 없어 아무도 몰랐다.
  */
-const MAX_UNCONDITIONAL_STEPS = 64
+const MAX_UNCONDITIONAL_STEPS = 66
 
 let total = 0
 let gated = 0

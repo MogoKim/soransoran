@@ -578,91 +578,81 @@ expect(
   true,
 )
 
-console.log('\n══════ P0-1 슬롯 — merge 된 뒤에는 다음 빈 10:30 KST 로 간다')
+console.log('\n══════ P0-1 슬롯 — 고정 fixture 로 시험한다 (실제 재고와 무관)')
 /**
- * 🔴 Day 1 PR 이 merge 되면 main 의 articles.ts 에 그 날짜가 들어간다.
- *    그러면 다음 회차의 슬롯 계산이 **그 날을 건너뛴다.** merge 전에는 건너뛰지 못하고,
- *    그래서 HOLD 로 아예 시작하지 않는 것이다.
+ * 🔴 **왜 fixture 인가** (2026-09-16 회귀 보정).
+ *
+ *    옛 판은 실제 `articles.ts` 를 읽으면서 기대값을 `2026-09-18` 로 하드코딩했다.
+ *    #524 가 merge 되어 9/18 이 차는 순간 **13건이 무더기로 깨졌다** — 로직은 멀쩡한데.
+ *    재고는 매일 바뀐다. 그 테스트는 내일도 모레도 깨진다.
+ *
+ *    날짜 규칙을 시험하려면 **날짜를 고정**해야 한다. 점유 Set 을 주입한다.
+ *    실제 재고를 쓰는 검사는 아래 `integration` 묶음에서 **동적으로** 계산한다.
  */
-const { slotAllocator, CONSUMES_SLOT } = await import('./magazine-auto-register-ready.mjs')
+const { slotAllocator, CONSUMES_SLOT, takenDates } = await import('./magazine-auto-register-ready.mjs')
 
-// 연속으로 등록되면 하루씩 증가한다 (commit 한 만큼만)
-{
-  const s = slotAllocator('2026-09-18')
-  const picked = [s.commit(), s.commit(), s.commit()]
-  expect('등록되면 하루씩 증가한다', picked, ['2026-09-18', '2026-09-19', '2026-09-20'])
-  expect('같은 날짜를 두 번 주지 않는다', new Set(picked).size, picked.length)
-  expect('날짜는 10:30 KST 로 굳는다', normalizePublishAt(picked[0]).publishAt, '2026-09-18T10:30:00+09:00')
+/** 🔴 9/16·9/17 이 차 있는 고정 상황. 실제 저장소 내용과 무관하다 */
+const TAKEN = ['2026-09-16', '2026-09-17']
+const FROM = '2026-09-16'
+const slots = (taken = TAKEN) => slotAllocator(FROM, { taken })
+/** 판정 나열을 날짜 배정으로 바꾼다 — 호출부와 같은 규칙이다 */
+const assignAll = (verdicts, taken = TAKEN) => {
+  const s = slots(taken)
+  return verdicts.map((v) => { const d = s.peek(); if (CONSUMES_SLOT.has(v)) s.commit(); return d })
 }
-// 실제 재고와 겹치지 않는다 — 9/17 까지 차 있으므로 9/18 부터가 맞다
-expect('이미 찬 날짜는 건너뛴다', slotAllocator('2026-09-10').peek(), '2026-09-18')
+
+expect('점유 상태에서 최초 빈 날짜는 9/18', slots().peek(), '2026-09-18')
+expect('주입한 Set 을 복사한다 (원본 불변)', (() => { const t = new Set(TAKEN); const s = slotAllocator(FROM, { taken: t }); s.commit(); return t.size })(), 2)
+expect('공급자 함수로도 넘길 수 있다', slotAllocator(FROM, { taken: () => TAKEN }).peek(), '2026-09-18')
 
 console.log('\n══════ 🔴 슬롯 버그 — 막힌 후보가 빈 예약일을 태우지 않는다')
 /**
  * 🔴 **실측 버그** (2026-09-16). 옛 판은 부를 때마다 날짜를 **소비**했다.
- *
- *      1) dinner-change-two-weeks  QA_FAIL  → 9/18 소비 🔴
- *      2) after-menopause-body     DONE     → 9/19 배정
- *      3) cold-weather-joint-pain  QA_FAIL  → 9/20 소비 🔴
- *
- *    등록은 하나인데 빈 날짜 셋이 사라졌다. 9/18 이 비어 있는데 성공한 글이 9/19 로 밀렸다.
+ *      BLOCKED → 9/18 소비 · DONE → 9/19 · BLOCKED → 9/20 소비
+ *    등록은 하나인데 빈 날짜 셋이 사라졌다.
  */
-// ① peek 은 소비하지 않는다 — 몇 번을 불러도 같은 값
-{
-  const s = slotAllocator('2026-09-18')
-  expect('peek 은 소비하지 않는다', [s.peek(), s.peek(), s.peek()], ['2026-09-18', '2026-09-18', '2026-09-18'])
-}
-// ② 실제 사고 재현 — 첫 후보가 BLOCKED 면 두 번째가 **같은 최초 빈 날짜**를 받는다
-{
-  const s = slotAllocator('2026-09-18')
-  const assign = (verdict) => { const d = s.peek(); if (CONSUMES_SLOT.has(verdict)) s.commit(); return d }
-  const a = assign('BLOCKED')   // dinner-change-two-weeks
-  const b = assign('DONE')      // after-menopause-body
-  const c = assign('BLOCKED')   // cold-weather-joint-pain
-  expect('🔴 BLOCKED 가 날짜를 태우지 않는다', a, '2026-09-18')
-  expect('🔴 다음 DONE 이 같은 최초 빈 날짜를 받는다', b, '2026-09-18')
-  expect('그 뒤 BLOCKED 도 날짜를 태우지 않는다', c, '2026-09-19')
-  expect('실제로 확정된 날짜는 하나뿐이다', s.peek(), '2026-09-19')
-}
-// ③ BLOCKED 가 연속돼도 날짜가 소모되지 않는다
-{
-  const s = slotAllocator('2026-09-18')
-  const assign = (v) => { const d = s.peek(); if (CONSUMES_SLOT.has(v)) s.commit(); return d }
-  const picked = [assign('BLOCKED'), assign('BLOCKED'), assign('BLOCKED'), assign('DONE')]
-  expect('BLOCKED 가 연속돼도 날짜가 그대로다', picked, ['2026-09-18', '2026-09-18', '2026-09-18', '2026-09-18'])
-  expect('그 다음 빈 날짜는 하루만 전진한다', s.peek(), '2026-09-19')
-}
-// ④ DONE 이 연속되면 중복 없이 하루씩
-{
-  const s = slotAllocator('2026-09-18')
-  const assign = (v) => { const d = s.peek(); if (CONSUMES_SLOT.has(v)) s.commit(); return d }
-  const picked = [assign('DONE'), assign('DONE'), assign('DONE')]
-  expect('DONE 연속은 하루씩 증가', picked, ['2026-09-18', '2026-09-19', '2026-09-20'])
-  expect('중복 0', new Set(picked).size, 3)
-}
-// ⑤ dry-run 과 write 의 배정이 같아야 한다
+expect('peek 은 소비하지 않는다', (() => { const s = slots(); return [s.peek(), s.peek(), s.peek()] })(), ['2026-09-18', '2026-09-18', '2026-09-18'])
+// 실제 사고 재현 — 첫 BLOCKED 뒤 DONE 이 같은 최초 빈 날짜를 받는다
+expect('🔴 첫 BLOCKED 뒤 DONE 이 9/18 을 받는다', assignAll(['BLOCKED', 'DONE', 'BLOCKED']), ['2026-09-18', '2026-09-18', '2026-09-19'])
+expect('🔴 BLOCKED 가 연속돼도 같은 날짜다', assignAll(['BLOCKED', 'BLOCKED', 'BLOCKED', 'DONE']), ['2026-09-18', '2026-09-18', '2026-09-18', '2026-09-18'])
+expect('DONE 연속은 9/18·9/19·9/20', assignAll(['DONE', 'DONE', 'DONE']), ['2026-09-18', '2026-09-19', '2026-09-20'])
+expect('DONE 연속에 중복이 없다', new Set(assignAll(['DONE', 'DONE', 'DONE'])).size, 3)
+expect('이미 찬 날짜는 건너뛴다', assignAll(['DONE'], ['2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19']), ['2026-09-20'])
+// 🔴 from 이 9/16 이므로 9/16·9/17 을 먼저 채우고 그다음 찬 9/18 을 건너뛴다
+expect('띄엄띄엄 찬 날짜도 건너뛴다', assignAll(['DONE', 'DONE', 'DONE'], ['2026-09-18', '2026-09-20']), ['2026-09-16', '2026-09-17', '2026-09-19'])
+expect('항상 10:30 KST 로 굳는다', assignAll(['DONE', 'DONE']).map((d) => normalizePublishAt(d).publishAt), ['2026-09-18T10:30:00+09:00', '2026-09-19T10:30:00+09:00'])
+
+// dry-run / write 배정 일치
 expect('DONE 은 슬롯을 쓴다', CONSUMES_SLOT.has('DONE'), true)
-expect('DRY_RUN_OK 도 슬롯을 쓴다 (dry-run 이 write 와 같은 날짜를 보여야 한다)', CONSUMES_SLOT.has('DRY_RUN_OK'), true)
+expect('DRY_RUN_OK 도 슬롯을 쓴다', CONSUMES_SLOT.has('DRY_RUN_OK'), true)
 expect('🔴 BLOCKED 는 슬롯을 쓰지 않는다', CONSUMES_SLOT.has('BLOCKED'), false)
-expect('DRY_RUN_INCOMPLETE 는 쓰지 않는다 (등록 가능 여부를 아직 모른다)', CONSUMES_SLOT.has('DRY_RUN_INCOMPLETE'), false)
-{
-  // 같은 판정 나열이면 dry-run 과 write 가 **같은 날짜**를 낸다
-  const run = (verdicts) => {
-    const s = slotAllocator('2026-09-18')
-    return verdicts.map((v) => { const d = s.peek(); if (CONSUMES_SLOT.has(v)) s.commit(); return d })
-  }
-  expect('dry-run 배정과 write 배정이 일치한다', run(['BLOCKED', 'DRY_RUN_OK', 'BLOCKED']), run(['BLOCKED', 'DONE', 'BLOCKED']))
-}
-// ⑥ 이미 찬 날짜는 계속 건너뛴다
-{
-  const s = slotAllocator('2026-09-10')
-  expect('과거 빈 날짜를 요구해도 찬 날은 건너뛴다', s.commit(), '2026-09-18')
-  expect('그 다음도 이어서 전진한다', s.commit(), '2026-09-19')
-}
+expect('🔴 DRY_RUN_INCOMPLETE 도 쓰지 않는다', CONSUMES_SLOT.has('DRY_RUN_INCOMPLETE'), false)
+expect(
+  'dry-run 배정과 write 배정이 일치한다',
+  assignAll(['BLOCKED', 'DRY_RUN_OK', 'DRY_RUN_INCOMPLETE', 'DRY_RUN_OK']),
+  assignAll(['BLOCKED', 'DONE', 'BLOCKED', 'DONE']),
+)
+
+console.log('\n══════ 슬롯 integration — 실제 재고로 보되 날짜를 하드코딩하지 않는다')
+/**
+ * 🔴 기대값을 **동적으로** 만든다. 재고가 매일 바뀌어도 이 검사는 깨지지 않는다.
+ *    시험하는 것은 "그 날짜가 며칠인가" 가 아니라 **"규칙이 지켜지는가"** 다.
+ */
+const liveTaken = takenDates()
+const liveFrom = '2026-09-16'
+const firstFree = (() => { let d = liveFrom; while (liveTaken.has(d)) d = new Date(new Date(`${d}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10); return d })()
+expect('기본 동작이 실제 재고를 읽는다', slotAllocator(liveFrom).peek(), firstFree)
+expect('최초 빈 날짜는 점유 목록에 없다', liveTaken.has(firstFree), false)
+expect('그 하루 전은 점유돼 있거나 시작일 이전이다', firstFree === liveFrom || liveTaken.has(new Date(new Date(`${firstFree}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10)), true)
+expect('실제 재고에서도 BLOCKED 는 날짜를 태우지 않는다', (() => { const s = slotAllocator(liveFrom); const a = s.peek(); const b = s.peek(); return a === b })(), true)
+expect('실제 재고에서도 10:30 KST 다', normalizePublishAt(slotAllocator(liveFrom).peek()).publishAt.endsWith('T10:30:00+09:00'), true)
+
 // 🔴 호출부가 정말 peek/commit 을 쓰는가 — 옛 소비형 호출이 되살아나면 버그가 돌아온다
 expect('호출부가 peek 으로 고른다', /const publishAt = slots\.peek\(\)/.test(readySrc), true)
 expect('등록되는 후보만 commit 한다', /if \(CONSUMES_SLOT\.has\(r\.verdict\)\) slots\.commit\(\)/.test(readySrc), true)
 expect('옛 소비형 호출이 없다', /nextSlot\(\)/.test(readySrc), false)
+// 🔴 운영은 주입 없이 실제 재고를 쓴다 — 기본값이 바뀌면 안 된다
+expect('운영 호출부는 taken 을 주입하지 않는다', /slotAllocator\(kstDate\(SLOT_START_OFFSET_DAYS\)\)/.test(readySrc), true)
 
 /**
  * 🔴 **순서는 소스 위치가 아니라 흐름으로 시험한다** (2026-09-16 재검토에서 배운 것).
