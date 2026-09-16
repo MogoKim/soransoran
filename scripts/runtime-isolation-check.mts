@@ -23,7 +23,7 @@ import {
   JOB_ENV_REQUIREMENTS, judgeJobEnv, partitionJobsByEnv,
   RUNTIME_JOBS, RETIRED_JOBS,
   judgeCanonicalMode, judgeJobPath, judgeJobState, judgeLoadedConfig, judgeLoadedJobs,
-  judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists,
+  judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists, judgeDisabledPlists,
   parseLaunchctlPrint, type JobState,
 } from '../src/lib/runtime-isolation'
 import {
@@ -563,6 +563,17 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
      *    되돌리면 [R-2] 가 깨져야 한다 — 그것이 이 fixture 의 검증력이다.
      */
     legacyRollbackOrder?: boolean
+    /**
+     * 🔴 **bootout 이 먹히지 않는 job** — 명령은 돌지만 상태가 그대로다.
+     *    "명령을 보냈다" 를 "내려갔다" 로 읽으면 안 된다는 것을 이 주입기가 증명한다.
+     */
+    bootoutNoop?: readonly string[]
+    /**
+     * 🔴 **옮겼다고 하는데 파일이 그대로인 job** — 명령은 성공을 돌려주고
+     *    설치본은 그 자리에 남는다. 로그인 재등록이 남긴 결과와 같은 모양이다.
+     *    배포는 명령의 반환값이 아니라 **다시 읽은 파일**로 판정해야 한다.
+     */
+    retireNoop?: readonly string[]
   }
   type World = {
     dir: string; manifestFile: string; pinFile: string
@@ -663,6 +674,8 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       bootout: (l) => {
         rec(`bootout:${l}`)
         if (f.legacyRollbackOrder === true) return false
+        // 🔴 반환값은 성공인데 상태는 그대로 — 실제로 겪는 모양이다
+        if ((f.bootoutNoop ?? []).includes(l)) return true
         state.set(l, 'unloaded')
         return true
       },
@@ -728,6 +741,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       retirePlist: (l) => {
         rec(`retire:${l}`)
         if ((f.retireFail ?? []).includes(l)) return false
+        if ((f.retireNoop ?? []).includes(l)) return true
         const cur = plists.get(l)
         if (cur !== undefined) { w.retiredStore.set(l, cur); plists.delete(l) }
         return true
@@ -1061,19 +1075,27 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     const DIS = ['job-c']
     const ACT = J.filter((l) => !DIS.includes(l))
 
-    // ① false + unloaded → 배포는 통과해야 한다
+    // ① false + unloaded + plist 존재 → 배포는 통과하고 **설치본을 보관소로 옮긴다**
     {
       const w = makeWorld({ initial: { 'job-c': 'unloaded' }, envBlocked: DIS })
       const r = await deploy(w, DIS)
       check('🟢 [D] 내려 둔 job 이 unloaded 면 배포가 통과한다', r.ok)
+      check('🔴 [D] 내려 둔 job 을 render 조차 하지 않는다', idx(w, 'render:job-c') === -1)
       check('🔴 [D] 내려 둔 job 을 설치하지 않는다',
         w.plists.get('job-c') !== RENDERED('job-c'))
-      check('🔴 [D] 내려 둔 job 을 render 조차 하지 않는다', idx(w, 'render:job-c') === -1)
       check('🔴 [D] 내려 둔 job 을 load 하지 않는다', idx(w, 'load:job-c') === -1)
-      check('🔴 [D] 내려 둔 job 을 bootout 하지 않는다', idx(w, 'bootout:job-c') === -1)
+      check('🔴 [D] 이미 내려가 있으면 bootout 하지 않는다', idx(w, 'bootout:job-c') === -1)
       check('🔴 [D] 내려 둔 job 을 unload 하지도 않는다', idx(w, 'unload:job-c') === -1)
       check('🔴 [D] 배포 뒤에도 내려 둔 job 은 unloaded 그대로다',
         w.state.get('job-c') === 'unloaded')
+      /**
+       * 🔴 **여기가 2026-09-16 실측 결함의 자리다.** 옛 판은 설치본을 그대로 두었고,
+       *    로그인·재부팅 때 launchd 가 그 파일을 다시 등록해 job 이 되살아났다.
+       */
+      check('🔴 [D] 내려 둔 job 의 설치본이 LaunchAgents 에서 사라진다',
+        !w.plists.has('job-c'))
+      check('🔴 [D] 지우지 않고 보관소로 옮긴다 — 되돌릴 수 있다',
+        w.retiredStore.get('job-c') === OLD_PLIST('job-c'))
       // 🔴 활성 job 의 기존 검증은 그대로여야 한다
       check('🔴 [D] 활성 job 은 전부 새 설치본으로 바뀐다',
         ACT.every((l) => w.plists.get(l) === RENDERED(l)))
@@ -1088,19 +1110,104 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         pinOf(w) === NEXT && manifestSha(w) === NEXT)
     }
 
-    // ② false + loaded → FAIL (배포가 대신 내리지 않는다)
+    // ② false + loaded + plist 존재 → bootout → unloaded 재확인 → 보관소 이동
     {
       const w = makeWorld({ initial: { 'job-c': 'loaded' }, envBlocked: DIS })
       const r = await deploy(w, DIS)
-      check('🔴 [D] 내려 둔 job 이 loaded 면 배포를 막는다', !r.ok)
+      check('🟢 [D] 되살아난 job 은 배포가 내리고 계속 간다', r.ok)
+      check('🔴 [D] label 기반으로 내린다 — plist 경로에 기대지 않는다',
+        idx(w, 'bootout:job-c') !== -1 && idx(w, 'unload:job-c') === -1)
+      check('🔴 [D] 내린 뒤 **다시 관측**해서 unloaded 를 확인한다',
+        w.state.get('job-c') === 'unloaded')
+      check('🔴 [D] 되살아난 job 의 설치본도 보관소로 옮긴다',
+        !w.plists.has('job-c') && w.retiredStore.get('job-c') === OLD_PLIST('job-c'))
+      check('🔴 [D] 내리면서도 render·install·load 는 하지 않는다',
+        idx(w, 'render:job-c') === -1 && idx(w, 'load:job-c') === -1
+        && w.plists.get('job-c') !== RENDERED('job-c'))
+      check('🔴 [D] 활성 job 은 영향받지 않는다',
+        ACT.every((l) => w.state.get(l) === 'loaded' && w.plists.get(l) === RENDERED(l)))
+    }
+
+    // ③ false + unloaded + plist 없음 → 옮길 것이 없다. 그대로 통과한다
+    {
+      const w = makeWorld({
+        initial: { 'job-c': 'unloaded' }, envBlocked: DIS, noInstalledPlist: ['job-c'],
+      })
+      const r = await deploy(w, DIS)
+      check('🟢 [D] 내려 둠 + 설치본 없음이면 그대로 통과한다', r.ok)
+      check('🔴 [D] 없는 설치본을 옮기려 들지 않는다', idx(w, 'retire:job-c') === -1)
+      check('🔴 [D] 보관소에 없던 것을 만들어 넣지 않는다', !w.retiredStore.has('job-c'))
+      check('🔴 [D] 그래도 job 은 unloaded 그대로다', w.state.get('job-c') === 'unloaded')
+    }
+
+    // ②-b bootout 을 보냈는데도 안 내려가면 **막는다** (fail-closed)
+    {
+      const w = makeWorld({
+        initial: { 'job-c': 'loaded' }, envBlocked: DIS, bootoutNoop: ['job-c'],
+      })
+      const r = await deploy(w, DIS)
+      check('🔴 [D] 내리려 했는데 그대로면 배포를 막는다', !r.ok)
       check('🔴 [D] preflight 에서 막는다 — 되돌릴 것이 없다', r.phase === 'preflight')
       check('🔴 [D] 이유를 DISABLED_JOB_LOADED 로 적는다',
         r.problems.some((x) => x.includes('DISABLED_JOB_LOADED')))
-      check('🔴 [D] 막을 때도 launchctl 을 대신 내리지 않는다',
-        idx(w, 'bootout:job-c') === -1 && idx(w, 'unload:job-c') === -1
-        && w.state.get('job-c') === 'loaded')
+      check('🔴 [D] 명령 반환값이 아니라 **관측한 상태**로 판정한다',
+        idx(w, 'bootout:job-c') !== -1 && w.state.get('job-c') === 'loaded')
       check('🔴 [D] 막을 때 코드도 건드리지 않는다 (checkout 0)',
         idx(w, 'checkout:target') === -1)
+      check('🔴 [D] 막을 때 설치본을 옮기지 않는다 — 되돌릴 것을 늘리지 않는다',
+        w.plists.has('job-c') && !w.retiredStore.has('job-c'))
+    }
+
+    /**
+     * ⑦ 🔴 **다시 켜면 되돌아온다.** 스위치가 `true` 가 되면 `partitionJobsByEnv` 가
+     *    active 로 넘기고, 배포가 **새 plist 를 render·설치·load** 한다.
+     *    격리가 되돌릴 수 없는 길이면 그것은 격리가 아니라 폐기다.
+     */
+    {
+      // 🔴 앞선 격리로 설치본이 보관소에 가 있는 상태 그대로에서 시작한다
+      const w = makeWorld({ initial: { 'job-c': 'unloaded' }, noInstalledPlist: ['job-c'] })
+      const r = await deploy(w, [])
+      check('🟢 [D] 다시 켠 뒤 배포가 통과한다', r.ok)
+      check('🔴 [D] 새 plist 를 render 한다', idx(w, 'render:job-c') !== -1)
+      check('🔴 [D] 보관소의 옛 사본이 아니라 **새 설치본**이 들어간다',
+        w.plists.get('job-c') === RENDERED('job-c'))
+      check('🔴 [D] 문법 검증을 거친다', idx(w, 'lint:job-c') !== -1)
+      check('🔴 [D] load 되어 loaded 가 된다',
+        idx(w, 'load:job-c') !== -1 && w.state.get('job-c') === 'loaded')
+      check('🔴 [D] 다시 켠 job 을 보관소로 옮기지 않는다', !w.retiredStore.has('job-c'))
+    }
+
+    /**
+     * ⑧ 🔴 **rollback 이 내려 둔 job 을 되살리면 안 된다.**
+     *    배포가 실패하면 활성 job 은 배포 전으로 돌아가야 하지만,
+     *    내려 둔 job 까지 돌려놓으면 격리가 배포 실패 한 번에 풀린다.
+     */
+    {
+      const w = makeWorld({ initial: { 'job-c': 'loaded' }, envBlocked: DIS, gateFail: 'gate2' })
+      const r = await deploy(w, DIS)
+      check('🔴 [D] 게이트 실패로 배포가 멈춘다', !r.ok && r.rollback?.attempted === true)
+      check('🔴 [D] rollback 이 내려 둔 job 을 다시 올리지 않는다',
+        w.state.get('job-c') === 'unloaded' && idx(w, 'load:job-c') === -1)
+      check('🔴 [D] rollback 이 보관소의 사본을 제자리로 되돌리지 않는다',
+        !w.plists.has('job-c'))
+      check('🔴 [D] 활성 job 은 배포 전 설치본·상태로 돌아간다',
+        ACT.every((l) => w.plists.get(l) === OLD_PLIST(l) && w.state.get(l) === 'loaded'))
+      check('🔴 [D] 복구가 완전하다', r.rollback?.complete === true)
+    }
+
+    /**
+     * 🔴 **"옮겼다" 는 말이 아니라 파일로 확인한다.** 배포 끝에 다시 읽어서
+     *    아직 그 자리에 있으면 실패다 — 그대로 두면 다음 로그인에 되살아난다.
+     */
+    {
+      const w = makeWorld({
+        initial: { 'job-c': 'unloaded' }, envBlocked: DIS, retireNoop: ['job-c'],
+      })
+      const r = await deploy(w, DIS)
+      check('🔴 [D] 옮겼다는 반환값만 믿지 않는다 — 파일이 남으면 실패다', !r.ok)
+      check('🔴 [D] post-load 에서 잡는다', r.phase === 'post-load')
+      check('🔴 [D] 되살아나는 이유를 적는다',
+        r.problems.some((x) => x.includes('LaunchAgents') && x.includes('재부팅')))
     }
 
     // ③ 관측 불가는 통과시키지 않는다 (fail-closed)
@@ -1152,6 +1259,56 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
           loaded: [...part.active, part.disabled[0]!],
           expected: part.active, disabled: part.disabled,
         }).ok)
+    /**
+     * 🔴 **로그인·재부팅 재등장** (2026-09-16 실측).
+     *    `false` 로 내리고 unload 했는데 이틀 뒤 두 job 이 다시 loaded 였다.
+     *    원인은 `~/Library/LaunchAgents` 에 남은 설치 plist 다 —
+     *    그 자리에 파일이 있으면 "내려 두었다" 는 다음 로그인까지만 참이다.
+     */
+    {
+      const dis = ['com.soransoran.raw-collect-82cook', 'com.soransoran.supply-collect-82cook-thin']
+      const files = dis.map((l) => `${l}.plist`)
+      const alive = RUNTIME_JOBS.filter((l) => !dis.includes(l)).map((l) => `${l}.plist`)
+      check('🟢 [D] 설치본이 보관소로 옮겨졌으면 통과한다',
+        judgeDisabledPlists({ agentFiles: alive, rollbackFiles: files, disabled: dis }).ok)
+      const back = judgeDisabledPlists({
+        agentFiles: [...alive, files[0]!], rollbackFiles: files, disabled: dis,
+      })
+      check('🔴 [D] plist 가 LaunchAgents 에 재등장하면 격리가 막는다', !back.ok)
+      check('🔴 [D] 어느 파일인지 이름으로 적는다',
+        back.problems.some((x) => x.includes(files[0]!)))
+      check('🔴 [D] 보관본이 없으면 되돌릴 수 없다고 적는다',
+        !judgeDisabledPlists({ agentFiles: alive, rollbackFiles: [], disabled: dis }).ok)
+      check('🔴 [D] 보관소를 못 읽으면 잔존 여부만 본다',
+        judgeDisabledPlists({ agentFiles: alive, disabled: dis }).ok)
+      /** 🔴 스위치가 다시 `true` 가 되면 대상에서 저절로 빠진다 — 이름을 박지 않았다 */
+      check('🔴 [D] disabled 가 비면 검사할 것이 없다',
+        judgeDisabledPlists({ agentFiles: [...alive, ...files], disabled: [] }).ok)
+    }
+
+    /** 🔴 특정 job 이름을 판정부에 박지 않았다 — 대상은 언제나 `disabled` 집합이다 */
+    {
+      const iso = readFileSync('src/lib/runtime-isolation.ts', 'utf-8')
+      const dep = readFileSync('src/lib/runtime-deploy.ts', 'utf-8')
+      /**
+       * 🔴 이름이 **명부와 스위치 표**에 있는 것은 정상이다 — 거기가 정본이다.
+       *    막아야 하는 것은 **격리 로직이 특정 label 로 분기하는 것**이다.
+       */
+      const noLabel = (src: string, from: string, to: string): boolean =>
+        !/82cook|navercafe|supply-process/.test(src.slice(src.indexOf(from), src.indexOf(to)))
+      check('🔴 [D] 내려 둔 job 판정부가 label 로 분기하지 않는다',
+        noLabel(iso, 'export function judgeDisabledPlists', 'function judgeLeftoverPlists'))
+      check('🔴 [D] 공통 잔존 plist 판정부도 label 로 분기하지 않는다',
+        noLabel(iso, 'function judgeLeftoverPlists', 'export type PathVerdict'))
+      check('🔴 [D] 배포기의 내려 둔 job 격리 구간이 label 로 분기하지 않는다',
+        noLabel(dep, 'const disabledLoaded: string[] = []', 'const gate = judgeDeploy(')
+        && noLabel(dep, '  for (const l of disabled) {\n    if (fx.readInstalledPlist(l) === null)', "steps.push('retire-verified')"))
+      check('🔴 [D] 배포 판정부 전체에 실행되는 82cook 분기가 없다',
+        !/if\s*\([^)]*82cook/.test(dep) && !/includes\('com\.soransoran\./.test(dep))
+      check('🔴 [D] 내려 둔 job 판정은 `disabled` 를 인자로 받는다',
+        /judgeDisabledPlists\(input: \{[\s\S]{0,400}?disabled: readonly string\[\]/.test(iso))
+    }
+
       check('🔴 [D] 내려 둔 job 이 빠져 있는 것은 실패가 아니다',
         judgeLoadedJobs({ loaded: part.active, expected: part.active, disabled: part.disabled }).ok)
     }
@@ -1161,8 +1318,16 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       const w = makeWorld({ initial: { 'job-c': 'unloaded' }, envBlocked: DIS })
       const r = await deploy(w, DIS)
       check('🟢 [D] 배포는 성공하고', r.ok)
-      check('🔴 [D] 내려 둔 job 이름이 실행 기록 어디에도 없다',
-        w.order.every((x) => !x.endsWith(':job-c')))
+      /**
+       * 🔴 **격리 말고는 아무것도 하지 않는다.** 실행 기록에 남아도 되는 것은
+       *    내리기(`bootout`)와 설치본 옮기기(`retire`) 둘뿐이다 —
+       *    render·install·load·unload 는 하나도 없어야 한다.
+       */
+      check('🔴 [D] 실행 기록에 내려 둔 job 의 render·install·load 가 0 이다',
+        w.order.every((x) => !/^(render|load|write-plist|lint|unload):job-c$/.test(x)))
+      check('🔴 [D] 남는 것은 격리 흔적뿐이다',
+        w.order.filter((x) => x.endsWith(':job-c'))
+          .every((x) => x.startsWith('bootout:') || x.startsWith('retire:')))
     }
   }
 
@@ -1705,6 +1870,18 @@ if (!existsSync(RUNTIME_ROOT)) {
   const retiredPlists = judgeRetiredPlists({ agentFiles, rollbackFiles })
   check('🔴 옛 1회판 plist 가 LaunchAgents 에 없다 (재부팅 재등록 차단)', retiredPlists.ok)
   for (const msg of retiredPlists.problems) console.log(`      ${msg}`)
+
+  /**
+   * 🔴 **내려 둔 job 의 설치본도 그 자리에 없어야 한다** (2026-09-16 실측).
+   *    `false` 로 내리고 unload 했는데 이틀 뒤 두 job 이 다시 loaded 였다 —
+   *    파일이 남아 있어 로그인·재부팅 때 launchd 가 다시 등록했다.
+   *    🔴 대상은 `partitionJobsByEnv` 의 `disabled` 집합이다 — 이름을 박지 않는다.
+   */
+  const disabledPlists = judgeDisabledPlists({
+    agentFiles, rollbackFiles, disabled: DISABLED_JOBS,
+  })
+  check('🔴 내려 둔 job 의 plist 가 LaunchAgents 에 없다 (로그인 재등록 차단)', disabledPlists.ok)
+  for (const msg of disabledPlists.problems) console.log(`      ${msg}`)
 
   // ── 🔴 격리 ≠ 최신 — lag 는 알리되 격리 실패로 세지 않는다 ──
   const originMain = git(['rev-parse', 'origin/main'], RUNTIME_ROOT)

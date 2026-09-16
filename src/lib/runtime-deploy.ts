@@ -306,9 +306,14 @@ export async function runDeploy(input: {
   /** 🔴 내려가 있어야 하고 설치본도 없어야 하는 옛 job */
   retiredJobs?: readonly string[]
   /**
-   * 🔴 **의도적으로 스위치를 내려 둔 job** — 설치도 load 도 하지 않는다.
-   *    배포는 이들의 plist 도 launchctl 상태도 건드리지 않는다.
-   *    확인하는 것은 하나뿐이다: **아직 unloaded 인가.**
+   * 🔴 **의도적으로 스위치를 내려 둔 job** — render 도 install 도 load 도 하지 않는다.
+   *
+   *    배포가 이들에게 하는 일은 **격리 두 가지뿐**이다:
+   *      · 올라와 있으면 label 기반으로 내리고 **다시 관측**한다
+   *      · 설치본이 남아 있으면 **보관소로 옮긴다** (지우지 않는다)
+   *    🔴 rollback 은 이들을 되살리지 않는다 — `allJobs` 에 넣지 않는 이유다.
+   *    🔴 스위치가 다시 `true` 가 되면 `partitionJobsByEnv` 가 active 로 넘기고,
+   *       배포가 **새 plist 를 render·설치·load** 한다.
    */
   disabledJobs?: readonly string[]
   /** 🔴 실제 loaded 경로를 판정할 기준 — runtime 안이어야 하는 것은 program 과 WorkingDirectory 뿐이다 */
@@ -346,15 +351,53 @@ export async function runDeploy(input: {
     }
   }
   /**
-   * 🔴 **내려 둔 job 은 관측만 한다.** 올라와 있으면 멈추고, 아니면 그대로 둔다.
-   *    관측하지 못한 것을 "내려가 있다" 로 통과시키지 않는다(fail-closed).
+   * 🔴 **내려 둔 job 이 올라와 있으면 배포가 내린다** (2026-09-16 정정).
+   *
+   *    옛 판은 관측만 하고 `DISABLED_JOB_LOADED` 로 배포를 막았다. 그런데 되살아나는
+   *    원인은 배포가 아니라 **`~/Library/LaunchAgents` 에 남은 설치 plist** 였다 —
+   *    로그인·재부팅 때 launchd 가 그 파일을 다시 등록한다. 막기만 하면 사람이
+   *    손으로 `bootout` 을 치게 되고, 다음 로그인에 또 올라온다.
+   *
+   *    🔴 정지는 **label 기반**이다 — plist 가 있든 없든 된다.
+   *    🔴 명령의 반환값이 아니라 **다시 관측한 상태**로 판정한다.
+   *    🔴 관측하지 못한 것을 "내려가 있다" 로 통과시키지 않는다(fail-closed).
+   *    🔴 그래도 내려가지 않으면 `disabledLoaded` 로 남아 게이트가 막는다.
    */
   const disabledLoaded: string[] = []
   const disabledUnknown: string[] = []
+  const disabledRetireFailed: string[] = []
   for (const l of disabled) {
-    const st = fx.probeJob(l)
-    if (st === 'loaded') disabledLoaded.push(l)
-    else if (st === 'unknown') disabledUnknown.push(l)
+    let st = fx.probeJob(l)
+    if (st === 'loaded') {
+      steps.push(`disabled-bootout:${l}`)
+      fx.bootout(l)
+      st = fx.probeJob(l)
+    }
+    if (st === 'loaded') { disabledLoaded.push(l); continue }
+    if (st === 'unknown') { disabledUnknown.push(l); continue }
+    /**
+     * 🔴 **설치본까지 치워야 격리가 끝난다** — 내려가 있는 것을 확인한 **바로 그 자리**에서.
+     *
+     *    배포 뒷단(⑨)에 두었더니 offline 게이트에서 배포가 멈춘 회차에는 파일이 그대로
+     *    남았다. 그러면 job 은 내려갔는데 다음 로그인에 다시 등록된다 — 격리가
+     *    **배포 성공에 딸린 것**이 되어 버린다. 격리는 배포 성패와 무관해야 한다.
+     *
+     *    🔴 아직 loaded 인 job 의 파일은 옮기지 않는다 — 내려가지 않은 채 파일만
+     *       사라지면 되돌릴 거리만 늘어난다. 그때는 아래 게이트가 배포를 막는다.
+     */
+    if (fx.readInstalledPlist(l) === null) continue
+    steps.push(`retire-disabled:${l}`)
+    if (!fx.retirePlist(l)) disabledRetireFailed.push(l)
+  }
+  if (disabledRetireFailed.length > 0) {
+    return {
+      ok: false, phase: 'preflight', steps,
+      problems: [
+        `내려 둔 job 의 plist 를 보관소로 옮기지 못했다(${disabledRetireFailed.join(' · ')})`
+        + ' — 그 자리에 남으면 로그인·재부팅 때 다시 등록된다',
+      ],
+      rollback: null,
+    }
   }
   if (disabledUnknown.length > 0) {
     return {
@@ -711,6 +754,13 @@ export async function runDeploy(input: {
   for (const l of disabled) {
     if (fx.probeJob(l) === 'loaded') {
       return failWith('post-load', `내려 둔 job 이 배포 뒤 loaded 가 됐다 — ${l}`)
+    }
+    // 🔴 "지금 내려가 있다" 로는 부족하다 — 파일이 남아 있으면 다음 로그인에 되살아난다
+    if (fx.readInstalledPlist(l) !== null) {
+      return failWith(
+        'post-load',
+        `내려 둔 job 의 plist 가 아직 LaunchAgents 에 있다 — ${l} (로그인·재부팅 때 다시 등록된다)`,
+      )
     }
   }
   steps.push('isolation-gate')

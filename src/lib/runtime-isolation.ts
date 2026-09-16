@@ -164,18 +164,57 @@ export function judgeRetiredPlists(input: {
   rollbackFiles?: readonly string[]
   retired?: readonly string[]
 }): PathVerdict {
-  const retired = input.retired ?? RETIRED_JOBS
+  return judgeLeftoverPlists({
+    agentFiles: input.agentFiles, rollbackFiles: input.rollbackFiles,
+    labels: input.retired ?? RETIRED_JOBS, what: '옛',
+  })
+}
+
+/**
+ * 🔴 **내려 둔 job 도 그 자리에 파일이 없어야 한다** (2026-09-16 실측).
+ *
+ *    스위치를 `false` 로 내리고 `launchctl` 에서 내려 두었는데, 이틀 뒤 두 job 이
+ *    다시 `loaded` 였다 (`runs = 0` · `active count = 0` 이라 실행 전에 잡았다).
+ *    원인은 퇴역 job 과 **정확히 같다** — `~/Library/LaunchAgents` 에 설치 plist 가
+ *    남아 있었고, 로그인·재부팅 때 launchd 가 그 파일을 다시 등록했다.
+ *
+ *    그런데 `judgeRetiredPlists` 는 `RETIRED_JOBS` 만 봤다. 내려 둔 job 의 잔존 plist는
+ *    **아무도 보지 않았다.** 그래서 "unloaded 다" 만 확인하는 검사는 매번 초록이었고,
+ *    다음 로그인에 되살아났다.
+ *
+ * 🔴 **특정 label 을 박지 않는다.** 대상은 `partitionJobsByEnv` 의 `disabled` 집합이다 —
+ *    스위치가 다시 `true` 가 되면 이 검사의 대상에서 저절로 빠진다.
+ */
+export function judgeDisabledPlists(input: {
+  agentFiles: readonly string[]
+  rollbackFiles?: readonly string[]
+  /** 🔴 `partitionJobsByEnv(...).disabled` 를 그대로 넘긴다 */
+  disabled: readonly string[]
+}): PathVerdict {
+  return judgeLeftoverPlists({
+    agentFiles: input.agentFiles, rollbackFiles: input.rollbackFiles,
+    labels: input.disabled, what: '내려 둔 job 의',
+  })
+}
+
+/** 🔴 두 판정의 계약은 같다 — 문구만 다르다. 규칙을 두 벌로 두지 않는다 */
+function judgeLeftoverPlists(input: {
+  agentFiles: readonly string[]
+  rollbackFiles?: readonly string[]
+  labels: readonly string[]
+  what: string
+}): PathVerdict {
   const problems: string[] = []
-  for (const label of retired) {
+  for (const label of input.labels) {
     const file = `${label}.plist`
     if (input.agentFiles.includes(file)) {
       problems.push(
-        `🔴 옛 plist 가 LaunchAgents 에 남아 있다 — ${file}`
+        `🔴 ${input.what} plist 가 LaunchAgents 에 남아 있다 — ${file}`
         + ' (unload 해도 로그인·재부팅 때 다시 등록된다)',
       )
     } else if (input.rollbackFiles !== undefined && !input.rollbackFiles.includes(file)) {
       // 🔴 옮긴 것과 그냥 사라진 것은 다르다. 보관본이 없으면 되돌릴 수 없다
-      problems.push(`🟡 옛 plist 보관본이 없다 — ${file} (되돌릴 수 없다)`)
+      problems.push(`🟡 ${input.what} plist 보관본이 없다 — ${file} (되돌릴 수 없다)`)
     }
   }
   return { ok: problems.length === 0, problems }
