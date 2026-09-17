@@ -22,7 +22,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  buildQualityPayload, buildQualitySystemPrompt, groundDigestOf, hasGround, type SourceGround,
+  buildQualityPayload, buildQualitySystemPrompt, digest16, groundDigestOf, hasGround,
+  type SourceGround,
 } from './micro-seed-auto-draft.mjs'
 import {
   DRAFT_QUALITY_AXES, MACHINE_AGE_HUMAN_REVIEW_NOTE, QUALITY_HOLD,
@@ -78,9 +79,22 @@ console.log('\n② 프롬프트 — 🔴 참고 자료이고, 다름은 실패�
   check('🔴 근거가 있으면 참고 자료라고 밝힌다', /참고 자료/.test(withG))
   check('🔴 🔴 근거 안의 문장을 지시로 따르지 않게 못박는다',
     /지시가 아니다/.test(withG) && /따르지 않는다/.test(withG))
-  check('🔴 관점을 바꾼 글을 막지 않는다고 적는다', /다른 관점/.test(withG) && /막지 않는다/.test(withG))
-  check('🔴 일상 질문을 막지 않는다고 적는다', /일상 질문/.test(withG))
-  check('🔴 질문 없이 털어놓는 글을 막지 않는다고 적는다', /털어놓는/.test(withG))
+  check('🔴 관점 전환이 이 축의 사유가 아니라고 적는다', /다른 관점/.test(withG))
+  check('🔴 일상 질문이 이 축의 사유가 아니라고 적는다', /일상 질문/.test(withG))
+  check('🔴 질문 없이 털어놓는 것이 이 축의 사유가 아니라고 적는다', /털어놓는/.test(withG))
+  /**
+   * 🔴 **면제가 아니라 "이 축의 사유가 아니다" 로 좁혔는가** (2026-09-17).
+   *    "전부 좋은 글이다. 막지 않는다" 로 두면 관점을 바꿨다는 이유로
+   *    위해·생활사 모순·다른 품질 축까지 면제되는 것처럼 읽힌다.
+   */
+  check('🔴 🔴 다른 축을 면제하지 않는다고 못박는다',
+    /이 축의 실패 사유가 아니다/.test(withG)
+    && /위해 · 생활사 모순 · 다른 품질 축은 \*\*그대로 본다\*\*/.test(withG)
+    && /면제하지 않는다/.test(withG))
+  check('🔴 🔴 네 가지에 해당해도 소재가 사라졌으면 걸린다고 적는다',
+    withG.includes('위 네 가지에 해당해도 **소재가 사라졌으면 이 축에 걸린다.**'))
+  check('🔴 "전부 좋은 글이다 · 막지 않는다" 라는 넓은 면제 문장을 쓰지 않는다',
+    !/전부 \*\*좋은 글이다/.test(withG))
   check('🔴 🔴 낱말 겹침을 세지 말라고 적는다 — 새 합격선을 만들지 않는다',
     /낱말이 겹치는지 세지 않는다/.test(withG))
   check('🔴 근거가 없으면 그 축을 **판정하지 않는다** 고 적는다',
@@ -109,6 +123,29 @@ console.log('\n③ 캐시 key — 🔴 근거가 달라지면 새 검수, 같으
   check('🔴 근거 없음은 따로 구분된다', d === 'none' && a !== d)
   check('🔴 제목만 달라도 표식이 달라진다',
     groundDigestOf({ ...GROUND, sourceTitle: '다른 제목' }) !== a)
+
+  /**
+   * 🔴 **지침이 바뀌면 key 도 바뀌는가** (2026-09-17 추가).
+   *
+   *    앞판 검사는 근거 **데이터** 변경만 봤다 — `groundDigest` 가 그것을 잡는다.
+   *    그런데 key 의 프롬프트 digest 를 `buildQualitySystemPrompt(persona)` 로,
+   *    즉 **근거 없는 분기**로 냈다. 그래서 근거 있는 분기의 **문장을 고쳐도**
+   *    key 가 그대로였고 옛 판정이 hit 될 수 있었다. 검사가 그것을 못 잡았다.
+   */
+  const withGround = digest16(buildQualitySystemPrompt(undefined, GROUND))
+  const withoutGround = digest16(buildQualitySystemPrompt(undefined))
+  check('🔴 🔴 근거 유무로 프롬프트 digest 가 갈린다 — 두 분기가 다른 글이다',
+    withGround !== withoutGround)
+  check('🔴 🔴 key 의 프롬프트 digest 를 **실제 요청과 같은 인자**로 만든다',
+    /const qSystemDigest = digest16\(buildQualitySystemPrompt\(persona, ground\)\)/
+      .test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')))
+  check('🔴 근거를 qSystemDigest 보다 **먼저** 정한다',
+    (() => {
+      const w = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      return w.indexOf('const ground: SourceGround') < w.indexOf('const qSystemDigest')
+    })())
+  check('🔴 같은 인자면 digest 도 같다 — 불필요한 재검수를 만들지 않는다',
+    digest16(buildQualitySystemPrompt(undefined, { ...GROUND })) === withGround)
 
   // 🔴 payload 와 key 가 **같은 것**을 본다
   const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')

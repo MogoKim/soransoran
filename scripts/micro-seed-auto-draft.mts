@@ -772,11 +772,20 @@ export function buildQualitySystemPrompt(persona?: PersonaLifeHistory, ground?: 
       '   🔴 걸리는 것 — 읽은 글의 이야기가 **사라져서**, 어떤 글을 읽고 썼는지',
       '      알 수 없는 글. 어느 원문에 붙여도 말이 되는 글.',
       '',
-      '   🟢 걸리지 않는 것 — 다음은 전부 **좋은 글이다. 막지 않는다**:',
-      '      · 읽은 글의 이야기를 **다른 관점**으로 푼 글 (원문과 결론이 달라도 된다)',
-      '      · 그 이야기에서 나온 **평범한 일상 질문**',
-      '      · 질문 없이 자기 경험·감정만 **털어놓는** 글',
-      '      · 원문의 낱말을 하나도 안 쓰고 다른 말로 푼 글',
+      '   🟢 다음은 **그 자체로는 이 축의 실패 사유가 아니다**:',
+      '      · 읽은 글의 이야기를 **다른 관점**으로 푼 것 (원문과 결론이 달라도 된다)',
+      '      · 그 이야기에서 나온 **평범한 일상 질문**인 것',
+      '      · 질문 없이 자기 경험·감정만 **털어놓는** 것',
+      '      · 원문의 낱말을 안 쓰고 **다른 말**로 푼 것',
+      /**
+       * 🔴 **"막지 않는다" 가 아니라 "이 축의 사유가 아니다" 다** (2026-09-17 정정).
+       *    앞 문장은 "전부 좋은 글이다. 막지 않는다" 였다 — 그러면 관점을 바꿨다는
+       *    이유로 **위해·생활사 모순·다른 품질 축까지 면제**되는 것처럼 읽힌다.
+       *    여기서 정하는 것은 `genericWithoutSourceAngle` 하나뿐이다.
+       */
+      '      🔴 위 네 가지에 해당해도 **소재가 사라졌으면 이 축에 걸린다.**',
+      '      🔴 그리고 위해 · 생활사 모순 · 다른 품질 축은 **그대로 본다** —',
+      '         이 목록은 그 판단을 면제하지 않는다.',
       '',
       '   🔴 **낱말이 겹치는지 세지 않는다.** 원문 낱말이 그대로 있어도 이야기가',
       '      사라졌으면 걸리고, 낱말이 하나도 없어도 이야기가 살아 있으면 통과다.',
@@ -1606,7 +1615,20 @@ async function main(): Promise<void> {
     const genKey = `gen|${j.sourceArticleId}|${hash}|${DRAFT_PROMPT_VERSION}`
       + `|${DRAFT_MODEL}|${digest16(genSystem)}`
     // 🔴 **본문 digest 를 담는다.** draftNo 만 보면 글이 바뀌어도 옛 판정이 재사용된다
-    const qSystemDigest = digest16(buildQualitySystemPrompt(persona))
+    /**
+     * 🔴 **근거를 여기서 먼저 정한다** — 아래 `qSystemDigest` 가 이것을 받아야 한다.
+     */
+    const ground: SourceGround = { sourceTitle: meta.title, sourceAngle: meta.angle }
+    /**
+     * 🔴 **key 는 실제 요청과 **같은 프롬프트**로 만든다** (2026-09-17 보정).
+     *
+     *    앞판은 `buildQualitySystemPrompt(persona)` 로 digest 를 냈다 — 근거 없는 쪽
+     *    분기만 계산한 것이다. 그래서 **근거가 있을 때의 지침을 고쳐도** digest 가
+     *    그대로였고, 옛 판정이 그대로 hit 될 수 있었다.
+     *    근거 **데이터**가 바뀌는 것은 `groundDigest` 가 잡지만, 근거 분기의
+     *    **문장**이 바뀌는 것은 아무도 못 잡았다.
+     */
+    const qSystemDigest = digest16(buildQualitySystemPrompt(persona, ground))
     /**
      * 🔴 **나이 판정 계약이 바뀌면 옛 캐시를 쓰지 않는다** (2026-09-16).
      *
@@ -1631,7 +1653,6 @@ async function main(): Promise<void> {
      *    🔴 근거가 같으면 key 도 같다 — 불필요한 재검수를 만들지 않는다.
      *    🔴 **생성 캐시(`genKey`)에는 넣지 않는다** — 생성 입력은 바뀌지 않았다.
      */
-    const ground: SourceGround = { sourceTitle: meta.title, sourceAngle: meta.angle }
     const groundDigest = groundDigestOf(ground)
     const qKey = (d: DraftCandidate): string =>
       `q|${j.sourceArticleId}|${d.draftNo}|${QUALITY_PROMPT_VERSION}|${DRAFT_MODEL}`
