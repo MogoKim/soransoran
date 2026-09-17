@@ -243,8 +243,15 @@ const bad = (name: string, detail: string) => {
   if (stuck.action !== 'give-up' || (stuck.action === 'give-up' && stuck.reason !== 'challenge'))
     offenders.push('🔴 확인 상자 상한이 없다')
 
-  // 🔴 두 사유의 안내 문구가 같으면 다음에 할 일을 알 수 없다
-  if (GUEST_TURNSTILE_TIMEOUT === GUEST_CHALLENGE_TIMEOUT)
+  /**
+   * 🔴 두 사유의 안내 문구가 같으면 다음에 할 일을 알 수 없다.
+   *    string 으로 받아 비교한다 — 상수를 그대로 === 로 두면 TS 가 리터럴 타입으로 좁혀
+   *    "겹치지 않는다(TS2367)" 며 컴파일을 막는다. 값이 같아지는 날을 잡는 것이 목적이므로
+   *    타입이 아니라 값을 본다.
+   */
+  const quietMessage: string = GUEST_TURNSTILE_TIMEOUT
+  const challengeMessage: string = GUEST_CHALLENGE_TIMEOUT
+  if (quietMessage === challengeMessage)
     offenders.push('🔴 조용한 대기와 확인 미완료가 같은 말을 한다')
 
   // 토큰이 오면 어떤 상태에서도 보낸다
