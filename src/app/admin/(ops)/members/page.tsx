@@ -138,7 +138,10 @@ export default async function AdminMembersPage() {
                   {m.email ?? <span className="text-content-muted">없음</span>}
                 </AdminCell>
 
-                <AdminCell label="가입">{formatKst(m.createdAt)}</AdminCell>
+                {/* 날짜는 곁다리다 — 작게 두고 자릿수를 맞춘다 */}
+                <AdminCell label="가입" tone="meta" className="tabular-nums">
+                  {formatKst(m.createdAt)}
+                </AdminCell>
 
                 <AdminCell label="활동">
                   글 {m._count.posts} · 댓글 {m._count.comments}

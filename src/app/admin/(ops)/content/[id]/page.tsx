@@ -142,7 +142,7 @@ export default async function AdminContentDetailPage({
                     {REASON_LABEL.get(r.reason) ?? r.reason}
                   </AdminBadge>
                   <AdminStatusBadge kind="report" value={r.status} />
-                  <span className="text-content-muted">{formatKst(r.createdAt)}</span>
+                  <span className="text-xs tabular-nums text-content-muted">{formatKst(r.createdAt)}</span>
                 </p>
                 {r.detail ? (
                   <p className="mt-1 whitespace-pre-wrap break-words text-sm text-content-muted">
@@ -153,7 +153,7 @@ export default async function AdminContentDetailPage({
             ))}
           </ul>
         )}
-        <Link href="/admin/reports" className="mt-2 inline-flex min-h-[52px] items-center text-link">
+        <Link href="/admin/reports" className="mt-2 inline-flex min-h-[52px] items-center text-sm text-link">
           신고 관리로 가기 →
         </Link>
       </AdminSection>
@@ -194,7 +194,7 @@ export default async function AdminContentDetailPage({
           <ul className="mt-2 flex list-none flex-col gap-2 p-0">
             {post.comments.map((c) => (
               <li key={c.id} className="rounded-lg border border-subtle bg-surface-card p-3">
-                <p className="m-0 whitespace-pre-wrap break-words text-sm text-content-primary">
+                <p className="m-0 whitespace-pre-wrap break-words text-base text-content-primary">
                   {c.content}
                 </p>
                 <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-content-muted">
@@ -248,7 +248,7 @@ export default async function AdminContentDetailPage({
       <section className="mt-8 border-t border-subtle pt-6">
         {deleted ? (
           <>
-            <h2 className="m-0 text-sm font-bold text-content-primary">조치</h2>
+            <h2 className="m-0 text-lg font-bold text-content-primary">조치</h2>
             <AdminQuote>
               삭제 상태인 글입니다. 이 화면에서는 공개 상태를 바꾸지 않습니다.
             </AdminQuote>

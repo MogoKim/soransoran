@@ -86,7 +86,12 @@ export default async function AdminContentPage() {
                  화면이 온통 분홍이 되어 오히려 아무것도 눈에 안 띈다. 얇은 왼쪽 선만 둔다. */
               accent={p.status === 'PUBLISHED' ? undefined : 'muted'}
             >
-              <span className="min-w-0 truncate font-bold text-content-primary">{p.title}</span>
+              {/* 🔴 모바일에서는 두 줄까지 보여 준다. 한 줄 말줄임이면 제목이 늘
+                     "…하는데 어떻게 해야…" 로 끝나 무슨 글인지 알 수 없었다.
+                     데스크탑은 열 폭이 정해져 있어 한 줄을 유지한다. */}
+              <span className="line-clamp-2 min-w-0 font-bold text-content-primary lg:truncate">
+                {p.title}
+              </span>
 
               <AdminCell label="게시판">{boardLabel(p.boardType)}</AdminCell>
 
@@ -94,7 +99,10 @@ export default async function AdminContentPage() {
                 {p.author.nickname ?? p.author.name ?? '회원'}
               </AdminCell>
 
-              <AdminCell label="작성">{formatKst(p.createdAt)}</AdminCell>
+              {/* 날짜는 곁다리다 — 작게 두고 자릿수를 맞춘다 */}
+              <AdminCell label="작성" tone="meta" className="tabular-nums">
+                {formatKst(p.createdAt)}
+              </AdminCell>
 
               {/* 🔴 가려진 글과 신고 있는 글이 눈에 걸려야 한다. 나머지는 조용히 둔다. */}
               <span className="flex flex-wrap items-center gap-1">
