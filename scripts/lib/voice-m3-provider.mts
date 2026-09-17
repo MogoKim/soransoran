@@ -131,18 +131,39 @@ export type LlmResponse = {
   errorCode: string | null
   /** 🔴 사유 요약만. 응답 본문을 그대로 담지 않는다 */
   errorMessage: string | null
+  /**
+   * 🔴 **사용량을 실제로 읽었는가** (2026-09-17 추가).
+   *
+   *    이전 판은 실패할 때도 `inputTokens: 0, outputTokens: 0` 을 돌려줬다.
+   *    그래서 "정말 0 토큰" 과 "모른다" 가 **구분되지 않았고**, 장부가 모르는 건을
+   *    0원으로 적을 수 있었다. 기존 두 칸의 타입은 그대로 두고(호출부 호환),
+   *    이 칸으로 그 둘을 가른다 — `false` 면 위 두 숫자는 값이 아니라 자리 채움이다.
+   */
+  usageKnown: boolean
+  /** 캐시 쓰기 토큰. 🔴 사용량을 못 읽었으면 null */
+  cacheWriteTokens: number | null
+  /** 캐시 읽기 토큰. 🔴 사용량을 못 읽었으면 null */
+  cacheReadTokens: number | null
+  /**
+   * 🔴 제공사 usage 객체의 **키 이름만**. 값은 담지 않는다.
+   *    우리가 읽지 않는 과금 항목이 응답에 나타나면 그 사실이 드러나야 한다.
+   */
+  usageKeys: string[]
 }
 
 /** 실패 응답을 만든다. 🔴 진단 필드를 빠뜨리지 않기 위한 한 자리 */
 function failure(
   errorCode: string, errorMessage: string,
   partial?: Partial<Pick<LlmResponse, 'inputTokens' | 'outputTokens' | 'finishReason'
-    | 'reasoningTokens' | 'responseChars' | 'maxTokensReached'>>,
+    | 'reasoningTokens' | 'responseChars' | 'maxTokensReached'
+    | 'usageKnown' | 'cacheWriteTokens' | 'cacheReadTokens' | 'usageKeys'>>,
 ): LlmResponse {
   return {
     ok: false, rawText: '',
     inputTokens: 0, outputTokens: 0,
     finishReason: '', reasoningTokens: null, responseChars: 0, maxTokensReached: false,
+    // 🔴 실패는 기본이 **모름**이다. 위의 0 두 개를 값으로 읽지 않게 한다
+    usageKnown: false, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
     ...partial,
     errorCode, errorMessage,
   }
@@ -313,6 +334,33 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
         : String(choice?.finish_reason ?? '')
     const maxTokensReached = isMaxTokensReached(finishReason, outputTokens, req.maxOutputTokens)
 
+    /**
+     * 🔴 **사용량을 실제로 읽었는지 판정한다** (2026-09-17).
+     *
+     *    `num()` 은 없는 값을 0 으로 바꾼다 — 편하지만 위험하다.
+     *    여기서는 **키가 있고 숫자였는가**를 따로 본다. 하나라도 아니면 `usageKnown=false`
+     *    이고, 장부는 그 건을 **미정산**으로 남긴다. 0원으로 적지 않는다.
+     */
+    const usageObj = isGemini ? gUsage : usage
+    const usageKeys = Object.keys(usageObj)
+    const isNum = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
+    const usageKnown = isGemini
+      ? isNum(gUsage.promptTokenCount) && isNum(gUsage.candidatesTokenCount)
+      : (isNum(usage.input_tokens) || isNum(usage.prompt_tokens))
+        && (isNum(usage.output_tokens) || isNum(usage.completion_tokens))
+    /**
+     * 🔴 캐시 토큰. **사용량 자체를 못 읽었으면 `null`(모름)** 이다.
+     *
+     *    읽었는데 캐시 칸이 없으면 `0` 으로 본다 — 우리는 `cache_control` 을 보내지 않으므로
+     *    캐시 쓰기·읽기가 일어날 수 없다. 🔴 이것은 **요청 모양에 근거한 판단**이고,
+     *    요청이 바뀌면 틀린다. 그래서 `usageKeys` 를 함께 남겨 사람이 대조할 수 있게 한다 —
+     *    응답에 우리가 안 읽는 과금 칸이 생기면 장부에 그 이름이 나타난다.
+     */
+    const cacheNum = (v: unknown): number => (isNum(v) ? (v as number) : 0)
+    const cacheWriteTokens = !usageKnown ? null
+      : cacheNum(usage.cache_creation_input_tokens) + cacheNum(usage.cache_creation)
+    const cacheReadTokens = !usageKnown ? null : cacheNum(usage.cache_read_input_tokens)
+
     // 🔴 종료 사유가 없으면 성공으로 세지 않는다.
     //    "잘렸는지 알 수 없는 응답" 을 통과시킨 것이 1차 실행의 진단 공백이었다.
     //    토큰은 이미 청구됐으므로 수치는 그대로 실어 보낸다 — cap 계상이 어긋나면 안 된다.
@@ -320,6 +368,9 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
       return failure('NO_FINISH_REASON', 'provider 응답에 종료 사유가 없다 — 잘림 여부를 판정할 수 없다', {
         inputTokens, outputTokens, reasoningTokens,
         responseChars: text.length, maxTokensReached,
+        // 🔴 종료 사유가 없어도 **토큰은 이미 청구됐다.** 사용량을 그대로 실어 보낸다 —
+        //    정산에서 빠지면 장부가 실제보다 적게 남는다
+        usageKnown, cacheWriteTokens, cacheReadTokens, usageKeys,
       })
     }
 
@@ -332,6 +383,7 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
       maxTokensReached,
       errorCode: null,
       errorMessage: null,
+      usageKnown, cacheWriteTokens, cacheReadTokens, usageKeys,
     }
   } catch (e: unknown) {
     const aborted = e instanceof Error && e.name === 'AbortError'
@@ -340,6 +392,105 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
       aborted ? 'TIMEOUT' : 'NETWORK',
       aborted ? `${req.timeoutMs}ms 안에 응답이 없었다` : '네트워크 오류',
     )
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 🔴 **공식 사전 토큰 계산** — `POST /v1/messages/count_tokens` (2026-09-17).
+ *
+ * 🔴 **이 호출은 무료다.** 공식 문서가 "free to use" 라고 적는다.
+ *    그래도 장부는 이것을 **따로 센다** — 유료 요청 수와 섞이면 회차 상한이 왜곡된다.
+ *
+ * 🔴 **결과는 추정이다.** 공식 문서 원문:
+ *      "The token count is an estimate. In some cases, the actual number of input
+ *       tokens used when creating a message might differ by a small amount."
+ *    그리고 "You are not billed for system-added tokens" 이다.
+ *    그래서 이 값을 **검증된 입력 상한**이라고 부르지 않는다. 예약의 근거일 뿐이다.
+ *
+ * 🔴 **실제 요청과 같은 것을 센다.** 모델 · system · messages · prefill 이 같아야 한다.
+ *    `max_tokens` 만 빠진다 — 그 칸은 입력 토큰 수에 영향을 주지 않고,
+ *    count_tokens 는 받지도 않는다.
+ *    🔴 이 동일성을 말로 주장하지 않는다. fixture 가 두 조립부를 대조한다.
+ *
+ * 🔴 **Anthropic 전용이다.** 다른 provider 에는 같은 계약의 무료 사전 계산이 없다 —
+ *    모르면 `null` 을 돌려주고, 장부 게이트가 그 요청을 보류한다. 추측하지 않는다.
+ */
+export type CountTokensRequest = {
+  model: ProviderModel
+  systemPrompt: string
+  userPayload: string
+  timeoutMs: number
+}
+
+export type CountTokensResult = {
+  ok: boolean
+  /** 🔴 공식 계산값. 추정이다. 못 받았으면 null */
+  inputTokens: number | null
+  errorCode: string | null
+  /** 🔴 사유 요약만. 응답 본문을 담지 않는다 */
+  errorMessage: string | null
+}
+
+export const COUNT_TOKENS_URL = 'https://api.anthropic.com/v1/messages/count_tokens'
+
+export async function countInputTokens(req: CountTokensRequest): Promise<CountTokensResult> {
+  if (req.model !== 'claude-haiku-4.5') {
+    return {
+      ok: false, inputTokens: null, errorCode: 'COUNT_UNSUPPORTED',
+      errorMessage: `${req.model} 에는 공식 사전 계산 경로가 없다`,
+    }
+  }
+  const status = keyStatus(req.model)
+  if (!status.present) {
+    return { ok: false, inputTokens: null, errorCode: 'NO_API_KEY', errorMessage: `${status.envName} 가 없다` }
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, req.timeoutMs)
+  try {
+    const res = await fetch(COUNT_TOKENS_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': process.env[status.envName] ?? '',
+        'anthropic-version': '2023-06-01',
+      },
+      // 🔴 실제 요청과 **같은 모델 · system · messages · prefill**.
+      //    `max_tokens` 만 없다 — count_tokens 가 받지 않는 칸이다
+      body: JSON.stringify({
+        model: apiModelIdFor(req.model),
+        system: req.systemPrompt,
+        messages: [
+          { role: 'user', content: req.userPayload },
+          { role: 'assistant', content: ANTHROPIC_JSON_PREFILL },
+        ],
+      }),
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      return {
+        ok: false, inputTokens: null, errorCode: `HTTP_${res.status}`,
+        errorMessage: `사전 계산이 ${res.status} 로 응답했다`,
+      }
+    }
+    const json = (await res.json()) as Record<string, unknown>
+    const n = json.input_tokens
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) {
+      // 🔴 모양이 다르면 **추측하지 않는다.** 모른다고 끝낸다
+      return {
+        ok: false, inputTokens: null, errorCode: 'COUNT_SHAPE',
+        errorMessage: '사전 계산 응답에 input_tokens 숫자가 없다',
+      }
+    }
+    return { ok: true, inputTokens: n, errorCode: null, errorMessage: null }
+  } catch (e: unknown) {
+    const aborted = e instanceof Error && e.name === 'AbortError'
+    return {
+      ok: false, inputTokens: null,
+      errorCode: aborted ? 'TIMEOUT' : 'NETWORK',
+      errorMessage: aborted ? `${req.timeoutMs}ms 안에 응답이 없었다` : '네트워크 오류',
+    }
   } finally {
     clearTimeout(timer)
   }

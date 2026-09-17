@@ -29,7 +29,12 @@ import {
   type Judgement, type JudgeInput, type RegressionRow, type SemanticOutcome, type SemanticStatus,
 } from '../src/lib/micro-seed-auto-judge'
 // 🔴 기존 LLM 경로를 그대로 쓴다. 새 HTTP 클라이언트도 새 SDK 도 만들지 않는다
-import { callProvider, keyStatus, type ProviderModel } from './lib/voice-m3-provider.mjs'
+import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-provider.mjs'
+/**
+ * 🔴 **유료 요청은 장부를 지나서만 나간다** (2026-09-17).
+ *    `callProvider` 를 직접 부르지 않는다 — 부르면 그 요청은 세어지지도 막히지도 않는다.
+ */
+import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const DATA_DIR = '.microseed-data'
@@ -252,6 +257,28 @@ export function isRetryable(st: SemanticStatus): boolean {
  * provider 오류·타임아웃은 최대 2회. 파싱 실패는 형식을 다시 일러 1회.
  * 그래도 안 되면 `verdict: null` 이고 judgeOne 이 HOLD 로 보낸다.
  */
+/**
+ * 🔴 **회차 장부.** `main()` 이 열기 전에는 `null` 이고, 그동안은 요청이 나가지 않는다.
+ *    "장부가 없으면 그냥 보낸다" 는 선택지를 두지 않는다 — 그 한 줄이 통제를 없앤다.
+ */
+let LEDGER: SupplyLlmSession | null = null
+
+/** 🔴 이 파일에서 provider 로 나가는 **유일한 문**. 장부가 없으면 보내지 않는다 */
+async function ask(stage: 'judge' | 'judgeRetry', systemPrompt: string, userPayload: string): Promise<LlmResponse> {
+  if (LEDGER === null) {
+    return {
+      ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
+      finishReason: '', reasoningTokens: null, responseChars: 0, maxTokensReached: false,
+      usageKnown: false, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+      errorCode: 'NO_LEDGER', errorMessage: '장부가 열리지 않아 유료 요청을 보내지 않았다',
+    }
+  }
+  return LEDGER.call({
+    stage, model: JUDGE_MODEL, systemPrompt, userPayload,
+    maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS,
+  })
+}
+
 async function askSemantic(t: JudgeInput): Promise<SemanticOutcome> {
   let attempt = 0
   let lastStatus: SemanticStatus = 'skipped'
@@ -259,10 +286,7 @@ async function askSemantic(t: JudgeInput): Promise<SemanticOutcome> {
 
   for (; attempt < MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) await sleep(backoffMs(attempt, Math.random()))
-    const res = await callProvider({
-      model: JUDGE_MODEL, systemPrompt: SYSTEM_PROMPT, userPayload: buildPayload(t),
-      maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS,
-    })
+    const res = await ask('judge', SYSTEM_PROMPT, buildPayload(t))
     lastError = res.errorCode
     lastStatus = statusOf(res.errorCode, res.maxTokensReached)
     if (lastStatus !== 'ok') {
@@ -278,12 +302,11 @@ async function askSemantic(t: JudgeInput): Promise<SemanticOutcome> {
     }
     // 🔴 파싱 실패 — 형식을 다시 일러 한 번만 더 묻는다
     lastStatus = 'parseError'
-    const retry = await callProvider({
-      model: JUDGE_MODEL,
-      systemPrompt: `${SYSTEM_PROMPT}\n\n🔴 지난 답이 JSON 이 아니었다. 설명 없이 JSON 객체 하나만 답한다.`,
-      userPayload: buildPayload(t),
-      maxOutputTokens: JUDGE_MAX_TOKENS, timeoutMs: JUDGE_TIMEOUT_MS,
-    })
+    const retry = await ask(
+      'judgeRetry',
+      `${SYSTEM_PROMPT}\n\n🔴 지난 답이 JSON 이 아니었다. 설명 없이 JSON 객체 하나만 답한다.`,
+      buildPayload(t),
+    )
     attempt += 1
     const v2 = (retry.ok && !retry.maxTokensReached) ? parseSemantic(retry.rawText) : null
     if (v2 !== null) {
@@ -365,6 +388,19 @@ async function main(): Promise<void> {
 
   const key = keyStatus(JUDGE_MODEL)
   if (!key.present) fail(`${key.envName} 가 없습니다`)
+
+  /**
+   * 🔴 **회차 장부를 연다** (2026-09-17). 이 줄 뒤에야 유료 요청이 나갈 수 있다.
+   *
+   *    예산·여유 배수는 **env 에서만** 온다. 비어 있으면 모든 유료 요청이 보류되고
+   *    회차는 호출 0 으로 끝난다 — 아무도 정하지 않은 금액으로 돈을 쓰지 않는다.
+   */
+  const ledgerRunId = `judge-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')}`
+  LEDGER = new SupplyLlmSession({ runId: ledgerRunId, limits: limitsFromEnv(process.env) })
+  console.log(`   장부 ${LEDGER.dir}`)
+  console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`
+    + ` · 여유 배수 ${LEDGER.limits.headroomMultiplier ?? '🔴 미설정'}`
+    + ` · 회차 요청 상한 ${LEDGER.limits.runRequestCap ?? '없음'}`)
 
   // ② 캐시 — 🔴 같은 입력을 두 번 묻지 않는다
   const cache = loadCache()
@@ -463,6 +499,9 @@ async function main(): Promise<void> {
       autoDecision: v.decision,
     })
   }
+  // 🔴 **장부를 화면에 찍는다.** 안 보이면 늘어도 모른다
+  if (LEDGER !== null) console.log(`\n④-b ${LEDGER.describe()}`)
+
   const reg = checkRegression(regRows)
   console.log(`\n⑤ 회귀 대조 (사람이 이미 판정한 ${regRows.length}건)`)
   console.log(`   🔴 false pass  ${reg.falsePass.length}건 · 🟡 보수적 ${reg.conservative.length}건 · 🟢 일치 ${reg.agree.length}건`)

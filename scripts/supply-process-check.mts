@@ -1159,7 +1159,9 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({ runId: 'R1', takenAt: new Date(), rows })), 'utf-8')
   }
   /** 🔴 가짜 provider 를 끼우고 실제 스크립트를 돌린다 — 호출 수를 정확히 센다 */
-  const runWithFake = (args: readonly string[]): { code: number | null; out: string; calls: number } => {
+  const runWithFake = (args: readonly string[]): {
+    code: number | null; out: string; calls: number; countCalls: number
+  } => {
     writeFileSync(logPath, '', 'utf-8')
     // 🔴 캐시는 매번 비운다 — 캐시 hit 이 호출 수를 가려서는 안 된다
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
@@ -1174,17 +1176,32 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
         cwd: root, encoding: 'utf-8',
         env: {
           ...process.env,
-          // 🔴 **임시 HOME** — 운영 자산 대신 합성 자산을 읽게 한다
+          // 🔴 **임시 HOME** — 운영 자산 대신 합성 자산을 읽게 한다.
+          //    장부도 이 HOME 아래에 생긴다(`defaultLedgerDir`) — 운영 장부를 건드리지 않는다
           HOME: fakeHome,
           // 🔴 키는 **있다.** 이제 키 오류로 대신 재지 않는다
           ANTHROPIC_API_KEY: 'fixture-fake-key',
+          /**
+           * 🔴 **시험 예산은 임시 환경에만 넣는다** (2026-09-17).
+           *    운영 금액이 아니다 — 이 블록은 "제외가 호출을 줄이는가" 를 보는 곳이라
+           *    장부가 여력 부족으로 막아 버리면 그 질문을 할 수 없다. 넉넉히 준다.
+           *    장부 자체의 행동은 `supply-llm-ledger-check` 가 따로 본다.
+           */
+          SORAN_LLM_DAILY_BUDGET_USD: '1000',
+          SORAN_LLM_RESERVE_HEADROOM: '1.5',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
         },
       },
     )
     const log = readFileSync(logPath, 'utf-8').split('\n').filter((l) => l.trim() !== '')
-    return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`, calls: log.length }
+    // 🔴 **유료 호출만 센다.** 무료 사전 계산(`/count_tokens`)을 같이 세면
+    //    "호출 0" 음성 검사가 의미를 잃는다 — 계산은 나가고 생성은 안 나갈 수 있다
+    return {
+      code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`,
+      calls: log.filter((l) => l.startsWith('paid\t')).length,
+      countCalls: log.filter((l) => l.startsWith('count\t')).length,
+    }
   }
 
   /**

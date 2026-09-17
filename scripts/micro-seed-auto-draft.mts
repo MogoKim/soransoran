@@ -94,7 +94,14 @@ import type { VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import type { VoiceProvenance } from '../src/lib/original-post-voice-match'
 import { humanVoiceDirectives, registerFreedomDirectives, VOICE_TAKEAWAYS } from './lib/original-post-prompt'
 // 🔴 기존 LLM 경로를 그대로 쓴다. 새 HTTP 클라이언트도 SDK 도 만들지 않는다
-import { callProvider, keyStatus, type ProviderModel } from './lib/voice-m3-provider.mjs'
+import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-provider.mjs'
+/**
+ * 🔴 **유료 요청은 장부를 지나서만 나간다** (2026-09-17).
+ *    `callProvider` 를 직접 부르지 않는다 — 나이 검수가 바로 그렇게 새어 나가
+ *    회차 상한(`CallBudget`)에도 관제 집계에도 잡히지 않았다.
+ */
+import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
+import { type LedgerStage } from '../src/lib/llm-ledger'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { judgeCrisisSignal, SAFETY_SIGNAL_VERSION } from '../src/lib/micro-seed-safety-signals'
 import { generateWithRetries } from '../src/lib/micro-seed-draft-run'
@@ -766,8 +773,35 @@ type CallOutcome<T> = { value: T | null; status: string; attemptCount: number; e
 /** 🔴 회차 전체의 실제 provider 요청 수 — **여기 하나로만 센다** */
 let BUDGET: CallBudget = new CallBudget(Number.MAX_SAFE_INTEGER)
 
+/**
+ * 🔴 **회차 장부.** `main()` 이 열기 전에는 `null` 이고, 그동안은 요청이 나가지 않는다.
+ *    "장부가 없으면 그냥 보낸다" 는 선택지를 두지 않는다 — 그 한 줄이 통제를 없앤다.
+ */
+let LEDGER: SupplyLlmSession | null = null
+
+/**
+ * 🔴 이 파일에서 provider 로 나가는 **유일한 문** (2026-09-17).
+ *
+ *    생성 · 품질 · JSON 재시도 · 축 재시도 · 나이 검수가 **전부** 여기를 지난다.
+ *    하나라도 `callProvider` 를 직접 부르면 그 요청은 계산되지도 예약되지도 않는다.
+ */
+async function ask(stage: LedgerStage, system: string, payload: string, maxOut: number): Promise<LlmResponse> {
+  if (LEDGER === null) {
+    return {
+      ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
+      finishReason: '', reasoningTokens: null, responseChars: 0, maxTokensReached: false,
+      usageKnown: false, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
+      errorCode: 'NO_LEDGER', errorMessage: '장부가 열리지 않아 유료 요청을 보내지 않았다',
+    }
+  }
+  return LEDGER.call({
+    stage, model: DRAFT_MODEL, systemPrompt: system, userPayload: payload,
+    maxOutputTokens: maxOut, timeoutMs: DRAFT_TIMEOUT_MS,
+  })
+}
+
 async function callJson<T>(
-  system: string, payload: string, parse: (raw: string) => T | null,
+  stage: LedgerStage, system: string, payload: string, parse: (raw: string) => T | null,
 ): Promise<CallOutcome<T>> {
   let attempt = 0
   let status = 'skipped'
@@ -777,10 +811,7 @@ async function callJson<T>(
     // 🔴 상한을 넘으면 부르지 않는다. 조용히 넘기지 않고 사유를 남긴다
     if (!BUDGET.take()) return { value: null, status: 'budgetExhausted', attemptCount: attempt + 1, errorCode }
     countCall(attempt === 0 ? 'first' : 'transportRetry')
-    const res = await callProvider({
-      model: DRAFT_MODEL, systemPrompt: system, userPayload: payload,
-      maxOutputTokens: DRAFT_MAX_TOKENS, timeoutMs: DRAFT_TIMEOUT_MS,
-    })
+    const res = await ask(stage, system, payload, DRAFT_MAX_TOKENS)
     errorCode = res.errorCode
     if (res.maxTokensReached) { status = 'maxTokens'; break }
     if (!res.ok) {
@@ -793,11 +824,11 @@ async function callJson<T>(
     status = 'parseError'
     if (!BUDGET.take()) return { value: null, status: 'budgetExhausted', attemptCount: attempt + 1, errorCode }
     countCall('jsonRetry')
-    const retry = await callProvider({
-      model: DRAFT_MODEL,
-      systemPrompt: `${system}\n\n🔴 지난 답이 JSON 이 아니었다. 설명 없이 JSON 객체 하나만 답한다.`,
-      userPayload: payload, maxOutputTokens: DRAFT_MAX_TOKENS, timeoutMs: DRAFT_TIMEOUT_MS,
-    })
+    const retry = await ask(
+      'jsonRetry',
+      `${system}\n\n🔴 지난 답이 JSON 이 아니었다. 설명 없이 JSON 객체 하나만 답한다.`,
+      payload, DRAFT_MAX_TOKENS,
+    )
     attempt += 1
     const v2 = (retry.ok && !retry.maxTokensReached) ? parse(retry.rawText) : null
     if (v2 !== null) return { value: v2, status: 'ok', attemptCount: attempt + 1, errorCode: null }
@@ -912,7 +943,7 @@ async function askQuality(
     onMiss(1)
     const payload = JSON.stringify({ title: d.title, body: d.body })
     const ctx = { persona, draftText: `${d.title}\n${d.body}` }
-    let q = await callJson(buildQualitySystemPrompt(persona), payload, (t) => parseQuality(t, ctx))
+    let q = await callJson('draftQuality', buildQualitySystemPrompt(persona), payload, (t) => parseQuality(t, ctx))
     statusCount.set(q.status, (statusCount.get(q.status) ?? 0) + 1)
     /**
      * 🔴 **모르는 축이 오면 한 번만 다시 묻는다** (2026-09-13).
@@ -924,6 +955,7 @@ async function askQuality(
       schemaRetry += 1
       for (const u of q.value.unknownIssues) unknownAxis.set(u, (unknownAxis.get(u) ?? 0) + 1)
       const retry = await callJson(
+        'schemaRetry',
         `${buildQualitySystemPrompt(persona)}\n\n${schemaRetryDirective(q.value.unknownIssues)}`,
         payload, (t) => parseQuality(t, ctx),
       )
@@ -941,19 +973,30 @@ async function askQuality(
      */
     if (q.value !== null && persona?.ageBand != null && persona.ageBand.trim() !== '') {
       ageCalls += 1
-      const ageRes = await callProvider({
-        model: DRAFT_MODEL,
-        systemPrompt: buildAgeCheckSystemPrompt(persona.ageBand),
-        userPayload: payload, maxOutputTokens: AGE_CHECK_MAX_TOKENS, timeoutMs: DRAFT_TIMEOUT_MS,
-      })
-      const age: LifeConflict | null = ageRes.ok && !ageRes.maxTokensReached
-        ? parseAgeCheck(ageRes.rawText, ctx.draftText)
-        : null
-      if (age === null) ageUnread += 1
-      const merged = mergeLifeConflict(q.value.lifeConflict, age)
-      if (merged !== q.value.lifeConflict) {
-        q = { ...q, value: { ...q.value, lifeConflict: merged } }
-        if (merged?.conflict === true) ageCaught += 1
+      /**
+       * 🔴 **여기가 새던 자리다** (2026-09-17 수정).
+       *    이 호출은 `callProvider` 를 직접 불러 `BUDGET.take()` 도 `countCall()` 도
+       *    지나지 않았다. 회차 상한에 잡히지 않았고 관제 집계에도 없었다 —
+       *    실측 506건이 통제 밖에 있었다. 이제 다른 호출과 **같은 문**을 지난다.
+       */
+      if (!BUDGET.take()) {
+        // 🔴 회차 상한에 닿았으면 부르지 않는다. 확인하지 못한 것으로 센다
+        ageUnread += 1
+        countCall('ageCheckBudgetExhausted')
+      } else {
+        countCall('ageCheck')
+        const ageRes = await ask(
+          'ageCheck', buildAgeCheckSystemPrompt(persona.ageBand), payload, AGE_CHECK_MAX_TOKENS,
+        )
+        const age: LifeConflict | null = ageRes.ok && !ageRes.maxTokensReached
+          ? parseAgeCheck(ageRes.rawText, ctx.draftText)
+          : null
+        if (age === null) ageUnread += 1
+        const merged = mergeLifeConflict(q.value.lifeConflict, age)
+        if (merged !== q.value.lifeConflict) {
+          q = { ...q, value: { ...q.value, lifeConflict: merged } }
+          if (merged?.conflict === true) ageCaught += 1
+        }
       }
     }
     out.set(d.draftNo, q.value)
@@ -1312,6 +1355,18 @@ async function main(): Promise<void> {
    */
   BUDGET = new CallBudget(callBudgetOf(seeds.length))
   /**
+   * 🔴 **회차 장부를 연다** (2026-09-17). 이 줄 뒤에야 유료 요청이 나갈 수 있다.
+   *
+   *    예산·여유 배수는 **env 에서만** 온다. 비어 있으면 모든 유료 요청이 보류되고
+   *    회차는 호출 0 으로 끝난다 — 아무도 정하지 않은 금액으로 돈을 쓰지 않는다.
+   */
+  const ledgerRunId = RUN_ID ?? `draft-${nowIso.replace(/[-:]/g, '').replace(/\..+$/, '')}`
+  LEDGER = new SupplyLlmSession({ runId: ledgerRunId, limits: limitsFromEnv(process.env) })
+  console.log(`   장부 ${LEDGER.dir}`)
+  console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`
+    + ` · 여유 배수 ${LEDGER.limits.headroomMultiplier ?? '🔴 미설정'}`
+    + ` · 회차 요청 상한 ${LEDGER.limits.runRequestCap ?? '없음'}`)
+  /**
    * 🔴 **누가 쓸지 생성 **전**에 정한다** (2026-09-13).
    *    원문의 생활사 요구를 정본 판정으로 읽고, 쓸 수 있는 Persona 중에서 고른다.
    *    쓸 수 없는 사람의 목소리로 AI 를 부르지 않는다.
@@ -1472,6 +1527,7 @@ async function main(): Promise<void> {
         generate: async (retryReason) => {
           if (retryReason !== null) retried += 1
           const g = await callJson(
+            'draftGen',
             retryReason === null ? genSystem : genSystem + retryDirective(retryReason),
             payload, parseGen,
           )
@@ -1556,7 +1612,7 @@ async function main(): Promise<void> {
         lifeRetried += 1
         for (let n = 0; n < MAX_LIFE_CONFLICT_RETRIES && allConflict() && crisisStop === null; n += 1) {
           const ev = [...qmap.values()].map((v) => v?.lifeConflict?.evidence ?? '').filter((x) => x !== '')
-          const g2 = await callJson(genSystem + lifeConflictDirective(persona, ev), buildGenPayload({
+          const g2 = await callJson('draftGen', genSystem + lifeConflictDirective(persona, ev), buildGenPayload({
             title: meta.title, bodyHead: meta.bodyHead, communityAngle: meta.angle,
             axis: meta.axis, lane: meta.lane,
           }), parseGen)
@@ -1644,6 +1700,12 @@ async function main(): Promise<void> {
   }
   console.log(`      종류별 ${[...callKind.entries()].map(([k, n]) => `${k} ${n}`).join(' · ') || '없음'}`
     + ` · schema 재요청 ${schemaRetry}회`)
+  /**
+   * 🔴 **장부를 화면에 찍는다** (2026-09-17). 안 보이면 늘어도 모른다.
+   *    위의 `BUDGET.spent` 는 **요청 수**이고, 아래는 **금액**이다. 둘은 다른 것을 센다 —
+   *    같은 줄에 합치면 어느 쪽이 막았는지 읽는 사람이 구분하지 못한다.
+   */
+  if (LEDGER !== null) console.log(`   ${LEDGER.describe().split('\n').join('\n   ')}`)
   /**
    * 🔴 **나이 판정을 결정론과 모델로 나눠 센다** (2026-09-16).
    *    합쳐 세면 "모델이 잡았다" 와 "부르기 전에 잡았다" 가 구분되지 않는다.
