@@ -148,11 +148,17 @@ export const FORBIDDEN_KEYS: readonly string[] = [
   'rawBody', 'body', 'sourceBody', 'bodyText', 'content', 'rawComments', 'html', 'bodyHtml',
 ] as const
 
-/** 소스·SRN 검수 화면(`.detail.jsonl`)이 읽는 키 */
+/**
+ * 소스·SRN 검수 화면(`.detail.jsonl`)이 읽는 키
+ *
+ * 🔴 **세 시각을 더한다** (2026-09-17). 얇은 행이 들고 온 시각을 여기서 다시 버리면
+ *    생성·적재가 영영 보지 못한다 — 한 군데만 뚫어서는 길이 나지 않는다.
+ */
 export const DETAIL_KEYS: readonly string[] = [
   'runId', 'axis', 'access', 'sourceSite', 'sourceArticleId', 'url', 'score', 'lane',
   'bodyLength', 'lengthBasis', 'imageCount', 'commentCount',
   'safetyVerdict', 'safetyReasons', 'assetAxes', 'reason', 'title', 'bodyHead',
+  'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
 ] as const
 
 /** raw-review 화면(`.raw-detail.jsonl`)이 읽는 키 */
@@ -160,6 +166,7 @@ export const RAW_DETAIL_KEYS: readonly string[] = [
   'sourceArticleId', 'sourceSite', 'url', 'title', 'score', 'lane',
   'accessStatus', 'bodyLength', 'bodyHead', 'axis',
   'safetyVerdict', 'safetyReasons', 'imageCount', 'commentCount', 'runId', 'fetchedAt',
+  'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
 ] as const
 
 /** 화면이 후보로 올리는 축 */
@@ -191,6 +198,14 @@ export type ThinRow = {
   reason?: string
   runId?: string
   fetchedAt?: string
+  /**
+   * 🔴 **파일에서 읽은 행이라 전부 `?` 다** — 옛 얇은 파일에는 이 세 키가 없다.
+   *    `micro-seed-82cook-thin.ThinRow` 와 이름이 같지만 **여기는 입력 쪽 모양**이고,
+   *    그쪽은 산출 쪽 모양이다. 없으면 `undefined` 이고 `S()` 가 빈 문자열로 읽는다.
+   */
+  sourcePostedAt?: string
+  sourceListedAt?: string
+  sourceCapturedAt?: string
 }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''))
@@ -232,6 +247,8 @@ export function toDetailRecord(r: ThinRow): Record<string, unknown> {
     reason: S(r.reason),
     title: S(r.title),
     bodyHead: S(r.bodyHead),
+    // 🔴 얇은 행이 들고 온 세 시각을 그대로 옮긴다. 여기서 재지도 메우지도 않는다
+    ...sourceTimesOf(r),
   }
 }
 
@@ -254,6 +271,24 @@ export function toRawDetailRecord(r: ThinRow): Record<string, unknown> {
     commentCount: N(r.commentCount),
     runId: S(r.runId),
     fetchedAt: S(r.fetchedAt),
+    ...sourceTimesOf(r),
+  }
+}
+
+/**
+ * 🔴 얇은 행의 세 시각 — **없으면 빈 문자열(모른다)** 이다.
+ *
+ *    옛 얇은 행에는 이 키가 없다. 그때 `undefined` 를 그대로 흘리면 JSON 에서 키가
+ *    사라지고, 다음 단계는 "키가 없다" 와 "모른다" 를 구분하지 못한다.
+ *    그래서 **항상 세 키를 채운다** — 값이 빈 문자열일 뿐이다.
+ */
+function sourceTimesOf(r: ThinRow): {
+  sourcePostedAt: string; sourceListedAt: string; sourceCapturedAt: string
+} {
+  return {
+    sourcePostedAt: S(r.sourcePostedAt),
+    sourceListedAt: S(r.sourceListedAt),
+    sourceCapturedAt: S(r.sourceCapturedAt),
   }
 }
 

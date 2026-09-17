@@ -48,6 +48,7 @@ import {
 } from '../src/lib/micro-seed-auto-draft'
 import {
   lifeHistoryLines, evidenceFoundIn, LIFE_CONFLICT_MISSING, LIFE_EVIDENCE_NOT_FOUND,
+  lifeReferenceLines, noGoAvoidLines,
   type PersonaLifeHistory,
 } from '../src/lib/micro-seed-auto-draft'
 import { PLANNED } from './persona-children-age-bands.mjs'
@@ -2307,6 +2308,190 @@ console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정�
       + readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     return !/cmu[0-9a-z]{20,}|후라이팬|요실금/.test(src)
   })())
+}
+
+// ─────────────────────────────────────────────────────────
+// [IC] 생성·검수 입력 계약 — 🔴 **카드에 있는데 프롬프트에 닿지 않던 칸** (2026-09-17)
+//
+//   실측 결함(어제 40건 검토):
+//     · 카드가 `은퇴` 인 P14 가 "우리 직장도 그런데" 를 썼다 — 직업을 안 넘겼다
+//     · 카드 noGo 가 `금액 언급` 인 P10 이 "1만 5천 원에 샀는데" 를 썼다 — noGo 를 안 넘겼다
+//   둘 다 `cardToPersona` 는 값을 채워 놨고 `lifeOf()` 가 7칸만 옮겨서 생긴 일이다.
+// ─────────────────────────────────────────────────────────
+{
+  const RETIRED: PersonaLifeHistory = {
+    code: 'P14', ageBand: '50대 후반', maritalStatus: '기혼', childrenCount: 1,
+    parentCare: '없음', menopauseStatus: '후',
+    workStatus: '은퇴', region: '중소도시', economicStatus: '여유',
+    noGoTopics: ['형편 언급', '자랑'],
+  }
+  const BARE: PersonaLifeHistory = { code: 'P99' }
+
+  // ── ① 전달: 직업·사는 곳이 생성과 검수가 **같이 보는 줄**에 있다 ──
+  check('🔴 [IC] 생활사 줄에 하는 일이 있다', lifeHistoryLines(RETIRED).some((l) => l.includes('하는 일: 은퇴')))
+  check('🔴 [IC] 생활사 줄에 사는 곳이 있다', lifeHistoryLines(RETIRED).some((l) => l.includes('사는 곳: 중소도시')))
+  check('🔴 [IC] 값이 없으면 "알려지지 않음" 이다 — 지어내지 않는다',
+    lifeHistoryLines(BARE).filter((l) => l.includes('알려지지 않음')).length === 7)
+
+  // ── ② 형편: 생성에는 주고 **검수에는 주지 않는다** ──
+  check('🔴 [IC] 형편은 생활사 줄에 **없다** — 검수가 글에 없는 것을 근거로 막지 못하게',
+    !lifeHistoryLines(RETIRED).some((l) => l.includes('여유')))
+  check('🔴 [IC] 형편은 참고 줄로만 간다', lifeReferenceLines(RETIRED).some((l) => l.includes('여유')))
+  check('🔴 [IC] 형편 참고 줄은 **자기 형편을 밝히지 말라**고 못박는다',
+    lifeReferenceLines(RETIRED).join('\n').includes('자기 형편을 본문에 드러내지 않습니다'))
+  check('🔴 [IC] 형편이 없으면 참고 줄 자체가 없다', lifeReferenceLines(BARE).length === 0)
+
+  /**
+   * ── 🔴 **금액은 카드마다 다르다** (2026-09-17 보정) ──
+   *
+   *    앞선 판은 형편 줄에서 *"금액·수입·재산을 적지 않습니다"* 라고 **모든 Persona 에게**
+   *    말했다. 그러면 장 본 값 · 생활비 · 물가 이야기가 통째로 막힌다 —
+   *    `NORTH-STAR.md` 가 허용한 소재이고 우리 고객이 실제로 쓰는 이야기다.
+   */
+  {
+    const ref = lifeReferenceLines(RETIRED).join('\n')
+    check('🔴 [IC] 형편 줄이 **모든 사람에게** 금액을 금지하지 않는다',
+      !/금액[^\n]{0,12}적지 않습니다/.test(ref))
+    check('🔴 [IC] 형편 줄이 "돈 이야기를 못 한다는 뜻이 아니다" 라고 적는다',
+      ref.includes('돈 이야기를 못 한다는 뜻이 아닙니다'))
+    for (const ok of ['장 본 값', '물가', '생활비', '중고 거래 값', '가격 비교']) {
+      check(`🔴 [IC] ${ok} 소재를 살려 둔다`, ref.includes(ok))
+    }
+    check('🔴 [IC] 자기 살림살이를 밝히는 말만 막는다',
+      ref.includes('우리는 여유가 있어서') && ref.includes('형편이 빠듯해서'))
+    check('🔴 [IC] 수입·재산 규모는 여전히 밝히지 않는다', ref.includes('수입·재산 규모를 밝히지 않습니다'))
+
+    // 🔴 금액 금지는 **그 카드의 noGoTopics 가** 정한다
+    const MONEY_NOGO: PersonaLifeHistory = { ...RETIRED, noGoTopics: ['금액 언급', '비교'] }
+    const NO_MONEY_NOGO: PersonaLifeHistory = { ...RETIRED, noGoTopics: ['이혼 권유'] }
+    check('🔴 [IC] 카드에 금액 금지가 있으면 그 카드에만 붙는다',
+      noGoAvoidLines(MONEY_NOGO).some((l) => l.includes('금액 언급')))
+    check('🔴 [IC] 카드에 금액 금지가 없으면 금액이 목록에 없다',
+      !noGoAvoidLines(NO_MONEY_NOGO).some((l) => l.includes('금액 언급')))
+    check('🔴 [IC] "목록에 금액이 있으면 이 사람만 피한다" 를 명시한다',
+      noGoAvoidLines(MONEY_NOGO).join('\n').includes('금액이 있으면 이 사람만'))
+    check('🔴 [IC] 목록에 없으면 형편이 무엇이든 값 이야기를 쓴다고 명시한다',
+      noGoAvoidLines(NO_MONEY_NOGO).join('\n').includes('값·생활비 이야기를 그대로 씁니다'))
+    // 🔴 두 카드의 프롬프트가 실제로 갈린다
+    const g1 = buildGenSystemPrompt({ title: 't', bodyHead: 'b', persona: MONEY_NOGO })
+    const g2 = buildGenSystemPrompt({ title: 't', bodyHead: 'b', persona: NO_MONEY_NOGO })
+    check('🔴 [IC] 금액 금지 카드와 아닌 카드의 지시가 실제로 다르다', g1 !== g2)
+    check('🔴 [IC] 금액 금지가 없는 카드는 프롬프트에 금액 금지가 없다', !g2.includes('금액 언급'))
+  }
+
+  // ── ③ noGo: 카드가 정한 회피 소재가 생성 쪽에 전달된다 ──
+  check('🔴 [IC] noGo 소재가 전달된다', noGoAvoidLines(RETIRED).some((l) => l.includes('형편 언급')))
+  check('🔴 [IC] noGo 목록이 카드마다 다르다는 것을 명시한다',
+    noGoAvoidLines(RETIRED).join('\n').includes('목록에 없으면'))
+  check('🔴 [IC] noGo 는 소재를 통째로 막는 지시가 아니다 — 스치는 것까지 막지 않는다',
+    noGoAvoidLines(RETIRED).join('\n').includes('스치듯 지나가는 것까지 막지는 않습니다'))
+  check('🔴 [IC] noGo 가 비면 줄 자체가 없다', noGoAvoidLines({ code: 'P1', noGoTopics: [] }).length === 0)
+
+  // ── ④ 실제 프롬프트에 닿는가 — **정상 사례** ──
+  const gen = buildGenSystemPrompt({ title: '가전 이야기', bodyHead: '요즘 세탁기가', persona: RETIRED })
+  check('🔴 [IC] 생성 프롬프트에 하는 일이 들어간다', gen.includes('하는 일: 은퇴'))
+  check('🔴 [IC] 생성 프롬프트에 사는 곳이 들어간다', gen.includes('사는 곳: 중소도시'))
+  check('🔴 [IC] 생성 프롬프트에 형편이 참고로 들어간다', gen.includes('형편(참고): 여유'))
+  check('🔴 [IC] 생성 프롬프트에 noGo 소재가 들어간다', gen.includes('형편 언급'))
+  const qual = buildQualitySystemPrompt(RETIRED)
+  check('🔴 [IC] 검수 프롬프트도 하는 일을 본다', qual.includes('하는 일: 은퇴'))
+  check('🔴 [IC] 검수 프롬프트는 형편을 **보지 않는다**', !qual.includes('형편(참고)'))
+  check('🔴 [IC] 검수 프롬프트는 noGo 를 **보지 않는다** — 회피는 쓰기 전 일이다',
+    !qual.includes('피하는 소재'))
+
+  // ── ⑤ 실제 충돌 사례: 지킬 수 없던 지시가 사라졌다 ──
+  check('🔴 [IC] 옛 지시("직업 … 지어내지 않습니다")가 남아 있지 않다 — 직업을 주면서 그 말을 하면 모순이다',
+    !/개인 사정\(직업/.test(gen))
+  check('🔴 [IC] 끝내 주지 않는 것만 "지어내지 않는다" 에 남는다',
+    gen.includes('병력 · 가족 구성'))
+
+  // ── ⑥ 🔴 가능한 생활사를 모순으로 단정하지 않는다 ──
+  for (const allow of ['은퇴한 뒤 다시 일을 찾거나', '부업', '봉사', '예전에 다니던 직장']) {
+    check(`🔴 [IC] 은퇴자도 ${allow} 이야기를 할 수 있다고 적는다`, gen.includes(allow))
+  }
+  check('🔴 [IC] 검수도 재취업·부업을 충돌로 세지 않는다',
+    qual.includes('은퇴한 뒤 다시 일하거나 부업·봉사를 하는 이야기'))
+  check('🔴 [IC] 검수는 **지금 신분을 다르게 말할 때만** 충돌이다',
+    qual.includes('지금 자기 신분을 **다르게 말할 때만** 충돌이다'))
+  check('🔴 [IC] 여행·방문 지역 이야기는 충돌이 아니다', qual.includes('여행·방문한 지역 이야기'))
+
+  // ── ⑦ 🔴 말투·길이·질문형을 획일화하지 않는다 ──
+  {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      + readFileSync('src/lib/micro-seed-auto-draft.ts', 'utf-8')
+    check('🔴 [IC] voiceCore·voiceLength 를 생성 프롬프트로 넘기지 않는다',
+      !/voiceCore:|voiceLength:\s*card\./.test(src))
+    check('🔴 [IC] 생성 프롬프트가 존댓말·반말을 지정하지 않는다',
+      !/존댓말로 (씁|쓰)|반말로 (씁|쓰)|존댓말만/.test(gen))
+    check('🔴 [IC] 생성 프롬프트가 글 길이를 못박지 않는다',
+      !/[0-9]+\s*문장 (이내|이상)|[0-9]+자 (이내|이상)로 (씁|쓰)/.test(gen))
+    check('🔴 [IC] 생성 프롬프트가 질문형을 강제하지 않는다',
+      !/(반드시|꼭).{0,12}(물음표|질문형)/.test(gen))
+  }
+
+  // ── ⑧ 🔴 계약이 바뀌면 캐시가 저절로 빗나간다 ──
+  {
+    const WORKING: PersonaLifeHistory = { ...RETIRED, workStatus: '파트타임' }
+    const genA = buildGenSystemPrompt({ title: 't', bodyHead: 'b', persona: RETIRED })
+    const genB = buildGenSystemPrompt({ title: 't', bodyHead: 'b', persona: WORKING })
+    check('🔴 [IC] 하는 일이 바뀌면 생성 프롬프트가 달라진다 → genKey 가 달라진다', genA !== genB)
+    const noGoA = buildGenSystemPrompt({ title: 't', bodyHead: 'b', persona: RETIRED })
+    const noGoB = buildGenSystemPrompt({
+      title: 't', bodyHead: 'b', persona: { ...RETIRED, noGoTopics: ['이혼 권유'] },
+    })
+    check('🔴 [IC] noGo 가 바뀌면 생성 프롬프트가 달라진다', noGoA !== noGoB)
+    const ecoA = buildGenSystemPrompt({ title: 't', bodyHead: 'b', persona: RETIRED })
+    const ecoB = buildGenSystemPrompt({
+      title: 't', bodyHead: 'b', persona: { ...RETIRED, economicStatus: '빠듯' },
+    })
+    check('🔴 [IC] 형편이 바뀌면 생성 프롬프트가 달라진다', ecoA !== ecoB)
+    check('🔴 [IC] 하는 일이 바뀌면 **검수** 프롬프트도 달라진다 → qKey 가 달라진다',
+      buildQualitySystemPrompt(RETIRED) !== buildQualitySystemPrompt(WORKING))
+    // 🔴 형편은 검수에 안 가므로 qKey 는 그대로다 — 이것이 의도다
+    check('🔴 [IC] 형편만 바뀌면 검수 프롬프트는 그대로다 (검수는 형편을 안 본다)',
+      buildQualitySystemPrompt(RETIRED)
+      === buildQualitySystemPrompt({ ...RETIRED, economicStatus: '빠듯' }))
+    check('🔴 [IC] 캐시 key 가 프롬프트 digest 를 담는다 — 판 상수를 손으로 올리지 않는다',
+      /digest16\(genSystem\)/.test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8'))
+      && /qSystemDigest = digest16\(buildQualitySystemPrompt\(persona\)\)/
+        .test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')))
+  }
+
+  // ── ⑨ 🔴 lifeOf 가 카드의 칸을 빠뜨리지 않는다 ──
+  {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    // 🔴 `holdReasonFor:` 는 **앞쪽 타입 선언에도** 나온다. lifeOf 뒤에서부터 찾는다
+    const from = src.indexOf('lifeOf: (id) =>')
+    const body = src.slice(from, src.indexOf('holdReasonFor:', from))
+    check('🔴 [IC] lifeOf 본문을 실제로 잘라냈다', from > 0 && body.length > 100)
+    for (const f of ['workStatus', 'region', 'economicStatus', 'noGoTopics']) {
+      check(`🔴 [IC] lifeOf 가 ${f} 를 옮긴다`, body.includes(`${f}: card.${f}`))
+    }
+  }
+
+  // ── ⑪ 🔴 생성 산출물이 원문 시각을 실어 나른다 ──
+  {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const meta = src.slice(src.indexOf('function loadMeta'), src.indexOf('function loadMeta') + 1400)
+    for (const f of ['sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt']) {
+      check(`🔴 [ST] 소재 메타가 ${f} 를 읽는다`, meta.includes(`${f}: S(r.${f})`))
+    }
+    const cand = src.slice(src.indexOf("candidateType: 'seedOriginality'"))
+      .slice(0, src.slice(src.indexOf("candidateType: 'seedOriginality'")).indexOf('autoJudge:'))
+    for (const f of ['sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt']) {
+      check(`🔴 [ST] 후보 파일이 ${f} 를 싣는다`, cand.includes(`${f}: a.meta.${f}`))
+    }
+    check('🔴 [ST] 초안을 쓴 시각(writtenAt)과 원문 시각을 섞지 않는다',
+      cand.includes('writtenAt: a.draft.generatedAt') && cand.includes('sourcePostedAt: a.meta.sourcePostedAt'))
+    check('🔴 [ST] 원문 시각을 프롬프트에 넣지 않는다 — 전달할 값이지 쓰는 값이 아니다',
+      !/sourcePostedAt/.test(gen))
+  }
+
+  // ── ⑩ 🔴 기존 계약은 그대로다 ──
+  check('🔴 [IC] 사람 검토 계약 유지', MACHINE_AGE_HUMAN_REVIEW_REQUIRED)
+  check('🔴 [IC] 자기 나이 지시가 그대로 있다', gen.includes('자기 나이를 직접 말할 때'))
+  check('🔴 [IC] 원문 보호 — 소재는 남이 쓴 글이라는 줄이 그대로 있다',
+    gen.includes('[소재] 는 남이 쓴 글입니다'))
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 
 import {
   SKIP_LABEL, CAFE_BODY_HEAD_CHARS, planCafeThin, keepAfterClassify, outPathOf,
-  isNaverCafeRow, statsOf, verifyThinRun, dedupKeyOf, uniqueSourceCount, type CafeRow,
+  isNaverCafeRow, statsOf, verifyThinRun, dedupKeyOf, uniqueSourceCount, sourceTimesOf, type CafeRow,
 } from '../src/lib/micro-seed-navercafe-thin'
 import { THIN_COLUMNS, FORBIDDEN_COLUMNS, toThinRow, violatesStorage } from '../src/lib/micro-seed-82cook-thin'
 
@@ -343,6 +343,86 @@ console.log('\n⑩ 🔴 후보 수를 고유 원천 수로 오해하지 않는�
   check('🔴 행 3건이지만 고유 원천은 2건이다', dup.length === 3 && uniqueSourceCount(dup) === 2)
   check('🔴 같은 번호라도 카페가 다르면 다른 글이다',
     uniqueSourceCount([row({ sourceArticleId: '9' }), row({ sourceArticleId: '9', sourceSite: 'navercafe:wgang' })]) === 2)
+}
+
+// ─────────────────────────────────────────────────────────
+// [ST] 원문 시각 전달 — 🔴 **수집기는 뽑고 있었는데 여기서 버려졌다** (2026-09-17)
+//
+//   실측: `sourcePostedAt` 채움률 remonterrace 222/222 · wgang 82/82.
+//   그런데 `CafeRow` 타입에도 `THIN_COLUMNS` 에도 자리가 없어 첫 변환에서 사라졌고,
+//   하류 신선도가 `sourceCapturedAt`(= 우리가 본 시각)으로 떨어졌다.
+//   그래서 2020년 글이 "0일차" 로 잡혔다.
+// ─────────────────────────────────────────────────────────
+{
+  const POSTED = '2020-12-13T15:00:00.000Z'
+  const LISTED = '2026-09-16T12:33:31.020Z'
+  const row: CafeRow = {
+    sourceArticleId: '1', sourceSite: 'navercafe:remonterrace',
+    sourcePostedAt: POSTED, sourceListedAt: LISTED, sourceCapturedAt: LISTED,
+  }
+
+  // ── ① 읽기: 세 시각을 구분해 읽는다 ──
+  const t = sourceTimesOf(row)
+  check('🔴 [ST] 게시 시각을 읽는다', t.sourcePostedAt === POSTED)
+  check('🔴 [ST] 목록에서 본 시각을 읽는다', t.sourceListedAt === LISTED)
+  check('🔴 [ST] 가져온 시각을 읽는다', t.sourceCapturedAt === LISTED)
+  check('🔴 [ST] 셋은 서로 다른 칸이다 — 하나로 뭉치지 않는다',
+    t.sourcePostedAt !== t.sourceListedAt)
+
+  // ── ② 🔴 모르는 것을 지어내지 않는다 ──
+  const noPost = sourceTimesOf({ sourceListedAt: LISTED, sourceCapturedAt: LISTED })
+  check('🔴 [ST] 게시 시각이 없으면 빈 문자열이다 (모른다)', noPost.sourcePostedAt === '')
+  check('🔴 [ST] 🔴 가져온 시각으로 게시 시각을 **메우지 않는다** — 그러면 옛 글이 새 글이 된다',
+    noPost.sourcePostedAt !== noPost.sourceCapturedAt)
+  const bad = sourceTimesOf({ sourcePostedAt: '어제쯤', sourceListedAt: LISTED })
+  check('🔴 [ST] 읽을 수 없는 시각은 버린다 (모른다)', bad.sourcePostedAt === '')
+  check('🔴 [ST] 잘못된 값을 지금 시각으로 바꾸지 않는다', bad.sourcePostedAt === '')
+
+  // ── ③ 저장 계약: 세 칸이 파일로 나갈 수 있다 ──
+  for (const k of ['sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt']) {
+    check(`🔴 [ST] 저장 계약에 ${k} 가 있다`, THIN_COLUMNS.includes(k))
+  }
+
+  // ── ④ 실제 행: toThinRow 가 세 칸을 싣고, 저장 관문을 통과한다 ──
+  const thin = toThinRow({
+    id: '1', url: 'https://x/1', title: '제목', commentCount: 0, score: 0,
+    maskedBody: '본문', bodyHeadChars: CAFE_BODY_HEAD_CHARS,
+    axis: 'sourceCandidate', safetyVerdict: 'pass', safetyReasons: [],
+    reason: 'r', runId: 'run', fetchedAt: LISTED,
+    sourceSite: 'navercafe:remonterrace', times: t,
+  })
+  check('🔴 [ST] 얇은 행이 게시 시각을 싣는다', thin.sourcePostedAt === POSTED)
+  check('🔴 [ST] 얇은 행이 목록 시각을 싣는다', thin.sourceListedAt === LISTED)
+  check('🔴 [ST] 세 칸이 있어도 저장 관문을 통과한다',
+    violatesStorage(thin as unknown as Record<string, unknown>, CAFE_BODY_HEAD_CHARS).length === 0)
+  check('🔴 [ST] 전문은 여전히 나가지 않는다',
+    !('rawBody' in (thin as unknown as Record<string, unknown>)))
+
+  // ── ⑤ 🔴 times 를 안 주면 세 칸이 빈 문자열이다 — 82cook 이 그 경우다 ──
+  const noTimes = toThinRow({
+    id: '2', url: 'u', title: 't', commentCount: 0, score: 0,
+    maskedBody: 'b', bodyHeadChars: CAFE_BODY_HEAD_CHARS,
+    axis: 'sourceCandidate', safetyVerdict: 'pass', safetyReasons: [],
+    reason: 'r', runId: 'run', fetchedAt: LISTED,
+  })
+  check('🔴 [ST] times 가 없으면 게시 시각은 빈 문자열이다', noTimes.sourcePostedAt === '')
+  check('🔴 [ST] 키 자체는 있다 — "키 없음" 과 "모른다" 를 구분하지 않아도 되게',
+    'sourcePostedAt' in (noTimes as unknown as Record<string, unknown>))
+
+  // ── ⑥ 🔴 배선이 실제로 이어져 있는가 ──
+  {
+    const src = readFileSync('scripts/micro-seed-navercafe-thin.mts', 'utf-8')
+    check('🔴 [ST] 얇은 변환 러너가 수집물의 시각을 넘긴다', /times:\s*sourceTimesOf\(r\)/.test(src))
+  }
+
+  // ── ⑦ 🔴 게시 시각을 **사건 시각**이라고 적지 않는다 ──
+  {
+    const src = readFileSync('src/lib/micro-seed-navercafe-thin.ts', 'utf-8')
+      + readFileSync('src/lib/micro-seed-82cook-thin.ts', 'utf-8')
+    check('🔴 [ST] "사건 시각" 이라고 표시하지 않는다',
+      !/sourcePostedAt[^\n]{0,40}(은|는|=)\s*사건/.test(src))
+    check('🔴 [ST] 사건 시각이 아니라는 말이 주석에 남아 있다', src.includes('사건 시각이 아니다'))
+  }
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

@@ -16,12 +16,20 @@
  * 🔴 **이 파일은 무엇을 열지만 정한다.** 여는 것도 저장도 러너의 일이다.
  */
 
-/** 🔴 이 레인이 저장할 수 있는 것 — 여기 없는 키는 파일에 나가지 않는다 */
+/**
+ * 🔴 이 레인이 저장할 수 있는 것 — 여기 없는 키는 파일에 나가지 않는다
+ *
+ * 🔴 **세 시각을 더한다** (2026-09-17). 수집기는 `sourcePostedAt` 을 이미 100% 뽑는데
+ *    (실측 remonterrace 222/222 · wgang 82/82) 이 목록에 없어서 **첫 변환에서 버려졌다.**
+ *    그래서 하류의 신선도 판정이 `sourceCapturedAt`(= 우리가 본 시각)으로 떨어졌고,
+ *    2020년 글이 "오늘 들어온 글" 로 잡혔다. 값을 새로 만드는 것이 아니라 **안 버리는 것**이다.
+ */
 export const THIN_COLUMNS: readonly string[] = [
   'sourceArticleId', 'sourceSite', 'url', 'title',
   'commentCount', 'score', 'bodyLength', 'bodyHead',
   'axis', 'safetyVerdict', 'safetyReasons', 'reason',
   'runId', 'fetchedAt',
+  'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
 ] as const
 
 /**
@@ -171,6 +179,36 @@ export function planThinFetch(input: PlanInput): Plan {
   }
 }
 
+/**
+ * 🔴 **세 시각은 서로 다른 것을 뜻한다. 하나로 뭉치지 않는다** (2026-09-17).
+ *
+ * ```
+ * sourcePostedAt    원문이 그 게시판에 올라온 시각    ← source 가 화면에 보여 준 값
+ * sourceListedAt    우리가 목록에서 그 줄을 본 시각
+ * sourceCapturedAt  우리가 그 글을 가져온 시각
+ * ```
+ *
+ * 🔴 **`sourcePostedAt` 은 "사건이 일어난 시각" 이 아니다.** 어제 방송된 이야기를
+ *    오늘 누가 쓰면 `sourcePostedAt` 은 오늘이다. 글이 올라온 시각일 뿐이고,
+ *    화면·문서·주석 어디에서도 사건 시각이라고 적지 않는다.
+ *
+ * 🔴 **모르면 빈 문자열이다.** `''` 는 "없다" 가 아니라 **"모른다"** 이고,
+ *    하류가 그것을 아는 채로 판단해야 한다. 0 이나 지금 시각으로 채우지 않는다.
+ */
+export type SourceTimes = {
+  /** 원문이 올라온 시각 (ISO) — 🔴 사건 시각이 아니다. 모르면 `''` */
+  sourcePostedAt: string
+  /** 우리가 목록에서 본 시각 (ISO). 모르면 `''` */
+  sourceListedAt: string
+  /** 우리가 가져온 시각 (ISO). 모르면 `''` */
+  sourceCapturedAt: string
+}
+
+/** 🔴 값이 없을 때의 정본 — 빈 문자열 셋. `null` 과 `undefined` 를 섞지 않는다 */
+export const NO_SOURCE_TIMES: SourceTimes = Object.freeze({
+  sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: '',
+})
+
 export type ThinRow = {
   sourceArticleId: string
   sourceSite: string
@@ -186,7 +224,7 @@ export type ThinRow = {
   reason: string
   runId: string
   fetchedAt: string
-}
+} & SourceTimes
 
 /**
  * 저장할 행을 만든다 — 🔴 **전문은 인자로만 받고 결과에 남지 않는다.**
@@ -208,10 +246,20 @@ export function toThinRow(input: {
    * 한쪽만 전문을 남기게 되고, 그 한쪽이 이 레인의 존재 이유를 무너뜨린다.
    */
   sourceSite?: string
+  /**
+   * 🔴 수집물이 이미 들고 있는 세 시각. 없으면 전부 `''`(모른다) 다.
+   *    82cook 얇은 상세는 지금 게시 시각을 뽑지 않으므로 기본값이 그대로 간다 —
+   *    **없는 값을 지어내지 않는다.**
+   */
+  times?: Partial<SourceTimes>
 }): ThinRow {
+  const t = input.times ?? {}
   return {
     sourceArticleId: input.id,
     sourceSite: input.sourceSite ?? '82cook',
+    sourcePostedAt: (t.sourcePostedAt ?? '').trim(),
+    sourceListedAt: (t.sourceListedAt ?? '').trim(),
+    sourceCapturedAt: (t.sourceCapturedAt ?? '').trim(),
     url: input.url,
     title: input.title,
     commentCount: input.commentCount,

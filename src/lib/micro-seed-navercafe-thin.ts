@@ -26,9 +26,41 @@ export type CafeRow = {
   sourceCommentCount?: unknown
   sourceBoardName?: unknown
   qualityFlags?: unknown
+  /**
+   * 🔴 **수집물은 이 셋을 이미 들고 있다** (2026-09-17 실측 — 채움률 222/222 · 82/82).
+   *    여기 타입에 없어서 얇은 변환이 통째로 흘려버렸고, 하류 신선도가
+   *    `sourceCapturedAt` 으로 떨어졌다. `sourcePostedAt` 은 **원문이 올라온 시각**이고
+   *    **사건 시각이 아니다.**
+   */
+  sourcePostedAt?: unknown
+  sourceListedAt?: unknown
+  sourceCapturedAt?: unknown
 }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
+
+/**
+ * 🔴 수집물 한 줄에서 세 시각을 읽는다 — **없거나 읽을 수 없으면 빈 문자열(모른다)** 이다.
+ *
+ *    🔴 `sourceCapturedAt` 으로 `sourcePostedAt` 을 **메우지 않는다.**
+ *       그렇게 메우면 오래된 글이 "갓 올라온 글" 이 된다 — 그것이 지금의 결함이다.
+ *    🔴 읽을 수 없는 값을 지금 시각으로 바꾸지 않는다. 모르는 것은 모르는 채로 내려보낸다.
+ */
+export function sourceTimesOf(r: CafeRow): {
+  sourcePostedAt: string; sourceListedAt: string; sourceCapturedAt: string
+} {
+  const iso = (v: unknown): string => {
+    const s = typeof v === 'string' ? v.trim() : ''
+    if (s === '') return ''
+    const d = new Date(s)
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString()
+  }
+  return {
+    sourcePostedAt: iso(r.sourcePostedAt),
+    sourceListedAt: iso(r.sourceListedAt),
+    sourceCapturedAt: iso(r.sourceCapturedAt),
+  }
+}
 
 export const SKIP_LABEL = {
   NO_ID: 'id 가 없다',
