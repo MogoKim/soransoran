@@ -141,6 +141,8 @@
     "collect:guard-status": "tsx scripts/collect-guard-clear.mts --status",
     "collect:guard-clear": "tsx scripts/collect-guard-clear.mts",
     "supply:process-check": "tsx scripts/supply-process-check.mts",
+    "supply:ledger-check": "tsx scripts/supply-llm-ledger-check.mts",
+    "supply:ledger-resolve": "tsx scripts/supply-llm-ledger-resolve.mts",
     "original-post:auto-publish": "tsx scripts/original-post-auto-publish.mts",
     "original-post:auto-publish-check": "tsx scripts/original-post-auto-publish-check.mts",
     "supply:d100-plan": "tsx scripts/supply-d100-plan.mts",

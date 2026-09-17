@@ -587,6 +587,17 @@ jobs:
       - name: 공급 처리 (수집 금지 · 발행 금지 · source 독립 실패 · lock 게이트)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:process-check
+      # 공급 AI 비용 장부 — 🔴 **요청 전 차단**을 행동으로 검사한다.
+      #
+      # 🔴 이 검사는 가짜 provider 로 `fetch` 를 가로채 **실제로 나간 요청 수**를 센다.
+      #    네트워크 0 · 실제 provider 0 · 운영 env 0 · 운영 장부 0 (임시 HOME 을 쓴다).
+      #    예산 금액은 시험용 임시 값이며 운영 값이 아니다.
+      #
+      # 🔴 "일일 과금이 한도를 넘지 않는다" 를 검사하지 않는다 — 그런 보장은 없다.
+      #    공식 `count_tokens` 도 추정이고, 이미 보낸 요청의 과금은 취소되지 않는다.
+      - name: 공급 AI 비용 장부 (요청 전 차단 · 미정산 예약 · 동시성 · 날짜 경계)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run supply:ledger-check
       - name: D100 공급 계획 (게시판 배선 · 요청 상한)
         run: npm run supply:d100-plan-check
 
