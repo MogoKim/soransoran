@@ -2099,6 +2099,135 @@ expect('배포 확인이 없으면 공급이 아니다', LG.composeLedger({
 expect('🔴 공개는 아직 0건이다 — watch 가 확인한다', ledgerFull.rows.find((r) => r.stage === '공개').count, 0)
 expect('예약 건수를 적는다', ledgerFull.rows.find((r) => r.stage === '공개').note.includes('예약 1건'), true)
 
+
+console.log('\n══════ 재검토 ① 비교 구문은 좁게 — 부사 어미 -게 로 뚫리지 않는다')
+/**
+ * 🔴 **직전 판이 막으려던 것을 열어 줬다** (2026-09-17 Codex 재현).
+ *
+ *    표지 목록에 `게` 가 맨몸으로 있었다. 한국어에서 `-게` 는 **부사를 만드는 흔한 어미**다.
+ *    그래서 "빠르**게** 낫습니다" 의 `빠르게` 가 비교 표지로 읽혀 의료 단정문이 통과했다.
+ *
+ *      "약을 먹으면 갱년기가 빠르게 낫습니다"       ← 완치 단정인데 면제됐다
+ *      "이 치료를 받으면 증상이 빠르게 나아집니다"  ← 면제됐다
+ *
+ *    안전 관문에서 이런 실수는 "검사가 없는 것" 보다 나쁘다 — 있다고 믿게 만든다.
+ *    이제 **관형절 어미(는·은·을) + 의존명사** 전체를 본다.
+ */
+const FB3 = await import('./lib/magazine-forbidden.mjs')
+const P3 = ['낫습니다', '나아집니다', '완치', '치료됩니다']
+const blocked3 = (t) => FB3.judgeForbidden(t, P3).violations.length > 0
+
+// 🔴 Codex 가 재현한 두 문장 — 반드시 차단
+expect('🔴 "빠르게 낫습니다" 는 차단한다', blocked3('약을 먹으면 갱년기가 빠르게 낫습니다.'), true)
+expect('🔴 "빠르게 나아집니다" 는 차단한다', blocked3('이 치료를 받으면 증상이 빠르게 나아집니다.'), true)
+// -게 부사 일반
+expect('🔴 "쉽게 낫습니다" 도 차단', blocked3('꾸준히 하면 증상이 쉽게 낫습니다.'), true)
+expect('🔴 "크게 나아집니다" 도 차단', blocked3('이 약이면 크게 나아집니다.'), true)
+// 주어가 병인 단정
+expect('🔴 "갱년기가 낫습니다" 차단', blocked3('갱년기가 낫습니다.'), true)
+expect('🔴 "편두통이 낫습니다" 차단', blocked3('편두통이 낫습니다.'), true)
+
+// 🔴 실제로 필요한 좁은 비교 구문만 허용
+expect('실측 문장은 허용한다', blocked3('하나씩 구분해 보는 편이 낫습니다.'), false)
+expect('"~는 게 낫습니다" 허용', blocked3('한 번 확인하는 게 낫습니다.'), false)
+expect('"~는 쪽이 낫습니다" 허용', blocked3('쉬는 쪽이 낫습니다.'), false)
+expect('"~는 것이 낫습니다" 허용', blocked3('물어보는 것이 낫습니다.'), false)
+
+// 🔴 근거 없이 넓히지 않았다
+expect('🔴 면제 대상은 실측한 하나뿐이다', [...FB3.HOMOGRAPH_PATTERNS], ['낫습니다'])
+expect('🔴 "나아집니다" 는 면제 대상이 아니다', FB3.HOMOGRAPH_PATTERNS.has('나아집니다'), false)
+expect('🔴 그래서 "~는 게 나아집니다" 도 차단된다', blocked3('쉬는 게 나아집니다.'), true)
+expect('의존명사는 네 가지뿐', FB3.COMPARATIVE_FORMS, ['편이', '쪽이', '것이', '게'])
+expect('관형절 어미는 세 가지뿐', FB3.CLAUSE_ENDINGS, ['는', '은', '을'])
+expect('🔴 멀리 있는 표지를 끌어오지 않는다', blocked3('하는 편이 좋다고들 합니다. 그런데 이 약이면 갱년기가 낫습니다.'), true)
+expect('한 문단에 허용·차단이 섞이면 차단', blocked3('구분해 보는 편이 낫습니다. 이 약이면 갱년기가 낫습니다.'), true)
+expect('실제 원고 문장은 그대로 통과', blocked3('폐경 이후 몸에서 느껴지는 변화도 하나씩 구분해 보는 편이 낫습니다.'), false)
+
+console.log('\n══════ 재검토 ② 예약 검증 실패를 공급 성공으로 적지 않는다')
+/**
+ * 🔴 merged=true · deploy=SERVED 인데 blockedBy 에 PUBLISHED_EARLY 가 있으면,
+ *    글이 **예약 시각 전에 공개된 것**이다. 이 레인이 막으려는 최악의 사고다.
+ *    직전 판은 blockedBy 를 아예 보지 않아 그 회차를 "공급 성공" 으로 적었다.
+ */
+const LG3 = await import('./lib/magazine-ledger.mjs')
+const merged3 = (over = {}) => LG3.composeLedger({
+  register: { done: [{ slug: 'x', publishAt: '2026-09-19T10:30:00+09:00' }], blocked: [] },
+  merge: { pr: { number: 9, url: 'u' }, merged: true, mergeCommit: 'abc1234', registered: [{ slug: 'x' }], deploy: { outcome: 'SERVED' }, ...over },
+})
+const earlyLedger = merged3({ blockedBy: [{ code: 'PUBLISHED_EARLY', message: '예약 전에 공개됐다' }] })
+expect('🔴 PUBLISHED_EARLY 면 공급 성공이 아니다', earlyLedger.supplied, false)
+expect('🔴 머리글이 검증 실패를 말한다', earlyLedger.headline.includes('PUBLISHED_EARLY'), true)
+expect('🔴 "공급 성공" 이라고 적지 않는다', earlyLedger.headline.includes('공급 성공'), false)
+// 🔴 **실제 병합·배포 실적은 보존한다** — 일어난 일을 지우지 않는다
+expect('병합 실적은 1건 그대로', earlyLedger.rows.find((r) => r.stage === '병합').count, 1)
+expect('병합 SHA 도 남는다', earlyLedger.rows.find((r) => r.stage === '병합').note, 'abc1234')
+expect('배포 실적도 1건 그대로', earlyLedger.rows.find((r) => r.stage === '배포').count, 1)
+expect('등록 실적도 남는다', earlyLedger.rows.find((r) => r.stage === '등록').count, 1)
+expect('🔴 공개 칸이 검증 실패를 적는다', earlyLedger.rows.find((r) => r.stage === '공개').note.includes('PUBLISHED_EARLY'), true)
+expect('머리글이 "병합·배포는 됐으나" 로 시작한다', earlyLedger.headline.includes('병합·배포는 됐으나'), true)
+
+expect('다른 검증 실패도 마찬가지다', merged3({ blockedBy: [{ code: 'HIDDEN_UNCONFIRMED', message: 'x' }] }).supplied, false)
+expect('검증에 걸린 것이 없으면 공급 성공', merged3({ blockedBy: [] }).supplied, true)
+expect('blockedBy 가 아예 없어도 공급 성공', merged3().supplied, true)
+
+// 🔴 **다른 후보의 QA 실패는 정상 후보의 공급을 취소하지 않는다**
+const mixed3 = LG3.composeLedger({
+  register: { done: [{ slug: 'ok-one', publishAt: '2026-09-19T10:30:00+09:00' }], blocked: [{ slug: 'bad-one' }, { slug: 'bad-two' }] },
+  merge: { pr: { number: 9 }, merged: true, mergeCommit: 'abc', registered: [{ slug: 'ok-one' }], deploy: { outcome: 'SERVED' }, blockedBy: [] },
+})
+expect('🔴 다른 후보가 QA 에 막혀도 정상 후보의 공급은 성공이다', mixed3.supplied, true)
+expect('등록 1건으로 센다', mixed3.rows.find((r) => r.stage === '등록').count, 1)
+
+console.log('\n══════ 재검토 ③ 실행 식별자 — 앞 회차 결과를 이번 실적으로 읽지 않는다')
+/**
+ * 🔴 결과 파일은 `_runs/{date}/*.json` — **하루 한 칸**이다.
+ *    식별자가 없으면 ① 앞 회차 성공 파일 ② 자식 실행 실패(파일 미생성)
+ *    ③ 손상된 파일에서 전부 "성공" 을 읽어 낼 수 있다.
+ */
+const RID3 = '20260917010000-4242'
+const lk3 = (result, runId = RID3) => LG3.linkResult({ runId, result, label: '병합' })
+
+expect('이번 회차 결과는 연결된다', lk3({ runId: RID3, merged: true }).ok, true)
+// ① 이전 성공 파일
+const prevSuccess3 = { runId: '20260916010000-99', merged: true, pr: { number: 1 }, deploy: { outcome: 'SERVED' } }
+expect('🔴 앞 회차 성공 파일은 거부한다', lk3(prevSuccess3).code, 'RESULT_STALE')
+expect('🔴 그 내용을 넘겨주지 않는다', lk3(prevSuccess3).result, null)
+expect('🔴 식별자 없는 옛 파일도 거부', lk3({ merged: true, deploy: { outcome: 'SERVED' } }).code, 'RESULT_STALE')
+// ② 자식 실행 실패 — 파일이 없다
+expect('🔴 결과 파일이 없으면 거부', lk3(null).code, 'RESULT_MISSING')
+expect('🔴 undefined 도 거부', lk3(undefined).code, 'RESULT_MISSING')
+// ③ 손상
+expect('🔴 손상된 파일은 거부', lk3('{"merged":tr').code, 'RESULT_MALFORMED')
+expect('🔴 식별자가 없으면 연결 자체를 하지 않는다', lk3({ runId: RID3 }, null).code, 'NO_RUN_ID')
+
+// 🔴 거부된 결과로는 공급 성공이 나오지 않는다 — 연결 전체를 시험한다
+const supplyWith3 = (mergeFile) => {
+  const l = LG3.linkResult({ runId: RID3, result: mergeFile, label: '병합' })
+  return LG3.composeLedger({
+    register: { done: [{ slug: 'x', publishAt: '2026-09-19T10:30:00+09:00' }], blocked: [] },
+    merge: l.result,
+  }).supplied
+}
+expect('🔴 앞 회차 성공 파일로는 공급 성공이 안 나온다', supplyWith3(prevSuccess3), false)
+expect('🔴 파일이 없으면 공급 성공이 안 나온다', supplyWith3(null), false)
+expect('🔴 손상돼도 공급 성공이 안 나온다', supplyWith3('깨진 내용'), false)
+expect(
+  '이번 회차 결과면 공급 성공이 나온다',
+  supplyWith3({ runId: RID3, pr: { number: 9 }, merged: true, mergeCommit: 'abc', registered: [{ slug: 'x' }], deploy: { outcome: 'SERVED' }, blockedBy: [] }),
+  true,
+)
+
+// 🔴 배선 — 실행기가 식별자를 만들어 두 자식에게 넘기고, 자식이 그것을 찍는가
+const runSrc3 = readFileSync(join('scripts', 'magazine-auto-register-run.mjs'), 'utf8')
+const readySrc3 = readFileSync(join('scripts', 'magazine-auto-register-ready.mjs'), 'utf8')
+const mergeSrc3 = readFileSync(join('scripts', 'magazine-auto-merge.mjs'), 'utf8')
+expect('실행기가 등록기에 식별자를 넘긴다', /'--run-id', RUN_ID/.test(runSrc3), true)
+expect('실행기가 병합기에도 넘긴다', (runSrc3.match(/'--run-id', RUN_ID/g) ?? []).length, 2)
+expect('등록기가 결과에 식별자를 찍는다', /runId: runIdFromArgv\(\)/.test(readySrc3), true)
+expect('병합기가 결과에 식별자를 찍는다', /runId: argv\.includes\('--run-id'\)/.test(mergeSrc3), true)
+expect('실행기가 연결을 확인한다', /linkResult\(\{ runId: RUN_ID/.test(runSrc3), true)
+expect('🔴 연결 실패는 종료 코드에 반영된다', /finalCode = Math\.max\(finalCode, 1\)/.test(runSrc3), true)
+
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')
 expect('fixture 가 추적돼 있다', existsSync(FIXTURE_DRAFT), true)

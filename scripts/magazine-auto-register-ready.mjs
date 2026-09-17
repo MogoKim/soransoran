@@ -354,8 +354,17 @@ function writeReport(report, { write }) {
   if (!write) return { written: false, path: reportPath(date), reason: 'dry-run — 쓰지 않는다' }
   const dir = join(DRAFTS_DIR, '_runs', date)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(reportPath(date), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  // 🔴 회차 식별자를 함께 남긴다 (2026-09-17). 결과 파일은 날짜별 한 칸이라,
+  //    식별자가 없으면 부른 쪽이 **앞 회차가 쓴 파일**을 이번 실적으로 읽는다.
+  const stamped = { ...report, runId: runIdFromArgv(), writtenAt: new Date().toISOString() }
+  writeFileSync(reportPath(date), `${JSON.stringify(stamped, null, 2)}\n`, 'utf8')
   return { written: true, path: reportPath(date) }
+}
+
+/** 실행기가 넘긴 회차 식별자. 사람이 직접 돌리면 없다 — 그때는 연결을 시도하지 않는다 */
+function runIdFromArgv() {
+  const i = process.argv.indexOf('--run-id')
+  return i === -1 ? null : process.argv[i + 1] ?? null
 }
 
 /**

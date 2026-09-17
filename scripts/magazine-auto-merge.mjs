@@ -604,7 +604,9 @@ async function main() {
     const date = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
     const dir = join(DRAFTS_DIR, '_runs', date)
     mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'auto-merge.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+    // 🔴 회차 식별자를 함께 남긴다. 없으면 부른 쪽이 **앞 회차 파일**을 이번 실적으로 읽는다.
+    const stamped = { ...report, runId: argv.includes('--run-id') ? argv[argv.indexOf('--run-id') + 1] ?? null : null, writtenAt: new Date().toISOString() }
+    writeFileSync(join(dir, 'auto-merge.json'), `${JSON.stringify(stamped, null, 2)}\n`, 'utf8')
   } catch (e) {
     line(`결과 파일을 남기지 못했다 (${e?.message ?? e}) — 판정은 그대로다`)
   }
