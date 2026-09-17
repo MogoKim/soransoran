@@ -296,7 +296,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
                 label="댓글 숨기기"
                 successText="댓글을 숨겼어요."
                 tone="danger"
-                confirmText="이 댓글을 숨길까요? 내용은 남고 화면에서만 가려집니다."
+                confirmText="댓글 내용을 숨길까요? 자리와 답글은 그대로 남습니다."
                 run={async () => {
                   'use server'
                   return setCommentHidden(report.comment!.id, true)
@@ -334,7 +334,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
       ) : null}
 
       {report.comment ? (
-        <AdminActionGroup label="댓글 고치기" hint="고쳐도 작성자에게 알림이 가지 않습니다.">
+        <AdminActionGroup label="댓글 수정" hint="수정해도 작성자에게 알림이 가지 않습니다.">
           <AdminCommentEditForm commentId={report.comment.id} content={report.comment.content} />
         </AdminActionGroup>
       ) : null}

@@ -29,7 +29,7 @@ import { usePathname } from 'next/navigation'
 const NAV = [
   { href: '/admin', label: '운영 홈', hint: '오늘 볼 것' },
   { href: '/admin/reports', label: '신고', hint: '판단하고 조치' },
-  { href: '/admin/content', label: '게시글', hint: '고치고 가리기' },
+  { href: '/admin/content', label: '게시글', hint: '수정하고 숨기기' },
   { href: '/admin/members', label: '회원', hint: '차단 관리' },
   { href: '/admin/home', label: '홈 노출', hint: '고정·숨김' },
   { href: '/admin/banners', label: '배너 관리', hint: '히어로 배너' },
@@ -56,10 +56,17 @@ export default function AdminOpsNav({ layout }: { layout: 'sidebar' | 'topbar' }
                 <Link
                   href={item.href}
                   aria-current={current ? 'page' : undefined}
+                  /* 🔴 hover 를 현재 표시와 다른 면으로 둔다 (2026-09-17).
+                        전에는 hover 도 bg-surface-card(흰색)라 **현재 항목과 같은 바탕**이 되어
+                        마우스를 올린 것과 지금 보고 있는 것이 구분되지 않았다.
+                        게다가 흰색은 바탕(#FBFAF9) 위 1.04:1 이라 사실상 보이지도 않았다.
+                        hover 는 옅은 블록(--surface-page · 바탕 위 1.21:1)으로 바꾼다 —
+                        현재 표시(흰 면 + 왼쪽 --cta 선)와 역할이 갈린다.
+                        메뉴 항목·순서·링크는 그대로다. */
                   className={`flex min-h-[44px] flex-col justify-center rounded-r-lg border-l-[3px] px-3 py-1.5 no-underline transition-colors ${
                     current
                       ? 'border-cta bg-surface-card'
-                      : 'border-transparent hover:bg-surface-card'
+                      : 'border-transparent hover:bg-surface-page'
                   }`}
                 >
                   <span

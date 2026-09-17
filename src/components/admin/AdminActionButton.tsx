@@ -78,12 +78,25 @@ export default function AdminActionButton({
    *    기준 3.0 을 넘어 통과했지만, 17px 로 내리면 본문 4.5 기준에 미달한다.
    *    brand-strong(#C43300)은 5.50:1 — 정본 §1-2 의 "작은 글씨는 brand-strong" 규칙 그대로다.
    */
+/**
+   * 🔴 못 누르는 버튼은 흐린 브랜드색이 아니라 **회색**이다 (2026-09-17).
+   *    전에는 disabled:opacity-50 하나였다. 그러면 주황이 옅어질 뿐이라
+   *    "누를 수 있는데 흐린 것" 으로 읽힌다 — 공용 ActionButton 이 이미 같은 이유로
+   *    회색 면을 쓰고 있었는데(ui/ActionButton) 운영 콘솔만 opacity 로 남아 있었다.
+   *    정책을 맞춘다. disabled 조건 자체는 건드리지 않는다.
+   *
+   * 🔴 hover·active 는 enabled: 로 잠근다. 못 누르는 버튼이 hover 에서 반응하면
+   *    "아직 누를 수 있다" 로 읽힌다.
+   *
+   * 🔴 좌우 여백을 px-4 → px-5 로 넓힌다. 높이 52px 에 16px 여백이면
+   *    짧은 라벨("저장")이 세로로 긴 상자가 된다. 공용 ActionButton 과 같은 값이다.
+   */
   const base =
-    'inline-flex min-h-[52px] items-center justify-center rounded-lg px-4 text-base font-bold transition duration-150 active:scale-[0.98] disabled:opacity-50'
+    'inline-flex min-h-[52px] items-center justify-center rounded-lg px-5 text-base font-bold transition duration-150 enabled:active:scale-[0.98] disabled:bg-surface-page disabled:text-content-muted disabled:border disabled:border-subtle'
   const skin =
     tone === 'danger'
-      ? 'border border-interactive text-brand-strong hover:bg-surface-soft'
-      : 'bg-cta text-content-primary hover:brightness-95'
+      ? 'border border-interactive text-brand-strong enabled:hover:bg-surface-soft'
+      : 'bg-cta text-content-primary enabled:hover:brightness-95'
 
   return (
     <div className="flex flex-col gap-1">

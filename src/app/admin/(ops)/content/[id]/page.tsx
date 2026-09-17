@@ -173,9 +173,9 @@ export default async function AdminContentDetailPage({
       <section className="mt-4">
         <details>
           <summary className="min-h-[44px] cursor-pointer list-none py-2 text-base font-bold text-content-primary">
-            글 내용 고치기{' '}
+            글 내용 수정{' '}
             <span className="text-sm font-normal text-content-muted">
-              (고쳐도 작성자에게 알림이 가지 않습니다)
+              (수정해도 작성자에게 알림이 가지 않습니다)
             </span>
           </summary>
           <div className="mt-2">
@@ -231,7 +231,7 @@ export default async function AdminContentDetailPage({
                       label="댓글 숨기기"
                       successText="댓글을 숨겼어요."
                       tone="danger"
-                      confirmText="이 댓글을 숨길까요? 내용은 남고 화면에서만 가려집니다."
+                      confirmText="댓글 내용을 숨길까요? 자리와 답글은 그대로 남습니다."
                       run={async () => {
                         'use server'
                         return setCommentHidden(c.id, true)
