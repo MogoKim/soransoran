@@ -28,6 +28,9 @@ import {
   type Pending,
 } from '../src/lib/supply-process'
 
+/** 🔴 큐 스냅샷이 준비된 상태 — 기존 기대(draft 계획됨)를 그대로 본다 */
+const GATE_READY = { kind: 'ready', snapshotPath: '.microseed-data/snap.json', runId: 'R1' } as const
+
 let pass = 0
 let fail = 0
 const check = (label: string, ok: boolean): void => {
@@ -187,7 +190,7 @@ console.log('\n⑦-b 🔴 **실제 오케스트레이터 경로** — planPendin
   check('thin + 두 산출물 → pending thin 0건', thinOf([THIN, D, R]).length === 0)
   check('thin + 두 산출물 → adapt 를 다시 걸지 않는다', !adaptPlanned([THIN, D, R]))
   check('🔴 두 산출물이 있으면 공통 judge·draft·fill 이 실제로 선다', (() => {
-    const stages = planCommonPhase(planPending([THIN, D, R]), judgeBuffer(24)).map((x) => x.stage)
+    const stages = planCommonPhase(planPending([THIN, D, R]), judgeBuffer(24), GATE_READY).map((x) => x.stage)
     return stages.includes('judge') && stages.includes('draft') && stages.includes('fill')
   })())
   check('🔴 planPending 이 옛 한쪽 기준 정규식을 쓰지 않는다', (() => {
@@ -239,7 +242,7 @@ console.log('\n⑨ adapt 가 끝나면 공통 judge·draft·fill 계획이 선�
     candidates: ['auto-draft-A.candidates.json'],
   }
   // 🔴 재고가 버퍼 목표보다 적을 때만 모델·적재가 돈다 — 그 정본을 그대로 쓴다
-  const plan = planCommonPhase(pending, judgeBuffer(24))
+  const plan = planCommonPhase(pending, judgeBuffer(24), GATE_READY)
   const stages = plan.map((p) => p.stage)
   check('judge · draft · fill 순서로 선다',
     stages.includes('judge') && stages.includes('draft') && stages.includes('fill')

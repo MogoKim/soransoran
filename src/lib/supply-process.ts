@@ -304,11 +304,40 @@ export function planSourcePhase(pending: Pending): SourcePlan[] {
  *    (judge=사람 판정·LLM 캐시 · draft=publish-candidates · fill=DB provenance).
  *    러너가 파일 목록을 들고 다니면 그 목록이 곧 두 번째 정본이 된다.
  */
-export function planCommonPhase(pending: Pending, policy: BufferPolicy): StagePlan[] {
+/**
+ * 🔴 **생성 전 큐 스냅샷 게이트** (2026-09-17).
+ *
+ *    `ready` 면 draft 에 스냅샷 경로와 회차를 넘긴다.
+ *    `hold` 면 **draft 를 계획하지 않는다** — 큐를 못 읽었는데 유료로 만들지 않는다.
+ *
+ * 🔴 **선택 인자로 두지 않는다.** 기본값을 "그냥 돈다" 로 두면 부르는 쪽이 잊었을 때
+ *    조용히 옛 동작으로 돌아가고, 그것을 아무도 모른다. 모든 호출부가 명시하게 한다.
+ */
+export type DraftQueueGate =
+  | { kind: 'ready'; snapshotPath: string; runId: string }
+  | { kind: 'hold'; reason: string }
+
+export function planCommonPhase(
+  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,
+): StagePlan[] {
   const out: StagePlan[] = []
   if (!policy.llm) return out
   if (pending.detail.length > 0) out.push(mk('judge', ['--call', '--apply'], null))
-  if (pending.shadow.length > 0 || pending.detail.length > 0) out.push(mk('draft', ['--call', '--apply'], null))
+  if (pending.shadow.length > 0 || pending.detail.length > 0) {
+    /**
+     * 🔴 **보류는 건너뜀이 아니다.** 입력 파일을 지우지도, 처리 완료로 적지도 않는다 —
+     *    다음 정상 회차가 같은 입력을 그대로 다시 집는다(`planPending` 은 파일만 본다).
+     */
+    if (gate.kind === 'ready') {
+      out.push(mk('draft', [
+        '--call', '--apply',
+        `--queue-snapshot=${gate.snapshotPath}`,
+        `--run-id=${gate.runId}`,
+        // 🔴 파일이 없으면 만들지 말라는 뜻 — 생성기가 스스로 fail-closed 한다
+        '--require-queue-snapshot',
+      ], null))
+    }
+  }
   if (policy.fill && policy.upTo > 0 && (pending.candidates.length > 0 || pending.detail.length > 0)) {
     out.push(mk('fill', ['--apply', `--up-to=${policy.upTo}`], null))
   }
@@ -513,11 +542,25 @@ export async function runSourcePhase(input: {
  * 🔴 **source 국면이 전부 실패해도 이 국면은 돈다.** 지난 회차가 남긴 미처리 입력은
  *    이번 수집과 무관하게 존재하고, 그것을 비우는 것이 이 러너의 일이다.
  */
+/**
+ * 🔴 **단계 하나를 돌리기 **직전**에 묻는다** (2026-09-17).
+ *
+ *    큐 스냅샷은 계획 시점이 아니라 **`draft` 를 돌리기 직전**에 떠야 한다.
+ *    계획 시점에 뜨면 그 사이 `judge` 가 도는 시간만큼 낡는다 — 실측으로 `judge` 가
+ *    12분 걸린 회차가 있다. 낡은 스냅샷은 **없는 세상**을 근거로 거르는 것이다.
+ *
+ * 🔴 `ok: false` 면 **그 단계만 건너뛴다.** 뒤 단계를 멈추지 않는다 —
+ *    `draft` 를 보류해도 `fill` 은 사람 후보를 적재할 수 있다.
+ */
+export type StageGate = { ok: true } | { ok: false; reason: string }
+
 export async function runCommonPhase(input: {
   plan: readonly StagePlan[]
   exec: ExecFn
   now: () => string
   onStage?: (plan: StagePlan) => void
+  /** 🔴 단계 직전 준비. 실패하면 그 단계를 보류한다 */
+  beforeStage?: (plan: StagePlan) => Promise<StageGate>
 }): Promise<PhaseResult> {
   const calls: PhaseResult['calls'] = []
   const outcomes: StageOutcome[] = []
@@ -532,6 +575,21 @@ export async function runCommonPhase(input: {
       continue
     }
     input.onStage?.(stage)
+    const gate = input.beforeStage === undefined
+      ? ({ ok: true } as StageGate)
+      : await input.beforeStage(stage)
+    if (!gate.ok) {
+      /**
+       * 🔴 **보류다. 건너뜀이 아니다.** 입력 파일을 지우지도 완료로 적지도 않으므로
+       *    다음 정상 회차가 같은 입력을 그대로 다시 집는다(`planPending` 은 파일만 본다).
+       */
+      outcomes.push({
+        stage: stage.stage, source: null, status: 'skipped', exitCode: null,
+        startedAt: input.now(), endedAt: input.now(),
+        note: `🟡 ${gate.reason} — 입력을 그대로 두고 다음 회차가 다시 집는다`,
+      })
+      continue
+    }
     const startedAt = input.now()
     const r = await input.exec(stage)
     calls.push({ stage: stage.stage, source: null, args: [...stage.args] })
