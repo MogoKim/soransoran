@@ -40,6 +40,8 @@ const AUTHOR_SELECT = {
     isBlocked: true,
     accounts: { where: { provider: 'kakao' }, select: { id: true }, take: 1 },
     persona: { select: { id: true } },
+    // 🔴 실회원 판정 정본(`isRealMember`)이 요구하는 세 번째 값이다
+    operatorWriter: { select: { id: true } },
   },
 } as const
 

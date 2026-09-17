@@ -59,6 +59,22 @@ export type PlannerPost = {
   /** 지금 노출 대상에서 내려가 있는가(expired/hold 등). 모르면 null */
   onHold: boolean | null
   /**
+   * 🔴 **창업자가 운영용 이름으로 직접 쓴 글인가** (2026-09-17). 모르면 null.
+   *
+   *    `onHold` 로 대신하지 않는다. 저 값은 "지금 내려가 있다" 는 뜻이고 이 값은
+   *    "다른 레인의 글이다" 는 뜻이다 — 한 값에 두 뜻을 담으면 관제가 제외 사유를
+   *    읽고도 무슨 일이 있었는지 알 수 없다.
+   *
+   * 🔴 **왜 제외하는가.** 수동 작성이 자동 배정을 움직이지 않게 하기 위해서다.
+   *    운영자 글을 대상에 넣으면 창업자가 글 하나를 쓴 것만으로 그날의 자동 후보
+   *    분배가 달라진다. 제외하면 **수동 작성 전후의 배정이 같다** — 그것이
+   *    두 레인이 분리됐다는 증명이다.
+   *
+   * 🔴 이 결정은 되돌릴 수 있다. 창업자가 "내 글에도 댓글이 붙었으면 한다" 고 정하면
+   *    여기 한 줄을 풀면 되고, 그때 바뀌는 것이 무엇인지도 이 주석이 말해 준다.
+   */
+  operatorWritten: boolean | null
+  /**
    * 🔴 생활사 판정에 쓰는 글의 제목·본문.
    *
    *    옛 판은 `conflictingPostIds: []` 를 **실행 코드에서 고정**해 두었다 —
@@ -105,6 +121,8 @@ export type PlanBlockCode =
   | 'POST_SLOTS_FULL'
   | 'POST_ON_HOLD'
   | 'POST_HOLD_UNKNOWN'
+  | 'POST_OPERATOR_WRITTEN'
+  | 'POST_OPERATOR_UNKNOWN'
   | 'POST_PUBLISHED_AT_UNKNOWN'
   | 'POST_TOO_OLD'
   | 'PERSONA_NOT_ACTIVE'
@@ -195,6 +213,17 @@ export function judgePlannerPost(post: PlannerPost, nowMs: number): PlanBlock[] 
     blocks.push({ code: 'POST_HOLD_UNKNOWN', message: '노출 보류 여부를 읽지 못했다 — 제외한다(fail-closed)' })
   } else if (post.onHold) {
     blocks.push({ code: 'POST_ON_HOLD', message: '지금 노출에서 내려가 있는 글이다' })
+  }
+  if (post.operatorWritten === null) {
+    blocks.push({
+      code: 'POST_OPERATOR_UNKNOWN',
+      message: '운영자 직접 글인지 읽지 못했다 — 제외한다(fail-closed)',
+    })
+  } else if (post.operatorWritten) {
+    blocks.push({
+      code: 'POST_OPERATOR_WRITTEN',
+      message: '창업자가 직접 쓴 글이다 — 자동 배정 대상이 아니다',
+    })
   }
   if (post.publishedAtMs === null) {
     blocks.push({ code: 'POST_PUBLISHED_AT_UNKNOWN', message: '공개 시각을 읽지 못했다 — 제외한다(fail-closed)' })

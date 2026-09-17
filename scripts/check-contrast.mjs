@@ -266,6 +266,9 @@ const CTA_CONTRACT_EXCLUDED = [...INK_EXCLUDED, 'src/components/ui/ActionButton.
 export const COMPACT_ALLOWED = [
   'src/components/admin/AdminPostEditForm.tsx',
   'src/components/admin/AdminCommentEditForm.tsx',
+  // 운영자 직접 작성 — 좁은 운영 표와 같은 밀도다 (2026-09-17)
+  'src/components/admin/OperatorComposeForm.tsx',
+  'src/components/admin/OperatorComposedItemControls.tsx',
 ]
 
 /**
@@ -919,11 +922,14 @@ function selfTest() {
       findCompactUsage('src/x.tsx', '<ActionButton tone="primary" size="default" />').length === 0,
     ],
     [
-      '지정한 admin 두 곳은 허용 경로다',
-      COMPACT_ALLOWED.length === 2 && COMPACT_ALLOWED.every((f) => f.startsWith('src/components/admin/')),
+      '허용 경로는 전부 운영 컴포넌트다',
+      // 🔴 개수를 못박지 않는다. 운영 화면이 하나 늘 때마다 self-test 가 깨지면
+      //    사람이 검사기를 고치는 대신 숫자를 올리게 된다 — 지켜야 할 것은
+      //    "몇 개인가" 가 아니라 **"고객 경로가 섞이지 않았는가"** 다.
+      COMPACT_ALLOWED.length > 0 && COMPACT_ALLOWED.every((f) => f.startsWith('src/components/admin/')),
     ],
     [
-      '허용된 admin 두 경로가 각 1건 primary 면 통과',
+      '허용된 운영 경로가 각 1건 primary 면 통과',
       checkCompactUsage(new Map(COMPACT_ALLOWED.map((f) => [f, [{ line: 1, tone: 'primary' }]]))).length === 0,
     ],
     [

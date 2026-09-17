@@ -64,8 +64,15 @@ export default async function AdminPersonasPage() {
       },
       orderBy: { code: 'asc' },
     }),
-    // 🔴 실회원 = Persona 가 붙지 않은 User
-    prisma.user.count({ where: { persona: null } }),
+    /**
+     * 🔴 실회원 = Persona 도 **운영용 작성자**도 붙지 않은 User (2026-09-17 보정).
+     *
+     *    옛 판은 `persona: null` 하나였다. 창업자가 직접 쓰는 운영용 닉네임이 생기면
+     *    그 User 가 이 수에 섞여 **실회원이 늘어난 것처럼 보인다** —
+     *    North Star 가 "재방문한 실제 사용자" 인데 운영자가 만든 계정이 거기 들어가면
+     *    지표가 스스로를 속인다. 어드민 회원 화면(`REAL_MEMBER_WHERE`)과 같은 기준을 쓴다.
+     */
+    prisma.user.count({ where: { persona: null, operatorWriter: null } }),
     prisma.personaGlobalSwitch.findFirst({ orderBy: { changedAt: 'desc' } }),
     prisma.post.count({ where: { personaId: { not: null } } }),
     prisma.comment.count({ where: { personaId: { not: null } } }),

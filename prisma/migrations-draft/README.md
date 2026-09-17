@@ -27,5 +27,19 @@ Prisma 의 `create()` 는 `select` 를 주지 않으면 **모든 스칼라 필�
 | 회차 | 무엇 | 짝이 되는 파일 산출물 |
 |---|---|---|
 | `0026_raw_content_source_times` | `MicroSeedRawContent` 에 `sourcePostedAt` · `sourceListedAt` | 🟢 **이미 흐르고 있다** — thin → adapt → 후보 파일 |
+| `0027_operator_composer` | `OperatorWriter` · `OperatorWriteLog` 표 · `Post`/`Comment` 에 `operatorWriterId` · `CommentOrigin.OPERATOR` | 🔴 **아직 흐르지 않는다** — 적용 전까지 `/admin/compose` 는 작성자 0명으로 뜬다 |
+
+### `0027_operator_composer` 를 적용할 때
+
+🔴 **schema 변경이 같은 PR 에 들어 있다.** 위 절차의 ①은 끝나 있고 ②③이 남았다.
+`prisma/migrations/0027_operator_composer/` 로 옮겨 적용한 **뒤에** merge 한다.
+
+🔴 **기존 행을 건드리지 않는다.** 더하는 컬럼은 전부 NULL 허용·기본값 없음이라
+Postgres 가 표를 재작성하지 않고, 백필도 없다. NULL = "운영 직접 작성이 아니다" 이고
+기존 글·댓글은 전부 그쪽이 맞다.
+
+🔴 **`ALTER TYPE ... ADD VALUE` 는 되돌릴 수 없다.** Postgres 는 enum label 삭제를
+지원하지 않는다. 롤백이 필요하면 표·컬럼만 되돌리고 `OPERATOR` label 은 남겨 둔다 —
+남아 있어도 쓰는 코드가 없으면 아무 일도 일어나지 않는다.
 
 🔴 파일 경로의 시각 전달은 **이 초안과 무관하게 이미 동작한다.** DB 저장만 미뤄져 있다.

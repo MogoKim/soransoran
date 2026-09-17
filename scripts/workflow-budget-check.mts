@@ -198,8 +198,19 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *    그 레인은 무인으로 articles.ts 를 고치고 PR 을 열고, **매거진 파일을 건드리지 않는
  *    PR 도 articles.ts 재고를 바꿔** 그 게이트를 깨뜨릴 수 있다.
  *    실제로 #524 merge 뒤 13 건이 깨졌는데 CI 에 없어 아무도 몰랐다.
+ *
+ * 🔴 67 → 68 (2026-09-17). 운영자 직접 작성 fixture 1 개를 무조건 실행으로 더했다.
+ *    실측 0.23 초(3 회 · 0.34 / 0.23 / 0.23). 기존 무조건 step 과 같은 값이고
+ *    DB · 네트워크 · write · provider 가 0 이다.
+ *
+ *    🔴 **경로 조건 뒤로 보내지 않는다.** 이 검사가 지키는 것은 운영 화면이 아니라
+ *       **"수동 작성이 자동 배정·상한·모델 입력을 건드리지 않는다"** 는 계약이다.
+ *       그 계약은 `persona-comment-planner` · `persona-comment-bootstrap-budget` ·
+ *       `persona-comment-release` 를 고치는 PR 이 깨뜨린다 — 운영 화면 파일을
+ *       하나도 건드리지 않는 PR 이다. 경로 조건 뒤에 두면 바로 그 PR 에서 돌지 않는다.
+ *       `micro-seed:safety-check` 를 무조건으로 둔 것과 같은 이유다.
  */
-const MAX_UNCONDITIONAL_STEPS = 67
+const MAX_UNCONDITIONAL_STEPS = 68
 
 let total = 0
 let gated = 0

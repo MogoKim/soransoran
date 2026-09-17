@@ -1394,7 +1394,23 @@ expect('회원 업로드는 여전히 세션 로그인을 본다', /const sessio
 console.log('\n══════ 어드민 메뉴 · 경로')
 
 expect("메뉴에 '/admin/banners' 가 있다", /href: '\/admin\/banners', label: '배너 관리'/.test(NAV), true)
-expect('메뉴는 6개다', [...NAV.matchAll(/\{ href: '\/admin/g)].length, 6)
+/**
+ * 🔴 **개수를 못박지 않는다** (2026-09-17).
+ *
+ *    이 검사가 지키려던 것은 "배너 메뉴가 사라지지 않았다" 와
+ *    "홈 노출 메뉴가 배너에 흡수되지 않았다" 두 가지다. 개수를 못박아 두면
+ *    메뉴가 하나 늘 때마다 여기가 깨지고, 사람은 계약을 확인하는 대신
+ *    숫자를 올리게 된다 — 그러면 이 줄은 아무것도 지키지 않는 줄이 된다.
+ *
+ *    대신 **모든 항목이 운영 경로인가**를 본다. 고객 경로가 운영 메뉴에 섞이는 것이
+ *    실제로 막아야 할 일이다.
+ */
+expect('메뉴가 비어 있지 않다', [...NAV.matchAll(/\{ href: '\/admin/g)].length > 0, true)
+expect(
+  '🔴 메뉴 항목이 전부 /admin 경로다 — 고객 경로가 섞이지 않는다',
+  [...NAV.matchAll(/\{ href: '([^']+)'/g)].every((m) => m[1]!.startsWith('/admin')),
+  true,
+)
 expect("메뉴에 '/admin/home' 이 그대로 있다", /href: '\/admin\/home'/.test(NAV), true)
 
 console.log('\n══════ R2 공개 host · env')
