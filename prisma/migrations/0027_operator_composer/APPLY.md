@@ -1,5 +1,8 @@
 # 0027 적용·merge·배포·복구 — 🔴 이 순서를 지킨다
 
+> 🔴 이 회차는 **정식 이력(`prisma/migrations/`)에 들어와 있다.**
+> `migrations-draft/` 에서 옮겨 왔고, 적용은 `prisma migrate deploy` 하나로 한다.
+
 이 문서는 **실측 결과**다. 추정이 아니다.
 격리 Postgres 17(`127.0.0.1:54329` · 운영과 완전히 분리)에서
 0001~0025 를 올린 DB 와 0027 까지 올린 DB 두 개를 만들어 양방향으로 확인했다.
@@ -40,10 +43,10 @@
 
 ---
 
-## 2. 정식 이력에 넣는 시점
+## 2. 정식 이력에 들어온 시점
 
-🔴 **적용하는 바로 그 작업에서 옮긴다.** 지금 `migrations-draft/` 에 있는 이유는
-"아직 DB 에 없다" 는 사실을 파일 위치로 말하기 위해서다(../README.md).
+🔴 **적용하는 작업에서 옮겼다.** `migrations-draft/` 에 두었던 이유는 "아직 DB 에 없다" 는
+사실을 파일 위치로 말하기 위해서였고, 그 상태가 끝났으므로 정식 이력으로 옮겼다.
 
 🔴 **SQL 을 psql 로 직접 붙여 넣지 않는다.** 그러면 `_prisma_migrations` 에 기록이 남지 않아
 다음 `migrate deploy` 가 drift 로 막히거나 같은 SQL 을 다시 실행한다.
@@ -54,16 +57,19 @@
 ## 3. 순서 — 🔴 ③ 이 끝나기 전에 ④ 를 하지 않는다
 
 ```
-① git mv prisma/migrations-draft/0027_operator_composer prisma/migrations/0027_operator_composer
-② npx prisma migrate deploy        # 운영 DB. 표·컬럼·enum 이 생기고 이력에 기록된다
+① npx prisma migrate status         # 🔴 미적용이 0027 하나인지 먼저 본다
+② npx prisma migrate deploy         # 운영 DB. 표·컬럼·enum 이 생기고 이력에 기록된다
 ③ 확인:
      select count(*) from "OperatorWriter";                      -- 0 (표가 있다)
-     select migration_name from _prisma_migrations
-       where migration_name = '0027_operator_composer';          -- 1행
+     select migration_name, finished_at from _prisma_migrations
+       where migration_name = '0027_operator_composer';          -- 1행 · finished_at 있음
 ④ PR #535 merge → 배포
 ⑤ 배포 후 /admin/compose 가 "작성자 0명" 으로 뜨는지 확인 (정상이다)
 ⑥ 운영용 닉네임 적재 — 별도 승인 절차
 ```
+
+🔴 **①에서 0027 말고 다른 미적용이 보이면 멈춘다.** 이 문서는 0027 **하나**를 적용하는
+절차이고, 밀려 있던 다른 회차가 같이 나가면 무엇이 무엇을 깨뜨렸는지 가릴 수 없다.
 
 **②는 기존 행을 건드리지 않는다.** 더하는 컬럼은 전부 NULL 허용·기본값 없음이라
 Postgres 가 표를 재작성하지 않고, 백필도 없다. 락 시간은 메타데이터 변경 수준이다.
@@ -74,14 +80,40 @@ Postgres 가 표를 재작성하지 않고, 백필도 없다. 락 시간은 메�
 
 ### ② 에서 실패했다 (migration 이 도중에 멈췄다)
 
+🔴 **아무것도 지우지 말고 먼저 상태를 본다.** 실패한 migration 을 자동으로 치우고
+다시 돌리는 절차를 만들지 않는다 — 한 번 잘못 치우면 무엇이 남았는지 알 수 없어진다.
+
 ```
-③ 확인 쿼리로 어디까지 갔는지 본다
-   → 표/컬럼이 없다:  아무 일도 없었다. 원인을 고치고 다시 ②
-   → 일부만 생겼다:   아래 되돌리기 SQL 로 지우고 다시 ②
+npx prisma migrate status            # 무엇이 실패로 기록돼 있는지
+psql "$DATABASE_URL" -c "\dt"        # 표가 어디까지 생겼는지
 ```
 
+**그 결과를 창업자에게 보고한 뒤**에 아래 중 하나를 고른다.
 🔴 **아직 merge 전이므로 운영 코드는 옛 코드다.** 새 표가 있든 없든 옛 코드는 돈다(§1-②).
-서두를 이유가 없다.
+서두를 이유가 없다 — 판단할 시간이 있다.
+
+#### 복구는 Prisma 정식 경로로 한다 (`prisma@6.19.3`)
+
+🔴 **`_prisma_migrations` 를 직접 건드리지 않는다.** SQL 로 그 표의 행을 지우면
+Prisma 가 아는 이력과 실제가 갈라지고, 그 어긋남은 다음 배포에서야 드러난다.
+그 표를 고치는 정식 수단은 `prisma migrate resolve` 하나다.
+
+```
+# (가) 실패한 회차가 DB 에 아무 흔적도 남기지 않았다
+#      → 되돌린 것으로 기록하고, 원인을 고친 뒤 다시 deploy
+npx prisma migrate resolve --rolled-back 0027_operator_composer
+npx prisma migrate deploy
+
+# (나) 실패로 기록됐지만 실제로는 SQL 이 전부 반영돼 있다 (사람이 확인한 경우에만)
+#      → 적용된 것으로 기록한다
+npx prisma migrate resolve --applied 0027_operator_composer
+```
+
+🔴 **(가) 를 쓰기 전에 DB 를 실제로 원래대로 되돌려 놓아야 한다.**
+`--rolled-back` 은 *"되돌렸다고 기록만"* 하는 명령이지 스스로 되돌리지 않는다.
+일부만 생긴 상태라면 §4-되돌리기로 정리한 **뒤에** 이 명령을 쓴다.
+
+🔴 `migrate reset` · `db push` 는 쓰지 않는다. 운영 DB 에서 그 둘은 데이터를 지운다.
 
 ### ④ 이후 배포한 코드에 문제가 있다 — 🔴 여기가 유일하게 까다롭다
 
@@ -127,7 +159,9 @@ Postgres 가 표를 재작성하지 않고, 백필도 없다. 락 시간은 메�
 🔴 **enum label 은 되돌릴 수 없다.** Postgres 는 `ALTER TYPE ... DROP VALUE` 를 지원하지 않는다.
 남아 있어도 쓰는 코드가 없으면 아무 일도 일어나지 않는다 — 지우려 애쓰지 않는다.
 
-### 표·컬럼만 되돌리기 (enum 은 남는다)
+### §4-되돌리기 — 표·컬럼만 (enum 은 남는다)
+
+🔴 **자동으로 돌리지 않는다.** 사람이 상태를 보고 판단한 뒤 손으로 실행한다.
 
 ```sql
 ALTER TABLE "Post"    DROP CONSTRAINT IF EXISTS "Post_operatorWriterId_fkey";
@@ -141,8 +175,11 @@ DROP TABLE IF EXISTS "OperatorWriter";
 DROP TYPE  IF EXISTS "OperatorWriteKind";
 DROP TYPE  IF EXISTS "OperatorWriteAction";
 DROP TYPE  IF EXISTS "OperatorWriterStatus";
-DELETE FROM _prisma_migrations WHERE migration_name = '0027_operator_composer';
 -- 🔴 "CommentOrigin" 의 'OPERATOR' 는 지울 수 없다. 남겨 둔다.
+--
+-- 🔴 **이력 표(_prisma_migrations)는 이 SQL 로 건드리지 않는다.**
+--    위 DDL 로 DB 를 되돌린 **뒤**, 이력은 Prisma 정식 명령으로만 맞춘다:
+--      npx prisma migrate resolve --rolled-back 0027_operator_composer
 ```
 
 🔴 **운영 글·댓글이 하나라도 있으면 컬럼 DROP 은 그 연결을 영구히 잃는다.**

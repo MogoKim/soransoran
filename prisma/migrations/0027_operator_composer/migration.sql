@@ -1,9 +1,10 @@
--- 운영자 직접 작성(Operator Composer) — 🔴 **초안이다. 적용하지 않는다.**
+-- 운영자 직접 작성(Operator Composer)
 --
--- 🔴 `prisma/migrations/` 가 아니라 `migrations-draft/` 에 있다.
---    활성 schema 에 컬럼만 올리고 DB 에 적용하지 않으면 `select` 없는 `create()` 가
---    없는 컬럼을 RETURNING 하다가 죽는다 — 자세한 것은 ../README.md.
---    🔴 **이 PR 은 schema 변경과 이 파일을 함께 담는다.** merge 전에 ③(적용)을 먼저 한다.
+-- 🔴 **정식 이력이다.** `prisma migrate deploy` 로 적용한다.
+--    적용·merge·배포 순서와 복구 절차는 같은 폴더의 `APPLY.md` 에 있다.
+--    🔴 **적용이 merge 보다 먼저다.** 활성 schema 에 컬럼만 올리고 DB 에 적용하지 않으면
+--    `select` 없는 `create()` 가 없는 컬럼을 RETURNING 하다가 죽는다
+--    (실측 범위는 APPLY.md §1 — 고객 화면은 무사, 어드민과 자동 댓글 레인이 깨진다).
 --
 -- 무엇을 만드는가
 --   ① OperatorWriter      창업자가 고르는 운영용 작성자 (자동 Persona 와 다른 표다)

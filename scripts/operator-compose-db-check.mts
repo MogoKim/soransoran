@@ -23,11 +23,8 @@
  *
  *   export DATABASE_URL="postgresql://soran@127.0.0.1:54329/soran_test"
  *   export DIRECT_URL="$DATABASE_URL"
- *   # 🔴 0027 은 아직 migrations-draft 에 있다. 이 검증에서만 임시로 옮겨 적용한다
- *   cp -R prisma/migrations-draft/0027_operator_composer prisma/migrations/
- *   npx prisma migrate deploy
+ *   npx prisma migrate deploy          # 0027 은 정식 이력에 있다
  *   npm run operator:compose-db-check
- *   rm -rf prisma/migrations/0027_operator_composer     # 🔴 반드시 되돌린다
  *
  *   pg_ctl -D "$PGDIR" stop -m fast ; rm -rf "$PGDIR" "$SOCK"
  *
@@ -37,7 +34,7 @@
  *   # generator 에 output = "./generated" 를 더한 뒤
  *   npx prisma generate --schema .tmp-oldclient/schema.prisma
  *   # 그 client 로 조회해 보면 `commentOrigin` 을 select 하는 경로만 깨진다
- *   # (실측 결과와 복구 절차는 prisma/migrations-draft/0027_operator_composer/APPLY.md)
+ *   # (실측 결과와 복구 절차는 prisma/migrations/0027_operator_composer/APPLY.md)
  */
 import { PrismaClient } from '@prisma/client'
 
