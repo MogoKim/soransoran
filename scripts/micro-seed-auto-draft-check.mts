@@ -1712,8 +1712,17 @@ console.log('\n㉑ 🔴 나이·세대 관점 — 글쓴이 나이를 생성과 
   check('🔴 생성 cache key 가 실제 프롬프트 digest 를 담는다',
     /genKey = `gen\|.*\|\$\{DRAFT_PROMPT_VERSION\}`/.test(runnerSrc)
     && /\+ `\|\$\{DRAFT_MODEL\}\|\$\{digest16\(genSystem\)\}`/.test(runnerSrc))
+  /**
+   * 🔴 **인자가 늘었다** (2026-09-17). 검수가 소재 비교 근거를 받으면서
+   *    프롬프트가 `(persona, ground)` 두 분기로 갈렸다. 성질은 그대로다 —
+   *    key 는 **실제 요청에 쓰는 그 프롬프트**로 만들어야 한다.
+   *    🔴 `(persona)` 만으로 계산하면 근거 분기의 지침을 고쳐도 key 가 안 바뀐다.
+   */
   check('🔴 품질 cache key 가 실제 프롬프트 digest 를 담는다',
-    /qSystemDigest = digest16\(buildQualitySystemPrompt\(persona\)\)/.test(runnerSrc))
+    /qSystemDigest = digest16\(buildQualitySystemPrompt\(persona, ground\)\)/.test(runnerSrc))
+  check('🔴 품질 요청도 **같은 인자**로 프롬프트를 만든다 — key 와 요청이 어긋나지 않는다',
+    /buildQualitySystemPrompt\(persona, ground\)/.test(runnerSrc)
+    && !/buildQualitySystemPrompt\(persona\)/.test(runnerSrc))
   check('🔴 [회귀] 나이대가 빠지면 프롬프트 digest 가 달라진다 — 옛 캐시가 hit 되지 않는다',
     digest16(buildQualitySystemPrompt(P03_LIKE))
     !== digest16(buildQualitySystemPrompt({ ...P03_LIKE, ageBand: undefined })))
@@ -2453,7 +2462,8 @@ console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정�
       === buildQualitySystemPrompt({ ...RETIRED, economicStatus: '빠듯' }))
     check('🔴 [IC] 캐시 key 가 프롬프트 digest 를 담는다 — 판 상수를 손으로 올리지 않는다',
       /digest16\(genSystem\)/.test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8'))
-      && /qSystemDigest = digest16\(buildQualitySystemPrompt\(persona\)\)/
+      // 🔴 인자가 `(persona, ground)` 로 늘었다 — 성질은 그대로다
+      && /qSystemDigest = digest16\(buildQualitySystemPrompt\(persona, ground\)\)/
         .test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')))
   }
 
