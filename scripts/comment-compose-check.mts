@@ -9,12 +9,23 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  resolveActionBarPassed,
   resolveComposeBarVisible,
+  resolveFormPosition,
+  resolveMovedFromTop,
   resolveScrollBehavior,
+  ACTION_BAR_HIDE_OUTSET_PX,
+  ACTION_BAR_MARK,
+  ACTION_BAR_SHOW_INSET_PX,
+  SCROLL_JUMP_RATIO,
+  SCROLL_SETTLE_MS,
+  SCROLL_START_GAP_PX,
+  SCROLL_START_MARK,
   SMOOTH_SCROLL_MAX_VIEWPORTS,
   FORM_NEAR_MARGIN_PX,
   KEYBOARD_MIN_SHRINK_PX,
   type ComposeBarInput,
+  type FormPosition,
 } from '../src/lib/comment-compose-bar'
 import {
   canSubmitGuestComment,
@@ -44,57 +55,236 @@ const bad = (name: string, detail: string) => {
   failures++
 }
 
-// ── 하단 바: 숨길 이유가 하나라도 있으면 숨긴다 (2^5 전수) ──
+// ── 하단 바: 전수(2^5 × 폼 자리 3가지 = 96가지) ──
 {
-  const keys = [
-    'sectionPassed',
-    'formNear',
-    'composing',
-    'keyboardOpen',
-    'otherComposerOpen',
-  ] as const
+  const flags = ['actionBarPassed', 'movedFromTop', 'composing', 'keyboardOpen', 'otherComposerOpen'] as const
+  const positions: FormPosition[] = ['below', 'visible', 'above']
   const offenders: string[] = []
   let shownCount = 0
+  let total = 0
 
-  for (let mask = 0; mask < 1 << keys.length; mask++) {
-    const input = { enabled: true } as ComposeBarInput
-    keys.forEach((key, i) => {
-      input[key] = Boolean(mask & (1 << i))
-    })
-    // 보일 조건은 단 하나뿐이다: 섹션을 지났고 나머지 숨길 이유가 전부 없다
-    const expected =
-      input.sectionPassed &&
-      !input.formNear &&
-      !input.composing &&
-      !input.keyboardOpen &&
-      !input.otherComposerOpen
-    const actual = resolveComposeBarVisible(input)
-    if (actual !== expected) {
-      offenders.push(`${keys.map((k, i) => (mask & (1 << i) ? k : '')).filter(Boolean).join('+') || '없음'}=${actual}`)
+  for (const formPosition of positions) {
+    for (let mask = 0; mask < 1 << flags.length; mask++) {
+      const input = { formPosition } as ComposeBarInput
+      flags.forEach((key, i) => {
+        input[key] = Boolean(mask & (1 << i))
+      })
+      const expected =
+        input.actionBarPassed &&
+        input.movedFromTop &&
+        formPosition === 'below' &&
+        !input.composing &&
+        !input.keyboardOpen &&
+        !input.otherComposerOpen
+      const actual = resolveComposeBarVisible(input)
+      total++
+      if (actual !== expected) {
+        offenders.push(`${formPosition}/${flags.filter((_, i) => mask & (1 << i)).join('+') || '없음'}`)
+      }
+      if (actual) shownCount++
     }
-    if (actual) shownCount++
   }
 
   if (offenders.length) bad('하단 바 조건 전수', `🔴 ${offenders.join(' / ')}`)
-  else ok('하단 바 조건 전수', `32가지 중 보이는 조합은 ${shownCount}가지뿐`)
+  else ok('하단 바 조건 전수', `${total}가지 중 보이는 조합은 ${shownCount}가지뿐`)
 }
 
-// ── enabled 가 거짓이면 어떤 조합에서도 뜨지 않는다 ──
+// ── 🔴 반례: 폼을 지나친 뒤 되살아나지 않는가 ──
+{
+  const base = {
+    actionBarPassed: true, movedFromTop: true,
+    composing: false, keyboardOpen: false, otherComposerOpen: false,
+  }
+  const offenders: string[] = []
+  if (!resolveComposeBarVisible({ ...base, formPosition: 'below' }))
+    offenders.push('🔴 폼이 아직 아래인데 뜨지 않았다')
+  if (resolveComposeBarVisible({ ...base, formPosition: 'visible' }))
+    offenders.push('🔴 폼이 보이는데 떴다')
+  /**
+   * 🔴 실측 반례(fx-empty): ON@1800 → off@2000 → **ON@3280**.
+   *    폼을 지나 추천 글·Footer 를 보는 자리에서 바가 되살아났다.
+   *    "교차하지 않는다" 만 보고 표시하면 이 일이 생긴다.
+   */
+  if (resolveComposeBarVisible({ ...base, formPosition: 'above' }))
+    offenders.push('🔴 폼을 지나친 뒤 되살아났다')
+  if (offenders.length) bad('폼 아래 재노출', offenders.join(' / '))
+  else ok('폼 아래 재노출', "below 만 표시 · visible·above 는 숨김")
+}
+
+// ── 🔴 좌표 판정: 위·아래·여유 구간을 구분하는가 ──
+{
+  const vh = 844
+  const offenders: string[] = []
+
+  // 폼 자리 — 세 구간
+  const fp = (top: number, bottom: number) => resolveFormPosition({ top, bottom, viewportHeight: vh })
+  const line = vh + FORM_NEAR_MARGIN_PX
+  // 여유 밖(화면 바닥보다 96px 넘게 아래) 에서만 '아직 안 왔다'
+  if (fp(line, line + 300) !== 'below') offenders.push('🔴 여유 밖의 폼을 below 로 보지 않는다')
+  if (fp(line + 200, line + 500) !== 'below') offenders.push('🔴 한참 아래 폼을 below 로 보지 않는다')
+  /**
+   * 🔴 반례: 화면 844 에서 폼 top 800 — 폼은 **이미 보인다**. 반드시 숨겨야 한다.
+   *    바닥에서 빼는 기준(viewportHeight - 96 = 748)이면 800 >= 748 이라 below 가 되어
+   *    바가 폼 위에 얹혔다.
+   */
+  if (fp(800, 800 + 310) !== 'visible') offenders.push('🔴 폼 top 800(화면 안)을 below 로 본다')
+  // 경계 전후
+  if (fp(line - 1, line + 300) !== 'visible') offenders.push('🔴 여유 안으로 들어온 폼을 visible 로 보지 않는다')
+  if (fp(vh, vh + 300) !== 'visible') offenders.push('🔴 화면 바닥에 닿은 폼을 visible 로 보지 않는다')
+  if (fp(vh - 1, vh + 300) !== 'visible') offenders.push('🔴 화면 안에 걸친 폼을 visible 로 보지 않는다')
+  if (fp(-500, -10) !== 'above') offenders.push('🔴 위로 지나간 폼을 above 로 보지 않는다')
+  if (fp(-500, 10) !== 'visible') offenders.push('🔴 걸쳐 있는 폼을 visible 로 보지 않는다')
+  // 🔴 여유가 바 높이보다 커야 비키는 일이 먼저 끝난다(바 ≈ 터치 52 + 여백)
+  if (FORM_NEAR_MARGIN_PX <= 69) offenders.push('🔴 여유가 바 높이보다 작다')
+
+  // 공감·공유 — 아래/여유/지남
+  const ab = (top: number, previous: boolean) => resolveActionBarPassed({ previous, top, viewportHeight: vh })
+  if (ab(vh + ACTION_BAR_HIDE_OUTSET_PX + 1, true) !== false)
+    offenders.push('🔴 아직 화면 아래인데 지났다고 본다')
+  if (ab(vh - ACTION_BAR_SHOW_INSET_PX, false) !== true)
+    offenders.push('🔴 표시 선을 넘었는데 지나지 않았다고 본다')
+  // 🔴 위로 지나간 경우도 "지나왔다" 이다 — 댓글을 읽는 내내 바가 남아야 한다
+  if (ab(-4000, false) !== true) offenders.push('🔴 위로 지나갔는데 거짓')
+  // 여유 구간은 이전 판단을 지킨다(양방향)
+  const between = vh + 10
+  if (ab(between, true) !== true) offenders.push('🔴 여유 구간에서 켜진 것이 꺼졌다')
+  if (ab(between, false) !== false) offenders.push('🔴 여유 구간에서 꺼진 것이 켜졌다')
+
+  // 맨 위 기준선
+  if (resolveMovedFromTop({ top: SCROLL_START_GAP_PX }) !== false)
+    offenders.push('🔴 기준선 위에서 내려왔다고 본다')
+  if (resolveMovedFromTop({ top: SCROLL_START_GAP_PX - 1 }) !== true)
+    offenders.push('🔴 기준선을 지났는데 아니라고 본다')
+
+  if (offenders.length) bad('좌표 판정', offenders.join(' / '))
+  else ok('좌표 판정', '폼 3구간 · 공감공유 아래/여유/지남 · 맨 위 기준선')
+}
+
+// ── 🔴 반례: 긴 글에서 48px 만으로는 절대 뜨지 않는다 ──
+{
+  const base = {
+    formPosition: 'below' as FormPosition, composing: false, keyboardOpen: false, otherComposerOpen: false,
+  }
+  const offenders: string[] = []
+
+  // 긴 글 최초 진입 — 아직 아무 조건도 아니다
+  if (resolveComposeBarVisible({ ...base, actionBarPassed: false, movedFromTop: false }))
+    offenders.push('🔴 최초 진입에서 떴다')
+  // 🔴 긴 글에서 조금 내려왔지만 공감·공유는 아직 저 아래 — 떠서는 안 된다
+  if (resolveComposeBarVisible({ ...base, actionBarPassed: false, movedFromTop: true }))
+    offenders.push('🔴 공감·공유 이전에 스크롤만으로 떴다')
+  // 짧은 글 최초 — 공감·공유는 이미 보이지만 아직 손도 대지 않았다
+  if (resolveComposeBarVisible({ ...base, actionBarPassed: true, movedFromTop: false }))
+    offenders.push('🔴 짧은 글 첫 화면에서 떴다')
+  // 둘 다 만족해야 뜬다
+  if (!resolveComposeBarVisible({ ...base, actionBarPassed: true, movedFromTop: true }))
+    offenders.push('🔴 두 조건을 채웠는데 뜨지 않았다')
+
+  if (offenders.length) bad('두 조건 반례', offenders.join(' / '))
+  else ok('두 조건 반례', '스크롤만으로도 · 공감공유만으로도 뜨지 않는다')
+}
+
+// ── 🔴 댓글 수를 보지 않는다 — 첫 댓글 유도도 이 바의 일이다 ──
 {
   const offenders: string[] = []
-  for (let mask = 0; mask < 32; mask++) {
-    const visible = resolveComposeBarVisible({
-      enabled: false,
-      sectionPassed: Boolean(mask & 1),
-      formNear: Boolean(mask & 2),
-      composing: Boolean(mask & 4),
-      keyboardOpen: Boolean(mask & 8),
-      otherComposerOpen: Boolean(mask & 16),
-    })
-    if (visible) offenders.push(`mask=${mask}`)
+  const keys = Object.keys({
+    actionBarPassed: 0, movedFromTop: 0, formPosition: 0, composing: 0, keyboardOpen: 0, otherComposerOpen: 0,
+  })
+  // 판정 입력에 댓글 수를 뜻하는 자리가 아예 없어야 한다
+  for (const gone of ['enabled', 'commentCount', 'tallEnough', 'sectionPassed']) {
+    if (keys.includes(gone)) offenders.push(`🔴 ${gone} 가 아직 판정에 있다`)
   }
-  if (offenders.length) bad('댓글 없는 글', `🔴 ${offenders.length}가지 조합에서 떴다`)
-  else ok('댓글 없는 글', 'enabled=false 면 32가지 전부 숨김')
+  const bar = readFileSync(join(SRC, 'lib', 'comment-compose-bar.ts'), 'utf8')
+  for (const gone of ['tallEnough', 'sectionPassed', 'MIN_SCROLL_RATIO', 'FAR_INPUT_RATIO']) {
+    if (bar.includes(gone)) offenders.push(`🔴 정책 파일에 ${gone} 가 남아 있다`)
+  }
+  const section = readFileSync(join(SRC, 'components', 'features', 'CommentSection.tsx'), 'utf8')
+  if (/enabled=\{comments\.length/.test(section)) offenders.push('🔴 댓글 수로 바를 막는다')
+  // 댓글 0개여도 조건만 맞으면 뜬다
+  if (!resolveComposeBarVisible({
+    actionBarPassed: true, movedFromTop: true, formPosition: 'below',
+    composing: false, keyboardOpen: false, otherComposerOpen: false,
+  })) offenders.push('🔴 댓글 0개 글에서 뜨지 않는다')
+  if (offenders.length) bad('댓글 수 무관', offenders.join(' / '))
+  else ok('댓글 수 무관', '판정에 댓글 수·섹션 높이가 없다 · 0개여도 뜬다')
+}
+
+// ── 🔴 순간 이동: 관찰이 오지 않아도 다시 재는가 ──
+{
+  const anchor = readFileSync(join(SRC, 'components', 'features', 'CommentComposeAnchor.tsx'), 'utf8')
+  const offenders: string[] = []
+  /**
+   * 🔴 IntersectionObserver 는 교차 상태가 바뀔 때만 부른다. 화면 몇 개분을 한 번에
+   *    건너뛰면(스크롤 복원 · 해시 이동) 교차 상태가 그대로라 콜백이 오지 않는다.
+   *    그래서 큰 폭 이동을 따로 잡아 다시 재야 한다.
+   */
+  if (!anchor.includes('SCROLL_JUMP_RATIO')) offenders.push('🔴 큰 폭 이동을 잡지 않는다')
+  /**
+   * 🔴 큰 폭만으로는 부족하다. 실측(fx-empty · y=2000→2400)에서 400px 이동은
+   *    관찰 경계도 건드리지 않고 큰 폭 기준(422px)에도 못 미쳐 판단이 낡았다.
+   *    스크롤이 멈춘 순간을 마지막 신호로 삼아야 한다.
+   */
+  if (!anchor.includes('SCROLL_SETTLE_MS')) offenders.push('🔴 멈춤에서 다시 재지 않는다')
+  /**
+   * 🔴 관찰 선과 판정 선이 어긋나면 그 사이 구간에 신호가 없다.
+   *    폼 관찰을 +96(아래로 넓힘)으로 두면 판정 선(화면 위 96)과 190px 어긋나,
+   *    멈춤 타이머가 메꿀 때까지 바가 남아 있었다(실측 fx-empty y=2220~2400).
+   */
+  /**
+   * 소스에는 템플릿 문자열 그대로 들어 있다 — 값이 아니라 그 형태를 본다.
+   * 🔴 폼 판정 선은 화면 바닥보다 96px **아래**다. 관찰도 아래로 넓혀야(+96) 같은 선이 된다.
+   *    음수(-96)로 두면 폼이 화면에 들어온 뒤에야 신호가 와서 비키는 일이 늦는다.
+   */
+  if (/0px 0px -\$\{FORM_NEAR_MARGIN_PX\}px 0px/.test(anchor))
+    offenders.push('🔴 폼 관찰 선이 화면 위쪽으로 잡혀 있다')
+  if (!/0px 0px \$\{FORM_NEAR_MARGIN_PX\}px 0px/.test(anchor))
+    offenders.push('🔴 폼 관찰 선이 판정 선에 맞춰져 있지 않다')
+  if (!anchor.includes('clearTimeout(settleTimer)')) offenders.push('🔴 멈춤 타이머를 정리하지 않는다')
+  if ((anchor.match(/clearTimeout\(settleTimer\)/g) ?? []).length < 2)
+    offenders.push('🔴 멈춤 타이머 정리가 재설정·cleanup 양쪽에 있지 않다')
+  if (SCROLL_SETTLE_MS <= 0 || SCROLL_SETTLE_MS > 400)
+    offenders.push(`🔴 멈춤 기준 ${SCROLL_SETTLE_MS}ms 가 범위를 벗어났다`)
+  if (!anchor.includes("addEventListener('pageshow'")) offenders.push('🔴 되살아난 화면에서 다시 재지 않는다')
+  // 🔴 판단은 한 곳에서만 — 관찰은 신호일 뿐이다
+  // 🔴 주석의 단어가 아니라 **실제 사용**을 본다(entry.isIntersecting · ?.isIntersecting)
+  if (/\.isIntersecting/.test(anchor)) offenders.push('🔴 관찰 결과를 그대로 상태로 쓴다')
+  if (!anchor.includes('new IntersectionObserver(schedule')) offenders.push('🔴 관찰이 신호로 쓰이지 않는다')
+  for (const fn of ['resolveFormPosition', 'resolveActionBarPassed', 'resolveMovedFromTop']) {
+    if (!anchor.includes(fn)) offenders.push(`🔴 ${fn} 을 쓰지 않는다`)
+  }
+  // 🔴 평소 스크롤에서 좌표를 재지 않는다
+  const onScroll = anchor.slice(anchor.indexOf('const onScroll ='), anchor.indexOf('const onPageShow ='))
+  if (/getBoundingClientRect/.test(onScroll)) offenders.push('🔴 매 스크롤마다 좌표를 잰다')
+  if (!/jumped/.test(onScroll)) offenders.push('🔴 큰 폭 여부를 가리지 않는다')
+  // cleanup
+  for (const off of ["removeEventListener('scroll'", "removeEventListener('resize'", "removeEventListener('pageshow'", 'cancelAnimationFrame(frame)', 'disconnect()']) {
+    if (!anchor.includes(off)) offenders.push(`🔴 ${off} 가 없다`)
+  }
+  if (SCROLL_JUMP_RATIO <= 0 || SCROLL_JUMP_RATIO > 1) offenders.push('🔴 큰 폭 기준이 범위를 벗어났다')
+  if (offenders.length) bad('순간 이동 보정', offenders.join(' / '))
+  else ok('순간 이동 보정', `관찰·멈춤(${SCROLL_SETTLE_MS}ms)·큰 폭(${SCROLL_JUMP_RATIO}화면)이 모두 measure() 하나를 부른다`)
+}
+
+// ── 기준 요소 계약이 양쪽에 살아 있는가 ──
+{
+  const offenders: string[] = []
+  const actionBar = readFileSync(join(SRC, 'components', 'features', 'PostActionBar.tsx'), 'utf8')
+  const page = readFileSync(join(SRC, 'app', 'community', '[boardSlug]', '[postId]', 'page.tsx'), 'utf8')
+  const anchor = readFileSync(join(SRC, 'components', 'features', 'CommentComposeAnchor.tsx'), 'utf8')
+  // 🔴 문자열을 각자 적지 않는다 — 한쪽만 고치면 판정이 조용히 멈춘다
+  if (!actionBar.includes('ACTION_BAR_MARK')) offenders.push('🔴 공감·공유 줄에 표시가 없다')
+  if (!page.includes('SCROLL_START_MARK')) offenders.push('🔴 글 맨 위 표시가 없다')
+  if (!anchor.includes('ACTION_BAR_MARK') || !anchor.includes('SCROLL_START_MARK'))
+    offenders.push('🔴 관찰이 표시 상수를 쓰지 않는다')
+  if (actionBar.includes(`'${ACTION_BAR_MARK}'`) && !actionBar.includes('ACTION_BAR_MARK'))
+    offenders.push('🔴 리터럴로 적었다')
+  if (!ACTION_BAR_MARK.startsWith('data-') || !SCROLL_START_MARK.startsWith('data-'))
+    offenders.push('🔴 표시가 data 속성이 아니다')
+  // 글을 옮겨도 앞 글의 상태가 남지 않는가
+  if (!/<CommentComposeAnchor key=\{postId\}>/.test(readFileSync(join(SRC, 'components', 'features', 'CommentSection.tsx'), 'utf8')))
+    offenders.push('🔴 글마다 새로 만들지 않는다')
+  if (offenders.length) bad('기준 요소 계약', offenders.join(' / '))
+  else ok('기준 요소 계약', `${ACTION_BAR_MARK} · ${SCROLL_START_MARK} · key={postId}`)
 }
 
 // ── 문턱값이 의미를 잃지 않았는가 ──
@@ -102,8 +292,11 @@ const bad = (name: string, detail: string) => {
   const offenders: string[] = []
   if (FORM_NEAR_MARGIN_PX < 52) offenders.push(`🔴 폼 여유 ${FORM_NEAR_MARGIN_PX}px 가 터치 높이보다 작다`)
   if (KEYBOARD_MIN_SHRINK_PX < 100) offenders.push(`🔴 키보드 문턱 ${KEYBOARD_MIN_SHRINK_PX}px 는 주소창 변화와 구분되지 않는다`)
+  // 🔴 손가락 한 번 쓸어내린 정도여야 한다. 너무 크면 짧은 글에서 영영 뜨지 않는다
+  if (SCROLL_START_GAP_PX <= 0 || SCROLL_START_GAP_PX > 200)
+    offenders.push(`🔴 맨 위 여유 ${SCROLL_START_GAP_PX}px 가 범위를 벗어났다`)
   if (offenders.length) bad('문턱값', offenders.join(' / '))
-  else ok('문턱값', `폼 여유 ${FORM_NEAR_MARGIN_PX}px · 키보드 ${KEYBOARD_MIN_SHRINK_PX}px`)
+  else ok('문턱값', `폼 여유 ${FORM_NEAR_MARGIN_PX}px · 키보드 ${KEYBOARD_MIN_SHRINK_PX}px · 맨 위 ${SCROLL_START_GAP_PX}px`)
 }
 
 // ── 먼 길은 건너뛰고 가까운 길만 미끄러진다 ──
@@ -206,16 +399,20 @@ const bad = (name: string, detail: string) => {
   for (const gone of ['max-md:fixed', 'opacity-50', 'z-[60]', 'z-[61]', 'reservedHeight']) {
     if (anchor.includes(gone)) offenders.push(`🔴 ${gone} 가 남아 있다`)
   }
-  // 🔴 window 스크롤로 판정하지 않는다. visualViewport 의 scroll 은 다른 일이다 —
-  //    iOS 가 화면을 밀어 올릴 때 offsetTop 이 바뀌는 것을 따라가는 용도다.
-  if (anchor.includes("window.addEventListener('scroll'"))
-    offenders.push('🔴 window scroll 리스너로 판정한다')
+  /**
+   * 🔴 한때는 window scroll 리스너 자체를 금지했다. 지금은 하나 있다 —
+   *    큰 폭으로 건너뛴 이동을 잡기 위해서다(관찰 콜백이 오지 않는 구간).
+   *    금지해야 할 것은 리스너가 아니라 **매 스크롤마다 좌표를 재는 일**이고,
+   *    그것은 '순간 이동 보정' 검사가 본다. 여기서는 옛 수식이 돌아오지 않았는지만 본다.
+   */
+  if (/scrollY\s*[<>]=?\s*.*viewportHeight|innerHeight\s*\*\s*(MIN_SCROLL|FAR_INPUT)/.test(anchor))
+    offenders.push('🔴 스크롤 수식으로 판정한다')
   if (!anchor.includes('IntersectionObserver')) offenders.push('🔴 IntersectionObserver 를 쓰지 않는다')
   if (!anchor.includes('disconnect()')) offenders.push('🔴 observer 를 정리하지 않는다')
   if (!anchor.includes('preventScroll: true')) offenders.push('🔴 포커스가 브라우저 스크롤을 부른다')
   if (!anchor.includes('prefers-reduced-motion')) offenders.push('🔴 움직임 설정을 보지 않는다')
   if (offenders.length) bad('시트 잔재', offenders.join(' / '))
-  else ok('시트 잔재', '시트·딤·예약높이·scroll 판정 0 · IO 정리 · preventScroll · reduced-motion')
+  else ok('시트 잔재', '시트·딤·예약높이·스크롤 수식 0 · IO 정리 · preventScroll · reduced-motion')
 }
 
 // ── 확인 상자가 떠 있는 동안 우리 시계가 멈추는가 (반례) ──

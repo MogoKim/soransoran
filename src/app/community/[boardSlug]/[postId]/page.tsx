@@ -20,6 +20,7 @@ import { isSearchIndexable, robotsMetaFor } from '@/lib/post-visibility'
 import { displayName } from '@/lib/display-name'
 import PostBody from '@/components/features/PostBody'
 import { postContentToSummary } from '@/lib/post-html'
+import { SCROLL_START_MARK } from '@/lib/comment-compose-bar'
 
 export const dynamic = 'force-dynamic'
 
@@ -107,6 +108,11 @@ export default async function PostDetailPage({
       <PostViewBeacon postId={post.id} />
 
       <main className="mx-auto max-w-3xl px-4 pb-16">
+        {/* 🔴 글 맨 위를 가리키는 표시. 하단 댓글 바가 "여기서 얼마나 내려왔는지" 를 잰다.
+              높이 0 이라 화면에는 아무것도 더하지 않는다. 지우면 짧은 글에서 바가
+              첫 화면부터 뜬다(comment-compose-bar 의 SCROLL_START_GAP_PX 주석). */}
+        <div {...{ [SCROLL_START_MARK]: '' }} aria-hidden />
+
         <nav className="py-2">
           <Link
             href={board.href}

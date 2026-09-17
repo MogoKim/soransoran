@@ -17,6 +17,36 @@ export const GUEST_PASSWORD_PATTERN = /^\d{4}$/
 export const GUEST_PASSWORD_MAX_ATTEMPTS = 3
 export const GUEST_LOCK_MS = 60 * 1000
 
+/**
+ * 폼 맨 위 제목.
+ *
+ * 🔴 첫 화면에 이름이 없으면 그 자리가 무엇을 하는 칸인지 말해 주는 것이 없다.
+ *    회원 폼에는 두지 않는다 — 회원은 이미 한 번 이상 써 본 사람이고,
+ *    그쪽 첫 화면은 입력칸 하나라 제목이 없어도 읽힌다.
+ * 🔴 답글에는 두지 않는다. 답글은 어느 댓글에 딸린 것인지가 자리로 이미 보인다.
+ */
+export const GUEST_COMPOSE_TITLE = '댓글을 남겨보세요'
+
+/**
+ * 비회원 입력칸 안내.
+ *
+ * 🔴 제목과 같은 말을 쓰지 않는다. 회원 폼은 제목이 없어 COMMENT_PLACEHOLDER
+ *    ('댓글을 남겨보세요.')가 그 역할까지 겸하지만, 여기서는 제목이 이미 그 말을 했다.
+ *    같은 문장이 위아래로 둘이면 둘 다 읽히지 않는다.
+ */
+export const GUEST_COMMENT_PLACEHOLDER = '여기에 편하게 적어주세요.'
+
+/** 등록 버튼에 적는 말 — 🔴 '등록' 은 기계의 말이다. 하는 일을 적는다 */
+export const GUEST_SUBMIT_LABEL = '댓글 남기기'
+export const GUEST_REPLY_SUBMIT_LABEL = '답글 남기기'
+
+/**
+ * 비회원 입력칸의 자동 확장 상한(px).
+ * 🔴 회원 폼(160)보다 크다. 처음부터 세 줄로 열리므로 상한도 그만큼 뒤에 있어야
+ *    몇 글자 적자마자 안쪽 스크롤로 넘어가지 않는다.
+ */
+export const GUEST_TEXTAREA_MAX_HEIGHT = 240
+
 export const GUEST_NICKNAME_PLACEHOLDER = '예: 소란맘'
 export const GUEST_PASSWORD_PLACEHOLDER = '숫자 4자리'
 

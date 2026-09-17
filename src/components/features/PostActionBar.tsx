@@ -15,6 +15,7 @@ import {
 } from '@/lib/share-link'
 import BottomSheet from '@/components/ui/BottomSheet'
 import ReportButton from '@/components/features/ReportButton'
+import { ACTION_BAR_MARK } from '@/lib/comment-compose-bar'
 
 /**
  * 로그인이 없어 막힌 자리에서 하는 말. 사전 차단과 서버 응답이 같은 문장을 쓰게 묶는다.
@@ -220,7 +221,12 @@ export default function PostActionBar({
   }
 
   return (
-    <div className="mt-6 border-t border-subtle pt-3">
+    /**
+     * 🔴 이 줄이 화면에 들어오는 순간이 하단 댓글 바가 뜨는 기준이다.
+     *    "다 읽고 무엇을 할지 고르는 자리" 라서, 읽기의 끝을 길이나 비율로
+     *    어림하지 않고 가리킨다. 표시를 지우면 바가 조용히 뜨지 않게 된다.
+     */
+    <div {...{ [ACTION_BAR_MARK]: '' }} className="mt-6 border-t border-subtle pt-3">
       <div className="flex items-center gap-2">
         {/* 공감 — 알약. 아직 켜지지 않는 상태라 채우지 않고 윤곽선으로 둔다 */}
         <button

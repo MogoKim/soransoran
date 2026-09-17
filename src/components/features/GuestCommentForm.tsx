@@ -23,8 +23,6 @@ import {
   COMMENT_CREATED,
   REPLY_CREATED,
   COMMENT_COUNTER_WARN_FROM,
-  COMMENT_PLACEHOLDER,
-  COMMENT_TEXTAREA_MAX_HEIGHT,
   MAX_COMMENT_LENGTH,
 } from '@/lib/comment-policy'
 import {
@@ -36,6 +34,11 @@ import {
   GUEST_PASSWORD_LENGTH,
   GUEST_PASSWORD_PLACEHOLDER,
   GUEST_SIGNUP_HINT,
+  GUEST_COMMENT_PLACEHOLDER,
+  GUEST_COMPOSE_TITLE,
+  GUEST_REPLY_SUBMIT_LABEL,
+  GUEST_SUBMIT_LABEL,
+  GUEST_TEXTAREA_MAX_HEIGHT,
   GUEST_CHALLENGE_PENDING,
   GUEST_CHALLENGE_TIMEOUT,
   GUEST_TURNSTILE_TIMEOUT,
@@ -204,7 +207,7 @@ export default function GuestCommentForm({
     })
   }, [])
 
-  useAutoResize(textareaRef, content, COMMENT_TEXTAREA_MAX_HEIGHT)
+  useAutoResize(textareaRef, content, GUEST_TEXTAREA_MAX_HEIGHT)
 
   /** 사이트 키가 없는 환경(로컬)에는 위젯이 없다 — 기다릴 것도 없다 */
   const needsToken = TURNSTILE_SITE_KEY.length > 0
@@ -325,6 +328,11 @@ export default function GuestCommentForm({
       <input type="hidden" name="boardSlug" value={boardSlug} />
       {parentId ? <input type="hidden" name="parentId" value={parentId} /> : null}
 
+      {/* 🔴 답글에는 제목을 두지 않는다 — 어느 댓글에 딸린 것인지가 자리로 이미 보인다 */}
+      {parentId ? null : (
+        <p className="m-0 mb-1 text-lg font-bold text-content-primary">{GUEST_COMPOSE_TITLE}</p>
+      )}
+
       {error ? (
         <p role="alert" className="text-sm text-state-danger">
           {error}
@@ -349,10 +357,15 @@ export default function GuestCommentForm({
         </div>
       ) : null}
 
+      {/* 🔴 처음부터 세 줄로 연다. 한 줄짜리 칸은 "한 줄만 쓰라" 는 말처럼 읽혀,
+             하고 싶은 말이 있어도 짧게 끊게 만든다.
+             🔴 min-h 는 em 이다 — useAutoResize 가 내용에 맞춰 style.height 를 바꿔도
+             min-height 가 이기고, em 이라 글자 크기 3단계에서 모두 세 줄을 지킨다.
+             rows 만으로는 안 된다: 빈 칸의 scrollHeight 는 한 줄이라 곧바로 줄어든다. */}
       <textarea
         ref={textareaRef}
         name="content"
-        rows={1}
+        rows={3}
         maxLength={MAX_COMMENT_LENGTH}
         value={content}
         onChange={(e) => {
@@ -363,8 +376,8 @@ export default function GuestCommentForm({
           setFormError('')
         }}
         aria-label="댓글"
-        className="min-h-[52px] resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-page p-3 leading-[1.7]"
-        placeholder={COMMENT_PLACEHOLDER}
+        className="min-h-[6.5em] resize-none overflow-y-auto rounded-lg border border-subtle bg-surface-page p-3 leading-[1.7]"
+        placeholder={GUEST_COMMENT_PLACEHOLDER}
       />
 
       {/* 🔴 처음부터 보여준다. 첫 화면이 칸 하나뿐이라 시끄럽지 않고,
@@ -432,13 +445,19 @@ export default function GuestCommentForm({
         </p>
       ) : null}
 
+      {/* 🔴 내용을 가운데로 모은다(justify-center). ActionButton 의 기본은 inline-flex 왼쪽
+             정렬이라 전폭으로 늘리면 글자가 왼쪽에 붙어 버튼으로 읽히지 않는다.
+             🔴 못 누를 때 윤곽선을 준다. 비활성 배경(--surface-page)은 카드(흰색)와
+             1.12:1 이라 면만으로는 버튼이 거기 있는지 보이지 않는다.
+             새 색을 만들지 않고 이미 있는 구분선 토큰으로 모양만 세운다.
+             🔴 공용 ActionButton 을 고치지 않는다 — 다른 화면의 버튼까지 함께 바뀐다. */}
       <ActionButton
         tone="primary"
-        label="등록"
+        label={parentId ? GUEST_REPLY_SUBMIT_LABEL : GUEST_SUBMIT_LABEL}
         pendingLabel={submitPendingLabel(phase)}
         busy={busy}
         disabled={!canSubmit}
-        className="w-full sm:ml-auto sm:w-auto sm:min-w-[96px]"
+        className="mt-1 w-full justify-center disabled:border disabled:border-subtle"
       />
     </form>
   )

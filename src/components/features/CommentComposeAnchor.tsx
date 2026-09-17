@@ -4,10 +4,21 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import CommentDock from '@/components/features/CommentDock'
 import { useComposeMode } from '@/components/features/ComposeModeProvider'
 import {
+  ACTION_BAR_HIDE_OUTSET_PX,
+  ACTION_BAR_MARK,
+  ACTION_BAR_SHOW_INSET_PX,
   FORM_NEAR_MARGIN_PX,
   KEYBOARD_MIN_SHRINK_PX,
+  SCROLL_JUMP_RATIO,
+  SCROLL_SETTLE_MS,
+  SCROLL_START_GAP_PX,
+  SCROLL_START_MARK,
+  resolveActionBarPassed,
   resolveComposeBarVisible,
+  resolveFormPosition,
+  resolveMovedFromTop,
   resolveScrollBehavior,
+  type FormPosition,
 } from '@/lib/comment-compose-bar'
 
 /** Tailwind md 미만 — CommentDock 의 `md:hidden` 과 같은 경계다 */
@@ -53,21 +64,14 @@ function stickyChromeBottom(): number {
  * 🔴 스크롤·포커스는 여기 한 곳에서만 한다. 회원 폼과 비회원 폼이 각자 하면
  *    한쪽만 고쳐지는 날이 온다 — 이 컴포넌트가 둘을 함께 감싸는 이유다.
  */
-export default function CommentComposeAnchor({
-  children,
-  enabled,
-}: {
-  children: ReactNode
-  /** 바를 둘 만한 글인가 — 댓글이 있는가를 부모가 판단해 넘긴다 */
-  enabled: boolean
-}) {
+export default function CommentComposeAnchor({ children }: { children: ReactNode }) {
   const areaRef = useRef<HTMLDivElement>(null)
   const [isMobile, setIsMobile] = useState(false)
-  const [sectionPassed, setSectionPassed] = useState(false)
-  const [formNear, setFormNear] = useState(true)
+  const [actionBarPassed, setActionBarPassed] = useState(false)
+  const [movedFromTop, setMovedFromTop] = useState(false)
+  const [formPosition, setFormPosition] = useState<FormPosition>('below')
   const [composing, setComposing] = useState(false)
   const [keyboardOpen, setKeyboardOpen] = useState(false)
-  const [tallEnough, setTallEnough] = useState(false)
   const { otherComposerOpen } = useComposeMode()
 
   /** 키보드 보정을 도중에 그만두는 손잡이. 화면을 떠날 때 반드시 부른다 */
@@ -82,42 +86,119 @@ export default function CommentComposeAnchor({
   }, [])
 
   /**
-   * 🔴 좌표를 재지 않고 브라우저에게 묻는다.
-   *    기준은 두 가지뿐이다 — 댓글 섹션이 화면에 걸쳐 있는가, 폼이 코앞인가.
-   *    섹션을 통째로 지나가면(다음 읽을 글 · 글쓰기 CTA 자리) 관찰이 저절로 꺼져
-   *    바도 함께 사라진다.
+   * 🔴 관찰은 **"지금 다시 재 보라" 는 신호**로만 쓴다. 판단은 measure() 한 곳에서만 한다.
+   *
+   *    예전에는 IntersectionObserver 의 isIntersecting 을 그대로 상태로 삼았다.
+   *    그 값은 "교차하지 않는다" 만 말할 뿐 위인지 아래인지를 구분하지 못하고,
+   *    큰 폭으로 건너뛴 스크롤(스크롤 복원 · 해시 이동)에서는 교차 상태가 바뀌지 않아
+   *    **콜백 자체가 오지 않는다**. 그래서 판단과 신호를 갈랐다 —
+   *    관찰이 와도, 우리가 직접 재도, 답을 내는 함수는 언제나 같다.
+   *
+   * 🔴 신호는 셋이다: 관찰(경계 통과) · 큰 폭 이동 · 화면 크기 변화.
+   *    평소 스크롤에서는 scrollY 만 읽고 아무것도 재지 않는다.
    */
   useEffect(() => {
     const area = areaRef.current
     if (!area || !isMobile) return
 
-    // 섹션을 못 잡으면 바로 위 묶음으로 대신한다 — 그래도 "지났는가" 는 답할 수 있다
-    const section = area.closest('section') ?? area.parentElement
-    if (!section) return
+    const actionBar = document.querySelector(`[${ACTION_BAR_MARK}]`)
+    const scrollStart = document.querySelector(`[${SCROLL_START_MARK}]`)
 
-    const measure = () => setTallEnough(section.getBoundingClientRect().height >= window.innerHeight)
+    let frame = 0
+
+    const measure = () => {
+      frame = 0
+      const viewportHeight = window.innerHeight
+
+      const areaRect = area.getBoundingClientRect()
+      setFormPosition(
+        resolveFormPosition({ top: areaRect.top, bottom: areaRect.bottom, viewportHeight }),
+      )
+
+      if (actionBar) {
+        const { top } = actionBar.getBoundingClientRect()
+        setActionBarPassed((previous) => resolveActionBarPassed({ previous, top, viewportHeight }))
+      }
+      if (scrollStart) {
+        setMovedFromTop(resolveMovedFromTop({ top: scrollStart.getBoundingClientRect().top }))
+      }
+    }
+
+    // 여러 신호가 한 프레임에 겹쳐도 재는 일은 한 번이다
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(measure)
+    }
+
     measure()
 
-    const sectionObserver = new IntersectionObserver(
-      ([entry]) => setSectionPassed(entry?.isIntersecting ?? false),
-      { threshold: 0 },
-    )
-    sectionObserver.observe(section)
+    /**
+     * 🔴 경계마다 신호가 필요하다. 공감·공유 줄은 선이 둘이라(표시 -24 · 숨김 +64)
+     *    관찰도 둘이다 — 한 관찰만 두면 나머지 선을 지날 때 아무 신호도 오지 않는다.
+     */
+    /**
+     * 🔴 관찰 선을 **판정 선과 같은 자리**에 둔다. 어긋나면 그 사이 구간에 신호가 없어
+     *    멈춤 타이머가 메꿀 때까지 판단이 낡는다(실측 fx-empty y=2220~2400).
+     *
+     *    폼의 판정 선은 화면 바닥보다 96px **아래**다(resolveFormPosition).
+     *    rootMargin 의 아래쪽 값을 +96 으로 주면 관찰 범위가 딱 그 선까지 넓어져,
+     *    폼이 화면에 들어오기 전에 신호가 온다 — 비키는 일이 먼저 끝난다.
+     */
+    const watch: Array<{ target: Element; rootMargin: string }> = [
+      { target: area, rootMargin: `0px 0px ${FORM_NEAR_MARGIN_PX}px 0px` },
+    ]
+    if (actionBar) {
+      watch.push({ target: actionBar, rootMargin: `0px 0px -${ACTION_BAR_SHOW_INSET_PX}px 0px` })
+      watch.push({ target: actionBar, rootMargin: `0px 0px ${ACTION_BAR_HIDE_OUTSET_PX}px 0px` })
+    }
+    if (scrollStart) {
+      watch.push({ target: scrollStart, rootMargin: `-${SCROLL_START_GAP_PX}px 0px 0px 0px` })
+    }
 
-    const formObserver = new IntersectionObserver(
-      ([entry]) => setFormNear(entry?.isIntersecting ?? true),
-      { threshold: 0, rootMargin: `0px 0px ${FORM_NEAR_MARGIN_PX}px 0px` },
-    )
-    formObserver.observe(area)
+    const observers = watch.map(({ target, rootMargin }) => {
+      const observer = new IntersectionObserver(schedule, { threshold: 0, rootMargin })
+      observer.observe(target)
+      return observer
+    })
 
-    // 글자 크기를 바꾸거나 화면을 돌리면 섹션 높이가 달라진다
-    const resizeObserver = new ResizeObserver(measure)
-    resizeObserver.observe(section)
+    /**
+     * 🔴 스크롤 중에는 아무것도 재지 않는다. **멈추면** 한 번 잰다.
+     *
+     *    관찰은 경계를 지날 때만 온다. 경계를 건드리지 않는 이동에서는 신호가 없어
+     *    판단이 낡는다 — 그래서 멈춤을 마지막 신호로 삼는다.
+     *    크게 뛴 이동은 멈춤을 기다리지 않고 그 자리에서 맞춘다.
+     */
+    let settleTimer = 0
+    let lastY = window.scrollY
+
+    const onScroll = () => {
+      const y = window.scrollY
+      const jumped = Math.abs(y - lastY) > window.innerHeight * SCROLL_JUMP_RATIO
+      lastY = y
+      window.clearTimeout(settleTimer)
+      if (jumped) {
+        schedule()
+        return
+      }
+      settleTimer = window.setTimeout(schedule, SCROLL_SETTLE_MS)
+    }
+
+    /** 뒤로가기로 되살아난 화면은 다시 그리지 않는다 — 그때도 한 번 잰다 */
+    const onPageShow = () => {
+      lastY = window.scrollY
+      schedule()
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', schedule, { passive: true })
+    window.addEventListener('pageshow', onPageShow)
 
     return () => {
-      sectionObserver.disconnect()
-      formObserver.disconnect()
-      resizeObserver.disconnect()
+      if (frame) window.cancelAnimationFrame(frame)
+      window.clearTimeout(settleTimer)
+      observers.forEach((observer) => observer.disconnect())
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', schedule)
+      window.removeEventListener('pageshow', onPageShow)
     }
   }, [isMobile])
 
@@ -250,9 +331,9 @@ export default function CommentComposeAnchor({
   }, [correctAfterKeyboard])
 
   const visible = resolveComposeBarVisible({
-    enabled: enabled && tallEnough,
-    sectionPassed,
-    formNear,
+    actionBarPassed,
+    movedFromTop,
+    formPosition,
     composing,
     keyboardOpen,
     otherComposerOpen,

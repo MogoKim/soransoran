@@ -118,9 +118,10 @@ export default function CommentSection({
         )}
 
         {/* 입력은 만들지 않고 있는 것을 부른다 — 확인 절차·비밀번호·글자수는 각 폼의 규칙이다.
-              🔴 댓글이 없으면 하단 바를 두지 않는다. 빈 자리 바로 아래가 입력칸이라
-                 띄워 봐야 몇 px 만에 사라진다. */}
-        <CommentComposeAnchor enabled={comments.length > 0}>
+              🔴 key 로 글마다 새로 만든다. 같은 경로 모양(/[boardSlug]/[postId])을 오갈 때
+                 React 가 같은 자리로 보고 상태를 이어 주면, 앞 글에서 뜬 바가 다음 글
+                 첫 화면에 그대로 남는다. */}
+        <CommentComposeAnchor key={postId}>
           {isLoggedIn ? (
             <CommentForm postId={postId} boardSlug={boardSlug} />
           ) : (
