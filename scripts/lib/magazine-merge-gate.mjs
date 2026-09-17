@@ -21,6 +21,39 @@
  * 🔴 파일도 네트워크도 만지지 않는다. 넘겨받은 사실만 판정한다.
  */
 
+/**
+ * 관문이 PR 에 대해 **실제로 보는 필드.**
+ *
+ * ─────────────────────────────────────────────────────────
+ * 🔴 **왜 한 곳에 모으나** (2026-09-17 실측).
+ *
+ *    목록 조회(`gh pr list`)와 상세 조회(`gh pr view`)가 **서로 다른 필드**를
+ *    가져오고 있었다. 목록에는 `headRefName` 이 있고 상세에는 없었다.
+ *    `mergeable` 을 다시 보려고 상세 조회 결과를 관문에 넘긴 순간,
+ *    `pr.headRefName` 이 `undefined` 가 되어 **정상 자동 PR 이 "사람 PR" 로 막혔다.**
+ *
+ *      ⛔ NOT_AUTO_BRANCH: undefined 는 자동 레인 브랜치가 아니다
+ *
+ *    등록 3건이 끝난 회차가 마지막 한 걸음에서 멈췄다.
+ *    fail-closed 라 사고는 아니었지만, **막지 말아야 할 것을 막았다.**
+ *
+ * 🔴 **그래서 목록과 상세가 같은 목록을 쓴다.** 조회하는 쪽이 각자 필드를
+ *    적으면 언젠가 또 갈라진다. 관문이 보는 것을 관문 옆에 적어 둔다.
+ */
+export const PR_FIELDS = [
+  'number',
+  'url',
+  'headRefName',
+  'headRefOid',
+  'baseRefName',
+  'state',
+  'mergeable',
+  'isDraft',
+]
+
+/** `gh --json` 에 그대로 넘기는 모양 */
+export const PR_FIELDS_ARG = PR_FIELDS.join(',')
+
 /** 자동 레인이 만드는 브랜치의 접두 — `magazine-outstanding.mjs` 와 같은 값이다 */
 export const AUTO_BRANCH_PREFIX = 'feat/magazine-auto-register-'
 
@@ -149,7 +182,12 @@ export function judgeAutoMerge({
     block('NO_PR', '자동 PR 을 찾지 못했다')
     return { ok: false, blockedBy, checked }
   }
-  if (!String(pr.headRefName ?? '').startsWith(AUTO_BRANCH_PREFIX)) {
+  // 🔴 **필드를 못 받은 것과 사람 PR 인 것을 구분한다** (2026-09-17).
+  //    둘 다 막지만 사람이 할 일이 다르다. 옛 판은 필드 누락을
+  //    "undefined 는 자동 레인 브랜치가 아니다" 로 적어 사람 PR 처럼 보이게 했다.
+  if (typeof pr.headRefName !== 'string' || pr.headRefName === '') {
+    block('PR_FIELDS_INCOMPLETE', `PR 조회에 headRefName 이 없다 — 조회 필드가 PR_FIELDS(${PR_FIELDS.join(', ')})와 어긋났다`)
+  } else if (!pr.headRefName.startsWith(AUTO_BRANCH_PREFIX)) {
     block('NOT_AUTO_BRANCH', `${pr.headRefName} 는 자동 레인 브랜치가 아니다 — 사람 PR 을 자동으로 merge 하지 않는다`)
   } else pass('자동 레인 브랜치')
 
