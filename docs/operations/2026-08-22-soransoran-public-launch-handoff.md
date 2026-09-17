@@ -218,6 +218,20 @@ Upstash 의존성       0개   — rate limit 이 인메모리라 서버리스�
 리스크  상세는 canonical·OG가 걸려 있다. metadata 회귀 주의
 ```
 
+> 🔴 **2026-09-17 대체됨 — 위 "우나어 참조" 두 줄은 지금 사실이 아니다.**
+>
+> 당시 적어 둔 `우나어 features/community/CommentDock.tsx (169행)` 는
+> 그 저장소에 **존재하지 않는다**. 우나어의 하단 고정 입력은 별도 파일이 아니라
+> `features/community/CommentInput.tsx` 한 줄(`max-md:sticky max-md:bottom-[72px]`)이고,
+> **회원 전용**이며, `bottom-[72px]` 는 우나어 하단 광고띠를 피하려는 값이다.
+> 소란소란에는 하단 탭바도 광고띠도 없어 그대로 옮길 수 없다.
+>
+> 이 항목은 `feat/comment-compose-ux` 에서 다음과 같이 마무리했다 —
+> 전체 폼을 고정하지 않고, 읽는 동안 작은 진입 바(`CommentDock`)를 띄운 뒤
+> 누르면 **원래 자리의 폼으로 데려가** 커서를 놓는다.
+> 노출 판정은 좌표 계산이 아니라 `IntersectionObserver` 가 한다.
+> 당시 기록은 그때의 판단으로 남겨 두고, 달라진 사실만 여기 적는다.
+
 ### 🥈 Batch 2 — 글쓰기 UX · 글자크기 · 공통 컴포넌트
 
 ```

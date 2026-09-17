@@ -3,7 +3,7 @@
 import CommentForm from '@/components/features/CommentForm'
 import { TOUCH_MIN } from '@/lib/spacing'
 import GuestCommentForm from '@/components/features/GuestCommentForm'
-import { useReplyOpen } from '@/components/features/ReplyOpenProvider'
+import { useComposeMode } from '@/components/features/ComposeModeProvider'
 
 export default function ReplyForm({
   postId,
@@ -16,7 +16,7 @@ export default function ReplyForm({
   parentId: string
   isLoggedIn: boolean
 }) {
-  const { openParentId, setOpenParentId } = useReplyOpen()
+  const { openParentId, setOpenParentId } = useComposeMode()
   const open = openParentId === parentId
 
   if (!open) {
