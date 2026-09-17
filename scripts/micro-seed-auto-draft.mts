@@ -38,6 +38,11 @@ import {
   pickDraftGated, judgeLifeRetry,
 } from '../src/lib/micro-seed-auto-draft'
 import { judgeSelfAgeConflict, SELF_AGE_RULE_VERSION } from '../src/lib/persona-self-age'
+/**
+ * 🔴 **생성 전 큐 스냅샷** (2026-09-17). 이 스크립트는 여전히 **DB 를 읽지 않는다** —
+ *    러너가 읽어 파일로 건넨 것을 검증해서 쓴다. 판정 규칙은 여기서 만들지 않는다.
+ */
+import { readQueueSnapshot, planPreDraftExclusion } from '../src/lib/supply-queue-snapshot'
 import {
   MACHINE_AGE_HUMAN_REVIEW_NOTE, AGE_CHECK_MODEL_TRIAL, AGE_CHECK_QUALIFIED_MODEL,
   type DraftCandidate, type Judgement, type Pick, type DraftQualityVerdict,
@@ -114,6 +119,22 @@ const APPLY = argv.includes('--apply')
  *    읽지도 쓰지도 않는 쪽이 안전하다.
  */
 const NO_CACHE = argv.includes('--no-cache')
+/**
+ * 🔴 **생성 전 큐 스냅샷** — 러너가 넘긴다.
+ *
+ *    `--require-queue-snapshot` 은 *"없거나 어긋나면 만들지 말라"* 는 뜻이다.
+ *    러너는 항상 이 셋을 같이 넘긴다. 손으로 부를 때는 안 넘겨도 종전대로 돈다 —
+ *    🔴 그 경우 **사전 제외가 없다는 사실을 화면에 적는다.** 조용히 넘어가지 않는다.
+ */
+const QUEUE_SNAPSHOT = ((): string | null => {
+  const hit = argv.find((a) => a.startsWith('--queue-snapshot='))
+  return hit === undefined ? null : hit.slice('--queue-snapshot='.length)
+})()
+const RUN_ID = ((): string | null => {
+  const hit = argv.find((a) => a.startsWith('--run-id='))
+  return hit === undefined ? null : hit.slice('--run-id='.length)
+})()
+const REQUIRE_QUEUE_SNAPSHOT = argv.includes('--require-queue-snapshot')
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
 
@@ -1212,8 +1233,58 @@ async function main(): Promise<void> {
   console.log('  🔴 사람의 ADOPT 를 사칭하지 않는다')
   console.log(`  🔴 DB 0 · 큐 0 · 발행 0 · Sheet 0${CALL ? '' : ' · LLM 0 · 네트워크 0 · 파일 write 0'}\n`)
 
-  const seeds = loadAutoSeeds()
-  if (seeds.length === 0) fail('AUTO_SEED 가 0건이다 — 먼저 micro-seed:auto-judge 를 돌린다')
+  const seedsAll = loadAutoSeeds()
+  if (seedsAll.length === 0) fail('AUTO_SEED 가 0건이다 — 먼저 micro-seed:auto-judge 를 돌린다')
+
+  /**
+   * ── 🔴 **생성 전 제외 — 유료 호출보다 먼저** (2026-09-17) ──
+   *
+   *    12:15 회차 실측: 266건을 유료로 만들어 183건을 채택했는데 적재는 10건이었고,
+   *    빠진 이유 1위가 `SIBLING` 161건 — *"같은 원문의 형제가 아직 큐에서 안 나갔다"* 였다.
+   *    그 판정은 **원문 id 와 큐 상태만 있으면** 알 수 있다. 만든 뒤에 버릴 이유가 없다.
+   *
+   * 🔴 **앞당기는 것은 `SIBLING` 하나뿐이다.** `ALREADY`·`HELD` 는 후보 **제목**을 보는 판정이고
+   *    생성 전에는 제목이 없다. 원문 id 로 대신하면 그 원문에서 나올 **다른 초안까지** 막는다 —
+   *    그것은 다른 정책이다. 적재 단계의 검사는 **그대로 남는다.**
+   *
+   * 🔴 **fail-closed.** 파일이 없거나 어긋나면 만들지 않는다.
+   *    입력 파일을 지우지도 처리 완료로 적지도 않으므로 **다음 정상 회차가 그대로 다시 집는다.**
+   */
+  let seeds = seedsAll
+  let preExcluded = 0
+  if (QUEUE_SNAPSHOT !== null || REQUIRE_QUEUE_SNAPSHOT) {
+    if (QUEUE_SNAPSHOT === null) {
+      fail('큐 스냅샷을 요구했는데 --queue-snapshot 이 없다 — 생성을 보류한다 (입력은 그대로 둔다)')
+    }
+    if (RUN_ID === null) {
+      fail('큐 스냅샷을 쓰려면 --run-id 가 있어야 한다 — 생성을 보류한다 (입력은 그대로 둔다)')
+    }
+    // 🔴 파일을 못 읽는 것과 내용이 어긋난 것을 섞지 않는다 — 둘 다 보류지만 사유가 다르다
+    let raw: string | null = null
+    try { raw = readFileSync(QUEUE_SNAPSHOT, 'utf-8') } catch { raw = null }
+    const read = readQueueSnapshot({ raw, runId: RUN_ID, now: new Date() })
+    if (!read.ok) {
+      fail(`큐 스냅샷을 쓸 수 없다 [${read.code}] ${read.reason}`
+        + ' — 생성을 보류한다. 입력은 그대로 두고 다음 회차가 다시 집는다')
+    }
+    const plan = planPreDraftExclusion({
+      sourceArticleIds: seedsAll.map((j) => j.sourceArticleId),
+      pendingSourceIds: read.pendingSourceIds,
+    })
+    const keep = new Set(plan.keep)
+    seeds = seedsAll.filter((j) => keep.has(j.sourceArticleId))
+    preExcluded = plan.excluded.length
+    console.log(`\n⓪ 생성 전 제외 ${preExcluded}건 — 같은 원문의 미발행 후보가 큐에 있다`)
+    console.log(`   스냅샷 ${QUEUE_SNAPSHOT} (${Math.round(read.ageMs / 1000)}초 전 · 회차 ${RUN_ID})`)
+    console.log(`   🔴 적재 단계의 중복·보류·트랜잭션 검사는 그대로 남는다 — 여기서 대신하지 않는다`)
+  } else {
+    // 🔴 손으로 부른 경우. 조용히 넘어가지 않는다
+    console.log('\n⓪ 🟡 큐 스냅샷 없이 돈다 — **생성 전 제외를 적용하지 않았다**')
+  }
+  if (seeds.length === 0) {
+    console.log('\n① AUTO_SEED 0건 — 전부 큐에 미발행 형제가 있다. 🟢 유료 호출 0\n')
+    return
+  }
   const metas = loadMeta()
   const seen = seenFromCandidates()
   const now = new Date()

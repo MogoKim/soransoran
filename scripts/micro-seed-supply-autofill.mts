@@ -35,7 +35,7 @@ import {
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Candidate, type HeldEntry,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY, MACHINE_SITE_PREFIX,
-  buildQueuePayload, queueProfileOf, machineProfileMismatch,
+  buildQueuePayload, queueProfileOf, machineProfileMismatch, isOurSite,
   type Envelope, type AutoJudgeProvenance,
 } from '../src/lib/micro-seed-supply-autofill'
 // 🔴 적재 직전 재검증 — 새 판정을 만들지 않고 §4-AS 의 함수를 그대로 쓴다
@@ -124,10 +124,7 @@ function readHeld(path: string): { held: HeldEntry[]; missing: boolean } {
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
-/** 우리가 만든 synthetic 인가 — 🔴 사람 접두와 기계 접두 둘 다 */
-function isOurSite(site: string): boolean {
-  return site.startsWith(AUTOFILL_SITE_PREFIX) || site.startsWith(MACHINE_SITE_PREFIX)
-}
+// 🔴 `isOurSite` 는 lib 정본을 그대로 쓴다 — 여기서 다시 쓰면 스냅샷과 범위가 갈린다
 
 /**
  * 적재 직전 재검증 — 🔴 **새 판정을 만들지 않는다. §4-AS 의 함수를 그대로 부른다.**

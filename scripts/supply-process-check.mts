@@ -10,8 +10,10 @@
  *    이틀간 신규 공급 0). 그래서 여기서는 **가짜 exec 를 주입해 호출 순서와 횟수**를 본다.
  *    "실패해도 계속한다" 는 주석은 검사가 아니다.
  */
-import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+/** 🔴 fixture 전용 합성 말투 자산 — 운영 자산을 읽지도 복사하지도 않는다 */
+import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -21,18 +23,26 @@ import {
   adaptKeyOf, hasWork, judgeBuffer, judgeProcessRun,
   mayWriteRunState, planCommonPhase, planPending, planSourcePhase,
   runCommonPhase, runSourcePhase, runStatusOf, sourceOfDataFile, verifyRun,
-  type ExecResult, type ProcessStage, type StagePlan, type SupplySourceId,
+  type ExecResult, type ProcessStage, type StagePlan, type SupplySourceId, type StageGate,
 } from '../src/lib/supply-process'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { STOCK_BANDS } from '../src/lib/supply-stock-plan'
 /** 🔴 잠금 정본 — 러너와 **같은 함수**를 시험한다. 사본을 만들지 않는다 */
 import { acquireLock, lockAnomaly, releaseLock } from './lib/collect-lock.mjs'
-import { planRefill, provenanceKeyOf, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
+import { planRefill, provenanceKeyOf, hasPendingSibling, isOurSite, MACHINE_SITE_PREFIX, type Candidate, type HeldEntry, type QueueRow } from '../src/lib/micro-seed-supply-autofill'
+/** 🔴 생성 전 큐 스냅샷 — 러너와 **같은 함수**를 시험한다 */
+import {
+  buildQueueSnapshot, pendingSourceIdsOf, readQueueSnapshot, planPreDraftExclusion,
+} from '../src/lib/supply-queue-snapshot'
+
 import { collectArgsFor, planCafeRun } from './lib/navercafe-run-plan.mjs'
 import { BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
 import { MAX_REQUESTS_PER_DAY, RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, thin82cookCapPerRun } from '../src/lib/collect-schedule'
 /** 🔴 운영 job 정본 — 여기에 label 을 다시 적지 않는다 */
 import { RETIRED_JOBS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
+
+/** 🔴 큐 스냅샷이 준비된 상태 — 기존 기대(draft 계획됨)를 그대로 본다 */
+const GATE_READY = { kind: 'ready', snapshotPath: '.microseed-data/snap.json', runId: 'R1' } as const
 
 let pass = 0
 let fail = 0
@@ -148,7 +158,7 @@ check('🔴 같은 runId 의 다른 카페가 서로를 막지 않는다', (() =
   check('🔴 두 산출물이 다 있으면 adapt 를 다시 계획하지 않는다',
     !adaptPlanned([THIN, D, R]))
   check('🔴 두 산출물이 다 있으면 공통 judge·draft·fill 이 선다', (() => {
-    const stages = planCommonPhase(planPending([THIN, D, R]), judgeBuffer(24)).map((x) => x.stage)
+    const stages = planCommonPhase(planPending([THIN, D, R]), judgeBuffer(24), GATE_READY).map((x) => x.stage)
     return stages.includes('judge') && stages.includes('draft') && stages.includes('fill')
   })())
 }
@@ -201,7 +211,7 @@ for (const [label, down, alive] of [
     calls.filter((c) => c.source === down).length === 1)
 
   // 🔴 공통 국면은 **그래도 돈다** — 지난 회차가 남긴 입력은 이번 수집과 무관하다
-  const common = planCommonPhase(pendingAfter, FULL_BUFFER)
+  const common = planCommonPhase(pendingAfter, FULL_BUFFER, GATE_READY)
   const c2 = fakeExec([])
   const r2 = await runCommonPhase({ plan: common, exec: c2.exec, now: NOW })
   check(`🟢 [${label} 실패] 공통 단계(판정→초안→보충)는 계속 돈다`,
@@ -248,7 +258,7 @@ check('🟢 adapt 는 끝났고 judge 가 끊긴 회차 — 다시 돌리면 ada
     '82cook-adapt-A.raw-detail.jsonl',
   ])
   const src = planSourcePhase(after)
-  const common = planCommonPhase(after, FULL_BUFFER)
+  const common = planCommonPhase(after, FULL_BUFFER, GATE_READY)
   return src.length === 0 && common.map((c) => c.stage).join(',') === 'judge,draft,fill'
 })())
 check('🟢 cafeThin 이 끊긴 회차 — 다시 돌리면 그 카페의 cafeThin 부터다', (() => {
@@ -258,7 +268,7 @@ check('🟢 cafeThin 이 끊긴 회차 — 다시 돌리면 그 카페의 cafeTh
     && src[0]!.stages.map((s) => s.stage).join(',') === 'cafeThin'
 })())
 {
-  const common = planCommonPhase(pendingAfter, FULL_BUFFER)
+  const common = planCommonPhase(pendingAfter, FULL_BUFFER, GATE_READY)
   const { calls, exec } = fakeExec([{ stage: 'judge', source: null }])
   const r = await runCommonPhase({ plan: common, exec, now: NOW })
   check('🔴 judge 가 실패하면 draft·fill 을 부르지 않는다',
@@ -275,7 +285,7 @@ console.log('\n⑤ 미처리 입력이 없으면 정상 no-op 이다')
   const empty = planPending([])
   check('🔴 빈 디렉터리는 할 일이 없다', !hasWork(empty))
   check('🔴 계획도 비어 있다',
-    planSourcePhase(empty).length === 0 && planCommonPhase(empty, FULL_BUFFER).length === 0)
+    planSourcePhase(empty).length === 0 && planCommonPhase(empty, FULL_BUFFER, GATE_READY).length === 0)
   const v = judgeProcessRun({ live: true, killOpen: true, lock: 'free', hasWork: false })
   check('🔴 live 여도 돌지 않는다 — 실패가 아니라 no-op 이다',
     !v.ok && v.code === 'NO_INPUT')
@@ -293,7 +303,7 @@ for (const usable of [0, 100, 300, 699]) {
   const p = judgeBuffer(usable)
   check(`🟢 재고 ${usable} — 공급 경로가 살아 있다 (모델 · 적재 둘 다)`,
     p.llm && p.fill && p.upTo === 700 - usable)
-  const common = planCommonPhase(pendingAfter, p)
+  const common = planCommonPhase(pendingAfter, p, GATE_READY)
   check(`🟢 재고 ${usable} — 판정·초안·보충이 계획에 다 있다`,
     common.map((c) => c.stage).join(',') === 'judge,draft,fill')
   check(`🔴 재고 ${usable} — 적재 상한이 인자에 실린다`,
@@ -303,13 +313,13 @@ for (const usable of [700, 1_000]) {
   const p = judgeBuffer(usable)
   check(`🟡 재고 ${usable} — 버퍼가 찼다: 모델 0 · DB write 0`, !p.llm && !p.fill && p.upTo === 0)
   check(`🟢 재고 ${usable} — 그래도 파일 단계는 계획에 남는다 (수집물을 방치하지 않는다)`,
-    planSourcePhase(pendingAll).length === 3 && planCommonPhase(pendingAfter, p).length === 0)
+    planSourcePhase(pendingAll).length === 3 && planCommonPhase(pendingAfter, p, GATE_READY).length === 0)
 }
 check('🔴 재고를 못 읽으면 파일 단계까지만 한다 — 모르는 수로 DB 에 쓰지 않는다', (() => {
   const p = judgeBuffer(null)
   return !p.llm && !p.fill
     && planSourcePhase(pendingAll).length === 3
-    && planCommonPhase(pendingAfter, p).length === 0
+    && planCommonPhase(pendingAfter, p, GATE_READY).length === 0
 })())
 check('🔴 재고는 회차를 막지 않는다 — judgeProcessRun 이 재고를 인자로 받지 않는다', (() => {
   const src = readFileSync('src/lib/supply-process.ts', 'utf-8')
@@ -849,6 +859,483 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     const lib = codeOf('src/lib/supply-process.ts')
     return /completedAdaptKeys\(/.test(lib) && !/82cook-adapt-\(\.\+\?\)/.test(lib)
   })())
+}
+
+// ─────────────────────────────────────────────────────────
+// [PQ] 생성 전 큐 스냅샷 게이트 — 🔴 **유료 호출보다 먼저** (2026-09-17)
+//
+//   12:15 회차 실측: 유료 266건 생성 → 채택 183 → 적재 10.
+//   빠진 이유 1위가 SIBLING 161건 — 원문 id 와 큐 상태만 있으면 **생성 전에** 안다.
+// ─────────────────────────────────────────────────────────
+{
+  const NOW = new Date('2026-09-17T04:00:00.000Z')
+  /** 🔴 형제 검사 대상 범위 — 적재의 isOurSite 가 통과시키는 접두 */
+  const OUR = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`
+  /** 🔴 대상 **밖** — legacy·다른 레인. 같은 원문 id 가 있어도 형제가 아니다 */
+  const OUTSIDE = 'navercafe:remonterrace'
+  const mkSnap = (over: Record<string, unknown> = {}): string => JSON.stringify({
+    ...buildQueueSnapshot({
+      runId: 'R1', takenAt: new Date(NOW.getTime() - 60_000),
+      rows: [
+        { sourceArticleId: 'A1-deadbeef', sourceSite: OUR, createdPostId: null },        // 미발행 → 제외 대상
+        { sourceArticleId: 'A2-cafebabe', sourceSite: OUR, createdPostId: 'post-1' },    // 발행 완료 → 제외 아님
+        { sourceArticleId: 'A3-0badf00d', sourceSite: OUR, createdPostId: '' },          // 빈 문자열 = 미발행
+      ],
+    }),
+    ...over,
+  })
+
+  // ── ① 스냅샷이 형제 규칙과 **같은 답**을 낸다 ──
+  {
+    const rows = [
+      { sourceArticleId: 'A1-deadbeef', sourceSite: OUR, createdPostId: null },
+      { sourceArticleId: 'A2-cafebabe', sourceSite: OUR, createdPostId: 'post-1' },
+      { sourceArticleId: 'A3-0badf00d', sourceSite: OUR, createdPostId: '' },
+      // 🔴 대상 밖 — 적재의 queueForSibling 이 거르는 행
+      { sourceArticleId: 'A5-11111111', sourceSite: OUTSIDE, createdPostId: null },
+    ]
+    /** 🔴 적재가 실제로 만드는 것과 **같은 모양** — isOurSite 로 거른 뒤 형제를 본다 */
+    const queueForSibling: QueueRow[] = rows
+      .filter((r) => isOurSite(r.sourceSite))
+      .map((r) => ({ sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId }))
+    const set = pendingSourceIdsOf(rows)
+    // 🔴 정본(hasPendingSibling)과 전수 대조 — 규칙이 두 벌이 되면 여기서 깨진다
+    let same = true
+    for (const id of ['A1', 'A2', 'A3', 'A4', 'A5']) {
+      if (set.has(id) !== hasPendingSibling(id, queueForSibling)) same = false
+    }
+    check('🔴 [PQ] 스냅샷 집합이 적재의 형제 판정과 전수 일치한다', same)
+    check('🔴 [PQ] 발행 완료된 형제는 제외 대상이 아니다 (기존 정책 유지)', !set.has('A2'))
+    check('🔴 [PQ] createdPostId 빈 문자열은 미발행이다', set.has('A3'))
+    check('🔴 [PQ] 🔴 대상 밖(legacy·다른 레인) 행은 형제가 아니다 — 범위가 적재와 같다',
+      !set.has('A5'))
+    check('🔴 [PQ] 범위를 안 보면 A5 까지 막혔을 것이다 — 이 검사가 그것을 막는다',
+      hasPendingSibling('A5', rows.map((r) => ({
+        sourceArticleId: r.sourceArticleId, status: 'APPROVED', createdPostId: r.createdPostId,
+      }))))
+  }
+
+  // ── ② 스냅샷 검증 — fail-closed ──
+  {
+    const ok = readQueueSnapshot({ raw: mkSnap(), runId: 'R1', now: NOW })
+    check('🔴 [PQ] 정상 스냅샷을 읽는다', ok.ok)
+    const cases: [string, ReturnType<typeof readQueueSnapshot>][] = [
+      ['파일 없음', readQueueSnapshot({ raw: null, runId: 'R1', now: NOW })],
+      ['JSON 아님', readQueueSnapshot({ raw: '{', runId: 'R1', now: NOW })],
+      ['다른 파일', readQueueSnapshot({ raw: mkSnap({ kind: 'other' }), runId: 'R1', now: NOW })],
+      ['옛 판', readQueueSnapshot({ raw: mkSnap({ version: 'v0' }), runId: 'R1', now: NOW })],
+      ['다른 회차', readQueueSnapshot({ raw: mkSnap(), runId: 'R2', now: NOW })],
+      ['너무 오래됨', readQueueSnapshot({
+        raw: mkSnap({ takenAt: new Date(NOW.getTime() - 60 * 60_000).toISOString() }), runId: 'R1', now: NOW })],
+      ['미래 시각', readQueueSnapshot({
+        raw: mkSnap({ takenAt: new Date(NOW.getTime() + 60_000).toISOString() }), runId: 'R1', now: NOW })],
+      ['모양 어긋남', readQueueSnapshot({ raw: mkSnap({ pendingSourceIds: 'x' }), runId: 'R1', now: NOW })],
+    ]
+    for (const [label, r] of cases) {
+      check(`🔴 [PQ] ${label} → 통과시키지 않는다`, !r.ok)
+    }
+    check('🔴 [PQ] 다른 회차 파일은 RUN_MISMATCH 로 구분한다',
+      (readQueueSnapshot({ raw: mkSnap(), runId: 'R2', now: NOW }) as { code?: string }).code === 'RUN_MISMATCH')
+  }
+
+  // ── ③ 제외 판정 — 다른 원문을 잘못 빼지 않는다 ──
+  {
+    const pending = new Set(['A1', 'A3'])
+    const plan = planPreDraftExclusion({ sourceArticleIds: ['A1', 'A2', 'A3', 'A4'], pendingSourceIds: pending })
+    check('🔴 [PQ] 미발행 형제가 있는 원문만 뺀다', plan.excluded.join() === 'A1,A3')
+    check('🔴 [PQ] 🔴 다른 원문은 그대로 둔다', plan.keep.join() === 'A2,A4')
+    check('🔴 [PQ] 뺀 것과 남긴 것을 둘 다 돌려준다 — 조용히 줄이지 않는다',
+      plan.keep.length + plan.excluded.length === 4)
+  }
+
+  // ── ④ 러너 계획 — 🔴 못 읽으면 draft 를 **계획하지 않는다** ──
+  {
+    const pend = planPending([
+      '82cook-thin-20260917-010000.thin-detail.jsonl',
+      '82cook-adapt-20260917-010000.detail.jsonl',
+      '82cook-adapt-20260917-010000.raw-detail.jsonl',
+    ])
+    const ready = planCommonPhase(pend, FULL_BUFFER, GATE_READY).map((x) => x.stage)
+    const held = planCommonPhase(pend, FULL_BUFFER, { kind: 'hold', reason: '큐를 읽지 못했다' })
+      .map((x) => x.stage)
+    check('🔴 [PQ] ready 면 draft 가 계획된다', ready.includes('draft'))
+    check('🔴 [PQ] 🔴 hold 면 draft 가 계획되지 않는다 — 유료 단계 보류', !held.includes('draft'))
+    check('🔴 [PQ] hold 여도 judge·fill 은 그대로다 — 보류는 draft 하나다',
+      held.includes('judge') && held.includes('fill'))
+    const args = planCommonPhase(pend, FULL_BUFFER, GATE_READY).find((x) => x.stage === 'draft')!.args
+    check('🔴 [PQ] draft 인자에 스냅샷 경로·회차·요구 플래그가 실린다',
+      args.some((a) => a.startsWith('--queue-snapshot='))
+      && args.some((a) => a.startsWith('--run-id='))
+      && args.includes('--require-queue-snapshot'))
+    check('🔴 [PQ] 기존 인자(--call --apply)를 잃지 않는다',
+      args.includes('--call') && args.includes('--apply'))
+  }
+
+  // ── ⑤ 🔴 **실제 실행 입구** — 가짜 입력·가짜 캐시 · API 키 없음 ──
+  //    키가 없으면 생성 경로는 `keyStatus` 에서 죽는다. 그래서
+  //    "키 오류로 죽었다" = 유료 경로에 **도달했다**, "0건으로 끝났다" = **도달하지 않았다** 다.
+  {
+    const root = mkdtempSync(join(tmpdir(), 'pq-'))
+    const dd = join(root, DATA_DIR_NAME)
+    mkdirSync(dd, { recursive: true })
+    const seed = (id: string): string => JSON.stringify({
+      sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+      ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
+      provenance: 'machine-shadow',
+    })
+    writeFileSync(join(dd, 'x.shadow.jsonl'), `${seed('A1')}\n${seed('A9')}\n`, 'utf-8')
+    writeFileSync(join(dd, 'x.detail.jsonl'), `${JSON.stringify({
+      sourceArticleId: 'A1', sourceSite: 's', title: '제목1', bodyHead: '본문', axis: 'a', lane: 'l',
+    })}\n${JSON.stringify({
+      sourceArticleId: 'A9', sourceSite: 's', title: '제목9', bodyHead: '본문', axis: 'a', lane: 'l',
+    })}\n`, 'utf-8')
+    // 🔴 가짜 캐시 — 있어도 게이트가 먼저다
+    writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    const snapPath = join(dd, 'supply-queue-snapshot-R1.json')
+
+    const runDraft = (args: readonly string[]): { code: number | null; out: string } => {
+      const r = spawnSync('npx', ['tsx', join(process.cwd(), 'scripts/micro-seed-auto-draft.mts'), ...args], {
+        cwd: root, encoding: 'utf-8',
+        // 🔴 키를 지운다 — 유료 경로에 닿으면 반드시 그 자리에서 죽는다
+        env: { ...process.env, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '' },
+      })
+      return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+    }
+
+    // ⓐ 미발행 후보가 있는 원문뿐 → 생성·품질·나이 호출 모두 0
+    writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({
+      runId: 'R1', takenAt: new Date(), rows: [
+        { sourceArticleId: 'A1-deadbeef', sourceSite: OUR, createdPostId: null },
+        { sourceArticleId: 'A9-deadbeef', sourceSite: OUR, createdPostId: null },
+      ],
+    })), 'utf-8')
+    const allBlocked = runDraft(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+    check('🔴 [PQ][입구] 전부 미발행 형제 → 유료 호출 0 (키 오류에 닿지 않는다)',
+      allBlocked.code === 0 && /유료 호출 0/.test(allBlocked.out) && !/API_KEY/.test(allBlocked.out))
+    check('🔴 [PQ][입구] 생성 전 제외 건수를 화면에 적는다', /생성 전 제외 2건/.test(allBlocked.out))
+
+    // ⓑ 신규 적격 원문이 있으면 기존 경로로 간다 (= 키 오류에 닿는다)
+    writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({
+      runId: 'R1', takenAt: new Date(), rows: [{ sourceArticleId: 'A1-deadbeef', sourceSite: OUR, createdPostId: null }],
+    })), 'utf-8')
+    const oneOpen = runDraft(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+    check('🔴 [PQ][입구] 적격 원문이 남으면 기존 생성·검수 경로로 간다',
+      /API_KEY/.test(oneOpen.out) && oneOpen.code !== 0)
+    check('🔴 [PQ][입구] 그때도 제외 1건을 적는다', /생성 전 제외 1건/.test(oneOpen.out))
+
+    // ⓒ 발행 완료 형제만 있는 원문 → 기존 정책대로 막지 않는다
+    writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({
+      runId: 'R1', takenAt: new Date(), rows: [
+        { sourceArticleId: 'A1-deadbeef', sourceSite: OUR, createdPostId: 'p1' },
+        { sourceArticleId: 'A9-deadbeef', sourceSite: OUR, createdPostId: 'p2' },
+      ],
+    })), 'utf-8')
+    const published = runDraft(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+    check('🔴 [PQ][입구] 발행 완료 형제만 있으면 제외하지 않는다 (기존 정책 유지)',
+      /생성 전 제외 0건/.test(published.out) && /API_KEY/.test(published.out))
+
+    // ⓓ 전달 실패 — 파일 없음 / 회차 불일치 / 깨진 파일
+    const missing = runDraft(['--call', '--apply', `--queue-snapshot=${join(dd, 'nope.json')}`, '--run-id=R1', '--require-queue-snapshot'])
+    check('🔴 [PQ][입구] 파일이 없으면 유료 호출 0 으로 보류한다',
+      missing.code !== 0 && /MISSING/.test(missing.out) && !/API_KEY/.test(missing.out))
+    const wrongRun = runDraft(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R2', '--require-queue-snapshot'])
+    check('🔴 [PQ][입구] 회차가 다르면 유료 호출 0 으로 보류한다',
+      wrongRun.code !== 0 && /RUN_MISMATCH/.test(wrongRun.out) && !/API_KEY/.test(wrongRun.out))
+    writeFileSync(snapPath, '{ broken', 'utf-8')
+    const broken = runDraft(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+    check('🔴 [PQ][입구] 깨진 파일이면 유료 호출 0 으로 보류한다',
+      broken.code !== 0 && /PARSE/.test(broken.out) && !/API_KEY/.test(broken.out))
+    const noArg = runDraft(['--call', '--apply', '--require-queue-snapshot'])
+    check('🔴 [PQ][입구] 요구했는데 인자가 없으면 보류한다',
+      noArg.code !== 0 && !/API_KEY/.test(noArg.out))
+
+    // ⓔ 🔴 보류해도 입력을 지우거나 완료로 적지 않는다 — 다음 회차가 다시 집는다
+    check('🔴 [PQ][입구] 보류 뒤에도 입력 파일이 그대로 있다',
+      existsSync(join(dd, 'x.shadow.jsonl')) && existsSync(join(dd, 'x.detail.jsonl')))
+    check('🔴 [PQ][입구] 보류가 후보 파일을 만들지 않았다',
+      readdirSync(dd).every((f) => !/\.candidates\.json$/.test(f)))
+    check('🔴 [PQ][입구] 🔴 가짜 캐시를 지우지 않았다', existsSync(join(dd, 'auto-draft-cache.json')))
+
+    rmSync(root, { recursive: true, force: true })
+  }
+
+  // ── ⑥ 🔴 배선을 떼면 검사가 깨지는가 ──
+  {
+    const lib = readFileSync('src/lib/supply-process.ts', 'utf-8')
+    check('🔴 [PQ] planCommonPhase 가 게이트를 **필수 인자**로 받는다 (기본값 없음)',
+      /planCommonPhase\(\s*\n?\s*pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,/.test(lib))
+    const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+    check('🔴 [PQ] 스냅샷을 **draft 직전**에 만든다 — 계획 시점이 아니다',
+      /if \(plan\.stage !== 'draft'\) return \{ ok: true \}/.test(runner)
+      && runner.indexOf('const beforeStage') > runner.indexOf('planCommonPhase(after1'))
+    check('🔴 [PQ] beforeStage 를 runCommonPhase 에 넘긴다', /onStage, beforeStage \}/.test(runner))
+    check('🔴 [PQ] 큐 조회 실패가 보류로 이어진다', /return \{ ok: false, reason:/.test(runner))
+    check('🔴 [PQ] 적재와 같은 세 칸만 읽는다 — sourceSite 포함',
+      /sourceArticleId: true, sourceSite: true/.test(runner))
+    check('🔴 [PQ] TTL 을 늘려 덮지 않았다',
+      /QUEUE_SNAPSHOT_TTL_MS = 30 \* 60 \* 1000/
+        .test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8')))
+    /**
+     * 🔴 **만드는 것과 쓰는 것은 다르다** (2026-09-17 — 변이 검사가 이 구멍을 찾았다).
+     *    `buildQueueSnapshot()` 호출만 보면, 파일 쓰기를 떼어도 검사가 통과한다.
+     *    그러면 생성기는 매번 `MISSING` 으로 보류하고 공급이 조용히 0 이 된다.
+     */
+    check('🔴 [PQ] 러너가 스냅샷을 **파일로 쓴다**', /writeAtomic\(snapPath,/.test(runner))
+    check('🔴 [PQ] 파일을 쓴 **뒤에** ok 를 돌려준다 — 쓰기 전에 통과시키지 않는다', (() => {
+      const w = runner.indexOf('writeAtomic(snapPath,')
+      return w > 0 && runner.indexOf('return { ok: true }', w) > w
+    })())
+    check('🔴 [PQ] 스냅샷 경로가 회차 이름을 쓴다 — 이전 회차 파일을 집지 않는다',
+      /queueSnapshotFileName\(runId\)/.test(runner))
+    const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    check('🔴 [PQ] 🔴 생성기는 여전히 DB 를 읽지 않는다',
+      !/PrismaClient|prisma\./.test(draft))
+    check('🔴 [PQ] 게이트가 keyStatus(유료 경로 준비)보다 앞에 있다',
+      draft.indexOf('planPreDraftExclusion(') < draft.indexOf('keyStatus(DRAFT_MODEL)'))
+    check('🔴 [PQ] 적재 단계의 ALREADY·HELD 검사를 그대로 둔다',
+      /ALREADY: '이미 큐에 올라갔다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8'))
+      && /HELD: '🔴 사람이 보류한 글이다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
+    check('🔴 [PQ] 스냅샷이 범위·미발행 조건을 **정본 함수로** 판단한다 — 다시 쓰지 않는다',
+      /import \{ baseArticleId, isOurSite, isPendingRow \}/
+        .test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
+      && /if \(!isOurSite\(/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8'))
+      && /if \(!isPendingRow\(r\)\)/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8')))
+    check('🔴 [PQ] hasPendingSibling 도 같은 정본 조건을 쓴다',
+      /baseArticleId\(q\.sourceArticleId\) === articleId && isPendingRow\(q\)/
+        .test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
+    check('🔴 [PQ] 적재 러너가 isOurSite 지역 사본을 갖고 있지 않다',
+      !/^function isOurSite/m.test(readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')))
+    check('🔴 [PQ] 🔴 원문 id 로 ALREADY·HELD 를 앞당기지 않았다 — 제목 판정은 적재에 남는다',
+      !/planPreDraftExclusion[\s\S]{0,400}(ALREADY|HELD)/.test(readFileSync('src/lib/supply-queue-snapshot.ts', 'utf-8')))
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// [FP] 🔴 **가짜 provider 로 실제 호출 수를 센다** (2026-09-17)
+//
+//   앞선 판은 API 키를 지우고 "키 오류가 났는가" 로 도달 여부를 쟀다.
+//   그것은 **도달하지 않았다**만 증명하고 **정상 경로가 도는지**는 증명하지 못한다.
+//   여기서는 `fetch` 를 가로채(`--import`) 호출을 **한 건씩 기록**한다. 네트워크 0.
+// ─────────────────────────────────────────────────────────
+{
+  const root = mkdtempSync(join(tmpdir(), 'fp-'))
+  const dd = join(root, DATA_DIR_NAME)
+  mkdirSync(dd, { recursive: true })
+  /**
+   * 🔴 생성기는 Persona Pool 문서를 **cwd 기준**으로 읽는다. 없으면 provider 를
+   *    부르기 전에 `쓸 Persona 가 없어 생성 전에 멈춘 원천` 으로 끝나서,
+   *    "호출 0" 이 **게이트 덕분인지 자산이 없어서인지** 구분되지 않는다.
+   */
+  symlinkSync(join(process.cwd(), 'docs'), join(root, 'docs'))
+  /**
+   * 🔴 **개인 Mac 자산에 기대지 않는다** (2026-09-17).
+   *    생성기는 말투 자산이 없으면 provider 를 부르기 전에 멈춘다. 그 자산은
+   *    `$HOME/Library/Application Support/soransoran/persona-reference/` 에 있고
+   *    CI 러너에는 없다 — 그래서 이 검사가 CI 에서 통째로 건너뛰어졌다.
+   *    여기서는 **임시 HOME 에 합성 자산**을 만들어 CI 에서도 같은 행동을 시험한다.
+   */
+  const fakeHome = join(root, 'home')
+  mkdirSync(fakeHome, { recursive: true })
+  const fakeAsset = writeFakePersonaAsset({ home: fakeHome })
+  check('🔴 [FP] 합성 말투 자산을 임시 HOME 에 만들었다 — 운영 자산을 쓰지 않는다',
+    existsSync(fakeAsset.corpus) && existsSync(fakeAsset.manifest)
+    && fakeAsset.corpus.startsWith(root))
+  const OUR = `${MACHINE_SITE_PREFIX}navercafe:remonterrace`
+  const seed = (id: string): string => JSON.stringify({
+    sourceArticleId: id, decision: 'AUTO_SEED', semanticRisks: [],
+    ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
+    provenance: 'machine-shadow',
+  })
+  const meta = (id: string, t: string): string => JSON.stringify({
+    sourceArticleId: id, sourceSite: 'navercafe:remonterrace', title: t,
+    bodyHead: '원문 머리 300자 안쪽', axis: 'sourceCandidate', lane: 'originalRaw',
+  })
+  writeFileSync(join(dd, 'x.shadow.jsonl'), `${seed('B1')}\n${seed('B9')}\n`, 'utf-8')
+  writeFileSync(join(dd, 'x.detail.jsonl'), `${meta('B1', '제목 하나')}\n${meta('B9', '제목 아홉')}\n`, 'utf-8')
+  const snapPath = join(dd, 'supply-queue-snapshot-R1.json')
+  const logPath = join(root, 'calls.log')
+
+  const writeSnap = (rows: readonly { sourceArticleId: string; sourceSite: string; createdPostId: string | null }[]): void => {
+    writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({ runId: 'R1', takenAt: new Date(), rows })), 'utf-8')
+  }
+  /** 🔴 가짜 provider 를 끼우고 실제 스크립트를 돌린다 — 호출 수를 정확히 센다 */
+  const runWithFake = (args: readonly string[]): { code: number | null; out: string; calls: number } => {
+    writeFileSync(logPath, '', 'utf-8')
+    // 🔴 캐시는 매번 비운다 — 캐시 hit 이 호출 수를 가려서는 안 된다
+    writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
+    /**
+     * 🔴 `npx` 가 아니라 **로컬 tsx 를 직접** 부른다 — HOME 을 바꾸면 npx 가
+     *    캐시를 못 찾아 네트워크로 나갈 수 있다. 이 검사는 네트워크 0 이어야 한다.
+     */
+    const r = spawnSync(
+      join(process.cwd(), 'node_modules/.bin/tsx'),
+      [join(process.cwd(), 'scripts/micro-seed-auto-draft.mts'), ...args],
+      {
+        cwd: root, encoding: 'utf-8',
+        env: {
+          ...process.env,
+          // 🔴 **임시 HOME** — 운영 자산 대신 합성 자산을 읽게 한다
+          HOME: fakeHome,
+          // 🔴 키는 **있다.** 이제 키 오류로 대신 재지 않는다
+          ANTHROPIC_API_KEY: 'fixture-fake-key',
+          FAKE_PROVIDER_LOG: logPath,
+          NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+        },
+      },
+    )
+    const log = readFileSync(logPath, 'utf-8').split('\n').filter((l) => l.trim() !== '')
+    return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`, calls: log.length }
+  }
+
+  /**
+   * 🔴 **통제 사례를 먼저 돌린다** (2026-09-17 — CI 가 이 구멍을 찾았다).
+   *
+   *    이 블록은 provider 가 **실제로 불리는** 환경에서만 뜻이 있다. 그런데 생성기는
+   *    Persona 말투 자산(`~/Library/.../persona-reference/`)이 없으면 provider 를
+   *    부르기 **전에** 멈춘다. 그 환경에서는 "호출 0" 이 게이트 덕분인지 자산이 없어서인지
+   *    구분되지 않고, **음성 검사가 전부 공짜로 통과**한다.
+   *
+   *    그래서 **아무것도 막지 않은 상태**를 먼저 돌려 호출이 실제로 나가는지 본다.
+   *    나가지 않으면 이 환경은 이 검사를 할 수 없다 — **조용히 넘어가지 않고 그 사실을 적는다.**
+   */
+  writeSnap([])
+  const control = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+  /**
+   * 🔴 **통제 사례가 실패하면 건너뛰지 않고 실패한다.**
+   *    앞선 판은 여기서 건너뛰었다. 그러면 자산이 없는 환경에서 음성 검사가
+   *    **전부 공짜로 통과**하고, 게이트가 실제로 막았는지 아무도 모른다.
+   */
+  check('🔴 [FP] 통제 사례 — 아무것도 막지 않으면 provider 가 실제로 불린다',
+    control.calls > 0)
+  check('🔴 [FP] 통제 사례에서 후보가 채택된다 — 생성·검수 경로가 끝까지 돈다',
+    /AUTO_ADOPT [1-9]/.test(control.out))
+  check('🔴 [FP] 🔴 자산 부재로 멈추지 않았다 — 이 검사가 개인 Mac 자산에 기대지 않는다',
+    !/쓸 Persona 가 없어/.test(control.out))
+
+  // ⓐ 대상 안 미발행 형제 둘 → 호출 0
+  writeSnap([
+    { sourceArticleId: 'B1-deadbeef', sourceSite: OUR, createdPostId: null },
+    { sourceArticleId: 'B9-deadbeef', sourceSite: OUR, createdPostId: null },
+  ])
+  const blocked = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+  check('🔴 [FP] 대상 안 미발행 형제뿐 → provider 호출 **정확히 0회**',
+    blocked.calls === 0 && blocked.code === 0 && /유료 호출 0/.test(blocked.out))
+
+  // ⓑ 🔴 대상 **밖** 큐에 같은 원문 id 가 있어도 제외하지 않는다
+  writeSnap([
+    { sourceArticleId: 'B1-deadbeef', sourceSite: 'navercafe:remonterrace', createdPostId: null },
+    { sourceArticleId: 'B9-deadbeef', sourceSite: 'navercafe:remonterrace', createdPostId: null },
+  ])
+  const outside = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+  check('🔴 [FP] 🔴 대상 밖 행은 형제가 아니다 — 제외 0건, 정상 생성된다',
+    /생성 전 제외 0건/.test(outside.out) && outside.calls > 0)
+
+  // ⓒ 발행 완료 형제만 → 기존 정책대로 제외하지 않는다
+  writeSnap([
+    { sourceArticleId: 'B1-deadbeef', sourceSite: OUR, createdPostId: 'p1' },
+    { sourceArticleId: 'B9-deadbeef', sourceSite: OUR, createdPostId: 'p2' },
+  ])
+  const published = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+  check('🔴 [FP] 발행 완료 형제만 있으면 제외하지 않는다 (기존 정책 유지)',
+    /생성 전 제외 0건/.test(published.out) && published.calls > 0)
+
+  // ⓓ 🔴 제외 대상과 신규 적격 원문이 **섞여도** 신규는 정상 처리된다
+  writeSnap([{ sourceArticleId: 'B1-deadbeef', sourceSite: OUR, createdPostId: null }])
+  const mixed = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+  check('🔴 [FP] 섞여 있으면 제외 1건 · 신규는 정상 생성된다',
+    /생성 전 제외 1건/.test(mixed.out) && /AUTO_SEED 1건/.test(mixed.out) && mixed.calls > 0)
+  check('🔴 [FP] 섞였을 때 호출이 전부 차단됐을 때보다 많다', mixed.calls > blocked.calls)
+  check('🔴 [FP] 🔴 제외한 만큼 호출이 줄었다 — 둘 다 열렸을 때보다 적다',
+    mixed.calls < published.calls)
+
+  // ⓔ 전달 실패 → provider 호출 0
+  const failCases: [string, readonly string[]][] = [
+    ['파일 없음', ['--call', '--apply', `--queue-snapshot=${join(dd, 'no.json')}`, '--run-id=R1', '--require-queue-snapshot']],
+    ['회차 불일치', ['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R2', '--require-queue-snapshot']],
+    ['인자 없음', ['--call', '--apply', '--require-queue-snapshot']],
+  ]
+  for (const [label, args] of failCases) {
+    const r = runWithFake(args)
+    check(`🔴 [FP] ${label} → provider 호출 **정확히 0회**`, r.calls === 0 && r.code !== 0)
+  }
+  writeFileSync(snapPath, '{ broken', 'utf-8')
+  const broken2 = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
+  check('🔴 [FP] 깨진 파일 → provider 호출 **정확히 0회**', broken2.calls === 0 && broken2.code !== 0)
+
+  // ⓕ 🔴 보류 뒤에도 입력·캐시가 남고 후보 파일이 생기지 않았다
+  check('🔴 [FP] 보류가 입력을 지우지 않았다',
+    existsSync(join(dd, 'x.shadow.jsonl')) && existsSync(join(dd, 'x.detail.jsonl')))
+  // 🔴 실제 HOME 을 건드리지 않았다
+  check('🔴 [FP] 합성 자산이 임시 HOME 안에만 있다', fakeAsset.dir.startsWith(root))
+
+  rmSync(root, { recursive: true, force: true })
+}
+
+// ─────────────────────────────────────────────────────────
+// [FC] 🔴 **가짜 시계** — judge 가 31분 걸려도 draft 직전 스냅샷을 쓴다
+// ─────────────────────────────────────────────────────────
+{
+  const T0 = new Date('2026-09-17T04:00:00.000Z').getTime()
+  let clock = T0
+  const now = (): string => new Date(clock).toISOString()
+  const taken: number[] = []
+  const stages: ProcessStage[] = []
+  const plan = planCommonPhase(
+    planPending([
+      '82cook-thin-20260917-020000.thin-detail.jsonl',
+      '82cook-adapt-20260917-020000.detail.jsonl',
+      '82cook-adapt-20260917-020000.raw-detail.jsonl',
+    ]),
+    FULL_BUFFER, GATE_READY,
+  )
+  const exec = async (p: StagePlan): Promise<ExecResult> => {
+    stages.push(p.stage)
+    // 🔴 judge 가 31분 걸린다 — TTL(30분) 보다 길다
+    if (p.stage === 'judge') clock += 31 * 60_000
+    return { ok: true, exitCode: 0, spawnError: '' }
+  }
+  const beforeStage = async (p: StagePlan): Promise<StageGate> => {
+    if (p.stage !== 'draft') return { ok: true }
+    taken.push(clock)
+    return { ok: true }
+  }
+  await runCommonPhase({ plan, exec, now, beforeStage })
+  check('🔴 [FC] judge 가 31분 걸려도 스냅샷은 **draft 직전**에 뜬다',
+    taken.length === 1 && taken[0]! === T0 + 31 * 60_000)
+  const fresh = readQueueSnapshot({
+    raw: JSON.stringify(buildQueueSnapshot({
+      runId: 'R1', takenAt: new Date(taken[0]!),
+      rows: [{ sourceArticleId: 'C1-aaaaaaaa', sourceSite: `${MACHINE_SITE_PREFIX}s`, createdPostId: null }],
+    })),
+    runId: 'R1', now: new Date(taken[0]!),
+  })
+  check('🔴 [FC] 그 스냅샷은 신선하다 — TTL 을 늘리지 않고 해결한다', fresh.ok)
+  const stale = readQueueSnapshot({
+    raw: JSON.stringify(buildQueueSnapshot({
+      runId: 'R1', takenAt: new Date(T0),
+      rows: [{ sourceArticleId: 'C1-aaaaaaaa', sourceSite: `${MACHINE_SITE_PREFIX}s`, createdPostId: null }],
+    })),
+    runId: 'R1', now: new Date(taken[0]!),
+  })
+  check('🔴 [FC] 옛 방식(계획 시점에 뜬 스냅샷)이었다면 STALE 로 막혔다',
+    !stale.ok && (stale as { code?: string }).code === 'STALE')
+
+  // 🔴 beforeStage 가 막으면 그 단계만 보류하고 뒤 단계는 돈다
+  const seen: ProcessStage[] = []
+  const r2 = await runCommonPhase({
+    plan,
+    exec: async (p) => { seen.push(p.stage); return { ok: true, exitCode: 0, spawnError: '' } },
+    now: () => new Date(T0).toISOString(),
+    beforeStage: async (p) => (p.stage === 'draft'
+      ? { ok: false, reason: '큐 스냅샷을 만들지 못했다' }
+      : { ok: true }),
+  })
+  check('🔴 [FC] 보류하면 draft 를 실행하지 않는다', !seen.includes('draft'))
+  check('🔴 [FC] 보류해도 fill 은 돈다 — 보류는 draft 하나다', seen.includes('fill'))
+  check('🔴 [FC] 보류를 skipped 로 기록한다 — 성공으로 적지 않는다',
+    r2.outcomes.some((o) => o.stage === 'draft' && o.status === 'skipped'))
+  check('🔴 [FC] 보류 사유에 "다음 회차가 다시 집는다" 를 남긴다',
+    r2.outcomes.some((o) => o.stage === 'draft' && /다음 회차가 다시 집는다/.test(o.note)))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail\n`)

@@ -330,10 +330,32 @@ export type QueueRow = {
 export function hasPendingSibling(
   articleId: string, queue: readonly QueueRow[],
 ): boolean {
-  return queue.some((q) =>
-    baseArticleId(q.sourceArticleId) === articleId
-    && (q.createdPostId === null || q.createdPostId === ''),
-  )
+  return queue.some((q) => baseArticleId(q.sourceArticleId) === articleId && isPendingRow(q))
+}
+
+/**
+ * 🔴 **미발행 조건의 정본** (2026-09-17).
+ *
+ *    `hasPendingSibling` 이 이 함수를 부른다. 같은 조건을 다른 곳에서 **다시 쓰지 않는다** —
+ *    한 곳에서 `trim()` 을 더하거나 빼는 순간 두 판정이 갈리고,
+ *    "생성 전에 걸렀다" 와 "적재에서 걸린다" 가 서로 다른 말을 한다.
+ */
+export function isPendingRow(r: { createdPostId: string | null }): boolean {
+  return r.createdPostId === null || r.createdPostId === ''
+}
+
+/**
+ * 🔴 **형제 검사의 대상 범위 정본** (2026-09-17).
+ *
+ *    우리가 만든 synthetic 행인가 — 사람 접두(`publish-candidate:`)와
+ *    기계 접두(`publish-candidate:auto:`) 둘 다다.
+ *
+ * 🔴 **범위를 넓히면 남의 원문까지 막는다.** legacy 행이나 다른 레인의 행에
+ *    같은 원문 id 가 있다는 이유로 생성을 막으면, 적재 단계는 그 행을 형제로 세지도 않으므로
+ *    **영영 만들어지지 않는 원문**이 생긴다. 적재(`queueForSibling`)와 같은 범위를 쓴다.
+ */
+export function isOurSite(site: string): boolean {
+  return site.startsWith(AUTOFILL_SITE_PREFIX) || site.startsWith(MACHINE_SITE_PREFIX)
 }
 
 /** synthetic id 는 `<원래id>-<해시8>` 이다. 앞부분을 되돌린다 */

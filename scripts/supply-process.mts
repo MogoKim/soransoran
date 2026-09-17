@@ -36,7 +36,7 @@ import {
   fmtCount, hasWork, judgeBuffer, judgeProcessRun,
   mayWriteRunState, planCommonPhase, planPending, planSourcePhase,
   runCommonPhase, runSourcePhase, runFileName, runStatusOf, verifyRun,
-  type LockView, type ProcessRun, type ProcessStage, type StagePlan,
+  type LockView, type ProcessRun, type ProcessStage, type StagePlan, type StageGate,
 } from '../src/lib/supply-process'
 /**
  * 🔴 **잠금은 검증된 계약 하나만 쓴다** (2026-09-11).
@@ -44,6 +44,12 @@ import {
  */
 import { acquireLock, lockAnomaly, releaseLock, type LockHandle } from './lib/collect-lock.mjs'
 import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
+/**
+ * 🔴 **생성 전 큐 스냅샷** (2026-09-17) — 판정 규칙은 여기서 만들지 않는다.
+ *    정본은 `micro-seed-supply-autofill.hasPendingSibling` · `baseArticleId` 이고,
+ *    스냅샷은 그 정본이 만든 집합을 파일로 옮기기만 한다.
+ */
+import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
@@ -275,7 +281,13 @@ async function main(): Promise<number> {
   // ── ④ 판정 ──
   const verdict = judgeProcessRun({ live: LIVE, killOpen, lock: lockView, hasWork: hasWork(pending) })
   const sourcePlans = planSourcePhase(pending)
-  const commonPlan = planCommonPhase(pending, policy)
+  /**
+   * 🔴 **미리보기다.** 아직 큐를 읽지 않았으므로 draft 를 계획에 넣지 않는다 —
+   *    "돌았다면" 목록에 유료 단계를 적어 두면 실제와 다른 그림이 된다.
+   */
+  const commonPlan = planCommonPhase(pending, policy, {
+    kind: 'hold', reason: '미리보기 — 큐 스냅샷은 실행 국면에서 만든다',
+  })
 
   if (!verdict.ok) {
     console.log(`\n④ 돌지 않는다 — ${verdict.reason}`)
@@ -355,8 +367,60 @@ async function main(): Promise<number> {
 
   // 🔴 **국면 사이에 다시 센다.** 방금 adapt 가 만든 검수용 파일이 공통 국면의 입력이다
   const after1 = planPending(dataFiles())
-  const common = planCommonPhase(after1, policy)
-  const phase2 = await runCommonPhase({ plan: common, exec, now: nowIso, onStage })
+  /**
+   * ── 🔴 **생성 전 큐 스냅샷** (2026-09-17) ──
+   *
+   *    12:15 회차 실측: 유료로 266건을 만들어 183건을 채택했는데 적재는 10건이었고,
+   *    빠진 이유 1위가 `SIBLING` 161건 — *"같은 원문의 형제가 아직 큐에서 안 나갔다"* 였다.
+   *    그 판정은 **원문 id 와 큐 상태만 있으면 생성 전에 알 수 있다.**
+   *
+   * 🔴 생성기는 DB 를 읽지 않는다(레인 계약). 그래서 **러너가 읽어 파일로 건넨다.**
+   * 🔴 못 읽으면 **draft 를 보류한다.** 입력은 그대로 두고 다음 회차가 다시 집는다.
+   */
+  /**
+   * ── 🔴 **생성 전 큐 스냅샷** (2026-09-17) ──
+   *
+   *    12:15 회차 실측: 유료로 266건을 만들어 183건을 채택했는데 적재는 10건이었고,
+   *    빠진 이유 1위가 `SIBLING` 161건 — *"같은 원문의 형제가 아직 큐에서 안 나갔다"* 였다.
+   *    그 판정은 **원문 id 와 큐 상태만 있으면 생성 전에 알 수 있다.**
+   *
+   * 🔴 생성기는 DB 를 읽지 않는다(레인 계약). 그래서 **러너가 읽어 파일로 건넨다.**
+   * 🔴 **`draft` 를 돌리기 직전에** 뜬다. 계획 시점에 뜨면 그 사이 `judge` 가 도는 만큼
+   *    낡는다 — 실측으로 `judge` 가 12분 걸린 회차가 있다. TTL 을 늘려 덮지 않는다.
+   * 🔴 못 읽거나 못 쓰면 **draft 를 보류한다.** 입력은 그대로 두고 다음 회차가 다시 집는다.
+   */
+  const snapPath = join(DATA_DIR, queueSnapshotFileName(runId))
+  const common = planCommonPhase(after1, policy, {
+    kind: 'ready', snapshotPath: snapPath, runId,
+  })
+  const beforeStage = async (plan: StagePlan): Promise<StageGate> => {
+    if (plan.stage !== 'draft') return { ok: true }
+    try {
+      const qrows = await prisma.originalPostApprovalQueue.findMany({
+        // 🔴 적재의 queueForSibling 과 **같은 세 칸**만 읽는다. 제목도 본문도 가져오지 않는다
+        select: {
+          createdPostId: true,
+          rawContent: { select: { sourceArticleId: true, sourceSite: true } },
+        },
+      })
+      const snap = buildQueueSnapshot({
+        runId, takenAt: new Date(),
+        rows: qrows.map((r) => ({
+          sourceArticleId: r.rawContent?.sourceArticleId ?? '',
+          sourceSite: r.rawContent?.sourceSite ?? '',
+          createdPostId: r.createdPostId,
+        })),
+      })
+      writeAtomic(snapPath, `${JSON.stringify(snap, null, 2)}\n`)
+      console.log(`   🟢 큐 스냅샷 ${snap.pendingSourceIds.length}건 미발행 원문 — ${snapPath}`)
+      return { ok: true }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.log(`   🔴 큐 스냅샷 실패 — ${msg}`)
+      return { ok: false, reason: `큐 스냅샷을 만들지 못해 초안 생성을 보류했다 (${msg})` }
+    }
+  }
+  const phase2 = await runCommonPhase({ plan: common, exec, now: nowIso, onStage, beforeStage })
   record.stages = [...record.stages, ...phase2.outcomes]
   record.status = runStatusOf(record.stages)
   record.completedAt = nowIso()
