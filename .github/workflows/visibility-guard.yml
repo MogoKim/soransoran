@@ -545,7 +545,12 @@ jobs:
       #    후보 파일에 칸은 다 있는데 값이 전부 빈 문자열이었다(실측).
       #    그래서 변환기만 보지 않고 수집물 → thin → adapt → 후보까지 행동으로 본다.
       #    가짜 provider · 임시 HOME · 네트워크 0 · DB 0.
+      #    🔴 무거운 검사다 — adapt·생성 러너를 자식 프로세스로 돌린다.
+      #       그래서 `supply:process-check` 과 같은 조건을 쓴다. `heavy` 는 fail-closed 이고,
+      #       화면만 고친 PR(src/app · components · styles · content · public)에서만 꺼진다 —
+      #       그런 PR 은 수집 → thin → adapt → 후보 경로를 건드리지 못한다.
       - name: 원문 게시 시각 전달 (수집 → thin → adapt → 후보)
+        if: steps.scope.outputs.heavy == 'true'
         run: npm run check:source-times
 
       # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
