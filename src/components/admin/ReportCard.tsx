@@ -296,7 +296,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
                 label="댓글 숨기기"
                 successText="댓글을 숨겼어요."
                 tone="danger"
-                confirmText="이 댓글을 숨길까요? 내용은 남고 화면에서만 가려집니다."
+                confirmText="댓글 내용을 숨길까요? 자리와 답글은 그대로 남습니다."
                 run={async () => {
                   'use server'
                   return setCommentHidden(report.comment!.id, true)

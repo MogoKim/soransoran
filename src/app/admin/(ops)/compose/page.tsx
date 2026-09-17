@@ -66,7 +66,7 @@ export default async function AdminComposePage() {
 
       <AdminSection
         title="작성 내역"
-        description="이 도구로 쓴 것만 보입니다. 회원 글과 자동 페르소나 글은 여기서 고치지 않습니다."
+        description="이 도구로 쓴 것만 보입니다. 회원 글과 자동 페르소나 글은 여기서 수정하지 않습니다."
       >
         {items.length === 0 ? (
           <div className="mt-2">

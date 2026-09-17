@@ -29,7 +29,7 @@ import { usePathname } from 'next/navigation'
 const NAV = [
   { href: '/admin', label: '운영 홈', hint: '오늘 볼 것' },
   { href: '/admin/reports', label: '신고', hint: '판단하고 조치' },
-  { href: '/admin/content', label: '게시글', hint: '고치고 가리기' },
+  { href: '/admin/content', label: '게시글', hint: '수정하고 숨기기' },
   { href: '/admin/members', label: '회원', hint: '차단 관리' },
   { href: '/admin/home', label: '홈 노출', hint: '고정·숨김' },
   { href: '/admin/banners', label: '배너 관리', hint: '히어로 배너' },

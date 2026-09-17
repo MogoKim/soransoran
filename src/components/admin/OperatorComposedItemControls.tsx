@@ -78,7 +78,7 @@ export default function OperatorComposedItemControls({
             confirmText={
               kind === 'post'
                 ? '이 글을 숨길까요? 고객 화면에서 사라지고 작성 내역에는 남습니다.'
-                : '이 댓글을 숨길까요? 고객 화면에서 사라지고 작성 내역에는 남습니다.'
+                : '댓글 내용을 숨길까요? 작성 내역에는 남습니다.'
             }
             successText="숨겼어요."
             run={() => (kind === 'post' ? deleteOperatorPost(id) : deleteOperatorComment(id))}

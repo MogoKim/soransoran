@@ -70,8 +70,8 @@ export default async function AdminHomePage() {
       urgent: false,
       hint:
         hiddenPosts > 0
-          ? `숨긴 글 ${hiddenPosts}건 · 제목·본문을 고치거나 가립니다`
-          : '제목·본문을 고치거나 가립니다',
+          ? `숨긴 글 ${hiddenPosts}건 · 제목·본문을 수정하거나 숨깁니다`
+          : '제목·본문을 수정하거나 숨깁니다',
     },
     {
       href: '/admin/members',
@@ -128,9 +128,16 @@ export default async function AdminHomePage() {
                바탕(#FBFAF9) 위에서 1.065:1 이라 눌러도 아무 반응이 없어 보였다.
                흰 카드 위에서는 1.110:1 로 의도한 면 분리가 산다.
                줄 수·문구·순서·링크는 그대로다 — 바탕만 카드로 바꾼다. */}
-        <ul className="m-0 mt-3 flex list-none flex-col overflow-hidden rounded-lg border border-subtle bg-surface-card p-0">
+        {/* 🔴 overflow-hidden 을 쓰지 않는다 (2026-09-17).
+               전역 :focus-visible 은 outline 2px + offset 2px 라 잘라 내면
+               키보드로 첫 줄·마지막 줄에 갔을 때 테두리가 카드 밖으로 잘린다.
+               모서리는 자식 링크에 직접 둥글기를 줘서 맞춘다. */}
+        <ul className="m-0 mt-3 flex list-none flex-col rounded-lg border border-subtle bg-surface-card p-0">
           {cards.map((card) => (
-            <li key={card.href} className="border-b border-subtle last:border-b-0">
+            <li
+              key={card.href}
+              className="border-b border-subtle first:[&>a]:rounded-t-lg last:border-b-0 last:[&>a]:rounded-b-lg"
+            >
               <Link
                 href={card.href}
                 className="flex min-h-[52px] flex-col gap-1 px-3 py-3 no-underline hover:bg-surface-soft lg:min-h-[60px] lg:flex-row lg:items-center lg:gap-4 lg:px-4"
