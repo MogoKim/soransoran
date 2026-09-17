@@ -2228,6 +2228,208 @@ expect('병합기가 결과에 식별자를 찍는다', /runId: argv\.includes\(
 expect('실행기가 연결을 확인한다', /linkResult\(\{ runId: RUN_ID/.test(runSrc3), true)
 expect('🔴 연결 실패는 종료 코드에 반영된다', /finalCode = Math\.max\(finalCode, 1\)/.test(runSrc3), true)
 
+
+console.log('\n══════ 필드 계약 — 목록 조회와 상세 조회가 같은 것을 준다')
+/**
+ * 🔴 **왜 생겼나** (2026-09-17 실측).
+ *
+ *    목록(`gh pr list`)과 상세(`gh pr view`)가 **서로 다른 필드**를 가져왔다.
+ *    목록에는 `headRefName` 이 있고 상세에는 없었다. `mergeable` 을 다시 보려고
+ *    상세 결과를 관문에 넘긴 순간 `pr.headRefName` 이 `undefined` 가 되어
+ *    **정상 자동 PR 이 "사람 PR" 로 막혔다.**
+ *
+ *      ⛔ NOT_AUTO_BRANCH: undefined 는 자동 레인 브랜치가 아니다
+ *
+ *    등록 3건이 끝난 회차가 마지막 한 걸음에서 멈췄다(#533).
+ *
+ * 🔴 **회귀가 못 잡은 이유도 분명하다.** 가짜 `getPr` 이 `{...PR8}` 로
+ *    **실제보다 풍부한** 객체를 돌려줬다. 주입식 테스트에서 가짜가 실제보다
+ *    관대하면 이런 결함은 통과한다. 그래서 이제 **실제 명령 조립과 응답 파싱**을
+ *    가짜 `exec` 로 시험하고, 그 결과를 `runAutoMerge` 전체 실행에 연결한다.
+ */
+const AMF = await import('./magazine-auto-merge.mjs')
+const MGF = await import('./lib/magazine-merge-gate.mjs')
+
+// ── ① 실제 gh 명령 인자 ──────────────────────────────────
+const AUTO_BRANCHF = `${MGF.AUTO_BRANCH_PREFIX}2026-09-17-093859`
+const PR_SHAF = 'd'.repeat(40)
+const prPayloadF = {
+  number: 533,
+  url: 'https://github.com/o/r/pull/533',
+  headRefName: AUTO_BRANCHF,
+  headRefOid: PR_SHAF,
+  baseRefName: 'main',
+  state: 'OPEN',
+  mergeable: 'MERGEABLE',
+  isDraft: false,
+}
+
+/**
+ * gh 를 흉내 낸다 — `--json` 에 적힌 필드만 돌려준다 (진짜 gh 가 그렇게 한다).
+ *
+ * 🔴 `viewOverride` 는 **상세 조회에만** 적용한다.
+ *    실제 결함이 정확히 그 모양이었다 — 목록에는 `headRefName` 이 있고
+ *    상세에만 없어서, 목록 필터는 통과하고 관문에서 막혔다.
+ */
+const ghFakeF = ({ prOverride = {}, viewOverride = null } = {}) => {
+  const seen = []
+  const exec = (cmd, args) => {
+    seen.push([cmd, ...args].join(' '))
+    const a = args.join(' ')
+    const pick = (obj) => {
+      const i = args.indexOf('--json')
+      if (i === -1) return obj
+      const fields = String(args[i + 1] ?? '').split(',').filter(Boolean)
+      return Object.fromEntries(fields.filter((f) => f in obj).map((f) => [f, obj[f]]))
+    }
+    const body = { ...prPayloadF, ...prOverride }
+    if (cmd === 'gh' && a.startsWith('pr list')) return { code: 0, out: JSON.stringify([pick(body)]), err: '' }
+    if (cmd === 'gh' && a.startsWith('pr view')) {
+      return { code: 0, out: JSON.stringify(pick({ ...body, ...(viewOverride ?? {}) })), err: '' }
+    }
+    return { code: 0, out: '', err: '' }
+  }
+  return { exec, seen }
+}
+
+const g = ghFakeF()
+const deps0 = AMF.makeRealDeps(g.exec, { log: () => {} })
+const listedF = deps0.listAutoPrs()
+const viewedF = deps0.getPr(533)
+
+expect('🔴 목록 조회가 필드 계약을 쓴다', g.seen.some((c) => c === `gh pr list --state open --limit 50 --json ${MGF.PR_FIELDS_ARG}`), true)
+expect('🔴 상세 조회도 **같은** 필드 계약을 쓴다', g.seen.some((c) => c === `gh pr view 533 --json ${MGF.PR_FIELDS_ARG}`), true)
+expect('🔴 관문이 보는 필드가 계약에 다 있다', MGF.PR_FIELDS.includes('headRefName') && MGF.PR_FIELDS.includes('url'), true)
+
+// ── ② 응답 파싱 — 두 경로가 같은 모양을 준다 ──────────────
+expect('목록이 자동 PR 을 찾아낸다', listedF.ok && listedF.prs.length === 1, true)
+expect('목록 결과에 headRefName 이 있다', listedF.prs[0].headRefName, AUTO_BRANCHF)
+expect('🔴 상세 결과에도 headRefName 이 있다 (옛 결함 지점)', viewedF.headRefName, AUTO_BRANCHF)
+expect('🔴 상세 결과에 url 도 있다', typeof viewedF.url, 'string')
+expect(
+  '🔴 두 경로가 계약의 필드를 빠짐없이 준다',
+  MGF.PR_FIELDS.filter((f) => !(f in viewedF) || !(f in listedF.prs[0])),
+  [],
+)
+
+// ── ③ 전체 실행에 연결 — 정상 자동 브랜치는 통과한다 ──────
+const BASE_F = 'b'.repeat(40)
+const ART_F = (rows) => [
+  'export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = {',
+  ...rows.map((r) => `  '${r.slug}': { publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}' },`),
+  '}',
+].join('\n')
+const QUE_F = (rows) => [
+  'export const TOPIC_QUEUE: TopicQueueItem[] = [',
+  ...rows.map((r) => `  { slug: '${r.slug}', riskLevel: '${r.riskLevel}', autoEligible: ${r.autoEligible} },`),
+  ']',
+].join('\n')
+const MAIN_A = [{ slug: 'old-one', publishAt: '2026-09-25T10:30:00+09:00' }]
+const NEW_A = [...MAIN_A, { slug: 'new-one', publishAt: '2026-09-24T10:30:00+09:00' }]
+const MAIN_QF = [{ slug: 'new-one', riskLevel: 'LOW', autoEligible: true }, { slug: 'keep', riskLevel: 'LOW', autoEligible: true }]
+const BR_QF = [{ slug: 'keep', riskLevel: 'LOW', autoEligible: true }]
+
+/**
+ * 🔴 **PR 조회만 진짜 실행기를 쓴다.** 나머지(git·CI·배포·HTTP)는 가짜다 —
+ *    여기서 보려는 것은 "조회한 필드가 관문까지 온전히 닿는가" 하나다.
+ */
+const wiredDepsF = (prOverride = {}, viewOverride = null) => {
+  const gh = ghFakeF({ prOverride, viewOverride })
+  const real = AMF.makeRealDeps(gh.exec, { log: () => {} })
+  let t = Date.parse('2026-09-17T09:45:00+09:00')
+  const calls = []
+  return {
+    gh,
+    calls,
+    deps: {
+      log: () => {},
+      now: () => t,
+      sleep: async (ms) => { t += ms },
+      fetchMain: () => true,
+      readBaseSha: () => BASE_F,
+      showFile: (sha, path) => (path.endsWith('articles.ts')
+        ? ART_F(sha === BASE_F ? MAIN_A : NEW_A)
+        : QUE_F(sha === BASE_F ? MAIN_QF : BR_QF)),
+      // 🔴 여기가 핵심 — 실제 실행기의 조회를 그대로 쓴다
+      listAutoPrs: () => real.listAutoPrs(),
+      getPr: (n) => real.getPr(n),
+      listPrFiles: () => ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/new-one/draft.md'],
+      getChecks: () => ({ ok: true, ciState: 'success', checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }] }),
+      mergePr: (n, sha) => { calls.push(`merge:${n}:${sha.slice(0, 4)}`); return { ok: true, mergeCommit: 'm'.repeat(40) } },
+      getProductionDeployment: (sha) => ({ found: true, state: 'success', sha, deploymentId: 'dpl_X' }),
+      liveDeploymentId: () => 'dpl_X',
+      httpStatus: () => 404,
+      httpBody: () => '',
+    },
+  }
+}
+const codesF = (r) => r.blockedBy.map((b) => b.code)
+
+const okRun = wiredDepsF()
+const okReport = await AMF.runAutoMerge({ apply: true, deps: okRun.deps })
+expect('🔴 정상 자동 브랜치는 통과한다 (#533 이 막혔던 지점)', codesF(okReport), [])
+expect('🔴 NOT_AUTO_BRANCH 로 막히지 않는다', codesF(okReport).includes('NOT_AUTO_BRANCH'), false)
+expect('실제로 merge 한다', okReport.merged, true)
+expect('🔴 상세 조회를 거쳐도 브랜치 이름이 살아 있다', okRun.gh.seen.some((c) => c.startsWith('gh pr view')), true)
+
+// ── ④ 브랜치 이름 누락 — 🔴 **옛 결함 그대로 재현한다** ───
+//    목록에는 있고 상세에만 없다. 목록 필터는 통과하고 관문이 받는다.
+const missingRun = wiredDepsF({}, { headRefName: undefined })
+const missingReport = await AMF.runAutoMerge({ apply: true, deps: missingRun.deps })
+expect('🔴 상세 조회에서 브랜치 이름이 빠지면 막는다', missingReport.blockedBy.length > 0, true)
+expect('🔴 원인을 필드 누락으로 적는다', codesF(missingReport).includes('PR_FIELDS_INCOMPLETE'), true)
+expect('🔴 사람 PR 로 오인하지 않는다', codesF(missingReport).includes('NOT_AUTO_BRANCH'), false)
+expect('🔴 merge 하지 않는다', missingRun.calls.some((c) => c.startsWith('merge:')), false)
+
+// ── ⑤ 사람 브랜치 — 두 겹으로 막힌다 ─────────────────────
+// 목록 필터가 먼저 걸러 낸다. 그래서 관문까지 가지 않고 "할 것이 없다" 로 끝난다.
+const humanRun = wiredDepsF({ headRefName: 'fix/사람이-만든-브랜치' })
+const humanReport = await AMF.runAutoMerge({ apply: true, deps: humanRun.deps })
+expect('🔴 사람 PR 은 목록에서 이미 걸러진다', humanReport.pr, null)
+expect('🔴 merge 하지 않는다', humanRun.calls.some((c) => c.startsWith('merge:')), false)
+// 목록 필터를 통과해 관문까지 갔다면(상세에서 이름이 바뀐 경우) 거기서도 막는다
+const humanLate = wiredDepsF({}, { headRefName: 'fix/사람이-만든-브랜치' })
+const humanLateReport = await AMF.runAutoMerge({ apply: true, deps: humanLate.deps })
+expect('🔴 관문에서도 사람 브랜치를 막는다', codesF(humanLateReport).includes('NOT_AUTO_BRANCH'), true)
+expect('🔴 merge 하지 않는다', humanLate.calls.some((c) => c.startsWith('merge:')), false)
+
+// ── ⑥ 관문 차원에서 둘을 구분한다 ────────────────────────
+const gateBaseF = {
+  expectedSha: PR_SHAF,
+  files: ['src/content/magazine/articles.ts'],
+  ciState: 'success',
+  checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
+  registered: [{ slug: 'new-one', publishAt: '2026-09-24T10:30:00+09:00', publishedAt: '2026-09-24', status: 'SCHEDULED' }],
+  queueBySlug: { 'new-one': { riskLevel: 'LOW', autoEligible: true } },
+  branchQueueBySlug: null,
+  mainSlugs: new Set(),
+  mainDates: new Set(),
+  now: Date.parse('2026-09-17T09:45:00+09:00'),
+}
+const gateCodesF = (pr) => MGF.judgeAutoMerge({ ...gateBaseF, pr }).blockedBy.map((b) => b.code)
+expect(
+  '🔴 필드 누락은 PR_FIELDS_INCOMPLETE 다 (사람 PR 로 오인하지 않는다)',
+  gateCodesF({ ...prPayloadF, headRefName: undefined }).includes('PR_FIELDS_INCOMPLETE'),
+  true,
+)
+expect(
+  '🔴 그때 NOT_AUTO_BRANCH 라고 적지 않는다',
+  gateCodesF({ ...prPayloadF, headRefName: undefined }).includes('NOT_AUTO_BRANCH'),
+  false,
+)
+expect('🔴 사람 브랜치는 NOT_AUTO_BRANCH 다', gateCodesF({ ...prPayloadF, headRefName: 'fix/x' }).includes('NOT_AUTO_BRANCH'), true)
+expect('🔴 빈 문자열도 필드 누락으로 본다', gateCodesF({ ...prPayloadF, headRefName: '' }).includes('PR_FIELDS_INCOMPLETE'), true)
+expect('정상 자동 브랜치는 둘 다 아니다', gateCodesF(prPayloadF).filter((c) => c === 'NOT_AUTO_BRANCH' || c === 'PR_FIELDS_INCOMPLETE'), [])
+
+// ── ⑦ 조회 실패도 성공으로 보지 않는다 ───────────────────
+const failExecF = (cmd, args) => (cmd === 'gh' ? { code: 1, out: '', err: 'gh 실패' } : { code: 0, out: '', err: '' })
+const failDepsF = AMF.makeRealDeps(failExecF, { log: () => {} })
+expect('🔴 목록 조회 실패는 ok=false', failDepsF.listAutoPrs().ok, false)
+expect('🔴 상세 조회 실패는 null', failDepsF.getPr(533), null)
+const badJsonF = (cmd, args) => ({ code: 0, out: '{깨진', err: '' })
+expect('🔴 깨진 응답도 ok=false', AMF.makeRealDeps(badJsonF, { log: () => {} }).listAutoPrs().ok, false)
+expect('🔴 깨진 상세 응답은 null', AMF.makeRealDeps(badJsonF, { log: () => {} }).getPr(533), null)
+
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')
 expect('fixture 가 추적돼 있다', existsSync(FIXTURE_DRAFT), true)

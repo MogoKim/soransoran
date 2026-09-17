@@ -29,7 +29,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DRAFTS_DIR, parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
-import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
+import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, PR_FIELDS_ARG, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -459,8 +459,18 @@ const exec = (cmd, args) => {
   return { code: r.status ?? 1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() }
 }
 
-export const realDeps = {
-  log: line,
+/**
+ * 실제 실행기를 만든다.
+ *
+ * 🔴 **`exec` 를 주입받는다** (2026-09-17).
+ *    직전 판은 모듈 안의 `exec` 를 직접 썼다. 그래서 **실제로 어떤 gh 명령을
+ *    조립하는지**를 시험할 방법이 없었고, 회귀의 가짜 `getPr` 이 실제보다
+ *    풍부한 객체를 돌려주는 바람에 `headRefName` 누락을 아무도 못 봤다.
+ *    이제 가짜 `exec` 로 **명령 인자와 응답 파싱까지** 시험한다.
+ */
+export function makeRealDeps(exec, { log: logFn = line } = {}) {
+  return {
+  log: logFn,
   fetchMain: () => exec('git', ['fetch', 'origin', 'main']).code === 0,
   readBaseSha: () => { const r = exec('git', ['rev-parse', 'origin/main']); return r.code === 0 ? r.out.trim() : null },
   showFile: (sha, path) => {
@@ -469,7 +479,8 @@ export const realDeps = {
     return r.out
   },
   listAutoPrs: () => {
-    const r = exec('gh', ['pr', 'list', '--state', 'open', '--limit', '50', '--json', 'number,url,headRefName,headRefOid,state,mergeable,isDraft,baseRefName'])
+    // 🔴 상세 조회와 **같은** 필드 계약을 쓴다
+    const r = exec('gh', ['pr', 'list', '--state', 'open', '--limit', '50', '--json', PR_FIELDS_ARG])
     if (r.code !== 0) return { ok: false, reason: 'gh 로 PR 목록을 읽지 못했다' }
     try {
       const list = JSON.parse(r.out || '[]')
@@ -477,7 +488,8 @@ export const realDeps = {
     } catch { return { ok: false, reason: 'PR 목록을 해석하지 못했다' } }
   },
   getPr: (number) => {
-    const r = exec('gh', ['pr', 'view', String(number), '--json', 'number,headRefOid,baseRefName,mergeable,state,isDraft'])
+    // 🔴 목록 조회와 **같은** 필드 계약을 쓴다 — 갈라지면 관문이 정상 PR 을 막는다
+    const r = exec('gh', ['pr', 'view', String(number), '--json', PR_FIELDS_ARG])
     if (r.code !== 0) return null
     try { return JSON.parse(r.out) } catch { return null }
   },
@@ -549,7 +561,11 @@ export const realDeps = {
     const r = exec('curl', ['-s', '-L', '--max-time', '25', url])
     return r.code === 0 ? r.out : null
   },
+  }
 }
+
+/** 실제 회차가 쓰는 실행기 */
+export const realDeps = makeRealDeps(exec)
 
 async function main() {
   const argv = process.argv.slice(2)
