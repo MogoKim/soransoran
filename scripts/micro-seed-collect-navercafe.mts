@@ -46,8 +46,8 @@ import {
 
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
 import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
-import { toThinRow, violatesStorage } from '../src/lib/micro-seed-82cook-thin'
-import { keepAfterClassify, outPathOf } from '../src/lib/micro-seed-navercafe-thin'
+import { violatesStorage } from '../src/lib/micro-seed-82cook-thin'
+import { keepAfterClassify, outPathOf, thinRowFromCollected } from '../src/lib/micro-seed-navercafe-thin'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import {
@@ -698,14 +698,19 @@ async function main() {
         }
         continue
       }
-      const row = toThinRow({
-        id: String(r.sourceArticleId ?? ''), url: String(r.sourceUrl ?? ''),
-        title: String(r.originalTitle ?? ''),
-        commentCount: Number(r.sourceCommentCount ?? 0), score: 0,
+      /**
+       * 🔴 **정본 조립 함수를 부른다** (2026-09-17 보정).
+       *
+       *    앞판은 여기서 `toThinRow` 를 직접 불렀고 `times` 를 넘기지 않았다.
+       *    얇은 변환기(`micro-seed-navercafe-thin.mts`)에만 배선이 있어서,
+       *    **운영 수집 경로의 세 시각이 통째로 비어 나갔다.**
+       *    이제 두 경로가 같은 함수를 쓰고, fixture 가 그 함수를 직접 시험한다.
+       */
+      const row = thinRowFromCollected({
+        collected: r,
         maskedBody: masked, bodyHeadChars: BODY_HEAD_CHARS,
         axis, safetyVerdict, safetyReasons: v.safety.reasons.map((x) => String(x)),
         reason: String(v.reason), runId: RUN_ID, fetchedAt: new Date().toISOString(),
-        sourceSite: String(r.sourceSite ?? ''),
       }) as unknown as Record<string, unknown>
       const bad = violatesStorage(row, BODY_HEAD_CHARS)
       if (bad.length > 0) throw new Error(`저장 계약 위반: ${bad.join(' · ')}`)

@@ -539,6 +539,14 @@ jobs:
       # 🔴 네트워크 0 · LLM 0 · DB 0 — 이미 수집된 파일만 다룬다.
       - name: 네이버 카페 얇은 저장 (전문 미저장 · Sheet 금지 · 정치 hard gate)
         run: npm run micro-seed:navercafe-thin-check
+      # 원문 게시 시각이 **운영 수집 경로**에서 끝까지 전달되는가.
+      #
+      # 🔴 앞판은 얇은 변환기에만 배선이 있었고 운영 수집기에는 없었다 —
+      #    후보 파일에 칸은 다 있는데 값이 전부 빈 문자열이었다(실측).
+      #    그래서 변환기만 보지 않고 수집물 → thin → adapt → 후보까지 행동으로 본다.
+      #    가짜 provider · 임시 HOME · 네트워크 0 · DB 0.
+      - name: 원문 게시 시각 전달 (수집 → thin → adapt → 후보)
+        run: npm run check:source-times
 
       # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
       #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —
