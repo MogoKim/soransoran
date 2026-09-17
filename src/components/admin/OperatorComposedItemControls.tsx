@@ -49,7 +49,7 @@ export default function OperatorComposedItemControls({
     <button
       type="button"
       onClick={() => setOpen(false)}
-      className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 font-bold text-brand-ink transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+      className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 text-base font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
     >
       닫기
     </button>
@@ -61,7 +61,7 @@ export default function OperatorComposedItemControls({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 font-bold text-brand-ink transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
+          className="inline-flex min-h-[52px] items-center justify-center rounded-lg border border-interactive px-4 text-base font-bold text-brand-strong transition duration-150 hover:bg-surface-soft active:scale-[0.98]"
         >
           고치기
         </button>

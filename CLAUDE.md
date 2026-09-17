@@ -105,7 +105,8 @@ unao-* localStorage 키
 > `400994e feat(brand): apply warm monochrome color system` (2026-09-07) 이고,
 > 같은 커밋에서 `#ff6f61` 이 사라졌다. 이 문단의 근거는 그 커밋 하나다 —
 > 그 밖의 경위는 정본 §1-1 의 기록을 본다.
-> **코랄 규칙은 우나어 저장소의 것이 아니다.** 우나어 쪽 문서·색은 이 저장소에서 건드리지 않는다.
+> 🔴 **이 기록은 소란소란의 옛 팔레트 설명이다.** 우나어(age-doesnt-matter)의 디자인 규칙을
+> 평가하거나 변경하는 근거가 아니다. 우나어의 색·문서는 그 저장소의 판단이며 여기서 다루지 않는다.
 
 > 검증: `npm run check:tokens` · `npm run check:brand-colors` · `npm run check:contrast`
 > 🔴 **`check:contrast` PASS 는 토큰 조합 검증이지 화면 검증이 아니다.**
