@@ -956,7 +956,7 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
       '82cook-adapt-20260917-010000.raw-detail.jsonl',
     ])
     const ready = planCommonPhase(pend, FULL_BUFFER, GATE_READY).map((x) => x.stage)
-    const held = planCommonPhase(pend, FULL_BUFFER, { kind: 'hold', reason: '큐를 읽지 못했다' })
+    const held = planCommonPhase(pend, FULL_BUFFER, { kind: 'hold', reason: '큐를 읽지 못했다', runId: 'R1' })
       .map((x) => x.stage)
     check('🔴 [PQ] ready 면 draft 가 계획된다', ready.includes('draft'))
     check('🔴 [PQ] 🔴 hold 면 draft 가 계획되지 않는다 — 유료 단계 보류', !held.includes('draft'))
@@ -1189,6 +1189,9 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
            */
           SORAN_LLM_DAILY_BUDGET_USD: '1000',
           SORAN_LLM_RESERVE_HEADROOM: '1.5',
+          // 🔴 회차 요청 상한도 **미설정이면 보류**다. 이 블록은 제외 효과를 보는 곳이라
+          //    넉넉히 준다 — 상한 자체의 행동은 `supply:ledger-check` 가 본다
+          SORAN_LLM_RUN_REQUEST_CAP: '10000',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
         },

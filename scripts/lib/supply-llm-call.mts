@@ -19,16 +19,19 @@
 import { randomUUID } from 'node:crypto'
 
 import {
-  judgeSettle, judgeSpend, ledgerDateOf, tallyOf,
+  judgeSettle, judgeSpend, ledgerDateOf, runPaidCountOf, tallyOf,
   type BlockCode, type BudgetLimits, type LedgerEntry, type LedgerStage,
 } from '../../src/lib/llm-ledger'
 import { PRICING_VERSION, costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
-  appendLedgerLine, defaultLedgerDir, ledgerPathOf, readLedgerDay, withLedgerLock,
+  appendLedgerLine, defaultLedgerDir, ledgerPathOf, readLedgerDay, readLedgerRun,
+  readSettleHold, settleHoldPathOf, withLedgerLock,
+  type LedgerRead, type SettleHold,
 } from './llm-ledger-store.mjs'
 import {
   callProvider, countInputTokens, type LlmResponse, type ProviderModel,
 } from './voice-m3-provider.mjs'
+import { writeSettleHold } from './llm-ledger-store.mjs'
 import { apiModelIdFor } from './voice-m3-contract.mjs'
 
 /** 🔴 차단된 요청이 돌려주는 오류 코드 머리 — 호출부가 provider 오류와 구분할 수 있게 한다 */
@@ -41,12 +44,15 @@ export const BUDGET_ENV = {
   headroomMultiplier: 'SORAN_LLM_RESERVE_HEADROOM',
 } as const
 
-function numEnv(env: NodeJS.ProcessEnv, name: string): number | null {
+function numEnv(env: NodeJS.ProcessEnv, name: string, opts: { integer?: boolean } = {}): number | null {
   const raw = (env[name] ?? '').trim()
   if (raw === '') return null
   const n = Number(raw)
   // 🔴 읽을 수 없는 값을 0 으로 읽지 않는다. 모르면 null 이고, null 이면 보류다
-  return Number.isFinite(n) && n > 0 ? n : null
+  if (!Number.isFinite(n) || n <= 0) return null
+  // 🔴 요청 **수** 상한에 2.5 같은 값이 오면 잘못 쓴 것이다 — 반올림해 넘기지 않는다
+  if (opts.integer === true && !Number.isInteger(n)) return null
+  return n
 }
 
 /**
@@ -56,9 +62,34 @@ function numEnv(env: NodeJS.ProcessEnv, name: string): number | null {
 export function limitsFromEnv(env: NodeJS.ProcessEnv): BudgetLimits {
   return {
     dailyUsd: numEnv(env, BUDGET_ENV.dailyUsd),
-    runRequestCap: numEnv(env, BUDGET_ENV.runRequestCap),
+    runRequestCap: numEnv(env, BUDGET_ENV.runRequestCap, { integer: true }),
     headroomMultiplier: numEnv(env, BUDGET_ENV.headroomMultiplier),
   }
+}
+
+/**
+ * 🔴 **장부 입출력.** 운영은 기본 저장소를 쓰고, 시험이 실패를 주입한다.
+ *
+ *    이 저장소가 이미 쓰는 방식(`beforeStage` · `exec` 주입)과 같다.
+ *    실제 디스크를 망가뜨려 "정산만 실패" 를 만들 방법이 없어서 이 자리를 둔다 —
+ *    🔴 **기본값이 진짜 저장소**이고, fixture 가 그것을 확인한다.
+ */
+export type LedgerIo = {
+  withLock: <T>(dir: string, fn: () => T) => T
+  readDay: (path: string) => LedgerRead
+  readRun: (dir: string, date: string, runId: string) => LedgerRead
+  append: (path: string, entry: LedgerEntry) => void
+  readHold: (dir: string) => string | null
+  writeHold: (dir: string, hold: SettleHold) => void
+}
+
+export const REAL_LEDGER_IO: LedgerIo = {
+  withLock: withLedgerLock,
+  readDay: readLedgerDay,
+  readRun: readLedgerRun,
+  append: appendLedgerLine,
+  readHold: readSettleHold,
+  writeHold: writeSettleHold,
 }
 
 export type SupplyCallInput = {
@@ -76,6 +107,8 @@ export type SupplySessionConfig = {
   dir?: string
   limits: BudgetLimits
   now?: () => Date
+  /** 🔴 시험 전용 주입. 운영은 비워 두고 기본 저장소를 쓴다 */
+  io?: LedgerIo
 }
 
 /** 회차 집계 — 🔴 사전 계산과 유료 요청을 **따로** 센다 */
@@ -87,6 +120,10 @@ export type SessionTally = {
   settledUsd: number
   usageUnknown: number
   overruns: number
+  /** 🔴 정산을 못 적어 보류를 건 횟수 */
+  settleHeld: number
+  /** 🔴 보류 표식조차 못 쓴 횟수 — 다음 회차가 이 보류를 못 본다 */
+  holdWriteFailed: number
   blockedBy: Map<BlockCode, number>
 }
 
@@ -109,9 +146,17 @@ export class SupplyLlmSession {
   readonly dir: string
   readonly limits: BudgetLimits
   private readonly now: () => Date
+  private readonly io: LedgerIo
+  /**
+   * 🔴 **정산을 못 적은 순간부터 이 회차의 유료 요청을 멈춘다.**
+   *    파일 표식(`settleHoldPathOf`)과 **둘 다** 둔다 — 파일은 재시작을 넘고,
+   *    이 플래그는 파일 쓰기마저 실패한 경우에 이 프로세스 안에서라도 막는다.
+   */
+  private settleFailed: string | null = null
   private readonly t: SessionTally = {
     paid: 0, blocked: 0, countTokens: 0,
     reservedUsd: 0, settledUsd: 0, usageUnknown: 0, overruns: 0,
+    settleHeld: 0, holdWriteFailed: 0,
     blockedBy: new Map(),
   }
 
@@ -120,6 +165,7 @@ export class SupplyLlmSession {
     this.dir = cfg.dir ?? defaultLedgerDir()
     this.limits = cfg.limits
     this.now = cfg.now ?? (() => new Date())
+    this.io = cfg.io ?? REAL_LEDGER_IO
   }
 
   get tally(): Readonly<SessionTally> { return this.t }
@@ -132,6 +178,11 @@ export class SupplyLlmSession {
       `  사전 계산 ${this.t.countTokens}건 (무료)`,
       `  예약 $${this.t.reservedUsd.toFixed(6)} · 정산 $${this.t.settledUsd.toFixed(6)}`
         + ` · 사용량 미상 ${this.t.usageUnknown}건 · 예약 초과 ${this.t.overruns}건`,
+      ...(this.t.settleHeld > 0
+        ? [`  🔴 정산을 적지 못해 유료 요청을 멈췄다 ${this.t.settleHeld}건`
+          + ` — ${settleHoldPathOf(this.dir)} 을 사람이 확인한다`
+          + (this.t.holdWriteFailed > 0 ? ` · 🔴 표식조차 못 쓴 것 ${this.t.holdWriteFailed}건` : '')]
+        : []),
       '  🔴 이 숫자는 이 회차가 센 것이다. 제공사 청구서가 정본이다',
     ].join('\n')
   }
@@ -148,6 +199,14 @@ export class SupplyLlmSession {
    *    장부는 있는데 막지는 못하는 상태가 된다 — fixture 가 그것을 검사한다.
    */
   async call(input: SupplyCallInput): Promise<LlmResponse> {
+    /**
+     * 🔴 **정산 실패가 한 번이라도 있으면 더 보내지 않는다.**
+     *    사전 계산(무료)조차 하지 않는다 — 어차피 보류될 요청이다.
+     */
+    if (this.settleFailed !== null) {
+      this.bump('SETTLE_ERROR')
+      return blockedResponse('SETTLE_ERROR', this.settleFailed)
+    }
     const startedAt = this.now()
     /**
      * 🔴 **날짜는 요청을 시작한 때로 고정한다.** 자정을 넘겨 응답이 와도 정산은
@@ -167,7 +226,7 @@ export class SupplyLlmSession {
     this.t.countTokens += 1
     const seq = this.t.paid + this.t.blocked
     try {
-      withLedgerLock(this.dir, () => {
+      this.io.withLock(this.dir, () => {
         this.write(path, {
           ...this.base(`${attemptId}-count`, 'countTokens', input, startedAt, seq),
           status: counted.ok ? 'settled' : 'blocked',
@@ -199,14 +258,23 @@ export class SupplyLlmSession {
     // ── ③ 🔴 읽기·판정·예약 기록을 **한 잠금 안에서** 한다 ──
     let verdict: ReturnType<typeof judgeSpend>
     try {
-      verdict = withLedgerLock(this.dir, () => {
-        const read = readLedgerDay(path)
+      verdict = this.io.withLock(this.dir, () => {
+        const read = this.io.readDay(path)
+        /**
+         * 🔴 **회차 사용량을 장부에서 센다 — 잠금 안에서.**
+         *    메모리 카운터는 판정·생성이 다른 프로세스라 서로를 못 보고,
+         *    재시작하면 0 이 되고, 같은 회차가 둘 돌면 각자 자기 것만 센다.
+         *    어제 파일도 함께 읽으므로 자정을 넘어도 상한이 초기화되지 않는다.
+         */
+        const runRead = this.io.readRun(this.dir, date, this.runId)
         const v = judgeSpend({
           limits: this.limits,
           tally: read.ok ? tallyOf(read.entries) : tallyOf([]),
-          runPaidSoFar: this.t.paid,
+          runPaid: runRead.ok ? runPaidCountOf(runRead.entries, this.runId) : 0,
           reserve,
-          ledgerOk: read.ok,
+          ledgerOk: read.ok && runRead.ok,
+          // 🔴 보류 표식도 **잠금 안에서** 본다. 밖에서 보면 그 사이에 걸릴 수 있다
+          settleHold: this.io.readHold(this.dir),
         })
         this.write(path, {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
@@ -257,7 +325,7 @@ export class SupplyLlmSession {
     if (settled.settledUsd !== null) this.t.settledUsd += settled.settledUsd
     if (settled.overran) this.t.overruns += 1
     try {
-      withLedgerLock(this.dir, () => {
+      this.io.withLock(this.dir, () => {
         this.write(path, {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
           status: settled.status,
@@ -274,13 +342,35 @@ export class SupplyLlmSession {
           errorCode: res.errorCode,
         })
       })
-    } catch {
+    } catch (e) {
       /**
        * 🔴 **정산을 못 적었다.** 요청은 이미 나갔고 예약 줄은 남아 있다 —
-       *    그 건은 미정산으로 남아 여력에서 계속 빠진다. 그게 맞는 방향이다.
-       *    다음 요청은 그만큼 좁은 여력에서 판정된다.
+       *    그 건은 미정산으로 남아 여력에서 계속 빠진다. 예약 보존은 그대로다.
+       *
+       * 🔴 **그것만으로는 모자라다** (2026-09-17 보정). 같은 원인이면 다음 정산도
+       *    못 적는다. 그래서 **이후 유료 요청을 멈춘다** — 메모리 플래그 하나와
+       *    파일 표식 하나로. 파일은 재시작을 넘고, 사람이 제공사 사용량과 대조한 뒤
+       *    직접 지워야 풀린다. 재시작이 우회가 되지 않게 하는 것이 요점이다.
        */
       this.t.usageUnknown += 1
+      const why = `정산을 장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`
+      this.settleFailed = `${why} · 🔴 ${settleHoldPathOf(this.dir)} 을 사람이 확인하고 지우면 풀린다`
+      this.t.settleHeld += 1
+      try {
+        this.io.writeHold(this.dir, {
+          runId: this.runId, attemptId, date,
+          reservedUsd: verdict.reservedUsd,
+          at: this.now().toISOString(), reason: why,
+        })
+      } catch {
+        /**
+         * 🔴 **표식마저 못 썼다.** 이 프로세스는 위 플래그로 멈춘다.
+         *    다음 프로세스는 이 보류를 못 본다 — 다만 같은 원인이 이어지면
+         *    그쪽의 첫 장부 쓰기가 실패해 `LEDGER_ERROR` 로 막힌다.
+         *    원인이 그 사이 사라진 경우는 막지 못한다. 숨기지 않고 적어 둔다.
+         */
+        this.t.holdWriteFailed += 1
+      }
     }
     return res
   }
@@ -317,6 +407,6 @@ export class SupplyLlmSession {
   }
 
   private write(path: string, entry: LedgerEntry): void {
-    appendLedgerLine(path, entry)
+    this.io.append(path, entry)
   }
 }

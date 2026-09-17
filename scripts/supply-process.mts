@@ -286,7 +286,7 @@ async function main(): Promise<number> {
    *    "돌았다면" 목록에 유료 단계를 적어 두면 실제와 다른 그림이 된다.
    */
   const commonPlan = planCommonPhase(pending, policy, {
-    kind: 'hold', reason: '미리보기 — 큐 스냅샷은 실행 국면에서 만든다',
+    kind: 'hold', reason: '미리보기 — 큐 스냅샷은 실행 국면에서 만든다', runId,
   })
 
   if (!verdict.ok) {

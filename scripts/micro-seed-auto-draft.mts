@@ -1360,8 +1360,15 @@ async function main(): Promise<void> {
    *    예산·여유 배수는 **env 에서만** 온다. 비어 있으면 모든 유료 요청이 보류되고
    *    회차는 호출 0 으로 끝난다 — 아무도 정하지 않은 금액으로 돈을 쓰지 않는다.
    */
-  const ledgerRunId = RUN_ID ?? `draft-${nowIso.replace(/[-:]/g, '').replace(/\..+$/, '')}`
-  LEDGER = new SupplyLlmSession({ runId: ledgerRunId, limits: limitsFromEnv(process.env) })
+  /**
+   * 🔴 **회차 id 를 지어내지 않는다** (2026-09-17 보정). 앞판은 없으면 스스로 만들었다 —
+   *    그러면 장부에서 그 회차의 사용량이 언제나 0 으로 보여 상한이 없는 것과 같아진다.
+   */
+  if (RUN_ID === null || RUN_ID.trim() === '') {
+    fail('--run-id 가 없습니다 — 회차 요청 상한을 판정 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
+  }
+  LEDGER = new SupplyLlmSession({ runId: RUN_ID, limits: limitsFromEnv(process.env) })
+  console.log(`   회차 ${RUN_ID} — 판정 단계와 요청 상한을 나눠 쓴다`)
   console.log(`   장부 ${LEDGER.dir}`)
   console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`
     + ` · 여유 배수 ${LEDGER.limits.headroomMultiplier ?? '🔴 미설정'}`

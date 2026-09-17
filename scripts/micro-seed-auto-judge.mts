@@ -55,6 +55,15 @@ const argv = process.argv.slice(2)
  */
 const CALL = argv.includes('--call')
 const APPLY = argv.includes('--apply')
+/**
+ * 🔴 **공급 회차 id** (2026-09-17). 비용 장부의 **회차 요청 상한**이 이 값으로 묶인다.
+ *
+ *    판정과 생성이 서로 다른 id 를 쓰면 상한이 단계마다 따로 걸려 회차 전체로는
+ *    두 배가 나간다. 그래서 `supply-process` 가 준 id 를 그대로 쓴다.
+ *    🔴 **없으면 스스로 만들지 않는다** — 지어낸 id 는 언제나 사용량 0 으로 보여
+ *    상한이 사실상 없는 것과 같아진다. 아래에서 유료 경로 직전에 막는다.
+ */
+const RUN_ID = argv.find((a) => a.startsWith('--run-id='))?.slice('--run-id='.length) ?? null
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
@@ -395,8 +404,11 @@ async function main(): Promise<void> {
    *    예산·여유 배수는 **env 에서만** 온다. 비어 있으면 모든 유료 요청이 보류되고
    *    회차는 호출 0 으로 끝난다 — 아무도 정하지 않은 금액으로 돈을 쓰지 않는다.
    */
-  const ledgerRunId = `judge-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '')}`
-  LEDGER = new SupplyLlmSession({ runId: ledgerRunId, limits: limitsFromEnv(process.env) })
+  if (RUN_ID === null || RUN_ID.trim() === '') {
+    fail('--run-id 가 없습니다 — 회차 요청 상한을 생성 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
+  }
+  LEDGER = new SupplyLlmSession({ runId: RUN_ID, limits: limitsFromEnv(process.env) })
+  console.log(`   회차 ${RUN_ID} — 생성 단계와 요청 상한을 나눠 쓴다`)
   console.log(`   장부 ${LEDGER.dir}`)
   console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`
     + ` · 여유 배수 ${LEDGER.limits.headroomMultiplier ?? '🔴 미설정'}`

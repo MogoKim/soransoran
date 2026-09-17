@@ -313,16 +313,27 @@ export function planSourcePhase(pending: Pending): SourcePlan[] {
  * 🔴 **선택 인자로 두지 않는다.** 기본값을 "그냥 돈다" 로 두면 부르는 쪽이 잊었을 때
  *    조용히 옛 동작으로 돌아가고, 그것을 아무도 모른다. 모든 호출부가 명시하게 한다.
  */
+/**
+ * 🔴 **회차 id 를 여기 하나에만 둔다** (2026-09-17 보정).
+ *
+ *    `runId` 는 큐 스냅샷뿐 아니라 **비용 장부의 회차 상한**에도 쓰인다.
+ *    판정과 생성이 서로 다른 id 를 쓰면 상한이 단계마다 따로 걸려
+ *    회차 전체로는 두 배가 나간다. 그래서 보류할 때도 id 를 들고 다닌다 —
+ *    두 곳에 따로 적으면 언젠가 한쪽만 바뀐다.
+ */
 export type DraftQueueGate =
   | { kind: 'ready'; snapshotPath: string; runId: string }
-  | { kind: 'hold'; reason: string }
+  | { kind: 'hold'; reason: string; runId: string }
 
 export function planCommonPhase(
   pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,
 ): StagePlan[] {
   const out: StagePlan[] = []
   if (!policy.llm) return out
-  if (pending.detail.length > 0) out.push(mk('judge', ['--call', '--apply'], null))
+  // 🔴 판정도 **같은 회차 id** 를 받는다 — 장부의 회차 요청 상한을 생성과 나눠 쓴다
+  if (pending.detail.length > 0) {
+    out.push(mk('judge', ['--call', '--apply', `--run-id=${gate.runId}`], null))
+  }
   if (pending.shadow.length > 0 || pending.detail.length > 0) {
     /**
      * 🔴 **보류는 건너뜀이 아니다.** 입력 파일을 지우지도, 처리 완료로 적지도 않는다 —

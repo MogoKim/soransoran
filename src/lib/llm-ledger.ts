@@ -31,6 +31,19 @@ export function ledgerDateOf(at: Date): string {
   return shifted.toISOString().slice(0, 10)
 }
 
+/**
+ * 하루 앞 날짜 — 🔴 **회차가 자정을 넘을 때 쓴다.**
+ *
+ *    장부 파일은 하루 단위인데 공급 회차는 자정을 넘을 수 있다. 오늘 파일만 보면
+ *    어제 시작한 회차가 쓴 요청이 **안 보이고**, 회차 요청 상한이 자정에 초기화된다.
+ *    그래서 회차 사용량을 셀 때는 어제 파일도 같이 읽는다.
+ */
+export function previousLedgerDate(date: string): string {
+  const t = Date.parse(`${date}T00:00:00.000Z`)
+  if (!Number.isFinite(t)) return date
+  return new Date(t - 86_400_000).toISOString().slice(0, 10)
+}
+
 /** 공급의 어느 단계인가 — 🔴 재시도도 자기 단계로 남는다 */
 export const LEDGER_STAGES = [
   'judge', 'judgeRetry',
@@ -59,6 +72,15 @@ export type BlockCode =
   | 'DAILY_EXHAUSTED'  // 남은 일일 여력이 부족하다
   | 'RUN_CAP'          // 회차 요청 수 상한
   | 'UNSETTLED_OVERRUN' // 🔴 실제 사용량이 예약액을 넘은 뒤 — 사람이 볼 때까지 멈춘다
+  /**
+   * 🔴 **정산을 장부에 적지 못했다** (2026-09-17 보정).
+   *
+   *    요청은 이미 나갔는데 그 결과를 적지 못한 상태다. 그 회차에 얼마가 나갔는지
+   *    장부로는 알 수 없다. 예약 줄은 남아 여력을 계속 먹지만 그것만으로는 모자라다 —
+   *    같은 원인(디스크·권한)이 계속되면 **다음 요청의 정산도 못 적는다.**
+   *    그래서 그 뒤의 유료 요청을 멈춘다. 사람이 제공사 사용량과 대조한 뒤 푼다.
+   */
+  | 'SETTLE_ERROR'
 
 /**
  * 장부 한 줄 — 🔴 **이 모양이 계약이다.**
@@ -147,11 +169,38 @@ export function tallyOf(entries: readonly LedgerEntry[]): DayTally {
   return t
 }
 
+/**
+ * 🔴 **한 회차가 이미 보낸 유료 요청 수** — 장부에서 센다 (2026-09-17 보정).
+ *
+ *    앞판은 세션의 메모리 카운터를 썼다. 그것은 세 곳에서 틀린다 —
+ *      ① 판정과 생성이 **다른 프로세스**라 서로의 사용량을 모른다
+ *      ② 회차가 죽고 다시 뜨면 카운터가 0 으로 돌아간다
+ *      ③ 같은 회차가 동시에 둘 돌면 각자 자기 것만 센다
+ *    장부를 세면 셋 다 해결된다 — 단, **잠금 안에서** 세야 ③ 이 막힌다.
+ */
+export function runPaidCountOf(entries: readonly LedgerEntry[], runId: string): number {
+  let n = 0
+  for (const e of entries) {
+    if (e.runId !== runId) continue
+    if (e.stage === 'countTokens') continue
+    // 🔴 보내지 않은 것은 세지 않는다. 보낸 것은 정산 여부와 무관하게 센다
+    if (e.status === 'blocked') continue
+    n += 1
+  }
+  return n
+}
+
 /** 🔴 운영 값은 코드가 정하지 않는다. 호출부가 넘긴다 */
 export type BudgetLimits = {
   /** 하루 예산(USD). 🔴 미설정이면 null — 그때는 유료 요청을 보류한다 */
   dailyUsd: number | null
-  /** 회차당 유료 요청 수 상한. 미설정이면 null */
+  /**
+   * 회차당 유료 요청 수 상한.
+   *
+   * 🔴 **미설정이면 보류다** (2026-09-17 보정). 앞판은 `null` 을 "상한 없음" 으로 읽어
+   *    그냥 통과시켰다 — 아무도 정하지 않은 상태가 곧 **무제한**이었다.
+   *    금액 예산과 같은 규칙을 쓴다: 정해지지 않았으면 안 보낸다.
+   */
   runRequestCap: number | null
   /** 예약 여유 배수. 🔴 "허용 초과액" 이 아니라 추정 오차를 덮는 값 */
   headroomMultiplier: number | null
@@ -172,15 +221,26 @@ export function judgeSpend(input: {
   limits: BudgetLimits
   /** 오늘 장부 집계 */
   tally: DayTally
-  /** 이번 회차의 유료 요청 수 (이 요청 제외) */
-  runPaidSoFar: number
+  /**
+   * 🔴 이 **회차**가 이미 보낸 유료 요청 수 — `runPaidCountOf` 가 장부에서 센 값이다.
+   *    메모리 카운터를 넣지 않는다. 판정·생성이 다른 프로세스라 서로를 못 본다.
+   */
+  runPaid: number
   /** 이번 요청의 예약액 판정 */
   reserve: CostVerdict
   /** 장부를 정상으로 읽었는가 */
   ledgerOk: boolean
+  /**
+   * 🔴 정산을 적지 못해 걸어 둔 보류. 사유가 있으면 유료 요청을 보내지 않는다.
+   *    이것은 **파일로 남아 재시작을 넘긴다** — 메모리 플래그였다면 다시 뜨는 것만으로 풀린다.
+   */
+  settleHold: string | null
 }): GateVerdict {
   if (!input.ledgerOk) {
     return { ok: false, code: 'LEDGER_ERROR', reason: '장부를 읽지 못했다 — 유료 요청을 보류한다' }
+  }
+  if (input.settleHold !== null) {
+    return { ok: false, code: 'SETTLE_ERROR', reason: input.settleHold }
   }
   if (input.tally.overruns > 0) {
     return {
@@ -198,10 +258,14 @@ export function judgeSpend(input: {
     const code: BlockCode = input.reserve.code === 'NO_PRICE' ? 'NO_PRICE' : 'NO_COUNT'
     return { ok: false, code, reason: input.reserve.reason }
   }
-  if (input.limits.runRequestCap !== null && input.runPaidSoFar >= input.limits.runRequestCap) {
+  // 🔴 상한이 정해지지 않았으면 보류한다 — 미설정을 "무제한" 으로 읽지 않는다
+  if (input.limits.runRequestCap === null) {
+    return { ok: false, code: 'NO_BUDGET', reason: '회차 요청 상한이 설정되지 않았다 — 유료 요청을 보류한다' }
+  }
+  if (input.runPaid >= input.limits.runRequestCap) {
     return {
       ok: false, code: 'RUN_CAP',
-      reason: `회차 요청 상한에 닿았다 — ${input.runPaidSoFar}/${input.limits.runRequestCap}`,
+      reason: `회차 요청 상한에 닿았다 — ${input.runPaid}/${input.limits.runRequestCap}`,
     }
   }
   // 🔴 이미 쓴 것 + 열린 예약을 **둘 다** 뺀다

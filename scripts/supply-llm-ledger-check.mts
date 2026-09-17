@@ -17,13 +17,16 @@
  * 🔴 **실제 운영 자산·env·장부를 건드리지 않는다.** 전부 임시 디렉터리와 임시 HOME 이다.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
+  symlinkSync, utimesSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
   LEDGER_SCOPE, LEDGER_STAGES, LEDGER_TZ_LABEL, PAID_STAGES,
-  judgeSettle, judgeSpend, ledgerDateOf, tallyOf,
+  judgeSettle, judgeSpend, ledgerDateOf, previousLedgerDate, runPaidCountOf, tallyOf,
   type BudgetLimits, type LedgerEntry, type LedgerStage,
 } from '../src/lib/llm-ledger'
 import {
@@ -31,12 +34,19 @@ import {
   costOf, priceOf, reserveOf,
 } from '../src/lib/llm-pricing'
 import {
-  LOCK_STALE_MS, appendLedgerLine, ledgerPathOf, lockPathOf, readLedgerDay, withLedgerLock,
+  LOCK_STALE_REPORT_MS, LOCK_WAIT_MS, LedgerLockError,
+  appendLedgerLine, ledgerPathOf, lockPathOf, readLedgerDay, readLedgerRun,
+  readSettleHold, settleHoldPathOf, withLedgerLock, writeSettleHold,
 } from './lib/llm-ledger-store.mjs'
-import { BUDGET_ENV, LEDGER_BLOCKED, limitsFromEnv } from './lib/supply-llm-call.mjs'
+import {
+  BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SupplyLlmSession, limitsFromEnv,
+  type LedgerIo,
+} from './lib/supply-llm-call.mjs'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
-import { buildQueueSnapshot } from '../src/lib/supply-queue-snapshot'
+import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
+/** 🔴 계획 정본 — 문자열이 아니라 **실제 인자**를 본다 */
+import { judgeBuffer, planCommonPhase, planPending } from '../src/lib/supply-process'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
 
 /** 🔴 주석을 지운다 — 검사가 주석의 낱말이 아니라 **코드**를 보게 한다 */
@@ -65,7 +75,7 @@ const ENTRY = (o: Partial<LedgerEntry>): LedgerEntry => ({
 })
 
 const LIMITS = (o: Partial<BudgetLimits> = {}): BudgetLimits => ({
-  dailyUsd: 1, runRequestCap: null, headroomMultiplier: 1.5, ...o,
+  dailyUsd: 1, runRequestCap: 1000, headroomMultiplier: 1.5, ...o,
 })
 const KNOWN = { known: true as const, usd: 0.01, pricingVersion: PRICING_VERSION }
 
@@ -188,7 +198,9 @@ console.log('\n④ 집계 — 🔴 미정산 예약을 자동으로 풀지 않�
 console.log('\n⑤ 요청 전 차단 — 🔴 모르면 멈춘다')
 // ─────────────────────────────────────────────────────────
 {
-  const base = { tally: tallyOf([]), runPaidSoFar: 0, reserve: KNOWN, ledgerOk: true }
+  const base = {
+    tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true, settleHold: null,
+  }
   check('🔴 장부를 못 읽으면 보류한다',
     (() => { const v = judgeSpend({ ...base, limits: LIMITS(), ledgerOk: false }); return !v.ok && v.code === 'LEDGER_ERROR' })())
   check('🔴 예산 금액이 없으면 보류한다 — 기본값을 만들지 않는다',
@@ -207,7 +219,7 @@ console.log('\n⑤ 요청 전 차단 — 🔴 모르면 멈춘다')
     })())
   check('🔴 회차 요청 상한에 닿으면 보류한다',
     (() => {
-      const v = judgeSpend({ ...base, limits: LIMITS({ runRequestCap: 3 }), runPaidSoFar: 3 })
+      const v = judgeSpend({ ...base, limits: LIMITS({ runRequestCap: 3 }), runPaid: 3 })
       return !v.ok && v.code === 'RUN_CAP'
     })())
   check('🟢 여력이 있으면 통과하고 그만큼 예약한다',
@@ -295,7 +307,47 @@ console.log('\n⑥ 저장소 — 🔴 덧붙이기 · 잠금 · 깨진 줄은 �
       try { withLedgerLock(dir, () => { throw new Error('x') }) } catch { /* 기대한 예외 */ }
       return !existsSync(lockPathOf(dir))
     })())
-  check('🔴 버려진 잠금 기준을 넉넉히 둔다 — 요청 타임아웃보다 길다', LOCK_STALE_MS >= 60_000)
+  // 🔴 **잠금을 빼앗지 않는다** (2026-09-17 보정)
+  {
+    const storeSrc = readFileSync('scripts/lib/llm-ledger-store.mts', 'utf-8')
+    check('🔴 mtime 을 보고 잠금을 지우는 코드가 없다',
+      !/rmSync\(lock[\s\S]{0,80}(stale|STALE|age)/.test(storeSrc)
+      && !/if \(age > LOCK_STALE/.test(storeSrc))
+    check('🔴 오래된 잠금은 "지운다" 가 아니라 **사람에게 알린다**',
+      /LOCK_STALE_REPORT_MS/.test(storeSrc) && /사람이 확인하고 지운다/.test(storeSrc))
+    check('🔴 잠금에 주인 표식을 쓴다', /JSON\.stringify\(owner\)/.test(storeSrc))
+    check('🔴 풀 때 **내 것인지** 확인한다',
+      /cur\.owner === owner\.owner/.test(storeSrc))
+
+    // ① 살아 있는 소유자 — 잠금을 쥔 채로 다른 요청이 들어오면 빼앗지 못하고 보류된다
+    const lock = lockPathOf(dir)
+    writeFileSync(lock, JSON.stringify({ owner: '남의-것', pid: 1, at: new Date().toISOString() }), 'utf-8')
+    let threw: unknown = null
+    const t0 = Date.now()
+    try { withLedgerLock(dir, () => 0) } catch (e) { threw = e }
+    check('🔴 남이 쥔 잠금은 빼앗지 않고 보류한다', threw instanceof LedgerLockError)
+    check('🔴 기다렸다가 보류한다 — 곧바로 뚫고 들어가지 않는다', Date.now() - t0 >= LOCK_WAIT_MS - 50)
+    check('🔴 보류해도 남의 잠금을 지우지 않았다', existsSync(lock))
+
+    // ② 오래된 잠금 — 지우지 않고 사유에 적는다
+    const old = new Date(Date.now() - LOCK_STALE_REPORT_MS - 60_000)
+    utimesSync(lock, old, old)
+    let msg = ''
+    try { withLedgerLock(dir, () => 0) } catch (e) { msg = e instanceof Error ? e.message : '' }
+    check('🔴 오래된 잠금도 지우지 않는다', existsSync(lock))
+    check('🔴 오래됐다는 사실을 사유에 적어 사람에게 넘긴다',
+      /초째 남아 있다/.test(msg) && /자동으로 지우지 않는다/.test(msg))
+    rmSync(lock, { force: true })
+
+    // ③ 소유권이 바뀌면 남의 잠금을 풀지 않는다
+    withLedgerLock(dir, () => {
+      // 잠금 구간 안에서 주인이 바뀐 상황을 만든다
+      writeFileSync(lock, JSON.stringify({ owner: '나중-사람', pid: 2, at: new Date().toISOString() }), 'utf-8')
+    })
+    check('🔴 나오는 길에 **남의 잠금**을 지우지 않는다 — 두 회차가 같이 들어가지 않는다',
+      existsSync(lock) && readFileSync(lock, 'utf-8').includes('나중-사람'))
+    rmSync(lock, { force: true })
+  }
 
   // 🔴 장부에 본문이 들어갈 자리가 없다
   const ledgerSrc = readFileSync('src/lib/llm-ledger.ts', 'utf-8')
@@ -305,6 +357,152 @@ console.log('\n⑥ 저장소 — 🔴 덧붙이기 · 잠금 · 깨진 줄은 �
   check('🔴 장부 줄에 본문·프롬프트·응답·키가 들어갈 칸이 없다',
     !/(prompt|rawText|body|content|apiKey|systemPrompt|payload|title|text)/i.test(typeBlock))
   check('🔴 사용량은 **키 이름만** 남긴다', /usageKeys: string\[\]/.test(typeBlock))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초기화되지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const rows = [
+    ENTRY({ runId: 'R1', attemptId: 'a', status: 'settled' }),
+    ENTRY({ runId: 'R1', attemptId: 'b', status: 'usageUnknown', settledUsd: null }),
+    ENTRY({ runId: 'R1', attemptId: 'c', status: 'blocked', settledUsd: null }),
+    ENTRY({ runId: 'R1', attemptId: 'd', stage: 'countTokens', status: 'settled' }),
+    ENTRY({ runId: 'R2', attemptId: 'e', status: 'settled' }),
+  ]
+  check('🔴 보낸 것만 센다 — 보류·무료 사전 계산은 상한에 넣지 않는다',
+    runPaidCountOf(rows, 'R1') === 2)
+  check('🔴 다른 회차의 사용량을 자기 상한에 넣지 않는다', runPaidCountOf(rows, 'R2') === 1)
+  check('🔴 어제 날짜를 계산한다 — 회차가 자정을 넘을 때 쓴다',
+    previousLedgerDate('2026-09-18') === '2026-09-17'
+    && previousLedgerDate('2026-01-01') === '2025-12-31'
+    && previousLedgerDate('2026-03-01') === '2026-02-28')
+
+  // 🔴 자정을 넘어도 같은 회차 상한이 초기화되지 않는다
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-run-'))
+  appendLedgerLine(ledgerPathOf(dir, '2026-09-17'), ENTRY({ runId: 'R1', attemptId: 'y1' }))
+  appendLedgerLine(ledgerPathOf(dir, '2026-09-17'), ENTRY({ runId: 'R1', attemptId: 'y2' }))
+  appendLedgerLine(ledgerPathOf(dir, '2026-09-18'), ENTRY({ runId: 'R1', attemptId: 't1' }))
+  const crossed = readLedgerRun(dir, '2026-09-18', 'R1')
+  check('🔴 자정을 넘은 회차는 어제 파일도 함께 읽는다 — 상한이 초기화되지 않는다',
+    crossed.ok && runPaidCountOf(crossed.entries, 'R1') === 3)
+  check('🔴 오늘 파일만 봤다면 1건으로 보였을 것이다',
+    (() => {
+      const today = readLedgerDay(ledgerPathOf(dir, '2026-09-18'))
+      return today.ok && runPaidCountOf(today.entries, 'R1') === 1
+    })())
+  writeFileSync(ledgerPathOf(dir, '2026-09-17'), '{ 깨진 줄\n', 'utf-8')
+  check('🔴 어제 파일을 못 읽으면 **실패**다 — 반쪽만 세지 않는다',
+    !readLedgerRun(dir, '2026-09-18', 'R1').ok)
+
+  // 🔴 상한 미설정·잘못된 값은 보류
+  const base = { tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true, settleHold: null }
+  check('🔴 회차 상한이 없으면 보류한다 — 미설정을 "무제한" 으로 읽지 않는다',
+    (() => {
+      const v = judgeSpend({ ...base, limits: LIMITS({ runRequestCap: null }) })
+      return !v.ok && v.code === 'NO_BUDGET'
+    })())
+  check('🔴 요청 수 상한에 소수는 받지 않는다',
+    limitsFromEnv({ [BUDGET_ENV.runRequestCap]: '2.5' }).runRequestCap === null)
+  check('🔴 요청 수 상한에 음수·0·글자는 받지 않는다',
+    limitsFromEnv({ [BUDGET_ENV.runRequestCap]: '0' }).runRequestCap === null
+    && limitsFromEnv({ [BUDGET_ENV.runRequestCap]: '-3' }).runRequestCap === null
+    && limitsFromEnv({ [BUDGET_ENV.runRequestCap]: '세 번' }).runRequestCap === null)
+  check('🟢 정수는 그대로 읽는다', limitsFromEnv({ [BUDGET_ENV.runRequestCap]: '6' }).runRequestCap === 6)
+
+  // 🔴 러너가 회차 id 를 지어내지 않는다
+  for (const [label, file] of [
+    ['판정', 'scripts/micro-seed-auto-judge.mts'],
+    ['생성', 'scripts/micro-seed-auto-draft.mts'],
+  ] as const) {
+    const src = readFileSync(file, 'utf-8')
+    check(`🔴 ${label} 러너가 --run-id 없이 유료 경로로 가지 않는다`,
+      /RUN_ID === null \|\| RUN_ID\.trim\(\) === ''[\s\S]{0,200}fail\(/.test(src))
+    check(`🔴 ${label} 러너가 회차 id 를 지어내지 않는다`,
+      !/runId: `(judge|draft)-\$\{/.test(src))
+    check(`🔴 ${label} 러너가 공급이 준 회차 id 를 그대로 쓴다`,
+      /new SupplyLlmSession\(\{ runId: RUN_ID/.test(src))
+  }
+  /**
+   * 🔴 **문자열이 아니라 계획을 본다.** 정본 함수를 불러 실제 인자를 확인한다 —
+   *    정규식은 표현이 바뀌면 조용히 눈이 멀고, 그때 상한이 단계마다 갈라진다.
+   */
+  {
+    const pend = planPending([
+      '82cook-adapt-20260911-010000.detail.jsonl',
+      '82cook-adapt-20260911-010000.raw-detail.jsonl',
+    ])
+    const stages = planCommonPhase(pend, judgeBuffer(120), {
+      kind: 'ready', snapshotPath: '/tmp/s.json', runId: 'RUN-XYZ',
+    })
+    const judge = stages.find((x) => x.stage === 'judge')
+    const draft = stages.find((x) => x.stage === 'draft')
+    check('🔴 공급이 판정에 회차 id 를 넘긴다',
+      judge !== undefined && judge.args.includes('--run-id=RUN-XYZ'))
+    check('🔴 판정과 생성이 **같은** 회차 id 를 받는다 — 상한이 단계마다 갈라지지 않는다',
+      judge !== undefined && draft !== undefined
+      && judge.args.filter((a) => a.startsWith('--run-id=')).join()
+        === draft.args.filter((a) => a.startsWith('--run-id=')).join())
+    const held = planCommonPhase(pend, judgeBuffer(120), {
+      kind: 'hold', reason: '큐를 못 읽었다', runId: 'RUN-XYZ',
+    })
+    check('🔴 생성을 보류해도 판정은 회차 id 를 받는다 — 보류가 상한을 풀지 않는다',
+      held.find((x) => x.stage === 'judge')?.args.includes('--run-id=RUN-XYZ') === true
+      && held.every((x) => x.stage !== 'draft'))
+  }
+  check('🔴 세션이 메모리 카운터로 상한을 판정하지 않는다',
+    (() => {
+      const w = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
+      return /runPaid: runRead\.ok \? runPaidCountOf\(/.test(w) && !/runPaid: this\.t\.paid/.test(w)
+    })())
+  check('🔴 회차 사용량도 **잠금 안에서** 읽는다',
+    (() => {
+      const w = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
+      const lockAt = w.indexOf('verdict = this.io.withLock')
+      const judgeAt = w.indexOf('judgeSpend({', lockAt)
+      const runAt = w.indexOf('this.io.readRun(', lockAt)
+      return lockAt !== -1 && runAt > lockAt && runAt < judgeAt
+    })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑥-c 정산 기록 실패 — 🔴 예약을 보존하고 그 뒤를 멈춘다')
+// ─────────────────────────────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-hold-'))
+  check('🔴 표식이 없으면 보류가 아니다', readSettleHold(dir) === null)
+  writeSettleHold(dir, {
+    runId: 'R1', attemptId: 'a1', date: '2026-09-17',
+    reservedUsd: 0.01, at: new Date().toISOString(), reason: '시험',
+  })
+  check('🔴 표식이 있으면 사유를 돌려준다', (readSettleHold(dir) ?? '').includes('정산을 장부에 적지 못한'))
+  check('🔴 사유가 **푸는 방법**을 알려 준다 — 사람이 지워야 풀린다',
+    (readSettleHold(dir) ?? '').includes(settleHoldPathOf(dir)))
+  writeSettleHold(dir, {
+    runId: 'R2', attemptId: 'b', date: '2026-09-18',
+    reservedUsd: 1, at: new Date().toISOString(), reason: '나중 것',
+  })
+  check('🔴 이미 있는 표식을 덮지 않는다 — 첫 실패가 원인에 가깝다',
+    (readSettleHold(dir) ?? '').includes('R1'))
+  writeFileSync(settleHoldPathOf(dir), '{ 깨진', 'utf-8')
+  check('🔴 표식을 읽지 못해도 **보류로 본다** — 모르면 멈춘다',
+    (readSettleHold(dir) ?? '').includes('사람이 확인한다'))
+  rmSync(settleHoldPathOf(dir), { force: true })
+  check('🔴 사람이 지우면 풀린다', readSettleHold(dir) === null)
+
+  const base = { tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true }
+  check('🔴 보류가 걸려 있으면 유료 요청을 보내지 않는다',
+    (() => {
+      const v = judgeSpend({ ...base, limits: LIMITS(), settleHold: '정산 실패' })
+      return !v.ok && v.code === 'SETTLE_ERROR'
+    })())
+  check('🔴 보류는 예산·상한보다 **먼저** 본다 — 여력이 남아도 멈춘다',
+    (() => {
+      const v = judgeSpend({
+        ...base, limits: LIMITS({ dailyUsd: 999999 }), settleHold: '정산 실패',
+      })
+      return !v.ok && v.code === 'SETTLE_ERROR'
+    })())
 }
 
 // ─────────────────────────────────────────────────────────
@@ -475,7 +673,9 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       entries: ledgerEntries(),
     }
   }
-  const OPEN = { [BUDGET_ENV.dailyUsd]: '1000', [BUDGET_ENV.headroomMultiplier]: '1.5' }
+  // 🔴 시험용 임시 값이다. 운영 예산이 아니다
+  const CAP = { [BUDGET_ENV.runRequestCap]: '10000' }
+  const OPEN = { [BUDGET_ENV.dailyUsd]: '1000', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP }
 
   // ⓐ 🔴 **충분한 여력 — 계산 → 예약 → 생성 → 정산이 끝까지 돈다**
   const ok = run(OPEN)
@@ -502,22 +702,27 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     readdirSync(ledgerDir).filter((f) => f.endsWith('.jsonl')).length === 1)
 
   // ⓑ 🔴 **예산 미설정 — 유료 요청 0.** 사전 계산(무료)은 나갈 수 있다
-  const noBudget = run({ [BUDGET_ENV.headroomMultiplier]: '1.5' })
+  const noBudget = run({ [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP })
   check('🔴 [L] 예산 금액이 없으면 **유료 요청 0회**', noBudget.paid === 0)
   check('🔴 [L] 그때도 사유가 장부에 남는다 — 조용히 넘어가지 않는다',
     noBudget.entries.some((e) => e.status === 'blocked' && e.blockCode === 'NO_BUDGET'))
   check('🔴 [L] 화면이 예산 미설정을 말한다', /예산 🔴 미설정/.test(noBudget.out))
 
   // ⓒ 여유 배수 미설정
-  const noHead = run({ [BUDGET_ENV.dailyUsd]: '1000' })
+  const noHead = run({ [BUDGET_ENV.dailyUsd]: '1000', ...CAP })
   check('🔴 [L] 여유 배수가 없으면 **유료 요청 0회**', noHead.paid === 0)
 
   // ⓓ 🔴 **여력 부족 — 생성 fetch 가 0 이다**
-  const tiny = run({ [BUDGET_ENV.dailyUsd]: '0.0000001', [BUDGET_ENV.headroomMultiplier]: '1.5' })
+  const tiny = run({ [BUDGET_ENV.dailyUsd]: '0.0000001', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP })
   check('🔴 [L] 여력이 모자라면 **유료 요청 0회** — 생성 fetch 가 나가지 않는다', tiny.paid === 0)
   check('🔴 [L] 여력 부족 사유를 장부에 남긴다',
     tiny.entries.some((e) => e.blockCode === 'DAILY_EXHAUSTED'))
   check('🔴 [L] 보류해도 회차는 끝난다 — 멈춰 서지 않는다', tiny.code === 0)
+
+  // ⓔ-0 🔴 상한 미설정 — 보류한다
+  const noCap = run({ [BUDGET_ENV.dailyUsd]: '1000', [BUDGET_ENV.headroomMultiplier]: '1.5' })
+  check('🔴 [L] 회차 요청 상한이 없으면 **유료 요청 0회** — 미설정이 무제한이 아니다',
+    noCap.paid === 0 && noCap.entries.some((e) => e.blockCode === 'NO_BUDGET'))
 
   // ⓔ 회차 요청 상한
   const capped = run({ ...OPEN, [BUDGET_ENV.runRequestCap]: '2' })
@@ -565,7 +770,7 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
   check('🔴 [L] 미정산이 쌓이면 여력이 줄어 결국 보류된다 — 모름이 예산을 다시 열지 않는다',
     (() => {
       process.env.FAKE_PROVIDER_MODE = 'no-usage'
-      const r = run({ [BUDGET_ENV.dailyUsd]: '0.007', [BUDGET_ENV.headroomMultiplier]: '1.5' })
+      const r = run({ [BUDGET_ENV.dailyUsd]: '0.007', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP })
       delete process.env.FAKE_PROVIDER_MODE
       return r.entries.some((e) => e.blockCode === 'DAILY_EXHAUSTED')
     })())
@@ -591,7 +796,7 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
    *    넉넉한 예산에서는 두 회차가 똑같이 돌아 "이어졌는가" 를 가릴 수 없다 —
    *    첫 회차가 실제로 소진해야 둘째 회차가 그 사실을 보고 멈춘다.
    */
-  const RESTART = { [BUDGET_ENV.dailyUsd]: '0.0065', [BUDGET_ENV.headroomMultiplier]: '1.5' }
+  const RESTART = { [BUDGET_ENV.dailyUsd]: '0.0065', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP }
   const first = run(RESTART, { wipe: false })
   const spentAfterFirst = first.entries.filter((e) => e.stage !== 'countTokens')
     .reduce((n, e) => n + (e.settledUsd ?? 0), 0)
@@ -618,7 +823,7 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
       FAKE_PROVIDER_LOG: '',
       NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
-      [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5',
+      [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP,
     }
     writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
     const both = [0, 1].map(() => spawnSync(join(process.cwd(), 'node_modules/.bin/tsx'), args, {
@@ -637,15 +842,253 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
   {
     const src = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
     check('🔴 [L] 정산 기록에 실패하면 예약을 풀지 않고 미정산으로 센다',
-      /catch \{[\s\S]{0,600}this\.t\.usageUnknown \+= 1/.test(src))
+      /catch \(e\) \{[\s\S]{0,1400}this\.t\.usageUnknown \+= 1[\s\S]{0,400}this\.settleFailed =/.test(src))
+    check('🔴 [L] 정산 실패는 **파일 표식**으로 남는다 — 재시작이 우회가 되지 않는다',
+      /this\.io\.writeHold\(this\.dir/.test(src))
+    check('🔴 [L] 표식조차 못 쓴 경우를 숨기지 않고 센다', /holdWriteFailed \+= 1/.test(src))
     check('🔴 [L] 장부에 못 적으면 요청을 보내지 않는다',
       /catch \(e\)[\s\S]{0,400}return blockedResponse\('LEDGER_ERROR'/.test(src))
     check('🔴 [L] 날짜를 요청 시작 시각으로 한 번만 정한다 — 정산이 다른 날로 가지 않는다',
       (src.match(/ledgerDateOf\(/g) ?? []).length === 1 && /const date = ledgerDateOf\(startedAt\)/.test(src))
     check('🔴 [L] 읽기·판정·예약 기록을 한 잠금 안에서 한다',
-      /withLedgerLock\(this\.dir, \(\) => \{[\s\S]{0,400}readLedgerDay\(path\)[\s\S]{0,600}judgeSpend\(\{[\s\S]{0,800}this\.write\(path/.test(src))
+      /this\.io\.withLock\(this\.dir, \(\) => \{[\s\S]{0,900}this\.io\.readDay\(path\)[\s\S]{0,1200}judgeSpend\(\{[\s\S]{0,900}this\.write\(path/.test(src))
+    check('🔴 [L] 기본 장부 입출력이 **진짜 저장소**다 — 주입은 시험 전용이다',
+      REAL_LEDGER_IO.append === appendLedgerLine
+      && REAL_LEDGER_IO.withLock === withLedgerLock
+      && REAL_LEDGER_IO.readHold === readSettleHold
+      && /this\.io = cfg\.io \?\? REAL_LEDGER_IO/.test(src))
     check('🔴 [L] 보류 응답이 provider 실패와 구분된다',
       LEDGER_BLOCKED === 'LEDGER_BLOCKED' && /\$\{LEDGER_BLOCKED\}:\$\{(code|v\.code)\}/.test(src))
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센다')
+//
+//   🔴 디스크를 골라서 망가뜨릴 방법이 없어 **장부 입출력을 주입**한다.
+//      provider 쪽은 그대로다 — `fetch` 를 가짜로 바꿔 실제 요청 수를 센다.
+// ─────────────────────────────────────────────────────────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-settlefail-'))
+  const realFetch = globalThis.fetch
+  let fetched = { count: 0, paid: 0 }
+  // 🔴 이 fixture 안에서만 바꾼다. 네트워크에 나가지 않는다
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    const u = String(url)
+    if (u.includes('/count_tokens')) {
+      fetched.count += 1
+      return new Response(JSON.stringify({ input_tokens: 100 }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    }
+    fetched.paid += 1
+    return new Response(JSON.stringify({
+      content: [{ text: '"ok":true}' }],
+      usage: { input_tokens: 11, output_tokens: 22 },
+      stop_reason: 'end_turn',
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof globalThis.fetch
+  const prevKey = process.env.ANTHROPIC_API_KEY
+  process.env.ANTHROPIC_API_KEY = 'fixture-fake-key'
+
+  /** 🔴 **정산 줄만** 못 쓰게 한다 — 사전 계산·예약은 정상으로 적힌다 */
+  const failSettleIo = (opts: { holdFails?: boolean } = {}): LedgerIo => ({
+    ...REAL_LEDGER_IO,
+    append: (path, entry) => {
+      if (entry.status === 'settled' && entry.stage !== 'countTokens') {
+        throw new Error('fixture: 정산 줄을 쓰지 못했다')
+      }
+      if (entry.status === 'usageUnknown') throw new Error('fixture: 정산 줄을 쓰지 못했다')
+      REAL_LEDGER_IO.append(path, entry)
+    },
+    writeHold: (d, h) => {
+      if (opts.holdFails === true) throw new Error('fixture: 표식도 쓰지 못했다')
+      REAL_LEDGER_IO.writeHold(d, h)
+    },
+  })
+
+  const ASK = {
+    stage: 'draftGen' as const, model: 'claude-haiku-4.5' as const,
+    systemPrompt: 'sys', userPayload: '{}', maxOutputTokens: 1200, timeoutMs: 5_000,
+  }
+  const LIM = { dailyUsd: 1000, runRequestCap: 10_000, headroomMultiplier: 1.5 }
+
+  const s1 = new SupplyLlmSession({ runId: 'RF', dir, limits: LIM, io: failSettleIo() })
+  const r1 = await s1.call(ASK)
+  const afterFirst = { ...fetched }
+  check('🔴 [SF] 첫 요청은 실제로 나갔다', afterFirst.paid === 1 && r1.ok)
+  check('🔴 [SF] 정산을 못 적어 보류를 걸었다', s1.tally.settleHeld === 1)
+  check('🔴 [SF] 예약 줄은 남아 있다 — 미정산이 여력을 계속 먹는다',
+    (() => {
+      const r = readLedgerDay(ledgerPathOf(dir, ledgerDateOf(new Date())))
+      return r.ok && r.entries.some((e) => e.stage === 'draftGen' && e.status === 'reserved')
+    })())
+
+  const r2 = await s1.call(ASK)
+  check('🔴 [SF] 그 뒤 요청은 **생성 fetch 0** — 사전 계산도 하지 않는다',
+    fetched.paid === afterFirst.paid && fetched.count === afterFirst.count)
+  check('🔴 [SF] 보류 사유를 돌려준다', r2.errorCode === `${LEDGER_BLOCKED}:SETTLE_ERROR`)
+
+  // 🔴 재시작으로 우회되지 않는다 — 새 세션이 표식을 읽는다
+  const before = { ...fetched }
+  const s2 = new SupplyLlmSession({ runId: 'RF2', dir, limits: LIM })
+  const r3 = await s2.call(ASK)
+  check('🔴 [SF] 🔴 재시작해도 막힌다 — 새 회차도 **생성 fetch 0**',
+    fetched.paid === before.paid && r3.errorCode === `${LEDGER_BLOCKED}:SETTLE_ERROR`)
+  check('🔴 [SF] 표식이 남아 있다', existsSync(settleHoldPathOf(dir)))
+
+  // 🔴 사람이 지우면 풀린다 — 이것이 복구 조건이다
+  rmSync(settleHoldPathOf(dir), { force: true })
+  const s3 = new SupplyLlmSession({ runId: 'RF3', dir, limits: LIM })
+  const r4 = await s3.call(ASK)
+  check('🔴 [SF] 사람이 표식을 지우면 다시 돈다 — 복구 조건이 사람 손이다',
+    r4.ok && fetched.paid === before.paid + 1)
+
+  // 🔴 표식조차 못 쓴 경우 — 그 프로세스 안에서는 여전히 막는다
+  {
+    const d2 = mkdtempSync(join(tmpdir(), 'ledger-holdfail-'))
+    const s4 = new SupplyLlmSession({ runId: 'RH', dir: d2, limits: LIM, io: failSettleIo({ holdFails: true }) })
+    await s4.call(ASK)
+    const mark = { ...fetched }
+    const r5 = await s4.call(ASK)
+    check('🔴 [SF] 표식을 못 써도 이 회차 안에서는 막는다 — 생성 fetch 0',
+      fetched.paid === mark.paid && r5.errorCode === `${LEDGER_BLOCKED}:SETTLE_ERROR`)
+    check('🔴 [SF] 표식을 못 썼다는 사실을 숨기지 않는다',
+      s4.tally.holdWriteFailed === 1 && /표식조차 못 쓴 것/.test(s4.describe()))
+    check('🔴 [SF] 🔴 그때는 다음 프로세스를 막지 못한다 — 이 한계를 적어 둔다',
+      readSettleHold(d2) === null
+      && /다음 프로세스는 이 보류를 못 본다/.test(readFileSync('scripts/lib/llm-ledger-store.mts', 'utf-8')))
+  }
+
+  globalThis.fetch = realFetch
+  if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+  else process.env.ANTHROPIC_API_KEY = prevKey
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상한을 나눠 쓴다')
+//
+//   🔴 **두 스크립트를 실제로 돌린다.** 상한이 단계마다 따로 걸리면
+//      회차 전체로는 두 배가 나간다 — 그것을 요청 수로 확인한다.
+// ─────────────────────────────────────────────────────────
+{
+  const root = mkdtempSync(join(tmpdir(), 'ledger-cap-'))
+  const dd = join(root, DATA_DIR_NAME)
+  mkdirSync(dd, { recursive: true })
+  symlinkSync(join(process.cwd(), 'docs'), join(root, 'docs'))
+  const fakeHome = join(root, 'home')
+  mkdirSync(fakeHome, { recursive: true })
+  writeFakePersonaAsset({ home: fakeHome })
+  const ledgerDir = join(fakeHome, 'Library', 'Application Support', 'soransoran', 'llm-ledger')
+
+  // 🔴 판정의 결정론 게이트를 통과하는 행 — 그래야 실제로 모델을 부른다
+  const detail = [1, 2, 3].map((i) => JSON.stringify({
+    sourceArticleId: `C${i}`, sourceSite: 'navercafe:remonterrace', title: `제목 ${i}`,
+    bodyHead: '원문 머리 300자 안쪽', axis: 'seedOriginality', lane: 'originalRaw',
+    access: 'ok', safetyVerdict: 'pass', safetyReasons: '', qualityFlags: [],
+    commentCount: 3, bodyLength: 200,
+  }))
+  const shadow = [1, 2, 3].map((i) => JSON.stringify({
+    sourceArticleId: `C${i}`, decision: 'AUTO_SEED', semanticRisks: [],
+    ruleVersion: 'auto-judge-v3', promptVersion: 'p', model: 'm', inputHash: 'h',
+    provenance: 'machine-shadow',
+  }))
+  writeFileSync(join(dd, 'x.detail.jsonl'), `${detail.join('\n')}\n`, 'utf-8')
+  writeFileSync(join(dd, 'x.shadow.jsonl'), `${shadow.join('\n')}\n`, 'utf-8')
+  // 🔴 큐 스냅샷은 회차에 묶인다 — 회차마다 새로 뜬다(정본 동작). 시험도 그대로 따른다
+  const snapOf = (runId: string): string => {
+    const p = join(dd, queueSnapshotFileName(runId))
+    writeFileSync(p, JSON.stringify(buildQueueSnapshot({ runId, takenAt: new Date(), rows: [] })), 'utf-8')
+    return p
+  }
+  const logPath = join(root, 'cap.log')
+  writeFileSync(logPath, '', 'utf-8')
+
+  const paidSoFar = (): number =>
+    readFileSync(logPath, 'utf-8').split('\n').filter((l) => l.startsWith('paid\t')).length
+
+  const stage = (script: string, argsOf: (runId: string) => readonly string[], cap: string, runId: string): number => {
+    const args = argsOf(runId)
+    // 🔴 판정 캐시를 비운다 — 캐시 hit 이 호출 수를 가려서는 안 된다
+    for (const f of ['auto-judge-cache.json', 'auto-draft-cache.json']) {
+      writeFileSync(join(dd, f), '{}', 'utf-8')
+    }
+    spawnSync(
+      join(process.cwd(), 'node_modules/.bin/tsx'),
+      [join(process.cwd(), script), ...args, `--run-id=${runId}`],
+      {
+        cwd: root, encoding: 'utf-8',
+        env: {
+          ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+          FAKE_PROVIDER_LOG: logPath,
+          NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+          // 🔴 시험용 임시 값이다
+          [BUDGET_ENV.dailyUsd]: '1000', [BUDGET_ENV.headroomMultiplier]: '1.5',
+          [BUDGET_ENV.runRequestCap]: cap,
+        },
+      },
+    )
+    return paidSoFar()
+  }
+  const JUDGE = ['scripts/micro-seed-auto-judge.mts', () => ['--call', '--apply']] as const
+  const DRAFT = [
+    'scripts/micro-seed-auto-draft.mts',
+    (runId: string) => ['--call', '--apply', `--queue-snapshot=${snapOf(runId)}`, '--require-queue-snapshot'],
+  ] as const
+
+  // ⓐ 🔴 판정 → 생성 합산이 상한을 넘지 않는다
+  const afterJudge = stage(JUDGE[0], JUDGE[1], '3', 'RC')
+  const afterDraft = stage(DRAFT[0], DRAFT[1], '3', 'RC')
+  check('🔴 [RC] 판정이 실제로 요청을 보냈다', afterJudge > 0)
+  check('🔴 [RC] 🔴 판정 + 생성 합계가 회차 상한을 넘지 않는다', afterDraft <= 3)
+  check('🔴 [RC] 생성이 판정이 쓴 만큼을 빼고 본다 — 단계마다 따로 걸리지 않는다',
+    afterDraft - afterJudge <= 3 - afterJudge)
+
+  // ⓑ 🔴 같은 회차로 다시 띄워도 상한이 초기화되지 않는다
+  const afterRestart = stage(DRAFT[0], DRAFT[1], '3', 'RC')
+  check('🔴 [RC] 같은 회차를 다시 띄워도 상한이 되살아나지 않는다', afterRestart === afterDraft)
+  check('🔴 [RC] 그때 사유가 장부에 남는다',
+    (() => {
+      const r = readLedgerRun(ledgerDir, ledgerDateOf(new Date()), 'RC')
+      return r.ok && r.entries.some((e) => e.blockCode === 'RUN_CAP')
+    })())
+
+  // ⓒ 🔴 다른 회차 id 는 자기 상한을 새로 갖는다 — 회차 단위가 맞다
+  const afterNewRun = stage(DRAFT[0], DRAFT[1], '3', 'RD')
+  check('🔴 [RC] 새 회차는 자기 상한을 갖는다 — 회차 단위로 센다', afterNewRun > afterRestart)
+
+  // ⓓ 🔴 회차 id 없이 부르면 유료 경로로 가지 않는다
+  {
+    writeFileSync(logPath, '', 'utf-8')
+    const r = spawnSync(
+      join(process.cwd(), 'node_modules/.bin/tsx'),
+      [join(process.cwd(), DRAFT[0]), ...DRAFT[1]('RZ')],
+      {
+        cwd: root, encoding: 'utf-8',
+        env: {
+          ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+          FAKE_PROVIDER_LOG: logPath,
+          NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+          [BUDGET_ENV.dailyUsd]: '1000', [BUDGET_ENV.headroomMultiplier]: '1.5',
+          [BUDGET_ENV.runRequestCap]: '3',
+        },
+      },
+    )
+    check('🔴 [RC] 회차 id 없이 부르면 **유료 요청 0회** 로 멈춘다',
+      paidSoFar() === 0 && r.status !== 0)
+  }
+
+  // ⓔ 🔴 정산 보류 표식이 있으면 **실제 러너**도 멈춘다 (재시작을 넘는다)
+  {
+    writeFileSync(logPath, '', 'utf-8')
+    writeSettleHold(ledgerDir, {
+      runId: 'RC', attemptId: 'x', date: ledgerDateOf(new Date()),
+      reservedUsd: 0.01, at: new Date().toISOString(), reason: 'fixture 주입',
+    })
+    stage(DRAFT[0], DRAFT[1], '10000', 'RE')
+    check('🔴 [RC] 🔴 정산 보류 표식이 있으면 새 회차도 **유료 요청 0회**', paidSoFar() === 0)
+    rmSync(settleHoldPathOf(ledgerDir), { force: true })
+    check('🔴 [RC] 사람이 표식을 지우면 다시 돈다', stage(DRAFT[0], DRAFT[1], '10000', 'RE2') > 0)
   }
 }
 
