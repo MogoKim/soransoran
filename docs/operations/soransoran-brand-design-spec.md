@@ -349,15 +349,21 @@ AdminBadge tone="brand"     brand-ink  on brand-soft(#FFE7DC)   2.98 : 1   ❌ 4
 AdminActionButton danger    brand-ink  on 카드(#FFFFFF)          3.53 : 1   ❌ 4.5 미달
 (외곽선 버튼)                brand-strong on 카드                 5.50 : 1   ✅
 AdminCommentEditForm 취소   같은 조합 · 같은 수치
+OperatorComposedItemControls  고치기 · 닫기 — 같은 조합 · 같은 수치
 ```
 
 배지는 12px 이던 때부터 미달이었고, 외곽선 버튼은 20px 을 상속하던 동안 **큰 글씨 3.0 으로
 우연히 통과**하다가 라벨을 17px 로 내리면서 미달이 드러났다.
-둘 다 §1-2 의 "작은 글씨는 `--brand-strong`" 규칙을 그대로 적용해 고쳤다.
-**채움/외곽선 구분·위험도 의미·확인창은 건드리지 않았다** — 글자색만 바꿨다.
+전부 §1-2 의 "작은 글씨는 `--brand-strong`" 규칙을 그대로 적용해 고쳤다.
+**채움/외곽선 구분·위험도 의미·확인창·disabled 조건은 건드리지 않았다** — 글자색과 크기만 바꿨다.
 
-> 🔴 `OperatorComposedItemControls.tsx` 의 외곽선 버튼 2개는 같은 결함이 남아 있다.
-> 이번 작업 지시에서 `Operator*` 직접 수정이 금지되어 손대지 않았다 — 별도 승인 대상이다.
+> 🕘 **기록 정정 (2026-09-17).** 이 절은 한때
+> "`OperatorComposedItemControls.tsx` 의 외곽선 버튼 2개는 결함이 남아 있다" 고 적었다.
+> 당시에는 `Operator*` 직접 수정이 작업 범위 밖이어서 미수정이었고, 그 뒤 창업자가
+> **그 두 버튼에 한해** 수정을 승인해 함께 고쳤다. 지금은 남은 자리가 없다.
+> 실측 확인: 고치기 · 닫기 · 내리기 모두 `#C43300` **5.50:1** · 17px · 52px (375 · 390 · 767 · 1440px).
+>
+> 🔴 나머지 `Operator*` 파일은 여전히 이 절의 범위가 아니다.
 
 #### 라벨 크기는 장식이 아니라 대비 조건이다
 
