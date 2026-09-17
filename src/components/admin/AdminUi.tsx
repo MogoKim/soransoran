@@ -61,7 +61,7 @@ export function AdminSection({
   // 제목·부연·본문 사이 리듬을 /admin/home 과 같게 둔다
   return (
     <section className={className}>
-      <h2 className="m-0 text-base font-bold text-content-primary">{title}</h2>
+      <h2 className="m-0 text-lg font-bold text-content-primary">{title}</h2>
       {description ? <p className="m-0 mt-1 text-sm text-content-muted">{description}</p> : null}
       {children}
     </section>
@@ -108,10 +108,10 @@ export function AdminBadge({
         : tone === 'success'
           ? 'bg-surface-soft font-bold text-state-success'
           : tone === 'brand'
-            ? 'bg-brand-soft font-bold text-brand-ink'
+            ? 'bg-brand-soft font-bold text-brand-strong'
             : 'bg-surface-soft text-content-muted'
   return (
-    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs ${skin}`}>
+    <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs ${skin}`}>
       {children}
     </span>
   )
@@ -174,7 +174,7 @@ export function AdminTable({
   return (
     <div className="mt-2">
       <div
-        className={`hidden border-b border-subtle px-2 pb-1.5 text-xs text-content-muted lg:grid lg:gap-3 ${columns}`}
+        className={`hidden border-b border-subtle px-2 pb-2 text-xs font-bold text-content-muted lg:grid lg:gap-3 ${columns}`}
       >
         {head}
       </div>
@@ -205,7 +205,7 @@ export function AdminTableRow({
     <li>
       <Link
         href={href}
-        className={`flex min-h-[52px] flex-col gap-1 rounded-lg border border-subtle bg-surface-card p-3 no-underline lg:grid lg:min-h-[44px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-1.5 lg:hover:bg-surface-soft ${edge} ${columns}`}
+        className={`flex min-h-[52px] flex-col gap-1.5 rounded-lg border border-subtle bg-surface-card p-3 no-underline lg:grid lg:min-h-[52px] lg:items-center lg:gap-3 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:px-2 lg:py-2 lg:hover:bg-surface-soft ${edge} ${columns}`}
       >
         {children}
       </Link>
@@ -213,19 +213,36 @@ export function AdminTableRow({
   )
 }
 
-/** 표 안의 한 칸. 모바일에서는 라벨을 함께 보여 줘야 무슨 값인지 알 수 있다. */
+/**
+ * 표 안의 한 칸. 모바일에서는 라벨을 함께 보여 줘야 무슨 값인지 알 수 있다.
+ *
+ * 🔴 한 칸이 전부 같은 크기·같은 회색이면 표가 아니라 회색 덩어리로 읽힌다(2026-09-17).
+ *    사람이 실제로 읽는 값(작성자·게시판·이메일)과 곁다리로 보는 값(날짜)을 가른다.
+ *      value — 17px · --text-secondary (카드 위 9.34:1)
+ *      meta  — 14px · --text-muted     (카드 위 5.89:1)
+ *    둘 다 본문 4.5 를 넘는다. 색을 옅게 해서 위계를 만든 것이 아니라
+ *    **크기로 가르고 색은 통과 범위 안에서만** 움직였다.
+ *
+ * 🔴 모바일 라벨은 값보다 작고 흐리게 둔다. 라벨과 값이 같은 모양이면
+ *    "게시판 자유게시판" 이 한 덩어리로 읽혀 라벨이 값을 잡아먹는다.
+ */
 export function AdminCell({
   label,
   children,
   className = '',
+  tone = 'value',
 }: {
   label?: string
   children: React.ReactNode
   className?: string
+  /** value = 읽는 값(기본) · meta = 날짜처럼 곁다리로 보는 값 */
+  tone?: 'value' | 'meta'
 }) {
+  const skin =
+    tone === 'meta' ? 'text-xs text-content-muted' : 'text-base text-content-secondary'
   return (
-    <span className={`min-w-0 text-sm text-content-muted ${className}`}>
-      {label ? <span className="lg:hidden">{label} </span> : null}
+    <span className={`min-w-0 ${skin} ${className}`}>
+      {label ? <span className="text-xs text-content-muted lg:hidden">{label} </span> : null}
       {children}
     </span>
   )
@@ -258,7 +275,7 @@ export function AdminCard({
  */
 export function AdminQuote({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-surface-soft p-2 text-sm text-content-primary">
+    <p className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-surface-soft p-3 text-base text-content-primary">
       {children}
     </p>
   )
@@ -290,8 +307,8 @@ export function AdminActionGroup({
           : 'mt-3'
       }
     >
-      <p className="m-0 text-xs font-bold uppercase tracking-wide text-content-muted">{label}</p>
-      {hint ? <p className="mt-1 text-xs text-content-muted">{hint}</p> : null}
+      <p className="m-0 text-sm font-bold uppercase tracking-wide text-content-muted">{label}</p>
+      {hint ? <p className="mt-1 text-sm text-content-muted">{hint}</p> : null}
       <div className="mt-2 flex flex-wrap gap-2">{children}</div>
     </div>
   )
@@ -311,7 +328,7 @@ export function AdminField({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-1 border-t border-subtle py-3 first:border-t-0 sm:flex-row sm:gap-4">
       <dt className="shrink-0 text-sm text-content-muted sm:w-40">{label}</dt>
-      <dd className="m-0 break-all text-sm text-content-primary">{value}</dd>
+      <dd className="m-0 break-all text-base text-content-primary">{value}</dd>
     </div>
   )
 }

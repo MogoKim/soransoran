@@ -99,33 +99,39 @@ export default async function AdminHomePage() {
     <main className="pt-2 lg:pt-0">
       <AdminPageHeader title="운영 홈" />
 
-      {/* /admin/home 과 같은 리듬 — 큰 박스 대신 한 줄로 상태를 말한다 */}
-      <p className="m-0 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-        <span className="text-content-primary">
+      {/* /admin/home 과 같은 리듬 — 큰 박스 대신 한 줄로 상태를 말한다.
+          🔴 이 줄이 화면에서 가장 먼저 읽혀야 하는데 13px 이라 가장 작았다.
+             제일 중요한 "미처리 신고" 를 본문 크기로 올리고 나머지는 보조로 내린다.
+             문구·숫자·순서는 그대로다. */}
+      <p className="m-0 mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span className="text-base text-content-primary">
           미처리 신고 <strong>{pendingReports}</strong>
         </span>
-        <span className="text-content-muted">
+        <span className="text-sm text-content-muted">
           최근 {RECENT_DAYS}일 글 {recentPosts} · 가입 {recentMembers}
         </span>
         {pinned + homeHidden > 0 ? (
-          <span className="text-content-muted">
+          <span className="text-sm text-content-muted">
             홈 고정 {pinned} · 숨김 {homeHidden}
           </span>
         ) : null}
       </p>
 
-      <AdminSection title="오늘 확인할 것" className="mt-5">
-        <ul className="m-0 mt-2 flex list-none flex-col p-0">
+      {/* 🔴 넓은 화면에서 폭을 묶는다. 1400px 을 네 줄짜리 목록이 다 쓰면
+             왼쪽 이름과 오른쪽 배지 사이가 손바닥만큼 벌어져 눈이 중간에서 끊긴다.
+             줄 수·문구·순서는 그대로다 — 가로로만 모은다. */}
+      <AdminSection title="오늘 확인할 것" className="mt-6 lg:max-w-3xl">
+        <ul className="m-0 mt-3 flex list-none flex-col p-0">
           {cards.map((card) => (
             <li key={card.href}>
               <Link
                 href={card.href}
-                className="flex min-h-[52px] flex-col gap-0.5 border-b border-subtle px-2 py-2 no-underline hover:bg-surface-soft lg:min-h-[52px] lg:flex-row lg:items-center lg:gap-3"
+                className="flex min-h-[52px] flex-col gap-1 border-b border-subtle px-2 py-3 no-underline hover:bg-surface-soft lg:min-h-[60px] lg:flex-row lg:items-center lg:gap-4"
               >
-                <span className="w-20 shrink-0 text-sm font-bold text-content-primary">
+                <span className="shrink-0 text-base font-bold text-content-primary lg:w-24">
                   {card.title}
                 </span>
-                <span className="flex-1 text-sm text-content-muted">{card.hint}</span>
+                <span className="flex-1 text-sm text-content-secondary">{card.hint}</span>
                 <span className="shrink-0">
                   <AdminBadge tone={card.urgent ? 'warning' : 'neutral'}>{card.now}</AdminBadge>
                 </span>

@@ -62,11 +62,27 @@ export default function AdminActionButton({
     })
   }
 
+  /**
+   * 🔴 크기 클래스를 붙인다 (2026-09-17).
+   *    전에는 없어서 body(고객값 20px)를 상속했고, 고객 "글자 크기" 3단계까지
+   *    따라가 버튼만 18~24px 로 흔들렸다. 조치 버튼이 화면에서 가장 큰 요소가 되어
+   *    보조 링크·상태 배지가 그 아래로 묻혔다.
+   *    17px 는 브랜드 정본이 admin CTA 대비를 판정할 때 전제한 크기대이기도 하다.
+   *
+   * 🔴 채움/외곽선 구분과 위험도 의미는 **그대로 둔다.**
+   *    tone='danger' = 외곽선 · 기본 = 채움. 확인창(confirmText)·disabled 조건도 무수정.
+   *    바꾼 것은 글자 크기와 **외곽선 글자색뿐**이다.
+   *
+   * 🔴 외곽선 글자를 --brand-ink → --brand-strong 으로 바꿨다.
+   *    brand-ink(#FA4601)는 흰 카드 위 3.53:1 이다. 20px bold 일 때는 큰 글씨
+   *    기준 3.0 을 넘어 통과했지만, 17px 로 내리면 본문 4.5 기준에 미달한다.
+   *    brand-strong(#C43300)은 5.50:1 — 정본 §1-2 의 "작은 글씨는 brand-strong" 규칙 그대로다.
+   */
   const base =
-    'inline-flex min-h-[52px] items-center justify-center rounded-lg px-4 font-bold transition duration-150 active:scale-[0.98] disabled:opacity-50'
+    'inline-flex min-h-[52px] items-center justify-center rounded-lg px-4 text-base font-bold transition duration-150 active:scale-[0.98] disabled:opacity-50'
   const skin =
     tone === 'danger'
-      ? 'border border-interactive text-brand-ink hover:bg-surface-soft'
+      ? 'border border-interactive text-brand-strong hover:bg-surface-soft'
       : 'bg-cta text-content-primary hover:brightness-95'
 
   return (

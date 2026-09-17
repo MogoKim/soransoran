@@ -23,7 +23,7 @@
 | 링크 | `--link` (= `--brand-strong` 과 같은 값 · 밑줄 필수) |
 | 누르는 것(버튼·FAB) | `--cta` (= `--brand` 원색) |
 | **고객** primary CTA·FAB 의 글자·아이콘 | `--cta-content` `#FFFFFF` — 🔴 `text-lg` + `font-bold` 와 한 몸 |
-| **admin** compact CTA 의 글자 | `--text-primary` — 13~14px 이라 흰 글씨를 못 쓴다 |
+| **admin** compact CTA 의 글자 | `--text-primary` — 17px 이라 흰 글씨를 못 쓴다 |
 | 게시판 아이콘·배지 | `board-registry` 의 `icon*Var` — §5 |
 | 카카오 로그인 버튼 | `--kakao-bg` / `--kakao-text` — §4 |
 | 구분선·테두리 | `--border-subtle` / `--border-interactive` — §6 |
@@ -77,7 +77,8 @@
 - **고객 CTA 면 위 글자·아이콘** — `--cta-content` `#FFFFFF` 하나다.
   `#FA4601` 위 **3.53:1**, 큰 굵은 글씨 기준 3:1 로 통과한다.
   🔴 크기를 빼면 미달이므로 `text-lg` + `font-bold` 없이 쓰지 않는다.
-  🔴 **admin compact CTA 는 예외다** — 13~14px 이라 흰색이 본문 4.5 에 미달해 `--text-primary`(4.65)를 쓴다.
+  🔴 **admin compact CTA 는 예외다** — 17px 이라 흰색이 본문 4.5 에 미달해 `--text-primary`(4.65)를 쓴다.
+  (🕘 2026-09-17 이전에는 이 근거를 13~14px 로 적었다. 실제 렌더는 20px 이었고, 지금은 17px 로 맞췄다 — §12-2)
 - **본문 · 미리보기** — `--text-primary` / `--text-secondary` 를 쓴다
 
 **면으로는 여전히 "많이 칠하는 색"이 아니라 "정확한 포인트 색"이다.**
@@ -333,9 +334,36 @@ hero 사진은 함께 실측했고 따뜻한 색이 나무·피부 톤이라 교
 한 클래스를 쓴다 — 리브랜딩 때 `--cta-content` 한 줄만 바뀌면 전 화면이 따라온다.
 
 🔴 **admin 만 먹색인 이유는 도메인이 아니라 밀도다.** `.admin-shell` 안에서 글자 크기 토큰이
-`--text-sm` 13px · `--text-body` 14px 로 내려간다. 그 크기에서 흰색은 본문 4.5 에 미달하므로
+`--text-sm` 15px · `--text-body` 17px 로 내려간다(§12-2). 그 크기에서 흰색은 본문 4.5 에 미달하므로
 `--text-primary`(4.65)를 쓴다. `.admin-shell` 은 `--cta` · `--cta-content` 를 덮지 않으며,
 분리는 오직 **컴포넌트가 고르는 토큰**으로만 이뤄진다.
+
+#### 🔴 admin 외곽선 버튼·brand 배지는 `--brand-strong` 이다 (2026-09-17)
+
+운영 콘솔에서 **작은 브랜드색 글자 두 자리**가 `--brand-ink` 를 쓰고 있었다.
+`check:contrast` 는 admin 을 제외 경로로 두므로 이 조합을 재지 않았다 — 직접 쟀다:
+
+```
+AdminBadge tone="brand"     brand-ink  on brand-soft(#FFE7DC)   2.98 : 1   ❌ 4.5 미달
+                            brand-strong on brand-soft          4.64 : 1   ✅
+AdminActionButton danger    brand-ink  on 카드(#FFFFFF)          3.53 : 1   ❌ 4.5 미달
+(외곽선 버튼)                brand-strong on 카드                 5.50 : 1   ✅
+AdminCommentEditForm 취소   같은 조합 · 같은 수치
+OperatorComposedItemControls  고치기 · 닫기 — 같은 조합 · 같은 수치
+```
+
+배지는 12px 이던 때부터 미달이었고, 외곽선 버튼은 20px 을 상속하던 동안 **큰 글씨 3.0 으로
+우연히 통과**하다가 라벨을 17px 로 내리면서 미달이 드러났다.
+전부 §1-2 의 "작은 글씨는 `--brand-strong`" 규칙을 그대로 적용해 고쳤다.
+**채움/외곽선 구분·위험도 의미·확인창·disabled 조건은 건드리지 않았다** — 글자색과 크기만 바꿨다.
+
+> 🕘 **기록 정정 (2026-09-17).** 이 절은 한때
+> "`OperatorComposedItemControls.tsx` 의 외곽선 버튼 2개는 결함이 남아 있다" 고 적었다.
+> 당시에는 `Operator*` 직접 수정이 작업 범위 밖이어서 미수정이었고, 그 뒤 창업자가
+> **그 두 버튼에 한해** 수정을 승인해 함께 고쳤다. 지금은 남은 자리가 없다.
+> 실측 확인: 고치기 · 닫기 · 내리기 모두 `#C43300` **5.50:1** · 17px · 52px (375 · 390 · 767 · 1440px).
+>
+> 🔴 나머지 `Operator*` 파일은 여전히 이 절의 범위가 아니다.
 
 #### 라벨 크기는 장식이 아니라 대비 조건이다
 
@@ -627,7 +655,7 @@ CTA 면 위 글자는 같은 원리를 **크기로** 푼다 — 면을 어둡게
 | **brand-ink** `#FA4601` | 🔴 **큰 글씨** 브랜드색 | 워드마크 · 목록 순번 22px bold · 댓글 수 | 🔴 **작은 글씨**(버튼 라벨 · 배지 · 메타) · **링크** |
 | **brand-strong** `#C43300` | 🔴 **작은 글씨** 브랜드색 | 버튼 라벨 · 배지 · 메타 · 강조 텍스트 · 제목 hover | 큰 면 fill |
 | **cta** `var(--brand)` `#FA4601` | 누르는 것 | 고객 primary CTA · FAB fill (**흰 글자 3.53:1** · §2-2-C) | 넓은 배경 면 · 작은 글씨 |
-| **cta-content** `#FFFFFF` | 🔴 **고객 primary CTA 내용색** | 고객 CTA 라벨 · FAB 의 `+` 아이콘과 "글쓰기" 라벨 (3.53:1 · §2-2-C) | 🔴 **admin compact CTA** — 13~14px 이라 본문 4.5 미달. 거기는 `--text-primary` |
+| **cta-content** `#FFFFFF` | 🔴 **고객 primary CTA 내용색** | 고객 CTA 라벨 · FAB 의 `+` 아이콘과 "글쓰기" 라벨 (3.53:1 · §2-2-C) | 🔴 **admin compact CTA** — 17px 이라 본문 4.5 미달. 거기는 `--text-primary` |
 | **link** `#C43300` | 상호작용을 알리는 글자 | 링크 (본문 autolink · 정책 · 문의 · 운영 콘솔) | 브랜드 인상을 만드는 자리 |
 
 ### 브랜드 원색을 글자로 쓰는 범위 (2026-09-07 개정)
@@ -1362,7 +1390,7 @@ npm run typecheck · lint · build
            · 라벨은 text-lg + font-bold 와 한 몸이다 (§2-2-C)
        최후 에러 화면 버튼 글자 (CSS 없이 인라인 · 20px/700)       BRAND.onBrand
 
-먹색   🔴 admin compact primary CTA 글자 — 13~14px 이라 흰색 불가    --text-primary
+먹색   🔴 admin compact primary CTA 글자 — 17px 이라 흰색 불가       --text-primary
 #241E1B    (ActionButton size="compact" · 운영 표 2곳)
 
 진한   배지 텍스트 · 작성자명 · 메타 · 버튼 라벨 · 강조 텍스트    --brand-strong
@@ -1593,23 +1621,52 @@ MD3 의 본문 기준(`body-large`)은 **16px** 다. 소란소란의 본문은 *
 
 | 클래스 | 토큰 | 고객 기본 | 고객 작게 | 고객 크게 | 운영 콘솔 |
 |---|---|---|---|---|---|
-| `text-xs` | `--text-caption` | **17px** | 15px | 20px | **12px** |
-| `text-sm` | `--text-sm` | **18px** | 16px | 22px | **13px** |
-| `text-base` | `--text-body` | **20px** | 18px | 24px | **14px** |
-| `text-lg` | `--text-title` | **24px** | 20px | 28px | **16px** |
-| `text-xl` | `--text-heading` | **28px** | 24px | 32px | 24px |
-| `text-2xl` | `--text-display` | **32px** | 28px | 38px | 28px |
+| `text-xs` | `--text-caption` | **17px** | 15px | 20px | **14px** |
+| `text-sm` | `--text-sm` | **18px** | 16px | 22px | **15px** |
+| `text-base` | `--text-body` | **20px** | 18px | 24px | **17px** |
+| `text-lg` | `--text-title` | **24px** | 20px | 28px | **20px** |
+| `text-xl` | `--text-heading` | **28px** | 24px | 32px | **26px** |
+| `text-2xl` | `--text-display` | **32px** | 28px | 38px | **30px** |
+
+> 🕘 운영 콘솔 열은 2026-09-17 이전 **12 / 13 / 14 / 16 / 24 / 28px** 이었다.
+> 창업자 시안으로 한 단계씩 올렸다 — 아래 "운영 콘솔은 별도 영역이다" 참조.
 
 정의 위치: `globals.css` `:root` / `:root[data-font-size='SMALL']` / `:root[data-font-size='LARGE']` / `.admin-shell`
 매핑 위치: `tailwind.config.ts` `theme.extend.fontSize`
 
 #### 🔴 운영 콘솔은 별도 영역이다
 
-`.admin-shell` 은 `--text-*` 를 **더 작게 고정**한다. 고객용 "글자 크기" 조절도 여기서는 통하지 않는다.
+`.admin-shell` 은 `--text-*` 를 **따로 고정**한다. 고객용 "글자 크기" 조절은 여기서 통하지 않는다.
 
-- **왜** — 운영자는 정보를 빽빽하게 훑는다. "크게" 로 두면 표 한 줄이 두 줄로 접혀 목록을 볼 수 없다.
-- **그래서** — 운영 콘솔의 12px·13px 는 **고객 화면의 최소 크기 규칙 밖**이다. 위반이 아니다.
-- **다만** — 같은 `text-xs` 가 고객 화면에서는 17px, 운영 콘솔에서는 12px 다. **이름이 같고 크기가 다르다**(§12-4).
+- **왜** — 운영 화면은 고객 화면과 밀도 요구가 다르다. 고객 3단계가 그대로 먹으면
+  "크게" 에서 표 한 줄이 두 줄로 접힌다. 그래서 축을 갈라 둔다.
+- **그래서** — 운영 콘솔의 14px·15px 는 **고객 화면의 최소 크기 규칙 밖**이다. 위반이 아니다.
+- **다만** — 같은 `text-xs` 가 고객 화면에서는 17px, 운영 콘솔에서는 14px 다. **이름이 같고 크기가 다르다**(§12-4).
+
+#### 🔴 그 고정이 2026-09-17 까지 절반만 걸려 있었다
+
+이 문서는 2026-09-03 부터 "운영 콘솔은 고정이라 글자 크기 조절이 통하지 않는다" 고 적어 왔다.
+**틀린 서술이었다.** `.admin-shell` 은 토큰만 덮었고, 크기를 실제로 만드는 선언은
+`body { font-size: var(--text-body) }` 하나뿐인데 `body` 는 그 스코프 **밖**이다.
+
+2026-09-17 프로덕션 실측:
+
+```
+.admin-shell 의 --text-body     0.875rem (14px)   ← 토큰은 덮여 있었다
+.admin-shell computed font-size 20px             ← 아무도 적용하지 않았다
+
+/admin/content 한 줄 : 제목 20px · 게시판 13px · 작성자 13px · 작성일 13px
+data-font-size 전환  : 작게 18px / 기본 20px / 크게 24px  ← 제목이 고객 축을 따라갔다
+```
+
+크기 클래스를 붙인 자리(13px 메타)만 고정이었고, 붙이지 않은 자리(목록 제목·조치 버튼)는
+고객값을 상속했다. 그 결과 **판단에 쓰는 메타가 가장 작고, 그냥 제목이 가장 큰** 상태였다.
+
+**고친 방법** — `.admin-shell` 에 `font-size: var(--text-body)` 와 `line-height: 1.6` 두 줄을 넣었다.
+토큰을 늘리거나 이름을 바꾸지 않았다. 고객 `:root` 와 `data-font-size` 블록은 한 줄도 건드리지 않았다.
+
+**함께 올린 값** — 운영자는 창업자 한 사람이고 매일 오래 읽는다. 훑기용 12~14px 은
+읽기에는 피로하다. 한 화면의 행 수를 늘리는 것이 목표가 아니므로 한 단계씩 올렸다(위 표).
 
 ---
 
