@@ -32,8 +32,10 @@
  *   node scripts/magazine-auto-register-run.mjs --notify-send  Slack 실제 발송까지
  */
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { composeLedger, formatLedger } from './lib/magazine-ledger.mjs'
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
 import { readHandoff, waitForProducer } from './lib/magazine-handoff.mjs'
 import { PRODUCER_LOCK_PATH, defaultPidAlive, readLock } from './lib/magazine-auto-lock.mjs'
@@ -140,7 +142,26 @@ if (write && passthrough.includes('--merge')) {
   const m = spawnSync(NODE, [MERGE, '--apply', '--notify-send'], { cwd: ROOT, stdio: 'inherit' })
   if (m.error) { line(`자동 병합을 띄우지 못했다 (${m.error.code ?? m.error.name})`); finalCode = Math.max(finalCode, 1) }
   else if (m.status !== 0) { line(`자동 병합이 막혔다 (종료 코드 ${m.status})`); finalCode = Math.max(finalCode, m.status ?? 1) }
-  else line('자동 병합 완료')
+
+  /**
+   * 🔴 **종료 코드 0 을 "자동 병합 완료" 로 옮겨 적지 않는다** (2026-09-17).
+   *
+   *    9/17 회차가 정확히 그랬다 — 병합기는 "자동 PR 이 없다 — 할 것이 없다" 고
+   *    정직하게 적고 0 으로 끝났는데, 이 자리가 그것을 "완료" 로 바꿔 적었다.
+   *    등록 0 · PR 0 · 병합 0 인 회차가 로그에서는 성공처럼 보였다.
+   *
+   *    무인 운영에서 로그는 유일한 감시 수단이다. 실적을 단계별로 적는다.
+   */
+  const readJson = (p) => { try { return JSON.parse(readFileSync(p, 'utf8')) } catch { return null } }
+  const date = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+  const runDir = join(ROOT, 'drafts', 'magazine', '_runs', date)
+  const ledger = composeLedger({
+    register: readJson(join(runDir, 'auto-register.json')),
+    merge: readJson(join(runDir, 'auto-merge.json')),
+  })
+  for (const l of formatLedger(ledger)) line(l)
+  // 🔴 "완료" 는 실제로 공급됐을 때만 쓴다
+  if (!ledger.supplied) line('🔴 이 회차는 콘텐츠 공급 0건이다 — 종료 코드 0 은 "할 일이 없었다" 는 뜻이다')
 
   // 🔴 회차의 부분 실패는 병합 성공이 덮지 않는다 — 둘 중 나쁜 쪽이 남는다
   if (code !== 0) line(`회차 판정은 그대로 ${code} 다 (막힌 후보를 숨기지 않는다)`)

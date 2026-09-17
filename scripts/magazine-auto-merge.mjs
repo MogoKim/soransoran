@@ -25,9 +25,10 @@
  * 종료 코드: 성공했거나 할 것이 없으면 0 · 막혔으면 1
  */
 import { spawnSync } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
+import { DRAFTS_DIR, parseArticlesSource, parseQueueSource } from './lib/magazine-load.mjs'
 import { AUTO_BRANCH_PREFIX, OK_CONCLUSIONS, REQUIRED_CHECKS, REQUIRED_CONCLUSIONS, judgeAutoMerge } from './lib/magazine-merge-gate.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
 
@@ -594,6 +595,20 @@ async function main() {
     const r = await send(msg, { dryRun: !notifySend })
     line(`Slack: ${r.sent ? '발송' : `미발송 — ${r.reason}`}`)
   }
+  /**
+   * 🔴 **결과를 파일로 남긴다** (2026-09-17).
+   *    부른 쪽이 종료 코드만 보고 "자동 병합 완료" 라고 적는 일을 없앤다.
+   *    종료 코드 0 은 "할 일이 없었다" 도 포함한다 — 그것은 공급 성공이 아니다.
+   */
+  try {
+    const date = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+    const dir = join(DRAFTS_DIR, '_runs', date)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'auto-merge.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  } catch (e) {
+    line(`결과 파일을 남기지 못했다 (${e?.message ?? e}) — 판정은 그대로다`)
+  }
+
   if (asJson) console.log(JSON.stringify(report, null, 2))
   line(`종료 (코드 ${code})`)
   process.exit(code)

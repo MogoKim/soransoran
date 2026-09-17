@@ -43,6 +43,7 @@
  *
  * 종료 코드: BLOCKED 가 하나라도 있으면 1
  */
+import { judgeForbidden } from './lib/magazine-forbidden.mjs'
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join, isAbsolute, basename } from 'node:path'
 import { runInNewContext } from 'node:vm'
@@ -180,10 +181,19 @@ export function judge(slug, { dir, queueItem, strictAuto = false }) {
   const patterns = Array.isArray(review?.forbiddenPatterns) ? review.forbiddenPatterns : null
   const patternHits = []
   if (patterns) {
-    for (const p of patterns) {
-      if (p && text.includes(p)) patternHits.push(p)
+    // 🔴 **글자가 아니라 뜻으로 본다** (2026-09-17).
+    //    `낫습니다` 는 "(병이) 낫습니다"(완치 주장)를 막으려는 것인데,
+    //    "~하는 편이 낫습니다" 라는 일상 비교 표현과 글자가 같다.
+    //    목록에서 빼지 않는다 — 빼면 "갱년기가 낫습니다" 가 통과한다.
+    //    비교 구문 표지가 바로 앞에 있을 때만, 미리 적어 둔 동형이의에 한해 면제한다.
+    const fv = judgeForbidden(text, patterns)
+    for (const v of fv.violations) {
+      patternHits.push(v.pattern)
+      const where = v.samples.length > 0 ? ` — "…${v.samples[0]}…"` : ''
+      block('FORBIDDEN_PATTERN', `forbiddenPatterns 위반: "${v.pattern}"${where}`)
     }
-    for (const p of patternHits) block('FORBIDDEN_PATTERN', `forbiddenPatterns 위반: "${p}"`)
+    // 🔴 면제도 기록에 남긴다. 조용히 넘어가면 관문이 열린 줄도 모른다.
+    for (const e of fv.exempted) notes.push(`forbiddenPatterns "${e.pattern}" ${e.count}회는 비교 표현으로 면제 (완치 주장 아님)`)
   } else {
     notes.push('forbiddenPatterns 없음 — 주제별 검사를 건너뛴다 (하위 호환)')
   }

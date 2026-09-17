@@ -14,6 +14,7 @@
  *    생성은 magazine-brief-auto.mjs 가 하고, 그 결과도 여기를 통과해야 한다.
  */
 
+import { HOMOGRAPH_PATTERNS, judgeForbidden } from './magazine-forbidden.mjs'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT } from './magazine-load.mjs'
@@ -293,8 +294,10 @@ export function verifyBrief({ briefText, review, queueItem }) {
     for (const w of [...BANNED_WORDS, ...MEDICAL_ASSERTIONS]) {
       if (s.includes(w)) crossHits.push(`"${w}" (공통 금지어)`)
     }
-    for (const p of patterns) {
-      if (p && s.includes(p)) crossHits.push(`"${p}" (forbiddenPatterns)`)
+    // 🔴 여기도 **뜻으로** 본다 (2026-09-17). 검증 쪽만 고치면 지침과 정책이 또 갈라진다.
+    //    "~하는 편이 낫습니다" 를 쓰라고 해 놓고 같은 글자를 금지어로 세는 일을 없앤다.
+    for (const v of judgeForbidden(s, patterns).violations) {
+      crossHits.push(`"${v.pattern}" (forbiddenPatterns)`)
     }
   }
   add(
@@ -304,10 +307,22 @@ export function verifyBrief({ briefText, review, queueItem }) {
   )
 
   // ── G4 forbiddenPatterns ──
+  //
+  // 🔴 **동형이의를 맨몸으로 적으면 알려 준다** (2026-09-17).
+  //    `낫습니다` 같은 어미는 완치 주장("갱년기가 낫습니다")과 일상 비교
+  //    ("~하는 편이 낫습니다")가 글자가 같다. 맨몸으로 적어 두면 멀쩡한 문장이
+  //    막히고, 그것을 피하려다 목록에서 빼면 진짜 완치 주장이 통과한다.
+  //    막지는 않는다 — 검증 쪽이 문맥으로 가리므로 이것은 **더 또렷하게 적으라는 안내**다.
+  const bareHomographs = patterns.filter((p) => HOMOGRAPH_PATTERNS.has(p))
+  const g4ok = patterns.length > 0
   add(
     'G4',
-    patterns.length > 0,
-    patterns.length ? `${patterns.length}개` : 'forbiddenPatterns 가 비었다 — batch-qa ⑩ 이 막는다',
+    g4ok,
+    !g4ok
+      ? 'forbiddenPatterns 가 비었다 — batch-qa ⑩ 이 막는다'
+      : bareHomographs.length > 0
+        ? `${patterns.length}개 (동형이의 ${bareHomographs.join(', ')} — 완치 뜻이면 "갱년기가 낫습니다" 처럼 주어를 붙여 적는 편이 또렷하다)`
+        : `${patterns.length}개`,
   )
 
   // ── G6 의료 · 재무 확인 권고 ──
