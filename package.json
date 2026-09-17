@@ -81,6 +81,7 @@
     "micro-seed:adapt-input-check": "tsx scripts/micro-seed-adapt-input-check.mts",
     "micro-seed:navercafe-thin": "tsx scripts/micro-seed-navercafe-thin.mts",
     "micro-seed:navercafe-thin-check": "tsx scripts/micro-seed-navercafe-thin-check.mts",
+    "check:source-times": "tsx scripts/source-times-check.mts",
     "micro-seed:auto-judge": "tsx scripts/micro-seed-auto-judge.mts",
     "micro-seed:auto-judge-check": "tsx scripts/micro-seed-auto-judge-check.mts",
     "micro-seed:auto-draft": "tsx scripts/micro-seed-auto-draft.mts",

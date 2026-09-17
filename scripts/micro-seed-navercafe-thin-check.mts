@@ -289,8 +289,13 @@ check('🔴 DB 를 건드리지 않는다', !/PrismaClient|prisma\./.test(code))
 check('🔴 Sheet 로 보내지 않는다 — 네이버 원문이 시트로 가면 되돌릴 수 없다',
   !/sheets|googleapis|appendRow|SHEET_ID/i.test(code))
 check('🔴 발행하지 않는다', !/\bpost\.(create|update)|publish|persona/i.test(code))
+/**
+ * 🔴 조립 정본이 `thinRowFromCollected` 로 바뀌었다 (2026-09-17) — 성질은 그대로다.
+ *    러너가 스스로 분류·조립을 만들지 않는다는 것을 본다.
+ */
 check('🔴 판정·분류를 새로 만들지 않는다 — 기존 함수를 쓴다',
-  /classifyDetail/.test(code) && /toThinRow/.test(code) && !/function classify/.test(code))
+  /classifyDetail/.test(code) && /thinRowFromCollected/.test(code)
+  && !/function classify/.test(code) && !/(await\s+)?toThinRow\s*\(/.test(code))
 check('🔴 마스킹을 자르기 전에 한다', (() => {
   const i = code.indexOf('maskSensitive')
   const j = code.indexOf('bodyHeadChars: BODY_HEAD_CHARS')
@@ -412,15 +417,29 @@ console.log('\n⑩ 🔴 후보 수를 고유 원천 수로 오해하지 않는�
   // ── ⑥ 🔴 배선이 실제로 이어져 있는가 ──
   {
     const src = readFileSync('scripts/micro-seed-navercafe-thin.mts', 'utf-8')
-    check('🔴 [ST] 얇은 변환 러너가 수집물의 시각을 넘긴다', /times:\s*sourceTimesOf\(r\)/.test(src))
+    /**
+     * 🔴 **성질은 같고 자리만 옮겼다** (2026-09-17).
+     *    조립이 `thinRowFromCollected` 로 모였다 — 운영 수집기가 같은 함수를 쓰게 하려고다.
+     *    그래서 **러너가 그 함수를 부르는가** 와 **그 함수가 시각을 넘기는가** 를 둘 다 본다.
+     *    한쪽만 보면 함수는 맞는데 안에서 시각을 버려도 통과한다.
+     */
+    check('🔴 [ST] 얇은 변환 러너가 정본 조립 함수를 쓴다', /thinRowFromCollected\(\{/.test(src))
+    check('🔴 [ST] 그 정본 조립 함수가 수집물의 시각을 넘긴다',
+      /times: sourceTimesOf\(c\)/.test(readFileSync('src/lib/micro-seed-navercafe-thin.ts', 'utf-8')))
   }
 
   // ── ⑦ 🔴 게시 시각을 **사건 시각**이라고 적지 않는다 ──
   {
     const src = readFileSync('src/lib/micro-seed-navercafe-thin.ts', 'utf-8')
       + readFileSync('src/lib/micro-seed-82cook-thin.ts', 'utf-8')
+    /**
+     * 🔴 **부정문을 위반으로 읽지 않는다** (2026-09-17 오탐 보정).
+     *    옛 판은 "`sourcePostedAt` 은 사건 시각이 **아니다**" 라고 바르게 적은 주석까지
+     *    위반으로 잡았다. 검사가 옳은 문장을 막으면 사람이 주석을 지우게 된다.
+     *    🔴 **주장하는 문장만** 잡는다 — 뒤에 부정이 오면 위반이 아니다.
+     */
     check('🔴 [ST] "사건 시각" 이라고 표시하지 않는다',
-      !/sourcePostedAt[^\n]{0,40}(은|는|=)\s*사건/.test(src))
+      !/sourcePostedAt[^\n]{0,40}(은|는|=)\s*[^\n]{0,20}사건[^\n]{0,12}시각(?![^\n]{0,10}(이 아니|가 아니|아니다))/.test(src))
     check('🔴 [ST] 사건 시각이 아니라는 말이 주석에 남아 있다', src.includes('사건 시각이 아니다'))
   }
 }

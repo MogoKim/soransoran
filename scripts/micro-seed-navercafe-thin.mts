@@ -26,10 +26,11 @@ import { pathToFileURL } from 'node:url'
 import { classifyDetail } from './lib/micro-seed-detail-classify.mjs'
 import { maskSensitive, BODY_HEAD_CHARS } from './lib/micro-seed-raw-originality.mjs'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
-import { toThinRow, violatesStorage } from '../src/lib/micro-seed-82cook-thin'
+import { violatesStorage } from '../src/lib/micro-seed-82cook-thin'
 import {
   SKIP_LABEL, CAFE_BODY_HEAD_CHARS, planCafeThin, keepAfterClassify, outPathOf,
-  statsOf, verifyThinRun, dedupKeyOf, uniqueSourceCount, sourceTimesOf, type CafeRow, type SkipCode,
+  statsOf, verifyThinRun, dedupKeyOf, uniqueSourceCount, sourceTimesOf, thinRowFromCollected,
+  type CafeRow, type SkipCode,
 } from '../src/lib/micro-seed-navercafe-thin'
 
 const DATA_DIR = '.microseed-data'
@@ -177,20 +178,16 @@ async function main(): Promise<void> {
       dropped.set(c, (dropped.get(c) ?? 0) + 1)
       continue
     }
-    const row = toThinRow({
-      id: S(r.sourceArticleId), url: S(r.sourceUrl), title,
-      commentCount: Number(r.sourceCommentCount ?? 0), score: 0,
+    /**
+     * 🔴 **운영 수집기와 같은 정본 함수를 쓴다** (2026-09-17 보정).
+     *    조립을 두 곳에 각각 적어 두었더니 한쪽(운영 수집기)만 `times` 를 빠뜨렸다.
+     */
+    const row = thinRowFromCollected({
+      collected: { ...r, originalTitle: title },
       maskedBody: masked, bodyHeadChars: BODY_HEAD_CHARS,
       axis, safetyVerdict,
       safetyReasons: v.safety.reasons.map((x) => String(x)),
       reason: String(v.reason), runId, fetchedAt: new Date().toISOString(),
-      // 🔴 여기가 82cook 과 다른 유일한 값이다
-      sourceSite: S(r.sourceSite),
-      /**
-       * 🔴 **수집물이 이미 들고 있던 세 시각을 그대로 내려보낸다** (2026-09-17).
-       *    새로 재지도, 없는 값을 채우지도 않는다 — 여기서 버려지던 것을 안 버릴 뿐이다.
-       */
-      times: sourceTimesOf(r),
     })
     // 🔴 저장 직전 마지막 관문 — 전문 컬럼이 섞였으면 통째로 멈춘다
     const bad = violatesStorage(row as unknown as Record<string, unknown>, BODY_HEAD_CHARS)

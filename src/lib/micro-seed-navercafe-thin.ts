@@ -15,6 +15,7 @@
  *
  * 🔴 판정도 분류도 여기서 새로 만들지 않는다 — `classifyDetail` 과 `toThinRow` 를 그대로 쓴다.
  */
+import { toThinRow, type ThinRow } from './micro-seed-82cook-thin'
 
 /** 수집기가 남긴 행 — 🔴 `rawBody` 는 **전문**이다. 이 파일 밖으로 내보내지 않는다 */
 export type CafeRow = {
@@ -60,6 +61,44 @@ export function sourceTimesOf(r: CafeRow): {
     sourceListedAt: iso(r.sourceListedAt),
     sourceCapturedAt: iso(r.sourceCapturedAt),
   }
+}
+
+/**
+ * 수집물 한 줄 → 저장할 얇은 행 — 🔴 **운영 수집기가 부르는 자리를 함수로 둔다** (2026-09-17).
+ *
+ * 🔴 **왜 함수로 뽑았나.**
+ *    세 시각을 넘기는 배선이 얇은 변환기(`micro-seed-navercafe-thin.mts`)에는 있었고
+ *    **운영 수집기(`micro-seed-collect-navercafe.mts`)에는 없었다.** 조립이 러너 안에
+ *    인라인으로 있으면 검사가 그 자리를 볼 수 없어, 한쪽만 고쳐 놓고 고쳤다고 적게 된다.
+ *    이제 두 경로가 **같은 함수**를 부르고, fixture 가 그 함수를 직접 시험한다.
+ *
+ * 🔴 **모르는 게시 시각을 수집 시각으로 채우지 않는다** — `sourceTimesOf` 가 그것을 지킨다.
+ * 🔴 **`sourcePostedAt` 은 사건 시각이 아니다** — 원문이 그 게시판에 올라온 시각일 뿐이다.
+ */
+export function thinRowFromCollected(input: {
+  /** 수집물 한 줄. 🔴 세 시각을 이미 들고 있다 */
+  collected: CafeRow & { sourceArticleId?: unknown; sourceUrl?: unknown; originalTitle?: unknown }
+  /** 마스킹까지 끝난 본문 */
+  maskedBody: string
+  bodyHeadChars: number
+  axis: string
+  safetyVerdict: string
+  safetyReasons: readonly string[]
+  reason: string
+  runId: string
+  fetchedAt: string
+}): ThinRow {
+  const c = input.collected
+  return toThinRow({
+    id: S(c.sourceArticleId), url: S(c.sourceUrl), title: S(c.originalTitle),
+    commentCount: Number(c.sourceCommentCount ?? 0), score: 0,
+    maskedBody: input.maskedBody, bodyHeadChars: input.bodyHeadChars,
+    axis: input.axis, safetyVerdict: input.safetyVerdict, safetyReasons: input.safetyReasons,
+    reason: input.reason, runId: input.runId, fetchedAt: input.fetchedAt,
+    sourceSite: S(c.sourceSite),
+    // 🔴 여기가 빠져 있던 자리다 — 세 시각을 정본 helper 로 넘긴다
+    times: sourceTimesOf(c),
+  })
 }
 
 export const SKIP_LABEL = {
