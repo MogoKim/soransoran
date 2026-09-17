@@ -7,10 +7,12 @@ import { TOAST_ASSERTIVE, TOAST_TOP, TOAST_Z, type ToastChrome } from '@/compone
 /**
  * 토스트가 뜨는 자리 — 🔴 이 파일만 위치를 안다.
  *
- * 🔴 상단이다. 하단은 이미 넷이 쓴다 —
- *    댓글 composer(z-61 · 키보드에 맞춰 움직인다) · dim(60) · FAB(40) ·
- *    WriteFooter(40) · CommentDock(30). 어느 하나는 반드시 가린다.
+ * 🔴 상단이다. 하단은 이미 셋이 쓴다 —
+ *    FAB(40) · WriteFooter(40) · CommentDock(30). 어느 하나는 반드시 가린다.
  *    상단은 키보드가 올라와도 자리가 흔들리지 않는다.
+ *
+ *    (2026-09-17 이전에는 여기에 댓글 composer 시트 z-61 과 딤 60 이 있었다.
+ *     시트를 없애고 하단 바가 원래 자리의 폼으로 데려가는 방식으로 바꾸면서 사라졌다.)
  *
  * 🔴 내려오는 높이는 chrome 이 정한다. full 은 Header+IconMenu 아래,
  *    minimal 은 Header 아래다. 한 값으로 고정하면 IconMenu 가 없는 화면에서

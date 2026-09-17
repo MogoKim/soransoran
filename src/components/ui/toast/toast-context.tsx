@@ -43,7 +43,7 @@ type ToastApi = {
 type ToastState = ToastApi & { items: ToastRecord[] }
 
 /**
- * 🔴 기본값을 no-op 으로 둔다. ReplyOpenProvider 처럼 throw 하지 않는다.
+ * 🔴 기본값을 no-op 으로 둔다. ComposeModeProvider 처럼 throw 하지 않는다.
  *    안내가 없다고 기능이 멈추면 안 된다 — PageShell 밖(글쓰기·로그인)에서
  *    같은 컴포넌트가 쓰일 수 있고, 그때는 조용히 아무 일도 일어나지 않는 편이 맞다.
  */

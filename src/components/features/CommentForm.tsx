@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
+import { useSubmitGuard } from '@/lib/use-submit-guard'
 import { createComment, type CommentActionState } from '@/lib/actions/comments'
 import { trackEvent } from '@/lib/analytics/track'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
@@ -46,6 +47,9 @@ export default function CommentForm({
    */
   const handledRef = useRef<CommentActionState | null>(null)
 
+  /** 🔴 연타 차단. 비회원 폼·수정 폼과 같은 것을 쓴다 — 한쪽만 막히면 일관되지 않다. */
+  const { guardSubmit } = useSubmitGuard(state)
+
   /**
    * 🔴 성공은 토스트가 알린다. 예전에는 이 자리에 문구를 띄웠는데,
    *    다시 타자를 치기 전까지 사라지지 않아 다음 댓글을 쓰는 동안에도 남아 있었다.
@@ -80,6 +84,7 @@ export default function CommentForm({
   return (
     <form
       action={formAction}
+      onSubmit={guardSubmit}
       className="flex flex-col gap-2 rounded-2xl border border-subtle bg-surface-card p-4"
     >
       <input type="hidden" name="postId" value={postId} />

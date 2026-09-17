@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { TOUCH_MIN } from '@/lib/spacing'
 import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
+import { useComposeLock } from '@/components/features/ComposeModeProvider'
 import {
   updateGuestComment,
   deleteGuestComment,
@@ -49,6 +50,9 @@ export default function GuestCommentControls({
   )
 
   const state = mode === 'delete' ? deleteState : editState
+
+  /** 🔴 회원 수정(CommentEditor)과 같은 계약이다 — 열려 있는 동안 하단 바가 비킨다. */
+  useComposeLock(mode !== null)
 
   // 성공하면 닫는다. 지운 댓글은 다시 그려지며 사라진다.
   useEffect(() => {

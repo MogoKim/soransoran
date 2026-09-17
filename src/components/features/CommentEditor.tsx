@@ -7,6 +7,8 @@ import { useFormState } from 'react-dom'
 import ActionButton from '@/components/ui/ActionButton'
 import DeleteButton from '@/components/features/DeleteButton'
 import { useAutoResize } from '@/lib/use-auto-resize'
+import { useSubmitGuard } from '@/lib/use-submit-guard'
+import { useComposeLock } from '@/components/features/ComposeModeProvider'
 import { updateComment, type CommentActionState } from '@/lib/actions/comments'
 import OnboardingNotice from '@/components/features/onboarding/onboarding-notice'
 import { useToast } from '@/components/ui/toast'
@@ -52,6 +54,15 @@ export default function CommentEditor({
 
   useAutoResize(textareaRef, content, COMMENT_TEXTAREA_MAX_HEIGHT)
 
+  /** 🔴 등록 폼과 같은 연타 차단을 쓴다 */
+  const { guardSubmit } = useSubmitGuard(state)
+
+  /**
+   * 🔴 고치는 동안에는 하단 작성 바가 비킨다.
+   *    이 화면에 작성할 자리가 둘이면, 쓴 글이 어디로 가는지 알 수 없다.
+   */
+  useComposeLock(editing)
+
   /**
    * 저장이 끝나면 닫는다. 바뀐 본문은 서버가 다시 그려 준다.
    * 🔴 닫히는 것만으로는 저장됐는지 알 수 없어 토스트로 알린다.
@@ -84,7 +95,7 @@ export default function CommentEditor({
   }
 
   return (
-    <form action={formAction} className="mt-2 flex flex-col gap-2">
+    <form action={formAction} onSubmit={guardSubmit} className="mt-2 flex flex-col gap-2">
       <input type="hidden" name="commentId" value={commentId} />
       <input type="hidden" name="postId" value={postId} />
       <input type="hidden" name="boardSlug" value={boardSlug} />

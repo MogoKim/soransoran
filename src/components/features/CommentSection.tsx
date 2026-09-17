@@ -2,7 +2,7 @@ import CommentForm from '@/components/features/CommentForm'
 import GuestCommentForm from '@/components/features/GuestCommentForm'
 import CommentItem, { type CommentWithReplies } from '@/components/features/CommentItem'
 import CommentComposeAnchor from '@/components/features/CommentComposeAnchor'
-import ReplyOpenProvider from '@/components/features/ReplyOpenProvider'
+import ComposeModeProvider from '@/components/features/ComposeModeProvider'
 import SortableCommentList from '@/components/features/SortableCommentList'
 import { displayName } from '@/lib/display-name'
 import { GUEST_BADGE } from '@/lib/guest-comment-policy'
@@ -85,8 +85,8 @@ export default function CommentSection({
         </div>
       ) : null}
 
-      {/* 답글과 하단 진입점이 같은 열림 상태를 본다 — 하단에 입력이 둘이 되지 않게. */}
-      <ReplyOpenProvider>
+      {/* 답글 · 댓글 수정 · 하단 진입 바가 같은 열림 상태를 본다 — 작성 자리가 둘이 되지 않게. */}
+      <ComposeModeProvider>
         {comments.length === 0 ? (
           <div className="mt-4 flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-subtle bg-surface-card p-8 text-center">
             <p className="m-0 font-bold text-content-primary">아직 댓글이 없어요</p>
@@ -117,15 +117,18 @@ export default function CommentSection({
           />
         )}
 
-        {/* 입력은 만들지 않고 있는 것을 부른다 — 확인 절차·비밀번호·글자수는 각 폼의 규칙이다. */}
-        <CommentComposeAnchor>
+        {/* 입력은 만들지 않고 있는 것을 부른다 — 확인 절차·비밀번호·글자수는 각 폼의 규칙이다.
+              🔴 key 로 글마다 새로 만든다. 같은 경로 모양(/[boardSlug]/[postId])을 오갈 때
+                 React 가 같은 자리로 보고 상태를 이어 주면, 앞 글에서 뜬 바가 다음 글
+                 첫 화면에 그대로 남는다. */}
+        <CommentComposeAnchor key={postId}>
           {isLoggedIn ? (
             <CommentForm postId={postId} boardSlug={boardSlug} />
           ) : (
             <GuestCommentForm postId={postId} boardSlug={boardSlug} />
           )}
         </CommentComposeAnchor>
-      </ReplyOpenProvider>
+      </ComposeModeProvider>
     </section>
   )
 }

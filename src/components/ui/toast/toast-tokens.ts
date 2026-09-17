@@ -32,9 +32,13 @@ export const TOAST_TOP: Record<ToastChrome, string> = {
 }
 
 /**
- * 🔴 z 는 61 보다 커야 한다.
- *    Header 50 · IconMenu 40 · FAB 40 · CommentDock 30 · composer dim 60 · composer 61.
- *    아래에 두면 댓글 입력 시트가 열렸을 때 안내가 시트 뒤로 숨는다.
+ * 🔴 지금 화면에 있는 것 중 가장 높은 것보다 커야 한다.
+ *    Header 50 · IconMenu 40 · FAB 40 · CommentDock 30.
+ *    아래에 두면 안내가 고정 요소 뒤로 숨는다.
+ *
+ * 🔴 값을 내리지 않는다. 한때 댓글 입력 시트(61)와 딤(60)이 있어 61 을 넘겨야 했고,
+ *    그 둘은 2026-09-17 에 사라졌다. 그래도 70 을 유지한다 —
+ *    앞으로 생길 겹침에 여유를 두는 값이지, 특정 컴포넌트에 맞춘 값이 아니다.
  */
 export const TOAST_Z = 70
 
