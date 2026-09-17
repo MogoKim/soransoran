@@ -25,9 +25,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  LEDGER_SCOPE, LEDGER_STAGES, LEDGER_TZ_LABEL, PAID_STAGES,
-  judgeSettle, judgeSpend, ledgerDateOf, previousLedgerDate, runPaidCountOf, tallyOf,
-  type BudgetLimits, type LedgerEntry, type LedgerStage,
+  LEDGER_SCOPE, LEDGER_STAGES, LEDGER_TZ_LABEL, PAID_STAGES, RESERVATION_GRACE_MS,
+  classifyReservations, judgeSettle, judgeSpend, ledgerDateOf, previousLedgerDate,
+  runPaidCountOf, tallyOf,
+  type BudgetLimits, type LedgerEntry, type LedgerStage, type OpenReservation,
 } from '../src/lib/llm-ledger'
 import {
   BILLABLE_NOW, MODEL_PRICES, PRICING_CHECKED_AT, PRICING_SOURCE, PRICING_VERSION,
@@ -35,7 +36,8 @@ import {
 } from '../src/lib/llm-pricing'
 import {
   LOCK_STALE_REPORT_MS, LOCK_WAIT_MS, LedgerLockError,
-  appendLedgerLine, ledgerPathOf, lockPathOf, readLedgerDay, readLedgerRun,
+  addOpenReservation, appendLedgerLine, clearOpenReservation, ledgerPathOf, lockPathOf,
+  openReservationsPathOf, pidAlive, readLedgerDay, readLedgerRun, readOpenReservations,
   readSettleHold, settleHoldPathOf, withLedgerLock, writeSettleHold,
 } from './lib/llm-ledger-store.mjs'
 import {
@@ -200,6 +202,7 @@ console.log('\n⑤ 요청 전 차단 — 🔴 모르면 멈춘다')
 {
   const base = {
     tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true, settleHold: null,
+    unresolved: [],
   }
   check('🔴 장부를 못 읽으면 보류한다',
     (() => { const v = judgeSpend({ ...base, limits: LIMITS(), ledgerOk: false }); return !v.ok && v.code === 'LEDGER_ERROR' })())
@@ -396,7 +399,9 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
     !readLedgerRun(dir, '2026-09-18', 'R1').ok)
 
   // 🔴 상한 미설정·잘못된 값은 보류
-  const base = { tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true, settleHold: null }
+  const base = {
+    tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true, settleHold: null, unresolved: [],
+  }
   check('🔴 회차 상한이 없으면 보류한다 — 미설정을 "무제한" 으로 읽지 않는다',
     (() => {
       const v = judgeSpend({ ...base, limits: LIMITS({ runRequestCap: null }) })
@@ -490,7 +495,7 @@ console.log('\n⑥-c 정산 기록 실패 — 🔴 예약을 보존하고 그 �
   rmSync(settleHoldPathOf(dir), { force: true })
   check('🔴 사람이 지우면 풀린다', readSettleHold(dir) === null)
 
-  const base = { tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true }
+  const base = { tally: tallyOf([]), runPaid: 0, reserve: KNOWN, ledgerOk: true, unresolved: [] }
   check('🔴 보류가 걸려 있으면 유료 요청을 보내지 않는다',
     (() => {
       const v = judgeSpend({ ...base, limits: LIMITS(), settleHold: '정산 실패' })
@@ -503,6 +508,108 @@ console.log('\n⑥-c 정산 기록 실패 — 🔴 예약을 보존하고 그 �
       })
       return !v.ok && v.code === 'SETTLE_ERROR'
     })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑥-d 열린 예약 — 🔴 요청 **전에** 남고, 끝을 적어야 사라진다')
+// ─────────────────────────────────────────────────────────
+{
+  const R = (o: Partial<OpenReservation> = {}): OpenReservation => ({
+    attemptId: 'a1', runId: 'R1', stage: 'draftGen', date: '2026-09-17',
+    startedAt: new Date('2026-09-17T00:00:00.000Z').toISOString(),
+    timeoutMs: 60_000, reservedUsd: 0.01, pid: 999, sessionId: 'S-OTHER', ...o,
+  })
+  const NOW = new Date('2026-09-17T00:00:10.000Z')
+  const ALIVE = (): boolean => true
+  const DEAD = (): boolean => false
+  const classify = (open: OpenReservation[], o: { pidAlive?: () => boolean } = {}) =>
+    classifyReservations({
+      open, now: NOW, sessionId: 'S-MINE', pid: 100, pidAlive: o.pidAlive ?? ALIVE,
+    })
+
+  check('🟢 남의 살아 있는 프로세스가 방금 남긴 예약은 **도는 중**이다 — 정상 동시 실행을 막지 않는다',
+    (() => { const c = classify([R()]); return c.inFlight.length === 1 && c.unresolved.length === 0 })())
+  check('🔴 내 세션이 남긴 예약은 확인이 필요하다 — 끝을 적지 못한 것이다',
+    (() => {
+      const c = classify([R({ sessionId: 'S-MINE' })])
+      return c.unresolved.length === 1 && c.unresolved[0]?.code === 'OWN_SESSION'
+    })())
+  check('🔴 **내 프로세스의 앞 세션**이 남긴 예약도 확인이 필요하다 — 재현된 결함이 여기였다',
+    (() => {
+      const c = classify([R({ pid: 100, sessionId: 'S-EARLIER' })])
+      return c.unresolved.length === 1 && c.unresolved[0]?.code === 'OWN_PROCESS'
+    })())
+  check('🔴 주인이 사라진 예약은 확인이 필요하다 — 예약 뒤에 죽었다',
+    (() => {
+      const c = classify([R()], { pidAlive: DEAD })
+      return c.unresolved.length === 1 && c.unresolved[0]?.code === 'OWNER_GONE'
+    })())
+  check('🔴 자기 타임아웃 + 여유보다 오래된 예약은 확인이 필요하다 — 도는 중일 수 없다',
+    (() => {
+      // 타임아웃 1초 · 여유 60초 → 그 합보다 오래된 것
+      const old = new Date(NOW.getTime() - (1_000 + RESERVATION_GRACE_MS + 1_000)).toISOString()
+      const c = classify([R({ timeoutMs: 1_000, startedAt: old })])
+      return c.unresolved.length === 1 && c.unresolved[0]?.code === 'TOO_OLD'
+    })())
+  check('🟢 타임아웃 + 여유 안쪽이면 아직 도는 중으로 본다 — 긴 요청을 함부로 막지 않는다',
+    (() => {
+      const recent = new Date(NOW.getTime() - 30_000).toISOString()
+      return classify([R({ timeoutMs: 60_000, startedAt: recent })]).inFlight.length === 1
+    })())
+  check('🔴 여유는 정산을 적을 시간만큼만 준다',
+    RESERVATION_GRACE_MS > 0 && RESERVATION_GRACE_MS <= 120_000)
+  check('🔴 시각이 깨져 있으면 도는 중으로 보지 않는다',
+    classify([R({ startedAt: '알 수 없음' })]).unresolved[0]?.code === 'TOO_OLD')
+  check('🔴 판정이 예약을 **지우지 않는다** — 복구는 사람이 한다',
+    (() => {
+      const open = [R({ sessionId: 'S-MINE' })]
+      classify(open)
+      return open.length === 1
+    })())
+  check('🔴 확인이 필요한 예약이 있으면 유료 요청을 보류한다',
+    (() => {
+      const c = classify([R({ sessionId: 'S-MINE' })])
+      const v = judgeSpend({
+        limits: LIMITS(), tally: tallyOf([]), runPaid: 0, reserve: KNOWN,
+        ledgerOk: true, settleHold: null, unresolved: c.unresolved,
+      })
+      return !v.ok && v.code === 'UNRESOLVED_RESERVATION' && /사람이 마감/.test(v.reason)
+    })())
+  check('🟢 도는 중인 예약만 있으면 막지 않는다 — 정상 동시 예약이 선다',
+    judgeSpend({
+      limits: LIMITS(), tally: tallyOf([]), runPaid: 0, reserve: KNOWN,
+      ledgerOk: true, settleHold: null, unresolved: classify([R()]).unresolved,
+    }).ok)
+
+  // 저장소
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-open-'))
+  check('🔴 없는 파일은 빈 목록이다', (() => { const r = readOpenReservations(dir); return r.ok && r.list.length === 0 })())
+  addOpenReservation(dir, R({ attemptId: 'x' }))
+  addOpenReservation(dir, R({ attemptId: 'y' }))
+  check('🔴 예약이 쌓인다', (() => { const r = readOpenReservations(dir); return r.ok && r.list.length === 2 })())
+  clearOpenReservation(dir, 'x')
+  check('🔴 끝을 적은 것만 사라진다',
+    (() => { const r = readOpenReservations(dir); return r.ok && r.list.length === 1 && r.list[0]?.attemptId === 'y' })())
+  writeFileSync(openReservationsPathOf(dir), '{ 깨진', 'utf-8')
+  check('🔴 목록을 읽지 못하면 **실패**다 — 빈 목록으로 읽지 않는다', !readOpenReservations(dir).ok)
+  writeFileSync(openReservationsPathOf(dir), '[{"attemptId":"z"}]', 'utf-8')
+  check('🔴 모양이 다른 줄을 통과시키지 않는다', !readOpenReservations(dir).ok)
+  check('🔴 살아 있는 pid 를 알아본다 — 신호를 보내지 않는다',
+    pidAlive(process.pid) && !pidAlive(2 ** 30) && !pidAlive(-1))
+
+  // 🔴 순서 — 예약은 보내기 **전에**, 지우기는 끝을 적은 **뒤에**
+  {
+    const w = readFileSync('scripts/lib/supply-llm-call.mts', 'utf-8')
+    const addAt = w.indexOf('this.io.addOpen(')
+    const sendAt = w.indexOf('const res = await callProvider(')
+    const settleWriteAt = w.indexOf('settledUsd: settled.settledUsd')
+    const clearAt = w.indexOf('this.io.clearOpen(')
+    check('🔴 예약을 남긴 **뒤에** 요청을 보낸다', addAt !== -1 && sendAt !== -1 && addAt < sendAt)
+    check('🔴 끝을 장부에 적은 **뒤에** 예약을 지운다',
+      settleWriteAt !== -1 && clearAt !== -1 && settleWriteAt < clearAt)
+    check('🔴 예약을 남기는 것도 잠금 안에서 한다',
+      w.lastIndexOf('verdict = this.io.withLock') < addAt && addAt < w.indexOf('} catch (e) {', addAt))
+  }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -627,10 +734,20 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     /** 🔴 무료 사전 계산 요청 수 — 유료와 섞지 않는다 */ counted: number
     entries: LedgerEntry[]
   }
-  /** 🔴 장부를 지운다 — 회차마다 새 하루로 본다 */
+  /**
+   * 🔴 시험 사이에 장부를 비운다 — 회차마다 새 하루로 본다.
+   *
+   * 🔴 **`.jsonl` 만 비운다.** 앞판은 디렉터리의 모든 파일을 빈 문자열로 덮었고,
+   *    그러면 `.open-reservations.json` 이 "빈 문자열" 이 되어 **JSON 이 아니게** 된다 —
+   *    모든 회차가 `LEDGER_ERROR` 로 막혀 검사 열넷이 엉뚱한 이유로 실패했다.
+   *    제어 파일은 덮지 않고 **지운다.**
+   */
   const wipeLedger = (): void => {
     if (!existsSync(ledgerDir)) return
-    for (const f of readdirSync(ledgerDir)) writeFileSync(join(ledgerDir, f), '', 'utf-8')
+    for (const f of readdirSync(ledgerDir)) {
+      if (f.endsWith('.jsonl')) writeFileSync(join(ledgerDir, f), '', 'utf-8')
+      else rmSync(join(ledgerDir, f), { force: true })
+    }
   }
   const ledgerEntries = (): LedgerEntry[] => {
     if (!existsSync(ledgerDir)) return []
@@ -937,12 +1054,59 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
     fetched.paid === before.paid && r3.errorCode === `${LEDGER_BLOCKED}:SETTLE_ERROR`)
   check('🔴 [SF] 표식이 남아 있다', existsSync(settleHoldPathOf(dir)))
 
-  // 🔴 사람이 지우면 풀린다 — 이것이 복구 조건이다
+  /**
+   * 🔴 **표식만 지워서는 풀리지 않는다** (2026-09-17 2차 보정).
+   *    끝을 적지 못한 예약이 그대로 남아 있기 때문이다 — 그것이 이번에 닫은 빈틈이다.
+   */
   rmSync(settleHoldPathOf(dir), { force: true })
   const s3 = new SupplyLlmSession({ runId: 'RF3', dir, limits: LIM })
   const r4 = await s3.call(ASK)
-  check('🔴 [SF] 사람이 표식을 지우면 다시 돈다 — 복구 조건이 사람 손이다',
-    r4.ok && fetched.paid === before.paid + 1)
+  check('🔴 [SF] 🔴 표식만 지워도 **여전히 막힌다** — 열린 예약이 남아 있다',
+    !r4.ok && r4.errorCode === `${LEDGER_BLOCKED}:UNRESOLVED_RESERVATION`
+    && fetched.paid === before.paid)
+
+  // 🔴 복구는 사람이 **마감 줄을 적는 것**이다 — 지우는 것이 아니다
+  const open = readOpenReservations(dir)
+  const openId = open.ok ? (open.list[0]?.attemptId ?? '') : ''
+  check('🔴 [SF] 열린 예약이 남아 있다 — 사람이 대조할 대상이 보인다', openId !== '')
+  const resolve = (args: readonly string[]): { code: number | null; out: string } => {
+    const r = spawnSync(
+      join(process.cwd(), 'node_modules/.bin/tsx'),
+      [join(process.cwd(), 'scripts/supply-llm-ledger-resolve.mts'), `--dir=${dir}`, ...args],
+      { encoding: 'utf-8' },
+    )
+    return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+  }
+  check('🔴 [SF] 확인했다고 밝히지 않으면 마감되지 않는다',
+    resolve([`--attempt=${openId}`]).code !== 0)
+  check('🔴 [SF] 금액을 적지 않으면 마감되지 않는다 — 기본값이 없다',
+    resolve([`--attempt=${openId}`, '--confirmed-with-provider']).code !== 0)
+  check('🔴 [SF] 목록만 볼 때는 아무것도 바꾸지 않는다',
+    (() => {
+      const r = resolve([])
+      const after = readOpenReservations(dir)
+      return r.code === 0 && after.ok && after.list.length === 1
+        && /손으로 지워 풀지 않습니다/.test(r.out)
+    })())
+  const done = resolve([`--attempt=${openId}`, '--confirmed-with-provider', '--actual-unknown'])
+  check('🔴 [SF] 사람이 제공사와 대조했다고 밝히면 마감된다', done.code === 0)
+  check('🔴 [SF] 🔴 장부를 지우지 않았다 — 앞 줄이 그대로 있다',
+    (() => {
+      const raw = readFileSync(ledgerPathOf(dir, ledgerDateOf(new Date())), 'utf-8')
+      return raw.split('\n').filter((l) => l.trim() !== '').length >= 3
+        && /"resolvedBy":"human"/.test(raw)
+    })())
+  check('🔴 [SF] 🔴 금액 미상으로 마감하면 예약이 **여력에서 계속 빠진다** — 쓴 돈이 사라지지 않는다',
+    (() => {
+      const r = readLedgerDay(ledgerPathOf(dir, ledgerDateOf(new Date())))
+      if (!r.ok) return false
+      const t = tallyOf(r.entries)
+      return t.usageUnknownUsd > 0 && t.settledUsd === 0
+    })())
+  const s5 = new SupplyLlmSession({ runId: 'RF4', dir, limits: LIM })
+  const r5 = await s5.call(ASK)
+  check('🔴 [SF] 마감한 뒤에야 다시 돈다 — 복구 조건이 사람 손이다',
+    r5.ok && fetched.paid === before.paid + 1)
 
   // 🔴 표식조차 못 쓴 경우 — 그 프로세스 안에서는 여전히 막는다
   {
@@ -955,9 +1119,115 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
       fetched.paid === mark.paid && r5.errorCode === `${LEDGER_BLOCKED}:SETTLE_ERROR`)
     check('🔴 [SF] 표식을 못 썼다는 사실을 숨기지 않는다',
       s4.tally.holdWriteFailed === 1 && /표식조차 못 쓴 것/.test(s4.describe()))
-    check('🔴 [SF] 🔴 그때는 다음 프로세스를 막지 못한다 — 이 한계를 적어 둔다',
-      readSettleHold(d2) === null
-      && /다음 프로세스는 이 보류를 못 본다/.test(readFileSync('scripts/lib/llm-ledger-store.mts', 'utf-8')))
+    /**
+     * 🔴 **표식이 없어도 다음 프로세스가 막힌다** (2026-09-17 2차 보정).
+     *    앞판은 여기서 막지 못했고, 저장 기능이 회복되면 그대로 다시 보냈다.
+     *    이제 근거가 **요청 전에 남는 예약**이라 표식 유무와 무관하다.
+     */
+    check('🔴 [SF] 표식이 없다 — 그래도 아래가 막아야 한다', readSettleHold(d2) === null)
+    const mark2 = { ...fetched }
+    const s6 = new SupplyLlmSession({ runId: 'RH2', dir: d2, limits: LIM })
+    const r6 = await s6.call(ASK)
+    check('🔴 [SF] 🔴 표식이 없어도 **새 세션이 막힌다** — 열린 예약이 근거다',
+      fetched.paid === mark2.paid
+      && r6.errorCode === `${LEDGER_BLOCKED}:UNRESOLVED_RESERVATION`)
+  }
+
+  /**
+   * 🔴 **프로세스가 예약 뒤에 그냥 끝나는 경우** — 정산도 표식도 없다.
+   *    운영이 쓰는 세션을 **진짜 자식 프로세스**에서 돌려 그 상태를 만든다.
+   */
+  {
+    const d3 = mkdtempSync(join(tmpdir(), 'ledger-die-'))
+    const probe = join(d3, 'die.mts')
+    writeFileSync(probe, [
+      "import { REAL_LEDGER_IO, SupplyLlmSession, type LedgerIo } from " +
+        `'${join(process.cwd(), 'scripts/lib/supply-llm-call.mjs')}'`,
+      "globalThis.fetch = (async (u: string | URL | Request) => (String(u).includes('/count_tokens')",
+      "  ? new Response(JSON.stringify({ input_tokens: 100 }), { status: 200, headers: { 'content-type': 'application/json' } })",
+      // 🔴 따옴표 중첩을 피한다 — prefill 뒤를 이어 쓴 모양을 코드로 만든다
+      "  : new Response(JSON.stringify({ content: [{ text: JSON.stringify({ ok: true }).slice(1) }],",
+      "      usage: { input_tokens: 11, output_tokens: 22 }, stop_reason: 'end_turn' }),",
+      "      { status: 200, headers: { 'content-type': 'application/json' } }))) as typeof globalThis.fetch",
+      "process.env.ANTHROPIC_API_KEY = 'fixture-fake-key'",
+      "// 🔴 예약은 남기고, 끝은 적지 못한 채 프로세스가 끝난다",
+      'const io: LedgerIo = { ...REAL_LEDGER_IO,',
+      "  append: (p, e) => { if (e.stage !== 'countTokens' && e.status !== 'reserved' && e.status !== 'blocked') " +
+        "{ throw new Error('x') } REAL_LEDGER_IO.append(p, e) },",
+      "  writeHold: () => { throw new Error('x') } }",
+      `await new SupplyLlmSession({ runId: 'RD1', dir: ${JSON.stringify(d3)},`,
+      "  limits: { dailyUsd: 1000, runRequestCap: 10000, headroomMultiplier: 1.5 }, io })",
+      "  .call({ stage: 'draftGen', model: 'claude-haiku-4.5', systemPrompt: 's', userPayload: '{}',",
+      '    maxOutputTokens: 1200, timeoutMs: 5000 })',
+      'process.exit(0)',
+      '',
+    ].join('\n'), 'utf-8')
+    const child = spawnSync(join(process.cwd(), 'node_modules/.bin/tsx'), [probe], { encoding: 'utf-8' })
+    const left = readOpenReservations(d3)
+    check('🔴 [SF] 자식 프로세스가 예약을 남기고 끝났다',
+      child.status === 0 && left.ok && left.list.length === 1
+      && left.list[0]?.pid !== process.pid)
+    check('🔴 [SF] 그 프로세스는 더 이상 없다', !pidAlive(left.ok ? (left.list[0]?.pid ?? -1) : -1))
+    const mark3 = { ...fetched }
+    const r7 = await new SupplyLlmSession({ runId: 'RD1', dir: d3, limits: LIM }).call(ASK)
+    check('🔴 [SF] 🔴 같은 회차 새 프로세스 — **생성 fetch 0**',
+      fetched.paid === mark3.paid && r7.errorCode === `${LEDGER_BLOCKED}:UNRESOLVED_RESERVATION`)
+    const r8 = await new SupplyLlmSession({ runId: 'RD2', dir: d3, limits: LIM }).call(ASK)
+    check('🔴 [SF] 🔴 새 회차 새 프로세스 — **생성 fetch 0**',
+      fetched.paid === mark3.paid && r8.errorCode === `${LEDGER_BLOCKED}:UNRESOLVED_RESERVATION`)
+  }
+
+  /**
+   * 🔴 **열린 예약 목록을 읽지 못하면 보내지 않는다.**
+   *    이 목록이 이제 차단의 근거다 — 못 읽는데 보내면 근거 없이 보내는 것이다.
+   *    (변이 시험 P4 가 이 검사의 부재를 찾아냈다.)
+   */
+  {
+    const d5 = mkdtempSync(join(tmpdir(), 'ledger-openbad-'))
+    for (const [label, body] of [
+      ['JSON 이 아니다', '{ 깨진'],
+      ['배열이 아니다', '{"a":1}'],
+      ['모르는 줄이 있다', '[{"attemptId":"z"}]'],
+      ['빈 문자열이다', ''],
+    ] as const) {
+      writeFileSync(openReservationsPathOf(d5), body, 'utf-8')
+      const mark = { ...fetched }
+      const r = await new SupplyLlmSession({ runId: 'RB', dir: d5, limits: LIM }).call(ASK)
+      check(`🔴 [SF] 열린 예약 목록이 ${label} → **생성 fetch 0**`,
+        fetched.paid === mark.paid && r.errorCode === `${LEDGER_BLOCKED}:LEDGER_ERROR`)
+      /**
+       * 🔴 **게이트가 목록을 보고 막았는지**까지 본다 (변이 시험 P4 에서 배웠다).
+       *
+       *    목록을 못 읽으면 뒤이은 예약 쓰기도 같은 파일을 읽다 던진다 — 그래서
+       *    "호출 0" 만 보면 **게이트가 목록을 아예 안 봐도 통과한다.**
+       *    사유가 `읽지 못했다` 인지 `적지 못했다` 인지로 그 둘을 가른다.
+       */
+      check(`🔴 [SF] 그때 사유가 **읽지 못했다** 다 — 쓰다 넘어진 것이 아니다`,
+        /읽지 못했다/.test(r.errorMessage ?? '') && !/적지 못했다/.test(r.errorMessage ?? ''))
+    }
+    rmSync(openReservationsPathOf(d5), { force: true })
+    const mark = { ...fetched }
+    const r = await new SupplyLlmSession({ runId: 'RB', dir: d5, limits: LIM }).call(ASK)
+    check('🟢 [SF] 목록이 없는 것은 정상이다 — 빈 목록으로 시작한다',
+      r.ok && fetched.paid === mark.paid + 1)
+  }
+
+  /**
+   * 🔴 **정상 동시 예약은 막지 않는다.** 살아 있는 다른 프로세스가 방금 남긴 예약은
+   *    도는 중이다 — 이것까지 막으면 공급이 서 버린다.
+   */
+  {
+    const d4 = mkdtempSync(join(tmpdir(), 'ledger-conc-'))
+    addOpenReservation(d4, {
+      attemptId: 'other', runId: 'RX', stage: 'draftGen', date: ledgerDateOf(new Date()),
+      startedAt: new Date().toISOString(), timeoutMs: 60_000, reservedUsd: 0.01,
+      // 🔴 **살아 있는 다른 프로세스** — 이 검사의 부모(npm)가 그 자리다
+      pid: process.ppid, sessionId: 'S-OTHER',
+    })
+    const mark4 = { ...fetched }
+    const r9 = await new SupplyLlmSession({ runId: 'RC1', dir: d4, limits: LIM }).call(ASK)
+    check('🟢 [SF] 살아 있는 다른 프로세스의 방금 예약은 막지 않는다 — 정상 동시 예약이 선다',
+      r9.ok && fetched.paid === mark4.paid + 1 && pidAlive(process.ppid))
   }
 
   globalThis.fetch = realFetch

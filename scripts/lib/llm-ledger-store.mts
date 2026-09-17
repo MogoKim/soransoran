@@ -18,7 +18,8 @@
  * 🔴 **원문·프롬프트·응답 본문·API 키·개인정보를 쓰지 않는다.** 줄의 모양이 그것을 막는다.
  */
 import {
-  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync,
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync,
+  statSync, writeSync,
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -26,7 +27,7 @@ import { join } from 'node:path'
 
 import {
   LEDGER_STAGES, previousLedgerDate,
-  type LedgerEntry, type LedgerStage, type LedgerStatus,
+  type LedgerEntry, type LedgerStage, type LedgerStatus, type OpenReservation,
 } from '../../src/lib/llm-ledger'
 
 /** 🔴 운영 자산과 같은 자리 규칙을 따른다 — `$HOME` 을 존중하므로 시험은 임시 HOME 을 준다 */
@@ -276,4 +277,109 @@ export function readLedgerRun(dir: string, date: string, runId: string): LedgerR
     for (const e of r.entries) if (e.runId === runId) out.push(e)
   }
   return { ok: true, entries: out }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **열린 예약 목록** (2026-09-17 2차 보정)
+//
+//   `SETTLE_ERROR` 는 **사후** 표식에 기댄다. 그 표식 쓰기까지 실패하면
+//   다음 프로세스는 아무것도 못 보고 그대로 다시 보냈다 — 실측으로 재현했다.
+//
+//   그래서 **요청보다 먼저** 남는 것을 근거로 쓴다. 이 파일은 잠금 안에서
+//   요청 직전에 늘고, 끝을 적을 때 준다. 끝을 못 적으면 남는다.
+//
+//   🔴 왜 장부 JSONL 을 뒤지지 않는가 — 요청마다 1년치 파일을 읽을 수 없다.
+//      이 파일은 **지금 열린 것**만 담아 작고, 읽는 값이 일정하다.
+//   🔴 이 파일을 지워 복구하지 않는다. 사람이 마감 줄을 적어야 풀린다.
+// ─────────────────────────────────────────────────────────
+
+export const OPEN_RESERVATIONS_FILE = '.open-reservations.json'
+
+export function openReservationsPathOf(dir: string): string {
+  return join(dir, OPEN_RESERVATIONS_FILE)
+}
+
+export type OpenRead =
+  | { ok: true; list: OpenReservation[] }
+  /** 🔴 읽지 못했다 — 게이트는 이때 유료 요청을 보류한다 */
+  | { ok: false; reason: string }
+
+function asReservation(v: unknown): OpenReservation | null {
+  if (typeof v !== 'object' || v === null) return null
+  const o = v as Record<string, unknown>
+  if (typeof o.attemptId !== 'string' || o.attemptId === '') return null
+  if (typeof o.runId !== 'string' || typeof o.sessionId !== 'string') return null
+  if (!LEDGER_STAGES.includes(o.stage as LedgerStage)) return null
+  if (typeof o.startedAt !== 'string' || typeof o.date !== 'string') return null
+  if (typeof o.timeoutMs !== 'number' || typeof o.pid !== 'number') return null
+  if (o.reservedUsd !== null && typeof o.reservedUsd !== 'number') return null
+  return o as unknown as OpenReservation
+}
+
+/** 🔴 읽지 못하거나 모양이 다르면 **실패**다. 빈 목록으로 읽지 않는다 */
+export function readOpenReservations(dir: string): OpenRead {
+  const path = openReservationsPathOf(dir)
+  if (!existsSync(path)) return { ok: true, list: [] }
+  let raw: string
+  try { raw = readFileSync(path, 'utf-8') } catch {
+    return { ok: false, reason: `열린 예약 목록을 읽지 못했다 — ${path}` }
+  }
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch {
+    return { ok: false, reason: `열린 예약 목록이 JSON 이 아니다 — ${path}` }
+  }
+  if (!Array.isArray(parsed)) return { ok: false, reason: `열린 예약 목록이 배열이 아니다 — ${path}` }
+  const list: OpenReservation[] = []
+  for (const v of parsed) {
+    const r = asReservation(v)
+    if (r === null) return { ok: false, reason: `열린 예약 목록에 모르는 줄이 있다 — ${path}` }
+    list.push(r)
+  }
+  return { ok: true, list }
+}
+
+/** 🔴 임시 파일에 쓰고 rename — 반쯤 쓰인 목록을 다른 회차가 읽지 않게 */
+function writeOpenReservations(dir: string, list: readonly OpenReservation[]): void {
+  const path = openReservationsPathOf(dir)
+  const tmp = `${path}.tmp-${process.pid}`
+  const fd = openSync(tmp, 'w', 0o600)
+  try {
+    writeSync(fd, `${JSON.stringify(list, null, 2)}\n`)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  renameSync(tmp, path)
+}
+
+/**
+ * 예약을 더한다 — 🔴 **요청을 보내기 직전, 잠금 안에서.**
+ *    여기서 실패하면 요청을 보내지 않는다. 적지 못할 것을 보내지 않는다.
+ */
+export function addOpenReservation(dir: string, r: OpenReservation): void {
+  const cur = readOpenReservations(dir)
+  if (!cur.ok) throw new Error(cur.reason)
+  writeOpenReservations(dir, [...cur.list.filter((x) => x.attemptId !== r.attemptId), r])
+}
+
+/**
+ * 예약을 지운다 — 🔴 **끝을 장부에 적은 뒤에만.**
+ *    순서를 바꾸면 끝을 못 적었는데 목록에서 사라져 아무도 모르게 된다.
+ */
+export function clearOpenReservation(dir: string, attemptId: string): void {
+  const cur = readOpenReservations(dir)
+  if (!cur.ok) throw new Error(cur.reason)
+  if (!cur.list.some((x) => x.attemptId === attemptId)) return
+  writeOpenReservations(dir, cur.list.filter((x) => x.attemptId !== attemptId))
+}
+
+/**
+ * 그 프로세스가 살아 있는가 — 🔴 **신호를 보내지 않는다.** 존재만 본다.
+ *
+ * 🔴 pid 는 재사용된다. 그래서 이것 하나로 판단하지 않는다 —
+ *    `classifyReservations` 가 나이도 함께 본다.
+ */
+export function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try { process.kill(pid, 0); return true } catch { return false }
 }

@@ -19,14 +19,16 @@
 import { randomUUID } from 'node:crypto'
 
 import {
-  judgeSettle, judgeSpend, ledgerDateOf, runPaidCountOf, tallyOf,
+  classifyReservations, judgeSettle, judgeSpend, ledgerDateOf, runPaidCountOf, tallyOf,
   type BlockCode, type BudgetLimits, type LedgerEntry, type LedgerStage,
+  type OpenReservation,
 } from '../../src/lib/llm-ledger'
 import { PRICING_VERSION, costOf, reserveOf } from '../../src/lib/llm-pricing'
 import {
-  appendLedgerLine, defaultLedgerDir, ledgerPathOf, readLedgerDay, readLedgerRun,
+  addOpenReservation, appendLedgerLine, clearOpenReservation, defaultLedgerDir, ledgerPathOf,
+  openReservationsPathOf, pidAlive, readLedgerDay, readLedgerRun, readOpenReservations,
   readSettleHold, settleHoldPathOf, withLedgerLock,
-  type LedgerRead, type SettleHold,
+  type LedgerRead, type OpenRead, type SettleHold,
 } from './llm-ledger-store.mjs'
 import {
   callProvider, countInputTokens, type LlmResponse, type ProviderModel,
@@ -81,6 +83,11 @@ export type LedgerIo = {
   append: (path: string, entry: LedgerEntry) => void
   readHold: (dir: string) => string | null
   writeHold: (dir: string, hold: SettleHold) => void
+  /** 🔴 요청 **전에** 남는 예약 목록 — 사후 표식이 실패해도 이것이 남는다 */
+  readOpen: (dir: string) => OpenRead
+  addOpen: (dir: string, r: OpenReservation) => void
+  clearOpen: (dir: string, attemptId: string) => void
+  pidAlive: (pid: number) => boolean
 }
 
 export const REAL_LEDGER_IO: LedgerIo = {
@@ -90,6 +97,10 @@ export const REAL_LEDGER_IO: LedgerIo = {
   append: appendLedgerLine,
   readHold: readSettleHold,
   writeHold: writeSettleHold,
+  readOpen: readOpenReservations,
+  addOpen: addOpenReservation,
+  clearOpen: clearOpenReservation,
+  pidAlive,
 }
 
 export type SupplyCallInput = {
@@ -147,6 +158,8 @@ export class SupplyLlmSession {
   readonly limits: BudgetLimits
   private readonly now: () => Date
   private readonly io: LedgerIo
+  /** 🔴 이 세션의 표식 — pid 가 재사용돼도 갈린다 */
+  private readonly sessionId = randomUUID()
   /**
    * 🔴 **정산을 못 적은 순간부터 이 회차의 유료 요청을 멈춘다.**
    *    파일 표식(`settleHoldPathOf`)과 **둘 다** 둔다 — 파일은 재시작을 넘고,
@@ -267,14 +280,25 @@ export class SupplyLlmSession {
          *    어제 파일도 함께 읽으므로 자정을 넘어도 상한이 초기화되지 않는다.
          */
         const runRead = this.io.readRun(this.dir, date, this.runId)
+        /**
+         * 🔴 **끝을 기록하지 못한 예약이 있는가** (2026-09-17 2차 보정).
+         *    사후 표식이 없어도 이것만으로 막힌다 — 표식 쓰기까지 실패한 경우를 덮는다.
+         */
+        const openRead = this.io.readOpen(this.dir)
+        const split = classifyReservations({
+          open: openRead.ok ? openRead.list : [],
+          now: startedAt, sessionId: this.sessionId, pid: process.pid, pidAlive: this.io.pidAlive,
+        })
         const v = judgeSpend({
           limits: this.limits,
           tally: read.ok ? tallyOf(read.entries) : tallyOf([]),
           runPaid: runRead.ok ? runPaidCountOf(runRead.entries, this.runId) : 0,
           reserve,
-          ledgerOk: read.ok && runRead.ok,
+          // 🔴 열린 예약 목록을 못 읽어도 보류다 — 모르면 멈춘다
+          ledgerOk: read.ok && runRead.ok && openRead.ok,
           // 🔴 보류 표식도 **잠금 안에서** 본다. 밖에서 보면 그 사이에 걸릴 수 있다
           settleHold: this.io.readHold(this.dir),
+          unresolved: split.unresolved,
         })
         this.write(path, {
           ...this.base(attemptId, input.stage, input, startedAt, seq),
@@ -285,6 +309,17 @@ export class SupplyLlmSession {
           endedAt: v.ok ? null : this.now().toISOString(),
           errorCode: v.ok ? null : `${LEDGER_BLOCKED}:${v.code}`,
         })
+        /**
+         * 🔴 **예약을 남기고 나서야 보낸다.** 이 쓰기가 실패하면 `withLock` 이 던지고
+         *    요청은 나가지 않는다 — 적지 못할 것을 보내지 않는다.
+         */
+        if (v.ok) {
+          this.io.addOpen(this.dir, {
+            attemptId, runId: this.runId, stage: input.stage, date,
+            startedAt: startedAt.toISOString(), timeoutMs: input.timeoutMs,
+            reservedUsd: v.reservedUsd, pid: process.pid, sessionId: this.sessionId,
+          })
+        }
         return v
       })
     } catch (e) {
@@ -341,6 +376,11 @@ export class SupplyLlmSession {
           endedAt: this.now().toISOString(),
           errorCode: res.errorCode,
         })
+        /**
+         * 🔴 **순서를 지킨다** — 끝을 장부에 적은 뒤에 예약을 지운다.
+         *    거꾸로 하면 끝을 못 적었는데 목록에서 사라져 아무도 모르게 된다.
+         */
+        this.io.clearOpen(this.dir, attemptId)
       })
     } catch (e) {
       /**
@@ -354,7 +394,9 @@ export class SupplyLlmSession {
        */
       this.t.usageUnknown += 1
       const why = `정산을 장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`
-      this.settleFailed = `${why} · 🔴 ${settleHoldPathOf(this.dir)} 을 사람이 확인하고 지우면 풀린다`
+      this.settleFailed = `${why}`
+        + ` · 🔴 예약 ${attemptId} 가 ${openReservationsPathOf(this.dir)} 에 열린 채로 남는다`
+        + ' · 제공사 사용량과 대조한 뒤 `npm run supply:ledger-resolve` 로 사람이 마감한다'
       this.t.settleHeld += 1
       try {
         this.io.writeHold(this.dir, {

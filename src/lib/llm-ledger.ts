@@ -81,6 +81,16 @@ export type BlockCode =
    *    그래서 그 뒤의 유료 요청을 멈춘다. 사람이 제공사 사용량과 대조한 뒤 푼다.
    */
   | 'SETTLE_ERROR'
+  /**
+   * 🔴 **끝을 기록하지 못한 요청이 남아 있다** (2026-09-17 2차 보정).
+   *
+   *    `SETTLE_ERROR` 는 **사후** 표식에 기댄다. 그 표식 쓰기까지 실패하면
+   *    다음 프로세스는 아무것도 못 보고 그대로 다시 보냈다(실측 재현).
+   *    그래서 **요청 전에 남긴 예약**을 근거로 쓴다 — 예약은 요청보다 먼저,
+   *    잠금 안에서 파일에 적힌다. 끝을 적지 못하면 그 예약이 그대로 남고,
+   *    다음 프로세스가 그것을 본다. 저장 기능이 회복돼도 마찬가지다.
+   */
+  | 'UNRESOLVED_RESERVATION'
 
 /**
  * 장부 한 줄 — 🔴 **이 모양이 계약이다.**
@@ -122,6 +132,11 @@ export type LedgerEntry = {
   endedAt: string | null
   /** 제공사 오류 코드. 본문은 담지 않는다 */
   errorCode: string | null
+  /**
+   * 🔴 사람이 제공사 사용량과 대조해 **직접 마감한 줄**이면 `'human'`.
+   *    코드가 스스로 이 값을 쓰지 않는다 — 복구가 자동으로 일어나면 통제가 아니다.
+   */
+  resolvedBy?: 'human' | null
 }
 
 /** 하루치 집계 — 🔴 예약·정산·미정산을 섞지 않는다 */
@@ -190,6 +205,124 @@ export function runPaidCountOf(entries: readonly LedgerEntry[], runId: string): 
   return n
 }
 
+/**
+ * 🔴 **요청 전에 남기는 예약 상태** (2026-09-17 2차 보정).
+ *
+ *    장부 JSONL 이 감사 기록이라면 이것은 **작업 중 목록**이다.
+ *    요청을 보내기 직전 잠금 안에서 더하고, 끝을 적을 때 지운다.
+ *    끝을 적지 못하면 남는다 — 그 남은 것이 다음 프로세스를 막는 근거다.
+ *
+ * 🔴 본문·프롬프트·응답이 들어갈 칸이 없다. 누가·언제·얼마·얼마나 기다리는가뿐이다.
+ */
+export type OpenReservation = {
+  attemptId: string
+  runId: string
+  stage: LedgerStage
+  /** 예약이 적힌 장부 날짜 — 사람이 그 파일을 열어 대조한다 */
+  date: string
+  startedAt: string
+  /** 🔴 이 요청의 **자기 타임아웃**. 이보다 오래 살아 있을 수 없다 */
+  timeoutMs: number
+  reservedUsd: number | null
+  /** 보낸 프로세스 */
+  pid: number
+  /** 보낸 세션 — pid 가 재사용돼도 갈린다 */
+  sessionId: string
+}
+
+/**
+ * 🔴 예약이 "아직 도는 중" 인지 판단할 때 주는 여유.
+ *    요청은 자기 타임아웃보다 오래 살 수 없고, 거기에 정산을 적을 시간을 더한다.
+ */
+export const RESERVATION_GRACE_MS = 60_000
+
+/** 왜 복구가 필요한가 — 🔴 사람이 읽고 무엇을 확인할지 알 수 있어야 한다 */
+export type ReservationVerdict = {
+  reservation: OpenReservation
+  code: 'OWN_SESSION' | 'OWN_PROCESS' | 'OWNER_GONE' | 'TOO_OLD'
+  reason: string
+}
+
+/**
+ * 열린 예약을 **정상 실행 중** 과 **복구 확인 필요** 로 가른다.
+ *
+ * 🔴 이 구분이 없으면 둘 중 하나가 된다 —
+ *    전부 통과시키면 재시작 우회를 못 막고,
+ *    전부 막으면 **정상 동시 실행**이 서로를 막아 공급이 서지 않는다.
+ *
+ * 🔴 **지우지 않는다.** 여기서 하는 일은 판단뿐이다. 복구는 사람이 한다.
+ */
+export function classifyReservations(input: {
+  open: readonly OpenReservation[]
+  now: Date
+  /** 지금 판정하는 세션 */
+  sessionId: string
+  /** 지금 판정하는 프로세스 */
+  pid: number
+  /** 그 pid 가 살아 있는가 — 주입한다(플랫폼 호출을 판정에 넣지 않는다) */
+  pidAlive: (pid: number) => boolean
+  graceMs?: number
+}): { inFlight: OpenReservation[]; unresolved: ReservationVerdict[] } {
+  const grace = input.graceMs ?? RESERVATION_GRACE_MS
+  const inFlight: OpenReservation[] = []
+  const unresolved: ReservationVerdict[] = []
+  for (const r of input.open) {
+    /**
+     * 🔴 **내 세션이 남긴 예약** — 이 함수는 요청을 보내기 **전에** 돈다.
+     *    내 앞 요청은 이미 끝났으므로, 남아 있다는 것은 끝을 적지 못했다는 뜻이다.
+     */
+    if (r.sessionId === input.sessionId) {
+      unresolved.push({
+        reservation: r, code: 'OWN_SESSION',
+        reason: '이 회차가 보낸 요청의 끝을 장부에 적지 못했다',
+      })
+      continue
+    }
+    /**
+     * 🔴 **내 프로세스가 남긴, 내 세션이 아닌 예약** (2026-09-17 재현 뒤 추가).
+     *
+     *    공급 회차는 한 프로세스에서 **한 세션이 차례로** 요청을 보낸다.
+     *    그러니 같은 프로세스의 다른 세션이 남긴 예약은 **지금 도는 중일 수 없다** —
+     *    앞 세션이 끝을 적지 못하고 넘어간 것이다.
+     *
+     *    이 규칙이 없으면 `pidAlive` 가 참이고 예약이 아직 젊어서
+     *    **같은 프로세스의 새 세션이 그대로 다시 보낸다**(실측 재현).
+     *
+     * 🔴 한 프로세스에서 세션을 둘 동시에 돌리면 서로를 막는다. 공급은 그렇게 돌지 않는다.
+     */
+    if (r.pid === input.pid) {
+      unresolved.push({
+        reservation: r, code: 'OWN_PROCESS',
+        reason: '이 프로세스의 앞 세션이 남긴 예약이다 — 끝이 기록되지 않았다',
+      })
+      continue
+    }
+    // 🔴 주인이 사라졌다 — 예약 뒤에 죽은 것이다. 결과를 아무도 모른다
+    if (!input.pidAlive(r.pid)) {
+      unresolved.push({
+        reservation: r, code: 'OWNER_GONE',
+        reason: `예약을 남긴 프로세스(pid ${r.pid})가 없다 — 요청 결과가 기록되지 않았다`,
+      })
+      continue
+    }
+    /**
+     * 🔴 자기 타임아웃 + 여유보다 오래됐다 — **아직 도는 중일 수 없다.**
+     *    시각으로 판단하지만 여기서 하는 일은 **막는 것**이다. 잠금처럼 빼앗지 않는다.
+     */
+    const age = input.now.getTime() - Date.parse(r.startedAt)
+    if (!Number.isFinite(age) || age > r.timeoutMs + grace) {
+      unresolved.push({
+        reservation: r, code: 'TOO_OLD',
+        reason: `예약이 ${Math.round((Number.isFinite(age) ? age : 0) / 1000)}초째 열려 있다`
+          + ` — 이 요청의 타임아웃(${r.timeoutMs}ms)보다 오래됐다`,
+      })
+      continue
+    }
+    inFlight.push(r)
+  }
+  return { inFlight, unresolved }
+}
+
 /** 🔴 운영 값은 코드가 정하지 않는다. 호출부가 넘긴다 */
 export type BudgetLimits = {
   /** 하루 예산(USD). 🔴 미설정이면 null — 그때는 유료 요청을 보류한다 */
@@ -235,12 +368,27 @@ export function judgeSpend(input: {
    *    이것은 **파일로 남아 재시작을 넘긴다** — 메모리 플래그였다면 다시 뜨는 것만으로 풀린다.
    */
   settleHold: string | null
+  /**
+   * 🔴 **끝을 기록하지 못한 예약들.** `classifyReservations` 가 가른 것을 그대로 받는다.
+   *    사후 표식(`settleHold`)이 없어도 이것만으로 막힌다 — 표식 쓰기까지 실패한
+   *    경우를 덮는 자리다.
+   */
+  unresolved: readonly ReservationVerdict[]
 }): GateVerdict {
   if (!input.ledgerOk) {
     return { ok: false, code: 'LEDGER_ERROR', reason: '장부를 읽지 못했다 — 유료 요청을 보류한다' }
   }
   if (input.settleHold !== null) {
     return { ok: false, code: 'SETTLE_ERROR', reason: input.settleHold }
+  }
+  if (input.unresolved.length > 0) {
+    const first = input.unresolved[0]!
+    return {
+      ok: false, code: 'UNRESOLVED_RESERVATION',
+      reason: `끝을 기록하지 못한 요청이 ${input.unresolved.length}건 있다`
+        + ` — ${first.reservation.attemptId} (${first.code}) ${first.reason}`
+        + ' · 🔴 제공사 사용량과 대조한 뒤 사람이 마감해야 풀린다',
+    }
   }
   if (input.tally.overruns > 0) {
     return {
