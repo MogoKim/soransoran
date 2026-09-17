@@ -552,6 +552,15 @@ jobs:
       - name: 원문 게시 시각 전달 (수집 → thin → adapt → 후보)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run check:source-times
+      # 검수가 **무엇을 읽고 썼는지** 비교할 근거를 받는가.
+      #
+      # 🔴 앞판은 초안만 보내면서 `genericWithoutSourceAngle` 을 물었다 —
+      #    비교 대상 없이 비교를 시켰다. 실측 4건이 전부 0.95~0.98 로 통과했다.
+      #    나간 요청 본문을 값으로 본다. 가짜 provider · 임시 HOME · 네트워크 0.
+      #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
+      - name: 검수 소재 근거 (요청 본문 · 나이 검수 분리 · 캐시 정합)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run check:quality-ground
 
       # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
       #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —

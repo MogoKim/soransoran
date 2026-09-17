@@ -59,10 +59,22 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json' },
 })
 
-globalThis.fetch = async (url) => {
+/**
+ * 🔴 **보낸 요청 본문을 따로 남긴다** (2026-09-17 추가).
+ *    "무엇이 실려 나갔는가" 를 검사가 값으로 볼 수 있어야 한다 —
+ *    프롬프트·payload 배선은 주석이나 정규식이 아니라 **나간 요청**이 증거다.
+ *    🔴 시험 전용이다. 운영 경로는 이 파일을 import 하지 않는다.
+ */
+const BODY_LOG = process.env.FAKE_PROVIDER_BODY_LOG ?? ''
+
+globalThis.fetch = async (url, init) => {
   const u = String(url)
   const isCount = u.includes('/count_tokens')
   if (LOG !== '') appendFileSync(LOG, `${isCount ? 'count' : 'paid'}\t${u}\n`)
+  if (BODY_LOG !== '' && !isCount) {
+    // 🔴 한 줄 JSON 으로 남긴다 — 검사가 줄 단위로 읽는다
+    appendFileSync(BODY_LOG, `${String(init?.body ?? '{}')}\n`)
+  }
 
   if (isCount) {
     if (MODE === 'count-fail') return json({ error: 'fixture' }, 500)
