@@ -32,8 +32,10 @@
  *   node scripts/magazine-auto-register-run.mjs --notify-send  Slack 실제 발송까지
  */
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { composeLedger, formatLedger, linkResult } from './lib/magazine-ledger.mjs'
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
 import { readHandoff, waitForProducer } from './lib/magazine-handoff.mjs'
 import { PRODUCER_LOCK_PATH, defaultPidAlive, readLock } from './lib/magazine-auto-lock.mjs'
@@ -62,7 +64,15 @@ const write = passthrough.includes('--write')
  *    plist 에 `--notify-send` 가 빠져도 여기서 붙는다 — 설정 한 줄에 기대지 않는다.
  */
 const notifyFlag = write ? '--notify-send' : '--notify'
-const args = [READY, ...(write ? passthrough : ['--dry-run', ...passthrough]), notifyFlag]
+/**
+ * 🔴 **이 회차의 식별자** (2026-09-17).
+ *    결과 파일은 날짜별 한 칸이라, 식별자 없이는 **앞 회차가 쓴 성공 파일**을
+ *    이번 실적으로 읽는다. 자식들이 이 값을 찍고, 아래에서 그것을 확인한다.
+ */
+const RUN_ID = `${new Date(Date.now() + 9 * 3600 * 1000).toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${process.pid}`
+line(`회차 식별자: ${RUN_ID}`)
+
+const args = [READY, ...(write ? passthrough : ['--dry-run', ...passthrough]), notifyFlag, '--run-id', RUN_ID]
 
 line(`매거진 자동 레인 시작${write ? '' : ' (dry-run)'}`)
 
@@ -137,10 +147,38 @@ if (write && passthrough.includes('--merge')) {
    */
   if (code !== 0) line(`회차에 막힌 후보가 있다 (종료 코드 ${code}) — 정상 PR 은 독립으로 검증한다`)
 
-  const m = spawnSync(NODE, [MERGE, '--apply', '--notify-send'], { cwd: ROOT, stdio: 'inherit' })
+  const m = spawnSync(NODE, [MERGE, '--apply', '--notify-send', '--run-id', RUN_ID], { cwd: ROOT, stdio: 'inherit' })
   if (m.error) { line(`자동 병합을 띄우지 못했다 (${m.error.code ?? m.error.name})`); finalCode = Math.max(finalCode, 1) }
   else if (m.status !== 0) { line(`자동 병합이 막혔다 (종료 코드 ${m.status})`); finalCode = Math.max(finalCode, m.status ?? 1) }
-  else line('자동 병합 완료')
+
+  /**
+   * 🔴 **종료 코드 0 을 "자동 병합 완료" 로 옮겨 적지 않는다** (2026-09-17).
+   *
+   *    9/17 회차가 정확히 그랬다 — 병합기는 "자동 PR 이 없다 — 할 것이 없다" 고
+   *    정직하게 적고 0 으로 끝났는데, 이 자리가 그것을 "완료" 로 바꿔 적었다.
+   *    등록 0 · PR 0 · 병합 0 인 회차가 로그에서는 성공처럼 보였다.
+   *
+   *    무인 운영에서 로그는 유일한 감시 수단이다. 실적을 단계별로 적는다.
+   */
+  const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')) } catch { return null } }
+  const date = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+  const runDir = join(ROOT, 'drafts', 'magazine', '_runs', date)
+
+  // 🔴 **이번 회차 것인지 확인하고서야 읽는다.** 앞 회차 파일·자식 실패·손상은 전부 "모르는 것" 이다.
+  const regLink = linkResult({ runId: RUN_ID, result: readJson(join(runDir, 'auto-register.json')), label: '등록' })
+  const mergeLink = linkResult({ runId: RUN_ID, result: readJson(join(runDir, 'auto-merge.json')), label: '병합' })
+  for (const l of [regLink, mergeLink]) if (!l.ok) line(`🔴 ${l.code}: ${l.message}`)
+
+  const ledger = composeLedger({ register: regLink.result, merge: mergeLink.result })
+  for (const l of formatLedger(ledger)) line(l)
+  // 🔴 "완료" 는 실제로 공급됐을 때만 쓴다
+  if (!ledger.supplied) {
+    line(!regLink.ok || !mergeLink.ok
+      ? '🔴 이번 회차 결과를 확인하지 못했다 — 공급 성공으로 세지 않는다'
+      : '🔴 이 회차는 콘텐츠 공급 0건이다 — 종료 코드 0 은 "할 일이 없었다" 는 뜻이다')
+    // 🔴 결과를 못 읽은 것은 운영 실패다. 조용히 0 으로 끝내지 않는다.
+    if (!regLink.ok || !mergeLink.ok) finalCode = Math.max(finalCode, 1)
+  }
 
   // 🔴 회차의 부분 실패는 병합 성공이 덮지 않는다 — 둘 중 나쁜 쪽이 남는다
   if (code !== 0) line(`회차 판정은 그대로 ${code} 다 (막힌 후보를 숨기지 않는다)`)

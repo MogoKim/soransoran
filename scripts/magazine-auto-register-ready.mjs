@@ -36,7 +36,7 @@
  * 종료 코드: BLOCKED 가 있으면 1, 아니면 0
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadQueue, loadArticles, DRAFTS_DIR } from './lib/magazine-load.mjs'
@@ -170,18 +170,70 @@ function slugsFromRun(date) {
   }
 }
 
-/** 원고가 바뀌었는지 보는 값 — 사람이 고치면 격리가 즉시 풀린다 */
+/**
+ * 원고가 바뀌었는지 보는 값 — 사람이 고치면 격리가 즉시 풀린다.
+ *
+ * 🔴 **`draft.md` 를 본다. `article-draft.ts` 가 아니다** (2026-09-17 실측).
+ *    `article-draft.ts` 는 **회차마다 자동 변환이 다시 만드는 산출물**이다.
+ *    그것을 지문으로 쓰면 내용이 그대로여도 매 회차 "바뀌었다" 가 되고,
+ *    실패 횟수가 1 로 초기화돼 격리가 영원히 발동하지 않는다.
+ *    실제로 그래서 같은 후보 둘이 이틀 연속 실패하고도 attempts=1 이었다.
+ *
+ *    `draft.md` 는 **사람이나 ChatGPT 가 쓴 입력**이다. 그것이 바뀌어야
+ *    "고쳐졌다" 이고, 그때만 격리가 풀려야 한다.
+ *
+ * 🔴 stat 이 아니라 내용을 읽는다. 시각은 지문에 들어가지 않는다.
+ */
 function draftFingerprint(slug) {
-  try {
-    const s = statSync(paths(slug).articleTs)
-    return fingerprintOf({ size: s.size, mtimeMs: s.mtimeMs })
-  } catch {
+  const p = paths(slug)
+  // 입력 정본이 우선이다. 없을 때만 산출물로 물러선다.
+  for (const file of [p.draftMd, p.articleTs]) {
     try {
-      const s = statSync(paths(slug).draftMd)
-      return fingerprintOf({ size: s.size, mtimeMs: s.mtimeMs })
-    } catch { return null }
+      const fp = fingerprintOf(readFileSync(file, 'utf8'))
+      if (fp) return fp
+    } catch { /* 다음 후보 파일 */ }
   }
+  return null
 }
+
+/**
+ * 한 회차의 처리 예산.
+ *
+ * ─────────────────────────────────────────────────────────
+ * 🔴 **실패 후보가 정상 후보를 굶겼다** (2026-09-17 실측).
+ *
+ *    옛 판은 `eligible.slice(0, 3)` 이었다. 앞의 3건이 전부 막히면 그 회차는
+ *    등록 0건으로 끝난다 — 뒤에 멀쩡한 후보가 6건 있어도 손대지 않는다.
+ *    실제로 9/17 회차는 gate 통과 9건 중 3건만 보고 셋 다 막혀 0건으로 끝났다.
+ *    격리 지문 결함까지 겹쳐 **같은 세 후보가 매일 앞자리를 차지했다.**
+ *
+ * 🔴 **그래서 예산을 둘로 나눈다.**
+ *      등록 예산  `limit`    — 이만큼 **등록되면** 멈춘다 (하루 공급량)
+ *      시도 상한  `ceiling`  — 이만큼 **시도하면** 멈춘다 (성공·실패 무관)
+ *
+ * 🔴 **상한은 반드시 유한하다.** 없으면 막힌 후보 수십 건을 매일 변환하며
+ *    ChatGPT·파일 쓰기를 태운다. 그것은 무한 재시도와 같다.
+ *    재시도가 아니라 **탐색**이라는 점이 중요하다 — 같은 후보를 다시 돌리지 않는다.
+ *    한 번 막힌 후보는 격리가 세고, 두 번이면 7일 비켜 준다.
+ *
+ * @returns {{stop:boolean, code:string, message:string}}
+ */
+export function judgeBudget({ registered, attempted, limit, ceiling }) {
+  if (registered >= limit) {
+    return { stop: true, code: 'BUDGET_MET', message: `등록 ${registered}건 — 오늘 예산(${limit})을 채웠다` }
+  }
+  if (attempted >= ceiling) {
+    return { stop: true, code: 'ATTEMPT_CEILING', message: `${attempted}건을 시도했다 — 상한(${ceiling})에서 멈춘다. 재시도하지 않는다` }
+  }
+  return { stop: false, code: 'CONTINUE', message: '' }
+}
+
+/**
+ * 시도 상한의 기본값.
+ * 🔴 등록 예산의 3배 · 최대 9. 하루에 후보 9건을 넘겨 보지 않는다.
+ */
+export const ATTEMPT_CEILING_MAX = 9
+export const ceilingFor = (limit) => Math.min(ATTEMPT_CEILING_MAX, Math.max(limit, limit * 3))
 
 /** 자동 레인 후보 — gate 를 통과하고 brief 가 이미 있는 것만 */
 export function scan({ runDate = null } = {}) {
@@ -302,8 +354,17 @@ function writeReport(report, { write }) {
   if (!write) return { written: false, path: reportPath(date), reason: 'dry-run — 쓰지 않는다' }
   const dir = join(DRAFTS_DIR, '_runs', date)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(reportPath(date), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  // 🔴 회차 식별자를 함께 남긴다 (2026-09-17). 결과 파일은 날짜별 한 칸이라,
+  //    식별자가 없으면 부른 쪽이 **앞 회차가 쓴 파일**을 이번 실적으로 읽는다.
+  const stamped = { ...report, runId: runIdFromArgv(), writtenAt: new Date().toISOString() }
+  writeFileSync(reportPath(date), `${JSON.stringify(stamped, null, 2)}\n`, 'utf8')
   return { written: true, path: reportPath(date) }
+}
+
+/** 실행기가 넘긴 회차 식별자. 사람이 직접 돌리면 없다 — 그때는 연결을 시도하지 않는다 */
+function runIdFromArgv() {
+  const i = process.argv.indexOf('--run-id')
+  return i === -1 ? null : process.argv[i + 1] ?? null
 }
 
 /**
@@ -517,13 +578,19 @@ async function main() {
   let store = loadQuarantine()
   let storeChanged = false
 
-  for (const cand of scanned.eligible.slice(0, limit)) {
+  // 🔴 등록 예산과 시도 상한을 따로 센다 — 막힌 후보가 정상 후보를 굶기지 않는다
+  const ceiling = ceilingFor(limit)
+  let registered = 0
+  let budgetStop = null
+  for (const cand of scanned.eligible) {
+    const b = judgeBudget({ registered, attempted: results.length, limit, ceiling })
+    if (b.stop) { budgetStop = b; break }
     // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
     const publishAt = slots.peek()
     const r = drive(cand.slug, { write, pr: wantPr, publishAt, alt: null, allowOptional: false })
     r.publishAt = publishAt
     // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
-    if (CONSUMES_SLOT.has(r.verdict)) slots.commit()
+    if (CONSUMES_SLOT.has(r.verdict)) { slots.commit(); registered += 1 }
     results.push(r)
 
     if (r.verdict === 'BLOCKED') {
@@ -552,6 +619,7 @@ async function main() {
     pool: scanned.pool,
     eligible: scanned.eligible.length,
     processed: results.length,
+    budget: { limit, ceiling, registered, stoppedBy: budgetStop?.code ?? 'EXHAUSTED', stopMessage: budgetStop?.message ?? '후보를 전부 보았다' },
     done: done.map((r) => ({ slug: r.slug, publishAt: r.publishAt })),
     blocked: blocked.map((r) => ({ slug: r.slug, blockedBy: r.blockedBy })),
     dryRunOk: results.filter((r) => r.verdict === 'DRY_RUN_OK').map((r) => r.slug),
@@ -597,6 +665,10 @@ function printHuman(report, { write }) {
   if (report.git) console.log(`  git: ${report.git.branch} · origin/main 동기 ${report.git.synced ? 'OK' : '아니오'}${report.git.fastForwarded ? ' (ff-only 로 따라붙음)' : ''}`)
   if (typeof report.pool === 'number') {
     console.log(`  후보 ${report.pool}건 중 gate 통과 ${report.eligible}건 · 처리 ${report.processed}건`)
+    // 🔴 왜 거기서 멈췄는지 로그만 보고 알 수 있어야 한다 — 새벽 감시의 유일한 기준이다
+    if (report.budget) {
+      console.log(`  예산: 등록 ${report.budget.registered}/${report.budget.limit} · 시도 ${report.processed}/${report.budget.ceiling} — ${report.budget.stopMessage}`)
+    }
   }
   if (report.branch) console.log(`  PR 브랜치: ${report.branch} (register write 앞에 생성)`)
   console.log('')

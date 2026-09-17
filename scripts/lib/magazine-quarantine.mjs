@@ -25,6 +25,7 @@
  * 🔴 **저장소 밖에 쓴다.** runtime 작업 트리는 깨끗해야 한다(write preflight).
  *    격리 기록이 추적 파일이면 매 회차 `DIRTY_TREE` 로 레인이 멈춘다.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -54,9 +55,35 @@ export const COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000
 
 /**
  * 원고가 바뀌었는지 보는 값. 내용이 달라지면 격리를 푼다.
- * 🔴 해시를 쓰지 않는다 — 길이와 마지막 수정 시각이면 "사람이 손댔다" 를 알기에 충분하다.
+ *
+ * ─────────────────────────────────────────────────────────
+ * 🔴 **size:mtime 이었다. 그래서 격리가 한 번도 작동하지 않았다** (2026-09-17 실측).
+ *
+ *    지문의 대상이 `article-draft.ts` 인데, 그 파일은 **회차마다 자동 변환이
+ *    다시 만든다.** 내용이 한 글자도 안 바뀌어도 mtime 이 바뀐다.
+ *    그러면 `recordFailure` 가 "원고가 바뀌었다" 로 보고 **attempts 를 1 로 되돌린다.**
+ *
+ *    실측: dinner-change-two-weeks 와 cold-weather-joint-pain 이 9/16·9/17
+ *    연속 실패했는데 attempts 가 둘 다 1 이었다. size 는 6282 로 같고 mtime 만 달랐다.
+ *    MAX_ATTEMPTS=2 에 **영원히 닿지 않는다** — 격리가 없는 것과 같다.
+ *    그 결과 같은 실패 후보가 매일 처리 예산을 먹고 새 후보를 밀어냈다.
+ *
+ * 🔴 **그래서 내용을 해시한다.** 시각도 경로도 넣지 않는다 —
+ *    같은 내용을 다시 변환하면 같은 값이어야 한다.
+ * 🔴 **줄 끝과 앞뒤 공백을 지운다.** 변환기가 개행을 다르게 쓰는 것으로
+ *    "사람이 고쳤다" 가 되면 같은 결함이 다시 생긴다.
  */
-export const fingerprintOf = ({ size = 0, mtimeMs = 0 } = {}) => `${size}:${Math.round(mtimeMs)}`
+export function fingerprintOf(input) {
+  // 옛 호출 모양({size, mtimeMs})으로 들어오면 지문을 만들지 않는다.
+  // 🔴 조용히 옛 값을 돌려주면 그 자리만 결함이 살아남는다.
+  if (input === null || input === undefined) return null
+  if (typeof input === 'object') {
+    throw new TypeError('fingerprintOf 는 원고 **내용 문자열**을 받는다 (size/mtime 은 회차마다 바뀌어 격리를 무력화했다)')
+  }
+  const normalized = String(input).replace(/\r\n/g, '\n').trim()
+  if (normalized === '') return null
+  return `sha256:${createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 32)}`
+}
 
 // ─────────────────────────────────────────────────────────
 // 판정 — 🔴 파일을 읽지 않는다
