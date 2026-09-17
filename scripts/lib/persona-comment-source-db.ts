@@ -38,6 +38,8 @@ export function makeDbTargetSource(args: {
           // 🔴 3축은 정본 select 를 쓴다 — 손으로 고르면 판정 입력이 갈라진다
           ...POST_VISIBILITY_SELECT,
           persona: { select: { code: true } },
+          // 🔴 운영자 직접 글 — 자동 배정 대상에서 뺀다
+          operatorWriterId: true,
           author: { select: { providerId: true, isAdmin: true, _count: { select: { accounts: true } } } },
           comments: {
             where: { isDeleted: false },
@@ -57,6 +59,7 @@ export function makeDbTargetSource(args: {
         category: p.category,
         sourceSite: p.sourceSite,
         authorPersonaCode: p.persona?.code ?? null,
+        authorOperatorWriterId: p.operatorWriterId,
         author: p.author === null ? null : {
           providerId: p.author.providerId,
           isAdmin: p.author.isAdmin,

@@ -47,6 +47,8 @@ type Author = {
   isBlocked: boolean
   accounts: { id: string }[]
   persona: { id: string } | null
+  /** 🔴 운영용 작성자가 붙어 있으면 실회원이 아니다 — `isRealMember` 가 요구한다 */
+  operatorWriter: { id: string } | null
 }
 
 export type ReportCardData = {

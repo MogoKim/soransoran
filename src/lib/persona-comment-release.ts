@@ -97,11 +97,34 @@ export function judgeModelGate(input: {
  *    Persona 글 · 관리자 글 · 자동 생성 글은 사람의 사연이 아니다.
  *    확인하지 못하면 막는다 — 모르는 채로 내보내는 것이 가장 위험하다.
  */
-export type PostAuthorKind = 'persona' | 'admin' | 'automated' | 'member' | 'unknown'
+export type PostAuthorKind =
+  | 'persona'
+  | 'admin'
+  | 'automated'
+  | 'member'
+  /**
+   * 🔴 창업자가 운영용 닉네임으로 **직접** 쓴 글 (2026-09-17).
+   *
+   *    `persona` 와 나눈 이유 — 자동 예산(`countManagedPosts`)이 두 값을 **다르게** 다뤄야 한다.
+   *    Persona 글은 댓글 자리를 여는 대상이고, 운영자 직접 글은 자동 여력에 **중립**이다.
+   *    한 값으로 합치면 창업자가 글을 쓰는 것만으로 자동 댓글 예산이 움직인다.
+   *
+   *    `member` 와 나눈 이유 — 실회원이 아니다. 회원 원문 보호·North Star 집계가
+   *    이 구분에 걸려 있다.
+   */
+  | 'operator'
+  | 'unknown'
 
 export type PostAuthorFacts = {
   /** 이 글을 쓴 Persona. 없으면 null */
   authorPersonaCode: string | null
+  /**
+   * 🔴 이 글을 쓴 **운영용 작성자**(OperatorWriter.id). 없으면 null.
+   *
+   *    `undefined` 는 select 누락이다 — 그때는 `unknown` 으로 막는다.
+   *    옛 호출부가 이 필드를 안 넘기면 타입이 먼저 막는다(optional 로 두지 않는다).
+   */
+  authorOperatorWriterId: string | null
   /** 글의 source 축 — `SYSTEM` 이면 자동 생성 경로다 */
   source: string | null
   /** 작성자 User 의 실회원 판별 입력. 🔴 모르면 필드를 비운다 */
@@ -153,21 +176,48 @@ export function judgePostAuthor(f: PostAuthorFacts | null): AuthorVerdict {
     }
   }
 
-  // ② Persona 글 — 사람의 사연이 아니다
+  /**
+   * ② 🔴 **운영자 직접 글을 Persona 보다 먼저 본다** (2026-09-17).
+   *
+   *    두 축이 동시에 채워지는 일은 없어야 하지만(`buildOperatorPostData` 가 막는다),
+   *    만약 섞인 행이 생긴다면 그것은 **자동 여력이 잘못 계산되는** 쪽으로 기운다.
+   *    순서를 여기 두면 그 행은 `operator` 로 읽혀 예산에서 빠진다 — 안전한 쪽이다.
+   *
+   * 🔴 `externalSendAllowed` 는 false 다. 운영 **글**은 자동 댓글 대상이 아니므로
+   *    본문이 모델로 갈 일이 애초에 없고, 그 사실을 값으로도 못박아 둔다.
+   *
+   * 🔴 **운영 댓글은 이야기가 다르다** (2026-09-17 · 창업자 결정).
+   *    Persona 글에 달린 운영 댓글은 **그 글의 대화 맥락으로 참고된다** —
+   *    창업자가 남긴 말만 빼 놓으면 모델이 같은 말을 다시 하거나 대화를 끊기 때문이다.
+   *    이 값은 "이 **글**의 본문을 보낼 것인가" 에만 답한다. 두 질문을 섞지 않는다.
+   *    경계 정본: `operator-writer.ts` §④ `OPERATOR_COMMENT_CONTEXT_POLICY`
+   */
+  if (f.authorOperatorWriterId === undefined) {
+    return { kind: 'unknown', externalSendAllowed: false, reason: '운영 작성자 여부를 읽지 못했다(fail-closed)' }
+  }
+  if (f.authorOperatorWriterId !== null && f.authorOperatorWriterId.trim() !== '') {
+    return {
+      kind: 'operator',
+      externalSendAllowed: false,
+      reason: '창업자가 운영용 이름으로 직접 쓴 글이다 — 자동 레인에 넣지 않는다',
+    }
+  }
+
+  // ③ Persona 글 — 사람의 사연이 아니다
   if (f.authorPersonaCode !== null && f.authorPersonaCode.trim() !== '') {
     return {
       kind: 'persona', externalSendAllowed: true,
       reason: `Persona ${f.authorPersonaCode} 가 쓴 글이다`,
     }
   }
-  // ③ 관리자 — 확인된 경우만
+  // ④ 관리자 — 확인된 경우만
   if (f.authorIsAdmin === true) {
     return { kind: 'admin', externalSendAllowed: true, reason: '관리자가 쓴 글이다' }
   }
   if (f.authorIsAdmin === null) {
     return { kind: 'unknown', externalSendAllowed: false, reason: '관리자 여부를 읽지 못했다(fail-closed)' }
   }
-  // ④ 실회원 판별 — 정본 하나로
+  // ⑤ 실회원 판별 — 정본 하나로
   if (f.authorRealMember === null) {
     return { kind: 'unknown', externalSendAllowed: false, reason: '작성자 계정 정보를 읽지 못했다(fail-closed)' }
   }
@@ -181,7 +231,7 @@ export function judgePostAuthor(f: PostAuthorFacts | null): AuthorVerdict {
         reason: '🔴 실회원이 쓴 글이다 — 원문을 외부 모델로 보내지 않는다',
       }
   }
-  // ⑤ 실회원도 Persona 도 관리자도 아닌 계정 — `source` 로 마지막 판단
+  // ⑥ 실회원도 Persona 도 관리자도 아닌 계정 — `source` 로 마지막 판단
   if (f.source === 'SYSTEM') {
     return { kind: 'automated', externalSendAllowed: true, reason: '자동 생성 경로(source=SYSTEM)로 만들어진 글이다' }
   }

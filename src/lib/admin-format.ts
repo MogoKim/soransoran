@@ -38,12 +38,19 @@ export function orDash(value: string | null | undefined): string {
  *    페르소나도 User 행을 갖지만 운영자가 차단하거나 상세를 볼 대상이 아니다.
  *    persona 파일을 건드리지 않고 관계 유무만 본다.
  *
+ * 🔴 **운영용 작성자도 뺀다** (2026-09-17).
+ *    창업자가 직접 쓰는 운영용 닉네임도 User 행을 갖는다. 카카오 Account 를 붙이지
+ *    않으므로 위 조건만으로도 이미 빠지지만, 관계를 **명시**해 둔다 —
+ *    누군가 실수로 그 계정에 로그인 수단을 붙이는 날 이 한 줄이 마지막 방어다.
+ *    (페르소나 조건이 같은 이유로 남아 있다)
+ *
  * 🔴 화면마다 where 를 다시 쓰지 않는다. 목록에서 빠진 사람이 상세로는 열리는
  *    상태가 가장 위험하다 — 목록·상세·집계가 같은 조각을 쓴다.
  */
 export const REAL_MEMBER_WHERE = {
   accounts: { some: { provider: 'kakao' } },
   persona: { is: null },
+  operatorWriter: { is: null },
 } as const
 
 /**
@@ -57,14 +64,15 @@ export const REAL_MEMBER_WHERE = {
  * 🔴 판정 근거를 여기 한 곳에 둔다. 화면에서 accounts.length 를 직접 세면
  *    REAL_MEMBER_WHERE 를 고칠 때 그쪽이 따라오지 않는다.
  *
- * 🔴 select 에 accounts(provider:'kakao' 필터)와 persona 를 반드시 포함해야 한다.
+ * 🔴 select 에 accounts(provider:'kakao' 필터)·persona·operatorWriter 를 반드시 포함해야 한다.
  *    빠뜨리면 타입이 막는다 — 런타임에 조용히 false 가 되지 않게 하려는 것이다.
  */
 export function isRealMember(user: {
   accounts: { id: string }[]
   persona: { id: string } | null
+  operatorWriter: { id: string } | null
 }): boolean {
-  return user.accounts.length > 0 && user.persona === null
+  return user.accounts.length > 0 && user.persona === null && user.operatorWriter === null
 }
 
 /**

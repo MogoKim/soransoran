@@ -28,4 +28,10 @@ Prisma 의 `create()` 는 `select` 를 주지 않으면 **모든 스칼라 필�
 |---|---|---|
 | `0026_raw_content_source_times` | `MicroSeedRawContent` 에 `sourcePostedAt` · `sourceListedAt` | 🟢 **이미 흐르고 있다** — thin → adapt → 후보 파일 |
 
+### 여기를 떠난 회차
+
+| 회차 | 옮긴 곳 |
+|---|---|
+| `0027_operator_composer` | 🟢 `prisma/migrations/0027_operator_composer/` — 적용 절차·복구는 그 폴더의 `APPLY.md` |
+
 🔴 파일 경로의 시각 전달은 **이 초안과 무관하게 이미 동작한다.** DB 저장만 미뤄져 있다.

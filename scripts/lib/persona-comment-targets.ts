@@ -52,6 +52,11 @@ export type SourcePost = {
   /** 🔴 어느 공동체에서 왔는가 — ⑨ 출처 문맥 판정 재료다. 자체 글이면 null */
   sourceSite: string | null
   authorPersonaCode: string | null
+  /**
+   * 🔴 창업자가 운영용 이름으로 직접 쓴 글인가 (OperatorWriter.id · 아니면 null).
+   *    자동 배정 대상에서 빠지는 근거이자, `judgePostAuthor` 의 입력이다.
+   */
+  authorOperatorWriterId: string | null
   author: { providerId: string | null; isAdmin: boolean | null; accountCount: number | null } | null
   /** 🔴 3축은 정본 select 로 읽어 그대로 넘긴다 — 여기서 축을 비교하지 않는다 */
   visibility: NonNullable<PostAuthorFacts['visibility']>
@@ -322,6 +327,8 @@ export async function materializeTargets(args: {
     publishedAtMs: p.publishAtMs,
     // 🔴 가입인사는 대화를 여는 자리가 아니다
     onHold: p.category === '가입인사',
+    // 🔴 운영자 직접 글은 다른 레인이다 — 자동 배정이 이 글을 보지 않는다
+    operatorWritten: p.authorOperatorWriterId !== null,
     title: p.title,
     body: p.content,
   }))
@@ -365,6 +372,23 @@ export async function materializeTargets(args: {
       // 🔴 원문 앞부분이다. 개인정보 판정을 통과한 글만 provider 로 간다
       bodyDigest: pr.content.slice(0, digestChars),
       boardLabel: pr.boardType,
+      /**
+       * 🔴 **운영 댓글도 기존 댓글과 똑같이 넘긴다** (2026-09-17 · 창업자 결정).
+       *
+       *    한때 운영 댓글만 빼 두었다. 그 판단을 철회한다 — 이 목록의 용도가
+       *    **"이 글에서 무슨 이야기가 오갔나"** 이기 때문이다. 창업자가 남긴 말만
+       *    빼 놓으면 모델은 그 말을 못 본 채 같은 말을 다시 하거나 대화를 끊는다.
+       *    자연스럽게 이어 가는 것이 이 목록이 있는 이유다.
+       *
+       * 🔴 **보호 기준은 하나도 낮추지 않는다.** 발췌 길이(`commentDigestChars`)도,
+       *    ① 유출 대조(`sourceTextsOf`)도 다른 댓글과 **같은 것**이 걸린다 —
+       *    오히려 운영 문장을 베끼면 그 대조가 잡는다.
+       *
+       * 🔴 **맥락과 자산은 다른 축이다.** 여기 실리는 것은 "그 자리의 대화" 이고,
+       *    Persona 의 말투·경험·⑧ 표본은 `pe.comments`(personaId 관계)에서만 온다.
+       *    운영 댓글은 `personaId` 가 null 이라 그 관계에 **구조적으로 들어갈 수 없다** —
+       *    막는 필터가 아니라 표의 모양이 답한다.
+       */
       existingCommentDigests: pr.comments.map((c) => c.content.slice(0, commentDigestChars)),
     },
     reactionRole,
@@ -448,6 +472,7 @@ export async function materializeTargets(args: {
         input: built.input,
         author: {
           authorPersonaCode: pr.authorPersonaCode,
+          authorOperatorWriterId: pr.authorOperatorWriterId,
           source: pr.source,
           authorRealMember: pr.author === null ? null : {
             accountCount: pr.author.accountCount, providerId: pr.author.providerId,

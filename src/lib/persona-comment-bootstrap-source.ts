@@ -48,6 +48,9 @@ export async function countManagedPostsToday(
         // 🔴 3축은 정본 select 를 쓴다 — 손으로 고르면 판정 입력이 갈라진다(C-2)
         ...POST_VISIBILITY_SELECT,
         persona: { select: { code: true } },
+        // 🔴 운영자 직접 글을 가려낸다. 빠뜨리면 `judgePostAuthor` 가 `unknown` 으로
+        //    막아 회차가 이유 없이 좁아진다 — 안전하지만 원인을 못 찾는 상태다
+        operatorWriterId: true,
         author: { select: { isAdmin: true, _count: { select: { accounts: true } } } },
         comments: { where: { isDeleted: false }, select: { personaId: true } },
       },
@@ -57,6 +60,7 @@ export async function countManagedPostsToday(
       const visibility = pickPostVisibility(p)
       const verdict = judgePostAuthor({
         authorPersonaCode: p.persona?.code ?? null,
+        authorOperatorWriterId: p.operatorWriterId,
         source: p.source,
         authorIsAdmin: p.author?.isAdmin ?? null,
         authorRealMember: p.author === null

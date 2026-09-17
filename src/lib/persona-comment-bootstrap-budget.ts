@@ -38,7 +38,7 @@ export const BOOTSTRAP_DAILY_MAX = 500
  */
 export type ManagedPostFacts = {
   /** `judgePostAuthor` 가 답한 작성자 유형 */
-  authorKind: 'persona' | 'admin' | 'automated' | 'member' | 'unknown'
+  authorKind: 'persona' | 'admin' | 'automated' | 'member' | 'operator' | 'unknown'
   /** 본문이 외부 커뮤니티에서 온 것인가. 모르면 null */
   externalSourced: boolean | null
   /**
@@ -79,6 +79,18 @@ export function countManagedPosts(rows: readonly ManagedPostFacts[]): ManagedCou
     if (r.externalSourced === null) { drop('출처 불명'); continue }
     if (r.externalSourced) { drop('외부 커뮤니티 원문'); continue }
     if (r.authorKind === 'member') { drop('실회원 글'); continue }
+    /**
+     * 🔴 **운영자 직접 글은 자동 예산에 중립이다** (2026-09-17).
+     *
+     *    창업자가 운영용 이름으로 글을 쓴다고 해서 자동 댓글 자리가 늘거나 줄지 않는다.
+     *    늘리면 "수동 활동이 자동 여력을 움직인다" 가 되고, 그 순간 관제가
+     *    자동 레인의 상태를 수동 활동과 분리해 읽을 수 없게 된다.
+     *    빼면 계산에 들어가지 않으므로 **수동 작성 전후의 `openSlots` 가 같다** —
+     *    그것이 이 레인이 자동 운영과 분리됐다는 유일한 증명이다.
+     *
+     * 🔴 "차감하지 않는다" 와 "더하지 않는다" 를 함께 지키는 자리는 여기뿐이다.
+     */
+    if (r.authorKind === 'operator') { drop('운영자 직접 글'); continue }
     if (r.authorKind === 'unknown') { drop('작성자 유형 불명'); continue }
     if (!isCount(r.personaCommentCount)) { drop('기존 Persona 댓글 수 불명'); continue }
     const slots = PERSONA_COMMENTS_PER_POST_MAX - r.personaCommentCount

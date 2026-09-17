@@ -254,6 +254,7 @@ console.log('③ 댓글 분산 planner')
   const post = (o: Partial<PlannerPost> & { id: string }): PlannerPost => ({
     status: 'PUBLISHED', authorPersonaCode: null, memberComments: 0, personaComments: 0,
     personaCodesOnPost: [], openQueuePersonaCodes: [], publishedAtMs: day(1), onHold: false,
+    operatorWritten: false,
     title: '오늘 날씨 이야기', body: '비가 와서 무릎이 시큰합니다', ...o,
   })
   const persona = (o: Partial<PlannerPersona> & { code: string }): PlannerPersona => ({
@@ -1950,6 +1951,7 @@ console.log('⑩ 실회원 정본 — judgeRealMember 하나만')
   const post = (o: Partial<PlannerPost> = {}): PlannerPost => ({
     id: 'x', status: 'PUBLISHED', authorPersonaCode: null, memberComments: 0, personaComments: 0,
     personaCodesOnPost: [], openQueuePersonaCodes: [], publishedAtMs: NOW - 86_400_000, onHold: false,
+    operatorWritten: false,
     title: '날씨', body: '비가 온다', ...o,
   })
   const pers = (probe: PlannerPersona['realMember']): PlannerPersona => ({
@@ -2667,7 +2669,7 @@ console.log('㉓ 대상 글 개인정보 계약 — 모르면 보내지 않는�
 // ─────────────────────────────────────────────────────────
 {
   const base: PostAuthorFacts = {
-    authorPersonaCode: null, source: 'USER',
+    authorPersonaCode: null, authorOperatorWriterId: null, source: 'USER',
     authorRealMember: { accountCount: 0, providerId: null },
     authorIsAdmin: false,
     visibility: {
@@ -3112,7 +3114,7 @@ console.log('㉜ 개인정보 — 출처를 작성자보다 먼저 본다')
     permanentNoindex: isMicroSeed, indexPromotionBlocked: isMicroSeed,
   })
   const base: PostAuthorFacts = {
-    authorPersonaCode: null, source: 'USER',
+    authorPersonaCode: null, authorOperatorWriterId: null, source: 'USER',
     authorRealMember: { accountCount: 0, providerId: null },
     authorIsAdmin: false, visibility: ms(false),
   }
@@ -3350,7 +3352,7 @@ console.log('㉟ Queue 파이프라인 — 실제 경로 (provider 주입)')
   const target = (over: Partial<PipelineTarget> = {}): PipelineTarget => ({
     input: built.input,
     author: {
-      authorPersonaCode: 'P02', source: 'SYSTEM',
+      authorPersonaCode: 'P02', authorOperatorWriterId: null, source: 'SYSTEM',
       authorRealMember: { accountCount: 0, providerId: null }, authorIsAdmin: false,
       visibility: { status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false },
     },
@@ -3384,7 +3386,7 @@ console.log('㉟ Queue 파이프라인 — 실제 경로 (provider 주입)')
     targets: [target({
       author: {
         // 🔴 Persona 글이 아니어야 실회원 판정까지 간다
-        authorPersonaCode: null, source: 'USER',
+        authorPersonaCode: null, authorOperatorWriterId: null, source: 'USER',
         authorRealMember: { accountCount: 1, providerId: null }, authorIsAdmin: false,
         visibility: { status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false },
       },
@@ -3807,7 +3809,7 @@ console.log('㊴ 대상 materializer — shadow 와 Queue 가 한 함수를 쓴�
     content: '오늘 동네를 한 바퀴 걸었어요. 바람이 선선했어요.',
     boardType: '수다방', publishAtMs: NOW - DAY, category: '수다방',
     sourceSite: null,
-    authorPersonaCode: 'P02',
+    authorPersonaCode: 'P02', authorOperatorWriterId: null,
     author: null,
     visibility: {
       status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
@@ -4381,7 +4383,7 @@ console.log('㊸ 사실성·분산 실패가 유료 호출을 막는가 (행동)
      *    외부 전송을 막으므로, 여기서 provider 가 열리는지 보려면 자체 글이어야 한다.
      */
     sourceSite: null,
-    authorPersonaCode: 'P02',
+    authorPersonaCode: 'P02', authorOperatorWriterId: null,
     author: null,
     visibility: {
       status: 'PUBLISHED', isMicroSeed: false, permanentNoindex: false, indexPromotionBlocked: false,
@@ -4979,7 +4981,7 @@ console.log('㊻ 글당 1~5 · 댓글 0개 우선 · 같은 Persona 재댓글 �
   const mkPost = (o: Partial<PlannerPost> & { id: string }): PlannerPost => ({
     status: 'PUBLISHED', authorPersonaCode: null, memberComments: 0, personaComments: 0,
     personaCodesOnPost: [], openQueuePersonaCodes: [],
-    publishedAtMs: NOW - 3_600_000, onHold: false,
+    publishedAtMs: NOW - 3_600_000, onHold: false, operatorWritten: false,
     title: '요즘 잠이 잘 안 와요', body: '새벽에 자꾸 깹니다', ...o,
   })
   const mkPersona = (code: string, o: Partial<PlannerPersona> = {}): PlannerPersona => ({

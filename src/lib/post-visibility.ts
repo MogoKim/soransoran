@@ -256,3 +256,26 @@ export const ORIGINAL_POST_VISIBILITY_FLAGS = {
   permanentNoindex: false,
   indexPromotionBlocked: false,
 } as const
+
+/**
+ * 운영자 직접 작성 Post 의 3축 **고정값**.
+ *
+ * 🔴 **평범한 커뮤니티 글과 같다.** 세 축이 전부 false 다 —
+ *    창업자가 직접 쓴 자기 글이지, 남의 커뮤니티에서 가져온 원문이 아니다.
+ *    Micro Seed 가 영구 noindex 를 받은 이유(헌법 §10-5 "원문 그대로")가
+ *    여기에는 해당하지 않는다.
+ *
+ * 🔴 **값이 `ORIGINAL_POST_VISIBILITY_FLAGS` 와 같은데도 따로 두는 이유.**
+ *    같은 값이라는 것과 같은 이유로 그 값이라는 것은 다르다. Original Post 는
+ *    **Originality Gate 를 통과한 재창작**이라 index 자격을 얻는다 — 그 게이트가
+ *    바뀌면 저쪽 값도 바뀐다. 이쪽은 게이트가 아니라 "사람이 자기 말을 썼다" 가
+ *    근거다. 한 상수를 같이 쓰면 저쪽 정책 변경이 이쪽을 조용히 끌고 간다.
+ *
+ * 🔴 이 파일에 있는 이유 — 3축 토큰은 이 파일 밖에서 쓸 수 없다 (C-2).
+ *    가드(scripts/check-post-visibility.mjs)가 src/ 전체를 훑어 잡는다.
+ */
+export const OPERATOR_POST_VISIBILITY_FLAGS = {
+  isMicroSeed: false,
+  permanentNoindex: false,
+  indexPromotionBlocked: false,
+} as const
