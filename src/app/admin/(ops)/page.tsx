@@ -121,12 +121,19 @@ export default async function AdminHomePage() {
              왼쪽 이름과 오른쪽 배지 사이가 손바닥만큼 벌어져 눈이 중간에서 끊긴다.
              줄 수·문구·순서는 그대로다 — 가로로만 모은다. */}
       <AdminSection title="오늘 확인할 것" className="mt-6 lg:max-w-3xl">
-        <ul className="m-0 mt-3 flex list-none flex-col p-0">
+        {/* 🔴 목록을 카드 면에 올린다 (2026-09-17).
+               globals.css §표면: "hover 가 있는 행을 바탕 위에 직접 놓지 않는다. 카드 안에 넣는다.
+               바탕 위에 놓으면 hover 색이 바탕색과 가까워져 아무 일도 일어나지 않는다."
+               이 목록이 정확히 그 경우였다 — 실측으로 hover(#F2F3F5)가
+               바탕(#FBFAF9) 위에서 1.065:1 이라 눌러도 아무 반응이 없어 보였다.
+               흰 카드 위에서는 1.110:1 로 의도한 면 분리가 산다.
+               줄 수·문구·순서·링크는 그대로다 — 바탕만 카드로 바꾼다. */}
+        <ul className="m-0 mt-3 flex list-none flex-col overflow-hidden rounded-lg border border-subtle bg-surface-card p-0">
           {cards.map((card) => (
-            <li key={card.href}>
+            <li key={card.href} className="border-b border-subtle last:border-b-0">
               <Link
                 href={card.href}
-                className="flex min-h-[52px] flex-col gap-1 border-b border-subtle px-2 py-3 no-underline hover:bg-surface-soft lg:min-h-[60px] lg:flex-row lg:items-center lg:gap-4"
+                className="flex min-h-[52px] flex-col gap-1 px-3 py-3 no-underline hover:bg-surface-soft lg:min-h-[60px] lg:flex-row lg:items-center lg:gap-4 lg:px-4"
               >
                 <span className="shrink-0 text-base font-bold text-content-primary lg:w-24">
                   {card.title}

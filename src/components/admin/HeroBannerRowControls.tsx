@@ -65,8 +65,8 @@ export default function HeroBannerRowControls({
             disabled={pending}
             onClick={() => run(() => restoreHeroBanner(bannerId))}
             className={outline}
-            title="보관 풀기 — 꺼진 상태로 돌아옵니다"
-            aria-label="보관 풀기"
+            title="복원 — 보관함에서 꺼내 꺼진 상태로 되돌립니다"
+            aria-label="복원"
           >
             <IconRestore />
             <span className="ml-1">복원</span>

@@ -173,9 +173,9 @@ export default async function AdminContentDetailPage({
       <section className="mt-4">
         <details>
           <summary className="min-h-[44px] cursor-pointer list-none py-2 text-base font-bold text-content-primary">
-            글 내용 고치기{' '}
+            글 내용 수정{' '}
             <span className="text-sm font-normal text-content-muted">
-              (고쳐도 작성자에게 알림이 가지 않습니다)
+              (수정해도 작성자에게 알림이 가지 않습니다)
             </span>
           </summary>
           <div className="mt-2">

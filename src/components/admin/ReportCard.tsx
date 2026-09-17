@@ -334,7 +334,7 @@ export default function ReportCard({ report }: { report: ReportCardData }) {
       ) : null}
 
       {report.comment ? (
-        <AdminActionGroup label="댓글 고치기" hint="고쳐도 작성자에게 알림이 가지 않습니다.">
+        <AdminActionGroup label="댓글 수정" hint="수정해도 작성자에게 알림이 가지 않습니다.">
           <AdminCommentEditForm commentId={report.comment.id} content={report.comment.content} />
         </AdminActionGroup>
       ) : null}

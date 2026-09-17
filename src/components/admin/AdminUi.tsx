@@ -39,9 +39,9 @@ export function AdminPageHeader({
           {backLabel}
         </Link>
       ) : null}
-      <h1 className="m-0 break-words text-xl font-bold text-content-primary">{title}</h1>
-      {badges ? <div className="mt-1 flex flex-wrap items-center gap-2">{badges}</div> : null}
-      {description ? <p className="m-0 mt-1 text-sm text-content-muted">{description}</p> : null}
+      <h1 className="m-0 break-words text-xl font-bold leading-snug text-content-primary">{title}</h1>
+      {badges ? <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div> : null}
+      {description ? <p className="m-0 mt-2 text-sm text-content-muted">{description}</p> : null}
     </header>
   )
 }
@@ -62,7 +62,7 @@ export function AdminSection({
   return (
     <section className={className}>
       <h2 className="m-0 text-lg font-bold text-content-primary">{title}</h2>
-      {description ? <p className="m-0 mt-1 text-sm text-content-muted">{description}</p> : null}
+      {description ? <p className="m-0 mt-1.5 text-sm text-content-muted">{description}</p> : null}
       {children}
     </section>
   )
@@ -303,13 +303,13 @@ export function AdminActionGroup({
     <div
       className={
         danger
-          ? 'mt-3 rounded-lg border border-subtle bg-surface-page p-2'
-          : 'mt-3'
+          ? 'mt-5 rounded-lg border border-subtle bg-surface-page p-3'
+          : 'mt-5'
       }
     >
       <p className="m-0 text-sm font-bold uppercase tracking-wide text-content-muted">{label}</p>
       {hint ? <p className="mt-1 text-sm text-content-muted">{hint}</p> : null}
-      <div className="mt-2 flex flex-wrap gap-2">{children}</div>
+      <div className="mt-3 flex flex-wrap gap-2">{children}</div>
     </div>
   )
 }
