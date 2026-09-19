@@ -2,60 +2,64 @@
  * SourceEssence — 🔴 **원문에 실제로 있던 것만 적는 sparse 구조**
  *
  * 🔴 **모든 칸을 채우지 않는다.** 갈등이 없는 글에는 갈등이 없고, 묻지 않는 글은
- *    묻지 않는다. 없는 것을 `null`·빈 목록으로 두는 것이 이 구조의 요점이다 —
- *    억지로 채우면 짧은 일상글이 장문 상담문이 되고, 그것이 지금 실패의 모양이다.
+ *    묻지 않는다. 없는 것을 `null`·빈 목록으로 두는 것이 이 구조의 요점이다.
  *
- * 🔴 **옛 `readSourceProfile` 의 규칙·사전·배타 분류를 정본으로 쓰지 않는다.**
- *    그쪽은 제목에서 유형을 하나 골라 긴 지시문을 만들어 낸다. 여기서는
- *    **모델이 읽은 것**을 받아 **근거가 있는 것만** 남긴다.
- *
- * 🔴 물음표 · 특정 낱말 · 숫자를 **강제하지 않는다.** 그런 규칙은 모든 글을
- *    같은 모양으로 수렴시킨다(2026-09-13 실측: 템플릿 90행이 100% 물음표 종결).
+ * 🔴 **보존 책임을 둘로 나눈다** (2026-09-19 실측 보정).
+ *    앞판은 `anchor` 하나가 "글자 그대로"와 "의미"를 겸했다. 그래서 모델이
+ *    **원문 문장 전체**를 `exact` 로 지정했고, 생성이 그대로 옮겨 적어
+ *    3편 중 2편이 복제로 막혔다.
+ *      · `protectedFacts` — 글자 자체를 지켜야 하는 **원자적 사실**만
+ *      · `sourceBeats`   — 지켜야 하는 **의미**. 원문 문장은 생성에 보내지 않는다
  */
 import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
 import type { ContextSufficiency, InsufficientReason } from './evidence'
 
-export const ESSENCE_VERSION = 'essence-v1'
+export const ESSENCE_VERSION = 'essence-v2'
 
-/** 보존할 요소의 종류 — 🔴 없는 종류를 만들어 채우지 않는다 */
-export const ANCHOR_KINDS = [
-  'publicEntity', 'number', 'situation', 'contrast', 'emotion',
-  'participationIntent', 'discoverabilityTerm', 'other',
-] as const
-export type AnchorKind = (typeof ANCHOR_KINDS)[number]
-
-/** exact = 글자 그대로 남긴다 · semantic = 같은 것을 가리키면 된다 */
-export const ANCHOR_PRESERVE = ['exact', 'semantic'] as const
-export type AnchorPreserve = (typeof ANCHOR_PRESERVE)[number]
-
-/** 어디서 왔는가 — 🔴 `derived` 는 원문에 그 글자가 없다는 뜻이다 */
-export const EVIDENCE_REFS = ['title', 'head', 'tail', 'derived'] as const
+/** 어디서 왔는가 — 🔴 그 자리에 그 글자가 있어야 한다 */
+export const EVIDENCE_REFS = ['title', 'head', 'tail'] as const
 export type EvidenceRef = (typeof EVIDENCE_REFS)[number]
 
-export type EssenceAnchor = {
-  kind: AnchorKind
+/**
+ * 글자 자체를 지켜야 하는 **원자적 사실** — 🔴 문장·절·감정 표현·질문은 될 수 없다.
+ *
+ *    숫자+단위(`9명`) · 공개 프로그램·상품·장소 이름(`나는솔로`) · 관계(`시어머니`) ·
+ *    검색 가치가 있는 핵심 용어(`갱년기`). 바꾸면 무슨 이야기인지 알 수 없어지는 것만이다.
+ */
+export const PROTECTED_FACT_KINDS = ['number', 'publicEntity', 'relation', 'searchTerm'] as const
+export type ProtectedFactKind = (typeof PROTECTED_FACT_KINDS)[number]
+
+export type ProtectedFact = {
+  kind: ProtectedFactKind
   text: string
-  preserve: AnchorPreserve
   evidenceRef: EvidenceRef
 }
 
-/** 원문이 어떻게 닫는가 — 🔴 `none` 은 결함이 아니다 */
+/** 지켜야 하는 **의미** — 🔴 `evidenceText` 는 검증용이고 생성에 보내지 않는다 */
+export const BEAT_KINDS = ['situation', 'contrast', 'emotion', 'participation'] as const
+export type BeatKind = (typeof BEAT_KINDS)[number]
+
+export type SourceBeat = {
+  kind: BeatKind
+  /** 🔴 생성이 받는 것은 이것뿐이다 — 원문 표현이 아니라 뜻이다 */
+  meaning: string
+  evidenceRef: EvidenceRef
+  /** 🔴 검증 전용. 생성 payload 에 넣지 않는다 */
+  evidenceText: string
+}
+
 export const CLOSING_INTENTS = ['ask', 'vent', 'share', 'none'] as const
 export type ClosingIntent = (typeof CLOSING_INTENTS)[number]
 
 export const TIME_SENSITIVITIES = ['evergreen', 'timeBound', 'unknown'] as const
 export type TimeSensitivity = (typeof TIME_SENSITIVITIES)[number]
 
-/**
- * 이 글이 우리 게시판에서 어떤 일을 하는가 — 🔴 **검수 기준이 여기에 따라 달라진다.**
- *    짧은 대화글을 "정보가 없다" 로, 정보글을 "묻지 않는다" 로 떨어뜨리지 않기 위해서다.
- */
+/** 이 글이 우리 게시판에서 하는 일 — 🔴 검수 기준이 여기에 따라 달라진다 */
 export const CONTENT_ROLES = [
   'discoveryAnchor', 'conversationSpark', 'experienceResonance', 'usefulAnswer',
 ] as const
 export type ContentRole = (typeof CONTENT_ROLES)[number]
 
-/** 1인칭으로 주장하려면 글쓴이에게 있어야 하는 사실 */
 export const CLAIM_FACTS = [
   'spouse', 'children', 'childAgeBand', 'parentCare', 'menopause', 'work', 'region', 'age',
 ] as const
@@ -67,24 +71,35 @@ export const CLAIM_FACT_LABEL: Readonly<Record<ClaimFact, string>> = {
   region: '사는 곳', age: '나이대',
 }
 
+/**
+ * 1인칭으로 주장하려면 글쓴이에게 있어야 하는 사실.
+ *
+ * 🔴 **자유 문장을 자격 판정에 쓰지 않는다** (2026-09-19 실측 보정).
+ *    앞판은 `detail` 한 칸이 사람 설명과 matcher 값을 겸했다. 그래서
+ *    *"자녀 없이 주변 관찰로 쓴 글"* 이라는 **관점 설명**이 자녀 자격값으로 쓰였고,
+ *    자녀 1명인 Persona 가 `SELF_EXPERIENCE` 로 갔다.
+ *      · `requiredValue` — Persona 카드 값과 **그대로 견줄 수 있는 정규 값**
+ *      · `selfClaim`     — 사람이 읽는 설명. matcher 는 보지 않는다
+ */
 export type ClaimRequirement = {
+  /** 🔴 검수가 위반을 가리킬 수 있게 하는 식별자 */
+  id: string
   fact: ClaimFact
-  /** 무엇을 1인칭으로 말하게 되는가 — 한 줄 */
-  detail: string
-  /**
-   * 🔴 **관점을 바꾸면 이 주장 없이도 쓸 수 있는가.**
-   *    `false` 면 당사자 경험이 이 글의 알맹이라는 뜻이고, 그때는 사람에게 넘긴다.
-   */
+  /** 🔴 카드 값과 견줄 정규 값 — 예: `있음` · `파트타임` · `수도권` · `중고등` */
+  requiredValue: string
+  /** 사람이 읽는 설명 — 🔴 자격 판정에 쓰지 않는다 */
+  selfClaim: string
   stanceShiftable: boolean
+  evidenceRef: EvidenceRef
+  evidenceText: string
 }
 
 export type SourceEssence = {
   contextSufficiency: ContextSufficiency
   insufficientReasons: InsufficientReason[]
-  /** 실제로 무슨 이야기인지 — 확인 못 했으면 null */
   coreMoment: string | null
-  anchors: EssenceAnchor[]
-  /** 사람이 답하고 싶어지는 지점 — 없으면 null */
+  protectedFacts: ProtectedFact[]
+  sourceBeats: SourceBeat[]
   participationHook: string | null
   participationConfidence: number | null
   closingIntent: ClosingIntent | null
@@ -94,93 +109,155 @@ export type SourceEssence = {
   essenceVersion: string
 }
 
-/** 🔴 검증에서 떨어진 것 — 조용히 버리지 않고 사람이 본다 */
-export type EssenceParse = {
-  essence: SourceEssence | null
-  droppedAnchors: { text: string; why: DropReason }[]
-  schemaProblems: string[]
-}
-
-export type DropReason = 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'derived'
+export type DropReason =
+  | 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'notAtomic' | 'unknownRef'
 
 export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
-  notInEvidence: '근거로 담은 글에 없는 말이다',
-  derived: '근거를 지목하지 못했다 — 보존 계약이 될 수 없다 (의미 해석은 coreMoment 에 남는다)',
-  personalInfo: '개인정보다 — anchor 가 될 수 없다',
+  notInEvidence: '지목한 자리에 그 말이 없다',
+  personalInfo: '개인정보다',
   empty: '비어 있다',
   unknownKind: '우리 종류가 아니다',
+  notAtomic: '문장·절·질문이다 — 글자 그대로 지킬 원자적 사실이 아니다',
+  unknownRef: '어디서 왔는지 지목하지 못했다',
+}
+
+export type EssenceParse = {
+  essence: SourceEssence | null
+  dropped: { text: string; why: DropReason }[]
+  schemaProblems: string[]
 }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
 
-/**
- * 🔴 **개인정보는 anchor 가 될 수 없다.**
- *    입력은 이미 마스킹돼 있지만, 모델이 `derived` 로 지어낼 수 있다.
- *    마스킹 표식과 남은 원시 패턴을 **둘 다** 본다.
- */
+/** 🔴 **공백·줄바꿈 차이만 지운다.** 그 밖의 정규화는 하지 않는다 */
+export function normalizeForProvenance(s: string): string {
+  return s.replace(/\s+/g, '')
+}
+
 const PII_RE = /\[링크\]|\[메일\]|\[연락처\]|\[계정\]|https?:\/\/|[\w.+-]+@[\w-]+\.[\w.]+|\b01[016-9][-.\s]?\d{3,4}[-.\s]?\d{4}\b|\b\d{2,4}[-.\s]\d{3,4}[-.\s]\d{4}\b|@[A-Za-z0-9_]{2,}|\d+동\s*\d+호/
 
-export function isPersonalInfoAnchor(text: string): boolean {
+export function isPersonalInfo(text: string): boolean {
   return PII_RE.test(text)
 }
 
-/**
- * anchor 가 근거를 **지목하고 있는가** — 🔴 **지목하지 못하면 anchor 가 아니다.**
- *
- *    🔴 `derived` 는 anchor 가 될 수 없다. 첫 판에서는 **보존 계약을 근거가 있는 것에만**
- *       건다. 의미 해석은 `coreMoment` · `participationHook` 에 남는다 —
- *       거기서는 판정일 뿐이고, 여기서는 **초안이 지켜야 하는 약속**이 되기 때문이다.
- *
- *    🔴 낱말 하나 겹침을 근거로 쓰지 않는다. 앞판은 그것으로
- *       *"김치 이야기 → 김치 때문에 회사가 망했다"* 를 통과시켰다.
- *       유사도 규칙도 사전도 만들지 않는다 — **근거에 그 말이 있는가** 하나만 본다.
- */
-export function anchorGrounded(a: EssenceAnchor, spans: readonly EvidenceSpan[]): boolean {
-  if (a.evidenceRef === 'derived') return false
-  // 🔴 **지목한 그 자리에 있어야 한다.** 합친 글에서 찾으면 provenance 가 거짓이 된다 —
-  //    제목에만 있는 말을 `head` 라고 해도 통과했다.
-  const span = spans.find((x) => x.kind === a.evidenceRef)
-  return span !== undefined && span.text.includes(a.text)
+/** 지목한 span 에 그 말이 있는가 — 🔴 공백·줄바꿈만 무시한다 */
+export function foundInSpan(text: string, ref: EvidenceRef, spans: readonly EvidenceSpan[]): boolean {
+  const span = spans.find((x) => x.kind === ref)
+  if (span === undefined) return false
+  return normalizeForProvenance(span.text).includes(normalizeForProvenance(text))
 }
 
 /**
- * 모델 응답 → SourceEssence — 🔴 **근거 없는 것은 남기지 않는다.**
+ * 🔴 **원자적인가** — 문장·절·질문을 글자 그대로 지키라고 하면 복제가 된다.
  *
- * 🔴 모르는 값이 오면 통째로 버리지 않고 **그 칸만** 비운다.
- *    전부 버리면 짧은 글이 계속 탈락한다.
+ *    셋 중 하나라도 걸리면 원자적이지 않다:
+ *      ① 문장 부호(`. ? ! …`)가 있다  ② 줄이 바뀐다  ③ 서술 어미로 끝난다
+ *    🔴 글자 수로 재지 않는다. 사전도 쓰지 않는다.
  */
-export function parseEssence(raw: string, packet: SourceEvidencePacket): EssenceParse {
+const PREDICATE_TAIL_RE = /(?:요|다|죠|네|까|군|거든|는데|니까|어요|아요|습니다|잖아)$/
+
+export function isAtomicFact(text: string): boolean {
+  const t = text.trim()
+  if (t === '') return false
+  if (/[.!?…]/.test(t)) return false
+  if (/[\r\n]/.test(t)) return false
+  if (PREDICATE_TAIL_RE.test(t)) return false
+  return true
+}
+
+/**
+ * 🔴 **Persona 카드가 실제로 가진 값들.** 여기서 어휘를 지어내지 않는다 —
+ *    부르는 쪽이 정본 카드에서 읽어 넘긴다.
+ */
+export type ClaimVocabulary = {
+  work: readonly string[]
+  region: readonly string[]
+  age: readonly string[]
+  childAgeBand: readonly string[]
+}
+
+/** 있음/없음으로만 판정하는 축 */
+const PRESENCE_FACTS: readonly ClaimFact[] = ['spouse', 'children', 'parentCare', 'menopause']
+
+/**
+ * 🔴 **자격 판정에 쓸 수 있는 값인가.**
+ *
+ *    앞판은 **비어 있지만 않으면** 통과시켰다. 그래서
+ *    *"자녀 없이 주변 관찰로 쓴 글"* 이라는 **관점 설명**이 자녀 자격값이 됐다.
+ *    이제 **카드가 실제로 가진 값**이어야 한다.
+ */
+export function claimValueAllowed(
+  fact: ClaimFact, requiredValue: string, vocab: ClaimVocabulary,
+): boolean {
+  const v = requiredValue.trim()
+  if (v === '') return false
+  if (PRESENCE_FACTS.includes(fact)) return v === '있음'
+  if (fact === 'work') return vocab.work.includes(v)
+  if (fact === 'region') return vocab.region.includes(v)
+  if (fact === 'age') return vocab.age.includes(v)
+  if (fact === 'childAgeBand') return vocab.childAgeBand.includes(v)
+  return false
+}
+
+export function parseEssence(
+  raw: string, packet: SourceEvidencePacket, vocab: ClaimVocabulary,
+): EssenceParse {
   let j: Record<string, unknown>
   try {
     const t = raw.trim()
     j = JSON.parse(t.startsWith('{') ? t : `{${t}`) as Record<string, unknown>
   } catch {
-    return { essence: null, droppedAnchors: [], schemaProblems: ['JSON 이 아니다'] }
+    return { essence: null, dropped: [], schemaProblems: ['JSON 이 아니다'] }
   }
   const problems: string[] = []
   const dropped: { text: string; why: DropReason }[] = []
+  const spans = packet.spans
 
-  const anchors: EssenceAnchor[] = []
-  for (const x of arr(j.anchors)) {
+  // ── protectedFacts — 원자적 사실만 ──
+  const facts: ProtectedFact[] = []
+  for (const x of arr(j.protectedFacts)) {
     const o = x as Record<string, unknown>
     const text = S(o.text)
     if (text === '') { dropped.push({ text: '', why: 'empty' }); continue }
-    const kind = S(o.kind) as AnchorKind
-    if (!(ANCHOR_KINDS as readonly string[]).includes(kind)) {
+    const kind = S(o.kind)
+    if (!(PROTECTED_FACT_KINDS as readonly string[]).includes(kind)) {
       dropped.push({ text, why: 'unknownKind' }); continue
     }
-    if (isPersonalInfoAnchor(text)) { dropped.push({ text, why: 'personalInfo' }); continue }
-    const preserve = (ANCHOR_PRESERVE as readonly string[]).includes(S(o.preserve))
-      ? (S(o.preserve) as AnchorPreserve) : 'semantic'
-    const ref = (EVIDENCE_REFS as readonly string[]).includes(S(o.evidenceRef))
-      ? (S(o.evidenceRef) as EvidenceRef) : 'derived'
-    const a: EssenceAnchor = { kind, text, preserve, evidenceRef: ref }
-    if (!anchorGrounded(a, packet.spans)) {
-      dropped.push({ text, why: ref === 'derived' ? 'derived' : 'notInEvidence' })
-      continue
+    if (isPersonalInfo(text)) { dropped.push({ text, why: 'personalInfo' }); continue }
+    if (!isAtomicFact(text)) { dropped.push({ text, why: 'notAtomic' }); continue }
+    const ref = S(o.evidenceRef)
+    if (!(EVIDENCE_REFS as readonly string[]).includes(ref)) {
+      dropped.push({ text, why: 'unknownRef' }); continue
     }
-    anchors.push(a)
+    if (!foundInSpan(text, ref as EvidenceRef, spans)) {
+      dropped.push({ text, why: 'notInEvidence' }); continue
+    }
+    facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
+  }
+
+  // ── sourceBeats — 의미. evidenceText 는 검증 전용 ──
+  const beats: SourceBeat[] = []
+  for (const x of arr(j.sourceBeats)) {
+    const o = x as Record<string, unknown>
+    const meaning = S(o.meaning)
+    const evidenceText = S(o.evidenceText)
+    if (meaning === '' || evidenceText === '') { dropped.push({ text: meaning, why: 'empty' }); continue }
+    const kind = S(o.kind)
+    if (!(BEAT_KINDS as readonly string[]).includes(kind)) {
+      dropped.push({ text: meaning, why: 'unknownKind' }); continue
+    }
+    if (isPersonalInfo(meaning) || isPersonalInfo(evidenceText)) {
+      dropped.push({ text: meaning, why: 'personalInfo' }); continue
+    }
+    const ref = S(o.evidenceRef)
+    if (!(EVIDENCE_REFS as readonly string[]).includes(ref)) {
+      dropped.push({ text: meaning, why: 'unknownRef' }); continue
+    }
+    if (!foundInSpan(evidenceText, ref as EvidenceRef, spans)) {
+      dropped.push({ text: meaning, why: 'notInEvidence' }); continue
+    }
+    beats.push({ kind: kind as BeatKind, meaning, evidenceRef: ref as EvidenceRef, evidenceText })
   }
 
   const roles: ContentRole[] = []
@@ -191,27 +268,37 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
   }
 
   const claims: ClaimRequirement[] = []
-  for (const c of arr(j.claimRequirements)) {
+  for (const [i, c] of arr(j.claimRequirements).entries()) {
     const o = c as Record<string, unknown>
     const fact = S(o.fact)
+    const requiredValue = S(o.requiredValue)
     if (!(CLAIM_FACTS as readonly string[]).includes(fact)) {
-      problems.push(`모르는 claim fact "${fact}"`); continue
+      problems.push(`claim "${fact || '(이름 없음)'}" 는 우리 축이 아니다`)
+      continue
     }
-    /**
-     * 🔴 **detail 이 비면 자격 조건이 될 수 없다** (2026-09-19 보정).
-     *    앞판은 빈 `work`·`region` 이 **모든 Persona 를 충족으로** 만들었다
-     *    (`'전업'.includes('')` 는 참이다). 그러면 자격 없는 사람이
-     *    `SELF_EXPERIENCE` 로 간다. 형식 문제로 남기고 생성하지 않는다.
-     */
-    if (S(o.detail) === '') {
-      problems.push(`claim "${fact}" 에 detail 이 없다 — 자격을 판정할 수 없다`)
+    if (!claimValueAllowed(fact as ClaimFact, requiredValue, vocab)) {
+      problems.push(
+        `claim "${fact}" 의 requiredValue "${requiredValue}" 는 카드가 가진 값이 아니다`
+        + ' — 자격을 판정할 수 없다',
+      )
+      continue
+    }
+    const ref = S(o.evidenceRef)
+    const evidenceText = S(o.evidenceText)
+    if (!(EVIDENCE_REFS as readonly string[]).includes(ref)
+      || evidenceText === '' || !foundInSpan(evidenceText, ref as EvidenceRef, spans)) {
+      problems.push(`claim "${fact}" 이 원문 근거를 지목하지 못했다`)
       continue
     }
     claims.push({
+      id: S(o.id) === '' ? `c${i + 1}` : S(o.id),
       fact: fact as ClaimFact,
-      detail: S(o.detail),
-      // 🔴 **모르면 바꿀 수 없는 것으로 본다.** 모르는 채로 관점을 낮추면 알맹이가 사라진다
+      requiredValue,
+      selfClaim: S(o.selfClaim),
+      // 🔴 모르면 바꿀 수 없는 것으로 본다
       stanceShiftable: o.stanceShiftable === true,
+      evidenceRef: ref as EvidenceRef,
+      evidenceText,
     })
   }
 
@@ -225,7 +312,8 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
       contextSufficiency: packet.contextSufficiency,
       insufficientReasons: packet.insufficientReasons,
       coreMoment: S(j.coreMoment) === '' ? null : S(j.coreMoment),
-      anchors,
+      protectedFacts: facts,
+      sourceBeats: beats,
       participationHook: S(j.participationHook) === '' ? null : S(j.participationHook),
       participationConfidence: Number.isFinite(conf) && conf >= 0 && conf <= 1 ? conf : null,
       closingIntent: (CLOSING_INTENTS as readonly string[]).includes(closing) ? (closing as ClosingIntent) : null,
@@ -234,15 +322,14 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
       claimRequirements: claims,
       essenceVersion: ESSENCE_VERSION,
     },
-    droppedAnchors: dropped,
+    dropped,
     schemaProblems: problems,
   }
 }
 
 /**
  * 🔴 생성해도 되는가 — 확인 못 한 글은 만들지 않는다.
- *    🔴 자격 판정을 할 수 없는 claim 이 하나라도 있으면 만들지 않는다 —
- *       형식이 깨진 채로 `SELF_EXPERIENCE` 로 보내지 않는다.
+ *    🔴 자격을 판정할 수 없는 claim 이 하나라도 있으면 만들지 않는다.
  */
 export function canGenerate(
   e: SourceEssence | null, schemaProblems: readonly string[] = [],
@@ -257,7 +344,8 @@ export function canGenerate(
   return { ok: true, why: '' }
 }
 
-/** 🔴 글자 그대로 남겨야 하는 것만 — deterministic 대조가 이것을 본다 */
-export function exactAnchors(e: SourceEssence): EssenceAnchor[] {
-  return e.anchors.filter((a) => a.preserve === 'exact')
+/** 🔴 초안에 글자 그대로 남아야 하는 것 */
+export function missingProtectedFacts(e: SourceEssence, draftText: string): string[] {
+  const d = normalizeForProvenance(draftText)
+  return e.protectedFacts.filter((f) => !d.includes(normalizeForProvenance(f.text))).map((f) => f.text)
 }

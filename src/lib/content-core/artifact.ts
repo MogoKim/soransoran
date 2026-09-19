@@ -11,9 +11,11 @@ import { EVIDENCE_CHAR_BUDGET, type SourceEvidencePacket } from './evidence'
 import type { SourceEssence, ClaimRequirement, DropReason } from './essence'
 import type { CoverageGap, Stance } from './speaker'
 import type { VoiceProvenance } from './voice-evidence'
-import type { DeterministicResult, MachineOutcome, ReviewCompletion, SemanticVerdict } from './review'
+import type {
+  ClaimViolation, DeterministicResult, MachineOutcome, ReviewCompletion, SemanticVerdict,
+} from './review'
 
-export const ARTIFACT_VERSION = 'human-review-v1'
+export const ARTIFACT_VERSION = 'human-review-v2'
 
 /** 🔴 사람만 적을 수 있다 — 기계가 채우면 사칭이다 */
 export const HUMAN_VERDICTS = ['READY', 'EDIT_REQUIRED', 'HOLD'] as const
@@ -47,7 +49,8 @@ export type HumanReviewArtifact = {
   }
 
   essence: SourceEssence | null
-  droppedAnchors: { text: string; why: DropReason }[]
+  /** 🔴 근거를 지목하지 못해 버린 것 — 조용히 사라지지 않게 남긴다 */
+  dropped: { text: string; why: DropReason }[]
 
   speaker: {
     personaCode: string | null
@@ -70,6 +73,10 @@ export type HumanReviewArtifact = {
     deterministic: DeterministicResult
     semantic: SemanticVerdict | null
     semanticCompletion: ReviewCompletion
+    /** 🔴 낮춘 자리인데 자기 사실로 주장한 곳 — 초안 속 문장을 가리킨다 */
+    claimViolations: ClaimViolation[]
+    /** 🔴 말투 두 책임을 **나눠서** 남긴다 */
+    voice: { contentLeak: boolean; mismatch: boolean }
     ageConflict: boolean | null
     ageCompletion: ReviewCompletion
     /** 🔴 기계 값이다. READY 가 아니다 */

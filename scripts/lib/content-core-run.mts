@@ -15,25 +15,26 @@
 import { buildEvidencePacket, evidenceText, violatesEvidenceBudget }
   from '../../src/lib/content-core/evidence'
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
-import { canGenerate, parseEssence } from '../../src/lib/content-core/essence'
-import type { SourceEssence } from '../../src/lib/content-core/essence'
+import { canGenerate, isPersonalInfo, missingProtectedFacts, parseEssence }
+  from '../../src/lib/content-core/essence'
+import type { DropReason, SourceEssence } from '../../src/lib/content-core/essence'
 import { planSpeaker } from '../../src/lib/content-core/speaker'
 import type { SpeakerFacts, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { buildVoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
-  alteredExactAnchors, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
-  type DeterministicFailure, type DeterministicResult, type ReviewCompletion, type SemanticVerdict,
+  groundedViolations, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
+  type ClaimViolation, type DeterministicFailure, type DeterministicResult,
+  type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
 import { ARTIFACT_VERSION, type CallMeta, type HumanReviewArtifact }
   from '../../src/lib/content-core/artifact'
-import { isPersonalInfoAnchor } from '../../src/lib/content-core/essence'
 import { hasBannedWord } from '../../src/lib/micro-seed-auto-draft'
 import { judgeCopy, measureOriginality } from '../../src/lib/draft-originality'
 import { judgeSelfAgeConflict } from '../../src/lib/persona-self-age'
 import {
   buildEssencePayload, buildEssenceSystemPrompt, buildV2DraftPayload, buildV2DraftSystemPrompt,
-  buildV2ReviewPayload, buildV2ReviewSystemPrompt,
+  buildV2ReviewPayload, buildV2ReviewSystemPrompt, type ClaimVocabulary,
 } from './content-core-prompts.mjs'
 
 /** provider 한 번 — 🔴 fixture 가 가짜를 넣는다 */
@@ -66,6 +67,8 @@ export type RunInput = {
   personas: readonly PersonaInput[]
   load?: Readonly<Record<string, number>>
   voiceSourceDigest: string
+  /** 🔴 Persona 카드가 실제로 가진 값들 — 자격 어휘를 여기서 지어내지 않는다 */
+  vocabulary: ClaimVocabulary
   ask: Ask
   now: Date
   /** 🔴 원천 하나가 쓸 수 있는 요청 수 — 넘기면 완주 실패로 남는다 */
@@ -120,12 +123,13 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const budgetProblems = violatesEvidenceBudget(packet)
 
   const blank = (
-    essence: SourceEssence | null, dropped: { text: string; why: never }[],
+    essence: SourceEssence | null, dropped: { text: string; why: DropReason }[],
     speaker: SpeakerPlan | null, voice: VoiceEvidence | null,
     draft: { title: string; body: string } | null,
     det: DeterministicResult, semantic: SemanticVerdict | null,
     semanticC: ReviewCompletion, ageConflict: boolean | null, ageC: ReviewCompletion,
     outcome: 'adopt' | 'hold' | 'drop', reason: string,
+    violations: ClaimViolation[] = [],
   ): HumanReviewArtifact => ({
     artifactVersion: ARTIFACT_VERSION,
     sourceArticleId: packet.sourceArticleId,
@@ -137,7 +141,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       packetVersion: packet.packetVersion,
     },
     essence,
-    droppedAnchors: dropped,
+    dropped,
     speaker: {
       personaCode: speaker?.personaCode ?? null, stance: speaker?.stance ?? null,
       claimRequirements: essence?.claimRequirements ?? [],
@@ -149,6 +153,11 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     draft,
     review: {
       deterministic: det, semantic, semanticCompletion: semanticC,
+      claimViolations: violations,
+      voice: {
+        contentLeak: semantic?.issues.includes('voiceContentLeak') ?? false,
+        mismatch: semantic?.issues.includes('voiceMismatch') ?? false,
+      },
       ageConflict, ageCompletion: ageC, machineOutcome: outcome, machineReason: reason,
     },
     humanDecision: { verdict: null, reasons: [], reviewedAt: null },
@@ -179,12 +188,12 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
 
   // ── ① 소재 판정 ──
-  const eRes = await ask('essence', buildEssenceSystemPrompt(), buildEssencePayload(packet))
+  const eRes = await ask('essence', buildEssenceSystemPrompt(input.vocabulary), buildEssencePayload(packet))
   const eC = completionOf(eRes)
   const eParse = eC.complete
-    ? parseEssence(eRes.rawText, packet)
-    : { essence: null, droppedAnchors: [], schemaProblems: [INCOMPLETE_LABEL[eC.reason ?? 'noResponse']] }
-  const dropped = eParse.droppedAnchors as { text: string; why: never }[]
+    ? parseEssence(eRes.rawText, packet, input.vocabulary)
+    : { essence: null, dropped: [], schemaProblems: [INCOMPLETE_LABEL[eC.reason ?? 'noResponse']] }
+  const dropped = eParse.dropped
   if (!eC.complete) {
     return blank(null, dropped, null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
       'hold', `소재 판정을 완주하지 못했다 (${INCOMPLETE_LABEL[eC.reason ?? 'noResponse']})`)
@@ -214,7 +223,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   // ── ④ 초안 한 편 ──
   const dRes = await ask('draftGen',
     buildV2DraftSystemPrompt({ essence, plan, voice }),
-    buildV2DraftPayload({ packet, essence }))
+    buildV2DraftPayload({ essence }))
   const dC = completionOf(dRes)
   const draft = dC.complete ? parseDraft(dRes.rawText) : null
   if (draft === null) {
@@ -227,12 +236,13 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   // ── ⑤ deterministic — 확정 가능한 것만 ──
   const draftText = `${draft.title}\n${draft.body}`
   const failures: DeterministicFailure[] = []
-  if (isPersonalInfoAnchor(draftText)) failures.push({ code: 'personalInfo', detail: '개인정보 표식' })
+  if (isPersonalInfo(draftText)) failures.push({ code: 'personalInfo', detail: '개인정보 표식' })
   if (hasBannedWord(draftText)) failures.push({ code: 'bannedWord', detail: '금지 낱말' })
   const copy = judgeCopy(measureOriginality(draftText, evidenceText(packet)))
   if (copy.copied) failures.push({ code: 'copiedFromSource', detail: copy.reason })
-  const altered = alteredExactAnchors(essence, draftText)
-  if (altered.length > 0) failures.push({ code: 'exactAnchorAltered', detail: altered.join(' · ') })
+  // 🔴 글자 그대로 지켜야 할 **원자적 사실**만 본다 — 문장은 애초에 여기 들어오지 못한다
+  const missing = missingProtectedFacts(essence, draftText)
+  if (missing.length > 0) failures.push({ code: 'protectedFactMissing', detail: missing.join(' · ') })
   if (persona.ageBand != null && persona.ageBand.trim() !== '') {
     // 🔴 정본이 판정하지 못하면(null) 막지 않는다 — 모르는 것을 결함으로 세지 않는다
     const sa = judgeSelfAgeConflict({ ageBand: persona.ageBand, text: draftText })
@@ -246,9 +256,17 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
 
   // ── ⑥ 의미 검수 1회 ──
   const rRes = await ask('semanticReview',
-    buildV2ReviewSystemPrompt({ essence, plan }), buildV2ReviewPayload(draft))
+    buildV2ReviewSystemPrompt({ essence, plan, voice }), buildV2ReviewPayload(draft))
   const semanticC = completionOf(rRes)
-  const semantic = semanticC.complete ? parseSemanticReview(rRes.rawText) : null
+  const parsed = semanticC.complete ? parseSemanticReview(rRes.rawText) : null
+  /**
+   * 🔴 **초안에 실제로 있는 문장만 위반 근거로 인정한다.**
+   *    지어낸 근거로 막으면 정상 글이 사라진다.
+   */
+  const g = parsed === null
+    ? { kept: [] as ClaimViolation[], ungrounded: [] as ClaimViolation[] }
+    : groundedViolations(parsed.claimViolations, draftText, plan.unmetClaims)
+  const semantic = parsed === null ? null : { ...parsed, claimViolations: g.kept }
   const semanticC2: ReviewCompletion = semanticC.complete && semantic === null
     ? { complete: false, reason: 'parseFailed' } : semanticC
 
@@ -273,5 +291,6 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     deterministic: det, semantic, semanticCompletion: semanticC2,
     ageCompletion: ageC2, ageConflict: ageConflict === true,
   })
-  return blank(essence, dropped, plan, voice, draft, det, semantic, semanticC2, ageConflict, ageC2, j.outcome, j.reason)
+  return blank(essence, dropped, plan, voice, draft, det, semantic, semanticC2,
+    ageConflict, ageC2, j.outcome, j.reason, semantic?.claimViolations ?? [])
 }

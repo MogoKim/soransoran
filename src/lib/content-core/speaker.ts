@@ -43,7 +43,7 @@ export type SpeakerDecision = 'ok' | 'hold'
 export type CoverageGap = {
   sourceArticleId: string
   /** 어떤 사실을 가진 사람이 없었나 */
-  missing: { fact: ClaimFact; detail: string }[]
+  missing: { fact: ClaimFact; requiredValue: string }[]
   /** 🔴 관점을 낮출 수 없던 이유 */
   why: 'coreIsOwnExperience' | 'noPersona'
 }
@@ -59,39 +59,29 @@ export type SpeakerPlan = {
   planVersion: string
 }
 
-/** 한 사실을 이 사람이 가지고 있는가 — 🔴 모르면 **없는 것으로 본다** */
+/**
+ * 한 사실을 이 사람이 가지고 있는가 — 🔴 **정규 값끼리만 견준다.**
+ *
+ *    앞판은 자유 문장 `detail` 로 `includes` 를 했다. `'전업'.includes('')` 가 참이라
+ *    빈 값이 모든 사람을 충족시켰고, *"자녀 없이 주변 관찰로 쓴 글"* 같은 **관점 설명**이
+ *    자녀 자격값으로 쓰였다. 이제 `requiredValue` 만 본다.
+ */
+const eq = (a: string | null | undefined, b: string): boolean =>
+  (a ?? '').trim() !== '' && (a ?? '').trim() === b.trim()
+
 export function hasFact(p: SpeakerFacts, c: ClaimRequirement): boolean {
-  /**
-   * 🔴 **무엇을 말하게 되는지 모르면 자격을 줄 수 없다** (2026-09-19).
-   *    빈 detail 은 `'전업'.includes('')` 로 **모든 사람을 충족**시켰다.
-   */
-  if (c.detail.trim() === '') return false
+  const want = c.requiredValue.trim()
+  if (want === '') return false
   switch (c.fact) {
-    case 'spouse': return p.spouse === true
-    case 'children': return (p.children ?? 0) > 0
-    case 'childAgeBand': {
-      const bands = p.childAgeBands
-      if (bands === undefined || bands.length === 0) return false
-      // detail 에 나이대 이름이 있으면 그것과 맞아야 한다
-      const wanted = bands.filter((b) => c.detail.includes(b))
-      return wanted.length > 0
-    }
-    case 'parentCare': return p.parentCare === true
-    case 'menopause': return p.menopause === true
-    case 'work': {
-      const w = (p.work ?? '').trim()
-      if (w === '') return false
-      // 🔴 detail 이 말하는 일과 카드의 일이 **같은 말**일 때만 인정한다
-      return c.detail.includes(w) || w.includes(c.detail.trim())
-    }
-    case 'region': {
-      const r = (p.region ?? '').trim()
-      return r !== '' && (c.detail.includes(r) || r.includes(c.detail.trim()))
-    }
-    case 'age': {
-      const a = (p.ageBand ?? '').trim()
-      return a !== '' && c.detail.includes(a)
-    }
+    case 'spouse': return want === '있음' ? p.spouse === true : false
+    case 'children': return want === '있음' ? (p.children ?? 0) > 0 : false
+    case 'childAgeBand': return (p.childAgeBands ?? []).some((b) => b.trim() === want)
+    case 'parentCare': return want === '있음' ? p.parentCare === true : false
+    case 'menopause': return want === '있음' ? p.menopause === true : false
+    // 🔴 카드 값과 **그대로** 같아야 한다 — 부분 일치를 쓰지 않는다
+    case 'work': return eq(p.work, want)
+    case 'region': return eq(p.region, want)
+    case 'age': return eq(p.ageBand, want)
     default: return false
   }
 }
@@ -178,7 +168,7 @@ export function planSpeaker(input: {
       reason: '당사자 경험이 이 글의 알맹이다 — 자리를 바꾸면 이야기가 사라진다',
       coverageGap: {
         sourceArticleId: input.sourceArticleId,
-        missing: unmet.map((c) => ({ fact: c.fact, detail: c.detail })),
+        missing: unmet.map((c) => ({ fact: c.fact, requiredValue: c.requiredValue })),
         why: 'coreIsOwnExperience',
       },
     }
@@ -192,7 +182,7 @@ export function planSpeaker(input: {
       reason: '고른 사람으로 다시 보니 자리를 낮출 수 없다',
       coverageGap: {
         sourceArticleId: input.sourceArticleId,
-        missing: unmet.map((c) => ({ fact: c.fact, detail: c.detail })),
+        missing: unmet.map((c) => ({ fact: c.fact, requiredValue: c.requiredValue })),
         why: 'coreIsOwnExperience',
       },
     }
@@ -208,5 +198,5 @@ export function planSpeaker(input: {
 /** 🔴 생성이 절대 1인칭으로 쓰면 안 되는 사실 — 프롬프트가 이 목록을 받는다 */
 export function forbiddenClaimLines(plan: SpeakerPlan): string[] {
   if (plan.stance === 'SELF_EXPERIENCE' || plan.unmetClaims.length === 0) return []
-  return plan.unmetClaims.map((c) => `${c.detail} — 자기 일로 말하지 않습니다`)
+  return plan.unmetClaims.map((c) => `${c.selfClaim} — 자기 일로 말하지 않습니다`)
 }

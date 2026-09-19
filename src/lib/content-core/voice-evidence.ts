@@ -7,7 +7,7 @@
  *
  * 🔴 **참고 댓글 속 사건을 새 글의 자기 경험으로 가져오면 안 된다.**
  *    다만 그 판정은 **deterministic 이 하지 않는다** — 같은 말을 쓴 것과
- *    가져온 것을 글자로 가를 수 없다. 의미 검수(`voiceFidelity`)와 사람이 본다.
+ *    가져온 것을 글자로 가를 수 없다. 의미 검수(`voiceContentLeak`)와 사람이 본다.
  */
 import type { SourceEssence } from './essence'
 
@@ -70,6 +70,7 @@ export function buildVoiceEvidence(input: {
  *    초안이 *"남편 퇴직"* 인데 참고 댓글에도 그 말이 있으면 **정상 글이 막혔다.**
  *    같은 말을 쓴 것과 참고에서 **가져온 것**을 글자만 보고 가를 수 없다.
  *
- * 🔴 그래서 이 판정은 **의미 검수(`voiceFidelity`)와 사람 검토**가 맡는다.
+ * 🔴 그래서 이 판정은 **의미 검수(`voiceContentLeak`)와 사람 검토**가 맡는다.
+ *    선택한 Persona 의 말투로 읽히는가는 `voiceMismatch` 가 따로 본다.
  *    deterministic 에는 확정 가능한 것만 남긴다 — 사전도 유사도 규칙도 만들지 않는다.
  */

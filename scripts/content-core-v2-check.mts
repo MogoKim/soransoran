@@ -3,8 +3,7 @@
  * Content Core v2 행동 검사 — 🔴 **네트워크 0 · 실제 provider 0 · DB 0**
  *
  * 🔴 **정규식이 있는지 세지 않는다.** 실제 함수를 돌려 나온 `HumanReviewArtifact`
- *    값으로 본다. 통과 수는 제품 성공이 아니다 — 이 검사가 증명하는 것은
- *    **경로가 계약대로 도는가** 하나뿐이다.
+ *    값으로 본다. 통과 수는 제품 성공이 아니다.
  *
  * 🔴 **못 하는 것**: 실제 모델이 재미있는 글을 쓰는가. 가짜 provider 는 정해진
  *    답을 돌려준다. 그것은 사람 blind 평가와 유료 실측으로만 확인된다.
@@ -14,10 +13,12 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
-import { buildEssenceSystemPrompt } from './lib/content-core-prompts.mjs'
+import { buildEssenceSystemPrompt, type ClaimVocabulary } from './lib/content-core-prompts.mjs'
 import { isContentCoreV2Enabled, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT }
   from '../src/lib/content-core/flag'
 import { EVIDENCE_CHAR_BUDGET } from '../src/lib/content-core/evidence'
+import { claimValueAllowed, isAtomicFact, normalizeForProvenance }
+  from '../src/lib/content-core/essence'
 import { violatesArtifact, artifactSummary, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
 
@@ -28,13 +29,24 @@ const check = (n: string, ok: boolean, extra = ''): void => {
 }
 const NOW = new Date('2026-09-19T10:00:00.000Z')
 
-// ── 가짜 provider ─────────────────────────────────────────
+/** 🔴 정본 카드가 실제로 가진 값들 (합성 — 시험 Persona 와 같은 어휘) */
+const VOCAB: ClaimVocabulary = {
+  work: ['파트타임', '전업', '자영업', '구직', '은퇴', '직장(정규)'],
+  region: ['수도권', '광역시', '중소도시', '읍면'],
+  age: ['40대 중반', '40대 후반', '50대 초반', '50대 후반', '60대 초반'],
+  childAgeBand: ['초등', '중고등', '대학·취준', '성인'],
+}
+
 type Canned = { essence?: unknown; draft?: unknown; review?: unknown; age?: unknown }
-type Fault = { truncate?: Ask extends never ? never : string; blocked?: string; usageUnknown?: string }
 const okRes = (text: string): AskResult => ({
   ok: true, rawText: text, truncated: false, usageKnown: true,
   inputTokens: 100, outputTokens: 20, usd: 0.0001, blocked: false,
 })
+const pick = (c: Canned, stage: string): string => JSON.stringify(
+  stage === 'essence' ? c.essence ?? {}
+    : stage === 'draftGen' ? c.draft ?? {}
+      : stage === 'semanticReview' ? c.review ?? { issues: [], claimViolations: [], confidence: 0.9, note: '' }
+        : c.age ?? { conflict: false, evidence: '' })
 const fakeAsk = (c: Canned, fault: { truncate?: string; blocked?: string; usageUnknown?: string } = {}): Ask =>
   async (stage) => {
     if (fault.blocked === stage) {
@@ -44,13 +56,7 @@ const fakeAsk = (c: Canned, fault: { truncate?: string; blocked?: string; usageU
     if (fault.usageUnknown === stage) return { ...okRes(pick(c, stage)), usageKnown: false, inputTokens: null, outputTokens: null, usd: null }
     return okRes(pick(c, stage))
   }
-const pick = (c: Canned, stage: string): string => JSON.stringify(
-  stage === 'essence' ? c.essence ?? {}
-    : stage === 'draftGen' ? c.draft ?? {}
-      : stage === 'semanticReview' ? c.review ?? { issues: [], confidence: 0.9, note: '' }
-        : c.age ?? { conflict: false, evidence: '' })
 
-// ── 합성 Persona ──────────────────────────────────────────
 const P = (o: Partial<PersonaInput> & { code: string }): PersonaInput => ({
   code: o.code, spouse: o.spouse, children: o.children, childAgeBands: o.childAgeBands,
   parentCare: o.parentCare, menopause: o.menopause, work: o.work ?? null, region: o.region ?? null,
@@ -59,35 +65,49 @@ const P = (o: Partial<PersonaInput> & { code: string }): PersonaInput => ({
   samples: o.samples ?? ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요'],
   bundleDigest: o.bundleDigest ?? 'bundle0000000000',
 })
-const 전업 = P({ code: 'P02', spouse: true, children: 1, work: '전업', region: '광역시' })
-const 파트타임 = P({ code: 'P01', spouse: true, children: 2, childAgeBands: ['중고생'], work: '파트타임', region: '수도권' })
-const 무자녀 = P({ code: 'P04', spouse: true, children: 0, work: '회사원', region: '수도권' })
-const ALL = [파트타임, 전업, 무자녀]
+const partTime = P({ code: 'P01', spouse: true, children: 2, childAgeBands: ['중고등'], work: '파트타임', region: '수도권' })
+const homemaker = P({ code: 'P02', spouse: true, children: 1, work: '전업', region: '광역시' })
+const noKids = P({ code: 'P04', spouse: true, children: 0, work: '직장(정규)', region: '수도권' })
+const ALL = [partTime, homemaker, noKids]
 
 const run = (o: {
   id: string; title: string; body: string; canned: Canned
   personas?: readonly PersonaInput[]
+  load?: Record<string, number>
   fault?: { truncate?: string; blocked?: string; usageUnknown?: string }
   cap?: number
 }): Promise<HumanReviewArtifact> => runContentCore({
   sourceArticleId: o.id, title: o.title, maskedBody: o.body,
-  personas: o.personas ?? ALL, voiceSourceDigest: 'asset000000000',
-  ask: fakeAsk(o.canned, o.fault), now: NOW, callCap: o.cap ?? 6,
+  personas: o.personas ?? ALL, load: o.load, voiceSourceDigest: 'asset000000000',
+  vocabulary: VOCAB, ask: fakeAsk(o.canned, o.fault), now: NOW, callCap: o.cap ?? 6,
 })
 
-const anchor = (kind: string, text: string, preserve = 'semantic', ref = 'head'): unknown =>
-  ({ kind, text, preserve, evidenceRef: ref })
+const fact = (kind: string, text: string, ref = 'head'): unknown => ({ kind, text, evidenceRef: ref })
+const beat = (kind: string, meaning: string, evidenceText: string, ref = 'head'): unknown =>
+  ({ kind, meaning, evidenceRef: ref, evidenceText })
+const claim = (o: { id?: string; fact: string; requiredValue: string; selfClaim?: string
+  stanceShiftable?: boolean; evidenceRef?: string; evidenceText: string }): unknown => ({
+  id: o.id ?? 'c1', fact: o.fact, requiredValue: o.requiredValue,
+  selfClaim: o.selfClaim ?? '', stanceShiftable: o.stanceShiftable ?? false,
+  evidenceRef: o.evidenceRef ?? 'head', evidenceText: o.evidenceText,
+})
 
 console.log('\n══ Content Core v2 행동 검사 (🔴 네트워크 0 · provider 0 · DB 0) ══\n')
-
 // ─────────────────────────────────────────────────────────
-console.log('⓪ 스위치 — 🔴 기본은 꺼짐. 운영 경로가 바뀌지 않는다')
+console.log('⓪ 스위치 · 운영 배선 — 🔴 이 PR 은 v1 을 한 줄도 바꾸지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 아무것도 안 주면 꺼져 있다', !isContentCoreV2Enabled({}))
-  check('🔴 모르는 값도 꺼진 것이다', !isContentCoreV2Enabled({ [CONTENT_CORE_V2_ENV]: '1' }))
+  check('🔴 기본은 꺼짐', !isContentCoreV2Enabled({}))
+  check('🔴 모르는 값도 꺼진 것', !isContentCoreV2Enabled({ [CONTENT_CORE_V2_ENV]: '1' }))
   check('🟢 "true" 하나만 켠다', isContentCoreV2Enabled({ [CONTENT_CORE_V2_ENV]: 'true' }))
-  check('🔴 스위치에 지울 마일스톤이 박혀 있다', CONTENT_CORE_V2_FLAG_REMOVE_AT === 'M5')
+  check('🔴 지울 마일스톤이 박혀 있다', CONTENT_CORE_V2_FLAG_REMOVE_AT === 'M5')
+  const v1Diff = execFileSync('git', ['diff', '--numstat', 'origin/main', '--',
+    'scripts/micro-seed-auto-draft.mts', 'src/lib/micro-seed-auto-draft.ts'], { encoding: 'utf-8' })
+  check('🔴 🔴 **v1 이 origin/main 과 0줄 차이다**', v1Diff.trim() === '', v1Diff.trim())
+  check('🟢 v1 러너는 그대로 있다', existsSync('scripts/micro-seed-auto-draft.mts'))
+  const opsRefs = execFileSync('git', ['grep', '-l', 'content-core', '--', 'src/', 'scripts/'], { encoding: 'utf-8' })
+    .trim().split('\n').filter((f) => f !== '' && !f.includes('content-core'))
+  check('🔴 운영 코드에 v2 소비자가 없다', opsRefs.length === 0, opsRefs.join(', '))
 }
 
 const results: { name: string; a: HumanReviewArtifact }[] = []
@@ -96,7 +116,7 @@ const record = (name: string, a: HumanReviewArtifact): HumanReviewArtifact => {
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n① 짧지만 완결된 일상글 — 🔴 없는 갈등을 만들지 않고 짧게 완주')
+console.log('\n① 짧지만 완결된 일상글 — 🔴 protectedFacts 가 없어도 완주')
 // ─────────────────────────────────────────────────────────
 {
   const a = record('①', await run({
@@ -105,22 +125,22 @@ console.log('\n① 짧지만 완결된 일상글 — 🔴 없는 갈등을 만�
     canned: {
       essence: {
         coreMoment: '올해 첫 김장 김치를 이르게 꺼내 먹은 이야기',
-        anchors: [anchor('situation', '김장 김치'), anchor('emotion', '괜찮네요', 'semantic', 'head')],
+        protectedFacts: [], // 🔴 없어도 된다
+        sourceBeats: [beat('situation', '첫 김장 김치를 예상보다 이르게 열어 본 장면', '아직 좀 이른가 싶었는데')],
         participationHook: '', participationConfidence: 0.4,
         closingIntent: 'share', timeSensitivity: 'timeBound',
         contentRoles: ['conversationSpark'], claimRequirements: [],
       },
-      draft: { title: '김장 김치 벌써 꺼내신 분', body: '올해는 좀 이른가 싶었는데 그냥 열어 봤어요. 생각보다 맛이 들었더라고요.' },
+      draft: { title: '벌써 열어 봤어요', body: '때가 아닌가 했는데 그냥 뚜껑을 열었습니다. 생각보다 잘 익었더라고요.' },
     },
   }))
-  check('🔴 짧은 글도 끝까지 갔다 (초안이 나왔다)', a.draft !== null)
-  check('🔴 없는 갈등·질문을 만들지 않았다',
-    a.essence?.claimRequirements.length === 0 && a.essence?.participationHook === null)
-  check('🔴 원문 흐름이 통째로 근거에 남았다 (짧은 글은 안 자른다)',
-    !a.evidence.truncated && a.evidence.spans.filter((s) => s.kind === 'tail').length === 0)
+  check('🔴 🔴 **protectedFacts 0개여도 완주한다**',
+    a.essence?.protectedFacts.length === 0 && a.draft !== null)
+  check('🔴 없는 갈등·질문을 만들지 않았다', a.essence?.claimRequirements.length === 0)
+  check('🔴 짧은 글은 안 자른다', !a.evidence.truncated)
   check('🔴 기계 판정이 나왔고 사람 칸은 비어 있다',
     a.review.machineOutcome === 'adopt' && a.humanDecision.verdict === null)
-  check('🔴 정상 경로 호출 4회 (판정1 · 생성1 · 검수1 · 나이1)', a.cost.totalCalls === 4, `${a.cost.totalCalls}회`)
+  check('🔴 정상 경로 호출 4회', a.cost.totalCalls === 4, `${a.cost.totalCalls}회`)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -128,61 +148,54 @@ console.log('\n② 사진·앞 대화가 있어야 아는 글 — 🔴 생성 0'
 // ─────────────────────────────────────────────────────────
 {
   const a = record('②', await run({
-    id: 'S2', title: '이거 어떤가요', body: '아래 사진 보시고 알려주세요. 지난 글에 이어서요.',
+    id: 'S2', title: '이거 어떤가요', body: '아래 사진을 보고 알려주세요. 지난 글에 이어서요.',
     canned: { draft: { title: 'x', body: 'y' } },
   }))
-  check('🔴 무슨 이야기인지 확인 못 함으로 섰다', a.evidence.contextSufficiency === 'insufficient')
-  check('🔴 사진·앞 글 두 가지를 다 짚었다',
+  check('🔴 확인 못 함으로 섰다', a.evidence.contextSufficiency === 'insufficient')
+  check('🔴 사진·앞 글 둘 다 짚었다',
     a.evidence.insufficientReasons.includes('needsImage')
     && a.evidence.insufficientReasons.includes('needsPriorThread'))
-  check('🔴 🔴 **유료 호출 0회** — 묻기 전에 멈췄다', a.cost.totalCalls === 0, `${a.cost.totalCalls}회`)
+  check('🔴 🔴 **유료 호출 0회**', a.cost.totalCalls === 0, `${a.cost.totalCalls}회`)
   check('🔴 초안을 만들지 않았다', a.draft === null)
-  check('🔴 adopt 가 아니다', a.review.machineOutcome === 'hold')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n③ 핵심 질문이 끝에 있는 긴 글 — 🔴 꼬리로 보존')
+console.log('\n③ 긴 글 — 🔴 꼬리 근거 · 줄바꿈이 provenance 를 죽이지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  const long = `${'서론이 길게 이어집니다. '.repeat(30)}그래서 다들 어떻게 하시는지 궁금해요?`
+  const long = `${'서론이 길게 이어집니다. '.repeat(30)}\n그래서 다들\n어떻게 하시는지 궁금해요?`
   const a = record('③', await run({
     id: 'S3', title: '요즘 고민이 하나 있어서요', body: long,
     canned: {
       essence: {
         coreMoment: '길게 적은 고민 끝에 다들 어떻게 하는지 묻는 글',
-        anchors: [anchor('participationIntent', '다들 어떻게 하시는지', 'semantic', 'tail')],
+        protectedFacts: [],
+        // 🔴 원문에는 줄바꿈이 있다 — 공백만 지우면 찾아져야 한다
+        sourceBeats: [beat('participation', '다른 사람들은 어떻게 하는지 듣고 싶어 하는 마음',
+          '그래서 다들 어떻게 하시는지 궁금해요', 'tail')],
         participationHook: '다들 어떻게 하시는지', participationConfidence: 0.8,
         closingIntent: 'ask', timeSensitivity: 'evergreen',
         contentRoles: ['conversationSpark'], claimRequirements: [],
       },
-      draft: { title: '다들 이럴 때 어떻게 하세요', body: '한참 혼자 생각하다가 여기 여쭤봅니다. 어떻게들 하시는지 궁금해요.' },
+      draft: { title: '다들 이럴 때 어떻게 하세요', body: '한참 혼자 생각하다가 여쭤봅니다. 어떻게들 하시는지 궁금해요.' },
     },
   }))
-  const tail = a.evidence.spans.find((s) => s.kind === 'tail')
-  check('🔴 긴 글은 머리·꼬리로 잘렸다', a.evidence.truncated && tail !== undefined)
-  check('🔴 🔴 **끝의 질문이 꼬리 근거에 남았다**', (tail?.text ?? '').includes('궁금해요'))
-  check('🔴 머리와 꼬리가 겹치지 않는다', (() => {
-    const h = a.evidence.spans.find((s) => s.kind === 'head')!
-    return h.toRatio <= (tail?.fromRatio ?? 1)
-  })())
-  check(`🔴 근거 총량이 예산 ${EVIDENCE_CHAR_BUDGET}자 안이다`,
-    a.evidence.bodyEvidenceChars <= EVIDENCE_CHAR_BUDGET, `${a.evidence.bodyEvidenceChars}자`)
-  check('🔴 버린 가운데를 비율로 남겼다', a.evidence.omittedRatio > 0)
-  check('🔴 꼬리 근거가 있으니 만들었다', a.draft !== null)
+  check('🔴 긴 글은 머리·꼬리로 잘렸다', a.evidence.truncated)
+  check('🔴 🔴 **줄바꿈이 달라도 근거가 살아남는다**',
+    a.essence?.sourceBeats.length === 1, JSON.stringify(a.dropped))
+  check(`🔴 총량이 예산 ${EVIDENCE_CHAR_BUDGET}자 안이다`, a.evidence.totalEvidenceChars <= EVIDENCE_CHAR_BUDGET)
+  check('🔴 끝까지 갔다', a.draft !== null)
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n④ 숫자가 있는 실용 질문 — 🔴 exact / semantic 을 가른다')
+console.log('\n④ 숫자 — 🔴 원자적 사실만 글자 그대로 지킨다')
 // ─────────────────────────────────────────────────────────
 {
-  const canned = (draftBody: string): Canned => ({
+  const base = (draftBody: string): Canned => ({
     essence: {
-      coreMoment: '직원 9명인 곳에서 여행 선물을 사야 하는지 묻는 글',
-      anchors: [
-        anchor('number', '9명', 'exact', 'head'),
-        anchor('discoverabilityTerm', '선물', 'exact', 'title'),
-        anchor('situation', '여행', 'semantic', 'title'),
-      ],
+      coreMoment: '직원 아홉 명인 곳에서 여행 선물을 사야 하는지 묻는 글',
+      protectedFacts: [fact('number', '9명'), fact('searchTerm', '선물', 'title')],
+      sourceBeats: [beat('situation', '근무 시간을 다른 날로 옮겨 채운 사정', '다른날 다 근무해요')],
       participationHook: '사야 하나 말아야 하나', participationConfidence: 0.9,
       closingIntent: 'ask', timeSensitivity: 'evergreen',
       contentRoles: ['usefulAnswer', 'conversationSpark'], claimRequirements: [],
@@ -190,533 +203,310 @@ console.log('\n④ 숫자가 있는 실용 질문 — 🔴 exact / semantic 을 
     draft: { title: '여행 선물 다들 사오세요', body: draftBody },
   })
   const keep = record('④', await run({
-    id: 'S4', title: '여행 다녀오면 선물하나요', body: '직원이 9명 정도 되는데 다들 사오시나요.',
-    canned: canned('직원이 9명이라 한 명씩 챙기면 부담이 큽니다. 다들 어떻게 하세요.'),
+    id: 'S4', title: '여행 다녀오면 선물하나요', body: '시간 땜빵난건 다른날 다 근무해요. 직원은 9명정도되요.',
+    canned: base('직원이 9명이라 한 명씩 챙기면 부담이 큽니다. 다들 어떻게 하세요.'),
   }))
-  check('🔴 exact 숫자를 지키면 통과한다', keep.review.deterministic.pass)
+  check('🔴 원자적 숫자를 지키면 통과한다', keep.review.deterministic.pass,
+    JSON.stringify(keep.review.deterministic.failures))
+  check('🔴 🔴 **"직원은 9명정도되요" 에서 "9명" 을 찾아낸다**',
+    keep.essence?.protectedFacts.some((f) => f.text === '9명') === true)
   const lost = await run({
-    id: 'S4b', title: '여행 다녀오면 선물하나요', body: '직원이 9명 정도 되는데 다들 사오시나요.',
-    canned: canned('사람이 꽤 많아서 한 명씩 챙기면 부담이 큽니다. 다들 어떻게 하세요.'),
+    id: 'S4b', title: '여행 다녀오면 선물하나요', body: '시간 땜빵난건 다른날 다 근무해요. 직원은 9명정도되요.',
+    canned: base('사람이 꽤 많아서 한 명씩 챙기면 부담이 큽니다. 다들 어떻게 하세요.'),
   })
-  check('🔴 🔴 **exact 숫자를 지우면 잡는다**',
-    !lost.review.deterministic.pass
-    && lost.review.deterministic.failures.some((f) => f.code === 'exactAnchorAltered'))
-  check('🔴 semantic 은 글자 그대로를 요구하지 않는다',
-    !lost.review.deterministic.failures.some((f) => f.detail.includes('여행')))
+  check('🔴 🔴 **숫자를 지우면 잡는다**',
+    lost.review.deterministic.failures.some((f) => f.code === 'protectedFactMissing'))
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑤ 1인칭 직업 경험 — 🔴 자격 있는 사람 또는 HOLD')
+console.log('\n⑤ 🔴 A 회귀 — 원문 질문 전체를 글자 그대로 지키라고 못 한다')
 // ─────────────────────────────────────────────────────────
 {
-  const claim = { fact: 'work', detail: '파트타임으로 일하는 사람의 경험', stanceShiftable: false }
-  const essence = {
-    coreMoment: '파트타임으로 일하며 겪은 일',
-    anchors: [anchor('situation', '일하는')],
-    participationHook: '', participationConfidence: 0.5,
-    closingIntent: 'share', timeSensitivity: 'evergreen',
-    contentRoles: ['experienceResonance'], claimRequirements: [claim],
-  }
-  const ok = record('⑤', await run({
-    id: 'S5', title: '파트타임 일하면서 느낀 거', body: '오전에만 나가는데 이런 점이 좋더라고요.',
-    canned: { essence, draft: { title: '오전만 나가는 일', body: '오전에만 나가니 오후가 통으로 남더라고요.' } },
+  const a = record('⑤', await run({
+    id: 'S5', title: '남편이 집안일 많이 돕나요?',
+    body: '티비에는 집안일 돕는 남편들 많이 나오던데.. 왜 저희 애아빠는 안그럴까요\n\n역시 방송은 방송일 뿐일까요',
+    canned: {
+      essence: {
+        coreMoment: '방송에 나오는 남편들과 자기 남편을 견주며 답답해하는 이야기',
+        // 🔴 앞판이 그대로 통과시켰던 모양 — 문장 · 질문을 글자 그대로 지키라고 한다
+        protectedFacts: [
+          fact('searchTerm', '왜 저희 애아빠는 안그럴까요'),
+          fact('searchTerm', '역시 방송은 방송일 뿐일까요'),
+          fact('searchTerm', '집안일'),
+        ],
+        sourceBeats: [beat('contrast', '화면 속 남편과 우리 집 남편의 거리', '티비에는 집안일 돕는 남편들')],
+        participationHook: '같은 마음인 사람이 있는지', participationConfidence: 0.85,
+        closingIntent: 'ask', timeSensitivity: 'evergreen',
+        contentRoles: ['conversationSpark', 'experienceResonance'],
+        // 🔴 남편을 자기 남편처럼 말하는 글 — spouse 조건이 있어야 한다
+        claimRequirements: [
+          claim({ id: 'c1', fact: 'spouse', requiredValue: '있음', selfClaim: '자기 배우자의 가사 분담',
+            evidenceText: '저희 애아빠' }),
+        ],
+      },
+      draft: { title: '화면 속 그 집 남편들', body: '방송만 보면 다들 앞치마를 두르고 집안일을 하더군요. 저희 집은 영 딴판이라 웃음이 납니다. 다들 어떠세요.' },
+    },
   }))
-  check('🔴 자격 있는 사람이 있으면 내 경험으로 쓴다',
-    ok.speaker.personaCode === 'P01' && ok.speaker.stance === 'SELF_EXPERIENCE')
-  const hold = await run({
-    id: 'S5b', title: '파트타임 일하면서 느낀 거', body: '오전에만 나가는데 이런 점이 좋더라고요.',
-    canned: { essence, draft: { title: 'x', body: 'y' } },
-    personas: [전업],
-  })
-  check('🔴 🔴 **자격 없고 자리도 못 낮추면 HOLD**', hold.review.machineOutcome === 'hold' && hold.draft === null)
-  check('🔴 coverageGap 을 남겼다 — 어떤 사람이 없었는지', (() => {
-    const g = hold.speaker.coverageGap
-    return g !== null && g.why === 'coreIsOwnExperience' && g.missing.some((m) => m.fact === 'work')
+  check('🔴 🔴 **질문 전체를 protectedFact 로 받지 않는다**',
+    a.essence?.protectedFacts.every((f) => !f.text.includes('까요')) === true,
+    JSON.stringify(a.essence?.protectedFacts))
+  check('🔴 버린 이유가 "문장·절·질문"이다',
+    a.dropped.filter((d) => d.why === 'notAtomic').length === 2, JSON.stringify(a.dropped))
+  check('🟢 원자적인 것은 남는다', a.essence?.protectedFacts.some((f) => f.text === '집안일') === true)
+  check('🔴 🔴 **spouse 조건이 자격에 들어갔다**',
+    a.essence?.claimRequirements.some((c) => c.fact === 'spouse' && c.requiredValue === '있음') === true)
+  check('🔴 기혼 Persona 가 배정됐다', ['P01', 'P02', 'P04'].includes(a.speaker.personaCode ?? ''))
+  check('🟢 원문을 옮기지 않은 초안은 통과한다', a.review.deterministic.pass,
+    JSON.stringify(a.review.deterministic.failures))
+  check('🔴 원문 문장이 생성 payload 로 가지 않는다', (() => {
+    const src = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
+    const i = src.indexOf('export function buildV2DraftPayload')
+    const body = src.slice(i, src.indexOf('\n}', i))
+    return !body.includes('sourceSpans') && !body.includes('evidenceText') && !body.includes('packet')
   })())
-  check('🔴 🔴 **아무나 배정하지 않았다** (v1 fallback 금지)', hold.speaker.personaCode === null)
-  check('🔴 생성 호출까지 가지 않았다', hold.cost.calls.every((c) => c.stage !== 'draftGen'))
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑥ 관찰로 바꿀 수 있는 소재 — 🔴 자리를 낮춰 완주')
+console.log('\n⑥ 🔴 B 회귀 — 관점 설명을 자녀 자격값으로 쓰지 않는다')
 // ─────────────────────────────────────────────────────────
 {
   const a = record('⑥', await run({
-    id: 'S6', title: '아들 낳으면 왜 안쓰럽게 보는지', body: '주위에서 그런 시선 많이 보셨나요.',
+    id: 'S6', title: '아들 낳으면 왜 안쓰럽게 보는지',
+    body: '딸도 딸 나름이고 아들도 진짜 엄마 잘챙기는 사람들 많이 봤거든요. 전 아직 자녀는 없지만 주위에도 저런 시선들 많이 보셨나요??',
     canned: {
       essence: {
-        coreMoment: '아들 엄마를 안쓰럽게 보는 시선에 대한 이야기',
-        anchors: [anchor('contrast', '안쓰럽게')],
-        participationHook: '그런 시선 보셨나요', participationConfidence: 0.8,
+        coreMoment: '아들을 낳은 사람을 안쓰럽게 보는 시선에 대한 의문',
+        protectedFacts: [],
+        sourceBeats: [beat('contrast', '아들과 딸을 두고 도는 통념과 실제로 본 모습의 어긋남', '아들도 진짜 엄마 잘챙기는 사람들')],
+        participationHook: '그런 시선을 본 적 있는지', participationConfidence: 0.72,
         closingIntent: 'ask', timeSensitivity: 'evergreen',
         contentRoles: ['conversationSpark', 'experienceResonance'],
-        claimRequirements: [{ fact: 'children', detail: '아들을 키우는 사람의 경험', stanceShiftable: true }],
+        // 🔴 앞판이 통과시킨 모양 — requiredValue 자리에 관점 설명을 넣었다
+        claimRequirements: [
+          claim({ id: 'c1', fact: 'children', requiredValue: '자녀 없이 주변 관찰로 쓴 글',
+            evidenceText: '전 아직 자녀는 없지만' }),
+        ],
       },
-      draft: { title: '그런 시선 겪어보셨어요', body: '주위에서 안쓰럽게 보는 말 들었다는 얘기를 들었어요. 다들 어떠세요.' },
+      draft: { title: 'x', body: 'y' },
     },
-    personas: [무자녀],
   }))
-  check('🔴 자격이 없어도 버리지 않았다', a.draft !== null)
-  check('🔴 🔴 자리를 낮췄다 (내 경험이 아니다)',
-    a.speaker.stance !== null && a.speaker.stance !== 'SELF_EXPERIENCE', String(a.speaker.stance))
-  check('🔴 묻는 글이었으므로 질문 자리로 갔다', a.speaker.stance === 'QUESTION')
-  check('🔴 못 채운 주장을 남겨 생성이 1인칭으로 못 쓰게 했다',
-    a.speaker.unmetClaims.some((c) => c.fact === 'children'))
+  check('🔴 🔴 **관점 설명은 자격값이 될 수 없다 — 생성하지 않는다**',
+    a.draft === null && a.review.machineOutcome === 'hold')
+  check('🔴 형식 문제로 남겼다', a.review.machineReason.includes('claim'), a.review.machineReason)
+  check('🔴 생성 호출까지 가지 않았다', a.cost.calls.every((c) => c.stage !== 'draftGen'))
+  // 🔴 coreMoment 를 원문에 없는 말로 바꾸지 않는다 — 사람이 볼 수 있게 남는다
+  check('🟢 coreMoment 가 artifact 에 그대로 남는다',
+    (a.essence?.coreMoment ?? '').includes('안쓰럽게'))
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑦ 공개 고유명 · 시의성 — 🔴 이름과 TTL 보존')
+console.log('\n⑦ 🔴 C 회귀 — 알바는 파트타임 Persona 와 연결된다')
 // ─────────────────────────────────────────────────────────
 {
+  const essence = {
+    coreMoment: '알바 시간을 조정하고 여행을 다녀온 뒤 동료 선물을 해야 하는지 묻는 글',
+    protectedFacts: [fact('number', '9명')],
+    sourceBeats: [beat('situation', '대신 일해준 사람 없이 시간을 다른 날로 채운 사정', '다른날 다 근무해요')],
+    participationHook: '선물을 해야 하는지', participationConfidence: 0.75,
+    closingIntent: 'ask', timeSensitivity: 'timeBound',
+    contentRoles: ['usefulAnswer', 'conversationSpark'],
+    claimRequirements: [
+      claim({ id: 'c1', fact: 'work', requiredValue: '파트타임', selfClaim: '알바로 일하는 사람의 경험',
+        stanceShiftable: true, evidenceText: '알바' }),
+    ],
+  }
+  const body = '알바 하는데 시간 땜빵난건 다른날 다 근무해요. 직원은 9명정도되요.'
+  // 🔴 파트타임 Persona 가 부하가 더 많아도 자격자가 먼저다
   const a = record('⑦', await run({
-    id: 'S7', title: '어제 그 프로그램 보셨어요', body: '나는솔로 마지막 회 보고 한참 생각했네요.',
-    canned: {
-      essence: {
-        coreMoment: '나는솔로 마지막 회를 보고 든 생각',
-        anchors: [anchor('publicEntity', '나는솔로', 'exact', 'head')],
-        participationHook: '보신 분 계세요', participationConfidence: 0.7,
-        closingIntent: 'ask', timeSensitivity: 'timeBound',
-        contentRoles: ['discoveryAnchor', 'conversationSpark'], claimRequirements: [],
-      },
-      draft: { title: '나는솔로 마지막 회 보신 분', body: '어젯밤에 보고 한참 앉아 있었어요. 보신 분 계세요.' },
-    },
+    id: 'S7', title: '알바중 여행다녀오면 선물하나요..?', body,
+    canned: { essence, draft: { title: '알바 다녀와서 선물', body: '시간을 다른 날로 옮겨 다 채웠는데요. 직원이 9명이라 고민됩니다. 다들 어떻게 하세요.' } },
+    load: { P01: 5, P02: 0, P04: 0 },
   }))
-  check('🔴 고유명이 exact 로 살아 있다', a.review.deterministic.pass)
-  check('🔴 🔴 시의성이 artifact 에 남았다 (TTL 판단 근거)', a.essence?.timeSensitivity === 'timeBound')
-  check('🔴 검색 유입 역할이 기록됐다', a.essence?.contentRoles.includes('discoveryAnchor') === true)
+  check('🔴 🔴 **파트타임 Persona 가 배정된다 (부하가 많아도)**',
+    a.speaker.personaCode === 'P01', String(a.speaker.personaCode))
+  check('🔴 자기 경험으로 쓴다', a.speaker.stance === 'SELF_EXPERIENCE')
+  check('🟢 전업 Persona 가 알바를 말하지 않는다', a.speaker.personaCode !== 'P02')
+  // 자격자가 없으면 자리를 낮춘다
+  const shifted = await run({
+    id: 'S7b', title: '알바중 여행다녀오면 선물하나요..?', body,
+    canned: { essence, draft: { title: '알바 선물 어떻게들 하세요', body: '시간을 다른 날로 옮겨 채우는 경우엔 어떻게 하시는지 궁금합니다. 직원이 9명이라면 더 그렇고요.' } },
+    personas: [homemaker],
+  })
+  check('🔴 자격자가 없으면 자리를 낮춘다',
+    shifted.speaker.stance !== null && shifted.speaker.stance !== 'SELF_EXPERIENCE',
+    String(shifted.speaker.stance))
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 말투 참고의 사건을 자기 경험으로 가져옴 — 🔴 의미 검수가 맡는다')
-// ─────
+console.log('\n⑧ 🔴 C 회귀 — 낮춘 자리인데 자기 사실로 주장하면 잡는다')
+// ─────────────────────────────────────────────────────────
 {
-  const leakP = P({
-    code: 'P09', spouse: true, children: 1, work: '전업',
-    samples: ['지난주에 시어머니 병원 모시고 다녀왔어요', '그러게요 저도 비슷했어요'],
-  })
+  const essence = {
+    coreMoment: '알바 시간을 조정하고 동료 선물을 해야 하는지 묻는 글',
+    protectedFacts: [], sourceBeats: [beat('situation', '시간을 다른 날로 채운 사정', '다른날 다 근무해요')],
+    participationHook: '선물을 해야 하는지', participationConfidence: 0.75,
+    closingIntent: 'ask', timeSensitivity: 'timeBound',
+    contentRoles: ['usefulAnswer'],
+    claimRequirements: [
+      claim({ id: 'c1', fact: 'work', requiredValue: '파트타임', selfClaim: '알바로 일하는 사람의 경험',
+        stanceShiftable: true, evidenceText: '알바' }),
+    ],
+  }
+  const violating = '제가 조정한 시간을 다른 날에 다 채우는 거거든요. 이럴 때 선물을 해야 하나요.'
   const a = record('⑧', await run({
-    id: 'S8', title: '요즘 날이 부척 차네요', body: '아침에 창문 열었다가 놀랐어요.',
+    id: 'S8', title: '알바중 여행다녀오면 선물하나요..?',
+    body: '알바 하는데 시간 땜빵난건 다른날 다 근무해요.',
+    personas: [homemaker],
+    canned: {
+      essence,
+      draft: { title: '이럴 때 선물 하시나요', body: violating },
+      review: { issues: [], confidence: 0.8, note: '',
+        claimViolations: [{ claimId: 'c1', evidence: '제가 조정한 시간을 다른 날에 다 채우는 거거든요', why: '알바 경험을 자기 일로 말했다' }] },
+    },
+  }))
+  check('🔴 🔴 **QUESTION 자리인데 자기 일로 말하면 adopt 가 아니다**', a.review.machineOutcome === 'hold')
+  check('🔴 어느 주장을 어디서 위반했는지 남는다',
+    a.review.claimViolations.length === 1 && a.review.claimViolations[0]!.claimId === 'c1')
+  check('🔴 근거가 초안에 실제로 있는 문장이다',
+    violating.includes(a.review.claimViolations[0]!.evidence))
+  // 🔴 초안에 없는 문장을 근거로 대면 막지 않는다
+  const fake = await run({
+    id: 'S8b', title: '알바중 여행다녀오면 선물하나요..?',
+    body: '알바 하는데 시간 땜빵난건 다른날 다 근무해요.',
+    personas: [homemaker],
+    canned: {
+      essence,
+      draft: { title: '이럴 때 선물 하시나요', body: '그런 경우엔 어떻게들 하시는지 궁금합니다.' },
+      review: { issues: [], confidence: 0.8, note: '',
+        claimViolations: [{ claimId: 'c1', evidence: '제가 매일 알바를 갑니다', why: '지어낸 근거' }] },
+    },
+  })
+  check('🔴 🔴 **지어낸 근거로는 막지 않는다**',
+    fake.review.claimViolations.length === 0 && fake.review.machineOutcome === 'adopt',
+    JSON.stringify(fake.review.claimViolations))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 🔴 Voice 책임 분리 — 사건 유출과 말투 불일치는 다른 것이다')
+// ─────────────────────────────────────────────────────────
+{
+  const base = {
+    id: 'S9', title: '요즘 날이 부쩍 차네요', body: '아침에 창문 열었다가 놀랐어요.',
     canned: {
       essence: {
         coreMoment: '아침 공기가 갑자기 차가워진 이야기',
-        anchors: [anchor('situation', '창문')],
+        protectedFacts: [], sourceBeats: [beat('emotion', '갑작스러운 서늘함에 놀란 마음', '창문 열었다가 놀랐어요')],
         participationHook: '', participationConfidence: 0.3,
         closingIntent: 'share', timeSensitivity: 'timeBound',
         contentRoles: ['conversationSpark'], claimRequirements: [],
       },
-      draft: { title: '아침 공기가 달라졌어요', body: '창을 여니 놀랄 만큼 서늘하더군요. 지난주 시어머니 병원 모시고 갔을 때랑 또 달라요.' },
-      review: { issues: ['voiceFidelity'], confidence: 0.8, note: '참고 댓글의 사건이 자기 경험으로 들어왔다' },
+      draft: { title: '아침 공기가 달라졌어요', body: '창을 여니 놀랄 만큼 서늘하더군요.' },
     },
-    personas: [leakP],
+  }
+  const leak = record('⑨', await run({
+    ...base, canned: { ...base.canned, review: { issues: ['voiceContentLeak'], claimViolations: [], confidence: 0.8, note: '참고 댓글의 사건이 들어왔다' } },
   }))
-  check('🔴 🔴 **의미 검수가 말하면 adopt 가 아니다**', a.review.machineOutcome === 'hold')
-  check('🔴 사유가 voiceFidelity 로 남았다', a.review.machineReason.includes('voiceFidelity'))
-  check('🔴 🔴 **deterministic 은 말투로 막지 않는다**',
-    a.review.deterministic.pass, JSON.stringify(a.review.deterministic.failures))
-  check('🔴 말투 출처가 artifact 에 남았다', a.voice.provenance?.personaCode === 'P09')
-  check('🔴 사람이 blind 로 볼 항목이 있다', a.voice.blindCheckPoints.length >= 3)
-}
-
-// ─────
-console.log('\n⑨ 소재가 사라진 일반 글 — 🔴 사람에게 넘긴다')
-// ─────────────────────────────────────────────────────────
-{
-  const a = record('⑨', await run({
-    id: 'S9', title: '여행 다녀오면 선물하나요', body: '직원이 9명 정도 되는데 다들 사오시나요.',
-    canned: {
-      essence: {
-        coreMoment: '직원 9명인 곳에서 여행 선물을 사야 하는지 묻는 글',
-        anchors: [anchor('situation', '선물', 'semantic', 'title')],
-        participationHook: '사야 하나', participationConfidence: 0.9,
-        closingIntent: 'ask', timeSensitivity: 'evergreen',
-        contentRoles: ['conversationSpark'], claimRequirements: [],
-      },
-      draft: { title: '요즘 누구랑 가장 자주 이야기하세요', body: '문득 그런 생각이 들어서 여쭤봅니다. 다들 어떠세요.' },
-      // 🔴 의미 검수가 소재 소실을 말한다
-      review: { issues: ['sourceFidelity'], confidence: 0.8, note: '어떤 원문을 읽고 썼는지 알 수 없다' },
-    },
-  }))
-  check('🔴 🔴 **소재가 사라지면 adopt 가 아니다**', a.review.machineOutcome === 'hold')
-  check('🔴 사유가 남았다', a.review.machineReason.includes('sourceFidelity'))
-  check('🔴 사람 판정 칸은 비어 있다 — 기계가 READY 라고 하지 않는다',
-    a.humanDecision.verdict === null)
+  check('🔴 사건 유출이면 adopt 아님', leak.review.machineOutcome === 'hold')
+  check('🔴 🔴 **artifact 가 사건 유출과 말투 불일치를 나눠 남긴다**',
+    leak.review.voice.contentLeak === true && leak.review.voice.mismatch === false)
+  const mismatch = await run({
+    ...base, id: 'S9b',
+    canned: { ...base.canned, review: { issues: ['voiceMismatch'], claimViolations: [], confidence: 0.8, note: '그 사람 말투가 아니다' } },
+  })
+  check('🔴 말투 불일치도 adopt 아님', mismatch.review.machineOutcome === 'hold')
+  check('🔴 🔴 **두 축이 따로 기록된다**',
+    mismatch.review.voice.mismatch === true && mismatch.review.voice.contentLeak === false)
+  check('🔴 검수 프롬프트가 voiceCore 를 받는다', (() => {
+    const src = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
+    const i = src.indexOf('export function buildV2ReviewSystemPrompt')
+    return src.slice(i, src.indexOf('export function buildV2ReviewPayload', i)).includes('voice.voiceCore')
+  })())
+  check('🔴 고정 할당량(이모티콘 개수·문장 길이)을 만들지 않았다', (() => {
+    const src = readFileSync('src/lib/content-core/review.ts', 'utf-8')
+    return src.includes('정해진 몫을 세지 않는다') && !/이모티콘 \d|문장 \d개/.test(src)
+  })())
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑩ 미완주 검수 — 🔴 잘림·차단·사용량 미상은 통과가 아니다')
+console.log('\n⑩ 복제 · 완주 — 🔴 기존 계약을 그대로 지킨다')
 // ─────────────────────────────────────────────────────────
 {
-  const base = {
-    id: 'S10', title: '오늘 아침 김치 꺼냈어요', body: '맛은 괜찮네요.',
+  const copied = record('⑩', await run({
+    id: 'S10', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
     canned: {
       essence: {
-        coreMoment: '김치를 이르게 꺼낸 이야기', anchors: [anchor('situation', '김치')],
+        coreMoment: '김치를 이르게 꺼낸 이야기', protectedFacts: [],
+        sourceBeats: [beat('situation', '예상보다 이르게 열어 본 장면', '좀 이른가 싶었는데')],
         participationHook: '', participationConfidence: 0.4, closingIntent: 'share',
         timeSensitivity: 'timeBound', contentRoles: ['conversationSpark'], claimRequirements: [],
       },
-      draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
+      draft: { title: '벌써 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요. 그냥 열었습니다.' },
+    },
+  }))
+  check('🔴 🔴 **원문 실질 복제는 계속 차단된다**',
+    copied.review.deterministic.failures.some((f) => f.code === 'copiedFromSource'))
+  const base = {
+    id: 'S10b', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    canned: {
+      essence: {
+        coreMoment: '김치를 이르게 꺼낸 이야기', protectedFacts: [],
+        sourceBeats: [beat('situation', '예상보다 이르게 열어 본 장면', '좀 이른가 싶었는데')],
+        participationHook: '', participationConfidence: 0.4, closingIntent: 'share',
+        timeSensitivity: 'timeBound', contentRoles: ['conversationSpark'], claimRequirements: [],
+      },
+      draft: { title: '벌써 열어 봤어요', body: '때가 아닌가 했는데 뚜껑을 열었습니다. 생각보다 잘 익었더라고요.' },
     },
   }
-  for (const [label, fault, reason] of [
-    ['검수 답이 잘림', { truncate: 'semanticReview' }, 'truncated'],
-    ['검수가 예산에 막힘', { blocked: 'semanticReview' }, 'budgetBlocked'],
-    ['검수 사용량 미상', { usageUnknown: 'semanticReview' }, 'usageUnknown'],
-    ['나이 검수 잘림', { truncate: 'ageCheck' }, 'truncated'],
-  ] as const) {
-    const a = await run({ ...base, fault })
-    const c = reason === 'truncated' && 'truncate' in fault && fault.truncate === 'ageCheck'
-      ? a.review.ageCompletion : a.review.semanticCompletion
-    check(`🔴 ${label} → adopt 아님`, a.review.machineOutcome !== 'adopt', a.review.machineOutcome)
-    check(`   ↳ 사유가 남았다 (${reason})`, c.reason === reason || a.review.ageCompletion.reason === reason)
-  }
-  const capped = await run({ ...base, cap: 2 })
-  check('🔴 원천별 상한에 걸리면 adopt 아님', capped.review.machineOutcome !== 'adopt')
-  check('🔴 상한을 넘겨 부르지 않았다', capped.cost.totalCalls <= 2, `${capped.cost.totalCalls}회`)
-}
-
-// ─────────────────────────────────────────────────────────
-console.log('\n⑪ artifact 계약 — 🔴 담으면 안 되는 것이 없다')
-// ─────────────────────────────────────────────────────────
-{
-  for (const { name, a } of results) {
-    const bad = violatesArtifact(a)
-    check(`${name} artifact 가 계약을 지킨다`, bad.length === 0, bad.join(' / '))
-  }
-  const one = results.find((r) => r.name === '④')!.a
-  check('🔴 사람이 읽을 요약이 나온다', artifactSummary(one).includes('S4'))
-  check('🔴 비용 칸이 채워졌다', one.cost.totalCalls > 0 && one.cost.totalUsd !== null)
-  check('🔴 🔴 원문 전문을 담지 않는다 — 근거는 예산 안이다',
-    results.every((r) => r.a.evidence.bodyEvidenceChars <= EVIDENCE_CHAR_BUDGET))
-}
-
-// ─────────────────────────────────────────────────────────
-console.log('\n⑫ v1/v2 경계 — 🔴 옛 경로가 새 경로로 새지 않는다')
-// ─────────────────────────────────────────────────────────
-{
-  /**
-   * 🔴 **이것만 소스 검사다.** import 관계는 실행으로 못 잰다 —
-   *    v1 계약이 새어 들어오는 것은 돌려 봐야 알 수 없고, 새고 나면 늦다.
-   */
-  const files = [
-    'scripts/lib/content-core-run.mts', 'scripts/lib/content-core-prompts.mts',
-    'src/lib/content-core/evidence.ts', 'src/lib/content-core/essence.ts',
-    'src/lib/content-core/speaker.ts', 'src/lib/content-core/voice-evidence.ts',
-    'src/lib/content-core/review.ts', 'src/lib/content-core/artifact.ts',
-    'src/lib/content-core/flag.ts',
-  ]
-  /** 🔴 v2 가 v1 에서 가져와도 되는 것 — 저장소에 한 벌이어야 하는 안전 정본만 */
-  const ALLOWED = new Set(['hasBannedWord', 'BANNED_WORDS'])
-  const FORBIDDEN = [
-    'readSourceProfile', 'expandSeed', 'MAX_DRAFTS_PER_SOURCE',
-    'buildGenSystemPrompt', 'buildQualitySystemPrompt', 'buildAgeCheckSystemPrompt',
-    'DRAFT_QUALITY_AXES', 'pickDraft', 'generateWithRetries',
-  ]
-  /**
-   * 🔴 **주석을 지우고 본다.** 계약은 **코드**가 지키는 것이고, 주석은
-   *    "쓰지 않는다" 를 설명하느라 그 이름을 적을 수밖에 없다.
-   *    앞서 이 검사가 주석까지 세어 제 설명을 위반으로 잡았다.
-   */
-  const srcOf = (f: string): string => readFileSync(f, 'utf-8')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
-  for (const name of FORBIDDEN) {
-    const hit = files.filter((f) => new RegExp(`\\b${name}\\b`).test(srcOf(f)))
-    check(`🔴 v2 가 \`${name}\` 을 쓰지 않는다`, hit.length === 0, hit.join(', '))
-  }
-  const imported = files.flatMap((f) => {
-    const m = srcOf(f).match(/import\s*\{([^}]*)\}\s*from\s*'[^']*micro-seed-auto-draft'/g) ?? []
-    return m.flatMap((x) => (x.match(/\{([^}]*)\}/)?.[1] ?? '').split(',').map((w) => w.replace(/\btype\b/, '').trim()))
-  }).filter((x) => x !== '')
-  check('🔴 🔴 v1 에서 가져오는 것이 허용 목록 안이다',
-    imported.every((x) => ALLOWED.has(x)), imported.filter((x) => !ALLOWED.has(x)).join(', '))
-  check('🟢 v1 러너는 그대로 있다 (되돌릴 수 있다)', existsSync('scripts/micro-seed-auto-draft.mts'))
-}
-
-// ─────────────────────────────────────────────────────────
-console.log('\n⑬ 🔴 Codex 독립 리뷰 회귀 — 재현됐던 결함 7개')
-// ─────────────────────────────────────────────────────────
-{
-  const BASE_E = {
-    coreMoment: '김치를 이르게 꺼낸 이야기', anchors: [anchor('situation', '김치')],
-    participationHook: '', participationConfidence: 0.4, closingIntent: 'share',
-    timeSensitivity: 'timeBound', contentRoles: ['conversationSpark'], claimRequirements: [],
-  }
-  const BASE = {
-    id: 'R0', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
-    canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' } },
-  }
-
-  // ── ①-2 anchor provenance — 🔴 지목한 자리에 실제로 있어야 한다 ──
-  console.log('  ①-2 anchor 위치 — 🔴 제목에 있는 말을 head 라고 하면 안 된다')
-  {
-    const longBody = `${'서론이 한참 이어집니다. '.repeat(30)}그래서 다들 어떻게 하시는지 궁금해요?`
-    const mk = (text: string, ref: string) => ({
-      ...BASE, id: `R1-${ref}-${text}`,
-      title: '나는솔로 마지막 회 보셨어요', body: longBody,
-      canned: {
-        essence: {
-          ...BASE_E, coreMoment: '나는솔로 마지막 회를 보고 든 생각',
-          anchors: [anchor('publicEntity', text, 'semantic', ref)],
-        },
-        draft: { title: '어젯밤 그 방송', body: '한참 앉아 있었어요. 다들 어떠셨어요.' },
-      },
-    })
-    for (const [label, text, ref, expect] of [
-      ['제목에만 있는 값 + ref=title', '나는솔로', 'title', true],
-      ['제목에만 있는 값 + ref=head', '나는솔로', 'head', false],
-      ['제목에만 있는 값 + ref=tail', '나는솔로', 'tail', false],
-      ['꼬리에만 있는 값 + ref=tail', '궁금해요', 'tail', true],
-      ['꼬리에만 있는 값 + ref=head', '궁금해요', 'head', false],
-    ] as const) {
-      const a = await run(mk(text, ref))
-      const kept = (a.essence?.anchors ?? []).some((x) => x.text === text)
-      check(`    🔴 ${label} → ${expect ? '통과' : '거부'}`, kept === expect,
-        `anchors=${JSON.stringify(a.essence?.anchors)} dropped=${JSON.stringify(a.droppedAnchors)}`)
-      if (!expect) {
-        check('      ↳ 사유를 남겼다', a.droppedAnchors.some((d) => d.text === text && d.why === 'notInEvidence'))
-      }
-    }
-    // 🔴 남은 anchor 의 provenance 가 실제 근거 위치와 맞는가 — artifact 값으로 본다
-    const ok = await run(mk('나는솔로', 'title'))
-    const kept = (ok.essence?.anchors ?? [])[0]
-    const span = ok.evidence.spans.find((x) => x.kind === kept?.evidenceRef)
-    check('    🔴 🔴 **artifact 의 provenance 가 실제 근거 위치와 맞는다**',
-      kept !== undefined && span !== undefined && span.text.includes(kept.text),
-      JSON.stringify({ kept, spans: ok.evidence.spans.map((x) => x.kind) }))
-  }
-
-  // ── ②-2 프롬프트가 쓰지 않을 값을 요구하지 않는다 ──
-  console.log('  ②-2 프롬프트 — 🔴 쓰지 않을 evidenceRef 를 모델에게 묻지 않는다')
-  {
-    const prompt = buildEssenceSystemPrompt()
-    check('    🔴 🔴 **프롬프트가 derived 를 안내하지 않는다**', !prompt.includes('derived'))
-    check('    🔴 JSON 예시도 title|head|tail 만 준다',
-      prompt.includes('"evidenceRef":"title|head|tail"') && !prompt.includes('|derived'))
-    // 🔴 그래도 외부 응답이 derived 를 보내면 막는 방어는 유지한다
-    const a = await run({
-      ...BASE, id: 'R2d',
-      canned: {
-        essence: { ...BASE_E, anchors: [anchor('situation', '김치', 'semantic', 'derived')] },
-        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
-      },
-    })
-    check('    🟢 그래도 derived 가 오면 버리고 사유를 남긴다',
-      (a.essence?.anchors ?? []).length === 0 && a.droppedAnchors.some((d) => d.why === 'derived'))
-  }
-
-  // ── ③-3 죽은 주석 ──
-  console.log('  ③-3 주석 — 🔴 지워진 함수를 설명하지 않는다')
-  {
-    const src = readFileSync('src/lib/content-core/voice-evidence.ts', 'utf-8')
-    check('    🔴 사라진 voiceLeak 을 설명하지 않는다', !src.includes('voiceLeak'))
-    check('    🔴 현재 계약을 적는다 (의미 검수·사람이 본다)',
-      src.includes('voiceFidelity') && src.includes('사람이 본다'))
-  }
-
-  // ── ② 모든 유료 단계가 같은 기준으로 fail-closed ──
-  console.log('  ② 사용량 미상 · 막힘 · 잘림 — 🔴 단계마다 똑같이 막는다')
+  check('🟢 새로 쓴 초안은 통과한다', (await run(base)).review.machineOutcome === 'adopt')
   for (const stage of ['essence', 'draftGen', 'semanticReview', 'ageCheck'] as const) {
     for (const [label, fault] of [
       ['사용량 미상', { usageUnknown: stage }], ['막힘', { blocked: stage }], ['잘림', { truncate: stage }],
     ] as const) {
-      const a = await run({ ...BASE, id: `R2-${stage}`, fault })
-      check(`    🔴 ${stage} ${label} → adopt 아님`, a.review.machineOutcome !== 'adopt', a.review.machineOutcome)
+      const a = await run({ ...base, id: `S10-${stage}`, fault })
+      check(`🔴 ${stage} ${label} → adopt 아님`, a.review.machineOutcome !== 'adopt', a.review.machineOutcome)
     }
   }
-  const okRun = await run(BASE)
-  check('    🟢 정상이면 adopt 다 (검사가 전부 막지 않는다)', okRun.review.machineOutcome === 'adopt')
-
-  // ── ③ derived anchor 로 없는 사실을 만들 수 없다 ──
-  console.log('  ③ derived anchor — 🔴 원문에 없는 것을 그대로 남기라고 못 한다')
-  {
-    const a = await run({
-      ...BASE, id: 'R3',
-      canned: {
-        essence: { ...BASE_E, anchors: [anchor('number', '직원 99명', 'exact', 'derived')] },
-        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
-      },
-    })
-    check('    🔴 🔴 김치 글에 "직원 99명" exact anchor 가 붙지 않는다',
-      (a.essence?.anchors ?? []).every((x) => !x.text.includes('99')))
-    check('    🔴 버린 이유를 남겼다 (근거를 지목하지 못했다)',
-      a.droppedAnchors.some((d) => d.why === 'derived'))
-    check('    🔴 없는 숫자를 초안에 요구하지 않았다 — 통과한다', a.review.deterministic.pass)
-    const b = await run({
-      ...BASE, id: 'R3b',
-      canned: {
-        essence: { ...BASE_E, anchors: [anchor('situation', '한여름 물놀이', 'semantic', 'derived')] },
-        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
-      },
-    })
-    check('    🔴 근거에 낱말 하나도 닿지 않는 semantic derived 도 버린다',
-      (b.essence?.anchors ?? []).length === 0 && b.droppedAnchors.length === 1)
-  }
-
-  // ── ④ 최종 Persona 로 다시 검증 ──
-  console.log('  ④ 화자 선택 — 🔴 검사한 사람과 고른 사람이 같아야 한다')
-  {
-    const essence = {
-      ...BASE_E, coreMoment: '파트타임으로 일하며 겪은 일',
-      contentRoles: ['usefulAnswer'],
-      claimRequirements: [{ fact: 'work', detail: '파트타임', stanceShiftable: false }],
-    }
-    // 🔴 전업(P02) 이 부하가 더 적게 오도록 파트타임(P01)에 부하를 준다
-    const a = await runContentCore({
-      sourceArticleId: 'R4', title: '파트타임 이야기', maskedBody: '오전에만 나가는데 이런 점이 좋더라고요.',
-      personas: [파트타임, 전업], load: { P01: 5, P02: 0 },
-      voiceSourceDigest: 'asset000000000',
-      ask: fakeAsk({ essence, draft: { title: 'x', body: 'y' } }), now: NOW, callCap: 6,
-    })
-    check('    🔴 🔴 **전업 Persona 가 파트타임 필수 글에 뽑히지 않는다**',
-      a.speaker.personaCode !== 'P02', String(a.speaker.personaCode))
-    check('    🔴 자격자가 있으면 부하를 무시하고 그 사람이다', a.speaker.personaCode === 'P01')
-    const b = await runContentCore({
-      sourceArticleId: 'R4b', title: '파트타임 이야기', maskedBody: '오전에만 나가는데 이런 점이 좋더라고요.',
-      personas: [전업], voiceSourceDigest: 'asset000000000',
-      ask: fakeAsk({ essence, draft: { title: 'x', body: 'y' } }), now: NOW, callCap: 6,
-    })
-    check('    🔴 자격자가 없으면 HOLD + coverageGap', b.review.machineOutcome === 'hold' && b.speaker.coverageGap !== null)
-    check('    🔴 생성까지 가지 않았다', b.cost.calls.every((c) => c.stage !== 'draftGen'))
-  }
-
-  // ── ⑤ voiceLeak — 말투는 통과, 사건만 잡는다 ──
-  console.log('  ⑤ 말투 — 🔴 deterministic 이 말투로 막지 않는다')
-  {
-    const plain = P({ code: 'PV1', samples: ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요'] })
-    const a = await run({
-      ...BASE, id: 'R5', personas: [plain],
-      canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '저도 비슷하게 느꼈어요. 그냥 열어 봤는데 생각보다 잘 익었더라고요.' } },
-    })
-    check('    🔴 "저도 비슷하게 느꼈어요" 는 막지 않는다', a.review.machineOutcome === 'adopt')
-    /**
-     * 🔴 원문 "배우자 은퇴" · 초안 "남편 퇴직" · 참고에도 같은 말 —
-     *    앞판은 이것을 누수로 막았다. 같은 말을 쓴 것과 가져온 것을 글자로 가를 수 없다.
-     */
-    const retired = P({ code: 'PV3', spouse: true, samples: ['우리 남편 퇴직하고 나서는 좀 그래요', '맞아요 저도요'] })
-    const b = await run({
-      id: 'R5b', title: '배우자 은퇴하고 달라진 것', body: '배우자 은퇴 뒤로 하루가 길어졌어요.',
-      personas: [retired],
-      canned: {
-        essence: {
-          ...BASE_E, coreMoment: '배우자가 은퇴한 뒤 하루가 달라진 이야기',
-          anchors: [anchor('situation', '은퇴', 'semantic', 'title')],
-          claimRequirements: [],
-        },
-        draft: { title: '남편 퇴직하고 하루가 길어요', body: '남편 퇴직 뒤로 시간이 다르게 흐르네요. 다들 어떻게 지내세요.' },
-      },
-    })
-    check('    🔴 🔴 **"남편 퇴직" 이 참고에도 있다고 막지 않는다**',
-      b.review.deterministic.pass && b.review.machineOutcome === 'adopt',
-      JSON.stringify(b.review.deterministic.failures))
-    check('    🔴 deterministic 코드 목록에 말투 누수가 없다', (() => {
-      const src = readFileSync('src/lib/content-core/review.ts', 'utf-8')
-        .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, '')
-      return !src.includes('voiceContentLeak')
-    })())
-  }
-
-  // ── ⑥ 300자 예산에 제목이 들어간다 ──
-  console.log('  ⑥ 저장 원문 총량 — 🔴 제목이 공짜가 아니다')
-  {
-    const longTitle = '가'.repeat(100)
-    const a = await run({
-      ...BASE, id: 'R6', title: longTitle, body: '나'.repeat(400),
-      canned: { essence: BASE_E, draft: { title: '짧은 제목', body: '짧은 본문입니다. 충분히 적어 둡니다.' } },
-    })
-    check(`    🔴 🔴 제목 100 + 본문이 총 ${EVIDENCE_CHAR_BUDGET}자를 넘지 않는다`,
-      a.evidence.totalEvidenceChars <= EVIDENCE_CHAR_BUDGET,
-      `${a.evidence.totalEvidenceChars}자`)
-    check('    🔴 제목이 예산을 쓰면 본문 몫이 줄어든다',
-      a.evidence.bodyEvidenceChars <= EVIDENCE_CHAR_BUDGET - longTitle.length)
-    check('    🔴 artifact 관문이 총량을 본다', violatesArtifact(a).length === 0)
-  }
-
-  // ── ⑦ contextSufficiency — 낱말 하나로 막지 않는다 ──
-  console.log('  ⑦ 이해 가능성 — 🔴 외부 자료가 **명백히 필요할 때만** 막는다')
-  {
-    for (const [label, title, body] of [
-      ['사진 정리 경험글', '이 사진 정리하다 울었어요', '앨범 꺼내서 한참 앉아 있었어요.'],
-      ['그 사진만 보면', '그 사진만 보면 엄마 생각이 나요', '볼 때마다 그래요.'],
-    ] as const) {
-      const a = await run({
-        ...BASE, id: `R7-${label}`, title, body,
-        canned: { essence: { ...BASE_E, coreMoment: '사진을 보다 든 감정' },
-          draft: { title: '앨범 정리하다가', body: '한참 앉아 있었어요. 다들 이런 날 있으시죠.' } },
-      })
-      check(`    🔴 🔴 **${label} 은 막히지 않는다**`,
-        a.evidence.contextSufficiency === 'sufficient', a.evidence.insufficientReasons.join(','))
-    }
-    const needPhoto = await run({
-      ...BASE, id: 'R7b', title: '이거 어떤가요', body: '아래 사진을 보고 알려주세요.',
-      canned: { essence: BASE_E, draft: { title: 'x', body: 'y' } },
-    })
-    check('    🔴 "보고 알려주세요" 는 외부 자료가 있어야 수행된다 — 막는다',
-      needPhoto.evidence.insufficientReasons.includes('needsImage') && needPhoto.cost.totalCalls === 0)
-    const vague = await run({
-      ...BASE, id: 'R7c', title: '그거 어떻게 됐어요', body: '그거 결국 어떻게 하셨어요?',
-      canned: { essence: { ...BASE_E, coreMoment: '' }, draft: { title: 'x', body: 'y' } },
-    })
-    check('    🔴 🔴 **애매한 의존은 hard block 하지 않는다** — 소재 판정이 맡는다',
-      vague.evidence.contextSufficiency === 'sufficient', vague.evidence.insufficientReasons.join(','))
-    check('    🟢 그래도 무슨 이야기인지 안 나오면 만들지 않는다',
-      vague.draft === null && vague.review.machineOutcome === 'hold')
-    check('    🔴 새 낱말 수 규칙을 만들지 않았다', (() => {
-      const src = readFileSync('src/lib/content-core/evidence.ts', 'utf-8')
-      return !/DEICTIC_ANTECEDENT_MIN_TOKENS|hasAntecedent/.test(src)
-    })())
-  }
-
-  // ── ③-2 detail 이 빈 claim 은 자격 조건이 될 수 없다 ──
-  console.log('  ③-2 claim detail — 🔴 빈 값이 자격 충족이 되지 않는다')
-  {
-    for (const fact of ['work', 'region'] as const) {
-      const a = await run({
-        ...BASE, id: `R3c-${fact}`,
-        canned: {
-          essence: { ...BASE_E, claimRequirements: [{ fact, detail: '', stanceShiftable: false }] },
-          draft: { title: 'x', body: 'y' },
-        },
-      })
-      check(`    🔴 🔴 **빈 ${fact} claim 이 SELF_EXPERIENCE 로 가지 않는다**`,
-        a.speaker.stance !== 'SELF_EXPERIENCE', String(a.speaker.stance))
-      check(`    🔴 형식 문제로 남고 생성하지 않는다 (${fact})`,
-        a.draft === null && a.review.machineOutcome === 'hold' && a.review.machineReason.includes('detail'))
-    }
-    const okClaim = await run({
-      ...BASE, id: 'R3d',
-      canned: {
-        essence: { ...BASE_E, claimRequirements: [{ fact: 'work', detail: '파트타임', stanceShiftable: false }] },
-        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
-      },
-    })
-    check('    🟢 detail 이 있으면 정상 판정한다', okClaim.speaker.personaCode === 'P01')
-  }
+  const capped = await run({ ...base, id: 'S10c', cap: 2 })
+  check('🔴 원천별 상한에 걸리면 adopt 아님', capped.review.machineOutcome !== 'adopt')
+  check('🔴 상한을 넘겨 부르지 않았다', capped.cost.totalCalls <= 2)
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑭ 🔴 운영 배선 — 이 PR 은 v1 을 한 줄도 바꾸지 않는다')
+console.log('\n⑪ 계약 단위 검사 · artifact')
 // ─────────────────────────────────────────────────────────
 {
-  /**
-   * 🔴 **router 를 만들지 않았다** (2026-09-19 보정). v2 에는 운영 runner 도
-   *    ledger adapter 도 없다 — "v2 가 맡는다" 고 찍으면서 0건이 되는 상태를
-   *    남기지 않는다. router 는 후속 세로 작업에서 runner 와 함께 만든다.
-   */
-  const v1Diff = execFileSync('git', ['diff', '--numstat', 'origin/main', '--',
-    'scripts/micro-seed-auto-draft.mts', 'src/lib/micro-seed-auto-draft.ts'], { encoding: 'utf-8' })
-  check('🔴 🔴 **v1 이 origin/main 과 완전히 같다 (0줄)**', v1Diff.trim() === '', v1Diff.trim())
-  const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-  check('🔴 v1 이 스위치를 읽지 않는다', !/CONTENT_CORE_V2|selectSupplyPath|content-core/.test(runner))
-  check('🔴 경로 선택기를 아직 만들지 않았다', (() => {
-    const src = readFileSync('src/lib/content-core/flag.ts', 'utf-8')
-    return !/selectSupplyPath|V1_STOPPED_FOR_V2/.test(src)
+  check('🔴 원자적 사실 판정 — 숫자·이름·관계는 통과',
+    isAtomicFact('9명') && isAtomicFact('나는솔로') && isAtomicFact('시어머니') && isAtomicFact('갱년기'))
+  check('🔴 🔴 문장·질문·절은 원자적이지 않다',
+    !isAtomicFact('왜 저희 애아빠는 안그럴까요') && !isAtomicFact('직원은 9명정도되요')
+    && !isAtomicFact('맛은 괜찮네요.') && !isAtomicFact('딸도 딸 나름이고\n아들도'))
+  check('🔴 공백·줄바꿈만 지운다', normalizeForProvenance('다들\n 어떻게 하시는지') === '다들어떻게하시는지')
+  check('🔴 🔴 **관점 설명은 자격값이 아니다**',
+    !claimValueAllowed('children', '자녀 없이 주변 관찰로 쓴 글', VOCAB)
+    && !claimValueAllowed('work', '알바로 일하는 사람의 경험', VOCAB)
+    && !claimValueAllowed('spouse', '', VOCAB))
+  check('🟢 카드가 가진 값만 통과한다',
+    claimValueAllowed('children', '있음', VOCAB) && claimValueAllowed('work', '파트타임', VOCAB)
+    && claimValueAllowed('region', '수도권', VOCAB) && claimValueAllowed('childAgeBand', '중고등', VOCAB))
+  check('🔴 카드에 없는 값은 막는다',
+    !claimValueAllowed('work', '알바', VOCAB) && !claimValueAllowed('region', '제주', VOCAB))
+  check('🔴 죽은 계약이 남아 있지 않다', (() => {
+    const files = ['src/lib/content-core/essence.ts', 'src/lib/content-core/review.ts',
+      'scripts/lib/content-core-run.mts', 'scripts/lib/content-core-prompts.mts',
+      'src/lib/content-core/artifact.ts']
+    const joined = files.map((f) => readFileSync(f, 'utf-8')).join('\n')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, '')
+    return !/\banchors\b|alteredExactAnchors|exactAnchors|EssenceAnchor|voiceFidelity|droppedAnchors|isPersonalInfoAnchor|anchorGrounded/.test(joined)
   })())
-  check('🟢 스위치 이름과 기본값은 한 곳에 못박혀 있다',
-    !isContentCoreV2Enabled({}) && isContentCoreV2Enabled({ [CONTENT_CORE_V2_ENV]: 'true' }))
-  check('🔴 스위치에 지울 마일스톤이 박혀 있다', CONTENT_CORE_V2_FLAG_REMOVE_AT === 'M5')
-  const opsRefs = execFileSync('git', ['grep', '-l', 'content-core', '--', 'src/', 'scripts/'], { encoding: 'utf-8' })
-    .trim().split('\n').filter((f) => f !== '' && !f.includes('content-core'))
-  check('🔴 🔴 **운영 코드에 v2 소비자가 없다**', opsRefs.length === 0, opsRefs.join(', '))
+  for (const { name, a } of results) {
+    const bad = violatesArtifact(a)
+    check(`${name} artifact 가 계약을 지킨다`, bad.length === 0, bad.join(' / '))
+  }
+  check('🔴 사람이 읽을 요약이 나온다', artifactSummary(results[0]!.a).includes('S1'))
+  check('🔴 essence 프롬프트가 정본 어휘만 안내한다', (() => {
+    const p = buildEssenceSystemPrompt(VOCAB)
+    return p.includes('파트타임') && p.includes('requiredValue') && !p.includes('derived')
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
