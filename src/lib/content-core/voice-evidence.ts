@@ -8,24 +8,35 @@
  * 🔴 **참고 댓글 속 사건을 새 글의 자기 경험으로 가져오면 안 된다.**
  *    다만 그 판정은 **deterministic 이 하지 않는다** — 같은 말을 쓴 것과
  *    가져온 것을 글자로 가를 수 없다. 의미 검수(`voiceContentLeak`)와 사람이 본다.
+ *
+ * 🔴 **말투 기준은 정본 `PoolCard.voiceTokens` 에서만 만든다** (2026-09-19 보정).
+ *    앞판은 `PersonaInput.voiceCore` 라는 **손으로 옮겨 적는 칸**을 따로 두었다.
+ *    정본 카드에는 그런 칸이 없어서(`voiceTokens` 다) 부르는 쪽이 조용히 빈 문자열을
+ *    넘겼고, **말투 기준 없이 생성·검수가 통과했다** (2026-09-19 두 번째 유료 실측).
+ *    이제 변환은 `voiceStandardOf` 하나뿐이고, 비면 **묻기 전에 멈춘다.**
  */
-import type { SourceEssence } from './essence'
-
-export const VOICE_EVIDENCE_VERSION = 'voice-evidence-v1'
+export const VOICE_EVIDENCE_VERSION = 'voice-evidence-v2'
 /** 🔴 2~3개면 리듬은 보인다. 늘리면 내용이 새어 들어온다 */
 export const VOICE_SAMPLE_MAX = 3
+/**
+ * 🔴 **1건으로는 그 사람의 결인지 그 한 번의 우연인지 가를 수 없다.**
+ *    blind 비교가 "이 사람 글로 읽히는가" 를 묻는 이상, 견줄 것이 둘은 있어야 한다.
+ */
+export const VOICE_SAMPLE_MIN = 2
 
 export type VoiceProvenance = {
   personaCode: string
   bundleDigest: string
   sourceDigest: string
   sampleCount: number
+  /** 🔴 기준이 실제로 몇 토큰에서 나왔는가 — 빈 기준이 조용히 지나가지 못하게 */
+  voiceTokenCount: number
 }
 
 export type VoiceEvidence = {
   personaCode: string
-  /** 🔴 카드 원문 그대로 — 여기서 밴드로 정규화하지 않는다 */
-  voiceCore: string
+  /** 🔴 정본 `voiceTokens` 에서 만든 **유일한** 말투 기준 문자열 */
+  voiceStandard: string
   samples: string[]
   provenance: VoiceProvenance
   /** 사람이 blind 로 확인할 항목 — 🔴 기계가 점수 매기지 않는다 */
@@ -35,23 +46,34 @@ export type VoiceEvidence = {
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
+/**
+ * 🔴 **정본 → 말투 기준. 이 변환은 저장소에 하나뿐이다.**
+ *    시험 harness 도 운영 runner 도 이것만 부른다. 손으로 조립하지 않는다.
+ */
+export function voiceStandardOf(voiceTokens: readonly string[]): string {
+  return voiceTokens.map(S).filter((x) => x !== '').join(' · ')
+}
+
 export function buildVoiceEvidence(input: {
   personaCode: string
-  voiceCore: string
+  /** 🔴 정본 카드 값 그대로 */
+  voiceTokens: readonly string[]
   samples: readonly string[]
   bundleDigest: string
   sourceDigest: string
 }): VoiceEvidence {
   const samples = input.samples.map(S).filter((x) => x !== '').slice(0, VOICE_SAMPLE_MAX)
+  const tokens = input.voiceTokens.map(S).filter((x) => x !== '')
   return {
     personaCode: S(input.personaCode),
-    voiceCore: S(input.voiceCore),
+    voiceStandard: voiceStandardOf(tokens),
     samples,
     provenance: {
       personaCode: S(input.personaCode),
       bundleDigest: S(input.bundleDigest),
       sourceDigest: S(input.sourceDigest),
       sampleCount: samples.length,
+      voiceTokenCount: tokens.length,
     },
     blindCheckPoints: [
       '이 글이 어느 Persona 의 글인지 알아볼 수 있는가',
@@ -61,6 +83,34 @@ export function buildVoiceEvidence(input: {
     ],
     voiceVersion: VOICE_EVIDENCE_VERSION,
   }
+}
+
+/**
+ * 🔴 **말투 없이 쓰지 않는다** — 묻기 전에 멈춘다.
+ *    빈 기준으로 생성하면 그 글은 아무의 말투도 아니고, 그 사실이
+ *    **검수에서도 드러나지 않는다** (검수 프롬프트도 같은 빈 값을 받으므로).
+ */
+export type VoiceReadiness = { ok: boolean; why: 'noVoiceStandard' | 'tooFewSamples' | null }
+
+export const VOICE_READINESS_LABEL: Readonly<Record<'noVoiceStandard' | 'tooFewSamples', string>> = {
+  noVoiceStandard: '말투 기준이 비어 있다 — 정본 카드의 voiceTokens 를 읽지 못했다',
+  tooFewSamples: `말투 참고 자료가 ${VOICE_SAMPLE_MIN}건보다 적다`,
+}
+
+export function judgeVoiceReadiness(v: VoiceEvidence): VoiceReadiness {
+  if (v.voiceStandard.trim() === '') return { ok: false, why: 'noVoiceStandard' }
+  if (v.samples.length < VOICE_SAMPLE_MIN) return { ok: false, why: 'tooFewSamples' }
+  return { ok: true, why: null }
+}
+
+/**
+ * 🔴 **정말로 들어갔는지 값으로 본다.** 프롬프트를 만드는 쪽이 조건을 잘못 쓰면
+ *    기준이 조용히 빠진다 — 그것이 이번 실측에서 실제로 일어난 일이다.
+ *    부르는 쪽은 이 검사에 걸리면 **요청을 보내지 않는다.**
+ */
+export function voiceStandardMissingFrom(system: string, v: VoiceEvidence): boolean {
+  const std = v.voiceStandard.trim()
+  return std === '' || !system.includes(std)
 }
 
 /**

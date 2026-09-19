@@ -40,6 +40,12 @@ export const BEAT_KINDS = ['situation', 'contrast', 'emotion', 'participation'] 
 export type BeatKind = (typeof BEAT_KINDS)[number]
 
 export type SourceBeat = {
+  /**
+   * 🔴 **안정적인 이름** — 검수가 "어느 결이 사라졌는가" 를 가리킬 수 있게 한다
+   *    (2026-09-19 보정). 앞판은 결에 이름이 없어서, 검수가 누락을 말하려면
+   *    **원문 문구를 다시 써야** 했고 그 근거는 초안에 없으니 인정할 수 없었다.
+   */
+  id: string
   kind: BeatKind
   /** 🔴 생성이 받는 것은 이것뿐이다 — 원문 표현이 아니라 뜻이다 */
   meaning: string
@@ -237,6 +243,21 @@ export type ClaimVocabulary = {
 const PRESENCE_FACTS: readonly ClaimFact[] = ['spouse', 'children', 'parentCare', 'menopause']
 
 /**
+ * 🔴 **`없음` 을 자격값으로 받는 축** (2026-09-19 실측 보정).
+ *
+ *    원문이 *"전 아직 자녀는 없지만"* 이라 모델이 `children="없음"` 을 냈고,
+ *    앞판은 presence 축에서 `있음` 만 받아 **초안을 한 편도 만들지 못했다.**
+ *    카드에 `childrenCount = 0` 이라는 **판정할 수 있는 값이 실제로 있는** 축이므로
+ *    자격을 견줄 수 있다.
+ *
+ * 🔴 **나머지 presence 축에 기계적으로 `없음` 을 붙이지 않는다.**
+ *    `spouse="없음"` (비혼·사별·이혼이 한 값으로 뭉갠다) · `parentCare="없음"` ·
+ *    `menopause="없음"` 은 카드 값과 무엇을 견줄지가 이번에 확인되지 않았다.
+ *    확인된 축만 고친다.
+ */
+const ABSENCE_ALLOWED_FACTS: readonly ClaimFact[] = ['children']
+
+/**
  * 🔴 **자격 판정에 쓸 수 있는 값인가.**
  *
  *    앞판은 **비어 있지만 않으면** 통과시켰다. 그래서
@@ -248,7 +269,9 @@ export function claimValueAllowed(
 ): boolean {
   const v = requiredValue.trim()
   if (v === '') return false
-  if (PRESENCE_FACTS.includes(fact)) return v === '있음'
+  if (PRESENCE_FACTS.includes(fact)) {
+    return v === '있음' || (v === '없음' && ABSENCE_ALLOWED_FACTS.includes(fact))
+  }
   if (fact === 'work') return vocab.work.includes(v)
   if (fact === 'region') return vocab.region.includes(v)
   if (fact === 'age') return vocab.age.includes(v)
@@ -302,7 +325,8 @@ export function parseEssence(
 
   // ── sourceBeats — 의미. evidenceText 는 검증 전용 ──
   const beats: SourceBeat[] = []
-  for (const x of arr(j.sourceBeats)) {
+  const usedBeatIds = new Set<string>()
+  for (const [bi, x] of arr(j.sourceBeats).entries()) {
     const o = x as Record<string, unknown>
     const meaning = S(o.meaning)
     const evidenceText = S(o.evidenceText)
@@ -321,7 +345,15 @@ export function parseEssence(
     if (!foundInSpan(evidenceText, ref as EvidenceRef, spans)) {
       dropped.push({ text: meaning, why: 'notInEvidence' }); continue
     }
-    beats.push({ kind: kind as BeatKind, meaning, evidenceRef: ref as EvidenceRef, evidenceText })
+    /**
+     * 🔴 **이름은 우리가 정한다.** 모델이 준 이름이 비었거나 겹치면 자리 번호로 바꾼다 —
+     *    겹친 이름은 "어느 결이 사라졌는지" 를 가리키지 못한다.
+     */
+    const given = S(o.id)
+    const id = given !== '' && !usedBeatIds.has(given) ? given : `b${bi + 1}`
+    if (usedBeatIds.has(id)) { dropped.push({ text: meaning, why: 'empty' }); continue }
+    usedBeatIds.add(id)
+    beats.push({ id, kind: kind as BeatKind, meaning, evidenceRef: ref as EvidenceRef, evidenceText })
   }
 
   const roles: ContentRole[] = []

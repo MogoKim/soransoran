@@ -10,9 +10,9 @@
  *
  * 🔴 **machine 판정은 READY 가 아니다.** 최종 READY/EDIT_REQUIRED/HOLD 는 사람이 정한다.
  */
-import type { ClaimFact, ClaimRequirement, ContentRole } from './essence'
+import type { ClaimFact, ClaimRequirement, ContentRole, SourceBeat } from './essence'
 
-export const REVIEW_VERSION = 'review-v3'
+export const REVIEW_VERSION = 'review-v4'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -44,7 +44,16 @@ export const SEMANTIC_AXES = [
    *    deterministic 유사도로 풀 수 없으므로 **같은 검수 호출**이 함께 본다.
    */
   'briefDistortion',
-  'sourceFidelity', 'personaClaimValidity',
+  /**
+   * 🔴 **`sourceFidelity` 를 여기서 없앴다** (2026-09-19 실측 보정).
+   *    그 축은 "이야기를 잃었는가" 하나로 **누락과 창작을 겸했다.** 그래서 두 번째
+   *    유료 실측에서 세 편 중 두 편이 `sourceFidelity` 로 멈췄는데,
+   *    한 편은 *"원래 의도는 살았다"* 는 자기 주석과 함께 걸렸다 —
+   *    무엇을 고쳐야 하는지 사람이 알 수 없었다.
+   *    🔴 대신 **근거를 가진 두 구조**(`missingBeatIds` · `unsupportedAdditions`)가
+   *       그 책임을 나눠 맡는다. 축을 늘린 것이 아니라 하나를 근거로 바꾼 것이다.
+   */
+  'personaClaimValidity',
   // 🔴 **말투 책임을 둘로 나눈다** (2026-09-19). 앞판 `voiceFidelity` 는 이름과 달리
   //    사건 유출만 봤다 — 선택한 Persona 의 말투인지는 아무도 보지 않았다.
   'voiceContentLeak', 'voiceMismatch',
@@ -55,7 +64,6 @@ export type SemanticAxis = (typeof SEMANTIC_AXES)[number]
 export const SEMANTIC_AXIS_PROMPT: Readonly<Record<SemanticAxis, string>> = {
   briefDistortion: '아래 [정리한 뜻]이 [원문 근거]에 없는 뜻을 만들거나 방향을 뒤집었는가'
     + ' (초안이 아니라 **정리한 뜻 자체**를 본다)',
-  sourceFidelity: '초안이 [정리한 뜻]의 이야기를 잃었는가 — 어느 원문에나 붙는 일반 글이 되지 않았는가',
   personaClaimValidity: '글쓴이가 **가지지 않은 생활사**를 자기 일로 말하지 않았는가'
     + ' (혼인 · 자녀 수와 나이대 · 직업 · 사는 곳 · 형편 · 부모 돌봄 · 갱년기 · 나이대)',
   voiceContentLeak: '말투 참고 자료의 **사건**(가족·병원·직장 일 같은 것)을 이 글에 가져왔는가',
@@ -97,9 +105,28 @@ export type LifeContradiction = {
   evidence: string
 }
 
+/**
+ * 🔴 **원문·brief·Persona 카드 어디에도 없던 새 사건** (2026-09-19 추가).
+ *    A 실측: 원문은 *"방송 속 남편들과 달라 답답하다"* 뿐인데 초안이
+ *    *"주말에 밥 차려달라고 하면 난리가 나고, 아이들 학용품은 못 봤대요"* 를 지어냈다.
+ *    C 실측: 원문은 시간을 옮겨 메운 것인데 초안이 *"휴가를 내고"* 로 바꿨다.
+ */
+export type UnsupportedAddition = {
+  /** 🔴 초안에 **실제로 있는** 문장 — 없으면 인정하지 않는다 */
+  evidence: string
+  why: string
+}
+
 export type SemanticVerdict = {
   issues: SemanticAxis[]
   unknownIssues: string[]
+  /**
+   * 🔴 **초안에서 사라진 필수 결의 id.**
+   *    C 실측: *"다른 직원 도움 없이 본인이 시간을 메꿨다"* 가 사라져 질문의 맥락이
+   *    무너졌는데, 앞판은 그것을 가리킬 이름이 없었다.
+   */
+  missingBeatIds: string[]
+  unsupportedAdditions: UnsupportedAddition[]
   lifeContradictions: LifeContradiction[]
   /**
    * 🔴 **낮춘 자리인데 자기 사실로 주장했는가.**
@@ -134,6 +161,27 @@ export function groundedLifeContradictions(
   return raw.filter((v) => v.evidence.trim() !== '' && flat.includes(v.evidence.replace(/\s+/g, '')))
 }
 
+
+/**
+ * 🔴 **우리가 실제로 건넨 결의 이름만 인정한다.** 모델이 지어낸 id 로 막지 않는다.
+ */
+export function groundedMissingBeatIds(
+  raw: readonly string[], beats: readonly SourceBeat[],
+): string[] {
+  const ids = new Set(beats.map((b) => b.id))
+  return [...new Set(raw.map((x) => x.trim()).filter((x) => ids.has(x)))]
+}
+
+/**
+ * 🔴 **초안에 실제로 있는 문장만 새 사건의 근거로 인정한다.**
+ *    지어낸 근거로 막으면 정상 글이 사라진다 — 과차단이 곧 공급 0이다.
+ */
+export function groundedAdditions(
+  raw: readonly UnsupportedAddition[], draftText: string,
+): UnsupportedAddition[] {
+  const flat = draftText.replace(/\s+/g, '')
+  return raw.filter((a) => a.evidence.trim() !== '' && flat.includes(a.evidence.replace(/\s+/g, '')))
+}
 
 export function groundedViolations(
   raw: readonly ClaimViolation[], draftText: string, claims: readonly ClaimRequirement[],
@@ -177,6 +225,18 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
       why: typeof o.why === 'string' ? o.why.slice(0, 120) : '',
     })
   }
+  const missingBeatIds: string[] = []
+  for (const v of Array.isArray(j.missingBeatIds) ? j.missingBeatIds : []) {
+    const id = String(v).trim()
+    if (id !== '') missingBeatIds.push(id)
+  }
+  const additions: UnsupportedAddition[] = []
+  for (const v of Array.isArray(j.unsupportedAdditions) ? j.unsupportedAdditions : []) {
+    const o = v as Record<string, unknown>
+    const evidence = typeof o.evidence === 'string' ? o.evidence.trim() : ''
+    if (evidence === '') continue
+    additions.push({ evidence, why: typeof o.why === 'string' ? o.why.slice(0, 120) : '' })
+  }
   const lifes: LifeContradiction[] = []
   for (const v of Array.isArray(j.lifeContradictions) ? j.lifeContradictions : []) {
     const o = v as Record<string, unknown>
@@ -192,6 +252,8 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
   return {
     issues: [...new Set(issues)],
     unknownIssues: [...new Set(unknown)],
+    missingBeatIds: [...new Set(missingBeatIds)],
+    unsupportedAdditions: additions,
     lifeContradictions: lifes,
     claimViolations: violations,
     confidence: conf,
@@ -228,6 +290,24 @@ export function judgeMachine(input: {
   // 🔴 정리한 뜻 자체가 원문을 뒤집었다 — 초안을 볼 것도 없다
   if (input.semantic.issues.includes('briefDistortion')) {
     return { outcome: 'hold', reason: 'briefDistortion — 정리한 뜻이 원문과 다르다' }
+  }
+  /**
+   * 🔴 **둘 중 하나라도 실질적이면 채택하지 않는다** (2026-09-19).
+   *    여기 오는 값은 이미 근거가 확인된 것뿐이다 — 초안에 없는 문장,
+   *    우리가 건네지 않은 결 이름은 부르는 쪽에서 이미 떨어졌다.
+   */
+  if (input.semantic.unsupportedAdditions.length > 0) {
+    return {
+      outcome: 'hold',
+      reason: `원문에 없는 사건 ${input.semantic.unsupportedAdditions.length}건`
+        + ` — ${input.semantic.unsupportedAdditions.map((a) => a.evidence).join(' / ')}`,
+    }
+  }
+  if (input.semantic.missingBeatIds.length > 0) {
+    return {
+      outcome: 'hold',
+      reason: `필수 결 누락 ${input.semantic.missingBeatIds.join(' · ')}`,
+    }
   }
   // 🔴 카드에 없는 생활사를 새로 주장했다 (claim 이 없어도 잡는다)
   if (input.semantic.lifeContradictions.length > 0) {

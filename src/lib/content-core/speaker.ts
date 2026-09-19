@@ -87,7 +87,13 @@ export function hasFact(p: PersonaLifeContract, c: ClaimRequirement): boolean {
   if (want === '') return false
   switch (c.fact) {
     case 'spouse': return want === '있음' ? p.maritalStatus.trim() === '기혼' : false
-    case 'children': return want === '있음' ? p.childrenCount > 0 : false
+    /**
+     * 🔴 **`없음` 도 견줄 수 있는 축이다** (2026-09-19 실측 보정).
+     *    카드에 `childrenCount = 0` 이라는 판정 가능한 값이 실제로 있다.
+     *    원문이 *"전 아직 자녀는 없지만"* 일 때 자녀 0인 사람이 1인칭으로 쓸 수 있다.
+     */
+    case 'children':
+      return want === '있음' ? p.childrenCount > 0 : want === '없음' ? p.childrenCount === 0 : false
     case 'childAgeBand': return p.childrenAgeBands.some((b) => b.trim() === want)
     case 'parentCare': return want === '있음' ? p.parentCare.trim() !== '없음' : false
     // 🔴 `전` 은 아직 겪지 않았다는 뜻이다 — 경험 주장의 근거가 될 수 없다

@@ -18,12 +18,16 @@ import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
 import { canGenerate, isPersonalInfo, missingProtectedFacts, parseEssence }
   from '../../src/lib/content-core/essence'
 import type { DropReason, SourceEssence } from '../../src/lib/content-core/essence'
+import type { PoolCard } from '../../src/lib/persona-pool-card'
 import { planSpeaker } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
-import { buildVoiceEvidence } from '../../src/lib/content-core/voice-evidence'
+import {
+  buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
+} from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
-  groundedLifeContradictions, groundedViolations, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
+  groundedAdditions, groundedLifeContradictions, groundedMissingBeatIds, groundedViolations,
+  judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
   type ClaimViolation, type DeterministicFailure, type DeterministicResult,
   type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
@@ -56,11 +60,45 @@ export type Ask = (stage: AskStage, system: string, payload: string) => Promise<
 /**
  * 🔴 **정본 카드 + 말투 근거.** Persona 정보를 v2 에서 다시 정의하지 않는다 —
  *    `PersonaLifeContract` 는 `PoolCard` 에서 고른 칸이다.
+ *
+ * 🔴 **`voiceCore` 라는 손으로 옮겨 적는 칸을 없앴다** (2026-09-19 실측 보정).
+ *    정본 카드가 가진 이름은 `voiceTokens` 인데 이 타입은 `voiceCore` 를 요구했다.
+ *    이름이 다르니 부르는 쪽이 조용히 빈 문자열을 넘겼고, **말투 기준 없이**
+ *    생성도 검수도 지나갔다. 이제 칸 이름이 정본과 같고, 조립은
+ *    `personaInputOf` **하나**만 한다.
  */
-export type PersonaInput = PersonaLifeContract & {
-  voiceCore: string
+export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> & {
   samples: readonly string[]
   bundleDigest: string
+}
+
+/**
+ * 🔴 **정본 `PoolCard` → v2 입력. 저장소에 이 변환 하나뿐이다.**
+ *    시험 harness 도 앞으로의 운영 runner 도 이것만 부른다 —
+ *    손으로 칸을 재조립하면 이번과 같은 조용한 빈 값이 다시 생긴다.
+ */
+export function personaInputOf(
+  card: PoolCard, ref: { samples: readonly string[]; bundleDigest: string },
+): PersonaInput {
+  return {
+    code: card.code,
+    ageBand: card.ageBand,
+    region: card.region,
+    maritalStatus: card.maritalStatus,
+    spouseRelationship: card.spouseRelationship,
+    childrenCount: card.childrenCount,
+    childrenAgeBands: card.childrenAgeBands,
+    workStatus: card.workStatus,
+    economicStatus: card.economicStatus,
+    menopauseStatus: card.menopauseStatus,
+    parentCare: card.parentCare,
+    personality: card.personality,
+    noGoTopics: card.noGoTopics,
+    noGoExpressions: card.noGoExpressions,
+    voiceTokens: card.voiceTokens,
+    samples: ref.samples,
+    bundleDigest: ref.bundleDigest,
+  }
 }
 
 export type RunInput = {
@@ -221,14 +259,36 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
 
   // ── ③ 말투 근거 ──
   const voice = buildVoiceEvidence({
-    personaCode: persona.code, voiceCore: persona.voiceCore, samples: persona.samples,
+    personaCode: persona.code, voiceTokens: persona.voiceTokens, samples: persona.samples,
     bundleDigest: persona.bundleDigest, sourceDigest: input.voiceSourceDigest,
   })
+  /**
+   * 🔴 **말투 없이 쓰지 않는다 — 묻기 전에 멈춘다** (2026-09-19 실측 보정).
+   *    빈 기준으로 만든 글은 아무의 말투도 아니고, 검수도 같은 빈 값을 받으므로
+   *    **그 사실이 판정에 드러나지 않는다.** 조용히 통과하느니 만들지 않는다.
+   */
+  const ready = judgeVoiceReadiness(voice)
+  if (!ready.ok) {
+    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
+      'hold', VOICE_READINESS_LABEL[ready.why!])
+  }
 
   // ── ④ 초안 한 편 ──
-  const dRes = await ask('draftGen',
-    buildV2DraftSystemPrompt({ essence, plan, voice, life: persona }),
-    buildV2DraftPayload({ essence }))
+  /**
+   * 🔴 **정말로 들어갔는지 값으로 본다.** 프롬프트 쪽 조건이 잘못되면 기준이
+   *    조용히 빠진다 — 두 요청 모두 보내기 전에 확인하고, 하나라도 비면 안 보낸다.
+   */
+  const draftSystem = buildV2DraftSystemPrompt({ essence, plan, voice, life: persona })
+  const reviewSystem = buildV2ReviewSystemPrompt({ essence, plan, voice, life: persona })
+  const voiceless = [
+    ...(voiceStandardMissingFrom(draftSystem, voice) ? ['생성'] : []),
+    ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
+  ]
+  if (voiceless.length > 0) {
+    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
+      'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
+  }
+  const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ essence }))
   const dC = completionOf(dRes)
   const draft = dC.complete ? parseDraft(dRes.rawText) : null
   if (draft === null) {
@@ -260,8 +320,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
 
   // ── ⑥ 의미 검수 1회 ──
-  const rRes = await ask('semanticReview',
-    buildV2ReviewSystemPrompt({ essence, plan, voice, life: persona }),
+  const rRes = await ask('semanticReview', reviewSystem,
     buildV2ReviewPayload({ draft, packet, essence }))
   const semanticC = completionOf(rRes)
   const parsed = semanticC.complete ? parseSemanticReview(rRes.rawText) : null
@@ -276,6 +335,9 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     ...parsed,
     claimViolations: g.kept,
     lifeContradictions: groundedLifeContradictions(parsed.lifeContradictions, draftText),
+    // 🔴 우리가 건넨 결 이름과 초안에 실제로 있는 문장만 인정한다
+    missingBeatIds: groundedMissingBeatIds(parsed.missingBeatIds, essence.sourceBeats),
+    unsupportedAdditions: groundedAdditions(parsed.unsupportedAdditions, draftText),
   }
   const semanticC2: ReviewCompletion = semanticC.complete && semantic === null
     ? { complete: false, reason: 'parseFailed' } : semanticC

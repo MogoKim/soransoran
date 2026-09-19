@@ -18,9 +18,9 @@ import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import { ROLE_EXEMPT, SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT } from '../../src/lib/content-core/review'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
 
-export const ESSENCE_PROMPT_VERSION = 'essence-p2'
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p2'
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p2'
+export const ESSENCE_PROMPT_VERSION = 'essence-p3'
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p3'
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p3'
 
 // ─────────────────────────────────────────────────────────
 // ① 소재 판정 — 무엇이 있었는지만 적는다
@@ -45,8 +45,11 @@ export function buildEssenceSystemPrompt(vocab: ClaimVocabulary): string {
     '- evidenceRef 가 가리키는 자리에 **그 글자가 그대로** 있어야 한다.',
     '',
     '## sourceBeats — 🔴 **지켜야 하는 의미**',
+    '- id: "b1" · "b2" … 자리 번호. 🔴 겹치지 않게 붙인다.',
     '- kind: situation(상황) · contrast(대비) · emotion(감정) · participation(답하고 싶어지는 지점)',
     '- meaning: 그 결을 **네 말로** 한 줄. 원문 표현을 옮겨 적지 않는다.',
+    '  🔴 **이것이 글쓴이가 받을 재료의 전부다.** 상황을 이루는 조건'
+    + '(누가 대신했는가 · 어떻게 메웠는가 · 언제였는가)이 원문에 있으면 **그 결에 함께 적는다.**',
     '- evidenceText: 그 뜻이 나온 **원문 그대로의 조각**. 어디서 왔는지 확인하는 데만 쓴다.',
     '',
     '## contentRoles — 이 글이 우리 게시판에서 하는 일 (여럿 가능)',
@@ -55,10 +58,20 @@ export function buildEssenceSystemPrompt(vocab: ClaimVocabulary): string {
     '- experienceResonance: 겪은 사람이 "나도" 하고 붙을 글',
     '- usefulAnswer: 알고 가면 도움이 되는 글',
     '',
-    '## claimRequirements — 이 이야기를 **1인칭으로** 쓰려면 글쓴이에게 있어야 하는 사실',
+    '## claimRequirements — 🔴 **초안이 반드시 1인칭으로 유지해야 하는 생활사만**',
+    '',
+    '🔴 **거의 언제나 빈 목록이다.** 곁에서 본 이야기 · 읽고 든 생각 · 궁금해서 묻는 글로',
+    '   살릴 수 있으면 **적지 않는다.** 여기 적는 순간 그 사실을 가진 사람이 없으면',
+    '   이 글은 한 편도 만들어지지 않는다.',
+    '   예) 원문이 *"주변 아들들을 보니 엄마를 잘 챙기더라"* 면 → **빈 목록.**',
+    '       남의 이야기이고 관찰로 그대로 살아난다.',
+    '   예) 원문이 *"우리 남편은 집안일을 안 한다"* 면 → spouse=있음.',
+    '       배우자 없이 이 문장을 1인칭으로 쓸 수 없다.',
+    '',
     `- fact: ${Object.entries(CLAIM_FACT_LABEL).map(([k, v]) => `${k}(${v})`).join(' · ')}`,
     '- 🔴 **requiredValue 는 아래 목록의 값 하나를 그대로 쓴다.** 설명을 쓰지 않는다:',
-    '   · spouse · children · parentCare · menopause → "있음"',
+    '   · spouse · parentCare · menopause → "있음"',
+    '   · children → "있음" 또는 "없음"',
     `   · work → ${vocab.work.join(' · ')}`,
     `   · region → ${vocab.region.join(' · ')}`,
     `   · age → ${vocab.age.join(' · ')}`,
@@ -73,7 +86,7 @@ export function buildEssenceSystemPrompt(vocab: ClaimVocabulary): string {
     'JSON 만 답한다:',
     '{"coreMoment":"실제로 무슨 이야기인지 한 줄. 🔴 원문에 없는 말로 바꾸지 않는다 (빈 문자열 가능)",',
     ' "protectedFacts":[{"kind":"...","text":"...","evidenceRef":"title|head|tail"}],',
-    ' "sourceBeats":[{"kind":"...","meaning":"...","evidenceRef":"title|head|tail","evidenceText":"..."}],',
+    ' "sourceBeats":[{"id":"b1","kind":"...","meaning":"...","evidenceRef":"title|head|tail","evidenceText":"..."}],',
     ' "participationHook":"답하고 싶어지는 지점 한 줄 (없으면 빈 문자열)",',
     ' "participationConfidence":0.0~1.0,',
     ' "closingIntent":"ask|vent|share|none",',
@@ -157,14 +170,25 @@ export function buildV2DraftSystemPrompt(input: {
       : []),
     ...(e.sourceBeats.length > 0
       ? ['## 살려야 하는 결 — 🔴 **뜻만 가져옵니다. 표현은 새로 씁니다**',
-         ...e.sourceBeats.map((b) => `   · ${b.meaning}`), '']
+         ...e.sourceBeats.map((b) => `   [${b.id}] ${b.meaning}`),
+         '🔴 **하나도 빠뜨리지 않습니다.** 빠지면 무슨 이야기였는지 달라집니다.', '']
       : []),
     ...(e.participationHook !== null
       ? [`🔴 사람들이 답하고 싶어진 지점: ${e.participationHook}`,
          '   이 지점이 글에 남아 있어야 합니다.', '']
       : []),
+    '## 🔴 구체적인 사실과 장면은 **위에 적힌 것에서만** 가져옵니다',
+    '   ① 「글자 그대로 남기는 것」 ② 「살려야 하는 결」 ③ 「당신은 이런 사람입니다」',
+    '   이 셋 밖의 장면 · 사건 · 대사 · 숫자 · 날짜 · 물건을 **지어내지 않습니다.**',
+    '   예) 결에 "남편이 집안일을 하지 않아 답답하다" 만 있으면,',
+    '       "주말에 밥 차려달라고 하면 난리가 난다" 같은 **없던 장면을 만들지 않습니다.**',
+    '   예) 결에 "다른 날 근무로 시간을 메웠다" 가 있으면 그대로 씁니다 —',
+    '       "휴가를 냈다" 로 **바꾸지 않습니다.** 바뀌면 다른 이야기입니다.',
+    '',
     '## 길이와 온도 — 🔴 소재가 정합니다',
     '🔴 **짧은 이야기는 짧게 씁니다.** 늘려서 사연으로 만들지 않습니다.',
+    '🔴 **재료가 적으면 짧게 씁니다.** 생생하게 만들려고 없던 장면을 채우지 않습니다 —',
+    '   짧고 사실대로인 글이 길고 지어낸 글보다 낫습니다.',
     '🔴 원문에 없던 갈등 · 감정 · 숫자 · 병 · 사건을 **만들지 않습니다.**',
     ...(e.closingIntent === 'ask'
       ? ['🔴 원문은 묻고 끝납니다. 그 물음이 살아 있어야 합니다.']
@@ -173,7 +197,7 @@ export function buildV2DraftSystemPrompt(input: {
         : []),
     '',
     '## 말투 — 🔴 리듬만 빌립니다',
-    voice.voiceCore === '' ? '' : `기준: ${voice.voiceCore}`,
+    `기준: ${voice.voiceStandard}`,
     '🔴 아래 참고에서 가져오는 것은 **말끝 · 호흡 · 감정 표현 · 줄바꿈**뿐입니다.',
     '   🔴 참고에 나온 **사건 · 가족 · 직장 · 병 · 돈 이야기는 당신 것이 아닙니다.**',
     ...voice.samples.flatMap((s, i) => [`--- 참고 ${i + 1} ---`, s]),
@@ -201,7 +225,7 @@ export function buildV2DraftPayload(input: { essence: SourceEssence }): string {
   return JSON.stringify({
     coreMoment: e.coreMoment,
     protectedFacts: e.protectedFacts.map((f) => f.text),
-    beats: e.sourceBeats.map((b) => b.meaning),
+    beats: e.sourceBeats.map((b) => ({ id: b.id, meaning: b.meaning })),
     participationHook: e.participationHook,
     closingIntent: e.closingIntent,
     contentRoles: e.contentRoles,
@@ -237,10 +261,8 @@ export function buildV2ReviewSystemPrompt(input: {
     '',
     `## 이 글을 쓴 사람이 서는 자리: ${input.plan.stance ?? '정해지지 않음'}`,
     `   ${STANCE_LABEL[input.plan.stance ?? 'REFLECTION']}`,
-    ...(input.voice.voiceCore !== ''
-      ? [`## 이 사람의 말투 기준: ${input.voice.voiceCore}`,
-         '   🔴 이 결로 읽히지 않으면 voiceMismatch 다. 이모티콘 개수나 문장 길이를 세지 않는다.']
-      : []),
+    `## 이 사람의 말투 기준: ${input.voice.voiceStandard}`,
+    '   🔴 이 결로 읽히지 않으면 voiceMismatch 다. 이모티콘 개수나 문장 길이를 세지 않는다.',
     ...(unmet.length > 0
       ? ['',
          '## 🔴 이 사람이 **가지지 않은 사실** — 자기 일로 말하면 안 된다',
@@ -250,6 +272,25 @@ export function buildV2ReviewSystemPrompt(input: {
          '   evidence 에는 **초안에 실제로 있는 문장**을 그대로 옮긴다. 지어내지 않는다.']
       : []),
     '',
+    '',
+    '## 🔴 살려야 했던 결 — 초안이 이것을 지켰는가',
+    ...(input.essence.sourceBeats.length > 0
+      ? input.essence.sourceBeats.map((b) => `   [${b.id}] ${b.meaning}`)
+      : ['   (없음)']),
+    '🔴 이 중 **초안에서 사라져 무슨 이야기인지 달라진 것**의 id 를 `missingBeatIds` 에 적는다.',
+    '   말을 바꿔 썼을 뿐 뜻이 남아 있으면 **적지 않는다.** 표현이 아니라 뜻을 본다.',
+    '',
+    '## 🔴 원문에 없던 새 사건을 만들었는가',
+    '   초안에 나오는 **구체적인 장면 · 사건 · 대사 · 숫자 · 날짜 · 물건** 중',
+    '   위 [원문근거] · [살려야 했던 결] · [이 사람의 생활사] 어디에도 없는 것을',
+    '   `unsupportedAdditions` 에 적는다.',
+    '   evidence 에는 **초안에 실제로 있는 문장**을 그대로 옮긴다. 지어내지 않는다.',
+    '🔴 **이것들은 새 사건이 아니다** — 적지 않는다:',
+    '   · 위 생활사 카드에 있는 사실 (직업 · 자녀 · 혼인 · 사는 곳 · 나이대)',
+    '   · 같은 뜻을 다른 말로 쓴 것',
+    '   · 감정 · 생각 · 궁금함 · 인사말',
+    '🔴 **짧다는 이유로 적지 않는다.** 재료가 적으면 짧은 것이 맞다.',
+    '',
     '## 이 사람의 생활사 (정본 카드)',
     ...lifeContractLines(input.life).map((x) => `- ${x}`),
     '🔴 초안이 **여기 없는 생활사를 자기 일로 주장**하면 `lifeContradictions` 에 적는다.',
@@ -258,6 +299,8 @@ export function buildV2ReviewSystemPrompt(input: {
     '',
     'JSON 만 답한다:',
     '{"issues":["해당하는 것만"],',
+    ' "missingBeatIds":["b1"],',
+    ' "unsupportedAdditions":[{"evidence":"초안에 있는 문장 그대로","why":"한 줄"}],',
     ' "claimViolations":[{"claimId":"c1","evidence":"초안에 있는 문장 그대로","why":"한 줄"}],',
     ' "lifeContradictions":[{"fact":"work|spouse|children|childAgeBand|region|economic|parentCare|menopause|age",',
     '                       "drafted":"초안이 주장한 것","card":"카드가 가진 것","evidence":"초안에 있는 문장 그대로"}],',
@@ -279,7 +322,7 @@ export function buildV2ReviewPayload(input: {
     원문근거: input.packet.spans.map((s) => ({ kind: s.kind, text: s.text })),
     정리한뜻: {
       coreMoment: input.essence.coreMoment,
-      beats: input.essence.sourceBeats.map((b) => b.meaning),
+      beats: input.essence.sourceBeats.map((b) => ({ id: b.id, meaning: b.meaning })),
     },
     초안: { title: input.draft.title, body: input.draft.body },
   })
