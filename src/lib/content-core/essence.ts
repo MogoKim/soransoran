@@ -12,8 +12,8 @@
  * 🔴 물음표 · 특정 낱말 · 숫자를 **강제하지 않는다.** 그런 규칙은 모든 글을
  *    같은 모양으로 수렴시킨다(2026-09-13 실측: 템플릿 90행이 100% 물음표 종결).
  */
-import type { SourceEvidencePacket } from './evidence'
-import { evidenceText, type ContextSufficiency, type InsufficientReason } from './evidence'
+import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
+import type { ContextSufficiency, InsufficientReason } from './evidence'
 
 export const ESSENCE_VERSION = 'essence-v1'
 
@@ -136,9 +136,12 @@ export function isPersonalInfoAnchor(text: string): boolean {
  *       *"김치 이야기 → 김치 때문에 회사가 망했다"* 를 통과시켰다.
  *       유사도 규칙도 사전도 만들지 않는다 — **근거에 그 말이 있는가** 하나만 본다.
  */
-export function anchorGrounded(a: EssenceAnchor, evidence: string): boolean {
+export function anchorGrounded(a: EssenceAnchor, spans: readonly EvidenceSpan[]): boolean {
   if (a.evidenceRef === 'derived') return false
-  return evidence.includes(a.text)
+  // 🔴 **지목한 그 자리에 있어야 한다.** 합친 글에서 찾으면 provenance 가 거짓이 된다 —
+  //    제목에만 있는 말을 `head` 라고 해도 통과했다.
+  const span = spans.find((x) => x.kind === a.evidenceRef)
+  return span !== undefined && span.text.includes(a.text)
 }
 
 /**
@@ -157,7 +160,6 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
   }
   const problems: string[] = []
   const dropped: { text: string; why: DropReason }[] = []
-  const evidence = evidenceText(packet)
 
   const anchors: EssenceAnchor[] = []
   for (const x of arr(j.anchors)) {
@@ -174,7 +176,7 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
     const ref = (EVIDENCE_REFS as readonly string[]).includes(S(o.evidenceRef))
       ? (S(o.evidenceRef) as EvidenceRef) : 'derived'
     const a: EssenceAnchor = { kind, text, preserve, evidenceRef: ref }
-    if (!anchorGrounded(a, evidence)) {
+    if (!anchorGrounded(a, packet.spans)) {
       dropped.push({ text, why: ref === 'derived' ? 'derived' : 'notInEvidence' })
       continue
     }

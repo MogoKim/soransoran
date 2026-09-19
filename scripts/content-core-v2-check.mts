@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
+import { buildEssenceSystemPrompt } from './lib/content-core-prompts.mjs'
 import { isContentCoreV2Enabled, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT }
   from '../src/lib/content-core/flag'
 import { EVIDENCE_CHAR_BUDGET } from '../src/lib/content-core/evidence'
@@ -443,6 +444,73 @@ console.log('\n⑬ 🔴 Codex 독립 리뷰 회귀 — 재현됐던 결함 7개'
   const BASE = {
     id: 'R0', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
     canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' } },
+  }
+
+  // ── ①-2 anchor provenance — 🔴 지목한 자리에 실제로 있어야 한다 ──
+  console.log('  ①-2 anchor 위치 — 🔴 제목에 있는 말을 head 라고 하면 안 된다')
+  {
+    const longBody = `${'서론이 한참 이어집니다. '.repeat(30)}그래서 다들 어떻게 하시는지 궁금해요?`
+    const mk = (text: string, ref: string) => ({
+      ...BASE, id: `R1-${ref}-${text}`,
+      title: '나는솔로 마지막 회 보셨어요', body: longBody,
+      canned: {
+        essence: {
+          ...BASE_E, coreMoment: '나는솔로 마지막 회를 보고 든 생각',
+          anchors: [anchor('publicEntity', text, 'semantic', ref)],
+        },
+        draft: { title: '어젯밤 그 방송', body: '한참 앉아 있었어요. 다들 어떠셨어요.' },
+      },
+    })
+    for (const [label, text, ref, expect] of [
+      ['제목에만 있는 값 + ref=title', '나는솔로', 'title', true],
+      ['제목에만 있는 값 + ref=head', '나는솔로', 'head', false],
+      ['제목에만 있는 값 + ref=tail', '나는솔로', 'tail', false],
+      ['꼬리에만 있는 값 + ref=tail', '궁금해요', 'tail', true],
+      ['꼬리에만 있는 값 + ref=head', '궁금해요', 'head', false],
+    ] as const) {
+      const a = await run(mk(text, ref))
+      const kept = (a.essence?.anchors ?? []).some((x) => x.text === text)
+      check(`    🔴 ${label} → ${expect ? '통과' : '거부'}`, kept === expect,
+        `anchors=${JSON.stringify(a.essence?.anchors)} dropped=${JSON.stringify(a.droppedAnchors)}`)
+      if (!expect) {
+        check('      ↳ 사유를 남겼다', a.droppedAnchors.some((d) => d.text === text && d.why === 'notInEvidence'))
+      }
+    }
+    // 🔴 남은 anchor 의 provenance 가 실제 근거 위치와 맞는가 — artifact 값으로 본다
+    const ok = await run(mk('나는솔로', 'title'))
+    const kept = (ok.essence?.anchors ?? [])[0]
+    const span = ok.evidence.spans.find((x) => x.kind === kept?.evidenceRef)
+    check('    🔴 🔴 **artifact 의 provenance 가 실제 근거 위치와 맞는다**',
+      kept !== undefined && span !== undefined && span.text.includes(kept.text),
+      JSON.stringify({ kept, spans: ok.evidence.spans.map((x) => x.kind) }))
+  }
+
+  // ── ②-2 프롬프트가 쓰지 않을 값을 요구하지 않는다 ──
+  console.log('  ②-2 프롬프트 — 🔴 쓰지 않을 evidenceRef 를 모델에게 묻지 않는다')
+  {
+    const prompt = buildEssenceSystemPrompt()
+    check('    🔴 🔴 **프롬프트가 derived 를 안내하지 않는다**', !prompt.includes('derived'))
+    check('    🔴 JSON 예시도 title|head|tail 만 준다',
+      prompt.includes('"evidenceRef":"title|head|tail"') && !prompt.includes('|derived'))
+    // 🔴 그래도 외부 응답이 derived 를 보내면 막는 방어는 유지한다
+    const a = await run({
+      ...BASE, id: 'R2d',
+      canned: {
+        essence: { ...BASE_E, anchors: [anchor('situation', '김치', 'semantic', 'derived')] },
+        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
+      },
+    })
+    check('    🟢 그래도 derived 가 오면 버리고 사유를 남긴다',
+      (a.essence?.anchors ?? []).length === 0 && a.droppedAnchors.some((d) => d.why === 'derived'))
+  }
+
+  // ── ③-3 죽은 주석 ──
+  console.log('  ③-3 주석 — 🔴 지워진 함수를 설명하지 않는다')
+  {
+    const src = readFileSync('src/lib/content-core/voice-evidence.ts', 'utf-8')
+    check('    🔴 사라진 voiceLeak 을 설명하지 않는다', !src.includes('voiceLeak'))
+    check('    🔴 현재 계약을 적는다 (의미 검수·사람이 본다)',
+      src.includes('voiceFidelity') && src.includes('사람이 본다'))
   }
 
   // ── ② 모든 유료 단계가 같은 기준으로 fail-closed ──
