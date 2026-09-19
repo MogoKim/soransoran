@@ -45,8 +45,17 @@ const pick = (c: Canned, stage: string): string => JSON.stringify(
     : stage === 'draftGen' ? c.draft ?? {}
       : stage === 'semanticReview' ? c.review ?? { issues: [], claimViolations: [], confidence: 0.9, note: '' }
         : c.age ?? { conflict: false, evidence: '' })
+/**
+ * 🔴 **보낸 것을 값으로 본다.** 정규식으로 소스를 훑지 않고, 실제로 provider 에게
+ *    간 system·payload 를 기록해 확인한다.
+ */
+type Sent = { stage: string; system: string; payload: string }
+let SENT: Sent[] = []
+const sentOf = (stage: string): Sent[] => SENT.filter((x) => x.stage === stage)
+
 const fakeAsk = (c: Canned, fault: { truncate?: string; blocked?: string; usageUnknown?: string } = {}): Ask =>
-  async (stage) => {
+  async (stage, system, payload) => {
+    SENT.push({ stage, system, payload })
     if (fault.blocked === stage) {
       return { ok: false, rawText: '', truncated: false, usageKnown: false, inputTokens: null, outputTokens: null, usd: null, blocked: true }
     }
@@ -90,11 +99,14 @@ const run = (o: {
   load?: Record<string, number>
   fault?: { truncate?: string; blocked?: string; usageUnknown?: string }
   cap?: number
-}): Promise<HumanReviewArtifact> => runContentCore({
+}): Promise<HumanReviewArtifact> => {
+  SENT = []
+  return runContentCore({
   sourceArticleId: o.id, title: o.title, maskedBody: o.body,
   personas: o.personas ?? ALL, load: o.load, voiceSourceDigest: 'asset000000000',
   vocabulary: VOCAB, ask: fakeAsk(o.canned, o.fault), now: NOW, callCap: o.cap ?? 6,
-})
+  })
+}
 
 const fact = (kind: string, text: string, ref = 'head'): unknown => ({ kind, text, evidenceRef: ref })
 const beat = (kind: string, meaning: string, evidenceText: string, ref = 'head'): unknown =>
@@ -264,10 +276,25 @@ console.log('\n⑤ 🔴 A 회귀 — 원문 질문 전체를 글자 그대로 �
   check('🔴 🔴 **질문 전체를 protectedFact 로 받지 않는다**',
     a.essence?.protectedFacts.every((f) => !f.text.includes('까요')) === true,
     JSON.stringify(a.essence?.protectedFacts))
-  check('🔴 🔴 **버리지 않고 뜻으로 낮춘다**',
-    a.dropped.filter((d) => d.why === 'downgradedToBeat').length === 2, JSON.stringify(a.dropped))
-  check('🔴 낮춘 것이 sourceBeats 에 남는다',
-    (a.essence?.sourceBeats ?? []).some((b) => b.meaning.includes('안그럴까요')))
+  check('🔴 사유만 남기고 버린다 (다른 칸으로 옮기지 않는다)',
+    a.dropped.filter((d) => d.why === 'clauseLike').length === 2, JSON.stringify(a.dropped))
+  /**
+   * 🔴 **실제로 draftGen 에 간 문자열**을 본다. 앞판은 문장을 `sourceBeat.meaning` 으로
+   *    옮겨서 원문 문구가 생성 프롬프트로 그대로 갔다 — 내가 만든 계약 위반이었다.
+   */
+  {
+    const sent = sentOf('draftGen')[0]!
+    const both = `${sent.system}\n${sent.payload}`
+    for (const phrase of ['왜 저희 애아빠는 안그럴까요', '역시 방송은 방송일 뿐일까요']) {
+      check(`🔴 🔴 **강등된 원문 문구가 생성에 가지 않는다 — "${phrase}"**`,
+        !both.includes(phrase))
+    }
+    check('🔴 🔴 **모델이 따로 정리한 뜻은 전달된다**',
+      both.includes('화면 속 남편과 우리 집 남편의 거리'))
+    check('🟢 검증된 protectedFact 는 전달된다', both.includes('집안일'))
+    check('🔴 원문 body 전체가 생성에 가지 않는다',
+      !both.includes('티비에는 집안일 돕는 남편들 많이 나오던데'))
+  }
   check('🟢 원자적인 것은 남는다', a.essence?.protectedFacts.some((f) => f.text === '집안일') === true)
   check('🔴 🔴 **spouse 조건이 자격에 들어갔다**',
     a.essence?.claimRequirements.some((c) => c.fact === 'spouse' && c.requiredValue === '있음') === true)
@@ -497,7 +524,8 @@ console.log('\n⑪ 계약 단위 검사 · artifact')
   check('🔴 🔴 **한국어 절 두 개가 protectedFact 로 들어가지 않는다**', (() => {
     const a = judgeProtectedFact('searchTerm', '남편이 집안일을 거의 돕지 않아서')
     const b = judgeProtectedFact('searchTerm', '아들을 낳으면 안쓰럽게 보는 시선')
-    return !a.ok && a.action === 'downgrade' && !b.ok && b.action === 'downgrade'
+    // 🔴 버린다 — 다른 칸으로 옮기지 않는다
+    return !a.ok && a.why === 'clauseLike' && !b.ok && b.why === 'clauseLike'
   })())
   check('🔴 숫자·관계는 모양이 아니면 버린다',
     !judgeProtectedFact('number', '남편이 집안일을').ok
@@ -658,6 +686,73 @@ console.log('\n⑬ 🔴 브리프 왜곡 — 정리한 뜻이 원문을 뒤집�
       .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, '')
     return (src.match(/ask\('semanticReview'/g) ?? []).length === 1
   })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ 🔴 생성에 실제로 간 문자열 — 정규식이 아니라 값으로 본다')
+// ─────────────────────────────────────────────────────────
+{
+  const BODY = '시간 땜빵난건 다른날 다 근무해요. 직원은 9명정도되요.'
+  const E = {
+    coreMoment: '근무 시간을 옮겨 채우고 동료 선물을 해야 하는지 묻는 이야기',
+    protectedFacts: [fact('number', '9명')],
+    sourceBeats: [beat('situation', '남이 대신해 준 것이 아니라 스스로 시간을 메운 사정', '다른날 다 근무해요')],
+    participationHook: '선물을 해야 하는지', participationConfidence: 0.8,
+    closingIntent: 'ask', timeSensitivity: 'evergreen',
+    contentRoles: ['usefulAnswer'], claimRequirements: [],
+  }
+  const DRAFT = { title: '이럴 때 선물 하시나요', body: '시간을 옮겨 스스로 메웠는데요. 직원이 9명이라 고민됩니다. 다들 어떻게 하세요.' }
+
+  const a = record('⑭', await run({
+    id: 'S14', title: '알바중 여행다녀오면 선물하나요..?', body: BODY,
+    canned: { essence: E, draft: DRAFT },
+  }))
+  const sent = sentOf('draftGen')[0]!
+  const both = `${sent.system}\n${sent.payload}`
+  check('🔴 🔴 **원문 문구가 생성에 가지 않는다**',
+    !both.includes('시간 땜빵난건') && !both.includes('직원은 9명정도되요')
+    && !both.includes('다른날 다 근무해요'))
+  check('🟢 검증된 protectedFact 는 전달된다', both.includes('9명'))
+  check('🟢 모델이 정리한 뜻은 전달된다', both.includes('스스로 시간을 메운 사정'))
+  check('🔴 정상 호출 4회', a.cost.totalCalls === 4, `${a.cost.totalCalls}회`)
+  check('🔴 검수는 원문 근거를 받는다 (생성과 다르다)', (() => {
+    const r = sentOf('semanticReview')[0]!
+    return r.payload.includes('시간 땜빵난건')
+  })())
+
+  // 🔴 9명이 빠지면 잡힌다
+  const missing = await run({
+    id: 'S14b', title: '알바중 여행다녀오면 선물하나요..?', body: BODY,
+    canned: { essence: E, draft: { title: '이럴 때 선물 하시나요', body: '시간을 옮겨 스스로 메웠는데요. 사람이 꽤 되어 고민됩니다. 다들 어떻게 하세요.' } },
+  })
+  check('🔴 🔴 **검증된 사실이 빠지면 잡는다**',
+    missing.review.deterministic.failures.some((f) => f.code === 'protectedFactMissing'))
+
+  // 🔴 protectedFacts 0개여도 완주
+  const none = await run({
+    id: 'S14c', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    canned: {
+      essence: { ...E, coreMoment: '김치를 이르게 꺼낸 이야기', protectedFacts: [],
+        sourceBeats: [beat('situation', '예상보다 이르게 열어 본 장면', '좀 이른가 싶었는데')],
+        closingIntent: 'share', contentRoles: ['conversationSpark'] },
+      draft: { title: '벌써 열어 봤어요', body: '때가 아닌가 했는데 뚜껑을 열었습니다. 생각보다 잘 익었더라고요.' },
+    },
+  })
+  check('🟢 protectedFacts 0개여도 완주한다',
+    none.review.machineOutcome === 'adopt' && none.cost.totalCalls === 4)
+
+  // 🔴 실질 복제는 계속 차단
+  const copy = await run({
+    id: 'S14d', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    canned: {
+      essence: { ...E, coreMoment: '김치를 이르게 꺼낸 이야기', protectedFacts: [],
+        sourceBeats: [beat('situation', '예상보다 이르게 열어 본 장면', '좀 이른가 싶었는데')],
+        closingIntent: 'share', contentRoles: ['conversationSpark'] },
+      draft: { title: '벌써 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요. 그냥 열었습니다.' },
+    },
+  })
+  check('🔴 원문 실질 복제는 계속 차단된다',
+    copy.review.deterministic.failures.some((f) => f.code === 'copiedFromSource'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

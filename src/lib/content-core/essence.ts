@@ -113,8 +113,8 @@ export type DropReason =
   | 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'unknownRef'
   /** 그 kind 로 증명할 수 있는 모양이 아니다 */
   | 'notProvable'
-  /** 문장·절인지 확실하지 않아 글자 강제 대신 **뜻으로 낮췄다** */
-  | 'downgradedToBeat'
+  /** 문장·절일 수 있어 글자를 강제할 수 없다 — 🔴 다른 칸으로 옮기지 않고 버린다 */
+  | 'clauseLike'
 
 export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
   notInEvidence: '지목한 자리에 그 말이 없다',
@@ -122,7 +122,7 @@ export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
   empty: '비어 있다',
   unknownKind: '우리 종류가 아니다',
   notProvable: '그 종류로 증명할 수 있는 모양이 아니다 — 글자 그대로 지키라고 할 수 없다',
-  downgradedToBeat: '문장·절일 수 있어 글자 강제 대신 **뜻**으로 낮췄다',
+  clauseLike: '문장·절일 수 있다 — 🔴 원문 문구를 다른 칸으로 옮기지 않고 버린다',
   unknownRef: '어디서 왔는지 지목하지 못했다',
 }
 
@@ -182,12 +182,22 @@ export function looksLikeClause(text: string): boolean {
   return /[.!?…]/.test(t) || /[\r\n]/.test(t) || /\s/.test(t)
 }
 
+/**
+ * 🔴 **증명하지 못하면 버린다. 다른 칸으로 옮기지 않는다** (2026-09-19 보정).
+ *
+ *    앞판은 문장으로 보이는 값을 `sourceBeat.meaning` 으로 **낮춰서** 남겼다.
+ *    그런데 `meaning` 은 생성 프롬프트로 간다 — 그래서 *"왜 저희 애아빠는 안그럴까요"*
+ *    같은 **원문 문구가 생성에 그대로 전달됐다.** "생성에 원문 조각을 보내지 않는다"
+ *    계약을 내가 깬 것이다.
+ *    🔴 같은 뜻이 필요하면 **모델이 따로 정리해 낸 `sourceBeats`** 만 쓴다.
+ *       원문 문장을 자동으로 되살리지 않는다.
+ */
 export type FactVerdict =
   | { ok: true }
-  /** 증명하지 못했다 — 버린다 */
-  | { ok: false; action: 'drop' }
-  /** 문장·절인지 확실하지 않다 — 글자 강제 대신 **뜻으로 낮춘다** */
-  | { ok: false; action: 'downgrade' }
+  /** 그 kind 로 확정할 수 있는 모양이 아니다 */
+  | { ok: false; why: 'notProvable' }
+  /** 문장·절일 수 있다 — 글자를 강제할 수 없다 */
+  | { ok: false; why: 'clauseLike' }
 
 /**
  * 🔴 이 값을 **글자 그대로 지키라고 해도 되는가.**
@@ -195,20 +205,20 @@ export type FactVerdict =
  */
 export function judgeProtectedFact(kind: ProtectedFactKind, text: string): FactVerdict {
   const t = text.trim()
-  if (t === '') return { ok: false, action: 'drop' }
+  if (t === '') return { ok: false, why: 'notProvable' }
   switch (kind) {
     // 🔴 구조로 확정된다
-    case 'number': return NUMBER_FACT_RE.test(t) ? { ok: true } : { ok: false, action: 'drop' }
+    case 'number': return NUMBER_FACT_RE.test(t) ? { ok: true } : { ok: false, why: 'notProvable' }
     // 🔴 정본 목록에 있는 이름만
-    case 'relation': return RELATION_NAMES.includes(t) ? { ok: true } : { ok: false, action: 'drop' }
+    case 'relation': return RELATION_NAMES.includes(t) ? { ok: true } : { ok: false, why: 'notProvable' }
     /**
-     * 🔴 공개 이름 · 검색 용어는 **확정할 방법이 없다.** 그래서 문장·절이 아님이
-     *    확실할 때만 글자를 강제하고, 아니면 **뜻으로 낮춘다**(버리지 않는다).
+     * 🔴 공개 이름 · 검색 용어는 **확정할 방법이 없다.** 문장·절이 아님이 확실할 때만
+     *    글자를 강제하고, 아니면 **버린다** — 다른 칸으로 옮기지 않는다.
      */
     case 'publicEntity':
     case 'searchTerm':
-      return looksLikeClause(t) ? { ok: false, action: 'downgrade' } : { ok: true }
-    default: return { ok: false, action: 'drop' }
+      return looksLikeClause(t) ? { ok: false, why: 'clauseLike' } : { ok: true }
+    default: return { ok: false, why: 'notProvable' }
   }
 }
 
@@ -260,9 +270,8 @@ export function parseEssence(
   const dropped: { text: string; why: DropReason }[] = []
   const spans = packet.spans
 
-  // ── protectedFacts — 증명 가능한 것만. 나머지는 뜻으로 낮춘다 ──
+  // ── protectedFacts — 증명 가능한 것만. 나머지는 사유만 남기고 버린다 ──
   const facts: ProtectedFact[] = []
-  const downgraded: SourceBeat[] = []
   for (const x of arr(j.protectedFacts)) {
     const o = x as Record<string, unknown>
     const text = S(o.text)
@@ -280,15 +289,12 @@ export function parseEssence(
       dropped.push({ text, why: 'notInEvidence' }); continue
     }
     const verdict = judgeProtectedFact(kind as ProtectedFactKind, text)
-    if (!verdict.ok && verdict.action === 'drop') {
-      dropped.push({ text, why: 'notProvable' }); continue
-    }
-    if (!verdict.ok && verdict.action === 'downgrade') {
-      // 🔴 버리지 않는다 — **뜻**으로 낮춰 남긴다
-      downgraded.push({
-        kind: 'situation', meaning: text, evidenceRef: ref as EvidenceRef, evidenceText: text,
-      })
-      dropped.push({ text, why: 'downgradedToBeat' })
+    if (!verdict.ok) {
+      /**
+       * 🔴 **사유만 남기고 버린다.** `sourceBeat.meaning` 으로 옮기지 않는다 —
+       *    그 칸은 생성 프롬프트로 가고, 옮기는 순간 원문 문구가 생성에 전달된다.
+       */
+      dropped.push({ text, why: verdict.why })
       continue
     }
     facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
@@ -371,7 +377,7 @@ export function parseEssence(
       insufficientReasons: packet.insufficientReasons,
       coreMoment: S(j.coreMoment) === '' ? null : S(j.coreMoment),
       protectedFacts: facts,
-      sourceBeats: [...beats, ...downgraded],
+      sourceBeats: beats,
       participationHook: S(j.participationHook) === '' ? null : S(j.participationHook),
       participationConfidence: Number.isFinite(conf) && conf >= 0 && conf <= 1 ? conf : null,
       closingIntent: (CLOSING_INTENTS as readonly string[]).includes(closing) ? (closing as ClosingIntent) : null,
