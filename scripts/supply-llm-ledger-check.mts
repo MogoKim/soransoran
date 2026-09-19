@@ -31,7 +31,7 @@ import {
   type BudgetLimits, type LedgerEntry, type LedgerStage, type OpenReservation,
 } from '../src/lib/llm-ledger'
 import {
-  BILLABLE_NOW, MODEL_PRICES, PRICING_CHECKED_AT, PRICING_SOURCE, PRICING_VERSION,
+  BILLABLE_NOW, MODEL_PRICES, PRICING_SOURCES, PRICING_VERSION,
   costOf, priceOf, reserveOf,
 } from '../src/lib/llm-pricing'
 import {
@@ -86,7 +86,11 @@ console.log('① 단가 — 🔴 공식 문서에서 확인한 값만 쓴다')
 // ─────────────────────────────────────────────────────────
 {
   check('🔴 출처와 조회일을 코드에 남긴다',
-    PRICING_SOURCE.startsWith('https://') && /^\d{4}-\d{2}-\d{2}$/.test(PRICING_CHECKED_AT))
+    Object.keys(MODEL_PRICES).every((m) => {
+      const src = PRICING_SOURCES[m]
+      return src !== undefined && src.url.startsWith('https://')
+        && /^\d{4}-\d{2}-\d{2}$/.test(src.checkedAt)
+    }))
   const haiku = priceOf('claude-haiku-4.5')
   check('🔴 Haiku 4.5 입력 $1/MTok · 출력 $5/MTok (2026-09-17 공식 문서)',
     haiku !== null && haiku.inputPerMTok === 1 && haiku.outputPerMTok === 5)
@@ -114,9 +118,10 @@ console.log('① 단가 — 🔴 공식 문서에서 확인한 값만 쓴다')
     const v = costOf({ model: 'claude-haiku-4.5', usage })
     check(`🔴 ${label} → 계산하지 않는다 (0원으로 적지 않는다)`, !v.known && v.code === 'NO_USAGE')
   }
+  // 🔴 `gemini-3.7-flash` 는 2026-09-19 에 가격표에 등록됐다 — 더는 "모르는 모델" 예시가 아니다
   check('🔴 단가를 모르면 계산하지 않는다',
     !costOf({
-      model: 'gemini-3.7-flash',
+      model: 'gpt-5-mini',
       usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
     }).known)
 

@@ -49,13 +49,31 @@ export type AskResult = {
   truncated: boolean
   usageKnown: boolean
   inputTokens: number | null
+  /** 🔴 과금 기준 출력 — Gemini 는 `candidates + thoughts` 합이다 */
   outputTokens: number | null
+  /** 🔴 그 중 thinking. 포함됐음을 확인하는 값이고, 없는 모델은 null 이다 */
+  thoughtsTokens: number | null
   usd: number | null
   /** 예산·상한에 막혀 **나가지도 않았는가** */
   blocked: boolean
 }
 export type AskStage = CallMeta['stage']
-export type Ask = (stage: AskStage, system: string, payload: string) => Promise<AskResult>
+
+/**
+ * 🔴 **단계마다 어느 모델을 쓰는가** — 부르는 쪽이 임의로 고르지 않게 한 곳에 둔다.
+ *    (2026-09-19: 화자 계획과 생성은 Gemini, 의미 검수는 Haiku 로 나눈 시험 구성.
+ *     검수를 생성과 같은 모델에 맡기면 자기 글을 자기가 채점한다.)
+ */
+export const STAGE_MODEL: Readonly<Record<AskStage, string>> = Object.freeze({
+  speakerPlan: 'gemini-3.7-flash',
+  draftGen: 'gemini-3.7-flash',
+  semanticReview: 'claude-haiku-4.5',
+})
+
+/** 🔴 `model` 을 인자로 받는다 — 어느 단계가 어디로 갔는지 **값으로** 확인된다 */
+export type Ask = (
+  stage: AskStage, system: string, payload: string, model: string,
+) => Promise<AskResult>
 
 /**
  * 🔴 **정본 카드 + 말투 근거.** Persona 정보를 v2 에서 다시 정의하지 않는다 —
@@ -148,12 +166,20 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const calls: CallMeta[] = []
   let spent = 0
   const ask = async (stage: AskStage, system: string, payload: string): Promise<AskResult> => {
+    const model = STAGE_MODEL[stage]
     if (spent >= input.callCap) {
-      return { ok: false, rawText: '', truncated: false, usageKnown: false, inputTokens: null, outputTokens: null, usd: null, blocked: true }
+      return {
+        ok: false, rawText: '', truncated: false, usageKnown: false,
+        inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null, blocked: true,
+      }
     }
     spent += 1
-    const r = await input.ask(stage, system, payload)
-    calls.push({ stage, count: 1, inputTokens: r.inputTokens, outputTokens: r.outputTokens, usd: r.usd })
+    const r = await input.ask(stage, system, payload, model)
+    // 🔴 어느 모델이 얼마를 썼는지 단계별로 남긴다 — 합쳐 놓으면 알 수 없다
+    calls.push({
+      stage, model, count: 1, inputTokens: r.inputTokens,
+      outputTokens: r.outputTokens, thoughtsTokens: r.thoughtsTokens, usd: r.usd,
+    })
     return r
   }
 

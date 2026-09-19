@@ -13,7 +13,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
-import { runContentCore, personaInputOf, type Ask, type AskResult, type PersonaInput }
+import { runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
 import {
   buildSpeakerPlanSystemPrompt, buildV2DraftSystemPrompt, lifeContractLines,
@@ -30,6 +30,12 @@ import { violatesArtifact, artifactSummary, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
 import { buildVoiceEvidence, voiceStandardOf, VOICE_SAMPLE_MIN }
   from '../src/lib/content-core/voice-evidence'
+import {
+  costOf, priceOf, GEMINI_POST_PROMO, GEMINI_PROMO_ENDS_AT, MODEL_PRICES,
+  PRICING_SOURCES, PRICING_VERSION, type Usage,
+} from '../src/lib/llm-pricing'
+import { GEMINI_COUNT_TOKENS_URL, geminiCountBody, readGeminiUsage }
+  from './lib/voice-m3-provider.mjs'
 import type { PoolCard } from '../src/lib/persona-pool-card'
 import type { ChildAgeBand } from '../src/lib/original-post-persona-match'
 
@@ -43,7 +49,7 @@ const NOW = new Date('2026-09-19T10:00:00.000Z')
 type Canned = { plan?: unknown; draft?: unknown; review?: unknown }
 const okRes = (text: string): AskResult => ({
   ok: true, rawText: text, truncated: false, usageKnown: true,
-  inputTokens: 100, outputTokens: 20, usd: 0.0001, blocked: false,
+  inputTokens: 100, outputTokens: 20, thoughtsTokens: null, usd: 0.0001, blocked: false,
 })
 const EMPTY_REVIEW = {
   droppedFromSource: [], unsupportedAdditions: [], lifeContradictions: [],
@@ -55,18 +61,21 @@ const pick = (c: Canned, stage: string): string => JSON.stringify(
       : c.review ?? EMPTY_REVIEW)
 
 /** 🔴 **보낸 것을 값으로 본다** — 실제로 provider 에게 간 system·payload 를 기록한다 */
-type Sent = { stage: string; system: string; payload: string }
+type Sent = { stage: string; system: string; payload: string; model: string }
 let SENT: Sent[] = []
 const sentOf = (stage: string): Sent[] => SENT.filter((x) => x.stage === stage)
 
 const fakeAsk = (c: Canned, fault: { truncate?: string; blocked?: string; usageUnknown?: string } = {}): Ask =>
-  async (stage, system, payload) => {
-    SENT.push({ stage, system, payload })
+  async (stage, system, payload, model) => {
+    SENT.push({ stage, system, payload, model })
     if (fault.blocked === stage) {
-      return { ok: false, rawText: '', truncated: false, usageKnown: false, inputTokens: null, outputTokens: null, usd: null, blocked: true }
+      return {
+        ok: false, rawText: '', truncated: false, usageKnown: false,
+        inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null, blocked: true,
+      }
     }
     if (fault.truncate === stage) return { ...okRes(''), truncated: true }
-    if (fault.usageUnknown === stage) return { ...okRes(pick(c, stage)), usageKnown: false, inputTokens: null, outputTokens: null, usd: null }
+    if (fault.usageUnknown === stage) return { ...okRes(pick(c, stage)), usageKnown: false, inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null }
     return okRes(pick(c, stage))
   }
 
@@ -677,6 +686,93 @@ console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 
         evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT_C } })
   check('🔴 protectedFact 도 자리가 틀리면 버린다',
     wrongRef2.dropped.some((d) => d.text === '3시간' && d.why === 'notInEvidence'))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑪ 🔴 혼합 모델 — 단계별 모델과 thinking 과금')
+// ─────────────────────────────────────────────────────────
+{
+  check('🔴 🔴 **speakerPlan · draftGen 은 Gemini, semanticReview 는 Haiku**',
+    STAGE_MODEL.speakerPlan === 'gemini-3.7-flash'
+    && STAGE_MODEL.draftGen === 'gemini-3.7-flash'
+    && STAGE_MODEL.semanticReview === 'claude-haiku-4.5')
+
+  const DRAFT = { title: '벌써 열어 봤어요', body: '때가 아닌가 했는데 뚜껑을 열었습니다.' }
+  const a = await run({
+    id: 'S11', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    personas: [homemaker],
+    canned: { plan: plan({ personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+      selfBasis: 'noLifeFactNeeded', universalReason: '보편적인 일상 이야기',
+      closingIntent: 'share', contentRoles: ['conversationSpark'] }), draft: DRAFT },
+  })
+  check('🔴 🔴 **실제 요청 인자에 단계별 모델이 실려 나갔다**',
+    sentOf('speakerPlan')[0]!.model === 'gemini-3.7-flash'
+    && sentOf('draftGen')[0]!.model === 'gemini-3.7-flash'
+    && sentOf('semanticReview')[0]!.model === 'claude-haiku-4.5')
+  check('🔴 🔴 **artifact 가 호출마다 모델을 남긴다 — 비용을 섞지 않는다**',
+    a.cost.calls.map((c) => `${c.stage}:${c.model}`).join(',')
+      === 'speakerPlan:gemini-3.7-flash,draftGen:gemini-3.7-flash,semanticReview:claude-haiku-4.5')
+  check('🔴 thinking 칸이 호출마다 남는다',
+    a.cost.calls.every((c) => 'thoughtsTokens' in c))
+  check('🔴 정상 경로 3회', a.cost.totalCalls === 3)
+
+  // ── 가격표 ──
+  const g = priceOf('gemini-3.7-flash')
+  check('🔴 🔴 **Gemini 3.7 Flash 공식 단가 $0.75 / $3.75 (2026-09-19 확인)**',
+    g !== null && g.inputPerMTok === 0.75 && g.outputPerMTok === 3.75)
+  check('🔴 프로모션 종료일과 이후 단가를 코드에 남겼다',
+    GEMINI_PROMO_ENDS_AT === '2026-12-31'
+    && GEMINI_POST_PROMO.inputPerMTok === 1.5 && GEMINI_POST_PROMO.outputPerMTok === 7.5)
+  check('🔴 모델마다 출처와 확인일이 있다',
+    Object.keys(MODEL_PRICES).every((m) => PRICING_SOURCES[m]?.url.startsWith('https://')))
+  check('🔴 가격표 버전이 한 제공사만 가리키지 않는다', !PRICING_VERSION.startsWith('anthropic-'))
+
+  // ── 🔴 thinking 토큰이 실제 정산에 포함되는가 ──
+  const usage = (o: Partial<Usage>): Usage => ({
+    inputTokens: 1000, outputTokens: 100, cacheWriteTokens: 0, cacheReadTokens: 0, ...o })
+  const visibleOnly = costOf({ model: 'gemini-3.7-flash', usage: usage({ outputTokens: 100 }) })
+  const withThoughts = costOf({ model: 'gemini-3.7-flash', usage: usage({ outputTokens: 600 }) })
+  check('🔴 🔴 **thinking 500 토큰이 정산에 실제로 더해진다**',
+    visibleOnly.known && withThoughts.known
+    && Math.abs((withThoughts.usd - visibleOnly.usd) - (500 * 3.75) / 1_000_000) < 1e-12,
+    `${visibleOnly.known ? visibleOnly.usd : '?'} → ${withThoughts.known ? withThoughts.usd : '?'}`)
+  check('🔴 사용량을 모르면 금액을 만들지 않는다',
+    !costOf({ model: 'gemini-3.7-flash', usage: usage({ outputTokens: null }) }).known
+    && !costOf({ model: 'gemini-3.7-flash', usage: usage({ cacheReadTokens: null }) }).known)
+  check('🔴 가격표에 없는 모델은 NO_PRICE 로 막힌다', (() => {
+    const v = costOf({ model: 'gpt-5-mini', usage: usage({}) })
+    return !v.known && v.code === 'NO_PRICE'
+  })())
+
+  // ── 🔴 provider 응답 해석: thinking 포함 · 누락 시 미상 ──
+  const gemUsage = (o: Record<string, unknown>): Record<string, unknown> => ({
+    promptTokenCount: 1000, candidatesTokenCount: 100, thoughtsTokenCount: 500, ...o })
+  check('🔴 🔴 **Gemini 출력 과금 = candidates + thoughts**',
+    readGeminiUsage(gemUsage({})).outputTokens === 600)
+  check('🔴 🔴 **thoughtsTokenCount 가 없으면 usageUnknown — 싸게 추정하지 않는다**',
+    readGeminiUsage(gemUsage({ thoughtsTokenCount: undefined })).usageKnown === false)
+  check('🟢 thinking 을 안 쓴 응답(0)은 정상 통과',
+    readGeminiUsage(gemUsage({ thoughtsTokenCount: 0 })).usageKnown === true
+    && readGeminiUsage(gemUsage({ thoughtsTokenCount: 0 })).outputTokens === 100)
+  check('🔴 예상 못 한 캐시 칸이 나타나면 0 으로 뭉개지 않는다',
+    readGeminiUsage(gemUsage({ cachedContentTokenCount: 300 })).cacheReadTokens === 300)
+  check('🔴 사용량 칸 이름이 장부에 남는다 — 모르는 과금 칸이 드러난다',
+    readGeminiUsage(gemUsage({ toolUsePromptTokenCount: 7 })).usageKeys.includes('toolUsePromptTokenCount'))
+
+  // ── 🔴 사전 계산 요청이 generateContent 와 같은 입력인가 ──
+  check('🔴 🔴 **Gemini countTokens 는 generateContentRequest 로 systemInstruction 을 함께 센다**',
+    geminiCountBody('sys', 'payload', 'gemini-3.7-flash')
+      === JSON.stringify({ generateContentRequest: {
+        model: 'models/gemini-3.7-flash',
+        systemInstruction: { parts: [{ text: 'sys' }] },
+        contents: [{ role: 'user', parts: [{ text: 'payload' }] }] } }))
+  check('🔴 사전 계산 URL 이 공식 endpoint 다',
+    GEMINI_COUNT_TOKENS_URL
+      === 'https://generativelanguage.googleapis.com/v1beta/models/{model}:countTokens')
+  check('🔴 "다른 provider 에는 공식 경로가 없다" 는 틀린 주석이 사라졌다', (() => {
+    const src = readFileSync('scripts/lib/voice-m3-provider.mts', 'utf-8')
+    return !src.includes('에는 공식 사전 계산 경로가 없다`')
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

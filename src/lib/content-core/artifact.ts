@@ -16,7 +16,7 @@ import type {
   SemanticVerdict, UnsupportedAddition,
 } from './review'
 
-export const ARTIFACT_VERSION = 'human-review-v4'
+export const ARTIFACT_VERSION = 'human-review-v5'
 
 /** 🔴 사람만 적을 수 있다 — 기계가 채우면 사칭이다 */
 export const HUMAN_VERDICTS = ['READY', 'EDIT_REQUIRED', 'HOLD'] as const
@@ -32,9 +32,21 @@ export type HumanVerdict = (typeof HUMAN_VERDICTS)[number]
  */
 export type CallMeta = {
   stage: 'speakerPlan' | 'draftGen' | 'semanticReview'
+  /**
+   * 🔴 **어느 모델이 이 단계를 맡았는가** (2026-09-19). 단계마다 모델이 다를 수 있어
+   *    회차 비용을 합쳐 놓으면 **무엇이 얼마를 썼는지 알 수 없다.**
+   */
+  model: string | null
   count: number
   inputTokens: number | null
+  /** 🔴 과금 기준 출력 — Gemini 는 `candidates + thoughts` 합이다 */
   outputTokens: number | null
+  /**
+   * 🔴 **그 중 thinking 이 몇인가.** `outputTokens` 에 이미 포함돼 있고,
+   *    이 칸은 **포함됐음을 사람이 확인하는 값**이다. 모르면 null 이다 —
+   *    thinking 을 쓰지 않는 모델은 null, 썼는데 못 읽었으면 그 건은 미정산이다.
+   */
+  thoughtsTokens: number | null
   usd: number | null
 }
 
