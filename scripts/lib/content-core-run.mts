@@ -19,11 +19,11 @@ import { canGenerate, isPersonalInfo, missingProtectedFacts, parseEssence }
   from '../../src/lib/content-core/essence'
 import type { DropReason, SourceEssence } from '../../src/lib/content-core/essence'
 import { planSpeaker } from '../../src/lib/content-core/speaker'
-import type { SpeakerFacts, SpeakerPlan } from '../../src/lib/content-core/speaker'
+import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { buildVoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
-  groundedViolations, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
+  groundedLifeContradictions, groundedViolations, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
   type ClaimViolation, type DeterministicFailure, type DeterministicResult,
   type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
@@ -53,7 +53,11 @@ export type AskResult = {
 export type AskStage = CallMeta['stage']
 export type Ask = (stage: AskStage, system: string, payload: string) => Promise<AskResult>
 
-export type PersonaInput = SpeakerFacts & {
+/**
+ * 🔴 **정본 카드 + 말투 근거.** Persona 정보를 v2 에서 다시 정의하지 않는다 —
+ *    `PersonaLifeContract` 는 `PoolCard` 에서 고른 칸이다.
+ */
+export type PersonaInput = PersonaLifeContract & {
   voiceCore: string
   samples: readonly string[]
   bundleDigest: string
@@ -154,6 +158,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     review: {
       deterministic: det, semantic, semanticCompletion: semanticC,
       claimViolations: violations,
+      lifeContradictions: semantic?.lifeContradictions ?? [],
       voice: {
         contentLeak: semantic?.issues.includes('voiceContentLeak') ?? false,
         mismatch: semantic?.issues.includes('voiceMismatch') ?? false,
@@ -222,7 +227,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
 
   // ── ④ 초안 한 편 ──
   const dRes = await ask('draftGen',
-    buildV2DraftSystemPrompt({ essence, plan, voice }),
+    buildV2DraftSystemPrompt({ essence, plan, voice, life: persona }),
     buildV2DraftPayload({ essence }))
   const dC = completionOf(dRes)
   const draft = dC.complete ? parseDraft(dRes.rawText) : null
@@ -256,7 +261,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
 
   // ── ⑥ 의미 검수 1회 ──
   const rRes = await ask('semanticReview',
-    buildV2ReviewSystemPrompt({ essence, plan, voice }), buildV2ReviewPayload(draft))
+    buildV2ReviewSystemPrompt({ essence, plan, voice, life: persona }),
+    buildV2ReviewPayload({ draft, packet, essence }))
   const semanticC = completionOf(rRes)
   const parsed = semanticC.complete ? parseSemanticReview(rRes.rawText) : null
   /**
@@ -266,7 +272,11 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const g = parsed === null
     ? { kept: [] as ClaimViolation[], ungrounded: [] as ClaimViolation[] }
     : groundedViolations(parsed.claimViolations, draftText, plan.unmetClaims)
-  const semantic = parsed === null ? null : { ...parsed, claimViolations: g.kept }
+  const semantic = parsed === null ? null : {
+    ...parsed,
+    claimViolations: g.kept,
+    lifeContradictions: groundedLifeContradictions(parsed.lifeContradictions, draftText),
+  }
   const semanticC2: ReviewCompletion = semanticC.complete && semantic === null
     ? { complete: false, reason: 'parseFailed' } : semanticC
 

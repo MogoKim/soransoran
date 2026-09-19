@@ -110,14 +110,19 @@ export type SourceEssence = {
 }
 
 export type DropReason =
-  | 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'notAtomic' | 'unknownRef'
+  | 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'unknownRef'
+  /** 그 kind 로 증명할 수 있는 모양이 아니다 */
+  | 'notProvable'
+  /** 문장·절인지 확실하지 않아 글자 강제 대신 **뜻으로 낮췄다** */
+  | 'downgradedToBeat'
 
 export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
   notInEvidence: '지목한 자리에 그 말이 없다',
   personalInfo: '개인정보다',
   empty: '비어 있다',
   unknownKind: '우리 종류가 아니다',
-  notAtomic: '문장·절·질문이다 — 글자 그대로 지킬 원자적 사실이 아니다',
+  notProvable: '그 종류로 증명할 수 있는 모양이 아니다 — 글자 그대로 지키라고 할 수 없다',
+  downgradedToBeat: '문장·절일 수 있어 글자 강제 대신 **뜻**으로 낮췄다',
   unknownRef: '어디서 왔는지 지목하지 못했다',
 }
 
@@ -149,21 +154,62 @@ export function foundInSpan(text: string, ref: EvidenceRef, spans: readonly Evid
 }
 
 /**
- * 🔴 **원자적인가** — 문장·절·질문을 글자 그대로 지키라고 하면 복제가 된다.
+ * 🔴 **kind 마다 "증명할 수 있는 것"만 받는다** (2026-09-19 실측 보정).
  *
- *    셋 중 하나라도 걸리면 원자적이지 않다:
- *      ① 문장 부호(`. ? ! …`)가 있다  ② 줄이 바뀐다  ③ 서술 어미로 끝난다
- *    🔴 글자 수로 재지 않는다. 사전도 쓰지 않는다.
+ *    앞판은 서술 어미 목록으로 걸렀다. 그래서 *"남편이 집안일을 거의 돕지 않아서"* ·
+ *    *"아들을 낳으면 안쓰럽게 보는 시선"* 이 **원자적 사실로 통과했다.**
+ *    어미를 계속 추가하는 것은 땜질이다 — 대신 **kind 별로 확정할 수 있는 모양**만 받는다.
  */
-const PREDICATE_TAIL_RE = /(?:요|다|죠|네|까|군|거든|는데|니까|어요|아요|습니다|잖아)$/
 
-export function isAtomicFact(text: string): boolean {
+/** 🔴 숫자 + 단위. 구조로 확정할 수 있다 — `9명` · `3시간` · `1200원` · `2주` */
+const NUMBER_FACT_RE = /^\d{1,6}(?:[.,]\d{1,3})?\s?[가-힣A-Za-z%°]{0,4}$/
+
+/**
+ * 🔴 **허용된 관계 명칭** — 열거다. 유사도 사전이 아니다.
+ *    v1 의 관계 정규식(`SPOUSE_RE` 등)은 module-private 이고, v1 파일은
+ *    origin/main 과 0줄이어야 하므로 export 하지 않는다. 그래서 여기 한 벌 둔다.
+ */
+export const RELATION_NAMES: readonly string[] = [
+  '남편', '신랑', '애들아빠', '아이아빠', '아내', '와이프',
+  '시어머니', '시아버지', '시댁', '시누이', '친정', '장인', '장모', '처가',
+  '아들', '딸', '애들', '아이들', '큰애', '작은애', '자식', '며느리', '사위', '손주',
+  '엄마', '아빠', '부모님', '언니', '오빠', '누나', '형', '동생', '올케', '형님', '동서',
+]
+
+/** 문장·절인 것이 **확실한가** — 확실할 때만 낮춘다 */
+export function looksLikeClause(text: string): boolean {
   const t = text.trim()
-  if (t === '') return false
-  if (/[.!?…]/.test(t)) return false
-  if (/[\r\n]/.test(t)) return false
-  if (PREDICATE_TAIL_RE.test(t)) return false
-  return true
+  return /[.!?…]/.test(t) || /[\r\n]/.test(t) || /\s/.test(t)
+}
+
+export type FactVerdict =
+  | { ok: true }
+  /** 증명하지 못했다 — 버린다 */
+  | { ok: false; action: 'drop' }
+  /** 문장·절인지 확실하지 않다 — 글자 강제 대신 **뜻으로 낮춘다** */
+  | { ok: false; action: 'downgrade' }
+
+/**
+ * 🔴 이 값을 **글자 그대로 지키라고 해도 되는가.**
+ *    긴 문구를 글자 그대로 쓰게 하면 그것이 곧 복제다.
+ */
+export function judgeProtectedFact(kind: ProtectedFactKind, text: string): FactVerdict {
+  const t = text.trim()
+  if (t === '') return { ok: false, action: 'drop' }
+  switch (kind) {
+    // 🔴 구조로 확정된다
+    case 'number': return NUMBER_FACT_RE.test(t) ? { ok: true } : { ok: false, action: 'drop' }
+    // 🔴 정본 목록에 있는 이름만
+    case 'relation': return RELATION_NAMES.includes(t) ? { ok: true } : { ok: false, action: 'drop' }
+    /**
+     * 🔴 공개 이름 · 검색 용어는 **확정할 방법이 없다.** 그래서 문장·절이 아님이
+     *    확실할 때만 글자를 강제하고, 아니면 **뜻으로 낮춘다**(버리지 않는다).
+     */
+    case 'publicEntity':
+    case 'searchTerm':
+      return looksLikeClause(t) ? { ok: false, action: 'downgrade' } : { ok: true }
+    default: return { ok: false, action: 'drop' }
+  }
 }
 
 /**
@@ -214,8 +260,9 @@ export function parseEssence(
   const dropped: { text: string; why: DropReason }[] = []
   const spans = packet.spans
 
-  // ── protectedFacts — 원자적 사실만 ──
+  // ── protectedFacts — 증명 가능한 것만. 나머지는 뜻으로 낮춘다 ──
   const facts: ProtectedFact[] = []
+  const downgraded: SourceBeat[] = []
   for (const x of arr(j.protectedFacts)) {
     const o = x as Record<string, unknown>
     const text = S(o.text)
@@ -225,13 +272,24 @@ export function parseEssence(
       dropped.push({ text, why: 'unknownKind' }); continue
     }
     if (isPersonalInfo(text)) { dropped.push({ text, why: 'personalInfo' }); continue }
-    if (!isAtomicFact(text)) { dropped.push({ text, why: 'notAtomic' }); continue }
     const ref = S(o.evidenceRef)
     if (!(EVIDENCE_REFS as readonly string[]).includes(ref)) {
       dropped.push({ text, why: 'unknownRef' }); continue
     }
     if (!foundInSpan(text, ref as EvidenceRef, spans)) {
       dropped.push({ text, why: 'notInEvidence' }); continue
+    }
+    const verdict = judgeProtectedFact(kind as ProtectedFactKind, text)
+    if (!verdict.ok && verdict.action === 'drop') {
+      dropped.push({ text, why: 'notProvable' }); continue
+    }
+    if (!verdict.ok && verdict.action === 'downgrade') {
+      // 🔴 버리지 않는다 — **뜻**으로 낮춰 남긴다
+      downgraded.push({
+        kind: 'situation', meaning: text, evidenceRef: ref as EvidenceRef, evidenceText: text,
+      })
+      dropped.push({ text, why: 'downgradedToBeat' })
+      continue
     }
     facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
   }
@@ -313,7 +371,7 @@ export function parseEssence(
       insufficientReasons: packet.insufficientReasons,
       coreMoment: S(j.coreMoment) === '' ? null : S(j.coreMoment),
       protectedFacts: facts,
-      sourceBeats: beats,
+      sourceBeats: [...beats, ...downgraded],
       participationHook: S(j.participationHook) === '' ? null : S(j.participationHook),
       participationConfidence: Number.isFinite(conf) && conf >= 0 && conf <= 1 ? conf : null,
       closingIntent: (CLOSING_INTENTS as readonly string[]).includes(closing) ? (closing as ClosingIntent) : null,

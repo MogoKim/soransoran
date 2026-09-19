@@ -10,7 +10,8 @@
  *    글이 그 사실을 **1인칭으로 주장할 때만** 자격 조건이 된다 —
  *    곁에서 본 이야기 · 읽고 든 생각 · 궁금해서 묻는 글에는 필요하지 않다.
  */
-import type { ClaimFact, ClaimRequirement, SourceEssence } from './essence'
+import type { PoolCard } from '../persona-pool-card'
+import type { ClaimFact, ClaimRequirement, ClaimVocabulary, SourceEssence } from './essence'
 
 export const SPEAKER_PLAN_VERSION = 'speaker-v1'
 
@@ -25,17 +26,29 @@ export const STANCE_LABEL: Readonly<Record<Stance, string>> = {
   QUESTION: '궁금해서 묻는 글로 쓴다 — 겪었다고 말하지 않는다',
 }
 
-/** 🔴 자격을 판정할 때 보는 Persona 사실 — 카드에서 온 값만 */
-export type SpeakerFacts = {
-  code: string
-  spouse?: boolean
-  children?: number
-  childAgeBands?: readonly string[]
-  parentCare?: boolean
-  menopause?: boolean
-  work?: string | null
-  region?: string | null
-  ageBand?: string | null
+/**
+ * 🔴 **정본 카드에서 가져온다 — v2 전용으로 다시 정의하지 않는다** (2026-09-19).
+ *
+ *    앞판은 `SpeakerFacts` 라는 축소판을 따로 두었다. 그래서 생성도 검수도
+ *    **선택된 사람의 생활사 전부**를 보지 못했고, 초안이 새로 지어낸 직업·자녀·
+ *    혼인·지역·형편을 검사할 근거가 없었다.
+ *    🔴 정본은 `PoolCard` 다. 여기서는 **필요한 칸만 고른다.**
+ */
+export type PersonaLifeContract = Pick<PoolCard,
+  | 'code' | 'ageBand' | 'region' | 'maritalStatus' | 'spouseRelationship'
+  | 'childrenCount' | 'childrenAgeBands' | 'workStatus' | 'economicStatus'
+  | 'menopauseStatus' | 'parentCare' | 'personality' | 'noGoTopics' | 'noGoExpressions'>
+
+/** 🔴 카드가 실제로 가진 값들 — 자격 어휘를 여기서 짓지 않는다 */
+export function vocabularyOf(cards: readonly PersonaLifeContract[]): ClaimVocabulary {
+  const uniq = (xs: readonly string[]): string[] =>
+    [...new Set(xs.map((x) => x.trim()).filter((x) => x !== ''))].sort()
+  return {
+    work: uniq(cards.map((c) => c.workStatus)),
+    region: uniq(cards.map((c) => c.region)),
+    age: uniq(cards.map((c) => c.ageBand)),
+    childAgeBand: uniq(cards.flatMap((c) => c.childrenAgeBands)),
+  }
 }
 
 export type SpeakerDecision = 'ok' | 'hold'
@@ -69,24 +82,25 @@ export type SpeakerPlan = {
 const eq = (a: string | null | undefined, b: string): boolean =>
   (a ?? '').trim() !== '' && (a ?? '').trim() === b.trim()
 
-export function hasFact(p: SpeakerFacts, c: ClaimRequirement): boolean {
+export function hasFact(p: PersonaLifeContract, c: ClaimRequirement): boolean {
   const want = c.requiredValue.trim()
   if (want === '') return false
   switch (c.fact) {
-    case 'spouse': return want === '있음' ? p.spouse === true : false
-    case 'children': return want === '있음' ? (p.children ?? 0) > 0 : false
-    case 'childAgeBand': return (p.childAgeBands ?? []).some((b) => b.trim() === want)
-    case 'parentCare': return want === '있음' ? p.parentCare === true : false
-    case 'menopause': return want === '있음' ? p.menopause === true : false
+    case 'spouse': return want === '있음' ? p.maritalStatus.trim() === '기혼' : false
+    case 'children': return want === '있음' ? p.childrenCount > 0 : false
+    case 'childAgeBand': return p.childrenAgeBands.some((b) => b.trim() === want)
+    case 'parentCare': return want === '있음' ? p.parentCare.trim() !== '없음' : false
+    // 🔴 `전` 은 아직 겪지 않았다는 뜻이다 — 경험 주장의 근거가 될 수 없다
+    case 'menopause': return want === '있음' ? p.menopauseStatus.trim() !== '전' : false
     // 🔴 카드 값과 **그대로** 같아야 한다 — 부분 일치를 쓰지 않는다
-    case 'work': return eq(p.work, want)
+    case 'work': return eq(p.workStatus, want)
     case 'region': return eq(p.region, want)
     case 'age': return eq(p.ageBand, want)
     default: return false
   }
 }
 
-export function unmetFor(p: SpeakerFacts, claims: readonly ClaimRequirement[]): ClaimRequirement[] {
+export function unmetFor(p: PersonaLifeContract, claims: readonly ClaimRequirement[]): ClaimRequirement[] {
   return claims.filter((c) => !hasFact(p, c))
 }
 
@@ -118,7 +132,7 @@ export function fallbackStance(e: SourceEssence): Stance {
 export function planSpeaker(input: {
   sourceArticleId: string
   essence: SourceEssence
-  personas: readonly SpeakerFacts[]
+  personas: readonly PersonaLifeContract[]
   /** 이번 회차에 이미 맡은 수 */
   load?: Readonly<Record<string, number>>
 }): SpeakerPlan {

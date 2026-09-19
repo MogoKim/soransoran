@@ -12,7 +12,8 @@ import type { SourceEssence, ClaimRequirement, DropReason } from './essence'
 import type { CoverageGap, Stance } from './speaker'
 import type { VoiceProvenance } from './voice-evidence'
 import type {
-  ClaimViolation, DeterministicResult, MachineOutcome, ReviewCompletion, SemanticVerdict,
+  ClaimViolation, DeterministicResult, LifeContradiction, MachineOutcome, ReviewCompletion,
+  SemanticVerdict,
 } from './review'
 
 export const ARTIFACT_VERSION = 'human-review-v2'
@@ -75,6 +76,8 @@ export type HumanReviewArtifact = {
     semanticCompletion: ReviewCompletion
     /** 🔴 낮춘 자리인데 자기 사실로 주장한 곳 — 초안 속 문장을 가리킨다 */
     claimViolations: ClaimViolation[]
+    /** 🔴 카드에 없는 생활사를 새로 주장한 곳 — claim 이 없어도 잡힌다 */
+    lifeContradictions: LifeContradiction[]
     /** 🔴 말투 두 책임을 **나눠서** 남긴다 */
     voice: { contentLeak: boolean; mismatch: boolean }
     ageConflict: boolean | null

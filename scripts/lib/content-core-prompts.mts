@@ -12,7 +12,7 @@ import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
 import type { SourceEssence } from '../../src/lib/content-core/essence'
 import { CLAIM_FACT_LABEL, type ClaimVocabulary } from '../../src/lib/content-core/essence'
 export type { ClaimVocabulary }
-import type { SpeakerPlan } from '../../src/lib/content-core/speaker'
+import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { STANCE_LABEL, forbiddenClaimLines } from '../../src/lib/content-core/speaker'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import { ROLE_EXEMPT, SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT } from '../../src/lib/content-core/review'
@@ -94,6 +94,27 @@ export function buildEssencePayload(p: SourceEvidencePacket): string {
   })
 }
 
+/**
+ * 🔴 **생활사 계약을 줄로 편다 — 생성과 검수가 같은 것을 본다.**
+ *    정본 카드에서 온 값만이다. 여기서 값을 만들지 않는다.
+ */
+export function lifeContractLines(p: PersonaLifeContract): string[] {
+  const kids = p.childrenCount === 0
+    ? '자녀 없음'
+    : `자녀 ${p.childrenCount}명${p.childrenAgeBands.length > 0 ? ` (${p.childrenAgeBands.join('·')})` : ''}`
+  return [
+    `나이대 ${p.ageBand}`,
+    `사는 곳 ${p.region}`,
+    `혼인 ${p.maritalStatus}${p.spouseRelationship === null ? '' : `(${p.spouseRelationship})`}`,
+    kids,
+    `하는 일 ${p.workStatus}`,
+    `형편 ${p.economicStatus}`,
+    `갱년기 ${p.menopauseStatus}`,
+    `부모 돌봄 ${p.parentCare}`,
+    ...(p.personality.length > 0 ? [`성격 ${p.personality.join(' · ')}`] : []),
+  ]
+}
+
 // ─────────────────────────────────────────────────────────
 // ② 생성 — 한 편
 // ─────────────────────────────────────────────────────────
@@ -102,12 +123,24 @@ export function buildV2DraftSystemPrompt(input: {
   essence: SourceEssence
   plan: SpeakerPlan
   voice: VoiceEvidence
+  life: PersonaLifeContract
 }): string {
-  const { essence: e, plan, voice } = input
+  const { essence: e, plan, voice, life } = input
   const forbidden = forbiddenClaimLines(plan)
   return [
     '당신은 40대 중반~60대 중반 여성들이 모인 커뮤니티의 회원입니다.',
     '아래 [소재]를 읽고 **우리 게시판에 올릴 글 한 편**을 씁니다.',
+    '',
+    '## 당신은 이런 사람입니다',
+    ...lifeContractLines(life).map((x) => `- ${x}`),
+    '🔴 **이 사실을 글에 전부 욱여넣지 않습니다.** 소재에 필요한 것만 씁니다.',
+    '🔴 **여기 없는 생활사를 새로 지어내지 않습니다** — 직업 · 자녀 · 혼인 · 사는 곳 · 형편.',
+    ...(life.noGoTopics.length > 0
+      ? [`🔴 이 소재는 피합니다: ${life.noGoTopics.join(' · ')}`,
+         '   🔴 다만 **비슷한 주제를 통째로 막는 뜻이 아닙니다.** 그 행동만 하지 않습니다.']
+      : []),
+    ...(life.noGoExpressions.length > 0
+      ? [`🔴 이 말버릇은 쓰지 않습니다: ${life.noGoExpressions.join(' · ')}`] : []),
     '',
     '## 당신이 서는 자리',
     `🔴 ${STANCE_LABEL[plan.stance ?? 'REFLECTION']}`,
@@ -183,6 +216,7 @@ export function buildV2ReviewSystemPrompt(input: {
   essence: SourceEssence
   plan: SpeakerPlan
   voice: VoiceEvidence
+  life: PersonaLifeContract
 }): string {
   const roles = input.essence.contentRoles
   const exempt = [...new Set(roles.flatMap((r) => ROLE_EXEMPT[r]))]
@@ -215,18 +249,38 @@ export function buildV2ReviewSystemPrompt(input: {
          '🔴 그러나 위 사실을 **자기가 겪은 일로** 쓴 문장이 있으면 `claimViolations` 에 적는다.',
          '   evidence 에는 **초안에 실제로 있는 문장**을 그대로 옮긴다. 지어내지 않는다.']
       : []),
-    ...(input.essence.coreMoment !== null
-      ? ['', `🔴 원문의 이야기: ${input.essence.coreMoment}`,
-         '   이것이 남아 있지 않으면 sourceFidelity 다.']
-      : []),
+    '',
+    '## 이 사람의 생활사 (정본 카드)',
+    ...lifeContractLines(input.life).map((x) => `- ${x}`),
+    '🔴 초안이 **여기 없는 생활사를 자기 일로 주장**하면 `lifeContradictions` 에 적는다.',
+    '   evidence 에는 **초안에 실제로 있는 문장**을 그대로 옮긴다. 지어내지 않는다.',
+    '🔴 생활사를 **적게 썼다는 이유로 막지 않는다.** 소재에 필요 없으면 안 쓰는 것이 맞다.',
     '',
     'JSON 만 답한다:',
     '{"issues":["해당하는 것만"],',
     ' "claimViolations":[{"claimId":"c1","evidence":"초안에 있는 문장 그대로","why":"한 줄"}],',
+    ' "lifeContradictions":[{"fact":"work|spouse|children|childAgeBand|region|economic|parentCare|menopause|age",',
+    '                       "drafted":"초안이 주장한 것","card":"카드가 가진 것","evidence":"초안에 있는 문장 그대로"}],',
     ' "confidence":0.0~1.0,"note":"한 줄"}',
   ].filter((x) => x !== '').join('\n')
 }
 
-export function buildV2ReviewPayload(draft: { title: string; body: string }): string {
-  return JSON.stringify({ title: draft.title, body: draft.body })
+/**
+ * 🔴 **검수에는 원문 근거를 보낸다** (2026-09-19). 검수는 생성이 아니다 —
+ *    정리한 뜻이 원문을 뒤집었는지 보려면 원문이 있어야 한다.
+ *    🔴 이미 마스킹되고 300자로 묶인 근거다. 장부·artifact 에 더 저장하지 않는다.
+ */
+export function buildV2ReviewPayload(input: {
+  draft: { title: string; body: string }
+  packet: SourceEvidencePacket
+  essence: SourceEssence
+}): string {
+  return JSON.stringify({
+    원문근거: input.packet.spans.map((s) => ({ kind: s.kind, text: s.text })),
+    정리한뜻: {
+      coreMoment: input.essence.coreMoment,
+      beats: input.essence.sourceBeats.map((b) => b.meaning),
+    },
+    초안: { title: input.draft.title, body: input.draft.body },
+  })
 }

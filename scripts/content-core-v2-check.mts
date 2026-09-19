@@ -13,11 +13,14 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
-import { buildEssenceSystemPrompt, type ClaimVocabulary } from './lib/content-core-prompts.mjs'
+import {
+  buildEssenceSystemPrompt, buildV2DraftSystemPrompt, lifeContractLines, type ClaimVocabulary,
+} from './lib/content-core-prompts.mjs'
 import { isContentCoreV2Enabled, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT }
   from '../src/lib/content-core/flag'
+import { vocabularyOf } from '../src/lib/content-core/speaker'
 import { EVIDENCE_CHAR_BUDGET } from '../src/lib/content-core/evidence'
-import { claimValueAllowed, isAtomicFact, normalizeForProvenance }
+import { claimValueAllowed, judgeProtectedFact, normalizeForProvenance }
   from '../src/lib/content-core/essence'
 import { violatesArtifact, artifactSummary, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
@@ -29,13 +32,8 @@ const check = (n: string, ok: boolean, extra = ''): void => {
 }
 const NOW = new Date('2026-09-19T10:00:00.000Z')
 
-/** 🔴 정본 카드가 실제로 가진 값들 (합성 — 시험 Persona 와 같은 어휘) */
-const VOCAB: ClaimVocabulary = {
-  work: ['파트타임', '전업', '자영업', '구직', '은퇴', '직장(정규)'],
-  region: ['수도권', '광역시', '중소도시', '읍면'],
-  age: ['40대 중반', '40대 후반', '50대 초반', '50대 후반', '60대 초반'],
-  childAgeBand: ['초등', '중고등', '대학·취준', '성인'],
-}
+/** 🔴 합성 카드에서 만든다 — 어휘를 손으로 적지 않는다 */
+let VOCAB: ClaimVocabulary
 
 type Canned = { essence?: unknown; draft?: unknown; review?: unknown; age?: unknown }
 const okRes = (text: string): AskResult => ({
@@ -57,18 +55,34 @@ const fakeAsk = (c: Canned, fault: { truncate?: string; blocked?: string; usageU
     return okRes(pick(c, stage))
   }
 
+/** 🔴 정본 카드 모양 그대로 — v2 전용 축소판을 만들지 않는다 */
 const P = (o: Partial<PersonaInput> & { code: string }): PersonaInput => ({
-  code: o.code, spouse: o.spouse, children: o.children, childAgeBands: o.childAgeBands,
-  parentCare: o.parentCare, menopause: o.menopause, work: o.work ?? null, region: o.region ?? null,
+  code: o.code,
   ageBand: o.ageBand ?? '40대 후반',
+  region: o.region ?? '수도권',
+  maritalStatus: o.maritalStatus ?? '기혼',
+  spouseRelationship: o.spouseRelationship ?? null,
+  childrenCount: o.childrenCount ?? 0,
+  childrenAgeBands: o.childrenAgeBands ?? [],
+  workStatus: o.workStatus ?? '전업',
+  economicStatus: o.economicStatus ?? '보통',
+  menopauseStatus: o.menopauseStatus ?? '전',
+  parentCare: o.parentCare ?? '없음',
+  personality: o.personality ?? ['조심스러움'],
+  noGoTopics: o.noGoTopics ?? [],
+  noGoExpressions: o.noGoExpressions ?? [],
   voiceCore: o.voiceCore ?? '짧은 문장 · ~해요 기본',
   samples: o.samples ?? ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요'],
   bundleDigest: o.bundleDigest ?? 'bundle0000000000',
 })
-const partTime = P({ code: 'P01', spouse: true, children: 2, childAgeBands: ['중고등'], work: '파트타임', region: '수도권' })
-const homemaker = P({ code: 'P02', spouse: true, children: 1, work: '전업', region: '광역시' })
-const noKids = P({ code: 'P04', spouse: true, children: 0, work: '직장(정규)', region: '수도권' })
+const partTime = P({ code: 'P01', childrenCount: 2, childrenAgeBands: ['중고등'], workStatus: '파트타임' })
+const homemaker = P({ code: 'P02', childrenCount: 1, workStatus: '전업', region: '광역시' })
+const noKids = P({ code: 'P04', childrenCount: 0, workStatus: '직장(정규)' })
+/** 🔴 비혼 — 남편을 자기 남편처럼 말하면 안 되는 사람 */
+const single = P({ code: 'P08', maritalStatus: '비혼', childrenCount: 0, workStatus: '자영업' })
 const ALL = [partTime, homemaker, noKids]
+
+VOCAB = vocabularyOf([partTime, homemaker, noKids, single])
 
 const run = (o: {
   id: string; title: string; body: string; canned: Canned
@@ -250,8 +264,10 @@ console.log('\n⑤ 🔴 A 회귀 — 원문 질문 전체를 글자 그대로 �
   check('🔴 🔴 **질문 전체를 protectedFact 로 받지 않는다**',
     a.essence?.protectedFacts.every((f) => !f.text.includes('까요')) === true,
     JSON.stringify(a.essence?.protectedFacts))
-  check('🔴 버린 이유가 "문장·절·질문"이다',
-    a.dropped.filter((d) => d.why === 'notAtomic').length === 2, JSON.stringify(a.dropped))
+  check('🔴 🔴 **버리지 않고 뜻으로 낮춘다**',
+    a.dropped.filter((d) => d.why === 'downgradedToBeat').length === 2, JSON.stringify(a.dropped))
+  check('🔴 낮춘 것이 sourceBeats 에 남는다',
+    (a.essence?.sourceBeats ?? []).some((b) => b.meaning.includes('안그럴까요')))
   check('🟢 원자적인 것은 남는다', a.essence?.protectedFacts.some((f) => f.text === '집안일') === true)
   check('🔴 🔴 **spouse 조건이 자격에 들어갔다**',
     a.essence?.claimRequirements.some((c) => c.fact === 'spouse' && c.requiredValue === '있음') === true)
@@ -475,11 +491,17 @@ console.log('\n⑩ 복제 · 완주 — 🔴 기존 계약을 그대로 지킨�
 console.log('\n⑪ 계약 단위 검사 · artifact')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 원자적 사실 판정 — 숫자·이름·관계는 통과',
-    isAtomicFact('9명') && isAtomicFact('나는솔로') && isAtomicFact('시어머니') && isAtomicFact('갱년기'))
-  check('🔴 🔴 문장·질문·절은 원자적이지 않다',
-    !isAtomicFact('왜 저희 애아빠는 안그럴까요') && !isAtomicFact('직원은 9명정도되요')
-    && !isAtomicFact('맛은 괜찮네요.') && !isAtomicFact('딸도 딸 나름이고\n아들도'))
+  check('🟢 증명 가능한 값은 통과한다',
+    judgeProtectedFact('number', '9명').ok && judgeProtectedFact('relation', '시어머니').ok
+    && judgeProtectedFact('publicEntity', '나는솔로').ok && judgeProtectedFact('searchTerm', '갱년기').ok)
+  check('🔴 🔴 **한국어 절 두 개가 protectedFact 로 들어가지 않는다**', (() => {
+    const a = judgeProtectedFact('searchTerm', '남편이 집안일을 거의 돕지 않아서')
+    const b = judgeProtectedFact('searchTerm', '아들을 낳으면 안쓰럽게 보는 시선')
+    return !a.ok && a.action === 'downgrade' && !b.ok && b.action === 'downgrade'
+  })())
+  check('🔴 숫자·관계는 모양이 아니면 버린다',
+    !judgeProtectedFact('number', '남편이 집안일을').ok
+    && !judgeProtectedFact('relation', '우리 시어머니가').ok)
   check('🔴 공백·줄바꿈만 지운다', normalizeForProvenance('다들\n 어떻게 하시는지') === '다들어떻게하시는지')
   check('🔴 🔴 **관점 설명은 자격값이 아니다**',
     !claimValueAllowed('children', '자녀 없이 주변 관찰로 쓴 글', VOCAB)
@@ -506,6 +528,135 @@ console.log('\n⑪ 계약 단위 검사 · artifact')
   check('🔴 essence 프롬프트가 정본 어휘만 안내한다', (() => {
     const p = buildEssenceSystemPrompt(VOCAB)
     return p.includes('파트타임') && p.includes('requiredValue') && !p.includes('derived')
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑫ 🔴 생활사 계약 — 생성과 검수가 같은 카드를 본다')
+// ─────────────────────────────────────────────────────────
+{
+  const BASE_E = {
+    coreMoment: '김치를 이르게 꺼낸 이야기', protectedFacts: [],
+    sourceBeats: [beat('situation', '예상보다 이르게 열어 본 장면', '좀 이른가 싶었는데')],
+    participationHook: '', participationConfidence: 0.4, closingIntent: 'share',
+    timeSensitivity: 'timeBound', contentRoles: ['conversationSpark'], claimRequirements: [],
+  }
+  const BASE = {
+    id: 'S12', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    canned: {
+      essence: BASE_E,
+      draft: { title: '벌써 열어 봤어요', body: '때가 아닌가 했는데 뚜껑을 열었습니다. 생각보다 잘 익었더라고요.' },
+    },
+  }
+  // 🔴 essence 가 spouse claim 을 **빠뜨려도** 비혼 Persona 가 자기 남편을 말하면 잡힌다
+  const a = record('⑫', await run({
+    ...BASE, id: 'S12a', personas: [single],
+    canned: {
+      ...BASE.canned,
+      draft: { title: '우리 남편이요', body: '우리 남편이 김치를 좋아해서 일찍 열었습니다. 다들 어떠세요.' },
+      review: { issues: ['personaClaimValidity'], claimViolations: [], confidence: 0.9, note: '',
+        lifeContradictions: [{ fact: 'spouse', drafted: '남편 있음', card: '비혼',
+          evidence: '우리 남편이 김치를 좋아해서 일찍 열었습니다' }] },
+    },
+  }))
+  check('🔴 🔴 **claim 이 없어도 비혼 Persona 의 남편 주장을 잡는다**',
+    a.review.machineOutcome === 'hold' && a.review.lifeContradictions.length === 1)
+  check('🔴 사유가 남았다', a.review.machineReason.includes('생활사 모순'))
+  check('🔴 근거가 초안에 실제로 있는 문장이다',
+    a.draft!.body.includes(a.review.lifeContradictions[0]!.evidence))
+  // 🔴 카드와 다른 직업·자녀 수를 주장하면 잡는다
+  const b = await run({
+    ...BASE, id: 'S12b', personas: [homemaker],
+    canned: {
+      ...BASE.canned,
+      draft: { title: '퇴근길에요', body: '회사 마치고 돌아와 아이 셋 먹이려고 열었습니다.' },
+      review: { issues: ['personaClaimValidity'], claimViolations: [], confidence: 0.9, note: '',
+        lifeContradictions: [
+          { fact: 'work', drafted: '회사 다님', card: '전업', evidence: '회사 마치고 돌아와' },
+          { fact: 'children', drafted: '자녀 3', card: '자녀 1', evidence: '아이 셋 먹이려고' }] },
+    },
+  })
+  check('🔴 🔴 **카드와 다른 직업·자녀 수를 잡는다**',
+    b.review.machineOutcome === 'hold' && b.review.lifeContradictions.length === 2)
+  // 🔴 지어낸 근거로는 막지 않는다
+  const c = await run({
+    ...BASE, id: 'S12c', personas: [homemaker],
+    canned: {
+      ...BASE.canned,
+      review: { issues: [], claimViolations: [], confidence: 0.9, note: '',
+        lifeContradictions: [{ fact: 'work', drafted: 'x', card: 'y', evidence: '초안에 없는 문장입니다' }] },
+    },
+  })
+  check('🔴 지어낸 생활사 근거는 무시한다',
+    c.review.lifeContradictions.length === 0 && c.review.machineOutcome === 'adopt')
+  // 🔴 생활사를 글에 나열하지 않는다 — 프롬프트가 그렇게 말한다
+  const gen = buildV2DraftSystemPrompt({
+    essence: { ...BASE_E, essenceVersion: 'x', contextSufficiency: 'sufficient', insufficientReasons: [] } as never,
+    plan: { decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE', unmetClaims: [],
+      coverageGap: null, reason: '', planVersion: 'x' },
+    voice: { personaCode: 'P02', voiceCore: 'x', samples: [], provenance: null as never,
+      blindCheckPoints: [], voiceVersion: 'x' } as never,
+    life: homemaker,
+  })
+  check('🔴 🔴 **생성이 생활사를 받되 욱여넣지 말라고 말한다**',
+    gen.includes('전부 욱여넣지 않습니다') && gen.includes('새로 지어내지 않습니다'))
+  check('🔴 생활사 값이 카드에서 온다',
+    lifeContractLines(homemaker).some((x) => x.includes('전업'))
+    && lifeContractLines(homemaker).some((x) => x.includes('자녀 1명')))
+  // 🔴 noGo 를 소재 전체 금지로 읽지 않는다
+  const withNoGo = buildV2DraftSystemPrompt({
+    essence: { ...BASE_E, essenceVersion: 'x', contextSufficiency: 'sufficient', insufficientReasons: [] } as never,
+    plan: { decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE', unmetClaims: [],
+      coverageGap: null, reason: '', planVersion: 'x' },
+    voice: { personaCode: 'P02', voiceCore: 'x', samples: [], provenance: null as never,
+      blindCheckPoints: [], voiceVersion: 'x' } as never,
+    life: P({ code: 'P05', noGoTopics: ['시어머니 험담'] }),
+  })
+  check('🔴 🔴 **noGo 를 주제 전체 금지로 과잉 해석하지 않는다**',
+    withNoGo.includes('통째로 막는 뜻이 아닙니다'))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 브리프 왜곡 — 정리한 뜻이 원문을 뒤집으면 막는다')
+// ─────────────────────────────────────────────────────────
+{
+  const a = record('⑬', await run({
+    id: 'S13', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    canned: {
+      essence: {
+        // 🔴 원문 근거는 "김치를 꺼냈다" 인데 뜻은 "회사가 망했다" 다
+        coreMoment: '김치 때문에 회사가 망한 이야기', protectedFacts: [],
+        sourceBeats: [beat('situation', '김치 때문에 회사가 망했다', '좀 이른가 싶었는데')],
+        participationHook: '', participationConfidence: 0.4, closingIntent: 'share',
+        timeSensitivity: 'timeBound', contentRoles: ['conversationSpark'], claimRequirements: [],
+      },
+      draft: { title: '회사가 그렇게 됐어요', body: '그 일 때문에 회사가 문을 닫았습니다. 다들 어떠세요.' },
+      review: { issues: ['briefDistortion'], claimViolations: [], lifeContradictions: [],
+        confidence: 0.9, note: '원문 근거에 회사 이야기가 없다' },
+    },
+  }))
+  check('🔴 🔴 **briefDistortion 이면 adopt 하지 않는다**', a.review.machineOutcome === 'hold')
+  check('🔴 사유가 남았다', a.review.machineReason.includes('briefDistortion'))
+  check('🔴 🔴 **검수가 원문 근거를 함께 받는다**', (() => {
+    const src = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
+    const i = src.indexOf('export function buildV2ReviewPayload')
+    const body = src.slice(i)
+    return body.includes('원문근거') && body.includes('정리한뜻') && body.includes('초안')
+  })())
+  check('🔴 생성에는 원문 근거를 보내지 않는다', (() => {
+    const src = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
+    const i = src.indexOf('export function buildV2DraftPayload')
+    const body = src.slice(i, src.indexOf('export function buildV2ReviewSystemPrompt', i))
+    return !body.includes('packet') && !body.includes('evidenceText') && !body.includes('spans')
+  })())
+  check('🔴 briefDistortion 과 sourceFidelity 가 따로 있다', (() => {
+    const src = readFileSync('src/lib/content-core/review.ts', 'utf-8')
+    return src.includes("'briefDistortion'") && src.includes("'sourceFidelity'")
+  })())
+  check('🔴 한 번의 semanticReview 가 넷을 함께 본다', (() => {
+    const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, '')
+    return (src.match(/ask\('semanticReview'/g) ?? []).length === 1
   })())
 }
 

@@ -10,9 +10,9 @@
  *
  * 🔴 **machine 판정은 READY 가 아니다.** 최종 READY/EDIT_REQUIRED/HOLD 는 사람이 정한다.
  */
-import type { ClaimRequirement, ContentRole } from './essence'
+import type { ClaimFact, ClaimRequirement, ContentRole } from './essence'
 
-export const REVIEW_VERSION = 'review-v2'
+export const REVIEW_VERSION = 'review-v3'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -37,6 +37,13 @@ export type DeterministicResult = { pass: boolean; failures: DeterministicFailur
  *    짧은 대화글을 "정보가 없다" 로, 정보글을 "묻지 않는다" 로 떨어뜨리지 않기 위해서다.
  */
 export const SEMANTIC_AXES = [
+  /**
+   * 🔴 **편집 브리프 자체가 원문을 왜곡했는가** (2026-09-19 추가).
+   *    앞판은 `meaning` 이 `evidenceText` 와 뜻이 달라도 통과했다 —
+   *    "김치를 꺼냈다" 가 "김치 때문에 회사가 망했다" 가 될 수 있었다.
+   *    deterministic 유사도로 풀 수 없으므로 **같은 검수 호출**이 함께 본다.
+   */
+  'briefDistortion',
   'sourceFidelity', 'personaClaimValidity',
   // 🔴 **말투 책임을 둘로 나눈다** (2026-09-19). 앞판 `voiceFidelity` 는 이름과 달리
   //    사건 유출만 봤다 — 선택한 Persona 의 말투인지는 아무도 보지 않았다.
@@ -46,8 +53,11 @@ export const SEMANTIC_AXES = [
 export type SemanticAxis = (typeof SEMANTIC_AXES)[number]
 
 export const SEMANTIC_AXIS_PROMPT: Readonly<Record<SemanticAxis, string>> = {
-  sourceFidelity: '원문의 이야기가 남아 있는가 — 어느 원문에나 붙는 일반 글이 되지 않았는가',
-  personaClaimValidity: '글쓴이가 가지지 않은 사실을 자기 일로 말하지 않았는가',
+  briefDistortion: '아래 [정리한 뜻]이 [원문 근거]에 없는 뜻을 만들거나 방향을 뒤집었는가'
+    + ' (초안이 아니라 **정리한 뜻 자체**를 본다)',
+  sourceFidelity: '초안이 [정리한 뜻]의 이야기를 잃었는가 — 어느 원문에나 붙는 일반 글이 되지 않았는가',
+  personaClaimValidity: '글쓴이가 **가지지 않은 생활사**를 자기 일로 말하지 않았는가'
+    + ' (혼인 · 자녀 수와 나이대 · 직업 · 사는 곳 · 형편 · 부모 돌봄 · 갱년기 · 나이대)',
   voiceContentLeak: '말투 참고 자료의 **사건**(가족·병원·직장 일 같은 것)을 이 글에 가져왔는가',
   voiceMismatch: '이 글이 **그 사람의 말투**로 읽히는가 — 리듬 · 말끝 · 줄바꿈. '
     + '🔴 이모티콘 개수 · 문장 길이 같은 정해진 몫을 세지 않는다',
@@ -72,9 +82,25 @@ export type ClaimViolation = {
   why: string
 }
 
+/**
+ * 🔴 **초안이 카드와 다른 생활사를 새로 주장했는가.**
+ *    `claimViolations` 는 원천에서 뽑힌 claim 이 있을 때만 잡는다 —
+ *    소재 판정이 claim 을 빠뜨리면 아무도 못 본다. 이쪽은 **카드 전체**와 견준다.
+ */
+export type LifeContradiction = {
+  fact: ClaimFact
+  /** 초안이 주장한 것 */
+  drafted: string
+  /** 카드가 가진 것 */
+  card: string
+  /** 초안에 실제로 있는 문장 */
+  evidence: string
+}
+
 export type SemanticVerdict = {
   issues: SemanticAxis[]
   unknownIssues: string[]
+  lifeContradictions: LifeContradiction[]
   /**
    * 🔴 **낮춘 자리인데 자기 사실로 주장했는가.**
    *    앞판은 stance 를 프롬프트에만 주고 아무도 확인하지 않았다 —
@@ -101,6 +127,14 @@ export const INCOMPLETE_LABEL: Readonly<Record<NonNullable<ReviewCompletion['rea
 }
 
 /** 🔴 초안에 실제로 있는 문장만 근거로 인정한다 — 지어낸 근거로 막지 않는다 */
+export function groundedLifeContradictions(
+  raw: readonly LifeContradiction[], draftText: string,
+): LifeContradiction[] {
+  const flat = draftText.replace(/\s+/g, '')
+  return raw.filter((v) => v.evidence.trim() !== '' && flat.includes(v.evidence.replace(/\s+/g, '')))
+}
+
+
 export function groundedViolations(
   raw: readonly ClaimViolation[], draftText: string, claims: readonly ClaimRequirement[],
 ): { kept: ClaimViolation[]; ungrounded: ClaimViolation[] } {
@@ -143,9 +177,22 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
       why: typeof o.why === 'string' ? o.why.slice(0, 120) : '',
     })
   }
+  const lifes: LifeContradiction[] = []
+  for (const v of Array.isArray(j.lifeContradictions) ? j.lifeContradictions : []) {
+    const o = v as Record<string, unknown>
+    const fact = typeof o.fact === 'string' ? o.fact.trim() : ''
+    if (fact === '') continue
+    lifes.push({
+      fact: fact as ClaimFact,
+      drafted: typeof o.drafted === 'string' ? o.drafted.slice(0, 60) : '',
+      card: typeof o.card === 'string' ? o.card.slice(0, 60) : '',
+      evidence: typeof o.evidence === 'string' ? o.evidence.trim() : '',
+    })
+  }
   return {
     issues: [...new Set(issues)],
     unknownIssues: [...new Set(unknown)],
+    lifeContradictions: lifes,
     claimViolations: violations,
     confidence: conf,
     note: typeof j.note === 'string' ? j.note.slice(0, 200) : '',
@@ -178,6 +225,17 @@ export function judgeMachine(input: {
   }
   if (input.semantic === null) return { outcome: 'hold', reason: '의미 판정을 읽지 못했다' }
   if (input.semantic.issues.includes('harm')) return { outcome: 'drop', reason: '위해' }
+  // 🔴 정리한 뜻 자체가 원문을 뒤집었다 — 초안을 볼 것도 없다
+  if (input.semantic.issues.includes('briefDistortion')) {
+    return { outcome: 'hold', reason: 'briefDistortion — 정리한 뜻이 원문과 다르다' }
+  }
+  // 🔴 카드에 없는 생활사를 새로 주장했다 (claim 이 없어도 잡는다)
+  if (input.semantic.lifeContradictions.length > 0) {
+    return {
+      outcome: 'hold',
+      reason: `생활사 모순 ${input.semantic.lifeContradictions.map((x) => x.fact).join(' · ')}`,
+    }
+  }
   // 🔴 낮춘 자리인데 자기 사실로 주장했다 — 하나라도 있으면 채택하지 않는다
   if (input.semantic.claimViolations.length > 0) {
     return {
