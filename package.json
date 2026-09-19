@@ -84,6 +84,7 @@
     "check:source-times": "tsx scripts/source-times-check.mts",
     "check:quality-ground": "tsx scripts/quality-source-ground-check.mts",
     "check:single-draft": "tsx scripts/single-draft-llm-path-check.mts",
+    "check:content-core-v2": "tsx scripts/content-core-v2-check.mts",
     "micro-seed:auto-judge": "tsx scripts/micro-seed-auto-judge.mts",
     "micro-seed:auto-judge-check": "tsx scripts/micro-seed-auto-judge-check.mts",
     "micro-seed:auto-draft": "tsx scripts/micro-seed-auto-draft.mts",

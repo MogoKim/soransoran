@@ -573,6 +573,17 @@ jobs:
       - name: 운영 생성 경로 단일화 (초안 1개 · 요청 3회 · 예산 공정성)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run check:single-draft
+      # Content Core v2 세로 경로 — 🔴 **스위치가 꺼져 있어 운영은 바뀌지 않는다.**
+      #
+      # 근거 묶음 → 소재 판정 → 화자·자리 → 말투 근거 → 초안 한 편 → 최소 검수 →
+      # 사람 판정 한 장까지 **실제 함수를 돌려** artifact 값으로 본다.
+      # 가짜 provider 를 주입한다 — 네트워크 0 · provider 0 · DB 0.
+      # 🔴 정규식 존재 검사가 아니다. 통과 수는 제품 성공이 아니다.
+      # 🔴 무조건 실행 step 상한(68)을 올리지 않는다 — 경로 조건 뒤에 둔다.
+      #    화면만 고친 PR 은 content-core 를 건드릴 수 없다.
+      - name: Content Core v2 세로 경로 (근거·소재·화자 자격·말투·검수 완주)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run check:content-core-v2
 
       # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
       #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —
