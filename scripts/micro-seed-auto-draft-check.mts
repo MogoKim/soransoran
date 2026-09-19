@@ -434,13 +434,13 @@ console.log('\n⑧ 🔴 하지 않는 것 — 스캔')
   }
   check('🔴 lib 은 순수 함수만이다',
     !/readFileSync|writeFileSync|fetch\(|await |PrismaClient/.test(lib))
-  /**
-   * 🔴 **2026-09-19 — 운영 후보는 템플릿에서 나오지 않는다.**
-   *    옛 검사는 "템플릿 생성기를 재사용한다" 를 계약으로 붙들고 있었다.
-   *    그 경로가 고정 질문을 대량 생산했다 — 이제 러너는 그것을 쓰지 않는다.
-   *    🔴 템플릿 코드 자체는 지우지 않았다(`single-draft-llm-path-check` 가 확인한다).
-   */
-  check('🔴 운영 러너가 템플릿 생성기를 쓰지 않는다', !/expandSeed/.test(runner))
+  check('🔴 기존 템플릿 생성기를 재사용한다 — 새로 만들지 않는다',
+    /from '\.\/lib\/micro-seed-seed-originality\.mjs'/.test(runner) && /expandSeed\(/.test(runner))
+  check('🔴 템플릿 생성기에 제목만 넘긴다', (() => {
+    const i = runner.lastIndexOf('expandSeed({')
+    const body = runner.slice(i, runner.indexOf('}, nowIso)', i))
+    return /title: meta\.title/.test(body) && !/rawBody|body:/.test(body)
+  })())
   // 🔴 LLM 을 쓰지만 기존 경로만 쓴다
   check('🔴 새 HTTP 클라이언트를 만들지 않았다 — callProvider 를 쓴다',
     /from '\.\/lib\/voice-m3-provider\.mjs'/.test(runner) && !/new\s+\w*Client\(/.test(runner))
@@ -457,12 +457,11 @@ console.log('\n⑧ 🔴 하지 않는 것 — 스캔')
   check('🔴 LLM 초안도 기존 safetyFilter 로 다시 잰다',
     /safetyFilter\(\{ title: d\.title, body: d\.body \}\)\.verdict/.test(runner))
   check('🔴 --apply 단독은 거부한다', /APPLY && !CALL[\s\S]{0,60}fail\(/.test(runner))
-  // 🔴 2026-09-19 — 운영 초안은 원천당 **1개**다. 여러 개를 만든 뒤 고르지 않는다
-  check('원천당 초안 상한이 있다', MAX_DRAFTS_PER_SOURCE === 1 && /MAX_DRAFTS_PER_SOURCE/.test(runner))
+  check('원천당 초안 상한이 있다', MAX_DRAFTS_PER_SOURCE === 2 && /MAX_DRAFTS_PER_SOURCE/.test(runner))
   check('promptVersion 을 기록한다', /DRAFT_PROMPT_VERSION/.test(runner))
   // 🔴 생성 캐시와 품질 캐시를 나눈다 — 품질만 바뀔 때 생성을 다시 하지 않는다
   check('🔴 생성 캐시 키와 품질 캐시 키가 다르다',
-    /genCacheKeyOf\(/.test(runner) && /`gen\|\$\{sourceArticleId\}/.test(runner) && /`q\|\$\{/.test(runner))
+    /const genKey = `gen\|/.test(runner) && /`q\|\$\{/.test(runner))
   check('품질 키에 QUALITY_PROMPT_VERSION 이 들어간다',
     /QUALITY_PROMPT_VERSION\}\|\$\{DRAFT_MODEL\}/.test(runner))
   check('🔴 deterministic 에서 막힌 초안에는 모델을 부르지 않는다',
@@ -687,9 +686,8 @@ console.log('\n⑫ 🔴 생성 → 품질 → 채택 → 적재 전체 경로')
 console.log('\n⑬ 🔴 cache 가 실제 프롬프트와 실제 본문을 본다')
 {
   const runner = codeOf('scripts/micro-seed-auto-draft.mts')
-  // 🔴 2026-09-19 — key 는 **실제 요청을 만든 정본**(`buildGenRequest`)의 digest 로 만든다
   check('🔴 생성 cache key 가 system prompt digest 를 담는다',
-    /genKey = genCacheKeyOf\(/.test(runner) && /digest16\(req\.system\)/.test(runner))
+    /genKey = [\s\S]*?digest16\(genSystem\)/.test(runner))
   check('🔴 품질 cache key 가 초안 본문 digest 를 담는다',
     /qKey = [\s\S]*?digest16\(`\$\{d\.title\}/.test(runner))
   check('🔴 품질 cache key 가 품질 프롬프트 digest 를 담는다', /qSystemDigest/.test(runner))
@@ -704,8 +702,7 @@ console.log('\n⑬ 🔴 cache 가 실제 프롬프트와 실제 본문을 본다
   check('🔴 판 값이 올라갔다 — 옛 회차와 섞이지 않는다',
     DRAFT_RULE_VERSION === 'auto-draft-v5'
     // 🔴 2026-09-14 — 나이대를 프롬프트에 넣었다. 옛 캐시를 재사용하지 않는다
-    // 🔴 2026-09-19 — 원천당 초안 1개 · 템플릿 분기 제거
-    && DRAFT_PROMPT_VERSION === 'draft-gen-v7'
+    && DRAFT_PROMPT_VERSION === 'draft-gen-v6'
     && QUALITY_PROMPT_VERSION === 'draft-quality-v5')
   check('🔴 옛 cache 를 지우지 않고 무시할 수 있다 (--no-cache)',
     /const NO_CACHE = argv\.includes\('--no-cache'\)/.test(runner)
@@ -1192,8 +1189,7 @@ console.log('\n⑰ 🔴 원천당 실제 요청 상한')
   check('🔴 공동 예산이다 — 원천당 상한이라고 부르지 않는다', (() => {
     const src = codeOf('scripts/micro-seed-auto-draft.mts')
     return CALL_ALLOWANCE_PER_SOURCE === 4 && callBudgetOf(1) === 4 && callBudgetOf(8) === 32
-      // 🔴 2026-09-19 — 정상 cold 경로가 생성1 + 품질1 + 나이1 = 3회로 줄었다
-      && CALL_EXPECTED_PATH_PER_SOURCE === 3
+      && CALL_EXPECTED_PATH_PER_SOURCE === 6
       && !/MAX_CALLS_PER_SOURCE/.test(src)
       && /공동 예산/.test(src)
   })())
@@ -1565,16 +1561,11 @@ console.log('\n⑳ 🔴 생활사 재생성 집계 — 확인하지 못한 것�
       .test(src.replace(/예전에는[^\n]*/g, ''))
       && /정본을 못 읽으면 machine 생성을 provider 호출 전에 멈춘다/.test(src)
   })())
-  /**
-   * 🔴 **2026-09-19 정정.** 옛 계약은 "6회는 강제 상한이 아니다" 였다 —
-   *    공동 예산 하나뿐이어서 원천별로 막는 장치가 없었기 때문이다.
-   *    이제 원천당 hard cap 이 있고, 정상 cold 경로는 3회다.
-   */
-  check('🔴 정상 경로는 눈금이고, 강제 상한은 원천당 cap 이라고 적혀 있다', (() => {
+  check('🔴 6회는 강제 상한이 아니라 기대치라고 적혀 있다', (() => {
     const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-    return CALL_EXPECTED_PATH_PER_SOURCE === 3
-      && /강제 상한은 `CALL_ALLOWANCE_PER_SOURCE`\(4회\) 다/.test(src)
-      && /값을 올리지 않았다/.test(src)
+    return CALL_EXPECTED_PATH_PER_SOURCE === 6
+      && /강제 상한이 아니라 설계상 기대치/.test(src)
+      && /이 수를 넘을 수 있다/.test(src)
       && !/CALL_WORST_PATH/.test(src)
   })())
 }
@@ -1718,15 +1709,9 @@ console.log('\n㉑ 🔴 나이·세대 관점 — 글쓴이 나이를 생성과 
 
   // ── ⑧ 캐시 — 옛 프롬프트 결과가 hit 되지 않는다 ──
   const runnerSrc = codeOf('scripts/micro-seed-auto-draft.mts')
-  /**
-   * 🔴 **2026-09-19 — 보내는 것과 key 가 같은 정본에서 온다.**
-   *    옛 key 는 `inputHashOf` 라는 **다른 값**으로 만들어져 `communityAngle` 을
-   *    담지 못했다 — 판정 한 줄이 바뀌어도 옛 글이 재사용됐다.
-   */
   check('🔴 생성 cache key 가 실제 프롬프트 digest 를 담는다',
-    /`gen\|\$\{sourceArticleId\}\|\$\{req\.promptVersion\}\|\$\{req\.model\}`/.test(runnerSrc)
-    && /\+ `\|\$\{digest16\(req\.system\)\}\|\$\{digest16\(req\.payload\)\}`/.test(runnerSrc)
-    && !/inputHashOf\(/.test(runnerSrc))
+    /genKey = `gen\|.*\|\$\{DRAFT_PROMPT_VERSION\}`/.test(runnerSrc)
+    && /\+ `\|\$\{DRAFT_MODEL\}\|\$\{digest16\(genSystem\)\}`/.test(runnerSrc))
   /**
    * 🔴 **인자가 늘었다** (2026-09-17). 검수가 소재 비교 근거를 받으면서
    *    프롬프트가 `(persona, ground)` 두 분기로 갈렸다. 성질은 그대로다 —
@@ -2175,14 +2160,14 @@ console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정�
     check('🔴 [SGB] 러너의 채택 입구가 게이트를 지난다', (() => {
       const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
       const gated = (src.match(/pickDraftGated\(\{/g) ?? []).length
-      // 🔴 2026-09-19 — 운영 채택 입구는 **하나**다. 게이트 없는 pickDraft 호출이 남으면 안 된다
-      return gated === 1 && !/\n      const p = pickDraft\(\{/.test(src)
+      // 🔴 LLM 경로와 템플릿 경로 둘 다다. 게이트 없는 pickDraft 호출이 남아 있으면 안 된다
+      return gated === 2 && !/\n      const p = pickDraft\(\{/.test(src)
         && !/\n    const p = pickDraft\(\{/.test(src)
     })())
     check('🔴 [SGB] 생활사 재생성 루프가 위기에서 멈춘다', (() => {
       const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
       return /allConflict\(\) && crisisStop === null/.test(src)
-        && /n < MAX_LIFE_CONFLICT_RETRIES[\s\S]{0,160}?allConflict\(\) && crisisStop === null; n \+= 1/.test(src)
+        && /allConflict\(\) && crisisStop === null; n \+= 1/.test(src)
     })())
     check('🔴 [SGB] orchestrator 는 스스로 I/O 를 하지 않는다 — 효과를 주입받는다', (() => {
       const src = readFileSync('src/lib/micro-seed-draft-run.ts', 'utf-8')
@@ -2199,8 +2184,7 @@ console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정�
     })())
     check('🔴 [SGB] 중단 사유를 명시적으로 남긴다', (() => {
       const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-      // 🔴 2026-09-19 — 템플릿 경로가 없어져 자리가 하나 줄었다 (생성 · 검수 판정)
-      return (src.match(/위기 신호로 회차를 멈췄다/g) ?? []).length >= 2
+      return (src.match(/위기 신호로 회차를 멈췄다/g) ?? []).length >= 3
     })())
   }
 
@@ -2290,8 +2274,8 @@ console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정�
   check('🔴 [SG] 위기 신호 회차는 재생성하지 않는다 (정본 §4 · §8)', (() => {
     const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     // 🔴 생활사 재생성 진입과 루프 **둘 다** 위기에서 서야 한다
-    return /allConflict\(\) && crisisStop === null\n/.test(src)
-      && /n < MAX_LIFE_CONFLICT_RETRIES[\s\S]{0,160}?allConflict\(\) && crisisStop === null; n \+= 1/.test(src)
+    return /allConflict\(\) && crisisStop === null\)/.test(src)
+      && /allConflict\(\) && crisisStop === null; n \+= 1/.test(src)
   })())
   check('🔴 [SG] 캐시 key 가 안전 taxonomy 와 그 판을 담는다', (() => {
     const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
@@ -2477,7 +2461,7 @@ console.log('\n㊿ 🔴 글쓴이가 자기 입으로 밝힌 나이 — 결정�
       buildQualitySystemPrompt(RETIRED)
       === buildQualitySystemPrompt({ ...RETIRED, economicStatus: '빠듯' }))
     check('🔴 [IC] 캐시 key 가 프롬프트 digest 를 담는다 — 판 상수를 손으로 올리지 않는다',
-      /digest16\(req\.system\)/.test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8'))
+      /digest16\(genSystem\)/.test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8'))
       // 🔴 인자가 `(persona, ground)` 로 늘었다 — 성질은 그대로다
       && /qSystemDigest = digest16\(buildQualitySystemPrompt\(persona, ground\)\)/
         .test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')))

@@ -7,7 +7,7 @@
  * 🔴 `machineOutcome` 은 **READY 가 아니다.** `humanDecision` 이 비어 있으면
  *    아직 아무도 이 글을 받아들이지 않은 것이다.
  */
-import type { SourceEvidencePacket } from './evidence'
+import { EVIDENCE_CHAR_BUDGET, type SourceEvidencePacket } from './evidence'
 import type { SourceEssence, ClaimRequirement, DropReason } from './essence'
 import type { CoverageGap, Stance } from './speaker'
 import type { VoiceProvenance } from './voice-evidence'
@@ -36,6 +36,8 @@ export type HumanReviewArtifact = {
     title: string
     spans: SourceEvidencePacket['spans']
     bodyEvidenceChars: number
+    /** 🔴 제목까지 합친 저장 원문 총량 — 예산이 걸리는 값 */
+    totalEvidenceChars: number
     bodyLength: number
     truncated: boolean
     omittedRatio: number
@@ -107,6 +109,10 @@ export function violatesArtifact(a: HumanReviewArtifact): string[] {
   }
   if (a.evidence.bodyEvidenceChars > a.evidence.bodyLength && a.evidence.bodyLength > 0) {
     bad.push('🔴 근거가 원문보다 길다 — 배선이 어긋났다')
+  }
+  // 🔴 제목까지 합친 총량이 예산 안인가 — 앞판은 제목이 공짜였다
+  if (a.evidence.totalEvidenceChars > EVIDENCE_CHAR_BUDGET) {
+    bad.push(`🔴 저장 원문 총량 ${a.evidence.totalEvidenceChars}자 — 예산 ${EVIDENCE_CHAR_BUDGET}자를 넘었다`)
   }
   if (a.review.machineOutcome === 'adopt'
     && (!a.review.semanticCompletion.complete || !a.review.ageCompletion.complete)) {

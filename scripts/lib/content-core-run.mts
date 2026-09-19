@@ -22,7 +22,7 @@ import type { SpeakerFacts, SpeakerPlan } from '../../src/lib/content-core/speak
 import { buildVoiceEvidence, voiceLeak } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
-  alteredExactAnchors, judgeMachine, parseSemanticReview,
+  alteredExactAnchors, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
   type DeterministicFailure, type DeterministicResult, type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
 import { ARTIFACT_VERSION, type CallMeta, type HumanReviewArtifact }
@@ -72,6 +72,14 @@ export type RunInput = {
   callCap: number
 }
 
+/**
+ * 🔴 **유료 단계는 전부 같은 기준으로 완주를 본다** (2026-09-19 보정).
+ *
+ *    앞판은 `semanticReview`·`ageCheck` 만 `usageKnown` 을 봤고,
+ *    `essence`·`draftGen` 은 `ok && !truncated` 만 봤다 — 사용량을 모르는 응답으로
+ *    만든 초안이 그대로 adopt 까지 갔다. 어느 단계든 **막힘 · 무응답 · 잘림 ·
+ *    사용량 미상 · 파싱 실패**는 똑같이 통과가 아니다.
+ */
 const completionOf = (r: AskResult): ReviewCompletion => {
   if (r.blocked) return { complete: false, reason: 'budgetBlocked' }
   if (!r.ok) return { complete: false, reason: 'noResponse' }
@@ -124,7 +132,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     generatedAt: input.now.toISOString(),
     evidence: {
       title: packet.title, spans: packet.spans, bodyEvidenceChars: packet.bodyEvidenceChars,
-      bodyLength: packet.bodyLength, truncated: packet.truncated, omittedRatio: packet.omittedRatio,
+      totalEvidenceChars: packet.totalEvidenceChars, bodyLength: packet.bodyLength, truncated: packet.truncated, omittedRatio: packet.omittedRatio,
       contextSufficiency: packet.contextSufficiency, insufficientReasons: packet.insufficientReasons,
       packetVersion: packet.packetVersion,
     },
@@ -172,10 +180,15 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
 
   // ── ① 소재 판정 ──
   const eRes = await ask('essence', buildEssenceSystemPrompt(), buildEssencePayload(packet))
-  const eParse = eRes.ok && !eRes.truncated
+  const eC = completionOf(eRes)
+  const eParse = eC.complete
     ? parseEssence(eRes.rawText, packet)
-    : { essence: null, droppedAnchors: [], schemaProblems: ['답을 읽지 못했다'] }
+    : { essence: null, droppedAnchors: [], schemaProblems: [INCOMPLETE_LABEL[eC.reason ?? 'noResponse']] }
   const dropped = eParse.droppedAnchors as { text: string; why: never }[]
+  if (!eC.complete) {
+    return blank(null, dropped, null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
+      'hold', `소재 판정을 완주하지 못했다 (${INCOMPLETE_LABEL[eC.reason ?? 'noResponse']})`)
+  }
   const gen = canGenerate(eParse.essence)
   if (!gen.ok) {
     return blank(eParse.essence, dropped, null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE, 'hold', gen.why)
@@ -202,11 +215,13 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const dRes = await ask('draftGen',
     buildV2DraftSystemPrompt({ essence, plan, voice }),
     buildV2DraftPayload({ packet, essence }))
-  const draft = dRes.ok && !dRes.truncated ? parseDraft(dRes.rawText) : null
+  const dC = completionOf(dRes)
+  const draft = dC.complete ? parseDraft(dRes.rawText) : null
   if (draft === null) {
+    const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(essence, dropped, plan, voice, null,
-      { pass: false, failures: [{ code: 'schemaInvalid', detail: '초안을 읽지 못했다' }] },
-      null, INCOMPLETE, null, INCOMPLETE, 'hold', '초안을 읽지 못했다')
+      { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
+      null, INCOMPLETE, null, INCOMPLETE, 'hold', why)
   }
 
   // ── ⑤ deterministic — 확정 가능한 것만 ──
@@ -219,7 +234,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const altered = alteredExactAnchors(essence, draftText)
   if (altered.length > 0) failures.push({ code: 'exactAnchorAltered', detail: altered.join(' · ') })
   const leak = voiceLeak({ draftText, samples: voice.samples, evidenceText: evidenceText(packet), essence })
-  if (leak.leaked) failures.push({ code: 'voiceContentLeak', detail: leak.tokens.slice(0, 5).join(' · ') })
+  if (leak.leaked) failures.push({ code: 'voiceContentLeak', detail: leak.phrases.slice(0, 5).join(' · ') })
   if (persona.ageBand != null && persona.ageBand.trim() !== '') {
     // 🔴 정본이 판정하지 못하면(null) 막지 않는다 — 모르는 것을 결함으로 세지 않는다
     const sa = judgeSelfAgeConflict({ ageBand: persona.ageBand, text: draftText })

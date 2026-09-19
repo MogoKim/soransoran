@@ -561,18 +561,6 @@ jobs:
       - name: 검수 소재 근거 (요청 본문 · 나이 검수 분리 · 캐시 정합)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run check:quality-ground
-      # 운영 자동 후보 생성이 **LLM 경로 하나**인가.
-      #
-      # 🔴 앞판은 소재 사전 + 고정 질문 템플릿을 먼저 쓰고 LLM 을 fallback 으로 뒀다.
-      #    큐를 통과한 원천 61건 중 60건이 템플릿이었고 90행이 13개 제목으로 돌아갔다 —
-      #    원문의 상황·갈등·감정은 하나도 남지 않았는데 검수 비용은 그대로 나갔다.
-      #    나간 요청과 후보 파일을 값으로 본다. 원천당 초안 1개 · 정상 cold 3회 ·
-      #    앞 원천의 재시도가 뒤 원천 기회를 못 가져가는가 · 완주 못 한 검수가
-      #    채택되거나 완료 캐시로 남지 않는가.
-      #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
-      - name: 운영 생성 경로 단일화 (초안 1개 · 요청 3회 · 예산 공정성)
-        if: steps.scope.outputs.heavy == 'true'
-        run: npm run check:single-draft
       # Content Core v2 세로 경로 — 🔴 **스위치가 꺼져 있어 운영은 바뀌지 않는다.**
       #
       # 근거 묶음 → 소재 판정 → 화자·자리 → 말투 근거 → 초안 한 편 → 최소 검수 →

@@ -153,12 +153,21 @@ export function planSpeaker(input: {
     return { ...base, decision: 'ok', personaCode: self, stance: 'SELF_EXPERIENCE', reason: '자격을 다 채웠다' }
   }
 
-  // ── ② 자격이 모자라다 — 자리를 낮춰도 이야기가 사는가 ──
-  const ranked = [...personas].sort((a, b) =>
-    unmetFor(a, claims).length - unmetFor(b, claims).length || a.code.localeCompare(b.code))
-  const candidate = ranked[0]!
-  const unmet = unmetFor(candidate, claims)
-  if (!stanceKeepsEssence(input.essence, unmet)) {
+  /**
+   * ── ② 자격이 모자라다 — 자리를 낮춰도 이야기가 사는가 ──
+   *
+   * 🔴 **전환 가능성은 "고른 그 사람" 으로 판정한다.**
+   *    앞판은 후보 한 명으로 전환 가능성을 보고, 그 뒤 **전체에서 다른 사람**을 골랐다.
+   *    그래서 파트타임 경험이 필요한 글에 전업 Persona 가 뽑힐 수 있었다 —
+   *    검사한 사람과 고른 사람이 달랐다.
+   */
+  const shiftable = personas.filter((p) => stanceKeepsEssence(input.essence, unmetFor(p, claims)))
+  const code = leastLoaded(shiftable.map((p) => p.code))
+  if (code === null) {
+    // 🔴 누구로도 자리를 낮출 수 없다 — 가장 적게 모자란 사람의 부족분을 근거로 남긴다
+    const closest = [...personas].sort((a, b) =>
+      unmetFor(a, claims).length - unmetFor(b, claims).length || a.code.localeCompare(b.code))[0]!
+    const unmet = unmetFor(closest, claims)
     return {
       ...base, decision: 'hold', personaCode: null, stance: null, unmetClaims: unmet,
       reason: '당사자 경험이 이 글의 알맹이다 — 자리를 바꾸면 이야기가 사라진다',
@@ -169,16 +178,24 @@ export function planSpeaker(input: {
       },
     }
   }
-  /**
-   * 🔴 여기서는 **부하가 가장 적은 사람**을 준다 — 자격이 필요 없는 자리이기 때문이다.
-   *    v1 처럼 "자격 실패 → 전원 후보" 로 넓히는 것이 아니라, **자리를 낮춘 뒤**의 선택이다.
-   */
-  const code = leastLoaded(personas.map((p) => p.code))!
   const pick = personas.find((p) => p.code === code)!
+  const unmet = unmetFor(pick, claims)
+  // 🔴 **고른 사람으로 다시 확인한다.** 검사한 사람과 고른 사람이 같아야 한다
+  if (!stanceKeepsEssence(input.essence, unmet)) {
+    return {
+      ...base, decision: 'hold', personaCode: null, stance: null, unmetClaims: unmet,
+      reason: '고른 사람으로 다시 보니 자리를 낮출 수 없다',
+      coverageGap: {
+        sourceArticleId: input.sourceArticleId,
+        missing: unmet.map((c) => ({ fact: c.fact, detail: c.detail })),
+        why: 'coreIsOwnExperience',
+      },
+    }
+  }
   return {
     ...base, decision: 'ok', personaCode: code,
     stance: fallbackStance(input.essence),
-    unmetClaims: unmetFor(pick, claims),
+    unmetClaims: unmet,
     reason: '1인칭 자격이 없어 자리를 낮췄다',
   }
 }

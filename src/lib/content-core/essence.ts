@@ -101,10 +101,11 @@ export type EssenceParse = {
   schemaProblems: string[]
 }
 
-export type DropReason = 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind'
+export type DropReason = 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'derivedExact'
 
 export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
   notInEvidence: '근거로 담은 글에 없는 말이다',
+  derivedExact: '원문에 없는 말을 글자 그대로 남기라고 했다 — 지어낸 것이다',
   personalInfo: '개인정보다 — anchor 가 될 수 없다',
   empty: '비어 있다',
   unknownKind: '우리 종류가 아니다',
@@ -124,11 +125,24 @@ export function isPersonalInfoAnchor(text: string): boolean {
   return PII_RE.test(text)
 }
 
-/** 근거로 담은 글에 실제로 있는 말인가 */
+/**
+ * 근거로 담은 글에 실제로 있는 말인가 — 🔴 **`derived` 를 통과권으로 두지 않는다.**
+ *
+ *    앞판은 `evidenceRef === 'derived'` 면 무조건 통과시켰다. 그러면 모델이
+ *    *"직원 99명"* 을 `derived` + `exact` 로 만들어 낼 수 있고, 그 뒤 대조 검사가
+ *    **없던 숫자를 초안에 넣으라고 요구**하게 된다. 지어낸 사실이 계약이 되는 길이다.
+ *
+ * 🔴 **exact 는 근거 span 에 글자 그대로 있어야 한다.** `derived` 는 exact 가 될 수 없다.
+ * 🔴 **semantic derived** 도 어디서 나왔는지 닿는 곳이 있어야 한다 —
+ *    낱말 하나도 근거에 없으면 도출이 아니라 창작이다.
+ */
 export function anchorGrounded(a: EssenceAnchor, evidence: string): boolean {
-  if (a.evidenceRef === 'derived') return true
-  if (a.preserve === 'exact') return evidence.includes(a.text)
-  // 🔴 semantic 은 글자 그대로가 아니어도 된다 — 다만 **낱말 하나는 닿아야** 한다
+  if (a.preserve === 'exact') {
+    // 🔴 derived + exact 는 있을 수 없다
+    if (a.evidenceRef === 'derived') return false
+    return evidence.includes(a.text)
+  }
+  // 🔴 semantic — 글자 그대로가 아니어도 되지만 **낱말 하나는 닿아야** 한다 (derived 포함)
   const words = a.text.split(/\s+/).map((w) => w.replace(/[^가-힣A-Za-z0-9]/g, '')).filter((w) => w.length >= 2)
   return words.length === 0 ? false : words.some((w) => evidence.includes(w))
 }
@@ -166,7 +180,10 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
     const ref = (EVIDENCE_REFS as readonly string[]).includes(S(o.evidenceRef))
       ? (S(o.evidenceRef) as EvidenceRef) : 'derived'
     const a: EssenceAnchor = { kind, text, preserve, evidenceRef: ref }
-    if (!anchorGrounded(a, evidence)) { dropped.push({ text, why: 'notInEvidence' }); continue }
+    if (!anchorGrounded(a, evidence)) {
+      dropped.push({ text, why: a.preserve === 'exact' && a.evidenceRef === 'derived' ? 'derivedExact' : 'notInEvidence' })
+      continue
+    }
     anchors.push(a)
   }
 

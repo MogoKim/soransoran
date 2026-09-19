@@ -9,12 +9,14 @@
  * 🔴 **못 하는 것**: 실제 모델이 재미있는 글을 쓰는가. 가짜 provider 는 정해진
  *    답을 돌려준다. 그것은 사람 blind 평가와 유료 실측으로만 확인된다.
  */
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
-import { isContentCoreV2Enabled, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT }
-  from '../src/lib/content-core/flag'
+import {
+  isContentCoreV2Enabled, selectSupplyPath, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT,
+} from '../src/lib/content-core/flag'
 import { EVIDENCE_CHAR_BUDGET } from '../src/lib/content-core/evidence'
 import { violatesArtifact, artifactSummary, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
@@ -354,7 +356,7 @@ console.log('\n⑩ 미완주 검수 — 🔴 잘림·차단·사용량 미상은
         participationHook: '', participationConfidence: 0.4, closingIntent: 'share',
         timeSensitivity: 'timeBound', contentRoles: ['conversationSpark'], claimRequirements: [],
       },
-      draft: { title: '벌써 꺼냈어요', body: '좀 이른가 싶었는데 열어 봤어요. 맛은 들었더라고요.' },
+      draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
     },
   }
   for (const [label, fault, reason] of [
@@ -430,6 +432,187 @@ console.log('\n⑫ v1/v2 경계 — 🔴 옛 경로가 새 경로로 새지 않�
   check('🔴 🔴 v1 에서 가져오는 것이 허용 목록 안이다',
     imported.every((x) => ALLOWED.has(x)), imported.filter((x) => !ALLOWED.has(x)).join(', '))
   check('🟢 v1 러너는 그대로 있다 (되돌릴 수 있다)', existsSync('scripts/micro-seed-auto-draft.mts'))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 Codex 독립 리뷰 회귀 — 재현됐던 결함 7개')
+// ─────────────────────────────────────────────────────────
+{
+  const BASE_E = {
+    coreMoment: '김치를 이르게 꺼낸 이야기', anchors: [anchor('situation', '김치')],
+    participationHook: '', participationConfidence: 0.4, closingIntent: 'share',
+    timeSensitivity: 'timeBound', contentRoles: ['conversationSpark'], claimRequirements: [],
+  }
+  const BASE = {
+    id: 'R0', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' } },
+  }
+
+  // ── ② 모든 유료 단계가 같은 기준으로 fail-closed ──
+  console.log('  ② 사용량 미상 · 막힘 · 잘림 — 🔴 단계마다 똑같이 막는다')
+  for (const stage of ['essence', 'draftGen', 'semanticReview', 'ageCheck'] as const) {
+    for (const [label, fault] of [
+      ['사용량 미상', { usageUnknown: stage }], ['막힘', { blocked: stage }], ['잘림', { truncate: stage }],
+    ] as const) {
+      const a = await run({ ...BASE, id: `R2-${stage}`, fault })
+      check(`    🔴 ${stage} ${label} → adopt 아님`, a.review.machineOutcome !== 'adopt', a.review.machineOutcome)
+    }
+  }
+  const okRun = await run(BASE)
+  check('    🟢 정상이면 adopt 다 (검사가 전부 막지 않는다)', okRun.review.machineOutcome === 'adopt')
+
+  // ── ③ derived anchor 로 없는 사실을 만들 수 없다 ──
+  console.log('  ③ derived anchor — 🔴 원문에 없는 것을 그대로 남기라고 못 한다')
+  {
+    const a = await run({
+      ...BASE, id: 'R3',
+      canned: {
+        essence: { ...BASE_E, anchors: [anchor('number', '직원 99명', 'exact', 'derived')] },
+        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
+      },
+    })
+    check('    🔴 🔴 김치 글에 "직원 99명" exact anchor 가 붙지 않는다',
+      (a.essence?.anchors ?? []).every((x) => !x.text.includes('99')))
+    check('    🔴 버린 이유를 남겼다 (지어낸 것)',
+      a.droppedAnchors.some((d) => d.why === 'derivedExact'))
+    check('    🔴 없는 숫자를 초안에 요구하지 않았다 — 통과한다', a.review.deterministic.pass)
+    const b = await run({
+      ...BASE, id: 'R3b',
+      canned: {
+        essence: { ...BASE_E, anchors: [anchor('situation', '한여름 물놀이', 'semantic', 'derived')] },
+        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
+      },
+    })
+    check('    🔴 근거에 낱말 하나도 닿지 않는 semantic derived 도 버린다',
+      (b.essence?.anchors ?? []).length === 0 && b.droppedAnchors.length === 1)
+  }
+
+  // ── ④ 최종 Persona 로 다시 검증 ──
+  console.log('  ④ 화자 선택 — 🔴 검사한 사람과 고른 사람이 같아야 한다')
+  {
+    const essence = {
+      ...BASE_E, coreMoment: '파트타임으로 일하며 겪은 일',
+      contentRoles: ['usefulAnswer'],
+      claimRequirements: [{ fact: 'work', detail: '파트타임', stanceShiftable: false }],
+    }
+    // 🔴 전업(P02) 이 부하가 더 적게 오도록 파트타임(P01)에 부하를 준다
+    const a = await runContentCore({
+      sourceArticleId: 'R4', title: '파트타임 이야기', maskedBody: '오전에만 나가는데 이런 점이 좋더라고요.',
+      personas: [파트타임, 전업], load: { P01: 5, P02: 0 },
+      voiceSourceDigest: 'asset000000000',
+      ask: fakeAsk({ essence, draft: { title: 'x', body: 'y' } }), now: NOW, callCap: 6,
+    })
+    check('    🔴 🔴 **전업 Persona 가 파트타임 필수 글에 뽑히지 않는다**',
+      a.speaker.personaCode !== 'P02', String(a.speaker.personaCode))
+    check('    🔴 자격자가 있으면 부하를 무시하고 그 사람이다', a.speaker.personaCode === 'P01')
+    const b = await runContentCore({
+      sourceArticleId: 'R4b', title: '파트타임 이야기', maskedBody: '오전에만 나가는데 이런 점이 좋더라고요.',
+      personas: [전업], voiceSourceDigest: 'asset000000000',
+      ask: fakeAsk({ essence, draft: { title: 'x', body: 'y' } }), now: NOW, callCap: 6,
+    })
+    check('    🔴 자격자가 없으면 HOLD + coverageGap', b.review.machineOutcome === 'hold' && b.speaker.coverageGap !== null)
+    check('    🔴 생성까지 가지 않았다', b.cost.calls.every((c) => c.stage !== 'draftGen'))
+  }
+
+  // ── ⑤ voiceLeak — 말투는 통과, 사건만 잡는다 ──
+  console.log('  ⑤ 말투 누수 — 🔴 말투 표현은 누수가 아니다')
+  {
+    const 보통 = P({ code: 'PV1', samples: ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요'] })
+    const a = await run({
+      ...BASE, id: 'R5', personas: [보통],
+      canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '저도 비슷하게 느꼈어요. 그냥 열어 봤는데 생각보다 잘 익었더라고요.' } },
+    })
+    check('    🔴 🔴 **"저도 비슷하게 느꼈어요" 는 누수가 아니다**',
+      !a.review.deterministic.failures.some((f) => f.code === 'voiceContentLeak'),
+      JSON.stringify(a.review.deterministic.failures))
+    check('    🟢 그래서 정상 말투 글이 통과한다', a.review.machineOutcome === 'adopt')
+    const 사건 = P({ code: 'PV2', samples: ['지난주에 시어머니 병원 모시고 다녀왔어요', '맞아요 저도요'] })
+    const b = await run({
+      ...BASE, id: 'R5b', personas: [사건],
+      canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '지난주 시어머니 병원 모시고 갔을 때 생각이 났어요. 생각보다 잘 익었네요.' } },
+    })
+    check('    🔴 🔴 **"시어머니 병원" 은 사건이라 잡는다**',
+      b.review.deterministic.failures.some((f) => f.code === 'voiceContentLeak'),
+      JSON.stringify(b.review.deterministic.failures))
+  }
+
+  // ── ⑥ 300자 예산에 제목이 들어간다 ──
+  console.log('  ⑥ 저장 원문 총량 — 🔴 제목이 공짜가 아니다')
+  {
+    const longTitle = '가'.repeat(100)
+    const a = await run({
+      ...BASE, id: 'R6', title: longTitle, body: '나'.repeat(400),
+      canned: { essence: BASE_E, draft: { title: '짧은 제목', body: '짧은 본문입니다. 충분히 적어 둡니다.' } },
+    })
+    check(`    🔴 🔴 제목 100 + 본문이 총 ${EVIDENCE_CHAR_BUDGET}자를 넘지 않는다`,
+      a.evidence.totalEvidenceChars <= EVIDENCE_CHAR_BUDGET,
+      `${a.evidence.totalEvidenceChars}자`)
+    check('    🔴 제목이 예산을 쓰면 본문 몫이 줄어든다',
+      a.evidence.bodyEvidenceChars <= EVIDENCE_CHAR_BUDGET - longTitle.length)
+    check('    🔴 artifact 관문이 총량을 본다', violatesArtifact(a).length === 0)
+  }
+
+  // ── ⑦ contextSufficiency — 낱말 하나로 막지 않는다 ──
+  console.log('  ⑦ 이해 가능성 — 🔴 "사진" 이라는 낱말이 죄가 아니다')
+  {
+    const okPhoto = await run({
+      ...BASE, id: 'R7', title: '오래된 사진 정리하다가', body: '앨범 꺼내서 사진 정리하다 한참 앉아 있었어요.',
+      canned: { essence: { ...BASE_E, coreMoment: '오래된 사진을 정리하다 감정이 든 이야기' },
+        draft: { title: '앨범 정리하다가', body: '한참 앉아 있었어요. 다들 이런 날 있으시죠.' } },
+    })
+    check('    🔴 🔴 **사진 정리 경험글은 막히지 않는다**',
+      okPhoto.evidence.contextSufficiency === 'sufficient', okPhoto.evidence.insufficientReasons.join(','))
+    check('    🟢 그래서 끝까지 갔다', okPhoto.draft !== null)
+    const needPhoto = await run({
+      ...BASE, id: 'R7b', title: '이거 어떤가요', body: '아래 사진 보시고 알려주세요.',
+      canned: { essence: BASE_E, draft: { title: 'x', body: 'y' } },
+    })
+    check('    🔴 실제로 사진을 봐야 하는 글은 막는다',
+      needPhoto.evidence.insufficientReasons.includes('needsImage') && needPhoto.cost.totalCalls === 0)
+    const bareDeictic = await run({
+      ...BASE, id: 'R7c', title: '그거 어떻게 됐어요', body: '그거 결국 어떻게 하셨어요?',
+      canned: { essence: BASE_E, draft: { title: 'x', body: 'y' } },
+    })
+    check('    🔴 🔴 **명시 낱말이 없어도 앞 대화가 필요하면 막는다**',
+      bareDeictic.evidence.contextSufficiency === 'insufficient'
+      && bareDeictic.evidence.insufficientReasons.includes('needsPriorThread'),
+      bareDeictic.evidence.insufficientReasons.join(','))
+    const richDeictic = await run({
+      ...BASE, id: 'R7d', title: '김장 김치 보관 어떻게 하세요',
+      body: '어제 김장 김치를 항아리에 담아 베란다에 뒀는데요. 그거 그냥 두면 되나요 아니면 냉장 보관이 나을까요.',
+      canned: { essence: { ...BASE_E, coreMoment: '김장 김치 보관 방법을 묻는 글' },
+        draft: { title: '김장 보관 어떻게 하세요', body: '항아리째 베란다에 뒀는데 이대로 둬도 될지 모르겠어요. 다들 어떻게 하세요.' } },
+    })
+    check('    🟢 재료가 있는 "그거" 글은 막지 않는다 — 과차단 반대 사례',
+      richDeictic.evidence.contextSufficiency === 'sufficient',
+      richDeictic.evidence.insufficientReasons.join(','))
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ 🔴 경로 선택 — flag 가 장식이 아니다')
+// ─────────────────────────────────────────────────────────
+{
+  check('🔴 기본은 v1 이다', selectSupplyPath({}) === 'v1')
+  check('🔴 모르는 값도 v1 이다', selectSupplyPath({ [CONTENT_CORE_V2_ENV]: 'yes' }) === 'v1')
+  check('🟢 true 면 v2 다', selectSupplyPath({ [CONTENT_CORE_V2_ENV]: 'true' }) === 'v2')
+  const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 🔴 **v1 진입점이 정본 선택기를 실제로 읽는다**',
+    /selectSupplyPath\(process\.env\) === 'v2'/.test(runner))
+  check('🔴 v2 면 v1 은 아무것도 만들지 않고 멈춘다',
+    /V1_STOPPED_FOR_V2[\s\S]{0,60}return/.test(runner))
+  /**
+   * 🔴 **flag=false 일 때 v1 이 origin/main 과 같은가** — 행동으로 본다.
+   *    이 PR 은 v1 의 **판정 로직을 바꾸지 않는다.** 진입점의 경로 선택 한 줄뿐이다.
+   */
+  const v1Diff = execFileSync('git', ['diff', '--numstat', 'origin/main', '--',
+    'scripts/micro-seed-auto-draft.mts', 'src/lib/micro-seed-auto-draft.ts'], { encoding: 'utf-8' })
+  const added = v1Diff.trim() === '' ? 0
+    : v1Diff.trim().split('\n').reduce((n, l) => n + Number(l.split('\t')[0] ?? 0), 0)
+  const removed = v1Diff.trim() === '' ? 0
+    : v1Diff.trim().split('\n').reduce((n, l) => n + Number(l.split('\t')[1] ?? 0), 0)
+  check('🔴 🔴 **v1 에서 지운 줄이 0이다** — 옛 동작을 없애지 않았다', removed === 0, `${removed}줄 삭제`)
+  check('🔴 v1 에 더한 것은 경로 선택뿐이다 (15줄 이하)', added <= 15, `${added}줄 추가`)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
