@@ -12,18 +12,24 @@ import type { SourceEssence, ClaimRequirement, DropReason } from './essence'
 import type { CoverageGap, Stance } from './speaker'
 import type { VoiceProvenance } from './voice-evidence'
 import type {
-  ClaimViolation, DeterministicResult, LifeContradiction, MachineOutcome, ReviewCompletion,
-  SemanticVerdict,
+  DeterministicResult, DroppedFromSource, LifeContradiction, MachineOutcome, ReviewCompletion,
+  SemanticVerdict, UnsupportedAddition,
 } from './review'
 
-export const ARTIFACT_VERSION = 'human-review-v2'
+export const ARTIFACT_VERSION = 'human-review-v3'
 
 /** 🔴 사람만 적을 수 있다 — 기계가 채우면 사칭이다 */
 export const HUMAN_VERDICTS = ['READY', 'EDIT_REQUIRED', 'HOLD'] as const
 export type HumanVerdict = (typeof HUMAN_VERDICTS)[number]
 
+/**
+ * 🔴 **`ageCheck` 를 없앴다** (2026-09-19). 나이·가족 나이 모순은 통합 의미 검수의
+ *    `lifeContradictions` 가 **같은 근거(초안 속 문장)** 로 판정한다 — 카드의 나이대와
+ *    자녀 나이대가 이미 그 프롬프트에 들어가 있다. 고유 책임이 없는 호출을
+ *    "기존 코드" 라는 이유로 두지 않는다. 정상 경로 4회 → 3회.
+ */
 export type CallMeta = {
-  stage: 'essence' | 'draftGen' | 'semanticReview' | 'ageCheck'
+  stage: 'essence' | 'draftGen' | 'semanticReview'
   count: number
   inputTokens: number | null
   outputTokens: number | null
@@ -74,14 +80,14 @@ export type HumanReviewArtifact = {
     deterministic: DeterministicResult
     semantic: SemanticVerdict | null
     semanticCompletion: ReviewCompletion
-    /** 🔴 낮춘 자리인데 자기 사실로 주장한 곳 — 초안 속 문장을 가리킨다 */
-    claimViolations: ClaimViolation[]
-    /** 🔴 카드에 없는 생활사를 새로 주장한 곳 — claim 이 없어도 잡힌다 */
+    /** 🔴 원문에 있었는데 초안에서 사라진 것 — **원문** 속 문장을 가리킨다 */
+    droppedFromSource: DroppedFromSource[]
+    /** 🔴 원문·카드에 없던 새 사건 — **초안** 속 문장을 가리킨다 */
+    unsupportedAdditions: UnsupportedAddition[]
+    /** 🔴 카드와 다른 생활사를 자기 일로 주장한 곳 (나이·자녀 나이 포함) */
     lifeContradictions: LifeContradiction[]
     /** 🔴 말투 두 책임을 **나눠서** 남긴다 */
     voice: { contentLeak: boolean; mismatch: boolean }
-    ageConflict: boolean | null
-    ageCompletion: ReviewCompletion
     /** 🔴 기계 값이다. READY 가 아니다 */
     machineOutcome: MachineOutcome
     machineReason: string
@@ -124,8 +130,7 @@ export function violatesArtifact(a: HumanReviewArtifact): string[] {
   if (a.evidence.totalEvidenceChars > EVIDENCE_CHAR_BUDGET) {
     bad.push(`🔴 저장 원문 총량 ${a.evidence.totalEvidenceChars}자 — 예산 ${EVIDENCE_CHAR_BUDGET}자를 넘었다`)
   }
-  if (a.review.machineOutcome === 'adopt'
-    && (!a.review.semanticCompletion.complete || !a.review.ageCompletion.complete)) {
+  if (a.review.machineOutcome === 'adopt' && !a.review.semanticCompletion.complete) {
     bad.push('🔴 완주하지 못한 검수로 adopt 가 됐다')
   }
   return bad

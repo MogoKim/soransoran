@@ -1,20 +1,29 @@
 /**
- * SourceEssence — 🔴 **원문에 실제로 있던 것만 적는 sparse 구조**
+ * SourceEssence — 🔴 **화자 자격을 정하기 위한 판정.** 생성의 재료가 아니다.
  *
- * 🔴 **모든 칸을 채우지 않는다.** 갈등이 없는 글에는 갈등이 없고, 묻지 않는 글은
- *    묻지 않는다. 없는 것을 `null`·빈 목록으로 두는 것이 이 구조의 요점이다.
+ * 🔴 **왜 좁혔나** (2026-09-19, 세 번의 유료 실측 뒤).
  *
- * 🔴 **보존 책임을 둘로 나눈다** (2026-09-19 실측 보정).
- *    앞판은 `anchor` 하나가 "글자 그대로"와 "의미"를 겸했다. 그래서 모델이
- *    **원문 문장 전체**를 `exact` 로 지정했고, 생성이 그대로 옮겨 적어
- *    3편 중 2편이 복제로 막혔다.
- *      · `protectedFacts` — 글자 자체를 지켜야 하는 **원자적 사실**만
- *      · `sourceBeats`   — 지켜야 하는 **의미**. 원문 문장은 생성에 보내지 않는다
+ *    앞판은 이 구조가 **생성이 보는 유일한 진실**이었다. 생성 모델은 원문을 보지 못하고
+ *    여기 적힌 `coreMoment` 와 `sourceBeats` 만 받았다. 복제를 막으려고 원문을 숨긴 것인데,
+ *    그 대가가 컸다:
+ *      · 원문의 *"안쓰럽게"* 가 세 번 연속 다른 뜻으로 바뀌었다
+ *        ("덜 쓸모 있다" → "덜 소중하게" → "덜 바라는")
+ *      · B 는 `sourceBeats` 가 **0개**로 나왔고, 생성은 빈자리를 **새 장면으로 채웠다**
+ *      · 사후 검수와 호출만 늘고 사람 READY 는 0/3 이었다
+ *
+ * 🔴 **이제 생성은 마스킹된 원문 근거를 직접 본다.** 복제는 원문을 숨겨서가 아니라
+ *    생성 지시와 `draft-originality` 의 어절·글자 연속·덮인 비율로 막는다.
+ *
+ * 🔴 그래서 이 파일이 남기는 것은 **생성에 건네는 뜻이 아니라**:
+ *      · `claimRequirements` — 누가 1인칭으로 쓸 수 있는가 (화자 자격)
+ *      · `protectedFacts`    — 글자 그대로 남아야 하는 원자적 사실 (숫자·관계·이름)
+ *      · `closingIntent` · `contentRoles` — 자리를 낮출 때 무엇이 남는가
+ *      · `coreMoment`        — 🔴 **사람이 목록에서 알아보는 한 줄. 생성에 가지 않는다**
  */
 import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
 import type { ContextSufficiency, InsufficientReason } from './evidence'
 
-export const ESSENCE_VERSION = 'essence-v2'
+export const ESSENCE_VERSION = 'essence-v3'
 
 /** 어디서 왔는가 — 🔴 그 자리에 그 글자가 있어야 한다 */
 export const EVIDENCE_REFS = ['title', 'head', 'tail'] as const
@@ -35,32 +44,10 @@ export type ProtectedFact = {
   evidenceRef: EvidenceRef
 }
 
-/** 지켜야 하는 **의미** — 🔴 `evidenceText` 는 검증용이고 생성에 보내지 않는다 */
-export const BEAT_KINDS = ['situation', 'contrast', 'emotion', 'participation'] as const
-export type BeatKind = (typeof BEAT_KINDS)[number]
-
-export type SourceBeat = {
-  /**
-   * 🔴 **안정적인 이름** — 검수가 "어느 결이 사라졌는가" 를 가리킬 수 있게 한다
-   *    (2026-09-19 보정). 앞판은 결에 이름이 없어서, 검수가 누락을 말하려면
-   *    **원문 문구를 다시 써야** 했고 그 근거는 초안에 없으니 인정할 수 없었다.
-   */
-  id: string
-  kind: BeatKind
-  /** 🔴 생성이 받는 것은 이것뿐이다 — 원문 표현이 아니라 뜻이다 */
-  meaning: string
-  evidenceRef: EvidenceRef
-  /** 🔴 검증 전용. 생성 payload 에 넣지 않는다 */
-  evidenceText: string
-}
-
 export const CLOSING_INTENTS = ['ask', 'vent', 'share', 'none'] as const
 export type ClosingIntent = (typeof CLOSING_INTENTS)[number]
 
-export const TIME_SENSITIVITIES = ['evergreen', 'timeBound', 'unknown'] as const
-export type TimeSensitivity = (typeof TIME_SENSITIVITIES)[number]
-
-/** 이 글이 우리 게시판에서 하는 일 — 🔴 검수 기준이 여기에 따라 달라진다 */
+/** 이 글이 우리 게시판에서 하는 일 — 🔴 자리를 낮춰도 되는지가 여기에 달렸다 */
 export const CONTENT_ROLES = [
   'discoveryAnchor', 'conversationSpark', 'experienceResonance', 'usefulAnswer',
 ] as const
@@ -80,10 +67,7 @@ export const CLAIM_FACT_LABEL: Readonly<Record<ClaimFact, string>> = {
 /**
  * 1인칭으로 주장하려면 글쓴이에게 있어야 하는 사실.
  *
- * 🔴 **자유 문장을 자격 판정에 쓰지 않는다** (2026-09-19 실측 보정).
- *    앞판은 `detail` 한 칸이 사람 설명과 matcher 값을 겸했다. 그래서
- *    *"자녀 없이 주변 관찰로 쓴 글"* 이라는 **관점 설명**이 자녀 자격값으로 쓰였고,
- *    자녀 1명인 Persona 가 `SELF_EXPERIENCE` 로 갔다.
+ * 🔴 **자유 문장을 자격 판정에 쓰지 않는다.**
  *      · `requiredValue` — Persona 카드 값과 **그대로 견줄 수 있는 정규 값**
  *      · `selfClaim`     — 사람이 읽는 설명. matcher 는 보지 않는다
  */
@@ -103,13 +87,10 @@ export type ClaimRequirement = {
 export type SourceEssence = {
   contextSufficiency: ContextSufficiency
   insufficientReasons: InsufficientReason[]
+  /** 🔴 **사람이 목록에서 알아보는 한 줄.** 생성 payload 에 넣지 않는다 */
   coreMoment: string | null
   protectedFacts: ProtectedFact[]
-  sourceBeats: SourceBeat[]
-  participationHook: string | null
-  participationConfidence: number | null
   closingIntent: ClosingIntent | null
-  timeSensitivity: TimeSensitivity
   contentRoles: ContentRole[]
   claimRequirements: ClaimRequirement[]
   essenceVersion: string
@@ -128,7 +109,7 @@ export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
   empty: '비어 있다',
   unknownKind: '우리 종류가 아니다',
   notProvable: '그 종류로 증명할 수 있는 모양이 아니다 — 글자 그대로 지키라고 할 수 없다',
-  clauseLike: '문장·절일 수 있다 — 🔴 원문 문구를 다른 칸으로 옮기지 않고 버린다',
+  clauseLike: '문장·절일 수 있다 — 글자를 강제할 수 없다',
   unknownRef: '어디서 왔는지 지목하지 못했다',
 }
 
@@ -160,11 +141,8 @@ export function foundInSpan(text: string, ref: EvidenceRef, spans: readonly Evid
 }
 
 /**
- * 🔴 **kind 마다 "증명할 수 있는 것"만 받는다** (2026-09-19 실측 보정).
- *
- *    앞판은 서술 어미 목록으로 걸렀다. 그래서 *"남편이 집안일을 거의 돕지 않아서"* ·
- *    *"아들을 낳으면 안쓰럽게 보는 시선"* 이 **원자적 사실로 통과했다.**
- *    어미를 계속 추가하는 것은 땜질이다 — 대신 **kind 별로 확정할 수 있는 모양**만 받는다.
+ * 🔴 **kind 마다 "증명할 수 있는 것"만 받는다.**
+ *    서술 어미 목록으로 거르면 *"남편이 집안일을 거의 돕지 않아서"* 가 원자적 사실로 통과한다.
  */
 
 /** 🔴 숫자 + 단위. 구조로 확정할 수 있다 — `9명` · `3시간` · `1200원` · `2주` */
@@ -172,8 +150,8 @@ const NUMBER_FACT_RE = /^\d{1,6}(?:[.,]\d{1,3})?\s?[가-힣A-Za-z%°]{0,4}$/
 
 /**
  * 🔴 **허용된 관계 명칭** — 열거다. 유사도 사전이 아니다.
- *    v1 의 관계 정규식(`SPOUSE_RE` 등)은 module-private 이고, v1 파일은
- *    origin/main 과 0줄이어야 하므로 export 하지 않는다. 그래서 여기 한 벌 둔다.
+ *    v1 의 관계 정규식은 module-private 이고, v1 파일은 origin/main 과 0줄이어야 하므로
+ *    export 하지 않는다. 그래서 여기 한 벌 둔다.
  */
 export const RELATION_NAMES: readonly string[] = [
   '남편', '신랑', '애들아빠', '아이아빠', '아내', '와이프',
@@ -182,22 +160,12 @@ export const RELATION_NAMES: readonly string[] = [
   '엄마', '아빠', '부모님', '언니', '오빠', '누나', '형', '동생', '올케', '형님', '동서',
 ]
 
-/** 문장·절인 것이 **확실한가** — 확실할 때만 낮춘다 */
+/** 문장·절인 것이 **확실한가** — 확실할 때만 버린다 */
 export function looksLikeClause(text: string): boolean {
   const t = text.trim()
   return /[.!?…]/.test(t) || /[\r\n]/.test(t) || /\s/.test(t)
 }
 
-/**
- * 🔴 **증명하지 못하면 버린다. 다른 칸으로 옮기지 않는다** (2026-09-19 보정).
- *
- *    앞판은 문장으로 보이는 값을 `sourceBeat.meaning` 으로 **낮춰서** 남겼다.
- *    그런데 `meaning` 은 생성 프롬프트로 간다 — 그래서 *"왜 저희 애아빠는 안그럴까요"*
- *    같은 **원문 문구가 생성에 그대로 전달됐다.** "생성에 원문 조각을 보내지 않는다"
- *    계약을 내가 깬 것이다.
- *    🔴 같은 뜻이 필요하면 **모델이 따로 정리해 낸 `sourceBeats`** 만 쓴다.
- *       원문 문장을 자동으로 되살리지 않는다.
- */
 export type FactVerdict =
   | { ok: true }
   /** 그 kind 로 확정할 수 있는 모양이 아니다 */
@@ -253,17 +221,10 @@ const PRESENCE_FACTS: readonly ClaimFact[] = ['spouse', 'children', 'parentCare'
  * 🔴 **나머지 presence 축에 기계적으로 `없음` 을 붙이지 않는다.**
  *    `spouse="없음"` (비혼·사별·이혼이 한 값으로 뭉갠다) · `parentCare="없음"` ·
  *    `menopause="없음"` 은 카드 값과 무엇을 견줄지가 이번에 확인되지 않았다.
- *    확인된 축만 고친다.
  */
 const ABSENCE_ALLOWED_FACTS: readonly ClaimFact[] = ['children']
 
-/**
- * 🔴 **자격 판정에 쓸 수 있는 값인가.**
- *
- *    앞판은 **비어 있지만 않으면** 통과시켰다. 그래서
- *    *"자녀 없이 주변 관찰로 쓴 글"* 이라는 **관점 설명**이 자녀 자격값이 됐다.
- *    이제 **카드가 실제로 가진 값**이어야 한다.
- */
+/** 🔴 **자격 판정에 쓸 수 있는 값인가** — 카드가 실제로 가진 값이어야 한다 */
 export function claimValueAllowed(
   fact: ClaimFact, requiredValue: string, vocab: ClaimVocabulary,
 ): boolean {
@@ -312,48 +273,8 @@ export function parseEssence(
       dropped.push({ text, why: 'notInEvidence' }); continue
     }
     const verdict = judgeProtectedFact(kind as ProtectedFactKind, text)
-    if (!verdict.ok) {
-      /**
-       * 🔴 **사유만 남기고 버린다.** `sourceBeat.meaning` 으로 옮기지 않는다 —
-       *    그 칸은 생성 프롬프트로 가고, 옮기는 순간 원문 문구가 생성에 전달된다.
-       */
-      dropped.push({ text, why: verdict.why })
-      continue
-    }
+    if (!verdict.ok) { dropped.push({ text, why: verdict.why }); continue }
     facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
-  }
-
-  // ── sourceBeats — 의미. evidenceText 는 검증 전용 ──
-  const beats: SourceBeat[] = []
-  const usedBeatIds = new Set<string>()
-  for (const [bi, x] of arr(j.sourceBeats).entries()) {
-    const o = x as Record<string, unknown>
-    const meaning = S(o.meaning)
-    const evidenceText = S(o.evidenceText)
-    if (meaning === '' || evidenceText === '') { dropped.push({ text: meaning, why: 'empty' }); continue }
-    const kind = S(o.kind)
-    if (!(BEAT_KINDS as readonly string[]).includes(kind)) {
-      dropped.push({ text: meaning, why: 'unknownKind' }); continue
-    }
-    if (isPersonalInfo(meaning) || isPersonalInfo(evidenceText)) {
-      dropped.push({ text: meaning, why: 'personalInfo' }); continue
-    }
-    const ref = S(o.evidenceRef)
-    if (!(EVIDENCE_REFS as readonly string[]).includes(ref)) {
-      dropped.push({ text: meaning, why: 'unknownRef' }); continue
-    }
-    if (!foundInSpan(evidenceText, ref as EvidenceRef, spans)) {
-      dropped.push({ text: meaning, why: 'notInEvidence' }); continue
-    }
-    /**
-     * 🔴 **이름은 우리가 정한다.** 모델이 준 이름이 비었거나 겹치면 자리 번호로 바꾼다 —
-     *    겹친 이름은 "어느 결이 사라졌는지" 를 가리키지 못한다.
-     */
-    const given = S(o.id)
-    const id = given !== '' && !usedBeatIds.has(given) ? given : `b${bi + 1}`
-    if (usedBeatIds.has(id)) { dropped.push({ text: meaning, why: 'empty' }); continue }
-    usedBeatIds.add(id)
-    beats.push({ id, kind: kind as BeatKind, meaning, evidenceRef: ref as EvidenceRef, evidenceText })
   }
 
   const roles: ContentRole[] = []
@@ -398,9 +319,7 @@ export function parseEssence(
     })
   }
 
-  const conf = Number(j.participationConfidence ?? NaN)
   const closing = S(j.closingIntent)
-  const time = S(j.timeSensitivity)
 
   return {
     essence: {
@@ -409,11 +328,7 @@ export function parseEssence(
       insufficientReasons: packet.insufficientReasons,
       coreMoment: S(j.coreMoment) === '' ? null : S(j.coreMoment),
       protectedFacts: facts,
-      sourceBeats: beats,
-      participationHook: S(j.participationHook) === '' ? null : S(j.participationHook),
-      participationConfidence: Number.isFinite(conf) && conf >= 0 && conf <= 1 ? conf : null,
       closingIntent: (CLOSING_INTENTS as readonly string[]).includes(closing) ? (closing as ClosingIntent) : null,
-      timeSensitivity: (TIME_SENSITIVITIES as readonly string[]).includes(time) ? (time as TimeSensitivity) : 'unknown',
       contentRoles: [...new Set(roles)],
       claimRequirements: claims,
       essenceVersion: ESSENCE_VERSION,
@@ -426,6 +341,9 @@ export function parseEssence(
 /**
  * 🔴 생성해도 되는가 — 확인 못 한 글은 만들지 않는다.
  *    🔴 자격을 판정할 수 없는 claim 이 하나라도 있으면 만들지 않는다.
+ *
+ * 🔴 **`coreMoment` 를 조건으로 두지 않는다** (2026-09-19). 그것은 사람이 읽는 한 줄이고,
+ *    생성은 원문 근거를 직접 본다 — 요약 한 줄이 비었다고 원문이 사라지는 것이 아니다.
  */
 export function canGenerate(
   e: SourceEssence | null, schemaProblems: readonly string[] = [],
@@ -436,7 +354,6 @@ export function canGenerate(
   if (e.contextSufficiency === 'insufficient') {
     return { ok: false, why: `무슨 이야기인지 확인하지 못했다 (${e.insufficientReasons.join('·')})` }
   }
-  if (e.coreMoment === null) return { ok: false, why: '무슨 이야기인지 한 줄도 나오지 않았다' }
   return { ok: true, why: '' }
 }
 

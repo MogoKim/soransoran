@@ -1,7 +1,12 @@
 /**
  * Content Core v2 — 🔴 **세로 경로 하나를 끝까지 돈다**
  *
- * 근거 묶음 → 소재 판정 → 화자·자리 → 말투 근거 → 초안 한 편 → 최소 검수 → 사람 판정 한 장
+ * 마스킹된 근거 묶음 → 화자 자격·자리 → 원문 근거 + Persona + Voice 로 초안 한 편
+ *   → deterministic(복제·개인정보·원자적 사실) → 원문과 초안을 **직접** 견주는 통합 검수
+ *   → 사람 판정 한 장
+ *
+ * 🔴 **유료 호출 3회다** (2026-09-19, 4회에서 줄임). 나이 검수는 통합 검수의
+ *    `lifeContradictions` 와 책임이 같아 없앴다.
  *
  * 🔴 **효과를 주입받는다.** provider·시계·예산을 직접 부르지 않는다 —
  *    fixture 가 가짜 provider 를 넣고 같은 경로를 돌린다.
@@ -26,9 +31,8 @@ import {
 } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
-  groundedAdditions, groundedLifeContradictions, groundedMissingBeatIds, groundedViolations,
-  judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
-  type ClaimViolation, type DeterministicFailure, type DeterministicResult,
+  groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
+  type DeterministicFailure, type DeterministicResult,
   type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
 import { ARTIFACT_VERSION, type CallMeta, type HumanReviewArtifact }
@@ -38,7 +42,7 @@ import { judgeCopy, measureOriginality } from '../../src/lib/draft-originality'
 import { judgeSelfAgeConflict } from '../../src/lib/persona-self-age'
 import {
   buildEssencePayload, buildEssenceSystemPrompt, buildV2DraftPayload, buildV2DraftSystemPrompt,
-  buildV2ReviewPayload, buildV2ReviewSystemPrompt, type ClaimVocabulary,
+  buildV2ReviewPayload, buildV2ReviewSystemPrompt, sourceBlock, type ClaimVocabulary,
 } from './content-core-prompts.mjs'
 
 /** provider 한 번 — 🔴 fixture 가 가짜를 넣는다 */
@@ -118,11 +122,11 @@ export type RunInput = {
 }
 
 /**
- * 🔴 **유료 단계는 전부 같은 기준으로 완주를 본다** (2026-09-19 보정).
+ * 🔴 **유료 단계 셋은 전부 같은 기준으로 완주를 본다** (2026-09-19 보정).
  *
- *    앞판은 `semanticReview`·`ageCheck` 만 `usageKnown` 을 봤고,
- *    `essence`·`draftGen` 은 `ok && !truncated` 만 봤다 — 사용량을 모르는 응답으로
- *    만든 초안이 그대로 adopt 까지 갔다. 어느 단계든 **막힘 · 무응답 · 잘림 ·
+ *    앞판은 검수 단계만 `usageKnown` 을 봤고 `essence`·`draftGen` 은
+ *    `ok && !truncated` 만 봤다 — 사용량을 모르는 응답으로 만든 초안이
+ *    그대로 adopt 까지 갔다. 어느 단계든 **막힘 · 무응답 · 잘림 ·
  *    사용량 미상 · 파싱 실패**는 똑같이 통과가 아니다.
  */
 const completionOf = (r: AskResult): ReviewCompletion => {
@@ -169,9 +173,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     speaker: SpeakerPlan | null, voice: VoiceEvidence | null,
     draft: { title: string; body: string } | null,
     det: DeterministicResult, semantic: SemanticVerdict | null,
-    semanticC: ReviewCompletion, ageConflict: boolean | null, ageC: ReviewCompletion,
+    semanticC: ReviewCompletion,
     outcome: 'adopt' | 'hold' | 'drop', reason: string,
-    violations: ClaimViolation[] = [],
   ): HumanReviewArtifact => ({
     artifactVersion: ARTIFACT_VERSION,
     sourceArticleId: packet.sourceArticleId,
@@ -195,13 +198,14 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     draft,
     review: {
       deterministic: det, semantic, semanticCompletion: semanticC,
-      claimViolations: violations,
+      droppedFromSource: semantic?.droppedFromSource ?? [],
+      unsupportedAdditions: semantic?.unsupportedAdditions ?? [],
       lifeContradictions: semantic?.lifeContradictions ?? [],
       voice: {
         contentLeak: semantic?.issues.includes('voiceContentLeak') ?? false,
         mismatch: semantic?.issues.includes('voiceMismatch') ?? false,
       },
-      ageConflict, ageCompletion: ageC, machineOutcome: outcome, machineReason: reason,
+      machineOutcome: outcome, machineReason: reason,
     },
     humanDecision: { verdict: null, reasons: [], reviewedAt: null },
     cost: {
@@ -219,14 +223,14 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   if (budgetProblems.length > 0) {
     return blank(null, [], null, null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
-      null, INCOMPLETE, null, INCOMPLETE, 'hold', budgetProblems.join(' · '))
+      null, INCOMPLETE, 'hold', budgetProblems.join(' · '))
   }
   /**
    * 🔴 **이미지·링크·앞 대화 없이는 알 수 없는 글은 만들지 않는다.**
    *    묻기 전에 멈춘다 — 확인 못 한 글에 돈을 쓰지 않는다.
    */
   if (packet.contextSufficiency === 'insufficient') {
-    return blank(null, [], null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
+    return blank(null, [], null, null, null, noDet, null, INCOMPLETE,
       'hold', `무슨 이야기인지 확인하지 못했다 (${packet.insufficientReasons.join('·')})`)
   }
 
@@ -238,12 +242,12 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     : { essence: null, dropped: [], schemaProblems: [INCOMPLETE_LABEL[eC.reason ?? 'noResponse']] }
   const dropped = eParse.dropped
   if (!eC.complete) {
-    return blank(null, dropped, null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
+    return blank(null, dropped, null, null, null, noDet, null, INCOMPLETE,
       'hold', `소재 판정을 완주하지 못했다 (${INCOMPLETE_LABEL[eC.reason ?? 'noResponse']})`)
   }
   const gen = canGenerate(eParse.essence, eParse.schemaProblems)
   if (!gen.ok) {
-    return blank(eParse.essence, dropped, null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE, 'hold', gen.why)
+    return blank(eParse.essence, dropped, null, null, null, noDet, null, INCOMPLETE, 'hold', gen.why)
   }
   const essence = eParse.essence!
 
@@ -253,7 +257,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     personas: input.personas, load: input.load,
   })
   if (plan.decision === 'hold' || plan.personaCode === null) {
-    return blank(essence, dropped, plan, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE, 'hold', plan.reason)
+    return blank(essence, dropped, plan, null, null, noDet, null, INCOMPLETE, 'hold', plan.reason)
   }
   const persona = input.personas.find((p) => p.code === plan.personaCode)!
 
@@ -269,7 +273,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const ready = judgeVoiceReadiness(voice)
   if (!ready.ok) {
-    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
+    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE,
       'hold', VOICE_READINESS_LABEL[ready.why!])
   }
 
@@ -285,17 +289,17 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
   ]
   if (voiceless.length > 0) {
-    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
+    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE,
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
-  const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ essence }))
+  const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
   const dC = completionOf(dRes)
   const draft = dC.complete ? parseDraft(dRes.rawText) : null
   if (draft === null) {
     const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(essence, dropped, plan, voice, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
-      null, INCOMPLETE, null, INCOMPLETE, 'hold', why)
+      null, INCOMPLETE, 'hold', why)
   }
 
   // ── ⑤ deterministic — 확정 가능한 것만 ──
@@ -315,54 +319,28 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {
-    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: INCOMPLETE, ageCompletion: INCOMPLETE, ageConflict: false })
-    return blank(essence, dropped, plan, voice, draft, det, null, INCOMPLETE, null, INCOMPLETE, j.outcome, j.reason)
+    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: INCOMPLETE })
+    return blank(essence, dropped, plan, voice, draft, det, null, INCOMPLETE, j.outcome, j.reason)
   }
 
   // ── ⑥ 의미 검수 1회 ──
-  const rRes = await ask('semanticReview', reviewSystem,
-    buildV2ReviewPayload({ draft, packet, essence }))
+  const rRes = await ask('semanticReview', reviewSystem, buildV2ReviewPayload({ draft, packet }))
   const semanticC = completionOf(rRes)
   const parsed = semanticC.complete ? parseSemanticReview(rRes.rawText) : null
   /**
-   * 🔴 **초안에 실제로 있는 문장만 위반 근거로 인정한다.**
+   * 🔴 **원문 또는 초안에 실제로 있는 문장만 근거로 인정한다.**
+   *    사라진 것은 **원문**에서, 새로 만든 것과 생활사 모순은 **초안**에서 확인한다.
    *    지어낸 근거로 막으면 정상 글이 사라진다.
    */
-  const g = parsed === null
-    ? { kept: [] as ClaimViolation[], ungrounded: [] as ClaimViolation[] }
-    : groundedViolations(parsed.claimViolations, draftText, plan.unmetClaims)
   const semantic = parsed === null ? null : {
     ...parsed,
-    claimViolations: g.kept,
-    lifeContradictions: groundedLifeContradictions(parsed.lifeContradictions, draftText),
-    // 🔴 우리가 건넨 결 이름과 초안에 실제로 있는 문장만 인정한다
-    missingBeatIds: groundedMissingBeatIds(parsed.missingBeatIds, essence.sourceBeats),
-    unsupportedAdditions: groundedAdditions(parsed.unsupportedAdditions, draftText),
+    droppedFromSource: groundedInSource(parsed.droppedFromSource, sourceBlock(packet)),
+    unsupportedAdditions: groundedInDraft(parsed.unsupportedAdditions, draftText),
+    lifeContradictions: groundedInDraft(parsed.lifeContradictions, draftText),
   }
   const semanticC2: ReviewCompletion = semanticC.complete && semantic === null
     ? { complete: false, reason: 'parseFailed' } : semanticC
 
-  // ── ⑦ 보조 나이 검수 — 🔴 이번 판에서 없애지 않는다 ──
-  const aRes = await ask('ageCheck',
-    `너는 글 한 편을 읽고 딱 하나만 판정한다.\n글쓴이는 **${persona.ageBand ?? ''}** 여성이다.\n`
-    + '글이 자기 나이나 가족 나이를 말하는데 그것과 어긋나는가.\n'
-    + 'JSON 만 답한다: {"conflict":true|false,"evidence":"초안에 실제로 있는 문장 (없으면 빈 문자열)"}',
-    JSON.stringify({ title: draft.title, body: draft.body }))
-  const ageC = completionOf(aRes)
-  let ageConflict: boolean | null = null
-  let ageC2 = ageC
-  if (ageC.complete) {
-    try {
-      const t = aRes.rawText.trim()
-      const j = JSON.parse(t.startsWith('{') ? t : `{${t}`) as Record<string, unknown>
-      ageConflict = j.conflict === true
-    } catch { ageC2 = { complete: false, reason: 'parseFailed' } }
-  }
-
-  const j = judgeMachine({
-    deterministic: det, semantic, semanticCompletion: semanticC2,
-    ageCompletion: ageC2, ageConflict: ageConflict === true,
-  })
-  return blank(essence, dropped, plan, voice, draft, det, semantic, semanticC2,
-    ageConflict, ageC2, j.outcome, j.reason, semantic?.claimViolations ?? [])
+  const j = judgeMachine({ deterministic: det, semantic, semanticCompletion: semanticC2 })
+  return blank(essence, dropped, plan, voice, draft, det, semantic, semanticC2, j.outcome, j.reason)
 }
