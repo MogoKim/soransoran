@@ -17,9 +17,9 @@
  *
  * 🔴 **machine 판정은 READY 가 아니다.** 최종 READY/EDIT_REQUIRED/HOLD 는 사람이 정한다.
  */
-import type { ClaimFact } from './essence'
+import { CLAIM_FACTS } from './essence'
 
-export const REVIEW_VERSION = 'review-v5'
+export const REVIEW_VERSION = 'review-v6'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -63,7 +63,16 @@ export type DroppedFromSource = {
   why: string
 }
 
-/** 🔴 **원문·Persona 어디에도 없던 새 사건** — 근거는 **초안** 문장이다 */
+/**
+ * 🔴 **원문에 없던 것을 새로 넣었는가** — 근거는 **초안** 문장이다.
+ *
+ * 🔴 **Persona 카드가 가진 사실이라는 이유로 면제하지 않는다** (2026-09-19 보정).
+ *    앞판은 카드의 직업·자녀·지역·형편을 통째로 면제했다. 그런데 생성 계약은
+ *    *"생활사는 화자 자격이지 글의 재료가 아니다"* 라고 말한다 — 두 계약이 어긋났다.
+ *    그래서 **원문이 요구하지 않은 생활사**(`ClaimRequirement` 에 없는 것)를
+ *    초안이 구체적으로 말하면, 그 사람이 실제로 가진 사실이어도 **새로 넣은 것**이다.
+ *    *"저는 수도권에 살고 형편이 빠듯해서요"* 는 원문이 부르지 않았으면 장식이다.
+ */
 export type UnsupportedAddition = {
   /** 🔴 초안에 **실제로 있는** 문장 */
   evidence: string
@@ -77,8 +86,21 @@ export type UnsupportedAddition = {
  *    카드의 나이대와 자녀 나이대가 이미 검수 프롬프트에 들어가 있고,
  *    근거도 똑같이 **초안 속 문장**이다. 그래서 나이만 따로 묻는 호출을 두지 않는다.
  */
+/**
+ * 🔴 **생활사 모순으로 말할 수 있는 축** — `ClaimFact` 보다 넓다 (2026-09-19 보정).
+ *
+ *    `ClaimFact` 는 **원천이 1인칭 자격으로 요구하는 축**이라 카드 값과 정규 값으로
+ *    견줄 수 있는 것만 담는다. 그런데 검수 프롬프트에는 `lifeContractLines` 가
+ *    **형편과 배우자 관계까지** 실어 보낸다 — 건네 놓고 그 모순은 말할 수 없었다.
+ *    🔴 자격 축과 억지로 합치지 않고 **여기서 따로 넓힌다.**
+ */
+export const LIFE_CONTRADICTION_FACTS = [
+  ...CLAIM_FACTS, 'economicStatus', 'spouseRelationship',
+] as const
+export type LifeContradictionFact = (typeof LIFE_CONTRADICTION_FACTS)[number]
+
 export type LifeContradiction = {
-  fact: ClaimFact
+  fact: LifeContradictionFact
   /** 초안이 주장한 것 */
   drafted: string
   /** 카드가 가진 것 */
@@ -161,8 +183,16 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
     const o = v as Record<string, unknown>
     const fact = typeof o.fact === 'string' ? o.fact.trim() : ''
     if (fact === '') continue
+    /**
+     * 🔴 **모르는 축 이름을 조용히 버리지 않는다.** 버리면 실제 모순이 사라진다.
+     *    우리 이름이 아니면 `unknownIssues` 로 올려 **채택하지 않게** 한다.
+     */
+    if (!(LIFE_CONTRADICTION_FACTS as readonly string[]).includes(fact)) {
+      unknown.push(`lifeContradiction:${fact}`)
+      continue
+    }
     lifes.push({
-      fact: fact as ClaimFact,
+      fact: fact as LifeContradictionFact,
       drafted: typeof o.drafted === 'string' ? o.drafted.slice(0, 60) : '',
       card: typeof o.card === 'string' ? o.card.slice(0, 60) : '',
       evidence: typeof o.evidence === 'string' ? o.evidence.trim() : '',

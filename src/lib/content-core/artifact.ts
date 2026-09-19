@@ -24,9 +24,11 @@ export type HumanVerdict = (typeof HUMAN_VERDICTS)[number]
 
 /**
  * 🔴 **`ageCheck` 를 없앴다** (2026-09-19). 나이·가족 나이 모순은 통합 의미 검수의
- *    `lifeContradictions` 가 **같은 근거(초안 속 문장)** 로 판정한다 — 카드의 나이대와
- *    자녀 나이대가 이미 그 프롬프트에 들어가 있다. 고유 책임이 없는 호출을
- *    "기존 코드" 라는 이유로 두지 않는다. 정상 경로 4회 → 3회.
+ *    `lifeContradictions` 가 **같은 근거(초안 속 문장)** 로 받는다 — 카드의 나이대와
+ *    자녀 나이대가 이미 그 프롬프트에 들어가 있고, 확정 가능한 자기 나이 모순은
+ *    deterministic 이 계속 본다. 정상 경로 4회 → 3회.
+ *    🔴 **동등성이 증명된 것은 아니다.** 계약이 같다는 것까지만 확인됐고,
+ *       실제 모델이 같은 판정을 내는지는 유료 실측으로만 안다.
  */
 export type CallMeta = {
   stage: 'essence' | 'draftGen' | 'semanticReview'

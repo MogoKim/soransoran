@@ -16,12 +16,13 @@ export type { ClaimVocabulary }
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { STANCE_LABEL, forbiddenClaimLines } from '../../src/lib/content-core/speaker'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
-import { SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT } from '../../src/lib/content-core/review'
+import { LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, SEMANTIC_AXIS_PROMPT }
+  from '../../src/lib/content-core/review'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
 
 export const ESSENCE_PROMPT_VERSION = 'essence-p4'
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p4'
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p4'
+export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p5'
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p5'
 
 /** 🔴 원문 근거를 한 덩어리로 — 생성도 검수도 **같은 것**을 본다 */
 export function sourceBlock(p: SourceEvidencePacket): string {
@@ -152,8 +153,11 @@ export function buildV2DraftSystemPrompt(input: {
     '## 당신은 이런 사람입니다',
     ...lifeContractLines(life).map((x) => `- ${x}`),
     '🔴 이것은 **당신이 이 글을 쓸 자격이 있는지**를 정하는 정보입니다.',
-    '   글의 재료가 아닙니다 — 소재에 필요 없으면 쓰지 않습니다.',
-    '🔴 여기 없는 생활사를 새로 지어내지 않습니다.',
+    '   글의 재료가 아닙니다.',
+    '🔴 **원문이 부르지 않은 당신의 직업 · 사는 곳 · 형편 · 자녀 · 혼인은 글에 넣지 않습니다.**',
+    '   예) 원문이 알바 이야기면 "파트타임으로 일해요" 는 씁니다.',
+    '       원문과 상관없으면 "저는 수도권에 살고 형편이 빠듯해서요" 는 **장식입니다.**',
+    '🔴 여기 없는 생활사를 새로 지어내지도 않습니다.',
     ...(life.noGoTopics.length > 0
       ? [`🔴 이 행동은 하지 않습니다: ${life.noGoTopics.join(' · ')}`,
          '   (비슷한 주제를 통째로 피하라는 뜻이 아닙니다)']
@@ -201,6 +205,7 @@ export function buildV2ReviewSystemPrompt(input: {
   life: PersonaLifeContract
 }): string {
   const unmet = input.plan.unmetClaims
+  const claims = input.essence.claimRequirements
   return [
     '너는 40대 중반~60대 중반 여성 커뮤니티의 글 검수자다.',
     '[원문]과 [초안]을 **직접 견주어** 아래 여섯 가지만 본다.',
@@ -209,16 +214,28 @@ export function buildV2ReviewSystemPrompt(input: {
     '   evidence 에는 **[원문]에 실제로 있는 문장**을 그대로 옮긴다.',
     '   🔴 말을 바꿔 썼을 뿐 뜻이 남아 있으면 적지 않는다. 표현이 아니라 뜻을 본다.',
     '',
-    '## ② unsupportedAdditions — [원문]·[이 사람의 생활사]에 없는 사건을 새로 만들었는가',
+    '## ② unsupportedAdditions — [원문]에 없는 것을 새로 넣었는가',
     '   evidence 에는 **[초안]에 실제로 있는 문장**을 그대로 옮긴다.',
-    '   🔴 **이것들은 새 사건이 아니다** — 적지 않는다:',
-    '      · 생활사 카드에 있는 사실 (직업 · 자녀 · 혼인 · 사는 곳 · 나이대 · 형편)',
-    '      · 같은 뜻을 다른 말로 쓴 것 · 감정 · 생각 · 궁금함 · 인사말',
+    '   ②-1 원문에 없는 **사건 · 날짜 · 대사 · 겪은 일**',
+    '   ②-2 🔴 **원문이 부르지 않은 생활사** — 초안이 자기 직업 · 사는 곳 · 형편 ·',
+    '        자녀 · 혼인 · 부모 돌봄 · 갱년기를 구체적으로 말했는데 [원문]도',
+    '        아래 [원문이 부르는 생활사]도 그것을 요구하지 않으면,',
+    '        🔴 **이 사람이 실제로 가진 사실이어도 새로 넣은 것이다.**',
+    '        예) 원문이 알바 이야기 → "파트타임으로 일해요" 는 통과',
+    '            원문과 상관없음 → "저는 수도권에 살고 형편이 빠듯해서요" 는 적는다',
+    '   🔴 **이것들은 새로 넣은 것이 아니다** — 적지 않는다:',
+    '      · 같은 뜻을 다른 말로 쓴 것 · 원문에 있는 상황을 자기 말로 옮긴 것',
+    '      · 감정 · 생각 · 궁금함 · 인사말',
     '',
     '## ③ lifeContradictions — 초안이 [이 사람의 생활사]와 **다른 사실**을 자기 일로 말했는가',
-    '   나이 · 자녀 나이도 여기서 본다 (fact 를 "age" · "childAgeBand" 로 적는다).',
+    `   fact 는 이 중 하나다: ${LIFE_CONTRADICTION_FACTS.join(' · ')}`,
+    '   나이 · 자녀 나이도 여기서 본다 ("age" · "childAgeBand").',
+    '   형편은 "economicStatus", 배우자와의 관계는 "spouseRelationship" 이다.',
     '   evidence 에는 **[초안]에 실제로 있는 문장**을 그대로 옮긴다.',
     '   🔴 생활사를 **적게 썼다는 이유로 적지 않는다.** 소재에 필요 없으면 안 쓰는 것이 맞다.',
+    '   🔴 **불만 · 서운함 · 그날의 다툼을 관계 파탄으로 읽지 않는다.**',
+    '      "남편이 집안일을 안 해서 답답하다" 는 원만한 사이에서도 하는 말이다.',
+    '      상시 별거 · 이혼 절차 · 관계가 끝났다고 말할 때만 spouseRelationship 이다.',
     '',
     '## ④⑤⑥ issues — 해당하는 것만 고른다. 해당 없으면 빈 배열이다',
     ...SEMANTIC_AXES.map((a) => `   - ${a}: ${SEMANTIC_AXIS_PROMPT[a]}`),
@@ -234,6 +251,12 @@ export function buildV2ReviewSystemPrompt(input: {
       ? ['🔴 이 사람이 **가지지 않은 사실** — 자기 일로 말하면 `lifeContradictions` 다:',
          ...unmet.map((c) => `   · ${c.selfClaim || `${c.fact}=${c.requiredValue}`}`)]
       : []),
+    '',
+    '## 🔴 원문이 부르는 생활사 — 이것만 초안에 나와도 된다',
+    ...(claims.length > 0
+      ? claims.map((c) => `   · ${c.fact} = ${c.requiredValue}`
+        + (c.selfClaim === '' ? '' : ` (${c.selfClaim})`))
+      : ['   (없음 — 원문이 글쓴이의 생활사를 부르지 않는다)']),
     `## 이 사람의 말투 기준: ${input.voice.voiceStandard}`,
     '',
     '## 이 사람의 생활사 (정본 카드)',
@@ -242,7 +265,7 @@ export function buildV2ReviewSystemPrompt(input: {
     'JSON 만 답한다:',
     '{"droppedFromSource":[{"evidence":"원문에 있는 문장 그대로","why":"한 줄"}],',
     ' "unsupportedAdditions":[{"evidence":"초안에 있는 문장 그대로","why":"한 줄"}],',
-    ' "lifeContradictions":[{"fact":"work|spouse|children|childAgeBand|region|parentCare|menopause|age",',
+    ' "lifeContradictions":[{"fact":"위 목록의 이름 하나",',
     '                       "drafted":"초안이 주장한 것","card":"카드가 가진 것","evidence":"초안에 있는 문장 그대로"}],',
     ' "issues":["해당하는 것만"],"confidence":0.0~1.0,"note":"한 줄"}',
   ].filter((x) => x !== '').join('\n')

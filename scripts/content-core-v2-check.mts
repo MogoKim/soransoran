@@ -24,9 +24,9 @@ import { isContentCoreV2Enabled, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOV
   from '../src/lib/content-core/flag'
 import { vocabularyOf } from '../src/lib/content-core/speaker'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
-import { claimValueAllowed, judgeProtectedFact, normalizeForProvenance }
+import { CLAIM_FACTS, claimValueAllowed, judgeProtectedFact, normalizeForProvenance }
   from '../src/lib/content-core/essence'
-import { SEMANTIC_AXES } from '../src/lib/content-core/review'
+import { LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES } from '../src/lib/content-core/review'
 import { violatesArtifact, artifactSummary, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
 import { buildVoiceEvidence, voiceStandardOf, VOICE_SAMPLE_MIN }
@@ -457,7 +457,7 @@ console.log('\n⑦ 🔴 복제 — 원문을 보여 준다고 옮겨 적는 것�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 🔴 ageCheck 를 없앤 근거 — 통합 검수가 같은 근거로 판정한다')
+console.log('\n⑧ 🔴 ageCheck 자리 — 🔴 **가짜 provider 로 계약만 확인한다. 동등성 증명이 아니다**')
 // ─────────────────────────────────────────────────────────
 {
   const E = { coreMoment: '김치를 이르게 꺼낸 이야기', protectedFacts: [],
@@ -472,9 +472,9 @@ console.log('\n⑧ 🔴 ageCheck 를 없앤 근거 — 통합 검수가 같은 �
       lifeContradictions: [{ fact: 'childAgeBand', drafted: '손주가 있다',
         card: '자녀 2명 (중고등)', evidence: '손주 녀석이 잘 먹어서 다행이에요.' }] } },
   })
-  check('🔴 🔴 **나이·가족 모순을 통합 검수가 잡는다**',
+  check('🔴 통합 검수가 나이·가족 모순을 받을 수 있다 (실제 모델 판단은 미확인)',
     a.review.machineOutcome === 'hold' && a.review.lifeContradictions.length === 1)
-  check('🔴 🔴 **근거는 ageCheck 와 같은 것 — 초안 속 문장이다**',
+  check('🔴 근거 모양은 ageCheck 와 같다 — 초안 속 문장이다',
     DRAFT.body.includes(a.review.lifeContradictions[0]!.evidence))
   check('🔴 🔴 **나이만 따로 묻는 호출이 없다** — 3회로 끝난다',
     a.cost.totalCalls === 3 && !a.cost.calls.some((c) => String(c.stage) === 'ageCheck'))
@@ -620,6 +620,134 @@ console.log('\n⑪ 완주 · 계약 단위 검사')
   check('🔴 원문 덩어리는 제목과 본문을 함께 담는다',
     sourceBlock(packet).includes('제목') && sourceBlock(packet).includes('본문입니다.'))
   check('🔴 근거 예산은 제목까지 합쳐 센다', EVIDENCE_CHAR_BUDGET === 300)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑫ 🔴 생활사는 글의 재료가 아니다 — 생성과 검수가 같은 계약을 쓴다')
+// ─────────────────────────────────────────────────────────
+{
+  const rich = P({ code: 'P01', region: '수도권', economicStatus: '빠듯',
+    workStatus: '파트타임', childrenCount: 2, childrenAgeBands: ['중고등'] as ChildAgeBand[] })
+
+  // ── 🔴 원문과 무관한 지역·형편을 장식으로 넣으면 HOLD ──
+  const E_NO_CLAIM = {
+    coreMoment: '김치를 이르게 꺼낸 이야기', protectedFacts: [],
+    closingIntent: 'share', contentRoles: ['conversationSpark'], claimRequirements: [],
+  }
+  const DECOR = { title: '김치 벌써 열었어요',
+    body: '올해는 서둘러 뚜껑을 열었어요. 저는 수도권에 살고 형편이 빠듯해서요.' }
+  const decor = await run({
+    id: 'S12a', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.',
+    personas: [rich],
+    canned: { essence: E_NO_CLAIM, draft: DECOR,
+      review: { ...EMPTY_REVIEW, confidence: 0.85, unsupportedAdditions: [
+        { evidence: '저는 수도권에 살고 형편이 빠듯해서요.', why: '원문이 부르지 않은 생활사' },
+      ] } },
+  })
+  check('🔴 🔴 **원문과 무관한 지역·형편 장식은 HOLD**',
+    decor.review.machineOutcome === 'hold' && decor.review.unsupportedAdditions.length === 1)
+  check('🔴 🔴 **카드가 가진 사실이라는 이유로 면제하지 않는다** — 프롬프트가 그렇게 말한다', (() => {
+    const sys = sentOf('semanticReview')[0]!.system
+    return sys.includes('이 사람이 실제로 가진 사실이어도 새로 넣은 것이다')
+      && !sys.includes('생활사 카드에 있는 사실 (직업')
+  })())
+  check('🔴 원문이 부르는 생활사가 없으면 "(없음)" 으로 건넨다',
+    sentOf('semanticReview')[0]!.system.includes('원문이 글쓴이의 생활사를 부르지 않는다'))
+  check('🔴 생성 지침도 같은 말을 한다',
+    sentOf('draftGen')[0]!.system.includes('원문이 부르지 않은 당신의 직업'))
+
+  // ── 🟢 원문이 알바 이야기면 "파트타임" 은 통과 ──
+  const E_WORK = {
+    coreMoment: '알바 중 여행 선물이 관례인지 묻는다',
+    protectedFacts: [fact('number', '3시간'), fact('number', '9명')],
+    closingIntent: 'ask', contentRoles: ['usefulAnswer'],
+    claimRequirements: [claim({ fact: 'work', requiredValue: '파트타임', selfClaim: '알바로 일한다',
+      stanceShiftable: true, evidenceText: '알바중', evidenceRef: 'title' })],
+  }
+  const workOk = await run({
+    id: SRC.C.id, title: SRC.C.title, body: SRC.C.body, personas: [rich],
+    canned: { essence: E_WORK, draft: { title: '여행 선물 하시나요',
+      body: '파트타임으로 일하는데 비는 시간은 제가 다른 날 채웠어요. 3시간씩이고 9명이에요. 다들 사 가시나요.' } },
+  })
+  check('🟢 🔴 **원문이 알바 이야기면 "파트타임" 은 통과한다**',
+    workOk.review.machineOutcome === 'adopt')
+  check('🔴 🔴 **원문이 부르는 생활사가 검수에 실제로 건네진다**',
+    sentOf('semanticReview')[0]!.system.includes('work = 파트타임'))
+
+  // ── 🟢 원문이 "우리 남편" 이면 기혼 Persona 의 남편 언급은 통과 ──
+  const E_SPOUSE = {
+    coreMoment: '방송 속 남편들과 달리 자기 남편은 집안일을 돕지 않는다',
+    protectedFacts: [fact('relation', '남편', 'title')],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    claimRequirements: [claim({ fact: 'spouse', requiredValue: '있음', selfClaim: '배우자가 있다',
+      evidenceText: '왜 저희 애아빠는 안그럴까요' })],
+  }
+  const spouseOk = await run({
+    id: SRC.A.id, title: SRC.A.title, body: SRC.A.body, personas: [rich],
+    canned: { essence: E_SPOUSE, draft: { title: '방송 속 남편들 보면요',
+      body: '화면에 나오는 남편들은 집안일을 곧잘 하던데 우리 남편은 딴판이에요. 다들 어떠세요.' } },
+  })
+  check('🟢 🔴 **원문이 "우리 남편" 이면 기혼 Persona 의 남편 언급은 통과**',
+    spouseOk.review.machineOutcome === 'adopt' && spouseOk.speaker.stance === 'SELF_EXPERIENCE')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 생활사 모순 축 — 건넨 것은 전부 말할 수 있어야 한다')
+// ─────────────────────────────────────────────────────────
+{
+  const tight = P({ code: 'P01', economicStatus: '빠듯',
+    spouseRelationship: '원만', maritalStatus: '기혼' })
+  const E = { coreMoment: '김치 이야기', protectedFacts: [],
+    closingIntent: 'share', contentRoles: ['conversationSpark'], claimRequirements: [] }
+  const base = { id: 'S13', title: '오늘 아침 김치 꺼냈어요', body: '좀 이른가 싶었는데 맛은 괜찮네요.' }
+
+  check('🔴 🔴 **형편과 배우자 관계가 축에 있다**',
+    (LIFE_CONTRADICTION_FACTS as readonly string[]).includes('economicStatus')
+    && (LIFE_CONTRADICTION_FACTS as readonly string[]).includes('spouseRelationship'))
+  check('🔴 자격 축과 섞지 않았다 — 두 축은 ClaimFact 에 없다',
+    !(CLAIM_FACTS as readonly string[]).includes('economicStatus')
+    && !(CLAIM_FACTS as readonly string[]).includes('spouseRelationship'))
+
+  const ECON = { title: '김치 열었어요',
+    body: '올해는 서둘러 열었어요. 저희는 경제적으로 여유로워서 이것저것 넉넉히 담급니다.' }
+  const econ = await run({ ...base, personas: [tight],
+    canned: { essence: E, draft: ECON, review: { ...EMPTY_REVIEW, confidence: 0.9,
+      lifeContradictions: [{ fact: 'economicStatus', drafted: '경제적으로 여유롭다', card: '빠듯',
+        evidence: '저희는 경제적으로 여유로워서 이것저것 넉넉히 담급니다.' }] } } })
+  check('🔴 🔴 **카드가 "빠듯" 인데 "여유롭다" 면 HOLD**',
+    econ.review.machineOutcome === 'hold'
+    && econ.review.lifeContradictions[0]!.fact === 'economicStatus')
+
+  const SPLIT = { title: '김치 열었어요',
+    body: '올해는 혼자 열었어요. 남편과는 몇 년째 따로 살고 이혼 절차를 밟는 중이라서요.' }
+  const split = await run({ ...base, personas: [tight],
+    canned: { essence: E, draft: SPLIT, review: { ...EMPTY_REVIEW, confidence: 0.9,
+      lifeContradictions: [{ fact: 'spouseRelationship', drafted: '별거·이혼 절차', card: '원만',
+        evidence: '남편과는 몇 년째 따로 살고 이혼 절차를 밟는 중이라서요.' }] } } })
+  check('🔴 🔴 **카드가 "원만" 인데 상시 별거·파탄이면 HOLD**',
+    split.review.machineOutcome === 'hold'
+    && split.review.lifeContradictions[0]!.fact === 'spouseRelationship')
+
+  const GRUMBLE = { title: '김치 열었어요',
+    body: '올해는 서둘러 열었어요. 남편이 하나도 안 도와줘서 어제는 좀 서운했네요.' }
+  const grumble = await run({ ...base, personas: [tight],
+    canned: { essence: E, draft: GRUMBLE } })
+  check('🟢 🔴 **불만·일시적 다툼을 관계 파탄으로 과잉 판정하지 않는다**',
+    grumble.review.machineOutcome === 'adopt' && grumble.review.lifeContradictions.length === 0)
+  check('🔴 검수 지침이 과잉 판정을 막는다',
+    sentOf('semanticReview')[0]!.system.includes('관계 파탄으로 읽지 않는다'))
+
+  // 🔴 모르는 축 이름은 조용히 사라지지 않는다
+  const odd = await run({ ...base, personas: [tight],
+    canned: { essence: E, draft: GRUMBLE, review: { ...EMPTY_REVIEW, confidence: 0.9,
+      lifeContradictions: [{ fact: 'economic', drafted: 'x', card: 'y',
+        evidence: '남편이 하나도 안 도와줘서 어제는 좀 서운했네요.' }] } } })
+  check('🔴 🔴 **모르는 축 이름은 버리지 않고 채택도 하지 않는다**',
+    odd.review.machineOutcome === 'hold'
+    && odd.review.semantic!.unknownIssues.includes('lifeContradiction:economic'))
+  check('🔴 검수 요청이 축 이름 목록을 건넨다',
+    sentOf('semanticReview')[0]!.system.includes('economicStatus')
+    && sentOf('semanticReview')[0]!.system.includes('spouseRelationship'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
