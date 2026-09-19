@@ -8,15 +8,15 @@
  *    아직 아무도 이 글을 받아들이지 않은 것이다.
  */
 import { EVIDENCE_CHAR_BUDGET, type SourceEvidencePacket } from './evidence'
-import type { SourceEssence, ClaimRequirement, DropReason } from './essence'
-import type { CoverageGap, Stance } from './speaker'
+import type { ClosingIntent, ContentRole, DropReason, ProtectedFact } from './source-facts'
+import type { SelfBasis, SpeakerWarrant, Stance, WarrantRejection } from './speaker'
 import type { VoiceProvenance } from './voice-evidence'
 import type {
   DeterministicResult, DroppedFromSource, LifeContradiction, MachineOutcome, ReviewCompletion,
   SemanticVerdict, UnsupportedAddition,
 } from './review'
 
-export const ARTIFACT_VERSION = 'human-review-v3'
+export const ARTIFACT_VERSION = 'human-review-v4'
 
 /** 🔴 사람만 적을 수 있다 — 기계가 채우면 사칭이다 */
 export const HUMAN_VERDICTS = ['READY', 'EDIT_REQUIRED', 'HOLD'] as const
@@ -31,7 +31,7 @@ export type HumanVerdict = (typeof HUMAN_VERDICTS)[number]
  *       실제 모델이 같은 판정을 내는지는 유료 실측으로만 안다.
  */
 export type CallMeta = {
-  stage: 'essence' | 'draftGen' | 'semanticReview'
+  stage: 'speakerPlan' | 'draftGen' | 'semanticReview'
   count: number
   inputTokens: number | null
   outputTokens: number | null
@@ -57,16 +57,26 @@ export type HumanReviewArtifact = {
     packetVersion: string
   }
 
-  essence: SourceEssence | null
   /** 🔴 근거를 지목하지 못해 버린 것 — 조용히 사라지지 않게 남긴다 */
   dropped: { text: string; why: DropReason }[]
 
-  speaker: {
+  /**
+   * 🔴 **화자 계획 한 장** — 자격 사실을 표현하는 구조는 `warrants` 하나뿐이다
+   *    (2026-09-19 대안 D: `essence.claimRequirements` 와 `speaker.unmetClaims` 두 벌을 없앴다).
+   */
+  plan: {
     personaCode: string | null
     stance: Stance | null
-    claimRequirements: ClaimRequirement[]
-    unmetClaims: ClaimRequirement[]
-    coverageGap: CoverageGap | null
+    /** 🔴 1인칭을 허가받은 방식 — 빈 배열과 구분되는 명시적 값 */
+    selfBasis: SelfBasis | null
+    /** 🔴 코드 검증을 통과한 허가 근거만 */
+    warrants: SpeakerWarrant[]
+    universalReason: string
+    /** 🔴 1인칭이 거절된 이유 — 자리를 낮추거나 HOLD 한 근거 */
+    rejection: WarrantRejection | null
+    protectedFacts: ProtectedFact[]
+    closingIntent: ClosingIntent | null
+    contentRoles: ContentRole[]
     reason: string
   }
 
@@ -140,12 +150,12 @@ export function violatesArtifact(a: HumanReviewArtifact): string[] {
 
 /** 사람이 읽는 한 줄 — 🔴 판정이 아니라 요약이다 */
 export function artifactSummary(a: HumanReviewArtifact): string {
-  const s = a.speaker
+  const s = a.plan
   return [
     `${a.sourceArticleId}`,
     `근거 ${a.evidence.bodyEvidenceChars}/${a.evidence.bodyLength}자${a.evidence.truncated ? ' (잘림)' : ''}`,
-    a.essence?.coreMoment ?? '무슨 이야기인지 확인 못 함',
-    `${s.personaCode ?? '화자 없음'} · ${s.stance ?? '자리 없음'}`,
+    `${s.personaCode ?? '화자 없음'} · ${s.stance ?? '자리 없음'}`
+      + (s.selfBasis === null ? '' : `(${s.selfBasis})`),
     `기계 ${a.review.machineOutcome}`,
     `사람 ${a.humanDecision.verdict ?? '미판정'}`,
   ].join(' · ')

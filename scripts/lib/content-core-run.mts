@@ -1,30 +1,25 @@
 /**
- * Content Core v2 — 🔴 **세로 경로 하나를 끝까지 돈다**
+ * Content Core v2 — 🔴 **세로 경로 하나를 끝까지 돈다. 유료 3회**
  *
- * 마스킹된 근거 묶음 → 화자 자격·자리 → 원문 근거 + Persona + Voice 로 초안 한 편
- *   → deterministic(복제·개인정보·원자적 사실) → 원문과 초안을 **직접** 견주는 통합 검수
+ * 마스킹된 근거 묶음
+ *   → ① 화자 계획 (원문 + 실제 카드를 함께 보고 고르고, **코드가 근거를 검증**)
+ *   → ② 원문 근거 + Persona + Voice 로 초안 한 편
+ *   → deterministic (복제 · 개인정보 · 원자적 사실 · 확정 가능한 나이 모순)
+ *   → ③ 원문과 초안을 **직접** 견주는 통합 검수
  *   → 사람 판정 한 장
  *
- * 🔴 **유료 호출 3회다** (2026-09-19, 4회에서 줄임). 나이 검수는 통합 검수의
- *    `lifeContradictions` 와 책임이 같아 없앴다.
- *
- * 🔴 **효과를 주입받는다.** provider·시계·예산을 직접 부르지 않는다 —
- *    fixture 가 가짜 provider 를 넣고 같은 경로를 돌린다.
+ * 🔴 **효과를 주입받는다.** provider·시계·예산을 직접 부르지 않는다.
  * 🔴 **DB · 큐 · 발행 · 네트워크를 모르는 파일이다.**
- * 🔴 **v1 의 생성·검수 계약을 가져오지 않는다.** 옛 소재 프로파일(`readSourceProfile`) ·
- *    템플릿(`expandSeed`) · 복수 초안(`MAX_DRAFTS_PER_SOURCE`) · 옛 품질 프롬프트가
- *    이 경로로 들어오지 못한다.
- *    🔴 다만 **금지 낱말 · 복제 · 자기 나이 정본은 공유한다** — 저장소에 한 벌이어야 하는
- *    안전 기준이고, 두 벌로 두면 한쪽이 낡는다. 허용 목록은 fixture 가 고정한다.
+ * 🔴 **v1 의 생성·검수 계약을 가져오지 않는다.** 다만 금지 낱말 · 복제 · 자기 나이
+ *    정본은 공유한다 — 저장소에 한 벌이어야 하는 안전 기준이다.
  */
 import { buildEvidencePacket, evidenceText, violatesEvidenceBudget }
   from '../../src/lib/content-core/evidence'
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
-import { canGenerate, isPersonalInfo, missingProtectedFacts, parseEssence }
-  from '../../src/lib/content-core/essence'
-import type { DropReason, SourceEssence } from '../../src/lib/content-core/essence'
+import { isPersonalInfo, missingProtectedFacts } from '../../src/lib/content-core/source-facts'
+import type { DropReason } from '../../src/lib/content-core/source-facts'
 import type { PoolCard } from '../../src/lib/persona-pool-card'
-import { planSpeaker } from '../../src/lib/content-core/speaker'
+import { canGenerate, parseSpeakerPlan } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import {
   buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
@@ -41,8 +36,9 @@ import { hasBannedWord } from '../../src/lib/micro-seed-auto-draft'
 import { judgeCopy, measureOriginality } from '../../src/lib/draft-originality'
 import { judgeSelfAgeConflict } from '../../src/lib/persona-self-age'
 import {
-  buildEssencePayload, buildEssenceSystemPrompt, buildV2DraftPayload, buildV2DraftSystemPrompt,
-  buildV2ReviewPayload, buildV2ReviewSystemPrompt, sourceBlock, type ClaimVocabulary,
+  buildSpeakerPlanPayload, buildSpeakerPlanSystemPrompt,
+  buildV2DraftPayload, buildV2DraftSystemPrompt,
+  buildV2ReviewPayload, buildV2ReviewSystemPrompt, sourceBlock,
 } from './content-core-prompts.mjs'
 
 /** provider 한 번 — 🔴 fixture 가 가짜를 넣는다 */
@@ -113,8 +109,6 @@ export type RunInput = {
   personas: readonly PersonaInput[]
   load?: Readonly<Record<string, number>>
   voiceSourceDigest: string
-  /** 🔴 Persona 카드가 실제로 가진 값들 — 자격 어휘를 여기서 지어내지 않는다 */
-  vocabulary: ClaimVocabulary
   ask: Ask
   now: Date
   /** 🔴 원천 하나가 쓸 수 있는 요청 수 — 넘기면 완주 실패로 남는다 */
@@ -169,8 +163,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const budgetProblems = violatesEvidenceBudget(packet)
 
   const blank = (
-    essence: SourceEssence | null, dropped: { text: string; why: DropReason }[],
-    speaker: SpeakerPlan | null, voice: VoiceEvidence | null,
+    plan: SpeakerPlan | null, dropped: { text: string; why: DropReason }[],
+    voice: VoiceEvidence | null,
     draft: { title: string; body: string } | null,
     det: DeterministicResult, semantic: SemanticVerdict | null,
     semanticC: ReviewCompletion,
@@ -185,14 +179,13 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       contextSufficiency: packet.contextSufficiency, insufficientReasons: packet.insufficientReasons,
       packetVersion: packet.packetVersion,
     },
-    essence,
     dropped,
-    speaker: {
-      personaCode: speaker?.personaCode ?? null, stance: speaker?.stance ?? null,
-      claimRequirements: essence?.claimRequirements ?? [],
-      unmetClaims: speaker?.unmetClaims ?? [],
-      coverageGap: speaker?.coverageGap ?? null,
-      reason: speaker?.reason ?? reason,
+    plan: {
+      personaCode: plan?.personaCode ?? null, stance: plan?.stance ?? null,
+      selfBasis: plan?.selfBasis ?? null, warrants: plan?.warrants ?? [],
+      universalReason: plan?.universalReason ?? '', rejection: plan?.rejection ?? null,
+      protectedFacts: plan?.protectedFacts ?? [], closingIntent: plan?.closingIntent ?? null,
+      contentRoles: plan?.contentRoles ?? [], reason: plan?.reason ?? reason,
     },
     voice: { provenance: voice?.provenance ?? null, blindCheckPoints: voice?.blindCheckPoints ?? [] },
     draft,
@@ -221,7 +214,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
 
   const noDet: DeterministicResult = { pass: true, failures: [] }
   if (budgetProblems.length > 0) {
-    return blank(null, [], null, null, null,
+    return blank(null, [], null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
       null, INCOMPLETE, 'hold', budgetProblems.join(' · '))
   }
@@ -230,38 +223,28 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    묻기 전에 멈춘다 — 확인 못 한 글에 돈을 쓰지 않는다.
    */
   if (packet.contextSufficiency === 'insufficient') {
-    return blank(null, [], null, null, null, noDet, null, INCOMPLETE,
+    return blank(null, [], null, null, noDet, null, INCOMPLETE,
       'hold', `무슨 이야기인지 확인하지 못했다 (${packet.insufficientReasons.join('·')})`)
   }
 
-  // ── ① 소재 판정 ──
-  const eRes = await ask('essence', buildEssenceSystemPrompt(input.vocabulary), buildEssencePayload(packet))
-  const eC = completionOf(eRes)
-  const eParse = eC.complete
-    ? parseEssence(eRes.rawText, packet, input.vocabulary)
-    : { essence: null, dropped: [], schemaProblems: [INCOMPLETE_LABEL[eC.reason ?? 'noResponse']] }
-  const dropped = eParse.dropped
-  if (!eC.complete) {
-    return blank(null, dropped, null, null, null, noDet, null, INCOMPLETE,
-      'hold', `소재 판정을 완주하지 못했다 (${INCOMPLETE_LABEL[eC.reason ?? 'noResponse']})`)
+  // ── ① 화자 계획 — 🔴 원문과 실제 카드를 함께 보고, 코드가 근거를 검증한다 ──
+  const pRes = await ask('speakerPlan', buildSpeakerPlanSystemPrompt(),
+    buildSpeakerPlanPayload({ packet, personas: input.personas, load: input.load }))
+  const pC = completionOf(pRes)
+  if (!pC.complete) {
+    return blank(null, [], null, null, noDet, null, INCOMPLETE,
+      'hold', `화자 계획을 완주하지 못했다 (${INCOMPLETE_LABEL[pC.reason ?? 'noResponse']})`)
   }
-  const gen = canGenerate(eParse.essence, eParse.schemaProblems)
+  const parse = parseSpeakerPlan(pRes.rawText, packet, input.personas)
+  const plan = parse.plan
+  const dropped = parse.dropped
+  const gen = canGenerate(packet, plan)
   if (!gen.ok) {
-    return blank(eParse.essence, dropped, null, null, null, noDet, null, INCOMPLETE, 'hold', gen.why)
-  }
-  const essence = eParse.essence!
-
-  // ── ② 화자와 자리 ──
-  const plan = planSpeaker({
-    sourceArticleId: packet.sourceArticleId, essence,
-    personas: input.personas, load: input.load,
-  })
-  if (plan.decision === 'hold' || plan.personaCode === null) {
-    return blank(essence, dropped, plan, null, null, noDet, null, INCOMPLETE, 'hold', plan.reason)
+    return blank(plan, dropped, null, null, noDet, null, INCOMPLETE, 'hold', gen.why)
   }
   const persona = input.personas.find((p) => p.code === plan.personaCode)!
 
-  // ── ③ 말투 근거 ──
+  // ── ② 말투 근거 ──
   const voice = buildVoiceEvidence({
     personaCode: persona.code, voiceTokens: persona.voiceTokens, samples: persona.samples,
     bundleDigest: persona.bundleDigest, sourceDigest: input.voiceSourceDigest,
@@ -273,23 +256,23 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const ready = judgeVoiceReadiness(voice)
   if (!ready.ok) {
-    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE,
+    return blank(plan, dropped, voice, null, noDet, null, INCOMPLETE,
       'hold', VOICE_READINESS_LABEL[ready.why!])
   }
 
-  // ── ④ 초안 한 편 ──
+  // ── ③ 초안 한 편 ──
   /**
    * 🔴 **정말로 들어갔는지 값으로 본다.** 프롬프트 쪽 조건이 잘못되면 기준이
    *    조용히 빠진다 — 두 요청 모두 보내기 전에 확인하고, 하나라도 비면 안 보낸다.
    */
-  const draftSystem = buildV2DraftSystemPrompt({ essence, plan, voice, life: persona })
-  const reviewSystem = buildV2ReviewSystemPrompt({ essence, plan, voice, life: persona })
+  const draftSystem = buildV2DraftSystemPrompt({ plan, voice, life: persona })
+  const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona })
   const voiceless = [
     ...(voiceStandardMissingFrom(draftSystem, voice) ? ['생성'] : []),
     ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
   ]
   if (voiceless.length > 0) {
-    return blank(essence, dropped, plan, voice, null, noDet, null, INCOMPLETE,
+    return blank(plan, dropped, voice, null, noDet, null, INCOMPLETE,
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
   const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
@@ -297,12 +280,12 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const draft = dC.complete ? parseDraft(dRes.rawText) : null
   if (draft === null) {
     const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
-    return blank(essence, dropped, plan, voice, null,
+    return blank(plan, dropped, voice, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
       null, INCOMPLETE, 'hold', why)
   }
 
-  // ── ⑤ deterministic — 확정 가능한 것만 ──
+  // ── ④ deterministic — 확정 가능한 것만 ──
   const draftText = `${draft.title}\n${draft.body}`
   const failures: DeterministicFailure[] = []
   if (isPersonalInfo(draftText)) failures.push({ code: 'personalInfo', detail: '개인정보 표식' })
@@ -310,7 +293,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const copy = judgeCopy(measureOriginality(draftText, evidenceText(packet)))
   if (copy.copied) failures.push({ code: 'copiedFromSource', detail: copy.reason })
   // 🔴 글자 그대로 지켜야 할 **원자적 사실**만 본다 — 문장은 애초에 여기 들어오지 못한다
-  const missing = missingProtectedFacts(essence, draftText)
+  const missing = missingProtectedFacts(plan.protectedFacts, draftText)
   if (missing.length > 0) failures.push({ code: 'protectedFactMissing', detail: missing.join(' · ') })
   if (persona.ageBand != null && persona.ageBand.trim() !== '') {
     // 🔴 정본이 판정하지 못하면(null) 막지 않는다 — 모르는 것을 결함으로 세지 않는다
@@ -320,10 +303,10 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {
     const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: INCOMPLETE })
-    return blank(essence, dropped, plan, voice, draft, det, null, INCOMPLETE, j.outcome, j.reason)
+    return blank(plan, dropped, voice, draft, det, null, INCOMPLETE, j.outcome, j.reason)
   }
 
-  // ── ⑥ 의미 검수 1회 ──
+  // ── ⑤ 의미 검수 1회 ──
   const rRes = await ask('semanticReview', reviewSystem, buildV2ReviewPayload({ draft, packet }))
   const semanticC = completionOf(rRes)
   const parsed = semanticC.complete ? parseSemanticReview(rRes.rawText) : null
@@ -342,5 +325,5 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     ? { complete: false, reason: 'parseFailed' } : semanticC
 
   const j = judgeMachine({ deterministic: det, semantic, semanticCompletion: semanticC2 })
-  return blank(essence, dropped, plan, voice, draft, det, semantic, semanticC2, j.outcome, j.reason)
+  return blank(plan, dropped, voice, draft, det, semantic, semanticC2, j.outcome, j.reason)
 }

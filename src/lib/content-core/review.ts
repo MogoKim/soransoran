@@ -17,7 +17,7 @@
  *
  * 🔴 **machine 판정은 READY 가 아니다.** 최종 READY/EDIT_REQUIRED/HOLD 는 사람이 정한다.
  */
-import { CLAIM_FACTS } from './essence'
+import { CLAIM_FACTS } from './source-facts'
 
 export const REVIEW_VERSION = 'review-v6'
 
