@@ -7,8 +7,10 @@
  * 판정(§4-AR)이 `AUTO_SEED` 로 남긴 소재에서 초안을 만들고, 하나를 골라
  * `supply-autofill` 이 먹을 수 있는 후보 파일까지 낸다.
  *
- * 🔴 **초안 생성을 새로 만들지 않는다.** 기존 `expandSeed`(소재 사전 + 템플릿)를 그대로 쓴다.
- *    LLM 을 부르지 않는다 — 이 구간은 원래 LLM 없이 도는 곳이다.
+ * 🔴 **운영 초안은 LLM 경로 하나다** (2026-09-19). 옛 판은 소재 사전 + 고정 질문 템플릿을
+ *    먼저 쓰고 LLM 을 fallback 으로 뒀다. 그 경로가 같은 질문을 대량 생산했다 —
+ *    큐를 통과한 원천 61건 중 60건이 템플릿이었고 90행이 13개 제목으로 돌아갔다.
+ *    🔴 템플릿 코드를 지우지 않았다. 운영 자동 후보 생성이 그 결과를 채택하지 않을 뿐이다.
  *
  * 🔴 **사람의 ADOPT 를 사칭하지 않는다.** 결정은 `AUTO_ADOPT` · `AUTO_HOLD` · `AUTO_DROP`,
  *    provenance 는 `machine-shadow` 다. 후보 파일에도 그 표시가 그대로 남는다 —
@@ -26,7 +28,6 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 // 🔴 기존 템플릿 생성기를 그대로 쓴다. 새 생성 로직을 만들지 않는다
-import { expandSeed } from './lib/micro-seed-seed-originality.mjs'
 import {
   pickDraft, summarizeDrafts, violatesDraftProvenance, normalize, parseQuality,
   echoesTitleAtEnd, hasBannedWord, checkDraft,
@@ -100,14 +101,14 @@ import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-
  *    `callProvider` 를 직접 부르지 않는다 — 나이 검수가 바로 그렇게 새어 나가
  *    회차 상한(`CallBudget`)에도 관제 집계에도 잡히지 않았다.
  */
-import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
+import { LEDGER_BLOCKED, SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
 import { type LedgerStage } from '../src/lib/llm-ledger'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { judgeCrisisSignal, SAFETY_SIGNAL_VERSION } from '../src/lib/micro-seed-safety-signals'
 import { generateWithRetries } from '../src/lib/micro-seed-draft-run'
 import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
+import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 
 const DATA_DIR = '.microseed-data'
 const argv = process.argv.slice(2)
@@ -482,7 +483,11 @@ export function buildGenSystemPrompt(t: {
     `## 🔴 쓰지 않습니다: ${HARM_BANS.join(' · ')}`,
     '',
     `초안 ${MAX_DRAFTS_PER_SOURCE}개를 JSON 으로만 답합니다.`,
-    '🔴 두 초안의 **말투와 길이를 서로 다르게** 씁니다. 같은 모양 둘은 하나만 있는 것과 같습니다.',
+    /**
+     * 🔴 **한 편만 요구한다** (2026-09-19). 여러 편을 받아 고르던 구조를 끝냈다 —
+     *    고르지 않았고, 예비 초안만 조용히 소비됐다.
+     */
+    '🔴 **가장 하고 싶은 이야기 한 편**을 씁니다. 여러 편을 늘어놓지 않습니다.',
     '{"drafts":[{"title":"...","body":"...","intendedQuestion":"본문이 묻는 것 한 줄 (묻지 않는 글이면 빈 문자열)",',
     '  "sourceAngle":"이 소재의 어떤 결을 살렸는지 한 줄"}]}',
   ].join('\n')
@@ -571,18 +576,38 @@ export class CallBudget {
   /** 🔴 **공동 예산이지만 어디에 썼는지는 보인다** — 원천별 사용량 (2026-09-13) */
   private readonly bySource = new Map<string, number>()
   private current: string | null = null
-  constructor(private readonly max: number) {}
+  /**
+   * 🔴 **원천 하나가 쓸 수 있는 hard cap** (2026-09-19).
+   *
+   *    앞판은 공동 예산 하나뿐이었다. 그래서 앞 원천이 재시도로 몰아 쓰면
+   *    뒤 원천은 **생성조차 못 해 보고** 굶었다 — 공동 예산은 총량만 셌다.
+   *    🔴 상한을 올리지 않았다. 같은 총량을 원천마다 나눠 담았을 뿐이다.
+   *    🔴 안 주면 옛 모양 그대로다 — 공동 예산만 본다.
+   */
+  constructor(private readonly max: number, private readonly perSourceCap = Number.POSITIVE_INFINITY) {}
   get spent(): number { return this.used }
   get left(): number { return Math.max(0, this.max - this.used) }
   /** 지금부터 나가는 요청은 이 원천의 것으로 센다 */
   enter(sourceArticleId: string | null): void { this.current = sourceArticleId }
   get perSource(): ReadonlyMap<string, number> { return this.bySource }
-  /** 원천당 가장 많이 쓴 수 — 계약(6회)을 넘었는지 본다 */
+  /** 원천당 가장 많이 쓴 수 — 계약을 넘었는지 본다 */
   get worstPerSource(): number {
     return this.bySource.size === 0 ? 0 : Math.max(...this.bySource.values())
   }
+  /** 🔴 지금 원천이 앞으로 더 쓸 수 있는 수 — 공동 예산과 원천별 cap 중 **작은 쪽** */
+  get leftForCurrentSource(): number {
+    if (this.current === null) return this.left
+    const usedHere = this.bySource.get(this.current) ?? 0
+    return Math.max(0, Math.min(this.left, this.perSourceCap - usedHere))
+  }
+  /**
+   * 🔴 **시작하기 전에 묻는 자리.** 남은 검수까지 완주할 수 없으면
+   *    반쯤 검수한 글이 남는다 — 그럴 바에는 시작하지 않고 사람에게 넘긴다.
+   */
+  canAffordForSource(n: number): boolean { return this.leftForCurrentSource >= n }
   take(): boolean {
     if (this.used >= this.max) return false
+    if (this.current !== null && (this.bySource.get(this.current) ?? 0) >= this.perSourceCap) return false
     this.used += 1
     if (this.current !== null) {
       this.bySource.set(this.current, (this.bySource.get(this.current) ?? 0) + 1)
@@ -864,6 +889,55 @@ export function buildGenPayload(t: {
   })
 }
 
+/**
+ * 🔴 **실제 생성 요청을 만드는 정본 하나** (2026-09-19).
+ *
+ *    앞판은 `genSystem` 과 `payload` 를 main 안에서 따로 조립하고, 캐시 key 는
+ *    또 다른 값(`inputHashOf`)으로 만들었다. 그래서 **보내는 것과 key 가 보는 것이
+ *    달랐다** — `communityAngle` 은 payload 에 실려 나가는데 key 에는 없었고,
+ *    판정 한 줄이 바뀌어도 옛 글이 그대로 재사용됐다.
+ *    🔴 이제 요청과 key 는 **이 함수가 낸 같은 결과**에서만 나온다.
+ */
+export type GenRequest = {
+  system: string
+  payload: string
+  model: ProviderModel
+  promptVersion: string
+}
+
+export function buildGenRequest(t: {
+  title: string
+  bodyHead: string
+  communityAngle: string
+  axis: string
+  lane: string
+  voiceSamples?: readonly string[]
+  persona?: PersonaLifeHistory
+}): GenRequest {
+  return {
+    system: buildGenSystemPrompt({
+      title: t.title, bodyHead: t.bodyHead,
+      voiceSamples: t.voiceSamples, persona: t.persona,
+    }),
+    payload: buildGenPayload({
+      title: t.title, bodyHead: t.bodyHead, communityAngle: t.communityAngle,
+      axis: t.axis, lane: t.lane,
+    }),
+    model: DRAFT_MODEL,
+    promptVersion: DRAFT_PROMPT_VERSION,
+  }
+}
+
+/**
+ * 🔴 **생성 캐시 key — 실제 요청 입력의 digest 만 담는다.**
+ *    원문 제목도 본문도 판정 한 줄도 **문자로 남지 않는다.**
+ *    입력이 하나라도 달라지면 digest 가 달라지고, 같으면 그대로 재사용된다.
+ */
+export function genCacheKeyOf(sourceArticleId: string, req: GenRequest): string {
+  return `gen|${sourceArticleId}|${req.promptVersion}|${req.model}`
+    + `|${digest16(req.system)}|${digest16(req.payload)}`
+}
+
 type CallOutcome<T> = { value: T | null; status: string; attemptCount: number; errorCode: string | null }
 
 /** 🔴 회차 전체의 실제 provider 요청 수 — **여기 하나로만 센다** */
@@ -894,6 +968,17 @@ async function ask(stage: LedgerStage, system: string, payload: string, maxOut: 
     stage, model: DRAFT_MODEL, systemPrompt: system, userPayload: payload,
     maxOutputTokens: maxOut, timeoutMs: DRAFT_TIMEOUT_MS,
   })
+}
+
+/**
+ * 🔴 **요청이 아예 나가지 않았는가** (2026-09-19).
+ *
+ *    장부가 막았거나(일 예산 · 회차 상한 · 미정산 · 가격 미상) 장부가 열리지 않았다.
+ *    "모델이 답했는데 못 읽었다" 와 **다른 일**이다 — 이쪽은 검수를 하지 못한 것이다.
+ */
+export function neverSent(errorCode: string | null): boolean {
+  const c = String(errorCode ?? '')
+  return c === 'NO_LEDGER' || c.startsWith(`${LEDGER_BLOCKED}:`)
 }
 
 async function callJson<T>(
@@ -943,8 +1028,14 @@ export function parseGen(raw: string): GenDraft[] | null {
   } catch { return null }
   const list = Array.isArray(j.drafts) ? j.drafts : null
   if (list === null || list.length === 0) return null
+  /**
+   * 🔴 **모델이 여러 편을 보내도 운영 후보는 첫 유효 초안 하나다** (2026-09-19).
+   *    앞판은 앞에서 잘라 놓고 세었다 — 첫 칸이 비어 있으면 뒤에 멀쩡한 글이 있어도
+   *    통째로 버렸다. 이제 **앞에서부터 쓸 수 있는 것**을 찾아 상한만큼만 받는다.
+   */
   const out: GenDraft[] = []
-  for (const d of list.slice(0, MAX_DRAFTS_PER_SOURCE)) {
+  for (const d of list) {
+    if (out.length >= MAX_DRAFTS_PER_SOURCE) break
     const o = d as Record<string, unknown>
     const title = S(o.title)
     const body = S(o.body)
@@ -1043,6 +1134,19 @@ async function askQuality(
       statusCount.set('ok', (statusCount.get('ok') ?? 0) + 1)
       continue
     }
+    /**
+     * 🔴 **완주할 여력이 없으면 묻지 않는다** (2026-09-19).
+     *
+     *    품질 1 + 보조 나이 1 = `QUALITY_PATH_CALLS` 회가 남아 있어야 시작한다.
+     *    품질만 묻고 나이를 못 부르면 **반쯤 검수한 글**이 남는다 —
+     *    그 글은 통과로 읽히면 안 되고, 완료로 캐시되어서도 안 된다.
+     *    🔴 묻지 않은 초안은 판정이 없다 → `semanticUnavailable` 로 사람에게 간다.
+     */
+    if (!BUDGET.canAffordForSource(QUALITY_PATH_CALLS)) {
+      qualityUnaffordable += 1
+      out.set(d.draftNo, null)
+      continue
+    }
     onMiss(1)
     /**
      * 🔴 **두 요청의 입력을 가른다** (2026-09-17). 앞판은 한 변수를 둘이 나눠 썼다 —
@@ -1083,6 +1187,13 @@ async function askQuality(
      *
      * 🔴 `ageBand` 가 없으면 부르지 않는다 — 정본이 없으면 애초에 여기 오지 못한다(§ loadVoice).
      */
+    /**
+     * 🔴 **검수를 완주하지 못했는가** (2026-09-19).
+     *    "물었는데 답을 못 읽었다" 와 "**묻지도 못했다**" 는 다른 일이다.
+     *    뒤엣것은 돈이 없어 검수를 건너뛴 것이고, 그것을 통과로 읽으면
+     *    예산이 모자랄수록 검수가 느슨해진다 — 정확히 반대여야 한다.
+     */
+    let reviewBlocked = false
     if (q.value !== null && persona?.ageBand != null && persona.ageBand.trim() !== '') {
       ageCalls += 1
       /**
@@ -1092,28 +1203,53 @@ async function askQuality(
        *    실측 506건이 통제 밖에 있었다. 이제 다른 호출과 **같은 문**을 지난다.
        */
       if (!BUDGET.take()) {
-        // 🔴 회차 상한에 닿았으면 부르지 않는다. 확인하지 못한 것으로 센다
+        /**
+         * 🔴 통신 · JSON 재시도가 원천 cap 을 먹은 경우다 —
+         *    앞의 여력 검사(`QUALITY_PATH_CALLS`)가 막지 못하는 자리다.
+         */
         ageUnread += 1
         countCall('ageCheckBudgetExhausted')
+        reviewBlocked = true
       } else {
         countCall('ageCheck')
         const ageRes = await ask(
           'ageCheck', buildAgeCheckSystemPrompt(persona.ageBand), agePayload, AGE_CHECK_MAX_TOKENS,
         )
-        const age: LifeConflict | null = ageRes.ok && !ageRes.maxTokensReached
-          ? parseAgeCheck(ageRes.rawText, ctx.draftText)
-          : null
-        if (age === null) ageUnread += 1
-        const merged = mergeLifeConflict(q.value.lifeConflict, age)
-        if (merged !== q.value.lifeConflict) {
-          q = { ...q, value: { ...q.value, lifeConflict: merged } }
-          if (merged?.conflict === true) ageCaught += 1
+        if (neverSent(ageRes.errorCode)) {
+          /**
+           * 🔴 **요청이 나가지도 않았다** — 장부가 막았다(일 예산 · 회차 상한 · 미정산).
+           *    모델이 답하지 않았으므로 나이는 **보지 않은** 것이다.
+           */
+          ageUnread += 1
+          countCall('ageCheckLedgerBlocked')
+          reviewBlocked = true
+        } else {
+          const age: LifeConflict | null = ageRes.ok && !ageRes.maxTokensReached
+            ? parseAgeCheck(ageRes.rawText, ctx.draftText)
+            : null
+          // 🔴 **답은 왔는데 못 읽은 경우**는 예전 그대로다 — 여기서 계약을 바꾸지 않는다
+          if (age === null) ageUnread += 1
+          const merged = mergeLifeConflict(q.value.lifeConflict, age)
+          if (merged !== q.value.lifeConflict) {
+            q = { ...q, value: { ...q.value, lifeConflict: merged } }
+            if (merged?.conflict === true) ageCaught += 1
+          }
         }
       }
     }
+    /**
+     * 🔴 **완주 못 한 검수는 통과로 읽지 않는다.**
+     *    막는 판정(위해 · 생활사)은 **그대로 남긴다** — 안전 쪽 정보를 버리지 않는다.
+     *    통과였던 것만 판정 없음으로 내려 `semanticUnavailable` 로 사람에게 간다.
+     */
+    if (reviewBlocked) {
+      qualityIncomplete += 1
+      if (q.value !== null && applyQuality(q.value) === 'ok') q = { ...q, value: null }
+    }
     out.set(d.draftNo, q.value)
     for (const u of q.value?.unknownIssues ?? []) unknownAxis.set(u, (unknownAxis.get(u) ?? 0) + 1)
-    if (q.value !== null) {
+    // 🔴 완주하지 못한 판정은 **캐시에 적지 않는다** — 다음 회차가 처음부터 다시 묻는다
+    if (!reviewBlocked && q.value !== null) {
       cache.set(k, { drafts: [], quality: { [String(d.draftNo)]: q.value }, status: 'ok', attemptCount: q.attemptCount })
     }
   }
@@ -1182,32 +1318,39 @@ function loadMeta(): Map<string, Meta> {
 /**
  * 🔴 **한 회차 전체가 쓸 수 있는 provider 요청** — 원천 수에 이 값을 곱해 만든다.
  *
- * 🔴 **원천당 상한이 아니다** (2026-09-13 정정). 이름이 `CALL_ALLOWANCE_PER_SOURCE` 였고
- *    설명도 "원천 하나가 나가는 최대치" 라고 적혀 있었지만, 구현은 처음부터
- *    **공동 예산**이었다 — `CallBudget` 은 총량만 세고 원천별로 막지 않는다.
- *    한 원천이 다 써 버려도 막는 장치가 없었다.
+ * 🔴 **이제는 원천당 hard cap 이기도 하다** (2026-09-19).
  *
- *    최악 경로는 실제로 4회를 넘는다:
- *      생성 1 + 초안 검수 2(초안 2개) + 생활사 재생성 1 + 재검수 2 = **6회**
- *    (여기에 schema 재요청·transport 재시도가 더 붙을 수 있다. 전부 같은 예산에서 나간다.)
+ *    2026-09-13 에는 이름만 `PER_SOURCE` 였고 구현은 **공동 예산** 하나였다 —
+ *    `CallBudget` 은 총량만 셌고, 앞 원천이 재시도로 다 써 버리면 뒤 원천은
+ *    생성조차 못 해 보고 굶었다. 막는 장치가 없었다.
  *
- * 🔴 그래서 **이름과 출력을 공동 예산으로 정정한다.** 상한을 올리지 않았다 —
- *    평균 사용량이 계약을 지키는지는 `perSource` 관측으로 본다.
+ * 🔴 **값을 올리지 않았다.** 같은 4회를, 이제는 **공동 예산과 원천별 cap 둘 다**로
+ *    읽는다. 회차 전체는 여전히 `원천 수 × 4` 이고, 그 안에서 원천 하나는 4회를
+ *    넘지 못한다. 정상 경로는 3회(`CALL_EXPECTED_PATH_PER_SOURCE`)다.
+ *
+ * 🔴 **통신 · JSON 재시도가 cap 을 쓰면 남은 검수가 부족할 수 있다.**
+ *    그때는 묻지 않고 사람에게 남긴다 — 반쯤 검수한 글을 채택하지 않는다.
  */
 export const CALL_ALLOWANCE_PER_SOURCE = 4
 
 /**
- * 🔴 **강제 상한이 아니라 설계상 기대치다** (2026-09-13).
+ * 🔴 **정상 cold 경로 — 생성 1 + 품질 1 + 보조 나이 1 = 3회** (2026-09-19).
  *
- *    한 원천이 정상 경로를 다 밟았을 때 나가는 요청 수 —
- *      생성 1 + 초안 검수 2 + 생활사 재생성 1 + 재검수 2 = 6
- *
- *    🔴 **이 수를 넘을 수 있다.** schema 재요청과 transport 재시도가 붙으면
- *       더 나간다. 막는 것은 **공동 예산 하나뿐**이고, 원천별로 조이는 장치는 없다.
- *       이 값은 관측한 사용량(`BUDGET.perSource`)을 읽을 때 쓰는 **눈금**이다 —
- *       평소보다 훨씬 큰 수가 보이면 어딘가 새고 있다는 뜻이다.
+ *    초안을 하나만 만들므로 검수도 그 하나에만 한다.
+ *    🔴 **강제 상한은 `CALL_ALLOWANCE_PER_SOURCE`(4회) 다.** 이 값은 눈금이다 —
+ *       관측한 사용량(`BUDGET.perSource`)이 이보다 크면 재시도가 붙은 것이다.
  */
-export const CALL_EXPECTED_PATH_PER_SOURCE = 6
+export const CALL_EXPECTED_PATH_PER_SOURCE = 3
+
+/** 🔴 기본 경로가 쓰는 수 — 생성 1 + 품질 1 + 나이 1 */
+export const BASE_PATH_CALLS = 3
+/**
+ * 🔴 **검수 하나를 완주하는 데 필요한 수** — 품질 1 + 보조 나이 1.
+ *    이만큼 없으면 묻지 않는다. 물어 놓고 나이를 못 보면 반쯤 검수한 글이 남는다.
+ */
+export const QUALITY_PATH_CALLS = 2
+/** 🔴 생활사 재생성을 **완주**하는 데 필요한 수 — 재생성 1 + 품질 1 + 나이 1 */
+export const LIFE_RETRY_CALLS = 3
 
 export function callBudgetOf(sources: number): number {
   return Math.max(0, sources) * CALL_ALLOWANCE_PER_SOURCE
@@ -1224,6 +1367,18 @@ let ageCaught = 0
 let ageUnread = 0
 /** 🔴 생활사 충돌로 다시 쓴 원천 · 고쳐진 수 · 그래도 어긋나 사람에게 넘긴 수 */
 let lifeRetried = 0
+/**
+ * 🔴 **완주할 여력이 없어 재생성을 시작하지 않은 원천** (2026-09-19).
+ *    "다시 썼는데 안 고쳐졌다" 와 "시작도 못 했다" 는 다른 일이다 — 따로 센다.
+ */
+let lifeRetryUnaffordable = 0
+/**
+ * 🔴 **검수를 완주하지 못한 초안** (2026-09-19) — 품질은 물었는데 보조 나이를
+ *    cap 때문에 못 부른 경우. 채택하지 않고 캐시에도 완료로 적지 않는다.
+ */
+let qualityIncomplete = 0
+/** 🔴 완주할 여력이 없어 **묻지도 않은** 초안 — 품질 호출 자체를 시작하지 않았다 */
+let qualityUnaffordable = 0
 /** 🔴 위기 신호로 재생성을 멈춘 회차 — 전용 줄로 따로 보고한다 */
 let crisisHeld = 0
 /** 🔴 **부르기 전에** 멈춘 원천 — 위기 소재는 생성 자체를 시작하지 않는다(§4) */
@@ -1464,14 +1619,15 @@ async function main(): Promise<void> {
   console.log(`① AUTO_SEED ${seeds.length}건`)
 
   if (!CALL) {
-    let tmplOk = 0
-    for (const j of seeds) {
-      const m = metas.get(j.sourceArticleId)
-      if (m === undefined) continue
-      const ex = expandSeed({ sourceArticleId: j.sourceArticleId, sourceSite: m.site, title: m.title }, nowIso)
-      if ((ex.drafts ?? []).length > 0) tmplOk += 1
-    }
-    console.log(`\n② 오프라인 추정 — 템플릿이 초안을 내는 것 ${tmplOk}건 · LLM fallback 필요 ${seeds.length - tmplOk}건`)
+    /**
+     * 🔴 **운영 생성 경로는 하나다** (2026-09-19). 옛 판은 여기서 "템플릿이 낼 수 있는 수"
+     *    를 세어 보여 줬다 — 그 경로 자체가 없어졌으므로 그 수는 이제 뜻이 없다.
+     */
+    const withMeta = seeds.filter((j) => metas.has(j.sourceArticleId)).length
+    console.log(`\n② 오프라인 추정 — 운영 경로는 LLM 하나다.`
+      + ` 소재를 읽은 원천 ${withMeta}건 · 못 읽은 원천 ${seeds.length - withMeta}건`)
+    console.log(`   정상 cold 경로 ${CALL_EXPECTED_PATH_PER_SOURCE}회/원천`
+      + ` (생성 1 + 품질 1 + 보조 나이 1) · 원천당 상한 ${CALL_ALLOWANCE_PER_SOURCE}회`)
     console.log('   🟡 LLM 0 · 네트워크 0 · 파일 write 0. 실행하려면 --call 을 붙이세요.\n')
     return
   }
@@ -1482,7 +1638,7 @@ async function main(): Promise<void> {
    * 🔴 **실제 provider 요청 상한.** 회차 하나가 몇 번 나갈지는 사람이 알아야 한다 —
    *    "최대 3회" 라는 말은 재생성 횟수였지 요청 수가 아니었다.
    */
-  BUDGET = new CallBudget(callBudgetOf(seeds.length))
+  BUDGET = new CallBudget(callBudgetOf(seeds.length), CALL_ALLOWANCE_PER_SOURCE)
   /**
    * 🔴 **회차 장부를 연다** (2026-09-17). 이 줄 뒤에야 유료 요청이 나갈 수 있다.
    *
@@ -1577,44 +1733,36 @@ async function main(): Promise<void> {
     /** 🔴 초안이 겹쳤는지 재는 기준 원문 — 제목과 본문 머리 둘 다 본다 */
     const sourceText = `${meta.title}\n${meta.bodyHead}`
 
-    // ── ① 템플릿 먼저 ──
-    const ex = expandSeed({
-      sourceArticleId: j.sourceArticleId, sourceSite: meta.site, title: meta.title,
-      sourceInput: 'auto-judge', sourceDecision: 'AUTO_SEED',
-    }, nowIso)
-    let from: string = 'template'
-    let drafts: DraftCandidate[] = (ex.drafts ?? []).slice(0, MAX_DRAFTS_PER_SOURCE).map((d) => ({
-      sourceArticleId: j.sourceArticleId, draftNo: d.draftNo,
-      title: d.title, body: d.body,
-      safetyVerdict: String(d.safety?.verdict ?? ''),
-      // 🔴 템플릿은 제목만 보고 만들지만, 실제 복제 판정은 **보내는 재료 전체**로 잰다
-      originality: measureOriginality(`${d.title}\n${d.body}`, sourceText),
-      generatedAt: d.generatedAt,
-    }))
-    // 🔴 템플릿 초안이 deterministic 게이트를 하나도 통과하지 못하면 LLM 으로 넘어간다
-    const deterministicOk = drafts.some((d) =>
-      S(d.title) !== '' && S(d.body) !== '' && S(d.safetyVerdict) === 'pass'
-      && !hasBannedWord(d.title + d.body) && !judgeCopy(d.originality).copied
-      && !echoesTitleAtEnd(d.title, d.body)
-      // 🔴 원문 제목을 그대로 쓴 초안은 통과로 치지 않는다 — 소재가 아니라 제목을 옮긴 것이다
-      && !copiesSourceTitle(meta.title, d.title))
-
-    const hash = inputHashOf({ title: meta.title, bodyHead: meta.bodyHead, axis: meta.axis, lane: meta.lane })
-    // 🔴 **생성 캐시와 품질 캐시를 나눈다.** 한 덩어리로 두면 품질 판정만 바꿔도
-    //    생성 호출 전체를 다시 하게 된다 — 2026-09-07 에 그 구조로 24건을 다시 불렀다.
     /**
-     * 🔴 **key 가 실제로 무엇으로 만들었는지를 담는다** (2026-09-13).
-     *    판 값만 보던 옛 key 는 voiceSamples 를 넣고도 옛 결과를 그대로 hit 시켰다.
-     *    system prompt digest 에 말투 근거가 이미 들어 있으므로 voice 가 바뀌면 자동 miss 다.
+     * ── 🔴 **운영 초안은 LLM 경로 하나다** (2026-09-19) ──
+     *
+     *    옛 판은 `expandSeed`(소재 사전 + 고정 질문 템플릿)를 먼저 썼고, 그 결과가
+     *    결정론 게이트를 통과하면 그대로 후보가 됐다. 큐를 통과한 원천 61건 중 60건이
+     *    그 경로였고, 90행이 13개 제목으로 돌아갔다 — 원문의 상황·갈등·감정은
+     *    하나도 남지 않았다. 그러면서 품질·나이 검수 비용은 그대로 나갔다.
+     *
+     * 🔴 **템플릿 코드를 지우지 않았다.** `expandSeed` 는 그대로 있고
+     *    자체 검사와 정형 용도(dry-run)가 그대로 쓴다. 바뀐 것은 하나다 —
+     *    **운영 자동 후보 생성이 템플릿 결과를 채택하지 않는다.**
+     * 🔴 topic 예외 목록을 만들지 않았다. 분기 자체가 없다.
      */
+    const from = 'llm'
+
     const persona = voice.lifeOf(j.sourceArticleId)
-    const genSystem = buildGenSystemPrompt({
-      title: meta.title, bodyHead: meta.bodyHead,
+    /**
+     * 🔴 **보내는 것과 캐시 key 가 같은 정본에서 온다** (2026-09-19).
+     *    옛 판은 프롬프트·payload 를 여기서 따로 조립하고 key 는 또 다른 해시로 만들었다 —
+     *    `communityAngle` 은 실려 나가는데 key 에는 없어서, 판정 한 줄이 바뀌어도
+     *    옛 글이 그대로 재사용됐다.
+     */
+    const genReq = buildGenRequest({
+      title: meta.title, bodyHead: meta.bodyHead, communityAngle: meta.angle,
+      axis: meta.axis, lane: meta.lane,
       voiceSamples: voice.samplesFor(j.sourceArticleId), persona,
     })
-    const genKey = `gen|${j.sourceArticleId}|${hash}|${DRAFT_PROMPT_VERSION}`
-      + `|${DRAFT_MODEL}|${digest16(genSystem)}`
-    // 🔴 **본문 digest 를 담는다.** draftNo 만 보면 글이 바뀌어도 옛 판정이 재사용된다
+    const genKey = genCacheKeyOf(j.sourceArticleId, genReq)
+    // 🔴 **생성 캐시와 품질 캐시를 나눈다.** 한 덩어리로 두면 품질 판정만 바꿔도
+    //    생성 호출 전체를 다시 하게 된다 — 2026-09-07 에 그 구조로 24건을 다시 불렀다.
     /**
      * 🔴 **근거를 여기서 먼저 정한다** — 아래 `qSystemDigest` 가 이것을 받아야 한다.
      */
@@ -1625,21 +1773,13 @@ async function main(): Promise<void> {
      *    앞판은 `buildQualitySystemPrompt(persona)` 로 digest 를 냈다 — 근거 없는 쪽
      *    분기만 계산한 것이다. 그래서 **근거가 있을 때의 지침을 고쳐도** digest 가
      *    그대로였고, 옛 판정이 그대로 hit 될 수 있었다.
-     *    근거 **데이터**가 바뀌는 것은 `groundDigest` 가 잡지만, 근거 분기의
-     *    **문장**이 바뀌는 것은 아무도 못 잡았다.
      */
     const qSystemDigest = digest16(buildQualitySystemPrompt(persona, ground))
     /**
      * 🔴 **나이 판정 계약이 바뀌면 옛 캐시를 쓰지 않는다** (2026-09-16).
-     *
-     *    옛 key 는 품질 프롬프트 digest 만 담았다. 그래서 나이 검수 프롬프트와
-     *    자기 나이 판정이 바뀌어도 **옛 판정이 그대로 hit** 됐다.
      *    운영 캐시 파일을 손으로 지우지 않는다 — key 가 계약을 담으면 저절로 miss 된다.
-     */
-    /**
-     * 🔴 **판정 계약이 바뀌면 옛 품질 캐시를 재사용하지 않는다.**
-     *    나이 검사 계약에 더해 **안전 축 taxonomy 와 그 판** 도 담는다 (2026-09-16) —
-     *    위기 신호 축을 새로 세웠는데 옛 캐시가 hit 되면 새 판정이 조용히 건너뛰어진다.
+     *    안전 축 taxonomy 와 그 판도 함께 담는다 — 위기 신호 축을 새로 세웠는데
+     *    옛 캐시가 hit 되면 새 판정이 조용히 건너뛰어진다.
      */
     const ageContractDigest = digest16(
       `${buildAgeCheckSystemPrompt(persona?.ageBand ?? '')}|${SELF_AGE_RULE_VERSION}`
@@ -1647,199 +1787,175 @@ async function main(): Promise<void> {
     )
     /**
      * 🔴 **검수에 실제로 전달되는 근거를 key 에 담는다** (2026-09-17).
-     *
-     *    근거를 주기 시작했는데 key 가 그대로면, **근거 없이 낸 옛 판정**이 그대로
-     *    hit 된다 — 2026-09-13 에 프롬프트를 바꾸고도 옛 결과가 재사용된 그 사고다.
-     *    🔴 근거가 같으면 key 도 같다 — 불필요한 재검수를 만들지 않는다.
-     *    🔴 **생성 캐시(`genKey`)에는 넣지 않는다** — 생성 입력은 바뀌지 않았다.
+     *    근거가 같으면 key 도 같다 — 불필요한 재검수를 만들지 않는다.
+     *    🔴 **생성 key 는 따로다** — 생성 요청 자체의 digest 로 만든다.
      */
     const groundDigest = groundDigestOf(ground)
     const qKey = (d: DraftCandidate): string =>
       `q|${j.sourceArticleId}|${d.draftNo}|${QUALITY_PROMPT_VERSION}|${DRAFT_MODEL}`
       + `|${qSystemDigest}|${ageContractDigest}|${groundDigest}|${digest16(`${d.title}\n${d.body}`)}`
 
-    if (!deterministicOk) {
-      from = 'llm'
+    let drafts: DraftCandidate[] = []
+    /**
+     * ── 생성 · 복제 재생성 — 🔴 **정본 함수 하나가 순서를 갖는다** (2026-09-16) ──
+     *
+     *    옛 판은 이 루프가 여기 인라인으로 있었고 위기 판정이 그 **뒤**였다.
+     *    그래서 위기 초안이 복제 조건까지 만족하면 생성을 한 번 더 불렀다.
+     *    🔴 이제 `generateWithRetries` 가 **복제 재생성 전에** 위기를 본다.
+     *    🔴 캐시로 받은 초안에도 같은 계약이 걸린다.
+     */
+    const cg = cache.get(genKey)
+    const cachedGen = cg !== undefined && cg.status === 'ok' ? cg.drafts : null
+    if (cachedGen !== null) {
+      hit += 1
+      statusCount.set('ok', (statusCount.get('ok') ?? 0) + 1)
+    } else miss += 1
+    let lastAttempt = 0
+    const run = await generateWithRetries<GenDraft>({
+      maxRetries: MAX_ORIGINALITY_RETRIES, cached: cachedGen,
+    }, {
+      generate: async (retryReason) => {
+        if (retryReason !== null) retried += 1
+        const g = await callJson(
+          'draftGen',
+          retryReason === null ? genReq.system : genReq.system + retryDirective(retryReason),
+          genReq.payload, parseGen,
+        )
+        statusCount.set(g.status, (statusCount.get(g.status) ?? 0) + 1)
+        lastAttempt = g.attemptCount
+        return g.value
+      },
       /**
-       * ── 생성 · 복제 재생성 — 🔴 **정본 함수 하나가 순서를 갖는다** (2026-09-16) ──
-       *
-       *    옛 판은 이 루프가 여기 인라인으로 있었고 위기 판정이 그 **뒤**였다.
-       *    그래서 위기 초안이 복제 조건까지 만족하면 생성을 한 번 더 불렀다.
-       *    🔴 이제 `generateWithRetries` 가 **복제 재생성 전에** 위기를 본다.
-       *    🔴 캐시로 받은 초안에도 같은 계약이 걸린다.
+       * 🔴 **제목 복제도 다시 쓸 이유다** (2026-09-14).
+       *    본문 기준(어절·글자·덮임)은 짧은 제목에 닿지 않는다.
        */
-      const cg = cache.get(genKey)
-      const cachedGen = cg !== undefined && cg.status === 'ok' ? cg.drafts : null
-      if (cachedGen !== null) {
-        hit += 1
-        statusCount.set('ok', (statusCount.get('ok') ?? 0) + 1)
-      } else miss += 1
-      const payload = buildGenPayload({
-        title: meta.title, bodyHead: meta.bodyHead, communityAngle: meta.angle,
-        axis: meta.axis, lane: meta.lane,
-      })
-      let lastAttempt = 0
-      const run = await generateWithRetries<GenDraft>({
-        maxRetries: MAX_ORIGINALITY_RETRIES, cached: cachedGen,
-      }, {
-        generate: async (retryReason) => {
-          if (retryReason !== null) retried += 1
-          const g = await callJson(
-            'draftGen',
-            retryReason === null ? genSystem : genSystem + retryDirective(retryReason),
-            payload, parseGen,
-          )
-          statusCount.set(g.status, (statusCount.get(g.status) ?? 0) + 1)
-          lastAttempt = g.attemptCount
-          return g.value
-        },
-        /**
-         * 🔴 **제목 복제도 다시 쓸 이유다** (2026-09-14).
-         *    본문 기준(어절·글자·덮임)은 짧은 제목에 닿지 않는다.
-         */
-        allCopied: (ds) => ds.every((d) => copiesSourceTitle(meta.title, d.title)
-          || judgeCopy(measureOriginality(`${d.title}\n${d.body}`, sourceText)).copied),
-        copyReason: (ds) => {
-          const worst = ds
-            .map((d) => copiesSourceTitle(meta.title, d.title)
-              ? { copied: true, reason: 'runWords' as const }
-              : judgeCopy(measureOriginality(`${d.title}\n${d.body}`, sourceText)))
-            .filter((v) => v.copied)
-          return COPY_REASON_LABEL[worst[0]?.reason ?? 'runWords']
-        },
-      })
-      const gen = run.drafts
-      if (gen !== null && !run.fromCache) {
-        cache.set(genKey, { drafts: gen, quality: {}, status: 'ok', attemptCount: lastAttempt })
-      }
-      /** 🔴 이 원천 회차가 위기로 멈췄는가 — 한 번 서면 되돌리지 않는다 */
-      let crisisStop: 'crisisSignal' | null = run.crisisStop
-      if (crisisStop !== null) {
-        crisisHeld += 1
-        console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${crisisStop} · 생성 ${run.generateCalls}회)`)
-      }
-      drafts = (gen ?? []).map((d, i2) => ({
-        sourceArticleId: j.sourceArticleId, draftNo: i2 + 1,
-        title: d.title, body: d.body,
-        // 🔴 LLM 초안도 기존 safetyFilter 로 다시 잰다 — 모델 말을 믿지 않는다
-        safetyVerdict: safetyFilter({ title: d.title, body: d.body }).verdict,
-        originality: measureOriginality(`${d.title}\n${d.body}`, sourceText),
-        generatedAt: nowIso,
-      }))
-      // ── 품질 (품질 캐시) — 🔴 deterministic 을 통과한 초안만 묻는다. 물어봐야 소용없는 것에 돈을 쓰지 않는다
-      let qmap = crisisStop !== null
-        ? new Map<number, DraftQualityVerdict | null>()
-        : await askQuality(
+      allCopied: (ds) => ds.every((d) => copiesSourceTitle(meta.title, d.title)
+        || judgeCopy(measureOriginality(`${d.title}\n${d.body}`, sourceText)).copied),
+      copyReason: (ds) => {
+        const worst = ds
+          .map((d) => copiesSourceTitle(meta.title, d.title)
+            ? { copied: true, reason: 'runWords' as const }
+            : judgeCopy(measureOriginality(`${d.title}\n${d.body}`, sourceText)))
+          .filter((v) => v.copied)
+        return COPY_REASON_LABEL[worst[0]?.reason ?? 'runWords']
+      },
+    })
+    const gen = run.drafts
+    if (gen !== null && !run.fromCache) {
+      cache.set(genKey, { drafts: gen, quality: {}, status: 'ok', attemptCount: lastAttempt })
+    }
+    /** 🔴 이 원천 회차가 위기로 멈췄는가 — 한 번 서면 되돌리지 않는다 */
+    let crisisStop: 'crisisSignal' | null = run.crisisStop
+    if (crisisStop !== null) {
+      crisisHeld += 1
+      console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${crisisStop} · 생성 ${run.generateCalls}회)`)
+    }
+    drafts = (gen ?? []).map((d, i2) => ({
+      sourceArticleId: j.sourceArticleId, draftNo: i2 + 1,
+      title: d.title, body: d.body,
+      // 🔴 LLM 초안도 기존 safetyFilter 로 다시 잰다 — 모델 말을 믿지 않는다
+      safetyVerdict: safetyFilter({ title: d.title, body: d.body }).verdict,
+      originality: measureOriginality(`${d.title}\n${d.body}`, sourceText),
+      generatedAt: nowIso,
+    }))
+    // ── 품질 (품질 캐시) — 🔴 deterministic 을 통과한 초안만 묻는다. 물어봐야 소용없는 것에 돈을 쓰지 않는다
+    let qmap = crisisStop !== null
+      ? new Map<number, DraftQualityVerdict | null>()
+      : await askQuality(
+        drafts, cache, qKey, statusCount, (n) => { hit += n }, (n) => { miss += n }, persona, ground,
+      )
+    /**
+     * 🔴 **모델이 잡은 위기도 같은 계약이다** (2026-09-16).
+     *    결정론이 놓친 것을 품질 판정이 말했으면 그때도 회차를 멈춘다.
+     */
+    const noteCrisis = (): void => {
+      if (crisisStop !== null) return
+      const why = judgeDraftGate({
+        drafts, allLifeConflict: false,
+        qualityHarms: [...qmap.values()].map((v) => v?.harms ?? []),
+      }).reason
+      if (why === null) return
+      crisisStop = why
+      crisisHeld += 1
+      console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${why} · 검수 판정)`)
+    }
+    noteCrisis()
+    /**
+     * 🔴 **생활사가 어긋나면 소재를 버리지 않고 자리를 바꿔 다시 쓴다** (2026-09-13).
+     *
+     *    어긋난 것은 **이번에 쓴 글**이지 소재가 아니다. 남편 이야기 · 자녀 이야기 ·
+     *    돌봄 이야기는 이 커뮤니티의 알맹이다. 그 사람이 주인공이 아닐 뿐이다.
+     *    그래서 같은 소재로 **관점을 바꿔** 한 번 다시 쓰게 하고,
+     *    그래도 자기 일로 말하면 그때 사람에게 넘긴다.
+     */
+    const allConflict = (): boolean =>
+      qmap.size > 0 && [...qmap.values()].every((v) => applyQuality(v) === 'lifeHistoryConflict')
+    /**
+     * 🔴 **위기 신호가 붙은 회차는 다시 쓰지 않는다** (정본 §4 · §8, 2026-09-16).
+     *    *"crisis_hold 는 재생성하지 않는다 — persona 를 바꿔도 생성하지 않는다."*
+     *    관점을 바꿔 다시 쓰게 하면 같은 위기 소재를 한 번 더 만들 뿐이다.
+     */
+    /**
+     * 🔴 **결정론이 잡은 위기와 모델이 잡은 위기를 함께 본다** (2026-09-16).
+     *    의미 판정으로만 감지된 위기도 재생성 금지에 걸려야 한다 —
+     *    정규식이 놓친 것을 모델이 말했는데 다시 쓰게 하면 같은 소재를 또 만든다.
+     */
+    /**
+     * 🔴 **완주할 여력이 없으면 시작하지 않는다** (2026-09-19).
+     *
+     *    재생성 1 + 품질 1 + 보조 나이 1 = `LIFE_RETRY_CALLS` 회가 남아 있어야 한다.
+     *    반만 쓰면 **검수를 못 받은 새 글**이 남는다 — 그것은 옛 글보다 나쁘다.
+     *    🔴 상한을 올리지도, 새 회차 id 로 옮겨 가지도 않는다. 사람에게 남긴다.
+     */
+    if (persona !== undefined && allConflict() && crisisStop === null
+      && !BUDGET.canAffordForSource(LIFE_RETRY_CALLS)) {
+      lifeRetryUnaffordable += 1
+      console.log(`   🟡 생활사 재생성을 시작하지 않았다 — 품질·나이까지 완주할 여력이 없다`
+        + ` (${j.sourceArticleId} · 남은 ${BUDGET.leftForCurrentSource}회 · 필요 ${LIFE_RETRY_CALLS}회)`
+        + ' — 사람이 본다')
+    }
+    if (persona !== undefined && allConflict() && crisisStop === null
+      && BUDGET.canAffordForSource(LIFE_RETRY_CALLS)) {
+      lifeRetried += 1
+      for (let n = 0; n < MAX_LIFE_CONFLICT_RETRIES
+        && BUDGET.canAffordForSource(LIFE_RETRY_CALLS)
+        && allConflict() && crisisStop === null; n += 1) {
+        const ev = [...qmap.values()].map((v) => v?.lifeConflict?.evidence ?? '').filter((x) => x !== '')
+        const g2 = await callJson(
+          'draftGen', genReq.system + lifeConflictDirective(persona, ev), genReq.payload, parseGen,
+        )
+        statusCount.set(`lifeRetry:${g2.status}`, (statusCount.get(`lifeRetry:${g2.status}`) ?? 0) + 1)
+        if (g2.value === null) break
+        drafts = g2.value.map((d, i2) => ({
+          sourceArticleId: j.sourceArticleId, draftNo: i2 + 1,
+          title: d.title, body: d.body,
+          safetyVerdict: safetyFilter({ title: d.title, body: d.body }).verdict,
+          originality: measureOriginality(`${d.title}\n${d.body}`, sourceText),
+          generatedAt: nowIso,
+        }))
+        qmap = await askQuality(
           drafts, cache, qKey, statusCount, (n) => { hit += n }, (n) => { miss += n }, persona, ground,
         )
-      /**
-       * 🔴 **모델이 잡은 위기도 같은 계약이다** (2026-09-16).
-       *    결정론이 놓친 것을 품질 판정이 말했으면 그때도 회차를 멈춘다.
-       */
-      const noteCrisis = (): void => {
-        if (crisisStop !== null) return
-        const why = judgeDraftGate({
-          drafts, allLifeConflict: false,
-          qualityHarms: [...qmap.values()].map((v) => v?.harms ?? []),
-        }).reason
-        if (why === null) return
-        crisisStop = why
-        crisisHeld += 1
-        console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${why} · 검수 판정)`)
+        // 🔴 **다시 쓴 결과에도 같은 계약을 건다** — 새 글이 위기면 거기서 멈춘다
+        noteCrisis()
       }
-      noteCrisis()
       /**
-       * 🔴 **생활사가 어긋나면 소재를 버리지 않고 자리를 바꿔 다시 쓴다** (2026-09-13).
+       * 🔴 **집계 정본은 `judgeLifeRetry` 하나다** (2026-09-13).
+       *    여기서 조건을 다시 적으면 fixture 와 러너가 다른 답을 내게 된다.
        *
-       *    어긋난 것은 **이번에 쓴 글**이지 소재가 아니다. 남편 이야기 · 자녀 이야기 ·
-       *    돌봄 이야기는 이 커뮤니티의 알맹이다. 그 사람이 주인공이 아닐 뿐이다.
-       *    그래서 같은 소재로 **관점을 바꿔** 한 번 다시 쓰게 하고,
-       *    그래도 자기 일로 말하면 그때 사람에게 넘긴다.
+       * 🔴 이것은 **생활사 축만** 세는 숫자다. 위해·품질로 막히는 글은 따로 있고,
+       *    최종 HOLD 통계와 섞지 않는다 — 생활사가 풀린 글이 위해로 막힐 수 있다.
+       *    채택 판정은 `applyQuality` 가 지금처럼 위해 우선 fail-closed 로 한다.
        */
-      const allConflict = (): boolean =>
-        qmap.size > 0 && [...qmap.values()].every((v) => applyQuality(v) === 'lifeHistoryConflict')
-      /**
-       * 🔴 **위기 신호가 붙은 회차는 다시 쓰지 않는다** (정본 §4 · §8, 2026-09-16).
-       *    *"crisis_hold 는 재생성하지 않는다 — persona 를 바꿔도 생성하지 않는다."*
-       *    관점을 바꿔 다시 쓰게 하면 같은 위기 소재를 한 번 더 만들 뿐이다.
-       */
-      /**
-       * 🔴 **결정론이 잡은 위기와 모델이 잡은 위기를 함께 본다** (2026-09-16).
-       *    의미 판정으로만 감지된 위기도 재생성 금지에 걸려야 한다 —
-       *    정규식이 놓친 것을 모델이 말했는데 다시 쓰게 하면 같은 소재를 또 만든다.
-       */
-      if (persona !== undefined && allConflict() && crisisStop === null) {
-        lifeRetried += 1
-        for (let n = 0; n < MAX_LIFE_CONFLICT_RETRIES && allConflict() && crisisStop === null; n += 1) {
-          const ev = [...qmap.values()].map((v) => v?.lifeConflict?.evidence ?? '').filter((x) => x !== '')
-          const g2 = await callJson('draftGen', genSystem + lifeConflictDirective(persona, ev), buildGenPayload({
-            title: meta.title, bodyHead: meta.bodyHead, communityAngle: meta.angle,
-            axis: meta.axis, lane: meta.lane,
-          }), parseGen)
-          statusCount.set(`lifeRetry:${g2.status}`, (statusCount.get(`lifeRetry:${g2.status}`) ?? 0) + 1)
-          if (g2.value === null) break
-          drafts = g2.value.map((d, i2) => ({
-            sourceArticleId: j.sourceArticleId, draftNo: i2 + 1,
-            title: d.title, body: d.body,
-            safetyVerdict: safetyFilter({ title: d.title, body: d.body }).verdict,
-            originality: measureOriginality(`${d.title}\n${d.body}`, sourceText),
-            generatedAt: nowIso,
-          }))
-          qmap = await askQuality(
-            drafts, cache, qKey, statusCount, (n) => { hit += n }, (n) => { miss += n }, persona, ground,
-          )
-          // 🔴 **다시 쓴 결과에도 같은 계약을 건다** — 새 글이 위기면 거기서 멈춘다
-          noteCrisis()
-        }
-        /**
-         * 🔴 **집계 정본은 `judgeLifeRetry` 하나다** (2026-09-13).
-         *    여기서 조건을 다시 적으면 fixture 와 러너가 다른 답을 내게 된다.
-         *
-         * 🔴 이것은 **생활사 축만** 세는 숫자다. 위해·품질로 막히는 글은 따로 있고,
-         *    최종 HOLD 통계와 섞지 않는다 — 생활사가 풀린 글이 위해로 막힐 수 있다.
-         *    채택 판정은 `applyQuality` 가 지금처럼 위해 우선 fail-closed 로 한다.
-         */
-        const outcome = judgeLifeRetry([...qmap.values()])
-        if (outcome === 'fixed') lifeFixed += 1
-        else if (outcome === 'held') lifeHeld += 1
-        else lifeUnverified += 1
-      }
-      // 🔴 위기로 멈춘 회차는 **정상 초안이 함께 있어도** 채택하지 않는다
-      const p = pickDraftGated({
-        judgement: j, drafts, seenTitles, seenBodies,
-        sourceUsed: usedSources.has(j.sourceArticleId), quality: qmap, crisisStop,
-      }, nowIso)
-      picks.push(p)
-      if (p.decision === 'AUTO_ADOPT' && p.draftNo !== null) {
-        const d = drafts.find((x) => x.draftNo === p.draftNo)!
-        adopted.push({ pick: p, draft: d, meta, from })
-        usedSources.add(j.sourceArticleId)
-        seenTitles.add(normalize(d.title))
-        seenBodies.add(normalize(d.body))
-      }
-      continue
+      const outcome = judgeLifeRetry([...qmap.values()])
+      if (outcome === 'fixed') lifeFixed += 1
+      else if (outcome === 'held') lifeHeld += 1
+      else lifeUnverified += 1
     }
-
-    // 템플릿 초안도 품질 판정을 받는다 — 🔴 deterministic 통과가 곧 채택이 아니다
-    const qmap2 = await askQuality(
-      drafts, cache, qKey, statusCount, (n) => { hit += n }, (n) => { miss += n },
-      voice.lifeOf(j.sourceArticleId), ground,
-    )
-    /**
-     * 🔴 **템플릿 초안에도 같은 계약을 건다** (2026-09-16).
-     *    템플릿은 제목을 확장해 만들지만, 원천이 위기이면 그 확장도 위기다.
-     */
-    const tmplCrisis = judgeDraftGate({
-      drafts, allLifeConflict: false,
-      qualityHarms: [...qmap2.values()].map((v) => v?.harms ?? []),
-    }).reason
-    if (tmplCrisis !== null) {
-      crisisHeld += 1
-      console.log(`   🔴 위기 신호로 회차를 멈췄다 — ${j.sourceArticleId} (${tmplCrisis} · 템플릿)`)
-    }
+    // 🔴 위기로 멈춘 회차는 **정상 초안이 함께 있어도** 채택하지 않는다
     const p = pickDraftGated({
       judgement: j, drafts, seenTitles, seenBodies,
-      sourceUsed: usedSources.has(j.sourceArticleId), quality: qmap2, crisisStop: tmplCrisis,
+      sourceUsed: usedSources.has(j.sourceArticleId), quality: qmap, crisisStop,
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT' && p.draftNo !== null) {
@@ -1860,7 +1976,7 @@ async function main(): Promise<void> {
     const per = [...BUDGET.perSource.entries()].sort((a, b) => b[1] - a[1])
     const avg = per.length === 0 ? 0 : BUDGET.spent / per.length
     console.log(`   원천별 사용: 최다 ${BUDGET.worstPerSource}회`
-      + ` (정상 경로 기대치 ${CALL_EXPECTED_PATH_PER_SOURCE}회 · 강제 상한 아님) · 평균 ${avg.toFixed(1)}회`
+      + ` (정상 cold 경로 ${CALL_EXPECTED_PATH_PER_SOURCE}회 · 원천당 상한 ${CALL_ALLOWANCE_PER_SOURCE}회) · 평균 ${avg.toFixed(1)}회`
       + `${per.length > 0 ? ` · ${per.slice(0, 3).map(([k, n]) => `${k}×${n}`).join(' ')}` : ''}`)
   }
   console.log(`      종류별 ${[...callKind.entries()].map(([k, n]) => `${k} ${n}`).join(' · ') || '없음'}`
@@ -1883,6 +1999,14 @@ async function main(): Promise<void> {
   console.log(`   🔴 소재를 이유로 막은 원천 0건 (설계상 없음)`
     + ` · 생활사 충돌 재생성 ${lifeRetried}건`
     + ` (생활사 해소 ${lifeFixed} · 생활사 충돌 유지 ${lifeHeld} · 해소 미확인 ${lifeUnverified})`)
+  /**
+   * 🔴 **완주하지 못한 자리를 따로 찍는다** (2026-09-19).
+   *    "검수해서 막았다" 와 "검수를 못 했다" 를 한 칸에 넣으면 구분되지 않는다.
+   */
+  console.log(`      🟡 여력이 없어 묻지 않은 초안 ${qualityUnaffordable}건`
+    + ` · 나이까지 완주 못 해 통과로 읽지 않은 초안 ${qualityIncomplete}건`
+    + ` · 여력이 없어 생활사 재생성을 시작 못 한 원천 ${lifeRetryUnaffordable}건`)
+  console.log('      🔴 셋 다 채택하지 않고 캐시에 완료로 적지 않는다 — 사람이 본다')
   // 🔴 provider 오류 · schema 오류 · 품질 HOLD 를 **나눠 센다.** 합치면 원인을 못 찾는다
   const kindOf = (st: string): string =>
     st === 'ok' ? 'ok'
@@ -1912,7 +2036,9 @@ async function main(): Promise<void> {
   console.log(`   🟢 AUTO_ADOPT ${s.AUTO_ADOPT}건  — 🔴 사람의 ADOPT 가 아니다`)
   console.log(`   🟡 AUTO_HOLD  ${s.AUTO_HOLD}건`)
   console.log(`   🔴 AUTO_DROP  ${s.AUTO_DROP}건`)
-  console.log(`   출처: 템플릿 ${adopted.filter((a) => a.from === 'template').length} · LLM ${adopted.filter((a) => a.from === 'llm').length}`)
+  // 🔴 운영 경로는 하나다 — 출처를 세는 줄이 아니라 **하나임을 확인하는 줄**이다
+  console.log(`   출처: 템플릿 0 · LLM ${adopted.length}`
+    + `${adopted.every((a) => a.from === 'llm') ? '' : ' 🔴 운영 후보에 다른 출처가 섞였다'}`)
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
     console.log(`   ${String(n).padStart(3)}건  ${DRAFT_REASON_LABEL[code as keyof typeof DRAFT_REASON_LABEL] ?? code}`)

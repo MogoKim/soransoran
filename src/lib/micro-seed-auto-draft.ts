@@ -53,7 +53,11 @@ export const DRAFT_RULE_VERSION = 'auto-draft-v5'
  *    40대 후반 Persona 가 `우리 언니(30~32)` 라는 없는 관계를 지어냈다.
  *    🔴 v5 캐시를 재사용하지 않는다 — key 는 판 값과 **실제 프롬프트 digest** 를 함께 본다.
  */
-export const DRAFT_PROMPT_VERSION = 'draft-gen-v6'
+/**
+ * 🔴 2026-09-19 — 생성 계약이 바뀌었다(원천당 초안 1개 · 템플릿 분기 제거).
+ *    판을 올려 옛 회차와 섞이지 않게 한다.
+ */
+export const DRAFT_PROMPT_VERSION = 'draft-gen-v7'
 /**
  * 🔴 품질 판정 프롬프트 판 — **생성과 따로 센다**. 판정만 바뀔 때 생성을 다시 하지 않기 위해서다.
  *    v5 — 같은 `lifeConflict` 축에서 **나이·세대 모순**을 함께 본다. v4 캐시를 재사용하지 않는다.
@@ -65,7 +69,17 @@ export const DRAFT_PROVENANCE = 'machine-generated'
 export const DRAFT_SOURCES = ['template', 'llm'] as const
 export type DraftSource = (typeof DRAFT_SOURCES)[number]
 /** 원천 하나당 만들 초안 상한 */
-export const MAX_DRAFTS_PER_SOURCE = 2
+/**
+ * 🔴 **원천당 운영 초안 1개** (2026-09-19, 2에서 줄였다).
+ *
+ *    옛 판은 초안 2개를 만들고 둘 다 검수한 뒤 `draftNo` 순서로 **처음 통과한 것**을
+ *    골랐다. 비교해서 나은 것을 고른 적이 없다 — 그냥 앞의 것이었다.
+ *    두 번째 초안은 첫 번째가 떨어졌을 때의 예비였고, 그 예비는 **같은 회차 안에서
+ *    조용히 소비**됐다. 사람은 첫 글이 왜 떨어졌는지 보지 못했다.
+ *    🔴 이제 하나만 만들고, 그 하나에 필요한 검수만 한다.
+ *       떨어지면 명시적인 재생성 사유가 있을 때만 다시 쓰고, 아니면 사람에게 남긴다.
+ */
+export const MAX_DRAFTS_PER_SOURCE = 1
 
 /** 🔴 제품 금지어 — CLAUDE.md 규칙. 초안에 있으면 버린다 */
 export const BANNED_WORDS: readonly string[] = ['시니어', '어르신', '노인', '실버'] as const
@@ -86,7 +100,7 @@ export type DraftReason =
 export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   lifeHistoryConflict: '글쓴이의 삶과 어긋나는 1인칭 경험',
   ok: '통과',
-  noDraft: '템플릿이 초안을 만들지 못했다 (소재를 못 찾음)',
+  noDraft: '초안을 만들지 못했다 (생성 실패 · 답을 못 읽음)',
   emptyTitle: '제목이 비었다',
   emptyBody: '본문이 비었다',
   safetyNotPass: 'safety 가 pass 가 아니다',

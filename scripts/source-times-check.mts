@@ -173,6 +173,13 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
       env: {
         ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
         NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+        /**
+         * 🔴 **원천마다 다른 글을 받는다** (2026-09-19).
+         *    가짜 provider 의 고정 응답은 이 합성 원문과 문장이 겹쳐
+         *    `copiedFromSource` 로 떨어진다 — 그러면 **시각 전달**을 재려던
+         *    이 검사가 시각까지 가 보지도 못한다. 여기서 재는 것은 베낌이 아니다.
+         */
+        FAKE_PROVIDER_VARY_BY_SOURCE: '1',
         // 🔴 시험용 임시 값. 운영 예산이 아니다
         SORAN_LLM_DAILY_BUDGET_USD: '1000',
         SORAN_LLM_RESERVE_HEADROOM: '1.5',
