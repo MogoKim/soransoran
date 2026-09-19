@@ -15,11 +15,20 @@
  *      ④ requiredValue 를 그 카드가 실제로 충족하는가
  *      ⑤ 모르는 fact·값은 통과시키지 않는다
  *
- * 🔴 **검증에 실패하면 다른 Persona 를 조용히 고르지 않는다.**
- *    관찰·생각·물음으로 소재가 살면 **같은 사람으로 자리를 낮추고**,
- *    당사자 경험이 알맹이면 HOLD 한다.
+ * 🔴 **검증에 실패하면 HOLD 한다** (2026-09-19 실측 보정).
+ *
+ *    앞판은 실패를 `QUESTION` 으로 **자동 강등**해서 그대로 생성했다. 그런데
+ *    그렇게 만든 A·C 두 편이 초안에서 **다시 자기 경험을 말했다**
+ *    ("우리 남편은…" · "3시간씩 일하는 알바를 하고 있는데").
+ *    "자격 검증 실패" 를 "다른 자리로는 만들어도 됨" 으로 바꾸는 것은 fail-closed 가 아니다.
+ *
+ *    🔴 비자기 경험 글이 맞다고 보면 **모델이 처음부터 그 자리를 골라야 한다.**
+ *      · SELF 선택 + 검증 성공 → 생성
+ *      · SELF 선택 + 검증 실패 → **HOLD**
+ *      · 처음부터 QUESTION/OBSERVATION/REFLECTION 선택 → 그 자리로 생성
  *
  * 🔴 `근거 없음 = SELF_EXPERIENCE 허가` 경로는 어디에도 없다.
+ * 🔴 검증 실패 후 다른 Persona 를 조용히 고르지도 않는다.
  */
 import type { PoolCard } from '../persona-pool-card'
 import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
@@ -30,7 +39,7 @@ import {
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
 
-export const SPEAKER_PLAN_VERSION = 'speaker-plan-v2'
+export const SPEAKER_PLAN_VERSION = 'speaker-plan-v3'
 
 /** 화자가 서는 자리 */
 export const STANCES = ['SELF_EXPERIENCE', 'OBSERVATION', 'REFLECTION', 'QUESTION'] as const
@@ -212,23 +221,6 @@ export function verifySelfWarrants(input: {
   return { ok: true }
 }
 
-/**
- * 🔴 **자리를 낮춰도 이야기가 살아남는가.**
- *    이 글의 역할이 경험 공감 하나뿐이면 관찰로 바꾸는 순간 알맹이가 없어진다.
- */
-export function stanceKeepsStory(roles: readonly ContentRole[]): boolean {
-  return !(roles.length === 1 && roles[0] === 'experienceResonance')
-}
-
-/** 자격을 못 채웠을 때 어느 자리로 내려갈까 — 🔴 원문이 닫는 방식을 따른다 */
-export function fallbackStance(
-  closingIntent: ClosingIntent | null, roles: readonly ContentRole[],
-): Stance {
-  if (closingIntent === 'ask') return 'QUESTION'
-  if (roles.includes('experienceResonance')) return 'OBSERVATION'
-  return 'REFLECTION'
-}
-
 const HOLD = (reason: string, rejection: WarrantRejection | null = null): SpeakerPlan => ({
   decision: 'hold', personaCode: null, stance: null, selfBasis: null, warrants: [],
   universalReason: '', protectedFacts: [], closingIntent: null, contentRoles: [],
@@ -361,24 +353,14 @@ export function parseSpeakerPlan(
     }
   }
   /**
-   * 🔴 **허가하지 않는다. 다른 사람을 고르지도 않는다.**
-   *    관찰·생각·물음으로 소재가 살면 **같은 사람으로** 자리를 낮추고,
-   *    당사자 경험이 알맹이면 HOLD 한다.
+   * 🔴 **허가하지 않으면 만들지 않는다.**
+   *    자리를 낮춰 생성하지 않는다 — 그렇게 만든 글이 다시 자기 경험을 말했다.
+   *    다른 Persona 를 고르지도 않는다.
    */
   const why = `${WARRANT_REJECTION_LABEL[v.why]}${v.detail === '' ? '' : ` (${v.detail})`}`
-  if (!stanceKeepsStory(base.contentRoles)) {
-    return {
-      plan: withBase(HOLD(`1인칭 허가 실패 — ${why}. 당사자 경험이 알맹이라 자리를 낮출 수 없다`, v.why)),
-      dropped, schemaProblems: problems,
-    }
-  }
   return {
-    plan: withBase({
-      decision: 'ok', personaCode, stance: fallbackStance(closingIntent, base.contentRoles),
-      selfBasis: null, warrants: [], universalReason: '',
-      reason: `1인칭 허가 실패 — ${why}. 같은 사람으로 자리를 낮췄다`, rejection: v.why,
-      ...base,
-    }),
+    plan: withBase(HOLD(
+      `1인칭 허가 실패 — ${why}. 🔴 자리를 낮춰 만들지 않는다`, v.why)),
     dropped, schemaProblems: problems,
   }
 }

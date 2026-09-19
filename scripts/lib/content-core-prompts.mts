@@ -19,7 +19,7 @@ import {
 } from '../../src/lib/content-core/review'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
 
-export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p1'
+export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p2'
 export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p6'
 export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p6'
 
@@ -67,6 +67,12 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '너는 40대 중반~60대 중반 여성 커뮤니티에 올릴 글의 **화자를 정한다.**',
     '[원문]을 읽고, [후보]에서 **이 이야기를 할 자격이 있는 사람**을 한 명 고른다.',
     '🔴 글을 쓰지 않는다. 요약하지도 않는다.',
+    '',
+    '## 🔴 원문은 `spans` 로 나뉘어 있다',
+    '   각 span 의 `kind`(`title` · `head` · `tail`)가 **곧 `evidenceRef` 다.**',
+    '   근거를 적을 때는 그 글자가 **실제로 들어 있는 span 의 kind** 를 쓴다.',
+    '   예) 제목에만 있는 말이면 `evidenceRef: "title"`, 본문 앞이면 `"head"`.',
+    '   🔴 자리가 틀리면 근거가 **없는 것으로 처리되어** 1인칭이 취소된다.',
     '',
     '## 자리(stance) — 🔴 자격이 있을 때만 위로 올라간다',
     ...Object.entries(STANCE_LABEL).map(([k, v]) => `- ${k}: ${v}`),
@@ -132,8 +138,15 @@ export function buildSpeakerPlanSystemPrompt(): string {
 }
 
 /**
+ * 🔴 **원문을 span 으로 나눠 보낸다** (2026-09-19 실측 보정).
+ *
+ *    앞판은 제목과 본문을 **한 문자열로 붙여** 보내면서 출력에는 `title`/`head`/`tail`
+ *    을 요구했다. 모델은 어느 글자가 어느 자리에 있는지 알 방법이 없었고,
+ *    그래서 A(`spouse`)·C(`work`) 의 허가 근거와 C 의 `3시간`·`9명` 이 전부
+ *    `evidenceNotInSource` 로 거절됐다 — **지시문 문구가 아니라 준 정보의 문제였다.**
+ *
  * 🔴 **말투 참고 댓글 본문은 보내지 않는다.** 자격 판정에 필요 없다.
- * 🔴 개인정보·회원 데이터도 보내지 않는다 — 근거는 이미 마스킹되고 300자로 묶였다.
+ * 🔴 원문 내용·개인정보 범위는 늘리지 않는다 — 이미 마스킹되고 300자로 묶인 그 span 들이다.
  */
 export function buildSpeakerPlanPayload(input: {
   packet: SourceEvidencePacket
@@ -141,9 +154,15 @@ export function buildSpeakerPlanPayload(input: {
   load?: Readonly<Record<string, number>>
 }): string {
   const load = input.load ?? {}
+  const p = input.packet
   return JSON.stringify({
-    원문: sourceBlock(input.packet),
-    후보: input.personas.map((p) => `${qualificationLine(p)} · 맡은 수 ${load[p.code] ?? 0}`),
+    원문: {
+      // 🔴 packet 에 **실제로 있는 span 만** — 없는 자리를 지어내 보내지 않는다
+      spans: p.spans.map((x) => ({ kind: x.kind, text: x.text })),
+      bodyLength: p.bodyLength,
+      truncated: p.truncated,
+    },
+    후보: input.personas.map((x) => `${qualificationLine(x)} · 맡은 수 ${load[x.code] ?? 0}`),
   })
 }
 

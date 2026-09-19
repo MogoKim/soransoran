@@ -11,7 +11,7 @@
  * 🔴 **이 판의 핵심**: `SELF_EXPERIENCE` 는 **코드가 검증한 허가 근거** 없이 나올 수 없다.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, personaInputOf, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
@@ -210,7 +210,8 @@ console.log('\n① 🔴 🔴 C 알바 원문 — SELF 는 파트타임 Persona �
   check('🔴 🔴 **카드 값을 바로 적어도 파트타임을 충족 못 하면 불가**',
     unmet.plan.stance !== 'SELF_EXPERIENCE' && unmet.plan.rejection === 'requiredValueUnmet',
     `${unmet.plan.stance} / ${unmet.plan.rejection}`)
-  check('🔴 🔴 **다른 Persona 를 조용히 고르지 않는다**', unmet.plan.personaCode === 'P02')
+  check('🔴 🔴 **다른 Persona 를 조용히 고르지 않는다 — 아무도 고르지 않고 멈춘다**',
+    unmet.plan.personaCode === null && unmet.draft === null && unmet.cost.totalCalls === 1)
 
   // 🔴 4차 결함 재현 — 근거 없이 SELF 를 주장
   const bare = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
@@ -289,8 +290,11 @@ console.log('\n③ 🔴 허가 근거 검증 — 없는 사람 · 없는 근거 
   check('🔴 🔴 **원문에 없는 근거로는 SELF 를 허가하지 않는다**',
     noEvidence.plan.stance !== 'SELF_EXPERIENCE'
     && noEvidence.plan.rejection === 'evidenceNotInSource')
-  check('🔴 소재가 사니 같은 사람으로 자리를 낮췄다',
-    noEvidence.plan.personaCode === 'P01' && noEvidence.plan.stance === 'QUESTION')
+  check('🔴 🔴 **허가 실패는 자동 강등이 아니라 HOLD 다**',
+    noEvidence.plan.stance === null && noEvidence.plan.personaCode === null
+    && noEvidence.draft === null, `${noEvidence.plan.stance}`)
+  check('🔴 🔴 **초안 호출 0 — 계획 1회에서 멈춘다**',
+    noEvidence.cost.totalCalls === 1, `${noEvidence.cost.totalCalls}회`)
 
   const oddFact = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
     personas: [partTime],
@@ -370,28 +374,58 @@ console.log('\n⑤ 🔴 자격이 필요 없는 글 — 과차단하지 않되 *
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑥ 🔴 강등과 HOLD — 소재가 살면 낮추고, 당사자 경험이 알맹이면 멈춘다')
+console.log('\n⑥ 🔴 허가 실패는 HOLD · 처음부터 고른 낮은 자리는 생성')
 // ─────────────────────────────────────────────────────────
 {
   const DRAFT = { title: '남편 집안일 이야기', body: '방송에서는 곧잘 하던데 실제로는 어떠신가요.' }
-  const bad = (roles: string[]): unknown => plan({
+  const badSelf = (roles: string[]): unknown => plan({
     personaCode: 'P08', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
     contentRoles: roles, closingIntent: 'ask',
     speakerWarrants: [warrant({ fact: 'spouse', requiredValue: '있음',
       evidenceText: '왜 저희 애아빠는 안그럴까요', cardValue: '비혼' })],
   })
-  const lowered = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
-    personas: [single], canned: { plan: bad(['conversationSpark', 'experienceResonance']), draft: DRAFT } })
-  check('🟢 🔴 **물음으로 바꿔도 소재가 살면 자리를 낮춘다**',
-    lowered.plan.stance === 'QUESTION' && lowered.plan.personaCode === 'P08' && lowered.draft !== null)
+  for (const [name, roles] of [
+    ['소재가 살 수 있는 글', ['conversationSpark', 'experienceResonance']],
+    ['당사자 경험이 알맹이뿐인 글', ['experienceResonance']],
+  ] as const) {
+    const a = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
+      personas: [single], canned: { plan: badSelf([...roles]), draft: DRAFT } })
+    check(`🔴 🔴 **SELF 허가 실패 → HOLD (${name})**`,
+      a.plan.stance === null && a.plan.personaCode === null && a.draft === null
+      && a.plan.rejection === 'requiredValueUnmet' && a.cost.totalCalls === 1,
+      `${a.plan.stance} / ${a.cost.totalCalls}회`)
+  }
+  check('🔴 🔴 **자동 강등 경로가 코드에 없다**', (() => {
+    const src = readFileSync('src/lib/content-core/speaker.ts', 'utf-8')
+    return !src.includes('fallbackStance') && !src.includes('stanceKeepsStory')
+  })())
+
+  // 🟢 모델이 **처음부터** 낮은 자리를 고른 경우는 그대로 만든다
+  const chosen = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
+    personas: [single],
+    canned: { plan: plan({ personaCode: 'P08', stance: 'QUESTION', closingIntent: 'ask',
+      contentRoles: ['conversationSpark'] }), draft: DRAFT } })
+  check('🟢 🔴 **처음부터 QUESTION 을 고르면 그 자리로 만든다**',
+    chosen.plan.stance === 'QUESTION' && chosen.plan.personaCode === 'P08'
+    && chosen.draft !== null && chosen.cost.totalCalls === 3)
   check('🔴 낮춘 자리가 생성 지시에 들어간다',
     sentOf('draftGen')[0]!.system.includes('이 글 속 경험은 당신 것이 아닙니다'))
+  check('🔴 검수도 낮춘 자리를 안다',
+    sentOf('semanticReview')[0]!.system.includes('원문 속 경험을 자기 일로 말하면'))
 
-  const held = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
-    personas: [single], canned: { plan: bad(['experienceResonance']), draft: DRAFT } })
-  check('🔴 🔴 **당사자 경험이 알맹이뿐이면 HOLD**',
-    held.plan.personaCode === null && held.draft === null
-    && held.plan.rejection === 'requiredValueUnmet', held.plan.reason)
+  // 🔴 낮춘 자리인데 초안이 자기 경험을 말하면 adopt 아님
+  const violates = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
+    personas: [single],
+    canned: { plan: plan({ personaCode: 'P08', stance: 'QUESTION', closingIntent: 'ask',
+      contentRoles: ['conversationSpark'] }),
+      draft: { title: '우리 남편은요', body: '저희 남편은 집안일을 통 안 해요. 다들 어떠세요.' },
+      review: { ...EMPTY_REVIEW, confidence: 0.9, lifeContradictions: [
+        { fact: 'spouse', drafted: '남편이 있다', card: '비혼',
+          evidence: '저희 남편은 집안일을 통 안 해요.' },
+      ] } } })
+  check('🔴 🔴 **낮춘 자리에서 자기 경험을 말하면 adopt 아님**',
+    violates.review.machineOutcome === 'hold'
+    && violates.review.lifeContradictions[0]!.fact === 'spouse')
 
   const modelHold = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
     personas: [single], canned: { plan: { decision: 'hold', holdReason: '쓸 사람이 없다' }, draft: DRAFT } })
@@ -559,6 +593,90 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
   })
   check('🔴 생활사는 자격 장치이지 글의 재료가 아니라고 말한다', gen.includes('글의 재료가 아닙니다'))
   check('🔴 원문에 없는 사건을 만들지 말라고 말한다', gen.includes('사건 · 날짜 · 대사 · 겪은 일'))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 을 구분할 수 있어야 한다')
+// ─────────────────────────────────────────────────────────
+{
+  const DRAFT_C = { title: '여행 선물 하시나요',
+    body: '대신 서 준 사람은 없고 비는 시간은 제가 다른 날에 채웠어요. 3시간씩 일하고 9명이에요. 다들 사 가시나요.' }
+
+  // 🔴 payload 가 span 구조를 실제로 담는가
+  const probe = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
+    personas: [partTime],
+    canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      protectedFacts: [fact('number', '3시간', 'head'), fact('number', '9명', 'head')],
+      contentRoles: ['usefulAnswer', 'conversationSpark'],
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
+        evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT_C } })
+  const sent = JSON.parse(sentOf('speakerPlan')[0]!.payload) as
+    { 원문: { spans: { kind: string; text: string }[]; bodyLength: number; truncated: boolean } }
+  check('🔴 🔴 **계획 payload 가 span 을 kind 와 함께 보낸다**',
+    Array.isArray(sent.원문.spans) && sent.원문.spans.every((x) => typeof x.kind === 'string'))
+  check('🔴 🔴 **제목과 본문이 서로 다른 span 으로 구분된다**',
+    sent.원문.spans.find((x) => x.kind === 'title')!.text === SRC.C.title
+    && sent.원문.spans.find((x) => x.kind === 'head')!.text.includes('누가 대타뛰어준건'))
+  check('🔴 packet 에 없는 span 은 보내지 않는다',
+    sent.원문.spans.every((x) => ['title', 'head', 'tail'].includes(x.kind))
+    && !sent.원문.spans.some((x) => x.kind === 'tail'))
+  check('🔴 본문 길이·잘림 여부가 함께 간다',
+    sent.원문.bodyLength === SRC.C.body.length && sent.원문.truncated === false)
+  check('🔴 원문 내용 범위는 늘어나지 않았다',
+    probe.evidence.totalEvidenceChars <= EVIDENCE_CHAR_BUDGET)
+  check('🔴 계획 지시가 kind 가 곧 evidenceRef 라고 말한다',
+    buildSpeakerPlanSystemPrompt().includes('곧 `evidenceRef` 다'))
+
+  // 🔴 🔴 C 의 알바 근거가 **title** 에서 검증된다
+  check('🔴 🔴 **C — 알바 근거가 title 로 검증되어 SELF 가 유지된다**',
+    probe.plan.stance === 'SELF_EXPERIENCE' && probe.plan.personaCode === 'P01'
+    && probe.plan.warrants[0]!.evidenceRef === 'title', probe.plan.reason)
+  // 🔴 🔴 C 의 3시간·9명이 **head** 에서 검증된다
+  check('🔴 🔴 **C — 3시간·9명이 head 에서 protectedFacts 로 살아남는다**',
+    probe.plan.protectedFacts.map((f) => f.text).join(',') === '3시간,9명'
+    && probe.dropped.length === 0, JSON.stringify(probe.dropped))
+  check('🔴 🔴 **protectedFacts 검증이 실제로 작동한다 — 빠지면 잡는다**', (await run({
+    id: SRC.C.id, title: SRC.C.title, body: SRC.C.body, personas: [partTime],
+    canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      protectedFacts: [fact('number', '3시간', 'head'), fact('number', '9명', 'head')],
+      contentRoles: ['usefulAnswer'],
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
+        evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }),
+      draft: { title: '선물', body: '비는 시간은 제가 다른 날 채웠어요. 사람이 꽤 되는데 다들 사 가시나요.' } },
+  })).review.deterministic.failures.some((f) => f.code === 'protectedFactMissing'))
+
+  // 🔴 🔴 A 의 남편 근거가 **title** 에서 검증된다
+  const a = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
+    personas: [partTime],
+    canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      protectedFacts: [fact('relation', '남편', 'title')],
+      contentRoles: ['conversationSpark', 'experienceResonance'],
+      speakerWarrants: [warrant({ fact: 'spouse', requiredValue: '있음',
+        evidenceRef: 'title', evidenceText: '남편이 집안일 많이 돕나요?', cardValue: '기혼' })] }),
+      draft: { title: '방송 속 남편들 보면요',
+        body: '화면에 나오는 남편들은 집안일을 곧잘 하던데 우리 남편은 딴판이에요. 다들 어떠세요.' } } })
+  check('🔴 🔴 **A — 남편 근거가 title 로 검증되어 SELF 가 유지된다**',
+    a.plan.stance === 'SELF_EXPERIENCE' && a.plan.warrants[0]!.evidenceRef === 'title'
+    && a.review.machineOutcome === 'adopt', a.plan.reason)
+
+  // 🔴 같은 글자라도 **자리가 틀리면** 거부한다
+  const wrongRef = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
+    personas: [partTime],
+    canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      protectedFacts: [], contentRoles: ['usefulAnswer'],
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
+        evidenceRef: 'head', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT_C } })
+  check('🔴 🔴 **같은 글자라도 ref 가 틀리면 거부한다 (title 내용을 head 라 하면)**',
+    wrongRef.plan.stance === null && wrongRef.plan.rejection === 'evidenceNotInSource'
+    && wrongRef.cost.totalCalls === 1)
+  const wrongRef2 = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
+    personas: [partTime],
+    canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      protectedFacts: [fact('number', '3시간', 'title')], contentRoles: ['usefulAnswer'],
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
+        evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT_C } })
+  check('🔴 protectedFact 도 자리가 틀리면 버린다',
+    wrongRef2.dropped.some((d) => d.text === '3시간' && d.why === 'notInEvidence'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
