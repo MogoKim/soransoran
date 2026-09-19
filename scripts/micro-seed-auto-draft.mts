@@ -107,7 +107,6 @@ import { judgeCrisisSignal, SAFETY_SIGNAL_VERSION } from '../src/lib/micro-seed-
 import { generateWithRetries } from '../src/lib/micro-seed-draft-run'
 import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { selectSupplyPath, V1_STOPPED_FOR_V2 } from '../src/lib/content-core/flag'
 import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 
 const DATA_DIR = '.microseed-data'
@@ -1393,16 +1392,6 @@ function loadVoice(sources: readonly { sourceArticleId: string; title: string; b
 
 async function main(): Promise<void> {
   await loadEnvLocal()
-  /**
-   * 🔴 **경로 선택은 정본 하나가 한다** (`selectSupplyPath`).
-   *    스위치가 꺼져 있으면(기본) 아래는 한 줄도 다르게 돌지 않는다 —
-   *    켜져 있으면 v1 은 **아무것도 만들지 않고** 멈춘다. 두 경로가 섞이지 않는다.
-   *    🔴 이 분기는 임시다. v2 가 운영으로 전환되면(M5) 이 파일과 함께 지운다.
-   */
-  if (selectSupplyPath(process.env) === 'v2') {
-    console.log(`\n${V1_STOPPED_FOR_V2}\n`)
-    return
-  }
   if (APPLY && !CALL) fail('--apply 는 --call 과 함께 씁니다')
 
   const mode = !CALL ? '오프라인 계획' : APPLY ? '생성 + 파일' : '생성 (파일 write 0 · cache write 있음)'

@@ -17,7 +17,9 @@ export const REVIEW_VERSION = 'review-v1'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
-  'exactAnchorAltered', 'selfAgeConflict', 'voiceContentLeak',
+  'exactAnchorAltered', 'selfAgeConflict',
+  // 🔴 `voiceContentLeak` 을 뺐다 (2026-09-19) — 글자만 보고 "같은 말" 과 "가져온 것" 을
+  //    가를 수 없다. 의미 검수(`voiceFidelity`)와 사람이 본다.
 ] as const
 export type DeterministicCode = (typeof DETERMINISTIC_CODES)[number]
 
@@ -28,7 +30,6 @@ export const DETERMINISTIC_LABEL: Readonly<Record<DeterministicCode, string>> = 
   schemaInvalid: '형식이 맞지 않는다',
   exactAnchorAltered: '그대로 남기기로 한 말이 바뀌었다',
   selfAgeConflict: '글쓴이 나이와 어긋난다',
-  voiceContentLeak: '말투 참고의 사건을 자기 경험으로 가져왔다',
 }
 
 export type DeterministicFailure = { code: DeterministicCode; detail: string }

@@ -63,90 +63,13 @@ export function buildVoiceEvidence(input: {
   }
 }
 
-/** 낱말로 쪼갠다 — 🔴 2자 이상 한글·영숫자만. 조사·기호는 버린다 */
-export function contentTokens(text: string): string[] {
-  return text
-    .split(/[^가-힣A-Za-z0-9]+/)
-    .map((w) => w.trim())
-    .filter((w) => w.length >= 2)
-}
-
-export type VoiceLeak = { leaked: boolean; phrases: string[] }
-
 /**
- * 🔴 **사건을 가리키는 말** — 관계 · 장소 · 기관. 여기 닿지 않으면 deterministic 은 막지 않는다.
+ * 🔴 **말투 참고의 사건 누수는 deterministic 이 막지 않는다** (2026-09-19 보정).
  *
- *    말투 표현(`저도` · `비슷하게` · `느꼈어요`)은 **가져와도 되는 것**이다.
- *    앞판은 낱말 하나만 겹쳐도 누수로 잡아 정상 말투를 막았다.
+ *    앞판은 "붙은 낱말 2개 + 관계·장소 낱말" 로 막았다. 그런데 원문이 *"배우자 은퇴"* 이고
+ *    초안이 *"남편 퇴직"* 인데 참고 댓글에도 그 말이 있으면 **정상 글이 막혔다.**
+ *    같은 말을 쓴 것과 참고에서 **가져온 것**을 글자만 보고 가를 수 없다.
+ *
+ * 🔴 그래서 이 판정은 **의미 검수(`voiceFidelity`)와 사람 검토**가 맡는다.
+ *    deterministic 에는 확정 가능한 것만 남긴다 — 사전도 유사도 규칙도 만들지 않는다.
  */
-const EVENT_MARKERS: readonly RegExp[] = [
-  /남편|아내|시어머니|시아버지|시댁|친정|장인|장모|처가|아들|딸|손주|며느리|사위|올케|형님|동서/,
-  /병원|한의원|약국|응급실|요양원|장례식장|학교|학원|회사|직장|가게|시장|마트|교회|절/,
-  /수술|입원|퇴원|진단|장례|이사|결혼|이혼|취업|퇴직|입학|졸업/,
-]
-
-function looksLikeEvent(text: string): boolean {
-  return EVENT_MARKERS.some((re) => re.test(text))
-}
-
-/** 참고 문장에서 **붙어 있는 낱말 2개 이상**을 뽑는다 */
-function adjacentPhrases(text: string): string[] {
-  const out: string[] = []
-  for (const chunk of text.split(/[.!?…\n]+/)) {
-    const ws = contentTokens(chunk)
-    for (let n = 2; n <= Math.min(4, ws.length); n += 1) {
-      for (let i = 0; i + n <= ws.length; i += 1) out.push(ws.slice(i, i + n).join(' '))
-    }
-  }
-  return [...new Set(out)]
-}
-
-/** 띄어쓰기를 무시하고 들어 있는가 — 초안이 조사를 붙여 써도 잡는다 */
-function containsLoose(haystack: string, phrase: string): boolean {
-  const parts = phrase.split(' ')
-  let from = 0
-  for (const p of parts) {
-    const i = haystack.indexOf(p, from)
-    if (i < 0) return false
-    // 🔴 붙어 있어야 한다 — 글 전체에 흩어져 있는 것은 같은 이야기가 아니다
-    if (from > 0 && i - from > 12) return false
-    from = i + p.length
-  }
-  return true
-}
-
-/**
- * 🔴 **참고 댓글의 사건이 초안에 들어왔는가** — 확실한 것만 잡는다.
- *
- *    셋을 모두 만족할 때만 누수다:
- *      ① 참고에서 **붙어 있던 낱말 2개 이상**이 초안에도 붙어서 나온다
- *      ② 그 말이 **관계 · 장소 · 기관**을 가리킨다 (말투 표현이 아니다)
- *      ③ 원문 근거에도 소재 판정에도 없다
- *
- * 🔴 애매한 것은 여기서 막지 않는다 — 의미 검수(`voiceFidelity`)와 사람이 본다.
- *    deterministic 이 애매한 것을 막으면 정상 말투가 통째로 사라진다.
- */
-export function voiceLeak(input: {
-  draftText: string
-  samples: readonly string[]
-  evidenceText: string
-  essence: SourceEssence | null
-}): VoiceLeak {
-  const known = [
-    input.evidenceText,
-    input.essence?.coreMoment ?? '',
-    ...(input.essence?.anchors ?? []).map((a) => a.text),
-    input.essence?.participationHook ?? '',
-  ].join(' ')
-  const found: string[] = []
-  for (const sample of input.samples) {
-    for (const phrase of adjacentPhrases(sample)) {
-      if (!looksLikeEvent(phrase)) continue
-      if (!containsLoose(input.draftText, phrase)) continue
-      if (containsLoose(known, phrase)) continue
-      found.push(phrase)
-    }
-  }
-  const phrases = [...new Set(found)]
-  return { leaked: phrases.length > 0, phrases }
-}

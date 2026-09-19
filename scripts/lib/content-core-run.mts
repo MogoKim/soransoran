@@ -19,7 +19,7 @@ import { canGenerate, parseEssence } from '../../src/lib/content-core/essence'
 import type { SourceEssence } from '../../src/lib/content-core/essence'
 import { planSpeaker } from '../../src/lib/content-core/speaker'
 import type { SpeakerFacts, SpeakerPlan } from '../../src/lib/content-core/speaker'
-import { buildVoiceEvidence, voiceLeak } from '../../src/lib/content-core/voice-evidence'
+import { buildVoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import {
   alteredExactAnchors, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
@@ -189,7 +189,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     return blank(null, dropped, null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE,
       'hold', `소재 판정을 완주하지 못했다 (${INCOMPLETE_LABEL[eC.reason ?? 'noResponse']})`)
   }
-  const gen = canGenerate(eParse.essence)
+  const gen = canGenerate(eParse.essence, eParse.schemaProblems)
   if (!gen.ok) {
     return blank(eParse.essence, dropped, null, null, null, noDet, null, INCOMPLETE, null, INCOMPLETE, 'hold', gen.why)
   }
@@ -233,8 +233,6 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   if (copy.copied) failures.push({ code: 'copiedFromSource', detail: copy.reason })
   const altered = alteredExactAnchors(essence, draftText)
   if (altered.length > 0) failures.push({ code: 'exactAnchorAltered', detail: altered.join(' · ') })
-  const leak = voiceLeak({ draftText, samples: voice.samples, evidenceText: evidenceText(packet), essence })
-  if (leak.leaked) failures.push({ code: 'voiceContentLeak', detail: leak.phrases.slice(0, 5).join(' · ') })
   if (persona.ageBand != null && persona.ageBand.trim() !== '') {
     // 🔴 정본이 판정하지 못하면(null) 막지 않는다 — 모르는 것을 결함으로 세지 않는다
     const sa = judgeSelfAgeConflict({ ageBand: persona.ageBand, text: draftText })

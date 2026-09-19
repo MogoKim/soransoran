@@ -75,42 +75,24 @@ export type SourceEvidencePacket = {
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
 /**
- * 🔴 **낱말 하나로 막지 않는다.** *"사진 정리하다 울었어요"* 는 완결된 글이고,
- *    *"아래 사진 보시고 알려주세요"* 는 사진을 봐야 아는 글이다. 가르는 것은
- *    **지시어 + 보라는 요청**이지 `사진` 이라는 낱말이 아니다.
- *    앞판은 낱말만 보고 정상 글을 막았다.
- */
-const DEICTIC = '(?:이|그|저|아래|위|여기|첨부(?:한|된)?|다음|밑)'
-const VISUAL = '(?:사진|이미지|짤|캡처|캡쳐|그림|영상)'
-const ASK_TO_SEE = '(?:보시고|보세요|봐\\s*주|참고|참조|확인)'
-const NEEDS_IMAGE_RE = new RegExp(
-  `${DEICTIC}\\s*${VISUAL}|${VISUAL}\\s*(?:처럼|같이)?\\s*${ASK_TO_SEE}|${VISUAL}\\s*첨부`,
-)
-const NEEDS_LINK_RE = /\[링크\]|링크\s*(?:참고|참조|보세요|확인|겁니다)|주소\s*남겨|여기\s*클릭/
-const NEEDS_PRIOR_RE = /지난\s*(?:글|번\s*글)|앞\s*글|이전\s*글|전에\s*쓴\s*글|앞서\s*말|그\s*글\s*보고|이어서/
-
-/**
- * 🔴 **명시 낱말이 없어도 앞 대화를 알아야 하는 글이 있다.**
- *    가리키는 말만 있고 가리킬 것이 글 안에 없으면 이어지는 글이다 —
- *    *"그거 어떻게 됐어요?"* 처럼.
- */
-const BARE_DEICTIC_RE = /(?:그거|그건|그게|저거|이거)\s*(?:어떻게|어떤|왜|언제|누가)?/
-/**
- * 🔴 **가리킬 것이 글 안에 있는가** — 낱말 수로 본다.
+ * 🔴 **외부 자료 없이는 수행할 수 없음이 명백할 때만** 막는다.
  *
- *    한국어 형태소 분석 없이 "명사인가" 를 가릴 수 없다. 대신 **글에 재료가
- *    얼마나 있는가**를 본다 — 가리키는 말을 빼고 남는 것이 이보다 적으면
- *    가리킬 것이 글 안에 없다고 본다.
- *    🔴 어림이다. 그래서 **짧은 글에만** 걸리고, 재료가 있는 글은 통과한다.
+ *    `이 사진` · `그 사진` 은 그 자체로 의존이 아니다 —
+ *    *"이 사진 정리하다 울었어요"* · *"그 사진만 보면 엄마 생각이 나요"* 는
+ *    완결된 글이다. 앞판은 지시어 + 사진이면 막아서 이런 글을 통째로 잃었다.
+ *
+ * 🔴 **애매한 의존은 여기서 막지 않는다.** 소재 판정(`coreMoment` 가 안 나오면 HOLD)과
+ *    사람 검토가 맡는다. deterministic 은 확정 가능한 것만 본다.
  */
-export const DEICTIC_ANTECEDENT_MIN_TOKENS = 6
-function hasAntecedent(text: string): boolean {
-  const words = new Set(
-    text.replace(/(?:그거|그건|그게|저거|이거|그것|이것)/g, ' ')
-      .split(/[^가-힣A-Za-z0-9]+/).filter((w) => w.length >= 2),
-  )
-  return words.size >= DEICTIC_ANTECEDENT_MIN_TOKENS
-}
+const VISUAL = '(?:사진|이미지|짤|캡처|캡쳐|그림|영상)'
+/** 🔴 "보고 알려 달라" — 자료를 봐야 **글쓴이의 요청을 수행할 수 있다** */
+const ASK_TO_SEE_RE = new RegExp(
+  `${VISUAL}[^.!?\\n]{0,12}?(?:보시고|보세요|봐\\s*주|보고\\s*(?:알려|말씀|판단|골라|추천)`
+  + `|참고\\s*(?:해|하)|확인\\s*(?:해|하)|첨부)`,
+)
+const NEEDS_LINK_RE = /\[링크\][^.!?\n]{0,12}?(?:보시고|보세요|확인|참고)|링크\s*(?:참고|참조|보세요|확인)|여기\s*클릭/
+/** 🔴 앞 글을 **명시적으로 가리킬 때만** — `이어서` 같은 흔한 말은 세지 않는다 */
+const NEEDS_PRIOR_RE = /지난\s*(?:글|번\s*글)|앞\s*글|이전\s*글|전에\s*쓴\s*글|앞\s*글에\s*이어/
 
 /** 마무리를 보여 주는가 — 물음표 · 종결 어미 · 부르는 말 중 하나라도 */
 const CLOSING_RE = /[?？]|(?:요|다|죠|네요|까요|세요|군요|네|음)\s*[.!…]*\s*$/
@@ -136,11 +118,9 @@ export function buildEvidencePacket(input: {
   const whole = `${title}\n${body}`
   const reasons: InsufficientReason[] = []
   if (body === '') reasons.push('emptyBody')
-  if (NEEDS_IMAGE_RE.test(whole)) reasons.push('needsImage')
+  if (ASK_TO_SEE_RE.test(whole)) reasons.push('needsImage')
   if (NEEDS_LINK_RE.test(whole)) reasons.push('needsLink')
   if (NEEDS_PRIOR_RE.test(whole)) reasons.push('needsPriorThread')
-  // 🔴 가리키는 말만 있고 가리킬 것이 없다 — 앞 대화가 있어야 읽힌다
-  if (BARE_DEICTIC_RE.test(whole) && !hasAntecedent(whole)) reasons.push('needsPriorThread')
 
   const len = body.length
   // 🔴 **제목이 먼저 예산을 쓴다.** 남은 만큼만 본문에서 들고 온다

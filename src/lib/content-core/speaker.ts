@@ -61,6 +61,11 @@ export type SpeakerPlan = {
 
 /** 한 사실을 이 사람이 가지고 있는가 — 🔴 모르면 **없는 것으로 본다** */
 export function hasFact(p: SpeakerFacts, c: ClaimRequirement): boolean {
+  /**
+   * 🔴 **무엇을 말하게 되는지 모르면 자격을 줄 수 없다** (2026-09-19).
+   *    빈 detail 은 `'전업'.includes('')` 로 **모든 사람을 충족**시켰다.
+   */
+  if (c.detail.trim() === '') return false
   switch (c.fact) {
     case 'spouse': return p.spouse === true
     case 'children': return (p.children ?? 0) > 0

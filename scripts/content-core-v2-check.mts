@@ -14,9 +14,8 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
-import {
-  isContentCoreV2Enabled, selectSupplyPath, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT,
-} from '../src/lib/content-core/flag'
+import { isContentCoreV2Enabled, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT }
+  from '../src/lib/content-core/flag'
 import { EVIDENCE_CHAR_BUDGET } from '../src/lib/content-core/evidence'
 import { violatesArtifact, artifactSummary, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
@@ -287,15 +286,15 @@ console.log('\n⑦ 공개 고유명 · 시의성 — 🔴 이름과 TTL 보존')
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 말투 참고의 사건을 자기 경험으로 가져옴 — 🔴 HOLD')
-// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 말투 참고의 사건을 자기 경험으로 가져옴 — 🔴 의미 검수가 맡는다')
+// ─────
 {
-  const 누수 = P({
+  const leakP = P({
     code: 'P09', spouse: true, children: 1, work: '전업',
     samples: ['지난주에 시어머니 병원 모시고 다녀왔어요', '그러게요 저도 비슷했어요'],
   })
   const a = record('⑧', await run({
-    id: 'S8', title: '요즘 날이 부쩍 차네요', body: '아침에 창문 열었다가 놀랐어요.',
+    id: 'S8', title: '요즘 날이 부척 차네요', body: '아침에 창문 열었다가 놀랐어요.',
     canned: {
       essence: {
         coreMoment: '아침 공기가 갑자기 차가워진 이야기',
@@ -304,22 +303,20 @@ console.log('\n⑧ 말투 참고의 사건을 자기 경험으로 가져옴 — 
         closingIntent: 'share', timeSensitivity: 'timeBound',
         contentRoles: ['conversationSpark'], claimRequirements: [],
       },
-      // 🔴 참고에만 있던 사건(시어머니 · 병원)을 자기 일로 가져왔다
-      draft: { title: '아침 공기가 달라졌어요', body: '창문 열다 놀랐네요. 지난주 시어머니 병원 모시고 갔을 때랑 또 다르더라고요.' },
+      draft: { title: '아침 공기가 달라졌어요', body: '창을 여니 놀랄 만큼 서늘하더군요. 지난주 시어머니 병원 모시고 갔을 때랑 또 달라요.' },
+      review: { issues: ['voiceFidelity'], confidence: 0.8, note: '참고 댓글의 사건이 자기 경험으로 들어왔다' },
     },
-    personas: [누수],
+    personas: [leakP],
   }))
-  check('🔴 🔴 **말투 참고의 사건을 가져온 것을 잡았다**',
-    a.review.deterministic.failures.some((f) => f.code === 'voiceContentLeak'),
-    JSON.stringify(a.review.deterministic.failures))
-  check('🔴 adopt 가 아니다', a.review.machineOutcome === 'hold')
-  check('🔴 무엇을 가져왔는지 근거가 남았다',
-    (a.review.deterministic.failures.find((f) => f.code === 'voiceContentLeak')?.detail ?? '').length > 0)
+  check('🔴 🔴 **의미 검수가 말하면 adopt 가 아니다**', a.review.machineOutcome === 'hold')
+  check('🔴 사유가 voiceFidelity 로 남았다', a.review.machineReason.includes('voiceFidelity'))
+  check('🔴 🔴 **deterministic 은 말투로 막지 않는다**',
+    a.review.deterministic.pass, JSON.stringify(a.review.deterministic.failures))
   check('🔴 말투 출처가 artifact 에 남았다', a.voice.provenance?.personaCode === 'P09')
   check('🔴 사람이 blind 로 볼 항목이 있다', a.voice.blindCheckPoints.length >= 3)
 }
 
-// ─────────────────────────────────────────────────────────
+// ─────
 console.log('\n⑨ 소재가 사라진 일반 글 — 🔴 사람에게 넘긴다')
 // ─────────────────────────────────────────────────────────
 {
@@ -473,8 +470,8 @@ console.log('\n⑬ 🔴 Codex 독립 리뷰 회귀 — 재현됐던 결함 7개'
     })
     check('    🔴 🔴 김치 글에 "직원 99명" exact anchor 가 붙지 않는다',
       (a.essence?.anchors ?? []).every((x) => !x.text.includes('99')))
-    check('    🔴 버린 이유를 남겼다 (지어낸 것)',
-      a.droppedAnchors.some((d) => d.why === 'derivedExact'))
+    check('    🔴 버린 이유를 남겼다 (근거를 지목하지 못했다)',
+      a.droppedAnchors.some((d) => d.why === 'derived'))
     check('    🔴 없는 숫자를 초안에 요구하지 않았다 — 통과한다', a.review.deterministic.pass)
     const b = await run({
       ...BASE, id: 'R3b',
@@ -515,25 +512,39 @@ console.log('\n⑬ 🔴 Codex 독립 리뷰 회귀 — 재현됐던 결함 7개'
   }
 
   // ── ⑤ voiceLeak — 말투는 통과, 사건만 잡는다 ──
-  console.log('  ⑤ 말투 누수 — 🔴 말투 표현은 누수가 아니다')
+  console.log('  ⑤ 말투 — 🔴 deterministic 이 말투로 막지 않는다')
   {
-    const 보통 = P({ code: 'PV1', samples: ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요'] })
+    const plain = P({ code: 'PV1', samples: ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요'] })
     const a = await run({
-      ...BASE, id: 'R5', personas: [보통],
+      ...BASE, id: 'R5', personas: [plain],
       canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '저도 비슷하게 느꼈어요. 그냥 열어 봤는데 생각보다 잘 익었더라고요.' } },
     })
-    check('    🔴 🔴 **"저도 비슷하게 느꼈어요" 는 누수가 아니다**',
-      !a.review.deterministic.failures.some((f) => f.code === 'voiceContentLeak'),
-      JSON.stringify(a.review.deterministic.failures))
-    check('    🟢 그래서 정상 말투 글이 통과한다', a.review.machineOutcome === 'adopt')
-    const 사건 = P({ code: 'PV2', samples: ['지난주에 시어머니 병원 모시고 다녀왔어요', '맞아요 저도요'] })
+    check('    🔴 "저도 비슷하게 느꼈어요" 는 막지 않는다', a.review.machineOutcome === 'adopt')
+    /**
+     * 🔴 원문 "배우자 은퇴" · 초안 "남편 퇴직" · 참고에도 같은 말 —
+     *    앞판은 이것을 누수로 막았다. 같은 말을 쓴 것과 가져온 것을 글자로 가를 수 없다.
+     */
+    const retired = P({ code: 'PV3', spouse: true, samples: ['우리 남편 퇴직하고 나서는 좀 그래요', '맞아요 저도요'] })
     const b = await run({
-      ...BASE, id: 'R5b', personas: [사건],
-      canned: { essence: BASE_E, draft: { title: '벌써 꺼냈어요', body: '지난주 시어머니 병원 모시고 갔을 때 생각이 났어요. 생각보다 잘 익었네요.' } },
+      id: 'R5b', title: '배우자 은퇴하고 달라진 것', body: '배우자 은퇴 뒤로 하루가 길어졌어요.',
+      personas: [retired],
+      canned: {
+        essence: {
+          ...BASE_E, coreMoment: '배우자가 은퇴한 뒤 하루가 달라진 이야기',
+          anchors: [anchor('situation', '은퇴', 'semantic', 'title')],
+          claimRequirements: [],
+        },
+        draft: { title: '남편 퇴직하고 하루가 길어요', body: '남편 퇴직 뒤로 시간이 다르게 흐르네요. 다들 어떻게 지내세요.' },
+      },
     })
-    check('    🔴 🔴 **"시어머니 병원" 은 사건이라 잡는다**',
-      b.review.deterministic.failures.some((f) => f.code === 'voiceContentLeak'),
+    check('    🔴 🔴 **"남편 퇴직" 이 참고에도 있다고 막지 않는다**',
+      b.review.deterministic.pass && b.review.machineOutcome === 'adopt',
       JSON.stringify(b.review.deterministic.failures))
+    check('    🔴 deterministic 코드 목록에 말투 누수가 없다', (() => {
+      const src = readFileSync('src/lib/content-core/review.ts', 'utf-8')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, '')
+      return !src.includes('voiceContentLeak')
+    })())
   }
 
   // ── ⑥ 300자 예산에 제목이 들어간다 ──
@@ -553,66 +564,91 @@ console.log('\n⑬ 🔴 Codex 독립 리뷰 회귀 — 재현됐던 결함 7개'
   }
 
   // ── ⑦ contextSufficiency — 낱말 하나로 막지 않는다 ──
-  console.log('  ⑦ 이해 가능성 — 🔴 "사진" 이라는 낱말이 죄가 아니다')
+  console.log('  ⑦ 이해 가능성 — 🔴 외부 자료가 **명백히 필요할 때만** 막는다')
   {
-    const okPhoto = await run({
-      ...BASE, id: 'R7', title: '오래된 사진 정리하다가', body: '앨범 꺼내서 사진 정리하다 한참 앉아 있었어요.',
-      canned: { essence: { ...BASE_E, coreMoment: '오래된 사진을 정리하다 감정이 든 이야기' },
-        draft: { title: '앨범 정리하다가', body: '한참 앉아 있었어요. 다들 이런 날 있으시죠.' } },
-    })
-    check('    🔴 🔴 **사진 정리 경험글은 막히지 않는다**',
-      okPhoto.evidence.contextSufficiency === 'sufficient', okPhoto.evidence.insufficientReasons.join(','))
-    check('    🟢 그래서 끝까지 갔다', okPhoto.draft !== null)
+    for (const [label, title, body] of [
+      ['사진 정리 경험글', '이 사진 정리하다 울었어요', '앨범 꺼내서 한참 앉아 있었어요.'],
+      ['그 사진만 보면', '그 사진만 보면 엄마 생각이 나요', '볼 때마다 그래요.'],
+    ] as const) {
+      const a = await run({
+        ...BASE, id: `R7-${label}`, title, body,
+        canned: { essence: { ...BASE_E, coreMoment: '사진을 보다 든 감정' },
+          draft: { title: '앨범 정리하다가', body: '한참 앉아 있었어요. 다들 이런 날 있으시죠.' } },
+      })
+      check(`    🔴 🔴 **${label} 은 막히지 않는다**`,
+        a.evidence.contextSufficiency === 'sufficient', a.evidence.insufficientReasons.join(','))
+    }
     const needPhoto = await run({
-      ...BASE, id: 'R7b', title: '이거 어떤가요', body: '아래 사진 보시고 알려주세요.',
+      ...BASE, id: 'R7b', title: '이거 어떤가요', body: '아래 사진을 보고 알려주세요.',
       canned: { essence: BASE_E, draft: { title: 'x', body: 'y' } },
     })
-    check('    🔴 실제로 사진을 봐야 하는 글은 막는다',
+    check('    🔴 "보고 알려주세요" 는 외부 자료가 있어야 수행된다 — 막는다',
       needPhoto.evidence.insufficientReasons.includes('needsImage') && needPhoto.cost.totalCalls === 0)
-    const bareDeictic = await run({
+    const vague = await run({
       ...BASE, id: 'R7c', title: '그거 어떻게 됐어요', body: '그거 결국 어떻게 하셨어요?',
-      canned: { essence: BASE_E, draft: { title: 'x', body: 'y' } },
+      canned: { essence: { ...BASE_E, coreMoment: '' }, draft: { title: 'x', body: 'y' } },
     })
-    check('    🔴 🔴 **명시 낱말이 없어도 앞 대화가 필요하면 막는다**',
-      bareDeictic.evidence.contextSufficiency === 'insufficient'
-      && bareDeictic.evidence.insufficientReasons.includes('needsPriorThread'),
-      bareDeictic.evidence.insufficientReasons.join(','))
-    const richDeictic = await run({
-      ...BASE, id: 'R7d', title: '김장 김치 보관 어떻게 하세요',
-      body: '어제 김장 김치를 항아리에 담아 베란다에 뒀는데요. 그거 그냥 두면 되나요 아니면 냉장 보관이 나을까요.',
-      canned: { essence: { ...BASE_E, coreMoment: '김장 김치 보관 방법을 묻는 글' },
-        draft: { title: '김장 보관 어떻게 하세요', body: '항아리째 베란다에 뒀는데 이대로 둬도 될지 모르겠어요. 다들 어떻게 하세요.' } },
+    check('    🔴 🔴 **애매한 의존은 hard block 하지 않는다** — 소재 판정이 맡는다',
+      vague.evidence.contextSufficiency === 'sufficient', vague.evidence.insufficientReasons.join(','))
+    check('    🟢 그래도 무슨 이야기인지 안 나오면 만들지 않는다',
+      vague.draft === null && vague.review.machineOutcome === 'hold')
+    check('    🔴 새 낱말 수 규칙을 만들지 않았다', (() => {
+      const src = readFileSync('src/lib/content-core/evidence.ts', 'utf-8')
+      return !/DEICTIC_ANTECEDENT_MIN_TOKENS|hasAntecedent/.test(src)
+    })())
+  }
+
+  // ── ③-2 detail 이 빈 claim 은 자격 조건이 될 수 없다 ──
+  console.log('  ③-2 claim detail — 🔴 빈 값이 자격 충족이 되지 않는다')
+  {
+    for (const fact of ['work', 'region'] as const) {
+      const a = await run({
+        ...BASE, id: `R3c-${fact}`,
+        canned: {
+          essence: { ...BASE_E, claimRequirements: [{ fact, detail: '', stanceShiftable: false }] },
+          draft: { title: 'x', body: 'y' },
+        },
+      })
+      check(`    🔴 🔴 **빈 ${fact} claim 이 SELF_EXPERIENCE 로 가지 않는다**`,
+        a.speaker.stance !== 'SELF_EXPERIENCE', String(a.speaker.stance))
+      check(`    🔴 형식 문제로 남고 생성하지 않는다 (${fact})`,
+        a.draft === null && a.review.machineOutcome === 'hold' && a.review.machineReason.includes('detail'))
+    }
+    const okClaim = await run({
+      ...BASE, id: 'R3d',
+      canned: {
+        essence: { ...BASE_E, claimRequirements: [{ fact: 'work', detail: '파트타임', stanceShiftable: false }] },
+        draft: { title: '벌써 꺼냈어요', body: '아직 때가 아닌가 했는데 그냥 열어 봤습니다. 생각보다 잘 익었더라고요.' },
+      },
     })
-    check('    🟢 재료가 있는 "그거" 글은 막지 않는다 — 과차단 반대 사례',
-      richDeictic.evidence.contextSufficiency === 'sufficient',
-      richDeictic.evidence.insufficientReasons.join(','))
+    check('    🟢 detail 이 있으면 정상 판정한다', okClaim.speaker.personaCode === 'P01')
   }
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑭ 🔴 경로 선택 — flag 가 장식이 아니다')
+console.log('\n⑭ 🔴 운영 배선 — 이 PR 은 v1 을 한 줄도 바꾸지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 기본은 v1 이다', selectSupplyPath({}) === 'v1')
-  check('🔴 모르는 값도 v1 이다', selectSupplyPath({ [CONTENT_CORE_V2_ENV]: 'yes' }) === 'v1')
-  check('🟢 true 면 v2 다', selectSupplyPath({ [CONTENT_CORE_V2_ENV]: 'true' }) === 'v2')
-  const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-  check('🔴 🔴 **v1 진입점이 정본 선택기를 실제로 읽는다**',
-    /selectSupplyPath\(process\.env\) === 'v2'/.test(runner))
-  check('🔴 v2 면 v1 은 아무것도 만들지 않고 멈춘다',
-    /V1_STOPPED_FOR_V2[\s\S]{0,60}return/.test(runner))
   /**
-   * 🔴 **flag=false 일 때 v1 이 origin/main 과 같은가** — 행동으로 본다.
-   *    이 PR 은 v1 의 **판정 로직을 바꾸지 않는다.** 진입점의 경로 선택 한 줄뿐이다.
+   * 🔴 **router 를 만들지 않았다** (2026-09-19 보정). v2 에는 운영 runner 도
+   *    ledger adapter 도 없다 — "v2 가 맡는다" 고 찍으면서 0건이 되는 상태를
+   *    남기지 않는다. router 는 후속 세로 작업에서 runner 와 함께 만든다.
    */
   const v1Diff = execFileSync('git', ['diff', '--numstat', 'origin/main', '--',
     'scripts/micro-seed-auto-draft.mts', 'src/lib/micro-seed-auto-draft.ts'], { encoding: 'utf-8' })
-  const added = v1Diff.trim() === '' ? 0
-    : v1Diff.trim().split('\n').reduce((n, l) => n + Number(l.split('\t')[0] ?? 0), 0)
-  const removed = v1Diff.trim() === '' ? 0
-    : v1Diff.trim().split('\n').reduce((n, l) => n + Number(l.split('\t')[1] ?? 0), 0)
-  check('🔴 🔴 **v1 에서 지운 줄이 0이다** — 옛 동작을 없애지 않았다', removed === 0, `${removed}줄 삭제`)
-  check('🔴 v1 에 더한 것은 경로 선택뿐이다 (15줄 이하)', added <= 15, `${added}줄 추가`)
+  check('🔴 🔴 **v1 이 origin/main 과 완전히 같다 (0줄)**', v1Diff.trim() === '', v1Diff.trim())
+  const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 v1 이 스위치를 읽지 않는다', !/CONTENT_CORE_V2|selectSupplyPath|content-core/.test(runner))
+  check('🔴 경로 선택기를 아직 만들지 않았다', (() => {
+    const src = readFileSync('src/lib/content-core/flag.ts', 'utf-8')
+    return !/selectSupplyPath|V1_STOPPED_FOR_V2/.test(src)
+  })())
+  check('🟢 스위치 이름과 기본값은 한 곳에 못박혀 있다',
+    !isContentCoreV2Enabled({}) && isContentCoreV2Enabled({ [CONTENT_CORE_V2_ENV]: 'true' }))
+  check('🔴 스위치에 지울 마일스톤이 박혀 있다', CONTENT_CORE_V2_FLAG_REMOVE_AT === 'M5')
+  const opsRefs = execFileSync('git', ['grep', '-l', 'content-core', '--', 'src/', 'scripts/'], { encoding: 'utf-8' })
+    .trim().split('\n').filter((f) => f !== '' && !f.includes('content-core'))
+  check('🔴 🔴 **운영 코드에 v2 소비자가 없다**', opsRefs.length === 0, opsRefs.join(', '))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

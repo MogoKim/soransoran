@@ -101,11 +101,11 @@ export type EssenceParse = {
   schemaProblems: string[]
 }
 
-export type DropReason = 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'derivedExact'
+export type DropReason = 'notInEvidence' | 'personalInfo' | 'empty' | 'unknownKind' | 'derived'
 
 export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
   notInEvidence: '근거로 담은 글에 없는 말이다',
-  derivedExact: '원문에 없는 말을 글자 그대로 남기라고 했다 — 지어낸 것이다',
+  derived: '근거를 지목하지 못했다 — 보존 계약이 될 수 없다 (의미 해석은 coreMoment 에 남는다)',
   personalInfo: '개인정보다 — anchor 가 될 수 없다',
   empty: '비어 있다',
   unknownKind: '우리 종류가 아니다',
@@ -126,25 +126,19 @@ export function isPersonalInfoAnchor(text: string): boolean {
 }
 
 /**
- * 근거로 담은 글에 실제로 있는 말인가 — 🔴 **`derived` 를 통과권으로 두지 않는다.**
+ * anchor 가 근거를 **지목하고 있는가** — 🔴 **지목하지 못하면 anchor 가 아니다.**
  *
- *    앞판은 `evidenceRef === 'derived'` 면 무조건 통과시켰다. 그러면 모델이
- *    *"직원 99명"* 을 `derived` + `exact` 로 만들어 낼 수 있고, 그 뒤 대조 검사가
- *    **없던 숫자를 초안에 넣으라고 요구**하게 된다. 지어낸 사실이 계약이 되는 길이다.
+ *    🔴 `derived` 는 anchor 가 될 수 없다. 첫 판에서는 **보존 계약을 근거가 있는 것에만**
+ *       건다. 의미 해석은 `coreMoment` · `participationHook` 에 남는다 —
+ *       거기서는 판정일 뿐이고, 여기서는 **초안이 지켜야 하는 약속**이 되기 때문이다.
  *
- * 🔴 **exact 는 근거 span 에 글자 그대로 있어야 한다.** `derived` 는 exact 가 될 수 없다.
- * 🔴 **semantic derived** 도 어디서 나왔는지 닿는 곳이 있어야 한다 —
- *    낱말 하나도 근거에 없으면 도출이 아니라 창작이다.
+ *    🔴 낱말 하나 겹침을 근거로 쓰지 않는다. 앞판은 그것으로
+ *       *"김치 이야기 → 김치 때문에 회사가 망했다"* 를 통과시켰다.
+ *       유사도 규칙도 사전도 만들지 않는다 — **근거에 그 말이 있는가** 하나만 본다.
  */
 export function anchorGrounded(a: EssenceAnchor, evidence: string): boolean {
-  if (a.preserve === 'exact') {
-    // 🔴 derived + exact 는 있을 수 없다
-    if (a.evidenceRef === 'derived') return false
-    return evidence.includes(a.text)
-  }
-  // 🔴 semantic — 글자 그대로가 아니어도 되지만 **낱말 하나는 닿아야** 한다 (derived 포함)
-  const words = a.text.split(/\s+/).map((w) => w.replace(/[^가-힣A-Za-z0-9]/g, '')).filter((w) => w.length >= 2)
-  return words.length === 0 ? false : words.some((w) => evidence.includes(w))
+  if (a.evidenceRef === 'derived') return false
+  return evidence.includes(a.text)
 }
 
 /**
@@ -181,7 +175,7 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
       ? (S(o.evidenceRef) as EvidenceRef) : 'derived'
     const a: EssenceAnchor = { kind, text, preserve, evidenceRef: ref }
     if (!anchorGrounded(a, evidence)) {
-      dropped.push({ text, why: a.preserve === 'exact' && a.evidenceRef === 'derived' ? 'derivedExact' : 'notInEvidence' })
+      dropped.push({ text, why: ref === 'derived' ? 'derived' : 'notInEvidence' })
       continue
     }
     anchors.push(a)
@@ -200,6 +194,16 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
     const fact = S(o.fact)
     if (!(CLAIM_FACTS as readonly string[]).includes(fact)) {
       problems.push(`모르는 claim fact "${fact}"`); continue
+    }
+    /**
+     * 🔴 **detail 이 비면 자격 조건이 될 수 없다** (2026-09-19 보정).
+     *    앞판은 빈 `work`·`region` 이 **모든 Persona 를 충족으로** 만들었다
+     *    (`'전업'.includes('')` 는 참이다). 그러면 자격 없는 사람이
+     *    `SELF_EXPERIENCE` 로 간다. 형식 문제로 남기고 생성하지 않는다.
+     */
+    if (S(o.detail) === '') {
+      problems.push(`claim "${fact}" 에 detail 이 없다 — 자격을 판정할 수 없다`)
+      continue
     }
     claims.push({
       fact: fact as ClaimFact,
@@ -233,9 +237,17 @@ export function parseEssence(raw: string, packet: SourceEvidencePacket): Essence
   }
 }
 
-/** 🔴 생성해도 되는가 — 확인 못 한 글은 만들지 않는다 */
-export function canGenerate(e: SourceEssence | null): { ok: boolean; why: string } {
+/**
+ * 🔴 생성해도 되는가 — 확인 못 한 글은 만들지 않는다.
+ *    🔴 자격 판정을 할 수 없는 claim 이 하나라도 있으면 만들지 않는다 —
+ *       형식이 깨진 채로 `SELF_EXPERIENCE` 로 보내지 않는다.
+ */
+export function canGenerate(
+  e: SourceEssence | null, schemaProblems: readonly string[] = [],
+): { ok: boolean; why: string } {
   if (e === null) return { ok: false, why: '판정을 읽지 못했다' }
+  const claimProblem = schemaProblems.find((x) => x.startsWith('claim '))
+  if (claimProblem !== undefined) return { ok: false, why: claimProblem }
   if (e.contextSufficiency === 'insufficient') {
     return { ok: false, why: `무슨 이야기인지 확인하지 못했다 (${e.insufficientReasons.join('·')})` }
   }
