@@ -211,14 +211,19 @@ export class SupplyLlmSession {
    * 🔴 재시도도 나이 검수도 이 함수를 지난다. 어느 하나가 우회하면
    *    장부는 있는데 막지는 못하는 상태가 된다 — fixture 가 그것을 검사한다.
    */
-  async call(input: SupplyCallInput): Promise<LlmResponse> {
+  /**
+   * 🔴 **장부가 정산한 금액을 응답에 실어 보낸다** (2026-09-20).
+   *    부르는 쪽이 비용을 **다시 계산하지 않게** 하려는 것이다 — 같은 값을 두 곳에서
+   *    계산하면 반드시 어긋난다. 정산하지 못한 건은 `null` 이다(0원이 아니다).
+   */
+  async call(input: SupplyCallInput): Promise<LlmResponse & { settledUsd: number | null }> {
     /**
      * 🔴 **정산 실패가 한 번이라도 있으면 더 보내지 않는다.**
      *    사전 계산(무료)조차 하지 않는다 — 어차피 보류될 요청이다.
      */
     if (this.settleFailed !== null) {
       this.bump('SETTLE_ERROR')
-      return blockedResponse('SETTLE_ERROR', this.settleFailed)
+      return { ...blockedResponse('SETTLE_ERROR', this.settleFailed), settledUsd: null }
     }
     const startedAt = this.now()
     /**
@@ -254,8 +259,11 @@ export class SupplyLlmSession {
     } catch (e) {
       // 🔴 장부에 못 적으면 유료 요청으로 넘어가지 않는다
       this.bump('LEDGER_ERROR')
-      return blockedResponse('LEDGER_ERROR',
-        `사전 계산을 장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`)
+      return {
+        ...blockedResponse('LEDGER_ERROR',
+          `사전 계산을 장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`),
+        settledUsd: null,
+      }
     }
 
     // ── ② 예약액 — 🔴 여유 배수는 호출부(env)가 준다. 코드가 고르지 않는다 ──
@@ -326,12 +334,12 @@ export class SupplyLlmSession {
       // 🔴 잠금·기록에 실패하면 **보낸다는 선택지는 없다.** 못 적는 요청은 안 보낸다
       const reason = `장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`
       this.bump('LEDGER_ERROR')
-      return blockedResponse('LEDGER_ERROR', reason)
+      return { ...blockedResponse('LEDGER_ERROR', reason), settledUsd: null }
     }
 
     if (!verdict.ok) {
       this.bump(verdict.code)
-      return blockedResponse(verdict.code, verdict.reason)
+      return { ...blockedResponse(verdict.code, verdict.reason), settledUsd: null }
     }
 
     // ── ④ 🔴 여기서만 유료 요청이 나간다 ──
@@ -414,7 +422,7 @@ export class SupplyLlmSession {
         this.t.holdWriteFailed += 1
       }
     }
-    return res
+    return { ...res, settledUsd: settled.settledUsd }
   }
 
   /** 장부 한 줄의 고정 칸 — 🔴 본문이 들어갈 자리가 없다 */

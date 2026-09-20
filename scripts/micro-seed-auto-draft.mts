@@ -105,10 +105,11 @@ import { SupplyLlmSession, limitsFromEnv, LEDGER_BLOCKED } from './lib/supply-ll
 import {
   runContentCore, personaInputOf, STAGE_MODEL, type Ask, type PersonaInput,
 } from './lib/content-core-run.mjs'
+import { buildSpeakerPlanSystemPrompt } from './lib/content-core-prompts.mjs'
 import {
-  buildSpeakerPlanSystemPrompt, SPEAKER_PLAN_PROMPT_VERSION,
-  V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
-} from './lib/content-core-prompts.mjs'
+  CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
+  SPEAKER_PLAN_PROMPT_VERSION, V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
+} from '../src/lib/content-core/pipeline'
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import { REVIEW_VERSION } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
@@ -120,9 +121,10 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { judgeCrisisSignal, SAFETY_SIGNAL_VERSION } from '../src/lib/micro-seed-safety-signals'
 import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 
-const DATA_DIR = '.microseed-data'
+export const DATA_DIR = '.microseed-data'
 const argv = process.argv.slice(2)
 /**
  * 🔴 **세 경로를 섞지 않는다** (§4-AR 과 같은 계약).
@@ -441,9 +443,10 @@ let LEDGER: SupplyLlmSession | null = null
 async function ask(
   stage: LedgerStage, system: string, payload: string, maxOut: number,
   model: ProviderModel = DRAFT_MODEL,
-): Promise<LlmResponse> {
+): Promise<LlmResponse & { settledUsd: number | null }> {
   if (LEDGER === null) {
     return {
+      settledUsd: null,
       ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
       finishReason: '', reasoningTokens: null, responseChars: 0, maxTokensReached: false,
       usageKnown: false, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
@@ -474,8 +477,12 @@ const v2Ask: Ask = async (stage, system, payload, model) => {
   return {
     ok: r.ok, rawText: r.rawText, truncated: r.maxTokensReached, usageKnown: r.usageKnown,
     inputTokens: r.inputTokens, outputTokens: r.outputTokens, thoughtsTokens: r.reasoningTokens,
-    // 🔴 금액은 영속 장부가 정본이다 — 여기서 두 번째로 계산하지 않는다
-    usd: null,
+    /**
+     * 🔴 **영속 장부가 정산한 금액을 그대로 싣는다** (2026-09-20).
+     *    여기서 두 번째로 계산하지 않는다 — 같은 값을 두 곳에서 계산하면 어긋난다.
+     *    정산하지 못한 건은 `null` 이다. 0원이 아니다.
+     */
+    usd: r.settledUsd,
     blocked: code === 'NO_LEDGER' || code.startsWith(`${LEDGER_BLOCKED}:`),
   }
 }
@@ -621,56 +628,27 @@ function loadMeta(): Map<string, Meta> {
  */
 export const CALL_ALLOWANCE_PER_SOURCE = 4
 
-/**
- * 🔴 **강제 상한이 아니라 설계상 기대치다** (2026-09-13).
- *
- *    한 원천이 정상 경로를 다 밟았을 때 나가는 요청 수 —
- *      생성 1 + 초안 검수 2 + 생활사 재생성 1 + 재검수 2 = 6
- *
- *    🔴 **이 수를 넘을 수 있다.** schema 재요청과 transport 재시도가 붙으면
- *       더 나간다. 막는 것은 **공동 예산 하나뿐**이고, 원천별로 조이는 장치는 없다.
- *       이 값은 관측한 사용량(`BUDGET.perSource`)을 읽을 때 쓰는 **눈금**이다 —
- *       평소보다 훨씬 큰 수가 보이면 어딘가 새고 있다는 뜻이다.
- */
-export const CALL_EXPECTED_PATH_PER_SOURCE = 6
-
 export function callBudgetOf(sources: number): number {
   return Math.max(0, sources) * CALL_ALLOWANCE_PER_SOURCE
 }
 
-/** 🔴 요청을 종류별로 센다 — 어디서 새는지 모르면 줄일 수 없다 */
+/**
+ * 🔴 **단계별 요청 수** — 혼합 모델이라 `단계:모델` 로 센다.
+ *    합쳐 세면 어느 모델이 몇 번 갔는지 알 수 없다.
+ */
 const callKind = new Map<string, number>()
-let schemaRetry = 0
-/** 🔴 나이 검수 호출 수 · 잡은 수 · 못 읽은 수 — 회차 로그에 그대로 찍는다 */
-let ageCalls = 0
 /** 🔴 결정론 자기 나이 판정이 잡은 수 — 회차 로그에 그대로 찍는다 */
 let selfAgeCaught = 0
-let ageCaught = 0
-let ageUnread = 0
-/** 🔴 생활사 충돌로 다시 쓴 원천 · 고쳐진 수 · 그래도 어긋나 사람에게 넘긴 수 */
-let lifeRetried = 0
-/** 🔴 위기 신호로 재생성을 멈춘 회차 — 전용 줄로 따로 보고한다 */
+/** 🔴 위기 신호로 멈춘 회차 — 전용 줄로 따로 보고한다 */
 let crisisHeld = 0
 /** 🔴 **부르기 전에** 멈춘 원천 — 위기 소재는 생성 자체를 시작하지 않는다(§4) */
 let sourceCrisisHeld = 0
-let lifeFixed = 0
-let lifeHeld = 0
-/**
- * 🔴 **생활사 해소를 확인하지 못한 초안** — 해소로 세지 않는다.
- *    예산이 없어 다시 묻지 못한 경우만이 아니다. 응답이 오지 않았거나,
- *    `lifeConflict` 가 빠졌거나, 모델이 초안에 없는 근거를 댄 경우가 전부 여기 들어간다.
- *    한 가지 원인만 적으면 로그를 읽는 사람이 다른 원인을 못 본다.
- */
-let lifeUnverified = 0
 export function countCall(kind: string): void {
   callKind.set(kind, (callKind.get(kind) ?? 0) + 1)
 }
 
 /** 🔴 digest — key 가 "무엇으로 만들었는가" 를 담게 한다 */
 export const digest16 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16)
-
-/** 🔴 모르는 품질 축을 회차 단위로 센다 — 숨기지 않고 화면에 찍는다 */
-const unknownAxis = new Map<string, number>()
 
 /**
  * 🔴 **화자를 여기서 미리 배정하지 않는다** (2026-09-20, Content Core v2 전환).
@@ -900,7 +878,6 @@ async function main(): Promise<void> {
   let hit = 0
   let miss = 0
   /** 🔴 겹쳐서 다시 쓴 횟수 — 화면에 찍는다. 안 보이면 늘어도 모른다 */
-  let retried = 0
   /** 🔴 쓸 Persona 가 없어 **생성 전에** 멈춘 원천 수 */
   let voiceHeld = 0
   const statusCount = new Map<string, number>()
@@ -972,7 +949,12 @@ async function main(): Promise<void> {
       miss += 1
       art = await runContentCore({
         sourceArticleId: j.sourceArticleId,
-        title: meta.title, maskedBody: meta.bodyHead,
+        /**
+         * 🔴 **제목도 마스킹을 거친다** (2026-09-20). 본문은 수집 단계에서
+         *    `maskSensitive` 를 지나는데 **제목은 지나지 않았다** — 연락처·메일·계정이
+         *    제목에 있으면 그대로 provider 로 나갔다. 정본 함수를 그대로 쓴다.
+         */
+        title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
         personas: voice.candidates, load: v2Load,
         voiceSourceDigest: voice.sourceDigest,
         ask: v2Ask, now, callCap: V2_CALL_CAP,
@@ -1044,46 +1026,38 @@ async function main(): Promise<void> {
   }
 
   const s = summarizeDrafts(picks)
-  console.log(`\n② 호출  cache hit ${hit} · miss ${miss} · 겹쳐서 다시 쓴 것 ${retried}회`)
-  console.log(`   🔴 실제 provider 요청 ${BUDGET.spent}회`
-    + ` (공동 예산 ${callBudgetOf(seeds.length)}회 = ${CALL_ALLOWANCE_PER_SOURCE}×${seeds.length} · 남은 ${BUDGET.left})`)
-  // 🔴 공동 예산이라 한 원천이 몰아 쓸 수 있다 — 실제로 그랬는지 본다
+  /**
+   * ── 🔴 **v2 계약에 맞춘 지표** (2026-09-20) ──
+   *
+   *    앞판 `kindOf` 는 `ok` 가 아닌 모든 이름을 `provider` 오류로 셌다. v2 는
+   *    단계 이름(`speakerPlan:gemini-3.7-flash` …)을 남기므로 **성공 호출이 전부
+   *    provider 오류로 찍혔다.** 없앤 지표(ageCheck · 생활사 재생성 · unknownAxis)도 지운다.
+   */
+  console.log(`\n② 호출`)
+  console.log(`   🟢 캐시 hit ${hit}건 — 🔴 provider 를 부르지 않았다`)
+  console.log(`   🔴 캐시 miss ${miss}건 → 실제 provider 요청 ${BUDGET.spent}회`
+    + ` (공동 예산 ${callBudgetOf(seeds.length)}회 = ${CALL_ALLOWANCE_PER_SOURCE}×${seeds.length}`
+    + ` · 남은 ${BUDGET.left})`)
   {
     const per = [...BUDGET.perSource.entries()].sort((a, b) => b[1] - a[1])
     const avg = per.length === 0 ? 0 : BUDGET.spent / per.length
     console.log(`   원천별 사용: 최다 ${BUDGET.worstPerSource}회`
-      + ` (정상 경로 기대치 ${CALL_EXPECTED_PATH_PER_SOURCE}회 · 강제 상한 아님) · 평균 ${avg.toFixed(1)}회`
+      + ` (정상 경로 ${V2_CALL_CAP}회 · 원천당 상한) · 평균 ${avg.toFixed(1)}회`
       + `${per.length > 0 ? ` · ${per.slice(0, 3).map(([k, n]) => `${k}×${n}`).join(' ')}` : ''}`)
   }
-  console.log(`      종류별 ${[...callKind.entries()].map(([k, n]) => `${k} ${n}`).join(' · ') || '없음'}`
-    + ` · schema 재요청 ${schemaRetry}회`)
+  // 🔴 단계마다 어느 모델이 몇 번 갔는가 — 혼합 회차라 합치면 알 수 없다
+  {
+    const byStage = [...statusCount.entries()].sort()
+    console.log(`   단계별 ${byStage.length === 0 ? '없음' : byStage.map(([k, n]) => `${k} ${n}회`).join(' · ')}`)
+  }
   /**
-   * 🔴 **장부를 화면에 찍는다** (2026-09-17). 안 보이면 늘어도 모른다.
-   *    위의 `BUDGET.spent` 는 **요청 수**이고, 아래는 **금액**이다. 둘은 다른 것을 센다 —
+   * 🔴 **장부를 화면에 찍는다.** 위는 **요청 수**, 아래는 **금액**이다 —
    *    같은 줄에 합치면 어느 쪽이 막았는지 읽는 사람이 구분하지 못한다.
    */
   if (LEDGER !== null) console.log(`   ${LEDGER.describe().split('\n').join('\n   ')}`)
-  /**
-   * 🔴 **나이 판정을 결정론과 모델로 나눠 센다** (2026-09-16).
-   *    합쳐 세면 "모델이 잡았다" 와 "부르기 전에 잡았다" 가 구분되지 않는다.
-   */
   console.log(`   🔴 위기 소재로 **부르기 전에** 멈춘 원천 ${sourceCrisisHeld}건 — AI 를 부르지 않았다 (정본 §4)`)
-  console.log(`      위기 신호로 재생성을 멈춘 회차 ${crisisHeld}건 — 사람이 본다`)
-  console.log(`      나이 자기모순(결정론) ${selfAgeCaught}건`
-    + ` · 나이 검수 호출 ${ageCalls}회 (잡음 ${ageCaught} · 못 읽음 ${ageUnread})`)
-  // 🔴 소재 차단 · 생활사 재생성 · 최종 HOLD 를 **따로** 센다 — 섞으면 어디가 막혔는지 모른다
-  console.log(`   🔴 소재를 이유로 막은 원천 0건 (설계상 없음)`
-    + ` · 생활사 충돌 재생성 ${lifeRetried}건`
-    + ` (생활사 해소 ${lifeFixed} · 생활사 충돌 유지 ${lifeHeld} · 해소 미확인 ${lifeUnverified})`)
-  // 🔴 provider 오류 · schema 오류 · 품질 HOLD 를 **나눠 센다.** 합치면 원인을 못 찾는다
-  const kindOf = (st: string): string =>
-    st === 'ok' ? 'ok'
-      : st.startsWith('schemaRetry') ? 'schema'
-        : st === 'parseError' ? 'schema'
-          : st === 'budgetExhausted' ? 'budget' : 'provider'
-  const grouped = new Map<string, number>()
-  for (const [st, n] of statusCount) grouped.set(kindOf(st), (grouped.get(kindOf(st)) ?? 0) + n)
-  console.log(`      응답 ${[...grouped.entries()].map(([k, n]) => `${k} ${n}`).join(' · ')}`)
+  console.log(`      위기 신호로 멈춘 회차 ${crisisHeld}건 — 사람이 본다`)
+  console.log(`      자기 나이 모순(결정론) ${selfAgeCaught}건`)
   if (voiceHeld > 0) {
     console.log(`   🟡 쓸 Persona 가 없어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
   }
@@ -1092,13 +1066,6 @@ async function main(): Promise<void> {
     if (used.length > 0) {
       console.log(`   🟢 말투 배정 ${used.map(([k, n]) => `${k}×${n}`).join(' · ')}`)
     }
-  }
-  if (unknownAxis.size > 0) {
-    console.log(`   🟡 우리 축이 아닌 이름 ${[...unknownAxis.entries()].map(([k, n]) => `"${k}"×${n}`).join(' · ')}`)
-    console.log('      — 다시 물었고, 그래도 같으면 qualitySchemaMismatch 로 막았다')
-  }
-  for (const [st, n] of [...statusCount.entries()].sort((a, b) => b[1] - a[1])) {
-    console.log(`   ${st === 'ok' ? '🟢' : '🔴'} ${st.padEnd(10)} ${n}건`)
   }
   console.log('\n③ 채택')
   console.log(`   🟢 AUTO_ADOPT ${s.AUTO_ADOPT}건  — 🔴 사람의 ADOPT 가 아니다`)
@@ -1137,8 +1104,12 @@ async function main(): Promise<void> {
     note: '🔴 기계가 만들고 기계가 고른 초안이다. 사람의 ADOPT 가 아니다 —'
       + ' sourceDecision 이 AUTO_ADOPT 라 supply-autofill 이 받지 않는다.',
     generatedAt: nowIso, ruleVersion: DRAFT_RULE_VERSION,
-    // 🔴 단계마다 모델이 다르다 — 하나로 적으면 어느 모델이 썼는지 알 수 없다
-    promptVersion: `${SPEAKER_PLAN_PROMPT_VERSION}|${V2_DRAFT_PROMPT_VERSION}|${V2_REVIEW_PROMPT_VERSION}`,
+    /**
+     * 🔴 **단계마다 모델이 다르다.** 한 칸에 하나만 적으면 거짓이 된다 —
+     *    `stageModels` 로 통째로 싣고, 봉투 profile 이 정본과 대조한다.
+     */
+    promptVersion: CONTENT_CORE_PROMPT_VERSION,
+    pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
     stageModels: STAGE_MODEL, provenance: DRAFT_PROVENANCE,
     candidates: adopted.map((a) => ({
       candidateType: 'seedOriginality',
@@ -1161,7 +1132,18 @@ async function main(): Promise<void> {
       // 🔴 **잰 값을 싣는다. 판정이 아니다.** 적재 쪽이 같은 정본으로 다시 판정한다
       originality: a.draft.originality,
       // 🔴 **어떤 말투 근거로 썼는지.** 텍스트도 작성자도 남기지 않는다 — 근거의 신원뿐이다
-      voiceProvenance: a.art.voice.provenance,
+      /**
+       * 🔴 **적재 정본(`readVoiceProvenance`)이 요구하는 모양으로 잇는다** (2026-09-20).
+       *    v2 는 `sampleCount` 로 세고 적재는 `comments` 로 읽는다 — 이름이 달라
+       *    그대로 실으면 `voiceProvenance 가 없거나 깨졌다` 로 전량 제외된다.
+       *    🔴 두 계약을 잇는 자리는 여기 하나다. 값을 지어내지 않는다.
+       */
+      voiceProvenance: a.art.voice.provenance === null ? null : {
+        personaCode: a.art.voice.provenance.personaCode,
+        comments: a.art.voice.provenance.sampleCount,
+        bundleDigest: a.art.voice.provenance.bundleDigest,
+        sourceDigest: a.art.voice.provenance.sourceDigest,
+      },
       leakedTokens: '', reviewedAt: nowIso, writtenAt: a.draft.generatedAt,
       /**
        * 🔴 **원문 쪽 세 시각** (2026-09-17) — 적재가 신선도를 제대로 재려면 여기를 지나야 한다.

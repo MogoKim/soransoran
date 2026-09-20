@@ -41,7 +41,17 @@ import { MACHINE_AGE_HUMAN_REVIEW_NOTE } from '../src/lib/micro-seed-auto-draft'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './micro-seed-auto-draft.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+/**
+ * 🔴 **사람이 볼 근거는 로컬 artifact 정본이다** (2026-09-20).
+ *    원문 근거를 DB 로 복사하지 않는다 — 큐에는 `sourceArticleId` 열쇠만 있다.
+ */
+import {
+  findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
+  type ReviewArtifact,
+} from '../src/lib/original-post-machine-review'
+import { DATA_DIR } from './micro-seed-auto-draft.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -100,6 +110,34 @@ const snapOf = new Map<string, ReviewSnapshot>(raw.map((r) => [r.id, {
   promptVersion: r.promptVersion, model: r.model, gateResults: r.gateResults,
 }]))
 
+/**
+ * 🔴 **로컬 artifact 정본을 읽는다.** DB 가 아니다 — 원문 근거는 여기에만 있다.
+ *    회차 파일이 여럿이면 전부 읽는다 (한 원천이 여러 회차에 있을 수 있다).
+ */
+function loadArtifacts(): ReviewArtifact[] {
+  if (!existsSync(DATA_DIR)) return []
+  const out: ReviewArtifact[] = []
+  for (const f of readdirSync(DATA_DIR).filter((x) => x.endsWith('.artifacts.json'))) {
+    try {
+      const j = JSON.parse(readFileSync(join(DATA_DIR, f), 'utf-8')) as unknown[]
+      for (const a of Array.isArray(j) ? j : []) {
+        const r = readReviewArtifact(a)
+        if (r !== null) out.push(r)
+      }
+    } catch { /* 🔴 못 읽은 파일은 없는 것으로 둔다 — 근거 없으면 검토가 막힌다 */ }
+  }
+  return out
+}
+const ARTIFACTS = loadArtifacts()
+
+/** 🔴 큐 행이 가리키는 원천 id — 없으면 artifact 를 찾을 수 없다 */
+function sourceArticleIdOf(r: AutoRow): string | null {
+  const g = r.gateResults as Record<string, unknown> | null
+  const ad = (g?.autoDraft ?? null) as Record<string, unknown> | null
+  const v = ad?.sourceArticleId
+  return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+}
+
 /** 🔴 이 후보의 글쓴이가 누구이고 몇 살인가 — 모르면 검토 완료를 거부한다 */
 type Ground = { personaCode: string | null; ageBand: string | null; ok: boolean; reason: string }
 function groundOf(r: AutoRow): Ground {
@@ -111,6 +149,15 @@ function groundOf(r: AutoRow): Ground {
   if (band === null || band.trim() === '') {
     return { personaCode: code, ageBand: null, ok: false, reason: `${code} 의 정본 나이대(ageBand)를 읽지 못했다` }
   }
+  /**
+   * 🔴 **사람이 볼 근거가 없으면 검토 완료를 거부한다** (2026-09-20).
+   *    다른 글의 근거로 이 글을 통과시키는 것이 가장 조용한 사고다.
+   */
+  const ev = findReviewArtifact({
+    sourceArticleId: sourceArticleIdOf(r),
+    title: r.title, body: r.body, artifacts: ARTIFACTS,
+  })
+  if (!ev.ok) return { personaCode: code, ageBand: band, ok: false, reason: ev.reason }
   return { personaCode: code, ageBand: band, ok: true, reason: '' }
 }
 
@@ -122,6 +169,15 @@ const reviewable = pending.filter((r) => grounds.get(r.id)!.ok)
 const blocked = pending.filter((r) => !grounds.get(r.id)!.ok)
 
 console.log(`① 기계 후보 ${machine.length}건 — 🟢 검토 완료 ${reviewed.length} · 🟡 미검토 ${pending.length}`)
+console.log(`   로컬 artifact ${ARTIFACTS.length}장 — 🔴 원문 근거는 DB 가 아니라 ${DATA_DIR} 에 있다`)
+{
+  // 🔴 장부가 정산한 값만 더한다. 여기서 비용을 다시 계산하지 않는다
+  const costs = ARTIFACTS.map(artifactCostUsd)
+  const known = costs.filter((c): c is number => c !== null)
+  console.log(`   정산 합계 $${known.reduce((n, c) => n + c, 0).toFixed(6)}`
+    + ` (정산 ${known.length}장 · 🔴 미상 ${costs.length - known.length}장)`)
+  console.log('   🔴 사람 READY 한 편당 비용은 **사람이 READY 를 찍은 뒤**에만 계산한다')
+}
 console.log(`   미검토 중  검토 가능 ${reviewable.length}건 · 🔴 근거 없어 검토 불가 ${blocked.length}건`)
 if (blocked.length > 0) {
   const why = new Map<string, number>()
@@ -141,6 +197,19 @@ if (ONLY_ID !== '') {
   console.log(`   생성 voice Persona ${g?.personaCode ?? '🔴 기록 없음'} · 나이대 ${g?.ageBand ?? '🔴 모름'}`)
   console.log(`\n   제목: ${r.title}`)
   console.log(`   본문:\n${r.body.split('\n').map((x) => `     ${x}`).join('\n')}`)
+  /**
+   * 🔴 **사람이 판단할 근거를 함께 보여 준다** — 원문 근거 · Persona·stance ·
+   *    원문에 없는 것 · 사라진 것 · 생활사 모순 · 기계 사유 · 정산액.
+   */
+  const ev = findReviewArtifact({
+    sourceArticleId: sourceArticleIdOf(r), title: r.title, body: r.body, artifacts: ARTIFACTS,
+  })
+  if (ev.ok) {
+    console.log('\n   ── 사람이 볼 근거 (로컬 artifact 정본 · DB 사본 아님) ──')
+    for (const line of reviewEvidenceLines(ev.artifact)) console.log(`   ${line}`)
+  } else {
+    console.log(`\n   🔴 근거를 찾지 못했다 — ${ev.reason}`)
+  }
   if (g !== undefined && !g.ok) console.log(`\n   🔴 검토 완료 불가 — ${g.reason}`)
 } else {
   console.log('\n② 검토 대기 (오래 기다린 순 · 상위 10건)')

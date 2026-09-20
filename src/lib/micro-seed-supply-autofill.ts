@@ -21,7 +21,11 @@ import { derive, SAFEST_PROFILE } from './scale-profile'
 import { judgeCopy, readMeasure, describeOriginality } from './draft-originality'
 import { readVoiceProvenance } from './original-post-voice-match'
 // 🔴 판 값의 정본은 초안 lib 하나다 — 여기서 다시 적으면 올릴 때마다 갈라진다
-import { DRAFT_RULE_VERSION, DRAFT_PROMPT_VERSION, DRAFT_PROVENANCE } from './micro-seed-auto-draft'
+import { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } from './micro-seed-auto-draft'
+import {
+  CONTENT_CORE_MODEL_LABEL, CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
+  stageModelsMismatch,
+} from './content-core/pipeline'
 
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
@@ -69,8 +73,12 @@ export const MACHINE_PROFILE = {
    *    판 값은 초안 lib 하나가 정한다. 여기서는 가져다 쓴다.
    */
   envelopeRuleVersion: DRAFT_RULE_VERSION,
-  envelopePromptVersion: DRAFT_PROMPT_VERSION,
-  envelopeModel: 'claude-haiku-4.5',
+  /**
+   * 🔴 **v2 판이다** (2026-09-20). 세 프롬프트 판을 합친 한 칸이고,
+   *    정본은 `src/lib/content-core/pipeline.ts` 다 — 여기서 다시 적지 않는다.
+   */
+  envelopePromptVersion: CONTENT_CORE_PROMPT_VERSION,
+  envelopePipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
   /** 행의 값 */
   sourceDecision: 'AUTO_ADOPT',
   sourceInput: 'auto-judge',
@@ -79,7 +87,12 @@ export const MACHINE_PROFILE = {
 
 /** 🔴 기계 후보가 큐에 남길 표시 — 사람 것과 한 글자도 겹치지 않는다 */
 export const MACHINE_PROMPT_VERSION = 'publish-candidate-auto-v1'
-export const MACHINE_MODEL = 'claude-haiku-4.5'
+/**
+ * 🔴 **한 모델 이름을 적지 않는다** (2026-09-20). 단계마다 다르므로
+ *    정본(`CONTENT_CORE_MODEL_LABEL`)이 만든 한 줄을 쓴다 —
+ *    큐 gateResults 와 발행 profile 이 **같은 값**을 읽는다.
+ */
+export const MACHINE_MODEL = CONTENT_CORE_MODEL_LABEL
 /**
  * 🔴 큐에 남기는 "누가 정했나" 표시 — **판 값을 여기 다시 적지 않는다** (2026-09-13).
  *    옛 판은 `'machine:auto-draft-v3'` 로 굳어 있어서, 초안이 v5 인데도 v3 이라고 적었다.
@@ -97,7 +110,13 @@ export type Envelope = {
   provenance?: string
   ruleVersion?: string
   promptVersion?: string
-  model?: string
+  /**
+   * 🔴 **단계마다 모델이 다르다** (2026-09-20, Content Core v2 전환).
+   *    옛 봉투는 `model` 한 칸이었다. 한 칸에 하나만 적으면 Gemini 가 쓴 글을
+   *    Haiku 가 썼다고 기록하게 된다 — 그래서 `stageModels` 를 통째로 싣는다.
+   */
+  stageModels?: unknown
+  pipelineVersion?: string
 }
 
 /**
@@ -115,7 +134,9 @@ export function machineProfileMismatch(
   eq(env.provenance, MACHINE_PROFILE.envelopeProvenance, 'envelope.provenance')
   eq(env.ruleVersion, MACHINE_PROFILE.envelopeRuleVersion, 'envelope.ruleVersion')
   eq(env.promptVersion, MACHINE_PROFILE.envelopePromptVersion, 'envelope.promptVersion')
-  eq(env.model, MACHINE_PROFILE.envelopeModel, 'envelope.model')
+  eq(env.pipelineVersion, MACHINE_PROFILE.envelopePipelineVersion, 'envelope.pipelineVersion')
+  // 🔴 어느 단계를 어느 모델이 맡았는지 **한 칸도 빠짐없이** 같아야 한다
+  bad.push(...stageModelsMismatch(env.stageModels))
   eq(c.sourceDecision, MACHINE_PROFILE.sourceDecision, 'sourceDecision')
   eq(c.sourceInput, MACHINE_PROFILE.sourceInput, 'sourceInput')
   eq(c.candidateType, MACHINE_PROFILE.candidateType, 'candidateType')
@@ -178,7 +199,7 @@ export function machineGateOk(gate: unknown): boolean {
 
 /** 🔴 사람 값을 사칭했는가 — 하나라도 있으면 기계 후보가 아니다 */
 export function impersonatesHuman(env: Envelope, c: Candidate): boolean {
-  const vals = [S(env.provenance), S(c.sourceDecision), S(env.model), S(env.promptVersion)]
+  const vals = [S(env.provenance), S(c.sourceDecision), S(env.pipelineVersion), S(env.promptVersion)]
   return vals.some((v) => HUMAN_ONLY_VALUES.includes(v))
 }
 
@@ -630,9 +651,17 @@ export function buildQueuePayload(input: {
         autoDraft: {
           provenance: MACHINE_PROFILE.envelopeProvenance,
           sourceDecision: MACHINE_PROFILE.sourceDecision,
+          /**
+           * 🔴 **원천 id 하나만 싣는다** (2026-09-20). 사람 검토가 로컬 artifact 정본을
+           *    찾을 열쇠다. 🔴 원문 제목·본문·근거는 **DB 로 복사하지 않는다** —
+           *    그것은 `.microseed-data/*.artifacts.json` 에만 있다.
+           */
+          sourceArticleId: S(c.sourceArticleId),
           draftRuleVersion: S(env.ruleVersion),
           draftPromptVersion: S(env.promptVersion),
-          model: S(env.model),
+          // 🔴 단계별 모델을 그대로 남긴다 — 한 칸으로 뭉개지 않는다
+          pipelineVersion: S(env.pipelineVersion),
+          stageModels: env.stageModels ?? null,
           draftFrom: S((c as unknown as Record<string, unknown>).draftFrom),
           safetyVerdict: S(c.safetyVerdict),
           originality: readMeasure(c.originality),

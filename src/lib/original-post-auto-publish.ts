@@ -26,6 +26,7 @@ export const AUTO_GATE_VERDICT = 'PASS'
 
 // 🔴 profile 판정의 단일 지점 — 적재기(§4-AN)와 같은 함수를 쓴다
 import { titleKey } from './draft-originality'
+import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
 // 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
 export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
@@ -48,7 +49,12 @@ import {
  *    "일부만 섞인 행" 을 허용하는 순간 구분이 무너지고, 그 구분 위에 이 레인이 서 있다.
  */
 export const MACHINE_PROMPT_VERSION = 'publish-candidate-auto-v1'
-export const MACHINE_MODEL = 'claude-haiku-4.5'
+/**
+ * 🔴 **큐와 같은 정본을 읽는다** (2026-09-20). 단계마다 모델이 다르므로
+ *    한 모델 이름을 적으면 거짓이고, 적재 쪽과 값이 갈리면 기계 행을
+ *    사람 행으로 오독한다 — 이 레인이 그 구분 위에 서 있다.
+ */
+export const MACHINE_MODEL = CONTENT_CORE_MODEL_LABEL
 export const MACHINE_SITE_PREFIX = 'publish-candidate:auto:'
 /**
  * gateResults 에 남아야 하는 표시.

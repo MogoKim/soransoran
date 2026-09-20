@@ -20,6 +20,7 @@ import {
   type Envelope, type QueueProfileRow,
   queueSourceTimesOf,
 } from '../src/lib/micro-seed-supply-autofill'
+import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 
 const NOW = '2026-09-07T12:00:00.000Z'
 /**
@@ -210,7 +211,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     provenance: MACHINE_PROFILE.envelopeProvenance,
     ruleVersion: MACHINE_PROFILE.envelopeRuleVersion,
     promptVersion: MACHINE_PROFILE.envelopePromptVersion,
-    model: MACHINE_PROFILE.envelopeModel,
+    pipelineVersion: MACHINE_PROFILE.envelopePipelineVersion,
+    stageModels: STAGE_MODEL,
   }
   const mc = ok({
     sourceDecision: 'AUTO_ADOPT', sourceInput: 'auto-judge',
@@ -251,7 +253,11 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
   // 🔴 provenance 세탁 금지 — 입력이 틀렸는데 정상 상수를 찍지 않는다
   for (const [label, patch] of [
     ['envelope.promptVersion 없음', { promptVersion: '' }],
-    ['envelope.model 이 사람 것', { model: 'human-curated' }],
+    ['envelope.pipelineVersion 이 다름', { pipelineVersion: 'content-core-v1' }],
+    // 🔴 단계별 모델을 손대면 통과하지 않는다 — 어느 모델이 썼는지가 계약이다
+    ['stageModels 가 없음', { stageModels: undefined }],
+    ['stageModels 한 칸이 다름', { stageModels: { ...STAGE_MODEL, draftGen: 'claude-haiku-4.5' } }],
+    ['stageModels 에 모르는 단계', { stageModels: { ...STAGE_MODEL, extra: 'x' } }],
   ] as const) {
     check(`🔴 ${label} → payload 없음`,
       buildQueuePayload({ envelope: { ...mEnv, ...patch }, candidate: mc, autoJudge: aj, now: NOW }) === null)

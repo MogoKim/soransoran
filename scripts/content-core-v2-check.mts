@@ -10,7 +10,7 @@
  *
  * 🔴 **이 판의 핵심**: `SELF_EXPERIENCE` 는 **코드가 검증한 허가 근거** 없이 나올 수 없다.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
@@ -19,8 +19,6 @@ import {
   buildSpeakerPlanSystemPrompt, buildV2DraftSystemPrompt, lifeContractLines,
   qualificationLine, sourceBlock,
 } from './lib/content-core-prompts.mjs'
-import { isContentCoreV2Enabled, CONTENT_CORE_V2_ENV, CONTENT_CORE_V2_FLAG_REMOVE_AT }
-  from '../src/lib/content-core/flag'
 import { cardValueText, hasFact, verifySelfWarrants }
   from '../src/lib/content-core/speaker'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
@@ -160,9 +158,18 @@ console.log('\n══ Content Core v2 행동 검사 (🔴 네트워크 0 · prov
 console.log('⓪ 스위치 · 운영 배선 — 🔴 이 PR 은 v1 을 한 줄도 바꾸지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  check('🔴 기본은 꺼짐', !isContentCoreV2Enabled({}))
-  check('🟢 "true" 하나만 켠다', isContentCoreV2Enabled({ [CONTENT_CORE_V2_ENV]: 'true' }))
-  check('🔴 지울 마일스톤이 박혀 있다', CONTENT_CORE_V2_FLAG_REMOVE_AT === 'M5')
+  /**
+   * 🔴 **스위치는 없앴다** (2026-09-20). v2 가 **유일한 생성 경로**가 되었으므로
+   *    끄고 켜는 칸이 남아 있으면 그 자체가 죽은 병렬 경로다.
+   */
+  check('🔴 🔴 **v2 스위치가 남아 있지 않다**', (() => {
+    if (existsSync('src/lib/content-core/flag.ts')) return false
+    // 🔴 `git grep` 은 못 찾으면 종료 코드 1 이다 — 그것이 곧 "없다" 다
+    // 🔴 이름을 통째로 적으면 이 파일 자신이 걸린다 — 쪼개서 만든다
+    const name = ['CONTENT', 'CORE', 'V2', 'ENV'].join('_')
+    const r = spawnSync('git', ['grep', '-l', name, '--', 'src/', 'scripts/'], { encoding: 'utf-8' })
+    return r.status !== 0 && (r.stdout ?? '').trim() === ''
+  })())
   /**
    * 🔴 **여기 두 단언은 2026-09-20 에 뜻이 뒤집혔다.**
    *    배선 전에는 *"v1 을 건드리지 않았다 · v2 소비자가 없다"* 가 격리의 증거였다.

@@ -1001,7 +1001,15 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       /this\.io\.writeHold\(this\.dir/.test(src))
     check('🔴 [L] 표식조차 못 쓴 경우를 숨기지 않고 센다', /holdWriteFailed \+= 1/.test(src))
     check('🔴 [L] 장부에 못 적으면 요청을 보내지 않는다',
-      /catch \(e\)[\s\S]{0,400}return blockedResponse\('LEDGER_ERROR'/.test(src))
+      /catch \(e\)[\s\S]{0,500}blockedResponse\('LEDGER_ERROR'/.test(src))
+    /**
+     * 🔴 **정산 금액을 부르는 쪽이 다시 계산하지 않는다** (2026-09-20).
+     *    장부가 적은 `settledUsd` 를 응답에 그대로 실어 보낸다 —
+     *    같은 값을 두 곳에서 계산하면 반드시 어긋난다. 못 적었으면 `null` 이다.
+     */
+    check('🔴 🔴 [L] **정산 금액을 응답에 실어 보낸다 — 재계산 금지**',
+      /Promise<LlmResponse & \{ settledUsd: number \| null \}>/.test(src)
+      && /return \{ \.\.\.res, settledUsd: settled\.settledUsd \}/.test(src))
     check('🔴 [L] 날짜를 요청 시작 시각으로 한 번만 정한다 — 정산이 다른 날로 가지 않는다',
       (src.match(/ledgerDateOf\(/g) ?? []).length === 1 && /const date = ledgerDateOf\(startedAt\)/.test(src))
     check('🔴 [L] 읽기·판정·예약 기록을 한 잠금 안에서 한다',

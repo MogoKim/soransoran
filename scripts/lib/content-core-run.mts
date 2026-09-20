@@ -21,6 +21,7 @@ import type { DropReason } from '../../src/lib/content-core/source-facts'
 import type { PoolCard } from '../../src/lib/persona-pool-card'
 /** 🔴 provider 가 아는 모델만 — `as` 로 모르는 이름을 억지 통과시키지 않는다 */
 import type { ProviderModel } from './voice-m3-provider.mjs'
+import { STAGE_MODEL as CANON_STAGE_MODEL } from '../../src/lib/content-core/pipeline'
 import { canGenerate, parseSpeakerPlan } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import {
@@ -62,15 +63,11 @@ export type AskResult = {
 export type AskStage = CallMeta['stage']
 
 /**
- * 🔴 **단계마다 어느 모델을 쓰는가** — 부르는 쪽이 임의로 고르지 않게 한 곳에 둔다.
- *    (2026-09-19: 화자 계획과 생성은 Gemini, 의미 검수는 Haiku 로 나눈 시험 구성.
- *     검수를 생성과 같은 모델에 맡기면 자기 글을 자기가 채점한다.)
+ * 🔴 **정본은 `src/lib/content-core/pipeline.ts` 다.** 봉투·큐·발행이 같은 값을 읽어야 해서
+ *    `src` 에 둔다. 여기서는 그 값이 **provider 가 아는 이름인지** 타입으로 강제한다 —
+ *    `as` 로 모르는 모델을 억지 통과시키지 않는다.
  */
-export const STAGE_MODEL: Readonly<Record<AskStage, ProviderModel>> = Object.freeze({
-  speakerPlan: 'gemini-3.7-flash',
-  draftGen: 'gemini-3.7-flash',
-  semanticReview: 'claude-haiku-4.5',
-})
+export const STAGE_MODEL: Readonly<Record<AskStage, ProviderModel>> = CANON_STAGE_MODEL
 
 /** 🔴 `model` 을 인자로 받는다 — 어느 단계가 어디로 갔는지 **값으로** 확인된다 */
 export type Ask = (

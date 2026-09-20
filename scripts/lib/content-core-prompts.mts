@@ -19,9 +19,13 @@ import {
 } from '../../src/lib/content-core/review'
 import { BANNED_WORDS } from '../../src/lib/micro-seed-auto-draft'
 
-export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p2'
-export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p6'
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p6'
+/**
+ * 🔴 **판 값의 정본은 `src/lib/content-core/pipeline.ts` 다.** 봉투·큐·발행이 같은 값을
+ *    읽어야 해서 거기 있다. 여기서 다시 적으면 한쪽이 낡는다 — 다시 내보내기만 한다.
+ */
+export {
+  SPEAKER_PLAN_PROMPT_VERSION, V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
+} from '../../src/lib/content-core/pipeline'
 
 /** 🔴 원문 근거를 한 덩어리로 — 계획도 생성도 검수도 **같은 것**을 본다 */
 export function sourceBlock(p: SourceEvidencePacket): string {

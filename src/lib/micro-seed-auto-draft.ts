@@ -47,13 +47,6 @@ export const HUMAN_DRAFT_PROVENANCE = ['human-curated', 'founder'] as const
 //    말투와 길이와 맺음은 **원문이 정한다**(source-profile). 기계는 안전만 잰다.
 //    독창성도 `6자 겹침` 에서 실질 복제 판정으로 바뀐다 → draft-originality.ts
 export const DRAFT_RULE_VERSION = 'auto-draft-v5'
-/**
- * 🔴 생성 프롬프트 판.
- *    v6 — **글쓴이의 나이대를 넘긴다** (2026-09-14). v5 는 나이를 보지 못해
- *    40대 후반 Persona 가 `우리 언니(30~32)` 라는 없는 관계를 지어냈다.
- *    🔴 v5 캐시를 재사용하지 않는다 — key 는 판 값과 **실제 프롬프트 digest** 를 함께 본다.
- */
-export const DRAFT_PROMPT_VERSION = 'draft-gen-v6'
 /** 🔴 사람 것과 겹치지 않는다. 기계가 **만든** 글이라는 표시 */
 export const DRAFT_PROVENANCE = 'machine-generated'
 

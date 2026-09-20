@@ -23,7 +23,7 @@ import { SEMANTIC_RISKS, SEMANTIC_HOLD, DRAFT_HARM_AXES } from '../src/lib/micro
 import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 import {
   callBudgetOf, CallBudget, HARM_BANS, MAX_ORIGINALITY_RETRIES,
-  CALL_ALLOWANCE_PER_SOURCE, CALL_EXPECTED_PATH_PER_SOURCE, HARM_PROMPT, digest16,
+  CALL_ALLOWANCE_PER_SOURCE, HARM_PROMPT, digest16,
   V2_CALL_CAP, V2_LEDGER_STAGE,
 } from './micro-seed-auto-draft.mjs'
 import {
@@ -43,9 +43,8 @@ import {
 import { planMatch, planBatch } from '../src/lib/original-post-persona-match'
 // 🔴 fixture 가 운영과 **같은 경로**를 지나게 한다 — 직접 matcher 만 부르면 중간 유실을 못 본다
 import { prepareCandidates } from '../src/lib/supply-candidates'
-import {
-  DRAFT_RULE_VERSION as RV, DRAFT_PROMPT_VERSION as PV,
-} from '../src/lib/micro-seed-auto-draft'
+import { DRAFT_RULE_VERSION as RV } from '../src/lib/micro-seed-auto-draft'
+import { CONTENT_CORE_PROMPT_VERSION } from '../src/lib/content-core/pipeline'
 import { planRefill, MACHINE_PROFILE } from '../src/lib/micro-seed-supply-autofill'
 
 /** 🔴 적재 단계까지 같은 글을 흘려보내 본다 — 판정만 통과하고 적재에서 막히면 의미가 없다 */
@@ -53,7 +52,8 @@ const MACHINE_ENV = {
   provenance: MACHINE_PROFILE.envelopeProvenance,
   ruleVersion: MACHINE_PROFILE.envelopeRuleVersion,
   promptVersion: MACHINE_PROFILE.envelopePromptVersion,
-  model: MACHINE_PROFILE.envelopeModel,
+  pipelineVersion: MACHINE_PROFILE.envelopePipelineVersion,
+  stageModels: STAGE_MODEL,
 }
 const machineCandidate = (o: { title: string; body: string }) => ({
   candidateType: MACHINE_PROFILE.candidateType,
