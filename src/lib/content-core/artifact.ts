@@ -16,7 +16,7 @@ import type {
   SemanticVerdict, UnsupportedAddition,
 } from './review'
 
-export const ARTIFACT_VERSION = 'human-review-v6'
+export const ARTIFACT_VERSION = 'human-review-v7'
 
 /** 🔴 사람만 적을 수 있다 — 기계가 채우면 사칭이다 */
 export const HUMAN_VERDICTS = ['READY', 'EDIT_REQUIRED', 'HOLD'] as const

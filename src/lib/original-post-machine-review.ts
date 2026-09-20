@@ -25,7 +25,12 @@ export type ReviewArtifact = {
   personaCode: string | null
   stance: string | null
   selfBasis: string | null
-  warrants: { fact: string; requiredValue: string; evidenceText: string }[]
+  /**
+   * 🔴 `verifiedCardValue` 는 **코드가 정본 Persona 카드에서 읽은 값**이다 —
+   *    provider 가 적어 낸 값이 아니다. 검토자가 Pool 문서를 열지 않고도
+   *    "이 사람이 정말 그런가" 를 볼 수 있게 함께 적는다.
+   */
+  warrants: { fact: string; requiredValue: string; evidenceText: string; verifiedCardValue: string }[]
   unsupportedAdditions: { evidence: string; why: string }[]
   lifeContradictions: { fact: string; drafted: string; card: string; evidence: string }[]
   droppedFromSource: { evidence: string; why: string }[]
@@ -169,7 +174,9 @@ export function reviewEvidenceLines(a: ReviewArtifact): string[] {
     `화자 ${a.personaCode ?? '(없음)'} / ${a.stance ?? '(없음)'}`
       + (a.selfBasis === null ? '' : ` (${a.selfBasis})`),
     ...(a.warrants.length > 0
-      ? [`1인칭 근거: ${a.warrants.map((w) => `${w.fact}=${w.requiredValue} ← "${w.evidenceText}"`).join(' · ')}`]
+      ? [`1인칭 근거: ${a.warrants.map((w) => `${w.fact}=${w.requiredValue}`
+        + `${w.verifiedCardValue === '' ? '' : ` (카드 "${w.verifiedCardValue}")`}`
+        + ` ← "${w.evidenceText}"`).join(' · ')}`]
       : ['1인칭 근거: (없음)']),
     '원문 근거:',
     ...a.evidence.map((e) => `   [${e.kind}] ${e.text}`),
@@ -213,6 +220,7 @@ export function readReviewArtifact(v: unknown): ReviewArtifact | null {
     selfBasis: typeof plan.selfBasis === 'string' ? plan.selfBasis : null,
     warrants: arr(plan.warrants).map((x) => ({
       fact: S(x.fact), requiredValue: S(x.requiredValue), evidenceText: S(x.evidenceText),
+      verifiedCardValue: S(x.verifiedCardValue),
     })),
     unsupportedAdditions: arr(review.unsupportedAdditions).map((x) => ({ evidence: S(x.evidence), why: S(x.why) })),
     droppedFromSource: arr(review.droppedFromSource).map((x) => ({ evidence: S(x.evidence), why: S(x.why) })),
