@@ -16,7 +16,7 @@ import type {
   SemanticVerdict, UnsupportedAddition,
 } from './review'
 
-export const ARTIFACT_VERSION = 'human-review-v5'
+export const ARTIFACT_VERSION = 'human-review-v6'
 
 /** 🔴 사람만 적을 수 있다 — 기계가 채우면 사칭이다 */
 export const HUMAN_VERDICTS = ['READY', 'EDIT_REQUIRED', 'HOLD'] as const
@@ -52,6 +52,15 @@ export type CallMeta = {
 
 export type HumanReviewArtifact = {
   artifactVersion: string
+  /**
+   * 🔴 **불투명 id** (2026-09-20). 이 한 장을 정확히 가리키는 이름이다.
+   *
+   *    🔴 **원문 제목·본문·해시에서 만들지 않는다.** 그렇게 만들면 id 자체가
+   *       원문의 지문이 되어 DB·큐에 원문이 새어 나간다. 회차마다 새로 만드는
+   *       무작위 값이고, 같은 원천을 두 번 만들면 **서로 다른 id** 다.
+   *    🔴 같은 값이 artifact → candidate → gateResults.autoDraft → 사람 검토까지 간다.
+   */
+  artifactId: string
   sourceArticleId: string
   generatedAt: string
 
@@ -136,6 +145,7 @@ export type HumanReviewArtifact = {
 /** 🔴 기록 직전 관문 — 담으면 안 되는 것이 들어갔는가 */
 export function violatesArtifact(a: HumanReviewArtifact): string[] {
   const bad: string[] = []
+  if (!/^[0-9a-f]{32}$/.test(a.artifactId)) bad.push('🔴 artifactId 가 불투명 id 모양이 아니다')
   if (a.humanDecision.verdict !== null) bad.push('🔴 기계가 사람 판정을 채웠다')
   if (a.humanDecision.reviewedAt !== null) bad.push('🔴 기계가 사람 검토 시각을 채웠다')
   const json = JSON.stringify(a)

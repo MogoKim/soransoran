@@ -152,6 +152,19 @@ function blockedResponse(code: BlockCode, reason: string): LlmResponse {
   }
 }
 
+/** 🔴 정산 줄을 적지 못한 건의 원인 코드 — 부르는 쪽이 이것으로 완주 실패를 읽는다 */
+export const SETTLE_NOT_RECORDED = 'SETTLE_NOT_RECORDED'
+
+/**
+ * 🔴 **응답 + 정산 기록 여부.** 둘을 한 값으로 돌려준다 —
+ *    "provider 는 성공했는데 장부에는 안 적혔다" 를 부르는 쪽이 못 보면 안 된다.
+ */
+export type SupplyCallResult = LlmResponse & {
+  settledUsd: number | null
+  /** 🔴 정산 줄이 장부에 실제로 적혔는가. `false` 면 그 단계는 완주가 아니다 */
+  settlementRecorded: boolean
+}
+
 export class SupplyLlmSession {
   readonly runId: string
   readonly dir: string
@@ -215,15 +228,22 @@ export class SupplyLlmSession {
    * 🔴 **장부가 정산한 금액을 응답에 실어 보낸다** (2026-09-20).
    *    부르는 쪽이 비용을 **다시 계산하지 않게** 하려는 것이다 — 같은 값을 두 곳에서
    *    계산하면 반드시 어긋난다. 정산하지 못한 건은 `null` 이다(0원이 아니다).
+   *
+   * 🔴 **정산 줄을 못 적었으면 성공으로 돌려주지 않는다** (2026-09-20 보정).
+   *    앞판은 provider 응답이 성공이면 `settledUsd` 까지 그대로 돌려줬다 —
+   *    장부에는 그 건이 **미정산으로 남아 있는데** 부르는 쪽은 완주로 읽었다.
+   *    그러면 금액을 모르는 글이 후보·캐시·AUTO_ADOPT 까지 갈 수 있다.
+   *    🔴 `settlementRecorded` 로 **명시**한다. 부르는 쪽은 이것이 `false` 면
+   *       그 단계를 완주로 세지 않는다.
    */
-  async call(input: SupplyCallInput): Promise<LlmResponse & { settledUsd: number | null }> {
+  async call(input: SupplyCallInput): Promise<SupplyCallResult> {
     /**
      * 🔴 **정산 실패가 한 번이라도 있으면 더 보내지 않는다.**
      *    사전 계산(무료)조차 하지 않는다 — 어차피 보류될 요청이다.
      */
     if (this.settleFailed !== null) {
       this.bump('SETTLE_ERROR')
-      return { ...blockedResponse('SETTLE_ERROR', this.settleFailed), settledUsd: null }
+      return { ...blockedResponse('SETTLE_ERROR', this.settleFailed), settledUsd: null, settlementRecorded: false }
     }
     const startedAt = this.now()
     /**
@@ -262,7 +282,7 @@ export class SupplyLlmSession {
       return {
         ...blockedResponse('LEDGER_ERROR',
           `사전 계산을 장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`),
-        settledUsd: null,
+        settledUsd: null, settlementRecorded: false,
       }
     }
 
@@ -334,12 +354,12 @@ export class SupplyLlmSession {
       // 🔴 잠금·기록에 실패하면 **보낸다는 선택지는 없다.** 못 적는 요청은 안 보낸다
       const reason = `장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`
       this.bump('LEDGER_ERROR')
-      return { ...blockedResponse('LEDGER_ERROR', reason), settledUsd: null }
+      return { ...blockedResponse('LEDGER_ERROR', reason), settledUsd: null, settlementRecorded: false }
     }
 
     if (!verdict.ok) {
       this.bump(verdict.code)
-      return { ...blockedResponse(verdict.code, verdict.reason), settledUsd: null }
+      return { ...blockedResponse(verdict.code, verdict.reason), settledUsd: null, settlementRecorded: false }
     }
 
     // ── ④ 🔴 여기서만 유료 요청이 나간다 ──
@@ -364,6 +384,8 @@ export class SupplyLlmSession {
       })
       : { known: false as const, code: 'NO_USAGE' as const, reason: '제공사 사용량을 읽지 못했다' }
     const settled = judgeSettle({ reservedUsd: verdict.reservedUsd, cost })
+    /** 🔴 정산 **줄을 실제로 적었는가.** 적지 못하면 이 단계는 완주가 아니다 */
+    let settlementRecorded = true
     if (settled.status === 'usageUnknown') this.t.usageUnknown += 1
     if (settled.settledUsd !== null) this.t.settledUsd += settled.settledUsd
     if (settled.overran) this.t.overruns += 1
@@ -401,6 +423,7 @@ export class SupplyLlmSession {
        *    직접 지워야 풀린다. 재시작이 우회가 되지 않게 하는 것이 요점이다.
        */
       this.t.usageUnknown += 1
+      settlementRecorded = false
       const why = `정산을 장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`
       this.settleFailed = `${why}`
         + ` · 🔴 예약 ${attemptId} 가 ${openReservationsPathOf(this.dir)} 에 열린 채로 남는다`
@@ -422,7 +445,14 @@ export class SupplyLlmSession {
         this.t.holdWriteFailed += 1
       }
     }
-    return { ...res, settledUsd: settled.settledUsd }
+    /**
+     * 🔴 **정산 줄을 적지 못했으면 금액을 주지 않고 완주로도 세지 않는다.**
+     *    요청은 이미 나갔으니 사용량은 그대로 싣되, 이 단계는 **실패**다.
+     */
+    return settlementRecorded
+      ? { ...res, settledUsd: settled.settledUsd, settlementRecorded: true }
+      : { ...res, ok: false, errorCode: res.errorCode ?? SETTLE_NOT_RECORDED,
+        settledUsd: null, settlementRecorded: false }
   }
 
   /** 장부 한 줄의 고정 칸 — 🔴 본문이 들어갈 자리가 없다 */

@@ -119,6 +119,11 @@ export function personaInputOf(
 }
 
 export type RunInput = {
+  /**
+   * 🔴 **이 한 장의 불투명 id.** 부르는 쪽이 회차마다 새로 만든다 —
+   *    원문에서 유도하지 않는다(원문 지문이 DB 로 새는 것을 막는다).
+   */
+  artifactId: string
   sourceArticleId: string
   /** 🔴 이미 마스킹된 값이다 */
   title: string
@@ -196,6 +201,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     outcome: 'adopt' | 'hold' | 'drop', reason: string,
   ): HumanReviewArtifact => ({
     artifactVersion: ARTIFACT_VERSION,
+    artifactId: input.artifactId,
     sourceArticleId: packet.sourceArticleId,
     generatedAt: input.now.toISOString(),
     evidence: {

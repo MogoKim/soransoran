@@ -1008,8 +1008,15 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
      *    같은 값을 두 곳에서 계산하면 반드시 어긋난다. 못 적었으면 `null` 이다.
      */
     check('🔴 🔴 [L] **정산 금액을 응답에 실어 보낸다 — 재계산 금지**',
-      /Promise<LlmResponse & \{ settledUsd: number \| null \}>/.test(src)
-      && /return \{ \.\.\.res, settledUsd: settled\.settledUsd \}/.test(src))
+      /Promise<SupplyCallResult>/.test(src)
+      && /settledUsd: settled\.settledUsd, settlementRecorded: true/.test(src))
+    /**
+     * 🔴 **정산 줄을 못 적었으면 성공으로 돌려주지 않는다** (2026-09-20).
+     *    부르는 쪽이 완주로 읽으면 금액을 모르는 글이 후보까지 간다.
+     */
+    check('🔴 🔴 [L] **정산 기록 실패는 성공 응답이 아니다**',
+      /settlementRecorded\s*\n?\s*\? \{ \.\.\.res/.test(src)
+      && /ok: false, errorCode: res\.errorCode \?\? SETTLE_NOT_RECORDED/.test(src))
     check('🔴 [L] 날짜를 요청 시작 시각으로 한 번만 정한다 — 정산이 다른 날로 가지 않는다',
       (src.match(/ledgerDateOf\(/g) ?? []).length === 1 && /const date = ledgerDateOf\(startedAt\)/.test(src))
     check('🔴 [L] 읽기·판정·예약 기록을 한 잠금 안에서 한다',
@@ -1078,7 +1085,15 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
   const s1 = new SupplyLlmSession({ runId: 'RF', dir, limits: LIM, io: failSettleIo() })
   const r1 = await s1.call(ASK)
   const afterFirst = { ...fetched }
-  check('🔴 [SF] 첫 요청은 실제로 나갔다', afterFirst.paid === 1 && r1.ok)
+  /**
+   * 🔴 **요청은 나갔지만 완주는 아니다** (2026-09-20 계약 변경).
+   *    provider 는 답했는데 정산 줄을 못 적었다 — 금액을 모르는 건이다.
+   *    앞판은 `ok: true` 에 금액까지 돌려줘서 부르는 쪽이 완주로 읽었다.
+   */
+  check('🔴 [SF] 첫 요청은 실제로 나갔다', afterFirst.paid === 1)
+  check('🔴 🔴 [SF] **정산을 못 적었으므로 완주가 아니다**',
+    !r1.ok && r1.settlementRecorded === false && r1.settledUsd === null,
+    `ok=${r1.ok} recorded=${r1.settlementRecorded} usd=${String(r1.settledUsd)}`)
   check('🔴 [SF] 정산을 못 적어 보류를 걸었다', s1.tally.settleHeld === 1)
   check('🔴 [SF] 예약 줄은 남아 있다 — 미정산이 여력을 계속 먹는다',
     (() => {

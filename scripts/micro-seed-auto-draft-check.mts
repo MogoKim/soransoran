@@ -127,11 +127,19 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
     const r = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     return /sourceDecision: 'AUTO_ADOPT'/.test(r) && !/sourceDecision: 'ADOPT'/.test(r)
   })())
-  check('🔴 supply-autofill 이 이 후보를 받지 않는다는 것을 파일에 적는다', (() => {
+  /**
+   * 🔴 **설명이 현실과 반대였다** (2026-09-20 정정). 앞판 note 는
+   *    *"AUTO_ADOPT 라 autofill 이 받지 않는다"* 였는데, `MACHINE_PROFILE` 의
+   *    `sourceDecision` 이 곧 `AUTO_ADOPT` 라 **machine 경로로 받는다.**
+   *    막는 것은 그 다음 단계, 발행 전 사람 검토다.
+   */
+  check('🔴 🔴 **note 가 현실을 적는다 — autofill 은 받고, 발행은 사람 검토가 연다**', (() => {
     const r = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-    return /supply-autofill 이 받지 않는다/.test(r)
+    return /supply-autofill 은 이 후보를 큐에 올리지만/.test(r)
+      && /publish:machine-review 로 검토를 마쳐야 열린다/.test(r)
+      && !/supply-autofill 이 받지 않는다/.test(r)
   })())
-  check('🔴 supply-autofill 이 실제로 ADOPT·SAVE 만 받는다', (() => {
+  check('🔴 기계 경로의 결정값이 사람 경로와 다르다 — 사칭하지 않는다', (() => {
     const lib = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
     return /seedOriginality: 'ADOPT'/.test(lib) && /rawOriginality: 'SAVE'/.test(lib)
   })())

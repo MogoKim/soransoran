@@ -62,7 +62,7 @@ import {
  *    `source-profile.ts` 는 Original Post 레인이 창업자 피드백 11판을 거쳐 만든 것이다.
  *    그것을 여기로 **연결**한다. 두 벌째 체계를 만들면 한쪽만 낡는다.
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfile } from './lib/source-profile'
 /**
  * 🔴 **말투 근거를 새로 만들지 않는다** (2026-09-13).
@@ -97,7 +97,9 @@ import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-
  *    `callProvider` 를 직접 부르지 않는다 — 나이 검수가 바로 그렇게 새어 나가
  *    회차 상한(`CallBudget`)에도 관제 집계에도 잡히지 않았다.
  */
-import { SupplyLlmSession, limitsFromEnv, LEDGER_BLOCKED } from './lib/supply-llm-call.mjs'
+import {
+  SupplyLlmSession, limitsFromEnv, LEDGER_BLOCKED, type SupplyCallResult,
+} from './lib/supply-llm-call.mjs'
 /**
  * 🔴 **Content Core v2 — 이 러너의 유일한 생성 경로** (2026-09-20 운영 전환).
  *    계획(Gemini) → 초안 한 편(Gemini) → 통합 검수(Haiku). 병렬 경로를 두지 않는다.
@@ -443,10 +445,10 @@ let LEDGER: SupplyLlmSession | null = null
 async function ask(
   stage: LedgerStage, system: string, payload: string, maxOut: number,
   model: ProviderModel = DRAFT_MODEL,
-): Promise<LlmResponse & { settledUsd: number | null }> {
+): Promise<SupplyCallResult> {
   if (LEDGER === null) {
     return {
-      settledUsd: null,
+      settledUsd: null, settlementRecorded: false,
       ok: false, rawText: '', inputTokens: 0, outputTokens: 0,
       finishReason: '', reasoningTokens: null, responseChars: 0, maxTokensReached: false,
       usageKnown: false, cacheWriteTokens: null, cacheReadTokens: null, usageKeys: [],
@@ -475,7 +477,14 @@ const v2Ask: Ask = async (stage, system, payload, model) => {
   const r = await ask(V2_LEDGER_STAGE[stage], system, payload, DRAFT_MAX_TOKENS, model)
   const code = String(r.errorCode ?? '')
   return {
-    ok: r.ok, rawText: r.rawText, truncated: r.maxTokensReached, usageKnown: r.usageKnown,
+    /**
+     * 🔴 **정산 줄을 못 적었으면 완주가 아니다** (2026-09-20).
+     *    provider 가 성공해도 장부에 안 적혔으면 금액을 모르는 글이다 —
+     *    그런 글이 후보·캐시·AUTO_ADOPT 로 가지 않게 여기서 막는다.
+     */
+    ok: r.ok && r.settlementRecorded,
+    rawText: r.rawText, truncated: r.maxTokensReached,
+    usageKnown: r.usageKnown && r.settlementRecorded,
     inputTokens: r.inputTokens, outputTokens: r.outputTokens, thoughtsTokens: r.reasoningTokens,
     /**
      * 🔴 **영속 장부가 정산한 금액을 그대로 싣는다** (2026-09-20).
@@ -948,6 +957,11 @@ async function main(): Promise<void> {
     } else {
       miss += 1
       art = await runContentCore({
+        /**
+         * 🔴 **회차마다 새로 만드는 불투명 id.** 원문에서 유도하지 않는다 —
+         *    유도하면 id 가 원문의 지문이 되어 DB·큐로 원문이 새어 나간다.
+         */
+        artifactId: randomUUID().replace(/-/g, ''),
         sourceArticleId: j.sourceArticleId,
         /**
          * 🔴 **제목도 마스킹을 거친다** (2026-09-20). 본문은 수집 단계에서
@@ -1101,8 +1115,15 @@ async function main(): Promise<void> {
   // 🔴 후보마다 "어느 판정에서 왔는지"를 실어 보낸다. 상수를 찍으면 근거가 아니라 장식이 된다 —
   //    supply-autofill 은 이 값이 없으면 큐 payload 를 만들지 않는다 (§4-AT)
   writeFileSync(candPath, `${JSON.stringify({
+    /**
+     * 🔴 **설명을 사실에 맞춘다** (2026-09-20). 앞판은 *"AUTO_ADOPT 라 autofill 이
+     *    받지 않는다"* 라고 적혀 있었다 — 지금은 **정확히 반대**다.
+     *    `MACHINE_PROFILE.sourceDecision === 'AUTO_ADOPT'` 이므로 autofill 은 받는다.
+     *    막는 것은 그 다음 단계, **발행 전 사람 검토**(`publish:machine-review`)다.
+     */
     note: '🔴 기계가 만들고 기계가 고른 초안이다. 사람의 ADOPT 가 아니다 —'
-      + ' sourceDecision 이 AUTO_ADOPT 라 supply-autofill 이 받지 않는다.',
+      + ' supply-autofill 은 이 후보를 큐에 올리지만,'
+      + ' 발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다.',
     generatedAt: nowIso, ruleVersion: DRAFT_RULE_VERSION,
     /**
      * 🔴 **단계마다 모델이 다르다.** 한 칸에 하나만 적으면 거짓이 된다 —
@@ -1113,6 +1134,8 @@ async function main(): Promise<void> {
     stageModels: STAGE_MODEL, provenance: DRAFT_PROVENANCE,
     candidates: adopted.map((a) => ({
       candidateType: 'seedOriginality',
+      /** 🔴 사람 검토가 이 한 장을 정확히 찾는 열쇠 — 원문에서 유도하지 않은 값이다 */
+      artifactId: a.art.artifactId,
       sourceArticleId: a.pick.sourceArticleId,
       sourceSite: a.meta.site,
       /**

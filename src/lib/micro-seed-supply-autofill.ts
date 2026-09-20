@@ -258,6 +258,8 @@ limits: StockLimits = SAFEST_STOCK_LIMITS,
 }
 
 export type Candidate = {
+  /** 🔴 사람 검토가 artifact 한 장을 정확히 찾는 불투명 열쇠 */
+  artifactId?: string
   candidateType?: string
   sourceArticleId?: string
   sourceSite?: string
@@ -652,10 +654,13 @@ export function buildQueuePayload(input: {
           provenance: MACHINE_PROFILE.envelopeProvenance,
           sourceDecision: MACHINE_PROFILE.sourceDecision,
           /**
-           * 🔴 **원천 id 하나만 싣는다** (2026-09-20). 사람 검토가 로컬 artifact 정본을
-           *    찾을 열쇠다. 🔴 원문 제목·본문·근거는 **DB 로 복사하지 않는다** —
+           * 🔴 **열쇠 둘만 싣는다** (2026-09-20). 사람 검토가 로컬 artifact 정본에서
+           *    **정확히 한 장**을 찾는다 — `artifactId` 로 찾고 `sourceArticleId` 로 대조한다.
+           *    🔴 원문 제목·본문·근거는 **DB 로 복사하지 않는다** —
            *    그것은 `.microseed-data/*.artifacts.json` 에만 있다.
+           *    🔴 `artifactId` 는 원문에서 유도하지 않은 불투명 값이라 지문이 되지 않는다.
            */
+          artifactId: S((c as unknown as Record<string, unknown>).artifactId),
           sourceArticleId: S(c.sourceArticleId),
           draftRuleVersion: S(env.ruleVersion),
           draftPromptVersion: S(env.promptVersion),

@@ -49,7 +49,8 @@ import { join } from 'node:path'
  */
 import {
   findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
-  type ReviewArtifact,
+  currentText, editDiffLines, usdPerReady,
+  type ReviewArtifact, type ReviewTarget,
 } from '../src/lib/original-post-machine-review'
 import { DATA_DIR } from './micro-seed-auto-draft.mjs'
 
@@ -130,12 +131,30 @@ function loadArtifacts(): ReviewArtifact[] {
 }
 const ARTIFACTS = loadArtifacts()
 
-/** 🔴 큐 행이 가리키는 원천 id — 없으면 artifact 를 찾을 수 없다 */
-function sourceArticleIdOf(r: AutoRow): string | null {
+/** 🔴 큐 행이 가리키는 열쇠 둘 — 없으면 artifact 를 찾을 수 없다 */
+function keysOf(r: AutoRow): { artifactId: string | null; sourceArticleId: string | null } {
   const g = r.gateResults as Record<string, unknown> | null
   const ad = (g?.autoDraft ?? null) as Record<string, unknown> | null
-  const v = ad?.sourceArticleId
-  return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+  const pick = (k: string): string | null => {
+    const v = ad?.[k]
+    return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+  }
+  return { artifactId: pick('artifactId'), sourceArticleId: pick('sourceArticleId') }
+}
+
+/**
+ * 🔴 **artifact 는 최초 초안과 견준다.** 사람이 고친 글과 견주면 정상적인
+ *    EDIT_REQUIRED 수정이 전부 `draftMismatch` 로 막힌다.
+ */
+function targetOf(r: AutoRow): ReviewTarget {
+  const raw = rawById.get(r.id)
+  return {
+    ...keysOf(r),
+    draftTitle: raw?.draftTitle ?? r.title,
+    draftBody: raw?.draftBody ?? r.body,
+    editedTitle: raw?.editedTitle ?? null,
+    editedBody: raw?.editedBody ?? null,
+  }
 }
 
 /** 🔴 이 후보의 글쓴이가 누구이고 몇 살인가 — 모르면 검토 완료를 거부한다 */
@@ -153,10 +172,7 @@ function groundOf(r: AutoRow): Ground {
    * 🔴 **사람이 볼 근거가 없으면 검토 완료를 거부한다** (2026-09-20).
    *    다른 글의 근거로 이 글을 통과시키는 것이 가장 조용한 사고다.
    */
-  const ev = findReviewArtifact({
-    sourceArticleId: sourceArticleIdOf(r),
-    title: r.title, body: r.body, artifacts: ARTIFACTS,
-  })
+  const ev = findReviewArtifact({ target: targetOf(r), artifacts: ARTIFACTS })
   if (!ev.ok) return { personaCode: code, ageBand: band, ok: false, reason: ev.reason }
   return { personaCode: code, ageBand: band, ok: true, reason: '' }
 }
@@ -171,12 +187,21 @@ const blocked = pending.filter((r) => !grounds.get(r.id)!.ok)
 console.log(`① 기계 후보 ${machine.length}건 — 🟢 검토 완료 ${reviewed.length} · 🟡 미검토 ${pending.length}`)
 console.log(`   로컬 artifact ${ARTIFACTS.length}장 — 🔴 원문 근거는 DB 가 아니라 ${DATA_DIR} 에 있다`)
 {
-  // 🔴 장부가 정산한 값만 더한다. 여기서 비용을 다시 계산하지 않는다
-  const costs = ARTIFACTS.map(artifactCostUsd)
-  const known = costs.filter((c): c is number => c !== null)
-  console.log(`   정산 합계 $${known.reduce((n, c) => n + c, 0).toFixed(6)}`
-    + ` (정산 ${known.length}장 · 🔴 미상 ${costs.length - known.length}장)`)
-  console.log('   🔴 사람 READY 한 편당 비용은 **사람이 READY 를 찍은 뒤**에만 계산한다')
+  /**
+   * 🔴 **운영 상태에서 읽는다** (2026-09-20). 손으로 목록을 넣지 않는다 —
+   *    `machineReviewedByHuman` 이 참인 행의 `artifactId` 가 곧 READY 다.
+   *    🔴 HOLD·폐기한 글의 비용도 분자에 든다. 쓴 돈은 쓴 돈이다.
+   */
+  const readyArtifactIds = machine
+    .filter((x) => machineReviewedByHuman(x.decidedBy))
+    .map((x) => keysOf(x).artifactId)
+    .filter((x): x is string => x !== null)
+  const v = usdPerReady({ artifacts: ARTIFACTS, readyArtifactIds })
+  console.log(`   정산 합계 ${v.total === null ? '🔴 계산 불가' : `$${v.total.toFixed(6)}`}`
+    + ` · 사람 READY ${v.ready}건`)
+  console.log(`   🔴 READY 한 편당 ${v.perReady === null ? `계산 불가 — ${v.why}` : `$${v.perReady.toFixed(6)}`}`)
+  const unsettled = ARTIFACTS.filter((a) => artifactCostUsd(a) === null).length
+  if (unsettled > 0) console.log(`   🔴 정산 미상 ${unsettled}장 — 합계를 만들지 않는다`)
 }
 console.log(`   미검토 중  검토 가능 ${reviewable.length}건 · 🔴 근거 없어 검토 불가 ${blocked.length}건`)
 if (blocked.length > 0) {
@@ -201,12 +226,31 @@ if (ONLY_ID !== '') {
    * 🔴 **사람이 판단할 근거를 함께 보여 준다** — 원문 근거 · Persona·stance ·
    *    원문에 없는 것 · 사라진 것 · 생활사 모순 · 기계 사유 · 정산액.
    */
-  const ev = findReviewArtifact({
-    sourceArticleId: sourceArticleIdOf(r), title: r.title, body: r.body, artifacts: ARTIFACTS,
-  })
+  const tgt = targetOf(r)
+  const cur = currentText(tgt)
+  /**
+   * 🔴 **사람이 읽어야 하는 것은 수정본이다** (2026-09-20). 위에 찍은 `r.title`/`r.body`
+   *    는 큐가 고른 현재 글이고, 아래는 **무엇이 기계 것이고 무엇이 사람 것인지**다.
+   */
+  if (cur.edited) {
+    console.log(`\n   ── 🔴 EDITED — 사람이 고친 글이다 (status ${r.status}) ──`)
+    console.log('   [기계 최초 초안]')
+    console.log(`     ${tgt.draftTitle}`)
+    console.log(tgt.draftBody.split('\n').map((x) => `       ${x}`).join('\n'))
+    console.log('   [사람 수정본 — 🔴 승인하려는 것은 이쪽이다]')
+    console.log(`     ${cur.title}`)
+    console.log(cur.body.split('\n').map((x) => `       ${x}`).join('\n'))
+    console.log('   [무엇이 바뀌었나]')
+    for (const line of editDiffLines(tgt)) console.log(`     ${line}`)
+  }
+  const ev = findReviewArtifact({ target: tgt, artifacts: ARTIFACTS })
   if (ev.ok) {
     console.log('\n   ── 사람이 볼 근거 (로컬 artifact 정본 · DB 사본 아님) ──')
     for (const line of reviewEvidenceLines(ev.artifact)) console.log(`   ${line}`)
+    if (cur.edited) {
+      console.log('   🔴 위 근거는 **기계 최초 초안**에 대한 것이다 —'
+        + ' 사람 수정본은 사람이 직접 읽고 판단한다')
+    }
   } else {
     console.log(`\n   🔴 근거를 찾지 못했다 — ${ev.reason}`)
   }

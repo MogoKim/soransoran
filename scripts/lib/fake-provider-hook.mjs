@@ -36,6 +36,35 @@ const LOG = process.env.FAKE_PROVIDER_LOG ?? ''
  *    count-fail    🔴 사전 계산만 실패한다 (계산 없이 유료 요청이 나가는지 본다)
  *    over-reserve  🔴 실제 사용량이 예약액을 크게 넘는다 (불일치 뒤 보류를 본다)
  */
+
+/**
+ * 🔴 **정산 줄 기록 실패를 심는다** (2026-09-20). `FAKE_LEDGER_SETTLE_FAIL` 에
+ *    단계 이름(`draftQuality` 등)을 주면 그 단계의 **정산 줄만** 못 적게 한다.
+ *    예약 줄은 정상으로 적힌다 — 그래야 "요청은 나갔는데 정산이 안 적힌" 상태가 된다.
+ *
+ * 🔴 **시험 전용 이음매다.** 운영 경로는 이 파일을 import 하지 않고,
+ *    `REAL_LEDGER_IO.append` 를 여기서만 감싼다. 운영 코드는 한 줄도 바뀌지 않는다.
+ */
+const SETTLE_FAIL_STAGE = process.env.FAKE_LEDGER_SETTLE_FAIL ?? ''
+let settleFailArmed = false
+/**
+ * 🔴 **첫 요청 때 건다.** 이 훅은 `--import` 로 tsx 로더보다 **먼저** 돌아서
+ *    그 시점에는 `.mts` 를 아직 해결하지 못한다. 첫 provider 요청이 나갈 무렵이면
+ *    러너가 이미 그 모듈을 읽었고 로더도 서 있다 — 3번째 단계의 정산보다 충분히 앞이다.
+ */
+async function armSettleFail() {
+  if (SETTLE_FAIL_STAGE === '' || settleFailArmed) return
+  settleFailArmed = true
+  const mod = await import('./supply-llm-call.mjs')
+  const real = mod.REAL_LEDGER_IO.append
+  mod.REAL_LEDGER_IO.append = (path, entry) => {
+    // 🔴 정산 줄만 막는다 — 예약 줄(`reserved`)은 그대로 적힌다
+    if (entry.stage === SETTLE_FAIL_STAGE && entry.status !== 'reserved' && entry.endedAt !== null) {
+      throw new Error('fixture: 정산 줄을 적지 못했다')
+    }
+    real(path, entry)
+  }
+}
 const MODE = process.env.FAKE_PROVIDER_MODE ?? 'ok'
 /** 🔴 사전 계산이 돌려줄 입력 토큰 수 — 예약액을 시험에서 조절하는 손잡이 */
 const COUNT_TOKENS = Number(process.env.FAKE_PROVIDER_COUNT_TOKENS ?? '100')
@@ -93,6 +122,7 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 const BODY_LOG = process.env.FAKE_PROVIDER_BODY_LOG ?? ''
 
 globalThis.fetch = async (url, init) => {
+  await armSettleFail()
   const u = String(url)
   // 🔴 제공사마다 사전 계산 경로 이름이 다르다 — 둘 다 무료다
   const isCount = u.includes('/count_tokens') || u.includes(':countTokens')

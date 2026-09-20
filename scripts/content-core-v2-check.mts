@@ -11,6 +11,7 @@
  * 🔴 **이 판의 핵심**: `SELF_EXPERIENCE` 는 **코드가 검증한 허가 근거** 없이 나올 수 없다.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 
 import { runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
@@ -124,6 +125,8 @@ const run = (o: {
 }): Promise<HumanReviewArtifact> => {
   SENT = []
   return runContentCore({
+    // 🔴 fixture 도 회차마다 새 불투명 id 를 준다 — 원문에서 유도하지 않는다
+    artifactId: randomUUID().replace(/-/g, ''),
     sourceArticleId: o.id, title: o.title, maskedBody: o.body,
     personas: o.personas ?? ALL, load: o.load, voiceSourceDigest: 'asset000000000',
     ask: fakeAsk(o.canned, o.fault), now: NOW, callCap: o.cap ?? 6,
