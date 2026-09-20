@@ -64,6 +64,37 @@ export type PersonaLifeContract = Pick<PoolCard,
   | 'menopauseStatus' | 'parentCare' | 'personality' | 'noGoTopics' | 'noGoExpressions'>
 
 /**
+ * 🔴 **생성 계약에 들어가는 생활사 칸의 정본 순서** (2026-09-21).
+ *
+ *    이 값들은 화자 계획·생성·검수 프롬프트에 **그대로 실린다**. 하나라도 바뀌면
+ *    같은 원문이라도 다른 글이 나온다. 그래서 생성 계약의 지문에 전부 들어가야 한다.
+ *    🔴 앞판은 `code`·말투 토큰·말투 묶음 지문만 담아서, 나이대·형편·금지 소재를
+ *    바꿔도 지난 결과가 "지금 계약의 결론" 으로 남았다(2026-09-21 실측 13/13).
+ */
+export const LIFE_CONTRACT_FIELDS = [
+  'code', 'ageBand', 'region', 'maritalStatus', 'spouseRelationship',
+  'childrenCount', 'childrenAgeBands', 'workStatus', 'economicStatus',
+  'menopauseStatus', 'parentCare', 'personality', 'noGoTopics', 'noGoExpressions',
+] as const satisfies readonly (keyof PersonaLifeContract)[]
+
+/**
+ * 🔴 **생활사 계약 한 줄.** 칸 순서는 위 목록으로 고정한다 — 객체 키 순서에 기대지 않는다.
+ *
+ * 🔴 **배열은 정렬하지 않는다.** 적힌 순서가 프롬프트에 그대로 실리기 때문이다.
+ *    정렬해 버리면 순서만 바뀐 카드가 "같은 계약" 이 되어, 다른 프롬프트로 만든
+ *    옛 결과를 그대로 쓰게 된다. 🔴 **댓글 원문은 담지 않는다** — 말투는 묶음 지문이 맡는다.
+ */
+export function lifeContractIdentity(p: PersonaLifeContract): string {
+  return LIFE_CONTRACT_FIELDS.map((k) => {
+    const v = p[k]
+    const text = v === null || v === undefined ? '∅'
+      : Array.isArray(v) ? v.map((x) => String(x)).join('\u0002')
+        : String(v)
+    return `${k}=${text}`
+  }).join('\u0001')
+}
+
+/**
  * 🔴 **모델이 적어 내는 칸.** 카드 값은 **여기 없다** (2026-09-20 보정).
  *
  *    앞판은 고른 사람의 카드 값을 모델이 `cardValue` 로 **다시 적게** 하고,
@@ -143,6 +174,21 @@ export type SpeakerPlan = {
   rejection: WarrantRejection | null
   planVersion: string
 }
+
+/**
+ * 🔴 **다시 물어도 같은 거절은 이것 하나다** (2026-09-21).
+ *
+ *    "그 사람의 카드가 이 값을 충족하지 않는다" 는 원문과 카드가 정하는 사실이라
+ *    다시 물어도 같다 — 결론이다. 나머지 거절은 **모델이 이번에 잘못 답한 것**이다:
+ *    후보에 없는 코드 · 우리 자리 이름이 아님 · 원문에 없는 근거 문장 · 빈 근거.
+ *    그것을 결론으로 적으면 정상 원천이 영구 제외된다.
+ */
+export const QUALIFICATION_REJECTIONS = [
+  'requiredValueUnmet',
+] as const satisfies readonly WarrantRejection[]
+
+/** 🔴 계획 응답이 JSON 조차 아니었다는 표시 — 문자열을 두 곳에 적지 않는다 */
+export const UNPARSABLE_PLAN = 'JSON 이 아니다'
 
 export type SpeakerPlanParse = {
   plan: SpeakerPlan
@@ -262,7 +308,7 @@ export function parseSpeakerPlan(
     const t = raw.trim()
     j = JSON.parse(t.startsWith('{') ? t : `{${t}`) as Record<string, unknown>
   } catch {
-    return { plan: HOLD('계획을 읽지 못했다'), dropped: [], schemaProblems: ['JSON 이 아니다'] }
+    return { plan: HOLD('계획을 읽지 못했다'), dropped: [], schemaProblems: [UNPARSABLE_PLAN] }
   }
   const problems: string[] = []
   const dropped: { text: string; why: DropReason }[] = []
@@ -384,6 +430,19 @@ export function parseSpeakerPlan(
       `1인칭 허가 실패 — ${why}. 🔴 자리를 낮춰 만들지 않는다`, v.why)),
     dropped, schemaProblems: problems,
   }
+}
+
+/**
+ * 🔴 **이번 답의 모양이 어긋났는가.** 어긋났으면 결론이 아니라 재시도다 —
+ *    같은 원문이라도 다음에는 제대로 온 답이 올 수 있다.
+ *
+ * 🔴 모르는 `contentRole` 처럼 **버리고 지나가는 흠**은 여기 해당하지 않는다.
+ *    계획 자체를 세우지 못한 경우만이다.
+ */
+export function planSchemaFailed(parse: SpeakerPlanParse): boolean {
+  if (parse.schemaProblems.includes(UNPARSABLE_PLAN)) return true
+  const r = parse.plan.rejection
+  return r !== null && !(QUALIFICATION_REJECTIONS as readonly string[]).includes(r)
 }
 
 /** 🔴 생성해도 되는가 — 확인 못 한 글은 만들지 않는다 */

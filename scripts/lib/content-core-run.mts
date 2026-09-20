@@ -22,7 +22,9 @@ import type { PoolCard } from '../../src/lib/persona-pool-card'
 /** 🔴 provider 가 아는 모델만 — `as` 로 모르는 이름을 억지 통과시키지 않는다 */
 import type { ProviderModel } from './voice-m3-provider.mjs'
 import { STAGE_MODEL as CANON_STAGE_MODEL } from '../../src/lib/content-core/pipeline'
-import { canGenerate, parseSpeakerPlan } from '../../src/lib/content-core/speaker'
+import {
+  canGenerate, lifeContractIdentity, parseSpeakerPlan, planSchemaFailed,
+} from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import {
   buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
@@ -88,6 +90,22 @@ export type Ask = (
 export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> & {
   samples: readonly string[]
   bundleDigest: string
+}
+
+/**
+ * 🔴 **이 회차가 쓸 수 있었던 후보 풀 전체의 한 줄.**
+ *
+ *    생성 계약(`personaPoolDigest`)이 이 값의 지문을 쓴다. 생활사 계약 전체와
+ *    말투 토큰·말투 묶음 지문이 들어간다 — 전부 프롬프트에 실리는 값이다.
+ *    🔴 **댓글 원문은 넣지 않는다.** 말투 근거는 `bundleDigest` 가 대신한다.
+ *    🔴 후보 순서는 코드 오름차순으로 고정한다 — 읽는 순서가 달라도 같은 값이어야 한다.
+ */
+export function personaPoolIdentity(cands: readonly PersonaInput[]): string {
+  return [...cands]
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((c) => `${lifeContractIdentity(c)}\u0001voice=${c.voiceTokens.join('\u0002')}`
+      + `\u0001bundle=${c.bundleDigest}`)
+    .join('\u0003')
 }
 
 /**
@@ -266,7 +284,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   if (budgetProblems.length > 0) {
     return blank(null, [], null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
-      null, notRun('ledgerUnavailable'), 'hold', budgetProblems.join(' · '))
+      // 🔴 장부 탓이 아니다 — 근거 묶음을 만드는 쪽이 어긋난 것이다. 다시 물어도 같다
+      null, notRun('evidenceBudgetViolated'), 'hold', budgetProblems.join(' · '))
   }
   /**
    * 🔴 **이미지·링크·앞 대화 없이는 알 수 없는 글은 만들지 않는다.**
@@ -288,6 +307,18 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const parse = parseSpeakerPlan(pRes.rawText, packet, input.personas)
   const plan = parse.plan
   const dropped = parse.dropped
+  /**
+   * 🔴 **형식을 어긴 답과 자격이 없는 원문을 가른다** (2026-09-21 보정).
+   *
+   *    앞판은 둘 다 `canGenerate` 실패로 흘러 `speakerUnqualified`(결론)가 됐다.
+   *    JSON 이 아니거나 schema 가 어긋난 것은 **이번 답이 잘못된 것**이다 —
+   *    다시 물으면 달라질 수 있다. 결론으로 적으면 정상 원천이 영구 제외된다.
+   */
+  if (planSchemaFailed(parse)) {
+    const why = parse.schemaProblems.length > 0 ? parse.schemaProblems.join(' · ') : plan.reason
+    return blank(plan, dropped, null, null, noDet, null, notRun('parseFailed'),
+      'hold', `화자 계획을 읽지 못했다 (${why})`)
+  }
   const gen = canGenerate(packet, plan)
   if (!gen.ok) {
     return blank(plan, dropped, null, null, noDet, null, notRun('speakerUnqualified'),
@@ -333,7 +364,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(plan, dropped, voice, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
-      null, dC.complete ? notRun('draftUnreadable') : notRunFrom(dC), 'hold', why)
+      // 🔴 읽지 못한 답은 **이번 답**이 잘못된 것이다 — 결론이 아니라 재시도다
+      null, dC.complete ? notRun('parseFailed') : notRunFrom(dC), 'hold', why)
   }
 
   // ── ④ deterministic — 확정 가능한 것만 ──

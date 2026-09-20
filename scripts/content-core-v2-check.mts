@@ -28,6 +28,7 @@ import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-co
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
 import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL, REVIEW_VERSION,
+  artifactRetryable, reviewShapeOk,
   REVIEW_WARNING_AXES, judgeMachine, reviewWarnings,
   type DeterministicResult, type ReviewCompletion, type SemanticVerdict,
 } from '../src/lib/content-core/review'
@@ -60,6 +61,11 @@ const check = (n: string, ok: boolean, extra = ''): void => {
 const NOW = new Date('2026-09-19T10:00:00.000Z')
 
 type Canned = { plan?: unknown; draft?: unknown; review?: unknown }
+type Fault = {
+  truncate?: string; blocked?: string; usageUnknown?: string
+  /** 🔴 그 단계가 **형식을 어긴 답**을 돌려준다 */
+  raw?: { stage: string; text: string }
+}
 const okRes = (text: string): AskResult => ({
   ok: true, rawText: text, truncated: false, usageKnown: true,
   inputTokens: 100, outputTokens: 20, thoughtsTokens: null, usd: 0.0001, blocked: false,
@@ -78,7 +84,7 @@ type Sent = { stage: string; system: string; payload: string; model: string }
 let SENT: Sent[] = []
 const sentOf = (stage: string): Sent[] => SENT.filter((x) => x.stage === stage)
 
-const fakeAsk = (c: Canned, fault: { truncate?: string; blocked?: string; usageUnknown?: string } = {}): Ask =>
+const fakeAsk = (c: Canned, fault: Fault = {}): Ask =>
   async (stage, system, payload, model) => {
     SENT.push({ stage, system, payload, model })
     if (fault.blocked === stage) {
@@ -88,6 +94,8 @@ const fakeAsk = (c: Canned, fault: { truncate?: string; blocked?: string; usageU
       }
     }
     if (fault.truncate === stage) return { ...okRes(''), truncated: true }
+    // 🔴 형식을 어긴 답 — 완주는 했는데 읽을 수 없는 경우다
+    if (fault.raw?.stage === stage) return okRes(fault.raw.text)
     if (fault.usageUnknown === stage) return { ...okRes(pick(c, stage)), usageKnown: false, inputTokens: null, outputTokens: null, thoughtsTokens: null, usd: null }
     return okRes(pick(c, stage))
   }
@@ -134,7 +142,7 @@ const run = (o: {
   id: string; title: string; body: string; canned: Canned
   personas?: readonly PersonaInput[]
   load?: Record<string, number>
-  fault?: { truncate?: string; blocked?: string; usageUnknown?: string }
+  fault?: Fault
   cap?: number
 }): Promise<HumanReviewArtifact> => {
   SENT = []
@@ -986,11 +994,75 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
     blocked.review.semanticCompletion.reason === 'budgetBlocked',
     String(blocked.review.semanticCompletion.reason))
   check('🔴 막힌 회차는 adopt 가 아니다', blocked.review.machineOutcome !== 'adopt')
+  /**
+   * 🔴 **형식을 어긴 답은 결론이 아니다** (2026-09-21 보정).
+   *    앞판은 화자 계획 파싱 실패가 `canGenerate` 실패로 흘러 `speakerUnqualified`(결론)가 됐고,
+   *    초안 파싱 실패는 `draftUnreadable`(결론)이었다. 둘 다 정상 원천을 영구 제외했다.
+   */
+  const planIn = plan({
+    personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+    speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
+      evidenceRef: 'title', evidenceText: '알바중' })],
+    contentRoles: ['usefulAnswer'],
+  })
+  for (const [name, fault] of [
+    ['화자 계획이 JSON 이 아니다', { raw: { stage: 'speakerPlan', text: '이건 JSON 이 아니다' } }],
+    ['화자 계획 schema 가 어긋났다', { raw: { stage: 'speakerPlan', text: '{"decision":"뭔가"}' } }],
+    ['초안이 JSON 이 아니다', { raw: { stage: 'draftGen', text: '제목만 덜렁 왔다' } }],
+    ['초안에 본문이 없다', { raw: { stage: 'draftGen', text: '{"title":"제목"}' } }],
+  ] as const) {
+    const got = await run({
+      id: SRC.C.id, title: SRC.C.title, body: SRC.C.body, personas: [partTime],
+      fault, canned: { plan: planIn, draft: D },
+    })
+    const c = got.review.semanticCompletion
+    check(`🔴 🔴 **${name} → 다시 시도한다**`,
+      c.complete === false && c.reason === 'notRun' && c.cause === 'parseFailed'
+      && artifactRetryable(got.review) === true && reviewShapeOk(got.review),
+      `${String(c.reason)}/${String(c.cause)} · ${got.review.machineReason}`)
+  }
+  check('🔴 🔴 **정상 자격 실패는 그대로 결론이다**',
+    held.review.semanticCompletion.cause === 'speakerUnqualified'
+    && artifactRetryable(held.review) === false,
+    String(held.review.semanticCompletion.cause))
+  {
+    const chose = await run({
+      id: SRC.C.id, title: SRC.C.title, body: SRC.C.body, personas: [partTime],
+      canned: {
+        plan: planIn, draft: D,
+        review: { ...EMPTY_REVIEW, issues: ['voiceMismatch'] },
+      },
+    })
+    check('🔴 🔴 **모델이 완주해서 고른 HOLD 는 결론이다**',
+      chose.review.machineOutcome === 'hold'
+      && chose.review.semanticCompletion.complete === true
+      && artifactRetryable(chose.review) === false,
+      `${chose.review.machineOutcome} · ${chose.review.machineReason}`)
+  }
+  check('🔴 예산에 막힌 회차는 계속 재시도다', artifactRetryable(blocked.review) === true)
+
+  /** 🔴 근거 예산 위반은 **장부 탓이 아니다** — 근거를 만드는 쪽이 어긋난 것이다 */
+  {
+    const over = await run({
+      id: 'budget-1', title: '제'.repeat(900), body: SRC.C.body, personas: [partTime],
+      canned: { plan: planIn, draft: D },
+    })
+    const c = over.review.semanticCompletion
+    check('🔴 🔴 **근거 예산 위반은 제 이름으로 남는다**',
+      c.cause === 'evidenceBudgetViolated' && c.reason === 'notRun',
+      `${String(c.reason)}/${String(c.cause)}`)
+    check('🔴 🔴 **그리고 다시 시도하지 않는다 — 배선이 그대로면 또 같다**',
+      artifactRetryable(over.review) === false && over.cost.totalCalls === 0)
+  }
+
   check('🔴 🔴 **중단 원인을 문구가 아니라 값으로 적는다**', (() => {
     const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     return !/const INCOMPLETE: ReviewCompletion/.test(src) && !/\bNOT_RUN\b/.test(src)
       && /notRun\('speakerUnqualified'\)/.test(src)
       && /notRun\('voiceUnready'\)/.test(src)
+      && /notRun\('evidenceBudgetViolated'\)/.test(src)
+      && /notRun\('parseFailed'\)/.test(src)
+      && !/draftUnreadable|ledgerUnavailable/.test(src)
       && /notRunFrom\(pC\)/.test(src)
   })())
   check('🔴 사유 이름마다 사람이 읽는 말이 있다',

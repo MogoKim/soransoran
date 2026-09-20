@@ -143,16 +143,40 @@ export type IncompleteReason = (typeof INCOMPLETE_REASONS)[number]
  * 🔴 앞 절반은 **다시 물으면 달라질 수 있는 것**, 뒤 절반은 **다시 물어도 같은 것**이다.
  */
 export const INCOMPLETE_CAUSES = [
-  // 다시 시도한다
-  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed', 'ledgerUnavailable',
+  /**
+   * 🔴 **다시 물으면 달라질 수 있는 것.** `parseFailed` 가 여기 있는 이유는
+   *    모델이 이번에 형식을 어겼다는 뜻이기 때문이다 — 같은 입력이라도 다음에는
+   *    제대로 온다. 이것을 결론으로 적으면 정상 원천이 영구 제외된다(2026-09-21 실측).
+   */
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
   // 결론이다 — 같은 입력·같은 계약이면 또 같다
-  'contextInsufficient', 'speakerUnqualified', 'voiceUnready', 'wiringBroken',
-  'draftUnreadable', 'deterministicFailed',
+  'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
+  'wiringBroken', 'deterministicFailed',
 ] as const
 export type IncompleteCause = (typeof INCOMPLETE_CAUSES)[number]
 
 export const RETRYABLE_CAUSES = [
-  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed', 'ledgerUnavailable',
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+] as const satisfies readonly IncompleteCause[]
+
+/**
+ * 🔴 **유료 단계가 직접 실패했을 때 쓰는 사유.** 이때 `reason` 과 `cause` 는 **같은 값**이다 —
+ *    다르면 둘 중 하나가 거짓이다.
+ */
+export const DIRECT_REASONS = [
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+] as const satisfies readonly IncompleteReason[]
+
+/**
+ * 🔴 **`notRun` 이 달고 올 수 있는 원인.** 검수를 부르기 전에 멈춘 경로가 실제로
+ *    내는 값만이다. 여기 없는 값이 `notRun` 과 함께 오면 모양이 깨진 것이다.
+ */
+export const NOT_RUN_CAUSES = [
+  // 앞 유료 단계가 완주하지 못해 그 원인을 물려받은 것
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+  // 묻기 전에 구조로 멈춘 것
+  'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
+  'wiringBroken', 'deterministicFailed',
 ] as const satisfies readonly IncompleteCause[]
 
 export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> = {
@@ -161,12 +185,11 @@ export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> =
   truncated: '답이 잘렸다',
   usageUnknown: '사용량을 알 수 없다',
   parseFailed: '답을 읽지 못했다',
-  ledgerUnavailable: '장부를 열지 못해 묻지 않았다',
   contextInsufficient: '무슨 이야기인지 확인하지 못했다',
+  evidenceBudgetViolated: '원문 근거 예산을 넘겼다 — 근거를 만드는 쪽이 어긋났다',
   speakerUnqualified: '이 원문을 1인칭으로 쓸 사람이 없다',
   voiceUnready: '말투 근거가 서지 않았다',
   wiringBroken: '요청 배선이 어긋났다',
-  draftUnreadable: '초안을 읽지 못했다',
   deterministicFailed: '확정 가능한 결함이 있다',
 }
 
@@ -186,14 +209,29 @@ export type ReviewCompletion = {
 export function reviewShapeOk(review: unknown): boolean {
   if (typeof review !== 'object' || review === null) return false
   const r = review as Record<string, unknown>
-  if (!(MACHINE_OUTCOMES as readonly string[]).includes(String(r.machineOutcome ?? ''))) return false
+  const outcome = String(r.machineOutcome ?? '')
+  if (!(MACHINE_OUTCOMES as readonly string[]).includes(outcome)) return false
   const c = r.semanticCompletion
   if (typeof c !== 'object' || c === null) return false
   const cc = c as Record<string, unknown>
   if (typeof cc.complete !== 'boolean') return false
+  // 🔴 완주했으면 사유도 원인도 없다 — 하나라도 있으면 둘 중 하나가 거짓이다
   if (cc.complete) return cc.reason === null && cc.cause === null
-  if (!(INCOMPLETE_REASONS as readonly string[]).includes(String(cc.reason ?? ''))) return false
-  return (INCOMPLETE_CAUSES as readonly string[]).includes(String(cc.cause ?? ''))
+  const reason = String(cc.reason ?? '')
+  const cause = String(cc.cause ?? '')
+  if (!(INCOMPLETE_REASONS as readonly string[]).includes(reason)) return false
+  if (!(INCOMPLETE_CAUSES as readonly string[]).includes(cause)) return false
+  // 🔴 단계가 직접 실패했으면 사유와 원인이 같아야 한다
+  if ((DIRECT_REASONS as readonly string[]).includes(reason) && reason !== cause) return false
+  // 🔴 `notRun` 은 검수를 부르기 전에 멈춘 경로가 내는 원인만 달 수 있다
+  if (reason === 'notRun' && !(NOT_RUN_CAUSES as readonly string[]).includes(cause)) return false
+  /**
+   * 🔴 **완주하지 못한 회차는 채택이 아니다.** 결론은 `hold` 다 —
+   *    딱 하나, 초안에 개인정보·금지 낱말이 있어 **묻기 전에 버린** 경우만 `drop` 이다.
+   *    그 판정은 코드가 확정한 것이라 다시 물어도 같다.
+   */
+  if (outcome === 'adopt') return false
+  return outcome === 'hold' || cause === 'deterministicFailed'
 }
 
 export const INCOMPLETE_LABEL: Readonly<Record<IncompleteReason, string>> = {

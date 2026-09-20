@@ -29,9 +29,14 @@ import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION, STAGE_MAX_OUTPUT_LABEL, STAGE_MODEL,
   type GenerationContract,
 } from '../src/lib/content-core/pipeline'
-import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import {
-  artifactRetryable, reviewShapeOk, INCOMPLETE_CAUSES, RETRYABLE_CAUSES, REVIEW_VERSION,
+  LIFE_CONTRACT_FIELDS, SPEAKER_PLAN_VERSION,
+} from '../src/lib/content-core/speaker'
+import { personaInputOf, personaPoolIdentity } from './lib/content-core-run.mjs'
+import type { PoolCard } from '../src/lib/persona-pool-card'
+import {
+  artifactRetryable, reviewShapeOk, DIRECT_REASONS, INCOMPLETE_CAUSES, NOT_RUN_CAUSES,
+  RETRYABLE_CAUSES, REVIEW_VERSION,
 } from '../src/lib/content-core/review'
 
 let pass = 0
@@ -521,9 +526,17 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     machineOutcome: 'hold',
     semanticCompletion: { complete: false, reason: 'notRun', cause: 'speakerUnqualified' }, ...o,
   })
-  check('🔴 🔴 **재시도 원인 여섯 가지**',
+  check('🔴 🔴 **재시도 원인 다섯 가지**',
     RETRYABLE_CAUSES.join(',')
-      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,ledgerUnavailable')
+      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed')
+  check('🔴 🔴 **모델이 형식을 어긴 것은 결론이 아니다**',
+    (RETRYABLE_CAUSES as readonly string[]).includes('parseFailed'))
+  check('🔴 🔴 **장부 탓·초안 읽기 실패라는 원인은 사라졌다**',
+    !(INCOMPLETE_CAUSES as readonly string[]).includes('ledgerUnavailable')
+    && !(INCOMPLETE_CAUSES as readonly string[]).includes('draftUnreadable'))
+  check('🔴 🔴 **근거 예산 위반은 제 이름으로 남는다 — 재시도가 아니다**',
+    (INCOMPLETE_CAUSES as readonly string[]).includes('evidenceBudgetViolated')
+    && !(RETRYABLE_CAUSES as readonly string[]).includes('evidenceBudgetViolated'))
   for (const c of RETRYABLE_CAUSES) {
     check(`🔴 ${c} 는 재시도다`,
       artifactRetryable(RV({ semanticCompletion: { complete: false, reason: 'notRun', cause: c } })) === true)
@@ -542,6 +555,14 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     })) === true)
   for (const [name, bad] of [
     ['completion 없음', { machineOutcome: 'hold' }],
+    ['직접 실패인데 원인이 다르다',
+      { machineOutcome: 'hold', semanticCompletion: { complete: false, reason: 'truncated', cause: 'voiceUnready' } }],
+    ['예산 차단인데 원인이 파싱 실패',
+      { machineOutcome: 'hold', semanticCompletion: { complete: false, reason: 'budgetBlocked', cause: 'parseFailed' } }],
+    ['미완료인데 채택',
+      { machineOutcome: 'adopt', semanticCompletion: { complete: false, reason: 'truncated', cause: 'truncated' } }],
+    ['미완료인데 폐기 — 확정 결함이 아니다',
+      { machineOutcome: 'drop', semanticCompletion: { complete: false, reason: 'notRun', cause: 'voiceUnready' } }],
     ['completion 이 객체가 아니다', { machineOutcome: 'hold', semanticCompletion: 'hold' }],
     ['complete 가 없다', { machineOutcome: 'hold', semanticCompletion: { reason: 'notRun', cause: 'voiceUnready' } }],
     ['모르는 reason', { machineOutcome: 'hold', semanticCompletion: { complete: false, reason: '뭔가', cause: 'voiceUnready' } }],
@@ -556,6 +577,41 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
         outcome: String((bad as { machineOutcome?: string }).machineOutcome ?? ''),
       }, BASE, ARTIFACT_VERSION)?.state === 'unknown')
   }
+  check('🔴 🔴 **직접 실패는 사유와 원인이 같아야 한다**',
+    DIRECT_REASONS.every((r) => reviewShapeOk(RV({
+      semanticCompletion: { complete: false, reason: r, cause: r },
+    }))))
+  check('🔴 🔴 **notRun 은 검증된 앞 단계 원인만 단다**',
+    NOT_RUN_CAUSES.every((c) => reviewShapeOk(RV({
+      semanticCompletion: { complete: false, reason: 'notRun', cause: c },
+    }))))
+  /**
+   * 🔴 **목록이 러너의 실제 배출과 같아야 한다.** 러너가 새 원인으로 멈추는데
+   *    목록에 없으면 그 artifact 는 모양이 깨진 것(`unknown`)이 되어 조용히 다시 돌게 된다.
+   *    🔴 그래서 **값 목록과 실제 코드**를 여기서 묶는다.
+   */
+  check('🔴 🔴 **러너가 내는 notRun 원인이 목록과 정확히 같다**', (() => {
+    const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+    const direct = [...src.matchAll(/notRun\('([a-zA-Z]+)'\)/g)].map((m) => m[1]!)
+    // 🔴 `notRunFrom` 은 앞 단계 완주 판정(`completionOf`)의 원인을 그대로 물려받는다
+    const inherited = /notRunFrom\(/.test(src)
+      ? [...src.matchAll(/reason: '([a-zA-Z]+)', cause: '([a-zA-Z]+)'/g)].map((m) => m[2]!)
+      : []
+    const emitted = new Set([...direct, ...inherited])
+    const listed = new Set<string>(NOT_RUN_CAUSES)
+    return emitted.size > 0 && [...emitted].every((c) => listed.has(c))
+      && [...listed].every((c) => emitted.has(c))
+  })())
+  check('🔴 🔴 **확정 결함으로 묻기 전에 버린 것만 미완료 drop 이다**', (() => {
+    const det = RV({
+      machineOutcome: 'drop',
+      semanticCompletion: { complete: false, reason: 'notRun', cause: 'deterministicFailed' },
+    })
+    return reviewShapeOk(det) && artifactRetryable(det) === false
+      && artifactOutcome({
+        ...A(), retryable: false, outcome: 'drop',
+      }, BASE, ARTIFACT_VERSION)?.state === 'terminal'
+  })())
   check('🔴 정상 hard HOLD 는 terminal 이다', (() => {
     const good = RV({ semanticCompletion: { complete: true, reason: null, cause: null } })
     return reviewShapeOk(good) && artifactOutcome({
@@ -592,6 +648,71 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
     return !/order: f\b/.test(runner) && !/\border\b\s*:/.test(lib)
   })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로 담는다')
+// ─────────────────────────────────────────────────────────
+{
+  const CARD = (o: Partial<PoolCard> = {}): PoolCard => ({
+    code: 'P01', title: '카드', ageBand: '40대 후반', region: '수도권',
+    maritalStatus: '기혼', spouseRelationship: '원만', childrenCount: 2,
+    childrenAgeBands: ['중고등'], workStatus: '파트타임', economicStatus: '빠듯',
+    housing: '전세', menopauseStatus: '전', parentCare: '간병 간헐',
+    personality: ['부지런함'], noGoTopics: ['남의 형편 비교'], noGoExpressions: ['"그래도"'],
+    forbiddenReactionRoles: [], voiceTokens: ['짧은 문장'], voiceLength: '짧음',
+    variationCount: 6, ...o,
+  })
+  const ref = { samples: ['가나다'], bundleDigest: 'b1' }
+  const poolOf = (...cards: PoolCard[]): string =>
+    personaPoolIdentity(cards.map((c) => personaInputOf(c, ref)))
+  const base = poolOf(CARD())
+
+  check('🔴 🔴 **계약 칸이 정본 생활사 열넷과 같다**',
+    LIFE_CONTRACT_FIELDS.join(',')
+      === 'code,ageBand,region,maritalStatus,spouseRelationship,childrenCount,childrenAgeBands,'
+      + 'workStatus,economicStatus,menopauseStatus,parentCare,personality,noGoTopics,noGoExpressions',
+    LIFE_CONTRACT_FIELDS.join(','))
+
+  /** 🔴 **열넷을 하나씩 바꿔 본다** — 하나라도 지문에 없으면 여기서 걸린다 */
+  const CHANGES: readonly (readonly [string, Partial<PoolCard>])[] = [
+    ['code', { code: 'P02' }],
+    ['ageBand', { ageBand: '50대 초반' }],
+    ['region', { region: '광역시' }],
+    ['maritalStatus', { maritalStatus: '이혼' }],
+    ['spouseRelationship', { spouseRelationship: '소원' }],
+    ['childrenCount', { childrenCount: 1 }],
+    ['childrenAgeBands', { childrenAgeBands: ['성인'] }],
+    ['workStatus', { workStatus: '전업' }],
+    ['economicStatus', { economicStatus: '여유' }],
+    ['menopauseStatus', { menopauseStatus: '진행중' }],
+    ['parentCare', { parentCare: '없음' }],
+    ['personality', { personality: ['느긋함'] }],
+    ['noGoTopics', { noGoTopics: ['다른 소재'] }],
+    ['noGoExpressions', { noGoExpressions: ['"다른 표현"'] }],
+  ]
+  for (const [name, patch] of CHANGES) {
+    check(`🔴 🔴 **${name} 이 바뀌면 계약이 바뀐다**`, poolOf(CARD(patch)) !== base)
+  }
+  check('🔴 🔴 **배열 순서가 바뀌어도 다른 계약이다** — 프롬프트에 그 순서로 실린다',
+    poolOf(CARD({ personality: ['가', '나'] })) !== poolOf(CARD({ personality: ['나', '가'] })))
+  check('🔴 말투 토큰이 바뀌면 계약이 바뀐다', poolOf(CARD({ voiceTokens: ['긴 문장'] })) !== base)
+  check('🔴 🔴 **말투 묶음이 바뀌면 계약이 바뀐다** — 댓글 원문은 담지 않는다', (() => {
+    const other = personaPoolIdentity([personaInputOf(CARD(), { samples: ['가나다'], bundleDigest: 'b2' })])
+    const sameBundleOtherText =
+      personaPoolIdentity([personaInputOf(CARD(), { samples: ['전혀 다른 댓글'], bundleDigest: 'b1' })])
+    return other !== base && sameBundleOtherText === base
+  })())
+  check('🔴 🔴 **계약에 댓글 원문이 없다**', !base.includes('가나다'))
+  check('🔴 🔴 **계약에 들어가지 않는 칸도 있다** — 집·금지 역할·variation 수',
+    poolOf(CARD({ housing: '자가' })) === base
+    && poolOf(CARD({ forbiddenReactionRoles: ['advice'] })) === base
+    && poolOf(CARD({ variationCount: 1 })) === base)
+  check('🔴 🔴 **읽는 순서가 달라도 같은 계약이다**', (() => {
+    const a = CARD(); const b = CARD({ code: 'P02' })
+    return poolOf(a, b) === poolOf(b, a)
+  })())
+  check('🔴 같은 풀이면 같은 값이다', poolOf(CARD()) === base)
 }
 
 // ─────────────────────────────────────────────────────────

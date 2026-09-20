@@ -14,7 +14,7 @@ import { loadCanonAsset, planBundles } from './persona-reference-store.mjs'
 import { PRODUCTION_PERSONA_CODES } from '../../src/lib/persona-cohort'
 import { parsePoolDoc, type PoolCard } from '../../src/lib/persona-pool-card'
 import type { VoiceReferenceBundle } from '../../src/lib/persona-voice-reference'
-import { personaInputOf, type PersonaInput } from './content-core-run.mjs'
+import { personaInputOf, personaPoolIdentity, type PersonaInput } from './content-core-run.mjs'
 import { VOICE_SAMPLE_MAX } from '../../src/lib/content-core/voice-evidence'
 
 /** 🔴 지문 길이는 저장소가 쓰는 값과 같다 */
@@ -116,11 +116,11 @@ export function loadVoice(): VoiceRuntime {
     bundleDigest: digest16(textsOf(c.code).join('\u0000')),
   }))
   /**
-   * 🔴 **후보 풀의 지문은 실제 후보에서 만든다.** 코드·말투 토큰·말투 묶음 지문 —
-   *    생성 결과를 바꾸는 값만이다. 생성 러너와 공급 러너가 같은 값을 얻는다.
+   * 🔴 **후보 풀의 지문은 실제 후보에서 만든다.** 생활사 계약 전체 · 말투 토큰 ·
+   *    말투 묶음 지문 — 프롬프트에 실려 결과를 바꾸는 값만이다.
+   *    🔴 조립은 정본 `personaPoolIdentity` 하나가 한다.
    */
-  const poolDigest = digest16(candidates
-    .map((c) => `${c.code}:${c.voiceTokens.join('/')}:${c.bundleDigest}`).join('|'))
+  const poolDigest = digest16(personaPoolIdentity(candidates))
   return {
     describe: `  🟢 말투 근거·나이대 모두 선 ${usable.length}명 — v2 계획 호출이 이 중에서 고른다`
       + (noAge.length > 0 ? `\n     🔴 나이대(ageBand) 없어 제외 ${noAge.length}명: ${noAge.map((x) => x.code).join(' · ')}` : '')

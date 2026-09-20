@@ -747,7 +747,17 @@ console.log('\n⑩ 🔴 🔴 문서 오탈자 한 줄로 전량 다시 만들지
   check('🔴 🔴 **뜻 없는 문서 수정은 계약을 바꾸지 않는다** — 전량 miss 되지 않는다',
     contractBaseOf(w6).personaPoolDigest === before.personaPoolDigest)
 
-  // 🔴 실제 카드가 바뀌면 계약이 바뀐다
+  /**
+   * 🔴 **생활사 한 줄이 바뀌면 계약이 바뀐다.** 나이대는 생성·검수 프롬프트에
+   *    그대로 실린다 — 바뀌었는데 옛 결과를 결론으로 쓰면 안 된다.
+   */
+  const aged = readFileSync(doc, 'utf-8').replace('ageBand 40대 후반', 'ageBand 50대 초반')
+  check('🔴 문서에서 그 줄을 실제로 찾았다', aged !== readFileSync(doc, 'utf-8'))
+  writeFileSync(doc, aged, 'utf-8')
+  check('🔴 🔴 **카드의 나이대가 바뀌면 계약이 바뀐다**',
+    contractBaseOf(w6).personaPoolDigest !== before.personaPoolDigest)
+
+  // 🔴 후보 자체가 바뀌어도 계약이 바뀐다
   writeFileSync(doc, readFileSync(doc, 'utf-8').replaceAll('P01', 'P99'), 'utf-8')
   check('🔴 🔴 **후보 풀이 실제로 바뀌면 계약도 바뀐다**',
     contractBaseOf(w6).personaPoolDigest !== before.personaPoolDigest)
