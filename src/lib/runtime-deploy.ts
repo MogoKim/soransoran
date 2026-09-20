@@ -116,9 +116,10 @@ export const DEPLOY_STEPS: readonly string[] = [
   '② fetch 하고 preflight — 🔴 fetch 실패는 그 자리에서 멈춘다(오래된 ref 로 판단하지 않는다)',
   '②-b **활성화 스위치 확인** — plist 가 올라가도 스위치가 닫혀 있으면 그 job 은 일하지 않는다',
   '③ 현재 SHA·manifest·**설치 plist 원문·loaded 상태**를 보존한다 (되돌릴 곳)',
+  '③-b 🔴 **첫 unload 바로 앞에서 실행 여부를 다시 관측한다** —'
+  + ' ② 와 ④ 사이에 시작한 회차가 있으면 **아무것도 건드리기 전에** 멈춘다'
+  + ' (🔴 unload 뒤에 두면 내려간 job 은 running 으로 보고되지 않아 아무것도 잡지 못한다)',
   '④ 예약 job 5개 + 퇴역 job + **발행 러너**를 unload 하고 **하나씩 내려간 것을 확인**한다',
-  '④-b 🔴 **checkout 직전에 실행 여부를 다시 관측한다** —'
-  + ' ② 의 관측과 ④ 사이에 시작한 회차가 있으면 파일을 건드리기 전에 멈춘다',
   '⑤ target SHA 로 checkout · npm ci · prisma generate',
   '⑥ **offline 게이트** — job 이 내려가 있어도 도는 것들만',
   '⑦ 🔴 **target commit 의 템플릿을 render 해 설치 plist 로 쓴다** —'
@@ -683,6 +684,34 @@ export async function runDeploy(input: {
     return { ok: false, phase, steps, problems, rollback: rb }
   }
 
+  /**
+   * ── ③-b 🔴 **첫 unload **바로 앞**에서 한 번 더 관측한다** (2026-09-20 보정) ──
+   *
+   *    ② preflight 의 관측과 ④ unload 사이에는 시간이 있다(render·상태 보존).
+   *    그 틈에 시작한 회차는 ② 에서 보이지 않았고, ④ 는 **실행 여부가 아니라
+   *    loaded 여부만** 본다 — 그래서 돌고 있는 회차 위로 그냥 내려간다.
+   *
+   * 🔴 **unload 뒤에 두면 아무것도 잡지 못한다.** 내려간 job 은 `launchctl` 이
+   *    더 이상 `state = running` 으로 보고하지 않으니, 재관측이 늘 깨끗하게 나온다.
+   *    그래서 이 자리는 **어떤 unload·write·checkout 보다도 앞**이어야 한다.
+   *
+   * 🔴 여기서 멈추면 **아무것도 바뀌지 않았다** — unload 0 · plist write 0 · checkout 0.
+   */
+  const recheck = fx.runningJobs()
+  const stillRunning = recheck.running.filter((l) => restoreJobs.includes(l))
+  const stillUnknown = recheck.unknown.filter((l) => restoreJobs.includes(l))
+  steps.push('pre-unload-recheck')
+  if (stillRunning.length > 0 || stillUnknown.length > 0) {
+    const why = stillRunning.length > 0
+      ? `아직 도는 회차가 있다(${stillRunning.join(' · ')})`
+      : `실행 여부를 확인하지 못했다(${stillUnknown.join(' · ')}) — 통과시키지 않는다(fail-closed)`
+    return {
+      ok: false, phase: 'pre-unload-recheck', steps,
+      problems: [`${why} — job 도 코드도 plist 도 건드리지 않았다`],
+      rollback: null,
+    }
+  }
+
   // ── ④ unload + 하나씩 실제 상태 확인 ──
   for (const l of restoreJobs) {
     // 🔴 원래 내려가 있던 job 은 내릴 것이 없다 (퇴역 job 이 대개 그렇다)
@@ -709,30 +738,6 @@ export async function runDeploy(input: {
     }
   }
   steps.push('unload-verified')
-
-  /**
-   * ── ④-b 🔴 **checkout 직전에 한 번 더 본다** (2026-09-20) ──
-   *
-   *    ② 의 관측과 ④ 의 unload 사이에는 시간이 있다. 그 틈에 시작한 회차는
-   *    ② 에서 보이지 않았고, ④ 는 실행 여부가 아니라 loaded 여부만 본다.
-   *    **파일을 건드리기 직전**에 다시 물어, 아직 도는 것이 있으면 멈춘다.
-   *    🔴 여기서 멈추면 코드도 plist 도 그대로다 — 되돌릴 것은 loaded 상태뿐이다.
-   */
-  const recheck = fx.runningJobs()
-  const stillRunning = recheck.running.filter((l) => restoreJobs.includes(l))
-  const stillUnknown = recheck.unknown.filter((l) => restoreJobs.includes(l))
-  steps.push('pre-checkout-recheck')
-  if (stillRunning.length > 0 || stillUnknown.length > 0) {
-    const why = stillRunning.length > 0
-      ? `아직 도는 회차가 있다(${stillRunning.join(' · ')})`
-      : `실행 여부를 확인하지 못했다(${stillUnknown.join(' · ')}) — 통과시키지 않는다(fail-closed)`
-    const residual = [...loadPrevious(), ...verifyRestored()]
-    return {
-      ok: false, phase: 'pre-checkout-recheck', steps,
-      problems: [`${why} — 코드도 plist 도 건드리지 않았다`],
-      rollback: { attempted: true, complete: residual.length === 0, residual: [...new Set(residual)] },
-    }
-  }
 
   // ── ⑤ checkout · 설치 ──
   steps.push('checkout')
@@ -795,10 +800,26 @@ export async function runDeploy(input: {
    *       그 자리가 runtime 안인가.
    */
   for (const l of quiesce) {
-    if (prevLoaded.get(l) !== 'loaded') continue
+    const beforeXml = prevPlists.get(l) ?? null
+    /**
+     * 🔴 **원래 내려가 있던 것도 사후에 확인한다.** "안 건드렸다" 를 말로 적지 않고
+     *    값으로 본다 — 배포가 운영 상태를 바꾸지 않았다는 것이 요점이다.
+     */
+    if (prevLoaded.get(l) !== 'loaded') {
+      const st = fx.probeJob(l)
+      if (st !== 'unloaded') {
+        return failWith('quiesce-restore', st === 'unknown'
+          ? `${l}: 배포 뒤 상태를 확인하지 못했다(fail-closed) — 원래 내려가 있던 job 이다`
+          : `${l}: 원래 내려가 있었는데 배포 뒤 loaded 다 — 배포가 올리지 않는다`)
+      }
+      if (fx.readInstalledPlist(l) !== beforeXml) {
+        return failWith('quiesce-restore',
+          `${l}: plist 원문이 배포 전과 다르다 — 배포는 이 파일을 쓰지 않는다`)
+      }
+      continue
+    }
     const why = ensureLoaded(l)
     if (why !== null) return failWith('quiesce-restore', why)
-    const beforeXml = prevPlists.get(l) ?? null
     if (beforeXml === null) {
       return failWith('quiesce-restore', `${l}: 배포 전 설치 plist 를 읽어 두지 못했다 — 대조할 원문이 없다`)
     }
