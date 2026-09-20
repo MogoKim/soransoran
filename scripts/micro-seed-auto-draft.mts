@@ -111,6 +111,7 @@ import { buildSpeakerPlanSystemPrompt } from './lib/content-core-prompts.mjs'
 import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   SPEAKER_PLAN_PROMPT_VERSION, V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
+  STAGE_MAX_OUTPUT_TOKENS, STAGE_MAX_OUTPUT_LABEL,
 } from '../src/lib/content-core/pipeline'
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import { REVIEW_VERSION } from '../src/lib/content-core/review'
@@ -262,7 +263,11 @@ export const DRAFT_MODEL: ProviderModel = 'claude-haiku-4.5'
 /** 🔴 나이 검수는 JSON 한 줄만 받는다 — 큰 검수와 같은 상한을 쓰지 않는다 */
 export const AGE_CHECK_MAX_TOKENS = 200
 export const DRAFT_TIMEOUT_MS = 25000
-export const DRAFT_MAX_TOKENS = 1200
+/**
+ * 🔴 **단계 공통 상한은 없앴다** (2026-09-20). 정본은
+ *    `src/lib/content-core/pipeline.ts` 의 `STAGE_MAX_OUTPUT_TOKENS` 하나다 —
+ *    세 단계가 1200 을 같이 쓰다가 thinking 이 본문 자리를 먹어 초안이 사라졌다.
+ */
 
 /**
  * 🔴 **원천 하나가 쓸 수 있는 v2 요청 수.** 정상 경로는 3회다 —
@@ -347,8 +352,7 @@ export const HARM_BANS: readonly string[] = [
 /**
  * 🔴 **provider 요청을 코드가 센다** (2026-09-13).
  *
- *    `MAX_ORIGINALITY_RETRIES = 2` 와 `callJson()` 안의 `MAX_ATTEMPTS`·파싱 재시도가
- *    곱해지면 원천 하나가 실제로 여러 번 나갈 수 있다.
+ *    원천 하나가 여러 단계를 거치므로 실제 요청이 여러 번 나갈 수 있다.
  *    "최대 3회" 라는 말은 **재생성 횟수**이지 요청 수가 아니었다 — 보고가 틀렸다.
  *    이제 실제 요청을 한 곳에서 세고, 상한을 넘으면 더 부르지 않는다.
  */
@@ -474,7 +478,8 @@ const v2Ask: Ask = async (stage, system, payload, model) => {
   if (!BUDGET.take()) return blockedRes
   countCall(stage)
   // 🔴 같은 장부 wrapper 를 지난다 — 여기서 provider 를 직접 부르지 않는다
-  const r = await ask(V2_LEDGER_STAGE[stage], system, payload, DRAFT_MAX_TOKENS, model)
+  // 🔴 **그 단계의 상한**을 쓴다 — 장부 예약도 provider 요청도 이 값으로 나간다
+  const r = await ask(V2_LEDGER_STAGE[stage], system, payload, STAGE_MAX_OUTPUT_TOKENS[stage], model)
   const code = String(r.errorCode ?? '')
   return {
     /**
@@ -494,43 +499,6 @@ const v2Ask: Ask = async (stage, system, payload, model) => {
     usd: r.settledUsd,
     blocked: code === 'NO_LEDGER' || code.startsWith(`${LEDGER_BLOCKED}:`),
   }
-}
-
-async function callJson<T>(
-  stage: LedgerStage, system: string, payload: string, parse: (raw: string) => T | null,
-): Promise<CallOutcome<T>> {
-  let attempt = 0
-  let status = 'skipped'
-  let errorCode: string | null = null
-  for (; attempt < MAX_ATTEMPTS; attempt += 1) {
-    if (attempt > 0) await sleep(backoffMs(attempt, Math.random()))
-    // 🔴 상한을 넘으면 부르지 않는다. 조용히 넘기지 않고 사유를 남긴다
-    if (!BUDGET.take()) return { value: null, status: 'budgetExhausted', attemptCount: attempt + 1, errorCode }
-    countCall(attempt === 0 ? 'first' : 'transportRetry')
-    const res = await ask(stage, system, payload, DRAFT_MAX_TOKENS)
-    errorCode = res.errorCode
-    if (res.maxTokensReached) { status = 'maxTokens'; break }
-    if (!res.ok) {
-      status = /timeout|abort/i.test(String(res.errorCode ?? '')) ? 'timeout' : 'httpError'
-      continue
-    }
-    const v = parse(res.rawText)
-    if (v !== null) return { value: v, status: 'ok', attemptCount: attempt + 1, errorCode: null }
-    // 🔴 파싱 실패 — 형식을 다시 일러 한 번만 더
-    status = 'parseError'
-    if (!BUDGET.take()) return { value: null, status: 'budgetExhausted', attemptCount: attempt + 1, errorCode }
-    countCall('jsonRetry')
-    const retry = await ask(
-      'jsonRetry',
-      `${system}\n\n🔴 지난 답이 JSON 이 아니었다. 설명 없이 JSON 객체 하나만 답한다.`,
-      payload, DRAFT_MAX_TOKENS,
-    )
-    attempt += 1
-    const v2 = (retry.ok && !retry.maxTokensReached) ? parse(retry.rawText) : null
-    if (v2 !== null) return { value: v2, status: 'ok', attemptCount: attempt + 1, errorCode: null }
-    break
-  }
-  return { value: null, status, attemptCount: attempt + 1, errorCode }
 }
 
 type GenDraft = { title: string; body: string; intendedQuestion: string; sourceAngle: string }
@@ -944,6 +912,8 @@ async function main(): Promise<void> {
       + `|${inputHashOf({ title: meta.title, bodyHead: meta.bodyHead, axis: meta.axis, lane: meta.lane })}`
       + `|${SPEAKER_PLAN_PROMPT_VERSION}|${V2_DRAFT_PROMPT_VERSION}|${V2_REVIEW_PROMPT_VERSION}`
       + `|${STAGE_MODEL.speakerPlan}|${STAGE_MODEL.draftGen}|${STAGE_MODEL.semanticReview}`
+      // 🔴 1200 으로 잘린 결과를 2000 짜리 계약이 재사용하지 않게 한다
+      + `|${STAGE_MAX_OUTPUT_LABEL}`
       + `|${ARTIFACT_VERSION}|${REVIEW_VERSION}|${SPEAKER_PLAN_VERSION}`
       + `|${digest16(buildSpeakerPlanSystemPrompt())}`
       + `|${digest16(voice.candidates.map((c) => `${c.code}:${c.voiceTokens.join('/')}:${c.bundleDigest}`).join('|'))}`
@@ -1149,7 +1119,8 @@ async function main(): Promise<void> {
       sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
       sourceInput: 'auto-judge',
       sourceDecision: 'AUTO_ADOPT',
-      draftFrom: 'content-core-v2',
+      // 🔴 정본을 읽는다 — 여기에 판 이름을 다시 적지 않는다
+      draftFrom: CONTENT_CORE_PIPELINE_VERSION,
       title: a.draft.title, body: a.draft.body,
       safetyVerdict: a.draft.safetyVerdict,
       // 🔴 **잰 값을 싣는다. 판정이 아니다.** 적재 쪽이 같은 정본으로 다시 판정한다

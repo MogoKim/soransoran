@@ -30,7 +30,8 @@ import { LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL } from '../sr
 import { violatesArtifact, artifactSummary, ARTIFACT_VERSION, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
 import {
-  CONTENT_CORE_PROMPT_VERSION, SPEAKER_PLAN_PROMPT_VERSION,
+  CONTENT_CORE_PROMPT_VERSION, SPEAKER_PLAN_PROMPT_VERSION, CONTENT_CORE_PIPELINE_VERSION,
+  CONTENT_CORE_STAGES, STAGE_MAX_OUTPUT_TOKENS, V2_DRAFT_PROMPT_VERSION,
 } from '../src/lib/content-core/pipeline'
 import { buildVoiceEvidence, voiceStandardOf, VOICE_SAMPLE_MIN }
   from '../src/lib/content-core/voice-evidence'
@@ -964,6 +965,73 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
   check('🔴 사유 이름마다 사람이 읽는 말이 있다',
     INCOMPLETE_LABEL.notRun !== '' && INCOMPLETE_LABEL.budgetBlocked !== ''
     && INCOMPLETE_LABEL.notRun !== INCOMPLETE_LABEL.budgetBlocked)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스트가 아니다 (2026-09-20)')
+// ─────────────────────────────────────────────────────────
+{
+  // ── ① 단계마다 제 상한 ──
+  check('🔴 🔴 **speakerPlan 1200 · draftGen 2000 · semanticReview 1200**',
+    STAGE_MAX_OUTPUT_TOKENS.speakerPlan === 1200
+    && STAGE_MAX_OUTPUT_TOKENS.draftGen === 2000
+    && STAGE_MAX_OUTPUT_TOKENS.semanticReview === 1200)
+  check('🔴 🔴 **초안만 더 받는다** — 세 값이 같지 않다',
+    STAGE_MAX_OUTPUT_TOKENS.draftGen > STAGE_MAX_OUTPUT_TOKENS.speakerPlan
+    && STAGE_MAX_OUTPUT_TOKENS.draftGen > STAGE_MAX_OUTPUT_TOKENS.semanticReview)
+  check('🔴 전체를 4000 으로 올리지 않았다 — 안 쓰는 자리는 예약액만 키운다',
+    CONTENT_CORE_STAGES.every((st) => STAGE_MAX_OUTPUT_TOKENS[st] <= 2000))
+  check('🔴 단계가 빠짐없이 값을 가진다',
+    CONTENT_CORE_STAGES.every((st) => Number.isInteger(STAGE_MAX_OUTPUT_TOKENS[st])))
+
+  const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 🔴 **공통 상한 상수가 사라졌다** — 옛 판으로 되돌리면 여기서 걸린다',
+    !/DRAFT_MAX_TOKENS/.test(runner))
+  check('🔴 🔴 **러너가 단계 상한을 그대로 넘긴다**',
+    /STAGE_MAX_OUTPUT_TOKENS\[stage\]/.test(runner))
+  check('🔴 🔴 **캐시 key 가 단계 상한을 담는다**', (() => {
+    const i = runner.indexOf('const v2Key =')
+    return i !== -1 && runner.slice(i, runner.indexOf('\n\n', i)).includes('STAGE_MAX_OUTPUT_LABEL')
+  })())
+  check('🔴 판 번호가 새 계약을 담는다',
+    CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.1'
+    && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p7'
+    && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
+  check('🔴 러너가 판 이름을 다시 적지 않는다',
+    /draftFrom: CONTENT_CORE_PIPELINE_VERSION/.test(runner)
+    && !/'content-core-v2/.test(runner))
+
+  // ── ② 말투는 경향이다 ──
+  // 🔴 파싱된 계획 모양 그대로 — 모델 응답 모양(`plan()`)이 아니다
+  const sys = buildV2DraftSystemPrompt({
+    plan: {
+      decision: 'ok', personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      warrants: [], universalReason: '보편적인 이야기다', protectedFacts: [],
+      closingIntent: 'ask', contentRoles: ['conversationSpark'], reason: '', rejection: null,
+      planVersion: SPEAKER_PLAN_VERSION,
+    } as never,
+    voice: buildVoiceEvidence({
+      personaCode: 'P01', voiceTokens: ['길게', '"ㅋㅋ" 자주', '오타 잦음', '느낌표 많음'],
+      samples: ['ㅋㅋ 저도요', '진짜 그래요!', '아휴 참'],
+      bundleDigest: 'b0', sourceDigest: 'a0',
+    }),
+    life: partTime,
+  })
+  check('🔴 🔴 **기준이 넣어야 할 목록이 아니라고 적혀 있다**',
+    sys.includes('항목을 하나씩 넣어야 하는 목록이 아닙니다'))
+  check('🔴 🔴 **모든 특징을 한 글에 넣지 말라고 적혀 있다**',
+    sys.includes('모든 특징을 한 글에 다 넣지 않습니다'))
+  check('🔴 🔴 **오타를 일부러 만들지 말라고 적혀 있다**',
+    sys.includes('오타를 일부러 만들지 않습니다'))
+  check('🔴 🔴 **ㅋㅋ·ㅎㅎ·ㅠㅠ·느낌표·사투리는 감정이 맞을 때만**',
+    /ㅋㅋ · ㅎㅎ · ㅠㅠ · 느낌표 · 사투리는 \*\*원문의 감정과 맞을 때만\*\*/.test(sys))
+  check('🔴 🔴 **말끝·호흡·문장 길이·줄바꿈을 먼저 쓰라고 적혀 있다**',
+    sys.includes('말끝 · 호흡 · 문장 길이 · 줄바꿈'))
+  check('🔴 강한 말투 기준 자체는 그대로 실린다 — 지우지 않았다',
+    sys.includes('"ㅋㅋ" 자주') && sys.includes('오타 잦음'))
+  check('🔴 🔴 **차단 규칙·검수 축을 더하지 않았다**',
+    SEMANTIC_AXES.length === 3
+    && !/ㅋ\{2,\}|ㅎ\{2,\}|ㅠ\{2,\}/.test(readFileSync('src/lib/content-core/review.ts', 'utf-8')))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

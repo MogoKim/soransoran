@@ -22,7 +22,7 @@ import {
 } from '../src/lib/micro-seed-supply-autofill'
 import {
   CONTENT_CORE_MODEL_LABEL, CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
-  STAGE_MODEL, stageModelsMismatch,
+  STAGE_MODEL, STAGE_MAX_OUTPUT_TOKENS, stageModelsMismatch,
 } from '../src/lib/content-core/pipeline'
 import {
   findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
@@ -154,6 +154,57 @@ console.log('\n② 🔴 🔴 제목이 정본 maskSensitive 를 거쳤다')
   check('🟢 마스킹해도 소재는 남는다', all.includes('김치'))
   // 🔴 정본 함수와 같은 결과인가 — 러너가 제 함수를 만들지 않았다
   check('🔴 정본 maskSensitive 와 같은 값이다', all.includes(maskSensitive(RAW_TITLE)))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n②-b 🔴 🔴 단계마다 제 출력 상한으로 나갔다 (2026-09-20)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **나간 요청 본문에서 값을 읽는다.** 세 단계가 `DRAFT_MAX_TOKENS = 1200`
+   *    하나를 같이 쓰다가, Gemini 의 thinking 이 본문 자리를 먹어 초안이 사라졌다
+   *    (SHADOW5 449787 실측: thinking 1,027 · 1,196 에서 잘림 · 초안 0).
+   *    🔴 주석이 아니라 **실제로 실려 나간 숫자**가 증거다.
+   */
+  const sent = readFileSync(bodyLog, 'utf-8').split('\n').filter((l) => l.trim() !== '')
+    .map((l) => JSON.parse(l) as { url: string; body: string })
+  /** 유료 요청만 — 사전 계산은 `isCount` 로 이미 걸러져 로그에 없다 */
+  const caps = sent.map((x) => {
+    const b = JSON.parse(x.body) as Record<string, unknown>
+    const gen = b.generationConfig as Record<string, unknown> | undefined
+    return {
+      gemini: x.url.includes('generativelanguage.googleapis.com'),
+      max: typeof gen?.maxOutputTokens === 'number' ? gen.maxOutputTokens
+        : typeof b.max_tokens === 'number' ? b.max_tokens : null,
+    }
+  })
+  check('🔴 유료 요청 3건이 나갔다', caps.length === 3, `${caps.length}건`)
+  // 🔴 순서는 speakerPlan → draftGen → semanticReview 다
+  check('🔴 🔴 **speakerPlan 은 1200 으로 나갔다**',
+    caps[0]?.gemini === true && caps[0]?.max === STAGE_MAX_OUTPUT_TOKENS.speakerPlan
+    && STAGE_MAX_OUTPUT_TOKENS.speakerPlan === 1200, String(caps[0]?.max))
+  check('🔴 🔴 **draftGen 은 2000 으로 나갔다** — 본문이 들어갈 자리다',
+    caps[1]?.gemini === true && caps[1]?.max === STAGE_MAX_OUTPUT_TOKENS.draftGen
+    && STAGE_MAX_OUTPUT_TOKENS.draftGen === 2000, String(caps[1]?.max))
+  check('🔴 🔴 **semanticReview 는 1200 으로 나갔다**',
+    caps[2]?.gemini === false && caps[2]?.max === STAGE_MAX_OUTPUT_TOKENS.semanticReview
+    && STAGE_MAX_OUTPUT_TOKENS.semanticReview === 1200, String(caps[2]?.max))
+  check('🔴 🔴 **세 단계가 한 값을 같이 쓰지 않는다** — 옛 공통 1200 으로 되돌리면 여기서 걸린다',
+    new Set(caps.map((c) => c.max)).size === 2
+    && caps[1]!.max !== caps[0]!.max && caps[1]!.max !== caps[2]!.max)
+  check('🔴 🔴 **장부 예약도 그 상한으로 계산됐다** — draftGen 예약이 계획보다 크다', (() => {
+    const ledgerDir = join(fakeHome, 'Library', 'Application Support', 'soransoran', 'llm-ledger')
+    const day = readdirSync(ledgerDir).filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+    const rows = day.flatMap((f) => readFileSync(join(ledgerDir, f), 'utf-8').split('\n')
+      .filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as Record<string, unknown>))
+    const res = (stage: string): number | null => {
+      const r = rows.find((x) => x.stage === stage && x.status === 'reserved')
+      return typeof r?.reservedUsd === 'number' ? r.reservedUsd : null
+    }
+    const plan = res('judge')
+    const draft = res('draftGen')
+    return plan !== null && draft !== null && draft > plan
+  })())
 }
 
 // ─────────────────────────────────────────────────────────
