@@ -31,7 +31,7 @@ import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
 import type { GenerationContract } from '../../src/lib/content-core/pipeline'
 import {
   groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
-  type DeterministicFailure, type DeterministicResult,
+  type DeterministicFailure, type DeterministicResult, type IncompleteCause,
   type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
 import { ARTIFACT_VERSION, type CallMeta, type HumanReviewArtifact }
@@ -149,11 +149,11 @@ export type RunInput = {
  *    사용량 미상 · 파싱 실패**는 똑같이 통과가 아니다.
  */
 const completionOf = (r: AskResult): ReviewCompletion => {
-  if (r.blocked) return { complete: false, reason: 'budgetBlocked' }
-  if (!r.ok) return { complete: false, reason: 'noResponse' }
-  if (r.truncated) return { complete: false, reason: 'truncated' }
-  if (!r.usageKnown) return { complete: false, reason: 'usageUnknown' }
-  return { complete: true, reason: null }
+  if (r.blocked) return { complete: false, reason: 'budgetBlocked', cause: 'budgetBlocked' }
+  if (!r.ok) return { complete: false, reason: 'noResponse', cause: 'noResponse' }
+  if (r.truncated) return { complete: false, reason: 'truncated', cause: 'truncated' }
+  if (!r.usageKnown) return { complete: false, reason: 'usageUnknown', cause: 'usageUnknown' }
+  return { complete: true, reason: null, cause: null }
 }
 
 const parseDraft = (raw: string): { title: string; body: string } | null => {
@@ -172,7 +172,15 @@ const parseDraft = (raw: string): { title: string; body: string } | null => {
  *    🔴 `budgetBlocked` 는 **의미 검수 호출이 실제로 막혔을 때만** 쓴다
  *    (`completionOf(rRes)` 가 그것을 판정한다).
  */
-const NOT_RUN: ReviewCompletion = { complete: false, reason: 'notRun' }
+const notRun = (cause: IncompleteCause): ReviewCompletion =>
+  ({ complete: false, reason: 'notRun', cause })
+
+/**
+ * 🔴 **앞 유료 단계가 완주하지 못해서 멈췄다.** 그 단계의 원인을 **그대로 물려준다** —
+ *    예산에 막힌 것과 답이 잘린 것은 다음 회차의 처리가 다르다.
+ */
+const notRunFrom = (c: ReviewCompletion): ReviewCompletion =>
+  notRun(c.cause ?? 'noResponse')
 
 /** 🔴 한 원천을 끝까지 돈다. 중간에 멈추면 멈춘 자리가 artifact 에 남는다 */
 export async function runContentCore(input: RunInput): Promise<HumanReviewArtifact> {
@@ -258,14 +266,14 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   if (budgetProblems.length > 0) {
     return blank(null, [], null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
-      null, NOT_RUN, 'hold', budgetProblems.join(' · '))
+      null, notRun('ledgerUnavailable'), 'hold', budgetProblems.join(' · '))
   }
   /**
    * 🔴 **이미지·링크·앞 대화 없이는 알 수 없는 글은 만들지 않는다.**
    *    묻기 전에 멈춘다 — 확인 못 한 글에 돈을 쓰지 않는다.
    */
   if (packet.contextSufficiency === 'insufficient') {
-    return blank(null, [], null, null, noDet, null, NOT_RUN,
+    return blank(null, [], null, null, noDet, null, notRun('contextInsufficient'),
       'hold', `무슨 이야기인지 확인하지 못했다 (${packet.insufficientReasons.join('·')})`)
   }
 
@@ -274,7 +282,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     buildSpeakerPlanPayload({ packet, personas: input.personas, load: input.load }))
   const pC = completionOf(pRes)
   if (!pC.complete) {
-    return blank(null, [], null, null, noDet, null, NOT_RUN,
+    return blank(null, [], null, null, noDet, null, notRunFrom(pC),
       'hold', `화자 계획을 완주하지 못했다 (${INCOMPLETE_LABEL[pC.reason ?? 'noResponse']})`)
   }
   const parse = parseSpeakerPlan(pRes.rawText, packet, input.personas)
@@ -282,7 +290,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const dropped = parse.dropped
   const gen = canGenerate(packet, plan)
   if (!gen.ok) {
-    return blank(plan, dropped, null, null, noDet, null, NOT_RUN, 'hold', gen.why)
+    return blank(plan, dropped, null, null, noDet, null, notRun('speakerUnqualified'),
+      'hold', gen.why)
   }
   const persona = input.personas.find((p) => p.code === plan.personaCode)!
 
@@ -298,7 +307,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const ready = judgeVoiceReadiness(voice)
   if (!ready.ok) {
-    return blank(plan, dropped, voice, null, noDet, null, NOT_RUN,
+    return blank(plan, dropped, voice, null, noDet, null, notRun('voiceUnready'),
       'hold', VOICE_READINESS_LABEL[ready.why!])
   }
 
@@ -314,7 +323,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
   ]
   if (voiceless.length > 0) {
-    return blank(plan, dropped, voice, null, noDet, null, NOT_RUN,
+    return blank(plan, dropped, voice, null, noDet, null, notRun('wiringBroken'),
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
   const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
@@ -324,7 +333,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(plan, dropped, voice, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
-      null, NOT_RUN, 'hold', why)
+      null, dC.complete ? notRun('draftUnreadable') : notRunFrom(dC), 'hold', why)
   }
 
   // ── ④ deterministic — 확정 가능한 것만 ──
@@ -344,8 +353,9 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {
-    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: NOT_RUN })
-    return blank(plan, dropped, voice, draft, det, null, NOT_RUN, j.outcome, j.reason)
+    const stop = notRun('deterministicFailed')
+    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: stop })
+    return blank(plan, dropped, voice, draft, det, null, stop, j.outcome, j.reason)
   }
 
   // ── ⑤ 의미 검수 1회 ──
@@ -364,7 +374,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     lifeContradictions: groundedInDraft(parsed.lifeContradictions, draftText),
   }
   const semanticC2: ReviewCompletion = semanticC.complete && semantic === null
-    ? { complete: false, reason: 'parseFailed' } : semanticC
+    ? { complete: false, reason: 'parseFailed', cause: 'parseFailed' } : semanticC
 
   const j = judgeMachine({ deterministic: det, semantic, semanticCompletion: semanticC2 })
   return blank(plan, dropped, voice, draft, det, semantic, semanticC2, j.outcome, j.reason)

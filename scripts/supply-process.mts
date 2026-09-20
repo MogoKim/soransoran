@@ -52,8 +52,8 @@ import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 /** 🔴 작업 묶음 정본 — 모양·상한·선택 규칙은 전부 저기 하나에 있다 */
 import {
-  attemptedSourceIds, judgeStageBudget, selectWorkset, terminalSourceIds, worksetFileName,
-  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL, type WorksetRow,
+  attemptedOutcomes, concludedSourceIds, judgeStageBudget, selectWorkset, worksetFileName,
+  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL, type PriorOutcome, type WorksetRow,
 } from '../src/lib/supply-workset'
 import {
   inputHashOf, mergeJudgeRows, PROMPT_VERSION, RULE_VERSION,
@@ -136,7 +136,7 @@ function worksetRows(paths: readonly string[]): WorksetRow[] | null {
  */
 /** 🔴 지난 결과를 한 번만 읽어 **끝난 것**과 **이미 본 것**을 함께 낸다 */
 function priorState(rows: readonly WorksetRow[], base: ContractBase): {
-  terminal: Set<string>; attempted: Set<string>
+  concluded: Set<string>; attempted: Map<string, PriorOutcome>
 } {
   const outcomes = readPriorOutcomes({
     dataDir: DATA_DIR,
@@ -146,7 +146,7 @@ function priorState(rows: readonly WorksetRow[], base: ContractBase): {
     },
     base, artifactVersion: ARTIFACT_VERSION,
   })
-  return { terminal: terminalSourceIds(outcomes), attempted: attemptedSourceIds(outcomes) }
+  return { concluded: concludedSourceIds(outcomes), attempted: attemptedOutcomes(outcomes) }
 }
 
 /** 🔴 사람이 이미 판정한 원천 — 판정기와 **같은 파일들**을 본다 */

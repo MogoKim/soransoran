@@ -10,26 +10,29 @@
  */
 import { spawnSync } from 'node:child_process'
 import {
-  mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync,
+  cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync,
+  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import {
-  SEED_AXIS, inputHashOf, mergeJudgeRows, PROMPT_VERSION, PROVEN_LANES, RULE_VERSION,
+  SEED_AXIS, RAW_AXIS, inputHashOf, mergeJudgeRows, PROMPT_VERSION, PROVEN_LANES, RULE_VERSION,
 } from '../src/lib/micro-seed-auto-judge'
 import { JUDGE_MODEL } from './micro-seed-auto-judge.mjs'
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 import {
-  attemptedSourceIds, judgeStageBudget, latestOutcomes, selectWorkset, terminalSourceIds,
+  attemptedOutcomes, concludedSourceIds, judgeStageBudget, latestOutcomes, selectWorkset,
   worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
 } from '../src/lib/supply-workset'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import type { PriorOutcome } from '../src/lib/supply-workset'
 import type { ContractBase } from '../src/lib/content-core/pipeline'
 import { ledgerRunIdOf } from '../src/lib/supply-process'
 // 🔴 합성 말투 자산 — 회원 댓글이 아니다. 없으면 생성기가 호출 전에 멈춘다
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 
 let pass = 0
 let fail = 0
@@ -48,7 +51,7 @@ const RUN = '20260920-999999'
 const PROVEN_LANE = PROVEN_LANES[0] ?? ''
 
 /** 🔴 한 회차용 세상 하나 — 운영 데이터와 완전히 분리된다 */
-function makeWorld(): { root: string; dd: string; home: string } {
+function makeWorld(o: { copyDocs?: boolean } = {}): { root: string; dd: string; home: string } {
   /**
    * 🔴 **실경로로 푼다.** macOS 의 `/var` 는 `/private/var` 심볼릭 링크라
    *    자식의 `process.cwd()` 와 인자 경로가 달라진다 — 러너가 "데이터 폴더 밖" 으로 본다.
@@ -60,17 +63,24 @@ function makeWorld(): { root: string; dd: string; home: string } {
   const home = join(root, 'home')
   mkdirSync(join(home, 'Library', 'Application Support', 'soransoran'), { recursive: true })
   writeFakePersonaAsset({ home })
-  symlinkSync(join(ROOT, 'docs'), join(root, 'docs'))
+  /**
+   * 🔴 기본은 링크다 — 운영 문서를 건드리지 않는다.
+   *    문서를 고쳐 보는 검사만 **복사본**을 쓴다.
+   */
+  if (o.copyDocs === true) cpSync(join(ROOT, 'docs'), join(root, 'docs'), { recursive: true })
+  else symlinkSync(join(ROOT, 'docs'), join(root, 'docs'))
   return { root, dd, home }
 }
 
 /** adapt 가 낸 모양 그대로 — 🔴 `detail` 과 `raw-detail` **쌍**으로 낸다 */
 function writeAdaptPair(
-  dd: string, rows: { id: string; comments: number; posted: string; lane?: string }[],
+  dd: string,
+  rows: { id: string; comments: number; posted: string; lane?: string; axis?: string }[],
+  runId = 'adapt-1',
 ): void {
   const detail = rows.map((r) => JSON.stringify({
-    runId: 'adapt-1', sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
-    axis: SEED_AXIS, lane: r.lane ?? PROVEN_LANE, access: 'ok', safetyVerdict: 'pass', safetyReasons: '',
+    runId, sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
+    axis: r.axis ?? SEED_AXIS, lane: r.lane ?? PROVEN_LANE, access: 'ok', safetyVerdict: 'pass', safetyReasons: '',
     title: `우리 나이 이야기 ${r.id}`,
     bodyHead: `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: r.comments, bodyLength: 300, imageCount: 0,
@@ -78,20 +88,20 @@ function writeAdaptPair(
     assetAxes: 'sleep|work',
     qualityFlags: [], sourcePostedAt: r.posted, sourceListedAt: r.posted, sourceCapturedAt: r.posted,
   })).join('\n')
-  writeFileSync(join(dd, 'adapt-1.detail.jsonl'), `${detail}\n`, 'utf-8')
+  writeFileSync(join(dd, `${runId}.detail.jsonl`), `${detail}\n`, 'utf-8')
   /**
    * 🔴 **같은 원천의 raw 쌍.** 키 이름이 `accessStatus` 다 — 정규화를 두 벌로 두면
    *    이 파일이 정상 원천을 `accessNotOk` 로 덮어쓴다 (2026-09-20 검토 결함).
    */
   const raw = rows.map((r) => JSON.stringify({
-    runId: 'adapt-1', sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
-    axis: SEED_AXIS, lane: r.lane ?? PROVEN_LANE, accessStatus: 'ok', safetyVerdict: 'pass', safetyReasons: '',
+    runId, sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
+    axis: r.axis ?? SEED_AXIS, lane: r.lane ?? PROVEN_LANE, accessStatus: 'ok', safetyVerdict: 'pass', safetyReasons: '',
     title: `우리 나이 이야기 ${r.id}`,
     bodyHead: `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: r.comments, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
     sourcePostedAt: r.posted, sourceListedAt: r.posted,
   })).join('\n')
-  writeFileSync(join(dd, 'adapt-1.raw-detail.jsonl'), `${raw}\n`, 'utf-8')
+  writeFileSync(join(dd, `${runId}.raw-detail.jsonl`), `${raw}\n`, 'utf-8')
 }
 
 /** 🔴 러너가 읽는 그대로 — `mergeJudgeRows` 정본을 지난다 */
@@ -167,7 +177,7 @@ const w = makeWorld()
   const plan = selectWorkset({
     rows, humanDecided: new Set(), queuePending: new Set(),
     // 🔴 첫 회차다 — 지난 결과가 없다
-    terminal: new Set(), attempted: new Set(),
+    concluded: new Set(), attempted: new Map(),
     limit: 5, runId: RUN, takenAt: new Date(),
   })
   check('🔴 🔴 **묶음 5건 · 나머지 3건은 남는다**',
@@ -307,8 +317,9 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
 
 {
   check('🔴 🔴 **말투 자산 판이 계약에 실제로 담겼다**',
-    BASE.voiceAssetDigest !== '' && BASE.personaCardDigest !== '',
-    `voice=${BASE.voiceAssetDigest} card=${BASE.personaCardDigest}`)
+    BASE.voiceAssetDigest !== '' && BASE.personaPoolDigest !== ''
+    && BASE.planPromptDigest !== '',
+    `voice=${BASE.voiceAssetDigest} pool=${BASE.personaPoolDigest}`)
 
   const artFiles = readdirSync(w.dd).filter((f) => /\.artifacts\.json$/.test(f))
   check('🔴 1회차 draft 가 artifact 를 남겼다', artFiles.length === 1, artFiles.join(','))
@@ -319,7 +330,11 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     contracts.length > 0 && contracts.every((c) =>
       c.pipelineVersion === BASE.pipelineVersion && c.promptVersion === BASE.promptVersion
       && c.voiceAssetDigest === BASE.voiceAssetDigest
-      && c.personaCardDigest === BASE.personaCardDigest
+      && c.speakerPlanVersion === BASE.speakerPlanVersion
+      && c.reviewVersion === BASE.reviewVersion
+      && c.planPromptDigest === BASE.planPromptDigest
+      && c.stageMaxOutputLabel === BASE.stageMaxOutputLabel
+      && c.personaPoolDigest === BASE.personaPoolDigest
       && JSON.stringify(c.stageModels) === JSON.stringify(BASE.stageModels)),
     JSON.stringify(contracts[0] ?? {}))
   check('🔴 🔴 **artifact 의 원천 지문이 공급 러너가 쓰는 지문과 같다** — 칸이 빠지면 영영 다르다',
@@ -341,7 +356,7 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     [...latestOutcomes(got).values()].every((o) => o.stage === 'draft'),
     [...latestOutcomes(got).values()].map((o) => `${o.sourceArticleId}:${o.stage}:${o.state}`).join(' '))
 
-  const terminal = terminalSourceIds(got)
+  const terminal = concludedSourceIds(got)
   check('🔴 🔴 **채택된 원천은 terminal 이 아니다** — 결론이 아니라 큐로 가는 것이다',
     terminal.size === 0 && [...latestOutcomes(got).values()].every((o) => o.state === 'candidate'),
     [...latestOutcomes(got).values()].map((o) => o.state).join(','))
@@ -363,7 +378,7 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     const now = outcomesOf(w)
     return selectWorkset({
       rows, humanDecided: new Set(), queuePending: queued,
-      terminal: terminalSourceIds(now), attempted: attemptedSourceIds(now),
+      concluded: concludedSourceIds(now), attempted: attemptedOutcomes(now),
       limit: 5, runId: tag, takenAt: new Date(),
     })
   }
@@ -392,7 +407,7 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
   }
 
   // ── 2회차 — 한 번도 안 본 backlog 가 먼저 올라온다 ──
-  const attempted1 = attemptedSourceIds(outcomesOf(w))
+  const attempted1 = attemptedOutcomes(outcomesOf(w))
   check('🔴 1회차가 본 원천은 5건이다', attempted1.size === 5, `${attempted1.size}건`)
   const second = selectAt(`${RUN}-2`)
   check('🔴 🔴 **적재된 원천을 다시 고르지 않는다**',
@@ -412,7 +427,7 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     r2.paid <= second.picked.length, `${r2.paid}회 / ${second.picked.length}`)
 
   // ── 3회차 — 2회차가 낸 결론은 빠지고 남은 것만 오른다 ──
-  const t2 = terminalSourceIds(outcomesOf(w))
+  const t2 = concludedSourceIds(outcomesOf(w))
   const newlyJudged = second.workset.sourceIds.filter((id) => !attempted1.has(id))
   check('🔴 🔴 **2회차에 처음 본 원천은 그 판정으로 끝났다**',
     newlyJudged.length === 3 && newlyJudged.every((id) => t2.has(id)),
@@ -446,7 +461,7 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
     fourth.picked.length <= third.picked.length,
     `${third.picked.length} → ${fourth.picked.length}`)
   const seenAll = new Set([
-    ...attempted1, ...second.workset.sourceIds, ...third.workset.sourceIds,
+    ...attempted1.keys(), ...second.workset.sourceIds, ...third.workset.sourceIds,
   ])
   check('🔴 🔴 **8건 전부 한 번씩은 끝까지 갔다** — 영구 제외도, 굶김도 없다',
     rows.every((r) => seenAll.has(r.sourceArticleId)), `${seenAll.size}/${rows.length}`)
@@ -456,14 +471,18 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
 console.log('\n④ 🔴 🔴 계약이 바뀌면 끝난 것도 다시 본다')
 // ─────────────────────────────────────────────────────────
 {
-  const before = terminalSourceIds(outcomesOf(w))
+  const before = concludedSourceIds(outcomesOf(w))
   check('🔴 이 시험이 헛돌지 않는다 — 바꾸기 전 terminal 이 있다', before.size > 0, `${before.size}건`)
 
   for (const [name, patch] of [
     ['생성 파이프라인 판', { pipelineVersion: 'content-core-v9' }],
     ['생성 프롬프트 판', { promptVersion: '다른-프롬프트' }],
     ['말투 자산 판', { voiceAssetDigest: '다른자산' }],
-    ['Persona 카드 판', { personaCardDigest: '다른카드' }],
+    ['Persona 후보 풀 판', { personaPoolDigest: '다른풀' }],
+    ['출력 상한', { stageMaxOutputLabel: 'speakerPlan=1,draftGen=1,semanticReview=1' }],
+    ['검수 판', { reviewVersion: 'review-v0' }],
+    ['화자 계획 판', { speakerPlanVersion: 'speaker-plan-v0' }],
+    ['계획 프롬프트', { planPromptDigest: '다른계획' }],
     ['단계 모델', { stageModels: { ...BASE.stageModels, draftGen: 'other-model' } }],
   ] as const) {
     const got = outcomesOf(w, { ...BASE, ...patch })
@@ -522,12 +541,12 @@ console.log('\n⑤ 🔴 🔴 말투 자산을 **실제로 바꾸고** 다시 돌
 console.log('\n⑥ 🔴 🔴 깨진 파일은 건너뛸 뿐 원천을 영영 굶기지 않는다')
 // ─────────────────────────────────────────────────────────
 {
-  const before = terminalSourceIds(outcomesOf(w))
+  const before = concludedSourceIds(outcomesOf(w))
   writeFileSync(join(w.dd, 'auto-judge-broken.shadow.jsonl'),
     '{ 이건 JSON 이 아니다\n{"sourceArticleId":"e0"}\n', 'utf-8')
   writeFileSync(join(w.dd, 'auto-draft-broken.artifacts.json'), '{"nope":', 'utf-8')
   writeFileSync(join(w.dd, 'auto-draft-notarray.artifacts.json'), '{"a":1}', 'utf-8')
-  const after = terminalSourceIds(outcomesOf(w))
+  const after = concludedSourceIds(outcomesOf(w))
   check('🔴 🔴 **깨진 파일이 terminal 집합을 바꾸지 않는다**',
     after.size === before.size && [...before].every((id) => after.has(id)),
     `${before.size} → ${after.size}`)
@@ -540,11 +559,11 @@ console.log('\n⑥ 🔴 🔴 깨진 파일은 건너뛸 뿐 원천을 영영 굶
   })}\n`, 'utf-8')
   const un = outcomesOf(w).filter((o) => o.sourceArticleId === 'e5')
   check('🔴 🔴 **모르는 판정은 unknown 이고 terminal 이 아니다**',
-    un.some((o) => o.state === 'unknown') && !terminalSourceIds(outcomesOf(w)).has('e5'),
-    un.map((o) => `${o.state}@${o.at}`).join(' '))
+    un.some((o) => o.state === 'unknown') && !concludedSourceIds(outcomesOf(w)).has('e5'),
+    un.map((o) => `${o.state}@${o.atMs}`).join(' '))
   const openAgain = selectWorkset({
     rows, humanDecided: new Set(), queuePending: NEXT.queued,
-    terminal: terminalSourceIds(outcomesOf(w)), attempted: attemptedSourceIds(outcomesOf(w)),
+    concluded: concludedSourceIds(outcomesOf(w)), attempted: attemptedOutcomes(outcomesOf(w)),
     limit: 5, runId: `${RUN}-5`, takenAt: new Date(),
   })
   check('🔴 🔴 **그 원천은 다음 회차에 다시 올라온다**',
@@ -587,6 +606,151 @@ console.log('\n⑦ 🔴 🔴 묻기 전에 HOLD 인 원천에는 유료 요청�
   check('🔴 🔴 **그래도 판정은 남는다 — AUTO_HOLD · 사유는 lane**',
     row.decision === 'AUTO_HOLD' && (row.reasonCodes ?? []).includes('laneNotProven'),
     `${String(row.decision)} · ${(row.reasonCodes ?? []).join(',')}`)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 끝이다')
+// ─────────────────────────────────────────────────────────
+{
+  const w4 = makeWorld()
+  /** 🔴 원문 그대로 레인의 축이어야 판정기가 AUTO_RAW 를 낸다 — 축은 우리가 정한다 */
+  writeAdaptPair(w4.dd, [
+    { id: 'raw1', comments: 30, posted: '2026-09-19T00:00:00Z', axis: RAW_AXIS, lane: 'originalRaw' },
+    { id: 'raw2', comments: 20, posted: '2026-09-18T00:00:00Z', axis: RAW_AXIS, lane: 'originalRaw' },
+  ])
+  const rows4 = rowsOf(w4.dd)
+  const hash4 = new Map(rows4.map((r) => [r.sourceArticleId, inputHashOf(r.input)]))
+  const canon4 = { ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION, judgeModel: JUDGE_MODEL }
+  const base4 = contractBaseOf(w4)
+  const out4 = (): PriorOutcome[] => readPriorOutcomes({
+    dataDir: w4.dd, hashOf: hash4, canon: canon4, base: base4, artifactVersion: ARTIFACT_VERSION,
+  })
+  const tag = '20260920-888888'
+  const first = selectWorkset({
+    rows: rows4, humanDecided: new Set(), queuePending: new Set(),
+    concluded: new Set(), attempted: new Map(), limit: 5, runId: tag, takenAt: new Date(),
+  })
+  const ws = join(w4.dd, worksetFileName(tag))
+  writeFileSync(ws, `${JSON.stringify(first.workset, null, 2)}\n`, 'utf-8')
+  const log = join(w4.root, 'raw.log')
+  writeFileSync(log, '', 'utf-8')
+  const r = runStage({
+    script: 'scripts/micro-seed-auto-judge.mts', world: w4, cap: '5', bodyLog: log,
+    judgeDecision: 'AUTO_RAW',
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'judge')}`,
+      `--workset=.microseed-data/${worksetFileName(tag)}`,
+      `--shadow-out=.microseed-data/auto-judge-${tag}.shadow.jsonl`],
+  })
+  const shadow = readFileSync(join(w4.dd, `auto-judge-${tag}.shadow.jsonl`), 'utf-8')
+    .split('\n').filter((l) => l.trim() !== '')
+    .map((l) => JSON.parse(l) as { sourceArticleId: string; decision: string })
+  check('🔴 🔴 **판정 러너가 실제로 AUTO_RAW 를 냈다**',
+    r.code === 0 && shadow.length === 2 && shadow.every((x) => x.decision === 'AUTO_RAW'),
+    `code=${r.code} · ${shadow.map((x) => x.decision).join(',')}\n${r.out.slice(-400)}`)
+
+  const states = [...latestOutcomes(out4()).values()].map((o) => o.state)
+  check('🔴 🔴 **AUTO_RAW 는 unknown 이 아니라 rawLane 이다**',
+    states.length === 2 && states.every((x) => x === 'rawLane'), states.join(','))
+  const next = selectWorkset({
+    rows: rows4, humanDecided: new Set(), queuePending: new Set(),
+    concluded: concludedSourceIds(out4()), attempted: attemptedOutcomes(out4()),
+    limit: 5, runId: `${tag}-2`, takenAt: new Date(),
+  })
+  check('🔴 🔴 **다음 회차에 다시 올라오지 않는다**',
+    next.picked.length === 0 && next.dropped.terminal === 2,
+    `${next.workset.sourceIds.join(',')} · 제외 ${next.dropped.terminal}`)
+
+  // 🔴 생성 러너가 AUTO_RAW 를 초안 대상으로 집지 않는다 — 유료 호출 0
+  const snap = join(w4.dd, queueSnapshotFileName(tag))
+  writeFileSync(snap, `${JSON.stringify(buildQueueSnapshot({
+    runId: tag, takenAt: new Date(), rows: [],
+  }), null, 2)}\n`, 'utf-8')
+  const dLog = join(w4.root, 'raw-draft.log')
+  writeFileSync(dLog, '', 'utf-8')
+  const d = runStage({
+    script: 'scripts/micro-seed-auto-draft.mts', world: w4, cap: '15', bodyLog: dLog,
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`,
+      `--queue-snapshot=.microseed-data/${queueSnapshotFileName(tag)}`, '--require-queue-snapshot',
+      `--input=.microseed-data/auto-judge-${tag}.shadow.jsonl`],
+  })
+  const dPaid = readFileSync(dLog, 'utf-8').split('\n').filter((l) => l.trim() !== '').length
+  check('🔴 🔴 **AUTO_RAW 는 draft 슬롯을 쓰지 않는다 — 유료 호출 0**',
+    dPaid === 0, `${dPaid}회 · code=${d.code}\n${d.out.slice(-300)}`)
+  check('🔴 후보 파일도 만들지 않는다',
+    readdirSync(w4.dd).filter((f) => /\.candidates\.json$/.test(f)).length === 0)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 🔴 🔴 신규가 계속 들어와도 재시도가 굶지 않는다 (실제 파일)')
+// ─────────────────────────────────────────────────────────
+{
+  const w5 = makeWorld()
+  const base5 = contractBaseOf(w5)
+  const canon5 = { ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION, judgeModel: JUDGE_MODEL }
+  /** 🔴 실제 판정 파일 한 줄 — 못 물어본 회차다(재시도) */
+  const writeRetryShadow = (id: string, hash: string, at: string): void => {
+    writeFileSync(join(w5.dd, `auto-judge-retry-${id}.shadow.jsonl`), `${JSON.stringify({
+      sourceArticleId: id, ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION,
+      model: JUDGE_MODEL, inputHash: hash, decision: 'AUTO_HOLD', semanticStatus: 'timeout',
+      decidedAt: at, provenance: 'machine-shadow', reasonCodes: ['semanticFailed'],
+    })}\n`, 'utf-8')
+  }
+  writeAdaptPair(w5.dd, [{ id: 'old-retry', comments: 1, posted: '2026-09-01T00:00:00Z' }])
+  writeRetryShadow('old-retry', inputHashOf(rowsOf(w5.dd)[0]!.input), '2026-09-01T00:00:00.000Z')
+
+  let everPicked = 0
+  for (let round = 1; round <= 10; round += 1) {
+    const fresh = Array.from({ length: 5 }, (_, i) => ({
+      id: `r${round}-${i}`, comments: 50 + i, posted: `2026-09-1${round % 10}T00:00:00Z`,
+    }))
+    const detail = fresh.map((f) => JSON.stringify({
+      runId: `adapt-new-${round}`, sourceArticleId: f.id, sourceSite: 'navercafe:wgang',
+      axis: SEED_AXIS, lane: PROVEN_LANE, access: 'ok', safetyVerdict: 'pass', safetyReasons: '',
+      title: `우리 나이 이야기 ${f.id}`,
+      bodyHead: `${f.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
+      commentCount: f.comments, bodyLength: 300, imageCount: 0, assetAxes: 'sleep|work',
+      qualityFlags: [], sourcePostedAt: f.posted, sourceListedAt: f.posted,
+      sourceCapturedAt: f.posted,
+    })).join('\n')
+    writeFileSync(join(w5.dd, `adapt-new-${round}.detail.jsonl`), `${detail}\n`, 'utf-8')
+
+    const rows5 = rowsOf(w5.dd)
+    const hash5 = new Map(rows5.map((r) => [r.sourceArticleId, inputHashOf(r.input)]))
+    const got = readPriorOutcomes({
+      dataDir: w5.dd, hashOf: hash5, canon: canon5, base: base5,
+      artifactVersion: ARTIFACT_VERSION,
+    })
+    const plan = selectWorkset({
+      rows: rows5, humanDecided: new Set(), queuePending: new Set(),
+      concluded: concludedSourceIds(got), attempted: attemptedOutcomes(got),
+      limit: 5, runId: `w5-${round}`, takenAt: new Date(`2026-09-2${round % 10}T00:00:00.000Z`),
+    })
+    if (plan.workset.sourceIds.includes('old-retry')) everPicked += 1
+  }
+  check('🔴 🔴 **실제 판정 파일로도 재시도가 매 회차 자리를 얻는다**',
+    everPicked === 10, `${everPicked}/10`)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑩ 🔴 🔴 문서 오탈자 한 줄로 전량 다시 만들지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const w6 = makeWorld({ copyDocs: true })
+  const doc = join(w6.root, PERSONA_POOL_DOC)
+  const before = contractBaseOf(w6)
+  check('🔴 후보 풀 지문이 실제로 잡힌다', before.personaPoolDigest !== '')
+
+  // 🔴 뜻이 바뀌지 않는 한 줄 — 주석
+  writeFileSync(doc, `${readFileSync(doc, 'utf-8')}\n<!-- 오탈자 한 줄 고침 -->\n`, 'utf-8')
+  check('🔴 🔴 **뜻 없는 문서 수정은 계약을 바꾸지 않는다** — 전량 miss 되지 않는다',
+    contractBaseOf(w6).personaPoolDigest === before.personaPoolDigest)
+
+  // 🔴 실제 카드가 바뀌면 계약이 바뀐다
+  writeFileSync(doc, readFileSync(doc, 'utf-8').replaceAll('P01', 'P99'), 'utf-8')
+  check('🔴 🔴 **후보 풀이 실제로 바뀌면 계약도 바뀐다**',
+    contractBaseOf(w6).personaPoolDigest !== before.personaPoolDigest)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

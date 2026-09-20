@@ -35,7 +35,9 @@ import { readReviewArtifact, reviewEvidenceLines } from '../src/lib/original-pos
 import { violatesArtifact, artifactSummary, ARTIFACT_VERSION, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
 import {
-  CONTENT_CORE_PROMPT_VERSION, SPEAKER_PLAN_PROMPT_VERSION, CONTENT_CORE_PIPELINE_VERSION,
+  CONTENT_CORE_PROMPT_VERSION, STAGE_MAX_OUTPUT_LABEL, SPEAKER_PLAN_PROMPT_VERSION,
+  CONTENT_CORE_PIPELINE_VERSION, generationIdentity, readGenerationContract,
+  sameGenerationContract, type GenerationContract,
   CONTENT_CORE_STAGES, STAGE_MAX_OUTPUT_TOKENS, V2_DRAFT_PROMPT_VERSION,
   V2_REVIEW_PROMPT_VERSION,
 } from '../src/lib/content-core/pipeline'
@@ -147,8 +149,12 @@ const run = (o: {
       sourceInputHash: 'fixturehash00000',
       pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
       promptVersion: CONTENT_CORE_PROMPT_VERSION,
+      speakerPlanVersion: SPEAKER_PLAN_VERSION,
+      reviewVersion: REVIEW_VERSION,
+      planPromptDigest: 'plan000000000000',
       stageModels: STAGE_MODEL,
-      voiceAssetDigest: 'asset000000000', personaCardDigest: 'card0000000000',
+      stageMaxOutputLabel: STAGE_MAX_OUTPUT_LABEL,
+      voiceAssetDigest: 'asset000000000', personaPoolDigest: 'pool0000000000',
     },
   })
 }
@@ -931,14 +937,15 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
   check('🔴 판 번호가 새 계약을 담는다',
     SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p3'
     && SPEAKER_PLAN_VERSION === 'speaker-plan-v4'
-    && ARTIFACT_VERSION === 'human-review-v8'
+    && ARTIFACT_VERSION === 'human-review-v9'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
-  check('🔴 🔴 **생성 캐시 key 가 새 판을 실제로 담는다**', (() => {
+  check('🔴 🔴 **캐시 key 와 artifact 계약이 같은 함수에서 나온다**', (() => {
     const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     const i = runner.indexOf('const v2Key =')
     const key = runner.slice(i, runner.indexOf('\n\n', i))
-    return /SPEAKER_PLAN_PROMPT_VERSION/.test(key) && /SPEAKER_PLAN_VERSION/.test(key)
-      && /ARTIFACT_VERSION/.test(key) && /digest16\(buildSpeakerPlanSystemPrompt\(\)\)/.test(key)
+    // 🔴 key 가 제 손으로 판 이름을 잇지 않는다 — 계약 하나만 쓴다
+    return /generationIdentity\(contract\)/.test(key) && /ARTIFACT_VERSION/.test(key)
+      && !/PROMPT_VERSION|STAGE_MODEL\.|SPEAKER_PLAN_VERSION|STAGE_MAX_OUTPUT_LABEL/.test(key)
   })())
 }
 
@@ -979,10 +986,12 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
     blocked.review.semanticCompletion.reason === 'budgetBlocked',
     String(blocked.review.semanticCompletion.reason))
   check('🔴 막힌 회차는 adopt 가 아니다', blocked.review.machineOutcome !== 'adopt')
-  check('🔴 🔴 **전역 INCOMPLETE 상수가 사라졌다**', (() => {
+  check('🔴 🔴 **중단 원인을 문구가 아니라 값으로 적는다**', (() => {
     const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
-    return !/const INCOMPLETE: ReviewCompletion/.test(src)
-      && /const NOT_RUN: ReviewCompletion = \{ complete: false, reason: 'notRun' \}/.test(src)
+    return !/const INCOMPLETE: ReviewCompletion/.test(src) && !/\bNOT_RUN\b/.test(src)
+      && /notRun\('speakerUnqualified'\)/.test(src)
+      && /notRun\('voiceUnready'\)/.test(src)
+      && /notRunFrom\(pC\)/.test(src)
   })())
   check('🔴 사유 이름마다 사람이 읽는 말이 있다',
     INCOMPLETE_LABEL.notRun !== '' && INCOMPLETE_LABEL.budgetBlocked !== ''
@@ -1011,10 +1020,39 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
     !/DRAFT_MAX_TOKENS/.test(runner))
   check('🔴 🔴 **러너가 단계 상한을 그대로 넘긴다**',
     /STAGE_MAX_OUTPUT_TOKENS\[stage\]/.test(runner))
-  check('🔴 🔴 **캐시 key 가 단계 상한을 담는다**', (() => {
-    const i = runner.indexOf('const v2Key =')
-    return i !== -1 && runner.slice(i, runner.indexOf('\n\n', i)).includes('STAGE_MAX_OUTPUT_LABEL')
-  })())
+  /**
+   * 🔴 **계약 한 칸이 바뀌면 identity 가 바뀐다.** 캐시 key 도 terminal 판정도
+   *    이 값을 쓰므로, 여기서 한 번 확인하면 두 곳이 함께 miss 된다.
+   */
+  {
+    const base: GenerationContract = {
+      sourceInputHash: 'h', pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
+      promptVersion: CONTENT_CORE_PROMPT_VERSION, speakerPlanVersion: SPEAKER_PLAN_VERSION,
+      reviewVersion: REVIEW_VERSION, planPromptDigest: 'plan1',
+      stageModels: STAGE_MODEL, stageMaxOutputLabel: STAGE_MAX_OUTPUT_LABEL,
+      voiceAssetDigest: 'v1', personaPoolDigest: 'p1',
+    }
+    const id0 = generationIdentity(base)
+    for (const [name, patch] of [
+      ['출력 상한', { stageMaxOutputLabel: 'speakerPlan=1,draftGen=1,semanticReview=1' }],
+      ['검수 판', { reviewVersion: 'review-v0' }],
+      ['화자 계획 판', { speakerPlanVersion: 'speaker-plan-v0' }],
+      ['계획 프롬프트', { planPromptDigest: 'plan2' }],
+      ['단계 모델', { stageModels: { ...STAGE_MODEL, draftGen: 'other' } }],
+      ['말투 자산', { voiceAssetDigest: 'v2' }],
+      ['Persona 후보 풀', { personaPoolDigest: 'p2' }],
+      ['원천 지문', { sourceInputHash: 'h2' }],
+    ] as const) {
+      const next = { ...base, ...patch }
+      check(`🔴 🔴 **${name}이 바뀌면 캐시와 terminal 이 함께 miss 된다**`,
+        generationIdentity(next) !== id0 && !sameGenerationContract(base, next))
+    }
+    check('🔴 같은 계약이면 같은 값이다',
+      generationIdentity({ ...base }) === id0 && sameGenerationContract({ ...base }, base))
+    check('🔴 🔴 **칸이 빠진 옛 계약은 읽지 않는다**',
+      readGenerationContract({ ...base, planPromptDigest: undefined }) === null
+      && readGenerationContract(null) === null)
+  }
   check('🔴 판 번호가 새 계약을 담는다',
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.1'
     && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p7'
@@ -1071,7 +1109,7 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
    *    판정하는지 값으로 본다. 예시를 프롬프트에 박아 맞추는 방식은 그만둔다.
    */
   const PASS: DeterministicResult = { pass: true, failures: [] }
-  const DONE: ReviewCompletion = { complete: true, reason: null }
+  const DONE: ReviewCompletion = { complete: true, reason: null, cause: null }
   const V = (o: Partial<SemanticVerdict> = {}): SemanticVerdict => ({
     issues: [], unknownIssues: [], droppedFromSource: [], unsupportedAdditions: [],
     lifeContradictions: [], confidence: 0.9, note: '', ...o,
@@ -1125,7 +1163,10 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
     check(`🔴 🔴 **${name} 은 계속 ${want.toUpperCase()} 다**`, j.outcome === want, j.outcome)
   }
   for (const reason of ['truncated', 'noResponse', 'parseFailed', 'usageUnknown', 'budgetBlocked', 'notRun'] as const) {
-    const j = judgeMachine({ deterministic: PASS, semantic: null, semanticCompletion: { complete: false, reason } })
+    const j = judgeMachine({
+      deterministic: PASS, semantic: null,
+      semanticCompletion: { complete: false, reason, cause: reason === 'notRun' ? 'voiceUnready' : reason },
+    })
     check(`🔴 미완료(${reason})는 계속 HOLD 다`, j.outcome === 'hold')
   }
   check('🔴 🔴 **경고 축은 둘뿐이다** — 새 축을 만들지 않았다',

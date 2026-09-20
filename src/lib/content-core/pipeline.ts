@@ -72,11 +72,16 @@ export const CONTENT_CORE_MODEL_LABEL =
   + CONTENT_CORE_STAGES.map((s) => `${s}=${STAGE_MODEL[s]}`).join(',')
 
 /**
- * 🔴 **이 글이 어떤 계약으로 만들어졌는가** (2026-09-20).
+ * 🔴 **이 글이 어떤 계약으로 만들어졌는가** (2026-09-20)
  *
  *    `artifactVersion` 하나로는 판단할 수 없다 — 그건 **스키마 판**이고,
  *    같은 스키마에서 프롬프트·모델·말투 자산이 바뀔 수 있다. 그러면 지난 HOLD 를
  *    지금 계약의 결론으로 쓰게 된다.
+ *
+ * 🔴 **생성 결과를 바꾸는 값은 전부 여기 있다.** 캐시 key 와 artifact 계약이
+ *    따로 조립되던 것을 하나로 합쳤다 — 출력 상한·검수판·화자 계획판·계획 프롬프트가
+ *    캐시에만 있어서, 그것들이 바뀌면 캐시는 miss 되는데 지난 HOLD 는 여전히
+ *    "지금 계약의 결론" 으로 남았다 (2026-09-20 실측).
  *
  * 🔴 **원문을 담지 않는다.** 입력은 해시 하나로만 적는다.
  */
@@ -84,28 +89,79 @@ export type GenerationContract = {
   /** 🔴 원문 지문 — 판정기 정본 해시와 같은 값이다. 원문을 복원할 수 없다 */
   sourceInputHash: string
   pipelineVersion: string
+  /** 세 프롬프트 판을 합친 한 줄 */
   promptVersion: string
+  /** 화자 계획 **구조** 판 — 프롬프트 판과 다르다 */
+  speakerPlanVersion: string
+  /** 검수 규칙 판 */
+  reviewVersion: string
+  /** 🔴 계획 지시문 원문의 지문 — 판 번호를 안 올리고 문구만 바꿔도 결과가 바뀐다 */
+  planPromptDigest: string
   stageModels: Readonly<Record<ContentCoreStage, string>>
+  /** 🔴 단계별 출력 상한 — 1200 으로 잘린 결과를 2000 짜리 계약이 쓰면 안 된다 */
+  stageMaxOutputLabel: string
   /** 말투 자산 판 — 댓글 정본 묶음의 지문 */
   voiceAssetDigest: string
-  /** Persona 정본 카드 판 */
-  personaCardDigest: string
+  /**
+   * 🔴 **실제로 쓸 수 있었던 Persona 후보 풀의 지문.**
+   *    카드 문서 원문이 아니다 — 오타 한 자 고쳤다고 전량 다시 만들 이유가 없다.
+   *    코드·말투 토큰·말투 묶음 지문처럼 **결과를 바꾸는 값**만 들어간다.
+   */
+  personaPoolDigest: string
 }
 
-/** 🔴 두 계약이 같은가 — 한 칸이라도 다르면 다른 계약이다 */
 /** 🔴 원천과 무관한 칸들 — 회차마다 한 번만 만든다 */
 export type ContractBase = Omit<GenerationContract, 'sourceInputHash'>
 
+/** 🔴 계약의 칸 순서 정본 — 여기 없는 칸은 identity 에 들어가지 않는다 */
+const CONTRACT_FIELDS = [
+  'sourceInputHash', 'pipelineVersion', 'promptVersion', 'speakerPlanVersion',
+  'reviewVersion', 'planPromptDigest', 'stageMaxOutputLabel',
+  'voiceAssetDigest', 'personaPoolDigest',
+] as const satisfies readonly (keyof GenerationContract)[]
+
+/**
+ * 🔴 **계약을 한 줄로.** 생성 캐시 key 와 "지난 결과가 지금 계약인가" 판단이
+ *    **이 함수 하나**를 쓴다. 두 곳에서 문자열을 따로 이으면 한쪽이 반드시 낡는다.
+ */
+export function generationIdentity(c: GenerationContract): string {
+  return [
+    ...CONTRACT_FIELDS.map((k) => `${k}=${c[k]}`),
+    CONTENT_CORE_STAGES.map((st) => `${st}=${c.stageModels[st]}`).join(','),
+  ].join('|')
+}
+
+/**
+ * 🔴 **파일에서 읽은 값을 계약으로.** 한 칸이라도 없거나 모양이 다르면 `null` 이다 —
+ *    빈 값을 채워 넣으면 모르는 것이 "같다" 로 통과한다.
+ */
+export function readGenerationContract(v: unknown): GenerationContract | null {
+  if (typeof v !== 'object' || v === null) return null
+  const o = v as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const k of CONTRACT_FIELDS) {
+    if (typeof o[k] !== 'string' || o[k] === '') return null
+    out[k] = o[k]
+  }
+  const models = o.stageModels
+  if (typeof models !== 'object' || models === null) return null
+  const m = models as Record<string, unknown>
+  const stageModels: Record<string, string> = {}
+  for (const st of CONTENT_CORE_STAGES) {
+    if (typeof m[st] !== 'string' || m[st] === '') return null
+    stageModels[st] = m[st] as string
+  }
+  return { ...out, stageModels } as unknown as GenerationContract
+}
+
+/** 🔴 두 계약이 같은가 — 한 칸이라도 다르면 다른 계약이다 */
 export function sameGenerationContract(
   a: GenerationContract | null | undefined, b: GenerationContract,
 ): boolean {
   if (a === null || a === undefined) return false
-  return a.sourceInputHash === b.sourceInputHash
-    && a.pipelineVersion === b.pipelineVersion
-    && a.promptVersion === b.promptVersion
-    && a.voiceAssetDigest === b.voiceAssetDigest
-    && a.personaCardDigest === b.personaCardDigest
-    && CONTENT_CORE_STAGES.every((st) => a.stageModels?.[st] === b.stageModels[st])
+  const norm = readGenerationContract(a)
+  if (norm === null) return false
+  return generationIdentity(norm) === generationIdentity(b)
 }
 
 /**

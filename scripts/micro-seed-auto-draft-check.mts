@@ -4,6 +4,7 @@
  *
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
+import { digest16, PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { readFileSync } from 'node:fs'
 import {
   pickDraft, pickV2, checkDraft, summarizeDrafts, violatesDraftProvenance,
@@ -23,8 +24,7 @@ import { SEMANTIC_RISKS, SEMANTIC_HOLD, DRAFT_HARM_AXES } from '../src/lib/micro
 import { SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 import {
   callBudgetOf, CallBudget, HARM_BANS, MAX_ORIGINALITY_RETRIES,
-  CALL_ALLOWANCE_PER_SOURCE, HARM_PROMPT, digest16,
-  V2_CALL_CAP, V2_LEDGER_STAGE,
+  CALL_ALLOWANCE_PER_SOURCE, HARM_PROMPT, V2_CALL_CAP, V2_LEDGER_STAGE,
 } from './micro-seed-auto-draft.mjs'
 import {
   readSourceProfile, readClosingIntent, readTitleIntent, endsNaturallyAsQuestion,
@@ -36,7 +36,6 @@ import { STAGE_MODEL } from './lib/content-core-run.mjs'
 import { LEDGER_STAGES } from '../src/lib/llm-ledger'
 import { PLANNED } from './persona-children-age-bands.mjs'
 import { readPostRequirements, hardFilter } from '../src/lib/original-post-persona-match'
-import { PERSONA_POOL_DOC } from './micro-seed-auto-draft.mjs'
 import {
   readVoiceProvenance, voiceOfGateResults, judgeVoiceMatch, VOICE_MATCH_CODES,
 } from '../src/lib/original-post-voice-match'
@@ -355,9 +354,11 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
     return a.assigned === null && (a.recoveryProblem ?? '').includes('이 글을 쓴')
   })())
   check('🔴 생성 쪽이 정본 universe 의 Persona 코드에 묶는다', (() => {
-    const r = codeOf('scripts/micro-seed-auto-draft.mts')
+    // 🔴 후보 풀을 읽는 곳은 생성 러너와 계약 산출이 **함께 쓰는 한 파일**이다
+    const r = codeOf('scripts/lib/voice-runtime.mts')
     return /planBundles\(\{ rows: asset\.rows, personaCodes: PRODUCTION_PERSONA_CODES \}\)/.test(r)
       && !/voice-a/.test(r)
+      && /loadVoice\(\)/.test(codeOf('scripts/micro-seed-auto-draft.mts'))
   })())
   check('🔴 판 값이 세 곳에 흩어져 있지 않다 — 정본 하나에서 나온다', (() => {
     const af = codeOf('src/lib/micro-seed-supply-autofill.ts')
