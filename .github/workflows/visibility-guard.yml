@@ -619,7 +619,13 @@ jobs:
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:process-check
 
+      # 🔴 **backlog 전체를 판정하지 않는다** — 2026-09-20 canary 가 $0.029949 를 쓰고
+      #    후보 0건으로 끝난 구조를 막는다. 순수 함수와 소스 계약만 본다
+      #    (provider 0 · DB 0 · write 0 · 실측 0.15 초).
+      #    🔴 `supply:process-check` 과 **같은 조건**을 쓴다 — 이 계약을 깨뜨릴 수 있는
+      #       PR(src/lib · scripts)은 전부 heavy 이고, 화면 전용 PR 은 건드리지 못한다.
       - name: 🔴 작업 묶음 — backlog 전체를 판정하지 않는다
+        if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:workset-check
       # 공급 AI 비용 장부 — 🔴 **요청 전 차단**을 행동으로 검사한다.
       #
