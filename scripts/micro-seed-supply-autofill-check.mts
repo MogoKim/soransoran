@@ -21,6 +21,7 @@ import {
   queueSourceTimesOf,
 } from '../src/lib/micro-seed-supply-autofill'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
+import { planCommonPhase, type Pending } from '../src/lib/supply-process'
 
 const NOW = '2026-09-07T12:00:00.000Z'
 /**
@@ -317,10 +318,29 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
     const r = judgeApply({ ...g, limit: 3 })
     return !r.ok && r.reason.includes('잘라내지 않고 멈춘다')
   })())
+  /**
+   * 🔴 **인자를 값으로 본다** (2026-09-20 보정). 앞판은 호출 문장을 글자로 박아
+   *    두었는데, 작업 묶음이 생기며 문장 모양이 바뀌자 계약은 그대로인데 검사가 깨졌다.
+   *    계약은 "러너는 상한까지(`--up-to`)로 부른다 · 정확히(`--limit`)로 부르지 않는다" 다.
+   */
   check('🔴 러너는 --up-to 로 부른다 — --limit 으로 부르지 않는다', (() => {
-    const lib = readFileSync('src/lib/supply-process.ts', 'utf-8')
-    return /mk\('fill', \['--apply', `--up-to=\$\{policy\.upTo\}`\], null\)/.test(lib)
-      && !/mk\('fill', \['--apply', `--limit=/.test(lib)
+    const pending: Pending = {
+      rawCafe: {}, thin: {}, detail: ['a.detail.jsonl'], shadow: [],
+      candidates: ['auto-draft-x.candidates.json'],
+    }
+    const policy = { llm: true, fill: true, upTo: 29, reason: '' }
+    const gate = { kind: 'ready' as const, snapshotPath: '/d/s.json', runId: 'R1' }
+    const plans = [
+      // 🔴 옛 경로(묶음 없음)와 새 경로(묶음 있음) **둘 다** 본다
+      ...planCommonPhase(pending, policy, gate),
+      ...planCommonPhase(pending, policy, gate, {
+        manifestPath: '/d/w.json', shadowPath: '/d/s.shadow.jsonl',
+        candidatesPath: '/d/c.json', limit: 5, perStage: { judge: 5, draft: 15 },
+      }),
+    ].filter((p) => p.stage === 'fill')
+    return plans.length === 2
+      && plans.every((p) => p.args.some((a: string) => a.startsWith('--up-to=')))
+      && plans.every((p) => !p.args.some((a: string) => a.startsWith('--limit=')))
   })())
   check('🔴 autofill CLI 가 --up-to 를 실제로 판정부에 넘긴다', (() => {
     const cli = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')

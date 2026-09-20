@@ -618,6 +618,9 @@ jobs:
       - name: 공급 처리 (수집 금지 · 발행 금지 · source 독립 실패 · lock 게이트)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:process-check
+
+      - name: 🔴 작업 묶음 — backlog 전체를 판정하지 않는다
+        run: npm run supply:workset-check
       # 공급 AI 비용 장부 — 🔴 **요청 전 차단**을 행동으로 검사한다.
       #
       # 🔴 이 검사는 가짜 provider 로 `fetch` 를 가로채 **실제로 나간 요청 수**를 센다.

@@ -1085,7 +1085,12 @@ async function main(): Promise<void> {
     const bad = violatesDraftProvenance(a.pick as unknown as Record<string, unknown>)
     if (bad.length > 0) fail(`provenance 위반\n${bad.map((b) => `     ${b}`).join('\n')}`)
   }
-  const rid = runId(now)
+  /**
+   * 🔴 **회차 id 를 받으면 그것으로 파일 이름을 짓는다** (2026-09-20).
+   *    러너가 다음 단계에 "이 파일만 읽어라" 고 건네려면 경로를 **미리 알아야** 한다.
+   *    시각으로 지으면 러너가 예측할 수 없어 디렉터리 전체를 다시 훑게 된다.
+   */
+  const rid = RUN_ID ?? runId(now)
   const pickPath = join(DATA_DIR, `auto-draft-${rid}.picks.jsonl`)
   const candPath = join(DATA_DIR, `auto-draft-${rid}.candidates.json`)
   /** 🔴 사람이 근거를 보고 판단하는 한 장 — 채택되지 않은 것도 남긴다 */

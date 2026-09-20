@@ -263,12 +263,23 @@ export type StagePlan = {
   source: SupplySourceId | null
   llm: boolean
   dbWrite: boolean
+  /**
+   * 🔴 **이 단계에만 주는 env** (2026-09-20). 장부 회차 id 와 요청 상한을
+   *    단계마다 따로 준다 — 한 상한을 나눠 쓰면 먼저 오는 단계가 전부 가져가고
+   *    뒤 단계가 굶는다. canary 가 그 모양이었다(judge 15 · draft 0).
+   * 🔴 운영 env 파일은 건드리지 않는다. 자식 프로세스에만 실린다.
+   */
+  env?: Readonly<Record<string, string>>
 }
 
-const mk = (stage: ProcessStage, args: readonly string[], source: SupplySourceId | null): StagePlan => ({
+const mk = (
+  stage: ProcessStage, args: readonly string[], source: SupplySourceId | null,
+  env?: Readonly<Record<string, string>>,
+): StagePlan => ({
   stage, label: STAGE_LABEL[stage], args, source,
   llm: LLM_STAGES.includes(stage),
   dbWrite: DB_WRITE_STAGES.includes(stage),
+  ...(env === undefined ? {} : { env }),
 })
 
 export type SourcePlan = { source: SupplySourceId; stages: StagePlan[] }
@@ -325,14 +336,48 @@ export type DraftQueueGate =
   | { kind: 'ready'; snapshotPath: string; runId: string }
   | { kind: 'hold'; reason: string; runId: string }
 
+/**
+ * 🔴 **이번 회차가 끝까지 보낼 묶음** (2026-09-20). 세 단계가 **같은 N 건**을 본다.
+ *    파일 경로를 계획이 정한다 — 하위 스크립트가 디렉터리 전체를 다시 훑지 않게.
+ */
+export type WorksetGate = {
+  /** manifest 경로 — `judge` 가 이 목록의 원천만 판정한다 */
+  manifestPath: string
+  /** 그 회차 판정 파일 — `draft` 가 **이것만** 읽는다 */
+  shadowPath: string
+  /** 그 회차 후보 파일 — `fill` 이 **이것만** 읽는다 */
+  candidatesPath: string
+  limit: number
+  /** 단계별 요청 상한 — 🔴 `judgeStageBudget` 이 낸 값을 그대로 받는다 */
+  perStage: Readonly<Record<'judge' | 'draft', number>>
+}
+
+/** 🔴 단계마다 **자기 장부 회차 id** 를 쓴다 — 상한이 섞이지 않는다 */
+export const stageRunIdOf = (runId: string, stage: 'judge' | 'draft'): string =>
+  `${runId}-${stage === 'judge' ? 'j' : 'd'}`
+
+const LEDGER_CAP_ENV = 'SORAN_LLM_RUN_REQUEST_CAP'
+
 export function planCommonPhase(
-  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,
+  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate, workset?: WorksetGate,
 ): StagePlan[] {
   const out: StagePlan[] = []
   if (!policy.llm) return out
-  // 🔴 판정도 **같은 회차 id** 를 받는다 — 장부의 회차 요청 상한을 생성과 나눠 쓴다
+  /**
+   * 🔴 **묶음이 정해졌으면 그 묶음만 돈다** (2026-09-20).
+   *    묶음이 없으면 옛 계약(디렉터리 전체)이다 — 손으로 부르는 경로가 그렇다.
+   */
   if (pending.detail.length > 0) {
-    out.push(mk('judge', ['--call', '--apply', `--run-id=${gate.runId}`], null))
+    out.push(mk('judge', [
+      '--call', '--apply',
+      `--run-id=${workset === undefined ? gate.runId : stageRunIdOf(gate.runId, 'judge')}`,
+      ...(workset === undefined ? [] : [
+        `--workset=${workset.manifestPath}`,
+        `--shadow-out=${workset.shadowPath}`,
+      ]),
+    ], null, workset === undefined ? undefined : {
+      [LEDGER_CAP_ENV]: String(workset.perStage.judge),
+    }))
   }
   if (pending.shadow.length > 0 || pending.detail.length > 0) {
     /**
@@ -343,14 +388,22 @@ export function planCommonPhase(
       out.push(mk('draft', [
         '--call', '--apply',
         `--queue-snapshot=${gate.snapshotPath}`,
-        `--run-id=${gate.runId}`,
+        `--run-id=${workset === undefined ? gate.runId : stageRunIdOf(gate.runId, 'draft')}`,
         // 🔴 파일이 없으면 만들지 말라는 뜻 — 생성기가 스스로 fail-closed 한다
         '--require-queue-snapshot',
-      ], null))
+        // 🔴 **그 회차가 만든 판정 파일만** 읽는다 — 과거 shadow 를 다시 훑지 않는다
+        ...(workset === undefined ? [] : [`--input=${workset.shadowPath}`]),
+      ], null, workset === undefined ? undefined : {
+        [LEDGER_CAP_ENV]: String(workset.perStage.draft),
+      }))
     }
   }
   if (policy.fill && policy.upTo > 0 && (pending.candidates.length > 0 || pending.detail.length > 0)) {
-    out.push(mk('fill', ['--apply', `--up-to=${policy.upTo}`], null))
+    out.push(mk('fill', workset === undefined
+      ? ['--apply', `--up-to=${policy.upTo}`]
+      // 🔴 **그 회차 후보 파일만** · 정확히 묶음 크기까지. 과거 후보 파일은 대상이 아니다
+      : ['--apply', `--input=${workset.candidatesPath}`, `--up-to=${Math.min(policy.upTo, workset.limit)}`],
+    null))
   }
   return out
 }
