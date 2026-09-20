@@ -116,7 +116,9 @@ export const DEPLOY_STEPS: readonly string[] = [
   '② fetch 하고 preflight — 🔴 fetch 실패는 그 자리에서 멈춘다(오래된 ref 로 판단하지 않는다)',
   '②-b **활성화 스위치 확인** — plist 가 올라가도 스위치가 닫혀 있으면 그 job 은 일하지 않는다',
   '③ 현재 SHA·manifest·**설치 plist 원문·loaded 상태**를 보존한다 (되돌릴 곳)',
-  '④ 예약 job 5개 + 퇴역 job 을 unload 하고 **하나씩 내려간 것을 확인**한다',
+  '④ 예약 job 5개 + 퇴역 job + **발행 러너**를 unload 하고 **하나씩 내려간 것을 확인**한다',
+  '④-b 🔴 **checkout 직전에 실행 여부를 다시 관측한다** —'
+  + ' ② 의 관측과 ④ 사이에 시작한 회차가 있으면 파일을 건드리기 전에 멈춘다',
   '⑤ target SHA 로 checkout · npm ci · prisma generate',
   '⑥ **offline 게이트** — job 이 내려가 있어도 도는 것들만',
   '⑦ 🔴 **target commit 의 템플릿을 render 해 설치 plist 로 쓴다** —'
@@ -124,6 +126,9 @@ export const DEPLOY_STEPS: readonly string[] = [
   '⑧ plutil 로 설치본을 검증한다 — 문법이 깨진 plist 는 load 가 조용히 실패한다',
   '⑨ 퇴역 job 의 설치 plist 를 보관소로 옮긴다 (unload 만으로는 재부팅 때 되살아난다)',
   '⑩ manifest·pin 을 준비하고 job 5개를 load 한 뒤 **하나씩 올라온 것을 확인**한다',
+  '⑩-b 🔴 **잠시 멈춘 발행 러너를 원래 설치본 그대로 되올린다** —'
+  + ' 배포 전 loaded 였을 때만. plist 원문 · ProgramArguments · WorkingDirectory 를 값으로 대조한다'
+  + ' (🔴 render·write 하지 않는다 — 공급 job 과 책임을 섞지 않는다)',
   '⑪ **실제 loaded 경로 + ProgramArguments** 대조 → runtime:isolation-check --require-runtime',
   '⑫ 여기까지 통과해야 "배포 완료" 다',
   '🔴 어느 단계든 실패하면 ⑬ 으로 간다',
@@ -257,6 +262,11 @@ export type DeployEffects = {
    */
   argsOf: (xml: string) => readonly string[]
   /**
+   * 🔴 plist 원문의 `WorkingDirectory` — 🔴 **파싱만** 한다. `argsOf` 와 같은 계약이다.
+   *    잠시 멈춘 job 을 되올린 뒤 **설치본과 같은 자리에서 도는가**를 값으로 본다.
+   */
+  workingDirOf: (xml: string) => string | null
+  /**
    * 🔴 `launchctl print` 원문에서 뽑은 **실제 loaded 설정**.
    *    판정은 `judgeLoadedConfig` 정본이 한다 — 여기서 따로 정규식을 쓰지 않는다.
    */
@@ -316,6 +326,21 @@ export async function runDeploy(input: {
    *       배포가 **새 plist 를 render·설치·load** 한다.
    */
   disabledJobs?: readonly string[]
+  /**
+   * 🔴 **배포 동안만 잠시 멈춰 두는 job** (2026-09-20). 공급 job 이 아니다.
+   *
+   *    `com.soransoran.original-post-runner` 는 공급 job 이 아니지만 **같은 runtime
+   *    작업 트리에서** 돈다. 그런데 배포의 관측·정지·복구 어디에도 없었다 —
+   *    `checkout`·`npm ci` 중에 발행 슬롯(예: 16:10)이 뜨면 **반쯤 바뀐 트리**를 읽는다.
+   *    지금까지는 사람이 예약 시각을 보고 기다려서 피했다. 그 병목을 없앤다.
+   *
+   * 🔴 **배포가 이들에게 하는 일은 잠시 내렸다 그대로 되올리는 것뿐이다.**
+   *      · render ✗ · writePlist ✗ · retire ✗ · env 판정 ✗ · 활성화 요구 ✗
+   *      · 배포 전 loaded 였을 때만 내리고, 끝나면 **같은 설치본으로** 되올린다
+   *      · 원래 내려가 있었으면 끝까지 내려가 있다
+   * 🔴 공급 job(`RUNTIME_JOBS`)에 섞지 않는다 — 템플릿·env·격리 책임이 다르다.
+   */
+  quiesceJobs?: readonly string[]
   /** 🔴 실제 loaded 경로를 판정할 기준 — runtime 안이어야 하는 것은 program 과 WorkingDirectory 뿐이다 */
   paths: PathContract
   offlineGates?: readonly string[]
@@ -330,6 +355,14 @@ export async function runDeploy(input: {
   const disabled = input.disabledJobs ?? []
   /** unload 대상 — 🔴 퇴역 job 도 내린다. 남겨 두면 같은 원천을 두 번 연다 */
   const allJobs = [...input.jobs, ...retired]
+  /** 🔴 배포 동안만 멈춰 두는 job — 파일은 건드리지 않는다 */
+  const quiesce = input.quiesceJobs ?? []
+  /**
+   * 🔴 **상태를 되돌려야 하는 전체.** `allJobs` 는 **파일까지** 다루는 목록이고,
+   *    이쪽은 **loaded 상태**를 보존·복구하는 목록이다. 둘을 갈라 둔다 —
+   *    잠시 멈춘 job 의 plist 는 배포가 쓰지도 지우지도 않는다.
+   */
+  const restoreJobs = [...allJobs, ...quiesce]
 
   // ── ② preflight — 🔴 fetch 실패는 그 자리에서 멈춘다 ──
   steps.push('fetch')
@@ -451,7 +484,7 @@ export async function runDeploy(input: {
   const prevManifest = fx.readManifest()
   const prevPlists = new Map<string, string | null>()
   const prevLoaded = new Map<string, JobState>()
-  for (const l of allJobs) {
+  for (const l of restoreJobs) {
     prevPlists.set(l, fx.readInstalledPlist(l))
     prevLoaded.set(l, fx.probeJob(l))
   }
@@ -518,14 +551,14 @@ export async function runDeploy(input: {
   const stopAll = (): string[] => {
     steps.push('rollback:stop')
     const residual: string[] = []
-    for (const l of allJobs) {
+    for (const l of restoreJobs) {
       if (fx.probeJob(l) === 'unloaded') continue
       steps.push(`bootout:${l}`)
       fx.bootout(l)
     }
     // ⓑ 🔴 명령의 반환값이 아니라 **다시 관측한 상태**로 판정한다
     steps.push('rollback:stop-verify')
-    for (const l of allJobs) {
+    for (const l of restoreJobs) {
       const st = fx.probeJob(l)
       if (st === 'loaded') residual.push(`${l}: 정지하지 못했다 — 아직 loaded 다`)
       else if (st === 'unknown') residual.push(`${l}: 정지 뒤 상태를 확인하지 못했다(fail-closed)`)
@@ -537,6 +570,7 @@ export async function runDeploy(input: {
   const restorePlists = (): string[] => {
     steps.push('rollback:plist')
     const residual: string[] = []
+    // 🔴 `allJobs` 다 — 잠시 멈춘 job 의 plist 는 배포가 쓰지 않았으므로 복원할 것도 없다
     for (const l of allJobs) {
       const before = prevPlists.get(l) ?? null
       if (before === null) {
@@ -557,7 +591,7 @@ export async function runDeploy(input: {
   const loadPrevious = (): string[] => {
     steps.push('rollback:load')
     const residual: string[] = []
-    for (const l of allJobs) {
+    for (const l of restoreJobs) {
       if (prevLoaded.get(l) !== 'loaded') continue
       /**
        * 🔴 **이미 올라와 있으면 다시 부르지 않는다.**
@@ -589,7 +623,7 @@ export async function runDeploy(input: {
   const verifyRestored = (): string[] => {
     steps.push('rollback:verify')
     const residual: string[] = []
-    for (const l of allJobs) {
+    for (const l of restoreJobs) {
       const want = prevLoaded.get(l)
       const now = fx.probeJob(l)
       if (want === 'loaded' && now !== 'loaded') residual.push(`${l}: 최종 확인에서 loaded 가 아니다`)
@@ -650,10 +684,10 @@ export async function runDeploy(input: {
   }
 
   // ── ④ unload + 하나씩 실제 상태 확인 ──
-  for (const l of allJobs) {
+  for (const l of restoreJobs) {
     // 🔴 원래 내려가 있던 job 은 내릴 것이 없다 (퇴역 job 이 대개 그렇다)
     if (prevLoaded.get(l) !== 'loaded') continue
-    steps.push(`unload:${l}`)
+    steps.push(`${quiesce.includes(l) ? 'quiesce-unload' : 'unload'}:${l}`)
     const returned = fx.unload(l)
     const state = fx.probeJob(l)
     if (returned && state === 'unloaded') continue
@@ -675,6 +709,30 @@ export async function runDeploy(input: {
     }
   }
   steps.push('unload-verified')
+
+  /**
+   * ── ④-b 🔴 **checkout 직전에 한 번 더 본다** (2026-09-20) ──
+   *
+   *    ② 의 관측과 ④ 의 unload 사이에는 시간이 있다. 그 틈에 시작한 회차는
+   *    ② 에서 보이지 않았고, ④ 는 실행 여부가 아니라 loaded 여부만 본다.
+   *    **파일을 건드리기 직전**에 다시 물어, 아직 도는 것이 있으면 멈춘다.
+   *    🔴 여기서 멈추면 코드도 plist 도 그대로다 — 되돌릴 것은 loaded 상태뿐이다.
+   */
+  const recheck = fx.runningJobs()
+  const stillRunning = recheck.running.filter((l) => restoreJobs.includes(l))
+  const stillUnknown = recheck.unknown.filter((l) => restoreJobs.includes(l))
+  steps.push('pre-checkout-recheck')
+  if (stillRunning.length > 0 || stillUnknown.length > 0) {
+    const why = stillRunning.length > 0
+      ? `아직 도는 회차가 있다(${stillRunning.join(' · ')})`
+      : `실행 여부를 확인하지 못했다(${stillUnknown.join(' · ')}) — 통과시키지 않는다(fail-closed)`
+    const residual = [...loadPrevious(), ...verifyRestored()]
+    return {
+      ok: false, phase: 'pre-checkout-recheck', steps,
+      problems: [`${why} — 코드도 plist 도 건드리지 않았다`],
+      rollback: { attempted: true, complete: residual.length === 0, residual: [...new Set(residual)] },
+    }
+  }
 
   // ── ⑤ checkout · 설치 ──
   steps.push('checkout')
@@ -726,6 +784,43 @@ export async function runDeploy(input: {
     if (why !== null) return failWith('load', why)
   }
   steps.push('load-verified')
+
+  /**
+   * ── ⑩-b 🔴 **잠시 멈춘 job 을 원래대로 되올린다** (2026-09-20) ──
+   *
+   *    🔴 **배포 전에 loaded 였던 것만.** 원래 내려가 있었으면 그대로 둔다 —
+   *       배포가 운영 상태를 바꾸는 자리가 되면 안 된다.
+   *    🔴 되올린 뒤 **값으로 확인한다**: 설치본 원문이 그대로인가 ·
+   *       ProgramArguments 와 WorkingDirectory 가 그 설치본과 같은가 ·
+   *       그 자리가 runtime 안인가.
+   */
+  for (const l of quiesce) {
+    if (prevLoaded.get(l) !== 'loaded') continue
+    const why = ensureLoaded(l)
+    if (why !== null) return failWith('quiesce-restore', why)
+    const beforeXml = prevPlists.get(l) ?? null
+    if (beforeXml === null) {
+      return failWith('quiesce-restore', `${l}: 배포 전 설치 plist 를 읽어 두지 못했다 — 대조할 원문이 없다`)
+    }
+    if (fx.readInstalledPlist(l) !== beforeXml) {
+      return failWith('quiesce-restore',
+        `${l}: plist 원문이 배포 전과 다르다 — 배포는 이 파일을 쓰지 않는다`)
+    }
+    const loaded = fx.loadedConfig(l)
+    const v = judgeLoadedConfig({
+      label: l, loaded,
+      runtimeRoot: input.paths.runtimeRoot, devRoots: input.paths.devRoots,
+      // 🔴 **배포 전 설치본**에서 뽑는다 — target 템플릿을 render 하지 않는다
+      expectedArgs: fx.argsOf(beforeXml),
+    })
+    if (!v.ok) return failWith('quiesce-restore', `되올린 설정이 설치본과 다르다 — ${v.problems.join(' / ')}`)
+    const wantWd = fx.workingDirOf(beforeXml)
+    if (wantWd === null || loaded.workingDirectory !== wantWd) {
+      return failWith('quiesce-restore',
+        `${l}: WorkingDirectory 가 설치본과 다르다 — 기대 ${wantWd ?? '(없음)'} · 실제 ${loaded.workingDirectory ?? '(없음)'}`)
+    }
+  }
+  if (quiesce.length > 0) steps.push('quiesce-restored')
 
   // ── ⑪ 🔴 여기서야 격리 검사를 돌린다 (job 이 올라와 있어야 의미가 있다) ──
   //

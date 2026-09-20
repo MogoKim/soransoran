@@ -37,8 +37,14 @@ import {
 import { readRuntimeEnv as readEnvFile } from './lib/runtime-env.mjs'
 import {
   leftoverPlaceholders, plistFileOf, programArguments, readInstalled, removeInstalled,
-  render, retireInstalled, rollbackDirOf, templatePathOf, unretireInstalled, writeInstalled,
+  render, retireInstalled, rollbackDirOf, templatePathOf, unretireInstalled, valueOf, writeInstalled,
 } from './lib/launchd-install.mjs'
+/**
+ * 🔴 **발행 러너 label 의 정본은 template 파일 하나다** — 여기에 문자열을 다시 적지 않는다.
+ *    이 job 은 공급 job 이 아니지만 **같은 runtime 작업 트리**에서 돌기 때문에,
+ *    배포 동안만 잠시 멈춘다. `RUNTIME_JOBS` 에 넣지 않는 이유가 그것이다.
+ */
+import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
 
 const RUNTIME_ROOT = join(homedir(), 'Documents', 'soransoran-runtime')
 /** 🔴 예약 실행이 절대 물으면 안 되는 곳 — 개발 작업트리들 */
@@ -49,6 +55,11 @@ const PIN_FILE = join(CANON_DIR, 'runtime-pinned-sha')
 const LOCK_FILE = join(CANON_DIR, 'runtime-deploy.lock')
 /** 🔴 정본은 `RUNTIME_JOBS` 하나다 — 여기에 label 을 다시 적지 않는다 */
 const JOBS = RUNTIME_JOBS
+/**
+ * 🔴 **배포 동안만 멈춰 두는 job.** 공급 job 도 퇴역 job 도 아니다 —
+ *    render·install·env 판정 어디에도 들어가지 않고, 잠시 내렸다 그대로 되올린다.
+ */
+const QUIESCE_JOBS: readonly string[] = [PUBLISH_RUNNER_LABEL]
 const AGENT_DIR = join(homedir(), 'Library', 'LaunchAgents')
 /**
  * 🔴 퇴역 plist 보관소 — 지우지 않고 옮긴다. 되돌릴 수 있어야 한다.
@@ -271,7 +282,8 @@ const fx: DeployEffects = {
     const running: string[] = []
     const unknown: string[] = []
     // 🔴 퇴역 job 도 본다 — 돌고 있는 옛 job 위로 배포하면 그 회차가 반쯤 잘린다
-    for (const l of [...JOBS, ...RETIRED_JOBS]) {
+    // 🔴 잠시 멈출 job 도 본다 — 돌고 있는 발행 회차 위로 checkout 하면 그 회차가 반쯤 잘린다
+    for (const l of [...JOBS, ...RETIRED_JOBS, ...QUIESCE_JOBS]) {
       const probe = probePrint(l)
       const { state } = judgeJobState(probe)
       // 🔴 못 본 job 을 "실행 중 아님" 으로 통과시키지 않는다
@@ -305,6 +317,7 @@ const fx: DeployEffects = {
   readInstalledPlist: (l) => readInstalled(AGENT_DIR, l),
   renderPlist: (target, l) => renderFromTarget(target, l),
   argsOf: (xml) => programArguments(xml),
+  workingDirOf: (xml) => valueOf(xml, 'WorkingDirectory'),
   writePlist: (l, xml) => writeInstalled(AGENT_DIR, l, xml),
   removePlist: (l) => removeInstalled(AGENT_DIR, l),
   retirePlist: (l) => {
@@ -352,7 +365,7 @@ if (DISABLED_JOBS.length > 0) {
 }
 const result = await runDeploy({
   target: TARGET ?? '', jobs: ACTIVE_JOBS, retiredJobs: RETIRED_JOBS,
-  disabledJobs: DISABLED_JOBS,
+  disabledJobs: DISABLED_JOBS, quiesceJobs: QUIESCE_JOBS,
   paths: { runtimeRoot: RUNTIME_ROOT, devRoots: DEV_ROOTS },
 }, fx)
 
