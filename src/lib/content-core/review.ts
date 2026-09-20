@@ -119,11 +119,20 @@ export type SemanticVerdict = {
   note: string
 }
 
-/** 🔴 검수가 **완주했는가** — 잘림·미응답·파싱 실패·사용량 미상은 통과가 아니다 */
+/**
+ * 🔴 검수가 **완주했는가** — 잘림·미응답·파싱 실패·사용량 미상은 통과가 아니다.
+ *
+ * 🔴 **`notRun` 을 더했다** (2026-09-20 보정). 앞판은 의미 검수를 **부르지도 않은**
+ *    조기 종료가 전부 `budgetBlocked` 로 적혔다. 실측 449988 은 예산 $0.0956 과
+ *    요청 3회가 남은 상태에서 화자 자격 때문에 멈췄는데, artifact 에는
+ *    "예산·상한에 막혀 묻지 못했다" 로 남았다 — **사실이 아닌 기록**이다.
+ *    사람이 원인을 잘못 짚는다. 두 상태를 가른다.
+ */
 export type ReviewCompletion = {
   complete: boolean
   /** 왜 완주하지 못했나 */
-  reason: 'truncated' | 'noResponse' | 'parseFailed' | 'usageUnknown' | 'budgetBlocked' | null
+  reason: 'truncated' | 'noResponse' | 'parseFailed' | 'usageUnknown'
+    | 'budgetBlocked' | 'notRun' | null
 }
 
 export const INCOMPLETE_LABEL: Readonly<Record<NonNullable<ReviewCompletion['reason']>, string>> = {
@@ -132,6 +141,7 @@ export const INCOMPLETE_LABEL: Readonly<Record<NonNullable<ReviewCompletion['rea
   parseFailed: '답을 읽지 못했다',
   usageUnknown: '사용량을 알 수 없다',
   budgetBlocked: '예산·상한에 막혀 묻지 못했다',
+  notRun: '앞 단계에서 멈춰 의미 검수를 부르지 않았다',
 }
 
 /** 🔴 공백·줄바꿈만 지우고 견준다 */

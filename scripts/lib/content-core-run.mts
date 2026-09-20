@@ -163,7 +163,13 @@ const parseDraft = (raw: string): { title: string; body: string } | null => {
   } catch { return null }
 }
 
-const INCOMPLETE: ReviewCompletion = { complete: false, reason: 'budgetBlocked' }
+/**
+ * 🔴 **의미 검수를 부르지 않았다.** 조기 종료가 쓰는 값이다 —
+ *    예산이 남아 있어도 앞 단계에서 멈추면 검수는 실행되지 않는다.
+ *    🔴 `budgetBlocked` 는 **의미 검수 호출이 실제로 막혔을 때만** 쓴다
+ *    (`completionOf(rRes)` 가 그것을 판정한다).
+ */
+const NOT_RUN: ReviewCompletion = { complete: false, reason: 'notRun' }
 
 /** 🔴 한 원천을 끝까지 돈다. 중간에 멈추면 멈춘 자리가 artifact 에 남는다 */
 export async function runContentCore(input: RunInput): Promise<HumanReviewArtifact> {
@@ -247,14 +253,14 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   if (budgetProblems.length > 0) {
     return blank(null, [], null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
-      null, INCOMPLETE, 'hold', budgetProblems.join(' · '))
+      null, NOT_RUN, 'hold', budgetProblems.join(' · '))
   }
   /**
    * 🔴 **이미지·링크·앞 대화 없이는 알 수 없는 글은 만들지 않는다.**
    *    묻기 전에 멈춘다 — 확인 못 한 글에 돈을 쓰지 않는다.
    */
   if (packet.contextSufficiency === 'insufficient') {
-    return blank(null, [], null, null, noDet, null, INCOMPLETE,
+    return blank(null, [], null, null, noDet, null, NOT_RUN,
       'hold', `무슨 이야기인지 확인하지 못했다 (${packet.insufficientReasons.join('·')})`)
   }
 
@@ -263,7 +269,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     buildSpeakerPlanPayload({ packet, personas: input.personas, load: input.load }))
   const pC = completionOf(pRes)
   if (!pC.complete) {
-    return blank(null, [], null, null, noDet, null, INCOMPLETE,
+    return blank(null, [], null, null, noDet, null, NOT_RUN,
       'hold', `화자 계획을 완주하지 못했다 (${INCOMPLETE_LABEL[pC.reason ?? 'noResponse']})`)
   }
   const parse = parseSpeakerPlan(pRes.rawText, packet, input.personas)
@@ -271,7 +277,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   const dropped = parse.dropped
   const gen = canGenerate(packet, plan)
   if (!gen.ok) {
-    return blank(plan, dropped, null, null, noDet, null, INCOMPLETE, 'hold', gen.why)
+    return blank(plan, dropped, null, null, noDet, null, NOT_RUN, 'hold', gen.why)
   }
   const persona = input.personas.find((p) => p.code === plan.personaCode)!
 
@@ -287,7 +293,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const ready = judgeVoiceReadiness(voice)
   if (!ready.ok) {
-    return blank(plan, dropped, voice, null, noDet, null, INCOMPLETE,
+    return blank(plan, dropped, voice, null, noDet, null, NOT_RUN,
       'hold', VOICE_READINESS_LABEL[ready.why!])
   }
 
@@ -303,7 +309,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
   ]
   if (voiceless.length > 0) {
-    return blank(plan, dropped, voice, null, noDet, null, INCOMPLETE,
+    return blank(plan, dropped, voice, null, noDet, null, NOT_RUN,
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
   const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
@@ -313,7 +319,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(plan, dropped, voice, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
-      null, INCOMPLETE, 'hold', why)
+      null, NOT_RUN, 'hold', why)
   }
 
   // ── ④ deterministic — 확정 가능한 것만 ──
@@ -333,8 +339,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {
-    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: INCOMPLETE })
-    return blank(plan, dropped, voice, draft, det, null, INCOMPLETE, j.outcome, j.reason)
+    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: NOT_RUN })
+    return blank(plan, dropped, voice, draft, det, null, NOT_RUN, j.outcome, j.reason)
   }
 
   // ── ⑤ 의미 검수 1회 ──

@@ -20,13 +20,18 @@ import {
   buildSpeakerPlanSystemPrompt, buildV2DraftSystemPrompt, lifeContractLines,
   qualificationLine, sourceBlock,
 } from './lib/content-core-prompts.mjs'
-import { cardValueText, hasFact, verifySelfWarrants }
-  from '../src/lib/content-core/speaker'
+import {
+  cardValueText, hasFact, verifySelfWarrants,
+  SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
+} from '../src/lib/content-core/speaker'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
-import { LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES } from '../src/lib/content-core/review'
-import { violatesArtifact, artifactSummary, type HumanReviewArtifact }
+import { LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL } from '../src/lib/content-core/review'
+import { violatesArtifact, artifactSummary, ARTIFACT_VERSION, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
+import {
+  CONTENT_CORE_PROMPT_VERSION, SPEAKER_PLAN_PROMPT_VERSION,
+} from '../src/lib/content-core/pipeline'
 import { buildVoiceEvidence, voiceStandardOf, VOICE_SAMPLE_MIN }
   from '../src/lib/content-core/voice-evidence'
 import {
@@ -134,10 +139,14 @@ const run = (o: {
 }
 
 const fact = (kind: string, text: string, ref = 'head'): unknown => ({ kind, text, evidenceRef: ref })
+/**
+ * 🔴 **모델이 적어 내는 칸만.** `cardValue` 는 없다 (2026-09-20) —
+ *    고른 사람의 카드 값은 코드가 정본에서 직접 읽는다.
+ */
 const warrant = (o: { fact: string; requiredValue: string; evidenceText: string
-  evidenceRef?: string; cardValue: string }): unknown => ({
+  evidenceRef?: string }): unknown => ({
   fact: o.fact, requiredValue: o.requiredValue,
-  evidenceRef: o.evidenceRef ?? 'head', evidenceText: o.evidenceText, cardValue: o.cardValue,
+  evidenceRef: o.evidenceRef ?? 'head', evidenceText: o.evidenceText,
 })
 /** 계획 응답 한 벌 */
 const plan = (o: Record<string, unknown>): unknown => ({
@@ -204,7 +213,7 @@ console.log('\n① 🔴 🔴 C 알바 원문 — SELF 는 파트타임 Persona �
   const PLAN_OK = plan({
     personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
     speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-      evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })],
+      evidenceRef: 'title', evidenceText: '알바중' })],
     protectedFacts: [fact('number', '3시간'), fact('number', '9명')],
     contentRoles: ['usefulAnswer', 'conversationSpark'],
   })
@@ -219,29 +228,39 @@ console.log('\n① 🔴 🔴 C 알바 원문 — SELF 는 파트타임 Persona �
   check('🔴 🔴 **허가 근거가 원문의 알바 문장에서 나왔다**',
     ok.plan.warrants[0]!.evidenceText === '알바중'
     && normalizeForProvenance(SRC.C.title).includes('알바중'))
-  check('🔴 카드 값이 그대로 대조됐다', ok.plan.warrants[0]!.cardValue === '파트타임')
+  check('🔴 🔴 **카드 값은 코드가 정본에서 읽어 찍는다**',
+    ok.plan.warrants[0]!.verifiedCardValue === cardValueText(partTime, 'work'),
+    ok.plan.warrants[0]!.verifiedCardValue)
   check('🔴 🔴 **정상 경로 3회**', ok.cost.totalCalls === 3, `${ok.cost.totalCalls}회`)
   check('🔴 단계 이름이 셋뿐이다',
     ok.cost.calls.map((c) => c.stage).join(',') === 'speakerPlan,draftGen,semanticReview')
 
-  // 🔴 전업 Persona 를 SELF 로 올리려 하면 — cardValue 를 속이든, 못 채우든 불가능
-  const lie = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
-    personas: [homemaker],
-    canned: { plan: plan({ personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
-      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })],
-      contentRoles: ['usefulAnswer'] }), draft: DRAFT } })
-  check('🔴 🔴 **전업 카드에 "파트타임" 이라 적으면 대조에서 걸린다**',
-    lie.plan.stance !== 'SELF_EXPERIENCE' && lie.plan.rejection === 'cardValueMismatch',
-    `${lie.plan.stance} / ${lie.plan.rejection}`)
+  /**
+   * 🔴 **모델이 카드 값을 보내도 아무 일도 일어나지 않는다** (2026-09-20).
+   *    옛 계약에서는 이 자리가 `cardValueMismatch` 로 갈렸다. 이제 코드가
+   *    정본만 읽으므로, 거짓 값을 실어 보내도 판정이 달라지지 않는다.
+   */
+  const stray = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
+    personas: [partTime, homemaker],
+    canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [{ fact: 'work', requiredValue: '파트타임',
+        evidenceRef: 'title', evidenceText: '알바중', cardValue: '전혀 다른 값' }],
+      protectedFacts: [fact('number', '3시간'), fact('number', '9명')],
+      contentRoles: ['usefulAnswer', 'conversationSpark'] }), draft: DRAFT } })
+  check('🔴 🔴 **provider 가 보낸 cardValue 는 판정에 영향을 주지 못한다**',
+    stray.plan.stance === 'SELF_EXPERIENCE'
+    && stray.plan.warrants[0]!.verifiedCardValue === cardValueText(partTime, 'work'),
+    `${stray.plan.stance} / ${stray.plan.rejection ?? '-'}`)
+  check('🔴 🔴 **그 값이 artifact 에 실리지도 않는다**',
+    !JSON.stringify(stray.plan.warrants).includes('전혀 다른 값'))
 
   const unmet = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
     personas: [homemaker],
     canned: { plan: plan({ personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'title', evidenceText: '알바중', cardValue: '전업' })],
+        evidenceRef: 'title', evidenceText: '알바중' })],
       contentRoles: ['usefulAnswer'] }), draft: DRAFT } })
-  check('🔴 🔴 **카드 값을 바로 적어도 파트타임을 충족 못 하면 불가**',
+  check('🔴 🔴 **전업 카드는 파트타임 자격을 충족하지 못한다**',
     unmet.plan.stance !== 'SELF_EXPERIENCE' && unmet.plan.rejection === 'requiredValueUnmet',
     `${unmet.plan.stance} / ${unmet.plan.rejection}`)
   check('🔴 🔴 **다른 Persona 를 조용히 고르지 않는다 — 아무도 고르지 않고 멈춘다**',
@@ -262,38 +281,38 @@ console.log('\n② 🔴 남편 자기 경험 → 기혼만 · 자녀 없음 → 
 {
   const A_DRAFT = { title: '방송 속 남편들 보면요',
     body: '화면에 나오는 남편들은 집안일을 곧잘 하던데 우리 남편은 딴판이에요. 다들 어떠세요.' }
-  const A_PLAN = (code: string, cardValue: string): unknown => plan({
+  const A_PLAN = (code: string): unknown => plan({
     personaCode: code, stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
     speakerWarrants: [warrant({ fact: 'spouse', requiredValue: '있음',
-      evidenceText: '왜 저희 애아빠는 안그럴까요', cardValue })],
+      evidenceText: '왜 저희 애아빠는 안그럴까요' })],
     protectedFacts: [fact('relation', '남편', 'title')],
     contentRoles: ['conversationSpark', 'experienceResonance'],
   })
   const married = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
-    personas: [partTime], canned: { plan: A_PLAN('P01', '기혼'), draft: A_DRAFT } })
+    personas: [partTime], canned: { plan: A_PLAN('P01'), draft: A_DRAFT } })
   check('🟢 기혼 Persona 는 남편 이야기를 1인칭으로 쓴다',
     married.plan.stance === 'SELF_EXPERIENCE' && married.plan.personaCode === 'P01')
 
   const unmarried = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
-    personas: [single], canned: { plan: A_PLAN('P08', '비혼'), draft: A_DRAFT } })
+    personas: [single], canned: { plan: A_PLAN('P08'), draft: A_DRAFT } })
   check('🔴 🔴 **비혼 Persona 는 남편 자기 경험이 불가능하다**',
     unmarried.plan.stance !== 'SELF_EXPERIENCE' && unmarried.plan.rejection === 'requiredValueUnmet')
 
   const B_DRAFT = { title: '아들 낳으면 왜 그런 눈으로 볼까요',
     body: '아들 낳았다고 하면 딱하게 보는 분위기가 있잖아요.\n곁에서 보면 아들이 엄마를 참 잘 챙기더라고요.\n다들 겪어 보셨어요?' }
-  const B_PLAN = (code: string, cardValue: string): unknown => plan({
+  const B_PLAN = (code: string): unknown => plan({
     personaCode: code, stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
     speakerWarrants: [warrant({ fact: 'children', requiredValue: '없음',
-      evidenceText: '전 아직 자녀는 없지만', cardValue })],
+      evidenceText: '전 아직 자녀는 없지만' })],
     contentRoles: ['conversationSpark'],
   })
   const childless = await run({ id: SRC.B.id, title: SRC.B.title, body: SRC.B.body,
-    personas: [noKids], canned: { plan: B_PLAN('P04', '0'), draft: B_DRAFT } })
+    personas: [noKids], canned: { plan: B_PLAN('P04'), draft: B_DRAFT } })
   check('🟢 🔴 **자녀 0인 Persona 는 "자녀 없음" 을 1인칭으로 쓴다**',
     childless.plan.stance === 'SELF_EXPERIENCE' && childless.plan.personaCode === 'P04')
 
   const hasKids = await run({ id: SRC.B.id, title: SRC.B.title, body: SRC.B.body,
-    personas: [partTime], canned: { plan: B_PLAN('P01', '2'), draft: B_DRAFT } })
+    personas: [partTime], canned: { plan: B_PLAN('P01'), draft: B_DRAFT } })
   check('🔴 🔴 **자녀 2명인 Persona 는 "자녀 없음" 이 불가능하다**',
     hasKids.plan.stance !== 'SELF_EXPERIENCE' && hasKids.plan.rejection === 'requiredValueUnmet')
 }
@@ -309,7 +328,7 @@ console.log('\n③ 🔴 허가 근거 검증 — 없는 사람 · 없는 근거 
     personas: [partTime],
     canned: { plan: plan({ personaCode: 'P99', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: facts,
-      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT } })
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT } })
   check('🔴 🔴 **카드에 없는 personaCode 는 HOLD**',
     ghost.plan.personaCode === null && ghost.plan.rejection === 'unknownPersona'
     && ghost.draft === null, ghost.plan.reason)
@@ -320,7 +339,7 @@ console.log('\n③ 🔴 허가 근거 검증 — 없는 사람 · 없는 근거 
     canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: facts, contentRoles: ['usefulAnswer', 'conversationSpark'],
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceText: '제가 편의점에서 일하는데', cardValue: '파트타임' })] }), draft: DRAFT } })
+        evidenceText: '제가 편의점에서 일하는데' })] }), draft: DRAFT } })
   check('🔴 🔴 **원문에 없는 근거로는 SELF 를 허가하지 않는다**',
     noEvidence.plan.stance !== 'SELF_EXPERIENCE'
     && noEvidence.plan.rejection === 'evidenceNotInSource')
@@ -334,7 +353,7 @@ console.log('\n③ 🔴 허가 근거 검증 — 없는 사람 · 없는 근거 
     personas: [partTime],
     canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: facts, contentRoles: ['usefulAnswer'],
-      speakerWarrants: [warrant({ fact: 'income', requiredValue: '많음', evidenceText: '알바중', evidenceRef: 'title', cardValue: 'x' })] }), draft: DRAFT } })
+      speakerWarrants: [warrant({ fact: 'income', requiredValue: '많음', evidenceText: '알바중', evidenceRef: 'title' })] }), draft: DRAFT } })
   check('🔴 🔴 **모르는 축은 통과시키지 않는다**',
     oddFact.plan.stance !== 'SELF_EXPERIENCE' && oddFact.plan.rejection === 'unknownFact')
 
@@ -357,7 +376,7 @@ console.log('\n④ 🔴 load 는 자격을 이기지 못한다')
     canned: { plan: plan({ personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: facts, contentRoles: ['usefulAnswer', 'conversationSpark'],
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'title', evidenceText: '알바중', cardValue: '전업' })] }), draft: DRAFT } })
+        evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT } })
   check('🔴 🔴 **load 가 적다고 무자격 Persona 가 SELF 가 되지 않는다**',
     a.plan.stance !== 'SELF_EXPERIENCE' && a.plan.rejection === 'requiredValueUnmet')
   check('🔴 load 는 계획 호출에 **입력으로만** 간다',
@@ -402,7 +421,7 @@ console.log('\n⑤ 🔴 자격이 필요 없는 글 — 과차단하지 않되 *
     canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE',
       selfBasis: 'noLifeFactNeeded', universalReason: 'x', closingIntent: 'share',
       contentRoles: ['conversationSpark'],
-      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceText: '맛은 괜찮네요', cardValue: '파트타임' })] }), draft: DRAFT } })
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceText: '맛은 괜찮네요' })] }), draft: DRAFT } })
   check('🔴 자격이 필요 없다면서 근거를 대면 통과시키지 않는다',
     both.plan.rejection === 'warrantsWithoutNeed')
 }
@@ -416,7 +435,7 @@ console.log('\n⑥ 🔴 허가 실패는 HOLD · 처음부터 고른 낮은 자�
     personaCode: 'P08', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
     contentRoles: roles, closingIntent: 'ask',
     speakerWarrants: [warrant({ fact: 'spouse', requiredValue: '있음',
-      evidenceText: '왜 저희 애아빠는 안그럴까요', cardValue: '비혼' })],
+      evidenceText: '왜 저희 애아빠는 안그럴까요' })],
   })
   for (const [name, roles] of [
     ['소재가 살 수 있는 글', ['conversationSpark', 'experienceResonance']],
@@ -477,7 +496,7 @@ console.log('\n⑦ 🔴 계획 호출이 받는 것 · 남기는 것')
     canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: [fact('number', '3시간'), fact('number', '9명')],
       contentRoles: ['usefulAnswer'],
-      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT } })
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT } })
   const sent = sentOf('speakerPlan')[0]!
   check('🔴 🔴 **계획 payload 에 마스킹된 원문이 들어간다**',
     normalizeForProvenance(sent.payload).includes(normalizeForProvenance('누가 대타뛰어준건 아니고')))
@@ -502,7 +521,7 @@ console.log('\n⑧ 🔴 생성·검수 — 원문 직접 · 복제 차단 · 과
     personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
     protectedFacts: [fact('number', '3시간'), fact('number', '9명')],
     contentRoles: ['usefulAnswer', 'conversationSpark'],
-    speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })],
+    speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임', evidenceRef: 'title', evidenceText: '알바중' })],
   })
   const GOOD = { title: '여행 다녀올 때 선물 하시나요',
     body: '대신 서 준 사람은 없고 비는 시간은 제가 다른 날에 채웠어요. 3시간씩 일하고 9명이에요. 다들 사 가시나요.' }
@@ -643,7 +662,7 @@ console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 
       protectedFacts: [fact('number', '3시간', 'head'), fact('number', '9명', 'head')],
       contentRoles: ['usefulAnswer', 'conversationSpark'],
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT_C } })
+        evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT_C } })
   const sent = JSON.parse(sentOf('speakerPlan')[0]!.payload) as
     { 원문: { spans: { kind: string; text: string }[]; bodyLength: number; truncated: boolean } }
   check('🔴 🔴 **계획 payload 가 span 을 kind 와 함께 보낸다**',
@@ -675,7 +694,7 @@ console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 
       protectedFacts: [fact('number', '3시간', 'head'), fact('number', '9명', 'head')],
       contentRoles: ['usefulAnswer'],
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }),
+        evidenceRef: 'title', evidenceText: '알바중' })] }),
       draft: { title: '선물', body: '비는 시간은 제가 다른 날 채웠어요. 사람이 꽤 되는데 다들 사 가시나요.' } },
   })).review.deterministic.failures.some((f) => f.code === 'protectedFactMissing'))
 
@@ -686,7 +705,7 @@ console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 
       protectedFacts: [fact('relation', '남편', 'title')],
       contentRoles: ['conversationSpark', 'experienceResonance'],
       speakerWarrants: [warrant({ fact: 'spouse', requiredValue: '있음',
-        evidenceRef: 'title', evidenceText: '남편이 집안일 많이 돕나요?', cardValue: '기혼' })] }),
+        evidenceRef: 'title', evidenceText: '남편이 집안일 많이 돕나요?' })] }),
       draft: { title: '방송 속 남편들 보면요',
         body: '화면에 나오는 남편들은 집안일을 곧잘 하던데 우리 남편은 딴판이에요. 다들 어떠세요.' } } })
   check('🔴 🔴 **A — 남편 근거가 title 로 검증되어 SELF 가 유지된다**',
@@ -699,7 +718,7 @@ console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 
     canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: [], contentRoles: ['usefulAnswer'],
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'head', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT_C } })
+        evidenceRef: 'head', evidenceText: '알바중' })] }), draft: DRAFT_C } })
   check('🔴 🔴 **같은 글자라도 ref 가 틀리면 거부한다 (title 내용을 head 라 하면)**',
     wrongRef.plan.stance === null && wrongRef.plan.rejection === 'evidenceNotInSource'
     && wrongRef.cost.totalCalls === 1)
@@ -708,7 +727,7 @@ console.log('\n⑩ 🔴 🔴 증거 위치 계약 — 모델이 title/head/tail 
     canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
       protectedFacts: [fact('number', '3시간', 'title')], contentRoles: ['usefulAnswer'],
       speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'title', evidenceText: '알바중', cardValue: '파트타임' })] }), draft: DRAFT_C } })
+        evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT_C } })
   check('🔴 protectedFact 도 자리가 틀리면 버린다',
     wrongRef2.dropped.some((d) => d.text === '3시간' && d.why === 'notInEvidence'))
 }
@@ -798,6 +817,153 @@ console.log('\n⑪ 🔴 혼합 모델 — 단계별 모델과 thinking 과금')
     const src = readFileSync('scripts/lib/voice-m3-provider.mts', 'utf-8')
     return !src.includes('에는 공식 사전 계산 경로가 없다`')
   })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에 있다 (2026-09-20)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실측 449988 을 그대로 세운다.**
+   *    자녀 1명(초등) Persona, 원문에 아이가 있다는 근거, `requiredValue: "있음"`.
+   *    옛 계약에서는 모델이 `cardValue: "1 (초등)"` 을 적어 카드 `"1"` 과 어긋나
+   *    생성 전에 멈췄다 — 사실은 맞고 표기만 달랐다.
+   */
+  const kidCard = P({
+    code: 'P09', childrenCount: 1, childrenAgeBands: ['초등'] as ChildAgeBand[],
+    workStatus: '전업',
+  })
+  const SRC_449988 = {
+    id: '449988', title: '남편과 각방',
+    body: '코골이 남편하고  결혼하고  잠귀가 밝은 저는 같은방  쓰는게 너무너무 힘들었는데..\n\n'
+      + '아이가 태어나고 새벽 출근준비하는 남편때문에 아이가 계속 새벽에 깨서 어찌어찌 각방을 썼는데..'
+      + ' 생각해보니 각방쓴지 어언..5년인데..\n\n이번에 집정리 좀할겸 다 세식구 각자 1방씩?얘기가 나왔는데..\n\n괜찮겠지요^^;;',
+  }
+  const D = { title: '각방 쓰신 지 얼마나 되셨어요',
+    body: '저희도 잠 때문에 방을 따로 쓴 지 오래됐어요.\n이번에 집을 정리하면서 다시 생각하게 되네요.\n다들 어떻게 지내세요?' }
+  const PLAN = plan({
+    personaCode: 'P09', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+    speakerWarrants: [warrant({ fact: 'children', requiredValue: '있음',
+      evidenceRef: 'head', evidenceText: '아이가 태어나고' })],
+    contentRoles: ['conversationSpark', 'experienceResonance'],
+  })
+  const r = await run({ ...SRC_449988, personas: [kidCard], canned: { plan: PLAN, draft: D } })
+  check('🟢 🔴 **449988 이 이제 1인칭 허가를 받는다**',
+    r.plan.stance === 'SELF_EXPERIENCE' && r.plan.personaCode === 'P09'
+    && r.plan.rejection === null, r.plan.reason)
+  check('🔴 🔴 **카드 값은 코드가 정본에서 읽었다 — "1"**',
+    r.plan.warrants[0]!.verifiedCardValue === '1'
+    && r.plan.warrants[0]!.verifiedCardValue === cardValueText(kidCard, 'children'))
+  check('🔴 🔴 **초안이 만들어지고 3회로 완주한다**',
+    r.draft !== null && r.cost.totalCalls === 3, `${r.cost.totalCalls}회`)
+
+  // 🔴 provider 가 옛 계약대로 "1 (초등)" 을 보내도 결과가 같다
+  const annotated = await run({ ...SRC_449988, personas: [kidCard],
+    canned: { plan: plan({ personaCode: 'P09', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [{ fact: 'children', requiredValue: '있음',
+        evidenceRef: 'head', evidenceText: '아이가 태어나고', cardValue: '1 (초등)' }],
+      contentRoles: ['conversationSpark', 'experienceResonance'] }), draft: D } })
+  check('🔴 🔴 **"1 (초등)" 을 보내도 더는 막히지 않는다**',
+    annotated.plan.stance === 'SELF_EXPERIENCE' && annotated.draft !== null,
+    annotated.plan.reason)
+
+  // ── 🔴 느슨해지지 않았다 ──
+  const wrongValue = await run({ ...SRC_449988, personas: [kidCard],
+    canned: { plan: plan({ personaCode: 'P09', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [warrant({ fact: 'children', requiredValue: '없음',
+        evidenceRef: 'head', evidenceText: '아이가 태어나고' })],
+      contentRoles: ['conversationSpark'] }), draft: D } })
+  check('🔴 🔴 **requiredValue 가 실제 카드와 다르면 여전히 거절**',
+    wrongValue.plan.stance !== 'SELF_EXPERIENCE'
+    && wrongValue.plan.rejection === 'requiredValueUnmet', `${wrongValue.plan.rejection}`)
+
+  const wrongRef = await run({ ...SRC_449988, personas: [kidCard],
+    canned: { plan: plan({ personaCode: 'P09', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [warrant({ fact: 'children', requiredValue: '있음',
+        evidenceRef: 'title', evidenceText: '아이가 태어나고' })],
+      contentRoles: ['conversationSpark'] }), draft: D } })
+  check('🔴 🔴 **근거 위치가 틀리면 여전히 거절**',
+    wrongRef.plan.stance !== 'SELF_EXPERIENCE'
+    && wrongRef.plan.rejection === 'evidenceNotInSource', `${wrongRef.plan.rejection}`)
+
+  const noKidPersona = await run({ ...SRC_449988, personas: [noKids],
+    canned: { plan: plan({ personaCode: 'P04', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [warrant({ fact: 'children', requiredValue: '있음',
+        evidenceRef: 'head', evidenceText: '아이가 태어나고' })],
+      contentRoles: ['conversationSpark'] }), draft: D } })
+  check('🔴 🔴 **자격 없는 Persona 는 여전히 거절**',
+    noKidPersona.plan.stance !== 'SELF_EXPERIENCE'
+    && noKidPersona.plan.rejection === 'requiredValueUnmet')
+  check('🔴 🔴 **자동 강등 없음 — 아무도 고르지 않고 계획 1회에서 멈춘다**',
+    noKidPersona.plan.personaCode === null && noKidPersona.plan.stance === null
+    && noKidPersona.draft === null && noKidPersona.cost.totalCalls === 1)
+
+  // ── 🔴 일어날 수 없는 사유는 목록에서 사라졌다 ──
+  check('🔴 🔴 **cardValueMismatch 가 더는 존재하지 않는다**',
+    !(WARRANT_REJECTIONS as readonly string[]).includes('cardValueMismatch')
+    && !readFileSync('src/lib/content-core/speaker.ts', 'utf-8')
+      .includes("why: 'cardValueMismatch'"))
+  check('🔴 🔴 **계획 요청이 cardValue 를 더는 요구하지 않는다**',
+    !buildSpeakerPlanSystemPrompt().includes('cardValue'))
+  check('🔴 판 번호가 새 계약을 담는다',
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p3'
+    && SPEAKER_PLAN_VERSION === 'speaker-plan-v4'
+    && ARTIFACT_VERSION === 'human-review-v7'
+    && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
+  check('🔴 🔴 **생성 캐시 key 가 새 판을 실제로 담는다**', (() => {
+    const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const i = runner.indexOf('const v2Key =')
+    const key = runner.slice(i, runner.indexOf('\n\n', i))
+    return /SPEAKER_PLAN_PROMPT_VERSION/.test(key) && /SPEAKER_PLAN_VERSION/.test(key)
+      && /ARTIFACT_VERSION/.test(key) && /digest16\(buildSpeakerPlanSystemPrompt\(\)\)/.test(key)
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs budgetBlocked')
+// ─────────────────────────────────────────────────────────
+{
+  const D = { title: '각방 쓰신 지 얼마나 되셨어요',
+    body: '저희도 잠 때문에 방을 따로 쓴 지 오래됐어요.\n이번에 집을 정리하면서 다시 생각하게 되네요.\n다들 어떻게 지내세요?' }
+  /** 🔴 자격 실패로 화자 계획에서 멈춘 회차 — 예산은 남아 있다 */
+  const held = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
+    personas: [single],
+    canned: { plan: plan({ personaCode: 'P08', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [warrant({ fact: 'spouse', requiredValue: '있음',
+        evidenceText: '왜 저희 애아빠는 안그럴까요' })],
+      contentRoles: ['conversationSpark'] }), draft: D } })
+  check('🔴 🔴 **조기 HOLD 의 semanticCompletion 은 notRun 이다**',
+    held.review.semanticCompletion.reason === 'notRun',
+    String(held.review.semanticCompletion.reason))
+  check('🔴 🔴 **예산이 남았는데 budgetBlocked 라고 적지 않는다**',
+    held.review.semanticCompletion.reason !== 'budgetBlocked' && held.cost.totalCalls === 1)
+  check('🔴 machineReason 에는 화자 계획의 실제 사유가 남는다',
+    held.review.machineReason.includes('1인칭 허가 실패')
+    && held.review.machineReason.includes(WARRANT_REJECTION_LABEL.requiredValueUnmet))
+
+  /** 🔴 의미 검수 호출이 **실제로** 막힌 회차 */
+  const blocked = await run({ id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
+    personas: [partTime],
+    fault: { blocked: 'semanticReview' },
+    canned: { plan: plan({ personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
+        evidenceRef: 'title', evidenceText: '알바중' })],
+      protectedFacts: [fact('number', '3시간'), fact('number', '9명')],
+      contentRoles: ['usefulAnswer'] }),
+      draft: { title: '여행 다녀올 때 선물 하시나요',
+        body: '대신 서 준 사람은 없고 비는 시간은 제가 다른 날에 채웠어요. 3시간씩 일하고 9명이에요. 다들 사 가시나요.' } } })
+  check('🔴 🔴 **의미 검수가 실제로 막히면 budgetBlocked 다**',
+    blocked.review.semanticCompletion.reason === 'budgetBlocked',
+    String(blocked.review.semanticCompletion.reason))
+  check('🔴 막힌 회차는 adopt 가 아니다', blocked.review.machineOutcome !== 'adopt')
+  check('🔴 🔴 **전역 INCOMPLETE 상수가 사라졌다**', (() => {
+    const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+    return !/const INCOMPLETE: ReviewCompletion/.test(src)
+      && /const NOT_RUN: ReviewCompletion = \{ complete: false, reason: 'notRun' \}/.test(src)
+  })())
+  check('🔴 사유 이름마다 사람이 읽는 말이 있다',
+    INCOMPLETE_LABEL.notRun !== '' && INCOMPLETE_LABEL.budgetBlocked !== ''
+    && INCOMPLETE_LABEL.notRun !== INCOMPLETE_LABEL.budgetBlocked)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

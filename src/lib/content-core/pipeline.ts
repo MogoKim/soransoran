@@ -14,7 +14,7 @@
 /** 🔴 파이프라인 판 — 경로 자체가 바뀌면 올린다 */
 export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2'
 
-export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p2'
+export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p3'
 export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p6'
 export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p6'
 

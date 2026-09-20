@@ -11,9 +11,11 @@
  *    `SELF_EXPERIENCE` 는 코드가 확인할 수 있는 **허가 근거**가 있어야 한다:
  *      ① 고른 personaCode 가 실제 후보에 있는가
  *      ② 근거 문장이 지목한 원문 span 에 실제로 있는가
- *      ③ 모델이 적은 카드 값이 **그 카드의 진짜 값**과 같은가
- *      ④ requiredValue 를 그 카드가 실제로 충족하는가
- *      ⑤ 모르는 fact·값은 통과시키지 않는다
+ *      ③ requiredValue 를 **고른 사람의 정본 카드**가 실제로 충족하는가
+ *      ④ 모르는 fact·값은 통과시키지 않는다
+ *
+ *    🔴 **카드 값은 코드가 정본에서 읽는다** (2026-09-20). 모델에게 옮겨 적게 하지
+ *       않는다 — 그 계약은 값이 맞아도 표기가 다르면 생성 전에 멈췄다.
  *
  * 🔴 **검증에 실패하면 HOLD 한다** (2026-09-19 실측 보정).
  *
@@ -34,12 +36,12 @@ import type { PoolCard } from '../persona-pool-card'
 import type { EvidenceSpan, SourceEvidencePacket } from './evidence'
 import {
   CLAIM_FACTS, CLOSING_INTENTS, CONTENT_ROLES, EVIDENCE_REFS, PROTECTED_FACT_KINDS,
-  foundInSpan, isPersonalInfo, judgeProtectedFact, normalizeForProvenance,
+  foundInSpan, isPersonalInfo, judgeProtectedFact,
   type ClaimFact, type ClosingIntent, type ContentRole, type DropReason,
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
 
-export const SPEAKER_PLAN_VERSION = 'speaker-plan-v3'
+export const SPEAKER_PLAN_VERSION = 'speaker-plan-v4'
 
 /** 화자가 서는 자리 */
 export const STANCES = ['SELF_EXPERIENCE', 'OBSERVATION', 'REFLECTION', 'QUESTION'] as const
@@ -62,18 +64,34 @@ export type PersonaLifeContract = Pick<PoolCard,
   | 'menopauseStatus' | 'parentCare' | 'personality' | 'noGoTopics' | 'noGoExpressions'>
 
 /**
- * 🔴 **1인칭 허가의 근거 한 줄.** 자격 사실을 표현하는 구조는 저장소에 **이것 하나뿐이다.**
+ * 🔴 **모델이 적어 내는 칸.** 카드 값은 **여기 없다** (2026-09-20 보정).
+ *
+ *    앞판은 고른 사람의 카드 값을 모델이 `cardValue` 로 **다시 적게** 하고,
+ *    코드가 정본과 완전 일치하는지 견줬다. 정본을 이미 코드가 들고 있는데
+ *    필사를 요구한 것이라, 값이 맞아도 표기가 다르면 생성 전에 멈췄다 —
+ *    실측 449988 에서 `children` 이 `"1 (초등)"` 으로 와서 카드 `"1"` 과 어긋났다.
+ *    사실은 맞았고 형식만 달랐다.
+ *
+ * 🔴 그래서 **책임을 나눈다.** 모델은 "원문이 어떤 자격을 요구하는가" 를 판단하고,
+ *    그 사람이 그 자격을 **실제로 가졌는가** 는 코드가 정본 카드에서 읽어 판정한다.
  */
-export type SpeakerWarrant = {
+export type ClaimedWarrant = {
   fact: ClaimFact
   /** 🔴 카드 값과 견줄 정규 값 — 예: `있음` · `없음` · `파트타임` · `수도권` */
   requiredValue: string
   /** 🔴 원문 어디에 그 말이 있는가 */
   evidenceRef: EvidenceRef
   evidenceText: string
-  /** 🔴 모델이 읽었다고 주장하는 **카드의 실제 값** — 코드가 카드와 대조한다 */
-  cardValue: string
 }
+
+/**
+ * 🔴 **검증을 통과한 근거 한 줄.** 자격 사실을 표현하는 구조는 저장소에 **이것 하나뿐이다.**
+ *
+ * 🔴 `verifiedCardValue` 는 **코드가 정본 카드에서 읽어 찍는다.** provider 가 준 값이
+ *    아니다. `verifySelfWarrants` 를 지나지 않고는 이 값을 만들 수 없다 —
+ *    타입이 그것을 강제한다.
+ */
+export type SpeakerWarrant = ClaimedWarrant & { verifiedCardValue: string }
 
 /**
  * 🔴 **1인칭을 허가받은 방식** — 빈 배열과 구분되는 **명시적 결정**이어야 한다.
@@ -83,9 +101,14 @@ export type SpeakerWarrant = {
 export const SELF_BASES = ['lifeFacts', 'noLifeFactNeeded'] as const
 export type SelfBasis = (typeof SELF_BASES)[number]
 
+/**
+ * 🔴 `cardValueMismatch` 를 **뺐다** (2026-09-20). 카드 값을 모델이 적어 내지 않으므로
+ *    "적어 낸 값이 카드와 다르다" 는 상태가 존재할 수 없다. 일어날 수 없는 사유를
+ *    목록에 남겨 두면 사람이 그 코드를 찾아 헤맨다.
+ */
 export const WARRANT_REJECTIONS = [
   'unknownPersona', 'unknownFact', 'unknownStance', 'unknownBasis',
-  'evidenceNotInSource', 'cardValueMismatch', 'requiredValueUnmet',
+  'evidenceNotInSource', 'requiredValueUnmet',
   'emptyWarrants', 'warrantsWithoutNeed', 'noUniversalReason',
 ] as const
 export type WarrantRejection = (typeof WARRANT_REJECTIONS)[number]
@@ -96,7 +119,6 @@ export const WARRANT_REJECTION_LABEL: Readonly<Record<WarrantRejection, string>>
   unknownStance: '우리 자리 이름이 아니다',
   unknownBasis: '1인칭 허가 방식을 밝히지 않았다',
   evidenceNotInSource: '근거 문장이 원문에 없다',
-  cardValueMismatch: '적어 낸 카드 값이 그 카드의 실제 값과 다르다',
   requiredValueUnmet: '그 사람의 카드가 이 값을 충족하지 않는다',
   emptyWarrants: '생활사 자격이 필요하다면서 근거를 하나도 대지 않았다',
   warrantsWithoutNeed: '자격이 필요 없다면서 자격 근거를 댔다',
@@ -130,12 +152,10 @@ export type SpeakerPlanParse = {
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
-const same = (a: string, b: string): boolean =>
-  normalizeForProvenance(a) !== '' && normalizeForProvenance(a) === normalizeForProvenance(b)
 
 /**
- * 🔴 **카드가 그 축에 대해 실제로 가진 글자.** 모델이 적어 낸 `cardValue` 를 이것과 견준다 —
- *    카드를 읽지 않고 지어낸 값을 잡는다.
+ * 🔴 **카드가 그 축에 대해 실제로 가진 글자.** 사람 검토용으로 근거 줄에 함께 적는다 —
+ *    검토자가 Pool 문서를 열지 않고도 "이 사람이 정말 그런가" 를 볼 수 있게.
  */
 export function cardValueText(p: PersonaLifeContract, fact: ClaimFact): string {
   switch (fact) {
@@ -183,10 +203,10 @@ export function hasFact(p: PersonaLifeContract, fact: ClaimFact, requiredValue: 
 export function verifySelfWarrants(input: {
   persona: PersonaLifeContract | undefined
   selfBasis: SelfBasis | null
-  warrants: readonly SpeakerWarrant[]
+  warrants: readonly ClaimedWarrant[]
   universalReason: string
   spans: readonly EvidenceSpan[]
-}): { ok: true } | { ok: false; why: WarrantRejection; detail: string } {
+}): { ok: true; warrants: SpeakerWarrant[] } | { ok: false; why: WarrantRejection; detail: string } {
   const p = input.persona
   if (p === undefined) return { ok: false, why: 'unknownPersona', detail: '' }
   if (input.selfBasis === null) return { ok: false, why: 'unknownBasis', detail: '' }
@@ -195,10 +215,11 @@ export function verifySelfWarrants(input: {
       return { ok: false, why: 'warrantsWithoutNeed', detail: input.warrants.map((w) => w.fact).join(' · ') }
     }
     if (input.universalReason.trim() === '') return { ok: false, why: 'noUniversalReason', detail: '' }
-    return { ok: true }
+    return { ok: true, warrants: [] }
   }
   // ── lifeFacts ──
   if (input.warrants.length === 0) return { ok: false, why: 'emptyWarrants', detail: '' }
+  const verified: SpeakerWarrant[] = []
   for (const w of input.warrants) {
     if (!(CLAIM_FACTS as readonly string[]).includes(w.fact)) {
       return { ok: false, why: 'unknownFact', detail: w.fact }
@@ -208,17 +229,17 @@ export function verifySelfWarrants(input: {
       || !foundInSpan(w.evidenceText, w.evidenceRef, input.spans)) {
       return { ok: false, why: 'evidenceNotInSource', detail: `${w.fact}: ${w.evidenceText}` }
     }
-    if (!same(w.cardValue, cardValueText(p, w.fact))) {
-      return {
-        ok: false, why: 'cardValueMismatch',
-        detail: `${w.fact}: 적어 낸 "${w.cardValue}" · 카드 "${cardValueText(p, w.fact)}"`,
-      }
-    }
+    /**
+     * 🔴 **정본 카드가 이 값을 충족하는가.** 이것이 자격 판정의 전부다 —
+     *    모델이 카드를 옮겨 적었는지는 더 이상 묻지 않는다.
+     */
     if (!hasFact(p, w.fact, w.requiredValue)) {
       return { ok: false, why: 'requiredValueUnmet', detail: `${w.fact}=${w.requiredValue}` }
     }
+    // 🔴 통과한 것에만 **코드가 읽은** 카드 값을 찍는다
+    verified.push({ ...w, verifiedCardValue: cardValueText(p, w.fact) })
   }
-  return { ok: true }
+  return { ok: true, warrants: verified }
 }
 
 const HOLD = (reason: string, rejection: WarrantRejection | null = null): SpeakerPlan => ({
@@ -302,12 +323,11 @@ export function parseSpeakerPlan(
   const basisRaw = S(j.selfBasis)
   const selfBasis = (SELF_BASES as readonly string[]).includes(basisRaw) ? (basisRaw as SelfBasis) : null
   const universalReason = S(j.universalReason)
-  const warrants: SpeakerWarrant[] = arr(j.speakerWarrants).map((x) => {
+  const warrants: ClaimedWarrant[] = arr(j.speakerWarrants).map((x) => {
     const o = x as Record<string, unknown>
     return {
       fact: S(o.fact) as ClaimFact, requiredValue: S(o.requiredValue),
       evidenceRef: S(o.evidenceRef) as EvidenceRef, evidenceText: S(o.evidenceText),
-      cardValue: S(o.cardValue),
     }
   })
 
@@ -343,9 +363,10 @@ export function parseSpeakerPlan(
     return {
       plan: withBase({
         decision: 'ok', personaCode, stance: 'SELF_EXPERIENCE', selfBasis,
-        warrants: selfBasis === 'lifeFacts' ? warrants : [],
+        // 🔴 **검증이 찍어 준 것만** 싣는다 — 모델이 준 배열을 그대로 쓰지 않는다
+        warrants: v.warrants,
         universalReason: selfBasis === 'noLifeFactNeeded' ? universalReason : '',
-        reason: selfBasis === 'lifeFacts' ? '원문 근거와 카드 값으로 1인칭을 허가했다'
+        reason: selfBasis === 'lifeFacts' ? '원문 근거와 정본 카드로 1인칭을 허가했다'
           : '특정 생활사 자격이 필요 없는 글이다', rejection: null,
         ...base,
       }),

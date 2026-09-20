@@ -58,7 +58,10 @@ export function lifeContractLines(p: PersonaLifeContract): string[] {
 // ① 화자 계획 — 🔴 원문과 실제 카드를 **함께** 본다
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 자격 판정에 쓰는 칸만. 코드가 `cardValue` 를 이 글자와 대조한다 */
+/**
+ * 🔴 자격 판정에 쓰는 칸만. 🔴 **이 줄은 모델이 읽는 용도다** — 모델이 이 값을 다시
+ *    적어 낼 필요는 없다. 자격 판정은 코드가 정본 카드에서 직접 읽어 한다.
+ */
 export function qualificationLine(p: PersonaLifeContract): string {
   return `[${p.code}] 나이대 ${p.ageBand} · 사는 곳 ${p.region} · 혼인 ${p.maritalStatus}`
     + ` · 자녀수 ${p.childrenCount}${p.childrenAgeBands.length > 0 ? ` (${p.childrenAgeBands.join('·')})` : ''}`
@@ -94,9 +97,11 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '   · children → "있음" 또는 "없음"',
     '   · work · region · age · childAgeBand → **[후보] 줄에 적힌 글자 그대로**',
     '- evidenceRef / evidenceText: 그 요구가 나온 **[원문]의 실제 문장 조각**',
-    '- cardValue: 고른 사람의 [후보] 줄에 있는 **그 칸의 값 그대로**',
     '',
-    '🔴 근거는 **코드가 대조한다.** 원문에 없는 문장, 카드와 다른 값, 충족하지 못하는',
+    '🔴 **카드 값을 옮겨 적지 않는다.** 고른 사람의 카드는 코드가 정본에서 직접 읽는다.',
+    '   네가 할 일은 "원문이 어떤 자격을 요구하는가" 를 정하는 것까지다.',
+    '',
+    '🔴 근거는 **코드가 대조한다.** 원문에 없는 문장, 고른 사람이 충족하지 못하는',
     '   requiredValue 는 **1인칭이 취소된다.** 지어내면 글이 만들어지지 않는다.',
     '',
     '### selfBasis = "noLifeFactNeeded"',
@@ -132,8 +137,7 @@ export function buildSpeakerPlanSystemPrompt(): string {
     ' "personaCode":"P01","stance":"SELF_EXPERIENCE|OBSERVATION|REFLECTION|QUESTION",',
     ' "selfBasis":"lifeFacts|noLifeFactNeeded (SELF_EXPERIENCE 일 때만)",',
     ' "speakerWarrants":[{"fact":"work","requiredValue":"파트타임",',
-    '                     "evidenceRef":"title|head|tail","evidenceText":"원문에 있는 조각",',
-    '                     "cardValue":"후보 줄의 그 칸 값"}],',
+    '                     "evidenceRef":"title|head|tail","evidenceText":"원문에 있는 조각"}],',
     ' "universalReason":"noLifeFactNeeded 일 때 한 줄",',
     ' "protectedFacts":[{"kind":"...","text":"...","evidenceRef":"title|head|tail"}],',
     ' "closingIntent":"ask|vent|share|none",',
