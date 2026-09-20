@@ -19,7 +19,7 @@
  */
 import { CLAIM_FACTS } from './source-facts'
 
-export const REVIEW_VERSION = 'review-v6'
+export const REVIEW_VERSION = 'review-v7'
 
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
@@ -223,46 +223,82 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
 export type MachineOutcome = 'adopt' | 'hold' | 'drop'
 
 /**
+ * 🔴 **사람에게 넘길 것과 기계가 막을 것을 가른다** (2026-09-20 실측 보정).
+ *
+ *    `unsupportedAdditions` · `droppedFromSource` 는 **경고**다. 막지 않는다.
+ *    SHADOW5B 5편은 사람이 전부 READY 로 봤는데 이 둘이 두 편을 막았고,
+ *    **같은 원문·같은 초안이 회차마다 ADOPT/HOLD 를 오갔다** —
+ *    "원문에 있는 사건인가" · "뜻이 남았는가" 는 모델이 회차마다 다르게 읽는 판단이다.
+ *    그것으로 사람이 READY 라고 본 글을 막으면, 막은 쪽이 틀린 횟수가 더 많다.
+ *
+ * 🔴 **그래도 지우지 않는다.** 근거는 artifact 에 그대로 남고 사람 검토 화면에 뜬다 —
+ *    판정을 **사람에게 넘기는 것**이지 검사를 없애는 것이 아니다.
+ *
+ * 🔴 **확정할 수 있는 결함은 그대로 막는다**: deterministic 실패 · 개인정보 · 복제 ·
+ *    금지어 · 보호 사실 누락 · harm · lifeContradictions · voice 누수·불일치 ·
+ *    미완료 · 잘림 · 파싱 실패 · 사용량 미상.
  * 🔴 **완주하지 못한 검수는 절대 adopt 가 아니다.**
  *    예산이 모자랄수록 검수가 느슨해지는 구조를 만들지 않는다.
+ * 🔴 adopt 는 **후보로 보낸다**는 뜻일 뿐이다. 사람 검토 없는 발행은 그대로 막혀 있다.
  */
+export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource'] as const
+export type ReviewWarningAxis = (typeof REVIEW_WARNING_AXES)[number]
+
+/**
+ * 🔴 **사람이 판정할 자리 한 줄씩.** 기계가 막지 않고 넘긴 것이 무엇인지 적는다 —
+ *    빈 배열이면 넘길 것이 없다는 뜻이다.
+ */
+export function reviewWarnings(s: SemanticVerdict | null): string[] {
+  if (s === null) return []
+  return [
+    ...(s.unsupportedAdditions.length > 0
+      ? [`원문에 없어 보이는 것 ${s.unsupportedAdditions.length}건`
+        + ` — ${s.unsupportedAdditions.map((a) => a.evidence).join(' / ')}`]
+      : []),
+    ...(s.droppedFromSource.length > 0
+      ? [`원문에서 사라져 보이는 것 ${s.droppedFromSource.length}건`
+        + ` — ${s.droppedFromSource.map((a) => a.evidence).join(' / ')}`]
+      : []),
+  ]
+}
+
 export function judgeMachine(input: {
   deterministic: DeterministicResult
   semantic: SemanticVerdict | null
   semanticCompletion: ReviewCompletion
-}): { outcome: MachineOutcome; reason: string } {
+}): { outcome: MachineOutcome; reason: string; warnings: string[] } {
   const hard = input.deterministic.failures
+  const none: string[] = []
   if (hard.some((f) => f.code === 'personalInfo' || f.code === 'bannedWord')) {
-    return { outcome: 'drop', reason: DETERMINISTIC_LABEL[hard[0]!.code] }
+    return { outcome: 'drop', reason: DETERMINISTIC_LABEL[hard[0]!.code], warnings: none }
   }
   if (!input.deterministic.pass) {
-    return { outcome: 'hold', reason: hard.map((f) => DETERMINISTIC_LABEL[f.code]).join(' · ') }
+    return {
+      outcome: 'hold', warnings: none,
+      reason: hard.map((f) => DETERMINISTIC_LABEL[f.code]).join(' · '),
+    }
   }
   if (!input.semanticCompletion.complete) {
-    return { outcome: 'hold', reason: `의미 검수를 완주하지 못했다 (${INCOMPLETE_LABEL[input.semanticCompletion.reason ?? 'noResponse']})` }
+    return {
+      outcome: 'hold', warnings: none,
+      reason: `의미 검수를 완주하지 못했다 (${INCOMPLETE_LABEL[input.semanticCompletion.reason ?? 'noResponse']})`,
+    }
   }
   const s = input.semantic
-  if (s === null) return { outcome: 'hold', reason: '의미 판정을 읽지 못했다' }
-  if (s.issues.includes('harm')) return { outcome: 'drop', reason: '위해' }
-  // 🔴 여기 오는 값은 이미 원문·초안에서 근거가 확인된 것뿐이다
-  if (s.unsupportedAdditions.length > 0) {
-    return {
-      outcome: 'hold',
-      reason: `원문에 없는 사건 ${s.unsupportedAdditions.length}건`
-        + ` — ${s.unsupportedAdditions.map((a) => a.evidence).join(' / ')}`,
-    }
-  }
-  if (s.droppedFromSource.length > 0) {
-    return {
-      outcome: 'hold',
-      reason: `원문의 핵심이 사라졌다 ${s.droppedFromSource.length}건`
-        + ` — ${s.droppedFromSource.map((a) => a.evidence).join(' / ')}`,
-    }
-  }
+  if (s === null) return { outcome: 'hold', reason: '의미 판정을 읽지 못했다', warnings: none }
+  if (s.issues.includes('harm')) return { outcome: 'drop', reason: '위해', warnings: none }
+  /**
+   * 🔴 **여기서부터가 경고다.** 근거는 이미 원문·초안에서 확인된 것뿐이고,
+   *    artifact 와 사람 검토 화면에 그대로 남는다. 막지는 않는다.
+   */
+  const warnings = reviewWarnings(s)
   if (s.lifeContradictions.length > 0) {
-    return { outcome: 'hold', reason: `생활사 모순 ${s.lifeContradictions.map((x) => x.fact).join(' · ')}` }
+    return {
+      outcome: 'hold', warnings,
+      reason: `생활사 모순 ${s.lifeContradictions.map((x) => x.fact).join(' · ')}`,
+    }
   }
-  if (s.issues.length > 0) return { outcome: 'hold', reason: s.issues.join(' · ') }
-  if (s.unknownIssues.length > 0) return { outcome: 'hold', reason: '우리 축이 아닌 이름만 왔다' }
-  return { outcome: 'adopt', reason: '' }
+  if (s.issues.length > 0) return { outcome: 'hold', reason: s.issues.join(' · '), warnings }
+  if (s.unknownIssues.length > 0) return { outcome: 'hold', reason: '우리 축이 아닌 이름만 왔다', warnings }
+  return { outcome: 'adopt', reason: '', warnings }
 }

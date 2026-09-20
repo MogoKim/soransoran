@@ -44,6 +44,7 @@ import {
   BUDGET_ENV, LEDGER_BLOCKED, REAL_LEDGER_IO, SupplyLlmSession, limitsFromEnv,
   type LedgerIo,
 } from './lib/supply-llm-call.mjs'
+import { STAGE_MODEL, STAGE_MAX_OUTPUT_TOKENS } from '../src/lib/content-core/pipeline'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
@@ -659,8 +660,14 @@ console.log('\n⑧ 우회 금지 — 🔴 유료 요청이 지나는 문은 하�
     // 🔴 장부를 부르는 자리는 **정확히 하나**여야 한다 — 두 곳이면 하나가 조용히 달라진다
     check(`${label} 러너가 장부를 부르는 자리는 한 곳뿐이다`,
       (src.match(/LEDGER\.call\(/g) ?? []).length === 1)
-    check(`${label} 러너의 provider 요청이 전부 ask() 를 지난다`,
-      (src.match(/await ask\(/g) ?? []).length >= 2)
+    /**
+     * 🔴 **개수가 아니라 계약을 본다** (2026-09-20 보정). 앞판은 `await ask(` 가
+     *    2개 이상인지 셌는데, 죽은 코드 하나를 지우자 개수가 줄어 실패했다 —
+     *    계약은 그대로인데 검사가 깨진 것이다. **직접 provider 를 부르지 않는가**가
+     *    진짜 계약이고, 그것은 위 세 줄(`callProvider`·`fetch`·`LEDGER.call` 한 곳)이 본다.
+     */
+    check(`${label} 러너의 provider 요청이 ask() 를 지난다`,
+      /await ask\(/.test(src))
   }
   const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   /**
@@ -948,7 +955,25 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
    *    넉넉한 예산에서는 두 회차가 똑같이 돌아 "이어졌는가" 를 가릴 수 없다 —
    *    첫 회차가 실제로 소진해야 둘째 회차가 그 사실을 보고 멈춘다.
    */
-  const RESTART = { [BUDGET_ENV.dailyUsd]: '0.0065', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP }
+  /**
+   * 🔴 **예산을 정본 예약액에서 끌어온다** (2026-09-20 보정).
+   *    앞판은 `0.0065` 라는 손으로 고정한 값이었다. 단계별 출력 상한이 바뀌자
+   *    예약액이 달라져 두 회차가 똑같이 돌았고, "이어졌는가" 를 가리지 못했다 —
+   *    **검사 상수가 계약을 따라오지 못한 것**이다.
+   *    🔴 이제 계획 1건은 통과하고 그 정산액이 쌓이면 막히는 폭으로 잡는다.
+   */
+  const planReserve = reserveOf({
+    model: STAGE_MODEL.speakerPlan, countedInputTokens: 100,
+    maxOutputTokens: STAGE_MAX_OUTPUT_TOKENS.speakerPlan, headroomMultiplier: 1.5,
+  })
+  if (!planReserve.known) throw new Error('계획 예약액을 계산하지 못했다')
+  const RESTART = {
+    [BUDGET_ENV.dailyUsd]: (planReserve.usd * 1.3).toFixed(6),
+    [BUDGET_ENV.headroomMultiplier]: '1.5',
+    // 🔴 정산액이 예약액보다 작아야 한다 — 크면 예약 초과로 **다른 이유**로 막힌다
+    FAKE_PROVIDER_OUTPUT_TOKENS: '600',
+    ...CAP,
+  }
   const first = run(RESTART, { wipe: false })
   const spentAfterFirst = first.entries.filter((e) => e.stage !== 'countTokens')
     .reduce((n, e) => n + (e.settledUsd ?? 0), 0)
@@ -960,7 +985,9 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
   check('🔴 [L] 하루 누적 정산액이 회차를 넘어 이어진다',
     spentAfterSecond >= spentAfterFirst && spentAfterFirst > 0)
   check('🔴 [L] 앞 회차가 소진한 만큼 뒤 회차가 막힌다 — 재시작이 예산을 되돌리지 않는다',
-    second.paid < first.paid && second.entries.some((e) => e.blockCode === 'DAILY_EXHAUSTED'))
+    second.paid < first.paid && second.entries.some((e) => e.blockCode === 'DAILY_EXHAUSTED'),
+    `first.paid=${first.paid} second.paid=${second.paid}`
+    + ` blockCodes=${[...new Set(second.entries.map((e) => e.blockCode).filter((x) => x !== null))].join(',')}`)
 
   // ⓚ 🔴 동시성 — 두 회차가 같은 장부를 동시에 본다
   {
