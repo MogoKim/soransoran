@@ -28,7 +28,7 @@ import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-co
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
 import {
   LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL, REVIEW_VERSION,
-  REVIEW_WARNING_AXES, judgeMachine,
+  REVIEW_WARNING_AXES, judgeMachine, reviewWarnings,
   type DeterministicResult, type ReviewCompletion, type SemanticVerdict,
 } from '../src/lib/content-core/review'
 import { readReviewArtifact, reviewEvidenceLines } from '../src/lib/original-post-machine-review'
@@ -1011,9 +1011,11 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.1'
     && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p7'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
-  check('🔴 러너가 판 이름을 다시 적지 않는다',
+  check('🔴 🔴 **러너가 판 이름을 어디에도 다시 적지 않는다**',
     /draftFrom: CONTENT_CORE_PIPELINE_VERSION/.test(runner)
-    && !/'content-core-v2/.test(runner))
+    && /provenanceNote: `[^`]*\$\{CONTENT_CORE_PIPELINE_VERSION\}`/.test(runner)
+    // 🔴 따옴표든 템플릿이든 **글자 자체**가 남아 있으면 안 된다 — 앞판이 그렇게 새어 나갔다
+    && !runner.includes('content-core-v2'))
 
   // ── ② 말투는 경향이다 ──
   // 🔴 파싱된 계획 모양 그대로 — 모델 응답 모양(`plan()`)이 아니다
@@ -1123,6 +1125,63 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
     && REVIEW_WARNING_AXES.join(',') === 'unsupportedAdditions,droppedFromSource')
   check('🔴 검수 축은 그대로 셋이다', SEMANTIC_AXES.join(',') === 'voiceContentLeak,voiceMismatch,harm')
 
+  // ── ④-b 🔴 혼합 — 경고와 hard 사유가 같이 있으면 전체는 HOLD 다 ──
+  {
+    const mixed = V({
+      unsupportedAdditions: ADD,
+      lifeContradictions: [{ fact: 'work', drafted: '전업', card: '파트타임', evidence: '전업이라' }],
+    })
+    const j = judgeMachine({ deterministic: PASS, semantic: mixed, semanticCompletion: DONE })
+    check('🔴 🔴 **경고 + 생활사 모순이면 전체는 HOLD 다**', j.outcome === 'hold', j.outcome)
+    check('🔴 🔴 **그래도 경고 근거는 보존된다**',
+      j.warnings.length === 1 && j.warnings[0]!.includes('어제 아침에도 일어났는데'))
+    check('🔴 전체 사유는 hard 쪽이 말한다', j.reason.includes('생활사 모순'))
+
+    const art = readReviewArtifact({
+      artifactId: 'b'.repeat(32), sourceArticleId: 's2',
+      evidence: { spans: [{ kind: 'head', text: '원문 조각' }] },
+      plan: { personaCode: 'P01', stance: 'SELF_EXPERIENCE', warrants: [] },
+      draft: { title: '제목', body: '본문' },
+      review: {
+        machineOutcome: j.outcome, machineReason: j.reason,
+        unsupportedAdditions: ADD, droppedFromSource: [],
+        lifeContradictions: mixed.lifeContradictions,
+      },
+      cost: { calls: [] },
+    })
+    const lines = art === null ? '' : reviewEvidenceLines(art).join('\n')
+    check('🔴 🔴 **화면이 "기계가 막지 않았다" 라고 주장하지 않는다**',
+      !lines.includes('기계가 막지 않았다'))
+    check('🔴 🔴 **경고 줄은 "이 항목 자체는 hard 차단 사유가 아니다" 라고만 말한다**',
+      lines.includes('이 항목 자체는 hard 차단 사유가 아니다'))
+    check('🔴 화면 맨 윗줄이 전체 판정(hold)을 말한다', lines.split('\n')[0]!.includes('기계 hold'))
+    check('🔴 경고 근거와 hard 근거가 모두 보인다',
+      lines.includes('어제 아침에도 일어났는데') && lines.includes('생활사 모순'))
+  }
+
+  // ── ④-c 🔴 adopt 경고 집계에 hard HOLD/DROP 을 넣지 않는다 ──
+  check('🔴 🔴 **회차 로그는 adopt 인 것만 "사람에게 넘긴 경고" 로 센다**', (() => {
+    const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const i = src.indexOf('const warned = artifacts.filter(')
+    if (i === -1) return false
+    const block = src.slice(i, i + 220)
+    return block.includes("a.review.machineOutcome === 'adopt'")
+      && block.includes('reviewWarnings(a.review.semantic).length > 0')
+  })())
+  {
+    /** 🔴 같은 판정 함수로 센다 — 집계 규칙을 손으로 다시 쓰지 않는다 */
+    const rows = [
+      { outcome: 'adopt', s: V({ unsupportedAdditions: ADD }) },
+      { outcome: 'adopt', s: V({ droppedFromSource: DROP }) },
+      { outcome: 'hold', s: V({ unsupportedAdditions: ADD, lifeContradictions: [{ fact: 'work', drafted: 'x', card: 'y', evidence: 'z' }] }) },
+      { outcome: 'drop', s: V({ unsupportedAdditions: ADD, issues: ['harm'] }) },
+      { outcome: 'adopt', s: V() },
+    ]
+    const counted = rows.filter((r) => r.outcome === 'adopt' && reviewWarnings(r.s).length > 0)
+    check('🔴 🔴 **hard HOLD/DROP 은 그 숫자에 들어가지 않는다** — 5장 중 2건만',
+      counted.length === 2)
+  }
+
   // ── ⑤ 사람 검토 화면이 경고를 보여준다 ──
   {
     const art = readReviewArtifact({
@@ -1140,8 +1199,9 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
     check('🔴 🔴 **사람 검토 화면에 원문 근거가 보인다**', String(lines).includes('원문 조각'))
     check('🔴 🔴 **경고 근거 둘이 모두 보인다**',
       String(lines).includes('어제 아침에도 일어났는데') && String(lines).includes('형수가 음식사오니깐'))
-    check('🔴 🔴 **기계가 막지 않았다고 화면이 말한다**',
-      String(lines).includes('[사람이 판정]') && String(lines).includes('기계가 막지 않았다'))
+    check('🔴 🔴 **화면이 사람이 판정할 자리라고 말한다**',
+      String(lines).includes('[사람이 판정]')
+      && String(lines).includes('이 항목 자체는 hard 차단 사유가 아니다'))
   }
 
   // ── ⑥ SHADOW5B 5편을 provider 없이 다시 판정하면 전부 후보다 ──

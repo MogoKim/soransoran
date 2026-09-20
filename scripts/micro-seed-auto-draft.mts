@@ -1057,14 +1057,16 @@ async function main(): Promise<void> {
   console.log(`   🔴 AUTO_DROP  ${s.AUTO_DROP}건`)
   console.log(`   🔴 v2 가 초안을 만들지 않고 멈춘 원천 ${v2Held}건 · artifact ${artifacts.length}장`)
   /**
-   * 🔴 **막지 않고 사람에게 넘긴 것** (2026-09-20). 근거는 artifact 에 그대로 있고
-   *    `publish:machine-review` 화면에 뜬다 — 숫자를 여기서도 보여 준다.
+   * 🔴 **사람에게 넘긴 경고만 센다** (2026-09-20 보정). `adopt` 인 artifact 만이다 —
+   *    hard 사유로 HOLD/DROP 된 글에도 경고 근거가 붙어 있을 수 있는데,
+   *    그것까지 세면 "사람에게 넘겼다" 는 숫자가 부풀어 거짓이 된다.
    */
-  const warned = artifacts.filter((a) => reviewWarnings(a.review.semantic).length > 0)
-  console.log(`   🟡 사람이 판정할 경고가 붙은 artifact ${warned.length}장`
+  const warned = artifacts.filter((a) =>
+    a.review.machineOutcome === 'adopt' && reviewWarnings(a.review.semantic).length > 0)
+  console.log(`   🟡 사람에게 넘긴 경고가 붙은 후보 ${warned.length}건`
     + ` — 원문에 없어 보이는 것 · 원문에서 사라져 보이는 것`)
   if (warned.length > 0) {
-    console.log('      🔴 기계가 막지 않았다. 발행은 사람이 검토를 마쳐야 열린다')
+    console.log('      🔴 이 항목만으로는 막지 않았다. 발행은 사람이 검토를 마쳐야 열린다')
   }
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
@@ -1159,7 +1161,8 @@ async function main(): Promise<void> {
       sourcePostedAt: a.meta.sourcePostedAt,
       sourceListedAt: a.meta.sourceListedAt,
       sourceCapturedAt: a.meta.sourceCapturedAt,
-      provenanceNote: `기계 생성 · ${DRAFT_RULE_VERSION} · ${DRAFT_PROVENANCE} · content-core-v2`,
+      // 🔴 판 이름은 정본을 읽는다 — 여기에 다시 적지 않는다
+      provenanceNote: `기계 생성 · ${DRAFT_RULE_VERSION} · ${DRAFT_PROVENANCE} · ${CONTENT_CORE_PIPELINE_VERSION}`,
       autoJudge: seedProv.get(a.pick.sourceArticleId) ?? null,
     })),
   }, null, 2)}\n`, 'utf-8')

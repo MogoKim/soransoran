@@ -181,19 +181,22 @@ export function reviewEvidenceLines(a: ReviewArtifact): string[] {
     '원문 근거:',
     ...a.evidence.map((e) => `   [${e.kind}] ${e.text}`),
     /**
-     * 🔴 **이 둘은 경고다 — 기계가 막지 않고 사람에게 넘긴 것이다** (2026-09-20).
-     *    같은 원문·같은 초안에 회차마다 판정이 갈렸다. 그래서 막지 않고 **보여준다.**
+     * 🔴 **이 둘은 hard 차단 사유가 아니다 — 사람이 판정할 자리다** (2026-09-20).
+     *    같은 원문·같은 초안에 회차마다 판정이 갈렸다. 그래서 이 항목만으로는 막지 않는다.
      *    🔴 근거는 지우지 않는다 — 사람이 이것을 보고 READY 를 정한다.
+     *
+     * 🔴 **"기계가 막지 않았다" 라고 쓰지 않는다** — 같은 글이 생활사 모순이나 harm 으로
+     *    HOLD/DROP 일 수 있다. 그때 이 줄은 거짓말이 된다. 전체 판정은 맨 윗줄이 말한다.
      */
     ...(a.unsupportedAdditions.length > 0
       ? ['🟡 [사람이 판정] 원문에 없어 보이는 것:',
         ...a.unsupportedAdditions.map((x) => `   "${x.evidence}" — ${x.why}`),
-        '   🔴 기계가 막지 않았다. 원문과 견주어 직접 확인해 주세요.']
+        '   🔴 이 항목 자체는 hard 차단 사유가 아니다. 원문과 견주어 사람이 판정한다.']
       : ['🟢 원문에 없어 보이는 것: 없음']),
     ...(a.droppedFromSource.length > 0
       ? ['🟡 [사람이 판정] 원문에서 사라져 보이는 것:',
         ...a.droppedFromSource.map((x) => `   "${x.evidence}" — ${x.why}`),
-        '   🔴 기계가 막지 않았다. 뜻이 남았는지 직접 확인해 주세요.']
+        '   🔴 이 항목 자체는 hard 차단 사유가 아니다. 원문과 견주어 사람이 판정한다.']
       : ['🟢 원문에서 사라져 보이는 것: 없음']),
     ...(a.lifeContradictions.length > 0
       ? ['🔴 생활사 모순:', ...a.lifeContradictions.map((x) => `   ${x.fact}: "${x.drafted}" ↔ 카드 "${x.card}" — "${x.evidence}"`)]
