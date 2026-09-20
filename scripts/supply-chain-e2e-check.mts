@@ -25,10 +25,11 @@ import {
   STAGE_MODEL, stageModelsMismatch,
 } from '../src/lib/content-core/pipeline'
 import {
-  findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd, usdPerReady,
-  currentText, editDiffLines,
-  type ReviewArtifact, type ReviewTarget,
+  findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
+  currentText, editDiffLines, completeReview,
+  type ReviewArtifact, type ReviewTarget, type ReviewTx, type ReviewRow,
 } from '../src/lib/original-post-machine-review'
+import type { ReviewSnapshot } from '../src/lib/original-post-auto-publish'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
@@ -300,29 +301,19 @@ console.log('\n⑤ 🔴 artifacts.json → 사람 검토 근거')
   check('🔴 단계별 모델이 남았다',
     a.calls.map((c) => c.model).join(',')
       === `${STAGE_MODEL.speakerPlan},${STAGE_MODEL.draftGen},${STAGE_MODEL.semanticReview}`)
-  const ready = usdPerReady({ artifacts: arts, readyArtifactIds: [AID] })
-  check('🔴 🔴 **사람 READY 한 편당 비용을 계산할 수 있다**',
-    ready.perReady !== null && ready.perReady > 0, JSON.stringify(ready))
-  /** 🔴 같은 장이 캐시 hit·여러 파일로 반복돼도 **한 번만** 센다 */
-  check('🔴 🔴 **중복 artifact 비용을 한 번만 집계한다**', (() => {
-    const one = usdPerReady({ artifacts: arts, readyArtifactIds: [AID] })
-    const dup = usdPerReady({ artifacts: [...arts, ...arts, ...arts], readyArtifactIds: [AID] })
-    return one.total !== null && dup.total === one.total && dup.perReady === one.perReady
+  /**
+   * 🔴 **전역 한 편당 비용은 내지 않는다** (2026-09-20). 분자(로컬 artifact 전부)와
+   *    분모(지금 미발행 READY)의 모집단이 달라 발행이 진행될수록 값이 커진다.
+   *    cohort 가 정해지기 전에는 **개별 비용만** 쓴다.
+   */
+  check('🔴 🔴 **전역 usdPerReady 를 더는 내보내지 않는다**', (() => {
+    const lib = readFileSync('src/lib/original-post-machine-review.ts', 'utf-8')
+    const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+    return !/export function usdPerReady/.test(lib) && !/usdPerReady\(/.test(cli)
+      && /한 편당 비용을 내지 않는다/.test(cli)
   })())
-  check('🔴 🔴 **같은 artifactId 가 다른 비용이면 오류로 막는다**', (() => {
-    const clash: ReviewArtifact = { ...a, calls: [{ stage: 'x', model: 'm', usd: 99 }] }
-    const v = usdPerReady({ artifacts: [a, clash], readyArtifactIds: [AID] })
-    return v.total === null && v.why.includes('서로 다른 비용')
-  })())
-  check('🔴 🔴 **READY 0 이면 계산 불가라고 말한다** — 0 으로 나누지 않는다', (() => {
-    const z = usdPerReady({ artifacts: arts, readyArtifactIds: [] })
-    return z.perReady === null && z.why.includes('계산 불가')
-  })())
-  check('🔴 정산 미상이 하나라도 있으면 합계를 만들지 않는다', (() => {
-    const broken: ReviewArtifact = { ...a, calls: [{ stage: 'x', model: null, usd: null }] }
-    return artifactCostUsd(broken) === null
-      && usdPerReady({ artifacts: [broken], readyArtifactIds: [AID] }).total === null
-  })())
+  check('🔴 개별 artifact 비용 표시는 남는다',
+    reviewEvidenceLines(a).join('\n').includes('비용: $'))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -416,6 +407,208 @@ console.log('\n⑧ 🔴 검토 뒤 글이 바뀌면 승인되지 않는다 (opti
     !judgeReviewSnapshot(snap, { ...snap, body: '누가 바꿨다' }).ok)
   check('🔴 검토 뒤 제목이 바뀌어도 실패', !judgeReviewSnapshot(snap, { ...snap, title: 'x' }).ok)
   check('🔴 검토 뒤 상태가 바뀌어도 실패', !judgeReviewSnapshot(snap, { ...snap, status: 'PUBLISHED' }).ok)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 도장도 남지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const SNAP = (o: Partial<ReviewRow> = {}): ReviewRow => ({
+    status: 'APPROVED', createdPostId: null, decidedBy: null, decidedAt: null,
+    updatedAt: new Date('2026-09-20T00:00:00Z'),
+    title: '기계 제목', body: '기계 본문', promptVersion: 'p', model: 'm',
+    gateResults: {}, ...o,
+  })
+  const BY = 'founder:machine-reviewed'
+  const NOW2 = new Date('2026-09-20T12:00:00Z')
+
+  /**
+   * 🔴 **되돌아가는 저장소.** `transaction` 안에서 던지면 그 안의 기록이 **전부 없던 일**이
+   *    된다 — 실제 DB 트랜잭션과 같은 계약이다. 실제 DB 는 쓰지 않는다.
+   */
+  const store = (o: {
+    row: ReviewRow | null
+    /** 두 번째 read 가 돌려줄 값 — 기록 뒤 상태를 흉내 낸다 */
+    after?: (staged: ReviewRow | null) => ReviewRow | null
+    stampCount?: number
+  }): { store: { transaction: <T>(fn: (tx: ReviewTx) => Promise<T>) => Promise<T> }; committed: () => ReviewRow | null } => {
+    let committed = o.row
+    return {
+      committed: () => committed,
+      store: {
+        transaction: async <T,>(fn: (tx: ReviewTx) => Promise<T>): Promise<T> => {
+          // 🔴 트랜잭션 안의 변경은 여기 쌓이고, 던지면 버려진다
+          let staged: ReviewRow | null = committed === null ? null : { ...committed }
+          let reads = 0
+          const tx: ReviewTx = {
+            read: async (_id) => {
+              reads += 1
+              return reads >= 2 && o.after !== undefined ? o.after(staged) : staged
+            },
+            stamp: async (i) => {
+              const n = o.stampCount ?? (staged !== null
+                && staged.updatedAt.getTime() === i.where.updatedAt.getTime()
+                && staged.decidedBy === i.where.decidedBy ? 1 : 0)
+              if (n === 1 && staged !== null) {
+                staged = { ...staged, decidedBy: i.decidedBy, decidedAt: i.decidedAt }
+              }
+              return n
+            },
+          }
+          try {
+            const r = await fn(tx)
+            committed = staged   // 🔴 끝까지 왔을 때만 커밋
+            return r
+          } catch (e) {
+            // 🔴 되돌린다 — staged 를 버린다
+            throw e
+          }
+        },
+      },
+    }
+  }
+
+  // ⓐ 정상 스냅샷만 검토 완료
+  {
+    const sv = store({ row: SNAP() })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    check('🟢 🔴 **정상 스냅샷이면 검토 완료된다**', v.ok, v.ok ? '' : v.reason)
+    check('🔴 도장이 decidedBy·decidedAt 둘 다 커밋됐다',
+      sv.committed()?.decidedBy === BY && sv.committed()?.decidedAt?.getTime() === NOW2.getTime())
+  }
+
+  // ⓑ 본문·제목·상태·provenance 가 바뀌면 write 0
+  for (const [label, patch] of [
+    ['본문', { body: '누가 바꿨다' }],
+    ['제목', { title: '누가 바꿨다' }],
+    ['상태', { status: 'PUBLISHED' }],
+    ['provenance(promptVersion)', { promptVersion: 'other' }],
+    ['provenance(model)', { model: 'other' }],
+    ['발행됨(createdPostId)', { createdPostId: 'post-1' }],
+  ] as const) {
+    const sv = store({ row: SNAP(patch) })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    check(`🔴 🔴 **${label} 가 바뀌면 write 0**`,
+      !v.ok && v.code === 'snapshotChanged' && sv.committed()?.decidedBy === null,
+      v.ok ? 'ok 였다' : `${v.code} · decidedBy=${String(sv.committed()?.decidedBy)}`)
+  }
+
+  // ⓒ 조건 불일치 → founder 표식 0
+  {
+    const sv = store({ row: SNAP(), stampCount: 0 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    check('🔴 🔴 **조건부 기록이 0건이면 도장 0**',
+      !v.ok && v.code === 'conditionMissed' && sv.committed()?.decidedBy === null)
+  }
+  // ⓒ-2 사후 오류(쓴 뒤 대조 어긋남) → 되돌린다
+  {
+    const sv = store({
+      row: SNAP(),
+      after: (st) => (st === null ? null : { ...st, body: '쓴 뒤 누가 바꿨다' }),
+    })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    check('🔴 🔴 **쓴 뒤 대조가 어긋나면 되돌린다 — 도장 0**',
+      !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null,
+      v.ok ? 'ok 였다' : `${v.code} · decidedBy=${String(sv.committed()?.decidedBy)}`)
+  }
+  {
+    const sv = store({ row: SNAP(), after: (st) => (st === null ? null : { ...st, decidedBy: null }) })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    check('🔴 도장이 남지 않았으면 되돌린다',
+      !v.ok && v.code === 'stampMissing' && sv.committed()?.decidedBy === null)
+  }
+  {
+    // 🔴 표시는 맞는데 **시각**이 다르다 = 다른 write 가 끼어들었다
+    const sv = store({
+      row: SNAP(),
+      after: (st) => (st === null ? null : { ...st, decidedAt: new Date('2026-09-20T13:00:00Z') }),
+    })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    check('🔴 🔴 **도장 시각이 내가 찍은 값이 아니면 되돌린다**',
+      !v.ok && v.code === 'stampMissing'
+      && sv.committed()?.decidedBy === null && sv.committed()?.decidedAt === null,
+      v.ok ? 'ok 였다' : v.code)
+  }
+  {
+    const sv = store({ row: null })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    check('🔴 행이 없으면 검토 완료하지 않는다', !v.ok && v.code === 'notFound')
+  }
+
+  // ⓓ EDITED 정상 수정본은 계속 검토 가능
+  {
+    /** 🔴 스냅샷의 `title`/`body` 는 **수정본**이다 — 사람이 그것을 읽고 승인한다 */
+    const edited = SNAP({ title: '사람이 고친 제목', body: '사람이 고친 본문' })
+    const sv = store({ row: edited })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: edited, decidedBy: BY, now: NOW2 })
+    check('🟢 🔴 **EDITED 정상 수정본도 검토 완료된다**', v.ok && sv.committed()?.decidedBy === BY,
+      v.ok ? '' : v.reason)
+  }
+
+  // 🔴 운영 러너가 이 경계를 실제로 쓴다
+  check('🔴 🔴 **운영 검토 러너가 completeReview 를 쓴다 — 도장 먼저 찍지 않는다**', (() => {
+    const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+    return /await completeReview\(\{/.test(cli)
+      && /prisma\.\$transaction/.test(cli)
+      // 🔴 트랜잭션 밖에서 도장을 찍는 updateMany 가 남아 있지 않다
+      && (cli.match(/updateMany\(\{/g) ?? []).length === 1
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑩ 🔴 🔴 정산 집계 — 실제 유료 요청 1건으로 숫자를 읽는다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **소스 정규식으로 보지 않는다.** "집계 줄이 `clearOpen` 아래에 있다" 는 검사는
+   *    줄이 함께 옮겨지면 늘 통과한다. 여기서는 가짜 provider 로 **요청을 실제로 보내고**
+   *    끝난 뒤 회차 집계 숫자를 그대로 읽는다.
+   */
+  const probeDir = mkdtempSync(join(tmpdir(), 'chain-e2e-tally-'))
+  const probe = (mode: 'ok' | 'settle-fail', env: Record<string, string> = {}): {
+    paid: number; settledUsd: number; usageUnknown: number; settleHeld: number
+    settlementRecorded: boolean; errorCode: string | null; usageKnown: boolean; ok: boolean
+  } => {
+    const r = spawnSync(
+      join(process.cwd(), 'node_modules/.bin/tsx'),
+      [join(process.cwd(), 'scripts/lib/settle-tally-probe.mts'),
+        join(probeDir, `${mode}-${Object.keys(env).join('-')}`), mode],
+      {
+        encoding: 'utf-8',
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: 'fixture-fake-key', GEMINI_API_KEY: 'fixture-fake-gemini-key',
+          NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
+          ...env,
+        },
+      },
+    )
+    const line = (r.stdout ?? '').trim().split('\n').filter((l) => l.startsWith('{')).pop() ?? ''
+    if (line === '') throw new Error(`탐침이 값을 내지 않았다 — ${r.stdout ?? ''}${r.stderr ?? ''}`)
+    return JSON.parse(line)
+  }
+
+  // 🟢 정상: 줄이 적혔으니 금액이 집계에 오른다
+  const okRun = probe('ok')
+  check('🟢 정상 정산이면 금액이 집계에 오른다',
+    okRun.settlementRecorded && okRun.paid === 1 && okRun.settledUsd > 0
+    && okRun.usageUnknown === 0 && okRun.settleHeld === 0)
+
+  // 🔴 사용량은 알지만 **정산 줄만** 못 적은 경우
+  const sf = probe('settle-fail')
+  check('🔴 🔴 **기록이 실패하면 settledUsd 가 0 이다** — 쓰지 않은 돈을 세지 않는다',
+    sf.usageKnown && sf.settledUsd === 0)
+  check('🔴 🔴 **사용량을 아는데 기록만 실패하면 usageUnknown 은 0 이다**',
+    sf.usageUnknown === 0)
+  check('🔴 🔴 **그 대신 settleHeld 가 1 이다** — 원인이 다른 두 가지를 한 칸에 담지 않는다',
+    sf.settleHeld === 1)
+  check('🔴 부르는 쪽은 완주 실패로 받는다',
+    !sf.ok && !sf.settlementRecorded && sf.errorCode === 'SETTLE_NOT_RECORDED')
+
+  // 🔴 사용량을 진짜 모르는 응답은 **정확히 한 번만** 센다
+  const nu = probe('ok', { FAKE_PROVIDER_MODE: 'no-usage' })
+  check('🔴 🔴 **사용량 미상 응답은 정확히 1건으로 센다** (두 번 세지 않는다)',
+    !nu.usageKnown && nu.usageUnknown === 1 && nu.settleHeld === 0 && nu.settledUsd === 0)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

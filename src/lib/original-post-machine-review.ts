@@ -10,7 +10,9 @@
  *    검토는 그 열쇠로 **로컬 정본**을 연다. 복사하면 원문이 DB 에 남는다.
  *
  * 🔴 **순수 함수다.** DB·파일·네트워크를 모른다 — fixture 가 그대로 돌린다.
+ *    검토 완료(`completeReview`)만 저장소를 **주입받아** 쓴다 — 여기서 Prisma 를 알지 않는다.
  */
+import { judgeReviewSnapshot, type ReviewSnapshot } from './original-post-auto-publish'
 
 /** 🔴 사람이 보아야 하는 것만 추린다 — artifact 전문을 그대로 들고 다니지 않는다 */
 export type ReviewArtifact = {
@@ -146,45 +148,19 @@ export function artifactCostUsd(a: ReviewArtifact): number | null {
 }
 
 /**
- * 🔴 **사람 READY 한 편당 비용.** READY 가 0 이면 **계산 불가**다 —
- *    0 으로 나눈 값이나 "무한" 을 적지 않는다.
+ * 🔴 **전역 "READY 한 편당 비용" 은 만들지 않는다** (2026-09-20 보정).
+ *
+ *    앞판은 **로컬에 있는 모든 artifact 비용**을 **지금 미발행 상태로 남은 READY 수**로
+ *    나눴다. 두 숫자의 모집단이 다르다 —
+ *      · 분자: 어제·오늘·어느 회차든 로컬에 남아 있는 파일 전부
+ *      · 분모: 지금 큐에 **미발행으로 남아 있는** READY 만 (발행된 것은 큐에서 빠진다)
+ *    그래서 발행이 진행될수록 분모가 줄어 한 편당 비용이 **끝없이 커진다.**
+ *
+ * 🔴 **회차·기간·생성 cohort 가 명시되지 않으면 이 수를 내지 않는다.**
+ *    없는 모집단을 여기서 새 규칙으로 추정하면, 그 규칙이 곧 근거 없는 숫자가 된다.
+ *    🔴 개별 artifact 의 정산 비용(`artifactCostUsd`)은 그대로 쓴다 —
+ *       그것은 모집단이 하나로 분명하다.
  */
-export function usdPerReady(input: {
-  artifacts: readonly ReviewArtifact[]
-  /** 🔴 사람이 READY 를 찍은 **artifactId** 들 */
-  readyArtifactIds: readonly string[]
-}): { total: number | null; ready: number; perReady: number | null; why: string } {
-  /**
-   * 🔴 **같은 artifactId 는 한 번만 센다** (2026-09-20).
-   *    캐시 hit 이나 회차 파일이 여럿이면 같은 장이 반복해서 들어온다 —
-   *    그대로 더하면 분자가 부풀어 한 편당 비용이 실제보다 크게 나온다.
-   *    🔴 같은 id 인데 **금액이 다르면** 오류다. 어느 쪽이 맞는지 알 수 없다.
-   */
-  const byId = new Map<string, number | null>()
-  for (const a of input.artifacts) {
-    const c = artifactCostUsd(a)
-    if (!byId.has(a.artifactId)) { byId.set(a.artifactId, c); continue }
-    const seen = byId.get(a.artifactId)!
-    if (seen !== c) {
-      return {
-        total: null, ready: new Set(input.readyArtifactIds).size, perReady: null,
-        why: `🔴 같은 artifactId 가 서로 다른 비용을 갖는다 (${a.artifactId})`,
-      }
-    }
-  }
-  const costs = [...byId.values()]
-  if (costs.some((c) => c === null)) {
-    return {
-      total: null, ready: new Set(input.readyArtifactIds).size, perReady: null,
-      why: '정산하지 못한 요청이 있다 — 계산 불가',
-    }
-  }
-  /** 🔴 HOLD·폐기한 글의 비용도 분자에 든다. 쓴 돈은 쓴 돈이다 */
-  const total = costs.reduce((n: number, c) => n + (c ?? 0), 0)
-  const ready = new Set(input.readyArtifactIds).size
-  if (ready === 0) return { total, ready: 0, perReady: null, why: 'READY 0건 — 계산 불가' }
-  return { total, ready, perReady: total / ready, why: '' }
-}
 
 /** 🔴 사람이 화면에서 읽는 줄 — 판정이 아니라 근거다 */
 export function reviewEvidenceLines(a: ReviewArtifact): string[] {
@@ -250,5 +226,107 @@ export function readReviewArtifact(v: unknown): ReviewArtifact | null {
       model: typeof x.model === 'string' ? x.model : null,
       usd: typeof x.usd === 'number' && Number.isFinite(x.usd) ? x.usd : null,
     })),
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 검토 완료 — **검증과 기록이 한 경계 안에 있다**
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **왜 하나로 묶나** (2026-09-20 보정).
+ *
+ *    앞판은 ① 조건부 UPDATE 로 도장을 찍고 ② 그 **뒤에** 다시 읽어 대조했다.
+ *    ②가 어긋나면 종료 코드 1 로 멈추지만 **도장은 이미 찍혀 있었다** —
+ *    "검증 실패인데 `decidedBy`/`decidedAt` 가 남는" 상태다.
+ *    🔴 이제 읽기·검증·기록·재대조가 **한 트랜잭션** 안이고,
+ *       어느 단계든 어긋나면 **되돌아간다(write 0).**
+ */
+/**
+ * 🔴 읽은 행 — 대조용 스냅샷에 **도장 칸**을 더한 것.
+ *    `judgeReviewSnapshot` 은 `decidedAt` 을 비교하지 않는다(바뀌라고 쓴 칸이다).
+ *    그래서 "도장이 내가 찍은 그 시각인가" 는 여기서 따로 본다.
+ */
+export type ReviewRow = ReviewSnapshot & { decidedAt: Date | null }
+
+export type ReviewTx = {
+  /** 지금 행의 스냅샷 — 없으면 `null` */
+  read: (id: string) => Promise<ReviewRow | null>
+  /**
+   * 🔴 **조건부 기록.** `where` 가 한 칸이라도 다르면 0 을 돌려준다 —
+   *    "그 사이 누가 바꿨다" 를 DB 가 판정한다.
+   */
+  stamp: (input: {
+    id: string; where: ReviewSnapshot; decidedBy: string; decidedAt: Date
+  }) => Promise<number>
+}
+
+/** 🔴 `fn` 이 던지면 **되돌린다.** 그것이 이 계약의 전부다 */
+export type ReviewStore = {
+  transaction: <T>(fn: (tx: ReviewTx) => Promise<T>) => Promise<T>
+}
+
+export const COMPLETE_FAIL_CODES = [
+  'notFound', 'snapshotChanged', 'conditionMissed', 'verifyFailed', 'stampMissing',
+] as const
+export type CompleteFailCode = (typeof COMPLETE_FAIL_CODES)[number]
+
+export const COMPLETE_FAIL_LABEL: Readonly<Record<CompleteFailCode, string>> = {
+  notFound: '그 행이 없다',
+  snapshotChanged: '🔴 검토한 뒤 그 사이에 후보가 바뀌었다 — 아무것도 쓰지 않았다',
+  conditionMissed: '🔴 조건부 기록이 0건이다 — 그 사이 누가 바꿨다. 아무것도 쓰지 않았다',
+  verifyFailed: '🔴 쓴 뒤 대조가 어긋났다 — **되돌렸다**',
+  stampMissing: '🔴 도장이 남지 않았다 — 되돌렸다',
+}
+
+export type CompleteVerdict =
+  | { ok: true; decidedAt: Date }
+  | { ok: false; code: CompleteFailCode; reason: string }
+
+/** 🔴 되돌리기 위해 던지는 표식 — 밖으로 새지 않는다 */
+class RollbackSignal extends Error {
+  constructor(readonly code: CompleteFailCode, readonly detail: string) { super(code) }
+}
+
+export async function completeReview(input: {
+  store: ReviewStore
+  id: string
+  /** 사람이 읽었을 때의 스냅샷 */
+  before: ReviewSnapshot
+  decidedBy: string
+  now: Date
+}): Promise<CompleteVerdict> {
+  try {
+    return await input.store.transaction(async (tx) => {
+      const current = await tx.read(input.id)
+      if (current === null) throw new RollbackSignal('notFound', '')
+      // ── ① 검증 — 사람이 읽은 그 글인가 ──
+      const same = judgeReviewSnapshot(input.before, current)
+      if (!same.ok) throw new RollbackSignal('snapshotChanged', same.changed.join(' · '))
+      // ── ② 조건부 기록 — DB 가 한 번 더 판정한다 ──
+      const n = await tx.stamp({
+        id: input.id, where: input.before, decidedBy: input.decidedBy, decidedAt: input.now,
+      })
+      if (n !== 1) throw new RollbackSignal('conditionMissed', `${n}건`)
+      // ── ③ 같은 경계 안에서 다시 읽어 대조 — 어긋나면 **되돌린다** ──
+      const back = await tx.read(input.id)
+      if (back === null) throw new RollbackSignal('notFound', '쓴 뒤')
+      if (back.decidedBy !== input.decidedBy) throw new RollbackSignal('stampMissing', String(back.decidedBy))
+      // 🔴 **시각까지 대조한다.** 표시만 맞고 시각이 다르면 다른 write 가 끼어든 것이다
+      if (back.decidedAt === null || back.decidedAt.getTime() !== input.now.getTime()) {
+        throw new RollbackSignal('stampMissing', `decidedAt ${back.decidedAt?.toISOString() ?? '없음'}`)
+      }
+      const still = judgeReviewSnapshot(input.before, back)
+      if (!still.ok) throw new RollbackSignal('verifyFailed', still.changed.join(' · '))
+      return { ok: true as const, decidedAt: input.now }
+    })
+  } catch (e) {
+    if (e instanceof RollbackSignal) {
+      return {
+        ok: false, code: e.code,
+        reason: `${COMPLETE_FAIL_LABEL[e.code]}${e.detail === '' ? '' : ` (${e.detail})`}`,
+      }
+    }
+    throw e
   }
 }

@@ -386,9 +386,14 @@ export class SupplyLlmSession {
     const settled = judgeSettle({ reservedUsd: verdict.reservedUsd, cost })
     /** 🔴 정산 **줄을 실제로 적었는가.** 적지 못하면 이 단계는 완주가 아니다 */
     let settlementRecorded = true
-    if (settled.status === 'usageUnknown') this.t.usageUnknown += 1
-    if (settled.settledUsd !== null) this.t.settledUsd += settled.settledUsd
-    if (settled.overran) this.t.overruns += 1
+    /**
+     * 🔴 **집계는 기록이 끝난 뒤에 한다** (2026-09-20 보정).
+     *
+     *    앞판은 `judgeSettle` 직후에 `settledUsd`·`overruns`·`usageUnknown` 을 올렸다.
+     *    그런데 그 아래 append 나 `clearOpen` 이 실패하면 **장부에는 아무것도 안 적혔는데
+     *    회차 집계에는 금액이 올라간다.** 화면·보고가 실제보다 많이 쓴 것으로 보인다.
+     *    🔴 그래서 **줄을 적고 열린 예약을 지운 뒤**에만 센다.
+     */
     try {
       this.io.withLock(this.dir, () => {
         this.write(path, {
@@ -412,6 +417,10 @@ export class SupplyLlmSession {
          */
         this.io.clearOpen(this.dir, attemptId)
       })
+      // 🔴 여기까지 왔다 = 줄이 적혔고 열린 예약도 풀렸다. 그때만 센다
+      if (settled.status === 'usageUnknown') this.t.usageUnknown += 1
+      if (settled.settledUsd !== null) this.t.settledUsd += settled.settledUsd
+      if (settled.overran) this.t.overruns += 1
     } catch (e) {
       /**
        * 🔴 **정산을 못 적었다.** 요청은 이미 나갔고 예약 줄은 남아 있다 —
@@ -422,7 +431,13 @@ export class SupplyLlmSession {
        *    파일 표식 하나로. 파일은 재시작을 넘고, 사람이 제공사 사용량과 대조한 뒤
        *    직접 지워야 풀린다. 재시작이 우회가 되지 않게 하는 것이 요점이다.
        */
-      this.t.usageUnknown += 1
+      /**
+       * 🔴 **사용량을 알았는데 기록만 실패한 것은 `usageUnknown` 이 아니다** (2026-09-20).
+       *    앞판은 무조건 올려서, 제공사가 사용량을 준 건까지 "사용량 미상" 으로 셌다 —
+       *    원인이 다른 두 가지를 한 칸에 담으면 어느 쪽인지 알 수 없다.
+       *    🔴 기록 실패는 `settleHeld` 가 센다.
+       */
+      if (settled.status === 'usageUnknown') this.t.usageUnknown += 1
       settlementRecorded = false
       const why = `정산을 장부에 적지 못했다 — ${e instanceof Error ? e.message : 'unknown'}`
       this.settleFailed = `${why}`

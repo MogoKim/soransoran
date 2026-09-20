@@ -49,7 +49,7 @@ import { join } from 'node:path'
  */
 import {
   findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
-  currentText, editDiffLines, usdPerReady,
+  currentText, editDiffLines, completeReview,
   type ReviewArtifact, type ReviewTarget,
 } from '../src/lib/original-post-machine-review'
 import { DATA_DIR } from './micro-seed-auto-draft.mjs'
@@ -188,20 +188,15 @@ console.log(`① 기계 후보 ${machine.length}건 — 🟢 검토 완료 ${rev
 console.log(`   로컬 artifact ${ARTIFACTS.length}장 — 🔴 원문 근거는 DB 가 아니라 ${DATA_DIR} 에 있다`)
 {
   /**
-   * 🔴 **운영 상태에서 읽는다** (2026-09-20). 손으로 목록을 넣지 않는다 —
-   *    `machineReviewedByHuman` 이 참인 행의 `artifactId` 가 곧 READY 다.
-   *    🔴 HOLD·폐기한 글의 비용도 분자에 든다. 쓴 돈은 쓴 돈이다.
+   * 🔴 **한 편당 비용을 여기서 내지 않는다** (2026-09-20 보정).
+   *    분자(로컬 artifact 전부)와 분모(지금 미발행 READY)의 모집단이 다르다 —
+   *    발행이 진행될수록 분모가 줄어 한 편당 비용이 끝없이 커진다.
+   *    🔴 회차·기간·cohort 가 정해지기 전에는 **개별 비용만** 보여 준다.
    */
-  const readyArtifactIds = machine
-    .filter((x) => machineReviewedByHuman(x.decidedBy))
-    .map((x) => keysOf(x).artifactId)
-    .filter((x): x is string => x !== null)
-  const v = usdPerReady({ artifacts: ARTIFACTS, readyArtifactIds })
-  console.log(`   정산 합계 ${v.total === null ? '🔴 계산 불가' : `$${v.total.toFixed(6)}`}`
-    + ` · 사람 READY ${v.ready}건`)
-  console.log(`   🔴 READY 한 편당 ${v.perReady === null ? `계산 불가 — ${v.why}` : `$${v.perReady.toFixed(6)}`}`)
   const unsettled = ARTIFACTS.filter((a) => artifactCostUsd(a) === null).length
-  if (unsettled > 0) console.log(`   🔴 정산 미상 ${unsettled}장 — 합계를 만들지 않는다`)
+  console.log(`   🔴 회차·기간 cohort 가 정해지지 않아 **한 편당 비용을 내지 않는다**`)
+  console.log(`      (개별 artifact 비용은 --id 로 한 건씩 본다`
+    + `${unsettled > 0 ? ` · 🔴 정산 미상 ${unsettled}장` : ''})`)
 }
 console.log(`   미검토 중  검토 가능 ${reviewable.length}건 · 🔴 근거 없어 검토 불가 ${blocked.length}건`)
 if (blocked.length > 0) {
@@ -296,66 +291,61 @@ const before = snapOf.get(target.id)
 if (before === undefined) { await prisma.$disconnect(); fail('검토 스냅샷을 읽지 못했습니다.') }
 
 /**
- * 🔴 **낙관적 잠금 조건부 UPDATE** (2026-09-14).
+ * 🔴 **검증과 기록이 한 트랜잭션 안에 있다** (2026-09-20 보정).
  *
- *    사람이 읽고 나서 여기까지 오는 사이에 본문이 바뀌거나 상태가 움직였을 수 있다.
- *    그 상태로 `founder` 를 붙이면 **읽지 않은 글에 도장을 찍는 것**이다.
- *    `updatedAt` 은 행이 한 번이라도 쓰이면 바뀌므로(`@updatedAt`), 그 값을 조건에 넣으면
- *    **무엇이 바뀌었든** 0건이 되어 멈춘다.
+ *    앞판은 조건부 UPDATE 로 도장을 먼저 찍고 **그 뒤에** 다시 읽어 대조했다.
+ *    대조가 어긋나면 종료 코드 1 로 멈췄지만 **도장은 이미 남아 있었다** —
+ *    "검증 실패인데 `decidedBy`/`decidedAt` 가 남는" 상태다.
+ *    🔴 이제 읽기·검증·기록·재대조가 한 경계 안이고, 어느 단계든 어긋나면 **되돌아간다.**
  *
- * 🔴 **`decidedAt` 을 함께 쓴다.** 앞선 판은 `decidedBy` 만 바꿔서
- *    "누가" 는 사람인데 "언제" 는 **기계가 적재한 시각**으로 남았다 — 거짓 기록이다.
- *    그리고 `queueOrderKey` 가 `decidedAt` 으로 줄을 세우므로,
- *    이 값을 함께 바꿔야 자동 발행 순서가 **실제 사람 검토 순서**가 된다.
+ * 🔴 판정 자체는 `src/lib/original-post-machine-review.ts` 의 순수 함수가 한다 —
+ *    여기서는 Prisma 를 그 계약에 끼워 넣기만 한다. fixture 는 같은 함수를 돌린다.
  */
-const reviewedAt = new Date()
-const res = await prisma.originalPostApprovalQueue.updateMany({
-  where: {
-    id: target.id,
-    // 🔴 **읽었을 때의 그 status** 다 — 그 사이 바뀌었으면 0건이 된다
-    status: rawById.get(target.id)!.status,
-    createdPostId: null,
-    decidedBy: before.decidedBy,
-    updatedAt: before.updatedAt,
-  },
-  data: { decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt },
-})
-if (res.count !== 1) {
-  await prisma.$disconnect()
-  fail('검토한 뒤 그 사이에 후보가 바뀌었습니다(상태 · 본문 · 승인 표시 중 하나).'
-    + ' 아무것도 바꾸지 않았습니다 — 다시 읽고 검토해 주세요.')
-}
+const SELECT = {
+  status: true, createdPostId: true, decidedBy: true, decidedAt: true, updatedAt: true,
+  draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+  promptVersion: true, model: true, gateResults: true,
+} as const
 
-/**
- * 🔴 **쓴 뒤에 다시 읽어 대조한다.** 조건부 UPDATE 가 통과했다는 것과
- *    "내가 읽은 그 글이 그대로다" 는 다른 말이다 — 발행 문안까지 눈으로 확인한다.
- */
-const back = await prisma.originalPostApprovalQueue.findUnique({
-  where: { id: target.id },
-  select: {
-    status: true, createdPostId: true, decidedBy: true, decidedAt: true, updatedAt: true,
-    draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-    promptVersion: true, model: true, gateResults: true,
+const reviewedAt = new Date()
+const verdict = await completeReview({
+  id: target.id, before, decidedBy: MACHINE_REVIEWED_BY, now: reviewedAt,
+  store: {
+    transaction: async (fn) => prisma.$transaction(async (tx) => fn({
+      read: async (id) => {
+        const r = await tx.originalPostApprovalQueue.findUnique({ where: { id }, select: SELECT })
+        return r === null ? null : {
+          status: r.status, createdPostId: r.createdPostId, decidedBy: r.decidedBy,
+          updatedAt: r.updatedAt, decidedAt: r.decidedAt,
+          title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
+          promptVersion: r.promptVersion, model: r.model, gateResults: r.gateResults,
+        }
+      },
+      /** 🔴 조건부 기록 — `updatedAt` 이 다르면 0건이 되어 그대로 되돌아간다 */
+      stamp: async (i) => (await tx.originalPostApprovalQueue.updateMany({
+        where: {
+          id: i.id,
+          // 🔴 읽었을 때의 그 status — 그 사이 바뀌었으면 0건이 된다
+          status: rawById.get(i.id)!.status,
+          createdPostId: null,
+          decidedBy: i.where.decidedBy, updatedAt: i.where.updatedAt,
+        },
+        data: { decidedBy: i.decidedBy, decidedAt: i.decidedAt },
+      })).count,
+    })),
   },
 })
-if (back === null) { await prisma.$disconnect(); fail('쓴 뒤 다시 읽지 못했습니다.') }
-const after: ReviewSnapshot = {
-  status: back.status, createdPostId: back.createdPostId, decidedBy: back.decidedBy,
-  updatedAt: back.updatedAt,
-  title: back.editedTitle ?? back.draftTitle, body: back.editedBody ?? back.draftBody,
-  promptVersion: back.promptVersion, model: back.model, gateResults: back.gateResults,
+
+if (!verdict.ok) {
+  await prisma.$disconnect()
+  fail(`${verdict.reason}\n     🔴 아무것도 바꾸지 않았습니다 — 다시 읽고 검토해 주세요.`)
 }
-// 🔴 `decidedBy`·`decidedAt` 은 바뀌라고 쓴 칸이라 이 대조에 넣지 않는다
-const snap = judgeReviewSnapshot(before, after)
-const stampOk = back.decidedBy === MACHINE_REVIEWED_BY
-  && back.decidedAt !== null && back.decidedAt.getTime() === reviewedAt.getTime()
 
 console.log(`\n✅ 검토 완료 — ${target.id}`)
-console.log(`   decidedBy → ${back.decidedBy} · decidedAt → ${kst(back.decidedAt)}`)
+console.log(`   decidedBy → ${MACHINE_REVIEWED_BY} · decidedAt → ${kst(reviewedAt)}`)
 console.log(`     (옛 값: ${target.decidedBy ?? '(없음)'} · ${kst(target.decidedAt)} — 🔴 기계 적재 시각이었다)`)
-console.log(`   status ${back.status} (그대로) · createdPostId ${back.createdPostId ?? 'null'}`)
-console.log(`   검토한 글과 동일 ${snap.ok ? '🟢 확인' : `🔴 어긋남 — ${snap.changed.join(' · ')}`}`)
-console.log(`   검토 표시 기록 ${stampOk ? '🟢 확인' : '🔴 어긋남'}`)
+console.log('   🔴 검증과 기록이 한 트랜잭션 안에서 끝났습니다 —'
+  + ' 어긋났으면 도장도 남지 않습니다')
 console.log('   🔴 본문 · 제목 · status · gateResults · Post · Comment · Persona 는 바뀌지 않았습니다\n')
 await prisma.$disconnect()
-process.exit(snap.ok && stampOk ? 0 : 1)
+process.exit(0)
