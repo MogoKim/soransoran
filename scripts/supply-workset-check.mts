@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 
 import {
   baseIdOf, judgeStageBudget, readWorkset, selectWorkset, terminalSourceIds,
+  type PriorArtifact, type PriorJudgement,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
   WORKSET_VERSION, worksetFileName, type WorksetRow,
 } from '../src/lib/supply-workset'
@@ -19,7 +20,9 @@ import {
   ledgerRunIdOf, planBoundedCommonPhase, planCommonPhase, type Pending,
 } from '../src/lib/supply-process'
 import { mergeJudgeRows, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
-import { artifactRetryable } from '../src/lib/content-core/review'
+import {
+  artifactRetryable, INCOMPLETE_LABEL, RETRYABLE_REASONS,
+} from '../src/lib/content-core/review'
 
 let pass = 0
 let fail = 0
@@ -332,6 +335,117 @@ console.log('\n⑧ 🔴 한 원천이 막혀도 다음 원천은 간다 · 실�
     return !/prisma\.post\.(create|update|delete)/.test(runner)
       && /HUMAN_ONLY_VALUES/.test(fillSrc)
   })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 🔴 🔴 terminal 은 지금 입력·지금 판의 최신 결과 하나다 (2026-09-20)')
+// ─────────────────────────────────────────────────────────
+{
+  const CANON = {
+    ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2c',
+    judgeModel: 'claude-haiku-4.5', artifactVersion: 'human-review-v7',
+  }
+  const CUR = [{ sourceArticleId: 's1', inputHash: 'h1' }]
+  const J = (o: Partial<PriorJudgement> & { order: string }): PriorJudgement => ({
+    sourceArticleId: 's1', inputHash: 'h1',
+    ruleVersion: CANON.ruleVersion, promptVersion: CANON.promptVersion, model: CANON.judgeModel,
+    decision: 'AUTO_HOLD', semanticStatus: 'ok', ...o,
+  })
+  const A = (o: Partial<PriorArtifact> & { order: string }): PriorArtifact => ({
+    sourceArticleId: 's1', artifactVersion: CANON.artifactVersion,
+    outcome: 'hold', retryable: false, ...o,
+  })
+  const T = (j: PriorJudgement[], a: PriorArtifact[] = []): Set<string> =>
+    terminalSourceIds({ current: CUR, judgements: j, artifacts: a, canon: CANON })
+
+  check('🔴 정상으로 끝난 HOLD 는 terminal 이다', T([J({ order: '1' })]).has('s1'))
+  check('🔴 🔴 **옛 HOLD 뒤 최신 SEED 면 terminal 이 아니다**',
+    !T([J({ order: '1' }), J({ order: '2', decision: 'AUTO_SEED' })]).has('s1'))
+  check('🔴 🔴 **옛 hard HOLD 뒤 최신 재시도 실패면 terminal 이 아니다**',
+    !T([J({ order: '1' }), J({ order: '2', semanticStatus: 'timeout' })]).has('s1'))
+  check('🔴 순서가 거꾸로 와도 최신이 이긴다',
+    !T([J({ order: '2', decision: 'AUTO_SEED' }), J({ order: '1' })]).has('s1'))
+
+  // ── 지금 입력·지금 판이 아니면 보지 않는다 ──
+  check('🔴 🔴 **입력 지문이 바뀌면 옛 결론을 쓰지 않는다**',
+    !T([J({ order: '1', inputHash: 'old' })]).has('s1'))
+  for (const [name, patch] of [
+    ['규칙 판', { ruleVersion: 'auto-judge-v2' }],
+    ['프롬프트 판', { promptVersion: 'semantic-shadow-v2' }],
+    ['모델', { model: 'other-model' }],
+  ] as const) {
+    check(`🔴 🔴 **${name}이 바뀌면 다시 평가할 수 있다**`,
+      !T([J({ order: '1', ...patch })]).has('s1'))
+  }
+  check('🔴 지금 고르지 않는 원천은 세지 않는다',
+    T([J({ order: '1', sourceArticleId: 'other' })]).size === 0)
+
+  // ── 생성 쪽 ──
+  check('🔴 완주 뒤 확정 HOLD 는 terminal 이다', T([], [A({ order: '3' })]).has('s1'))
+  check('🔴 🔴 **재시도 대상 artifact 는 terminal 이 아니다**',
+    !T([], [A({ order: '3', retryable: true })]).has('s1'))
+  check('🔴 artifact 판이 바뀌면 보지 않는다',
+    !T([], [A({ order: '3', artifactVersion: 'human-review-v6' })]).has('s1'))
+  check('🔴 adopt 는 terminal 이 아니다 — 후보가 됐고 큐 형제로 걸린다',
+    !T([], [A({ order: '3', outcome: 'adopt' })]).has('s1'))
+  check('🔴 🔴 **판정 HOLD 뒤 생성이 재시도 대상이면 최신이 이긴다**',
+    !T([J({ order: '1' })], [A({ order: '2', retryable: true })]).has('s1'))
+
+  // ── 재시도 사유 어휘 ──
+  check('🔴 🔴 **재시도 사유 다섯 가지**',
+    RETRYABLE_REASONS.join(',') === 'truncated,noResponse,parseFailed,usageUnknown,budgetBlocked')
+  for (const r of RETRYABLE_REASONS) {
+    check(`🔴 ${r} 는 재시도다`,
+      artifactRetryable({ semanticCompletion: { complete: false, reason: r } }))
+  }
+  check('🔴 🔴 **notRun 은 원인으로 가른다 — 예산이면 재시도**',
+    artifactRetryable({
+      semanticCompletion: { complete: false, reason: 'notRun' },
+      machineReason: `화자 계획을 완주하지 못했다 (${INCOMPLETE_LABEL.budgetBlocked})`,
+    }))
+  check('🔴 🔴 **notRun 이라도 자격 실패면 결론이다**',
+    !artifactRetryable({
+      semanticCompletion: { complete: false, reason: 'notRun' },
+      machineReason: '1인칭 허가 실패 — 그 사람의 카드가 이 값을 충족하지 않는다',
+    }))
+  check('🔴 🔴 **잘림도 원인 문구로 잡는다**',
+    artifactRetryable({
+      semanticCompletion: { complete: false, reason: 'notRun' },
+      machineReason: `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL.truncated})`,
+    }))
+  check('🔴 완주한 확정 HOLD 는 재시도가 아니다',
+    !artifactRetryable({ semanticCompletion: { complete: true, reason: null }, machineReason: '생활사 모순 work' }))
+  check('🔴 읽지 못한 것은 결론으로 보지 않는다', artifactRetryable(null))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑨ 🔴 버퍼가 차 있거나 고를 것이 0건이면 정상 종료다')
+// ─────────────────────────────────────────────────────────
+{
+  const pending: Pending = {
+    rawCafe: {}, thin: {}, detail: ['a.detail.jsonl'], shadow: [], candidates: [],
+  }
+  const gate = { kind: 'ready' as const, snapshotPath: '/d/s.json', runId: RUN }
+  const ws = {
+    manifestPath: '/d/w.json', shadowPath: '/d/s.shadow.jsonl',
+    candidatesPath: '/d/c.json', limit: 5, perStage: { judge: 5, draft: 15 },
+  }
+  check('🔴 🔴 **모델 단계가 꺼져 있으면 계획이 비어 있다**',
+    planBoundedCommonPhase(pending, { llm: false, fill: false, upTo: 0, reason: '재고 충분' }, gate, ws)
+      .length === 0)
+
+  const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+  check('🔴 🔴 **버퍼 충족은 실패가 아니다 — done 으로 끝낸다**',
+    /if \(!policy\.llm\) \{[\s\S]{0,200}모델 단계 없음/.test(runner)
+    && !/if \(!policy\.llm\)[\s\S]{0,200}return 1/.test(runner))
+  check('🔴 🔴 **고를 원천이 0건이면 정상 no-op 이다**',
+    /worksetEmpty[\s\S]{0,160}정상 no-op/.test(runner))
+  check('🔴 🔴 **빈 묶음으로 manifest 를 쓰지 않는다**',
+    /if \(plan\.picked\.length === 0\) \{[\s\S]{0,140}worksetEmpty = true/.test(runner))
+  check('🔴 🔴 **못 만든 회차만 실패다**',
+    /} else \{[\s\S]{0,160}작업 묶음을 만들지 못했다[\s\S]{0,160}return 1/.test(runner))
+  check('🔴 묶음이 없으면 공통 단계 계획이 비어 있다',
+    /const common = workset === undefined\s*\n\s*\? \[\]/.test(runner))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

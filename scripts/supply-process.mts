@@ -53,9 +53,15 @@ import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-que
 /** 🔴 작업 묶음 정본 — 모양·상한·선택 규칙은 전부 저기 하나에 있다 */
 import {
   judgeStageBudget, selectWorkset, terminalSourceIds, worksetFileName,
-  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL, type WorksetRow,
+  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL,
+  type PriorArtifact, type PriorJudgement, type WorksetRow,
 } from '../src/lib/supply-workset'
-import { mergeJudgeRows } from '../src/lib/micro-seed-auto-judge'
+import {
+  inputHashOf, mergeJudgeRows, PROMPT_VERSION, RULE_VERSION,
+} from '../src/lib/micro-seed-auto-judge'
+import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
+/** 🔴 판정 모델 이름 — 판정 러너가 쓰는 그 값이다 */
+import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
 import { artifactRetryable } from '../src/lib/content-core/review'
 import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
@@ -122,12 +128,14 @@ function worksetRows(paths: readonly string[]): WorksetRow[] | null {
 
 /**
  * 🔴 **앞 회차가 끝낸 원천** — 판정 파일과 artifact 에서 모은다. 새 파일을 만들지 않는다.
- *    예산·상한에 막힌 것은 재시도 대상이라 빼지 않는다.
+ *
+ * 🔴 **합집합이 아니다.** 지금 입력 지문·지금 판에 해당하는 것만 보고, 원천마다
+ *    **가장 최신** 결과 하나로 판정한다. 파일 이름(회차 시각)이 곧 순서다.
  */
-function terminalIds(): Set<string> {
-  const judgements: { sourceArticleId: string; decision: string; semanticStatus: string }[] = []
-  const artifacts: { sourceArticleId: string; retryable: boolean; outcome: string }[] = []
-  for (const f of readdirSync(DATA_DIR)) {
+function terminalIds(rows: readonly WorksetRow[]): Set<string> {
+  const judgements: PriorJudgement[] = []
+  const artifacts: PriorArtifact[] = []
+  for (const f of readdirSync(DATA_DIR).sort()) {
     if (f.endsWith('.shadow.jsonl')) {
       let raw: string
       try { raw = readFileSync(join(DATA_DIR, f), 'utf-8') } catch { continue }
@@ -138,29 +146,46 @@ function terminalIds(): Set<string> {
           const j = JSON.parse(t) as Record<string, unknown>
           judgements.push({
             sourceArticleId: String(j.sourceArticleId ?? ''),
+            inputHash: String(j.inputHash ?? ''),
+            ruleVersion: String(j.ruleVersion ?? ''),
+            promptVersion: String(j.promptVersion ?? ''),
+            model: String(j.model ?? ''),
             decision: String(j.decision ?? ''),
             semanticStatus: String(j.semanticStatus ?? ''),
+            order: f,
           })
-        } catch { /* 못 읽는 줄은 건너뛴다 — 끝난 것으로 세지 않는 쪽이 안전하다 */ }
+        } catch { /* 못 읽는 줄은 끝난 것으로 세지 않는다 */ }
       }
       continue
     }
     if (!/^auto-draft-.*\.artifacts\.json$/.test(f)) continue
     try {
-      const rows = JSON.parse(readFileSync(join(DATA_DIR, f), 'utf-8')) as unknown
-      if (!Array.isArray(rows)) continue
-      for (const a of rows) {
+      const rows2 = JSON.parse(readFileSync(join(DATA_DIR, f), 'utf-8')) as unknown
+      if (!Array.isArray(rows2)) continue
+      for (const a of rows2) {
         const o = a as Record<string, unknown>
         const rv = (o.review ?? {}) as Record<string, unknown>
         artifacts.push({
           sourceArticleId: String(o.sourceArticleId ?? ''),
+          artifactVersion: String(o.artifactVersion ?? ''),
           outcome: String(rv.machineOutcome ?? ''),
           retryable: artifactRetryable(rv),
+          order: f,
         })
       }
     } catch { /* 같은 이유로 건너뛴다 */ }
   }
-  return terminalSourceIds({ judgements, artifacts })
+  return terminalSourceIds({
+    // 🔴 지금 입력의 지문 — 판정기와 **같은 함수**로 만든다
+    current: rows.map((r) => ({
+      sourceArticleId: r.sourceArticleId, inputHash: inputHashOf(r.input),
+    })),
+    judgements, artifacts,
+    canon: {
+      ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION,
+      judgeModel: JUDGE_MODEL_NAME, artifactVersion: ARTIFACT_VERSION,
+    },
+  })
 }
 
 /** 🔴 사람이 이미 판정한 원천 — 판정기와 **같은 파일들**을 본다 */
@@ -567,6 +592,8 @@ async function main(): Promise<number> {
   }
 
   let workset: WorksetGate | undefined
+  /** 🔴 고를 원천이 0건이었는가 — "못 만들었다" 와 구분한다 */
+  let worksetEmpty = false
   if (snapOk && policy.llm) {
     const rows = worksetRows(after1.detail.map((f) => join(DATA_DIR, f)))
     if (rows === null) {
@@ -574,13 +601,18 @@ async function main(): Promise<number> {
       return 1
     }
     const plan = selectWorkset({
-      rows, humanDecided: humanDecidedIds(), queuePending, terminal: terminalIds(),
+      rows, humanDecided: humanDecidedIds(), queuePending, terminal: terminalIds(rows),
       limit: WORKSET_LIMIT, runId, takenAt: new Date(),
     })
-    writeAtomic(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`)
-    workset = {
-      manifestPath: wsPath, shadowPath, candidatesPath: candPath,
-      limit: WORKSET_LIMIT, perStage: budget.perStage,
+    if (plan.picked.length === 0) {
+      // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
+      worksetEmpty = true
+    } else {
+      writeAtomic(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`)
+      workset = {
+        manifestPath: wsPath, shadowPath, candidatesPath: candPath,
+        limit: WORKSET_LIMIT, perStage: budget.perStage,
+      }
     }
     console.log(`   🔴 작업 묶음 ${plan.picked.length}건 / 상한 ${WORKSET_LIMIT} — ${wsPath}`)
     console.log(`      단계 상한  judge ${budget.perStage.judge}회 · draft ${budget.perStage.draft}회`
@@ -599,17 +631,31 @@ async function main(): Promise<number> {
    * 🔴 **묶음 없이 live 를 돌리지 않는다** (2026-09-20 보정).
    *    앞판은 `workset` 이 `undefined` 면 옛 전체 스캔으로 넘어갔다 —
    *    그것이 canary 에서 backlog 609건을 판정하게 만든 길이다.
+   *
+   * 🔴 **다만 "없는 것"과 "못 만든 것"은 다르다.**
+   *    · 버퍼가 차서 모델 단계 자체가 없는 회차 → **정상 done** (파일 단계까지 끝)
+   *    · 고를 원천이 0건인 회차 → **정상 no-op done** (judge·draft·fill 0회)
+   *    · 스냅샷·입력을 못 읽어 만들지 못한 회차 → 🔴 **실패**
    */
   if (workset === undefined) {
-    console.error('\n🔴 중단: 작업 묶음을 만들지 못했다 — judge · draft · fill 0회\n')
-    record.status = 'failed'
-    record.completedAt = nowIso()
-    save()
-    return 1
+    if (!policy.llm) {
+      // 🔴 재고가 차 있다 — 모델을 부를 이유가 없다. 실패가 아니다
+      console.log(`\n   🟢 모델 단계 없음 — ${policy.reason}. 파일 단계까지 끝냈다`)
+    } else if (worksetEmpty) {
+      console.log('\n   🟢 고를 원천이 0건이다 — judge · draft · fill 0회 (정상 no-op)')
+    } else {
+      console.error('\n🔴 중단: 작업 묶음을 만들지 못했다 — judge · draft · fill 0회\n')
+      record.status = 'failed'
+      record.completedAt = nowIso()
+      save()
+      return 1
+    }
   }
-  const common = planBoundedCommonPhase(after1, policy, {
-    kind: 'ready', snapshotPath: snapPath, runId,
-  }, workset)
+  const common = workset === undefined
+    ? []
+    : planBoundedCommonPhase(after1, policy, {
+      kind: 'ready', snapshotPath: snapPath, runId,
+    }, workset)
   /**
    * 🔴 **스냅샷을 두 번 뜬다** (2026-09-20).
    *    ① 묶음을 고르기 전 — 같은 원문의 형제를 **AI 호출 전에** 빼려면 필요하다

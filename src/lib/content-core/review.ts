@@ -242,20 +242,35 @@ export type MachineOutcome = 'adopt' | 'hold' | 'drop'
  * 🔴 adopt 는 **후보로 보낸다**는 뜻일 뿐이다. 사람 검토 없는 발행은 그대로 막혀 있다.
  */
 /**
- * 🔴 **이 회차 결과를 다시 시도해야 하는가.** 예산·상한에 막힌 것만 재시도 대상이다 —
- *    결론이 아니라 "묻지 못했다" 이기 때문이다.
- *    🔴 공급 회차가 다음 묶음을 고를 때 이것으로 가른다. 낱말을 직접 비교하지 않는다.
+ * 🔴 **다시 물어보면 답이 달라질 수 있는 사유들.** 결론이 아니라 "못 물어봤다" 이다.
+ *    🔴 `notRun` 은 **여기 없다** — 앞 단계가 왜 멈췄는지에 따라 갈린다.
+ *       사유 문구(`machineReason`)에 아래 낱말이 있으면 일시 실패다.
+ */
+export const RETRYABLE_REASONS = [
+  'truncated', 'noResponse', 'parseFailed', 'usageUnknown', 'budgetBlocked',
+] as const satisfies readonly NonNullable<ReviewCompletion['reason']>[]
+
+/**
+ * 🔴 **이 회차 결과를 다시 시도해야 하는가.**
+ *
+ *    잘림 · 무응답 · 파싱 실패 · 사용량 미상 · 예산 차단 · 정산 미완료는 **재시도**다.
+ *    deterministic hard HOLD 와 완주 뒤 확정 HOLD 는 **결론**이다 — 다시 물어도 같다.
+ *
+ * 🔴 `notRun` 하나로는 가를 수 없다. 앞 단계가 **예산에 막혀** 멈췄으면 재시도이고,
+ *    **화자 자격이 없어** 멈췄으면 결론이다. 그 차이는 `machineReason` 이 말한다.
  */
 export function artifactRetryable(review: {
   semanticCompletion?: { complete?: boolean; reason?: string | null } | null
   machineReason?: string
 } | null | undefined): boolean {
+  // 🔴 읽지 못한 것은 결론으로 보지 않는다 — 다음 회차가 다시 본다
   if (review === null || review === undefined) return true
   const reason = review.semanticCompletion?.reason ?? null
-  if (reason === 'budgetBlocked') return true
-  // 🔴 앞 단계가 막혀 검수를 못 부른 경우도 사유 문구로 드러난다
-  return typeof review.machineReason === 'string'
-    && review.machineReason.includes(INCOMPLETE_LABEL.budgetBlocked)
+  if (reason !== null && (RETRYABLE_REASONS as readonly string[]).includes(reason)) return true
+  const why = typeof review.machineReason === 'string' ? review.machineReason : ''
+  if (why === '') return false
+  // 🔴 낱말을 직접 적지 않는다 — 정본 라벨과 대조한다
+  return RETRYABLE_REASONS.some((r) => why.includes(INCOMPLETE_LABEL[r]))
 }
 
 export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource'] as const

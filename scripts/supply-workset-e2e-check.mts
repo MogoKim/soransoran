@@ -16,7 +16,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
-import { SEED_AXIS, mergeJudgeRows } from '../src/lib/micro-seed-auto-judge'
+import {
+  SEED_AXIS, inputHashOf, mergeJudgeRows, PROMPT_VERSION, RULE_VERSION,
+} from '../src/lib/micro-seed-auto-judge'
+import { JUDGE_MODEL } from './micro-seed-auto-judge.mjs'
+import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 import {
   judgeStageBudget, selectWorkset, terminalSourceIds, worksetFileName, type WorksetRow,
 } from '../src/lib/supply-workset'
@@ -268,19 +272,27 @@ console.log('\n③ 🔴 🔴 두 회차 연속 — 앞 회차가 끝낸 것이 �
 // ─────────────────────────────────────────────────────────
 {
   const rows = rowsOf(w.dd)
-  /**
-   * 🔴 **1회차가 terminal 로 끝난 상황을 세운다.** 판정이 정상으로 끝났는데
-   *    HOLD/DROP 이면 다시 물어도 같은 답이다 — 다음 회차의 상위 자리를 비켜야 한다.
-   *    🔴 무의미한 통과를 막으려고 terminal 이 **비어 있지 않은지 먼저 본다.**
-   */
+  const CANON = {
+    ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION,
+    judgeModel: JUDGE_MODEL, artifactVersion: ARTIFACT_VERSION,
+  }
+  /** 🔴 지금 입력의 지문 — 판정기와 **같은 함수**로 만든다 */
+  const current = rows.map((r) => ({
+    sourceArticleId: r.sourceArticleId, inputHash: inputHashOf(r.input),
+  }))
+  const hashOf = new Map(current.map((c) => [c.sourceArticleId, c.inputHash]))
   const firstIds = ['e0', 'e1', 'e2', 'e3', 'e4']
+  const judged = (ids: readonly string[], o: {
+    order: string; decision?: string; semanticStatus?: string; inputHash?: string
+  }) => ids.map((id) => ({
+    sourceArticleId: id, inputHash: o.inputHash ?? hashOf.get(id) ?? '',
+    ruleVersion: CANON.ruleVersion, promptVersion: CANON.promptVersion, model: CANON.judgeModel,
+    decision: o.decision ?? 'AUTO_HOLD', semanticStatus: o.semanticStatus ?? 'ok', order: o.order,
+  }))
+
   const terminal = terminalSourceIds({
-    judgements: firstIds.map((id, i) => ({
-      sourceArticleId: id,
-      decision: i % 2 === 0 ? 'AUTO_HOLD' : 'AUTO_DROP',
-      semanticStatus: 'ok',
-    })),
-    artifacts: [],
+    current, judgements: judged(firstIds, { order: 'auto-judge-1.shadow.jsonl' }),
+    artifacts: [], canon: CANON,
   })
   check('🔴 terminal 집합이 비어 있지 않다 — 이 시험이 헛돌지 않는다',
     terminal.size === 5, `${terminal.size}건`)
@@ -295,12 +307,11 @@ console.log('\n③ 🔴 🔴 두 회차 연속 — 앞 회차가 끝낸 것이 �
     second.workset.sourceIds.join(',') === 'e5,e6,e7', second.workset.sourceIds.join(','))
   check('🔴 1회차가 끝낸 5건은 제외 사유로 세어진다', second.dropped.terminal === 5)
 
-  /** 🔴 3회차 — 남은 것도 끝나면 고를 것이 없다. 같은 것을 다시 돌지 않는다 */
+  /** 🔴 3회차 — 남은 것도 끝나면 고를 것이 0건이다 */
   const allDone = terminalSourceIds({
-    judgements: rows.map((r) => ({
-      sourceArticleId: r.sourceArticleId, decision: 'AUTO_HOLD', semanticStatus: 'ok',
-    })),
-    artifacts: [],
+    current,
+    judgements: judged(rows.map((r) => r.sourceArticleId), { order: 'auto-judge-2.shadow.jsonl' }),
+    artifacts: [], canon: CANON,
   })
   const third = selectWorkset({
     rows, humanDecided: new Set(), queuePending: new Set(), terminal: allDone,
@@ -309,25 +320,45 @@ console.log('\n③ 🔴 🔴 두 회차 연속 — 앞 회차가 끝낸 것이 �
   check('🔴 🔴 **전부 끝나면 고를 것이 0건이다** — 같은 것을 되풀이하지 않는다',
     third.picked.length === 0 && third.deferred === 0)
 
-  check('🔴 🔴 **재시도해야 하는 것은 영구 제외하지 않는다**', (() => {
-    const retryTerminal = terminalSourceIds({
-      // 🔴 물어보지 못한 판정 · 예산에 막힌 생성 — 둘 다 결론이 아니다
-      judgements: [{ sourceArticleId: 'r1', decision: 'AUTO_HOLD', semanticStatus: 'truncated' }],
-      artifacts: [{ sourceArticleId: 'r2', outcome: 'hold', retryable: true }],
-    })
-    return retryTerminal.size === 0
-  })())
-  check('🔴 🔴 **생성이 끝까지 가서 막힌 것은 terminal 이다**', (() => {
-    const t = terminalSourceIds({
-      judgements: [],
-      artifacts: [{ sourceArticleId: 'h1', outcome: 'hold', retryable: false }],
-    })
-    return t.has('h1')
-  })())
-  check('🔴 🔴 **artifactRetryable 은 예산 사유만 재시도로 본다**',
-    artifactRetryable({ semanticCompletion: { complete: false, reason: 'budgetBlocked' } })
-    && !artifactRetryable({ semanticCompletion: { complete: true, reason: null } })
-    && !artifactRetryable({ semanticCompletion: { complete: false, reason: 'truncated' } }))
+  /** 🔴 4회차 — 그 뒤에 재시도 결과가 나오면 옛 terminal 이 남지 않는다 */
+  const afterRetry = terminalSourceIds({
+    current,
+    judgements: [
+      ...judged(firstIds, { order: 'auto-judge-1.shadow.jsonl' }),
+      // 🔴 더 최신 회차에서 **물어보지 못했다** — 결론이 아니다
+      ...judged(['e0'], { order: 'auto-judge-3.shadow.jsonl', semanticStatus: 'timeout' }),
+    ],
+    artifacts: [], canon: CANON,
+  })
+  check('🔴 🔴 **최신 재시도 결과가 옛 terminal 을 지운다**',
+    !afterRetry.has('e0') && afterRetry.has('e1'), [...afterRetry].join(','))
+
+  /** 🔴 입력이 바뀌면 다시 평가할 수 있다 */
+  const changed = terminalSourceIds({
+    current,
+    judgements: judged(firstIds, { order: 'auto-judge-1.shadow.jsonl', inputHash: '옛지문' }),
+    artifacts: [], canon: CANON,
+  })
+  check('🔴 🔴 **입력 지문이 다르면 옛 결론을 쓰지 않는다**', changed.size === 0)
+
+  /** 🔴 실제 artifact 파일로도 확인한다 — 1회차 draft 가 남긴 것 */
+  const artFiles = readdirSync(w.dd).filter((f) => /\.artifacts\.json$/.test(f)).sort()
+  check('🔴 1회차 draft 가 artifact 를 남겼다', artFiles.length === 1, artFiles.join(','))
+  const arts = artFiles.flatMap((f) =>
+    (JSON.parse(readFileSync(join(w.dd, f), 'utf-8')) as Record<string, unknown>[]).map((a) => {
+      const rv = (a.review ?? {}) as Record<string, unknown>
+      return {
+        sourceArticleId: String(a.sourceArticleId ?? ''),
+        artifactVersion: String(a.artifactVersion ?? ''),
+        outcome: String(rv.machineOutcome ?? ''),
+        retryable: artifactRetryable(rv), order: f,
+      }
+    }))
+  check('🔴 🔴 **artifact 판이 지금 판과 같다**',
+    arts.length > 0 && arts.every((a) => a.artifactVersion === ARTIFACT_VERSION),
+    [...new Set(arts.map((a) => a.artifactVersion))].join(','))
+  check('🔴 🔴 **재시도 판정이 실제 artifact 에서도 돈다**',
+    arts.every((a) => typeof a.retryable === 'boolean'))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

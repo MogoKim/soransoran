@@ -88,38 +88,91 @@ export type WorksetPlan = {
   deferred: number
 }
 
+/** 🔴 판정 한 줄이 **지금 계약에 해당하는가**를 가리는 값들 */
+export type PriorJudgement = {
+  sourceArticleId: string
+  /** 그때 본 입력의 지문 — 지금 입력과 다르면 지난 결론이 아니다 */
+  inputHash: string
+  ruleVersion: string
+  promptVersion: string
+  model: string
+  decision: string
+  semanticStatus: string
+  /** 🔴 최신을 가리는 값 — 파일 이름(회차 시각) 순서를 그대로 쓴다 */
+  order: string
+}
+
+export type PriorArtifact = {
+  sourceArticleId: string
+  artifactVersion: string
+  outcome: string
+  /** 🔴 `artifactRetryable` 이 판정한 값을 그대로 받는다 */
+  retryable: boolean
+  order: string
+}
+
+/** 🔴 지금 판의 이름들 — 여기서 상수를 적지 않고 부르는 쪽이 정본을 넘긴다 */
+export type WorksetCanon = {
+  ruleVersion: string
+  promptVersion: string
+  judgeModel: string
+  artifactVersion: string
+}
+
 /**
- * 🔴 **앞 회차가 끝낸 원천을 모은다.** 판정 파일과 artifact — **이미 있는 계약**만 읽는다.
- *    새 checkpoint 파일을 만들지 않는다.
+ * 🔴 **앞 회차가 끝낸 원천을 모은다** — 과거 파일 전체의 **합집합이 아니다**.
  *
- * 🔴 **재시도해야 하는 것은 빼지 않는다**:
- *    · 판정이 정상으로 끝나지 않은 것(`semanticStatus !== 'ok'`) — 물어보지 못한 것이다
- *    · 생성이 예산·상한에 막힌 것 — 돈이 모자랐을 뿐 결론이 아니다
+ * 🔴 **세 가지를 지킨다** (2026-09-20 보정):
+ *    ① **지금 입력·지금 판**에 해당하는 결과만 본다. 입력 지문이나 판이 바뀌면
+ *       지난 결론은 이 원천에 대한 결론이 아니다 — 다시 평가할 수 있어야 한다.
+ *    ② **최신이 이긴다.** 옛 HOLD 뒤에 새 SEED 가 있으면 terminal 이 아니다.
+ *    ③ **재시도 결과가 나오면 옛 terminal 이 남지 않는다.** 못 물어본 것은 결론이 아니다.
+ *
+ * 🔴 판정 쪽은 **judge 캐시와 같은 네 칸**(입력 지문·규칙·프롬프트·모델)으로 거른다 —
+ *    그 계약이 이미 판을 담고 있다. 여기서 새 checkpoint 를 만들지 않는다.
  */
 export function terminalSourceIds(input: {
-  /** 지난 회차들의 판정 줄 */
-  judgements: readonly { sourceArticleId: string; decision: string; semanticStatus: string }[]
-  /** 지난 회차들의 artifact */
-  artifacts: readonly { sourceArticleId: string; retryable: boolean; outcome: string }[]
+  /** 지금 고를 원천과 그 입력 지문 */
+  current: readonly { sourceArticleId: string; inputHash: string }[]
+  judgements: readonly PriorJudgement[]
+  artifacts: readonly PriorArtifact[]
+  canon: WorksetCanon
 }): Set<string> {
-  const out = new Set<string>()
+  const hashOf = new Map(input.current.map((c) => [S(c.sourceArticleId), S(c.inputHash)]))
+  /** 원천별 **가장 최신** 결과 하나 — 판정이든 생성이든 order 가 큰 쪽 */
+  const latest = new Map<string, { order: string; terminal: boolean }>()
+  const put = (id: string, order: string, terminal: boolean): void => {
+    const cur = latest.get(id)
+    if (cur === undefined || order >= cur.order) latest.set(id, { order, terminal })
+  }
+
   for (const j of input.judgements) {
     const id = S(j.sourceArticleId)
-    if (id === '') continue
-    // 🔴 물어보지 못한 판정은 결론이 아니다 — 다음 회차가 다시 묻는다
-    if (S(j.semanticStatus) !== 'ok') continue
-    if (S(j.decision) !== 'AUTO_SEED') out.add(id)
+    if (!hashOf.has(id)) continue
+    // ① 지금 입력·지금 판이 아니면 이 원천에 대한 결론이 아니다
+    if (S(j.inputHash) !== hashOf.get(id)) continue
+    if (S(j.ruleVersion) !== input.canon.ruleVersion) continue
+    if (S(j.promptVersion) !== input.canon.promptVersion) continue
+    if (S(j.model) !== input.canon.judgeModel) continue
+    // ③ 물어보지 못한 판정은 결론이 아니다 — 최신이면 옛 terminal 을 지운다
+    const terminal = S(j.semanticStatus) === 'ok' && S(j.decision) !== 'AUTO_SEED'
+    put(id, S(j.order), terminal)
   }
   for (const a of input.artifacts) {
     const id = S(a.sourceArticleId)
-    if (id === '' || a.retryable) continue
-    // 🔴 생성이 끝까지 가서 막힌 것만 — adopt 는 후보가 됐으니 큐 형제로 걸린다
-    if (a.outcome === 'hold' || a.outcome === 'drop') out.add(id)
+    if (!hashOf.has(id)) continue
+    if (S(a.artifactVersion) !== input.canon.artifactVersion) continue
+    // 🔴 adopt 는 후보가 됐으니 큐 형제로 걸린다 — 여기서 끝난 것으로 세지 않는다
+    const terminal = !a.retryable && (a.outcome === 'hold' || a.outcome === 'drop')
+    put(id, S(a.order), terminal)
   }
+
+  const out = new Set<string>()
+  for (const [id, v] of latest) if (v.terminal) out.add(id)
   return out
 }
 
-/** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 */
+/** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 *//** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 */
 export const baseIdOf = (id: string): string => id.split('#')[0] ?? id
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
