@@ -9,9 +9,13 @@
  * 🔴 **네트워크에 나가지 않는다.** 운영 코드는 한 줄도 바뀌지 않는다 —
  *    이 파일은 운영 경로에서 import 되지 않고, 테스트가 `--import` 로만 끼운다.
  *
- * 🔴 한 응답이 생성·품질·나이 세 파서를 **모두** 만족한다.
- *    `parseGen` 은 `drafts`, `parseQuality` 는 `decision`·`issues`·`harms`·`lifeConflict`,
- *    `parseAgeCheck` 는 `conflict` 를 본다 — 키가 겹치지 않아 한 객체에 담긴다.
+ * 🔴 **한 응답이 Content Core v2 세 파서를 모두 만족한다** (2026-09-20).
+ *    `parseSpeakerPlan` 은 `decision`·`personaCode`·`stance`·`selfBasis`,
+ *    `parseDraft` 는 `title`·`body`,
+ *    `parseSemanticReview` 는 `confidence`·`issues` 를 본다 — 키가 겹치지 않아 한 객체다.
+ *
+ * 🔴 **제공사가 둘이다.** Anthropic(`/messages`)과 Google(`:generateContent`)은
+ *    응답 모양도 usage 칸 이름도 다르다. 같은 내용을 **각 제공사 모양으로** 돌려준다.
  *
  * 🔴 Anthropic 은 assistant prefill `{` 를 쓰므로 **여는 중괄호 없이** 이어 쓴 모양을 돌려준다.
  *
@@ -38,22 +42,43 @@ const COUNT_TOKENS = Number(process.env.FAKE_PROVIDER_COUNT_TOKENS ?? '100')
 /** 🔴 응답이 신고할 출력 토큰 수 */
 const OUT_TOKENS = Number(process.env.FAKE_PROVIDER_OUTPUT_TOKENS ?? '22')
 
+/** 🔴 fixture 가 고르게 할 Persona — 없으면 계획이 unknownPersona 로 막힌다 */
+const PERSONA = process.env.FAKE_PROVIDER_PERSONA ?? 'P01'
+
 const PAYLOAD = {
-  drafts: [
-    { title: '가짜 초안 하나', body: '이건 fixture 가 만든 본문입니다. 충분히 길게 적어 둡니다.', intendedQuestion: '', sourceAngle: '' },
-    { title: '가짜 초안 둘', body: '두 번째 본문입니다. 서로 다른 말로 적어 둡니다.', intendedQuestion: '', sourceAngle: '' },
-  ],
-  decision: 'AUTO_ADOPT',
+  // ── speakerPlan ──
+  decision: 'ok',
+  personaCode: PERSONA,
+  stance: 'SELF_EXPERIENCE',
+  // 🔴 자격 근거가 필요 없는 보편 글로 선언한다 — 합성 원문에 생활사 요구가 없다
+  selfBasis: 'noLifeFactNeeded',
+  universalReason: 'fixture 합성 원문 — 특정 생활사 자격이 필요 없다',
+  speakerWarrants: [],
+  protectedFacts: [],
+  closingIntent: 'share',
+  contentRoles: ['conversationSpark'],
+  // ── draftGen ──
+  /**
+   * 🔴 **합성 원문과 겹치지 않는 낱말로만 채운다.** 짧은 초안은 조금만 겹쳐도
+   *    덮인 비율이 올라가 `copiedFromSource` 로 막힌다 — 그러면 fixture 가
+   *    배선이 아니라 제 문장을 시험하게 된다.
+   */
+  title: '오늘 있었던 작은 일',
+  body: '아침에 창문을 열어 두었더니 바람이 제법 선선하더라고요.\n'
+    + '다들 어떻게 지내시는지 궁금해서 한 줄 남겨 봅니다.',
+  // ── semanticReview ──
   confidence: 0.9,
-  harms: [],
   issues: [],
-  lifeConflict: { conflict: false, evidence: '' },
-  conflict: false,
-  evidence: '',
+  droppedFromSource: [],
+  unsupportedAdditions: [],
+  lifeContradictions: [],
+  note: '',
 }
 
-// 🔴 prefill 뒤를 이어 쓰는 모양 — 여는 `{` 를 뺀다
+// 🔴 prefill 뒤를 이어 쓰는 모양 — 여는 `{` 를 뺀다 (Anthropic 전용)
 const TEXT = JSON.stringify(PAYLOAD).slice(1)
+/** 🔴 Gemini 는 prefill 이 없다 — 완전한 JSON 을 돌려준다 */
+const GEMINI_TEXT = JSON.stringify(PAYLOAD)
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json' },
@@ -69,16 +94,20 @@ const BODY_LOG = process.env.FAKE_PROVIDER_BODY_LOG ?? ''
 
 globalThis.fetch = async (url, init) => {
   const u = String(url)
-  const isCount = u.includes('/count_tokens')
+  // 🔴 제공사마다 사전 계산 경로 이름이 다르다 — 둘 다 무료다
+  const isCount = u.includes('/count_tokens') || u.includes(':countTokens')
+  const isGemini = u.includes('generativelanguage.googleapis.com')
   if (LOG !== '') appendFileSync(LOG, `${isCount ? 'count' : 'paid'}\t${u}\n`)
   if (BODY_LOG !== '' && !isCount) {
-    // 🔴 한 줄 JSON 으로 남긴다 — 검사가 줄 단위로 읽는다
-    appendFileSync(BODY_LOG, `${String(init?.body ?? '{}')}\n`)
+    // 🔴 한 줄 JSON 으로 남긴다 — 검사가 줄 단위로 읽는다. url 을 함께 적어
+    //    어느 제공사로 갔는지 값으로 확인된다
+    appendFileSync(BODY_LOG, `${JSON.stringify({ url: u, body: String(init?.body ?? '{}') })}\n`)
   }
 
   if (isCount) {
     if (MODE === 'count-fail') return json({ error: 'fixture' }, 500)
-    return json({ input_tokens: COUNT_TOKENS })
+    // 🔴 Gemini 는 `totalTokens`, Anthropic 은 `input_tokens`
+    return isGemini ? json({ totalTokens: COUNT_TOKENS }) : json({ input_tokens: COUNT_TOKENS })
   }
 
   if (MODE === 'timeout') {
@@ -89,9 +118,23 @@ globalThis.fetch = async (url, init) => {
   }
   if (MODE === 'no-usage') {
     // 🔴 `usage` 자체가 없다. "0 토큰" 이 아니라 **모름**이어야 한다
-    return json({ content: [{ text: TEXT }], stop_reason: 'end_turn' })
+    return isGemini
+      ? json({ candidates: [{ content: { parts: [{ text: GEMINI_TEXT }] }, finishReason: 'STOP' }] })
+      : json({ content: [{ text: TEXT }], stop_reason: 'end_turn' })
   }
   const outTokens = MODE === 'over-reserve' ? OUT_TOKENS * 1000 : OUT_TOKENS
+  if (isGemini) {
+    /**
+     * 🔴 **thinking 토큰을 함께 신고한다** — 없으면 `usageKnown=false` 여야 한다.
+     *    `no-thoughts` 모드가 그 경로를 시험한다.
+     */
+    const usage = { promptTokenCount: 11, candidatesTokenCount: outTokens, totalTokenCount: 11 + outTokens }
+    if (MODE !== 'no-thoughts') usage.thoughtsTokenCount = Number(process.env.FAKE_PROVIDER_THOUGHTS ?? '7')
+    return json({
+      candidates: [{ content: { parts: [{ text: GEMINI_TEXT }] }, finishReason: 'STOP' }],
+      usageMetadata: usage,
+    })
+  }
   return json({
     content: [{ text: TEXT }],
     usage: { input_tokens: 11, output_tokens: outTokens },

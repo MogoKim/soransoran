@@ -57,8 +57,9 @@ const stripComments = (src: string): string =>
 
 let pass = 0
 let fail = 0
-const check = (n: string, ok: boolean): void => {
-  if (ok) { pass += 1; console.log(`  ✅ ${n}`) } else { fail += 1; console.log(`  🔴 FAIL ${n}`) }
+const check = (n: string, ok: boolean, extra = ''): void => {
+  if (ok) { pass += 1; console.log(`  ✅ ${n}`) }
+  else { fail += 1; console.log(`  🔴 FAIL ${n}${extra === '' ? '' : `\n${extra}`}`) }
 }
 
 console.log('\n══ 공급 AI 비용 장부 검사 (🔴 네트워크 0 · 실제 provider 0) ══\n')
@@ -662,10 +663,15 @@ console.log('\n⑧ 우회 금지 — 🔴 유료 요청이 지나는 문은 하�
       (src.match(/await ask\(/g) ?? []).length >= 2)
   }
   const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-  check('🔴 나이 검수도 회차 상한을 지난다 — 여기가 새던 자리다',
-    /ageCalls \+= 1[\s\S]{0,700}BUDGET\.take\(\)[\s\S]{0,400}await ask\(\s*'ageCheck'/.test(draft))
-  check('🔴 나이 검수를 종류별 집계에도 넣는다 — 관제가 못 보던 자리다',
-    /countCall\('ageCheck'\)/.test(draft))
+  /**
+   * 🔴 **별도 나이 검수는 없앴다** (2026-09-20, Content Core v2 전환).
+   *    나이·가족 모순은 통합 의미 검수의 `lifeContradictions` 가 같은 근거로 받는다.
+   *    🔴 대신 **v2 세 단계가 전부 상한과 집계를 지나는지** 본다 — 그것이 새던 자리다.
+   */
+  check('🔴 v2 세 단계가 전부 회차 상한을 지난다',
+    /const v2Ask: Ask = [\s\S]{0,400}BUDGET\.take\(\)[\s\S]{0,300}await ask\(/.test(draft))
+  check('🔴 v2 세 단계를 종류별 집계에도 넣는다 — 관제가 못 보던 자리다',
+    /countCall\(stage\)/.test(draft))
 
   // 🔴 사전 계산이 실제 요청과 **같은 것**을 센다 — 말이 아니라 조립부를 본다
   const countAt = provider.indexOf('export async function countInputTokens')
@@ -780,6 +786,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
           // 🔴 임시 HOME — 합성 말투 자산과 **임시 장부**가 여기 있다
           HOME: fakeHome,
           ANTHROPIC_API_KEY: 'fixture-fake-key',
+          // 🔴 v2 계획·생성은 Gemini 를 쓴다 — 키가 없으면 러너가 시작 전에 멈춘다
+          GEMINI_API_KEY: 'fixture-fake-gemini-key',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
           // 🔴 **시험 값이다. 운영 예산이 아니다** — 임시 환경에만 들어간다
@@ -801,7 +809,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
 
   // ⓐ 🔴 **충분한 여력 — 계산 → 예약 → 생성 → 정산이 끝까지 돈다**
   const ok = run(OPEN)
-  check('🔴 [L] 여력이 있으면 유료 요청이 실제로 나간다', ok.paid > 0 && ok.code === 0)
+  check('🔴 [L] 여력이 있으면 유료 요청이 실제로 나간다', ok.paid > 0 && ok.code === 0,
+    `paid=${ok.paid} code=${ok.code}\n${ok.out.slice(-2500)}`)
   check('🔴 [L] 유료 요청마다 **사전 계산이 먼저** 나간다', ok.counted >= ok.paid)
   check('🔴 [L] 장부에 유료 요청이 정산까지 기록된다',
     ok.entries.filter((e) => e.stage !== 'countTokens' && e.status === 'settled').length === ok.paid)
@@ -812,13 +821,34 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
   check('🔴 [L] 예약과 정산이 **같은 요청 id** 로 묶인다',
     ok.entries.filter((e) => e.stage !== 'countTokens')
       .every((e) => e.reservedUsd !== null && e.countedInputTokens !== null))
+  /**
+   * 🔴 **혼합 모델이다** (2026-09-20). 계획·생성은 Gemini, 검수는 Haiku —
+   *    장부가 **호출마다** 제공사 모델 id 를 남겨야 청구서와 대조할 수 있다.
+   */
   check('🔴 [L] 장부가 제공사 모델 id 를 남긴다 — 청구서와 대조할 수 있다',
-    ok.entries.every((e) => e.apiModelId.startsWith('claude-haiku-4-5')))
+    ok.entries.every((e) => e.apiModelId.trim() !== '')
+    && ok.entries.some((e) => e.apiModelId.startsWith('gemini-3.7-flash'))
+    && ok.entries.some((e) => e.apiModelId.startsWith('claude-haiku-4-5')),
+    [...new Set(ok.entries.map((e) => `${e.stage}:${e.apiModelId}`))].join(' · '))
+  check('🔴 🔴 [L] **계획·생성은 Gemini · 검수는 Haiku** — 실제 요청 인자로 확인',
+    ok.entries.filter((e) => e.stage === 'judge' || e.stage === 'draftGen')
+      .every((e) => e.apiModelId.startsWith('gemini-3.7-flash'))
+    && ok.entries.filter((e) => e.stage === 'draftQuality')
+      .every((e) => e.apiModelId.startsWith('claude-haiku-4-5')),
+    [...new Set(ok.entries.map((e) => `${e.stage}:${e.apiModelId}`))].join(' · '))
   check('🔴 [L] 장부에 원문·프롬프트·응답이 없다',
     !/(sourceBodyHead|가짜 초안|fixture 가 만든 본문|fixture-fake-key)/
       .test(readdirSync(ledgerDir).map((f) => readFileSync(join(ledgerDir, f), 'utf-8')).join('')))
-  check('🔴 [L] 재시도·나이 검수도 장부에 자기 단계로 남는다',
-    ok.entries.some((e) => e.stage === 'ageCheck') && ok.entries.some((e) => e.stage === 'draftGen'))
+  /**
+   * 🔴 **v2 세 단계가 각자 자기 이름으로 남는다** (2026-09-20).
+   *    별도 나이 검수는 없앴다 — 통합 검수가 같은 근거로 본다.
+   */
+  check('🔴 [L] v2 세 단계가 장부에 자기 단계로 남는다',
+    ok.entries.some((e) => e.stage === 'judge')
+    && ok.entries.some((e) => e.stage === 'draftGen')
+    && ok.entries.some((e) => e.stage === 'draftQuality')
+    && !ok.entries.some((e) => e.stage === 'ageCheck'),
+    [...new Set(ok.entries.map((e) => e.stage))].join(' · '))
   check('🔴 [L] 화면에 장부를 찍는다 — 안 보이면 늘어도 모른다', /장부 .*· 유료 \d+건/.test(ok.out))
   check('🔴 [L] 하루치가 한 파일에 모인다 — 정산이 다른 날로 새지 않는다',
     readdirSync(ledgerDir).filter((f) => f.endsWith('.jsonl')).length === 1)
@@ -943,6 +973,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     ]
     const env = {
       ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+      // 🔴 v2 계획·생성은 Gemini 를 쓴다
+      GEMINI_API_KEY: 'fixture-fake-gemini-key',
       FAKE_PROVIDER_LOG: '',
       NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
       [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP,
@@ -1295,6 +1327,8 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
         cwd: root, encoding: 'utf-8',
         env: {
           ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+          // 🔴 v2 계획·생성은 Gemini 를 쓴다
+          GEMINI_API_KEY: 'fixture-fake-gemini-key',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
           // 🔴 시험용 임시 값이다
@@ -1342,6 +1376,8 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
         cwd: root, encoding: 'utf-8',
         env: {
           ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+          // 🔴 v2 계획·생성은 Gemini 를 쓴다
+          GEMINI_API_KEY: 'fixture-fake-gemini-key',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
           [BUDGET_ENV.dailyUsd]: '1000', [BUDGET_ENV.headroomMultiplier]: '1.5',

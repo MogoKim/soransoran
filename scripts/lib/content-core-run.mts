@@ -19,6 +19,8 @@ import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
 import { isPersonalInfo, missingProtectedFacts } from '../../src/lib/content-core/source-facts'
 import type { DropReason } from '../../src/lib/content-core/source-facts'
 import type { PoolCard } from '../../src/lib/persona-pool-card'
+/** 🔴 provider 가 아는 모델만 — `as` 로 모르는 이름을 억지 통과시키지 않는다 */
+import type { ProviderModel } from './voice-m3-provider.mjs'
 import { canGenerate, parseSpeakerPlan } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import {
@@ -64,7 +66,7 @@ export type AskStage = CallMeta['stage']
  *    (2026-09-19: 화자 계획과 생성은 Gemini, 의미 검수는 Haiku 로 나눈 시험 구성.
  *     검수를 생성과 같은 모델에 맡기면 자기 글을 자기가 채점한다.)
  */
-export const STAGE_MODEL: Readonly<Record<AskStage, string>> = Object.freeze({
+export const STAGE_MODEL: Readonly<Record<AskStage, ProviderModel>> = Object.freeze({
   speakerPlan: 'gemini-3.7-flash',
   draftGen: 'gemini-3.7-flash',
   semanticReview: 'claude-haiku-4.5',
@@ -72,7 +74,7 @@ export const STAGE_MODEL: Readonly<Record<AskStage, string>> = Object.freeze({
 
 /** 🔴 `model` 을 인자로 받는다 — 어느 단계가 어디로 갔는지 **값으로** 확인된다 */
 export type Ask = (
-  stage: AskStage, system: string, payload: string, model: string,
+  stage: AskStage, system: string, payload: string, model: ProviderModel,
 ) => Promise<AskResult>
 
 /**

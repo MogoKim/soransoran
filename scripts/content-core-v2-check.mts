@@ -163,13 +163,28 @@ console.log('⓪ 스위치 · 운영 배선 — 🔴 이 PR 은 v1 을 한 줄�
   check('🔴 기본은 꺼짐', !isContentCoreV2Enabled({}))
   check('🟢 "true" 하나만 켠다', isContentCoreV2Enabled({ [CONTENT_CORE_V2_ENV]: 'true' }))
   check('🔴 지울 마일스톤이 박혀 있다', CONTENT_CORE_V2_FLAG_REMOVE_AT === 'M5')
-  const v1Diff = execFileSync('git', ['diff', '--numstat', 'origin/main', '--',
-    'scripts/micro-seed-auto-draft.mts', 'src/lib/micro-seed-auto-draft.ts'], { encoding: 'utf-8' })
-  check('🔴 🔴 **v1 이 origin/main 과 0줄 차이다**', v1Diff.trim() === '', v1Diff.trim())
-  check('🟢 v1 러너는 그대로 있다', existsSync('scripts/micro-seed-auto-draft.mts'))
-  const opsRefs = execFileSync('git', ['grep', '-l', 'content-core', '--', 'src/', 'scripts/'], { encoding: 'utf-8' })
-    .trim().split('\n').filter((f) => f !== '' && !f.includes('content-core'))
-  check('🔴 운영 코드에 v2 소비자가 없다', opsRefs.length === 0, opsRefs.join(', '))
+  /**
+   * 🔴 **여기 두 단언은 2026-09-20 에 뜻이 뒤집혔다.**
+   *    배선 전에는 *"v1 을 건드리지 않았다 · v2 소비자가 없다"* 가 격리의 증거였다.
+   *    배선 뒤에는 그 반대가 계약이다 — **운영 러너가 v2 를 부르고, 대체된 v1
+   *    생성 경로는 남아 있지 않다.** 옛 단언을 남겨 두면 통과가 곧 미배선을 뜻한다.
+   */
+  const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🟢 🔴 **운영 러너가 Content Core v2 를 실제로 호출한다**',
+    /await runContentCore\(\{/.test(runner))
+  check('🔴 🔴 **대체된 v1 생성·검수 경로가 러너에 남아 있지 않다**', (() => {
+    const dead = ['expandSeed', 'askQuality', 'parseQuality', 'generateWithRetries',
+      'buildGenSystemPrompt', 'buildQualitySystemPrompt', 'buildAgeCheckSystemPrompt',
+      'MAX_DRAFTS_PER_SOURCE', 'pickDraftGated', 'lifeConflictDirective']
+      .filter((n) => new RegExp(`\\b${n}\\b`).test(runner))
+    return dead.length === 0
+  })(), '남은 참조 있음')
+  check('🔴 유료 요청이 전부 장부 wrapper 를 지난다 — provider 직접 호출 0',
+    (runner.match(/LEDGER\.call\(/g) ?? []).length === 1
+    && !/fetch\(/.test(runner))
+  check('🟢 v1 러너 파일 자체는 그대로 있다 (수집·판정·적재는 삭제하지 않았다)',
+    existsSync('scripts/micro-seed-auto-draft.mts')
+    && /planPreDraftExclusion/.test(runner) && /judgeSourceGate/.test(runner))
 }
 
 // ─────────────────────────────────────────────────────────

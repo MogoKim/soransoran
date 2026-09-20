@@ -172,6 +172,8 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
       cwd: root, encoding: 'utf-8',
       env: {
         ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+        // 🔴 v2 계획·생성은 Gemini 를 쓴다 — 키가 없으면 러너가 시작 전에 멈춘다
+        GEMINI_API_KEY: 'fixture-fake-gemini-key',
         NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
         // 🔴 시험용 임시 값. 운영 예산이 아니다
         SORAN_LLM_DAILY_BUDGET_USD: '1000',
@@ -196,7 +198,19 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
   check('🔴 후보의 게시 시각이 빈 문자열이 아니다 — 실측 결함 그대로 재현되지 않는다',
     String(c?.sourcePostedAt ?? '') !== '')
   if (!existsSync(join(dd, 'x.shadow.jsonl'))) check('입력이 남아 있다', false)
-  if (fail > 0) console.log(`\n  (생성 러너 출력 꼬리)\n${out.split('\n').slice(-12).map((l) => `    ${l}`).join('\n')}`)
+  if (fail > 0) {
+    const af = readdirSync(dd).filter((f) => /\.artifacts\.json$/.test(f))
+    for (const f of af) {
+      const arts = JSON.parse(readFileSync(join(dd, f), 'utf-8')) as Record<string, unknown>[]
+      for (const a of arts) {
+        const rv = a.review as Record<string, unknown>
+        console.log(`    artifact ${String(a.sourceArticleId)} → ${String(rv.machineOutcome)} · ${String(rv.machineReason)}`)
+        console.log(`      plan ${JSON.stringify(a.plan)}`)
+        console.log(`      det ${JSON.stringify(rv.deterministic)}`)
+      }
+    }
+    console.log(`\n  (생성 러너 출력 꼬리)\n${out.split('\n').slice(-12).map((l) => `    ${l}`).join('\n')}`)
+  }
 }
 
 // ─────────────────────────────────────────────────────────
