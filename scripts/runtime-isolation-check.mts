@@ -33,7 +33,9 @@ import {
   judgeDeploy, judgeDeployLock, judgeLockRelease, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
 /** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
-import { rollbackDirOf } from './lib/launchd-install.mjs'
+import { rollbackDirOf, sameArgs } from './lib/launchd-install.mjs'
+/** 🔴 발행 러너 label 의 정본 — 여기에 문자열을 다시 적지 않는다 */
+import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
 import { readRuntimeEnv } from './lib/runtime-env.mjs'
 
 /** 🔴 예약 실행 전용 worktree — 개발 작업트리와 **다른 곳**이다 */
@@ -410,6 +412,11 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
   const J = ['job-a', 'job-b', 'job-c']
   /** 🔴 퇴역 job — unload 하고 설치본도 보관소로 옮겨야 한다 */
   const RETIRED = ['job-old']
+  /**
+   * 🔴 **배포 동안만 멈춰 두는 job** — 공급 job 이 아니지만 같은 runtime 트리에서 돈다.
+   *    운영에서는 `com.soransoran.original-post-runner` 다.
+   */
+  const QJOB = 'job-publish'
   // 🔴 40자리 **hex** 여야 한다 — judgeDeploy 가 축약·비-SHA 를 막는다
   const PREV = 'c'.repeat(40)
   const NEXT = 'd'.repeat(40)
@@ -529,6 +536,19 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     loadFailAt?: number
     /** 관측 자체가 실패하는 job */
     probeUnknown?: readonly string[]
+    /** 🔴 처음부터 **돌고 있는** job */
+    running?: readonly string[]
+    /** 🔴 preflight 뒤(=checkout 직전 재관측부터) 돌기 시작한 job */
+    runningLater?: readonly string[]
+    /** 🔴 checkout 직전 재관측에서 실행 여부를 알 수 없는 job */
+    runningUnknownLater?: readonly string[]
+    /** 🔴 되올린 job 의 WorkingDirectory 가 설치본과 다른 상태 */
+    wdMismatch?: boolean
+    /**
+     * 🔴 **배포 막바지에 잠시 멈춘 job 의 상태가 어긋난다** — manifest 를 쓰는 시점에
+     *    끼어든다. 배포가 "안 건드렸다" 를 **값으로 확인하는지** 보는 결함이다.
+     */
+    quiesceDrift?: 'loaded' | 'plist' | 'unknown'
     /** 처음부터 이 상태로 시작한다 */
     initial?: Readonly<Record<string, JobState>>
     /** 실제 loaded 설정이 개발 트리를 가리키는 job */
@@ -613,11 +633,12 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     writeFileSync(pinFile, `${PREV}\n`, 'utf-8')
 
     const state = new Map<string, JobState>(
-      [...J, ...RETIRED].map((l) => [l, f.initial?.[l] ?? (J.includes(l) ? 'loaded' : 'unloaded')]),
+      [...J, ...RETIRED, QJOB].map((l) =>
+        [l, f.initial?.[l] ?? (J.includes(l) || l === QJOB ? 'loaded' : 'unloaded')]),
     )
     // 🔴 배포 전 설치본 — 옛 내용이 들어 있다. `noInstalledPlist` 면 아예 없다
     const plists = new Map<string, string>()
-    for (const l of [...J, ...RETIRED]) {
+    for (const l of [...J, ...RETIRED, QJOB]) {
       if ((f.noInstalledPlist ?? []).includes(l)) continue
       plists.set(l, OLD_PLIST(l))
     }
@@ -628,6 +649,10 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     }
     const rec = (m: string): void => { w.order.push(m) }
     let loads = 0
+    /** 🔴 `runningJobs` 관측 횟수 — preflight 와 checkout 직전을 가른다 */
+    let probes = 0
+    /** 🔴 `quiesceDrift: 'unknown'` 이 켜지면 그때부터 관측이 실패한다 */
+    let driftUnknown = false
     /** 🔴 명령이 실제로 상태를 바꿨는가 — 반환값과 독립이다 */
     const applyEffect = (l: string, eff: JobState | 'keep' | undefined, fallback: JobState): void => {
       const e = eff ?? fallback
@@ -640,10 +665,29 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       isAncestor: () => true,
       dirty: () => false,
       // 🔴 실제 배포기와 같게 — 퇴역 job 도 본다 (돌고 있는 옛 job 위로 배포하지 않는다)
-      runningJobs: () => ({
-        running: [],
-        unknown: (f.probeUnknown ?? []).filter((l) => [...J, ...RETIRED].includes(l)),
-      }),
+      /**
+       * 🔴 실제 배포기와 같게 — 퇴역 job 과 **잠시 멈출 job** 도 본다.
+       *
+       * 🔴 **`launchctl` 처럼 군다** (2026-09-20 보정). 내려간 job 은 `state = running`
+       *    으로 보고되지 않는다 — 그래서 `state` 가 `loaded` 인 것만 running 이 될 수 있다.
+       *    앞선 fixture 는 unload 뒤에도 `runningLater` 를 그대로 돌려줬다. 그 가짜 계약
+       *    때문에 **재관측이 unload 뒤에 있어도 통과**했다 — 실제로는 아무것도 못 잡는데.
+       *
+       * 🔴 `runningLater` 는 **두 번째 관측부터** 돌기 시작한 회차다 —
+       *    preflight 와 unload 사이의 틈이 그것이다.
+       */
+      runningJobs: () => {
+        probes += 1
+        const later = probes >= 2 ? (f.runningLater ?? []) : []
+        return {
+          // 🔴 내려간 job 은 돌 수 없다
+          running: [...(f.running ?? []), ...later].filter((l) => state.get(l) === 'loaded'),
+          unknown: [
+            ...(f.probeUnknown ?? []).filter((l) => [...J, ...RETIRED, QJOB].includes(l)),
+            ...(probes >= 2 ? (f.runningUnknownLater ?? []) : []),
+          ],
+        }
+      },
 
       /**
        * 🔴 **실제 `launchctl unload <plist>` 를 그대로 흉내낸다** (2026-09-11).
@@ -679,7 +723,9 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         state.set(l, 'unloaded')
         return true
       },
-      probeJob: (l) => ((f.probeUnknown ?? []).includes(l) ? 'unknown' : state.get(l)!),
+      probeJob: (l) => (
+        (f.probeUnknown ?? []).includes(l) || (driftUnknown && l === QJOB)
+          ? 'unknown' : state.get(l)!),
       load: (l) => {
         rec(`load:${l}`); loads += 1
         if (f.loadFailAt === loads) return false
@@ -721,6 +767,8 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         return target === NEXT ? RENDERED(l) : OLD_RENDERED(l)
       },
       argsOf: (xml) => PARSE_ARGS(xml),
+      // 🔴 설치본의 WorkingDirectory — fixture plist 는 runtime 을 가리킨다
+      workingDirOf: () => (f.wdMismatch === true ? `${RTDIR}-other` : RTDIR),
       envBlockers: (jobs) => (f.envBlocked ?? [])
         .filter((l) => jobs.includes(l))
         .map((l) => ({ job: l, key: `SWITCH_${l}`, detail: `SWITCH_${l} 가 없다 (unset)` })),
@@ -777,7 +825,14 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
 
       readManifest: () => (existsSync(manifestFile) ? readFileSync(manifestFile, 'utf-8') : null),
       readPin: () => { try { return readFileSync(pinFile, 'utf-8').trim() } catch { return null } },
-      writeManifest: (j) => { rec('write-manifest'); writeFileSync(manifestFile, j, 'utf-8'); return true },
+      writeManifest: (j) => {
+        rec('write-manifest')
+        // 🔴 배포 막바지에 잠시 멈춘 job 이 어긋나는 상황을 여기서 끼워 넣는다
+        if (f.quiesceDrift === 'loaded') state.set(QJOB, 'loaded')
+        if (f.quiesceDrift === 'plist') plists.set(QJOB, '<plist>job-publish:new:누가 바꿨다</plist>')
+        if (f.quiesceDrift === 'unknown') driftUnknown = true
+        writeFileSync(manifestFile, j, 'utf-8'); return true
+      },
       removeManifest: () => { rec('remove-manifest'); rmSync(manifestFile, { force: true }); return true },
       writePin: (sha) => { writeFileSync(pinFile, `${sha}\n`, 'utf-8'); return true },
       log: () => { /* fixture 는 조용히 */ },
@@ -786,11 +841,12 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
   }
   const deploy = async (
     w: World, disabledJobs: readonly string[] = [],
+    quiesceJobs: readonly string[] = [QJOB],
   ): Promise<Awaited<ReturnType<typeof runDeploy>>> =>
     runDeploy({
       // 🔴 내려 둔 job 은 배포 대상에서 빠진다 — 실제 배포기가 넘기는 모양 그대로다
       target: NEXT, jobs: J.filter((l) => !disabledJobs.includes(l)),
-      retiredJobs: RETIRED, disabledJobs, paths: PATHS,
+      retiredJobs: RETIRED, disabledJobs, quiesceJobs, paths: PATHS,
       offlineGates: ['gate1', 'gate2'], now: () => '2026-09-09T00:00:00.000Z',
     }, w.fx)
   const idx = (w: World, m: string): number => w.order.findIndex((x) => x === m || x.startsWith(m))
@@ -1364,6 +1420,187 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     /** 🔴 퇴역 job 의 스위치는 요구하지 않는다 — 그 job 은 없어질 것이다 */
     check('🔴 [E] 퇴역 job 의 스위치를 요구하지 않는다',
       !Object.values(JOB_ENV_REQUIREMENTS).includes('SORAN_SUPPLY_AUTOPILOT_ENABLED'))
+  }
+
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [Q] **배포 동안만 멈추는 발행 러너** — 사람이 예약 시각을 피해 기다리던 병목
+  //
+  //    2026-09-20 실측: `com.soransoran.original-post-runner` 는 공급 job 이 아니지만
+  //    같은 runtime 작업 트리에서 돈다. 그런데 배포의 관측·정지·복구 어디에도 없어,
+  //    16:10 발행 슬롯이 checkout·npm ci 중에 뜨면 **반쯤 바뀐 트리**를 읽을 수 있었다.
+  //    그때는 사람이 시각을 보고 기다려서 피했다.
+  //
+  //    🔴 배포가 이 job 에 하는 일은 **잠시 내렸다 그대로 되올리는 것뿐**이다 —
+  //       render ✗ · write ✗ · retire ✗ · env 판정 ✗.
+  // ─────────────────────────────────────────────────────────
+  {
+    // ── ① 돌고 있으면 아무것도 건드리지 않고 멈춘다 ──
+    {
+      const w = makeWorld({ running: [QJOB] })
+      const r = await deploy(w)
+      check('🔴 [Q] 발행 러너가 돌고 있으면 배포하지 않는다', !r.ok && r.phase === 'preflight')
+      check('🔴 [Q] 🔴 **write 0** — plist 를 건드리지 않았다', countOf(w, `write-plist:${QJOB}`) === 0)
+      check('🔴 [Q] 🔴 **unload 0** — 돌고 있는 회차를 자르지 않았다',
+        idx(w, `unload:${QJOB}`) === -1 && !r.steps.includes(`quiesce-unload:${QJOB}`))
+      check('🔴 [Q] 🔴 **checkout 0** — 코드도 그대로다', idx(w, 'checkout:target') === -1)
+      check('🔴 [Q] 발행 러너는 그대로 loaded 다', w.state.get(QJOB) === 'loaded')
+    }
+
+    // ── ② loaded 지만 idle 이면 checkout 전에 내리고, 성공 후 되올린다 ──
+    {
+      const w = makeWorld()
+      const r = await deploy(w)
+      check('🟢 [Q] 정상 배포가 통과한다', r.ok, )
+      check('🔴 [Q] 🔴 **checkout 전에 내려간다**',
+        r.steps.includes(`quiesce-unload:${QJOB}`)
+        && idx(w, `unload:${QJOB}`) !== -1
+        && idx(w, `unload:${QJOB}`) < idx(w, 'checkout:target'))
+      check('🔴 [Q] 🔴 **성공 뒤 다시 올라온다**', w.state.get(QJOB) === 'loaded')
+      check('🔴 [Q] 되올린 단계가 기록에 남는다', r.steps.includes('quiesce-restored'))
+      check('🔴 [Q] 🔴 **성공 배포에서도 plist 를 render·write 하지 않는다**',
+        countOf(w, `render:${QJOB}`) === 0 && countOf(w, `write-plist:${QJOB}`) === 0)
+      check('🔴 [Q] 🔴 **퇴역시키지도 않는다**',
+        countOf(w, `retire:${QJOB}`) === 0 && countOf(w, `remove-plist:${QJOB}`) === 0)
+      check('🔴 [Q] 🔴 **plist 원문이 배포 전과 같다**', w.plists.get(QJOB) === OLD_PLIST(QJOB))
+      check('🔴 [Q] 🔴 **되올린 인자가 설치본과 같다**',
+        sameArgs(PARSE_ARGS(w.plists.get(QJOB)!), w.fx.loadedConfig(QJOB).args))
+      check('🔴 [Q] 🔴 **WorkingDirectory 가 runtime 을 가리킨다**',
+        w.fx.loadedConfig(QJOB).workingDirectory === RTDIR)
+    }
+
+    // ── ③ 원래 내려가 있었으면 끝까지 내려가 있다 ──
+    {
+      const w = makeWorld({ initial: { [QJOB]: 'unloaded' } })
+      const r = await deploy(w)
+      check('🟢 [Q] 원래 내려가 있어도 배포는 통과한다', r.ok)
+      check('🔴 [Q] 🔴 **내리지도 올리지도 않는다**',
+        idx(w, `unload:${QJOB}`) === -1 && idx(w, `load:${QJOB}`) === -1
+        && !r.steps.includes(`quiesce-unload:${QJOB}`))
+      check('🔴 [Q] 🔴 **끝까지 unloaded 다** — 배포가 운영 상태를 바꾸지 않는다',
+        w.state.get(QJOB) === 'unloaded')
+      check('🔴 [Q] 🔴 **그 경우에도 plist 원문이 그대로다**',
+        w.plists.get(QJOB) === OLD_PLIST(QJOB))
+    }
+    // 🔴 원래 unloaded 였는데 배포 중에 올라오면 성공으로 보고하지 않는다
+    {
+      const w = makeWorld({ initial: { [QJOB]: 'unloaded' }, loadEffect: { [QJOB]: 'loaded' } })
+      w.state.set(QJOB, 'unloaded')
+      const r = await deploy(w)
+      // 🔴 fixture 로는 "배포가 올리는" 경로가 없다 — 그래서 정상 통과가 맞다
+      check('🟢 [Q] 배포가 원래 내려가 있던 job 을 올리지 않는다', r.ok && w.state.get(QJOB) === 'unloaded')
+    }
+
+    // ── ④ unload 가 안 되면 checkout 0 ──
+    {
+      const w = makeWorld({ unloadEffect: { [QJOB]: 'keep' } })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **내려가지 않으면 배포하지 않는다**', !r.ok && r.phase === 'unload')
+      check('🔴 [Q] 🔴 **checkout 0 · write 0**',
+        idx(w, 'checkout:target') === -1 && countOf(w, `write-plist:${QJOB}`) === 0)
+      check('🔴 [Q] 원래 loaded 였던 것은 되돌아온다', w.state.get(QJOB) === 'loaded')
+    }
+    {
+      const w = makeWorld({ probeUnknown: [QJOB] })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **상태를 모르면 통과시키지 않는다(fail-closed)**',
+        !r.ok && idx(w, 'checkout:target') === -1)
+    }
+
+    /**
+     * ── ⑤ preflight 와 unload 사이에 시작한 회차 ──
+     *
+     * 🔴 **첫 unload 바로 앞**에서 잡아야 한다. `launchctl` 은 내려간 job 을
+     *    running 으로 보고하지 않으므로, 재관측이 unload 뒤에 있으면 이 시험이 FAIL 한다.
+     */
+    {
+      const w = makeWorld({ runningLater: [QJOB] })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **첫 unload 앞의 재관측이 그 틈을 잡는다**',
+        !r.ok && r.phase === 'pre-unload-recheck')
+      check('🔴 [Q] 🔴 **unload 0 · write 0 · checkout 0** — 아무것도 바뀌지 않았다',
+        idx(w, `unload:${QJOB}`) === -1 && idx(w, 'bootout:') === -1
+        && countOf(w, `write-plist:${QJOB}`) === 0 && idx(w, 'checkout:target') === -1)
+      check('🔴 [Q] 발행 러너는 그대로 loaded 다', w.state.get(QJOB) === 'loaded')
+      check('🔴 [Q] 🔴 **재관측이 어떤 unload 보다 앞이다**', (() => {
+        const re = r.steps.indexOf('pre-unload-recheck')
+        const firstUnload = r.steps.findIndex((x) => x.startsWith('unload:') || x.startsWith('quiesce-unload:'))
+        return re !== -1 && (firstUnload === -1 || re < firstUnload)
+      })())
+    }
+    {
+      const w = makeWorld({ runningUnknownLater: [QJOB] })
+      const r = await deploy(w)
+      check('🔴 [Q] 재관측에서 알 수 없으면 멈춘다(fail-closed)',
+        !r.ok && r.phase === 'pre-unload-recheck'
+        && idx(w, `unload:${QJOB}`) === -1 && idx(w, 'checkout:target') === -1)
+    }
+
+    // ── ⑥ 실패하면 loaded 상태와 plist 원문이 배포 전으로 ──
+    for (const [name, fault] of [
+      ['checkout 실패', { checkout: true }],
+      ['offline 게이트 실패', { gateFail: 'gate2' }],
+    ] as const) {
+      const w = makeWorld(fault)
+      const r = await deploy(w)
+      check(`🔴 [Q] ${name} 이면 배포가 멈춘다`, !r.ok)
+      check(`🔴 [Q] 🔴 **${name} 뒤 발행 러너가 원래대로 loaded 다**`,
+        w.state.get(QJOB) === 'loaded', )
+      check(`🔴 [Q] ${name} 뒤에도 plist 원문이 그대로다`, w.plists.get(QJOB) === OLD_PLIST(QJOB))
+      check(`🔴 [Q] ${name} 복구가 완전하다`, r.rollback?.complete === true,
+      )
+    }
+
+    // ── ⑥-b 🔴 사후 상태를 **값으로** 확인한다 — "안 건드렸다" 를 말로 적지 않는다 ──
+    {
+      const w = makeWorld({ initial: { [QJOB]: 'unloaded' }, quiesceDrift: 'loaded' })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **원래 unloaded 였는데 배포 뒤 loaded 면 실패다**',
+        !r.ok && r.phase === 'quiesce-restore')
+    }
+    {
+      const w = makeWorld({ initial: { [QJOB]: 'unloaded' }, quiesceDrift: 'plist' })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **원래 unloaded 였는데 plist 원문이 바뀌면 실패다**',
+        !r.ok && r.phase === 'quiesce-restore')
+    }
+    {
+      const w = makeWorld({ initial: { [QJOB]: 'unloaded' }, quiesceDrift: 'unknown' })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **사후 상태를 모르면 통과시키지 않는다(fail-closed)**',
+        !r.ok && r.phase === 'quiesce-restore')
+    }
+    {
+      const w = makeWorld({ quiesceDrift: 'plist' })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **원래 loaded 였을 때도 plist 원문이 바뀌면 실패다**',
+        !r.ok && r.phase === 'quiesce-restore')
+    }
+
+    // ── ⑦ 되올렸는데 설정이 설치본과 다르면 성공으로 보고하지 않는다 ──
+    {
+      const w = makeWorld({ wdMismatch: true })
+      const r = await deploy(w)
+      check('🔴 [Q] 🔴 **WorkingDirectory 가 설치본과 다르면 실패다**',
+        !r.ok && r.phase === 'quiesce-restore')
+    }
+
+    // ── ⑧ 공급 job 계약은 그대로다 ──
+    check('🔴 [Q] 🔴 **발행 러너를 RUNTIME_JOBS 에 넣지 않았다**',
+      !RUNTIME_JOBS.includes(PUBLISH_RUNNER_LABEL) && RUNTIME_JOBS.length === 5)
+    check('🔴 [Q] 🔴 **퇴역 job 으로 취급하지 않는다**', !RETIRED_JOBS.includes(PUBLISH_RUNNER_LABEL))
+    check('🔴 [Q] 🔴 **활성화 스위치를 요구하지 않는다**',
+      !Object.keys(JOB_ENV_REQUIREMENTS).includes(PUBLISH_RUNNER_LABEL))
+    check('🔴 [Q] 🔴 **label 을 새로 적지 않고 정본을 쓴다**', (() => {
+      const src = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
+      return /import \{ PUBLISH_RUNNER_LABEL \}/.test(src)
+        && /QUIESCE_JOBS: readonly string\[\] = \[PUBLISH_RUNNER_LABEL\]/.test(src)
+        && !/'com\.soransoran\.original-post-runner'/.test(src)
+    })())
+    check('🔴 [Q] 🔴 **매거진 job 은 대상이 아니다** — 다른 runtime 을 쓴다', (() => {
+      const src = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
+      return !/magazine/.test(src)
+    })())
   }
 
 
