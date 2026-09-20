@@ -21,7 +21,7 @@ import {
   queueSourceTimesOf,
 } from '../src/lib/micro-seed-supply-autofill'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
-import { planCommonPhase, type Pending } from '../src/lib/supply-process'
+import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
 
 const NOW = '2026-09-07T12:00:00.000Z'
 /**
@@ -333,7 +333,7 @@ console.log('\n⑥ 실행 게이트 — 두 스위치가 다 있어야 한다')
     const plans = [
       // 🔴 옛 경로(묶음 없음)와 새 경로(묶음 있음) **둘 다** 본다
       ...planCommonPhase(pending, policy, gate),
-      ...planCommonPhase(pending, policy, gate, {
+      ...planBoundedCommonPhase(pending, policy, gate, {
         manifestPath: '/d/w.json', shadowPath: '/d/s.shadow.jsonl',
         candidatesPath: '/d/c.json', limit: 5, perStage: { judge: 5, draft: 15 },
       }),

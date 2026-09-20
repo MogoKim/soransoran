@@ -1,3 +1,5 @@
+import { HARD_BLOCK, hardGate, preSemanticGate, type JudgeInput } from './micro-seed-auto-judge'
+
 /**
  * 공급 회차의 **작업 묶음** — 🔴 AI 를 부르기 전에 **코드가** 정한다 (2026-09-20)
  *
@@ -38,6 +40,10 @@ export const WORKSET_TOTAL_PER_SOURCE = 4
 /** 기본 묶음 크기 — 🔴 `--workset-limit` 이 없으면 이 값이다 */
 export const WORKSET_DEFAULT_LIMIT = 5
 
+/**
+ * 🔴 고를 후보 한 줄. `input` 은 **판정기와 같은 정규화**를 지난 값이다 —
+ *    `mergeJudgeRows` 가 만든 것을 그대로 받는다. 여기서 다시 파싱하지 않는다.
+ */
 export type WorksetRow = {
   sourceArticleId: string
   sourceSite: string
@@ -46,13 +52,12 @@ export type WorksetRow = {
   /** 원문이 올라온 시각 · 목록에서 본 시각 (없으면 빈 문자열) */
   sourcePostedAt: string
   sourceListedAt: string
-  /** deterministic 판정에 쓰는 칸 — 🔴 여기서 규칙을 새로 만들지 않는다 */
-  access: string
-  safetyVerdict: string
+  /** 🔴 정본 게이트에 그대로 넘길 판정 입력 */
+  input: JudgeInput
 }
 
 export const WORKSET_DROPS = [
-  'humanDecided', 'queueSibling', 'hardBlocked', 'accessNotOk', 'safetyNotPass',
+  'humanDecided', 'queueSibling', 'hardBlocked', 'preGated', 'terminal',
 ] as const
 export type WorksetDrop = (typeof WORKSET_DROPS)[number]
 
@@ -60,8 +65,8 @@ export const WORKSET_DROP_LABEL: Readonly<Record<WorksetDrop, string>> = {
   humanDecided: '사람이 이미 판정한 원천',
   queueSibling: '같은 원문의 미발행 형제가 큐에 있다',
   hardBlocked: 'deterministic hard block',
-  accessNotOk: '접근이 ok 가 아니다',
-  safetyNotPass: '안전 판정이 pass 가 아니다',
+  preGated: '접근·안전 조건을 충족하지 않는다',
+  terminal: '앞 회차가 이미 끝낸 원천 (HOLD·DROP·생성 hard HOLD)',
 }
 
 export type Workset = {
@@ -81,6 +86,37 @@ export type WorksetPlan = {
   dropped: Record<WorksetDrop, number>
   /** 조건은 맞지만 이번 묶음에 못 들어간 것 — 🔴 **그대로 남는다** */
   deferred: number
+}
+
+/**
+ * 🔴 **앞 회차가 끝낸 원천을 모은다.** 판정 파일과 artifact — **이미 있는 계약**만 읽는다.
+ *    새 checkpoint 파일을 만들지 않는다.
+ *
+ * 🔴 **재시도해야 하는 것은 빼지 않는다**:
+ *    · 판정이 정상으로 끝나지 않은 것(`semanticStatus !== 'ok'`) — 물어보지 못한 것이다
+ *    · 생성이 예산·상한에 막힌 것 — 돈이 모자랐을 뿐 결론이 아니다
+ */
+export function terminalSourceIds(input: {
+  /** 지난 회차들의 판정 줄 */
+  judgements: readonly { sourceArticleId: string; decision: string; semanticStatus: string }[]
+  /** 지난 회차들의 artifact */
+  artifacts: readonly { sourceArticleId: string; retryable: boolean; outcome: string }[]
+}): Set<string> {
+  const out = new Set<string>()
+  for (const j of input.judgements) {
+    const id = S(j.sourceArticleId)
+    if (id === '') continue
+    // 🔴 물어보지 못한 판정은 결론이 아니다 — 다음 회차가 다시 묻는다
+    if (S(j.semanticStatus) !== 'ok') continue
+    if (S(j.decision) !== 'AUTO_SEED') out.add(id)
+  }
+  for (const a of input.artifacts) {
+    const id = S(a.sourceArticleId)
+    if (id === '' || a.retryable) continue
+    // 🔴 생성이 끝까지 가서 막힌 것만 — adopt 는 후보가 됐으니 큐 형제로 걸린다
+    if (a.outcome === 'hold' || a.outcome === 'drop') out.add(id)
+  }
+  return out
 }
 
 /** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 */
@@ -106,14 +142,19 @@ export function selectWorkset(input: {
   humanDecided: ReadonlySet<string>
   /** 큐에 미발행 형제가 있는 원문 (base id) */
   queuePending: ReadonlySet<string>
-  /** deterministic hard block 에 걸린 원천 — 🔴 정본 게이트가 판정한 것을 받는다 */
-  hardBlocked: ReadonlySet<string>
+  /**
+   * 🔴 **앞 회차가 이미 끝낸 원천.** 이것이 없으면 terminal HOLD/DROP 이 댓글 수
+   *    상위 자리를 영구 점유해 다음 회차가 같은 것만 보게 된다 —
+   *    회차 간 진행이 멈춘다 (2026-09-20 검토에서 잡힌 결함).
+   *    🔴 **재시도해야 하는 것은 여기 넣지 않는다** (예산·상한에 막힌 것 등).
+   */
+  terminal: ReadonlySet<string>
   limit: number
   runId: string
   takenAt: Date
 }): WorksetPlan {
   const dropped: Record<WorksetDrop, number> = {
-    humanDecided: 0, queueSibling: 0, hardBlocked: 0, accessNotOk: 0, safetyNotPass: 0,
+    humanDecided: 0, queueSibling: 0, hardBlocked: 0, preGated: 0, terminal: 0,
   }
   // 🔴 같은 원천이 여러 파일에 있으면 **마지막 행**만 남긴다
   const byId = new Map<string, WorksetRow>()
@@ -127,9 +168,15 @@ export function selectWorkset(input: {
   for (const r of byId.values()) {
     if (input.humanDecided.has(r.sourceArticleId)) { dropped.humanDecided += 1; continue }
     if (input.queuePending.has(baseIdOf(r.sourceArticleId))) { dropped.queueSibling += 1; continue }
-    if (input.hardBlocked.has(r.sourceArticleId)) { dropped.hardBlocked += 1; continue }
-    if (S(r.access) !== 'ok') { dropped.accessNotOk += 1; continue }
-    if (S(r.safetyVerdict) !== 'pass') { dropped.safetyNotPass += 1; continue }
+    if (input.terminal.has(r.sourceArticleId)) { dropped.terminal += 1; continue }
+    /**
+     * 🔴 **판정기 정본 게이트를 그대로 부른다** — 여기서 규칙을 새로 만들지 않는다.
+     *    `access`·`safety` 를 손으로 비교하던 앞판은 판정기와 어긋날 수 있었다.
+     */
+    if (hardGate(r.input).some((c) => (HARD_BLOCK as readonly string[]).includes(c))) {
+      dropped.hardBlocked += 1; continue
+    }
+    if (preSemanticGate(r.input).length > 0) { dropped.preGated += 1; continue }
     eligible.push(r)
   }
 

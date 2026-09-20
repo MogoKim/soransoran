@@ -287,6 +287,54 @@ export const SEMANTIC_STATUSES = [
 ] as const
 export type SemanticStatus = (typeof SEMANTIC_STATUSES)[number]
 
+/**
+ * 🔴 **상세 한 줄 → 판정 입력.** 두 화면의 키 이름이 다르다 —
+ *    `detail` 은 `access`, `raw-detail` 은 `accessStatus` 다.
+ *    🔴 **이 변환은 저장소에 하나뿐이다.** 판정기도 작업 묶음도 이것만 부른다 —
+ *       흉내 낸 파서를 두 벌 두면 한쪽이 정상 원천을 `accessNotOk` 로 덮는다
+ *       (2026-09-20 검토에서 잡힌 결함).
+ */
+export function normalizeJudgeRow(
+  raw: Record<string, unknown>, kind: 'detail' | 'raw-detail',
+): JudgeInput | null {
+  const id = S(raw.sourceArticleId)
+  if (id === '') return null
+  return {
+    sourceArticleId: id,
+    axis: S(raw.axis),
+    // 🔴 키 이름이 화면마다 다르다. 여기서 맞춘다
+    access: kind === 'detail' ? S(raw.access) : S(raw.accessStatus),
+    title: S(raw.title), bodyHead: S(raw.bodyHead),
+    commentCount: Number(raw.commentCount ?? 0),
+    lane: S(raw.lane), assetAxes: S(raw.assetAxes),
+    safetyVerdict: S(raw.safetyVerdict), safetyReasons: S(raw.safetyReasons),
+    bodyLength: Number(raw.bodyLength ?? 0),
+    qualityFlags: Array.isArray(raw.qualityFlags) ? raw.qualityFlags.map(String) : [],
+  }
+}
+
+/**
+ * 🔴 **원천 하나로 합친다.** `detail` 이 먼저, `raw-detail` 은 축이 `rawOriginality`
+ *    일 때만 덮어쓴다 — 그 축이 더 최신 판정을 들고 있다.
+ *    🔴 그 조건이 없으면 raw 행이 정상 detail 행을 지워 버린다.
+ */
+export function mergeJudgeRows(
+  entries: readonly { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[],
+): JudgeInput[] {
+  const byId = new Map<string, JudgeInput>()
+  for (const e of entries.filter((x) => x.kind === 'detail')) {
+    const v = normalizeJudgeRow(e.row, 'detail')
+    if (v !== null) byId.set(S(v.sourceArticleId), v)
+  }
+  for (const e of entries.filter((x) => x.kind === 'raw-detail')) {
+    const v = normalizeJudgeRow(e.row, 'raw-detail')
+    if (v === null) continue
+    const id = S(v.sourceArticleId)
+    if (!byId.has(id) || S(v.axis) === RAW_AXIS) byId.set(id, v)
+  }
+  return [...byId.values()]
+}
+
 export type Judgement = {
   sourceArticleId: string
   decision: AutoDecision

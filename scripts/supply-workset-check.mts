@@ -11,11 +11,15 @@
 import { readFileSync } from 'node:fs'
 
 import {
-  baseIdOf, judgeStageBudget, readWorkset, selectWorkset,
+  baseIdOf, judgeStageBudget, readWorkset, selectWorkset, terminalSourceIds,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
   WORKSET_VERSION, worksetFileName, type WorksetRow,
 } from '../src/lib/supply-workset'
-import { planCommonPhase, stageRunIdOf, type Pending } from '../src/lib/supply-process'
+import {
+  ledgerRunIdOf, planBoundedCommonPhase, planCommonPhase, type Pending,
+} from '../src/lib/supply-process'
+import { mergeJudgeRows, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
+import { artifactRetryable } from '../src/lib/content-core/review'
 
 let pass = 0
 let fail = 0
@@ -26,23 +30,43 @@ const check = (name: string, ok: boolean, detail = ''): void => {
   }
 }
 
-const ROW = (o: Partial<WorksetRow> & { sourceArticleId: string }): WorksetRow => ({
-  sourceSite: 'navercafe:wgang', commentCount: 0,
-  sourcePostedAt: '', sourceListedAt: '', access: 'ok', safetyVerdict: 'pass', ...o,
-})
+/** 🔴 정본 정규화를 지난 행 하나 — fixture 도 손으로 조립하지 않는다 */
+const ROW = (o: {
+  sourceArticleId: string; commentCount?: number
+  sourcePostedAt?: string; sourceListedAt?: string
+  access?: string; safetyVerdict?: string; axis?: string; title?: string
+}): WorksetRow => {
+  const [input] = mergeJudgeRows([{
+    kind: 'detail',
+    row: {
+      sourceArticleId: o.sourceArticleId, title: o.title ?? '제목입니다 우리 이야기',
+      bodyHead: '본문 머리 300자 가운데 일부입니다. 사람들이 반응한 이야기입니다.',
+      // 🔴 정본이 인정하는 축만 통과한다 — fixture 도 실제 값을 쓴다
+      commentCount: o.commentCount ?? 0, axis: o.axis ?? SEED_AXIS,
+      access: o.access ?? 'ok', safetyVerdict: o.safetyVerdict ?? 'pass',
+      lane: 'seed', assetAxes: '', safetyReasons: '', bodyLength: 300, qualityFlags: [],
+    },
+  }])
+  return {
+    sourceArticleId: o.sourceArticleId, sourceSite: 'navercafe:wgang',
+    commentCount: o.commentCount ?? 0,
+    sourcePostedAt: o.sourcePostedAt ?? '', sourceListedAt: o.sourceListedAt ?? '',
+    input: input!,
+  }
+}
 const NOW = new Date('2026-09-20T12:00:00Z')
 const RUN = '20260920-120000'
 const sel = (o: {
   rows: readonly WorksetRow[]
   humanDecided?: readonly string[]
   queuePending?: readonly string[]
-  hardBlocked?: readonly string[]
+  terminal?: readonly string[]
   limit?: number
 }) => selectWorkset({
   rows: o.rows,
   humanDecided: new Set(o.humanDecided ?? []),
   queuePending: new Set(o.queuePending ?? []),
-  hardBlocked: new Set(o.hardBlocked ?? []),
+  terminal: new Set(o.terminal ?? []),
   limit: o.limit ?? 5, runId: RUN, takenAt: NOW,
 })
 
@@ -83,9 +107,10 @@ console.log('\n② 🔴 단계별 상한 — 앞 단계가 뒤 단계를 굶기�
   }
   check('🔴 🔴 **단계 합이 전체를 넘으면 실행 전에 거부한다**',
     WORKSET_STAGE_PER_SOURCE.judge + WORKSET_STAGE_PER_SOURCE.draft <= WORKSET_TOTAL_PER_SOURCE)
-  check('🔴 🔴 **단계마다 장부 회차 id 가 다르다** — 상한이 섞이지 않는다',
-    stageRunIdOf(RUN, 'judge') !== stageRunIdOf(RUN, 'draft')
-    && stageRunIdOf(RUN, 'judge').startsWith(RUN))
+  check('🔴 🔴 **장부 회차 id 만 단계별로 다르다** — 파이프라인 id 는 하나다',
+    ledgerRunIdOf(RUN, 'judge') !== ledgerRunIdOf(RUN, 'draft')
+    && ledgerRunIdOf(RUN, 'judge') === `${RUN}-j`
+    && ledgerRunIdOf(RUN, 'draft') === `${RUN}-d`)
 }
 
 // ─────────────────────────────────────────────────────────
@@ -101,14 +126,15 @@ console.log('\n③ 🔴 고르기 전에 빼는 것 — AI 호출 전이다')
     ROW({ sourceArticleId: 'f6', commentCount: 94, safetyVerdict: 'review' }),
     ROW({ sourceArticleId: 'g7', commentCount: 93 }),
   ]
-  const p = sel({ rows, humanDecided: ['a1'], queuePending: ['c3'], hardBlocked: ['b2'], limit: 5 })
+  const p = sel({ rows, humanDecided: ['a1'], queuePending: ['c3'], terminal: ['b2'], limit: 5 })
   const ids = p.workset.sourceIds
   check('🔴 사람이 이미 판정한 원천은 빠진다', !ids.includes('a1') && p.dropped.humanDecided === 1)
   check('🔴 🔴 **같은 원문의 Queue 형제는 AI 호출 전에 빠진다**',
     !ids.includes('c3#2') && p.dropped.queueSibling === 1)
-  check('🔴 deterministic hard block 은 빠진다', !ids.includes('b2') && p.dropped.hardBlocked === 1)
-  check('🔴 접근이 ok 가 아니면 빠진다', !ids.includes('e5') && p.dropped.accessNotOk === 1)
-  check('🔴 안전이 pass 가 아니면 빠진다', !ids.includes('f6') && p.dropped.safetyNotPass === 1)
+  check('🔴 🔴 **앞 회차가 끝낸 원천은 빠진다** — 다음 회차를 굶기지 않는다',
+    !ids.includes('b2') && p.dropped.terminal === 1)
+  check('🔴 🔴 **접근·안전은 판정기 정본 게이트가 거른다**',
+    !ids.includes('e5') && !ids.includes('f6') && p.dropped.preGated === 2)
   check('🟢 남은 둘만 고른다', ids.length === 2 && ids.includes('d4') && ids.includes('g7'))
   check('🔴 형제 판정은 `#` 앞을 본다', baseIdOf('c3#2') === 'c3' && baseIdOf('c3') === 'c3')
 }
@@ -199,7 +225,7 @@ console.log('\n⑥ 🔴 세 단계가 같은 묶음을 본다 — 과거 파일�
     candidatesPath: '/d/new.candidates.json', limit: 5,
     perStage: { judge: 5, draft: 15 },
   }
-  const plans = planCommonPhase(pending, policy, gate, ws)
+  const plans = planBoundedCommonPhase(pending, policy, gate, ws)
   const of = (st: string): typeof plans[number] | undefined => plans.find((p) => p.stage === st)
 
   check('🔴 🔴 **judge 가 묶음 파일만 본다**',
@@ -215,18 +241,29 @@ console.log('\n⑥ 🔴 세 단계가 같은 묶음을 본다 — 과거 파일�
   check('🔴 🔴 **단계마다 자기 요청 상한을 받는다**',
     of('judge')?.env?.SORAN_LLM_RUN_REQUEST_CAP === '5'
     && of('draft')?.env?.SORAN_LLM_RUN_REQUEST_CAP === '15')
-  check('🔴 🔴 **단계마다 장부 회차 id 가 다르다**',
-    of('judge')?.args.includes(`--run-id=${stageRunIdOf(RUN, 'judge')}`) === true
-    && of('draft')?.args.includes(`--run-id=${stageRunIdOf(RUN, 'draft')}`) === true)
+  check('🔴 🔴 **파이프라인 id 는 세 단계가 같다** — 묶음·스냅샷·산출물이 이어진다',
+    of('judge')?.args.includes(`--run-id=${RUN}`) === true
+    && of('draft')?.args.includes(`--run-id=${RUN}`) === true)
+  check('🔴 🔴 **장부 id 만 j/d 로 갈린다**',
+    of('judge')?.args.includes(`--ledger-run-id=${ledgerRunIdOf(RUN, 'judge')}`) === true
+    && of('draft')?.args.includes(`--ledger-run-id=${ledgerRunIdOf(RUN, 'draft')}`) === true)
+  check('🔴 🔴 **생성기가 받는 --run-id 가 큐 스냅샷 회차와 같다** — RUN_MISMATCH 가 없다',
+    of('draft')?.args.includes(`--run-id=${gate.runId}`) === true)
   check('🔴 draft 는 큐 스냅샷을 계속 요구한다',
     of('draft')?.args.includes('--require-queue-snapshot') === true)
-  check('🟢 묶음이 없으면 옛 계약 그대로다 — 손으로 부르는 경로', (() => {
+  check('🟢 🔴 **손으로 부르는 경로는 묶음을 쓰지 않는다** — 함수가 다르다', (() => {
     const old = planCommonPhase(pending, policy, gate)
     const j = old.find((p) => p.stage === 'judge')
     const f = old.find((p) => p.stage === 'fill')
     return j?.args.some((a) => a.startsWith('--workset=')) === false
+      && j?.args.some((a) => a.startsWith('--ledger-run-id=')) === false
       && j?.env === undefined
       && f?.args.includes('--up-to=698') === true
+  })())
+  check('🔴 🔴 **live 경로는 묶음을 반드시 받는다** — 타입이 강제한다', (() => {
+    const src = readFileSync('src/lib/supply-process.ts', 'utf-8')
+    return /planBoundedCommonPhase\([\s\S]{0,200}workset: WorksetGate,\n\): StagePlan\[\]/.test(src)
+      && !/planBoundedCommonPhase[\s\S]{0,200}workset\?:/.test(src)
   })())
 }
 
@@ -238,9 +275,13 @@ console.log('\n⑦ 🔴 배선이 실제로 그렇게 돼 있는가')
   const judge = readFileSync('scripts/micro-seed-auto-judge.mts', 'utf-8')
   const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
 
-  check('🔴 🔴 **묶음을 adapt 뒤·공통 단계 계획 앞에서 고른다**',
-    runner.indexOf('selectWorkset(') > runner.indexOf('const phase1 = await runSourcePhase')
-    && runner.indexOf('selectWorkset(') < runner.indexOf('planCommonPhase(after1'))
+  check('🔴 🔴 **묶음을 adapt 뒤·공통 단계 계획 앞에서 고른다**', (() => {
+    // 🔴 import 줄이 아니라 **호출 자리**를 본다
+    const call = runner.indexOf('const plan = selectWorkset({')
+    const adapt = runner.indexOf('const phase1 = await runSourcePhase')
+    const plan = runner.indexOf('planBoundedCommonPhase(after1')
+    return adapt > 0 && call > adapt && plan > call
+  })())
   check('🔴 🔴 **상한이 잘못되면 실행 전에 멈춘다**',
     /const budget = judgeStageBudget\(WORKSET_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)[\s\S]{0,120}return 1/.test(runner))
   check('🔴 단계 env 는 자식 프로세스에만 실린다',
@@ -261,11 +302,9 @@ console.log('\n⑦ 🔴 배선이 실제로 그렇게 돼 있는가')
     return !/callProvider|fetch\(|--call/.test(block)
   })())
   check('🔴 🔴 **backlog 입력 파일을 지우지 않는다**', (() => {
-    // 🔴 `rmSync` 는 잠금 해제에만 쓴다 — 상세·판정·후보 파일을 지우는 자리는 없다
-    const calls = runner.match(/rmSync\([^)]*\)/g) ?? []
-    return calls.every((c) => /LOCK|lock/.test(c))
-      && !/unlinkSync/.test(runner)
-      && !/detail\.jsonl['"`]\s*\)/.test(runner)
+    // 🔴 지우는 호출 자체가 없다 — 잠금 해제조차 여기서 하지 않는다
+    const calls = runner.match(/\b(rmSync|unlinkSync|rmdirSync)\(/g) ?? []
+    return calls.length === 0
   })())
 }
 

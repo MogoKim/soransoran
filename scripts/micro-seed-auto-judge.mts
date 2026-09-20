@@ -24,6 +24,7 @@ import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   judgeOne, summarize, checkRegression, violatesProvenance, parseSemantic, inputHashOf,
+  mergeJudgeRows,
   hardGate, preSemanticGate, HARD_BLOCK, BODY_HEAD_MAX,
   REASON_LABEL, RULE_VERSION, PROMPT_VERSION, AUTO_PROVENANCE, SEED_AXIS, RAW_AXIS, SKIPPED,
   type Judgement, type JudgeInput, type RegressionRow, type SemanticOutcome, type SemanticStatus,
@@ -71,6 +72,14 @@ const RUN_ID = argv.find((a) => a.startsWith('--run-id='))?.slice('--run-id='.le
  *    없으면 종전대로 전부다 — 손으로 부르는 경로는 그대로 둔다.
  *    🔴 backlog 전체를 미리 판정하지 않기 위한 계약이다.
  */
+/**
+ * 🔴 **비용 장부 회차 id** (2026-09-20). `--run-id` 와 **책임이 다르다** —
+ *    `--run-id` 는 묶음·큐 스냅샷·산출물을 잇는 파이프라인 id 이고,
+ *    이것은 장부의 요청 상한을 단계마다 가르는 값이다.
+ *    없으면 `--run-id` 를 그대로 쓴다(손으로 부르는 경로).
+ */
+const LEDGER_RUN_ID = argv.find((a) => a.startsWith('--ledger-run-id='))
+  ?.slice('--ledger-run-id='.length) ?? null
 const WORKSET_PATH = argv.find((a) => a.startsWith('--workset='))?.slice('--workset='.length) ?? null
 /** 🔴 판정 파일을 **정확히 이 경로로** 쓴다 — 다음 단계가 이 파일만 읽는다 */
 const SHADOW_OUT = argv.find((a) => a.startsWith('--shadow-out='))?.slice('--shadow-out='.length) ?? null
@@ -140,45 +149,19 @@ function inputOverride(): string[] | null {
 }
 
 function loadTargets(): JudgeInput[] {
-  const byId = new Map<string, JudgeInput>()
   const only = inputOverride()
   // 🔴 지정이 있으면 그 목록에서만 고른다. 없으면 종전대로 디렉터리 전체다
   const pick = (suffix: string): string[] => (only === null
     ? filesEnding(suffix)
     : only.filter((f) => f.endsWith(suffix)))
-  for (const f of pick('.detail.jsonl')) {
-    for (const r of jsonl(f)) {
-      const id = S(r.sourceArticleId)
-      if (id === '') continue
-      byId.set(id, {
-        sourceArticleId: id, axis: S(r.axis), access: S(r.access),
-        // 🔴 v1 이 여기서 title · bodyHead 를 빠뜨렸다. 저장은 돼 있는데 판정에 안 넣었다
-        title: S(r.title), bodyHead: S(r.bodyHead), commentCount: Number(r.commentCount ?? 0),
-        lane: S(r.lane), assetAxes: S(r.assetAxes),
-        safetyVerdict: S(r.safetyVerdict), safetyReasons: S(r.safetyReasons),
-        bodyLength: Number(r.bodyLength ?? 0),
-        qualityFlags: Array.isArray(r.qualityFlags) ? r.qualityFlags.map(String) : [],
-      })
-    }
-  }
-  for (const f of pick('.raw-detail.jsonl')) {
-    for (const r of jsonl(f)) {
-      const id = S(r.sourceArticleId)
-      if (id === '') continue
-      // 🔴 raw 파일이 더 최신 판정을 가질 수 있다 — 축이 rawOriginality 면 덮어쓴다
-      const prev = byId.get(id)
-      const cand: JudgeInput = {
-        sourceArticleId: id, axis: S(r.axis), access: S(r.accessStatus),
-        title: S(r.title), bodyHead: S(r.bodyHead), commentCount: Number(r.commentCount ?? 0),
-        lane: S(r.lane), assetAxes: S(r.assetAxes),
-        safetyVerdict: S(r.safetyVerdict), safetyReasons: S(r.safetyReasons),
-        bodyLength: Number(r.bodyLength ?? 0),
-        qualityFlags: Array.isArray(r.qualityFlags) ? r.qualityFlags.map(String) : [],
-      }
-      if (prev === undefined || S(r.axis) === RAW_AXIS) byId.set(id, cand)
-    }
-  }
-  return [...byId.values()]
+  /**
+   * 🔴 **정규화는 정본 하나만 쓴다** (`mergeJudgeRows`). 여기서 칸을 손으로 맞추지 않는다 —
+   *    `access` 와 `accessStatus` 를 두 벌로 다루다 정상 원천을 덮어쓴 적이 있다.
+   */
+  const entries: { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[] = []
+  for (const f of pick('.detail.jsonl')) for (const r of jsonl(f)) entries.push({ kind: 'detail', row: r })
+  for (const f of pick('.raw-detail.jsonl')) for (const r of jsonl(f)) entries.push({ kind: 'raw-detail', row: r })
+  return mergeJudgeRows(entries)
 }
 
 /** 🔴 판정에 쓰는 모델. 기존 계약의 라벨을 그대로 쓴다 */
@@ -435,7 +418,10 @@ async function main(): Promise<void> {
   if (RUN_ID === null || RUN_ID.trim() === '') {
     fail('--run-id 가 없습니다 — 회차 요청 상한을 생성 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
   }
-  LEDGER = new SupplyLlmSession({ runId: RUN_ID, limits: limitsFromEnv(process.env) })
+  // 🔴 **장부만 별도 id 를 쓴다** — 파이프라인 id(`RUN_ID`)는 그대로 둔다
+  LEDGER = new SupplyLlmSession({
+    runId: LEDGER_RUN_ID ?? RUN_ID, limits: limitsFromEnv(process.env),
+  })
   console.log(`   회차 ${RUN_ID} — 생성 단계와 요청 상한을 나눠 쓴다`)
   console.log(`   장부 ${LEDGER.dir}`)
   console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`

@@ -34,7 +34,7 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
   PROCESS_KILL_SWITCH_ENV, LOCK_FILE, LOCK_TTL_MS, SUPPLY_SOURCES,
   fmtCount, hasWork, judgeBuffer, judgeProcessRun,
-  mayWriteRunState, planCommonPhase, planPending, planSourcePhase, stageRunIdOf, type WorksetGate,
+  mayWriteRunState, planBoundedCommonPhase, planCommonPhase, planPending, planSourcePhase, ledgerRunIdOf, type WorksetGate,
   runCommonPhase, runSourcePhase, runFileName, runStatusOf, verifyRun,
   type LockView, type ProcessRun, type ProcessStage, type StagePlan, type StageGate,
 } from '../src/lib/supply-process'
@@ -52,9 +52,11 @@ import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 /** 🔴 작업 묶음 정본 — 모양·상한·선택 규칙은 전부 저기 하나에 있다 */
 import {
-  judgeStageBudget, selectWorkset, worksetFileName,
+  judgeStageBudget, selectWorkset, terminalSourceIds, worksetFileName,
   WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL, type WorksetRow,
 } from '../src/lib/supply-workset'
+import { mergeJudgeRows } from '../src/lib/micro-seed-auto-judge'
+import { artifactRetryable } from '../src/lib/content-core/review'
 import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
@@ -75,31 +77,90 @@ const WORKSET_LIMIT = ((): number => {
 })()
 
 /**
- * 🔴 상세 파일에서 **고르기에 필요한 칸만** 읽는다. 원문 본문은 읽지 않는다.
- *    같은 원천이 여러 파일에 있으면 뒤에 온 것이 최신이다(`selectWorkset` 이 그렇게 센다).
+ * 🔴 상세 파일을 **판정기와 같은 정규화**로 읽는다 (`mergeJudgeRows`).
+ *    `detail` 의 `access` 와 `raw-detail` 의 `accessStatus` 를 정본이 맞춘다 —
+ *    여기서 손으로 파싱하면 raw 행이 정상 원천을 덮어쓴다.
+ * 🔴 **파싱에 실패하면 `null`** — 부르는 쪽이 fail-closed 한다.
  */
-function worksetRows(paths: readonly string[]): WorksetRow[] {
-  const out: WorksetRow[] = []
+function worksetRows(paths: readonly string[]): WorksetRow[] | null {
+  const entries: { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[] = []
+  /** 정렬에 쓰는 칸 — 🔴 판정 입력에는 없는 값이라 따로 모은다 */
+  const meta = new Map<string, { site: string; posted: string; listed: string }>()
+  const S2 = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
   for (const f of paths) {
+    const kind: 'detail' | 'raw-detail' = f.endsWith('.raw-detail.jsonl') ? 'raw-detail' : 'detail'
     let raw: string
-    try { raw = readFileSync(f, 'utf-8') } catch { continue }
+    try { raw = readFileSync(f, 'utf-8') } catch { return null }
     for (const line of raw.split('\n')) {
       const t = line.trim()
       if (t === '') continue
       let r: Record<string, unknown>
-      try { r = JSON.parse(t) as Record<string, unknown> } catch { continue }
-      const id = typeof r.sourceArticleId === 'string' ? r.sourceArticleId.trim() : ''
+      // 🔴 한 줄이라도 깨져 있으면 조용히 건너뛰지 않는다 — 고를 대상이 달라진다
+      try { r = JSON.parse(t) as Record<string, unknown> } catch { return null }
+      entries.push({ kind, row: r })
+      const id = S2(r.sourceArticleId)
       if (id === '') continue
-      const S2 = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
-      out.push({
-        sourceArticleId: id, sourceSite: S2(r.sourceSite),
-        commentCount: typeof r.commentCount === 'number' ? r.commentCount : 0,
-        sourcePostedAt: S2(r.sourcePostedAt), sourceListedAt: S2(r.sourceListedAt),
-        access: S2(r.access), safetyVerdict: S2(r.safetyVerdict),
+      const prev = meta.get(id)
+      meta.set(id, {
+        site: S2(r.sourceSite) !== '' ? S2(r.sourceSite) : prev?.site ?? '',
+        posted: S2(r.sourcePostedAt) !== '' ? S2(r.sourcePostedAt) : prev?.posted ?? '',
+        listed: S2(r.sourceListedAt) !== '' ? S2(r.sourceListedAt) : prev?.listed ?? '',
       })
     }
   }
-  return out
+  return mergeJudgeRows(entries).map((input): WorksetRow => {
+    const id = String(input.sourceArticleId ?? '')
+    const m = meta.get(id)
+    return {
+      sourceArticleId: id, sourceSite: m?.site ?? '',
+      commentCount: Number(input.commentCount ?? 0),
+      sourcePostedAt: m?.posted ?? '', sourceListedAt: m?.listed ?? '',
+      input,
+    }
+  })
+}
+
+/**
+ * 🔴 **앞 회차가 끝낸 원천** — 판정 파일과 artifact 에서 모은다. 새 파일을 만들지 않는다.
+ *    예산·상한에 막힌 것은 재시도 대상이라 빼지 않는다.
+ */
+function terminalIds(): Set<string> {
+  const judgements: { sourceArticleId: string; decision: string; semanticStatus: string }[] = []
+  const artifacts: { sourceArticleId: string; retryable: boolean; outcome: string }[] = []
+  for (const f of readdirSync(DATA_DIR)) {
+    if (f.endsWith('.shadow.jsonl')) {
+      let raw: string
+      try { raw = readFileSync(join(DATA_DIR, f), 'utf-8') } catch { continue }
+      for (const line of raw.split('\n')) {
+        const t = line.trim()
+        if (t === '') continue
+        try {
+          const j = JSON.parse(t) as Record<string, unknown>
+          judgements.push({
+            sourceArticleId: String(j.sourceArticleId ?? ''),
+            decision: String(j.decision ?? ''),
+            semanticStatus: String(j.semanticStatus ?? ''),
+          })
+        } catch { /* 못 읽는 줄은 건너뛴다 — 끝난 것으로 세지 않는 쪽이 안전하다 */ }
+      }
+      continue
+    }
+    if (!/^auto-draft-.*\.artifacts\.json$/.test(f)) continue
+    try {
+      const rows = JSON.parse(readFileSync(join(DATA_DIR, f), 'utf-8')) as unknown
+      if (!Array.isArray(rows)) continue
+      for (const a of rows) {
+        const o = a as Record<string, unknown>
+        const rv = (o.review ?? {}) as Record<string, unknown>
+        artifacts.push({
+          sourceArticleId: String(o.sourceArticleId ?? ''),
+          outcome: String(rv.machineOutcome ?? ''),
+          retryable: artifactRetryable(rv),
+        })
+      }
+    } catch { /* 같은 이유로 건너뛴다 */ }
+  }
+  return terminalSourceIds({ judgements, artifacts })
 }
 
 /** 🔴 사람이 이미 판정한 원천 — 판정기와 **같은 파일들**을 본다 */
@@ -474,8 +535,9 @@ async function main(): Promise<number> {
     return 1
   }
   const wsPath = join(DATA_DIR, worksetFileName(runId))
-  const shadowPath = join(DATA_DIR, `auto-judge-${stageRunIdOf(runId, 'judge')}.shadow.jsonl`)
-  const candPath = join(DATA_DIR, `auto-draft-${stageRunIdOf(runId, 'draft')}.candidates.json`)
+  // 🔴 파일 이름은 **파이프라인 회차 id** 로 짓는다 — 세 단계가 같은 값으로 이어진다
+  const shadowPath = join(DATA_DIR, `auto-judge-${runId}.shadow.jsonl`)
+  const candPath = join(DATA_DIR, `auto-draft-${runId}.candidates.json`)
 
   /**
    * 🔴 큐 스냅샷을 **묶음을 고르기 전에** 뜬다 — 같은 원문의 미발행 형제를
@@ -506,11 +568,13 @@ async function main(): Promise<number> {
 
   let workset: WorksetGate | undefined
   if (snapOk && policy.llm) {
+    const rows = worksetRows(after1.detail.map((f) => join(DATA_DIR, f)))
+    if (rows === null) {
+      console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
+      return 1
+    }
     const plan = selectWorkset({
-      rows: worksetRows(after1.detail.map((f) => join(DATA_DIR, f))),
-      humanDecided: humanDecidedIds(),
-      queuePending,
-      hardBlocked: new Set<string>(),
+      rows, humanDecided: humanDecidedIds(), queuePending, terminal: terminalIds(),
       limit: WORKSET_LIMIT, runId, takenAt: new Date(),
     })
     writeAtomic(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`)
@@ -531,7 +595,19 @@ async function main(): Promise<number> {
     }
   }
 
-  const common = planCommonPhase(after1, policy, {
+  /**
+   * 🔴 **묶음 없이 live 를 돌리지 않는다** (2026-09-20 보정).
+   *    앞판은 `workset` 이 `undefined` 면 옛 전체 스캔으로 넘어갔다 —
+   *    그것이 canary 에서 backlog 609건을 판정하게 만든 길이다.
+   */
+  if (workset === undefined) {
+    console.error('\n🔴 중단: 작업 묶음을 만들지 못했다 — judge · draft · fill 0회\n')
+    record.status = 'failed'
+    record.completedAt = nowIso()
+    save()
+    return 1
+  }
+  const common = planBoundedCommonPhase(after1, policy, {
     kind: 'ready', snapshotPath: snapPath, runId,
   }, workset)
   /**

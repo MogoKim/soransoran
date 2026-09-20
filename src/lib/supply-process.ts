@@ -352,32 +352,29 @@ export type WorksetGate = {
   perStage: Readonly<Record<'judge' | 'draft', number>>
 }
 
-/** 🔴 단계마다 **자기 장부 회차 id** 를 쓴다 — 상한이 섞이지 않는다 */
-export const stageRunIdOf = (runId: string, stage: 'judge' | 'draft'): string =>
+/**
+ * 🔴 **비용 장부 회차 id 는 따로 쓴다** (2026-09-20 보정).
+ *
+ *    `--run-id` 하나에 provenance(묶음·큐 스냅샷·산출물 연결)와 장부 책임을 겹치면
+ *    생성기가 큐 스냅샷을 **다른 회차 파일**로 읽고 거절한다(`RUN_MISMATCH`).
+ *    파이프라인 id 는 세 단계가 **같은 값**을 쓰고, 장부 id 만 단계별로 가른다.
+ */
+export const ledgerRunIdOf = (runId: string, stage: 'judge' | 'draft'): string =>
   `${runId}-${stage === 'judge' ? 'j' : 'd'}`
 
 const LEDGER_CAP_ENV = 'SORAN_LLM_RUN_REQUEST_CAP'
 
+/**
+ * 🔴 **손으로 부르는 경로** — 디렉터리 전체를 본다. 묶음 계약이 없다.
+ *    live 공급은 이 함수를 쓰지 않는다 (`planBoundedCommonPhase` 를 쓴다).
+ */
 export function planCommonPhase(
-  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate, workset?: WorksetGate,
+  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,
 ): StagePlan[] {
   const out: StagePlan[] = []
   if (!policy.llm) return out
-  /**
-   * 🔴 **묶음이 정해졌으면 그 묶음만 돈다** (2026-09-20).
-   *    묶음이 없으면 옛 계약(디렉터리 전체)이다 — 손으로 부르는 경로가 그렇다.
-   */
   if (pending.detail.length > 0) {
-    out.push(mk('judge', [
-      '--call', '--apply',
-      `--run-id=${workset === undefined ? gate.runId : stageRunIdOf(gate.runId, 'judge')}`,
-      ...(workset === undefined ? [] : [
-        `--workset=${workset.manifestPath}`,
-        `--shadow-out=${workset.shadowPath}`,
-      ]),
-    ], null, workset === undefined ? undefined : {
-      [LEDGER_CAP_ENV]: String(workset.perStage.judge),
-    }))
+    out.push(mk('judge', ['--call', '--apply', `--run-id=${gate.runId}`], null))
   }
   if (pending.shadow.length > 0 || pending.detail.length > 0) {
     /**
@@ -388,22 +385,57 @@ export function planCommonPhase(
       out.push(mk('draft', [
         '--call', '--apply',
         `--queue-snapshot=${gate.snapshotPath}`,
-        `--run-id=${workset === undefined ? gate.runId : stageRunIdOf(gate.runId, 'draft')}`,
+        `--run-id=${gate.runId}`,
         // 🔴 파일이 없으면 만들지 말라는 뜻 — 생성기가 스스로 fail-closed 한다
         '--require-queue-snapshot',
-        // 🔴 **그 회차가 만든 판정 파일만** 읽는다 — 과거 shadow 를 다시 훑지 않는다
-        ...(workset === undefined ? [] : [`--input=${workset.shadowPath}`]),
-      ], null, workset === undefined ? undefined : {
-        [LEDGER_CAP_ENV]: String(workset.perStage.draft),
-      }))
+      ], null))
     }
   }
   if (policy.fill && policy.upTo > 0 && (pending.candidates.length > 0 || pending.detail.length > 0)) {
-    out.push(mk('fill', workset === undefined
-      ? ['--apply', `--up-to=${policy.upTo}`]
-      // 🔴 **그 회차 후보 파일만** · 정확히 묶음 크기까지. 과거 후보 파일은 대상이 아니다
-      : ['--apply', `--input=${workset.candidatesPath}`, `--up-to=${Math.min(policy.upTo, workset.limit)}`],
-    null))
+    out.push(mk('fill', ['--apply', `--up-to=${policy.upTo}`], null))
+  }
+  return out
+}
+
+/**
+ * 🔴 **live 공급 경로** — 묶음이 **반드시** 있어야 한다. 타입이 그것을 강제한다.
+ *
+ *    묶음을 못 만들면 부르는 쪽이 회차를 멈춘다. `undefined` 를 넘겨 옛 전체 스캔으로
+ *    새는 길이 없다 — 그것이 2026-09-20 canary 를 만든 구조다.
+ */
+export function planBoundedCommonPhase(
+  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate, workset: WorksetGate,
+): StagePlan[] {
+  const out: StagePlan[] = []
+  if (!policy.llm) return out
+  if (pending.detail.length > 0) {
+    out.push(mk('judge', [
+      '--call', '--apply',
+      // 🔴 파이프라인 id 는 세 단계가 같다 — 묶음·스냅샷·산출물이 이 값으로 이어진다
+      `--run-id=${gate.runId}`,
+      // 🔴 장부 id 만 단계별로 가른다 — 상한이 섞이지 않는다
+      `--ledger-run-id=${ledgerRunIdOf(gate.runId, 'judge')}`,
+      `--workset=${workset.manifestPath}`,
+      `--shadow-out=${workset.shadowPath}`,
+    ], null, { [LEDGER_CAP_ENV]: String(workset.perStage.judge) }))
+  }
+  if ((pending.shadow.length > 0 || pending.detail.length > 0) && gate.kind === 'ready') {
+    out.push(mk('draft', [
+      '--call', '--apply',
+      `--queue-snapshot=${gate.snapshotPath}`,
+      `--run-id=${gate.runId}`,
+      `--ledger-run-id=${ledgerRunIdOf(gate.runId, 'draft')}`,
+      '--require-queue-snapshot',
+      // 🔴 **그 회차가 만든 판정 파일만** 읽는다 — 과거 shadow 를 다시 훑지 않는다
+      `--input=${workset.shadowPath}`,
+    ], null, { [LEDGER_CAP_ENV]: String(workset.perStage.draft) }))
+  }
+  if (policy.fill && policy.upTo > 0 && (pending.candidates.length > 0 || pending.detail.length > 0)) {
+    // 🔴 **그 회차 후보 파일만** · 정확히 묶음 크기까지. 과거 후보 파일은 대상이 아니다
+    out.push(mk('fill', [
+      '--apply', `--input=${workset.candidatesPath}`,
+      `--up-to=${Math.min(policy.upTo, workset.limit)}`,
+    ], null))
   }
   return out
 }

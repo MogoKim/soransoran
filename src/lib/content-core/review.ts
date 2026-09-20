@@ -241,6 +241,23 @@ export type MachineOutcome = 'adopt' | 'hold' | 'drop'
  *    예산이 모자랄수록 검수가 느슨해지는 구조를 만들지 않는다.
  * 🔴 adopt 는 **후보로 보낸다**는 뜻일 뿐이다. 사람 검토 없는 발행은 그대로 막혀 있다.
  */
+/**
+ * 🔴 **이 회차 결과를 다시 시도해야 하는가.** 예산·상한에 막힌 것만 재시도 대상이다 —
+ *    결론이 아니라 "묻지 못했다" 이기 때문이다.
+ *    🔴 공급 회차가 다음 묶음을 고를 때 이것으로 가른다. 낱말을 직접 비교하지 않는다.
+ */
+export function artifactRetryable(review: {
+  semanticCompletion?: { complete?: boolean; reason?: string | null } | null
+  machineReason?: string
+} | null | undefined): boolean {
+  if (review === null || review === undefined) return true
+  const reason = review.semanticCompletion?.reason ?? null
+  if (reason === 'budgetBlocked') return true
+  // 🔴 앞 단계가 막혀 검수를 못 부른 경우도 사유 문구로 드러난다
+  return typeof review.machineReason === 'string'
+    && review.machineReason.includes(INCOMPLETE_LABEL.budgetBlocked)
+}
+
 export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource'] as const
 export type ReviewWarningAxis = (typeof REVIEW_WARNING_AXES)[number]
 

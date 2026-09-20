@@ -159,6 +159,14 @@ const RUN_ID = ((): string | null => {
   const hit = argv.find((a) => a.startsWith('--run-id='))
   return hit === undefined ? null : hit.slice('--run-id='.length)
 })()
+/**
+ * 🔴 **비용 장부 회차 id** (2026-09-20). `--run-id` 와 **책임이 다르다** —
+ *    `--run-id` 는 묶음·큐 스냅샷·산출물을 잇는 파이프라인 id 이고,
+ *    이것은 장부의 요청 상한을 단계마다 가르는 값이다.
+ *    없으면 `--run-id` 를 그대로 쓴다(손으로 부르는 경로).
+ */
+const LEDGER_RUN_ID = argv.find((a) => a.startsWith('--ledger-run-id='))
+  ?.slice('--ledger-run-id='.length) ?? null
 const REQUIRE_QUEUE_SNAPSHOT = argv.includes('--require-queue-snapshot')
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
@@ -832,7 +840,10 @@ async function main(): Promise<void> {
   if (RUN_ID === null || RUN_ID.trim() === '') {
     fail('--run-id 가 없습니다 — 회차 요청 상한을 판정 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
   }
-  LEDGER = new SupplyLlmSession({ runId: RUN_ID, limits: limitsFromEnv(process.env) })
+  // 🔴 **장부만 별도 id 를 쓴다** — 파이프라인 id(`RUN_ID`)는 그대로 둔다
+  LEDGER = new SupplyLlmSession({
+    runId: LEDGER_RUN_ID ?? RUN_ID, limits: limitsFromEnv(process.env),
+  })
   console.log(`   회차 ${RUN_ID} — 판정 단계와 요청 상한을 나눠 쓴다`)
   console.log(`   장부 ${LEDGER.dir}`)
   console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`
