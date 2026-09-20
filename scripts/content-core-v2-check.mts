@@ -17,7 +17,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
 import {
-  buildSpeakerPlanSystemPrompt, buildV2DraftSystemPrompt, lifeContractLines,
+  buildSpeakerPlanSystemPrompt, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, lifeContractLines,
   qualificationLine, sourceBlock,
 } from './lib/content-core-prompts.mjs'
 import {
@@ -26,12 +26,18 @@ import {
 } from '../src/lib/content-core/speaker'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
-import { LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL } from '../src/lib/content-core/review'
+import {
+  LIFE_CONTRADICTION_FACTS, SEMANTIC_AXES, INCOMPLETE_LABEL, REVIEW_VERSION,
+  REVIEW_WARNING_AXES, judgeMachine,
+  type DeterministicResult, type ReviewCompletion, type SemanticVerdict,
+} from '../src/lib/content-core/review'
+import { readReviewArtifact, reviewEvidenceLines } from '../src/lib/original-post-machine-review'
 import { violatesArtifact, artifactSummary, ARTIFACT_VERSION, type HumanReviewArtifact }
   from '../src/lib/content-core/artifact'
 import {
   CONTENT_CORE_PROMPT_VERSION, SPEAKER_PLAN_PROMPT_VERSION, CONTENT_CORE_PIPELINE_VERSION,
   CONTENT_CORE_STAGES, STAGE_MAX_OUTPUT_TOKENS, V2_DRAFT_PROMPT_VERSION,
+  V2_REVIEW_PROMPT_VERSION,
 } from '../src/lib/content-core/pipeline'
 import { buildVoiceEvidence, voiceStandardOf, VOICE_SAMPLE_MIN }
   from '../src/lib/content-core/voice-evidence'
@@ -553,7 +559,15 @@ console.log('\n⑧ 🔴 생성·검수 — 원문 직접 · 복제 차단 · 과
   const invented = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
     review: { ...EMPTY_REVIEW, confidence: 0.85,
       unsupportedAdditions: [{ evidence: '다들 사 가시나요.', why: '원문에 없는 장면' }] } } })
-  check('🔴 원문에 없는 사건은 adopt 아님', invented.review.machineOutcome === 'hold')
+  /**
+   * 🔴 **2026-09-20 — 이제 경고다.** 막지 않고 사람에게 넘긴다.
+   *    근거는 artifact 에 그대로 남는다 (아래 두 줄이 그것을 본다).
+   */
+  check('🟡 🔴 **원문에 없어 보이는 것은 막지 않고 후보로 보낸다**',
+    invented.review.machineOutcome === 'adopt', invented.review.machineReason)
+  check('🔴 🔴 **그래도 근거는 artifact 에 남는다**',
+    invented.review.unsupportedAdditions.length === 1
+    && invented.review.unsupportedAdditions[0]!.evidence === '다들 사 가시나요.')
 
   const ghostEvidence = await run({ ...base, canned: { plan: PLAN_OK, draft: GOOD,
     review: { ...EMPTY_REVIEW, confidence: 0.85,
@@ -1032,6 +1046,135 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
   check('🔴 🔴 **차단 규칙·검수 축을 더하지 않았다**',
     SEMANTIC_AXES.length === 3
     && !/ㅋ\{2,\}|ㅎ\{2,\}|ㅠ\{2,\}/.test(readFileSync('src/lib/content-core/review.ts', 'utf-8')))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, 애매한 판정은 사람에게 (2026-09-20)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 SHADOW5B 5편은 사람이 전부 READY 로 봤는데 `unsupportedAdditions` ·
+   *    `droppedFromSource` 가 두 편을 막았고, **같은 원문·같은 초안이 회차마다
+   *    ADOPT/HOLD 를 오갔다.** 그래서 이 둘은 경고로 내리고 판정을 사람에게 넘긴다.
+   *
+   * 🔴 **프롬프트 문자열을 세지 않는다** — `judgeMachine` 이 실제로 어떻게
+   *    판정하는지 값으로 본다. 예시를 프롬프트에 박아 맞추는 방식은 그만둔다.
+   */
+  const PASS: DeterministicResult = { pass: true, failures: [] }
+  const DONE: ReviewCompletion = { complete: true, reason: null }
+  const V = (o: Partial<SemanticVerdict> = {}): SemanticVerdict => ({
+    issues: [], unknownIssues: [], droppedFromSource: [], unsupportedAdditions: [],
+    lifeContradictions: [], confidence: 0.9, note: '', ...o,
+  })
+  const ADD = [{ evidence: '어제 아침에도 일어났는데 힘이 너무 안 나서', why: '원문에 없다' }]
+  const DROP = [{ evidence: '형수가 음식사오니깐 나오는데', why: '사라졌다' }]
+
+  // ── ① unsupportedAdditions 만 있으면 후보로 간다 ──
+  {
+    const j = judgeMachine({ deterministic: PASS, semantic: V({ unsupportedAdditions: ADD }), semanticCompletion: DONE })
+    check('🟢 🔴 **원문에 없어 보이는 것만 있으면 adopt 다** — 사람에게 넘긴다',
+      j.outcome === 'adopt', `${j.outcome} / ${j.reason}`)
+    check('🔴 🔴 **경고는 사라지지 않는다** — 근거가 그대로 남는다',
+      j.warnings.length === 1 && j.warnings[0]!.includes('어제 아침에도 일어났는데'))
+  }
+  // ── ② droppedFromSource 만 있어도 후보로 간다 ──
+  {
+    const j = judgeMachine({ deterministic: PASS, semantic: V({ droppedFromSource: DROP }), semanticCompletion: DONE })
+    check('🟢 🔴 **원문에서 사라져 보이는 것만 있으면 adopt 다**', j.outcome === 'adopt', j.reason)
+    check('🔴 그 근거도 경고로 남는다',
+      j.warnings.length === 1 && j.warnings[0]!.includes('형수가 음식사오니깐'))
+  }
+  // ── ③ 둘 다 있어도 사람 검토 후보다 ──
+  {
+    const j = judgeMachine({
+      deterministic: PASS, semanticCompletion: DONE,
+      semantic: V({ unsupportedAdditions: ADD, droppedFromSource: DROP }),
+    })
+    check('🟢 🔴 **두 경고가 함께 있어도 사람 검토 후보가 된다**', j.outcome === 'adopt', j.reason)
+    check('🔴 경고 둘이 모두 남는다', j.warnings.length === 2)
+  }
+  // ── ④ 확정할 수 있는 결함은 그대로 막는다 ──
+  for (const [name, arg, want] of [
+    ['생활사 모순', V({ lifeContradictions: [{ fact: 'work', drafted: '전업', card: '파트타임', evidence: 'x' }] }), 'hold'],
+    ['harm', V({ issues: ['harm'] }), 'drop'],
+    ['말투 누수', V({ issues: ['voiceContentLeak'] }), 'hold'],
+    ['말투 불일치', V({ issues: ['voiceMismatch'] }), 'hold'],
+    ['모르는 축', V({ unknownIssues: ['무엇'] }), 'hold'],
+  ] as const) {
+    const j = judgeMachine({ deterministic: PASS, semantic: arg, semanticCompletion: DONE })
+    check(`🔴 🔴 **${name} 은 계속 ${want.toUpperCase()} 다**`, j.outcome === want, j.outcome)
+  }
+  for (const [name, code, want] of [
+    ['개인정보', 'personalInfo', 'drop'],
+    ['금지어', 'bannedWord', 'drop'],
+    ['복제', 'copiedFromSource', 'hold'],
+    ['보호 사실 누락', 'protectedFactMissing', 'hold'],
+  ] as const) {
+    const det: DeterministicResult = { pass: false, failures: [{ code, detail: '' }] }
+    const j = judgeMachine({ deterministic: det, semantic: V(), semanticCompletion: DONE })
+    check(`🔴 🔴 **${name} 은 계속 ${want.toUpperCase()} 다**`, j.outcome === want, j.outcome)
+  }
+  for (const reason of ['truncated', 'noResponse', 'parseFailed', 'usageUnknown', 'budgetBlocked', 'notRun'] as const) {
+    const j = judgeMachine({ deterministic: PASS, semantic: null, semanticCompletion: { complete: false, reason } })
+    check(`🔴 미완료(${reason})는 계속 HOLD 다`, j.outcome === 'hold')
+  }
+  check('🔴 🔴 **경고 축은 둘뿐이다** — 새 축을 만들지 않았다',
+    REVIEW_WARNING_AXES.length === 2
+    && REVIEW_WARNING_AXES.join(',') === 'unsupportedAdditions,droppedFromSource')
+  check('🔴 검수 축은 그대로 셋이다', SEMANTIC_AXES.join(',') === 'voiceContentLeak,voiceMismatch,harm')
+
+  // ── ⑤ 사람 검토 화면이 경고를 보여준다 ──
+  {
+    const art = readReviewArtifact({
+      artifactId: 'a'.repeat(32), sourceArticleId: 's1',
+      evidence: { spans: [{ kind: 'head', text: '원문 조각' }] },
+      plan: { personaCode: 'P01', stance: 'SELF_EXPERIENCE', warrants: [] },
+      draft: { title: '제목', body: '본문' },
+      review: {
+        machineOutcome: 'adopt', machineReason: '',
+        unsupportedAdditions: ADD, droppedFromSource: DROP, lifeContradictions: [],
+      },
+      cost: { calls: [] },
+    })
+    const lines = art === null ? [] : reviewEvidenceLines(art).join('\n')
+    check('🔴 🔴 **사람 검토 화면에 원문 근거가 보인다**', String(lines).includes('원문 조각'))
+    check('🔴 🔴 **경고 근거 둘이 모두 보인다**',
+      String(lines).includes('어제 아침에도 일어났는데') && String(lines).includes('형수가 음식사오니깐'))
+    check('🔴 🔴 **기계가 막지 않았다고 화면이 말한다**',
+      String(lines).includes('[사람이 판정]') && String(lines).includes('기계가 막지 않았다'))
+  }
+
+  // ── ⑥ SHADOW5B 5편을 provider 없이 다시 판정하면 전부 후보다 ──
+  {
+    /** 🔴 실제 재실행에서 Haiku 가 낸 판정 그대로 — provider 를 부르지 않는다 */
+    const real: { id: string; add: number; drop: number }[] = [
+      { id: '450476', add: 1, drop: 0 },
+      { id: '449787', add: 0, drop: 0 },
+      { id: '35023663', add: 0, drop: 1 },
+      { id: '450407', add: 0, drop: 0 },
+      { id: '449635', add: 0, drop: 0 },
+    ]
+    const outcomes = real.map((r) => judgeMachine({
+      deterministic: PASS, semanticCompletion: DONE,
+      semantic: V({
+        unsupportedAdditions: r.add > 0 ? ADD : [],
+        droppedFromSource: r.drop > 0 ? DROP : [],
+      }),
+    }))
+    check('🟢 🔴 **SHADOW5B 5편이 전부 사람 검토 후보가 된다** (provider 호출 0)',
+      outcomes.every((o) => o.outcome === 'adopt'),
+      outcomes.map((o) => o.outcome).join(','))
+    check('🔴 경고가 붙은 2편은 경고를 달고 간다',
+      outcomes.filter((o) => o.warnings.length > 0).length === 2)
+  }
+
+  // ── ⑦ 사람 확인 없는 발행은 그대로 막혀 있다 ──
+  check('🔴 🔴 **기계 후보는 사람 검토 전에는 발행되지 않는다**', (() => {
+    const pub = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
+    const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    return /HUMAN_ONLY_VALUES/.test(pub)
+      && /발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다/.test(runner)
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

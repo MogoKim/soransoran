@@ -16,7 +16,7 @@ export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.1'
 
 export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p3'
 export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p7'
-export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p6'
+export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p7'
 
 export const CONTENT_CORE_STAGES = ['speakerPlan', 'draftGen', 'semanticReview'] as const
 export type ContentCoreStage = (typeof CONTENT_CORE_STAGES)[number]

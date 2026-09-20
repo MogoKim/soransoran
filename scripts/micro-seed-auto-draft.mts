@@ -114,7 +114,7 @@ import {
   STAGE_MAX_OUTPUT_TOKENS, STAGE_MAX_OUTPUT_LABEL,
 } from '../src/lib/content-core/pipeline'
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
-import { REVIEW_VERSION } from '../src/lib/content-core/review'
+import { REVIEW_VERSION, reviewWarnings } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
 import {
   ARTIFACT_VERSION, violatesArtifact, type CallMeta, type HumanReviewArtifact,
@@ -1056,6 +1056,16 @@ async function main(): Promise<void> {
   console.log(`   🟡 AUTO_HOLD  ${s.AUTO_HOLD}건`)
   console.log(`   🔴 AUTO_DROP  ${s.AUTO_DROP}건`)
   console.log(`   🔴 v2 가 초안을 만들지 않고 멈춘 원천 ${v2Held}건 · artifact ${artifacts.length}장`)
+  /**
+   * 🔴 **막지 않고 사람에게 넘긴 것** (2026-09-20). 근거는 artifact 에 그대로 있고
+   *    `publish:machine-review` 화면에 뜬다 — 숫자를 여기서도 보여 준다.
+   */
+  const warned = artifacts.filter((a) => reviewWarnings(a.review.semantic).length > 0)
+  console.log(`   🟡 사람이 판정할 경고가 붙은 artifact ${warned.length}장`
+    + ` — 원문에 없어 보이는 것 · 원문에서 사라져 보이는 것`)
+  if (warned.length > 0) {
+    console.log('      🔴 기계가 막지 않았다. 발행은 사람이 검토를 마쳐야 열린다')
+  }
   console.log('\n④ 사유')
   for (const [code, n] of Object.entries(s.byReason).sort((a, b) => b[1] - a[1])) {
     console.log(`   ${String(n).padStart(3)}건  ${DRAFT_REASON_LABEL[code as keyof typeof DRAFT_REASON_LABEL] ?? code}`)

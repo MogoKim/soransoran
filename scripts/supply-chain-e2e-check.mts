@@ -338,7 +338,9 @@ console.log('\n⑤ 🔴 artifacts.json → 사람 검토 근거')
   const lines = reviewEvidenceLines(a).join('\n')
   check('🔴 🔴 **사람이 원문 근거를 본다**', lines.includes('원문 근거:') && lines.includes('김치'))
   check('🔴 사람이 Persona·stance 를 본다', /화자 P\d+ \/ \w+/.test(lines), lines.split('\n')[1])
-  check('🔴 사람이 원문에 없는 것을 본다', lines.includes('원문에 없는 것'))
+  // 🔴 2026-09-20 — 이 둘은 경고다. 막지 않고 **사람에게 보여 준다**
+  check('🔴 사람이 원문에 없어 보이는 것을 본다', lines.includes('원문에 없어 보이는 것'))
+  check('🔴 사람이 원문에서 사라져 보이는 것을 본다', lines.includes('원문에서 사라져 보이는 것'))
   check('🔴 사람이 생활사 모순을 본다', lines.includes('생활사 모순'))
   check('🔴 사람이 기계 사유를 본다', lines.includes('기계 '))
   check('🔴 🔴 **원문 근거가 마스킹된 값이다**',
