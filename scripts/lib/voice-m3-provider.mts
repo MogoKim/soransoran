@@ -310,11 +310,22 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
 
     // 🔴 Gemini 는 usageMetadata 에 담고 이름도 다르다(promptTokenCount 등)
     const gUsage = (json.usageMetadata ?? {}) as Record<string, unknown>
-    const inputTokens = isGemini
-      ? num(gUsage.promptTokenCount)
+    // 🔴 Gemini 해석은 순수 함수 하나로 모은다 — 두 곳에 적으면 한쪽이 낡는다
+    const gRead = isGemini ? readGeminiUsage(gUsage) : null
+    const inputTokens = gRead !== null
+      ? gRead.inputTokens
       : num(usage.input_tokens) || num(usage.prompt_tokens)
-    const outputTokens = isGemini
-      ? num(gUsage.candidatesTokenCount)
+    /**
+     * 🔴 **Gemini 출력 과금 = 보이는 출력 + thinking** (2026-09-19 공식 문서 확인).
+     *
+     *    https://ai.google.dev/gemini-api/docs/thinking —
+     *    *"When thinking is turned on, response pricing is the sum of output tokens
+     *    and thinking tokens."* 앞판은 `candidatesTokenCount` 만 셌다. 그러면
+     *    **thinking 비용이 통째로 장부에서 빠진다.**
+     *    `totalTokenCount` 도 *"prompt + thoughts + response candidates"* 다.
+     */
+    const outputTokens = gRead !== null
+      ? gRead.outputTokens
       : num(usage.output_tokens) || num(usage.completion_tokens)
     // 🔴 reasoning 토큰. OpenAI 는 completion_tokens_details 안에 준다.
     //    Anthropic 은 thinking 을 켜지 않았으므로 null 이다 — 0 이 아니다.
@@ -322,8 +333,8 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
     const details = (usage.completion_tokens_details ?? null) as Record<string, unknown> | null
     // 🔴 Gemini 2.5 는 thinking 토큰을 usageMetadata.thoughtsTokenCount 로 준다.
     //    없으면 null 이다 — 0 이 아니다. 0 은 "안 썼다", null 은 "알 수 없다" 로 읽힌다
-    const reasoningTokens = isGemini
-      ? (typeof gUsage.thoughtsTokenCount === 'number' ? num(gUsage.thoughtsTokenCount) : null)
+    const reasoningTokens = gRead !== null
+      ? gRead.thoughtsTokens
       : isAnthropic || details === null
         ? null
         : num(details.reasoning_tokens)
@@ -344,8 +355,14 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
     const usageObj = isGemini ? gUsage : usage
     const usageKeys = Object.keys(usageObj)
     const isNum = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
-    const usageKnown = isGemini
-      ? isNum(gUsage.promptTokenCount) && isNum(gUsage.candidatesTokenCount)
+    /**
+     * 🔴 **thinking 토큰을 못 읽으면 `usageUnknown` 이다** (2026-09-19).
+     *    싸게 추정하지 않는다 — 모르면 미정산으로 남기는 것이 장부의 계약이다.
+     *    `thoughtsTokenCount` 는 thinking 을 쓰지 않은 응답에서 **아예 없을 수** 있어
+     *    "없음" 과 "0" 을 가른다: 숫자 0 은 통과, 칸 자체가 없으면 미상이다.
+     */
+    const usageKnown = gRead !== null
+      ? gRead.usageKnown
       : (isNum(usage.input_tokens) || isNum(usage.prompt_tokens))
         && (isNum(usage.output_tokens) || isNum(usage.completion_tokens))
     /**
@@ -357,9 +374,17 @@ export async function callProvider(req: LlmRequest): Promise<LlmResponse> {
      *    응답에 우리가 안 읽는 과금 칸이 생기면 장부에 그 이름이 나타난다.
      */
     const cacheNum = (v: unknown): number => (isNum(v) ? (v as number) : 0)
-    const cacheWriteTokens = !usageKnown ? null
-      : cacheNum(usage.cache_creation_input_tokens) + cacheNum(usage.cache_creation)
-    const cacheReadTokens = !usageKnown ? null : cacheNum(usage.cache_read_input_tokens)
+    /**
+     * 🔴 **Gemini 는 캐시 칸 이름이 다르다** — `cachedContentTokenCount` 하나다
+     *    (공식 문서: *"Number of tokens in the cached part of the prompt"*).
+     *    우리는 `cachedContent` 를 보내지 않으므로 나타날 수 없지만, 나타나면
+     *    0 으로 뭉개지 않고 **읽기 쪽 단가로** 계산한다.
+     */
+    const cacheWriteTokens = gRead !== null ? gRead.cacheWriteTokens
+      : !usageKnown ? null
+        : cacheNum(usage.cache_creation_input_tokens) + cacheNum(usage.cache_creation)
+    const cacheReadTokens = gRead !== null ? gRead.cacheReadTokens
+      : !usageKnown ? null : cacheNum(usage.cache_read_input_tokens)
 
     // 🔴 종료 사유가 없으면 성공으로 세지 않는다.
     //    "잘렸는지 알 수 없는 응답" 을 통과시킨 것이 1차 실행의 진단 공백이었다.
@@ -433,13 +458,141 @@ export type CountTokensResult = {
   errorMessage: string | null
 }
 
-export const COUNT_TOKENS_URL = 'https://api.anthropic.com/v1/messages/count_tokens'
+/**
+ * 🔴 **Gemini `usageMetadata` 해석 — 순수 함수.** 네트워크 없이 검사할 수 있어야 한다.
+ *
+ *    공식 계약 (2026-09-19 확인 · https://ai.google.dev/api/generate-content):
+ *      · `promptTokenCount`        입력
+ *      · `candidatesTokenCount`    보이는 출력
+ *      · `thoughtsTokenCount`      thinking — 🔴 **출력 과금에 포함된다**
+ *      · `totalTokenCount`         prompt + thoughts + candidates
+ *      · `cachedContentTokenCount` 캐시된 프롬프트 (우리는 요청하지 않는다)
+ */
+export type GeminiUsageRead = {
+  inputTokens: number
+  /** 🔴 과금 기준 출력 = candidates + thoughts */
+  outputTokens: number
+  thoughtsTokens: number | null
+  usageKnown: boolean
+  cacheWriteTokens: number | null
+  cacheReadTokens: number | null
+  usageKeys: string[]
+}
 
+export function readGeminiUsage(g: Record<string, unknown>): GeminiUsageRead {
+  const isNum = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
+  const n = (v: unknown): number => (isNum(v) ? (v as number) : 0)
+  /**
+   * 🔴 **thinking 토큰을 못 읽으면 미상이다.** 싸게 추정하지 않는다 —
+   *    `thoughtsTokenCount: 0` 은 "안 썼다" 로 통과하고, 칸이 **없으면** 미상이다.
+   */
+  const usageKnown = isNum(g.promptTokenCount) && isNum(g.candidatesTokenCount)
+    && isNum(g.thoughtsTokenCount)
+  return {
+    inputTokens: n(g.promptTokenCount),
+    outputTokens: n(g.candidatesTokenCount) + n(g.thoughtsTokenCount),
+    thoughtsTokens: isNum(g.thoughtsTokenCount) ? n(g.thoughtsTokenCount) : null,
+    usageKnown,
+    // 🔴 우리는 `cachedContent` 를 보내지 않는다 — 쓰기는 일어날 수 없다
+    cacheWriteTokens: usageKnown ? 0 : null,
+    // 🔴 그래도 나타나면 0 으로 뭉개지 않고 읽는다
+    cacheReadTokens: usageKnown ? n(g.cachedContentTokenCount) : null,
+    usageKeys: Object.keys(g),
+  }
+}
+
+/**
+ * 🔴 **사전 계산 요청 본문 — `generateContent` 와 같은 입력을 센다.** 순수 함수다.
+ *    `contents` 와 `generateContentRequest` 는 상호 배타이고, systemInstruction 을
+ *    함께 세려면 후자를 써야 한다 (2026-09-19 확인 · https://ai.google.dev/api/tokens).
+ */
+export function geminiCountBody(
+  systemPrompt: string, userPayload: string, apiModelId: string,
+): string {
+  return JSON.stringify({
+    generateContentRequest: {
+      model: `models/${apiModelId}`,
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userPayload }] }],
+    },
+  })
+}
+
+export const COUNT_TOKENS_URL = 'https://api.anthropic.com/v1/messages/count_tokens'
+/**
+ * 🔴 **Gemini 공식 사전 계산** (2026-09-19 확인 · https://ai.google.dev/api/tokens).
+ *    `POST .../v1beta/{model=models/*}:countTokens` · 응답은 `totalTokens`.
+ *    `contents` 와 `generateContentRequest` 는 **상호 배타**라서,
+ *    systemInstruction 을 함께 세려면 `generateContentRequest` 쪽을 쓴다.
+ */
+export const GEMINI_COUNT_TOKENS_URL =
+  'https://generativelanguage.googleapis.com/v1beta/models/{model}:countTokens'
+
+/**
+ * 🔴 **Gemini 사전 계산 어댑터** — 실제 `generateContent` 와 **같은 입력**을 센다.
+ *    같은 `apiModelId` · 같은 `systemInstruction` · 같은 `contents`.
+ *    🔴 원문·프롬프트·키를 로그나 장부에 남기지 않는다. 실패하면 추정치로 대체하지 않는다.
+ */
+async function countGeminiTokens(req: CountTokensRequest): Promise<CountTokensResult> {
+  const status = keyStatus(req.model)
+  if (!status.present) {
+    return { ok: false, inputTokens: null, errorCode: 'NO_API_KEY', errorMessage: `${status.envName} 가 없다` }
+  }
+  const apiModelId = apiModelIdFor(req.model)
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, req.timeoutMs)
+  try {
+    const res = await fetch(GEMINI_COUNT_TOKENS_URL.replace('{model}', apiModelId), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        // 🔴 키는 헤더로 보낸다 — URL 에 넣으면 로그·오류 메시지에 남을 수 있다
+        'x-goog-api-key': process.env[status.envName] ?? '',
+      },
+      // 🔴 `generateContent` 가 보내는 것과 **같은 모양**이어야 같은 입력을 센다.
+      //    `generationConfig` 는 입력 토큰 수에 영향이 없어 넣지 않는다.
+      body: geminiCountBody(req.systemPrompt, req.userPayload, apiModelId),
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      return {
+        ok: false, inputTokens: null, errorCode: `HTTP_${res.status}`,
+        errorMessage: `사전 계산이 ${res.status} 로 응답했다`,
+      }
+    }
+    const json = (await res.json()) as Record<string, unknown>
+    const n = json.totalTokens
+    if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) {
+      // 🔴 모양이 다르거나 비정상이면 **추측하지 않는다.** 모른다고 끝낸다
+      return {
+        ok: false, inputTokens: null, errorCode: 'COUNT_SHAPE',
+        errorMessage: '사전 계산 응답에 정상적인 totalTokens 가 없다',
+      }
+    }
+    return { ok: true, inputTokens: n, errorCode: null, errorMessage: null }
+  } catch (e: unknown) {
+    const aborted = e instanceof Error && e.name === 'AbortError'
+    return {
+      ok: false, inputTokens: null,
+      errorCode: aborted ? 'TIMEOUT' : 'NETWORK',
+      errorMessage: aborted ? `${req.timeoutMs}ms 안에 응답이 없었다` : '네트워크 오류',
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * 🔴 **공식 사전 계산.** 제공사마다 경로가 다르다 — 없는 제공사는 통과시키지 않는다.
+ *    (2026-09-19: Anthropic 과 Google 두 곳에 공식 경로가 있다.
+ *     앞판 주석의 *"다른 provider 에는 공식 사전 계산 경로가 없다"* 는 틀린 말이었다.)
+ */
 export async function countInputTokens(req: CountTokensRequest): Promise<CountTokensResult> {
+  if (req.model.startsWith('gemini-')) return countGeminiTokens(req)
   if (req.model !== 'claude-haiku-4.5') {
     return {
       ok: false, inputTokens: null, errorCode: 'COUNT_UNSUPPORTED',
-      errorMessage: `${req.model} 에는 공식 사전 계산 경로가 없다`,
+      errorMessage: `${req.model} 에는 우리가 구현한 공식 사전 계산 경로가 없다`,
     }
   }
   const status = keyStatus(req.model)

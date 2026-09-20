@@ -1090,8 +1090,13 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
     const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     check('🔴 [PQ] 🔴 생성기는 여전히 DB 를 읽지 않는다',
       !/PrismaClient|prisma\./.test(draft))
+    /**
+     * 🔴 **생성 전 제외가 유료 경로 준비보다 앞이다.** 만든 뒤에 버릴 이유가 없다.
+     *    (2026-09-20: v2 는 단계마다 모델이 달라 키 확인이 `keyStatus(DRAFT_MODEL)`
+     *     한 줄에서 `STAGE_MODEL` 순회로 바뀌었다 — 순서 계약은 그대로다.)
+     */
     check('🔴 [PQ] 게이트가 keyStatus(유료 경로 준비)보다 앞에 있다',
-      draft.indexOf('planPreDraftExclusion(') < draft.indexOf('keyStatus(DRAFT_MODEL)'))
+      draft.indexOf('planPreDraftExclusion(') < draft.indexOf('const k = keyStatus(m)'))
     check('🔴 [PQ] 적재 단계의 ALREADY·HELD 검사를 그대로 둔다',
       /ALREADY: '이미 큐에 올라갔다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8'))
       && /HELD: '🔴 사람이 보류한 글이다'/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
@@ -1181,6 +1186,8 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
           HOME: fakeHome,
           // 🔴 키는 **있다.** 이제 키 오류로 대신 재지 않는다
           ANTHROPIC_API_KEY: 'fixture-fake-key',
+          // 🔴 v2 계획·생성은 Gemini 를 쓴다 — 키가 없으면 러너가 시작 전에 멈춘다
+          GEMINI_API_KEY: 'fixture-fake-gemini-key',
           /**
            * 🔴 **시험 예산은 임시 환경에만 넣는다** (2026-09-17).
            *    운영 금액이 아니다 — 이 블록은 "제외가 호출을 줄이는가" 를 보는 곳이라

@@ -552,15 +552,24 @@ jobs:
       - name: 원문 게시 시각 전달 (수집 → thin → adapt → 후보)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run check:source-times
-      # 검수가 **무엇을 읽고 썼는지** 비교할 근거를 받는가.
-      #
-      # 🔴 앞판은 초안만 보내면서 `genericWithoutSourceAngle` 을 물었다 —
-      #    비교 대상 없이 비교를 시켰다. 실측 4건이 전부 0.95~0.98 로 통과했다.
-      #    나간 요청 본문을 값으로 본다. 가짜 provider · 임시 HOME · 네트워크 0.
+      # 운영 체인 end-to-end — 🔴 **실제 러너가 쓴 파일**을 실제 적재 순수 함수에 넣는다.
+      #    손으로 만든 봉투는 증거가 아니다. 가짜 provider · 임시 HOME · 네트워크 0 · DB 0.
       #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
-      - name: 검수 소재 근거 (요청 본문 · 나이 검수 분리 · 캐시 정합)
+      - name: 운영 체인 end-to-end (러너 → 후보 → 적재 → 큐 → 사람 검토)
         if: steps.scope.outputs.heavy == 'true'
-        run: npm run check:quality-ground
+        run: npm run check:supply-chain-e2e
+      # Content Core v2 — 🔴 **2026-09-20 부터 운영 생성 경로다.**
+      #    옛 `check:quality-ground` 는 v2 통합 검수가 대체해 함께 지웠다.
+      #
+      # 근거 묶음 → 소재 판정 → 화자·자리 → 말투 근거 → 초안 한 편 → 최소 검수 →
+      # 사람 판정 한 장까지 **실제 함수를 돌려** artifact 값으로 본다.
+      # 가짜 provider 를 주입한다 — 네트워크 0 · provider 0 · DB 0.
+      # 🔴 정규식 존재 검사가 아니다. 통과 수는 제품 성공이 아니다.
+      # 🔴 무조건 실행 step 상한(68)을 올리지 않는다 — 경로 조건 뒤에 둔다.
+      #    화면만 고친 PR 은 content-core 를 건드릴 수 없다.
+      - name: Content Core v2 세로 경로 (근거·소재·화자 자격·말투·검수 완주)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run check:content-core-v2
 
       # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
       #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —

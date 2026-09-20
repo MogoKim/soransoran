@@ -590,6 +590,12 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
 
   // ── ⑦ 🔴 검토 명령 — 기본 read-only · 근거 없으면 거부 ──
   const rev = codeOf('scripts/original-post-machine-review.mts')
+  /**
+   * 🔴 2026-09-20 — 읽기·검증·기록·재대조가 `completeReview` **한 트랜잭션**으로 옮겨졌다.
+   *    러너는 그 경계에 Prisma 를 끼워 넣기만 한다. 판정 계약은 이 정본이 들고 있다.
+   *    🔴 되돌아가는지(write 0)는 `check:supply-chain-e2e` ⑨ 가 주입 저장소로 실제로 돌린다.
+   */
+  const revLib = codeOf('src/lib/original-post-machine-review.ts')
   check('🔴 검토 명령은 --apply 없이 DB write 0 으로 끝난다',
     /if \(!APPLY\) \{/.test(rev) && rev.indexOf('if (!APPLY) {') < rev.indexOf('updateMany('))
   check('🔴 --apply 는 --id 와 --limit=1 을 함께 요구한다',
@@ -600,14 +606,14 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
     /profileOf\(target\) !== 'machine'/.test(rev))
   // 🔴 2026-09-14 — 낙관적 잠금으로 바뀌었다. 자세한 계약은 ㉑ 이 본다
   check('🔴 조건부 UPDATE — 스냅샷이 바뀌었으면 멈춘다',
-    /createdPostId: null,/.test(rev) && /updatedAt: before\.updatedAt,/.test(rev))
+    /createdPostId: null,/.test(rev) && /updatedAt: i\.where\.updatedAt,/.test(rev))
   check('🔴 바꾸는 컬럼은 decidedBy · decidedAt 둘뿐이다',
-    /data: \{ decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt \}/.test(rev))
+    /data: \{ decidedBy: i\.decidedBy, decidedAt: i\.decidedAt \},/.test(rev))
   check('🔴 [계약] 검토 명령이 Post·Comment·Persona 를 쓰지 않는다',
     !/prisma\.(post|comment|persona)\.(create|update|updateMany|delete)/.test(rev))
   check('🔴 [계약] 검토 명령이 본문·status·gateResults 를 쓰지 않는다', (() => {
     // 🔴 **update 의 `data` 객체만** 본다. select 에 있는 필드 이름을 write 로 세지 않는다
-    const i = rev.indexOf('data: { decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt }')
+    const i = rev.indexOf('data: { decidedBy: i.decidedBy, decidedAt: i.decidedAt },')
     if (i === -1) return false
     const dataObj = rev.slice(i, rev.indexOf('}', i) + 1)
     return !/draftTitle|draftBody|editedTitle|editedBody|status|gateResults/.test(dataObj)
@@ -615,12 +621,13 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
   check('🔴 [계약] 검토 명령이 provider 를 부르지 않는다',
     !/callProvider|anthropic|openai|fetch\(/.test(rev))
   check('🔴 기계 생성 provenance 보존을 확인한다 — read-back 대조',
-    /judgeReviewSnapshot\(before, after\)/.test(rev))
+    /const still = judgeReviewSnapshot\(input\.before, back\)/.test(revLib))
 }
 
 console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
 {
   const rev = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+  const revLib = readFileSync('src/lib/original-post-machine-review.ts', 'utf-8')
   const MACHINE_GATE2 = {
     provenance: DRAFT_PROVENANCE, sourceDecision: 'AUTO_ADOPT', draftRuleVersion: DRAFT_RULE_VERSION,
   }
@@ -633,13 +640,14 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
 
   // ── ① decidedBy 와 decidedAt 을 **함께** 쓴다 ──
   check('🔴 검토 완료 UPDATE 가 decidedBy 와 decidedAt 을 함께 기록한다',
-    /data: \{ decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt \}/.test(rev))
+    /data: \{ decidedBy: i\.decidedBy, decidedAt: i\.decidedAt \},/.test(rev))
   check('🔴 검토 시각은 실제 검토 완료 시각이다 (적재 시각이 아니다)',
     /const reviewedAt = new Date\(\)/.test(rev))
   check('🔴 [회귀] decidedBy 만 바꾸던 옛 판이 아니다',
-    !/data: \{ decidedBy: MACHINE_REVIEWED_BY \}/.test(rev))
+    !/data: \{ decidedBy: i\.decidedBy \}/.test(rev))
   check('🔴 read-back 이 decidedAt 까지 확인한다',
-    /back\.decidedAt\.getTime\(\) === reviewedAt\.getTime\(\)/.test(rev))
+    /back\.decidedAt\.getTime\(\) !== input\.now\.getTime\(\)/.test(revLib)
+    && /RollbackSignal\('stampMissing'/.test(revLib))
 
   // ── ② 자동 발행 정렬이 **실제 사람 검토 순서**를 쓴다 ──
   check('🟢 정렬 근거가 decidedAt 이다', (() => {
@@ -688,25 +696,25 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
   // ── ④ 🔴 updatedAt 낙관적 잠금이 where 에 있다 ──
   check('🔴 [요구] 조회 시 updatedAt 을 읽는다', /updatedAt: true,/.test(rev))
   check('🔴 [요구] 조건부 UPDATE where 에 id·status·createdPostId·decidedBy·updatedAt 이 있다', (() => {
-    const i = rev.indexOf('const res = await prisma.originalPostApprovalQueue.updateMany({')
+    const i = rev.indexOf('stamp: async (i) => (await tx.originalPostApprovalQueue.updateMany({')
     if (i === -1) return false
     const w = rev.slice(i, rev.indexOf('data: {', i))
-    return /id: target\.id,/.test(w) && /status: rawById\.get\(target\.id\)!\.status,/.test(w)
-      && /createdPostId: null,/.test(w) && /decidedBy: before\.decidedBy,/.test(w)
-      && /updatedAt: before\.updatedAt,/.test(w)
+    return /id: i\.id,/.test(w) && /status: rawById\.get\(i\.id\)!\.status,/.test(w)
+      && /createdPostId: null,/.test(w) && /decidedBy: i\.where\.decidedBy,/.test(w)
+      && /updatedAt: i\.where\.updatedAt,/.test(w)
   })())
-  check('🔴 [요구] update 0건이면 멈춘다',
-    /if \(res\.count !== 1\) \{/.test(rev) && /검토한 뒤 그 사이에 후보가 바뀌었습니다/.test(rev))
+  check('🔴 [요구] update 0건이면 멈춘다 — 같은 경계 안에서 되돌린다',
+    /if \(n !== 1\) throw new RollbackSignal\('conditionMissed'/.test(revLib))
   check('🔴 read-back 이 발행 문안(edited ?? draft)으로 대조한다',
-    /title: back\.editedTitle \?\? back\.draftTitle,/.test(rev)
-    && /body: back\.editedBody \?\? back\.draftBody,/.test(rev))
+    /title: r\.editedTitle \?\? r\.draftTitle, body: r\.editedBody \?\? r\.draftBody,/.test(rev))
   check('🔴 read-back 이 judgeReviewSnapshot 으로 판정한다',
-    /judgeReviewSnapshot\(before, after\)/.test(rev))
-  check('🔴 스냅샷이 어긋나면 exit 1', /process\.exit\(snap\.ok && stampOk \? 0 : 1\)/.test(rev))
+    /const still = judgeReviewSnapshot\(input\.before, back\)/.test(revLib))
+  check('🔴 스냅샷이 어긋나면 exit 1 — 아무것도 쓰지 않는다',
+    /if \(!verdict\.ok\) \{/.test(rev) && /아무것도 바꾸지 않았습니다/.test(rev))
 
   // ── ⑤ 🔴 write 범위가 넓어지지 않았다 ──
   check('🔴 [계약] 바꾸는 컬럼은 decidedBy · decidedAt 둘뿐이다', (() => {
-    const i = rev.indexOf('data: { decidedBy: MACHINE_REVIEWED_BY, decidedAt: reviewedAt }')
+    const i = rev.indexOf('data: { decidedBy: i.decidedBy, decidedAt: i.decidedAt },')
     if (i === -1) return false
     const d = rev.slice(i, rev.indexOf('}', i) + 1)
     return !/draftTitle|draftBody|editedTitle|editedBody|status|gateResults|promptVersion|model/.test(d)

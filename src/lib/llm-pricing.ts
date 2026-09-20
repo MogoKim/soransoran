@@ -1,23 +1,35 @@
 /**
  * 공급 AI 가격표 — 🔴 **순수 함수. 네트워크·파일·시각 조회 0**
  *
- * 🔴 **이 값은 공식 문서에서 직접 확인한 것이다** (2026-09-17 조회).
- *    출처: https://platform.claude.com/docs/en/about-claude/pricing
- *    추정하거나 기억으로 적지 않는다. 바뀌면 `PRICING_VERSION` 을 올린다.
+ * 🔴 **모든 값은 각 제공사 공식 문서에서 직접 확인한 것이다.** 모델마다 출처와
+ *    확인일을 따로 적는다. 추정하거나 기억으로 적지 않는다.
+ *    바뀌면 `PRICING_VERSION` 을 올린다.
  *
  * 🔴 **여기 없는 모델은 `null` 이다.** "아마 이 정도" 로 계산하지 않는다 —
  *    모르는 단가로 계산한 금액은 숫자만 있고 근거가 없다.
+ *
+ * 🔴 **이 표는 더 이상 한 제공사짜리가 아니다** (2026-09-19). Anthropic 과 Google
+ *    두 곳의 단가를 담는다 — `PRICING_VERSION` 이름이 한쪽만 가리키지 않게 한다.
  */
 
 /**
  * 🔴 **가격표 판.** 장부의 모든 줄이 어느 판으로 계산됐는지 적는다.
  *    나중에 청구서와 대조할 때 "그때 무슨 값을 썼나" 를 알 수 있어야 한다.
  */
-export const PRICING_VERSION = 'anthropic-2026-09-17'
+export const PRICING_VERSION = 'supply-2026-09-19'
 
-/** 🔴 사람이 다시 확인할 수 있게 출처를 코드에 남긴다 */
-export const PRICING_SOURCE = 'https://platform.claude.com/docs/en/about-claude/pricing'
-export const PRICING_CHECKED_AT = '2026-09-17'
+/** 🔴 사람이 다시 확인할 수 있게 **모델별** 출처를 코드에 남긴다 */
+export const PRICING_SOURCES: Readonly<Record<string, { url: string; checkedAt: string }>> =
+  Object.freeze({
+    'claude-haiku-4.5': Object.freeze({
+      url: 'https://platform.claude.com/docs/en/about-claude/pricing',
+      checkedAt: '2026-09-17',
+    }),
+    'gemini-3.7-flash': Object.freeze({
+      url: 'https://ai.google.dev/gemini-api/docs/pricing',
+      checkedAt: '2026-09-19',
+    }),
+  })
 
 /** USD per 1,000,000 tokens */
 export type ModelPrice = {
@@ -48,6 +60,46 @@ export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = Object.freeze(
     cacheWrite1hPerMTok: 2,
     cacheReadPerMTok: 0.1,
   }),
+  /**
+   * 🔴 **Google 공식 가격표 확인 2026-09-19** (`PRICING_SOURCES` 참조).
+   *
+   *    "Input: $0.75 through December 31, 2026. $1.50 starting January 1, 2027."
+   *    "Output: $3.75 through December 31, 2026. $7.50 starting January 1, 2027."
+   *
+   * 🔴 **출력 단가는 thinking 토큰을 포함한 값이다.** 공식 문서:
+   *    *"When thinking is turned on, response pricing is the sum of output tokens
+   *    and thinking tokens."* 그래서 부르는 쪽이 `outputTokens` 에
+   *    `candidatesTokenCount + thoughtsTokenCount` 를 넣어야 한다 —
+   *    `candidatesTokenCount` 만 넣으면 thinking 비용이 통째로 빠진다.
+   *
+   * 🔴 **프로모션 단가다.** `GEMINI_PROMO_ENDS_AT` 뒤에는 두 배가 된다.
+   *    그날이 지나면 이 표를 고치고 `PRICING_VERSION` 을 올린다.
+   *
+   * 🔴 캐시 단가는 **요청하지 않는 기능**이지만 0 으로 두지 않는다 —
+   *    응답에 캐시 칸이 나타나면 실제 단가로 계산돼야 한다.
+   *    "Context caching: $0.075 ... $0.50 / 1,000,000 tokens per hour (storage)".
+   *    🔴 시간당 저장료는 토큰당 단가가 아니라 **시간 기반**이라 이 표로 표현할 수
+   *    없다. 우리는 캐시를 요청하지 않으므로 발생하지 않고, 발생하면
+   *    `usageKeys` 에 그 칸 이름이 남아 사람이 알게 된다.
+   */
+  'gemini-3.7-flash': Object.freeze({
+    inputPerMTok: 0.75,
+    outputPerMTok: 3.75,
+    // 🔴 Gemini 는 5분·1시간 쓰기를 나누지 않는다 — 한 값을 양쪽에 둔다
+    cacheWrite5mPerMTok: 0.075,
+    cacheWrite1hPerMTok: 0.075,
+    cacheReadPerMTok: 0.075,
+  }),
+})
+
+/** 🔴 이 날이 지나면 Gemini 단가가 두 배가 된다 — 표를 고치고 버전을 올린다 */
+export const GEMINI_PROMO_ENDS_AT = '2026-12-31'
+export const GEMINI_POST_PROMO: ModelPrice = Object.freeze({
+  inputPerMTok: 1.5,
+  outputPerMTok: 7.5,
+  cacheWrite5mPerMTok: 0.15,
+  cacheWrite1hPerMTok: 0.15,
+  cacheReadPerMTok: 0.15,
 })
 
 export function priceOf(model: string): ModelPrice | null {

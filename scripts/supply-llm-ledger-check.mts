@@ -31,7 +31,7 @@ import {
   type BudgetLimits, type LedgerEntry, type LedgerStage, type OpenReservation,
 } from '../src/lib/llm-ledger'
 import {
-  BILLABLE_NOW, MODEL_PRICES, PRICING_CHECKED_AT, PRICING_SOURCE, PRICING_VERSION,
+  BILLABLE_NOW, MODEL_PRICES, PRICING_SOURCES, PRICING_VERSION,
   costOf, priceOf, reserveOf,
 } from '../src/lib/llm-pricing'
 import {
@@ -57,8 +57,9 @@ const stripComments = (src: string): string =>
 
 let pass = 0
 let fail = 0
-const check = (n: string, ok: boolean): void => {
-  if (ok) { pass += 1; console.log(`  ✅ ${n}`) } else { fail += 1; console.log(`  🔴 FAIL ${n}`) }
+const check = (n: string, ok: boolean, extra = ''): void => {
+  if (ok) { pass += 1; console.log(`  ✅ ${n}`) }
+  else { fail += 1; console.log(`  🔴 FAIL ${n}${extra === '' ? '' : `\n${extra}`}`) }
 }
 
 console.log('\n══ 공급 AI 비용 장부 검사 (🔴 네트워크 0 · 실제 provider 0) ══\n')
@@ -86,7 +87,11 @@ console.log('① 단가 — 🔴 공식 문서에서 확인한 값만 쓴다')
 // ─────────────────────────────────────────────────────────
 {
   check('🔴 출처와 조회일을 코드에 남긴다',
-    PRICING_SOURCE.startsWith('https://') && /^\d{4}-\d{2}-\d{2}$/.test(PRICING_CHECKED_AT))
+    Object.keys(MODEL_PRICES).every((m) => {
+      const src = PRICING_SOURCES[m]
+      return src !== undefined && src.url.startsWith('https://')
+        && /^\d{4}-\d{2}-\d{2}$/.test(src.checkedAt)
+    }))
   const haiku = priceOf('claude-haiku-4.5')
   check('🔴 Haiku 4.5 입력 $1/MTok · 출력 $5/MTok (2026-09-17 공식 문서)',
     haiku !== null && haiku.inputPerMTok === 1 && haiku.outputPerMTok === 5)
@@ -114,9 +119,10 @@ console.log('① 단가 — 🔴 공식 문서에서 확인한 값만 쓴다')
     const v = costOf({ model: 'claude-haiku-4.5', usage })
     check(`🔴 ${label} → 계산하지 않는다 (0원으로 적지 않는다)`, !v.known && v.code === 'NO_USAGE')
   }
+  // 🔴 `gemini-3.7-flash` 는 2026-09-19 에 가격표에 등록됐다 — 더는 "모르는 모델" 예시가 아니다
   check('🔴 단가를 모르면 계산하지 않는다',
     !costOf({
-      model: 'gemini-3.7-flash',
+      model: 'gpt-5-mini',
       usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
     }).known)
 
@@ -657,10 +663,15 @@ console.log('\n⑧ 우회 금지 — 🔴 유료 요청이 지나는 문은 하�
       (src.match(/await ask\(/g) ?? []).length >= 2)
   }
   const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-  check('🔴 나이 검수도 회차 상한을 지난다 — 여기가 새던 자리다',
-    /ageCalls \+= 1[\s\S]{0,700}BUDGET\.take\(\)[\s\S]{0,400}await ask\(\s*'ageCheck'/.test(draft))
-  check('🔴 나이 검수를 종류별 집계에도 넣는다 — 관제가 못 보던 자리다',
-    /countCall\('ageCheck'\)/.test(draft))
+  /**
+   * 🔴 **별도 나이 검수는 없앴다** (2026-09-20, Content Core v2 전환).
+   *    나이·가족 모순은 통합 의미 검수의 `lifeContradictions` 가 같은 근거로 받는다.
+   *    🔴 대신 **v2 세 단계가 전부 상한과 집계를 지나는지** 본다 — 그것이 새던 자리다.
+   */
+  check('🔴 v2 세 단계가 전부 회차 상한을 지난다',
+    /const v2Ask: Ask = [\s\S]{0,400}BUDGET\.take\(\)[\s\S]{0,300}await ask\(/.test(draft))
+  check('🔴 v2 세 단계를 종류별 집계에도 넣는다 — 관제가 못 보던 자리다',
+    /countCall\(stage\)/.test(draft))
 
   // 🔴 사전 계산이 실제 요청과 **같은 것**을 센다 — 말이 아니라 조립부를 본다
   const countAt = provider.indexOf('export async function countInputTokens')
@@ -775,6 +786,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
           // 🔴 임시 HOME — 합성 말투 자산과 **임시 장부**가 여기 있다
           HOME: fakeHome,
           ANTHROPIC_API_KEY: 'fixture-fake-key',
+          // 🔴 v2 계획·생성은 Gemini 를 쓴다 — 키가 없으면 러너가 시작 전에 멈춘다
+          GEMINI_API_KEY: 'fixture-fake-gemini-key',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
           // 🔴 **시험 값이다. 운영 예산이 아니다** — 임시 환경에만 들어간다
@@ -796,7 +809,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
 
   // ⓐ 🔴 **충분한 여력 — 계산 → 예약 → 생성 → 정산이 끝까지 돈다**
   const ok = run(OPEN)
-  check('🔴 [L] 여력이 있으면 유료 요청이 실제로 나간다', ok.paid > 0 && ok.code === 0)
+  check('🔴 [L] 여력이 있으면 유료 요청이 실제로 나간다', ok.paid > 0 && ok.code === 0,
+    `paid=${ok.paid} code=${ok.code}\n${ok.out.slice(-2500)}`)
   check('🔴 [L] 유료 요청마다 **사전 계산이 먼저** 나간다', ok.counted >= ok.paid)
   check('🔴 [L] 장부에 유료 요청이 정산까지 기록된다',
     ok.entries.filter((e) => e.stage !== 'countTokens' && e.status === 'settled').length === ok.paid)
@@ -807,13 +821,34 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
   check('🔴 [L] 예약과 정산이 **같은 요청 id** 로 묶인다',
     ok.entries.filter((e) => e.stage !== 'countTokens')
       .every((e) => e.reservedUsd !== null && e.countedInputTokens !== null))
+  /**
+   * 🔴 **혼합 모델이다** (2026-09-20). 계획·생성은 Gemini, 검수는 Haiku —
+   *    장부가 **호출마다** 제공사 모델 id 를 남겨야 청구서와 대조할 수 있다.
+   */
   check('🔴 [L] 장부가 제공사 모델 id 를 남긴다 — 청구서와 대조할 수 있다',
-    ok.entries.every((e) => e.apiModelId.startsWith('claude-haiku-4-5')))
+    ok.entries.every((e) => e.apiModelId.trim() !== '')
+    && ok.entries.some((e) => e.apiModelId.startsWith('gemini-3.7-flash'))
+    && ok.entries.some((e) => e.apiModelId.startsWith('claude-haiku-4-5')),
+    [...new Set(ok.entries.map((e) => `${e.stage}:${e.apiModelId}`))].join(' · '))
+  check('🔴 🔴 [L] **계획·생성은 Gemini · 검수는 Haiku** — 실제 요청 인자로 확인',
+    ok.entries.filter((e) => e.stage === 'judge' || e.stage === 'draftGen')
+      .every((e) => e.apiModelId.startsWith('gemini-3.7-flash'))
+    && ok.entries.filter((e) => e.stage === 'draftQuality')
+      .every((e) => e.apiModelId.startsWith('claude-haiku-4-5')),
+    [...new Set(ok.entries.map((e) => `${e.stage}:${e.apiModelId}`))].join(' · '))
   check('🔴 [L] 장부에 원문·프롬프트·응답이 없다',
     !/(sourceBodyHead|가짜 초안|fixture 가 만든 본문|fixture-fake-key)/
       .test(readdirSync(ledgerDir).map((f) => readFileSync(join(ledgerDir, f), 'utf-8')).join('')))
-  check('🔴 [L] 재시도·나이 검수도 장부에 자기 단계로 남는다',
-    ok.entries.some((e) => e.stage === 'ageCheck') && ok.entries.some((e) => e.stage === 'draftGen'))
+  /**
+   * 🔴 **v2 세 단계가 각자 자기 이름으로 남는다** (2026-09-20).
+   *    별도 나이 검수는 없앴다 — 통합 검수가 같은 근거로 본다.
+   */
+  check('🔴 [L] v2 세 단계가 장부에 자기 단계로 남는다',
+    ok.entries.some((e) => e.stage === 'judge')
+    && ok.entries.some((e) => e.stage === 'draftGen')
+    && ok.entries.some((e) => e.stage === 'draftQuality')
+    && !ok.entries.some((e) => e.stage === 'ageCheck'),
+    [...new Set(ok.entries.map((e) => e.stage))].join(' · '))
   check('🔴 [L] 화면에 장부를 찍는다 — 안 보이면 늘어도 모른다', /장부 .*· 유료 \d+건/.test(ok.out))
   check('🔴 [L] 하루치가 한 파일에 모인다 — 정산이 다른 날로 새지 않는다',
     readdirSync(ledgerDir).filter((f) => f.endsWith('.jsonl')).length === 1)
@@ -938,6 +973,8 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
     ]
     const env = {
       ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+      // 🔴 v2 계획·생성은 Gemini 를 쓴다
+      GEMINI_API_KEY: 'fixture-fake-gemini-key',
       FAKE_PROVIDER_LOG: '',
       NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
       [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.headroomMultiplier]: '1.5', ...CAP,
@@ -964,7 +1001,22 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
       /this\.io\.writeHold\(this\.dir/.test(src))
     check('🔴 [L] 표식조차 못 쓴 경우를 숨기지 않고 센다', /holdWriteFailed \+= 1/.test(src))
     check('🔴 [L] 장부에 못 적으면 요청을 보내지 않는다',
-      /catch \(e\)[\s\S]{0,400}return blockedResponse\('LEDGER_ERROR'/.test(src))
+      /catch \(e\)[\s\S]{0,500}blockedResponse\('LEDGER_ERROR'/.test(src))
+    /**
+     * 🔴 **정산 금액을 부르는 쪽이 다시 계산하지 않는다** (2026-09-20).
+     *    장부가 적은 `settledUsd` 를 응답에 그대로 실어 보낸다 —
+     *    같은 값을 두 곳에서 계산하면 반드시 어긋난다. 못 적었으면 `null` 이다.
+     */
+    check('🔴 🔴 [L] **정산 금액을 응답에 실어 보낸다 — 재계산 금지**',
+      /Promise<SupplyCallResult>/.test(src)
+      && /settledUsd: settled\.settledUsd, settlementRecorded: true/.test(src))
+    /**
+     * 🔴 **정산 줄을 못 적었으면 성공으로 돌려주지 않는다** (2026-09-20).
+     *    부르는 쪽이 완주로 읽으면 금액을 모르는 글이 후보까지 간다.
+     */
+    check('🔴 🔴 [L] **정산 기록 실패는 성공 응답이 아니다**',
+      /settlementRecorded\s*\n?\s*\? \{ \.\.\.res/.test(src)
+      && /ok: false, errorCode: res\.errorCode \?\? SETTLE_NOT_RECORDED/.test(src))
     check('🔴 [L] 날짜를 요청 시작 시각으로 한 번만 정한다 — 정산이 다른 날로 가지 않는다',
       (src.match(/ledgerDateOf\(/g) ?? []).length === 1 && /const date = ledgerDateOf\(startedAt\)/.test(src))
     check('🔴 [L] 읽기·판정·예약 기록을 한 잠금 안에서 한다',
@@ -1033,7 +1085,15 @@ console.log('\n⑩ 정산 실패 뒤 — 🔴 실제로 fetch 가 0 인지 센�
   const s1 = new SupplyLlmSession({ runId: 'RF', dir, limits: LIM, io: failSettleIo() })
   const r1 = await s1.call(ASK)
   const afterFirst = { ...fetched }
-  check('🔴 [SF] 첫 요청은 실제로 나갔다', afterFirst.paid === 1 && r1.ok)
+  /**
+   * 🔴 **요청은 나갔지만 완주는 아니다** (2026-09-20 계약 변경).
+   *    provider 는 답했는데 정산 줄을 못 적었다 — 금액을 모르는 건이다.
+   *    앞판은 `ok: true` 에 금액까지 돌려줘서 부르는 쪽이 완주로 읽었다.
+   */
+  check('🔴 [SF] 첫 요청은 실제로 나갔다', afterFirst.paid === 1)
+  check('🔴 🔴 [SF] **정산을 못 적었으므로 완주가 아니다**',
+    !r1.ok && r1.settlementRecorded === false && r1.settledUsd === null,
+    `ok=${r1.ok} recorded=${r1.settlementRecorded} usd=${String(r1.settledUsd)}`)
   check('🔴 [SF] 정산을 못 적어 보류를 걸었다', s1.tally.settleHeld === 1)
   check('🔴 [SF] 예약 줄은 남아 있다 — 미정산이 여력을 계속 먹는다',
     (() => {
@@ -1290,6 +1350,8 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
         cwd: root, encoding: 'utf-8',
         env: {
           ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+          // 🔴 v2 계획·생성은 Gemini 를 쓴다
+          GEMINI_API_KEY: 'fixture-fake-gemini-key',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
           // 🔴 시험용 임시 값이다
@@ -1337,6 +1399,8 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
         cwd: root, encoding: 'utf-8',
         env: {
           ...process.env, HOME: fakeHome, ANTHROPIC_API_KEY: 'fixture-fake-key',
+          // 🔴 v2 계획·생성은 Gemini 를 쓴다
+          GEMINI_API_KEY: 'fixture-fake-gemini-key',
           FAKE_PROVIDER_LOG: logPath,
           NODE_OPTIONS: `--import=${join(process.cwd(), 'scripts/lib/fake-provider-hook.mjs')}`,
           [BUDGET_ENV.dailyUsd]: '1000', [BUDGET_ENV.headroomMultiplier]: '1.5',

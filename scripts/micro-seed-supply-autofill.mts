@@ -95,16 +95,21 @@ const ajMap = new WeakMap<object, AutoJudgeProvenance>()
 function envelopeOf(c: Candidate): Envelope { return envMap.get(c as object) ?? {} }
 function autoJudgeOf(c: Candidate): AutoJudgeProvenance { return ajMap.get(c as object) ?? {} }
 
-/** 🔴 봉투와 행을 함께 읽는다 — 행만 읽으면 기계 profile 을 검증할 수 없다 */
-function readCandidateFile(path: string): { envelope: Envelope; candidates: Candidate[] } {
+/**
+ * 🔴 봉투와 행을 함께 읽는다 — 행만 읽으면 기계 profile 을 검증할 수 없다.
+ *    🔴 **내보낸다** (2026-09-20). end-to-end fixture 가 **실제 러너가 쓴 파일**을
+ *    이 함수로 읽어 봉투 계약을 검증한다 — 손으로 만든 봉투는 증거가 아니다.
+ */
+export function readCandidateFile(path: string): { envelope: Envelope; candidates: Candidate[] } {
   const j = JSON.parse(readFileSync(path, 'utf-8')) as {
     candidates?: Candidate[]; provenance?: string; ruleVersion?: string
-    promptVersion?: string; model?: string
+    promptVersion?: string; pipelineVersion?: string; stageModels?: unknown
   }
   return {
     envelope: {
       provenance: j.provenance, ruleVersion: j.ruleVersion,
-      promptVersion: j.promptVersion, model: j.model,
+      promptVersion: j.promptVersion, pipelineVersion: j.pipelineVersion,
+      stageModels: j.stageModels,
     },
     candidates: Array.isArray(j.candidates) ? j.candidates : [],
   }
