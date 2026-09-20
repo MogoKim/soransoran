@@ -10,13 +10,14 @@
 import { EVIDENCE_CHAR_BUDGET, type SourceEvidencePacket } from './evidence'
 import type { ClosingIntent, ContentRole, DropReason, ProtectedFact } from './source-facts'
 import type { SelfBasis, SpeakerWarrant, Stance, WarrantRejection } from './speaker'
+import type { GenerationContract } from './pipeline'
 import type { VoiceProvenance } from './voice-evidence'
 import type {
   DeterministicResult, DroppedFromSource, LifeContradiction, MachineOutcome, ReviewCompletion,
   SemanticVerdict, UnsupportedAddition,
 } from './review'
 
-export const ARTIFACT_VERSION = 'human-review-v7'
+export const ARTIFACT_VERSION = 'human-review-v8'
 
 /** 🔴 사람만 적을 수 있다 — 기계가 채우면 사칭이다 */
 export const HUMAN_VERDICTS = ['READY', 'EDIT_REQUIRED', 'HOLD'] as const
@@ -63,6 +64,11 @@ export type HumanReviewArtifact = {
   artifactId: string
   sourceArticleId: string
   generatedAt: string
+  /**
+   * 🔴 **어떤 계약으로 만들었는가** (2026-09-20). 다음 회차가 "지난 HOLD 가 지금도
+   *    결론인가" 를 이 값으로 판단한다. `artifactVersion` 은 스키마 판일 뿐이다.
+   */
+  contract: GenerationContract
 
   evidence: {
     title: string

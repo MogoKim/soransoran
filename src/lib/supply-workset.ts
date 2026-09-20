@@ -1,4 +1,8 @@
-import { HARD_BLOCK, hardGate, preSemanticGate, type JudgeInput } from './micro-seed-auto-judge'
+import { HARD_BLOCK, hardGate, holdBeforeAsking, type JudgeInput } from './micro-seed-auto-judge'
+import { artifactRetryable } from './content-core/review'
+import {
+  sameGenerationContract, type ContractBase, type GenerationContract,
+} from './content-core/pipeline'
 
 /**
  * 공급 회차의 **작업 묶음** — 🔴 AI 를 부르기 전에 **코드가** 정한다 (2026-09-20)
@@ -88,91 +92,176 @@ export type WorksetPlan = {
   deferred: number
 }
 
-/** 🔴 판정 한 줄이 **지금 계약에 해당하는가**를 가리는 값들 */
-export type PriorJudgement = {
+/**
+ * 🔴 **한 원천의 지난 결과 하나.** 판정이든 생성이든 같은 모양으로 본다 —
+ *    두 벌로 두면 "어느 쪽이 최신인가" 를 비교할 수 없다.
+ */
+export const OUTCOME_STATES = ['seeded', 'terminal', 'retryable', 'candidate', 'unknown'] as const
+export type OutcomeState = (typeof OUTCOME_STATES)[number]
+
+/** 🔴 단계 순위 — **같은 시각이면 생성이 판정보다 뒤다** */
+export const STAGE_RANK = Object.freeze({ judge: 0, draft: 1 } as const)
+export type OutcomeStage = keyof typeof STAGE_RANK
+
+export type PriorOutcome = {
   sourceArticleId: string
-  /** 그때 본 입력의 지문 — 지금 입력과 다르면 지난 결론이 아니다 */
+  /**
+   * 🔴 **명시 시각.** 판정은 `decidedAt`, 생성은 `generatedAt` 이다.
+   *    🔴 파일 이름을 쓰지 않는다 — `auto-draft-20260920…` 이 문자열로는
+   *    `auto-judge-20260907…` 보다 **앞선다**. 13일 뒤 결과가 옛것으로 밀렸다(실측).
+   */
+  at: string
+  stage: OutcomeStage
+  state: OutcomeState
+}
+
+export type WorksetCanon = {
+  ruleVersion: string
+  promptVersion: string
+  judgeModel: string
+}
+
+/** 🔴 지난 판정 한 줄 — 파일에서 읽은 그대로 */
+export type PriorJudgementRow = {
+  sourceArticleId: string
   inputHash: string
   ruleVersion: string
   promptVersion: string
   model: string
   decision: string
   semanticStatus: string
-  /** 🔴 최신을 가리는 값 — 파일 이름(회차 시각) 순서를 그대로 쓴다 */
-  order: string
+  decidedAt: string
 }
 
-export type PriorArtifact = {
+/** 🔴 지난 artifact 한 장 — 파일에서 읽은 그대로 */
+export type PriorArtifactRow = {
   sourceArticleId: string
   artifactVersion: string
+  contract: GenerationContract | null
   outcome: string
-  /** 🔴 `artifactRetryable` 이 판정한 값을 그대로 받는다 */
   retryable: boolean
-  order: string
+  generatedAt: string
 }
 
-/** 🔴 지금 판의 이름들 — 여기서 상수를 적지 않고 부르는 쪽이 정본을 넘긴다 */
-export type WorksetCanon = {
-  ruleVersion: string
-  promptVersion: string
-  judgeModel: string
-  artifactVersion: string
+const AUTO_DECISIONS = ['AUTO_SEED', 'AUTO_HOLD', 'AUTO_DROP'] as const
+const MACHINE_OUTCOMES = ['adopt', 'hold', 'drop'] as const
+const SEMANTIC_OK = 'ok'
+
+/**
+ * 🔴 **지난 판정 한 줄을 상태로 바꾼다.** 지금 입력·지금 judge 계약이 아니면 `null` —
+ *    이 원천에 대한 결론이 아니다.
+ */
+export function judgementOutcome(
+  j: PriorJudgementRow, currentInputHash: string, canon: WorksetCanon,
+): PriorOutcome | null {
+  const id = S(j.sourceArticleId)
+  if (id === '' || S(j.decidedAt) === '') return null
+  if (S(j.inputHash) !== currentInputHash) return null
+  if (S(j.ruleVersion) !== canon.ruleVersion) return null
+  if (S(j.promptVersion) !== canon.promptVersion) return null
+  if (S(j.model) !== canon.judgeModel) return null
+  const status = S(j.semanticStatus)
+  const decision = S(j.decision)
+  const state: OutcomeState =
+    // 🔴 모르는 값은 결론이 아니다 — 영구 제외하지 않는다
+    !(AUTO_DECISIONS as readonly string[]).includes(decision) ? 'unknown'
+      : status !== SEMANTIC_OK ? 'retryable'
+        : decision === 'AUTO_SEED' ? 'seeded' : 'terminal'
+  return { sourceArticleId: id, at: S(j.decidedAt), stage: 'judge', state }
 }
 
 /**
- * 🔴 **앞 회차가 끝낸 원천을 모은다** — 과거 파일 전체의 **합집합이 아니다**.
- *
- * 🔴 **세 가지를 지킨다** (2026-09-20 보정):
- *    ① **지금 입력·지금 판**에 해당하는 결과만 본다. 입력 지문이나 판이 바뀌면
- *       지난 결론은 이 원천에 대한 결론이 아니다 — 다시 평가할 수 있어야 한다.
- *    ② **최신이 이긴다.** 옛 HOLD 뒤에 새 SEED 가 있으면 terminal 이 아니다.
- *    ③ **재시도 결과가 나오면 옛 terminal 이 남지 않는다.** 못 물어본 것은 결론이 아니다.
- *
- * 🔴 판정 쪽은 **judge 캐시와 같은 네 칸**(입력 지문·규칙·프롬프트·모델)으로 거른다 —
- *    그 계약이 이미 판을 담고 있다. 여기서 새 checkpoint 를 만들지 않는다.
+ * 🔴 **지난 artifact 한 장을 상태로 바꾼다.** 스키마 판과 **생성 계약**이 둘 다
+ *    지금과 같아야 한다 — `artifactVersion` 하나로는 프롬프트·모델·자산 판이 바뀐 것을 못 본다.
  */
-export function terminalSourceIds(input: {
-  /** 지금 고를 원천과 그 입력 지문 */
-  current: readonly { sourceArticleId: string; inputHash: string }[]
-  judgements: readonly PriorJudgement[]
-  artifacts: readonly PriorArtifact[]
-  canon: WorksetCanon
-}): Set<string> {
-  const hashOf = new Map(input.current.map((c) => [S(c.sourceArticleId), S(c.inputHash)]))
-  /** 원천별 **가장 최신** 결과 하나 — 판정이든 생성이든 order 가 큰 쪽 */
-  const latest = new Map<string, { order: string; terminal: boolean }>()
-  const put = (id: string, order: string, terminal: boolean): void => {
-    const cur = latest.get(id)
-    if (cur === undefined || order >= cur.order) latest.set(id, { order, terminal })
-  }
+export function artifactOutcome(
+  a: PriorArtifactRow, currentContract: GenerationContract, artifactVersion: string,
+): PriorOutcome | null {
+  const id = S(a.sourceArticleId)
+  if (id === '' || S(a.generatedAt) === '') return null
+  if (S(a.artifactVersion) !== artifactVersion) return null
+  if (!sameGenerationContract(a.contract, currentContract)) return null
+  const outcome = S(a.outcome)
+  const state: OutcomeState =
+    !(MACHINE_OUTCOMES as readonly string[]).includes(outcome) ? 'unknown'
+      : a.retryable ? 'retryable'
+        : outcome === 'adopt' ? 'candidate' : 'terminal'
+  return { sourceArticleId: id, at: S(a.generatedAt), stage: 'draft', state }
+}
 
-  for (const j of input.judgements) {
-    const id = S(j.sourceArticleId)
-    if (!hashOf.has(id)) continue
-    // ① 지금 입력·지금 판이 아니면 이 원천에 대한 결론이 아니다
-    if (S(j.inputHash) !== hashOf.get(id)) continue
-    if (S(j.ruleVersion) !== input.canon.ruleVersion) continue
-    if (S(j.promptVersion) !== input.canon.promptVersion) continue
-    if (S(j.model) !== input.canon.judgeModel) continue
-    // ③ 물어보지 못한 판정은 결론이 아니다 — 최신이면 옛 terminal 을 지운다
-    const terminal = S(j.semanticStatus) === 'ok' && S(j.decision) !== 'AUTO_SEED'
-    put(id, S(j.order), terminal)
-  }
-  for (const a of input.artifacts) {
-    const id = S(a.sourceArticleId)
-    if (!hashOf.has(id)) continue
-    if (S(a.artifactVersion) !== input.canon.artifactVersion) continue
-    // 🔴 adopt 는 후보가 됐으니 큐 형제로 걸린다 — 여기서 끝난 것으로 세지 않는다
-    const terminal = !a.retryable && (a.outcome === 'hold' || a.outcome === 'drop')
-    put(id, S(a.order), terminal)
-  }
+/**
+ * 🔴 **판정 파일 한 줄을 그대로 상태로.** 러너와 검사가 **같은 함수**를 쓴다 —
+ *    읽는 코드를 두 벌로 두면 검사가 구현을 흉내 내는 것으로 끝난다.
+ *    🔴 지금 회차 대상이 아닌 원천(`hashOf` 에 없는 id)은 `null` 이다.
+ */
+export function shadowRecordOutcome(
+  raw: Record<string, unknown>, hashOf: ReadonlyMap<string, string>, canon: WorksetCanon,
+): PriorOutcome | null {
+  const hash = hashOf.get(S(raw.sourceArticleId))
+  if (hash === undefined) return null
+  return judgementOutcome({
+    sourceArticleId: S(raw.sourceArticleId), inputHash: S(raw.inputHash),
+    ruleVersion: S(raw.ruleVersion), promptVersion: S(raw.promptVersion), model: S(raw.model),
+    decision: S(raw.decision), semanticStatus: S(raw.semanticStatus),
+    decidedAt: S(raw.decidedAt),
+  }, hash, canon)
+}
 
-  const out = new Set<string>()
-  for (const [id, v] of latest) if (v.terminal) out.add(id)
+/** 🔴 **artifact 한 장을 그대로 상태로.** 위와 같은 이유로 여기 하나만 둔다 */
+export function artifactRecordOutcome(
+  raw: Record<string, unknown>, hashOf: ReadonlyMap<string, string>,
+  base: ContractBase, artifactVersion: string,
+): PriorOutcome | null {
+  const hash = hashOf.get(S(raw.sourceArticleId))
+  if (hash === undefined) return null
+  const review = (raw.review ?? {}) as Record<string, unknown>
+  const c = raw.contract
+  return artifactOutcome({
+    sourceArticleId: S(raw.sourceArticleId), artifactVersion: S(raw.artifactVersion),
+    // 🔴 계약 칸이 없는 옛 artifact 는 `null` — 지금 계약과 같을 수 없다
+    contract: typeof c === 'object' && c !== null ? c as GenerationContract : null,
+    outcome: S(review.machineOutcome), retryable: artifactRetryable(review),
+    generatedAt: S(raw.generatedAt),
+  }, { ...base, sourceInputHash: hash }, artifactVersion)
+}
+
+/** 🔴 원천마다 **가장 최신** 하나 — 시각이 같으면 단계 순위로 가른다 */
+export function latestOutcomes(rows: readonly PriorOutcome[]): Map<string, PriorOutcome> {
+  const out = new Map<string, PriorOutcome>()
+  for (const r of rows) {
+    const cur = out.get(r.sourceArticleId)
+    if (cur === undefined) { out.set(r.sourceArticleId, r); continue }
+    const newer = r.at > cur.at
+      || (r.at === cur.at && STAGE_RANK[r.stage] >= STAGE_RANK[cur.stage])
+    if (newer) out.set(r.sourceArticleId, r)
+  }
   return out
 }
 
-/** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 *//** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 */
+/**
+ * 🔴 **다음 회차에서 뺄 원천.** 최신 상태가 `terminal` 인 것만이다.
+ *
+ *    `retryable` · `unknown` 은 다시 본다 — 결론이 아니라 못 물어본 것이다.
+ *    `candidate` 는 큐 형제로 걸린다 — 여기서 빼면 적재가 실패한 회차를 되살릴 수 없다.
+ */
+export function terminalSourceIds(rows: readonly PriorOutcome[]): Set<string> {
+  const out = new Set<string>()
+  for (const [id, v] of latestOutcomes(rows)) if (v.state === 'terminal') out.add(id)
+  return out
+}
+
+/**
+ * 🔴 **지금 계약으로 이미 한 번 돌려 본 원천.** 결론이 나지 않았어도(재시도·모름·
+ *    채택했지만 적재까지 못 간 것) **다시 볼 수는 있다** — 그래서 빼지 않는다.
+ *
+ * 🔴 대신 **뒤로 보낸다.** 안 그러면 댓글 수 상위에 있는 이 원천들이 회차마다
+ *    같은 자리를 차지해 한 번도 안 본 backlog 가 영영 올라오지 못한다.
+ */
+export function attemptedSourceIds(rows: readonly PriorOutcome[]): Set<string> {
+  return new Set(latestOutcomes(rows).keys())
+}
+
+/** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 */
 export const baseIdOf = (id: string): string => id.split('#')[0] ?? id
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
@@ -185,7 +274,7 @@ const timeKeyOf = (r: WorksetRow): string =>
 /**
  * 🔴 **묶음을 고른다.** AI 를 부르기 전에 끝난다 — 이 함수는 순수하다.
  *
- * 🔴 순서: 댓글 수 많은 순 → 시각 최신 순 → id 오름차순(안정).
+ * 🔴 순서: **안 본 것 먼저** → 댓글 수 많은 순 → 시각 최신 순 → id 오름차순(안정).
  *    같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.
  */
 export function selectWorkset(input: {
@@ -202,6 +291,11 @@ export function selectWorkset(input: {
    *    🔴 **재시도해야 하는 것은 여기 넣지 않는다** (예산·상한에 막힌 것 등).
    */
   terminal: ReadonlySet<string>
+  /**
+   * 🔴 **지금 계약으로 이미 돌려 본 원천** (`attemptedSourceIds`). 빼지 않고 **뒤로** 보낸다 —
+   *    한 번도 안 본 원천이 먼저다. 이것이 회차 간 진행을 보장한다.
+   */
+  attempted: ReadonlySet<string>
   limit: number
   runId: string
   takenAt: Date
@@ -229,12 +323,19 @@ export function selectWorkset(input: {
     if (hardGate(r.input).some((c) => (HARD_BLOCK as readonly string[]).includes(c))) {
       dropped.hardBlocked += 1; continue
     }
-    if (preSemanticGate(r.input).length > 0) { dropped.preGated += 1; continue }
+    /**
+     * 🔴 **물어봐도 HOLD 인 것은 묶음에 넣지 않는다.** 판정기가 모델 답을 받고
+     *    나서 보던 사유를 `holdBeforeAsking` 하나로 모았다 — 같은 함수를 부른다.
+     */
+    if (holdBeforeAsking(r.input).length > 0) { dropped.preGated += 1; continue }
     eligible.push(r)
   }
 
+  const tried = (r: WorksetRow): number => (input.attempted.has(r.sourceArticleId) ? 1 : 0)
   eligible.sort((a, b) =>
-    N(b.commentCount) - N(a.commentCount)
+    // 🔴 한 번도 안 본 원천이 먼저다 — 결론 안 난 것이 상위 자리를 되풀이 점유하지 못한다
+    tried(a) - tried(b)
+    || N(b.commentCount) - N(a.commentCount)
     || timeKeyOf(b).localeCompare(timeKeyOf(a))
     || a.sourceArticleId.localeCompare(b.sourceArticleId))
 

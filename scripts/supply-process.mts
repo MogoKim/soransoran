@@ -52,17 +52,19 @@ import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 /** 🔴 작업 묶음 정본 — 모양·상한·선택 규칙은 전부 저기 하나에 있다 */
 import {
-  judgeStageBudget, selectWorkset, terminalSourceIds, worksetFileName,
-  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL,
-  type PriorArtifact, type PriorJudgement, type WorksetRow,
+  attemptedSourceIds, judgeStageBudget, selectWorkset, terminalSourceIds, worksetFileName,
+  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL, type WorksetRow,
 } from '../src/lib/supply-workset'
 import {
   inputHashOf, mergeJudgeRows, PROMPT_VERSION, RULE_VERSION,
 } from '../src/lib/micro-seed-auto-judge'
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
+/** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
+import { currentContractBase } from './lib/generation-contract.mjs'
+import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import type { ContractBase } from '../src/lib/content-core/pipeline'
 /** 🔴 판정 모델 이름 — 판정 러너가 쓰는 그 값이다 */
 import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
-import { artifactRetryable } from '../src/lib/content-core/review'
 import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
@@ -132,60 +134,19 @@ function worksetRows(paths: readonly string[]): WorksetRow[] | null {
  * 🔴 **합집합이 아니다.** 지금 입력 지문·지금 판에 해당하는 것만 보고, 원천마다
  *    **가장 최신** 결과 하나로 판정한다. 파일 이름(회차 시각)이 곧 순서다.
  */
-function terminalIds(rows: readonly WorksetRow[]): Set<string> {
-  const judgements: PriorJudgement[] = []
-  const artifacts: PriorArtifact[] = []
-  for (const f of readdirSync(DATA_DIR).sort()) {
-    if (f.endsWith('.shadow.jsonl')) {
-      let raw: string
-      try { raw = readFileSync(join(DATA_DIR, f), 'utf-8') } catch { continue }
-      for (const line of raw.split('\n')) {
-        const t = line.trim()
-        if (t === '') continue
-        try {
-          const j = JSON.parse(t) as Record<string, unknown>
-          judgements.push({
-            sourceArticleId: String(j.sourceArticleId ?? ''),
-            inputHash: String(j.inputHash ?? ''),
-            ruleVersion: String(j.ruleVersion ?? ''),
-            promptVersion: String(j.promptVersion ?? ''),
-            model: String(j.model ?? ''),
-            decision: String(j.decision ?? ''),
-            semanticStatus: String(j.semanticStatus ?? ''),
-            order: f,
-          })
-        } catch { /* 못 읽는 줄은 끝난 것으로 세지 않는다 */ }
-      }
-      continue
-    }
-    if (!/^auto-draft-.*\.artifacts\.json$/.test(f)) continue
-    try {
-      const rows2 = JSON.parse(readFileSync(join(DATA_DIR, f), 'utf-8')) as unknown
-      if (!Array.isArray(rows2)) continue
-      for (const a of rows2) {
-        const o = a as Record<string, unknown>
-        const rv = (o.review ?? {}) as Record<string, unknown>
-        artifacts.push({
-          sourceArticleId: String(o.sourceArticleId ?? ''),
-          artifactVersion: String(o.artifactVersion ?? ''),
-          outcome: String(rv.machineOutcome ?? ''),
-          retryable: artifactRetryable(rv),
-          order: f,
-        })
-      }
-    } catch { /* 같은 이유로 건너뛴다 */ }
-  }
-  return terminalSourceIds({
-    // 🔴 지금 입력의 지문 — 판정기와 **같은 함수**로 만든다
-    current: rows.map((r) => ({
-      sourceArticleId: r.sourceArticleId, inputHash: inputHashOf(r.input),
-    })),
-    judgements, artifacts,
+/** 🔴 지난 결과를 한 번만 읽어 **끝난 것**과 **이미 본 것**을 함께 낸다 */
+function priorState(rows: readonly WorksetRow[], base: ContractBase): {
+  terminal: Set<string>; attempted: Set<string>
+} {
+  const outcomes = readPriorOutcomes({
+    dataDir: DATA_DIR,
+    hashOf: new Map(rows.map((r) => [r.sourceArticleId, inputHashOf(r.input)])),
     canon: {
-      ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION,
-      judgeModel: JUDGE_MODEL_NAME, artifactVersion: ARTIFACT_VERSION,
+      ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION, judgeModel: JUDGE_MODEL_NAME,
     },
+    base, artifactVersion: ARTIFACT_VERSION,
   })
+  return { terminal: terminalSourceIds(outcomes), attempted: attemptedSourceIds(outcomes) }
 }
 
 /** 🔴 사람이 이미 판정한 원천 — 판정기와 **같은 파일들**을 본다 */
@@ -600,8 +561,9 @@ async function main(): Promise<number> {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
       return 1
     }
+    const prior = priorState(rows, currentContractBase())
     const plan = selectWorkset({
-      rows, humanDecided: humanDecidedIds(), queuePending, terminal: terminalIds(rows),
+      rows, humanDecided: humanDecidedIds(), queuePending, ...prior,
       limit: WORKSET_LIMIT, runId, takenAt: new Date(),
     })
     if (plan.picked.length === 0) {

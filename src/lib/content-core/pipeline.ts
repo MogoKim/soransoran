@@ -72,6 +72,43 @@ export const CONTENT_CORE_MODEL_LABEL =
   + CONTENT_CORE_STAGES.map((s) => `${s}=${STAGE_MODEL[s]}`).join(',')
 
 /**
+ * 🔴 **이 글이 어떤 계약으로 만들어졌는가** (2026-09-20).
+ *
+ *    `artifactVersion` 하나로는 판단할 수 없다 — 그건 **스키마 판**이고,
+ *    같은 스키마에서 프롬프트·모델·말투 자산이 바뀔 수 있다. 그러면 지난 HOLD 를
+ *    지금 계약의 결론으로 쓰게 된다.
+ *
+ * 🔴 **원문을 담지 않는다.** 입력은 해시 하나로만 적는다.
+ */
+export type GenerationContract = {
+  /** 🔴 원문 지문 — 판정기 정본 해시와 같은 값이다. 원문을 복원할 수 없다 */
+  sourceInputHash: string
+  pipelineVersion: string
+  promptVersion: string
+  stageModels: Readonly<Record<ContentCoreStage, string>>
+  /** 말투 자산 판 — 댓글 정본 묶음의 지문 */
+  voiceAssetDigest: string
+  /** Persona 정본 카드 판 */
+  personaCardDigest: string
+}
+
+/** 🔴 두 계약이 같은가 — 한 칸이라도 다르면 다른 계약이다 */
+/** 🔴 원천과 무관한 칸들 — 회차마다 한 번만 만든다 */
+export type ContractBase = Omit<GenerationContract, 'sourceInputHash'>
+
+export function sameGenerationContract(
+  a: GenerationContract | null | undefined, b: GenerationContract,
+): boolean {
+  if (a === null || a === undefined) return false
+  return a.sourceInputHash === b.sourceInputHash
+    && a.pipelineVersion === b.pipelineVersion
+    && a.promptVersion === b.promptVersion
+    && a.voiceAssetDigest === b.voiceAssetDigest
+    && a.personaCardDigest === b.personaCardDigest
+    && CONTENT_CORE_STAGES.every((st) => a.stageModels?.[st] === b.stageModels[st])
+}
+
+/**
  * 🔴 봉투에 실린 `stageModels` 가 정본과 **한 칸도 빠짐없이** 같은가.
  *    빠진 칸을 통과시키면 "어느 모델이 썼는지 모르는 글" 이 큐에 올라간다.
  */

@@ -25,7 +25,7 @@ import { pathToFileURL } from 'node:url'
 import {
   judgeOne, summarize, checkRegression, violatesProvenance, parseSemantic, inputHashOf,
   mergeJudgeRows,
-  hardGate, preSemanticGate, HARD_BLOCK, BODY_HEAD_MAX,
+  hardGate, holdBeforeAsking, HARD_BLOCK, BODY_HEAD_MAX,
   REASON_LABEL, RULE_VERSION, PROMPT_VERSION, AUTO_PROVENANCE, SEED_AXIS, RAW_AXIS, SKIPPED,
   type Judgement, type JudgeInput, type RegressionRow, type SemanticOutcome, type SemanticStatus,
 } from '../src/lib/micro-seed-auto-judge'
@@ -394,7 +394,13 @@ async function main(): Promise<void> {
     if (hard.some((c) => HARD_BLOCK.includes(c)) || S(t.sourceArticleId) === '') {
       preJudged.push(judgeOne(t, now)); continue
     }
-    if (preSemanticGate(t).length > 0) { preJudged.push(judgeOne(t, now)); continue }
+    /**
+     * 🔴 **물어봐도 HOLD 인 것은 묻지 않는다** (2026-09-20 정리).
+     *    앞판은 `preSemanticGate` 만 봤고, lane·자산 축 격리는 **모델 답을 받은 뒤**
+     *    `decide` 가 덮었다 — 결과가 정해진 원천에 유료 요청이 나갔다(실측).
+     *    이제 `decide` 와 **같은 함수**로 묻기 전에 가른다.
+     */
+    if (holdBeforeAsking(t).length > 0) { preJudged.push(judgeOne(t, now)); continue }
     needAsk.push(t)
   }
   console.log(`① 상세 ${all.length}건 → 신규 ${fresh.length}건 · 사람이 이미 본 것 ${seen.length}건`)
@@ -491,7 +497,7 @@ async function main(): Promise<void> {
   const regRows: RegressionRow[] = []
   for (const t of seen) {
     const blocked = hardGate(t).some((c) => HARD_BLOCK.includes(c))
-    const pre = preSemanticGate(t).length > 0
+    const pre = holdBeforeAsking(t).length > 0
     let outcome: SemanticOutcome = SKIPPED
     if (!blocked && !pre) {
       const k = cacheKey(S(t.sourceArticleId), inputHashOf(t))

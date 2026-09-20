@@ -77,6 +77,7 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
  *    배정되든 모순될 사실이 없다.
  */
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
+import { currentContractBase } from './lib/generation-contract.mjs'
 import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 /**
  * 🔴 **Persona 정체성의 정본은 Pool 카드 문서다.** 여기서 만들지도 복제하지도 않는다.
@@ -128,6 +129,12 @@ import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 
 export const DATA_DIR = '.microseed-data'
+/**
+ * 🔴 **이 회차의 생성 계약 — 원천과 무관한 칸.** 공급 러너와 **같은 함수**로 만든다.
+ *    두 곳에서 따로 조립하면 한쪽이 낡아 "같은 계약" 판정이 틀어진다.
+ */
+const CONTRACT_BASE = currentContractBase()
+
 const argv = process.argv.slice(2)
 /**
  * 🔴 **세 경로를 섞지 않는다** (§4-AR 과 같은 계약).
@@ -546,8 +553,20 @@ function runId(now: Date): string {
  */
 type Meta = {
   title: string; site: string; bodyHead: string; axis: string; lane: string; angle: string
+  /** 🔴 원천 지문에 들어가는 값이다 — 빠뜨리면 공급 러너의 지문과 영영 달라진다 */
+  assetAxes: string
   sourcePostedAt: string; sourceListedAt: string; sourceCapturedAt: string
 }
+
+/**
+ * 🔴 **원천 입력 identity 는 하나다** (2026-09-20). 판정기가 shadow 에 적는 `inputHash`,
+ *    공급 러너가 "지금 입력" 으로 삼는 값, artifact 계약의 `sourceInputHash` 가
+ *    **같은 함수 · 같은 칸**이어야 한다. 한 칸이라도 빠지면 두 지문이 영영 달라지고,
+ *    그러면 끝난 원천이 terminal 로 인정되지 않아 같은 원천을 되풀이해 고른다.
+ */
+const sourceIdentityHash = (m: Meta): string => inputHashOf({
+  title: m.title, bodyHead: m.bodyHead, axis: m.axis, lane: m.lane, assetAxes: m.assetAxes,
+})
 
 function loadMeta(): Map<string, Meta> {
   const out = new Map<string, Meta>()
@@ -559,7 +578,7 @@ function loadMeta(): Map<string, Meta> {
         if (id === '' || t === '') continue
         out.set(id, {
           title: t, site: S(r.sourceSite), bodyHead: S(r.bodyHead),
-          axis: S(r.axis), lane: S(r.lane), angle: '',
+          axis: S(r.axis), lane: S(r.lane), angle: '', assetAxes: S(r.assetAxes),
           // 🔴 옛 파일에는 이 키가 없다 — 그러면 빈 문자열(모른다)이다
           sourcePostedAt: S(r.sourcePostedAt),
           sourceListedAt: S(r.sourceListedAt),
@@ -649,6 +668,8 @@ type VoiceRuntime = {
   candidates: readonly PersonaInput[]
   /** 말투 자산 판 — artifact provenance 에 남는다 */
   sourceDigest: string
+  /** 🔴 Persona 정본 카드 판 — 생성 계약의 한 칸이다 */
+  cardDigest: string
   /** 🔴 정본을 못 읽었다 — provider 호출 전에 전 원천을 막는다 */
   blockAllCode: string | null
   blockReason: string | null
@@ -667,7 +688,8 @@ type VoiceRuntime = {
  */
 function loadVoice(sources: readonly { sourceArticleId: string; title: string; body: string }[]): VoiceRuntime {
   const none: VoiceRuntime = {
-    describe: '', candidates: [], sourceDigest: '', blockAllCode: null, blockReason: null,
+    describe: '', candidates: [], sourceDigest: '', cardDigest: '',
+    blockAllCode: null, blockReason: null,
   }
   /** 🔴 정본을 못 읽었다 — 쓰지 않는다. 조용히 품질이 낮은 글을 만들지 않는다 */
   const blocked = (code: string, why: string): VoiceRuntime => ({
@@ -684,8 +706,12 @@ function loadVoice(sources: readonly { sourceArticleId: string; title: string; b
   // 🔴 정본 카드 — 여기서 Persona 를 만들지 않는다. 문서가 정본이다
   let cards: PoolCard[] = []
   let cardNote = ''
+  /** 🔴 Persona 정본 카드 판 — 문서가 바뀌면 값이 바뀐다 */
+  let cardDigest = ''
   try {
-    const doc = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
+    const docText = readFileSync(PERSONA_POOL_DOC, 'utf-8')
+    cardDigest = digest16(docText)
+    const doc = parsePoolDoc(docText)
     cards = doc.cards
     if (doc.problems.length > 0) cardNote = ` · 🟡 카드 문제 ${doc.problems.length}건`
   } catch {
@@ -727,6 +753,7 @@ function loadVoice(sources: readonly { sourceArticleId: string; title: string; b
       + (plan.blocks.length > 0 ? `\n     🟡 ${plan.blocks.slice(0, 2).join(' · ')}` : ''),
     candidates,
     sourceDigest: asset.sourceDigest ?? '',
+    cardDigest,
     blockAllCode: null,
     blockReason: null,
   }
@@ -920,7 +947,7 @@ async function main(): Promise<void> {
      *    🔴 캐시 **파일**은 지우지 않는다. key 가 계약을 담으면 저절로 miss 된다.
      */
     const v2Key = `v2|${j.sourceArticleId}`
-      + `|${inputHashOf({ title: meta.title, bodyHead: meta.bodyHead, axis: meta.axis, lane: meta.lane })}`
+      + `|${sourceIdentityHash(meta)}`
       + `|${SPEAKER_PLAN_PROMPT_VERSION}|${V2_DRAFT_PROMPT_VERSION}|${V2_REVIEW_PROMPT_VERSION}`
       + `|${STAGE_MODEL.speakerPlan}|${STAGE_MODEL.draftGen}|${STAGE_MODEL.semanticReview}`
       // 🔴 1200 으로 잘린 결과를 2000 짜리 계약이 재사용하지 않게 한다
@@ -951,6 +978,11 @@ async function main(): Promise<void> {
          */
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
         personas: voice.candidates, load: v2Load,
+        /**
+         * 🔴 **이 회차의 생성 계약.** 다음 회차가 "지난 HOLD 가 지금도 결론인가" 를
+         *    이 값으로 판단한다 — 스키마 판 하나로는 알 수 없다.
+         */
+        contract: { ...CONTRACT_BASE, sourceInputHash: sourceIdentityHash(meta) },
         voiceSourceDigest: voice.sourceDigest,
         ask: v2Ask, now, callCap: V2_CALL_CAP,
       })

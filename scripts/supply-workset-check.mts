@@ -11,15 +11,23 @@
 import { readFileSync } from 'node:fs'
 
 import {
-  baseIdOf, judgeStageBudget, readWorkset, selectWorkset, terminalSourceIds,
-  type PriorArtifact, type PriorJudgement,
+  artifactOutcome, baseIdOf, judgementOutcome, judgeStageBudget, readWorkset, selectWorkset,
+  terminalSourceIds, OUTCOME_STATES, STAGE_RANK,
+  type PriorArtifactRow, type PriorJudgementRow, type PriorOutcome,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
   WORKSET_VERSION, worksetFileName, type WorksetRow,
 } from '../src/lib/supply-workset'
 import {
   ledgerRunIdOf, planBoundedCommonPhase, planCommonPhase, type Pending,
 } from '../src/lib/supply-process'
-import { mergeJudgeRows, SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
+import {
+  holdBeforeAsking, mergeJudgeRows, PROVEN_LANES, SEED_AXIS,
+} from '../src/lib/micro-seed-auto-judge'
+import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
+import {
+  CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION, STAGE_MODEL,
+  type GenerationContract,
+} from '../src/lib/content-core/pipeline'
 import {
   artifactRetryable, INCOMPLETE_LABEL, RETRYABLE_REASONS,
 } from '../src/lib/content-core/review'
@@ -47,7 +55,9 @@ const ROW = (o: {
       // 🔴 정본이 인정하는 축만 통과한다 — fixture 도 실제 값을 쓴다
       commentCount: o.commentCount ?? 0, axis: o.axis ?? SEED_AXIS,
       access: o.access ?? 'ok', safetyVerdict: o.safetyVerdict ?? 'pass',
-      lane: 'seed', assetAxes: '', safetyReasons: '', bodyLength: 300, qualityFlags: [],
+      // 🔴 실증된 lane 이어야 판정까지 간다 — 아니면 묻기 전에 HOLD 다
+      lane: PROVEN_LANES[0] ?? '', assetAxes: '', safetyReasons: '', bodyLength: 300,
+      qualityFlags: [],
     },
   }])
   return {
@@ -64,12 +74,14 @@ const sel = (o: {
   humanDecided?: readonly string[]
   queuePending?: readonly string[]
   terminal?: readonly string[]
+  attempted?: readonly string[]
   limit?: number
 }) => selectWorkset({
   rows: o.rows,
   humanDecided: new Set(o.humanDecided ?? []),
   queuePending: new Set(o.queuePending ?? []),
   terminal: new Set(o.terminal ?? []),
+  attempted: new Set(o.attempted ?? []),
   limit: o.limit ?? 5, runId: RUN, takenAt: NOW,
 })
 
@@ -338,60 +350,139 @@ console.log('\n⑧ 🔴 한 원천이 막혀도 다음 원천은 간다 · 실�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑧ 🔴 🔴 terminal 은 지금 입력·지금 판의 최신 결과 하나다 (2026-09-20)')
+console.log('\n⑦-b 🔴 🔴 회차 간 진행 — 한 번도 안 본 원천이 먼저다')
+// ─────────────────────────────────────────────────────────
+{
+  const rows = Array.from({ length: 6 }, (_, i) =>
+    ROW({ sourceArticleId: `p${i}`, commentCount: 100 - i }))
+  const first = sel({ rows, limit: 3 })
+  check('🔴 첫 회차는 댓글 수 상위 3건이다',
+    first.workset.sourceIds.join(',') === 'p0,p1,p2', first.workset.sourceIds.join(','))
+  /** 🔴 세 건을 돌렸는데 결론이 안 났다 — 빼지는 않지만 뒤로 간다 */
+  const next = sel({ rows, attempted: ['p0', 'p1', 'p2'], limit: 3 })
+  check('🔴 🔴 **이미 본 원천이 상위 자리를 되풀이 점유하지 않는다**',
+    next.workset.sourceIds.join(',') === 'p3,p4,p5', next.workset.sourceIds.join(','))
+  check('🔴 🔴 **그래도 영구 제외는 아니다** — 자리가 남으면 다시 올라온다',
+    sel({ rows, attempted: ['p0', 'p1', 'p2'], limit: 6 })
+      .workset.sourceIds.join(',') === 'p3,p4,p5,p0,p1,p2')
+  check('🔴 전부 본 뒤에는 댓글 수 순서로 돌아온다',
+    sel({ rows, attempted: rows.map((r) => r.sourceArticleId), limit: 3 })
+      .workset.sourceIds.join(',') === 'p0,p1,p2')
+  check('🔴 🔴 **끝난 것은 뒤로 가는 게 아니라 아예 빠진다**',
+    sel({ rows, terminal: ['p0', 'p1', 'p2'], attempted: ['p0', 'p1', 'p2'], limit: 6 })
+      .workset.sourceIds.join(',') === 'p3,p4,p5')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑦-c 🔴 🔴 묻기 전에 HOLD 인 것은 묶음이 고르지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const ok = ROW({ sourceArticleId: 'g1', commentCount: 10 })
+  const badLane: WorksetRow = {
+    ...ok, sourceArticleId: 'g2', input: { ...ok.input, lane: '아직-증명되지-않은-lane' },
+  }
+  check('🔴 🔴 **실증되지 않은 lane 은 묻기 전에 빠진다** — 판정 예산을 쓰지 않는다',
+    holdBeforeAsking(badLane.input).includes('laneNotProven')
+    && sel({ rows: [ok, badLane] }).workset.sourceIds.join(',') === 'g1')
+  check('🔴 판정기와 **같은 함수**가 같은 답을 낸다',
+    holdBeforeAsking(ok.input).length === 0)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-09-20 재설계)')
 // ─────────────────────────────────────────────────────────
 {
   const CANON = {
     ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2c',
-    judgeModel: 'claude-haiku-4.5', artifactVersion: 'human-review-v7',
+    judgeModel: 'claude-haiku-4.5',
   }
-  const CUR = [{ sourceArticleId: 's1', inputHash: 'h1' }]
-  const J = (o: Partial<PriorJudgement> & { order: string }): PriorJudgement => ({
+  const BASE: GenerationContract = {
+    sourceInputHash: 'h1',
+    pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
+    promptVersion: CONTENT_CORE_PROMPT_VERSION,
+    stageModels: STAGE_MODEL,
+    voiceAssetDigest: 'v1', personaCardDigest: 'c1',
+  }
+  const J = (o: Partial<PriorJudgementRow> = {}): PriorJudgementRow => ({
     sourceArticleId: 's1', inputHash: 'h1',
     ruleVersion: CANON.ruleVersion, promptVersion: CANON.promptVersion, model: CANON.judgeModel,
-    decision: 'AUTO_HOLD', semanticStatus: 'ok', ...o,
+    decision: 'AUTO_HOLD', semanticStatus: 'ok', decidedAt: '2026-09-07T03:20:58.000Z', ...o,
   })
-  const A = (o: Partial<PriorArtifact> & { order: string }): PriorArtifact => ({
-    sourceArticleId: 's1', artifactVersion: CANON.artifactVersion,
-    outcome: 'hold', retryable: false, ...o,
+  const A = (o: Partial<PriorArtifactRow> = {}): PriorArtifactRow => ({
+    sourceArticleId: 's1', artifactVersion: ARTIFACT_VERSION, contract: BASE,
+    outcome: 'hold', retryable: false, generatedAt: '2026-09-20T20:41:28.000Z', ...o,
   })
-  const T = (j: PriorJudgement[], a: PriorArtifact[] = []): Set<string> =>
-    terminalSourceIds({ current: CUR, judgements: j, artifacts: a, canon: CANON })
+  const jo = (o: Partial<PriorJudgementRow> = {}) => judgementOutcome(J(o), 'h1', CANON)
+  const ao = (o: Partial<PriorArtifactRow> = {}) => artifactOutcome(A(o), BASE, ARTIFACT_VERSION)
+  const term = (rows: (PriorOutcome | null)[]): Set<string> =>
+    terminalSourceIds(rows.filter((x): x is PriorOutcome => x !== null))
 
-  check('🔴 정상으로 끝난 HOLD 는 terminal 이다', T([J({ order: '1' })]).has('s1'))
-  check('🔴 🔴 **옛 HOLD 뒤 최신 SEED 면 terminal 이 아니다**',
-    !T([J({ order: '1' }), J({ order: '2', decision: 'AUTO_SEED' })]).has('s1'))
-  check('🔴 🔴 **옛 hard HOLD 뒤 최신 재시도 실패면 terminal 이 아니다**',
-    !T([J({ order: '1' }), J({ order: '2', semanticStatus: 'timeout' })]).has('s1'))
-  check('🔴 순서가 거꾸로 와도 최신이 이긴다',
-    !T([J({ order: '2', decision: 'AUTO_SEED' }), J({ order: '1' })]).has('s1'))
+  // ── ① 실제 파일 이름이 시간 순이 아니어도 최신이 이긴다 ──
+  check('🔴 🔴 **파일명 문자열로는 2026-09-20 draft 가 2026-09-07 judge 보다 앞선다**',
+    'auto-draft-20260920-204128.artifacts.json' < 'auto-judge-20260907-032058.shadow.jsonl')
+  check('🔴 🔴 **그래도 명시 시각으로는 최신 retryable 이 이긴다**',
+    !term([jo(), ao({ retryable: true })]).has('s1'))
+  check('🔴 🔴 **배열에 늦게 온 것이 아니라 시각이 최신인 것이 이긴다**',
+    // 순서를 뒤집어도 2026-09-20 재시도가 이긴다
+    !term([ao({ retryable: true }), jo()]).has('s1')
+    // 그리고 재시도가 **더 옛것**이면 2026-09-07 결론이 이긴다
+    && term([ao({ retryable: true, generatedAt: '2026-09-01T00:00:00.000Z' }), jo()]).has('s1'))
+  check('🔴 상태 어휘가 다섯이다',
+    OUTCOME_STATES.join(',') === 'seeded,terminal,retryable,candidate,unknown')
 
-  // ── 지금 입력·지금 판이 아니면 보지 않는다 ──
-  check('🔴 🔴 **입력 지문이 바뀌면 옛 결론을 쓰지 않는다**',
-    !T([J({ order: '1', inputHash: 'old' })]).has('s1'))
+  // ── ② 같은 회차 AUTO_SEED → hard HOLD 는 HOLD 가 최종이다 ──
+  const SAME = '2026-09-20T11:36:07.000Z'
+  check('🔴 🔴 **같은 회차 SEED 뒤 hard HOLD 면 HOLD 가 최종이다**',
+    term([
+      jo({ decision: 'AUTO_SEED', decidedAt: SAME }),
+      ao({ generatedAt: SAME }),
+    ]).has('s1'))
+  check('🔴 단계 순위는 judge < draft 다', STAGE_RANK.judge < STAGE_RANK.draft)
+
+  // ── ③ 상태 분류 ──
+  check('🟢 AUTO_SEED 는 seeded', jo({ decision: 'AUTO_SEED' })?.state === 'seeded')
+  check('🔴 AUTO_HOLD·AUTO_DROP 은 terminal',
+    jo()?.state === 'terminal' && jo({ decision: 'AUTO_DROP' })?.state === 'terminal')
+  check('🔴 물어보지 못한 판정은 retryable',
+    jo({ semanticStatus: 'timeout' })?.state === 'retryable')
+  check('🔴 🔴 **모르는 decision 은 unknown — 영구 terminal 이 아니다**',
+    jo({ decision: '뭔가' })?.state === 'unknown'
+    && !term([jo({ decision: '뭔가' })]).has('s1'))
+  check('🔴 adopt 는 candidate — terminal 이 아니다',
+    ao({ outcome: 'adopt' })?.state === 'candidate' && !term([ao({ outcome: 'adopt' })]).has('s1'))
+  check('🔴 재시도 대상 artifact 는 retryable', ao({ retryable: true })?.state === 'retryable')
+  check('🔴 🔴 **모르는 outcome 은 unknown**', ao({ outcome: '뭔가' })?.state === 'unknown')
+
+  // ── ④ 지금 입력·지금 계약이 아니면 기록을 쓰지 않는다 ──
+  check('🔴 🔴 **원문 inputHash 가 바뀌면 옛 판정을 쓰지 않는다**', jo({ inputHash: 'old' }) === null)
   for (const [name, patch] of [
-    ['규칙 판', { ruleVersion: 'auto-judge-v2' }],
-    ['프롬프트 판', { promptVersion: 'semantic-shadow-v2' }],
-    ['모델', { model: 'other-model' }],
+    ['규칙', { ruleVersion: 'auto-judge-v2' }],
+    ['프롬프트', { promptVersion: 'semantic-shadow-v2' }],
+    ['모델', { model: 'other' }],
   ] as const) {
-    check(`🔴 🔴 **${name}이 바뀌면 다시 평가할 수 있다**`,
-      !T([J({ order: '1', ...patch })]).has('s1'))
+    check(`🔴 🔴 **judge ${name} 판이 바뀌면 다시 평가한다**`, jo(patch) === null)
   }
-  check('🔴 지금 고르지 않는 원천은 세지 않는다',
-    T([J({ order: '1', sourceArticleId: 'other' })]).size === 0)
+  check('🔴 🔴 **artifactVersion 하나로 판단하지 않는다** — 계약이 다르면 무시',
+    ao({ contract: { ...BASE, promptVersion: '옛판' } }) === null
+    && ao({ contract: { ...BASE, pipelineVersion: 'content-core-v2' } }) === null)
+  check('🔴 🔴 **생성 모델이 바뀌면 다시 평가한다**',
+    ao({ contract: { ...BASE, stageModels: { ...STAGE_MODEL, draftGen: 'other' } } }) === null)
+  check('🔴 🔴 **Persona/Voice 자산 판이 바뀌면 다시 평가한다**',
+    ao({ contract: { ...BASE, voiceAssetDigest: 'v2' } }) === null
+    && ao({ contract: { ...BASE, personaCardDigest: 'c2' } }) === null)
+  check('🔴 🔴 **계약 칸이 없는 옛 artifact 는 쓰지 않는다**', ao({ contract: null }) === null)
+  check('🔴 스키마 판이 다르면 쓰지 않는다', ao({ artifactVersion: 'human-review-v7' }) === null)
+  check('🔴 원문 지문이 다르면 쓰지 않는다',
+    artifactOutcome(A(), { ...BASE, sourceInputHash: 'h2' }, ARTIFACT_VERSION) === null)
 
-  // ── 생성 쪽 ──
-  check('🔴 완주 뒤 확정 HOLD 는 terminal 이다', T([], [A({ order: '3' })]).has('s1'))
-  check('🔴 🔴 **재시도 대상 artifact 는 terminal 이 아니다**',
-    !T([], [A({ order: '3', retryable: true })]).has('s1'))
-  check('🔴 artifact 판이 바뀌면 보지 않는다',
-    !T([], [A({ order: '3', artifactVersion: 'human-review-v6' })]).has('s1'))
-  check('🔴 adopt 는 terminal 이 아니다 — 후보가 됐고 큐 형제로 걸린다',
-    !T([], [A({ order: '3', outcome: 'adopt' })]).has('s1'))
-  check('🔴 🔴 **판정 HOLD 뒤 생성이 재시도 대상이면 최신이 이긴다**',
-    !T([J({ order: '1' })], [A({ order: '2', retryable: true })]).has('s1'))
+  // ── ⑤ malformed 는 fail-closed 하되 영구 terminal 이 아니다 ──
+  check('🔴 🔴 **시각이 없으면 기록으로 세지 않는다**',
+    jo({ decidedAt: '' }) === null && ao({ generatedAt: '' }) === null)
+  check('🔴 id 가 없으면 세지 않는다', jo({ sourceArticleId: '' }) === null)
+  check('🔴 🔴 **malformed 가 terminal 을 만들지 않는다**',
+    term([jo({ decidedAt: '' }), ao({ generatedAt: '' })]).size === 0)
 
-  // ── 재시도 사유 어휘 ──
+  // ── ⑥ 재시도 사유 어휘 ──
   check('🔴 🔴 **재시도 사유 다섯 가지**',
     RETRYABLE_REASONS.join(',') === 'truncated,noResponse,parseFailed,usageUnknown,budgetBlocked')
   for (const r of RETRYABLE_REASONS) {
@@ -408,14 +499,27 @@ console.log('\n⑧ 🔴 🔴 terminal 은 지금 입력·지금 판의 최신 �
       semanticCompletion: { complete: false, reason: 'notRun' },
       machineReason: '1인칭 허가 실패 — 그 사람의 카드가 이 값을 충족하지 않는다',
     }))
-  check('🔴 🔴 **잘림도 원인 문구로 잡는다**',
-    artifactRetryable({
-      semanticCompletion: { complete: false, reason: 'notRun' },
-      machineReason: `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL.truncated})`,
-    }))
   check('🔴 완주한 확정 HOLD 는 재시도가 아니다',
     !artifactRetryable({ semanticCompletion: { complete: true, reason: null }, machineReason: '생활사 모순 work' }))
-  check('🔴 읽지 못한 것은 결론으로 보지 않는다', artifactRetryable(null))
+
+  // ── ⑦ 계약을 한 곳에서만 만든다 ──
+  check('🔴 🔴 **생성 러너와 공급 러너가 같은 함수를 쓴다**', (() => {
+    const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+    return /currentContractBase\(\)/.test(draft) && /currentContractBase\(\)/.test(runner)
+  })())
+  check('🔴 🔴 **artifact 가 원문을 계약에 담지 않는다** — 해시 한 칸뿐', (() => {
+    const src = readFileSync('src/lib/content-core/pipeline.ts', 'utf-8')
+    const i = src.indexOf('export type GenerationContract')
+    const block = src.slice(i, src.indexOf('}', i))
+    return block.includes('sourceInputHash')
+      && !/bodyHead|title:|maskedBody/.test(block)
+  })())
+  check('🔴 🔴 **파일명으로 최신을 판단하는 코드가 남지 않았다**', (() => {
+    const lib = readFileSync('src/lib/supply-workset.ts', 'utf-8')
+    const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+    return !/order: f\b/.test(runner) && !/\border\b\s*:/.test(lib)
+  })())
 }
 
 // ─────────────────────────────────────────────────────────

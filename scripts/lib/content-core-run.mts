@@ -28,6 +28,7 @@ import {
   buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
 } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
+import type { GenerationContract } from '../../src/lib/content-core/pipeline'
 import {
   groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
   type DeterministicFailure, type DeterministicResult,
@@ -131,6 +132,8 @@ export type RunInput = {
   personas: readonly PersonaInput[]
   load?: Readonly<Record<string, number>>
   voiceSourceDigest: string
+  /** 🔴 이 회차의 생성 계약 — artifact 에 그대로 실린다 */
+  contract: GenerationContract
   ask: Ask
   now: Date
   /** 🔴 원천 하나가 쓸 수 있는 요청 수 — 넘기면 완주 실패로 남는다 */
@@ -210,6 +213,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     artifactId: input.artifactId,
     sourceArticleId: packet.sourceArticleId,
     generatedAt: input.now.toISOString(),
+    // 🔴 **어떤 계약으로 만들었는가** — 조기 종료한 artifact 에도 반드시 실린다
+    contract: input.contract,
     evidence: {
       title: packet.title, spans: packet.spans, bodyEvidenceChars: packet.bodyEvidenceChars,
       totalEvidenceChars: packet.totalEvidenceChars, bodyLength: packet.bodyLength, truncated: packet.truncated, omittedRatio: packet.omittedRatio,

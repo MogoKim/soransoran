@@ -142,6 +142,14 @@ const run = (o: {
     sourceArticleId: o.id, title: o.title, maskedBody: o.body,
     personas: o.personas ?? ALL, load: o.load, voiceSourceDigest: 'asset000000000',
     ask: fakeAsk(o.canned, o.fault), now: NOW, callCap: o.cap ?? 6,
+    // 🔴 fixture 도 계약을 싣는다 — 정본 모양 그대로다
+    contract: {
+      sourceInputHash: 'fixturehash00000',
+      pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
+      promptVersion: CONTENT_CORE_PROMPT_VERSION,
+      stageModels: STAGE_MODEL,
+      voiceAssetDigest: 'asset000000000', personaCardDigest: 'card0000000000',
+    },
   })
 }
 
@@ -923,7 +931,7 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
   check('🔴 판 번호가 새 계약을 담는다',
     SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p3'
     && SPEAKER_PLAN_VERSION === 'speaker-plan-v4'
-    && ARTIFACT_VERSION === 'human-review-v7'
+    && ARTIFACT_VERSION === 'human-review-v8'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
   check('🔴 🔴 **생성 캐시 key 가 새 판을 실제로 담는다**', (() => {
     const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')

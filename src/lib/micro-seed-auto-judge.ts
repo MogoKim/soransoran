@@ -449,6 +449,26 @@ export function parseSemantic(rawText: string): SemanticVerdict | null {
 }
 
 /**
+ * 🔴 **묻기 전에 이미 HOLD 인 것** (2026-09-20 정리)
+ *
+ *    `decide` 가 모델 답을 받고 나서 보던 격리 사유를 **한 함수로 모았다.**
+ *    작업 묶음 선택도 같은 함수를 부른다 — 두 곳이 따로 판단하면
+ *    결과가 정해진 원천에 판정 예산을 쓰고, 언젠가 한쪽만 고쳐진다.
+ *
+ * 🔴 규칙을 새로 만들지 않았다. `decide` 가 쓰던 그 목록·그 순서 그대로다.
+ */
+export function holdBeforeAsking(input: JudgeInput): ReasonCode[] {
+  const out = [
+    ...hardGate(input).filter((c) => HOLD_REASONS.includes(c)),
+    ...preSemanticGate(input),
+  ]
+  const lane = S(input.lane)
+  if (lane !== '' && !PROVEN_LANES.includes(lane)) out.push('laneNotProven')
+  if (HOLD_ASSET_AXES.some((a) => S(input.assetAxes).includes(a))) out.push('assetHealth')
+  return out
+}
+
+/**
  * ① deterministic hard gate — 🔴 **여기서 막히면 모델을 부르지도 않는다.**
  *
  * 돈이 아니라 순서의 문제다. 모델에게 물어본 뒤 막으면, 언젠가 모델 답이
@@ -531,10 +551,7 @@ export function judgeOne(
   // ② 물어볼 자격
   // 🔴 hardGate 가 낸 것 중 **버리진 않지만 격리해야 하는 사유**도 여기서 받는다.
   //    안 받으면 volatile · unknownReason · medicalOrAd 가 조용히 통과한다.
-  const pre = [...hard.filter((c) => HOLD_REASONS.includes(c)), ...preSemanticGate(input)]
-  const lane = S(input.lane)
-  if (lane !== '' && !PROVEN_LANES.includes(lane)) pre.push('laneNotProven')
-  if (HOLD_ASSET_AXES.some((a) => S(input.assetAxes).includes(a))) pre.push('assetHealth')
+  const pre = holdBeforeAsking(input)
   if (pre.length > 0) {
     return { ...base, decision: 'AUTO_HOLD', reasonCodes: dedupe([...hard, ...pre]) }
   }
