@@ -18,6 +18,8 @@
  */
 
 /** 공개 발행 단계 — 🔴 이 목록 밖의 단계는 없다 */
+import { PROFILES, RELEASE_STAGES, type ReleaseStage } from './scale-profile'
+
 export const D100_STAGES = ['d3', 'd5', 'd10', 'd20', 'd30', 'd50', 'd100'] as const
 export type D100Stage = (typeof D100_STAGES)[number]
 
@@ -32,13 +34,34 @@ export const PLANNED_DETAIL_PER_PUBLIC_POST = 3.82
 /** 🔴 재고는 14일치를 든다 — 공급이 하루 끊겨도 발행이 멎지 않게 */
 export const STOCK_DAYS = 14
 
+/**
+ * 🔴 **READY 순증가는 공개량보다 많아야 한다** (2026-09-21 보정).
+ *
+ *    앞판은 `readyNetRequiredPerDay = publicPostsPerDay` 였다. 그러면 하루에 만든 만큼
+ *    그날 다 나가야 본전이고, **재고는 영원히 늘지 않는다.** 14일치 재고를 목표로 두면서
+ *    순증가를 0 으로 설계한 셈이다.
+ *
+ *    또 READY 가 전부 나가지도 않는다 — 사람이 보류하거나 내리는 것이 있고,
+ *    TTL 이 지나 신선도에서 떨어지는 것이 있다. 20% 는 그 몫이다.
+ *
+ * 🔴 이 값을 낮추려면 "실제 탈락률이 20% 미만" 을 먼저 측정한다. 추정으로 내리지 않는다.
+ */
+export const READY_NET_MARGIN = 1.2
+
+/**
+ * 🔴 **발행 러너는 회차당 1건만 낸다.** (`scripts/original-post-auto-publish.mts` ③-b
+ *    "이번에 나갈 한 건"). 그래서 하루 발행 가능량은 슬롯 수와 같다 —
+ *    프로필의 `count` 를 2 로 적어도 2건이 나가지 않는다.
+ */
+export const POSTS_PER_INVOCATION = 1
+
 export type D100Plan = {
   stage: D100Stage
   /** 하루 공개 발행 편수 */
   publicPostsPerDay: number
   /** 하루 필요한 상세 수집 건수 */
   detailedSourcesRequiredPerDay: number
-  /** 하루 필요한 READY 순증가 */
+  /** 🔴 하루 필요한 READY 순증가 — 공개량 × `READY_NET_MARGIN` (올림) */
   readyNetRequiredPerDay: number
   /** 14일치 재고 목표 */
   readyStock14Days: number
@@ -50,6 +73,63 @@ export type D100Plan = {
   publishSlotCount: number
   /** 다음 단계로 올리기 전 최소 관측 일수 */
   minimumObservationDays: number
+  /** 🔴 **계획이 아니라 실제 스케줄러가 할 수 있는 것** */
+  scheduler: SchedulerSupport
+}
+
+/**
+ * 🔴 **발행 계획과 실제 스케줄러를 잇는다** (2026-09-21 보정).
+ *
+ *    앞판은 `publishSlotCount` 를 계획값으로만 적어 두었다. 그런데 실제 cron 은
+ *    `scale-profile.PROFILES` 에만 있고 그것은 **d1·d3·d5·d10 네 단계뿐**이다.
+ *    d20 이상은 슬롯이 아예 없다 — 표에 20·30·50·100 을 적어 두면 "설정만 바꾸면 된다"
+ *    로 읽히지만, 바꿀 설정이 없다. 그 사실을 `supported: false` 로 낸다.
+ */
+export type SchedulerSupport = {
+  /** 대응하는 release 단계 — 없으면 `null` */
+  releaseStage: ReleaseStage | null
+  /** 하루 예약된 회차 수 — 프로필이 없으면 `null` */
+  scheduledSlotsPerDay: number | null
+  /** 🔴 회차당 실제 발행 건수 */
+  actualPostsPerInvocation: number
+  /** 🔴 실제로 하루에 낼 수 있는 편수 = 회차 수 × 회차당 건수 */
+  actualDailyPublishable: number | null
+  /** 🔴 이 단계의 공개량을 스케줄러가 감당하는가 */
+  supported: boolean
+  /** 막는 이유 — 감당하면 `null` */
+  reason: 'schedulerUnsupported' | 'slotsInsufficient' | null
+  detail: string | null
+}
+
+/** 🔴 D100 단계 이름과 release 단계 이름이 같을 때만 대응한다 */
+function releaseStageOf(stage: D100Stage): ReleaseStage | null {
+  return (RELEASE_STAGES as readonly string[]).includes(stage) ? (stage as ReleaseStage) : null
+}
+
+export function schedulerSupportOf(stage: D100Stage): SchedulerSupport {
+  const want = INPUT[stage].publicPostsPerDay
+  const rs = releaseStageOf(stage)
+  if (rs === null) {
+    return {
+      releaseStage: null, scheduledSlotsPerDay: null,
+      actualPostsPerInvocation: POSTS_PER_INVOCATION,
+      actualDailyPublishable: null, supported: false,
+      reason: 'schedulerUnsupported',
+      detail: `${stage} 에 대응하는 release 프로필이 없다`
+        + ` (있는 것은 ${RELEASE_STAGES.join('·')}) — 설정으로 올릴 수 없다`,
+    }
+  }
+  const slots = PROFILES[rs].slots.length
+  const actual = slots * POSTS_PER_INVOCATION
+  return {
+    releaseStage: rs, scheduledSlotsPerDay: slots,
+    actualPostsPerInvocation: POSTS_PER_INVOCATION,
+    actualDailyPublishable: actual,
+    supported: actual >= want,
+    reason: actual >= want ? null : 'slotsInsufficient',
+    detail: actual >= want ? null
+      : `회차 ${slots} × 회차당 ${POSTS_PER_INVOCATION}건 = ${actual}건/day < 공개 ${want}건/day`,
+  }
 }
 
 /**
@@ -85,13 +165,15 @@ export function d100Plan(stage: D100Stage): D100Plan {
     // 🔴 올림한다 — 모자라면 그 단계가 서지 않는다
     detailedSourcesRequiredPerDay:
       Math.ceil(i.publicPostsPerDay * PLANNED_DETAIL_PER_PUBLIC_POST),
-    readyNetRequiredPerDay: i.publicPostsPerDay,
+    // 🔴 공개량과 같게 두면 재고가 늘지 않는다 — 여유율을 곱하고 올린다
+    readyNetRequiredPerDay: Math.ceil(i.publicPostsPerDay * READY_NET_MARGIN),
     readyStock14Days: i.publicPostsPerDay * STOCK_DAYS,
     activePersonaTarget: i.activePersonaTarget,
     commentMinPerDay: i.commentMinPerDay,
     commentMaxPerDay: i.commentMaxPerDay,
     publishSlotCount: i.publishSlotCount,
     minimumObservationDays: i.minimumObservationDays,
+    scheduler: schedulerSupportOf(stage),
   }
 }
 
@@ -108,10 +190,10 @@ export function nextStage(stage: D100Stage): D100Stage | null {
 export type PromotionInput = {
   /** 지금 단계 */
   stage: D100Stage
-  /** 지금 쓸 수 있는 재고 (`publishableNow` 가 아니라 usable 재고) */
-  readyStock: number
-  /** 실제 활성 Persona 수 */
-  activePersonas: number
+  /** 🔴 지금 쓸 수 있는 재고. **재지 못했으면 `null`** — 0 도 -1 도 아니다 */
+  readyStock: number | null
+  /** 🔴 실제 활성 Persona 수. 재지 못했으면 `null` */
+  activePersonas: number | null
   /** 🔴 측정되지 않았으면 `null` — 0 으로 채우지 않는다 */
   detailPerDay: number | null
   readyNetPerDay: number | null
@@ -140,14 +222,22 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
   const blocking: string[] = []
   const unmeasured: string[] = []
 
-  if (input.readyStock < cur.readyStock14Days) {
+  if (input.readyStock === null) unmeasured.push('재고')
+  else if (input.readyStock < cur.readyStock14Days) {
     blocking.push(`재고 ${input.readyStock} < 14일치 ${cur.readyStock14Days}`)
   }
-  if (input.activePersonas < cur.activePersonaTarget) {
+  if (input.activePersonas === null) unmeasured.push('활성 Persona')
+  else if (input.activePersonas < cur.activePersonaTarget) {
     blocking.push(`활성 Persona ${input.activePersonas} < 필요 ${cur.activePersonaTarget}`)
   }
   if (input.observedDays < cur.minimumObservationDays) {
     blocking.push(`관측 ${input.observedDays}일 < 최소 ${cur.minimumObservationDays}일`)
+  }
+  // 🔴 **스케줄러가 못 하는 단계로는 올리지 않는다.** 재고가 아무리 많아도 나갈 길이 없다
+  const nxt = nextStage(input.stage)
+  if (nxt !== null) {
+    const sc = schedulerSupportOf(nxt)
+    if (!sc.supported) blocking.push(`다음 단계 ${nxt} 를 스케줄러가 감당하지 못한다 — ${sc.detail}`)
   }
   if (!input.publishRunnerReady) blocking.push('발행 runner 가 돌 수 없다')
   if (!input.commentRunnerReady) blocking.push('댓글 runner 가 돌 수 없다')

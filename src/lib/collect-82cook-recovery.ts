@@ -79,6 +79,123 @@ export const CANARY_CONTRACT = Object.freeze({
   resumeFromCheckpoint: true,
 } as const)
 
+/**
+ * 🔴 **목록 요청도 예산에 든다** (2026-09-21 2차 보정).
+ *
+ *    앞판은 `maxRequestsPerDay: 20` 과 `maxDetailPerRun: 5` 를 나란히 두었을 뿐이라,
+ *    읽는 사람마다 "하루 상세 20건" 으로도 "하루 요청 20번" 으로도 읽혔다.
+ *    상대 서버가 세는 것은 **요청 수**다 — 목록 페이지도 요청이다.
+ *    목록을 예산 밖에 두면 실제 요청이 계약의 두 배가 된다.
+ */
+export const COUNTS_LIST_REQUESTS_IN_BUDGET = true
+
+/** 🔴 한 회차가 쓰는 요청 수 = 목록 페이지 + 상세 건수 */
+export function requestsPerRun(listPages: number, detailCount: number): number {
+  return (COUNTS_LIST_REQUESTS_IN_BUDGET ? listPages : 0) + detailCount
+}
+
+/**
+ * 🔴 **하루 예산 안에서 실제로 열 수 있는 상세 건수.**
+ *    "회차당 5건 × 4회 = 20건" 이 아니다 — 목록 요청이 먼저 빠진다.
+ */
+export function dailyDetailCeiling(input: {
+  maxRequestsPerDay: number
+  runsPerDay: number
+  listPagesPerRun: number
+  maxDetailPerRun: number
+}): number {
+  const listCost = COUNTS_LIST_REQUESTS_IN_BUDGET ? input.listPagesPerRun * input.runsPerDay : 0
+  const left = input.maxRequestsPerDay - listCost
+  if (left <= 0) return 0
+  return Math.min(left, input.runsPerDay * input.maxDetailPerRun)
+}
+
+/**
+ * 🔴 **네 가지 용량을 섞지 않는다** (2026-09-21 2차 보정).
+ *
+ *    앞판은 `CANARY_CONTRACT` 하나만 있었다. 그래서 "82cook 은 하루 20건" 처럼 읽혔는데,
+ *    그 20 은 **첫 관측용 상한**이지 운영 값도, 관측된 실력도, 필요량도 아니다.
+ *    네 값이 한 이름 아래 있으면 canary 를 통과한 날 곧바로 "이제 20건이면 된다" 가 된다.
+ *
+ *      `canary`     첫 관측에서만 쓰는 상한 — 🔴 **목표가 아니다**
+ *      `observed`   실제로 무사히 관측된 처리량 — 🔴 재기 전에는 `null`
+ *      `operating`  지금 운영해도 된다고 판단한 값 — 사다리의 현재 칸
+ *      `required`   D100 이 요구하는 양 — 🔴 **우리 사정과 무관하다**
+ */
+export type CapacityKind = 'canary' | 'observed' | 'operating' | 'required'
+
+export type Capacity82 = {
+  kind: CapacityKind
+  /** 회차당 상세 건수 — 모르면 `null` */
+  detailPerRun: number | null
+  /** 하루 상세 건수 — 모르면 `null` */
+  detailPerDay: number | null
+  /** 하루 요청 상한 — 모르면 `null` */
+  requestsPerDay: number | null
+  note: string
+}
+
+/**
+ * 🔴 **확대 사다리.** 한 칸씩만 오른다. 칸을 건너뛰지 않고,
+ *    무사 회차가 쌓이기 전에는 다음 칸을 쓰지 않는다 — 관측 없는 상향은 계약 위반이다.
+ */
+export const ESCALATION_LADDER = [
+  { step: 1, maxDetailPerRun: 5, minCleanRunsToEnter: 0, note: '첫 관측 — canary 계약 그대로' },
+  { step: 2, maxDetailPerRun: 10, minCleanRunsToEnter: 3, note: '무사 3회 뒤' },
+  { step: 3, maxDetailPerRun: 20, minCleanRunsToEnter: 6, note: '무사 6회 뒤 — 정기 등록 구간' },
+  { step: 4, maxDetailPerRun: 30, minCleanRunsToEnter: 12, note: '무사 12회 뒤 — 20~30 사이에서만 움직인다' },
+] as const
+export type EscalationStep = (typeof ESCALATION_LADDER)[number]
+
+/** 🔴 사다리의 천장 — 이보다 위는 이 계약에 없다 */
+export const LADDER_MAX_DETAIL_PER_RUN = 30
+
+/**
+ * 🔴 **무사 회차 수로만 칸이 정해진다.** 급하다는 이유로 올리지 않는다.
+ *    중단 신호가 하나라도 있었으면 1칸으로 되돌린다.
+ */
+export function ladderStepFor(input: {
+  cleanRuns: number
+  sawAbortSignal: boolean
+}): EscalationStep {
+  if (input.sawAbortSignal) return ESCALATION_LADDER[0]
+  let cur: EscalationStep = ESCALATION_LADDER[0]
+  for (const s of ESCALATION_LADDER) if (input.cleanRuns >= s.minCleanRunsToEnter) cur = s
+  return cur
+}
+
+/**
+ * 🔴 **상대가 막았다는 직접 신호에는 자동 재시도를 하지 않는다.**
+ *    NETWORK 는 우리 쪽·경로 문제일 수 있어 backoff 가 말이 되지만,
+ *    403·429·CAPTCHA·로그인 요구는 **상대의 답**이다. 자동으로 다시 두드리는 것은
+ *    우회 시도와 구분되지 않는다 — 사람이 보고 판단한다.
+ */
+export const NO_AUTO_RETRY_SIGNALS = ['http403', 'http429', 'captcha', 'loginRequired'] as const
+
+export function mayAutoRetry(signal: AbortSignal82): boolean {
+  return !(NO_AUTO_RETRY_SIGNALS as readonly string[]).includes(signal)
+}
+
+/**
+ * 🔴 **쿠키는 있는지/언제 만든 것인지까지만 본다.** 값을 읽지도 적지도 않는다 —
+ *    세션 쿠키 값은 계정 그 자체이고, 로그에 한 번 남으면 회수할 수 없다.
+ */
+export type CookieAudit = {
+  /** 쿠키가 하나라도 있는가 */
+  present: boolean
+  /** 몇 개인가 — 🔴 이름도 값도 남기지 않는다 */
+  count: number
+  /** 언제 만든 세션인가 (일) — 모르면 `null` */
+  ageDays: number | null
+}
+
+/** 🔴 값이 아니라 **사실**만 문자열로 낸다 */
+export function describeCookieAudit(a: CookieAudit): string {
+  if (!a.present) return '세션 쿠키 없음 — 🔴 canary 를 돌리지 않는다'
+  const age = a.ageDays === null ? '만든 시점 모름' : `${a.ageDays}일 된 세션`
+  return `세션 쿠키 ${a.count}개 · ${age} — 🔴 값은 읽지 않는다`
+}
+
 /** 🔴 하나라도 보이면 그 회차를 **즉시 중단**하고 차단기를 연다 */
 export const ABORT_SIGNALS = [
   'http403', 'http429', 'captcha', 'loginRequired', 'bodyNotArticle', 'repeatedNetwork',
@@ -90,6 +207,68 @@ export const NEVER = [
   'CAPTCHA 우회', '접근 제어 우회', '로그인 제한 우회',
   '가짜 쿠키·Referer 조작', '관측 없이 속도 상향', '대체 공급원을 기본안으로 제안',
 ] as const
+
+/**
+ * 🔴 **네 값을 한 번에 낸다.** 표로 나란히 놓여야 "canary 값 = 운영 값" 오독이 막힌다.
+ *    `observed` 는 재기 전에는 전부 `null` 이다 — 0 이 아니다.
+ */
+export function capacities82(input: {
+  /** 이 단계가 요구하는 **전체** 상세/day (모든 공급원 합) */
+  requiredDetailPerDayAllSources: number
+  /** 지금 사다리 칸 */
+  ladder: EscalationStep
+  /** canary 한 회차가 여는 목록 페이지 수 */
+  listPagesPerRun: number
+  /** 하루 회차 수 */
+  runsPerDay: number
+  /** 🔴 실제로 관측된 값 — 재지 않았으면 `null` */
+  observedDetailPerDay: number | null
+  observedDetailPerRun: number | null
+}): Readonly<Record<CapacityKind, Capacity82>> {
+  return {
+    canary: {
+      kind: 'canary',
+      detailPerRun: CANARY_CONTRACT.maxDetailPerRun,
+      detailPerDay: dailyDetailCeiling({
+        maxRequestsPerDay: CANARY_CONTRACT.maxRequestsPerDay,
+        runsPerDay: input.runsPerDay,
+        listPagesPerRun: input.listPagesPerRun,
+        maxDetailPerRun: CANARY_CONTRACT.maxDetailPerRun,
+      }),
+      requestsPerDay: CANARY_CONTRACT.maxRequestsPerDay,
+      note: '🔴 첫 관측용 상한이다 — 목표도 운영 값도 아니다',
+    },
+    observed: {
+      kind: 'observed',
+      detailPerRun: input.observedDetailPerRun,
+      detailPerDay: input.observedDetailPerDay,
+      requestsPerDay: null,
+      note: input.observedDetailPerDay === null
+        ? '🔴 아직 재지 않았다 — 0 이 아니라 unmeasured 다'
+        : '무사히 끝난 회차에서 관측된 값',
+    },
+    operating: {
+      kind: 'operating',
+      detailPerRun: input.ladder.maxDetailPerRun,
+      detailPerDay: dailyDetailCeiling({
+        maxRequestsPerDay: CANARY_CONTRACT.maxRequestsPerDay,
+        runsPerDay: input.runsPerDay,
+        listPagesPerRun: input.listPagesPerRun,
+        maxDetailPerRun: input.ladder.maxDetailPerRun,
+      }),
+      requestsPerDay: CANARY_CONTRACT.maxRequestsPerDay,
+      note: `사다리 ${input.ladder.step}칸 — ${input.ladder.note}`,
+    },
+    required: {
+      kind: 'required',
+      detailPerRun: null,
+      detailPerDay: input.requiredDetailPerDayAllSources,
+      requestsPerDay: null,
+      note: '🔴 모든 공급원 합계다. 82cook 몫이 얼마인지는 아직 정하지 않았다'
+        + ' — 관측 전에 비율을 적으면 그 숫자가 근거처럼 읽힌다',
+    },
+  }
+}
 
 export type CanaryPlanInput = {
   phase: RecoveryPhase
