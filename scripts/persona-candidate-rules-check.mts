@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import {
   planDecision, canDecide, isDeclineReasonCode, DECLINE_REASONS,
   type CandidateStatus, type CandidateDecision,
+  planWithdrawal, isWithdrawn, withdrawReasonCode,
 } from '../src/lib/persona-candidate-rules'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -106,6 +107,86 @@ const DECISIONS: CandidateDecision[] = ['approve', 'decline']
   if (!/status:\s*'PENDING'/.test(code)) offenders.push('🔴 조건부 UPDATE 가 아니다')
   if (offenders.length) bad('server action 경계', offenders.join(' / '))
   else ok('server action 경계', 'write 는 대기열만 · LLM 0 · PUBLISHED 0 · requireAdmin · 조건부 UPDATE')
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 승인해 둔 미공개 후보를 거둬들이는 전이 (2026-09-21)
+// ─────────────────────────────────────────────────────────
+{
+  const base = {
+    publishedCommentId: null as string | null,
+    reason: 'PERSONA_MISMATCH',
+    approvedBy: 'admin-1',
+    approvedAt: new Date('2026-09-01T01:27:00.000Z'),
+  }
+  const offenders: string[] = []
+
+  // 🔴 APPROVED · EDITED 만 거둘 수 있다
+  for (const st of ALL) {
+    const v = planWithdrawal({ ...base, status: st })
+    const want = st === 'APPROVED' || st === 'EDITED'
+    if (v.ok !== want) offenders.push(`${st}=${v.ok ? 'ok' : 'blocked'}`)
+  }
+  if (offenders.length === 0) ok('철회 가능 상태', 'APPROVED · EDITED 만')
+  else bad('철회 가능 상태', offenders.join(' / '))
+
+  // 🔴 이미 공개된 것은 거둘 수 없다 — 상태가 맞아도
+  const published = planWithdrawal({
+    ...base, status: 'APPROVED', publishedCommentId: 'comment-1',
+  })
+  if (!published.ok && published.error.includes('이미 공개')) ok('공개된 것', '거둘 수 없다')
+  else bad('공개된 것', JSON.stringify(published))
+
+  // 🔴 사유가 비었거나 코드가 아니면 받지 않는다
+  const empty = planWithdrawal({ ...base, status: 'APPROVED', reason: '  ' })
+  const free = planWithdrawal({ ...base, status: 'APPROVED', reason: '그냥 싫어서' })
+  if (!empty.ok && !free.ok) ok('사유 검증', '빈 값 · 자유 텍스트 거부')
+  else bad('사유 검증', `empty=${empty.ok} free=${free.ok}`)
+
+  // 🔴 원래 승인 도장이 사라지지 않는다
+  const done = planWithdrawal({ ...base, status: 'APPROVED' })
+  if (done.ok) {
+    const keeps = done.declineReason.includes('admin-1')
+      && done.declineReason.includes('2026-09-01T01:27:00.000Z')
+      && done.nextStatus === 'DECLINED'
+    // 🔴 폐기와 철회를 가릴 수 있다
+    const tells = isWithdrawn(done.declineReason)
+      && !isWithdrawn('PERSONA_MISMATCH')
+      && withdrawReasonCode(done.declineReason) === 'PERSONA_MISMATCH'
+      && withdrawReasonCode('PERSONA_MISMATCH') === null
+    if (keeps && tells) ok('감사 기록', '승인 도장 보존 · 폐기와 구분 · 사유 코드 집계 가능')
+    else bad('감사 기록', `keeps=${keeps} tells=${tells} · ${done.declineReason}`)
+  } else bad('감사 기록', done.error)
+
+  // 🔴 결정 경로는 그대로다 — 철회가 PENDING 결정을 흔들지 않는다
+  const stillPendingOnly = ALL.filter((st) => planDecision({ status: st, decision: 'approve' }).ok)
+  if (stillPendingOnly.length === 1 && stillPendingOnly[0] === 'PENDING') {
+    ok('결정 경로 불변', 'PENDING 만 결정한다')
+  } else bad('결정 경로 불변', stillPendingOnly.join(','))
+
+  // 🔴 server action 경계 — 철회도 같은 규칙을 지킨다
+  {
+    /**
+     * 🔴 **주석을 벗기고 본다.** 앞선 돌연변이 시험에서 WHERE 절을 통째로 지웠는데도
+     *    통과했다 — 바로 위 주석에 같은 문구가 있었기 때문이다.
+     *    주석은 규칙이 아니다.
+     */
+    const raw = readFileSync('src/lib/actions/persona-candidate.ts', 'utf-8')
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const i = code.indexOf('export async function withdrawPersonaCandidate')
+    const block = i < 0 ? '' : code.slice(i)
+    const o: string[] = []
+    if (i < 0) o.push('🔴 철회 server action 이 없다')
+    if (!block.includes('requireAdmin')) o.push('🔴 requireAdmin 이 없다')
+    // 🔴 updateMany 의 where 안에 미공개 조건이 있어야 한다
+    const where = /updateMany\(\{\s*where:\s*\{([^}]*)\}/.exec(block)?.[1] ?? ''
+    if (!/publishedCommentId:\s*null/.test(where)) o.push('🔴 조건부 UPDATE 에 미공개 조건이 없다')
+    if (!/status:/.test(where)) o.push('🔴 조건부 UPDATE 에 상태 조건이 없다')
+    if (/prisma\.(post|comment|persona)\./i.test(block)) o.push('🔴 다른 표를 건드린다')
+    if (/PUBLISHED/.test(block)) o.push('🔴 PUBLISHED 를 다룬다')
+    if (o.length) bad('철회 server action', o.join(' / '))
+    else ok('철회 server action', '대기열만 · requireAdmin · 미공개 조건부 UPDATE')
+  }
 }
 
 console.log('\n승인 대기열 상태 전환 fixture')
