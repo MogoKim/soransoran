@@ -8,6 +8,7 @@ import {
   CANDIDATE_STATUS_LABEL, GATE_STATUS_LABEL, STATUS_LABEL, formatKst, filledMark,
 } from '@/lib/persona-admin'
 import PersonaCandidateDecision from '@/components/admin/PersonaCandidateDecision'
+import PersonaCandidateWithdraw from '@/components/admin/PersonaCandidateWithdraw'
 import PersonaCandidatePublish from '@/components/admin/PersonaCandidatePublish'
 import PersonaCandidateTarget from '@/components/admin/PersonaCandidateTarget'
 import { DECLINE_REASONS, type CandidateStatus } from '@/lib/persona-candidate-rules'
@@ -226,6 +227,16 @@ export default async function PersonaCandidateDetailPage(
 
         {/* 🔴 write 는 server action 한 곳에만 있다 (lib/actions/persona-candidate.ts) */}
         <PersonaCandidateDecision candidateId={row.id} status={row.status as CandidateStatus} />
+
+        {/* 🔴 승인해 두고 아직 공개하지 않은 후보를 거둬들이는 자리.
+              결정(PENDING) 버튼과 **다른 자리**다 — 결정 기록을 덮지 않는다. */}
+        <PersonaCandidateWithdraw
+          candidateId={row.id}
+          status={row.status as CandidateStatus}
+          publishedCommentId={row.publishedCommentId}
+          approvedBy={row.decidedBy}
+          approvedAt={row.decidedAt}
+        />
 
         {/* 🔴 대상 글 지정은 발행이 아니다. targetPostId 한 컬럼만 바꾼다.
               발행 버튼보다 위에 둔다 — 대상을 정해야 발행이 가능해지는 순서다. */}
