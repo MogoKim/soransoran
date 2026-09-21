@@ -62,6 +62,16 @@ import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 /** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
+import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
+import { horizonStart } from '../src/lib/scale-profile'
+import { activeScale } from '../src/lib/scale-runtime'
+
+/**
+ * 🔴 **화자 여력을 며칠 앞까지 보는가.** 발행 쪽 최소 간격(d3 은 2일)보다 넉넉해야
+ *    "이 화자는 이 지평에서 몇 편까지 받을 수 있나" 가 성립한다.
+ */
+const SPEAKER_LOAD_HORIZON_DAYS = 7
 import type { ContractBase } from '../src/lib/content-core/pipeline'
 /** 🔴 판정 모델 이름 — 판정 러너가 쓰는 그 값이다 */
 import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
@@ -188,6 +198,57 @@ const STAGE_SCRIPT: Record<ProcessStage, string> = {
   judge: 'scripts/micro-seed-auto-judge.mts',
   draft: 'scripts/micro-seed-auto-draft.mts',
   fill: 'scripts/micro-seed-supply-autofill.mts',
+}
+
+/**
+ * 🔴 **화자 여력을 DB 에서 읽어 파일로 적는다** — 생성 러너가 읽는 유일한 통로다.
+ *
+ *    `openDays`  지평 안에서 그 화자가 **배정 가능한 날 수**.
+ *                발행 정본(`availablePersonasAt`)이 판정한다 — 여기서 규칙을 다시 적지 않는다.
+ *    `readyCount` 이미 발행 대기 재고에 있는 그 화자의 글 수.
+ *                🔴 이미 들고 있으면 더 만들어도 같은 날 못 나간다.
+ */
+async function writeSpeakerLoad(prisma: PrismaClient): Promise<void> {
+  const personas = await prisma.persona.findMany({
+    where: { status: 'active' }, select: { code: true },
+  })
+  const logs = await prisma.originalPostApprovalQueue.findMany({
+    where: { matchedAt: { not: null } },
+    select: { matchedAt: true, matchedPersona: { select: { code: true } } },
+  })
+  /** 🔴 아직 발행되지 않은 채 배정만 된 행 = 재고에 든 그 화자의 글 */
+  const pending = await prisma.originalPostApprovalQueue.findMany({
+    where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
+    select: { matchedPersona: { select: { code: true } } },
+  })
+  const history = personas.map((p) => ({
+    code: p.code,
+    matchedAts: logs.filter((l) => l.matchedPersona?.code === p.code && l.matchedAt !== null)
+      .map((l) => l.matchedAt as Date),
+  }))
+  const scale = activeScale()
+  const prof = scale.releaseProfile
+  const caps = { postsPerWeek: prof.postsPerWeek, minDaysBetween: prof.minDaysBetween }
+  const horizonDays = SPEAKER_LOAD_HORIZON_DAYS
+  const start = horizonStart(new Date())
+  const openDays = new Map<string, number>()
+  for (let i = 0; i < horizonDays; i += 1) {
+    const at = new Date(start.getTime() + i * 86_400_000)
+    for (const code of availablePersonasAt(history, at, caps)) {
+      openDays.set(code, (openDays.get(code) ?? 0) + 1)
+    }
+  }
+  const byCode: Record<string, { openDays: number; readyCount: number }> = {}
+  for (const p of personas) {
+    byCode[p.code] = {
+      openDays: openDays.get(p.code) ?? 0,
+      readyCount: pending.filter((r) => r.matchedPersona?.code === p.code).length,
+    }
+  }
+  mkdirSync(DATA_DIR, { recursive: true })
+  writeFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), JSON.stringify({
+    writtenAt: new Date().toISOString(), horizonDays, byCode,
+  }, null, 2))
 }
 
 const runIdOf = (d: Date): string =>
@@ -452,6 +513,18 @@ async function main(): Promise<number> {
     llmCall: null as number | null, cacheHit: null as number | null,
   }
   const exec = async (plan: StagePlan): Promise<{ ok: boolean; exitCode: number | null; spawnError: string }> => {
+    /**
+     * 🔴 **생성 앞에 화자 여력을 적어 둔다** (2026-09-22).
+     *
+     *    생성 러너는 설계상 DB 를 쓰지 않는다. 그런데 "누가 며칠 뒤에 쓸 수 있는가" 와
+     *    "이미 그 화자 글이 재고에 몇 편 있는가" 는 DB 에만 있다 —
+     *    그것을 안 보고 화자를 골라서 **한 회차가 같은 화자에게 두 편**을 몰아줬다(실측).
+     *    여기서 읽어 파일로 넘긴다. 🔴 실패해도 생성을 멈추지 않는다(fail-safe) —
+     *    그때 생성 러너는 "회차 안 중복만 막는다" 고 적는다.
+     */
+    if (plan.stage === 'draft') {
+      try { await writeSpeakerLoad(prisma) } catch { /* 적지 못해도 멈추지 않는다 */ }
+    }
     // 🔴 단계별 env 는 **자식 프로세스에만** 실린다. 운영 env 파일은 건드리지 않는다
     const r = await run(STAGE_SCRIPT[plan.stage], plan.args, plan.env)
     if (plan.stage === 'judge') {

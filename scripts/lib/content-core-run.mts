@@ -329,7 +329,20 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     return blank(plan, dropped, null, null, noDet, null, notRun('speakerUnqualified'),
       'hold', gen.why)
   }
-  const persona = input.personas.find((p) => p.code === plan.personaCode)!
+  /**
+   * 🔴 **제안하지 않은 화자는 받지 않는다** (2026-09-22).
+   *
+   *    화자 여력 계획이 원천마다 후보를 좁히면서, 모델이 **목록에 없는 이름**을
+   *    돌려줄 수 있는 자리가 생겼다. 앞판은 `!` 로 단정해 그 값이 `undefined` 인 채
+   *    아래로 흘렀다 — 말투 근거도 자격 판정도 없는 글이 만들어진다.
+   *    🔴 제안 밖이면 만들지 않는다(fail-closed).
+   */
+  const persona = input.personas.find((p) => p.code === plan.personaCode)
+  if (persona === undefined) {
+    return blank(plan, dropped, null, null, noDet, null, notRun('speakerUnqualified'),
+      'hold', `제안하지 않은 화자다 — ${plan.personaCode ?? '(없음)'}`
+        + ` (제안 ${input.personas.map((p) => p.code).join(',') || '없음'})`)
+  }
 
   // ── ② 말투 근거 ──
   const voice = buildVoiceEvidence({
