@@ -209,8 +209,18 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *       `persona-comment-release` 를 고치는 PR 이 깨뜨린다 — 운영 화면 파일을
  *       하나도 건드리지 않는 PR 이다. 경로 조건 뒤에 두면 바로 그 PR 에서 돌지 않는다.
  *       `micro-seed:safety-check` 를 무조건으로 둔 것과 같은 이유다.
+ *
+ * 🔴 68 → 69 (2026-09-21). 목록 쪽 이동 경계값 fixture 1 개를 무조건 실행으로 더했다.
+ *    실측 0.19 초(3 회 · 0.20 / 0.18 / 0.19). 지금까지 더한 어느 무조건 step 보다 싸고
+ *    DB · 네트워크 · write 가 0 이다 — `src/lib/list-query.ts` 는 import 가 하나도 없다.
+ *
+ *    🔴 **경로 조건 뒤로 보내지 않는다.** 이 검사를 깨뜨리는 PR 이 두 종류이기 때문이다 —
+ *       `list-query.ts` · `queries/posts.ts` 를 고치는 **서버 경로 PR** 과,
+ *       `Pagination.tsx` 만 고치는 **화면 전용 PR** 이다.
+ *       경로 조건은 후자에서 생략되는데, 이 fixture 의 aria-current 가드는
+ *       바로 그 화면 전용 PR 이 깨뜨리는 것이다. 한쪽만 보면 가드가 절반만 닫힌다.
  */
-const MAX_UNCONDITIONAL_STEPS = 68
+const MAX_UNCONDITIONAL_STEPS = 69
 
 let total = 0
 let gated = 0
