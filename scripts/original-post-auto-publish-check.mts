@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs'
 import {
-  reviewPatchOf, REVIEW_DECISIONS, REVIEW_DECISION_STATUS,
+  reviewPatchOf, REVIEW_DECISIONS, REVIEW_DECISION_STATUS, REVIEW_DECISION_WRITES,
 } from '../src/lib/original-post-machine-review'
 import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
 
@@ -619,7 +619,7 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
    */
   check('🔴 🔴 **ready 는 여전히 도장 두 칸만 바꾼다**', (() => {
     const patch = reviewPatchOf({
-      decision: 'ready', draftTitle: 'ㄱ', draftBody: 'ㄴ', edit: null, declineReason: null,
+      action: { decision: 'ready' }, draftTitle: 'ㄱ', draftBody: 'ㄴ',
     })
     return patch.status === 'APPROVED' && patch.editedTitle === undefined
       && patch.editedBody === undefined && patch.editDiff === undefined
@@ -760,10 +760,25 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
    */
   check('🔴 [회귀] "decidedBy 하나뿐" 이라는 낡은 문구가 돌아오지 않는다',
     !/decidedBy` ?하나뿐|decidedBy ?하나뿐/.test(rev))
-  check('🟢 화면 문구가 두 칸을 말한다',
-    /바꾸는 것은 decidedBy·decidedAt 두 칸뿐이다/.test(rev))
-  check('🟢 헤더 주석도 두 칸을 말한다',
-    /\*\*바꾸는 것은 `decidedBy`·`decidedAt` 두 칸뿐이다\.\*\*/.test(rev))
+  /**
+   * 🔴 **출력이 사실을 말하는가** (2026-09-21). 결정이 셋이 되면서 "두 칸만 바뀐다" 는
+   *    거짓이 됐다. 문구를 손으로 적지 않고 **정본 값을 읽어** 적는지 본다.
+   */
+  check('🔴 🔴 **"두 칸뿐" 이라는 낡은 문구가 사라졌다**',
+    !/두 칸뿐이다/.test(rev)
+    && !/본문 · 제목 · status · gateResults · Post · Comment · Persona 는 바뀌지 않았습니다/.test(rev))
+  check('🔴 🔴 **바뀐 칸을 정본에서 읽어 적는다**',
+    /REVIEW_DECISION_WRITES\[decision\]/.test(rev)
+    && /REVIEW_UNTOUCHED_COLUMNS/.test(rev))
+  check('🔴 🔴 **결정마다 바뀌는 칸이 사실과 같다**',
+    REVIEW_DECISION_WRITES.ready === 'decidedBy · decidedAt'
+    && REVIEW_DECISION_WRITES.edit.includes('editDiff')
+    && REVIEW_DECISION_WRITES.edit.includes('status')
+    && REVIEW_DECISION_WRITES.reject.includes('declineReason')
+    && !REVIEW_DECISION_WRITES.ready.includes('status'))
+  check('🔴 🔴 **미루기가 결정 목록에 없다**',
+    !(REVIEW_DECISIONS as readonly string[]).includes('hold')
+    && /미루기는 결정이 아니다/.test(rev))
 
   // ── ⑥ 🔴 기존 Gate 와 human 동작은 그대로다 ──
   check('🟢 [계약] 미검토 machine 은 여전히 차단된다',
