@@ -148,7 +148,17 @@ const GATE = `steps.${SCOPE_ID}.outputs.heavy == 'true'`
 
 /** 어떤 step 의 `run:` 이 그 스크립트를 부르는가 — 그 step 이 게이트를 갖는가 */
 function stepIsGated(script: string): boolean {
-  const runIdx = lines.findIndex((l) => new RegExp(`^        run: npm run ${script.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`).test(l))
+  /**
+   * 🔴 **한 줄 `run:` 과 여러 줄 `run: |` 을 둘 다 읽는다** (2026-09-21).
+   *
+   *    앞판은 `        run: npm run X` 한 모양만 찾았다. 그래서 같은 step 안에
+   *    명령을 하나 더 붙여 `run: |` 로 바꾸면, **경로 조건은 그대로인데**
+   *    "게이트가 없다" 로 읽혀 빨개졌다 — 실제로 이 판에서 그렇게 됐다.
+   *    실패 방향이 안전한 쪽이었을 뿐 탐지가 맞은 것은 아니다.
+   */
+  const esc = script.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const runLine = new RegExp(`^\\s*(run: )?npm run ${esc}\\s*$`)
+  const runIdx = lines.findIndex((l) => runLine.test(l))
   if (runIdx < 0) return false
   // 이 run 이 속한 step 의 머리(`- name:`)까지 거슬러 올라가 그 사이에 if 가 있는지 본다
   for (let i = runIdx; i >= 0; i -= 1) {

@@ -41,8 +41,9 @@ import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
 import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
-import { stageVerdicts } from '../src/lib/scale-readiness'
-import { effectiveWeeklyCap } from '../src/lib/scale-profile'
+import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
+import { canaryAuthorization, judgeOneDayCanary } from '../src/lib/release-canary'
+import { effectiveWeeklyCap, RELEASE_STAGES } from '../src/lib/scale-profile'
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -232,7 +233,34 @@ const readiness = stageVerdicts({
   })),
   axis: { now: axisNow, publishedToday: axisPublishedToday },
 })
-const scale = installFromEnv(process.env, { readiness })
+/**
+ * 🔴 **하루짜리 첫 시험 판정** (2026-09-21).
+ *
+ *    `readiness` 네 조건은 전부 14일 지속성이라 "내일 하루 3편을 안전하게 낼 수
+ *    있는가" 를 묻는 자리가 없었다. 그래서 같은 `simulateStage` 를 **지평 1일**로
+ *    한 번 더 돌린다 — 🔴 새 계산이 아니라 같은 함수에 다른 창을 준다.
+ *
+ * 🔴 허가된 단계에 대해서만 돌린다. 허가가 없으면 판정 자체를 만들지 않는다.
+ */
+const canaryAuth = canaryAuthorization(process.env, axisNow, RELEASE_STAGES)
+const canaryVerdict = canaryAuth.activeToday && canaryAuth.stage !== null
+  ? judgeOneDayCanary(simulateStage({
+    stage: canaryAuth.stage,
+    queue: queueCandidates,
+    personas: personas as never,
+    history: personas.map((p) => ({
+      code: p.code,
+      matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
+    })),
+    axis: { now: axisNow, publishedToday: axisPublishedToday },
+    // 🔴 **하루**다. 이 값이 14 가 되면 하루 판정이 14일 판정으로 바뀐다
+    days: 1,
+  }))
+  : null
+const scale = installFromEnv(process.env, {
+  readiness,
+  canary: { now: axisNow, verdict: canaryVerdict },
+})
 // 🔴 여기서부터 쓰기 판정에 쓰이는 값은 전부 `scale` 에서 나온다
 const RELEASE_DAILY_CAP = scale.releaseProfile.dailyTarget
 const RELEASE_CAPS = {
@@ -244,6 +272,19 @@ for (const n of scale.notes) console.log(`     · ${n}`)
 console.log(`     적용된 발행 상한  일 ${RELEASE_DAILY_CAP}건 · persona 주 ${RELEASE_CAPS.postsPerWeek}건`
   + ` · 최소 ${RELEASE_CAPS.minDaysBetween}일`)
 if (scale.throttledByReadiness) console.log('     🔴 준비도 미달로 감속됐다 — 이 값이 실제로 적용된다')
+/**
+ * 🔴 **시험 회차임을 숨기지 않는다.** 이 줄이 없으면 로그만 보고
+ *    "d3 이 준비됐구나" 로 읽힌다 — 그것이 정확히 막으려는 오해다.
+ */
+if (canaryVerdict !== null) {
+  console.log(`     ③-e 하루짜리 첫 시험 판정  ${canaryVerdict.stage}`
+    + ` · 그날 ${canaryVerdict.can}/${canaryVerdict.want}건 · ${canaryVerdict.ok ? 'GO' : '🔴 NO-GO'}`)
+  for (const r of canaryVerdict.reasons) console.log(`        🔴 ${r}`)
+}
+if (scale.canaryStage) {
+  console.log('     🔴 **이 회차는 하루짜리 첫 시험이다** — 지속 D3 승격이 아니다')
+  console.log(`        14일 누적·공백·재고 조건은 그대로 미달이다 (허가 날짜 ${scale.canaryDate})`)
+}
 
 // 🔴 확정된 release cap · **지금 시각**으로 계획한다. 관제·예측이 부르는 함수와 같다
 const prepared = prepareCandidates({

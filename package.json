@@ -139,6 +139,7 @@
     "persona:planner-check": "tsx scripts/persona-capacity-planner-check.mts",
     "persona:wave2-check": "tsx scripts/persona-wave2-check.mts",
     "persona:cohort-run": "tsx scripts/persona-cohort-run.mts",
+    "release:canary-check": "tsx scripts/release-canary-check.mts",
     "scale:foundation-check": "tsx scripts/scale-foundation-check.mts",
     "master:doc-check": "tsx scripts/master-operating-doc-check.mts",
     "d10:prep-check": "tsx scripts/d10-activation-prep-check.mts",

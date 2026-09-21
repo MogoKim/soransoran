@@ -108,6 +108,11 @@ jobs:
       #       둘이 어긋나면 supply-health 가 "워크플로우 불일치" 로 잡는다.
       SORAN_CAPACITY_STAGE: ${{ vars.SORAN_CAPACITY_STAGE }}
       SORAN_RELEASE_STAGE: ${{ vars.SORAN_RELEASE_STAGE }}
+      # 🔴 **하루짜리 첫 시험 허가** (2026-09-21). 둘 다 있어야 켜지고,
+      #    그 KST 날짜 하루가 지나면 아무도 끄지 않아도 꺼진다.
+      #    🔴 `SORAN_RELEASE_STAGE` 는 그대로 둔다 — 지속 단계와 시험은 다른 값이다.
+      SORAN_RELEASE_CANARY_STAGE: ${{ vars.SORAN_RELEASE_CANARY_STAGE }}
+      SORAN_RELEASE_CANARY_DATE: ${{ vars.SORAN_RELEASE_CANARY_DATE }}
     steps:
       - uses: actions/checkout@v4
 

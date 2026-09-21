@@ -717,9 +717,20 @@ jobs:
       #    프로필을 몰래 바꾸면 7건이 FAIL 한다(실측 확인).
       #    cohort manifest · 단계 fail-closed · 공급 역산 · 병목도 함께 본다.
       #    DB 0 · 네트워크 0 · LLM 0.
+      # 🔴 **하루짜리 첫 시험이 우회가 되지 않는지** 같은 step 에서 본다 (2026-09-21).
+      #    날짜가 지나면 저절로 꺼지는가 · 그날치 판정이 NO-GO 면 안 켜지는가 ·
+      #    capacity 상한을 시험이라도 비켜 가지 않는가 · `chosenReady` 가 false 로 남는가.
+      #
+      # 🔴 **새 step 을 만들지 않는다.** 무조건 실행 step 은 69/69 로 상한에 닿아 있다.
+      #    이 검사가 읽는 것은 `release-canary.ts` · `scale-runtime.ts` · `scale-profile.ts`
+      #    뿐이고 셋 다 `src/lib` 이라 **DENY 에 걸려 언제나 heavy** 다 —
+      #    화면 전용 PR 은 이 셋을 건드릴 수 없으므로 경로 조건 뒤가 빠짐없는 자리다.
+      #    실측 0.35 초. DB · 네트워크 · write 0.
       - name: Scale Foundation (회귀 0 · cohort · 공급 역산 · 병목)
         if: steps.scope.outputs.heavy == 'true'
-        run: npm run scale:foundation-check
+        run: |
+          npm run scale:foundation-check
+          npm run release:canary-check
 
       # 목적·North Star·Lane·AI 모델·현재 운영 상태의 단일 진입점.
       # 날짜별 문서가 다시 현재 정본을 자처하거나 코드의 기본 모델·d1 workflow와
