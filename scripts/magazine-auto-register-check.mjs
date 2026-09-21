@@ -1052,7 +1052,8 @@ const M = await import('./lib/magazine-merge-gate.mjs')
 const SHA = 'a'.repeat(40)
 const okPr = { number: 9, url: 'u', headRefName: `${M.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: SHA, state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
 const okFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/x-slug/draft.md', 'public/magazine/x-slug/hero.webp']
-const okReg = [{ slug: 'x-slug', publishAt: '2026-09-20T10:30:00+09:00', publishedAt: '2026-09-20', status: 'SCHEDULED' }]
+// 🔴 자동 등록 글에는 대표 이미지가 **반드시** 있다 (2026-09-21 사고 뒤 계약)
+const okReg = [{ slug: 'x-slug', publishAt: '2026-09-20T10:30:00+09:00', publishedAt: '2026-09-20', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } }]
 const okQueue = { 'x-slug': { riskLevel: 'LOW', autoEligible: true } }
 const base = {
   pr: okPr, expectedSha: SHA, files: okFiles, ciState: 'success',
@@ -1115,8 +1116,8 @@ console.log('\n══════ 운영연결 ① 등록 후 삭제된 큐 — 
 const MG = await import('./lib/magazine-merge-gate.mjs')
 const MSHA = 'a'.repeat(40)
 const mPr = { number: 9, url: 'u', headRefName: `${MG.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: MSHA, state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
-const mFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/x-slug/draft.md']
-const mReg = [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }]
+const mFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/x-slug/draft.md', 'public/magazine/x-slug/hero.webp']
+const mReg = [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } }]
 const okChecks = [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }]
 // 🔴 등록 전 큐(main): slug 가 **있다** · 등록 후 큐(PR): slug 가 **없다**
 const MAIN_QUEUE = { 'x-slug': { riskLevel: 'MEDIUM', autoEligible: true }, 'other': { riskLevel: 'LOW', autoEligible: true } }
@@ -1422,7 +1423,8 @@ const NOW8 = Date.parse('2026-09-17T12:00:00+09:00')
 
 const ART = (rows) => [
   'export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = {',
-  ...rows.map((r) => `  '${r.slug}': { title: ${JSON.stringify(r.title ?? r.slug)}, publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}' },`),
+  // 🔴 대표 이미지는 자동 등록 글의 필수 필드다 — fixture 도 실제 계약을 따른다
+  ...rows.map((r) => `  '${r.slug}': { title: ${JSON.stringify(r.title ?? r.slug)}, publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}', heroImage: { src: '/magazine/${r.slug}/hero.webp' } },`),
   '}',
 ].join('\n')
 const QUE = (rows) => [
@@ -2316,7 +2318,8 @@ expect(
 const BASE_F = 'b'.repeat(40)
 const ART_F = (rows) => [
   'export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = {',
-  ...rows.map((r) => `  '${r.slug}': { publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}' },`),
+  // 🔴 대표 이미지는 자동 등록 글의 필수 필드다
+  ...rows.map((r) => `  '${r.slug}': { publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}', heroImage: { src: '/magazine/${r.slug}/hero.webp' } },`),
   '}',
 ].join('\n')
 const QUE_F = (rows) => [
@@ -2353,7 +2356,7 @@ const wiredDepsF = (prOverride = {}, viewOverride = null) => {
       // 🔴 여기가 핵심 — 실제 실행기의 조회를 그대로 쓴다
       listAutoPrs: () => real.listAutoPrs(),
       getPr: (n) => real.getPr(n),
-      listPrFiles: () => ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/new-one/draft.md'],
+      listPrFiles: () => ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/new-one/draft.md', 'public/magazine/new-one/hero.webp'],
       getChecks: () => ({ ok: true, ciState: 'success', checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }] }),
       mergePr: (n, sha) => { calls.push(`merge:${n}:${sha.slice(0, 4)}`); return { ok: true, mergeCommit: 'm'.repeat(40) } },
       getProductionDeployment: (sha) => ({ found: true, state: 'success', sha, deploymentId: 'dpl_X' }),
@@ -2429,6 +2432,125 @@ expect('🔴 상세 조회 실패는 null', failDepsF.getPr(533), null)
 const badJsonF = (cmd, args) => ({ code: 0, out: '{깨진', err: '' })
 expect('🔴 깨진 응답도 ok=false', AMF.makeRealDeps(badJsonF, { log: () => {} }).listAutoPrs().ok, false)
 expect('🔴 깨진 상세 응답은 null', AMF.makeRealDeps(badJsonF, { log: () => {} }).getPr(533), null)
+
+
+console.log('\n══════ 대표 이미지 — 자동 레인은 예외 없이 요구한다 (2026-09-21 사고)')
+/**
+ * 🔴 **무엇이 일어났나.**
+ *
+ *    9/19~9/26 등록 글 **8건이 전부 대표 이미지 없이** 나갔다.
+ *    세 단계가 나란히 놓쳤고, 어느 하나만 있었어도 막혔을 일이다.
+ *
+ *      ① 생성   `heroPlan` 이 imageMode=OPTIONAL 이면 need:false 로 그냥 건너뛴다
+ *      ② 검사   batch-qa·register 가 REQUIRED 일 때만 hero 를 본다
+ *      ③ 감시   runWatch 가 heroImage 가 없으면 **image=200 으로 세었다**
+ *
+ *    ③ 이 제일 나쁘다. 없는 것을 "확인했다" 고 적었다 —
+ *    9/19·9/20 watch 로그에 `✅ … 본문·이미지·목록 확인` 이 남아 있고,
+ *    그 글들에는 대표 이미지가 애초에 없다. 검사가 아니라 **거짓 보증**이었다.
+ *
+ * 🔴 **OPTIONAL 의 뜻은 "사람이 판단해서 뺄 수 있다" 였다.**
+ *    자동 레인에는 판단할 사람이 없다. 사람이 없는 자리에서 "선택" 은
+ *    언제나 "없음" 으로 굳는다 — 실제로 8건 연속 그렇게 됐다.
+ */
+const LANE = await import('./lib/magazine-auto-lane.mjs')
+const AMH = await import('./magazine-auto-merge.mjs')
+const MGH = await import('./lib/magazine-merge-gate.mjs')
+const BQ = await import('./magazine-batch-qa.mjs')
+
+// ── ① 생성 — 자동 레인은 OPTIONAL 도 만든다 ───────────────
+const plan = (item, o) => LANE.heroPlan(item, { alt: '물컵을 든 50대 여성', ...o })
+expect('🔴 자동 레인 · OPTIONAL 이어도 만든다', plan({ imageMode: 'OPTIONAL' }, { autoLane: true }).need, true)
+expect('🔴 자동 레인 · imageMode 가 없어도 만든다', plan({}, { autoLane: true }).need, true)
+expect('자동 레인 · REQUIRED 는 당연히 만든다', plan({ imageMode: 'REQUIRED' }, { autoLane: true }).need, true)
+expect('🔴 그 사실을 표시에 남긴다', plan({ imageMode: 'OPTIONAL' }, { autoLane: true }).enforcedByLane, true)
+// 🔴 사람 경로는 그대로 둔다 — OPTIONAL 은 사람이 뺄 수 있다
+expect('사람 경로 · OPTIONAL 은 건너뛴다', plan({ imageMode: 'OPTIONAL' }, {}).need, false)
+expect('사람 경로 · --allow-optional 이면 만든다', plan({ imageMode: 'OPTIONAL' }, { allowOptional: true }).need, true)
+expect('사람 경로 · REQUIRED 는 만든다', plan({ imageMode: 'REQUIRED' }, {}).need, true)
+// alt 는 여전히 사람이 적는다 — 자동으로 지어내지 않는다
+expect(
+  '🔴 자동 레인이어도 alt 를 지어내지 않는다',
+  LANE.heroPlan({ imageMode: 'OPTIONAL' }, { alt: null, autoLane: true }).blocked?.code,
+  'HERO_ALT_REQUIRED',
+)
+
+// ── ③ 감시 — 없는 이미지를 200 으로 세지 않는다 ───────────
+const WNOW = Date.parse('2026-09-21T12:00:00+09:00')
+const wrow = (o) => [{ slug: 'x', publishAt: '2026-09-20T10:30:00+09:00', article: 200, inList: true, ...o }]
+const wcodes = (o) => AMH.judgeWatch({ rows: wrow(o), now: WNOW }).blockedBy.map((b) => b.code)
+expect('🔴 heroImage 가 아예 없으면 실패다 (옛 판은 200 이었다)', wcodes({ image: null }), ['IMAGE_MISSING'])
+expect('🔴 undefined 도 실패다', wcodes({ image: undefined }), ['IMAGE_MISSING'])
+expect('🔴 "아예 없다" 와 "깨졌다" 를 구분해 적는다',
+  AMH.judgeWatch({ rows: wrow({ image: null }), now: WNOW }).blockedBy[0].message.includes('아예 없다'), true)
+expect('이미지 URL 이 404 여도 실패', wcodes({ image: 404 }), ['IMAGE_MISSING'])
+expect('이미지가 200 이면 통과', AMH.judgeWatch({ rows: wrow({ image: 200 }), now: WNOW }).ok, true)
+expect('🔴 없는 이미지를 "확인" 으로 적지 않는다',
+  AMH.judgeWatch({ rows: wrow({ image: null }), now: WNOW }).checked.join(' ').includes('이미지'), false)
+// 🔴 runWatch 소스가 `: 200` 으로 되돌아가지 않았는가 — 옛 결함의 정확한 모양이다
+const mergeSrcH = readFileSync(join('scripts', 'magazine-auto-merge.mjs'), 'utf8')
+expect('🔴 heroImage 없을 때 200 으로 떨어뜨리지 않는다', /heroImage\?\.src \?[^:]*: 200/.test(mergeSrcH), false)
+
+// ── ② 검사 — imageMode 와 무관하게 본다 ───────────────────
+expect('batch-qa 가 requireHero 를 받는다', typeof BQ.judge, 'function')
+const bqSrc = readFileSync(join('scripts', 'magazine-batch-qa.mjs'), 'utf8')
+expect('🔴 requireHero 면 imageMode 를 보지 않는다', /if \(requireHero \|\| imageMode === 'REQUIRED'\)/.test(bqSrc), true)
+expect('🔴 CLI 에 --require-hero 가 있다', /--require-hero/.test(bqSrc), true)
+const driveSrc = readFileSync(join('scripts', 'magazine-auto-register.mjs'), 'utf8')
+expect('🔴 자동 레인이 batch-qa 에 그것을 넘긴다', /autoLane \? \['--require-hero'\]/.test(driveSrc), true)
+expect('🔴 자동 레인이 heroPlan 에 autoLane 을 넘긴다', /heroPlan\(item, \{ alt: heroAlt, allowOptional, autoLane \}\)/.test(driveSrc), true)
+const readySrcH = readFileSync(join('scripts', 'magazine-auto-register-ready.mjs'), 'utf8')
+expect('🔴 ready 가 drive 를 자동 레인으로 부른다', /autoLane: true/.test(readySrcH), true)
+
+// ── ④ 병합 관문 — 마지막 문 ───────────────────────────────
+const hBase = {
+  pr: { number: 1, url: 'u', headRefName: `${MGH.AUTO_BRANCH_PREFIX}2026-09-21-010000`, headRefOid: 'h'.repeat(40), state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false },
+  expectedSha: 'h'.repeat(40),
+  ciState: 'success',
+  checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
+  queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: true } },
+  branchQueueBySlug: null,
+  mainSlugs: new Set(),
+  mainDates: new Set(),
+  now: Date.parse('2026-09-21T00:00:00+09:00'),
+}
+const hReg = (hero) => [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', ...(hero ? { heroImage: { src: hero } } : {}) }]
+const HFILES = ['src/content/magazine/articles.ts', 'public/magazine/x-slug/hero.webp']
+const hCodes = (o) => MGH.judgeAutoMerge({ ...hBase, ...o }).blockedBy.map((b) => b.code)
+
+expect('🔴 hero 가 없으면 병합하지 않는다', hCodes({ registered: hReg(null), files: HFILES }), ['HERO_MISSING'])
+expect(
+  '🔴 경로만 있고 파일이 PR 에 없으면 막는다',
+  hCodes({ registered: hReg('/magazine/x-slug/hero.webp'), files: ['src/content/magazine/articles.ts'] }),
+  ['HERO_FILE_ABSENT'],
+)
+expect('둘 다 있으면 통과한다', hCodes({ registered: hReg('/magazine/x-slug/hero.webp'), files: HFILES }), [])
+// 🔴 여러 건 중 하나만 빠져도 막는다
+expect(
+  '🔴 한 건만 빠져도 막는다',
+  hCodes({
+    registered: [
+      { slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } },
+      { slug: 'y-slug', publishAt: '2026-09-26T10:30:00+09:00', publishedAt: '2026-09-26', status: 'SCHEDULED' },
+    ],
+    queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: true }, 'y-slug': { riskLevel: 'LOW', autoEligible: true } },
+    files: HFILES,
+  }).includes('HERO_MISSING'),
+  true,
+)
+
+// ── ⑤ 실제 재고 — 자동 발행 글에 대표 이미지가 있는가 ──────
+/**
+ * 🔴 **이 검사가 이번 사고를 다시 잡는다.** 예약·공개된 글 중 hero 가 없는 것이 하나라도
+ *    있으면 실패한다. 실제 `articles.ts` 를 본다 — fixture 가 아니다.
+ */
+const { loadArticles: loadArticlesLive } = await import('./lib/magazine-load.mjs')
+const liveArticles = loadArticlesLive()
+const autoEra = liveArticles.filter((a) => a.publishAt && Date.parse(a.publishAt) >= Date.parse('2026-09-19T00:00:00+09:00'))
+const noHero = autoEra.filter((a) => !a.heroImage?.src)
+expect(`🔴 9/19 이후 등록 글 ${autoEra.length}건에 대표 이미지가 전부 있다`, noHero.map((a) => a.slug), [])
+const brokenHero = autoEra.filter((a) => a.heroImage?.src && !existsSync(join('public', a.heroImage.src.replace(/^\//, ''))))
+expect('🔴 그 이미지 파일이 실제로 존재한다', brokenHero.map((a) => a.slug), [])
 
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')

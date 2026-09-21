@@ -16,7 +16,12 @@ export const DRAFT: MagazineArticleBody = {
   publishedAt: '',
   medical: true,
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/national-checkup-eligibility/hero.webp',
+    alt: '건강검진 안내문을 식탁에서 펼쳐 읽는 50대 여성',
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

@@ -153,7 +153,15 @@ export function judgeWatch({ rows, now }) {
     const due = Date.parse(r.publishAt)
     if (!Number.isFinite(due) || due > now) { checked.push(`${r.slug} 아직 예약 전 — 건너뜀`); continue }
     if (r.article !== 200) blockedBy.push({ code: 'ARTICLE_MISSING', message: `${r.slug} 본문이 HTTP ${r.article} 다` })
-    if (r.image !== 200) blockedBy.push({ code: 'IMAGE_MISSING', message: `${r.slug} 대표 이미지가 HTTP ${r.image} 다` })
+    // 🔴 heroImage 자체가 없는 것과 URL 이 깨진 것을 구분해 적는다. 둘 다 실패다.
+    if (r.image !== 200) {
+      blockedBy.push({
+        code: 'IMAGE_MISSING',
+        message: r.image === null || r.image === undefined
+          ? `${r.slug} 에 대표 이미지가 아예 없다 (heroImage 미설정)`
+          : `${r.slug} 대표 이미지가 HTTP ${r.image} 다`,
+      })
+    }
     if (!r.inList) blockedBy.push({ code: 'LIST_MISSING', message: `${r.slug} 가 /magazine 목록에 없다` })
     if (r.article === 200 && r.image === 200 && r.inList) checked.push(`${r.slug} 본문·이미지·목록 확인`)
   }
@@ -438,7 +446,16 @@ export async function runWatch({ deps }) {
       slug: a.slug,
       publishAt: a.publishAt,
       article: deps.httpStatus(`${SITE}/magazine/${a.slug}`),
-      image: a.heroImage?.src ? deps.httpStatus(`${SITE}${a.heroImage.src}`) : 200,
+      // 🔴 **heroImage 가 없으면 `null` 이다. 200 이 아니다** (2026-09-21 사고).
+      //    옛 판은 `: 200` 이었다. 대표 이미지가 **아예 없는** 글을
+      //    "이미지 확인" 으로 적어 초록으로 넘겼다 — 9/19·9/20 로그가 그 증거다.
+      //
+      //      ✅ how-long-did-menopause-last 본문·이미지·목록 확인   ← hero 가 없는 글이다
+      //
+      //    없는 것을 확인했다고 적는 검사는 검사가 아니라 **거짓 보증**이다.
+      //    빠진 값은 언제나 실패 쪽으로 떨어뜨린다.
+      image: a.heroImage?.src ? deps.httpStatus(`${SITE}${a.heroImage.src}`) : null,
+      heroSrc: a.heroImage?.src ?? null,
       inList: typeof listHtml === 'string' && listHtml.includes(a.slug),
     }))
   const v = judgeWatch({ rows, now: now() })

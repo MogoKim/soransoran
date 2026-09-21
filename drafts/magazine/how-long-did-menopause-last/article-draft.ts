@@ -16,7 +16,12 @@ export const DRAFT: MagazineArticleBody = {
   publishedAt: '',
   medical: true,
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/how-long-did-menopause-last/hero.webp',
+    alt: '창밖을 보며 달력에 표시된 날짜를 세어 보는 50대 여성',
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

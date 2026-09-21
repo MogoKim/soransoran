@@ -16,7 +16,12 @@ export const DRAFT: MagazineArticleBody = {
   publishedAt: '',
   medical: true,
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/dry-eyes-menopause/hero.webp',
+    alt: '눈이 뻑뻑한 듯 잠시 눈을 감고 쉬는 50대 여성',
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

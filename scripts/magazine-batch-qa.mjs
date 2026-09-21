@@ -39,6 +39,7 @@
  *   node scripts/magazine-batch-qa.mjs --all              drafts/magazine 전체
  *   node scripts/magazine-batch-qa.mjs ... --json
   node scripts/magazine-batch-qa.mjs ... --strict-auto   자동화 검사(⑦~⑩) 강제
+  node scripts/magazine-batch-qa.mjs ... --require-hero  🔴 imageMode 와 무관하게 대표 이미지 필수
  *   node scripts/magazine-batch-qa.mjs --help
  *
  * 종료 코드: BLOCKED 가 하나라도 있으면 1
@@ -123,7 +124,7 @@ function bodyText(article) {
 
 // ── 판정 ───────────────────────────────────────────────────
 
-export function judge(slug, { dir, queueItem, strictAuto = false }) {
+export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = false }) {
   const reasons = []
   const notes = []
   /** BLOCKED 사유를 코드로도 남긴다 — 사람은 message 를, 자동화는 code 를 본다 */
@@ -214,12 +215,26 @@ export function judge(slug, { dir, queueItem, strictAuto = false }) {
   }
 
   // ⑥ hero
+  /**
+   * 🔴 **`requireHero` 면 imageMode 를 보지 않는다** (2026-09-21 사고).
+   *
+   *    옛 판은 `imageMode === 'REQUIRED'` 일 때만 hero 를 봤다. 그래서
+   *    `OPTIONAL` 인 글은 이 검사를 **통째로 건너뛰었고**, 9/19~9/26 등록 8건이
+   *    전부 대표 이미지 없이 나갔다.
+   *
+   *    자동 등록 경로에는 "이미지를 뺄지" 판단할 사람이 없다.
+   *    그 자리에서 OPTIONAL 은 언제나 "없음" 으로 굳는다.
+   */
   const imageMode = queueItem?.imageMode ?? null
   let heroOk = null
-  if (imageMode === 'REQUIRED') {
+  if (requireHero || imageMode === 'REQUIRED') {
     const src = article.heroImage?.src
     heroOk = Boolean(src) && existsSync(join(ROOT, 'public', src.replace(/^\//, '')))
-    if (!heroOk) block('HERO_MISSING', `imageMode=REQUIRED 인데 hero 가 없다${src ? ` (public${src})` : ''}`)
+    if (!heroOk) {
+      block('HERO_MISSING', src
+        ? `대표 이미지 파일이 없다 (public${src})`
+        : `대표 이미지가 없다 — ${requireHero ? '자동 등록 경로는 imageMode 와 무관하게 필수다' : `imageMode=${imageMode}`}`)
+    }
   }
 
   // ⑦~⑩ 자동화 모드 전용 — 사람이 원고를 훑어보던 단계가 사라질 때 생기는 구멍
@@ -350,6 +365,8 @@ function main() {
   const asJson = argv.includes('--json')
   // --run 은 producer 산출물이다 = 자동화 경로다. 자동으로 엄격해진다
   const strictAuto = argv.includes('--strict-auto') || argv.includes('--run')
+  // 🔴 자동 등록 경로는 imageMode 와 무관하게 대표 이미지를 요구한다 (2026-09-21 사고)
+  const requireHero = argv.includes('--require-hero')
   let slugs = []
   if (argv.includes('--run')) {
     slugs = fromRun(argv[argv.indexOf('--run') + 1])
@@ -369,7 +386,7 @@ function main() {
   const results = slugs.map((arg) => {
     const dir = draftDir(arg)
     const slug = basename(dir)
-    return judge(slug, { dir, queueItem: bySlug.get(slug), strictAuto })
+    return judge(slug, { dir, queueItem: bySlug.get(slug), strictAuto, requireHero })
   })
 
   if (asJson) console.log(JSON.stringify({ results }, null, 2))

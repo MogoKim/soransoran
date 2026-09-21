@@ -15,7 +15,12 @@ export const DRAFT: MagazineArticleBody = {
   // 발행일은 창업자가 확정한다
   publishedAt: '',
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/child-marriage-silence/hero.webp',
+    alt: '말없이 찻잔을 앞에 두고 생각에 잠긴 50대 여성',
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

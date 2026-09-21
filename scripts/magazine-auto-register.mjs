@@ -68,7 +68,11 @@ function run(file, args, { json = false } = {}) {
  * 각 단계는 { stage, status, detail } 로 남는다 — status 는 ok · skip · blocked 셋뿐이다.
  */
 export function drive(slug, opts) {
-  const { write = false, pr = false, publishAt = null, alt = null, allowOptional = false } = opts
+  /**
+   * 🔴 `autoLane` — 이 회차를 사람이 아니라 **자동 레인이** 돌리고 있는가.
+   *    자동 레인에서는 대표 이미지가 선택이 아니라 필수다 (2026-09-21 사고).
+   */
+  const { write = false, pr = false, publishAt = null, alt = null, allowOptional = false, autoLane = false } = opts
   const steps = []
   const blockedBy = []
   const add = (stage, status, detail) => steps.push({ stage, status, detail })
@@ -145,7 +149,8 @@ export function drive(slug, opts) {
   if (!alt) heroBrief = resolveHeroBrief(slug)
   const heroAlt = alt ?? heroBrief.alt
 
-  const hp = heroPlan(item, { alt: heroAlt, allowOptional })
+  // 🔴 자동 레인이면 OPTIONAL 도 필수다 — 판단할 사람이 없는 자리에서 "선택" 은 "없음" 이 된다
+  const hp = heroPlan(item, { alt: heroAlt, allowOptional, autoLane })
   if (!hp.need) {
     add('hero', 'skip', hp.reason)
   } else if (!heroAlt && !heroBrief.ok) {
@@ -159,17 +164,18 @@ export function drive(slug, opts) {
     const args = ['--slug', slug, '--alt', hp.alt, '--write']
     // 🔴 scene 은 선택이다. 없으면 hero runner 가 cluster 기본 장면을 고른다.
     if (heroBrief.scene) args.push('--prompt', heroBrief.scene)
-    if (hp.mode === 'OPTIONAL') args.push('--allow-optional')
+    // 🔴 자동 레인이 강제한 경우에도 runner 에게 OPTIONAL 을 허용한다고 알려야 만든다
+    if (hp.mode !== 'REQUIRED') args.push('--allow-optional')
     const r = run(HERO, args)
     if (r.code !== 0) {
       return stop('hero', 'HERO_FAILED', (r.stderr || r.stdout).trim().split('\n').slice(-2).join(' '))
     }
-    add('hero', 'ok', `hero 생성 (${hp.mode}${heroBrief.scene ? ' · review scene' : ' · 기본 장면'})`)
+    add('hero', 'ok', `hero 생성 (${hp.mode ?? '-'}${hp.enforcedByLane ? ' · 자동 레인 강제' : ''}${heroBrief.scene ? ' · review scene' : ' · 기본 장면'})`)
   }
 
   // ── ⑥ batch-qa ────────────────────────────────────────────
   {
-    const r = run(BATCH_QA, [slug, '--strict-auto', '--json'], { json: true })
+    const r = run(BATCH_QA, [slug, '--strict-auto', '--json', ...(autoLane ? ['--require-hero'] : [])], { json: true })
     const rows = Array.isArray(r.json) ? r.json : r.json?.results ?? []
     const row = rows.find((x) => x.slug === slug) ?? null
     if (!row) return stop('batch', 'BATCH_QA_UNREADABLE', 'batch-qa 결과를 읽지 못했다')

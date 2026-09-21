@@ -3837,6 +3837,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'how-long-did-menopause-last': {
+    heroImage: {
+      src: '/magazine/how-long-did-menopause-last/hero.webp',
+      alt: "창밖을 보며 달력에 표시된 날짜를 세어 보는 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '갱년기 증상은 보통 몇 년까지 가나요?',
     description:
       '갱년기 증상이 이어지는 시간은 사람마다 다릅니다. 평균에 내 몸을 맞추기보다 개인차를 이해하고, 오래 지속될 때 살펴볼 신호와 진료가 필요한 때를 함께 짚어봅니다.',
@@ -3958,6 +3964,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'national-checkup-eligibility': {
+    heroImage: {
+      src: '/magazine/national-checkup-eligibility/hero.webp',
+      alt: "건강검진 안내문을 식탁에서 펼쳐 읽는 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '올해 국가건강검진 대상자인지 어떻게 확인하나요?',
     description:
       '국가건강검진 안내문이 오지 않아 올해 대상자인지 헷갈릴 때, 국민건강보험공단 홈페이지와 The건강보험 앱, 지사 문의로 본인 대상 여부를 확인하는 순서를 차근차근 정리합니다.',
@@ -4071,6 +4083,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'dry-mouth-menopause': {
+    heroImage: {
+      src: '/magazine/dry-mouth-menopause/hero.webp',
+      alt: "물컵을 들고 입 안이 마른 듯 잠시 멈춘 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '갱년기에 입이 자꾸 마르는 이유',
     description:
       '새벽에 입이 말라 깨고 낮에도 자꾸 물을 찾게 되는 시기, 우리 또래 여성에게 이런 변화가 왜 생기는지와 생활 속에서 살펴볼 점을 함께 짚어봅니다.',
@@ -4188,6 +4206,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'frequent-urination-menopause': {
+    heroImage: {
+      src: '/magazine/frequent-urination-menopause/hero.webp',
+      alt: "밤에 깨어 물 한 잔을 들고 조용히 서 있는 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '갱년기에 소변이 자주 마려운 이유',
     description:
       '갱년기 즈음 화장실이 자주 가고 싶어지는 변화를 방광과 요도 주변의 변화와 함께 살펴보고, 진료가 필요한 신호도 짚어봅니다.',
@@ -4289,6 +4313,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'starting-work-at-this-age': {
+    heroImage: {
+      src: '/magazine/starting-work-at-this-age/hero.webp',
+      alt: "노트에 무언가 적으며 새 일을 알아보는 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '이 나이에 새로 일을 시작한다는 것',
     description:
       '다시 일을 시작하려는 50대 이후의 마음을 생활비, 몸의 조건, 달라진 일의 방식, 주변 사람들과의 대화라는 자리에서 차분히 돌아봅니다.',
@@ -4405,6 +4435,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'dry-eyes-menopause': {
+    heroImage: {
+      src: '/magazine/dry-eyes-menopause/hero.webp',
+      alt: "눈이 뻑뻑한 듯 잠시 눈을 감고 쉬는 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '갱년기에 눈이 뻑뻑한 이유',
     description:
       '아침부터 눈에 모래가 들어간 듯 뻑뻑하거나 화면을 보다 자꾸 눈을 감게 될 때, 갱년기 무렵 달라지는 눈의 느낌과 생활 속에서 살펴볼 점을 정리했습니다.',
@@ -4502,6 +4538,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'husband-retired-at-home': {
+    heroImage: {
+      src: '/magazine/husband-retired-at-home/hero.webp',
+      alt: "거실에서 각자 시간을 보내는 부부 곁의 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '60대 초반, 남편이 은퇴하고 집에 있을 때',
     description:
       '남편의 은퇴 뒤 하루 종일 함께 있는 시간이 낯설고 답답하게 느껴질 때, 서로를 탓하지 않으면서 각자의 시간과 생활 리듬을 다시 만들어가는 이야기를 나눕니다.',
@@ -4614,6 +4656,12 @@ const MAGAZINE_ARTICLE_RECORD = {
     ],
   },
   'child-marriage-silence': {
+    heroImage: {
+      src: '/magazine/child-marriage-silence/hero.webp',
+      alt: "말없이 찻잔을 앞에 두고 생각에 잠긴 50대 여성",
+      width: 1200,
+      height: 675,
+    },
     title: '60대 초반, 자녀가 결혼 이야기를 안 할 때',
     description:
       '자녀가 결혼 이야기를 오래 꺼내지 않을 때 부모 마음에 남는 서운함과 조바심을 살펴보고, 재촉하지 않으면서 관계를 이어가는 작은 방법을 이야기합니다.',

@@ -15,7 +15,12 @@ export const DRAFT: MagazineArticleBody = {
   // 발행일은 창업자가 확정한다
   publishedAt: '',
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/husband-retired-at-home/hero.webp',
+    alt: '거실에서 각자 시간을 보내는 부부 곁의 50대 여성',
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {
