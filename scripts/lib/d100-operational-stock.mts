@@ -384,10 +384,21 @@ function memoRepo(inner: StockRepo): StockRepo {
   }
 }
 
-/** 🔴 창 안에서 관측된 하루 평균 — 0건이면 0 이 아니라 `null`(unmeasured) 이다 */
-function perDay(count: number, days: number): Measured {
+/**
+ * 🔴 **정상 조회의 0 건은 `0/day` 다 — `unmeasured` 가 아니다** (2026-09-21 5차 보정).
+ *
+ *    앞판은 `count === 0` 이면 `null` 을 냈다. 그래서 **조회는 잘 됐는데 한 건도 없다**와
+ *    **조회를 못 했다**가 같은 화면이 됐다. 둘은 할 일이 정반대다 —
+ *    앞은 "만들어야 한다", 뒤는 "왜 못 읽는지 고쳐야 한다".
+ *
+ *    게다가 `unmeasured` 는 승격 판정에서 `blocking` 과 다르게 취급된다.
+ *    생산이 진짜 0 인데 `unmeasured` 로 적으면 "아직 모른다" 로 보여, **0 이라는 사실이
+ *    화면에서 사라진다.** 0 은 측정된 값이고, 목표에 미달하므로 막아야 한다.
+ *
+ * 🔴 창 길이가 0 이하일 때만 `null` 이다 — 그때는 나눌 수가 없다.
+ */
+export function perDayMeasured(count: number, days: number): Measured {
   if (days <= 0) return null
-  if (count === 0) return null
   return Math.round((count / days) * 10) / 10
 }
 
@@ -445,6 +456,12 @@ export type StockReadOptions = {
    *    🔴 과거 시각으로 쓰는 길은 없다(`appendSnapshot` 은 지금 값만 받는다).
    */
   recordSnapshot?: boolean
+  /**
+   * 🔴 스냅샷을 적는 함수 — 기본은 정본 `appendSnapshot`.
+   *    바꿔 끼울 수 있게 둔 이유는 하나뿐이다: **기록 실패가 정말 밖까지 전해지는지**
+   *    시험하려면 일부러 실패하는 writer 를 넣어 봐야 한다.
+   */
+  appendSnapshotFn?: (readyStock: number, now: Date) => boolean
   /** 지금 단계의 하루 발행 목표 — 연속 달성 일수를 세는 기준 */
   currentDailyTarget: number
   /** 🔴 발행 runner 가 실제로 돌 수 있는가 — 예약량과 예측값을 가른다 */
@@ -464,6 +481,14 @@ export async function readOperationalStock(
     return { ok: false, detail: 'DATABASE_URL 이 없다 — 운영 env 를 찾지 못했다' }
   }
   const prisma = new PrismaClient()
+  /**
+   * 🔴 **기록은 try 밖에서 한다** (2026-09-21 5차 보정).
+   *
+   *    앞판은 `try` 안에서 `SnapshotWriteFailed` 를 던졌는데, 바로 아래 `catch (e)` 가
+   *    그것을 **읽기 실패로 삼켜** `{ ok:false }` 로 바꿨다. 그래서 CLI 는 예외를 본 적이
+   *    없고 종료코드는 0 이었다 — "적으라고 했는데 못 적었다" 가 어디에도 남지 않았다.
+   */
+  let snapshotToWrite: number | null = null
   try {
     // 🔴 같은 질의를 두 번 던지지 않는다 — 재고와 생산량이 **같은 행 집합**을 봐야 한다
     const repo = memoRepo(prismaStockRepo(prisma))
@@ -520,9 +545,7 @@ export async function readOperationalStock(
      *    앞판은 `appendSnapshot` 의 반환값을 버렸다 — 사람이 시계열을 시작한 줄 알았는데
      *    파일이 하나도 안 쌓이고, 며칠 뒤에도 순증가는 여전히 unmeasured 다.
      */
-    if (opts.recordSnapshot === true && !appendSnapshot(read.funnel.readyStock, now)) {
-      throw new SnapshotWriteFailed(`스냅샷을 적지 못했다 — ${SNAPSHOT_PATH}`)
-    }
+    if (opts.recordSnapshot === true) snapshotToWrite = read.funnel.readyStock
 
     // 🔴 공개 발행 편수 — Post 생성 시각으로만 센다. 연속 달성 일수도 여기서 나온다
     const publishedAts = await publishedAtsOf(prisma)
@@ -565,10 +588,10 @@ export async function readOperationalStock(
       activePersonas,
       detail,
       detailPerDay: detail.perDay,
-      readyQualifiedPerDay: perDay(produced.length, THROUGHPUT_WINDOW_DAYS),
+      readyQualifiedPerDay: perDayMeasured(produced.length, THROUGHPUT_WINDOW_DAYS),
       readyStockDelta,
       readyStockDeltaPerDay: readyStockDelta.measured ? readyStockDelta.perDay : null,
-      publishedPerDay: perDay(publishedInWindow, THROUGHPUT_WINDOW_DAYS),
+      publishedPerDay: perDayMeasured(publishedInWindow, THROUGHPUT_WINDOW_DAYS),
       throughputWindowDays: THROUGHPUT_WINDOW_DAYS,
       personaTiers: tiers,
       personaMissingAxes: missingAxisHistogram(personaRead.candidates),
@@ -582,9 +605,73 @@ export async function readOperationalStock(
       collectFailing,
     }
   } catch (e) {
-    // 🔴 fail-closed — 읽지 못했으면 0 이 아니다
-    return { ok: false, detail: e instanceof Error ? e.message : '알 수 없음' }
+    // 🔴 fail-closed — 읽지 못했으면 0 이 아니다. **다만 기록 실패는 삼키지 않는다**
+    return readFailureOf(e)
   } finally {
     await prisma.$disconnect()
+    // 🔴 읽기 catch 밖이다 — 기록 실패는 읽기 실패로 둔갑하지 않는다
+    if (snapshotToWrite !== null) {
+      const write = opts.appendSnapshotFn ?? appendSnapshot
+      if (!write(snapshotToWrite, now)) {
+        throw new SnapshotWriteFailed(`스냅샷을 적지 못했다 — ${SNAPSHOT_PATH}`)
+      }
+    }
   }
+}
+
+/**
+ * 🔴 **읽기 실패로 삼켜도 되는 예외인가** (2026-09-21 5차 보정).
+ *
+ *    `SnapshotWriteFailed` 는 "읽지 못했다" 가 아니라 "적으라 했는데 못 적었다" 다.
+ *    그것을 `{ ok:false }` 로 바꾸면 종료코드가 0 이 되고, 사람은 시계열을 시작한 줄 안다.
+ *    🔴 기록을 try 밖으로 옮긴 것과 **이중**으로 막는다 — 누가 다시 안으로 옮겨도 여기서 통과한다.
+ */
+export function readFailureOf(e: unknown): OperationalStock {
+  if (e instanceof SnapshotWriteFailed) throw e
+  return { ok: false, detail: e instanceof Error ? e.message : '알 수 없음' }
+}
+
+export type ReadinessRun = {
+  /** 🔴 CLI 가 그대로 쓰는 종료코드 */
+  exitCode: number
+  stock: OperationalStock
+  /** 종료코드가 0 이 아닌 이유 */
+  failure: string | null
+}
+
+/**
+ * 🔴 **조립 경로를 한 곳에 둔다** (2026-09-21 5차 보정).
+ *
+ *    "읽고 → 필요하면 적고 → 종료코드를 정한다" 를 CLI 안에 인라인으로 두면,
+ *    그 판단이 정말 도는지 fixture 가 물어볼 방법이 없다. 실제로 앞판에서는
+ *    `throw` 와 `process.exit(1)` 이 **둘 다 코드에 있는데도** 예외가 중간에 삼켜져
+ *    종료코드는 0 이었다 — 문자열 검사는 그것을 잡지 못했다.
+ *
+ * 🔴 **적으라고 했는데 못 적었으면 실패다.** 읽지 못해 적을 값이 없었던 경우도 같다 —
+ *    사람은 "시계열을 시작했다" 고 믿고 돌아갈 것이기 때문이다.
+ */
+export async function runReadiness(deps: {
+  read: () => Promise<OperationalStock>
+  recordSnapshot: boolean
+}): Promise<ReadinessRun> {
+  let stock: OperationalStock
+  try {
+    stock = await deps.read()
+  } catch (e) {
+    if (e instanceof SnapshotWriteFailed) {
+      return {
+        exitCode: 1,
+        stock: { ok: false, detail: e.message },
+        failure: e.message,
+      }
+    }
+    throw e
+  }
+  if (deps.recordSnapshot && !stock.ok) {
+    return {
+      exitCode: 1, stock,
+      failure: `스냅샷을 적으라고 했는데 재고를 읽지 못했다 — ${stock.detail}`,
+    }
+  }
+  return { exitCode: 0, stock, failure: null }
 }

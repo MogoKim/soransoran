@@ -35,7 +35,7 @@ import {
   capacities82, judgeLadder, TOP_STEP_INCIDENT_FREE_DAYS,
 } from '../src/lib/collect-82cook-recovery'
 import {
-  readOperationalStock, releaseStageFromEnvText, SnapshotWriteFailed,
+  readOperationalStock, releaseStageFromEnvText, runReadiness,
 } from './lib/d100-operational-stock.mjs'
 import { SNAPSHOT_PATH } from './lib/d100-ready-snapshot.mjs'
 import { NORTH_STAR_MISSING_EVENTS, northStar } from '../src/lib/north-star'
@@ -80,11 +80,11 @@ const envFlag = (name: string): boolean =>
  */
 const resolved = releaseStageFromEnvText(envText)
 const currentReleaseStage = resolved.stage
-/** 🔴 올라가려는 단계 — 모든 승격 판정이 이 단계의 필요량을 쓴다 */
-const targetStage: D100Stage = targetStageFor(currentReleaseStage)
+/** 🔴 **다음** 단계 — 사전 준비(preflight)가 이 단계의 필요량을 쓴다 */
+const nextStage: D100Stage = targetStageFor(currentReleaseStage)
 /** 🔴 d1 은 D100 표에 없다 — 없는 칸을 d3 으로 올려 읽지 않는다 */
 const currentPlan = currentPlanOf(currentReleaseStage)
-const plan = d100Plan(targetStage)
+const plan = d100Plan(nextStage)
 
 /**
  * 🔴 **운영 DB 를 read-only 로 읽는다.** Raw SQL 0 · write 0.
@@ -98,25 +98,28 @@ const RECORD_SNAPSHOT = process.argv.slice(2).includes('--record-snapshot')
 const PUBLISH_LABEL = 'com.soransoran.original-post-runner'
 const publishRunnerLoaded = installed(PUBLISH_LABEL) && loadedJobs.has(PUBLISH_LABEL)
 
-let read: Awaited<ReturnType<typeof readOperationalStock>>
-try {
-  read = await readOperationalStock(new Date(), {
-    targetStage,
+/**
+ * 🔴 **조립은 `runReadiness` 한 곳이 한다.** 여기서 인라인으로 판단하면
+ *    그 판단이 정말 도는지 fixture 가 물어볼 수 없다 — 앞판이 그래서 뚫렸다.
+ */
+const run = await runReadiness({
+  read: () => readOperationalStock(new Date(), {
+    targetStage: nextStage,
     // 🔴 예측기에는 **지금 운영 중인** 단계의 상한을 넘긴다 — 목표 단계가 아니다
     dailyCap: PROFILES[currentReleaseStage].dailyTarget,
     currentDailyTarget: dailyTargetOf(currentReleaseStage),
     publishRunnerLoaded,
     repoRoot: process.cwd(),
     recordSnapshot: RECORD_SNAPSHOT,
-  })
-} catch (e) {
-  // 🔴 스냅샷을 적으라고 해 놓고 못 적었으면 **실패로 끝낸다** — 조용히 넘어가지 않는다
-  if (e instanceof SnapshotWriteFailed) {
-    console.error(`🔴 ${e.message}`)
-    process.exit(1)
-  }
-  throw e
+  }),
+  recordSnapshot: RECORD_SNAPSHOT,
+})
+if (run.exitCode !== 0) {
+  // 🔴 적으라고 했는데 못 적었으면 **실패로 끝낸다** — 조용히 넘어가지 않는다
+  console.error(`🔴 ${run.failure ?? '알 수 없는 실패'}`)
+  process.exit(run.exitCode)
 }
+const read = run.stock
 const funnel = read.ok ? read.funnel : null
 const linkSummary = read.ok ? read.links : summarizeLinks([])
 const activePersonas: Measured = read.ok ? read.activePersonas : null
@@ -213,8 +216,8 @@ const readiness: CapabilityReadiness = {
 
 const promo = judgePromotion({
   current: currentReleaseStage,
-  // 🔴 **목표 단계의 필요량**으로 잰다 — 지금 단계 수치만 채우고 올라가지 않는다
-  target: targetStage,
+  // 🔴 **다음 단계의 필요량**으로 사전 준비를 잰다
+  next: nextStage,
   // 🔴 못 읽었으면 승격 판정도 하지 않는다 — 0 으로도 -1 로도 내려가지 않는다
   readyStock: funnel?.readyStock ?? null,
   /**
@@ -232,10 +235,13 @@ const promo = judgePromotion({
   publishRunnerReady: capabilityFactsReady(facts.publish),
   commentRunnerReady: capabilityFactsReady(facts.comment),
   /**
-   * 🔴 **목표 단계 제한이 켜져 있는가.** 지금은 env 가 d1 이므로 false 다 —
-   *    이 PR 은 어떤 단계도 실제로 켜지 않는다.
+   * 🔴 **지금 단계의 제한이 확정돼 있는가.** env 가 그 단계를 명시했을 때만 참이다 —
+   *    안전 단계로 떨어진 것(`fromEnv:false`)은 "그 단계를 운영하기로 했다" 가 아니다.
+   *
+   *    🔴 앞판은 여기에 `현재 === 다음` 을 넣었다. 다음은 정의상 현재가 아니므로
+   *    **언제나 false** 였고, canary 칸은 통과할 수 있는 경우가 없었다.
    */
-  targetLimitsActive: (currentReleaseStage as string) === (targetStage as string),
+  currentLimitsActive: resolved.fromEnv,
 })
 
 /**
@@ -270,7 +276,7 @@ if (JSON_OUT) {
     currentReleaseFromEnv: resolved.fromEnv,
     currentReleaseFallbackReason: resolved.fallbackReason,
     currentPlan,
-    targetStage,
+    nextStage,
     plan, promotion: promo,
     stock: read.ok ? funnel : { readFailed: read.detail },
     activePersonas: activePersonas === null ? UNMEASURED : activePersonas,
@@ -331,7 +337,7 @@ if (JSON_OUT) {
     + `  · 하루 ${PROFILES[currentReleaseStage].dailyTarget}편`
     + `${resolved.fromEnv ? '' : '  🔴 env 값이 아니다'}`)
   if (resolved.fallbackReason !== null) console.log(`      · ${resolved.fallbackReason}`)
-  console.log(`    올라가려는 단계        ${targetStage}  · 하루 ${plan.publicPostsPerDay}편`)
+  console.log(`    다음 단계              ${nextStage}  · 하루 ${plan.publicPostsPerDay}편`)
   if (currentPlan === null) {
     console.log(`    🔴 ${currentReleaseStage} 은 D100 용량표에 없는 칸이다 (표는 d3 부터다)`)
   }
@@ -439,7 +445,7 @@ if (JSON_OUT) {
       + `  · active 카드 ${activePersonas ?? '?'}명`)
   }
 
-  console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 목표 ${targetStage})`)
+  console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 다음 ${nextStage})`)
   console.log('    🔴 공개량 · READY 순증가 · 재고는 서로 다른 값이다 — 한 칸으로 합치지 않는다')
   console.log('    단계   공개/day  READY생산/day  재고14일  상세/day  Persona  댓글/day  최소관측')
   for (const p of allD100Plans()) {
@@ -469,19 +475,23 @@ if (JSON_OUT) {
     if (sc.detail !== null) console.log(`        · ${sc.detail}`)
   }
 
-  console.log(`\n④ 승격 상태 전이 — ${currentReleaseStage} → ${targetStage}`)
-  console.log('    🔴 한 번의 판정이 아니라 세 칸을 지나는 이동이다')
+  console.log(`\n④ 승격 상태 전이 — ${currentReleaseStage} 운영 중 · 다음은 ${nextStage}`)
+  console.log('    🔴 canary·stable 은 **지금 단계**의 것이고, preflight 는 **다음 단계**의 것이다')
   console.log(`    지금 칸  ${promo.phase}`)
   console.log(`    다음 할 일  ${promo.nextAction}`)
-  const gate = (name: string, g: typeof promo.preflight, note: string): void => {
-    console.log(`    ${g.ready ? '🟢' : '🔴'} ${name.padEnd(14)} ${note}`)
+  const gate = (name: string, g: typeof promo.nextPreflight, note: string): void => {
+    console.log(`    ${g.ready ? '🟢' : '🔴'} ${name.padEnd(18)} ${note}`)
     for (const b of g.blocking) console.log(`        🔴 ${b}`)
     for (const u of g.unmeasured) console.log(`        ⬚ 측정되지 않음: ${u}`)
   }
-  gate(`${currentReleaseStage} stable`, promo.currentStable, '지금 단계가 자기 목표를 냈는가 (다음 칸의 전제)')
-  gate('preflight', promo.preflight, '재고·Persona·수집·생성·스케줄러 — 🔴 목표 발행량은 묻지 않는다')
-  gate('canary', promo.canary, '목표 단계 제한을 실제로 켰는가')
-  gate('stable', promo.stable, `${targetStage} 에서 ${plan.publicPostsPerDay}/day 를 ${plan.minimumObservationDays}일`)
+  gate(`${currentReleaseStage} canary`, promo.currentCanary,
+    '지금 단계 제한이 힘을 쓰고 있는가')
+  gate(`${currentReleaseStage} stable`, promo.currentStable,
+    `${dailyTargetOf(currentReleaseStage)}/day 를 ${stableObservationDaysOf(currentReleaseStage)}일 냈는가`)
+  gate(`${nextStage} preflight`, promo.nextPreflight,
+    `재고·Persona·수집·생성·스케줄러 — 🔴 ${nextStage} 발행량은 묻지 않는다`)
+  console.log(`    ${promo.ready ? '🟢' : '🔴'} 제한을 ${nextStage} 로 올려도 되는가`
+    + `  (지금 단계 stable + 다음 단계 preflight)`)
   console.log('    🔴 이 PR 은 어떤 단계도 실제로 켜지 않는다')
 
   console.log('\n⑤ North Star — 주간 재방문 참여 실사용자')

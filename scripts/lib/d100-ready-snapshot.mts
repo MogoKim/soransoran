@@ -17,9 +17,15 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-export const SNAPSHOT_PATH = join(
-  homedir(), 'Library', 'Application Support', 'soransoran', 'd100-ready-stock.jsonl',
-)
+/**
+ * 🔴 경로를 env 로 바꿀 수 있게 둔다. **운영 기본값은 그대로다** —
+ *    바꿀 수 있어야 "적지 못하면 정말 실패로 끝나는가" 를 실제로 돌려 볼 수 있다.
+ */
+export const SNAPSHOT_PATH_ENV = 'SORAN_D100_SNAPSHOT_PATH'
+
+export const SNAPSHOT_PATH = (process.env[SNAPSHOT_PATH_ENV] ?? '').trim() !== ''
+  ? (process.env[SNAPSHOT_PATH_ENV] as string)
+  : join(homedir(), 'Library', 'Application Support', 'soransoran', 'd100-ready-stock.jsonl')
 
 export type ReadyStockSnapshot = {
   /** ISO — 잰 시각 */

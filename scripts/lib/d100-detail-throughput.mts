@@ -64,9 +64,18 @@ export function detailThroughput(input: {
     const ok = rows.filter(isDetailSuccess)
     const failed = rows.filter((r) => r.status === 'failed')
     const newRows = ok.reduce((n, r) => n + (typeof r.newUniqueThinRows === 'number' ? r.newUniqueThinRows : 0), 0)
-    // 🔴 성공 회차가 없으면 "0건 들어왔다" 가 아니라 "잴 수 없다" 다 —
-    //    job 이 아예 안 돌았는지 돌고도 못 가져왔는지 구분되지 않는다
-    const perDay = ok.length === 0 ? null : Math.round((newRows / input.windowDays) * 10) / 10
+    /**
+     * 🔴 **회차 기록이 아예 없을 때만 `null` 이다** (2026-09-21 5차 보정).
+     *
+     *    · 기록 0건        → `null`. job 이 안 돌았는지 기록이 유실됐는지 알 수 없다
+     *    · 기록은 있는데 성공 0 → **`0`**. 돌았고 한 건도 못 가져왔다는 **측정된 사실**이다
+     *
+     *    앞판은 둘을 모두 `null` 로 냈다. 그러면 수집이 계속 실패하는 상황이
+     *    "아직 안 재 봤다" 로 보여, 고쳐야 할 것이 화면에서 사라진다.
+     */
+    const perDay = rows.length === 0
+      ? null
+      : Math.round((newRows / input.windowDays) * 10) / 10
     if (perDay === null) unmeasured.push(source)
     else { total += perDay; anyMeasured = true }
     bySource.push({ source, successRuns: ok.length, failedRuns: failed.length, newDetailRows: newRows, perDay })

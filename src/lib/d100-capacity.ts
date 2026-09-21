@@ -228,12 +228,16 @@ export function currentPlanOf(current: ReleaseStage): D100Plan | null {
  *    올라가려면 *이미 하루 3편을 내고 있어야* 했다 — 올라가야 낼 수 있는 양을
  *    올라가기 전에 요구한 것이라, 논리적으로 영원히 통과할 수 없다.
  *
- *      `preflight`  재고·Persona·수집·생성·스케줄러가 목표를 감당하는가
- *                   🔴 **목표 발행량은 묻지 않는다**
- *      `canary`     목표 단계 제한을 실제로 켰는가 (env 가 올라갔는가)
- *      `stable`     그 단계에서 **실제로** 목표 발행량을 최소 관측일 동안 냈는가
+ *      `canary`     🔴 **지금 켜진 단계**의 제한이 힘을 쓰고 있는가
+ *      `stable`     🔴 **지금 켜진 단계**가 자기 목표를 최소 관측일 동안 냈는가
+ *      `preflight`  🔴 **다음 단계**를 재고·Persona·수집·생성·스케줄러가 감당하는가
+ *                   (다음 단계 발행량은 묻지 않는다 — 올라가야 낼 수 있는 양이다)
  *
- * 🔴 그리고 **다음 칸으로 가려면 지금 단계가 `stable` 이어야 한다** —
+ * 🔴 **canary/stable 은 지금 단계의 것이고 preflight 는 다음 단계의 것이다** (5차 보정).
+ *    앞판은 셋을 모두 *다음* 단계에 걸었고, canary 를 `현재 === 다음` 으로 계산했다 —
+ *    정의상 언제나 거짓이라 canary 가 통과할 수 있는 경우가 없었다.
+ *
+ * 🔴 제한을 올리려면 **지금 단계가 stable** 이고 **다음 단계 preflight** 가 끝나야 한다 —
  *    d3→d5 는 d3 이 3/day 를 7일 낸 뒤에만 열린다.
  */
 export const PROMOTION_PHASES = ['preflight', 'canary', 'stable'] as const
@@ -266,10 +270,10 @@ export type PromotionInput = {
   /** 🔴 지금 **운영 중인** release 단계 (env 정본에서 읽는다) */
   current: ReleaseStage
   /**
-   * 🔴 **올라가려는 단계.** 판정은 전부 이 단계의 필요량으로 한다 —
+   * 🔴 **다음 단계.** 사전 준비(preflight)는 이 단계의 필요량으로 잰다 —
    *    지금 단계 필요량만 채우고 다음 칸으로 올라가는 것이 앞판의 결함이었다.
    */
-  target: D100Stage
+  next: D100Stage
   /** 🔴 지금 쓸 수 있는 재고. **재지 못했으면 `null`** — 0 도 -1 도 아니다 */
   readyStock: number | null
   /** 🔴 실제 활성 Persona 수. 재지 못했으면 `null` */
@@ -303,27 +307,41 @@ export type PromotionInput = {
    *    목표 단계의 발행량을 사전 조건으로 요구하지 않는다.
    */
   publishedPerDay: number | null
-  /** 🔴 목표 단계 제한이 실제로 켜져 있는가 (env 가 올라갔는가) */
-  targetLimitsActive: boolean
+  /**
+   * 🔴 **지금 단계의 제한이 실제로 힘을 쓰고 있는가** (2026-09-21 5차 보정).
+   *
+   *    앞판은 이 칸을 `현재 === 목표` 로 채웠다. 그런데 목표는 정의상 **다음** 단계라
+   *    정상 전이에서는 언제나 `false` 였다 — canary 칸이 통과할 수 있는 경우가
+   *    아예 없었다는 뜻이다.
+   *
+   *    물어야 할 것은 "지금 켜진 단계가 제대로 돌고 있는가" 다:
+   *    env 가 그 단계를 명시했고, 발행 러너가 실제로 돌 수 있는가.
+   */
+  currentLimitsActive: boolean
 }
 
 export type PromotionVerdict = {
-  /** 🔴 세 칸을 모두 지났는가 — 즉 **다음 목표로 넘어가도 되는가** */
+  /** 🔴 **제한을 올려도 되는가** — 지금 단계 stable + 다음 단계 preflight */
   ready: boolean
   /** 🔴 지금 서 있는 칸 */
   phase: PromotionPhase
   /** 🔴 지금 해야 할 일 한 줄 */
   nextAction: string
-  /** 🔴 어느 단계의 필요량으로 쟀는가 — 보고서가 이 값을 그대로 적는다 */
-  target: D100Stage
-  /** 목표 단계의 필요량 그 자체 */
+  /** 지금 켜져 있는 단계 */
+  current: ReleaseStage
+  /** 🔴 그 단계의 D100 필요량 — 표에 없는 칸(d1)이면 `null` */
+  currentPlan: D100Plan | null
+  /** 다음 단계 */
+  next: D100Stage
+  /** 다음 단계의 필요량 그 자체 */
   requirement: D100Plan
-  /** 🔴 지금 단계가 자기 목표를 냈는가 — 다음 칸의 전제다 */
+  /** 🔴 **지금 단계**의 제한이 힘을 쓰고 있는가 */
+  currentCanary: GateVerdict
+  /** 🔴 **지금 단계**가 자기 목표를 냈는가 */
   currentStable: GateVerdict
-  preflight: GateVerdict
-  canary: GateVerdict
-  stable: GateVerdict
-  /** 🔴 세 칸을 합친 것 — 옛 호출부가 읽던 자리다 */
+  /** 🔴 **다음 단계**의 사전 준비 — 다음 단계 발행량은 묻지 않는다 */
+  nextPreflight: GateVerdict
+  /** 🔴 세 칸을 합친 것 */
   blocking: string[]
   unmeasured: string[]
 }
@@ -333,27 +351,39 @@ export type PromotionVerdict = {
  *    모르는 것을 "괜찮다" 로 읽으면 확대가 관측 없이 일어난다.
  */
 export function judgePromotion(input: PromotionInput): PromotionVerdict {
-  /**
-   * 🔴 **목표 단계의 필요량으로 잰다.** `d100Plan(현재)` 로 재면 d3 수치(재고 42 ·
-   *    READY 4/day)만 채우고 d5 로 올라간다 — d5 는 70 · 6/day 를 요구한다.
-   */
-  const req = d100Plan(input.target)
-
-  // ── ⓪ 지금 단계가 자기 목표를 내고 있는가 — 🔴 다음 칸의 전제다 ──
+  const cur = currentPlanOf(input.current)
+  const req = d100Plan(input.next)
   const curTarget = dailyTargetOf(input.current)
   const needDays = stableObservationDaysOf(input.current)
-  const currentStable: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
-  if (input.publishedPerDay === null) currentStable.unmeasured.push('공개 발행/day')
-  else if (input.publishedPerDay < curTarget) {
-    currentStable.blocking.push(`${input.current} 공개 발행 ${input.publishedPerDay}/day < 자기 목표 ${curTarget}/day`)
-  }
-  if (input.currentStableStreakDays === null) currentStable.unmeasured.push('연속 달성 일수')
-  else if (input.currentStableStreakDays < needDays) {
-    currentStable.blocking.push(`${input.current} 연속 달성 ${input.currentStableStreakDays}일 < 필요 ${needDays}일`)
-  }
-  currentStable.ready = currentStable.blocking.length === 0 && currentStable.unmeasured.length === 0
 
-  // ── ① preflight — 🔴 목표 발행량은 **묻지 않는다** ──
+  // ── ① 지금 단계 canary — 제한이 켜져 있고 실제로 돌 수 있는가 ──
+  const canary: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
+  if (!input.currentLimitsActive) {
+    canary.blocking.push(`${input.current} 제한이 ${RELEASE_ENV} 로 확정되지 않았다`)
+  }
+  if (!input.publishRunnerReady) canary.blocking.push('발행 runner 가 돌 수 없다')
+  canary.ready = canary.blocking.length === 0
+
+  // ── ② 지금 단계 stable — 자기 목표를 최소 관측일 동안 냈는가 ──
+  const stable: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
+  if (!canary.ready) stable.blocking.push(`${input.current} canary 를 통과하지 못했다`)
+  if (input.publishedPerDay === null) stable.unmeasured.push('공개 발행/day')
+  else if (input.publishedPerDay < curTarget) {
+    stable.blocking.push(`${input.current} 공개 발행 ${input.publishedPerDay}/day < 자기 목표 ${curTarget}/day`)
+  }
+  if (input.currentStableStreakDays === null) stable.unmeasured.push('연속 달성 일수')
+  else if (input.currentStableStreakDays < needDays) {
+    stable.blocking.push(`${input.current} 연속 달성 ${input.currentStableStreakDays}일 < 필요 ${needDays}일`)
+  }
+  stable.ready = stable.blocking.length === 0 && stable.unmeasured.length === 0
+
+  /**
+   * ── ③ 다음 단계 preflight — 🔴 **지금 단계 실적과 따로 잰다** ──
+   *
+   *    d1 을 돌리는 동안에도 d3 준비는 진행된다. 그래서 여기서 지금 단계가 stable 인지
+   *    묻지 않는다 — 그 조건은 아래 `ready`(실제 전환)에서 본다.
+   * 🔴 그리고 **다음 단계의 발행량은 묻지 않는다.** 올라가야 낼 수 있는 양이다.
+   */
   const pre: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
   if (input.readyStock === null) pre.unmeasured.push('재고')
   else if (input.readyStock < req.readyStock14Days) {
@@ -389,51 +419,33 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
   if (!input.publishRunnerReady) pre.blocking.push('발행 runner 가 돌 수 없다')
   if (!input.commentRunnerReady) pre.blocking.push('댓글 runner 가 돌 수 없다')
   // 🔴 스케줄러가 못 하는 단계로는 올리지 않는다. 재고가 아무리 많아도 나갈 길이 없다
-  const sc = schedulerSupportOf(input.target)
-  if (!sc.supported) pre.blocking.push(`목표 ${input.target} 를 스케줄러가 감당하지 못한다 — ${sc.detail}`)
-  // 🔴 지금 단계가 자리를 잡지 못했으면 다음 준비를 통과로 보지 않는다
-  if (!currentStable.ready) {
-    pre.blocking.push(`${input.current} 가 아직 stable 이 아니다`)
-    for (const u of currentStable.unmeasured) pre.unmeasured.push(`${input.current} ${u}`)
-  }
+  const sc = schedulerSupportOf(input.next)
+  if (!sc.supported) pre.blocking.push(`다음 단계 ${input.next} 를 스케줄러가 감당하지 못한다 — ${sc.detail}`)
   pre.ready = pre.blocking.length === 0 && pre.unmeasured.length === 0
 
-  // ── ② canary — 목표 단계 제한을 실제로 켰는가 ──
-  const canary: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
-  if (!pre.ready) canary.blocking.push('preflight 를 통과하지 못했다')
-  if (!input.targetLimitsActive) {
-    canary.blocking.push(`${input.target} 제한이 아직 켜지지 않았다 (${RELEASE_ENV})`)
-  }
-  canary.ready = canary.blocking.length === 0
-
-  // ── ③ stable — 목표 단계에서 실제로 그 양을 냈는가 ──
-  const stable: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
-  if (!canary.ready) stable.blocking.push('canary 를 통과하지 못했다')
-  if (input.publishedPerDay === null) stable.unmeasured.push('공개 발행/day')
-  else if (input.publishedPerDay < req.publicPostsPerDay) {
-    stable.blocking.push(`공개 발행 ${input.publishedPerDay}/day < 목표 ${req.publicPostsPerDay}/day`)
-  }
-  if (input.currentStableStreakDays === null) stable.unmeasured.push('연속 달성 일수')
-  else if (input.currentStableStreakDays < req.minimumObservationDays) {
-    stable.blocking.push(`연속 달성 ${input.currentStableStreakDays}일 < 최소 ${req.minimumObservationDays}일`)
-  }
-  stable.ready = stable.blocking.length === 0 && stable.unmeasured.length === 0
-
-  const phase: PromotionPhase = !pre.ready ? 'preflight' : !canary.ready ? 'canary' : 'stable'
-  const nextAction = !pre.ready
-    ? `preflight 를 채운다 — ${[...pre.blocking, ...pre.unmeasured.map((u) => `${u} 미측정`)][0] ?? ''}`
-    : !canary.ready
-      ? `🔴 사람이 ${RELEASE_ENV} 를 ${input.target} 로 올린다 (이 PR 에서는 하지 않는다)`
-      : stable.ready
-        ? `${input.target} 가 자리를 잡았다 — 다음 목표로 넘어갈 수 있다`
-        : `${input.target} 에서 ${req.publicPostsPerDay}/day 를 ${req.minimumObservationDays}일 낸다`
+  /**
+   * 🔴 **전환은 둘 다 되어야 한다.** 지금 단계가 자리를 잡았고(stable),
+   *    다음 단계 준비가 끝났을 때(preflight)만 제한을 올린다 —
+   *    d3→d5 는 d3 이 3/day 를 7일 낸 뒤에만 열린다.
+   */
+  const ready = stable.ready && pre.ready
+  const phase: PromotionPhase = !canary.ready ? 'canary'
+    : !stable.ready ? 'stable' : 'preflight'
+  const nextAction = !canary.ready
+    ? `${input.current} 가 제대로 돌게 한다 — ${canary.blocking[0] ?? ''}`
+    : !stable.ready
+      ? `${input.current} 에서 ${curTarget}/day 를 ${needDays}일 낸다`
+      + ` (${[...stable.blocking, ...stable.unmeasured.map((u) => `${u} 미측정`)][0] ?? ''})`
+      : !pre.ready
+        ? `${input.next} 사전 준비를 채운다 — ${[...pre.blocking, ...pre.unmeasured.map((u) => `${u} 미측정`)][0] ?? ''}`
+        : `🔴 사람이 ${RELEASE_ENV} 를 ${input.next} 로 올린다 (이 PR 에서는 하지 않는다)`
 
   return {
-    ready: stable.ready,
-    phase, nextAction,
-    target: input.target, requirement: req,
-    currentStable, preflight: pre, canary, stable,
-    blocking: [...pre.blocking, ...canary.blocking, ...stable.blocking],
-    unmeasured: [...new Set([...pre.unmeasured, ...stable.unmeasured])],
+    ready, phase, nextAction,
+    current: input.current, currentPlan: cur,
+    next: input.next, requirement: req,
+    currentCanary: canary, currentStable: stable, nextPreflight: pre,
+    blocking: [...canary.blocking, ...stable.blocking, ...pre.blocking],
+    unmeasured: [...new Set([...stable.unmeasured, ...pre.unmeasured])],
   }
 }
