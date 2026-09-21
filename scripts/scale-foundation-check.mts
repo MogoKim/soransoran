@@ -1233,10 +1233,16 @@ console.log('\n⑩ 소스 계약')
   check('🔴 health 가 설정 불일치를 화면에 적는다', /configMismatch/.test(health)
     && /설정 불일치/.test(read('scripts/supply-health.mts')))
   check('🔴 health 가 감속 사유를 화면에 적는다', /자동 감속/.test(read('scripts/supply-health.mts')))
-  // 🔴 프로필만 올리고 워크플로우를 그대로 두면 글이 안 나간다 — health 가 그것을 본다
-  check('🔴 health 가 워크플로우 어긋남을 본다',
-    /compareWorkflow\(/.test(health) && /workflowMismatch/.test(health)
+  /**
+   * 🔴 **워크플로는 모든 단계의 합집합이다** (2026-09-21 보정).
+   *    활성 단계 프로필과 견주면 d1 에서 10개 중 9개가 거짓 경보로 잡혔다(실측).
+   *    이제 `compareWorkflowSuperset` 으로 본다 — 빠진 단계 슬롯과 계획에 없는 cron 만 잡는다.
+   */
+  check('🔴 health 가 워크플로우 어긋남을 본다 — 합집합 기준으로',
+    /compareWorkflowSuperset\(/.test(health) && /workflowMismatch/.test(health)
     && /워크플로우 불일치/.test(read('scripts/supply-health.mts')))
+  check('🔴 🔴 **활성 단계 프로필로 견주던 옛 판이 돌아오지 않았다**',
+    !/compareWorkflow\(resolved\.releaseProfile/.test(health))
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

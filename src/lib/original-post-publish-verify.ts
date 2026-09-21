@@ -90,13 +90,47 @@ export function verifyPublishedRow(r: PublishedRowFacts): string[] {
   return problems
 }
 
-/** 여러 행을 한 번에 — 🔴 문제가 있는 행만 돌려준다 */
+/**
+ * 🔴 **사람이 내린 글이 남기는 결과** (2026-09-21).
+ *    Post 를 숨기면 status 와 색인·추천 플래그가 **따라서** 바뀐다.
+ *    그 셋은 숨김의 **파생 결과**이지 연결 오류가 아니다.
+ */
+const TAKEDOWN_DERIVED = ['Post status=', '색인 대상이 아니다', '추천 표면에 오르지 못한다']
+
+/** 🔴 이 행이 "사람이 내린 글" 인가 — Post 는 있고 상태만 숨김이다 */
+function isTakenDown(r: PublishedRowFacts): boolean {
+  return r.post !== null && (r.post.status === 'HIDDEN' || r.post.status === 'DELETED')
+}
+
+/**
+ * 여러 행을 한 번에 — 🔴 **연결이 깨진 행과 사람이 내린 행을 가른다** (2026-09-21 실측 보정).
+ *
+ *    앞판은 둘을 모두 `bad` 로 넣었고 health 가 `PUBLISH_MISMATCH` CRITICAL 로 올렸다.
+ *    실측 1건(`cmu0ov5b3…` → Post `cmu0sjyll…` HIDDEN)은 **운영 판단으로 내린 글**이었다 —
+ *    `permanentNoindex` 도 `indexPromotionBlocked` 도 false 였다(콘텐츠 결함 표식이 아니다).
+ *    그것을 데이터 손상처럼 부르면 **진짜 손상이 묻힌다.**
+ *
+ * 🔴 **경고를 숨기는 것이 아니다.** 내린 글은 `takenDown` 으로 계속 보고되고,
+ *    숨김 때문이 아닌 문제가 하나라도 남아 있으면 그 행은 여전히 `bad` 다.
+ */
 export function verifyPublishedRows(rows: readonly PublishedRowFacts[]): {
   ok: boolean
   bad: { queueId: string; problems: string[] }[]
+  takenDown: { queueId: string; problems: string[] }[]
 } {
-  const bad = rows
-    .map((r) => ({ queueId: r.queueId, problems: verifyPublishedRow(r) }))
-    .filter((x) => x.problems.length > 0)
-  return { ok: bad.length === 0, bad }
+  const bad: { queueId: string; problems: string[] }[] = []
+  const takenDown: { queueId: string; problems: string[] }[] = []
+  for (const r of rows) {
+    const problems = verifyPublishedRow(r)
+    if (problems.length === 0) continue
+    if (isTakenDown(r)) {
+      // 🔴 숨김의 파생 결과를 걷어 내고 **남는 것**을 본다
+      const rest = problems.filter((p) => !TAKEDOWN_DERIVED.some((d) => p.includes(d)))
+      if (rest.length === 0) { takenDown.push({ queueId: r.queueId, problems }); continue }
+      bad.push({ queueId: r.queueId, problems: rest })
+      continue
+    }
+    bad.push({ queueId: r.queueId, problems })
+  }
+  return { ok: bad.length === 0, bad, takenDown }
 }
