@@ -149,6 +149,15 @@ export type RunInput = {
   maskedBody: string
   /** 🔴 순서는 여기서 정하지 않는다 — 러너가 원문 지문으로 세운다 */
   personas: readonly PersonaInput[]
+  /**
+   * 🔴 **좁히기 전의 전체 화자 후보 수** (2026-09-22).
+   *
+   *    화자 여력 계획이 원천마다 후보를 나누므로, "쓸 사람이 없다" 는 실패가
+   *    **두 가지**가 됐다 — 전체에서도 없는 것(결론)과 이번 묶음에만 없는 것
+   *    (다음 회차에 달라진다). 이 값이 없으면 둘을 가를 수 없다.
+   *    🔴 좁히지 않았으면 `personas.length` 와 같다.
+   */
+  personaPoolSize: number
   voiceSourceDigest: string
   /** 🔴 이 회차의 생성 계약 — artifact 에 그대로 실린다 */
   contract: GenerationContract
@@ -324,10 +333,23 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     return blank(plan, dropped, null, null, noDet, null, notRun('parseFailed'),
       'hold', `화자 계획을 읽지 못했다 (${why})`)
   }
+  /**
+   * 🔴 **좁힌 묶음 탓인지 전체에서도 없는지 가른다** (2026-09-22).
+   *
+   *    `speakerUnqualified` 는 **결론**이라 그 원천이 영구 제외된다.
+   *    후보를 나눈 뒤에는 "이번 묶음에 맞는 사람이 없었다" 가 그 값으로 적히는데,
+   *    그것은 결론이 아니다 — 다음 회차에 다른 묶음을 받으면 쓸 수 있다.
+   *    🔴 좁혀져 있었으면 `speakerSlotNarrowed`(다시 본다)로 적는다.
+   */
+  const narrowed = input.personas.length < input.personaPoolSize
+  const noSpeakerCause = narrowed ? 'speakerSlotNarrowed' as const : 'speakerUnqualified' as const
+  const narrowNote = narrowed
+    ? ` (이번 묶음 ${input.personas.length}/${input.personaPoolSize}명 — 좁혀져 있었다)`
+    : ''
   const gen = canGenerate(packet, plan)
   if (!gen.ok) {
-    return blank(plan, dropped, null, null, noDet, null, notRun('speakerUnqualified'),
-      'hold', gen.why)
+    return blank(plan, dropped, null, null, noDet, null, notRun(noSpeakerCause),
+      'hold', `${gen.why}${narrowNote}`)
   }
   /**
    * 🔴 **제안하지 않은 화자는 받지 않는다** (2026-09-22).
@@ -339,9 +361,9 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const persona = input.personas.find((p) => p.code === plan.personaCode)
   if (persona === undefined) {
-    return blank(plan, dropped, null, null, noDet, null, notRun('speakerUnqualified'),
+    return blank(plan, dropped, null, null, noDet, null, notRun(noSpeakerCause),
       'hold', `제안하지 않은 화자다 — ${plan.personaCode ?? '(없음)'}`
-        + ` (제안 ${input.personas.map((p) => p.code).join(',') || '없음'})`)
+        + ` (제안 ${input.personas.map((p) => p.code).join(',') || '없음'})${narrowNote}`)
   }
 
   // ── ② 말투 근거 ──

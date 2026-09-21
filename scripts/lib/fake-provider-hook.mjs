@@ -133,9 +133,17 @@ const JUDGE_PAYLOAD = {
  */
 const pickOffered = (body) => {
   try {
-    const parsed = JSON.parse(String(body ?? '{}'))
-    const raw = JSON.stringify(parsed)
-    const codes = [...raw.matchAll(/\b(P\d{2})\b/g)].map((m) => m[1])
+    const req = JSON.parse(String(body ?? '{}'))
+    /**
+     * 🔴 **`후보` 목록만 본다.** 원문 span 까지 훑으면 본문에 우연히 섞인
+     *    `Pxx` 를 화자로 고른다 — 제안에 없는 이름이 되어 실제와 어긋난다.
+     */
+    const payload = JSON.parse(
+      String(req?.contents?.[0]?.parts?.[0]?.text ?? req?.messages?.[0]?.content ?? '{}'))
+    const lines = Array.isArray(payload?.후보) ? payload.후보 : []
+    const codes = lines
+      .map((l) => (typeof l === 'string' ? /^\[(P\d{2})\]/.exec(l)?.[1] ?? null : null))
+      .filter((c) => c !== null)
     if (codes.length === 0) return PERSONA
     return codes.includes(PERSONA) ? PERSONA : codes[0]
   } catch { return PERSONA }

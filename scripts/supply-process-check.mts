@@ -26,6 +26,7 @@ import {
   type ExecResult, type ProcessStage, type StagePlan, type SupplySourceId, type StageGate,
 } from '../src/lib/supply-process'
 import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
+import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
 import { STOCK_BANDS } from '../src/lib/supply-stock-plan'
 /** 🔴 잠금 정본 — 러너와 **같은 함수**를 시험한다. 사본을 만들지 않는다 */
 import { acquireLock, lockAnomaly, releaseLock } from './lib/collect-lock.mjs'
@@ -1225,6 +1226,23 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
    *    그래서 **아무것도 막지 않은 상태**를 먼저 돌려 호출이 실제로 나가는지 본다.
    *    나가지 않으면 이 환경은 이 검사를 할 수 없다 — **조용히 넘어가지 않고 그 사실을 적는다.**
    */
+  /**
+   * 🔴 **화자 여력 파일을 먼저 적는다** (2026-09-22).
+   *
+   *    운영에서는 공급 러너가 DB 를 읽어 이 파일을 적고 생성 러너가 읽는다.
+   *    🔴 없으면 **유료 생성이 멈춘다** — 전체 후보로 되돌아가면 같은 화자에
+   *    몰아주기가 그대로 재현되기 때문이다. 이 블록은 provider 가 실제로 불리는
+   *    상태를 만들어야 뜻이 있으므로, 그 배선을 여기서도 이어 준다.
+   */
+  {
+    const byCode: Record<string, { openDays: number; readyCount: number }> = {}
+    for (let i = 1; i <= 24; i += 1) {
+      byCode[`P${String(i).padStart(2, '0')}`] = { openDays: 7, readyCount: 0 }
+    }
+    writeFileSync(join(dd, SPEAKER_LOAD_FILE), JSON.stringify({
+      writtenAt: new Date().toISOString(), horizonDays: 7, byCode,
+    }, null, 2), 'utf-8')
+  }
   writeSnap([])
   const control = runWithFake(['--call', '--apply', `--queue-snapshot=${snapPath}`, '--run-id=R1', '--require-queue-snapshot'])
   /**

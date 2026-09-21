@@ -27,6 +27,10 @@ import {
   worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
 } from '../src/lib/supply-workset'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
+import {
+  RETRYABLE_CAUSES, INCOMPLETE_CAUSE_LABEL,
+} from '../src/lib/content-core/review'
 import type { PriorOutcome } from '../src/lib/supply-workset'
 import type { ContractBase } from '../src/lib/content-core/pipeline'
 import { ledgerRunIdOf } from '../src/lib/supply-process'
@@ -51,7 +55,9 @@ const RUN = '20260920-999999'
 const PROVEN_LANE = PROVEN_LANES[0] ?? ''
 
 /** 🔴 한 회차용 세상 하나 — 운영 데이터와 완전히 분리된다 */
-function makeWorld(o: { copyDocs?: boolean } = {}): { root: string; dd: string; home: string } {
+function makeWorld(
+  o: { copyDocs?: boolean; speakerLoad?: 'fresh' | 'stale' | 'malformed' | 'none' } = {},
+): { root: string; dd: string; home: string } {
   /**
    * 🔴 **실경로로 푼다.** macOS 의 `/var` 는 `/private/var` 심볼릭 링크라
    *    자식의 `process.cwd()` 와 인자 경로가 달라진다 — 러너가 "데이터 폴더 밖" 으로 본다.
@@ -69,7 +75,36 @@ function makeWorld(o: { copyDocs?: boolean } = {}): { root: string; dd: string; 
    */
   if (o.copyDocs === true) cpSync(join(ROOT, 'docs'), join(root, 'docs'), { recursive: true })
   else symlinkSync(join(ROOT, 'docs'), join(root, 'docs'))
+  /**
+   * 🔴 **공급 러너가 적는 화자 여력 파일** (2026-09-22).
+   *
+   *    운영에서는 `supply-process` 가 DB 를 읽어 이 파일을 적고, 생성 러너가 읽는다.
+   *    🔴 파일이 없으면 **유료 생성이 멈춘다** — 전체 후보로 되돌아가면
+   *    같은 화자에 몰아주기가 그대로 재현되기 때문이다.
+   *    여기서는 그 배선을 이어 붙인다. `o.speakerLoad: 'none'` 이면 일부러 빼서
+   *    **막히는 것**을 값으로 확인한다.
+   */
+  if (o.speakerLoad !== 'none') {
+    writeSpeakerLoadFile(dd, o.speakerLoad ?? 'fresh')
+  }
   return { root, dd, home }
+}
+
+/** 🔴 fixture 가 쓰는 여력 파일 — 운영 파일과 **같은 계약**이다 */
+function writeSpeakerLoadFile(dd: string, kind: 'fresh' | 'stale' | 'malformed'): void {
+  if (kind === 'malformed') {
+    writeFileSync(join(dd, SPEAKER_LOAD_FILE), JSON.stringify({ writtenAt: 1, byCode: {} }))
+    return
+  }
+  const writtenAt = kind === 'stale'
+    ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    : new Date().toISOString()
+  const byCode: Record<string, { openDays: number; readyCount: number }> = {}
+  // 🔴 가짜 말투 자산이 세우는 코드에 넉넉한 여력을 준다
+  for (let i = 1; i <= 24; i += 1) {
+    byCode[`P${String(i).padStart(2, '0')}`] = { openDays: 7, readyCount: 0 }
+  }
+  writeFileSync(join(dd, SPEAKER_LOAD_FILE), JSON.stringify({ writtenAt, horizonDays: 7, byCode }, null, 2))
 }
 
 /** adapt 가 낸 모양 그대로 — 🔴 `detail` 과 `raw-detail` **쌍**으로 낸다 */
@@ -773,6 +808,115 @@ console.log('\n⑩ 🔴 🔴 문서 오탈자 한 줄로 전량 다시 만들지
   writeFileSync(doc, readFileSync(doc, 'utf-8').replaceAll('P01', 'P99'), 'utf-8')
   check('🔴 🔴 **후보 풀이 실제로 바뀌면 계약도 바뀐다**',
     contractBaseOf(w6).personaPoolDigest !== before.personaPoolDigest)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑳ 🔴 🔴 화자 여력 파일 — 공급 러너 → 파일 → 생성 러너 → artifact')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **연결해서 본다.** 순수 함수 검사만으로는 "유료 생성이 조용히 전체 후보로
+   *    되돌아가지 않는다" 를 말할 수 없다 — 실제 러너가 그 파일을 읽고 멈추는지를
+   *    봐야 한다. 아래는 같은 세계에서 **파일만 바꿔** FAIL → PASS 를 보인다.
+   */
+  const seeds = Array.from({ length: 5 }, (_, i) => ({
+    id: `sl-${i}`, comments: 12, posted: '2026-09-18T00:00:00.000Z',
+  }))
+  const draftRun = (kind: 'none' | 'stale' | 'malformed' | 'fresh') => {
+    const w = makeWorld({ speakerLoad: kind })
+    const rel = (p: string): string => p.slice(w.root.length + 1)
+    writeAdaptPair(w.dd, seeds)
+    const tag = `20260922-${kind}`
+    // 🔴 묶음은 **정본이 만든다** — 손으로 적으면 계약이 어긋나 판정이 0건이 된다
+    const plan2 = selectWorkset({
+      rows: rowsOf(w.dd), humanDecided: new Set(), queuePending: new Set(),
+      concluded: new Set(), attempted: new Map(),
+      limit: 5, runId: tag, takenAt: new Date(),
+    })
+    const wsPath = join(w.dd, worksetFileName(tag))
+    writeFileSync(wsPath, `${JSON.stringify(plan2.workset, null, 2)}\n`, 'utf-8')
+    const jr = runStage({
+      script: 'scripts/micro-seed-auto-judge.mts', world: w, cap: '5', judgeDecision: 'AUTO_SEED',
+      args: ['--call', '--apply', `--run-id=${tag}`,
+        `--ledger-run-id=${ledgerRunIdOf(tag, 'judge')}`,
+        `--workset=${rel(wsPath)}`, `--shadow-out=${rel(join(w.dd, `auto-judge-${tag}.shadow.jsonl`))}`],
+    })
+    const dr = runStage({
+      script: 'scripts/micro-seed-auto-draft.mts', world: w, cap: '15',
+      args: ['--call', '--apply', `--run-id=${tag}`,
+        `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`, `--workset=${rel(wsPath)}`],
+    })
+    return { w, jr, dr }
+  }
+
+  // ── 🔴 파일이 없으면 유료 생성이 멈춘다 ──
+  for (const kind of ['none', 'stale', 'malformed'] as const) {
+    const { w, dr } = draftRun(kind)
+    const arts = readdirSync(w.dd).filter((x) => /\.artifacts\.json$/.test(x))
+    check(`🔴 🔴 **여력 파일 ${kind} — 유료 생성이 멈춘다 (exit≠0)**`,
+      dr.code !== 0 && /화자 여력을 쓸 수 없다/.test(dr.out),
+      `code=${dr.code} ${dr.out.slice(-260)}`)
+    check(`🔴 ${kind} — artifact 도 후보 파일도 만들지 않았다`,
+      arts.length === 0
+      && readdirSync(w.dd).filter((x) => /\.candidates\.json$/.test(x)).length === 0,
+      arts.join(','))
+  }
+
+  // ── 🔴 같은 세계에 파일이 있으면 통과한다 ──
+  {
+    const { w, dr } = draftRun('fresh')
+    const arts = readdirSync(w.dd).filter((x) => /\.artifacts\.json$/.test(x))
+    check('🔴 🔴 **여력 파일이 있으면 생성이 돈다 — 같은 배선에서 FAIL → PASS**',
+      dr.code === 0 && arts.length === 1, `code=${dr.code} arts=${arts.length}`)
+    check('🔴 러너가 여력을 읽었다고 적는다',
+      /화자 여력 \d+명/.test(dr.out), dr.out.slice(-220))
+
+    /** 🔴 **artifact 의 화자가 서로 다르다** — 한 회차가 한 사람에게 몰아주지 않는다 */
+    const parsed = JSON.parse(readFileSync(join(w.dd, arts[0]!), 'utf-8')) as
+      Record<string, { plan?: { personaCode?: string } }>
+    const codes = Object.values(parsed).map((a) => a.plan?.personaCode ?? '')
+      .filter((c) => c !== '')
+    check('🔴 🔴 **한 회차의 artifact 화자가 서로 겹치지 않는다**',
+      codes.length >= 2 && new Set(codes).size === codes.length, codes.join(','))
+
+    /** 🔴 **다음 묶음**이 그 결과를 읽는다 — 채택된 것은 결론이 아니다 */
+    /**
+     * 🔴 **다음 단계로 이어진다.** 채택된 것은 후보 파일로 나가고,
+     *    멈춘 것은 artifact 에 **사유 값**으로 남아 다음 묶음이 읽는다.
+     */
+    const candFiles = readdirSync(w.dd).filter((x) => /\.candidates\.json$/.test(x))
+    check('🔴 채택된 것이 후보 파일로 나간다', candFiles.length === 1, candFiles.join(','))
+    const causes = Object.values(parsed)
+      .map((a) => (a as { review?: { semanticCompletion?: { cause?: string | null } } })
+        .review?.semanticCompletion?.cause ?? null)
+    check('🔴 🔴 **멈춘 것이 있다면 사유가 값으로 남는다 — `speakerUnqualified` 로 뭉개지 않는다**',
+      causes.every((c) => c === null || c !== 'speakerUnqualified'
+        || codes.length === 0),
+      causes.map((c) => String(c)).join(','))
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉑ 🔴 🔴 좁힌 묶음 탓 HOLD 는 다음 회차에 다시 본다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **결론과 재시도를 가른다.** 좁힌 묶음에 맞는 사람이 없어 멈춘 것은
+   *    `speakerSlotNarrowed` 이고 **다시 본다**. 전체 후보에서도 자격이 없는 것은
+   *    `speakerUnqualified` 이고 **결론**이다. 섞으면 정상 원천이 영구 제외된다.
+   */
+  check('🔴 🔴 **`speakerSlotNarrowed` 는 다시 시도한다**',
+    (RETRYABLE_CAUSES as readonly string[]).includes('speakerSlotNarrowed'))
+  check('🔴 🔴 **`speakerUnqualified` 는 그대로 결론이다**',
+    !(RETRYABLE_CAUSES as readonly string[]).includes('speakerUnqualified'))
+  check('🔴 두 값은 서로 다른 이름이다',
+    INCOMPLETE_CAUSE_LABEL.speakerSlotNarrowed !== INCOMPLETE_CAUSE_LABEL.speakerUnqualified)
+
+  /** 🔴 생성 러너가 좁혀졌을 때만 그 값을 쓴다 */
+  const runSrc = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+  check('🔴 🔴 **좁혀졌을 때만 재시도 값으로 적는다**',
+    /input\.personas\.length < input\.personaPoolSize/.test(runSrc)
+    && /narrowed \? 'speakerSlotNarrowed' as const : 'speakerUnqualified' as const/.test(runSrc))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

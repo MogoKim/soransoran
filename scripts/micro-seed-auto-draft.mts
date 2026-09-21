@@ -834,10 +834,29 @@ async function main(): Promise<void> {
   console.log(`\n   ${speakerLoad.describe}`)
 
   /**
-   * 🔴 **여력을 모르면 좁히지 않는다.** 파일이 없을 때 회차 안 중복만 막자고
-   *    "한 화자 = 한 편" 으로 두면, 화자가 원천보다 적은 환경에서 나머지가 통째로
-   *    보류된다 — 공급이 멎는 쪽이 고치려던 문제보다 크다.
-   *    🔴 그때는 **전원을 후보로 주고 그 사실을 적는다.** 조용히 넘어가지 않는다.
+   * 🔴 **유료 회차는 여력 없이 돌지 않는다** (2026-09-22 보정).
+   *
+   *    앞판은 파일이 없으면 조용히 **전체 후보**로 돌아갔다. 그 상태로 돈을 쓰면
+   *    고치려던 문제(같은 화자에 몰아주기)가 그대로 재현되고, 로그 한 줄 말고는
+   *    그 사실이 남지 않는다. 🔴 **부르기 전에 멈춘다.**
+   *
+   *    무료 회차(계획만 보는 dry-run)는 그대로 돈다 — 돈이 나가지 않으므로
+   *    "무엇이 될지 본다" 를 막을 이유가 없다. 다만 좁히지 않았음을 적는다.
+   */
+  if (CALL && !speakerLoad.loaded) {
+    console.error(`\n🔴 중단: ${speakerLoad.describe}`)
+    console.error(`   사유 코드 ${speakerLoad.problem ?? 'unknown'}`)
+    console.error('   🔴 유료 생성은 화자 여력 없이 돌지 않는다 —'
+      + ' 전체 후보로 되돌아가면 같은 화자에 몰아주기가 그대로 재현된다')
+    console.error('   🔴 provider 호출 0 · 파일 write 0 — 부르기도 쓰기도 전에 멈췄다')
+    console.error(`   공급 러너가 ${DATA_DIR}/${SPEAKER_LOAD_FILE} 를 먼저 적어야 한다\n`)
+    process.exit(1)
+  }
+  /**
+   * 🔴 **여력을 모르면 좁히지 않는다** (무료 회차만 여기 온다).
+   *    "한 화자 = 한 편" 으로 두면 화자가 원천보다 적은 환경에서 나머지가 통째로
+   *    보류돼, 계획만 보는 회차가 거짓을 보여 준다.
+   *    🔴 전원을 후보로 주고 **그 사실을 적는다.** 조용히 넘어가지 않는다.
    */
   const speakerPlanOfRun = speakerLoad.loaded
     ? planSpeakerAvailability({
@@ -936,6 +955,8 @@ async function main(): Promise<void> {
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
         // 🔴 **좁힌 묶음만 보낸다** — 회차 안에서 서로 겹치지 않는다
         personas: voice.candidates.filter((c) => slotCodes.includes(c.code)),
+        // 🔴 좁히기 전의 수 — "이번 묶음에만 없다" 와 "전체에도 없다" 를 가른다
+        personaPoolSize: voice.candidates.length,
         /**
          * 🔴 **이 회차의 생성 계약.** 다음 회차가 "지난 HOLD 가 지금도 결론인가" 를
          *    이 값으로 판단한다 — 스키마 판 하나로는 알 수 없다.

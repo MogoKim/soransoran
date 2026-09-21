@@ -15,7 +15,10 @@
 import {
   planSpeakerAvailability, remainingCapacity,
 } from '../src/lib/content-core/speaker-availability'
-import { readSpeakerLoad } from '../src/lib/content-core/speaker-load-file'
+import {
+  readSpeakerLoad, draftSpeakerOf,
+} from '../src/lib/content-core/speaker-load-file'
+import { readFileSync } from 'node:fs'
 import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 import { PROFILES } from '../src/lib/scale-profile'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
@@ -196,27 +199,96 @@ console.log('\n④ 🔴 🔴 계획이 회차 안에서 화자를 겹치지 않�
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n⑤ 🔴 여력 파일 — 없으면 회차 안 중복만 막는다(fail-safe)')
+console.log('\n⑤ 🔴 여력 파일 — 무료 회차만 좁히지 않고 지나간다')
 // ─────────────────────────────────────────────────────────
 {
-  const missing = readSpeakerLoad(null)
-  check('🔴 🔴 **파일이 없어도 생성을 멈추지 않는다 — 다만 그 사실을 적는다**',
-    missing.loaded === false && missing.openDaysOf('P01') === 1
-    && missing.readyCountOf('P01') === 0
-    && missing.describe.includes('회차 안 중복만'))
+  const NOW = new Date('2026-09-22T03:00:00.000Z')
+  const missing = readSpeakerLoad(null, NOW)
+  check('🔴 🔴 **못 읽으면 그 사실과 사유를 값으로 남긴다**',
+    missing.loaded === false && missing.problem === 'missing'
+    && missing.describe.includes('화자 여력을 쓸 수 없다'))
 
   const good = readSpeakerLoad({
-    writtenAt: '2026-09-22T00:00:00.000Z', horizonDays: 7,
+    writtenAt: '2026-09-22T02:30:00.000Z', horizonDays: 7,
     byCode: { P01: { openDays: 3, readyCount: 2 }, P02: { openDays: 3, readyCount: 0 } },
-  })
+  }, NOW)
   check('🔴 읽으면 그 값을 그대로 쓴다',
     good.loaded && good.openDaysOf('P01') === 3 && good.readyCountOf('P01') === 2)
   check('🔴 🔴 **모르는 화자는 여력 0 이다 — 1 로 보정하지 않는다**',
     good.openDaysOf('P99') === 0)
   check('🔴 모양이 어긋난 파일은 읽은 것으로 치지 않는다',
-    readSpeakerLoad({ writtenAt: 1, horizonDays: 7, byCode: {} }).loaded === false
-    && readSpeakerLoad({ writtenAt: 'x', horizonDays: 0, byCode: {} }).loaded === false
-    && readSpeakerLoad({ writtenAt: 'x', horizonDays: 7, byCode: { P01: { openDays: -1, readyCount: 0 } } }).loaded === false)
+    readSpeakerLoad({ writtenAt: 1, horizonDays: 7, byCode: {} }, NOW).loaded === false
+    && readSpeakerLoad({ writtenAt: 'x', horizonDays: 0, byCode: {} }, NOW).loaded === false
+    && readSpeakerLoad({ writtenAt: 'x', horizonDays: 7, byCode: { P01: { openDays: -1, readyCount: 0 } } }, NOW).loaded === false)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑥ 🔴 🔴 미배정 READY 의 화자를 재고로 센다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실측 재현.** 2026-09-21 회차의 P01 글 2건은 `matchedPersonaId = null` 이었다.
+   *    배정된 행만 세던 앞판은 그 둘을 **한 건도 세지 않았고**, 그래서 P01 이
+   *    여력이 가득한 것처럼 보였다. 화자는 `autoDraft.voice.personaCode` 에 있다.
+   */
+  const row = (speaker: string | null) => ({
+    autoDraft: speaker === null ? undefined : { voice: { personaCode: speaker, comments: 3 } },
+  })
+  check('🔴 🔴 **배정 전 READY 의 화자를 gateResults 에서 읽는다**',
+    draftSpeakerOf(row('P01')) === 'P01' && draftSpeakerOf(row(null)) === null)
+  check('🔴 모양이 아니면 null 이다 — 아무에게나 얹지 않는다',
+    draftSpeakerOf(null) === null && draftSpeakerOf({ autoDraft: { voice: {} } }) === null
+    && draftSpeakerOf({ autoDraft: { voice: { personaCode: '  ' } } }) === null)
+
+  /** 🔴 그 둘을 세면 P01 의 여력이 실제로 줄어든다 */
+  const withoutCount = planSpeakerAvailability({
+    sourceKeys: ['s1'],
+    capacities: [{ code: 'P01', openDays: 2, readyCount: 0 },
+      { code: 'P02', openDays: 2, readyCount: 0 }],
+  })
+  const withCount = planSpeakerAvailability({
+    sourceKeys: ['s1'],
+    // 🔴 P01 이 이미 2건을 들고 있다 — 실측 그대로
+    capacities: [{ code: 'P01', openDays: 2, readyCount: 2 },
+      { code: 'P02', openDays: 2, readyCount: 0 }],
+  })
+  check('🔴 🔴 **P01 글 2건을 세면 P01 이 후보에서 빠진다**',
+    withoutCount.eligible.includes('P01') && !withCount.eligible.includes('P01')
+    && withCount.eligible.join(',') === 'P02',
+    `${withoutCount.eligible.join(',')} → ${withCount.eligible.join(',')}`)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑦ 🔴 🔴 여력 파일 — 오래되거나 깨지면 쓰지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  const NOW = new Date('2026-09-22T03:00:00.000Z')
+  const ok = readSpeakerLoad({
+    writtenAt: '2026-09-22T02:00:00.000Z', horizonDays: 7,
+    byCode: { P01: { openDays: 3, readyCount: 1 } },
+  }, NOW)
+  check('🔴 한 시간 전 기록은 쓴다', ok.loaded && ok.problem === null)
+
+  const stale = readSpeakerLoad({
+    writtenAt: '2026-09-21T02:00:00.000Z', horizonDays: 7,
+    byCode: { P01: { openDays: 3, readyCount: 1 } },
+  }, NOW)
+  check('🔴 🔴 **하루 전 기록은 쓰지 않는다 — 재고가 그 사이 바뀐다**',
+    stale.loaded === false && stale.problem === 'stale', String(stale.problem))
+
+  const future = readSpeakerLoad({
+    writtenAt: '2026-09-23T02:00:00.000Z', horizonDays: 7, byCode: {},
+  }, NOW)
+  check('🔴 미래 시각도 쓰지 않는다', future.loaded === false && future.problem === 'stale')
+
+  check('🔴 없으면 missing · 깨졌으면 malformed 로 갈린다',
+    readSpeakerLoad(null, NOW).problem === 'missing'
+    && readSpeakerLoad({ writtenAt: 1 }, NOW).problem === 'malformed')
+
+  /** 🔴 유료 생성은 이 값을 보고 멈춘다 — 러너가 그렇게 배선돼 있다 */
+  const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 🔴 **유료 회차는 여력 없이 돌지 않는다**',
+    /if \(CALL && !speakerLoad\.loaded\)/.test(src) && /process\.exit\(1\)/.test(src))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

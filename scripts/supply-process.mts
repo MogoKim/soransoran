@@ -62,9 +62,12 @@ import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 /** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
-import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
+import { SPEAKER_LOAD_FILE, draftSpeakerOf } from '../src/lib/content-core/speaker-load-file'
+import { canaryAuthorization, kstDateString } from '../src/lib/release-canary'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
-import { horizonStart } from '../src/lib/scale-profile'
+import {
+  horizonStart, PROFILES, RELEASE_STAGES, type ScaleProfile,
+} from '../src/lib/scale-profile'
 import { activeScale } from '../src/lib/scale-runtime'
 
 /**
@@ -216,33 +219,58 @@ async function writeSpeakerLoad(prisma: PrismaClient): Promise<void> {
     where: { matchedAt: { not: null } },
     select: { matchedAt: true, matchedPersona: { select: { code: true } } },
   })
-  /** 🔴 아직 발행되지 않은 채 배정만 된 행 = 재고에 든 그 화자의 글 */
+  /**
+   * 🔴 **재고에 든 그 화자의 글** — 배정된 것과 **아직 배정되지 않은 것**을 함께 센다.
+   *
+   *    앞판은 `matchedPersona` 만 봤다. 그런데 갓 만들어진 READY 는 **배정 전**이고,
+   *    그 글의 화자는 `gateResults.autoDraft.voice.personaCode` 에 있다 —
+   *    실측(2026-09-21): P01 글 2건이 둘 다 `matchedPersonaId=null` 이라
+   *    재고에서 **한 건도 세어지지 않았다.** 그래서 P01 은 여력이 가득한 것처럼 보였다.
+   */
   const pending = await prisma.originalPostApprovalQueue.findMany({
     where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
-    select: { matchedPersona: { select: { code: true } } },
+    select: { matchedPersona: { select: { code: true } }, gateResults: true },
   })
+  const pendingSpeakerOf = (r: { matchedPersona: { code: string } | null; gateResults: unknown }): string | null =>
+    r.matchedPersona?.code ?? draftSpeakerOf(r.gateResults)
   const history = personas.map((p) => ({
     code: p.code,
     matchedAts: logs.filter((l) => l.matchedPersona?.code === p.code && l.matchedAt !== null)
       .map((l) => l.matchedAt as Date),
   }))
-  const scale = activeScale()
-  const prof = scale.releaseProfile
-  const caps = { postsPerWeek: prof.postsPerWeek, minDaysBetween: prof.minDaysBetween }
+  /**
+   * 🔴 **날짜마다 그날의 상한을 쓴다** (2026-09-22).
+   *
+   *    하루짜리 첫 시험(canary)은 **그 KST 날짜 하루만** 산다. 그날은 d3(주 3건 ·
+   *    최소 2일)이고 다음 날은 다시 d1(주 1건 · 최소 5일)이다 —
+   *    한 프로필로 지평 전체를 재면 그 다음 날들의 여력이 **과하게 잡힌다.**
+   */
+  const now = new Date()
+  const sustained = activeScale().releaseProfile
+  const canaryAuth = canaryAuthorization(process.env, now, RELEASE_STAGES)
+  const profileForDay = (at: Date): ScaleProfile =>
+    (canaryAuth.stage !== null && canaryAuth.date === kstDateString(at))
+      ? PROFILES[canaryAuth.stage]
+      : sustained
   const horizonDays = SPEAKER_LOAD_HORIZON_DAYS
-  const start = horizonStart(new Date())
+  const start = horizonStart(now)
   const openDays = new Map<string, number>()
   for (let i = 0; i < horizonDays; i += 1) {
     const at = new Date(start.getTime() + i * 86_400_000)
-    for (const code of availablePersonasAt(history, at, caps)) {
-      openDays.set(code, (openDays.get(code) ?? 0) + 1)
-    }
+    const p = profileForDay(at)
+    const caps = { postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween }
+    /**
+     * 🔴 **그날 낼 수 있는 편수를 넘겨 세지 않는다.** 배정 가능한 사람이 20명이어도
+     *    그날 상한이 3편이면 그 지평에서 열리는 자리는 3개다.
+     */
+    const codes = availablePersonasAt(history, at, caps).slice(0, p.dailyTarget)
+    for (const code of codes) openDays.set(code, (openDays.get(code) ?? 0) + 1)
   }
   const byCode: Record<string, { openDays: number; readyCount: number }> = {}
   for (const p of personas) {
     byCode[p.code] = {
       openDays: openDays.get(p.code) ?? 0,
-      readyCount: pending.filter((r) => r.matchedPersona?.code === p.code).length,
+      readyCount: pending.filter((r) => pendingSpeakerOf(r) === p.code).length,
     }
   }
   mkdirSync(DATA_DIR, { recursive: true })

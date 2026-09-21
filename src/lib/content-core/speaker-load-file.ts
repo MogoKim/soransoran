@@ -49,7 +49,16 @@ export type SpeakerLoadReader = {
   /** 사람이 읽는 한 줄 — 🔴 파일이 없으면 그 사실이 여기 적힌다 */
   describe: string
   loaded: boolean
+  /** 🔴 왜 못 읽었는가 — `loaded` 가 true 면 null */
+  problem: 'missing' | 'malformed' | 'stale' | null
 }
+
+/**
+ * 🔴 **여력 파일이 얼마나 오래되면 못 쓰는가.**
+ *    재고와 배정은 회차마다 바뀐다 — 어제 값으로 오늘 화자를 나누면
+ *    이미 재고를 채운 사람에게 또 몰아준다.
+ */
+export const SPEAKER_LOAD_MAX_AGE_MS = 6 * 60 * 60 * 1000
 
 /**
  * 🔴 파일을 못 읽으면 **회차 안 중복만** 막는 값으로 돌아간다.
@@ -57,22 +66,51 @@ export type SpeakerLoadReader = {
  *    `readyCount: 0` 은 "재고를 모른다" 가 아니라 **빼지 않는다**는 뜻이다 —
  *    🔴 모르는 것을 0 으로 **단정하지 않기 위해** describe 에 적는다.
  */
-export function readSpeakerLoad(raw: unknown): SpeakerLoadReader {
+export function readSpeakerLoad(raw: unknown, now: Date = new Date()): SpeakerLoadReader {
   const f = parseLoad(raw)
-  if (f === null) {
-    return {
-      openDaysOf: () => 1,
-      readyCountOf: () => 0,
-      loaded: false,
-      describe: '🔴 화자 여력 파일을 읽지 못했다 — 이 회차 안 중복만 막는다'
-        + ' (날짜별 여력·기존 재고는 반영되지 않았다)',
-    }
+  const blocked = (problem: 'missing' | 'malformed' | 'stale', why: string): SpeakerLoadReader => ({
+    openDaysOf: () => 1,
+    readyCountOf: () => 0,
+    loaded: false,
+    problem,
+    describe: `🔴 화자 여력을 쓸 수 없다 — ${why}`,
+  })
+  if (raw === null || raw === undefined) return blocked('missing', '파일이 없다')
+  if (f === null) return blocked('malformed', '모양이 어긋난다')
+  /**
+   * 🔴 **오래된 파일은 없는 것과 같다.** 재고와 배정은 회차마다 바뀐다 —
+   *    어제 값으로 오늘 화자를 나누면 이미 재고를 채운 사람에게 또 몰아준다.
+   */
+  const ageMs = now.getTime() - new Date(f.writtenAt).getTime()
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > SPEAKER_LOAD_MAX_AGE_MS) {
+    return blocked('stale', `기록이 오래됐다 (${f.writtenAt})`)
   }
   return {
+    problem: null,
     openDaysOf: (code) => f.byCode[code]?.openDays ?? 0,
     readyCountOf: (code) => f.byCode[code]?.readyCount ?? 0,
     loaded: true,
     describe: `🟢 화자 여력 ${Object.keys(f.byCode).length}명 · 지평 ${f.horizonDays}일`
       + ` · 기록 ${f.writtenAt}`,
   }
+}
+
+/**
+ * 🔴 **아직 배정되지 않은 READY 의 화자.** (2026-09-22)
+ *
+ *    갓 만들어진 후보는 `matchedPersona` 가 비어 있고, 누가 썼는지는
+ *    `gateResults.autoDraft.voice.personaCode` 에만 있다.
+ *    실측(2026-09-21): P01 글 2건이 둘 다 배정 전이라 재고에서 **한 건도
+ *    세어지지 않았고**, 그래서 P01 이 여력이 가득한 것처럼 보였다.
+ *
+ * 🔴 모양이 아니면 `null` 이다 — 모르는 것을 아무에게나 얹지 않는다.
+ */
+export function draftSpeakerOf(gateResults: unknown): string | null {
+  if (typeof gateResults !== 'object' || gateResults === null) return null
+  const ad = (gateResults as Record<string, unknown>).autoDraft
+  if (typeof ad !== 'object' || ad === null) return null
+  const v = (ad as Record<string, unknown>).voice
+  if (typeof v !== 'object' || v === null) return null
+  const code = (v as Record<string, unknown>).personaCode
+  return typeof code === 'string' && code.trim() !== '' ? code.trim() : null
 }
