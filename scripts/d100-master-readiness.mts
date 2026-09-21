@@ -429,6 +429,15 @@ if (JSON_OUT) {
       const mark = t.ready ? '🟢' : '🔴'
       const tgt = t.target === null ? '회차마다 다름' : `목표 ${t.target}`
       console.log(`    ${mark} ${t.tier.padEnd(11)} ${t.passed}/${t.total}  (${tgt})`)
+      /**
+       * 🔴 **"0명" 이 두 가지 뜻으로 읽힌다.** 재지 못한 축 때문에 완전 인증이 0명인 것과
+       *    실제로 쓸 사람이 0명인 것은 할 일이 정반대다.
+       */
+      if (t.passed !== t.passedIgnoringUnmeasured) {
+        console.log(`        🔴 이 ${t.passed}명은 **완전 인증** 수다.`
+          + ` 재지 못한 축을 빼고 세면 ${t.passedIgnoringUnmeasured}명이 막힌 데 없다`)
+        console.log('        🔴 둘은 할 일이 다르다 — 앞은 재는 방법을 만들고, 뒤는 사람을 채운다')
+      }
       if (t.reason !== null) console.log(`        · ${t.reason}`)
       for (const [code, n] of Object.entries(t.blocking)) {
         console.log(`        🔴 ${code} ${n}명`)

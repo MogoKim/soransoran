@@ -302,9 +302,11 @@ export type PromotionInput = {
   /** 댓글 runner 가 실제로 돌 수 있는가 */
   commentRunnerReady: boolean
   /**
-   * 🔴 **관측된 하루 공개 발행 편수.** 재지 않았으면 `null`.
-   *    🔴 이 값은 **지금 단계가 stable 인가**를 볼 때만 쓴다 —
-   *    목표 단계의 발행량을 사전 조건으로 요구하지 않는다.
+   * 🔴 **최근 창의 하루 평균 발행 편수 — 진단값이다** (2026-09-21 6차 보정).
+   *
+   *    안정화 판정에 쓰지 않는다. 단계를 막 올린 직후에는 이전 단계의 낮은 실적이
+   *    평균에 섞여 있어, 새 단계 조건을 다 채워도 이 값은 한동안 미달로 남는다.
+   *    안정화는 `currentStableStreakDays` 하나가 답한다.
    */
   publishedPerDay: number | null
   /**
@@ -365,15 +367,27 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
   canary.ready = canary.blocking.length === 0
 
   // ── ② 지금 단계 stable — 자기 목표를 최소 관측일 동안 냈는가 ──
+  /**
+   * 🔴 **안정화는 연속 달성 일수 하나로만 판정한다** (2026-09-21 6차 보정).
+   *
+   *    앞판은 여기에 `publishedPerDay`(최근 14일 평균)까지 요구했다. 그런데 두 조건은
+   *    **서로 다른 창**을 본다 — 한쪽은 7일 연속, 한쪽은 14일 평균이다.
+   *
+   *    d1 에서 7일 동안 1편/day 를 내고 d3 으로 올려 7일 동안 3편/day 를 내면,
+   *    연속 달성은 7일로 채워지지만 14일 평균은 (7×1 + 7×3)/14 = **2편/day** 다.
+   *    그래서 조건을 다 채운 순간에도 "3/day 미달" 로 막힌다 — 단계를 막 올린 직후가
+   *    가장 오래 막히는 구조였고, 7일 조건이 사실상 14일 조건으로 늘어난 것이다.
+   *
+   * 🔴 14일 평균은 **진단값으로만** 남긴다(`publishedPerDay`). 안정화 조건이 아니다.
+   */
   const stable: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
   if (!canary.ready) stable.blocking.push(`${input.current} canary 를 통과하지 못했다`)
-  if (input.publishedPerDay === null) stable.unmeasured.push('공개 발행/day')
-  else if (input.publishedPerDay < curTarget) {
-    stable.blocking.push(`${input.current} 공개 발행 ${input.publishedPerDay}/day < 자기 목표 ${curTarget}/day`)
-  }
   if (input.currentStableStreakDays === null) stable.unmeasured.push('연속 달성 일수')
   else if (input.currentStableStreakDays < needDays) {
-    stable.blocking.push(`${input.current} 연속 달성 ${input.currentStableStreakDays}일 < 필요 ${needDays}일`)
+    stable.blocking.push(
+      `${input.current} 연속 달성 ${input.currentStableStreakDays}일 < 필요 ${needDays}일`
+      + ` (완료된 KST 날짜에서 ${curTarget}편/day 이상)`,
+    )
   }
   stable.ready = stable.blocking.length === 0 && stable.unmeasured.length === 0
 

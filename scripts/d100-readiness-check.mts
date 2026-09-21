@@ -43,6 +43,10 @@ import {
   missingEvents, sumCountedActors,
 } from '../src/lib/north-star'
 import { compareWorkflowSuperset, allStageCronLines, stageGatingPresent } from '../src/lib/scale-workflow-render'
+import {
+  judgeStageStatus, buildStageFacts, firstBrokenStage, rateOf, showRate, describeBacklog,
+  MIN_RUNS_FOR_DAILY_RATE, type StageEvidence,
+} from '../src/lib/d100-supply-funnel'
 import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
 import {
   RECOVERY_PLAN, CANARY_CONTRACT, judgeCanary, NEVER, MIN_CLEAN_RUNS_BEFORE_JOB,
@@ -1391,13 +1395,17 @@ console.log('\n⑮ 🔴 🔴 PR #555 5차 보정 — 세 결함의 회귀')
     const v = assemble('SORAN_RELEASE_STAGE=d3\n')
     // 🔴 이제 물어야 할 실적은 d3 의 3/day 다
     const askD3 = v.current === 'd3' && v.next === 'd5' && v.currentCanary.ready
+    /**
+     * 🔴 **안정화는 연속 달성 일수가 답한다** (6차 보정).
+     *    14일 평균을 조건으로 두면 단계를 막 올린 직후가 가장 오래 막힌다.
+     */
     const notYet = assemble('SORAN_RELEASE_STAGE=d3\n', {
-      publishedPerDay: 1, currentStableStreakDays: 99,
+      currentStableStreakDays: stableObservationDaysOf('d3') - 1,
     })
     // 🔴 d5 준비는 d3 실적과 **따로** 판정된다
     return askD3 && v.currentStable.ready
       && !notYet.currentStable.ready
-      && notYet.currentStable.blocking.some((b) => b.includes(`${D3.publicPostsPerDay}/day`))
+      && notYet.currentStable.blocking.some((b) => b.includes('연속 달성'))
       && notYet.nextPreflight.ready && !notYet.ready
       && d100Plan(v.next).publicPostsPerDay === D5.publicPostsPerDay
   })())
@@ -1428,11 +1436,21 @@ console.log('\n⑮ 🔴 🔴 PR #555 5차 보정 — 세 결함의 회귀')
     const produceBlocked = !zeroProduce.nextPreflight.ready
       && zeroProduce.nextPreflight.blocking.some((b) => b.includes('READY 생산 0/day'))
       && !zeroProduce.nextPreflight.unmeasured.includes('READY 생산량/day')
-    // 🔴 공개 발행 0 — 같은 원칙
-    const zeroPublish = assemble('SORAN_RELEASE_STAGE=d1\n', { publishedPerDay: 0 })
-    const publishBlocked = !zeroPublish.currentStable.ready
-      && zeroPublish.currentStable.blocking.some((b) => b.includes('0/day'))
-      && !zeroPublish.currentStable.unmeasured.includes('공개 발행/day')
+    /**
+     * 🔴 **공개 발행 0 — 같은 원칙.** 다만 안정화를 막는 것은 14일 평균이 아니라
+     *    **연속 달성 일수**다. 한 건도 안 나갔으면 연속 달성은 0 일이다.
+     */
+    const NOW0 = new Date('2026-09-21T03:00:00.000Z')
+    const zeroStreak = stableStreakDays({ publishedAts: [], dailyTarget: 1, now: NOW0 })
+    const zeroPublish = assemble('SORAN_RELEASE_STAGE=d1\n', {
+      publishedPerDay: perDayMeasured(0, 14), currentStableStreakDays: zeroStreak,
+    })
+    const publishBlocked = zeroStreak === 0
+      // 🔴 0/day 는 측정된 값이다 — unmeasured 가 아니다
+      && perDayMeasured(0, 14) === 0
+      && !zeroPublish.currentStable.ready
+      && zeroPublish.currentStable.blocking.some((b) => b.includes('연속 달성 0일'))
+      && !zeroPublish.currentStable.unmeasured.includes('연속 달성 일수')
     // 🔴 반면 `null` 은 unmeasured 로 남는다 — 둘이 구분된다
     const nullProduce = assemble('SORAN_RELEASE_STAGE=d1\n', { readyQualifiedPerDay: null })
     const nullStaysUnmeasured = nullProduce.nextPreflight.unmeasured.includes('READY 생산량/day')
@@ -1462,6 +1480,216 @@ console.log('\n⑮ 🔴 🔴 PR #555 5차 보정 — 세 결함의 회귀')
       // 🔴 창 길이가 없을 때만 `null` 이다
       && perDayMeasured(0, 0) === null
     return produceBlocked && publishBlocked && nullStaysUnmeasured && detailZero && divides
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑯ 🔴 🔴 안정화 판정 — 7일 조건이 몰래 14일이 되면 FAIL')
+// ─────────────────────────────────────────────────────────
+{
+  const NOW = new Date('2026-09-21T03:00:00.000Z') // 12:00 KST — 오늘은 아직 안 끝났다
+  /** 🔴 어제부터 거슬러 `n` 일 동안 하루 `count` 편씩 — 실제 발행 시각 목록을 만든다 */
+  const days = (from: number, n: number, count: number): Date[] => {
+    const out: Date[] = []
+    for (let i = from; i < from + n; i += 1) {
+      for (let k = 0; k < count; k += 1) {
+        out.push(new Date(NOW.getTime() - i * 86_400_000 - k * 3600_000))
+      }
+    }
+    return out
+  }
+  /** 🔴 **실제 생산값 계산부터 승격 판정까지 이어 붙인다** */
+  const endToEnd = (publishedAts: readonly Date[], current: 'd1' | 'd3' | 'd5' | 'd10') => {
+    const target = dailyTargetOf(current)
+    const streak = stableStreakDays({ publishedAts, dailyTarget: target, now: NOW })
+    // 🔴 14일 평균 — 진단값이다. 승격 판정에 넣지 않는다
+    const since = NOW.getTime() - 14 * 86_400_000
+    const avg = perDayMeasured(publishedAts.filter((d) => d.getTime() >= since).length, 14)
+    const next = targetStageFor(current)
+    const req = d100Plan(next)
+    const v = judgePromotion({
+      current, next,
+      readyStock: req.readyStock14Days, activePersonas: req.activePersonaTarget,
+      detailPerDay: req.detailedSourcesRequiredPerDay,
+      readyQualifiedPerDay: req.readyQualifiedRequiredPerDay, readyStockDeltaPerDay: 1,
+      publishedPerDay: avg, currentStableStreakDays: streak,
+      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
+    })
+    return { streak, avg, v }
+  }
+
+  /**
+   * 🔴 **d1 에서 7일 1편 → d3 에서 7일 3편.**
+   *    연속 달성은 7일로 찼는데 14일 평균은 (7 + 21)/14 = 2편/day 다 —
+   *    앞판은 여기서 "3/day 미달" 로 막았다. 단계를 올린 직후가 가장 오래 막히는 구조였다.
+   */
+  check('🔴 🔴 **d1 7일×1편 → d3 7일×3편 이면 d3 stable 이다**', (() => {
+    const ats = [...days(1, 7, 3), ...days(8, 7, 1)]
+    const { streak, avg, v } = endToEnd(ats, 'd3')
+    return streak === 7 && avg === 2
+      // 🔴 14일 평균이 목표 미달인데도 stable 이다 — 그것이 이 보정의 요점이다
+      && avg < dailyTargetOf('d3')
+      && v.currentStable.ready
+      && !v.blocking.some((b) => b.includes('공개 발행'))
+  })())
+
+  check('🔴 🔴 **d3 7일 중 하루가 2편이면 FAIL**', (() => {
+    // 🔴 3일 전 하루만 2편
+    const ats = [...days(1, 2, 3), ...days(3, 1, 2), ...days(4, 4, 3), ...days(8, 7, 1)]
+    const { streak, v } = endToEnd(ats, 'd3')
+    return streak === 2 && !v.currentStable.ready
+      && v.currentStable.blocking.some((b) => b.includes('연속 달성 2일'))
+  })())
+
+  /** 🔴 관측 기간이 다른 단계도 같은 규칙이다 — d5 는 7일, d10 은 14일 */
+  check('🔴 🔴 **d5 는 7일 · d10 은 14일 — 단계마다 제 기간을 쓴다**', (() => {
+    const d5Ok = endToEnd(days(1, 7, 5), 'd5')
+    const d5Short = endToEnd(days(1, 6, 5), 'd5')
+    const d10Ok = endToEnd(days(1, 14, 10), 'd10')
+    const d10Short = endToEnd(days(1, 13, 10), 'd10')
+    return stableObservationDaysOf('d5') === 7 && stableObservationDaysOf('d10') === 14
+      && d5Ok.v.currentStable.ready && !d5Short.v.currentStable.ready
+      && d10Ok.v.currentStable.ready && !d10Short.v.currentStable.ready
+  })())
+
+  /** 🔴 **오늘의 미완료 날짜는 달성일에 넣지 않는다** */
+  check('🔴 🔴 **오늘은 세지 않는다 — 아침마다 연속 기록이 0 이 되지 않는다**', (() => {
+    // 🔴 어제까지 7일은 채웠고 오늘은 아직 한 건도 없다
+    const ats = days(1, 7, 3)
+    const withToday = stableStreakDays({ publishedAts: ats, dailyTarget: 3, now: NOW })
+    // 🔴 오늘 1편만 나간 상태여도 어제까지의 기록은 그대로다
+    const partial = stableStreakDays({
+      publishedAts: [...ats, new Date(NOW.getTime() - 1000)], dailyTarget: 3, now: NOW,
+    })
+    return withToday === 7 && partial === 7
+  })())
+
+  /** 🔴 14일 평균을 다시 필수 조건으로 넣으면 여기서 깨진다 */
+  check('🔴 🔴 **14일 평균은 stable 의 필수 조건이 아니다**', (() => {
+    const src = readFileSync('src/lib/d100-capacity.ts', 'utf-8')
+    const i = src.indexOf('const stable: GateVerdict')
+    const block = src.slice(i, src.indexOf('stable.ready =', i))
+    // 🔴 stable 블록 안에서 `publishedPerDay` 를 보지 않는다
+    return i > 0 && !/publishedPerDay/.test(block)
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑰ 🔴 🔴 공급 깔때기 재대조 — 이름을 흐리면 FAIL')
+// ─────────────────────────────────────────────────────────
+{
+  const NOW = Date.parse('2026-09-21T06:00:00.000Z')
+  const ev = (over: Partial<StageEvidence> & { stage: StageEvidence['stage'] }): StageEvidence => ({
+    lastAtMs: NOW - 3600_000, recentCount: 10, unit: '건', switchedOff: null,
+    staleAfterDays: 1, ...over,
+  })
+
+  /** 🔴 세 가지 상태가 실제로 갈린다 */
+  check('🔴 **가동·정지·미측정이 갈린다 — 근거가 없으면 0 이 아니다**', (() => {
+    const running = judgeStageStatus(ev({ stage: 'judge' }), NOW)
+    const stale = judgeStageStatus(ev({ stage: 'judge', lastAtMs: NOW - 5 * 86_400_000 }), NOW)
+    const off = judgeStageStatus(ev({ stage: 'judge', switchedOff: true }), NOW)
+    // 🔴 볼 근거가 아예 없다 — "안 돈다" 라고 단정하지 않는다
+    const none = judgeStageStatus(ev({ stage: 'judge', lastAtMs: null, recentCount: null }), NOW)
+    return running === 'running' && stale === 'stopped' && off === 'stopped' && none === 'unmeasured'
+  })())
+
+  /**
+   * 🔴 **한 번의 회차를 일수로 나누지 않는다.**
+   *    canary 3건을 14 로 나누면 0.2/day 가 되는데, 하루도 정상 가동한 적이 없다.
+   */
+  check('🔴 🔴 **회차가 하나면 일간 값을 내지 않는다**', (() => {
+    const one = rateOf({ count: 3, runs: 1, days: 14, lastAt: '2026-09-21' })
+    const many = rateOf({ count: 28, runs: 10, days: 14 })
+    const none = rateOf({ count: 0, runs: 0, days: 14 })
+    return one.kind === 'singleRun' && one.count === 3
+      && /일간 값으로 읽지 않는다/.test(showRate(one))
+      && many.kind === 'daily' && many.perDay === 2
+      && none.kind === 'unmeasured'
+      && MIN_RUNS_FOR_DAILY_RATE === 2
+  })())
+
+  /** 🔴 **backlog 와 유입을 섞지 않는다** */
+  check('🔴 🔴 **계약 불일치를 "오래된 것" 이라 부르지 않는다**', (() => {
+    const lines = describeBacklog({
+      backlog: 239, backlogUsable: 4, backlogContractMismatch: 213,
+      inflow: rateOf({ count: 3, runs: 1, days: 14 }),
+    })
+    const joined = lines.join(' ')
+    return /backlog 239건/.test(joined) && /못 쓰는 것 213건/.test(joined)
+      && /오래돼서" 가 아니다/.test(joined)
+      // 🔴 backlog 와 유입이 한 숫자로 합쳐지지 않는다
+      && !/242|236/.test(joined)
+  })())
+
+  /** 🔴 **끊긴 자리는 가장 위의 멎은 칸이다** */
+  check('🔴 🔴 **아래 칸을 고치라고 말하지 않는다 — 가장 위에서 끊긴 곳을 찾는다**', (() => {
+    const facts = buildStageFacts({
+      nowMs: NOW,
+      evidence: [
+        ev({ stage: 'sourceList' }), ev({ stage: 'sourceDetail' }),
+        // 🔴 여기서 끊긴다
+        ev({ stage: 'adapt', switchedOff: true }),
+        // 🔴 아래 칸은 입력이 끊겨 산출물이 오래됐다
+        ev({ stage: 'judge', lastAtMs: NOW - 5 * 86_400_000 }),
+        ev({ stage: 'draft', lastAtMs: NOW - 5 * 86_400_000 }),
+      ],
+    })
+    const broken = firstBrokenStage(facts)
+    const judge = facts.find((f) => f.stage === 'judge')!
+    /**
+     * 🔴 **산출물이 최근이면 그 칸은 돈 것이다** — 위 칸이 멎었어도 그렇다.
+     *    (손으로 한 번 돌린 회차가 그런 모습이다) 그래서 아래 칸이 굶은 모습은
+     *    "산출물이 오래됐다" 로 나타난다.
+     */
+    const ranOnce = buildStageFacts({
+      nowMs: NOW,
+      evidence: [ev({ stage: 'adapt', switchedOff: true }), ev({ stage: 'judge' })],
+    }).find((f) => f.stage === 'judge')!
+    return broken?.stage === 'adapt'
+      && judge.status === 'stopped'
+      && (judge.blockedReason ?? '').includes('위 칸이 멎어')
+      && ranOnce.status === 'running' && ranOnce.blockedReason === null
+  })())
+
+  /** 🔴 **자기 스위치도 꺼져 있으면 그것도 적는다** */
+  check('🔴 **이유를 하나만 고르지 않는다 — 위 칸과 자기 스위치를 함께 적는다**', (() => {
+    const facts = buildStageFacts({
+      nowMs: NOW,
+      evidence: [ev({ stage: 'adapt', switchedOff: true }), ev({ stage: 'publish', switchedOff: true })],
+    })
+    const pub = facts.find((f) => f.stage === 'publish')!
+    return (pub.blockedReason ?? '').includes('스위치가 꺼져 있다')
+      && (pub.blockedReason ?? '').includes('위 칸이 멎어')
+  })())
+
+  /** 🔴 **Persona 0명의 두 뜻을 가른다** */
+  check('🔴 🔴 **완전 인증 0명과 실제로 쓸 사람 0명을 가른다**', (() => {
+    const FULL: PersonaCandidate = {
+      code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
+      voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
+      daysSinceActive: 0, retired: false, qualificationConflict: false,
+      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+    }
+    // 🔴 전원이 자격 감사만 미측정 — 막힌 데는 없다
+    const onlyUnmeasured = personaTierReadiness({
+      stage: 'd3',
+      candidates: Array.from({ length: 24 }, (_, i) => ({
+        ...FULL, code: `P${i}`, qualificationConflict: null,
+      })),
+    })
+    const card = onlyUnmeasured.find((t) => t.tier === 'card')!
+    // 🔴 전원이 실제로 막혀 있다
+    const reallyBlocked = personaTierReadiness({
+      stage: 'd3',
+      candidates: Array.from({ length: 24 }, (_, i) => ({ ...FULL, code: `P${i}`, ageBand: null })),
+    }).find((t) => t.tier === 'card')!
+    const wired = /passedIgnoringUnmeasured/.test(
+      readFileSync('scripts/d100-master-readiness.mts', 'utf-8'))
+    return card.passed === 0 && card.passedIgnoringUnmeasured === 24
+      && (card.reason ?? '').includes('24명')
+      && reallyBlocked.passed === 0 && reallyBlocked.passedIgnoringUnmeasured === 0
+      && wired
   })())
 }
 

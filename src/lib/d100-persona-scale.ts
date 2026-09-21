@@ -246,8 +246,16 @@ export type PersonaScaleNeed = {
 export type TierReadiness = {
   tier: PersonaTier
   ready: boolean
-  /** 그 층을 통과한 사람 수 */
+  /** 그 층을 통과한 사람 수 — 🔴 재지 못한 축이 있으면 그 사람은 통과가 아니다 */
   passed: number
+  /**
+   * 🔴 **재지 못한 축을 빼고 세면 몇 명인가** (2026-09-21 6차 보정).
+   *
+   *    "0명" 이 두 가지 뜻으로 읽힌다: **실제로 쓸 사람이 없다**와
+   *    **감사 항목을 재지 않아 완전 인증이 0명이다**. 할 일이 정반대다 —
+   *    앞은 사람을 만들어야 하고, 뒤는 재는 방법을 만들어야 한다.
+   */
+  passedIgnoringUnmeasured: number
   /** 대상 인원 */
   total: number
   /** 🔴 목표 인원 (카드·풀 층에만 뜻이 있다) */
@@ -272,11 +280,14 @@ export function personaTierReadiness(input: {
     const blocking: Record<string, number> = {}
     const unmeasured: Record<string, number> = {}
     let passed = 0
+    let passedIgnoringUnmeasured = 0
     for (const p of input.candidates) {
       const v = personaTiers(p)[tier]
       for (const c of v.blocked) blocking[c] = (blocking[c] ?? 0) + 1
       for (const c of v.unmeasured) unmeasured[c] = (unmeasured[c] ?? 0) + 1
       if (v.ok) passed += 1
+      // 🔴 **막힌 것**만 본다 — 재지 못한 축은 없는 셈 치고 센 수다
+      if (v.blocked.length === 0) passedIgnoringUnmeasured += 1
     }
     /**
      * 🔴 카드·풀 층은 **목표 인원**을 채워야 한다. 배정 층은 회차마다 달라지므로
@@ -292,11 +303,13 @@ export function personaTierReadiness(input: {
       ? !hasUnmeasured && passed >= target
       : !hasUnmeasured && passed === total && total > 0
     const reason = ready ? null
-      : hasUnmeasured ? `재지 못한 축이 있다 (${Object.keys(unmeasured).join('·')})`
+      : hasUnmeasured
+        ? `재지 못한 축이 있다 (${Object.keys(unmeasured).join('·')})`
+          + ` — 🔴 그 축을 빼고 세면 ${passedIgnoringUnmeasured}명이다`
         : tier === 'card' ? `${passed}명 < 목표 ${target}명`
           : `${total - passed}명이 이 층을 통과하지 못한다`
     out.push({
-      tier, ready, passed, total,
+      tier, ready, passed, passedIgnoringUnmeasured, total,
       target: tier === 'card' ? target : null,
       blocking, unmeasured, reason,
     })
