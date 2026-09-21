@@ -138,6 +138,16 @@ export function resolveScale(
         notes.push(`🔴 첫 시험 ${auth.stage} 가 capacity=${cap.stage} 를 넘는다 — 시험이라도 열지 않는다`)
       } else if (canary.verdict === null) {
         notes.push('🔴 첫 시험 허가는 있으나 그날치 판정을 받지 못했다 — 켜지 않는다(fail-closed)')
+      } else if (canary.verdict.stage !== auth.stage) {
+        /**
+         * 🔴 **허가한 단계와 판정한 단계가 다르면 거부한다** (2026-09-21).
+         *
+         *    호출부가 d5 를 판정해 놓고 d3 허가에 붙이면, 여기서는 그 차이를
+         *    볼 수 없어 **다른 단계의 계산으로 단계를 올리게** 된다.
+         *    두 값이 같은지는 이 자리에서만 확인할 수 있다.
+         */
+        notes.push(`🔴 첫 시험 허가는 ${auth.stage} 인데 판정은 ${canary.verdict.stage} 다`
+          + ' — 다른 단계의 계산으로 올리지 않는다(fail-closed)')
       } else if (!canary.verdict.ok) {
         notes.push(`🔴 첫 시험 ${auth.stage} 를 켜지 않는다 — ${canary.verdict.reasons.join(' / ')}`)
       } else if (stageRank(auth.stage) <= stageRank(stage)) {
@@ -145,7 +155,9 @@ export function resolveScale(
       } else {
         stage = auth.stage
         canaryStage = true
-        notes.push(`🔴 **하루짜리 첫 시험** ${auth.stage} · ${auth.date} — 그날 ${canary.verdict.can}/${canary.verdict.want}건`)
+        notes.push(`🔴 **하루짜리 첫 시험** ${auth.stage} · ${auth.date}`
+          + ` — 오늘 ${canary.verdict.published}/${canary.verdict.want}건 발행`
+          + ` · 이 회차 필요 ${canary.verdict.need}건 · 낼 수 있는 것 ${canary.verdict.can}건`)
         notes.push('🔴 지속 운영 승격이 아니다 — 14일 누적·공백·재고 조건은 그대로 미달이다')
       }
     }

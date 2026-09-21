@@ -42,7 +42,7 @@ import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish
 import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
-import { canaryAuthorization, judgeOneDayCanary } from '../src/lib/release-canary'
+import { canaryAuthorization, judgeOneDayCanary, slotsLeftToday } from '../src/lib/release-canary'
 import { effectiveWeeklyCap, RELEASE_STAGES } from '../src/lib/scale-profile'
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
@@ -255,7 +255,15 @@ const canaryVerdict = canaryAuth.activeToday && canaryAuth.stage !== null
     axis: { now: axisNow, publishedToday: axisPublishedToday },
     // 🔴 **하루**다. 이 값이 14 가 되면 하루 판정이 14일 판정으로 바뀐다
     days: 1,
-  }))
+  }), {
+    /**
+     * 🔴 **오늘 이미 낸 수와 남은 슬롯을 넘긴다** (2026-09-21 보정).
+     *    넘기지 않으면 회차마다 하루치 전체를 다시 요구해,
+     *    마지막 슬롯에서 재고가 줄었다는 이유로 그날 목표를 못 채운다.
+     */
+    publishedToday: axisPublishedToday,
+    slotsLeft: slotsLeftToday(canaryAuth.stage, axisNow),
+  })
   : null
 const scale = installFromEnv(process.env, {
   readiness,
@@ -278,7 +286,10 @@ if (scale.throttledByReadiness) console.log('     🔴 준비도 미달로 감�
  */
 if (canaryVerdict !== null) {
   console.log(`     ③-e 하루짜리 첫 시험 판정  ${canaryVerdict.stage}`
-    + ` · 그날 ${canaryVerdict.can}/${canaryVerdict.want}건 · ${canaryVerdict.ok ? 'GO' : '🔴 NO-GO'}`)
+    + ` · 오늘 ${canaryVerdict.published}/${canaryVerdict.want}건 발행`
+    + ` · 남은 슬롯 ${canaryVerdict.slotsLeft}`
+    + ` · 이 회차 필요 ${canaryVerdict.need}건 · 낼 수 있는 것 ${canaryVerdict.can}건`
+    + ` · ${canaryVerdict.ok ? 'GO' : '🔴 NO-GO'}`)
   for (const r of canaryVerdict.reasons) console.log(`        🔴 ${r}`)
 }
 if (scale.canaryStage) {

@@ -40,10 +40,24 @@ export type CanaryVerdict = {
   stage: ReleaseStage
   /** 그날 슬롯 수 = 그날 목표 편수 */
   want: number
-  /** 그 하루에 실제로 낼 수 있다고 본 수 */
+  /** 🔴 **오늘(KST) 이미 낸 수** — 회차마다 다시 세지 않는다 */
+  published: number
+  /** 🔴 아직 쓸 수 있는 슬롯 수 */
+  slotsLeft: number
+  /** 🔴 **이 회차가 실제로 더 채워야 하는 수** = min(목표 − 이미 낸 수, 남은 슬롯) */
+  need: number
+  /** 배정까지 끝나 지금 낼 수 있다고 본 미발행 후보 수 */
   can: number
   ok: boolean
   reasons: string[]
+}
+
+/** 🔴 오늘 상태 — 러너가 DB 와 시계에서 읽어 넘긴다 */
+export type TodayState = {
+  /** 오늘(KST) 이미 발행한 수 — DB 실측 */
+  publishedToday: number
+  /** 아직 쓸 수 있는 슬롯 수 — 지나지 않은 슬롯 + 밀려서 대신 낼 수 있는 슬롯 */
+  slotsLeft: number
 }
 
 /**
@@ -57,8 +71,32 @@ export type CanaryVerdict = {
  * 🔴 **묻지 않는 것**을 분명히 적는다 — 14일 누적 발행량 · 14일 공백일 ·
  *    14일치 재고. 그 셋은 `judgeReadiness` 가 계속 본다.
  */
-export function judgeOneDayCanary(sim: SimOutcome): CanaryVerdict {
+export function judgeOneDayCanary(sim: SimOutcome, today: TodayState): CanaryVerdict {
   const want = PROFILES[sim.stage].dailyTarget
+  /**
+   * 🔴 **회차마다 하루치 전체를 다시 요구하지 않는다** (2026-09-21 보정).
+   *
+   *    앞판은 `sim.in14 >= want` 였다. 그래서 READY 4건으로 시작해
+   *    09:30 에 한 건을 내고 3건이 남으면 13:30 회차가 다시 3건을 요구하고,
+   *    13:30 뒤 2건이 남으면 **19:00 회차가 NO-GO 로 막혔다** —
+   *    그날 3편을 낼 수 있는데도 마지막 한 편이 나가지 못한다.
+   *
+   *    묻는 것은 "오늘 목표를 **아직** 채울 수 있는가" 다:
+   *      · 이미 낸 수는 빼고
+   *      · 남은 슬롯보다 많이 요구하지 않는다 (슬롯이 하나면 한 건만 있으면 된다)
+   */
+  /**
+   * 🔴 **`슬롯 남은 수` 로 한 번 더 깎지 않는다** (2026-09-21 2차 보정).
+   *
+   *    처음에는 `min(목표 − 이미 낸 수, 남은 슬롯)` 으로 썼다. 그런데 프로필은
+   *    **슬롯 합 === dailyTarget** 을 검증하고(`validateProfile`), 한 회차는 한 건만
+   *    낸다. 그래서 도달 가능한 모든 상태에서 두 값이 **같다** — `min` 의 한쪽은
+   *    언제나 죽은 가지이고, 돌연변이를 넣어도 다른 쪽이 가려 준다(실측).
+   *
+   *    죽은 가지를 가드인 척 남기지 않는다. 대신 **그 불변식 자체를** 검사가 잠근다
+   *    (`④ 남은 슬롯과 남은 편수는 같다`). 프로필이 어긋나면 거기서 깨진다.
+   */
+  const need = Math.max(0, want - today.publishedToday)
   const reasons: string[] = []
   if (sim.horizonDays !== 1) {
     reasons.push(`🔴 하루치 시뮬레이션이 아니다 (지평 ${sim.horizonDays}일) — 하루 판정으로 쓸 수 없다`)
@@ -66,11 +104,38 @@ export function judgeOneDayCanary(sim: SimOutcome): CanaryVerdict {
   if (sim.recoveryBroken > 0) {
     reasons.push(`기배정 복구가 깨진 행 ${sim.recoveryBroken}건 — 레인이 멈춘다`)
   }
-  if (sim.in14 < want) {
-    reasons.push(`그날 낼 수 있는 것 ${sim.in14}/${want}건`
-      + ` — ${want - sim.in14}건 모자란다 (재고 ${sim.stock}건 · persona ${sim.personas}명)`)
+  /**
+   * 🔴 `need === 0` 이면 **오늘 할 일이 끝났다** — 목표를 채웠다는 뜻이고,
+   *    낼 수 있는 수는 0 이상이므로 이 비교는 저절로 통과한다.
+   *    그때 NO-GO 를 내면 하루 중간에 단계가 d1 로 떨어져, 이미 낸 3건이
+   *    "상한 초과" 처럼 읽힌다. 할 일이 없는 것은 미달이 아니다.
+   */
+  if (sim.in14 < need) {
+    reasons.push(`이 회차에 더 필요한 ${need}건 중 ${sim.in14}건만 낼 수 있다`
+      + ` (오늘 ${today.publishedToday}/${want}건 발행 · 남은 슬롯 ${today.slotsLeft}`
+      + ` · 재고 ${sim.stock}건 · persona ${sim.personas}명)`)
   }
-  return { stage: sim.stage, want, can: sim.in14, ok: reasons.length === 0, reasons }
+  return {
+    stage: sim.stage, want,
+    published: today.publishedToday, slotsLeft: today.slotsLeft, need,
+    can: sim.in14, ok: reasons.length === 0, reasons,
+  }
+}
+
+/**
+ * 🔴 **아직 지나지 않은 슬롯 수** — 보고용이다.
+ *
+ *    판정에는 쓰지 않는다. 프로필 불변식(슬롯 합 === dailyTarget)이 있는 한
+ *    이 값은 `목표 − 이미 낸 수` 와 같고, 판정에 한 번 더 곱하면 죽은 가지가 된다.
+ *    로그가 "몇 시 슬롯이 남았는가" 를 사람 말로 보여 주는 데 쓴다 —
+ *    🔴 그리고 검사가 그 **같음**을 직접 잠근다.
+ */
+export function slotsLeftToday(stage: ReleaseStage, now: Date): number {
+  const p = PROFILES[stage]
+  const kst = new Date(now.getTime() + 9 * 3_600_000)
+  const minuteNow = kst.getUTCHours() * 60 + kst.getUTCMinutes()
+  return p.slots.filter((sl) => sl.hour * 60 + sl.minute >= minuteNow)
+    .reduce((n, sl) => n + sl.count, 0)
 }
 
 export type CanaryAuthorization = {
