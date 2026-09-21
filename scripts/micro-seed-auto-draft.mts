@@ -806,7 +806,6 @@ async function main(): Promise<void> {
    *    🔴 이제 한 경로다: 계획(Gemini) → 초안 한 편(Gemini) → 통합 검수(Haiku).
    *       화자 자격은 코드가 근거를 대조해 허가하고, 못 대면 만들지 않는다.
    */
-  const v2Load: Record<string, number> = {}
   for (const j of seeds) {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
     BUDGET.enter(j.sourceArticleId)
@@ -865,7 +864,7 @@ async function main(): Promise<void> {
          *    제목에 있으면 그대로 provider 로 나갔다. 정본 함수를 그대로 쓴다.
          */
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
-        personas: voice.candidates, load: v2Load,
+        personas: voice.candidates,
         /**
          * 🔴 **이 회차의 생성 계약.** 다음 회차가 "지난 HOLD 가 지금도 결론인가" 를
          *    이 값으로 판단한다 — 스키마 판 하나로는 알 수 없다.
@@ -882,9 +881,6 @@ async function main(): Promise<void> {
     for (const c of art.cost.calls) {
       const k = `${c.stage}:${c.model ?? '?'}`
       statusCount.set(k, (statusCount.get(k) ?? 0) + 1)
-    }
-    if (art.plan.personaCode !== null) {
-      v2Load[art.plan.personaCode] = (v2Load[art.plan.personaCode] ?? 0) + 1
     }
     artifacts.push(art)
     /** 🔴 담으면 안 되는 것이 들어갔는가 — 파일로 나가기 전에 본다 */
@@ -977,9 +973,19 @@ async function main(): Promise<void> {
     console.log(`   🟡 쓸 Persona 가 없어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
   }
   {
-    const used = Object.entries(v2Load).filter(([, n]) => n > 0).sort()
-    if (used.length > 0) {
-      console.log(`   🟢 말투 배정 ${used.map(([k, n]) => `${k}×${n}`).join(' · ')}`)
+    /**
+     * 🔴 **결과를 세어 보여 줄 뿐이다.** 앞판은 이 수를 다음 원천의 요청에 실어
+     *    Persona 선택을 바꿨다 — 회차 안에서만 존재하는 값이라 계약에 담기지 않았고,
+     *    같은 계약인데 실제로 보낸 것이 달랐다. 이제 보고에만 쓴다.
+     */
+    const used = new Map<string, number>()
+    for (const a of artifacts) {
+      const code = a.plan.personaCode
+      if (code !== null) used.set(code, (used.get(code) ?? 0) + 1)
+    }
+    if (used.size > 0) {
+      console.log(`   🟢 말투 배정 ${[...used].sort()
+        .map(([k, n]) => `${k}×${n}`).join(' · ')}`)
     }
   }
   console.log('\n③ 채택')

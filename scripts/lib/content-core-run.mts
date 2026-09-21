@@ -23,7 +23,7 @@ import type { PoolCard } from '../../src/lib/persona-pool-card'
 import type { ProviderModel } from './voice-m3-provider.mjs'
 import { STAGE_MODEL as CANON_STAGE_MODEL } from '../../src/lib/content-core/pipeline'
 import {
-  canGenerate, lifeContractIdentity, parseSpeakerPlan, planSchemaFailed,
+  canGenerate, lifeContractIdentity, orderPersonasForSource, parseSpeakerPlan, planSchemaFailed,
 } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import {
@@ -147,8 +147,8 @@ export type RunInput = {
   /** 🔴 이미 마스킹된 값이다 */
   title: string
   maskedBody: string
+  /** 🔴 순서는 여기서 정하지 않는다 — 러너가 원문 지문으로 세운다 */
   personas: readonly PersonaInput[]
-  load?: Readonly<Record<string, number>>
   voiceSourceDigest: string
   /** 🔴 이 회차의 생성 계약 — artifact 에 그대로 실린다 */
   contract: GenerationContract
@@ -297,14 +297,19 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
 
   // ── ① 화자 계획 — 🔴 원문과 실제 카드를 함께 보고, 코드가 근거를 검증한다 ──
+  /**
+   * 🔴 **이 원문에 대해 정해진 순서로 세운다.** 읽은 순서가 달라도 실제로 보내는 것이
+   *    같아야 하고, 그 순서는 계약(`sourceInputHash` + 후보 풀)만으로 다시 만들 수 있어야 한다.
+   */
+  const ordered = orderPersonasForSource(input.personas, input.contract.sourceInputHash)
   const pRes = await ask('speakerPlan', buildSpeakerPlanSystemPrompt(),
-    buildSpeakerPlanPayload({ packet, personas: input.personas, load: input.load }))
+    buildSpeakerPlanPayload({ packet, personas: ordered }))
   const pC = completionOf(pRes)
   if (!pC.complete) {
     return blank(null, [], null, null, noDet, null, notRunFrom(pC),
       'hold', `화자 계획을 완주하지 못했다 (${INCOMPLETE_LABEL[pC.reason ?? 'noResponse']})`)
   }
-  const parse = parseSpeakerPlan(pRes.rawText, packet, input.personas)
+  const parse = parseSpeakerPlan(pRes.rawText, packet, ordered)
   const plan = parse.plan
   const dropped = parse.dropped
   /**

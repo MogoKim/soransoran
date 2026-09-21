@@ -64,6 +64,47 @@ export type PersonaLifeContract = Pick<PoolCard,
   | 'menopauseStatus' | 'parentCare' | 'personality' | 'noGoTopics' | 'noGoExpressions'>
 
 /**
+ * 🔴 **이 원문에서 후보를 보여 줄 순서** (2026-09-21)
+ *
+ *    화자 계획 요청은 후보 목록을 **순서대로** 싣고, 모델은 앞쪽을 고르는 경향이 있다.
+ *    그래서 순서는 **실제 provider 입력의 일부**다.
+ *
+ * 🔴 **왜 원천마다 다른가.** 순서를 코드순으로 고정하면 늘 같은 사람이 먼저 와서
+ *    한 Persona 에 쏠린다. 앞판은 그 쏠림을 `맡은 수(load)` 로 막았는데, 그것은
+ *    **그 회차 안에서만 존재하는 값**이라 계약에 담을 수도, 다음 회차가 다시 만들 수도
+ *    없었다 — 같은 계약인데 실제로 보낸 것이 달랐다(2026-09-21 실측).
+ *
+ * 🔴 그래서 **원문 지문과 Persona 코드로** 순서를 정한다. 같은 원문이면 언제나 같은
+ *    순서이고, 원문이 다르면 순서가 흩어진다. 회차 상태가 들어가지 않는다.
+ */
+export function personaOrderKey(sourceInputHash: string, code: string): string {
+  const src = `${sourceInputHash}\u0001${code}`
+  let a = 0x811c9dc5
+  let b = 0x01000193
+  for (let i = 0; i < src.length; i += 1) {
+    const c = src.charCodeAt(i)
+    a = Math.imul(a ^ c, 0x01000193) >>> 0
+    b = Math.imul(b + c, 0x85ebca6b) >>> 0
+  }
+  return `${a.toString(16).padStart(8, '0')}${b.toString(16).padStart(8, '0')}`
+}
+
+/**
+ * 🔴 **후보를 그 순서로 세운다.** 들어온 배열의 순서는 쓰지 않는다 —
+ *    읽은 순서가 달라도 **실제로 보내는 것**이 같아야 한다.
+ *    🔴 지문이 같은 두 사람이 있으면 코드로 가른다(안정).
+ */
+export function orderPersonasForSource<T extends { code: string }>(
+  personas: readonly T[], sourceInputHash: string,
+): T[] {
+  return [...personas].sort((x, y) => {
+    const kx = personaOrderKey(sourceInputHash, x.code)
+    const ky = personaOrderKey(sourceInputHash, y.code)
+    return kx < ky ? -1 : kx > ky ? 1 : x.code.localeCompare(y.code)
+  })
+}
+
+/**
  * 🔴 **생성 계약에 들어가는 생활사 칸의 정본 순서** (2026-09-21).
  *
  *    이 값들은 화자 계획·생성·검수 프롬프트에 **그대로 실린다**. 하나라도 바뀌면

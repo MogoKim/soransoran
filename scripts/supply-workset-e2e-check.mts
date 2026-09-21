@@ -240,6 +240,18 @@ const w = makeWorld()
     d.code === 0 && !d.out.includes('RUN_MISMATCH'), `code=${d.code}\n${d.out.slice(-900)}`)
   const dPaid = readFileSync(dLog, 'utf-8').split('\n').filter((l) => l.trim() !== '').length
   check('🔴 🔴 **draft 유료 요청 ≤ 15**', dPaid <= 15, `${dPaid}회`)
+  /**
+   * 🔴 **실제로 나간 요청 본문으로 확인한다.** 회차 안에서만 존재하는 값이 실려 나가면
+   *    계약과 실제 입력이 어긋난다 — 그 값은 다음 회차가 다시 만들 수 없다.
+   */
+  {
+    const sent = readFileSync(dLog, 'utf-8').split('\n').filter((l) => l.trim() !== '')
+      .map((l) => String((JSON.parse(l) as { body?: string }).body ?? ''))
+    check('🔴 🔴 **나간 요청 어디에도 맡은 수가 없다**',
+      sent.length > 0 && sent.every((b) => !b.includes('맡은 수')), `${sent.length}건`)
+    check('🔴 후보 목록은 실제로 실려 나갔다',
+      sent.some((b) => b.includes('나이대') && b.includes('하는 일')))
+  }
   check('🔴 🔴 **그 회차 shadow 만 읽었다** — 과거 판정 파일을 훑지 않았다',
     d.out.includes(shadowPath.split('/').pop() ?? '?') || d.out.includes('AUTO_SEED 5건'),
     d.out.slice(-500))

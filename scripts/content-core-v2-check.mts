@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 
-import { runContentCore, personaInputOf, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
+import { runContentCore, personaInputOf, personaPoolIdentity, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
 import {
   buildSpeakerPlanSystemPrompt, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, lifeContractLines,
@@ -141,7 +141,6 @@ const ALL = [partTime, homemaker, noKids]
 const run = (o: {
   id: string; title: string; body: string; canned: Canned
   personas?: readonly PersonaInput[]
-  load?: Record<string, number>
   fault?: Fault
   cap?: number
 }): Promise<HumanReviewArtifact> => {
@@ -150,7 +149,7 @@ const run = (o: {
     // 🔴 fixture 도 회차마다 새 불투명 id 를 준다 — 원문에서 유도하지 않는다
     artifactId: randomUUID().replace(/-/g, ''),
     sourceArticleId: o.id, title: o.title, maskedBody: o.body,
-    personas: o.personas ?? ALL, load: o.load, voiceSourceDigest: 'asset000000000',
+    personas: o.personas ?? ALL, voiceSourceDigest: 'asset000000000',
     ask: fakeAsk(o.canned, o.fault), now: NOW, callCap: o.cap ?? 6,
     // 🔴 fixture 도 계약을 싣는다 — 정본 모양 그대로다
     contract: {
@@ -393,26 +392,40 @@ console.log('\n③ 🔴 허가 근거 검증 — 없는 사람 · 없는 근거 
 }
 
 // ─────────────────────────────────────────────────────────
-console.log('\n④ 🔴 load 는 자격을 이기지 못한다')
+console.log('\n④ 🔴 🔴 후보 순서는 원문이 정한다 — 회차 상태가 아니다')
 // ─────────────────────────────────────────────────────────
 {
   const DRAFT = { title: '여행 선물', body: '3시간씩 일하고 9명이에요. 다들 사 가시나요.' }
   const facts = [fact('number', '3시간'), fact('number', '9명')]
-  // 🔴 P02(전업)는 load 0, P01(파트타임)은 load 5 — 그래도 P02 로 SELF 가 될 수 없다
+  const planned = plan({
+    personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+    protectedFacts: facts, contentRoles: ['usefulAnswer', 'conversationSpark'],
+    speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
+      evidenceRef: 'title', evidenceText: '알바중' })],
+  })
   const a = await run({
     id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
-    personas: [partTime, homemaker], load: { P01: 5, P02: 0 },
-    canned: { plan: plan({ personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
-      protectedFacts: facts, contentRoles: ['usefulAnswer', 'conversationSpark'],
-      speakerWarrants: [warrant({ fact: 'work', requiredValue: '파트타임',
-        evidenceRef: 'title', evidenceText: '알바중' })] }), draft: DRAFT } })
-  check('🔴 🔴 **load 가 적다고 무자격 Persona 가 SELF 가 되지 않는다**',
+    personas: [partTime, homemaker],
+    canned: { plan: planned, draft: DRAFT } })
+  const payloadA = sentOf('speakerPlan')[0]!.payload
+  check('🔴 🔴 **앞에 있다고 무자격 Persona 가 SELF 가 되지 않는다**',
     a.plan.stance !== 'SELF_EXPERIENCE' && a.plan.rejection === 'requiredValueUnmet')
-  check('🔴 load 는 계획 호출에 **입력으로만** 간다',
-    sentOf('speakerPlan')[0]!.payload.includes('맡은 수 5')
-    && sentOf('speakerPlan')[0]!.payload.includes('맡은 수 0'))
-  check('🔴 계획 지시가 load 로 자격을 뒤집지 말라고 말한다',
+  check('🔴 🔴 **회차 안에서만 존재하는 값(맡은 수)이 요청에 없다**',
+    !payloadA.includes('맡은 수'), payloadA.slice(0, 200))
+
+  /** 🔴 같은 원문·같은 후보 풀이면 **읽은 순서가 달라도 보내는 것이 같다** */
+  await run({
+    id: SRC.C.id, title: SRC.C.title, body: SRC.C.body,
+    personas: [homemaker, partTime],
+    canned: { plan: planned, draft: DRAFT } })
+  check('🔴 🔴 **[P01,P02] 와 [P02,P01] 의 실제 요청이 같다**',
+    sentOf('speakerPlan')[0]!.payload === payloadA)
+  check('🔴 🔴 **그리고 계약도 같다**',
+    personaPoolIdentity([partTime, homemaker]) === personaPoolIdentity([homemaker, partTime]))
+  check('🔴 계획 지시가 순서로 자격을 뒤집지 말라고 말한다',
     buildSpeakerPlanSystemPrompt().includes('자격 없는 사람을 고르지 않는다'))
+  check('🔴 🔴 **지시가 맡은 수를 더는 말하지 않는다**',
+    !buildSpeakerPlanSystemPrompt().includes('맡은 수'))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -943,7 +956,7 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
   check('🔴 🔴 **계획 요청이 cardValue 를 더는 요구하지 않는다**',
     !buildSpeakerPlanSystemPrompt().includes('cardValue'))
   check('🔴 판 번호가 새 계약을 담는다',
-    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p3'
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p4'
     && SPEAKER_PLAN_VERSION === 'speaker-plan-v4'
     && ARTIFACT_VERSION === 'human-review-v9'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))

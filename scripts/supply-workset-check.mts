@@ -30,9 +30,13 @@ import {
   type GenerationContract,
 } from '../src/lib/content-core/pipeline'
 import {
-  LIFE_CONTRACT_FIELDS, SPEAKER_PLAN_VERSION,
+  LIFE_CONTRACT_FIELDS, SPEAKER_PLAN_VERSION, orderPersonasForSource,
 } from '../src/lib/content-core/speaker'
 import { personaInputOf, personaPoolIdentity } from './lib/content-core-run.mjs'
+import {
+  buildSpeakerPlanPayload, buildSpeakerPlanSystemPrompt,
+} from './lib/content-core-prompts.mjs'
+import { buildEvidencePacket } from '../src/lib/content-core/evidence'
 import type { PoolCard } from '../src/lib/persona-pool-card'
 import {
   artifactRetryable, reviewShapeOk, DIRECT_REASONS, INCOMPLETE_CAUSES, NOT_RUN_CAUSES,
@@ -713,6 +717,57 @@ console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로
     return poolOf(a, b) === poolOf(b, a)
   })())
   check('🔴 같은 풀이면 같은 값이다', poolOf(CARD()) === base)
+
+  // ── 🔴 후보 순서는 원문이 정한다 — 실제로 보내는 것과 계약이 같은 입력을 쓴다 ──
+  const POOL = ['P01', 'P02', 'P03', 'P04', 'P05'].map((c) => personaInputOf(CARD({ code: c }), ref))
+  const codes = (hash: string, from: readonly typeof POOL[number][] = POOL): string =>
+    orderPersonasForSource(from, hash).map((x) => x.code).join(',')
+
+  check('🔴 🔴 **같은 원문 지문은 언제나 같은 후보 순서다**',
+    codes('h-aaaa') === codes('h-aaaa'))
+  check('🔴 🔴 **읽은 순서가 달라도 같은 순서가 나온다**',
+    codes('h-aaaa', [...POOL].reverse()) === codes('h-aaaa'))
+  check('🔴 🔴 **원문이 다르면 순서가 흩어진다**', (() => {
+    const orders = new Set(Array.from({ length: 40 }, (_, i) => codes(`h-${i}`)))
+    return orders.size > 1
+  })(), `${new Set(Array.from({ length: 40 }, (_, i) => codes(`h-${i}`))).size}가지`)
+  check('🔴 🔴 **첫 후보가 한 사람으로 고정되지 않는다**', (() => {
+    const first = new Set(Array.from({ length: 40 }, (_, i) => codes(`h-${i}`).split(',')[0]!))
+    return first.size >= 3
+  })(), [...new Set(Array.from({ length: 40 }, (_, i) => codes(`h-${i}`).split(',')[0]!))].join(','))
+  check('🔴 아무도 빠지거나 겹치지 않는다', (() => {
+    const got = orderPersonasForSource(POOL, 'h-x').map((x) => x.code)
+    return got.length === POOL.length && new Set(got).size === POOL.length
+  })())
+  check('🔴 🔴 **계약은 순서에 흔들리지 않는다** — 순서는 지문에서 다시 만든다',
+    personaPoolIdentity(POOL) === personaPoolIdentity([...POOL].reverse()))
+  check('🔴 🔴 **요청을 만드는 쪽이 그 순서를 실제로 쓴다**', (() => {
+    const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+    return /orderPersonasForSource\(input\.personas, input\.contract\.sourceInputHash\)/.test(src)
+      && /personas: ordered/.test(src)
+  })())
+  /** 🔴 **실제로 나가는 문자열로 본다** — 주석이 아니라 만들어진 요청이다 */
+  check('🔴 🔴 **요청에도 지시에도 회차 상태가 없다**', (() => {
+    const packet = buildEvidencePacket({
+      sourceArticleId: 's1', title: '제목', maskedBody: '본문입니다. 다들 어떠세요?',
+    })
+    const payload = buildSpeakerPlanPayload({ packet, personas: POOL })
+    return !payload.includes('맡은 수')
+      && !buildSpeakerPlanSystemPrompt().includes('맡은 수')
+  })())
+  check('🔴 🔴 **읽은 순서가 달라도 실제로 나가는 요청이 같다**', (() => {
+    const packet = buildEvidencePacket({
+      sourceArticleId: 's1', title: '제목', maskedBody: '본문입니다. 다들 어떠세요?',
+    })
+    const hash = 'h-payload'
+    const one = buildSpeakerPlanPayload({ packet, personas: orderPersonasForSource(POOL, hash) })
+    const two = buildSpeakerPlanPayload({
+      packet, personas: orderPersonasForSource([...POOL].reverse(), hash),
+    })
+    return one === two
+  })())
+  check('🔴 🔴 **생성 러너가 회차 안 상태를 더는 만들지 않는다**',
+    !/v2Load/.test(readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')))
 }
 
 // ─────────────────────────────────────────────────────────
