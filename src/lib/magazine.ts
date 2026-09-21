@@ -1,5 +1,6 @@
 import { MAGAZINE_ARTICLES } from '@/content/magazine/articles'
-import type { MagazineArticle } from '@/content/magazine/types'
+import type { MagazineArticle, MagazineCluster } from '@/content/magazine/types'
+import { MAGAZINE_ALL_CLUSTER, MAGAZINE_PAGE_SIZE, isPageOutOfRange } from '@/lib/list-query'
 
 /**
  * 매거진 공개 관문
@@ -42,6 +43,100 @@ export function getAllMagazineArticles(): MagazineArticle[] {
   return MAGAZINE_ARTICLES.filter((a) => isPublicMagazineArticle(a)).sort((a, b) =>
     b.publishedAt.localeCompare(a.publishedAt),
   )
+}
+
+/** 목록에서 고른 분류. `'all'` 은 "고르지 않음" 이지 분류가 아니다. */
+export type MagazineListCluster = MagazineCluster | typeof MAGAZINE_ALL_CLUSTER
+
+export type MagazineListState = {
+  /** 칩으로 세울 분류 — 공개 글 전체 기준 */
+  clusters: MagazineCluster[]
+  /** 정규화된 분류. 칩에 없는 값은 전체로 되돌아온다 */
+  cluster: MagazineListCluster
+  /** 이 쪽에 실을 글 */
+  articles: MagazineArticle[]
+  /** 고른 분류 기준 전체 개수 — 쪽 수와 404 경계가 이 값에서 나온다 */
+  total: number
+}
+
+/**
+ * 목록 한 화면에 필요한 것을 **한 번의 공개 글 스냅샷에서** 전부 계산한다.
+ *
+ * 🔴 **스냅샷을 인자로 받는 것이 이 함수의 핵심이다.**
+ *    화면이 칩 목록 · 분류 정규화 · 개수 · 자르기를 따로 물으면 그때마다
+ *    `getAllMagazineArticles()` 가 다시 돌아 `MAGAZINE_ARTICLES` 전체를
+ *    거르고 정렬한다. 같은 요청 안에서 같은 답을 네 번 만드는 일이었다.
+ *    더 나쁜 것은 네 번의 결과가 **서로 다른 순간을 볼 수 있다는 점**이다 —
+ *    예약 공개 시각을 막 지난 글이 칩 계산에는 없고 목록에는 있으면,
+ *    고를 수 없는 분류의 글이 화면에 실린다.
+ *
+ * 🔴 배열을 받으므로 **합성 표본을 그대로 넣을 수 있다.**
+ *    실제 콘텐츠는 분류별 최대 9건이라 "분류 + 2쪽" 이 실데이터로는 열리지 않는다.
+ *    콘텐츠를 늘리는 대신 여기로 13건짜리 배열을 넣어 그 경로를 검사한다.
+ *
+ * 🔴 분류 판정 기준은 "타입에 있는가" 가 아니라 **"칩이 있는가"** 다.
+ *    공개 글이 0건인 분류는 칩도 없다. 그 주소로 들어오면 고를 수 없는 것이
+ *    골라진 화면이 되므로 전체로 되돌린다. 404 를 주지 않는 것은
+ *    `parseBoardSort` 와 같은 태도다 — 되돌아갈 곳이 언제나 있다.
+ *
+ * 🔴 범위를 넘긴 쪽은 **자르지 않고 빈 배열**을 준다.
+ *    `parsePageParam` 이 자릿수가 긴 값을 안전 정수까지 허용하므로 `(page-1)*12` 가
+ *    1e17 같은 값이 될 수 있다. 호출부는 같은 `isPageOutOfRange` 로 404 를 낸다 —
+ *    판정이 두 곳이면 한쪽만 고쳐져 빈 200 이 되돌아온다.
+ */
+export function resolveMagazineList(
+  published: readonly MagazineArticle[],
+  requested: string | undefined,
+  page: number,
+): MagazineListState {
+  const clusters = [...new Set(published.map((a) => a.cluster))]
+
+  const cluster: MagazineListCluster =
+    requested && (clusters as string[]).includes(requested)
+      ? (requested as MagazineCluster)
+      : MAGAZINE_ALL_CLUSTER
+
+  const filtered =
+    cluster === MAGAZINE_ALL_CLUSTER
+      ? [...published]
+      : published.filter((a) => a.cluster === cluster)
+  const total = filtered.length
+
+  if (isPageOutOfRange(page, total, MAGAZINE_PAGE_SIZE)) {
+    return { clusters, cluster, articles: [], total }
+  }
+
+  const start = (page - 1) * MAGAZINE_PAGE_SIZE
+  return {
+    clusters,
+    cluster,
+    articles: filtered.slice(start, start + MAGAZINE_PAGE_SIZE),
+    total,
+  }
+}
+
+/**
+ * 화면이 부르는 입구. 공개 관문을 거쳐 스냅샷을 얻고 위 순수 계산에 넘긴다.
+ *
+ * 🔴 `MAGAZINE_ARTICLES` 를 직접 읽지 않는다 — 관문을 거쳐야
+ *    DRAFT·BLOCKED·예약 글이 목록에도 total 에도 섞이지 않는다.
+ *
+ * 🔴 인자가 **원시값 둘**이다. 배열(`?cluster=a&cluster=b`)을 여기까지 들여보내지 않는다 —
+ *    호출부가 React `cache` 로 감싸는데, `cache` 는 인자의 동일성만 보므로 내용이 같은
+ *    다른 배열은 다른 키가 되어 같은 요청에서 계산이 두 번 돈다.
+ *    배열을 문자열로 누르는 일은 주소 해석의 첫 관문(`firstParam`)이 맡는다.
+ *
+ * ⚠️ 이 함수 자체에는 요청 단위 공유 장치가 없다.
+ *    `generateMetadata` 와 렌더가 같은 답을 봐야 하므로 **공유는 호출부
+ *    (`app/magazine/page.tsx`)가 React `cache` 로 건다.**
+ *    그 장치를 여기 두지 않는 이유는 이 모듈이 `npm run check:pagination` 에서도
+ *    돌기 때문이다 — Node 로 부르면 `react` 의 `cache` 가 `undefined` 다(실측).
+ */
+export function getMagazineListState(
+  cluster: string | undefined,
+  page: number,
+): MagazineListState {
+  return resolveMagazineList(getAllMagazineArticles(), cluster, page)
 }
 
 export function getMagazineArticleBySlug(slug: string): MagazineArticle | undefined {

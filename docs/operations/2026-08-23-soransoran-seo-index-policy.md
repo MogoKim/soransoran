@@ -78,7 +78,7 @@ soft delete 즉시 sitemap에서 빠지고 상세는 404가 된다.
 | `/community/free` | index | 자기 경로 | ✅ | — | 커뮤니티 폭 |
 | `/community/*/[postId]` | index | 자기 경로 | ✅ (PUBLISHED만) | — | 유일한 원본 콘텐츠 |
 | `/terms` · `/privacy` | index | 자기 경로 | ❌ | — | 신뢰 신호. sitemap 필수는 아님 |
-| `/magazine` | **noindex, follow** | `/magazine` 유지 | ❌ | — | 발행 경로 없음 (원칙 3) |
+| `/magazine` | index | **자기 경로** (쪽·분류 포함) | ✅ 목록 + 공개 글 전부 | — | 발행 완료 · 공개 34건 (2026-09-21 코드 대조) |
 | `/best` | **noindex, follow** | `/best` 유지 | ❌ | — | 모아보기 로직 없음 (원칙 3) |
 | `/write` | **noindex, nofollow** | 상속(무시됨) | ❌ | — | 로그인 필수 기능 화면 |
 | `/login` | **noindex, nofollow** | 상속(무시됨) | ❌ | — | 기능 화면 |
@@ -86,12 +86,33 @@ soft delete 즉시 sitemap에서 빠지고 상세는 404가 된다.
 | `/api/*` | — | — | ❌ | ✅ `/api/` | — |
 
 **`follow` 차이의 근거**
-`/magazine` · `/best`는 상단 메뉴에서 도달하는 정식 면이라 크롤러가 다른 게시판으로
+`/best`는 상단 메뉴에서 도달하는 정식 면이라 크롤러가 다른 게시판으로
 이동할 수 있게 `follow: true`. `/write` · `/login`은 로그인 흐름뿐이라 `follow: false`.
+(`/magazine` 도 발행 전에는 같은 이유로 `follow: true` 였다 — 지금은 index 라 해당하지 않는다)
 
 **noindex 페이지의 canonical**
 noindex가 붙으면 canonical 값은 크롤러가 무시한다.
-`/magazine` · `/best`의 canonical을 유지하는 이유는 발행 시작 시 되돌리기 쉽게 두기 위해서다.
+`/best`의 canonical을 유지하는 이유는 모아보기 구현 시 되돌리기 쉽게 두기 위해서다.
+
+**`/magazine` 의 canonical — 목록별 자기 경로 (2026-09-21)**
+`/magazine` 은 index 이므로 canonical 이 실제로 읽힌다.
+쪽·분류를 나눈 뒤에도 **지금 보고 있는 목록**을 가리킨다.
+
+```
+/magazine                            → /magazine
+/magazine?page=2                     → /magazine?page=2
+/magazine?page=1                     → /magazine            (기본값은 뺀다)
+/magazine?cluster=sleep              → /magazine?cluster=sleep
+/magazine?cluster=sleep&page=2       → /magazine?cluster=sleep&page=2
+/magazine?cluster=all                → /magazine            (기본값은 뺀다)
+/magazine?cluster=<모르는 값>        → /magazine            (전체로 정규화)
+```
+
+2쪽 이후를 `/magazine` 으로 몰지 않는다 — 그러면 그 화면들이 1쪽의 복제로 처리되어
+깊은 글로 가는 내부 링크가 색인에서 끊긴다.
+범위를 넘긴 쪽은 빈 200 이 아니라 **404** 다(soft-404 방지).
+규칙 정본은 `buildMagazineListHref()` 하나이고 `npm run check:pagination` 이 고정한다.
+목록 정책 전체는 [매거진 전략서](./2026-08-23-soransoran-magazine-strategy.md) §6 D7.
 
 ---
 
@@ -105,7 +126,7 @@ noindex가 붙으면 canonical 값은 크롤러가 무시한다.
 | 신고 글 | 자동 숨김 없음(운영자 판단). 현재 규모에선 수동으로 충분 |
 | 차단 사용자 글 | 뷰어별 개인 설정이므로 **sitemap에 반영하지 않는다**(의도된 설계). 화면에서만 필터 |
 | 외부 링크 `rel` | 현재 평문 렌더라 불필요. **링크화 도입 시 `rel="ugc nofollow"` 동시 필수** |
-| 빈 게시판 | 커뮤니티 게시판은 글 0이어도 index(곧 채워짐). **매거진·베스트는 noindex**(구조적으로 비어 있음) |
+| 빈 면 | 커뮤니티 게시판은 글 0이어도 index(곧 채워짐). **`/best` 는 noindex** — 모아보기 로직이 없어 구조적으로 비어 있다. (`/magazine` 도 발행 전에는 같은 이유였다. **2026-09-21 현재 공개 34건이라 index 다.** 공개 글이 0건으로 돌아가면 다시 건다) |
 | 저품질·짧은 글 | 기술적으로 거르지 않는다. `content-guard`가 **입구에서** 방어(최소 길이·링크 도배·금칙어) |
 
 **핵심 구분**: "아직 글이 없는 게시판"(곧 채워짐)과 "구조적으로 빈 면"(발행 경로 자체가 없음)은 다르다.
@@ -199,7 +220,7 @@ sitemap 에서 뺐는데 상세가 200 이면 크롤러가 링크를 타고 들�
 
 | 상황 | 조치 |
 |---|---|
-| 매거진 발행 경로 구현 | `src/app/magazine/page.tsx`의 `robots` 한 줄 제거 + `sitemap.ts`를 `BOARD_REGISTRY`로 복원 |
+| ~~매거진 발행 경로 구현~~ | ✅ **완료 (과거 조치)** — `robots` 제거 + sitemap 재포함이 이미 반영돼 있다. 되돌릴 조건은 "공개 글 0건" 하나뿐이고 지금은 34건이다 |
 | 베스트 모아보기 구현 | `src/app/best/page.tsx` 동일 |
 | UGC 자동 링크화 도입 | 같은 PR에서 `rel="ugc nofollow"` 적용 (원칙 9) |
 | 게시판 추가 | `board-registry`에 등록하면 sitemap·메뉴가 함께 따라온다 |
@@ -217,11 +238,13 @@ sitemap 에서 뺐는데 상세가 200 이면 크롤러가 링크를 타고 들�
                         canonical = https://soransoran.com
 2. /community/*         robots meta 없음 · canonical 자기 경로
 3. /community/*/[id]    robots meta 없음 · canonical 자기 경로
-4. /magazine · /best    noindex, follow · canonical 유지 · HTTP 200
+4. /magazine            robots meta 없음 · canonical 자기 경로(쪽·분류 포함) · HTTP 200
+                        범위 초과 쪽은 404 (빈 200 아님)
+   /best                noindex, follow · canonical 유지 · HTTP 200
 5. /write · /login      noindex, nofollow · HTTP 200
 6. /robots.txt          Allow: / · Disallow: /api/ · /admin/ · 전체 Disallow: / 0건
-7. /sitemap.xml         홈 + 커뮤니티 게시판 + 공개글만
-                        /magazine · /best · /write · /login · /admin/reports 0건
+7. /sitemap.xml         홈 + /magazine 목록 + 공개 매거진 글 + 공개 커뮤니티 글
+                        /best · /write · /login · /admin/reports 0건
 8. 전 route             vercel.app 0건
 ```
 

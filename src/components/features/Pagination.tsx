@@ -4,15 +4,24 @@ import { useEffect, useState, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { TOUCH_MIN } from '@/lib/spacing'
-import { buildBoardListHref, type BoardSort } from '@/lib/list-query'
+import { buildListHref, type ListKeepParams } from '@/lib/list-query'
 
 type PaginationProps = {
   currentPage: number
   totalPages: number
-  /** 게시판 목록 주소. 예: '/community/free' */
+  /** 목록 주소. 예: '/community/free' · '/magazine' */
   basePath: string
-  /** 페이지를 옮겨도 정렬은 따라간다 */
-  sort: BoardSort
+  /**
+   * 쪽을 옮겨도 따라가는 축. 게시판은 정렬, 매거진은 분류다.
+   *
+   * 🔴 함수가 아니라 **문자열 지도**를 받는다. 목록 화면은 서버 컴포넌트이고 이쪽은
+   *    client 라 주소를 만드는 함수를 prop 으로 넘길 수 없다. 값만 넘기고 주소는
+   *    여기서 `buildListHref` 로 만든다 — 규칙이 한 곳에 남는다.
+   *
+   * 🔴 무엇이 기본값인지는 이 컴포넌트가 모른다.
+   *    `boardListKeep` · `magazineListKeep` 이 기본값 축을 이미 `undefined` 로 지워서 준다.
+   */
+  keep?: ListKeepParams
 }
 
 /**
@@ -67,7 +76,7 @@ const BUNCH = 3
  *    (2026-09-21 실측). 소란소란의 "크게"(24px)가 우나어의 가장 큰 단계와 같은 값이라
  *    한 단계만 올려도 같은 일이 난다.
  */
-export default function Pagination({ currentPage, totalPages, basePath, sort }: PaginationProps) {
+export default function Pagination({ currentPage, totalPages, basePath, keep }: PaginationProps) {
   const router = useRouter()
   const [jump, setJump] = useState(String(currentPage))
 
@@ -78,7 +87,7 @@ export default function Pagination({ currentPage, totalPages, basePath, sort }: 
 
   if (totalPages <= 1) return null
 
-  const hrefFor = (page: number) => buildBoardListHref(basePath, { page, sort })
+  const hrefFor = (page: number) => buildListHref(basePath, { page, keep })
 
   const isFirst = currentPage <= 1
   const isLast = currentPage >= totalPages

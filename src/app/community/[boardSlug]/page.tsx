@@ -8,6 +8,7 @@ import ListHeader from '@/components/ui/list-header'
 import { getBoardBySlug } from '@/lib/board-registry'
 import { getPostsByBoard } from '@/lib/queries/posts'
 import {
+  boardListKeep,
   buildBoardListHref,
   isPageOutOfRange,
   lastPageOf,
@@ -180,7 +181,7 @@ export default async function BoardPage({
           currentPage={page}
           totalPages={lastPageOf(total)}
           basePath={board.href}
-          sort={sort}
+          keep={boardListKeep(sort)}
         />
       </main>
     </PageShell>
