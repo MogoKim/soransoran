@@ -55,7 +55,7 @@ import { planSupply, collectReadiness } from '../src/lib/scale-supply-plan'
 import { currentCapacity, preparedCapacity, describeInventory } from '../src/lib/collect-inventory'
 import { observeJobsSafe } from './lib/launchd-observe.mjs'
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
-import { compareWorkflow } from '../src/lib/scale-workflow-render'
+import { compareWorkflowSuperset } from '../src/lib/scale-workflow-render'
 import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
 import {
   forecastPublishing, nextScheduleAt, capacityOf, personasNeededFor,
@@ -619,7 +619,9 @@ async function main(): Promise<void> {
   const publish = judgePublish({
     todayCount, dailyCap: RELEASE_DAILY_CAP,
     afterPublishGrace: now.getTime() >= graceUntil.getTime(),
-    mismatched: verdict.bad.length, legacyPublishedToday, historicUnknownProfile,
+    // 🔴 연결이 깨진 행만 CRITICAL 이다 — 숨겨진 글은 따로 센다
+    mismatched: verdict.bad.length, hiddenPost: verdict.hiddenPost.length,
+    legacyPublishedToday, historicUnknownProfile,
     candidates: stock.usable, now,
   })
 
@@ -703,13 +705,19 @@ async function main(): Promise<void> {
       ? `규모 설정이 설치되지 않았다 — 안전 기본값(${DAILY_PUBLISH_CAP}/day)으로 돈다`
       : null,
     /**
-     * 🔴 **프로필을 올려도 워크플로우가 그대로면 글은 안 나간다** — 그 어긋남을 여기서 본다.
+     * 🔴 **워크플로는 설계상 모든 단계의 합집합이다** (2026-09-21 실측 보정).
+     *
+     *    앞판은 **활성 단계 프로필**과 견줬다. 그런데 yml 은 단계마다 고쳐 배포하지
+     *    않으려고 합집합을 예약하고 **러너가 자기 슬롯인지 판정**한다 —
+     *    그래서 d1 에서 10개 중 9개가 "프로필에 없다" 로 잡혔다. **거짓 경보다.**
+     *
+     * 🔴 느슨해진 것이 아니다: 어느 단계 슬롯도 아닌 cron 과, 빠진 단계 슬롯은 여전히 잡는다.
      *    yml 을 못 읽는 경우도 사유로 남긴다(조용히 통과시키지 않는다).
      */
     workflowMismatch: (() => {
       const f = join(process.cwd(), '.github/workflows/auto-publish.yml')
       if (!existsSync(f)) return ['auto-publish.yml 을 찾지 못했다 — 스케줄을 확인할 수 없다']
-      return compareWorkflow(resolved.releaseProfile, readFileSync(f, 'utf-8')).map((m) => m.detail)
+      return compareWorkflowSuperset(readFileSync(f, 'utf-8')).map((m) => m.detail)
     })(),
     slots: resolved.releaseProfile.slots.map((x) => slotLabel(x)),
     /** 🔴 무엇이 채워지면 올라가는가 — 감속 조건은 이 표의 뒤집음이다 */

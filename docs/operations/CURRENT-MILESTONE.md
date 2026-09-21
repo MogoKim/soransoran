@@ -2,6 +2,10 @@
 
 > 바뀌지 않는 것은 [`NORTH-STAR.md`](./NORTH-STAR.md) 에 있다. 이 문서는 **자주 바뀐다.**
 > 상세 실측과 이력은 `MASTER-OPERATING-SYSTEM.md` §8.0-D100 에 있다.
+>
+> 🔴 **목표의 정본은 [D100 목표 정본](2026-09-21-d100-goal-canon.md) 하나다** (2026-09-21).
+> 단위는 **공개 발행**이다 — Shadow·Queue 후보가 아니다. 별도 SEO 레인은 만들지 않는다.
+> 단계별 숫자는 `src/lib/d100-capacity.ts` 에 있고 `npm run d100:readiness` 가 읽어 낸다.
 
 ## 목표
 

@@ -139,6 +139,49 @@ export function allStageCronLines(): string[] {
   return allStageSlots().map(slotCronUtc)
 }
 
+export type SupersetMismatch = { kind: 'missing' | 'unplanned' | 'count'; detail: string }
+
+/**
+ * 🔴 **워크플로는 모든 단계의 합집합이어야 한다** (2026-09-21 실측 보정).
+ *
+ *    앞판은 `compareWorkflow(활성 단계 프로필, yml)` 로 견줬다. 그런데 yml 은
+ *    **설계상** 합집합이다(위 주석이 그 이유를 적어 두었다) — 단계를 바꿀 때마다
+ *    yml 을 고쳐 배포하지 않으려고 합집합을 예약하고 러너가 자기 슬롯인지 판정한다.
+ *    그래서 d1 에서 실측하면 10개 중 9개가 `extra` 로 잡혔다. **거짓 경보다.**
+ *
+ * 🔴 **느슨하게 만든 것이 아니다.** 두 가지는 여전히 실패다:
+ *      `missing`    어떤 단계의 슬롯이 yml 에 없다 → 그 단계는 영원히 돌지 않는다
+ *      `unplanned`  yml 에만 있는 cron → 아무도 계획하지 않은 회차가 돈다
+ */
+export function compareWorkflowSuperset(yml: string): SupersetMismatch[] {
+  const want = allStageCronLines()
+  const have = parseCronLines(yml)
+  const out: SupersetMismatch[] = []
+  for (const c of want) {
+    if (!have.includes(c)) out.push({ kind: 'missing', detail: `단계 슬롯 ${c} 가 워크플로우에 없다` })
+  }
+  for (const c of have) {
+    if (!want.includes(c)) out.push({ kind: 'unplanned', detail: `워크플로우 cron ${c} 는 어느 단계 슬롯도 아니다` })
+  }
+  return out
+}
+
+/**
+ * 🔴 **합집합을 예약했으면 러너가 반드시 걸러야 한다.**
+ *    거르지 않으면 d1 인데 하루 10번 발행을 시도한다 — 상한이 막아 주더라도
+ *    그것은 두 번째 방어선이지 설계가 아니다.
+ *
+ * 🔴 문자열 포함 검사 하나로 끝내지 않는다 — 부르는 쪽이 **행동 fixture** 로
+ *    "d1 에서 d10 슬롯이 실제로 걸러지는가" 를 값으로 확인한다.
+ */
+export function stageGatingPresent(runnerSrc: string): boolean {
+  /**
+   * 🔴 합집합을 **정본 함수에서** 가져오는가. 손으로 적은 슬롯 목록이면
+   *    단계를 올릴 때 조용히 어긋난다.
+   */
+  return /allStageSlots\(\)/.test(runnerSrc)
+}
+
 /**
  * 🔴 UTC cron → KST 슬롯. `slotCronUtc` 의 역함수다.
  *    `m h * * *` 만 받는다 — 목록(`1,2`) · 범위(`0-5`) · 스텝 표기는 슬롯이 아니다.

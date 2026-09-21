@@ -569,8 +569,9 @@ npm run publish:trigger-preflight   # 다르면 exit 1 → local runner 등록�
 | d3 | 3 | 42 | 코드 기반만 있음 |
 | d5 | 5 | 70 | 코드 기반만 있음 |
 | d10 | 10 | 140 | NOT READY |
-| Shadow100 | Queue 후보 100/day | 별도 | 수집·수율 미증명 |
-| SEO100-200 | indexable 콘텐츠 100~200/day | 별도 Lane | 설계 없음 |
+| ~~Shadow100~~ | ~~Queue 후보 100/day~~ | — | 🔴 **superseded (2026-09-21)** — Shadow 는 공개 100/day 의 **선행 지표**이지 목표가 아니다. [D100 목표 정본](2026-09-21-d100-goal-canon.md) |
+| ~~SEO100-200~~ | ~~indexable 콘텐츠 100~200/day~~ | — | 🔴 **superseded (2026-09-21)** — **별도 SEO 레인을 만들지 않는다.** SEO 는 커뮤니티 글이 검색에 노출된 **결과**다. [D100 목표 정본](2026-09-21-d100-goal-canon.md) |
+| d20 · d30 · d50 · d100 | 20 · 30 · 50 · 100 | 코드 정본 | `src/lib/d100-capacity.ts` · `npm run d100:readiness` |
 
 현재 d10 병목은 다음 네 가지다.
 
@@ -1463,7 +1464,7 @@ health · Queue · runner · 발행 트랜잭션 중 **아무도 주지 않았�
 
 | 항목 | 값 | 코드 정본 |
 |---|---|---|
-| 공개 글 | **100/day** | `scale-profile.ts` `PROFILES` — 🔴 지금은 `d1`(1/day) |
+| 공개 글 | **100/day** (D100 목표 정본) | 단계 정본 `src/lib/d100-capacity.ts` · 슬롯 `scale-profile.ts` `PROFILES` — 🔴 지금은 `d1`(1/day) |
 | 새 관리형 글의 첫 댓글 | **60분 안에** | `FIRST_COMMENT_MAX_MINUTES` |
 | 한 글의 Persona 댓글 | **1~5건** | `PERSONA_COMMENTS_PER_POST_MAX` |
 | Persona 댓글 하루 상한 | **500건** | `BOOTSTRAP_DAILY_MAX` |

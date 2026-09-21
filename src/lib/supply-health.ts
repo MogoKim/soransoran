@@ -74,6 +74,7 @@ export type FindingCode =
   | 'PUBLISH_OVER_CAP'
   | 'PUBLISH_LEGACY'
   | 'PUBLISH_MISMATCH'
+  | 'PUBLISH_HIDDEN_POST'
   | 'PUBLISH_NO_CANDIDATE'
   | 'PUBLISH_HISTORIC_UNKNOWN'
   // 발행 여력 (§4-AW ③-b)
@@ -474,7 +475,16 @@ export type PublishInput = {
    */
   afterPublishGrace: boolean
   /** 큐에서 PUBLISHED 인데 Post 가 없는 것 등 정합이 깨진 수 */
+  /** 🔴 **연결이 깨진 행만** — Post 가 없거나(orphan) 모르는 상태(realMismatch) */
   mismatched: number
+  /**
+   * 🔴 **숨겨진 글** (Post HIDDEN·DELETED). 2026-09-21 실측에서 1건이었고,
+   *    앞판은 이것을 `PUBLISH_MISMATCH` CRITICAL 로 올렸다 — 연결이 멀쩡한 것을
+   *    데이터 손상처럼 부르면 진짜 손상이 묻힌다.
+   * 🔴 **숨기지 않는다.** 따로 보고하고 재고에서도 뺀다.
+   * 🔴 **"사람이 내렸다" 고 부르지 않는다** — 감사 기록 없이 주체·의도를 단정할 수 없다.
+   */
+  hiddenPost?: number
   /**
    * 🔴 **오늘(KST) 발행분 중** profile 이 없는 것.
    *
@@ -504,7 +514,13 @@ export function judgePublish(input: PublishInput): Finding[] {
   }
   if (input.mismatched > 0) {
     out.push(f('CRITICAL', 'PUBLISH_MISMATCH',
-      `Queue 와 Post 가 어긋난 행이 ${input.mismatched}건 있다`))
+      `Queue 와 Post 의 **연결이 깨진** 행이 ${input.mismatched}건 있다 (Post 없음 또는 모르는 상태)`))
+  }
+  if ((input.hiddenPost ?? 0) > 0) {
+    // 🔴 연결은 정상이다 — CRITICAL 이 아니다. 그래도 보고는 한다
+    out.push(f('INFO', 'PUBLISH_HIDDEN_POST',
+      `숨겨진 글 ${input.hiddenPost}건 (Post HIDDEN·DELETED · 연결은 정상 · 재고에서 제외)`
+      + ' — 🔴 사람이 내린 것인지 자동 처리인지는 이 조회로 알 수 없다(감사 기록 확인 필요)'))
   }
   if (input.todayCount > input.dailyCap) {
     out.push(f('CRITICAL', 'PUBLISH_OVER_CAP',

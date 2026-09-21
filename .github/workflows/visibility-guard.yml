@@ -636,6 +636,12 @@ jobs:
       #    (provider 0 · DB 0 · write 0 · 실측 0.15 초).
       #    🔴 `supply:process-check` 과 **같은 조건**을 쓴다 — 이 계약을 깨뜨릴 수 있는
       #       PR(src/lib · scripts)은 전부 heavy 이고, 화면 전용 PR 은 건드리지 못한다.
+      # 🔴 D100 Phase 0 정본 — 재고 이름·Queue/Post 정합·workflow superset·runner 상태·
+      #    Persona 확장·North Star·82cook 복구가 한 곳에서 판정된다.
+      #    🔴 무거운 검사라 `supply:process-check` 과 같은 조건을 쓴다.
+      - name: 🔴 D100 준비도 정본 (재고·정합·runner·Persona·North Star·82cook)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run d100:readiness-check
       - name: 🔴 작업 묶음 — backlog 전체를 판정하지 않는다
         if: steps.scope.outputs.heavy == 'true'
         run: npm run supply:workset-check
