@@ -10,6 +10,7 @@
  * 🔴 네트워크 0 · 실제 provider 0 · DB 0 · Queue write 0.
  */
 import { spawnSync } from 'node:child_process'
+import { isDeepStrictEqual } from 'node:util'
 import {
   mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync, existsSync,
 } from 'node:fs'
@@ -825,6 +826,78 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
       !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null,
       v.ok ? 'ok 였다 — 검사가 헛돈다' : v.code)
   }
+  {
+    /**
+     * 🔴 **키 순서만 다른 것은 같은 값이다** (2026-09-21).
+     *    `editDiff` 는 Postgres `jsonb` 라 왕복하며 키 순서가 바뀔 수 있다 —
+     *    그것으로 정상 수정을 되돌리면 안 된다.
+     */
+    const reordered = (v: unknown): unknown => {
+      const o = v as Record<string, unknown>
+      // 🔴 같은 내용을 **거꾸로** 다시 담는다
+      return Object.fromEntries(Object.entries(o).reverse())
+    }
+    const sv = store({
+      row: REAL_SNAP(),
+      after: (st) => (st === null ? null : { ...st, editDiff: reordered(st.editDiff) }),
+    })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    const c = sv.committed()
+    check('🔴 🔴 **키 순서만 다른 editDiff 는 되돌리지 않는다**',
+      v.ok && c?.status === 'EDITED' && c.decidedBy === BY,
+      v.ok ? '' : v.reason)
+    check('🔴 그 시험이 헛돌지 않는다 — 읽어 온 값은 실제로 순서가 뒤집혔다', (() => {
+      const made = reviewPatchOf({
+        action: {
+          decision: 'edit', gate: passGate,
+          edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+        },
+        draftTitle: REAL_TITLE, draftBody: REAL_DRAFT,
+      }).editDiff
+      const flipped = reordered(made)
+      // 🔴 글자로는 다르고, 뜻으로는 같다 — 앞판이라면 여기서 되돌렸다
+      return JSON.stringify(flipped) !== JSON.stringify(made)
+        && isDeepStrictEqual(flipped, made)
+        && Object.keys(made as Record<string, unknown>).length === 5
+    })())
+  }
+  {
+    /** 🔴 키 순서는 같은데 **값 하나**가 다르다 — 이것은 되돌린다 */
+    const sv = store({
+      row: REAL_SNAP(),
+      after: (st) => (st === null ? null : {
+        ...st,
+        editDiff: { ...(st.editDiff as Record<string, unknown>), bodyCharsAfter: 99999 },
+      }),
+    })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    check('🔴 🔴 **키 순서가 같아도 값이 하나 다르면 되돌린다**',
+      !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null,
+      v.ok ? 'ok 였다' : v.code)
+  }
+  check('🔴 🔴 **비교가 글자가 아니라 구조다**', (() => {
+    const lib = readFileSync('src/lib/original-post-machine-review.ts', 'utf-8')
+    return /isDeepStrictEqual\(back\.editDiff \?\? null, wantDiff\)/.test(lib)
+      // 🔴 양쪽을 문자열로 만들어 견주던 옛 판이 돌아오지 않았다
+      && !/JSON\.stringify\(back\.editDiff/.test(lib)
+  })())
+  check('🔴 🔴 **값·타입·배열 순서 차이는 계속 다르다**',
+    !isDeepStrictEqual({ a: 1 }, { a: '1' })
+    && !isDeepStrictEqual({ a: [1, 2] }, { a: [2, 1] })
+    && !isDeepStrictEqual({ a: 1 }, { a: 1, b: 2 })
+    && isDeepStrictEqual({ a: 1, b: 2 }, { b: 2, a: 1 }))
   {
     // 🔴 값이 **변조**돼도 되돌린다
     const sv = store({

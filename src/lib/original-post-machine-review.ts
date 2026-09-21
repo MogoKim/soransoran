@@ -12,6 +12,7 @@
  * 🔴 **순수 함수다.** DB·파일·네트워크를 모른다 — fixture 가 그대로 돌린다.
  *    검토 완료(`completeReview`)만 저장소를 **주입받아** 쓴다 — 여기서 Prisma 를 알지 않는다.
  */
+import { isDeepStrictEqual } from 'node:util'
 import { judgeReviewSnapshot, type ReviewSnapshot } from './original-post-auto-publish'
 
 /** 🔴 사람이 보아야 하는 것만 추린다 — artifact 전문을 그대로 들고 다니지 않는다 */
@@ -525,8 +526,15 @@ export async function completeReview(input: {
        *    `judgeReviewSnapshot` 은 발행 문안만 본다 — 왜 고쳤나·왜 버렸나가 빠지거나
        *    다른 값으로 들어가도 통과했다. 그 둘이 없으면 "무엇을 왜" 가 사라진다.
        */
+      /**
+       * 🔴 **키 순서로 판정하지 않는다** (2026-09-21 정정).
+       *    앞판은 양쪽을 `JSON.stringify` 해서 견줬다. `editDiff` 는 Postgres `jsonb` 라
+       *    **객체 키 순서를 보존하지 않는다** — 내용이 같아도 왕복하며 순서가 바뀌면
+       *    정상 수정이 `verifyFailed` 로 되돌아간다.
+       *    🔴 값·타입·배열 순서 차이는 그대로 실패한다(`isDeepStrictEqual` 의 계약).
+       */
       const wantDiff = patch.editDiff ?? input.before.editDiff ?? null
-      if (JSON.stringify(back.editDiff ?? null) !== JSON.stringify(wantDiff)) {
+      if (!isDeepStrictEqual(back.editDiff ?? null, wantDiff)) {
         throw new RollbackSignal('verifyFailed', 'editDiff 가 기대값과 다르다')
       }
       const wantReason = patch.declineReason ?? input.before.declineReason ?? null
