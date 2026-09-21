@@ -10,6 +10,7 @@
  * 🔴 네트워크 0 · 실제 provider 0 · DB 0 · Queue write 0.
  */
 import { spawnSync } from 'node:child_process'
+import { isDeepStrictEqual } from 'node:util'
 import {
   mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync, existsSync,
 } from 'node:fs'
@@ -28,8 +29,19 @@ import {
   findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
   currentText, editDiffLines, completeReview,
   type ReviewArtifact, type ReviewTarget, type ReviewTx, type ReviewRow,
+  REVIEW_DECISIONS, REVIEW_DECISION_STATUS, PUBLISHABLE_DECISIONS, reviewPatchOf,
+  type ReviewAction, type ReviewGate,
 } from '../src/lib/original-post-machine-review'
-import type { ReviewSnapshot } from '../src/lib/original-post-auto-publish'
+import {
+  selectAutoTargets, MACHINE_PROMPT_VERSION,
+  type AutoRow, type ReviewSnapshot,
+} from '../src/lib/original-post-auto-publish'
+import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
+import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
+import { AUTO_GATE_VERDICT } from '../src/lib/original-post-auto-publish'
+import { readSourceProfile, mustKeepDetails } from './lib/source-profile'
+import { analyzeDraft } from './lib/original-post-prompt'
+import { gateDraft } from './lib/original-post-gate'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
@@ -470,10 +482,12 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
     status: 'APPROVED', createdPostId: null, decidedBy: null, decidedAt: null,
     updatedAt: new Date('2026-09-20T00:00:00Z'),
     title: '기계 제목', body: '기계 본문', promptVersion: 'p', model: 'm',
-    gateResults: {}, ...o,
+    gateResults: {}, editDiff: null, declineReason: null, ...o,
   })
   const BY = 'founder:machine-reviewed'
   const NOW2 = new Date('2026-09-20T12:00:00Z')
+  /** 🔴 최초 초안 — 수정본과 견주는 기준이다. 모든 결정이 이 값을 받는다 */
+  const DRAFT = { draftTitle: '기계 제목', draftBody: '기계 본문' }
 
   /**
    * 🔴 **되돌아가는 저장소.** `transaction` 안에서 던지면 그 안의 기록이 **전부 없던 일**이
@@ -484,6 +498,8 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
     /** 두 번째 read 가 돌려줄 값 — 기록 뒤 상태를 흉내 낸다 */
     after?: (staged: ReviewRow | null) => ReviewRow | null
     stampCount?: number
+    /** 🔴 저장소가 이 칸들을 **버린다** — 실제로 빠뜨렸을 때를 흉내 낸다 */
+    drop?: readonly ('editDiff' | 'declineReason')[]
   }): { store: { transaction: <T>(fn: (tx: ReviewTx) => Promise<T>) => Promise<T> }; committed: () => ReviewRow | null } => {
     let committed = o.row
     return {
@@ -503,7 +519,20 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
                 && staged.updatedAt.getTime() === i.where.updatedAt.getTime()
                 && staged.decidedBy === i.where.decidedBy ? 1 : 0)
               if (n === 1 && staged !== null) {
-                staged = { ...staged, decidedBy: i.decidedBy, decidedAt: i.decidedAt }
+                /** 🔴 실제 UPDATE 와 같게 — 결정이 바꾸는 칸을 그대로 반영한다 */
+                const drop = o.drop ?? []
+                staged = {
+                  ...staged, decidedBy: i.decidedBy, decidedAt: i.decidedAt,
+                  status: i.patch.status,
+                  title: i.patch.editedTitle ?? staged.title,
+                  body: i.patch.editedBody ?? staged.body,
+                  // 🔴 실제 UPDATE 와 같게 — 없는 칸은 그대로 두고, 있는 칸만 바꾼다
+                  editDiff: drop.includes('editDiff')
+                    ? staged.editDiff : (i.patch.editDiff ?? staged.editDiff),
+                  declineReason: drop.includes('declineReason')
+                    ? staged.declineReason : (i.patch.declineReason ?? staged.declineReason),
+                  updatedAt: new Date(staged.updatedAt.getTime() + 1000),
+                }
               }
               return n
             },
@@ -524,7 +553,7 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
   // ⓐ 정상 스냅샷만 검토 완료
   {
     const sv = store({ row: SNAP() })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check('🟢 🔴 **정상 스냅샷이면 검토 완료된다**', v.ok, v.ok ? '' : v.reason)
     check('🔴 도장이 decidedBy·decidedAt 둘 다 커밋됐다',
       sv.committed()?.decidedBy === BY && sv.committed()?.decidedAt?.getTime() === NOW2.getTime())
@@ -540,7 +569,7 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
     ['발행됨(createdPostId)', { createdPostId: 'post-1' }],
   ] as const) {
     const sv = store({ row: SNAP(patch) })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check(`🔴 🔴 **${label} 가 바뀌면 write 0**`,
       !v.ok && v.code === 'snapshotChanged' && sv.committed()?.decidedBy === null,
       v.ok ? 'ok 였다' : `${v.code} · decidedBy=${String(sv.committed()?.decidedBy)}`)
@@ -549,7 +578,7 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
   // ⓒ 조건 불일치 → founder 표식 0
   {
     const sv = store({ row: SNAP(), stampCount: 0 })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check('🔴 🔴 **조건부 기록이 0건이면 도장 0**',
       !v.ok && v.code === 'conditionMissed' && sv.committed()?.decidedBy === null)
   }
@@ -559,14 +588,14 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
       row: SNAP(),
       after: (st) => (st === null ? null : { ...st, body: '쓴 뒤 누가 바꿨다' }),
     })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check('🔴 🔴 **쓴 뒤 대조가 어긋나면 되돌린다 — 도장 0**',
       !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null,
       v.ok ? 'ok 였다' : `${v.code} · decidedBy=${String(sv.committed()?.decidedBy)}`)
   }
   {
     const sv = store({ row: SNAP(), after: (st) => (st === null ? null : { ...st, decidedBy: null }) })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check('🔴 도장이 남지 않았으면 되돌린다',
       !v.ok && v.code === 'stampMissing' && sv.committed()?.decidedBy === null)
   }
@@ -576,7 +605,7 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
       row: SNAP(),
       after: (st) => (st === null ? null : { ...st, decidedAt: new Date('2026-09-20T13:00:00Z') }),
     })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check('🔴 🔴 **도장 시각이 내가 찍은 값이 아니면 되돌린다**',
       !v.ok && v.code === 'stampMissing'
       && sv.committed()?.decidedBy === null && sv.committed()?.decidedAt === null,
@@ -584,7 +613,7 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
   }
   {
     const sv = store({ row: null })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: SNAP(), decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check('🔴 행이 없으면 검토 완료하지 않는다', !v.ok && v.code === 'notFound')
   }
 
@@ -593,12 +622,474 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
     /** 🔴 스냅샷의 `title`/`body` 는 **수정본**이다 — 사람이 그것을 읽고 승인한다 */
     const edited = SNAP({ title: '사람이 고친 제목', body: '사람이 고친 본문' })
     const sv = store({ row: edited })
-    const v = await completeReview({ store: sv.store, id: 'q1', before: edited, decidedBy: BY, now: NOW2 })
+    const v = await completeReview({ store: sv.store, id: 'q1', before: edited, decidedBy: BY, now: NOW2, ...DRAFT, action: { decision: 'ready' } })
     check('🟢 🔴 **EDITED 정상 수정본도 검토 완료된다**', v.ok && sv.committed()?.decidedBy === BY,
       v.ok ? '' : v.reason)
   }
 
+  // ─────────────────────────────────────────────────────────
+  // ⓔ 🔴 🔴 네 가지 결정 — APPROVED 기계 후보를 사람이 끝낼 수 있다 (2026-09-21)
+  // ─────────────────────────────────────────────────────────
+  /** 🔴 원천 35038242 와 같은 모양 — 첫 문장만 고쳐야 하는 글이다 */
+  const REAL_TITLE = '친정엄마나 시어머니랑 매일 통화하시나요?'
+  const REAL_DRAFT = [
+    '딸들은 친정엄마랑 가까이 살아도 매일 통화하곤 하잖아요.',
+    '',
+    '아는 분 남편은 외아들이라 그런지 어머니랑 매일 통화를 한다고 하네요.',
+    '그렇게 매일 할 말이 많을까 싶기도 하고.. 저는 좀 싫을 것 같다는 생각도 드네요.',
+    '',
+    '보통 남편분들이 어머니랑 매일 통화하는 경우가 잘 없지 않나요? 다들 어떠신지 궁금합니다.',
+  ].join('\n')
+  const REAL_FIXED = REAL_DRAFT.replace(
+    '딸들은 친정엄마랑 가까이 살아도 매일 통화하곤 하잖아요.',
+    '딸들은 친정엄마가 가까이 살아도 매일 통화하는 편인가요?',
+  )
+  const REAL = { draftTitle: REAL_TITLE, draftBody: REAL_DRAFT }
+  const REAL_SNAP = (o: Partial<ReviewRow> = {}): ReviewRow =>
+    SNAP({ title: REAL_TITLE, body: REAL_DRAFT, ...o })
+  const passGate: ReviewGate = () => ({ ok: true, reason: '' })
+  const blockGate: ReviewGate = () => ({ ok: false, reason: 'BLOCK — SOURCE_ECHO' })
+  const NOTE = '원문이 질문한 것을 사실처럼 단정한 첫 문장만 바로잡았다'
+
+  check('🔴 🔴 **결정은 셋이다 — 미루기는 결정이 아니다**',
+    REVIEW_DECISIONS.join(',') === 'ready,edit,reject')
+  check('🔴 🔴 **PENDING 으로 보내는 결정이 없다** — publish:decide 우회로를 막았다',
+    !(Object.values(REVIEW_DECISION_STATUS) as readonly string[]).includes('PENDING'))
+  check('🔴 🔴 **새 상태를 만들지 않았다** — 전부 기존 정본 상태다',
+    REVIEW_DECISIONS.every((d) =>
+      (ORIGINAL_POST_STATUSES as readonly string[]).includes(REVIEW_DECISION_STATUS[d])))
+  check('🔴 🔴 **발행 가능한 결정은 둘뿐이다**',
+    PUBLISHABLE_DECISIONS.join(',') === 'ready,edit')
+
+  // ① 수정 없이 READY
+  {
+    const sv = store({ row: REAL_SNAP() })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: { decision: 'ready' },
+    })
+    const c = sv.committed()
+    check('🟢 🔴 **수정 없이 READY 된다**',
+      v.ok && c?.status === 'APPROVED' && c.decidedBy === BY && c.body === REAL_DRAFT,
+      v.ok ? '' : v.reason)
+    check('🔴 ready 는 수정본·사유를 건드리지 않는다',
+      c?.editDiff === null && c.declineReason === null)
+  }
+
+  // ② APPROVED 기계 후보를 고쳐서 READY — 한 트랜잭션
+  {
+    const sv = store({ row: REAL_SNAP() })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    const c = sv.committed()
+    check('🟢 🔴 **APPROVED 기계 후보를 수정 후 READY 할 수 있다**',
+      v.ok && c?.status === 'EDITED' && c.decidedBy === BY && c.body === REAL_FIXED,
+      v.ok ? String(c?.status) : v.reason)
+    check('🔴 🔴 **고친 문안이 발행 문안이 된다**', c?.body === REAL_FIXED && c.title === REAL_TITLE)
+    check('🔴 🔴 **diff 가 실제로 커밋된다**', (() => {
+      const d = (c?.editDiff ?? {}) as Record<string, unknown>
+      return d.bodyChanged === true && d.note === NOTE
+    })())
+  }
+
+  // ② 수정 전후 diff 보존
+  {
+    const patch = reviewPatchOf({
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+      draftTitle: REAL_TITLE, draftBody: REAL_DRAFT,
+    })
+    const d = patch.editDiff as Record<string, unknown>
+    check('🔴 🔴 **diff 가 남는다 — 무엇이 얼마나 바뀌었나와 왜**',
+      patch.status === 'EDITED' && d.titleChanged === false && d.bodyChanged === true
+      && d.bodyCharsBefore === REAL_DRAFT.length && d.bodyCharsAfter === REAL_FIXED.length
+      && d.note === NOTE)
+    check('🔴 🔴 **diff 에 본문을 담지 않는다** — 수정본은 editedBody 한 곳뿐',
+      !JSON.stringify(d).includes('친정엄마'))
+  }
+
+  // ③ 수정본이 게이트에 걸리거나 게이트가 없으면 write 0
+  {
+    const sv = store({ row: REAL_SNAP() })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: blockGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    check('🔴 🔴 **수정본이 저장 기준에 걸리면 READY 불가 · write 0**',
+      !v.ok && v.code === 'gateFailed'
+      && sv.committed()?.decidedBy === null && sv.committed()?.status === 'APPROVED',
+      v.ok ? 'ok 였다' : v.code)
+  }
+  {
+    /**
+     * 🔴 **게이트 없이 고칠 수 없다.** 타입이 먼저 막지만, 타입을 우회해 불러도
+     *    실행 시 `gateMissing` 으로 멈추고 아무것도 쓰지 않는다.
+     */
+    const sv = store({ row: REAL_SNAP() })
+    const noGate = {
+      decision: 'edit', edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+    } as unknown as ReviewAction
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: noGate,
+    })
+    check('🔴 🔴 **게이트 없이 edit 을 부르면 write 0 이다**',
+      !v.ok && v.code === 'gateMissing'
+      && sv.committed()?.decidedBy === null && sv.committed()?.status === 'APPROVED',
+      v.ok ? 'ok 였다' : v.code)
+  }
+  check('🔴 🔴 **타입이 먼저 막는다** — edit 은 gate 와 수정본이 필수다', (() => {
+    const lib = readFileSync('src/lib/original-post-machine-review.ts', 'utf-8')
+    const i2 = lib.indexOf('export type ReviewAction')
+    const block = lib.slice(i2, lib.indexOf('\n\n', i2))
+    return /decision: 'edit'; edit: ReviewEdit; gate: ReviewGate/.test(block)
+      && /decision: 'reject'; declineReason: string/.test(block)
+  })())
+  {
+    const sv = store({ row: REAL_SNAP() })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_DRAFT, note: NOTE },
+      },
+    })
+    check('🔴 고친 것이 없으면 edit 이 아니다 · write 0',
+      !v.ok && v.code === 'editUnchanged' && sv.committed()?.decidedBy === null)
+  }
+  {
+    const sv = store({ row: REAL_SNAP() })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: '   ' },
+      },
+    })
+    check('🔴 왜 고쳤는지 없으면 쓰지 않는다', !v.ok && v.code === 'editMissing')
+  }
+
+  // ④ REJECT — 발행 불가 상태로 간다
+  {
+    const sv = store({ row: REAL_SNAP() })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: { decision: 'reject', declineReason: 'TOPIC_UNFIT' },
+    })
+    const c = sv.committed()
+    check('🔴 🔴 **reject 는 DECLINED 로 간다 — 발행 대상이 아니다**',
+      v.ok && c?.status === 'DECLINED', v.ok ? String(c?.status) : v.reason)
+    check('🔴 🔴 **왜 버렸는지가 실제로 커밋된다**', c?.declineReason === 'TOPIC_UNFIT')
+    check('🔴 reject 뒤에도 본문은 그대로다', c?.body === REAL_DRAFT)
+  }
+  {
+    const sv = store({ row: REAL_SNAP() })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: { decision: 'reject', declineReason: '  ' },
+    })
+    check('🔴 폐기 사유가 없으면 쓰지 않는다',
+      !v.ok && v.code === 'reasonMissing' && sv.committed()?.status === 'APPROVED')
+  }
+
+  // ④-b 🔴 🔴 쓴 뒤 대조가 editDiff·declineReason 까지 본다
+  {
+    const sv = store({ row: REAL_SNAP(), drop: ['editDiff'] })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    check('🔴 🔴 **저장소가 editDiff 를 버리면 전체 되돌린다**',
+      !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null,
+      v.ok ? 'ok 였다 — 검사가 헛돈다' : v.code)
+  }
+  {
+    const sv = store({ row: REAL_SNAP(), drop: ['declineReason'] })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: { decision: 'reject', declineReason: 'TOPIC_UNFIT' },
+    })
+    check('🔴 🔴 **저장소가 declineReason 을 버리면 전체 되돌린다**',
+      !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null,
+      v.ok ? 'ok 였다 — 검사가 헛돈다' : v.code)
+  }
+  {
+    /**
+     * 🔴 **키 순서만 다른 것은 같은 값이다** (2026-09-21).
+     *    `editDiff` 는 Postgres `jsonb` 라 왕복하며 키 순서가 바뀔 수 있다 —
+     *    그것으로 정상 수정을 되돌리면 안 된다.
+     */
+    const reordered = (v: unknown): unknown => {
+      const o = v as Record<string, unknown>
+      // 🔴 같은 내용을 **거꾸로** 다시 담는다
+      return Object.fromEntries(Object.entries(o).reverse())
+    }
+    const sv = store({
+      row: REAL_SNAP(),
+      after: (st) => (st === null ? null : { ...st, editDiff: reordered(st.editDiff) }),
+    })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    const c = sv.committed()
+    check('🔴 🔴 **키 순서만 다른 editDiff 는 되돌리지 않는다**',
+      v.ok && c?.status === 'EDITED' && c.decidedBy === BY,
+      v.ok ? '' : v.reason)
+    check('🔴 그 시험이 헛돌지 않는다 — 읽어 온 값은 실제로 순서가 뒤집혔다', (() => {
+      const made = reviewPatchOf({
+        action: {
+          decision: 'edit', gate: passGate,
+          edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+        },
+        draftTitle: REAL_TITLE, draftBody: REAL_DRAFT,
+      }).editDiff
+      const flipped = reordered(made)
+      // 🔴 글자로는 다르고, 뜻으로는 같다 — 앞판이라면 여기서 되돌렸다
+      return JSON.stringify(flipped) !== JSON.stringify(made)
+        && isDeepStrictEqual(flipped, made)
+        && Object.keys(made as Record<string, unknown>).length === 5
+    })())
+  }
+  {
+    /** 🔴 키 순서는 같은데 **값 하나**가 다르다 — 이것은 되돌린다 */
+    const sv = store({
+      row: REAL_SNAP(),
+      after: (st) => (st === null ? null : {
+        ...st,
+        editDiff: { ...(st.editDiff as Record<string, unknown>), bodyCharsAfter: 99999 },
+      }),
+    })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    check('🔴 🔴 **키 순서가 같아도 값이 하나 다르면 되돌린다**',
+      !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null,
+      v.ok ? 'ok 였다' : v.code)
+  }
+  check('🔴 🔴 **비교가 글자가 아니라 구조다**', (() => {
+    const lib = readFileSync('src/lib/original-post-machine-review.ts', 'utf-8')
+    return /isDeepStrictEqual\(back\.editDiff \?\? null, wantDiff\)/.test(lib)
+      // 🔴 양쪽을 문자열로 만들어 견주던 옛 판이 돌아오지 않았다
+      && !/JSON\.stringify\(back\.editDiff/.test(lib)
+  })())
+  check('🔴 🔴 **값·타입·배열 순서 차이는 계속 다르다**',
+    !isDeepStrictEqual({ a: 1 }, { a: '1' })
+    && !isDeepStrictEqual({ a: [1, 2] }, { a: [2, 1] })
+    && !isDeepStrictEqual({ a: 1 }, { a: 1, b: 2 })
+    && isDeepStrictEqual({ a: 1, b: 2 }, { b: 2, a: 1 }))
+  {
+    // 🔴 값이 **변조**돼도 되돌린다
+    const sv = store({
+      row: REAL_SNAP(),
+      after: (st) => (st === null ? null : { ...st, editDiff: { note: '다른 값' } }),
+    })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    check('🔴 🔴 **editDiff 가 변조되면 되돌린다**',
+      !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null)
+  }
+  {
+    const sv = store({
+      row: REAL_SNAP(),
+      after: (st) => (st === null ? null : { ...st, declineReason: 'OTHER' }),
+    })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: { decision: 'reject', declineReason: 'TOPIC_UNFIT' },
+    })
+    check('🔴 🔴 **declineReason 이 변조되면 되돌린다**',
+      !v.ok && v.code === 'verifyFailed' && sv.committed()?.decidedBy === null)
+  }
+  check('🔴 🔴 **스냅샷·SELECT·read 어댑터가 그 두 칸을 싣는다**', (() => {
+    const lib = readFileSync('src/lib/original-post-machine-review.ts', 'utf-8')
+    const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+    const i2 = lib.indexOf('export type ReviewRow')
+    const row = lib.slice(i2, lib.indexOf('\n}', i2))
+    return /editDiff/.test(row) && /declineReason/.test(row)
+      && (cli.match(/editDiff: true, declineReason: true/g) ?? []).length === 2
+      && /editDiff: r\.editDiff, declineReason: r\.declineReason/.test(cli)
+  })())
+
+  // ⑤ 🔴 발행기가 실제로 무엇을 고르는가 — 결정마다 값으로 본다
+  {
+    const ROW = (o: Partial<AutoRow>): AutoRow => ({
+      id: 'q1', status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
+      promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+      matchedPersonaId: 'p1', title: REAL_TITLE, body: REAL_DRAFT,
+      // 🔴 기계 profile 을 **정본 상수로** 만든다 — 값을 손으로 적지 않는다
+      sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`,
+      gateResults: {
+        autoDraft: {
+          provenance: MACHINE_PROFILE.envelopeProvenance,
+          sourceDecision: MACHINE_PROFILE.sourceDecision,
+          draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
+        },
+      },
+      decidedBy: 'founder', decidedAt: NOW2, createdAt: NOW2, ...o,
+    })
+    const pick = (r: AutoRow): { ok: boolean; code: string } => {
+      const out = selectAutoTargets([r], () => 'pass')
+      return { ok: out.targets.length === 1, code: out.rejected[0]?.code ?? '' }
+    }
+    check('🔴 🔴 **ready(APPROVED+founder) 는 발행 대상이다**', pick(ROW({})).ok)
+    check('🔴 🔴 **edit(EDITED+founder) 도 발행 대상이다**', pick(ROW({ status: 'EDITED' })).ok)
+    for (const [d, st] of [['reject', 'DECLINED'], ['hold', 'PENDING']] as const) {
+      const got = pick(ROW({ status: st }))
+      check(`🔴 🔴 **${d}(${st}) 는 발행되지 않는다**`, !got.ok && got.code === 'STATUS', got.code)
+    }
+    const unreviewed = pick(ROW({ decidedBy: 'machine:auto-draft-v5' }))
+    check('🔴 🔴 **사람이 보지 않은 기계 후보는 발행되지 않는다**',
+      !unreviewed.ok && unreviewed.code === 'HUMAN_REVIEW_REQUIRED', unreviewed.code)
+  }
+
+  // ⑥ 🔴 stale snapshot — 결정이 무엇이든 전체 rollback
+  const ACTIONS: readonly ReviewAction[] = [
+    { decision: 'ready' },
+    { decision: 'edit', gate: passGate, edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE } },
+    { decision: 'reject', declineReason: 'TOPIC_UNFIT' },
+  ]
+  check('🔴 결정마다 하나씩 본다', ACTIONS.length === REVIEW_DECISIONS.length)
+  for (const action of ACTIONS) {
+    const decision = action.decision
+    const moved = REAL_SNAP({ body: '그 사이 누가 고쳤다' })
+    const sv = store({ row: moved })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL, action,
+    })
+    const c = sv.committed()
+    check(`🔴 🔴 **${decision}: 스냅샷이 낡았으면 write 0**`,
+      !v.ok && v.code === 'snapshotChanged'
+      && c?.decidedBy === null && c.status === 'APPROVED' && c.body === '그 사이 누가 고쳤다',
+      v.ok ? 'ok 였다' : v.code)
+  }
+  // 🔴 그 사이 발행됐으면 어떤 결정도 쓰지 않는다
+  {
+    const sv = store({ row: REAL_SNAP({ createdPostId: 'post1' }) })
+    const v = await completeReview({
+      store: sv.store, id: 'q1', before: REAL_SNAP(), decidedBy: BY, now: NOW2, ...REAL,
+      action: {
+        decision: 'edit', gate: passGate,
+        edit: { title: REAL_TITLE, body: REAL_FIXED, note: NOTE },
+      },
+    })
+    check('🔴 🔴 **그 사이 발행됐으면 write 0**',
+      !v.ok && v.code === 'snapshotChanged' && sv.committed()?.decidedBy === null)
+  }
+
+  // ⑦ 🔴 이 경로는 Queue 한 테이블만 쓴다 — Post 를 만들지 않는다
+  check('🔴 🔴 **검토 러너가 Queue 말고 아무것도 쓰지 않는다**', (() => {
+    const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+    const writes = [...cli.matchAll(/(?:prisma|tx)\.([a-zA-Z]+)\.(create|update|updateMany|delete|deleteMany|upsert)/g)]
+    return writes.length > 0
+      && writes.every((m) => m[1] === 'originalPostApprovalQueue')
+  })())
+  check('🔴 🔴 **결정이 건드리지 않는 칸** — 최초 초안·게이트 결과·판·모델', (() => {
+    const src = readFileSync('src/lib/original-post-machine-review.ts', 'utf-8')
+    const i = src.indexOf('export type ReviewPatch')
+    const block = src.slice(i, src.indexOf('\n}', i))
+    return !/draftTitle|draftBody|gateResults|promptVersion|model|createdPostId/.test(block)
+  })())
+
+  // ⑧ 🔴 🔴 실제 CLI — 모르는 결정·빠진 인자는 DB 를 열기 전에 멈춘다
+  {
+    const cli = (args: readonly string[]): { code: number | null; out: string } => {
+      const r = spawnSync('npx', ['tsx', 'scripts/original-post-machine-review.mts', ...args], {
+        encoding: 'utf-8', cwd: process.cwd(),
+        // 🔴 DB 주소를 주지 않는다 — 열기 전에 멈추는지 보는 검사다
+        env: { ...process.env, DATABASE_URL: '' },
+      })
+      return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+    }
+    const bad = cli(['--id', 'x', '--apply', '--limit=1', '--decision=뭔가'])
+    check('🔴 🔴 **모르는 결정은 DB 를 열기 전에 멈춘다**',
+      bad.code === 1 && bad.out.includes('모르는 결정')
+      && !bad.out.includes('DATABASE_URL'), bad.out.slice(-200))
+    check('🔴 쓸 수 있는 값을 알려 준다',
+      REVIEW_DECISIONS.every((d) => bad.out.includes(d)))
+  }
+
+  // ⑨ 🔴 🔴 ② 재현 — 그 수정본이 실제 발행 게이트를 통과하는가
+  {
+    const src = {
+      rawTitle: '친정엄마랑 매일 통화하시나요? 아는 지인 남편이 매일 시모랑 통화한대요',
+      rawBody: [
+        '딸은 가까이 살아도 매일 통화할거같은데 어떤가요?',
+        '',
+        '지인 남편이 매일 시모랑 통화하는데 그렇게 할말이 많나요? 외아들이라 시모랑 친한가봐요',
+        '',
+        '근데 전 싫을거같아요',
+        '',
+        '남편들은 매일 시모랑 통화하는분 없을거같은데 어때요?',
+      ].join('\n'),
+    }
+    /** 🔴 운영 러너가 쓰는 그 경로다 — 여기서 규칙을 새로 만들지 않는다 */
+    const gateOf = (t: { title: string; body: string }): string => {
+      const profile = readSourceProfile(src)
+      const signals = analyzeDraft({
+        title: t.title, body: t.body, sourceTexts: [src.rawTitle, src.rawBody],
+        allowedContentUrl: profile.contentReferenceUrl,
+        closingIntent: profile.closingIntent,
+        allowNumberedList: profile.preserveStructure.numberedList,
+      })
+      const must = mustKeepDetails(profile.concreteDetailsToKeep)
+      const both = `${t.title}\n${t.body}`
+      return gateDraft({
+        signals, closingIntent: profile.closingIntent,
+        sourceBodyLength: [...src.rawBody].length,
+        mustKeepTotal: must.length,
+        mustKeepFound: must.filter((x) => both.includes(x.sample)).length,
+      }).verdict
+    }
+    /**
+     * 🔴 **기계 초안 자체가 이 게이트로는 HOLD 다** — 기계 경로는 Content Core 의
+     *    제 검수를 쓰고 이 게이트를 지나지 않는다. 그래서 수정본에만 `PASS` 를 요구하면
+     *    고쳐야 할 글일수록 고칠 수 없게 된다. 막는 것은 `BLOCK` 하나다.
+     */
+    check('🔴 🔴 **최초 초안도 이 게이트로는 PASS 가 아니다** — 실측',
+      gateOf({ title: REAL_TITLE, body: REAL_DRAFT }) === 'HOLD',
+      gateOf({ title: REAL_TITLE, body: REAL_DRAFT }))
+    check('🔴 🔴 **지정된 수정본은 BLOCK 이 아니다 — 저장할 수 있다**',
+      gateOf({ title: REAL_TITLE, body: REAL_FIXED }) !== 'BLOCK',
+      gateOf({ title: REAL_TITLE, body: REAL_FIXED }))
+    const echoed = gateOf({ title: REAL_TITLE, body: src.rawBody })
+    check('🔴 🔴 **원문을 그대로 넣으면 BLOCK 이다** — 게이트가 실제로 일한다',
+      echoed === 'BLOCK', echoed)
+  }
+
   // 🔴 운영 러너가 이 경계를 실제로 쓴다
+  check('🔴 🔴 **운영 검토 러너가 네 결정을 실제로 배선한다**', (() => {
+    const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+    return /--decision=/.test(cli) && /--edited-file=/.test(cli) && /--reason=/.test(cli)
+      && /gate: reGate/.test(cli) && /gateDraft\(\{/.test(cli)
+      // 🔴 저장 금지 계약은 그대로 — BLOCK 이면 쓰지 않는다
+      && /g\.verdict === 'BLOCK'/.test(cli)
+  })())
   check('🔴 🔴 **운영 검토 러너가 completeReview 를 쓴다 — 도장 먼저 찍지 않는다**', (() => {
     const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
     return /await completeReview\(\{/.test(cli)

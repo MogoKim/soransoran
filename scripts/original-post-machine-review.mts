@@ -10,11 +10,20 @@
  *
  *    이 명령은 그 "한 번 보는" 자리다. 사람이 읽고, 괜찮으면 `decidedBy` 를 `founder` 로 바꾼다.
  *
- * 🔴 **새 컬럼도 migration 도 만들지 않는다.** 큐에 이미 있는 `decidedBy` 하나를 쓴다.
+ * 🔴 **새 컬럼도 migration 도 만들지 않는다.** 큐에 이미 있는 칸만 쓴다.
  *
- * 🔴 **바꾸는 것은 `decidedBy`·`decidedAt` 두 칸뿐이다.**
- *    본문 · 제목 · `status` · `gateResults` · Post · Comment · Persona 는 건드리지 않는다.
- *    provider 를 부르지 않는다. 기계 생성 provenance 는 그대로 남는다.
+ * 🔴 **결정마다 바뀌는 칸이 다르다** (`REVIEW_DECISION_WRITES` 가 정본이다):
+ *      ready   `decidedBy` · `decidedAt`
+ *      edit    `status` · `editedTitle` · `editedBody` · `editDiff` · 도장 두 칸
+ *      reject  `status` · `declineReason` · 도장 두 칸
+ *
+ * 🔴 **어느 결정도 건드리지 않는 칸** (`REVIEW_UNTOUCHED_COLUMNS`):
+ *    `draftTitle` · `draftBody` · `gateResults` · `promptVersion` · `model` · `createdPostId`.
+ *    Post · Comment · Persona 는 write 0 이고, provider 를 부르지 않는다.
+ *    기계 생성 provenance 는 그대로 남는다.
+ *
+ * 🔴 **미루기는 결정이 아니다.** 아무것도 하지 않으면 미검토로 남아 발행기가 막는다 —
+ *    `PENDING` 으로 보내 `publish:decide` 가 기계 artifact 검토를 우회하게 하지 않는다.
  *
  *    🔴 `decidedAt` 이 함께 바뀌는 이유 — "누가" 만 적고 "언제" 를 기계 적재 시각으로 두면
  *    그 기록이 거짓이 된다. 그리고 `queueOrderKey` 가 `decidedAt` 으로 줄을 세우므로,
@@ -27,7 +36,10 @@
  * 사용법
  *   npm run publish:machine-review                     대기 목록 (read-only)
  *   npm run publish:machine-review -- --id <queueId>   한 건 전문 (read-only)
- *   npm run publish:machine-review -- --id <id> --apply --limit=1   🔴 검토 완료 표시
+ *   npm run publish:machine-review -- --id <id> --apply --limit=1   🔴 그대로 내보낸다
+ *   … --decision=edit --edited-file=tmp/edit.json     🔴 고쳐서 내보낸다
+ *   … --decision=reject --reason=TOPIC_UNFIT          🔴 내보내지 않는다
+ *   🔴 **미루려면 아무것도 하지 않는다** — 미검토로 남으면 발행기가 막는다
  *
  * 종료 코드: 검토 완료에 실패하면 1 · 그 외 0
  */
@@ -50,8 +62,16 @@ import { join } from 'node:path'
 import {
   findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
   currentText, editDiffLines, completeReview,
-  type ReviewArtifact, type ReviewTarget,
+  REVIEW_DECISIONS, REVIEW_DECISION_LABEL, REVIEW_DECISION_STATUS, PUBLISHABLE_DECISIONS,
+  REVIEW_DECISION_WRITES, REVIEW_UNTOUCHED_COLUMNS,
+  type ReviewAction, type ReviewArtifact, type ReviewDecision, type ReviewEdit,
+  type ReviewGate, type ReviewRow, type ReviewTarget,
 } from '../src/lib/original-post-machine-review'
+import { AUTO_GATE_VERDICT } from '../src/lib/original-post-auto-publish'
+import { DECLINE_REASONS, isDeclineReasonCode } from '../src/lib/original-post-decision'
+import { readSourceProfile, mustKeepDetails } from './lib/source-profile'
+import { analyzeDraft } from './lib/original-post-prompt'
+import { gateDraft } from './lib/original-post-gate'
 import { DATA_DIR } from './micro-seed-auto-draft.mjs'
 
 const argv = process.argv.slice(2)
@@ -60,11 +80,24 @@ const ONLY_ID = (argv.find((a) => a.startsWith('--id='))?.slice(5)
   ?? (argv.includes('--id') ? argv[argv.indexOf('--id') + 1] : undefined) ?? '').trim()
 const limitRaw = argv.find((a) => a.startsWith('--limit='))?.slice(8)
 const LIMIT = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10)
+/** 🔴 기본은 `ready` — 앞판과 같은 동작이다 */
+const DECISION = (argv.find((a) => a.startsWith('--decision='))?.slice(11) ?? 'ready').trim()
+const EDITED_FILE = (argv.find((a) => a.startsWith('--edited-file='))?.slice(14) ?? '').trim()
+const REASON = (argv.find((a) => a.startsWith('--reason='))?.slice(9) ?? '').trim()
 
 // 🔴 변수에 타입을 적어야 TS 가 `never` 로 좁혀 준다 (화살표 반환형만으로는 부족하다)
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const kst = (d: Date | null): string =>
   d === null ? '—' : `${new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} KST`
+
+/**
+ * 🔴 **모르는 결정이면 DB 를 열기 전에 멈춘다.** 연결한 뒤에 걸러도 결과는 같지만,
+ *    오타 하나로 운영 DB 에 붙는 일을 만들 이유가 없다.
+ */
+if (!(REVIEW_DECISIONS as readonly string[]).includes(DECISION)) {
+  fail(`모르는 결정입니다 — ${DECISION}. 쓸 수 있는 값: ${REVIEW_DECISIONS.join(' · ')}`)
+}
+const decision = DECISION as ReviewDecision
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
@@ -75,7 +108,10 @@ const ageOf = new Map(
 
 console.log(APPLY ? '\n══ 🔴 검토 완료 표시 (--apply) ══\n' : '\n══ 기계 후보 사람 검토 (read-only · DB write 0) ══\n')
 console.log(`  ${MACHINE_AGE_HUMAN_REVIEW_NOTE}`)
-console.log(`  🔴 바꾸는 것은 decidedBy·decidedAt 두 칸뿐이다 — 본문 · status · gateResults · Post 는 건드리지 않는다\n`)
+console.log('  🔴 사람이 정할 수 있는 것: '
+  + REVIEW_DECISIONS.map((d) => `${d}(${REVIEW_DECISION_LABEL[d]})`).join(' · '))
+console.log(`  🔴 어느 결정도 건드리지 않는 칸: ${REVIEW_UNTOUCHED_COLUMNS}`)
+console.log('  🔴 미루려면 **아무것도 하지 않는다** — 미검토로 남으면 발행되지 않는다\n')
 
 const raw = await prisma.originalPostApprovalQueue.findMany({
   where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
@@ -86,7 +122,11 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     // 🔴 낙관적 잠금의 근거 — 사람이 읽은 뒤 행이 한 번이라도 쓰였으면 값이 바뀐다
     updatedAt: true,
     gateResults: true, decidedBy: true, decidedAt: true, createdAt: true,
-    rawContent: { select: { sourceSite: true } },
+    sourceRawContentId: true,
+    // 🔴 검토 스냅샷이 이 둘까지 들고 있어야 쓴 뒤 대조할 수 있다
+    editDiff: true, declineReason: true,
+    // 🔴 수정본을 발행 기준으로 다시 재려면 원문이 필요하다 — 읽기만 한다
+    rawContent: { select: { sourceSite: true, rawTitle: true, rawBody: true } },
   },
   orderBy: [{ decidedAt: 'asc' }, { createdAt: 'asc' }],
 })
@@ -104,11 +144,13 @@ const rows: AutoRow[] = raw.map((r) => ({
  */
 // 🔴 Prisma enum 타입을 그대로 쓰려면 원본 행을 들고 있어야 한다 (문자열로 넘기면 where 가 거부한다)
 const rawById = new Map(raw.map((r) => [r.id, r]))
-const snapOf = new Map<string, ReviewSnapshot>(raw.map((r) => [r.id, {
+const snapOf = new Map<string, ReviewRow>(raw.map((r) => [r.id, {
   status: r.status, createdPostId: r.createdPostId, decidedBy: r.decidedBy,
-  updatedAt: r.updatedAt,
+  updatedAt: r.updatedAt, decidedAt: r.decidedAt,
   title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
   promptVersion: r.promptVersion, model: r.model, gateResults: r.gateResults,
+  // 🔴 쓴 뒤 이 둘도 대조한다 — 왜 고쳤나·왜 버렸나가 사라지면 안 된다
+  editDiff: r.editDiff, declineReason: r.declineReason,
 }]))
 
 /**
@@ -268,7 +310,7 @@ if (!APPLY) {
   process.exit(0)
 }
 
-// ── --apply — 🔴 decidedBy 한 칸만 바꾼다 ──
+// ── --apply — 🔴 결정이 바꾸는 칸만 바꾼다 ──
 if (ONLY_ID === '') { await prisma.$disconnect(); fail('--apply 는 --id 와 함께만 씁니다. 한 번에 1건입니다.') }
 if (LIMIT !== 1) { await prisma.$disconnect(); fail(`--limit 은 1 이어야 합니다 (받은 값 ${LIMIT ?? '없음'})`) }
 const found = rows.find((x) => x.id === ONLY_ID)
@@ -290,6 +332,85 @@ if (!g.ok) {
 const before = snapOf.get(target.id)
 if (before === undefined) { await prisma.$disconnect(); fail('검토 스냅샷을 읽지 못했습니다.') }
 
+const rawRow = rawById.get(target.id)!
+
+/**
+ * 🔴 **고친 문안은 파일로 받는다** — CLI 인자로 받으면 셸 이력·프로세스 목록에 본문이 남는다.
+ */
+let edited: ReviewEdit | null = null
+if (decision === 'edit') {
+  if (EDITED_FILE === '' || !existsSync(EDITED_FILE)) {
+    await prisma.$disconnect()
+    fail('--decision=edit 에는 --edited-file=<경로> 가 필요합니다 ({ title, body, note }).')
+  }
+  let parsed: unknown
+  try { parsed = JSON.parse(readFileSync(EDITED_FILE, 'utf-8')) } catch {
+    await prisma.$disconnect(); fail(`수정본 파일을 읽지 못했습니다 — ${EDITED_FILE}`)
+  }
+  const o = (parsed ?? {}) as Record<string, unknown>
+  if (typeof o.title !== 'string' || typeof o.body !== 'string' || typeof o.note !== 'string') {
+    await prisma.$disconnect()
+    fail('수정본 파일은 { "title": "...", "body": "...", "note": "왜 고쳤나" } 여야 합니다.')
+  }
+  edited = { title: o.title, body: o.body, note: o.note }
+}
+if (decision === 'reject' && !isDeclineReasonCode(REASON)) {
+  await prisma.$disconnect()
+  fail(`--decision=reject 에는 --reason=<코드> 가 필요합니다: ${DECLINE_REASONS.map((r) => r.code).join(' · ')}`)
+}
+
+/**
+ * 🔴 **기계 검수 근거는 "최초 초안" 에 대한 것이다.** 사람이 고친 문안은 그 검수를 받지 않았다 —
+ *    화면에 그렇게 적는다. 대신 아래에서 **발행 기준 게이트**를 다시 통과시킨다.
+ */
+if (decision === 'edit' && edited !== null) {
+  console.log('\n③ 🔴 고쳐서 내보냅니다')
+  console.log('   🔴 위 기계 검수(adopt·경고)는 **최초 초안**에 대한 근거입니다 —')
+  console.log('      사람이 고친 문안은 그 검수를 받지 않았습니다. 발행 기준만 다시 잽니다.')
+  for (const line of editDiffLines({
+    draftTitle: rawRow.draftTitle, draftBody: rawRow.draftBody,
+    editedTitle: edited.title, editedBody: edited.body,
+    artifactId: null, sourceArticleId: null,
+  })) console.log(`   ${line}`)
+  console.log(`   왜 고쳤나: ${edited.note}`)
+}
+
+/**
+ * 🔴 **수정본을 저장 기준으로 다시 잰다.** 사람 손을 거쳤다는 이유로 저장 금지 계약을
+ *    우회하지 않는다 — `BLOCK` 이면 쓰지 않는다. `publish:decide` 와 **같은 기준**이다.
+ *
+ * 🔴 **`PASS` 를 요구하지 않는다** (2026-09-21 실측으로 정정).
+ *    기계 초안 자체가 이 게이트로는 `HOLD` 다(원천 35038242 — `CTA_IN_ASKING_POST`).
+ *    기계 경로는 Content Core 의 제 검수를 쓰고 이 게이트를 지나지 않는다.
+ *    그런데 사람 수정본에만 `PASS` 를 요구하면, **고쳐야 할 글일수록 고칠 수 없게** 된다.
+ *    🔴 대신 판정과 사유 코드를 화면에 적어 사람이 보고 정한다.
+ */
+const reGate: ReviewGate = (t) => {
+  const src = rawRow.rawContent
+  const profile = readSourceProfile({ rawTitle: src.rawTitle, rawBody: src.rawBody })
+  const signals = analyzeDraft({
+    title: t.title, body: t.body,
+    sourceTexts: [src.rawTitle, src.rawBody],
+    allowedContentUrl: profile.contentReferenceUrl,
+    closingIntent: profile.closingIntent,
+    allowNumberedList: profile.preserveStructure.numberedList,
+  })
+  const must = mustKeepDetails(profile.concreteDetailsToKeep)
+  const both = `${t.title}\n${t.body}`
+  const g = gateDraft({
+    signals, closingIntent: profile.closingIntent,
+    sourceBodyLength: [...src.rawBody].length,
+    mustKeepTotal: must.length,
+    mustKeepFound: must.filter((x) => both.includes(x.sample)).length,
+  })
+  // 🔴 사유 코드만 적는다 — detail 에 원문 조각이 섞일 수 있다
+  const codes = [...g.blocks, ...g.holds].map((f) => f.code)
+  const line = `${g.verdict}${codes.length === 0 ? '' : ` — ${codes.join(' · ')}`}`
+  console.log(`   수정본 재판정  ${line}`
+    + (g.verdict === AUTO_GATE_VERDICT ? '' : ' 🟡 (BLOCK 이 아니면 사람이 정한다)'))
+  return g.verdict === 'BLOCK' ? { ok: false, reason: line } : { ok: true, reason: line }
+}
+
 /**
  * 🔴 **검증과 기록이 한 트랜잭션 안에 있다** (2026-09-20 보정).
  *
@@ -305,11 +426,24 @@ const SELECT = {
   status: true, createdPostId: true, decidedBy: true, decidedAt: true, updatedAt: true,
   draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
   promptVersion: true, model: true, gateResults: true,
+  // 🔴 쓴 뒤 이 둘까지 대조한다 — "무엇을 왜" 가 사라지면 안 된다
+  editDiff: true, declineReason: true,
 } as const
+
+/**
+ * 🔴 **결정과 그 결정이 요구하는 것을 한 값으로 묶는다.** `edit` 은 수정본과 게이트가
+ *    **타입으로** 필수다 — 빠뜨리면 컴파일이 깨진다.
+ */
+const action: ReviewAction = decision === 'edit'
+  ? { decision: 'edit', edit: edited!, gate: reGate }
+  : decision === 'reject'
+    ? { decision: 'reject', declineReason: REASON }
+    : { decision: 'ready' }
 
 const reviewedAt = new Date()
 const verdict = await completeReview({
   id: target.id, before, decidedBy: MACHINE_REVIEWED_BY, now: reviewedAt,
+  action, draftTitle: rawRow.draftTitle, draftBody: rawRow.draftBody,
   store: {
     transaction: async (fn) => prisma.$transaction(async (tx) => fn({
       read: async (id) => {
@@ -319,6 +453,7 @@ const verdict = await completeReview({
           updatedAt: r.updatedAt, decidedAt: r.decidedAt,
           title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
           promptVersion: r.promptVersion, model: r.model, gateResults: r.gateResults,
+          editDiff: r.editDiff, declineReason: r.declineReason,
         }
       },
       /** 🔴 조건부 기록 — `updatedAt` 이 다르면 0건이 되어 그대로 되돌아간다 */
@@ -330,7 +465,19 @@ const verdict = await completeReview({
           createdPostId: null,
           decidedBy: i.where.decidedBy, updatedAt: i.where.updatedAt,
         },
-        data: { decidedBy: i.decidedBy, decidedAt: i.decidedAt },
+        /**
+         * 🔴 **결정이 바꾸는 칸만 쓴다.** `patch` 에 없는 칸은 보내지 않는다 —
+         *    `draftTitle`·`draftBody`·`gateResults`·`promptVersion`·`model` 은 그대로다.
+         */
+        data: {
+          decidedBy: i.decidedBy, decidedAt: i.decidedAt,
+          status: i.patch.status as never,
+          ...(i.patch.editedTitle === undefined ? {} : { editedTitle: i.patch.editedTitle }),
+          ...(i.patch.editedBody === undefined ? {} : { editedBody: i.patch.editedBody }),
+          ...(i.patch.editDiff === undefined ? {} : { editDiff: i.patch.editDiff as never }),
+          ...(i.patch.declineReason === undefined
+            ? {} : { declineReason: i.patch.declineReason as never }),
+        },
       })).count,
     })),
   },
@@ -341,11 +488,16 @@ if (!verdict.ok) {
   fail(`${verdict.reason}\n     🔴 아무것도 바꾸지 않았습니다 — 다시 읽고 검토해 주세요.`)
 }
 
-console.log(`\n✅ 검토 완료 — ${target.id}`)
+console.log(`\n✅ 검토 완료 — ${target.id} · ${REVIEW_DECISION_LABEL[decision]}`)
+console.log(`   status → ${REVIEW_DECISION_STATUS[decision]}`
+  + ((PUBLISHABLE_DECISIONS as readonly string[]).includes(decision)
+    ? ' (발행 대상이 됩니다)' : ' 🔴 (발행되지 않습니다)'))
 console.log(`   decidedBy → ${MACHINE_REVIEWED_BY} · decidedAt → ${kst(reviewedAt)}`)
+// 🔴 **실제로 바뀐 칸을 정본에서 읽어 적는다** — 문구를 손으로 적지 않는다
+console.log(`   바뀐 칸: ${REVIEW_DECISION_WRITES[decision]}`)
 console.log(`     (옛 값: ${target.decidedBy ?? '(없음)'} · ${kst(target.decidedAt)} — 🔴 기계 적재 시각이었다)`)
 console.log('   🔴 검증과 기록이 한 트랜잭션 안에서 끝났습니다 —'
   + ' 어긋났으면 도장도 남지 않습니다')
-console.log('   🔴 본문 · 제목 · status · gateResults · Post · Comment · Persona 는 바뀌지 않았습니다\n')
+console.log(`   🔴 바뀌지 않은 칸: ${REVIEW_UNTOUCHED_COLUMNS} · Post · Comment · Persona\n`)
 await prisma.$disconnect()
 process.exit(0)
