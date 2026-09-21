@@ -409,6 +409,8 @@ console.log('\n⑦ 🔴 🔴 정산 줄을 못 적으면 후보가 0건이다')
   const root2 = mkdtempSync(join(tmpdir(), 'chain-e2e-sf-'))
   const dd2 = join(root2, '.microseed-data')
   mkdirSync(dd2, { recursive: true })
+  // 🔴 유료 생성은 화자 여력 없이 돌지 않는다 — 이 블록은 정산 실패를 재므로 한 명에게 몰아 준다
+  writeFakeSpeakerLoad(dd2, 'fresh', 'P01')
   const home2 = join(root2, 'home')
   mkdirSync(join(home2, 'Library', 'Application Support', 'soransoran'), { recursive: true })
   writeFakePersonaAsset({ home: home2 })
