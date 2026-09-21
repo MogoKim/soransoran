@@ -42,8 +42,14 @@ import { makeDbTargetSource } from './lib/persona-comment-source-db'
 import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
 import { buildPromptFromInput } from './lib/persona-comment-bridge'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
-import { parseCandidate } from './lib/persona-prompt'
-import { callProvider, type ProviderModel } from './lib/voice-m3-provider.mjs'
+import { judgeCommentCall } from './lib/persona-comment-call.mjs'
+import { type ProviderModel } from './lib/voice-m3-provider.mjs'
+import {
+  SupplyLlmSession,
+  limitsFromEnv,
+  missingBudgetEnvNames,
+  LEDGER_BLOCKED,
+} from './lib/supply-llm-call.mjs'
 import { readConfirmedSelection } from '../src/lib/persona-comment-provenance'
 import { dedupKeyOf, OPEN_STATUSES } from '../src/lib/persona-comment-queue'
 import { EVAL_ROOT } from './lib/persona-comment-eval-store'
@@ -201,6 +207,31 @@ if (!runLimit.ok) {
 /** 🔴 planner · materialize · provider · write 가 **같은 수**를 본다 */
 const RUN_LIMIT = runLimit.value === null ? BUDGET_RUN_LIMIT : Math.min(BUDGET_RUN_LIMIT, runLimit.value)
 const TARGET_LIMIT = WANT_CALL ? RUN_LIMIT : PREVIEW_LIMIT
+
+/**
+ * 🔴 **비용 장부 세션** (2026-09-21).
+ *
+ *    글 공급과 **같은 장부**다. 예산·회차 상한·예약 여유는 전부 env 에서 오고
+ *    **기본값이 없다** — 하나라도 비면 그 회차의 유료 요청은 보류된다(fail-closed).
+ *
+ * 🔴 **건수 상한만으로 금액을 말하지 않는다.** 회차 요청 상한(`RUN_REQUEST_CAP`)과
+ *    하루 예산(`DAILY_BUDGET_USD`)이 **둘 다** 있어야 한다 —
+ *    앞엣것은 몇 번인지만 정하고, 실제 금액은 뒤엣것이 막는다.
+ */
+const LEDGER_LIMITS = limitsFromEnv(process.env)
+const session = new SupplyLlmSession({
+  runId: `comment-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15)}`,
+  limits: LEDGER_LIMITS,
+})
+if (WANT_CALL) {
+  const missing = missingBudgetEnvNames(LEDGER_LIMITS)
+  if (missing.length > 0) {
+    console.error(`\n🔴 중단: 예산이 설정되지 않았다 — ${missing.join(' · ')}`)
+    console.error('   🔴 provider 호출 0 · DB write 0 — 부르기도 쓰기도 전에 멈췄다')
+    console.error('   🔴 건수 상한만으로는 금액을 보장하지 못한다\n')
+    process.exit(1)
+  }
+}
 console.log(`  예산  ${powers.budget} — ${readiness.detail}`)
 if (powers.budget === 'bootstrap') {
   console.log(`        관리형 공개 글 ${managed?.eligible ?? '🔴 읽지 못함'}편`
@@ -278,18 +309,32 @@ const result = await runEnqueuePipeline({
     const prompt = buildPromptFromInput(input, ctx.recentTexts, reference.byCode.get(input.personaCode),
       { requireReference: reference.byCode.size > 0 })
     if (!prompt.ok) return { ok: false, text: null, errorCode: 'PROMPT_BLOCKED' }
-    const res = await callProvider({
+    /**
+     * 🔴 **장부를 지나서 부른다** (2026-09-21).
+     *
+     *    앞판은 `callProvider` 를 직접 불렀다 — 그래서 하루 예산·회차 상한·예약/정산이
+     *    이 경로에만 없었고, 금액 상한을 걸 자리가 아예 없었다.
+     *    글 공급과 **같은 세션**을 쓴다. 두 번째 장부를 만들지 않는다.
+     *
+     * 🔴 세션이 막으면 `LEDGER_BLOCKED:*` 가 오고, 파이프라인은 그것을 실패로 본다 —
+     *    후보가 만들어지지 않는다.
+     */
+    const res = await session.call({
+      stage: 'commentGen',
       model: model as ProviderModel,
       systemPrompt: prompt.prompt.systemPrompt,
       userPayload: prompt.prompt.userPayload,
       maxOutputTokens: prompt.prompt.maxOutputTokens,
       timeoutMs: 60_000,
     })
-    if (!res.ok) return { ok: false, text: null, errorCode: res.errorCode }
-    const parsed = parseCandidate(res.rawText)
-    return parsed.ok
-      ? { ok: true, text: parsed.text, errorCode: null }
-      : { ok: false, text: null, errorCode: parsed.errorCode }
+    /**
+     * 🔴 **후보로 삼아도 되는지는 `judgeCommentCall` 한 곳이 정한다.**
+     *
+     *    여기 `if` 로 적으면 스크립트 최상위라 **불러서 확인할 수 없다** —
+     *    실제로 그 상태에서 두 구멍이 있었다. 사용량을 못 읽은 건(`settledUsd: null`)을
+     *    정산된 것으로 보고, 상한에 닿아 잘린 응답을 파싱된다는 이유로 통과시켰다.
+     */
+    return judgeCommentCall(res)
   },
   gate: ({ input, text }) => {
     const ctx = ctxOf(input.post.id, input.personaCode, input.reactionRole)
@@ -382,6 +427,25 @@ for (const o of result.outcomes) {
     console.log(`        🔴 bootstrap 인정 실패 — ${rep.reason}`)
   }
 }
-console.log(`\n  🔴 이 회차 provider 호출 ${result.providerCalls}회 · DB write ${result.created}건\n`)
+console.log(`\n  🔴 이 회차 provider 호출 ${result.providerCalls}회 · DB write ${result.created}건`)
+/**
+ * 🔴 **비용을 회차마다 적는다.** 예약과 정산이 짝을 이루지 않으면 그 사실이 보여야 한다 —
+ *    "돌았는데 얼마 썼는지 모른다" 를 성공으로 끝내지 않는다.
+ */
+{
+  const t = session.tally
+  console.log(`  비용  유료 ${t.paid}회 · 사전계산 ${t.countTokens}회 · 막힘 ${t.blocked}회`)
+  console.log(`        예약 $${t.reservedUsd.toFixed(6)} · 정산 $${t.settledUsd.toFixed(6)}`
+    + `${t.usageUnknown > 0 ? ` · 🔴 사용량 미상 ${t.usageUnknown}건` : ''}`
+    + `${t.overruns > 0 ? ` · 🔴 초과 ${t.overruns}건` : ''}`
+    + `${t.settleHeld > 0 ? ` · 🔴 정산 보류 ${t.settleHeld}건` : ''}`)
+  if (t.blocked > 0) {
+    console.log(`        막힌 이유  ${[...t.blockedBy].map(([c, n]) => `${c} ${n}`).join(' · ')}`)
+  }
+  if (t.usageUnknown > 0 || t.settleHeld > 0 || t.holdWriteFailed > 0) {
+    console.log('  🔴 미정산이 남았다 — 다음 회차는 사람이 마감할 때까지 유료 요청 0 이다')
+  }
+}
+console.log('')
 await prisma.$disconnect()
 process.exit(0)

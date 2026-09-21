@@ -49,6 +49,14 @@ export const LEDGER_STAGES = [
   'judge', 'judgeRetry',
   'draftGen', 'draftQuality', 'jsonRetry', 'schemaRetry',
   'ageCheck',
+  /**
+   * 🔴 **댓글 후보 생성** (2026-09-21).
+   *
+   *    댓글 경로는 `callProvider` 를 직접 불러 **장부를 타지 않았다** —
+   *    금액 상한을 걸 자리가 없어 "건수 1건" 만으로 비용을 말해야 했다.
+   *    글 공급과 **같은 장부**를 쓴다. 두 번째 장부를 만들지 않는다.
+   */
+  'commentGen',
   /** 🔴 사전 계산은 **무료**지만 따로 센다 — 유료 요청 수와 섞지 않는다 */
   'countTokens',
 ] as const

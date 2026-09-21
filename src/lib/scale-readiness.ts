@@ -25,6 +25,13 @@ import { prepareCandidates, type QueueCandidate } from './supply-candidates'
 
 export type SimOutcome = {
   stage: ReleaseStage
+  /**
+   * 🔴 **예측이 실제로 덮은 KST 날짜들** (2026-09-21 추가).
+   *    "며칠치를 봤는가" 만으로는 **어느 날**을 봤는지 알 수 없다 —
+   *    지평 시작점이 다음 날 0시라 하루짜리 판정이 이튿날을 보고 있었다(실측).
+   *    그 사실이 값으로 드러나야 검사가 단정할 수 있다.
+   */
+  dates: readonly string[]
   /** 14일에 실제로 나간 건수 */
   in14: number
   /** 목표 */
@@ -131,6 +138,23 @@ export function simulateStage(input: {
   history?: readonly PersonaHistory[]
   axis: TimeAxis
   days?: number
+  /**
+   * 🔴 **지평을 어디에 붙이는가** (2026-09-21 추가).
+   *
+   *    · `'nextDay'` (기본) — 다음 KST 운영일 0시. **14일 지속성 판정의 창이다.**
+   *      오늘이라는 조각 하루를 빼서 단계끼리 같은 창으로 비교한다. 기존 의미 그대로다.
+   *    · `'now'` — **지금 이 순간**. "오늘 남은 몫" 을 묻는 하루 판정만 쓴다.
+   *      🔴 승격 판정에 쓰지 않는다 — 조각 하루를 온전한 하루처럼 세게 된다.
+   *
+   * 🔴 기본값이 `'nextDay'` 라 기존 호출부의 의미는 하나도 바뀌지 않는다.
+   */
+  anchor?: 'nextDay' | 'now'
+  /**
+   * 🔴 **그 창의 하루 상한을 덮어쓴다.** 오늘 이미 낸 몫이 있으면
+   *    남은 만큼만 낼 수 있다 — 프로필 상한을 그대로 쓰면 오늘 하루에
+   *    상한이 두 번 얹힌다. 🔴 생략하면 프로필 상한이다.
+   */
+  dailyCap?: number
 }): SimOutcome {
   const p = PROFILES[input.stage]
   const days = input.days ?? 14
@@ -141,7 +165,9 @@ export function simulateStage(input: {
    *    오늘 이미 낸 몫 위에 그 단계의 하루 상한이 통째로 다시 얹히고
    *    (d10 · 오늘 3건 → 오늘 13건), 단계마다 창이 달라 비교가 성립하지 않는다.
    */
-  const horizonStartAt = horizonStart(input.axis.now)
+  const horizonStartAt = (input.anchor ?? 'nextDay') === 'now'
+    ? input.axis.now
+    : horizonStart(input.axis.now)
   const nextSlotAt = nextSlotAnchor(p, input.axis)
   const f = forecastPublishing({
     queue: input.queue,
@@ -149,12 +175,14 @@ export function simulateStage(input: {
     history: input.history ?? input.personas.map((x) => ({ code: x.code, matchedAts: [] })),
     startAt: horizonStartAt,
     days,
-    dailyCap: p.dailyTarget,
+    dailyCap: input.dailyCap ?? p.dailyTarget,
     // 🔴 단계별 주 cap · 간격을 주입한다. 넘기지 않으면 운영 프로필로 돌아 단계 비교가 무의미해진다
     caps: { postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween },
   })
   return {
     stage: input.stage,
+    // 🔴 예측이 실제로 덮은 날짜 — 검사가 "어느 날을 봤나" 를 단정할 수 있게 한다
+    dates: f.days.map((d) => d.date),
     in14: f.in14,
     want14: p.dailyTarget * days,
     gaps: f.days.filter((d) => d.published.length === 0).length,
