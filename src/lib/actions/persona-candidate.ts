@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { auth } from '@/lib/auth'
 import { requireAdmin } from '@/lib/admin'
 import {
-  planDecision, type CandidateDecision, type CandidateStatus,
+  planDecision, planWithdrawal, type CandidateDecision, type CandidateStatus,
 } from '@/lib/persona-candidate-rules'
 
 /**
@@ -75,6 +75,74 @@ export async function decidePersonaCandidate(
     if (res.count === 0) return { error: '이미 처리된 후보입니다. 새로고침해 주세요.' }
   } catch {
     // 🔴 예외 원문을 화면에 싣지 않는다
+    return { error: '처리하지 못했습니다. 잠시 후 다시 시도해 주세요.' }
+  }
+
+  revalidatePath('/admin/persona-candidates')
+  revalidatePath(`/admin/persona-candidates/${row.id}`)
+  return { nextStatus: plan.nextStatus }
+}
+
+/**
+ * 🔴 **승인해 둔 미공개 후보를 거둬들인다** (2026-09-21).
+ *
+ *    `decidePersonaCandidate` 와 **다른 함수**다. 같은 함수에 모드를 더하면
+ *    `PENDING` 만 결정한다는 계약이 흐려진다 — 그 계약이 결정 기록을 지킨다.
+ *
+ * 🔴 write 대상은 `PersonaApprovalQueue` 한 테이블뿐이다.
+ *    Post · Comment · Persona · ActivityLog 를 건드리지 않는다.
+ * 🔴 이미 공개된 것은 거두지 않는다 — 규칙 함수가 먼저 막고,
+ *    아래 조건부 UPDATE 가 한 번 더 막는다.
+ */
+export async function withdrawPersonaCandidate(
+  id: string,
+  reason: string,
+): Promise<DecisionState> {
+  const { ok } = await requireAdmin()
+  if (!ok) return { error: '권한이 없습니다.' }
+
+  const session = await auth()
+  const actorId = session?.user?.id
+  if (!actorId) return { error: '로그인이 필요합니다.' }
+
+  const target = (id ?? '').trim()
+  if (target === '') return { error: '대상을 찾을 수 없습니다.' }
+
+  // 🔴 본문을 읽지 않는다 — 판정에 필요한 칸만 읽는다
+  const row = await prisma.personaApprovalQueue.findUnique({
+    where: { id: target },
+    select: {
+      id: true, status: true, publishedCommentId: true,
+      decidedBy: true, decidedAt: true,
+    },
+  })
+  if (row === null) return { error: '대상을 찾을 수 없습니다.' }
+
+  const plan = planWithdrawal({
+    status: row.status as CandidateStatus,
+    publishedCommentId: row.publishedCommentId,
+    reason,
+    approvedBy: row.decidedBy,
+    approvedAt: row.decidedAt,
+  })
+  if (!plan.ok) return { error: plan.error }
+
+  try {
+    /**
+     * 🔴 **조건부 UPDATE.** 읽은 뒤 쓰는 사이에 누가 공개했으면 여기서 0건이 된다 —
+     *    `publishedCommentId: null` 을 WHERE 에 넣는 이유다.
+     */
+    const res = await prisma.personaApprovalQueue.updateMany({
+      where: { id: row.id, status: row.status, publishedCommentId: null },
+      data: {
+        status: plan.nextStatus,
+        declineReason: plan.declineReason,
+        decidedBy: actorId,
+        decidedAt: new Date(),
+      },
+    })
+    if (res.count === 0) return { error: '이미 처리된 후보입니다. 새로고침해 주세요.' }
+  } catch {
     return { error: '처리하지 못했습니다. 잠시 후 다시 시도해 주세요.' }
   }
 
