@@ -75,6 +75,15 @@ export type BrandAsset = {
   replace: boolean
   /** 외부 브랜드라 바꾸면 안 되는가 */
   locked: boolean
+  /**
+   * 이미지 파일의 실제 픽셀 크기 — `'32x32'` 형식.
+   *
+   * 🔴 `kind: 'file'` 이면서 PNG 인 자산은 **반드시 적는다.**
+   *    check:brand-assets 가 PNG 헤더를 직접 읽어 대조한다 —
+   *    "180×180 으로 교체했다"는 note 의 서술만으로는 아무것도 보장하지 못한다.
+   *    실제로 그 서술이 맞는지 아무도 확인하지 않은 채 반년을 지날 수 있다.
+   */
+  pixels?: string
   /** 판단 근거 — 실제로 열어 확인한 내용 */
   note: string
 }
@@ -87,13 +96,16 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     use: '브라우저 탭 favicon (Next.js app 규약)',
     replace: true,
     locked: false,
+    pixels: '32x32',
     note:
-      '32×32. ✅ 2026-09-07 새 팔레트 자산으로 **교체 완료.** ' +
-      '창업자가 만든 2048×2048 정사각 원본에서 축소했다 — 브랜드 주황 바탕에 ' +
-      '흰색과 연분홍 두 줄 글자다. 이전의 겹친 원 3개 추상 심볼은 대체됐다. ' +
-      '🔴 replace 는 true 로 둔다 — 지금 어긋나 있다는 뜻이 아니라 ' +
-      '**다음 리브랜딩에서도 사람이 새로 만들어야 하는 자산**이라는 정책값이다. ' +
-      '글자가 픽셀에 구워져 있어 이름이 바뀌면 코드로는 못 고친다.',
+      '✅ 2026-09-21 신규 브랜드로 **교체 완료 — C-반전안.** ' +
+      '창업자 승인 원본 Favicon.png(1254×1254)에서 두 사람이 손을 맞대는 심볼만 ' +
+      '뽑아, 진한 주황 면 위에 밝은 크림 심볼로 뒤집은 것이다. ' +
+      '🔴 작은 크기에서 면이 먼저 보여야 하기 때문이다 — 크림 카드 안은 밝은 탭 배경에 ' +
+      '묻힌다(실측: 크림안 32px 2.59:1 vs 이 안 2.89:1). 16px 축소도 형태가 남는다(2.40:1). ' +
+      '🔴 **글자가 없다.** 이름이 바뀌어도 이 파일은 그대로 쓸 수 있다 — ' +
+      '이전 자산(주황 바탕에 두 줄 글자)과 갈리는 지점이다. ' +
+      'replace 는 true 로 둔다 — 다음 리브랜딩에서 사람이 다시 만들어야 하는 자산이라는 정책값이다.',
   },
   {
     path: 'src/app/apple-icon.png',
@@ -102,23 +114,65 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     use: 'iOS 홈 화면 아이콘 (Next.js app 규약)',
     replace: true,
     locked: false,
+    pixels: '180x180',
     note:
-      '180×180. ✅ icon.png 와 같은 원본에서 축소해 **교체 완료**(2026-09-07). ' +
+      '✅ 2026-09-21 신규 브랜드로 **교체 완료 — A안.** 같은 승인 원본에서 뽑았고 ' +
+      '같은 심볼 체계지만 표현이 다르다 — 크림 카드 위 원색 심볼에 세 갈래 빛과 ' +
+      '좌우 마크까지 남긴다. 홈 화면은 충분히 커서 디테일이 살고 원본 인상에 가장 가깝다. ' +
+      '실측 3.12:1. 32px 이하에서는 이 표현이 흐려지므로 탭 아이콘은 C-반전을 쓴다. ' +
       'replace 는 위와 같은 이유로 true 를 유지한다.',
+  },
+  {
+    path: 'public/brand/icon-192.png',
+    kind: 'file',
+    category: 'app-icon',
+    use: 'PWA 설치 아이콘 — manifest 192×192',
+    replace: true,
+    locked: false,
+    pixels: '192x192',
+    note:
+      '✅ 2026-09-21 신설. apple-icon 과 같은 A안이다. ' +
+      '🔴 purpose 는 any 다(manifest.ts 참조) — 심볼이 maskable 안전영역(지름 80%)을 ' +
+      '넘어서 실측 57.4% 가 밖이다. 선언하면 팔이 잘린다.',
+  },
+  {
+    path: 'public/brand/icon-512.png',
+    kind: 'file',
+    category: 'app-icon',
+    use: 'PWA 스플래시·스토어 면 — manifest 512×512',
+    replace: true,
+    locked: false,
+    pixels: '512x512',
+    note: '✅ 2026-09-21 신설. 192 와 같은 A안, 같은 purpose 판단이다.',
+  },
+  {
+    path: 'public/brand/soransoran-logo.png',
+    kind: 'file',
+    category: 'logo',
+    use: '가로형 로고 — 헤더 · 오류 화면 · OG 2곳이 모두 이 한 파일을 쓴다',
+    replace: true,
+    locked: false,
+    pixels: '186x96',
+    note:
+      '✅ 2026-09-21 신설. 창업자 승인 원본 Logo.png(1672×941, 646KB)의 투명 여백을 ' +
+      '실제 내용 기준으로 정리(1557×805)하고 표시 상자 93×48 의 2배로 줄인 것이다. ' +
+      '비율 1.9342 → 1.9375(왜곡 없음) · 23.2KB. ' +
+      '🔴 원본을 런타임에 그대로 쓰지 않는다 — 646KB 는 헤더 한 줄이 짊어질 무게가 아니다. ' +
+      '🔴 이름이 픽셀에 들어 있다. 이름이 바뀌면 코드로는 못 고친다(replace: true).',
   },
   {
     path: 'src/components/brand/Logo.tsx',
     kind: 'code',
     category: 'logo',
-    use: '헤더·오류 화면 워드마크 — 브랜드 표시의 단일 진입점',
+    use: '헤더·오류 화면 로고 — 브랜드 표시의 단일 진입점',
     replace: false,
     locked: false,
     note:
-      '이미지가 아니라 **두 색 텍스트 워드마크**다(2026-09-07). ' +
-      '앞 절반은 weight 800 --brand, 뒤 절반은 weight 500 --brand-strong 이고 ' +
-      '크기는 24px 고정, 자간 -0.02em 이다. 분리 위치만 상수로 두고 값은 BRAND_NAME 에서 파생한다. ' +
-      '이름·색을 바꾸면 따라 바뀌므로 교체 대상이 아니다. ' +
-      '이미지 로고로 가기로 결정하면 이 파일 하나만 고치면 된다.',
+      '🕘 2026-09-07~09-21 에는 **두 색 텍스트 워드마크**였다(24px · 800/500 · ' +
+      '--brand/--brand-strong). 2026-09-21 신규 브랜드에서 **가로형 이미지 로고**로 바뀌었다. ' +
+      '이 파일은 이제 next/image 로 public/brand/soransoran-logo.png 를 48px 높이로 그린다 — ' +
+      '주소와 크기의 정본은 src/lib/brand-logo.ts 다. ' +
+      '파일을 바꾸면 따라 바뀌므로 코드 자체는 교체 대상이 아니다.',
   },
   {
     path: 'src/app/opengraph-image.tsx',
@@ -128,10 +182,10 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     replace: false,
     locked: false,
     note:
-      'next/og 로 매 요청 생성한다. **두 색 워드마크**(2026-09-07)를 화면 Logo 와 같은 ' +
-      'BRAND_NAME_HEAD / BRAND_NAME_TAIL 조각으로 그린다 — 앞 800 BRAND.color, 뒤 500 BRAND.strong, ' +
-      '52px 에 자간 -0.03em. next/og 는 CSS 변수를 해석하지 못해 색은 BRAND 상수를 쓴다. ' +
-      'SITE.tagline 과 카피도 코드가 읽으므로 픽셀에 글자가 박히지 않는다. ' +
+      'next/og 로 매 요청 생성한다. 🕘 2026-09-21 까지는 두 색 워드마크를 코드로 그렸고, ' +
+      '지금은 **화면과 같은 로고 파일**을 높이 72px 로 그린다(brand-logo-image.ts 가 ' +
+      '번들 안의 PNG 를 data URI 로 읽어 넘긴다 — 자기 자신에게 HTTP 요청하지 않는다). ' +
+      '제목·게시판명·카피는 여전히 코드가 읽으므로 픽셀에 박히지 않는다. ' +
       '우나어는 og-cover.png 에 로고가 구워져 있어 수동 교체가 필요했다.',
   },
   {
@@ -142,8 +196,8 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     replace: false,
     locked: false,
     note:
-      '위와 같은 방식이고 워드마크도 같은 두 색 조각이다. 글 제목 + 브랜드 워드마크를 코드로 그린다. ' +
-      '보드 라벨은 워드마크 전체 뒤에 기존 간격으로 붙는다.',
+      '위와 같은 방식이고 로고도 같은 파일이다. 글 제목 + 로고를 그린다. ' +
+      '보드 라벨은 로고 뒤에 기존 간격(marginLeft 20)으로, 세로 가운데 맞춰 붙는다.',
   },
   {
     path: 'src/app/manifest.ts',
@@ -152,7 +206,9 @@ export const BRAND_ASSETS: readonly BrandAsset[] = [
     use: 'PWA manifest — name · theme_color · background_color',
     replace: false,
     locked: false,
-    note: 'SITE.name 과 BRAND 색을 읽는다. 아이콘은 위 file 자산이 진다.',
+    note:
+      'SITE.name 과 BRAND 색을 읽는다. 아이콘 4종(32·180·192·512)은 위 file 자산이 지고 ' +
+      'manifest 는 경로·크기·MIME 만 선언한다. purpose 는 any 다 — 근거는 manifest.ts 머리말.',
   },
   {
     path: 'public/images/hero/soransoran-community-hero.jpg',

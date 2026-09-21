@@ -96,18 +96,25 @@ const COMBOS = [
   { fg: '--brand-ink', bgs: ['--surface-card', '--surface-app'], req: 'large', standard: 'internal', why: '브랜드 원색 — 워드마크 및 그 밖의 사용처' },
 
   /**
-   * ── 워드마크 앞 조각 (3:1) ──
+   * ── 브랜드 원색을 글자로 쓸 때의 하한 (3:1) ──
    *
-   * 🔴 --brand-ink 만 검사하면 실제 로고 색을 놓친다.
-   *    Logo.tsx 의 앞 조각은 `text-brand`(= --brand)를 쓴다. 지금은 --brand 와 --brand-ink 가
-   *    같은 값이라 한쪽만 재도 결과가 같지만, **리브랜딩에서 둘이 갈라지는 순간**
-   *    화면에 실제로 칠해지는 --brand 의 회귀를 아무도 잡지 못한다.
-   *    같은 값일 때 미리 걸어 두는 것이 이 조합의 목적이다.
+   * 🕘 **2026-09-21 까지 이 조합의 이유는 워드마크였다.** Logo.tsx 의 앞 조각이
+   *    `text-brand`(= --brand)를 24px/800 으로 썼고, --brand-ink 만 재면 실제 로고 색을
+   *    놓치기 때문에 걸어 둔 것이다. 로고가 **이미지**로 바뀌면서 그 사용처는 0 이 됐다.
+   *
+   * 🔴 그래도 조합을 지우지 않는다. --brand 와 --brand-ink 는 지금 같은 값이라
+   *    한쪽만 재도 결과가 같지만, **리브랜딩에서 둘이 갈라지는 순간** 아무도 --brand 를
+   *    재지 않게 된다. 같은 값일 때 미리 걸어 두는 것이 이 조합의 목적이었고,
+   *    사용처가 0 인 지금이 오히려 그 이유가 더 크다 — 다시 글자로 쓰려는 사람이
+   *    이 줄에서 기준을 만난다.
    *
    * 🔴 standard: 'internal' — WCAG 1.4.3 은 로고타입을 대비 요건에서 제외한다.
    *    그럼에도 3:1 을 두는 것은 --brand-ink 와 같은 이유의 내부 품질 목표다.
+   *
+   * 🔴 이미지 로고 자체의 계약(경로·크기·@2x·구 계약 잔존)은 여기가 아니라
+   *    `npm run check:brand-assets` 가 진다 — 글자 대비 검사로는 잴 수 없는 것이다.
    */
-  { fg: '--brand', bgs: ['--surface-card', '--surface-app'], req: 'large', standard: 'internal', why: '워드마크 앞 조각 — Logo.tsx 24px / weight 800' },
+  { fg: '--brand', bgs: ['--surface-card', '--surface-app'], req: 'large', standard: 'internal', why: '브랜드 원색을 글자로 쓸 때의 하한 — 지금 사용처 0' },
 ]
 
 /**
@@ -145,9 +152,8 @@ const EXCEPTIONS = []
  */
 const BRAND_INK_USAGE = [
   /**
-   * 🔴 워드마크는 2026-09-07 두 색 전환으로 이 목록에서 빠졌다.
-   *    Logo.tsx 가 --brand-ink 대신 --brand(앞) · --brand-strong(뒤) 두 조각을 쓰고,
-   *    error.tsx 는 직접 마크업을 버리고 Logo 를 쓴다.
+   * 🕘 워드마크는 2026-09-07 두 색 전환으로 이 목록에서 빠졌고,
+   *    2026-09-21 에는 아예 글자가 아니게 됐다(가로형 이미지 로고).
    *    목록을 줄인 것이지 기준을 푼 것이 아니다 — 남은 두 자리는 그대로 큰 글씨다.
    */
   { file: 'src/components/features/CommentSection.tsx', count: 1, kind: 'LARGE_TEXT', note: 'text-lg(--text-title 20~28px) bold 안의 댓글 수' },
@@ -157,13 +163,17 @@ const BRAND_INK_USAGE = [
 /**
  * `text-brand` 사용처 baseline — 원색을 **글자로** 쓰는 자리를 이름으로 고정한다
  *
- * 🔴 --brand 는 원래 비텍스트 전용이었다. 두 색 워드마크(2026-09-07 · 정본 §3-2-A)에서
- *    앞 조각이 처음 글자에 쓰였고, 그 자리는 24px / weight 800 이라 큰 글씨다.
- *    작은 글씨에 새로 쓰면 4.5:1 을 못 넘는다(3.53) — 그래서 여기 없는 파일은 실패한다.
+ * 🔴 --brand 는 비텍스트 전용이다. 작은 글씨에 쓰면 4.5:1 을 못 넘는다(3.53) —
+ *    여기 없는 파일에서 `text-brand` 가 나오면 실패한다.
+ *
+ * 🕘 **2026-09-07~09-21 에는 여기 Logo.tsx 한 줄이 있었다.** 두 색 워드마크의 앞 조각이
+ *    24px / weight 800 으로 원색을 글자에 쓴 유일한 자리였다.
+ *    2026-09-21 로고가 가로형 **이미지**로 바뀌면서 그 사용이 사라져 목록이 비었다.
+ *
+ * 🔴 **비었다고 검사를 지우지 않는다.** 빈 목록은 "원색을 글자로 쓰는 자리가 하나도 없다"는
+ *    강한 선언이고, 새로 하나라도 생기면 NEW 로 걸린다 — 오히려 지금이 가장 엄격한 상태다.
  */
-const BRAND_USAGE = [
-  { file: 'src/components/brand/Logo.tsx', count: 1, kind: 'LARGE_TEXT', note: '두 색 워드마크 앞 조각. 24px 고정 / weight 800' },
-]
+const BRAND_USAGE = []
 
 /**
  * src 를 훑어 파일별 `text-brand-ink` 출현 횟수를 센다.
@@ -765,7 +775,13 @@ function selfTest() {
       const r = checkBrandUsage(new Map([['a/logo.tsx', 1]]), { rebrand: false, usage: U })
       return ['text-brand 사용이 줄면 실패가 아니라 정리 요구', r.failures.length === 0 && r.cleanups.length > 0]
     })(),
-    ['지금 BRAND_USAGE 는 LARGE_TEXT 뿐이다', BRAND_USAGE.every((u) => u.kind === 'LARGE_TEXT')],
+    // 🔴 지금은 비어 있다. every 가 빈 배열에서 true 인 것에 기대지 않고,
+    //    "비어 있거나 전부 LARGE_TEXT" 라는 두 갈래를 각각 확인한다.
+    ['BRAND_USAGE 에 BASELINE_DEBT 를 두지 않는다', BRAND_USAGE.every((u) => u.kind === 'LARGE_TEXT')],
+    [
+      '🔴 빈 baseline 에서도 새 text-brand 사용을 잡는다',
+      checkBrandUsage(new Map([['a/new.tsx', 1]]), { rebrand: false, usage: [] }).failures.some((f) => f.kind === 'NEW'),
+    ],
 
     // ── 고객 primary CTA 계약 (className 표현 단위) ──
     (() => {
@@ -1119,7 +1135,11 @@ console.log(
   `text-brand 사용처 ${actualBrand.size}파일 · ${brandTotal}건 — ` +
     `LARGE_TEXT ${BRAND_USAGE.filter((u) => u.kind === 'LARGE_TEXT').length}파일`,
 )
-console.log('  워드마크 앞 조각(24px / weight 800)뿐이다. 작은 글씨의 새 사용은 실패한다.')
+console.log(
+  BRAND_USAGE.length === 0
+    ? '  원색을 글자로 쓰는 자리는 0 이다(로고가 이미지로 바뀌었다). 새 사용은 전부 실패한다.'
+    : '  등록된 자리뿐이다. 작은 글씨의 새 사용은 실패한다.',
+)
 
 console.log('')
 console.log(
