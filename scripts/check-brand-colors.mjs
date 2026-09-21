@@ -29,10 +29,11 @@ const PAIRS = [
   { brand: 'color', css: '--brand', why: '브랜드 시그니처 — theme-color · OG 장식 면' },
   { brand: 'ink', css: '--brand-ink', why: '큰 글씨 브랜드색 — 화면 --brand-ink 의 CSS 밖 짝' },
   /**
-   * 🔴 두 색 워드마크의 뒤 조각. 화면은 --brand-strong 을, CSS 밖(global-error·next/og)은
-   *    BRAND.strong 을 쓴다. 같은 워드마크라 값이 갈라지면 자리마다 다른 색이 된다.
+   * 🕘 2026-09-21 까지는 두 색 워드마크의 뒤 조각이었다. 로고가 이미지로 바뀌어
+   *    BRAND.strong 을 읽는 코드는 0 이 됐지만, 화면의 --brand-strong 은 작은 글씨
+   *    브랜드 텍스트·배지가 계속 쓴다. 짝을 지우면 그 값이 혼자 움직여도 아무도 모른다.
    */
-  { brand: 'strong', css: '--brand-strong', why: '워드마크 뒤 조각 — CSS 밖에서도 같은 색이어야 한다' },
+  { brand: 'strong', css: '--brand-strong', why: '진한 주황 — 화면 토큰이 혼자 움직이는지 보는 짝' },
   { brand: 'text', css: '--text-primary', why: '본문 텍스트 — OG 카피' },
   { brand: 'onBrand', css: '--cta-content', why: '고객 primary CTA 의 글자·아이콘' },
   { brand: 'muted', css: '--text-muted', why: '보조 텍스트' },

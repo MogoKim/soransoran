@@ -1,6 +1,27 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
+  experimental: {
+    /**
+     * OG 이미지가 읽는 로고 파일을 서버 번들에 함께 올린다.
+     *
+     * 🔴 적지 않으면 **배포에서만 깨진다.** OG 두 곳은 공유 카드를 그릴 때
+     *    `public/brand/soransoran-logo.png` 를 읽는데(src/lib/brand-logo-image.ts),
+     *    파일 추적기는 `process.cwd()` 로 조립한 경로를 따라가지 못한다 —
+     *    실측: 이 항목 없이 빌드하면 두 route 의 `.nft.json` 에 로고가 **없다.**
+     *    로컬에는 public/ 이 그대로 있어 통과하고, 서버리스 함수에만 파일이 빠진다.
+     *
+     * 🔴 절대 URL 로 자기 자신에게 요청하는 방식을 쓰지 않기로 한 대가다(§3-2-A).
+     *    네트워크 실패로 로고 없는 카드가 나가는 것보다, 번들에 파일을 넣는 편이 낫다.
+     *
+     * 🔴 경로가 맞는지는 눈이 아니라 `.nft.json` 으로 확인한다 —
+     *    키가 어긋나면 이 설정은 **조용히 아무것도 하지 않는다.**
+     */
+    outputFileTracingIncludes: {
+      '/opengraph-image': ['./public/brand/soransoran-logo.png'],
+      '/community/[boardSlug]/[postId]/opengraph-image': ['./public/brand/soransoran-logo.png'],
+    },
+  },
   images: {
     formats: ['image/avif', 'image/webp'],
     minimumCacheTTL: 86400,
