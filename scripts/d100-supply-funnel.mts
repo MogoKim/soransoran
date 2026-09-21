@@ -19,15 +19,19 @@ import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import {
-  PIPELINE_STAGES, STAGE_LABEL, buildStageFacts, firstBrokenStage,
-  rateOf, showRate, describeBacklog,
-  type PipelineStage, type StageEvidence,
+  STAGE_LABEL, buildStageFacts, firstBrokenStage,
+  rateOf, showRate, describeBacklog, describeLaneReady,
+  readWorksetManifest, tallySemanticCompletion, stageTimesOf, laneReadyOf,
+  type PipelineStage, type StageEvidence, type LaneReadySplit, type SemanticTally, type LaneRow,
 } from '../src/lib/d100-supply-funnel'
-import { scanArtifacts } from './lib/d100-artifact-scan.mjs'
+import { scanArtifacts, readJsonArtifacts } from './lib/d100-artifact-scan.mjs'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 import { isDetailSuccess } from '../src/lib/collect-run-record'
 import { SOURCE_FACTS } from '../src/lib/collect-schedule'
-import { profileOf, machineReviewedByHuman, type AutoRow } from '../src/lib/original-post-auto-publish'
+import {
+  profileOf, machineReviewedByHuman, selectAutoTargets, type AutoRow,
+} from '../src/lib/original-post-auto-publish'
+import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { MACHINE_MODEL, MACHINE_PROMPT_VERSION, MACHINE_SITE_PREFIX, machineGateOk } from '../src/lib/micro-seed-supply-autofill'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
@@ -130,24 +134,37 @@ type QueueRead = {
   contractOk: number
   contractMismatch: number
   mismatchByField: Record<string, number>
-  humanReviewed: number
-  humanReviewedInWindow: number
-  personaMatched: number
+  /** 🔴 단계마다 **자기 시각**을 쓴다 — 큐 createdAt 을 공통 완료 시각으로 쓰지 않는다 */
+  lane: LaneReadySplit
+  lastHumanDecisionAtMs: number | null
+  personaMatchedAll: number
+  personaMatchedInWindow: number
+  lastMatchedAtMs: number | null
+  publishedLinked: number
   publishedInWindow: number
+  lastPublishedAtMs: number | null
+  postStatus: Record<string, number>
   backlogUsable: number
   lastCreatedAtMs: number | null
   createdDays: number
 }
+const EMPTY_LANE: LaneReadySplit = {
+  humanReviewHistoryAll: 0, humanReviewHistoryInWindow: 0,
+  laneContract: 0, laneNotRejected: 0, laneUnpublished: 0, lanePublishable: 0,
+}
 let q: QueueRead = {
   ok: false, total: 0, createdInWindow: 0, contractOk: 0, contractMismatch: 0,
-  mismatchByField: {}, humanReviewed: 0, humanReviewedInWindow: 0, personaMatched: 0,
-  publishedInWindow: 0, backlogUsable: 0, lastCreatedAtMs: null, createdDays: 0,
+  mismatchByField: {}, lane: EMPTY_LANE, lastHumanDecisionAtMs: null,
+  personaMatchedAll: 0, personaMatchedInWindow: 0, lastMatchedAtMs: null,
+  publishedLinked: 0, publishedInWindow: 0, lastPublishedAtMs: null, postStatus: {},
+  backlogUsable: 0, lastCreatedAtMs: null, createdDays: 0,
 }
 try {
   const raw = await prisma.originalPostApprovalQueue.findMany({
     select: {
       id: true, status: true, createdPostId: true, gateVerdict: true, promptVersion: true,
-      model: true, matchedPersonaId: true, gateResults: true, decidedBy: true, decidedAt: true,
+      model: true, matchedPersonaId: true, matchedAt: true, gateResults: true,
+      decidedBy: true, decidedAt: true,
       createdAt: true, draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
       rawContent: { select: { sourceSite: true } },
     },
@@ -172,6 +189,53 @@ try {
     mismatch[bad] = (mismatch[bad] ?? 0) + 1
   }
   const kst = (d: Date): string => new Date(d.getTime() + 9 * 3600_000).toISOString().slice(0, 10)
+
+  /**
+   * 🔴 **단계마다 자기 행·자기 상태·자기 시각으로 센다** (2026-09-21 7차 보정).
+   *
+   *    앞판은 세 단계 모두 `createdAt >= SINCE` 로 거른 뒤 세고, 마지막 시각도
+   *    큐 `createdAt` 하나를 돌려썼다. 그래서 창 **밖에** 만들어져 창 **안에** 배정·발행된
+   *    행이 통째로 빠졌고(배정 10 vs 실제 14), 세 단계가 같은 시각을 가리켰다.
+   */
+  const humanHistory = raw.filter((r) => machineReviewedByHuman(r.decidedBy))
+  /**
+   * 🔴 **READY 재고는 정본 함수가 만든다.** 여기서 거르면 거절·계약 불일치를
+   *    섞어도 fixture 가 묻지 못한다 — 그 상태로 한 판을 냈다.
+   */
+  const laneRows: LaneRow[] = raw.map((r) => ({
+    id: r.id, status: r.status, createdPostId: r.createdPostId,
+    humanDecided: machineReviewedByHuman(r.decidedBy),
+    contractOk: profileOf(asRow(r)) !== null,
+    decidedAt: r.decidedAt ?? r.createdAt,
+  }))
+  // 🔴 발행기 정본이 고른다 — 여기서 조건을 다시 적지 않는다
+  const publishableIds = selectAutoTargets(
+    raw.filter((r) => r.createdPostId === null || r.createdPostId === '').map(asRow),
+    (t, b) => safetyFilter({ title: t, body: b }).verdict,
+  ).targets.map((t) => t.id)
+  const lane = laneReadyOf({ rows: laneRows, publishableIds, sinceMs: SINCE.getTime() })
+
+  const matched = raw.filter((r) => r.matchedPersonaId !== null)
+  const linkedIds = raw.map((r) => r.createdPostId)
+    .filter((v): v is string => v !== null && v !== '')
+  const posts = linkedIds.length === 0 ? [] : await prisma.post.findMany({
+    where: { id: { in: linkedIds } }, select: { id: true, createdAt: true, status: true },
+  })
+  // 🔴 단계별 시각은 정본 함수가 만든다 — 여기서 다시 고르지 않는다
+  const times = stageTimesOf({
+    decidedAts: humanHistory.map((r) => r.decidedAt ?? r.createdAt),
+    matchedAts: matched.map((r) => r.matchedAt ?? r.createdAt),
+    postTimes: posts.map((x) => ({ postId: x.id, createdAt: x.createdAt })),
+    // 🔴 큐가 가리키는 Post id — 이 밖의 시각은 발행 시각으로 세지 않는다
+    linkedPostIds: linkedIds,
+    queueCreatedAts: raw.map((r) => r.createdAt),
+  })
+  const tally = (xs: readonly { status: string }[]): Record<string, number> => {
+    const m: Record<string, number> = {}
+    for (const x of xs) m[x.status] = (m[x.status] ?? 0) + 1
+    return m
+  }
+
   q = {
     ok: true,
     total: raw.length,
@@ -179,14 +243,20 @@ try {
     contractOk: win.filter((r) => profileOf(asRow(r)) !== null).length,
     contractMismatch: win.filter((r) => profileOf(asRow(r)) === null).length,
     mismatchByField: mismatch,
-    humanReviewed: raw.filter((r) => machineReviewedByHuman(r.decidedBy)).length,
-    humanReviewedInWindow: win.filter((r) => machineReviewedByHuman(r.decidedBy)).length,
-    personaMatched: win.filter((r) => r.matchedPersonaId !== null).length,
-    publishedInWindow: win.filter((r) => r.createdPostId !== null && r.createdPostId !== '').length,
-    backlogUsable: raw.filter((r) => profileOf(asRow(r)) !== null
-      && (r.createdPostId === null || r.createdPostId === '')).length,
-    lastCreatedAtMs: raw.length === 0 ? null
-      : Math.max(...raw.map((r) => r.createdAt.getTime())),
+    lane,
+    // 🔴 검토 단계의 시각은 `decidedAt` 이다
+    lastHumanDecisionAtMs: times.humanReadyAtMs,
+    personaMatchedAll: matched.length,
+    // 🔴 배정 단계의 시각은 `matchedAt` 이다 — 창 판정도 그 시각으로 한다
+    personaMatchedInWindow: matched.filter((r) => (r.matchedAt ?? r.createdAt) >= SINCE).length,
+    lastMatchedAtMs: times.personaMatchAtMs,
+    publishedLinked: posts.length,
+    // 🔴 발행 단계의 시각은 **Post** 의 시각이다 — 큐 행이 아니다
+    publishedInWindow: posts.filter((x) => x.createdAt >= SINCE).length,
+    lastPublishedAtMs: times.publishAtMs,
+    postStatus: tally(posts.map((x) => ({ status: String(x.status) }))),
+    backlogUsable: lane.laneUnpublished,
+    lastCreatedAtMs: times.candidateAtMs,
     /**
      * 🔴 **계약을 맞춘 행이 생긴 날 수**다 (2026-09-21 보정).
      *
@@ -207,6 +277,37 @@ try {
 // ─────────────────────────────────────────────────────────
 // ③ 칸별 사실 — 🔴 가동/정지/미측정
 // ─────────────────────────────────────────────────────────
+/**
+ * 🔴 **작업 묶음은 자기 manifest 가 답한다** — judge 파일 시각을 빌리지 않는다.
+ *    `supply-workset-<runId>.json` 의 `sourceIds` 길이가 그 회차의 묶음 크기다.
+ */
+const worksetFiles = readJsonArtifacts({
+  prefix: 'supply-workset-', suffix: '.json', sinceMs: SINCE.getTime(),
+})
+const worksets = worksetFiles.map((f) => ({ file: f, m: readWorksetManifest(f.json) }))
+const worksetOk = worksets.filter((w) => w.m !== null)
+const worksetBroken = worksets.length - worksetOk.length
+const worksetSourceIds = worksetOk.reduce((n2, w) => n2 + w.m!.sourceIds.length, 0)
+const worksetLastMs = worksetOk.length === 0 ? null
+  : Math.max(...worksetOk.map((w) => Date.parse(w.m!.takenAt)))
+
+/**
+ * 🔴 **의미 검수는 `review.semanticCompletion.complete === true` 만 완료다.**
+ *    초안 파일이 있다고 검수가 끝난 것이 아니다.
+ */
+const artifactFiles = readJsonArtifacts({
+  prefix: 'auto-draft-', suffix: '.artifacts.json', sinceMs: SINCE.getTime(),
+})
+const tallies = artifactFiles.map((f) => ({ file: f, t: tallySemanticCompletion(f.json) }))
+const talliesOk = tallies.filter((x) => x.t !== null)
+const semTotal: SemanticTally = talliesOk.reduce<SemanticTally>((acc, x) => ({
+  total: acc.total + x.t!.total, complete: acc.complete + x.t!.complete,
+  incomplete: acc.incomplete + x.t!.incomplete, unknown: acc.unknown + x.t!.unknown,
+}), { total: 0, complete: 0, incomplete: 0, unknown: 0 })
+const semBroken = tallies.length - talliesOk.length
+const semLastMs = talliesOk.length === 0 ? null
+  : Math.max(...talliesOk.map((x) => x.file.mtimeMs))
+
 const judgeArt = scanArtifacts({ prefix: 'auto-judge-', suffix: '.shadow.jsonl', sinceMs: SINCE.getTime() })
 const draftArt = scanArtifacts({ prefix: 'auto-draft-', suffix: '.picks.jsonl', sinceMs: SINCE.getTime() })
 /**
@@ -240,8 +341,13 @@ const evidence: StageEvidence[] = [
     switchedOff: supplyOff, staleAfterDays: 1,
   },
   {
-    stage: 'workset', lastAtMs: judgeArt.lastAtMs, recentCount: null,
-    unit: '🔴 작업 묶음 파일을 따로 남기지 않는다 — judge 산출로 갈음할 수 없다',
+    stage: 'workset',
+    // 🔴 manifest 의 `takenAt` 이 이 칸의 시각이다
+    lastAtMs: worksetLastMs,
+    recentCount: worksetOk.length === 0 ? null : worksetSourceIds,
+    unit: worksetOk.length === 0
+      ? `🔴 manifest 를 읽지 못했다 (깨진 파일 ${worksetBroken}개)`
+      : `묶음에 든 원천 수 (manifest ${worksetOk.length}개${worksetBroken > 0 ? ` · 🔴 깨짐 ${worksetBroken}개` : ''})`,
     switchedOff: supplyOff, staleAfterDays: 1,
   },
   {
@@ -254,8 +360,13 @@ const evidence: StageEvidence[] = [
     switchedOff: supplyOff, staleAfterDays: 1,
   },
   {
-    stage: 'semanticReview', lastAtMs: draftArt.lastAtMs, recentCount: null,
-    unit: '🔴 검수 결과만 따로 담는 산출물이 없다 — draft 산출로 갈음하지 않는다',
+    stage: 'semanticReview', lastAtMs: semLastMs,
+    recentCount: talliesOk.length === 0 ? null : semTotal.complete,
+    unit: talliesOk.length === 0
+      ? `🔴 artifacts 를 읽지 못했다 (깨진 파일 ${semBroken}개)`
+      : `semanticCompletion.complete=true 인 건수`
+        + ` (전체 ${semTotal.total} · 미완 ${semTotal.incomplete} · 모름 ${semTotal.unknown}`
+        + `${semBroken > 0 ? ` · 🔴 깨짐 ${semBroken}개` : ''})`,
     switchedOff: supplyOff, staleAfterDays: 1,
   },
   {
@@ -264,18 +375,20 @@ const evidence: StageEvidence[] = [
     switchedOff: supplyOff, staleAfterDays: 1,
   },
   {
-    stage: 'humanReady', lastAtMs: q.lastCreatedAtMs,
-    recentCount: q.ok ? q.humanReviewedInWindow : null, unit: '사람이 검토 완료한 행',
+    stage: 'humanReady', lastAtMs: q.lastHumanDecisionAtMs,
+    // 🔴 **발행기가 고르는 수**가 READY 재고다. 검토 이력 수가 아니다
+    recentCount: q.ok ? q.lane.lanePublishable : null,
+    unit: '🔴 현재 레인 발행 가능 재고 — 사람 검토 이력 수가 아니다',
     switchedOff: null, staleAfterDays: 2,
   },
   {
-    stage: 'personaMatch', lastAtMs: q.lastCreatedAtMs,
-    recentCount: q.ok ? q.personaMatched : null, unit: 'Persona 배정된 행',
-    switchedOff: null, staleAfterDays: 2,
+    stage: 'personaMatch', lastAtMs: q.lastMatchedAtMs,
+    recentCount: q.ok ? q.personaMatchedInWindow : null,
+    unit: 'matchedAt 이 창 안인 행', switchedOff: null, staleAfterDays: 2,
   },
   {
-    stage: 'publish', lastAtMs: q.lastCreatedAtMs,
-    recentCount: q.ok ? q.publishedInWindow : null, unit: '발행된 행',
+    stage: 'publish', lastAtMs: q.lastPublishedAtMs,
+    recentCount: q.ok ? q.publishedInWindow : null, unit: 'Post 생성 시각이 창 안인 행',
     switchedOff: !(plistInstalled('com.soransoran.original-post-runner')
       && loadedJobs.has('com.soransoran.original-post-runner')),
     staleAfterDays: 2,
@@ -359,8 +472,22 @@ if (JSON_OUT) {
     for (const [k, v] of Object.entries(q.mismatchByField)) {
       console.log(`      어긋난 칸: ${k}  ${v}건`)
     }
-    console.log(`  사람 검토 완료 — 전체 ${q.humanReviewed}건 · 창 안 ${q.humanReviewedInWindow}건`)
-    console.log(`  Persona 배정 ${q.personaMatched}건 · 발행 ${q.publishedInWindow}건`)
+    for (const l of describeLaneReady(q.lane)) console.log(`  ${l}`)
+    console.log(`  Persona 배정 — 전체 ${q.personaMatchedAll}건 · 창 안 ${q.personaMatchedInWindow}건`
+      + ` (matchedAt 기준 · 최근 ${ts(q.lastMatchedAtMs)})`)
+    console.log(`  발행 — 연결 ${q.publishedLinked}건 · 창 안 ${q.publishedInWindow}건`
+      + ` (Post 시각 기준 · 최근 ${ts(q.lastPublishedAtMs)})`)
+    console.log(`  Post 상태 ${Object.entries(q.postStatus).map(([k, v]) => `${k} ${v}`).join(' · ')}`)
+    /**
+     * 🔴 **"창 안에 216건 생겼다" 와 "정기 공급이 216건 냈다" 는 근거가 다르다.**
+     *    앞엣것은 `Queue.createdAt` 이 답한다. 뒤엣것은 **회차에 예약/수동 표시**가
+     *    있어야 답할 수 있는데, 공급 회차는 그 표시를 남기지 않는다.
+     */
+    console.log(`  창 안 생성 ${q.createdInWindow}건 — 근거: Queue.createdAt`)
+    console.log('  정기 live 공급량 — 🔴 unmeasured.'
+      + ' 공급 회차에 예약/수동 구분 기록이 없어 "예약으로 나온 몫" 을 가릴 수 없다')
+    console.log(`  (참고: 공급 스위치는 ${supplyOff ? '꺼져 있다' : '켜져 있다'}`
+      + ' — 꺼진 채로 생긴 행은 손으로 돌린 회차의 산물이다)')
     console.log('  🔴 `readyQualifiedPerDay` 의 분자는 **계약을 맞추고 사람 검토까지 끝난 행**이다.')
     console.log('     공급기가 멎어 있던 기간의 그 수를 14 로 나눈 값은')
     console.log('     **정상 가동 AI 생산율도, 수집→READY 전환율도 아니다.**')

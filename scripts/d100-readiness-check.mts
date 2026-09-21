@@ -45,7 +45,9 @@ import {
 import { compareWorkflowSuperset, allStageCronLines, stageGatingPresent } from '../src/lib/scale-workflow-render'
 import {
   judgeStageStatus, buildStageFacts, firstBrokenStage, rateOf, showRate, describeBacklog,
-  MIN_RUNS_FOR_DAILY_RATE, type StageEvidence,
+  MIN_RUNS_FOR_DAILY_RATE, describeLaneReady, laneReadyMisreported,
+  readWorksetManifest, tallySemanticCompletion, stageTimesOf, laneReadyOf,
+  type StageEvidence, type LaneReadySplit, type LaneRow,
 } from '../src/lib/d100-supply-funnel'
 import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
 import {
@@ -1690,6 +1692,175 @@ console.log('\n⑰ 🔴 🔴 공급 깔때기 재대조 — 이름을 흐리면 
       && (card.reason ?? '').includes('24명')
       && reallyBlocked.passed === 0 && reallyBlocked.passedIgnoringUnmeasured === 0
       && wired
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑱ 🔴 🔴 단계별 사실 연결 — 남의 시각·남의 건수를 빌리면 FAIL')
+// ─────────────────────────────────────────────────────────
+{
+  const d = (iso: string): Date => new Date(iso)
+
+  /**
+   * ① 🔴 **다른 큐 행이 새로 생겨도 세 단계가 움직이면 안 된다.**
+   *    앞판은 세 단계 모두 `Queue.createdAt` 을 마지막 시각으로 썼다 —
+   *    적재만 일어나도 사람 검토·배정·발행이 방금 된 것처럼 보였다.
+   */
+  check('🔴 ① **큐 행이 새로 생겨도 READY·배정·발행 시각은 그대로다**', (() => {
+    const base = {
+      decidedAts: [d('2026-09-10T00:00:00Z')],
+      matchedAts: [d('2026-09-11T00:00:00Z')],
+      postTimes: [{ postId: 'p1', createdAt: d('2026-09-12T00:00:00Z') }],
+      linkedPostIds: ['p1'],
+      queueCreatedAts: [d('2026-09-12T00:00:00Z')],
+    }
+    const before = stageTimesOf(base)
+    // 🔴 **큐 행만** 새로 생겼다 — 다른 단계는 아무 일도 없었다
+    const after = stageTimesOf({
+      ...base, queueCreatedAts: [...base.queueCreatedAts, d('2026-09-21T00:00:00Z')],
+    })
+    return before.humanReadyAtMs === after.humanReadyAtMs
+      && before.personaMatchAtMs === after.personaMatchAtMs
+      && before.publishAtMs === after.publishAtMs
+      // 🔴 적재 시각만 움직인다
+      && after.candidateAtMs !== before.candidateAtMs
+      // 🔴 세 시각이 서로 다르다 — 하나를 돌려쓰지 않는다
+      && new Set([after.humanReadyAtMs, after.personaMatchAtMs, after.publishAtMs]).size === 3
+      /**
+       * 🔴 **큐 행으로 발행 시각을 지어낼 수 없다.** 모양이 같아도 id 가
+       *    큐가 가리키는 Post 집합 밖이면 한 건도 세지 않는다.
+       */
+      && stageTimesOf({
+        ...base,
+        postTimes: [{ postId: 'queue-row-id', createdAt: d('2026-09-21T00:00:00Z') }],
+      }).publishAtMs === null
+  })())
+
+  /**
+   * ② 🔴 **거절·계약 불일치는 READY 가 아니다.**
+   *    실측: 사람 검토 이력 11건 · 실제 레인 READY 4건.
+   */
+  check('🔴 ② **검토 이력 11건을 READY 11건으로 적으면 잡힌다**', (() => {
+    /**
+     * 🔴 **실제 저장 형식 그대로 넣는다.** 거절된 글·계약 불일치·이미 발행된 글이
+     *    섞인 목록에서 READY 재고가 얼마가 되는지를 본다.
+     */
+    const SINCE = d('2026-09-07T00:00:00Z').getTime()
+    const row = (o: Partial<LaneRow> & { id: string }): LaneRow => ({
+      status: 'APPROVED', createdPostId: null, humanDecided: true, contractOk: true,
+      decidedAt: d('2026-09-20T00:00:00Z'), ...o,
+    })
+    const rows: LaneRow[] = [
+      row({ id: 'ok1' }), row({ id: 'ok2' }), row({ id: 'ok3' }), row({ id: 'ok4' }),
+      // 🔴 거절 — READY 가 아니다
+      row({ id: 'declined', status: 'DECLINED' }),
+      row({ id: 'expired', status: 'EXPIRED' }),
+      // 🔴 계약 불일치 — 사람이 봤어도 지금 레인으로 못 나간다
+      row({ id: 'legacy1', contractOk: false }),
+      row({ id: 'legacy2', contractOk: false }),
+      // 🔴 이미 발행됨 — 재고가 아니다
+      row({ id: 'published', status: 'PUBLISHED', createdPostId: 'post-1' }),
+      // 🔴 창 밖 검토 이력
+      row({ id: 'old', decidedAt: d('2026-08-01T00:00:00Z') }),
+    ]
+    /** 🔴 발행기가 고른 id — 계약 불일치·발행된 것은 애초에 고르지 않는다 */
+    const publishableIds = ['ok1', 'ok2', 'ok3', 'ok4']
+    const measured = laneReadyOf({ rows, publishableIds, sinceMs: SINCE })
+    const excludes = measured.lanePublishable === 4
+      && measured.laneContract === 8 && measured.laneNotRejected === 6
+      && measured.laneUnpublished === 5
+      // 🔴 사람이 본 이력은 10건이지만 READY 는 4건이다
+      && measured.humanReviewHistoryAll === 10
+      && measured.humanReviewHistoryInWindow === 9
+    /** 🔴 미발행 집합 밖의 id 를 고르면 세지 않는다 — 재고가 부풀지 않는다 */
+    const foreign = laneReadyOf({
+      rows, publishableIds: [...publishableIds, 'published', '없는행'], sinceMs: SINCE,
+    }).lanePublishable === 4
+
+    const real: LaneReadySplit = {
+      humanReviewHistoryAll: 25, humanReviewHistoryInWindow: 11,
+      laneContract: 10, laneNotRejected: 10, laneUnpublished: 4, lanePublishable: 4,
+    }
+    if (!excludes || !foreign) return false
+    const lines = describeLaneReady(real).join(' ')
+    return laneReadyMisreported(real, 11) && !laneReadyMisreported(real, 4)
+      && /READY 재고 4건/.test(lines)
+      && /사람 검토 이력 11건/.test(lines)
+      && /READY 재고가 아니다/.test(lines)
+      // 🔴 깔때기가 좁아지는 것이 보인다
+      && real.laneContract >= real.laneNotRejected
+      && real.laneNotRejected >= real.laneUnpublished
+      && real.laneUnpublished >= real.lanePublishable
+  })())
+
+  /**
+   * ③ 🔴 **실제 저장 형식**으로 읽는다. 모양이 아니면 `null` 이고 0 이 아니다.
+   */
+  check('🔴 ③ **workset manifest 를 정본 구조로 읽는다**', (() => {
+    // 🔴 실제 파일 형식 그대로
+    const realFile = {
+      kind: 'supply-workset', version: 'workset-v1', runId: '20260921-003912',
+      takenAt: '2026-09-21T00:39:13.895Z', limit: 5,
+      sourceIds: ['35038277', '35038242', '35038433', '35038800', '35022233'],
+    }
+    const m = readWorksetManifest(realFile)
+    const ok = m !== null && m.sourceIds.length === 5 && m.runId === '20260921-003912'
+    // 🔴 깨진 파일·다른 종류는 읽지 않는다 — 0 으로 세지 않는다
+    return ok
+      && readWorksetManifest({ ...realFile, kind: 'something-else' }) === null
+      && readWorksetManifest({ ...realFile, sourceIds: [1, 2] }) === null
+      && readWorksetManifest(null) === null
+      && readWorksetManifest('{"kind":"supply-workset"') === null
+  })())
+
+  check('🔴 ③-b **검수 미완료를 완료로 세지 않는다**', (() => {
+    // 🔴 실제 artifacts 형식 — 완료는 `review.semanticCompletion.complete === true` 뿐이다
+    const art = (complete: unknown): unknown => ({
+      artifactVersion: 'human-review-v9', sourceArticleId: 'x',
+      review: { deterministic: { pass: true }, semanticCompletion: { complete, reason: null, cause: null } },
+    })
+    const t = tallySemanticCompletion([
+      art(true), art(true), art(true), art(false), art(null),
+      // 🔴 review 가 없는 것 · semanticCompletion 이 없는 것
+      { artifactVersion: 'v', sourceArticleId: 'y' },
+      { artifactVersion: 'v', sourceArticleId: 'z', review: { deterministic: { pass: true } } },
+    ])
+    return t !== null && t.total === 7 && t.complete === 3
+      && t.incomplete === 1 && t.unknown === 3
+      // 🔴 배열이 아니면 읽지 않는다
+      && tallySemanticCompletion({ not: 'array' }) === null
+      && tallySemanticCompletion(null) === null
+  })())
+
+  /** 🔴 계기판이 그 정본 읽기를 실제로 쓰는가 */
+  check('🔴 ③-c **계기판이 judge/draft 시각을 빌리지 않는다**', (() => {
+    const src = readFileSync('scripts/d100-supply-funnel.mts', 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const worksetBlock = src.slice(src.indexOf("stage: 'workset'"), src.indexOf("stage: 'judge'"))
+    const semBlock = src.slice(src.indexOf("stage: 'semanticReview'"), src.indexOf("stage: 'candidate'"))
+    return /readWorksetManifest/.test(src) && /tallySemanticCompletion/.test(src)
+      && /stageTimesOf/.test(src)
+      // 🔴 두 칸이 judge/draft 파일 시각을 쓰지 않는다
+      && !/judgeArt|draftArt|draftCand/.test(worksetBlock)
+      && !/judgeArt|draftArt|draftCand/.test(semBlock)
+      // 🔴 세 단계가 큐 적재 시각을 쓰지 않는다
+      && !/stage: 'humanReady',\s*lastAtMs: q\.lastCreatedAtMs/.test(src)
+      && !/stage: 'personaMatch',\s*lastAtMs: q\.lastCreatedAtMs/.test(src)
+      && !/stage: 'publish',\s*lastAtMs: q\.lastCreatedAtMs/.test(src)
+      // 🔴 READY 자리에 검토 이력 수를 넣지 않는다
+      && /recentCount: q\.ok \? q\.lane\.lanePublishable : null/.test(src)
+      && !/recentCount: q\.ok \? q\.lane\.humanReviewHistory/.test(src)
+      // 🔴 READY 재고는 정본 함수가 만든다
+      && /laneReadyOf\(/.test(src)
+      /**
+       * 🔴 **여기만 구조 검사다.** `postTimes` 를 큐 행으로 바꿔도 모양이 같아
+       *    순수 fixture 로는 잡히지 않는다 — 다만 그렇게 바꾸면 실행 시
+       *    `linkedPostIds` 밖이라 발행 시각이 통째로 `(없음)` 이 된다(lib 이 막는다).
+       *    이 줄은 그 바꿔치기를 **코드 단계에서** 한 번 더 막는다.
+       */
+      && /postTimes: posts\.map\(/.test(src)
+      && /linkedPostIds: linkedIds/.test(src)
+      && !/postTimes: raw\.map\(/.test(src)
   })())
 }
 

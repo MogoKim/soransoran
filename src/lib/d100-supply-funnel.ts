@@ -161,6 +161,206 @@ export type BacklogSplit = {
   inflow: RateReading
 }
 
+/**
+ * 🔴 **"사람이 봤다" 와 "지금 나갈 수 있다" 는 다른 사실이다** (2026-09-21 7차 보정).
+ *
+ *    앞판은 창 안의 **사람 검토 이력 11건**을 그대로 "사람 READY 11건" 으로 적었다.
+ *    그 11건에는 이미 발행된 글, 거절된 글, **지금 레인 계약과 어긋나는 글**이 섞여 있다.
+ *    실제로 지금 나갈 수 있는 것은 4건이다 — 화면이 세 배 가까이 부풀어 있었다.
+ *
+ *    그래서 두 수를 **따로** 들고 다닌다. 하나로 합치면 어느 쪽 뜻인지 알 수 없다.
+ */
+export type LaneReadySplit = {
+  /** 🔴 사람이 검토한 이력 — 발행 가능성과 무관하다 */
+  humanReviewHistoryAll: number
+  humanReviewHistoryInWindow: number
+  /** 지금 레인 계약에 맞는 행 */
+  laneContract: number
+  /** 그중 거절되지 않은 것 */
+  laneNotRejected: number
+  /** 그중 아직 발행되지 않은 것 */
+  laneUnpublished: number
+  /** 🔴 **발행기가 실제로 고르는 수** — 이것이 READY 재고다 */
+  lanePublishable: number
+}
+
+/** 🔴 거절·기한경과는 READY 가 아니다 */
+export const LANE_ALIVE_STATUSES = ['APPROVED', 'EDITED', 'PUBLISHED'] as const
+
+export type LaneRow = {
+  id: string
+  status: string
+  createdPostId: string | null
+  /** 사람이 검토했는가 — 🔴 발행 가능성과 무관한 사실이다 */
+  humanDecided: boolean
+  /** 지금 레인 계약에 맞는가 */
+  contractOk: boolean
+  decidedAt: Date | null
+}
+
+/**
+ * 🔴 **READY 재고를 한 곳에서 만든다.** CLI 안에 인라인으로 두면
+ *    거절된 글이나 계약 불일치를 섞어도 fixture 가 물어볼 방법이 없다 —
+ *    실제로 그 상태로 한 판을 냈다.
+ */
+export function laneReadyOf(input: {
+  rows: readonly LaneRow[]
+  /** 🔴 발행기가 실제로 고른 id — 부르는 쪽이 정본 selector 로 만든다 */
+  publishableIds: readonly string[]
+  sinceMs: number
+}): LaneReadySplit {
+  const history = input.rows.filter((r) => r.humanDecided)
+  const contract = input.rows.filter((r) => r.contractOk)
+  const alive = contract.filter(
+    (r) => (LANE_ALIVE_STATUSES as readonly string[]).includes(r.status),
+  )
+  const unpublished = alive.filter((r) => r.createdPostId === null || r.createdPostId === '')
+  const unpublishedIds = new Set(unpublished.map((r) => r.id))
+  /**
+   * 🔴 **고른 것이 미발행 집합 밖이면 세지 않는다.** 밖에 있다는 것은 두 판정이
+   *    어긋났다는 뜻이고, 그때 큰 쪽을 믿으면 재고가 부풀어 오른다.
+   */
+  const publishable = input.publishableIds.filter((id) => unpublishedIds.has(id)).length
+  return {
+    humanReviewHistoryAll: history.length,
+    humanReviewHistoryInWindow: history.filter(
+      (r) => (r.decidedAt?.getTime() ?? 0) >= input.sinceMs,
+    ).length,
+    laneContract: contract.length,
+    laneNotRejected: alive.length,
+    laneUnpublished: unpublished.length,
+    lanePublishable: publishable,
+  }
+}
+
+export function describeLaneReady(r: LaneReadySplit): string[] {
+  return [
+    `🔴 현재 레인 READY 재고 ${r.lanePublishable}건`
+    + ` (계약 ${r.laneContract} → 미거절 ${r.laneNotRejected} → 미발행 ${r.laneUnpublished}`
+    + ` → 발행기 통과 ${r.lanePublishable})`,
+    `사람 검토 이력 ${r.humanReviewHistoryInWindow}건(창 안) · ${r.humanReviewHistoryAll}건(전체)`
+    + ' — 🔴 **READY 재고가 아니다.** 발행된 것·거절된 것·계약이 어긋난 것이 섞여 있다',
+  ]
+}
+
+/**
+ * 🔴 **검토 이력을 READY 로 적으면 안 된다.** 두 수가 같아지는 것을 막는 것이 아니라,
+ *    **READY 자리에 이력 수를 넣었는지**를 본다.
+ */
+export function laneReadyMisreported(r: LaneReadySplit, reportedReady: number): boolean {
+  return reportedReady !== r.lanePublishable
+}
+
+/**
+ * 🔴 **단계마다 자기 시각을 쓴다** (2026-09-21 7차 보정).
+ *
+ *    앞판은 세 단계 모두 `Queue.createdAt` 하나를 마지막 시각으로 돌려썼다.
+ *    그러면 **다른 행이 새로 적재되기만 해도** 사람 검토·배정·발행이 방금 일어난 것처럼
+ *    보인다 — 세 칸이 동시에 초록이 되고, 실제로는 아무도 아무것도 하지 않았다.
+ */
+export type StageTimes = {
+  humanReadyAtMs: number | null
+  personaMatchAtMs: number | null
+  publishAtMs: number | null
+  candidateAtMs: number | null
+}
+
+export function latestMs(xs: readonly (Date | null)[]): number | null {
+  const ms = xs.filter((d): d is Date => d !== null).map((d) => d.getTime())
+  return ms.length === 0 ? null : Math.max(...ms)
+}
+
+/**
+ * 🔴 **발행 시각은 Post 의 것이다.**
+ *
+ *    타입만으로는 못 막는다 — 큐 행으로 `{ postId, createdAt }` 를 지어내면 모양이 같다.
+ *    그래서 **큐가 실제로 가리키는 Post id 집합**을 함께 받아, 그 밖의 시각은 버린다.
+ *    큐 행 id 는 그 집합에 없으므로 지어낸 시각은 한 건도 남지 않는다.
+ */
+export type PostTime = { postId: string; createdAt: Date }
+
+export function stageTimesOf(input: {
+  /** 사람이 결정한 시각들 */
+  decidedAts: readonly (Date | null)[]
+  /** Persona 를 배정한 시각들 */
+  matchedAts: readonly (Date | null)[]
+  /** 🔴 **Post** 가 생긴 시각들 — 큐 행의 시각이 아니다 */
+  postTimes: readonly PostTime[]
+  /** 🔴 큐가 가리키는 Post id — **이 밖의 시각은 발행 시각이 아니다** */
+  linkedPostIds: readonly string[]
+  /** 큐에 적재된 시각들 */
+  queueCreatedAts: readonly Date[]
+}): StageTimes {
+  const linked = new Set(input.linkedPostIds)
+  const realPosts = input.postTimes.filter((p) => linked.has(p.postId))
+  return {
+    humanReadyAtMs: latestMs(input.decidedAts),
+    personaMatchAtMs: latestMs(input.matchedAts),
+    publishAtMs: latestMs(realPosts.map((p) => p.createdAt)),
+    candidateAtMs: latestMs(input.queueCreatedAts),
+  }
+}
+
+/**
+ * 🔴 **작업 묶음·의미 검수는 자기 정본 파일이 답한다** (2026-09-21 7차 보정).
+ *
+ *    앞판은 judge/draft 파일의 **시각**을 빌려 이 두 칸의 상태를 말했다.
+ *    그것은 "judge 가 돌았다" 는 근거이지 "묶음이 몇 건이었나" 도
+ *    "검수가 몇 건 끝났나" 도 아니다. 파일이 없거나 깨졌을 때만 `unmeasured` 다.
+ */
+export type WorksetManifest = {
+  kind: string
+  version: string
+  runId: string
+  takenAt: string
+  limit: number
+  sourceIds: readonly string[]
+}
+
+export const WORKSET_KIND = 'supply-workset'
+
+/** 🔴 모양이 아니면 읽지 않는다 — 깨진 파일을 0 으로 세지 않는다 */
+export function readWorksetManifest(v: unknown): WorksetManifest | null {
+  if (v === null || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (o.kind !== WORKSET_KIND) return null
+  if (typeof o.runId !== 'string' || typeof o.takenAt !== 'string') return null
+  if (!Array.isArray(o.sourceIds)) return null
+  const ids = o.sourceIds.filter((x): x is string => typeof x === 'string')
+  if (ids.length !== o.sourceIds.length) return null
+  return {
+    kind: o.kind, version: typeof o.version === 'string' ? o.version : '(모름)',
+    runId: o.runId, takenAt: o.takenAt,
+    limit: typeof o.limit === 'number' ? o.limit : ids.length,
+    sourceIds: ids,
+  }
+}
+
+/**
+ * 🔴 **`review.semanticCompletion.complete === true` 만 완료다.**
+ *    파일이 있다고 검수가 끝난 것이 아니고, 초안이 있다고 끝난 것도 아니다.
+ */
+export type SemanticTally = { total: number; complete: number; incomplete: number; unknown: number }
+
+export function tallySemanticCompletion(artifacts: unknown): SemanticTally | null {
+  if (!Array.isArray(artifacts)) return null
+  const t: SemanticTally = { total: 0, complete: 0, incomplete: 0, unknown: 0 }
+  for (const a of artifacts) {
+    t.total += 1
+    if (a === null || typeof a !== 'object') { t.unknown += 1; continue }
+    const review = (a as Record<string, unknown>).review
+    if (review === null || typeof review !== 'object') { t.unknown += 1; continue }
+    const sc = (review as Record<string, unknown>).semanticCompletion
+    if (sc === null || typeof sc !== 'object') { t.unknown += 1; continue }
+    const complete = (sc as Record<string, unknown>).complete
+    // 🔴 boolean 이 아니면 모른다 — true 로 읽지 않는다
+    if (complete === true) t.complete += 1
+    else if (complete === false) t.incomplete += 1
+    else t.unknown += 1
+  }
+  return t
+}
+
 export function describeBacklog(b: BacklogSplit): string[] {
   const out = [
     `backlog ${b.backlog}건 (지금 계약에 맞는 것 ${b.backlogUsable}건`

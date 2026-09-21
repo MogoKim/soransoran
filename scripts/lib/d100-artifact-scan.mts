@@ -22,6 +22,37 @@ export type ScanResult = {
   lastAtMs: number | null
 }
 
+/**
+ * 🔴 **JSON 파일을 파싱해 정본 구조로 읽는다.** 줄 수를 세지 않는다 —
+ *    깨진 파일은 `null` 로 남기고 0 으로 세지 않는다.
+ */
+export type ParsedFile = { name: string; mtimeMs: number; json: unknown | null }
+
+export function readJsonArtifacts(input: {
+  dir?: string
+  prefix: string
+  suffix: string
+  sinceMs: number
+}): ParsedFile[] {
+  const dir = input.dir ?? DATA_DIR
+  if (!existsSync(dir)) return []
+  let names: string[] = []
+  try { names = readdirSync(dir) } catch { return [] }
+  const out: ParsedFile[] = []
+  for (const n of names) {
+    if (!n.startsWith(input.prefix) || !n.endsWith(input.suffix)) continue
+    const p = join(dir, n)
+    let mtimeMs = 0
+    try { mtimeMs = statSync(p).mtimeMs } catch { continue }
+    if (mtimeMs < input.sinceMs) continue
+    let json: unknown | null = null
+    // 🔴 못 읽거나 깨졌으면 `null` — 부르는 쪽이 unmeasured 로 다룬다
+    try { json = JSON.parse(readFileSync(p, 'utf-8')) } catch { json = null }
+    out.push({ name: n, mtimeMs, json })
+  }
+  return out.sort((a, b) => a.mtimeMs - b.mtimeMs)
+}
+
 /** 🔴 이름이 `prefix` 로 시작하고 `suffix` 로 끝나는 파일만 */
 export function scanArtifacts(input: {
   dir?: string
