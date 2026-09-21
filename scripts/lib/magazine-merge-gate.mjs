@@ -336,6 +336,28 @@ export function judgeAutoMerge({
     if (r.status && !['SCHEDULED', 'PUBLISHED'].includes(r.status)) {
       block('STATUS_UNEXPECTED', `${r.slug} 의 status 가 ${r.status} 다`)
     }
+
+    /**
+     * 🔴 **대표 이미지가 없으면 병합하지 않는다** (2026-09-21 사고).
+     *
+     *    9/19~9/26 등록 8건이 전부 hero 없이 main 에 들어갔다.
+     *    생성 단계(OPTIONAL 스킵)와 QA 단계(REQUIRED 만 검사)가 둘 다 놓쳤고,
+     *    **여기에도 검사가 없어서** 마지막 문까지 그대로 통과했다.
+     *
+     *    자동 레인이 내보내는 글에는 예외 없이 대표 이미지가 있어야 한다.
+     *    파일이 PR 안에 실제로 들어 있는지도 함께 본다 — articles.ts 의
+     *    경로만 맞고 파일이 없으면 독자에게는 깨진 이미지다.
+     */
+    const heroSrc = r.heroImage?.src ?? null
+    if (!heroSrc) {
+      block('HERO_MISSING', `${r.slug} 에 대표 이미지가 없다 — 자동 등록 글은 예외 없이 필요하다`)
+    } else {
+      // heroImage.src 는 `/magazine/<slug>/hero.webp` · 저장소 경로는 `public` 이 앞에 붙는다
+      const expected = `public${heroSrc.startsWith('/') ? '' : '/'}${heroSrc}`
+      if (!(files ?? []).includes(expected)) {
+        block('HERO_FILE_ABSENT', `${r.slug} 의 대표 이미지 파일이 PR 에 없다 (${expected}) — 경로만 있고 그림이 없다`)
+      }
+    }
   }
   if (blockedBy.length === 0) pass(`등록 ${rows.length}건 — 등급·중복·예약일 확인`)
 

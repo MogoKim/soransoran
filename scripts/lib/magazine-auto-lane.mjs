@@ -87,9 +87,25 @@ export function progress(slug) {
  *   REQUIRED → 만든다 (alt 가 있어야 한다)
  *   OPTIONAL → 기본 스킵. allowOptional 을 사람이 켜야 만든다.
  */
-export function heroPlan(item, { alt = null, allowOptional = false } = {}) {
+export function heroPlan(item, { alt = null, allowOptional = false, autoLane = false } = {}) {
   const mode = item?.imageMode ?? null
-  if (mode !== 'REQUIRED' && !(mode === 'OPTIONAL' && allowOptional)) {
+  /**
+   * 🔴 **자동 레인에서는 OPTIONAL 도 필수다** (2026-09-21 사고).
+   *
+   *    9/19~9/26 등록 글 8건이 전부 대표 이미지 없이 나갔다. 원인은 여기다 —
+   *    `imageMode=OPTIONAL` 이면 `need:false` 로 **그냥 건너뛰었고**,
+   *    batch-qa 와 register 는 `REQUIRED` 일 때만 hero 를 봤다.
+   *    즉 OPTIONAL 인 글은 **아무도 이미지를 보지 않는 경로**로 끝까지 갔다.
+   *
+   *    OPTIONAL 의 원래 뜻은 "사람이 판단해서 뺄 수 있다" 였다.
+   *    그런데 자동 레인에는 판단할 사람이 없다. 사람이 없는 자리에서
+   *    "선택" 은 곧 "없음" 이 된다 — 실제로 8건 연속 그렇게 됐다.
+   *
+   * 🔴 **그래서 자동 등록 경로에서는 OPTIONAL 을 허용하지 않는다.**
+   *    사람이 직접 돌리는 경로(`--allow-optional` 없이)에서는 그대로 둔다.
+   */
+  const required = mode === 'REQUIRED' || (autoLane && mode !== null) || (autoLane && mode === null)
+  if (!required && !(mode === 'OPTIONAL' && allowOptional)) {
     return { need: false, mode, reason: mode === 'OPTIONAL' ? 'OPTIONAL — 기본 스킵' : `imageMode=${mode ?? '-'}` }
   }
   if (!alt) {
@@ -100,5 +116,5 @@ export function heroPlan(item, { alt = null, allowOptional = false } = {}) {
       blocked: { code: 'HERO_ALT_REQUIRED', message: `imageMode=${mode} 인데 --alt 가 없다 — alt 는 사람이 적는다` },
     }
   }
-  return { need: true, mode, alt, blocked: null }
+  return { need: true, mode, alt, blocked: null, enforcedByLane: autoLane && mode !== 'REQUIRED' }
 }

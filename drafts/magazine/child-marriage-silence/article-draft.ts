@@ -15,7 +15,12 @@ export const DRAFT: MagazineArticleBody = {
   // 발행일은 창업자가 확정한다
   publishedAt: '',
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/child-marriage-silence/hero.webp',
+    alt: "탁자에 머그잔을 두고 거실 소파에 턱을 괴고 앉은 50대 여성",
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

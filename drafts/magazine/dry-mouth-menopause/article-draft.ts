@@ -16,7 +16,12 @@ export const DRAFT: MagazineArticleBody = {
   publishedAt: '',
   medical: true,
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/dry-mouth-menopause/hero.webp',
+    alt: "머그잔을 앞에 두고 식탁에 턱을 괴고 앉아 창밖을 바라보는 50대 여성",
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

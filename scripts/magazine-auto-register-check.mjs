@@ -1052,7 +1052,8 @@ const M = await import('./lib/magazine-merge-gate.mjs')
 const SHA = 'a'.repeat(40)
 const okPr = { number: 9, url: 'u', headRefName: `${M.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: SHA, state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
 const okFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/x-slug/draft.md', 'public/magazine/x-slug/hero.webp']
-const okReg = [{ slug: 'x-slug', publishAt: '2026-09-20T10:30:00+09:00', publishedAt: '2026-09-20', status: 'SCHEDULED' }]
+// 🔴 자동 등록 글에는 대표 이미지가 **반드시** 있다 (2026-09-21 사고 뒤 계약)
+const okReg = [{ slug: 'x-slug', publishAt: '2026-09-20T10:30:00+09:00', publishedAt: '2026-09-20', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } }]
 const okQueue = { 'x-slug': { riskLevel: 'LOW', autoEligible: true } }
 const base = {
   pr: okPr, expectedSha: SHA, files: okFiles, ciState: 'success',
@@ -1115,8 +1116,8 @@ console.log('\n══════ 운영연결 ① 등록 후 삭제된 큐 — 
 const MG = await import('./lib/magazine-merge-gate.mjs')
 const MSHA = 'a'.repeat(40)
 const mPr = { number: 9, url: 'u', headRefName: `${MG.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: MSHA, state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
-const mFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/x-slug/draft.md']
-const mReg = [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }]
+const mFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/x-slug/draft.md', 'public/magazine/x-slug/hero.webp']
+const mReg = [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } }]
 const okChecks = [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }]
 // 🔴 등록 전 큐(main): slug 가 **있다** · 등록 후 큐(PR): slug 가 **없다**
 const MAIN_QUEUE = { 'x-slug': { riskLevel: 'MEDIUM', autoEligible: true }, 'other': { riskLevel: 'LOW', autoEligible: true } }
@@ -1422,7 +1423,8 @@ const NOW8 = Date.parse('2026-09-17T12:00:00+09:00')
 
 const ART = (rows) => [
   'export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = {',
-  ...rows.map((r) => `  '${r.slug}': { title: ${JSON.stringify(r.title ?? r.slug)}, publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}' },`),
+  // 🔴 대표 이미지는 자동 등록 글의 필수 필드다 — fixture 도 실제 계약을 따른다
+  ...rows.map((r) => `  '${r.slug}': { title: ${JSON.stringify(r.title ?? r.slug)}, publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}', heroImage: { src: '/magazine/${r.slug}/hero.webp' } },`),
   '}',
 ].join('\n')
 const QUE = (rows) => [
@@ -2316,7 +2318,8 @@ expect(
 const BASE_F = 'b'.repeat(40)
 const ART_F = (rows) => [
   'export const MAGAZINE_ARTICLE_RECORD: Record<string, MagazineArticle> = {',
-  ...rows.map((r) => `  '${r.slug}': { publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}' },`),
+  // 🔴 대표 이미지는 자동 등록 글의 필수 필드다
+  ...rows.map((r) => `  '${r.slug}': { publishedAt: '${r.publishAt.slice(0, 10)}', status: 'SCHEDULED', publishAt: '${r.publishAt}', heroImage: { src: '/magazine/${r.slug}/hero.webp' } },`),
   '}',
 ].join('\n')
 const QUE_F = (rows) => [
@@ -2353,7 +2356,7 @@ const wiredDepsF = (prOverride = {}, viewOverride = null) => {
       // 🔴 여기가 핵심 — 실제 실행기의 조회를 그대로 쓴다
       listAutoPrs: () => real.listAutoPrs(),
       getPr: (n) => real.getPr(n),
-      listPrFiles: () => ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/new-one/draft.md'],
+      listPrFiles: () => ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/new-one/draft.md', 'public/magazine/new-one/hero.webp'],
       getChecks: () => ({ ok: true, ciState: 'success', checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }] }),
       mergePr: (n, sha) => { calls.push(`merge:${n}:${sha.slice(0, 4)}`); return { ok: true, mergeCommit: 'm'.repeat(40) } },
       getProductionDeployment: (sha) => ({ found: true, state: 'success', sha, deploymentId: 'dpl_X' }),
@@ -2429,6 +2432,192 @@ expect('🔴 상세 조회 실패는 null', failDepsF.getPr(533), null)
 const badJsonF = (cmd, args) => ({ code: 0, out: '{깨진', err: '' })
 expect('🔴 깨진 응답도 ok=false', AMF.makeRealDeps(badJsonF, { log: () => {} }).listAutoPrs().ok, false)
 expect('🔴 깨진 상세 응답은 null', AMF.makeRealDeps(badJsonF, { log: () => {} }).getPr(533), null)
+
+
+console.log('\n══════ 대표 이미지 — 자동 레인은 예외 없이 요구한다 (2026-09-21 사고)')
+/**
+ * 🔴 **무엇이 일어났나.**
+ *
+ *    9/19~9/26 등록 글 **8건이 전부 대표 이미지 없이** 나갔다.
+ *    세 단계가 나란히 놓쳤고, 어느 하나만 있었어도 막혔을 일이다.
+ *
+ *      ① 생성   `heroPlan` 이 imageMode=OPTIONAL 이면 need:false 로 그냥 건너뛴다
+ *      ② 검사   batch-qa·register 가 REQUIRED 일 때만 hero 를 본다
+ *      ③ 감시   runWatch 가 heroImage 가 없으면 **image=200 으로 세었다**
+ *
+ *    ③ 이 제일 나쁘다. 없는 것을 "확인했다" 고 적었다 —
+ *    9/19·9/20 watch 로그에 `✅ … 본문·이미지·목록 확인` 이 남아 있고,
+ *    그 글들에는 대표 이미지가 애초에 없다. 검사가 아니라 **거짓 보증**이었다.
+ *
+ * 🔴 **OPTIONAL 의 뜻은 "사람이 판단해서 뺄 수 있다" 였다.**
+ *    자동 레인에는 판단할 사람이 없다. 사람이 없는 자리에서 "선택" 은
+ *    언제나 "없음" 으로 굳는다 — 실제로 8건 연속 그렇게 됐다.
+ */
+const LANE = await import('./lib/magazine-auto-lane.mjs')
+const AMH = await import('./magazine-auto-merge.mjs')
+const MGH = await import('./lib/magazine-merge-gate.mjs')
+const BQ = await import('./magazine-batch-qa.mjs')
+
+// ── ① 생성 — 자동 레인은 OPTIONAL 도 만든다 ───────────────
+const plan = (item, o) => LANE.heroPlan(item, { alt: '물컵을 든 50대 여성', ...o })
+expect('🔴 자동 레인 · OPTIONAL 이어도 만든다', plan({ imageMode: 'OPTIONAL' }, { autoLane: true }).need, true)
+expect('🔴 자동 레인 · imageMode 가 없어도 만든다', plan({}, { autoLane: true }).need, true)
+expect('자동 레인 · REQUIRED 는 당연히 만든다', plan({ imageMode: 'REQUIRED' }, { autoLane: true }).need, true)
+expect('🔴 그 사실을 표시에 남긴다', plan({ imageMode: 'OPTIONAL' }, { autoLane: true }).enforcedByLane, true)
+// 🔴 사람 경로는 그대로 둔다 — OPTIONAL 은 사람이 뺄 수 있다
+expect('사람 경로 · OPTIONAL 은 건너뛴다', plan({ imageMode: 'OPTIONAL' }, {}).need, false)
+expect('사람 경로 · --allow-optional 이면 만든다', plan({ imageMode: 'OPTIONAL' }, { allowOptional: true }).need, true)
+expect('사람 경로 · REQUIRED 는 만든다', plan({ imageMode: 'REQUIRED' }, {}).need, true)
+// alt 는 여전히 사람이 적는다 — 자동으로 지어내지 않는다
+expect(
+  '🔴 자동 레인이어도 alt 를 지어내지 않는다',
+  LANE.heroPlan({ imageMode: 'OPTIONAL' }, { alt: null, autoLane: true }).blocked?.code,
+  'HERO_ALT_REQUIRED',
+)
+
+// ── ③ 감시 — 없는 이미지를 200 으로 세지 않는다 ───────────
+const WNOW = Date.parse('2026-09-21T12:00:00+09:00')
+const wrow = (o) => [{ slug: 'x', publishAt: '2026-09-20T10:30:00+09:00', article: 200, inList: true, ...o }]
+const wcodes = (o) => AMH.judgeWatch({ rows: wrow(o), now: WNOW }).blockedBy.map((b) => b.code)
+expect('🔴 heroImage 가 아예 없으면 실패다 (옛 판은 200 이었다)', wcodes({ image: null }), ['IMAGE_MISSING'])
+expect('🔴 undefined 도 실패다', wcodes({ image: undefined }), ['IMAGE_MISSING'])
+expect('🔴 "아예 없다" 와 "깨졌다" 를 구분해 적는다',
+  AMH.judgeWatch({ rows: wrow({ image: null }), now: WNOW }).blockedBy[0].message.includes('아예 없다'), true)
+expect('이미지 URL 이 404 여도 실패', wcodes({ image: 404 }), ['IMAGE_MISSING'])
+expect('이미지가 200 이면 통과', AMH.judgeWatch({ rows: wrow({ image: 200 }), now: WNOW }).ok, true)
+expect('🔴 없는 이미지를 "확인" 으로 적지 않는다',
+  AMH.judgeWatch({ rows: wrow({ image: null }), now: WNOW }).checked.join(' ').includes('이미지'), false)
+// 🔴 runWatch 소스가 `: 200` 으로 되돌아가지 않았는가 — 옛 결함의 정확한 모양이다
+const mergeSrcH = readFileSync(join('scripts', 'magazine-auto-merge.mjs'), 'utf8')
+expect('🔴 heroImage 없을 때 200 으로 떨어뜨리지 않는다', /heroImage\?\.src \?[^:]*: 200/.test(mergeSrcH), false)
+
+// ── ② 검사 — imageMode 와 무관하게 본다 ───────────────────
+expect('batch-qa 가 requireHero 를 받는다', typeof BQ.judge, 'function')
+const bqSrc = readFileSync(join('scripts', 'magazine-batch-qa.mjs'), 'utf8')
+expect('🔴 requireHero 면 imageMode 를 보지 않는다', /if \(requireHero \|\| imageMode === 'REQUIRED'\)/.test(bqSrc), true)
+expect('🔴 CLI 에 --require-hero 가 있다', /--require-hero/.test(bqSrc), true)
+const driveSrc = readFileSync(join('scripts', 'magazine-auto-register.mjs'), 'utf8')
+expect('🔴 자동 레인이 batch-qa 에 그것을 넘긴다', /autoLane \? \['--require-hero'\]/.test(driveSrc), true)
+expect('🔴 자동 레인이 heroPlan 에 autoLane 을 넘긴다', /heroPlan\(item, \{ alt: heroAlt, allowOptional, autoLane \}\)/.test(driveSrc), true)
+const readySrcH = readFileSync(join('scripts', 'magazine-auto-register-ready.mjs'), 'utf8')
+expect('🔴 ready 가 drive 를 자동 레인으로 부른다', /autoLane: true/.test(readySrcH), true)
+
+// ── ④ 병합 관문 — 마지막 문 ───────────────────────────────
+const hBase = {
+  pr: { number: 1, url: 'u', headRefName: `${MGH.AUTO_BRANCH_PREFIX}2026-09-21-010000`, headRefOid: 'h'.repeat(40), state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false },
+  expectedSha: 'h'.repeat(40),
+  ciState: 'success',
+  checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
+  queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: true } },
+  branchQueueBySlug: null,
+  mainSlugs: new Set(),
+  mainDates: new Set(),
+  now: Date.parse('2026-09-21T00:00:00+09:00'),
+}
+const hReg = (hero) => [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', ...(hero ? { heroImage: { src: hero } } : {}) }]
+const HFILES = ['src/content/magazine/articles.ts', 'public/magazine/x-slug/hero.webp']
+const hCodes = (o) => MGH.judgeAutoMerge({ ...hBase, ...o }).blockedBy.map((b) => b.code)
+
+expect('🔴 hero 가 없으면 병합하지 않는다', hCodes({ registered: hReg(null), files: HFILES }), ['HERO_MISSING'])
+expect(
+  '🔴 경로만 있고 파일이 PR 에 없으면 막는다',
+  hCodes({ registered: hReg('/magazine/x-slug/hero.webp'), files: ['src/content/magazine/articles.ts'] }),
+  ['HERO_FILE_ABSENT'],
+)
+expect('둘 다 있으면 통과한다', hCodes({ registered: hReg('/magazine/x-slug/hero.webp'), files: HFILES }), [])
+// 🔴 여러 건 중 하나만 빠져도 막는다
+expect(
+  '🔴 한 건만 빠져도 막는다',
+  hCodes({
+    registered: [
+      { slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } },
+      { slug: 'y-slug', publishAt: '2026-09-26T10:30:00+09:00', publishedAt: '2026-09-26', status: 'SCHEDULED' },
+    ],
+    queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: true }, 'y-slug': { riskLevel: 'LOW', autoEligible: true } },
+    files: HFILES,
+  }).includes('HERO_MISSING'),
+  true,
+)
+
+// ── ⑤ 실제 재고 — 자동 발행 글에 대표 이미지가 있는가 ──────
+/**
+ * 🔴 **이 검사가 이번 사고를 다시 잡는다.** 예약·공개된 글 중 hero 가 없는 것이 하나라도
+ *    있으면 실패한다. 실제 `articles.ts` 를 본다 — fixture 가 아니다.
+ */
+const { loadArticles: loadArticlesLive } = await import('./lib/magazine-load.mjs')
+const liveArticles = loadArticlesLive()
+const autoEra = liveArticles.filter((a) => a.publishAt && Date.parse(a.publishAt) >= Date.parse('2026-09-19T00:00:00+09:00'))
+const noHero = autoEra.filter((a) => !a.heroImage?.src)
+expect(`🔴 9/19 이후 등록 글 ${autoEra.length}건에 대표 이미지가 전부 있다`, noHero.map((a) => a.slug), [])
+const brokenHero = autoEra.filter((a) => a.heroImage?.src && !existsSync(join('public', a.heroImage.src.replace(/^\//, ''))))
+expect('🔴 그 이미지 파일이 실제로 존재한다', brokenHero.map((a) => a.slug), [])
+
+
+console.log('\n══════ 대표 이미지 보정 도구 — 일괄 쓰기를 막는다')
+/**
+ * 🔴 **`--write` 에는 `--slug` 가 반드시 따라붙는다** (2026-09-21).
+ *
+ *    이 도구는 사고 복구용이다. `--write` 만으로 "누락된 전부" 를 고치게 두면
+ *    손이 미끄러진 한 번에 수십 건의 **발행본**이 사람 확인 없이 바뀐다.
+ *
+ *    실제로 이번 8건은 자동으로 붙인 alt 가 **그림과 달랐다** —
+ *    사람이 이미지를 직접 보고서야 맞출 수 있었다(휴대폰을 "안내문" 이라 적고,
+ *    혼자 있는 장면을 "부부" 라 적고, 눈을 뜬 장면을 "눈을 감고" 라 적었다).
+ *    그 대조를 건너뛸 수 있는 손잡이를 남겨 두지 않는다.
+ */
+const BF = await import('./magazine-hero-backfill.mjs')
+const ws = (o) => BF.judgeWriteScope(o)
+expect('🔴 --write 인데 --slug 가 없으면 막는다', ws({ write: true, slugs: null }).code, 'SLUG_REQUIRED')
+expect('🔴 빈 목록도 막는다', ws({ write: true, slugs: [] }).code, 'SLUG_REQUIRED')
+expect('🔴 막을 때 ok 는 false 다', ws({ write: true, slugs: null }).ok, false)
+expect('🔴 왜 막았는지 적는다', ws({ write: true, slugs: null }).message.includes('일괄 수정은 막는다'), true)
+expect('--slug 가 있으면 통과', ws({ write: true, slugs: ['a-slug'] }).code, 'SCOPED')
+expect('여러 건도 통과', ws({ write: true, slugs: ['a', 'b'] }).ok, true)
+// 🔴 보는 것은 아무것도 바꾸지 않으므로 dry-run 은 전체를 봐도 된다
+expect('dry-run 은 --slug 없이도 전체를 본다', ws({ write: false, slugs: null }).code, 'DRY_RUN')
+expect('dry-run 은 언제나 ok', ws({ write: false, slugs: null }).ok, true)
+// CLI 가 실제로 그 판정을 쓰는가
+const bfSrc = readFileSync(join('scripts', 'magazine-hero-backfill.mjs'), 'utf8')
+expect('🔴 CLI 가 judgeWriteScope 를 부른다', /judgeWriteScope\(\{ write, slugs: only \}\)/.test(bfSrc), true)
+expect('🔴 막히면 종료 코드 2 로 끝난다', /process\.exit\(2\)/.test(bfSrc), true)
+
+console.log('\n══════ alt — 실제 그림과 맞는가')
+/**
+ * 🔴 **자동으로 붙인 alt 는 그림을 보지 않고 쓴 것이다** (2026-09-21).
+ *    8건 중 7건이 실제 이미지와 달랐다. 사람이 이미지를 직접 열어 고쳤다.
+ *
+ *    여기서 기계가 확인할 수 있는 것은 "그림과 같은가" 가 아니라
+ *    **모양과 금지 표현**뿐이다. 그림과의 일치는 사람이 본다 —
+ *    그래서 `--write` 에 `--slug` 를 요구한다(위 검사).
+ */
+const altRows = loadArticlesLive().filter((a) => a.publishAt && Date.parse(a.publishAt) >= Date.parse('2026-09-19T00:00:00+09:00'))
+expect('9/19 이후 글이 전부 alt 를 갖는다', altRows.filter((a) => !a.heroImage?.alt).map((a) => a.slug), [])
+expect('🔴 전부 "여성" 으로 끝난다 (등록 관례)', altRows.filter((a) => !a.heroImage.alt.endsWith('여성')).map((a) => a.slug), [])
+expect('길이가 10~120자다', altRows.filter((a) => a.heroImage.alt.length < 10 || a.heroImage.alt.length > 120).map((a) => a.slug), [])
+// 🔴 브랜드 금지어가 alt 에 들어가지 않는다
+expect(
+  '🔴 "시니어·어르신·노인·실버" 가 없다',
+  altRows.filter((a) => /시니어|어르신|노인|실버/.test(a.heroImage.alt)).map((a) => a.slug),
+  [],
+)
+// 🔴 이번에 실제로 틀렸던 표현이 되살아나지 않았는가 — 그림에 없는 것들이다
+const GHOSTS = [
+  ['national-checkup-eligibility', '안내문', '실제는 휴대폰 화면이다'],
+  ['frequent-urination-menopause', '밤에', '실제는 밝은 낮이다'],
+  ['dry-eyes-menopause', '눈을 감', '실제는 눈을 뜨고 있다'],
+  ['husband-retired-at-home', '부부', '실제는 여성 혼자다'],
+  ['how-long-did-menopause-last', '달력', '그림에 달력이 없다'],
+  ['starting-work-at-this-age', '적으며', '실제는 펜을 든 채 멈춰 있다'],
+]
+for (const [slug, ghost, why] of GHOSTS) {
+  const a = altRows.find((x) => x.slug === slug)
+  expect(`🔴 ${slug}: "${ghost}" 가 없다 (${why})`, a ? a.heroImage.alt.includes(ghost) : true, false)
+}
+// alt 는 초안과 발행본이 같아야 한다 — 한쪽만 고치면 다음 회차가 옛 값을 되살린다
+for (const a of altRows) {
+  const draft = readFileSync(join('drafts', 'magazine', a.slug, 'article-draft.ts'), 'utf8')
+  expect(`${a.slug}: 초안 alt 가 발행본과 같다`, draft.includes(JSON.stringify(a.heroImage.alt)), true)
+}
 
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')

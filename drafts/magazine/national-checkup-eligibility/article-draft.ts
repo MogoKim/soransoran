@@ -16,7 +16,12 @@ export const DRAFT: MagazineArticleBody = {
   publishedAt: '',
   medical: true,
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/national-checkup-eligibility/hero.webp',
+    alt: "거실 소파에 앉아 휴대폰 화면을 손가락으로 짚어 보는 50대 여성",
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

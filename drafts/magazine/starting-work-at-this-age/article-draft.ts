@@ -15,7 +15,12 @@ export const DRAFT: MagazineArticleBody = {
   // 발행일은 창업자가 확정한다
   publishedAt: '',
 
-  // heroImage 는 이미지 회수 후 채운다
+  heroImage: {
+    src: '/magazine/starting-work-at-this-age/hero.webp',
+    alt: "식탁에 노트와 서류를 펼쳐 두고 펜을 든 채 생각에 잠긴 50대 여성",
+    width: 1200,
+    height: 675,
+  },
 
   body: [
     {

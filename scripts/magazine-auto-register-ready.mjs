@@ -587,7 +587,8 @@ async function main() {
     if (b.stop) { budgetStop = b; break }
     // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
     const publishAt = slots.peek()
-    const r = drive(cand.slug, { write, pr: wantPr, publishAt, alt: null, allowOptional: false })
+    // 🔴 자동 레인이다 — 대표 이미지는 선택이 아니라 필수다 (2026-09-21 사고)
+    const r = drive(cand.slug, { write, pr: wantPr, publishAt, alt: null, allowOptional: false, autoLane: true })
     r.publishAt = publishAt
     // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
     if (CONSUMES_SLOT.has(r.verdict)) { slots.commit(); registered += 1 }
