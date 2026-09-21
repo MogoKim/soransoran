@@ -30,6 +30,7 @@ import {
   currentText, editDiffLines, completeReview,
   type ReviewArtifact, type ReviewTarget, type ReviewTx, type ReviewRow,
   REVIEW_DECISIONS, REVIEW_DECISION_STATUS, PUBLISHABLE_DECISIONS, reviewPatchOf,
+  sourceEvidenceOf,
   type ReviewAction, type ReviewGate,
 } from '../src/lib/original-post-machine-review'
 import {
@@ -39,9 +40,7 @@ import {
 import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { AUTO_GATE_VERDICT } from '../src/lib/original-post-auto-publish'
-import { readSourceProfile, mustKeepDetails } from './lib/source-profile'
-import { analyzeDraft } from './lib/original-post-prompt'
-import { gateDraft } from './lib/original-post-gate'
+import { gateEditedDraft } from './lib/original-post-edit-gate.mjs'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
@@ -1034,61 +1033,145 @@ console.log('\n⑨ 🔴 🔴 검토 완료는 원자적이다 — 어긋나면 �
       REVIEW_DECISIONS.every((d) => bad.out.includes(d)))
   }
 
-  // ⑨ 🔴 🔴 ② 재현 — 그 수정본이 실제 발행 게이트를 통과하는가
+  // ⑨ 🔴 🔴 ② 재현 — 편집 재검수의 **원문**이 무엇이어야 하는가
   {
-    const src = {
-      rawTitle: '친정엄마랑 매일 통화하시나요? 아는 지인 남편이 매일 시모랑 통화한대요',
-      rawBody: [
-        '딸은 가까이 살아도 매일 통화할거같은데 어떤가요?',
-        '',
-        '지인 남편이 매일 시모랑 통화하는데 그렇게 할말이 많나요? 외아들이라 시모랑 친한가봐요',
-        '',
-        '근데 전 싫을거같아요',
-        '',
-        '남편들은 매일 시모랑 통화하는분 없을거같은데 어때요?',
-      ].join('\n'),
-    }
-    /** 🔴 운영 러너가 쓰는 그 경로다 — 여기서 규칙을 새로 만들지 않는다 */
-    const gateOf = (t: { title: string; body: string }): string => {
-      const profile = readSourceProfile(src)
-      const signals = analyzeDraft({
-        title: t.title, body: t.body, sourceTexts: [src.rawTitle, src.rawBody],
-        allowedContentUrl: profile.contentReferenceUrl,
-        closingIntent: profile.closingIntent,
-        allowNumberedList: profile.preserveStructure.numberedList,
-      })
-      const must = mustKeepDetails(profile.concreteDetailsToKeep)
-      const both = `${t.title}\n${t.body}`
-      return gateDraft({
-        signals, closingIntent: profile.closingIntent,
-        sourceBodyLength: [...src.rawBody].length,
-        mustKeepTotal: must.length,
-        mustKeepFound: must.filter((x) => both.includes(x.sample)).length,
-      }).verdict
-    }
+    /** 🔴 실제 외부 원문 — artifact 가 마스킹해 들고 있는 그 근거다 */
+    const EXTERNAL_TITLE = '친정엄마랑 매일 통화하시나요? 아는 지인 남편이 매일 시모랑 통화한대요'
+    const EXTERNAL_BODY = [
+      '딸은 가까이 살아도 매일 통화할거같은데 어떤가요?',
+      '',
+      '지인 남편이 매일 시모랑 통화하는데 그렇게 할말이 많나요? 외아들이라 시모랑 친한가봐요',
+      '',
+      '근데 전 싫을거같아요',
+      '',
+      '남편들은 매일 시모랑 통화하는분 없을거같은데 어때요?',
+    ].join('\n')
+
+    const ART = (o: Partial<ReviewArtifact> = {}): ReviewArtifact => ({
+      artifactId: 'c9aef86ca02a4fa3b66474f5909993e9',
+      sourceArticleId: '35038242',
+      // 🔴 생성기가 남기는 모양 그대로 — title · head · tail (head 와 tail 은 겹칠 수 있다)
+      evidence: [
+        { kind: 'title', text: EXTERNAL_TITLE },
+        { kind: 'head', text: EXTERNAL_BODY },
+        { kind: 'tail', text: EXTERNAL_BODY },
+      ],
+      draft: { title: REAL_TITLE, body: REAL_DRAFT },
+      personaCode: 'P18', stance: 'QUESTION', selfBasis: null,
+      warrants: [], unsupportedAdditions: [], lifeContradictions: [], droppedFromSource: [],
+      machineOutcome: 'adopt', machineReason: '', calls: [], ...o,
+    })
+
     /**
-     * 🔴 **기계 초안 자체가 이 게이트로는 HOLD 다** — 기계 경로는 Content Core 의
-     *    제 검수를 쓰고 이 게이트를 지나지 않는다. 그래서 수정본에만 `PASS` 를 요구하면
-     *    고쳐야 할 글일수록 고칠 수 없게 된다. 막는 것은 `BLOCK` 하나다.
+     * 🔴 **운영 모양을 그대로 재현한다** — 적재기가 만든 합성 raw 에는
+     *    AI 초안의 **사본**이 들어 있다(실측: queueId cmuaipz7f0…).
      */
-    check('🔴 🔴 **최초 초안도 이 게이트로는 PASS 가 아니다** — 실측',
-      gateOf({ title: REAL_TITLE, body: REAL_DRAFT }) === 'HOLD',
-      gateOf({ title: REAL_TITLE, body: REAL_DRAFT }))
-    check('🔴 🔴 **지정된 수정본은 BLOCK 이 아니다 — 저장할 수 있다**',
-      gateOf({ title: REAL_TITLE, body: REAL_FIXED }) !== 'BLOCK',
-      gateOf({ title: REAL_TITLE, body: REAL_FIXED }))
-    const echoed = gateOf({ title: REAL_TITLE, body: src.rawBody })
-    check('🔴 🔴 **원문을 그대로 넣으면 BLOCK 이다** — 게이트가 실제로 일한다',
-      echoed === 'BLOCK', echoed)
+    const SYNTHETIC_RAW = { rawTitle: REAL_TITLE, rawBody: REAL_DRAFT }
+    check('🔴 🔴 **운영 모양 재현 — 합성 raw 가 AI 초안과 글자까지 같다**',
+      SYNTHETIC_RAW.rawTitle === REAL_TITLE && SYNTHETIC_RAW.rawBody === REAL_DRAFT)
+
+    const evidence = sourceEvidenceOf(ART())
+    check('🔴 🔴 **artifact 근거가 외부 원문이다 — AI 초안이 아니다**',
+      evidence.rawTitle === EXTERNAL_TITLE && evidence.rawBody === EXTERNAL_BODY
+      && evidence.rawBody !== REAL_DRAFT,
+      evidence.rawTitle)
+    check('🔴 겹쳐 실린 근거를 두 번 세지 않는다',
+      evidence.rawBody.split('\n').filter((l) => l.includes('외아들이라')).length === 1)
+
+    // ── 🔴 보정 전 재현: 합성 raw 를 원문으로 보면 정상 수정이 막힌다 ──
+    const withSynthetic = gateEditedDraft({
+      source: SYNTHETIC_RAW, title: REAL_TITLE, body: REAL_FIXED,
+    })
+    check('🔴 🔴 **[보정 전] 합성 raw 를 원문으로 보면 SOURCE_ECHO BLOCK 이다**',
+      withSynthetic.verdict === 'BLOCK' && withSynthetic.codes.includes('SOURCE_ECHO'),
+      `${withSynthetic.verdict} — ${withSynthetic.codes.join(' · ')}`)
+
+    // ── 🔴 보정 후: artifact 근거로 재면 저장할 수 있다 ──
+    const withEvidence = gateEditedDraft({
+      source: evidence, title: REAL_TITLE, body: REAL_FIXED,
+    })
+    check('🔴 🔴 **[보정 후] 지정 수정본이 SOURCE_ECHO BLOCK 이 아니다**',
+      withEvidence.verdict !== 'BLOCK' && !withEvidence.codes.includes('SOURCE_ECHO'),
+      `${withEvidence.verdict} — ${withEvidence.codes.join(' · ')}`)
+    check('🔴 HOLD 는 허용이다 — 막는 것은 BLOCK 하나뿐',
+      withEvidence.verdict === 'HOLD' || withEvidence.verdict === AUTO_GATE_VERDICT,
+      withEvidence.verdict)
+
+    // ── 🔴 게이트를 느슨하게 만들지 않았다: 진짜 원문을 베끼면 여전히 막힌다 ──
+    const echoed = gateEditedDraft({
+      source: evidence, title: REAL_TITLE,
+      // 🔴 artifact 근거에서 연속 20자를 그대로 가져온 문안
+      body: `${EXTERNAL_BODY.slice(0, 40)}\n\n다들 어떠신지 궁금합니다.`,
+    })
+    check('🔴 🔴 **artifact 근거의 연속 20자를 베끼면 SOURCE_ECHO BLOCK 이다**',
+      echoed.verdict === 'BLOCK' && echoed.codes.includes('SOURCE_ECHO'),
+      `${echoed.verdict} — ${echoed.codes.join(' · ')}`)
+    check('🔴 원문 전문을 그대로 넣어도 BLOCK 이다',
+      gateEditedDraft({ source: evidence, title: REAL_TITLE, body: EXTERNAL_BODY })
+        .verdict === 'BLOCK')
+
+    // ── 🔴 artifact 를 못 고르면 fail-closed ──
+    const TARGET = {
+      artifactId: 'c9aef86ca02a4fa3b66474f5909993e9', sourceArticleId: '35038242',
+      draftTitle: REAL_TITLE, draftBody: REAL_DRAFT, editedTitle: null, editedBody: null,
+    }
+    for (const [name, arts, want] of [
+      ['artifact 누락', [] as ReviewArtifact[], 'artifactMissing'],
+      ['같은 id 인데 내용이 다르다',
+        [ART(), ART({ machineReason: '다르다' })], 'duplicateArtifactId'],
+      ['원천이 다르다', [ART({ sourceArticleId: '99999' })], 'sourceMismatch'],
+      ['최초 초안이 다르다',
+        [ART({ draft: { title: REAL_TITLE, body: '다른 초안' } })], 'draftMismatch'],
+    ] as const) {
+      const ev = findReviewArtifact({ target: TARGET, artifacts: arts })
+      check(`🔴 🔴 **${name} → 근거 없음으로 막는다 (write 0)**`,
+        !ev.ok && ev.code === want, ev.ok ? 'ok 였다' : ev.code)
+    }
+    check('🔴 정상 artifact 하나면 고른다', (() => {
+      const ev = findReviewArtifact({ target: TARGET, artifacts: [ART()] })
+      return ev.ok && ev.artifact.artifactId === TARGET.artifactId
+    })())
+
+    // ── 🔴 운영 러너가 합성 raw 를 쓰지 않는다 ──
+    check('🔴 🔴 **러너가 DB 원문 본문을 읽지도 않는다**', (() => {
+      const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+      const code = cli.split('\n').filter((l) => !l.trimStart().startsWith('*')
+        && !l.trimStart().startsWith('//')).join('\n')
+      return !/rawTitle: true/.test(code) && !/rawBody: true/.test(code)
+        && !/rawContent\.rawTitle|rawContent\.rawBody/.test(code)
+    })())
+    check('🔴 🔴 **러너가 검증된 artifact 근거로 잰다**', (() => {
+      const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+      return /sourceEvidenceOf\(g\.artifact!\)/.test(cli)
+        && /gateEditedDraft\(\{ source, title: t\.title, body: t\.body \}\)/.test(cli)
+        // 🔴 조립을 러너가 다시 하지 않는다 — 정본 함수 하나다
+        && !/analyzeDraft\(\{/.test(cli) && !/gateDraft\(\{/.test(cli)
+    })())
+    check('🔴 🔴 **원문을 DB 에 새로 쓰지 않는다**', (() => {
+      const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
+      const lib = readFileSync('scripts/lib/original-post-edit-gate.mts', 'utf-8')
+      return !/microSeedRawContent\.(create|update|upsert)/.test(cli)
+        && !/prisma|PrismaClient/.test(lib)
+    })())
+    check('🔴 🔴 **게이트 임계값·예외 문자열을 건드리지 않았다**', (() => {
+      const lib = readFileSync('scripts/lib/original-post-edit-gate.mts', 'utf-8')
+      // 🔴 **코드만** 본다 — 주석은 "왜" 를 적는 자리다
+      const code = lib.split('\n')
+        .filter((l) => !l.trimStart().startsWith('*') && !l.trimStart().startsWith('//')
+          && !l.trimStart().startsWith('/*'))
+        .join('\n')
+      // 🔴 조립만 한다 — 규칙은 정본 `gateDraft` 가 정한다
+      return /gateDraft\(\{/.test(code) && !/SOURCE_ECHO|threshold|>=|<=/.test(code)
+    })())
   }
 
   // 🔴 운영 러너가 이 경계를 실제로 쓴다
   check('🔴 🔴 **운영 검토 러너가 네 결정을 실제로 배선한다**', (() => {
     const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
     return /--decision=/.test(cli) && /--edited-file=/.test(cli) && /--reason=/.test(cli)
-      && /gate: reGate/.test(cli) && /gateDraft\(\{/.test(cli)
+      && /gate: reGate/.test(cli) && /gateEditedDraft\(/.test(cli)
       // 🔴 저장 금지 계약은 그대로 — BLOCK 이면 쓰지 않는다
-      && /g\.verdict === 'BLOCK'/.test(cli)
+      && /r\.verdict === 'BLOCK' \? \{ ok: false/.test(cli)
   })())
   check('🔴 🔴 **운영 검토 러너가 completeReview 를 쓴다 — 도장 먼저 찍지 않는다**', (() => {
     const cli = readFileSync('scripts/original-post-machine-review.mts', 'utf-8')
