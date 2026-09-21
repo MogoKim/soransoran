@@ -89,7 +89,7 @@ export function readPngSize(buf) {
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
 }
 
-/** `'186x96'` → `{ width, height }`. 형식이 아니면 null */
+/** `'192x96'` → `{ width, height }`. 형식이 아니면 null */
 export function parsePixels(text) {
   const m = /^(\d+)x(\d+)$/.exec(String(text ?? ''))
   return m ? { width: Number(m[1]), height: Number(m[2]) } : null
@@ -391,8 +391,8 @@ function selfTest() {
     })(),
     ['PNG 가 아니면 오류를 돌려준다', Boolean(readPngSize(Buffer.from('not a png at all......')).error)],
     ['너무 짧은 파일도 오류다', Boolean(readPngSize(Buffer.alloc(8)).error)],
-    ["pixels 문자열을 읽는다", parsePixels('186x96')?.width === 186 && parsePixels('186x96')?.height === 96],
-    ['pixels 형식 오류를 잡는다', parsePixels('186 x 96') === null && parsePixels('big') === null],
+    ["pixels 문자열을 읽는다", parsePixels('192x96')?.width === 192 && parsePixels('192x96')?.height === 96],
+    ['pixels 형식 오류를 잡는다', parsePixels('192 x 96') === null && parsePixels('big') === null],
     [
       '🔴 PNG 파일 자산에 pixels 가 없으면 잡는다',
       validate(readManifest(wrap(`{ path: 'a/b.png', kind: 'file', category: 'logo', use: 'u', replace: false, locked: false, note: 'n' }`)))
@@ -433,8 +433,8 @@ function selfTest() {
 
     // ── 로고 표시 상자 ──
     (() => {
-      const o = readLogoDisplaySize("export const BRAND_LOGO = { src: '/a.png', width: 93, height: 48 } as const")
-      return ['brand-logo.ts 의 표시 상자를 읽는다', o?.width === 93 && o?.height === 48]
+      const o = readLogoDisplaySize("export const BRAND_LOGO = { src: '/a.png', width: 96, height: 48 } as const")
+      return ['brand-logo.ts 의 표시 상자를 읽는다', o?.width === 96 && o?.height === 48]
     })(),
     ['BRAND_LOGO 가 없으면 null', readLogoDisplaySize('export const OTHER = { width: 1, height: 2 }') === null],
 
