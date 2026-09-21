@@ -151,9 +151,22 @@ console.log('\n④ 🔴 🔴 계획이 회차 안에서 화자를 겹치지 않�
     sourceKeys: ['s1', 's2', 's3'],
     capacities: [cap('P01', 3), cap('P02', 3), cap('P03', 3), cap('P04', 3), cap('P05', 3), cap('P06', 3)],
   })
-  const all = plan.slots.flatMap((s) => s.codes)
-  check('🔴 🔴 **원천끼리 화자가 겹치지 않는다**',
-    new Set(all).size === all.length, JSON.stringify(plan.slots))
+  /**
+   * 🔴 **겹침의 기준은 여력이다.** 여력이 1일인 사람은 한 원천에만 가고,
+   *    3일인 사람은 **다른 날에** 세 편까지 쓸 수 있으므로 세 원천까지 갈 수 있다.
+   *    같은 날 두 편이 되지 않게 하는 것이 목적이지, 사람을 한 번만 쓰는 것이 아니다.
+   */
+  const countOf = (code: string) => plan.slots.filter((sl) => sl.codes.includes(code)).length
+  check('🔴 🔴 **여력 1일인 화자는 한 원천에만 간다**', (() => {
+    const one = planSpeakerAvailability({
+      sourceKeys: ['s1', 's2', 's3'],
+      capacities: [cap('P01', 1), cap('P02', 1), cap('P03', 1)],
+    })
+    const flat = one.slots.flatMap((sl) => sl.codes)
+    return new Set(flat).size === flat.length && flat.length === 3
+  })())
+  check('🔴 여력이 남는 화자는 여러 원천을 맡을 수 있다',
+    countOf('P01') >= 1 && plan.slots.every((sl) => sl.codes.length > 0))
   check('🔴 모든 원천이 고를 사람을 받는다',
     plan.slots.every((s) => s.codes.length > 0))
 

@@ -41,6 +41,7 @@ import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { AUTO_GATE_VERDICT } from '../src/lib/original-post-auto-publish'
 import { gateEditedDraft } from './lib/original-post-edit-gate.mjs'
+import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
@@ -61,6 +62,8 @@ console.log('\n══ 운영 체인 end-to-end (🔴 실제 러너 · 가짜 pro
 const root = mkdtempSync(join(tmpdir(), 'chain-e2e-'))
 const dd = join(root, '.microseed-data')
 mkdirSync(dd, { recursive: true })
+// 🔴 유료 생성은 화자 여력 없이 돌지 않는다 — 공급 러너가 적는 그 파일을 잇는다
+writeFakeSpeakerLoad(dd)
 const fakeHome = join(root, 'home')
 mkdirSync(join(fakeHome, 'Library', 'Application Support', 'soransoran'), { recursive: true })
 // 🔴 합성 말투 자산 — 회원 댓글이 아니다. 없으면 러너가 생성 전에 멈춘다

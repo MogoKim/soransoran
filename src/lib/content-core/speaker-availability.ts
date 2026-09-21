@@ -92,8 +92,29 @@ export function planSpeakerAvailability(input: {
   }
 
   const n = input.sourceKeys.length
+  /**
+   * 🔴 **여력은 사람 수가 아니라 사람-날 수다** (2026-09-22 보정).
+   *
+   *    처음에는 화자 한 명을 원천 하나에만 줬다. 그러면 원천이 화자보다 많을 때
+   *    나머지가 통째로 보류된다 — 공급이 멎는다(실측: 여러 fixture 가 그렇게 굶었다).
+   *    🔴 여력이 3일인 사람은 **다른 날에** 세 편까지 쓸 수 있다. 그 수만큼 펴 놓고 나눈다.
+   *    🔴 여력이 1일이면 여전히 한 원천에만 간다 — 같은 날 두 편이 되지 않는다.
+   */
+  const byCode = new Map(withRemaining.map((c) => [c.code, c.remaining]))
+  /**
+   * 🔴 **가능한 한 편다. 겹치는 것은 사람이 모자랄 때뿐이다.**
+   *    사람이 넉넉하면 한 사람이 한 원천만 맡는다 — 여력이 7일이라고 해서
+   *    한 회차의 다섯 편을 혼자 가져가면 그것이 바로 고치려던 상태다.
+   *    🔴 몫은 `ceil(원천 수 / 여력 있는 사람 수)` 이고, 그 사람의 여력을 넘지 않는다.
+   */
+  const share = eligible.length === 0 ? 0 : Math.ceil(n / eligible.length)
+  const pool: string[] = []
+  for (const code of eligible) {
+    const take = Math.min(byCode.get(code) ?? 0, Math.max(1, share))
+    for (let k = 0; k < take; k += 1) pool.push(code)
+  }
   const slots: SpeakerSlot[] = input.sourceKeys.map((sourceKey, i) => {
-    const codes = n === 0 ? [] : eligible.filter((_, j) => j % n === i)
+    const codes = n === 0 ? [] : [...new Set(pool.filter((_, j) => j % n === i))]
     return { sourceKey, codes }
   })
   const empty = slots.filter((s) => s.codes.length === 0)
