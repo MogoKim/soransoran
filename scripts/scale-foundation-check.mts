@@ -996,7 +996,7 @@ console.log('\n⑥ 준비도 (140행 고유 queue id 시뮬레이션)')
   // 🔴 **판정 분기를 직접 시험한다.** 시뮬레이션만 돌리면 그 분기가 한 번도 안 켜져
   //    가드를 지워도 fixture 가 통과한다 — 실제로 그랬다(복구 깨짐 가드).
   const synth = (o: Partial<ReturnType<typeof simulateStage>> = {}): ReturnType<typeof simulateStage> => ({
-    stage: 'd1', in14: 14, want14: 14, gaps: 0, recoveryBroken: 0, personas: 19, stock: 14,
+    stage: 'd1', dates: [], in14: 14, want14: 14, gaps: 0, recoveryBroken: 0, personas: 19, stock: 14,
     // 🔴 지평 시작점과 다음 슬롯은 **다른 값**이다 — 판정 분기 시험에는 둘 다 필요하다
     horizonStartAt: horizonStart(START), nextSlotAt: START, horizonDays: 14, ...o,
   })

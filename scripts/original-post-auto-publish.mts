@@ -43,7 +43,10 @@ import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-run
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
 import { canaryAuthorization, judgeOneDayCanary, slotsLeftToday } from '../src/lib/release-canary'
-import { effectiveWeeklyCap, RELEASE_STAGES } from '../src/lib/scale-profile'
+import { effectiveWeeklyCap, RELEASE_STAGES, PROFILES } from '../src/lib/scale-profile'
+
+/** 🔴 단계의 하루 목표 — 러너가 숫자를 손으로 적지 않는다 */
+const scaleTargetOf = (st: (typeof RELEASE_STAGES)[number]): number => PROFILES[st].dailyTarget
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -255,6 +258,22 @@ const canaryVerdict = canaryAuth.activeToday && canaryAuth.stage !== null
     axis: { now: axisNow, publishedToday: axisPublishedToday },
     // 🔴 **하루**다. 이 값이 14 가 되면 하루 판정이 14일 판정으로 바뀐다
     days: 1,
+    /**
+     * 🔴 **지금 이 순간부터 본다** (2026-09-21 3차 보정).
+     *
+     *    기본 지평은 `horizonStart(now)` = **다음 KST 자정**이다. 그래서
+     *    9/22 09:30 회차의 예측 시작이 **9/23 00:00** 이었다 — 정본 함수를
+     *    직접 돌려 확인했다. 그날 시험의 GO/NO-GO 가 이튿날 사정에 끌려갔다.
+     *    오늘 신선하고 내일 TTL 을 넘기는 후보는 오늘 낼 수 있는데도 빠졌다.
+     *
+     * 🔴 14일 지속성 판정의 창은 건드리지 않는다 — 그쪽은 기본값 그대로다.
+     */
+    anchor: 'now',
+    /**
+     * 🔴 **오늘 남은 발행분만큼만** 낸다고 본다. 프로필 상한(3)을 그대로 쓰면
+     *    이미 낸 몫 위에 하루 상한이 통째로 다시 얹힌다.
+     */
+    dailyCap: Math.max(0, scaleTargetOf(canaryAuth.stage) - axisPublishedToday),
   }), {
     /**
      * 🔴 **오늘 이미 낸 수와 남은 슬롯을 넘긴다** (2026-09-21 보정).

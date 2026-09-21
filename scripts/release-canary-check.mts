@@ -24,6 +24,7 @@ import { resolveScale } from '../src/lib/scale-runtime'
 import { simulateStage } from '../src/lib/scale-readiness'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 import type { PersonaForMatch } from '../src/lib/original-post-persona-match'
+import { judgeCatchUp } from '../src/lib/publish-slot-catchup'
 import { PROFILES, RELEASE_STAGES, type StageVerdict } from '../src/lib/scale-profile'
 import type { SimOutcome } from '../src/lib/scale-readiness'
 
@@ -43,7 +44,7 @@ const TODAY = kstDateString(NOW)
 
 /** 🔴 하루치 시뮬레이션 결과 — 지평 1일이 계약이다 */
 const simOf = (over: Partial<SimOutcome> = {}): SimOutcome => ({
-  stage: 'd3', in14: 3, want14: 3, gaps: 0, recoveryBroken: 0,
+  stage: 'd3', dates: ['2026-09-22'], in14: 3, want14: 3, gaps: 0, recoveryBroken: 0,
   personas: 24, stock: 4,
   horizonStartAt: NOW, nextSlotAt: NOW, horizonDays: 1,
   ...over,
@@ -235,11 +236,14 @@ console.log('\n④ 🔴 🔴 연속 3회 — 실제 `simulateStage` 로 세 슬�
 
   /** 한 회차를 그대로 돌린다 — 러너가 하는 것과 같은 순서다 */
   const invoke = (at: Date, pool: readonly QueueCandidate[], publishedToday: number) => {
+    /** 🔴 러너와 **같은 인자**로 부른다 — 오늘 앵커 · 오늘 남은 상한 */
     const sim = simulateStage({
       stage: 'd3', queue: pool, personas,
       history: personas.map((p) => ({ code: p.code, matchedAts: [] })),
       axis: { now: at, publishedToday },
       days: 1,
+      anchor: 'now',
+      dailyCap: Math.max(0, PROFILES.d3.dailyTarget - publishedToday),
     })
     const slotsLeft = slotsLeftToday('d3', at)
     const verdict = judgeOneDayCanary(sim, { publishedToday, slotsLeft })
@@ -276,6 +280,16 @@ console.log('\n④ 🔴 🔴 연속 3회 — 실제 `simulateStage` 로 세 슬�
   pool = pool.slice(1)
   check('🔴 13:30 발행 후 남은 후보 2건', pool.length === 2)
 
+  /**
+   * 🔴 **하루 판정이 오늘 남은 몫보다 많이 계획하지 않는다.**
+   *    프로필 상한(3)을 그대로 쓰면 이미 낸 몫 위에 하루 상한이 다시 얹혀,
+   *    "오늘 3건 더 낼 수 있다" 가 되어 하루 총 4건이 된다.
+   */
+  check('🔴 🔴 **13:30 — 오늘 남은 몫 2건을 넘겨 계획하지 않는다**',
+    r2.sim.in14 <= PROFILES.d3.dailyTarget - 1
+    && r2.verdict.published + r2.verdict.can <= PROFILES.d3.dailyTarget,
+    JSON.stringify({ can: r2.sim.in14, 남은몫: PROFILES.d3.dailyTarget - 1 }))
+
   // ── 19:00 회차 — 🔴 앞판이 막던 자리다 ──
   const r3 = invoke(new Date('2026-09-22T10:00:00.000Z'), pool, 2)
   check('🔴 🔴 **19:00 — 2/3건 냈다. 1건만 더 필요 · GO (앞판은 여기서 막혔다)**',
@@ -283,6 +297,11 @@ console.log('\n④ 🔴 🔴 연속 3회 — 실제 `simulateStage` 로 세 슬�
     && r3.scale.releaseStage === 'd3' && r3.scale.canaryStage,
     JSON.stringify({ need: r3.verdict.need, can: r3.verdict.can,
       slots: r3.slotsLeft, stage: r3.scale.releaseStage }))
+
+  check('🔴 🔴 **19:00 — 하루 총 3건을 넘지 않는다**',
+    r3.sim.in14 <= PROFILES.d3.dailyTarget - 2
+    && r3.verdict.published + r3.verdict.can <= PROFILES.d3.dailyTarget,
+    JSON.stringify({ published: r3.verdict.published, can: r3.sim.in14 }))
 
   /**
    * 🔴 **앞판 규칙이었다면 막혔다**는 것을 값으로 남긴다 —
@@ -314,28 +333,82 @@ console.log('\n④ 🔴 🔴 연속 3회 — 실제 `simulateStage` 로 세 슬�
       stage: starved.scale.releaseStage }))
 
   /**
-   * 🔴 **남은 슬롯 = 남은 편수.** 판정은 `목표 − 이미 낸 수` 하나만 쓴다 —
-   *    프로필 불변식(슬롯 합 === dailyTarget · 회차당 1건)이 그것을 떠받친다.
-   *    그 불변식이 깨지면 판정이 조용히 틀리므로 **여기서 직접 잠근다.**
+   * 🔴 **`남은 슬롯 = 남은 편수` 는 일반 불변식이 아니다** (2026-09-21 정정).
+   *
+   *    앞판은 그렇게 단정하고 슬롯 직전 시각만 골라 검사해 통과시켰다.
+   *    🔴 09:40 에 발행 0 이면 남은 슬롯은 **2**(13:30·19:00)인데
+   *    남은 편수는 **3** 이다 — 같지 않다. 늦게 뜬 회차와 누락된 회차가
+   *    정확히 그 상태를 만든다.
+   *
+   *    그래서 그 단정을 버린다. 판정은 `목표 − 오늘 발행 수` 하나만 쓰고,
+   *    "몇 시 슬롯이 남았나" 는 **보고용**이다. 아래는 그 둘이 **다르다**는
+   *    사실과, 그때 실제 정본(`judgeCatchUp` · 하루 상한)이 어떻게 도는지를
+   *    값으로 확인한다.
    */
   {
-    const at = (h: number, m: number) =>
-      new Date(Date.UTC(2026, 8, 22, h - 9, m, 0))
-    const cases: readonly { label: string; now: Date; published: number }[] = [
-      { label: '09:30 직전 · 0건', now: at(9, 29), published: 0 },
-      { label: '13:30 직전 · 1건', now: at(13, 29), published: 1 },
-      { label: '19:00 직전 · 2건', now: at(18, 59), published: 2 },
-      { label: '19:00 직후 · 3건', now: at(19, 1), published: 3 },
-    ]
+    const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 22, h - 9, m, 0))
     const want = PROFILES.d3.dailyTarget
-    const slotSum = PROFILES.d3.slots.reduce((n, sl) => n + sl.count, 0)
-    check('🔴 🔴 **슬롯 합 === 하루 목표 — 판정이 기대는 불변식이다**', slotSum === want,
-      `슬롯 합 ${slotSum} · 목표 ${want}`)
-    for (const c of cases) {
-      const left = slotsLeftToday('d3', c.now)
-      check(`🔴 남은 슬롯 = 남은 편수 (${c.label})`,
-        left === want - c.published, `슬롯 ${left} · 남은 편수 ${want - c.published}`)
-    }
+
+    check('🔴 🔴 **09:40 · 발행 0 — 남은 슬롯 2 ≠ 남은 편수 3**',
+      slotsLeftToday('d3', at(9, 40)) === 2 && want - 0 === 3,
+      `슬롯 ${slotsLeftToday('d3', at(9, 40))} · 편수 ${want - 0}`)
+
+    check('🔴 09:29 · 발행 0 — 이때는 3 으로 같다 (우연이지 규칙이 아니다)',
+      slotsLeftToday('d3', at(9, 29)) === 3)
+
+    /**
+     * 🔴 **늦게 온 09:30 회차** — GitHub 예약은 수십 분 늦을 수 있다.
+     *    `judgeCatchUp` 은 시계가 아니라 **그 run 을 띄운 예약**으로 판정한다.
+     */
+    const late = judgeCatchUp({
+      stage: 'd3', now: at(9, 40), trigger: 'schedule',
+      cron: '30 0 * * *', publishedToday: 0,
+    })
+    check('🔴 🔴 **09:40 에 늦게 와도 09:30 회차는 그대로 발행한다**',
+      late.run && late.allowed >= 1 && late.ownSlot,
+      JSON.stringify({ run: late.run, allowed: late.allowed, own: late.ownSlot, due: late.dueCount }))
+
+    /** 🔴 그 회차의 하루 판정 — 남은 편수 3 을 요구하고, 후보 4건이면 GO */
+    const lateVerdict = invoke(at(9, 40), [1, 2, 3, 4].map(candOf), 0)
+    check('🔴 🔴 **늦게 온 회차도 그날 3건을 목표로 본다 (남은 슬롯 2에 끌려가지 않는다)**',
+      lateVerdict.verdict.need === 3 && lateVerdict.verdict.ok
+      && lateVerdict.scale.releaseStage === 'd3',
+      JSON.stringify({ need: lateVerdict.verdict.need, can: lateVerdict.verdict.can,
+        slots: lateVerdict.slotsLeft }))
+
+    /**
+     * 🔴 **09:30 회차가 통째로 누락된 경우** — 13:30 회차가 밀린 몫을 대신 낸다.
+     *    이것이 `judgeCatchUp` 의 존재 이유다. 여기서 다시 만들지 않는다.
+     */
+    const missed = judgeCatchUp({
+      stage: 'd3', now: at(13, 30), trigger: 'schedule',
+      cron: '30 4 * * *', publishedToday: 0,
+    })
+    check('🔴 🔴 **09:30 이 누락되면 13:30 이 밀린 몫을 대신 낸다 — 다만 회차당 1건**',
+      missed.run && missed.dueCount === 2 && missed.catchUp === true
+      // 🔴 밀린 두 건을 한 번에 몰아 내지 않는다 — 그날 안에 나눠 낸다
+      && missed.allowed === 1,
+      JSON.stringify({ run: missed.run, allowed: missed.allowed,
+        due: missed.dueCount, catchUp: missed.catchUp }))
+
+    /**
+     * 🔴 **한 회차가 하루 상한을 넘기지 못한다.** 이미 3건을 냈으면
+     *    19:00 회차는 돌지 않는다 — 시험이라도 이 문은 열지 않는다.
+     */
+    const full = judgeCatchUp({
+      stage: 'd3', now: at(19, 0), trigger: 'schedule',
+      cron: '0 10 * * *', publishedToday: 3,
+    })
+    check('🔴 🔴 **오늘 3건을 채웠으면 그 회차는 발행하지 않는다 (하루 상한 3)**',
+      full.run === false && full.allowed === 0,
+      JSON.stringify({ run: full.run, allowed: full.allowed }))
+
+    /** 🔴 오늘 발행 수를 못 셌으면 돌지 않는다 — fail-closed */
+    const unknown = judgeCatchUp({
+      stage: 'd3', now: at(13, 30), trigger: 'schedule',
+      cron: '30 4 * * *', publishedToday: null,
+    })
+    check('🔴 오늘 발행 수를 못 세면 발행하지 않는다(fail-closed)', unknown.run === false)
   }
 
   // ── 🔴 허가 단계와 판정 단계가 다르면 거부 ──
@@ -357,6 +430,155 @@ console.log('\n④ 🔴 🔴 연속 3회 — 실제 `simulateStage` 로 세 슬�
     mismatch.releaseStage === 'd1' && mismatch.canaryStage === false
     && mismatch.notes.some((n) => n.includes('판정은')),
     `stage=${mismatch.releaseStage}`)
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑤ 🔴 🔴 9/22 판정은 9/22 를 본다 — 9/23 에 끌려가지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **정본 함수를 직접 돌려 확인한 결함이다** (2026-09-21).
+   *
+   *    `simulateStage` 의 기본 지평은 `horizonStart(now)` = **다음 KST 자정**이다.
+   *    그래서 9/22 09:30 회차의 예측 시작이 **9/23 00:00** 이었다 —
+   *    그날 시험의 GO/NO-GO 가 이튿날 사정에 끌려갔다.
+   *
+   *    아래는 **양방향**으로 증명한다. 오늘 되고 내일 안 되는 후보와,
+   *    오늘 안 되고 내일 되는 후보를 각각 넣어 두 창이 **다른 답**을 내는지 본다.
+   *    🔴 예측이 덮은 KST 날짜도 값으로 단정한다.
+   */
+  const NOW_0930 = new Date('2026-09-22T00:30:00.000Z') // 2026-09-22 09:30 KST
+  const persona = (code: string) => ({
+    code, status: 'active', providerId: null, accountCount: 0,
+    maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] as string[],
+    parentCare: '상시', menopauseStatus: '진행중', workStatus: null, economicStatus: null,
+    region: null, noGoTopics: [] as string[], voiceLength: '중간',
+    postsThisWeek: 0, daysSinceLastPost: null,
+  }) as unknown as PersonaForMatch
+
+  const candAt = (id: string, captured: Date): QueueCandidate => ({
+    queueId: id, title: '국수를 삶았습니다',
+    body: '국수를 삶아 먹었습니다. 별것 아닌데 오래 생각났습니다.',
+    gateVerdict: 'PASS', createdAt: 0, assignedPersonaCode: null,
+    capturedAt: captured, voice: null, profile: 'human' as const,
+  })
+
+  const sim = (o: {
+    queue: readonly QueueCandidate[]
+    personas: readonly PersonaForMatch[]
+    history: readonly { code: string; matchedAts: Date[] }[]
+    anchor: 'now' | 'nextDay'
+  }) => simulateStage({
+    stage: 'd3', queue: o.queue, personas: o.personas, history: o.history,
+    axis: { now: NOW_0930, publishedToday: 0 },
+    days: 1, anchor: o.anchor, dailyCap: 3,
+  })
+
+  // ── 🔴 예측 대상 KST 날짜를 값으로 단정한다 ──
+  {
+    const pool = [candAt('c', new Date('2026-09-20T00:00:00.000Z'))]
+    const ps = [persona('A')]
+    const hist = [{ code: 'A', matchedAts: [] as Date[] }]
+    const today = sim({ queue: pool, personas: ps, history: hist, anchor: 'now' })
+    const tomorrow = sim({ queue: pool, personas: ps, history: hist, anchor: 'nextDay' })
+    check('🔴 🔴 **`anchor: now` 는 9/22 를 본다**',
+      today.dates.length === 1 && today.dates[0] === '2026-09-22',
+      JSON.stringify(today.dates))
+    check('🔴 🔴 **기본 지평은 9/23 을 본다 — 이것이 앞판이 보던 날이다**',
+      tomorrow.dates.length === 1 && tomorrow.dates[0] === '2026-09-23',
+      JSON.stringify(tomorrow.dates))
+    /**
+     * 🔴 **`anchor` 를 생략하면 예전 그대로여야 한다.** 기본값이 `now` 로 바뀌면
+     *    14일 지속성 판정이 조각 하루를 온전한 하루처럼 세게 된다 —
+     *    `simulateAllStages` · `stageVerdicts` · 승격 판정이 전부 그 값을 쓴다.
+     */
+    const noAnchor = simulateStage({
+      stage: 'd3', queue: pool, personas: ps, history: hist,
+      axis: { now: NOW_0930, publishedToday: 0 }, days: 1,
+    })
+    check('🔴 🔴 **`anchor` 를 생략하면 다음 날 0시다 — 14일 판정의 창은 그대로다**',
+      noAnchor.horizonStartAt.toISOString() === '2026-09-22T15:00:00.000Z'
+      && noAnchor.dates[0] === '2026-09-23',
+      JSON.stringify({ start: noAnchor.horizonStartAt.toISOString(), date: noAnchor.dates[0] }))
+    check('🔴 14일 지속성 창의 의미는 그대로다 — 기본값이 다음 날 0시다',
+      tomorrow.horizonStartAt.toISOString() === '2026-09-22T15:00:00.000Z')
+  }
+
+  // ── ⓐ 오늘 적격 · 내일 부적격 (TTL 경계) ──
+  {
+    /**
+     * 🔴 상시(evergreen) TTL 은 28일이다. 9/22 에 꼭 28일이 되게 잡으면
+     *    그날은 낼 수 있고 9/23 에는 넘긴다.
+     */
+    /**
+     * 🔴 경계를 **양쪽에서** 만족시켜야 한다 —
+     *    9/22 09:30 에 나이 28일(warm), 9/23 00:00 에 29일(expired).
+     *    `2026-08-25 00:00 KST` 가 그 구간 안에 있다.
+     */
+    const captured = new Date('2026-08-24T15:00:00.000Z')
+    const pool = [candAt('ttl-edge', captured)]
+    const ps = [persona('A')]
+    const hist = [{ code: 'A', matchedAts: [] as Date[] }]
+    const today = sim({ queue: pool, personas: ps, history: hist, anchor: 'now' })
+    const tomorrow = sim({ queue: pool, personas: ps, history: hist, anchor: 'nextDay' })
+    check('🔴 🔴 **오늘 적격 · 내일 부적격 — 9/22 는 1건, 9/23 은 0건**',
+      today.in14 === 1 && tomorrow.in14 === 0,
+      JSON.stringify({ today: today.in14, tomorrow: tomorrow.in14,
+        dates: [today.dates[0], tomorrow.dates[0]] }))
+
+    const goToday = judgeOneDayCanary(today, { publishedToday: 0, slotsLeft: 3 })
+    const goTomorrow = judgeOneDayCanary(tomorrow, { publishedToday: 2, slotsLeft: 1 })
+    check('🔴 🔴 **그 후보로 오늘 마지막 한 건을 채울 수 있다 (앞판은 내일을 보고 막았다)**',
+      goToday.can === 1 && goTomorrow.can === 0
+      && judgeOneDayCanary(today, { publishedToday: 2, slotsLeft: 1 }).ok === true
+      && goTomorrow.ok === false,
+      JSON.stringify({ todayCan: goToday.can, tomorrowCan: goTomorrow.can }))
+  }
+
+  // ── ⓑ 오늘 부적격 · 내일 적격 (Persona 간격) ──
+  {
+    /**
+     * 🔴 d3 은 `minDaysBetween: 2` 다. 어제 글을 쓴 persona 는 오늘 못 쓰고
+     *    내일 풀린다. 후보를 맡을 사람이 그 한 명뿐이면 오늘은 0건이다.
+     */
+    const pool = [candAt('persona-cooldown', new Date('2026-09-20T00:00:00.000Z'))]
+    const ps = [persona('A')]
+    /**
+     * 🔴 9/22 09:30 에는 간격 1일(막힘), 9/23 00:00 에는 2일(풀림).
+     *    `2026-09-21 00:00 KST` 가 그 구간이다.
+     */
+    const hist = [{ code: 'A', matchedAts: [new Date('2026-09-20T15:00:00.000Z')] }]
+    const today = sim({ queue: pool, personas: ps, history: hist, anchor: 'now' })
+    const tomorrow = sim({ queue: pool, personas: ps, history: hist, anchor: 'nextDay' })
+    check('🔴 🔴 **오늘 부적격 · 내일 적격 — 9/22 는 0건, 9/23 은 1건**',
+      today.in14 === 0 && tomorrow.in14 === 1,
+      JSON.stringify({ today: today.in14, tomorrow: tomorrow.in14,
+        dates: [today.dates[0], tomorrow.dates[0]] }))
+
+    /** 🔴 내일 된다고 오늘 GO 를 주지 않는다 — 이것이 반대 방향의 증명이다 */
+    check('🔴 🔴 **내일 낼 수 있어도 오늘 판정은 NO-GO 다**',
+      judgeOneDayCanary(today, { publishedToday: 2, slotsLeft: 1 }).ok === false
+      && judgeOneDayCanary(tomorrow, { publishedToday: 2, slotsLeft: 1 }).ok === true)
+  }
+
+  // ── 🔴 Persona·신선도 게이트에 막히면 NO-GO ──
+  {
+    const stale = [candAt('stale', new Date('2026-08-01T00:00:00.000Z'))]
+    const ps = [persona('A')]
+    const hist = [{ code: 'A', matchedAts: [] as Date[] }]
+    const v = judgeOneDayCanary(
+      sim({ queue: stale, personas: ps, history: hist, anchor: 'now' }),
+      { publishedToday: 0, slotsLeft: 3 })
+    check('🔴 🔴 **TTL 을 넘긴 후보뿐이면 NO-GO — 신선도 게이트를 우회하지 않는다**',
+      v.can === 0 && v.ok === false, JSON.stringify({ can: v.can }))
+
+    const noPersona = judgeOneDayCanary(
+      sim({ queue: [candAt('ok', new Date('2026-09-20T00:00:00.000Z'))],
+        personas: [], history: [], anchor: 'now' }),
+      { publishedToday: 0, slotsLeft: 3 })
+    check('🔴 🔴 **맡을 Persona 가 없으면 NO-GO**',
+      noPersona.can === 0 && noPersona.ok === false)
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
