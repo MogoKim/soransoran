@@ -17,7 +17,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/husband-retired-at-home/hero.webp',
-    alt: '거실에서 각자 시간을 보내는 부부 곁의 50대 여성',
+    alt: "빈 거실을 뒤로하고 식탁에 혼자 앉아 찻잔을 앞에 둔 50대 여성",
     width: 1200,
     height: 675,
   },

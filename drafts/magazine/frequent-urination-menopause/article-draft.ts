@@ -18,7 +18,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/frequent-urination-menopause/hero.webp',
-    alt: '밤에 깨어 물 한 잔을 들고 조용히 서 있는 50대 여성',
+    alt: "밝은 낮 거실 소파에서 머그잔을 들고 창밖을 바라보는 50대 여성",
     width: 1200,
     height: 675,
   },

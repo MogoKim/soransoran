@@ -18,7 +18,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/dry-eyes-menopause/hero.webp',
-    alt: '눈이 뻑뻑한 듯 잠시 눈을 감고 쉬는 50대 여성',
+    alt: "거실 소파에 턱을 괴고 앉아 눈을 뜬 채 창밖을 바라보는 50대 여성",
     width: 1200,
     height: 675,
   },

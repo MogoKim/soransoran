@@ -17,7 +17,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/starting-work-at-this-age/hero.webp',
-    alt: '노트에 무언가 적으며 새 일을 알아보는 50대 여성',
+    alt: "식탁에 노트와 서류를 펼쳐 두고 펜을 든 채 생각에 잠긴 50대 여성",
     width: 1200,
     height: 675,
   },

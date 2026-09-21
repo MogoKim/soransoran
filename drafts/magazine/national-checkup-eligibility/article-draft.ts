@@ -18,7 +18,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/national-checkup-eligibility/hero.webp',
-    alt: '건강검진 안내문을 식탁에서 펼쳐 읽는 50대 여성',
+    alt: "거실 소파에 앉아 휴대폰 화면을 손가락으로 짚어 보는 50대 여성",
     width: 1200,
     height: 675,
   },

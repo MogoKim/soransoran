@@ -17,7 +17,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/child-marriage-silence/hero.webp',
-    alt: '말없이 찻잔을 앞에 두고 생각에 잠긴 50대 여성',
+    alt: "탁자에 머그잔을 두고 거실 소파에 턱을 괴고 앉은 50대 여성",
     width: 1200,
     height: 675,
   },

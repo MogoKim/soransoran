@@ -3839,7 +3839,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'how-long-did-menopause-last': {
     heroImage: {
       src: '/magazine/how-long-did-menopause-last/hero.webp',
-      alt: "창밖을 보며 달력에 표시된 날짜를 세어 보는 50대 여성",
+      alt: "거실 소파에서 두 손으로 찻잔을 감싸 쥐고 창밖을 바라보는 50대 여성",
       width: 1200,
       height: 675,
     },
@@ -3966,7 +3966,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'national-checkup-eligibility': {
     heroImage: {
       src: '/magazine/national-checkup-eligibility/hero.webp',
-      alt: "건강검진 안내문을 식탁에서 펼쳐 읽는 50대 여성",
+      alt: "거실 소파에 앉아 휴대폰 화면을 손가락으로 짚어 보는 50대 여성",
       width: 1200,
       height: 675,
     },
@@ -4085,7 +4085,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'dry-mouth-menopause': {
     heroImage: {
       src: '/magazine/dry-mouth-menopause/hero.webp',
-      alt: "물컵을 들고 입 안이 마른 듯 잠시 멈춘 50대 여성",
+      alt: "머그잔을 앞에 두고 식탁에 턱을 괴고 앉아 창밖을 바라보는 50대 여성",
       width: 1200,
       height: 675,
     },
@@ -4208,7 +4208,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'frequent-urination-menopause': {
     heroImage: {
       src: '/magazine/frequent-urination-menopause/hero.webp',
-      alt: "밤에 깨어 물 한 잔을 들고 조용히 서 있는 50대 여성",
+      alt: "밝은 낮 거실 소파에서 머그잔을 들고 창밖을 바라보는 50대 여성",
       width: 1200,
       height: 675,
     },
@@ -4315,7 +4315,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'starting-work-at-this-age': {
     heroImage: {
       src: '/magazine/starting-work-at-this-age/hero.webp',
-      alt: "노트에 무언가 적으며 새 일을 알아보는 50대 여성",
+      alt: "식탁에 노트와 서류를 펼쳐 두고 펜을 든 채 생각에 잠긴 50대 여성",
       width: 1200,
       height: 675,
     },
@@ -4437,7 +4437,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'dry-eyes-menopause': {
     heroImage: {
       src: '/magazine/dry-eyes-menopause/hero.webp',
-      alt: "눈이 뻑뻑한 듯 잠시 눈을 감고 쉬는 50대 여성",
+      alt: "거실 소파에 턱을 괴고 앉아 눈을 뜬 채 창밖을 바라보는 50대 여성",
       width: 1200,
       height: 675,
     },
@@ -4540,7 +4540,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'husband-retired-at-home': {
     heroImage: {
       src: '/magazine/husband-retired-at-home/hero.webp',
-      alt: "거실에서 각자 시간을 보내는 부부 곁의 50대 여성",
+      alt: "빈 거실을 뒤로하고 식탁에 혼자 앉아 찻잔을 앞에 둔 50대 여성",
       width: 1200,
       height: 675,
     },
@@ -4658,7 +4658,7 @@ const MAGAZINE_ARTICLE_RECORD = {
   'child-marriage-silence': {
     heroImage: {
       src: '/magazine/child-marriage-silence/hero.webp',
-      alt: "말없이 찻잔을 앞에 두고 생각에 잠긴 50대 여성",
+      alt: "탁자에 머그잔을 두고 거실 소파에 턱을 괴고 앉은 50대 여성",
       width: 1200,
       height: 675,
     },

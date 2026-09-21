@@ -16,10 +16,21 @@
  * 🔴 **파일이 실제로 있을 때만 넣는다.** 경로만 적고 그림이 없으면 독자에게는 깨진 이미지다.
  * 🔴 기본은 dry-run. `--write` 를 명시해야 쓴다.
  *
+ * 🔴 **`--write` 에는 `--slug` 가 반드시 따라붙는다** (2026-09-21).
+ *
+ *    이 도구는 **사고 복구용**이다. 빠진 글을 한꺼번에 메우라고 만든 것이 아니다.
+ *    `--write` 만으로 "누락된 전부" 를 고치게 두면, 손이 미끄러진 한 번에
+ *    수십 건의 발행본이 사람 확인 없이 바뀐다 — 대표 이미지는 독자가 가장 먼저
+ *    보는 것이고, 엉뚱한 그림이 붙으면 글보다 먼저 신뢰를 깎는다.
+ *
+ *    실제로 이번 8건은 **alt 가 그림과 달랐다.** 자동으로 붙인 문구를 사람이
+ *    이미지와 대조하고서야 맞출 수 있었다. 그 대조를 건너뛸 수 있는 손잡이를
+ *    남겨 두지 않는다. 고칠 글을 이름으로 적게 한다.
+ *
  * 사용법
- *   node scripts/magazine-hero-backfill.mjs              무엇이 바뀔지만 본다
- *   node scripts/magazine-hero-backfill.mjs --write      실제로 넣는다
- *   node scripts/magazine-hero-backfill.mjs --slug a,b   특정 글만
+ *   node scripts/magazine-hero-backfill.mjs                     무엇이 바뀔지만 본다 (전체)
+ *   node scripts/magazine-hero-backfill.mjs --slug a,b          그 글만 미리 본다
+ *   node scripts/magazine-hero-backfill.mjs --slug a,b --write  🔴 실제로 넣는다
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -28,6 +39,26 @@ import { ARTICLES_TS, DRAFTS_DIR, evalLiteral, loadArticles, sliceLiteral } from
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
+
+/**
+ * `--write` 를 받아도 되는가. **파일을 만지지 않는다.**
+ *
+ * 🔴 대상을 이름으로 적지 않은 일괄 쓰기를 막는다 (2026-09-21).
+ *    dry-run 은 전체를 봐도 된다 — 보는 것은 아무것도 바꾸지 않는다.
+ *
+ * @returns {{ok:boolean, code:string, message:string}}
+ */
+export function judgeWriteScope({ write, slugs }) {
+  if (!write) return { ok: true, code: 'DRY_RUN', message: 'dry-run — 무엇이 바뀔지만 본다' }
+  if (!Array.isArray(slugs) || slugs.length === 0) {
+    return {
+      ok: false,
+      code: 'SLUG_REQUIRED',
+      message: '--write 에는 --slug 가 필요하다 — 고칠 글을 이름으로 적는다 (일괄 수정은 막는다)',
+    }
+  }
+  return { ok: true, code: 'SCOPED', message: `대상 ${slugs.length}건: ${slugs.join(', ')}` }
+}
 
 /**
  * 초안(`article-draft.ts`)에서 대표 이미지를 읽는다.
@@ -104,6 +135,14 @@ function main() {
   const argv = process.argv.slice(2)
   const write = argv.includes('--write')
   const only = argv.includes('--slug') ? String(argv[argv.indexOf('--slug') + 1] ?? '').split(',').filter(Boolean) : null
+
+  // 🔴 대상을 이름으로 적지 않은 일괄 쓰기를 막는다
+  const scope = judgeWriteScope({ write, slugs: only })
+  if (!scope.ok) {
+    console.error(`\n  🔴 ${scope.code}: ${scope.message}\n`)
+    console.error('  예) node scripts/magazine-hero-backfill.mjs --slug dry-mouth-menopause --write\n')
+    process.exit(2)
+  }
 
   const articles = loadArticles()
   const targets = articles.filter((a) => (only ? only.includes(a.slug) : !a.heroImage?.src))

@@ -18,7 +18,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/how-long-did-menopause-last/hero.webp',
-    alt: '창밖을 보며 달력에 표시된 날짜를 세어 보는 50대 여성',
+    alt: "거실 소파에서 두 손으로 찻잔을 감싸 쥐고 창밖을 바라보는 50대 여성",
     width: 1200,
     height: 675,
   },

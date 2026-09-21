@@ -18,7 +18,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/dry-mouth-menopause/hero.webp',
-    alt: '물컵을 들고 입 안이 마른 듯 잠시 멈춘 50대 여성',
+    alt: "머그잔을 앞에 두고 식탁에 턱을 괴고 앉아 창밖을 바라보는 50대 여성",
     width: 1200,
     height: 675,
   },

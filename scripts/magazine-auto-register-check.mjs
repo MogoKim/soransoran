@@ -2552,6 +2552,73 @@ expect(`🔴 9/19 이후 등록 글 ${autoEra.length}건에 대표 이미지가 
 const brokenHero = autoEra.filter((a) => a.heroImage?.src && !existsSync(join('public', a.heroImage.src.replace(/^\//, ''))))
 expect('🔴 그 이미지 파일이 실제로 존재한다', brokenHero.map((a) => a.slug), [])
 
+
+console.log('\n══════ 대표 이미지 보정 도구 — 일괄 쓰기를 막는다')
+/**
+ * 🔴 **`--write` 에는 `--slug` 가 반드시 따라붙는다** (2026-09-21).
+ *
+ *    이 도구는 사고 복구용이다. `--write` 만으로 "누락된 전부" 를 고치게 두면
+ *    손이 미끄러진 한 번에 수십 건의 **발행본**이 사람 확인 없이 바뀐다.
+ *
+ *    실제로 이번 8건은 자동으로 붙인 alt 가 **그림과 달랐다** —
+ *    사람이 이미지를 직접 보고서야 맞출 수 있었다(휴대폰을 "안내문" 이라 적고,
+ *    혼자 있는 장면을 "부부" 라 적고, 눈을 뜬 장면을 "눈을 감고" 라 적었다).
+ *    그 대조를 건너뛸 수 있는 손잡이를 남겨 두지 않는다.
+ */
+const BF = await import('./magazine-hero-backfill.mjs')
+const ws = (o) => BF.judgeWriteScope(o)
+expect('🔴 --write 인데 --slug 가 없으면 막는다', ws({ write: true, slugs: null }).code, 'SLUG_REQUIRED')
+expect('🔴 빈 목록도 막는다', ws({ write: true, slugs: [] }).code, 'SLUG_REQUIRED')
+expect('🔴 막을 때 ok 는 false 다', ws({ write: true, slugs: null }).ok, false)
+expect('🔴 왜 막았는지 적는다', ws({ write: true, slugs: null }).message.includes('일괄 수정은 막는다'), true)
+expect('--slug 가 있으면 통과', ws({ write: true, slugs: ['a-slug'] }).code, 'SCOPED')
+expect('여러 건도 통과', ws({ write: true, slugs: ['a', 'b'] }).ok, true)
+// 🔴 보는 것은 아무것도 바꾸지 않으므로 dry-run 은 전체를 봐도 된다
+expect('dry-run 은 --slug 없이도 전체를 본다', ws({ write: false, slugs: null }).code, 'DRY_RUN')
+expect('dry-run 은 언제나 ok', ws({ write: false, slugs: null }).ok, true)
+// CLI 가 실제로 그 판정을 쓰는가
+const bfSrc = readFileSync(join('scripts', 'magazine-hero-backfill.mjs'), 'utf8')
+expect('🔴 CLI 가 judgeWriteScope 를 부른다', /judgeWriteScope\(\{ write, slugs: only \}\)/.test(bfSrc), true)
+expect('🔴 막히면 종료 코드 2 로 끝난다', /process\.exit\(2\)/.test(bfSrc), true)
+
+console.log('\n══════ alt — 실제 그림과 맞는가')
+/**
+ * 🔴 **자동으로 붙인 alt 는 그림을 보지 않고 쓴 것이다** (2026-09-21).
+ *    8건 중 7건이 실제 이미지와 달랐다. 사람이 이미지를 직접 열어 고쳤다.
+ *
+ *    여기서 기계가 확인할 수 있는 것은 "그림과 같은가" 가 아니라
+ *    **모양과 금지 표현**뿐이다. 그림과의 일치는 사람이 본다 —
+ *    그래서 `--write` 에 `--slug` 를 요구한다(위 검사).
+ */
+const altRows = loadArticlesLive().filter((a) => a.publishAt && Date.parse(a.publishAt) >= Date.parse('2026-09-19T00:00:00+09:00'))
+expect('9/19 이후 글이 전부 alt 를 갖는다', altRows.filter((a) => !a.heroImage?.alt).map((a) => a.slug), [])
+expect('🔴 전부 "여성" 으로 끝난다 (등록 관례)', altRows.filter((a) => !a.heroImage.alt.endsWith('여성')).map((a) => a.slug), [])
+expect('길이가 10~120자다', altRows.filter((a) => a.heroImage.alt.length < 10 || a.heroImage.alt.length > 120).map((a) => a.slug), [])
+// 🔴 브랜드 금지어가 alt 에 들어가지 않는다
+expect(
+  '🔴 "시니어·어르신·노인·실버" 가 없다',
+  altRows.filter((a) => /시니어|어르신|노인|실버/.test(a.heroImage.alt)).map((a) => a.slug),
+  [],
+)
+// 🔴 이번에 실제로 틀렸던 표현이 되살아나지 않았는가 — 그림에 없는 것들이다
+const GHOSTS = [
+  ['national-checkup-eligibility', '안내문', '실제는 휴대폰 화면이다'],
+  ['frequent-urination-menopause', '밤에', '실제는 밝은 낮이다'],
+  ['dry-eyes-menopause', '눈을 감', '실제는 눈을 뜨고 있다'],
+  ['husband-retired-at-home', '부부', '실제는 여성 혼자다'],
+  ['how-long-did-menopause-last', '달력', '그림에 달력이 없다'],
+  ['starting-work-at-this-age', '적으며', '실제는 펜을 든 채 멈춰 있다'],
+]
+for (const [slug, ghost, why] of GHOSTS) {
+  const a = altRows.find((x) => x.slug === slug)
+  expect(`🔴 ${slug}: "${ghost}" 가 없다 (${why})`, a ? a.heroImage.alt.includes(ghost) : true, false)
+}
+// alt 는 초안과 발행본이 같아야 한다 — 한쪽만 고치면 다음 회차가 옛 값을 되살린다
+for (const a of altRows) {
+  const draft = readFileSync(join('drafts', 'magazine', a.slug, 'article-draft.ts'), 'utf8')
+  expect(`${a.slug}: 초안 alt 가 발행본과 같다`, draft.includes(JSON.stringify(a.heroImage.alt)), true)
+}
+
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
 const FIXTURE_DRAFT = join(FIXTURES, 'manuscript-pass.draft.md')
 expect('fixture 가 추적돼 있다', existsSync(FIXTURE_DRAFT), true)
