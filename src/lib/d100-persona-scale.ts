@@ -27,10 +27,24 @@ export const VOICE_MIN_COMMENTS = 3
  *    `pool`        지금 풀에 들어갈 수 있는가 — 말투 근거·퇴역·휴면
  *    `assignment`  **이번 회차에** 배정할 수 있는가 — 회차마다 달라진다
  */
-export const CARD_BLOCK_CODES = ['lifeAxisMissing', 'noAgeBand', 'qualificationConflict'] as const
-export const POOL_BLOCK_CODES = ['voiceEvidenceThin', 'retired', 'dormant'] as const
+/**
+ * 🔴 **층 배치를 창업자 정본에 맞춘다** (2026-09-21 4차 보정).
+ *
+ *      카드     생활사 · 나이 · Voice · 퇴역 · 자격 충돌  — 사람 자체가 서는가
+ *      Pool     topic / role 분포                        — 풀이 한쪽으로 쏠리지 않는가
+ *      회차 배정 활동 상한 · 연속 노출 · pair repeat        — 이번 회차에 쓸 수 있는가
+ *
+ * 🔴 앞판은 말투 근거를 Pool 에 두었다. 그런데 말투가 없으면 **그 사람이 아직 안 만들어진 것**이지
+ *    "풀 구성이 문제" 가 아니다 — 할 일이 다르다(자산을 모은다 / 사람을 바꾼다).
+ * 🔴 `dormant` 는 카드에 둔다. 퇴역과 같이 **그 사람의 지금 상태**이고,
+ *    회차가 바뀐다고 달라지지 않는다.
+ */
+export const CARD_BLOCK_CODES = [
+  'lifeAxisMissing', 'noAgeBand', 'voiceEvidenceThin', 'retired', 'dormant', 'qualificationConflict',
+] as const
+export const POOL_BLOCK_CODES = ['topicConcentrated', 'roleConcentrated'] as const
 export const ASSIGNMENT_BLOCK_CODES = [
-  'activityOverCap', 'consecutiveExposure', 'topicConcentrated', 'roleConcentrated', 'pairRepeat',
+  'activityOverCap', 'consecutiveExposure', 'pairRepeat',
 ] as const
 
 export const PERSONA_BLOCK_CODES = [
@@ -43,10 +57,10 @@ export type PersonaTier = (typeof PERSONA_TIERS)[number]
 
 /** 🔴 코드마다 어느 층인지 하나로 정해 둔다 — 두 곳에서 다르게 세지 않게 */
 export const PERSONA_BLOCK_TIER: Readonly<Record<PersonaBlockCode, PersonaTier>> = {
-  lifeAxisMissing: 'card', noAgeBand: 'card', qualificationConflict: 'card',
-  voiceEvidenceThin: 'pool', retired: 'pool', dormant: 'pool',
-  activityOverCap: 'assignment', consecutiveExposure: 'assignment',
-  topicConcentrated: 'assignment', roleConcentrated: 'assignment', pairRepeat: 'assignment',
+  lifeAxisMissing: 'card', noAgeBand: 'card', voiceEvidenceThin: 'card',
+  retired: 'card', dormant: 'card', qualificationConflict: 'card',
+  topicConcentrated: 'pool', roleConcentrated: 'pool',
+  activityOverCap: 'assignment', consecutiveExposure: 'assignment', pairRepeat: 'assignment',
 }
 
 export const PERSONA_BLOCK_LABEL: Readonly<Record<PersonaBlockCode, string>> = {
@@ -92,12 +106,19 @@ export type PersonaCandidate = {
   voiceComments: number
   /** 오늘 이미 한 글+댓글 */
   activityToday: number
-  /** 바로 앞 글에 연속으로 나왔는가 */
-  consecutiveExposures: number
+  /**
+   * 🔴 바로 앞 글에 연속으로 나왔는가. **재지 않았으면 `null`** —
+   *    0 을 넣으면 "연속으로 나오지 않았다" 가 되고, 그 거짓이 배정을 열어 준다.
+   */
+  consecutiveExposures: number | null
   /** 마지막 활동 이후 지난 날 */
   daysSinceActive: number
   retired: boolean
-  qualificationConflict: boolean
+  /**
+   * 🔴 자격 충돌 — **재지 않았으면 `null`**. `false` 는 "확인했고 문제없다" 는 뜻이라
+   *    확인한 적이 없는 것을 그렇게 적으면 감사 없이 통과시키는 것이 된다.
+   */
+  qualificationConflict: boolean | null
   /**
    * 🔴 이 사람의 최근 활동 중 **가장 많은 소재 하나**가 차지하는 비율(0~1).
    *    재지 않았으면 `null` 이다 — 0 으로 채우지 않는다.
@@ -131,20 +152,27 @@ export function personaTiers(p: PersonaCandidate): PersonaTierVerdict {
   const pool: TierVerdict = { ok: true, blocked: [], unmeasured: [] }
   const assign: TierVerdict = { ok: true, blocked: [], unmeasured: [] }
 
+  // ── 카드 — 사람 자체가 서는가 ──
   if (PERSONA_LIFE_AXES.some((a) => !p.filledAxes.includes(a))) card.blocked.push('lifeAxisMissing')
   if (p.ageBand === null || p.ageBand.trim() === '') card.blocked.push('noAgeBand')
-  if (p.qualificationConflict) card.blocked.push('qualificationConflict')
+  if (p.voiceComments < VOICE_MIN_COMMENTS) card.blocked.push('voiceEvidenceThin')
+  if (p.retired) card.blocked.push('retired')
+  if (p.daysSinceActive >= DORMANT_AFTER_DAYS) card.blocked.push('dormant')
+  // 🔴 모르면 통과가 아니다 — 감사 없이 "문제없다" 고 적지 않는다
+  if (p.qualificationConflict === null) card.unmeasured.push('qualificationConflict')
+  else if (p.qualificationConflict) card.blocked.push('qualificationConflict')
 
-  if (p.voiceComments < VOICE_MIN_COMMENTS) pool.blocked.push('voiceEvidenceThin')
-  if (p.retired) pool.blocked.push('retired')
-  if (p.daysSinceActive >= DORMANT_AFTER_DAYS) pool.blocked.push('dormant')
+  // ── Pool — 풀이 한쪽으로 쏠리지 않는가 ──
+  if (p.topicShare === null) pool.unmeasured.push('topicConcentrated')
+  else if (p.topicShare > TOPIC_SHARE_CAP) pool.blocked.push('topicConcentrated')
+  if (p.roleShare === null) pool.unmeasured.push('roleConcentrated')
+  else if (p.roleShare > ROLE_SHARE_CAP) pool.blocked.push('roleConcentrated')
 
+  // ── 회차 배정 — 이번 회차에 쓸 수 있는가 ──
   if (p.activityToday >= ACTIVITY_CAP_PER_DAY) assign.blocked.push('activityOverCap')
-  if (p.consecutiveExposures > CONSECUTIVE_EXPOSURE_CAP) assign.blocked.push('consecutiveExposure')
-  if (p.topicShare === null) assign.unmeasured.push('topicConcentrated')
-  else if (p.topicShare > TOPIC_SHARE_CAP) assign.blocked.push('topicConcentrated')
-  if (p.roleShare === null) assign.unmeasured.push('roleConcentrated')
-  else if (p.roleShare > ROLE_SHARE_CAP) assign.blocked.push('roleConcentrated')
+  // 🔴 모르면 통과가 아니다
+  if (p.consecutiveExposures === null) assign.unmeasured.push('consecutiveExposure')
+  else if (p.consecutiveExposures > CONSECUTIVE_EXPOSURE_CAP) assign.blocked.push('consecutiveExposure')
   if (p.postsSinceLastPairing === null) assign.unmeasured.push('pairRepeat')
   else if (p.postsSinceLastPairing !== 'never' && p.postsSinceLastPairing < PAIR_REPEAT_GAP) {
     assign.blocked.push('pairRepeat')
@@ -256,16 +284,20 @@ export function personaTierReadiness(input: {
      *    재지 못한 축이 하나라도 있으면 그 층은 ready 가 아니다.
      */
     const hasUnmeasured = Object.keys(unmeasured).length > 0
-    const ready = tier === 'assignment'
-      ? !hasUnmeasured && passed === total && total > 0
-      : !hasUnmeasured && passed >= target
+    /**
+     * 🔴 카드 층만 **목표 인원**을 요구한다 — 몇 명을 만들어야 하는가가 그 층의 질문이다.
+     *    Pool·배정 층은 있는 사람 전원이 판정 가능하고 통과해야 한다 (인원 목표가 아니다).
+     */
+    const ready = tier === 'card'
+      ? !hasUnmeasured && passed >= target
+      : !hasUnmeasured && passed === total && total > 0
     const reason = ready ? null
       : hasUnmeasured ? `재지 못한 축이 있다 (${Object.keys(unmeasured).join('·')})`
-        : tier === 'assignment' ? `${total - passed}명이 이번 회차에 배정될 수 없다`
-          : `${passed}명 < 목표 ${target}명`
+        : tier === 'card' ? `${passed}명 < 목표 ${target}명`
+          : `${total - passed}명이 이 층을 통과하지 못한다`
     out.push({
       tier, ready, passed, total,
-      target: tier === 'assignment' ? null : target,
+      target: tier === 'card' ? target : null,
       blocking, unmeasured, reason,
     })
   }

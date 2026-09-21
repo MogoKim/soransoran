@@ -250,8 +250,15 @@ export function hiddenPostNote(s: LinkSummary): string | null {
  *    `unloaded`         설치는 됐는데 내려가 있다
  *    `unhealthy`        올라가 있는데 정상이 아니다
  */
+/**
+ * 🔴 **`healthUnknown` 을 따로 둔다** (2026-09-21 4차 보정).
+ *
+ *    앞판은 `failing` 이 `null`(모른다) 이어도 `ready` 를 냈다. 최근 회차가 전부
+ *    실패하고 있어도 화면은 초록이었다는 뜻이다 — "설치됐고 올라가 있다" 와
+ *    "제대로 돌고 있다" 는 다른 사실인데 한 칸에 뭉쳐 있었다.
+ */
 export const RUNNER_STATES = [
-  'ready', 'disabledByPolicy', 'notRegistered', 'unloaded', 'unhealthy',
+  'ready', 'healthUnknown', 'disabledByPolicy', 'notRegistered', 'unloaded', 'unhealthy',
 ] as const
 export type RunnerState = (typeof RUNNER_STATES)[number]
 
@@ -310,7 +317,8 @@ export function runnerFactsOf(input: {
   const failing = input.failing ?? null
   const state = runnerStateOf({
     installed: input.installed, loaded: input.loaded, enabled: input.enabled,
-    failing: failing === true,
+    // 🔴 `null` 을 `false` 로 떨어뜨리지 않는다 — 그 변환이 앞판의 결함이었다
+    failing,
   })
   const canRun = runnerCanRun(state)
 
@@ -329,6 +337,8 @@ export function runnerFactsOf(input: {
 
   const reasons: string[] = []
   if (!canRun) reasons.push(RUNNER_STATE_REASON[state])
+  // 🔴 돌 수 있어도 최근 성패를 모르면 그 사실을 적는다
+  else if (failing === null) reasons.push(RUNNER_STATE_REASON.healthUnknown)
   if (capacityReason !== null) reasons.push(capacityReason)
   return {
     installed: input.installed, loaded: input.loaded, enabled: input.enabled,
@@ -340,6 +350,7 @@ export function runnerFactsOf(input: {
 /** 🔴 라벨 하나마다 사람이 읽을 이유가 있다 */
 export const RUNNER_STATE_REASON: Readonly<Record<RunnerState, string>> = {
   ready: '돌 수 있다',
+  healthUnknown: '🔴 최근 회차가 정상이었는지 모른다 — 확인하기 전에는 준비된 것이 아니다',
   disabledByPolicy: '사람이 일부러 꺼 두었다 — 손상이 아니다',
   notRegistered: 'plist 가 설치되어 있지 않다',
   unloaded: '설치는 됐는데 launchctl 에 올라가 있지 않다',
@@ -363,12 +374,15 @@ export function runnerStateOf(input: {
   /** env 스위치가 켜져 있는가 — 스위치가 없는 job 은 `true` */
   enabled: boolean
   /** 올라가 있는데 최근 회차가 실패했는가 */
-  failing?: boolean
+  /** 🔴 `undefined`·`null` 은 **모른다** 다 — `false`(확인했고 정상)와 다르다 */
+  failing?: boolean | null
 }): RunnerState {
   if (!input.enabled) return 'disabledByPolicy'
   if (!input.installed) return 'notRegistered'
   if (!input.loaded) return 'unloaded'
-  return input.failing === true ? 'unhealthy' : 'ready'
+  if (input.failing === true) return 'unhealthy'
+  // 🔴 최근 회차 성패를 모르면 `ready` 가 아니다
+  return input.failing === false ? 'ready' : 'healthUnknown'
 }
 
 /** 🔴 능력 다섯 — 하나로 뭉쳐 GREEN 이라 말하지 않는다 */

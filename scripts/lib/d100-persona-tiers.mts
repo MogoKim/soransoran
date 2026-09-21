@@ -81,15 +81,19 @@ export function candidateOf(r: PersonaRow): PersonaCandidate {
     activityToday: r.activityToday,
     /**
      * 🔴 **연속 노출은 회차 단위 사실이다.** 이 조회는 회차를 모른다 —
-     *    0 을 넣으면 "연속으로 나오지 않았다" 가 되므로, 배정 층이 이미
-     *    `unmeasured` 인 지금은 그 층 전체가 막혀 결론이 바뀌지 않는다.
+     *    `0` 을 넣으면 "연속으로 나오지 않았다" 는 **거짓**이 되고, 그 거짓이 배정을 열어 준다.
+     *    재지 않았으므로 `null` 이다.
      */
-    consecutiveExposures: 0,
+    consecutiveExposures: null,
     // 🔴 활동 기록이 없으면 "오늘 활동했다"(0일) 가 아니다 — 휴면으로 본다(fail-closed)
     daysSinceActive: r.daysSinceActive ?? Number.MAX_SAFE_INTEGER,
     retired: r.status !== 'active',
-    /** 🔴 자격 충돌은 별도 감사 경로다 — 이 조회로는 알 수 없어 막지 않는다 */
-    qualificationConflict: false,
+    /**
+     * 🔴 자격 충돌은 별도 감사 경로다 — 이 조회로는 알 수 없다.
+     *    `false` 는 "확인했고 문제없다" 는 뜻이라, 확인한 적 없는 것을 그렇게 적으면
+     *    감사 없이 통과시키는 것이 된다. 그래서 `null` 이다.
+     */
+    qualificationConflict: null,
     /**
      * 🔴 **소재·역할 쏠림과 짝 반복은 아직 재는 곳이 없다.**
      *    글의 "소재" 와 댓글의 "역할" 은 어느 표에도 컬럼으로 없고,

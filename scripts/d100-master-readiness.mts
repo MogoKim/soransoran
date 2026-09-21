@@ -21,7 +21,7 @@ import { homedir } from 'node:os'
 
 import {
   allD100Plans, d100Plan, judgePromotion, currentPlanOf, targetStageFor,
-  READY_NET_MARGIN, type D100Stage,
+  dailyTargetOf, stableObservationDaysOf, READY_NET_MARGIN, type D100Stage,
 } from '../src/lib/d100-capacity'
 import { RELEASE_ENV, PROFILES } from '../src/lib/scale-profile'
 import { DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
@@ -34,7 +34,9 @@ import {
   RECOVERY_PLAN, CANARY_CONTRACT, ESCALATION_LADDER, NO_AUTO_RETRY_SIGNALS,
   capacities82, judgeLadder, TOP_STEP_INCIDENT_FREE_DAYS,
 } from '../src/lib/collect-82cook-recovery'
-import { readOperationalStock, releaseStageFromEnvText } from './lib/d100-operational-stock.mjs'
+import {
+  readOperationalStock, releaseStageFromEnvText, SnapshotWriteFailed,
+} from './lib/d100-operational-stock.mjs'
 import { SNAPSHOT_PATH } from './lib/d100-ready-snapshot.mjs'
 import { NORTH_STAR_MISSING_EVENTS, northStar } from '../src/lib/north-star'
 
@@ -89,24 +91,43 @@ const plan = d100Plan(targetStage)
  *    못 읽으면 0 이 아니라 `readFailed` 다 — 재고 없음과 못 읽음을 같은 화면으로 두지 않는다.
  */
 const RECORD_SNAPSHOT = process.argv.slice(2).includes('--record-snapshot')
-const read = await readOperationalStock(new Date(), {
-  targetStage,
-  // 🔴 예측기에는 **지금 운영 중인** 단계의 상한을 넘긴다 — 목표 단계가 아니다
-  dailyCap: PROFILES[currentReleaseStage].dailyTarget,
-  repoRoot: process.cwd(),
-  recordSnapshot: RECORD_SNAPSHOT,
-})
+/**
+ * 🔴 **발행 runner 가 올라가 있는가** — 예약량과 예측값을 가르는 사실이다.
+ *    DB 를 읽기 **전에** 정해야 reader 가 두 값을 따로 낼 수 있다.
+ */
+const PUBLISH_LABEL = 'com.soransoran.original-post-runner'
+const publishRunnerLoaded = installed(PUBLISH_LABEL) && loadedJobs.has(PUBLISH_LABEL)
+
+let read: Awaited<ReturnType<typeof readOperationalStock>>
+try {
+  read = await readOperationalStock(new Date(), {
+    targetStage,
+    // 🔴 예측기에는 **지금 운영 중인** 단계의 상한을 넘긴다 — 목표 단계가 아니다
+    dailyCap: PROFILES[currentReleaseStage].dailyTarget,
+    currentDailyTarget: dailyTargetOf(currentReleaseStage),
+    publishRunnerLoaded,
+    repoRoot: process.cwd(),
+    recordSnapshot: RECORD_SNAPSHOT,
+  })
+} catch (e) {
+  // 🔴 스냅샷을 적으라고 해 놓고 못 적었으면 **실패로 끝낸다** — 조용히 넘어가지 않는다
+  if (e instanceof SnapshotWriteFailed) {
+    console.error(`🔴 ${e.message}`)
+    process.exit(1)
+  }
+  throw e
+}
 const funnel = read.ok ? read.funnel : null
 const linkSummary = read.ok ? read.links : summarizeLinks([])
 const activePersonas: Measured = read.ok ? read.activePersonas : null
 /** 🔴 관측값이다 — 못 읽었거나 창 안에 아무 것도 없으면 `null`(unmeasured) 이다 */
 const detailPerDay: Measured = read.ok ? read.detailPerDay : null
-/** 🔴 **생산량이다.** 승격 입력으로 쓰지 않는다 */
-const readyProducedPerDay: Measured = read.ok ? read.readyProducedPerDay : null
-/** 🔴 **순증가다.** 두 시점 재고 차이로만 나온다 */
-const readyNetPerDay: Measured = read.ok ? read.readyNetPerDay : null
+/** 🔴 **새로 품질을 통과한 생산량.** 여유율 20% 가 붙는 값이다 */
+const readyQualifiedPerDay: Measured = read.ok ? read.readyQualifiedPerDay : null
+/** 🔴 **재고 증감.** 생산량과 다른 값이고, 여기에 4/day 를 요구하지 않는다 */
+const readyStockDeltaPerDay: Measured = read.ok ? read.readyStockDeltaPerDay : null
+const stableStreak: number | null = read.ok ? read.stableStreakDays : null
 const publishedPerDay: Measured = read.ok ? read.publishedPerDay : null
-const observedDays = read.ok ? read.observedDays : 0
 const personaTiers = read.ok ? read.personaTiers : []
 const personaReady = read.ok ? read.personaReady : false
 
@@ -151,7 +172,8 @@ const facts: Readonly<Record<Capability, RunnerFacts>> = {
     requiredPerDay: plan.detailedSourcesRequiredPerDay, observedPerDay: detailPerDay,
   }),
   generate: factsOf('com.soransoran.supply-process', envFlag('SORAN_SUPPLY_PROCESS_ENABLED'), {
-    requiredPerDay: plan.readyNetRequiredPerDay, observedPerDay: readyNetPerDay,
+    // 🔴 생성 능력이 답할 질문은 "얼마나 **만드는가**" 다 — 재고가 얼마나 늘었나가 아니다
+    requiredPerDay: plan.readyQualifiedRequiredPerDay, observedPerDay: readyQualifiedPerDay,
   }),
   publish: factsOf('com.soransoran.original-post-runner', true),
   comment: factsOf('com.soransoran.persona-comment-runner', true),
@@ -173,7 +195,15 @@ const COLLECT_JOBS = [
 const collectJobs = COLLECT_JOBS.map((j) => ({
   source: j.source,
   label: j.label,
-  facts: factsOf(j.label, j.env === null ? true : envFlag(j.env)),
+  /**
+   * 🔴 **최근 회차 성패를 실제로 읽는다.** 수집만은 회차 기록이 있어 알 수 있다 —
+   *    기록이 없으면 `null`(모른다) 이고, 그러면 `ready` 가 아니다.
+   */
+  facts: runnerFactsOf({
+    installed: installed(j.label), loaded: loadedJobs.has(j.label),
+    enabled: j.env === null ? true : envFlag(j.env),
+    failing: read.ok ? (read.collectFailing[j.source] ?? null) : null,
+  }),
 }))
 
 const readiness: CapabilityReadiness = {
@@ -193,12 +223,19 @@ const promo = judgePromotion({
    */
   activePersonas: personaReady ? activePersonas : null,
   detailPerDay,
-  // 🔴 생산량이 아니라 순증가를 넘긴다
-  readyNetPerDay,
+  // 🔴 여유율은 **생산량**에 붙는다
+  readyQualifiedPerDay,
+  // 🔴 재고 증감은 고갈 감시용이다 — 여기에 4/day 를 요구하지 않는다
+  readyStockDeltaPerDay,
   publishedPerDay,
-  observedDays,
+  currentStableStreakDays: stableStreak,
   publishRunnerReady: capabilityFactsReady(facts.publish),
   commentRunnerReady: capabilityFactsReady(facts.comment),
+  /**
+   * 🔴 **목표 단계 제한이 켜져 있는가.** 지금은 env 가 d1 이므로 false 다 —
+   *    이 PR 은 어떤 단계도 실제로 켜지 않는다.
+   */
+  targetLimitsActive: (currentReleaseStage as string) === (targetStage as string),
 })
 
 /**
@@ -247,21 +284,31 @@ if (JSON_OUT) {
       detailPerDay,
       detailBySource: read.ok ? read.detail.bySource : null,
       detailUnmeasuredSources: read.ok ? read.detail.unmeasuredSources : DETAIL_SOURCES,
-      // 🔴 생산량과 순증가는 **다른 값**이다. 한 칸에 합치지 않는다
-      readyProducedPerDay,
-      readyNet: read.ok ? read.readyNet : { measured: false, reason: '재고를 읽지 못했다' },
-      readyNetPerDay,
+      // 🔴 생산량과 재고 증감은 **다른 값**이다. 한 칸에 합치지 않는다
+      readyQualifiedPerDay,
+      readyStockDelta: read.ok ? read.readyStockDelta
+        : { measured: false, reason: '재고를 읽지 못했다' },
+      readyStockDeltaPerDay,
       publishedPerDay,
-      observedDays,
+      /** 🔴 고정 14일 상수를 없앤 자리 — 실제로 연속 달성한 날 수다 */
+      currentStableStreakDays: stableStreak,
+      currentDailyTarget: dailyTargetOf(currentReleaseStage),
+      stableObservationDaysNeeded: stableObservationDaysOf(currentReleaseStage),
+      throughputWindowDays: read.ok ? read.throughputWindowDays : null,
       snapshotPath: SNAPSHOT_PATH,
     },
+    promotionPhase: promo.phase,
     persona: {
       tiers: personaTiers, ready: personaReady, activeCount: activePersonas,
       missingAxes: read.ok ? read.personaMissingAxes : null,
     },
     scheduled: {
-      in7Days: read.ok ? read.scheduledIn7Days : null,
-      in14Days: read.ok ? read.scheduledIn14Days : null,
+      // 🔴 runner 가 내려가 있으면 실제 예약은 0 이다. 예측값과 섞지 않는다
+      actualIn7Days: read.ok ? read.actualScheduledIn7Days : null,
+      actualIn14Days: read.ok ? read.actualScheduledIn14Days : null,
+      forecastIfLoadedIn7Days: read.ok ? read.forecastIfLoadedIn7Days : null,
+      forecastIfLoadedIn14Days: read.ok ? read.forecastIfLoadedIn14Days : null,
+      publishRunnerLoaded,
     },
     links: linkSummary, linkCritical: linkCriticalCount(linkSummary),
     northStar: ns,
@@ -345,18 +392,26 @@ if (JSON_OUT) {
     }
   }
   console.log(`    상세 수집/day 합계  ${showMeasured(detailPerDay)}`)
-  console.log(`    READY 생산량/day    ${showMeasured(readyProducedPerDay)}`
-    + '   🔴 생산량이다 — 승격 입력이 아니다')
-  console.log(`    READY 순증가/day    ${showMeasured(readyNetPerDay)}`)
-  if (read.ok && !read.readyNet.measured) console.log(`      · ${read.readyNet.reason}`)
-  if (read.ok && read.readyNet.measured) {
-    console.log(`      · ${read.readyNet.fromStock} → ${read.readyNet.toStock}`
-      + ` (${read.readyNet.spanDays}일 · ${read.readyNet.fromAt})`)
+  console.log('    🔴 **생산량**과 **재고 증감**은 다른 값이다 — 여유율 20% 는 생산량에 붙는다')
+  console.log(`    READY 생산량/day    ${showMeasured(readyQualifiedPerDay)}`
+    + `   (목표 ${plan.readyQualifiedRequiredPerDay}/day)`)
+  console.log(`    재고 증감/day       ${showMeasured(readyStockDeltaPerDay)}`
+    + '   🔴 여기에 목표를 요구하지 않는다. 재고를 채운 뒤 음수면 고갈 위험이다')
+  if (read.ok && !read.readyStockDelta.measured) console.log(`      · ${read.readyStockDelta.reason}`)
+  if (read.ok && read.readyStockDelta.measured) {
+    console.log(`      · ${read.readyStockDelta.fromStock} → ${read.readyStockDelta.toStock}`
+      + ` (${read.readyStockDelta.spanDays}일 · ${read.readyStockDelta.fromAt})`)
   }
-  console.log(`    공개 발행/day       ${showMeasured(publishedPerDay)}`)
-  console.log(`    예약 전망 7일/14일   ${showMeasured(read.ok ? read.scheduledIn7Days : null)}`
-    + ` / ${showMeasured(read.ok ? read.scheduledIn14Days : null)}`)
-  console.log(`    이 단계 관측 일수    ${observedDays}일`)
+  console.log(`    공개 발행/day       ${showMeasured(publishedPerDay)}`
+    + `   (${currentReleaseStage} 자기 목표 ${dailyTargetOf(currentReleaseStage)}/day)`)
+  console.log(`    연속 달성 일수      ${stableStreak ?? '?'}일`
+    + `   (${currentReleaseStage} 가 stable 이 되려면 ${stableObservationDaysOf(currentReleaseStage)}일)`)
+  console.log('    🔴 예약과 전망은 다른 값이다 — runner 가 내려가 있으면 실제 예약은 0 이다')
+  console.log(`    지금 예약 7일/14일   ${showMeasured(read.ok ? read.actualScheduledIn7Days : null)}`
+    + ` / ${showMeasured(read.ok ? read.actualScheduledIn14Days : null)}`
+    + `   (발행 runner ${publishRunnerLoaded ? '올라와 있다' : '🔴 내려가 있다'})`)
+  console.log(`    올렸다면 7일/14일    ${showMeasured(read.ok ? read.forecastIfLoadedIn7Days : null)}`
+    + ` / ${showMeasured(read.ok ? read.forecastIfLoadedIn14Days : null)}`)
   console.log(`    🔴 순증가 시계열: ${SNAPSHOT_PATH}`)
   console.log('       (시작하려면 --record-snapshot · 🔴 과거 값은 만들 수 없다)')
 
@@ -386,18 +441,20 @@ if (JSON_OUT) {
 
   console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 목표 ${targetStage})`)
   console.log('    🔴 공개량 · READY 순증가 · 재고는 서로 다른 값이다 — 한 칸으로 합치지 않는다')
-  console.log('    단계   공개/day  READY순증/day  재고14일  상세/day  Persona  댓글/day  최소관측')
+  console.log('    단계   공개/day  READY생산/day  재고14일  상세/day  Persona  댓글/day  최소관측')
   for (const p of allD100Plans()) {
     console.log(`    ${p.stage.padEnd(6)} ${String(p.publicPostsPerDay).padStart(7)}`
-      + `  ${String(p.readyNetRequiredPerDay).padStart(12)}`
+      + `  ${String(p.readyQualifiedRequiredPerDay).padStart(12)}`
       + `  ${String(p.readyStock14Days).padStart(8)}`
       + `  ${String(p.detailedSourcesRequiredPerDay).padStart(8)}`
       + `  ${String(p.activePersonaTarget).padStart(7)}`
       + `  ${`${p.commentMinPerDay}~${p.commentMaxPerDay}`.padStart(8)}`
       + `  ${String(p.minimumObservationDays).padStart(6)}일`)
   }
-  console.log(`    🔴 READY 순증가 목표 = 공개량 × ${READY_NET_MARGIN} (올림) —`
+  console.log(`    🔴 READY **생산** 목표 = 공개량 × ${READY_NET_MARGIN} (올림) —`
     + ' 같게 두면 재고가 영원히 늘지 않는다')
+  console.log('    🔴 이 목표는 **재고 증감**에 요구하지 않는다 —'
+    + ' 4건 만들어 3건 내보내 +1 인 것은 정상이다')
 
   console.log('\n③-b 스케줄러가 실제로 감당하는가 — 🔴 계획 슬롯이 아니라 예약된 cron 이다')
   console.log('    단계   release  예약회차/day  회차당  실제발행/day  필요/day  판정')
@@ -412,10 +469,20 @@ if (JSON_OUT) {
     if (sc.detail !== null) console.log(`        · ${sc.detail}`)
   }
 
-  console.log('\n④ 다음 단계로 올려도 되는가')
-  console.log(`    ${promo.ready ? '🟢 올려도 된다' : '🔴 아직이다'}`)
-  for (const b of promo.blocking) console.log(`      🔴 ${b}`)
-  for (const u of promo.unmeasured) console.log(`      ⬚ 측정되지 않음: ${u}`)
+  console.log(`\n④ 승격 상태 전이 — ${currentReleaseStage} → ${targetStage}`)
+  console.log('    🔴 한 번의 판정이 아니라 세 칸을 지나는 이동이다')
+  console.log(`    지금 칸  ${promo.phase}`)
+  console.log(`    다음 할 일  ${promo.nextAction}`)
+  const gate = (name: string, g: typeof promo.preflight, note: string): void => {
+    console.log(`    ${g.ready ? '🟢' : '🔴'} ${name.padEnd(14)} ${note}`)
+    for (const b of g.blocking) console.log(`        🔴 ${b}`)
+    for (const u of g.unmeasured) console.log(`        ⬚ 측정되지 않음: ${u}`)
+  }
+  gate(`${currentReleaseStage} stable`, promo.currentStable, '지금 단계가 자기 목표를 냈는가 (다음 칸의 전제)')
+  gate('preflight', promo.preflight, '재고·Persona·수집·생성·스케줄러 — 🔴 목표 발행량은 묻지 않는다')
+  gate('canary', promo.canary, '목표 단계 제한을 실제로 켰는가')
+  gate('stable', promo.stable, `${targetStage} 에서 ${plan.publicPostsPerDay}/day 를 ${plan.minimumObservationDays}일`)
+  console.log('    🔴 이 PR 은 어떤 단계도 실제로 켜지 않는다')
 
   console.log('\n⑤ North Star — 주간 재방문 참여 실사용자')
   console.log(`    ${ns.measured ? `${ns.weeklyReturningEngagedUsers}명` : `unmeasured — ${ns.reason}`}`)

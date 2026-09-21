@@ -15,9 +15,10 @@ import { loadEnvLocal } from './micro-seed-time.mjs'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
 import { readStockFunnel, type StockRepo, type QueueRowFacts } from './d100-stock-reader.mjs'
 import { readRunRecords } from './collect-run-store.mjs'
+import type { CollectRunRecord } from '../../src/lib/collect-run-record'
 import { detailThroughput, DETAIL_SOURCES, type DetailThroughput } from './d100-detail-throughput.mjs'
 import {
-  readSnapshots, readyNetFromSnapshots, appendSnapshot, type NetChange,
+  readSnapshots, readyNetFromSnapshots, appendSnapshot, SNAPSHOT_PATH, type NetChange,
 } from './d100-ready-snapshot.mjs'
 import {
   readPersonaCandidates, missingAxisHistogram, type PersonaRow, type PersonaTierRepo,
@@ -55,21 +56,35 @@ export type OperationalStock =
        * 🔴 **생산량.** 창 안에 만들어진 READY 후보 수다 —
        *    발행·만료로 빠진 몫을 빼지 않았으므로 **순증가가 아니다.**
        */
-      readyProducedPerDay: Measured
-      /** 🔴 **순증가.** 두 시점 재고 차이로만 계산한다. 스냅샷이 없으면 unmeasured */
-      readyNet: NetChange
-      readyNetPerDay: Measured
+      /** 🔴 **새로 품질을 통과한 READY 생산량.** 여유율 20% 가 붙는 값이다 */
+      readyQualifiedPerDay: Measured
+      /** 🔴 **두 스냅샷 사이의 실제 재고 증감.** 생산량과 다른 값이다 */
+      readyStockDelta: NetChange
+      readyStockDeltaPerDay: Measured
       /** 🔴 관측된 하루 공개 발행 편수 */
       publishedPerDay: Measured
-      observedDays: number
+      /** 🔴 처리량을 본 **창**의 길이다 — "이 단계를 며칠 관측했다" 가 아니다 */
+      throughputWindowDays: number
       /** 🔴 Persona 3계층 — 계기판이 이 값을 그대로 찍는다 */
       personaTiers: TierReadiness[]
       /** 🔴 어느 생활사 축이 몇 명에게서 비었는가 */
       personaMissingAxes: Record<string, number>
       personaReady: boolean
-      /** 🔴 실제 예측기가 낸 전망 */
-      scheduledIn7Days: Measured
-      scheduledIn14Days: Measured
+      /**
+       * 🔴 **지금 실제로 예약된 양.** 발행 runner 가 내려가 있으면 0 이다 —
+       *    예측값을 여기 적으면 "곧 3건 나간다" 로 읽히는데 아무것도 나가지 않는다.
+       */
+      actualScheduledIn7Days: Measured
+      actualScheduledIn14Days: Measured
+      /** 🔴 **runner 를 올렸다면** 나갈 수 있는 양 — 예측기가 낸 값 */
+      forecastIfLoadedIn7Days: Measured
+      forecastIfLoadedIn14Days: Measured
+      /** 지금 발행 runner 가 돌 수 있는가 — 위 두 값을 가르는 사실 */
+      publishRunnerLoaded: boolean
+      /** 🔴 지금 단계에서 목표 발행량을 연속 달성한 날 수 */
+      stableStreakDays: number
+      /** 공급원별 최근 회차 성패 — `null` 이면 모른다 */
+      collectFailing: Record<string, boolean | null>
     }
   | { ok: false; detail: string }
 
@@ -212,6 +227,10 @@ export function prismaPersonaRepo(prisma: PrismaClient, now: Date, repoRoot: str
 export async function forecastPersonasOf(prisma: PrismaClient, now: Date): Promise<{
   personas: PersonaForMatch[]
   codeOfPersonaId: Map<string, string>
+  /** 🔴 러너와 **같은 표**에서 읽는다 — `PersonaActivityLog(kind='post')` */
+  history: { code: string; matchedAts: Date[] }[]
+  /** 이 사람이 최근에 쓴 글 수 — 연속 노출 판정의 근거가 될 원자료 */
+  postLogs: { code: string; at: Date }[]
 }> {
   const rows = await prisma.persona.findMany({
     where: { status: 'active' },
@@ -222,6 +241,22 @@ export async function forecastPersonasOf(prisma: PrismaClient, now: Date): Promi
   })
   const codeOfPersonaId = new Map(rows.map((r) => [r.id, r.code]))
   const weekAgo = new Date(now.getTime() - 7 * 86_400_000)
+  /**
+   * 🔴 **발행 이력의 정본은 `PersonaActivityLog(kind='post')` 다.**
+   *    러너(`original-post-auto-publish.mts` ③)가 읽는 바로 그 표다 —
+   *    큐의 `matchedAt` 은 "배정했다" 이지 "발행했다" 가 아니다.
+   */
+  const postLogRows = await prisma.personaActivityLog.findMany({
+    where: { kind: 'post' },
+    select: { createdAt: true, persona: { select: { code: true } } },
+  })
+  const postLogs = postLogRows
+    .filter((l) => l.persona !== null)
+    .map((l) => ({ code: l.persona!.code, at: l.createdAt }))
+  const history = rows.map((r) => ({
+    code: r.code,
+    matchedAts: postLogs.filter((l) => l.code === r.code).map((l) => l.at),
+  }))
   const personas: PersonaForMatch[] = []
   for (const r of rows) {
     const id = (r.identity ?? {}) as Record<string, unknown>
@@ -249,7 +284,44 @@ export async function forecastPersonasOf(prisma: PrismaClient, now: Date): Promi
         : Math.floor((now.getTime() - last.getTime()) / 86_400_000),
     } as PersonaForMatch)
   }
-  return { personas, codeOfPersonaId }
+  return { personas, codeOfPersonaId, history, postLogs }
+}
+
+/**
+ * 🔴 **연속으로 몇 날 목표를 냈는가.** 고정 14일 상수를 없앤 자리다 —
+ *    상수는 "14일 관측했다" 는 주장인데 아무도 재지 않았다.
+ *
+ * 🔴 **오늘은 세지 않는다.** 아직 끝나지 않은 날을 "목표 미달" 로 세면
+ *    매일 아침 연속 기록이 0 으로 떨어진다.
+ */
+export function stableStreakDays(input: {
+  publishedAts: readonly Date[]
+  dailyTarget: number
+  now: Date
+  maxLookbackDays?: number
+}): number {
+  const kstDay = (d: Date): string => new Date(d.getTime() + 9 * 3600_000).toISOString().slice(0, 10)
+  const byDay = new Map<string, number>()
+  for (const d of input.publishedAts) byDay.set(kstDay(d), (byDay.get(kstDay(d)) ?? 0) + 1)
+  let streak = 0
+  const look = input.maxLookbackDays ?? 120
+  for (let i = 1; i <= look; i += 1) {
+    const day = kstDay(new Date(input.now.getTime() - i * 86_400_000))
+    if ((byDay.get(day) ?? 0) < input.dailyTarget) break
+    streak += 1
+  }
+  return streak
+}
+
+/**
+ * 🔴 **최근 회차가 정상이었는가** — `null` 은 모른다는 뜻이다.
+ *    기록이 하나도 없으면 "정상" 이 아니라 **모른다**.
+ */
+export function latestRunFailing(records: readonly CollectRunRecord[]): boolean | null {
+  const done = records.filter((r) => r.status === 'ok' || r.status === 'failed')
+  if (done.length === 0) return null
+  const last = done.reduce((a, b) => (a.startedAt >= b.startedAt ? a : b))
+  return last.status === 'failed'
 }
 
 /**
@@ -265,6 +337,8 @@ export function forecastFromRows(input: {
   personas: readonly PersonaForMatch[]
   /** personaId → code. 🔴 못 찾으면 **모르는 코드**를 넘겨 예측이 fail-closed 로 멈추게 한다 */
   codeOfPersonaId: ReadonlyMap<string, string>
+  /** 🔴 **공식 발행 러너와 같은 이력** — `PersonaActivityLog(kind='post')` */
+  history: readonly { code: string; matchedAts: Date[] }[]
   dailyCap: number
   now: Date
 }): { in7: Measured; in14: Measured } {
@@ -281,9 +355,16 @@ export function forecastFromRows(input: {
       capturedAt: r.sourceCapturedAt,
       ...voiceInputOf(r as AutoRow),
     }))
+  /**
+   * 🔴 **빈 이력을 넘기지 않는다** (2026-09-21 4차 보정).
+   *
+   *    앞판은 `matchedAts: []` 를 넘겼다. 그러면 예측기는 **아무도 최근에 안 썼다**고 믿고
+   *    주 상한·최소 간격을 한 번도 적용하지 않는다 — 그래서 7일 전망이 3/3 으로 꽉 찼다.
+   *    실제 러너는 `PersonaActivityLog(kind='post')` 를 넘긴다. 같은 것을 넘긴다.
+   */
+  if (input.history.length !== input.personas.length) return { in7: null, in14: null }
   const f = forecastPublishing({
-    queue, personas: input.personas,
-    history: input.personas.map((p) => ({ code: p.code, matchedAts: [] })),
+    queue, personas: input.personas, history: input.history,
     startAt: input.now, days: 14, dailyCap: input.dailyCap,
   })
   return { in7: f.in7, in14: f.in14 }
@@ -364,7 +445,14 @@ export type StockReadOptions = {
    *    🔴 과거 시각으로 쓰는 길은 없다(`appendSnapshot` 은 지금 값만 받는다).
    */
   recordSnapshot?: boolean
+  /** 지금 단계의 하루 발행 목표 — 연속 달성 일수를 세는 기준 */
+  currentDailyTarget: number
+  /** 🔴 발행 runner 가 실제로 돌 수 있는가 — 예약량과 예측값을 가른다 */
+  publishRunnerLoaded: boolean
 }
+
+/** 🔴 `--record-snapshot` 을 켰는데 기록에 실패한 경우 */
+export class SnapshotWriteFailed extends Error {}
 
 export async function readOperationalStock(
   now: Date, opts: StockReadOptions,
@@ -424,12 +512,19 @@ export async function readOperationalStock(
      * 🔴 **순증가는 두 시점의 재고 차이뿐이다.** 스냅샷이 없으면 `unmeasured` —
      *    생산량으로 갈음하지 않는다.
      */
-    const readyNet = readyNetFromSnapshots({
+    const readyStockDelta = readyNetFromSnapshots({
       snapshots: readSnapshots(), nowStock: read.funnel.readyStock, now,
     })
-    if (opts.recordSnapshot === true) appendSnapshot(read.funnel.readyStock, now)
+    /**
+     * 🔴 **기록 실패를 삼키지 않는다** (2026-09-21 4차 보정).
+     *    앞판은 `appendSnapshot` 의 반환값을 버렸다 — 사람이 시계열을 시작한 줄 알았는데
+     *    파일이 하나도 안 쌓이고, 며칠 뒤에도 순증가는 여전히 unmeasured 다.
+     */
+    if (opts.recordSnapshot === true && !appendSnapshot(read.funnel.readyStock, now)) {
+      throw new SnapshotWriteFailed(`스냅샷을 적지 못했다 — ${SNAPSHOT_PATH}`)
+    }
 
-    // 🔴 공개 발행 편수 — Post 생성 시각으로만 센다
+    // 🔴 공개 발행 편수 — Post 생성 시각으로만 센다. 연속 달성 일수도 여기서 나온다
     const publishedAts = await publishedAtsOf(prisma)
     const publishedInWindow = publishedAts.filter((d) => d >= since).length
 
@@ -443,29 +538,48 @@ export async function readOperationalStock(
     })
 
     // ── 예약 전망 — 🔴 0 을 주입하지 않는다. 러너와 같은 예측기를 부른다 ──
-    const { personas: personasForMatch, codeOfPersonaId } = await forecastPersonasOf(prisma, now)
+    const {
+      personas: personasForMatch, codeOfPersonaId, history,
+    } = await forecastPersonasOf(prisma, now)
     const fc = forecastFromRows({
       rows, publishableIds: read.rows.sets.publishableNow,
-      personas: personasForMatch, codeOfPersonaId, dailyCap: opts.dailyCap, now,
+      personas: personasForMatch, codeOfPersonaId, history, dailyCap: opts.dailyCap, now,
     })
+    /**
+     * 🔴 **예약된 양과 예측값은 다르다.** 발행 runner 가 내려가 있으면 실제로는
+     *    한 건도 나가지 않는다 — 예측값을 "예약" 이라 적으면 멎은 레인이 초록으로 보인다.
+     */
+    const actual7 = opts.publishRunnerLoaded ? fc.in7 : 0
+    const actual14 = opts.publishRunnerLoaded ? fc.in14 : 0
+    const streak = stableStreakDays({
+      publishedAts, dailyTarget: opts.currentDailyTarget, now,
+    })
+    const collectFailing: Record<string, boolean | null> = {}
+    for (const src of DETAIL_SOURCES) collectFailing[src] = latestRunFailing(readRunRecords(src))
 
     return {
       ok: true,
-      funnel: { ...read.funnel, scheduledIn7Days: fc.in7, scheduledIn14Days: fc.in14 },
+      // 🔴 깔때기에는 **지금 실제로 예약된 양**을 적는다. 예측값이 아니다
+      funnel: { ...read.funnel, scheduledIn7Days: actual7, scheduledIn14Days: actual14 },
       links,
       activePersonas,
       detail,
       detailPerDay: detail.perDay,
-      readyProducedPerDay: perDay(produced.length, THROUGHPUT_WINDOW_DAYS),
-      readyNet,
-      readyNetPerDay: readyNet.measured ? readyNet.perDay : null,
+      readyQualifiedPerDay: perDay(produced.length, THROUGHPUT_WINDOW_DAYS),
+      readyStockDelta,
+      readyStockDeltaPerDay: readyStockDelta.measured ? readyStockDelta.perDay : null,
       publishedPerDay: perDay(publishedInWindow, THROUGHPUT_WINDOW_DAYS),
-      observedDays: THROUGHPUT_WINDOW_DAYS,
+      throughputWindowDays: THROUGHPUT_WINDOW_DAYS,
       personaTiers: tiers,
       personaMissingAxes: missingAxisHistogram(personaRead.candidates),
       personaReady: personaReadinessOk(tiers),
-      scheduledIn7Days: fc.in7,
-      scheduledIn14Days: fc.in14,
+      actualScheduledIn7Days: actual7,
+      actualScheduledIn14Days: actual14,
+      forecastIfLoadedIn7Days: fc.in7,
+      forecastIfLoadedIn14Days: fc.in14,
+      publishRunnerLoaded: opts.publishRunnerLoaded,
+      stableStreakDays: streak,
+      collectFailing,
     }
   } catch (e) {
     // 🔴 fail-closed — 읽지 못했으면 0 이 아니다

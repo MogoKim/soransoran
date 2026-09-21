@@ -18,7 +18,7 @@
  */
 
 /** 공개 발행 단계 — 🔴 이 목록 밖의 단계는 없다 */
-import { PROFILES, RELEASE_STAGES, type ReleaseStage } from './scale-profile'
+import { PROFILES, RELEASE_STAGES, RELEASE_ENV, type ReleaseStage } from './scale-profile'
 
 export const D100_STAGES = ['d3', 'd5', 'd10', 'd20', 'd30', 'd50', 'd100'] as const
 export type D100Stage = (typeof D100_STAGES)[number]
@@ -61,8 +61,15 @@ export type D100Plan = {
   publicPostsPerDay: number
   /** 하루 필요한 상세 수집 건수 */
   detailedSourcesRequiredPerDay: number
-  /** 🔴 하루 필요한 READY 순증가 — 공개량 × `READY_NET_MARGIN` (올림) */
-  readyNetRequiredPerDay: number
+  /**
+   * 🔴 하루 필요한 **READY 생산량** — 공개량 × `READY_NET_MARGIN` (올림).
+   *
+   * 🔴 **재고 증감에 이 값을 요구하지 않는다** (2026-09-21 4차 보정).
+   *    앞판은 이 값을 `readyNetPerDay`(재고 차이)와 견줬다. 그러면 D3 에서
+   *    **4건 만들고 3건 내보내 재고가 +1** 인 정상 운영이 "순증가 1 < 필요 4" 로 막힌다.
+   *    여유율 20% 는 *만들어야 할 양*에 붙는 것이지 *쌓여야 할 양*이 아니다.
+   */
+  readyQualifiedRequiredPerDay: number
   /** 14일치 재고 목표 */
   readyStock14Days: number
   /** 필요한 활성 Persona 수 */
@@ -166,7 +173,7 @@ export function d100Plan(stage: D100Stage): D100Plan {
     detailedSourcesRequiredPerDay:
       Math.ceil(i.publicPostsPerDay * PLANNED_DETAIL_PER_PUBLIC_POST),
     // 🔴 공개량과 같게 두면 재고가 늘지 않는다 — 여유율을 곱하고 올린다
-    readyNetRequiredPerDay: Math.ceil(i.publicPostsPerDay * READY_NET_MARGIN),
+    readyQualifiedRequiredPerDay: Math.ceil(i.publicPostsPerDay * READY_NET_MARGIN),
     readyStock14Days: i.publicPostsPerDay * STOCK_DAYS,
     activePersonaTarget: i.activePersonaTarget,
     commentMinPerDay: i.commentMinPerDay,
@@ -214,6 +221,47 @@ export function currentPlanOf(current: ReleaseStage): D100Plan | null {
   return (D100_STAGES as readonly string[]).includes(current) ? d100Plan(current as D100Stage) : null
 }
 
+/**
+ * 🔴 **승격은 한 번의 판정이 아니라 세 칸을 지나는 이동이다** (2026-09-21 4차 보정).
+ *
+ *    앞판은 목표 단계의 **발행량까지** 사전 조건에 넣었다. 그래서 d1 에서 d3 으로
+ *    올라가려면 *이미 하루 3편을 내고 있어야* 했다 — 올라가야 낼 수 있는 양을
+ *    올라가기 전에 요구한 것이라, 논리적으로 영원히 통과할 수 없다.
+ *
+ *      `preflight`  재고·Persona·수집·생성·스케줄러가 목표를 감당하는가
+ *                   🔴 **목표 발행량은 묻지 않는다**
+ *      `canary`     목표 단계 제한을 실제로 켰는가 (env 가 올라갔는가)
+ *      `stable`     그 단계에서 **실제로** 목표 발행량을 최소 관측일 동안 냈는가
+ *
+ * 🔴 그리고 **다음 칸으로 가려면 지금 단계가 `stable` 이어야 한다** —
+ *    d3→d5 는 d3 이 3/day 를 7일 낸 뒤에만 열린다.
+ */
+export const PROMOTION_PHASES = ['preflight', 'canary', 'stable'] as const
+export type PromotionPhase = (typeof PROMOTION_PHASES)[number]
+
+/**
+ * 🔴 D100 표에 없는 release 단계(d1)의 관측 일수. d3·d5 와 같은 7일이다 —
+ *    표에 없다고 관측을 면제하지 않는다.
+ */
+export const DEFAULT_STABLE_OBSERVATION_DAYS = 7
+
+/** 🔴 이 단계가 하루에 내야 하는 편수 — release 프로필이 정본이다 */
+export function dailyTargetOf(stage: ReleaseStage): number {
+  return PROFILES[stage].dailyTarget
+}
+
+/** 🔴 이 단계가 stable 로 인정받기까지 필요한 연속 관측 일수 */
+export function stableObservationDaysOf(stage: ReleaseStage): number {
+  return currentPlanOf(stage)?.minimumObservationDays ?? DEFAULT_STABLE_OBSERVATION_DAYS
+}
+
+export type GateVerdict = {
+  ready: boolean
+  blocking: string[]
+  /** 🔴 재지 못해 판단할 수 없는 것 — `blocking` 과 다르다 */
+  unmeasured: string[]
+}
+
 export type PromotionInput = {
   /** 🔴 지금 **운영 중인** release 단계 (env 정본에서 읽는다) */
   current: ReleaseStage
@@ -228,29 +276,55 @@ export type PromotionInput = {
   activePersonas: number | null
   /** 🔴 측정되지 않았으면 `null` — 0 으로 채우지 않는다 */
   detailPerDay: number | null
-  readyNetPerDay: number | null
-  /** 이 단계에서 무사히 관측한 일수 */
-  observedDays: number
+  /**
+   * 🔴 **새로 품질을 통과한 READY 생산량.** 여유율 20% 는 여기에 붙는다.
+   *    (앞판 이름 `readyNetPerDay` 는 재고 차이와 뒤섞였다)
+   */
+  readyQualifiedPerDay: number | null
+  /**
+   * 🔴 **두 스냅샷 사이의 실제 재고 증감.** 여기에 4/day·120/day 를 요구하지 않는다 —
+   *    만든 만큼 내보내면 증감은 작은 양수가 정상이다.
+   *    재고 목표를 채운 뒤 **음수**면 고갈 위험으로 따로 막는다.
+   */
+  readyStockDeltaPerDay: number | null
+  /**
+   * 🔴 **지금 단계에서 목표 발행량을 연속으로 달성한 날 수.**
+   *    앞판의 `observedDays: 14` 상수를 없앤 자리다 — 상수는 "14일 관측했다" 는
+   *    주장인데 아무도 재지 않았다.
+   */
+  currentStableStreakDays: number | null
   /** 발행 runner 가 실제로 돌 수 있는가 */
   publishRunnerReady: boolean
   /** 댓글 runner 가 실제로 돌 수 있는가 */
   commentRunnerReady: boolean
   /**
    * 🔴 **관측된 하루 공개 발행 편수.** 재지 않았으면 `null`.
-   *    d1→d3 이면 3/day 를 실제로 내고 있는지까지 본다 — 재고만 쌓여도 올라가지 않는다.
+   *    🔴 이 값은 **지금 단계가 stable 인가**를 볼 때만 쓴다 —
+   *    목표 단계의 발행량을 사전 조건으로 요구하지 않는다.
    */
   publishedPerDay: number | null
+  /** 🔴 목표 단계 제한이 실제로 켜져 있는가 (env 가 올라갔는가) */
+  targetLimitsActive: boolean
 }
 
 export type PromotionVerdict = {
+  /** 🔴 세 칸을 모두 지났는가 — 즉 **다음 목표로 넘어가도 되는가** */
   ready: boolean
+  /** 🔴 지금 서 있는 칸 */
+  phase: PromotionPhase
+  /** 🔴 지금 해야 할 일 한 줄 */
+  nextAction: string
   /** 🔴 어느 단계의 필요량으로 쟀는가 — 보고서가 이 값을 그대로 적는다 */
   target: D100Stage
   /** 목표 단계의 필요량 그 자체 */
   requirement: D100Plan
-  /** 🔴 막는 이유 — 비어 있으면 올려도 된다 */
+  /** 🔴 지금 단계가 자기 목표를 냈는가 — 다음 칸의 전제다 */
+  currentStable: GateVerdict
+  preflight: GateVerdict
+  canary: GateVerdict
+  stable: GateVerdict
+  /** 🔴 세 칸을 합친 것 — 옛 호출부가 읽던 자리다 */
   blocking: string[]
-  /** 🔴 측정되지 않아 판단할 수 없는 것 — `blocking` 과 다르다 */
   unmeasured: string[]
 }
 
@@ -263,43 +337,103 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
    * 🔴 **목표 단계의 필요량으로 잰다.** `d100Plan(현재)` 로 재면 d3 수치(재고 42 ·
    *    READY 4/day)만 채우고 d5 로 올라간다 — d5 는 70 · 6/day 를 요구한다.
    */
-  const cur = d100Plan(input.target)
-  const blocking: string[] = []
-  const unmeasured: string[] = []
+  const req = d100Plan(input.target)
 
-  if (input.readyStock === null) unmeasured.push('재고')
-  else if (input.readyStock < cur.readyStock14Days) {
-    blocking.push(`재고 ${input.readyStock} < 14일치 ${cur.readyStock14Days}`)
+  // ── ⓪ 지금 단계가 자기 목표를 내고 있는가 — 🔴 다음 칸의 전제다 ──
+  const curTarget = dailyTargetOf(input.current)
+  const needDays = stableObservationDaysOf(input.current)
+  const currentStable: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
+  if (input.publishedPerDay === null) currentStable.unmeasured.push('공개 발행/day')
+  else if (input.publishedPerDay < curTarget) {
+    currentStable.blocking.push(`${input.current} 공개 발행 ${input.publishedPerDay}/day < 자기 목표 ${curTarget}/day`)
   }
-  if (input.activePersonas === null) unmeasured.push('활성 Persona')
-  else if (input.activePersonas < cur.activePersonaTarget) {
-    blocking.push(`활성 Persona ${input.activePersonas} < 필요 ${cur.activePersonaTarget}`)
+  if (input.currentStableStreakDays === null) currentStable.unmeasured.push('연속 달성 일수')
+  else if (input.currentStableStreakDays < needDays) {
+    currentStable.blocking.push(`${input.current} 연속 달성 ${input.currentStableStreakDays}일 < 필요 ${needDays}일`)
   }
-  if (input.observedDays < cur.minimumObservationDays) {
-    blocking.push(`관측 ${input.observedDays}일 < 최소 ${cur.minimumObservationDays}일`)
+  currentStable.ready = currentStable.blocking.length === 0 && currentStable.unmeasured.length === 0
+
+  // ── ① preflight — 🔴 목표 발행량은 **묻지 않는다** ──
+  const pre: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
+  if (input.readyStock === null) pre.unmeasured.push('재고')
+  else if (input.readyStock < req.readyStock14Days) {
+    pre.blocking.push(`재고 ${input.readyStock} < 14일치 ${req.readyStock14Days}`)
   }
-  // 🔴 **스케줄러가 못 하는 단계로는 올리지 않는다.** 재고가 아무리 많아도 나갈 길이 없다
+  if (input.activePersonas === null) pre.unmeasured.push('활성 Persona')
+  else if (input.activePersonas < req.activePersonaTarget) {
+    pre.blocking.push(`활성 Persona ${input.activePersonas} < 필요 ${req.activePersonaTarget}`)
+  }
+  if (input.detailPerDay === null) pre.unmeasured.push('상세 수집/day')
+  else if (input.detailPerDay < req.detailedSourcesRequiredPerDay) {
+    pre.blocking.push(`상세 ${input.detailPerDay}/day < 필요 ${req.detailedSourcesRequiredPerDay}/day`)
+  }
+  /**
+   * 🔴 **생산량에 여유율이 붙는다.** 재고 증감이 아니다 —
+   *    4건 만들어 3건 내보내 +1 인 것은 정상이고, 그것을 막으면 정상 운영이 막힌다.
+   */
+  if (input.readyQualifiedPerDay === null) pre.unmeasured.push('READY 생산량/day')
+  else if (input.readyQualifiedPerDay < req.readyQualifiedRequiredPerDay) {
+    pre.blocking.push(`READY 생산 ${input.readyQualifiedPerDay}/day < 필요 ${req.readyQualifiedRequiredPerDay}/day`)
+  }
+  /**
+   * 🔴 **재고 증감은 고갈 감시용이다.** 목표 재고를 채운 뒤 줄고 있으면 막는다 —
+   *    채우기 전이라면 아직 쌓는 중이라 음수도 이상하지 않다.
+   */
+  const stockMet = input.readyStock !== null && input.readyStock >= req.readyStock14Days
+  if (stockMet) {
+    if (input.readyStockDeltaPerDay === null) pre.unmeasured.push('재고 증감/day')
+    else if (input.readyStockDeltaPerDay < 0) {
+      pre.blocking.push(`🔴 고갈 위험 — 재고가 하루 ${input.readyStockDeltaPerDay}씩 줄고 있다`)
+    }
+  }
+  if (!input.publishRunnerReady) pre.blocking.push('발행 runner 가 돌 수 없다')
+  if (!input.commentRunnerReady) pre.blocking.push('댓글 runner 가 돌 수 없다')
+  // 🔴 스케줄러가 못 하는 단계로는 올리지 않는다. 재고가 아무리 많아도 나갈 길이 없다
   const sc = schedulerSupportOf(input.target)
-  if (!sc.supported) blocking.push(`목표 ${input.target} 를 스케줄러가 감당하지 못한다 — ${sc.detail}`)
-  if (!input.publishRunnerReady) blocking.push('발행 runner 가 돌 수 없다')
-  if (!input.commentRunnerReady) blocking.push('댓글 runner 가 돌 수 없다')
+  if (!sc.supported) pre.blocking.push(`목표 ${input.target} 를 스케줄러가 감당하지 못한다 — ${sc.detail}`)
+  // 🔴 지금 단계가 자리를 잡지 못했으면 다음 준비를 통과로 보지 않는다
+  if (!currentStable.ready) {
+    pre.blocking.push(`${input.current} 가 아직 stable 이 아니다`)
+    for (const u of currentStable.unmeasured) pre.unmeasured.push(`${input.current} ${u}`)
+  }
+  pre.ready = pre.blocking.length === 0 && pre.unmeasured.length === 0
 
-  if (input.detailPerDay === null) unmeasured.push('상세 수집/day')
-  else if (input.detailPerDay < cur.detailedSourcesRequiredPerDay) {
-    blocking.push(`상세 ${input.detailPerDay}/day < 필요 ${cur.detailedSourcesRequiredPerDay}/day`)
+  // ── ② canary — 목표 단계 제한을 실제로 켰는가 ──
+  const canary: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
+  if (!pre.ready) canary.blocking.push('preflight 를 통과하지 못했다')
+  if (!input.targetLimitsActive) {
+    canary.blocking.push(`${input.target} 제한이 아직 켜지지 않았다 (${RELEASE_ENV})`)
   }
-  if (input.publishedPerDay === null) unmeasured.push('공개 발행/day')
-  else if (input.publishedPerDay < cur.publicPostsPerDay) {
-    blocking.push(`공개 발행 ${input.publishedPerDay}/day < 목표 ${cur.publicPostsPerDay}/day`)
-  }
-  if (input.readyNetPerDay === null) unmeasured.push('READY 순증가/day')
-  else if (input.readyNetPerDay < cur.readyNetRequiredPerDay) {
-    blocking.push(`READY 순증가 ${input.readyNetPerDay}/day < 필요 ${cur.readyNetRequiredPerDay}/day`)
-  }
+  canary.ready = canary.blocking.length === 0
 
-  // 🔴 측정되지 않은 값이 하나라도 있으면 올리지 않는다
+  // ── ③ stable — 목표 단계에서 실제로 그 양을 냈는가 ──
+  const stable: GateVerdict = { ready: false, blocking: [], unmeasured: [] }
+  if (!canary.ready) stable.blocking.push('canary 를 통과하지 못했다')
+  if (input.publishedPerDay === null) stable.unmeasured.push('공개 발행/day')
+  else if (input.publishedPerDay < req.publicPostsPerDay) {
+    stable.blocking.push(`공개 발행 ${input.publishedPerDay}/day < 목표 ${req.publicPostsPerDay}/day`)
+  }
+  if (input.currentStableStreakDays === null) stable.unmeasured.push('연속 달성 일수')
+  else if (input.currentStableStreakDays < req.minimumObservationDays) {
+    stable.blocking.push(`연속 달성 ${input.currentStableStreakDays}일 < 최소 ${req.minimumObservationDays}일`)
+  }
+  stable.ready = stable.blocking.length === 0 && stable.unmeasured.length === 0
+
+  const phase: PromotionPhase = !pre.ready ? 'preflight' : !canary.ready ? 'canary' : 'stable'
+  const nextAction = !pre.ready
+    ? `preflight 를 채운다 — ${[...pre.blocking, ...pre.unmeasured.map((u) => `${u} 미측정`)][0] ?? ''}`
+    : !canary.ready
+      ? `🔴 사람이 ${RELEASE_ENV} 를 ${input.target} 로 올린다 (이 PR 에서는 하지 않는다)`
+      : stable.ready
+        ? `${input.target} 가 자리를 잡았다 — 다음 목표로 넘어갈 수 있다`
+        : `${input.target} 에서 ${req.publicPostsPerDay}/day 를 ${req.minimumObservationDays}일 낸다`
+
   return {
-    ready: blocking.length === 0 && unmeasured.length === 0,
-    target: input.target, requirement: cur, blocking, unmeasured,
+    ready: stable.ready,
+    phase, nextAction,
+    target: input.target, requirement: req,
+    currentStable, preflight: pre, canary, stable,
+    blocking: [...pre.blocking, ...canary.blocking, ...stable.blocking],
+    unmeasured: [...new Set([...pre.unmeasured, ...stable.unmeasured])],
   }
 }
