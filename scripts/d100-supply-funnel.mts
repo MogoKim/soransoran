@@ -21,13 +21,16 @@ import { PrismaClient } from '@prisma/client'
 import {
   STAGE_LABEL, buildStageFacts, firstBrokenStage,
   rateOf, showRate, describeBacklog, describeLaneReady,
-  readWorksetManifest, tallySemanticCompletion, stageTimesOf, laneReadyOf,
+  worksetEvidenceOf, worksetRunIdOf, tallySemanticCompletion, stageTimesOf, laneReadyOf,
   type PipelineStage, type StageEvidence, type LaneReadySplit, type SemanticTally, type LaneRow,
 } from '../src/lib/d100-supply-funnel'
 import { scanArtifacts, readJsonArtifacts } from './lib/d100-artifact-scan.mjs'
 import { readRunRecords } from './lib/collect-run-store.mjs'
 import { isDetailSuccess } from '../src/lib/collect-run-record'
 import { SOURCE_FACTS } from '../src/lib/collect-schedule'
+import { readWorkset } from '../src/lib/supply-workset'
+import { prismaStockRepo } from './lib/d100-operational-stock.mjs'
+import { readStockFunnel } from './lib/d100-stock-reader.mjs'
 import {
   profileOf, machineReviewedByHuman, selectAutoTargets, type AutoRow,
 } from '../src/lib/original-post-auto-publish'
@@ -126,6 +129,11 @@ const cafeRows: CafeRow[] = CAFES.map((c) => {
 // ② 큐 재대조 — 🔴 backlog 와 유입을 가른다
 // ─────────────────────────────────────────────────────────
 const prisma = new PrismaClient()
+/**
+ * 🔴 **준비도 계기판과 같은 저장소·같은 selector.** 여기서 자기 판정을 만들면
+ *    두 CLI 가 같은 DB 를 보고 다른 재고를 말한다.
+ */
+const stockRepo = prismaStockRepo(prisma)
 type QueueRead = {
   ok: boolean
   detail?: string
@@ -136,6 +144,13 @@ type QueueRead = {
   mismatchByField: Record<string, number>
   /** 🔴 단계마다 **자기 시각**을 쓴다 — 큐 createdAt 을 공통 완료 시각으로 쓰지 않는다 */
   lane: LaneReadySplit
+  /**
+   * 🔴 **`d100:readiness` 와 같은 정본 reader 가 낸 READY 재고**.
+   *    두 CLI 가 서로 다른 selector 를 쓰면 같은 DB 를 보고 다른 재고를 말한다 —
+   *    실제로 4건과 3건으로 갈렸다(차이는 **신선도 검사**였다).
+   */
+  readyStockIds: string[]
+  readyStockReadFailed: string | null
   lastHumanDecisionAtMs: number | null
   personaMatchedAll: number
   personaMatchedInWindow: number
@@ -154,7 +169,9 @@ const EMPTY_LANE: LaneReadySplit = {
 }
 let q: QueueRead = {
   ok: false, total: 0, createdInWindow: 0, contractOk: 0, contractMismatch: 0,
-  mismatchByField: {}, lane: EMPTY_LANE, lastHumanDecisionAtMs: null,
+  mismatchByField: {}, lane: EMPTY_LANE,
+  readyStockIds: [], readyStockReadFailed: '읽지 않았다',
+  lastHumanDecisionAtMs: null,
   personaMatchedAll: 0, personaMatchedInWindow: 0, lastMatchedAtMs: null,
   publishedLinked: 0, publishedInWindow: 0, lastPublishedAtMs: null, postStatus: {},
   backlogUsable: 0, lastCreatedAtMs: null, createdDays: 0,
@@ -215,6 +232,18 @@ try {
   ).targets.map((t) => t.id)
   const lane = laneReadyOf({ rows: laneRows, publishableIds, sinceMs: SINCE.getTime() })
 
+  /**
+   * 🔴 **재고는 `d100:readiness` 와 **같은 함수**가 낸다** (2026-09-21 8차 보정).
+   *
+   *    앞판은 여기서 신선도를 보지 않는 자체 selector 로 4건을 냈고,
+   *    준비도 계기판은 신선도를 통과한 3건을 냈다. 같은 DB 를 읽고 두 수가 갈렸는데
+   *    양쪽 다 "READY" 라고 불렀다.
+   */
+  const stockRead = await readStockFunnel({
+    repo: stockRepo, now: NOW,
+    safetyOf: (t: string, b: string) => safetyFilter({ title: t, body: b }).verdict,
+  })
+
   const matched = raw.filter((r) => r.matchedPersonaId !== null)
   const linkedIds = raw.map((r) => r.createdPostId)
     .filter((v): v is string => v !== null && v !== '')
@@ -244,6 +273,8 @@ try {
     contractMismatch: win.filter((r) => profileOf(asRow(r)) === null).length,
     mismatchByField: mismatch,
     lane,
+    readyStockIds: stockRead.ok ? [...stockRead.rows.sets.publishableNow] : [],
+    readyStockReadFailed: stockRead.ok ? null : stockRead.detail,
     // 🔴 검토 단계의 시각은 `decidedAt` 이다
     lastHumanDecisionAtMs: times.humanReadyAtMs,
     personaMatchedAll: matched.length,
@@ -284,12 +315,11 @@ try {
 const worksetFiles = readJsonArtifacts({
   prefix: 'supply-workset-', suffix: '.json', sinceMs: SINCE.getTime(),
 })
-const worksets = worksetFiles.map((f) => ({ file: f, m: readWorksetManifest(f.json) }))
-const worksetOk = worksets.filter((w) => w.m !== null)
-const worksetBroken = worksets.length - worksetOk.length
-const worksetSourceIds = worksetOk.reduce((n2, w) => n2 + w.m!.sourceIds.length, 0)
-const worksetLastMs = worksetOk.length === 0 ? null
-  : Math.max(...worksetOk.map((w) => Date.parse(w.m!.takenAt)))
+// 🔴 **정본 `readWorkset` 이 판정한다** — 관제가 두 번째 규칙을 갖지 않는다
+const ws = worksetEvidenceOf(
+  worksetFiles.map((f) => ({ file: f.name, runId: worksetRunIdOf(f.name), json: f.json })),
+  readWorkset,
+)
 
 /**
  * 🔴 **의미 검수는 `review.semanticCompletion.complete === true` 만 완료다.**
@@ -343,11 +373,12 @@ const evidence: StageEvidence[] = [
   {
     stage: 'workset',
     // 🔴 manifest 의 `takenAt` 이 이 칸의 시각이다
-    lastAtMs: worksetLastMs,
-    recentCount: worksetOk.length === 0 ? null : worksetSourceIds,
-    unit: worksetOk.length === 0
-      ? `🔴 manifest 를 읽지 못했다 (깨진 파일 ${worksetBroken}개)`
-      : `묶음에 든 원천 수 (manifest ${worksetOk.length}개${worksetBroken > 0 ? ` · 🔴 깨짐 ${worksetBroken}개` : ''})`,
+    lastAtMs: ws.lastTakenAtMs,
+    recentCount: ws.ok === 0 ? null : ws.sourceIds,
+    unit: ws.ok === 0
+      ? `🔴 정본 계약을 통과한 manifest 가 없다 (거부 ${ws.broken.length}개)`
+      : `묶음에 든 원천 수 (정본 통과 manifest ${ws.ok}개`
+        + `${ws.broken.length > 0 ? ` · 🔴 거부 ${ws.broken.length}개` : ''})`,
     switchedOff: supplyOff, staleAfterDays: 1,
   },
   {
@@ -436,6 +467,14 @@ if (JSON_OUT) {
   console.log(JSON.stringify({
     window: { days: WINDOW_DAYS, since: SINCE.toISOString(), now: NOW.toISOString() },
     cafes: cafeRows, queue: q, stages: facts,
+    readyStockCompare: {
+      // 🔴 두 CLI 가 **같은 함수**로 낸 집합 — 행 id 를 그대로 싣는다
+      selector: 'readStockFunnel.publishableNow (d100:readiness 와 동일)',
+      readyStockIds: q.readyStockIds,
+      readyStockCount: q.readyStockIds.length,
+      publisherCandidatesBeforeFreshness: q.lane.lanePublishable,
+      readFailed: q.readyStockReadFailed,
+    },
     firstBroken: broken === null ? null : broken.stage,
     queueInflow,
   }, null, 2))
@@ -472,7 +511,19 @@ if (JSON_OUT) {
     for (const [k, v] of Object.entries(q.mismatchByField)) {
       console.log(`      어긋난 칸: ${k}  ${v}건`)
     }
+    console.log('  🔴 **두 이름을 가른다** — 신선도 검사 전후는 다른 수다')
+    if (q.readyStockReadFailed !== null) {
+      console.log(`  🔴 READY 재고를 읽지 못했다 — ${q.readyStockReadFailed}`)
+    } else {
+      console.log('  READY 재고(신선도 통과 · d100:readiness 와 같은 selector)'
+        + ` ${q.readyStockIds.length}건  [${q.readyStockIds.join(', ')}]`)
+    }
     for (const l of describeLaneReady(q.lane)) console.log(`  ${l}`)
+    const staleOut = q.lane.lanePublishable - q.readyStockIds.length
+    if (q.readyStockReadFailed === null && staleOut !== 0) {
+      console.log(`  🔴 차이 ${staleOut}건 — 신선도에서 떨어진 몫이다.`
+        + ' 두 수를 같은 이름으로 부르지 않는다')
+    }
     console.log(`  Persona 배정 — 전체 ${q.personaMatchedAll}건 · 창 안 ${q.personaMatchedInWindow}건`
       + ` (matchedAt 기준 · 최근 ${ts(q.lastMatchedAtMs)})`)
     console.log(`  발행 — 연결 ${q.publishedLinked}건 · 창 안 ${q.publishedInWindow}건`

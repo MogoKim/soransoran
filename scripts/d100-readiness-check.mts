@@ -43,10 +43,12 @@ import {
   missingEvents, sumCountedActors,
 } from '../src/lib/north-star'
 import { compareWorkflowSuperset, allStageCronLines, stageGatingPresent } from '../src/lib/scale-workflow-render'
+import { readWorkset } from '../src/lib/supply-workset'
 import {
   judgeStageStatus, buildStageFacts, firstBrokenStage, rateOf, showRate, describeBacklog,
-  MIN_RUNS_FOR_DAILY_RATE, describeLaneReady, laneReadyMisreported,
-  readWorksetManifest, tallySemanticCompletion, stageTimesOf, laneReadyOf,
+  MIN_RUNS_FOR_DAILY_RATE, MIN_PRODUCTION_DAYS, productionRateOf, describeProduction,
+  describeLaneReady, laneReadyMisreported,
+  worksetEvidenceOf, worksetRunIdOf, tallySemanticCompletion, stageTimesOf, laneReadyOf,
   type StageEvidence, type LaneReadySplit, type LaneRow,
 } from '../src/lib/d100-supply-funnel'
 import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
@@ -1336,7 +1338,12 @@ console.log('\n⑭ 🔴 🔴 PR #555 4차 보정 — 승격 수학')
 
   /** 🔴 관측 일수 상수를 없앴다 */
   check('🔴 ⑤-c **observedDays 상수 대신 실제 연속 달성 일수를 쓴다**', (() => {
-    const noConst = !/observedDays/.test(strip(cli)) && !/observedDays/.test(strip(stock))
+    /**
+     * 🔴 **고정 14일 상수 자리**만 본다. `productionRateOf` 의 `observedDays` 는
+     *    "산출이 있던 날 수" 라는 **실측값**이고, 없앤 그 상수와 다른 것이다.
+     */
+    const noConst = !/observedDays: THROUGHPUT_WINDOW_DAYS/.test(strip(stock))
+      && !/observedDays: 14/.test(strip(cli)) && !/observedDays: 14/.test(strip(stock))
       && /stableStreakDays/.test(strip(stock)) && /currentStableStreakDays/.test(strip(cli))
     const NOW = new Date('2026-09-21T00:00:00.000Z')
     const day = (n: number): Date => new Date(NOW.getTime() - n * 86_400_000)
@@ -1784,7 +1791,9 @@ console.log('\n⑱ 🔴 🔴 단계별 사실 연결 — 남의 시각·남의 �
     if (!excludes || !foreign) return false
     const lines = describeLaneReady(real).join(' ')
     return laneReadyMisreported(real, 11) && !laneReadyMisreported(real, 4)
-      && /READY 재고 4건/.test(lines)
+      && /발행기 후보\(신선도 검사 \*\*전\*\*\) 4건/.test(lines)
+      // 🔴 신선도 전 수를 "READY 재고" 라 부르지 않는다
+      && !/READY 재고 4건/.test(lines)
       && /사람 검토 이력 11건/.test(lines)
       && /READY 재고가 아니다/.test(lines)
       // 🔴 깔때기가 좁아지는 것이 보인다
@@ -1796,21 +1805,61 @@ console.log('\n⑱ 🔴 🔴 단계별 사실 연결 — 남의 시각·남의 �
   /**
    * ③ 🔴 **실제 저장 형식**으로 읽는다. 모양이 아니면 `null` 이고 0 이 아니다.
    */
-  check('🔴 ③ **workset manifest 를 정본 구조로 읽는다**', (() => {
-    // 🔴 실제 파일 형식 그대로
+  check('🔴 ③ **workset 은 정본 계약이 판정한다 — 두 번째 규칙을 두지 않는다**', (() => {
+    /** 🔴 실제 파일 형식 그대로 */
+    const RUN = '20260921-003912'
     const realFile = {
-      kind: 'supply-workset', version: 'workset-v1', runId: '20260921-003912',
+      kind: 'supply-workset', version: 'workset-v1', runId: RUN,
       takenAt: '2026-09-21T00:39:13.895Z', limit: 5,
       sourceIds: ['35038277', '35038242', '35038433', '35038800', '35022233'],
     }
-    const m = readWorksetManifest(realFile)
-    const ok = m !== null && m.sourceIds.length === 5 && m.runId === '20260921-003912'
-    // 🔴 깨진 파일·다른 종류는 읽지 않는다 — 0 으로 세지 않는다
-    return ok
-      && readWorksetManifest({ ...realFile, kind: 'something-else' }) === null
-      && readWorksetManifest({ ...realFile, sourceIds: [1, 2] }) === null
-      && readWorksetManifest(null) === null
-      && readWorksetManifest('{"kind":"supply-workset"') === null
+    const one = (json: unknown, file = `supply-workset-${RUN}.json`) =>
+      worksetEvidenceOf([{ file, runId: worksetRunIdOf(file), json }], readWorkset)
+
+    const good = one(realFile)
+    if (good.ok !== 1 || good.sourceIds !== 5 || good.broken.length !== 0) return false
+    if (good.lastTakenAtMs !== Date.parse(realFile.takenAt)) return false
+
+    /**
+     * 🔴 **정상 5건으로 세면 안 되는 반례들.** 전부 실제 함수를 불러 확인한다 —
+     *    앞판의 두 번째 검증기는 아래 넷을 모두 통과시켰다.
+     */
+    const cases: [string, unknown, string][] = [
+      // 🔴 틀린 판
+      ['틀린 version', { ...realFile, version: 'workset-v0' }, 'VERSION'],
+      // 🔴 상한 초과 — 여기서 새는 것이 가장 위험하다
+      ['상한 초과', { ...realFile, limit: 3 }, 'OVER_LIMIT'],
+      // 🔴 읽을 수 없는 takenAt — "시각만 모르는 정상 묶음" 으로 두면 멎은 단계가 초록이다
+      ['잘못된 takenAt', { ...realFile, takenAt: '어제쯤' }, 'SHAPE'],
+      ['takenAt 없음', { ...realFile, takenAt: undefined }, 'SHAPE'],
+      ['다른 종류', { ...realFile, kind: 'something-else' }, 'KIND'],
+      ['빈 id 섞임', { ...realFile, sourceIds: ['35038277', ''] }, 'SHAPE'],
+      ['sourceIds 가 배열이 아니다', { ...realFile, sourceIds: 'a,b' }, 'SHAPE'],
+      ['limit 이 정수가 아니다', { ...realFile, limit: 0 }, 'SHAPE'],
+      ['객체가 아니다', null, 'PARSE'],
+    ]
+    for (const [name, json, code] of cases) {
+      const r = one(json)
+      if (r.ok !== 0 || r.sourceIds !== 0 || r.lastTakenAtMs !== null) return false
+      if (r.broken.length !== 1 || r.broken[0]!.code !== code) return false
+      void name
+    }
+    // 🔴 파일 이름의 회차와 안의 회차가 다르면 받지 않는다
+    const wrongRun = one(realFile, 'supply-workset-20260101-000000.json')
+    if (wrongRun.ok !== 0 || wrongRun.broken[0]!.code !== 'RUN_MISMATCH') return false
+    // 🔴 이름에서 회차를 못 읽으면 받지 않는다
+    const badName = one(realFile, 'workset.json')
+    if (badName.ok !== 0 || badName.broken[0]!.code !== 'NAME') return false
+
+    /** 🔴 관제가 정본을 부르고, 자기 규칙을 따로 두지 않는다 */
+    const src = readFileSync('scripts/d100-supply-funnel.mts', 'utf-8')
+    // 🔴 주석의 낱말은 규칙이 아니다 — 코드에서만 본다
+    const stripC = (t: string): string =>
+      t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const lib = stripC(readFileSync('src/lib/d100-supply-funnel.ts', 'utf-8'))
+    return /readWorkset\b/.test(src) && /worksetEvidenceOf\(/.test(src)
+      // 🔴 두 번째 검증기가 다시 생기면 잡힌다
+      && !/readWorksetManifest/.test(lib) && !/WORKSET_KIND/.test(lib)
   })())
 
   check('🔴 ③-b **검수 미완료를 완료로 세지 않는다**', (() => {
@@ -1838,7 +1887,9 @@ console.log('\n⑱ 🔴 🔴 단계별 사실 연결 — 남의 시각·남의 �
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
     const worksetBlock = src.slice(src.indexOf("stage: 'workset'"), src.indexOf("stage: 'judge'"))
     const semBlock = src.slice(src.indexOf("stage: 'semanticReview'"), src.indexOf("stage: 'candidate'"))
-    return /readWorksetManifest/.test(src) && /tallySemanticCompletion/.test(src)
+    // 🔴 정본 계약을 부른다 — 두 번째 검증기를 두지 않는다
+    return /worksetEvidenceOf\(/.test(src) && /readWorkset\b/.test(src)
+      && /tallySemanticCompletion/.test(src)
       && /stageTimesOf/.test(src)
       // 🔴 두 칸이 judge/draft 파일 시각을 쓰지 않는다
       && !/judgeArt|draftArt|draftCand/.test(worksetBlock)
@@ -1861,6 +1912,110 @@ console.log('\n⑱ 🔴 🔴 단계별 사실 연결 — 남의 시각·남의 �
       && /postTimes: posts\.map\(/.test(src)
       && /linkedPostIds: linkedIds/.test(src)
       && !/postTimes: raw\.map\(/.test(src)
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑲ 🔴 🔴 회차 1번을 생산율로 · 다른 selector 를 같은 이름으로 — 둘 다 FAIL')
+// ─────────────────────────────────────────────────────────
+{
+  const cli = readFileSync('scripts/d100-master-readiness.mts', 'utf-8')
+  const stock = readFileSync('scripts/lib/d100-operational-stock.mts', 'utf-8')
+  const funnelCli = readFileSync('scripts/d100-supply-funnel.mts', 'utf-8')
+  const strip = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  /**
+   * ① 🔴 **canary 3건을 14 로 나눠 승격 입력에 넣지 않는다.**
+   *    실측이 그 모양이었다 — `3 ÷ 14 = 0.2/day` 가 "필요 4/day 에 못 미친다" 의 근거였다.
+   */
+  check('🔴 ① **한 회차 3건은 생산율이 아니다 — 승격 입력이 unmeasured 가 된다**', (() => {
+    // 🔴 공급이 예약으로 돌지 않으면 잴 수 없다
+    const canary = productionRateOf({
+      rows: 3, observedDays: 1, windowDays: 14, scheduledSupplyOn: false,
+    })
+    // 🔴 예약으로 돌아도 산출이 있던 날이 모자라면 잴 수 없다
+    const tooFewDays = productionRateOf({
+      rows: 30, observedDays: MIN_PRODUCTION_DAYS - 1, windowDays: 14, scheduledSupplyOn: true,
+    })
+    // 🔴 여러 날 스스로 돌았을 때만 값을 낸다
+    const real = productionRateOf({
+      rows: 56, observedDays: 14, windowDays: 14, scheduledSupplyOn: true,
+    })
+    if (canary.measured || tooFewDays.measured || !real.measured) return false
+    if (real.perDay !== 4) return false
+    if (!/예약으로 돌고 있지 않다/.test(canary.reason)) return false
+    if (!/산출이 있던 날/.test(tooFewDays.reason)) return false
+
+    /** 🔴 그 unmeasured 가 **승격 판정까지** 이어진다 */
+    const D3 = d100Plan('d3')
+    const v = judgePromotion({
+      current: 'd1', next: 'd3',
+      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      detailPerDay: D3.detailedSourcesRequiredPerDay,
+      // 🔴 canary 는 위에서 `measured:false` 임을 확인했다 — 그래서 `null` 이다
+      readyQualifiedPerDay: null,
+      readyStockDeltaPerDay: 1,
+      publishedPerDay: dailyTargetOf('d1'),
+      currentStableStreakDays: stableObservationDaysOf('d1'),
+      publishRunnerReady: true, commentRunnerReady: true, currentLimitsActive: true,
+    })
+    const blocked = !v.nextPreflight.ready
+      && v.nextPreflight.unmeasured.includes('READY 생산량/day')
+      // 🔴 **0.2/day 미달** 이라는 거짓 이유가 뜨지 않는다
+      && !v.nextPreflight.blocking.some((b) => b.includes('READY 생산'))
+
+    /** 🔴 회차 사실은 따로 적는다 — 나눈 값이 아니다 */
+    const fact = rateOf({ count: 3, runs: 1, days: 14, lastAt: '2026-09-21 11:35' })
+    const lines = describeProduction(canary, fact).join(' ')
+    const separated = /unmeasured/.test(lines) && /회차 1번 3건/.test(lines)
+      && /나눠 생산율이라 부르지 않는다/.test(lines)
+      && !/0\.2/.test(lines)
+
+    /** 🔴 계기판이 그 규칙을 실제로 쓴다 */
+    const wired = /productionRateOf\(/.test(strip(stock))
+      && /scheduledSupplyOn/.test(strip(stock))
+      && /readyQualifiedPerDay: production\.measured \? production\.perDay : null/.test(strip(stock))
+      // 🔴 창 일수로 나누던 옛 배선이 없어야 한다
+      && !/readyQualifiedPerDay: perDayMeasured\(produced/.test(strip(stock))
+      && /describeProduction\(/.test(strip(cli))
+    return blocked && separated && wired
+  })())
+
+  /**
+   * ② 🔴 **두 CLI 가 같은 이름에 같은 selector 를 써야 한다.**
+   *    실측이 4 와 3 으로 갈렸고 양쪽 다 "READY" 라고 불렀다.
+   */
+  check('🔴 ② **신선도 전 후보와 READY 재고를 같은 이름으로 부르지 않는다**', (() => {
+    const split: LaneReadySplit = {
+      humanReviewHistoryAll: 25, humanReviewHistoryInWindow: 11,
+      laneContract: 10, laneNotRejected: 10, laneUnpublished: 4, lanePublishable: 4,
+    }
+    const lines = describeLaneReady(split).join(' ')
+    // 🔴 신선도 전 수를 "READY 재고" 라 부르지 않는다
+    const named = /발행기 후보\(신선도 검사 \*\*전\*\*\) 4건/.test(lines)
+      && !/READY 재고 4건/.test(lines)
+      && /사람 검토 이력 11건/.test(lines)
+
+    /** 🔴 두 CLI 가 **같은 함수**로 재고를 낸다 */
+    const sameSelector = /readStockFunnel\(/.test(strip(funnelCli))
+      && /prismaStockRepo\(/.test(strip(funnelCli))
+      && /readStockFunnel\(/.test(strip(stock))
+      // 🔴 양쪽이 행 id 를 내보낸다 — 수가 아니라 집합으로 대조할 수 있다
+      && /readyStockIds/.test(strip(funnelCli)) && /readyStockIds/.test(strip(stock))
+      && /readyStockIds/.test(strip(cli))
+      // 🔴 funnel 이 자기 신선도 판정을 따로 만들지 않는다
+      && !/freshnessOf\(/.test(strip(funnelCli))
+      /**
+       * 🔴 **재고 id 는 정본 reader 의 산물이어야 한다.**
+       *    자기 selector 결과(`publishableIds`)를 그 자리에 넣으면 신선도 전 4건이
+       *    "READY 재고" 로 새어 나간다 — 두 CLI 가 다시 갈라진다.
+       */
+      && /readyStockIds: stockRead\.ok \? \[\.\.\.stockRead\.rows\.sets\.publishableNow\]/.test(strip(funnelCli))
+      && !/readyStockIds: publishableIds/.test(strip(funnelCli))
+      /** 🔴 workset 판정을 정본 `readWorkset` 에 넘긴다 — 인라인 대체를 막는다 */
+      && /worksetEvidenceOf\(\s*worksetFiles[\s\S]{0,200}?readWorkset,\s*\)/.test(strip(funnelCli))
+    return named && sameSelector
   })())
 }
 

@@ -114,6 +114,69 @@ export function buildStageFacts(input: {
  */
 export const MIN_RUNS_FOR_DAILY_RATE = 2
 
+/**
+ * 🔴 **정기 운영의 일일 생산율을 말할 자격** (2026-09-21 8차 보정).
+ *
+ *    `rateOf` 는 "회차가 둘 이상인가" 만 본다. 그런데 하루에 손으로 두 번 돌려도
+ *    회차는 둘이다 — 그것으로 "정기 운영 생산율" 을 말할 수는 없다.
+ *
+ *    생산율은 **여러 날에 걸쳐 스스로 돈 기록**이 있을 때만 잰다:
+ *      · 산출이 있었던 **서로 다른 날**이 `MIN_PRODUCTION_DAYS` 이상이고
+ *      · 공급 스위치가 켜져 있어 **예약으로 도는 상태**여야 한다
+ *
+ *    둘 중 하나라도 아니면 `unmeasured` 다 — 0 도, 나눈 값도 아니다.
+ */
+export const MIN_PRODUCTION_DAYS = 3
+
+export type ProductionRate =
+  | { measured: true; perDay: number; days: number; observedDays: number; rows: number }
+  | { measured: false; reason: string; rows: number; observedDays: number }
+
+export function productionRateOf(input: {
+  /** 창 안에 만들어진 행 수 */
+  rows: number
+  /** 🔴 산출이 있었던 **서로 다른 날** 수 */
+  observedDays: number
+  /** 창 길이 */
+  windowDays: number
+  /** 🔴 공급이 예약으로 도는 상태인가 */
+  scheduledSupplyOn: boolean
+}): ProductionRate {
+  const base = { rows: input.rows, observedDays: input.observedDays }
+  if (input.windowDays <= 0) return { measured: false, reason: '창 길이가 없다', ...base }
+  if (!input.scheduledSupplyOn) {
+    return {
+      measured: false,
+      reason: '공급이 예약으로 돌고 있지 않다 — 손으로 돌린 회차로 정기 생산율을 말할 수 없다',
+      ...base,
+    }
+  }
+  if (input.observedDays < MIN_PRODUCTION_DAYS) {
+    return {
+      measured: false,
+      reason: `산출이 있던 날이 ${input.observedDays}일 < 최소 ${MIN_PRODUCTION_DAYS}일`,
+      ...base,
+    }
+  }
+  return {
+    measured: true,
+    perDay: Math.round((input.rows / input.windowDays) * 10) / 10,
+    days: input.windowDays, ...base,
+  }
+}
+
+/** 🔴 회차 사실은 생산율과 **따로** 적는다 — 나눠서 일간 값으로 만들지 않는다 */
+export function describeProduction(r: ProductionRate, runFact: RateReading): string[] {
+  const head = r.measured
+    ? `정기 READY 생산 ${r.perDay}/day (${r.rows}건 · ${r.observedDays}일 관측 · 창 ${r.days}일)`
+    : `정기 READY 생산 unmeasured — ${r.reason}`
+  return [
+    head,
+    `이번 회차 사실: ${showRate(runFact)}`,
+    '🔴 회차 결과를 창 일수로 나눠 생산율이라 부르지 않는다',
+  ]
+}
+
 export type RateReading =
   | { kind: 'daily'; perDay: number; runs: number; days: number }
   | { kind: 'singleRun'; count: number; at: string | null }
@@ -233,9 +296,15 @@ export function laneReadyOf(input: {
   }
 }
 
+/**
+ * 🔴 **`lanePublishable` 은 신선도 검사 *전* 의 발행기 후보다** (2026-09-21 8차 보정).
+ *
+ *    `d100:readiness` 의 READY 재고는 **신선도까지 통과한** 수다. 두 수가 4 와 3 으로
+ *    갈렸는데 양쪽 다 "READY" 라고 불렀다 — 이름이 같으면 어느 쪽이 맞는지 물을 수 없다.
+ */
 export function describeLaneReady(r: LaneReadySplit): string[] {
   return [
-    `🔴 현재 레인 READY 재고 ${r.lanePublishable}건`
+    `발행기 후보(신선도 검사 **전**) ${r.lanePublishable}건`
     + ` (계약 ${r.laneContract} → 미거절 ${r.laneNotRejected} → 미발행 ${r.laneUnpublished}`
     + ` → 발행기 통과 ${r.lanePublishable})`,
     `사람 검토 이력 ${r.humanReviewHistoryInWindow}건(창 안) · ${r.humanReviewHistoryAll}건(전체)`
@@ -308,32 +377,65 @@ export function stageTimesOf(input: {
  *    그것은 "judge 가 돌았다" 는 근거이지 "묶음이 몇 건이었나" 도
  *    "검수가 몇 건 끝났나" 도 아니다. 파일이 없거나 깨졌을 때만 `unmeasured` 다.
  */
-export type WorksetManifest = {
-  kind: string
-  version: string
-  runId: string
-  takenAt: string
-  limit: number
-  sourceIds: readonly string[]
+/**
+ * 🔴 **정본 계약을 다시 적지 않는다** (2026-09-21 8차 보정).
+ *
+ *    앞판은 여기에 `readWorksetManifest` 라는 **두 번째 검증기**를 만들었다.
+ *    그것은 `kind` 와 `sourceIds` 모양만 봤고, **틀린 version·상한 초과·읽을 수 없는
+ *    takenAt** 을 전부 정상으로 받았다 — 실제 러너가 거부하는 파일을 관제는
+ *    "정상 5건" 으로 세는 상태였다.
+ *
+ *    검증은 `supply-workset.readWorkset` 하나가 한다. 여기서는 그 결과를
+ *    **깨진 증거**로 옮겨 적기만 한다.
+ */
+export type WorksetFileRead = {
+  file: string
+  /** 파일 이름에서 뽑은 회차 — 정본 `readWorkset` 이 회차 일치까지 본다 */
+  runId: string | null
+  json: unknown
 }
 
-export const WORKSET_KIND = 'supply-workset'
-
-/** 🔴 모양이 아니면 읽지 않는다 — 깨진 파일을 0 으로 세지 않는다 */
-export function readWorksetManifest(v: unknown): WorksetManifest | null {
-  if (v === null || typeof v !== 'object') return null
-  const o = v as Record<string, unknown>
-  if (o.kind !== WORKSET_KIND) return null
-  if (typeof o.runId !== 'string' || typeof o.takenAt !== 'string') return null
-  if (!Array.isArray(o.sourceIds)) return null
-  const ids = o.sourceIds.filter((x): x is string => typeof x === 'string')
-  if (ids.length !== o.sourceIds.length) return null
-  return {
-    kind: o.kind, version: typeof o.version === 'string' ? o.version : '(모름)',
-    runId: o.runId, takenAt: o.takenAt,
-    limit: typeof o.limit === 'number' ? o.limit : ids.length,
-    sourceIds: ids,
+/**
+ * 🔴 **정본 `readWorkset` 을 그대로 부른다.** 여기서 조건을 하나라도 다시 적으면
+ *    러너가 거부하는 파일을 관제가 받는 상태가 다시 생긴다.
+ */
+export function worksetEvidenceOf(
+  files: readonly WorksetFileRead[],
+  read: (raw: unknown, expectRunId: string) => (
+    | { ok: true; sourceIds: ReadonlySet<string>; limit: number; takenAtMs: number }
+    | { ok: false; code: string; reason: string }
+  ),
+): WorksetEvidence {
+  const out: WorksetEvidence = { ok: 0, sourceIds: 0, broken: [], lastTakenAtMs: null }
+  for (const f of files) {
+    if (f.runId === null) {
+      out.broken.push({ file: f.file, code: 'NAME', reason: '파일 이름에서 회차를 읽을 수 없다' })
+      continue
+    }
+    const r = read(f.json, f.runId)
+    if (!r.ok) { out.broken.push({ file: f.file, code: r.code, reason: r.reason }); continue }
+    out.ok += 1
+    out.sourceIds += r.sourceIds.size
+    if (out.lastTakenAtMs === null || r.takenAtMs > out.lastTakenAtMs) out.lastTakenAtMs = r.takenAtMs
   }
+  return out
+}
+
+/** 🔴 `supply-workset-<runId>.json` — 이름에서 회차를 뽑는다 */
+export function worksetRunIdOf(fileName: string): string | null {
+  const m = /^supply-workset-(.+)\.json$/.exec(fileName)
+  return m === null ? null : m[1]!
+}
+
+export type WorksetEvidence = {
+  /** 읽힌 묶음 수 */
+  ok: number
+  /** 🔴 묶음에 든 원천 수 합계 — 읽힌 것만 센다 */
+  sourceIds: number
+  /** 🔴 거부된 파일과 그 이유 코드 */
+  broken: { file: string; code: string; reason: string }[]
+  /** 가장 늦은 `takenAt`(ms) — 읽힌 것이 없으면 `null` */
+  lastTakenAtMs: number | null
 }
 
 /**

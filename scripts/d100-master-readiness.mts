@@ -38,6 +38,7 @@ import {
   readOperationalStock, releaseStageFromEnvText, runReadiness,
 } from './lib/d100-operational-stock.mjs'
 import { SNAPSHOT_PATH } from './lib/d100-ready-snapshot.mjs'
+import { describeProduction, MIN_PRODUCTION_DAYS } from '../src/lib/d100-supply-funnel'
 import { NORTH_STAR_MISSING_EVENTS, northStar } from '../src/lib/north-star'
 
 const JSON_OUT = process.argv.slice(2).includes('--json')
@@ -109,6 +110,12 @@ const run = await runReadiness({
     dailyCap: PROFILES[currentReleaseStage].dailyTarget,
     currentDailyTarget: dailyTargetOf(currentReleaseStage),
     publishRunnerLoaded,
+    /**
+     * 🔴 공급이 **예약으로** 도는가. 스위치가 꺼져 있으면 최근 산출물이 있어도
+     *    그것은 손으로 돌린 회차이고, 정기 생산율의 근거가 되지 않는다.
+     */
+    scheduledSupplyOn: envFlag('SORAN_SUPPLY_PROCESS_ENABLED')
+      && installed('com.soransoran.supply-process'),
     repoRoot: process.cwd(),
     recordSnapshot: RECORD_SNAPSHOT,
   }),
@@ -279,6 +286,8 @@ if (JSON_OUT) {
     nextStage,
     plan, promotion: promo,
     stock: read.ok ? funnel : { readFailed: read.detail },
+    // 🔴 `d100:funnel` 과 **같은 selector** 의 산물 — 집합으로 대조한다
+    readyStockIds: read.ok ? read.readyStockIds : null,
     activePersonas: activePersonas === null ? UNMEASURED : activePersonas,
     capabilities: readiness,
     capabilityFacts: facts,
@@ -292,6 +301,8 @@ if (JSON_OUT) {
       detailUnmeasuredSources: read.ok ? read.detail.unmeasuredSources : DETAIL_SOURCES,
       // 🔴 생산량과 재고 증감은 **다른 값**이다. 한 칸에 합치지 않는다
       readyQualifiedPerDay,
+      readyProduction: read.ok ? read.readyProduction : null,
+      readyRunFact: read.ok ? read.readyRunFact : null,
       readyStockDelta: read.ok ? read.readyStockDelta
         : { measured: false, reason: '재고를 읽지 못했다' },
       readyStockDeltaPerDay,
@@ -401,6 +412,13 @@ if (JSON_OUT) {
   console.log('    🔴 **생산량**과 **재고 증감**은 다른 값이다 — 여유율 20% 는 생산량에 붙는다')
   console.log(`    READY 생산량/day    ${showMeasured(readyQualifiedPerDay)}`
     + `   (목표 ${plan.readyQualifiedRequiredPerDay}/day)`)
+  if (read.ok) {
+    for (const l of describeProduction(read.readyProduction, read.readyRunFact)) {
+      console.log(`      · ${l}`)
+    }
+    console.log(`      · 정기 생산율을 재려면 공급이 예약으로 돌고 산출이 있던 날이`
+      + ` ${MIN_PRODUCTION_DAYS}일 이상이어야 한다`)
+  }
   console.log(`    재고 증감/day       ${showMeasured(readyStockDeltaPerDay)}`
     + '   🔴 여기에 목표를 요구하지 않는다. 재고를 채운 뒤 음수면 고갈 위험이다')
   if (read.ok && !read.readyStockDelta.measured) console.log(`      · ${read.readyStockDelta.reason}`)

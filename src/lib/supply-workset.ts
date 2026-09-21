@@ -466,7 +466,13 @@ export function selectWorkset(input: {
 
 export type WorksetFail = 'MISSING' | 'PARSE' | 'KIND' | 'VERSION' | 'RUN_MISMATCH' | 'SHAPE' | 'OVER_LIMIT'
 export type WorksetRead =
-  | { ok: true; sourceIds: ReadonlySet<string>; limit: number }
+  | {
+      ok: true
+      sourceIds: ReadonlySet<string>
+      limit: number
+      /** 🔴 이 묶음을 집은 시각(ms) — 관제가 단계 상태를 이 값으로 판정한다 */
+      takenAtMs: number
+    }
   | { ok: false; code: WorksetFail; reason: string }
 
 /**
@@ -494,7 +500,18 @@ export function readWorkset(raw: unknown, expectRunId: string): WorksetRead {
   if (ids.length > limit) {
     return { ok: false, code: 'OVER_LIMIT', reason: `${ids.length}건 > 상한 ${limit}건` }
   }
-  return { ok: true, sourceIds: new Set(ids), limit }
+  /**
+   * 🔴 **`takenAt` 이 시각이 아니면 받지 않는다** (2026-09-21 보정).
+   *
+   *    이 값은 "이 묶음을 언제 집었나" 의 유일한 근거이고, 관제가 단계 상태를
+   *    그 시각으로 판정한다. 읽을 수 없는 값이면 **묶음이 없는 것**으로 다뤄야지
+   *    "시각만 모르는 정상 묶음" 으로 두면 안 된다 — 그러면 멎은 단계가 계속 초록이다.
+   */
+  const takenAtMs = parseInstantMs(o.takenAt)
+  if (takenAtMs === null) {
+    return { ok: false, code: 'SHAPE', reason: `takenAt 을 읽을 수 없다 (${String(o.takenAt)})` }
+  }
+  return { ok: true, sourceIds: new Set(ids), limit, takenAtMs }
 }
 
 export type StageBudget = {

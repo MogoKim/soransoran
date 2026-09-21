@@ -29,6 +29,9 @@ import { personaTierReadiness, personaReadinessOk, type TierReadiness } from '..
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 import type { PersonaForMatch } from '../../src/lib/original-post-persona-match'
 import type { D100Stage } from '../../src/lib/d100-capacity'
+import {
+  productionRateOf, rateOf, type ProductionRate, type RateReading,
+} from '../../src/lib/d100-supply-funnel'
 import { resolveStage, RELEASE_ENV } from '../../src/lib/scale-profile'
 import { ANCHOR_MIN_COMMENTS, bundlesForPersonas } from './persona-reference-store.mjs'
 // 🔴 재고와 **같은 판정 함수**를 쓴다 — 여기서 규칙을 다시 적으면 두 숫자가 갈라진다
@@ -44,6 +47,8 @@ export type OperationalStock =
   | {
       ok: true
       funnel: StockFunnel
+      /** 🔴 재고를 이루는 **행 id** — 다른 CLI 와 집합으로 대조하기 위한 값이다 */
+      readyStockIds: string[]
       links: LinkSummary
       activePersonas: number
       /**
@@ -56,8 +61,16 @@ export type OperationalStock =
        * 🔴 **생산량.** 창 안에 만들어진 READY 후보 수다 —
        *    발행·만료로 빠진 몫을 빼지 않았으므로 **순증가가 아니다.**
        */
-      /** 🔴 **새로 품질을 통과한 READY 생산량.** 여유율 20% 가 붙는 값이다 */
+      /**
+       * 🔴 **정기 운영의 READY 생산량.** 여유율 20% 가 붙는 값이다.
+       *    여러 날 스스로 돈 기록이 없으면 `null`(unmeasured) 이다 —
+       *    회차 한 번의 결과를 창 일수로 나누지 않는다.
+       */
       readyQualifiedPerDay: Measured
+      /** 🔴 그 판정의 근거 전부 */
+      readyProduction: ProductionRate
+      /** 🔴 **회차 사실** — 생산율과 따로 적는다 */
+      readyRunFact: RateReading
       /** 🔴 **두 스냅샷 사이의 실제 재고 증감.** 생산량과 다른 값이다 */
       readyStockDelta: NetChange
       readyStockDeltaPerDay: Measured
@@ -466,6 +479,10 @@ export type StockReadOptions = {
   currentDailyTarget: number
   /** 🔴 발행 runner 가 실제로 돌 수 있는가 — 예약량과 예측값을 가른다 */
   publishRunnerLoaded: boolean
+  /**
+   * 🔴 **공급이 예약으로 도는가.** 손으로 돌린 회차로 정기 생산율을 말하지 않는다.
+   */
+  scheduledSupplyOn: boolean
 }
 
 /** 🔴 `--record-snapshot` 을 켰는데 기록에 실패한 경우 */
@@ -534,6 +551,30 @@ export async function readOperationalStock(
     })
 
     /**
+     * 🔴 **회차 한 번을 창 일수로 나누지 않는다** (2026-09-21 8차 보정).
+     *
+     *    앞판은 `3건 ÷ 14일 = 0.2/day` 를 D3 승격 입력에 넣었다. 그 3건은
+     *    **손으로 돌린 canary 한 회차**의 산물이고, 정기 운영은 하루도 없었다.
+     *    "0.2/day 라서 4/day 에 못 미친다" 는 판정은 근거가 없는 수를 근거로 삼은 것이다.
+     */
+    const kstDay = (d: Date): string =>
+      new Date(d.getTime() + 9 * 3600_000).toISOString().slice(0, 10)
+    const producedDays = new Set(produced.map((r) => kstDay(r.decidedAt ?? r.createdAt))).size
+    const lastProducedAt = produced.length === 0 ? null
+      : new Date(Math.max(...produced.map((r) => (r.decidedAt ?? r.createdAt).getTime())))
+    const production = productionRateOf({
+      rows: produced.length, observedDays: producedDays,
+      windowDays: THROUGHPUT_WINDOW_DAYS, scheduledSupplyOn: opts.scheduledSupplyOn,
+    })
+    // 🔴 회차 사실은 따로 남긴다 — 생산율 자리에 넣지 않는다
+    const runFact = rateOf({
+      count: produced.length, runs: producedDays, days: THROUGHPUT_WINDOW_DAYS,
+      lastAt: lastProducedAt === null ? null
+        : kstDay(lastProducedAt) + ' ' + new Date(lastProducedAt.getTime() + 9 * 3600_000)
+          .toISOString().slice(11, 16),
+    })
+
+    /**
      * 🔴 **순증가는 두 시점의 재고 차이뿐이다.** 스냅샷이 없으면 `unmeasured` —
      *    생산량으로 갈음하지 않는다.
      */
@@ -584,11 +625,14 @@ export async function readOperationalStock(
       ok: true,
       // 🔴 깔때기에는 **지금 실제로 예약된 양**을 적는다. 예측값이 아니다
       funnel: { ...read.funnel, scheduledIn7Days: actual7, scheduledIn14Days: actual14 },
+      readyStockIds: [...read.rows.sets.publishableNow],
       links,
       activePersonas,
       detail,
       detailPerDay: detail.perDay,
-      readyQualifiedPerDay: perDayMeasured(produced.length, THROUGHPUT_WINDOW_DAYS),
+      readyQualifiedPerDay: production.measured ? production.perDay : null,
+      readyProduction: production,
+      readyRunFact: runFact,
       readyStockDelta,
       readyStockDeltaPerDay: readyStockDelta.measured ? readyStockDelta.perDay : null,
       publishedPerDay: perDayMeasured(publishedInWindow, THROUGHPUT_WINDOW_DAYS),
