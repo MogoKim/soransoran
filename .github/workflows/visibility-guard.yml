@@ -216,6 +216,18 @@ jobs:
       - name: 브랜드 자산 manifest
         run: npm run check:brand-assets
 
+      # 🔴 목록 쪽 이동 경계값 가드. 여기도 순수 파일 검사라 Prisma 앞에 둔다
+      #    (src/lib/list-query.ts 는 import 가 하나도 없다 — 몇 초에 끝난다).
+      #
+      #    이 가드가 막는 것은 **화면으로는 안 보이는 고장**이다:
+      #      · page 파싱이 `3.9` 를 3쪽으로 추측해 적힌 것과 다른 화면을 여는 것
+      #      · 범위를 넘긴 쪽이 404 대신 빈 200 이 되어 막다른 골목·soft-404 가 되는 것
+      #      · 자릿수가 긴 값이 Prisma skip 에 닿아 404 가 아니라 500 이 나는 것
+      #    셋 다 빌드도 타입도 통과하고, 사람이 알아채는 때는 이미 배포된 뒤다 —
+      #    check:visibility · check:tokens 를 여기 둔 것과 같은 이유로 CI 가 본다.
+      - name: 목록 쪽 이동 가드
+        run: npm run check:pagination
+
       # typecheck 는 @prisma/client 타입을 필요로 한다.
       # generate 는 스키마만 읽으므로 DB 접속이 없다 — CI 에 DATABASE_URL 을 두지 않는다.
       - name: Prisma Client 생성
