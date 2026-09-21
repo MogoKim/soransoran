@@ -123,6 +123,25 @@ const JUDGE_PAYLOAD = {
 }
 
 // 🔴 prefill 뒤를 이어 쓰는 모양 — 여는 `{` 를 뺀다 (Anthropic 전용)
+/**
+ * 🔴 **제안받은 후보 중에서 고른다** (2026-09-22).
+ *
+ *    앞판은 언제나 `P01` 을 돌려줬다. 그런데 생성 계획은 원천마다
+ *    **서로 다른 후보 묶음**을 제안한다(화자 여력 계획) — 제안에 없는 이름을
+ *    돌려주는 provider 는 현실에 없고, 그런 가짜는 **실제보다 강하다.**
+ *    요청 본문의 `후보` 목록을 읽어 그 안에서 고른다. 못 읽으면 기본값이다.
+ */
+const pickOffered = (body) => {
+  try {
+    const parsed = JSON.parse(String(body ?? '{}'))
+    const raw = JSON.stringify(parsed)
+    const codes = [...raw.matchAll(/\b(P\d{2})\b/g)].map((m) => m[1])
+    if (codes.length === 0) return PERSONA
+    return codes.includes(PERSONA) ? PERSONA : codes[0]
+  } catch { return PERSONA }
+}
+const payloadFor = (body) => ({ ...PAYLOAD, personaCode: pickOffered(body) })
+
 const TEXT = JSON.stringify(PAYLOAD).slice(1)
 /** 🔴 Gemini 는 prefill 이 없다 — 완전한 JSON 을 돌려준다 */
 const GEMINI_TEXT = JSON.stringify(PAYLOAD)
@@ -148,8 +167,10 @@ globalThis.fetch = async (url, init) => {
   const isCount = u.includes('/count_tokens') || u.includes(':countTokens')
   const isGemini = u.includes('generativelanguage.googleapis.com')
   const isJudge = String(init?.body ?? '').includes(JUDGE_MARK)
-  const text = isJudge ? JUDGE_TEXT : TEXT
-  const geminiText = isJudge ? JUDGE_GEMINI_TEXT : GEMINI_TEXT
+  // 🔴 계획 요청이면 **제안받은 후보 중에서** 고른 응답을 만든다
+  const planText = JSON.stringify(payloadFor(init?.body))
+  const text = isJudge ? JUDGE_TEXT : planText.slice(1)
+  const geminiText = isJudge ? JUDGE_GEMINI_TEXT : planText
   if (LOG !== '') appendFileSync(LOG, `${isCount ? 'count' : 'paid'}\t${u}\n`)
   if (BODY_LOG !== '' && !isCount) {
     // 🔴 한 줄 JSON 으로 남긴다 — 검사가 줄 단위로 읽는다. url 을 함께 적어
