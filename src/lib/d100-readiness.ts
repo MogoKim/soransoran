@@ -35,8 +35,9 @@ export type StockFunnel = {
   fresh: number
   personaAssignable: number
   publishableNow: number
-  scheduledIn7Days: number
-  scheduledIn14Days: number
+  /** 🔴 실제 예측기가 낸 7일 전망. **재지 못했으면 `null`** — 0 이 아니다 */
+  scheduledIn7Days: Measured
+  scheduledIn14Days: Measured
   readyStock: number
 }
 
@@ -97,8 +98,9 @@ export function judgeFunnelRows(input: FunnelRowsInput): FunnelProblem[] {
 
 /** 🔴 행 집합 → 숫자. 숫자를 따로 세지 않는다 — 같은 집합에서 만든다 */
 export function funnelFromRows(input: FunnelRowsInput & {
-  scheduledIn7Days: number
-  scheduledIn14Days: number
+  /** 🔴 예측기가 낸 값. 입력이 없으면 `null` 이다 — 0 을 넣지 않는다 */
+  scheduledIn7Days: Measured
+  scheduledIn14Days: Measured
 }): StockFunnel {
   const n = (k: FunnelStage): number => input.sets[k].length
   return {
@@ -130,11 +132,17 @@ export type FunnelRead =
  */
 export function judgeFunnel(f: StockFunnel): FunnelProblem[] {
   const out: FunnelProblem[] = []
-  const order: (keyof StockFunnel)[] = [
+  /**
+   * 🔴 **세는 칸만 견준다.** 예약 전망은 `Measured`(null 가능)이고 깔때기 칸이 아니다 —
+   *    같은 목록에 넣으면 "전망이 재고보다 크다" 같은 뜻 없는 비교가 생긴다.
+   */
+  type CountKey = 'queueTotal' | 'unpublishedApproved' | 'profileCompatible'
+    | 'humanReviewed' | 'fresh' | 'personaAssignable' | 'publishableNow'
+  const order: CountKey[] = [
     'unpublishedApproved', 'profileCompatible', 'humanReviewed', 'fresh',
     'personaAssignable', 'publishableNow',
   ]
-  let prevKey: keyof StockFunnel = 'queueTotal'
+  let prevKey: CountKey = 'queueTotal'
   for (const k of order) {
     if (f[k] > f[prevKey]) {
       out.push({ code: 'FUNNEL_WIDENS', detail: `${k} ${f[k]} > ${prevKey} ${f[prevKey]}` })

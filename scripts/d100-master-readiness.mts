@@ -20,8 +20,11 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 import {
-  allD100Plans, d100Plan, judgePromotion, nextStage, READY_NET_MARGIN, type D100Stage,
+  allD100Plans, d100Plan, judgePromotion, currentPlanOf, targetStageFor,
+  READY_NET_MARGIN, type D100Stage,
 } from '../src/lib/d100-capacity'
+import { RELEASE_ENV, PROFILES } from '../src/lib/scale-profile'
+import { DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
 import {
   CAPABILITIES, allCapabilitiesReady, capabilityBlockers, runnerFactsOf, capabilityFactsReady,
   showMeasured, summarizeLinks, linkCriticalCount, hiddenPostNote, UNMEASURED,
@@ -29,9 +32,10 @@ import {
 } from '../src/lib/d100-readiness'
 import {
   RECOVERY_PLAN, CANARY_CONTRACT, ESCALATION_LADDER, NO_AUTO_RETRY_SIGNALS,
-  capacities82, ladderStepFor,
+  capacities82, judgeLadder, TOP_STEP_INCIDENT_FREE_DAYS,
 } from '../src/lib/collect-82cook-recovery'
-import { readOperationalStock } from './lib/d100-operational-stock.mjs'
+import { readOperationalStock, releaseStageFromEnvText } from './lib/d100-operational-stock.mjs'
+import { SNAPSHOT_PATH } from './lib/d100-ready-snapshot.mjs'
 import { NORTH_STAR_MISSING_EVENTS, northStar } from '../src/lib/north-star'
 
 const JSON_OUT = process.argv.slice(2).includes('--json')
@@ -63,21 +67,48 @@ const envText = existsSync(join(APP_DIR, 'env.local'))
 const envFlag = (name: string): boolean =>
   new RegExp(`^${name}=true\\s*$`, 'm').test(envText)
 
-const stage: D100Stage = 'd3'
-const plan = d100Plan(stage)
+/**
+ * 🔴 **지금 단계는 코드가 아니라 env 가 정한다** (2026-09-21 3차 보정).
+ *
+ *    앞판은 `stage = 'd3'` 를 박아 두고 그것을 "지금 단계" 라고 적었다.
+ *    실제 `SORAN_RELEASE_STAGE` 는 **d1** 이다 — 하루 1편 내는 레인을 3편이라고
+ *    적어 두고 그 위에서 승격을 물었으니, 한 칸이 통째로 건너뛰어졌다.
+ *
+ * 🔴 판정은 정본 `resolveStage` 가 한다. 모르는 값은 가장 안전한 단계로 떨어진다.
+ */
+const resolved = releaseStageFromEnvText(envText)
+const currentReleaseStage = resolved.stage
+/** 🔴 올라가려는 단계 — 모든 승격 판정이 이 단계의 필요량을 쓴다 */
+const targetStage: D100Stage = targetStageFor(currentReleaseStage)
+/** 🔴 d1 은 D100 표에 없다 — 없는 칸을 d3 으로 올려 읽지 않는다 */
+const currentPlan = currentPlanOf(currentReleaseStage)
+const plan = d100Plan(targetStage)
 
 /**
  * 🔴 **운영 DB 를 read-only 로 읽는다.** Raw SQL 0 · write 0.
  *    못 읽으면 0 이 아니라 `readFailed` 다 — 재고 없음과 못 읽음을 같은 화면으로 두지 않는다.
  */
-const read = await readOperationalStock()
+const RECORD_SNAPSHOT = process.argv.slice(2).includes('--record-snapshot')
+const read = await readOperationalStock(new Date(), {
+  targetStage,
+  // 🔴 예측기에는 **지금 운영 중인** 단계의 상한을 넘긴다 — 목표 단계가 아니다
+  dailyCap: PROFILES[currentReleaseStage].dailyTarget,
+  repoRoot: process.cwd(),
+  recordSnapshot: RECORD_SNAPSHOT,
+})
 const funnel = read.ok ? read.funnel : null
 const linkSummary = read.ok ? read.links : summarizeLinks([])
 const activePersonas: Measured = read.ok ? read.activePersonas : null
 /** 🔴 관측값이다 — 못 읽었거나 창 안에 아무 것도 없으면 `null`(unmeasured) 이다 */
 const detailPerDay: Measured = read.ok ? read.detailPerDay : null
+/** 🔴 **생산량이다.** 승격 입력으로 쓰지 않는다 */
+const readyProducedPerDay: Measured = read.ok ? read.readyProducedPerDay : null
+/** 🔴 **순증가다.** 두 시점 재고 차이로만 나온다 */
 const readyNetPerDay: Measured = read.ok ? read.readyNetPerDay : null
+const publishedPerDay: Measured = read.ok ? read.publishedPerDay : null
 const observedDays = read.ok ? read.observedDays : 0
+const personaTiers = read.ok ? read.personaTiers : []
+const personaReady = read.ok ? read.personaReady : false
 
 /**
  * 🔴 **runner 는 라벨 하나가 아니라 사실의 묶음이다.**
@@ -110,6 +141,12 @@ const facts: Readonly<Record<Capability, RunnerFacts>> = {
    * 🔴 수집은 job 이 올라와 있는 것으로 끝나지 않는다 —
    *    **이 단계가 요구하는 상세 건수를 실제로 채우는가**까지 본다.
    */
+  /**
+   * 🔴 **수집은 job 하나가 아니다** (2026-09-21 3차 보정).
+   *    앞판은 wgang 하나만 보고 `collect: ready` 라 적었다 — remonterrace 도 82cook 도
+   *    같은 능력에 들어가는데 화면에 없었다. 아래 `collectJobs` 가 전부를 따로 보여 주고,
+   *    능력 판정은 **목표 단계의 실측 상세/day** 로 한다.
+   */
   collect: factsOf('com.soransoran.navercafe-collect-wgang-multi', true, {
     requiredPerDay: plan.detailedSourcesRequiredPerDay, observedPerDay: detailPerDay,
   }),
@@ -125,17 +162,41 @@ const facts: Readonly<Record<Capability, RunnerFacts>> = {
   measure: measureFacts(),
 }
 
+/** 🔴 공급원별 수집 job — 하나만 보여 주면 나머지가 죽어도 초록이다 */
+const COLLECT_JOBS = [
+  { source: 'navercafe:wgang', label: 'com.soransoran.navercafe-collect-wgang-multi', env: null },
+  { source: 'navercafe:remonterrace', label: 'com.soransoran.navercafe-collect-remonterrace-multi', env: null },
+  // 🔴 82cook 은 **필수 공급원**인데 지금 등록되어 있지 않다. 그 사실이 화면에 보여야 한다
+  { source: '82cook', label: 'com.soransoran.raw-collect-82cook', env: 'SORAN_82COOK_COLLECT_ENABLED' },
+] as const
+
+const collectJobs = COLLECT_JOBS.map((j) => ({
+  source: j.source,
+  label: j.label,
+  facts: factsOf(j.label, j.env === null ? true : envFlag(j.env)),
+}))
+
 const readiness: CapabilityReadiness = {
   collect: facts.collect.state, generate: facts.generate.state,
   publish: facts.publish.state, comment: facts.comment.state, measure: facts.measure.state,
 }
 
 const promo = judgePromotion({
-  stage,
+  current: currentReleaseStage,
+  // 🔴 **목표 단계의 필요량**으로 잰다 — 지금 단계 수치만 채우고 올라가지 않는다
+  target: targetStage,
   // 🔴 못 읽었으면 승격 판정도 하지 않는다 — 0 으로도 -1 로도 내려가지 않는다
   readyStock: funnel?.readyStock ?? null,
-  activePersonas,
-  detailPerDay, readyNetPerDay, observedDays,
+  /**
+   * 🔴 **Persona 3계층이 전부 ready 일 때만 인원을 셌다고 말한다.**
+   *    active 수만 넘기면 카드만 있는 사람이 "쓸 수 있는 사람" 으로 들어간다.
+   */
+  activePersonas: personaReady ? activePersonas : null,
+  detailPerDay,
+  // 🔴 생산량이 아니라 순증가를 넘긴다
+  readyNetPerDay,
+  publishedPerDay,
+  observedDays,
   publishRunnerReady: capabilityFactsReady(facts.publish),
   commentRunnerReady: capabilityFactsReady(facts.comment),
 })
@@ -148,11 +209,19 @@ const promo = judgePromotion({
  * 🔴 82cook 용량 — 아직 아무것도 재지 않았다. 관측값은 `null` 이다.
  *    무사 회차도 0 이라 사다리는 첫 칸이다.
  */
-const ladder = ladderStepFor({ cleanRuns: 0, sawAbortSignal: false })
+/**
+ * 🔴 아직 아무 회차도 돌지 않았다 — 1칸이고, 관측도 승인도 없다.
+ *    `operatingApprovedBy: null` 이 자동 승격을 막는 자물쇠다.
+ */
+const ladder = judgeLadder({
+  currentStep: 1, cleanRunsInCurrentStep: 0,
+  incidentFreeDaysInCurrentStep: 0, sawAbortSignal: false,
+})
 const cap82 = capacities82({
   requiredDetailPerDayAllSources: d100Plan('d100').detailedSourcesRequiredPerDay,
-  ladder, listPagesPerRun: 1, runsPerDay: 4,
+  ladder, listPagesPerRun: 1, canaryRunsPerDay: 4,
   observedDetailPerDay: null, observedDetailPerRun: null,
+  operatingApprovedBy: null,
 })
 
 const ns = northStar({ returningByActor: {}, returningEngagedByActor: {}, measuredWeeks: null })
@@ -160,15 +229,40 @@ const ns = northStar({ returningByActor: {}, returningEngagedByActor: {}, measur
 if (JSON_OUT) {
   console.log(JSON.stringify({
     basis: { codeSha, runtimeSha, pinSha, mixed: codeSha !== runtimeSha },
-    stage, plan, promotion: promo,
+    currentReleaseStage,
+    currentReleaseFromEnv: resolved.fromEnv,
+    currentReleaseFallbackReason: resolved.fallbackReason,
+    currentPlan,
+    targetStage,
+    plan, promotion: promo,
     stock: read.ok ? funnel : { readFailed: read.detail },
     activePersonas: activePersonas === null ? UNMEASURED : activePersonas,
     capabilities: readiness,
     capabilityFacts: facts,
+    collectJobs: collectJobs.map((j) => ({ source: j.source, label: j.label, ...j.facts })),
     capabilitiesReady: allCapabilitiesReady(readiness),
     blockers: capabilityBlockers(readiness),
     scheduler: Object.fromEntries(allD100Plans().map((p) => [p.stage, p.scheduler])),
-    throughput: { detailPerDay, readyNetPerDay, observedDays },
+    throughput: {
+      detailPerDay,
+      detailBySource: read.ok ? read.detail.bySource : null,
+      detailUnmeasuredSources: read.ok ? read.detail.unmeasuredSources : DETAIL_SOURCES,
+      // 🔴 생산량과 순증가는 **다른 값**이다. 한 칸에 합치지 않는다
+      readyProducedPerDay,
+      readyNet: read.ok ? read.readyNet : { measured: false, reason: '재고를 읽지 못했다' },
+      readyNetPerDay,
+      publishedPerDay,
+      observedDays,
+      snapshotPath: SNAPSHOT_PATH,
+    },
+    persona: {
+      tiers: personaTiers, ready: personaReady, activeCount: activePersonas,
+      missingAxes: read.ok ? read.personaMissingAxes : null,
+    },
+    scheduled: {
+      in7Days: read.ok ? read.scheduledIn7Days : null,
+      in14Days: read.ok ? read.scheduledIn14Days : null,
+    },
     links: linkSummary, linkCritical: linkCriticalCount(linkSummary),
     northStar: ns,
     stages: allD100Plans(),
@@ -185,6 +279,16 @@ if (JSON_OUT) {
   console.log(`    운영  ${runtimeSha || '(모름)'}${codeSha !== runtimeSha ? '  🔴 코드와 운영 기준이 다르다' : ''}`)
   console.log(`    pin   ${pinSha || '(모름)'}`)
 
+  console.log('\n  단계 — 🔴 지금 돌고 있는 것과 올라가려는 것은 다른 값이다')
+  console.log(`    지금 운영(${RELEASE_ENV})  ${currentReleaseStage}`
+    + `  · 하루 ${PROFILES[currentReleaseStage].dailyTarget}편`
+    + `${resolved.fromEnv ? '' : '  🔴 env 값이 아니다'}`)
+  if (resolved.fallbackReason !== null) console.log(`      · ${resolved.fallbackReason}`)
+  console.log(`    올라가려는 단계        ${targetStage}  · 하루 ${plan.publicPostsPerDay}편`)
+  if (currentPlan === null) {
+    console.log(`    🔴 ${currentReleaseStage} 은 D100 용량표에 없는 칸이다 (표는 d3 부터다)`)
+  }
+
   console.log('\n① 능력별 준비도 — 🔴 하나로 뭉쳐 GREEN 이라 하지 않는다')
   console.log('    능력       상태              설치 load 스위치 최근실패 용량')
   for (const c of CAPABILITIES) {
@@ -195,6 +299,13 @@ if (JSON_OUT) {
     console.log(`    ${mark} ${c.padEnd(8)} ${f.state.padEnd(16)}`
       + `${tri(f.installed)}  ${tri(f.loaded)}   ${tri(f.enabled)}    ${tri(f.failing)}   ${tri(f.capacitySatisfied)}`)
     if (f.reason !== null) console.log(`        · ${f.reason}`)
+  }
+  console.log('    수집 job — 🔴 공급원마다 따로 본다')
+  for (const j of collectJobs) {
+    const f = j.facts
+    const tri = (v: boolean | null): string => v === null ? ' ?' : v ? ' ○' : ' ✕'
+    console.log(`      ${j.source.padEnd(22)} ${f.state.padEnd(16)}`
+      + `${tri(f.installed)}  ${tri(f.loaded)}   ${tri(f.enabled)}    ${tri(f.failing)}`)
   }
   console.log(`    전체 ${allCapabilitiesReady(readiness) ? '🟢 준비됨' : '🔴 준비되지 않음'}`)
   for (const b of capabilityBlockers(readiness)) console.log(`      · ${b}`)
@@ -223,11 +334,57 @@ if (JSON_OUT) {
   }
 
   console.log('\n② 처리량 — 🔴 측정되지 않은 값은 unmeasured 다')
-  console.log(`    상세 수집/day     ${showMeasured(detailPerDay)}`)
-  console.log(`    READY 순증가/day  ${showMeasured(readyNetPerDay)}`)
-  console.log(`    이 단계 관측 일수  ${observedDays}일`)
+  console.log('    🔴 상세는 **수집 회차 기록**이 근거다 — DB 행 수를 세지 않는다')
+  if (read.ok) {
+    for (const b of read.detail.bySource) {
+      console.log(`      ${b.source.padEnd(22)} ${showMeasured(b.perDay).padStart(10)}/day`
+        + `  (성공 ${b.successRuns}회 · 실패 ${b.failedRuns}회 · 신규 ${b.newDetailRows}건)`)
+    }
+    if (read.detail.unmeasuredSources.length > 0) {
+      console.log(`      🔴 잴 수 없는 공급원: ${read.detail.unmeasuredSources.join(' · ')}`)
+    }
+  }
+  console.log(`    상세 수집/day 합계  ${showMeasured(detailPerDay)}`)
+  console.log(`    READY 생산량/day    ${showMeasured(readyProducedPerDay)}`
+    + '   🔴 생산량이다 — 승격 입력이 아니다')
+  console.log(`    READY 순증가/day    ${showMeasured(readyNetPerDay)}`)
+  if (read.ok && !read.readyNet.measured) console.log(`      · ${read.readyNet.reason}`)
+  if (read.ok && read.readyNet.measured) {
+    console.log(`      · ${read.readyNet.fromStock} → ${read.readyNet.toStock}`
+      + ` (${read.readyNet.spanDays}일 · ${read.readyNet.fromAt})`)
+  }
+  console.log(`    공개 발행/day       ${showMeasured(publishedPerDay)}`)
+  console.log(`    예약 전망 7일/14일   ${showMeasured(read.ok ? read.scheduledIn7Days : null)}`
+    + ` / ${showMeasured(read.ok ? read.scheduledIn14Days : null)}`)
+  console.log(`    이 단계 관측 일수    ${observedDays}일`)
+  console.log(`    🔴 순증가 시계열: ${SNAPSHOT_PATH}`)
+  console.log('       (시작하려면 --record-snapshot · 🔴 과거 값은 만들 수 없다)')
 
-  console.log(`\n③ 단계별 필요량 (지금 ${stage} · 다음 ${nextStage(stage) ?? '(없음)'})`)
+  console.log('\n②-b Persona 3계층 — 🔴 active 수 하나로 준비 완료라 하지 않는다')
+  if (personaTiers.length === 0) {
+    console.log('    🔴 읽지 못했다')
+  } else {
+    for (const t of personaTiers) {
+      const mark = t.ready ? '🟢' : '🔴'
+      const tgt = t.target === null ? '회차마다 다름' : `목표 ${t.target}`
+      console.log(`    ${mark} ${t.tier.padEnd(11)} ${t.passed}/${t.total}  (${tgt})`)
+      if (t.reason !== null) console.log(`        · ${t.reason}`)
+      for (const [code, n] of Object.entries(t.blocking)) {
+        console.log(`        🔴 ${code} ${n}명`)
+        // 🔴 "축이 비었다" 만으로는 무엇을 채울지 모른다 — 축 이름까지 적는다
+        if (code === 'lifeAxisMissing' && read.ok) {
+          for (const [axis, m] of Object.entries(read.personaMissingAxes)) {
+            console.log(`            · ${axis} ${m}명`)
+          }
+        }
+      }
+      for (const [code, n] of Object.entries(t.unmeasured)) console.log(`        ⬚ ${code} ${n}명 (재지 않았다)`)
+    }
+    console.log(`    전체 ${personaReady ? '🟢 준비됨' : '🔴 준비되지 않음'}`
+      + `  · active 카드 ${activePersonas ?? '?'}명`)
+  }
+
+  console.log(`\n③ 단계별 필요량 (지금 운영 ${currentReleaseStage} · 목표 ${targetStage})`)
   console.log('    🔴 공개량 · READY 순증가 · 재고는 서로 다른 값이다 — 한 칸으로 합치지 않는다')
   console.log('    단계   공개/day  READY순증/day  재고14일  상세/day  Persona  댓글/day  최소관측')
   for (const p of allD100Plans()) {
@@ -282,8 +439,21 @@ if (JSON_OUT) {
       + `  ${String(c.detailPerDay ?? '-').padStart(8)}`
       + `  ${String(c.requestsPerDay ?? '-').padStart(8)}  ${c.note}`)
   }
-  console.log(`    확대 사다리  ${ESCALATION_LADDER.map((l) => `${l.step}) ${l.maxDetailPerRun}건/회차 (무사 ${l.minCleanRunsToEnter}회)`).join(' → ')}`)
-  console.log(`    지금 칸      ${ladder.step}칸 · ${ladder.note}`)
+  console.log('    확대 사다리')
+  for (const l of ESCALATION_LADDER) {
+    const cond = l.incidentFreeDaysInPrevStep > 0
+      ? `직전 칸에서 🔴 ${l.incidentFreeDaysInPrevStep}일 무사고`
+      : l.cleanRunsInPrevStep > 0 ? `직전 칸에서 무사 ${l.cleanRunsInPrevStep}회` : '시작'
+    console.log(`      ${l.step}) ${String(l.maxDetailPerRun).padStart(2)}건/회차`
+      + ` · ${l.maxRunsPerDay}회/day  ← ${cond}`)
+  }
+  console.log(`    지금 칸      ${ladder.step.step}칸 · ${ladder.step.note}`)
+  console.log(`    다음 칸 제안 ${ladder.mayProposeNext ? '가능' : '🔴 불가'}`
+    + `${ladder.decelerated ? ' · 🔴 사고로 감속했다' : ''}`)
+  for (const b of ladder.blocking) console.log(`      · ${b}`)
+  console.log(`    🔴 마지막 칸은 **${TOP_STEP_INCIDENT_FREE_DAYS}일 무사고**가 조건이다`
+    + ' — 회차 수로 대체하지 않는다')
+  console.log('    🔴 자동 승격은 없다 — 사람 승인 전에는 operating 이 값을 갖지 않는다')
   console.log(`    자동 재시도 금지 신호  ${NO_AUTO_RETRY_SIGNALS.join(' · ')}`
     + ' — 🔴 상대의 답이다. 사람이 본다')
 

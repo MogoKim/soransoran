@@ -619,8 +619,8 @@ async function main(): Promise<void> {
   const publish = judgePublish({
     todayCount, dailyCap: RELEASE_DAILY_CAP,
     afterPublishGrace: now.getTime() >= graceUntil.getTime(),
-    // 🔴 연결이 깨진 행만 CRITICAL 이다 — 사람이 내린 글은 따로 센다
-    mismatched: verdict.bad.length, takenDown: verdict.takenDown.length,
+    // 🔴 연결이 깨진 행만 CRITICAL 이다 — 숨겨진 글은 따로 센다
+    mismatched: verdict.bad.length, hiddenPost: verdict.hiddenPost.length,
     legacyPublishedToday, historicUnknownProfile,
     candidates: stock.usable, now,
   })

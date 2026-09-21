@@ -91,46 +91,54 @@ export function verifyPublishedRow(r: PublishedRowFacts): string[] {
 }
 
 /**
- * 🔴 **사람이 내린 글이 남기는 결과** (2026-09-21).
- *    Post 를 숨기면 status 와 색인·추천 플래그가 **따라서** 바뀐다.
+ * 🔴 **숨겨진 글이 남기는 결과** (2026-09-21 · 명칭 3차 보정).
+ *    Post 가 숨겨지면 status 와 색인·추천 플래그가 **따라서** 바뀐다.
  *    그 셋은 숨김의 **파생 결과**이지 연결 오류가 아니다.
  */
-const TAKEDOWN_DERIVED = ['Post status=', '색인 대상이 아니다', '추천 표면에 오르지 못한다']
+const HIDDEN_DERIVED = ['Post status=', '색인 대상이 아니다', '추천 표면에 오르지 못한다']
 
-/** 🔴 이 행이 "사람이 내린 글" 인가 — Post 는 있고 상태만 숨김이다 */
-function isTakenDown(r: PublishedRowFacts): boolean {
+/**
+ * 🔴 이 행의 Post 가 **숨겨져 있는가** — 연결은 정상이고 상태만 숨김이다.
+ *
+ * 🔴 **"사람이 내렸다" 고 부르지 않는다.** 우리가 아는 것은 `Post.status` 하나뿐이고,
+ *    누가 왜 그렇게 했는지는 이 조회가 읽지 않는다 — 운영 판단일 수도,
+ *    자동 처리일 수도, 마이그레이션 사고일 수도 있다. 감사 기록으로 확인하지 않은
+ *    의도를 이름에 넣으면 그 이름 때문에 아무도 더 확인하지 않는다.
+ */
+function isHiddenPost(r: PublishedRowFacts): boolean {
   return r.post !== null && (r.post.status === 'HIDDEN' || r.post.status === 'DELETED')
 }
 
 /**
- * 여러 행을 한 번에 — 🔴 **연결이 깨진 행과 사람이 내린 행을 가른다** (2026-09-21 실측 보정).
+ * 여러 행을 한 번에 — 🔴 **연결이 깨진 행과 숨겨진 행을 가른다** (2026-09-21 실측 보정).
  *
  *    앞판은 둘을 모두 `bad` 로 넣었고 health 가 `PUBLISH_MISMATCH` CRITICAL 로 올렸다.
- *    실측 1건(`cmu0ov5b3…` → Post `cmu0sjyll…` HIDDEN)은 **운영 판단으로 내린 글**이었다 —
- *    `permanentNoindex` 도 `indexPromotionBlocked` 도 false 였다(콘텐츠 결함 표식이 아니다).
- *    그것을 데이터 손상처럼 부르면 **진짜 손상이 묻힌다.**
+ *    실측 1건(`cmu0ov5b3…` → Post `cmu0sjyll…` HIDDEN)은 Post 가 숨겨져 있을 뿐
+ *    연결은 멀쩡했다 — `permanentNoindex` 도 `indexPromotionBlocked` 도 false 였다
+ *    (콘텐츠 결함 표식이 아니다). 그것을 데이터 손상처럼 부르면 **진짜 손상이 묻힌다.**
  *
- * 🔴 **경고를 숨기는 것이 아니다.** 내린 글은 `takenDown` 으로 계속 보고되고,
+ * 🔴 **경고를 숨기는 것이 아니다.** 숨겨진 글은 `hiddenPost` 로 계속 보고되고,
  *    숨김 때문이 아닌 문제가 하나라도 남아 있으면 그 행은 여전히 `bad` 다.
+ * 🔴 **주체와 의도를 단정하지 않는다** — 이 함수는 `Post.status` 밖을 읽지 않는다.
  */
 export function verifyPublishedRows(rows: readonly PublishedRowFacts[]): {
   ok: boolean
   bad: { queueId: string; problems: string[] }[]
-  takenDown: { queueId: string; problems: string[] }[]
+  hiddenPost: { queueId: string; problems: string[] }[]
 } {
   const bad: { queueId: string; problems: string[] }[] = []
-  const takenDown: { queueId: string; problems: string[] }[] = []
+  const hiddenPost: { queueId: string; problems: string[] }[] = []
   for (const r of rows) {
     const problems = verifyPublishedRow(r)
     if (problems.length === 0) continue
-    if (isTakenDown(r)) {
+    if (isHiddenPost(r)) {
       // 🔴 숨김의 파생 결과를 걷어 내고 **남는 것**을 본다
-      const rest = problems.filter((p) => !TAKEDOWN_DERIVED.some((d) => p.includes(d)))
-      if (rest.length === 0) { takenDown.push({ queueId: r.queueId, problems }); continue }
+      const rest = problems.filter((p) => !HIDDEN_DERIVED.some((d) => p.includes(d)))
+      if (rest.length === 0) { hiddenPost.push({ queueId: r.queueId, problems }); continue }
       bad.push({ queueId: r.queueId, problems: rest })
       continue
     }
     bad.push({ queueId: r.queueId, problems })
   }
-  return { ok: bad.length === 0, bad, takenDown }
+  return { ok: bad.length === 0, bad, hiddenPost }
 }

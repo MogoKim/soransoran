@@ -136,32 +136,115 @@ export type Capacity82 = {
 }
 
 /**
- * 🔴 **확대 사다리.** 한 칸씩만 오른다. 칸을 건너뛰지 않고,
- *    무사 회차가 쌓이기 전에는 다음 칸을 쓰지 않는다 — 관측 없는 상향은 계약 위반이다.
+ * 🔴 **확대 사다리 — 창업자 계약 그대로** (2026-09-21 3차 보정).
+ *
+ *      5건/회차  →  무사 3회  →  10건/회차  →  무사 3회  →  20건/회차
+ *      →  **7일 무사고**  →  20~30건/회차 · 2~3회/day
+ *
+ * 🔴 **마지막 칸의 조건은 회차 수가 아니라 기간이다.** 앞판은 "무사 12회" 로 바꿔
+ *    적었는데, 하루에 여러 회차를 몰아 돌리면 **반나절이면 12회**가 찬다.
+ *    7일을 요구한 이유는 "여러 날에 걸쳐 아무 일도 없었다" 를 보려는 것이다 —
+ *    회차 수로 대체하면 그 뜻이 통째로 사라진다.
+ *
+ * 🔴 각 칸은 **직전 칸에서** 조건을 채워야 들어간다. 1칸에서 무사 6회를 돌아도
+ *    3칸으로 건너뛰지 않는다.
  */
 export const ESCALATION_LADDER = [
-  { step: 1, maxDetailPerRun: 5, minCleanRunsToEnter: 0, note: '첫 관측 — canary 계약 그대로' },
-  { step: 2, maxDetailPerRun: 10, minCleanRunsToEnter: 3, note: '무사 3회 뒤' },
-  { step: 3, maxDetailPerRun: 20, minCleanRunsToEnter: 6, note: '무사 6회 뒤 — 정기 등록 구간' },
-  { step: 4, maxDetailPerRun: 30, minCleanRunsToEnter: 12, note: '무사 12회 뒤 — 20~30 사이에서만 움직인다' },
+  {
+    step: 1, maxDetailPerRun: 5, maxRunsPerDay: 1,
+    cleanRunsInPrevStep: 0, incidentFreeDaysInPrevStep: 0,
+    note: '첫 관측 — canary 계약 그대로',
+  },
+  {
+    step: 2, maxDetailPerRun: 10, maxRunsPerDay: 1,
+    cleanRunsInPrevStep: 3, incidentFreeDaysInPrevStep: 0,
+    note: '1칸에서 무사 3회를 채운 뒤',
+  },
+  {
+    step: 3, maxDetailPerRun: 20, maxRunsPerDay: 1,
+    cleanRunsInPrevStep: 3, incidentFreeDaysInPrevStep: 0,
+    note: '2칸에서 무사 3회를 채운 뒤',
+  },
+  {
+    step: 4, maxDetailPerRun: 30, maxRunsPerDay: 3,
+    cleanRunsInPrevStep: 0, incidentFreeDaysInPrevStep: 7,
+    note: '3칸에서 🔴 **7일 무사고** — 20~30건/회차 · 2~3회/day',
+  },
 ] as const
 export type EscalationStep = (typeof ESCALATION_LADDER)[number]
 
 /** 🔴 사다리의 천장 — 이보다 위는 이 계약에 없다 */
 export const LADDER_MAX_DETAIL_PER_RUN = 30
+/** 🔴 마지막 칸의 하한 — 20~30 사이에서만 움직인다 */
+export const LADDER_TOP_MIN_DETAIL_PER_RUN = 20
+/** 🔴 마지막 칸에 들어가는 유일한 조건 */
+export const TOP_STEP_INCIDENT_FREE_DAYS = 7
+
+export type LadderObservation = {
+  /** 지금 서 있는 칸 */
+  currentStep: number
+  /** 🔴 **이 칸에서** 무사히 끝난 회차 수 */
+  cleanRunsInCurrentStep: number
+  /** 🔴 **이 칸에서** 사고 없이 지난 날 수 */
+  incidentFreeDaysInCurrentStep: number
+  /** 마지막 회차에 중단 신호가 있었는가 */
+  sawAbortSignal: boolean
+}
+
+export type LadderVerdict = {
+  /** 지금 적용되는 칸 */
+  step: EscalationStep
+  /** 🔴 다음 칸으로 올라가도 되는가 — **자동으로 올라가지는 않는다** */
+  mayProposeNext: boolean
+  /** 다음 칸이 요구하는 것 중 아직 못 채운 것 */
+  blocking: string[]
+  /** 사고로 되돌아왔는가 */
+  decelerated: boolean
+}
+
+function stepAt(n: number): EscalationStep {
+  return ESCALATION_LADDER.find((s) => s.step === n) ?? ESCALATION_LADDER[0]
+}
 
 /**
- * 🔴 **무사 회차 수로만 칸이 정해진다.** 급하다는 이유로 올리지 않는다.
- *    중단 신호가 하나라도 있었으면 1칸으로 되돌린다.
+ * 🔴 **자동 승격은 없다.** 이 함수는 "올릴 것을 사람에게 제안해도 되는가" 만 답한다 —
+ *    실제 상향은 `operatingPolicy` 의 사람 승인을 거친다.
+ * 🔴 사고를 보면 **직전 안전 칸으로 감속한다.** 1칸으로 떨어뜨리지 않는 이유는,
+ *    그 칸까지는 이미 무사했다는 관측이 있기 때문이다 — 다만 1칸이면 더 갈 곳이 없다.
  */
+export function judgeLadder(obs: LadderObservation): LadderVerdict {
+  if (obs.sawAbortSignal) {
+    const back = Math.max(1, obs.currentStep - 1)
+    return {
+      step: stepAt(back), mayProposeNext: false, decelerated: true,
+      blocking: [`중단 신호를 봤다 — ${obs.currentStep}칸에서 ${back}칸으로 감속한다`],
+    }
+  }
+  const cur = stepAt(obs.currentStep)
+  const next = ESCALATION_LADDER.find((s) => s.step === obs.currentStep + 1)
+  if (next === undefined) {
+    return { step: cur, mayProposeNext: false, decelerated: false, blocking: ['마지막 칸이다'] }
+  }
+  const blocking: string[] = []
+  if (obs.cleanRunsInCurrentStep < next.cleanRunsInPrevStep) {
+    blocking.push(`이 칸 무사 ${obs.cleanRunsInCurrentStep}회 < 필요 ${next.cleanRunsInPrevStep}회`)
+  }
+  if (obs.incidentFreeDaysInCurrentStep < next.incidentFreeDaysInPrevStep) {
+    // 🔴 회차 수로 대체할 수 없는 조건이다
+    blocking.push(`이 칸 무사고 ${obs.incidentFreeDaysInCurrentStep}일 < 필요 ${next.incidentFreeDaysInPrevStep}일`)
+  }
+  return { step: cur, mayProposeNext: blocking.length === 0, decelerated: false, blocking }
+}
+
+/** 🔴 옛 이름 — 회차 수만 보던 판정이다. 새 코드는 `judgeLadder` 를 쓴다 */
 export function ladderStepFor(input: {
   cleanRuns: number
   sawAbortSignal: boolean
 }): EscalationStep {
-  if (input.sawAbortSignal) return ESCALATION_LADDER[0]
-  let cur: EscalationStep = ESCALATION_LADDER[0]
-  for (const s of ESCALATION_LADDER) if (input.cleanRuns >= s.minCleanRunsToEnter) cur = s
-  return cur
+  return judgeLadder({
+    currentStep: 1, cleanRunsInCurrentStep: input.cleanRuns,
+    incidentFreeDaysInCurrentStep: 0, sawAbortSignal: input.sawAbortSignal,
+  }).step
 }
 
 /**
@@ -215,23 +298,42 @@ export const NEVER = [
 export function capacities82(input: {
   /** 이 단계가 요구하는 **전체** 상세/day (모든 공급원 합) */
   requiredDetailPerDayAllSources: number
-  /** 지금 사다리 칸 */
-  ladder: EscalationStep
+  /** 지금 사다리 판정 */
+  ladder: LadderVerdict
   /** canary 한 회차가 여는 목록 페이지 수 */
   listPagesPerRun: number
-  /** 하루 회차 수 */
-  runsPerDay: number
+  /** canary 하루 회차 수 */
+  canaryRunsPerDay: number
   /** 🔴 실제로 관측된 값 — 재지 않았으면 `null` */
   observedDetailPerDay: number | null
   observedDetailPerRun: number | null
+  /**
+   * 🔴 **사람이 이 칸을 승인했는가.** 관측만으로 운영값이 되지 않는다 —
+   *    자동 승격을 막는 마지막 자물쇠다.
+   */
+  operatingApprovedBy: string | null
 }): Readonly<Record<CapacityKind, Capacity82>> {
+  /**
+   * 🔴 **운영값은 canary 상한을 물려받지 않는다** (2026-09-21 3차 보정).
+   *
+   *    앞판은 `operating` 이 `CANARY_CONTRACT.maxRequestsPerDay`(20)를 그대로 썼다.
+   *    그러면 사다리를 4칸까지 올려도 하루 요청이 20에 묶여, 30건/회차 × 3회 를
+   *    **영원히 낼 수 없다** — 첫 관측용 안전값이 운영의 천장이 되어 버린다.
+   *    반대 방향으로도 나쁘다: canary 값을 올리면 운영값이 같이 올라간다.
+   *
+   * 🔴 그리고 운영값은 **관측 + 사람 승인** 전에는 아예 값이 아니다.
+   */
+  const approved = input.operatingApprovedBy !== null && input.operatingApprovedBy.trim() !== ''
+  const observedOk = input.observedDetailPerDay !== null
+  const operatingUsable = approved && observedOk && !input.ladder.decelerated
+
   return {
     canary: {
       kind: 'canary',
       detailPerRun: CANARY_CONTRACT.maxDetailPerRun,
       detailPerDay: dailyDetailCeiling({
         maxRequestsPerDay: CANARY_CONTRACT.maxRequestsPerDay,
-        runsPerDay: input.runsPerDay,
+        runsPerDay: input.canaryRunsPerDay,
         listPagesPerRun: input.listPagesPerRun,
         maxDetailPerRun: CANARY_CONTRACT.maxDetailPerRun,
       }),
@@ -243,22 +345,31 @@ export function capacities82(input: {
       detailPerRun: input.observedDetailPerRun,
       detailPerDay: input.observedDetailPerDay,
       requestsPerDay: null,
-      note: input.observedDetailPerDay === null
-        ? '🔴 아직 재지 않았다 — 0 이 아니라 unmeasured 다'
-        : '무사히 끝난 회차에서 관측된 값',
+      note: observedOk ? '무사히 끝난 회차에서 관측된 값'
+        : '🔴 아직 재지 않았다 — 0 이 아니라 unmeasured 다',
     },
-    operating: {
-      kind: 'operating',
-      detailPerRun: input.ladder.maxDetailPerRun,
-      detailPerDay: dailyDetailCeiling({
-        maxRequestsPerDay: CANARY_CONTRACT.maxRequestsPerDay,
-        runsPerDay: input.runsPerDay,
-        listPagesPerRun: input.listPagesPerRun,
-        maxDetailPerRun: input.ladder.maxDetailPerRun,
-      }),
-      requestsPerDay: CANARY_CONTRACT.maxRequestsPerDay,
-      note: `사다리 ${input.ladder.step}칸 — ${input.ladder.note}`,
-    },
+    operating: operatingUsable
+      ? {
+          kind: 'operating',
+          detailPerRun: input.ladder.step.maxDetailPerRun,
+          // 🔴 **사다리 칸이 정한다.** canary 예산을 물려받지 않는다
+          detailPerDay: input.ladder.step.maxDetailPerRun * input.ladder.step.maxRunsPerDay,
+          requestsPerDay: requestsPerRun(
+            input.listPagesPerRun, input.ladder.step.maxDetailPerRun,
+          ) * input.ladder.step.maxRunsPerDay,
+          note: `사다리 ${input.ladder.step.step}칸 · 승인 ${input.operatingApprovedBy}`
+            + ` — ${input.ladder.step.note}`,
+        }
+      : {
+          kind: 'operating',
+          detailPerRun: null, detailPerDay: null, requestsPerDay: null,
+          note: '🔴 미승인·미관측이다 — '
+            + [
+              approved ? null : '사람 승인이 없다',
+              observedOk ? null : '관측값이 없다',
+              input.ladder.decelerated ? '사고로 감속 중이다' : null,
+            ].filter((x) => x !== null).join(' · '),
+        },
     required: {
       kind: 'required',
       detailPerRun: null,

@@ -11,7 +11,13 @@ import {
   D100_STAGES, allD100Plans, d100Plan, judgePromotion, nextStage,
   PLANNED_DETAIL_PER_PUBLIC_POST, STOCK_DAYS, D100_PERSONA_TARGET_MAX,
   READY_NET_MARGIN, POSTS_PER_INVOCATION, schedulerSupportOf,
+  targetStageFor, currentPlanOf,
 } from '../src/lib/d100-capacity'
+import { resolveStage } from '../src/lib/scale-profile'
+import { readyNetFromSnapshots, READY_SELECTOR_VERSION } from './lib/d100-ready-snapshot.mjs'
+import { detailThroughput, DETAIL_SOURCES } from './lib/d100-detail-throughput.mjs'
+import { forecastFromRows, releaseStageFromEnvText } from './lib/d100-operational-stock.mjs'
+import type { CollectRunRecord } from '../src/lib/collect-run-record'
 import {
   judgeFunnel, judgeFunnelRows, LINK_STATES, linkStateOf, summarizeLinks, linkCriticalCount,
   hiddenPostNote, runnerStateOf, runnerCanRun, runnerIsFault, runnerFactsOf, capabilityFactsReady,
@@ -21,6 +27,7 @@ import {
 } from '../src/lib/d100-readiness'
 import {
   judgePersonaScale, personaBlockers, personaUnmeasured, personaUsable, PERSONA_LIFE_AXES,
+  personaTierReadiness, personaReadinessOk,
   VOICE_MIN_COMMENTS, type PersonaCandidate,
 } from '../src/lib/d100-persona-scale'
 import {
@@ -33,7 +40,9 @@ import { verifyPublishedRows } from '../src/lib/original-post-publish-verify'
 import {
   RECOVERY_PLAN, CANARY_CONTRACT, judgeCanary, NEVER, MIN_CLEAN_RUNS_BEFORE_JOB,
   COUNTS_LIST_REQUESTS_IN_BUDGET, requestsPerRun, dailyDetailCeiling,
-  ladderStepFor, LADDER_MAX_DETAIL_PER_RUN, mayAutoRetry, capacities82, describeCookieAudit,
+  judgeLadder, LADDER_MAX_DETAIL_PER_RUN, LADDER_TOP_MIN_DETAIL_PER_RUN,
+  TOP_STEP_INCIDENT_FREE_DAYS, ESCALATION_LADDER,
+  mayAutoRetry, capacities82, describeCookieAudit,
 } from '../src/lib/collect-82cook-recovery'
 import {
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
@@ -97,7 +106,8 @@ console.log('\n② 🔴 🔴 재고 깔때기 — 다른 집합을 섞지 않는
     queueTotal: 239, unpublishedApproved: 221, legacyExcluded: 217,
     profileCompatible: 4, humanReviewed: 3, fresh: 3,
     personaAssignable: 1, publishableNow: 0,
-    scheduledIn7Days: 0, scheduledIn14Days: 0, readyStock: 3,
+    // 🔴 예측하지 않았으면 0 이 아니라 null 이다
+    scheduledIn7Days: null, scheduledIn14Days: null, readyStock: 3,
   }
   check('🔴 🔴 **실측 모양은 깔때기로 말이 된다**',
     judgeFunnel(REAL).length === 0, JSON.stringify(judgeFunnel(REAL)))
@@ -153,15 +163,15 @@ console.log('\n③ 🔴 🔴 Queue ↔ Post — 숨긴 글과 끊어진 연결�
   }
   {
     const v = verifyPublishedRows([ROW])
-    check('🔴 🔴 **사람이 내린 글은 bad 가 아니라 takenDown 이다**',
-      v.ok && v.bad.length === 0 && v.takenDown.length === 1,
-      JSON.stringify({ bad: v.bad.length, taken: v.takenDown.length }))
+    check('🔴 🔴 **숨겨진 글은 bad 가 아니라 hiddenPost 다**',
+      v.ok && v.bad.length === 0 && v.hiddenPost.length === 1,
+      JSON.stringify({ bad: v.bad.length, hidden: v.hiddenPost.length }))
   }
   {
     // 🔴 숨김 때문이 아닌 문제가 남으면 여전히 bad 다
     const v = verifyPublishedRows([{ ...ROW, queuePersonaId: 'other' }])
     check('🔴 🔴 **숨겼어도 persona 가 어긋나면 계속 CRITICAL**',
-      !v.ok && v.bad.length === 1 && v.takenDown.length === 0
+      !v.ok && v.bad.length === 1 && v.hiddenPost.length === 0
       && v.bad[0]!.problems.every((p) => !p.includes('Post status=')),
       JSON.stringify(v.bad))
   }
@@ -171,12 +181,32 @@ console.log('\n③ 🔴 🔴 Queue ↔ Post — 숨긴 글과 끊어진 연결�
   }
   check('🔴 🔴 **health 가 둘을 갈라 넘긴다**', (() => {
     const h = readFileSync('scripts/supply-health.mts', 'utf-8')
-    return /mismatched: verdict\.bad\.length/.test(h) && /takenDown: verdict\.takenDown\.length/.test(h)
+    return /mismatched: verdict\.bad\.length/.test(h) && /hiddenPost: verdict\.hiddenPost\.length/.test(h)
   })())
-  check('🔴 🔴 **숨긴 글은 CRITICAL 이 아니라 INFO 로 보고된다**', (() => {
+  check('🔴 🔴 **숨겨진 글은 CRITICAL 이 아니라 INFO 로 보고된다**', (() => {
     const lib = readFileSync('src/lib/supply-health.ts', 'utf-8')
-    return /'INFO', 'PUBLISH_TAKEN_DOWN'/.test(lib)
+    return /'INFO', 'PUBLISH_HIDDEN_POST'/.test(lib)
       && /'CRITICAL', 'PUBLISH_MISMATCH'/.test(lib)
+  })())
+  /**
+   * 🔴 **주체·의도를 단정하지 않는다.** "사람이 내린 글" 은 감사 기록 없이는 주장이다 —
+   *    자동 처리·마이그레이션 사고도 같은 값을 만든다.
+   */
+  check('🔴 🔴 **어느 경로도 "사람이 내렸다" 고 단정하지 않는다**', (() => {
+    const strip = (t: string): string =>
+      t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    return ['src/lib/original-post-publish-verify.ts', 'src/lib/supply-health.ts',
+      'src/lib/d100-readiness.ts', 'scripts/supply-health.mts']
+      .every((f) => {
+        const src = strip(readFileSync(f, 'utf-8'))
+        /**
+         * 🔴 **단정하는 표현**만 막는다 — "사람이 내린 것인지 …알 수 없다" 는
+         *    오히려 우리가 넣은 유보 문구다. 그것까지 막으면 검사가 유보를 벌준다.
+         */
+        return !/사람이 내린 글/.test(src) && !/takenDown|TAKEN_DOWN/.test(src)
+          // 🔴 유보 문구는 **있어야** 한다
+          && (!/숨겨진 글/.test(src) || /알 수 없다/.test(src))
+      })
   })())
 }
 
@@ -247,19 +277,22 @@ console.log('\n⑥ 🔴 🔴 측정되지 않은 값 — 0 으로 채우지 않�
   check('🔴 🔴 **thin 수를 READY 순증가로 대체하면 FAIL**',
     readyNetFromThin(80) === null)
   const promo = judgePromotion({
-    stage: 'd3', readyStock: 9999, activePersonas: 9999,
-    detailPerDay: null, readyNetPerDay: null, observedDays: 999,
+    current: 'd1', target: 'd3', readyStock: 9999, activePersonas: 9999,
+    detailPerDay: null, readyNetPerDay: null, publishedPerDay: null, observedDays: 999,
     publishRunnerReady: true, commentRunnerReady: true,
   })
   check('🔴 🔴 **측정되지 않으면 올리지 않는다 — 통과로 세지 않는다**',
-    !promo.ready && promo.blocking.length === 0 && promo.unmeasured.length === 2,
+    !promo.ready && promo.blocking.length === 0 && promo.unmeasured.length === 3,
     JSON.stringify(promo))
   // 🔴 필요량을 여기 다시 적지 않는다 — 정본이 바뀌면 이 fixture 도 따라 움직여야 한다
   const D3 = d100Plan('d3')
+  // 🔴 지금 운영은 d1 이고 올라가려는 칸은 d3 이다 — 두 값을 섞지 않는다
   const full: Parameters<typeof judgePromotion>[0] = {
-    stage: 'd3', readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+    current: 'd1', target: 'd3',
+    readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
     detailPerDay: D3.detailedSourcesRequiredPerDay,
     readyNetPerDay: D3.readyNetRequiredPerDay,
+    publishedPerDay: D3.publicPostsPerDay,
     observedDays: D3.minimumObservationDays,
     publishRunnerReady: true, commentRunnerReady: true,
   }
@@ -287,13 +320,15 @@ console.log('\n⑥ 🔴 🔴 측정되지 않은 값 — 0 으로 채우지 않�
    * 🔴 **다음 단계를 스케줄러가 못 하면 올리지 않는다.** d10 은 전부 채워도
    *    d20 에 cron 이 없어 막힌다 — "재고만 쌓으면 된다" 가 아니다.
    */
-  check('🔴 🔴 **다음 단계에 cron 이 없으면 올리지 않는다 (d10 → d20)**', (() => {
-    const D10 = d100Plan('d10')
+  check('🔴 🔴 **목표 단계에 cron 이 없으면 올리지 않는다 (d10 → d20)**', (() => {
+    const D20 = d100Plan('d20')
     const v = judgePromotion({
-      stage: 'd10', readyStock: D10.readyStock14Days, activePersonas: D10.activePersonaTarget,
-      detailPerDay: D10.detailedSourcesRequiredPerDay,
-      readyNetPerDay: D10.readyNetRequiredPerDay,
-      observedDays: D10.minimumObservationDays,
+      current: 'd10', target: 'd20',
+      readyStock: D20.readyStock14Days, activePersonas: D20.activePersonaTarget,
+      detailPerDay: D20.detailedSourcesRequiredPerDay,
+      readyNetPerDay: D20.readyNetRequiredPerDay,
+      publishedPerDay: D20.publicPostsPerDay,
+      observedDays: D20.minimumObservationDays,
       publishRunnerReady: true, commentRunnerReady: true,
     })
     return !v.ready && v.blocking.some((b) => b.includes('d20'))
@@ -725,27 +760,281 @@ console.log('\n⑫ 🔴 🔴 필수 행동 17 — 고치면 반드시 여기서 
       && dailyDetailCeiling({
         maxRequestsPerDay: 20, runsPerDay: 4, listPagesPerRun: 1, maxDetailPerRun: 5,
       }) === 16
-    const ladder = ladderStepFor({ cleanRuns: 0, sawAbortSignal: false }).maxDetailPerRun === 5
-      && ladderStepFor({ cleanRuns: 3, sawAbortSignal: false }).maxDetailPerRun === 10
-      && ladderStepFor({ cleanRuns: 6, sawAbortSignal: false }).maxDetailPerRun === 20
-      && ladderStepFor({ cleanRuns: 99, sawAbortSignal: false }).maxDetailPerRun === LADDER_MAX_DETAIL_PER_RUN
-      // 🔴 중단 신호를 봤으면 되돌아간다
-      && ladderStepFor({ cleanRuns: 99, sawAbortSignal: true }).maxDetailPerRun === 5
+    const step = (cur: number, clean: number, days: number, abort = false) =>
+      judgeLadder({
+        currentStep: cur, cleanRunsInCurrentStep: clean,
+        incidentFreeDaysInCurrentStep: days, sawAbortSignal: abort,
+      })
+    const ladder = step(1, 0, 0).step.maxDetailPerRun === 5
+      // 🔴 1칸에서 무사 3회 → 2칸 제안 가능
+      && step(1, 3, 0).mayProposeNext && step(2, 0, 0).step.maxDetailPerRun === 10
+      && step(2, 3, 0).mayProposeNext && step(3, 0, 0).step.maxDetailPerRun === 20
+      // 🔴 3칸 → 4칸은 **회차 수로는 절대 못 간다**. 7일이 필요하다
+      && !step(3, 999, 0).mayProposeNext && step(3, 0, 7).mayProposeNext
+      && step(4, 0, 0).step.maxDetailPerRun === LADDER_MAX_DETAIL_PER_RUN
+      // 🔴 중단 신호를 보면 직전 안전 칸으로 감속한다
+      && step(4, 999, 99, true).step.step === 3 && step(4, 999, 99, true).decelerated
+      && step(1, 999, 99, true).step.step === 1
     const retry = !mayAutoRetry('http403') && !mayAutoRetry('http429')
       && !mayAutoRetry('captcha') && mayAutoRetry('repeatedNetwork')
     const four = capacities82({
-      requiredDetailPerDayAllSources: 382,
-      ladder: ladderStepFor({ cleanRuns: 0, sawAbortSignal: false }),
-      listPagesPerRun: 1, runsPerDay: 4,
+      requiredDetailPerDayAllSources: 382, ladder: step(1, 0, 0),
+      listPagesPerRun: 1, canaryRunsPerDay: 4,
       observedDetailPerDay: null, observedDetailPerRun: null,
+      operatingApprovedBy: null,
     })
     // 🔴 네 값이 섞이지 않는다 — 관측은 0 이 아니라 null 이다
+    // 🔴 그리고 운영값은 **미승인·미관측이면 값 자체가 없다**
     const split = four.observed.detailPerDay === null && four.required.detailPerDay === 382
       && four.canary.detailPerDay !== four.required.detailPerDay
+      && four.operating.detailPerDay === null && four.operating.requestsPerDay === null
+    // 🔴 승인·관측이 있어도 canary 의 20요청 상한을 물려받지 않는다
+    const approved = capacities82({
+      requiredDetailPerDayAllSources: 382, ladder: step(4, 0, 7),
+      listPagesPerRun: 1, canaryRunsPerDay: 4,
+      observedDetailPerDay: 12, observedDetailPerRun: 4,
+      operatingApprovedBy: 'founder',
+    })
+    const notInherited = approved.operating.requestsPerDay !== null
+      && approved.operating.requestsPerDay > CANARY_CONTRACT.maxRequestsPerDay
+      && approved.operating.detailPerRun === LADDER_MAX_DETAIL_PER_RUN
+      && approved.operating.detailPerDay === 90
     // 🔴 쿠키는 값을 내지 않는다
     const cookie = describeCookieAudit({ present: true, count: 3, ageDays: 2 })
-    return budget && ladder && retry && split
+    return budget && ladder && retry && split && notInherited
       && /3개/.test(cookie) && !/=/.test(cookie)
+  })())
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 🔴 🔴 PR #555 3차 보정 — 이 아홉 가지를 되돌리면 반드시 깨진다')
+// ─────────────────────────────────────────────────────────
+{
+  const cli = readFileSync('scripts/d100-master-readiness.mts', 'utf-8')
+  const stock = readFileSync('scripts/lib/d100-operational-stock.mts', 'utf-8')
+  const strip = (t: string): string =>
+    t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  // ① 운영 d1 을 d3 으로 표시하면 FAIL
+  check('🔴 ① **지금 단계는 env 가 정한다 — 코드에 박지 않는다**', (() => {
+    const code = strip(cli)
+    const fromEnv = /releaseStageFromEnvText\(envText\)/.test(code)
+      && /currentReleaseStage = resolved\.stage/.test(code)
+      && /targetStage[^=]*= targetStageFor\(currentReleaseStage\)/.test(code)
+    /**
+     * 🔴 **단계 이름 문자열을 어디에도 배정하지 않는다.** `resolveStage` 를 부르면서
+     *    결과만 `'d3'` 으로 덮어써도 통과하던 것이 앞판의 구멍이었다.
+     */
+    const noHardcode = !/(currentReleaseStage|targetStage)[^=\n]*=\s*'d\d+'/.test(code)
+      && !/const\s+stage\s*:\s*D100Stage\s*=\s*'/.test(code)
+    // 🔴 실제로 env 글에서 읽어 오는가 — 값이 바뀌면 답도 바뀐다
+    const readsEnv = releaseStageFromEnvText('SORAN_RELEASE_STAGE=d1\n').stage === 'd1'
+      && releaseStageFromEnvText('SORAN_RELEASE_STAGE=d5\n').stage === 'd5'
+      && releaseStageFromEnvText('SORAN_RELEASE_STAGE=d5\n').fromEnv
+      && releaseStageFromEnvText('').stage === 'd1'
+      && releaseStageFromEnvText('').fromEnv === false
+    // 🔴 정본 판정: 빈 env → 가장 안전한 d1
+    const resolves = resolveStage(undefined).stage === 'd1'
+      && resolveStage('d3').stage === 'd3' && resolveStage('허튼값').stage === 'd1'
+    const maps = targetStageFor('d1') === 'd3' && targetStageFor('d3') === 'd5'
+      && targetStageFor('d5') === 'd10' && targetStageFor('d10') === 'd20'
+    // 🔴 d1 은 D100 용량표에 없다 — 없는 칸을 d3 으로 올려 읽지 않는다
+    return fromEnv && noHardcode && readsEnv && resolves && maps && currentPlanOf('d1') === null
+  })())
+
+  // ② D3 수치로 D5 승격하면 FAIL
+  check('🔴 ② **목표 단계의 필요량으로 잰다 — 현재 단계 수치로 올라가지 않는다**', (() => {
+    const D3 = d100Plan('d3'); const D5 = d100Plan('d5')
+    // 🔴 d3 수치를 그대로 들고 d5 로 올라가려 하면 막혀야 한다
+    const regress = judgePromotion({
+      current: 'd3', target: 'd5',
+      readyStock: D3.readyStock14Days, activePersonas: D3.activePersonaTarget,
+      detailPerDay: D3.detailedSourcesRequiredPerDay,
+      readyNetPerDay: D3.readyNetRequiredPerDay,
+      publishedPerDay: D3.publicPostsPerDay,
+      observedDays: D5.minimumObservationDays,
+      publishRunnerReady: true, commentRunnerReady: true,
+    })
+    const blocked = !regress.ready
+      && regress.blocking.some((b) => b.includes(`${D5.readyStock14Days}`))
+      && regress.blocking.some((b) => b.includes(`${D5.readyNetRequiredPerDay}/day`))
+      && regress.blocking.some((b) => b.includes(`${D5.detailedSourcesRequiredPerDay}/day`))
+      && regress.blocking.some((b) => b.includes(`${D5.publicPostsPerDay}/day`))
+    // 🔴 d5 수치를 채우면 통과한다
+    const ok = judgePromotion({
+      current: 'd3', target: 'd5',
+      readyStock: D5.readyStock14Days, activePersonas: D5.activePersonaTarget,
+      detailPerDay: D5.detailedSourcesRequiredPerDay,
+      readyNetPerDay: D5.readyNetRequiredPerDay,
+      publishedPerDay: D5.publicPostsPerDay,
+      observedDays: D5.minimumObservationDays,
+      publishRunnerReady: true, commentRunnerReady: true,
+    })
+    // 🔴 d1→d3 은 D3 의 42 · 4/day · 12/day · 24명 · 3편/day 를 본다
+    const d1 = judgePromotion({
+      current: 'd1', target: 'd3',
+      readyStock: 41, activePersonas: 24, detailPerDay: 12,
+      readyNetPerDay: 4, publishedPerDay: 3, observedDays: 7,
+      publishRunnerReady: true, commentRunnerReady: true,
+    })
+    return blocked && ok.ready && ok.target === 'd5'
+      && !d1.ready && d1.blocking.some((b) => b.includes('42'))
+  })())
+
+  // ③ readyProduced 를 readyNet 으로 연결하면 FAIL
+  check('🔴 ③ **생산량과 순증가가 다른 값이고, 순증가는 스냅샷 차이로만 나온다**', (() => {
+    const wired = /readyProducedPerDay/.test(strip(cli)) && /readyNetPerDay/.test(strip(cli))
+      // 🔴 생산량을 순증가 자리에 넘기는 배선이 없어야 한다
+      && !/readyNetPerDay\s*:\s*readyProducedPerDay/.test(strip(cli))
+      && !/readyNetPerDay\s*:\s*perDay\(produced/.test(strip(stock))
+      && /readyNetFromSnapshots/.test(strip(stock))
+    const NOW = new Date('2026-09-21T00:00:00.000Z')
+    // 🔴 스냅샷이 없으면 unmeasured 다 — 0 이 아니다
+    const none = readyNetFromSnapshots({ snapshots: [], nowStock: 3, now: NOW })
+    // 🔴 판이 다르면 비교가 성립하지 않는다
+    const other = readyNetFromSnapshots({
+      snapshots: [{ at: '2026-09-11T00:00:00.000Z', readyStock: 1, selectorVersion: 'other' }],
+      nowStock: 3, now: NOW,
+    })
+    // 🔴 간격이 하루 미만이면 하루치를 말할 수 없다
+    const tooSoon = readyNetFromSnapshots({
+      snapshots: [{ at: '2026-09-20T18:00:00.000Z', readyStock: 1, selectorVersion: READY_SELECTOR_VERSION }],
+      nowStock: 3, now: NOW,
+    })
+    const diff = readyNetFromSnapshots({
+      snapshots: [{ at: '2026-09-11T00:00:00.000Z', readyStock: 1, selectorVersion: READY_SELECTOR_VERSION }],
+      nowStock: 3, now: NOW,
+    })
+    /**
+     * 🔴 **왜 못 쟀는지가 화면에 남아야 한다.** "없음" 같은 말로 줄이면 사람이
+     *    "0 이라는 뜻인가" 로 읽는다 — 그 오독이 바로 이 절의 결함이었다.
+     */
+    const saysWhy = !none.measured && /스냅샷/.test(none.reason)
+      && !other.measured && /판|selector|버전/i.test(other.reason)
+      && !tooSoon.measured && /일/.test(tooSoon.reason)
+    return wired && !none.measured && !other.measured && !tooSoon.measured && saysWhy
+      && diff.measured && diff.perDay === 0.2 && diff.spanDays === 10
+  })())
+
+  // ④ synthetic RawContent 가 detail/day 를 올리면 FAIL
+  check('🔴 ④ **상세/day 는 수집 회차 기록에서만 나온다 — DB 행 수가 아니다**', (() => {
+    // 🔴 `microSeedRawContent.count` 로 상세를 세는 배선이 없어야 한다
+    const noDbCount = !/microSeedRawContent\.count/.test(strip(stock))
+      && /detailThroughput/.test(strip(stock)) && /readRunRecords/.test(strip(stock))
+    const NOW = new Date('2026-09-21T00:00:00.000Z')
+    const rec = (over: Partial<CollectRunRecord>): CollectRunRecord => ({
+      runId: 'r', source: 'navercafe:wgang', trigger: 'schedule', mode: 'detail', status: 'ok',
+      startedAt: '2026-09-20T00:00:00.000Z', endedAt: null, code: null,
+      listRows: 10, detailRequests: 5, bodyRows: 5, thinRows: 5,
+      skippedSeen: 0, repeatedRows: 0, newUniqueThinRows: 5, ...over,
+    })
+    const base = detailThroughput({
+      windowDays: 10, now: NOW,
+      recordsOf: (src) => src === 'navercafe:wgang' ? [rec({})] : [],
+    })
+    /**
+     * 🔴 **합성 행을 아무리 넣어도 이 수는 움직이지 않는다.**
+     *    회차 기록을 늘리지 않는 한 상세 수집량은 변하지 않는다 —
+     *    그것이 DB 행 수를 세지 않는 이유다.
+     */
+    const same = detailThroughput({
+      windowDays: 10, now: NOW,
+      recordsOf: (src) => src === 'navercafe:wgang' ? [rec({})] : [],
+    })
+    // 🔴 상세를 열고도 본문을 못 읽은 회차는 성공이 아니다
+    const noBody = detailThroughput({
+      windowDays: 10, now: NOW,
+      recordsOf: (src) => src === 'navercafe:wgang' ? [rec({ bodyRows: 0, newUniqueThinRows: 99 })] : [],
+    })
+    return noDbCount && base.perDay === 0.5 && same.perDay === base.perDay
+      && noBody.perDay === null
+      && noBody.unmeasuredSources.length === DETAIL_SOURCES.length
+  })())
+
+  // ⑤ 예약 전망을 0 으로 하드코딩하면 FAIL
+  check('🔴 ⑤ **예약 전망은 예측기가 낸다 — 0 을 주입하지 않는다**', (() => {
+    const noZero = !/scheduledIn7Days\s*:\s*0/.test(strip(stock))
+      && !/scheduledIn14Days\s*:\s*0/.test(strip(stock))
+      && /forecastPublishing/.test(strip(stock))
+    // 🔴 사람이 없으면 0 건이 아니라 **계산할 수 없다**
+    const noPersona = forecastFromRows({
+      rows: [], publishableIds: [], personas: [], codeOfPersonaId: new Map(),
+      dailyCap: 1, now: new Date('2026-09-21T00:00:00.000Z'),
+    })
+    // 🔴 타입이 `Measured` 라 0 과 null 을 구분한다
+    const typed = /scheduledIn7Days: Measured/.test(readFileSync('src/lib/d100-readiness.ts', 'utf-8'))
+    return noZero && noPersona.in7 === null && noPersona.in14 === null && typed
+  })())
+
+  // ⑥ Persona 3계층 중 하나를 계기판에서 제거하면 FAIL
+  check('🔴 ⑥ **3계층이 계기판에 연결돼 있다 — 순수 함수만 있으면 없는 것이다**', (() => {
+    const wired = /personaTierReadiness/.test(strip(stock)) && /personaReadinessOk/.test(strip(stock))
+      && /personaTiers/.test(strip(cli)) && /personaReady/.test(strip(cli))
+      // 🔴 active 수만으로 승격 입력을 채우지 않는다
+      && /activePersonas: personaReady \? activePersonas : null/.test(strip(cli))
+    const FULL: PersonaCandidate = {
+      code: 'P', filledAxes: [...PERSONA_LIFE_AXES], ageBand: '50대 초반',
+      voiceComments: VOICE_MIN_COMMENTS, activityToday: 0, consecutiveExposures: 0,
+      daysSinceActive: 0, retired: false, qualificationConflict: false,
+      topicShare: 0, roleShare: 0, postsSinceLastPairing: 'never',
+    }
+    const many = Array.from({ length: 24 }, (_, i) => ({ ...FULL, code: `P${i}` }))
+    const all = personaTierReadiness({ stage: 'd3', candidates: many })
+    const ready = personaReadinessOk(all) && all.length === 3
+    // 🔴 한 층이라도 아니면 전체가 아니다
+    const cardBroken = personaTierReadiness({
+      stage: 'd3', candidates: many.map((p) => ({ ...p, ageBand: null })),
+    })
+    // 🔴 재지 않은 축이 있으면 그 층은 ready 가 아니다
+    const unmeasured = personaTierReadiness({
+      stage: 'd3', candidates: many.map((p) => ({ ...p, topicShare: null })),
+    })
+    return wired && ready
+      && !personaReadinessOk(cardBroken) && cardBroken[0]!.ready === false
+      && !personaReadinessOk(unmeasured)
+      && unmeasured[2]!.unmeasured.topicConcentrated === 24
+  })())
+
+  // ⑦ 82cook operating 이 canary 20요청 상한을 상속하면 FAIL
+  check('🔴 ⑦ **operating 이 canary 예산을 물려받지 않는다**', (() => {
+    const src = strip(readFileSync('src/lib/collect-82cook-recovery.ts', 'utf-8'))
+    // 🔴 operating 칸을 만드는 자리에서 canary 상수를 예산으로 쓰지 않는다
+    const opBlock = src.slice(src.indexOf("kind: 'operating'"))
+    const clean = opBlock.slice(0, opBlock.indexOf("kind: 'required'"))
+    return !/CANARY_CONTRACT\.maxRequestsPerDay/.test(clean)
+  })())
+
+  // ⑧ 7일 무사고 조건을 제거하면 FAIL
+  check('🔴 ⑧ **마지막 칸의 조건은 7일 무사고다 — 회차 수로 대체되지 않는다**', (() => {
+    const top = ESCALATION_LADDER[ESCALATION_LADDER.length - 1]!
+    const byDays = top.incidentFreeDaysInPrevStep === TOP_STEP_INCIDENT_FREE_DAYS
+      && TOP_STEP_INCIDENT_FREE_DAYS === 7
+      && top.maxDetailPerRun === 30 && top.maxRunsPerDay === 3
+    // 🔴 무사 회차가 아무리 많아도 날이 차지 않으면 못 올라간다
+    const runsCannotSubstitute = !judgeLadder({
+      currentStep: 3, cleanRunsInCurrentStep: 10_000,
+      incidentFreeDaysInCurrentStep: 6, sawAbortSignal: false,
+    }).mayProposeNext
+    const daysWork = judgeLadder({
+      currentStep: 3, cleanRunsInCurrentStep: 0,
+      incidentFreeDaysInCurrentStep: 7, sawAbortSignal: false,
+    }).mayProposeNext
+    // 🔴 20~30 사이에서만 움직인다
+    const band = LADDER_TOP_MIN_DETAIL_PER_RUN === 20 && LADDER_MAX_DETAIL_PER_RUN === 30
+    return byDays && runsCannotSubstitute && daysWork && band
+  })())
+
+  // ⑨ hiddenPost 를 사람이 내린 글로 단정하면 FAIL — 위 ⑤절이 전 경로를 훑는다
+  check('🔴 ⑨ **계기판도 주체를 단정하지 않는다**', (() => {
+    const code = strip(cli)
+    return !/사람이 내린 글/.test(code) && !/takenDown/.test(code)
+  })())
+
+  // 🔴 공급원별 수집 — wgang 하나만 보여 주면 나머지가 죽어도 초록이다
+  check('🔴 ⑨-b **수집 job 을 공급원마다 따로 보여 준다**', (() => {
+    const code = strip(cli)
+    return /remonterrace/.test(code) && /82cook/.test(code) && /collectJobs/.test(code)
+      && DETAIL_SOURCES.length === 3
   })())
 }
 

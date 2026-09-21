@@ -212,6 +212,72 @@ export type PersonaScaleNeed = {
 }
 
 /**
+ * 🔴 **층마다 따로 답한다** — ready / blocking / unmeasured.
+ *    한 층이라도 `ready` 가 아니면 Persona 준비도는 아니다.
+ */
+export type TierReadiness = {
+  tier: PersonaTier
+  ready: boolean
+  /** 그 층을 통과한 사람 수 */
+  passed: number
+  /** 대상 인원 */
+  total: number
+  /** 🔴 목표 인원 (카드·풀 층에만 뜻이 있다) */
+  target: number | null
+  /** 코드별 막힌 사람 수 */
+  blocking: Readonly<Record<string, number>>
+  /** 🔴 재지 못해 판단할 수 없는 코드별 사람 수 */
+  unmeasured: Readonly<Record<string, number>>
+  reason: string | null
+}
+
+/** 🔴 층별 판정 — 계기판이 이 값을 그대로 찍는다 */
+export function personaTierReadiness(input: {
+  stage: D100Stage
+  candidates: readonly PersonaCandidate[]
+}): TierReadiness[] {
+  const target = d100Plan(input.stage).activePersonaTarget
+  const total = input.candidates.length
+  const out: TierReadiness[] = []
+
+  for (const tier of PERSONA_TIERS) {
+    const blocking: Record<string, number> = {}
+    const unmeasured: Record<string, number> = {}
+    let passed = 0
+    for (const p of input.candidates) {
+      const v = personaTiers(p)[tier]
+      for (const c of v.blocked) blocking[c] = (blocking[c] ?? 0) + 1
+      for (const c of v.unmeasured) unmeasured[c] = (unmeasured[c] ?? 0) + 1
+      if (v.ok) passed += 1
+    }
+    /**
+     * 🔴 카드·풀 층은 **목표 인원**을 채워야 한다. 배정 층은 회차마다 달라지므로
+     *    목표와 견주지 않고 "전원이 판정 가능한가" 만 본다 —
+     *    재지 못한 축이 하나라도 있으면 그 층은 ready 가 아니다.
+     */
+    const hasUnmeasured = Object.keys(unmeasured).length > 0
+    const ready = tier === 'assignment'
+      ? !hasUnmeasured && passed === total && total > 0
+      : !hasUnmeasured && passed >= target
+    const reason = ready ? null
+      : hasUnmeasured ? `재지 못한 축이 있다 (${Object.keys(unmeasured).join('·')})`
+        : tier === 'assignment' ? `${total - passed}명이 이번 회차에 배정될 수 없다`
+          : `${passed}명 < 목표 ${target}명`
+    out.push({
+      tier, ready, passed, total,
+      target: tier === 'assignment' ? null : target,
+      blocking, unmeasured, reason,
+    })
+  }
+  return out
+}
+
+/** 🔴 **한 층이라도 아니면 Persona 준비도는 아니다** */
+export function personaReadinessOk(tiers: readonly TierReadiness[]): boolean {
+  return tiers.length === PERSONA_TIERS.length && tiers.every((t) => t.ready)
+}
+
+/**
  * 🔴 **카드 수가 아니라 풀에 드는 사람 수로 센다.**
  *    카드만 180장 만들어도 `poolReady` 가 모자라면 READY 가 아니다.
  *

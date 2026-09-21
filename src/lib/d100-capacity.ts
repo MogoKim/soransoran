@@ -187,9 +187,41 @@ export function nextStage(stage: D100Stage): D100Stage | null {
   return i < 0 || i + 1 >= D100_STAGES.length ? null : D100_STAGES[i + 1]!
 }
 
+/**
+ * 🔴 **운영 중인 단계와 목표 단계는 다른 것이다** (2026-09-21 3차 보정).
+ *
+ *    앞판은 계기판이 `stage = 'd3'` 를 **코드에 박아** 두고 그것을 "지금 단계" 라고 불렀다.
+ *    실제 운영값은 `SORAN_RELEASE_STAGE` 이고 지금은 **d1** 이다 —
+ *    하루 1편 내는 레인을 하루 3편이라고 적어 두고, 그 위에서 "d5 로 올려도 되는가" 를
+ *    물었다. 한 칸이 통째로 건너뛰어진 것이다.
+ *
+ * 🔴 `d1` 은 D100 단계표에 없다. release 단계(d1·d3·d5·d10)와 D100 용량 단계
+ *    (d3~d100)는 겹치되 같지 않다 — 그래서 변환을 한 곳에 둔다.
+ */
+export function targetStageFor(current: ReleaseStage): D100Stage {
+  // 🔴 d1 의 다음은 D100 표의 첫 칸이다
+  if (current === 'd1') return D100_STAGES[0]
+  const nxt = nextStage(current as D100Stage)
+  // 🔴 마지막이면 자기 자신 — 더 올릴 곳이 없다
+  return nxt ?? (current as D100Stage)
+}
+
+/**
+ * 🔴 지금 운영 중인 단계의 **필요량**. release 단계 `d1` 은 D100 표에 없으므로
+ *    "표에 없는 단계" 임을 그대로 말한다 — 없는 칸을 d3 으로 올려 읽지 않는다.
+ */
+export function currentPlanOf(current: ReleaseStage): D100Plan | null {
+  return (D100_STAGES as readonly string[]).includes(current) ? d100Plan(current as D100Stage) : null
+}
+
 export type PromotionInput = {
-  /** 지금 단계 */
-  stage: D100Stage
+  /** 🔴 지금 **운영 중인** release 단계 (env 정본에서 읽는다) */
+  current: ReleaseStage
+  /**
+   * 🔴 **올라가려는 단계.** 판정은 전부 이 단계의 필요량으로 한다 —
+   *    지금 단계 필요량만 채우고 다음 칸으로 올라가는 것이 앞판의 결함이었다.
+   */
+  target: D100Stage
   /** 🔴 지금 쓸 수 있는 재고. **재지 못했으면 `null`** — 0 도 -1 도 아니다 */
   readyStock: number | null
   /** 🔴 실제 활성 Persona 수. 재지 못했으면 `null` */
@@ -203,10 +235,19 @@ export type PromotionInput = {
   publishRunnerReady: boolean
   /** 댓글 runner 가 실제로 돌 수 있는가 */
   commentRunnerReady: boolean
+  /**
+   * 🔴 **관측된 하루 공개 발행 편수.** 재지 않았으면 `null`.
+   *    d1→d3 이면 3/day 를 실제로 내고 있는지까지 본다 — 재고만 쌓여도 올라가지 않는다.
+   */
+  publishedPerDay: number | null
 }
 
 export type PromotionVerdict = {
   ready: boolean
+  /** 🔴 어느 단계의 필요량으로 쟀는가 — 보고서가 이 값을 그대로 적는다 */
+  target: D100Stage
+  /** 목표 단계의 필요량 그 자체 */
+  requirement: D100Plan
   /** 🔴 막는 이유 — 비어 있으면 올려도 된다 */
   blocking: string[]
   /** 🔴 측정되지 않아 판단할 수 없는 것 — `blocking` 과 다르다 */
@@ -218,7 +259,11 @@ export type PromotionVerdict = {
  *    모르는 것을 "괜찮다" 로 읽으면 확대가 관측 없이 일어난다.
  */
 export function judgePromotion(input: PromotionInput): PromotionVerdict {
-  const cur = d100Plan(input.stage)
+  /**
+   * 🔴 **목표 단계의 필요량으로 잰다.** `d100Plan(현재)` 로 재면 d3 수치(재고 42 ·
+   *    READY 4/day)만 채우고 d5 로 올라간다 — d5 는 70 · 6/day 를 요구한다.
+   */
+  const cur = d100Plan(input.target)
   const blocking: string[] = []
   const unmeasured: string[] = []
 
@@ -234,11 +279,8 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
     blocking.push(`관측 ${input.observedDays}일 < 최소 ${cur.minimumObservationDays}일`)
   }
   // 🔴 **스케줄러가 못 하는 단계로는 올리지 않는다.** 재고가 아무리 많아도 나갈 길이 없다
-  const nxt = nextStage(input.stage)
-  if (nxt !== null) {
-    const sc = schedulerSupportOf(nxt)
-    if (!sc.supported) blocking.push(`다음 단계 ${nxt} 를 스케줄러가 감당하지 못한다 — ${sc.detail}`)
-  }
+  const sc = schedulerSupportOf(input.target)
+  if (!sc.supported) blocking.push(`목표 ${input.target} 를 스케줄러가 감당하지 못한다 — ${sc.detail}`)
   if (!input.publishRunnerReady) blocking.push('발행 runner 가 돌 수 없다')
   if (!input.commentRunnerReady) blocking.push('댓글 runner 가 돌 수 없다')
 
@@ -246,11 +288,18 @@ export function judgePromotion(input: PromotionInput): PromotionVerdict {
   else if (input.detailPerDay < cur.detailedSourcesRequiredPerDay) {
     blocking.push(`상세 ${input.detailPerDay}/day < 필요 ${cur.detailedSourcesRequiredPerDay}/day`)
   }
+  if (input.publishedPerDay === null) unmeasured.push('공개 발행/day')
+  else if (input.publishedPerDay < cur.publicPostsPerDay) {
+    blocking.push(`공개 발행 ${input.publishedPerDay}/day < 목표 ${cur.publicPostsPerDay}/day`)
+  }
   if (input.readyNetPerDay === null) unmeasured.push('READY 순증가/day')
   else if (input.readyNetPerDay < cur.readyNetRequiredPerDay) {
     blocking.push(`READY 순증가 ${input.readyNetPerDay}/day < 필요 ${cur.readyNetRequiredPerDay}/day`)
   }
 
   // 🔴 측정되지 않은 값이 하나라도 있으면 올리지 않는다
-  return { ready: blocking.length === 0 && unmeasured.length === 0, blocking, unmeasured }
+  return {
+    ready: blocking.length === 0 && unmeasured.length === 0,
+    target: input.target, requirement: cur, blocking, unmeasured,
+  }
 }
