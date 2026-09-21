@@ -275,10 +275,26 @@ export type ReviewTx = {
   /**
    * 🔴 **조건부 기록.** `where` 가 한 칸이라도 다르면 0 을 돌려준다 —
    *    "그 사이 누가 바꿨다" 를 DB 가 판정한다.
+   *
+   * 🔴 `patch` 는 결정이 바꾸는 칸이다. 비어 있으면 도장 두 칸만 바뀐다(앞판과 같다).
    */
   stamp: (input: {
     id: string; where: ReviewSnapshot; decidedBy: string; decidedAt: Date
+    patch: ReviewPatch
   }) => Promise<number>
+}
+
+/**
+ * 🔴 **결정이 바꾸는 칸.** 여기 없는 칸은 어떤 결정도 건드리지 않는다 —
+ *    `draftTitle`·`draftBody`·`gateResults`·`promptVersion`·`model`·`createdPostId` 는 그대로다.
+ */
+export type ReviewPatch = {
+  status: string
+  /** 🔴 없으면 **건드리지 않는다** — 지우면 사람이 한 일이 사라진다 */
+  editedTitle?: string
+  editedBody?: string
+  editDiff?: unknown
+  declineReason?: string
 }
 
 /** 🔴 `fn` 이 던지면 **되돌린다.** 그것이 이 계약의 전부다 */
@@ -286,8 +302,56 @@ export type ReviewStore = {
   transaction: <T>(fn: (tx: ReviewTx) => Promise<T>) => Promise<T>
 }
 
+/**
+ * 🔴 **사람이 내릴 수 있는 검토 결정** (2026-09-21)
+ *
+ *    앞판은 `ready` 하나뿐이었다 — 기계가 만든 글을 사람이 읽고 "괜찮다" 만 찍을 수 있었다.
+ *    고쳐서 내보내거나, 버리거나, 미루는 길이 **코드에 없었다.** 그래서 문장 하나를
+ *    고쳐야 하는 글이 큐에 그대로 남았다(2026-09-21 실측 — 원천 35038242).
+ *
+ * 🔴 **새 상태를 만들지 않는다.** 네 결정 모두 `ORIGINAL_POST_STATUSES` 안에서 끝난다.
+ */
+export const REVIEW_DECISIONS = ['ready', 'edit', 'reject', 'hold'] as const
+export type ReviewDecision = (typeof REVIEW_DECISIONS)[number]
+
+/**
+ * 🔴 **결정이 남기는 상태.** 발행기(`selectAutoTargets`)가 무엇을 고르는지에서 나온 값이다:
+ *    `APPROVED`·`EDITED` 만 발행 대상이고, 기계 글은 `decidedBy === 'founder'` 도 있어야 한다.
+ *
+ *    ready   APPROVED 그대로 — 사람 도장이 붙어 발행 대상이 된다
+ *    edit    EDITED   — 사람이 고친 문안으로 발행 대상이 된다
+ *    reject  DECLINED — 발행기가 `STATUS` 로 거른다. 폐기다
+ *    hold    PENDING  — 발행기가 `STATUS` 로 거른다. **결정을 미룬 것**이라
+ *                       `publish:decide`(PENDING 만 받는다)가 나중에 마무리할 수 있다
+ */
+export const REVIEW_DECISION_STATUS = Object.freeze({
+  ready: 'APPROVED', edit: 'EDITED', reject: 'DECLINED', hold: 'PENDING',
+} as const satisfies Readonly<Record<ReviewDecision, string>>)
+
+/** 🔴 발행 대상이 될 수 있는 결정 — 발행기 조건과 같은 값에서 나온다 */
+export const PUBLISHABLE_DECISIONS = [
+  'ready', 'edit',
+] as const satisfies readonly ReviewDecision[]
+
+export const REVIEW_DECISION_LABEL: Readonly<Record<ReviewDecision, string>> = {
+  ready: '그대로 내보내도 된다',
+  edit: '고쳐서 내보낸다',
+  reject: '내보내지 않는다 (폐기)',
+  hold: '지금은 미룬다 — 나중에 다시 본다',
+}
+
+/** 🔴 사람이 고친 문안 — 본문은 CLI 가 아니라 파일로 온다 */
+export type ReviewEdit = { title: string; body: string; note: string }
+
+/**
+ * 🔴 **수정본이 발행 기준을 다시 통과하는가.** 사람이 고친 글에도 원문 조각이
+ *    들어갈 수 있다 — 사람 손을 거쳤다는 이유로 저장 금지 계약을 우회하지 않는다.
+ */
+export type ReviewGate = (t: { title: string; body: string }) => { ok: boolean; reason: string }
+
 export const COMPLETE_FAIL_CODES = [
   'notFound', 'snapshotChanged', 'conditionMissed', 'verifyFailed', 'stampMissing',
+  'gateFailed', 'editMissing', 'editUnchanged', 'reasonMissing',
 ] as const
 export type CompleteFailCode = (typeof COMPLETE_FAIL_CODES)[number]
 
@@ -297,6 +361,10 @@ export const COMPLETE_FAIL_LABEL: Readonly<Record<CompleteFailCode, string>> = {
   conditionMissed: '🔴 조건부 기록이 0건이다 — 그 사이 누가 바꿨다. 아무것도 쓰지 않았다',
   verifyFailed: '🔴 쓴 뒤 대조가 어긋났다 — **되돌렸다**',
   stampMissing: '🔴 도장이 남지 않았다 — 되돌렸다',
+  gateFailed: '🔴 고친 글이 발행 기준을 통과하지 못했다 — 아무것도 쓰지 않았다',
+  editMissing: '🔴 고친 문안이 없다 — 제목·본문·왜 고쳤는지가 모두 있어야 한다',
+  editUnchanged: '🔴 고친 것이 없다 — 그대로 내보낼 것이면 ready 로 한다',
+  reasonMissing: '🔴 폐기 사유가 없다 — 왜 버리는지 값으로 남긴다',
 }
 
 export type CompleteVerdict =
@@ -308,6 +376,47 @@ class RollbackSignal extends Error {
   constructor(readonly code: CompleteFailCode, readonly detail: string) { super(code) }
 }
 
+/**
+ * 🔴 **무엇을 쓸 것인가.** 결정마다 바뀌는 칸을 한 곳에서 만든다 —
+ *    부르는 쪽이 조립하면 결정별로 칸이 어긋난다.
+ */
+export function reviewPatchOf(input: {
+  decision: ReviewDecision
+  draftTitle: string
+  draftBody: string
+  edit: ReviewEdit | null
+  declineReason: string | null
+}): ReviewPatch {
+  // 🔴 고치지 않는 결정은 수정본·사유 칸을 **그대로 둔다** — 상태만 바뀐다
+  const keep: ReviewPatch = { status: REVIEW_DECISION_STATUS[input.decision] }
+  if (input.decision === 'edit' && input.edit !== null) {
+    const e = input.edit
+    return {
+      status: REVIEW_DECISION_STATUS.edit,
+      editedTitle: e.title,
+      editedBody: e.body,
+      // 🔴 본문을 담지 않는다 — 바뀌었는지와 얼마나, 그리고 사람이 쓴 한 줄뿐이다
+      editDiff: {
+        titleChanged: flat(e.title) !== flat(input.draftTitle),
+        bodyChanged: flat(e.body) !== flat(input.draftBody),
+        bodyCharsBefore: input.draftBody.length,
+        bodyCharsAfter: e.body.length,
+        note: e.note,
+      },
+    }
+  }
+  if (input.decision === 'reject' && input.declineReason !== null) {
+    return { status: REVIEW_DECISION_STATUS.reject, declineReason: input.declineReason }
+  }
+  return keep
+}
+
+/**
+ * 🔴 **읽기·검증·기록·재대조가 한 트랜잭션.** 어느 단계든 어긋나면 되돌아간다(write 0).
+ *
+ * 🔴 `edit` 는 **쓰기 전에** 발행 기준을 다시 통과해야 한다 —
+ *    통과하지 못하면 `gateFailed` 이고 아무것도 쓰지 않는다.
+ */
 export async function completeReview(input: {
   store: ReviewStore
   id: string
@@ -315,19 +424,55 @@ export async function completeReview(input: {
   before: ReviewSnapshot
   decidedBy: string
   now: Date
+  /** 기본은 `ready` — 앞판과 같은 동작이다 */
+  decision?: ReviewDecision
+  /** `edit` 일 때만 */
+  edit?: ReviewEdit | null
+  /** `reject` 일 때만 */
+  declineReason?: string | null
+  /** 최초 초안 — 수정본과 견주어 diff 를 만든다 */
+  draftTitle: string
+  draftBody: string
+  /** `edit` 일 때 수정본을 다시 재는 정본 게이트 */
+  gate?: ReviewGate
 }): Promise<CompleteVerdict> {
+  const decision: ReviewDecision = input.decision ?? 'ready'
+  const edit = input.edit ?? null
   try {
     return await input.store.transaction(async (tx) => {
+      // ── ⓪ 결정이 갖춰야 할 것 — 트랜잭션 안에서 본다. 못 갖췄으면 write 0 ──
+      if (decision === 'edit') {
+        if (edit === null || edit.title.trim() === '' || edit.body.trim() === ''
+          || edit.note.trim() === '') {
+          throw new RollbackSignal('editMissing', '')
+        }
+        if (flat(edit.title) === flat(input.draftTitle)
+          && flat(edit.body) === flat(input.draftBody)) {
+          throw new RollbackSignal('editUnchanged', '')
+        }
+        const g = input.gate?.({ title: edit.title, body: edit.body })
+        if (g !== undefined && !g.ok) throw new RollbackSignal('gateFailed', g.reason)
+      }
+      if (decision === 'reject' && (input.declineReason ?? '').trim() === '') {
+        throw new RollbackSignal('reasonMissing', '')
+      }
+
       const current = await tx.read(input.id)
       if (current === null) throw new RollbackSignal('notFound', '')
       // ── ① 검증 — 사람이 읽은 그 글인가 ──
       const same = judgeReviewSnapshot(input.before, current)
       if (!same.ok) throw new RollbackSignal('snapshotChanged', same.changed.join(' · '))
+
+      const patch = reviewPatchOf({
+        decision, draftTitle: input.draftTitle,
+        draftBody: input.draftBody, edit, declineReason: input.declineReason ?? null,
+      })
       // ── ② 조건부 기록 — DB 가 한 번 더 판정한다 ──
       const n = await tx.stamp({
-        id: input.id, where: input.before, decidedBy: input.decidedBy, decidedAt: input.now,
+        id: input.id, where: input.before, decidedBy: input.decidedBy, decidedAt: input.now, patch,
       })
       if (n !== 1) throw new RollbackSignal('conditionMissed', `${n}건`)
+
       // ── ③ 같은 경계 안에서 다시 읽어 대조 — 어긋나면 **되돌린다** ──
       const back = await tx.read(input.id)
       if (back === null) throw new RollbackSignal('notFound', '쓴 뒤')
@@ -336,7 +481,20 @@ export async function completeReview(input: {
       if (back.decidedAt === null || back.decidedAt.getTime() !== input.now.getTime()) {
         throw new RollbackSignal('stampMissing', `decidedAt ${back.decidedAt?.toISOString() ?? '없음'}`)
       }
-      const still = judgeReviewSnapshot(input.before, back)
+      /**
+       * 🔴 **바뀌라고 쓴 칸은 바뀐 값으로 견준다.** 앞판은 "아무것도 안 바뀌었나" 만 봤다 —
+       *    그 비교를 그대로 두면 수정·폐기·보류가 언제나 `verifyFailed` 가 된다.
+       */
+      const expected: ReviewSnapshot = {
+        ...input.before,
+        status: patch.status,
+        title: patch.editedTitle ?? input.before.title,
+        body: patch.editedBody ?? input.before.body,
+        // 🔴 `updatedAt` 은 write 가 반드시 바꾼다 — 비교 대상이 아니다
+        updatedAt: back.updatedAt,
+        decidedBy: back.decidedBy,
+      }
+      const still = judgeReviewSnapshot(expected, back)
       if (!still.ok) throw new RollbackSignal('verifyFailed', still.changed.join(' · '))
       return { ok: true as const, decidedAt: input.now }
     })

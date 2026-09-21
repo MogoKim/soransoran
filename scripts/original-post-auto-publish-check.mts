@@ -5,6 +5,11 @@
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
 import { readFileSync } from 'node:fs'
+import {
+  reviewPatchOf, REVIEW_DECISIONS, REVIEW_DECISION_STATUS,
+} from '../src/lib/original-post-machine-review'
+import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
+
 import { SOURCE_TITLE_CHECK_VERSION } from '../src/lib/draft-originality'
 import {
   selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, queueOrderKey, compareAutoRow,
@@ -607,21 +612,34 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
   // 🔴 2026-09-14 — 낙관적 잠금으로 바뀌었다. 자세한 계약은 ㉑ 이 본다
   check('🔴 조건부 UPDATE — 스냅샷이 바뀌었으면 멈춘다',
     /createdPostId: null,/.test(rev) && /updatedAt: i\.where\.updatedAt,/.test(rev))
-  check('🔴 바꾸는 컬럼은 decidedBy · decidedAt 둘뿐이다',
-    /data: \{ decidedBy: i\.decidedBy, decidedAt: i\.decidedAt \},/.test(rev))
+  /**
+   * 🔴 **결정이 바꾸는 칸은 계약이 정한다** (2026-09-21). `ready` 는 예전처럼 도장 두 칸뿐이고,
+   *    `edit`·`reject`·`hold` 는 상태와 수정본·사유까지 바꾼다. 어느 결정도
+   *    최초 초안·게이트 결과·판·모델·발행 id 는 건드리지 않는다.
+   */
+  check('🔴 🔴 **ready 는 여전히 도장 두 칸만 바꾼다**', (() => {
+    const patch = reviewPatchOf({
+      decision: 'ready', draftTitle: 'ㄱ', draftBody: 'ㄴ', edit: null, declineReason: null,
+    })
+    return patch.status === 'APPROVED' && patch.editedTitle === undefined
+      && patch.editedBody === undefined && patch.editDiff === undefined
+      && patch.declineReason === undefined
+  })())
   check('🔴 [계약] 검토 명령이 Post·Comment·Persona 를 쓰지 않는다',
     !/prisma\.(post|comment|persona)\.(create|update|updateMany|delete)/.test(rev))
-  check('🔴 [계약] 검토 명령이 본문·status·gateResults 를 쓰지 않는다', (() => {
-    // 🔴 **update 의 `data` 객체만** 본다. select 에 있는 필드 이름을 write 로 세지 않는다
-    const i = rev.indexOf('data: { decidedBy: i.decidedBy, decidedAt: i.decidedAt },')
+  check('🔴 🔴 **검토 명령이 최초 초안·게이트 결과·판·모델을 쓰지 않는다**', (() => {
+    // 🔴 계약 타입에 그 칸이 아예 없다 — 쓰고 싶어도 쓸 수 없다
+    const i = revLib.indexOf('export type ReviewPatch')
     if (i === -1) return false
-    const dataObj = rev.slice(i, rev.indexOf('}', i) + 1)
-    return !/draftTitle|draftBody|editedTitle|editedBody|status|gateResults/.test(dataObj)
+    const block = revLib.slice(i, revLib.indexOf('\n}', i))
+    return !/draftTitle|draftBody|gateResults|promptVersion|model|createdPostId/.test(block)
   })())
   check('🔴 [계약] 검토 명령이 provider 를 부르지 않는다',
     !/callProvider|anthropic|openai|fetch\(/.test(rev))
   check('🔴 기계 생성 provenance 보존을 확인한다 — read-back 대조',
-    /const still = judgeReviewSnapshot\(input\.before, back\)/.test(revLib))
+    /const still = judgeReviewSnapshot\(expected, back\)/.test(revLib)
+    // 🔴 바뀌라고 쓴 칸만 기대값으로 바꾼다 — provenance 칸은 그대로 대조한다
+    && /promptVersion: before\.promptVersion|\.\.\.input\.before,/.test(revLib))
 }
 
 console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
@@ -640,11 +658,14 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
 
   // ── ① decidedBy 와 decidedAt 을 **함께** 쓴다 ──
   check('🔴 검토 완료 UPDATE 가 decidedBy 와 decidedAt 을 함께 기록한다',
-    /data: \{ decidedBy: i\.decidedBy, decidedAt: i\.decidedAt \},/.test(rev))
+    /decidedBy: i\.decidedBy, decidedAt: i\.decidedAt,/.test(rev))
   check('🔴 검토 시각은 실제 검토 완료 시각이다 (적재 시각이 아니다)',
     /const reviewedAt = new Date\(\)/.test(rev))
   check('🔴 [회귀] decidedBy 만 바꾸던 옛 판이 아니다',
     !/data: \{ decidedBy: i\.decidedBy \}/.test(rev))
+  check('🔴 🔴 **결정마다 상태가 정본 상태 안에서 정해진다**',
+    REVIEW_DECISIONS.every((d) =>
+      (ORIGINAL_POST_STATUSES as readonly string[]).includes(REVIEW_DECISION_STATUS[d])))
   check('🔴 read-back 이 decidedAt 까지 확인한다',
     /back\.decidedAt\.getTime\(\) !== input\.now\.getTime\(\)/.test(revLib)
     && /RollbackSignal\('stampMissing'/.test(revLib))
@@ -708,16 +729,14 @@ console.log('\n㉑ 🔴 검토 시각 정합 · 스냅샷 보호 (2026-09-14)')
   check('🔴 read-back 이 발행 문안(edited ?? draft)으로 대조한다',
     /title: r\.editedTitle \?\? r\.draftTitle, body: r\.editedBody \?\? r\.draftBody,/.test(rev))
   check('🔴 read-back 이 judgeReviewSnapshot 으로 판정한다',
-    /const still = judgeReviewSnapshot\(input\.before, back\)/.test(revLib))
+    /const still = judgeReviewSnapshot\(expected, back\)/.test(revLib))
   check('🔴 스냅샷이 어긋나면 exit 1 — 아무것도 쓰지 않는다',
     /if \(!verdict\.ok\) \{/.test(rev) && /아무것도 바꾸지 않았습니다/.test(rev))
 
   // ── ⑤ 🔴 write 범위가 넓어지지 않았다 ──
-  check('🔴 [계약] 바꾸는 컬럼은 decidedBy · decidedAt 둘뿐이다', (() => {
-    const i = rev.indexOf('data: { decidedBy: i.decidedBy, decidedAt: i.decidedAt },')
-    if (i === -1) return false
-    const d = rev.slice(i, rev.indexOf('}', i) + 1)
-    return !/draftTitle|draftBody|editedTitle|editedBody|status|gateResults|promptVersion|model/.test(d)
+  check('🔴 🔴 **[계약] write 범위가 넓어지지 않았다** — Queue 한 테이블뿐', (() => {
+    const writes = [...rev.matchAll(/(?:prisma|tx)\.([a-zA-Z]+)\.(create|update|updateMany|delete|deleteMany|upsert)/g)]
+    return writes.length > 0 && writes.every((m) => m[1] === 'originalPostApprovalQueue')
   })())
   check('🔴 [계약] Post·Comment·Persona write 0',
     !/prisma\.(post|comment|persona)\.(create|update|updateMany|delete|deleteMany|upsert)/.test(rev))
