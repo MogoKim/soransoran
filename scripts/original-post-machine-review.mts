@@ -61,7 +61,7 @@ import { join } from 'node:path'
  */
 import {
   findReviewArtifact, readReviewArtifact, reviewEvidenceLines, artifactCostUsd,
-  currentText, editDiffLines, completeReview,
+  currentText, editDiffLines, completeReview, sourceEvidenceOf,
   REVIEW_DECISIONS, REVIEW_DECISION_LABEL, REVIEW_DECISION_STATUS, PUBLISHABLE_DECISIONS,
   REVIEW_DECISION_WRITES, REVIEW_UNTOUCHED_COLUMNS,
   type ReviewAction, type ReviewArtifact, type ReviewDecision, type ReviewEdit,
@@ -69,9 +69,7 @@ import {
 } from '../src/lib/original-post-machine-review'
 import { AUTO_GATE_VERDICT } from '../src/lib/original-post-auto-publish'
 import { DECLINE_REASONS, isDeclineReasonCode } from '../src/lib/original-post-decision'
-import { readSourceProfile, mustKeepDetails } from './lib/source-profile'
-import { analyzeDraft } from './lib/original-post-prompt'
-import { gateDraft } from './lib/original-post-gate'
+import { gateEditedDraft } from './lib/original-post-edit-gate.mjs'
 import { DATA_DIR } from './micro-seed-auto-draft.mjs'
 
 const argv = process.argv.slice(2)
@@ -125,8 +123,13 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     sourceRawContentId: true,
     // 🔴 검토 스냅샷이 이 둘까지 들고 있어야 쓴 뒤 대조할 수 있다
     editDiff: true, declineReason: true,
-    // 🔴 수정본을 발행 기준으로 다시 재려면 원문이 필요하다 — 읽기만 한다
-    rawContent: { select: { sourceSite: true, rawTitle: true, rawBody: true } },
+    /**
+     * 🔴 **합성 raw 의 본문을 아예 읽지 않는다** (2026-09-21).
+     *    적재기가 거기에 AI 초안의 사본을 넣는다 — 외부 원문이 아니다.
+     *    재검수의 원문은 artifact 의 마스킹된 근거다(`sourceEvidenceOf`).
+     *    🔴 읽지 않으면 **쓸 수도 없다.** profile 판정에 필요한 `sourceSite` 만 가져온다.
+     */
+    rawContent: { select: { sourceSite: true } },
   },
   orderBy: [{ decidedAt: 'asc' }, { createdAt: 'asc' }],
 })
@@ -200,23 +203,39 @@ function targetOf(r: AutoRow): ReviewTarget {
 }
 
 /** 🔴 이 후보의 글쓴이가 누구이고 몇 살인가 — 모르면 검토 완료를 거부한다 */
-type Ground = { personaCode: string | null; ageBand: string | null; ok: boolean; reason: string }
+/**
+ * 🔴 **검증을 통과한 artifact 를 들고 다닌다** (2026-09-21).
+ *    `findReviewArtifact` 가 artifactId · sourceArticleId · 최초 초안을 이미 대조했다.
+ *    그 결과를 버리고 나중에 다시 찾으면 **다른 근거로 재검수할 길**이 생긴다.
+ */
+type Ground = {
+  personaCode: string | null; ageBand: string | null; ok: boolean; reason: string
+  artifact: ReviewArtifact | null
+}
 function groundOf(r: AutoRow): Ground {
   const code = voiceInputOf(r).voice?.personaCode ?? null
   if (code === null) {
-    return { personaCode: null, ageBand: null, ok: false, reason: '생성 Persona 기록이 없다 — 누가 쓴 글인지 모른다' }
+    return {
+      personaCode: null, ageBand: null, artifact: null,
+      ok: false, reason: '생성 Persona 기록이 없다 — 누가 쓴 글인지 모른다',
+    }
   }
   const band = ageOf.get(code) ?? null
   if (band === null || band.trim() === '') {
-    return { personaCode: code, ageBand: null, ok: false, reason: `${code} 의 정본 나이대(ageBand)를 읽지 못했다` }
+    return {
+      personaCode: code, ageBand: null, artifact: null,
+      ok: false, reason: `${code} 의 정본 나이대(ageBand)를 읽지 못했다`,
+    }
   }
   /**
    * 🔴 **사람이 볼 근거가 없으면 검토 완료를 거부한다** (2026-09-20).
    *    다른 글의 근거로 이 글을 통과시키는 것이 가장 조용한 사고다.
    */
   const ev = findReviewArtifact({ target: targetOf(r), artifacts: ARTIFACTS })
-  if (!ev.ok) return { personaCode: code, ageBand: band, ok: false, reason: ev.reason }
-  return { personaCode: code, ageBand: band, ok: true, reason: '' }
+  if (!ev.ok) {
+    return { personaCode: code, ageBand: band, artifact: null, ok: false, reason: ev.reason }
+  }
+  return { personaCode: code, ageBand: band, artifact: ev.artifact, ok: true, reason: '' }
 }
 
 const machine = rows.filter((r) => profileOf(r) === 'machine')
@@ -384,31 +403,25 @@ if (decision === 'edit' && edited !== null) {
  *    기계 경로는 Content Core 의 제 검수를 쓰고 이 게이트를 지나지 않는다.
  *    그런데 사람 수정본에만 `PASS` 를 요구하면, **고쳐야 할 글일수록 고칠 수 없게** 된다.
  *    🔴 대신 판정과 사유 코드를 화면에 적어 사람이 보고 정한다.
+ *
+ * 🔴 **원문은 artifact 근거다 — DB 의 `rawContent` 가 아니다** (2026-09-21 실측 보정).
+ *    적재기가 기계 후보마다 만드는 합성 raw 에는 **AI 초안의 사본**이 들어 있다
+ *    (실측: queueId cmuaipz7f0… 의 `rawTitle`·`rawBody` 가 초안과 글자까지 같았다).
+ *    그것을 외부 원문으로 삼으면 사람이 한 글자만 고쳐도 자기 자신과 겹쳐
+ *    `SOURCE_ECHO` 로 막힌다. `original-post-auto-publish.ts` 도 같은 이유로
+ *    **"`rawContent.rawTitle` 을 원문으로 읽지 않는다"** 를 이미 계약으로 적어 두었다.
+ *    🔴 게이트 규칙·임계값은 하나도 바꾸지 않았다. 원문을 바로잡았을 뿐이다.
  */
 const reGate: ReviewGate = (t) => {
-  const src = rawRow.rawContent
-  const profile = readSourceProfile({ rawTitle: src.rawTitle, rawBody: src.rawBody })
-  const signals = analyzeDraft({
-    title: t.title, body: t.body,
-    sourceTexts: [src.rawTitle, src.rawBody],
-    allowedContentUrl: profile.contentReferenceUrl,
-    closingIntent: profile.closingIntent,
-    allowNumberedList: profile.preserveStructure.numberedList,
-  })
-  const must = mustKeepDetails(profile.concreteDetailsToKeep)
-  const both = `${t.title}\n${t.body}`
-  const g = gateDraft({
-    signals, closingIntent: profile.closingIntent,
-    sourceBodyLength: [...src.rawBody].length,
-    mustKeepTotal: must.length,
-    mustKeepFound: must.filter((x) => both.includes(x.sample)).length,
-  })
-  // 🔴 사유 코드만 적는다 — detail 에 원문 조각이 섞일 수 있다
-  const codes = [...g.blocks, ...g.holds].map((f) => f.code)
-  const line = `${g.verdict}${codes.length === 0 ? '' : ` — ${codes.join(' · ')}`}`
+  // 🔴 `findReviewArtifact` 가 이미 대조한 **그 한 장**이다 — 다시 찾지 않는다
+  const source = sourceEvidenceOf(g.artifact!)
+  // 🔴 조립은 정본 하나가 한다 — 검사도 이 함수를 돌린다
+  const r = gateEditedDraft({ source, title: t.title, body: t.body })
+  const line = `${r.verdict}${r.codes.length === 0 ? '' : ` — ${r.codes.join(' · ')}`}`
   console.log(`   수정본 재판정  ${line}`
-    + (g.verdict === AUTO_GATE_VERDICT ? '' : ' 🟡 (BLOCK 이 아니면 사람이 정한다)'))
-  return g.verdict === 'BLOCK' ? { ok: false, reason: line } : { ok: true, reason: line }
+    + (r.verdict === AUTO_GATE_VERDICT ? '' : ' 🟡 (BLOCK 이 아니면 사람이 정한다)'))
+  console.log('   🔴 원문 근거는 artifact 의 마스킹된 근거다 — DB 합성 raw 가 아니다')
+  return r.verdict === 'BLOCK' ? { ok: false, reason: line } : { ok: true, reason: line }
 }
 
 /**

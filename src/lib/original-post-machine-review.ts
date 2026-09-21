@@ -127,6 +127,51 @@ export function findReviewArtifact(input: {
   return { ok: true, artifact: a }
 }
 
+/**
+ * 🔴 **외부 원문 근거 — artifact 에서만 온다** (2026-09-21)
+ *
+ * 🔴 **왜 DB 를 쓰지 않는가.** 적재기는 기계 후보마다 **합성 `MicroSeedRawContent`** 를
+ *    만들고 거기에 **AI 초안의 사본**을 넣는다. 운영 실측에서 `rawTitle`·`rawBody` 가
+ *    `draftTitle`·`draftBody` 와 **글자까지 같았다**(queueId cmuaipz7f0…).
+ *    그 값을 외부 원문으로 삼아 재검수하면, 사람이 한 글자만 고쳐도 자기 자신과
+ *    20자 넘게 겹쳐 `SOURCE_ECHO` 로 막힌다 — 정상 수정이 영영 저장되지 않는다.
+ *
+ * 🔴 같은 이유로 `original-post-auto-publish.ts` 도 이미
+ *    **"`rawContent.rawTitle` 을 원문으로 읽지 않는다"** 를 계약으로 적어 두었다.
+ *
+ * 🔴 **그래서 artifact 가 들고 있는 마스킹된 근거를 쓴다.** 그 값은 생성 회차에
+ *    외부 원문에서 뜬 것이고, 개인정보가 마스킹되어 있으며, DB 에 복사하지 않는다.
+ */
+export const EVIDENCE_TITLE_KIND = 'title'
+
+export type ReviewSourceEvidence = {
+  /** 🔴 원문 제목 — 없으면 빈 문자열 */
+  rawTitle: string
+  /** 🔴 제목을 뺀 나머지 근거를 줄로 이은 것 */
+  rawBody: string
+}
+
+/**
+ * 🔴 **artifact 근거 → 재검수 입력.** 제목 조각과 본문 조각을 가른다.
+ *    같은 값을 `readSourceProfile` · `analyzeDraft.sourceTexts` · `sourceBodyLength` ·
+ *    `mustKeepDetails` 가 **전부** 쓴다 — 한 곳만 다른 원문을 보면 판정이 어긋난다.
+ *
+ * 🔴 같은 조각이 여러 번 실려 있을 수 있다(`head` 와 `tail` 이 겹친다) — 중복은 한 번만 센다.
+ */
+export function sourceEvidenceOf(a: ReviewArtifact): ReviewSourceEvidence {
+  const title = a.evidence.find((e) => e.kind === EVIDENCE_TITLE_KIND)?.text ?? ''
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const e of a.evidence) {
+    if (e.kind === EVIDENCE_TITLE_KIND) continue
+    const t = e.text.trim()
+    if (t === '' || seen.has(t)) continue
+    seen.add(t)
+    parts.push(t)
+  }
+  return { rawTitle: title.trim(), rawBody: parts.join('\n') }
+}
+
 /** 🔴 최초 초안과 수정본의 차이 — 사람이 무엇이 바뀌었는지 본다 */
 export function editDiffLines(t: ReviewTarget): string[] {
   const cur = currentText(t)
