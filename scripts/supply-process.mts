@@ -34,7 +34,7 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
   PROCESS_KILL_SWITCH_ENV, LOCK_FILE, LOCK_TTL_MS, SUPPLY_SOURCES,
   fmtCount, hasWork, judgeBuffer, judgeProcessRun,
-  mayWriteRunState, planCommonPhase, planPending, planSourcePhase,
+  mayWriteRunState, planBoundedCommonPhase, planCommonPhase, planPending, planSourcePhase, ledgerRunIdOf, type WorksetGate,
   runCommonPhase, runSourcePhase, runFileName, runStatusOf, verifyRun,
   type LockView, type ProcessRun, type ProcessStage, type StagePlan, type StageGate,
 } from '../src/lib/supply-process'
@@ -50,6 +50,21 @@ import { STOCK_BANDS, judgeStockBand } from '../src/lib/supply-stock-plan'
  *    스냅샷은 그 정본이 만든 집합을 파일로 옮기기만 한다.
  */
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
+/** 🔴 작업 묶음 정본 — 모양·상한·선택 규칙은 전부 저기 하나에 있다 */
+import {
+  attemptedOutcomes, concludedSourceIds, judgeStageBudget, selectWorkset, worksetFileName,
+  WORKSET_DEFAULT_LIMIT, WORKSET_DROP_LABEL, type PriorOutcome, type WorksetRow,
+} from '../src/lib/supply-workset'
+import {
+  inputHashOf, mergeJudgeRows, PROMPT_VERSION, RULE_VERSION,
+} from '../src/lib/micro-seed-auto-judge'
+import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
+/** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
+import { currentContractBase } from './lib/generation-contract.mjs'
+import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import type { ContractBase } from '../src/lib/content-core/pipeline'
+/** 🔴 판정 모델 이름 — 판정 러너가 쓰는 그 값이다 */
+import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
 import { readStock, type StockLimits } from '../src/lib/micro-seed-supply-autofill'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
@@ -58,6 +73,100 @@ import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 /** 🔴 정본은 lib 하나다 — 여기서 문자열을 다시 쓰지 않는다 */
 const DATA_DIR = DATA_DIR_NAME
 const argv = process.argv.slice(2)
+/**
+ * 🔴 **이번 회차가 끝까지 보낼 원천 수.** 기본은 정본 값이다 —
+ *    올리면 유료 요청도 그만큼 는다(judge N · draft 3N · 전체 4N).
+ */
+const WORKSET_LIMIT = ((): number => {
+  const hit = process.argv.slice(2).find((a) => a.startsWith('--workset-limit='))
+  if (hit === undefined) return WORKSET_DEFAULT_LIMIT
+  const n = Number.parseInt(hit.slice('--workset-limit='.length), 10)
+  return Number.isInteger(n) && n > 0 ? n : -1
+})()
+
+/**
+ * 🔴 상세 파일을 **판정기와 같은 정규화**로 읽는다 (`mergeJudgeRows`).
+ *    `detail` 의 `access` 와 `raw-detail` 의 `accessStatus` 를 정본이 맞춘다 —
+ *    여기서 손으로 파싱하면 raw 행이 정상 원천을 덮어쓴다.
+ * 🔴 **파싱에 실패하면 `null`** — 부르는 쪽이 fail-closed 한다.
+ */
+function worksetRows(paths: readonly string[]): WorksetRow[] | null {
+  const entries: { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[] = []
+  /** 정렬에 쓰는 칸 — 🔴 판정 입력에는 없는 값이라 따로 모은다 */
+  const meta = new Map<string, { site: string; posted: string; listed: string }>()
+  const S2 = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  for (const f of paths) {
+    const kind: 'detail' | 'raw-detail' = f.endsWith('.raw-detail.jsonl') ? 'raw-detail' : 'detail'
+    let raw: string
+    try { raw = readFileSync(f, 'utf-8') } catch { return null }
+    for (const line of raw.split('\n')) {
+      const t = line.trim()
+      if (t === '') continue
+      let r: Record<string, unknown>
+      // 🔴 한 줄이라도 깨져 있으면 조용히 건너뛰지 않는다 — 고를 대상이 달라진다
+      try { r = JSON.parse(t) as Record<string, unknown> } catch { return null }
+      entries.push({ kind, row: r })
+      const id = S2(r.sourceArticleId)
+      if (id === '') continue
+      const prev = meta.get(id)
+      meta.set(id, {
+        site: S2(r.sourceSite) !== '' ? S2(r.sourceSite) : prev?.site ?? '',
+        posted: S2(r.sourcePostedAt) !== '' ? S2(r.sourcePostedAt) : prev?.posted ?? '',
+        listed: S2(r.sourceListedAt) !== '' ? S2(r.sourceListedAt) : prev?.listed ?? '',
+      })
+    }
+  }
+  return mergeJudgeRows(entries).map((input): WorksetRow => {
+    const id = String(input.sourceArticleId ?? '')
+    const m = meta.get(id)
+    return {
+      sourceArticleId: id, sourceSite: m?.site ?? '',
+      commentCount: Number(input.commentCount ?? 0),
+      sourcePostedAt: m?.posted ?? '', sourceListedAt: m?.listed ?? '',
+      input,
+    }
+  })
+}
+
+/**
+ * 🔴 **앞 회차가 끝낸 원천** — 판정 파일과 artifact 에서 모은다. 새 파일을 만들지 않는다.
+ *
+ * 🔴 **합집합이 아니다.** 지금 입력 지문·지금 판에 해당하는 것만 보고, 원천마다
+ *    **가장 최신** 결과 하나로 판정한다. 파일 이름(회차 시각)이 곧 순서다.
+ */
+/** 🔴 지난 결과를 한 번만 읽어 **끝난 것**과 **이미 본 것**을 함께 낸다 */
+function priorState(rows: readonly WorksetRow[], base: ContractBase): {
+  concluded: Set<string>; attempted: Map<string, PriorOutcome>
+} {
+  const outcomes = readPriorOutcomes({
+    dataDir: DATA_DIR,
+    hashOf: new Map(rows.map((r) => [r.sourceArticleId, inputHashOf(r.input)])),
+    canon: {
+      ruleVersion: RULE_VERSION, promptVersion: PROMPT_VERSION, judgeModel: JUDGE_MODEL_NAME,
+    },
+    base, artifactVersion: ARTIFACT_VERSION,
+  })
+  return { concluded: concludedSourceIds(outcomes), attempted: attemptedOutcomes(outcomes) }
+}
+
+/** 🔴 사람이 이미 판정한 원천 — 판정기와 **같은 파일들**을 본다 */
+function humanDecidedIds(): Set<string> {
+  const out = new Set<string>()
+  for (const pre of ['seed-originality-source-approvals-', 'srn-approvals', 'raw-originality-approvals-']) {
+    for (const f of readdirSync(DATA_DIR).filter((x) => x.startsWith(pre) && x.endsWith('.json'))) {
+      try {
+        const j = JSON.parse(readFileSync(join(DATA_DIR, f), 'utf-8')) as Record<string, unknown>
+        const rows = Array.isArray(j.decisions) ? j.decisions : []
+        for (const r of rows) {
+          const id = (r as Record<string, unknown>).sourceArticleId
+          if (typeof id === 'string' && id.trim() !== '') out.add(id.trim())
+        }
+      } catch { /* 못 읽는 파일은 건너뛴다 — 판정기와 같은 태도다 */ }
+    }
+  }
+  return out
+}
+
 const LIVE = argv.includes('--live')
 /**
  * 🔴 **dry-run 전용 모의 재고.** 재고가 차 있는 날에도 "부족하면 무엇을 할지" 를 볼 수 있어야 한다.
@@ -97,7 +206,9 @@ function writeAtomic(path: string, body: string): void {
  * 🔴 **error 를 받지 않으면 Promise 가 영원히 안 끝난다.** 실행 파일이 없거나
  *    프로세스가 뜨지 못하면 close 가 오지 않는다 — 그러면 lock 을 쥔 채 매달린다.
  */
-function run(script: string, args: readonly string[]): Promise<{ code: number | null; out: string; spawnError: string }> {
+function run(
+  script: string, args: readonly string[], env?: Readonly<Record<string, string>>,
+): Promise<{ code: number | null; out: string; spawnError: string }> {
   return new Promise((resolve) => {
     let settled = false
     const done = (r: { code: number | null; out: string; spawnError: string }): void => {
@@ -107,7 +218,11 @@ function run(script: string, args: readonly string[]): Promise<{ code: number | 
     }
     let out = ''
     try {
-      const p = spawn('npx', ['tsx', script, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+      const p = spawn('npx', ['tsx', script, ...args], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // 🔴 단계 env 는 **이 자식에게만** 실린다 — 운영 env 파일은 바뀌지 않는다
+        ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+      })
       p.stdout.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stdout.write(t) })
       p.stderr.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stderr.write(t) })
       p.on('error', (e: Error) => {
@@ -337,7 +452,8 @@ async function main(): Promise<number> {
     llmCall: null as number | null, cacheHit: null as number | null,
   }
   const exec = async (plan: StagePlan): Promise<{ ok: boolean; exitCode: number | null; spawnError: string }> => {
-    const r = await run(STAGE_SCRIPT[plan.stage], plan.args)
+    // 🔴 단계별 env 는 **자식 프로세스에만** 실린다. 운영 env 파일은 건드리지 않는다
+    const r = await run(STAGE_SCRIPT[plan.stage], plan.args, plan.env)
     if (plan.stage === 'judge') {
       tally.seeds = num(r.out, /AUTO_SEED\s+(\d+)건/)
       tally.hold = num(r.out, /AUTO_HOLD\s+(\d+)건/)
@@ -390,9 +506,124 @@ async function main(): Promise<number> {
    * 🔴 못 읽거나 못 쓰면 **draft 를 보류한다.** 입력은 그대로 두고 다음 회차가 다시 집는다.
    */
   const snapPath = join(DATA_DIR, queueSnapshotFileName(runId))
-  const common = planCommonPhase(after1, policy, {
-    kind: 'ready', snapshotPath: snapPath, runId,
-  })
+
+  /**
+   * ── 🔴 **작업 묶음** — adapt 뒤, **AI 를 부르기 전에** 코드가 정한다 (2026-09-20) ──
+   *
+   *    2026-09-20 canary: adapt 가 3일치 backlog 를 609건으로 펼쳤고 judge 가
+   *    공동 상한 15회를 전부 써 draft 는 0회였다. 후보 0건에 $0.029949.
+   *    🔴 이제 N 건만 골라 **그 N 건만** 판정→생성→적재까지 세로로 보낸다.
+   *    고르지 않은 것은 지우지도 판정하지도 않는다 — 다음 회차가 집는다.
+   */
+  const budget = judgeStageBudget(WORKSET_LIMIT)
+  if (!budget.ok) {
+    console.error(`\n🔴 중단: ${budget.reason}\n`)
+    return 1
+  }
+  const wsPath = join(DATA_DIR, worksetFileName(runId))
+  // 🔴 파일 이름은 **파이프라인 회차 id** 로 짓는다 — 세 단계가 같은 값으로 이어진다
+  const shadowPath = join(DATA_DIR, `auto-judge-${runId}.shadow.jsonl`)
+  const candPath = join(DATA_DIR, `auto-draft-${runId}.candidates.json`)
+
+  /**
+   * 🔴 큐 스냅샷을 **묶음을 고르기 전에** 뜬다 — 같은 원문의 미발행 형제를
+   *    AI 호출 전에 빼야 한다. 생성 직전에도 다시 쓰이므로 한 번만 뜬다.
+   */
+  let queuePending = new Set<string>()
+  let snapOk = false
+  try {
+    const qrows = await prisma.originalPostApprovalQueue.findMany({
+      select: { createdPostId: true, rawContent: { select: { sourceArticleId: true, sourceSite: true } } },
+    })
+    const snap = buildQueueSnapshot({
+      runId, takenAt: new Date(),
+      rows: qrows.map((r) => ({
+        sourceArticleId: r.rawContent?.sourceArticleId ?? '',
+        sourceSite: r.rawContent?.sourceSite ?? '',
+        createdPostId: r.createdPostId,
+      })),
+    })
+    // 🔴 이 파일은 **묶음을 고르는 데만** 쓴다 — 생성 직전에 다시 뜬다
+    writeAtomic(snapPath, `${JSON.stringify(snap, null, 2)}\n`)
+    queuePending = new Set(snap.pendingSourceIds)
+    snapOk = true
+    console.log(`\n   🟢 큐 스냅샷(묶음 선택용) ${snap.pendingSourceIds.length}건 미발행 원문`)
+  } catch (e) {
+    console.log(`\n   🔴 큐 스냅샷 실패 — ${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  let workset: WorksetGate | undefined
+  /** 🔴 고를 원천이 0건이었는가 — "못 만들었다" 와 구분한다 */
+  let worksetEmpty = false
+  if (snapOk && policy.llm) {
+    const rows = worksetRows(after1.detail.map((f) => join(DATA_DIR, f)))
+    if (rows === null) {
+      console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
+      return 1
+    }
+    const prior = priorState(rows, currentContractBase())
+    const plan = selectWorkset({
+      rows, humanDecided: humanDecidedIds(), queuePending, ...prior,
+      limit: WORKSET_LIMIT, runId, takenAt: new Date(),
+    })
+    if (plan.picked.length === 0) {
+      // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다
+      worksetEmpty = true
+    } else {
+      writeAtomic(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`)
+      workset = {
+        manifestPath: wsPath, shadowPath, candidatesPath: candPath,
+        limit: WORKSET_LIMIT, perStage: budget.perStage,
+      }
+    }
+    console.log(`   🔴 작업 묶음 ${plan.picked.length}건 / 상한 ${WORKSET_LIMIT} — ${wsPath}`)
+    console.log(`      단계 상한  judge ${budget.perStage.judge}회 · draft ${budget.perStage.draft}회`
+      + ` · 회차 전체 ${budget.total}회 (🔴 단계마다 따로 — 앞 단계가 뒤 단계를 굶기지 못한다)`)
+    const dropNote = (Object.keys(plan.dropped) as (keyof typeof plan.dropped)[])
+      .filter((k) => plan.dropped[k] > 0)
+      .map((k) => `${WORKSET_DROP_LABEL[k]} ${plan.dropped[k]}`)
+    console.log(`      제외 ${dropNote.length === 0 ? '없음' : dropNote.join(' · ')}`)
+    console.log(`      🔴 이번에 안 고른 ${plan.deferred}건은 **그대로 남는다** — 다음 회차가 집는다`)
+    for (const r of plan.picked) {
+      console.log(`      · ${r.sourceArticleId} · ${r.sourceSite} · 댓글 ${r.commentCount}`)
+    }
+  }
+
+  /**
+   * 🔴 **묶음 없이 live 를 돌리지 않는다** (2026-09-20 보정).
+   *    앞판은 `workset` 이 `undefined` 면 옛 전체 스캔으로 넘어갔다 —
+   *    그것이 canary 에서 backlog 609건을 판정하게 만든 길이다.
+   *
+   * 🔴 **다만 "없는 것"과 "못 만든 것"은 다르다.**
+   *    · 버퍼가 차서 모델 단계 자체가 없는 회차 → **정상 done** (파일 단계까지 끝)
+   *    · 고를 원천이 0건인 회차 → **정상 no-op done** (judge·draft·fill 0회)
+   *    · 스냅샷·입력을 못 읽어 만들지 못한 회차 → 🔴 **실패**
+   */
+  if (workset === undefined) {
+    if (!policy.llm) {
+      // 🔴 재고가 차 있다 — 모델을 부를 이유가 없다. 실패가 아니다
+      console.log(`\n   🟢 모델 단계 없음 — ${policy.reason}. 파일 단계까지 끝냈다`)
+    } else if (worksetEmpty) {
+      console.log('\n   🟢 고를 원천이 0건이다 — judge · draft · fill 0회 (정상 no-op)')
+    } else {
+      console.error('\n🔴 중단: 작업 묶음을 만들지 못했다 — judge · draft · fill 0회\n')
+      record.status = 'failed'
+      record.completedAt = nowIso()
+      save()
+      return 1
+    }
+  }
+  const common = workset === undefined
+    ? []
+    : planBoundedCommonPhase(after1, policy, {
+      kind: 'ready', snapshotPath: snapPath, runId,
+    }, workset)
+  /**
+   * 🔴 **스냅샷을 두 번 뜬다** (2026-09-20).
+   *    ① 묶음을 고르기 전 — 같은 원문의 형제를 **AI 호출 전에** 빼려면 필요하다
+   *    ② `draft` 직전 — 그 사이 `judge` 가 도는 만큼 ①이 낡는다. 실측으로 12분 걸린
+   *       회차가 있었다. TTL 을 늘려 덮지 않는다. **생성이 보는 것은 ②다.**
+   */
   const beforeStage = async (plan: StagePlan): Promise<StageGate> => {
     if (plan.stage !== 'draft') return { ok: true }
     try {

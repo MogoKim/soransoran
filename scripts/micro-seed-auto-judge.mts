@@ -24,7 +24,8 @@ import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   judgeOne, summarize, checkRegression, violatesProvenance, parseSemantic, inputHashOf,
-  hardGate, preSemanticGate, HARD_BLOCK, BODY_HEAD_MAX,
+  mergeJudgeRows,
+  hardGate, holdBeforeAsking, HARD_BLOCK, BODY_HEAD_MAX,
   REASON_LABEL, RULE_VERSION, PROMPT_VERSION, AUTO_PROVENANCE, SEED_AXIS, RAW_AXIS, SKIPPED,
   type Judgement, type JudgeInput, type RegressionRow, type SemanticOutcome, type SemanticStatus,
 } from '../src/lib/micro-seed-auto-judge'
@@ -36,6 +37,8 @@ import { keyStatus, type LlmResponse, type ProviderModel } from './lib/voice-m3-
  */
 import { SupplyLlmSession, limitsFromEnv } from './lib/supply-llm-call.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+/** 🔴 작업 묶음 정본 — 여기서 모양을 다시 정하지 않는다 */
+import { readWorkset } from '../src/lib/supply-workset'
 
 const DATA_DIR = '.microseed-data'
 const argv = process.argv.slice(2)
@@ -64,6 +67,22 @@ const APPLY = argv.includes('--apply')
  *    상한이 사실상 없는 것과 같아진다. 아래에서 유료 경로 직전에 막는다.
  */
 const RUN_ID = argv.find((a) => a.startsWith('--run-id='))?.slice('--run-id='.length) ?? null
+/**
+ * 🔴 **이번 회차가 판정할 원천 목록** (2026-09-20). 주면 **그 원천만** 판정한다.
+ *    없으면 종전대로 전부다 — 손으로 부르는 경로는 그대로 둔다.
+ *    🔴 backlog 전체를 미리 판정하지 않기 위한 계약이다.
+ */
+/**
+ * 🔴 **비용 장부 회차 id** (2026-09-20). `--run-id` 와 **책임이 다르다** —
+ *    `--run-id` 는 묶음·큐 스냅샷·산출물을 잇는 파이프라인 id 이고,
+ *    이것은 장부의 요청 상한을 단계마다 가르는 값이다.
+ *    없으면 `--run-id` 를 그대로 쓴다(손으로 부르는 경로).
+ */
+const LEDGER_RUN_ID = argv.find((a) => a.startsWith('--ledger-run-id='))
+  ?.slice('--ledger-run-id='.length) ?? null
+const WORKSET_PATH = argv.find((a) => a.startsWith('--workset='))?.slice('--workset='.length) ?? null
+/** 🔴 판정 파일을 **정확히 이 경로로** 쓴다 — 다음 단계가 이 파일만 읽는다 */
+const SHADOW_OUT = argv.find((a) => a.startsWith('--shadow-out='))?.slice('--shadow-out='.length) ?? null
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
@@ -130,45 +149,19 @@ function inputOverride(): string[] | null {
 }
 
 function loadTargets(): JudgeInput[] {
-  const byId = new Map<string, JudgeInput>()
   const only = inputOverride()
   // 🔴 지정이 있으면 그 목록에서만 고른다. 없으면 종전대로 디렉터리 전체다
   const pick = (suffix: string): string[] => (only === null
     ? filesEnding(suffix)
     : only.filter((f) => f.endsWith(suffix)))
-  for (const f of pick('.detail.jsonl')) {
-    for (const r of jsonl(f)) {
-      const id = S(r.sourceArticleId)
-      if (id === '') continue
-      byId.set(id, {
-        sourceArticleId: id, axis: S(r.axis), access: S(r.access),
-        // 🔴 v1 이 여기서 title · bodyHead 를 빠뜨렸다. 저장은 돼 있는데 판정에 안 넣었다
-        title: S(r.title), bodyHead: S(r.bodyHead), commentCount: Number(r.commentCount ?? 0),
-        lane: S(r.lane), assetAxes: S(r.assetAxes),
-        safetyVerdict: S(r.safetyVerdict), safetyReasons: S(r.safetyReasons),
-        bodyLength: Number(r.bodyLength ?? 0),
-        qualityFlags: Array.isArray(r.qualityFlags) ? r.qualityFlags.map(String) : [],
-      })
-    }
-  }
-  for (const f of pick('.raw-detail.jsonl')) {
-    for (const r of jsonl(f)) {
-      const id = S(r.sourceArticleId)
-      if (id === '') continue
-      // 🔴 raw 파일이 더 최신 판정을 가질 수 있다 — 축이 rawOriginality 면 덮어쓴다
-      const prev = byId.get(id)
-      const cand: JudgeInput = {
-        sourceArticleId: id, axis: S(r.axis), access: S(r.accessStatus),
-        title: S(r.title), bodyHead: S(r.bodyHead), commentCount: Number(r.commentCount ?? 0),
-        lane: S(r.lane), assetAxes: S(r.assetAxes),
-        safetyVerdict: S(r.safetyVerdict), safetyReasons: S(r.safetyReasons),
-        bodyLength: Number(r.bodyLength ?? 0),
-        qualityFlags: Array.isArray(r.qualityFlags) ? r.qualityFlags.map(String) : [],
-      }
-      if (prev === undefined || S(r.axis) === RAW_AXIS) byId.set(id, cand)
-    }
-  }
-  return [...byId.values()]
+  /**
+   * 🔴 **정규화는 정본 하나만 쓴다** (`mergeJudgeRows`). 여기서 칸을 손으로 맞추지 않는다 —
+   *    `access` 와 `accessStatus` 를 두 벌로 다루다 정상 원천을 덮어쓴 적이 있다.
+   */
+  const entries: { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[] = []
+  for (const f of pick('.detail.jsonl')) for (const r of jsonl(f)) entries.push({ kind: 'detail', row: r })
+  for (const f of pick('.raw-detail.jsonl')) for (const r of jsonl(f)) entries.push({ kind: 'raw-detail', row: r })
+  return mergeJudgeRows(entries)
 }
 
 /** 🔴 판정에 쓰는 모델. 기존 계약의 라벨을 그대로 쓴다 */
@@ -368,8 +361,26 @@ async function main(): Promise<void> {
   console.log('  🔴 사람 판정을 사칭하지 않는다 — SEED·ADOPT·founder 를 쓰지 않는다')
   console.log(`  🔴 DB 0 · 큐 0 · 발행 0 · Sheet 0${CALL ? '' : ' · 네트워크 0 · LLM 0 · 파일 write 0'}\n`)
 
-  const all = loadTargets()
-  if (all.length === 0) fail(`${DATA_DIR} 에 판정할 상세 행이 없다`)
+  const all0 = loadTargets()
+  if (all0.length === 0) fail(`${DATA_DIR} 에 판정할 상세 행이 없다`)
+  /**
+   * 🔴 **묶음이 주어졌으면 그 원천만 본다** — 여기서 거르지 않으면
+   *    backlog 전체가 판정 대상이 되어 상한을 다 먹는다 (2026-09-20 canary).
+   *    🔴 못 읽으면 **멈춘다.** "못 읽었으니 전부" 는 이 배선을 없애는 것과 같다.
+   */
+  let all = all0
+  if (WORKSET_PATH !== null) {
+    if (RUN_ID === null) fail('--workset 은 --run-id 와 함께 씁니다')
+    let parsed: unknown
+    try { parsed = JSON.parse(readFileSync(WORKSET_PATH, 'utf-8')) } catch (e) {
+      fail(`작업 묶음을 읽지 못했다 — ${WORKSET_PATH} (${e instanceof Error ? e.message : 'unknown'})`)
+    }
+    const ws = readWorkset(parsed, RUN_ID)
+    if (!ws.ok) fail(`작업 묶음이 계약과 다르다 [${ws.code}] ${ws.reason}`)
+    all = all0.filter((t) => ws.sourceIds.has(S(t.sourceArticleId)))
+    console.log(`  🔴 작업 묶음 ${ws.sourceIds.size}건만 판정한다 (상한 ${ws.limit}) — ${WORKSET_PATH}`)
+    console.log(`     고르지 않은 ${all0.length - all.length}건은 **그대로 남는다** — 다음 회차가 집는다\n`)
+  }
   const human = humanDecisions()
   const fresh = all.filter((t) => !human.has(S(t.sourceArticleId)))
   const seen = all.filter((t) => human.has(S(t.sourceArticleId)))
@@ -383,7 +394,13 @@ async function main(): Promise<void> {
     if (hard.some((c) => HARD_BLOCK.includes(c)) || S(t.sourceArticleId) === '') {
       preJudged.push(judgeOne(t, now)); continue
     }
-    if (preSemanticGate(t).length > 0) { preJudged.push(judgeOne(t, now)); continue }
+    /**
+     * 🔴 **물어봐도 HOLD 인 것은 묻지 않는다** (2026-09-20 정리).
+     *    앞판은 `preSemanticGate` 만 봤고, lane·자산 축 격리는 **모델 답을 받은 뒤**
+     *    `decide` 가 덮었다 — 결과가 정해진 원천에 유료 요청이 나갔다(실측).
+     *    이제 `decide` 와 **같은 함수**로 묻기 전에 가른다.
+     */
+    if (holdBeforeAsking(t).length > 0) { preJudged.push(judgeOne(t, now)); continue }
     needAsk.push(t)
   }
   console.log(`① 상세 ${all.length}건 → 신규 ${fresh.length}건 · 사람이 이미 본 것 ${seen.length}건`)
@@ -407,7 +424,10 @@ async function main(): Promise<void> {
   if (RUN_ID === null || RUN_ID.trim() === '') {
     fail('--run-id 가 없습니다 — 회차 요청 상한을 생성 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
   }
-  LEDGER = new SupplyLlmSession({ runId: RUN_ID, limits: limitsFromEnv(process.env) })
+  // 🔴 **장부만 별도 id 를 쓴다** — 파이프라인 id(`RUN_ID`)는 그대로 둔다
+  LEDGER = new SupplyLlmSession({
+    runId: LEDGER_RUN_ID ?? RUN_ID, limits: limitsFromEnv(process.env),
+  })
   console.log(`   회차 ${RUN_ID} — 생성 단계와 요청 상한을 나눠 쓴다`)
   console.log(`   장부 ${LEDGER.dir}`)
   console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`
@@ -477,7 +497,7 @@ async function main(): Promise<void> {
   const regRows: RegressionRow[] = []
   for (const t of seen) {
     const blocked = hardGate(t).some((c) => HARD_BLOCK.includes(c))
-    const pre = preSemanticGate(t).length > 0
+    const pre = holdBeforeAsking(t).length > 0
     let outcome: SemanticOutcome = SKIPPED
     if (!blocked && !pre) {
       const k = cacheKey(S(t.sourceArticleId), inputHashOf(t))
@@ -535,7 +555,8 @@ async function main(): Promise<void> {
     if (bad.length > 0) fail(`provenance 위반\n${bad.map((b) => `     ${b}`).join('\n')}`)
   }
   const runId = now.replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')
-  const out = join(DATA_DIR, `auto-judge-${runId}.shadow.jsonl`)
+  // 🔴 경로를 지정받았으면 **그대로** 쓴다 — 다음 단계가 이 파일 하나만 읽는다
+  const out = SHADOW_OUT ?? join(DATA_DIR, `auto-judge-${runId}.shadow.jsonl`)
   if (!isInsideDataDir(out)) fail(`${out} 은 ${DATA_DIR}/ 밖이다`)
   writeFileSync(out, `${judged.map((jd) => JSON.stringify(jd)).join('\n')}\n`, 'utf-8')
   saveCache(cache)

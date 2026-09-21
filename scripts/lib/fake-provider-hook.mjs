@@ -104,10 +104,30 @@ const PAYLOAD = {
   note: '',
 }
 
+/**
+ * 🔴 **판정 요청은 응답 모양이 다르다** (2026-09-20).
+ *
+ *    의미 판정기는 `decision`(AUTO_*) 과 `confidence` 를 기다린다. 위 payload 의
+ *    `decision: 'ok'` 는 화자 계획의 값이라 판정기가 읽으면 `parseError` 가 된다 —
+ *    그러면 어떤 검사도 **판정이 끝난 상태**를 만들어 보지 못한다.
+ *
+ * 🔴 **보낸 프롬프트로 가른다.** 판정 지시문에만 들어 있는 선택지 열거를 본다 —
+ *    검사가 지어낸 표시가 아니라 실제로 나간 요청의 내용이다.
+ */
+const JUDGE_MARK = 'AUTO_SEED|AUTO_RAW|AUTO_HOLD|AUTO_DROP'
+const JUDGE_PAYLOAD = {
+  decision: process.env.FAKE_PROVIDER_JUDGE_DECISION ?? 'AUTO_HOLD',
+  confidence: 0.8,
+  risks: [],
+  communityAngle: '우리 또래가 겪는 이야기',
+}
+
 // 🔴 prefill 뒤를 이어 쓰는 모양 — 여는 `{` 를 뺀다 (Anthropic 전용)
 const TEXT = JSON.stringify(PAYLOAD).slice(1)
 /** 🔴 Gemini 는 prefill 이 없다 — 완전한 JSON 을 돌려준다 */
 const GEMINI_TEXT = JSON.stringify(PAYLOAD)
+const JUDGE_TEXT = JSON.stringify(JUDGE_PAYLOAD).slice(1)
+const JUDGE_GEMINI_TEXT = JSON.stringify(JUDGE_PAYLOAD)
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'content-type': 'application/json' },
@@ -127,6 +147,9 @@ globalThis.fetch = async (url, init) => {
   // 🔴 제공사마다 사전 계산 경로 이름이 다르다 — 둘 다 무료다
   const isCount = u.includes('/count_tokens') || u.includes(':countTokens')
   const isGemini = u.includes('generativelanguage.googleapis.com')
+  const isJudge = String(init?.body ?? '').includes(JUDGE_MARK)
+  const text = isJudge ? JUDGE_TEXT : TEXT
+  const geminiText = isJudge ? JUDGE_GEMINI_TEXT : GEMINI_TEXT
   if (LOG !== '') appendFileSync(LOG, `${isCount ? 'count' : 'paid'}\t${u}\n`)
   if (BODY_LOG !== '' && !isCount) {
     // 🔴 한 줄 JSON 으로 남긴다 — 검사가 줄 단위로 읽는다. url 을 함께 적어
@@ -149,8 +172,8 @@ globalThis.fetch = async (url, init) => {
   if (MODE === 'no-usage') {
     // 🔴 `usage` 자체가 없다. "0 토큰" 이 아니라 **모름**이어야 한다
     return isGemini
-      ? json({ candidates: [{ content: { parts: [{ text: GEMINI_TEXT }] }, finishReason: 'STOP' }] })
-      : json({ content: [{ text: TEXT }], stop_reason: 'end_turn' })
+      ? json({ candidates: [{ content: { parts: [{ text: geminiText }] }, finishReason: 'STOP' }] })
+      : json({ content: [{ text }], stop_reason: 'end_turn' })
   }
   const outTokens = MODE === 'over-reserve' ? OUT_TOKENS * 1000 : OUT_TOKENS
   if (isGemini) {
@@ -161,12 +184,12 @@ globalThis.fetch = async (url, init) => {
     const usage = { promptTokenCount: 11, candidatesTokenCount: outTokens, totalTokenCount: 11 + outTokens }
     if (MODE !== 'no-thoughts') usage.thoughtsTokenCount = Number(process.env.FAKE_PROVIDER_THOUGHTS ?? '7')
     return json({
-      candidates: [{ content: { parts: [{ text: GEMINI_TEXT }] }, finishReason: 'STOP' }],
+      candidates: [{ content: { parts: [{ text: geminiText }] }, finishReason: 'STOP' }],
       usageMetadata: usage,
     })
   }
   return json({
-    content: [{ text: TEXT }],
+    content: [{ text }],
     usage: { input_tokens: 11, output_tokens: outTokens },
     stop_reason: 'end_turn',
   })

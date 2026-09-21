@@ -77,6 +77,8 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
  *    배정되든 모순될 사실이 없다.
  */
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
+import { currentContractBase } from './lib/generation-contract.mjs'
+import { digest16, loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
 import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 /**
  * 🔴 **Persona 정체성의 정본은 Pool 카드 문서다.** 여기서 만들지도 복제하지도 않는다.
@@ -86,7 +88,6 @@ import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 import { parsePoolDoc, type PoolCard } from '../src/lib/persona-pool-card'
 
 /** 🔴 정본 문서 경로 — `persona-pool-card` 파일 머리가 가리키는 그 문서다 */
-export const PERSONA_POOL_DOC = 'docs/operations/2026-08-30-persona-pool-design.md'
 import type { VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
 import type { VoiceProvenance } from '../src/lib/original-post-voice-match'
 import { humanVoiceDirectives, registerFreedomDirectives, VOICE_TAKEAWAYS } from './lib/original-post-prompt'
@@ -111,7 +112,8 @@ import { buildSpeakerPlanSystemPrompt } from './lib/content-core-prompts.mjs'
 import {
   CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   SPEAKER_PLAN_PROMPT_VERSION, V2_DRAFT_PROMPT_VERSION, V2_REVIEW_PROMPT_VERSION,
-  STAGE_MAX_OUTPUT_TOKENS, STAGE_MAX_OUTPUT_LABEL,
+  STAGE_MAX_OUTPUT_TOKENS, STAGE_MAX_OUTPUT_LABEL, generationIdentity,
+  type GenerationContract,
 } from '../src/lib/content-core/pipeline'
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import { REVIEW_VERSION, reviewWarnings } from '../src/lib/content-core/review'
@@ -128,6 +130,12 @@ import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 
 export const DATA_DIR = '.microseed-data'
+/**
+ * 🔴 **이 회차의 생성 계약 — 원천과 무관한 칸.** 공급 러너와 **같은 함수**로 만든다.
+ *    두 곳에서 따로 조립하면 한쪽이 낡아 "같은 계약" 판정이 틀어진다.
+ */
+const CONTRACT_BASE = currentContractBase()
+
 const argv = process.argv.slice(2)
 /**
  * 🔴 **세 경로를 섞지 않는다** (§4-AR 과 같은 계약).
@@ -159,6 +167,14 @@ const RUN_ID = ((): string | null => {
   const hit = argv.find((a) => a.startsWith('--run-id='))
   return hit === undefined ? null : hit.slice('--run-id='.length)
 })()
+/**
+ * 🔴 **비용 장부 회차 id** (2026-09-20). `--run-id` 와 **책임이 다르다** —
+ *    `--run-id` 는 묶음·큐 스냅샷·산출물을 잇는 파이프라인 id 이고,
+ *    이것은 장부의 요청 상한을 단계마다 가르는 값이다.
+ *    없으면 `--run-id` 를 그대로 쓴다(손으로 부르는 경로).
+ */
+const LEDGER_RUN_ID = argv.find((a) => a.startsWith('--ledger-run-id='))
+  ?.slice('--ledger-run-id='.length) ?? null
 const REQUIRE_QUEUE_SNAPSHOT = argv.includes('--require-queue-snapshot')
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
@@ -538,8 +554,20 @@ function runId(now: Date): string {
  */
 type Meta = {
   title: string; site: string; bodyHead: string; axis: string; lane: string; angle: string
+  /** 🔴 원천 지문에 들어가는 값이다 — 빠뜨리면 공급 러너의 지문과 영영 달라진다 */
+  assetAxes: string
   sourcePostedAt: string; sourceListedAt: string; sourceCapturedAt: string
 }
+
+/**
+ * 🔴 **원천 입력 identity 는 하나다** (2026-09-20). 판정기가 shadow 에 적는 `inputHash`,
+ *    공급 러너가 "지금 입력" 으로 삼는 값, artifact 계약의 `sourceInputHash` 가
+ *    **같은 함수 · 같은 칸**이어야 한다. 한 칸이라도 빠지면 두 지문이 영영 달라지고,
+ *    그러면 끝난 원천이 terminal 로 인정되지 않아 같은 원천을 되풀이해 고른다.
+ */
+const sourceIdentityHash = (m: Meta): string => inputHashOf({
+  title: m.title, bodyHead: m.bodyHead, axis: m.axis, lane: m.lane, assetAxes: m.assetAxes,
+})
 
 function loadMeta(): Map<string, Meta> {
   const out = new Map<string, Meta>()
@@ -551,7 +579,7 @@ function loadMeta(): Map<string, Meta> {
         if (id === '' || t === '') continue
         out.set(id, {
           title: t, site: S(r.sourceSite), bodyHead: S(r.bodyHead),
-          axis: S(r.axis), lane: S(r.lane), angle: '',
+          axis: S(r.axis), lane: S(r.lane), angle: '', assetAxes: S(r.assetAxes),
           // 🔴 옛 파일에는 이 키가 없다 — 그러면 빈 문자열(모른다)이다
           sourcePostedAt: S(r.sourcePostedAt),
           sourceListedAt: S(r.sourceListedAt),
@@ -625,104 +653,6 @@ export function countCall(kind: string): void {
 }
 
 /** 🔴 digest — key 가 "무엇으로 만들었는가" 를 담게 한다 */
-export const digest16 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16)
-
-/**
- * 🔴 **화자를 여기서 미리 배정하지 않는다** (2026-09-20, Content Core v2 전환).
- *
- *    앞판은 원천마다 Persona 를 **먼저 찍어** 주는 계획 함수가 따로 있었다.
- *    고른 쪽이 원문을 본 적이 없어서 알바 원문에 전업 Persona 가 배정됐다(2026-09-19 실측).
- *    이제 v2 계획 호출이 **원문과 후보 카드를 함께** 보고 고르고, 코드가 근거를 검증한다.
- *    🔴 여기가 하는 일은 **후보 풀을 정본에서 읽어 오는 것**뿐이다.
- */
-type VoiceRuntime = {
-  describe: string
-  /** 🔴 v2 계획 호출이 이 중에서 고른다 — 정본 카드 + 말투 묶음 */
-  candidates: readonly PersonaInput[]
-  /** 말투 자산 판 — artifact provenance 에 남는다 */
-  sourceDigest: string
-  /** 🔴 정본을 못 읽었다 — provider 호출 전에 전 원천을 막는다 */
-  blockAllCode: string | null
-  blockReason: string | null
-}
-
-/**
- * 🔴 **말투 근거를 붙이고, 누가 쓸지 생성 전에 정한다** (2026-09-13).
- *
- * 🔴 Persona 정체성의 정본은 **Pool 카드 문서**다(`parsePoolDoc` → `cardToPersona`).
- *    DB 를 읽지 않는다 — 이 러너는 파일까지다.
- *
- * 🔴 **정본을 못 읽으면 machine 생성을 provider 호출 전에 멈춘다** (2026-09-13).
- *    말투 자산 · Persona 카드 · 쓸 수 있는 사람 0명 — 셋 다 `blockAllCode` 를 세워
- *    모든 원천에 같은 원인 코드를 남긴다. 예전에는 "말투 근거 없이 씁니다" 하고
- *    그냥 진행했는데, 그렇게 만든 글은 누구 이름으로 낼지 정할 수 없어 전량 보류됐다.
- */
-function loadVoice(sources: readonly { sourceArticleId: string; title: string; body: string }[]): VoiceRuntime {
-  const none: VoiceRuntime = {
-    describe: '', candidates: [], sourceDigest: '', blockAllCode: null, blockReason: null,
-  }
-  /** 🔴 정본을 못 읽었다 — 쓰지 않는다. 조용히 품질이 낮은 글을 만들지 않는다 */
-  const blocked = (code: string, why: string): VoiceRuntime => ({
-    ...none, blockAllCode: code, blockReason: why,
-    describe: `  🔴 ${why} — machine 생성을 멈춥니다 (provider 호출 0)`,
-  })
-  const asset = loadCanonAsset()
-  if (!asset.ok || asset.rows.length === 0) {
-    return blocked('voiceAssetMissing', `말투 근거 정본을 읽지 못했다 (${asset.code})`)
-  }
-  const plan = planBundles({ rows: asset.rows, personaCodes: PRODUCTION_PERSONA_CODES })
-  const bundleOf = new Map<string, VoiceReferenceBundle>(plan.bundles.map((b) => [b.personaCode, b]))
-
-  // 🔴 정본 카드 — 여기서 Persona 를 만들지 않는다. 문서가 정본이다
-  let cards: PoolCard[] = []
-  let cardNote = ''
-  try {
-    const doc = parsePoolDoc(readFileSync(PERSONA_POOL_DOC, 'utf-8'))
-    cards = doc.cards
-    if (doc.problems.length > 0) cardNote = ` · 🟡 카드 문제 ${doc.problems.length}건`
-  } catch {
-    return blocked('personaCanonMissing', `Persona 정본 카드를 읽지 못했다 (${PERSONA_POOL_DOC})`)
-  }
-  /**
-   * 🔴 **말투 근거가 선 사람 + 나이대가 있는 사람만 후보다** (2026-09-14).
-   *
-   *    `ageBand` 가 없으면 생성 프롬프트도 나이 검수도 글쓴이가 몇 살인지 모른다 —
-   *    그 상태로 provider 를 부르면 실측 결함(`40대 후반의 언니가 30대 초반`)이 그대로 난다.
-   *    🔴 **호출 전에 멈춘다.** 모르는 채로 돈을 쓰고 글을 만들지 않는다.
-   */
-  const withVoice = cards.filter((p) => bundleOf.has(p.code))
-  const hasAge = (p: { ageBand?: string | null }): boolean =>
-    typeof p.ageBand === 'string' && p.ageBand.trim() !== ''
-  const usable = withVoice.filter(hasAge)
-  const noAge = withVoice.filter((p) => !hasAge(p))
-  if (withVoice.length === 0) {
-    return blocked('noUsablePersona', '말투 근거가 선 Persona 가 0명이다')
-  }
-  if (usable.length === 0) {
-    return blocked('personaAgeBandMissing',
-      `정본 나이대(ageBand)가 있는 Persona 가 0명이다 — provider 를 부르지 않는다`
-      + ` (말투 근거는 ${withVoice.length}명이 섰다)`)
-  }
-  const textsOf = (code: string): string[] => (bundleOf.get(code)?.comments ?? []).map((x) => x.text)
-  /**
-   * 🔴 **정본 변환 하나만 쓴다** (`personaInputOf`). 칸을 손으로 재조립하면
-   *    2026-09-19 처럼 말투 기준이 빈 채로 유료 요청이 나간다.
-   */
-  const candidates = usable.map((c) => personaInputOf(c, {
-    samples: textsOf(c.code).slice(0, VOICE_SAMPLE_MAX),
-    bundleDigest: digest16(textsOf(c.code).join('\u0000')),
-  }))
-  return {
-    describe: `  🟢 말투 근거·나이대 모두 선 ${usable.length}명 — v2 계획 호출이 이 중에서 고른다`
-      + (noAge.length > 0 ? `\n     🔴 나이대(ageBand) 없어 제외 ${noAge.length}명: ${noAge.map((x) => x.code).join(' · ')}` : '')
-      + ` · 자산 ${asset.sourceDigest ?? '?'}${cardNote}`
-      + (plan.blocks.length > 0 ? `\n     🟡 ${plan.blocks.slice(0, 2).join(' · ')}` : ''),
-    candidates,
-    sourceDigest: asset.sourceDigest ?? '',
-    blockAllCode: null,
-    blockReason: null,
-  }
-}
 
 async function main(): Promise<void> {
   await loadEnvLocal()
@@ -832,7 +762,10 @@ async function main(): Promise<void> {
   if (RUN_ID === null || RUN_ID.trim() === '') {
     fail('--run-id 가 없습니다 — 회차 요청 상한을 판정 단계와 나눠 쓸 수 없어 유료 호출을 멈춥니다')
   }
-  LEDGER = new SupplyLlmSession({ runId: RUN_ID, limits: limitsFromEnv(process.env) })
+  // 🔴 **장부만 별도 id 를 쓴다** — 파이프라인 id(`RUN_ID`)는 그대로 둔다
+  LEDGER = new SupplyLlmSession({
+    runId: LEDGER_RUN_ID ?? RUN_ID, limits: limitsFromEnv(process.env),
+  })
   console.log(`   회차 ${RUN_ID} — 판정 단계와 요청 상한을 나눠 쓴다`)
   console.log(`   장부 ${LEDGER.dir}`)
   console.log(`   예산 ${LEDGER.limits.dailyUsd === null ? '🔴 미설정 — 유료 요청을 보류한다' : `$${LEDGER.limits.dailyUsd}/일`}`
@@ -843,13 +776,7 @@ async function main(): Promise<void> {
    *    원문의 생활사 요구를 정본 판정으로 읽고, 쓸 수 있는 Persona 중에서 고른다.
    *    쓸 수 없는 사람의 목소리로 AI 를 부르지 않는다.
    */
-  const voice = loadVoice(seeds.map((j) => {
-    const m = metas.get(j.sourceArticleId)
-    return {
-      sourceArticleId: j.sourceArticleId,
-      title: m?.title ?? '', body: m?.bodyHead ?? '',
-    }
-  }))
+  const voice = loadVoice()
   console.log(voice.describe)
   const cache = loadCache()
   let hit = 0
@@ -879,7 +806,6 @@ async function main(): Promise<void> {
    *    🔴 이제 한 경로다: 계획(Gemini) → 초안 한 편(Gemini) → 통합 검수(Haiku).
    *       화자 자격은 코드가 근거를 대조해 허가하고, 못 대면 만들지 않는다.
    */
-  const v2Load: Record<string, number> = {}
   for (const j of seeds) {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
     BUDGET.enter(j.sourceArticleId)
@@ -903,21 +829,20 @@ async function main(): Promise<void> {
     }
 
     /**
-     * 🔴 **생성 캐시 key 가 실제 계약을 담는다** (2026-09-20).
-     *    옛 Haiku 생성 결과와 옛 검수 결과를 v2 가 재사용하면 안 된다 —
-     *    stage-model · 프롬프트 판 · 원문 근거 · 후보 풀 · 말투 자산이 전부 들어간다.
+     * 🔴 **이 회차의 생성 계약.** artifact 에 적는 값과 캐시 key 가 **같은 것**이다 —
+     *    앞판은 캐시 key 만 출력 상한·검수판·화자 계획판·계획 프롬프트를 담아서,
+     *    그것들이 바뀌면 캐시는 miss 되는데 지난 HOLD 는 "지금 계약의 결론" 으로 남았다.
+     */
+    const contract: GenerationContract = {
+      ...CONTRACT_BASE, sourceInputHash: sourceIdentityHash(meta),
+    }
+    /**
+     * 🔴 **캐시 key = 원천 id + 스키마 판 + 계약 identity.**
+     *    스키마 판을 넣는 것은 캐시에 담긴 것이 **artifact 객체**이기 때문이다 —
+     *    모양이 바뀌면 옛 객체를 되살릴 수 없다.
      *    🔴 캐시 **파일**은 지우지 않는다. key 가 계약을 담으면 저절로 miss 된다.
      */
-    const v2Key = `v2|${j.sourceArticleId}`
-      + `|${inputHashOf({ title: meta.title, bodyHead: meta.bodyHead, axis: meta.axis, lane: meta.lane })}`
-      + `|${SPEAKER_PLAN_PROMPT_VERSION}|${V2_DRAFT_PROMPT_VERSION}|${V2_REVIEW_PROMPT_VERSION}`
-      + `|${STAGE_MODEL.speakerPlan}|${STAGE_MODEL.draftGen}|${STAGE_MODEL.semanticReview}`
-      // 🔴 1200 으로 잘린 결과를 2000 짜리 계약이 재사용하지 않게 한다
-      + `|${STAGE_MAX_OUTPUT_LABEL}`
-      + `|${ARTIFACT_VERSION}|${REVIEW_VERSION}|${SPEAKER_PLAN_VERSION}`
-      + `|${digest16(buildSpeakerPlanSystemPrompt())}`
-      + `|${digest16(voice.candidates.map((c) => `${c.code}:${c.voiceTokens.join('/')}:${c.bundleDigest}`).join('|'))}`
-      + `|${voice.sourceDigest}`
+    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}`
 
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
@@ -939,7 +864,12 @@ async function main(): Promise<void> {
          *    제목에 있으면 그대로 provider 로 나갔다. 정본 함수를 그대로 쓴다.
          */
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
-        personas: voice.candidates, load: v2Load,
+        personas: voice.candidates,
+        /**
+         * 🔴 **이 회차의 생성 계약.** 다음 회차가 "지난 HOLD 가 지금도 결론인가" 를
+         *    이 값으로 판단한다 — 스키마 판 하나로는 알 수 없다.
+         */
+        contract,
         voiceSourceDigest: voice.sourceDigest,
         ask: v2Ask, now, callCap: V2_CALL_CAP,
       })
@@ -951,9 +881,6 @@ async function main(): Promise<void> {
     for (const c of art.cost.calls) {
       const k = `${c.stage}:${c.model ?? '?'}`
       statusCount.set(k, (statusCount.get(k) ?? 0) + 1)
-    }
-    if (art.plan.personaCode !== null) {
-      v2Load[art.plan.personaCode] = (v2Load[art.plan.personaCode] ?? 0) + 1
     }
     artifacts.push(art)
     /** 🔴 담으면 안 되는 것이 들어갔는가 — 파일로 나가기 전에 본다 */
@@ -1046,9 +973,19 @@ async function main(): Promise<void> {
     console.log(`   🟡 쓸 Persona 가 없어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
   }
   {
-    const used = Object.entries(v2Load).filter(([, n]) => n > 0).sort()
-    if (used.length > 0) {
-      console.log(`   🟢 말투 배정 ${used.map(([k, n]) => `${k}×${n}`).join(' · ')}`)
+    /**
+     * 🔴 **결과를 세어 보여 줄 뿐이다.** 앞판은 이 수를 다음 원천의 요청에 실어
+     *    Persona 선택을 바꿨다 — 회차 안에서만 존재하는 값이라 계약에 담기지 않았고,
+     *    같은 계약인데 실제로 보낸 것이 달랐다. 이제 보고에만 쓴다.
+     */
+    const used = new Map<string, number>()
+    for (const a of artifacts) {
+      const code = a.plan.personaCode
+      if (code !== null) used.set(code, (used.get(code) ?? 0) + 1)
+    }
+    if (used.size > 0) {
+      console.log(`   🟢 말투 배정 ${[...used].sort()
+        .map(([k, n]) => `${k}×${n}`).join(' · ')}`)
     }
   }
   console.log('\n③ 채택')
@@ -1085,7 +1022,12 @@ async function main(): Promise<void> {
     const bad = violatesDraftProvenance(a.pick as unknown as Record<string, unknown>)
     if (bad.length > 0) fail(`provenance 위반\n${bad.map((b) => `     ${b}`).join('\n')}`)
   }
-  const rid = runId(now)
+  /**
+   * 🔴 **회차 id 를 받으면 그것으로 파일 이름을 짓는다** (2026-09-20).
+   *    러너가 다음 단계에 "이 파일만 읽어라" 고 건네려면 경로를 **미리 알아야** 한다.
+   *    시각으로 지으면 러너가 예측할 수 없어 디렉터리 전체를 다시 훑게 된다.
+   */
+  const rid = RUN_ID ?? runId(now)
   const pickPath = join(DATA_DIR, `auto-draft-${rid}.picks.jsonl`)
   const candPath = join(DATA_DIR, `auto-draft-${rid}.candidates.json`)
   /** 🔴 사람이 근거를 보고 판단하는 한 장 — 채택되지 않은 것도 남긴다 */

@@ -22,15 +22,18 @@ import type { PoolCard } from '../../src/lib/persona-pool-card'
 /** 🔴 provider 가 아는 모델만 — `as` 로 모르는 이름을 억지 통과시키지 않는다 */
 import type { ProviderModel } from './voice-m3-provider.mjs'
 import { STAGE_MODEL as CANON_STAGE_MODEL } from '../../src/lib/content-core/pipeline'
-import { canGenerate, parseSpeakerPlan } from '../../src/lib/content-core/speaker'
+import {
+  canGenerate, lifeContractIdentity, orderPersonasForSource, parseSpeakerPlan, planSchemaFailed,
+} from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import {
   buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
 } from '../../src/lib/content-core/voice-evidence'
 import type { VoiceEvidence } from '../../src/lib/content-core/voice-evidence'
+import type { GenerationContract } from '../../src/lib/content-core/pipeline'
 import {
   groundedInDraft, groundedInSource, judgeMachine, parseSemanticReview, INCOMPLETE_LABEL,
-  type DeterministicFailure, type DeterministicResult,
+  type DeterministicFailure, type DeterministicResult, type IncompleteCause,
   type ReviewCompletion, type SemanticVerdict,
 } from '../../src/lib/content-core/review'
 import { ARTIFACT_VERSION, type CallMeta, type HumanReviewArtifact }
@@ -90,6 +93,22 @@ export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> &
 }
 
 /**
+ * 🔴 **이 회차가 쓸 수 있었던 후보 풀 전체의 한 줄.**
+ *
+ *    생성 계약(`personaPoolDigest`)이 이 값의 지문을 쓴다. 생활사 계약 전체와
+ *    말투 토큰·말투 묶음 지문이 들어간다 — 전부 프롬프트에 실리는 값이다.
+ *    🔴 **댓글 원문은 넣지 않는다.** 말투 근거는 `bundleDigest` 가 대신한다.
+ *    🔴 후보 순서는 코드 오름차순으로 고정한다 — 읽는 순서가 달라도 같은 값이어야 한다.
+ */
+export function personaPoolIdentity(cands: readonly PersonaInput[]): string {
+  return [...cands]
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((c) => `${lifeContractIdentity(c)}\u0001voice=${c.voiceTokens.join('\u0002')}`
+      + `\u0001bundle=${c.bundleDigest}`)
+    .join('\u0003')
+}
+
+/**
  * 🔴 **정본 `PoolCard` → v2 입력. 저장소에 이 변환 하나뿐이다.**
  *    시험 harness 도 앞으로의 운영 runner 도 이것만 부른다 —
  *    손으로 칸을 재조립하면 이번과 같은 조용한 빈 값이 다시 생긴다.
@@ -128,9 +147,11 @@ export type RunInput = {
   /** 🔴 이미 마스킹된 값이다 */
   title: string
   maskedBody: string
+  /** 🔴 순서는 여기서 정하지 않는다 — 러너가 원문 지문으로 세운다 */
   personas: readonly PersonaInput[]
-  load?: Readonly<Record<string, number>>
   voiceSourceDigest: string
+  /** 🔴 이 회차의 생성 계약 — artifact 에 그대로 실린다 */
+  contract: GenerationContract
   ask: Ask
   now: Date
   /** 🔴 원천 하나가 쓸 수 있는 요청 수 — 넘기면 완주 실패로 남는다 */
@@ -146,11 +167,11 @@ export type RunInput = {
  *    사용량 미상 · 파싱 실패**는 똑같이 통과가 아니다.
  */
 const completionOf = (r: AskResult): ReviewCompletion => {
-  if (r.blocked) return { complete: false, reason: 'budgetBlocked' }
-  if (!r.ok) return { complete: false, reason: 'noResponse' }
-  if (r.truncated) return { complete: false, reason: 'truncated' }
-  if (!r.usageKnown) return { complete: false, reason: 'usageUnknown' }
-  return { complete: true, reason: null }
+  if (r.blocked) return { complete: false, reason: 'budgetBlocked', cause: 'budgetBlocked' }
+  if (!r.ok) return { complete: false, reason: 'noResponse', cause: 'noResponse' }
+  if (r.truncated) return { complete: false, reason: 'truncated', cause: 'truncated' }
+  if (!r.usageKnown) return { complete: false, reason: 'usageUnknown', cause: 'usageUnknown' }
+  return { complete: true, reason: null, cause: null }
 }
 
 const parseDraft = (raw: string): { title: string; body: string } | null => {
@@ -169,7 +190,15 @@ const parseDraft = (raw: string): { title: string; body: string } | null => {
  *    🔴 `budgetBlocked` 는 **의미 검수 호출이 실제로 막혔을 때만** 쓴다
  *    (`completionOf(rRes)` 가 그것을 판정한다).
  */
-const NOT_RUN: ReviewCompletion = { complete: false, reason: 'notRun' }
+const notRun = (cause: IncompleteCause): ReviewCompletion =>
+  ({ complete: false, reason: 'notRun', cause })
+
+/**
+ * 🔴 **앞 유료 단계가 완주하지 못해서 멈췄다.** 그 단계의 원인을 **그대로 물려준다** —
+ *    예산에 막힌 것과 답이 잘린 것은 다음 회차의 처리가 다르다.
+ */
+const notRunFrom = (c: ReviewCompletion): ReviewCompletion =>
+  notRun(c.cause ?? 'noResponse')
 
 /** 🔴 한 원천을 끝까지 돈다. 중간에 멈추면 멈춘 자리가 artifact 에 남는다 */
 export async function runContentCore(input: RunInput): Promise<HumanReviewArtifact> {
@@ -210,6 +239,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     artifactId: input.artifactId,
     sourceArticleId: packet.sourceArticleId,
     generatedAt: input.now.toISOString(),
+    // 🔴 **어떤 계약으로 만들었는가** — 조기 종료한 artifact 에도 반드시 실린다
+    contract: input.contract,
     evidence: {
       title: packet.title, spans: packet.spans, bodyEvidenceChars: packet.bodyEvidenceChars,
       totalEvidenceChars: packet.totalEvidenceChars, bodyLength: packet.bodyLength, truncated: packet.truncated, omittedRatio: packet.omittedRatio,
@@ -253,31 +284,50 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   if (budgetProblems.length > 0) {
     return blank(null, [], null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
-      null, NOT_RUN, 'hold', budgetProblems.join(' · '))
+      // 🔴 장부 탓이 아니다 — 근거 묶음을 만드는 쪽이 어긋난 것이다. 다시 물어도 같다
+      null, notRun('evidenceBudgetViolated'), 'hold', budgetProblems.join(' · '))
   }
   /**
    * 🔴 **이미지·링크·앞 대화 없이는 알 수 없는 글은 만들지 않는다.**
    *    묻기 전에 멈춘다 — 확인 못 한 글에 돈을 쓰지 않는다.
    */
   if (packet.contextSufficiency === 'insufficient') {
-    return blank(null, [], null, null, noDet, null, NOT_RUN,
+    return blank(null, [], null, null, noDet, null, notRun('contextInsufficient'),
       'hold', `무슨 이야기인지 확인하지 못했다 (${packet.insufficientReasons.join('·')})`)
   }
 
   // ── ① 화자 계획 — 🔴 원문과 실제 카드를 함께 보고, 코드가 근거를 검증한다 ──
+  /**
+   * 🔴 **이 원문에 대해 정해진 순서로 세운다.** 읽은 순서가 달라도 실제로 보내는 것이
+   *    같아야 하고, 그 순서는 계약(`sourceInputHash` + 후보 풀)만으로 다시 만들 수 있어야 한다.
+   */
+  const ordered = orderPersonasForSource(input.personas, input.contract.sourceInputHash)
   const pRes = await ask('speakerPlan', buildSpeakerPlanSystemPrompt(),
-    buildSpeakerPlanPayload({ packet, personas: input.personas, load: input.load }))
+    buildSpeakerPlanPayload({ packet, personas: ordered }))
   const pC = completionOf(pRes)
   if (!pC.complete) {
-    return blank(null, [], null, null, noDet, null, NOT_RUN,
+    return blank(null, [], null, null, noDet, null, notRunFrom(pC),
       'hold', `화자 계획을 완주하지 못했다 (${INCOMPLETE_LABEL[pC.reason ?? 'noResponse']})`)
   }
-  const parse = parseSpeakerPlan(pRes.rawText, packet, input.personas)
+  const parse = parseSpeakerPlan(pRes.rawText, packet, ordered)
   const plan = parse.plan
   const dropped = parse.dropped
+  /**
+   * 🔴 **형식을 어긴 답과 자격이 없는 원문을 가른다** (2026-09-21 보정).
+   *
+   *    앞판은 둘 다 `canGenerate` 실패로 흘러 `speakerUnqualified`(결론)가 됐다.
+   *    JSON 이 아니거나 schema 가 어긋난 것은 **이번 답이 잘못된 것**이다 —
+   *    다시 물으면 달라질 수 있다. 결론으로 적으면 정상 원천이 영구 제외된다.
+   */
+  if (planSchemaFailed(parse)) {
+    const why = parse.schemaProblems.length > 0 ? parse.schemaProblems.join(' · ') : plan.reason
+    return blank(plan, dropped, null, null, noDet, null, notRun('parseFailed'),
+      'hold', `화자 계획을 읽지 못했다 (${why})`)
+  }
   const gen = canGenerate(packet, plan)
   if (!gen.ok) {
-    return blank(plan, dropped, null, null, noDet, null, NOT_RUN, 'hold', gen.why)
+    return blank(plan, dropped, null, null, noDet, null, notRun('speakerUnqualified'),
+      'hold', gen.why)
   }
   const persona = input.personas.find((p) => p.code === plan.personaCode)!
 
@@ -293,7 +343,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   const ready = judgeVoiceReadiness(voice)
   if (!ready.ok) {
-    return blank(plan, dropped, voice, null, noDet, null, NOT_RUN,
+    return blank(plan, dropped, voice, null, noDet, null, notRun('voiceUnready'),
       'hold', VOICE_READINESS_LABEL[ready.why!])
   }
 
@@ -309,7 +359,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     ...(voiceStandardMissingFrom(reviewSystem, voice) ? ['의미 검수'] : []),
   ]
   if (voiceless.length > 0) {
-    return blank(plan, dropped, voice, null, noDet, null, NOT_RUN,
+    return blank(plan, dropped, voice, null, noDet, null, notRun('wiringBroken'),
       'hold', `말투 기준이 ${voiceless.join('·')} 요청에 들어가지 않았다 — 배선이 어긋났다`)
   }
   const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
@@ -319,7 +369,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(plan, dropped, voice, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: why }] },
-      null, NOT_RUN, 'hold', why)
+      // 🔴 읽지 못한 답은 **이번 답**이 잘못된 것이다 — 결론이 아니라 재시도다
+      null, dC.complete ? notRun('parseFailed') : notRunFrom(dC), 'hold', why)
   }
 
   // ── ④ deterministic — 확정 가능한 것만 ──
@@ -339,8 +390,9 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {
-    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: NOT_RUN })
-    return blank(plan, dropped, voice, draft, det, null, NOT_RUN, j.outcome, j.reason)
+    const stop = notRun('deterministicFailed')
+    const j = judgeMachine({ deterministic: det, semantic: null, semanticCompletion: stop })
+    return blank(plan, dropped, voice, draft, det, null, stop, j.outcome, j.reason)
   }
 
   // ── ⑤ 의미 검수 1회 ──
@@ -359,7 +411,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     lifeContradictions: groundedInDraft(parsed.lifeContradictions, draftText),
   }
   const semanticC2: ReviewCompletion = semanticC.complete && semantic === null
-    ? { complete: false, reason: 'parseFailed' } : semanticC
+    ? { complete: false, reason: 'parseFailed', cause: 'parseFailed' } : semanticC
 
   const j = judgeMachine({ deterministic: det, semantic, semanticCompletion: semanticC2 })
   return blank(plan, dropped, voice, draft, det, semantic, semanticC2, j.outcome, j.reason)

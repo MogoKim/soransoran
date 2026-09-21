@@ -263,12 +263,23 @@ export type StagePlan = {
   source: SupplySourceId | null
   llm: boolean
   dbWrite: boolean
+  /**
+   * 🔴 **이 단계에만 주는 env** (2026-09-20). 장부 회차 id 와 요청 상한을
+   *    단계마다 따로 준다 — 한 상한을 나눠 쓰면 먼저 오는 단계가 전부 가져가고
+   *    뒤 단계가 굶는다. canary 가 그 모양이었다(judge 15 · draft 0).
+   * 🔴 운영 env 파일은 건드리지 않는다. 자식 프로세스에만 실린다.
+   */
+  env?: Readonly<Record<string, string>>
 }
 
-const mk = (stage: ProcessStage, args: readonly string[], source: SupplySourceId | null): StagePlan => ({
+const mk = (
+  stage: ProcessStage, args: readonly string[], source: SupplySourceId | null,
+  env?: Readonly<Record<string, string>>,
+): StagePlan => ({
   stage, label: STAGE_LABEL[stage], args, source,
   llm: LLM_STAGES.includes(stage),
   dbWrite: DB_WRITE_STAGES.includes(stage),
+  ...(env === undefined ? {} : { env }),
 })
 
 export type SourcePlan = { source: SupplySourceId; stages: StagePlan[] }
@@ -325,12 +336,43 @@ export type DraftQueueGate =
   | { kind: 'ready'; snapshotPath: string; runId: string }
   | { kind: 'hold'; reason: string; runId: string }
 
+/**
+ * 🔴 **이번 회차가 끝까지 보낼 묶음** (2026-09-20). 세 단계가 **같은 N 건**을 본다.
+ *    파일 경로를 계획이 정한다 — 하위 스크립트가 디렉터리 전체를 다시 훑지 않게.
+ */
+export type WorksetGate = {
+  /** manifest 경로 — `judge` 가 이 목록의 원천만 판정한다 */
+  manifestPath: string
+  /** 그 회차 판정 파일 — `draft` 가 **이것만** 읽는다 */
+  shadowPath: string
+  /** 그 회차 후보 파일 — `fill` 이 **이것만** 읽는다 */
+  candidatesPath: string
+  limit: number
+  /** 단계별 요청 상한 — 🔴 `judgeStageBudget` 이 낸 값을 그대로 받는다 */
+  perStage: Readonly<Record<'judge' | 'draft', number>>
+}
+
+/**
+ * 🔴 **비용 장부 회차 id 는 따로 쓴다** (2026-09-20 보정).
+ *
+ *    `--run-id` 하나에 provenance(묶음·큐 스냅샷·산출물 연결)와 장부 책임을 겹치면
+ *    생성기가 큐 스냅샷을 **다른 회차 파일**로 읽고 거절한다(`RUN_MISMATCH`).
+ *    파이프라인 id 는 세 단계가 **같은 값**을 쓰고, 장부 id 만 단계별로 가른다.
+ */
+export const ledgerRunIdOf = (runId: string, stage: 'judge' | 'draft'): string =>
+  `${runId}-${stage === 'judge' ? 'j' : 'd'}`
+
+const LEDGER_CAP_ENV = 'SORAN_LLM_RUN_REQUEST_CAP'
+
+/**
+ * 🔴 **손으로 부르는 경로** — 디렉터리 전체를 본다. 묶음 계약이 없다.
+ *    live 공급은 이 함수를 쓰지 않는다 (`planBoundedCommonPhase` 를 쓴다).
+ */
 export function planCommonPhase(
   pending: Pending, policy: BufferPolicy, gate: DraftQueueGate,
 ): StagePlan[] {
   const out: StagePlan[] = []
   if (!policy.llm) return out
-  // 🔴 판정도 **같은 회차 id** 를 받는다 — 장부의 회차 요청 상한을 생성과 나눠 쓴다
   if (pending.detail.length > 0) {
     out.push(mk('judge', ['--call', '--apply', `--run-id=${gate.runId}`], null))
   }
@@ -351,6 +393,49 @@ export function planCommonPhase(
   }
   if (policy.fill && policy.upTo > 0 && (pending.candidates.length > 0 || pending.detail.length > 0)) {
     out.push(mk('fill', ['--apply', `--up-to=${policy.upTo}`], null))
+  }
+  return out
+}
+
+/**
+ * 🔴 **live 공급 경로** — 묶음이 **반드시** 있어야 한다. 타입이 그것을 강제한다.
+ *
+ *    묶음을 못 만들면 부르는 쪽이 회차를 멈춘다. `undefined` 를 넘겨 옛 전체 스캔으로
+ *    새는 길이 없다 — 그것이 2026-09-20 canary 를 만든 구조다.
+ */
+export function planBoundedCommonPhase(
+  pending: Pending, policy: BufferPolicy, gate: DraftQueueGate, workset: WorksetGate,
+): StagePlan[] {
+  const out: StagePlan[] = []
+  if (!policy.llm) return out
+  if (pending.detail.length > 0) {
+    out.push(mk('judge', [
+      '--call', '--apply',
+      // 🔴 파이프라인 id 는 세 단계가 같다 — 묶음·스냅샷·산출물이 이 값으로 이어진다
+      `--run-id=${gate.runId}`,
+      // 🔴 장부 id 만 단계별로 가른다 — 상한이 섞이지 않는다
+      `--ledger-run-id=${ledgerRunIdOf(gate.runId, 'judge')}`,
+      `--workset=${workset.manifestPath}`,
+      `--shadow-out=${workset.shadowPath}`,
+    ], null, { [LEDGER_CAP_ENV]: String(workset.perStage.judge) }))
+  }
+  if ((pending.shadow.length > 0 || pending.detail.length > 0) && gate.kind === 'ready') {
+    out.push(mk('draft', [
+      '--call', '--apply',
+      `--queue-snapshot=${gate.snapshotPath}`,
+      `--run-id=${gate.runId}`,
+      `--ledger-run-id=${ledgerRunIdOf(gate.runId, 'draft')}`,
+      '--require-queue-snapshot',
+      // 🔴 **그 회차가 만든 판정 파일만** 읽는다 — 과거 shadow 를 다시 훑지 않는다
+      `--input=${workset.shadowPath}`,
+    ], null, { [LEDGER_CAP_ENV]: String(workset.perStage.draft) }))
+  }
+  if (policy.fill && policy.upTo > 0 && (pending.candidates.length > 0 || pending.detail.length > 0)) {
+    // 🔴 **그 회차 후보 파일만** · 정확히 묶음 크기까지. 과거 후보 파일은 대상이 아니다
+    out.push(mk('fill', [
+      '--apply', `--input=${workset.candidatesPath}`,
+      `--up-to=${Math.min(policy.upTo, workset.limit)}`,
+    ], null))
   }
   return out
 }

@@ -31,6 +31,7 @@
  *
  * 종료 코드: 검토 완료에 실패하면 1 · 그 외 0
  */
+import { digest16, PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import { PrismaClient } from '@prisma/client'
 
 import {
@@ -39,7 +40,6 @@ import {
 } from '../src/lib/original-post-auto-publish'
 import { MACHINE_AGE_HUMAN_REVIEW_NOTE } from '../src/lib/micro-seed-auto-draft'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
-import { PERSONA_POOL_DOC } from './micro-seed-auto-draft.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'

@@ -115,8 +115,9 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '- 당사자 경험이 이 글의 알맹이라 바꾸면 사라지면 → `decision: "hold"`',
     '',
     '## 누구를 고를까',
-    '🔴 **자격을 채운 사람 중에서** 지금 회차에 맡은 수(load)가 적은 사람을 고른다.',
-    '🔴 load 가 적다는 이유로 **자격 없는 사람을 고르지 않는다.**',
+    '🔴 **자격을 채운 사람 중에서** 후보 목록에 **먼저 나온 사람**을 고른다.',
+    '🔴 목록 순서는 이 원문에 대해 미리 정해져 있다 — 원문마다 다르다.',
+    '🔴 앞에 있다는 이유로 **자격 없는 사람을 고르지 않는다.**',
     '',
     '## protectedFacts — 🔴 글자 자체를 지켜야 하는 **원자적 사실**만',
     '- kind: number(숫자+단위) · publicEntity(공개 프로그램·상품·장소 이름)',
@@ -156,12 +157,16 @@ export function buildSpeakerPlanSystemPrompt(): string {
  * 🔴 **말투 참고 댓글 본문은 보내지 않는다.** 자격 판정에 필요 없다.
  * 🔴 원문 내용·개인정보 범위는 늘리지 않는다 — 이미 마스킹되고 300자로 묶인 그 span 들이다.
  */
+/**
+ * 🔴 **후보는 부르는 쪽이 이미 세워서 준다** (`orderPersonasForSource`).
+ *    여기서 다시 정렬하지 않는다 — 정렬을 두 곳에 두면 한쪽이 낡는다.
+ *    🔴 **회차 안에서만 존재하는 값(맡은 수)은 싣지 않는다.** 그 값은 계약에 담을 수도,
+ *    다음 회차가 다시 만들 수도 없어서 "같은 계약, 다른 요청" 을 만들었다.
+ */
 export function buildSpeakerPlanPayload(input: {
   packet: SourceEvidencePacket
   personas: readonly PersonaLifeContract[]
-  load?: Readonly<Record<string, number>>
 }): string {
-  const load = input.load ?? {}
   const p = input.packet
   return JSON.stringify({
     원문: {
@@ -170,7 +175,7 @@ export function buildSpeakerPlanPayload(input: {
       bodyLength: p.bodyLength,
       truncated: p.truncated,
     },
-    후보: input.personas.map((x) => `${qualificationLine(x)} · 맡은 수 ${load[x.code] ?? 0}`),
+    후보: input.personas.map((x) => qualificationLine(x)),
   })
 }
 

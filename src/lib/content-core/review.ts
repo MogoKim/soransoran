@@ -128,14 +128,113 @@ export type SemanticVerdict = {
  *    "예산·상한에 막혀 묻지 못했다" 로 남았다 — **사실이 아닌 기록**이다.
  *    사람이 원인을 잘못 짚는다. 두 상태를 가른다.
  */
+export const INCOMPLETE_REASONS = [
+  'truncated', 'noResponse', 'parseFailed', 'usageUnknown', 'budgetBlocked', 'notRun',
+] as const
+export type IncompleteReason = (typeof INCOMPLETE_REASONS)[number]
+
+/**
+ * 🔴 **왜 그렇게 됐는가 — 값으로 적는다** (2026-09-20 보정).
+ *
+ *    앞판은 `notRun` 하나만 남기고, 재시도인지 결론인지는 `machineReason` **문구를
+ *    찾아서** 갈랐다. 문구는 사람이 읽으라고 있는 것이다 — 한 글자만 고쳐도
+ *    예산에 막힌 회차가 "결론" 이 되어 영구 제외된다.
+ *
+ * 🔴 앞 절반은 **다시 물으면 달라질 수 있는 것**, 뒤 절반은 **다시 물어도 같은 것**이다.
+ */
+export const INCOMPLETE_CAUSES = [
+  /**
+   * 🔴 **다시 물으면 달라질 수 있는 것.** `parseFailed` 가 여기 있는 이유는
+   *    모델이 이번에 형식을 어겼다는 뜻이기 때문이다 — 같은 입력이라도 다음에는
+   *    제대로 온다. 이것을 결론으로 적으면 정상 원천이 영구 제외된다(2026-09-21 실측).
+   */
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+  // 결론이다 — 같은 입력·같은 계약이면 또 같다
+  'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
+  'wiringBroken', 'deterministicFailed',
+] as const
+export type IncompleteCause = (typeof INCOMPLETE_CAUSES)[number]
+
+export const RETRYABLE_CAUSES = [
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+] as const satisfies readonly IncompleteCause[]
+
+/**
+ * 🔴 **유료 단계가 직접 실패했을 때 쓰는 사유.** 이때 `reason` 과 `cause` 는 **같은 값**이다 —
+ *    다르면 둘 중 하나가 거짓이다.
+ */
+export const DIRECT_REASONS = [
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+] as const satisfies readonly IncompleteReason[]
+
+/**
+ * 🔴 **`notRun` 이 달고 올 수 있는 원인.** 검수를 부르기 전에 멈춘 경로가 실제로
+ *    내는 값만이다. 여기 없는 값이 `notRun` 과 함께 오면 모양이 깨진 것이다.
+ */
+export const NOT_RUN_CAUSES = [
+  // 앞 유료 단계가 완주하지 못해 그 원인을 물려받은 것
+  'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+  // 묻기 전에 구조로 멈춘 것
+  'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
+  'wiringBroken', 'deterministicFailed',
+] as const satisfies readonly IncompleteCause[]
+
+export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> = {
+  budgetBlocked: '예산·상한에 막혀 묻지 못했다',
+  noResponse: '답이 오지 않았다',
+  truncated: '답이 잘렸다',
+  usageUnknown: '사용량을 알 수 없다',
+  parseFailed: '답을 읽지 못했다',
+  contextInsufficient: '무슨 이야기인지 확인하지 못했다',
+  evidenceBudgetViolated: '원문 근거 예산을 넘겼다 — 근거를 만드는 쪽이 어긋났다',
+  speakerUnqualified: '이 원문을 1인칭으로 쓸 사람이 없다',
+  voiceUnready: '말투 근거가 서지 않았다',
+  wiringBroken: '요청 배선이 어긋났다',
+  deterministicFailed: '확정 가능한 결함이 있다',
+}
+
 export type ReviewCompletion = {
   complete: boolean
   /** 왜 완주하지 못했나 */
-  reason: 'truncated' | 'noResponse' | 'parseFailed' | 'usageUnknown'
-    | 'budgetBlocked' | 'notRun' | null
+  reason: IncompleteReason | null
+  /** 🔴 **문구가 아니라 값.** 완주했으면 `null` 이다 */
+  cause: IncompleteCause | null
 }
 
-export const INCOMPLETE_LABEL: Readonly<Record<NonNullable<ReviewCompletion['reason']>, string>> = {
+/**
+ * 🔴 **artifact 의 검수 칸이 읽을 수 있는 모양인가.**
+ *    `machineOutcome` 만 있고 완주 기록이 없거나 깨졌으면 **결론으로 세지 않는다** —
+ *    부분 artifact 하나가 원천을 영구 제외하면 안 된다.
+ */
+export function reviewShapeOk(review: unknown): boolean {
+  if (typeof review !== 'object' || review === null) return false
+  const r = review as Record<string, unknown>
+  const outcome = String(r.machineOutcome ?? '')
+  if (!(MACHINE_OUTCOMES as readonly string[]).includes(outcome)) return false
+  const c = r.semanticCompletion
+  if (typeof c !== 'object' || c === null) return false
+  const cc = c as Record<string, unknown>
+  if (typeof cc.complete !== 'boolean') return false
+  // 🔴 완주했으면 사유도 원인도 없다 — 하나라도 있으면 둘 중 하나가 거짓이다
+  if (cc.complete) return cc.reason === null && cc.cause === null
+  const reason = String(cc.reason ?? '')
+  const cause = String(cc.cause ?? '')
+  if (!(INCOMPLETE_REASONS as readonly string[]).includes(reason)) return false
+  if (!(INCOMPLETE_CAUSES as readonly string[]).includes(cause)) return false
+  // 🔴 단계가 직접 실패했으면 사유와 원인이 같아야 한다
+  if ((DIRECT_REASONS as readonly string[]).includes(reason) && reason !== cause) return false
+  // 🔴 `notRun` 은 검수를 부르기 전에 멈춘 경로가 내는 원인만 달 수 있다
+  if (reason === 'notRun' && !(NOT_RUN_CAUSES as readonly string[]).includes(cause)) return false
+  /**
+   * 🔴 **완주하지 못한 회차는 채택이 아니다.** 결론은 `hold` 다 —
+   *    딱 하나, 초안에 개인정보·금지 낱말이 있어 **묻기 전에 버린** 경우만 `drop` 이다.
+   *    그 판정은 코드가 확정한 것이라 다시 물어도 같다.
+   */
+  if (outcome === 'adopt') return false
+  return outcome === 'hold' || cause === 'deterministicFailed'
+}
+
+export const INCOMPLETE_LABEL: Readonly<Record<IncompleteReason, string>> = {
   truncated: '답이 잘렸다',
   noResponse: '답이 오지 않았다',
   parseFailed: '답을 읽지 못했다',
@@ -220,7 +319,9 @@ export function parseSemanticReview(raw: string): SemanticVerdict | null {
 }
 
 /** 기계가 낼 수 있는 값 — 🔴 `adopt` 는 **READY 가 아니다** */
-export type MachineOutcome = 'adopt' | 'hold' | 'drop'
+/** 🔴 기계가 낼 수 있는 결론 — 정본 하나. 다른 파일이 목록을 다시 적지 않는다 */
+export const MACHINE_OUTCOMES = ['adopt', 'hold', 'drop'] as const
+export type MachineOutcome = (typeof MACHINE_OUTCOMES)[number]
 
 /**
  * 🔴 **사람에게 넘길 것과 기계가 막을 것을 가른다** (2026-09-20 실측 보정).
@@ -241,6 +342,27 @@ export type MachineOutcome = 'adopt' | 'hold' | 'drop'
  *    예산이 모자랄수록 검수가 느슨해지는 구조를 만들지 않는다.
  * 🔴 adopt 는 **후보로 보낸다**는 뜻일 뿐이다. 사람 검토 없는 발행은 그대로 막혀 있다.
  */
+/**
+ * 🔴 **다시 물어보면 답이 달라질 수 있는 사유들.** 결론이 아니라 "못 물어봤다" 이다.
+ *    🔴 `notRun` 은 **여기 없다** — 앞 단계가 왜 멈췄는지에 따라 갈린다.
+ *       사유 문구(`machineReason`)에 아래 낱말이 있으면 일시 실패다.
+ */
+/**
+ * 🔴 **이 회차 결과를 다시 시도해야 하는가 — 값 하나로 가른다.**
+ *
+ *    앞판은 `machineReason` 문구에서 정본 라벨을 찾았다. 문구가 바뀌면 판정이
+ *    바뀌는 구조였다. 이제 `semanticCompletion.cause` **값**만 본다.
+ *
+ * 🔴 읽지 못한 모양은 `null` 이다 — 재시도도 결론도 아니다. 부르는 쪽이 `unknown` 으로 둔다.
+ */
+export function artifactRetryable(review: unknown): boolean | null {
+  if (!reviewShapeOk(review)) return null
+  const c = (review as { semanticCompletion: { complete: boolean; cause: IncompleteCause | null } })
+    .semanticCompletion
+  if (c.complete) return false
+  return (RETRYABLE_CAUSES as readonly string[]).includes(c.cause ?? '')
+}
+
 export const REVIEW_WARNING_AXES = ['unsupportedAdditions', 'droppedFromSource'] as const
 export type ReviewWarningAxis = (typeof REVIEW_WARNING_AXES)[number]
 

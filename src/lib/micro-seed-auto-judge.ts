@@ -287,6 +287,54 @@ export const SEMANTIC_STATUSES = [
 ] as const
 export type SemanticStatus = (typeof SEMANTIC_STATUSES)[number]
 
+/**
+ * 🔴 **상세 한 줄 → 판정 입력.** 두 화면의 키 이름이 다르다 —
+ *    `detail` 은 `access`, `raw-detail` 은 `accessStatus` 다.
+ *    🔴 **이 변환은 저장소에 하나뿐이다.** 판정기도 작업 묶음도 이것만 부른다 —
+ *       흉내 낸 파서를 두 벌 두면 한쪽이 정상 원천을 `accessNotOk` 로 덮는다
+ *       (2026-09-20 검토에서 잡힌 결함).
+ */
+export function normalizeJudgeRow(
+  raw: Record<string, unknown>, kind: 'detail' | 'raw-detail',
+): JudgeInput | null {
+  const id = S(raw.sourceArticleId)
+  if (id === '') return null
+  return {
+    sourceArticleId: id,
+    axis: S(raw.axis),
+    // 🔴 키 이름이 화면마다 다르다. 여기서 맞춘다
+    access: kind === 'detail' ? S(raw.access) : S(raw.accessStatus),
+    title: S(raw.title), bodyHead: S(raw.bodyHead),
+    commentCount: Number(raw.commentCount ?? 0),
+    lane: S(raw.lane), assetAxes: S(raw.assetAxes),
+    safetyVerdict: S(raw.safetyVerdict), safetyReasons: S(raw.safetyReasons),
+    bodyLength: Number(raw.bodyLength ?? 0),
+    qualityFlags: Array.isArray(raw.qualityFlags) ? raw.qualityFlags.map(String) : [],
+  }
+}
+
+/**
+ * 🔴 **원천 하나로 합친다.** `detail` 이 먼저, `raw-detail` 은 축이 `rawOriginality`
+ *    일 때만 덮어쓴다 — 그 축이 더 최신 판정을 들고 있다.
+ *    🔴 그 조건이 없으면 raw 행이 정상 detail 행을 지워 버린다.
+ */
+export function mergeJudgeRows(
+  entries: readonly { kind: 'detail' | 'raw-detail'; row: Record<string, unknown> }[],
+): JudgeInput[] {
+  const byId = new Map<string, JudgeInput>()
+  for (const e of entries.filter((x) => x.kind === 'detail')) {
+    const v = normalizeJudgeRow(e.row, 'detail')
+    if (v !== null) byId.set(S(v.sourceArticleId), v)
+  }
+  for (const e of entries.filter((x) => x.kind === 'raw-detail')) {
+    const v = normalizeJudgeRow(e.row, 'raw-detail')
+    if (v === null) continue
+    const id = S(v.sourceArticleId)
+    if (!byId.has(id) || S(v.axis) === RAW_AXIS) byId.set(id, v)
+  }
+  return [...byId.values()]
+}
+
 export type Judgement = {
   sourceArticleId: string
   decision: AutoDecision
@@ -401,6 +449,26 @@ export function parseSemantic(rawText: string): SemanticVerdict | null {
 }
 
 /**
+ * 🔴 **묻기 전에 이미 HOLD 인 것** (2026-09-20 정리)
+ *
+ *    `decide` 가 모델 답을 받고 나서 보던 격리 사유를 **한 함수로 모았다.**
+ *    작업 묶음 선택도 같은 함수를 부른다 — 두 곳이 따로 판단하면
+ *    결과가 정해진 원천에 판정 예산을 쓰고, 언젠가 한쪽만 고쳐진다.
+ *
+ * 🔴 규칙을 새로 만들지 않았다. `decide` 가 쓰던 그 목록·그 순서 그대로다.
+ */
+export function holdBeforeAsking(input: JudgeInput): ReasonCode[] {
+  const out = [
+    ...hardGate(input).filter((c) => HOLD_REASONS.includes(c)),
+    ...preSemanticGate(input),
+  ]
+  const lane = S(input.lane)
+  if (lane !== '' && !PROVEN_LANES.includes(lane)) out.push('laneNotProven')
+  if (HOLD_ASSET_AXES.some((a) => S(input.assetAxes).includes(a))) out.push('assetHealth')
+  return out
+}
+
+/**
  * ① deterministic hard gate — 🔴 **여기서 막히면 모델을 부르지도 않는다.**
  *
  * 돈이 아니라 순서의 문제다. 모델에게 물어본 뒤 막으면, 언젠가 모델 답이
@@ -483,10 +551,7 @@ export function judgeOne(
   // ② 물어볼 자격
   // 🔴 hardGate 가 낸 것 중 **버리진 않지만 격리해야 하는 사유**도 여기서 받는다.
   //    안 받으면 volatile · unknownReason · medicalOrAd 가 조용히 통과한다.
-  const pre = [...hard.filter((c) => HOLD_REASONS.includes(c)), ...preSemanticGate(input)]
-  const lane = S(input.lane)
-  if (lane !== '' && !PROVEN_LANES.includes(lane)) pre.push('laneNotProven')
-  if (HOLD_ASSET_AXES.some((a) => S(input.assetAxes).includes(a))) pre.push('assetHealth')
+  const pre = holdBeforeAsking(input)
   if (pre.length > 0) {
     return { ...base, decision: 'AUTO_HOLD', reasonCodes: dedupe([...hard, ...pre]) }
   }

@@ -432,8 +432,15 @@ console.log('\n⑥-b 회차 상한 — 🔴 장부에서 세고, 자정에 초�
       /RUN_ID === null \|\| RUN_ID\.trim\(\) === ''[\s\S]{0,200}fail\(/.test(src))
     check(`🔴 ${label} 러너가 회차 id 를 지어내지 않는다`,
       !/runId: `(judge|draft)-\$\{/.test(src))
+    /**
+     * 🔴 **회차 id 를 지어내지 않는다** — 공급이 준 것만 쓴다 (2026-09-20 보정).
+     *    장부 id 와 파이프라인 id 의 책임이 갈리면서 표현이 바뀌었다.
+     *    계약은 그대로다: 두 값 **모두 CLI 로 받은 것**이고 여기서 만들지 않는다.
+     */
     check(`🔴 ${label} 러너가 공급이 준 회차 id 를 그대로 쓴다`,
-      /new SupplyLlmSession\(\{ runId: RUN_ID/.test(src))
+      /runId: LEDGER_RUN_ID \?\? RUN_ID/.test(src)
+      && /--ledger-run-id=/.test(src)
+      && !/runId: `/.test(src))
   }
   /**
    * 🔴 **문자열이 아니라 계획을 본다.** 정본 함수를 불러 실제 인자를 확인한다 —
