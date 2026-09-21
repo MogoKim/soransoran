@@ -24,6 +24,12 @@ import { LEDGER_STAGES, PAID_STAGES, tallyOf } from '../src/lib/llm-ledger'
 import { readLedgerDay, ledgerPathOf } from './lib/llm-ledger-store.mjs'
 import { M3_MODEL_CANDIDATES, M3_OUTPUT_TOKEN_POLICY } from './lib/voice-m3-contract.mjs'
 import { MAX_OUTPUT_TOKENS } from './lib/persona-prompt'
+import {
+  judgeCommentCall, SETTLE_AMOUNT_UNKNOWN, MAX_TOKENS_REACHED, SETTLE_NOT_RECORDED,
+  type CommentCallOutcome,
+} from './lib/persona-comment-call.mjs'
+import { REAL_LEDGER_IO, type SupplyCallResult } from './lib/supply-llm-call.mjs'
+import type { LedgerEntry } from '../src/lib/llm-ledger'
 import { runEnqueuePipeline, type PipelineTarget } from './lib/persona-comment-pipeline'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
 import { GATE_CODES } from '../src/lib/persona-comment-gate-report'
@@ -54,6 +60,56 @@ const AUTHOR_MEMBER: PostAuthorFacts = {
   authorPersonaCode: null, source: 'USER',
   authorRealMember: { accountCount: 1, providerId: 'kakao' },
 }
+const targetOf = (over: {
+  postId?: string
+  author?: PostAuthorFacts | null
+  personaAlreadyOnPost?: boolean | null
+  personaCommentsOnPost?: number | null
+  hasOpenQueue?: boolean | null
+} = {}): PipelineTarget => {
+  const postId = over.postId ?? 'post-1'
+  /**
+   * 🔴 `??` 를 쓰지 않는다. `null` 은 **"읽지 못했다"** 라는 시험 대상 값인데
+   *    `?? false` 로 받으면 조용히 `false` 가 되어 fail-closed 를 못 본다.
+   */
+  const pick = <K extends keyof typeof over>(k: K, fallback: NonNullable<typeof over[K]>) =>
+    (k in over ? over[k] : fallback) as typeof over[K]
+  return {
+    input: {
+      personaCode: 'P15', reactionRole: '공감',
+      persona: {
+        code: 'P15', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기 중',
+        identity: { menopauseStatus: '중' }, voiceCore: { tone: '담담' }, voiceVariations: {},
+        noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
+      },
+      post: {
+        id: postId, title: '요즘 잠이 안 와요', bodyDigest: '새벽에 자꾸 깬다는 이야기',
+        boardLabel: '자유게시판', existingCommentDigests: [],
+      },
+      voice: {
+        source: 'persona-comments', openers: ['저도'], endings: ['-어요'],
+        punctuation: ['...'], sampleCount: 12,
+      },
+      memory: { has: true, summary: '작년 여름에 같은 일을 겪었다' },
+      fingerprint: 'fp-P15',
+    },
+    author: over.author === undefined ? AUTHOR_PERSONA : over.author,
+    facts: {
+      postId, personaCode: 'P15', reactionRole: '공감',
+      hasOpenQueue: pick('hasOpenQueue', false) as boolean | null,
+      personaCommentsOnPost: pick('personaCommentsOnPost', 0) as number | null,
+      personaAlreadyOnPost: pick('personaAlreadyOnPost', false) as boolean | null,
+      postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
+    },
+  }
+}
+
+/** 🔴 9관문 전부 pass — 차단이 **다른 축에서** 오는지 보기 위한 바닥 */
+const allPass: PipelineGateResult = {
+  gates: GATE_CODES.map((g) => ({ gate: g, outcome: 'pass' as const, detail: '시험' })),
+  gateStatus: 'pass', isBootstrap: false,
+}
+
 const CANON: ModelCanon = {
   runId: 'check', artifactSha: { summary: 'a', samples: 'b', key: 'c' },
   winner: 'gemini-3.7-flash', decidedBy: 'check', decidedAt: '2026-09-21T00:00:00.000Z',
@@ -123,8 +179,14 @@ console.log('① 🔴 🔴 장부를 지난다 — 두 번째 장부를 만들�
       && /건수 상한만으로는 금액을 보장하지 못한다/.test(CLI))
   }
 
-  check('🔴 **정산 줄을 못 적으면 산출물을 쓰지 않는다**',
-    /settlementRecorded/.test(cli) && /SETTLE_NOT_RECORDED/.test(cli))
+  /**
+   * 🔴 러너가 **판정을 정본에 맡긴다.** 스크립트 최상위 `if` 로 적으면
+   *    불러서 확인할 수 없고, 실제로 그 상태에서 두 구멍이 났다(⑤).
+   */
+  check('🔴 🔴 **후보 채택 판정을 `judgeCommentCall` 한 곳에 맡긴다**',
+    /return judgeCommentCall\(res\)/.test(cli)
+    // 🔴 러너가 따로 파싱하지 않는다 — 두 곳에 적으면 언젠가 갈린다
+    && !/parseCandidate\(/.test(cli))
 }
 
 // ─────────────────────────────────────────────────────────
@@ -358,56 +420,6 @@ console.log('\n④ 🔴 🔴 차단 관문을 실제 runner 경로로 돌린다'
    *    `checkCommentCandidate`)을 그대로 실행하고 반환값을 본다.
    *    가짜인 것은 provider 와 DB writer 뿐이다.
    */
-  const targetOf = (over: {
-    postId?: string
-    author?: PostAuthorFacts | null
-    personaAlreadyOnPost?: boolean | null
-    personaCommentsOnPost?: number | null
-    hasOpenQueue?: boolean | null
-  } = {}): PipelineTarget => {
-    const postId = over.postId ?? 'post-1'
-    /**
-     * 🔴 `??` 를 쓰지 않는다. `null` 은 **"읽지 못했다"** 라는 시험 대상 값인데
-     *    `?? false` 로 받으면 조용히 `false` 가 되어 fail-closed 를 못 본다.
-     */
-    const pick = <K extends keyof typeof over>(k: K, fallback: NonNullable<typeof over[K]>) =>
-      (k in over ? over[k] : fallback) as typeof over[K]
-    return {
-      input: {
-        personaCode: 'P15', reactionRole: '공감',
-        persona: {
-          code: 'P15', ageBand: '50대 초반', region: '경기', lifeStage: '갱년기 중',
-          identity: { menopauseStatus: '중' }, voiceCore: { tone: '담담' }, voiceVariations: {},
-          noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: [],
-        },
-        post: {
-          id: postId, title: '요즘 잠이 안 와요', bodyDigest: '새벽에 자꾸 깬다는 이야기',
-          boardLabel: '자유게시판', existingCommentDigests: [],
-        },
-        voice: {
-          source: 'persona-comments', openers: ['저도'], endings: ['-어요'],
-          punctuation: ['...'], sampleCount: 12,
-        },
-        memory: { has: true, summary: '작년 여름에 같은 일을 겪었다' },
-        fingerprint: 'fp-P15',
-      },
-      author: over.author === undefined ? AUTHOR_PERSONA : over.author,
-      facts: {
-        postId, personaCode: 'P15', reactionRole: '공감',
-        hasOpenQueue: pick('hasOpenQueue', false) as boolean | null,
-        personaCommentsOnPost: pick('personaCommentsOnPost', 0) as number | null,
-        personaAlreadyOnPost: pick('personaAlreadyOnPost', false) as boolean | null,
-        postStatus: 'PUBLISHED', personaActive: true, personaRealMember: false,
-      },
-    }
-  }
-
-  /** 🔴 9관문 전부 pass — 차단이 **다른 축에서** 오는지 보기 위한 바닥 */
-  const allPass: PipelineGateResult = {
-    gates: GATE_CODES.map((g) => ({ gate: g, outcome: 'pass' as const, detail: '시험' })),
-    gateStatus: 'pass', isBootstrap: false,
-  }
-
   /** provider 를 몇 번 불렀는지 세는 가짜 — 🔴 네트워크 0 */
   const runPipeline = async (
     targets: readonly PipelineTarget[],
@@ -550,6 +562,231 @@ console.log('\n④ 🔴 🔴 차단 관문을 실제 runner 경로로 돌린다'
     // 🔴 이 경로 어디에도 Comment 를 만드는 자리가 없다 — 공개는 다른 층이 한다
     check('🔴 **적재 경로는 댓글을 공개하지 않는다**',
       !/prisma\.comment\.create/.test(cli))
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑤ 🔴 🔴 실제 세션 → 실제 어댑터 → 파이프라인 연결')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **세 층을 끊지 않고 잇는다** (2026-09-21).
+   *
+   *    ③ 은 세션까지, ④ 는 파이프라인까지만 봤다. 그 사이에 있는
+   *    **러너의 provider 어댑터**는 어느 쪽도 보지 않았고, 거기 구멍이 둘 있었다.
+   *
+   *    · 사용량을 못 읽은 건: 세션은 `usageUnknown` · `settledUsd: null` 을 주는데
+   *      **줄은 적혔으므로** `settlementRecorded` 가 `true` 다.
+   *      러너는 그 둘만 봐서 **얼마인지 모르는 건을 정산된 것으로** 취급했다.
+   *    · 상한에 닿아 잘린 건: provider 가 `ok: true` 를 준다.
+   *      잘린 JSON 이 우연히 파싱되면 **문장이 끊긴 댓글**이 후보가 됐다.
+   *
+   * 🔴 여기서는 진짜 `SupplyLlmSession` 을 만들고, 러너가 쓰는 **그 판정 함수**
+   *    (`judgeCommentCall`)를 그대로 `runEnqueuePipeline` 의 provider 로 꽂는다.
+   *    가짜인 것은 `fetch` 와 DB writer 뿐이다.
+   */
+  const realFetch = globalThis.fetch
+
+  type Shape = {
+    /** 🔴 사용량 자체를 주지 않는다 — `usageUnknown` 이 된다 */
+    omitUsage?: boolean
+    finishReason?: string
+    outputTokens?: number
+    /** 모델이 돌려주는 본문. 🔴 기본은 **파싱되는** 정상 JSON 이다 */
+    body?: string
+    /** 🔴 정산 줄 쓰기를 실패시킨다 — 예약은 적히고 정산만 못 적는다 */
+    failSettleWrite?: boolean
+  }
+
+  const connect = async (shape: Shape) => {
+    const inTokens = 900
+    const outTokens = shape.outputTokens ?? 300
+    const body = shape.body ?? '{"comment":"저도 그 무렵엔 새벽마다 깼어요"}'
+    const dir = mkdtempSync(join(tmpdir(), 'soran-comment-wire-'))
+    const day = new Date('2026-09-21T03:00:00.000Z')
+    const session = new SupplyLlmSession({
+      runId: 'comment-wire', dir,
+      limits: limitsFromEnv({
+        [BUDGET_ENV.dailyUsd]: '0.02', [BUDGET_ENV.runRequestCap]: '1',
+        [BUDGET_ENV.headroomMultiplier]: '1.5',
+      } as NodeJS.ProcessEnv),
+      now: () => day,
+      ...(shape.failSettleWrite === true
+        ? {
+          io: {
+            ...REAL_LEDGER_IO,
+            append: (path: string, entry: LedgerEntry) => {
+              /**
+               * 🔴 **유료 요청의 정산 줄만** 실패시킨다.
+               *    무료 사전 계산(`countTokens`)까지 막으면 요청이 나가기도 전에
+               *    `LEDGER_ERROR` 로 멈춘다 — 그것은 다른 사고다.
+               */
+              const isSettleLine = entry.stage === 'commentGen'
+                && (entry.status === 'settled' || entry.status === 'usageUnknown')
+              if (isSettleLine) throw new Error('시험: 정산 줄 쓰기 실패')
+              REAL_LEDGER_IO.append(path, entry)
+            },
+          },
+        }
+        : {}),
+    })
+    process.env.GEMINI_API_KEY = 'test-key-not-real'
+    let genCalls = 0
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u.includes(':countTokens') || u.includes('/count_tokens')) {
+        return new Response(JSON.stringify({ totalTokens: inTokens }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      genCalls += 1
+      return new Response(JSON.stringify({
+        candidates: [{
+          content: { parts: [{ text: body }] },
+          finishReason: shape.finishReason ?? 'STOP',
+        }],
+        ...(shape.omitUsage === true ? {} : {
+          usageMetadata: {
+            promptTokenCount: inTokens, candidatesTokenCount: outTokens,
+            thoughtsTokenCount: 7, totalTokenCount: inTokens + outTokens + 7,
+          },
+        }),
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof globalThis.fetch
+
+    const written: { targetPostId: string; status: string }[] = []
+    let adapter: CommentCallOutcome | null = null
+    /** 🔴 어댑터가 받은 **세션 결과 원본** — 계약을 직접 확인하려고 남긴다 */
+    let lastCall: SupplyCallResult | null = null
+    try {
+      const res = await runEnqueuePipeline({
+        selection: { status: 'confirmed', winner: 'gemini-3.7-flash' },
+        canon: CANON,
+        targets: [targetOf()],
+        /**
+         * 🔴 **러너의 어댑터 꼬리를 그대로 쓴다.** 세션 결과를 후보로 삼아도 되는지는
+         *    `judgeCommentCall` 한 곳이 정한다 — 검사용으로 다시 적지 않는다.
+         */
+        provider: async () => {
+          const call = lastCall = await session.call({
+            stage: 'commentGen', model: 'gemini-3.7-flash',
+            systemPrompt: '시험 지시', userPayload: '시험 입력',
+            maxOutputTokens: MAX_OUTPUT_TOKENS, timeoutMs: 5_000,
+          })
+          adapter = judgeCommentCall(call)
+          return adapter
+        },
+        gate: () => allPass,
+        writer: async ({ input }) => {
+          written.push({ targetPostId: input.post.id, status: 'PENDING' })
+          return { created: true, reason: 'PENDING 적재' }
+        },
+        limit: 5, providerCallLimit: 5, preflightOk: true,
+      })
+      const read = readLedgerDay(ledgerPathOf(dir, '2026-09-21'))
+      return {
+        res, written, genCalls,
+        adapter: adapter as CommentCallOutcome | null,
+        call: lastCall as SupplyCallResult | null,
+        entries: read.ok ? read.entries : [],
+        tally: session.tally,
+      }
+    } finally { globalThis.fetch = realFetch }
+  }
+
+  // ── 정상 정산 1건 → PENDING 1건 ──
+  {
+    const r = await connect({})
+    const settled = r.entries.filter((e) => e.stage === 'commentGen' && e.status === 'settled')
+    check('🔴 🔴 **정상 정산 1건 → `PENDING` 후보 1건**',
+      r.genCalls === 1
+      && r.adapter?.ok === true
+      && settled.length === 1 && settled[0]!.settledUsd !== null
+      && r.res.created === 1
+      && r.written.length === 1 && r.written[0]!.status === 'PENDING'
+      && r.res.outcomes[0]!.step === 'ENQUEUED',
+      JSON.stringify({ gen: r.genCalls, adapter: r.adapter,
+        created: r.res.created, step: r.res.outcomes[0]?.step }))
+  }
+
+  // ── 사용량 미상 → 후보 0 ──
+  {
+    const r = await connect({ omitUsage: true })
+    const unknown = r.entries.filter((e) => e.status === 'usageUnknown')
+    check('🔴 🔴 **사용량 미상 → writer 0 · `PENDING` 0**',
+      // 🔴 요청은 실제로 나갔고 파싱도 되는 응답이다 — 그래도 후보가 되지 않는다
+      r.genCalls === 1
+      && unknown.length === 1
+      && r.adapter?.ok === false
+      && r.adapter.errorCode === SETTLE_AMOUNT_UNKNOWN
+      /**
+       * 🔴 **여기가 앞판의 구멍이다.** 세션은 `ok: true` 를 주고
+       *    `settlementRecorded` 도 `true` 다 — 줄은 적혔기 때문이다.
+       *    그 둘만 보던 러너는 이 건을 후보로 만들었다.
+       */
+      && r.call?.ok === true && r.call.settlementRecorded === true
+      && r.call.settledUsd === null
+      && r.written.length === 0 && r.res.created === 0
+      && r.res.outcomes[0]!.step === 'PROVIDER_FAILED'
+      && r.tally.usageUnknown === 1,
+      JSON.stringify({ gen: r.genCalls, adapter: r.adapter,
+        written: r.written.length, step: r.res.outcomes[0]?.step }))
+
+    // 🔴 "줄은 적혔다" 를 "정산됐다" 로 읽지 않는다 — 이것이 정확히 앞판의 구멍이었다
+    check('🔴 🔴 **줄은 적혔지만 금액은 `null` 이다 — 둘을 구분한다**',
+      r.entries.some((e) => e.status === 'usageUnknown' && e.settledUsd === null))
+  }
+
+  // ── 정산 기록 실패 → 후보 0 ──
+  {
+    const r = await connect({ failSettleWrite: true })
+    check('🔴 🔴 **정산 기록 실패 → writer 0 · `PENDING` 0**',
+      r.genCalls === 1
+      && r.adapter?.ok === false
+      // 🔴 요청은 나갔다. 막는 근거는 "장부에 못 적었다" 하나다
+      && r.adapter.errorCode === SETTLE_NOT_RECORDED
+      && r.written.length === 0 && r.res.created === 0
+      && r.res.outcomes[0]!.step === 'PROVIDER_FAILED'
+      && r.tally.settleHeld === 1,
+      JSON.stringify({ adapter: r.adapter, written: r.written.length,
+        held: r.tally.settleHeld }))
+
+    /**
+     * 🔴 **세션 계약을 직접 못박는다** (2026-09-21).
+     *
+     *    `judgeCommentCall` 의 `settlementRecorded` 줄은 **오늘 도달하지 않는다** —
+     *    세션이 정산 줄을 못 적으면 스스로 `ok: false` 로 뒤집기 때문이다.
+     *    그 줄을 지워도 검사가 걸리지 않는 것을 돌연변이로 확인했다.
+     *    지우지 않고 남기는 대신, 기대고 있는 **그 계약**을 여기서 확인한다 —
+     *    계약이 바뀌면 이 줄이 먼저 깨진다.
+     */
+    check('🔴 🔴 **세션은 정산을 못 적으면 `ok` 를 내주지 않는다**',
+      r.call !== null && r.call.ok === false
+      && r.call.settlementRecorded === false && r.call.settledUsd === null,
+      JSON.stringify({ ok: r.call?.ok, recorded: r.call?.settlementRecorded }))
+  }
+
+  // ── 잘림 → 후보 0 ──
+  {
+    /**
+     * 🔴 **파싱되는 잘린 응답**을 준다. 종료 사유가 `MAX_TOKENS` 이고 사용량도 정상이라
+     *    세션은 정상 정산한다 — 막는 근거는 오직 "잘렸다" 하나여야 한다.
+     */
+    const r = await connect({
+      finishReason: 'MAX_TOKENS',
+      body: '{"comment":"저도 그 무렵엔 새벽마다 깨서"}',
+    })
+    const settled = r.entries.filter((e) => e.stage === 'commentGen' && e.status === 'settled')
+    check('🔴 🔴 **잘린 응답 → writer 0 · `PENDING` 0 (파싱돼도 후보가 아니다)**',
+      r.genCalls === 1
+      // 🔴 정산은 정상이다 — 돈은 나갔고 장부에 적혔다
+      && settled.length === 1 && settled[0]!.settledUsd !== null
+      && r.adapter?.ok === false
+      && r.adapter.errorCode === MAX_TOKENS_REACHED
+      && r.written.length === 0 && r.res.created === 0
+      && r.res.outcomes[0]!.step === 'PROVIDER_FAILED',
+      JSON.stringify({ adapter: r.adapter, written: r.written.length,
+        settled: settled.length }))
   }
 }
 

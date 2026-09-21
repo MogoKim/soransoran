@@ -42,7 +42,7 @@ import { makeDbTargetSource } from './lib/persona-comment-source-db'
 import { bundlesForPersonas } from './lib/persona-reference-store.mjs'
 import { buildPromptFromInput } from './lib/persona-comment-bridge'
 import { checkCommentCandidate } from './lib/persona-comment-candidate.mjs'
-import { parseCandidate } from './lib/persona-prompt'
+import { judgeCommentCall } from './lib/persona-comment-call.mjs'
 import { type ProviderModel } from './lib/voice-m3-provider.mjs'
 import {
   SupplyLlmSession,
@@ -327,18 +327,14 @@ const result = await runEnqueuePipeline({
       maxOutputTokens: prompt.prompt.maxOutputTokens,
       timeoutMs: 60_000,
     })
-    if (!res.ok) return { ok: false, text: null, errorCode: res.errorCode }
     /**
-     * 🔴 **정산 줄을 못 적었으면 산출물을 쓰지 않는다.** provider 는 성공했는데
-     *    장부에 안 적힌 상태로 후보를 만들면, 쓴 돈이 장부에서 사라진다.
+     * 🔴 **후보로 삼아도 되는지는 `judgeCommentCall` 한 곳이 정한다.**
+     *
+     *    여기 `if` 로 적으면 스크립트 최상위라 **불러서 확인할 수 없다** —
+     *    실제로 그 상태에서 두 구멍이 있었다. 사용량을 못 읽은 건(`settledUsd: null`)을
+     *    정산된 것으로 보고, 상한에 닿아 잘린 응답을 파싱된다는 이유로 통과시켰다.
      */
-    if (!res.settlementRecorded) {
-      return { ok: false, text: null, errorCode: 'SETTLE_NOT_RECORDED' }
-    }
-    const parsed = parseCandidate(res.rawText)
-    return parsed.ok
-      ? { ok: true, text: parsed.text, errorCode: null }
-      : { ok: false, text: null, errorCode: parsed.errorCode }
+    return judgeCommentCall(res)
   },
   gate: ({ input, text }) => {
     const ctx = ctxOf(input.post.id, input.personaCode, input.reactionRole)
