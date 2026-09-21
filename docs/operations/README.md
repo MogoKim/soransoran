@@ -30,6 +30,7 @@
 
 | 문서 | 역할 |
 |---|---|
+| `M-GRAPH-PROJECT-CHARTER.md` | 🔴 매거진 검색 영토·주제망·시리즈·내부 연결·장기 발행 계획의 전략 정본 |
 | `2026-09-03-controlled-activity-automation-strategy.md` | 자동화 속도·안전 전략 상세 |
 | `2026-09-02-original-post-lane-strategy.md` | Original Post Lane 상세 |
 | `2026-08-29-persona-network-strategy.md` | Persona와 댓글 비율 전략 상세 |
@@ -37,4 +38,3 @@
 | `2026-09-08-scale-foundation.md` | d1/d3/d5/d10 scale 계약 상세 |
 | `2026-09-03-raw-supply-chain-design.md` | 구현 역사와 사고 기록 |
 | `2026-08-26-soransoran-milestones.md` | 과거 마일스톤 기록, 현재 상태 정본 아님 |
-

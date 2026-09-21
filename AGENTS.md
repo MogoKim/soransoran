@@ -13,6 +13,10 @@
 🔴 **이 두 문서의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
 낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다.
 
+🔴 **매거진의 검색 키워드·주제 선정·시리즈·관련 글·SEO 성장 작업은 반드시**
+[`docs/operations/M-GRAPH-PROJECT-CHARTER.md`](docs/operations/M-GRAPH-PROJECT-CHARTER.md)를 먼저 읽는다.
+이 문서가 M-GRAPH 전략 정본이며, M-AUTO의 실행·안전 정본을 대체하지 않는다.
+
 ## 0. 역할
 
 - **창업자**: 방향 결정 · 외부 콘솔 작업 · merge 및 배포 승인
