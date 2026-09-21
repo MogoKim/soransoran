@@ -20,6 +20,10 @@
 🔴 **이 두 문서의 내용을 여기 복제하지 않는다.** 복제하면 반드시 한쪽이 낡고,
 낡은 쪽이 먼저 읽힌다. 값이 필요하면 그 문서를 연다.
 
+🔴 **매거진의 검색 키워드·주제 선정·시리즈·관련 글·SEO 성장 작업은 반드시**
+[`docs/operations/M-GRAPH-PROJECT-CHARTER.md`](docs/operations/M-GRAPH-PROJECT-CHARTER.md)를 먼저 읽는다.
+M-GRAPH 목적과 M-AUTO 실행 계약을 섞거나, 검색 노출을 일일 발행 게이트로 만들지 않는다.
+
 ## 🔴 이 저장소는 우나어가 아니다
 
 - **우나어(age-doesnt-matter) repo 를 fork 하지 않았다.** 구조와 패턴만 선별 참고했다.
