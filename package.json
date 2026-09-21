@@ -52,6 +52,7 @@
     "collect:lock-check": "tsx scripts/collect-lock-check.mts",
     "persona:comment-runner": "tsx scripts/persona-comment-runner.mts",
     "persona:comment-gate-check": "tsx scripts/persona-comment-check.mts",
+    "persona:comment-ledger-check": "tsx scripts/persona-comment-ledger-check.mts",
     "persona:generate-check": "tsx scripts/persona-generate-check.mts",
     "persona:reference-preflight": "tsx scripts/persona-reference-preflight.mts",
     "persona:reference-build-asset": "tsx scripts/persona-reference-build-asset.mts",

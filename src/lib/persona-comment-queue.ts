@@ -45,6 +45,7 @@ export type EnqueueBlockCode =
   | 'TEXT_EMPTY'
   | 'MODEL_NOT_CONFIRMED'
   | 'BOOTSTRAP_CLAIM_INVALID'
+  | 'POST_ID_MISSING'
 
 export type EnqueueBlock = { code: EnqueueBlockCode; message: string }
 
@@ -116,6 +117,18 @@ export function planEnqueue(f: EnqueueFacts): EnqueuePlan {
   const report = judgeGateReport({ gates: f.gates, status: f.gateStatus })
   const dedupKey = dedupKeyOf(f.postId, f.personaCode, f.reactionRole)
 
+  /**
+   * 🔴 **대상 글이 없는 후보는 만들지 않는다** (2026-09-21).
+   *
+   *    `PersonaApprovalQueue.targetPostId` 는 **nullable** 이다 — 스키마가
+   *    막아 주지 않는다. 대상 글을 잃은 후보가 들어가면 어느 글에 붙일지
+   *    알 수 없고, 어드민에서 승인해도 붙을 자리가 없다.
+   *    🔴 `dedupKey` 도 `comment::<persona>:<role>` 이 되어 **글이 달라도 같은 열쇠**가 된다 —
+   *    unique constraint 가 엉뚱한 글끼리 충돌시킨다.
+   */
+  if (f.postId.trim() === '') {
+    blocks.push({ code: 'POST_ID_MISSING', message: '🔴 대상 글 id 가 없다 — 붙일 자리가 없는 후보다' })
+  }
   if (f.text.trim() === '') blocks.push({ code: 'TEXT_EMPTY', message: '후보 본문이 비어 있다' })
   if (!f.modelConfirmed) {
     blocks.push({ code: 'MODEL_NOT_CONFIRMED', message: '모델이 확정되지 않았다 — 적재하지 않는다' })

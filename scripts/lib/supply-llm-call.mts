@@ -70,6 +70,23 @@ export function limitsFromEnv(env: NodeJS.ProcessEnv): BudgetLimits {
 }
 
 /**
+ * 🔴 **비어 있는 예산 env 의 이름**을 돌려준다 (2026-09-21).
+ *
+ *    하나라도 비면 그 회차는 **부르기 전에** 멈춰야 한다 — 호출부가
+ *    이 목록이 비었는지만 보고 판단한다. 🔴 **값이 아니라 이름만** 돌려준다.
+ *
+ *    호출부에 흩어져 있던 `=== null` 세 줄을 여기 하나로 모은 이유는,
+ *    그 자리에서는 지우거나 뒤집어도 아무 시험이 걸리지 않았기 때문이다.
+ */
+export function missingBudgetEnvNames(limits: BudgetLimits): string[] {
+  const names: string[] = []
+  if (limits.dailyUsd === null) names.push(BUDGET_ENV.dailyUsd)
+  if (limits.runRequestCap === null) names.push(BUDGET_ENV.runRequestCap)
+  if (limits.headroomMultiplier === null) names.push(BUDGET_ENV.headroomMultiplier)
+  return names
+}
+
+/**
  * 🔴 **장부 입출력.** 운영은 기본 저장소를 쓰고, 시험이 실패를 주입한다.
  *
  *    이 저장소가 이미 쓰는 방식(`beforeStage` · `exec` 주입)과 같다.
