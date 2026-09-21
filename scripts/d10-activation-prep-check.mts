@@ -248,9 +248,31 @@ console.log('① 준비도 시간축 (지평 ≠ 다음 발행 슬롯)')
   }
   check('🔴 러너가 그 수를 PersonaActivityLog 로 센다',
     /axisPublishedToday = await prisma\.personaActivityLog\.count/.test(codeOf('scripts/original-post-auto-publish.mts')))
-  // 🔴 lib 이 지평을 만든다 — 호출부가 만들면 두 화면이 갈린다
-  check('🔴 simulateStage 가 horizonStart 로 시작점을 만든다',
-    /const horizonStartAt = horizonStart\(input\.axis\.now\)/.test(codeOf('src/lib/scale-readiness.ts')))
+  /**
+   * 🔴 lib 이 지평을 만든다 — 호출부가 만들면 두 화면이 갈린다.
+   *
+   * 🔴 **앵커가 둘로 늘었다** (2026-09-21). 하루짜리 첫 시험만 `'now'` 를 쓴다.
+   *    그래도 지평을 만드는 것은 여전히 lib 이고, 호출부가 **임의 시작점을
+   *    넘길 길은 없다** — 그것이 이 가드가 지키던 것이다.
+   *    기본값이 `horizonStart` 라는 사실은 `release:canary-check` 가
+   *    **행동으로도** 잠근다(앵커를 생략한 호출의 지평 시작점을 값으로 단정).
+   */
+  const simCode = codeOf('src/lib/scale-readiness.ts')
+  check('🔴 simulateStage 의 **기본** 지평을 horizonStart 가 만든다',
+    /\(input\.anchor \?\? 'nextDay'\) === 'now'/.test(simCode)
+    && /: horizonStart\(input\.axis\.now\)/.test(simCode))
+  /**
+   * 🔴 **입력 타입 블록만 본다.** 본문의 `startAt: horizonStartAt` 은
+   *    예측기로 **넘기는** 값이지 호출부가 주는 값이 아니다 — 둘을 섞으면
+   *    가드가 엉뚱한 줄을 보고 빨개진다(실측).
+   */
+  const simInput = simCode.slice(
+    simCode.indexOf('export function simulateStage(input: {'),
+    simCode.indexOf('}): SimOutcome {'))
+  check('🔴 🔴 앵커는 둘 중 하나다 — 임의 시작점을 받지 않는다',
+    /anchor\?: 'nextDay' \| 'now'/.test(simInput)
+    // 🔴 `startAt` 을 입력으로 받으면 호출부마다 다른 창을 쓰게 된다
+    && !/startAt/.test(simInput))
   check('🔴 예측기에 넘기는 것은 지평이지 슬롯이 아니다',
     /startAt: horizonStartAt/.test(codeOf('src/lib/scale-readiness.ts'))
     && !/startAt: nextSlotAt/.test(codeOf('src/lib/scale-readiness.ts')))
