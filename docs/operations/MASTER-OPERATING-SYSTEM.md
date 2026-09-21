@@ -195,11 +195,18 @@ flowchart LR
 | Memory | 사용자·Persona 대화 | Self/Relationship/Community/Mood | 미정 | 완료 | 스키마만 | 사실상 0행 | 미착수 |
 | Reply/Reaction/Best | 댓글·기억·시간 | 답글, 좋아요, Best | 미정 | 방향만 | 미구현 | 미가동 | 미착수 |
 | Health/Forecast | DB, 파일, 로그, scale | 화면 + JSON | 없음 | 완료 | 완료 | 수동 조회 | 부분완료 |
+| Magazine Publish (**M-AUTO**) | topic queue 항목 | `articles.ts`, hero, 예약 PR, 자동 병합, 공개 | brief claude CLI · 원고/이미지 ChatGPT 웹 UI | 완료 | 완료 | launchd 3 job (producer·auto-register·watch) | 가동 — 정본 [`magazine-automation-runbook.md`](./magazine-automation-runbook.md) |
+| Magazine Topic Graph (**M-GRAPH**) | Google 검색 조사 근거 + 기존 매거진 자산 | 검색 의도 정본 · 주제 그래프 · 장기 발행 구간 | 미정 | 헌장만 확정 (G0 이전) | 없음 | 없음 | 미착수 — 정본 [`M-GRAPH-PROJECT-CHARTER.md`](./M-GRAPH-PROJECT-CHARTER.md) |
 | SEO Bulk | 별도 indexable 콘텐츠 | 별도 URL/작성자/색인 정책 | 미정 | 미완료 | 없음 | 없음 | 미착수 |
 
 🔴 **이 표에 변동하는 운영 숫자를 적지 않는다.** 재고·Persona 수·발행량 같은 값은
 움직이는 순간값이라, 여기와 §6.3 두 곳에 적으면 반드시 한쪽이 낡는다(2026-09-09 실제 발생).
 이 표는 **Lane 의 구조와 판정**만 적고, 숫자는 **§6.3 한 곳**에서만 관리한다.
+
+🔴 **M-GRAPH 는 M-AUTO 를 대체하지 않는다.** M-GRAPH 가 *무엇을 왜 어떤 관계로* 발행할지 정하고,
+M-AUTO 가 *정해진 대상을 안전하게* 만들고 공개한다. 매거진의 검색 키워드·주제 선정·시리즈·
+관련 글·SEO 성장 작업은 먼저 [`M-GRAPH-PROJECT-CHARTER.md`](./M-GRAPH-PROJECT-CHARTER.md)를 읽고,
+설치·가동·병합·공개 감시는 [`magazine-automation-runbook.md`](./magazine-automation-runbook.md)를 읽는다.
 
 ### 4.0 `sourceCapturedAt` 은 게시 시각이 아니다
 
@@ -2273,6 +2280,10 @@ Claude 또는 Codex의 보고는 항상 이 다섯 칸을 분리한다.
 | 2026-09-08 | 현재 생성 모델은 운영 사실상 Haiku지만 최종 생성 모델로 확정하지 않음 | 분석 모델 선택과 생성 모델 선택은 별개 |
 | 2026-09-08 | 82cook 10슬롯 활성화 보류 | 현재 네트워크 실패와 성공률 8/10, 보호장치 미완료 |
 | 2026-09-08 | d10 준비 작업은 큰 묶음 A/B/C로 병렬 진행 | 창업자 개입과 반복 amend 감소 |
+| 2026-09-21 | 매거진 검색 주제망을 **M-GRAPH 정본**으로 분리 확정. M-AUTO는 공급 엔진으로 존속 | 검색 영토·의도·관계의 정본이 여러 문서에 흩어져 관련 글 연결 규칙이 서로 충돌했다 |
+| 2026-09-21 | D100~D365 발행표는 입력이 아니라 **조사의 산출물**로 확정 | 제목부터 채우면 검색 근거 없는 대량 생산이 된다 |
+| 2026-09-21 | 검색 노출·클릭을 **일일 발행 게이트로 쓰지 않는다**. 색인 제출 게이트(색인 정책 §5)는 별개로 유지 | 초기 노출 0~소수에 과잉 반응하면 장기 계획이 매일 흔들린다 |
+| 2026-09-21 | 기존 유형 비율 60/25/15·축 비율 35/20/20/15/10은 **역사적 기준선**이며 M-GRAPH 실행 구간에 자동 승계하지 않는다. `ContentType`·`PublishWindow`·계절 2~4주 선행은 유지 | 근거 없는 고정 비율을 새 병목으로 만들지 않되, YMYL 편중과 40대 이탈 위험은 G8 전에 검토한다 |
 
 ## 15. 조사 근거
 
