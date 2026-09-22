@@ -11,9 +11,12 @@
 import { PrismaClient } from '@prisma/client'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
-import { selectAutoTargets, REJECT_LABEL, type AutoRow } from '../src/lib/original-post-auto-publish'
+import { selectAutoTargets, REJECT_LABEL, voiceInputOf, type AutoRow } from '../src/lib/original-post-auto-publish'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
-import { PROFILES } from '../src/lib/scale-profile'
+import { PROFILES, RELEASE_STAGES, effectiveWeeklyCap, type ReleaseStage } from '../src/lib/scale-profile'
+import { planBatch } from '../src/lib/original-post-persona-match'
+import { canaryAuthorization, windowAuthorization } from '../src/lib/release-canary'
+import { installFromEnv } from '../src/lib/scale-runtime'
 import { HUMAN_DECIDER, AUTO_DECIDER } from '../src/lib/auto-ready'
 
 await loadEnvLocal()
@@ -85,34 +88,136 @@ const excluded = items.filter((i) => i.reasons.length > 0)
 console.log(`   └ 발행 가능 ${pool.length}건 · 제외 ${excluded.length}건`)
 for (const e of excluded) console.log(`      ⏸️ ${e.id} · ${e.speaker} · ${e.reasons.join(' · ')}`)
 
+// ── persona 여력을 러너와 같은 방식으로 만든다 ──
+const WEEK_AGO = new Date(SNAPSHOT.getTime() - 7 * 864e5)
+const personaRows = await prisma.persona.findMany({
+  where: { status: 'active' },
+  select: {
+    id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
+    user: { select: { providerId: true, _count: { select: { accounts: true } } } },
+  },
+})
+const personas = []
+for (const r of personaRows) {
+  const id = (r.identity ?? {}) as Record<string, unknown>
+  const vc = (r.voiceCore ?? {}) as Record<string, unknown>
+  const postsThisWeek = await prisma.originalPostApprovalQueue.count({
+    where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO } },
+  })
+  const last = await prisma.originalPostApprovalQueue.findFirst({
+    where: { matchedPersona: { code: r.code } }, orderBy: { matchedAt: 'desc' }, select: { matchedAt: true },
+  })
+  personas.push({
+    code: r.code, status: r.status,
+    providerId: r.user?.providerId ?? null,
+    accountCount: r.user?._count.accounts ?? null,
+    ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
+    maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
+    childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
+    ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),
+    parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
+    menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
+    workStatus: null, economicStatus: null, region: null,
+    noGoTopics: [...r.noGoTopics],
+    voiceLength: typeof vc.length === 'string' ? vc.length : null,
+    postsThisWeek,
+    daysSinceLastPost: last?.matchedAt == null ? null : Math.floor((SNAPSHOT.getTime() - last.matchedAt.getTime()) / 864e5),
+  })
+}
+const capturedAtOf = new Map(rows.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
+const bodyOf = new Map(rows.map((r) => [r.id, r.editedBody ?? r.draftBody]))
+const titleOf = new Map(rows.map((r) => [r.id, r.editedTitle ?? r.draftTitle]))
+
+// ── 그날의 허가 — capacity 상한 · canary · window ──
+const stageOfDay = (dayIso: string): { stage: ReleaseStage; why: readonly string[] } => {
+  const at = new Date(`${dayIso}T03:00:00Z`)   // 그날 12:00 KST
+  const canary = canaryAuthorization(process.env, at, RELEASE_STAGES)
+  const win = windowAuthorization(process.env, at, RELEASE_STAGES)
+  const sc = installFromEnv(process.env, {
+    now: at,
+    ...(canary.activeToday && canary.stage !== null ? { canaryStage: canary.stage } : {}),
+    ...(win.activeToday && win.stage !== null ? { windowStage: win.stage } : {}),
+  } as never)
+  return { stage: sc.releaseStage, why: [...(sc.notes ?? [])] }
+}
+
+/**
+ * 🔴 **그날의 단계는 GitHub Actions `vars` 에 있다** — 이 프로세스의 env 에는 없다.
+ *    그래서 env 만 보면 언제나 가장 안전한 d1 로 떨어진다. 실제 운영값을 재려면
+ *    `--stage=9/23:d3,9/24:d5` 로 넘긴다. 넘기지 않으면 env 판정을 그대로 쓴다.
+ */
+const STAGE_ARG = (process.argv.slice(2).find((a) => a.startsWith('--stage='))?.slice(8) ?? '').trim()
+const forced = new Map(STAGE_ARG === '' ? [] : STAGE_ARG.split(',').map((kv) => {
+  const [d, st] = kv.split(':')
+  return [String(d).trim(), String(st).trim() as ReleaseStage] as const
+}))
 const plan = [
-  { day: '9/23', stage: 'd3' as const },
-  { day: '9/24', stage: 'd5' as const },
+  { day: '9/23', iso: '2026-09-23' },
+  { day: '9/24', iso: '2026-09-24' },
 ]
+let live = personas.map((p) => ({ ...p }))
 for (const p of plan) {
-  const need = PROFILES[p.stage].dailyTarget
-  // 🔴 한 회차에 같은 화자를 두 번 쓰지 않는다
+  const envAuth = stageOfDay(p.iso)
+  const override = forced.get(p.day)
+  const stage = override ?? envAuth.stage
+  const auth = override === undefined ? envAuth
+    : { stage, why: [`🔴 --stage 로 주입된 값이다 (env 판정은 ${envAuth.stage}) — 실제 값은 GHA vars 에 있다`] }
+  const prof = PROFILES[stage]
+  const need = prof.dailyTarget
+  const weekCap = effectiveWeeklyCap(prof.postsPerWeek, prof.minDaysBetween)
+  console.log(`\n③ ${p.day} — 설치되는 단계 **${stage}** (상한 ${need}건/일 · 주 ${weekCap} · 간격 ${prof.minDaysBetween}일)`)
+  for (const w of auth.why) console.log(`     · ${w}`)
+
+  // 🔴 배정은 러너와 **같은 `planBatch`** 가 한다 — 여기서 따로 조립하지 않는다
+  const batch = planBatch(
+    // 🔴 말투·profile 은 **정본 한 함수**(`voiceInputOf`)가 만든다 — 러너와 같은 입력이어야 한다
+    pool.map((c, i) => {
+      const src = autoRows.find((a) => a.id === c.id)!
+      return {
+        queueId: c.id, title: titleOf.get(c.id) ?? '', body: bodyOf.get(c.id) ?? '',
+        gateVerdict: src.gateVerdict, createdAt: i, assignedPersonaCode: null,
+        ...voiceInputOf(src),
+        capturedAt: capturedAtOf.get(c.id) ?? null,
+      }
+    }) as never,
+    live as never,
+    { postsPerWeek: weekCap, minDaysBetween: prof.minDaysBetween } as never,
+  )
+  const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
   const take: typeof pool = []
   const used = new Set<string>()
   for (const c of pool) {
     if (take.length >= need) break
-    if (used.has(c.speaker)) continue
-    used.add(c.speaker); take.push(c)
+    const a = assignOf.get(c.id)
+    const who = a?.assigned ?? null
+    if (who === null) continue
+    if (used.has(who)) continue
+    used.add(who); take.push({ ...c, speaker: who })
   }
-  console.log(`\n③ ${p.day} ${p.stage.toUpperCase()} — 필요 ${need}건`)
-  if (take.length === 0) console.log('   (없음)')
+  if (take.length === 0) console.log('   (배정되는 후보 없음)')
   for (const t of take) console.log(`   ✅ ${t.id} · ${t.speaker} · ${t.title.slice(0, 28)}`)
-  const shortGlobal = need - take.length
-  const sameSpeaker = pool.filter((c) => !take.includes(c) && used.has(c.speaker))
-  for (const c of sameSpeaker) console.log(`   ⏭️ ${c.id} · ${c.speaker} · 같은 회차에 화자 중복`)
-  console.log(`   → 확보 ${take.length}/${need} · 부족 글 ${Math.max(0, shortGlobal)}건 · 부족 화자 ${Math.max(0, need - used.size)}명`)
-  pool = pool.filter((c) => !take.includes(c))
-  console.log(`   (소비 뒤 남은 발행 가능 재고 ${pool.length}건)`)
+  for (const c of pool) {
+    if (take.some((t) => t.id === c.id)) continue
+    const a = assignOf.get(c.id)
+    const who = a?.assigned ?? null
+    const why = who === null
+      ? '🔴 배정 안 됨 (생활사 조건 불일치 또는 주 cap·간격 소진)'
+      : used.has(who) ? `⏭️ ${who} — 같은 회차 화자 중복` : `⏭️ ${who} — 그날 상한 ${need}건 초과`
+    console.log(`   ${why.startsWith('🔴') ? '🔴' : '⏭️'} ${c.id} · ${c.speaker} · ${why}`)
+  }
+  console.log(`   → **${p.day} 실제 발행 가능 ${take.length}/${need}** · 부족 글 ${Math.max(0, need - take.length)}건`
+    + ` · 부족 화자 ${Math.max(0, need - used.size)}명`)
+
+  // 🔴 소비를 반영한다 — 주 cap 이 줄고 마지막 발행일이 오늘이 된다
+  for (const t of take) {
+    const p2 = live.find((x) => x.code === t.speaker)
+    if (p2 !== undefined) { p2.postsThisWeek += 1; p2.daysSinceLastPost = 0 }
+  }
+  for (const x of live) if (!used.has(x.code) && x.daysSinceLastPost !== null) x.daysSinceLastPost += 1
+  pool = pool.filter((c) => !take.some((t) => t.id === c.id))
+  console.log(`   (소비 뒤 남은 후보 ${pool.length}건)`)
 }
-console.log('🔴 이 예측이 **보지 않은 축** — 그래서 위 수는 상한이다')
-console.log('   · persona 배정 가능성 (생활사 조건 · 주간 cap · 최소 간격)')
-console.log('   · 그날의 canary/window 허가와 capacity 상한')
-console.log('   실제 배정은 발행 러너의 ③ 구간이 그날 판정한다. 오늘 스냅샷에서는')
-console.log('   같은 재고로 배정이 3건만 붙었다 — 나머지는 "여력 소진" 또는 "조건에 맞는 persona 없음".')
+console.log('\n🔴 이 예측이 보는 축: 후보 선택기 · TTL · persona 배정(생활사·주 cap·간격) · capacity/canary/window')
+console.log('🔴 보지 않는 축: 그 사이 새로 READY 가 되는 후보 · kill switch · 그날의 catch-up 판정')
 console.log('🔴 후보 ≠ READY. 여기 센 것은 decidedBy 가 사람·자동인 행뿐이다.\n')
 await prisma.$disconnect()

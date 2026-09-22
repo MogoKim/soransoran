@@ -16,7 +16,7 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
 import {
   auditStateOf, judgeAuditGate, readAuditRecord, readAutoReadyStamp,
-  AUDIT_RECORD_KEY, AUTO_DECIDER, casMergeEditDiff,
+  AUDIT_RECORD_KEY, AUTO_DECIDER, casMergeEditDiff, recordAuditVerdict,
 } from '../src/lib/auto-ready'
 
 const argv = process.argv.slice(2)
@@ -32,6 +32,8 @@ const DEFECT: boolean | undefined =
   DEFECT_RAW === 'yes' ? true : DEFECT_RAW === 'no' ? false : undefined
 if (DEFECT_RAW !== '' && DEFECT === undefined) fail(`--defect 는 yes 또는 no 입니다 — 받은 값: ${DEFECT_RAW}`)
 if (APPLY && (ID === '' || DEFECT === undefined)) fail('--apply 에는 --id 와 --defect=yes|no 가 둘 다 필요합니다.')
+/** 🔴 위에서 걸렀지만 타입은 그것을 모른다 — 여기서 한 번 더 좁힌다 */
+const DEFECT_APPLIED: boolean = DEFECT ?? false
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
@@ -100,7 +102,8 @@ if (rec === null) { await prisma.$disconnect(); fail('그 행은 감사 대상�
  */
 const w = await casMergeEditDiff({
   id: ID, key: AUDIT_RECORD_KEY,
-  value: { ...rec, defect: DEFECT, ...(NOTE === '' ? {} : { note: NOTE }) },
+  // 🔴 `yes` 는 `no` 로 덮이지 않는다 — 두 감사자가 엇갈려도 닫히는 쪽이 이긴다
+  value: recordAuditVerdict({ defect: DEFECT_APPLIED, ...(NOTE === '' ? {} : { note: NOTE }) }),
   read: async (id) => prisma.originalPostApprovalQueue.findUnique({
     where: { id }, select: { editDiff: true, updatedAt: true },
   }),
@@ -111,7 +114,7 @@ const w = await casMergeEditDiff({
   })).count,
 })
 if (!w.ok) { await prisma.$disconnect(); fail(`${w.reason} (시도 ${w.tries}회). 아무것도 쓰지 않았습니다.`) }
-console.log(`  ✅ ${ID} · 결함 ${DEFECT ? 'yes' : 'no'}${NOTE === '' ? '' : ` · ${NOTE}`}`)
+console.log(`  ✅ ${ID} · 결함 ${DEFECT_APPLIED ? 'yes' : 'no'}${NOTE === '' ? '' : ` · ${NOTE}`}`)
 
 const after = auditStateOf(await prisma.originalPostApprovalQueue.findMany({
   where: { decidedBy: AUTO_DECIDER }, select: { id: true, editDiff: true },

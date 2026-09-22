@@ -656,7 +656,14 @@ export type CasWrite = {
 export async function casMergeEditDiff(input: {
   id: string
   key: string
-  value: Record<string, unknown>
+  /**
+   * 🔴 **값이 아니라 규칙을 받는다** (2026-09-22 보정).
+   *
+   *    고정된 값을 받으면 재시도할 때 **그 사이 남이 쓴 것을 그대로 덮는다.**
+   *    감사 판정에서 이것이 치명적이다 — `yes` 가 `no` 에 덮이면 닫힌 게이트가
+   *    다시 열린다. 그래서 **그때 본 값**을 받아 합치는 함수를 받는다.
+   */
+  value: (current: unknown) => Record<string, unknown>
   read: (id: string) => Promise<{ editDiff: unknown; updatedAt: Date } | null>
   write: (w: CasWrite) => Promise<number>
   attempts?: number
@@ -665,9 +672,56 @@ export async function casMergeEditDiff(input: {
   for (let i = 1; i <= max; i += 1) {
     const cur = await input.read(input.id)
     if (cur === null) return { ok: false, reason: '그 행이 없다', tries: i }
-    const merged = mergeJsonField(cur.editDiff, input.key, input.value)
+    // 🔴 **재시도마다 다시 읽은 값으로** 규칙을 적용한다
+    const existing = (cur.editDiff !== null && typeof cur.editDiff === 'object')
+      ? (cur.editDiff as Record<string, unknown>)[input.key] : undefined
+    const merged = mergeJsonField(cur.editDiff, input.key, input.value(existing))
     const n = await input.write({ where: { id: input.id, updatedAt: cur.updatedAt }, data: { editDiff: merged } })
     if (n === 1) return { ok: true, tries: i }
   }
   return { ok: false, reason: `🔴 ${max}번 시도했지만 그 사이 계속 바뀌었다 — 쓰지 않았다`, tries: max }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **감사 판정은 닫히는 쪽으로만 움직인다** (2026-09-22)
+//
+//   두 감사자가 같은 행을 보고 `yes`·`no` 를 엇갈려 적을 수 있다. 값을 통째로
+//   쓰면 **나중에 쓴 쪽이 이긴다** — `yes` 가 `no` 에 덮이면 닫혔어야 할 게이트가
+//   다시 열린다. 결함은 한 사람만 봐도 결함이므로, 규칙은 한쪽으로만 간다.
+//
+//   🔴 `yes` 를 되돌리려면 사람이 그 행의 기록을 명시적으로 고쳐야 한다.
+//      경쟁하는 쓰기로 조용히 뒤집히지 않는다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 감사 대상으로 표시한다 — **이미 있는 판정·날짜를 지우지 않는다** */
+export function markAuditPicked(todayKst: string) {
+  return (current: unknown): Record<string, unknown> => {
+    const prev = readAuditRecord(typeof current === 'object' && current !== null
+      ? { [AUDIT_RECORD_KEY]: current } : null)
+    // 🔴 이미 뽑혀 있으면 그대로 둔다 — 다시 뽑아 시계를 되돌리면 대기 일수가 초기화된다
+    if (prev !== null) return { ...prev }
+    return { pickedOn: todayKst }
+  }
+}
+
+/**
+ * 🔴 감사 결과를 적는다. **`yes` 는 `no` 로 덮이지 않는다.**
+ *    두 감사자의 메모는 지우지 않고 이어 붙인다 — 뒤집힌 판정도 기록으로 남는다.
+ */
+export function recordAuditVerdict(input: { defect: boolean; note?: string }) {
+  return (current: unknown): Record<string, unknown> => {
+    const prev = readAuditRecord(typeof current === 'object' && current !== null
+      ? { [AUDIT_RECORD_KEY]: current } : null)
+    const pickedOn = prev?.pickedOn ?? ''
+    // 🔴 한쪽으로만 간다: 한 번 `true` 면 계속 `true`
+    const defect = prev?.defect === true ? true : input.defect
+    const notes = [prev?.note, input.note].filter((n): n is string => typeof n === 'string' && n.trim() !== '')
+    // 🔴 같은 메모를 두 번 붙이지 않는다 — 재시도가 문장을 불린다
+    const note = [...new Set(notes)].join(' / ')
+    return {
+      ...(pickedOn === '' ? {} : { pickedOn }),
+      defect,
+      ...(note === '' ? {} : { note }),
+    }
+  }
 }

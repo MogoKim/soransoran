@@ -57,7 +57,7 @@ import { createHash } from 'node:crypto'
 import {
   planRun, judgeAutoReadyOpen, sampleOf, recheckBeforePublish, readAutoReadyStamp,
   outcomeOf, warningsOfGate, auditPicks, AUTO_DECIDER, HUMAN_DECIDER, AUTO_READY_ENV,
-  auditStateOf, judgeAuditGate, combineGates, readAuditRecord, AUDIT_RECORD_KEY, casMergeEditDiff,
+  auditStateOf, judgeAuditGate, combineGates, readAuditRecord, AUDIT_RECORD_KEY, casMergeEditDiff, markAuditPicked,
   type StampCandidate, type ReviewOutcome,
 } from '../src/lib/auto-ready'
 import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
@@ -166,7 +166,7 @@ if (autoDecidedRows.length > 0) {
        *    되쓰면 그 사이 다른 실행이 찍은 도장이 **통째로 사라진다**(검사 ⑭ 반례).
        */
       const r = await casMergeEditDiff({
-        id: m.id, key: AUDIT_RECORD_KEY, value: { pickedOn: todayKst },
+        id: m.id, key: AUDIT_RECORD_KEY, value: markAuditPicked(todayKst),
         read: async (id) => prisma.originalPostApprovalQueue.findUnique({
           where: { id }, select: { editDiff: true, updatedAt: true },
         }),

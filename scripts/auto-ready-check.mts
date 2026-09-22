@@ -11,7 +11,7 @@ import {
   planAutoReadyWrite, recheckBeforePublish, bodyVersionOf, hardDefectOf, HARD_DEFECT_KEY,
   planRun, readAutoReadyStamp, isEditRecord, type StampCandidate,
   judgeAutoInTx, judgeAuditGate, auditStateOf, combineGates, readAuditRecord, AUDIT_RECORD_KEY,
-  casMergeEditDiff, mergeJsonField, AUTO_READY_RECORD_KEY,
+  casMergeEditDiff, mergeJsonField, AUTO_READY_RECORD_KEY, markAuditPicked, recordAuditVerdict,
   type ReviewOutcome,
 } from '../src/lib/auto-ready'
 import { selectAutoTargets, autoReadyAccepted, MACHINE_REVIEWED_BY, AUTO_GATE_VERDICT, type AutoRow } from '../src/lib/original-post-auto-publish'
@@ -620,7 +620,7 @@ console.log('\n⑬ 🔴 🔴 **감사가 다음 회차에도 남고, 실제로 �
   check('🔴 🔴 **러너가 감사 판정을 실제 게이트에 합친다**',
     /combineGates\(sampleGate, auditGate\)/.test(runner))
   check('🔴 🔴 **감사 대상을 DB 에 표시한다 — 러너 임시 디스크가 아니다**',
-    /key: AUDIT_RECORD_KEY, value: \{ pickedOn: todayKst \}/.test(runner)
+    /key: AUDIT_RECORD_KEY, value: markAuditPicked\(todayKst\)/.test(runner)
     && !/writeFileSync/.test(runner))
   check('🔴 🔴 **발행 트랜잭션에 게이트와 해시를 넘긴다**',
     /autoReadyOpen: autoOpen\.open, sha256,/.test(runner))
@@ -688,7 +688,7 @@ console.log('\n⑭ 🔴 🔴 **두 실행이 같은 `editDiff` 를 쓴다 — �
     await row.writeBlind({ editDiff: mergeJsonField({}, AUTO_READY_RECORD_KEY, stampRec) })  // A 가 먼저 썼다
     // B 가 자기가 읽은 낡은 값으로 조건부로 쓰려 한다 → 0건 → 다시 읽어 합친다
     const res = await casMergeEditDiff({
-      id: 'q1', key: AUDIT_RECORD_KEY, value: { pickedOn: 'd' },
+      id: 'q1', key: AUDIT_RECORD_KEY, value: () => ({ pickedOn: 'd' }),
       read: async () => row.read(), write: async (w) => row.writeCas(w),
     })
     check('🔴 🔴 **조건부 + 재시도면 도장이 살아남는다**',
@@ -701,7 +701,7 @@ console.log('\n⑭ 🔴 🔴 **두 실행이 같은 `editDiff` 를 쓴다 — �
   // ── 계속 바뀌면 성공한 척하지 않는다
   {
     const res = await casMergeEditDiff({
-      id: 'q1', key: AUDIT_RECORD_KEY, value: { pickedOn: 'd' },
+      id: 'q1', key: AUDIT_RECORD_KEY, value: () => ({ pickedOn: 'd' }),
       read: async () => ({ editDiff: {}, updatedAt: new Date(Math.random()) }),
       write: async () => 0, attempts: 3,
     })
@@ -720,6 +720,91 @@ console.log('\n⑭ 🔴 🔴 **두 실행이 같은 `editDiff` 를 쓴다 — �
   check('🔴 🔴 **감사 기록 명령이 조건부 병합을 쓴다**', /casMergeEditDiff\(/.test(audit))
   check('🔴 🔴 **두 곳 다 낡은 `editDiff` 통째 쓰기가 남아 있지 않다**',
     !/\.\.\.base, \[AUDIT_RECORD_KEY\]/.test(runner) && !/\.\.\.base,/.test(audit))
+}
+
+console.log('\n⑮ 🔴 🔴 **같은 `audit` 칸을 두 감사자가 엇갈려 쓴다**')
+{
+  // 🔴 앞 검사(⑭)는 **다른 키**가 살아남는지만 봤다. 같은 키 안의 **판정**이
+  //    덮이는 것은 전혀 다른 문제다 — `yes` 가 `no` 에 덮이면 닫힌 게이트가 다시 열린다.
+  const makeRow = (editDiff: Record<string, unknown>) => {
+    let state = { editDiff: editDiff as unknown, updatedAt: new Date(1000) }
+    return {
+      read: async () => ({ ...state }),
+      writeCas: async (w: { where: { id: string; updatedAt: Date }; data: Record<string, unknown> }) => {
+        if (w.where.updatedAt.getTime() !== state.updatedAt.getTime()) return 0
+        state = { editDiff: w.data.editDiff, updatedAt: new Date(state.updatedAt.getTime() + 1) }
+        return 1
+      },
+      now: () => state,
+    }
+  }
+  const L3 = { pendingMaxDays: 2, pendingMax: 10, todayKst: '2026-09-22' }
+  const PICKED = { pickedOn: '2026-09-22' }
+
+  // ── 감사자 A 는 "결함 있음", 감사자 B 는 "이상 없음" 을 기록한다.
+  //    B 의 첫 시도는 A 때문에 0건이 되고, **재시도**에서 A 의 판정 위에 덮어쓴다.
+  {
+    const row = makeRow({ [AUDIT_RECORD_KEY]: PICKED })
+    const a = await casMergeEditDiff({
+      id: 'q1', key: AUDIT_RECORD_KEY, value: recordAuditVerdict({ defect: true, note: 'A: 나이 모순' }),
+      read: async () => row.read(), write: async (w) => row.writeCas(w),
+    })
+    const b = await casMergeEditDiff({
+      id: 'q1', key: AUDIT_RECORD_KEY, value: recordAuditVerdict({ defect: false, note: 'B: 이상 없음' }),
+      read: async () => row.read(), write: async (w) => row.writeCas(w),
+    })
+    check('🔴 두 기록이 모두 성공한다 — 순서만 다르다', a.ok && b.ok)
+    check('🔴 🔴 **`yes` 가 `no` 에 덮이지 않는다 — 덮이면 닫힌 게이트가 다시 열린다**',
+      readAuditRecord(row.now().editDiff)?.defect === true,
+      JSON.stringify(readAuditRecord(row.now().editDiff)))
+    check('🔴 🔴 **게이트가 닫힌 채로 남는다**',
+      judgeAuditGate(auditStateOf([{ id: 'q1', editDiff: row.now().editDiff }]), L3).open === false)
+    check('🔴 뒤집힌 판정이 지워지지 않고 기록으로 남는다', (() => {
+      const r = readAuditRecord(row.now().editDiff)
+      return (r?.note ?? '').includes('A:') && (r?.note ?? '').includes('B:')
+    })(), JSON.stringify(readAuditRecord(row.now().editDiff)))
+  }
+
+  // ── 순서를 바꿔도 같다
+  {
+    const row = makeRow({ [AUDIT_RECORD_KEY]: PICKED })
+    await casMergeEditDiff({ id: 'q1', key: AUDIT_RECORD_KEY,
+      value: recordAuditVerdict({ defect: false }), read: async () => row.read(), write: async (w) => row.writeCas(w) })
+    await casMergeEditDiff({ id: 'q1', key: AUDIT_RECORD_KEY,
+      value: recordAuditVerdict({ defect: true }), read: async () => row.read(), write: async (w) => row.writeCas(w) })
+    check('🔴 🔴 **`no` 다음에 `yes` 가 와도 `yes` 가 이긴다**',
+      readAuditRecord(row.now().editDiff)?.defect === true)
+  }
+
+  // ── 🔴 러너의 감사 대상 표시가 **이미 있는 판정을 지우지 못한다**
+  {
+    const row = makeRow({ [AUDIT_RECORD_KEY]: { pickedOn: '2026-09-21', defect: true, note: '결함' } })
+    const r = await casMergeEditDiff({
+      id: 'q1', key: AUDIT_RECORD_KEY, value: markAuditPicked('2026-09-22'),
+      read: async () => row.read(), write: async (w) => row.writeCas(w),
+    })
+    const rec = readAuditRecord(row.now().editDiff)
+    check('🔴 🔴 **표시가 이미 끝난 판정을 지우지 않는다**',
+      rec?.defect === true && rec.note === '결함', JSON.stringify({ r, rec }))
+    check('🔴 🔴 **뽑힌 날짜도 처음 것을 유지한다 — 다시 뽑아 시계를 되돌리지 않는다**',
+      rec?.pickedOn === '2026-09-21')
+  }
+
+  // ── 아직 표시가 없으면 표시한다
+  {
+    const row = makeRow({})
+    await casMergeEditDiff({ id: 'q1', key: AUDIT_RECORD_KEY, value: markAuditPicked('2026-09-22'),
+      read: async () => row.read(), write: async (w) => row.writeCas(w) })
+    check('🔴 표시가 없던 행은 감사 대상이 된다', readAuditRecord(row.now().editDiff)?.pickedOn === '2026-09-22')
+  }
+
+  // 🔴 부르는 쪽이 실제로 이 규칙을 쓰는가
+  const runner = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  const audit = readFileSync('scripts/auto-ready-audit.mts', 'utf-8')
+  check('🔴 🔴 **러너가 `markAuditPicked` 를 쓴다 — 통째 덮어쓰기가 아니다**',
+    /value: markAuditPicked\(/.test(runner))
+  check('🔴 🔴 **감사 기록 명령이 `recordAuditVerdict` 를 쓴다**',
+    /value: recordAuditVerdict\(/.test(audit))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
