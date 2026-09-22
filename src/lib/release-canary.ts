@@ -190,3 +190,132 @@ export function canaryAuthorization(
       : `첫 시험 허가는 ${rawDate} (KST) 의 것이다 — 오늘(${today})은 아니다`,
   }
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **기간형 제한 운영** — 하루짜리 시험과 다른 것이다 (2026-09-22)
+//
+//    하루짜리(`CANARY_*`)는 날짜 하나라 **매일 사람이 바꿔야** 한다.
+//    며칠을 이어 보려면 그 손이 매일 들어가고, 그것이 "매일 수동 시동" 의
+//    남은 절반이었다. 🔴 기간을 명시하면 그 손이 없어지고, **끝나면 스스로 닫힌다.**
+//
+// 🔴 **지속 운영 승격이 아니다.** 14일 누적·공백·재고 조건은 그대로 미달이고
+//    `chosenReady` 는 false 로 남는다. 기간이 지나면 사람 개입 없이 기본 단계다.
+// ─────────────────────────────────────────────────────────
+
+export const WINDOW_STAGE_ENV = 'SORAN_RELEASE_WINDOW_STAGE'
+export const WINDOW_FROM_ENV = 'SORAN_RELEASE_WINDOW_FROM'
+export const WINDOW_UNTIL_ENV = 'SORAN_RELEASE_WINDOW_UNTIL'
+
+/** 🔴 기간을 아무리 길게 적어도 이보다 길 수 없다 — 잊고 두는 것을 막는다 */
+export const WINDOW_MAX_DAYS = 7
+
+export type WindowAuthorization = {
+  stage: ReleaseStage | null
+  from: string | null
+  until: string | null
+  /** 오늘이 그 기간 안인가 */
+  activeToday: boolean
+  note: string | null
+}
+
+/**
+ * 🔴 **모양이 맞는 것과 실제로 있는 날인 것은 다르다** (2026-09-22 보정).
+ *
+ *    앞판은 `/^\d{4}-\d{2}-\d{2}$/` 하나만 봤다. 그래서 `2026-02-30` 도 통과했고,
+ *    `Date.parse` 가 NaN 을 내면 `span < 0` 도 `span + 1 > WINDOW_MAX_DAYS` 도
+ *    **둘 다 false** 라 7일 상한이 통째로 무력해졌다 — NaN 비교는 언제나 false 다.
+ *    없는 날짜 하나로 몇 달짜리 기간이 열리는 길이었다.
+ *
+ * 🔴 그래서 **되돌려 찍어 같은 글자인지** 본다. 2026-02-30 은 3월 2일로 굴러가므로 걸린다.
+ */
+const isDate = (s: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const t = Date.parse(`${s}T00:00:00Z`)
+  if (!Number.isFinite(t)) return false
+  return new Date(t).toISOString().slice(0, 10) === s
+}
+const daysBetween = (a: string, b: string): number =>
+  Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000)
+
+/**
+ * 🔴 **세 값을 모두 요구한다.** 하나라도 비면 켜지지 않는다 —
+ *    `UNTIL` 만 빠뜨리면 영원히 켜진 기간이 되고, 그것이 가장 위험하다.
+ */
+export function windowAuthorization(
+  env: Readonly<Record<string, string | undefined>>,
+  now: Date,
+  allowed: readonly ReleaseStage[],
+): WindowAuthorization {
+  const rawStage = (env[WINDOW_STAGE_ENV] ?? '').trim()
+  const rawFrom = (env[WINDOW_FROM_ENV] ?? '').trim()
+  const rawUntil = (env[WINDOW_UNTIL_ENV] ?? '').trim()
+  const none: WindowAuthorization = { stage: null, from: null, until: null, activeToday: false, note: null }
+  if (rawStage === '' && rawFrom === '' && rawUntil === '') return none
+  const bad = (note: string): WindowAuthorization => ({ ...none, note })
+  if (rawStage === '' || rawFrom === '' || rawUntil === '') {
+    return bad(`🔴 기간 허가가 반쪽이다 — ${WINDOW_STAGE_ENV} · ${WINDOW_FROM_ENV} · ${WINDOW_UNTIL_ENV} 를 **모두** 준다`)
+  }
+  if (!isDate(rawFrom) || !isDate(rawUntil)) return bad(`🔴 기간 날짜 형식이 아니다 — ${rawFrom}~${rawUntil}`)
+  if (!allowed.includes(rawStage as ReleaseStage)) return bad(`🔴 모르는 단계다 — ${rawStage}`)
+  /**
+   * 🔴 여기 닿을 때 두 값은 **실재하는 날짜**다 — `isDate` 가 되돌려 찍어 확인했다.
+   *    그래서 `span` 은 유한하고, 아래 두 비교가 NaN 으로 함께 false 가 되는 일이 없다.
+   *    (앞판은 형식만 봤고, 그때 `2026-02-30` 하나로 7일 상한이 통째로 열렸다.)
+   */
+  const span = daysBetween(rawFrom, rawUntil)
+  if (span < 0) return bad(`🔴 시작이 끝보다 뒤다 — ${rawFrom} > ${rawUntil}`)
+  if (span + 1 > WINDOW_MAX_DAYS) {
+    return bad(`🔴 기간이 ${span + 1}일이다 — 최대 ${WINDOW_MAX_DAYS}일. 잊고 두는 것을 막는다`)
+  }
+  const today = kstDateString(now)
+  const activeToday = today >= rawFrom && today <= rawUntil
+  return {
+    stage: rawStage as ReleaseStage, from: rawFrom, until: rawUntil, activeToday,
+    note: activeToday
+      ? `🔴 기간형 제한 운영 — ${rawStage} · ${rawFrom}~${rawUntil} (KST). 오늘은 그 안이다`
+      : `기간 허가는 ${rawFrom}~${rawUntil} 의 것이다 — 오늘(${today})은 밖이다`,
+  }
+}
+
+/** 🔴 그날 더 내도 되는가 — 세 가지를 **다른 무게**로 가른다 */
+export type DayGuardInput = {
+  /** 오늘(KST) 이미 낸 수 */
+  publishedToday: number
+  /** 그날 목표 */
+  dailyTarget: number
+  /** 지금 낼 수 있다고 본 수 */
+  publishable: number
+  /** 🔴 전면 중단 사유 — 중복·정산·안전 */
+  hardDefects: readonly string[]
+}
+export type DayGuard = {
+  /** 이 회차가 더 내도 되는가 */
+  allow: boolean
+  /** 🔴 **전면 중단**인가 (그날을 닫는다) */
+  halt: boolean
+  reason: string
+}
+
+/**
+ * 🔴 **재고 부족과 결함을 같은 무게로 다루지 않는다.**
+ *
+ *    · 재고가 모자라 더 못 내는 것은 **그만 내는 것**이다 — 오늘 낸 것은 그대로 둔다
+ *    · 중복·정산·안전 결함은 **전면 중단**이다 — 원인을 사람이 볼 때까지 그날을 닫는다
+ */
+export function judgeDayGuard(i: DayGuardInput): DayGuard {
+  if (i.hardDefects.length > 0) {
+    return { allow: false, halt: true, reason: `🔴 전면 중단 — ${i.hardDefects.join(' · ')}` }
+  }
+  const remain = Math.max(0, i.dailyTarget - i.publishedToday)
+  if (remain === 0) {
+    return { allow: false, halt: false, reason: `오늘 ${i.publishedToday}/${i.dailyTarget}건 — 다 냈다` }
+  }
+  if (i.publishable <= 0) {
+    return {
+      allow: false, halt: false,
+      reason: `🟡 재고가 없어 더 내지 않는다 (오늘 ${i.publishedToday}/${i.dailyTarget}건)`
+        + ' — 낸 것은 그대로 둔다',
+    }
+  }
+  return { allow: true, halt: false, reason: `더 낼 수 있다 — 남은 ${remain}건 · 낼 수 있는 것 ${i.publishable}건` }
+}

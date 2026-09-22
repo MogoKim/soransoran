@@ -27,7 +27,7 @@
  */
 import { PrismaClient } from '@prisma/client'
 import {
-  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, REJECT_LABEL,
+  selectAutoTargets, judgeApply, judgePublishDefects, verifyAfterPublish, pickPublishTarget, REJECT_LABEL,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT,
   type AutoRow,
 } from '../src/lib/original-post-auto-publish'
@@ -42,7 +42,10 @@ import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish
 import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
-import { canaryAuthorization, judgeOneDayCanary, slotsLeftToday } from '../src/lib/release-canary'
+import {
+  canaryAuthorization, judgeOneDayCanary, slotsLeftToday,
+  windowAuthorization, judgeDayGuard,
+} from '../src/lib/release-canary'
 import { effectiveWeeklyCap, RELEASE_STAGES, PROFILES } from '../src/lib/scale-profile'
 
 /** 🔴 단계의 하루 목표 — 러너가 숫자를 손으로 적지 않는다 */
@@ -284,9 +287,39 @@ const canaryVerdict = canaryAuth.activeToday && canaryAuth.stage !== null
     slotsLeft: slotsLeftToday(canaryAuth.stage, axisNow),
   })
   : null
+/**
+ * 🔴 **기간형 제한 운영** — 하루짜리와 같은 그날치 판정을 쓰되, 기간 안이면 켠다.
+ *    🔴 `publishedToday` 를 넘겨 **그날 첫 발행 뒤에는 단계를 고정**한다.
+ */
+const windowAuth = windowAuthorization(process.env, axisNow, RELEASE_STAGES)
+/** 🔴 판정과 따로 **예측 자체**를 붙들어 둔다 — 결함 신호를 실측값에서 읽으려면 필요하다 */
+const windowSim = windowAuth.activeToday && windowAuth.stage !== null
+  ? simulateStage({
+    stage: windowAuth.stage,
+    queue: queueCandidates,
+    personas: personas as never,
+    history: personas.map((p) => ({
+      code: p.code,
+      matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
+    })),
+    axis: { now: axisNow, publishedToday: axisPublishedToday },
+    days: 1, anchor: 'now',
+    dailyCap: Math.max(0, scaleTargetOf(windowAuth.stage) - axisPublishedToday),
+  })
+  : null
+const windowVerdict = windowSim !== null && windowAuth.stage !== null
+  ? judgeOneDayCanary(windowSim, {
+    publishedToday: axisPublishedToday,
+    slotsLeft: slotsLeftToday(windowAuth.stage, axisNow),
+  })
+  : null
 const scale = installFromEnv(process.env, {
   readiness,
   canary: { now: axisNow, verdict: canaryVerdict },
+  window: {
+    now: axisNow, verdict: windowVerdict, dayVerdict: windowVerdict,
+    publishedToday: axisPublishedToday,
+  },
 })
 // 🔴 여기서부터 쓰기 판정에 쓰이는 값은 전부 `scale` 에서 나온다
 const RELEASE_DAILY_CAP = scale.releaseProfile.dailyTarget
@@ -310,6 +343,11 @@ if (canaryVerdict !== null) {
     + ` · 이 회차 필요 ${canaryVerdict.need}건 · 낼 수 있는 것 ${canaryVerdict.can}건`
     + ` · ${canaryVerdict.ok ? 'GO' : '🔴 NO-GO'}`)
   for (const r of canaryVerdict.reasons) console.log(`        🔴 ${r}`)
+}
+if (windowVerdict !== null) {
+  console.log(`     ②-w 기간형 판정  ${windowVerdict.stage} · ${windowAuth.from} ~ ${windowAuth.until}`
+    + ` · 오늘 ${windowVerdict.published}/${windowVerdict.want}건 · 낼 수 있는 것 ${windowVerdict.can}건`)
+  console.log('     🔴 기간형은 14일 지속 운영 기준을 충족했다는 뜻이 아니다')
 }
 if (scale.canaryStage) {
   console.log('     🔴 **이 회차는 하루짜리 첫 시험이다** — 지속 D3 승격이 아니다')
@@ -443,7 +481,51 @@ if (catchUp.due.length > 0) {
   console.log(`   도래한 슬롯  ${catchUp.due.map((d) => d.kst).join(' · ')}`)
 }
 
-const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: RELEASE_DAILY_CAP, killSwitchEnabled: killed, slot })
+/**
+ * 🔴 **그날 판정 — 로그가 아니라 문이다** (2026-09-22).
+ *
+ * 🔴 여기서 쓰는 발행 수는 위의 `axisPublishedToday` 가 아니라 **바로 위에서 DB 로 센**
+ *    `publishedToday` 다. 상한을 지키는 값과 그날을 닫는 값이 다르면 둘 중 하나는 거짓말이다.
+ *
+ * 🔴 **후보별 제외와 배관 결함을 섞지 않는다** (2026-09-22 보정).
+ *
+ *    앞판은 `SAFETY` 로 빠진 행이 **한 건이라도** 있으면 그날을 전면 중단했다.
+ *    그런데 안전 판정 실패는 **그 행 하나의 문제**다 — 이미 `selectAutoTargets` 가
+ *    그 행만 빼고 나머지를 넘긴다. 그것을 다시 전면 중단으로 올리면
+ *    **멀쩡한 다른 후보의 발행까지 한 줄 때문에 멎는다.** 공급이 조용히 0 이 되는 모양이다.
+ *
+ *    · 후보별 제외 (막지 않는다) — SAFETY · GATE · PROFILE · HUMAN_REVIEW_REQUIRED …
+ *    · 배관 결함 (그날을 닫는다) — 상한을 이미 넘겨 버렸다 · 기배정 복구가 깨졌다
+ *
+ * 🔴 **정산 결함은 이 러너에서 관측되지 않는다** — LLM 장부는 공급 경로에 있고
+ *    이 러너는 장부를 읽지 않는다. 여기서 "정산도 봤다" 고 적으면 거짓이 된다.
+ */
+/** 🔴 조립은 `src/lib` 한 함수가 한다 — 러너 안에 두면 검사가 닿지 않는다 */
+const defects = judgePublishDefects({
+  publishedToday, dailyCap: RELEASE_DAILY_CAP,
+  recoveryBroken: windowSim?.recoveryBroken ?? 0,
+  rejected,
+})
+const hardDefects = defects.hardDefects
+/** 🔴 안전 실패는 **세어서 보여 주되 막지 않는다** — 그 행은 이미 빠져 있다 */
+const safetyRejects = rejected.filter((r) => r.code === 'SAFETY')
+if (safetyRejects.length > 0) {
+  console.log(`   ⚠️ 안전 판정으로 제외된 후보 ${safetyRejects.length}건`
+    + ' — 그 행만 빠진다. 남은 후보의 발행은 막지 않는다')
+}
+const dayGuard = windowVerdict === null ? null : judgeDayGuard({
+  publishedToday,
+  dailyTarget: RELEASE_DAILY_CAP,
+  publishable: windowVerdict.can,
+  hardDefects,
+})
+if (dayGuard !== null) {
+  console.log(`   ②-g 그날 판정  ${dayGuard.allow ? 'GO' : '중단'}${dayGuard.halt ? ' 🔴 전면' : ''}`
+    + ` — ${dayGuard.reason}`)
+  console.log('   🔴 정산 결함은 이 러너에서 보지 않는다 — 장부는 공급 경로에 있다')
+}
+
+const gate = judgeApply({ targets, picked, apply: APPLY, limit: LIMIT, publishedToday, dailyCap: RELEASE_DAILY_CAP, killSwitchEnabled: killed, slot, dayGuard })
 if (!gate.ok) {
   console.log(`\n⑤ 발행하지 않는다 — ${gate.reason}`)
   if (!APPLY) console.log('   🟡 dry-run 입니다. DB write 0 · Post 0 · 실행하려면 --apply 와 --limit=1 을 둘 다 붙이세요.')

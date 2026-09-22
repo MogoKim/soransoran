@@ -345,7 +345,17 @@ const result = await runEnqueuePipeline({
     const verdict = checkCommentCandidate(gateInputOf(ctx.gate, input, text))
     const report = judgeGateReport({ gates: verdict.gates, status: verdict.status })
     return {
-      gates: verdict.gates.map((g) => ({ gate: g.gate, outcome: g.outcome })),
+      /**
+       * 🔴 **왜 막혔는지 축 이름을 함께 싣는다** (2026-09-22).
+       *
+       *    실측(2026-09-22 회차): ⑧ 이 `regenerate` 로 막혔는데 **어느 축인지
+       *    로그 어디에도 없었다.** 막힌 본문은 일부러 저장하지 않으므로,
+       *    원인을 알려면 유료 호출을 다시 해야 했다 — 그것이 이 구멍의 값이다.
+       *
+       * 🔴 `detail` 은 판정부가 **축 이름과 비율만** 담는다(`persona-gate-78`).
+       *    본문도 원문 조각도 들어가지 않는다 — 그 계약은 그대로 둔다.
+       */
+      gates: verdict.gates.map((g) => ({ gate: g.gate, outcome: g.outcome, detail: g.detail })),
       gateStatus: verdict.status,
       // 🔴 호출자 주장이 아니라 Gate 모양으로 판정한다
       isBootstrap: report.missingRequired.length === 1 && report.missingRequired[0] === '⑧',

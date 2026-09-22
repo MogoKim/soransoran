@@ -26,7 +26,9 @@ import {
   RELEASE_STAGES,
   type ReleaseStage, type ScaleProfile, type StageVerdict,
 } from './scale-profile'
-import { canaryAuthorization, type CanaryVerdict } from './release-canary'
+import {
+  canaryAuthorization, windowAuthorization, type CanaryVerdict,
+} from './release-canary'
 
 export type ResolvedScale = {
   /** 준비된 능력 — 내부 공급(재고·수집)이 이것을 따른다 */
@@ -99,6 +101,11 @@ export function resolveScale(
      *    이 파일은 DB 를 모르므로 여기서 계산하지 않는다(`readiness` 와 같은 방식).
      */
     canary?: { now: Date; verdict: CanaryVerdict | null }
+    /**
+     * 🔴 **기간형 제한 운영.** `publishedToday` 는 그날 단계를 고정하는 근거다 —
+     *    이미 낸 날의 단계를 낮추면 그 발행이 상한 초과가 된다.
+     */
+    window?: { now: Date; verdict: CanaryVerdict | null; dayVerdict: CanaryVerdict | null; publishedToday: number }
   } = {},
 ): ResolvedScale {
   const cap = resolveStage(env[CAPACITY_ENV], 'capacity')
@@ -126,6 +133,69 @@ export function resolveScale(
    *
    * 🔴 그날치 판정이 `ok` 가 아니면 켜지지 않는다. 허가만으로는 올라가지 않는다.
    */
+  /**
+   * ②-0 🔴 **기간형 제한 운영** (2026-09-22).
+   *
+   *    하루짜리와 달리 **기간**을 명시한다 — 매일 날짜를 바꾸지 않아도 되고,
+   *    끝나면 사람 개입 없이 닫힌다. 🔴 지속 운영 승격이 아니다.
+   *
+   * 🔴 **그날 첫 발행 뒤에는 단계가 바뀌지 않는다.** 아침에 d3 로 한 편을 내고
+   *    낮에 d1 로 내려가면, 이미 낸 그 한 편이 "상한 초과" 가 된다 —
+   *    같은 날 두 규칙이 겹치면 어느 쪽도 지켜지지 않는다.
+   *    그래서 `publishedToday > 0` 이면 **그날 단계를 고정**한다.
+   */
+  const win = opts.window
+  let windowStage = false
+  let windowRange: string | null = null
+  if (win !== undefined) {
+    const wa = windowAuthorization(env, win.now, RELEASE_STAGES)
+    windowRange = wa.from === null ? null : `${wa.from}~${wa.until}`
+    if (wa.note !== null) notes.push(wa.note)
+    if (wa.activeToday && wa.stage !== null) {
+      if (stageRank(wa.stage) > stageRank(cap.stage)) {
+        notes.push(`🔴 기간 허가 ${wa.stage} 가 capacity=${cap.stage} 를 넘는다 — 열지 않는다`)
+      } else if (win.dayVerdict === null) {
+        notes.push('🔴 기간 허가는 있으나 그날치 판정을 받지 못했다 — 켜지 않는다(fail-closed)')
+      } else if (win.dayVerdict.stage !== wa.stage) {
+        notes.push(`🔴 기간 허가는 ${wa.stage} 인데 판정은 ${win.dayVerdict.stage} 다 — 켜지 않는다`)
+      } else if (win.publishedToday > PROFILES[stage].dailyTarget) {
+        /**
+         * 🔴 **이미 기본 단계 상한을 넘겨 낸 날은 그 단계를 지킨다.**
+         *    여기서 내리면 **이미 나간 글이 상한 초과**가 된다 — 그날치 판정이
+         *    지금 NO-GO 여도 마찬가지다. 더 낼지 말지는 `judgeDayGuard` 가 따로 정한다.
+         */
+        stage = wa.stage
+        windowStage = true
+        notes.push(`🔴 오늘 이미 ${win.publishedToday}건 냈다 — 그날 단계 ${wa.stage} 를 **고정**한다`)
+        notes.push(`🔴 기본 단계 ${PROFILES[stage].dailyTarget}건을 넘겼다 — 내리면 이미 낸 것이 상한 초과가 된다`)
+      } else if (!win.dayVerdict.ok) {
+        notes.push(`🔴 기간 ${wa.stage} 를 켜지 않는다 — ${win.dayVerdict.reasons.join(' / ')}`)
+      } else if (stageRank(wa.stage) > stageRank(stage)) {
+        stage = wa.stage
+        windowStage = true
+        notes.push(`🔴 **기간형 제한 운영** ${wa.stage} · ${wa.from}~${wa.until}`)
+        notes.push('🔴 지속 운영 승격이 아니다 — 14일 누적·공백·재고 조건은 그대로 미달이다')
+        if (win.publishedToday > 0) {
+          /**
+           * 🔴 **`publishedToday > 0` 만으로 단계를 확정하지 않는다** (2026-09-22 보정).
+           *
+           *    앞판은 오늘 발행이 하나라도 있으면 그것만 보고 기간 단계를 확정했다.
+           *    그래서 **d1 로 한 편이 나간 날 오후에 변수를 켜는 것만으로** 그날이 d3 가 됐다 —
+           *    그날치 판정(재고·화자·신선도)을 한 번도 묻지 않고 두 편이 더 열렸다.
+           *    그 한 편이 어느 단계에서 나갔는지는 `PersonaActivityLog` 에 남지 않아
+           *    **구분할 수 없다.** 구분할 수 없으면 판정을 물어야 한다.
+           *
+           * 🔴 **안전한 활성화 조건**: 기간은 *그날 발행이 시작되기 전에* 켠다.
+           *    이미 낸 날 오후에 켜면, 그날치 판정이 GO 일 때만 열린다(지금 이 자리다).
+           *    판정이 NO-GO 면 열리지 않고, 기본 단계 상한을 이미 넘긴 날만 고정된다.
+           */
+          notes.push(`🔴 오늘 이미 ${win.publishedToday}건 냈다 — 어느 단계에서 나갔는지 구분할 수 없다`)
+          notes.push('🔴 그래서 발행 수만으로 확정하지 않았다 — 그날치 판정이 GO 라서 열었다')
+        }
+      }
+    }
+  }
+
   const canary = opts.canary
   let canaryStage = false
   let canaryDate: string | null = null
@@ -167,7 +237,7 @@ export function resolveScale(
   let throttledByReadiness = false
   let chosenReady = false
   const readiness = opts.readiness
-  if (canaryStage) {
+  if (canaryStage || windowStage) {
     /**
      * 🔴 **시험 회차는 준비도 감속을 건너뛴다.** 그것이 이 기능의 전부다 —
      *    다른 안전장치(하루 상한 · 슬롯 · 신선도 · persona 적격 · 중복 · 트랜잭션)는
@@ -196,10 +266,10 @@ export function resolveScale(
     releaseProfile: PROFILES[stage],
     throttledByCapacity,
     throttledByReadiness,
-    readinessApplied: !canaryStage && readiness !== undefined && readiness.length > 0,
+    readinessApplied: !canaryStage && !windowStage && readiness !== undefined && readiness.length > 0,
     chosenReady,
-    canaryStage,
-    canaryDate,
+    canaryStage: canaryStage || windowStage,
+    canaryDate: canaryDate ?? windowRange,
     notes,
     source: 'env',
   }
@@ -242,6 +312,7 @@ export function installFromEnv(
   opts: {
     readiness?: readonly StageVerdict[]
     canary?: { now: Date; verdict: CanaryVerdict | null }
+    window?: { now: Date; verdict: CanaryVerdict | null; dayVerdict: CanaryVerdict | null; publishedToday: number }
   } = {},
 ): ResolvedScale {
   return applyScale(resolveScale(env, opts))
