@@ -474,6 +474,52 @@ console.log('\n⑩ 🔴 🔴 P01 미배정 READY 2건 — 실제 파일과 최�
     new Set(all).size === all.length, all.join(','))
 }
 
+// ─────────────────────────────────────────────────────────
+console.log('\n⑪ 🔴 🔴 재고는 **낼 수 있는 글**만 센다 — legacy 를 세면 공급이 멎는다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실측한 회귀** (2026-09-22). 미배정 READY 를 세도록 고치면서
+   *    미발행 `APPROVED·EDITED` 를 **전부** 셌다. 큐에는 계약이 어긋나 영영
+   *    발행되지 않는 legacy 217건이 있어서 P01 13건 · P08 14건으로 잡혔고,
+   *    `여력 = 열린날 − 재고` 가 전부 0 이 되어
+   *    🔴 **여력 있는 화자 0명 → 원천 5건 전부 보류**로 공급이 멎었다.
+   *
+   *    실측 전후:
+   *      · 고치기 전  P01(1/13) … 여력 0명 · 5건 보류
+   *      · 고친 뒤    P01(1/2) P03(1/0) P04(1/0) P07(1/0) P08(1/0) … 4명 · 1건 보류
+   */
+  const cap = (code: string, openDays: number, readyCount: number) => ({ code, openDays, readyCount })
+  const legacyCounted = planSpeakerAvailability({
+    sourceKeys: ['s1', 's2', 's3', 's4', 's5'],
+    capacities: [cap('P01', 1, 13), cap('P03', 1, 6), cap('P04', 1, 11), cap('P07', 1, 8), cap('P08', 1, 14)],
+  })
+  check('🔴 🔴 **legacy 까지 세면 전원 제외되고 공급이 멎는다 (재현)**',
+    legacyCounted.eligible.length === 0
+    && legacyCounted.slots.every((sl) => sl.codes.length === 0),
+    JSON.stringify(legacyCounted.eligible))
+
+  const publishableOnly = planSpeakerAvailability({
+    sourceKeys: ['s1', 's2', 's3', 's4', 's5'],
+    capacities: [cap('P01', 1, 2), cap('P03', 1, 0), cap('P04', 1, 0), cap('P07', 1, 0), cap('P08', 1, 0)],
+  })
+  check('🔴 🔴 **낼 수 있는 글만 세면 네 사람이 남는다**',
+    publishableOnly.eligible.join(',') === 'P03,P04,P07,P08',
+    publishableOnly.eligible.join(','))
+  check('🔴 🔴 **P01 은 검토 대기 2건 때문에 빠진다 — 같은 화자로 또 만들지 않는다**',
+    !publishableOnly.eligible.includes('P01')
+    && publishableOnly.notes.some((n) => n.includes('P01(열린날 1·재고 2)')),
+    publishableOnly.notes.join(' | '))
+
+  /** 🔴 공급 러너가 발행 정본으로 거르고, 검토 대기도 함께 센다 */
+  const src = readFileSync('scripts/supply-process.mts', 'utf-8')
+  check('🔴 🔴 **재고 판정을 발행 정본(`selectAutoTargets`)에 맡긴다**',
+    /selectAutoTargets\(pendingRows/.test(src))
+  check('🔴 🔴 **검토 대기는 세고 legacy 는 세지 않는다**',
+    /r\.code === 'HUMAN_REVIEW_REQUIRED'/.test(src)
+    && /legacy 는 세지 않는다/.test(src))
+}
+
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 DB 0 · 네트워크 0 · LLM 0 · 파일 write 0\n')
 if (fail > 0) process.exit(1)
