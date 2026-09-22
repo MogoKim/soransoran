@@ -286,3 +286,154 @@ export function recheckBeforePublish(i: RecheckInput): RecheckVerdict {
   if (!v.auto) return { ok: false, reason: `지금 다시 보면 자동 대상이 아니다 — ${v.reasons.join(' · ')}` }
   return { ok: true, reason: `본문 판 ${now} 유지 · 적격` }
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **기록을 어디에 남기는가** (2026-09-22)
+//
+//   스키마를 바꿀 수 없으므로 `editDiff` JSON 을 쓴다. 그런데 이 칸은 원래
+//   "사람이 고친 내역" 자리다. **둘을 구분하지 않으면 표본이 망가진다** —
+//   자동 도장을 찍은 행이 "수정된 행" 으로 세어지고, 표식만 남긴 폐기 행이
+//   수정과 폐기 **양쪽에** 들어가 무수정 승인 수가 음수가 된다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 **고친 내역인가.** 이 두 열쇠가 있어야 사람이 문장을 고친 기록이다 */
+export function isEditRecord(editDiff: unknown): boolean {
+  if (editDiff === null || typeof editDiff !== 'object') return false
+  const d = editDiff as Record<string, unknown>
+  return typeof d.titleChanged === 'boolean' || typeof d.bodyChanged === 'boolean'
+}
+
+export const AUTO_READY_RECORD_KEY = 'autoReady'
+
+/** 🔴 자동 도장이 남긴 것을 되읽는다 — 발행 직전에 본문 판을 대조하려면 필요하다 */
+export function readAutoReadyStamp(editDiff: unknown): { bodyVersion: string; openReason: string } | null {
+  if (editDiff === null || typeof editDiff !== 'object') return null
+  const r = (editDiff as Record<string, unknown>)[AUTO_READY_RECORD_KEY]
+  if (r === null || typeof r !== 'object') return null
+  const m = r as Record<string, unknown>
+  const bv = typeof m.bodyVersion === 'string' ? m.bodyVersion : ''
+  if (bv === '') return null
+  return { bodyVersion: bv, openReason: typeof m.openReason === 'string' ? m.openReason : '' }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **한 회차가 무엇을 쓸지 정한다** — 러너는 이 계획을 그대로 집행한다.
+//    러너 안에서 조립하면 검사가 닿지 않는다.
+// ─────────────────────────────────────────────────────────
+
+export type StampCandidate = RowInput & {
+  id: string
+  /** 지금 이 행에 적힌 결정자. 기계 값이어야 한다 — 이미 사람·자동이 정했으면 건드리지 않는다 */
+  decidedBy: string | null
+  /** 🔴 낙관적 잠금의 근거. 읽은 뒤 누가 한 번이라도 쓰면 값이 달라진다 */
+  updatedAt: Date
+  status: string
+  createdPostId: string | null
+}
+
+export type StampWrite = {
+  id: string
+  /** 🔴 조건부 UPDATE 의 where 절 — 하나라도 어긋나면 0건이 되어 아무것도 쓰지 않는다 */
+  where: { id: string; decidedBy: string; status: string; createdPostId: null; updatedAt: Date }
+  data: { decidedBy: typeof AUTO_DECIDER; decidedAt: Date; editDiff: Record<string, unknown> }
+}
+export type StampSkip = { id: string; reasons: string[] }
+export type RunPlan = { open: OpenVerdict; writes: StampWrite[]; toHumanReview: StampSkip[] }
+
+/**
+ * 🔴 **회차 계획.** 게이트가 닫혀 있으면 `writes` 는 **언제나 빈 배열**이다 —
+ *    부르는 쪽이 판정을 잊어도 쓸 것이 없다(fail-closed).
+ *
+ * 🔴 이미 누가 정한 행은 손대지 않는다. `founder` 도장을 덮어쓰지 않고,
+ *    자동 도장을 두 번 찍지도 않는다.
+ */
+export function planRun(input: {
+  candidates: readonly StampCandidate[]
+  open: OpenVerdict
+  now: Date
+  machineDecidedBy: string
+  sha256: (text: string) => string
+}): RunPlan {
+  if (!input.open.open) {
+    return {
+      open: input.open, writes: [],
+      toHumanReview: input.candidates.map((c) => ({ id: c.id, reasons: [`게이트 닫힘 — ${input.open.reason}`] })),
+    }
+  }
+  const writes: StampWrite[] = []
+  const toHumanReview: StampSkip[] = []
+  for (const c of input.candidates) {
+    if (c.createdPostId !== null) continue          // 이미 나간 글이다
+    if ((c.decidedBy ?? '') !== input.machineDecidedBy) continue  // 사람·자동이 이미 정했다
+    const v = judgeRow(c)
+    if (!v.auto) { toHumanReview.push({ id: c.id, reasons: v.reasons }); continue }
+    writes.push({
+      id: c.id,
+      where: { id: c.id, decidedBy: input.machineDecidedBy, status: c.status, createdPostId: null, updatedAt: c.updatedAt },
+      data: {
+        decidedBy: AUTO_DECIDER,
+        decidedAt: input.now,
+        editDiff: {
+          [AUTO_READY_RECORD_KEY]: {
+            decidedBy: AUTO_DECIDER,
+            decidedAt: input.now.toISOString(),
+            bodyVersion: bodyVersionOf(c, input.sha256),
+            openReason: input.open.reason,
+          },
+        },
+      },
+    })
+  }
+  return { open: input.open, writes, toHumanReview }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **표본을 읽는 곳이 둘이면 답이 둘이 된다** (2026-09-22 실측).
+//
+//   발행 러너는 22/30·95.5%, 보고 명령은 15/30·93.3% 를 냈다. 러너가
+//   `publish-candidate:` 접두를 써서 **사람 후보까지 표본에 넣었기** 때문이다.
+//   그래서 한 행을 판정으로 바꾸는 일을 여기 한 함수로 모은다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 경고 = 저장 게이트가 남긴 `holds`·`blocks`. 기록 자체가 없으면 그것도 경고다 */
+export function warningsOfGate(gate: unknown): string[] {
+  if (gate === null || typeof gate !== 'object') return ['gateResults 없음']
+  const g = gate as Record<string, unknown>
+  const arr = (k: string): string[] => (Array.isArray(g[k]) ? (g[k] as unknown[]).map(String) : [])
+  return [...arr('holds'), ...arr('blocks')]
+}
+
+/** 표본·적격 판정에 필요한 한 행 — Prisma 모양을 그대로 받지 않는다 */
+export type SampleRow = {
+  gateVerdict: unknown
+  gateResults: unknown
+  draftTitle: string
+  draftBody: string
+  decidedBy: string | null
+  editDiff: unknown
+  declineReason: string | null
+  /** 🔴 **원천을 언제 봤는가.** `null` 이면 모르는 것이고, 모르면 자동 대상이 아니다 */
+  sourceCapturedAt: Date | null
+}
+
+/** 🔴 자동이 손댈 행인가 — 표본의 분모를 이것으로 거른다 */
+export function eligibilityOf(r: SampleRow): RowVerdict {
+  return judgeRow({
+    gateVerdict: String(r.gateVerdict),
+    warnings: warningsOfGate(r.gateResults),
+    sourceCapturedKnown: r.sourceCapturedAt !== null,
+    title: r.draftTitle, body: r.draftBody,
+  })
+}
+
+/** 🔴 한 행 → 한 판정. 러너와 보고 명령이 **같은 이 함수**를 쓴다 */
+export function outcomeOf(r: SampleRow): ReviewOutcome {
+  return {
+    decidedBy: r.decidedBy ?? '',
+    // 🔴 도장·표식만 담긴 editDiff 는 "고친 내역" 이 아니다
+    hasEditDiff: isEditRecord(r.editDiff),
+    hasDeclineReason: (r.declineReason ?? '').trim() !== '',
+    eligible: eligibilityOf(r).auto,
+    hardDefect: hardDefectOf(r.editDiff),
+  }
+}

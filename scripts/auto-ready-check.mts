@@ -9,6 +9,7 @@ import {
   HUMAN_DECIDER, AUTO_DECIDER, AUTO_READY_ENV, AUTO_READY_BLOCKERS,
   sampleOf, judgeAutoReadyOpen, judgeRow, auditPicks, judgeAuditOutcome,
   planAutoReadyWrite, recheckBeforePublish, bodyVersionOf, hardDefectOf, HARD_DEFECT_KEY,
+  planRun, readAutoReadyStamp, isEditRecord, type StampCandidate,
   type ReviewOutcome,
 } from '../src/lib/auto-ready'
 import { selectAutoTargets, autoReadyAccepted, MACHINE_REVIEWED_BY, AUTO_GATE_VERDICT, type AutoRow } from '../src/lib/original-post-auto-publish'
@@ -18,6 +19,7 @@ import {
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX,
 } from '../src/lib/micro-seed-supply-autofill'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
+import { readFileSync } from 'node:fs'
 
 let pass = 0, fail = 0
 const check = (n: string, ok: boolean, d = ''): void => {
@@ -341,6 +343,82 @@ console.log('\n⑨ 🔴 🔴 **중대 결함 기록 경로 — 재는 자리가 
     return judgeAutoReadyOpen({ enabled: true, reviewSampleMin: 1, noEditAccuracyMin: 0,
       hardDefectMax: 0, sample: smp }).open === false
   })())
+}
+
+console.log('\n⑩ 🔴 🔴 **회차 계획 — 러너가 그대로 집행하는 값**')
+{
+  const sha256 = (t: string) => {
+    let h = 2166136261 >>> 0
+    for (const ch of t) h = (Math.imul(h ^ ch.charCodeAt(0), 16777619)) >>> 0
+    return h.toString(16).padStart(8, '0').repeat(8)
+  }
+  const MACHINE = 'machine:auto-draft-v5'
+  const now = new Date('2026-09-22T12:00:00Z')
+  const good = '주변에 물어보면 반반이더라고요. 다들 어떻게 드시나요?'
+  const cand = (o: Partial<StampCandidate> = {}): StampCandidate => ({
+    id: 'q1', decidedBy: MACHINE, updatedAt: new Date('2026-09-22T11:00:00Z'),
+    status: 'APPROVED', createdPostId: null,
+    gateVerdict: 'PASS', warnings: [], sourceCapturedKnown: true,
+    title: '김치 이야기', body: good, ...o,
+  })
+  const OPEN = { open: true, reason: '네 조건 통과' }
+  const SHUT = { open: false, reason: '표본 15/30 — 15건 부족' }
+  const run = (c: StampCandidate[], open = OPEN) =>
+    planRun({ candidates: c, open, now, machineDecidedBy: MACHINE, sha256 })
+
+  check('🔴 🔴 **게이트가 닫히면 쓸 것이 0 이다 — 부르는 쪽이 잊어도 쓰지 않는다**',
+    run([cand()], SHUT).writes.length === 0)
+  check('🔴 닫혔을 때 후보는 버려지지 않고 사람 검토로 간다',
+    run([cand()], SHUT).toHumanReview.length === 1)
+  check('🔴 🔴 **`founder` 도장을 덮어쓰지 않는다**',
+    run([cand({ decidedBy: HUMAN_DECIDER })]).writes.length === 0)
+  check('🔴 🔴 **자동 도장을 두 번 찍지 않는다**',
+    run([cand({ decidedBy: AUTO_DECIDER })]).writes.length === 0)
+  check('🔴 🔴 **이미 발행된 행은 건드리지 않는다**',
+    run([cand({ createdPostId: 'post-1' })]).writes.length === 0)
+
+  const w = run([cand()]).writes[0]
+  check('🔴 🔴 **결정 주체는 자동이다 — 사람 값이 아니다**',
+    w?.data.decidedBy === AUTO_DECIDER && String(w?.data.decidedBy) !== String(HUMAN_DECIDER))
+  check('🔴 🔴 **조건부 UPDATE 가 읽은 순간의 `updatedAt` 을 조건으로 건다**', (() => {
+    const c = cand()
+    return w?.where.updatedAt.getTime() === c.updatedAt.getTime()
+      && w?.where.decidedBy === MACHINE && w?.where.createdPostId === null
+  })())
+  check('🔴 🔴 **본문 판을 함께 쓴다 — 나중에 대조할 수 있다**', (() => {
+    const rec = readAutoReadyStamp(w?.data.editDiff)
+    return rec !== null && rec.bodyVersion === bodyVersionOf(cand(), sha256)
+  })())
+  check('🔴 🔴 **자동 도장 기록은 "고친 내역" 으로 세어지지 않는다**',
+    isEditRecord(w?.data.editDiff) === false)
+  check('🔴 부적격 후보는 쓰지 않고 사람 검토로 보낸다', (() => {
+    const r = run([cand({ id: 'q2', body: '이런 가죽쟈켓 어떤가요?' })])
+    return r.writes.length === 0 && r.toHumanReview[0]?.reasons.some((x) => x.startsWith('imageDependent'))
+  })())
+}
+
+console.log('\n⑪ 🔴 🔴 **운영 러너가 실제로 이 경로를 부른다**')
+{
+  const runner = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  const calls = (name: string) => new RegExp(`\\b${name}\\s*\\(`).test(runner)
+  check('🔴 🔴 **발행 러너가 `planRun` 을 부른다 — 검사에서만 불리지 않는다**', calls('planRun'))
+  check('🔴 🔴 **발행 러너가 `recheckBeforePublish` 를 부른다**', calls('recheckBeforePublish'))
+  check('🔴 🔴 **발행 러너가 `auditPicks` 를 부른다**', calls('auditPicks'))
+  check('🔴 🔴 **DB 에 실제로 쓴다 — `updateMany` 로 조건부 기록한다**',
+    /updateMany\(\{[\s\S]{0,400}?decidedBy: w\.data\.decidedBy/.test(runner))
+  check('🔴 🔴 **조건부 where 에 `updatedAt` 이 들어간다 — 그 사이 바뀌면 0건이다**',
+    /where: \{[\s\S]{0,300}?updatedAt: w\.where\.updatedAt/.test(runner))
+  check('🔴 🔴 **`--apply` 가 아니면 쓰지 않는다**', /if \(!APPLY\) \{\s*\n\s*console\.log\('     🟡 dry-run/.test(runner))
+  check('🔴 🔴 **사람 도장을 쓰려 하면 그 자리에서 멈춘다**',
+    /String\(w\.data\.decidedBy\) === String\(HUMAN_DECIDER\)/.test(runner))
+  check('🔴 🔴 **발행 선택기에 게이트 판정을 넘긴다 — 기본 닫힘을 우회하지 않는다**',
+    /autoReadyOpen: autoOpen\.open/.test(runner))
+  check('🔴 🔴 **발행 직전 재확인이 발행 호출보다 앞에 있다**',
+    runner.indexOf('recheckBeforePublish') < runner.indexOf('publishOriginalPostTx('))
+  check('🔴 🔴 **감사는 발행 여부와 무관하게 매 회차 돈다 — 발행 게이트보다 앞이다**',
+    runner.indexOf('auditPicks') < runner.indexOf('const gate = judgeApply'))
+  check('🔴 표본은 기계 후보만 센다 — 사람 후보가 섞이면 부풀어 오른다 (실측 22 vs 15)',
+    /startsWith: MACHINE_SITE_PREFIX/.test(runner))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

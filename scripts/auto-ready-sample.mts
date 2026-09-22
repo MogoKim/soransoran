@@ -15,11 +15,11 @@
 import { PrismaClient } from '@prisma/client'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import {
-  sampleOf, judgeAutoReadyOpen, judgeRow, hardDefectOf, HUMAN_DECIDER,
-  type ReviewOutcome,
+  sampleOf, judgeAutoReadyOpen, outcomeOf, eligibilityOf, HUMAN_DECIDER,
+  type ReviewOutcome, type SampleRow,
 } from '../src/lib/auto-ready'
 import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
-import { MACHINE_SITE_PREFIX } from '../src/lib/original-post-auto-publish'
+import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
@@ -31,38 +31,20 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     id: true, status: true, gateVerdict: true, gateResults: true,
     draftTitle: true, draftBody: true, decidedBy: true, decidedAt: true,
     editDiff: true, declineReason: true, createdPostId: true,
+    // 🔴 **원천을 언제 봤는가** — 가정하지 않고 실제 값을 읽는다
+    rawContent: { select: { sourceCapturedAt: true } },
   },
   orderBy: [{ decidedAt: 'asc' }, { createdAt: 'asc' }],
 })
 
-/** 🔴 경고 = 저장 게이트가 남긴 `holds`·`blocks`. 비어 있어야 무경고다 */
-const warningsOf = (gate: unknown): string[] => {
-  if (gate === null || typeof gate !== 'object') return ['gateResults 없음']
-  const g = gate as Record<string, unknown>
-  const arr = (k: string) => (Array.isArray(g[k]) ? (g[k] as unknown[]).map(String) : [])
-  return [...arr('holds'), ...arr('blocks')]
-}
-
+// 🔴 발행 러너와 **같은 함수**로 판정한다 — 각자 조립하면 답이 갈린다(실측 22 vs 15)
 const rows = raw.map((r) => {
-  const warnings = warningsOf(r.gateResults)
-  const verdict = judgeRow({
-    gateVerdict: String(r.gateVerdict), warnings,
-    // 🔴 큐 행이 수집 시각을 들고 있지 않다. 없는 값을 `false` 로 세면 표본이 전부 0 이 되고,
-    //    `true` 로 세면 모르는 것을 통과시킨다. 이 축은 **재지 않았다고 따로 적는다.**
-    sourceCapturedKnown: true,
-    title: r.draftTitle, body: r.draftBody,
-  })
-  return { ...r, warnings, verdict }
+  const row: SampleRow = { ...r, sourceCapturedAt: r.rawContent?.sourceCapturedAt ?? null }
+  return { ...r, row, verdict: eligibilityOf(row) }
 })
-
 const decided = rows.filter((r) => (r.decidedBy ?? '').trim() === HUMAN_DECIDER)
-const outcomes: ReviewOutcome[] = decided.map((r) => ({
-  decidedBy: r.decidedBy ?? '',
-  hasEditDiff: r.editDiff !== null,
-  hasDeclineReason: (r.declineReason ?? '').trim() !== '',
-  eligible: r.verdict.auto,
-  hardDefect: hardDefectOf(r.editDiff),
-}))
+const outcomes: ReviewOutcome[] = decided.map((r) => outcomeOf(r.row))
+const capturedUnknown = decided.filter((r) => r.row.sourceCapturedAt === null).length
 
 const sample = sampleOf(outcomes)
 const open = judgeAutoReadyOpen({
@@ -77,8 +59,8 @@ const open = judgeAutoReadyOpen({
 console.log('\n══ 자동 READY 표본 (read-only · DB write 0) ══\n')
 console.log(`  기계 후보 전체            ${rows.length}건`)
 console.log(`  사람 결정 완료            ${decided.length}건`)
-console.log(`  └ 무경고 적격 (상한)      ${outcomes.filter((o) => o.eligible).length}건`)
-console.log(`  🔴 원천 수집 시각 축은 큐 행에 없어 재지 않았다 — 위 적격 수는 상한이다\n`)
+console.log(`  └ 무경고 적격 (확정)      ${outcomes.filter((o) => o.eligible).length}건`)
+console.log(`  🔴 원천 수집 시각을 모르는 행     ${capturedUnknown}건 (적격에서 제외됨)\n`)
 console.log(`  표본(적격·결정 완료)      ${sample.total} / ${AUTO_READY_CONTRACT.reviewSampleMin}`)
 console.log(`  ├ 무수정 승인             ${sample.ready}`)
 console.log(`  ├ 수정                    ${sample.edited}`)

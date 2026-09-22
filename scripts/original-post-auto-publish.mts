@@ -53,6 +53,15 @@ const scaleTargetOf = (st: (typeof RELEASE_STAGES)[number]): number => PROFILES[
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import {
+  planRun, judgeAutoReadyOpen, sampleOf, recheckBeforePublish, readAutoReadyStamp,
+  outcomeOf, warningsOfGate, auditPicks, AUTO_DECIDER, HUMAN_DECIDER, AUTO_READY_ENV,
+  type StampCandidate, type ReviewOutcome,
+} from '../src/lib/auto-ready'
+import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
+import { MACHINE_DECIDED_BY, MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -104,6 +113,8 @@ const raw = await prisma.originalPostApprovalQueue.findMany({
     // 🔴 **발행 판정이 이 값을 본다** — 기계 후보는 사람이 확인한 것만 나간다
     decidedBy: true,
     decidedAt: true, createdAt: true,
+    // 🔴 자동 READY 가 쓰는 낙관적 잠금의 근거 · 도장 기록 · 결정 흔적
+    updatedAt: true, editDiff: true, declineReason: true,
     // 🔴 신선도 판정 근거 — 원문을 언제 봤는가
     rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
   },
@@ -125,8 +136,125 @@ const rows: AutoRow[] = raw.map((r) => ({
   decidedAt: r.decidedAt, createdAt: r.createdAt,
 }))
 
+
+// ── ①-b 🔴 **자동 READY** — 사람 대신 기계가 도장을 찍는 자리 ──
+//
+// 🔴 이 구간은 **기본이 닫힘**이다. 스위치가 꺼져 있거나 표본·무수정률·중대 결함
+//    조건을 하나라도 못 채우면 `writes` 가 빈 배열이고 DB write 는 0 이다.
+// 🔴 `founder` 를 쓰지 않는다 — 결정 주체는 언제나 `auto-ready:v1` 이다.
+const sha256 = (t: string): string => createHash('sha256').update(t, 'utf8').digest('hex')
+const capturedKnownOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt != null]))
+const rowInputOf = (r: (typeof raw)[number]) => ({
+  gateVerdict: String(r.gateVerdict), warnings: warningsOfGate(r.gateResults),
+  sourceCapturedKnown: capturedKnownOf.get(r.id) === true,
+  title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
+})
+
+// 🔴 표본은 **사람이 결정을 끝낸 무경고 적격 행**만 센다. 발행된 행도 포함한다 —
+//    발행 여부로 깎으면 무수정률이 왜곡된다. 그래서 이 한 번은 따로 읽는다.
+const sampleRaw = await prisma.originalPostApprovalQueue.findMany({
+  // 🔴 **기계 후보만** — `publish-candidate:` 로 잡으면 사람 후보가 섞여 표본이 부풀었다 (실측 22 vs 15)
+  where: { rawContent: { sourceSite: { startsWith: MACHINE_SITE_PREFIX } }, decidedBy: HUMAN_DECIDER },
+  select: {
+    id: true, gateVerdict: true, gateResults: true, draftTitle: true, draftBody: true,
+    editedTitle: true, editedBody: true, decidedBy: true, editDiff: true, declineReason: true,
+    rawContent: { select: { sourceCapturedAt: true } },
+  },
+})
+// 🔴 러너와 보고 명령이 **같은 함수**를 쓴다 — 각자 조립하면 답이 갈린다
+const outcomes: ReviewOutcome[] = sampleRaw.map((r) =>
+  outcomeOf({ ...r, sourceCapturedAt: r.rawContent?.sourceCapturedAt ?? null }))
+const autoSample = sampleOf(outcomes)
+const autoOpen = judgeAutoReadyOpen({
+  enabled: (process.env[AUTO_READY_ENV] ?? '').trim() === '1',
+  reviewSampleMin: AUTO_READY_CONTRACT.reviewSampleMin,
+  noEditAccuracyMin: AUTO_READY_CONTRACT.noEditAccuracyMin,
+  hardDefectMax: AUTO_READY_CONTRACT.hardDefectMax,
+  sample: autoSample,
+})
+console.log(`\n①-b 자동 READY  ${autoOpen.open ? '🔴 열림' : '닫힘'} — ${autoOpen.reason}`)
+console.log(`     표본 ${autoSample.total}/${AUTO_READY_CONTRACT.reviewSampleMin}`
+  + ` · 무수정률 ${autoSample.noEditAccuracy === null ? '—' : `${(autoSample.noEditAccuracy * 100).toFixed(1)}%`}`
+  + ` · 중대 결함 ${autoSample.hardDefects === null ? '🔴 미측정' : autoSample.hardDefects}`)
+
+const stampCandidates: StampCandidate[] = raw.map((r) => ({
+  id: r.id, decidedBy: r.decidedBy, updatedAt: r.updatedAt, status: r.status,
+  createdPostId: r.createdPostId, ...rowInputOf(r),
+}))
+const runPlan = planRun({
+  candidates: stampCandidates, open: autoOpen, now: new Date(),
+  machineDecidedBy: MACHINE_DECIDED_BY, sha256,
+})
+const stampedOk: string[] = []
+if (runPlan.writes.length > 0) {
+  console.log(`     자동 도장 대상 ${runPlan.writes.length}건 · 사람 검토로 보낼 후보 ${runPlan.toHumanReview.length}건`)
+  if (!APPLY) {
+    console.log('     🟡 dry-run 이라 쓰지 않는다')
+  } else {
+    for (const w of runPlan.writes) {
+      // 🔴 `founder` 를 자동 결정 주체로 쓰지 않는다 — 값이 어긋나면 그 자리에서 멈춘다
+      if (String(w.data.decidedBy) === String(HUMAN_DECIDER)) {
+        await prisma.$disconnect(); fail('🔴 자동 경로가 사람 도장을 쓰려 했습니다. 아무것도 쓰지 않았습니다.')
+      }
+      // 🔴 조건부 UPDATE — 읽은 뒤 누가 한 번이라도 쓰면 updatedAt 이 달라져 0건이 된다.
+      //    동시에 두 회차가 돌아도 두 번째는 0건이고, 그 행은 조용히 건너뛴다.
+      const u = await prisma.originalPostApprovalQueue.updateMany({
+        where: {
+          id: w.where.id, decidedBy: w.where.decidedBy, createdPostId: null,
+          status: w.where.status as never, updatedAt: w.where.updatedAt,
+        },
+        data: { decidedBy: w.data.decidedBy, decidedAt: w.data.decidedAt, editDiff: w.data.editDiff as never },
+      })
+      if (u.count === 1) stampedOk.push(w.id)
+      else console.log(`     ⚠️ ${w.id} — 그 사이 행이 바뀌어 건너뛴다 (write 0)`)
+    }
+    console.log(`     ✅ 자동 READY 기록 ${stampedOk.length}건 · decidedBy=${AUTO_DECIDER}`)
+  }
+} else {
+  console.log(`     기록 0건 — ${autoOpen.open ? '적격 후보가 없다' : '게이트가 닫혀 있다'}`)
+}
+
+// ── ①-c 🔴 **사후 감사 20%** — 자동이 정한 글을 사람이 되짚는다 ──
+//
+// 🔴 이 구간은 **정기 회차마다 돈다.** 별도 예약을 만들지 않는다 — 늘려도 같은 큐에서
+//    같이 늦는다. 읽기만 하며, 고른 목록을 사람 검토 묶음 파일로 남긴다.
+// 🔴 감사에서 결함이 하나라도 나오면 비율을 줄이지 않고 **자동을 닫는다**(`judgeAuditOutcome`).
+//    닫는 행위는 스위치를 끄는 것이고, 그것은 사람이 한다 — 러너가 env 를 바꾸지 않는다.
+const autoDecided = await prisma.originalPostApprovalQueue.findMany({
+  where: { decidedBy: AUTO_DECIDER },
+  select: { id: true, createdPostId: true, draftTitle: true, decidedAt: true },
+  orderBy: { decidedAt: 'asc' },
+})
+if (autoDecided.length > 0) {
+  const picks = new Set(auditPicks({
+    autoDecided: autoDecided.map((r) => r.id),
+    ratio: AUTO_READY_CONTRACT.sampledAuditRatio,
+    seed: Number(kstDayStart(new Date()).getTime() / 1000 | 0),
+  }))
+  console.log(`\n①-c 사후 감사  자동 판정 ${autoDecided.length}건 중 ${picks.size}건`)
+  const lines = autoDecided.filter((r) => picks.has(r.id)).map((r) =>
+    `- ${r.id} · ${r.createdPostId === null ? '미발행' : `Post ${r.createdPostId}`} · ${r.draftTitle.slice(0, 40)}`)
+  for (const l of lines) console.log(`   ${l}`)
+  const dir = 'docs/operations/auto-ready-audit'
+  mkdirSync(dir, { recursive: true })
+  const day = kst(kstDayStart(new Date())).slice(0, 10)
+  writeFileSync(`${dir}/${day}.md`, `# 자동 READY 사후 감사 ${day}\n\n`
+    + `자동 판정 ${autoDecided.length}건 · 감사 대상 ${picks.size}건 (${AUTO_READY_CONTRACT.sampledAuditRatio * 100}%)\n\n`
+    + `${lines.join('\n')}\n\n`
+    + '🔴 결함이 하나라도 나오면 비율을 줄이지 않고 자동을 닫는다.\n'
+    + `🔴 스위치는 사람이 끈다 — ${AUTO_READY_ENV}=0\n`, 'utf-8')
+  console.log(`   묶음 ${dir}/${day}.md`)
+} else {
+  console.log('\n①-c 사후 감사  자동 판정 0건 — 감사할 것이 없다')
+}
+
+
 // ── ② 안전 재판정 — 🔴 저장된 값을 믿지 않는다 ──
-const { targets, rejected } = selectAutoTargets(rows, (t, b) => safetyFilter({ title: t, body: b }).verdict)
+// 🔴 자동 도장을 방금 찍었으면 그 행의 `decidedBy` 는 이미 바뀌었다 — 메모리 쪽도 맞춘다
+const stampedIds = new Set(stampedOk)
+const rowsNow: AutoRow[] = rows.map((r) => (stampedIds.has(r.id) ? { ...r, decidedBy: AUTO_DECIDER } : r))
+const { targets, rejected } = selectAutoTargets(rowsNow, (t, b) => safetyFilter({ title: t, body: b }).verdict,
+  { autoReadyOpen: autoOpen.open })
 
 // 🔴 발행 대상은 **배정을 끝낸 뒤** 고른다 (③ 아래). 맨 앞 한 건을 미리 집으면,
 //    그 글이 배정되지 않았을 때 뒤에 배정된 글이 있어도 하루를 통째로 버린다.
@@ -566,6 +694,39 @@ if (target.matchedPersonaId === null) {
   })
   if (u.count !== 1) { await prisma.$disconnect(); fail('배정 중 상태가 바뀌었습니다. 아무것도 발행하지 않았습니다.') }
   console.log(`   ✅ 배정 ${plan.personaCode} (${plan.meta.total}점)`)
+}
+
+// ── ⑥-b 🔴 **발행 직전 재확인** — 자동이 정한 글에만 해당한다 ──
+//
+// 🔴 도장을 찍은 뒤 사람이 본문을 고쳤을 수 있고, 그 사이 게이트가 닫혔을 수 있다.
+//    둘 중 하나라도 해당하면 **이 글은 자동으로 나가지 않는다.** 사람이 다시 본다.
+//    여기서 다시 읽는 이유: 위에서 읽은 값은 이 회차의 맨 처음 값이다.
+if (target.decidedBy === AUTO_DECIDER) {
+  const fresh = await prisma.originalPostApprovalQueue.findUniqueOrThrow({
+    where: { id: target.id },
+    select: {
+      gateVerdict: true, gateResults: true, draftTitle: true, draftBody: true,
+      editedTitle: true, editedBody: true, editDiff: true, decidedBy: true, createdPostId: true,
+      rawContent: { select: { sourceCapturedAt: true } },
+    },
+  })
+  const stamp = readAutoReadyStamp(fresh.editDiff)
+  const current = { title: fresh.editedTitle ?? fresh.draftTitle, body: fresh.editedBody ?? fresh.draftBody }
+  const rc = stamp === null
+    ? { ok: false, reason: '🔴 자동 도장 기록을 찾을 수 없다 — 본문 판을 대조할 수 없다' }
+    : recheckBeforePublish({
+      stampedBodyVersion: stamp.bodyVersion, current, open: autoOpen.open, sha256,
+      row: {
+        gateVerdict: String(fresh.gateVerdict), warnings: warningsOfGate(fresh.gateResults),
+        sourceCapturedKnown: fresh.rawContent?.sourceCapturedAt != null, ...current,
+      },
+    })
+  console.log(`   ⑥-b 발행 직전 재확인  ${rc.ok ? '✅ 통과' : '🔴 중단'} — ${rc.reason}`)
+  if (!rc.ok || fresh.decidedBy !== AUTO_DECIDER || fresh.createdPostId !== null) {
+    console.log('   🔴 자동으로 내보내지 않는다. 사람 검토 묶음으로 남는다 (Post 0 · DB write 0)\n')
+    await prisma.$disconnect()
+    process.exit(0)
+  }
 }
 
 // ── ⑦ 발행 — 🔴 되돌릴 수 없다 ──
