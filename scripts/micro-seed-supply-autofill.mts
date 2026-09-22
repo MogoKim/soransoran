@@ -36,7 +36,7 @@ import {
   type Candidate, type HeldEntry,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY, MACHINE_SITE_PREFIX,
   buildQueuePayload, queueProfileOf, machineProfileMismatch, isOurSite,
-  type Envelope, type AutoJudgeProvenance,
+  type Envelope, type AutoJudgeProvenance, sourceCapturedAtOf,
 } from '../src/lib/micro-seed-supply-autofill'
 // 🔴 적재 직전 재검증 — 새 판정을 만들지 않고 §4-AS 의 함수를 그대로 쓴다
 import { echoesTitleAtEnd, hasBannedWord } from '../src/lib/micro-seed-auto-draft'
@@ -353,7 +353,15 @@ async function main(): Promise<void> {
   for (const c of gate.take) {
     const title = S(c.title)
     const body = S(c.body)
-    const at = S(c.reviewedAt) !== '' ? new Date(S(c.reviewedAt)) : new Date()
+    /**
+     * 🔴 **원천 수집 시각을 그대로 보존한다** (2026-09-22).
+     *    앞판은 `reviewedAt`(검토 시각) 또는 `new Date()` 를 넣었다 —
+     *    발행기가 TTL 을 재는 칸이라, 9/17 원천이 "오늘 수집" 으로 보였다.
+     * 🔴 컬럼이 non-null 이라 모를 때도 값은 넣되(적재 시각),
+     *    **모른다는 사실을 `gateResults` 에 남겨** 읽는 쪽이 나이를 `null` 로 돌린다.
+     */
+    const realCaptured = sourceCapturedAtOf(c)
+    const at = realCaptured ?? (S(c.reviewedAt) !== '' ? new Date(S(c.reviewedAt)) : new Date())
     // 🔴 적재 직전 마지막 관문 — 하나라도 어긋나면 이 건만 건너뛴다
     const bad = recheck(title, body, c.originality)
     if (bad.length > 0) {
