@@ -51,6 +51,7 @@ import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-que
 /** 🔴 계획 정본 — 문자열이 아니라 **실제 인자**를 본다 */
 import { judgeBuffer, planCommonPhase, planPending } from '../src/lib/supply-process'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
 
 /** 🔴 주석을 지운다 — 검사가 주석의 낱말이 아니라 **코드**를 보게 한다 */
 const stripComments = (src: string): string =>
@@ -731,6 +732,12 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
   const root = mkdtempSync(join(tmpdir(), 'ledger-fp-'))
   const dd = join(root, DATA_DIR_NAME)
   mkdirSync(dd, { recursive: true })
+  /**
+   * 🔴 유료 생성은 화자 여력 없이 돌지 않는다 — 공급 러너가 적는 그 파일을 잇는다.
+   *    🔴 이 블록이 재는 것은 **장부 상한**이지 화자 분산이 아니다.
+   *    한 명에게 여력을 몰아 주어 좁히기 전과 같은 요청 수가 나가게 한다.
+   */
+  writeFakeSpeakerLoad(dd, 'fresh', null, 'R1')
   symlinkSync(join(process.cwd(), 'docs'), join(root, 'docs'))
   const fakeHome = join(root, 'home')
   mkdirSync(fakeHome, { recursive: true })
@@ -1339,6 +1346,12 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
   const root = mkdtempSync(join(tmpdir(), 'ledger-cap-'))
   const dd = join(root, DATA_DIR_NAME)
   mkdirSync(dd, { recursive: true })
+  /**
+   * 🔴 유료 생성은 화자 여력 없이 돌지 않는다.
+   *    🔴 이 블록이 재는 것은 **회차 요청 상한**이지 화자 분산이 아니다 —
+   *    한 명에게 여력을 몰아 주어 좁히기 전과 같은 요청 수가 나가게 한다.
+   */
+  writeFakeSpeakerLoad(dd, 'fresh', 'P01')
   symlinkSync(join(process.cwd(), 'docs'), join(root, 'docs'))
   const fakeHome = join(root, 'home')
   mkdirSync(fakeHome, { recursive: true })
@@ -1377,6 +1390,8 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
     for (const f of ['auto-judge-cache.json', 'auto-draft-cache.json']) {
       writeFileSync(join(dd, f), '{}', 'utf-8')
     }
+    // 🔴 생성은 **그 회차의** 여력 기록만 쓴다 — 회차마다 새로 적는다
+    if (script.includes('auto-draft')) writeFakeSpeakerLoad(dd, 'fresh', 'P01', runId)
     spawnSync(
       join(process.cwd(), 'node_modules/.bin/tsx'),
       [join(process.cwd(), script), ...args, `--run-id=${runId}`],

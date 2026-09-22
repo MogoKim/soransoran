@@ -79,6 +79,10 @@ import { readSourceProfile, profileDirectives, titleDirectives, type SourceProfi
 import { loadCanonAsset, planBundles } from './lib/persona-reference-store.mjs'
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { digest16, loadVoice, PERSONA_POOL_DOC, type VoiceRuntime } from './lib/voice-runtime.mjs'
+import { planSpeakerAvailability } from '../src/lib/content-core/speaker-availability'
+import {
+  readSpeakerLoad, SPEAKER_LOAD_FILE,
+} from '../src/lib/content-core/speaker-load-file'
 import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
 /**
  * 🔴 **Persona 정체성의 정본은 Pool 카드 문서다.** 여기서 만들지도 복제하지도 않는다.
@@ -806,6 +810,90 @@ async function main(): Promise<void> {
    *    🔴 이제 한 경로다: 계획(Gemini) → 초안 한 편(Gemini) → 통합 검수(Haiku).
    *       화자 자격은 코드가 근거를 대조해 허가하고, 못 대면 만들지 않는다.
    */
+  /**
+   * 🔴 **화자 여력 계획 — 생성 앞이다** (2026-09-22).
+   *
+   *    앞판은 원천마다 독립적으로 화자를 골라서 한 회차가 **같은 화자에게 여러 편**을
+   *    몰아줄 수 있었다. 실측(2026-09-21): 새 후보 2건이 둘 다 P01 이었고,
+   *    발행 쪽 최소 간격 때문에 9/23 예측이 `CAPACITY_WAIT` 로 2/3 에 멈췄다 —
+   *    그날 쓸 수 있는 화자가 20명이었는데도. **글이 아니라 화자가 겹친 것이다.**
+   *
+   * 🔴 여기서 하는 것은 **좁히기뿐**이다 — 자격 없는 사람을 끼워 넣지 않는다.
+   *    생활사 자격 판정은 그대로 뒤에서 돈다. 묶음이 비면 그 원천은 보류다.
+   */
+  /**
+   * 🔴 **날짜별 여력과 기존 재고는 DB 에만 있다.** 이 러너는 설계상 DB 를 쓰지 않으므로
+   *    공급 러너가 적어 둔 파일에서 읽는다. 없으면 회차 안 중복만 막는다(fail-safe) —
+   *    🔴 그 사실을 아래 한 줄로 적는다. 조용히 "여력을 봤다" 고 하지 않는다.
+   */
+  const speakerLoad = ((): ReturnType<typeof readSpeakerLoad> => {
+    try {
+      return readSpeakerLoad(
+        JSON.parse(readFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), 'utf-8')),
+        new Date(),
+        /**
+         * 🔴 **유료 회차는 이 회차의 기록만 쓴다** (2026-09-22).
+         *    공급 러너가 적다가 실패해도 6시간 안에 쓴 이전 파일이 남아 있으면
+         *    시간만으로는 통과한다 — 그 회차의 재고·배정은 빠진 채로.
+         *    🔴 무료 회차는 묻지 않는다(`null`) — 돈이 나가지 않는다.
+         */
+        CALL ? RUN_ID : null,
+      )
+    } catch { return readSpeakerLoad(null) }
+  })()
+  console.log(`\n   ${speakerLoad.describe}`)
+
+  /**
+   * 🔴 **유료 회차는 여력 없이 돌지 않는다** (2026-09-22 보정).
+   *
+   *    앞판은 파일이 없으면 조용히 **전체 후보**로 돌아갔다. 그 상태로 돈을 쓰면
+   *    고치려던 문제(같은 화자에 몰아주기)가 그대로 재현되고, 로그 한 줄 말고는
+   *    그 사실이 남지 않는다. 🔴 **부르기 전에 멈춘다.**
+   *
+   *    무료 회차(계획만 보는 dry-run)는 그대로 돈다 — 돈이 나가지 않으므로
+   *    "무엇이 될지 본다" 를 막을 이유가 없다. 다만 좁히지 않았음을 적는다.
+   */
+  if (CALL && !speakerLoad.loaded) {
+    console.error(`\n🔴 중단: ${speakerLoad.describe}`)
+    console.error(`   사유 코드 ${speakerLoad.problem ?? 'unknown'}`)
+    console.error('   🔴 유료 생성은 화자 여력 없이 돌지 않는다 —'
+      + ' 전체 후보로 되돌아가면 같은 화자에 몰아주기가 그대로 재현된다')
+    console.error('   🔴 provider 호출 0 · 파일 write 0 — 부르기도 쓰기도 전에 멈췄다')
+    console.error(`   공급 러너가 ${DATA_DIR}/${SPEAKER_LOAD_FILE} 를 먼저 적어야 한다\n`)
+    process.exit(1)
+  }
+  /**
+   * 🔴 **여력을 모르면 좁히지 않는다** (무료 회차만 여기 온다).
+   *    "한 화자 = 한 편" 으로 두면 화자가 원천보다 적은 환경에서 나머지가 통째로
+   *    보류돼, 계획만 보는 회차가 거짓을 보여 준다.
+   *    🔴 전원을 후보로 주고 **그 사실을 적는다.** 조용히 넘어가지 않는다.
+   */
+  const speakerPlanOfRun = speakerLoad.loaded
+    ? planSpeakerAvailability({
+      sourceKeys: seeds.map((j) => j.sourceArticleId),
+      capacities: voice.candidates.map((c) => ({
+        code: c.code,
+        openDays: speakerLoad.openDaysOf(c.code),
+        readyCount: speakerLoad.readyCountOf(c.code),
+      })),
+    })
+    : {
+      slots: seeds.map((j) => ({
+        sourceKey: j.sourceArticleId, codes: voice.candidates.map((c) => c.code),
+      })),
+      eligible: voice.candidates.map((c) => c.code),
+      identity: 'no-load-file',
+      notes: ['🔴 여력 파일이 없어 **좁히지 않았다** — 같은 화자가 겹칠 수 있다'],
+    }
+  const slotOf = new Map(speakerPlanOfRun.slots.map((sl) => [sl.sourceKey, sl.codes]))
+  console.log(`
+   🔴 화자 여력 계획 — 여력 있는 화자 ${speakerPlanOfRun.eligible.length}명`)
+  console.log(`      ${speakerPlanOfRun.eligible.join(' ') || '(없음)'}`)
+  for (const n of speakerPlanOfRun.notes) console.log(`      · ${n}`)
+  for (const sl of speakerPlanOfRun.slots) {
+    console.log(`      ${sl.sourceKey} → ${sl.codes.join(' ') || '🔴 보류(배정할 화자 없음)'}`)
+  }
+
   for (const j of seeds) {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
     BUDGET.enter(j.sourceArticleId)
@@ -842,7 +930,18 @@ async function main(): Promise<void> {
      *    모양이 바뀌면 옛 객체를 되살릴 수 없다.
      *    🔴 캐시 **파일**은 지우지 않는다. key 가 계약을 담으면 저절로 miss 된다.
      */
-    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}`
+    /**
+     * 🔴 **이 원천에 준 화자 묶음** — 비면 만들지 않는다.
+     *    계약 identity 에는 넣지 않는다: 그 값은 "지난 HOLD 가 지금 계약의 결론인가" 도
+     *    판단하는데, 회차마다 바뀌는 묶음을 거기 넣으면 **모든 옛 HOLD 가 늘 낡은 것이
+     *    되어** 같은 원천을 계속 다시 부른다(유료 호출이 는다).
+     *    🔴 대신 **캐시 key 와 artifact** 에 싣는다 — 실제로 보낸 후보와
+     *       캐시·기록이 같은 것을 가리킨다. 그것이 앞판이 깨뜨린 지점이다.
+     */
+    const slotCodes = slotOf.get(j.sourceArticleId) ?? []
+    if (slotCodes.length === 0) { voiceHeld += 1; holdPick(); continue }
+    const slotDigest = digest16(slotCodes.join(','))
+    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}`
 
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
@@ -864,7 +963,10 @@ async function main(): Promise<void> {
          *    제목에 있으면 그대로 provider 로 나갔다. 정본 함수를 그대로 쓴다.
          */
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
-        personas: voice.candidates,
+        // 🔴 **좁힌 묶음만 보낸다** — 회차 안에서 서로 겹치지 않는다
+        personas: voice.candidates.filter((c) => slotCodes.includes(c.code)),
+        // 🔴 좁히기 전의 수 — "이번 묶음에만 없다" 와 "전체에도 없다" 를 가른다
+        personaPoolSize: voice.candidates.length,
         /**
          * 🔴 **이 회차의 생성 계약.** 다음 회차가 "지난 HOLD 가 지금도 결론인가" 를
          *    이 값으로 판단한다 — 스키마 판 하나로는 알 수 없다.

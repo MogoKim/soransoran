@@ -26,6 +26,7 @@ import { DATA_DIR_NAME } from '../src/lib/micro-seed-82cook-thin-adapt'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { writeFakePersonaAsset } from './lib/fake-persona-asset.mjs'
+import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
 
 let pass = 0
 let fail = 0
@@ -111,6 +112,7 @@ console.log('\n③ 수집 → thin → adapt — 🔴 실제 adapt 러너를 돌
 const root = mkdtempSync(join(tmpdir(), 'st-'))
 const dd = join(root, DATA_DIR_NAME)
 mkdirSync(dd, { recursive: true })
+// 🔴 유료 생성은 화자 여력 없이 돌지 않는다 — 공급 러너가 적는 그 파일을 잇는다
 {
   const row = thinRowFromCollected({
     collected: {
@@ -160,6 +162,8 @@ console.log('\n④ → 생성 → 후보 파일 — 🔴 가짜 provider · 임�
   const runId = 'ST1'
   const snapPath = join(dd, queueSnapshotFileName(runId))
   writeFileSync(snapPath, JSON.stringify(buildQueueSnapshot({ runId, takenAt: new Date(), rows: [] })), 'utf-8')
+  // 🔴 생성은 **그 회차의** 여력 기록만 쓴다
+  writeFakeSpeakerLoad(dd, 'fresh', null, runId)
   writeFileSync(join(dd, 'auto-draft-cache.json'), '{}', 'utf-8')
 
   const r = spawnSync(

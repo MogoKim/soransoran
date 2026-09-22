@@ -149,6 +149,16 @@ export const INCOMPLETE_CAUSES = [
    *    제대로 온다. 이것을 결론으로 적으면 정상 원천이 영구 제외된다(2026-09-21 실측).
    */
   'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+  /**
+   * 🔴 **좁힌 후보 묶음 탓에 못 쓴 것** (2026-09-22).
+   *
+   *    화자 여력 계획이 원천마다 후보를 나누면서, "이 원문에 맞는 사람이
+   *    **이번 묶음에** 없었다" 는 실패가 생겼다. 그것은 **결론이 아니다** —
+   *    다음 회차에 다른 묶음을 받으면 쓸 수 있다.
+   *    🔴 `speakerUnqualified`(전체 후보에서도 자격이 없다)와 **다른 값**이다.
+   *       섞으면 정상 원천이 영구 제외된다 — `parseFailed` 가 그랬던 것과 같다.
+   */
+  'speakerSlotNarrowed',
   // 결론이다 — 같은 입력·같은 계약이면 또 같다
   'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
   'wiringBroken', 'deterministicFailed',
@@ -157,6 +167,8 @@ export type IncompleteCause = (typeof INCOMPLETE_CAUSES)[number]
 
 export const RETRYABLE_CAUSES = [
   'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
+  // 🔴 다음 회차에 다른 묶음을 받으면 달라진다
+  'speakerSlotNarrowed',
 ] as const satisfies readonly IncompleteCause[]
 
 /**
@@ -177,6 +189,8 @@ export const NOT_RUN_CAUSES = [
   // 묻기 전에 구조로 멈춘 것
   'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
   'wiringBroken', 'deterministicFailed',
+  // 🔴 좁힌 묶음 탓 — 결론이 아니다
+  'speakerSlotNarrowed',
 ] as const satisfies readonly IncompleteCause[]
 
 export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> = {
@@ -188,6 +202,7 @@ export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> =
   contextInsufficient: '무슨 이야기인지 확인하지 못했다',
   evidenceBudgetViolated: '원문 근거 예산을 넘겼다 — 근거를 만드는 쪽이 어긋났다',
   speakerUnqualified: '이 원문을 1인칭으로 쓸 사람이 없다',
+  speakerSlotNarrowed: '이번 묶음에 맞는 사람이 없었다 — 다음 회차에 다시 본다',
   voiceUnready: '말투 근거가 서지 않았다',
   wiringBroken: '요청 배선이 어긋났다',
   deterministicFailed: '확정 가능한 결함이 있다',

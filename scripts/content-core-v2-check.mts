@@ -143,13 +143,21 @@ const run = (o: {
   personas?: readonly PersonaInput[]
   fault?: Fault
   cap?: number
+  /** 🔴 좁히기 전의 전체 후보 수 — 주지 않으면 `personas` 가 곧 전체다 */
+  poolSize?: number
 }): Promise<HumanReviewArtifact> => {
   SENT = []
   return runContentCore({
     // 🔴 fixture 도 회차마다 새 불투명 id 를 준다 — 원문에서 유도하지 않는다
     artifactId: randomUUID().replace(/-/g, ''),
     sourceArticleId: o.id, title: o.title, maskedBody: o.body,
-    personas: o.personas ?? ALL, voiceSourceDigest: 'asset000000000',
+    personas: o.personas ?? ALL,
+    /**
+     * 🔴 **넘긴 목록이 곧 전체다** — 따로 주지 않는 한.
+     *    `poolSize` 를 크게 주면 "좁혀져 있었다" 가 되어 `speakerSlotNarrowed` 로 적힌다.
+     */
+    personaPoolSize: o.poolSize ?? (o.personas ?? ALL).length,
+    voiceSourceDigest: 'asset000000000',
     ask: fakeAsk(o.canned, o.fault), now: NOW, callCap: o.cap ?? 6,
     // 🔴 fixture 도 계약을 싣는다 — 정본 모양 그대로다
     contract: {
@@ -1071,7 +1079,13 @@ console.log('\n⑮ 🔴 🔴 중단 사유가 사실을 말한다 — notRun vs 
   check('🔴 🔴 **중단 원인을 문구가 아니라 값으로 적는다**', (() => {
     const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     return !/const INCOMPLETE: ReviewCompletion/.test(src) && !/\bNOT_RUN\b/.test(src)
-      && /notRun\('speakerUnqualified'\)/.test(src)
+      /**
+       * 🔴 화자 없음은 **두 값**이 됐다 (2026-09-22) — 전체에서도 없는 것(결론)과
+       *    이번 묶음에만 없는 것(다시 본다). 둘 다 **값**으로 적혀야 한다.
+       */
+      && /notRun\(noSpeakerCause\)/.test(src)
+      && /'speakerUnqualified' as const/.test(src)
+      && /'speakerSlotNarrowed' as const/.test(src)
       && /notRun\('voiceUnready'\)/.test(src)
       && /notRun\('evidenceBudgetViolated'\)/.test(src)
       && /notRun\('parseFailed'\)/.test(src)

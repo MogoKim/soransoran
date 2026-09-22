@@ -41,6 +41,7 @@ import { ORIGINAL_POST_STATUSES } from '../src/lib/original-post-decision'
 import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { AUTO_GATE_VERDICT } from '../src/lib/original-post-auto-publish'
 import { gateEditedDraft } from './lib/original-post-edit-gate.mjs'
+import { writeFakeSpeakerLoad } from './lib/fake-speaker-load.mjs'
 import { buildQueueSnapshot, queueSnapshotFileName } from '../src/lib/supply-queue-snapshot'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { judgeReviewSnapshot } from '../src/lib/original-post-auto-publish'
@@ -61,6 +62,7 @@ console.log('\n══ 운영 체인 end-to-end (🔴 실제 러너 · 가짜 pro
 const root = mkdtempSync(join(tmpdir(), 'chain-e2e-'))
 const dd = join(root, '.microseed-data')
 mkdirSync(dd, { recursive: true })
+// 🔴 유료 생성은 화자 여력 없이 돌지 않는다 — 공급 러너가 적는 그 파일을 잇는다
 const fakeHome = join(root, 'home')
 mkdirSync(join(fakeHome, 'Library', 'Application Support', 'soransoran'), { recursive: true })
 // 🔴 합성 말투 자산 — 회원 댓글이 아니다. 없으면 러너가 생성 전에 멈춘다
@@ -91,7 +93,9 @@ writeFileSync(join(dd, queueSnapshotFileName(runId)),
 const bodyLog = join(root, 'body.log')
 writeFileSync(bodyLog, '', 'utf-8')
 /** 🔴 실제 러너 한 회차 — 시험 env 는 자식 프로세스에만 */
-const runRunner = (extraEnv: Record<string, string> = {}, rid = runId): ReturnType<typeof spawnSync> =>
+const runRunner = (extraEnv: Record<string, string> = {}, rid = runId): ReturnType<typeof spawnSync> => (
+  // 🔴 생성은 **그 회차의** 여력 기록만 쓴다
+  writeFakeSpeakerLoad(dd, 'fresh', null, rid),
   spawnSync(
     join(process.cwd(), 'node_modules/.bin/tsx'),
     [
@@ -112,7 +116,8 @@ const runRunner = (extraEnv: Record<string, string> = {}, rid = runId): ReturnTy
         ...extraEnv,
       },
     },
-  )
+  ))
+writeFakeSpeakerLoad(dd, 'fresh', null, runId)
 const r = spawnSync(
   join(process.cwd(), 'node_modules/.bin/tsx'),
   [
@@ -406,6 +411,7 @@ console.log('\n⑦ 🔴 🔴 정산 줄을 못 적으면 후보가 0건이다')
   const root2 = mkdtempSync(join(tmpdir(), 'chain-e2e-sf-'))
   const dd2 = join(root2, '.microseed-data')
   mkdirSync(dd2, { recursive: true })
+  // 🔴 유료 생성은 화자 여력 없이 돌지 않는다 — 이 블록은 정산 실패를 재므로 한 명에게 몰아 준다
   const home2 = join(root2, 'home')
   mkdirSync(join(home2, 'Library', 'Application Support', 'soransoran'), { recursive: true })
   writeFakePersonaAsset({ home: home2 })
@@ -416,6 +422,7 @@ console.log('\n⑦ 🔴 🔴 정산 줄을 못 적으면 후보가 0건이다')
   const rid2 = 'E2ESF'
   writeFileSync(join(dd2, queueSnapshotFileName(rid2)),
     JSON.stringify(buildQueueSnapshot({ runId: rid2, takenAt: new Date(), rows: [] })), 'utf-8')
+  writeFakeSpeakerLoad(dd2, 'fresh', 'P01', rid2)
   const r2 = spawnSync(
     join(process.cwd(), 'node_modules/.bin/tsx'),
     [

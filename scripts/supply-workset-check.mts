@@ -530,9 +530,18 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
     machineOutcome: 'hold',
     semanticCompletion: { complete: false, reason: 'notRun', cause: 'speakerUnqualified' }, ...o,
   })
-  check('🔴 🔴 **재시도 원인 다섯 가지**',
+  /**
+   * 🔴 여섯 번째가 늘었다 (2026-09-22) — `speakerSlotNarrowed`.
+   *    화자 여력 계획이 원천마다 후보를 나누면서 "이번 묶음에 맞는 사람이 없었다" 가
+   *    생겼다. 그것은 결론이 아니다 — 다음 회차에 다른 묶음을 받으면 쓸 수 있다.
+   */
+  check('🔴 🔴 **재시도 원인 여섯 가지**',
     RETRYABLE_CAUSES.join(',')
-      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed')
+      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,speakerSlotNarrowed',
+    RETRYABLE_CAUSES.join(','))
+  check('🔴 🔴 **좁힌 묶음 탓은 다시 보고, 전체 자격 미달은 결론이다**',
+    (RETRYABLE_CAUSES as readonly string[]).includes('speakerSlotNarrowed')
+    && !(RETRYABLE_CAUSES as readonly string[]).includes('speakerUnqualified'))
   check('🔴 🔴 **모델이 형식을 어긴 것은 결론이 아니다**',
     (RETRYABLE_CAUSES as readonly string[]).includes('parseFailed'))
   check('🔴 🔴 **장부 탓·초안 읽기 실패라는 원인은 사라졌다**',
@@ -597,11 +606,18 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
   check('🔴 🔴 **러너가 내는 notRun 원인이 목록과 정확히 같다**', (() => {
     const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     const direct = [...src.matchAll(/notRun\('([a-zA-Z]+)'\)/g)].map((m) => m[1]!)
+    /**
+     * 🔴 화자 없음은 **값 하나를 골라** 넘긴다 (2026-09-22) —
+     *    좁혀졌으면 `speakerSlotNarrowed`, 아니면 `speakerUnqualified`.
+     *    `notRun(<변수>)` 라 위 정규식에 잡히지 않으므로 여기서 함께 센다.
+     */
+    const picked = [...src.matchAll(/'(speakerSlotNarrowed|speakerUnqualified)' as const/g)]
+      .map((m) => m[1]!)
     // 🔴 `notRunFrom` 은 앞 단계 완주 판정(`completionOf`)의 원인을 그대로 물려받는다
     const inherited = /notRunFrom\(/.test(src)
       ? [...src.matchAll(/reason: '([a-zA-Z]+)', cause: '([a-zA-Z]+)'/g)].map((m) => m[2]!)
       : []
-    const emitted = new Set([...direct, ...inherited])
+    const emitted = new Set([...direct, ...inherited, ...picked])
     const listed = new Set<string>(NOT_RUN_CAUSES)
     return emitted.size > 0 && [...emitted].every((c) => listed.has(c))
       && [...listed].every((c) => emitted.has(c))

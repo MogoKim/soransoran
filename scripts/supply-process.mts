@@ -62,6 +62,24 @@ import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 /** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import {
+  SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
+} from '../src/lib/content-core/speaker-load-file'
+import { planOpenDays } from '../src/lib/content-core/speaker-availability'
+import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
+import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
+import { canaryAuthorization, kstDateString } from '../src/lib/release-canary'
+import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
+import {
+  horizonStart, PROFILES, RELEASE_STAGES, type ScaleProfile,
+} from '../src/lib/scale-profile'
+import { activeScale } from '../src/lib/scale-runtime'
+
+/**
+ * 🔴 **화자 여력을 며칠 앞까지 보는가.** 발행 쪽 최소 간격(d3 은 2일)보다 넉넉해야
+ *    "이 화자는 이 지평에서 몇 편까지 받을 수 있나" 가 성립한다.
+ */
+const SPEAKER_LOAD_HORIZON_DAYS = 7
 import type { ContractBase } from '../src/lib/content-core/pipeline'
 /** 🔴 판정 모델 이름 — 판정 러너가 쓰는 그 값이다 */
 import { JUDGE_MODEL as JUDGE_MODEL_NAME } from './micro-seed-auto-judge.mjs'
@@ -188,6 +206,161 @@ const STAGE_SCRIPT: Record<ProcessStage, string> = {
   judge: 'scripts/micro-seed-auto-judge.mts',
   draft: 'scripts/micro-seed-auto-draft.mts',
   fill: 'scripts/micro-seed-supply-autofill.mts',
+}
+
+/**
+ * 🔴 **화자 여력을 DB 에서 읽어 파일로 적는다** — 생성 러너가 읽는 유일한 통로다.
+ *
+ *    `openDays`  지평 안에서 그 화자가 **배정 가능한 날 수**.
+ *                발행 정본(`availablePersonasAt`)이 판정한다 — 여기서 규칙을 다시 적지 않는다.
+ *    `readyCount` 이미 발행 대기 재고에 있는 그 화자의 글 수.
+ *                🔴 이미 들고 있으면 더 만들어도 같은 날 못 나간다.
+ */
+/**
+ * 🔴 **값을 만드는 곳과 적는 곳을 나눈다** (2026-09-22).
+ *
+ *    적는 함수 안에만 있으면 **read-only 로 확인할 방법이 없다** — 파일을 쓰지 않고는
+ *    "지금 이 DB 로 무엇이 계획되는가" 를 볼 수 없었다. 값을 돌려주는 함수를 따로 둔다.
+ */
+export async function buildSpeakerLoad(
+  prisma: PrismaClient, runId: string,
+): Promise<SpeakerLoadFile & { stageByDate: readonly { date: string; stage: string }[] }> {
+  const personas = await prisma.persona.findMany({
+    where: { status: 'active' }, select: { code: true },
+  })
+  const logs = await prisma.originalPostApprovalQueue.findMany({
+    where: { matchedAt: { not: null } },
+    select: { matchedAt: true, matchedPersona: { select: { code: true } } },
+  })
+  /**
+   * 🔴 **재고에 든 그 화자의 글** — 배정된 것과 **아직 배정되지 않은 것**을 함께 센다.
+   *
+   *    앞판은 `matchedPersona` 만 봤다. 그런데 갓 만들어진 READY 는 **배정 전**이고,
+   *    그 글의 화자는 `gateResults.autoDraft.voice.personaCode` 에 있다 —
+   *    실측(2026-09-21): P01 글 2건이 둘 다 `matchedPersonaId=null` 이라
+   *    재고에서 **한 건도 세어지지 않았다.** 그래서 P01 은 여력이 가득한 것처럼 보였다.
+   */
+  /**
+   * 🔴 **발행 러너가 인정하는 행만 센다** (2026-09-22 2차 보정).
+   *
+   *    앞판은 미발행 `APPROVED·EDITED` 를 **전부** 셌다. 그런데 큐에는 계약이
+   *    어긋나 **영영 발행되지 않는 legacy 217건**이 들어 있다 — 실측에서
+   *    P01 13건 · P08 14건으로 잡혀 `여력 = 열린날 − 재고` 가 전부 0 이 됐고,
+   *    🔴 **여력 있는 화자 0명 → 원천 5건 전부 보류**로 공급이 통째로 멎었다.
+   *
+   *    재고는 "그 화자가 **낼 수 있는** 글을 몇 편 들고 있나" 다.
+   *    🔴 판정은 발행 정본(`selectAutoTargets`) 하나가 한다 — 여기서 다시 적지 않는다.
+   */
+  const pendingRaw = await prisma.originalPostApprovalQueue.findMany({
+    where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
+    select: {
+      id: true, status: true, createdPostId: true, gateVerdict: true,
+      promptVersion: true, model: true, matchedPersonaId: true,
+      draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true,
+      matchedPersona: { select: { code: true } },
+      rawContent: { select: { sourceSite: true } },
+    },
+  })
+  const codeOfId = new Map(personas.map((p) => [p.code, p.code]))
+  void codeOfId
+  const pendingRows: AutoRow[] = pendingRaw.map((r) => ({
+    id: r.id, status: r.status, createdPostId: r.createdPostId, gateVerdict: r.gateVerdict,
+    promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
+    gateResults: r.gateResults,
+    title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
+    sourceSite: r.rawContent.sourceSite,
+    draftTitle: r.draftTitle, editedTitle: r.editedTitle,
+    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt,
+  } as AutoRow))
+  const sel = selectAutoTargets(pendingRows, (t, b) => safetyFilter({ title: t, body: b }).verdict)
+  /**
+   * 🔴 **사람 검토를 기다리는 같은 화자 글도 센다** (2026-09-22).
+   *
+   *    `HUMAN_REVIEW_REQUIRED` 로 빠진 행은 **곧 재고가 될 글**이다 —
+   *    창업자가 READY 로 정하는 순간 그 화자의 자리를 차지한다.
+   *    그것을 안 세면 같은 화자로 또 만들게 되고, 실측(2026-09-21)의
+   *    **P01 두 건**이 정확히 그렇게 생겼다.
+   *
+   * 🔴 `PROFILE` 로 빠진 legacy 는 세지 않는다 — 영영 발행되지 않는다.
+   */
+  const awaitingIds = new Set(
+    sel.rejected.filter((r) => r.code === 'HUMAN_REVIEW_REQUIRED').map((r) => r.id),
+  )
+  const usableIds = new Set([...sel.targets.map((t) => t.id), ...awaitingIds])
+  const pending = pendingRaw.filter((r) => usableIds.has(r.id))
+  const pendingSpeakerOf = (r: { matchedPersona: { code: string } | null; gateResults: unknown }): string | null =>
+    r.matchedPersona?.code ?? draftSpeakerOf(r.gateResults)
+  const history = personas.map((p) => ({
+    code: p.code,
+    matchedAts: logs.filter((l) => l.matchedPersona?.code === p.code && l.matchedAt !== null)
+      .map((l) => l.matchedAt as Date),
+  }))
+  /**
+   * 🔴 **날짜마다 그날의 상한을 쓴다** (2026-09-22).
+   *
+   *    하루짜리 첫 시험(canary)은 **그 KST 날짜 하루만** 산다. 그날은 d3(주 3건 ·
+   *    최소 2일)이고 다음 날은 다시 d1(주 1건 · 최소 5일)이다 —
+   *    한 프로필로 지평 전체를 재면 그 다음 날들의 여력이 **과하게 잡힌다.**
+   */
+  const now = new Date()
+  const scale = activeScale()
+  const sustained = scale.releaseProfile
+  const canaryAuth = canaryAuthorization(process.env, now, RELEASE_STAGES)
+  const profileForDay = (at: Date): ScaleProfile =>
+    (canaryAuth.stage !== null && canaryAuth.date === kstDateString(at))
+      ? PROFILES[canaryAuth.stage]
+      : sustained
+  const horizonDays = SPEAKER_LOAD_HORIZON_DAYS
+  const start = horizonStart(now)
+  /**
+   * 🔴 **정본 하나가 하루하루를 채워 본다.** 앞판은 날마다
+   *    `availablePersonasAt(...).slice(0, dailyTarget)` 을 썼는데, 그 목록은
+   *    **코드순**이라 d1 7일이면 P01 이 7일을 다 가져갔다(실측).
+   *    이제 고른 날을 이력에 쌓아 다음 날 판정이 그 사람을 빼게 한다.
+   */
+  const plan = planOpenDays({
+    days: Array.from({ length: horizonDays }, (_, i) => new Date(start.getTime() + i * 86_400_000)),
+    profileOf: (at) => {
+      const p = profileForDay(at)
+      return { dailyTarget: p.dailyTarget, postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween }
+    },
+    history,
+    availableAt: (h, at, caps) => availablePersonasAt(
+      h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
+    dateLabel: (at) => kstDateString(at),
+  })
+  const openDays = plan.openDays
+  const byCode: Record<string, { openDays: number; readyCount: number }> = {}
+  for (const p of personas) {
+    byCode[p.code] = {
+      openDays: openDays.get(p.code) ?? 0,
+      readyCount: pending.filter((r) => pendingSpeakerOf(r) === p.code).length,
+    }
+  }
+  /**
+   * 🔴 **어느 날을 어느 단계로 봤는지 남긴다** (2026-09-22).
+   *
+   *    로컬 공급 회차는 GitHub 전용 canary 변수를 볼 수 없다 — 그래서 시험 날짜도
+   *    지속 단계(d1)로 계획한다. 그것이 틀린 것은 아니지만(적게 잡는 쪽이다),
+   *    **무엇을 보고 세었는지 모르면 나중에 값을 믿을 수 없다.**
+   *    🔴 사람이 읽고 "이 계획은 d1 기준이다" 를 알 수 있게 적는다.
+   */
+  const stageByDate = Array.from({ length: horizonDays }, (_, i) => {
+    const at = new Date(start.getTime() + i * 86_400_000)
+    return { date: kstDateString(at), stage: profileForDay(at) === sustained ? scale.releaseStage : (canaryAuth.stage ?? '?') }
+  })
+  return {
+    writtenAt: new Date().toISOString(), runId, horizonDays, byCode,
+    byDate: plan.byDate, stageByDate,
+  }
+}
+
+/** 🔴 값을 만들어 파일로 적는다 — 만드는 것은 위 함수 하나다 */
+async function writeSpeakerLoad(prisma: PrismaClient, runId: string): Promise<void> {
+  const payload = await buildSpeakerLoad(prisma, runId)
+  mkdirSync(DATA_DIR, { recursive: true })
+  writeFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), JSON.stringify(payload, null, 2))
 }
 
 const runIdOf = (d: Date): string =>
@@ -452,6 +625,33 @@ async function main(): Promise<number> {
     llmCall: null as number | null, cacheHit: null as number | null,
   }
   const exec = async (plan: StagePlan): Promise<{ ok: boolean; exitCode: number | null; spawnError: string }> => {
+    /**
+     * 🔴 **생성 앞에 화자 여력을 적어 둔다** (2026-09-22).
+     *
+     *    생성 러너는 설계상 DB 를 쓰지 않는다. 그런데 "누가 며칠 뒤에 쓸 수 있는가" 와
+     *    "이미 그 화자 글이 재고에 몇 편 있는가" 는 DB 에만 있다 —
+     *    그것을 안 보고 화자를 골라서 **한 회차가 같은 화자에게 두 편**을 몰아줬다(실측).
+     *    여기서 읽어 파일로 넘긴다. 🔴 실패해도 생성을 멈추지 않는다(fail-safe) —
+     *    그때 생성 러너는 "회차 안 중복만 막는다" 고 적는다.
+     */
+    /**
+     * 🔴 **적지 못하면 그 회차의 생성을 시작하지 않는다** (2026-09-22 보정).
+     *
+     *    앞판은 실패를 삼켰다. 그러면 **6시간 안에 쓴 이전 파일**이 남아 있을 때
+     *    생성 러너가 그것을 읽고 그대로 돈다 — 그 회차의 재고·배정은 빠진 채로.
+     *    🔴 파일에 회차 id 를 적고, 여기서도 실패하면 단계를 건너뛴다(둘 다 막는다).
+     */
+    if (plan.stage === 'draft') {
+      try {
+        await writeSpeakerLoad(prisma, runId)
+      } catch (e) {
+        const why = e instanceof Error ? e.message : 'unknown'
+        console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)
+        console.log('   🔴 이 회차의 생성을 시작하지 않는다 (provider 호출 0 · 파일 write 0)')
+        console.log('   🔴 이전 파일이 남아 있어도 쓰지 않는다 — 회차 id 가 다르다')
+        return { ok: false, exitCode: null, spawnError: 'speakerLoadWriteFailed' }
+      }
+    }
     // 🔴 단계별 env 는 **자식 프로세스에만** 실린다. 운영 env 파일은 건드리지 않는다
     const r = await run(STAGE_SCRIPT[plan.stage], plan.args, plan.env)
     if (plan.stage === 'judge') {
