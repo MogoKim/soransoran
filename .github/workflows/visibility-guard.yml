@@ -738,6 +738,11 @@ jobs:
       #    그날 단계를 고정하고 재고 부족에 **실제로 문을 닫는가**(앞판은 로그만 냈다) ·
       #    launchd 가 정말 6회인가 · 정기 회차 전 생산율을 unmeasured 로 적는가.
       #    launchd 템플릿(docs/)을 읽는다 — docs 는 ALLOW 에 없어 언제나 heavy 다.
+      #
+      # 🔴 **자동 READY 계약**도 같은 자리다 (2026-09-22). 실측 0.2 초.
+      #    여기서 잠그는 것은 "자동 READY 가 열렸다" 가 아니라 **사람 도장을 기계가 찍지
+      #    못한다**는 것과 **못 잰 것을 통과로 읽지 않는다**는 것이다.
+      #    회귀 사례 4종(이미지 의존 · 시점 이동 · 근거 없는 단정 · 후속 뉴스)을 값으로 잠근다.
       - name: Scale Foundation (회귀 0 · cohort · 공급 역산 · 병목)
         if: steps.scope.outputs.heavy == 'true'
         run: |
@@ -745,6 +750,7 @@ jobs:
           npm run release:canary-check
           npm run speaker:availability-check
           npm run supply:automation-check
+          npm run auto-ready-check
 
       # 목적·North Star·Lane·AI 모델·현재 운영 상태의 단일 진입점.
       # 날짜별 문서가 다시 현재 정본을 자처하거나 코드의 기본 모델·d1 workflow와
