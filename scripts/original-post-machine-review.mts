@@ -82,6 +82,12 @@ const LIMIT = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10)
 const DECISION = (argv.find((a) => a.startsWith('--decision='))?.slice(11) ?? 'ready').trim()
 const EDITED_FILE = (argv.find((a) => a.startsWith('--edited-file='))?.slice(14) ?? '').trim()
 const REASON = (argv.find((a) => a.startsWith('--reason='))?.slice(9) ?? '').trim()
+/**
+ * 🔴 **중대 결함이었나** (2026-09-22). `edit`·`reject` 에는 **반드시** 적는다.
+ *    적지 않으면 자동 READY 게이트가 "재지 못했다" 로 읽고 닫힌 채로 남는다 —
+ *    미측정을 0 으로 치지 않기 위해 결정하는 그 자리에서 값을 받는다.
+ */
+const HARD_RAW = (argv.find((a) => a.startsWith('--hard-defect='))?.slice(14) ?? '').trim()
 
 // 🔴 변수에 타입을 적어야 TS 가 `never` 로 좁혀 준다 (화살표 반환형만으로는 부족하다)
 const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n`); process.exit(1) }
@@ -96,6 +102,17 @@ if (!(REVIEW_DECISIONS as readonly string[]).includes(DECISION)) {
   fail(`모르는 결정입니다 — ${DECISION}. 쓸 수 있는 값: ${REVIEW_DECISIONS.join(' · ')}`)
 }
 const decision = DECISION as ReviewDecision
+
+/** 🔴 `yes`/`no` 만 받는다 — 빈 값이나 오타를 "아니오" 로 읽지 않는다 */
+const HARD_DEFECT: boolean | undefined =
+  HARD_RAW === 'yes' ? true : HARD_RAW === 'no' ? false : undefined
+if (HARD_RAW !== '' && HARD_DEFECT === undefined) {
+  fail(`--hard-defect 는 yes 또는 no 입니다 — 받은 값: ${HARD_RAW}`)
+}
+if (APPLY && decision !== 'ready' && HARD_DEFECT === undefined) {
+  fail('🔴 --hard-defect=yes|no 가 필요합니다 — 수정·폐기는 중대 결함이었는지를 함께 남깁니다.\n'
+    + '   재지 않은 것을 0 으로 치면 자동 READY 게이트가 근거 없이 열립니다.')
+}
 
 await loadEnvLocal()
 const prisma = new PrismaClient()
@@ -448,9 +465,9 @@ const SELECT = {
  *    **타입으로** 필수다 — 빠뜨리면 컴파일이 깨진다.
  */
 const action: ReviewAction = decision === 'edit'
-  ? { decision: 'edit', edit: edited!, gate: reGate }
+  ? { decision: 'edit', edit: edited!, gate: reGate, hardDefect: HARD_DEFECT }
   : decision === 'reject'
-    ? { decision: 'reject', declineReason: REASON }
+    ? { decision: 'reject', declineReason: REASON, hardDefect: HARD_DEFECT }
     : { decision: 'ready' }
 
 const reviewedAt = new Date()
