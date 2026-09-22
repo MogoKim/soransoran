@@ -250,7 +250,11 @@ console.log('\n══ 발행 규칙 fixture ══\n')
   // 🔴 이중 스위치 + cap 상한
   if (!code.includes("argv.includes('--apply')")) offenders.push('🔴 --apply 스위치가 없다')
   if (!/LIMIT\s*!==\s*take\.length/.test(code)) offenders.push('🔴 --limit 대조가 없다')
-  if (!/LIMIT\s*>\s*DAILY_PUBLISH_CAP/.test(code)) offenders.push('🔴 --limit 이 cap 을 넘는지 보지 않는다')
+  // 🔴 상한 판정은 `judgeManualLimit` 한 곳이 한다 (`limit > MANUAL_PUBLISH_CAP`).
+  //    옛 검사는 CLI 안에서 `LIMIT > DAILY_PUBLISH_CAP` 문자열을 찾았는데, 정본이
+  //    수동 전용 상한으로 옮겨 가면서 **검사만 옛 이름을 보고 있었다** (2026-09-22).
+  if (!/judgeManualLimit\(/.test(code)) offenders.push('🔴 --limit 상한 판정을 부르지 않는다')
+  if (!/manual\.ok/.test(code)) offenders.push('🔴 --limit 상한 판정 결과를 쓰지 않는다')
   if (!code.includes('--check')) offenders.push('🔴 --check 가 없다')
   // 🔴 본문 전문을 찍지 않는다
   if (/console\.log\([^)]*draftBody|console\.log\([^)]*editedBody/.test(code)) offenders.push('🔴 본문을 출력한다')
