@@ -189,3 +189,51 @@ export function describePrepared(p: PreparedCandidates): string {
   return `자동 대상 ${p.auto.length}건 · 사람 검수 ${p.held.length}건`
     + ` (TTL ${n('TTL_EXPIRED')} · 시각미상 ${n('AGE_UNKNOWN')} · 상한 복구 ${n('RECOVERY_STALE')} — 삭제 아님)`
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **큐 행 → 후보 입력을 한 곳에서 만든다** (2026-09-22)
+//
+//   러너와 예측기가 "같은 `prepareCandidates` 를 쓴다" 고 말해도, **입력을 각자
+//   조립하면 같은 함수가 아니다.** 실제로 갈렸다 — 예측기는 모든 행을
+//   `assignedPersonaCode: null` 로 주어 **기존 배정을 매 회차 다시 매칭**했고,
+//   러너는 기존 `matchedPersonaId` 를 보존했다.
+// ─────────────────────────────────────────────────────────
+
+export type QueueRowForCandidate = {
+  id: string
+  title: string
+  body: string
+  gateVerdict: unknown
+  matchedPersonaId: string | null
+}
+
+/**
+ * 🔴 배정 id 를 코드로 못 바꾸면 **빈 문자열이 아니라 모르는 코드**를 낸다 —
+ *    `planBatch` 가 fail-closed 로 잡아 멈춘다. 빈 값이면 조용히 재배정된다.
+ */
+export function assignedCodeOf(
+  matchedPersonaId: string | null,
+  codeOf: ReadonlyMap<string, string>,
+): string | null {
+  if (matchedPersonaId === null) return null
+  return codeOf.get(matchedPersonaId) ?? `__unknown:${matchedPersonaId}`
+}
+
+export function queueCandidateOf(input: {
+  row: QueueRowForCandidate
+  seq: number
+  codeOf: ReadonlyMap<string, string>
+  capturedAt: Date | null
+  voice: Partial<QueueCandidate>
+}): QueueCandidate {
+  return {
+    queueId: input.row.id,
+    title: input.row.title,
+    body: input.row.body,
+    gateVerdict: input.row.gateVerdict as never,
+    createdAt: input.seq,
+    assignedPersonaCode: assignedCodeOf(input.row.matchedPersonaId, input.codeOf),
+    ...input.voice,
+    capturedAt: input.capturedAt,
+  } as QueueCandidate
+}

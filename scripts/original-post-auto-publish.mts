@@ -50,7 +50,7 @@ import { effectiveWeeklyCap, RELEASE_STAGES, PROFILES, type ReleaseStage } from 
 
 /** 🔴 단계의 하루 목표 — 러너가 숫자를 손으로 적지 않는다 */
 const scaleTargetOf = (st: (typeof RELEASE_STAGES)[number]): number => PROFILES[st].dailyTarget
-import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
+import { prepareCandidates, describePrepared, queueCandidateOf, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { createHash } from 'node:crypto'
@@ -354,16 +354,12 @@ const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
  * 🔴 `capturedAt` 을 **그대로** 넘긴다 — 나이를 여기서 굳히지 않는다.
  *    예측은 하루씩 밀며 그날의 나이로 다시 판정해야 하므로 스냅숏을 주면 안 된다.
  */
-const queueCandidates: QueueCandidate[] = targets.map((t, i) => ({
-  queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: i,
-  // 🔴 배정된 persona 를 못 찾으면 빈 문자열이 아니라 **모르는 코드**를 넘긴다 —
-  //    planBatch 가 fail-closed 로 잡아 멈춘다. 조용히 재배정되면 안 된다
-  assignedPersonaCode: t.matchedPersonaId === null
-    ? null
-    : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
-  // 🔴 말투·profile 은 **정본 한 함수**가 만든다. 호출부마다 따로 부르면 한 곳이 빠진다
-  ...voiceInputOf(t),
-  capturedAt: capturedAtOf.get(t.id) ?? null,
+// 🔴 후보 입력 조립도 **정본 한 함수**가 한다 — 러너와 예측기가 각자 조립하면
+//    "같은 `prepareCandidates` 를 쓴다" 는 말이 거짓이 된다 (실제로 갈렸다)
+const queueCandidates: QueueCandidate[] = targets.map((t, i) => queueCandidateOf({
+  row: { id: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, matchedPersonaId: t.matchedPersonaId },
+  seq: i, codeOf: codeOfPersonaId, capturedAt: capturedAtOf.get(t.id) ?? null,
+  voice: voiceInputOf(t),
 }))
 
 /**

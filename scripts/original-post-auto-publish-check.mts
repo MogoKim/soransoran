@@ -5,6 +5,7 @@
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
 import { readFileSync } from 'node:fs'
+import { assignedCodeOf } from '../src/lib/supply-candidates'
 import {
   reviewPatchOf, REVIEW_DECISIONS, REVIEW_DECISION_STATUS, REVIEW_DECISION_WRITES,
 } from '../src/lib/original-post-machine-review'
@@ -306,8 +307,16 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
     /if \(target\.matchedPersonaId === null\) \{/.test(runnerSrc))
   check('🔴 matchedAt 을 다시 쓰는 경로가 하나뿐이다',
     (runnerSrc.match(/matchedAt: new Date\(\)/g) ?? []).length === 1)
-  check('🔴 기존 배정을 planBatch 에 정본으로 넘긴다',
-    /assignedPersonaCode:/.test(runnerSrc))
+  // 🔴 조립이 `queueCandidateOf` 로 옮겨 갔다 (2026-09-22) — 러너·예측기가 같은 값을
+  //    쓰게 하려고 뽑았다. 문자열이 아니라 **넘기는 값**과 **그 함수의 동작**을 본다.
+  check('🔴 기존 배정을 정본 조립 함수에 넘긴다',
+    /queueCandidateOf\(\{/.test(runnerSrc) && /matchedPersonaId: t\.matchedPersonaId/.test(runnerSrc))
+  check('🔴 🔴 **배정 id 가 있으면 코드로, 못 찾으면 모르는 코드로 — 빈 값이 아니다**', (() => {
+    const codeOf = new Map([['pid-1', 'P18']])
+    return assignedCodeOf(null, codeOf) === null
+      && assignedCodeOf('pid-1', codeOf) === 'P18'
+      && assignedCodeOf('없음', codeOf) === '__unknown:없음'
+  })())
   check('🔴 배정이 깨졌으면 발행하지 않고 멈춘다',
     /recoveryProblem/.test(runnerSrc) && /brokenRecovery/.test(runnerSrc))
   check('🔴 예고한 persona 와 발행된 persona 를 대조한다',

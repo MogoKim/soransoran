@@ -23,6 +23,7 @@ import {
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { readFileSync } from 'node:fs'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
+import { queueCandidateOf, assignedCodeOf, prepareCandidates } from '../src/lib/supply-candidates'
 
 let pass = 0, fail = 0
 const check = (n: string, ok: boolean, d = ''): void => {
@@ -805,6 +806,61 @@ console.log('\n⑮ 🔴 🔴 **같은 `audit` 칸을 두 감사자가 엇갈려 
     /value: markAuditPicked\(/.test(runner))
   check('🔴 🔴 **감사 기록 명령이 `recordAuditVerdict` 를 쓴다**',
     /value: recordAuditVerdict\(/.test(audit))
+}
+
+console.log('\n⑯ 🔴 🔴 **러너 ↔ 예측기 동등성** — "같은 함수" 라는 말을 값으로 확인한다')
+{
+  const codeOf = new Map([['pid-18', 'P18'], ['pid-06', 'P06']])
+  const row = (o: Partial<{ id: string; matchedPersonaId: string | null }> = {}) => ({
+    id: 'q1', title: '김치 이야기', body: '다들 어떻게 드시나요?', gateVerdict: 'PASS',
+    matchedPersonaId: null as string | null, ...o,
+  })
+  const make = (r: ReturnType<typeof row>, capturedAt: Date | null) =>
+    queueCandidateOf({ row: r, seq: 0, codeOf, capturedAt, voice: {} })
+
+  // ① 이미 배정된 행 — 배정이 보존돼야 한다
+  check('🔴 🔴 **이미 배정된 행은 그 배정이 그대로 넘어간다 — `null` 로 재매칭하지 않는다**',
+    make(row({ matchedPersonaId: 'pid-18' }), null).assignedPersonaCode === 'P18')
+
+  // ② 배정 id 가 잘못된 행 — 빈 값이 아니라 모르는 코드
+  check('🔴 🔴 **배정 id 를 못 찾으면 빈 값이 아니라 모르는 코드다 (fail-closed)**', (() => {
+    const v = make(row({ matchedPersonaId: 'pid-없음' }), null).assignedPersonaCode
+    return v === '__unknown:pid-없음' && v !== null && String(v).length > 0
+  })())
+  check('🔴 배정이 없던 행만 `null` 이다', make(row(), null).assignedPersonaCode === null)
+  check('🔴 🔴 **`assignedCodeOf` 한 함수가 세 경우를 다 정한다**',
+    assignedCodeOf(null, codeOf) === null
+    && assignedCodeOf('pid-06', codeOf) === 'P06'
+    && assignedCodeOf('x', codeOf) === '__unknown:x')
+
+  // ③ 9/23 엔 유효하지만 9/24 엔 만료되는 행
+  {
+    // 🔴 `hot` TTL 2일. 9/21 12:00 에 본 원천은 9/23 엔 2일, 9/24 엔 3일이다
+    const captured = new Date('2026-09-21T03:00:00Z')
+    const hot = { ...row(), title: '오늘 속보 났던데', body: '방금 뉴스 보고 왔어요. 다들 보셨나요?' }
+    const at23 = new Date('2026-09-23T03:00:00Z')
+    const at24 = new Date('2026-09-24T03:00:00Z')
+    const p23 = prepareCandidates({ candidates: [make(hot, captured)], personas: [], at: at23 })
+    const p24 = prepareCandidates({ candidates: [make(hot, captured)], personas: [], at: at24 })
+    const held23 = p23.held.length
+    const held24 = p24.held.length
+    check('🔴 🔴 **같은 행이 날짜에 따라 다르게 판정된다 — 실행 시각으로 한 번 재고 끝내면 안 된다**',
+      held23 !== held24 || p23.verdicts.get('q1')?.reason !== p24.verdicts.get('q1')?.reason,
+      JSON.stringify({ d23: p23.verdicts.get('q1'), d24: p24.verdicts.get('q1') }))
+    check('🔴 🔴 **뒷날이 앞날보다 더 많이 걸린다 — 나이는 늘기만 한다**', held24 >= held23)
+  }
+
+  // 🔴 두 파일이 정말 같은 조립 함수를 부르는가
+  const runner = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  const forecast = readFileSync('scripts/supply-forecast.mts', 'utf-8')
+  check('🔴 🔴 **러너가 `queueCandidateOf` 를 부른다**', /queueCandidateOf\(\{/.test(runner))
+  check('🔴 🔴 **예측기가 `queueCandidateOf` 를 부른다**', /queueCandidateOf\(\{/.test(forecast))
+  check('🔴 🔴 **예측기에 `assignedPersonaCode: null` 하드코딩이 남아 있지 않다**',
+    !/assignedPersonaCode: null/.test(forecast))
+  check('🔴 🔴 **예측기가 날짜마다 `at` 을 바꿔 부른다 — 실행 시각 고정이 아니다**',
+    /prepareCandidates\(\{[\s\S]{0,200}?at,/.test(forecast)
+    && /const at = new Date\(`\$\{p\.iso\}/.test(forecast))
+  check('🔴 🔴 **예측기가 TTL 을 손으로 재지 않는다**', !/TTL_DAYS/.test(forecast))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

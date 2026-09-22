@@ -14,9 +14,8 @@ import { MACHINE_SITE_PREFIX } from '../src/lib/micro-seed-supply-autofill'
 import { selectAutoTargets, REJECT_LABEL, voiceInputOf, type AutoRow } from '../src/lib/original-post-auto-publish'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { PROFILES, RELEASE_STAGES, effectiveWeeklyCap, type ReleaseStage } from '../src/lib/scale-profile'
-import { planBatch } from '../src/lib/original-post-persona-match'
+import { prepareCandidates, queueCandidateOf, type QueueCandidate } from '../src/lib/supply-candidates'
 import { canaryAuthorization, windowAuthorization } from '../src/lib/release-canary'
-import { installFromEnv } from '../src/lib/scale-runtime'
 import { HUMAN_DECIDER, AUTO_DECIDER } from '../src/lib/auto-ready'
 
 await loadEnvLocal()
@@ -56,7 +55,6 @@ const speakerOf = (g: unknown): string => {
   const v = (g as Record<string, Record<string, Record<string, unknown>>>)?.autoDraft?.voice?.personaCode
   return typeof v === 'string' ? v : '(사람 후보)'
 }
-const TTL_DAYS = 14
 // 🔴 **발행 러너와 같은 선택기를 쓴다.** 각자 조건을 조립하면 답이 갈린다 —
 //    오늘 표본에서 이미 한 번 갈렸다(22 vs 15). 여기서 또 갈리면 예측을 믿을 수 없다.
 const autoRows: AutoRow[] = rows.map((r) => ({
@@ -69,16 +67,12 @@ const autoRows: AutoRow[] = rows.map((r) => ({
 }))
 const sel = selectAutoTargets(autoRows, (t, b) => safetyFilter({ title: t, body: b }).verdict)
 const rejectOf = new Map(sel.rejected.map((x) => [x.id, x.code]))
+// 🔴 **신선도(TTL)는 여기서 재지 않는다.** 러너의 `prepareCandidates` 가 **그 날 기준**으로
+//    다시 판정한다 — 실행 시각으로 한 번 재고 끝내면 "9/23 엔 살아 있고 9/24 엔 만료" 를 놓친다.
 const items = rows.map((r) => {
-  const captured = r.rawContent?.sourceCapturedAt ?? null
-  const ageDays = captured === null ? null : Math.floor((SNAPSHOT.getTime() - captured.getTime()) / 864e5)
-  const reasons: string[] = []
   const code = rejectOf.get(r.id)
-  if (code !== undefined) reasons.push(REJECT_LABEL[code as keyof typeof REJECT_LABEL] ?? code)
-  // 🔴 신선도는 선택기 뒤 단계다 — 러너의 ③-d 와 같은 축이다
-  if (ageDays === null) reasons.push('원천 수집 시각 미상')
-  else if (ageDays > TTL_DAYS) reasons.push(`TTL 초과 ${ageDays}일`)
-  return { id: r.id, speaker: speakerOf(r.gateResults), reasons, title: r.draftTitle, ageDays }
+  const reasons = code === undefined ? [] : [REJECT_LABEL[code as keyof typeof REJECT_LABEL] ?? code]
+  return { id: r.id, speaker: speakerOf(r.gateResults), reasons, title: r.draftTitle }
 })
 console.log(`\n② READY 재고 ${items.length}건 (후보가 아니라 결정이 끝난 행만)`)
 
@@ -125,20 +119,53 @@ for (const r of personaRows) {
   })
 }
 const capturedAtOf = new Map(rows.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
+// 🔴 배정 id → 코드. 러너와 같다 — 못 찾으면 모르는 코드를 넘겨 fail-closed 로 잡히게 한다
+const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
 const bodyOf = new Map(rows.map((r) => [r.id, r.editedBody ?? r.draftBody]))
 const titleOf = new Map(rows.map((r) => [r.id, r.editedTitle ?? r.draftTitle]))
 
 // ── 그날의 허가 — capacity 상한 · canary · window ──
+/**
+ * 🔴 **그날 허가되는 최대 단계.** capacity 천장 아래에서 window·canary 가 여는 값이다.
+ *
+ * 🔴 앞판은 `installFromEnv(env, { canaryStage, windowStage } as never)` 를 불렀다.
+ *    그 키는 존재하지 않는데 `as never` 가 타입 검사를 지워 **조용히 무시됐고**,
+ *    그래서 창이 열린 날에도 d1 이 나왔다. 없는 키를 넘기는 코드는 죽은 코드다.
+ *
+ * 🔴 **준비도(readiness) 감속은 여기서 재지 않는다** — 그것은 그날의 실적에 달렸고
+ *    예측 시점에는 없다. 그래서 아래 값은 **그날 허가의 상한**이다.
+ */
 const stageOfDay = (dayIso: string): { stage: ReleaseStage; why: readonly string[] } => {
   const at = new Date(`${dayIso}T03:00:00Z`)   // 그날 12:00 KST
-  const canary = canaryAuthorization(process.env, at, RELEASE_STAGES)
+  const idx = (st: ReleaseStage) => RELEASE_STAGES.indexOf(st)
+  const why: string[] = []
+  const ceilRaw = (process.env.SORAN_CAPACITY_STAGE ?? '').trim()
+  const ceiling = (RELEASE_STAGES as readonly string[]).includes(ceilRaw)
+    ? ceilRaw as ReleaseStage : RELEASE_STAGES[0]
+  why.push(`capacity 천장 ${ceiling}${ceilRaw === '' ? ' (설정 없음 — 가장 안전한 값)' : ''}`)
+
+  const baseRaw = (process.env.SORAN_RELEASE_STAGE ?? '').trim()
+  let stage: ReleaseStage = (RELEASE_STAGES as readonly string[]).includes(baseRaw)
+    ? baseRaw as ReleaseStage : RELEASE_STAGES[0]
+  why.push(`기본 release ${stage}`)
+
   const win = windowAuthorization(process.env, at, RELEASE_STAGES)
-  const sc = installFromEnv(process.env, {
-    now: at,
-    ...(canary.activeToday && canary.stage !== null ? { canaryStage: canary.stage } : {}),
-    ...(win.activeToday && win.stage !== null ? { windowStage: win.stage } : {}),
-  } as never)
-  return { stage: sc.releaseStage, why: [...(sc.notes ?? [])] }
+  if (win.activeToday && win.stage !== null) {
+    if (idx(win.stage) > idx(stage)) { stage = win.stage; why.push(`window 가 ${win.stage} 로 올린다`) }
+  } else why.push(`window 비활성 (${win.note ?? '오늘이 창 밖이다'})`)
+
+  const canary = canaryAuthorization(process.env, at, RELEASE_STAGES)
+  if (canary.activeToday && canary.stage !== null) {
+    if (idx(canary.stage) > idx(stage)) { stage = canary.stage; why.push(`canary 가 ${canary.stage} 로 올린다`) }
+  } else why.push(`canary 비활성 (${canary.note ?? '오늘이 카나리 날이 아니다'})`)
+
+  // 🔴 천장이 마지막이다 — 창·카나리가 무엇을 열든 여기서 잘린다
+  if (idx(stage) > idx(ceiling)) {
+    why.push(`🔴 capacity ${ceiling} 가 ${stage} 를 막는다 — 시험이라도 열지 않는다`)
+    stage = ceiling
+  }
+  why.push('🔴 준비도 감속은 그날 실적에 달려 있어 예측에서 재지 않는다 — 위 값은 허가 상한이다')
+  return { stage, why }
 }
 
 /**
@@ -168,44 +195,49 @@ for (const p of plan) {
   console.log(`\n③ ${p.day} — 설치되는 단계 **${stage}** (상한 ${need}건/일 · 주 ${weekCap} · 간격 ${prof.minDaysBetween}일)`)
   for (const w of auth.why) console.log(`     · ${w}`)
 
-  // 🔴 배정은 러너와 **같은 `planBatch`** 가 한다 — 여기서 따로 조립하지 않는다
-  const batch = planBatch(
-    // 🔴 말투·profile 은 **정본 한 함수**(`voiceInputOf`)가 만든다 — 러너와 같은 입력이어야 한다
-    pool.map((c, i) => {
-      const src = autoRows.find((a) => a.id === c.id)!
-      return {
-        queueId: c.id, title: titleOf.get(c.id) ?? '', body: bodyOf.get(c.id) ?? '',
-        gateVerdict: src.gateVerdict, createdAt: i, assignedPersonaCode: null,
-        ...voiceInputOf(src),
-        capturedAt: capturedAtOf.get(c.id) ?? null,
-      }
-    }) as never,
-    live as never,
-    { postsPerWeek: weekCap, minDaysBetween: prof.minDaysBetween } as never,
-  )
-  const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
+  // 🔴 배정·신선도는 러너와 **같은 `prepareCandidates`** 가 한다.
+  //    `at` 을 **그 날**로 준다 — 러너는 지금, 예측은 그 날이다.
+  const at = new Date(`${p.iso}T03:00:00Z`)   // 그날 12:00 KST
+  const cands: QueueCandidate[] = pool.map((c, i) => {
+    const src = autoRows.find((a) => a.id === c.id)!
+    // 🔴 러너와 **같은 조립 함수**를 쓴다 — 기존 배정 보존·모르는 코드 처리가 같아야 한다
+    return queueCandidateOf({
+      row: { id: src.id, title: titleOf.get(c.id) ?? '', body: bodyOf.get(c.id) ?? '',
+        gateVerdict: src.gateVerdict, matchedPersonaId: src.matchedPersonaId },
+      seq: i, codeOf: codeOfPersonaId, capturedAt: capturedAtOf.get(c.id) ?? null,
+      voice: voiceInputOf(src),
+    })
+  })
+  const prepared = prepareCandidates({
+    candidates: cands, personas: live as never,
+    caps: { postsPerWeek: weekCap, minDaysBetween: prof.minDaysBetween }, at,
+  })
+  const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
+  const heldOf = new Map(prepared.held.map((h) => [h.queueId, h]))
+  const autoOrder = prepared.auto.map((a) => a.queueId)
+
   const take: typeof pool = []
   const used = new Set<string>()
-  for (const c of pool) {
+  for (const id of autoOrder) {
     if (take.length >= need) break
-    const a = assignOf.get(c.id)
-    const who = a?.assigned ?? null
-    if (who === null) continue
-    if (used.has(who)) continue
+    const who = assignOf.get(id)?.assigned ?? null
+    if (who === null || used.has(who)) continue
+    const c = pool.find((x) => x.id === id)!
     used.add(who); take.push({ ...c, speaker: who })
   }
   if (take.length === 0) console.log('   (배정되는 후보 없음)')
   for (const t of take) console.log(`   ✅ ${t.id} · ${t.speaker} · ${t.title.slice(0, 28)}`)
   for (const c of pool) {
     if (take.some((t) => t.id === c.id)) continue
-    const a = assignOf.get(c.id)
-    const who = a?.assigned ?? null
-    const why = who === null
-      ? '🔴 배정 안 됨 (생활사 조건 불일치 또는 주 cap·간격 소진)'
-      : used.has(who) ? `⏭️ ${who} — 같은 회차 화자 중복` : `⏭️ ${who} — 그날 상한 ${need}건 초과`
+    const h = heldOf.get(c.id)
+    const who = assignOf.get(c.id)?.assigned ?? null
+    const why = h !== undefined ? `🔴 ${h.hold} — ${h.reason}`
+      : who === null ? '🔴 배정 안 됨 (생활사 조건 불일치 또는 주 cap·간격 소진)'
+        : used.has(who) ? `⏭️ ${who} — 같은 회차 화자 중복`
+          : `⏭️ ${who} — 그날 상한 ${need}건 초과`
     console.log(`   ${why.startsWith('🔴') ? '🔴' : '⏭️'} ${c.id} · ${c.speaker} · ${why}`)
   }
-  console.log(`   → **${p.day} 실제 발행 가능 ${take.length}/${need}** · 부족 글 ${Math.max(0, need - take.length)}건`
+  console.log(`   → **${p.day} ${stage} 예측 ${take.length}/${need}** · 부족 글 ${Math.max(0, need - take.length)}건`
     + ` · 부족 화자 ${Math.max(0, need - used.size)}명`)
 
   // 🔴 소비를 반영한다 — 주 cap 이 줄고 마지막 발행일이 오늘이 된다
