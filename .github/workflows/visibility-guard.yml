@@ -731,12 +731,20 @@ jobs:
       #    한 회차가 같은 화자에게 여러 편을 몰아주면 발행 쪽 최소 간격에 걸려
       #    그날 자리가 빈다 — 실측으로 9/23 이 2/3 였다. 읽는 것은 `src/lib` 뿐이라
       #    DENY 에 걸려 언제나 heavy 다.
+      #
+      # 🔴 **공급 자동화 계약**도 같은 자리다 (2026-09-22). 실측 0.3 초.
+      #    여기서 잠그는 것은 "자동화됐다" 는 말이 아니라 **무엇이 안 되는지**다:
+      #    공식 edit 뒤에도 machine profile · 원래 화자로 남는가 · 기간형 D3 가
+      #    그날 단계를 고정하고 재고 부족에 **실제로 문을 닫는가**(앞판은 로그만 냈다) ·
+      #    launchd 가 정말 6회인가 · 정기 회차 전 생산율을 unmeasured 로 적는가.
+      #    launchd 템플릿(docs/)을 읽는다 — docs 는 ALLOW 에 없어 언제나 heavy 다.
       - name: Scale Foundation (회귀 0 · cohort · 공급 역산 · 병목)
         if: steps.scope.outputs.heavy == 'true'
         run: |
           npm run scale:foundation-check
           npm run release:canary-check
           npm run speaker:availability-check
+          npm run supply:automation-check
 
       # 목적·North Star·Lane·AI 모델·현재 운영 상태의 단일 진입점.
       # 날짜별 문서가 다시 현재 정본을 자처하거나 코드의 기본 모델·d1 workflow와

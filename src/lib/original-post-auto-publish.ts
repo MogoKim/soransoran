@@ -398,6 +398,17 @@ export function judgeApply(input: {
    *       슬롯 판정은 "언제" 를, 상한은 "몇 건" 을 답한다.
    */
   slot: { run: boolean; reason: string }
+  /**
+   * 🔴 **기간형 운영의 그날 판정** (2026-09-22).
+   *
+   *    앞판은 `judgeDayGuard` 를 부르고 **결과를 로그로만** 내보냈다. 재고가 없어도,
+   *    중복 발행 흔적이 있어도 발행은 그대로 진행됐다 — 판정이 있는데 아무것도 막지
+   *    않는 상태는 미구현보다 나쁘다. 읽는 사람은 막힌다고 믿기 때문이다.
+   *
+   * 🔴 그래서 **이 게이트 하나**로 들어온다. 쓰기 직전의 문은 여전히 하나다.
+   * 🔴 기간형이 아닌 날에는 `null` 이고, 그때 동작은 이전과 똑같다.
+   */
+  dayGuard?: { allow: boolean; halt: boolean; reason: string } | null
 }): ApplyGate {
   if (!input.apply) return { ok: false, reason: 'dry-run — --apply 가 없다' }
   if (input.limit !== 1) {
@@ -406,6 +417,13 @@ export function judgeApply(input: {
   // 🔴 내 단계의 회차가 아니면 여기서 끝난다 — DB write 0
   if (!input.slot.run) return { ok: false, reason: input.slot.reason }
   if (input.killSwitchEnabled) return { ok: false, reason: '전체 중지(kill switch)가 켜져 있다' }
+  // 🔴 그날 판정이 막으면 여기서 끝난다 — DB write 0
+  if (input.dayGuard != null && !input.dayGuard.allow) {
+    return {
+      ok: false,
+      reason: `${input.dayGuard.halt ? '🔴 그날 전면 중단' : '그날 추가 발행 없음'} — ${input.dayGuard.reason}`,
+    }
+  }
   if (input.targets.length === 0) return { ok: false, reason: '후보가 0건이다' }
   if (input.publishedToday >= input.dailyCap) {
     return { ok: false, reason: `오늘 상한 ${input.dailyCap}건을 채웠다 (${input.publishedToday}/${input.dailyCap})` }
