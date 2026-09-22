@@ -16,12 +16,16 @@ import {
 } from '../src/lib/auto-ready'
 import { selectAutoTargets, autoReadyAccepted, MACHINE_REVIEWED_BY, AUTO_GATE_VERDICT, type AutoRow } from '../src/lib/original-post-auto-publish'
 import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
+import { judgeOneDayCanary } from '../src/lib/release-canary'
+import { installFromEnv } from '../src/lib/scale-runtime'
 import { reviewPatchOf, REVIEW_HARD_DEFECT_KEY } from '../src/lib/original-post-machine-review'
 import {
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX,
 } from '../src/lib/micro-seed-supply-autofill'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { queueCandidateOf, assignedCodeOf, prepareCandidates } from '../src/lib/supply-candidates'
 import { semanticSummaryOf, semanticHoldsOf } from '../src/lib/micro-seed-supply-autofill'
@@ -940,6 +944,131 @@ console.log('\n⑰ 🔴 🔴 **의미 검수 경고가 게이트까지 온다 (P
     const high = { ...P07_REVIEW, semantic: { ...P07_REVIEW.semantic, confidence: 0.99 } }
     return judgeRow(rowOf(high)).auto === false
   })())
+}
+
+console.log('\n⑱ 🔴 🔴 **실제 파일 E2E — artifact → 후보 → payload → gateResults → 적격 판정**')
+{
+  // 🔴 **손으로 베낀 fixture 가 아니다.** 운영 러너가 쓴 실제 파일을 읽는다.
+  //    파일이 없으면 검사를 건너뛰지 않고 **실패**한다 — 조용히 통과시키지 않는다.
+  const dirs = [join(homedir(), 'Documents/soransoran-runtime/.microseed-data'), '.microseed-data']
+  let found: { file: string; art: Record<string, unknown> } | null = null
+  for (const d of dirs) {
+    let names: string[] = []
+    try { names = readdirSync(d).filter((n) => n.includes('artifacts')) } catch { continue }
+    for (const n of names) {
+      try {
+        const o = JSON.parse(readFileSync(join(d, n), 'utf-8')) as { artifacts?: unknown[] }
+        const arr = (Array.isArray(o) ? o : (o.artifacts ?? [])) as Array<Record<string, unknown>>
+        /**
+         * 🔴 같은 원천이 **여러 회차 파일에 있다.** 그중 `semantic` 이 `null` 인 장도 있다
+         *    (9/20 장이 그렇다). 그래서 "키가 있다" 가 아니라 **요약이 나오는 장**을 고른다.
+         */
+        const hit = arr.find((a) => String((a as { sourceArticleId?: unknown }).sourceArticleId) === '35019068'
+          && semanticSummaryOf((a as { review?: unknown }).review) !== null)
+        if (hit !== undefined) { found = { file: join(d, n), art: hit }; break }
+      } catch { /* 깨진 파일은 건너뛴다 */ }
+    }
+    if (found !== null) break
+  }
+  check('🔴 🔴 **P07 의 실제 artifact 파일을 찾았다 (35019068)**', found !== null,
+    found === null ? '파일 없음' : found.file)
+
+  if (found !== null) {
+    // ① artifact → 요약
+    const sum = semanticSummaryOf(found.art.review)
+    check('🔴 ① 실제 artifact 에서 결함 2건을 읽는다', sum?.unsupportedAdditions === 2, JSON.stringify(sum))
+
+    // ② 요약 → 후보 파일이 나르는 모양 → 다시 요약 (값이 보존되는가)
+    const carried = { semantic: sum, deterministic: { pass: sum?.deterministicPass === true },
+      semanticCompletion: { complete: sum?.complete === true } }
+    const sum2 = semanticSummaryOf(carried)
+    check('🔴 ② 후보 파일을 거쳐도 값이 보존된다', JSON.stringify(sum) === JSON.stringify(sum2))
+
+    // ③ 적재 payload → gateResults
+    const gate = { holds: semanticHoldsOf(sum2), blocks: [] as string[], semanticReview: sum2 }
+    check('🔴 ③ 적재가 경고를 `holds` 에 싣는다',
+      gate.holds.some((h) => h.startsWith('SEMANTIC_UNSUPPORTED_ADDITION')))
+    check('🔴 ③ `blocks` 는 비어 있다 — 후보 생성은 계속된다', gate.blocks.length === 0)
+
+    // ④ DB 모양 → 사람 검토가 읽는 경고
+    const warn = warningsOfGate(gate)
+    check('🔴 ④ 사람 검토 화면이 그 경고를 읽는다', warn.length > 0 && !warn.includes(NO_SEMANTIC_RECORD))
+
+    // ⑤ 자동 적격 판정
+    const v = judgeRow({ gateVerdict: 'PASS', warnings: warn, sourceCapturedKnown: true,
+      title: '아들 낳았다고 하면 안쓰럽게 보는 시선들이요', body: '주변 보면 … 많잖아요.' })
+    check('🔴 🔴 **⑤ 자동 READY 에서 빠진다 — 실제 파일에서 시작해 여기까지 왔다**', v.auto === false)
+  }
+
+  // 🔴 망가진 모양들이 **전부** 자동에서 빠지는가 — 값으로 확인한다
+  const shapes: Array<[string, unknown]> = [
+    ['빈 객체', {}],
+    ['semantic 만 빈 객체', { semantic: {} }],
+    ['deterministic 누락', { semantic: { unsupportedAdditions: [] }, semanticCompletion: { complete: true } }],
+    ['completion 누락', { semantic: { unsupportedAdditions: [] }, deterministic: { pass: true } }],
+    ['불완전 판정', { semantic: { unsupportedAdditions: [] }, deterministic: { pass: true }, semanticCompletion: { complete: false } }],
+    ['deterministic 실패', { semantic: { unsupportedAdditions: [] }, deterministic: { pass: false }, semanticCompletion: { complete: true } }],
+    ['null', null],
+    ['문자열', 'ok'],
+  ]
+  check('🔴 🔴 **망가진 판정 기록은 전부 자동에서 빠진다**', shapes.every(([, raw]) => {
+    const s2 = semanticSummaryOf(raw)
+    const w = warningsOfGate({ holds: semanticHoldsOf(s2), blocks: [], semanticReview: s2 })
+    return judgeRow({ gateVerdict: 'PASS', warnings: w, sourceCapturedKnown: true,
+      title: '김치 이야기', body: '주변에 물어보면 반반이더라고요.' }).auto === false
+  }), shapes.filter(([, raw]) => {
+    const s2 = semanticSummaryOf(raw)
+    const w = warningsOfGate({ holds: semanticHoldsOf(s2), blocks: [], semanticReview: s2 })
+    return judgeRow({ gateVerdict: 'PASS', warnings: w, sourceCapturedKnown: true,
+      title: '김치 이야기', body: '주변에 물어보면 반반이더라고요.' }).auto === true
+  }).map(([n]) => n).join(','))
+
+  check('🔴 🔴 **`holds` 와 요약이 어긋나면 자동에서 빠진다 (요약은 깨끗한데 holds 에 경고가 있다)**', (() => {
+    const clean = { complete: true, deterministicPass: true, unsupportedAdditions: 0,
+      lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 }
+    const w = warningsOfGate({ holds: ['SEMANTIC_LIFE_CONTRADICTION:1'], blocks: [], semanticReview: clean })
+    return judgeRow({ gateVerdict: 'PASS', warnings: w, sourceCapturedKnown: true,
+      title: '김치 이야기', body: '주변에 물어보면 반반이더라고요.' }).auto === false
+  })())
+}
+
+console.log('\n⑲ 🔴 🔴 **9/23 소비 뒤 남은 3건으로 9/24 D5 는 NO-GO 다**')
+{
+  // 🔴 같은 스냅샷의 순차 결과를 값으로 잠근다.
+  //    9/22 실발행 3건 → 9/23 d3 가 3건 소비 → 9/24 에 남는 후보 3건.
+  const sim = (can: number, stage: 'd3' | 'd5') => ({
+    stage, in14: can, stock: can, personas: can, horizonDays: 1, recoveryBroken: 0,
+  })
+  const today = { publishedToday: 0, slotsLeft: 5 }
+
+  const d5 = judgeOneDayCanary(sim(3, 'd5') as never, today)
+  check('🔴 🔴 **남은 3건으로 d5(5건 필요)는 NO-GO 다**',
+    d5.ok === false && d5.need === 5 && d5.can === 3, JSON.stringify(d5))
+  check('🔴 🔴 **왜 안 되는지가 값으로 남는다**',
+    d5.reasons.some((r) => r.includes('5건 중 3건만')), d5.reasons.join(' / '))
+
+  const d3 = judgeOneDayCanary(sim(3, 'd3') as never, { publishedToday: 0, slotsLeft: 3 })
+  check('🔴 🔴 **같은 3건으로 d3(3건 필요)는 GO 다 — D3 는 유지된다**',
+    d3.ok === true && d3.need === 3 && d3.can === 3, JSON.stringify(d3))
+
+  check('🔴 🔴 **4건이어도 d5 는 NO-GO — 5건을 다 채워야 연다**',
+    judgeOneDayCanary(sim(4, 'd5') as never, today).ok === false)
+  check('🔴 5건이면 d5 가 GO 다', judgeOneDayCanary(sim(5, 'd5') as never, today).ok === true)
+  check('🔴 🔴 **기배정 복구가 깨져 있으면 재고가 충분해도 NO-GO**',
+    judgeOneDayCanary({ ...sim(5, 'd5'), recoveryBroken: 1 } as never, today).ok === false)
+  check('🔴 🔴 **하루치 시뮬레이션이 아니면 하루 판정으로 쓰지 않는다**',
+    judgeOneDayCanary({ ...sim(5, 'd5'), horizonDays: 14 } as never, today).ok === false)
+
+  // 🔴 NO-GO 일 때 무엇이 설치되는가 — 카나리가 열지 못하면 window 의 d3 가 남는다
+  const shut = installFromEnv({
+    SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1',
+    SORAN_RELEASE_WINDOW_STAGE: 'd3',
+    SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29',
+  }, {
+    canary: { now: new Date('2026-09-24T03:00:00Z'), verdict: d5 },
+    window: { now: new Date('2026-09-24T03:00:00Z'), verdict: null, dayVerdict: null, publishedToday: 0 },
+  })
+  check('🔴 🔴 **d5 가 NO-GO 면 d5 로 설치되지 않는다**', shut.releaseStage !== 'd5', shut.releaseStage)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
