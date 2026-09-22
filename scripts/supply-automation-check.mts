@@ -577,7 +577,14 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
     const m = new RegExp(`^${k}=(.*)$`, 'm').exec(envText)
     return m === null ? null : (m[1] ?? '').trim()
   }
-  check('🔴 정본 env 파일을 읽을 수 있다', envText !== null, envPath)
+  /**
+   * 🔴 **CI 러너에는 운영 env 가 없다.** 없다고 FAIL 로 만들면 검사가 CI 에서 늘 빨갛고,
+   *    빨간 검사는 곧 지워진다. 그래서 **운영 기계인지 먼저 가른다.**
+   *    🔴 다만 조용히 건너뛰지 않는다 — env 가 없으면 **설치본도 없어야 한다.**
+   *    (env 없이 설치본만 있으면 그 기계는 예산 없이 도는 것이다.)
+   */
+  const operatorMachine = envText !== null
+  console.log(`     정본 env ${operatorMachine ? '있음 — 운영 기계다' : '없음 — 운영 기계가 아니다(CI 등)'}`)
   const declared = SUPPLY_BUDGET_ENV_NAMES.filter((n) => envOf(n) !== null)
   console.log(`     정본 env 예산 선언 ${declared.length}/${SUPPLY_BUDGET_ENV_NAMES.length}`)
   check('🔴 🔴 **예산 env 는 셋 다이거나 하나도 없다 — 반쪽은 장부가 fail-closed 로 막는다**',
@@ -589,6 +596,7 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
   check('🔴 plist 의 WorkingDirectory 가 저장소라야 그 .env.local 을 읽는다',
     tpl.includes('<key>WorkingDirectory</key>'))
 
+
   /** 🔴 설치된 plist — 있으면 정본과 맞아야 한다 */
   const installed = (() => {
     const at = `${process.env.HOME ?? ''}/Library/LaunchAgents/com.soransoran.supply-process.plist`
@@ -596,6 +604,9 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
   })()
   const enabled = envOf(SUPPLY_ENABLE_ENV) === 'true'
   console.log(`     설치된 plist ${installed === null ? '없음' : '있음'} · 스위치 ${enabled ? 'true' : 'false/없음'}`)
+
+  check('🔴 🔴 **정본 env 가 없는 기계에는 설치본도 없다 — 예산 없이 도는 기계를 막는다**',
+    operatorMachine || installed === null)
 
   /** 🔴 승인 전 — 승인값이 없으면 **켜져 있어서는 안 된다**(fail-closed) */
   if (SUPPLY_DAILY_USD_APPROVED === null) {
