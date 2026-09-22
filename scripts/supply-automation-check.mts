@@ -16,9 +16,12 @@ import { PROFILES, RELEASE_STAGES, type StageVerdict } from '../src/lib/scale-pr
 import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 import {
   SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_BUDGET_ENV_NAMES,
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_DAILY_USD_PROPOSED, SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
+  SUPPLY_DAILY_USD_APPROVED, SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
+  SUPPLY_WORKSET_PER_RUN, SUPPLY_RESERVE_HEADROOM, SUPPLY_ENV_FILE_REL, SUPPLY_ENABLE_ENV,
   judgeProductionRate, AUTO_READY_CONTRACT, AUTO_READY_STEPS, describeSupplySchedule,
 } from '../src/lib/supply-schedule-contract'
+import { WORKSET_DEFAULT_LIMIT, WORKSET_TOTAL_PER_SOURCE } from '../src/lib/supply-workset'
+import { judgeSpend, judgeSettle, tallyOf, type DayTally } from '../src/lib/llm-ledger'
 import {
   profileOf, selectAutoTargets, voiceInputOf, judgeApply, judgePublishDefects,
   AUTO_GATE_VERDICT, MACHINE_REVIEWED_BY, type AutoRow,
@@ -556,61 +559,177 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
     JSON.stringify(hours) === JSON.stringify(SUPPLY_RUN_SLOTS_KST.map((s) => ({ hour: s.hour, minute: s.minute }))),
     JSON.stringify(hours))
   /**
-   * 🔴 **"예산 env 가 없어야 PASS" 는 잘못된 조건이었다** (2026-09-22 보정).
+   * 🔴 **두 번 틀렸던 자리다** (2026-09-22 2차 정정).
    *
-   *    앞판은 템플릿에 예산 env 가 **없을 때만** 통과했다. 그래서 승인을 받아
-   *    실제로 넣는 순간 검사가 빨갛게 된다 — 활성화하면 깨지는 검사는
-   *    활성화를 막는 것이 아니라 **검사를 지우게** 만든다.
+   *    1차: "예산 env 가 **없어야** PASS" — 승인받아 넣는 순간 검사가 깨졌다.
+   *    2차: "plist 에 들어가야 한다" — **위치가 틀렸다.** 러너는 `loadEnvLocal()` 로
+   *         `process.cwd()/.env.local` 을 읽고, plist 의 `WorkingDirectory` 가
+   *         runtime 작업트리이며 그곳의 `.env.local` 은 정본 env 파일로 걸린 심볼릭 링크다.
+   *         plist 에 넣으면 값이 두 곳으로 갈라진다.
    *
-   * 🔴 그래서 승인 **전** 상태와 승인 **후** 설치본을 각각 본다.
-   *    둘 다 정상이면 PASS 다.
-   * 🔴 값은 찍지 않는다 — 예산·요청 상한 두 숫자만 본다.
+   * 🔴 그래서 지금은 **정본 env 파일**을 본다. 값은 세 개만 읽고 **찍지 않는다** —
+   *    같은 파일에 API 키가 있다.
    */
-  const tplBudget = SUPPLY_BUDGET_ENV_NAMES.filter((n) => tpl.includes(n))
-  console.log(`     템플릿 예산 env 선언 ${tplBudget.length}/${SUPPLY_BUDGET_ENV_NAMES.length}`)
-  check('🔴 🔴 **예산 env 는 셋 다이거나 하나도 없다 — 반쪽 선언은 안 된다**',
-    tplBudget.length === 0 || tplBudget.length === SUPPLY_BUDGET_ENV_NAMES.length,
-    `${tplBudget.length}개`)
-  check('🔴 🔴 **템플릿에 비밀값 리터럴이 없다**',
-    !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(tpl))
+  const envPath = `${process.env.HOME ?? ''}/${SUPPLY_ENV_FILE_REL}`
+  const envText = (() => { try { return readFileSync(envPath, 'utf-8') } catch { return null } })()
+  const envOf = (k: string): string | null => {
+    if (envText === null) return null
+    const m = new RegExp(`^${k}=(.*)$`, 'm').exec(envText)
+    return m === null ? null : (m[1] ?? '').trim()
+  }
+  check('🔴 정본 env 파일을 읽을 수 있다', envText !== null, envPath)
+  const declared = SUPPLY_BUDGET_ENV_NAMES.filter((n) => envOf(n) !== null)
+  console.log(`     정본 env 예산 선언 ${declared.length}/${SUPPLY_BUDGET_ENV_NAMES.length}`)
+  check('🔴 🔴 **예산 env 는 셋 다이거나 하나도 없다 — 반쪽은 장부가 fail-closed 로 막는다**',
+    declared.length === 0 || declared.length === SUPPLY_BUDGET_ENV_NAMES.length,
+    `${declared.length}개`)
+  check('🔴 🔴 **plist 에는 예산 env 를 넣지 않는다 — 두 곳으로 갈라지지 않게**',
+    SUPPLY_BUDGET_ENV_NAMES.every((n) => !tpl.includes(n)),
+    SUPPLY_BUDGET_ENV_NAMES.filter((n) => tpl.includes(n)).join(','))
+  check('🔴 plist 의 WorkingDirectory 가 저장소라야 그 .env.local 을 읽는다',
+    tpl.includes('<key>WorkingDirectory</key>'))
 
-  /** 🔴 승인 전 — 승인값이 없으면 **설치본이 있어서는 안 된다**(fail-closed) */
+  /** 🔴 설치된 plist — 있으면 정본과 맞아야 한다 */
   const installed = (() => {
     const at = `${process.env.HOME ?? ''}/Library/LaunchAgents/com.soransoran.supply-process.plist`
     try { return { at, text: readFileSync(at, 'utf-8') } } catch { return null }
   })()
-  console.log(`     설치된 plist ${installed === null ? '없음 (미등록)' : '있음'}`)
-  if (SUPPLY_DAILY_USD_APPROVED === null) {
-    check('🔴 🔴 **하루 상한이 미승인이면 launchd 가 등록돼 있지 않다**',
-      installed === null, installed === null ? '' : '🔴 미승인인데 설치본이 있다')
-    check(`🔴 제안값 $${SUPPLY_DAILY_USD_PROPOSED} 는 승인값이 아니다`,
-      SUPPLY_DAILY_USD_PROPOSED > 0)
-  } else {
-    check('🔴 승인값은 0 보다 크다', SUPPLY_DAILY_USD_APPROVED > 0)
-  }
+  const enabled = envOf(SUPPLY_ENABLE_ENV) === 'true'
+  console.log(`     설치된 plist ${installed === null ? '없음' : '있음'} · 스위치 ${enabled ? 'true' : 'false/없음'}`)
 
-  /** 🔴 승인 후 — 설치본이 있으면 예산·요청 상한이 정본과 맞아야 한다 */
-  if (installed !== null) {
-    const num = (key: string): number | null => {
-      const m = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(installed.text)
-      if (m === null) return null
-      const v = Number(m[1])
-      return Number.isFinite(v) ? v : null
+  /** 🔴 승인 전 — 승인값이 없으면 **켜져 있어서는 안 된다**(fail-closed) */
+  if (SUPPLY_DAILY_USD_APPROVED === null) {
+    check('🔴 🔴 **하루 상한이 미승인이면 공급이 켜져 있지 않다**',
+      installed === null && !enabled && declared.length === 0,
+      '🔴 미승인인데 예산·스위치·설치본 중 무엇이 있다')
+  } else {
+    /**
+     * 🔴 승인 후 — 값이 있으면 승인값 이하여야 하고, 없으면 아직 안 넣은 것이다.
+     *    **둘 다 PASS 다.** 켜는 순간 깨지는 검사를 다시 만들지 않는다.
+     */
+    check('🔴 승인값은 0 보다 크다', SUPPLY_DAILY_USD_APPROVED > 0)
+    if (declared.length === SUPPLY_BUDGET_ENV_NAMES.length) {
+      const daily = Number(envOf('SORAN_LLM_DAILY_BUDGET_USD'))
+      const cap = Number(envOf('SORAN_LLM_RUN_REQUEST_CAP'))
+      const head = Number(envOf('SORAN_LLM_RESERVE_HEADROOM'))
+      check('🔴 🔴 **하루 예산이 승인값 이하다**',
+        Number.isFinite(daily) && daily <= SUPPLY_DAILY_USD_APPROVED,
+        `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED}`)
+      check('🔴 🔴 **회차 요청 상한이 정본과 같다**',
+        cap === SUPPLY_REQUESTS_PER_RUN, `${cap} / 정본 ${SUPPLY_REQUESTS_PER_RUN}`)
+      check('🔴 🔴 **여유 배수가 정본과 같고 1 이상이다**',
+        head === SUPPLY_RESERVE_HEADROOM && head >= 1, `${head} / 정본 ${SUPPLY_RESERVE_HEADROOM}`)
+      check('🔴 🔴 **회차당 원천 × 원천당 요청 = 회차 요청 상한**',
+        SUPPLY_WORKSET_PER_RUN * WORKSET_TOTAL_PER_SOURCE === SUPPLY_REQUESTS_PER_RUN,
+        `${SUPPLY_WORKSET_PER_RUN}×${WORKSET_TOTAL_PER_SOURCE}`)
+      check('🔴 정본 workset 기본값이 회차 계약과 같다',
+        WORKSET_DEFAULT_LIMIT === SUPPLY_WORKSET_PER_RUN,
+        `${WORKSET_DEFAULT_LIMIT} / ${SUPPLY_WORKSET_PER_RUN}`)
+    } else {
+      console.log('     🔴 예산 env 가 아직 없다 — 회차는 돌지만 유료 요청은 NO_BUDGET 으로 보류된다')
     }
-    check('🔴 🔴 **설치본이 예산 env 세 개를 모두 선언한다**',
-      SUPPLY_BUDGET_ENV_NAMES.every((n) => installed.text.includes(n)),
-      SUPPLY_BUDGET_ENV_NAMES.filter((n) => !installed.text.includes(n)).join(','))
-    const cap = num('SORAN_LLM_RUN_REQUEST_CAP')
-    check('🔴 🔴 **회차 요청 상한이 정본과 같다**',
-      cap === SUPPLY_REQUESTS_PER_RUN, `${cap} / 정본 ${SUPPLY_REQUESTS_PER_RUN}`)
-    const daily = num('SORAN_LLM_DAILY_BUDGET_USD')
-    check('🔴 🔴 **하루 예산이 승인값 이하다 — 승인 없이는 통과할 수 없다**',
-      SUPPLY_DAILY_USD_APPROVED !== null && daily !== null && daily <= SUPPLY_DAILY_USD_APPROVED,
-      `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED ?? '(없음)'}`)
+    /** 🔴 스위치가 켜져 있으면 예산도 있어야 한다 — 돌면서 0건인 상태를 막는다 */
+    check('🔴 🔴 **스위치가 켜져 있으면 예산 env 도 있다 — 돌면서 0건을 막는다**',
+      !enabled || declared.length === SUPPLY_BUDGET_ENV_NAMES.length)
+    check('🔴 🔴 **설치본이 있으면 스위치와 예산이 함께 있다**',
+      installed === null || (enabled && declared.length === SUPPLY_BUDGET_ENV_NAMES.length))
+  }
+  if (installed !== null) {
+    check('🔴 설치본도 6회다',
+      (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
     check('🔴 🔴 **설치본에 비밀값 리터럴이 없다**',
       !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(installed.text))
-    check('🔴 설치본도 6회다', (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
+    check('🔴 🔴 **설치본에도 예산 env 를 넣지 않는다**',
+      SUPPLY_BUDGET_ENV_NAMES.every((n) => !installed.text.includes(n)))
   }
+  check('🔴 🔴 **템플릿에 비밀값 리터럴이 없다**',
+    !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(tpl))
+
+  // ── 🔴 🔴 장부가 승인 상한을 실제로 지키는가 ──
+  {
+    /**
+     * 🔴 **$0.30 은 하루 총액이다** — 공급·판정·초안·댓글이 같은 장부를 쓴다.
+     *    그날 이미 정산된 액수가 이 상한에 함께 든다. 회차마다 새로 $0.30 이 아니다.
+     */
+    const limits = {
+      dailyUsd: SUPPLY_DAILY_USD_APPROVED,
+      runRequestCap: SUPPLY_REQUESTS_PER_RUN,
+      headroomMultiplier: SUPPLY_RESERVE_HEADROOM,
+    }
+    const tally = (o: Partial<DayTally>): DayTally => ({
+      settledUsd: 0, openReservedUsd: 0, usageUnknownUsd: 0,
+      paidRequests: 0, countTokensRequests: 0, blocked: 0, overruns: 0, ...o,
+    })
+    const spend = (t: DayTally, usd: number, extra: Partial<Parameters<typeof judgeSpend>[0]> = {}) =>
+      judgeSpend({
+        limits, tally: t, runPaid: 0, reserve: { known: true, usd, pricingVersion: 'v' },
+        ledgerOk: true, settleHold: null, unresolved: [], ...extra,
+      })
+
+    check('🔴 여력 안이면 통과한다', spend(tally({ settledUsd: 0.05 }), 0.05).ok === true)
+    check('🔴 🔴 **그날 이미 쓴 액수가 상한에 함께 든다 — 회차마다 새로 $0.30 이 아니다**', (() => {
+      const v = spend(tally({ settledUsd: 0.28 }), 0.05)
+      return !v.ok && v.code === 'DAILY_EXHAUSTED'
+    })(), JSON.stringify(spend(tally({ settledUsd: 0.28 }), 0.05)))
+    check('🔴 🔴 **열린 예약도 여력에서 뺀다 — 끝나지 않은 요청이 여력을 되돌려 주지 않는다**', (() => {
+      const v = spend(tally({ settledUsd: 0.10, openReservedUsd: 0.19 }), 0.05)
+      return !v.ok && v.code === 'DAILY_EXHAUSTED'
+    })())
+    check('🔴 🔴 **끝을 기록하지 못한 예약이 있으면 사람이 마감할 때까지 막는다**', (() => {
+      const v = spend(tally({}), 0.01, {
+        unresolved: [{
+          code: 'ownerGone',
+          reason: '주인 프로세스가 없다',
+          reservation: { attemptId: 'a1', runId: 'r1', pid: 1, startedAt: '', reservedUsd: 0.01 },
+        }] as never,
+      })
+      return !v.ok && v.code === 'UNRESOLVED_RESERVATION'
+    })())
+    check('🔴 🔴 **정산을 적지 못한 보류가 있으면 막는다**', (() => {
+      const v = spend(tally({}), 0.01, { settleHold: '정산을 적지 못했다' })
+      return !v.ok && v.code === 'SETTLE_ERROR'
+    })())
+    check('🔴 🔴 **실제가 예약을 넘은 건이 있으면 막는다**', (() => {
+      const v = spend(tally({ overruns: 1 }), 0.01)
+      return !v.ok && v.code === 'UNSETTLED_OVERRUN'
+    })())
+    check('🔴 🔴 **장부를 못 읽으면 막는다 — 모르면 쓰지 않는다**',
+      spend(tally({}), 0.01, { ledgerOk: false }).ok === false)
+    check('🔴 🔴 **회차 요청 상한에 닿으면 막는다**', (() => {
+      const v = spend(tally({}), 0.01, { runPaid: SUPPLY_REQUESTS_PER_RUN })
+      return !v.ok && v.code === 'RUN_CAP'
+    })())
+    check('🔴 🔴 **예산 env 가 없으면 무제한이 아니라 보류다**', (() => {
+      const v = judgeSpend({
+        limits: { dailyUsd: null, runRequestCap: null, headroomMultiplier: null },
+        tally: tally({}), runPaid: 0, reserve: { known: true, usd: 0.01, pricingVersion: 'v' },
+        ledgerOk: true, settleHold: null, unresolved: [],
+      })
+      return !v.ok && v.code === 'NO_BUDGET'
+    })())
+    /** 🔴 미상 사용량은 자동으로 풀리지 않는다 — 열린 예약으로 남는다 */
+    check('🔴 🔴 **사용량을 모르면 예약을 풀지 않는다 (usageUnknown)**', (() => {
+      const r = judgeSettle({ reservedUsd: 0.01, cost: { known: false, code: 'NO_USAGE', reason: '' } })
+      return r.status === 'usageUnknown' && r.settledUsd === null
+    })())
+    /** 🔴 접은 장부에서 미상은 열린 예약에 들어간다 */
+    check('🔴 🔴 **미상 사용량이 여력을 되돌려 주지 않는다**', (() => {
+      const t = tallyOf([
+        { attemptId: 'a', runId: 'r', stage: 'judge', status: 'usageUnknown',
+          reservedUsd: 0.25, settledUsd: null, model: 'm', pricingVersion: 'v' },
+      ] as never)
+      return t.openReservedUsd === 0.25 && t.usageUnknownUsd === 0.25
+        && spend(t, 0.1).ok === false
+    })())
+    check('🔴 🔴 **한 attemptId 의 마지막 줄이 이긴다 — 예약과 정산을 두 번 세지 않는다**', (() => {
+      const t = tallyOf([
+        { attemptId: 'a', runId: 'r', stage: 'judge', status: 'settled',
+          reservedUsd: 0.02, settledUsd: 0.007, model: 'm', pricingVersion: 'v' },
+      ] as never)
+      return t.settledUsd === 0.007 && t.openReservedUsd === 0 && t.paidRequests === 1
+    })())
+  }
+
   check('🔴 🔴 **노트북 종료 한계를 출력한다**',
     describeSupplySchedule().includes('노트북 종료')
     && SUPPLY_UNDETECTED_LIMITS.some((x) => x.includes('catch-up 이 없다')))
