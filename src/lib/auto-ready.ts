@@ -437,3 +437,146 @@ export function outcomeOf(r: SampleRow): ReviewOutcome {
     hardDefect: hardDefectOf(r.editDiff),
   }
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **감사를 남긴다** (2026-09-22 보정)
+//
+//   앞판은 `auditPicks` 결과를 GitHub Actions 러너의 임시 디스크에 파일로 썼다.
+//   그 디스크는 회차가 끝나면 사라진다. **다음 회차가 읽을 수 없으면 감사가 아니다** —
+//   고른 것도, 사람이 무엇을 보고 무엇을 찾았는지도 남지 않는다.
+//
+//   스키마를 바꿀 수 없으므로 **감사 대상 행 자신의 `editDiff`** 에 적는다.
+//   그 행이 곧 감사 대상이므로 자리가 흩어지지 않고, 다음 회차가 그대로 읽는다.
+// ─────────────────────────────────────────────────────────
+
+export const AUDIT_RECORD_KEY = 'audit'
+
+export type AuditRecord = {
+  /** 감사 대상으로 뽑힌 회차(KST 날짜) */
+  pickedOn: string
+  /** 🔴 사람이 보고 내린 판정. **없으면 "아직 안 봤다"** 이지 "결함 없음" 이 아니다 */
+  defect?: boolean
+  note?: string
+}
+
+export function readAuditRecord(editDiff: unknown): AuditRecord | null {
+  if (editDiff === null || typeof editDiff !== 'object') return null
+  const r = (editDiff as Record<string, unknown>)[AUDIT_RECORD_KEY]
+  if (r === null || typeof r !== 'object') return null
+  const m = r as Record<string, unknown>
+  const on = typeof m.pickedOn === 'string' ? m.pickedOn : ''
+  if (on === '') return null
+  return {
+    pickedOn: on,
+    ...(typeof m.defect === 'boolean' ? { defect: m.defect } : {}),
+    ...(typeof m.note === 'string' ? { note: m.note } : {}),
+  }
+}
+
+export type AuditState = {
+  /** 자동이 정한 글 전체 */
+  autoDecided: number
+  /** 감사 대상으로 남아 있는 것 */
+  picked: number
+  /** 그중 사람이 보고 판정을 끝낸 것 */
+  reviewed: number
+  /** 결함이 나온 것 */
+  defects: number
+  /** 🔴 아직 안 본 것 — **결함 0 으로 치지 않는다** */
+  pending: number
+}
+
+export function auditStateOf(rows: readonly { id: string; editDiff: unknown }[]): AuditState {
+  const recs = rows.map((r) => readAuditRecord(r.editDiff)).filter((r): r is AuditRecord => r !== null)
+  const reviewed = recs.filter((r) => r.defect !== undefined)
+  return {
+    autoDecided: rows.length,
+    picked: recs.length,
+    reviewed: reviewed.length,
+    defects: reviewed.filter((r) => r.defect === true).length,
+    pending: recs.length - reviewed.length,
+  }
+}
+
+/**
+ * 🔴 **감사가 자동을 닫는 실제 경로.** `judgeAutoReadyOpen` 이 열어도 이것이 닫으면 닫힌다.
+ *
+ * 🔴 아직 안 본 감사 대상이 있으면 **다음 회차를 열지 않는다.** 여기서 "나중에 보면 된다" 로
+ *    넘어가면 감사가 장식이 된다 — 뽑아만 놓고 아무도 보지 않아도 자동이 계속 돈다.
+ */
+export function judgeAuditGate(state: AuditState): OpenVerdict {
+  if (state.autoDecided === 0) return { open: true, reason: '자동 판정이 없어 감사할 것이 없다' }
+  if (state.picked === 0) return { open: false, reason: '🔴 자동 판정이 있는데 감사 대상이 뽑히지 않았다' }
+  // 🔴 **결함이 먼저다.** 대기가 남아 있어도 이미 나온 결함이 더 굳은 사실이다
+  if (state.defects > 0) {
+    const o = judgeAuditOutcome({ audited: state.reviewed, defectsFound: state.defects })
+    return { open: false, reason: `🔴 감사 — ${o.reason}` }
+  }
+  // 🔴 그다음이 대기다. 보지 않은 것을 결함 0 으로 치지 않는다
+  if (state.pending > 0) {
+    return { open: false, reason: `🔴 감사 대기 ${state.pending}건 — 보지 않은 것을 결함 0 으로 치지 않는다` }
+  }
+  const outcome = judgeAuditOutcome({ audited: state.reviewed, defectsFound: state.defects })
+  if (!outcome.keepOpen) return { open: false, reason: `🔴 감사 — ${outcome.reason}` }
+  return { open: true, reason: `감사 ${state.reviewed}건 전부 확인 · 결함 0` }
+}
+
+/** 🔴 두 문이 **모두** 열려야 열린다 — 하나라도 닫히면 닫힌다 */
+export function combineGates(sample: OpenVerdict, audit: OpenVerdict): OpenVerdict {
+  if (!sample.open) return sample
+  if (!audit.open) return audit
+  return { open: true, reason: `${sample.reason} · ${audit.reason}` }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **발행 트랜잭션 안에서 다시 본다** (2026-09-22 보정)
+//
+//   `recheckBeforePublish` 는 트랜잭션 **밖**에 있다. 재확인이 통과한 직후
+//   다른 실행이 본문을 고치면, 고쳐진 본문이 그대로 `Post` 에 쓰인다.
+//   그래서 **실제로 Post 를 만드는 그 트랜잭션 안에서** 같은 것을 다시 묻는다.
+// ─────────────────────────────────────────────────────────
+
+export type InTxRow = {
+  decidedBy: string | null
+  editDiff: unknown
+  gateVerdict: unknown
+  gateResults: unknown
+  /** 🔴 **실제로 Post 에 쓰일 글** — 수정본이 있으면 그것이다 */
+  title: string
+  body: string
+  sourceCapturedAt: Date | null
+}
+
+export type InTxVerdict = { ok: true } | { ok: false; detail: string }
+
+/**
+ * 🔴 **자동이 정한 글만 본다.** 사람이 정한 글은 이 문을 지나지 않는다 — 기존 동작 불변.
+ *
+ *    셋 중 하나라도 어긋나면 막는다.
+ *      ① 게이트가 닫혀 있다
+ *      ② 도장 당시의 본문 판과 **지금 쓰이려는 글**이 다르다
+ *      ③ 지금 다시 봐도 자동 대상이어야 한다
+ */
+export function judgeAutoInTx(input: {
+  row: InTxRow
+  autoReadyOpen: boolean
+  sha256: (text: string) => string
+}): InTxVerdict {
+  const r = input.row
+  if ((r.decidedBy ?? '') !== AUTO_DECIDER) return { ok: true }
+  if (!input.autoReadyOpen) return { ok: false, detail: '자동 READY 게이트가 닫혀 있다' }
+  const stamp = readAutoReadyStamp(r.editDiff)
+  if (stamp === null) return { ok: false, detail: '자동 도장 기록이 없다 — 본문 판을 대조할 수 없다' }
+  const now = bodyVersionOf({ title: r.title, body: r.body }, input.sha256)
+  if (now !== stamp.bodyVersion) {
+    return { ok: false, detail: `도장 이후 본문이 바뀌었다 — ${stamp.bodyVersion} → ${now}` }
+  }
+  const v = judgeRow({
+    gateVerdict: String(r.gateVerdict),
+    warnings: warningsOfGate(r.gateResults),
+    sourceCapturedKnown: r.sourceCapturedAt !== null,
+    title: r.title, body: r.body,
+  })
+  if (!v.auto) return { ok: false, detail: `지금 다시 보면 자동 대상이 아니다 — ${v.reasons.join(' · ')}` }
+  return { ok: true }
+}

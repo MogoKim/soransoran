@@ -58,6 +58,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import {
   planRun, judgeAutoReadyOpen, sampleOf, recheckBeforePublish, readAutoReadyStamp,
   outcomeOf, warningsOfGate, auditPicks, AUTO_DECIDER, HUMAN_DECIDER, AUTO_READY_ENV,
+  auditStateOf, judgeAuditGate, combineGates, readAuditRecord, AUDIT_RECORD_KEY,
   type StampCandidate, type ReviewOutcome,
 } from '../src/lib/auto-ready'
 import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
@@ -137,6 +138,52 @@ const rows: AutoRow[] = raw.map((r) => ({
 }))
 
 
+// ── ①-a 🔴 **사후 감사 20% — 다음 회차도 읽는다** ──
+//
+// 🔴 앞판은 고른 목록을 러너의 임시 디스크에 파일로 썼다. 그 디스크는 회차가 끝나면
+//    사라진다. **다음 회차가 읽을 수 없으면 감사가 아니다.** 그래서 감사 대상 행
+//    자신의 `editDiff.audit` 에 적는다 — 그 행이 곧 감사 대상이라 자리가 흩어지지 않는다.
+// 🔴 그리고 그 기록이 **자동을 실제로 닫는다**(`judgeAuditGate`). 파일만 만들고
+//    아무 판정도 하지 않으면 감사가 장식이 된다.
+const autoDecidedRows = await prisma.originalPostApprovalQueue.findMany({
+  where: { decidedBy: AUTO_DECIDER },
+  select: { id: true, editDiff: true, createdPostId: true, draftTitle: true, decidedAt: true },
+  orderBy: { decidedAt: 'asc' },
+})
+const todayKst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)
+if (autoDecidedRows.length > 0) {
+  // 🔴 뽑기는 결정적이다 — 같은 입력이면 같은 답이라 회차가 여러 번 와도 대상이 흔들리지 않는다
+  const want = new Set(auditPicks({
+    autoDecided: autoDecidedRows.map((r) => r.id),
+    ratio: AUTO_READY_CONTRACT.sampledAuditRatio,
+    seed: 20260922,
+  }))
+  const missing = autoDecidedRows.filter((r) => want.has(r.id) && readAuditRecord(r.editDiff) === null)
+  if (missing.length > 0 && APPLY) {
+    for (const m of missing) {
+      // 🔴 기존 기록을 덮지 않는다 — 도장·표식과 **같은 칸에 얹는다**
+      const base = (m.editDiff !== null && typeof m.editDiff === 'object')
+        ? m.editDiff as Record<string, unknown> : {}
+      const u = await prisma.originalPostApprovalQueue.updateMany({
+        where: { id: m.id, decidedBy: AUTO_DECIDER },
+        data: { editDiff: { ...base, [AUDIT_RECORD_KEY]: { pickedOn: todayKst } } as never },
+      })
+      if (u.count !== 1) console.log(`     ⚠️ ${m.id} 감사 대상 표시 실패 — 그 사이 행이 바뀌었다`)
+    }
+  }
+}
+// 🔴 표시한 뒤 다시 읽는다 — 방금 쓴 것까지 포함해서 판정해야 한다
+const auditRows = APPLY && autoDecidedRows.length > 0
+  ? await prisma.originalPostApprovalQueue.findMany({
+    where: { decidedBy: AUTO_DECIDER }, select: { id: true, editDiff: true },
+  })
+  : autoDecidedRows
+const auditState = auditStateOf(auditRows)
+const auditGate = judgeAuditGate(auditState)
+console.log(`\n①-a 사후 감사  자동 판정 ${auditState.autoDecided}건 · 대상 ${auditState.picked}건`
+  + ` · 확인 ${auditState.reviewed}건 · 결함 ${auditState.defects}건 · 대기 ${auditState.pending}건`)
+console.log(`     ${auditGate.open ? '통과' : '🔴 닫힘'} — ${auditGate.reason}`)
+
 // ── ①-b 🔴 **자동 READY** — 사람 대신 기계가 도장을 찍는 자리 ──
 //
 // 🔴 이 구간은 **기본이 닫힘**이다. 스위치가 꺼져 있거나 표본·무수정률·중대 결함
@@ -165,13 +212,15 @@ const sampleRaw = await prisma.originalPostApprovalQueue.findMany({
 const outcomes: ReviewOutcome[] = sampleRaw.map((r) =>
   outcomeOf({ ...r, sourceCapturedAt: r.rawContent?.sourceCapturedAt ?? null }))
 const autoSample = sampleOf(outcomes)
-const autoOpen = judgeAutoReadyOpen({
+const sampleGate = judgeAutoReadyOpen({
   enabled: (process.env[AUTO_READY_ENV] ?? '').trim() === '1',
   reviewSampleMin: AUTO_READY_CONTRACT.reviewSampleMin,
   noEditAccuracyMin: AUTO_READY_CONTRACT.noEditAccuracyMin,
   hardDefectMax: AUTO_READY_CONTRACT.hardDefectMax,
   sample: autoSample,
 })
+// 🔴 **두 문이 모두 열려야 열린다** — 표본이 좋아도 감사가 닫으면 닫힌다
+const autoOpen = combineGates(sampleGate, auditGate)
 console.log(`\n①-b 자동 READY  ${autoOpen.open ? '🔴 열림' : '닫힘'} — ${autoOpen.reason}`)
 console.log(`     표본 ${autoSample.total}/${AUTO_READY_CONTRACT.reviewSampleMin}`
   + ` · 무수정률 ${autoSample.noEditAccuracy === null ? '—' : `${(autoSample.noEditAccuracy * 100).toFixed(1)}%`}`
@@ -213,41 +262,6 @@ if (runPlan.writes.length > 0) {
 } else {
   console.log(`     기록 0건 — ${autoOpen.open ? '적격 후보가 없다' : '게이트가 닫혀 있다'}`)
 }
-
-// ── ①-c 🔴 **사후 감사 20%** — 자동이 정한 글을 사람이 되짚는다 ──
-//
-// 🔴 이 구간은 **정기 회차마다 돈다.** 별도 예약을 만들지 않는다 — 늘려도 같은 큐에서
-//    같이 늦는다. 읽기만 하며, 고른 목록을 사람 검토 묶음 파일로 남긴다.
-// 🔴 감사에서 결함이 하나라도 나오면 비율을 줄이지 않고 **자동을 닫는다**(`judgeAuditOutcome`).
-//    닫는 행위는 스위치를 끄는 것이고, 그것은 사람이 한다 — 러너가 env 를 바꾸지 않는다.
-const autoDecided = await prisma.originalPostApprovalQueue.findMany({
-  where: { decidedBy: AUTO_DECIDER },
-  select: { id: true, createdPostId: true, draftTitle: true, decidedAt: true },
-  orderBy: { decidedAt: 'asc' },
-})
-if (autoDecided.length > 0) {
-  const picks = new Set(auditPicks({
-    autoDecided: autoDecided.map((r) => r.id),
-    ratio: AUTO_READY_CONTRACT.sampledAuditRatio,
-    seed: Number(kstDayStart(new Date()).getTime() / 1000 | 0),
-  }))
-  console.log(`\n①-c 사후 감사  자동 판정 ${autoDecided.length}건 중 ${picks.size}건`)
-  const lines = autoDecided.filter((r) => picks.has(r.id)).map((r) =>
-    `- ${r.id} · ${r.createdPostId === null ? '미발행' : `Post ${r.createdPostId}`} · ${r.draftTitle.slice(0, 40)}`)
-  for (const l of lines) console.log(`   ${l}`)
-  const dir = 'docs/operations/auto-ready-audit'
-  mkdirSync(dir, { recursive: true })
-  const day = kst(kstDayStart(new Date())).slice(0, 10)
-  writeFileSync(`${dir}/${day}.md`, `# 자동 READY 사후 감사 ${day}\n\n`
-    + `자동 판정 ${autoDecided.length}건 · 감사 대상 ${picks.size}건 (${AUTO_READY_CONTRACT.sampledAuditRatio * 100}%)\n\n`
-    + `${lines.join('\n')}\n\n`
-    + '🔴 결함이 하나라도 나오면 비율을 줄이지 않고 자동을 닫는다.\n'
-    + `🔴 스위치는 사람이 끈다 — ${AUTO_READY_ENV}=0\n`, 'utf-8')
-  console.log(`   묶음 ${dir}/${day}.md`)
-} else {
-  console.log('\n①-c 사후 감사  자동 판정 0건 — 감사할 것이 없다')
-}
-
 
 // ── ② 안전 재판정 — 🔴 저장된 값을 믿지 않는다 ──
 // 🔴 자동 도장을 방금 찍었으면 그 행의 `decidedBy` 는 이미 바뀌었다 — 메모리 쪽도 맞춘다
@@ -731,7 +745,12 @@ if (target.decidedBy === AUTO_DECIDER) {
 
 // ── ⑦ 발행 — 🔴 되돌릴 수 없다 ──
 // 🔴 상한을 주입한다 — 트랜잭션 안 재판정도 같은 값을 쓴다
-const res = await publishOriginalPostTx(prisma, { queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP })
+// 🔴 트랜잭션 **안**에서 다시 볼 수 있도록 게이트와 해시를 넘긴다.
+//    주지 않으면 자동 도장 행은 트랜잭션 안에서 막힌다(fail-closed).
+const res = await publishOriginalPostTx(prisma, {
+  queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP,
+  autoReadyOpen: autoOpen.open, sha256,
+})
 if (res.kind !== 'published') {
   await prisma.$disconnect()
   fail(res.kind === 'blocked' ? `발행이 막혔습니다 — ${res.code} · ${res.detail}` : `발행 오류 — ${res.message}`)

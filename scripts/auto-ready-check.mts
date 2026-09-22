@@ -10,6 +10,7 @@ import {
   sampleOf, judgeAutoReadyOpen, judgeRow, auditPicks, judgeAuditOutcome,
   planAutoReadyWrite, recheckBeforePublish, bodyVersionOf, hardDefectOf, HARD_DEFECT_KEY,
   planRun, readAutoReadyStamp, isEditRecord, type StampCandidate,
+  judgeAutoInTx, judgeAuditGate, auditStateOf, combineGates, readAuditRecord, AUDIT_RECORD_KEY,
   type ReviewOutcome,
 } from '../src/lib/auto-ready'
 import { selectAutoTargets, autoReadyAccepted, MACHINE_REVIEWED_BY, AUTO_GATE_VERDICT, type AutoRow } from '../src/lib/original-post-auto-publish'
@@ -20,6 +21,7 @@ import {
 } from '../src/lib/micro-seed-supply-autofill'
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { readFileSync } from 'node:fs'
+import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 
 let pass = 0, fail = 0
 const check = (n: string, ok: boolean, d = ''): void => {
@@ -413,12 +415,194 @@ console.log('\n⑪ 🔴 🔴 **운영 러너가 실제로 이 경로를 부른�
     /String\(w\.data\.decidedBy\) === String\(HUMAN_DECIDER\)/.test(runner))
   check('🔴 🔴 **발행 선택기에 게이트 판정을 넘긴다 — 기본 닫힘을 우회하지 않는다**',
     /autoReadyOpen: autoOpen\.open/.test(runner))
-  check('🔴 🔴 **발행 직전 재확인이 발행 호출보다 앞에 있다**',
-    runner.indexOf('recheckBeforePublish') < runner.indexOf('publishOriginalPostTx('))
-  check('🔴 🔴 **감사는 발행 여부와 무관하게 매 회차 돈다 — 발행 게이트보다 앞이다**',
-    runner.indexOf('auditPicks') < runner.indexOf('const gate = judgeApply'))
   check('🔴 표본은 기계 후보만 센다 — 사람 후보가 섞이면 부풀어 오른다 (실측 22 vs 15)',
     /startsWith: MACHINE_SITE_PREFIX/.test(runner))
+}
+
+console.log('\n⑫ 🔴 🔴 **경쟁 조건 — 재확인 직후 본문이 바뀌는 반례**')
+{
+  const sha256 = (t: string) => {
+    let h = 2166136261 >>> 0
+    for (const ch of t) h = (Math.imul(h ^ ch.charCodeAt(0), 16777619)) >>> 0
+    return h.toString(16).padStart(8, '0').repeat(8)
+  }
+  const good = '주변에 물어보면 반반이더라고요. 다들 어떻게 드시나요?'
+  const captured = new Date('2026-09-21T00:00:00Z')
+
+  // 🔴 **한 행을 두 실행이 함께 본다.** 이것이 실제 배치의 모양이다.
+  const store = {
+    decidedBy: AUTO_DECIDER as string | null,
+    title: '김치 이야기', body: good,
+    editDiff: {} as unknown,
+    gateVerdict: 'PASS' as unknown, gateResults: { holds: [], blocks: [] } as unknown,
+    sourceCapturedAt: captured as Date | null,
+  }
+  store.editDiff = planRun({
+    candidates: [{
+      id: 'q1', decidedBy: 'machine:auto-draft-v5', updatedAt: new Date(), status: 'APPROVED',
+      createdPostId: null, gateVerdict: 'PASS', warnings: [], sourceCapturedKnown: true,
+      title: store.title, body: store.body,
+    }],
+    open: { open: true, reason: '네 조건 통과' }, now: new Date(),
+    machineDecidedBy: 'machine:auto-draft-v5', sha256,
+  }).writes[0]?.data.editDiff
+
+  // ── ① 러너 A: 발행 직전 재확인 → 통과한다
+  const stamp = readAutoReadyStamp(store.editDiff)!
+  const outside = recheckBeforePublish({
+    stampedBodyVersion: stamp.bodyVersion, current: { title: store.title, body: store.body },
+    open: true, sha256,
+    row: { gateVerdict: 'PASS', warnings: [], sourceCapturedKnown: true, title: store.title, body: store.body },
+  })
+  check('🔴 트랜잭션 밖 재확인은 이 순간 통과한다', outside.ok)
+
+  // ── ② 그 직후 러너 B(또는 사람)가 본문을 고친다 — 트랜잭션은 아직 열리지 않았다
+  store.body = `${good} 확실히 그런 겁니다.`
+
+  // ── ③ 러너 A 가 이제 트랜잭션을 연다. **밖의 판정은 이미 낡았다.**
+  const inTx = judgeAutoInTx({
+    row: { ...store, title: store.title, body: store.body },
+    autoReadyOpen: true, sha256,
+  })
+  check('🔴 🔴 **트랜잭션 안에서 잡는다 — 밖의 통과를 믿지 않는다**',
+    inTx.ok === false && !inTx.ok && inTx.detail.includes('본문이 바뀌었다'), JSON.stringify(inTx))
+  check('🔴 🔴 **밖의 재확인만 있었다면 바뀐 본문이 그대로 나갔을 것이다**', (() => {
+    // 밖의 판정은 ①에서 이미 ok 였고, ②의 변경을 알 길이 없다
+    return outside.ok && !inTx.ok
+  })())
+
+  // ── 게이트가 그 사이 닫혀도 막힌다
+  store.body = good
+  check('🔴 🔴 **도장 이후 게이트가 닫히면 트랜잭션 안에서 막힌다**', (() => {
+    const v = judgeAutoInTx({ row: store, autoReadyOpen: false, sha256 })
+    return !v.ok && v.detail.includes('닫혀')
+  })())
+  check('🔴 🔴 **해시 함수를 주지 않으면 발행되지 않는다 (fail-closed)**', (() => {
+    const v = judgeAutoInTx({ row: store, autoReadyOpen: true, sha256: () => '' })
+    return !v.ok
+  })())
+  check('🔴 🔴 **원천 시각을 잃으면 트랜잭션 안에서 막힌다**', (() => {
+    const v = judgeAutoInTx({ row: { ...store, sourceCapturedAt: null }, autoReadyOpen: true, sha256 })
+    return !v.ok && v.detail.includes('수집 시각')
+  })())
+  check('🔴 사람이 정한 글은 이 문을 지나지 않는다 — 기존 동작 불변',
+    judgeAutoInTx({ row: { ...store, decidedBy: HUMAN_DECIDER }, autoReadyOpen: false, sha256 }).ok === true)
+  check('🔴 본문이 그대로고 게이트가 열려 있으면 통과한다',
+    judgeAutoInTx({ row: store, autoReadyOpen: true, sha256 }).ok === true)
+
+  // ── 🔴 **실제 발행 함수를 돌린다.** 부르기만 하고 결과를 버리는 코드를 잡으려면
+  //    문자열 검사로는 부족하다 — 가짜 저장소로 `publishOriginalPostTx` 자체를 실행한다.
+  type Row = {
+    id: string; status: string; createdPostId: string | null; gateVerdict: string
+    draftTitle: string; draftBody: string; editedTitle: string | null; editedBody: string | null
+    decidedBy: string | null; editDiff: unknown; gateResults: unknown
+    rawContent: { sourceCapturedAt: Date | null }
+    matchedPersona: {
+      id: string; code: string; status: string; userId: string
+      user: { providerId: string | null; _count: { accounts: number } }
+    } | null
+  }
+  const baseRow = (): Row => ({
+    id: 'q1', status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
+    draftTitle: '김치 이야기', draftBody: good, editedTitle: null, editedBody: null,
+    decidedBy: AUTO_DECIDER, editDiff: store.editDiff, gateResults: { holds: [], blocks: [] },
+    rawContent: { sourceCapturedAt: captured },
+    matchedPersona: { id: 'p1', code: 'P10', status: 'active', userId: 'u1',
+      user: { providerId: null, _count: { accounts: 0 } } },
+  })
+  /** 🔴 만들어진 Post 를 센다 — 0 이어야 "막았다" 이다 */
+  const fakeDb = (row: Row) => {
+    let created = 0
+    const tx = {
+      originalPostApprovalQueue: {
+        findUnique: async () => row,
+        updateMany: async () => ({ count: 1 }),
+      },
+      personaGlobalSwitch: { findUnique: async () => ({ enabled: false }) },
+      personaActivityLog: { count: async () => 0, create: async () => { /* noop */ } },
+      post: { create: async () => { created += 1; return { id: 'post-1', boardType: 'free' } } },
+    }
+    const client = { $transaction: async (fn: (t: unknown) => unknown) => fn(tx) }
+    return { client: client as never, made: () => created }
+  }
+
+  const runTx = async (row: Row, open: boolean, hash: ((t: string) => string) | undefined) => {
+    const db = fakeDb(row)
+    const res = await publishOriginalPostTx(db.client, {
+      queueId: row.id, publishedToday: 0, dailyCap: 5, autoReadyOpen: open, sha256: hash,
+    })
+    return { res, made: db.made() }
+  }
+
+  const okRun = await runTx(baseRow(), true, sha256)
+  check('🔴 조건이 그대로면 실제로 발행된다 — 막기만 하는 코드가 아니다',
+    okRun.res.kind === 'published' && okRun.made === 1, JSON.stringify(okRun.res))
+
+  const changed = baseRow()
+  changed.editedBody = `${good} 확실히 그런 겁니다.`   // 🔴 재확인 뒤 누가 고쳤다
+  const changedRun = await runTx(changed, true, sha256)
+  check('🔴 🔴 **바뀐 본문은 Post 가 만들어지지 않는다 (write 0)**',
+    changedRun.res.kind === 'blocked' && changedRun.made === 0, JSON.stringify(changedRun.res))
+  check('🔴 🔴 **막힌 이유가 값으로 남는다**',
+    changedRun.res.kind === 'blocked' && changedRun.res.code === 'AUTO_READY_LOST')
+
+  const shutRun = await runTx(baseRow(), false, sha256)
+  check('🔴 🔴 **게이트가 닫혀 있으면 Post 0 이다**',
+    shutRun.res.kind === 'blocked' && shutRun.made === 0)
+
+  const noHash = await runTx(baseRow(), true, undefined)
+  check('🔴 🔴 **해시를 안 넘기면 Post 0 이다 (fail-closed)**',
+    noHash.res.kind === 'blocked' && noHash.made === 0)
+
+  const human = baseRow()
+  human.decidedBy = HUMAN_DECIDER
+  const humanRun = await runTx(human, false, undefined)
+  check('🔴 사람이 정한 글은 게이트와 무관하게 나간다 — 기존 동작 불변',
+    humanRun.res.kind === 'published' && humanRun.made === 1, JSON.stringify(humanRun.res))
+}
+
+console.log('\n⑬ 🔴 🔴 **감사가 다음 회차에도 남고, 실제로 자동을 닫는다**')
+{
+  const row = (id: string, rec?: Record<string, unknown>) =>
+    ({ id, editDiff: rec === undefined ? {} : { [AUDIT_RECORD_KEY]: rec } })
+  check('🔴 🔴 **기록이 행에 남아 다음 회차가 읽는다 — 임시 파일이 아니다**', (() => {
+    const r = readAuditRecord({ [AUDIT_RECORD_KEY]: { pickedOn: '2026-09-22', defect: false } })
+    return r?.pickedOn === '2026-09-22' && r.defect === false
+  })())
+  check('🔴 🔴 **결함이 나오면 자동이 닫힌다 — 비율을 줄이지 않는다**', (() => {
+    const g = judgeAuditGate(auditStateOf([
+      row('a', { pickedOn: 'd', defect: true }), row('b', { pickedOn: 'd', defect: false }), row('c'),
+    ]))
+    return !g.open && g.reason.includes('자동을 닫는다')
+  })())
+  check('🔴 🔴 **보지 않은 감사 대상이 남아 있으면 열지 않는다 — 대기를 결함 0 으로 치지 않는다**', (() => {
+    const g = judgeAuditGate(auditStateOf([row('a', { pickedOn: 'd' }), row('b')]))
+    return !g.open && g.reason.includes('감사 대기 1건')
+  })())
+  check('🔴 🔴 **자동 판정이 있는데 대상이 하나도 안 뽑혔으면 닫힌다**',
+    judgeAuditGate(auditStateOf([row('a'), row('b')])).open === false)
+  check('🔴 전부 확인했고 결함 0 이면 통과한다',
+    judgeAuditGate(auditStateOf([row('a', { pickedOn: 'd', defect: false }), row('b')])).open === true)
+  check('🔴 자동 판정이 아예 없으면 감사할 것이 없다', judgeAuditGate(auditStateOf([])).open === true)
+  check('🔴 🔴 **두 문 중 하나라도 닫히면 닫힌다**', (() => {
+    const open = { open: true, reason: '통과' }
+    const shut = { open: false, reason: '🔴 감사 — 결함' }
+    return combineGates(open, shut).open === false
+      && combineGates(shut, open).open === false
+      && combineGates(open, open).open === true
+  })())
+
+  const runner = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  check('🔴 🔴 **러너가 감사 판정을 실제 게이트에 합친다**',
+    /combineGates\(sampleGate, auditGate\)/.test(runner))
+  check('🔴 🔴 **감사 대상을 DB 에 표시한다 — 러너 임시 디스크가 아니다**',
+    /\[AUDIT_RECORD_KEY\]: \{ pickedOn: todayKst \}/.test(runner))
+  check('🔴 🔴 **발행 트랜잭션에 게이트와 해시를 넘긴다**',
+    /autoReadyOpen: autoOpen\.open, sha256,/.test(runner))
+  check('🔴 감사 기록 명령이 있다 — 결과를 적을 자리가 실제로 있다', (() => {
+    const pkg = JSON.parse(readFileSync('package.json', 'utf-8')) as { scripts: Record<string, string> }
+    return typeof pkg.scripts['auto-ready-audit'] === 'string'
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
