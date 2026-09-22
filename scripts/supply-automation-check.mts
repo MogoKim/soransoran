@@ -546,6 +546,129 @@ console.log('\n②-w 🔴 🔴 기간 변수가 **실제 예약 job** 까지 닿
 }
 
 // ─────────────────────────────────────────────────────────
+console.log('\n②-d5 🔴 🔴 D3 기간 운영 + D5 하루 시험이 겹치는 날')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실제 결함이었다** (2026-09-22). 그날 문(`judgeDayGuard`)이 언제나
+   *    **D3 판정**(`windowVerdict.can` = 3 − 발행수)을 봤다. D5 가 함께 켜진 날에는
+   *    단계가 d5(상한 5)인데 문은 3에서 "재고가 없다" 로 닫혔다 — **4·5번째가 막혔다.**
+   *
+   * 🔴 고친 뒤: 문은 **실제로 설치된 단계**의 판정을 본다.
+   */
+  const ENVS = {
+    SORAN_CAPACITY_STAGE: 'd10',
+    [WINDOW_STAGE_ENV]: 'd3', [WINDOW_FROM_ENV]: '2026-09-24', [WINDOW_UNTIL_ENV]: '2026-09-25',
+    SORAN_RELEASE_CANARY_STAGE: 'd5', SORAN_RELEASE_CANARY_DATE: '2026-09-24',
+  } as unknown as NodeJS.ProcessEnv
+  const NOTHING: StageVerdict[] = RELEASE_STAGES.map((stage) => ({ stage, ready: false, reasons: ['재고'] }))
+  const NOW = new Date('2026-09-24T00:40:00.000Z') // 9/24 09:40 KST
+  /** 🔴 단계마다 그날치 판정을 만드는 것은 러너와 같은 방식이다 — 남은 몫만큼만 본다 */
+  const dayFor = (stage: 'd3' | 'd5', published: number, stock: number) => {
+    const cap = Math.max(0, PROFILES[stage].dailyTarget - published)
+    const can = Math.min(cap, stock)
+    const sim: SimOutcome = {
+      stage, dates: ['2026-09-24'], in14: can, want14: PROFILES[stage].dailyTarget,
+      gaps: 0, recoveryBroken: 0, personas: 24, stock,
+      horizonStartAt: NOW, nextSlotAt: NOW, horizonDays: 1,
+    }
+    return judgeOneDayCanary(sim, {
+      publishedToday: published,
+      slotsLeft: Math.max(0, PROFILES[stage].dailyTarget - published),
+    })
+  }
+  const resolve = (published: number, stock: number) => resolveScale(ENVS, {
+    readiness: NOTHING,
+    window: {
+      now: NOW, verdict: dayFor('d3', published, stock),
+      dayVerdict: dayFor('d3', published, stock), publishedToday: published,
+    },
+    canary: { now: NOW, verdict: dayFor('d5', published, stock) },
+  })
+  /** 🔴 앞판이 쓰던 값 = D3 판정 · 고친 뒤 = 설치된 단계 판정 */
+  const gateAt = (published: number, stock: number, useWindow: boolean) => {
+    const r = resolve(published, stock)
+    const installed = r.releaseStage as 'd3' | 'd5'
+    const v = useWindow ? dayFor('d3', published, stock) : dayFor(installed, published, stock)
+    const row: AutoRow = {
+      id: `q${published}`, status: 'APPROVED', createdPostId: null, gateVerdict: AUTO_GATE_VERDICT,
+      promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, matchedPersonaId: 'p',
+      sourceSite: `${AUTOFILL_SITE_PREFIX}sheet`, title: 't', body: 'b',
+      decidedBy: 'founder', decidedAt: NOW, createdAt: NOW,
+    }
+    return {
+      stage: installed,
+      cap: PROFILES[installed].dailyTarget,
+      gate: judgeApply({
+        targets: [row], picked: row, apply: true, limit: 1,
+        publishedToday: published, dailyCap: PROFILES[installed].dailyTarget,
+        killSwitchEnabled: false, slot: { run: true, reason: '도래' },
+        dayGuard: judgeDayGuard({
+          publishedToday: published, dailyTarget: PROFILES[installed].dailyTarget,
+          publishable: v.can, hardDefects: [],
+        }),
+      }),
+    }
+  }
+
+  check('🔴 🔴 **겹치는 날 설치되는 단계는 d5 다 (높은 쪽)**',
+    resolve(0, 5).releaseStage === 'd5', resolve(0, 5).releaseStage)
+  check('🔴 🔴 **상한도 5다 — 3에서 멈추지 않는다**', gateAt(0, 5, false).cap === 5)
+
+  // ── 🔴 실제 연속 0→5회 ──
+  for (const n of [0, 1, 2, 3, 4]) {
+    const r = gateAt(n, 5 - n, false)
+    check(`🔴 🔴 **${n}건 낸 뒤 ${n + 1}번째가 열린다 (d5 · 상한 5)**`,
+      r.stage === 'd5' && r.gate.ok === true, r.gate.ok ? '' : r.gate.reason)
+  }
+  check('🔴 🔴 **5건을 다 내면 닫힌다 — 6번째는 없다**', (() => {
+    const r = gateAt(5, 0, false)
+    return r.gate.ok === false && !r.gate.reason.includes('전면')
+  })())
+
+  /** 🔴 **앞판 결함 재현** — D3 판정을 쓰면 4번째가 막힌다 */
+  check('🔴 🔴 **회귀 재현: D3 판정을 쓰면 4번째가 막힌다**', (() => {
+    const bad = gateAt(3, 2, true)
+    return bad.stage === 'd5' && bad.gate.ok === false && bad.gate.reason.includes('재고가 없어')
+  })(), JSON.stringify(gateAt(3, 2, true).gate))
+
+  // ── D5 NO-GO 이면 적격한 D3 를 유지한다 ──
+  {
+    /** 🔴 재고가 3건뿐이라 d5 는 NO-GO 이지만 d3 는 GO 다 */
+    const r = resolveScale(ENVS, {
+      readiness: NOTHING,
+      window: { now: NOW, verdict: dayFor('d3', 0, 3), dayVerdict: dayFor('d3', 0, 3), publishedToday: 0 },
+      canary: { now: NOW, verdict: dayFor('d5', 0, 3) },
+    })
+    check('🔴 🔴 **D5 가 NO-GO 면 d1 로 떨어지지 않고 적격한 D3 를 유지한다**',
+      r.releaseStage === 'd3', r.releaseStage)
+    check('🔴 왜 d5 를 안 켰는지 적는다',
+      r.notes.some((n) => n.includes('d5')), r.notes.join(' | '))
+  }
+  check('🔴 🔴 **겹쳐도 준비됐다고 말하지 않는다**',
+    resolve(0, 5).chosenReady === false && resolve(0, 5).readinessApplied === false)
+  check('🔴 🔴 **capacity 를 넘는 단계는 시험이라도 열지 않는다**', (() => {
+    const low = { ...ENVS, SORAN_CAPACITY_STAGE: 'd3' } as NodeJS.ProcessEnv
+    const r = resolveScale(low, {
+      readiness: NOTHING,
+      window: { now: NOW, verdict: dayFor('d3', 0, 5), dayVerdict: dayFor('d3', 0, 5), publishedToday: 0 },
+      canary: { now: NOW, verdict: dayFor('d5', 0, 5) },
+    })
+    return r.releaseStage === 'd3'
+  })())
+
+  // ── 🔴 러너가 설치된 단계의 판정을 쓰는가 ──
+  {
+    const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+    check('🔴 🔴 **러너의 그날 문이 설치된 단계 판정을 쓴다**',
+      /publishable: effectiveVerdict\.can/.test(src) && !/publishable: windowVerdict\.can/.test(src))
+    check('🔴 판정을 만드는 함수가 하나다 — 창이 달라지지 않는다',
+      (src.match(/const dayFor = \(stage: ReleaseStage\)/g) ?? []).length === 1
+      && (src.match(/anchor: 'now'/g) ?? []).length === 1)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 잡는 것')
 // ─────────────────────────────────────────────────────────
 {
