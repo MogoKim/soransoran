@@ -395,12 +395,26 @@ export function planRun(input: {
 //   그래서 한 행을 판정으로 바꾸는 일을 여기 한 함수로 모은다.
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 경고 = 저장 게이트가 남긴 `holds`·`blocks`. 기록 자체가 없으면 그것도 경고다 */
+/**
+ * 🔴 경고 = 저장 게이트가 남긴 `holds`·`blocks`. 기록 자체가 없으면 그것도 경고다.
+ *
+ * 🔴 **의미 검수 판정이 기록돼 있지 않아도 경고다** (2026-09-22).
+ *    2026-09-22 실측: 기계 후보 234건 **전부** 이 기록이 없었다. 적재가 그것을
+ *    싣지 않았기 때문이다. 기록이 없는 행을 "경고 없음" 으로 읽으면,
+ *    **재지 않은 것을 이상 없음으로 읽는** 것이 된다.
+ *    🔴 이 경고는 후보 생성도 사람 검토도 막지 않는다 — **자동 READY 에서만 뺀다.**
+ */
+export const SEMANTIC_RECORD_KEY = 'semanticReview'
+export const NO_SEMANTIC_RECORD = 'SEMANTIC_REVIEW_MISSING'
+
 export function warningsOfGate(gate: unknown): string[] {
   if (gate === null || typeof gate !== 'object') return ['gateResults 없음']
   const g = gate as Record<string, unknown>
   const arr = (k: string): string[] => (Array.isArray(g[k]) ? (g[k] as unknown[]).map(String) : [])
-  return [...arr('holds'), ...arr('blocks')]
+  const out = [...arr('holds'), ...arr('blocks')]
+  const rec = g[SEMANTIC_RECORD_KEY]
+  if (rec === null || rec === undefined || typeof rec !== 'object') out.push(NO_SEMANTIC_RECORD)
+  return out
 }
 
 /** 표본·적격 판정에 필요한 한 행 — Prisma 모양을 그대로 받지 않는다 */

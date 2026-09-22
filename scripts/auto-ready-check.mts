@@ -10,7 +10,7 @@ import {
   sampleOf, judgeAutoReadyOpen, judgeRow, auditPicks, judgeAuditOutcome,
   planAutoReadyWrite, recheckBeforePublish, bodyVersionOf, hardDefectOf, HARD_DEFECT_KEY,
   planRun, readAutoReadyStamp, isEditRecord, type StampCandidate,
-  judgeAutoInTx, judgeAuditGate, auditStateOf, combineGates, readAuditRecord, AUDIT_RECORD_KEY,
+  judgeAutoInTx, judgeAuditGate, auditStateOf, combineGates, readAuditRecord, AUDIT_RECORD_KEY, warningsOfGate, NO_SEMANTIC_RECORD,
   casMergeEditDiff, mergeJsonField, AUTO_READY_RECORD_KEY, markAuditPicked, recordAuditVerdict,
   type ReviewOutcome,
 } from '../src/lib/auto-ready'
@@ -24,6 +24,7 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { readFileSync } from 'node:fs'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { queueCandidateOf, assignedCodeOf, prepareCandidates } from '../src/lib/supply-candidates'
+import { semanticSummaryOf, semanticHoldsOf } from '../src/lib/micro-seed-supply-autofill'
 
 let pass = 0, fail = 0
 const check = (n: string, ok: boolean, d = ''): void => {
@@ -436,7 +437,7 @@ console.log('\n⑫ 🔴 🔴 **경쟁 조건 — 재확인 직후 본문이 바�
     decidedBy: AUTO_DECIDER as string | null,
     title: '김치 이야기', body: good,
     editDiff: {} as unknown,
-    gateVerdict: 'PASS' as unknown, gateResults: { holds: [], blocks: [] } as unknown,
+    gateVerdict: 'PASS' as unknown, gateResults: { holds: [], blocks: [], semanticReview: { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.95 } } as unknown,
     sourceCapturedAt: captured as Date | null,
   }
   store.editDiff = planRun({
@@ -507,7 +508,7 @@ console.log('\n⑫ 🔴 🔴 **경쟁 조건 — 재확인 직후 본문이 바�
   const baseRow = (): Row => ({
     id: 'q1', status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
     draftTitle: '김치 이야기', draftBody: good, editedTitle: null, editedBody: null,
-    decidedBy: AUTO_DECIDER, editDiff: store.editDiff, gateResults: { holds: [], blocks: [] },
+    decidedBy: AUTO_DECIDER, editDiff: store.editDiff, gateResults: { holds: [], blocks: [], semanticReview: { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.95 } },
     rawContent: { sourceCapturedAt: captured },
     matchedPersona: { id: 'p1', code: 'P10', status: 'active', userId: 'u1',
       user: { providerId: null, _count: { accounts: 0 } } },
@@ -861,6 +862,84 @@ console.log('\n⑯ 🔴 🔴 **러너 ↔ 예측기 동등성** — "같은 함�
     /prepareCandidates\(\{[\s\S]{0,200}?at,/.test(forecast)
     && /const at = new Date\(`\$\{p\.iso\}/.test(forecast))
   check('🔴 🔴 **예측기가 TTL 을 손으로 재지 않는다**', !/TTL_DAYS/.test(forecast))
+}
+
+console.log('\n⑰ 🔴 🔴 **의미 검수 경고가 게이트까지 온다 (P07 실측)**')
+{
+  // 🔴 2026-09-22 후보 `cmucp5zkd…`(P07) 의 **실제 artifact 값**이다.
+  //    semanticReview 가 결함 2건을 찾았는데 DB 의 holds 는 비어 있었다.
+  const P07_REVIEW = {
+    deterministic: { pass: true, failures: [] },
+    semantic: {
+      issues: [], unknownIssues: [], droppedFromSource: [],
+      unsupportedAdditions: [
+        { evidence: '어디서 글을 읽다 보니까…', why: '원문에 없는 행동을 추가했다' },
+        { evidence: '주변 보면 … 많잖아요.', why: '경험을 관찰로 바꿨다' },
+      ],
+      lifeContradictions: [], confidence: 0.75,
+    },
+    semanticCompletion: { complete: true, reason: null, cause: null },
+  }
+  const CLEAN_REVIEW = {
+    deterministic: { pass: true, failures: [] },
+    semantic: { issues: [], unknownIssues: [], droppedFromSource: [],
+      unsupportedAdditions: [], lifeContradictions: [], confidence: 0.95 },
+    semanticCompletion: { complete: true, reason: null, cause: null },
+  }
+
+  const sumP07 = semanticSummaryOf(P07_REVIEW)
+  check('🔴 🔴 **실제 값에서 결함 2건을 읽는다**', sumP07?.unsupportedAdditions === 2)
+  check('🔴 🔴 **경고로 바뀐다 — 문자열을 새로 찾지 않고 이미 낸 판정을 옮긴다**',
+    semanticHoldsOf(sumP07).some((h) => h.startsWith('SEMANTIC_UNSUPPORTED_ADDITION')))
+  check('🔴 깨끗한 후보는 경고가 0 이다', semanticHoldsOf(semanticSummaryOf(CLEAN_REVIEW)).length === 0)
+  check('🔴 🔴 **판정 기록이 아예 없으면 그것도 경고다 — 재지 못한 것을 "이상 없음" 으로 읽지 않는다**',
+    semanticHoldsOf(semanticSummaryOf(null))[0] === 'SEMANTIC_REVIEW_INCOMPLETE')
+  check('🔴 판정이 끝까지 돌지 않았으면 경고다', (() => {
+    const s2 = semanticSummaryOf({ ...P07_REVIEW, semanticCompletion: { complete: false } })
+    return semanticHoldsOf(s2).includes('SEMANTIC_REVIEW_INCOMPLETE')
+  })())
+
+  // 🔴 **자동 적격 판정까지 이어지는가** — gate 가 PASS 여도 빠져야 한다
+  const rowOf = (review: unknown) => ({
+    gateVerdict: 'PASS',
+    warnings: warningsOfGate({
+      holds: semanticHoldsOf(semanticSummaryOf(review)), blocks: [],
+      semanticReview: semanticSummaryOf(review),
+    }),
+    sourceCapturedKnown: true,
+    title: '아들 낳았다고 하면 안쓰럽게 보는 시선들이요',
+    body: '딸도 딸 나름이고, 주변 보면 엄마 알뜰히 잘 챙기는 아들들도 참 많잖아요.',
+  })
+  const vP07 = judgeRow(rowOf(P07_REVIEW))
+  check('🔴 🔴 **P07 은 gateVerdict=PASS 여도 자동 READY 에서 빠진다**',
+    vP07.auto === false && vP07.reasons.some((r) => r.includes('SEMANTIC_UNSUPPORTED_ADDITION')),
+    JSON.stringify(vP07))
+  const vClean = judgeRow({ ...rowOf(CLEAN_REVIEW),
+    title: '김치 이야기', body: '주변에 물어보면 반반이더라고요. 다들 어떻게 드시나요?' })
+  check('🔴 🔴 **깨끗한 후보는 불필요하게 막히지 않는다**', vClean.auto === true, JSON.stringify(vClean))
+  const vNone = judgeRow(rowOf(null))
+  check('🔴 🔴 **판정 기록이 없는 행도 자동에서 빠진다**', vNone.auto === false)
+  check('🔴 🔴 **기록 칸 자체가 없는 과거 행도 자동에서 빠진다 (실측 234건 전부가 이 상태다)**', (() => {
+    const w = warningsOfGate({ holds: [], blocks: [] })   // 앞판 모양 — 경고 0 이었다
+    return w.includes(NO_SEMANTIC_RECORD)
+      && judgeRow({ gateVerdict: 'PASS', warnings: w, sourceCapturedKnown: true,
+        title: '김치 이야기', body: '주변에 물어보면 반반이더라고요.' }).auto === false
+  })())
+
+  // 🔴 후보 생성과 사람 검토는 계속돼야 한다 — `blocks` 를 채우지 않는다
+  const src = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
+  check('🔴 🔴 **경고를 `holds` 에만 넣는다 — `blocks` 를 채우면 후보 생성이 멈춘다**',
+    /holds: semanticHoldsOf\(semanticSummaryOf\(input\.review\)\),\s*\n\s*blocks: \[\],/.test(src))
+  check('🔴 🔴 **원문 전문을 DB 로 복제하지 않는다 — 수와 완전성만 싣는다**', (() => {
+    const sum = semanticSummaryOf(P07_REVIEW)!
+    const json = JSON.stringify(sum)
+    return !json.includes('어디서 글을 읽다') && !json.includes('evidence') && !json.includes('why')
+      && Object.keys(sum).length === 6
+  })())
+  check('🔴 🔴 **요약만으로 READY 를 정하지 않는다 — confidence 가 높아도 결함이 있으면 막힌다**', (() => {
+    const high = { ...P07_REVIEW, semantic: { ...P07_REVIEW.semantic, confidence: 0.99 } }
+    return judgeRow(rowOf(high)).auto === false
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

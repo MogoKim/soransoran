@@ -96,6 +96,19 @@ function envelopeOf(c: Candidate): Envelope { return envMap.get(c as object) ?? 
 function autoJudgeOf(c: Candidate): AutoJudgeProvenance { return ajMap.get(c as object) ?? {} }
 
 /**
+ * 🔴 **후보가 들고 온 의미 검수 요약**. 생성 쪽(`micro-seed-auto-draft`)이 artifact 에서
+ *    뽑아 `semanticReview` 칸에 실어 보낸다. 없으면 `null` 이고, 적재는 그것을
+ *    **재지 못한 것**으로 읽어 경고를 남긴다 — "이상 없음" 으로 읽지 않는다.
+ */
+function reviewOf(c: Candidate): unknown {
+  const v = (c as unknown as Record<string, unknown>).semanticReview
+  if (v === null || v === undefined) return null
+  // 🔴 이미 요약된 모양이면 그대로. `semanticSummaryOf` 가 다시 받아도 같은 값을 낸다
+  return { semantic: v, deterministic: { pass: (v as Record<string, unknown>).deterministicPass === true },
+    semanticCompletion: { complete: (v as Record<string, unknown>).complete === true } }
+}
+
+/**
  * 🔴 봉투와 행을 함께 읽는다 — 행만 읽으면 기계 profile 을 검증할 수 없다.
  *    🔴 **내보낸다** (2026-09-20). end-to-end fixture 가 **실제 러너가 쓴 파일**을
  *    이 함수로 읽어 봉투 계약을 검증한다 — 손으로 만든 봉투는 증거가 아니다.
@@ -305,7 +318,7 @@ async function main(): Promise<void> {
   const preview = targets.slice(0, previewN).map((c) => {
     const pl = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c,
-      autoJudge: autoJudgeOf(c), now: new Date().toISOString(),
+      autoJudge: autoJudgeOf(c), review: reviewOf(c), now: new Date().toISOString(),
     })
     return {
       title: S(c.title),
@@ -363,7 +376,7 @@ async function main(): Promise<void> {
     // 🔴 큐에 넣을 값을 순수 함수가 만든다 — 러너가 접두를 붙이다 P0 를 냈다
     const payload = buildQueuePayload({
       envelope: envelopeOf(c), candidate: c,
-      autoJudge: autoJudgeOf(c), now: new Date().toISOString(),
+      autoJudge: autoJudgeOf(c), review: reviewOf(c), now: new Date().toISOString(),
     })
     if (payload === null) {
       console.log(`   ⏭ 건너뜀 ${title.slice(0, 20)} — profile 이 어긋나 payload 를 만들지 않는다`)
