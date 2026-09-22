@@ -16,10 +16,17 @@ export const SUPPLY_RUN_SLOTS_KST = [
 export const SUPPLY_RUNS_PER_DAY = SUPPLY_RUN_SLOTS_KST.length
 
 /**
- * 🔴 **자식 프로세스에 실려야 하는 예산 env.**
- *    지금 템플릿에는 `PATH` 하나뿐이다 — 이 셋이 없으면 장부가 fail-closed 로
- *    유료 요청을 보류하고, 회차는 돌지만 **후보가 0건**이다.
- *    🔴 등록 전에 이 이름들이 plist 에 들어가야 한다.
+ * 🔴 **예산 env 세 개.** 없으면 장부가 fail-closed 로 유료 요청을 보류하고,
+ *    회차는 돌지만 **후보가 0건**이다.
+ *
+ * 🔴 **어디에 넣는가 — plist 가 아니다** (2026-09-22 정정).
+ *    앞판 주석은 "등록 전에 plist 에 들어가야 한다" 고 적었다. **틀렸다.**
+ *    러너는 `loadEnvLocal()` 로 `process.cwd()/.env.local` 을 읽고,
+ *    plist 의 `WorkingDirectory` 가 runtime 작업트리이며 그곳의 `.env.local` 은
+ *    운영 정본 `~/Library/Application Support/soransoran/env.local` 로 걸린
+ *    심볼릭 링크다. 그러니 **정본 env 파일 한 곳**에 넣는다.
+ *    plist 에 또 넣으면 두 곳이 갈라지고, 갈라진 순간 어느 쪽이 도는지 알 수 없다.
+ *    🔴 plist 에는 `PATH` 만 있으면 된다(nvm 경로) — 그것이 지금 모습이고 맞다.
  */
 export const SUPPLY_BUDGET_ENV_NAMES = [
   'SORAN_LLM_DAILY_BUDGET_USD',
@@ -32,11 +39,36 @@ export const SUPPLY_WORKSET_PER_RUN = 5
 export const SUPPLY_REQUESTS_PER_RUN = 20
 
 /**
- * 🔴 **미승인 제안값이다.** 사람이 승인하기 전에는 어떤 회차도 이 값을 쓰지 않는다.
- *    근거: 2026-09-22 실측 회차당 $0.0223~$0.0288 → 6회 ≈ $0.15. 여유 2배.
+ * 🔴 **창업자 승인값 $0.30/day** (2026-09-22 승인).
+ *
+ *    근거 — 장부 실측(9/19~9/22, 유료 4건 이상인 회차 21개):
+ *      회차당 정산 **중앙 $0.0265 · 최대 $0.0535** (5원천 꽉 채운 회차 SHADOW5B)
+ *      → 꽉 찬 회차 기준 하루 약 5.6회분. 6회 전부가 꽉 차면 $0.32 로 상한에 닿고,
+ *        그때는 장부가 마지막 회차를 **막는다**(fail-closed). 그것이 의도한 동작이다.
+ *
+ * 🔴 **하루 총액이다** — 공급·판정·초안·댓글이 **같은 장부**를 쓴다.
+ *    그날 이미 정산된 액수가 이 상한에 함께 든다.
+ * 🔴 승인값이 `null` 이면 어떤 회차도 돌지 않는다(`NO_BUDGET`).
  */
 export const SUPPLY_DAILY_USD_PROPOSED = 0.30
-export const SUPPLY_DAILY_USD_APPROVED: number | null = null
+export const SUPPLY_DAILY_USD_APPROVED: number | null = 0.30
+
+/**
+ * 🔴 **예약 여유 배수.** 입력 토큰 추정치에만 곱한다 — 출력은 `maxOutputTokens` 라
+ *    요청 body 에 실려 나가는 **확정 한도**이고 그보다 많이 과금될 수 없다.
+ *    그래서 1.2 로 충분하다. 실측 52건에서 실제가 예약을 넘은 건 **0건**이고
+ *    정산/예약 최대 비율은 0.717 이었다 (2026-09-21~22).
+ */
+export const SUPPLY_RESERVE_HEADROOM = 1.2
+
+/**
+ * 🔴 **정본 env 파일.** 여기 한 곳에만 예산 값을 적는다.
+ *    runtime 작업트리의 `.env.local` 이 이 파일로 걸린 심볼릭 링크다.
+ */
+export const SUPPLY_ENV_FILE_REL = 'Library/Application Support/soransoran/env.local'
+
+/** 🔴 공급 처리 회차를 켜는 스위치 — 이것이 없으면 `--live` 가 무시된다 */
+export const SUPPLY_ENABLE_ENV = 'SORAN_SUPPLY_PROCESS_ENABLED'
 
 /**
  * 🔴 **감지하지 못하는 것.** 적어 두지 않으면 "자동화됐다" 로 읽힌다.
@@ -60,7 +92,9 @@ export function describeSupplySchedule(): string {
     SUPPLY_DAILY_USD_APPROVED === null
       ? `🔴 하루 비용 상한 **미승인** — 제안값 $${SUPPLY_DAILY_USD_PROPOSED.toFixed(2)}`
       : `하루 비용 상한 $${SUPPLY_DAILY_USD_APPROVED.toFixed(2)}`,
-    `🔴 예산 env ${SUPPLY_BUDGET_ENV_NAMES.join(' · ')} 가 plist 에 실려야 한다`,
+    `예산 env ${SUPPLY_BUDGET_ENV_NAMES.join(' · ')} — 🔴 정본 env 파일(~/${SUPPLY_ENV_FILE_REL}) 한 곳에 둔다`,
+    `여유 배수 ${SUPPLY_RESERVE_HEADROOM} (입력 추정치에만 곱한다 · 출력은 확정 한도)`,
+    `🔴 스위치 ${SUPPLY_ENABLE_ENV} 가 true 여야 --live 가 산다`,
     ...SUPPLY_UNDETECTED_LIMITS.map((x) => `🔴 ${x}`),
   ].join('\n')
 }

@@ -16,9 +16,12 @@ import { PROFILES, RELEASE_STAGES, type StageVerdict } from '../src/lib/scale-pr
 import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 import {
   SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_BUDGET_ENV_NAMES,
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_DAILY_USD_PROPOSED, SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
+  SUPPLY_DAILY_USD_APPROVED, SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
+  SUPPLY_WORKSET_PER_RUN, SUPPLY_RESERVE_HEADROOM, SUPPLY_ENV_FILE_REL, SUPPLY_ENABLE_ENV,
   judgeProductionRate, AUTO_READY_CONTRACT, AUTO_READY_STEPS, describeSupplySchedule,
 } from '../src/lib/supply-schedule-contract'
+import { WORKSET_DEFAULT_LIMIT, WORKSET_TOTAL_PER_SOURCE } from '../src/lib/supply-workset'
+import { judgeSpend, judgeSettle, tallyOf, type DayTally } from '../src/lib/llm-ledger'
 import {
   profileOf, selectAutoTargets, voiceInputOf, judgeApply, judgePublishDefects,
   AUTO_GATE_VERDICT, MACHINE_REVIEWED_BY, type AutoRow,
@@ -543,6 +546,129 @@ console.log('\n②-w 🔴 🔴 기간 변수가 **실제 예약 job** 까지 닿
 }
 
 // ─────────────────────────────────────────────────────────
+console.log('\n②-d5 🔴 🔴 D3 기간 운영 + D5 하루 시험이 겹치는 날')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실제 결함이었다** (2026-09-22). 그날 문(`judgeDayGuard`)이 언제나
+   *    **D3 판정**(`windowVerdict.can` = 3 − 발행수)을 봤다. D5 가 함께 켜진 날에는
+   *    단계가 d5(상한 5)인데 문은 3에서 "재고가 없다" 로 닫혔다 — **4·5번째가 막혔다.**
+   *
+   * 🔴 고친 뒤: 문은 **실제로 설치된 단계**의 판정을 본다.
+   */
+  const ENVS = {
+    SORAN_CAPACITY_STAGE: 'd10',
+    [WINDOW_STAGE_ENV]: 'd3', [WINDOW_FROM_ENV]: '2026-09-24', [WINDOW_UNTIL_ENV]: '2026-09-25',
+    SORAN_RELEASE_CANARY_STAGE: 'd5', SORAN_RELEASE_CANARY_DATE: '2026-09-24',
+  } as unknown as NodeJS.ProcessEnv
+  const NOTHING: StageVerdict[] = RELEASE_STAGES.map((stage) => ({ stage, ready: false, reasons: ['재고'] }))
+  const NOW = new Date('2026-09-24T00:40:00.000Z') // 9/24 09:40 KST
+  /** 🔴 단계마다 그날치 판정을 만드는 것은 러너와 같은 방식이다 — 남은 몫만큼만 본다 */
+  const dayFor = (stage: 'd3' | 'd5', published: number, stock: number) => {
+    const cap = Math.max(0, PROFILES[stage].dailyTarget - published)
+    const can = Math.min(cap, stock)
+    const sim: SimOutcome = {
+      stage, dates: ['2026-09-24'], in14: can, want14: PROFILES[stage].dailyTarget,
+      gaps: 0, recoveryBroken: 0, personas: 24, stock,
+      horizonStartAt: NOW, nextSlotAt: NOW, horizonDays: 1,
+    }
+    return judgeOneDayCanary(sim, {
+      publishedToday: published,
+      slotsLeft: Math.max(0, PROFILES[stage].dailyTarget - published),
+    })
+  }
+  const resolve = (published: number, stock: number) => resolveScale(ENVS, {
+    readiness: NOTHING,
+    window: {
+      now: NOW, verdict: dayFor('d3', published, stock),
+      dayVerdict: dayFor('d3', published, stock), publishedToday: published,
+    },
+    canary: { now: NOW, verdict: dayFor('d5', published, stock) },
+  })
+  /** 🔴 앞판이 쓰던 값 = D3 판정 · 고친 뒤 = 설치된 단계 판정 */
+  const gateAt = (published: number, stock: number, useWindow: boolean) => {
+    const r = resolve(published, stock)
+    const installed = r.releaseStage as 'd3' | 'd5'
+    const v = useWindow ? dayFor('d3', published, stock) : dayFor(installed, published, stock)
+    const row: AutoRow = {
+      id: `q${published}`, status: 'APPROVED', createdPostId: null, gateVerdict: AUTO_GATE_VERDICT,
+      promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, matchedPersonaId: 'p',
+      sourceSite: `${AUTOFILL_SITE_PREFIX}sheet`, title: 't', body: 'b',
+      decidedBy: 'founder', decidedAt: NOW, createdAt: NOW,
+    }
+    return {
+      stage: installed,
+      cap: PROFILES[installed].dailyTarget,
+      gate: judgeApply({
+        targets: [row], picked: row, apply: true, limit: 1,
+        publishedToday: published, dailyCap: PROFILES[installed].dailyTarget,
+        killSwitchEnabled: false, slot: { run: true, reason: '도래' },
+        dayGuard: judgeDayGuard({
+          publishedToday: published, dailyTarget: PROFILES[installed].dailyTarget,
+          publishable: v.can, hardDefects: [],
+        }),
+      }),
+    }
+  }
+
+  check('🔴 🔴 **겹치는 날 설치되는 단계는 d5 다 (높은 쪽)**',
+    resolve(0, 5).releaseStage === 'd5', resolve(0, 5).releaseStage)
+  check('🔴 🔴 **상한도 5다 — 3에서 멈추지 않는다**', gateAt(0, 5, false).cap === 5)
+
+  // ── 🔴 실제 연속 0→5회 ──
+  for (const n of [0, 1, 2, 3, 4]) {
+    const r = gateAt(n, 5 - n, false)
+    check(`🔴 🔴 **${n}건 낸 뒤 ${n + 1}번째가 열린다 (d5 · 상한 5)**`,
+      r.stage === 'd5' && r.gate.ok === true, r.gate.ok ? '' : r.gate.reason)
+  }
+  check('🔴 🔴 **5건을 다 내면 닫힌다 — 6번째는 없다**', (() => {
+    const r = gateAt(5, 0, false)
+    return r.gate.ok === false && !r.gate.reason.includes('전면')
+  })())
+
+  /** 🔴 **앞판 결함 재현** — D3 판정을 쓰면 4번째가 막힌다 */
+  check('🔴 🔴 **회귀 재현: D3 판정을 쓰면 4번째가 막힌다**', (() => {
+    const bad = gateAt(3, 2, true)
+    return bad.stage === 'd5' && bad.gate.ok === false && bad.gate.reason.includes('재고가 없어')
+  })(), JSON.stringify(gateAt(3, 2, true).gate))
+
+  // ── D5 NO-GO 이면 적격한 D3 를 유지한다 ──
+  {
+    /** 🔴 재고가 3건뿐이라 d5 는 NO-GO 이지만 d3 는 GO 다 */
+    const r = resolveScale(ENVS, {
+      readiness: NOTHING,
+      window: { now: NOW, verdict: dayFor('d3', 0, 3), dayVerdict: dayFor('d3', 0, 3), publishedToday: 0 },
+      canary: { now: NOW, verdict: dayFor('d5', 0, 3) },
+    })
+    check('🔴 🔴 **D5 가 NO-GO 면 d1 로 떨어지지 않고 적격한 D3 를 유지한다**',
+      r.releaseStage === 'd3', r.releaseStage)
+    check('🔴 왜 d5 를 안 켰는지 적는다',
+      r.notes.some((n) => n.includes('d5')), r.notes.join(' | '))
+  }
+  check('🔴 🔴 **겹쳐도 준비됐다고 말하지 않는다**',
+    resolve(0, 5).chosenReady === false && resolve(0, 5).readinessApplied === false)
+  check('🔴 🔴 **capacity 를 넘는 단계는 시험이라도 열지 않는다**', (() => {
+    const low = { ...ENVS, SORAN_CAPACITY_STAGE: 'd3' } as NodeJS.ProcessEnv
+    const r = resolveScale(low, {
+      readiness: NOTHING,
+      window: { now: NOW, verdict: dayFor('d3', 0, 5), dayVerdict: dayFor('d3', 0, 5), publishedToday: 0 },
+      canary: { now: NOW, verdict: dayFor('d5', 0, 5) },
+    })
+    return r.releaseStage === 'd3'
+  })())
+
+  // ── 🔴 러너가 설치된 단계의 판정을 쓰는가 ──
+  {
+    const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+    check('🔴 🔴 **러너의 그날 문이 설치된 단계 판정을 쓴다**',
+      /publishable: effectiveVerdict\.can/.test(src) && !/publishable: windowVerdict\.can/.test(src))
+    check('🔴 판정을 만드는 함수가 하나다 — 창이 달라지지 않는다',
+      (src.match(/const dayFor = \(stage: ReleaseStage\)/g) ?? []).length === 1
+      && (src.match(/anchor: 'now'/g) ?? []).length === 1)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 잡는 것')
 // ─────────────────────────────────────────────────────────
 {
@@ -556,61 +682,188 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
     JSON.stringify(hours) === JSON.stringify(SUPPLY_RUN_SLOTS_KST.map((s) => ({ hour: s.hour, minute: s.minute }))),
     JSON.stringify(hours))
   /**
-   * 🔴 **"예산 env 가 없어야 PASS" 는 잘못된 조건이었다** (2026-09-22 보정).
+   * 🔴 **두 번 틀렸던 자리다** (2026-09-22 2차 정정).
    *
-   *    앞판은 템플릿에 예산 env 가 **없을 때만** 통과했다. 그래서 승인을 받아
-   *    실제로 넣는 순간 검사가 빨갛게 된다 — 활성화하면 깨지는 검사는
-   *    활성화를 막는 것이 아니라 **검사를 지우게** 만든다.
+   *    1차: "예산 env 가 **없어야** PASS" — 승인받아 넣는 순간 검사가 깨졌다.
+   *    2차: "plist 에 들어가야 한다" — **위치가 틀렸다.** 러너는 `loadEnvLocal()` 로
+   *         `process.cwd()/.env.local` 을 읽고, plist 의 `WorkingDirectory` 가
+   *         runtime 작업트리이며 그곳의 `.env.local` 은 정본 env 파일로 걸린 심볼릭 링크다.
+   *         plist 에 넣으면 값이 두 곳으로 갈라진다.
    *
-   * 🔴 그래서 승인 **전** 상태와 승인 **후** 설치본을 각각 본다.
-   *    둘 다 정상이면 PASS 다.
-   * 🔴 값은 찍지 않는다 — 예산·요청 상한 두 숫자만 본다.
+   * 🔴 그래서 지금은 **정본 env 파일**을 본다. 값은 세 개만 읽고 **찍지 않는다** —
+   *    같은 파일에 API 키가 있다.
    */
-  const tplBudget = SUPPLY_BUDGET_ENV_NAMES.filter((n) => tpl.includes(n))
-  console.log(`     템플릿 예산 env 선언 ${tplBudget.length}/${SUPPLY_BUDGET_ENV_NAMES.length}`)
-  check('🔴 🔴 **예산 env 는 셋 다이거나 하나도 없다 — 반쪽 선언은 안 된다**',
-    tplBudget.length === 0 || tplBudget.length === SUPPLY_BUDGET_ENV_NAMES.length,
-    `${tplBudget.length}개`)
-  check('🔴 🔴 **템플릿에 비밀값 리터럴이 없다**',
-    !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(tpl))
+  const envPath = `${process.env.HOME ?? ''}/${SUPPLY_ENV_FILE_REL}`
+  const envText = (() => { try { return readFileSync(envPath, 'utf-8') } catch { return null } })()
+  const envOf = (k: string): string | null => {
+    if (envText === null) return null
+    const m = new RegExp(`^${k}=(.*)$`, 'm').exec(envText)
+    return m === null ? null : (m[1] ?? '').trim()
+  }
+  /**
+   * 🔴 **CI 러너에는 운영 env 가 없다.** 없다고 FAIL 로 만들면 검사가 CI 에서 늘 빨갛고,
+   *    빨간 검사는 곧 지워진다. 그래서 **운영 기계인지 먼저 가른다.**
+   *    🔴 다만 조용히 건너뛰지 않는다 — env 가 없으면 **설치본도 없어야 한다.**
+   *    (env 없이 설치본만 있으면 그 기계는 예산 없이 도는 것이다.)
+   */
+  const operatorMachine = envText !== null
+  console.log(`     정본 env ${operatorMachine ? '있음 — 운영 기계다' : '없음 — 운영 기계가 아니다(CI 등)'}`)
+  const declared = SUPPLY_BUDGET_ENV_NAMES.filter((n) => envOf(n) !== null)
+  console.log(`     정본 env 예산 선언 ${declared.length}/${SUPPLY_BUDGET_ENV_NAMES.length}`)
+  check('🔴 🔴 **예산 env 는 셋 다이거나 하나도 없다 — 반쪽은 장부가 fail-closed 로 막는다**',
+    declared.length === 0 || declared.length === SUPPLY_BUDGET_ENV_NAMES.length,
+    `${declared.length}개`)
+  check('🔴 🔴 **plist 에는 예산 env 를 넣지 않는다 — 두 곳으로 갈라지지 않게**',
+    SUPPLY_BUDGET_ENV_NAMES.every((n) => !tpl.includes(n)),
+    SUPPLY_BUDGET_ENV_NAMES.filter((n) => tpl.includes(n)).join(','))
+  check('🔴 plist 의 WorkingDirectory 가 저장소라야 그 .env.local 을 읽는다',
+    tpl.includes('<key>WorkingDirectory</key>'))
 
-  /** 🔴 승인 전 — 승인값이 없으면 **설치본이 있어서는 안 된다**(fail-closed) */
+
+  /** 🔴 설치된 plist — 있으면 정본과 맞아야 한다 */
   const installed = (() => {
     const at = `${process.env.HOME ?? ''}/Library/LaunchAgents/com.soransoran.supply-process.plist`
     try { return { at, text: readFileSync(at, 'utf-8') } } catch { return null }
   })()
-  console.log(`     설치된 plist ${installed === null ? '없음 (미등록)' : '있음'}`)
-  if (SUPPLY_DAILY_USD_APPROVED === null) {
-    check('🔴 🔴 **하루 상한이 미승인이면 launchd 가 등록돼 있지 않다**',
-      installed === null, installed === null ? '' : '🔴 미승인인데 설치본이 있다')
-    check(`🔴 제안값 $${SUPPLY_DAILY_USD_PROPOSED} 는 승인값이 아니다`,
-      SUPPLY_DAILY_USD_PROPOSED > 0)
-  } else {
-    check('🔴 승인값은 0 보다 크다', SUPPLY_DAILY_USD_APPROVED > 0)
-  }
+  const enabled = envOf(SUPPLY_ENABLE_ENV) === 'true'
+  console.log(`     설치된 plist ${installed === null ? '없음' : '있음'} · 스위치 ${enabled ? 'true' : 'false/없음'}`)
 
-  /** 🔴 승인 후 — 설치본이 있으면 예산·요청 상한이 정본과 맞아야 한다 */
-  if (installed !== null) {
-    const num = (key: string): number | null => {
-      const m = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(installed.text)
-      if (m === null) return null
-      const v = Number(m[1])
-      return Number.isFinite(v) ? v : null
+  check('🔴 🔴 **정본 env 가 없는 기계에는 설치본도 없다 — 예산 없이 도는 기계를 막는다**',
+    operatorMachine || installed === null)
+
+  /** 🔴 승인 전 — 승인값이 없으면 **켜져 있어서는 안 된다**(fail-closed) */
+  if (SUPPLY_DAILY_USD_APPROVED === null) {
+    check('🔴 🔴 **하루 상한이 미승인이면 공급이 켜져 있지 않다**',
+      installed === null && !enabled && declared.length === 0,
+      '🔴 미승인인데 예산·스위치·설치본 중 무엇이 있다')
+  } else {
+    /**
+     * 🔴 승인 후 — 값이 있으면 승인값 이하여야 하고, 없으면 아직 안 넣은 것이다.
+     *    **둘 다 PASS 다.** 켜는 순간 깨지는 검사를 다시 만들지 않는다.
+     */
+    check('🔴 승인값은 0 보다 크다', SUPPLY_DAILY_USD_APPROVED > 0)
+    if (declared.length === SUPPLY_BUDGET_ENV_NAMES.length) {
+      const daily = Number(envOf('SORAN_LLM_DAILY_BUDGET_USD'))
+      const cap = Number(envOf('SORAN_LLM_RUN_REQUEST_CAP'))
+      const head = Number(envOf('SORAN_LLM_RESERVE_HEADROOM'))
+      check('🔴 🔴 **하루 예산이 승인값 이하다**',
+        Number.isFinite(daily) && daily <= SUPPLY_DAILY_USD_APPROVED,
+        `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED}`)
+      check('🔴 🔴 **회차 요청 상한이 정본과 같다**',
+        cap === SUPPLY_REQUESTS_PER_RUN, `${cap} / 정본 ${SUPPLY_REQUESTS_PER_RUN}`)
+      check('🔴 🔴 **여유 배수가 정본과 같고 1 이상이다**',
+        head === SUPPLY_RESERVE_HEADROOM && head >= 1, `${head} / 정본 ${SUPPLY_RESERVE_HEADROOM}`)
+      check('🔴 🔴 **회차당 원천 × 원천당 요청 = 회차 요청 상한**',
+        SUPPLY_WORKSET_PER_RUN * WORKSET_TOTAL_PER_SOURCE === SUPPLY_REQUESTS_PER_RUN,
+        `${SUPPLY_WORKSET_PER_RUN}×${WORKSET_TOTAL_PER_SOURCE}`)
+      check('🔴 정본 workset 기본값이 회차 계약과 같다',
+        WORKSET_DEFAULT_LIMIT === SUPPLY_WORKSET_PER_RUN,
+        `${WORKSET_DEFAULT_LIMIT} / ${SUPPLY_WORKSET_PER_RUN}`)
+    } else {
+      console.log('     🔴 예산 env 가 아직 없다 — 회차는 돌지만 유료 요청은 NO_BUDGET 으로 보류된다')
     }
-    check('🔴 🔴 **설치본이 예산 env 세 개를 모두 선언한다**',
-      SUPPLY_BUDGET_ENV_NAMES.every((n) => installed.text.includes(n)),
-      SUPPLY_BUDGET_ENV_NAMES.filter((n) => !installed.text.includes(n)).join(','))
-    const cap = num('SORAN_LLM_RUN_REQUEST_CAP')
-    check('🔴 🔴 **회차 요청 상한이 정본과 같다**',
-      cap === SUPPLY_REQUESTS_PER_RUN, `${cap} / 정본 ${SUPPLY_REQUESTS_PER_RUN}`)
-    const daily = num('SORAN_LLM_DAILY_BUDGET_USD')
-    check('🔴 🔴 **하루 예산이 승인값 이하다 — 승인 없이는 통과할 수 없다**',
-      SUPPLY_DAILY_USD_APPROVED !== null && daily !== null && daily <= SUPPLY_DAILY_USD_APPROVED,
-      `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED ?? '(없음)'}`)
+    /** 🔴 스위치가 켜져 있으면 예산도 있어야 한다 — 돌면서 0건인 상태를 막는다 */
+    check('🔴 🔴 **스위치가 켜져 있으면 예산 env 도 있다 — 돌면서 0건을 막는다**',
+      !enabled || declared.length === SUPPLY_BUDGET_ENV_NAMES.length)
+    check('🔴 🔴 **설치본이 있으면 스위치와 예산이 함께 있다**',
+      installed === null || (enabled && declared.length === SUPPLY_BUDGET_ENV_NAMES.length))
+  }
+  if (installed !== null) {
+    check('🔴 설치본도 6회다',
+      (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
     check('🔴 🔴 **설치본에 비밀값 리터럴이 없다**',
       !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(installed.text))
-    check('🔴 설치본도 6회다', (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
+    check('🔴 🔴 **설치본에도 예산 env 를 넣지 않는다**',
+      SUPPLY_BUDGET_ENV_NAMES.every((n) => !installed.text.includes(n)))
   }
+  check('🔴 🔴 **템플릿에 비밀값 리터럴이 없다**',
+    !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(tpl))
+
+  // ── 🔴 🔴 장부가 승인 상한을 실제로 지키는가 ──
+  {
+    /**
+     * 🔴 **$0.30 은 하루 총액이다** — 공급·판정·초안·댓글이 같은 장부를 쓴다.
+     *    그날 이미 정산된 액수가 이 상한에 함께 든다. 회차마다 새로 $0.30 이 아니다.
+     */
+    const limits = {
+      dailyUsd: SUPPLY_DAILY_USD_APPROVED,
+      runRequestCap: SUPPLY_REQUESTS_PER_RUN,
+      headroomMultiplier: SUPPLY_RESERVE_HEADROOM,
+    }
+    const tally = (o: Partial<DayTally>): DayTally => ({
+      settledUsd: 0, openReservedUsd: 0, usageUnknownUsd: 0,
+      paidRequests: 0, countTokensRequests: 0, blocked: 0, overruns: 0, ...o,
+    })
+    const spend = (t: DayTally, usd: number, extra: Partial<Parameters<typeof judgeSpend>[0]> = {}) =>
+      judgeSpend({
+        limits, tally: t, runPaid: 0, reserve: { known: true, usd, pricingVersion: 'v' },
+        ledgerOk: true, settleHold: null, unresolved: [], ...extra,
+      })
+
+    check('🔴 여력 안이면 통과한다', spend(tally({ settledUsd: 0.05 }), 0.05).ok === true)
+    check('🔴 🔴 **그날 이미 쓴 액수가 상한에 함께 든다 — 회차마다 새로 $0.30 이 아니다**', (() => {
+      const v = spend(tally({ settledUsd: 0.28 }), 0.05)
+      return !v.ok && v.code === 'DAILY_EXHAUSTED'
+    })(), JSON.stringify(spend(tally({ settledUsd: 0.28 }), 0.05)))
+    check('🔴 🔴 **열린 예약도 여력에서 뺀다 — 끝나지 않은 요청이 여력을 되돌려 주지 않는다**', (() => {
+      const v = spend(tally({ settledUsd: 0.10, openReservedUsd: 0.19 }), 0.05)
+      return !v.ok && v.code === 'DAILY_EXHAUSTED'
+    })())
+    check('🔴 🔴 **끝을 기록하지 못한 예약이 있으면 사람이 마감할 때까지 막는다**', (() => {
+      const v = spend(tally({}), 0.01, {
+        unresolved: [{
+          code: 'ownerGone',
+          reason: '주인 프로세스가 없다',
+          reservation: { attemptId: 'a1', runId: 'r1', pid: 1, startedAt: '', reservedUsd: 0.01 },
+        }] as never,
+      })
+      return !v.ok && v.code === 'UNRESOLVED_RESERVATION'
+    })())
+    check('🔴 🔴 **정산을 적지 못한 보류가 있으면 막는다**', (() => {
+      const v = spend(tally({}), 0.01, { settleHold: '정산을 적지 못했다' })
+      return !v.ok && v.code === 'SETTLE_ERROR'
+    })())
+    check('🔴 🔴 **실제가 예약을 넘은 건이 있으면 막는다**', (() => {
+      const v = spend(tally({ overruns: 1 }), 0.01)
+      return !v.ok && v.code === 'UNSETTLED_OVERRUN'
+    })())
+    check('🔴 🔴 **장부를 못 읽으면 막는다 — 모르면 쓰지 않는다**',
+      spend(tally({}), 0.01, { ledgerOk: false }).ok === false)
+    check('🔴 🔴 **회차 요청 상한에 닿으면 막는다**', (() => {
+      const v = spend(tally({}), 0.01, { runPaid: SUPPLY_REQUESTS_PER_RUN })
+      return !v.ok && v.code === 'RUN_CAP'
+    })())
+    check('🔴 🔴 **예산 env 가 없으면 무제한이 아니라 보류다**', (() => {
+      const v = judgeSpend({
+        limits: { dailyUsd: null, runRequestCap: null, headroomMultiplier: null },
+        tally: tally({}), runPaid: 0, reserve: { known: true, usd: 0.01, pricingVersion: 'v' },
+        ledgerOk: true, settleHold: null, unresolved: [],
+      })
+      return !v.ok && v.code === 'NO_BUDGET'
+    })())
+    /** 🔴 미상 사용량은 자동으로 풀리지 않는다 — 열린 예약으로 남는다 */
+    check('🔴 🔴 **사용량을 모르면 예약을 풀지 않는다 (usageUnknown)**', (() => {
+      const r = judgeSettle({ reservedUsd: 0.01, cost: { known: false, code: 'NO_USAGE', reason: '' } })
+      return r.status === 'usageUnknown' && r.settledUsd === null
+    })())
+    /** 🔴 접은 장부에서 미상은 열린 예약에 들어간다 */
+    check('🔴 🔴 **미상 사용량이 여력을 되돌려 주지 않는다**', (() => {
+      const t = tallyOf([
+        { attemptId: 'a', runId: 'r', stage: 'judge', status: 'usageUnknown',
+          reservedUsd: 0.25, settledUsd: null, model: 'm', pricingVersion: 'v' },
+      ] as never)
+      return t.openReservedUsd === 0.25 && t.usageUnknownUsd === 0.25
+        && spend(t, 0.1).ok === false
+    })())
+    check('🔴 🔴 **한 attemptId 의 마지막 줄이 이긴다 — 예약과 정산을 두 번 세지 않는다**', (() => {
+      const t = tallyOf([
+        { attemptId: 'a', runId: 'r', stage: 'judge', status: 'settled',
+          reservedUsd: 0.02, settledUsd: 0.007, model: 'm', pricingVersion: 'v' },
+      ] as never)
+      return t.settledUsd === 0.007 && t.openReservedUsd === 0 && t.paidRequests === 1
+    })())
+  }
+
   check('🔴 🔴 **노트북 종료 한계를 출력한다**',
     describeSupplySchedule().includes('노트북 종료')
     && SUPPLY_UNDETECTED_LIMITS.some((x) => x.includes('catch-up 이 없다')))

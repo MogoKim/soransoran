@@ -46,7 +46,7 @@ import {
   canaryAuthorization, judgeOneDayCanary, slotsLeftToday,
   windowAuthorization, judgeDayGuard,
 } from '../src/lib/release-canary'
-import { effectiveWeeklyCap, RELEASE_STAGES, PROFILES } from '../src/lib/scale-profile'
+import { effectiveWeeklyCap, RELEASE_STAGES, PROFILES, type ReleaseStage } from '../src/lib/scale-profile'
 
 /** 🔴 단계의 하루 목표 — 러너가 숫자를 손으로 적지 않는다 */
 const scaleTargetOf = (st: (typeof RELEASE_STAGES)[number]): number => PROFILES[st].dailyTarget
@@ -248,71 +248,64 @@ const readiness = stageVerdicts({
  *
  * 🔴 허가된 단계에 대해서만 돌린다. 허가가 없으면 판정 자체를 만들지 않는다.
  */
-const canaryAuth = canaryAuthorization(process.env, axisNow, RELEASE_STAGES)
-const canaryVerdict = canaryAuth.activeToday && canaryAuth.stage !== null
-  ? judgeOneDayCanary(simulateStage({
-    stage: canaryAuth.stage,
+/**
+ * 🔴 **그날치 판정을 단계마다 같은 방식으로 만든다** (2026-09-22).
+ *
+ *    앞판은 하루짜리(canary)와 기간형(window)이 각자 `simulateStage` 를 불렀고,
+ *    그러다 보니 **그날 실제로 설치된 단계**의 판정이 없는 경우가 생겼다.
+ *    D3 기간 운영과 D5 하루 시험이 겹치면 단계는 d5 인데 판정은 d3 것이었다.
+ */
+const personasForSim = personas as never
+const historyForSim = personas.map((p) => ({
+  code: p.code,
+  matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
+}))
+/** 🔴 예측과 판정을 **함께** 낸다 — 결함 신호(`recoveryBroken`)는 예측 쪽에만 있다 */
+const dayFor = (stage: ReleaseStage) => {
+  const sim = simulateStage({
+    stage,
     queue: queueCandidates,
-    personas: personas as never,
-    history: personas.map((p) => ({
-      code: p.code,
-      matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
-    })),
+    personas: personasForSim,
+    history: historyForSim,
     axis: { now: axisNow, publishedToday: axisPublishedToday },
-    // 🔴 **하루**다. 이 값이 14 가 되면 하루 판정이 14일 판정으로 바뀐다
-    days: 1,
     /**
-     * 🔴 **지금 이 순간부터 본다** (2026-09-21 3차 보정).
-     *
-     *    기본 지평은 `horizonStart(now)` = **다음 KST 자정**이다. 그래서
-     *    9/22 09:30 회차의 예측 시작이 **9/23 00:00** 이었다 — 정본 함수를
-     *    직접 돌려 확인했다. 그날 시험의 GO/NO-GO 가 이튿날 사정에 끌려갔다.
-     *    오늘 신선하고 내일 TTL 을 넘기는 후보는 오늘 낼 수 있는데도 빠졌다.
-     *
-     * 🔴 14일 지속성 판정의 창은 건드리지 않는다 — 그쪽은 기본값 그대로다.
+     * 🔴 **하루**다. 이 값이 14 가 되면 하루 판정이 14일 판정으로 바뀐다.
+     * 🔴 **지금 이 순간부터** 본다 — 기본 지평은 다음 KST 자정이라
+     *    그날 시험의 GO/NO-GO 가 이튿날 사정에 끌려갔다(2026-09-21 실측).
      */
+    days: 1,
     anchor: 'now',
     /**
-     * 🔴 **오늘 남은 발행분만큼만** 낸다고 본다. 프로필 상한(3)을 그대로 쓰면
+     * 🔴 **오늘 남은 발행분만큼만** 낸다고 본다. 프로필 상한을 그대로 쓰면
      *    이미 낸 몫 위에 하루 상한이 통째로 다시 얹힌다.
      */
-    dailyCap: Math.max(0, scaleTargetOf(canaryAuth.stage) - axisPublishedToday),
-  }), {
-    /**
-     * 🔴 **오늘 이미 낸 수와 남은 슬롯을 넘긴다** (2026-09-21 보정).
-     *    넘기지 않으면 회차마다 하루치 전체를 다시 요구해,
-     *    마지막 슬롯에서 재고가 줄었다는 이유로 그날 목표를 못 채운다.
-     */
-    publishedToday: axisPublishedToday,
-    slotsLeft: slotsLeftToday(canaryAuth.stage, axisNow),
+    dailyCap: Math.max(0, scaleTargetOf(stage) - axisPublishedToday),
   })
-  : null
+  /**
+   * 🔴 **오늘 이미 낸 수와 남은 슬롯을 넘긴다** (2026-09-21 보정).
+   *    넘기지 않으면 회차마다 하루치 전체를 다시 요구해,
+   *    마지막 슬롯에서 재고가 줄었다는 이유로 그날 목표를 못 채운다.
+   */
+  const verdict = judgeOneDayCanary(sim, {
+    publishedToday: axisPublishedToday,
+    slotsLeft: slotsLeftToday(stage, axisNow),
+  })
+  return { sim, verdict }
+}
+
+/**
+ * 🔴 **하루짜리 첫 시험 판정** — 허가된 단계에 대해서만 만든다.
+ *    허가가 없으면 판정 자체를 만들지 않는다.
+ */
+const canaryAuth = canaryAuthorization(process.env, axisNow, RELEASE_STAGES)
+const canaryDay = canaryAuth.activeToday && canaryAuth.stage !== null ? dayFor(canaryAuth.stage) : null
+const canaryVerdict = canaryDay?.verdict ?? null
 /**
  * 🔴 **기간형 제한 운영** — 하루짜리와 같은 그날치 판정을 쓰되, 기간 안이면 켠다.
- *    🔴 `publishedToday` 를 넘겨 **그날 첫 발행 뒤에는 단계를 고정**한다.
  */
 const windowAuth = windowAuthorization(process.env, axisNow, RELEASE_STAGES)
-/** 🔴 판정과 따로 **예측 자체**를 붙들어 둔다 — 결함 신호를 실측값에서 읽으려면 필요하다 */
-const windowSim = windowAuth.activeToday && windowAuth.stage !== null
-  ? simulateStage({
-    stage: windowAuth.stage,
-    queue: queueCandidates,
-    personas: personas as never,
-    history: personas.map((p) => ({
-      code: p.code,
-      matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
-    })),
-    axis: { now: axisNow, publishedToday: axisPublishedToday },
-    days: 1, anchor: 'now',
-    dailyCap: Math.max(0, scaleTargetOf(windowAuth.stage) - axisPublishedToday),
-  })
-  : null
-const windowVerdict = windowSim !== null && windowAuth.stage !== null
-  ? judgeOneDayCanary(windowSim, {
-    publishedToday: axisPublishedToday,
-    slotsLeft: slotsLeftToday(windowAuth.stage, axisNow),
-  })
-  : null
+const windowDay = windowAuth.activeToday && windowAuth.stage !== null ? dayFor(windowAuth.stage) : null
+const windowVerdict = windowDay?.verdict ?? null
 const scale = installFromEnv(process.env, {
   readiness,
   canary: { now: axisNow, verdict: canaryVerdict },
@@ -482,6 +475,23 @@ if (catchUp.due.length > 0) {
 }
 
 /**
+ * 🔴 **그날 문이 쓰는 판정은 "실제로 설치된 단계" 의 것이다** (2026-09-22 보정).
+ *
+ *    앞판은 언제나 `windowVerdict` 를 썼다. D3 기간 운영과 D5 하루 시험이 겹치면
+ *    `resolveScale` 은 d5 를 설치하는데 문은 **d3 판정**(`can` 이 3−발행수)을 보고
+ *    **4·5번째 글을 "재고가 없다" 로 막았다.** 상한은 5인데 3에서 멈추는 모양이다.
+ *
+ * 🔴 그래서 설치가 끝난 뒤 **그 단계로 다시 판정한다.** 판정을 만드는 함수는 하나뿐이라
+ *    창이 달라지지 않는다. 허가가 하나도 없는 날에는 `null` 이고, 그때 동작은 이전과 같다.
+ */
+const effectiveDay = (canaryAuth.activeToday || windowAuth.activeToday)
+  ? (scale.releaseStage === windowAuth.stage ? windowDay
+    : scale.releaseStage === canaryAuth.stage ? canaryDay
+      : dayFor(scale.releaseStage))
+  : null
+const effectiveVerdict = effectiveDay?.verdict ?? null
+
+/**
  * 🔴 **그날 판정 — 로그가 아니라 문이다** (2026-09-22).
  *
  * 🔴 여기서 쓰는 발행 수는 위의 `axisPublishedToday` 가 아니라 **바로 위에서 DB 로 센**
@@ -503,7 +513,7 @@ if (catchUp.due.length > 0) {
 /** 🔴 조립은 `src/lib` 한 함수가 한다 — 러너 안에 두면 검사가 닿지 않는다 */
 const defects = judgePublishDefects({
   publishedToday, dailyCap: RELEASE_DAILY_CAP,
-  recoveryBroken: windowSim?.recoveryBroken ?? 0,
+  recoveryBroken: effectiveDay?.sim.recoveryBroken ?? 0,
   rejected,
 })
 const hardDefects = defects.hardDefects
@@ -513,10 +523,10 @@ if (safetyRejects.length > 0) {
   console.log(`   ⚠️ 안전 판정으로 제외된 후보 ${safetyRejects.length}건`
     + ' — 그 행만 빠진다. 남은 후보의 발행은 막지 않는다')
 }
-const dayGuard = windowVerdict === null ? null : judgeDayGuard({
+const dayGuard = effectiveVerdict === null ? null : judgeDayGuard({
   publishedToday,
   dailyTarget: RELEASE_DAILY_CAP,
-  publishable: windowVerdict.can,
+  publishable: effectiveVerdict.can,
   hardDefects,
 })
 if (dayGuard !== null) {
