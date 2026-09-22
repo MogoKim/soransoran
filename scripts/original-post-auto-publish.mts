@@ -374,7 +374,24 @@ const historyRows = await prisma.personaActivityLog.findMany({
 })
 // 🔴 **시간축은 하나다** — `now` 와 오늘 발행 수만 넘기고 단계별 시작점은 lib 이 만든다.
 //    러너와 관제가 각자 시작점을 정하면 같은 DB 를 보고 다른 준비도를 말한다
-const axisNow = new Date()
+/**
+ * 🔴 **판정 기준 시각.** 기본은 지금이다.
+ *
+ *    `--as-of=YYYY-MM-DD` 를 주면 그날 12:00 KST 로 본다 — **단계 판정을 대조하기 위한
+ *    read-only 전용**이다. 예측기가 따로 조립한 값이 아니라 **이 러너 자신의 판정**을
+ *    보려면 이 길뿐이다.
+ * 🔴 `--apply` 와 함께 쓸 수 없다. 과거·미래 시각으로 실제 발행하는 길을 열지 않는다.
+ */
+const AS_OF_RAW = (argv.find((a) => a.startsWith('--as-of='))?.slice(8) ?? '').trim()
+if (AS_OF_RAW !== '' && APPLY) {
+  fail('--as-of 는 read-only 전용입니다 — --apply 와 함께 쓸 수 없습니다.')
+}
+const AS_OF: Date | null = AS_OF_RAW === '' ? null : new Date(`${AS_OF_RAW}T03:00:00Z`)
+if (AS_OF !== null && Number.isNaN(AS_OF.getTime())) fail(`--as-of 날짜를 읽을 수 없습니다 — ${AS_OF_RAW}`)
+const axisNow = AS_OF ?? new Date()
+if (AS_OF !== null) {
+  console.log(`\n🔴 --as-of ${AS_OF_RAW} — 단계 판정 대조용 read-only 입니다 (발행 0 · DB write 0)\n`)
+}
 const axisPublishedToday = await prisma.personaActivityLog.count({
   where: { kind: 'post', createdAt: { gte: kstDayStart(axisNow) } },
 })
