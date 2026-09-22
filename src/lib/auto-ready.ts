@@ -474,6 +474,8 @@ export function readAuditRecord(editDiff: unknown): AuditRecord | null {
 }
 
 export type AuditState = {
+  /** 🔴 가장 오래 묵은 미확인 대상이 뽑힌 날 (KST `YYYY-MM-DD`). 없으면 `null` */
+  oldestPendingOn: string | null
   /** 자동이 정한 글 전체 */
   autoDecided: number
   /** 감사 대상으로 남아 있는 것 */
@@ -489,22 +491,37 @@ export type AuditState = {
 export function auditStateOf(rows: readonly { id: string; editDiff: unknown }[]): AuditState {
   const recs = rows.map((r) => readAuditRecord(r.editDiff)).filter((r): r is AuditRecord => r !== null)
   const reviewed = recs.filter((r) => r.defect !== undefined)
+  const pendingOns = recs.filter((r) => r.defect === undefined).map((r) => r.pickedOn).sort()
   return {
     autoDecided: rows.length,
     picked: recs.length,
     reviewed: reviewed.length,
     defects: reviewed.filter((r) => r.defect === true).length,
     pending: recs.length - reviewed.length,
+    oldestPendingOn: pendingOns[0] ?? null,
   }
 }
 
 /**
  * 🔴 **감사가 자동을 닫는 실제 경로.** `judgeAutoReadyOpen` 이 열어도 이것이 닫으면 닫힌다.
  *
- * 🔴 아직 안 본 감사 대상이 있으면 **다음 회차를 열지 않는다.** 여기서 "나중에 보면 된다" 로
- *    넘어가면 감사가 장식이 된다 — 뽑아만 놓고 아무도 보지 않아도 자동이 계속 돈다.
+ * 🔴 **미확인이 있다는 사실만으로 즉시 닫지 않는다** (2026-09-22 보정).
+ *    그렇게 하면 20% 사후 감사가 사람의 **매회차 허가**가 되고, 사람이 한 번 늦으면
+ *    자동이 선다. D100 에서는 하루 20건을 매일 처리해야 자동이 멎지 않는다 —
+ *    그것은 자동화가 아니라 사전 승인이다.
+ *
+ * 🔴 대신 **밀린 정도**로 닫는다. 막으려는 것은 "사람이 조금 늦는 것" 이 아니라
+ *    "아무도 보지 않는데 계속 나가는 것" 이다.
+ *      · 결함이 하나라도 나오면 → 즉시 닫힘 (그대로)
+ *      · 미확인이 `auditPendingMaxDays` 보다 오래 묵으면 → 닫힘
+ *      · 미확인이 `auditPendingMax` 건을 넘으면 → 닫힘
  */
-export function judgeAuditGate(state: AuditState): OpenVerdict {
+export function judgeAuditGate(state: AuditState, limits?: {
+  pendingMaxDays: number
+  pendingMax: number
+  /** 오늘(KST `YYYY-MM-DD`) */
+  todayKst: string
+}): OpenVerdict {
   if (state.autoDecided === 0) return { open: true, reason: '자동 판정이 없어 감사할 것이 없다' }
   if (state.picked === 0) return { open: false, reason: '🔴 자동 판정이 있는데 감사 대상이 뽑히지 않았다' }
   // 🔴 **결함이 먼저다.** 대기가 남아 있어도 이미 나온 결함이 더 굳은 사실이다
@@ -512,13 +529,35 @@ export function judgeAuditGate(state: AuditState): OpenVerdict {
     const o = judgeAuditOutcome({ audited: state.reviewed, defectsFound: state.defects })
     return { open: false, reason: `🔴 감사 — ${o.reason}` }
   }
-  // 🔴 그다음이 대기다. 보지 않은 것을 결함 0 으로 치지 않는다
+  // 🔴 그다음이 **밀린 정도**다. 미확인이 있다는 사실만으로는 닫지 않는다
   if (state.pending > 0) {
-    return { open: false, reason: `🔴 감사 대기 ${state.pending}건 — 보지 않은 것을 결함 0 으로 치지 않는다` }
+    // 🔴 한도를 주지 않으면 닫는다 — 부르는 쪽이 계약을 빠뜨리면 안전한 쪽으로 간다
+    if (limits === undefined) {
+      return { open: false, reason: `🔴 감사 대기 ${state.pending}건 · 한도가 주어지지 않았다` }
+    }
+    if (state.pending > limits.pendingMax) {
+      return { open: false, reason: `🔴 감사 대기 ${state.pending}건 — 한도 ${limits.pendingMax}건을 넘었다` }
+    }
+    const days = state.oldestPendingOn === null ? 0 : daysBetween(state.oldestPendingOn, limits.todayKst)
+    if (days > limits.pendingMaxDays) {
+      return { open: false, reason: `🔴 가장 오래 묵은 감사 대기가 ${days}일 — 한도 ${limits.pendingMaxDays}일을 넘었다` }
+    }
+    return {
+      open: true,
+      reason: `감사 확인 ${state.reviewed}건 · 결함 0 · 대기 ${state.pending}건(${days}일 — 한도 안)`,
+    }
   }
   const outcome = judgeAuditOutcome({ audited: state.reviewed, defectsFound: state.defects })
   if (!outcome.keepOpen) return { open: false, reason: `🔴 감사 — ${outcome.reason}` }
   return { open: true, reason: `감사 ${state.reviewed}건 전부 확인 · 결함 0` }
+}
+
+/** 🔴 두 날짜(KST `YYYY-MM-DD`) 사이의 날 수. 형식이 이상하면 **아주 큰 값**을 낸다 — 모르면 닫는 쪽이다 */
+function daysBetween(from: string, to: string): number {
+  const a = Date.parse(`${from}T00:00:00Z`)
+  const b = Date.parse(`${to}T00:00:00Z`)
+  if (Number.isNaN(a) || Number.isNaN(b)) return Number.MAX_SAFE_INTEGER
+  return Math.round((b - a) / 864e5)
 }
 
 /** 🔴 두 문이 **모두** 열려야 열린다 — 하나라도 닫히면 닫힌다 */
@@ -579,4 +618,56 @@ export function judgeAutoInTx(input: {
   })
   if (!v.auto) return { ok: false, detail: `지금 다시 보면 자동 대상이 아니다 — ${v.reasons.join(' · ')}` }
   return { ok: true }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **JSON 한 칸을 여럿이 쓴다** (2026-09-22 보정)
+//
+//   `editDiff` 에는 세 가지가 함께 산다 — 사람이 고친 내역, 자동 도장, 감사 기록.
+//   읽고-합쳐서-통째로 쓰는 방식은, 두 실행이 같은 값을 읽으면 **나중 것이 앞 것을 덮는다.**
+//   앞판 주석은 "그 사이 변경 시 0건" 이라고 적었지만 `where` 에 `updatedAt` 이 없어
+//   그 말이 성립하지 않았다. 아래 두 가지로 고친다.
+//     ① 조건부 UPDATE 에 **읽은 순간의 `updatedAt`** 을 넣는다
+//     ② 0건이면 **다시 읽어 합치고 재시도**한다 — 조용히 지나가지 않는다
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 한 칸만 바꾸고 나머지는 그대로 둔다 — 통째로 갈아끼우지 않는다 */
+export function mergeJsonField(
+  base: unknown,
+  key: string,
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const obj = (base !== null && typeof base === 'object') ? { ...(base as Record<string, unknown>) } : {}
+  obj[key] = value
+  return obj
+}
+
+export type CasWrite = {
+  where: { id: string; updatedAt: Date }
+  data: Record<string, unknown>
+}
+
+/**
+ * 🔴 **읽고-합쳐-조건부로 쓰고, 어긋나면 다시 읽어 되풀이한다.**
+ *
+ *    `read` 는 그때의 `editDiff` 와 `updatedAt` 을 함께 준다. `write` 는 조건이
+ *    어긋나면 0 을 돌려준다. 횟수를 다 쓰면 **실패로 알린다** — 성공한 척하지 않는다.
+ */
+export async function casMergeEditDiff(input: {
+  id: string
+  key: string
+  value: Record<string, unknown>
+  read: (id: string) => Promise<{ editDiff: unknown; updatedAt: Date } | null>
+  write: (w: CasWrite) => Promise<number>
+  attempts?: number
+}): Promise<{ ok: true; tries: number } | { ok: false; reason: string; tries: number }> {
+  const max = input.attempts ?? 3
+  for (let i = 1; i <= max; i += 1) {
+    const cur = await input.read(input.id)
+    if (cur === null) return { ok: false, reason: '그 행이 없다', tries: i }
+    const merged = mergeJsonField(cur.editDiff, input.key, input.value)
+    const n = await input.write({ where: { id: input.id, updatedAt: cur.updatedAt }, data: { editDiff: merged } })
+    if (n === 1) return { ok: true, tries: i }
+  }
+  return { ok: false, reason: `🔴 ${max}번 시도했지만 그 사이 계속 바뀌었다 — 쓰지 않았다`, tries: max }
 }

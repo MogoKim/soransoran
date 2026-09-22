@@ -54,11 +54,10 @@ import { prepareCandidates, describePrepared, type QueueCandidate } from '../src
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
 import {
   planRun, judgeAutoReadyOpen, sampleOf, recheckBeforePublish, readAutoReadyStamp,
   outcomeOf, warningsOfGate, auditPicks, AUTO_DECIDER, HUMAN_DECIDER, AUTO_READY_ENV,
-  auditStateOf, judgeAuditGate, combineGates, readAuditRecord, AUDIT_RECORD_KEY,
+  auditStateOf, judgeAuditGate, combineGates, readAuditRecord, AUDIT_RECORD_KEY, casMergeEditDiff,
   type StampCandidate, type ReviewOutcome,
 } from '../src/lib/auto-ready'
 import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
@@ -161,14 +160,23 @@ if (autoDecidedRows.length > 0) {
   const missing = autoDecidedRows.filter((r) => want.has(r.id) && readAuditRecord(r.editDiff) === null)
   if (missing.length > 0 && APPLY) {
     for (const m of missing) {
-      // 🔴 기존 기록을 덮지 않는다 — 도장·표식과 **같은 칸에 얹는다**
-      const base = (m.editDiff !== null && typeof m.editDiff === 'object')
-        ? m.editDiff as Record<string, unknown> : {}
-      const u = await prisma.originalPostApprovalQueue.updateMany({
-        where: { id: m.id, decidedBy: AUTO_DECIDER },
-        data: { editDiff: { ...base, [AUDIT_RECORD_KEY]: { pickedOn: todayKst } } as never },
+      /**
+       * 🔴 **읽고-합쳐-조건부로 쓰고, 어긋나면 다시 읽어 되풀이한다.**
+       *    `editDiff` 한 칸에 도장·감사·고친 내역이 함께 산다. 읽은 값을 통째로
+       *    되쓰면 그 사이 다른 실행이 찍은 도장이 **통째로 사라진다**(검사 ⑭ 반례).
+       */
+      const r = await casMergeEditDiff({
+        id: m.id, key: AUDIT_RECORD_KEY, value: { pickedOn: todayKst },
+        read: async (id) => prisma.originalPostApprovalQueue.findUnique({
+          where: { id }, select: { editDiff: true, updatedAt: true },
+        }),
+        write: async (w) => (await prisma.originalPostApprovalQueue.updateMany({
+          // 🔴 `updatedAt` 이 조건에 **있어야** "그 사이 바뀌면 0건" 이 참이 된다
+          where: { id: w.where.id, updatedAt: w.where.updatedAt, decidedBy: AUTO_DECIDER },
+          data: { editDiff: w.data.editDiff as never },
+        })).count,
       })
-      if (u.count !== 1) console.log(`     ⚠️ ${m.id} 감사 대상 표시 실패 — 그 사이 행이 바뀌었다`)
+      if (!r.ok) console.log(`     ⚠️ ${m.id} 감사 대상 표시 실패 — ${r.reason}`)
     }
   }
 }
@@ -179,7 +187,11 @@ const auditRows = APPLY && autoDecidedRows.length > 0
   })
   : autoDecidedRows
 const auditState = auditStateOf(auditRows)
-const auditGate = judgeAuditGate(auditState)
+const auditGate = judgeAuditGate(auditState, {
+  pendingMaxDays: AUTO_READY_CONTRACT.auditPendingMaxDays,
+  pendingMax: AUTO_READY_CONTRACT.auditPendingMax,
+  todayKst,
+})
 console.log(`\n①-a 사후 감사  자동 판정 ${auditState.autoDecided}건 · 대상 ${auditState.picked}건`
   + ` · 확인 ${auditState.reviewed}건 · 결함 ${auditState.defects}건 · 대기 ${auditState.pending}건`)
 console.log(`     ${auditGate.open ? '통과' : '🔴 닫힘'} — ${auditGate.reason}`)

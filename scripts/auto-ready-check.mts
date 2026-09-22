@@ -11,6 +11,7 @@ import {
   planAutoReadyWrite, recheckBeforePublish, bodyVersionOf, hardDefectOf, HARD_DEFECT_KEY,
   planRun, readAutoReadyStamp, isEditRecord, type StampCandidate,
   judgeAutoInTx, judgeAuditGate, auditStateOf, combineGates, readAuditRecord, AUDIT_RECORD_KEY,
+  casMergeEditDiff, mergeJsonField, AUTO_READY_RECORD_KEY,
   type ReviewOutcome,
 } from '../src/lib/auto-ready'
 import { selectAutoTargets, autoReadyAccepted, MACHINE_REVIEWED_BY, AUTO_GATE_VERDICT, type AutoRow } from '../src/lib/original-post-auto-publish'
@@ -565,6 +566,7 @@ console.log('\n⑬ 🔴 🔴 **감사가 다음 회차에도 남고, 실제로 �
 {
   const row = (id: string, rec?: Record<string, unknown>) =>
     ({ id, editDiff: rec === undefined ? {} : { [AUDIT_RECORD_KEY]: rec } })
+  const L2 = { pendingMaxDays: 2, pendingMax: 10, todayKst: '2026-09-22' }
   check('🔴 🔴 **기록이 행에 남아 다음 회차가 읽는다 — 임시 파일이 아니다**', (() => {
     const r = readAuditRecord({ [AUDIT_RECORD_KEY]: { pickedOn: '2026-09-22', defect: false } })
     return r?.pickedOn === '2026-09-22' && r.defect === false
@@ -572,18 +574,40 @@ console.log('\n⑬ 🔴 🔴 **감사가 다음 회차에도 남고, 실제로 �
   check('🔴 🔴 **결함이 나오면 자동이 닫힌다 — 비율을 줄이지 않는다**', (() => {
     const g = judgeAuditGate(auditStateOf([
       row('a', { pickedOn: 'd', defect: true }), row('b', { pickedOn: 'd', defect: false }), row('c'),
-    ]))
+    ]), { pendingMaxDays: 2, pendingMax: 10, todayKst: '2026-09-22' })
     return !g.open && g.reason.includes('자동을 닫는다')
   })())
-  check('🔴 🔴 **보지 않은 감사 대상이 남아 있으면 열지 않는다 — 대기를 결함 0 으로 치지 않는다**', (() => {
-    const g = judgeAuditGate(auditStateOf([row('a', { pickedOn: 'd' }), row('b')]))
-    return !g.open && g.reason.includes('감사 대기 1건')
+  const L = { pendingMaxDays: AUTO_READY_CONTRACT.auditPendingMaxDays,
+    pendingMax: AUTO_READY_CONTRACT.auditPendingMax, todayKst: '2026-09-22' }
+  check('🔴 🔴 **미확인이 있다는 사실만으로 즉시 닫지 않는다 — 사후 감사는 매회차 허가가 아니다**', (() => {
+    const g = judgeAuditGate(auditStateOf([row('a', { pickedOn: '2026-09-22' }), row('b')]), L)
+    return g.open && g.reason.includes('한도 안')
   })())
+  check('🔴 🔴 **미확인이 오래 묵으면 닫는다**', (() => {
+    const g = judgeAuditGate(auditStateOf([row('a', { pickedOn: '2026-09-18' }), row('b')]), L)
+    return !g.open && g.reason.includes('4일')
+  })())
+  check('🔴 🔴 **미확인이 한도 건수를 넘으면 닫는다**', (() => {
+    const many = Array.from({ length: AUTO_READY_CONTRACT.auditPendingMax + 1 },
+      (_, i) => row(`p${i}`, { pickedOn: '2026-09-22' }))
+    const g = judgeAuditGate(auditStateOf(many), L)
+    return !g.open && g.reason.includes('한도')
+  })())
+  check('🔴 🔴 **한도를 주지 않으면 닫는다 — 계약을 빠뜨리면 안전한 쪽이다**',
+    judgeAuditGate(auditStateOf([row('a', { pickedOn: '2026-09-22' }), row('b')])).open === false)
+  check('🔴 🔴 **대기가 한도 안이어도 결함이 나오면 즉시 닫는다**', (() => {
+    const g = judgeAuditGate(auditStateOf([
+      row('a', { pickedOn: '2026-09-22', defect: true }), row('b', { pickedOn: '2026-09-22' }),
+    ]), L)
+    return !g.open && g.reason.includes('자동을 닫는다')
+  })())
+  check('🔴 날짜 형식이 이상하면 닫는다 — 모르면 안전한 쪽이다',
+    judgeAuditGate(auditStateOf([row('a', { pickedOn: 'd' }), row('b')]), L).open === false)
   check('🔴 🔴 **자동 판정이 있는데 대상이 하나도 안 뽑혔으면 닫힌다**',
-    judgeAuditGate(auditStateOf([row('a'), row('b')])).open === false)
+    judgeAuditGate(auditStateOf([row('a'), row('b')]), L2).open === false)
   check('🔴 전부 확인했고 결함 0 이면 통과한다',
-    judgeAuditGate(auditStateOf([row('a', { pickedOn: 'd', defect: false }), row('b')])).open === true)
-  check('🔴 자동 판정이 아예 없으면 감사할 것이 없다', judgeAuditGate(auditStateOf([])).open === true)
+    judgeAuditGate(auditStateOf([row('a', { pickedOn: 'd', defect: false }), row('b')]), L2).open === true)
+  check('🔴 자동 판정이 아예 없으면 감사할 것이 없다', judgeAuditGate(auditStateOf([]), L2).open === true)
   check('🔴 🔴 **두 문 중 하나라도 닫히면 닫힌다**', (() => {
     const open = { open: true, reason: '통과' }
     const shut = { open: false, reason: '🔴 감사 — 결함' }
@@ -596,13 +620,106 @@ console.log('\n⑬ 🔴 🔴 **감사가 다음 회차에도 남고, 실제로 �
   check('🔴 🔴 **러너가 감사 판정을 실제 게이트에 합친다**',
     /combineGates\(sampleGate, auditGate\)/.test(runner))
   check('🔴 🔴 **감사 대상을 DB 에 표시한다 — 러너 임시 디스크가 아니다**',
-    /\[AUDIT_RECORD_KEY\]: \{ pickedOn: todayKst \}/.test(runner))
+    /key: AUDIT_RECORD_KEY, value: \{ pickedOn: todayKst \}/.test(runner)
+    && !/writeFileSync/.test(runner))
   check('🔴 🔴 **발행 트랜잭션에 게이트와 해시를 넘긴다**',
     /autoReadyOpen: autoOpen\.open, sha256,/.test(runner))
   check('🔴 감사 기록 명령이 있다 — 결과를 적을 자리가 실제로 있다', (() => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf-8')) as { scripts: Record<string, string> }
     return typeof pkg.scripts['auto-ready-audit'] === 'string'
   })())
+}
+
+console.log('\n⑭ 🔴 🔴 **두 실행이 같은 `editDiff` 를 쓴다 — 유실 반례**')
+{
+  // 🔴 실제 Prisma 의 모양을 흉내 낸다: `updatedAt` 은 쓸 때마다 바뀌고,
+  //    `updateMany` 는 where 가 어긋나면 0 을 돌려준다.
+  const makeRow = (editDiff: Record<string, unknown>) => {
+    let state = { editDiff: editDiff as unknown, updatedAt: new Date(1000) }
+    return {
+      read: async () => ({ ...state }),
+      /** 🔴 조건에 `updatedAt` 이 **있는** 쓰기 */
+      writeCas: async (w: { where: { id: string; updatedAt: Date }; data: Record<string, unknown> }) => {
+        if (w.where.updatedAt.getTime() !== state.updatedAt.getTime()) return 0
+        state = { editDiff: w.data.editDiff, updatedAt: new Date(state.updatedAt.getTime() + 1) }
+        return 1
+      },
+      /** 🔴 앞판처럼 `updatedAt` 이 **없는** 쓰기 — 언제나 성공한다 */
+      writeBlind: async (data: Record<string, unknown>) => {
+        state = { editDiff: data.editDiff, updatedAt: new Date(state.updatedAt.getTime() + 1) }
+        return 1
+      },
+      now: () => state,
+    }
+  }
+  const stampRec = { decidedBy: AUTO_DECIDER, bodyVersion: 'abcd1234abcd1234', openReason: '통과' }
+
+  // ── 반례: 앞판 방식(updatedAt 없음)에서 도장이 사라진다
+  {
+    const row = makeRow({ [AUTO_READY_RECORD_KEY]: stampRec })
+    // 실행 A 와 실행 B 가 **같은 값을 읽는다**
+    const seenA = await row.read()
+    const seenB = await row.read()
+    // A: 감사 표시를 얹는다
+    await row.writeBlind({ editDiff: mergeJsonField(seenA.editDiff, AUDIT_RECORD_KEY, { pickedOn: '2026-09-22' }) })
+    // B: 자기가 읽은 (감사 표시 없는) 값에 감사 판정을 얹는다 — A 의 결과를 모른다
+    await row.writeBlind({ editDiff: mergeJsonField(seenB.editDiff, AUDIT_RECORD_KEY, { pickedOn: '2026-09-22', defect: false }) })
+    const after = row.now().editDiff
+    check('🔴 🔴 **앞판 주장 "그 사이 변경 시 0건" 은 거짓이었다 — 두 쓰기가 다 성공한다**',
+      readAuditRecord(after)?.defect === false)
+    check('🔴 🔴 **그래도 도장은 살아남는다 (이번 경우)** — 유실은 값에 따라 달라진다',
+      readAutoReadyStamp(after) !== null)
+  }
+
+  // ── 🔴 진짜 유실: B 가 A 보다 **먼저** 읽었고, 그 사이 A 가 도장을 찍었다
+  {
+    const row = makeRow({})
+    const seenB = await row.read()                       // B 는 빈 칸을 봤다
+    await row.writeBlind({ editDiff: mergeJsonField({}, AUTO_READY_RECORD_KEY, stampRec) }) // A 가 도장을 찍었다
+    await row.writeBlind({ editDiff: mergeJsonField(seenB.editDiff, AUDIT_RECORD_KEY, { pickedOn: 'd' }) })
+    check('🔴 🔴 **자동 도장이 통째로 사라진다 — 본문 판을 잃어 발행이 영구히 막힌다**',
+      readAutoReadyStamp(row.now().editDiff) === null)
+  }
+
+  // ── 고친 방식: 조건부 + 재시도
+  {
+    const row = makeRow({})
+    const seenB = await row.read()
+    await row.writeBlind({ editDiff: mergeJsonField({}, AUTO_READY_RECORD_KEY, stampRec) })  // A 가 먼저 썼다
+    // B 가 자기가 읽은 낡은 값으로 조건부로 쓰려 한다 → 0건 → 다시 읽어 합친다
+    const res = await casMergeEditDiff({
+      id: 'q1', key: AUDIT_RECORD_KEY, value: { pickedOn: 'd' },
+      read: async () => row.read(), write: async (w) => row.writeCas(w),
+    })
+    check('🔴 🔴 **조건부 + 재시도면 도장이 살아남는다**',
+      res.ok && readAutoReadyStamp(row.now().editDiff) !== null, JSON.stringify(res))
+    check('🔴 🔴 **감사 기록도 함께 남는다 — 둘 다 산다**',
+      readAuditRecord(row.now().editDiff)?.pickedOn === 'd')
+    check('🔴 낡은 값으로 쓰려던 시도는 0건이었다', seenB.updatedAt.getTime() !== row.now().updatedAt.getTime())
+  }
+
+  // ── 계속 바뀌면 성공한 척하지 않는다
+  {
+    const res = await casMergeEditDiff({
+      id: 'q1', key: AUDIT_RECORD_KEY, value: { pickedOn: 'd' },
+      read: async () => ({ editDiff: {}, updatedAt: new Date(Math.random()) }),
+      write: async () => 0, attempts: 3,
+    })
+    check('🔴 🔴 **끝내 못 쓰면 실패로 알린다 — 조용히 지나가지 않는다**',
+      !res.ok && res.tries === 3)
+  }
+  check('🔴 다른 칸은 건드리지 않는다', (() => {
+    const m = mergeJsonField({ titleChanged: true, [AUTO_READY_RECORD_KEY]: stampRec }, AUDIT_RECORD_KEY, { pickedOn: 'd' })
+    return m.titleChanged === true && readAutoReadyStamp(m) !== null && readAuditRecord(m) !== null
+  })())
+
+  // 🔴 **부르는 쪽이 실제로 이 방식을 쓰는가**
+  const runner = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  const audit = readFileSync('scripts/auto-ready-audit.mts', 'utf-8')
+  check('🔴 🔴 **러너의 감사 표시가 조건부 병합을 쓴다**', /casMergeEditDiff\(/.test(runner))
+  check('🔴 🔴 **감사 기록 명령이 조건부 병합을 쓴다**', /casMergeEditDiff\(/.test(audit))
+  check('🔴 🔴 **두 곳 다 낡은 `editDiff` 통째 쓰기가 남아 있지 않다**',
+    !/\.\.\.base, \[AUDIT_RECORD_KEY\]/.test(runner) && !/\.\.\.base,/.test(audit))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

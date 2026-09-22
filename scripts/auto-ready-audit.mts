@@ -13,9 +13,10 @@
  */
 import { PrismaClient } from '@prisma/client'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { AUTO_READY_CONTRACT } from '../src/lib/supply-schedule-contract'
 import {
   auditStateOf, judgeAuditGate, readAuditRecord, readAutoReadyStamp,
-  AUDIT_RECORD_KEY, AUTO_DECIDER,
+  AUDIT_RECORD_KEY, AUTO_DECIDER, casMergeEditDiff,
 } from '../src/lib/auto-ready'
 
 const argv = process.argv.slice(2)
@@ -47,7 +48,13 @@ const rows = await prisma.originalPostApprovalQueue.findMany({
 console.log(APPLY ? '\n══ 🔴 감사 결과 기록 (--apply) ══\n' : '\n══ 자동 READY 사후 감사 (read-only · DB write 0) ══\n')
 
 const state = auditStateOf(rows)
-const gate = judgeAuditGate(state)
+const todayKst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)
+const LIMITS = {
+  pendingMaxDays: AUTO_READY_CONTRACT.auditPendingMaxDays,
+  pendingMax: AUTO_READY_CONTRACT.auditPendingMax,
+  todayKst,
+}
+const gate = judgeAuditGate(state, LIMITS)
 console.log(`  자동 판정 ${state.autoDecided}건 · 감사 대상 ${state.picked}건`
   + ` · 확인 ${state.reviewed}건 · 결함 ${state.defects}건 · 🔴 대기 ${state.pending}건`)
 console.log(`  자동 READY 에 대한 감사 판정: ${gate.open ? '통과' : '🔴 닫힘'} — ${gate.reason}\n`)
@@ -86,25 +93,30 @@ if (target === undefined) { await prisma.$disconnect(); fail(`그 행은 자동 
 const rec = readAuditRecord(target.editDiff)
 if (rec === null) { await prisma.$disconnect(); fail('그 행은 감사 대상으로 뽑히지 않았습니다.') }
 
-const base = (target.editDiff !== null && typeof target.editDiff === 'object')
-  ? target.editDiff as Record<string, unknown> : {}
-// 🔴 조건부 UPDATE — 그 사이 행이 바뀌었으면 0건이 되어 아무것도 쓰지 않는다
-const u = await prisma.originalPostApprovalQueue.updateMany({
-  where: { id: ID, decidedBy: AUTO_DECIDER },
-  data: {
-    editDiff: {
-      ...base,
-      [AUDIT_RECORD_KEY]: { ...rec, defect: DEFECT, ...(NOTE === '' ? {} : { note: NOTE }) },
-    } as never,
-  },
+/**
+ * 🔴 **읽고-합쳐-조건부로 쓰고, 어긋나면 다시 읽어 되풀이한다.**
+ *    `editDiff` 에는 자동 도장·감사 기록·사람이 고친 내역이 함께 산다.
+ *    읽은 값을 통째로 되쓰면 그 사이 다른 실행이 쓴 것이 사라진다.
+ */
+const w = await casMergeEditDiff({
+  id: ID, key: AUDIT_RECORD_KEY,
+  value: { ...rec, defect: DEFECT, ...(NOTE === '' ? {} : { note: NOTE }) },
+  read: async (id) => prisma.originalPostApprovalQueue.findUnique({
+    where: { id }, select: { editDiff: true, updatedAt: true },
+  }),
+  write: async (x) => (await prisma.originalPostApprovalQueue.updateMany({
+    // 🔴 `updatedAt` 이 조건에 있어야 "그 사이 바뀌면 0건" 이 참이 된다
+    where: { id: x.where.id, updatedAt: x.where.updatedAt, decidedBy: AUTO_DECIDER },
+    data: { editDiff: x.data.editDiff as never },
+  })).count,
 })
-if (u.count !== 1) { await prisma.$disconnect(); fail('그 사이 행이 바뀌었습니다. 아무것도 쓰지 않았습니다.') }
+if (!w.ok) { await prisma.$disconnect(); fail(`${w.reason} (시도 ${w.tries}회). 아무것도 쓰지 않았습니다.`) }
 console.log(`  ✅ ${ID} · 결함 ${DEFECT ? 'yes' : 'no'}${NOTE === '' ? '' : ` · ${NOTE}`}`)
 
 const after = auditStateOf(await prisma.originalPostApprovalQueue.findMany({
   where: { decidedBy: AUTO_DECIDER }, select: { id: true, editDiff: true },
 }))
-const g2 = judgeAuditGate(after)
+const g2 = judgeAuditGate(after, LIMITS)
 console.log(`  기록 뒤 감사 판정: ${g2.open ? '통과' : '🔴 닫힘'} — ${g2.reason}`)
 console.log('  🔴 결함이 나오면 비율을 줄이지 않고 자동을 닫는다 — 다음 회차부터 도장 0건이다\n')
 

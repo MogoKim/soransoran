@@ -169,7 +169,8 @@
     "operator:compose-db-check": "tsx scripts/operator-compose-db-check.mts",
     "check:comment-compose": "tsx scripts/comment-compose-check.mts",
     "auto-ready-sample": "tsx scripts/auto-ready-sample.mts",
-    "auto-ready-audit": "tsx scripts/auto-ready-audit.mts"
+    "auto-ready-audit": "tsx scripts/auto-ready-audit.mts",
+    "supply:forecast": "tsx scripts/supply-forecast.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
