@@ -56,7 +56,12 @@ const PROVEN_LANE = PROVEN_LANES[0] ?? ''
 
 /** 🔴 한 회차용 세상 하나 — 운영 데이터와 완전히 분리된다 */
 function makeWorld(
-  o: { copyDocs?: boolean; speakerLoad?: 'fresh' | 'stale' | 'malformed' | 'none' } = {},
+  o: {
+    copyDocs?: boolean
+    speakerLoad?: 'fresh' | 'stale' | 'malformed' | 'none'
+    /** 🔴 생성이 쓸 회차 id — 파일은 **그 회차의 것**이어야 한다 */
+    speakerLoadRunId?: string
+  } = {},
 ): { root: string; dd: string; home: string } {
   /**
    * 🔴 **실경로로 푼다.** macOS 의 `/var` 는 `/private/var` 심볼릭 링크라
@@ -85,15 +90,17 @@ function makeWorld(
    *    **막히는 것**을 값으로 확인한다.
    */
   if (o.speakerLoad !== 'none') {
-    writeSpeakerLoadFile(dd, o.speakerLoad ?? 'fresh')
+    writeSpeakerLoadFile(dd, o.speakerLoad ?? 'fresh', o.speakerLoadRunId ?? RUN)
   }
   return { root, dd, home }
 }
 
 /** 🔴 fixture 가 쓰는 여력 파일 — 운영 파일과 **같은 계약**이다 */
-function writeSpeakerLoadFile(dd: string, kind: 'fresh' | 'stale' | 'malformed'): void {
+function writeSpeakerLoadFile(
+  dd: string, kind: 'fresh' | 'stale' | 'malformed', runId = 'fixture-run',
+): void {
   if (kind === 'malformed') {
-    writeFileSync(join(dd, SPEAKER_LOAD_FILE), JSON.stringify({ writtenAt: 1, byCode: {} }))
+    writeFileSync(join(dd, SPEAKER_LOAD_FILE), JSON.stringify({ writtenAt: 1, runId, byCode: {} }))
     return
   }
   const writtenAt = kind === 'stale'
@@ -104,7 +111,8 @@ function writeSpeakerLoadFile(dd: string, kind: 'fresh' | 'stale' | 'malformed')
   for (let i = 1; i <= 24; i += 1) {
     byCode[`P${String(i).padStart(2, '0')}`] = { openDays: 7, readyCount: 0 }
   }
-  writeFileSync(join(dd, SPEAKER_LOAD_FILE), JSON.stringify({ writtenAt, horizonDays: 7, byCode }, null, 2))
+  writeFileSync(join(dd, SPEAKER_LOAD_FILE),
+    JSON.stringify({ writtenAt, runId, horizonDays: 7, byCode }, null, 2))
 }
 
 /** adapt 가 낸 모양 그대로 — 🔴 `detail` 과 `raw-detail` **쌍**으로 낸다 */
@@ -823,7 +831,8 @@ console.log('\n⑳ 🔴 🔴 화자 여력 파일 — 공급 러너 → 파일 �
     id: `sl-${i}`, comments: 12, posted: '2026-09-18T00:00:00.000Z',
   }))
   const draftRun = (kind: 'none' | 'stale' | 'malformed' | 'fresh') => {
-    const w = makeWorld({ speakerLoad: kind })
+    const tagForLoad = `20260922-${kind}`
+    const w = makeWorld({ speakerLoad: kind, speakerLoadRunId: tagForLoad })
     const rel = (p: string): string => p.slice(w.root.length + 1)
     writeAdaptPair(w.dd, seeds)
     const tag = `20260922-${kind}`

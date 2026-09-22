@@ -21,9 +21,11 @@ export function writeFakeSpeakerLoad(
    *    장부 상한처럼 화자와 무관한 것을 재는 검사가 이 값에 흔들리지 않는다.
    */
   onlyCode: string | null = null,
+  /** 🔴 이 파일이 어느 회차의 것인가 — 유료 회차는 자기 것만 쓴다 */
+  runId = 'fixture-run',
 ): void {
   if (kind === 'malformed') {
-    writeFileSync(join(dataDir, SPEAKER_LOAD_FILE), JSON.stringify({ writtenAt: 1, byCode: {} }), 'utf-8')
+    writeFileSync(join(dataDir, SPEAKER_LOAD_FILE), JSON.stringify({ writtenAt: 1, runId, byCode: {} }), 'utf-8')
     return
   }
   const writtenAt = kind === 'stale'
@@ -38,5 +40,5 @@ export function writeFakeSpeakerLoad(
   }
   writeFileSync(
     join(dataDir, SPEAKER_LOAD_FILE),
-    JSON.stringify({ writtenAt, horizonDays: 7, byCode }, null, 2), 'utf-8')
+    JSON.stringify({ writtenAt, runId, horizonDays: 7, byCode }, null, 2), 'utf-8')
 }

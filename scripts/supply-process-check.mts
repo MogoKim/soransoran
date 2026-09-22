@@ -1240,7 +1240,8 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
       byCode[`P${String(i).padStart(2, '0')}`] = { openDays: 7, readyCount: 0 }
     }
     writeFileSync(join(dd, SPEAKER_LOAD_FILE), JSON.stringify({
-      writtenAt: new Date().toISOString(), horizonDays: 7, byCode,
+      // 🔴 이 블록의 생성은 `--run-id=R1` 로 돈다 — 그 회차의 기록이어야 한다
+      writtenAt: new Date().toISOString(), runId: 'R1', horizonDays: 7, byCode,
     }, null, 2), 'utf-8')
   }
   writeSnap([])

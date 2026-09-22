@@ -20,9 +20,19 @@ export type SpeakerLoadRow = {
 }
 export type SpeakerLoadFile = {
   writtenAt: string
+  /**
+   * 🔴 **이 파일을 만든 회차** (2026-09-22).
+   *
+   *    파일 쓰기가 실패해도 **6시간 안에 쓴 이전 파일**이 그대로 남아 있으면,
+   *    시간만 보는 검사로는 "쓸 만하다" 가 된다 — 그 회차의 재고·배정은
+   *    반영되지 않았는데도. 회차 id 를 함께 적어 **그 회차의 것만** 쓴다.
+   */
+  runId: string
   /** 지평 일수 — 몇 일을 보고 센 값인가 */
   horizonDays: number
   byCode: Readonly<Record<string, SpeakerLoadRow>>
+  /** 날짜별로 누가 자리를 받았는가 — 사람이 읽는 근거. 판정에는 쓰지 않는다 */
+  byDate?: readonly { date: string; codes: readonly string[] }[]
 }
 
 /** 🔴 모양을 손으로 확인한다 — 한 칸이라도 어긋나면 `null` 이다 */
@@ -30,6 +40,7 @@ function parseLoad(raw: unknown): SpeakerLoadFile | null {
   if (typeof raw !== 'object' || raw === null) return null
   const o = raw as Record<string, unknown>
   if (typeof o.writtenAt !== 'string' || o.writtenAt === '') return null
+  if (typeof o.runId !== 'string' || o.runId.trim() === '') return null
   if (!Number.isInteger(o.horizonDays) || (o.horizonDays as number) < 1) return null
   if (typeof o.byCode !== 'object' || o.byCode === null) return null
   const byCode: Record<string, SpeakerLoadRow> = {}
@@ -40,7 +51,10 @@ function parseLoad(raw: unknown): SpeakerLoadFile | null {
     if (!Number.isInteger(r.readyCount) || (r.readyCount as number) < 0) return null
     byCode[code] = { openDays: r.openDays as number, readyCount: r.readyCount as number }
   }
-  return { writtenAt: o.writtenAt, horizonDays: o.horizonDays as number, byCode }
+  return {
+    writtenAt: o.writtenAt, runId: (o.runId as string).trim(),
+    horizonDays: o.horizonDays as number, byCode,
+  }
 }
 
 export type SpeakerLoadReader = {
@@ -50,7 +64,7 @@ export type SpeakerLoadReader = {
   describe: string
   loaded: boolean
   /** 🔴 왜 못 읽었는가 — `loaded` 가 true 면 null */
-  problem: 'missing' | 'malformed' | 'stale' | null
+  problem: 'missing' | 'malformed' | 'stale' | 'runMismatch' | null
 }
 
 /**
@@ -66,9 +80,13 @@ export const SPEAKER_LOAD_MAX_AGE_MS = 6 * 60 * 60 * 1000
  *    `readyCount: 0` 은 "재고를 모른다" 가 아니라 **빼지 않는다**는 뜻이다 —
  *    🔴 모르는 것을 0 으로 **단정하지 않기 위해** describe 에 적는다.
  */
-export function readSpeakerLoad(raw: unknown, now: Date = new Date()): SpeakerLoadReader {
+export function readSpeakerLoad(
+  raw: unknown, now: Date = new Date(), expectRunId: string | null = null,
+): SpeakerLoadReader {
   const f = parseLoad(raw)
-  const blocked = (problem: 'missing' | 'malformed' | 'stale', why: string): SpeakerLoadReader => ({
+  const blocked = (
+    problem: 'missing' | 'malformed' | 'stale' | 'runMismatch', why: string,
+  ): SpeakerLoadReader => ({
     openDaysOf: () => 1,
     readyCountOf: () => 0,
     loaded: false,
@@ -84,6 +102,14 @@ export function readSpeakerLoad(raw: unknown, now: Date = new Date()): SpeakerLo
   const ageMs = now.getTime() - new Date(f.writtenAt).getTime()
   if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > SPEAKER_LOAD_MAX_AGE_MS) {
     return blocked('stale', `기록이 오래됐다 (${f.writtenAt})`)
+  }
+  /**
+   * 🔴 **이 회차의 것이 아니면 쓰지 않는다.** 쓰기가 실패해도 조금 전 파일이
+   *    남아 있으면 시간만으로는 통과한다 — 그 회차의 재고·배정은 빠진 채로.
+   *    🔴 회차를 묻지 않으면(`null`) 이 검사는 하지 않는다 — 무료 회차용이다.
+   */
+  if (expectRunId !== null && f.runId !== expectRunId) {
+    return blocked('runMismatch', `다른 회차의 기록이다 (${f.runId} ≠ ${expectRunId})`)
   }
   return {
     problem: null,

@@ -63,6 +63,7 @@ import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
 import { SPEAKER_LOAD_FILE, draftSpeakerOf } from '../src/lib/content-core/speaker-load-file'
+import { planOpenDays } from '../src/lib/content-core/speaker-availability'
 import { canaryAuthorization, kstDateString } from '../src/lib/release-canary'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
 import {
@@ -211,7 +212,7 @@ const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *    `readyCount` 이미 발행 대기 재고에 있는 그 화자의 글 수.
  *                🔴 이미 들고 있으면 더 만들어도 같은 날 못 나간다.
  */
-async function writeSpeakerLoad(prisma: PrismaClient): Promise<void> {
+async function writeSpeakerLoad(prisma: PrismaClient, runId: string): Promise<void> {
   const personas = await prisma.persona.findMany({
     where: { status: 'active' }, select: { code: true },
   })
@@ -254,18 +255,24 @@ async function writeSpeakerLoad(prisma: PrismaClient): Promise<void> {
       : sustained
   const horizonDays = SPEAKER_LOAD_HORIZON_DAYS
   const start = horizonStart(now)
-  const openDays = new Map<string, number>()
-  for (let i = 0; i < horizonDays; i += 1) {
-    const at = new Date(start.getTime() + i * 86_400_000)
-    const p = profileForDay(at)
-    const caps = { postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween }
-    /**
-     * 🔴 **그날 낼 수 있는 편수를 넘겨 세지 않는다.** 배정 가능한 사람이 20명이어도
-     *    그날 상한이 3편이면 그 지평에서 열리는 자리는 3개다.
-     */
-    const codes = availablePersonasAt(history, at, caps).slice(0, p.dailyTarget)
-    for (const code of codes) openDays.set(code, (openDays.get(code) ?? 0) + 1)
-  }
+  /**
+   * 🔴 **정본 하나가 하루하루를 채워 본다.** 앞판은 날마다
+   *    `availablePersonasAt(...).slice(0, dailyTarget)` 을 썼는데, 그 목록은
+   *    **코드순**이라 d1 7일이면 P01 이 7일을 다 가져갔다(실측).
+   *    이제 고른 날을 이력에 쌓아 다음 날 판정이 그 사람을 빼게 한다.
+   */
+  const plan = planOpenDays({
+    days: Array.from({ length: horizonDays }, (_, i) => new Date(start.getTime() + i * 86_400_000)),
+    profileOf: (at) => {
+      const p = profileForDay(at)
+      return { dailyTarget: p.dailyTarget, postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween }
+    },
+    history,
+    availableAt: (h, at, caps) => availablePersonasAt(
+      h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
+    dateLabel: (at) => kstDateString(at),
+  })
+  const openDays = plan.openDays
   const byCode: Record<string, { openDays: number; readyCount: number }> = {}
   for (const p of personas) {
     byCode[p.code] = {
@@ -275,7 +282,9 @@ async function writeSpeakerLoad(prisma: PrismaClient): Promise<void> {
   }
   mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), JSON.stringify({
-    writtenAt: new Date().toISOString(), horizonDays, byCode,
+    // 🔴 **이 회차의 것임을 못박는다** — 쓰기가 실패해도 옛 파일이 쓰이지 않게
+    writtenAt: new Date().toISOString(), runId, horizonDays, byCode,
+    byDate: plan.byDate,
   }, null, 2))
 }
 
@@ -550,8 +559,23 @@ async function main(): Promise<number> {
      *    여기서 읽어 파일로 넘긴다. 🔴 실패해도 생성을 멈추지 않는다(fail-safe) —
      *    그때 생성 러너는 "회차 안 중복만 막는다" 고 적는다.
      */
+    /**
+     * 🔴 **적지 못하면 그 회차의 생성을 시작하지 않는다** (2026-09-22 보정).
+     *
+     *    앞판은 실패를 삼켰다. 그러면 **6시간 안에 쓴 이전 파일**이 남아 있을 때
+     *    생성 러너가 그것을 읽고 그대로 돈다 — 그 회차의 재고·배정은 빠진 채로.
+     *    🔴 파일에 회차 id 를 적고, 여기서도 실패하면 단계를 건너뛴다(둘 다 막는다).
+     */
     if (plan.stage === 'draft') {
-      try { await writeSpeakerLoad(prisma) } catch { /* 적지 못해도 멈추지 않는다 */ }
+      try {
+        await writeSpeakerLoad(prisma, runId)
+      } catch (e) {
+        const why = e instanceof Error ? e.message : 'unknown'
+        console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)
+        console.log('   🔴 이 회차의 생성을 시작하지 않는다 (provider 호출 0 · 파일 write 0)')
+        console.log('   🔴 이전 파일이 남아 있어도 쓰지 않는다 — 회차 id 가 다르다')
+        return { ok: false, exitCode: null, spawnError: 'speakerLoadWriteFailed' }
+      }
     }
     // 🔴 단계별 env 는 **자식 프로세스에만** 실린다. 운영 env 파일은 건드리지 않는다
     const r = await run(STAGE_SCRIPT[plan.stage], plan.args, plan.env)

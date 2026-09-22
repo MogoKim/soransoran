@@ -737,7 +737,7 @@ console.log('\n⑨ 행동 — 🔴 가짜 provider 로 실제 요청 수를 센�
    *    🔴 이 블록이 재는 것은 **장부 상한**이지 화자 분산이 아니다.
    *    한 명에게 여력을 몰아 주어 좁히기 전과 같은 요청 수가 나가게 한다.
    */
-  writeFakeSpeakerLoad(dd)
+  writeFakeSpeakerLoad(dd, 'fresh', null, 'R1')
   symlinkSync(join(process.cwd(), 'docs'), join(root, 'docs'))
   const fakeHome = join(root, 'home')
   mkdirSync(fakeHome, { recursive: true })
@@ -1390,6 +1390,8 @@ console.log('\n⑪ 회차 상한 공유 — 🔴 판정과 생성이 같은 상�
     for (const f of ['auto-judge-cache.json', 'auto-draft-cache.json']) {
       writeFileSync(join(dd, f), '{}', 'utf-8')
     }
+    // 🔴 생성은 **그 회차의** 여력 기록만 쓴다 — 회차마다 새로 적는다
+    if (script.includes('auto-draft')) writeFakeSpeakerLoad(dd, 'fresh', 'P01', runId)
     spawnSync(
       join(process.cwd(), 'node_modules/.bin/tsx'),
       [join(process.cwd(), script), ...args, `--run-id=${runId}`],

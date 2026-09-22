@@ -132,3 +132,70 @@ export function planSpeakerAvailability(input: {
   const identity = slots.map((s) => `${s.sourceKey}:${s.codes.join(',')}`).join('|')
   return { slots, eligible, identity, notes }
 }
+
+/**
+ * 🔴 **지평의 하루하루를 실제로 채워 본다** (2026-09-22 보정)
+ *
+ * 🔴 **무엇이 틀렸나.** 앞판은 날마다
+ *    `availablePersonasAt(...).slice(0, dailyTarget)` 을 썼다.
+ *    그 목록은 **코드순으로 정렬**돼 있어서, d1(하루 1편) 7일이면
+ *    **P01 이 7일을 다 가져가고** 나머지는 0 이었다 — 주간 상한도 최소 간격도
+ *    그 사람에게 실제로는 걸리는데, 자리를 세는 쪽이 그것을 몰랐다.
+ *
+ * 🔴 **고친 방법.** 그날 자리를 고를 때마다 **그 사람의 이력에 그날을 더한다.**
+ *    그러면 다음 날 `availablePersonasAt` 이 최소 간격·주간 상한으로 그 사람을 뺀다 —
+ *    자리가 저절로 퍼진다. 🔴 **이미 예정된 배정도 같은 이력에 들어 있다.**
+ *
+ * 🔴 고르는 순서는 **덜 쓴 사람 먼저**다. 같으면 코드순 — 같은 입력이면 같은 결과다.
+ */
+export type OpenDayPlan = {
+  /** 화자별 열린 날 수 */
+  openDays: ReadonlyMap<string, number>
+  /** 날짜별로 누가 어느 자리를 받았는가 — 사람이 읽고 검사가 단정한다 */
+  byDate: readonly { date: string; codes: readonly string[] }[]
+}
+
+export function planOpenDays(input: {
+  /** 지평의 각 날 (KST 기준 시각) */
+  days: readonly Date[]
+  /** 그날의 하루 상한과 cap — 날짜마다 다를 수 있다(canary) */
+  profileOf: (at: Date) => { dailyTarget: number; postsPerWeek: number; minDaysBetween: number }
+  /** 🔴 이미 예정·완료된 배정을 담은 이력 — 여기에 계획을 쌓아 간다 */
+  history: readonly { code: string; matchedAts: readonly Date[] }[]
+  /** 🔴 발행 정본이 판정한다 — 여기서 규칙을 다시 적지 않는다 */
+  availableAt: (
+    hist: readonly { code: string; matchedAts: readonly Date[] }[],
+    at: Date,
+    caps: { postsPerWeek: number; minDaysBetween: number },
+  ) => string[]
+  /** KST 날짜 문자열 */
+  dateLabel: (at: Date) => string
+}): OpenDayPlan {
+  // 🔴 호출자의 배열을 바꾸지 않는다
+  const hist = input.history.map((h) => ({ code: h.code, matchedAts: [...h.matchedAts] }))
+  const openDays = new Map<string, number>()
+  const byDate: { date: string; codes: string[] }[] = []
+
+  for (const at of input.days) {
+    const p = input.profileOf(at)
+    const caps = { postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween }
+    const picked: string[] = []
+    for (let slot = 0; slot < p.dailyTarget; slot += 1) {
+      const free = input.availableAt(hist, at, caps).filter((c) => !picked.includes(c))
+      if (free.length === 0) break
+      /**
+       * 🔴 **덜 쓴 사람 먼저.** 코드순으로 집으면 앞자리 사람이 지평을 독식한다 —
+       *    그것이 정확히 이 보정이 고치는 결함이다.
+       */
+      const next = [...free].sort((a, b) =>
+        ((openDays.get(a) ?? 0) - (openDays.get(b) ?? 0)) || a.localeCompare(b))[0]!
+      picked.push(next)
+      openDays.set(next, (openDays.get(next) ?? 0) + 1)
+      // 🔴 **그날을 이력에 더한다** — 다음 날 판정이 이 사람을 빼도록
+      const row = hist.find((h) => h.code === next)
+      if (row !== undefined) row.matchedAts.push(at)
+    }
+    byDate.push({ date: input.dateLabel(at), codes: picked })
+  }
+  return { openDays, byDate }
+}

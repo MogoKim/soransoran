@@ -828,7 +828,17 @@ async function main(): Promise<void> {
    */
   const speakerLoad = ((): ReturnType<typeof readSpeakerLoad> => {
     try {
-      return readSpeakerLoad(JSON.parse(readFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), 'utf-8')))
+      return readSpeakerLoad(
+        JSON.parse(readFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), 'utf-8')),
+        new Date(),
+        /**
+         * 🔴 **유료 회차는 이 회차의 기록만 쓴다** (2026-09-22).
+         *    공급 러너가 적다가 실패해도 6시간 안에 쓴 이전 파일이 남아 있으면
+         *    시간만으로는 통과한다 — 그 회차의 재고·배정은 빠진 채로.
+         *    🔴 무료 회차는 묻지 않는다(`null`) — 돈이 나가지 않는다.
+         */
+        CALL ? RUN_ID : null,
+      )
     } catch { return readSpeakerLoad(null) }
   })()
   console.log(`\n   ${speakerLoad.describe}`)
