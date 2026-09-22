@@ -113,6 +113,16 @@ jobs:
       #    🔴 `SORAN_RELEASE_STAGE` 는 그대로 둔다 — 지속 단계와 시험은 다른 값이다.
       SORAN_RELEASE_CANARY_STAGE: ${{ vars.SORAN_RELEASE_CANARY_STAGE }}
       SORAN_RELEASE_CANARY_DATE: ${{ vars.SORAN_RELEASE_CANARY_DATE }}
+      # 🔴 **기간형 제한 운영 허가** (2026-09-22). 하루짜리와 달리 날짜가 둘이라
+      #    매일 사람이 바꾸지 않아도 되고, `UNTIL` 다음 날 아무도 끄지 않아도 닫힌다.
+      #
+      # 🔴 **세 값을 모두 넘긴다.** 하나라도 빠지면 러너가 켜지 않는다(fail-closed) —
+      #    그러나 여기서 빠뜨리면 "변수는 있는데 켜지지 않는" 말 없는 실패가 된다.
+      #    실제로 앞판은 이 세 줄이 없어 기능 전체가 운영에서 죽어 있었다.
+      #    🔴 `SORAN_RELEASE_STAGE` 는 그대로 둔다 — 지속 단계와 기간 운영은 다른 값이다.
+      SORAN_RELEASE_WINDOW_STAGE: ${{ vars.SORAN_RELEASE_WINDOW_STAGE }}
+      SORAN_RELEASE_WINDOW_FROM: ${{ vars.SORAN_RELEASE_WINDOW_FROM }}
+      SORAN_RELEASE_WINDOW_UNTIL: ${{ vars.SORAN_RELEASE_WINDOW_UNTIL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -146,10 +156,31 @@ jobs:
           else
             echo "✅ capacity=$cap · release=$rel"
           fi
+          # 🔴 기간 허가도 함께 보여 준다 — 세 값 중 하나만 있으면 러너가 켜지 않는다.
+          #    여기서 보이지 않으면 "왜 d1 인가" 를 로그로 설명할 수 없다.
+          ws="${SORAN_RELEASE_WINDOW_STAGE:-}"
+          wf="${SORAN_RELEASE_WINDOW_FROM:-}"
+          wu="${SORAN_RELEASE_WINDOW_UNTIL:-}"
+          wn=0
+          [ -n "$ws" ] && wn=$((wn+1))
+          [ -n "$wf" ] && wn=$((wn+1))
+          [ -n "$wu" ] && wn=$((wn+1))
+          if [ "$wn" = 0 ]; then
+            echo "   기간 허가 없음 — 기간형 제한 운영은 꺼져 있습니다"
+          elif [ "$wn" = 3 ]; then
+            echo "   기간 허가 $ws · $wf~$wu (최종 판정은 러너가 합니다)"
+          else
+            echo "🟡 기간 허가가 반쪽입니다 ($wn/3) — 러너가 켜지 않습니다(fail-closed)"
+          fi
           {
             echo "## 규모 설정"
             echo "- capacity: \`${cap:-(없음)}\` · release: \`${rel:-(없음)}\`"
             [ -n "$note" ] && echo "- 🟡 허용 밖/누락 →$note"
+            if [ "$wn" = 3 ]; then
+              echo "- 기간 허가: \`$ws\` · \`$wf\`~\`$wu\`"
+            elif [ "$wn" != 0 ]; then
+              echo "- 🟡 기간 허가가 반쪽이다 ($wn/3) — 켜지지 않는다"
+            fi
             echo "- 🔴 최종 상한은 러너가 준비도까지 반영해 정한다 (로그 ③-c 참조)"
           } >> "$GITHUB_STEP_SUMMARY"
 

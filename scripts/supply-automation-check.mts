@@ -9,18 +9,18 @@ import { readFileSync } from 'node:fs'
 
 import {
   windowAuthorization, judgeDayGuard, judgeOneDayCanary,
-  WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, WINDOW_MAX_DAYS,
+  WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, WINDOW_MAX_DAYS, kstDateString,
 } from '../src/lib/release-canary'
 import { resolveScale } from '../src/lib/scale-runtime'
 import { PROFILES, RELEASE_STAGES, type StageVerdict } from '../src/lib/scale-profile'
 import { forecastPublishing } from '../src/lib/supply-capacity-forecast'
 import {
   SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_BUDGET_ENV_NAMES,
-  SUPPLY_DAILY_USD_APPROVED, SUPPLY_DAILY_USD_PROPOSED, SUPPLY_UNDETECTED_LIMITS,
+  SUPPLY_DAILY_USD_APPROVED, SUPPLY_DAILY_USD_PROPOSED, SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
   judgeProductionRate, AUTO_READY_CONTRACT, AUTO_READY_STEPS, describeSupplySchedule,
 } from '../src/lib/supply-schedule-contract'
 import {
-  profileOf, selectAutoTargets, voiceInputOf, judgeApply,
+  profileOf, selectAutoTargets, voiceInputOf, judgeApply, judgePublishDefects,
   AUTO_GATE_VERDICT, MACHINE_REVIEWED_BY, type AutoRow,
 } from '../src/lib/original-post-auto-publish'
 import { reviewPatchOf } from '../src/lib/original-post-machine-review'
@@ -28,6 +28,7 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { checkVoiceFingerprint } from './lib/persona-gate-78.mjs'
 import {
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX,
+  AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
 } from '../src/lib/micro-seed-supply-autofill'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 import type { PersonaForMatch } from '../src/lib/original-post-persona-match'
@@ -192,9 +193,20 @@ console.log('\n② 🔴 🔴 기간형 D3 — 그날 단계 고정 · 재고는 
   check('🔴 0건 — 켜진다 (3/3 가능)', r0.releaseStage === 'd3', r0.releaseStage)
   for (const n of [1, 2, 3]) {
     const r = at(n, 3 - n)
-    check(`🔴 🔴 **${n}건 낸 뒤에도 그날 단계는 d3 로 고정된다**`,
-      r.releaseStage === 'd3' && r.notes.some((x) => x.includes('고정')),
-      `${r.releaseStage}`)
+    check(`🔴 🔴 **${n}건 낸 뒤에도 그날 단계는 d3 다**`, r.releaseStage === 'd3', r.releaseStage)
+  }
+  /**
+   * 🔴 **왜 d3 인지가 건수마다 다르다** — 그 차이가 이 보정의 핵심이다.
+   *    1건: 기본 단계(d1) 상한 안이므로 **그날치 판정에 물어서** 연다
+   *    2건 이상: 내리면 이미 낸 것이 상한 초과가 되므로 **고정**한다
+   */
+  check('🔴 🔴 **1건일 때는 판정에 물어서 연다 — 발행 수만으로 확정하지 않는다**',
+    at(1, 2).notes.some((x) => x.includes('구분할 수 없다'))
+    && !at(1, 2).notes.some((x) => x.includes('고정')),
+    at(1, 2).notes.join(' | '))
+  for (const n of [2, 3]) {
+    check(`🔴 🔴 **${n}건일 때는 고정한다 — 내리면 이미 낸 것이 상한 초과다**`,
+      at(n, 3 - n).notes.some((x) => x.includes('고정')), at(n, 3 - n).notes.join(' | '))
   }
   /** 🔴 재고가 0 이어도 이미 낸 날은 단계를 내리지 않는다 */
   const starved = at(2, 0)
@@ -246,8 +258,9 @@ console.log('\n② 🔴 🔴 기간형 D3 — 그날 단계 고정 · 재고는 
    */
   const row = (id: string): AutoRow => ({
     id, status: 'APPROVED', createdPostId: null, gateVerdict: AUTO_GATE_VERDICT,
-    promptVersion: 'human-curated-v1', model: 'human', matchedPersonaId: 'p',
-    sourceSite: 'founder-curated:x', title: 't', body: 'b',
+    /** 🔴 사람 profile 정본값을 가져다 쓴다 — 손으로 적으면 갈라진다 */
+    promptVersion: AUTOFILL_PROMPT_VERSION, model: AUTOFILL_MODEL, matchedPersonaId: 'p',
+    sourceSite: `${AUTOFILL_SITE_PREFIX}sheet`, title: 't', body: 'b',
     decidedBy: 'founder', decidedAt: new Date('2026-09-23T00:00:00.000Z'),
     createdAt: new Date('2026-09-22T00:00:00.000Z'),
   })
@@ -298,6 +311,79 @@ console.log('\n② 🔴 🔴 기간형 D3 — 그날 단계 고정 · 재고는 
     check('🔴 그날 판정이 GO 여도 슬롯이 아니면 닫힌다', res.ok === false)
   }
 
+  // ── 🔴 🔴 후보별 제외가 그날 전체를 막지 않는다 ──
+  {
+    /**
+     * 🔴 **한 줄 때문에 멀쩡한 나머지가 멎으면 안 된다** (2026-09-22 보정).
+     *
+     *    앞판은 `SAFETY` 로 빠진 행이 한 건이라도 있으면 그날을 **전면 중단**했다.
+     *    안전 판정 실패는 그 행 하나의 문제이고 `selectAutoTargets` 가 이미 빼 준다.
+     *    그것을 전면 중단으로 올리면 공급이 조용히 0 이 된다.
+     *
+     * 🔴 그래서 **안전한 행 + 위험한 행을 섞어** 실제 발행 게이트까지 통과시킨다.
+     */
+    const safeRow = { ...row('safe'), title: '무릎이 시큰거려서요', body: '계단이 무서워졌습니다. 다들 어떠신가요.' }
+    /** 🔴 실제 안전 판정이 잡는 문구를 쓴다 — 스텁이 아니다 */
+    const riskyRow = {
+      ...row('risky'), title: '이 약 드시면 낫습니다',
+      body: '병원 가지 마시고 이 약만 드세요. 암도 완치됩니다. 계좌로 입금하시면 보내 드립니다.',
+    }
+    const realSafety = (t: string, b: string): string => safetyFilter({ title: t, body: b }).verdict
+    const sel = selectAutoTargets([safeRow, riskyRow], realSafety)
+    check('🔴 🔴 **위험한 행만 빠지고 안전한 행은 남는다**',
+      sel.targets.length === 1 && sel.targets[0]!.id === 'safe'
+      && sel.rejected.some((r) => r.id === 'risky' && r.code === 'SAFETY'),
+      `${sel.targets.map((t) => t.id).join(',')} / ${JSON.stringify(sel.rejected)}`)
+
+    /** 🔴 그 제외가 **그날 판정의 결함 목록에 들어가지 않는다** */
+    const g = judgeDayGuard({
+      publishedToday: 0, dailyTarget: 3, publishable: 1,
+      // 🔴 후보별 제외는 여기 들어오지 않는다 — 러너가 넣지 않는 것을 검사도 넣지 않는다
+      hardDefects: [],
+    })
+    const res = judgeApply({
+      targets: sel.targets, picked: sel.targets[0] ?? null, apply: true, limit: 1,
+      publishedToday: 0, dailyCap: 3, killSwitchEnabled: false,
+      slot: { run: true, reason: '도래' }, dayGuard: g,
+    })
+    check('🔴 🔴 **위험한 행이 섞여 있어도 안전한 후보는 실제로 발행 게이트를 통과한다**',
+      res.ok === true, why(res))
+
+    /** 🔴 배관 결함은 여전히 그날을 닫는다 — 둘을 섞지 않았다는 증거 */
+    const plumbing = judgeApply({
+      targets: sel.targets, picked: sel.targets[0] ?? null, apply: true, limit: 1,
+      publishedToday: 0, dailyCap: 3, killSwitchEnabled: false,
+      slot: { run: true, reason: '도래' },
+      dayGuard: judgeDayGuard({
+        publishedToday: 4, dailyTarget: 3, publishable: 1,
+        hardDefects: ['오늘 발행 4건이 상한 3건을 넘었다 — 중복 발행 흔적이다'],
+      }),
+    })
+    check('🔴 🔴 **배관 결함(상한 초과)은 여전히 전면 중단이다**',
+      plumbing.ok === false && plumbing.reason.includes('전면 중단'), why(plumbing))
+
+    /**
+     * 🔴 **결함 조립을 실제로 돌려 본다.** 러너 안에 조립이 있으면 검사가 닿지 않아
+     *    "안전 제외를 넣지 않았다" 를 문자열로만 믿어야 했다 — 그 검사는 우회된다.
+     */
+    const d = judgePublishDefects({
+      publishedToday: 1, dailyCap: 3, recoveryBroken: 0, rejected: sel.rejected,
+    })
+    check('🔴 🔴 **안전 제외가 있어도 전면 중단 사유는 0 이다**',
+      d.hardDefects.length === 0 && d.perRowExcluded === 1, JSON.stringify(d))
+    check('🔴 🔴 **상한 초과는 전면 중단 사유가 된다**',
+      judgePublishDefects({ publishedToday: 4, dailyCap: 3, recoveryBroken: 0, rejected: sel.rejected })
+        .hardDefects.length === 1)
+    check('🔴 🔴 **복구 깨짐도 전면 중단 사유다**',
+      judgePublishDefects({ publishedToday: 1, dailyCap: 3, recoveryBroken: 2, rejected: [] })
+        .hardDefects.length === 1)
+    check('🔴 러너가 그 함수를 쓴다 — 자기 자리에서 다시 조립하지 않는다', (() => {
+      const rsrc = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+      return rsrc.includes('judgePublishDefects({')
+        && !/hardDefects\.push\(/.test(rsrc)
+    })())
+  }
+
   // ── 🔴 러너가 그 문에 실제로 값을 넣는가 ──
   {
     const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
@@ -315,6 +401,148 @@ console.log('\n② 🔴 🔴 기간형 D3 — 그날 단계 고정 · 재고는 
 }
 
 // ─────────────────────────────────────────────────────────
+console.log('\n②-w 🔴 🔴 기간 변수가 **실제 예약 job** 까지 닿는가 · 날짜 검증')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **라이브러리가 맞는 것과 운영에서 도는 것은 다르다** (2026-09-22 보정).
+   *
+   *    앞판은 `windowAuthorization` 을 fixture 로만 통과시켰다. 그런데
+   *    `auto-publish.yml` 의 발행 job 에는 `SORAN_RELEASE_WINDOW_*` 세 줄이
+   *    **아예 없었다.** 변수를 아무리 켜도 러너의 `process.env` 에 닿지 않는다 —
+   *    기능 전체가 운영에서 죽은 채 검사만 초록이었다.
+   */
+  const yml = readFileSync('.github/workflows/auto-publish.yml', 'utf-8')
+  /** 🔴 주석을 떼고 본다 — 주석에 적힌 이름이 배선을 대신하지 않는다 */
+  const code = yml.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+  const jobEnv = code.slice(code.indexOf('jobs:'), code.indexOf('    steps:'))
+  for (const n of [WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV]) {
+    check(`🔴 🔴 **예약 job 이 ${n} 를 vars 에서 받는다**`,
+      new RegExp(`^\\s*${n}:\\s*\\$\\{\\{\\s*vars\\.${n}\\s*\\}\\}\\s*$`, 'm').test(jobEnv))
+  }
+  check('🔴 🔴 **실제 발행 step 이 그 job 안에 있어 env 를 물려받는다**', (() => {
+    const i = code.indexOf("if: github.event_name == 'schedule'")
+    const j = code.indexOf('jobs:')
+    return i > j && code.slice(i).includes('--apply --limit=1')
+  })())
+  check('🔴 하루짜리 허가 세 줄도 그대로 있다 — 기간형이 그것을 지우지 않았다',
+    jobEnv.includes('vars.SORAN_RELEASE_CANARY_STAGE')
+    && jobEnv.includes('vars.SORAN_RELEASE_CANARY_DATE')
+    && jobEnv.includes('vars.SORAN_RELEASE_STAGE'))
+
+  // ── 🔴 존재하지 않는 날짜 · 역순 · 7일 초과 · NaN 경계 ──
+  const auth = (from: string, until: string, now = new Date('2026-09-23T04:30:00.000Z')) =>
+    windowAuthorization(
+      { [WINDOW_STAGE_ENV]: 'd3', [WINDOW_FROM_ENV]: from, [WINDOW_UNTIL_ENV]: until },
+      now, RELEASE_STAGES,
+    )
+  check('🔴 정상 기간은 켜진다 (9/23~9/26)', auth('2026-09-23', '2026-09-26').activeToday === true)
+  for (const [f, u, why] of [
+    ['2026-02-30', '2026-03-02', '2월 30일은 없다'],
+    ['2026-13-01', '2026-13-03', '13월은 없다'],
+    ['2026-09-00', '2026-09-03', '0일은 없다'],
+    ['2026-09-32', '2026-09-33', '32일은 없다'],
+    ['2025-02-29', '2025-03-01', '2025년 2월 29일은 없다 (평년)'],
+  ] as const) {
+    const a = auth(f, u)
+    check(`🔴 🔴 **없는 날짜는 켜지 않는다 — ${why}**`,
+      a.activeToday === false && a.stage === null, `${a.note}`)
+  }
+  check('🔴 🔴 **NaN 으로 7일 상한을 우회할 수 없다**', (() => {
+    /**
+     * 🔴 앞판의 구멍: `Date.parse('2026-02-30...')` 가 NaN 이면
+     *    `span < 0` 도 `span + 1 > 7` 도 둘 다 false 라 **몇 달짜리 기간이 열렸다.**
+     */
+    const a = auth('2026-02-30', '2026-09-30')
+    return a.activeToday === false && a.stage === null
+  })())
+  check('🔴 🔴 **역순은 켜지 않는다**', (() => {
+    const a = auth('2026-09-26', '2026-09-23')
+    return a.activeToday === false && (a.note ?? '').includes('시작이 끝보다 뒤')
+  })())
+  check(`🔴 🔴 **${WINDOW_MAX_DAYS}일 초과는 켜지 않는다 (경계 ${WINDOW_MAX_DAYS + 1}일)**`, (() => {
+    const a = auth('2026-09-23', '2026-09-30')
+    return a.activeToday === false && (a.note ?? '').includes(`${WINDOW_MAX_DAYS}일`)
+  })())
+  check(`🔴 정확히 ${WINDOW_MAX_DAYS}일은 켜진다 — 경계를 한 칸 좁히지 않는다`,
+    auth('2026-09-23', '2026-09-29').activeToday === true)
+  check('🔴 윤년 2월 29일은 있는 날이다 — 막지 않는다',
+    auth('2028-02-29', '2028-03-01', new Date('2028-02-29T04:30:00.000Z')).activeToday === true)
+
+  // ── 🔴 9/23 시작 · 기간 중 · 종료 다음 날 (dry-run) ──
+  const NOTHING: StageVerdict[] = RELEASE_STAGES.map((stage) => ({ stage, ready: false, reasons: ['재고'] }))
+  const WIN = {
+    SORAN_CAPACITY_STAGE: 'd3',
+    [WINDOW_STAGE_ENV]: 'd3', [WINDOW_FROM_ENV]: '2026-09-23', [WINDOW_UNTIL_ENV]: '2026-09-26',
+  }
+  const dayRun = (iso: string, published: number) => {
+    const now = new Date(iso)
+    const sim: SimOutcome = {
+      stage: 'd3', dates: [kstDateString(now)], in14: 3, want14: 3, gaps: 0, recoveryBroken: 0,
+      personas: 24, stock: 3, horizonStartAt: now, nextSlotAt: now, horizonDays: 1,
+    }
+    const v = judgeOneDayCanary(sim, { publishedToday: published, slotsLeft: 3 - published })
+    return resolveScale(WIN as NodeJS.ProcessEnv, {
+      readiness: NOTHING,
+      window: { now, verdict: v, dayVerdict: v, publishedToday: published },
+    })
+  }
+  {
+    const r = dayRun('2026-09-23T00:40:00.000Z', 0) // 9/23 09:40 KST · 아직 0건
+    check('🔴 🔴 **9/23 기간 시작 — 아직 0건이면 d3 로 연다**',
+      r.releaseStage === 'd3' && r.canaryStage === true, r.releaseStage)
+  }
+  {
+    const r = dayRun('2026-09-24T08:40:00.000Z', 2) // 기간 중 · 늦은 예약
+    check('🔴 🔴 **기간 중 예약 실행 — 2건 낸 뒤에도 d3 고정**',
+      r.releaseStage === 'd3' && r.notes.some((n) => n.includes('고정')), r.releaseStage)
+  }
+  {
+    const r = dayRun('2026-09-27T00:40:00.000Z', 0) // 종료 다음 날
+    check('🔴 🔴 **종료 다음 날(9/27) — 아무도 끄지 않아도 d1 로 돌아온다**',
+      r.releaseStage === 'd1' && r.canaryStage === false, r.releaseStage)
+  }
+  {
+    /**
+     * 🔴 #5 — **d1 로 이미 한 편이 나간 날 오후에 기간 변수를 켠 경우.**
+     *
+     *    앞판은 `publishedToday > 0` 하나만 보고 그날을 d3 로 **확정**했다.
+     *    그날치 판정(재고·화자·신선도)을 한 번도 묻지 않고 두 편이 더 열렸다.
+     *    그 한 편이 어느 단계에서 나갔는지는 기록에 없어 구분할 수 없다.
+     */
+    const noGo = (iso: string, published: number) => {
+      const now = new Date(iso)
+      /** 🔴 재고가 없어 그날치 판정이 NO-GO 인 상황 */
+      const sim: SimOutcome = {
+        stage: 'd3', dates: [kstDateString(now)], in14: 0, want14: 3, gaps: 0, recoveryBroken: 0,
+        personas: 24, stock: 0, horizonStartAt: now, nextSlotAt: now, horizonDays: 1,
+      }
+      const v = judgeOneDayCanary(sim, { publishedToday: published, slotsLeft: 3 - published })
+      return resolveScale(WIN as NodeJS.ProcessEnv, {
+        readiness: NOTHING,
+        window: { now, verdict: v, dayVerdict: v, publishedToday: published },
+      })
+    }
+    const r = noGo('2026-09-23T05:40:00.000Z', 1) // 9/23 14:40 KST · 이미 1건 · 판정 NO-GO
+    check('🔴 🔴 **발행 수만으로 D3 를 확정하지 않는다 — 판정이 NO-GO 면 열지 않는다**',
+      r.releaseStage !== 'd3', r.releaseStage)
+    check('🔴 🔴 **왜 안 열었는지를 적는다**',
+      r.notes.some((n) => n.includes('켜지 않는다')), r.notes.join(' | '))
+
+    /** 🔴 판정이 GO 면 연다 — 다만 구분할 수 없다는 사실을 기록에 남긴다 */
+    const go = dayRun('2026-09-23T05:40:00.000Z', 1)
+    check('🔴 🔴 **판정이 GO 면 열되, 구분할 수 없다는 사실을 남긴다**',
+      go.releaseStage === 'd3' && go.notes.some((n) => n.includes('구분할 수 없다')),
+      go.notes.join(' | '))
+
+    /** 🔴 이미 기본 단계 상한을 넘긴 날은 판정과 무관하게 고정한다 */
+    const over = noGo('2026-09-24T05:40:00.000Z', 2)
+    check('🔴 🔴 **기본 상한을 넘긴 날은 NO-GO 여도 내리지 않는다 — 소급 초과를 만들지 않는다**',
+      over.releaseStage === 'd3' && over.notes.some((n) => n.includes('고정')), over.releaseStage)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 잡는 것')
 // ─────────────────────────────────────────────────────────
 {
@@ -327,11 +555,62 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
   check('🔴 🔴 **슬롯 시각도 같다 — 2회라고 부르지 않는다**',
     JSON.stringify(hours) === JSON.stringify(SUPPLY_RUN_SLOTS_KST.map((s) => ({ hour: s.hour, minute: s.minute }))),
     JSON.stringify(hours))
-  check('🔴 🔴 **지금 템플릿에는 예산 env 가 없다 — 등록 전에 넣어야 한다**',
-    SUPPLY_BUDGET_ENV_NAMES.every((n) => !tpl.includes(n)),
-    SUPPLY_BUDGET_ENV_NAMES.filter((n) => tpl.includes(n)).join(','))
-  check('🔴 🔴 **$0.30 은 미승인 제안값이다**',
-    SUPPLY_DAILY_USD_APPROVED === null && SUPPLY_DAILY_USD_PROPOSED === 0.30)
+  /**
+   * 🔴 **"예산 env 가 없어야 PASS" 는 잘못된 조건이었다** (2026-09-22 보정).
+   *
+   *    앞판은 템플릿에 예산 env 가 **없을 때만** 통과했다. 그래서 승인을 받아
+   *    실제로 넣는 순간 검사가 빨갛게 된다 — 활성화하면 깨지는 검사는
+   *    활성화를 막는 것이 아니라 **검사를 지우게** 만든다.
+   *
+   * 🔴 그래서 승인 **전** 상태와 승인 **후** 설치본을 각각 본다.
+   *    둘 다 정상이면 PASS 다.
+   * 🔴 값은 찍지 않는다 — 예산·요청 상한 두 숫자만 본다.
+   */
+  const tplBudget = SUPPLY_BUDGET_ENV_NAMES.filter((n) => tpl.includes(n))
+  console.log(`     템플릿 예산 env 선언 ${tplBudget.length}/${SUPPLY_BUDGET_ENV_NAMES.length}`)
+  check('🔴 🔴 **예산 env 는 셋 다이거나 하나도 없다 — 반쪽 선언은 안 된다**',
+    tplBudget.length === 0 || tplBudget.length === SUPPLY_BUDGET_ENV_NAMES.length,
+    `${tplBudget.length}개`)
+  check('🔴 🔴 **템플릿에 비밀값 리터럴이 없다**',
+    !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(tpl))
+
+  /** 🔴 승인 전 — 승인값이 없으면 **설치본이 있어서는 안 된다**(fail-closed) */
+  const installed = (() => {
+    const at = `${process.env.HOME ?? ''}/Library/LaunchAgents/com.soransoran.supply-process.plist`
+    try { return { at, text: readFileSync(at, 'utf-8') } } catch { return null }
+  })()
+  console.log(`     설치된 plist ${installed === null ? '없음 (미등록)' : '있음'}`)
+  if (SUPPLY_DAILY_USD_APPROVED === null) {
+    check('🔴 🔴 **하루 상한이 미승인이면 launchd 가 등록돼 있지 않다**',
+      installed === null, installed === null ? '' : '🔴 미승인인데 설치본이 있다')
+    check(`🔴 제안값 $${SUPPLY_DAILY_USD_PROPOSED} 는 승인값이 아니다`,
+      SUPPLY_DAILY_USD_PROPOSED > 0)
+  } else {
+    check('🔴 승인값은 0 보다 크다', SUPPLY_DAILY_USD_APPROVED > 0)
+  }
+
+  /** 🔴 승인 후 — 설치본이 있으면 예산·요청 상한이 정본과 맞아야 한다 */
+  if (installed !== null) {
+    const num = (key: string): number | null => {
+      const m = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(installed.text)
+      if (m === null) return null
+      const v = Number(m[1])
+      return Number.isFinite(v) ? v : null
+    }
+    check('🔴 🔴 **설치본이 예산 env 세 개를 모두 선언한다**',
+      SUPPLY_BUDGET_ENV_NAMES.every((n) => installed.text.includes(n)),
+      SUPPLY_BUDGET_ENV_NAMES.filter((n) => !installed.text.includes(n)).join(','))
+    const cap = num('SORAN_LLM_RUN_REQUEST_CAP')
+    check('🔴 🔴 **회차 요청 상한이 정본과 같다**',
+      cap === SUPPLY_REQUESTS_PER_RUN, `${cap} / 정본 ${SUPPLY_REQUESTS_PER_RUN}`)
+    const daily = num('SORAN_LLM_DAILY_BUDGET_USD')
+    check('🔴 🔴 **하루 예산이 승인값 이하다 — 승인 없이는 통과할 수 없다**',
+      SUPPLY_DAILY_USD_APPROVED !== null && daily !== null && daily <= SUPPLY_DAILY_USD_APPROVED,
+      `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED ?? '(없음)'}`)
+    check('🔴 🔴 **설치본에 비밀값 리터럴이 없다**',
+      !/postgresql:\/\/|AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z]{10,}/.test(installed.text))
+    check('🔴 설치본도 6회다', (installed.text.match(/<key>Hour<\/key>/g) ?? []).length === SUPPLY_RUNS_PER_DAY)
+  }
   check('🔴 🔴 **노트북 종료 한계를 출력한다**',
     describeSupplySchedule().includes('노트북 종료')
     && SUPPLY_UNDETECTED_LIMITS.some((x) => x.includes('catch-up 이 없다')))

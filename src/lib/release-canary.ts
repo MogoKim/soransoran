@@ -218,7 +218,22 @@ export type WindowAuthorization = {
   note: string | null
 }
 
-const isDate = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s)
+/**
+ * 🔴 **모양이 맞는 것과 실제로 있는 날인 것은 다르다** (2026-09-22 보정).
+ *
+ *    앞판은 `/^\d{4}-\d{2}-\d{2}$/` 하나만 봤다. 그래서 `2026-02-30` 도 통과했고,
+ *    `Date.parse` 가 NaN 을 내면 `span < 0` 도 `span + 1 > WINDOW_MAX_DAYS` 도
+ *    **둘 다 false** 라 7일 상한이 통째로 무력해졌다 — NaN 비교는 언제나 false 다.
+ *    없는 날짜 하나로 몇 달짜리 기간이 열리는 길이었다.
+ *
+ * 🔴 그래서 **되돌려 찍어 같은 글자인지** 본다. 2026-02-30 은 3월 2일로 굴러가므로 걸린다.
+ */
+const isDate = (s: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const t = Date.parse(`${s}T00:00:00Z`)
+  if (!Number.isFinite(t)) return false
+  return new Date(t).toISOString().slice(0, 10) === s
+}
 const daysBetween = (a: string, b: string): number =>
   Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000)
 
@@ -242,6 +257,11 @@ export function windowAuthorization(
   }
   if (!isDate(rawFrom) || !isDate(rawUntil)) return bad(`🔴 기간 날짜 형식이 아니다 — ${rawFrom}~${rawUntil}`)
   if (!allowed.includes(rawStage as ReleaseStage)) return bad(`🔴 모르는 단계다 — ${rawStage}`)
+  /**
+   * 🔴 여기 닿을 때 두 값은 **실재하는 날짜**다 — `isDate` 가 되돌려 찍어 확인했다.
+   *    그래서 `span` 은 유한하고, 아래 두 비교가 NaN 으로 함께 false 가 되는 일이 없다.
+   *    (앞판은 형식만 봤고, 그때 `2026-02-30` 하나로 7일 상한이 통째로 열렸다.)
+   */
   const span = daysBetween(rawFrom, rawUntil)
   if (span < 0) return bad(`🔴 시작이 끝보다 뒤다 — ${rawFrom} > ${rawUntil}`)
   if (span + 1 > WINDOW_MAX_DAYS) {

@@ -373,6 +373,41 @@ export type ApplyGate = { ok: true; target: AutoRow } | { ok: false; reason: str
  *    무작위가 아니라 **정해진 순서**라야 dry-run 에서 본 것이 그대로 나간다.
  *    0건이면 아무 일도 하지 않는다.
  */
+/**
+ * 🔴 **그날을 닫아야 하는 결함만 고른다 — 후보별 제외는 여기 들어오지 않는다.**
+ *
+ *    앞판은 이 조립을 러너 안에서 했고, `SAFETY` 로 빠진 행이 **한 건이라도** 있으면
+ *    그날을 전면 중단했다. 안전 판정 실패는 그 행 하나의 문제이고
+ *    `selectAutoTargets` 가 이미 그 행만 빼 준다. 그것을 전면 중단으로 올리면
+ *    **멀쩡한 다른 후보의 발행까지 한 줄 때문에 멎는다** — 공급이 조용히 0 이 되는 모양이다.
+ *
+ * 🔴 조립을 러너에 두면 검사가 닿지 않는다. 그래서 여기 한 함수다.
+ * 🔴 **정산 결함은 이 경로에서 관측되지 않는다** — LLM 장부는 공급 쪽에 있고
+ *    발행 러너는 장부를 읽지 않는다. 여기서 "정산도 봤다" 고 적으면 거짓이 된다.
+ */
+export function judgePublishDefects(input: {
+  /** 오늘(KST) 실제로 나간 수 — DB 카운트 */
+  publishedToday: number
+  /** 그날 상한 */
+  dailyCap: number
+  /** 기배정 복구가 깨진 행 수 */
+  recoveryBroken: number
+  /** 🔴 후보별 제외 목록 — **막지 않는다.** 세어서 보여 주기만 한다 */
+  rejected: readonly Reject[]
+}): { hardDefects: string[]; perRowExcluded: number } {
+  const hardDefects: string[] = []
+  // 🔴 상한보다 많이 나간 것은 한 행의 문제가 아니다 — 중복 발행 흔적이다
+  if (input.publishedToday > input.dailyCap) {
+    hardDefects.push(
+      `오늘 발행 ${input.publishedToday}건이 상한 ${input.dailyCap}건을 넘었다 — 중복 발행 흔적이다`,
+    )
+  }
+  if (input.recoveryBroken > 0) {
+    hardDefects.push(`기배정 복구가 깨진 행이 ${input.recoveryBroken}건 있다`)
+  }
+  return { hardDefects, perRowExcluded: input.rejected.length }
+}
+
 export function judgeApply(input: {
   targets: readonly AutoRow[]
   /**

@@ -158,15 +158,16 @@ export function resolveScale(
         notes.push('🔴 기간 허가는 있으나 그날치 판정을 받지 못했다 — 켜지 않는다(fail-closed)')
       } else if (win.dayVerdict.stage !== wa.stage) {
         notes.push(`🔴 기간 허가는 ${wa.stage} 인데 판정은 ${win.dayVerdict.stage} 다 — 켜지 않는다`)
-      } else if (win.publishedToday > 0) {
+      } else if (win.publishedToday > PROFILES[stage].dailyTarget) {
         /**
-         * 🔴 **이미 낸 날은 그 단계를 지킨다.** 그날치 판정이 지금 NO-GO 여도
-         *    단계를 내리지 않는다 — 내리면 이미 낸 것이 상한 초과가 된다.
-         *    더 낼지 말지는 `judgeDayGuard` 가 따로 정한다.
+         * 🔴 **이미 기본 단계 상한을 넘겨 낸 날은 그 단계를 지킨다.**
+         *    여기서 내리면 **이미 나간 글이 상한 초과**가 된다 — 그날치 판정이
+         *    지금 NO-GO 여도 마찬가지다. 더 낼지 말지는 `judgeDayGuard` 가 따로 정한다.
          */
         stage = wa.stage
         windowStage = true
         notes.push(`🔴 오늘 이미 ${win.publishedToday}건 냈다 — 그날 단계 ${wa.stage} 를 **고정**한다`)
+        notes.push(`🔴 기본 단계 ${PROFILES[stage].dailyTarget}건을 넘겼다 — 내리면 이미 낸 것이 상한 초과가 된다`)
       } else if (!win.dayVerdict.ok) {
         notes.push(`🔴 기간 ${wa.stage} 를 켜지 않는다 — ${win.dayVerdict.reasons.join(' / ')}`)
       } else if (stageRank(wa.stage) > stageRank(stage)) {
@@ -174,6 +175,23 @@ export function resolveScale(
         windowStage = true
         notes.push(`🔴 **기간형 제한 운영** ${wa.stage} · ${wa.from}~${wa.until}`)
         notes.push('🔴 지속 운영 승격이 아니다 — 14일 누적·공백·재고 조건은 그대로 미달이다')
+        if (win.publishedToday > 0) {
+          /**
+           * 🔴 **`publishedToday > 0` 만으로 단계를 확정하지 않는다** (2026-09-22 보정).
+           *
+           *    앞판은 오늘 발행이 하나라도 있으면 그것만 보고 기간 단계를 확정했다.
+           *    그래서 **d1 로 한 편이 나간 날 오후에 변수를 켜는 것만으로** 그날이 d3 가 됐다 —
+           *    그날치 판정(재고·화자·신선도)을 한 번도 묻지 않고 두 편이 더 열렸다.
+           *    그 한 편이 어느 단계에서 나갔는지는 `PersonaActivityLog` 에 남지 않아
+           *    **구분할 수 없다.** 구분할 수 없으면 판정을 물어야 한다.
+           *
+           * 🔴 **안전한 활성화 조건**: 기간은 *그날 발행이 시작되기 전에* 켠다.
+           *    이미 낸 날 오후에 켜면, 그날치 판정이 GO 일 때만 열린다(지금 이 자리다).
+           *    판정이 NO-GO 면 열리지 않고, 기본 단계 상한을 이미 넘긴 날만 고정된다.
+           */
+          notes.push(`🔴 오늘 이미 ${win.publishedToday}건 냈다 — 어느 단계에서 나갔는지 구분할 수 없다`)
+          notes.push('🔴 그래서 발행 수만으로 확정하지 않았다 — 그날치 판정이 GO 라서 열었다')
+        }
       }
     }
   }

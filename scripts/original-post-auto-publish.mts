@@ -27,7 +27,7 @@
  */
 import { PrismaClient } from '@prisma/client'
 import {
-  selectAutoTargets, judgeApply, verifyAfterPublish, pickPublishTarget, REJECT_LABEL,
+  selectAutoTargets, judgeApply, judgePublishDefects, verifyAfterPublish, pickPublishTarget, REJECT_LABEL,
   AUTO_PROMPT_VERSION, AUTO_MODEL, AUTO_SITE_PREFIX, AUTO_GATE_VERDICT,
   type AutoRow,
 } from '../src/lib/original-post-auto-publish'
@@ -487,23 +487,31 @@ if (catchUp.due.length > 0) {
  * 🔴 여기서 쓰는 발행 수는 위의 `axisPublishedToday` 가 아니라 **바로 위에서 DB 로 센**
  *    `publishedToday` 다. 상한을 지키는 값과 그날을 닫는 값이 다르면 둘 중 하나는 거짓말이다.
  *
- * 🔴 **결함 신호는 이 자리에서 실제로 보이는 것만 적는다.**
- *    · 중복  — 오늘 발행 수가 그날 상한을 이미 넘었다 (ActivityLog 실측)
- *    · 안전  — `selectAutoTargets` 가 SAFETY 로 뺀 행이 있다
- *    · 복구  — 기배정 복구가 깨졌다 (`recoveryBroken`)
+ * 🔴 **후보별 제외와 배관 결함을 섞지 않는다** (2026-09-22 보정).
+ *
+ *    앞판은 `SAFETY` 로 빠진 행이 **한 건이라도** 있으면 그날을 전면 중단했다.
+ *    그런데 안전 판정 실패는 **그 행 하나의 문제**다 — 이미 `selectAutoTargets` 가
+ *    그 행만 빼고 나머지를 넘긴다. 그것을 다시 전면 중단으로 올리면
+ *    **멀쩡한 다른 후보의 발행까지 한 줄 때문에 멎는다.** 공급이 조용히 0 이 되는 모양이다.
+ *
+ *    · 후보별 제외 (막지 않는다) — SAFETY · GATE · PROFILE · HUMAN_REVIEW_REQUIRED …
+ *    · 배관 결함 (그날을 닫는다) — 상한을 이미 넘겨 버렸다 · 기배정 복구가 깨졌다
+ *
  * 🔴 **정산 결함은 이 러너에서 관측되지 않는다** — LLM 장부는 공급 경로에 있고
  *    이 러너는 장부를 읽지 않는다. 여기서 "정산도 봤다" 고 적으면 거짓이 된다.
  */
-const hardDefects: string[] = []
-if (publishedToday > RELEASE_DAILY_CAP) {
-  hardDefects.push(`오늘 발행 ${publishedToday}건이 상한 ${RELEASE_DAILY_CAP}건을 넘었다 — 중복 발행 흔적이다`)
-}
+/** 🔴 조립은 `src/lib` 한 함수가 한다 — 러너 안에 두면 검사가 닿지 않는다 */
+const defects = judgePublishDefects({
+  publishedToday, dailyCap: RELEASE_DAILY_CAP,
+  recoveryBroken: windowSim?.recoveryBroken ?? 0,
+  rejected,
+})
+const hardDefects = defects.hardDefects
+/** 🔴 안전 실패는 **세어서 보여 주되 막지 않는다** — 그 행은 이미 빠져 있다 */
 const safetyRejects = rejected.filter((r) => r.code === 'SAFETY')
 if (safetyRejects.length > 0) {
-  hardDefects.push(`안전 판정을 통과하지 못한 행이 ${safetyRejects.length}건 있다`)
-}
-if ((windowSim?.recoveryBroken ?? 0) > 0) {
-  hardDefects.push(`기배정 복구가 깨진 행이 ${windowSim?.recoveryBroken}건 있다`)
+  console.log(`   ⚠️ 안전 판정으로 제외된 후보 ${safetyRejects.length}건`
+    + ' — 그 행만 빠진다. 남은 후보의 발행은 막지 않는다')
 }
 const dayGuard = windowVerdict === null ? null : judgeDayGuard({
   publishedToday,
