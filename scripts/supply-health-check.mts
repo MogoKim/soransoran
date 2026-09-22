@@ -753,6 +753,24 @@ console.log('\n⑬ 🔴 관제는 사실을 따로 갖지 않는다')
     /NOT_REGISTERED/.test(code) && /예약 job 이 등록돼 있지 않다/.test(code))
 }
 
+{
+  /**
+   * 🔴 **관제와 러너가 같은 답을 내야 한다** (2026-09-22 실측 결함).
+   *
+   *    `supply-health` 가 `selectAutoTargets` 에 `decidedBy` 를 넘기지 않았다.
+   *    주석은 "러너와 같은 필드를 읽는다" 였지만 실제로는 달랐고, 배열 전체를
+   *    `as never` 로 캐스팅해 **컴파일러가 그 사실을 말해 주지 못했다.**
+   *    결과: 기계 후보가 전부 `HUMAN_REVIEW_REQUIRED` 로 떨어져 관제가
+   *    후보를 **7건 중 1건**으로 보고했다. 승격 판단의 근거 화면이 과소 보고한 것이다.
+   */
+  const code = readFileSync('scripts/supply-health.mts', 'utf-8')
+  check('🔴 🔴 **관제가 `decidedBy` 를 읽는다 — 없으면 기계 후보가 전부 떨어진다**',
+    /decidedBy: true/.test(code) && /decidedBy: r\.decidedBy/.test(code))
+  check('🔴 🔴 **`selectAutoTargets` 인자를 `as never` 로 캐스팅하지 않는다 — 빠진 칸이 가려진다**',
+    !/selectAutoTargets\(\s*\n?\s*queueRows\.map[\s\S]{0,600}?as never/.test(code))
+  check('🔴 관제가 러너와 같은 선택기를 부른다', /selectAutoTargets\(/.test(code))
+}
+
 console.log('\n─────────────────────────────────────────────────────────')
 console.log(`  ${failN === 0 ? '✅' : '🔴'} ${pass} pass · ${failN} fail\n`)
 process.exit(failN === 0 ? 0 : 1)
