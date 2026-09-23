@@ -27,7 +27,12 @@ import { digest16, loadVoice } from './voice-runtime.mjs'
  *    🔴 부모(공급 회차)와 자식(초안 생성)이 **같은 값**을 써야 한다 —
  *    각자 `new Date()` 를 부르면 KST 자정·생일 경계에서 갈린다.
  */
-export function currentContractBase(runAt?: Date): ContractBase {
+/**
+ * 🔴 **시각은 필수다** (2026-09-23). 선택 인자로 두었더니 e2e 탐침이 시각 없이 불러
+ *    `age=∅` 짜리 계약을 만들었고, 그 계약은 **어떤 artifact 와도 같지 않다** —
+ *    그러면 끝난 원천이 terminal 로 인정되지 않아 같은 원천을 유료로 되풀이한다.
+ */
+export function currentContractBase(runAt: Date): ContractBase {
   let voiceAssetDigest = ''
   let personaPoolDigest = ''
   try {

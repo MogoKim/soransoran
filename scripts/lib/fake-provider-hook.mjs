@@ -73,6 +73,11 @@ const OUT_TOKENS = Number(process.env.FAKE_PROVIDER_OUTPUT_TOKENS ?? '22')
 
 /** 🔴 fixture 가 고르게 할 Persona — 없으면 계획이 unknownPersona 로 막힌다 */
 const PERSONA = process.env.FAKE_PROVIDER_PERSONA ?? 'P01'
+/**
+ * 🔴 **원문에 있는 화자 자신의 나이** — 주면 계획이 그것을 `loadBearing` 으로 적어 낸다.
+ *    그러면 어떤 Persona 로도 숫자만 바꿀 수 없어 **재계획**이 일어난다.
+ */
+const SELF_AGE = process.env.FAKE_PROVIDER_SELF_AGE ?? ''
 
 const PAYLOAD = {
   // ── speakerPlan ──
@@ -83,7 +88,19 @@ const PAYLOAD = {
   selfBasis: 'noLifeFactNeeded',
   universalReason: 'fixture 합성 원문 — 특정 생활사 자격이 필요 없다',
   speakerWarrants: [],
-  protectedFacts: [],
+  /**
+   * 🔴 **화자 자신의 나이를 담은 원문을 흉내 낸다** (2026-09-23).
+   *    이 값이 있어야 "이 Persona 로는 못 바꾼다 → 다른 Persona 로 다시 계획한다" 는
+   *    경로가 **실제 러너에서** 일어난다. 없으면 그 경로를 한 번도 지나지 않는다.
+   */
+  ...(SELF_AGE === ''
+    ? { protectedFacts: [] }
+    : {
+      protectedFacts: [{ kind: 'number', text: SELF_AGE, evidenceRef: 'head' }],
+      speakerRelative: [{
+        axis: 'age', sourceText: SELF_AGE, evidenceRef: 'head', materiality: 'loadBearing',
+      }],
+    }),
   closingIntent: 'share',
   contentRoles: ['conversationSpark'],
   // ── draftGen ──

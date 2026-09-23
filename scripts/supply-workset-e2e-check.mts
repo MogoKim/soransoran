@@ -118,14 +118,16 @@ function writeSpeakerLoadFile(
 /** adapt 가 낸 모양 그대로 — 🔴 `detail` 과 `raw-detail` **쌍**으로 낸다 */
 function writeAdaptPair(
   dd: string,
-  rows: { id: string; comments: number; posted: string; lane?: string; axis?: string }[],
+  rows: { id: string; comments: number; posted: string; lane?: string; axis?: string
+    /** 🔴 합성 원문의 머리를 바꾼다 — 화자 자신의 나이가 든 원문을 만들 때 쓴다 */
+    head?: string }[],
   runId = 'adapt-1',
 ): void {
   const detail = rows.map((r) => JSON.stringify({
     runId, sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
     axis: r.axis ?? SEED_AXIS, lane: r.lane ?? PROVEN_LANE, access: 'ok', safetyVerdict: 'pass', safetyReasons: '',
     title: `우리 나이 이야기 ${r.id}`,
-    bodyHead: `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
+    bodyHead: r.head ?? `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: r.comments, bodyLength: 300, imageCount: 0,
     // 🔴 빈 값이 아니어야 한다 — 지문에서 이 칸이 빠진 것을 검사가 볼 수 있다
     assetAxes: 'sleep|work',
@@ -140,7 +142,7 @@ function writeAdaptPair(
     runId, sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
     axis: r.axis ?? SEED_AXIS, lane: r.lane ?? PROVEN_LANE, accessStatus: 'ok', safetyVerdict: 'pass', safetyReasons: '',
     title: `우리 나이 이야기 ${r.id}`,
-    bodyHead: `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
+    bodyHead: r.head ?? `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: r.comments, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
     sourcePostedAt: r.posted, sourceListedAt: r.posted,
   })).join('\n')
@@ -176,6 +178,8 @@ const runStage = (o: {
   cap: string; bodyLog?: string
   /** 🔴 가짜 provider 가 돌려줄 판정 — 회차마다 다른 결론을 실제로 만들어 본다 */
   judgeDecision?: string
+  /** 🔴 원문에 든 화자 자신의 나이 — 주면 계획이 load-bearing 으로 적어 낸다 */
+  selfAge?: string
 }): Spawned => {
   const r = spawnSync(TSX, [join(ROOT, o.script), ...o.args], {
     cwd: o.world.root, encoding: 'utf-8',
@@ -185,6 +189,7 @@ const runStage = (o: {
       NODE_OPTIONS: `--import=${HOOK}`,
       ...(o.bodyLog === undefined ? {} : { FAKE_PROVIDER_BODY_LOG: o.bodyLog }),
       ...(o.judgeDecision === undefined ? {} : { FAKE_PROVIDER_JUDGE_DECISION: o.judgeDecision }),
+      ...(o.selfAge === undefined ? {} : { FAKE_PROVIDER_SELF_AGE: o.selfAge }),
       SORAN_LLM_DAILY_BUDGET_USD: '1000',
       SORAN_LLM_RESERVE_HEADROOM: '1.5',
       SORAN_LLM_RUN_REQUEST_CAP: o.cap,
@@ -355,7 +360,8 @@ function contractBaseOf(world: { root: string; home: string }): ContractBase {
   const probe = join(world.root, 'contract-probe.mts')
   writeFileSync(probe, [
     `import { currentContractBase } from '${join(ROOT, 'scripts/lib/generation-contract.mjs')}'`,
-    'process.stdout.write(JSON.stringify(currentContractBase()))',
+    // 🔴 **러너와 같은 방식으로 시각을 준다** — 없이 부르면 age=∅ 계약이 나온다
+    'process.stdout.write(JSON.stringify(currentContractBase(new Date())))',
   ].join('\n'), 'utf-8')
   const r = spawnSync(TSX, [probe], {
     cwd: world.root, encoding: 'utf-8', env: { ...process.env, HOME: world.home },
@@ -391,7 +397,9 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
       && c.stageMaxOutputLabel === BASE.stageMaxOutputLabel
       && c.personaPoolDigest === BASE.personaPoolDigest
       && JSON.stringify(c.stageModels) === JSON.stringify(BASE.stageModels)),
-    JSON.stringify(contracts[0] ?? {}))
+    Object.keys(BASE).filter((k) => JSON.stringify((contracts[0] ?? {})[k])
+      !== JSON.stringify((BASE as unknown as Record<string, unknown>)[k]))
+      .map((k) => `${k}: ${JSON.stringify((contracts[0] ?? {})[k])} vs ${JSON.stringify((BASE as unknown as Record<string, unknown>)[k])}`).join(' | '))
   check('🔴 🔴 **artifact 의 원천 지문이 공급 러너가 쓰는 지문과 같다** — 칸이 빠지면 영영 다르다',
     arts.every((a) => {
       const c = (a.contract ?? {}) as Record<string, unknown>
@@ -926,6 +934,91 @@ console.log('\n㉑ 🔴 🔴 좁힌 묶음 탓 HOLD 는 다음 회차에 다시 
   check('🔴 🔴 **좁혀졌을 때만 재시도 값으로 적는다**',
     /input\.personas\.length < input\.personaPoolSize/.test(runSrc)
     && /narrowed \? 'speakerSlotNarrowed' as const : 'speakerUnqualified' as const/.test(runSrc))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉒ 🔴 🔴 Persona 재계획 — 실제 러너를 다시 돌리면 다른 사람이 나간다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **helper 검사가 아니다.** 실제 `micro-seed-auto-draft.mts` 를 **같은 세계에서
+   *    세 번 spawn** 한다. 러너가 앞 회차의 artifact 파일을 스스로 읽어 실패한 화자를
+   *    빼는지, 그래서 **실제로 다른 사람**이 나가는지를 파일로 확인한다.
+   *
+   * 🔴 원문에 화자 자신의 나이가 있고 계획이 그것을 `loadBearing` 이라 말한다 —
+   *    그러면 누구로도 숫자만 바꿀 수 없어 회차마다 실패한다. 재계획이 없으면
+   *    **같은 사람**으로 영원히 같은 실패를 되풀이한다(유료 호출만 쓴다).
+   */
+  const SELF_AGE = '44'
+  const w = makeWorld({ speakerLoad: 'fresh', speakerLoadRunId: '20260922-replan' })
+  const rel = (p: string): string => p.slice(w.root.length + 1)
+  writeAdaptPair(w.dd, [{
+    id: 'rp-0', comments: 21, posted: '2026-09-18T00:00:00.000Z',
+    head: `제가 ${SELF_AGE}인데 요즘 부쩍 그런 생각이 들어요. 다들 어떠세요?`,
+  }])
+  const plan = selectWorkset({
+    rows: rowsOf(w.dd), humanDecided: new Set(), queuePending: new Set(),
+    concluded: new Set(), attempted: new Map(),
+    limit: 5, runId: '20260922-replan', takenAt: new Date(),
+  })
+  const wsPath = join(w.dd, worksetFileName('20260922-replan'))
+  writeFileSync(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`, 'utf-8')
+  runStage({
+    script: 'scripts/micro-seed-auto-judge.mts', world: w, cap: '5', judgeDecision: 'AUTO_SEED',
+    args: ['--call', '--apply', '--run-id=20260922-replan',
+      `--ledger-run-id=${ledgerRunIdOf('20260922-replan', 'judge')}`,
+      `--workset=${rel(wsPath)}`,
+      `--shadow-out=${rel(join(w.dd, 'auto-judge-20260922-replan.shadow.jsonl'))}`],
+  })
+
+  /** 🔴 회차마다 화자를 누구로 골랐는지 — artifact 파일에서 읽는다 */
+  const draftOnce = (tag: string): { out: string; picked: string[]; causes: string[] } => {
+    // 🔴 여력 파일은 **그 회차의 것**이어야 한다 — 운영에서도 공급 러너가 회차마다 적는다
+    writeSpeakerLoadFile(w.dd, 'fresh', tag)
+    const r = runStage({
+      script: 'scripts/micro-seed-auto-draft.mts', world: w, cap: '15', selfAge: SELF_AGE,
+      args: ['--call', '--apply', `--run-id=${tag}`,
+        `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`, `--workset=${rel(wsPath)}`],
+    })
+    const f = readdirSync(w.dd).filter((x) => x === `auto-draft-${tag}.artifacts.json`)
+    const arts = f.length === 0 ? [] : JSON.parse(readFileSync(join(w.dd, f[0]!), 'utf-8')) as
+      Record<string, unknown>[]
+    const causeOf = (a: Record<string, unknown>): string => {
+      const rev = a.review as Record<string, unknown> | undefined
+      const c = rev?.semanticCompletion as Record<string, unknown> | undefined
+      return String(c?.cause ?? '')
+    }
+    return {
+      out: r.out,
+      picked: arts.map((a) => String((a.plan as Record<string, unknown> | undefined)?.personaCode ?? '')),
+      causes: arts.map(causeOf),
+    }
+  }
+
+  const r1 = draftOnce('20260922-rp1')
+  check('🔴 🔴 **1회차가 실제로 화자 탓으로 실패했다 — artifact 에 사유가 값으로 남는다**',
+    r1.picked.length === 1 && r1.picked[0] !== ''
+    && r1.causes.join(',') === 'loadBearingMismatch',
+    `${r1.picked.join(',')} · ${r1.causes.join(',')}`)
+
+  const r2 = draftOnce('20260922-rp2')
+  check('🔴 🔴 **2회차는 다른 사람이 나간다 — 러너가 스스로 앞 실패를 읽었다**',
+    r2.picked.length === 1 && r2.picked[0] !== '' && r2.picked[0] !== r1.picked[0],
+    `1회차 ${r1.picked.join(',')} → 2회차 ${r2.picked.join(',')}`)
+
+  const r3 = draftOnce('20260922-rp3')
+  check('🔴 🔴 **3회차도 앞의 두 사람을 다시 고르지 않는다**',
+    r3.picked.length === 1 && !r1.picked.includes(r3.picked[0] ?? 'x')
+    && !r2.picked.includes(r3.picked[0] ?? 'x'),
+    `${r1.picked.join(',')} · ${r2.picked.join(',')} → ${r3.picked.join(',')}`)
+
+  /** 🔴 유한하다 — 같은 원천을 무한히 다시 사지 않는다 */
+  const r4 = draftOnce('20260922-rp4')
+  check('🔴 🔴 **4회차는 만들지 않는다 — 시도 상한에서 멈춘다 (유료 호출 0)**',
+    r4.picked.length === 0 && /ATTEMPT_CAP|EXHAUSTED/.test(r4.out),
+    `${r4.picked.join(',')} · ${r4.out.slice(-260)}`)
+  check('🔴 🔴 **그 멈춤이 회차 보고에 값으로 남는다**',
+    /적격 화자를 다 써서 더 시도하지 않은 원천 1건/.test(r4.out), r4.out.slice(-300))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

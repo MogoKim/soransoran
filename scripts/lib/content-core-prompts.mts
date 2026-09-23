@@ -119,6 +119,21 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '🔴 목록 순서는 이 원문에 대해 미리 정해져 있다 — 원문마다 다르다.',
     '🔴 앞에 있다는 이유로 **자격 없는 사람을 고르지 않는다.**',
     '',
+    /**
+     * 🔴 **원문 화자 자신의 사실은 따로 적는다** (2026-09-23).
+     *    우리는 원문 작성자를 복제하지 않는다 — 그 값은 지키는 것이 아니라 **바꾼다.**
+     *    다만 나이가 **결론을 바꾸는** 글(지원 자격·의료·임신·보험)은 숫자만 바꿀 수 없다.
+     */
+    '## speakerRelative — 🔴 **원문 화자 자신의** 사실',
+    '- 원문을 쓴 사람의 나이·혼인·자녀 같은 값이다. **우리 사람 값으로 바꿔 쓸 것**이다.',
+    '- axis: age (지금은 나이만 받습니다)',
+    '- sourceText: 원문에 있는 그 값 (예 "44")',
+    '- evidenceRef: title|head|tail — 그 값이 나온 자리',
+    '- materiality:',
+    '   · incidental — 나이를 바꿔도 글의 뜻이 그대로다 (피부·패션·일상·감정)',
+    '   · loadBearing — 나이가 **결론을 바꾼다** (지원 자격·연령 제한·의료·임신·보험)',
+    '- 🔴 **제3자(아는 분·친구)의 나이는 여기 넣지 않습니다.** 그것은 원문 이야기의 일부입니다.',
+    '',
     '## protectedFacts — 🔴 글자 자체를 지켜야 하는 **원자적 사실**만',
     '- kind: number(숫자+단위) · publicEntity(공개 프로그램·상품·장소 이름)',
     '        · relation(관계) · searchTerm(검색창에 칠 핵심 용어)',
@@ -140,6 +155,8 @@ export function buildSpeakerPlanSystemPrompt(): string {
     ' "speakerWarrants":[{"fact":"work","requiredValue":"파트타임",',
     '                     "evidenceRef":"title|head|tail","evidenceText":"원문에 있는 조각"}],',
     ' "universalReason":"noLifeFactNeeded 일 때 한 줄",',
+    ' "speakerRelative":[{"axis":"age","sourceText":"44","evidenceRef":"head",',
+    '                      "materiality":"incidental|loadBearing"}],',
     ' "protectedFacts":[{"kind":"...","text":"...","evidenceRef":"title|head|tail"}],',
     ' "closingIntent":"ask|vent|share|none",',
     ' "contentRoles":["..."]}',

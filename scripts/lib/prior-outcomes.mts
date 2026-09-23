@@ -25,7 +25,12 @@ export type PriorOutcomeRead = {
   dataDir: string
   /** 🔴 **이번 회차 대상 원천의 지금 입력 지문.** 여기 없는 id 는 보지 않는다 */
   hashOf: ReadonlyMap<string, string>
-  canon: WorksetCanon
+  /**
+   * 🔴 **판정 canon — 없으면 판정 파일을 아예 읽지 않는다** (2026-09-23).
+   *    생성 러너는 "지난 회차가 누구로 실패했나" 만 필요하고 그것은 artifact 에만 있다.
+   *    canon 을 아무 값으로나 채워 넣으면 그 값이 맞는 척하는 기록이 된다.
+   */
+  canon?: WorksetCanon
   base: ContractBase
   artifactVersion: string
 }
@@ -40,12 +45,15 @@ export function readPriorOutcomes(o: PriorOutcomeRead): PriorOutcome[] {
     let raw: string
     try { raw = readFileSync(join(o.dataDir, f), 'utf-8') } catch { continue }
     if (isShadow) {
+      const canon = o.canon
+      // 🔴 canon 을 주지 않은 호출은 판정 결론을 보지 않겠다는 뜻이다
+      if (canon === undefined) continue
       for (const line of raw.split('\n')) {
         if (line.trim() === '') continue
         let row: unknown
         try { row = JSON.parse(line) } catch { continue }
         if (typeof row !== 'object' || row === null) continue
-        const s = shadowRecordOutcome(row as Record<string, unknown>, o.hashOf, o.canon)
+        const s = shadowRecordOutcome(row as Record<string, unknown>, o.hashOf, canon)
         if (s !== null) out.push(s)
       }
       continue

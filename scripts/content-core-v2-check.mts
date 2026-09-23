@@ -13,7 +13,9 @@
 import { pickV2 } from '../src/lib/micro-seed-auto-draft'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { runContentCore, personaInputOf, personaPoolIdentity, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
@@ -38,7 +40,9 @@ import {
   exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
   materializePersonaAt, bandOfAge,
 } from '../src/lib/persona-birth-anchor'
-import { selectWorkset } from '../src/lib/supply-workset'
+import { selectWorkset, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX } from '../src/lib/supply-workset'
+import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { personasForAttempt } from './lib/replan-personas.mjs'
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
@@ -2042,6 +2046,304 @@ console.log('\n🔴 🔴 **P02 전체 E2E — 실제 `runContentCore` 를 끝까
   })())
 }
 
+console.log('\n🔴 🔴 **materiality — 계획이 말한 값을 쓰되 증거로 확인한다 (하드코딩 제거)**')
+{
+  /**
+   * 🔴 앞판은 화자 상대 사실을 **전부 `incidental`** 로 하드코딩했다. 그래서
+   *    `loadBearingMismatch` 는 **한 번도 나올 수 없는 죽은 경로**였다.
+   *    여기서는 실제 `runContentCore` 를 돌려 세 갈래가 **정말 갈리는지** 본다.
+   */
+  const CARD_P02 = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+  const p02 = P({
+    code: 'P02', ageBand: CARD_P02.ageBand, birthDate: CARD_P02.birthDate,
+    maritalStatus: CARD_P02.maritalStatus, childrenCount: CARD_P02.childrenCount,
+    childrenAgeBands: CARD_P02.childrenAgeBands, workStatus: CARD_P02.workStatus,
+    region: CARD_P02.region, menopauseStatus: CARD_P02.menopauseStatus,
+    parentCare: CARD_P02.parentCare,
+  })
+  const T = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const B = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const DRAFT = {
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+  }
+  const planWith = (speakerRelative: unknown[]): unknown => ({
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+    selfBasis: 'lifeFacts', universalReason: '',
+    speakerWarrants: [{
+      fact: 'age', requiredValue: CARD_P02.ageBand, evidenceRef: 'head', evidenceText: '낼44인데',
+    }],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+    speakerRelative,
+  })
+  const go = (speakerRelative: unknown[]) => run({
+    id: '35040880', title: T, body: B, personas: [p02],
+    canned: { plan: planWith(speakerRelative), draft: DRAFT, review: EMPTY_REVIEW },
+  })
+
+  /** 🔴 ① 계획이 그 나이를 `incidental` 이라 말하고 증거도 맞다 → 바꿔서 채택 */
+  const ok1 = await go([
+    { axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' },
+  ])
+  check('🔴 🔴 **① 계획이 incidental 이라 말하고 증거가 맞으면 바꿔서 채택한다**',
+    ok1.review.machineOutcome === 'adopt',
+    `${ok1.review.machineOutcome} · ${ok1.review.machineReason}`)
+
+  /** 🔴 ② 계획이 `loadBearing` 이라 말하면 숫자만 바꾸지 않는다 — 재계획이다 */
+  const lb = await go([
+    { axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'loadBearing' },
+  ])
+  check('🔴 🔴 **② 계획이 loadBearing 이라 말하면 채택하지 않는다 — 죽은 경로가 아니다**',
+    lb.review.machineOutcome !== 'adopt'
+    && lb.review.semanticCompletion.cause === 'loadBearingMismatch',
+    `${lb.review.machineOutcome} · ${String(lb.review.semanticCompletion.cause)}`)
+  check('🔴 🔴 **② 그 사유는 재시도 자격을 유지한다 — 다른 Persona 면 될 수 있다**',
+    artifactRetryable(lb.review) === true)
+
+  /**
+   * 🔴 ③ **계획은 답했는데 이 사실만 빠졌다** → 모르는 것이므로 바꾸지 않는다.
+   *    (빠진 것을 조용히 `incidental` 로 보면 "42세 이상 지원 가능" 이 조용히 바뀐다)
+   */
+  const omitted = await go([
+    { axis: 'age', sourceText: '80퍼', evidenceRef: 'title', materiality: 'incidental' },
+  ])
+  check('🔴 🔴 **③ 계획이 답했는데 그 사실만 빠지면 loadBearing 이다**',
+    omitted.review.machineOutcome !== 'adopt'
+    && omitted.review.semanticCompletion.cause === 'loadBearingMismatch',
+    `${omitted.review.machineOutcome} · ${String(omitted.review.semanticCompletion.cause)}`)
+
+  /** 🔴 ④ 증거를 지어내면 그 말을 쓰지 않는다 — 모델 말을 그대로 믿지 않는다 */
+  const faked = await go([
+    { axis: 'age', sourceText: '44', evidenceRef: 'title', materiality: 'incidental' },
+    { axis: 'age', sourceText: '80퍼', evidenceRef: 'title', materiality: 'incidental' },
+  ])
+  check('🔴 🔴 **④ evidenceRef 가 실제와 다르면 그 incidental 주장을 버린다**',
+    faked.review.machineOutcome !== 'adopt'
+    && faked.review.semanticCompletion.cause === 'loadBearingMismatch',
+    `${faked.review.machineOutcome} · ${String(faked.review.semanticCompletion.cause)}`)
+
+  /**
+   * 🔴 ⑤ **원문에 없는 말을 지목한 계획은 채택되지 않는다.**
+   *
+   * 🔴 **`foundInSpan` 이 이것을 잡는다고 말하지 않는다.** 실측하면 그보다 앞서
+   *    결정적 검사(보호 사실이 원문에 없다)가 먼저 잡는다. `claimed` 안의
+   *    `foundInSpan` 은 **그 뒤를 받치는 이중 방어**이고, 지금 배선에서 단독으로
+   *    관측되지는 않는다 — 관측되지 않은 것을 관측했다고 적지 않는다.
+   */
+  const notInSpan = await run({
+    id: '35040880', title: T, body: B, personas: [p02],
+    canned: {
+      plan: {
+        ...(planWith([
+          { axis: 'age', sourceText: '44살', evidenceRef: 'head', materiality: 'incidental' },
+        ]) as Record<string, unknown>),
+        // 🔴 원문에 없는 표기다 — 모델이 지어낸 자리다
+        protectedFacts: [
+          { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+          { kind: 'number', text: '44살', evidenceRef: 'head' },
+        ],
+      },
+      draft: DRAFT, review: EMPTY_REVIEW,
+    },
+  })
+  check('🔴 🔴 **⑤ 원문에 없는 말을 지목한 계획은 채택되지 않는다**',
+    notInSpan.review.machineOutcome !== 'adopt',
+    `${notInSpan.review.machineOutcome} · ${notInSpan.review.machineReason}`)
+
+  /**
+   * 🔴 ⑥ **계획이 아예 답하지 않았다** → 바꾸되(정상 경로가 멈추지 않는다)
+   *    "확인된 값이 아니다" 를 artifact 에 남긴다.
+   */
+  const silent = await go([])
+  check('🔴 🔴 **⑥ 계획이 speakerRelative 를 아예 안 쓰면 정상 경로가 멈추지 않는다**',
+    silent.review.machineOutcome === 'adopt',
+    `${silent.review.machineOutcome} · ${silent.review.machineReason}`)
+  check('🔴 🔴 **⑥ 대신 "확인된 값이 아니다" 가 artifact 에 남는다 — 조용히 넘어가지 않는다**',
+    JSON.stringify(silent.plan).includes('speakerRelative 를 적어 내지 않았다'),
+    silent.plan.reason)
+  check('🔴 🔴 **⑥ 계획이 답했으면 그 줄이 남지 않는다**',
+    !JSON.stringify(ok1.plan).includes('speakerRelative 를 적어 내지 않았다'))
+}
+
+console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다음 시도가 실제로 달라진다**')
+{
+  /**
+   * 🔴 **helper 만 부르는 검사가 아니다.** 실제 `runContentCore` 로 **진짜 실패 artifact**
+   *    를 만들고, 러너가 쓰는 파일 이름·JSON 모양 그대로 디스크에 쓴 뒤,
+   *    러너가 부르는 **같은 읽기 함수**(`readPriorOutcomes`)로 다시 읽어 계획한다.
+   *
+   * 🔴 가짜 fixture 를 손으로 적지 않는다 — 실제가 내지 못하는 모양을 fixture 가 내면
+   *    시험이 결함을 덮는다.
+   */
+  const CARD = (code: string): PoolCard =>
+    parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+      .cards.find((c) => c.code === code)!
+  const cardOf = (code: string): PersonaInput => {
+    const c = CARD(code)
+    return P({
+      code, ageBand: c.ageBand, birthDate: c.birthDate, maritalStatus: c.maritalStatus,
+      childrenCount: c.childrenCount, childrenAgeBands: c.childrenAgeBands,
+      workStatus: c.workStatus, region: c.region,
+      menopauseStatus: c.menopauseStatus, parentCare: c.parentCare,
+    })
+  }
+  const SLOT = ['P02', 'P04', 'P08']
+  const CANDS = SLOT.map(cardOf)
+
+  const SRC_ID = '35040880'
+  const SRC_TITLE = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const SRC_BODY = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const HASH = 'fixturehash00000'
+  const BASE = {
+    pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
+    promptVersion: CONTENT_CORE_PROMPT_VERSION,
+    speakerPlanVersion: SPEAKER_PLAN_VERSION,
+    reviewVersion: REVIEW_VERSION,
+    planPromptDigest: 'plan000000000000',
+    stageModels: STAGE_MODEL,
+    stageMaxOutputLabel: STAGE_MAX_OUTPUT_LABEL,
+    voiceAssetDigest: 'asset000000000', personaPoolDigest: 'pool0000000000',
+  }
+
+  /** 🔴 **그 화자로 실제 실패시킨다** — 나이 문장을 통째로 뺀 초안이다 */
+  const failWith = async (code: string): Promise<HumanReviewArtifact> => run({
+    id: SRC_ID, title: SRC_TITLE, body: SRC_BODY,
+    personas: [cardOf(code)],
+    canned: {
+      plan: {
+        decision: 'ok', personaCode: code, stance: 'SELF_EXPERIENCE',
+        selfBasis: 'lifeFacts', universalReason: '',
+        speakerWarrants: [{
+          fact: 'age', requiredValue: CARD(code).ageBand,
+          evidenceRef: 'head', evidenceText: '낼44인데',
+        }],
+        closingIntent: 'ask', contentRoles: ['conversationSpark'],
+        protectedFacts: [
+          { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+          { kind: 'number', text: '44', evidenceRef: 'head' },
+        ],
+      },
+      draft: {
+        title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+        body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+      },
+      review: EMPTY_REVIEW,
+    },
+  })
+
+  /** 🔴 러너가 쓰는 그 파일 이름·그 JSON 으로 쓴다 — 읽는 쪽이 흉내가 아니게 */
+  const world = (): string => mkdtempSync(join(tmpdir(), 'replan-'))
+  const writeArtifacts = (dir: string, rid: string, arts: readonly HumanReviewArtifact[]): void => {
+    writeFileSync(join(dir, `auto-draft-${rid}.artifacts.json`),
+      `${JSON.stringify(arts, null, 2)}\n`, 'utf-8')
+  }
+  const outcomesOf = (dir: string) => readPriorOutcomes({
+    dataDir: dir, hashOf: new Map([[SRC_ID, HASH]]),
+    base: BASE, artifactVersion: ARTIFACT_VERSION,
+  })
+  const planNext = (dir: string) => personasForAttempt({
+    outcomes: outcomesOf(dir), sourceArticleId: SRC_ID, slotCodes: SLOT, candidates: CANDS,
+  })
+
+  const a02 = await failWith('P02')
+  check('🔴 🔴 **실제 실행이 P02 로 실패한다 (손으로 적은 fixture 아님)**',
+    a02.plan.personaCode === 'P02'
+    && a02.review.semanticCompletion.cause === 'personaTransformFailed'
+    && a02.review.machineOutcome !== 'adopt',
+    `${a02.plan.personaCode} · ${String(a02.review.semanticCompletion.cause)}`)
+
+  const d1 = world()
+  writeArtifacts(d1, '20260923-100000', [a02])
+  const r1 = planNext(d1)
+  check('🔴 🔴 **① 디스크에 쓴 실패 기록을 읽어 P02 를 제외한다**',
+    r1.ok && r1.excluded.join(',') === 'P02', JSON.stringify(r1))
+  check('🔴 🔴 **① 다음 시도에 나가는 화자가 실제로 바뀐다 — P02 가 빠진다**',
+    r1.ok && !r1.personas.some((c) => c.code === 'P02') && r1.personas.length === 2,
+    r1.ok ? r1.personas.map((c) => c.code).join(' ') : JSON.stringify(r1))
+  check('🔴 🔴 **① 두 번째 시도임을 센다**', r1.ok && r1.attempt === 2, JSON.stringify(r1))
+  check('🔴 🔴 **① 첫 시도(기록 없음)에는 아무도 빼지 않는다**', (() => {
+    const empty = planNext(world())
+    return empty.ok && empty.excluded.length === 0 && empty.personas.length === 3
+      && empty.attempt === 1
+  })())
+
+  /** 🔴 ② 실제로 P04 로도 실패시킨다 — 두 사람이 빠진다 */
+  const a04 = await failWith('P04')
+  const d2 = world()
+  writeArtifacts(d2, '20260923-100000', [a02])
+  writeArtifacts(d2, '20260923-110000', [a04])
+  const r2 = planNext(d2)
+  check('🔴 🔴 **② 두 번 실패하면 둘 다 빠지고 남은 한 사람만 나간다**',
+    r2.ok && r2.personas.map((c) => c.code).join(',') === 'P08'
+    && [...r2.excluded].sort().join(',') === 'P02,P04',
+    JSON.stringify(r2.ok ? r2.personas.map((c) => c.code) : r2))
+
+  /** 🔴 ③ 셋 다 실패 — 더 시도하지 않는다. 같은 원천을 무한히 다시 사지 않는다 */
+  const a08 = await failWith('P08')
+  const d3 = world()
+  writeArtifacts(d3, '20260923-100000', [a02])
+  writeArtifacts(d3, '20260923-110000', [a04])
+  writeArtifacts(d3, '20260923-120000', [a08])
+  const r3 = planNext(d3)
+  check('🔴 🔴 **③ 적격 화자를 모두 소진하면 구조화된 중단이다 (문자열 아님)**',
+    !r3.ok && (r3.code === 'EXHAUSTED' || r3.code === 'ATTEMPT_CAP'),
+    JSON.stringify(r3))
+  check('🔴 🔴 **③ 무한 유료 반복 반례 — 시도 상한을 넘기지 않는다**',
+    REPLAN_ATTEMPT_MAX === 3 && !r3.ok, `${REPLAN_ATTEMPT_MAX} · ${JSON.stringify(r3)}`)
+
+  /**
+   * 🔴 ④ **화자 탓이 아닌 실패로 사람을 태우지 않는다.**
+   *    예산에 막힌 회차는 누구를 골랐든 똑같이 막혔다.
+   */
+  const aBudget = await run({
+    id: SRC_ID, title: SRC_TITLE, body: SRC_BODY, personas: [cardOf('P02')],
+    canned: {}, fault: { blocked: 'speakerPlan' },
+  })
+  const d4 = world()
+  writeArtifacts(d4, '20260923-100000', [aBudget])
+  const r4 = planNext(d4)
+  check('🔴 🔴 **④ 예산 실패는 화자를 제외하지 않는다 — 장애 한 번에 원천이 굶지 않는다**',
+    r4.ok && r4.excluded.length === 0 && r4.personas.length === 3,
+    `${String(aBudget.review.semanticCompletion.cause)} → ${JSON.stringify(r4)}`)
+  check('🔴 🔴 **④ 화자 탓 사유는 두 가지뿐이다 — 목록이 늘면 이 검사가 깨진다**',
+    [...PERSONA_REPLAN_CAUSES].join(',') === 'personaTransformFailed,loadBearingMismatch',
+    [...PERSONA_REPLAN_CAUSES].join(','))
+
+  /** 🔴 ⑤ 계약이 다르면 지난 실패는 이 계약의 결론이 아니다 */
+  check('🔴 🔴 **⑤ 원천 입력이 달라지면 지난 실패를 물려받지 않는다**', (() => {
+    const got = personasForAttempt({
+      outcomes: readPriorOutcomes({
+        dataDir: d1, hashOf: new Map([[SRC_ID, 'otherhash0000000']]),
+        base: BASE, artifactVersion: ARTIFACT_VERSION,
+      }),
+      sourceArticleId: SRC_ID, slotCodes: SLOT, candidates: CANDS,
+    })
+    return got.ok && got.excluded.length === 0
+  })())
+
+  /**
+   * 🔴 ⑥ **러너가 실제로 이 경로를 쓰는가.** 위는 실행 검사이고 이것은 배선 검사다 —
+   *    둘을 섞어 부르지 않는다. 러너가 화자 묶음을 **다른 곳에서 다시 조립하면**
+   *    제외가 조용히 사라지므로, 조립이 한 곳뿐인 것까지 본다.
+   */
+  const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 🔴 **⑥ 러너가 `personasForAttempt` 를 부른다**',
+    /personasForAttempt\(\{/.test(runnerSrc))
+  check('🔴 🔴 **⑥ 생성에 넘기는 화자 묶음은 그 결과 하나뿐이다**',
+    /personas: replan\.personas,/.test(runnerSrc)
+    && !/personas: voice\.candidates/.test(runnerSrc), 
+    runnerSrc.split('\n').filter((l) => /^\s*personas:/.test(l)).join(' | '))
+  check('🔴 🔴 **⑥ `ok:false` 면 만들지 않고 넘어간다 — 유료 호출 앞이다**',
+    /if \(!replan\.ok\) \{[\s\S]{0,400}?holdPick\(\)\n\s*continue/.test(runnerSrc))
+  check('🔴 🔴 **⑥ 제외 목록이 캐시 key 에 들어간다 — 바뀌기 전 결과를 되받지 않는다**',
+    /excl=\$\{digest16/.test(runnerSrc))
+}
+
 console.log('\n🔴 🔴 **birthDate 가 생성 계약에 들어간다 — 고치면 캐시가 무효화된다**')
 {
   const base = P({ code: 'P02', birthDate: '1979-06-20' })
@@ -2174,7 +2476,11 @@ console.log('\n🔴 🔴 **운영 계약에 나이가 실제로 들어간다 (he
   const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   const gc = readFileSync('scripts/lib/generation-contract.mts', 'utf-8')
   const sp = readFileSync('scripts/supply-process.mts', 'utf-8')
-  check('🔴 🔴 **`currentContractBase` 가 시각을 받는다**', /currentContractBase\(runAt\?: Date\)/.test(gc))
+  // 🔴 **선택이 아니라 필수다** (2026-09-23). 선택이면 시각 없이 부르는 곳이 생기고,
+  //    그 계약은 `age=∅` 라 어떤 artifact 와도 같지 않다(e2e 탐침에서 실측).
+  check('🔴 🔴 **`currentContractBase` 가 시각을 필수로 받는다**',
+    /currentContractBase\(runAt: Date\)/.test(gc)
+    && !/currentContractBase\(runAt\?: Date\)/.test(gc))
   check('🔴 🔴 **그 시각을 `loadVoice` 로 넘긴다**', /loadVoice\(runAt\)/.test(gc))
   check('🔴 🔴 **auto-draft 가 회차 시각 하나를 쓴다 — module-level 무시각 계약이 없다**',
     /const RUN_AT = new Date\(\)/.test(src)

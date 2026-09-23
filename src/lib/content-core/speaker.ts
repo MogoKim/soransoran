@@ -414,6 +414,27 @@ export function parseSpeakerPlan(
   // ── protectedFacts — 증명 가능한 것만 ──
   const facts: ProtectedFact[] = []
   const speakerRelative: SpeakerRelativeEntry[] = []
+  /**
+   * 🔴 계획이 적어 낸 화자 상대 사실 — **증거가 맞을 때만** 쓴다.
+   *    같은 `sourceText` + `evidenceRef` 로 찾는다.
+   */
+  const claimed = new Map<string, FactRole>()
+  /**
+   * 🔴 **계획이 그 질문에 답했는가** (2026-09-23). `claimed` 가 비었다는 것만으로는
+   *    "답했는데 이 사실을 안 적었다" 와 "아예 답하지 않았다" 를 가르지 못한다.
+   */
+  const materialityAnswered = arr(j.speakerRelative).length > 0
+  for (const x of arr(j.speakerRelative)) {
+    const o = x as Record<string, unknown>
+    const t = S(o.sourceText)
+    const r = S(o.evidenceRef)
+    const m = S(o.materiality)
+    if (t === '' || !(EVIDENCE_REFS as readonly string[]).includes(r)) continue
+    if (m !== 'incidental' && m !== 'loadBearing') continue
+    // 🔴 지목한 자리에 실제로 그 말이 있어야 한다 — 없으면 모델이 지어낸 것이다
+    if (!foundInSpan(t, r as EvidenceRef, spans)) continue
+    claimed.set(`${r}\u0001${t}`, m)
+  }
   for (const x of arr(j.protectedFacts)) {
     const o = x as Record<string, unknown>
     const text = S(o.text)
@@ -445,11 +466,17 @@ export function parseSpeakerPlan(
     if (selfAxis !== null) {
       dropped.push({ text, why: 'speakerRelative' })
       // 🔴 **빼기만 하지 않는다.** 무엇을 바꿔야 하는지 남겨 프롬프트가 쓰게 한다
+      /**
+       * 🔴 **계획이 말한 materiality 를 받되, 코드가 증거를 검증한다** (2026-09-23).
+       *    앞판은 전부 `incidental` 로 하드코딩해 `loadBearingMismatch` 가
+       *    **운영상 죽은 경로**였다.
+       *    🔴 모델 말을 그대로 믿지 않는다 — `sourceText`·`evidenceRef` 가
+       *       실제 증거와 맞을 때만 그 값을 쓴다. 아니면 **안전한 쪽(loadBearing)**.
+       */
       speakerRelative.push({
         axis: selfAxis, sourceText: text, sourceRole: 'self',
         evidenceRef: ref as EvidenceRef,
-        // 🔴 의미 판정은 뒤에서 한다 — 여기서는 **원문에 있었다** 는 사실만 남긴다
-        materiality: 'incidental',
+        materiality: materialityFor(text, ref as EvidenceRef, claimed, materialityAnswered),
       })
       continue
     }
@@ -531,8 +558,17 @@ export function parseSpeakerPlan(
         // 🔴 **검증이 찍어 준 것만** 싣는다 — 모델이 준 배열을 그대로 쓰지 않는다
         warrants: v.warrants,
         universalReason: selfBasis === 'noLifeFactNeeded' ? universalReason : '',
-        reason: selfBasis === 'lifeFacts' ? '원문 근거와 정본 카드로 1인칭을 허가했다'
-          : '특정 생활사 자격이 필요 없는 글이다', rejection: null,
+        /**
+         * 🔴 **계획이 materiality 를 말하지 않았으면 그 사실을 계획에 남긴다** (2026-09-23).
+         *    `schemaProblems` 는 HOLD 일 때만 artifact 로 간다 — 채택된 글에는
+         *    아무 데도 남지 않아 **아무도 못 보는 기록**이 된다. 그래서 여기 싣는다.
+         */
+        reason: (selfBasis === 'lifeFacts' ? '원문 근거와 정본 카드로 1인칭을 허가했다'
+          : '특정 생활사 자격이 필요 없는 글이다')
+          + (!materialityAnswered && speakerRelative.length > 0
+            ? ` 🔴 계획이 speakerRelative 를 적어 내지 않았다 — 화자 상대 사실 `
+              + `${speakerRelative.length}건을 incidental 로 보고 바꿨다(증거로 확인된 값이 아니다)`
+            : ''), rejection: null,
         ...base,
       }),
       dropped, schemaProblems: problems,
@@ -657,4 +693,28 @@ function relationAxisOf(clause: string, text: string): SpeakerRelativeAxis | nul
     }
   }
   return null
+}
+
+/**
+ * 🔴 **계획이 말한 값을 쓰되, 증거가 맞을 때만 쓴다.**
+ *    `loadBearing` 이면 숫자만 바꾸지 않고 재계획한다 — 잘못 `incidental` 로 보면
+ *    "42세 이상 지원 가능" 같은 글의 숫자가 조용히 바뀐다.
+ *
+ * 🔴 **없을 때 무엇으로 두는가가 갈린다** (2026-09-23 실측 회귀).
+ *
+ *    · `answered` — 계획이 `speakerRelative` 를 적어 냈는데 **이 사실만 빠졌다**.
+ *      그러면 모르는 것이고, 모르면 바꾸지 않는다 → `loadBearing`.
+ *      (증거가 어긋나 버려진 항목도 여기다 — 지어낸 계획을 통과시키지 않는다)
+ *    · **아예 적어 내지 않았다** — 그러면 모든 자기 나이가 load-bearing 이 되어
+ *      *정상 원문 전부*가 HOLD 로 굳는다(실측: 나이 변환 경로 전면 정지).
+ *      숫자를 우리 값으로 바꾸는 것이 이 파이프라인의 본래 일이므로 `incidental` 이고,
+ *      **계획이 답하지 않았다는 사실은 문제로 남긴다** — 조용히 넘어가지 않는다.
+ */
+export function materialityFor(
+  text: string, ref: EvidenceRef, claimed: ReadonlyMap<string, FactRole>,
+  answered: boolean,
+): FactRole {
+  const v = claimed.get(`${ref}\u0001${text}`)
+  if (v !== undefined) return v
+  return answered ? 'loadBearing' : 'incidental'
 }

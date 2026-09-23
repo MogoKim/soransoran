@@ -2,7 +2,9 @@ import {
   AUTO_DECISIONS, HARD_BLOCK, hardGate, holdBeforeAsking,
   type AutoDecision, type JudgeInput,
 } from './micro-seed-auto-judge'
-import { artifactRetryable, MACHINE_OUTCOMES } from './content-core/review'
+import {
+  artifactRetryable, MACHINE_OUTCOMES, type IncompleteCause,
+} from './content-core/review'
 import {
   readGenerationContract, sameGenerationContract,
   type ContractBase, type GenerationContract,
@@ -125,6 +127,13 @@ export type OutcomeStage = keyof typeof STAGE_RANK
 export type PriorOutcome = {
   sourceArticleId: string
   /**
+   * 🔴 **이번에 실패한 화자** (2026-09-23). 다음 시도에서 그 사람을 다시 고르지 않는다.
+   *    `null` 이면 화자와 무관한 실패다(예산·파싱).
+   */
+  failedPersonaCode?: string | null
+  /** 🔴 왜 실패했나 — 코드로 분기한다. 문자열을 파싱하지 않는다 */
+  failedCause?: string | null
+  /**
    * 🔴 **명시 시각을 epoch 로 바꾼 값.** 판정은 `decidedAt`, 생성은 `generatedAt` 이다.
    *
    *    🔴 파일 이름을 쓰지 않는다 — `auto-draft-20260920…` 이 문자열로는
@@ -164,6 +173,10 @@ export type PriorArtifactRow = {
   /** 🔴 `null` 은 **모양을 읽지 못했다** 는 뜻이다 — 재시도도 결론도 아니다 */
   retryable: boolean | null
   generatedAt: string
+  /** 🔴 그 회차가 고른 화자 — 다음 시도에서 제외하려면 필요하다 (2026-09-23) */
+  personaCode?: string
+  /** 🔴 실패 사유 코드 */
+  cause?: string
 }
 
 const SEMANTIC_OK = 'ok'
@@ -255,7 +268,11 @@ export function artifactOutcome(
     a.retryable === null || !(MACHINE_OUTCOMES as readonly string[]).includes(outcome) ? 'unknown'
       : a.retryable ? 'retryable'
         : outcome === 'adopt' ? 'candidate' : 'terminal'
-  return { sourceArticleId: id, atMs, stage: 'draft', state }
+  return {
+    sourceArticleId: id, atMs, stage: 'draft', state,
+    failedPersonaCode: state === 'retryable' ? (S(a.personaCode) || null) : null,
+    failedCause: state === 'retryable' ? (S(a.cause) || null) : null,
+  }
 }
 
 /**
@@ -277,6 +294,14 @@ export function shadowRecordOutcome(
 }
 
 /** 🔴 **artifact 한 장을 그대로 상태로.** 위와 같은 이유로 여기 하나만 둔다 */
+/** 🔴 검수 완료 기록에서 실패 사유 코드만 꺼낸다 */
+function readCause(review: unknown): unknown {
+  if (review === null || typeof review !== 'object') return ''
+  const c = (review as Record<string, unknown>).semanticCompletion
+  if (c === null || typeof c !== 'object') return ''
+  return (c as Record<string, unknown>).cause
+}
+
 export function artifactRecordOutcome(
   raw: Record<string, unknown>, hashOf: ReadonlyMap<string, string>,
   base: ContractBase, artifactVersion: string,
@@ -292,6 +317,12 @@ export function artifactRecordOutcome(
     // 🔴 모양을 읽지 못하면 `null` 이고, 그러면 `unknown` 이다
     retryable: artifactRetryable(review),
     generatedAt: S(raw.generatedAt),
+    /**
+     * 🔴 **그 회차가 고른 화자와 실패 사유** (2026-09-23).
+     *    다음 시도에서 같은 사람을 다시 고르지 않으려면 여기서 꺼내야 한다.
+     */
+    personaCode: S((raw.plan as Record<string, unknown> | undefined)?.personaCode),
+    cause: S(readCause(review)),
   }, { ...base, sourceInputHash: hash }, artifactVersion)
 }
 
@@ -543,4 +574,69 @@ export function judgeStageBudget(limit: number): StageBudget | StageBudgetFail {
     return { ok: false, reason: `단계별 상한 합 ${sum}회 > 회차 전체 상한 ${total}회 — 실행하지 않는다` }
   }
   return { ok: true, perStage, total }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **같은 사람으로 같은 실패를 되풀이하지 않는다** (2026-09-23)
+//
+//   앞판은 `retryable` 표시만 했다. 그러면 다음 회차가 **같은 Persona** 로 같은 글을
+//   또 만들고 또 실패한다 — 유료 호출만 쓰고 끝난다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 같은 원천·같은 계약에서 허용하는 최대 시도 수. 넘으면 결론이다 */
+export const REPLAN_ATTEMPT_MAX = 3
+
+/**
+ * 🔴 **화자를 바꾸면 달라질 수 있는 실패만 화자 탓이다** (2026-09-23).
+ *
+ *    예산·응답 없음·파싱 실패는 **누구를 골랐든 똑같이** 났다. 그것으로 사람을
+ *    제외하면 멀쩡한 화자가 하나씩 타서, 장애 한 번에 원천이 `EXHAUSTED` 로 굳는다.
+ *    시도 수 상한도 같은 이유로 **이 사유들만** 센다.
+ */
+export const PERSONA_REPLAN_CAUSES = [
+  'personaTransformFailed', 'loadBearingMismatch',
+] as const satisfies readonly IncompleteCause[]
+
+const personaAttributable = (cause: string | null | undefined): boolean =>
+  (PERSONA_REPLAN_CAUSES as readonly string[]).includes((cause ?? '').trim())
+
+export type ReplanPlan =
+  | { ok: true; excluded: string[]; attempt: number }
+  /** 🔴 더 시도하지 않는다 — 적격 경로가 없거나 상한을 넘었다 */
+  | { ok: false; code: 'EXHAUSTED' | 'ATTEMPT_CAP'; reason: string; excluded: string[] }
+
+/**
+ * 🔴 **다음 시도에 누구를 뺄지 정한다.**
+ *    · 화자 때문에 실패한 사람은 제외한다
+ *    · 남은 적격자가 없으면 `EXHAUSTED` — 무한 반복하지 않는다
+ *    · 시도 상한을 넘으면 `ATTEMPT_CAP`
+ */
+export function planReplan(input: {
+  /** 같은 원천·같은 계약의 지난 시도들 (오래된 순) */
+  attempts: ReadonlyArray<{ failedPersonaCode?: string | null; failedCause?: string | null }>
+  /** 지금 쓸 수 있는 화자 전체 */
+  eligible: readonly string[]
+  attemptMax?: number
+}): ReplanPlan {
+  const max = input.attemptMax ?? REPLAN_ATTEMPT_MAX
+  /**
+   * 🔴 **화자 탓인 실패만 센다.** 나머지는 재시도 표시로 이미 처리된다 —
+   *    여기서 또 세면 예산 장애가 화자를 태운다.
+   */
+  const blamed = input.attempts.filter((a) => personaAttributable(a.failedCause))
+  const excluded = [...new Set(
+    blamed.map((a) => (a.failedPersonaCode ?? '').trim()).filter((c) => c !== ''),
+  )]
+  const attempt = blamed.length + 1
+  if (blamed.length >= max) {
+    return { ok: false, code: 'ATTEMPT_CAP', reason: `같은 계약에서 ${max}번 시도했다`, excluded }
+  }
+  const left = input.eligible.filter((c) => !excluded.includes(c))
+  if (left.length === 0) {
+    return {
+      ok: false, code: 'EXHAUSTED',
+      reason: `적격 화자 ${input.eligible.length}명이 모두 실패했다`, excluded,
+    }
+  }
+  return { ok: true, excluded, attempt }
 }

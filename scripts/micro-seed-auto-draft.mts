@@ -133,6 +133,13 @@ import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judg
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
+/**
+ * 🔴 **같은 사람으로 같은 실패를 되풀이하지 않는다** (2026-09-23).
+ *    지난 회차가 화자 탓으로 멈춘 원천은 **그 화자를 빼고** 다시 계획한다.
+ *    읽는 코드·정하는 코드는 러너와 검사가 **같은 것**을 쓴다.
+ */
+import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { personasForAttempt } from './lib/replan-personas.mjs'
 
 export const DATA_DIR = '.microseed-data'
 /**
@@ -807,6 +814,8 @@ async function main(): Promise<void> {
   const artifacts: HumanReviewArtifact[] = []
   /** 🔴 v2 가 초안을 만들지 않고 멈춘 원천 수 (자격 없음 · 근거 부족 · 미완주) */
   let v2Held = 0
+  /** 🔴 적격 화자를 다 써서 더 시도하지 않은 원천 — 유료 호출 0 */
+  let replanExhausted = 0
   const usedSources = new Set<string>()
   const seenTitles = new Set(seen.titles)
   const seenBodies = new Set(seen.bodies)
@@ -905,6 +914,26 @@ async function main(): Promise<void> {
     console.log(`      ${sl.sourceKey} → ${sl.codes.join(' ') || '🔴 보류(배정할 화자 없음)'}`)
   }
 
+  /**
+   * ── 🔴 **지난 시도를 읽는다 — 유료 호출보다 먼저** (2026-09-23) ──
+   *
+   *    같은 원천·같은 계약에서 화자 탓으로 멈춘 기록이 있으면 그 사람을 뺀다.
+   *    🔴 **판정 canon 은 주지 않는다** — 여기서 필요한 것은 "누구로 실패했나" 뿐이고
+   *       그 값은 artifact 에만 있다. 판정 결론은 공급 러너가 본다.
+   *    🔴 못 읽는 파일은 건너뛸 뿐 제외를 만들지 않는다(`readPriorOutcomes` 계약).
+   */
+  const priorOutcomes = readPriorOutcomes({
+    dataDir: DATA_DIR,
+    hashOf: new Map(
+      seeds.flatMap((j) => {
+        const m = metas.get(j.sourceArticleId)
+        return m === undefined ? [] : [[j.sourceArticleId, sourceIdentityHash(m)] as const]
+      }),
+    ),
+    base: currentContractBase(RUN_AT),
+    artifactVersion: ARTIFACT_VERSION,
+  })
+
   for (const j of seeds) {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
     BUDGET.enter(j.sourceArticleId)
@@ -951,8 +980,31 @@ async function main(): Promise<void> {
      */
     const slotCodes = slotOf.get(j.sourceArticleId) ?? []
     if (slotCodes.length === 0) { voiceHeld += 1; holdPick(); continue }
+    /**
+     * 🔴 **지난 시도에서 화자 탓으로 실패했으면 그 사람을 뺀다** (2026-09-23).
+     *    유료 호출보다 앞이다. 남은 사람이 없거나 시도 상한을 넘으면 **만들지 않는다** —
+     *    같은 원천을 무한히 다시 사는 경로가 여기서 끊긴다.
+     */
+    const replan = personasForAttempt({
+      outcomes: priorOutcomes, sourceArticleId: j.sourceArticleId,
+      slotCodes, candidates: voice.candidates,
+    })
+    if (!replan.ok) {
+      replanExhausted += 1
+      console.log(`   🟡 ${j.sourceArticleId} — ${replan.code}: ${replan.reason}`
+        + `${replan.excluded.length > 0 ? ` (제외 ${replan.excluded.join(' ')})` : ''}`)
+      holdPick()
+      continue
+    }
+    /**
+     * 🔴 **캐시 key 도 제외 목록을 담는다.** 담지 않으면 사람을 바꾼 시도가
+     *    **바뀌기 전 결과**를 캐시에서 받아 그대로 또 실패한다.
+     *    🔴 제외가 없을 때는 칸을 붙이지 않는다 — 평상시 key 를 바꾸지 않기 위해서다.
+     */
     const slotDigest = digest16(slotCodes.join(','))
-    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}`
+    const exclPart = replan.excluded.length === 0
+      ? '' : `|excl=${digest16([...replan.excluded].sort().join(','))}`
+    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}${exclPart}`
 
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
@@ -974,8 +1026,12 @@ async function main(): Promise<void> {
          *    제목에 있으면 그대로 provider 로 나갔다. 정본 함수를 그대로 쓴다.
          */
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
-        // 🔴 **좁힌 묶음만 보낸다** — 회차 안에서 서로 겹치지 않는다
-        personas: voice.candidates.filter((c) => slotCodes.includes(c.code)),
+        /**
+         * 🔴 **좁힌 묶음에서 지난 실패 화자를 뺀 것만 보낸다** — 회차 안에서 겹치지 않고,
+         *    같은 사람으로 같은 실패를 되풀이하지도 않는다. 이 값을 여기서 다시
+         *    조립하지 않는다 — 조립하면 제외가 조용히 사라진다.
+         */
+        personas: replan.personas,
         // 🔴 좁히기 전의 수 — "이번 묶음에만 없다" 와 "전체에도 없다" 를 가른다
         personaPoolSize: voice.candidates.length,
         /**
@@ -1103,6 +1159,9 @@ async function main(): Promise<void> {
   console.log(`   🔴 위기 소재로 **부르기 전에** 멈춘 원천 ${sourceCrisisHeld}건 — AI 를 부르지 않았다 (정본 §4)`)
   console.log(`      위기 신호로 멈춘 회차 ${crisisHeld}건 — 사람이 본다`)
   console.log(`      자기 나이 모순(결정론) ${selfAgeCaught}건`)
+  if (replanExhausted > 0) {
+    console.log(`   🟡 적격 화자를 다 써서 더 시도하지 않은 원천 ${replanExhausted}건 — AI 를 부르지 않았다`)
+  }
   if (voiceHeld > 0) {
     console.log(`   🟡 쓸 Persona 가 없어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
   }
