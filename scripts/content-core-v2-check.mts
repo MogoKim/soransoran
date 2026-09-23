@@ -1472,8 +1472,12 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
    * 🔴 **HOLD 가 어디 남는지 값으로 확인한다** (2026-09-23 표현 정정).
    *    앞판은 "DB 사람 검토 후보로 남는다" 고 썼는데 **틀렸다.** `adopted` 에는
    *    `AUTO_ADOPT` 만 들어가므로 HOLD 는 **DB 후보가 되지 않는다.**
-   *    남는 곳은 회차 산출물 `auto-draft-<회차>.picks.jsonl` 이고,
-   *    `usedSources` 가 **회차 안에서만 사는 Set** 이라 다음 회차에 그 원천이 다시 뽑힌다.
+   *    남는 곳은 회차 산출물 `auto-draft-<회차>.picks.jsonl` 이다.
+   *
+   * 🔴 **재시도 계약** (2026-09-23 재정정). `AUTO_HOLD` 원천은 `concluded` 가 아니어서
+   *    **재시도 자격을 유지한다.** 다만 **다음 회차 즉시 선택은 보장되지 않는다** —
+   *    workset 의 reserve 자리 · 신규 우선 · starvation 규칙에 따라 다시 선택된다.
+   *    그 동작은 아래 `selectWorkset` 실행 검사가 값으로 확인한다.
    */
   const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 HOLD 도 `picks` 산출물에는 남는다',
@@ -1563,6 +1567,34 @@ console.log('\n🔴 🔴 **실행 사슬 — artifact.plan → voice candidate a
     chain(P02_PLAN, THIRD).adopted === 1, JSON.stringify(chain(P02_PLAN, THIRD).picks))
   check('🔴 다른 화자(50대 초반)에게는 44 가 더 크게 어긋난다 — adopted 0건',
     chain({ plan: { personaCode: 'P10', selfBasis: 'lifeFacts' } }, BAD).adopted === 0)
+
+  /**
+   * 🔴 **과잉 차단 방지** (2026-09-23 마스터 판정).
+   *
+   *    막아야 할 것은 **나이를 말한 것**이 아니라 **원문 작성자의 개인 사실("곧 44")을
+   *    화자에게 이식한 것**이다. P02 카드가 보장하는 것은 `40대 후반` 이지
+   *    정확한 47·48·49세가 아니다. 카드가 보장하는 **연령대 표현은 통과해야 한다** —
+   *    그런 디테일이 글을 사람답게 만든다.
+   *
+   *    🔴 카드에 연령대만 있으면 **연령대까지만** 쓴다. 근거 없는 정확한 나이를
+   *       새로 지어내 통과시키는 편집은 제안하지 않는다.
+   */
+  const BAND_OK = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
+    + '저도 40대 후반인데 아직 어려 보인다는 말을 듣고 그래요.'
+  check('🔴 🔴 **카드와 맞는 연령대 표현 + lifeFacts → adopted 1건 (과잉 차단하지 않는다)**',
+    chain({ plan: { personaCode: 'P02', selfBasis: 'lifeFacts' } }, BAND_OK).adopted === 1,
+    JSON.stringify(chain({ plan: { personaCode: 'P02', selfBasis: 'lifeFacts' } }, BAND_OK).picks))
+  check('🔴 🔴 **같은 문장이라도 `noLifeFactNeeded` 면 AUTO_HOLD — 자격 없이 생활사를 쓸 수 없다**', (() => {
+    const r = chain({ plan: { personaCode: 'P02', selfBasis: 'noLifeFactNeeded' } }, BAND_OK)
+    return r.adopted === 0 && r.picks[0]?.startsWith('AUTO_HOLD') === true
+  })(), JSON.stringify(chain({ plan: { personaCode: 'P02', selfBasis: 'noLifeFactNeeded' } }, BAND_OK).picks))
+  check('🔴 🔴 **"곧 44" + P02(40대 후반) 는 그대로 AUTO_HOLD — 개인 사실 이식은 막는다**', (() => {
+    const r = chain({ plan: { personaCode: 'P02', selfBasis: 'lifeFacts' } }, BAD)
+    return r.adopted === 0 && r.picks[0]?.startsWith('AUTO_HOLD') === true
+  })(), JSON.stringify(chain({ plan: { personaCode: 'P02', selfBasis: 'lifeFacts' } }, BAD).picks))
+  check('🔴 카드가 보장하는 폭만큼만 통과한다 — 47·48·49 는 40대 후반 안이라 통과',
+    chain({ plan: { personaCode: 'P02', selfBasis: 'lifeFacts' } },
+      '저는 48인데 요즘 그런 생각이 들더라고요.').adopted === 1)
 }
 
 console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확인한다 (다음 회차 즉시 선택을 보장하지 않는다)**')
