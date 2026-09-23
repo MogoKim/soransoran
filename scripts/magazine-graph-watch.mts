@@ -48,6 +48,17 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import {
+  checkAuth,
+  makeRealDeps,
+  redeployProduction,
+  resolveProdDeployment,
+  resolveProject,
+  setKillEnv,
+  type ProdDeployment,
+  type ProjectLink,
+  type VercelDeps,
+} from './lib/mgraph-vercel.mjs'
 import { getAllMagazineArticles } from '../src/lib/magazine'
 import { MAGAZINE_ARTICLES } from '../src/content/magazine/articles'
 
@@ -62,14 +73,23 @@ export type PageFetch =
 
 export type StepResult = { ok: boolean; detail: string }
 
+/** 준비 단계의 결과 — 실패면 이유를 그대로 로그와 Slack 에 싣는다 */
+export type Resolved<T> = { ok: true; value: T } | { ok: false; why: string }
+
 export type GraphWatchDeps = {
   fetchPage: (url: string) => PageFetch
   now: () => Date
-  /** 층 1 — 환경변수와 재배포. 🔴 둘 다 해야 반영된다 */
+  /**
+   * 층 1 — 환경변수와 재배포. 🔴 **둘 다** 해야 반영된다.
+   *
+   * 🔴 준비(`preflight`)와 실행을 나눈다. 로그인·프로젝트·Production 배포가
+   *    하나로 확정되지 않으면 **아무것도 건드리지 않고** 실패로 끝낸다 —
+   *    반쯤 끄다 마는 것이 안 끄는 것보다 나쁘다.
+   */
   vercel: {
-    hasCredentials: () => boolean
-    setKillEnv: () => StepResult
-    redeploy: () => StepResult
+    preflight: () => Resolved<{ who: string; project: ProjectLink; deployment: ProdDeployment }>
+    setKillEnv: (ctx: { project: ProjectLink }) => StepResult
+    redeploy: (ctx: { project: ProjectLink; deployment: ProdDeployment }) => StepResult
   }
   /** 층 2 — control.ts 를 그래프 전용 레인으로 내보낸다 */
   lane: {
@@ -184,16 +204,36 @@ export async function runGraphWatch({
     }
 
     /**
-     * 🔴 **credential 이 없으면 여기서 실패로 적는다.** 건너뛰고 "알림 발송" 으로
-     *    끝내면 차단되지 않은 상태가 초록불로 보고된다.
+     * 🔴 **준비가 확정되지 않으면 아무것도 건드리지 않는다.**
+     *    로그인 · 연결된 프로젝트 하나 · Ready 인 Production 배포 하나 —
+     *    셋이 다 서야 실행한다. 반쯤 끄다 마는 것이 안 끄는 것보다 나쁘다.
+     *
+     * 🔴 건너뛰고 "알림 발송" 으로 끝내지 않는다. 그러면 차단되지 않은 상태가
+     *    초록불로 보고된다.
      */
-    if (!deps.vercel.hasCredentials()) {
-      step('층1 환경변수', { ok: false, detail: '🔴 Vercel credential 이 없다 — 끄지 못했다' })
-      step('층1 재배포', { ok: false, detail: '🔴 credential 이 없어 재배포를 걸지 못했다' })
+    const pre = deps.vercel.preflight()
+    if (!pre.ok) {
+      step('층1 준비 (로그인·프로젝트·Production 배포)', { ok: false, detail: pre.why })
+      step('층1 환경변수 MGRAPH_GRAPH_KILL=1', { ok: false, detail: '🔴 준비가 서지 않아 실행하지 않았다' })
+      step('층1 재배포', { ok: false, detail: '🔴 준비가 서지 않아 실행하지 않았다' })
     } else {
-      step('층1 환경변수 MGRAPH_GRAPH_KILL=1', deps.vercel.setKillEnv())
-      // 🔴 값만 바꾸면 현재 배포는 그대로다. 재배포까지가 한 조치다.
-      step('층1 재배포 트리거', deps.vercel.redeploy())
+      const { who, project, deployment } = pre.value
+      step('층1 준비', {
+        ok: true,
+        detail: `${who} · ${project.projectName}(${project.projectId.slice(0, 12)}…) · ${deployment.id}`,
+      })
+
+      // 🔴 env 성공과 재배포 성공을 **각각** 본다. 하나라도 실패하면 자동 차단 성공이 아니다.
+      const envStep = deps.vercel.setKillEnv({ project })
+      step('층1 환경변수 MGRAPH_GRAPH_KILL=1', envStep)
+
+      if (!envStep.ok) {
+        // 🔴 값이 안 들어갔는데 재배포하면 **끄지 않은 채 다시 배포**하는 꼴이다
+        step('층1 재배포', { ok: false, detail: '🔴 환경변수가 서지 않아 재배포하지 않았다' })
+      } else {
+        // 🔴 값만 바꾸면 현재 배포는 그대로다. 재배포까지가 한 조치다.
+        step('층1 재배포 트리거', deps.vercel.redeploy({ project, deployment }))
+      }
     }
 
     step('층2 control.ts 영구 차단', deps.writeControl(reason, deps.now()))
@@ -279,19 +319,32 @@ export const realDeps: GraphWatchDeps = {
   },
   now: () => new Date(),
   vercel: {
-    // 🔴 있는 척하지 않는다. 없으면 없다고 답하고, 호출부가 실패로 적는다.
-    hasCredentials: () =>
-      Boolean(process.env.VERCEL_TOKEN) && Boolean(process.env.VERCEL_PROJECT_ID),
-    setKillEnv: () => {
-      const r = exec('npx', [
-        'vercel', 'env', 'add', 'MGRAPH_GRAPH_KILL', 'production',
-        '--token', process.env.VERCEL_TOKEN ?? '', '--force',
-      ])
-      return { ok: r.code === 0, detail: r.code === 0 ? 'MGRAPH_GRAPH_KILL=1 설정' : `실패: ${r.err.trim().slice(0, 200)}` }
+    /**
+     * 🔴 **읽기만 한다.** 로그인·프로젝트·Production 배포를 확인할 뿐 아무것도 바꾸지 않는다.
+     *    셋 중 하나라도 확정되지 않으면 실패를 돌려주고, 호출부가 실행을 멈춘다.
+     */
+    preflight: () => {
+      const d = makeRealDeps()
+      if (!d.ok) return d
+      const who = checkAuth(d.value)
+      if (!who.ok) return who
+      const project = resolveProject(d.value)
+      if (!project.ok) return project
+      const deployment = resolveProdDeployment(d.value, project.value)
+      if (!deployment.ok) return deployment
+      return { ok: true, value: { who: who.value, project: project.value, deployment: deployment.value } }
     },
-    redeploy: () => {
-      const r = exec('npx', ['vercel', 'redeploy', '--token', process.env.VERCEL_TOKEN ?? '', '--yes'])
-      return { ok: r.code === 0, detail: r.code === 0 ? '재배포 트리거됨' : `실패: ${r.err.trim().slice(0, 200)}` }
+    setKillEnv: ({ project }) => {
+      const d = makeRealDeps()
+      if (!d.ok) return { ok: false, detail: d.why }
+      const r = setKillEnv(d.value, project)
+      return r.ok ? { ok: true, detail: r.value } : { ok: false, detail: r.why }
+    },
+    redeploy: ({ project, deployment }) => {
+      const d = makeRealDeps()
+      if (!d.ok) return { ok: false, detail: d.why }
+      const r = redeployProduction(d.value, project, deployment)
+      return r.ok ? { ok: true, detail: r.value } : { ok: false, detail: r.why }
     },
   },
   lane: {
