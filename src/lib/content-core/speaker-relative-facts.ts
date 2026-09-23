@@ -278,7 +278,13 @@ export function checkAgeMappingApplied(input: {
 }): MappingPostVerdict {
   const selfAges = selfAgeNumbersIn(input.text, input.otherMarkers)
   const srcNums = input.sourceAges.map((a) => Number(a)).filter((n) => Number.isFinite(n))
-  const left = selfAges.filter((n) => srcNums.includes(n))
+  /**
+   * 🔴 **원문 값이 우리 값과 같으면 이미 정합하다** (2026-09-23 보정).
+   *    앞판은 `sourceAges` 에 있는 숫자를 먼저 leftover 로 봤다. 그래서
+   *    *원문 47 · Persona 47* 처럼 **바꿀 것이 없는 정상 사례**가 실패했다.
+   *    우리 기대값과 다른 원문 숫자만 남은 것이다.
+   */
+  const left = selfAges.filter((n) => srcNums.includes(n) && n !== input.exactAge)
   if (left.length > 0) {
     return { ok: false, code: 'SOURCE_AGE_REMAINS', reason: `원문 화자 나이가 남았다 — ${left.join('·')}` }
   }

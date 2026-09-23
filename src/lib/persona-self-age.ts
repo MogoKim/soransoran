@@ -314,9 +314,20 @@ export function judgeSelfAgeBasis(input: {
   ageBand: string | null | undefined
   /** 계획이 정한 자격 근거. `lifeFacts` 가 아니면 생활사 사실을 쓸 수 없다 */
   selfBasis: string | null | undefined
+  /**
+   * 🔴 **우리 정본이 정한 그날의 나이** (2026-09-23).
+   *    글에 적힌 나이가 이 값이면 **우리가 넣은 값**이다 — 원문에서 베낀 것이 아니라
+   *    Persona 카드가 근거다. 그때는 `selfBasis` 를 묻지 않는다.
+   *    묻으면 "원문 화자 자격" 판정이 **우리 자신의 사실**을 막는다(실측 모순).
+   */
+  personaExactAge?: number | null
 }): SelfAgeBasisVerdict {
   const claim = readSelfAgeClaim(input.text)
   if (claim === null) return { hold: false, reason: '정확한 자기 나이를 말하지 않았다' }
+  const ours = input.personaExactAge ?? null
+  if (ours !== null && claim.span.from === ours && claim.span.to === ours) {
+    return { hold: false, reason: `우리 정본 나이(${ours})다 — 원문에서 베낀 값이 아니다` }
+  }
   // 🔴 나이를 밝혔으면 그것은 생활사 사실이다 — "필요 없다" 로 보낼 수 없다
   if ((input.selfBasis ?? '') !== 'lifeFacts') {
     return {

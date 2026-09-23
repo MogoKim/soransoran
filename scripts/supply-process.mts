@@ -761,10 +761,12 @@ async function main(): Promise<number> {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
       return 1
     }
-    const prior = priorState(rows, currentContractBase())
+    // 🔴 회차 시각 하나 — 자식(auto-draft)과 같은 값을 써야 계약이 어긋나지 않는다
+    const runAt = new Date()
+    const prior = priorState(rows, currentContractBase(runAt))
     const plan = selectWorkset({
       rows, humanDecided: humanDecidedIds(), queuePending, ...prior,
-      limit: WORKSET_LIMIT, runId, takenAt: new Date(),
+      limit: WORKSET_LIMIT, runId, takenAt: runAt,
     })
     if (plan.picked.length === 0) {
       // 🔴 **manifest 를 쓰지 않는다** — 빈 묶음으로 단계를 돌릴 이유가 없다

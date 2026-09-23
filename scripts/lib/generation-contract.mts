@@ -21,11 +21,17 @@ import { digest16, loadVoice } from './voice-runtime.mjs'
  *    읽는다 — 상수를 적지 않는다. 읽지 못하면 빈 문자열이고, 그러면 어떤 옛 artifact 와도
  *    같지 않다(= 다시 평가한다). 🔴 조용히 "같다" 로 넘어가지 않는다.
  */
-export function currentContractBase(): ContractBase {
+/**
+ * 🔴 **회차 시각을 받는다** (2026-09-23). 주지 않으면 후보 풀 지문에 나이가 빠져
+ *    (`age=∅`) 생일이 지나도 옛 artifact 가 그대로 재사용된다.
+ *    🔴 부모(공급 회차)와 자식(초안 생성)이 **같은 값**을 써야 한다 —
+ *    각자 `new Date()` 를 부르면 KST 자정·생일 경계에서 갈린다.
+ */
+export function currentContractBase(runAt?: Date): ContractBase {
   let voiceAssetDigest = ''
   let personaPoolDigest = ''
   try {
-    const v = loadVoice()
+    const v = loadVoice(runAt)
     voiceAssetDigest = v.sourceDigest
     personaPoolDigest = v.poolDigest
   } catch { /* 빈 값 — 어떤 옛 계약과도 같지 않다 */ }

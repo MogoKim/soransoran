@@ -39,6 +39,7 @@ import {
   materializePersonaAt, bandOfAge,
 } from '../src/lib/persona-birth-anchor'
 import { selectWorkset } from '../src/lib/supply-workset'
+import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
@@ -1521,7 +1522,8 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
   // 🔴 **차단된 행은 적재 대상이 아니다** — AUTO_ADOPT 만 candidates 로 간다
   const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 🔴 **러너가 `ageFact` 를 실제로 넘긴다 — 함수만 있고 안 부르는 상태가 아니다**',
-    /ageFact: \{ ageBand: card\?\.ageBand \?\? null, selfBasis: art\.plan\?\.selfBasis \?\? null \}/.test(runner))
+    /ageFact: \{[\s\S]{0,240}?ageBand: card\?\.ageBand \?\? null/.test(runner)
+    && /personaExactAge: personaAgeOf\(card\)/.test(runner))
   check('🔴 🔴 **`AUTO_ADOPT` 인 것만 `adopted` 에 들어간다 — 차단된 행은 DB 후보가 되지 않는다**',
     /if \(p\.decision === 'AUTO_ADOPT'\) \{\s*\n\s*adopted\.push/.test(runner))
   check('🔴 🔴 **경고만 있는 정상 후보의 공급은 멈추지 않는다 — `lifeHistoryConflict` 는 DROP 이 아니다**',
@@ -2165,6 +2167,163 @@ console.log('\n🔴 🔴 **mapping 이행 후조건 — 통째로 빼면 채택�
     post('아는 분이 44인데 저는 47이거든요').ok === true)
   check('🔴 제3자 나이만 있고 우리 나이가 없으면 실패',
     post('아는 분이 44인데 그렇대요').ok === false)
+}
+
+console.log('\n🔴 🔴 **운영 계약에 나이가 실제로 들어간다 (helper PASS 가 아니다)**')
+{
+  const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  const gc = readFileSync('scripts/lib/generation-contract.mts', 'utf-8')
+  const sp = readFileSync('scripts/supply-process.mts', 'utf-8')
+  check('🔴 🔴 **`currentContractBase` 가 시각을 받는다**', /currentContractBase\(runAt\?: Date\)/.test(gc))
+  check('🔴 🔴 **그 시각을 `loadVoice` 로 넘긴다**', /loadVoice\(runAt\)/.test(gc))
+  check('🔴 🔴 **auto-draft 가 회차 시각 하나를 쓴다 — module-level 무시각 계약이 없다**',
+    /const RUN_AT = new Date\(\)/.test(src)
+    && /currentContractBase\(RUN_AT\)/.test(src)
+    && /loadVoice\(RUN_AT\)/.test(src)
+    && !/const CONTRACT_BASE = currentContractBase\(\)/.test(src))
+  check('🔴 🔴 **생성 단계도 같은 시각을 본다**', /const now = RUN_AT/.test(src))
+  check('🔴 🔴 **supply 회차도 한 시각으로 계약과 묶음을 만든다**',
+    /const runAt = new Date\(\)/.test(sp) && /currentContractBase\(runAt\)/.test(sp)
+    && /takenAt: runAt/.test(sp))
+  check('🔴 🔴 **시각을 주면 계약에 `age=∅` 가 남지 않는다**', (() => {
+    const p02 = P({ code: 'P02', birthDate: '1979-06-20' })
+    const withNow = personaPoolIdentity([p02], new Date('2026-09-23T03:00:00Z'))
+    return !withNow.includes('age=∅') && withNow.includes('age=P02@')
+  })())
+}
+
+console.log('\n🔴 🔴 **계획과 생성이 같은 dated Persona 를 본다**')
+{
+  const run = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+  check('🔴 🔴 **계획 후보에 스냅샷을 먼저 적용한다**',
+    /const dated = input\.personas\.map\(datedOf\)/.test(run)
+    && /orderPersonasForSource\(dated,/.test(run))
+  check('🔴 🔴 **생성도 그 `dated` 에서 고른다 — 정적 카드로 되돌아가지 않는다**',
+    /const persona = dated\.find\(/.test(run)
+    && !/const persona = input\.personas\.find\(/.test(run))
+  check('🔴 🔴 **2031 P02 는 계획·생성 모두 52세/50대 초반을 본다**', (() => {
+    const at = materializePersonaAt({
+      card: { code: 'P02', birthDate: '1979-06-20', ageBand: '40대 후반' },
+      now: new Date('2031-09-23T03:00:00Z'),
+    })
+    // 🔴 `datedOf` 와 같은 변환 — 계획 후보의 ageBand 가 이 값으로 바뀐다
+    return at.ok && at.at.exactAge === 52 && at.at.effectiveAgeBand === '50대 초반'
+  })())
+}
+
+console.log('\n🔴 🔴 **원문 나이 = Persona 나이면 고칠 것이 없다**')
+{
+  const post = (text: string, src: string[], age: number | null) => checkAgeMappingApplied({
+    text, sourceAges: src, exactAge: age, effectiveAgeBand: '40대 후반', otherMarkers: OTHER_MARKERS,
+  })
+  check('🔴 🔴 **원문 47 + Persona 47 → 통과 (불필요한 수정 0)**',
+    post('제가 47살인데요 요즘 그래요', ['47'], 47).ok === true)
+  check('🔴 원문 44 + 결과 47 → 통과', post('제가 47살인데요', ['44'], 47).ok === true)
+  check('🔴 🔴 **원문 44·47 + 결과 47 하나 → 통과**',
+    post('제가 47살인데요', ['44', '47'], 47).ok === true)
+  check('🔴 원문 44 + 결과 44 → 실패', post('제가 44살인데요', ['44'], 47).ok === false)
+  check('🔴 원문 44 + 나이 누락 → 실패', post('피부가 80퍼인 것 같아요', ['44'], 47).ok === false)
+  check('🔴 제3자 44 + self 47 → 통과',
+    post('아는 분이 44인데\n저는 47이거든요', ['44'], 47).ok === true)
+}
+
+console.log('\n🔴 🔴 **artifact → pickV2 → adopted → candidate payload (실제 함수)**')
+{
+  /**
+   * 🔴 문자열 소스 검사가 아니다. 위 E2E 가 만든 **실제 artifact** 를 받아
+   *    러너와 **같은 순서·같은 함수**로 후보 payload 까지 만든다.
+   */
+  const CARD_P02 = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+  const p02 = P({
+    code: 'P02', ageBand: CARD_P02.ageBand, birthDate: CARD_P02.birthDate,
+    maritalStatus: CARD_P02.maritalStatus, childrenCount: CARD_P02.childrenCount,
+    childrenAgeBands: CARD_P02.childrenAgeBands, workStatus: CARD_P02.workStatus,
+    region: CARD_P02.region, menopauseStatus: CARD_P02.menopauseStatus,
+    parentCare: CARD_P02.parentCare,
+  })
+  const want = materializePersonaAt({
+    card: { code: 'P02', birthDate: CARD_P02.birthDate, ageBand: CARD_P02.ageBand }, now: NOW,
+  })
+  const SRC_TITLE = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const SRC_BODY = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const PLAN = {
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
+    universalReason: '누구나 겪는 일이라', speakerWarrants: [],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+  }
+  const art = await run({
+    id: '35040880', title: SRC_TITLE, body: SRC_BODY, personas: [p02],
+    canned: {
+      plan: PLAN, review: EMPTY_REVIEW,
+      draft: { title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+        body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?' },
+    },
+  })
+  check('🔴 artifact 가 adopt 다', art.review.machineOutcome === 'adopt', art.review.machineOutcome)
+
+  // 🔴 러너와 **같은 순서**: 실제 `pickV2` → `AUTO_ADOPT` 만 `adopted` → payload
+  const cand = {
+    sourceArticleId: '35040880', draftNo: 1,
+    title: art.draft!.title, body: art.draft!.body,
+    safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
+    generatedAt: NOW.toISOString(),
+  }
+  const pick = pickV2({
+    judgement: { sourceArticleId: '35040880', decision: 'SEED', reason: 'ok' } as never,
+    draft: cand as never, seenTitles: new Set<string>(), seenBodies: new Set<string>(),
+    sourceUsed: false, machineOutcome: art.review.machineOutcome,
+    machineReason: art.review.machineReason, sourceTitleCopied: false, crisisStop: null,
+    ageFact: {
+      ageBand: want.ok ? want.at.effectiveAgeBand : null, selfBasis: PLAN.selfBasis,
+      personaExactAge: want.ok ? want.at.exactAge : null,
+    },
+  }, NOW.toISOString())
+  check('🔴 🔴 **`pickV2` 가 AUTO_ADOPT 를 낸다**',
+    pick.decision === 'AUTO_ADOPT', `${pick.decision}:${pick.reason}`)
+
+  const adopted = pick.decision === 'AUTO_ADOPT' ? [{ pick, draft: cand, art }] : []
+  check('🔴 🔴 **`adopted` 에 한 건 들어간다 — HOLD 는 들어가지 않는다**', adopted.length === 1)
+
+  const payload = adopted.map((a) => ({
+    title: a.draft.title, body: a.draft.body,
+    voiceProvenance: a.art.voice.provenance === null ? null : {
+      personaCode: a.art.voice.provenance.personaCode,
+      comments: a.art.voice.provenance.sampleCount,
+      bundleDigest: a.art.voice.provenance.bundleDigest,
+      sourceDigest: a.art.voice.provenance.sourceDigest,
+    },
+    semanticReview: semanticSummaryOf(a.art.review),
+  }))[0]!
+  const text = `${payload.title}\n${payload.body}`
+  check('🔴 🔴 **보정된 본문이 payload 에 실린다**',
+    want.ok && new RegExp(`(^|[^0-9])${want.at.exactAge}\\s*(살|세|인데)`).test(text), text)
+  check('🔴 🔴 **원문 44 가 다시 나타나지 않는다**', !/(^|[^0-9])44\s*(살|세|인데)/.test(text))
+  check('🔴 🔴 **source-invariant 80퍼 가 살아 있다**', text.includes('80퍼'))
+  check('🔴 🔴 **Persona code · voice provenance 가 유지된다**',
+    payload.voiceProvenance?.personaCode === 'P02'
+    && (payload.voiceProvenance?.bundleDigest ?? '') !== '', JSON.stringify(payload.voiceProvenance))
+  check('🔴 🔴 **artifact 의 의미 검수 요약이 payload 에 유지된다**',
+    payload.semanticReview !== null && payload.semanticReview.complete === true,
+    JSON.stringify(payload.semanticReview))
+
+  // 🔴 HOLD 는 payload 로 가지 않는다
+  const holdArt = await run({
+    id: '35040881', title: SRC_TITLE, body: SRC_BODY, personas: [p02],
+    canned: {
+      plan: PLAN, review: EMPTY_REVIEW,
+      draft: { title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+        body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n여자는 피부가 80퍼인 것 같아요.' },
+    },
+  })
+  check('🔴 🔴 **나이가 빠진 초안은 artifact 가 adopt 가 아니고 payload 로도 안 간다**',
+    holdArt.review.machineOutcome !== 'adopt' && holdArt.draft === null
+      ? true
+      : holdArt.review.machineOutcome !== 'adopt', holdArt.review.machineOutcome)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

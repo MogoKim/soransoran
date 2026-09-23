@@ -668,7 +668,11 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
   check('🔴 🔴 **생성 러너와 공급 러너가 같은 함수를 쓴다**', (() => {
     const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-    return /currentContractBase\(\)/.test(draft) && /currentContractBase\(\)/.test(runner)
+    /**
+     * 🔴 회차 시각을 받게 됐다 (2026-09-23) — 계약에 그날 나이가 들어간다.
+     *    **같은 함수를 쓴다**는 계약은 그대로다.
+     */
+    return /currentContractBase\(RUN_AT\)/.test(draft) && /currentContractBase\(runAt\)/.test(runner)
   })())
   check('🔴 🔴 **artifact 가 원문을 계약에 담지 않는다** — 해시 한 칸뿐', (() => {
     const src = readFileSync('src/lib/content-core/pipeline.ts', 'utf-8')
@@ -772,7 +776,12 @@ console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로
     personaPoolIdentity(POOL) === personaPoolIdentity([...POOL].reverse()))
   check('🔴 🔴 **요청을 만드는 쪽이 그 순서를 실제로 쓴다**', (() => {
     const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
-    return /orderPersonasForSource\(input\.personas, input\.contract\.sourceInputHash\)/.test(src)
+    /**
+     * 🔴 계획 후보에 **그날의 Persona 스냅샷**을 먼저 입힌다 (2026-09-23) —
+     *    그래야 계획과 생성이 같은 사람을 본다. 순서 계약은 그대로다.
+     */
+    return /orderPersonasForSource\(dated, input\.contract\.sourceInputHash\)/.test(src)
+      && /const dated = input\.personas\.map\(datedOf\)/.test(src)
       && /personas: ordered/.test(src)
   })())
   /** 🔴 **실제로 나가는 문자열로 본다** — 주석이 아니라 만들어진 요청이다 */

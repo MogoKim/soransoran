@@ -343,7 +343,23 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    * 🔴 **이 원문에 대해 정해진 순서로 세운다.** 읽은 순서가 달라도 실제로 보내는 것이
    *    같아야 하고, 그 순서는 계약(`sourceInputHash` + 후보 풀)만으로 다시 만들 수 있어야 한다.
    */
-  const ordered = orderPersonasForSource(input.personas, input.contract.sourceInputHash)
+  /**
+   * 🔴 **계획도 그날의 Persona 를 본다** (2026-09-23 보정).
+   *
+   *    앞판은 계획 후보에 **정적 카드 `ageBand`** 를 실었고, 생성 단계만
+   *    `materializePersonaAt` 의 `effectiveAgeBand` 를 썼다. 그러면 미래에
+   *      계획: "P02 는 40대 후반" · 생성: "P02 는 50대 초반"
+   *    으로 **서로 다른 사람**을 보게 된다.
+   *    🔴 계획·자격 검증·프롬프트·검수·나이 검사가 **같은 스냅샷** 하나를 쓴다.
+   */
+  const datedOf = (p: PersonaInput): PersonaInput => {
+    const v = materializePersonaAt({
+      card: { code: p.code, birthDate: p.birthDate ?? '', ageBand: p.ageBand }, now: input.now,
+    })
+    return v.ok ? { ...p, ageBand: v.at.effectiveAgeBand } : p
+  }
+  const dated = input.personas.map(datedOf)
+  const ordered = orderPersonasForSource(dated, input.contract.sourceInputHash)
   const pRes = await ask('speakerPlan', buildSpeakerPlanSystemPrompt(),
     buildSpeakerPlanPayload({ packet, personas: ordered }))
   const pC = completionOf(pRes)
@@ -392,7 +408,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    아래로 흘렀다 — 말투 근거도 자격 판정도 없는 글이 만들어진다.
    *    🔴 제안 밖이면 만들지 않는다(fail-closed).
    */
-  const persona = input.personas.find((p) => p.code === plan.personaCode)
+  // 🔴 계획이 본 것과 **같은 dated 스냅샷**에서 고른다 — 정적 카드로 되돌아가지 않는다
+  const persona = dated.find((p) => p.code === plan.personaCode)
   if (persona === undefined) {
     return blank(plan, dropped, null, null, noDet, null, notRun(noSpeakerCause),
       'hold', `제안하지 않은 화자다 — ${plan.personaCode ?? '(없음)'}`
@@ -429,6 +446,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    🔴 정적 `ageBand` 를 런타임 fallback 으로 쓰지 않는다. 그러면 2031년에도
    *       "40대 후반" 으로 돌아간다(실측 반례).
    */
+  // 🔴 위 `dated` 와 같은 함수·같은 시각이다 — 두 번 계산해도 값이 갈리지 않는다
   const snap = materializePersonaAt({
     card: { code: persona.code, birthDate: persona.birthDate ?? '', ageBand: persona.ageBand },
     now: input.now,

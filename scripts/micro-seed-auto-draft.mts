@@ -90,6 +90,7 @@ import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
  *    `voice-persona-plan` 이 그 둘을 맞춰 볼 뿐이다.
  */
 import { parsePoolDoc, type PoolCard } from '../src/lib/persona-pool-card'
+import { materializePersonaAt } from '../src/lib/persona-birth-anchor'
 
 /** 🔴 정본 문서 경로 — `persona-pool-card` 파일 머리가 가리키는 그 문서다 */
 import type { VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
@@ -138,7 +139,12 @@ export const DATA_DIR = '.microseed-data'
  * 🔴 **이 회차의 생성 계약 — 원천과 무관한 칸.** 공급 러너와 **같은 함수**로 만든다.
  *    두 곳에서 따로 조립하면 한쪽이 낡아 "같은 계약" 판정이 틀어진다.
  */
-const CONTRACT_BASE = currentContractBase()
+/**
+ * 🔴 **회차 시각.** 계약·후보 풀 지문·생성이 **모두 이 값 하나**를 쓴다.
+ *    🔴 module-level 에서 `currentContractBase()` 를 시각 없이 만들면
+ *       운영 계약에 `age=∅` 가 들어간다(실측 결함).
+ */
+const RUN_AT = new Date()
 
 const argv = process.argv.slice(2)
 /**
@@ -729,7 +735,8 @@ async function main(): Promise<void> {
   }
   const metas = loadMeta()
   const seen = seenFromCandidates()
-  const now = new Date()
+  // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
+  const now = RUN_AT
   const nowIso = now.toISOString()
   console.log(`① AUTO_SEED ${seeds.length}건`)
 
@@ -784,7 +791,7 @@ async function main(): Promise<void> {
    * 🔴 **그날 시각을 넘긴다** (2026-09-23). 후보 풀 지문에 나이가 들어가
    *    생일이 지나면 옛 artifact 가 재사용되지 않는다.
    */
-  const voice = loadVoice(new Date(nowIso))
+  const voice = loadVoice(RUN_AT)
   console.log(voice.describe)
   const cache = loadCache()
   let hit = 0
@@ -926,7 +933,7 @@ async function main(): Promise<void> {
      *    그것들이 바뀌면 캐시는 miss 되는데 지난 HOLD 는 "지금 계약의 결론" 으로 남았다.
      */
     const contract: GenerationContract = {
-      ...CONTRACT_BASE, sourceInputHash: sourceIdentityHash(meta),
+      ...currentContractBase(RUN_AT), sourceInputHash: sourceIdentityHash(meta),
     }
     /**
      * 🔴 **캐시 key = 원천 id + 스키마 판 + 계약 identity.**
@@ -1030,6 +1037,14 @@ async function main(): Promise<void> {
      *    `selfBasis` 를 채택 판정에 넘긴다 — **여기가 adopt 를 정하는 가장 이른 자리**다.
      *    🔴 카드를 못 찾으면 `null` 을 넘기고, 판정이 fail-closed 로 막는다.
      */
+    /** 🔴 그날 나이 — 한 번만 계산한다 */
+    const personaAgeOf = (c: { code: string; birthDate?: string; ageBand: string } | undefined): number | null => {
+      if (c === undefined) return null
+      const v = materializePersonaAt({
+        card: { code: c.code, birthDate: c.birthDate ?? '', ageBand: c.ageBand }, now: RUN_AT,
+      })
+      return v.ok ? v.at.exactAge : null
+    }
     const planned = art.plan?.personaCode ?? null
     const card = planned === null ? undefined
       : voice.candidates.find((c) => c.code === planned)
@@ -1040,7 +1055,11 @@ async function main(): Promise<void> {
       machineReason: art.review.machineReason,
       sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
       crisisStop: crisis,
-      ageFact: { ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null },
+      ageFact: {
+        ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null,
+        // 🔴 생성이 쓴 그날 나이 — 그 값이면 우리가 넣은 것이라 자격을 다시 묻지 않는다
+        personaExactAge: personaAgeOf(card),
+      },
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {
