@@ -141,6 +141,7 @@
     "persona:cohort-run": "tsx scripts/persona-cohort-run.mts",
     "release:canary-check": "tsx scripts/release-canary-check.mts",
     "supply:automation-check": "tsx scripts/supply-automation-check.mts",
+    "auto-ready-check": "tsx scripts/auto-ready-check.mts",
     "speaker:availability-check": "tsx scripts/speaker-availability-check.mts",
     "scale:foundation-check": "tsx scripts/scale-foundation-check.mts",
     "master:doc-check": "tsx scripts/master-operating-doc-check.mts",
@@ -166,7 +167,11 @@
     "publish:machine-review": "tsx scripts/original-post-machine-review.mts",
     "operator:compose-check": "tsx scripts/operator-compose-check.mts",
     "operator:compose-db-check": "tsx scripts/operator-compose-db-check.mts",
-    "check:comment-compose": "tsx scripts/comment-compose-check.mts"
+    "check:comment-compose": "tsx scripts/comment-compose-check.mts",
+    "auto-ready-sample": "tsx scripts/auto-ready-sample.mts",
+    "auto-ready-audit": "tsx scripts/auto-ready-audit.mts",
+    "supply:forecast": "tsx scripts/supply-forecast.mts",
+    "auto-ready-restore-scan": "tsx scripts/auto-ready-restore-scan.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

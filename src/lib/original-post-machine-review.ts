@@ -424,8 +424,19 @@ export type ReviewGate = (t: { title: string; body: string }) => { ok: boolean; 
  */
 export type ReviewAction =
   | { decision: 'ready' }
-  | { decision: 'edit'; edit: ReviewEdit; gate: ReviewGate }
-  | { decision: 'reject'; declineReason: string }
+  | { decision: 'edit'; edit: ReviewEdit; gate: ReviewGate; hardDefect?: boolean }
+  | { decision: 'reject'; declineReason: string; hardDefect?: boolean }
+
+/**
+ * 🔴 **중대 결함 표식** (2026-09-22). 자동 READY 게이트는 "수정·폐기된 것 중 몇 건이
+ *    중대 결함이었나" 를 본다. 재지 않은 것을 0 으로 치면 게이트가 근거 없이 열린다.
+ *    그래서 `editDiff` JSON 안에 **값으로** 남긴다 — 스키마를 바꾸지 않고 쓸 수 있는
+ *    자리는 여기뿐이다. 값이 없으면 `sampleOf` 가 **미측정**으로 읽고 게이트를 닫는다.
+ *
+ *    폐기(`reject`)에도 같은 칸을 쓴다. 이때 `editDiff` 는 "고친 내역" 이 아니라
+ *    **이 결정에 대한 판단 표식**만 담는다.
+ */
+export const REVIEW_HARD_DEFECT_KEY = 'hardDefect'
 
 export const COMPLETE_FAIL_CODES = [
   'notFound', 'snapshotChanged', 'conditionMissed', 'verifyFailed', 'stampMissing',
@@ -473,6 +484,7 @@ export function reviewPatchOf(input: {
       editedBody: a.edit.body,
       // 🔴 본문을 담지 않는다 — 바뀌었는지와 얼마나, 그리고 사람이 쓴 한 줄뿐이다
       editDiff: {
+        ...(a.hardDefect === undefined ? {} : { [REVIEW_HARD_DEFECT_KEY]: a.hardDefect }),
         titleChanged: flat(a.edit.title) !== flat(input.draftTitle),
         bodyChanged: flat(a.edit.body) !== flat(input.draftBody),
         bodyCharsBefore: input.draftBody.length,
@@ -482,7 +494,13 @@ export function reviewPatchOf(input: {
     }
   }
   if (a.decision === 'reject') {
-    return { status: REVIEW_DECISION_STATUS.reject, declineReason: a.declineReason }
+    return {
+      status: REVIEW_DECISION_STATUS.reject,
+      declineReason: a.declineReason,
+      // 🔴 폐기에도 표식을 남긴다 — 없으면 `sampleOf` 가 미측정으로 읽는다
+      ...(a.hardDefect === undefined
+        ? {} : { editDiff: { [REVIEW_HARD_DEFECT_KEY]: a.hardDefect } }),
+    }
   }
   return { status: REVIEW_DECISION_STATUS.ready }
 }

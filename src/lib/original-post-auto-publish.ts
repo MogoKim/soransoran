@@ -31,6 +31,7 @@ import { queueProfileOf } from './micro-seed-supply-autofill'
 // 🔴 기계 표식 검사는 적재 쪽과 같은 함수를 쓴다 — 두 벌이면 한쪽만 고쳐져 P0 가 된다
 export { machineGateOk as machineMarksOk } from './micro-seed-supply-autofill'
 // 🔴 판 값의 정본은 초안 lib 하나다
+import { AUTO_DECIDER } from './auto-ready'
 import {
   DRAFT_RULE_VERSION, DRAFT_PROVENANCE, MACHINE_AGE_HUMAN_REVIEW_REQUIRED,
 } from './micro-seed-auto-draft'
@@ -163,6 +164,19 @@ export function machineReviewedByHuman(decidedBy: string | null | undefined): bo
   return (decidedBy ?? '').trim() === MACHINE_REVIEWED_BY
 }
 
+/**
+ * 🔴 **자동 판정이 남긴 값을 인정할 것인가** (2026-09-22).
+ *
+ *    자동 job 이 `founder` 를 찍는 우회를 막으려고 값을 갈라 두었다(`AUTO_DECIDER`).
+ *    그 값은 **게이트가 열려 있을 때만** 발행 대상이 된다. 닫혀 있으면
+ *    이미 찍혀 있던 자동 도장도 통하지 않는다 — 되돌리기가 스위치 하나다.
+ *
+ * 🔴 `founder` 는 여기서 인정하지 않는다. 사람 도장은 위 함수가 따로 본다.
+ */
+export function autoReadyAccepted(decidedBy: string | null | undefined, open: boolean): boolean {
+  return open && (decidedBy ?? '').trim() === AUTO_DECIDER
+}
+
 export type RejectCode =
   | 'STATUS' | 'ALREADY_PUBLISHED' | 'GATE' | 'PROMPT_VERSION' | 'MODEL' | 'SITE' | 'SAFETY' | 'EMPTY'
   | 'PROFILE' | 'HUMAN_REVIEW_REQUIRED' | 'TITLE_COPIES_SOURCE'
@@ -293,6 +307,11 @@ export function founderRetitled(r: { draftTitle?: string; editedTitle?: string |
 
 export function selectAutoTargets(
   rows: readonly AutoRow[], safetyOf: SafetyVerdictOf,
+  /**
+   * 🔴 **자동 READY 게이트가 열려 있는가.** 기본은 닫힘(fail-closed) —
+   *    부르는 쪽이 넘기지 않으면 지금 동작 그대로다.
+   */
+  input: { autoReadyOpen?: boolean } = {},
 ): { targets: AutoRow[]; rejected: Reject[] } {
   const targets: AutoRow[] = []
   const rejected: Reject[] = []
@@ -316,7 +335,8 @@ export function selectAutoTargets(
      *    🔴 모르는 값·`null` 은 "확인하지 않았다" 다(fail-closed).
      */
     if (MACHINE_AGE_HUMAN_REVIEW_REQUIRED && profile === 'machine'
-      && !machineReviewedByHuman(r.decidedBy)) {
+      && !machineReviewedByHuman(r.decidedBy)
+      && !autoReadyAccepted(r.decidedBy, input.autoReadyOpen ?? false)) {
       push(r.id, 'HUMAN_REVIEW_REQUIRED'); continue
     }
     if (r.title.trim() === '' || r.body.trim() === '') { push(r.id, 'EMPTY'); continue }

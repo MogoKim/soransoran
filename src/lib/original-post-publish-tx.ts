@@ -31,6 +31,7 @@
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
+import { judgeAutoInTx } from './auto-ready'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
   type PublishBlockCode,
@@ -84,6 +85,13 @@ export type PublishTxInput = {
    *    주지 않으면 `judgePublish` 가 가장 안전한 상수(1건)로 떨어뜨린다.
    */
   dailyCap: number
+  /**
+   * 🔴 **자동 READY 게이트가 지금 열려 있는가** (2026-09-22).
+   *    주지 않으면 `false` 로 읽는다 — fail-closed. 사람이 정한 글에는 영향이 없다.
+   */
+  autoReadyOpen?: boolean
+  /** 🔴 본문 판을 재는 함수. 주지 않으면 자동 도장 행은 발행되지 않는다 */
+  sha256?: (text: string) => string
 }
 
 /**
@@ -101,6 +109,9 @@ export async function publishOriginalPostTx(
         select: {
           id: true, status: true, createdPostId: true, gateVerdict: true,
           draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+          // 🔴 자동 도장 재확인의 근거 — **이 트랜잭션 안에서** 읽는다
+          decidedBy: true, editDiff: true, gateResults: true,
+          rawContent: { select: { sourceCapturedAt: true } },
           matchedPersona: {
             select: {
               id: true, code: true, status: true, userId: true,
@@ -158,11 +169,37 @@ export async function publishOriginalPostTx(
 
       const persona = row.matchedPersona!
 
-      // ── ① Post ──
       // 🔴 수정본이 있으면 그것이 발행될 글이다
+      const publishTitle = row.editedTitle ?? row.draftTitle
+      const publishBody = row.editedBody ?? row.draftBody
+
+      /**
+       * 🔴 **자동이 정한 글은 여기서 한 번 더 막힌다** (2026-09-22).
+       *
+       *    러너의 발행 직전 재확인은 트랜잭션 **밖**이다. 재확인이 통과한 직후
+       *    다른 실행이 본문을 고치면 고쳐진 본문이 그대로 나간다. 그래서
+       *    **실제로 쓰일 제목·본문**(`publishTitle`·`publishBody`)으로 여기서 다시 묻는다.
+       *    조건을 잃었으면 `Post` 를 만들기 전에 되돌아간다 — write 0 이다.
+       */
+      const autoTx = judgeAutoInTx({
+        row: {
+          decidedBy: row.decidedBy, editDiff: row.editDiff,
+          gateVerdict: row.gateVerdict, gateResults: row.gateResults,
+          title: publishTitle, body: publishBody,
+          sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
+        },
+        autoReadyOpen: input.autoReadyOpen === true,
+        // 🔴 주지 않으면 판이 언제나 어긋나 막힌다 — 그것이 안전한 기본값이다
+        sha256: input.sha256 ?? (() => ''),
+      })
+      if (!autoTx.ok) {
+        return { kind: 'blocked', code: 'AUTO_READY_LOST', detail: autoTx.detail, publishedTodayInTx }
+      }
+
+      // ── ① Post ──
       const data = buildOriginalPostData({
-        title: row.editedTitle ?? row.draftTitle,
-        content: row.editedBody ?? row.draftBody,
+        title: publishTitle,
+        content: publishBody,
         authorId: persona.userId,
         personaId: persona.id,
       })

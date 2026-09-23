@@ -56,7 +56,7 @@ import { currentCapacity, preparedCapacity, describeInventory } from '../src/lib
 import { observeJobsSafe } from './lib/launchd-observe.mjs'
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { compareWorkflowSuperset } from '../src/lib/scale-workflow-render'
-import { selectAutoTargets } from '../src/lib/original-post-auto-publish'
+import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
 import {
   forecastPublishing, nextScheduleAt, capacityOf, personasNeededFor,
   blockRatesByCombination, kstStamp, judgeCapacity,
@@ -467,7 +467,10 @@ async function main(): Promise<void> {
       draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
       promptVersion: true, model: true, matchedPersonaId: true, gateResults: true,
       // 🔴 러너와 **같은 필드**를 읽는다 — compareAutoRow 가 decidedAt·createdAt 으로 정렬한다
-      decidedAt: true, createdAt: true,
+      // 🔴 `decidedBy` 가 빠져 있었다 (2026-09-22). 주석은 "러너와 같은 필드" 라고
+      //    적혀 있었지만 실제로는 달랐고, `as never` 가 그 사실을 가렸다.
+      //    없으면 `selectAutoTargets` 가 기계 후보를 전부 HUMAN_REVIEW_REQUIRED 로 떨군다.
+      decidedBy: true, decidedAt: true, createdAt: true,
       // 🔴 freshness 근거도 러너와 같은 필드다. 없으면 나이를 모르므로 hold 로 간다
       rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
@@ -478,17 +481,23 @@ async function main(): Promise<void> {
     queueRows.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]),
   )
   // 🔴 legacy 를 여기서 뺀다 — selectAutoTargets 가 발행 러너와 같은 기준으로 거른다
+  /**
+   * 🔴 **`as never` 를 쓰지 않는다** (2026-09-22).
+   *    앞판은 배열 전체를 `as never` 로 캐스팅했고, 그래서 `decidedBy` 가 빠진 것을
+   *    컴파일러가 말해 주지 못했다. 타입을 적으면 빠진 칸이 그 자리에서 드러난다.
+   */
+  const healthRows: AutoRow[] = queueRows.map((r) => ({
+    id: r.id, status: r.status, createdPostId: r.createdPostId,
+    gateVerdict: r.gateVerdict,
+    title: S(r.editedTitle) !== '' ? S(r.editedTitle) : S(r.draftTitle),
+    body: S(r.editedBody) !== '' ? S(r.editedBody) : S(r.draftBody),
+    promptVersion: r.promptVersion, model: r.model,
+    matchedPersonaId: r.matchedPersonaId, gateResults: r.gateResults,
+    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt,
+    sourceSite: r.rawContent?.sourceSite ?? '',
+  }))
   const { targets: autoTargets } = selectAutoTargets(
-    queueRows.map((r) => ({
-      id: r.id, status: r.status, createdPostId: r.createdPostId,
-      gateVerdict: r.gateVerdict, matchedAt: r.matchedAt,
-      title: S(r.editedTitle) !== '' ? S(r.editedTitle) : S(r.draftTitle),
-      body: S(r.editedBody) !== '' ? S(r.editedBody) : S(r.draftBody),
-      promptVersion: r.promptVersion, model: r.model,
-      matchedPersonaId: r.matchedPersonaId, gateResults: r.gateResults,
-      decidedAt: r.decidedAt, createdAt: r.createdAt,
-      sourceSite: r.rawContent?.sourceSite ?? '',
-    })) as never,
+    healthRows,
     (t: string, b: string) => safetyFilter({ title: t, body: b }).verdict,
   )
 
