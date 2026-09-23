@@ -1,4 +1,4 @@
-import { ageMentionsIn } from '../persona-self-age'
+import { ageMentionsIn, ageFactOf } from '../persona-self-age'
 
 /**
  * 🔴 **원문 작성자를 복제하지 않는다** (2026-09-23 정본).
@@ -208,45 +208,55 @@ export function fixSourceSpeakerAge(input: {
   sourceAges: readonly string[]
   /** 우리 Persona 의 표현 — `49살` 또는 `40대 후반` */
   personaText: string
-  /** 제3자를 가리키는 말. 같은 절에 있으면 고치지 않는다 */
-  otherMarkers: readonly string[]
+  /**
+   * 🔴 더 쓰지 않는다 — 공용 parser 가 이미 역할로 가른다.
+   *    호출부 호환을 위해 자리만 받는다.
+   */
+  otherMarkers?: readonly string[]
 }): AgeFixResult {
-  if (input.sourceAges.length === 0) return { text: input.text, fixed: 0, remaining: [] }
+  void input.otherMarkers
+  /**
+   * 🔴 **역할을 끝까지 쓴다** (2026-09-23 마스터 지적).
+   *
+   *    앞판은 문자열 전역 치환(`split/join`)과 역할 없는 정규식을 썼다. 실측 결함:
+   *      "친구는 40대 초반인데 저는 52살입니다"      → 친구 나이까지 52살로 훼손
+   *      "저는 40대 초반이고, 40대 초반부터 지원 대상" → 지원 조건까지 변조
+   *      "제가 44살이고 44세부터 지원 대상입니다"     → exact 경로도 같은 결함
+   *
+   * 🔴 **`self` 인 자리만** 바꾼다. 제3자·사건 조건은 원문 그대로 둔다.
+   * 🔴 파싱된 **위치**로 자른다. 뒤에서부터 적용해 앞 자리가 밀리지 않게 한다.
+   */
+  const wanted = input.sourceAges
+    .map((a) => ageFactOf(a))
+    .filter((f): f is NonNullable<typeof f> => f !== null)
+  if (wanted.length === 0) return { text: input.text, fixed: 0, remaining: [] }
+
+  const hit = (m: { span: { from: number; to: number } }): boolean =>
+    wanted.some((f) => f.span.from === m.span.from && f.span.to === m.span.to)
+
+  const targets = ageMentionsIn(input.text)
+    .filter((m) => m.role === 'self' && hit(m))
+    .sort((a, b) => b.at - a.at)
+
   let out = input.text
   let fixed = 0
-  const remaining: string[] = []
-  for (const age of input.sourceAges) {
-    const n = age.trim()
-    if (n === '') continue
+  for (const m of targets) {
     /**
-     * 🔴 **구간 표현은 통째로 바꾼다** (2026-09-23 마스터 P0).
-     *    `40대 초반` 은 숫자 어미가 없어 아래 규칙에 걸리지 않는다 —
-     *    그대로 두면 원문 화자의 연령대가 글에 남는다.
+     * 🔴 **원문 값이 곧 우리 값이면 손대지 않는다** — 바꿀 것이 없다.
+     *    `49살` 자리에 `49살` 을 다시 넣어 `fixed` 를 부풀리지 않는다.
      */
-    if (!/^\d{1,3}$/.test(n)) {
-      if (!out.includes(n)) continue
-      const before = out
-      out = out.split(n).join(input.personaText)
-      if (out !== before) fixed += 1
-      continue
-    }
-    // 🔴 그 숫자가 **나이로 쓰인 자리**만 본다 — `80퍼` · `3일` 과 갈린다
-    const re = new RegExp(`(^|[^0-9])(${n})\\s*(살|세|인데|이고|이라|예요|이에요|입니다|이면)`, 'g')
-    out = out.replace(re, (whole, pre: string, _num: string, tail: string, at: number) => {
-      // 🔴 같은 절에 제3자 표지가 있으면 그 사람 나이다 — 손대지 않는다
-      const from = out.lastIndexOf('\n', at) + 1
-      const clause = out.slice(from, at + whole.length + 12)
-      if (input.otherMarkers.some((w) => clause.includes(w))) { remaining.push(n); return whole }
-      fixed += 1
-      // 🔴 `49살` 이면 어미를 흡수하고, `40대 후반` 이면 어미를 살린다
-      return /^\d{1,3}살$/.test(input.personaText)
-        ? `${pre}${input.personaText.replace('살', '')}${tail === '살' ? '살' : tail}`
-        : `${pre}${input.personaText}${tail === '살' || tail === '세' ? '' : tail}`
-    })
-    if (new RegExp(`(^|[^0-9])${n}\\s*(살|세|인데|이고|이라|예요|이에요|입니다|이면)`).test(out)
-      && !remaining.includes(n)) remaining.push(n)
+    if (m.raw === input.personaText) continue
+    out = out.slice(0, m.at) + input.personaText + out.slice(m.at + m.raw.length)
+    fixed += 1
   }
-  return { text: out, fixed, remaining: [...new Set(remaining)] }
+  /**
+   * 🔴 **남은 것** — 바꾸고 나서도 `self` 자리에 원문 나이가 있으면 그것이다.
+   *    제3자·조건 자리에 같은 숫자가 남은 것은 **정상**이므로 세지 않는다.
+   */
+  const remaining = [...new Set(
+    ageMentionsIn(out).filter((m) => m.role === 'self' && hit(m)).map((m) => m.raw),
+  )]
+  return { text: out, fixed, remaining }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -338,53 +348,58 @@ export function checkAgeMappingApplied(input: {
   sourceAges: readonly string[]
   exactAge: number | null
   effectiveAgeBand: string
+  /** 🔴 더 쓰지 않는다 — 공용 parser 가 이미 역할로 가른다 */
+  otherMarkers?: readonly string[]
   /**
    * 🔴 **1인칭 자리에서만 "우리 나이가 있어야 한다"** (2026-09-23).
-   *    관찰·질문 자리에서는 우리 나이를 주장하지 않는다 — 그때 이 조건을 걸면
-   *    정상 글이 `PERSONA_AGE_ABSENT` 로 막힌다. 원문 나이가 **1인칭으로** 남는 것은
-   *    자리와 무관하게 여전히 막는다.
+   *    관찰·질문 자리에서는 우리 나이를 주장하지 않는다.
    */
   requireSelfAge?: boolean
 }): MappingPostVerdict {
-  const selfAges = selfAgeNumbersIn(input.text)
+  void input.otherMarkers
   /**
-   * 🔴 **구간 원문이 남았으면 바꾸지 않은 것이다** (2026-09-23 마스터 P0).
-   *    숫자 어미가 없어 `selfAgeNumbersIn` 에 잡히지 않는다 — 표현으로 본다.
+   * 🔴 **raw substring 을 보지 않는다** (2026-09-23 마스터 지적).
+   *
+   *    앞판은 원문 표현이 글 어딘가에 글자로 있으면 실패로 봤다. 그래서
+   *      "저는 52살이고 친구는 40대 초반입니다"
+   *      "저는 52살이고 40대 초반부터 지원 대상입니다"
+   *    처럼 **올바르게 보존된** 제3자·조건 때문에 정상 글이 막혔다(실측).
+   *    🔴 `self` 역할에 원문 나이가 남았을 때만 실패다.
    */
-  const leftBand = input.sourceAges
-    .filter((a) => !/^\d{1,3}$/.test(a.trim()) && a.trim() !== '')
-    .filter((a) => a.trim() !== input.effectiveAgeBand && input.text.includes(a.trim()))
-  if (leftBand.length > 0) {
+  const mentions = ageMentionsIn(input.text)
+  const selfM = mentions.filter((m) => m.role === 'self')
+  const wanted = input.sourceAges
+    .map((a) => ageFactOf(a))
+    .filter((f): f is NonNullable<typeof f> => f !== null)
+  const isSource = (m: { span: { from: number; to: number } }): boolean =>
+    wanted.some((f) => f.span.from === m.span.from && f.span.to === m.span.to)
+  const isOurs = (m: { span: { from: number; to: number }; raw: string }): boolean =>
+    (input.exactAge !== null && m.span.from === input.exactAge && m.span.to === input.exactAge)
+    || m.raw === input.effectiveAgeBand
+
+  // 🔴 원문 나이가 **1인칭 자리**에 남았는가 — 우리 값과 같으면 이미 정합하다
+  const left = selfM.filter((m) => isSource(m) && !isOurs(m))
+  if (left.length > 0) {
     return {
       ok: false, code: 'SOURCE_AGE_REMAINS',
-      reason: `원문 화자 연령대가 남았다 — ${leftBand.join('·')}`,
+      reason: `원문 화자 나이가 1인칭으로 남았다 — ${left.map((m) => m.raw).join('·')}`,
     }
   }
-  const srcNums = input.sourceAges.map((a) => Number(a)).filter((n) => Number.isFinite(n))
-  /**
-   * 🔴 **원문 값이 우리 값과 같으면 이미 정합하다** (2026-09-23 보정).
-   *    앞판은 `sourceAges` 에 있는 숫자를 먼저 leftover 로 봤다. 그래서
-   *    *원문 47 · Persona 47* 처럼 **바꿀 것이 없는 정상 사례**가 실패했다.
-   *    우리 기대값과 다른 원문 숫자만 남은 것이다.
-   */
-  const left = selfAges.filter((n) => srcNums.includes(n) && n !== input.exactAge)
-  if (left.length > 0) {
-    return { ok: false, code: 'SOURCE_AGE_REMAINS', reason: `원문 화자 나이가 남았다 — ${left.join('·')}` }
-  }
-  const distinct = [...new Set(selfAges)]
+  // 🔴 1인칭 나이가 여럿이면 실패 (fail-closed) — 기존 계약 그대로다
+  const distinct = [...new Set(selfM.filter((m) => m.kind === 'exact').map((m) => m.span.from))]
   if (distinct.length > 1) {
     return { ok: false, code: 'CONFLICTING_SELF_AGE', reason: `1인칭 나이가 여럿이다 — ${distinct.join('·')}` }
   }
   if (input.requireSelfAge === false) {
     return { ok: true, note: '1인칭 자리가 아니다 — 우리 나이를 주장하지 않는다' }
   }
-  // 🔴 우리 값이 실제로 들어갔는가 — 숫자든 밴드 표현이든 하나는 있어야 한다
+  // 🔴 우리 값이 **1인칭으로** 들어갔는가 — 숫자든 밴드 표현이든 하나는 있어야 한다
   const hasExact = input.exactAge !== null && distinct.includes(input.exactAge)
-  const hasBand = input.text.includes(input.effectiveAgeBand)
+  const hasBand = selfM.some((m) => m.raw === input.effectiveAgeBand)
   if (!hasExact && !hasBand) {
     return {
       ok: false, code: 'PERSONA_AGE_ABSENT',
-      reason: `우리 쪽 나이(${input.exactAge ?? input.effectiveAgeBand})가 글에 없다`
+      reason: `우리 쪽 나이(${input.exactAge ?? input.effectiveAgeBand})가 1인칭으로 글에 없다`
         + ' — 원문 나이를 바꾸지 않고 통째로 뺐다',
     }
   }

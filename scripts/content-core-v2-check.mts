@@ -31,7 +31,7 @@ import {
 import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis, OTHER_MARKERS } from '../src/lib/persona-self-age'
 import { speakerRelativeAxisOf, parseSpeakerPlan, materialityFor } from '../src/lib/content-core/speaker'
 import {
-  expectedSelfFactsIn, selfAgeNumbersIn,
+  expectedSelfFactsIn, selfAgeNumbersIn, fixSourceSpeakerAge,
 } from '../src/lib/content-core/speaker-relative-facts'
 import { ageMentionsIn } from '../src/lib/persona-self-age'
 import { sourceAgeFact } from '../src/lib/content-core/load-bearing'
@@ -3243,6 +3243,86 @@ console.log('\n🔴 🔴 **원문 나이 = Persona 나이면 고칠 것이 없�
     post('아는 분이 44인데\n저는 47이거든요', ['44'], 47).ok === true)
 }
 
+console.log('\n🔴 🔴 **자동 변환과 후조건이 역할을 끝까지 쓴다 (마스터 지적 · 혼합 역할)**')
+{
+  /**
+   * 🔴 앞판은 `ageMentionsIn` 으로 역할을 만들어 놓고 **치환과 후조건에서 버렸다.**
+   *    전역 `split/join` 과 역할 없는 정규식이라 마스터 실측에서:
+   *      "친구는 40대 초반인데 저는 52살입니다"        → 친구 나이까지 52살로 훼손
+   *      "저는 40대 초반이고, 40대 초반부터 지원 대상"  → 지원 조건까지 변조
+   *      "제가 44살이고 44세부터 지원 대상입니다"       → exact 경로도 같은 결함
+   *    그리고 **올바르게 보존된** 제3자·조건 때문에 정상 글이 `SOURCE_AGE_REMAINS` 로 막혔다.
+   */
+  const fix = (text: string, sourceAges: string[], personaText: string) =>
+    fixSourceSpeakerAge({ text, sourceAges, personaText })
+  const post = (text: string, sourceAges: string[], exactAge: number, band: string) =>
+    checkAgeMappingApplied({ text, sourceAges, exactAge, effectiveAgeBand: band, requireSelfAge: true })
+  /** 🔴 실패 코드만 꺼낸다 — 통과면 빈 문자열이다 */
+  const postCode = (text: string, sourceAges: string[], exactAge: number, band: string): string => {
+    const v = post(text, sourceAges, exactAge, band)
+    return v.ok ? '' : v.code
+  }
+
+  /** 🔴 ① self exact 44→49 · eventCondition 44 는 그대로 */
+  const r1 = fix('제가 44살이고 44세부터 지원 대상입니다.', ['44'], '49살')
+  check('🔴 🔴 **① self exact 만 49살로 바뀌고 조건 44세는 그대로다**',
+    r1.text === '제가 49살이고 44세부터 지원 대상입니다.' && r1.fixed === 1, r1.text)
+
+  /** 🔴 ② self band 40대 초반→52 · thirdParty 40대 초반 은 그대로 */
+  const r2 = fix('저는 40대 초반이고 친구는 40대 초반입니다.', ['40대 초반'], '52살')
+  check('🔴 🔴 **② 내 구간만 52살로 바뀌고 친구 구간은 그대로다**',
+    r2.text === '저는 52살이고 친구는 40대 초반입니다.' && r2.fixed === 1, r2.text)
+  const r2b = fix('친구는 40대 초반인데 저는 52살입니다.', ['40대 초반'], '52살')
+  check('🔴 🔴 **② 제3자 나이만 있으면 아무것도 바꾸지 않는다 — 훼손 0**',
+    r2b.text === '친구는 40대 초반인데 저는 52살입니다.' && r2b.fixed === 0, r2b.text)
+
+  /** 🔴 ③ self band 40대 초반→52 · eventCondition 40대 초반 은 그대로 */
+  const r3 = fix('저는 40대 초반이고, 40대 초반부터 지원 대상입니다.', ['40대 초반'], '52살')
+  check('🔴 🔴 **③ 내 구간만 바뀌고 지원 조건 구간은 그대로다**',
+    r3.text === '저는 52살이고, 40대 초반부터 지원 대상입니다.' && r3.fixed === 1, r3.text)
+
+  /** 🔴 ④ 올바르게 보존된 제3자·조건 때문에 SOURCE_AGE_REMAINS 가 나면 안 된다 */
+  const p4a = post('저는 52살이고 친구는 40대 초반입니다.', ['40대 초반'], 52, '50대 초반')
+  const p4b = post('저는 52살이고 40대 초반부터 지원 대상입니다.', ['40대 초반'], 52, '50대 초반')
+  check('🔴 🔴 **④ 제3자 구간이 남아도 통과한다 — raw substring 을 보지 않는다**',
+    p4a.ok, JSON.stringify(p4a))
+  check('🔴 🔴 **④ 조건 구간이 남아도 통과한다**', p4b.ok, JSON.stringify(p4b))
+  check('🔴 🔴 **④ 1인칭에 원문 나이가 남으면 여전히 막는다**',
+    !post('저는 40대 초반이고 친구는 52살입니다.', ['40대 초반'], 52, '50대 초반').ok,
+    JSON.stringify(post('저는 40대 초반이고 친구는 52살입니다.', ['40대 초반'], 52, '50대 초반')))
+  check('🔴 🔴 **④ 1인칭 나이가 여럿이면 여전히 막는다 (기존 계약 유지)**',
+    postCode('저는 52살입니다. 저는 57살입니다.', ['40대 초반'], 52, '50대 초반')
+      === 'CONFLICTING_SELF_AGE',
+    JSON.stringify(post('저는 52살입니다. 저는 57살입니다.', ['40대 초반'], 52, '50대 초반')))
+
+  /** 🔴 ⑤ 제3자 나이만 있고 우리 나이가 없으면 기존대로 실패 */
+  check('🔴 🔴 **⑤ 우리 나이가 1인칭으로 없으면 기존대로 PERSONA_AGE_ABSENT**',
+    postCode('친구는 40대 초반입니다. 저는 잘 모르겠어요.', ['40대 초반'], 52, '50대 초반')
+      === 'PERSONA_AGE_ABSENT',
+    JSON.stringify(post('친구는 40대 초반입니다. 저는 잘 모르겠어요.', ['40대 초반'], 52, '50대 초반')))
+  check('🔴 🔴 **⑤ 새 HOLD 사유를 만들지 않았다 — 기존 세 코드뿐이다**', (() => {
+    const src = readFileSync('src/lib/content-core/speaker-relative-facts.ts', 'utf-8')
+    const codes = [...src.matchAll(/code: '([A-Z_]+)'/g)].map((m) => m[1]!)
+    return [...new Set(codes)].sort().join(',')
+      === 'CONFLICTING_SELF_AGE,NO_PERSONA_VALUE,PERSONA_AGE_ABSENT,SOURCE_AGE_REMAINS,UNKNOWN_AXIS'
+  })())
+
+  /** 🔴 ⑥ 원문 값 = 우리 값이면 손대지 않는다 */
+  const noop = fix('제가 49살입니다.', ['49'], '49살')
+  check('🔴 🔴 **⑥ 원문 나이와 우리 나이가 같으면 no-op — fixed 0**',
+    noop.text === '제가 49살입니다.' && noop.fixed === 0, `${noop.text} · fixed=${noop.fixed}`)
+
+  /** 🔴 ⑦ 전역 치환·역할 없는 정규식으로 되돌리면 이 검사가 깨진다 — 배선으로 확인 */
+  const srfSrc = readFileSync('src/lib/content-core/speaker-relative-facts.ts', 'utf-8')
+  check('🔴 🔴 **⑦ 전역 split/join 치환이 남아 있지 않다**',
+    !/\.split\(n\)\.join\(/.test(srfSrc) && !/out\.split\([^)]*\)\.join\(/.test(srfSrc))
+  check('🔴 🔴 **⑦ 치환은 파싱된 위치로 자른다 — 뒤에서부터 적용한다**',
+    /out\.slice\(0, m\.at\) \+ input\.personaText \+ out\.slice\(m\.at \+ m\.raw\.length\)/.test(srfSrc)
+    && /\.sort\(\(a, b\) => b\.at - a\.at\)/.test(srfSrc))
+  check('🔴 🔴 **⑦ 치환·후조건이 `self` 역할만 본다**',
+    (srfSrc.match(/m\.role === 'self'/g) ?? []).length >= 3)
+}
+
 console.log('\n🔴 🔴 **나이 전 경로 — exact 와 band 를 각각 끝까지 실행한다 (마스터 P0)**')
 {
   /**
@@ -3399,6 +3479,56 @@ console.log('\n🔴 🔴 **나이 전 경로 — exact 와 band 를 각각 끝�
     check('🔴 🔴 **band ④ 어미 없는 구간 표현도 바뀐다 — "40대 초반 여성" 이 남지 않는다**',
       bare.payload !== null && !bare.payload.body.includes('40대 초반'),
       `${bare.art.review.machineOutcome} · ${bare.art.draft?.body.split('\n')[0] ?? ''}`)
+  }
+
+  // ─────────── 혼합 역할 — 전체 경로에서 제3자·조건이 보존된다 ───────────
+  {
+    /**
+     * 🔴 마스터 요구 ⑦ — 한 글에 **내 나이 · 친구 나이 · 지원 조건**이 함께 있을 때
+     *    `runContentCore → pickV2 → adopted → candidate payload` 까지 가서
+     *    바뀐 것은 내 나이 하나뿐인지 본다.
+     */
+    const me = pickCard(52)
+    const T = '지원 대상 나이가 궁금해요'
+    // 🔴 원문을 길게 둔다 — 짧으면 초안이 조금만 겹쳐도 `copiedFromSource` 로 막혀
+    //    이 검사가 배선이 아니라 제 문장을 시험하게 된다
+    const B = '저는 40대 초반인데 친구는 60대 초반입니다. 둘이 같이 알아보는 중인데 '
+      + '들리는 말이 제각각이라 헷갈립니다. 40대 초반부터 지원 대상이라던데 어디서 확인하면 '
+      + '되는지, 서류는 무엇을 챙겨야 하는지 아시는 분 계실까요? 주변에 먼저 해 보신 분이 '
+      + '없어서 답답한 마음에 여쭤봅니다.'
+    const D = {
+      title: '지원 대상 나이를 아시는 분 계실까요',
+      body: '저는 40대 초반인데 친구는 60대 초반입니다.\n'
+        + '40대 초반부터 해당된다고 들었는데, 실제로 받아 보신 분 이야기가 궁금합니다.',
+    }
+    const mixed = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: {
+        decision: 'ok', personaCode: me.c.code, stance: 'SELF_EXPERIENCE',
+        selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+        speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+        protectedFacts: [],
+        speakerRelative: [
+          { axis: 'age', sourceText: '40대 초반', evidenceRef: 'head', materiality: 'incidental' },
+        ],
+      },
+      draft: D, band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **혼합 ① 전체 경로가 payload 까지 간다 — AUTO_ADOPT**',
+      mixed.pick?.decision === 'AUTO_ADOPT' && mixed.payload !== null,
+      `${mixed.art.review.machineOutcome} · ${mixed.art.review.machineReason}`)
+    check('🔴 🔴 **혼합 ② 내 나이만 바뀐다 — payload 에 "저는 52"**',
+      mixed.payload !== null && /저는 52/.test(mixed.payload.body),
+      mixed.payload?.body ?? '')
+    check('🔴 🔴 **혼합 ③ 친구 나이(60대 초반)가 그대로 남는다**',
+      mixed.payload !== null && mixed.payload.body.includes('친구는 60대 초반'),
+      mixed.payload?.body ?? '')
+    check('🔴 🔴 **혼합 ④ 지원 조건(40대 초반부터)이 그대로 남는다**',
+      mixed.payload !== null && mixed.payload.body.includes('40대 초반부터'),
+      mixed.payload?.body ?? '')
+    check('🔴 🔴 **혼합 ⑤ 1인칭 자리에는 원문 40대 초반이 남지 않는다**',
+      mixed.payload !== null && !/저는 40대 초반/.test(mixed.payload.body),
+      mixed.payload?.body ?? '')
   }
 
   // ─────────── load-bearing self band — 조건 "50대 초반" ───────────
