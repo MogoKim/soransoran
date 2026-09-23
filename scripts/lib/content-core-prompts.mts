@@ -10,7 +10,7 @@
  *    보내면 남의 글이 화자 선택에 섞인다.
  */
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
-import { planAxisMapping } from '../../src/lib/content-core/speaker-relative-facts'
+import { type AxisMapping } from '../../src/lib/content-core/speaker-relative-facts'
 import { CLAIM_FACT_LABEL } from '../../src/lib/content-core/source-facts'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { STANCE_LABEL } from '../../src/lib/content-core/speaker'
@@ -187,26 +187,17 @@ export function buildV2DraftSystemPrompt(input: {
   plan: SpeakerPlan
   voice: VoiceEvidence
   life: PersonaLifeContract
-  /** 🔴 그날 계산한 정확한 나이. 없으면 연령대까지만 쓴다 */
-  exactAge?: number | null
+  /**
+   * 🔴 **성공한 변환 계획만 받는다** (2026-09-23 fail-closed).
+   *    앞판은 여기서 `planAxisMapping` 을 부르고 `mapping.ok ? … : []` 로 넘겼다 —
+   *    실패해도 **빈 지시로 조용히 생성**됐고, 그러면 `protectedFacts` 에서 빠진
+   *    사실이 대체 없이 사라진다. 이제 **부르는 쪽(`runContentCore`)이 먼저 판정**하고,
+   *    성공했을 때만 그 결과를 여기로 넘긴다.
+   */
+  mappings: readonly AxisMapping[]
 }): string {
   const { plan, voice, life } = input
-  /**
-   * 🔴 **대체 지시를 실제로 만든다.** `planAxisMapping` 정본이 만든 문장을 그대로 쓴다 —
-   *    여기서 규칙을 다시 적지 않는다.
-   */
-  const mapping = planAxisMapping({
-    facts: (plan.speakerRelative ?? []).map((e) => ({
-      axis: e.axis, sourceText: e.sourceText, role: e.materiality,
-    })),
-    persona: {
-      exactAge: input.exactAge ?? null,
-      ageBand: life.ageBand, maritalStatus: life.maritalStatus,
-      childrenCount: life.childrenCount, parentCare: life.parentCare,
-      menopauseStatus: life.menopauseStatus, work: life.workStatus, region: life.region,
-    },
-  })
-  const replacements = mapping.ok ? mapping.mappings.map((m) => m.outputRule) : []
+  const replacements = input.mappings.map((m) => m.outputRule)
   return [
     '당신은 40대 중반~60대 중반 여성들이 모인 커뮤니티의 회원입니다.',
     '[원문]은 다른 커뮤니티에서 사람들이 실제로 반응한 글입니다.',

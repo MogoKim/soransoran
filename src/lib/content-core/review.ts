@@ -159,6 +159,16 @@ export const INCOMPLETE_CAUSES = [
    *       섞으면 정상 원천이 영구 제외된다 — `parseFailed` 가 그랬던 것과 같다.
    */
   'speakerSlotNarrowed',
+  /**
+   * 🔴 **화자 상대 사실을 우리 값으로 바꾸지 못했다** (2026-09-23).
+   *    같은 원천이라도 **다른 Persona** 면 바꿀 수 있으므로 결론이 아니다.
+   */
+  'personaTransformFailed',
+  /**
+   * 🔴 **그 사실이 글의 결론을 바꾼다** (지원 자격·의료·임신 …).
+   *    숫자만 바꿀 수 없다 — 맞는 Persona·stance 로 **다시 계획**해야 한다.
+   */
+  'loadBearingMismatch',
   // 결론이다 — 같은 입력·같은 계약이면 또 같다
   'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
   'wiringBroken', 'deterministicFailed',
@@ -169,6 +179,11 @@ export const RETRYABLE_CAUSES = [
   'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
   // 🔴 다음 회차에 다른 묶음을 받으면 달라진다
   'speakerSlotNarrowed',
+  /**
+   * 🔴 **다른 Persona 면 될 수 있다** (2026-09-23). 앞판은 `complete` 인 HOLD 를
+   *    **전부** 결론으로 봤다 — 자동으로 고칠 수 있는 불일치 하나가 원천을 영구히 태웠다.
+   */
+  'personaTransformFailed', 'loadBearingMismatch',
 ] as const satisfies readonly IncompleteCause[]
 
 /**
@@ -191,6 +206,8 @@ export const NOT_RUN_CAUSES = [
   'wiringBroken', 'deterministicFailed',
   // 🔴 좁힌 묶음 탓 — 결론이 아니다
   'speakerSlotNarrowed',
+  // 🔴 화자 상대 사실 변환을 묻기 전에 멈춘 것 — 다른 Persona 면 될 수 있다
+  'personaTransformFailed', 'loadBearingMismatch',
 ] as const satisfies readonly IncompleteCause[]
 
 export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> = {
@@ -205,6 +222,8 @@ export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> =
   speakerSlotNarrowed: '이번 묶음에 맞는 사람이 없었다 — 다음 회차에 다시 본다',
   voiceUnready: '말투 근거가 서지 않았다',
   wiringBroken: '요청 배선이 어긋났다',
+  personaTransformFailed: '🔴 원문 화자의 사실을 우리 Persona 값으로 바꾸지 못했다 — 다른 사람이면 될 수 있다',
+  loadBearingMismatch: '🔴 그 사실이 글의 결론을 바꾼다 — 맞는 사람·자리로 다시 계획해야 한다',
   deterministicFailed: '확정 가능한 결함이 있다',
 }
 

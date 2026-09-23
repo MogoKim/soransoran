@@ -534,10 +534,16 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
    * 🔴 여섯 번째가 늘었다 (2026-09-22) — `speakerSlotNarrowed`.
    *    화자 여력 계획이 원천마다 후보를 나누면서 "이번 묶음에 맞는 사람이 없었다" 가
    *    생겼다. 그것은 결론이 아니다 — 다음 회차에 다른 묶음을 받으면 쓸 수 있다.
+   *
+   * 🔴 일곱·여덟 번째 (2026-09-23) — `personaTransformFailed` · `loadBearingMismatch`.
+   *    원문 화자의 사실을 우리 Persona 값으로 **바꾸지 못한** 실패다.
+   *    앞판은 `complete` 인 HOLD 를 전부 결론으로 봐서, **다른 사람이면 될 수 있는**
+   *    불일치 하나가 원천을 영구히 태웠다.
    */
-  check('🔴 🔴 **재시도 원인 여섯 가지**',
+  check('🔴 🔴 **재시도 원인 여덟 가지**',
     RETRYABLE_CAUSES.join(',')
-      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,speakerSlotNarrowed',
+      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,speakerSlotNarrowed'
+        + ',personaTransformFailed,loadBearingMismatch',
     RETRYABLE_CAUSES.join(','))
   check('🔴 🔴 **좁힌 묶음 탓은 다시 보고, 전체 자격 미달은 결론이다**',
     (RETRYABLE_CAUSES as readonly string[]).includes('speakerSlotNarrowed')
@@ -613,11 +619,18 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
      */
     const picked = [...src.matchAll(/'(speakerSlotNarrowed|speakerUnqualified)' as const/g)]
       .map((m) => m[1]!)
+    /**
+     * 🔴 화자 상대 사실 변환 실패도 **값 하나를 골라** 넘긴다 (2026-09-23) —
+     *    `LOAD_BEARING` 이면 `loadBearingMismatch`, 아니면 `personaTransformFailed`.
+     *    같은 이유로 위 정규식에 잡히지 않으므로 여기서 함께 센다.
+     */
+    const transform = [...src.matchAll(/'(loadBearingMismatch|personaTransformFailed)' as const/g)]
+      .map((m) => m[1]!)
     // 🔴 `notRunFrom` 은 앞 단계 완주 판정(`completionOf`)의 원인을 그대로 물려받는다
     const inherited = /notRunFrom\(/.test(src)
       ? [...src.matchAll(/reason: '([a-zA-Z]+)', cause: '([a-zA-Z]+)'/g)].map((m) => m[2]!)
       : []
-    const emitted = new Set([...direct, ...inherited, ...picked])
+    const emitted = new Set([...direct, ...inherited, ...picked, ...transform])
     const listed = new Set<string>(NOT_RUN_CAUSES)
     return emitted.size > 0 && [...emitted].every((c) => listed.has(c))
       && [...listed].every((c) => emitted.has(c))

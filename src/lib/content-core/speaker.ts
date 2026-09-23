@@ -606,9 +606,14 @@ export function speakerRelativeAxisOf(input: {
      */
     if (AGE_LIKE.test(clause) && clause.includes(input.text)
       && !OTHER_MARKERS.some((w) => clause.includes(w))) return 'age'
-    // 🔴 나이 말고 다른 축도 **같은 계약**으로 본다 — 축마다 패치하지 않는다
-    const rel = relationAxisOf(clause, input.text)
-    if (rel !== null) return rel
+    /**
+     * 🔴 **관계·직업·지역·갱년기는 아직 켜지 않는다** (2026-09-23 마스터 판정).
+     *
+     *    걷어내기만 하고 **완전한 변환과 검증이 없으면 내용이 사라진다.**
+     *    공통 타입(`SpeakerRelativeAxis`)은 두되, 미지원 축은 활성화하지 않는다.
+     *    `relationAxisOf` 는 그 축들을 켤 때 쓸 자리로 남겨 둔다 — 지금은 부르지 않는다.
+     */
+    void relationAxisOf
   }
   return null
 }

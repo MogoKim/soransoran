@@ -27,6 +27,13 @@ import {
 } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { exactAgeOf } from '../../src/lib/persona-birth-anchor'
+import { planAxisMapping, fixSourceSpeakerAge } from '../../src/lib/content-core/speaker-relative-facts'
+import { OTHER_MARKERS } from '../../src/lib/persona-self-age'
+
+/** 🔴 KST 날짜 한 줄 — 주입된 시각에서만 만든다 */
+function kstDateKey(at: Date): string {
+  return new Date(at.getTime() + 9 * 3600e3).toISOString().slice(0, 10)
+}
 import {
   buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
 } from '../../src/lib/content-core/voice-evidence'
@@ -109,7 +116,12 @@ export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> &
 export function personaPoolIdentity(cands: readonly PersonaInput[]): string {
   return [...cands]
     .sort((a, b) => a.code.localeCompare(b.code))
-    .map((c) => `${lifeContractIdentity(c)}\u0001voice=${c.voiceTokens.join('\u0002')}`
+    /**
+     * 🔴 **`birthDate` 도 넣는다** (2026-09-23). 그 값이 프롬프트의 나이 지시를 바꾸므로
+     *    계약에 들어가야 한다. 빠지면 생일을 고쳐도 **옛 artifact 가 그대로 재사용**된다.
+     */
+    .map((c) => `${lifeContractIdentity(c)}\u0001birth=${c.birthDate ?? '∅'}`
+      + `\u0001voice=${c.voiceTokens.join('\u0002')}`
       + `\u0001bundle=${c.bundleDigest}`)
     .join('\u0003')
 }
@@ -396,15 +408,42 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    조용히 빠진다 — 두 요청 모두 보내기 전에 확인하고, 하나라도 비면 안 보낸다.
    */
   /**
-   * 🔴 **그날의 정확한 나이를 계산해 넘긴다** (2026-09-23).
-   *    없으면 `null` 이고, 프롬프트가 연령대까지만 쓰게 한다 — 숫자를 지어내지 않는다.
+   * 🔴 **주입된 시계를 쓴다** (2026-09-23). `Date.now()` 를 부르면 같은 입력이
+   *    실행 시각에 따라 다른 나이를 내고, 과거 재현도 되지 않는다.
    */
-  const todayKst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)
+  const todayKst = kstDateKey(input.now)
   const ageV = exactAgeOf({
     birthDate: persona.birthDate ?? null, ageBand: persona.ageBand, onKstDate: todayKst,
   })
+
+  /**
+   * 🔴 **변환 계획을 먼저 판정한다** (2026-09-23 fail-closed).
+   *
+   *    `protectedFacts` 에서 화자 상대 사실을 빼 놓고 **대체 지시 없이** 생성하면
+   *    그 내용이 사라진다. 그래서 여기서 먼저 묻고, 실패하면 **구조화된 이유**로 멈춘다 —
+   *    문자열을 파싱해 상태를 정하지 않는다.
+   */
+  const mapping = planAxisMapping({
+    facts: plan.speakerRelative.map((e) => ({
+      axis: e.axis, sourceText: e.sourceText, role: e.materiality,
+    })),
+    persona: {
+      exactAge: ageV.ok ? ageV.age : null,
+      ageBand: persona.ageBand, maritalStatus: persona.maritalStatus,
+      childrenCount: persona.childrenCount, parentCare: persona.parentCare,
+      menopauseStatus: persona.menopauseStatus, work: persona.workStatus, region: persona.region,
+    },
+  })
+  if (!mapping.ok) {
+    // 🔴 코드로 분기한다 — 문자열을 파싱해 상태를 정하지 않는다
+    const cause = mapping.code === 'LOAD_BEARING'
+      ? 'loadBearingMismatch' as const : 'personaTransformFailed' as const
+    return blank(plan, dropped, null, null, noDet, null, notRun(cause),
+      'hold', `${mapping.axis}: ${mapping.reason}`)
+  }
+
   const draftSystem = buildV2DraftSystemPrompt({
-    plan, voice, life: persona, exactAge: ageV.ok ? ageV.age : null,
+    plan, voice, life: persona, mappings: mapping.mappings,
   })
   const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona })
   const voiceless = [
@@ -417,7 +456,7 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
   const dRes = await ask('draftGen', draftSystem, buildV2DraftPayload({ packet }))
   const dC = completionOf(dRes)
-  const draft = dC.complete ? parseDraft(dRes.rawText) : null
+  let draft = dC.complete ? parseDraft(dRes.rawText) : null
   if (draft === null) {
     const why = dC.complete ? '초안을 읽지 못했다' : `초안 생성을 완주하지 못했다 (${INCOMPLETE_LABEL[dC.reason ?? 'noResponse']})`
     return blank(plan, dropped, voice, null,
@@ -425,6 +464,28 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       // 🔴 읽지 못한 답은 **이번 답**이 잘못된 것이다 — 결론이 아니라 재시도다
       null, dC.complete ? notRun('parseFailed') : notRunFrom(dC), 'hold', why)
   }
+
+  /**
+   * 🔴 **자동 보정** (2026-09-23). 모델이 "바꿔 쓰라" 를 어기고 원문 나이를 그대로
+   *    베낀 경우, 곧바로 HOLD 로 태우지 않고 **결정적으로 고친다.**
+   *    🔴 유료 호출을 더 쓰지 않는다 — 문자열 치환이다.
+   *    🔴 고친 뒤 아래 deterministic·semantic 검사를 **그대로 다시 지난다.**
+   */
+  const ageMap = mapping.mappings.find((m) => m.axis === 'age')
+  const fixed = ageMap === undefined || ageMap.personaText === null
+    ? { title: draft.title, body: draft.body, fixed: 0, remaining: [] as string[] }
+    : (() => {
+      const t = fixSourceSpeakerAge({
+        text: draft.title, sourceAges: [ageMap.sourceText],
+        personaText: ageMap.personaText, otherMarkers: OTHER_MARKERS,
+      })
+      const b = fixSourceSpeakerAge({
+        text: draft.body, sourceAges: [ageMap.sourceText],
+        personaText: ageMap.personaText, otherMarkers: OTHER_MARKERS,
+      })
+      return { title: t.text, body: b.text, fixed: t.fixed + b.fixed, remaining: [...t.remaining, ...b.remaining] }
+    })()
+  if (fixed.fixed > 0) draft = { ...draft, title: fixed.title, body: fixed.body }
 
   // ── ④ deterministic — 확정 가능한 것만 ──
   const draftText = `${draft.title}\n${draft.body}`
