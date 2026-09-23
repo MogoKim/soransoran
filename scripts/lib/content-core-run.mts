@@ -30,11 +30,14 @@ import { materializePersonaAt } from '../../src/lib/persona-birth-anchor'
 import {
   planAxisMapping, fixSourceSpeakerAge, checkAgeMappingApplied,
 } from '../../src/lib/content-core/speaker-relative-facts'
-import { OTHER_MARKERS } from '../../src/lib/persona-self-age'
+import { OTHER_MARKERS, readSelfAgeClaim } from '../../src/lib/persona-self-age'
 /**
  * 🔴 **load-bearing 을 한 번에 판정한다** (2026-09-23). 사람을 차례로 태우지 않는다.
  */
-import { resolveLoadBearing, type LoadBearingCandidate } from '../../src/lib/content-core/load-bearing'
+import {
+  resolveLoadBearing, loadBearingRequirements, checkLoadBearingPreserved,
+  type LoadBearingCandidate,
+} from '../../src/lib/content-core/load-bearing'
 import {
   selfForbiddenBy, priorFailureLines, type PriorPlanFailure,
 } from '../../src/lib/content-core/replan-input'
@@ -311,6 +314,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       universalReason: plan?.universalReason ?? '', rejection: plan?.rejection ?? null,
       protectedFacts: plan?.protectedFacts ?? [], closingIntent: plan?.closingIntent ?? null,
       contentRoles: plan?.contentRoles ?? [], reason: plan?.reason ?? reason,
+      // 🔴 다음 회차를 강제하는 값 — 문구가 아니라 목록이다
+      suggestedPersonaCodes: [...suggested],
     },
     voice: { provenance: voice?.provenance ?? null, blindCheckPoints: voice?.blindCheckPoints ?? [] },
     draft,
@@ -338,6 +343,11 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   })
 
   const noDet: DeterministicResult = { pass: true, failures: [] }
+  /**
+   * 🔴 **추천 후보는 artifact 에 값으로 남는다** (2026-09-23 마스터 P0-3).
+   *    `blank()` 가 이 변수를 읽는다 — 실패 경로마다 따로 넘기면 한 곳이 빠진다.
+   */
+  let suggested: readonly string[] = []
   if (budgetProblems.length > 0) {
     return blank(null, [], null, null,
       { pass: false, failures: [{ code: 'schemaInvalid', detail: budgetProblems.join(' · ') }] },
@@ -518,6 +528,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       ? 'meaningUnpreservable' as const
       : lb.code === 'PERSONA_MISMATCH' ? 'loadBearingMismatch' as const
         : 'loadBearingSelfImpossible' as const
+    // 🔴 문구뿐 아니라 **값으로도** 남긴다 — 다음 회차가 이 목록만 쓴다
+    if (lb.retry) suggested = lb.suggest
     const suggest = lb.retry && lb.suggest.length > 0 ? ` (만족하는 후보 ${lb.suggest.join(' ')})` : ''
     return blank(plan, dropped, voice, null, noDet, null, notRun(cause),
       'hold', `${lb.code}: ${lb.reason}${suggest}`)
@@ -543,8 +555,18 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       'hold', `${mapping.axis}: ${mapping.reason}`)
   }
 
+  /**
+   * 🔴 **지켜야 하는 조건을 값으로 만든다** (2026-09-23 마스터 P0-2).
+   *    초안 지시문과 아래 결정적 후조건이 **같은 값**을 쓴다 — 두 벌로 두면 한쪽이 낡는다.
+   */
+  const keepRules = loadBearingRequirements({
+    facts: plan.speakerRelative
+      .filter((e) => e.materiality === 'loadBearing')
+      .map((e) => ({ axis: e.axis, sourceText: e.sourceText })),
+    stance: plan.stance,
+  })
   const draftSystem = buildV2DraftSystemPrompt({
-    plan, voice, life: persona, mappings: mapping.mappings,
+    plan, voice, life: persona, mappings: mapping.mappings, keep: keepRules,
   })
   const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona })
   const voiceless = [
@@ -607,6 +629,20 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   // ── ④ deterministic — 확정 가능한 것만 ──
   const draftText = `${draft.title}\n${draft.body}`
   const failures: DeterministicFailure[] = []
+  /**
+   * 🔴 **결론을 만드는 조건이 최종 글에 남았는가** (2026-09-23 마스터 P0-2).
+   *
+   *    원문 자기 나이는 `protectedFacts` 에서 이미 걷어내졌고 `planAxisMapping` 은
+   *    load-bearing 을 건너뛴다 — 그래서 초안이 그 조건을 **통째로 지워도** 아무도
+   *    막지 못했다. 🔴 의미 검수가 `clean` 이라 답해도 여기서 막는다.
+   *    🔴 결정적 단계이므로 **유료 검수 요청 앞**이다 — 호출이 늘지 않는다.
+   */
+  const kept = checkLoadBearingPreserved({
+    text: draftText, requirements: keepRules,
+    // 🔴 정본 하나를 쓴다 — 전언·명사 수식을 이미 가른다
+    selfClaim: readSelfAgeClaim(draftText)?.span ?? null,
+  })
+  if (!kept.ok) failures.push({ code: 'loadBearingLost', detail: `${kept.code}: ${kept.reason}` })
   if (isPersonalInfo(draftText)) failures.push({ code: 'personalInfo', detail: '개인정보 표식' })
   if (hasBannedWord(draftText)) failures.push({ code: 'bannedWord', detail: '금지 낱말' })
   const copy = judgeCopy(measureOriginality(draftText, evidenceText(packet)))

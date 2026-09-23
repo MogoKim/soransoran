@@ -11,6 +11,7 @@
  */
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
 import { type AxisMapping } from '../../src/lib/content-core/speaker-relative-facts'
+import type { LoadBearingRequirement } from '../../src/lib/content-core/load-bearing'
 import { CLAIM_FACT_LABEL } from '../../src/lib/content-core/source-facts'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { STANCE_LABEL } from '../../src/lib/content-core/speaker'
@@ -232,9 +233,15 @@ export function buildV2DraftSystemPrompt(input: {
    *    성공했을 때만 그 결과를 여기로 넘긴다.
    */
   mappings: readonly AxisMapping[]
+  /**
+   * 🔴 **바꾸지 말고 지켜야 하는 조건** (2026-09-23 마스터 P0-2).
+   *    `mappings`(바꿔라)와 **섞지 않는다** — 반대 지시다.
+   */
+  keep?: readonly LoadBearingRequirement[]
 }): string {
   const { plan, voice, life } = input
   const replacements = input.mappings.map((m) => m.outputRule)
+  const keeps = (input.keep ?? []).map((k) => k.outputRule)
   return [
     '당신은 40대 중반~60대 중반 여성들이 모인 커뮤니티의 회원입니다.',
     '[원문]은 다른 커뮤니티에서 사람들이 실제로 반응한 글입니다.',
@@ -255,6 +262,14 @@ export function buildV2DraftSystemPrompt(input: {
         ...replacements.map((r) => `- ${r}`),
         '- 🔴 위 값을 **빼지 말고 바꿉니다.** 그 자리를 비우면 글이 어색해집니다.',
         '- 🔴 원문에 없던 사실을 **새로 더하지 않습니다.**']
+      : []),
+    /**
+     * 🔴 **결론을 만드는 조건은 반대로 지킵니다** (2026-09-23).
+     *    바꾸면 글이 성립하지 않습니다 — 위 "바꿔 씁니다" 와 **다른 목록**입니다.
+     */
+    ...(keeps.length > 0
+      ? ['', '## 🔴 이 값은 **바꾸지 말고 지킵니다** (바꾸면 글이 성립하지 않습니다)',
+        ...keeps.map((r) => `- ${r}`)]
       : []),
     ...(plan.closingIntent === 'ask'
       ? ['- 원문은 묻고 끝납니다. 그 물음이 살아 있어야 합니다.']

@@ -272,6 +272,43 @@ export function selfAgeNumbersIn(text: string, otherMarkers: readonly string[]):
 }
 
 /**
+ * 🔴 **원문에서 화자 자신의 나이를 코드가 먼저 찾는다** (2026-09-23 마스터 P0-1)
+ *
+ *   앞판은 planner 가 `protectedFacts` 에 적어 준 것만 훑었다. 모델이 원문의
+ *   "낼 44" 를 `protectedFacts` 와 `speakerRelative` **양쪽에서 빠뜨리면**
+ *   누락 자체가 발견되지 않았다 — 그러면 원문 화자의 나이가 그대로 남은 글이
+ *   아무 경고 없이 발행 후보가 된다.
+ *
+ * 🔴 **정규식을 새로 만들지 않는다.** 정본 `selfAgeNumbersIn` 하나를 그대로 쓴다 —
+ *    제3자 절 제외 · 퍼센트(80퍼) · 기간(3일) · 연도(2026년) 오탐 제외가 거기 들어 있다.
+ * 🔴 **나이 축만이다.** 혼인·자녀·직업·지역·갱년기는 이 판에서 활성화하지 않는다.
+ */
+export type ExpectedSelfFact = {
+  axis: SpeakerRelativeAxis
+  /** 🔴 planner 가 적어야 하는 그 값 — 숫자 문자열이다 */
+  sourceText: string
+  /** 그 값이 나온 자리 */
+  evidenceRef: string
+}
+
+export function expectedSelfFactsIn(
+  spans: readonly { kind: string; text: string }[],
+  otherMarkers: readonly string[],
+): ExpectedSelfFact[] {
+  const out: ExpectedSelfFact[] = []
+  const seen = new Set<string>()
+  for (const sp of spans) {
+    for (const n of selfAgeNumbersIn(sp.text, otherMarkers)) {
+      const key = `${sp.kind}\u0001${n}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ axis: 'age', sourceText: String(n), evidenceRef: sp.kind })
+    }
+  }
+  return out
+}
+
+/**
  * 🔴 **age mapping 이 이행됐는지 확인한다.**
  *    · 원문 화자 나이가 남아 있으면 실패
  *    · 우리 나이(또는 허용된 밴드 표현)가 **없으면** 실패 — 통째로 뺀 경우다

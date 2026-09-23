@@ -24,6 +24,11 @@ export const REVIEW_VERSION = 'review-v7'
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
   'selfAgeConflict', 'protectedFactMissing',
+  /**
+   * 🔴 **결론을 만드는 조건이 최종 글에서 사라지거나 뒤바뀌었다** (2026-09-23).
+   *    의미 검수가 `clean` 이라 답해도 이 결함은 그 답으로 드러나지 않는다.
+   */
+  'loadBearingLost',
 ] as const
 export type DeterministicCode = (typeof DETERMINISTIC_CODES)[number]
 
@@ -34,6 +39,7 @@ export const DETERMINISTIC_LABEL: Readonly<Record<DeterministicCode, string>> = 
   schemaInvalid: '형식이 맞지 않는다',
   selfAgeConflict: '글쓴이 나이와 어긋난다',
   protectedFactMissing: '글자 그대로 지켜야 할 사실이 사라졌다',
+  loadBearingLost: '🔴 글의 결론을 만드는 조건이 사라지거나 뒤바뀌었다',
 }
 
 export type DeterministicFailure = { code: DeterministicCode; detail: string }

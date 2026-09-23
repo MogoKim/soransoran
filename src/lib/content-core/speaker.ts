@@ -41,7 +41,9 @@ import {
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
 import { readSelfAgeClaim, OTHER_MARKERS } from '../persona-self-age'
-import { AXIS_LABEL, type SpeakerRelativeAxis, type FactRole } from './speaker-relative-facts'
+import {
+  AXIS_LABEL, expectedSelfFactsIn, type SpeakerRelativeAxis, type FactRole,
+} from './speaker-relative-facts'
 
 /**
  * 🔴 계획이 싣는 한 줄 — **무엇을 무엇으로 바꾸는가**.
@@ -500,6 +502,36 @@ export function parseSpeakerPlan(
       continue
     }
     facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
+  }
+
+  /**
+   * 🔴 **코드가 먼저 찾은 것과 대조한다** (2026-09-23 마스터 P0-1).
+   *
+   *    위 반복은 planner 가 `protectedFacts` 에 적어 준 것만 훑는다. 모델이 원문의
+   *    자기 나이를 **양쪽에서 빠뜨리면** 누락 자체가 발견되지 않았다.
+   *    🔴 정본 parser 가 원문 span 에서 직접 산출한 목록을 기준으로 삼는다.
+   */
+  const expected = expectedSelfFactsIn(spans, OTHER_MARKERS)
+  for (const e of expected) {
+    const already = speakerRelative.some(
+      (x) => x.sourceText === e.sourceText && x.evidenceRef === e.evidenceRef,
+    )
+    if (already) continue
+    const role = materialityFor(e.sourceText, e.evidenceRef as EvidenceRef, claimed)
+    if (role === null) {
+      problems.push(MATERIALITY_MISSING
+        + ` — 원문에 화자 자신의 ${AXIS_LABEL[e.axis]} "${e.sourceText}"(${e.evidenceRef}) 가 있는데`
+        + ' 계획이 protectedFacts·speakerRelative 어디에도 적지 않았다')
+      continue
+    }
+    /**
+     * 🔴 planner 가 `speakerRelative` 로만 적어 낸 경우다 — 그래도 **변환 대상**이다.
+     *    여기서 싣지 않으면 그 나이가 대체 없이 초안으로 흘러간다.
+     */
+    speakerRelative.push({
+      axis: e.axis, sourceText: e.sourceText, sourceRole: 'self',
+      evidenceRef: e.evidenceRef as EvidenceRef, materiality: role,
+    })
   }
 
   const roles: ContentRole[] = []

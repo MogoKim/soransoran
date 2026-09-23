@@ -136,6 +136,11 @@ export type PriorOutcome = {
    *    **같은 1인칭 계획**을 또 세운다 — 자리를 바꿔야 하는 실패가 있다.
    */
   failedStance?: string | null
+  /**
+   * 🔴 **다음 회차가 반드시 써야 하는 후보** (2026-09-23 마스터 P0-3).
+   *    비면 제한이 없다는 뜻이다 — "아무나" 가 아니라 "이번엔 제한이 없다" 다.
+   */
+  suggestedPersonaCodes?: readonly string[]
   /** 🔴 왜 실패했나 — 코드로 분기한다. 문자열을 파싱하지 않는다 */
   failedCause?: string | null
   /**
@@ -182,6 +187,8 @@ export type PriorArtifactRow = {
   personaCode?: string
   /** 🔴 그 회차가 고른 자리 — 자리를 바꿔야 하는 실패가 있다 */
   stance?: string
+  /** 🔴 그 회차가 지목한 후보 — 다음 회차를 강제한다 */
+  suggestedPersonaCodes?: readonly string[]
   /** 🔴 실패 사유 코드 */
   cause?: string
 }
@@ -279,6 +286,8 @@ export function artifactOutcome(
     sourceArticleId: id, atMs, stage: 'draft', state,
     failedPersonaCode: state === 'retryable' ? (S(a.personaCode) || null) : null,
     failedStance: state === 'retryable' ? (S(a.stance) || null) : null,
+    suggestedPersonaCodes: state === 'retryable'
+      ? (a.suggestedPersonaCodes ?? []).map((x) => S(x)).filter((x) => x !== '') : [],
     failedCause: state === 'retryable' ? (S(a.cause) || null) : null,
   }
 }
@@ -331,6 +340,10 @@ export function artifactRecordOutcome(
      */
     personaCode: S((raw.plan as Record<string, unknown> | undefined)?.personaCode),
     stance: S((raw.plan as Record<string, unknown> | undefined)?.stance),
+    suggestedPersonaCodes: (() => {
+      const v = (raw.plan as Record<string, unknown> | undefined)?.suggestedPersonaCodes
+      return Array.isArray(v) ? v.map((x) => S(x)).filter((x) => x !== '') : []
+    })(),
     cause: S(readCause(review)),
   }, { ...base, sourceInputHash: hash }, artifactVersion)
 }

@@ -26,6 +26,7 @@ export function attemptsForSource(
   outcomes: readonly PriorOutcome[], sourceArticleId: string,
 ): {
   failedPersonaCode?: string | null; failedStance?: string | null; failedCause?: string | null
+  suggestedPersonaCodes?: readonly string[]
 }[] {
   return outcomes
     .filter((o) => o.sourceArticleId === sourceArticleId && o.stage === 'draft')
@@ -34,6 +35,7 @@ export function attemptsForSource(
       failedPersonaCode: o.failedPersonaCode,
       failedStance: o.failedStance,
       failedCause: o.failedCause,
+      suggestedPersonaCodes: o.suggestedPersonaCodes ?? [],
     }))
 }
 
@@ -46,7 +48,11 @@ export type PersonaPick<T extends PersonaCoded = PersonaCoded> =
      */
     priorFailures: PriorPlanFailure[]
   }
-  | { ok: false; code: 'EXHAUSTED' | 'ATTEMPT_CAP' | 'CONCLUDED'; reason: string; excluded: string[] }
+  | {
+    ok: false
+    code: 'EXHAUSTED' | 'ATTEMPT_CAP' | 'CONCLUDED' | 'SUGGESTED_UNAVAILABLE'
+    reason: string; excluded: string[]
+  }
 
 /**
  * 🔴 **이번 시도에 보낼 화자 묶음.**
@@ -83,8 +89,28 @@ export function personasForAttempt<T extends PersonaCoded>(input: {
     attempts, eligible: input.slotCodes, attemptMax: input.attemptMax,
   })
   if (!plan.ok) return plan
+  /**
+   * 🔴 **지난 회차가 지목한 후보가 있으면 그 안에서만 고른다** (2026-09-23 마스터 P0-3).
+   *
+   *    앞판은 추천이 사람이 읽는 문구에만 있었다 — 다음 회차가 정렬 순서대로
+   *    **또 다른 불일치 Persona** 를 골랐다. 지목이 있으면 그것이 곧 후보 집합이다.
+   *    🔴 지목한 사람이 더 이상 적격하지 않으면 **조용히 전체로 돌아가지 않는다.**
+   */
+  const lastSuggest = [...attempts].reverse()
+    .map((a) => a.suggestedPersonaCodes ?? [])
+    .find((x) => x.length > 0) ?? []
+  const allowed = lastSuggest.length === 0
+    ? input.slotCodes
+    : input.slotCodes.filter((c) => lastSuggest.includes(c))
+  if (lastSuggest.length > 0 && allowed.length === 0) {
+    return {
+      ok: false, code: 'SUGGESTED_UNAVAILABLE', excluded: plan.excluded,
+      reason: `지목된 후보 ${lastSuggest.join(' ')} 가 이번 묶음에 없다`
+        + ' — 조건을 만족하지 않는 사람으로 대체하지 않는다',
+    }
+  }
   const personas = input.candidates.filter(
-    (c) => input.slotCodes.includes(c.code) && !plan.excluded.includes(c.code),
+    (c) => allowed.includes(c.code) && !plan.excluded.includes(c.code),
   )
   /**
    * 🔴 **묶음이 비면 만들지 않는다.** `planReplan` 은 코드 목록만 보고 남은 사람이

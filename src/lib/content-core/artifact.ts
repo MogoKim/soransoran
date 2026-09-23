@@ -105,6 +105,13 @@ export type HumanReviewArtifact = {
     closingIntent: ClosingIntent | null
     contentRoles: ContentRole[]
     reason: string
+    /**
+     * 🔴 **다음 회차가 반드시 써야 하는 후보** (2026-09-23 마스터 P0-3).
+     *    앞판은 `resolveLoadBearing` 의 추천이 **사람이 읽는 문구에만** 들어갔다 —
+     *    그래서 다음 회차가 또 다른 불일치 Persona 를 고를 수 있었다.
+     *    🔴 값으로 남겨야 다음 회차가 강제된다. 빈 배열은 "추천 없음" 이다.
+     */
+    suggestedPersonaCodes: string[]
   }
 
   voice: {

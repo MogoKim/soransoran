@@ -1275,6 +1275,92 @@ console.log('\n㉔ 🔴 🔴 후보 봉투 — 실제 writer 가 적은 파일�
     runnerSrc.split('\n').filter((l) => l.includes('candidateType')).join(' | '))
 }
 
+// ─────────────────────────────────────────────────────────
+console.log('\n㉕ 🔴 🔴 신선도 merge — 빈 값이 아는 값을 지우지 않는다 (마스터 P0-4)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 실측 결함(2026-09-23): `.raw-detail.jsonl` 에는 원문 쪽 세 시각이 **아예 없는데**
+   *    같은 원천이 두 파일에 다 있어서(운영 1321건) 나중에 읽은 raw 가 앞서 읽은 시각을
+   *    **빈 문자열로 지웠다.** 실제로 `auto-draft-20260922-131506.candidates.json` 이
+   *    세 칸을 비운 채 나갔다.
+   *
+   * 🔴 여기서는 **실제 러너를 돌려 산출 파일**로 확인한다. 세 파일을 같은 원천에 겹쳐 둔다:
+   *    ① 오래된 detail — 유효한 시각
+   *    ② 더 최신 detail — **다른** 유효한 시각
+   *    ③ raw-detail — 빈 시각
+   *    결과는 **가장 최신의 비어 있지 않은 값**이어야 한다.
+   */
+  const tag = '20260922-fresh'
+  const w = makeWorld({ speakerLoad: 'fresh', speakerLoadRunId: tag })
+  const rel = (p: string): string => p.slice(w.root.length + 1)
+  const ID = 'fr-0'
+  const OLD = '2026-09-10T00:00:00.000Z'
+  const NEW_T = '2026-09-18T00:00:00.000Z'
+  const row = (o: Record<string, unknown>): string => JSON.stringify({
+    sourceArticleId: ID, sourceSite: 'navercafe:wgang',
+    axis: SEED_AXIS, lane: PROVEN_LANE, access: 'ok', accessStatus: 'ok',
+    safetyVerdict: 'pass', safetyReasons: '',
+    title: '우리 나이 이야기 fr-0',
+    bodyHead: 'fr-0 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?',
+    commentCount: 19, bodyLength: 300, imageCount: 0, assetAxes: 'sleep|work', qualityFlags: [],
+    ...o,
+  })
+  // 🔴 파일 이름이 곧 순서다 — 러너는 이름 순으로 읽는다
+  writeFileSync(join(w.dd, 'a-old.detail.jsonl'),
+    `${row({ sourcePostedAt: OLD, sourceListedAt: OLD, sourceCapturedAt: OLD })}\n`, 'utf-8')
+  writeFileSync(join(w.dd, 'b-new.detail.jsonl'),
+    `${row({ sourcePostedAt: NEW_T, sourceListedAt: NEW_T, sourceCapturedAt: NEW_T })}\n`, 'utf-8')
+  // 🔴 운영 raw 파일에는 세 시각이 **아예 없다** — 그 모양 그대로
+  writeFileSync(join(w.dd, 'c-raw.raw-detail.jsonl'), `${row({})}\n`, 'utf-8')
+
+  const plan = selectWorkset({
+    rows: rowsOf(w.dd), humanDecided: new Set(), queuePending: new Set(),
+    concluded: new Set(), attempted: new Map(),
+    limit: 5, runId: tag, takenAt: new Date(),
+  })
+  const wsPath = join(w.dd, worksetFileName(tag))
+  writeFileSync(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`, 'utf-8')
+  runStage({
+    script: 'scripts/micro-seed-auto-judge.mts', world: w, cap: '5', judgeDecision: 'AUTO_SEED',
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'judge')}`, `--workset=${rel(wsPath)}`,
+      `--shadow-out=${rel(join(w.dd, `auto-judge-${tag}.shadow.jsonl`))}`],
+  })
+  runStage({
+    script: 'scripts/micro-seed-auto-draft.mts', world: w, cap: '15',
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`, `--workset=${rel(wsPath)}`],
+  })
+
+  const candPath = join(w.dd, `auto-draft-${tag}.candidates.json`)
+  const env = existsSync(candPath)
+    ? JSON.parse(readFileSync(candPath, 'utf-8')) as Record<string, unknown> : {}
+  const it = (Array.isArray(env.candidates) ? env.candidates as Record<string, unknown>[] : [])[0] ?? {}
+  check('🔴 🔴 **① 실제 러너가 후보를 냈다**', Object.keys(it).length > 0, candPath)
+  check('🔴 🔴 **② raw 의 빈 시각이 아는 시각을 지우지 않았다**',
+    String(it.sourcePostedAt ?? '') !== '' && String(it.sourceListedAt ?? '') !== ''
+    && String(it.sourceCapturedAt ?? '') !== '',
+    JSON.stringify({ p: it.sourcePostedAt, l: it.sourceListedAt, c: it.sourceCapturedAt }))
+  check('🔴 🔴 **③ 남은 값은 더 최신 detail 의 것이다 — 오래된 값이 아니다**',
+    it.sourcePostedAt === NEW_T && it.sourceListedAt === NEW_T && it.sourceCapturedAt === NEW_T,
+    `${String(it.sourcePostedAt)} (기대 ${NEW_T} · 옛값 ${OLD})`)
+
+  /**
+   * 🔴 ④ **정책을 코드에서도 잠근다.** 산출 파일만 보면 파일 순서가 우연히 맞아
+   *    통과할 수 있다 — 빈 값이 덮지 않는다는 규칙 자체를 본다.
+   */
+  const draftSrc = readFileSync(join(ROOT, 'scripts/micro-seed-auto-draft.mts'), 'utf-8')
+  check('🔴 🔴 **④ 빈 값으로 덮지 않는 규칙이 코드에 있다**',
+    /const keep = \(next: string, prev: string \| undefined\): string =>/.test(draftSrc)
+    && /next !== '' \? next : \(prev \?\? ''\)/.test(draftSrc))
+  check('🔴 🔴 **④ 세 시각 모두 그 규칙을 지난다**',
+    /sourcePostedAt: keep\(/.test(draftSrc) && /sourceListedAt: keep\(/.test(draftSrc)
+    && /sourceCapturedAt: keep\(/.test(draftSrc))
+  check('🔴 🔴 **④ 파일 순서는 이름으로 결정적이다 — 읽을 때마다 달라지지 않는다**',
+    /readdirSync\(DATA_DIR\)\.filter\(\(f\) => f\.endsWith\(suffix\)\)\.sort\(\)/.test(draftSrc))
+}
+
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 가짜 provider · 임시 HOME · 임시 디렉터리다 — 운영 데이터 · DB · 실제 모델 0.')
 if (fail > 0) process.exit(1)

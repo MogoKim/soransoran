@@ -138,3 +138,108 @@ export function resolveLoadBearing(input: {
     ? { ok: true, kind: 'personaSatisfies', note: '고른 사람이 그 조건을 만족한다 — 원문 값이 곧 우리 값이다' }
     : { ok: true, kind: 'notClaimed', note: '1인칭이 아니다 — 그 값을 우리 것으로 주장하지 않는다' }
 }
+
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **보존 계약** (2026-09-23 마스터 P0-2)
+//
+//   `resolveLoadBearing` 이 통과시켜도 그것만으로는 부족하다. 원문 자기 나이는
+//   `protectedFacts` 에서 이미 걷어내졌고 `planAxisMapping` 은 load-bearing 을
+//   건너뛴다 — 그래서 **최종 글에서 그 조건이 통째로 사라질 수 있다.**
+//   의미 검수가 "깨끗하다" 고 답해도 그 사실은 드러나지 않는다.
+//
+// 🔴 그래서 요구사항을 **값으로 만들어** 초안 지시문과 결정적 후조건이 **함께** 쓴다.
+// 🔴 incidental 변환 경로와 섞지 않는다 — 저쪽은 "바꿔라", 이쪽은 "지켜라" 다.
+// ─────────────────────────────────────────────────────────
+
+export type LoadBearingMode =
+  /** 🔴 1인칭 조건 — 그 나이가 **우리 화자의 나이로** 남아야 한다 */
+  | 'selfCondition'
+  /** 🔴 사건 조건 — 그 나이가 **글 안에 남되 우리 나이로 주장하지 않는다** */
+  | 'eventCondition'
+
+export type LoadBearingRequirement = {
+  axis: SpeakerRelativeAxis
+  /** 원문에 있던 그 값 */
+  sourceText: string
+  age: number
+  mode: LoadBearingMode
+  /** 🔴 초안 지시문에 그대로 들어가는 한 줄 */
+  outputRule: string
+}
+
+/**
+ * 🔴 **통과한 load-bearing 사실을 보존 요구로 바꾼다.**
+ *    `resolveLoadBearing` 이 `ok` 를 낸 뒤에만 부른다.
+ */
+export function loadBearingRequirements(input: {
+  facts: readonly LoadBearingFact[]
+  stance: string | null
+}): LoadBearingRequirement[] {
+  const out: LoadBearingRequirement[] = []
+  for (const f of input.facts) {
+    const age = sourceAgeNumber(f.sourceText)
+    if (age === null) continue
+    const mode: LoadBearingMode = input.stance === 'SELF_EXPERIENCE'
+      ? 'selfCondition' : 'eventCondition'
+    out.push({
+      axis: f.axis, sourceText: f.sourceText, age, mode,
+      outputRule: mode === 'selfCondition'
+        ? `🔴 ${AXIS_LABEL[f.axis]} **${age}** 은 글의 결론을 만드는 조건이다. `
+          + `바꾸지 말고 **"${age}"** 를 1인칭으로 그대로 쓴다(우리 화자도 그 나이다).`
+        : `🔴 ${AXIS_LABEL[f.axis]} **${age}** 은 글의 결론을 만드는 조건이다. `
+          + `**"${age}"** 를 글에 남기되, **자기 나이라고 쓰지 않는다**(들은 이야기·조건으로 적는다).`,
+    })
+  }
+  return out
+}
+
+export type LoadBearingPostVerdict =
+  | { ok: true; note: string }
+  | { ok: false; code: 'CONDITION_LOST' | 'CONDITION_NOT_SELF' | 'CONDITION_CLAIMED_AS_SELF'; reason: string }
+
+/**
+ * 🔴 **최종 글에 조건이 남았는가 — 결정적으로 본다.**
+ *
+ *    의미 검수가 `clean` 이라고 답해도 여기서 막는다. 모델의 답은 근거가 아니다.
+ *
+ * @param selfClaim 글쓴이가 **자기 입으로 밝힌 나이 구간** — 정본 `readSelfAgeClaim` 결과.
+ *   🔴 새 정규식을 만들지 않는다. 그 정본은 전언(`…라던데`)·명사 수식(`51세 지원자가`)·
+ *      타인 표지를 이미 가른다 — 여기서 다시 세면 *"51세부터 대상이라던데"* 가
+ *      우리 나이 주장으로 잘못 잡힌다(실측).
+ */
+export function checkLoadBearingPreserved(input: {
+  text: string
+  requirements: readonly LoadBearingRequirement[]
+  selfClaim: { from: number; to: number } | null
+}): LoadBearingPostVerdict {
+  const claims = (n: number): boolean =>
+    input.selfClaim !== null && input.selfClaim.from <= n && n <= input.selfClaim.to
+  for (const r of input.requirements) {
+    // 🔴 글자 자체가 사라졌는가 — 통째로 뺀 경우다
+    if (!new RegExp(`(^|[^0-9])${r.age}([^0-9]|$)`).test(input.text)) {
+      return {
+        ok: false, code: 'CONDITION_LOST',
+        reason: `조건이 된 ${AXIS_LABEL[r.axis]} ${r.age} 가 글에서 사라졌다`,
+      }
+    }
+    if (r.mode === 'selfCondition' && !claims(r.age)) {
+      return {
+        ok: false, code: 'CONDITION_NOT_SELF',
+        reason: `${r.age} 가 1인칭 조건으로 쓰이지 않았다 — 밝힌 나이 ${
+          input.selfClaim === null ? '없음' : `${input.selfClaim.from}~${input.selfClaim.to}`}`,
+      }
+    }
+    if (r.mode === 'eventCondition' && claims(r.age)) {
+      return {
+        ok: false, code: 'CONDITION_CLAIMED_AS_SELF',
+        reason: `${r.age} 를 우리 화자의 나이로 주장했다 — 1인칭 자리가 아니다`,
+      }
+    }
+  }
+  return {
+    ok: true,
+    note: input.requirements.length === 0
+      ? '보존할 조건이 없다' : `${input.requirements.length}개 조건이 글에 남았다`,
+  }
+}
