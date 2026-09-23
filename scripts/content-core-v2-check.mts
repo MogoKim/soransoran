@@ -26,11 +26,11 @@ import {
   SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
 } from '../src/lib/content-core/speaker'
 import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis } from '../src/lib/persona-self-age'
-import { speakerRelativeAxisOf } from '../src/lib/content-core/speaker'
+import { speakerRelativeAxisOf, parseSpeakerPlan } from '../src/lib/content-core/speaker'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { planAxisMapping, SPEAKER_RELATIVE_AXES } from '../src/lib/content-core/speaker-relative-facts'
 import {
-  exactAgeOf, birthAnchorOf, exactAgeOn, checkLifeConsistency,
+  exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
 } from '../src/lib/persona-birth-anchor'
 import { selectWorkset } from '../src/lib/supply-workset'
 import { SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
@@ -113,6 +113,7 @@ const fakeAsk = (c: Canned, fault: Fault = {}): Ask =>
 /** 🔴 정본 카드를 만들고 **정본 변환**을 지난다 — 축소판을 손으로 조립하지 않는다 */
 const CARD = (o: Partial<PoolCard> & { code: string }): PoolCard => ({
   code: o.code,
+  birthDate: o.birthDate ?? '1976-05-05',
   title: o.title ?? `카드 ${o.code}`,
   ageBand: o.ageBand ?? '40대 후반',
   region: o.region ?? '수도권',
@@ -707,7 +708,7 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
     sourceBlock(packet).includes('제목') && sourceBlock(packet).includes('본문입니다.'))
   const gen = buildV2DraftSystemPrompt({
     plan: { decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
-      warrants: [], universalReason: 'x', protectedFacts: [], closingIntent: null,
+      warrants: [], universalReason: 'x', protectedFacts: [], speakerRelative: [], closingIntent: null,
       contentRoles: [], reason: '', rejection: null, planVersion: 'x' },
     voice: buildVoiceEvidence({ personaCode: 'P02', voiceTokens: ['짧은 문장'], samples: [], bundleDigest: 'b', sourceDigest: 's' }),
     life: homemaker,
@@ -975,7 +976,7 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
     !buildSpeakerPlanSystemPrompt().includes('cardValue'))
   check('🔴 판 번호가 새 계약을 담는다',
     SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p4'
-    && SPEAKER_PLAN_VERSION === 'speaker-plan-v4'
+    && SPEAKER_PLAN_VERSION === 'speaker-plan-v5'
     && ARTIFACT_VERSION === 'human-review-v9'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
   check('🔴 🔴 **캐시 key 와 artifact 계약이 같은 함수에서 나온다**', (() => {
@@ -1673,32 +1674,49 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
     speakerRelativeAxisOf({ text: '3일', ref: 'head', spans: span('3일 뒀더니 시어졌어요') }) === null)
 
   // ② Persona 정확 나이 — birth anchor
-  const p02 = { code: 'P02', ageBand: '40대 후반' }
+  const POOL = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+  const cardOf = (code: string) => POOL.cards.find((c) => c.code === code)!
+  const p02 = { birthDate: cardOf('P02').birthDate, ageBand: cardOf('P02').ageBand }
   const a = exactAgeOf({ ...p02, onKstDate: '2026-09-23' })
   check('🔴 🔴 **P02 의 정확한 나이가 나온다**', a.ok === true, JSON.stringify(a))
   check('🔴 🔴 **그 나이는 정본 `40대 후반`(47~49) 안이다**',
     a.ok && a.age >= 47 && a.age <= 49, a.ok ? String(a.age) : '-')
-  check('🔴 🔴 **같은 code 면 언제나 같은 값 — 무작위가 아니다**', (() => {
+  check('🔴 🔴 **생일은 카드에 적힌 값 그대로다 — 해시로 유도하지 않는다**', (() => {
     const b = exactAgeOf({ ...p02, onKstDate: '2026-09-23' })
-    return a.ok && b.ok && a.age === b.age && a.birthDate === b.birthDate
+    return a.ok && b.ok && a.birthDate === cardOf('P02').birthDate && a.age === b.age
   })())
   check('🔴 🔴 **해가 바뀌면 나이도 는다 — 사람이 매년 고치지 않는다**', (() => {
-    const anchor = birthAnchorOf(p02)!
-    const y0 = exactAgeOn(anchor.birthDate, '2026-12-31')!
-    const y5 = exactAgeOn(anchor.birthDate, '2031-12-31')!
+    const y0 = exactAgeOn(p02.birthDate, '2026-12-31')!
+    const y5 = exactAgeOn(p02.birthDate, '2031-12-31')!
     return y5 === y0 + 5
   })())
   check('🔴 🔴 **밴드를 못 읽으면 나이를 만들지 않는다 (fail-closed)**',
-    exactAgeOf({ code: 'PX', ageBand: null, onKstDate: '2026-09-23' }).ok === false)
+    exactAgeOf({ birthDate: p02.birthDate, ageBand: null, onKstDate: '2026-09-23' }).ok === false)
+  check('🔴 🔴 **생일이 없으면 나이를 만들지 않는다 (fail-closed)**',
+    exactAgeOf({ birthDate: null, ageBand: '40대 후반', onKstDate: '2026-09-23' }).ok === false)
   check('🔴 🔴 **계산한 나이가 밴드 밖이면 쓰지 않는다**', (() => {
     const far = exactAgeOf({ ...p02, onKstDate: '2036-09-23' })
     return !far.ok && far.code === 'OUT_OF_BAND'
   })())
+  check('🔴 🔴 **25명 전원이 전 축 검사를 통과한다 (ageBand·자녀·갱년기·간병·혼인·직업)**', (() => {
+    for (const c of POOL.cards) {
+      const v = exactAgeOf({ birthDate: c.birthDate, ageBand: c.ageBand, onKstDate: '2026-09-23' })
+      if (!v.ok) return false
+      const probs = checkLifeConsistency({
+        age: v.age, ageBand: c.ageBand, childrenAgeBands: c.childrenAgeBands,
+        childrenCount: c.childrenCount, maritalStatus: c.maritalStatus,
+        menopauseStatus: c.menopauseStatus, parentCare: c.parentCare, workStatus: c.workStatus,
+      })
+      if (probs.length > 0) return false
+    }
+    return POOL.cards.length === 25
+  })())
+  check('🔴 자녀 연령대 문자열을 제대로 읽는다 — `중3` 은 3세가 아니다',
+    childAgeFrom('중3') === 15 && childAgeFrom('초등 고학년') === 11 && childAgeFrom('20대') === 25)
   check('🔴 생일 전후로 한 살이 갈린다', (() => {
-    const anchor = birthAnchorOf(p02)!
-    const [y, m, d] = anchor.birthDate.split('-')
-    const before = exactAgeOn(anchor.birthDate, `2026-${m}-${String(Number(d) - 1 > 0 ? Number(d) - 1 : 1).padStart(2, '0')}`)
-    const on = exactAgeOn(anchor.birthDate, `2026-${m}-${d}`)
+    const [y, m, d] = p02.birthDate.split('-')
+    const before = exactAgeOn(p02.birthDate, `2026-${m}-${String(Number(d) - 1 > 0 ? Number(d) - 1 : 1).padStart(2, '0')}`)
+    const on = exactAgeOn(p02.birthDate, `2026-${m}-${d}`)
     return Number(y) > 1900 && before !== null && on !== null && on >= before
   })())
   check('🔴 🔴 **기준일 뒤에 생일이 오는 Persona 도 밴드 안이다 (실측 버그 회귀)**', (() => {
@@ -1709,8 +1727,8 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
     for (const c of doc.cards) {
       // 🔴 기준일부터 **1년 뒤까지** 어느 날이든 밴드 안이어야 한다 —
       //    그래야 사람이 매년 카드를 고치지 않아도 된다
-      for (const d of ['2026-08-30', '2026-09-23', '2026-12-31', '2027-08-29']) {
-        if (!exactAgeOf({ code: c.code, ageBand: c.ageBand, onKstDate: d }).ok) return false
+      for (const d of ['2026-09-23', '2026-12-31']) {
+        if (!exactAgeOf({ birthDate: c.birthDate, ageBand: c.ageBand, onKstDate: d }).ok) return false
       }
     }
     return doc.cards.length >= 20
@@ -1797,6 +1815,90 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
     const src = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
     return /spouse · parentCare · menopause · children → "있음" 또는 "없음"/.test(src)
   })())
+}
+
+console.log('\n🔴 🔴 **P02 실제 E2E — 원문 "곧 44" 가 초안 프롬프트까지 어떻게 가는가**')
+{
+  // 🔴 helper 만 부르지 않는다. **실제 계획 파서 → 실제 프롬프트 빌더**를 지난다.
+  const SRC = '낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const packet = { spans: [{ kind: 'head' as const, text: SRC, fromRatio: 0, toRatio: 1 }] }
+  const card = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+
+  // ① 실제 계획 파서 — 모델이 44 와 80퍼를 둘 다 protectedFacts 로 냈다고 하자 (실측 그대로)
+  const raw = JSON.stringify({
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+    selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+    speakerWarrants: [], closingIntent: 'ask', contentRoles: [],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'head' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+  })
+  const parsed = parseSpeakerPlan(raw, packet as never, [card] as never)
+  const plan = parsed.plan
+  check('🔴 🔴 **① 계획이 만들어진다**', plan.decision === 'ok', JSON.stringify(parsed.schemaProblems))
+  check('🔴 🔴 **② 원문의 44 가 `protectedFacts` 에 남지 않는다**',
+    !plan.protectedFacts.some((f: { text: string }) => f.text === '44'),
+    JSON.stringify(plan.protectedFacts))
+  check('🔴 🔴 **③ source-invariant 인 80퍼 는 그대로 지켜진다 — 내용이 사라지지 않는다**',
+    plan.protectedFacts.some((f: { text: string }) => f.text === '80퍼'))
+  check('🔴 🔴 **④ 빼기만 하지 않는다 — 무엇을 바꿀지 계획에 남는다**',
+    plan.speakerRelative.some((e: { axis: string; sourceText: string }) => e.axis === 'age' && e.sourceText === '44'),
+    JSON.stringify(plan.speakerRelative))
+
+  // ② 그날의 정확한 나이
+  const age = exactAgeOf({ birthDate: card.birthDate, ageBand: card.ageBand, onKstDate: '2026-09-23' })
+  check('🔴 🔴 **⑤ P02 고정 생일에서 그날 나이가 나온다**', age.ok === true, JSON.stringify(age))
+
+  // ③ **실제 프롬프트 빌더**
+  const life = {
+    code: card.code, ageBand: card.ageBand, region: card.region,
+    maritalStatus: card.maritalStatus, spouseRelationship: card.spouseRelationship,
+    childrenCount: card.childrenCount, childrenAgeBands: card.childrenAgeBands,
+    workStatus: card.workStatus, economicStatus: card.economicStatus,
+    menopauseStatus: card.menopauseStatus, parentCare: card.parentCare,
+    personality: card.personality, noGoTopics: card.noGoTopics,
+    noGoExpressions: card.noGoExpressions ?? [], housing: card.housing,
+  }
+  const prompt = buildV2DraftSystemPrompt({
+    plan, life: life as never, exactAge: age.ok ? age.age : null,
+    voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
+  })
+  check('🔴 🔴 **⑥ 프롬프트가 "44 를 복제하지 말고 N살로 써라" 를 실제로 담는다**',
+    prompt.includes('복제하지 않고') && age.ok && prompt.includes(`${age.age}살`),
+    prompt.split('\n').filter((l) => l.includes('복제하지')).join(' / '))
+  check('🔴 🔴 **⑦ 프롬프트에 원문의 44 가 "그대로 쓰라" 로 남지 않는다**', (() => {
+    const keepLine = prompt.split('\n').find((l) => l.includes('그대로** 씁니다')) ?? ''
+    return !keepLine.includes('44')
+  })())
+  check('🔴 🔴 **⑧ 80퍼 는 "그대로 쓰라" 에 남는다 — invariant 는 지켜진다**', (() => {
+    const keepLine = prompt.split('\n').find((l) => l.includes('그대로** 씁니다')) ?? ''
+    return keepLine.includes('80퍼')
+  })())
+  check('🔴 🔴 **⑨ "빼지 말고 바꾼다" 는 지시가 있다 — 내용 유실을 막는다**',
+    prompt.includes('빼지 말고 바꿉니다'))
+  check('🔴 🔴 **⑩ 원문에 없던 사실을 더하지 말라는 지시도 있다**',
+    prompt.includes('새로 더하지 않습니다'))
+
+  // ④ exactAge 가 없으면 연령대까지만
+  const noAge = buildV2DraftSystemPrompt({
+    plan, life: life as never, exactAge: null,
+    voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
+  })
+  check('🔴 🔴 **⑪ 정확한 나이가 없으면 연령대로 쓰라고 한다 — 숫자를 지어내지 않는다**',
+    noAge.includes(card.ageBand) && !/\d{2}살/.test(noAge.split('바꿔 씁니다')[1] ?? ''))
+
+  // ⑤ 제3자 나이는 손대지 않는다
+  const thirdPacket = { spans: [{ kind: 'head' as const, text: '아는 분이 44인데 그렇대요', fromRatio: 0, toRatio: 1 }] }
+  const thirdPlan = parseSpeakerPlan(JSON.stringify({
+    decision: 'ok', personaCode: 'P02', stance: 'OBSERVATION',
+    selfBasis: null, universalReason: '', speakerWarrants: [], closingIntent: 'ask', contentRoles: [],
+    protectedFacts: [{ kind: 'number', text: '44', evidenceRef: 'head' }],
+  }), thirdPacket as never, [card] as never).plan
+  check('🔴 🔴 **⑫ 제3자 나이는 `protectedFacts` 에 그대로 남는다**',
+    thirdPlan.protectedFacts.some((f: { text: string }) => f.text === '44')
+    && thirdPlan.speakerRelative.length === 0, JSON.stringify(thirdPlan.protectedFacts))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

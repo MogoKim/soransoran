@@ -125,7 +125,7 @@ console.log('\n③ 조합 탐색 규칙 (synthetic)')
   //    실측: 캐스팅 때문에 `noGoTopics` 누락이 런타임 오류로만 드러났다
   const card = (code: string, over: Partial<PoolCard> = {}): PersonaForMatch =>
     cardToPersona({
-      code, title: 't', ageBand: '50대 초반', region: '수도권',
+      code, birthDate: '1974-05-05', title: 't', ageBand: '50대 초반', region: '수도권',
       maritalStatus: '기혼', spouseRelationship: '원만',
       childrenCount: 0, childrenAgeBands: [], workStatus: '전업', economicStatus: '보통',
       housing: '자가', menopauseStatus: '진행중', parentCare: '없음',

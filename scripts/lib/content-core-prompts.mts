@@ -10,6 +10,7 @@
  *    보내면 남의 글이 화자 선택에 섞인다.
  */
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
+import { planAxisMapping } from '../../src/lib/content-core/speaker-relative-facts'
 import { CLAIM_FACT_LABEL } from '../../src/lib/content-core/source-facts'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { STANCE_LABEL } from '../../src/lib/content-core/speaker'
@@ -186,8 +187,26 @@ export function buildV2DraftSystemPrompt(input: {
   plan: SpeakerPlan
   voice: VoiceEvidence
   life: PersonaLifeContract
+  /** 🔴 그날 계산한 정확한 나이. 없으면 연령대까지만 쓴다 */
+  exactAge?: number | null
 }): string {
   const { plan, voice, life } = input
+  /**
+   * 🔴 **대체 지시를 실제로 만든다.** `planAxisMapping` 정본이 만든 문장을 그대로 쓴다 —
+   *    여기서 규칙을 다시 적지 않는다.
+   */
+  const mapping = planAxisMapping({
+    facts: (plan.speakerRelative ?? []).map((e) => ({
+      axis: e.axis, sourceText: e.sourceText, role: e.materiality,
+    })),
+    persona: {
+      exactAge: input.exactAge ?? null,
+      ageBand: life.ageBand, maritalStatus: life.maritalStatus,
+      childrenCount: life.childrenCount, parentCare: life.parentCare,
+      menopauseStatus: life.menopauseStatus, work: life.workStatus, region: life.region,
+    },
+  })
+  const replacements = mapping.ok ? mapping.mappings.map((m) => m.outputRule) : []
   return [
     '당신은 40대 중반~60대 중반 여성들이 모인 커뮤니티의 회원입니다.',
     '[원문]은 다른 커뮤니티에서 사람들이 실제로 반응한 글입니다.',
@@ -197,6 +216,17 @@ export function buildV2DraftSystemPrompt(input: {
     '- 원문의 주제 · 핵심 낱말 · 숫자 · 관계 · 상황 · 질문',
     ...(plan.protectedFacts.length > 0
       ? [`- 🔴 이 말들은 **그대로** 씁니다: ${plan.protectedFacts.map((f) => f.text).join(' · ')}`]
+      : []),
+    /**
+     * 🔴 **원문 작성자를 복제하지 않습니다** (2026-09-23).
+     *    원문 화자의 나이·혼인·자녀 같은 사실은 **지키는 것이 아니라 바꾸는 것**입니다.
+     *    🔴 빼기만 하면 내용이 사라집니다 — 여기서 **무엇으로 바꿀지**를 줍니다.
+     */
+    ...(replacements.length > 0
+      ? ['', '## 🔴 원문 작성자의 사실 → 당신의 사실로 바꿔 씁니다',
+        ...replacements.map((r) => `- ${r}`),
+        '- 🔴 위 값을 **빼지 말고 바꿉니다.** 그 자리를 비우면 글이 어색해집니다.',
+        '- 🔴 원문에 없던 사실을 **새로 더하지 않습니다.**']
       : []),
     ...(plan.closingIntent === 'ask'
       ? ['- 원문은 묻고 끝납니다. 그 물음이 살아 있어야 합니다.']

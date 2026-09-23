@@ -29,62 +29,22 @@ export const BIRTH_ANCHOR_RULE_VERSION = 'birth-anchor-v1'
  */
 export const ANCHOR_BASE_DATE = '2026-08-30'
 
-/** 🔴 결정적 해시 — 같은 code 면 언제나 같은 값이다. 무작위가 아니다 */
-function hashOf(code: string): number {
-  let h = 2166136261 >>> 0
-  for (const ch of code) h = (Math.imul(h ^ ch.charCodeAt(0), 16777619)) >>> 0
-  return h >>> 0
-}
-
 export type BirthAnchor = {
   /** `YYYY-MM-DD` — 🔴 내부 값이다. 글에 쓰지 않는다 */
   birthDate: string
-  /** 기준일에 이 나이였다 */
-  ageAtBase: number
 }
 
 /**
- * 🔴 `ageBand` 안에서 **결정적으로** 하나를 고른다.
- *    밴드를 읽지 못하면 `null` — 모르면 만들지 않는다(fail-closed).
+ * 🔴 **카드에 적힌 생일을 그대로 쓴다** (2026-09-23 정정).
+ *
+ *    앞판은 `RULE_VERSION|code` 해시로 생일을 **유도**했다. 그것은 정본이 아니다 —
+ *    규칙 판이나 `ageBand` 가 바뀌면 같은 사람의 생일이 바뀐다.
+ *    이제 Persona Pool 카드의 `birthDate` 줄 **한 곳**이 정본이고, 여기서는 읽기만 한다.
  */
-export function birthAnchorOf(input: {
-  code: string
-  ageBand: string | null | undefined
-  baseDate?: string
-}): BirthAnchor | null {
-  const span = parseAgeBand(input.ageBand)
-  if (span === null) return null
-  const base = input.baseDate ?? ANCHOR_BASE_DATE
-  const baseY = Number(base.slice(0, 4))
-  if (!Number.isFinite(baseY)) return null
-
-  const h = hashOf(`${BIRTH_ANCHOR_RULE_VERSION}|${input.code}`)
-  /**
-   * 🔴 **밴드 맨 위를 쓰지 않는다** (2026-09-23 보정).
-   *    상단을 고르면 그해 생일이 지나는 순간 밴드를 벗어나 `OUT_OF_BAND` 가 된다
-   *    (P03·P14·P24 실측 — 12월 31일에 깨졌다). 그러면 **매년 사람이 카드를 고쳐야** 한다.
-   *    한 칸 아래까지만 써서 **최소 1년**은 카드 갱신 없이 버티게 한다.
-   *    (밴드 폭이 1이면 그 한 칸을 쓴다 — 그때는 어쩔 수 없다.)
-   */
-  const top = span.to > span.from ? span.to - 1 : span.to
-  const width = top - span.from + 1
-  const age = span.from + (h % width)
-  // 🔴 월·일도 결정적으로. 28일까지만 써서 어느 달이든 실재하는 날짜가 된다
-  const month = ((h >>> 8) % 12) + 1
-  const day = ((h >>> 16) % 28) + 1
-  /**
-   * 🔴 **월·일을 함께 본다** (2026-09-23 보정).
-   *    `baseY - age` 로만 잡으면, 생일이 기준일보다 **뒤**인 Persona 는 기준일에
-   *    아직 생일 전이라 실제 나이가 한 살 적어진다. 그러면 며칠만 지나도
-   *    `OUT_OF_BAND` 가 난다 (P01·P16·P19 실측).
-   */
-  const baseM = Number(base.slice(5, 7))
-  const baseD = Number(base.slice(8, 10))
-  const birthdayPassedAtBase = month < baseM || (month === baseM && day <= baseD)
-  const birthYear = baseY - age - (birthdayPassedAtBase ? 0 : 1)
-  const mm = String(month).padStart(2, '0')
-  const dd = String(day).padStart(2, '0')
-  return { birthDate: `${birthYear}-${mm}-${dd}`, ageAtBase: age }
+export function birthAnchorOf(input: { birthDate: string | null | undefined }): BirthAnchor | null {
+  const d = (input.birthDate ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null
+  return { birthDate: d }
 }
 
 /** 🔴 KST 기준 만 나이. 생일이 지나지 않았으면 한 살 적다 */
@@ -102,28 +62,28 @@ export function exactAgeOn(birthDate: string, onKstDate: string): number | null 
 export type ExactAgeVerdict =
   | { ok: true; age: number; birthDate: string }
   /** 🔴 밴드를 못 읽었거나, 계산한 나이가 밴드 밖이다 — 쓰지 않는다 */
-  | { ok: false; code: 'NO_BAND' | 'OUT_OF_BAND'; reason: string }
+  | { ok: false; code: 'NO_BIRTHDATE' | 'NO_BAND' | 'OUT_OF_BAND'; reason: string }
 
 /**
  * 🔴 **그날의 정확한 나이.** `ageBand` 와 반드시 일치해야 한다 —
  *    어긋나면 쓰지 않는다(fail-closed). 해가 바뀌어 밴드를 벗어나면 여기서 잡힌다.
  */
 export function exactAgeOf(input: {
-  code: string
+  birthDate: string | null | undefined
   ageBand: string | null | undefined
   /** 발행 날짜 (KST `YYYY-MM-DD`) */
   onKstDate: string
-  baseDate?: string
 }): ExactAgeVerdict {
   const anchor = birthAnchorOf(input)
   if (anchor === null) {
-    return { ok: false, code: 'NO_BAND', reason: `나이대를 읽을 수 없다 — ${input.ageBand ?? '(없음)'}` }
+    return { ok: false, code: 'NO_BIRTHDATE', reason: `생일을 읽을 수 없다 — ${input.birthDate ?? '(없음)'}` }
   }
   const age = exactAgeOn(anchor.birthDate, input.onKstDate)
   const span = parseAgeBand(input.ageBand)
-  if (age === null || span === null) {
-    return { ok: false, code: 'NO_BAND', reason: '나이를 계산할 수 없다' }
+  if (span === null) {
+    return { ok: false, code: 'NO_BAND', reason: `나이대를 읽을 수 없다 — ${input.ageBand ?? '(없음)'}` }
   }
+  if (age === null) return { ok: false, code: 'NO_BIRTHDATE', reason: '나이를 계산할 수 없다' }
   if (age < span.from || age > span.to) {
     return {
       ok: false, code: 'OUT_OF_BAND',
@@ -137,28 +97,83 @@ export function exactAgeOf(input: {
 export type LifeConsistencyProblem = { axis: string; reason: string }
 
 /**
- * 🔴 **정확한 나이가 다른 생활사와 모순되지 않는가.**
- *    자녀 나이·혼인·갱년기와 어긋나면 그 나이를 쓰지 않는다.
+ * 🔴 **정확한 나이가 다른 생활사와 모순되지 않는가.** 여섯 축 전부를 본다 —
+ *    `ageBand` 하나만 맞춰 놓고 "정합" 이라고 쓰지 않는다.
  */
 export function checkLifeConsistency(input: {
   age: number
+  ageBand?: string | null
   childrenAgeBands?: readonly string[] | null
+  childrenCount?: number | null
   maritalStatus?: string | null
   menopauseStatus?: string | null
+  parentCare?: string | null
+  workStatus?: string | null
 }): LifeConsistencyProblem[] {
   const out: LifeConsistencyProblem[] = []
-  // 🔴 자녀가 있으면 적어도 그 나이 + 18 이어야 말이 된다
-  for (const b of input.childrenAgeBands ?? []) {
-    const m = /(\d{1,2})/.exec(String(b))
-    if (m === null) continue
-    const childAge = Number(m[1])
-    if (Number.isFinite(childAge) && input.age - childAge < 18) {
-      out.push({ axis: 'children', reason: `자녀 ${childAge}세인데 화자가 ${input.age}세다` })
-    }
+
+  // ① ageBand 안에 있는가
+  const span = parseAgeBand(input.ageBand)
+  if (input.ageBand != null && span === null) {
+    out.push({ axis: 'ageBand', reason: `나이대를 읽을 수 없다 — ${input.ageBand}` })
+  } else if (span !== null && (input.age < span.from || input.age > span.to)) {
+    out.push({ axis: 'ageBand', reason: `${input.age}세가 ${input.ageBand}(${span.from}~${span.to}) 밖이다` })
   }
-  // 🔴 갱년기 '후' 인데 40대 초반이면 어긋난다
-  if ((input.menopauseStatus ?? '') === '후' && input.age < 45) {
-    out.push({ axis: 'menopause', reason: `갱년기 '후' 인데 ${input.age}세다` })
+
+  /**
+   * ② 자녀 연령대 — 🔴 문자열 그대로 읽는다 (`초등 고학년` · `중3` · `20대` …).
+   *    숫자만 긁으면 `중3` 을 3세로 읽는다.
+   */
+  for (const raw of input.childrenAgeBands ?? []) {
+    const childAge = childAgeFrom(String(raw))
+    if (childAge === null) continue
+    const gap = input.age - childAge
+    if (gap < 18) out.push({ axis: 'children', reason: `자녀 약 ${childAge}세인데 화자가 ${input.age}세다 (터울 ${gap})` })
+    if (gap > 55) out.push({ axis: 'children', reason: `자녀 약 ${childAge}세인데 화자가 ${input.age}세다 (터울 ${gap})` })
+  }
+  if ((input.childrenCount ?? 0) > 0 && (input.childrenAgeBands ?? []).length === 0) {
+    out.push({ axis: 'children', reason: '자녀 수는 있는데 연령대가 비어 있다 — 모순을 잴 수 없다' })
+  }
+
+  // ③ 갱년기
+  const men = (input.menopauseStatus ?? '').trim()
+  if (men === '후' && input.age < 45) out.push({ axis: 'menopause', reason: `갱년기 '후' 인데 ${input.age}세다` })
+  if (men === '전' && input.age >= 58) out.push({ axis: 'menopause', reason: `갱년기 '전' 인데 ${input.age}세다` })
+
+  // ④ 부모 돌봄 — 🔴 40세 미만이 상시 간병이면 드물다. 값 자체를 모르면 그것도 문제다
+  const care = (input.parentCare ?? '').trim()
+  if (input.parentCare != null && care === '') out.push({ axis: 'parentCare', reason: '값이 비어 있다' })
+
+  // ⑤ 혼인 — 값이 비어 있으면 자격 판정이 fail-closed 로 막힌다
+  const mar = (input.maritalStatus ?? '').trim()
+  if (input.maritalStatus != null && mar === '') out.push({ axis: 'maritalStatus', reason: '값이 비어 있다' })
+
+  // ⑥ 직업 — 정년을 크게 넘겨 '직장인' 이면 어긋난다
+  const work = (input.workStatus ?? '').trim()
+  if (input.workStatus != null && work === '') out.push({ axis: 'work', reason: '값이 비어 있다' })
+  else if (/직장|회사|근무|재직/.test(work) && input.age >= 66) {
+    out.push({ axis: 'work', reason: `${input.age}세인데 '${work}' 이다` })
   }
   return out
+}
+
+/** 🔴 `초등 고학년` · `중3` · `20대` 같은 표현을 나이로 읽는다. 못 읽으면 `null` */
+export function childAgeFrom(band: string): number | null {
+  const t = band.trim()
+  if (t === '') return null
+  if (/영유아|유아|미취학/.test(t)) return 4
+  if (/초등\s*저/.test(t)) return 8
+  if (/초등\s*고/.test(t)) return 11
+  if (/초등/.test(t)) return 10
+  const mid = /중\s*([1-3])/.exec(t)
+  if (mid !== null) return 12 + Number(mid[1])
+  const high = /고\s*([1-3])/.exec(t)
+  if (high !== null) return 15 + Number(high[1])
+  if (/중학/.test(t)) return 14
+  if (/고등/.test(t)) return 17
+  const decade = /([1-9]0)\s*대/.exec(t)
+  if (decade !== null) return Number(decade[1]) + 5
+  const plain = /(\d{1,2})\s*세?/.exec(t)
+  if (plain !== null) { const n = Number(plain[1]); if (n >= 0 && n <= 60) return n }
+  return null
 }

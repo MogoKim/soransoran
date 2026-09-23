@@ -26,6 +26,7 @@ import {
   canGenerate, lifeContractIdentity, orderPersonasForSource, parseSpeakerPlan, planSchemaFailed,
 } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
+import { exactAgeOf } from '../../src/lib/persona-birth-anchor'
 import {
   buildVoiceEvidence, judgeVoiceReadiness, voiceStandardMissingFrom, VOICE_READINESS_LABEL,
 } from '../../src/lib/content-core/voice-evidence'
@@ -88,6 +89,11 @@ export type Ask = (
  *    `personaInputOf` **하나**만 한다.
  */
 export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> & {
+  /**
+   * 🔴 **내부 생일** (`YYYY-MM-DD`). 정확한 나이를 계산하는 정본이고,
+   *    글에는 나오지 않는다 — 나오는 것은 계산된 나이뿐이다.
+   */
+  birthDate?: string
   samples: readonly string[]
   bundleDigest: string
 }
@@ -118,6 +124,8 @@ export function personaInputOf(
 ): PersonaInput {
   return {
     code: card.code,
+    // 🔴 정본 생일 — 정확한 나이를 계산하는 유일한 출처다. 글에는 나오지 않는다
+    birthDate: card.birthDate,
     ageBand: card.ageBand,
     region: card.region,
     maritalStatus: card.maritalStatus,
@@ -387,7 +395,17 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    * 🔴 **정말로 들어갔는지 값으로 본다.** 프롬프트 쪽 조건이 잘못되면 기준이
    *    조용히 빠진다 — 두 요청 모두 보내기 전에 확인하고, 하나라도 비면 안 보낸다.
    */
-  const draftSystem = buildV2DraftSystemPrompt({ plan, voice, life: persona })
+  /**
+   * 🔴 **그날의 정확한 나이를 계산해 넘긴다** (2026-09-23).
+   *    없으면 `null` 이고, 프롬프트가 연령대까지만 쓰게 한다 — 숫자를 지어내지 않는다.
+   */
+  const todayKst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)
+  const ageV = exactAgeOf({
+    birthDate: persona.birthDate ?? null, ageBand: persona.ageBand, onKstDate: todayKst,
+  })
+  const draftSystem = buildV2DraftSystemPrompt({
+    plan, voice, life: persona, exactAge: ageV.ok ? ageV.age : null,
+  })
   const reviewSystem = buildV2ReviewSystemPrompt({ plan, voice, life: persona })
   const voiceless = [
     ...(voiceStandardMissingFrom(draftSystem, voice) ? ['생성'] : []),

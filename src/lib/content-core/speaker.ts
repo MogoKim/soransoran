@@ -41,9 +41,30 @@ import {
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
 import { readSelfAgeClaim, OTHER_MARKERS } from '../persona-self-age'
-import { type SpeakerRelativeAxis } from './speaker-relative-facts'
+import { type SpeakerRelativeAxis, type FactRole } from './speaker-relative-facts'
 
-export const SPEAKER_PLAN_VERSION = 'speaker-plan-v4'
+/**
+ * 🔴 계획이 싣는 한 줄 — **무엇을 무엇으로 바꾸는가**.
+ *    `personaText` 는 생성 직전에 채운다(그때 Persona 가 정해진다).
+ */
+export type SpeakerRelativeEntry = {
+  axis: SpeakerRelativeAxis
+  sourceText: string
+  /** 원문에서 누구의 사실이었나 */
+  sourceRole: 'self' | 'thirdParty' | 'invariant'
+  evidenceRef: EvidenceRef
+  materiality: FactRole
+}
+
+export const SPEAKER_PLAN_VERSION = 'speaker-plan-v5'
+
+/**
+ * 🔴 **아는 값만 통과시킨다** (2026-09-23). 카드에 적힐 수 있는 값을 **열거**한다 —
+ *    "그 값이 아니면 전부 참" 으로 두면 빈 값·오타가 근거로 선다(fail-open).
+ */
+const MARITAL_SINGLE: readonly string[] = ['미혼', '비혼', '이혼', '사별', '별거']
+const PARENT_CARE_YES: readonly string[] = ['간헐', '상시', '있음', '동거 간병']
+const MENOPAUSE_YES: readonly string[] = ['중', '후', '진행', '완료']
 
 /** 화자가 서는 자리 */
 export const STANCES = ['SELF_EXPERIENCE', 'OBSERVATION', 'REFLECTION', 'QUESTION'] as const
@@ -210,6 +231,12 @@ export type SpeakerPlan = {
   /** 자격이 필요 없다고 본 이유 — `noLifeFactNeeded` 일 때만 */
   universalReason: string
   protectedFacts: ProtectedFact[]
+  /**
+   * 🔴 **원문 화자의 사실과 우리 쪽 대체값** (2026-09-23).
+   *    `protectedFacts` 에서 빼기만 하면 **내용이 사라진다.** 무엇을 무엇으로 바꿀지
+   *    여기 담아 **초안 프롬프트가 실제로 소비**한다.
+   */
+  speakerRelative: SpeakerRelativeEntry[]
   closingIntent: ClosingIntent | null
   contentRoles: ContentRole[]
   reason: string
@@ -277,27 +304,37 @@ export function hasFact(p: PersonaLifeContract, fact: ClaimFact, requiredValue: 
      *    `requiredValueUnmet` → `speakerUnqualified` → **비재시도 결론**으로 갔다.
      */
     case 'spouse': {
-      const married = p.maritalStatus.trim() === '기혼'
-      return want === '있음' ? married : want === '없음' ? !married : false
+      // 🔴 **빈 값·모르는 값은 통과시키지 않는다** (2026-09-23 fail-open 보정).
+      //    앞판은 `!married` 였다 — 카드가 비어 있어도 "없음" 근거가 섰다.
+      const v = p.maritalStatus.trim()
+      if (v === '') return false
+      if (want === '있음') return v === '기혼'
+      if (want === '없음') return MARITAL_SINGLE.includes(v)
+      return false
     }
     /** 🔴 `없음` 도 견줄 수 있는 축이다 — 카드에 `childrenCount = 0` 이라는 판정값이 있다 */
     case 'children':
       return want === '있음' ? p.childrenCount > 0 : want === '없음' ? p.childrenCount === 0 : false
     case 'childAgeBand': return p.childrenAgeBands.some((b) => b.trim() === want)
     case 'parentCare': {
-      const caring = p.parentCare.trim() !== '없음'
-      return want === '있음' ? caring : want === '없음' ? !caring : false
+      const v = p.parentCare.trim()
+      if (v === '') return false
+      if (want === '있음') return PARENT_CARE_YES.includes(v)
+      if (want === '없음') return v === '없음'
+      return false
     }
     /** 🔴 `전` 은 아직 겪지 않았다는 뜻이다 — 경험 주장의 근거가 될 수 없다 */
     case 'menopause': {
-      // 🔴 `전` 은 아직 겪지 않았다는 뜻이다 — 경험 주장의 근거가 될 수 없다.
-      //    다만 **"아직 전이다" 를 근거로 삼는 글**은 있을 수 있어 `없음` 도 받는다
-      const after = p.menopauseStatus.trim() !== '전'
-      return want === '있음' ? after : want === '없음' ? !after : false
+      const v = p.menopauseStatus.trim()
+      if (v === '') return false
+      if (want === '있음') return MENOPAUSE_YES.includes(v)
+      if (want === '없음') return v === '전'
+      return false
     }
-    case 'work': return eq(p.workStatus)
-    case 'region': return eq(p.region)
-    case 'age': return eq(p.ageBand)
+    // 🔴 빈 값은 통과시키지 않는다 — `eq` 는 빈 값끼리도 같다고 본다
+    case 'work': return p.workStatus.trim() !== '' && eq(p.workStatus)
+    case 'region': return p.region.trim() !== '' && eq(p.region)
+    case 'age': return p.ageBand.trim() !== '' && eq(p.ageBand)
     default: return false
   }
 }
@@ -350,7 +387,7 @@ export function verifySelfWarrants(input: {
 
 const HOLD = (reason: string, rejection: WarrantRejection | null = null): SpeakerPlan => ({
   decision: 'hold', personaCode: null, stance: null, selfBasis: null, warrants: [],
-  universalReason: '', protectedFacts: [], closingIntent: null, contentRoles: [],
+  universalReason: '', protectedFacts: [], speakerRelative: [], closingIntent: null, contentRoles: [],
   reason, rejection, planVersion: SPEAKER_PLAN_VERSION,
 })
 
@@ -376,6 +413,7 @@ export function parseSpeakerPlan(
 
   // ── protectedFacts — 증명 가능한 것만 ──
   const facts: ProtectedFact[] = []
+  const speakerRelative: SpeakerRelativeEntry[] = []
   for (const x of arr(j.protectedFacts)) {
     const o = x as Record<string, unknown>
     const text = S(o.text)
@@ -404,7 +442,17 @@ export function parseSpeakerPlan(
      *    🔴 **제3자의 나이는 걷어내지 않는다** — 그것은 원문 이야기의 일부다.
      */
     const selfAxis = speakerRelativeAxisOf({ text, ref: ref as EvidenceRef, spans })
-    if (selfAxis !== null) { dropped.push({ text, why: 'speakerRelative' }); continue }
+    if (selfAxis !== null) {
+      dropped.push({ text, why: 'speakerRelative' })
+      // 🔴 **빼기만 하지 않는다.** 무엇을 바꿔야 하는지 남겨 프롬프트가 쓰게 한다
+      speakerRelative.push({
+        axis: selfAxis, sourceText: text, sourceRole: 'self',
+        evidenceRef: ref as EvidenceRef,
+        // 🔴 의미 판정은 뒤에서 한다 — 여기서는 **원문에 있었다** 는 사실만 남긴다
+        materiality: 'incidental',
+      })
+      continue
+    }
     facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
   }
 
@@ -418,7 +466,7 @@ export function parseSpeakerPlan(
   const closingIntent = (CLOSING_INTENTS as readonly string[]).includes(closing)
     ? (closing as ClosingIntent) : null
   const base = {
-    protectedFacts: facts, closingIntent, contentRoles: [...new Set(roles)],
+    protectedFacts: facts, speakerRelative, closingIntent, contentRoles: [...new Set(roles)],
     planVersion: SPEAKER_PLAN_VERSION,
   }
   const withBase = (p: SpeakerPlan): SpeakerPlan => ({ ...p, ...base })

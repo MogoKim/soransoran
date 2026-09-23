@@ -17,6 +17,12 @@ import { CHILD_AGE_BANDS, readLengthBand, type ChildAgeBand, type PersonaForMatc
 export type PoolCard = {
   /** `P01` ~ `P20` */
   code: string
+  /**
+   * 🔴 **내부 생일** (`YYYY-MM-DD`). 정확한 나이를 계산하는 **유일한 정본**이다.
+   *    🔴 글에 쓰지 않는다 — 나오는 것은 계산된 나이뿐이다.
+   *    🔴 해시로 유도하지 않는다. 규칙이나 `ageBand` 가 바뀌어도 생일은 그대로여야 한다.
+   */
+  birthDate: string
   /** 카드 제목 — 사람이 어느 카드인지 알아보는 용도 */
   title: string
   ageBand: string
@@ -158,6 +164,14 @@ export function parseCard(code: string, title: string, body: string): { card: Po
 
   const idParts = parts(idLine!.replace(/^ageBand\s*/, ''))
   const ageBand = idParts[0] ?? ''
+  /**
+   * 🔴 **생일은 카드에 적힌 값을 그대로 읽는다.** 없으면 문제로 올린다 —
+   *    조용히 만들어 내면 정본이 두 벌이 된다.
+   */
+  const birthLine = lines.find((l) => l.startsWith('birthDate'))
+  const birthDate = birthLine === undefined ? ''
+    : (/(\d{4}-\d{2}-\d{2})/.exec(birthLine)?.[1] ?? '')
+  if (birthDate === '') problems.push('birthDate 줄이 없거나 날짜를 읽을 수 없다')
   const region = idParts[1] ?? ''
   const mar = readMarital(idParts[2] ?? '')
   if (mar.status === null) problems.push(`혼인 상태를 읽지 못했다: ${idParts[2] ?? '—'}`)
@@ -220,7 +234,7 @@ export function parseCard(code: string, title: string, body: string): { card: Po
 
   return {
     card: {
-      code, title, ageBand, region,
+      code, title, ageBand, birthDate, region,
       maritalStatus: mar.status!, spouseRelationship: mar.relationship,
       childrenCount: kids.count, childrenAgeBands: kids.bands,
       workStatus, economicStatus, housing,

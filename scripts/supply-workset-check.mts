@@ -675,7 +675,7 @@ console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로
 // ─────────────────────────────────────────────────────────
 {
   const CARD = (o: Partial<PoolCard> = {}): PoolCard => ({
-    code: 'P01', title: '카드', ageBand: '40대 후반', region: '수도권',
+    code: 'P01', birthDate: '1978-05-05', title: '카드', ageBand: '40대 후반', region: '수도권',
     maritalStatus: '기혼', spouseRelationship: '원만', childrenCount: 2,
     childrenAgeBands: ['중고등'], workStatus: '파트타임', economicStatus: '빠듯',
     housing: '전세', menopauseStatus: '전', parentCare: '간병 간헐',
