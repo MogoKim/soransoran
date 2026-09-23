@@ -11,6 +11,7 @@
  *    같은 원천을 무한히 다시 사는 경로를 여기서 끊는다.
  */
 import { planReplan, type PriorOutcome, type ReplanPlan } from '../../src/lib/supply-workset'
+import type { PriorPlanFailure } from '../../src/lib/content-core/replan-input'
 
 /** 🔴 화자 하나 — 코드만 본다. 카드 전체를 알 필요가 없다 */
 export type PersonaCoded = { code: string }
@@ -23,16 +24,29 @@ export type PersonaCoded = { code: string }
  */
 export function attemptsForSource(
   outcomes: readonly PriorOutcome[], sourceArticleId: string,
-): { failedPersonaCode?: string | null; failedCause?: string | null }[] {
+): {
+  failedPersonaCode?: string | null; failedStance?: string | null; failedCause?: string | null
+}[] {
   return outcomes
     .filter((o) => o.sourceArticleId === sourceArticleId && o.stage === 'draft')
     .sort((a, b) => a.atMs - b.atMs)
-    .map((o) => ({ failedPersonaCode: o.failedPersonaCode, failedCause: o.failedCause }))
+    .map((o) => ({
+      failedPersonaCode: o.failedPersonaCode,
+      failedStance: o.failedStance,
+      failedCause: o.failedCause,
+    }))
 }
 
 export type PersonaPick<T extends PersonaCoded = PersonaCoded> =
-  | { ok: true; personas: T[]; excluded: string[]; attempt: number }
-  | { ok: false; code: 'EXHAUSTED' | 'ATTEMPT_CAP'; reason: string; excluded: string[] }
+  | {
+    ok: true; personas: T[]; excluded: string[]; attempt: number
+    /**
+     * 🔴 **다음 계획기가 받을 지난 실패** (2026-09-23 마스터 지적).
+     *    사람만 빼면 계획기는 같은 1인칭 계획을 또 세운다.
+     */
+    priorFailures: PriorPlanFailure[]
+  }
+  | { ok: false; code: 'EXHAUSTED' | 'ATTEMPT_CAP' | 'CONCLUDED'; reason: string; excluded: string[] }
 
 /**
  * 🔴 **이번 시도에 보낼 화자 묶음.**
@@ -49,6 +63,21 @@ export function personasForAttempt<T extends PersonaCoded>(input: {
   candidates: readonly T[]
   attemptMax?: number
 }): PersonaPick<T> {
+  /**
+   * 🔴 **이미 결론난 원천은 만들지 않는다** (2026-09-23).
+   *    운영에서는 공급 러너가 `concludedSourceIds` 로 먼저 거른다. 그래도 여기서
+   *    한 번 더 본다 — 묶음 파일을 손으로 주는 경로가 있고, 그때 결론난 원천에
+   *    **유료 호출이 또 나가면** "한 번에 결론" 이라는 계약이 거짓이 된다.
+   */
+  const concluded = input.outcomes.some(
+    (o) => o.sourceArticleId === input.sourceArticleId && o.stage === 'draft' && o.state === 'terminal',
+  )
+  if (concluded) {
+    return {
+      ok: false, code: 'CONCLUDED', excluded: [],
+      reason: '이 원천은 이미 결론이 났다 — 다시 만들지 않는다',
+    }
+  }
   const attempts = attemptsForSource(input.outcomes, input.sourceArticleId)
   const plan: ReplanPlan = planReplan({
     attempts, eligible: input.slotCodes, attemptMax: input.attemptMax,
@@ -67,5 +96,12 @@ export function personasForAttempt<T extends PersonaCoded>(input: {
       reason: '제외하고 남은 화자의 카드가 없다', excluded: plan.excluded,
     }
   }
-  return { ok: true, personas, excluded: plan.excluded, attempt: plan.attempt }
+  return {
+    ok: true, personas, excluded: plan.excluded, attempt: plan.attempt,
+    priorFailures: attempts.map((a): PriorPlanFailure => ({
+      personaCode: a.failedPersonaCode ?? null,
+      stance: a.failedStance ?? null,
+      cause: a.failedCause ?? null,
+    })),
+  }
 }

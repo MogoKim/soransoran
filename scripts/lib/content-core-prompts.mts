@@ -133,6 +133,10 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '   · incidental — 나이를 바꿔도 글의 뜻이 그대로다 (피부·패션·일상·감정)',
     '   · loadBearing — 나이가 **결론을 바꾼다** (지원 자격·연령 제한·의료·임신·보험)',
     '- 🔴 **제3자(아는 분·친구)의 나이는 여기 넣지 않습니다.** 그것은 원문 이야기의 일부입니다.',
+    '- 🔴 **원문 화자 자신의 값을 protectedFacts 에 적었다면 여기에도 반드시 적습니다.**',
+    '  한 건이라도 빠지면 그 답은 **버려지고 다시 묻습니다** — 기본값으로 통과시키지 않습니다.',
+    '- 🔴 materiality 가 loadBearing 이면, **그 조건을 실제로 만족하는 후보**를 personaCode 로',
+    '  고르십시오. 그런 후보가 없으면 stance 를 OBSERVATION · QUESTION 으로 바꾸십시오.',
     '',
     '## protectedFacts — 🔴 글자 자체를 지켜야 하는 **원자적 사실**만',
     '- kind: number(숫자+단위) · publicEntity(공개 프로그램·상품·장소 이름)',
@@ -183,8 +187,17 @@ export function buildSpeakerPlanSystemPrompt(): string {
 export function buildSpeakerPlanPayload(input: {
   packet: SourceEvidencePacket
   personas: readonly PersonaLifeContract[]
+  /**
+   * 🔴 **같은 원천의 지난 실패** (2026-09-23 마스터 지적). 빼기만 하면 계획기는
+   *    왜 실패했는지 모른 채 **같은 1인칭 계획**을 또 세운다. 유료 호출은 늘지 않는다 —
+   *    같은 요청의 입력 한 칸이다.
+   */
+  priorFailures?: readonly string[]
+  /** 🔴 지난 시도가 "조건을 만족하는 사람이 없다" 로 멈췄다 — 1인칭을 쓰면 안 된다 */
+  selfForbidden?: boolean
 }): string {
   const p = input.packet
+  const prior = input.priorFailures ?? []
   return JSON.stringify({
     원문: {
       // 🔴 packet 에 **실제로 있는 span 만** — 없는 자리를 지어내 보내지 않는다
@@ -193,6 +206,13 @@ export function buildSpeakerPlanPayload(input: {
       truncated: p.truncated,
     },
     후보: input.personas.map((x) => qualificationLine(x)),
+    // 🔴 빈 칸을 넣지 않는다 — 빈 배열은 "지난 시도가 없다" 와 구분되지 않는다
+    ...(prior.length === 0 ? {} : { 지난실패: prior }),
+    ...(input.selfForbidden !== true ? {} : {
+      금지: ['🔴 stance 를 SELF_EXPERIENCE 로 쓰지 마십시오 — '
+        + '원문의 핵심 조건을 만족하는 사람이 없습니다. '
+        + 'OBSERVATION · QUESTION · REFLECTION 중에서 고르고 selfBasis 는 비웁니다.'],
+    }),
   })
 }
 

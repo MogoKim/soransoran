@@ -14,7 +14,14 @@
 /** 🔴 파이프라인 판 — 경로 자체가 바뀌면 올린다 */
 export const CONTENT_CORE_PIPELINE_VERSION = 'content-core-v2.1'
 
-export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p4'
+/**
+ * 🔴 **p5 (2026-09-23)** — 계획 요청의 출력 계약이 바뀌었다.
+ *    · 화자 상대 사실마다 `materiality` 를 **반드시** 적어야 한다 (누락은 모양 오류)
+ *    · `loadBearing` 이면 조건을 만족하는 후보를 고르거나 자리를 바꿔야 한다
+ *    · 요청 입력에 `지난실패`·`금지` 칸이 생겼다
+ *    🔴 올리지 않으면 **옛 응답으로 만든 artifact 와 캐시가 새 계약으로 재사용된다.**
+ */
+export const SPEAKER_PLAN_PROMPT_VERSION = 'speaker-plan-p5'
 export const V2_DRAFT_PROMPT_VERSION = 'v2-draft-p7'
 export const V2_REVIEW_PROMPT_VERSION = 'v2-review-p7'
 

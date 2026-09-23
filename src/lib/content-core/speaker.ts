@@ -41,7 +41,7 @@ import {
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
 import { readSelfAgeClaim, OTHER_MARKERS } from '../persona-self-age'
-import { type SpeakerRelativeAxis, type FactRole } from './speaker-relative-facts'
+import { AXIS_LABEL, type SpeakerRelativeAxis, type FactRole } from './speaker-relative-facts'
 
 /**
  * 🔴 계획이 싣는 한 줄 — **무엇을 무엇으로 바꾸는가**.
@@ -56,7 +56,11 @@ export type SpeakerRelativeEntry = {
   materiality: FactRole
 }
 
-export const SPEAKER_PLAN_VERSION = 'speaker-plan-v5'
+/**
+ * 🔴 **v6 (2026-09-23)** — 파서 의미가 바뀌었다. `materiality` 미기재는 기본값이 아니라
+ *    모양 오류이고, load-bearing 판정 자리가 `resolveLoadBearing` 으로 옮겨졌다.
+ */
+export const SPEAKER_PLAN_VERSION = 'speaker-plan-v6'
 
 /**
  * 🔴 **아는 값만 통과시킨다** (2026-09-23). 카드에 적힐 수 있는 값을 **열거**한다 —
@@ -259,6 +263,11 @@ export const QUALIFICATION_REJECTIONS = [
 
 /** 🔴 계획 응답이 JSON 조차 아니었다는 표시 — 문자열을 두 곳에 적지 않는다 */
 export const UNPARSABLE_PLAN = 'JSON 이 아니다'
+/**
+ * 🔴 **계획이 화자 상대 사실의 materiality 를 답하지 않았다** (2026-09-23).
+ *    기본값으로 통과시키지 않는다 — 모양 오류로 다시 묻는다.
+ */
+export const MATERIALITY_MISSING = '🔴 materiality 누락'
 
 export type SpeakerPlanParse = {
   plan: SpeakerPlan
@@ -419,11 +428,6 @@ export function parseSpeakerPlan(
    *    같은 `sourceText` + `evidenceRef` 로 찾는다.
    */
   const claimed = new Map<string, FactRole>()
-  /**
-   * 🔴 **계획이 그 질문에 답했는가** (2026-09-23). `claimed` 가 비었다는 것만으로는
-   *    "답했는데 이 사실을 안 적었다" 와 "아예 답하지 않았다" 를 가르지 못한다.
-   */
-  const materialityAnswered = arr(j.speakerRelative).length > 0
   for (const x of arr(j.speakerRelative)) {
     const o = x as Record<string, unknown>
     const t = S(o.sourceText)
@@ -473,10 +477,25 @@ export function parseSpeakerPlan(
        *    🔴 모델 말을 그대로 믿지 않는다 — `sourceText`·`evidenceRef` 가
        *       실제 증거와 맞을 때만 그 값을 쓴다. 아니면 **안전한 쪽(loadBearing)**.
        */
+      /**
+       * 🔴 **답하지 않았으면 기본값으로 통과시키지 않는다** (2026-09-23 마스터 지적).
+       *
+       *    앞판은 계획이 `speakerRelative` 를 아예 안 쓰면 **검증되지 않은 자기 나이를
+       *    `incidental` 로 간주해 adopt** 했다. artifact 에 경고를 남기는 것은
+       *    안전 검증이 아니다 — 그 글은 그대로 발행 후보가 됐다.
+       *    🔴 지금은 **모양 오류**로 처리한다. 같은 사람에게 다시 묻는 재시도이지
+       *       결론이 아니므로 정상 원천이 영구 제외되지도 않는다.
+       */
+      const claimedRole = materialityFor(text, ref as EvidenceRef, claimed)
+      if (claimedRole === null) {
+        problems.push(MATERIALITY_MISSING
+          + ` — ${AXIS_LABEL[selfAxis]} "${text}"(${ref}) 에 대한 materiality 가 없다`)
+        continue
+      }
       speakerRelative.push({
         axis: selfAxis, sourceText: text, sourceRole: 'self',
         evidenceRef: ref as EvidenceRef,
-        materiality: materialityFor(text, ref as EvidenceRef, claimed, materialityAnswered),
+        materiality: claimedRole,
       })
       continue
     }
@@ -558,17 +577,8 @@ export function parseSpeakerPlan(
         // 🔴 **검증이 찍어 준 것만** 싣는다 — 모델이 준 배열을 그대로 쓰지 않는다
         warrants: v.warrants,
         universalReason: selfBasis === 'noLifeFactNeeded' ? universalReason : '',
-        /**
-         * 🔴 **계획이 materiality 를 말하지 않았으면 그 사실을 계획에 남긴다** (2026-09-23).
-         *    `schemaProblems` 는 HOLD 일 때만 artifact 로 간다 — 채택된 글에는
-         *    아무 데도 남지 않아 **아무도 못 보는 기록**이 된다. 그래서 여기 싣는다.
-         */
-        reason: (selfBasis === 'lifeFacts' ? '원문 근거와 정본 카드로 1인칭을 허가했다'
-          : '특정 생활사 자격이 필요 없는 글이다')
-          + (!materialityAnswered && speakerRelative.length > 0
-            ? ` 🔴 계획이 speakerRelative 를 적어 내지 않았다 — 화자 상대 사실 `
-              + `${speakerRelative.length}건을 incidental 로 보고 바꿨다(증거로 확인된 값이 아니다)`
-            : ''), rejection: null,
+        reason: selfBasis === 'lifeFacts' ? '원문 근거와 정본 카드로 1인칭을 허가했다'
+          : '특정 생활사 자격이 필요 없는 글이다', rejection: null,
         ...base,
       }),
       dropped, schemaProblems: problems,
@@ -596,6 +606,12 @@ export function parseSpeakerPlan(
  */
 export function planSchemaFailed(parse: SpeakerPlanParse): boolean {
   if (parse.schemaProblems.includes(UNPARSABLE_PLAN)) return true
+  /**
+   * 🔴 **materiality 누락은 모양 오류다** (2026-09-23 마스터 지적).
+   *    앞판은 기본값 `incidental` 로 통과시켜 **검증되지 않은 자기 나이**가
+   *    발행 후보가 됐다. 다시 물으면 달라질 수 있으므로 결론이 아니라 재시도다.
+   */
+  if (parse.schemaProblems.some((x) => x.startsWith(MATERIALITY_MISSING))) return true
   const r = parse.plan.rejection
   return r !== null && !(QUALIFICATION_REJECTIONS as readonly string[]).includes(r)
 }
@@ -696,25 +712,17 @@ function relationAxisOf(clause: string, text: string): SpeakerRelativeAxis | nul
 }
 
 /**
- * 🔴 **계획이 말한 값을 쓰되, 증거가 맞을 때만 쓴다.**
- *    `loadBearing` 이면 숫자만 바꾸지 않고 재계획한다 — 잘못 `incidental` 로 보면
- *    "42세 이상 지원 가능" 같은 글의 숫자가 조용히 바뀐다.
+ * 🔴 **계획이 말한 값을 쓰되, 증거가 맞을 때만 쓴다.** 증거가 어긋난 주장은
+ *    `claimed` 에 들어가지도 않는다 — 지어낸 계획을 통과시키지 않는다.
  *
- * 🔴 **없을 때 무엇으로 두는가가 갈린다** (2026-09-23 실측 회귀).
+ * 🔴 **없으면 `null` 이다. 기본값을 만들지 않는다** (2026-09-23 마스터 지적).
  *
- *    · `answered` — 계획이 `speakerRelative` 를 적어 냈는데 **이 사실만 빠졌다**.
- *      그러면 모르는 것이고, 모르면 바꾸지 않는다 → `loadBearing`.
- *      (증거가 어긋나 버려진 항목도 여기다 — 지어낸 계획을 통과시키지 않는다)
- *    · **아예 적어 내지 않았다** — 그러면 모든 자기 나이가 load-bearing 이 되어
- *      *정상 원문 전부*가 HOLD 로 굳는다(실측: 나이 변환 경로 전면 정지).
- *      숫자를 우리 값으로 바꾸는 것이 이 파이프라인의 본래 일이므로 `incidental` 이고,
- *      **계획이 답하지 않았다는 사실은 문제로 남긴다** — 조용히 넘어가지 않는다.
+ *    앞판은 계획이 답하지 않으면 `incidental` 로 두고 artifact 에 경고만 남겼다.
+ *    경고는 안전 검증이 아니다 — 검증되지 않은 자기 나이가 그대로 발행 후보가 됐다.
+ *    부르는 쪽이 `null` 을 **모양 오류**로 올려 다시 묻는다.
  */
 export function materialityFor(
   text: string, ref: EvidenceRef, claimed: ReadonlyMap<string, FactRole>,
-  answered: boolean,
-): FactRole {
-  const v = claimed.get(`${ref}\u0001${text}`)
-  if (v !== undefined) return v
-  return answered ? 'loadBearing' : 'incidental'
+): FactRole | null {
+  return claimed.get(`${ref}\u0001${text}`) ?? null
 }

@@ -325,8 +325,13 @@ console.log('\n⑦ 🔴 배선이 실제로 그렇게 돼 있는가')
   })())
   check('🔴 🔴 **상한이 잘못되면 실행 전에 멈춘다**',
     /const budget = judgeStageBudget\(WORKSET_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)[\s\S]{0,120}return 1/.test(runner))
+  /**
+   * 🔴 회차 시각이 자식 env 에 함께 실리면서 모양이 바뀌었다(2026-09-23) —
+   *    지키는 것은 같다: **자식에게만** 실리고, 부모 `process.env` 는 건드리지 않는다.
+   */
   check('🔴 단계 env 는 자식 프로세스에만 실린다',
-    /env: \{ \.\.\.process\.env, \.\.\.env \}/.test(runner)
+    /env: \{ \.\.\.process\.env, \.\.\.withClock \}/.test(runner)
+    && /const withClock = \{ \.\.\.\(env \?\? \{\}\), \[RUN_AT_ENV\]: RUN_AT\.toISOString\(\) \}/.test(runner)
     && !/process\.env\.SORAN_LLM_RUN_REQUEST_CAP\s*=/.test(runner))
   check('🔴 🔴 **판정기가 묶음 밖 원천을 판정하지 않는다**',
     /all = all0\.filter\(\(t\) => ws\.sourceIds\.has\(/.test(judge))
@@ -540,11 +545,20 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
    *    앞판은 `complete` 인 HOLD 를 전부 결론으로 봐서, **다른 사람이면 될 수 있는**
    *    불일치 하나가 원천을 영구히 태웠다.
    */
-  check('🔴 🔴 **재시도 원인 여덟 가지**',
+  /**
+   * 🔴 **load-bearing 이 둘로 나뉘었다** (2026-09-23 마스터 P0-1).
+   *    `loadBearingMismatch` — 조건을 만족하는 다른 후보가 있다 (사람을 바꾼다)
+   *    `loadBearingSelfImpossible` — 만족하는 후보가 없다 (자리를 바꾼다)
+   *    🔴 `meaningUnpreservable` 은 여기 없다 — 결론이다.
+   */
+  check('🔴 🔴 **재시도 원인 아홉 가지**',
     RETRYABLE_CAUSES.join(',')
       === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,speakerSlotNarrowed'
-        + ',personaTransformFailed,loadBearingMismatch',
+        + ',personaTransformFailed,loadBearingMismatch,loadBearingSelfImpossible',
     RETRYABLE_CAUSES.join(','))
+  check('🔴 🔴 **의미가 보존되지 않는다는 결론은 다시 시도하지 않는다**',
+    !(RETRYABLE_CAUSES as readonly string[]).includes('meaningUnpreservable')
+    && (INCOMPLETE_CAUSES as readonly string[]).includes('meaningUnpreservable'))
   check('🔴 🔴 **좁힌 묶음 탓은 다시 보고, 전체 자격 미달은 결론이다**',
     (RETRYABLE_CAUSES as readonly string[]).includes('speakerSlotNarrowed')
     && !(RETRYABLE_CAUSES as readonly string[]).includes('speakerUnqualified'))
@@ -624,7 +638,8 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
      *    `LOAD_BEARING` 이면 `loadBearingMismatch`, 아니면 `personaTransformFailed`.
      *    같은 이유로 위 정규식에 잡히지 않으므로 여기서 함께 센다.
      */
-    const transform = [...src.matchAll(/'(loadBearingMismatch|personaTransformFailed)' as const/g)]
+    const transform = [...src.matchAll(
+      /'(loadBearingMismatch|loadBearingSelfImpossible|meaningUnpreservable|personaTransformFailed)' as const/g)]
       .map((m) => m[1]!)
     // 🔴 `notRunFrom` 은 앞 단계 완주 판정(`completionOf`)의 원인을 그대로 물려받는다
     const inherited = /notRunFrom\(/.test(src)

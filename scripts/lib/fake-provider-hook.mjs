@@ -78,6 +78,18 @@ const PERSONA = process.env.FAKE_PROVIDER_PERSONA ?? 'P01'
  *    그러면 어떤 Persona 로도 숫자만 바꿀 수 없어 **재계획**이 일어난다.
  */
 const SELF_AGE = process.env.FAKE_PROVIDER_SELF_AGE ?? ''
+/**
+ * 🔴 **원문 화자 나이의 materiality** — 기본은 `incidental`(바꿔도 뜻이 같다).
+ *    `loadBearing` 을 주면 "숫자가 결론을 바꾼다" 는 계획이 되어 재계획 경로로 간다.
+ */
+const SELF_AGE_ROLE = process.env.FAKE_PROVIDER_SELF_AGE_ROLE ?? 'incidental'
+/**
+ * 🔴 **금지 지시를 따르는 모델인가.** 실제 모델은 요청의 `금지` 칸을 읽고 1인칭을 버린다.
+ *    끄면 "지시를 무시하는 모델" 이 되어 **결론 경로**가 실제로 관측된다.
+ */
+const OBEY_FORBID = process.env.FAKE_PROVIDER_OBEY_FORBID === '1'
+/** 🔴 초안이 나이 문장을 통째로 빼 버린다 — 이행 후조건이 잡아야 한다 */
+const DROP_AGE = process.env.FAKE_PROVIDER_DROP_AGE === '1'
 
 const PAYLOAD = {
   // ── speakerPlan ──
@@ -98,7 +110,7 @@ const PAYLOAD = {
     : {
       protectedFacts: [{ kind: 'number', text: SELF_AGE, evidenceRef: 'head' }],
       speakerRelative: [{
-        axis: 'age', sourceText: SELF_AGE, evidenceRef: 'head', materiality: 'loadBearing',
+        axis: 'age', sourceText: SELF_AGE, evidenceRef: 'head', materiality: SELF_AGE_ROLE,
       }],
     }),
   closingIntent: 'share',
@@ -165,7 +177,30 @@ const pickOffered = (body) => {
     return codes.includes(PERSONA) ? PERSONA : codes[0]
   } catch { return PERSONA }
 }
-const payloadFor = (body) => ({ ...PAYLOAD, personaCode: pickOffered(body) })
+/** 🔴 요청에 1인칭 금지가 실렸는가 — 실제 모델이 읽는 그 칸을 본다 */
+const selfForbiddenIn = (body) => {
+  try {
+    const req = JSON.parse(String(body ?? '{}'))
+    const text = String(req?.contents?.[0]?.parts?.[0]?.text ?? req?.messages?.[0]?.content ?? '')
+    return text.includes('SELF_EXPERIENCE 로 쓰지 마십시오')
+  } catch { return false }
+}
+const payloadFor = (body) => {
+  const base = { ...PAYLOAD, personaCode: pickOffered(body) }
+  /**
+   * 🔴 **초안이 나이를 통째로 빼는 반례** — 원문에 나이가 있어도 쓰지 않는다.
+   *    그러면 이행 후조건이 `PERSONA_AGE_ABSENT` 로 잡고 `personaTransformFailed` 가 된다.
+   */
+  if (DROP_AGE) {
+    base.body = '아침에 창문을 열어 두었더니 바람이 제법 선선하더라고요.\n'
+      + '다들 어떻게 지내시는지 궁금해서 한 줄 남겨 봅니다.'
+  }
+  // 🔴 금지를 따르는 모델이면 1인칭을 버린다 — 실제 모델이 하는 일이다
+  if (OBEY_FORBID && selfForbiddenIn(body)) {
+    return { ...base, stance: 'QUESTION', selfBasis: null, universalReason: '' }
+  }
+  return base
+}
 
 const TEXT = JSON.stringify(PAYLOAD).slice(1)
 /** 🔴 Gemini 는 prefill 이 없다 — 완전한 JSON 을 돌려준다 */

@@ -122,8 +122,9 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
       violatesDraftProvenance({ ...row, provenance: pv }).length > 0)
   }
   // 🔴 후보 파일이 사람 판정으로 위장하지 않는지
+  // 🔴 봉투 조립은 `candidate-envelope` 하나다(2026-09-23) — 옮긴 자리에서 본다
   check('🔴 후보 파일의 sourceDecision 이 AUTO_ADOPT 다', (() => {
-    const r = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const r = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
     return /sourceDecision: 'AUTO_ADOPT'/.test(r) && !/sourceDecision: 'ADOPT'/.test(r)
   })())
   /**
@@ -133,7 +134,7 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
    *    막는 것은 그 다음 단계, 발행 전 사람 검토다.
    */
   check('🔴 🔴 **note 가 현실을 적는다 — autofill 은 받고, 발행은 사람 검토가 연다**', (() => {
-    const r = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const r = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
     return /supply-autofill 은 이 후보를 큐에 올리지만/.test(r)
       && /publish:machine-review 로 검토를 마쳐야 열린다/.test(r)
       && !/supply-autofill 이 받지 않는다/.test(r)

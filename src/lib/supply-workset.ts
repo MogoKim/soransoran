@@ -131,6 +131,11 @@ export type PriorOutcome = {
    *    `null` 이면 화자와 무관한 실패다(예산·파싱).
    */
   failedPersonaCode?: string | null
+  /**
+   * 🔴 **실패한 자리도 나른다** (2026-09-23 마스터 지적). 사람만 빼면 다음 계획기가
+   *    **같은 1인칭 계획**을 또 세운다 — 자리를 바꿔야 하는 실패가 있다.
+   */
+  failedStance?: string | null
   /** 🔴 왜 실패했나 — 코드로 분기한다. 문자열을 파싱하지 않는다 */
   failedCause?: string | null
   /**
@@ -175,6 +180,8 @@ export type PriorArtifactRow = {
   generatedAt: string
   /** 🔴 그 회차가 고른 화자 — 다음 시도에서 제외하려면 필요하다 (2026-09-23) */
   personaCode?: string
+  /** 🔴 그 회차가 고른 자리 — 자리를 바꿔야 하는 실패가 있다 */
+  stance?: string
   /** 🔴 실패 사유 코드 */
   cause?: string
 }
@@ -271,6 +278,7 @@ export function artifactOutcome(
   return {
     sourceArticleId: id, atMs, stage: 'draft', state,
     failedPersonaCode: state === 'retryable' ? (S(a.personaCode) || null) : null,
+    failedStance: state === 'retryable' ? (S(a.stance) || null) : null,
     failedCause: state === 'retryable' ? (S(a.cause) || null) : null,
   }
 }
@@ -322,6 +330,7 @@ export function artifactRecordOutcome(
      *    다음 시도에서 같은 사람을 다시 고르지 않으려면 여기서 꺼내야 한다.
      */
     personaCode: S((raw.plan as Record<string, unknown> | undefined)?.personaCode),
+    stance: S((raw.plan as Record<string, unknown> | undefined)?.stance),
     cause: S(readCause(review)),
   }, { ...base, sourceInputHash: hash }, artifactVersion)
 }
@@ -613,7 +622,9 @@ export type ReplanPlan =
  */
 export function planReplan(input: {
   /** 같은 원천·같은 계약의 지난 시도들 (오래된 순) */
-  attempts: ReadonlyArray<{ failedPersonaCode?: string | null; failedCause?: string | null }>
+  attempts: ReadonlyArray<{
+    failedPersonaCode?: string | null; failedStance?: string | null; failedCause?: string | null
+  }>
   /** 지금 쓸 수 있는 화자 전체 */
   eligible: readonly string[]
   attemptMax?: number

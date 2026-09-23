@@ -31,6 +31,13 @@ import {
   planAxisMapping, fixSourceSpeakerAge, checkAgeMappingApplied,
 } from '../../src/lib/content-core/speaker-relative-facts'
 import { OTHER_MARKERS } from '../../src/lib/persona-self-age'
+/**
+ * 🔴 **load-bearing 을 한 번에 판정한다** (2026-09-23). 사람을 차례로 태우지 않는다.
+ */
+import { resolveLoadBearing, type LoadBearingCandidate } from '../../src/lib/content-core/load-bearing'
+import {
+  selfForbiddenBy, priorFailureLines, type PriorPlanFailure,
+} from '../../src/lib/content-core/replan-input'
 
 /** 🔴 KST 날짜 한 줄 — 주입된 시각에서만 만든다 */
 function kstDateKey(at: Date): string {
@@ -198,6 +205,14 @@ export type RunInput = {
   now: Date
   /** 🔴 원천 하나가 쓸 수 있는 요청 수 — 넘기면 완주 실패로 남는다 */
   callCap: number
+  /**
+   * 🔴 **같은 원천의 지난 실패** (2026-09-23 마스터 지적).
+   *
+   *    앞판은 실패한 사람을 빼기만 했다. 그러면 계획기는 **왜 실패했는지 모른 채**
+   *    같은 1인칭 계획을 또 세운다. 실패 사유를 **요청의 입력으로** 실어
+   *    같은 계획을 되풀이하지 않게 한다. 🔴 유료 호출을 늘리지 않는다 — 입력만 늘린다.
+   */
+  priorFailures?: readonly PriorPlanFailure[]
 }
 
 /**
@@ -360,8 +375,16 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
   }
   const dated = input.personas.map(datedOf)
   const ordered = orderPersonasForSource(dated, input.contract.sourceInputHash)
+  /**
+   * 🔴 **지난 실패를 계획 요청의 입력으로 싣는다** (2026-09-23).
+   *    빼기만 하면 계획기는 같은 1인칭 계획을 또 세운다.
+   */
+  const prior = input.priorFailures ?? []
+  const selfForbidden = selfForbiddenBy(prior)
   const pRes = await ask('speakerPlan', buildSpeakerPlanSystemPrompt(),
-    buildSpeakerPlanPayload({ packet, personas: ordered }))
+    buildSpeakerPlanPayload({
+      packet, personas: ordered, priorFailures: priorFailureLines(prior), selfForbidden,
+    }))
   const pC = completionOf(pRes)
   if (!pC.complete) {
     return blank(null, [], null, null, noDet, null, notRunFrom(pC),
@@ -464,6 +487,42 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    그 내용이 사라진다. 그래서 여기서 먼저 묻고, 실패하면 **구조화된 이유**로 멈춘다 —
    *    문자열을 파싱해 상태를 정하지 않는다.
    */
+  /**
+   * ── 🔴 **load-bearing 을 한 번에 판정한다** (2026-09-23 마스터 지적) ──
+   *
+   *    앞판은 `planAxisMapping` 이 Persona 를 보기도 전에 실패를 냈고, 재계획은
+   *    사람만 바꿨다 — 성공 가능성 0 인 반복이었다. 지금은 **조건을 만족하는 후보가
+   *    실제로 있는가**를 보고, 없으면 자리를 바꾸고, 그것도 안 되면 **한 번에 결론**이다.
+   */
+  const lb = resolveLoadBearing({
+    facts: plan.speakerRelative
+      .filter((e) => e.materiality === 'loadBearing')
+      .map((e) => ({ axis: e.axis, sourceText: e.sourceText })),
+    stance: plan.stance,
+    chosen: { code: persona.code, exactAge: at.exactAge },
+    candidates: dated.map((p): LoadBearingCandidate => {
+      const v = materializePersonaAt({
+        card: { code: p.code, birthDate: p.birthDate ?? '', ageBand: p.ageBand }, now: input.now,
+      })
+      return { code: p.code, exactAge: v.ok ? v.at.exactAge : null }
+    }),
+    selfAlreadyFailed: selfForbidden,
+  })
+  if (!lb.ok) {
+    /**
+     * 🔴 **코드로 분기한다.** 재시도인지 결론인지가 여기서 갈린다 —
+     *    결론을 재시도로 적으면 같은 원천을 유료로 되풀이하고,
+     *    재시도를 결론으로 적으면 정상 원천이 영구 제외된다.
+     */
+    const cause = !lb.retry
+      ? 'meaningUnpreservable' as const
+      : lb.code === 'PERSONA_MISMATCH' ? 'loadBearingMismatch' as const
+        : 'loadBearingSelfImpossible' as const
+    const suggest = lb.retry && lb.suggest.length > 0 ? ` (만족하는 후보 ${lb.suggest.join(' ')})` : ''
+    return blank(plan, dropped, voice, null, noDet, null, notRun(cause),
+      'hold', `${lb.code}: ${lb.reason}${suggest}`)
+  }
+
   const mapping = planAxisMapping({
     facts: plan.speakerRelative.map((e) => ({
       axis: e.axis, sourceText: e.sourceText, role: e.materiality,
@@ -536,6 +595,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       text: `${draft.title}\n${draft.body}`,
       sourceAges, exactAge: at.exactAge, effectiveAgeBand: at.effectiveAgeBand,
       otherMarkers: OTHER_MARKERS,
+      // 🔴 1인칭 자리에서만 우리 나이를 요구한다
+      requireSelfAge: plan.stance === 'SELF_EXPERIENCE',
     })
     if (!post.ok) {
       return blank(plan, dropped, null, null, noDet, null,

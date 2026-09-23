@@ -131,6 +131,8 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { judgeCrisisSignal, SAFETY_SIGNAL_VERSION } from '../src/lib/micro-seed-safety-signals'
 import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { runClockFrom, RUN_AT_ENV } from './lib/run-clock.mjs'
+import { candidateEnvelope } from './lib/candidate-envelope.mjs'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
 /**
@@ -151,7 +153,13 @@ export const DATA_DIR = '.microseed-data'
  *    🔴 module-level 에서 `currentContractBase()` 를 시각 없이 만들면
  *       운영 계약에 `age=∅` 가 들어간다(실측 결함).
  */
-const RUN_AT = new Date()
+/**
+ * 🔴 **부모가 준 시각을 쓴다** (2026-09-23 마스터 지적). 부모와 자식이 각자
+ *    `new Date()` 를 만들면 KST 자정·생일 경계에서 **다른 날**을 보고, 계약이 갈려
+ *    끝난 원천이 terminal 로 인정되지 않는다.
+ */
+const RUN_CLOCK = runClockFrom(process.env)
+const RUN_AT = RUN_CLOCK.at
 
 const argv = process.argv.slice(2)
 /**
@@ -594,13 +602,27 @@ function loadMeta(): Map<string, Meta> {
         const id = S(r.sourceArticleId)
         const t = S(r.title)
         if (id === '' || t === '') continue
+        /**
+         * 🔴 **아는 값을 모르는 값으로 덮어쓰지 않는다** (2026-09-23 실측 결함).
+         *
+         *    `.raw-detail.jsonl` 에는 원문 쪽 세 시각이 **아예 없다**(운영 파일 확인).
+         *    그런데 같은 원천이 두 파일에 다 있고(운영 1321건) raw 를 나중에 읽으므로,
+         *    앞서 읽은 세 시각이 **빈 문자열로 지워졌다.** 실제로
+         *    `auto-draft-20260922-131506.candidates.json` 이 세 칸을 빈 값으로 내보냈다 —
+         *    적재가 신선도를 재지 못한다.
+         *    🔴 빈 값은 "모른다" 이지 "없다" 가 아니다. 모른다로 아는 것을 지우지 않는다.
+         */
+        const was = out.get(id)
+        const keep = (next: string, prev: string | undefined): string =>
+          next !== '' ? next : (prev ?? '')
         out.set(id, {
-          title: t, site: S(r.sourceSite), bodyHead: S(r.bodyHead),
-          axis: S(r.axis), lane: S(r.lane), angle: '', assetAxes: S(r.assetAxes),
-          // 🔴 옛 파일에는 이 키가 없다 — 그러면 빈 문자열(모른다)이다
-          sourcePostedAt: S(r.sourcePostedAt),
-          sourceListedAt: S(r.sourceListedAt),
-          sourceCapturedAt: S(r.sourceCapturedAt),
+          title: t, site: keep(S(r.sourceSite), was?.site), bodyHead: keep(S(r.bodyHead), was?.bodyHead),
+          axis: keep(S(r.axis), was?.axis), lane: keep(S(r.lane), was?.lane), angle: '',
+          assetAxes: keep(S(r.assetAxes), was?.assetAxes),
+          // 🔴 옛 파일에는 이 키가 없다 — 그러면 앞서 읽은 값을 지키고, 그것도 없으면 빈 문자열이다
+          sourcePostedAt: keep(S(r.sourcePostedAt), was?.sourcePostedAt),
+          sourceListedAt: keep(S(r.sourceListedAt), was?.sourceListedAt),
+          sourceCapturedAt: keep(S(r.sourceCapturedAt), was?.sourceCapturedAt),
         })
       }
     }
@@ -678,6 +700,9 @@ async function main(): Promise<void> {
   const mode = !CALL ? '오프라인 계획' : APPLY ? '생성 + 파일' : '생성 (파일 write 0 · cache write 있음)'
   console.log(`\n══ ${mode} ══\n`)
   console.log(`  규칙 ${DRAFT_RULE_VERSION} · provenance ${DRAFT_PROVENANCE}`)
+  // 🔴 어느 시계를 썼는지 회차마다 찍는다 — 문서에만 적으면 아무도 읽지 않는다
+  console.log(`  🔴 회차 시각 ${RUN_AT.toISOString()} (${RUN_CLOCK.from === 'parent'
+    ? `부모가 준 ${RUN_AT_ENV}` : '자기 시계 — 단독 실행'})`)
   console.log(`  🔴 생성 경로 Content Core v2 — `
     + Object.entries(STAGE_MODEL).map(([k, v]) => `${k}:${v}`).join(' · '))
   // 🔴 회차마다 찍는다 — 문서에만 적으면 아무도 읽지 않는다
@@ -991,6 +1016,10 @@ async function main(): Promise<void> {
     })
     if (!replan.ok) {
       replanExhausted += 1
+      /**
+       * 🔴 `CONCLUDED` 는 "이미 결론난 원천" 이다 — 이 회차의 실패가 아니다.
+       *    같은 칸으로 세도 값이 흐려지지 않게 사유를 그대로 찍는다.
+       */
       console.log(`   🟡 ${j.sourceArticleId} — ${replan.code}: ${replan.reason}`
         + `${replan.excluded.length > 0 ? ` (제외 ${replan.excluded.join(' ')})` : ''}`)
       holdPick()
@@ -1032,6 +1061,11 @@ async function main(): Promise<void> {
          *    조립하지 않는다 — 조립하면 제외가 조용히 사라진다.
          */
         personas: replan.personas,
+        /**
+         * 🔴 **지난 실패를 계획기의 입력으로 넘긴다** (2026-09-23). 사람만 빼면
+         *    같은 1인칭 계획이 되풀이된다. 유료 호출은 늘지 않는다 — 입력 한 칸이다.
+         */
+        priorFailures: replan.priorFailures,
         // 🔴 좁히기 전의 수 — "이번 묶음에만 없다" 와 "전체에도 없다" 를 가른다
         personaPoolSize: voice.candidates.length,
         /**
@@ -1231,82 +1265,41 @@ async function main(): Promise<void> {
   writeFileSync(pickPath, `${picks.map((pp) => JSON.stringify(pp)).join('\n')}\n`, 'utf-8')
   // 🔴 후보마다 "어느 판정에서 왔는지"를 실어 보낸다. 상수를 찍으면 근거가 아니라 장식이 된다 —
   //    supply-autofill 은 이 값이 없으면 큐 payload 를 만들지 않는다 (§4-AT)
-  writeFileSync(candPath, `${JSON.stringify({
-    /**
-     * 🔴 **설명을 사실에 맞춘다** (2026-09-20). 앞판은 *"AUTO_ADOPT 라 autofill 이
-     *    받지 않는다"* 라고 적혀 있었다 — 지금은 **정확히 반대**다.
-     *    `MACHINE_PROFILE.sourceDecision === 'AUTO_ADOPT'` 이므로 autofill 은 받는다.
-     *    막는 것은 그 다음 단계, **발행 전 사람 검토**(`publish:machine-review`)다.
-     */
-    note: '🔴 기계가 만들고 기계가 고른 초안이다. 사람의 ADOPT 가 아니다 —'
-      + ' supply-autofill 은 이 후보를 큐에 올리지만,'
-      + ' 발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다.',
+  /**
+   * 🔴 **봉투는 공용 함수 하나가 조립한다** (2026-09-23 마스터 지적).
+   *    검사가 축약본을 손으로 조립하면 러너가 칸을 빠뜨려도 검사는 통과한다 —
+   *    실제로 `semanticReview` 가 빠진 채 적재까지 갔다(P07 실측).
+   */
+  writeFileSync(candPath, `${JSON.stringify(candidateEnvelope({
     generatedAt: nowIso, ruleVersion: DRAFT_RULE_VERSION,
-    /**
-     * 🔴 **단계마다 모델이 다르다.** 한 칸에 하나만 적으면 거짓이 된다 —
-     *    `stageModels` 로 통째로 싣고, 봉투 profile 이 정본과 대조한다.
-     */
-    promptVersion: CONTENT_CORE_PROMPT_VERSION,
-    pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
-    stageModels: STAGE_MODEL, provenance: DRAFT_PROVENANCE,
-    candidates: adopted.map((a) => ({
-      candidateType: 'seedOriginality',
-      /** 🔴 사람 검토가 이 한 장을 정확히 찾는 열쇠 — 원문에서 유도하지 않은 값이다 */
-      artifactId: a.art.artifactId,
+    provenance: DRAFT_PROVENANCE, stageModels: STAGE_MODEL,
+    items: adopted.map((a) => ({
+      artifact: a.art,
       sourceArticleId: a.pick.sourceArticleId,
-      sourceSite: a.meta.site,
-      /**
-       * 🔴 **대조 결과만 싣는다** (2026-09-14).
-       *    원문 제목은 바로 위 `a.meta.title` 에 **메모리로만** 있다 —
-       *    전문도 해시도 파일·DB 어디에도 남기지 않는다(§4-AF ⑤).
-       *    🔴 `copied` 는 **제목을 다시 쓴 뒤에도 같았다**는 뜻이다.
-       */
-      sourceTitleChecked: true,
-      sourceTitleCopied: copiesSourceTitle(a.meta.title, a.draft.title),
-      sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-      sourceInput: 'auto-judge',
-      sourceDecision: 'AUTO_ADOPT',
-      // 🔴 정본을 읽는다 — 여기에 판 이름을 다시 적지 않는다
-      draftFrom: CONTENT_CORE_PIPELINE_VERSION,
-      title: a.draft.title, body: a.draft.body,
-      safetyVerdict: a.draft.safetyVerdict,
-      // 🔴 **잰 값을 싣는다. 판정이 아니다.** 적재 쪽이 같은 정본으로 다시 판정한다
-      originality: a.draft.originality,
-      // 🔴 **어떤 말투 근거로 썼는지.** 텍스트도 작성자도 남기지 않는다 — 근거의 신원뿐이다
-      /**
-       * 🔴 **적재 정본(`readVoiceProvenance`)이 요구하는 모양으로 잇는다** (2026-09-20).
-       *    v2 는 `sampleCount` 로 세고 적재는 `comments` 로 읽는다 — 이름이 달라
-       *    그대로 실으면 `voiceProvenance 가 없거나 깨졌다` 로 전량 제외된다.
-       *    🔴 두 계약을 잇는 자리는 여기 하나다. 값을 지어내지 않는다.
-       */
-      voiceProvenance: a.art.voice.provenance === null ? null : {
-        personaCode: a.art.voice.provenance.personaCode,
-        comments: a.art.voice.provenance.sampleCount,
-        bundleDigest: a.art.voice.provenance.bundleDigest,
-        sourceDigest: a.art.voice.provenance.sourceDigest,
+      meta: {
+        site: a.meta.site,
+        sourcePostedAt: a.meta.sourcePostedAt,
+        sourceListedAt: a.meta.sourceListedAt,
+        sourceCapturedAt: a.meta.sourceCapturedAt,
+      },
+      draft: {
+        title: a.draft.title, body: a.draft.body,
+        safetyVerdict: a.draft.safetyVerdict,
+        originality: a.draft.originality,
+        generatedAt: a.draft.generatedAt,
       },
       /**
-       * 🔴 **의미 검수 요약을 싣는다** (2026-09-22). 앞판은 `review` 를 아예 싣지
-       *    않아서, 모델이 찾은 결함이 적재까지 오지 못했다(P07 실측).
-       *    🔴 문장이 아니라 **수와 완전성**이다 — 원문도 근거 문장도 나르지 않는다.
+       * 🔴 **대조 결과만 싣는다** (2026-09-14). 원문 제목은 메모리에만 있다 —
+       *    전문도 해시도 파일·DB 어디에도 남기지 않는다(§4-AF ⑤).
        */
-      semanticReview: semanticSummaryOf(a.art.review),
-      leakedTokens: '', reviewedAt: nowIso, writtenAt: a.draft.generatedAt,
-      /**
-       * 🔴 **원문 쪽 세 시각** (2026-09-17) — 적재가 신선도를 제대로 재려면 여기를 지나야 한다.
-       *
-       *    🔴 `sourcePostedAt` 은 **원문이 올라온 시각**이다. 사건·방송·발언 시각이 아니다.
-       *    🔴 `writtenAt`(= 우리가 초안을 쓴 시각)과 섞지 않는다. 재생성해도 원문 시각은 안 바뀐다.
-       *    🔴 모르면 빈 문자열이다 — 지금 시각으로 채우지 않는다.
-       */
-      sourcePostedAt: a.meta.sourcePostedAt,
-      sourceListedAt: a.meta.sourceListedAt,
-      sourceCapturedAt: a.meta.sourceCapturedAt,
-      // 🔴 판 이름은 정본을 읽는다 — 여기에 다시 적지 않는다
-      provenanceNote: `기계 생성 · ${DRAFT_RULE_VERSION} · ${DRAFT_PROVENANCE} · ${CONTENT_CORE_PIPELINE_VERSION}`,
+      sourceTitleCopied: copiesSourceTitle(a.meta.title, a.draft.title),
+      sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
       autoJudge: seedProv.get(a.pick.sourceArticleId) ?? null,
+      ruleVersion: DRAFT_RULE_VERSION,
+      provenance: DRAFT_PROVENANCE,
+      reviewedAt: nowIso,
     })),
-  }, null, 2)}\n`, 'utf-8')
+  }), null, 2)}\n`, 'utf-8')
   writeFileSync(artPath, `${JSON.stringify(artifacts, null, 2)}\n`, 'utf-8')
   saveCache(cache)
   console.log(`\n⑥ 🔴 파일 3개`)

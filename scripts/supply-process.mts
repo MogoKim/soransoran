@@ -28,6 +28,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync, spawn } from 'node:child_process'
 
+
 import type { PrismaClient } from '@prisma/client'
 
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
@@ -62,6 +63,13 @@ import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 /** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { RUN_AT_ENV } from './lib/run-clock.mjs'
+
+/**
+ * 🔴 **이 회차의 시각 하나** (2026-09-23 마스터 지적). 여기서 만들고,
+ *    계약·묶음·자식 프로세스가 **전부 이 값**을 쓴다. 두 번 만들지 않는다.
+ */
+const RUN_AT = new Date()
 import {
   SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
 } from '../src/lib/content-core/speaker-load-file'
@@ -382,6 +390,12 @@ function writeAtomic(path: string, body: string): void {
 function run(
   script: string, args: readonly string[], env?: Readonly<Record<string, string>>,
 ): Promise<{ code: number | null; out: string; spawnError: string }> {
+  /**
+   * 🔴 **회차 시각 하나를 자식에게 넘긴다** (2026-09-23 마스터 지적).
+   *    앞판은 부모와 자식이 각자 `new Date()` 를 만들었다 — KST 자정·생일 경계에서
+   *    **다른 날**을 보고 계약이 갈렸다.
+   */
+  const withClock = { ...(env ?? {}), [RUN_AT_ENV]: RUN_AT.toISOString() }
   return new Promise((resolve) => {
     let settled = false
     const done = (r: { code: number | null; out: string; spawnError: string }): void => {
@@ -394,7 +408,7 @@ function run(
       const p = spawn('npx', ['tsx', script, ...args], {
         stdio: ['ignore', 'pipe', 'pipe'],
         // 🔴 단계 env 는 **이 자식에게만** 실린다 — 운영 env 파일은 바뀌지 않는다
-        ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+        env: { ...process.env, ...withClock },
       })
       p.stdout.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stdout.write(t) })
       p.stderr.on('data', (b: Buffer) => { const t = b.toString(); out += t; process.stderr.write(t) })
@@ -761,8 +775,8 @@ async function main(): Promise<number> {
       console.error('\n🔴 중단: 상세 입력을 읽지 못해 작업 묶음을 만들 수 없다 — 유료 단계 0회\n')
       return 1
     }
-    // 🔴 회차 시각 하나 — 자식(auto-draft)과 같은 값을 써야 계약이 어긋나지 않는다
-    const runAt = new Date()
+    // 🔴 회차 시각 하나 — 자식(auto-draft)이 env 로 **같은 값**을 받는다
+    const runAt = RUN_AT
     const prior = priorState(rows, currentContractBase(runAt))
     const plan = selectWorkset({
       rows, humanDecided: humanDecidedIds(), queuePending, ...prior,

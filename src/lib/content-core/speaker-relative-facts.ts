@@ -77,6 +77,10 @@ export type AxisMapping = {
 }
 
 /** 🔴 실패 이유 — **문자열을 파싱하지 않는다.** 부르는 쪽이 이 코드로 분기한다 */
+/**
+ * 🔴 `LOAD_BEARING` 은 **이 함수가 더 이상 내지 않는다** (2026-09-23). 판정 자리가
+ *    `resolveLoadBearing` 으로 옮겨졌다. 옛 artifact 를 읽는 쪽이 있으므로 이름은 남긴다.
+ */
 export const MAPPING_FAIL_CODES = ['LOAD_BEARING', 'NO_PERSONA_VALUE', 'UNKNOWN_AXIS'] as const
 export type MappingFailCode = (typeof MAPPING_FAIL_CODES)[number]
 
@@ -101,12 +105,16 @@ export function planAxisMapping(input: {
 }): MappingPlan {
   const mappings: AxisMapping[] = []
   for (const f of input.facts) {
-    if (f.role === 'loadBearing') {
-      return {
-        ok: false, code: 'LOAD_BEARING', axis: f.axis,
-        reason: `🔴 ${AXIS_LABEL[f.axis]} 가 글의 결론을 바꾼다 — 숫자만 바꾸지 않는다`,
-      }
-    }
+    /**
+     * 🔴 **load-bearing 은 여기서 판정하지 않는다** (2026-09-23 마스터 지적).
+     *
+     *    앞판은 여기서 곧바로 실패를 냈다 — **Persona 사실을 비교하기도 전에**.
+     *    그래서 "사람을 바꿔 다시 계획" 이 성공 가능성 0 인 반복이 됐다.
+     *    지금은 `resolveLoadBearing` 이 부르는 쪽에서 **한 번에** 판정하고,
+     *    여기까지 온 load-bearing 사실은 이미 "고른 사람이 그 조건을 만족한다" 는 뜻이다.
+     *    🔴 그러면 **원문 값이 곧 우리 값**이므로 바꿀 것이 없다.
+     */
+    if (f.role === 'loadBearing') continue
     if (!(SPEAKER_RELATIVE_AXES as readonly string[]).includes(f.axis)) {
       return { ok: false, code: 'UNKNOWN_AXIS', axis: f.axis, reason: `모르는 축이다 — ${String(f.axis)}` }
     }
@@ -275,6 +283,13 @@ export function checkAgeMappingApplied(input: {
   exactAge: number | null
   effectiveAgeBand: string
   otherMarkers: readonly string[]
+  /**
+   * 🔴 **1인칭 자리에서만 "우리 나이가 있어야 한다"** (2026-09-23).
+   *    관찰·질문 자리에서는 우리 나이를 주장하지 않는다 — 그때 이 조건을 걸면
+   *    정상 글이 `PERSONA_AGE_ABSENT` 로 막힌다. 원문 나이가 **1인칭으로** 남는 것은
+   *    자리와 무관하게 여전히 막는다.
+   */
+  requireSelfAge?: boolean
 }): MappingPostVerdict {
   const selfAges = selfAgeNumbersIn(input.text, input.otherMarkers)
   const srcNums = input.sourceAges.map((a) => Number(a)).filter((n) => Number.isFinite(n))
@@ -291,6 +306,9 @@ export function checkAgeMappingApplied(input: {
   const distinct = [...new Set(selfAges)]
   if (distinct.length > 1) {
     return { ok: false, code: 'CONFLICTING_SELF_AGE', reason: `1인칭 나이가 여럿이다 — ${distinct.join('·')}` }
+  }
+  if (input.requireSelfAge === false) {
+    return { ok: true, note: '1인칭 자리가 아니다 — 우리 나이를 주장하지 않는다' }
   }
   // 🔴 우리 값이 실제로 들어갔는가 — 숫자든 밴드 표현이든 하나는 있어야 한다
   const hasExact = input.exactAge !== null && distinct.includes(input.exactAge)
