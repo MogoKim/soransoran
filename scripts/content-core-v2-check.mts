@@ -24,8 +24,8 @@ import {
 import {
   cardValueText, hasFact, verifySelfWarrants,
   SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
-  judgeFirstPersonAge, firstPersonAgesIn, ageBandRange,
 } from '../src/lib/content-core/speaker'
+import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis } from '../src/lib/persona-self-age'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
 import {
@@ -1387,47 +1387,55 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
   })())
 }
 
-console.log('\n🔴 🔴 **1인칭 정확한 나이는 생활사 사실이다 (2026-09-23 P02 실측 재현)**')
+console.log('\n🔴 🔴 **자기 나이 정본 — 새 계약을 만들지 않고 `persona-self-age` 를 쓴다**')
 {
-  // 🔴 후보 `cmudal78h…`(P02) 의 **실제 초안 문장**이다. 계획은 44를 protectedFacts 로
-  //    지키면서 selfBasis 를 noLifeFactNeeded 로 보냈고, P02 정본은 40대 후반이다.
-  const P02_DRAFT = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
-    + '잔주름도 좀 옅어지는 것 같고 그러더라고요.\n제가 곧 44인데 아직 어리다는 소리도 듣고 그래요.\n'
-    + '자랑하려는 건 아닌데, 정말 여자는 피부가 80퍼인 것 같다는 생각이 들더라고요.'
-  const EDITED = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
-    + '잔주름도 좀 옅어지는 것 같고 그러더라고요.\n저도 아직 어려 보인다는 소리를 듣고 그래요.\n'
-    + '자랑하려는 건 아닌데, 정말 여자는 피부가 80퍼인 것 같다는 생각이 들더라고요.'
+  // 🔴 정본 구간: 초반 0~3 · 중반 4~6 · **후반 7~9**. 40대 후반 = 47~49 다.
+  check('🔴 🔴 **40대 후반 = 47~49 — 45·46 은 들어가지 않는다**', (() => {
+    const b = parseAgeBand('40대 후반')
+    return b?.from === 47 && b.to === 49
+  })(), JSON.stringify(parseAgeBand('40대 후반')))
+  check('🔴 초반 0~3 · 중반 4~6', (() => {
+    const a = parseAgeBand('50대 초반'); const m = parseAgeBand('50대 중반')
+    return a?.from === 50 && a.to === 53 && m?.from === 54 && m.to === 56
+  })())
+  check('🔴 🔴 **P02 실제 문장 "제가 곧 44인데" 를 읽는다 (정본 확장)**', (() => {
+    const c = readSelfAgeClaim('제가 곧 44인데 아직 어리다는 소리도 듣고 그래요.')
+    return c !== null && c.span.from === 44 && c.span.to === 44
+  })())
+  const basis = (text: string, band: string | null, sb: string | null) =>
+    judgeSelfAgeBasis({ text, ageBand: band, selfBasis: sb })
+  check('🔴 🔴 **44 + 40대 후반 + lifeFacts → HOLD (겹치지 않는다)**',
+    basis('제가 곧 44인데', '40대 후반', 'lifeFacts').hold === true)
+  check('🔴 🔴 **45 는 40대 후반과 겹치지 않는다 — 통과하면 실패다**',
+    basis('제가 45인데', '40대 후반', 'lifeFacts').hold === true)
+  check('🔴 🔴 **46 도 겹치지 않는다**',
+    basis('제가 46인데', '40대 후반', 'lifeFacts').hold === true)
+  check('🔴 🔴 **47~49 만 겹친다**',
+    basis('제가 47인데', '40대 후반', 'lifeFacts').hold === false
+    && basis('제가 49인데', '40대 후반', 'lifeFacts').hold === false
+    && basis('제가 50인데', '40대 후반', 'lifeFacts').hold === true)
+  check('🔴 🔴 **나이를 밝혔는데 `selfBasis` 가 lifeFacts 가 아니면 HOLD**', (() => {
+    const v = basis('제가 47인데', '40대 후반', 'noLifeFactNeeded')
+    return v.hold && v.code === 'AGE_WITHOUT_LIFE_FACT'
+  })())
+  check('🔴 `selfBasis` 가 null 이어도 HOLD',
+    basis('제가 47인데', '40대 후반', null).hold === true)
+  check('🔴 🔴 **밴드를 읽을 수 없으면 HOLD (fail-closed)**', (() => {
+    const v = basis('제가 47인데', null, 'lifeFacts')
+    return v.hold && v.code === 'AGE_BAND_UNKNOWN'
+  })())
+  check('🔴 나이를 말하지 않으면 통과다',
+    basis('저도 아직 어려 보인다는 소리를 듣고 그래요.', '40대 후반', 'noLifeFactNeeded').hold === false)
 
-  check('🔴 🔴 **실제 초안에서 1인칭 나이 44 를 찾는다**',
-    firstPersonAgesIn(P02_DRAFT).includes(44), JSON.stringify(firstPersonAgesIn(P02_DRAFT)))
-  check('🔴 🔴 **그 경로가 막힌다 — 44를 지키면서 "생활사 필요 없음" 일 수 없다**', (() => {
-    const v = judgeFirstPersonAge({ text: P02_DRAFT, ageBand: '40대 후반', selfBasis: 'noLifeFactNeeded' })
-    return !v.ok && v.code === 'AGE_WITHOUT_LIFE_FACT'
-  })())
-  check('🔴 🔴 **lifeFacts 로 보내도 44 는 40대 후반 밖이라 막힌다**', (() => {
-    const v = judgeFirstPersonAge({ text: P02_DRAFT, ageBand: '40대 후반', selfBasis: 'lifeFacts' })
-    return !v.ok && v.code === 'AGE_OUTSIDE_BAND'
-  })())
-  check('🔴 🔴 **마스터 편집안(나이 제거)은 통과한다**',
-    judgeFirstPersonAge({ text: EDITED, ageBand: '40대 후반', selfBasis: 'noLifeFactNeeded' }).ok === true)
-
-  check('🔴 밴드 안의 나이는 통과한다 (47 · 40대 후반)',
-    judgeFirstPersonAge({ text: '제가 47인데 요즘 그래요', ageBand: '40대 후반', selfBasis: 'lifeFacts' }).ok === true)
-  check('🔴 🔴 **밴드를 읽을 수 없으면 막는다 — 모르면 안전한 쪽이다**', (() => {
-    const v = judgeFirstPersonAge({ text: '제가 47인데', ageBand: null, selfBasis: 'lifeFacts' })
-    return !v.ok && v.code === 'AGE_BAND_UNKNOWN'
-  })())
-  check('🔴 남의 나이·햇수는 1인칭 나이가 아니다', (() => {
-    const t = '아는 분이 44인데 / 몇 년 다녀보니 / 80퍼는 넘는 것 같아요'
-    return firstPersonAgesIn(t).length === 0
-  })(), JSON.stringify(firstPersonAgesIn('아는 분이 44인데 / 몇 년 다녀보니 / 80퍼는 넘는 것 같아요')))
-  check('🔴 나이가 아예 없으면 이 판정은 통과다',
-    judgeFirstPersonAge({ text: '김치 담가 드시나요', ageBand: null, selfBasis: 'noLifeFactNeeded' }).ok === true)
-
-  check('🔴 밴드 해석 — 40대 후반 = 45~49 · 50대 초반 = 50~53 · 50대 = 50~59', (() => {
-    const a = ageBandRange('40대 후반'); const b = ageBandRange('50대 초반'); const c = ageBandRange('50대')
-    return a?.lo === 45 && a.hi === 49 && b?.lo === 50 && b.hi === 53 && c?.lo === 50 && c.hi === 59
-  })())
+  // 🔴 기존 오탐 방지 계약이 그대로인가 — 훼손하면 여기서 깨진다
+  check('🔴 🔴 **제3자 나이는 자기 나이가 아니다**',
+    readSelfAgeClaim('아는 분이 44인데 몇 년 다녀보니 80퍼는 넘는 것 같더라고요.') === null)
+  check('🔴 🔴 **기간·퍼센트는 나이가 아니다**',
+    readSelfAgeClaim('몇 년 꾸준히 다녀봤는데요. 80퍼는 넘는 것 같아요.') === null
+    && readSelfAgeClaim('3일 뒀더니 시어졌어요.') === null)
+  check('🔴 근사 표현은 자기 나이 근거로 쓰지 않는다',
+    readSelfAgeClaim('마흔 중반쯤 됐는데요.') === null)
+  check('🔴 가족 나이는 자기 나이가 아니다', readSelfAgeClaim('엄마가 예순이 넘었어요.') === null)
 }
 
 console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에 막는다 (함수 PASS 가 아니다)**')
@@ -1457,8 +1465,22 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
     blocked.decision !== 'AUTO_ADOPT', JSON.stringify({ d: blocked.decision, r: blocked.reason }))
   check('🔴 🔴 **사유가 값으로 남는다 — 기존 어휘 `lifeHistoryConflict`**',
     blocked.reason === 'lifeHistoryConflict', String(blocked.reason))
-  check('🔴 🔴 **`AUTO_HOLD` 다 — 사람 검토용으로 남고 조용히 버려지지 않는다**',
-    blocked.decision === 'AUTO_HOLD', String(blocked.decision))
+  check('🔴 `AUTO_HOLD` 다 — `AUTO_DROP` 이 아니다', blocked.decision === 'AUTO_HOLD', String(blocked.decision))
+  /**
+   * 🔴 **HOLD 가 어디 남는지 값으로 확인한다** (2026-09-23 표현 정정).
+   *    앞판은 "DB 사람 검토 후보로 남는다" 고 썼는데 **틀렸다.** `adopted` 에는
+   *    `AUTO_ADOPT` 만 들어가므로 HOLD 는 **DB 후보가 되지 않는다.**
+   *    남는 곳은 회차 산출물 `auto-draft-<회차>.picks.jsonl` 이고,
+   *    `usedSources` 가 **회차 안에서만 사는 Set** 이라 다음 회차에 그 원천이 다시 뽑힌다.
+   */
+  const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 🔴 **HOLD 도 `picks` 에 기록된다 — 조용히 사라지지 않는다**',
+    /picks\.push\(p\)/.test(runnerSrc) && /picks\.map\(\(pp\) => JSON\.stringify\(pp\)\)/.test(runnerSrc))
+  check('🔴 🔴 **`usedSources` 는 회차 안에서만 산다 — 다음 회차에 그 원천이 다시 뽑힌다(굶김 아님)**',
+    /const usedSources = new Set<string>\(\)/.test(runnerSrc)
+    && !/usedSources[\s\S]{0,200}?writeFileSync/.test(runnerSrc))
+  check('🔴 🔴 **HOLD 는 DB 후보가 되지 않는다 — `adopted` 에 안 들어간다**',
+    blocked.decision !== 'AUTO_ADOPT')
   check('🔴 🔴 **`selfBasis=lifeFacts` 로 보내도 44 는 밴드 밖이라 막힌다**',
     run(P02_BODY, '40대 후반', 'lifeFacts').decision !== 'AUTO_ADOPT')
   check('🔴 🔴 **밴드를 모르면 막는다 (fail-closed)**',
@@ -1472,7 +1494,7 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
   const third = '아는 분이 44인데 몇 년 다녀보니 80퍼는 넘는 것 같더라고요. 그 집 애가 15살이래요.'
   check('🔴 🔴 **제3자 나이·기간·퍼센트는 오탐으로 막지 않는다**',
     run(third, '40대 후반', 'noLifeFactNeeded').decision === 'AUTO_ADOPT',
-    JSON.stringify(firstPersonAgesIn(third)))
+    JSON.stringify(readSelfAgeClaim(third)))
 
   // 🔴 넘기지 않으면 검사하지 않는다 — 기존 호출부 동작 불변
   check('🔴 `ageFact` 를 넘기지 않으면 기존 동작 그대로다',
@@ -1487,6 +1509,61 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
   check('🔴 🔴 **경고만 있는 정상 후보의 공급은 멈추지 않는다 — `lifeHistoryConflict` 는 DROP 이 아니다**',
     !/'lifeHistoryConflict'/.test(readFileSync('src/lib/micro-seed-auto-draft.ts', 'utf-8')
       .split('const DROP')[1]?.split(']')[0] ?? ''))
+}
+
+console.log('\n🔴 🔴 **실행 사슬 — artifact.plan → voice candidate ageBand → pickV2 → adopted**')
+{
+  // 🔴 러너가 하는 일을 **그 순서 그대로** 돌린다. 정규식 검사가 아니다.
+  const TITLE = '여자는 피부가 80퍼라는 말이 맞는 것 같아요'
+  const BAD = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
+    + '제가 곧 44인데 아직 어리다는 소리도 듣고 그래요.'
+  const GOOD = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
+    + '저도 아직 어려 보인다는 소리를 듣고 그래요.'
+  const THIRD = '아는 분이 44인데 몇 년 다녀보니 80퍼는 넘는 것 같더라고요. 3일 뒀더니 그렇대요.'
+
+  /** 실제 voice 후보 목록의 모양 — code 와 ageBand 를 가진다 */
+  const CANDIDATES = [
+    { code: 'P02', ageBand: '40대 후반' },
+    { code: 'P10', ageBand: '50대 초반' },
+  ]
+  /** artifact 의 plan 모양 */
+  type Art = { plan: { personaCode: string; selfBasis: string | null } | null }
+
+  /** 🔴 러너와 **같은 순서**: plan → candidate 조회 → pickV2 → adopted */
+  const chain = (art: Art, body: string): { picks: string[]; adopted: number } => {
+    const picks: string[] = []
+    let adopted = 0
+    const planned = art.plan?.personaCode ?? null
+    const card = planned === null ? undefined : CANDIDATES.find((c) => c.code === planned)
+    const p = pickV2({
+      judgement: { sourceArticleId: '35040880', decision: 'SEED', reason: 'ok' } as never,
+      draft: { sourceArticleId: '35040880', draftNo: 1, title: TITLE, body,
+        safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
+        generatedAt: '2026-09-23T00:00:00.000Z' } as never,
+      seenTitles: new Set<string>(), seenBodies: new Set<string>(), sourceUsed: false,
+      machineOutcome: 'adopt', machineReason: '', sourceTitleCopied: false, crisisStop: null,
+      ageFact: { ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null },
+    }, '2026-09-23T00:00:00.000Z')
+    picks.push(`${p.decision}:${p.reason}`)
+    if (p.decision === 'AUTO_ADOPT') adopted += 1   // 🔴 러너와 같은 조건
+    return { picks, adopted }
+  }
+
+  const P02_PLAN: Art = { plan: { personaCode: 'P02', selfBasis: 'noLifeFactNeeded' } }
+  check('🔴 🔴 **원본 "제가 곧 44인데" 는 adopted 0건**',
+    chain(P02_PLAN, BAD).adopted === 0, JSON.stringify(chain(P02_PLAN, BAD).picks))
+  check('🔴 🔴 **마스터 편집안은 adopted 1건**',
+    chain(P02_PLAN, GOOD).adopted === 1, JSON.stringify(chain(P02_PLAN, GOOD).picks))
+  check('🔴 🔴 **`lifeFacts` 로 보내도 44 는 40대 후반(47~49) 밖이라 adopted 0건**',
+    chain({ plan: { personaCode: 'P02', selfBasis: 'lifeFacts' } }, BAD).adopted === 0)
+  check('🔴 🔴 **모르는 personaCode → 카드를 못 찾아 fail-closed (adopted 0)**',
+    chain({ plan: { personaCode: 'P99', selfBasis: 'lifeFacts' } }, BAD).adopted === 0)
+  check('🔴 🔴 **plan 이 아예 없으면 fail-closed (adopted 0)**',
+    chain({ plan: null }, BAD).adopted === 0)
+  check('🔴 🔴 **제3자 나이·기간은 오탐으로 막지 않는다 — adopted 1건**',
+    chain(P02_PLAN, THIRD).adopted === 1, JSON.stringify(chain(P02_PLAN, THIRD).picks))
+  check('🔴 다른 화자(50대 초반)에게는 44 가 더 크게 어긋난다 — adopted 0건',
+    chain({ plan: { personaCode: 'P10', selfBasis: 'lifeFacts' } }, BAD).adopted === 0)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

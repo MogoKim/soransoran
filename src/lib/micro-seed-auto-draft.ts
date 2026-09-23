@@ -16,7 +16,7 @@
  *    같은 소재에서 나온 두 글이 연달아 나가면 결이 겹쳐 보인다(§4-AN 형제 검사와 같은 이유).
  */
 
-import { judgeFirstPersonAge, type SelfBasis } from './content-core/speaker'
+import { judgeSelfAgeBasis } from './persona-self-age'
 import {
   judgeCopy, COPY_REASON_LABEL,
   type OriginalityMeasure, type CopyReason,
@@ -325,7 +325,7 @@ export type PickV2Input = {
    *    함께 넘긴다. 넘기지 않으면 검사하지 않는다 — 기존 호출부의 동작이 바뀌지 않는다.
    *    🔴 넘기면 **채택 전에** 막는다. 적재까지 간 뒤 고치는 것이 아니다.
    */
-  ageFact?: { ageBand: string | null; selfBasis: SelfBasis | null }
+  ageFact?: { ageBand: string | null; selfBasis: string | null }
 }
 
 export function pickV2(input: PickV2Input, now: string): Pick {
@@ -364,12 +364,12 @@ export function pickV2(input: PickV2Input, now: string): Pick {
    *    🔴 `AUTO_HOLD` 다(`DROP` 목록에 없다). 사람 검토용 후보 생성은 계속된다.
    */
   if (input.ageFact !== undefined) {
-    const age = judgeFirstPersonAge({
+    const age = judgeSelfAgeBasis({
       text: `${d.title}\n${d.body}`,
       ageBand: input.ageFact.ageBand,
       selfBasis: input.ageFact.selfBasis,
     })
-    if (!age.ok) return held('lifeHistoryConflict')
+    if (age.hold) return held('lifeHistoryConflict')
   }
   if (input.sourceTitleCopied) return held('copiedFromSource')
   return { ...base, decision: 'AUTO_ADOPT', draftNo: d.draftNo, reason: 'ok', rejected: [] }

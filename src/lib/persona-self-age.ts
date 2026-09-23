@@ -195,6 +195,23 @@ function readAgeExpression(s: string): { span: AgeSpan; at: number; raw: string 
   const exact = /(?:만\s*)?([1-9][0-9])\s*(?:살|세)(?!대)/.exec(s)
   if (exact !== null) { const v = Number(exact[1]); add(v, v, exact) }
 
+  /**
+   * ⑤ `44인데` · `44이고` · `44예요` — 🔴 **단위 없이 서술로 붙은 나이** (2026-09-23 추가).
+   *
+   *    P02 실측: 초안이 "제가 곧 44인데" 라고 썼는데 ④ 가 `살`·`세` 를 요구해 읽지 못했다.
+   *    그래서 정본 `40대 후반` 과 어긋난 채로 채택까지 갔다.
+   *
+   *    🔴 **서술 어미가 바로 붙을 때만** 읽는다. 그래야 `80퍼` · `3일` · `몇 년` 같은
+   *       수량 표현과 갈린다. 뒤에 단위 명사가 오면 나이가 아니다.
+   *    🔴 20~99 만 본다 — `10인데` 같은 것은 나이로 읽지 않는다.
+   */
+  const bare = /(?:^|[^0-9])([2-9][0-9])\s*(?:인데|이고|이라|이라서|예요|이에요|입니다|이면|인지라)/.exec(s)
+  if (bare !== null) {
+    const v = Number(bare[1])
+    const at = bare.index + bare[0].indexOf(bare[1]!)
+    cand.push({ span: { from: v, to: v }, at, raw: bare[0].slice(bare[0].indexOf(bare[1]!)) })
+  }
+
   if (cand.length === 0) return null
   /**
    * 🔴 **정규식 종류의 우선순위로 고르지 않는다** (2026-09-16 정정).
@@ -267,4 +284,42 @@ export function judgeSelfAgeConflict(input: {
     reason: `글쓴이는 ${input.ageBand} 인데 글에서 자기 나이를`
       + ` ${claim.span.from}~${claim.span.to}세로 말한다`,
   }
+}
+
+/**
+ * 🔴 **정확한 자기 나이는 생활사 사실이다** (2026-09-23 P02 실측).
+ *
+ *    후보 `cmudal78h…` 의 계획이 44 를 `protectedFacts` 로 지키면서 `selfBasis` 를
+ *    `noLifeFactNeeded` 로 보냈고, 초안에 "제가 곧 44인데" 가 들어갔다.
+ *    **P02 정본은 40대 후반(47~49)** 이다.
+ *
+ * 🔴 판정 계약을 새로 만들지 않는다 — `readSelfAgeClaim`·`parseAgeBand` 정본을 그대로 쓴다.
+ *    여기서 더하는 것은 **`selfBasis` 와의 대조** 하나뿐이다.
+ */
+export type SelfAgeBasisVerdict =
+  | { hold: false; reason: string }
+  | { hold: true; code: 'AGE_WITHOUT_LIFE_FACT' | 'AGE_BAND_UNKNOWN' | 'AGE_BAND_CONFLICT'; reason: string }
+
+export function judgeSelfAgeBasis(input: {
+  text: string
+  ageBand: string | null | undefined
+  /** 계획이 정한 자격 근거. `lifeFacts` 가 아니면 생활사 사실을 쓸 수 없다 */
+  selfBasis: string | null | undefined
+}): SelfAgeBasisVerdict {
+  const claim = readSelfAgeClaim(input.text)
+  if (claim === null) return { hold: false, reason: '정확한 자기 나이를 말하지 않았다' }
+  // 🔴 나이를 밝혔으면 그것은 생활사 사실이다 — "필요 없다" 로 보낼 수 없다
+  if ((input.selfBasis ?? '') !== 'lifeFacts') {
+    return {
+      hold: true, code: 'AGE_WITHOUT_LIFE_FACT',
+      reason: `🔴 자기 나이 ${claim.span.from}~${claim.span.to}세를 말하면서`
+        + ` 자격 근거가 ${input.selfBasis ?? '(없음)'} 다`,
+    }
+  }
+  if (parseAgeBand(input.ageBand) === null) {
+    return { hold: true, code: 'AGE_BAND_UNKNOWN', reason: `🔴 정본 나이대를 읽을 수 없다 — ${input.ageBand ?? '(없음)'}` }
+  }
+  const v = judgeSelfAgeConflict({ ageBand: input.ageBand, text: input.text })
+  if (v !== null && v.conflict) return { hold: true, code: 'AGE_BAND_CONFLICT', reason: v.reason }
+  return { hold: false, reason: `자기 나이가 ${input.ageBand} 와 겹친다` }
 }
