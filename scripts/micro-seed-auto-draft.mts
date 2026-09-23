@@ -1022,6 +1022,14 @@ async function main(): Promise<void> {
      * 🔴 **기계 판정을 그대로 채택으로 옮기지 않는다.** v2 가 `adopt` 여도
      *    제목 복제 · 중복 · 안전 · 위기 검사는 기존 정본이 다시 본다.
      */
+    /**
+     * 🔴 **1인칭 나이 판정의 입력** (2026-09-23). 정본 카드의 `ageBand` 와 계획의
+     *    `selfBasis` 를 채택 판정에 넘긴다 — **여기가 adopt 를 정하는 가장 이른 자리**다.
+     *    🔴 카드를 못 찾으면 `null` 을 넘기고, 판정이 fail-closed 로 막는다.
+     */
+    const planned = art.plan?.personaCode ?? null
+    const card = planned === null ? undefined
+      : voice.candidates.find((c) => c.code === planned)
     const p = pickV2({
       judgement: j, draft: cand, seenTitles, seenBodies,
       sourceUsed: usedSources.has(j.sourceArticleId),
@@ -1029,6 +1037,7 @@ async function main(): Promise<void> {
       machineReason: art.review.machineReason,
       sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
       crisisStop: crisis,
+      ageFact: { ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null },
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {

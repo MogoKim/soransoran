@@ -10,6 +10,7 @@
  *
  * 🔴 **이 판의 핵심**: `SELF_EXPERIENCE` 는 **코드가 검증한 허가 근거** 없이 나올 수 없다.
  */
+import { pickV2 } from '../src/lib/micro-seed-auto-draft'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -1427,6 +1428,65 @@ console.log('\n🔴 🔴 **1인칭 정확한 나이는 생활사 사실이다 (2
     const a = ageBandRange('40대 후반'); const b = ageBandRange('50대 초반'); const c = ageBandRange('50대')
     return a?.lo === 45 && a.hi === 49 && b?.lo === 50 && b.hi === 53 && c?.lo === 50 && c.hi === 59
   })())
+}
+
+console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에 막는다 (함수 PASS 가 아니다)**')
+{
+  // 🔴 P02 의 **실제 초안 문장**과 실제 정본 나이대다.
+  const P02_BODY = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
+    + '잔주름도 좀 옅어지는 것 같고 그러더라고요.\n제가 곧 44인데 아직 어리다는 소리도 듣고 그래요.\n'
+    + '자랑하려는 건 아닌데, 정말 여자는 피부가 80퍼인 것 같다는 생각이 들더라고요.'
+  const EDITED_BODY = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
+    + '잔주름도 좀 옅어지는 것 같고 그러더라고요.\n저도 아직 어려 보인다는 소리를 듣고 그래요.\n'
+    + '자랑하려는 건 아닌데, 정말 여자는 피부가 80퍼인 것 같다는 생각이 들더라고요.'
+  const TITLE = '여자는 피부가 80퍼라는 말이 맞는 것 같아요'
+
+  const run = (body: string, ageBand: string | null, selfBasis: 'lifeFacts' | 'noLifeFactNeeded' | null,
+    withAgeFact = true) => pickV2({
+    judgement: { sourceArticleId: '35040880', decision: 'SEED', reason: 'ok' } as never,
+    draft: { sourceArticleId: '35040880', draftNo: 1, title: TITLE, body,
+      safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
+      generatedAt: '2026-09-23T00:00:00.000Z' } as never,
+    seenTitles: new Set<string>(), seenBodies: new Set<string>(), sourceUsed: false,
+    machineOutcome: 'adopt', machineReason: '', sourceTitleCopied: false, crisisStop: null,
+    ...(withAgeFact ? { ageFact: { ageBand, selfBasis } } : {}),
+  }, '2026-09-23T00:00:00.000Z')
+
+  const blocked = run(P02_BODY, '40대 후반', 'noLifeFactNeeded')
+  check('🔴 🔴 **"제가 곧 44인데" + P02(40대 후반) 는 채택되지 않는다**',
+    blocked.decision !== 'AUTO_ADOPT', JSON.stringify({ d: blocked.decision, r: blocked.reason }))
+  check('🔴 🔴 **사유가 값으로 남는다 — 기존 어휘 `lifeHistoryConflict`**',
+    blocked.reason === 'lifeHistoryConflict', String(blocked.reason))
+  check('🔴 🔴 **`AUTO_HOLD` 다 — 사람 검토용으로 남고 조용히 버려지지 않는다**',
+    blocked.decision === 'AUTO_HOLD', String(blocked.decision))
+  check('🔴 🔴 **`selfBasis=lifeFacts` 로 보내도 44 는 밴드 밖이라 막힌다**',
+    run(P02_BODY, '40대 후반', 'lifeFacts').decision !== 'AUTO_ADOPT')
+  check('🔴 🔴 **밴드를 모르면 막는다 (fail-closed)**',
+    run(P02_BODY, null, 'lifeFacts').decision !== 'AUTO_ADOPT')
+
+  const okPick = run(EDITED_BODY, '40대 후반', 'noLifeFactNeeded')
+  check('🔴 🔴 **나이를 뺀 마스터 편집안은 채택된다 — 막기만 하는 코드가 아니다**',
+    okPick.decision === 'AUTO_ADOPT', JSON.stringify({ d: okPick.decision, r: okPick.reason }))
+
+  // 🔴 오탐 — 제3자 나이·기간·퍼센트는 막지 않는다
+  const third = '아는 분이 44인데 몇 년 다녀보니 80퍼는 넘는 것 같더라고요. 그 집 애가 15살이래요.'
+  check('🔴 🔴 **제3자 나이·기간·퍼센트는 오탐으로 막지 않는다**',
+    run(third, '40대 후반', 'noLifeFactNeeded').decision === 'AUTO_ADOPT',
+    JSON.stringify(firstPersonAgesIn(third)))
+
+  // 🔴 넘기지 않으면 검사하지 않는다 — 기존 호출부 동작 불변
+  check('🔴 `ageFact` 를 넘기지 않으면 기존 동작 그대로다',
+    run(P02_BODY, '40대 후반', 'noLifeFactNeeded', false).decision === 'AUTO_ADOPT')
+
+  // 🔴 **차단된 행은 적재 대상이 아니다** — AUTO_ADOPT 만 candidates 로 간다
+  const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 🔴 **러너가 `ageFact` 를 실제로 넘긴다 — 함수만 있고 안 부르는 상태가 아니다**',
+    /ageFact: \{ ageBand: card\?\.ageBand \?\? null, selfBasis: art\.plan\?\.selfBasis \?\? null \}/.test(runner))
+  check('🔴 🔴 **`AUTO_ADOPT` 인 것만 `adopted` 에 들어간다 — 차단된 행은 DB 후보가 되지 않는다**',
+    /if \(p\.decision === 'AUTO_ADOPT'\) \{\s*\n\s*adopted\.push/.test(runner))
+  check('🔴 🔴 **경고만 있는 정상 후보의 공급은 멈추지 않는다 — `lifeHistoryConflict` 는 DROP 이 아니다**',
+    !/'lifeHistoryConflict'/.test(readFileSync('src/lib/micro-seed-auto-draft.ts', 'utf-8')
+      .split('const DROP')[1]?.split(']')[0] ?? ''))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

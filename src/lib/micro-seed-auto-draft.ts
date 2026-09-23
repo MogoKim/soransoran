@@ -16,6 +16,7 @@
  *    같은 소재에서 나온 두 글이 연달아 나가면 결이 겹쳐 보인다(§4-AN 형제 검사와 같은 이유).
  */
 
+import { judgeFirstPersonAge, type SelfBasis } from './content-core/speaker'
 import {
   judgeCopy, COPY_REASON_LABEL,
   type OriginalityMeasure, type CopyReason,
@@ -319,6 +320,12 @@ export type PickV2Input = {
   machineReason: string
   sourceTitleCopied: boolean
   crisisStop: 'crisisSignal' | null
+  /**
+   * 🔴 **1인칭 나이 판정** (2026-09-23). 계획이 정한 `selfBasis` 와 화자 정본 나이대를
+   *    함께 넘긴다. 넘기지 않으면 검사하지 않는다 — 기존 호출부의 동작이 바뀌지 않는다.
+   *    🔴 넘기면 **채택 전에** 막는다. 적재까지 간 뒤 고치는 것이 아니다.
+   */
+  ageFact?: { ageBand: string | null; selfBasis: SelfBasis | null }
 }
 
 export function pickV2(input: PickV2Input, now: string): Pick {
@@ -346,6 +353,24 @@ export function pickV2(input: PickV2Input, now: string): Pick {
     sourceUsed: input.sourceUsed,
   })
   if (own !== 'ok') return held(own)
+  /**
+   * 🔴 **1인칭 정확한 나이는 생활사 사실이다** (2026-09-23 P02 실측).
+   *
+   *    후보 `cmudal78h…` 의 계획이 44 를 `protectedFacts` 로 지키면서 `selfBasis` 를
+   *    `noLifeFactNeeded` 로 보냈고, 초안에 "제가 곧 44인데" 가 들어갔다.
+   *    **P02 정본은 40대 후반**이다. semanticReview 도 "카드와 일치" 라고 오판했다.
+   *
+   *    🔴 사유 이름을 새로 만들지 않는다 — 기존 `lifeHistoryConflict` 를 쓴다.
+   *    🔴 `AUTO_HOLD` 다(`DROP` 목록에 없다). 사람 검토용 후보 생성은 계속된다.
+   */
+  if (input.ageFact !== undefined) {
+    const age = judgeFirstPersonAge({
+      text: `${d.title}\n${d.body}`,
+      ageBand: input.ageFact.ageBand,
+      selfBasis: input.ageFact.selfBasis,
+    })
+    if (!age.ok) return held('lifeHistoryConflict')
+  }
   if (input.sourceTitleCopied) return held('copiedFromSource')
   return { ...base, decision: 'AUTO_ADOPT', draftNo: d.draftNo, reason: 'ok', rejected: [] }
 }
