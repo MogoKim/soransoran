@@ -39,7 +39,6 @@ import {
   hasBannedWord, judgeSourceGate, judgeDraftGate,
   DRAFT_REASON_LABEL, DRAFT_RULE_VERSION, DRAFT_PROVENANCE, BANNED_WORDS,
 } from '../src/lib/micro-seed-auto-draft'
-import { judgeSelfAgeConflict, SELF_AGE_RULE_VERSION } from '../src/lib/persona-self-age'
 /**
  * 🔴 **생성 전 큐 스냅샷** (2026-09-17). 이 스크립트는 여전히 **DB 를 읽지 않는다** —
  *    러너가 읽어 파일로 건넨 것을 검증해서 쓴다. 판정 규칙은 여기서 만들지 않는다.

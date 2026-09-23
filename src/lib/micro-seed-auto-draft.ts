@@ -361,7 +361,13 @@ export function pickV2(input: PickV2Input, now: string): Pick {
    *    **P02 정본은 40대 후반**이다. semanticReview 도 "카드와 일치" 라고 오판했다.
    *
    *    🔴 사유 이름을 새로 만들지 않는다 — 기존 `lifeHistoryConflict` 를 쓴다.
-   *    🔴 `AUTO_HOLD` 다(`DROP` 목록에 없다). 사람 검토용 후보 생성은 계속된다.
+   *
+   * 🔴 **`AUTO_HOLD` 가 무엇인지 정확히 적는다** (2026-09-23 정정).
+   *    앞판 주석은 "사람 검토용 후보 생성은 계속된다" 고 썼는데 **틀렸다.**
+   *      · `picks` 산출물(`auto-draft-<회차>.picks.jsonl`)에는 남는다
+   *      · `adopted` 에는 들어가지 않는다
+   *      · **DB 사람 검토 후보는 생성되지 않는다**
+   *      · `AUTO_DROP` 은 아니다 — 그 원천이 영구히 닫히지 않는다
    */
   if (input.ageFact !== undefined) {
     const age = judgeSelfAgeBasis({

@@ -26,6 +26,8 @@ import {
   SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
 } from '../src/lib/content-core/speaker'
 import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis } from '../src/lib/persona-self-age'
+import { selectWorkset } from '../src/lib/supply-workset'
+import { SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
 import {
@@ -1474,11 +1476,8 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
    *    `usedSources` 가 **회차 안에서만 사는 Set** 이라 다음 회차에 그 원천이 다시 뽑힌다.
    */
   const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
-  check('🔴 🔴 **HOLD 도 `picks` 에 기록된다 — 조용히 사라지지 않는다**',
+  check('🔴 HOLD 도 `picks` 산출물에는 남는다',
     /picks\.push\(p\)/.test(runnerSrc) && /picks\.map\(\(pp\) => JSON\.stringify\(pp\)\)/.test(runnerSrc))
-  check('🔴 🔴 **`usedSources` 는 회차 안에서만 산다 — 다음 회차에 그 원천이 다시 뽑힌다(굶김 아님)**',
-    /const usedSources = new Set<string>\(\)/.test(runnerSrc)
-    && !/usedSources[\s\S]{0,200}?writeFileSync/.test(runnerSrc))
   check('🔴 🔴 **HOLD 는 DB 후보가 되지 않는다 — `adopted` 에 안 들어간다**',
     blocked.decision !== 'AUTO_ADOPT')
   check('🔴 🔴 **`selfBasis=lifeFacts` 로 보내도 44 는 밴드 밖이라 막힌다**',
@@ -1564,6 +1563,61 @@ console.log('\n🔴 🔴 **실행 사슬 — artifact.plan → voice candidate a
     chain(P02_PLAN, THIRD).adopted === 1, JSON.stringify(chain(P02_PLAN, THIRD).picks))
   check('🔴 다른 화자(50대 초반)에게는 44 가 더 크게 어긋난다 — adopted 0건',
     chain({ plan: { personaCode: 'P10', selfBasis: 'lifeFacts' } }, BAD).adopted === 0)
+}
+
+console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확인한다 (다음 회차 즉시 선택을 보장하지 않는다)**')
+{
+  /**
+   * 🔴 앞판은 "다음 회차에 그 원천이 다시 뽑힌다" 고 단언했다. **철회한다.**
+   *    정확한 계약은 이렇다.
+   *      · HOLD 된 원천은 `concluded` 에 들어가지 않아 **재시도 자격을 유지**한다
+   *      · **다음 회차 즉시 선택은 보장하지 않는다** — 신규가 자리를 채울 수 있다
+   *      · `WORKSET_RETRY_RESERVE` 한 자리와 **오래 기다린 순** 정렬이 굶김을 막는다
+   */
+  const row = (id: string, comments: number) => ({
+    sourceArticleId: id, sourceSite: 'navercafe:remonterrace',
+    commentCount: comments, sourcePostedAt: '', sourceListedAt: '',
+    input: { sourceArticleId: id, title: `요즘 김치 담그기 어떠신가요 ${id}`,
+      bodyHead: '주변에 물어보면 반반이더라고요. 다들 어떻게 하시는지 궁금해서 여쭤봐요.',
+      bodyLength: 120, commentCount: comments,
+      safetyVerdict: 'pass', access: 'ok', axis: SEED_AXIS } as never,
+  })
+  const NOW = new Date('2026-09-23T05:00:00Z')
+  const ago = (h: number) => NOW.getTime() - h * 3600e3
+  const plan = (limit: number, attempted: Map<string, { atMs: number }>, fresh: string[]) =>
+    selectWorkset({
+      rows: [...fresh.map((f, i) => row(f, 50 - i)), ...[...attempted.keys()].map((k, i) => row(k, 40 - i))],
+      humanDecided: new Set<string>(), queuePending: new Set<string>(),
+      concluded: new Set<string>(), attempted: attempted as never,
+      limit, runId: 'r1', takenAt: NOW,
+    })
+
+  const att = new Map([['old-1', { atMs: ago(30) }], ['old-2', { atMs: ago(5) }]])
+  const p5 = plan(5, att, ['new-1', 'new-2', 'new-3', 'new-4', 'new-5'])
+  const ids5 = p5.workset.sourceIds
+  check('🔴 🔴 **신규가 충분해도 재시도 자리가 남는다**',
+    ids5.some((x) => x.startsWith('old-')), JSON.stringify(ids5))
+  check('🔴 🔴 **재시도 중에서는 오래 기다린 것이 먼저다**',
+    ids5.filter((x) => x.startsWith('old-'))[0] === 'old-1', JSON.stringify(ids5))
+  check('🔴 신규가 자리를 다 못 채우면 재시도가 남은 칸을 쓴다',
+    plan(5, att, ['new-1']).workset.sourceIds.length > 1)
+  check('🔴 🔴 **다음 회차 즉시 선택은 보장되지 않는다 — 자리가 하나면 신규가 가져갈 수 있다**', (() => {
+    const one = plan(1, new Map([['old-2', { atMs: ago(1) }]]), ['new-1'])
+    return one.workset.sourceIds.length === 1 && one.workset.sourceIds[0] === 'new-1'
+  })())
+  check('🔴 🔴 **다만 오래 굶으면 자리 하나여도 재시도가 가져간다**', (() => {
+    const one = plan(1, new Map([['old-1', { atMs: ago(72) }]]), ['new-1'])
+    return one.workset.sourceIds[0] === 'old-1'
+  })())
+  check('🔴 `concluded` 에 들어간 원천은 다시 뽑히지 않는다', (() => {
+    const p2 = selectWorkset({
+      rows: [row('done-1', 99), row('new-1', 10)],
+      humanDecided: new Set<string>(), queuePending: new Set<string>(),
+      concluded: new Set(['done-1']), attempted: new Map() as never,
+      limit: 5, runId: 'r1', takenAt: NOW,
+    })
+    return !p2.workset.sourceIds.includes('done-1')
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
