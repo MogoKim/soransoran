@@ -1,51 +1,50 @@
-import Link from 'next/link'
-import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
-import { formatMagazinePublishedDate } from '@/lib/magazine-date'
-import { TITLE_CARD } from '@/lib/typography'
+import RelatedMagazineLink from '@/components/features/RelatedMagazineLink'
+import { SLOT_LABEL, type RelatedMagazineItem } from '@/lib/magazine-graph'
 
 /**
- * 상세 하단 관련글.
+ * 🔴 그림을 싣지 않는다 — 연관 글은 같은 분류에서 오고, 그림이 없는 글이 섞인다.
+ * 🔴 목록 카드를 쓰지 않는다 — 본문이 이미 흰 면 위에 있다. 카드 안에 카드를 넣지 않는다.
  *
- * 🔴 그림을 싣지 않는다.
- *    관련글은 같은 분류에서만 뽑는데 그림이 없는 글이 적지 않아,
- *    섞이면 줄마다 높이와 눈길이 흔들린다. 글만 두면 어떤 글이 와도 같은 모양이다.
+ * 🔴 화면은 그래프를 모른다. 무엇을 왜 골랐는지는 resolver 가 정하고,
+ *    여기는 받은 순서대로 그린다. 그래야 그래프를 꺼도 이 파일이 그대로 산다.
  *
- * 🔴 목록 카드를 쓰지 않는다.
- *    본문이 이미 흰 면 위에 있어 그 아래 면을 또 쌓으면 읽기의 끝이 무거워진다.
- *    여기는 다음 글로 넘어가는 손잡이지 새로운 읽을거리 진열장이 아니다.
+ * 🔴 **목록 공통 graphVersion 을 받지 않는다.** 한 목록에 지정 관계와 보충이 섞이므로
+ *    공통값을 모든 클릭에 붙이면 보충 클릭이 그래프 성과로 잡힌다.
+ *
+ * 🔴 **서버 컴포넌트로 남는다.** 계측은 줄 하나(RelatedMagazineLink)만 클라이언트다.
+ *    목록 전체를 내리면 글 데이터가 통째로 브라우저까지 간다.
  */
-export default function RelatedMagazineList({ articles }: { articles: MagazineArticle[] }) {
-  if (articles.length === 0) return null
-
+export default function RelatedMagazineList({
+  items,
+  fromSlug,
+}: {
+  items: RelatedMagazineItem[]
+  fromSlug: string
+}) {
+  if (items.length === 0) return null
   return (
     <section className="mt-8 border-t border-subtle pt-6">
       <h2 className="text-lg font-bold text-content-primary">함께 읽어보세요</h2>
-
       <ul className="mt-2 flex flex-col [&>li+li]:border-t [&>li+li]:border-subtle">
-        {articles.map((article) => (
+        {items.map(({ article, relationType, surface, slot, reason, source, position, graphVersion }) => (
           <li key={article.slug}>
-            <Link
-              href={`/magazine/${article.slug}`}
-              className="group flex min-h-[72px] items-center gap-3 py-3 no-underline"
-            >
-              <span className="flex min-w-0 flex-col gap-1">
-                <span className={`line-clamp-2 break-keep ${TITLE_CARD} text-content-primary transition-colors duration-150 group-hover:text-brand-strong group-active:text-brand-strong`}>
-                  {article.title}
-                </span>
-                <span className="flex flex-wrap items-center gap-x-1.5 text-meta text-content-muted">
-                  <span className="font-bold text-brand-strong">
-                    {MAGAZINE_CLUSTER_LABELS[article.cluster]}
-                  </span>
-                  <span aria-hidden>·</span>
-                  {formatMagazinePublishedDate(article.publishedAt)}
-                </span>
-              </span>
-
-              {/* 넘어간다는 신호다. 글자가 아니라 표시라 낭독하지 않는다. */}
-              <span aria-hidden className="ml-auto shrink-0 text-content-muted">
-                →
-              </span>
-            </Link>
+            <RelatedMagazineLink
+              slug={article.slug}
+              title={article.title}
+              cluster={article.cluster}
+              publishedAt={article.publishedAt}
+              fromSlug={fromSlug}
+              relationType={relationType}
+              surface={surface}
+              slot={slot}
+              /* 🔴 보충에는 슬롯 문구를 주지 않는다 — 슬롯인 척하면 화면이 거짓말을 한다 */
+              slotLabel={slot ? SLOT_LABEL[slot] : null}
+              reason={reason}
+              source={source}
+              position={position}
+              /* 🔴 목록 공통값이 아니라 **이 줄의** 버전이다 */
+              graphVersion={graphVersion}
+            />
           </li>
         ))}
       </ul>

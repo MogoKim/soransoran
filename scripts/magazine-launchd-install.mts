@@ -75,6 +75,12 @@ export const MAGAZINE_JOBS = [
   'com.soransoran.magazine-producer',
   'com.soransoran.magazine-auto-register',
   'com.soransoran.magazine-watch',
+  /**
+   * 🔴 11:05 — magazine-watch(11:00) **직후**다.
+   *    앞은 "예약한 글이 나왔는가", 이것은 "아직 안 나온 글이 링크에 떴는가" 다.
+   *    공개가 끝난 뒤라야 뒤의 질문이 참이 된다.
+   */
+  'com.soransoran.magazine-graph-watch',
 ] as const
 
 const CANON_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran')

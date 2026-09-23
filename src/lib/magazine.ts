@@ -145,7 +145,13 @@ export function getMagazineArticleBySlug(slug: string): MagazineArticle | undefi
   return getAllMagazineArticles().find((a) => a.slug === slug)
 }
 
-/** 같은 클러스터 안에서만 연결한다 */
+/**
+ * 같은 클러스터 안에서만 연결한다.
+ *
+ * 🔴 **이 함수는 이제 폴백이다** (M-GRAPH G9). 화면이 직접 부르지 않고
+ *    `resolveRelatedMagazine` 이 그래프가 답을 못 낼 때 이것으로 되돌아온다.
+ *    🔴 고치지 않는다 — 그래프가 꺼졌을 때 독자가 보는 화면이 바로 이것이다.
+ */
 export function getRelatedMagazineArticles(
   article: MagazineArticle,
   limit = 3,

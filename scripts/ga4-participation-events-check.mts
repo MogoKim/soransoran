@@ -58,7 +58,7 @@ const typeGuardSamples: string[] = []
   typeGuardSamples.push(okEvent.board_slug, badEvent.board_slug, extraKey.member_type)
 }
 
-/** 이벤트 이름이 6종 그대로인지 — 늘거나 줄면 컴파일이 깨진다 */
+/** 이벤트 이름이 8종 그대로인지 — 늘거나 줄면 컴파일이 깨진다 */
 type ExpectedEventName =
   | 'write_login_prompt'
   | 'write_auth_start'
@@ -66,6 +66,10 @@ type ExpectedEventName =
   | 'write_draft_restored'
   | 'post_publish'
   | 'comment_publish'
+  /** 🔴 매거진 하단 연관 글 이동 (M-GRAPH G9). board_slug 를 쓰지 않는다 */
+  | 'magazine_related_click'
+  /** 🔴 그 추천이 화면에 보였다 (G9.1) — 클릭률의 분모 */
+  | 'magazine_related_impression'
 type EventNamesAreExact = [SoranEventName] extends [ExpectedEventName]
   ? [ExpectedEventName] extends [SoranEventName]
     ? true
@@ -290,7 +294,7 @@ check(
   !COMMUNITY_BOARD_SLUGS.includes('magazine' as CommunityBoardSlug) &&
     !COMMUNITY_BOARD_SLUGS.includes('best' as CommunityBoardSlug),
 )
-check('이벤트 이름 6종이 그대로다 (타입 대조)', eventNamesAreExact === true)
+check('이벤트 이름 8종이 그대로다 (타입 대조)', eventNamesAreExact === true)
 check('타입 차단 표본이 전부 살아 있다', typeGuardSamples.length === 7)
 
 // ── 보고 ─────────────────────────────────────────────────

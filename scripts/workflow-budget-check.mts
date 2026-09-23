@@ -338,6 +338,24 @@ if (ALLOW !== null && DENY !== null) {
     { light: false, why: '인증 화면 (auth/ 만 잡는다)', files: ['src/app/auth/callback/page.tsx'] },
     { light: false, why: '업로드 화면 (upload/ 만 잡는다)', files: ['src/app/uploads/preview.tsx'] },
     { light: false, why: 'actions 디렉터리 (actions/ 만 잡는다)', files: ['src/app/x/actions/save.tsx'] },
+    /**
+     * 🔴 **그래프 번들** — `src/content/` 이라 ALLOW 에 들지만 화면이 아니다.
+     *    이것이 바뀌면 독자가 보는 연관 글이 통째로 달라진다. graph/ 만이 잡는다.
+     *    이 줄을 DENY 에서 빼면 전달 PR 이 M-GRAPH 가드를 건너뛴다.
+     */
+    { light: false, why: '그래프 current (graph/ 만 잡는다)', files: ['src/content/magazine/graph/current.ts'] },
+    { light: false, why: '그래프 control', files: ['src/content/magazine/graph/control.ts'] },
+    { light: false, why: '그래프 버전 파일', files: ['src/content/magazine/graph/g-20260923-4b759b.ts'] },
+    {
+      light: false,
+      why: '🔴 그래프 전달 커밋 4파일 — 이 회차가 반드시 heavy 여야 한다',
+      files: [
+        'src/content/magazine/graph/types.ts',
+        'src/content/magazine/graph/current.ts',
+        'src/content/magazine/graph/control.ts',
+        'src/content/magazine/graph/g-20260923-4b759b.ts',
+      ],
+    },
 
     // 🟢 진짜 화면만
     { light: true, why: '일반 화면 컴포넌트', files: ['src/components/post/PostCard.tsx'] },
@@ -345,7 +363,9 @@ if (ALLOW !== null && DENY !== null) {
     { light: true, why: '화면 여러 개', files: ['src/app/page.tsx', 'src/components/ui/Button.tsx'] },
     { light: true, why: '스타일', files: ['src/styles/x.css'] },
     { light: true, why: '정적 자산', files: ['public/og.png'] },
-    { light: true, why: '매거진 콘텐츠', files: ['src/content/magazine/articles.ts'] },
+    /** 🔴 원고는 여전히 화면 전용이다 — graph/ 만 무겁게 했지 src/content/magazine 전체가 아니다 */
+    { light: true, why: '매거진 원고 (graph/ 가 아니다)', files: ['src/content/magazine/articles.ts'] },
+    { light: true, why: '매거진 타입 (graph/ 가 아니다)', files: ['src/content/magazine/types.ts'] },
 
     // 🔴 섞이면 무겁다 — 화면 파일이 같이 있다고 가벼워지지 않는다
     { light: false, why: '화면 + API 혼합', files: ['src/app/page.tsx', 'src/app/api/example/route.ts'] },
@@ -376,6 +396,25 @@ if (ALLOW !== null && DENY !== null) {
     DENY.test('src/app/api/x/route.ts') && DENY.test('src/lib/actions/y.ts'))
   check('🔴 DENY 가 평범한 화면 파일을 잡지 않는다',
     !DENY.test('src/app/page.tsx') && !DENY.test('src/components/post/PostCard.tsx'))
+
+  /**
+   * 🔴 **죽은 게이트를 만들지 않는다.**
+   *    M-GRAPH 가드를 heavy 뒤로 보냈다. 그 자체는 비용을 아끼는 결정이지만,
+   *    그래프 경로가 heavy 를 강제하지 않으면 **가드가 영영 돌지 않는 회차**가 생긴다.
+   *    그래서 두 사실을 짝으로 고정한다 — 하나만 만족하면 실패다.
+   */
+  const graphFiles = ['src/content/magazine/graph/current.ts']
+  check('🔴 그래프 변경은 heavy 를 강제한다 (가드가 돌 수 있다)', !isLight(graphFiles))
+  const guardLine = lines.findIndex((l) => l.includes('npm run check:magazine-graph'))
+  check('🔴 M-GRAPH 가드가 워크플로우에 배선되어 있다', guardLine >= 0)
+  if (guardLine >= 0) {
+    const start = lines.slice(0, guardLine).map((l, j) => ({ l, j }))
+      .filter((x) => /^      - (name|uses):/.test(x.l)).pop()?.j ?? 0
+    const end = lines.findIndex((l, j) => j > guardLine && /^      - (name|uses):/.test(l))
+    const block = lines.slice(start, end < 0 ? lines.length : end)
+    check('🔴 M-GRAPH 가드는 heavy 조건 뒤에 있다 (화면 전용 PR 에 tsc 를 더하지 않는다)',
+      block.some((l) => l.includes(GATE)))
+  }
 }
 
 // ─────────────────────────────────────────────────────────

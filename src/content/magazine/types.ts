@@ -1,6 +1,15 @@
 /** 상세: docs/operations/2026-08-23-soransoran-magazine-strategy.md */
 
-/** 관련글은 같은 클러스터 안에서만 연결한다. */
+/**
+ * 분류.
+ *
+ * 🔴 **연관 글이 같은 분류 안에만 머무르지 않는다** (M-GRAPH G9).
+ *    폴백(getRelatedMagazineArticles)은 같은 분류 최신 3편이지만,
+ *    그래프를 켜면 BRIDGE 관계가 분류를 건너뛴다 —
+ *    「남편이 이해 못 할 때」(부부·가족) → 「이유 없이 눈물이 날 때」(감정) 처럼
+ *    독자의 다음 질문이 분류 경계를 지키지 않기 때문이다.
+ *    분류는 여전히 목록의 칩과 화면 표기에 쓰인다. 연결의 울타리가 아닐 뿐이다.
+ */
 export type MagazineCluster =
   | 'menopause-symptom'
   | 'sleep'
