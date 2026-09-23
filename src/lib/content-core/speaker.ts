@@ -511,7 +511,7 @@ export function parseSpeakerPlan(
    *    자기 나이를 **양쪽에서 빠뜨리면** 누락 자체가 발견되지 않았다.
    *    🔴 정본 parser 가 원문 span 에서 직접 산출한 목록을 기준으로 삼는다.
    */
-  const expected = expectedSelfFactsIn(spans, OTHER_MARKERS)
+  const expected = expectedSelfFactsIn(spans)
   for (const e of expected) {
     const already = speakerRelative.some(
       (x) => x.sourceText === e.sourceText && x.evidenceRef === e.evidenceRef,

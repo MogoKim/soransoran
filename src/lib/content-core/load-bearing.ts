@@ -18,6 +18,7 @@
  */
 import type { SpeakerRelativeAxis } from './speaker-relative-facts'
 import { AXIS_LABEL } from './speaker-relative-facts'
+import { ageMentionsIn } from '../persona-self-age'
 
 /**
  * 🔴 **이 브랜치가 완결한 축은 나이 하나다.** 혼인·자녀·직업·지역·갱년기 변환은
@@ -52,12 +53,17 @@ export type LoadBearingPlan =
     axis: SpeakerRelativeAxis; reason: string
   }
 
-/** 🔴 원문 표현에서 나이 숫자만 꺼낸다. 못 꺼내면 `null` — 지어내지 않는다 */
+/**
+ * 🔴 **정본 parser 의 얇은 소비자다** (2026-09-23 마스터 P0-1).
+ *    앞판은 여기에 `\d{2}` 정규식이 따로 있었다 — `51만원` · `51번` 도 나이로 읽었다.
+ *    🔴 나이 표현으로 읽히지 않으면 `null` 이다. 지어내지 않는다.
+ */
 export function sourceAgeNumber(sourceText: string): number | null {
-  const m = /(\d{2})/.exec(sourceText)
-  if (m === null) return null
-  const n = Number(m[1])
-  return Number.isFinite(n) && n >= 20 && n <= 99 ? n : null
+  // 🔴 계획이 적어 낸 값은 조각이라 서술이 없다 — `47세` 꼴로 붙여 정본에 묻는다
+  const raw = sourceText.trim()
+  const probe = /^\d{1,3}$/.test(raw) ? `제가 ${raw}세입니다` : raw
+  const m = ageMentionsIn(probe).find((x) => x.kind === 'exact')
+  return m?.span.from ?? null
 }
 
 /**
@@ -211,26 +217,42 @@ export type LoadBearingPostVerdict =
 export function checkLoadBearingPreserved(input: {
   text: string
   requirements: readonly LoadBearingRequirement[]
-  selfClaim: { from: number; to: number } | null
 }): LoadBearingPostVerdict {
-  const claims = (n: number): boolean =>
-    input.selfClaim !== null && input.selfClaim.from <= n && n <= input.selfClaim.to
+  /**
+   * 🔴 **공용 parser 의 결과만 본다** (2026-09-23 마스터 P0-2).
+   *
+   *    앞판은 `new RegExp('51')` 로 숫자가 **글자로 있는지**만 봤다. 그래서
+   *    *"지원금이 51만원입니다"* · *"51번 버스를 탔어요"* 가 조건이 살아 있는 것으로
+   *    잘못 통과했다(마스터 실측). 나이로 읽히지 않으면 조건이 아니다.
+   */
+  const mentions = ageMentionsIn(input.text)
+  const exactSelf = mentions.filter((m) => m.role === 'self' && m.kind === 'exact')
+  const selfBands = mentions.filter((m) => m.role === 'self' && m.kind === 'band')
   for (const r of input.requirements) {
-    // 🔴 글자 자체가 사라졌는가 — 통째로 뺀 경우다
-    if (!new RegExp(`(^|[^0-9])${r.age}([^0-9]|$)`).test(input.text)) {
+    // 🔴 그 나이가 **나이 표현으로** 글에 남았는가
+    const same = mentions.filter((m) => m.span.from <= r.age && r.age <= m.span.to)
+    if (same.length === 0) {
       return {
         ok: false, code: 'CONDITION_LOST',
-        reason: `조건이 된 ${AXIS_LABEL[r.axis]} ${r.age} 가 글에서 사라졌다`,
+        reason: `조건이 된 ${AXIS_LABEL[r.axis]} ${r.age} 가 나이 표현으로 남지 않았다`
+          + `${mentions.length === 0 ? ' (글에 나이 표현이 없다)' : ''}`,
       }
     }
-    if (r.mode === 'selfCondition' && !claims(r.age)) {
-      return {
-        ok: false, code: 'CONDITION_NOT_SELF',
-        reason: `${r.age} 가 1인칭 조건으로 쓰이지 않았다 — 밝힌 나이 ${
-          input.selfClaim === null ? '없음' : `${input.selfClaim.from}~${input.selfClaim.to}`}`,
+    if (r.mode === 'selfCondition') {
+      /**
+       * 🔴 **정확한 나이여야 한다.** `50대 초반` 은 51 을 품지만 그것으로는 부족하다 —
+       *    조건이 된 값은 그 숫자 자체이지 구간이 아니다.
+       */
+      if (!exactSelf.some((m) => m.span.from === r.age)) {
+        return {
+          ok: false, code: 'CONDITION_NOT_SELF',
+          reason: `${r.age} 가 **정확한 1인칭 나이**로 쓰이지 않았다 — `
+            + `1인칭 표현 ${[...exactSelf, ...selfBands].map((m) => m.raw).join('·') || '없음'}`,
+        }
       }
+      continue
     }
-    if (r.mode === 'eventCondition' && claims(r.age)) {
+    if (exactSelf.some((m) => m.span.from === r.age)) {
       return {
         ok: false, code: 'CONDITION_CLAIMED_AS_SELF',
         reason: `${r.age} 를 우리 화자의 나이로 주장했다 — 1인칭 자리가 아니다`,

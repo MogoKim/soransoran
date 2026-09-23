@@ -128,6 +128,17 @@ const SUBJECT_OF_OTHER = /^\s*(?:이|가)\s/
  */
 const TIME_POINT_AFTER = /^\s*(?:부터|까지|까진|이후|이전|무렵|때|에(?!요))/
 
+/**
+ * 🔴 **나이 뒤에 붙는 범위 표현** (2026-09-23 마스터 P0-1).
+ *    *"만 65세 **이상이면** 신청할 수 있어요"* · *"51세**부터** 지원 대상입니다"* 는
+ *    화자의 신상이 아니라 **자격·보험 조건**이다. 원문에서 지켜야 할 값이지
+ *    우리 Persona 값으로 바꿀 값이 아니다.
+ *    🔴 낱말 금지 목록이 아니다 — 나이 표현 **바로 뒤의 조사**만 본다.
+ *    🔴 `부터`·`까지` 는 `TIME_POINT_AFTER` 가 이미 잡는다(둘 다 `eventCondition`) —
+ *       여기 겹쳐 두면 어느 쪽이 판정했는지 알 수 없다.
+ */
+const RANGE_AFTER = /^\s*(?:이상|이하|미만|초과)/
+
 const MODIFIES_NOUN =
   /^\s*(?:인|짜리)\s*(?!저는|저도|나는|난\s|내가|제가|본인)[가-힣]{1,10}(?:이|가|은|는|을|를|도|만|들|의|에게|한테)/
 
@@ -160,7 +171,11 @@ function clauses(text: string): { text: string; headOfLine: boolean }[] {
   const out: { text: string; headOfLine: boolean }[] = []
   for (const line of text.split(/\n+/)) {
     const parts = line
-      .split(/(?<=[.!?。…])\s+|[,·]\s*|(?<=(?:이고|며|면서|는데|지만|때|아서|어서|니까|다가|라서))\s+/)
+      /**
+       * 🔴 `인데` 를 더한다 (2026-09-23). *"아는 분이 44인데 저는 47이거든요"* 가
+       *    한 절로 남아 앞의 `분이` 때문에 **뒤의 자기 나이 47 까지** 남의 것이 됐다.
+       */
+      .split(/(?<=[.!?。…])\s+|[,·]\s*|(?<=(?:이고|며|면서|는데|인데|지만|때|아서|어서|니까|다가|라서))\s+/)
       .map(clean)
       .filter((x) => x !== '')
     for (const [i, t] of parts.entries()) out.push({ text: t, headOfLine: i === 0 })
@@ -214,11 +229,16 @@ function readAgeExpression(s: string): { span: AgeSpan; at: number; raw: string 
    *       수량 표현과 갈린다. 뒤에 단위 명사가 오면 나이가 아니다.
    *    🔴 20~99 만 본다 — `10인데` 같은 것은 나이로 읽지 않는다.
    */
-  const bare = /(?:^|[^0-9])([2-9][0-9])\s*(?:인데|이고|이라|이라서|예요|이에요|입니다|이면|인지라)/.exec(s)
+  const bare = /(?:^|[^0-9])([2-9][0-9])\s*(?:인데|이고|이라|이라서|예요|이에요|입니다|이면|인지라|이거든요)/.exec(s)
   if (bare !== null) {
     const v = Number(bare[1])
     const at = bare.index + bare[0].indexOf(bare[1]!)
-    cand.push({ span: { from: v, to: v }, at, raw: bare[0].slice(bare[0].indexOf(bare[1]!)) })
+    /**
+     * 🔴 **어미를 `raw` 에 삼키지 않는다** (2026-09-23). 삼키면 뒤따르는 글이
+     *    `인데 …` 가 아니라 `아직도 …` 로 보여 *"낼44인데 아직도"* 가
+     *    **남의 나이(명사 수식)** 로 잘못 분류됐다(실측).
+     */
+    cand.push({ span: { from: v, to: v }, at, raw: bare[1]! })
   }
 
   if (cand.length === 0) return null
@@ -242,24 +262,115 @@ function readAgeExpression(s: string): { span: AgeSpan; at: number; raw: string 
  *       전언·추측 표지가 없으면 자기 나이다 (*"40대 후반이고 …"* — 실측 결함이 이 모양이었다)
  *    그 밖은 `null` 이다. 🔴 첫머리라는 **사실만으로** 단정하지 않는다.
  */
-export function readSelfAgeClaim(text: string): SelfAgeClaim | null {
+// ─────────────────────────────────────────────────────────
+// 🔴 **나이 표현을 읽는 곳은 여기 하나다** (2026-09-23 마스터 P0-1)
+//
+//   앞판은 숫자를 읽는 코드가 **세 벌**이었다 — `readAgeExpression`(여기),
+//   `selfAgeNumbersIn`(speaker-relative-facts), `sourceAgeNumber`(load-bearing).
+//   그래서 `readSelfAgeClaim` 은 *"51세부터 지원 대상입니다"* 를 자기 나이로 보지 않는데
+//   `expectedSelfFactsIn` 은 자기 나이 51 로 **오인**했다(마스터 실측).
+//   자격·보험·제3자·사건 조건은 원문에서 **지켜야 할 값**이지 바꿀 값이 아니다.
+//
+// 🔴 숫자를 읽는 규칙도, 누구 것인지 가르는 규칙도 **이 함수 하나**다.
+//    다른 곳은 전부 이 결과를 소비하는 얇은 껍데기다.
+// ─────────────────────────────────────────────────────────
+
+export const AGE_MENTION_ROLES = ['self', 'thirdParty', 'eventCondition', 'unknown'] as const
+export type AgeMentionRole = (typeof AGE_MENTION_ROLES)[number]
+
+export type AgeMention = {
+  /** 원문에 있던 표현 그대로 */
+  raw: string
+  /** 그 표현이 시작하는 자리 (텍스트 전체 기준) */
+  at: number
+  /** 어느 span 에서 나왔나 — 부르는 쪽이 넣는다 */
+  evidenceRef: string
+  /** 🔴 `44살` 처럼 한 살로 정해졌는가, `40대 후반` 처럼 구간인가 */
+  kind: 'exact' | 'band'
+  span: AgeSpan
+  role: AgeMentionRole
+  /**
+   * 🔴 **왜 그렇게 보았나.** `readSelfAgeClaim` 은 보수적으로 앞의 둘만 받는다 —
+   *    그 함수는 생활사 모순을 **막는** 데 쓰이므로 과잉 차단을 피해야 한다.
+   */
+  reason: 'firstPerson' | 'clauseHeadPredicate' | 'barePredicate'
+    | 'otherMarker' | 'modifiesNoun' | 'subjectOfOther' | 'rangeCondition' | 'timePoint'
+    | 'hearsay' | 'undecided'
+  /** 사람이 읽는 근거 — 글에 **그대로 있는** 절이다 */
+  clause: string
+}
+
+/** 🔴 `readSelfAgeClaim` 이 근거로 받는 것 — 보수적인 둘뿐이다 */
+const STRICT_SELF_REASONS = ['firstPerson', 'clauseHeadPredicate'] as const
+
+/**
+ * 🔴 **글 안의 나이 표현을 전부, 역할과 함께 낸다.**
+ *
+ *    절마다 본다 — 한 문장에 자기 나이와 가족 나이가 함께 오는 글을 통째로 버리지 않는다.
+ */
+export function ageMentionsIn(text: string, evidenceRef = ''): AgeMention[] {
+  const out: AgeMention[] = []
+  let cursor = 0
   for (const { text: c, headOfLine } of clauses(text)) {
+    // 🔴 절이 원문 어디에서 왔는지 — 못 찾으면 0 이 아니라 직전 자리다
+    const found = text.indexOf(c, cursor)
+    const base = found < 0 ? cursor : found
+    if (found >= 0) cursor = found + c.length
     const age = readAgeExpression(c)
     if (age === null) continue
-    if (OTHER_MARKERS.some((w) => c.includes(w))) continue
     const after = c.slice(age.at + age.raw.length)
-    if (SUBJECT_OF_OTHER.test(after)) continue
-    if (MODIFIES_NOUN.test(after)) continue
-    if (TIME_POINT_AFTER.test(after)) continue
-    if (NOUN_AFTER.test(after) && !PREDICATE_AFTER.test(after) && !APPROX_AFTER.test(after)) continue
-    if (SELF_MARKERS.some((w) => c.includes(w))) {
-      return { span: age.span, evidence: c, reason: 'firstPerson' }
+    const kind: 'exact' | 'band' = age.span.from === age.span.to ? 'exact' : 'band'
+    const push = (role: AgeMentionRole, reason: AgeMention['reason']): void => {
+      out.push({
+        raw: age.raw, at: base + age.at, evidenceRef, kind, span: age.span, role, reason, clause: c,
+      })
     }
-    // 🔴 1인칭 표지가 없을 때는 **확실한 서술**만 근거다 — 근사 표현(`쯤`·`정도`)은 쓰지 않는다
-    if (headOfLine && c.slice(0, age.at).trim() === '' && PREDICATE_AFTER.test(after)
-      && !HEARSAY.test(c)) {
-      return { span: age.span, evidence: c, reason: 'clauseHeadPredicate' }
+    // ① 같은 절에 타인 표지가 있으면 남의 나이다
+    if (OTHER_MARKERS.some((w) => c.includes(w))) { push('thirdParty', 'otherMarker'); continue }
+    /**
+     * ② 🔴 **범위 조사가 붙으면 자격·보험 조건이다** — 화자의 신상이 아니다.
+     *    `TIME_POINT_AFTER` 보다 먼저 본다: `부터` 는 둘 다에 있는데
+     *    *"51세부터 지원 대상"* 은 시점이 아니라 **조건**이다.
+     */
+    if (RANGE_AFTER.test(after)) { push('eventCondition', 'rangeCondition'); continue }
+    // ③ 나이 뒤가 다른 명사·주어면 그 명사의 나이다
+    if (SUBJECT_OF_OTHER.test(after)) { push('thirdParty', 'subjectOfOther'); continue }
+    if (MODIFIES_NOUN.test(after)) { push('thirdParty', 'modifiesNoun'); continue }
+    if (NOUN_AFTER.test(after) && !PREDICATE_AFTER.test(after) && !APPROX_AFTER.test(after)) {
+      push('thirdParty', 'modifiesNoun'); continue
     }
+    // ④ 시점 조사면 "지금 몇 살" 이 아니다 — 과거·미래의 한 때다
+    if (TIME_POINT_AFTER.test(after)) { push('eventCondition', 'timePoint'); continue }
+    // ⑤ 1인칭 표지가 있으면 자기 나이다
+    if (SELF_MARKERS.some((w) => c.includes(w))) { push('self', 'firstPerson'); continue }
+    // ⑥ 전언·추측이면 남을 두고 하는 짐작이다
+    if (HEARSAY.test(c)) { push('unknown', 'hearsay'); continue }
+    // ⑦ 절 첫머리에서 바로 서술로 이어지면 자기 나이다
+    if (headOfLine && c.slice(0, age.at).trim() === '' && PREDICATE_AFTER.test(after)) {
+      push('self', 'clauseHeadPredicate'); continue
+    }
+    /**
+     * ⑧ 🔴 **서술 어미가 바로 붙었다** — *"낼44인데"* (P02 실측 원문).
+     *    한국어는 주어를 생략하므로 이것도 자기 나이다. 위 ①~④ 를 전부 지난 뒤이므로
+     *    남의 나이·조건·시점은 여기 오지 않는다.
+     *    🔴 `readSelfAgeClaim` 은 이 근거를 **받지 않는다** — 그 함수는 막는 쪽이라
+     *       보수적이어야 한다. 넓히면 정상 글이 새로 막힌다.
+     */
+    if (PREDICATE_AFTER.test(after)) { push('self', 'barePredicate'); continue }
+    push('unknown', 'undecided')
+  }
+  return out
+}
+
+/**
+ * 🔴 **공용 parser 의 얇은 소비자다** (2026-09-23). 숫자도 역할도 여기서 다시 읽지 않는다.
+ *    🔴 보수적인 근거 둘만 받는다 — 이 함수는 생활사 모순을 **막는** 데 쓰인다.
+ */
+export function readSelfAgeClaim(text: string): SelfAgeClaim | null {
+  for (const m of ageMentionsIn(text)) {
+    if (m.role !== 'self') continue
+    if (!(STRICT_SELF_REASONS as readonly string[]).includes(m.reason)) continue
+    return { span: m.span, evidence: m.clause, reason: m.reason as SelfAgeClaim['reason'] }
   }
   return null
 }

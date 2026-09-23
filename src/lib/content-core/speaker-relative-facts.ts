@@ -1,3 +1,5 @@
+import { ageMentionsIn } from '../persona-self-age'
+
 /**
  * 🔴 **원문 작성자를 복제하지 않는다** (2026-09-23 정본).
  *
@@ -247,28 +249,22 @@ export type MappingPostVerdict =
   | { ok: true; note: string }
   | { ok: false; code: 'SOURCE_AGE_REMAINS' | 'PERSONA_AGE_ABSENT' | 'CONFLICTING_SELF_AGE'; reason: string }
 
-/** 🔴 글에서 **1인칭으로 쓰인** 나이 숫자들. 제3자 절은 세지 않는다 */
-export function selfAgeNumbersIn(text: string, otherMarkers: readonly string[]): number[] {
-  const out: number[] = []
-  const re = /(?:^|[^0-9])([2-9][0-9])\s*(?:살|세|인데|이고|이라|예요|이에요|입니다|이면|이거든요|이라서)/g
-  for (const m of text.matchAll(re)) {
-    const at = m.index ?? 0
-    /**
-     * 🔴 **절 단위로 본다** (2026-09-23). 줄 단위로 자르면
-     *    *"아는 분이 44인데 저는 47이거든요"* 가 한 덩이가 되어 **우리 나이 47 까지**
-     *    제3자로 처리된다. 쉼표·연결어미에서도 끊는다.
-     */
-    const head = text.slice(0, at)
-    const cut = Math.max(
-      head.lastIndexOf('\n'), head.lastIndexOf(','), head.lastIndexOf('.'),
-      head.lastIndexOf('만'), head.lastIndexOf('데 '), head.lastIndexOf('고 '),
-    )
-    const from = cut < 0 ? 0 : cut + 1
-    const clause = text.slice(from, at + m[0].length + 8)
-    if (otherMarkers.some((w) => clause.includes(w))) continue
-    out.push(Number(m[1]))
-  }
-  return out
+/**
+ * 🔴 **정본 parser 의 얇은 소비자다** (2026-09-23 마스터 P0-1).
+ *
+ *    앞판은 여기에 **별도 숫자 정규식**이 있었다. 그래서 `readSelfAgeClaim` 이
+ *    남의 것·조건으로 본 표현을 여기서는 자기 나이로 읽어 **서로 다른 답**을 냈다.
+ *    이제 숫자도 역할도 `ageMentionsIn` 하나가 정한다.
+ *
+ * 🔴 타인 표지 목록은 받지 않는다 — 공용 parser 가 이미 그것으로 가른다.
+ *    무시하는 인자를 남기면 부르는 쪽이 "내가 준 목록이 쓰인다" 고 잘못 읽는다.
+ */
+export function selfAgeNumbersIn(text: string): number[] {
+  return [...new Set(
+    ageMentionsIn(text)
+      .filter((m) => m.role === 'self' && m.kind === 'exact')
+      .map((m) => m.span.from),
+  )]
 }
 
 /**
@@ -293,16 +289,22 @@ export type ExpectedSelfFact = {
 
 export function expectedSelfFactsIn(
   spans: readonly { kind: string; text: string }[],
-  otherMarkers: readonly string[],
 ): ExpectedSelfFact[] {
   const out: ExpectedSelfFact[] = []
   const seen = new Set<string>()
   for (const sp of spans) {
-    for (const n of selfAgeNumbersIn(sp.text, otherMarkers)) {
-      const key = `${sp.kind}\u0001${n}`
+    for (const m of ageMentionsIn(sp.text, sp.kind)) {
+      /**
+       * 🔴 **자기 신상만이다.** 자격·보험 조건(`eventCondition`)과 제3자는 원문에서
+       *    **지켜야 할 값**이지 우리 Persona 값으로 바꿀 값이 아니다 —
+       *    창업자가 정한 source-invariant 다.
+       *    🔴 구간(`40대 후반`)은 바꿀 숫자가 없다 — 정확한 나이만 요구한다.
+       */
+      if (m.role !== 'self' || m.kind !== 'exact') continue
+      const key = `${sp.kind}\u0001${m.span.from}`
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ axis: 'age', sourceText: String(n), evidenceRef: sp.kind })
+      out.push({ axis: 'age', sourceText: String(m.span.from), evidenceRef: sp.kind })
     }
   }
   return out
@@ -319,7 +321,6 @@ export function checkAgeMappingApplied(input: {
   sourceAges: readonly string[]
   exactAge: number | null
   effectiveAgeBand: string
-  otherMarkers: readonly string[]
   /**
    * 🔴 **1인칭 자리에서만 "우리 나이가 있어야 한다"** (2026-09-23).
    *    관찰·질문 자리에서는 우리 나이를 주장하지 않는다 — 그때 이 조건을 걸면
@@ -328,7 +329,7 @@ export function checkAgeMappingApplied(input: {
    */
   requireSelfAge?: boolean
 }): MappingPostVerdict {
-  const selfAges = selfAgeNumbersIn(input.text, input.otherMarkers)
+  const selfAges = selfAgeNumbersIn(input.text)
   const srcNums = input.sourceAges.map((a) => Number(a)).filter((n) => Number.isFinite(n))
   /**
    * 🔴 **원문 값이 우리 값과 같으면 이미 정합하다** (2026-09-23 보정).

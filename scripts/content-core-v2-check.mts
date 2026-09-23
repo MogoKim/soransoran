@@ -30,7 +30,11 @@ import {
 } from '../src/lib/content-core/speaker'
 import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis, OTHER_MARKERS } from '../src/lib/persona-self-age'
 import { speakerRelativeAxisOf, parseSpeakerPlan, materialityFor } from '../src/lib/content-core/speaker'
-import { expectedSelfFactsIn } from '../src/lib/content-core/speaker-relative-facts'
+import {
+  expectedSelfFactsIn, selfAgeNumbersIn,
+} from '../src/lib/content-core/speaker-relative-facts'
+import { ageMentionsIn } from '../src/lib/persona-self-age'
+import { sourceAgeNumber } from '../src/lib/content-core/load-bearing'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 
 /** 🔴 KST 날짜 한 줄 — 검사도 러너와 같은 규칙을 쓴다 */
@@ -2423,6 +2427,153 @@ console.log('\n🔴 🔴 **load-bearing 조건 보존 — 초안이 지우면 �
     `${dropped.cost.totalCalls} · ${keptSelf.cost.totalCalls}`)
 }
 
+console.log('\n🔴 🔴 **공용 age mention parser — 숫자 해석이 한 곳이다 (마스터 P0-1)**')
+{
+  /**
+   * 🔴 앞판은 숫자를 읽는 코드가 **세 벌**이었다(`readAgeExpression` ·
+   *    `selfAgeNumbersIn` · `sourceAgeNumber`). 그래서 `readSelfAgeClaim` 이
+   *    남의 것·조건으로 본 표현을 `expectedSelfFactsIn` 은 **자기 나이로 오인**했다.
+   *    자격·보험·제3자·사건 조건은 창업자가 정한 **source-invariant** 다.
+   */
+  const span = (text: string, kind = 'head') => [{ kind, text }]
+  const selfOf = (t: string): number[] =>
+    expectedSelfFactsIn(span(t)).map((x) => Number(x.sourceText))
+
+  // ── 자기 나이로 탐지해야 하는 것 ──
+  check('🔴 🔴 **① "제가 곧 44인데" → 자기 나이 44**',
+    selfOf('제가 곧 44인데').join(',') === '44', JSON.stringify(selfOf('제가 곧 44인데')))
+  check('🔴 🔴 **① "낼44인데 아직도 어리단소리들어요" → 자기 나이 44 (P02 실측 원문)**',
+    selfOf('낼44인데 아직도 어리단소리들어요 ㅋ').join(',') === '44',
+    JSON.stringify(selfOf('낼44인데 아직도 어리단소리들어요 ㅋ')))
+  check('🔴 🔴 **① "아는 분이 44인데 저는 47이거든요" → 47 만**',
+    selfOf('아는 분이 44인데 저는 47이거든요').join(',') === '47',
+    JSON.stringify(selfOf('아는 분이 44인데 저는 47이거든요')))
+
+  /**
+   * ── 🔴 **자기 나이로 탐지하면 안 되는 것** ──
+   *    마스터가 실행해 보인 오인 4건이다. 앞판은 전부 자기 나이로 읽었다.
+   */
+  const NOT_SELF: [string, string][] = [
+    ['51세부터 지원 대상입니다', '자격 조건'],
+    ['만 65세 이상이면 신청할 수 있어요', '자격 조건'],
+    ['51세 지원자가 많아요', '제3자'],
+    ['보험은 51세부터 비싸져요', '보험 조건'],
+    ['아는 분이 44인데 그렇대요', '제3자'],
+    ['여잔 피부가 80퍼인듯', '퍼센트'],
+    ['3일 만에 끝났고 5년째입니다', '기간'],
+    ['2026년부터 바뀐다네요', '연도'],
+    ['30대같다고 다들 말하네요', '밴드 비유'],
+    ['지원금이 51만원입니다', '금액'],
+    ['51번 버스를 탔어요', '번호'],
+  ]
+  for (const [t, why] of NOT_SELF) {
+    check(`🔴 🔴 **② ${why} — "${t}" 는 자기 나이가 아니다**`,
+      selfOf(t).length === 0, JSON.stringify(selfOf(t)))
+  }
+
+  /** 🔴 ③ 역할을 구조화해서 낸다 — 사람이 읽는 문구가 아니라 값이다 */
+  const roleOf = (t: string): string =>
+    ageMentionsIn(t, 'head').map((m) => `${m.role}/${m.kind}/${m.span.from}-${m.span.to}`).join(' ')
+  check('🔴 🔴 **③ 자격 조건은 `eventCondition` 으로 낸다**',
+    roleOf('51세부터 지원 대상입니다') === 'eventCondition/exact/51-51',
+    roleOf('51세부터 지원 대상입니다'))
+  check('🔴 🔴 **③ "만 65세 이상이면" 은 범위 조사로 `eventCondition` 이다 — unknown 이 아니다**',
+    roleOf('만 65세 이상이면 신청할 수 있어요') === 'eventCondition/exact/65-65',
+    roleOf('만 65세 이상이면 신청할 수 있어요'))
+  check('🔴 🔴 **③ 그 판정 근거는 범위 조사다 — 어느 규칙이 잡았는지 값으로 남는다**',
+    ageMentionsIn('만 65세 이상이면 신청할 수 있어요')[0]?.reason === 'rangeCondition',
+    String(ageMentionsIn('만 65세 이상이면 신청할 수 있어요')[0]?.reason))
+  check('🔴 🔴 **③ "51세부터" 는 시점 조사가 잡는다 — 규칙이 겹치지 않는다**',
+    ageMentionsIn('51세부터 지원 대상입니다')[0]?.reason === 'timePoint',
+    String(ageMentionsIn('51세부터 지원 대상입니다')[0]?.reason))
+  check('🔴 🔴 **③ 제3자 수식은 `thirdParty` 로 낸다**',
+    roleOf('51세 지원자가 많아요') === 'thirdParty/exact/51-51', roleOf('51세 지원자가 많아요'))
+  check('🔴 🔴 **③ 구간 표현은 `band` 로 낸다 — 숫자 하나로 줄이지 않는다**',
+    roleOf('저는 50대 초반이에요') === 'self/band/50-53', roleOf('저는 50대 초반이에요'))
+  check('🔴 🔴 **③ evidenceRef 를 함께 낸다**',
+    ageMentionsIn('제가 47인데', 'title')[0]?.evidenceRef === 'title')
+  check('🔴 🔴 **③ 원문 표현을 그대로 낸다**',
+    ageMentionsIn('저는 50대 초반이에요')[0]?.raw === '50대 초반',
+    String(ageMentionsIn('저는 50대 초반이에요')[0]?.raw))
+
+  /** 🔴 ④ 옛 소비자들이 같은 답을 낸다 — 두 벌이 아니다 */
+  check('🔴 🔴 **④ `readSelfAgeClaim` 과 `expectedSelfFactsIn` 이 어긋나지 않는다**', (() => {
+    for (const [t] of NOT_SELF) {
+      if (readSelfAgeClaim(t) !== null || selfOf(t).length > 0) return false
+    }
+    return true
+  })())
+  check('🔴 🔴 **④ `selfAgeNumbersIn` 도 같은 결과를 낸다 — 별도 정규식이 없다**',
+    selfAgeNumbersIn('51세부터 지원 대상입니다').length === 0
+    && selfAgeNumbersIn('제가 곧 44인데').join(',') === '44')
+  check('🔴 🔴 **④ `sourceAgeNumber` 도 같은 정본을 쓴다 — 51만원·51번은 나이가 아니다**',
+    sourceAgeNumber('51') === 51 && sourceAgeNumber('51만원') === null
+    && sourceAgeNumber('51번') === null,
+    `${sourceAgeNumber('51')} · ${sourceAgeNumber('51만원')} · ${sourceAgeNumber('51번')}`)
+  check('🔴 🔴 **④ 나이를 읽는 별도 정규식이 소비자 쪽에 남아 있지 않다**', (() => {
+    /** 🔴 주석은 뺀다 — "앞판에는 이런 정규식이 있었다" 는 설명까지 걸리면 거짓 실패다 */
+    const code = (f: string): string => readFileSync(f, 'utf-8')
+      .split('\n').filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
+    const srf = code('src/lib/content-core/speaker-relative-facts.ts')
+    const lb = code('src/lib/content-core/load-bearing.ts')
+    return !/\[2-9\]\[0-9\]/.test(srf) && !/\\d\{2\}/.test(lb)
+      && /ageMentionsIn/.test(srf) && /ageMentionsIn/.test(lb)
+  })())
+}
+
+console.log('\n🔴 🔴 **load-bearing 보존은 숫자 존재가 아니라 나이 의미로 본다 (마스터 P0-2)**')
+{
+  /**
+   * 🔴 앞판은 `new RegExp('51')` 로 **글자가 있는지**만 봤다. 마스터가 든 네 반례가
+   *    전부 잘못 통과했다. 여기서는 공용 age mention 결과로 본다.
+   */
+  const REQ_SELF = loadBearingRequirements({
+    facts: [{ axis: 'age', sourceText: '51' }], stance: 'SELF_EXPERIENCE',
+  })
+  const REQ_EVENT = loadBearingRequirements({
+    facts: [{ axis: 'age', sourceText: '51' }], stance: 'QUESTION',
+  })
+  const keptOf = (text: string, req: typeof REQ_SELF) =>
+    checkLoadBearingPreserved({ text, requirements: req })
+
+  /** 🔴 마스터가 든 거짓 PASS 4건 — 전부 FAIL 이어야 한다 */
+  const FALSE_PASS: [string, typeof REQ_SELF, string][] = [
+    ['지원금이 51만원입니다', REQ_EVENT, 'eventCondition + 금액'],
+    ['51번 버스를 탔어요', REQ_EVENT, 'eventCondition + 번호'],
+    ['저는 50대 초반이고 지원금은 51만원이에요', REQ_SELF, 'selfCondition + 금액'],
+    ['저는 50대 초반이에요. 51번 버스를 탔어요', REQ_SELF, 'selfCondition + 번호'],
+  ]
+  for (const [text, req, why] of FALSE_PASS) {
+    const v = keptOf(text, req)
+    check(`🔴 🔴 **① ${why} → FAIL 이어야 한다**`, !v.ok,
+      `"${text}" → ${v.ok ? 'PASS(잘못)' : `${v.code}: ${v.reason}`}`)
+  }
+
+  /** 🔴 ② 계약대로 통과해야 하는 것 */
+  check('🔴 🔴 **② selfCondition 은 정확한 51 세 1인칭이어야 통과한다**',
+    keptOf('제가 51세라 대상이 된다고 들었어요', REQ_SELF).ok,
+    JSON.stringify(keptOf('제가 51세라 대상이 된다고 들었어요', REQ_SELF)))
+  check('🔴 🔴 **② "50대 초반" 은 51 을 품어도 부족하다 — 구간으로 대신하지 않는다**',
+    !keptOf('저는 50대 초반이라 대상이 된다고 들었어요', REQ_SELF).ok,
+    JSON.stringify(keptOf('저는 50대 초반이라 대상이 된다고 들었어요', REQ_SELF)))
+  check('🔴 🔴 **② eventCondition 은 나이 조건으로 남아야 통과한다**',
+    keptOf('51세부터 대상이 된다는데 맞을까요?', REQ_EVENT).ok,
+    JSON.stringify(keptOf('51세부터 대상이 된다는데 맞을까요?', REQ_EVENT)))
+  check('🔴 🔴 **② eventCondition 인데 자기 나이로 주장하면 막는다**',
+    !keptOf('제가 51세라서 대상이 된다고 들었습니다', REQ_EVENT).ok,
+    JSON.stringify(keptOf('제가 51세라서 대상이 된다고 들었습니다', REQ_EVENT)))
+  check('🔴 🔴 **② 조건이 아예 사라지면 막는다**',
+    !keptOf('대상이 된다고 들어서 알아보는 중입니다', REQ_SELF).ok,
+    JSON.stringify(keptOf('대상이 된다고 들어서 알아보는 중입니다', REQ_SELF)))
+
+  /** 🔴 ③ 구간 조건은 구간 표현으로 보존한다 — 숫자 50 으로 줄이지 않는다 */
+  check('🔴 🔴 **③ 구간 조건은 span 을 그대로 본다**', (() => {
+    const band = ageMentionsIn('저는 50대 초반이에요')[0]
+    return band !== undefined && band.kind === 'band'
+      && band.span.from === 50 && band.span.to === 53 && band.raw === '50대 초반'
+  })())
+}
+
 console.log('\n🔴 🔴 **원문 자기 나이 탐지는 planner 출력에 의존하지 않는다 (마스터 P0-1)**')
 {
   /**
@@ -2499,26 +2650,26 @@ console.log('\n🔴 🔴 **원문 자기 나이 탐지는 planner 출력에 의�
   /** 🔴 ③ 오탐 금지 — 제3자 나이·퍼센트·기간·연도는 요구하지 않는다 */
   const span = (text: string, kind = 'head') => [{ kind, text }]
   check('🔴 🔴 **③ 제3자 나이는 요구하지 않는다**',
-    expectedSelfFactsIn(span('아는 분이 44인데 그렇대요'), OTHER_MARKERS).length === 0)
+    expectedSelfFactsIn(span('아는 분이 44인데 그렇대요')).length === 0)
   check('🔴 🔴 **③ 퍼센트(80퍼)는 나이가 아니다**',
-    expectedSelfFactsIn(span('여잔 피부가 80퍼인듯'), OTHER_MARKERS).length === 0)
+    expectedSelfFactsIn(span('여잔 피부가 80퍼인듯')).length === 0)
   check('🔴 🔴 **③ 기간(3일·5년)은 나이가 아니다**',
-    expectedSelfFactsIn(span('3일 만에 끝났고 5년째입니다'), OTHER_MARKERS).length === 0)
+    expectedSelfFactsIn(span('3일 만에 끝났고 5년째입니다')).length === 0)
   check('🔴 🔴 **③ 연도(2026년)는 나이가 아니다**',
-    expectedSelfFactsIn(span('2026년부터 바뀐다네요'), OTHER_MARKERS).length === 0)
+    expectedSelfFactsIn(span('2026년부터 바뀐다네요')).length === 0)
   check('🔴 🔴 **③ "30대같다" 의 30 은 나이 주장이 아니다**',
-    expectedSelfFactsIn(span('30대같다고 다들 말하네요'), OTHER_MARKERS).length === 0)
+    expectedSelfFactsIn(span('30대같다고 다들 말하네요')).length === 0)
   check('🔴 🔴 **③ 자기 나이는 자리까지 찾아낸다**', (() => {
-    const got = expectedSelfFactsIn(span('낼44인데 아직도 어리단소리들어요'), OTHER_MARKERS)
+    const got = expectedSelfFactsIn(span('낼44인데 아직도 어리단소리들어요'))
     return got.length === 1 && got[0]!.sourceText === '44' && got[0]!.evidenceRef === 'head'
       && got[0]!.axis === 'age'
   })())
   check('🔴 🔴 **③ 제3자와 자기 나이가 한 줄에 있으면 자기 것만 찾는다**', (() => {
-    const got = expectedSelfFactsIn(span('아는 분이 44인데 저는 47이거든요'), OTHER_MARKERS)
+    const got = expectedSelfFactsIn(span('아는 분이 44인데 저는 47이거든요'))
     return got.length === 1 && got[0]!.sourceText === '47'
   })())
   check('🔴 🔴 **③ 나이 축만 낸다 — 다른 생활사 축을 활성화하지 않았다**',
-    expectedSelfFactsIn(span('제가 47인데 파트타임이고 부산 살아요'), OTHER_MARKERS)
+    expectedSelfFactsIn(span('제가 47인데 파트타임이고 부산 살아요'))
       .every((x) => x.axis === 'age'))
 }
 
@@ -2884,7 +3035,7 @@ console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다�
     /personasForAttempt\(\{/.test(runnerSrc))
   check('🔴 🔴 **⑥ 생성에 넘기는 화자 묶음은 그 결과 하나뿐이다**',
     /personas: replan\.personas,/.test(runnerSrc)
-    && !/personas: voice\.candidates/.test(runnerSrc), 
+    && !/personas: voice\.candidates/.test(runnerSrc),
     runnerSrc.split('\n').filter((l) => /^\s*personas:/.test(l)).join(' | '))
   check('🔴 🔴 **⑥ `ok:false` 면 만들지 않고 넘어간다 — 유료 호출 앞이다**',
     /if \(!replan\.ok\) \{[\s\S]{0,400}?holdPick\(\)\n\s*continue/.test(runnerSrc))
@@ -2996,7 +3147,6 @@ console.log('\n🔴 🔴 **mapping 이행 후조건 — 통째로 빼면 채택�
 {
   const post = (text: string, exactAge: number | null = 47) => checkAgeMappingApplied({
     text, sourceAges: ['44'], exactAge, effectiveAgeBand: '40대 후반',
-    otherMarkers: OTHER_MARKERS,
   })
   check('🔴 🔴 **원문 나이가 남으면 실패**', (() => {
     const v = post('제가 곧 44인데 그래요')
@@ -3075,7 +3225,7 @@ console.log('\n🔴 🔴 **계획과 생성이 같은 dated Persona 를 본다**
 console.log('\n🔴 🔴 **원문 나이 = Persona 나이면 고칠 것이 없다**')
 {
   const post = (text: string, src: string[], age: number | null) => checkAgeMappingApplied({
-    text, sourceAges: src, exactAge: age, effectiveAgeBand: '40대 후반', otherMarkers: OTHER_MARKERS,
+    text, sourceAges: src, exactAge: age, effectiveAgeBand: '40대 후반',
   })
   check('🔴 🔴 **원문 47 + Persona 47 → 통과 (불필요한 수정 0)**',
     post('제가 47살인데요 요즘 그래요', ['47'], 47).ok === true)

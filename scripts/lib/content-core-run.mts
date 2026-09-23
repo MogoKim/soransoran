@@ -30,7 +30,7 @@ import { materializePersonaAt } from '../../src/lib/persona-birth-anchor'
 import {
   planAxisMapping, fixSourceSpeakerAge, checkAgeMappingApplied,
 } from '../../src/lib/content-core/speaker-relative-facts'
-import { OTHER_MARKERS, readSelfAgeClaim } from '../../src/lib/persona-self-age'
+import { OTHER_MARKERS } from '../../src/lib/persona-self-age'
 /**
  * 🔴 **load-bearing 을 한 번에 판정한다** (2026-09-23). 사람을 차례로 태우지 않는다.
  */
@@ -616,7 +616,6 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const post = checkAgeMappingApplied({
       text: `${draft.title}\n${draft.body}`,
       sourceAges, exactAge: at.exactAge, effectiveAgeBand: at.effectiveAgeBand,
-      otherMarkers: OTHER_MARKERS,
       // 🔴 1인칭 자리에서만 우리 나이를 요구한다
       requireSelfAge: plan.stance === 'SELF_EXPERIENCE',
     })
@@ -637,11 +636,8 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    막지 못했다. 🔴 의미 검수가 `clean` 이라 답해도 여기서 막는다.
    *    🔴 결정적 단계이므로 **유료 검수 요청 앞**이다 — 호출이 늘지 않는다.
    */
-  const kept = checkLoadBearingPreserved({
-    text: draftText, requirements: keepRules,
-    // 🔴 정본 하나를 쓴다 — 전언·명사 수식을 이미 가른다
-    selfClaim: readSelfAgeClaim(draftText)?.span ?? null,
-  })
+  // 🔴 공용 age mention parser 하나만 본다 — 숫자가 글자로 있는지로 통과시키지 않는다
+  const kept = checkLoadBearingPreserved({ text: draftText, requirements: keepRules })
   if (!kept.ok) failures.push({ code: 'loadBearingLost', detail: `${kept.code}: ${kept.reason}` })
   if (isPersonalInfo(draftText)) failures.push({ code: 'personalInfo', detail: '개인정보 표식' })
   if (hasBannedWord(draftText)) failures.push({ code: 'bannedWord', detail: '금지 낱말' })
