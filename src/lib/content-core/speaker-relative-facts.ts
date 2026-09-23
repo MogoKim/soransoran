@@ -218,6 +218,18 @@ export function fixSourceSpeakerAge(input: {
   for (const age of input.sourceAges) {
     const n = age.trim()
     if (n === '') continue
+    /**
+     * 🔴 **구간 표현은 통째로 바꾼다** (2026-09-23 마스터 P0).
+     *    `40대 초반` 은 숫자 어미가 없어 아래 규칙에 걸리지 않는다 —
+     *    그대로 두면 원문 화자의 연령대가 글에 남는다.
+     */
+    if (!/^\d{1,3}$/.test(n)) {
+      if (!out.includes(n)) continue
+      const before = out
+      out = out.split(n).join(input.personaText)
+      if (out !== before) fixed += 1
+      continue
+    }
     // 🔴 그 숫자가 **나이로 쓰인 자리**만 본다 — `80퍼` · `3일` 과 갈린다
     const re = new RegExp(`(^|[^0-9])(${n})\\s*(살|세|인데|이고|이라|예요|이에요|입니다|이면)`, 'g')
     out = out.replace(re, (whole, pre: string, _num: string, tail: string, at: number) => {
@@ -298,13 +310,18 @@ export function expectedSelfFactsIn(
        * 🔴 **자기 신상만이다.** 자격·보험 조건(`eventCondition`)과 제3자는 원문에서
        *    **지켜야 할 값**이지 우리 Persona 값으로 바꿀 값이 아니다 —
        *    창업자가 정한 source-invariant 다.
-       *    🔴 구간(`40대 후반`)은 바꿀 숫자가 없다 — 정확한 나이만 요구한다.
+       *
+       * 🔴 **구간도 받는다** (2026-09-23 마스터 P0). 앞판은 `exact` 만 받아서
+       *    *"저는 40대 초반인데"* 를 계획이 양쪽에서 빠뜨려도 **발견하지 못했다** —
+       *    그러면 원문 화자의 연령대가 그대로 남은 글이 나간다.
        */
-      if (m.role !== 'self' || m.kind !== 'exact') continue
-      const key = `${sp.kind}\u0001${m.span.from}`
+      if (m.role !== 'self') continue
+      // 🔴 원문 표현 그대로 요구한다 — 숫자로 줄이면 구간이 사라진다
+      const text = m.kind === 'exact' ? String(m.span.from) : m.raw
+      const key = `${sp.kind}\u0001${text}`
       if (seen.has(key)) continue
       seen.add(key)
-      out.push({ axis: 'age', sourceText: String(m.span.from), evidenceRef: sp.kind })
+      out.push({ axis: 'age', sourceText: text, evidenceRef: sp.kind })
     }
   }
   return out
@@ -330,6 +347,19 @@ export function checkAgeMappingApplied(input: {
   requireSelfAge?: boolean
 }): MappingPostVerdict {
   const selfAges = selfAgeNumbersIn(input.text)
+  /**
+   * 🔴 **구간 원문이 남았으면 바꾸지 않은 것이다** (2026-09-23 마스터 P0).
+   *    숫자 어미가 없어 `selfAgeNumbersIn` 에 잡히지 않는다 — 표현으로 본다.
+   */
+  const leftBand = input.sourceAges
+    .filter((a) => !/^\d{1,3}$/.test(a.trim()) && a.trim() !== '')
+    .filter((a) => a.trim() !== input.effectiveAgeBand && input.text.includes(a.trim()))
+  if (leftBand.length > 0) {
+    return {
+      ok: false, code: 'SOURCE_AGE_REMAINS',
+      reason: `원문 화자 연령대가 남았다 — ${leftBand.join('·')}`,
+    }
+  }
   const srcNums = input.sourceAges.map((a) => Number(a)).filter((n) => Number.isFinite(n))
   /**
    * 🔴 **원문 값이 우리 값과 같으면 이미 정합하다** (2026-09-23 보정).

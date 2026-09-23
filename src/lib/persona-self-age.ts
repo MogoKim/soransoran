@@ -363,6 +363,36 @@ export function ageMentionsIn(text: string, evidenceRef = ''): AgeMention[] {
 }
 
 /**
+ * 🔴 **표현 한 조각을 구조화된 나이 사실로** (2026-09-23 마스터 P0)
+ *
+ *    계획이 적어 낸 `sourceText` 는 `"44"` 처럼 **서술이 없는 조각**이거나
+ *    `"40대 초반"` 처럼 **구간**이다. 앞판은 여기서 숫자 하나만 꺼냈고,
+ *    그래서 구간이 통째로 `null` 이 되어 load-bearing 경로가 **전부 결론**으로 갔다
+ *    (마스터 실측: `sourceAgeNumber('50대 초반') → null`).
+ *
+ * 🔴 숫자로 평탄화하지 않는다 — `kind`·`raw`·`span` 을 그대로 낸다.
+ */
+export type AgeFact = {
+  kind: 'exact' | 'band'
+  /** 원문 표현 그대로 */
+  raw: string
+  span: AgeSpan
+}
+
+export function ageFactOf(sourceText: string): AgeFact | null {
+  const raw = sourceText.trim()
+  if (raw === '') return null
+  /**
+   * 🔴 맨 숫자는 서술이 없어 정본이 나이로 읽지 못한다 — `47세` 꼴로 붙여 묻는다.
+   *    🔴 `51만원` · `51번` 은 붙이지 않는다. 그대로 물어 **나이가 아님**이 드러나게 한다.
+   */
+  const probe = /^\d{1,3}$/.test(raw) ? `제가 ${raw}세입니다` : raw
+  const m = ageMentionsIn(probe)[0]
+  if (m === undefined) return null
+  return { kind: m.kind, raw, span: m.span }
+}
+
+/**
  * 🔴 **공용 parser 의 얇은 소비자다** (2026-09-23). 숫자도 역할도 여기서 다시 읽지 않는다.
  *    🔴 보수적인 근거 둘만 받는다 — 이 함수는 생활사 모순을 **막는** 데 쓰인다.
  */

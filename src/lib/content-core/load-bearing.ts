@@ -18,7 +18,7 @@
  */
 import type { SpeakerRelativeAxis } from './speaker-relative-facts'
 import { AXIS_LABEL } from './speaker-relative-facts'
-import { ageMentionsIn } from '../persona-self-age'
+import { ageMentionsIn, ageFactOf, type AgeFact } from '../persona-self-age'
 
 /**
  * 🔴 **이 브랜치가 완결한 축은 나이 하나다.** 혼인·자녀·직업·지역·갱년기 변환은
@@ -54,16 +54,20 @@ export type LoadBearingPlan =
   }
 
 /**
- * 🔴 **정본 parser 의 얇은 소비자다** (2026-09-23 마스터 P0-1).
- *    앞판은 여기에 `\d{2}` 정규식이 따로 있었다 — `51만원` · `51번` 도 나이로 읽었다.
- *    🔴 나이 표현으로 읽히지 않으면 `null` 이다. 지어내지 않는다.
+ * 🔴 **정본 parser 의 얇은 소비자다** (2026-09-23 마스터 P0).
+ *
+ *    앞판은 여기가 **숫자 하나**(`sourceAgeNumber`)였다. 그래서 `"50대 초반"` 이
+ *    통째로 `null` 이 되어 구간 조건이 전부 `MEANING_UNPRESERVABLE` 로 갔다(실측).
+ *    🔴 `kind`·`raw`·`span` 을 그대로 나른다 — 숫자로 평탄화하지 않는다.
  */
-export function sourceAgeNumber(sourceText: string): number | null {
-  // 🔴 계획이 적어 낸 값은 조각이라 서술이 없다 — `47세` 꼴로 붙여 정본에 묻는다
-  const raw = sourceText.trim()
-  const probe = /^\d{1,3}$/.test(raw) ? `제가 ${raw}세입니다` : raw
-  const m = ageMentionsIn(probe).find((x) => x.kind === 'exact')
-  return m?.span.from ?? null
+export function sourceAgeFact(sourceText: string): AgeFact | null {
+  return ageFactOf(sourceText)
+}
+
+/** 🔴 그 나이가 조건을 만족하는가 — `exact` 는 같아야 하고 `band` 는 구간에 들어야 한다 */
+export function satisfiesAgeFact(fact: AgeFact, age: number | null): boolean {
+  if (age === null) return false
+  return fact.span.from <= age && age <= fact.span.to
 }
 
 /**
@@ -99,24 +103,25 @@ export function resolveLoadBearing(input: {
      */
     if (input.stance !== 'SELF_EXPERIENCE') continue
 
-    const want = sourceAgeNumber(f.sourceText)
+    const want = sourceAgeFact(f.sourceText)
     if (want === null) {
       return {
         ok: false, retry: false, code: 'MEANING_UNPRESERVABLE', axis: f.axis,
-        reason: `🔴 원문 값을 숫자로 읽지 못했다 — "${f.sourceText}". 보존 여부를 확인할 수 없다`,
+        reason: `🔴 원문 값을 나이로 읽지 못했다 — "${f.sourceText}". 보존 여부를 확인할 수 없다`,
       }
     }
-    if (input.chosen.exactAge === want) continue
+    // 🔴 구간이면 **그 구간에 들면** 조건을 만족한다 — 숫자 하나로 줄이지 않는다
+    if (satisfiesAgeFact(want, input.chosen.exactAge)) continue
 
     // 🔴 **조건을 실제로 만족하는 후보가 있는가** — 있으면 그 사람으로 다시 계획한다
     const fit = input.candidates
-      .filter((c) => c.exactAge === want && c.code !== input.chosen.code)
+      .filter((c) => satisfiesAgeFact(want, c.exactAge) && c.code !== input.chosen.code)
       .map((c) => c.code)
     if (fit.length > 0) {
       return {
         ok: false, retry: true, code: 'PERSONA_MISMATCH', axis: f.axis, suggest: fit,
         forbidSelf: false,
-        reason: `🔴 ${AXIS_LABEL[f.axis]} ${want} 가 글의 결론을 바꾸는데 `
+        reason: `🔴 ${AXIS_LABEL[f.axis]} ${want.raw} 가 글의 결론을 바꾸는데 `
           + `${input.chosen.code}(${input.chosen.exactAge ?? '?'}) 는 그 조건이 아니다 `
           + `— 만족하는 후보 ${fit.join(' ')}`,
       }
@@ -130,13 +135,13 @@ export function resolveLoadBearing(input: {
       return {
         ok: false, retry: false, code: 'MEANING_UNPRESERVABLE', axis: f.axis,
         reason: `🔴 1인칭을 금지한 뒤에도 1인칭 계획이 왔다 — `
-          + `${AXIS_LABEL[f.axis]} ${want} 를 보존할 길이 없다`,
+          + `${AXIS_LABEL[f.axis]} ${want.raw} 를 보존할 길이 없다`,
       }
     }
     return {
       ok: false, retry: true, code: 'SELF_IMPOSSIBLE', axis: f.axis, suggest: [],
       forbidSelf: true,
-      reason: `🔴 ${AXIS_LABEL[f.axis]} ${want} 를 만족하는 후보가 없다 `
+      reason: `🔴 ${AXIS_LABEL[f.axis]} ${want.raw} 를 만족하는 후보가 없다 `
         + `— 1인칭을 버리고 다른 자리로 계획한다`,
     }
   }
@@ -168,7 +173,8 @@ export type LoadBearingRequirement = {
   axis: SpeakerRelativeAxis
   /** 원문에 있던 그 값 */
   sourceText: string
-  age: number
+  /** 🔴 **숫자로 평탄화하지 않는다** — 구간이면 구간 그대로다 */
+  fact: AgeFact
   mode: LoadBearingMode
   /** 🔴 초안 지시문에 그대로 들어가는 한 줄 */
   outputRule: string
@@ -184,17 +190,19 @@ export function loadBearingRequirements(input: {
 }): LoadBearingRequirement[] {
   const out: LoadBearingRequirement[] = []
   for (const f of input.facts) {
-    const age = sourceAgeNumber(f.sourceText)
-    if (age === null) continue
+    const fact = sourceAgeFact(f.sourceText)
+    if (fact === null) continue
     const mode: LoadBearingMode = input.stance === 'SELF_EXPERIENCE'
       ? 'selfCondition' : 'eventCondition'
+    // 🔴 구간이면 **그 표현 그대로** 지시한다 — `50대 초반` 을 `50` 으로 줄이지 않는다
+    const shown = fact.raw
     out.push({
-      axis: f.axis, sourceText: f.sourceText, age, mode,
+      axis: f.axis, sourceText: f.sourceText, fact, mode,
       outputRule: mode === 'selfCondition'
-        ? `🔴 ${AXIS_LABEL[f.axis]} **${age}** 은 글의 결론을 만드는 조건이다. `
-          + `바꾸지 말고 **"${age}"** 를 1인칭으로 그대로 쓴다(우리 화자도 그 나이다).`
-        : `🔴 ${AXIS_LABEL[f.axis]} **${age}** 은 글의 결론을 만드는 조건이다. `
-          + `**"${age}"** 를 글에 남기되, **자기 나이라고 쓰지 않는다**(들은 이야기·조건으로 적는다).`,
+        ? `🔴 ${AXIS_LABEL[f.axis]} **${shown}** 은 글의 결론을 만드는 조건이다. `
+          + `바꾸지 말고 **"${shown}"** 에 해당하는 1인칭 나이로 쓴다(우리 화자도 그 범위다).`
+        : `🔴 ${AXIS_LABEL[f.axis]} **${shown}** 은 글의 결론을 만드는 조건이다. `
+          + `**"${shown}"** 범위를 글에 남기되, **자기 나이라고 쓰지 않는다**(들은 이야기·조건으로 적는다).`,
     })
   }
   return out
@@ -226,36 +234,59 @@ export function checkLoadBearingPreserved(input: {
    *    잘못 통과했다(마스터 실측). 나이로 읽히지 않으면 조건이 아니다.
    */
   const mentions = ageMentionsIn(input.text)
-  const exactSelf = mentions.filter((m) => m.role === 'self' && m.kind === 'exact')
-  const selfBands = mentions.filter((m) => m.role === 'self' && m.kind === 'band')
+  const selfM = mentions.filter((m) => m.role === 'self')
+  const notSelf = mentions.filter((m) => m.role !== 'self')
+  const same = (a: { from: number; to: number }, b: { from: number; to: number }): boolean =>
+    a.from === b.from && a.to === b.to
+  const within = (inner: { from: number; to: number }, outer: { from: number; to: number }): boolean =>
+    outer.from <= inner.from && inner.to <= outer.to
+
   for (const r of input.requirements) {
-    // 🔴 그 나이가 **나이 표현으로** 글에 남았는가
-    const same = mentions.filter((m) => m.span.from <= r.age && r.age <= m.span.to)
-    if (same.length === 0) {
+    const want = r.fact.span
+    // 🔴 그 나이가 **나이 표현으로** 글에 남았는가 — 글자로 있는지가 아니다
+    if (!mentions.some((m) => within(m.span, want) || same(m.span, want))) {
       return {
         ok: false, code: 'CONDITION_LOST',
-        reason: `조건이 된 ${AXIS_LABEL[r.axis]} ${r.age} 가 나이 표현으로 남지 않았다`
+        reason: `조건이 된 ${AXIS_LABEL[r.axis]} ${r.fact.raw} 가 나이 표현으로 남지 않았다`
           + `${mentions.length === 0 ? ' (글에 나이 표현이 없다)' : ''}`,
       }
     }
     if (r.mode === 'selfCondition') {
       /**
-       * 🔴 **정확한 나이여야 한다.** `50대 초반` 은 51 을 품지만 그것으로는 부족하다 —
-       *    조건이 된 값은 그 숫자 자체이지 구간이 아니다.
+       * 🔴 **우리 화자가 그 조건에 실제로 해당한다고 써야 한다.**
+       *    · `exact` 조건이면 **정확히 그 나이**여야 한다 — `50대 초반`(50~53)이
+       *      51 을 품는다는 것만으로는 부족하다(조건이 된 값은 그 숫자 자체다).
+       *    · `band` 조건이면 1인칭 표현이 **그 구간 안**이면 된다 —
+       *      `50대 초반` 조건에 `제가 52살` 도, `저는 50대 초반` 도 성립한다.
        */
-      if (!exactSelf.some((m) => m.span.from === r.age)) {
+      const ok = r.fact.kind === 'exact'
+        ? selfM.some((m) => m.kind === 'exact' && same(m.span, want))
+        : selfM.some((m) => within(m.span, want))
+      if (!ok) {
         return {
           ok: false, code: 'CONDITION_NOT_SELF',
-          reason: `${r.age} 가 **정확한 1인칭 나이**로 쓰이지 않았다 — `
-            + `1인칭 표현 ${[...exactSelf, ...selfBands].map((m) => m.raw).join('·') || '없음'}`,
+          reason: `${r.fact.raw} 가 **1인칭 조건**으로 쓰이지 않았다 — `
+            + `1인칭 표현 ${selfM.map((m) => m.raw).join('·') || '없음'}`,
         }
       }
       continue
     }
-    if (exactSelf.some((m) => m.span.from === r.age)) {
+    /**
+     * 🔴 **사건 조건이면 같은 범위 의미가 남아야 한다.**
+     *    구간을 숫자 하나로 줄이거나 반대로 넓히면 조건이 달라진다 — `span` 이 같아야 한다.
+     */
+    if (!notSelf.some((m) => same(m.span, want))) {
+      return {
+        ok: false, code: 'CONDITION_LOST',
+        reason: `${r.fact.raw} 가 **같은 범위의 나이 조건**으로 남지 않았다 — `
+          + `남은 표현 ${notSelf.map((m) => m.raw).join('·') || '없음'}`,
+      }
+    }
+    // 🔴 그 나이를 우리 화자의 것으로 주장하면 안 된다
+    if (selfM.some((m) => within(m.span, want) || same(m.span, want))) {
       return {
         ok: false, code: 'CONDITION_CLAIMED_AS_SELF',
-        reason: `${r.age} 를 우리 화자의 나이로 주장했다 — 1인칭 자리가 아니다`,
+        reason: `${r.fact.raw} 를 우리 화자의 나이로 주장했다 — 1인칭 자리가 아니다`,
       }
     }
   }

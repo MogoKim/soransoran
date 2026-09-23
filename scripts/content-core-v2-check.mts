@@ -34,7 +34,7 @@ import {
   expectedSelfFactsIn, selfAgeNumbersIn,
 } from '../src/lib/content-core/speaker-relative-facts'
 import { ageMentionsIn } from '../src/lib/persona-self-age'
-import { sourceAgeNumber } from '../src/lib/content-core/load-bearing'
+import { sourceAgeFact } from '../src/lib/content-core/load-bearing'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 
 /** 🔴 KST 날짜 한 줄 — 검사도 러너와 같은 규칙을 쓴다 */
@@ -2506,10 +2506,15 @@ console.log('\n🔴 🔴 **공용 age mention parser — 숫자 해석이 한 �
   check('🔴 🔴 **④ `selfAgeNumbersIn` 도 같은 결과를 낸다 — 별도 정규식이 없다**',
     selfAgeNumbersIn('51세부터 지원 대상입니다').length === 0
     && selfAgeNumbersIn('제가 곧 44인데').join(',') === '44')
-  check('🔴 🔴 **④ `sourceAgeNumber` 도 같은 정본을 쓴다 — 51만원·51번은 나이가 아니다**',
-    sourceAgeNumber('51') === 51 && sourceAgeNumber('51만원') === null
-    && sourceAgeNumber('51번') === null,
-    `${sourceAgeNumber('51')} · ${sourceAgeNumber('51만원')} · ${sourceAgeNumber('51번')}`)
+  check('🔴 🔴 **④ `sourceAgeFact` 도 같은 정본을 쓴다 — 51만원·51번은 나이가 아니다**',
+    sourceAgeFact('51')?.span.from === 51 && sourceAgeFact('51만원') === null
+    && sourceAgeFact('51번') === null,
+    JSON.stringify([sourceAgeFact('51'), sourceAgeFact('51만원'), sourceAgeFact('51번')]))
+  check('🔴 🔴 **④ 구간도 구조로 읽는다 — 숫자 하나로 평탄화하지 않는다**', (() => {
+    const f = sourceAgeFact('50대 초반')
+    return f !== null && f.kind === 'band' && f.raw === '50대 초반'
+      && f.span.from === 50 && f.span.to === 53
+  })(), JSON.stringify(sourceAgeFact('50대 초반')))
   check('🔴 🔴 **④ 나이를 읽는 별도 정규식이 소비자 쪽에 남아 있지 않다**', (() => {
     /** 🔴 주석은 뺀다 — "앞판에는 이런 정규식이 있었다" 는 설명까지 걸리면 거짓 실패다 */
     const code = (f: string): string => readFileSync(f, 'utf-8')
@@ -3236,6 +3241,233 @@ console.log('\n🔴 🔴 **원문 나이 = Persona 나이면 고칠 것이 없�
   check('🔴 원문 44 + 나이 누락 → 실패', post('피부가 80퍼인 것 같아요', ['44'], 47).ok === false)
   check('🔴 제3자 44 + self 47 → 통과',
     post('아는 분이 44인데\n저는 47이거든요', ['44'], 47).ok === true)
+}
+
+console.log('\n🔴 🔴 **나이 전 경로 — exact 와 band 를 각각 끝까지 실행한다 (마스터 P0)**')
+{
+  /**
+   * 🔴 parser 단위 검사로 끝내지 않는다. 마스터가 지정한 전 경로를 **실행**한다:
+   *    원문 → expected fact → 계획 누락 대조 → mapping/load-bearing → 초안 지시문
+   *    → 결정적 후조건 → `pickV2` → adopted → candidate payload
+   */
+  const CARDS_A = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')).cards
+  const aged = CARDS_A.map((c) => {
+    const v = materializePersonaAt({ card: { code: c.code, birthDate: c.birthDate, ageBand: c.ageBand }, now: NOW })
+    return { c, age: v.ok ? v.at.exactAge : null, band: v.ok ? v.at.effectiveAgeBand : c.ageBand }
+  })
+  const pickCard = (age: number) => aged.find((x) => x.age === age)!
+  const inputOf = (x: typeof aged[number]) => P({
+    code: x.c.code, ageBand: x.c.ageBand, birthDate: x.c.birthDate,
+    maritalStatus: x.c.maritalStatus, childrenCount: x.c.childrenCount,
+    childrenAgeBands: x.c.childrenAgeBands, workStatus: x.c.workStatus,
+    region: x.c.region, menopauseStatus: x.c.menopauseStatus, parentCare: x.c.parentCare,
+  })
+
+  /** 🔴 원문 → 후보 payload 까지 러너와 **같은 순서·같은 함수**로 */
+  const fullPath = async (o: {
+    title: string; body: string; personas: PersonaInput[]
+    plan: Record<string, unknown>; draft: { title: string; body: string }
+    band: string | null; exactAge: number | null
+  }) => {
+    const art = await run({
+      id: 'full-1', title: o.title, body: o.body, personas: o.personas,
+      canned: { plan: o.plan, draft: o.draft, review: EMPTY_REVIEW },
+    })
+    if (art.draft === null) return { art, pick: null, payload: null }
+    const cand = {
+      sourceArticleId: 'full-1', draftNo: 1,
+      title: art.draft.title, body: art.draft.body,
+      safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
+      generatedAt: NOW.toISOString(),
+    }
+    const pick = pickV2({
+      judgement: { sourceArticleId: 'full-1', decision: 'SEED', reason: 'ok' } as never,
+      draft: cand as never, seenTitles: new Set<string>(), seenBodies: new Set<string>(),
+      sourceUsed: false, machineOutcome: art.review.machineOutcome,
+      machineReason: art.review.machineReason, sourceTitleCopied: false, crisisStop: null,
+      ageFact: { ageBand: o.band, selfBasis: String(o.plan.selfBasis ?? '') as never, personaExactAge: o.exactAge },
+    }, NOW.toISOString())
+    const payload = pick.decision === 'AUTO_ADOPT'
+      ? { title: cand.title, body: cand.body, artifactId: art.artifactId } : null
+    return { art, pick, payload }
+  }
+
+  // ─────────── exact — 원문 44 · 우리 47 ───────────
+  {
+    const me = pickCard(47)
+    const T = '자랑은 아닌데 여잔 피부가80퍼인듯'
+    const B = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+    check('🔴 🔴 **exact ① 원문에서 자기 나이 44 를 코드가 먼저 찾는다**',
+      expectedSelfFactsIn([{ kind: 'head', text: B }]).map((x) => x.sourceText).join(',') === '44',
+      JSON.stringify(expectedSelfFactsIn([{ kind: 'head', text: B }])))
+
+    const planOf = (sr: unknown[]) => ({
+      decision: 'ok', personaCode: me.c.code, stance: 'SELF_EXPERIENCE',
+      selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+      speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+      protectedFacts: [{ kind: 'number', text: '80퍼', evidenceRef: 'title' }],
+      speakerRelative: sr,
+    })
+    const D = {
+      title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+      body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+    }
+    // ② 계획이 양쪽에서 누락 → parseFailed
+    const miss = await fullPath({
+      title: T, body: B, personas: [inputOf(me)], plan: planOf([]), draft: D,
+      band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **exact ② 계획이 양쪽에서 빠뜨리면 parseFailed — 후보가 되지 않는다**',
+      miss.art.review.semanticCompletion.cause === 'parseFailed' && miss.payload === null,
+      `${miss.art.review.machineOutcome} · ${String(miss.art.review.semanticCompletion.cause)}`)
+
+    // ③ 정상 — incidental 변환 → payload 까지
+    const ok = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: planOf([{ axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' }]),
+      draft: D, band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **exact ③ 정상 변환이 payload 까지 간다 — AUTO_ADOPT**',
+      ok.pick?.decision === 'AUTO_ADOPT' && ok.payload !== null,
+      `${ok.art.review.machineOutcome} · ${ok.pick?.decision}`)
+    check('🔴 🔴 **exact ③ payload 에 원문 44 가 없고 우리 47 이 있다**',
+      ok.payload !== null && !/(^|[^0-9])44\s*(살|세|인데)/.test(ok.payload.body)
+      && new RegExp(`(^|[^0-9])${me.age}\\s*(살|세|인데)`).test(ok.payload.body),
+      ok.payload?.body.split('\n')[1] ?? '')
+  }
+
+  // ─────────── band — 원문 "40대 초반" · 우리 52 ───────────
+  {
+    const me = pickCard(52)
+    const T = '피부 고민 있으신 분'
+    const B = '저는 40대 초반인데 피부 고민이 있어요.\n다들 어떻게 관리하시나요?'
+    check('🔴 🔴 **band ① 원문의 "40대 초반" 을 코드가 구간으로 찾는다**',
+      expectedSelfFactsIn([{ kind: 'head', text: B }]).map((x) => x.sourceText).join(',') === '40대 초반',
+      JSON.stringify(expectedSelfFactsIn([{ kind: 'head', text: B }])))
+
+    const planOf = (sr: unknown[]) => ({
+      decision: 'ok', personaCode: me.c.code, stance: 'SELF_EXPERIENCE',
+      selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+      speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+      protectedFacts: [], speakerRelative: sr,
+    })
+    // 🔴 모델이 원문 구간을 그대로 베낀 초안 — 자동 보정이 잡아야 한다
+    const D = {
+      title: '피부 관리 어떻게 하시는지 궁금해요',
+      body: '저는 40대 초반인데 요즘 부쩍 건조하다는 느낌이 듭니다.\n다들 무엇부터 챙기시는지 여쭙고 싶어요.',
+    }
+    // ② 계획이 양쪽에서 누락 → parseFailed
+    const miss = await fullPath({
+      title: T, body: B, personas: [inputOf(me)], plan: planOf([]), draft: D,
+      band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **band ② 계획이 양쪽에서 빠뜨리면 parseFailed — 후보가 되지 않는다**',
+      miss.art.review.semanticCompletion.cause === 'parseFailed' && miss.payload === null,
+      `${miss.art.review.machineOutcome} · ${String(miss.art.review.semanticCompletion.cause)}`)
+
+    // ③ 정상 — incidental 구간 변환 → payload 까지
+    const ok = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: planOf([{ axis: 'age', sourceText: '40대 초반', evidenceRef: 'head', materiality: 'incidental' }]),
+      draft: D, band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **band ③ 구간 변환이 payload 까지 간다 — AUTO_ADOPT**',
+      ok.pick?.decision === 'AUTO_ADOPT' && ok.payload !== null,
+      `${ok.art.review.machineOutcome} · ${ok.art.review.machineReason} · ${ok.pick?.decision}`)
+    check('🔴 🔴 **band ③ payload 에 원문 "40대 초반" 이 남지 않는다**',
+      ok.payload !== null && !ok.payload.body.includes('40대 초반'),
+      ok.payload?.body.split('\n')[0] ?? '')
+    check('🔴 🔴 **band ③ 우리 값(52살 또는 50대 초반)이 들어간다**',
+      ok.payload !== null
+      && (ok.payload.body.includes(`${me.age}`) || ok.payload.body.includes(me.band ?? '\u0000')),
+      ok.payload?.body.split('\n')[0] ?? '')
+
+    /**
+     * 🔴 ④ **어미가 붙지 않은 구간 표현**도 바꾼다 — *"40대 초반 여성이라"*.
+     *    숫자 치환 규칙은 `살|세|인데` 같은 **어미**를 요구하므로 여기 걸리지 않는다.
+     *    그대로 두면 원문 화자의 연령대가 글에 남는다.
+     */
+    const bare = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: planOf([{ axis: 'age', sourceText: '40대 초반', evidenceRef: 'head', materiality: 'incidental' }]),
+      draft: {
+        title: '피부 관리 어떻게 하시는지 궁금해요',
+        body: '저는 40대 초반 여성이라 그런지 요즘 부쩍 건조합니다.\n다들 무엇부터 챙기시는지 여쭙고 싶어요.',
+      },
+      band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **band ④ 어미 없는 구간 표현도 바뀐다 — "40대 초반 여성" 이 남지 않는다**',
+      bare.payload !== null && !bare.payload.body.includes('40대 초반'),
+      `${bare.art.review.machineOutcome} · ${bare.art.draft?.body.split('\n')[0] ?? ''}`)
+  }
+
+  // ─────────── load-bearing self band — 조건 "50대 초반" ───────────
+  {
+    const fit = pickCard(52)
+    const unfit = pickCard(57)
+    const F = [{ axis: 'age' as const, sourceText: '50대 초반' }]
+    const C = (code: string, age: number | null) => ({ code, exactAge: age })
+    const okFit = resolveLoadBearing({
+      facts: F, stance: 'SELF_EXPERIENCE', chosen: C(fit.c.code, 52),
+      candidates: [C(fit.c.code, 52)], selfAlreadyFailed: false,
+    })
+    check('🔴 🔴 **lb-band ① 52 는 50대 초반 조건을 만족한다 — SELF 가능**',
+      okFit.ok && okFit.kind === 'personaSatisfies', JSON.stringify(okFit))
+    const bad = resolveLoadBearing({
+      facts: F, stance: 'SELF_EXPERIENCE', chosen: C(unfit.c.code, 57),
+      candidates: [C(unfit.c.code, 57), C(fit.c.code, 52)], selfAlreadyFailed: false,
+    })
+    check('🔴 🔴 **lb-band ② 57 은 불충족 — 구간에 드는 후보만 지목한다**',
+      !bad.ok && bad.retry && bad.code === 'PERSONA_MISMATCH'
+      && bad.suggest.join(',') === fit.c.code, JSON.stringify(bad))
+    const none = resolveLoadBearing({
+      facts: F, stance: 'SELF_EXPERIENCE', chosen: C(unfit.c.code, 57),
+      candidates: [C(unfit.c.code, 57), C('PXX', 61)], selfAlreadyFailed: false,
+    })
+    check('🔴 🔴 **lb-band ③ 구간에 드는 후보가 없으면 자리를 바꾼다**',
+      !none.ok && none.retry && none.code === 'SELF_IMPOSSIBLE', JSON.stringify(none))
+    check('🔴 🔴 **lb-band ④ 숫자 50 으로 축약하지 않는다 — span 50~53 을 그대로 쓴다**', (() => {
+      const req = loadBearingRequirements({ facts: F, stance: 'SELF_EXPERIENCE' })
+      return req[0]?.fact.kind === 'band' && req[0].fact.raw === '50대 초반'
+        && req[0].fact.span.from === 50 && req[0].fact.span.to === 53
+        && req[0].outputRule.includes('50대 초반')
+    })(), JSON.stringify(loadBearingRequirements({ facts: F, stance: 'SELF_EXPERIENCE' })))
+
+    const reqSelf = loadBearingRequirements({ facts: F, stance: 'SELF_EXPERIENCE' })
+    const keep = (t: string, r = reqSelf) => checkLoadBearingPreserved({ text: t, requirements: r })
+    check('🔴 🔴 **lb-band ⑤ "제가 52살인데" 로 조건이 보존된다**',
+      keep('제가 52살인데 해당된다고 들었어요').ok,
+      JSON.stringify(keep('제가 52살인데 해당된다고 들었어요')))
+    check('🔴 🔴 **lb-band ⑤ "저는 50대 초반이라" 로도 보존된다**',
+      keep('저는 50대 초반이라 해당된다고 들었어요').ok,
+      JSON.stringify(keep('저는 50대 초반이라 해당된다고 들었어요')))
+    check('🔴 🔴 **lb-band ⑤ "제가 57살인데" 는 구간 밖이라 막는다**',
+      !keep('제가 57살인데 해당된다고 들었어요').ok,
+      JSON.stringify(keep('제가 57살인데 해당된다고 들었어요')))
+    check('🔴 🔴 **lb-band ⑤ 조건이 사라지면 막는다**',
+      !keep('해당된다고 들어서 알아보는 중입니다').ok)
+  }
+
+  // ─────────── load-bearing event band — "50대 초반부터 지원 대상" ───────────
+  {
+    const F = [{ axis: 'age' as const, sourceText: '50대 초반' }]
+    const reqEvent = loadBearingRequirements({ facts: F, stance: 'QUESTION' })
+    const keep = (t: string) => checkLoadBearingPreserved({ text: t, requirements: reqEvent })
+    check('🔴 🔴 **lb-event ① 같은 범위가 조건으로 남으면 통과한다**',
+      keep('50대 초반부터 지원 대상이라는데 맞을까요?').ok,
+      JSON.stringify(keep('50대 초반부터 지원 대상이라는데 맞을까요?')))
+    for (const [t, why] of [
+      ['지원금이 50만원입니다', '금액'],
+      ['50번 버스를 탔어요', '번호'],
+      ['제가 52살이라 대상이 된다고 들었습니다', '자기 나이로 주장'],
+    ] as [string, string][]) {
+      check(`🔴 🔴 **lb-event ② ${why} 만으로는 조건 보존이 아니다 — "${t}"**`,
+        !keep(t).ok, `${t} → ${JSON.stringify(keep(t))}`)
+    }
+    check('🔴 🔴 **lb-event ③ 구간을 숫자 하나로 줄이면 조건이 달라진다 — 막는다**',
+      !keep('50세부터 지원 대상이라는데 맞을까요?').ok,
+      JSON.stringify(keep('50세부터 지원 대상이라는데 맞을까요?')))
+  }
 }
 
 console.log('\n🔴 🔴 **artifact → pickV2 → adopted → candidate payload (실제 함수)**')
