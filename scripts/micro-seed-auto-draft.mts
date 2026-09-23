@@ -29,6 +29,7 @@
  *   npx tsx scripts/micro-seed-auto-draft.mts            # 계획만 · 파일 write 0
  *   npx tsx scripts/micro-seed-auto-draft.mts --apply    # 초안 · 후보 파일 생성
  */
+import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -1194,6 +1195,12 @@ async function main(): Promise<void> {
         bundleDigest: a.art.voice.provenance.bundleDigest,
         sourceDigest: a.art.voice.provenance.sourceDigest,
       },
+      /**
+       * 🔴 **의미 검수 요약을 싣는다** (2026-09-22). 앞판은 `review` 를 아예 싣지
+       *    않아서, 모델이 찾은 결함이 적재까지 오지 못했다(P07 실측).
+       *    🔴 문장이 아니라 **수와 완전성**이다 — 원문도 근거 문장도 나르지 않는다.
+       */
+      semanticReview: semanticSummaryOf(a.art.review),
       leakedTokens: '', reviewedAt: nowIso, writtenAt: a.draft.generatedAt,
       /**
        * 🔴 **원문 쪽 세 시각** (2026-09-17) — 적재가 신선도를 제대로 재려면 여기를 지나야 한다.

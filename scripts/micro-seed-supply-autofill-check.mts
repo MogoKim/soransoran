@@ -4,7 +4,9 @@
  *
  * 읽기만 한다. DB·네트워크·파일 쓰기 0.
  */
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 import { DAILY_PUBLISH_CAP } from '../src/lib/original-post-publish'
 import {
@@ -15,7 +17,7 @@ import {
   type Candidate, type HeldEntry, type QueueRow,
   MACHINE_PROFILE, MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_DECIDED_BY,
   MACHINE_SITE_PREFIX, HUMAN_ONLY_VALUES, USABLE_PROMPT_VERSIONS,
-  machineProfileMismatch, impersonatesHuman, buildQueuePayload, queueProfileOf,
+  machineProfileMismatch, impersonatesHuman, buildQueuePayload, queueProfileOf, semanticSummaryOf,
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Envelope, type QueueProfileRow,
   queueSourceTimesOf,
@@ -515,6 +517,102 @@ console.log('\n⑨ 🔴 pacing 상수를 건드리지 않았다')
         calls.every((c) => c.slice(0, 400).includes('select:')))
     }
   }
+}
+
+console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — 실제 artifact 파일로 확인한다**')
+{
+  /**
+   * 🔴 **손으로 베낀 fixture 가 아니다.** 운영 러너가 쓴 `.microseed-data/*.artifacts.json`
+   *    에서 `review.semantic` 이 실린 장을 찾아, artifact → 요약 → 후보가 나르는 모양 →
+   *    적재 payload → `gateResults.holds` 까지 **한 경로로** 확인한다.
+   *
+   * 🔴 2026-09-22 실측 결함: 후보 `cmucp5zkd…`(P07) 에서 semanticReview 가
+   *    `unsupportedAdditions` 2건을 찾았는데 DB 의 `holds` 는 비어 있었다.
+   *    적재가 `holds: [], blocks: []` 를 하드코딩했기 때문이다.
+   */
+  // 🔴 이 블록만의 fixture — 바깥 스코프에 기대지 않는다
+  const eEnv: Envelope = {
+    provenance: MACHINE_PROFILE.envelopeProvenance,
+    ruleVersion: MACHINE_PROFILE.envelopeRuleVersion,
+    promptVersion: MACHINE_PROFILE.envelopePromptVersion,
+    pipelineVersion: MACHINE_PROFILE.envelopePipelineVersion,
+    stageModels: STAGE_MODEL,
+  }
+  const eC = ok({
+    sourceDecision: 'AUTO_ADOPT', sourceInput: 'auto-judge',
+    candidateType: 'seedOriginality', originality: CLEAN, leakedTokens: '',
+    voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' },
+  })
+  const eAj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
+    model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
+
+  const dirs = [join(homedir(), 'Documents/soransoran-runtime/.microseed-data'), '.microseed-data']
+  let real: { file: string; review: unknown; n: number } | null = null
+  for (const d of dirs) {
+    let names: string[] = []
+    try { names = readdirSync(d).filter((x) => x.includes('artifacts')) } catch { continue }
+    for (const n of names) {
+      try {
+        const o = JSON.parse(readFileSync(join(d, n), 'utf-8')) as { artifacts?: unknown[] }
+        const arr = (Array.isArray(o) ? o : (o.artifacts ?? [])) as Array<Record<string, unknown>>
+        for (const a of arr) {
+          const sum = semanticSummaryOf(a.review)
+          // 🔴 **결함이 하나라도 있는 장**을 찾는다 — 깨끗한 장만 보면 전달을 증명하지 못한다
+          if (sum !== null && sum.unsupportedAdditions > 0) {
+            real = { file: n, review: a.review, n: sum.unsupportedAdditions }; break
+          }
+        }
+      } catch { /* 깨진 파일은 건너뛴다 */ }
+      if (real !== null) break
+    }
+    if (real !== null) break
+  }
+
+  if (real === null) {
+    // 🔴 파일이 없으면 **건너뛰지 않는다.** 없는 것을 통과로 읽지 않는다.
+    check('🔴 🔴 **결함이 실린 실제 artifact 를 찾았다**', false)
+  } else {
+    const sum = semanticSummaryOf(real.review)!
+    check('🔴 ① 실제 artifact 에서 결함을 읽는다', sum.unsupportedAdditions === real.n)
+
+    // ② 후보 파일이 나르는 모양 (micro-seed-auto-draft 가 싣는 값)
+    const carried = { semantic: sum, deterministic: { pass: sum.deterministicPass },
+      semanticCompletion: { complete: sum.complete } }
+    const sum2 = semanticSummaryOf(carried)
+    check('🔴 ② 후보 파일을 거쳐도 값이 보존된다 — 수로 실어도 같다',
+      JSON.stringify(sum) === JSON.stringify(sum2))
+
+    // ③ 적재 payload — **실제 `buildQueuePayload`** 를 부른다
+    const pl = buildQueuePayload({ envelope: eEnv, candidate: eC, autoJudge: eAj, review: carried, now: NOW })
+    const g = (pl?.gateResults ?? {}) as Record<string, unknown>
+    const holds = Array.isArray(g.holds) ? (g.holds as unknown[]).map(String) : []
+    check('🔴 🔴 **③ 적재가 경고를 `holds` 에 싣는다 — 하드코딩된 빈 배열이 아니다**',
+      holds.some((h) => h.startsWith('SEMANTIC_UNSUPPORTED_ADDITION')))
+    check('🔴 🔴 **③ `blocks` 는 비어 있다 — 후보 생성은 계속된다**',
+      Array.isArray(g.blocks) && (g.blocks as unknown[]).length === 0)
+    check('🔴 ③ 요약도 함께 실린다', g.semanticReview != null)
+    check('🔴 🔴 **원문·근거 문장을 DB 로 복제하지 않는다 — 수와 완전성 6칸뿐이다**', (() => {
+      const j = JSON.stringify(g.semanticReview)
+      return !j.includes('evidence') && !j.includes('why')
+        && Object.keys(g.semanticReview as object).length === 6
+    })())
+  }
+
+  // ④ 깨끗한 후보는 경고가 없다 — 불필요하게 막지 않는다
+  const cleanRev = { semantic: { unsupportedAdditions: [], lifeContradictions: [], droppedFromSource: [], confidence: 0.95 },
+    deterministic: { pass: true }, semanticCompletion: { complete: true } }
+  const cleanPl = buildQueuePayload({ envelope: eEnv, candidate: eC, autoJudge: eAj, review: cleanRev, now: NOW })
+  const cg = (cleanPl?.gateResults ?? {}) as Record<string, unknown>
+  check('🔴 🔴 **④ 깨끗한 후보는 `holds` 가 비어 있다**',
+    Array.isArray(cg.holds) && (cg.holds as unknown[]).length === 0)
+
+  // ⑤ 판정 기록이 없으면 경고다 — 재지 못한 것을 "이상 없음" 으로 읽지 않는다
+  const nonePl = buildQueuePayload({ envelope: eEnv, candidate: eC, autoJudge: eAj, now: NOW })
+  const ng = (nonePl?.gateResults ?? {}) as Record<string, unknown>
+  check('🔴 🔴 **⑤ 판정 기록이 없으면 경고가 남는다**',
+    Array.isArray(ng.holds) && (ng.holds as string[]).includes('SEMANTIC_REVIEW_INCOMPLETE'))
+  check('🔴 ⑤ 그때도 `blocks` 는 비어 있다 — 후보 생성은 멈추지 않는다',
+    Array.isArray(ng.blocks) && (ng.blocks as unknown[]).length === 0)
 }
 
 console.log('\n─────────────────────────────────────────────────────────')

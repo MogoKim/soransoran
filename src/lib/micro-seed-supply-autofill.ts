@@ -615,6 +615,8 @@ export function buildQueuePayload(input: {
   candidate: Candidate
   /** 🔴 후보에 실려 온 판정 출처. 상수를 찍지 않고 **이관**한다 */
   autoJudge?: AutoJudgeProvenance
+  /** 🔴 artifact 의 `review` 블록. 없으면 **재지 못한 것**으로 읽는다 */
+  review?: unknown
   now: string
 }): QueuePayload | null {
   const { envelope: env, candidate: c } = input
@@ -635,7 +637,15 @@ export function buildQueuePayload(input: {
       promptVersion: MACHINE_PROMPT_VERSION,
       model: MACHINE_MODEL,
       gateResults: {
-        holds: [], blocks: [],
+        /**
+         * 🔴 **모델이 이미 낸 판정을 옮긴다** (2026-09-22). 앞판은 여기가 `[]` 로
+         *    하드코딩돼 있어, semanticReview 가 찾은 결함이 DB 에 오지 못했다.
+         *    🔴 `blocks` 는 그대로 비운다 — 이 경고는 후보 생성을 막지 않는다.
+         *       사람 검토는 계속되고, **자동 READY 에서만 빠진다.**
+         */
+        holds: semanticHoldsOf(semanticSummaryOf(input.review)),
+        blocks: [],
+        [SEMANTIC_SUMMARY_KEY]: semanticSummaryOf(input.review),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
           candidateType: S(c.candidateType),
@@ -710,4 +720,93 @@ export function buildQueuePayload(input: {
       },
     },
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **모델이 찾은 결함이 게이트까지 오지 못했다** (2026-09-22 실측)
+//
+//   후보 `cmucp5zkd…`(P07) 에서 semanticReview 가 `unsupportedAdditions` 2건을 찾고
+//   note 에 "원문의 '전 아직 자녀는 없지만' 을 지우고 아들을 낳은 사람으로 재구성했다"
+//   고 적었다. 그런데 DB 의 `gateResults.holds`·`blocks` 는 **비어 있었다.**
+//
+//   유실은 두 곳이었다.
+//     ① artifact → candidates.json : `review` 를 아예 싣지 않았다
+//     ② candidate → gateResults    : `holds: [], blocks: []` 를 **하드코딩**했다
+//
+//   🔴 이미 찾은 경고를 **문자열 규칙으로 다시 찾지 않는다.** 이미 낸 판정을 옮길 뿐이다.
+//   🔴 원문 전문을 DB 로 복제하지 않는다 — **개수와 완전성**만 싣는다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 적재가 싣는 의미 검수 요약 — 문장이 아니라 **수와 완전성**이다 */
+export type SemanticSummary = {
+  /** 판정이 끝까지 돌았는가. `false` 면 **재지 못한 것**이다 */
+  complete: boolean
+  /** 규칙 검사 통과 여부 */
+  deterministicPass: boolean
+  unsupportedAdditions: number
+  lifeContradictions: number
+  droppedFromSource: number
+  /** 0~1. 🔴 **이 값만으로 READY 를 정하지 않는다** — 참고 수치다 */
+  confidence: number | null
+}
+
+export const SEMANTIC_SUMMARY_KEY = 'semanticReview'
+
+/** 🔴 경고 코드 — 사람 화면과 자동 판정이 **같은 이름**을 읽는다 */
+export const SEMANTIC_HOLD_CODES = {
+  unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION',
+  lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
+  droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE',
+  incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
+} as const
+
+/** artifact 의 review 블록 → 적재가 실을 요약. 모양이 아니면 `null` 이다 */
+export function semanticSummaryOf(review: unknown): SemanticSummary | null {
+  if (review === null || typeof review !== 'object') return null
+  const r = review as Record<string, unknown>
+  const sem = (r.semantic !== null && typeof r.semantic === 'object')
+    ? r.semantic as Record<string, unknown> : null
+  if (sem === null) return null
+  /**
+   * 🔴 두 모양을 다 받는다 — artifact 는 **배열**로, 후보가 나르는 요약은 **수**로 온다.
+   *    한쪽만 보면 나르는 도중에 값이 0 으로 바뀐다.
+   */
+  const n = (k: string): number => {
+    const v = sem[k] ?? r[k]
+    if (Array.isArray(v)) return v.length
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0
+  }
+  const det = (r.deterministic !== null && typeof r.deterministic === 'object')
+    ? (r.deterministic as Record<string, unknown>).pass === true : false
+  const comp = (r.semanticCompletion !== null && typeof r.semanticCompletion === 'object')
+    ? (r.semanticCompletion as Record<string, unknown>).complete === true : false
+  const conf = typeof sem.confidence === 'number' ? sem.confidence : null
+  return {
+    complete: comp,
+    deterministicPass: det,
+    unsupportedAdditions: n('unsupportedAdditions'),
+    lifeContradictions: n('lifeContradictions'),
+    droppedFromSource: n('droppedFromSource'),
+    confidence: conf,
+  }
+}
+
+/**
+ * 🔴 요약 → 경고 목록. **판정 기록이 없으면 그것도 경고다** — 재지 못한 것을
+ *    "이상 없음" 으로 읽지 않는다.
+ */
+export function semanticHoldsOf(sum: SemanticSummary | null): string[] {
+  if (sum === null) return [SEMANTIC_HOLD_CODES.incomplete]
+  const out: string[] = []
+  if (!sum.complete || !sum.deterministicPass) out.push(SEMANTIC_HOLD_CODES.incomplete)
+  if (sum.unsupportedAdditions > 0) {
+    out.push(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:${sum.unsupportedAdditions}`)
+  }
+  if (sum.lifeContradictions > 0) {
+    out.push(`${SEMANTIC_HOLD_CODES.lifeContradictions}:${sum.lifeContradictions}`)
+  }
+  if (sum.droppedFromSource > 0) {
+    out.push(`${SEMANTIC_HOLD_CODES.droppedFromSource}:${sum.droppedFromSource}`)
+  }
+  return out
 }
