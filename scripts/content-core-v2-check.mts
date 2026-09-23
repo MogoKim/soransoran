@@ -23,6 +23,7 @@ import {
 import {
   cardValueText, hasFact, verifySelfWarrants,
   SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
+  judgeFirstPersonAge, firstPersonAgesIn, ageBandRange,
 } from '../src/lib/content-core/speaker'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
@@ -1382,6 +1383,49 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
     const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     return /HUMAN_ONLY_VALUES/.test(pub)
       && /발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다/.test(runner)
+  })())
+}
+
+console.log('\n🔴 🔴 **1인칭 정확한 나이는 생활사 사실이다 (2026-09-23 P02 실측 재현)**')
+{
+  // 🔴 후보 `cmudal78h…`(P02) 의 **실제 초안 문장**이다. 계획은 44를 protectedFacts 로
+  //    지키면서 selfBasis 를 noLifeFactNeeded 로 보냈고, P02 정본은 40대 후반이다.
+  const P02_DRAFT = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
+    + '잔주름도 좀 옅어지는 것 같고 그러더라고요.\n제가 곧 44인데 아직 어리다는 소리도 듣고 그래요.\n'
+    + '자랑하려는 건 아닌데, 정말 여자는 피부가 80퍼인 것 같다는 생각이 들더라고요.'
+  const EDITED = '동네에 있는 좀 저렴한 에스테틱을 몇 년 꾸준히 다녀봤는데요.\n'
+    + '잔주름도 좀 옅어지는 것 같고 그러더라고요.\n저도 아직 어려 보인다는 소리를 듣고 그래요.\n'
+    + '자랑하려는 건 아닌데, 정말 여자는 피부가 80퍼인 것 같다는 생각이 들더라고요.'
+
+  check('🔴 🔴 **실제 초안에서 1인칭 나이 44 를 찾는다**',
+    firstPersonAgesIn(P02_DRAFT).includes(44), JSON.stringify(firstPersonAgesIn(P02_DRAFT)))
+  check('🔴 🔴 **그 경로가 막힌다 — 44를 지키면서 "생활사 필요 없음" 일 수 없다**', (() => {
+    const v = judgeFirstPersonAge({ text: P02_DRAFT, ageBand: '40대 후반', selfBasis: 'noLifeFactNeeded' })
+    return !v.ok && v.code === 'AGE_WITHOUT_LIFE_FACT'
+  })())
+  check('🔴 🔴 **lifeFacts 로 보내도 44 는 40대 후반 밖이라 막힌다**', (() => {
+    const v = judgeFirstPersonAge({ text: P02_DRAFT, ageBand: '40대 후반', selfBasis: 'lifeFacts' })
+    return !v.ok && v.code === 'AGE_OUTSIDE_BAND'
+  })())
+  check('🔴 🔴 **마스터 편집안(나이 제거)은 통과한다**',
+    judgeFirstPersonAge({ text: EDITED, ageBand: '40대 후반', selfBasis: 'noLifeFactNeeded' }).ok === true)
+
+  check('🔴 밴드 안의 나이는 통과한다 (47 · 40대 후반)',
+    judgeFirstPersonAge({ text: '제가 47인데 요즘 그래요', ageBand: '40대 후반', selfBasis: 'lifeFacts' }).ok === true)
+  check('🔴 🔴 **밴드를 읽을 수 없으면 막는다 — 모르면 안전한 쪽이다**', (() => {
+    const v = judgeFirstPersonAge({ text: '제가 47인데', ageBand: null, selfBasis: 'lifeFacts' })
+    return !v.ok && v.code === 'AGE_BAND_UNKNOWN'
+  })())
+  check('🔴 남의 나이·햇수는 1인칭 나이가 아니다', (() => {
+    const t = '아는 분이 44인데 / 몇 년 다녀보니 / 80퍼는 넘는 것 같아요'
+    return firstPersonAgesIn(t).length === 0
+  })(), JSON.stringify(firstPersonAgesIn('아는 분이 44인데 / 몇 년 다녀보니 / 80퍼는 넘는 것 같아요')))
+  check('🔴 나이가 아예 없으면 이 판정은 통과다',
+    judgeFirstPersonAge({ text: '김치 담가 드시나요', ageBand: null, selfBasis: 'noLifeFactNeeded' }).ok === true)
+
+  check('🔴 밴드 해석 — 40대 후반 = 45~49 · 50대 초반 = 50~53 · 50대 = 50~59', (() => {
+    const a = ageBandRange('40대 후반'); const b = ageBandRange('50대 초반'); const c = ageBandRange('50대')
+    return a?.lo === 45 && a.hi === 49 && b?.lo === 50 && b.hi === 53 && c?.lo === 50 && c.hi === 59
   })())
 }
 
