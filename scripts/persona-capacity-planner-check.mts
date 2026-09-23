@@ -37,6 +37,7 @@ console.log('① 카드 파싱')
 {
   const body = `
 ageBand 50대 초반 · 수도권 · 기혼(원만) · 자녀 2(중고생·초등, 동거) · 자녀관계 가까움
+birthDate 1974-05-05   · 🔴 내부 값이다. 글에 쓰지 않는다 — 계산된 나이만 쓴다
 파트타임 · 빠듯 · 전세 · 갱년기 진행중 · 간병 간헐
 성격    부지런함 · 현실적
 voiceCore  짧은 문장 · "~해요" 기본 · 이모티콘 거의 없음
@@ -125,7 +126,7 @@ console.log('\n③ 조합 탐색 규칙 (synthetic)')
   //    실측: 캐스팅 때문에 `noGoTopics` 누락이 런타임 오류로만 드러났다
   const card = (code: string, over: Partial<PoolCard> = {}): PersonaForMatch =>
     cardToPersona({
-      code, title: 't', ageBand: '50대 초반', region: '수도권',
+      code, birthDate: '1974-05-05', title: 't', ageBand: '50대 초반', region: '수도권',
       maritalStatus: '기혼', spouseRelationship: '원만',
       childrenCount: 0, childrenAgeBands: [], workStatus: '전업', economicStatus: '보통',
       housing: '자가', menopauseStatus: '진행중', parentCare: '없음',
@@ -216,6 +217,7 @@ console.log('\n⑤ noGo 파싱 · 매칭 전달')
 {
   const body = (noGo: string, ban = '금지 advice · caution') => `
 ageBand 50대 초반 · 수도권 · 기혼(원만) · 자녀 없음
+birthDate 1974-05-05   · 🔴 내부 값이다. 글에 쓰지 않는다 — 계산된 나이만 쓴다
 전업 · 보통 · 자가 · 갱년기 후 · 간병 없음
 성격    무던함 · 성실 · 조용함
 voiceCore  중간 길이 · 존댓말

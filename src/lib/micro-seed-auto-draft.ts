@@ -325,7 +325,12 @@ export type PickV2Input = {
    *    함께 넘긴다. 넘기지 않으면 검사하지 않는다 — 기존 호출부의 동작이 바뀌지 않는다.
    *    🔴 넘기면 **채택 전에** 막는다. 적재까지 간 뒤 고치는 것이 아니다.
    */
-  ageFact?: { ageBand: string | null; selfBasis: string | null }
+  ageFact?: {
+    ageBand: string | null
+    selfBasis: string | null
+    /** 🔴 우리 정본이 정한 그날 나이 — 이 값이면 우리가 넣은 것이다 */
+    personaExactAge?: number | null
+  }
 }
 
 export function pickV2(input: PickV2Input, now: string): Pick {
@@ -374,6 +379,7 @@ export function pickV2(input: PickV2Input, now: string): Pick {
       text: `${d.title}\n${d.body}`,
       ageBand: input.ageFact.ageBand,
       selfBasis: input.ageFact.selfBasis,
+      personaExactAge: input.ageFact.personaExactAge ?? null,
     })
     if (age.hold) return held('lifeHistoryConflict')
   }

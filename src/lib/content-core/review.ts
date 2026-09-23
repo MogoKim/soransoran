@@ -24,6 +24,11 @@ export const REVIEW_VERSION = 'review-v7'
 export const DETERMINISTIC_CODES = [
   'personalInfo', 'copiedFromSource', 'bannedWord', 'schemaInvalid',
   'selfAgeConflict', 'protectedFactMissing',
+  /**
+   * 🔴 **결론을 만드는 조건이 최종 글에서 사라지거나 뒤바뀌었다** (2026-09-23).
+   *    의미 검수가 `clean` 이라 답해도 이 결함은 그 답으로 드러나지 않는다.
+   */
+  'loadBearingLost',
 ] as const
 export type DeterministicCode = (typeof DETERMINISTIC_CODES)[number]
 
@@ -34,6 +39,7 @@ export const DETERMINISTIC_LABEL: Readonly<Record<DeterministicCode, string>> = 
   schemaInvalid: '형식이 맞지 않는다',
   selfAgeConflict: '글쓴이 나이와 어긋난다',
   protectedFactMissing: '글자 그대로 지켜야 할 사실이 사라졌다',
+  loadBearingLost: '🔴 글의 결론을 만드는 조건이 사라지거나 뒤바뀌었다',
 }
 
 export type DeterministicFailure = { code: DeterministicCode; detail: string }
@@ -159,9 +165,31 @@ export const INCOMPLETE_CAUSES = [
    *       섞으면 정상 원천이 영구 제외된다 — `parseFailed` 가 그랬던 것과 같다.
    */
   'speakerSlotNarrowed',
+  /**
+   * 🔴 **화자 상대 사실을 우리 값으로 바꾸지 못했다** (2026-09-23).
+   *    같은 원천이라도 **다른 Persona** 면 바꿀 수 있으므로 결론이 아니다.
+   */
+  'personaTransformFailed',
+  /**
+   * 🔴 **load-bearing 은 한 덩어리가 아니다** (2026-09-23 마스터 지적).
+   *
+   *    앞판은 `loadBearingMismatch` 하나로 뭉뚱그렸다. 그런데 `planAxisMapping` 은
+   *    load-bearing 이면 **Persona 를 보기도 전에** 실패했다 — 사람을 바꿔도 성공
+   *    가능성이 0 인데 세 명을 차례로 태웠다. 재계획이 아니라 유료 반복이었다.
+   *    🔴 **다음 시도에 무엇이 달라지는가**로 나눈다.
+   */
+  // 🔴 그 조건을 만족하는 **다른 후보가 있다** → 그 사람으로 다시 계획한다
+  'loadBearingMismatch',
+  // 🔴 만족하는 후보가 없다 → **SELF 가 아닌 stance** 로 다시 계획한다 (사람은 그대로)
+  'loadBearingSelfImpossible',
   // 결론이다 — 같은 입력·같은 계약이면 또 같다
   'contextInsufficient', 'evidenceBudgetViolated', 'speakerUnqualified', 'voiceUnready',
   'wiringBroken', 'deterministicFailed',
+  /**
+   * 🔴 **어떤 Persona·stance 로도 의미가 보존되지 않는다** — 한 번에 결론이다.
+   *    여기까지 오면 다시 물어도 같다. 세 번 태우지 않는다.
+   */
+  'meaningUnpreservable',
 ] as const
 export type IncompleteCause = (typeof INCOMPLETE_CAUSES)[number]
 
@@ -169,6 +197,18 @@ export const RETRYABLE_CAUSES = [
   'budgetBlocked', 'noResponse', 'truncated', 'usageUnknown', 'parseFailed',
   // 🔴 다음 회차에 다른 묶음을 받으면 달라진다
   'speakerSlotNarrowed',
+  /**
+   * 🔴 **다른 Persona 면 될 수 있다** (2026-09-23). 앞판은 `complete` 인 HOLD 를
+   *    **전부** 결론으로 봤다 — 자동으로 고칠 수 있는 불일치 하나가 원천을 영구히 태웠다.
+   */
+  /**
+   * 🔴 셋 다 **다음 시도에 실제로 달라지는 것이 있다.**
+   *    · personaTransformFailed — 다른 Persona 면 바꿀 값이 있다
+   *    · loadBearingMismatch     — 그 조건을 만족하는 후보가 실제로 있다
+   *    · loadBearingSelfImpossible — SELF 를 버리고 다른 stance 로 갈 수 있다
+   *    🔴 `meaningUnpreservable` 은 여기 없다 — 다시 물어도 같다.
+   */
+  'personaTransformFailed', 'loadBearingMismatch', 'loadBearingSelfImpossible',
 ] as const satisfies readonly IncompleteCause[]
 
 /**
@@ -191,6 +231,10 @@ export const NOT_RUN_CAUSES = [
   'wiringBroken', 'deterministicFailed',
   // 🔴 좁힌 묶음 탓 — 결론이 아니다
   'speakerSlotNarrowed',
+  // 🔴 화자 상대 사실 변환을 묻기 전에 멈춘 것 — 다른 Persona·stance 면 될 수 있다
+  'personaTransformFailed', 'loadBearingMismatch', 'loadBearingSelfImpossible',
+  // 🔴 어떤 길로도 안 되는 것 — 결론이다
+  'meaningUnpreservable',
 ] as const satisfies readonly IncompleteCause[]
 
 export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> = {
@@ -205,6 +249,12 @@ export const INCOMPLETE_CAUSE_LABEL: Readonly<Record<IncompleteCause, string>> =
   speakerSlotNarrowed: '이번 묶음에 맞는 사람이 없었다 — 다음 회차에 다시 본다',
   voiceUnready: '말투 근거가 서지 않았다',
   wiringBroken: '요청 배선이 어긋났다',
+  personaTransformFailed: '🔴 원문 화자의 사실을 우리 Persona 값으로 바꾸지 못했다 — 다른 사람이면 될 수 있다',
+  loadBearingMismatch: '🔴 그 사실이 글의 결론을 바꾼다 — **그 조건을 만족하는 다른 사람**으로 다시 계획한다',
+  loadBearingSelfImpossible:
+    '🔴 그 조건을 만족하는 사람이 없다 — 1인칭을 버리고 **다른 자리(관찰·질문)** 로 다시 계획한다',
+  meaningUnpreservable:
+    '🔴 어떤 사람·자리로도 원문의 뜻이 보존되지 않는다 — 결론이다. 다시 묻지 않는다',
   deterministicFailed: '확정 가능한 결함이 있다',
 }
 

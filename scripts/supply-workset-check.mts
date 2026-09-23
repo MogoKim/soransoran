@@ -325,8 +325,13 @@ console.log('\n⑦ 🔴 배선이 실제로 그렇게 돼 있는가')
   })())
   check('🔴 🔴 **상한이 잘못되면 실행 전에 멈춘다**',
     /const budget = judgeStageBudget\(WORKSET_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)[\s\S]{0,120}return 1/.test(runner))
+  /**
+   * 🔴 회차 시각이 자식 env 에 함께 실리면서 모양이 바뀌었다(2026-09-23) —
+   *    지키는 것은 같다: **자식에게만** 실리고, 부모 `process.env` 는 건드리지 않는다.
+   */
   check('🔴 단계 env 는 자식 프로세스에만 실린다',
-    /env: \{ \.\.\.process\.env, \.\.\.env \}/.test(runner)
+    /env: \{ \.\.\.process\.env, \.\.\.withClock \}/.test(runner)
+    && /const withClock = \{ \.\.\.\(env \?\? \{\}\), \[RUN_AT_ENV\]: RUN_AT\.toISOString\(\) \}/.test(runner)
     && !/process\.env\.SORAN_LLM_RUN_REQUEST_CAP\s*=/.test(runner))
   check('🔴 🔴 **판정기가 묶음 밖 원천을 판정하지 않는다**',
     /all = all0\.filter\(\(t\) => ws\.sourceIds\.has\(/.test(judge))
@@ -534,11 +539,26 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
    * 🔴 여섯 번째가 늘었다 (2026-09-22) — `speakerSlotNarrowed`.
    *    화자 여력 계획이 원천마다 후보를 나누면서 "이번 묶음에 맞는 사람이 없었다" 가
    *    생겼다. 그것은 결론이 아니다 — 다음 회차에 다른 묶음을 받으면 쓸 수 있다.
+   *
+   * 🔴 일곱·여덟 번째 (2026-09-23) — `personaTransformFailed` · `loadBearingMismatch`.
+   *    원문 화자의 사실을 우리 Persona 값으로 **바꾸지 못한** 실패다.
+   *    앞판은 `complete` 인 HOLD 를 전부 결론으로 봐서, **다른 사람이면 될 수 있는**
+   *    불일치 하나가 원천을 영구히 태웠다.
    */
-  check('🔴 🔴 **재시도 원인 여섯 가지**',
+  /**
+   * 🔴 **load-bearing 이 둘로 나뉘었다** (2026-09-23 마스터 P0-1).
+   *    `loadBearingMismatch` — 조건을 만족하는 다른 후보가 있다 (사람을 바꾼다)
+   *    `loadBearingSelfImpossible` — 만족하는 후보가 없다 (자리를 바꾼다)
+   *    🔴 `meaningUnpreservable` 은 여기 없다 — 결론이다.
+   */
+  check('🔴 🔴 **재시도 원인 아홉 가지**',
     RETRYABLE_CAUSES.join(',')
-      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,speakerSlotNarrowed',
+      === 'budgetBlocked,noResponse,truncated,usageUnknown,parseFailed,speakerSlotNarrowed'
+        + ',personaTransformFailed,loadBearingMismatch,loadBearingSelfImpossible',
     RETRYABLE_CAUSES.join(','))
+  check('🔴 🔴 **의미가 보존되지 않는다는 결론은 다시 시도하지 않는다**',
+    !(RETRYABLE_CAUSES as readonly string[]).includes('meaningUnpreservable')
+    && (INCOMPLETE_CAUSES as readonly string[]).includes('meaningUnpreservable'))
   check('🔴 🔴 **좁힌 묶음 탓은 다시 보고, 전체 자격 미달은 결론이다**',
     (RETRYABLE_CAUSES as readonly string[]).includes('speakerSlotNarrowed')
     && !(RETRYABLE_CAUSES as readonly string[]).includes('speakerUnqualified'))
@@ -613,11 +633,19 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
      */
     const picked = [...src.matchAll(/'(speakerSlotNarrowed|speakerUnqualified)' as const/g)]
       .map((m) => m[1]!)
+    /**
+     * 🔴 화자 상대 사실 변환 실패도 **값 하나를 골라** 넘긴다 (2026-09-23) —
+     *    `LOAD_BEARING` 이면 `loadBearingMismatch`, 아니면 `personaTransformFailed`.
+     *    같은 이유로 위 정규식에 잡히지 않으므로 여기서 함께 센다.
+     */
+    const transform = [...src.matchAll(
+      /'(loadBearingMismatch|loadBearingSelfImpossible|meaningUnpreservable|personaTransformFailed)' as const/g)]
+      .map((m) => m[1]!)
     // 🔴 `notRunFrom` 은 앞 단계 완주 판정(`completionOf`)의 원인을 그대로 물려받는다
     const inherited = /notRunFrom\(/.test(src)
       ? [...src.matchAll(/reason: '([a-zA-Z]+)', cause: '([a-zA-Z]+)'/g)].map((m) => m[2]!)
       : []
-    const emitted = new Set([...direct, ...inherited, ...picked])
+    const emitted = new Set([...direct, ...inherited, ...picked, ...transform])
     const listed = new Set<string>(NOT_RUN_CAUSES)
     return emitted.size > 0 && [...emitted].every((c) => listed.has(c))
       && [...listed].every((c) => emitted.has(c))
@@ -655,7 +683,11 @@ console.log('\n⑧ 🔴 🔴 상태 전이 — 최신 하나가 정한다 (2026-
   check('🔴 🔴 **생성 러너와 공급 러너가 같은 함수를 쓴다**', (() => {
     const draft = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
     const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
-    return /currentContractBase\(\)/.test(draft) && /currentContractBase\(\)/.test(runner)
+    /**
+     * 🔴 회차 시각을 받게 됐다 (2026-09-23) — 계약에 그날 나이가 들어간다.
+     *    **같은 함수를 쓴다**는 계약은 그대로다.
+     */
+    return /currentContractBase\(RUN_AT\)/.test(draft) && /currentContractBase\(runAt\)/.test(runner)
   })())
   check('🔴 🔴 **artifact 가 원문을 계약에 담지 않는다** — 해시 한 칸뿐', (() => {
     const src = readFileSync('src/lib/content-core/pipeline.ts', 'utf-8')
@@ -675,7 +707,7 @@ console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로
 // ─────────────────────────────────────────────────────────
 {
   const CARD = (o: Partial<PoolCard> = {}): PoolCard => ({
-    code: 'P01', title: '카드', ageBand: '40대 후반', region: '수도권',
+    code: 'P01', birthDate: '1978-05-05', title: '카드', ageBand: '40대 후반', region: '수도권',
     maritalStatus: '기혼', spouseRelationship: '원만', childrenCount: 2,
     childrenAgeBands: ['중고등'], workStatus: '파트타임', economicStatus: '빠듯',
     housing: '전세', menopauseStatus: '전', parentCare: '간병 간헐',
@@ -759,7 +791,12 @@ console.log('\n⑧-a 🔴 🔴 생성 계약이 화자의 생활사를 실제로
     personaPoolIdentity(POOL) === personaPoolIdentity([...POOL].reverse()))
   check('🔴 🔴 **요청을 만드는 쪽이 그 순서를 실제로 쓴다**', (() => {
     const src = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
-    return /orderPersonasForSource\(input\.personas, input\.contract\.sourceInputHash\)/.test(src)
+    /**
+     * 🔴 계획 후보에 **그날의 Persona 스냅샷**을 먼저 입힌다 (2026-09-23) —
+     *    그래야 계획과 생성이 같은 사람을 본다. 순서 계약은 그대로다.
+     */
+    return /orderPersonasForSource\(dated, input\.contract\.sourceInputHash\)/.test(src)
+      && /const dated = input\.personas\.map\(datedOf\)/.test(src)
       && /personas: ordered/.test(src)
   })())
   /** 🔴 **실제로 나가는 문자열로 본다** — 주석이 아니라 만들어진 요청이다 */

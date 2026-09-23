@@ -66,8 +66,14 @@ export type DropReason =
   | 'notProvable'
   /** 문장·절일 수 있어 글자를 강제할 수 없다 — 🔴 다른 칸으로 옮기지 않고 버린다 */
   | 'clauseLike'
+  /**
+   * 🔴 **원문 화자 자신의 사실이다** (2026-09-23). 우리는 원문 작성자를 복제하지 않는다 —
+   *    그 값은 지키는 것이 아니라 **우리 Persona 값으로 바꾼다.**
+   */
+  | 'speakerRelative'
 
 export const DROP_REASON_LABEL: Readonly<Record<DropReason, string>> = {
+  speakerRelative: '🔴 원문 화자 자신의 사실이다 — 지키지 않고 우리 Persona 값으로 바꾼다',
   notInEvidence: '지목한 자리에 그 말이 없다',
   personalInfo: '개인정보다',
   empty: '비어 있다',

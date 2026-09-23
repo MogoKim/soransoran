@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process'
 import {
   cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync,
   writeFileSync,
+  existsSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -27,6 +28,7 @@ import {
   worksetFileName, WORKSET_KIND, WORKSET_VERSION, type WorksetPlan, type WorksetRow,
 } from '../src/lib/supply-workset'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { missingCandidateKeys } from './lib/candidate-envelope.mjs'
 import { SPEAKER_LOAD_FILE } from '../src/lib/content-core/speaker-load-file'
 import {
   RETRYABLE_CAUSES, INCOMPLETE_CAUSE_LABEL,
@@ -118,14 +120,16 @@ function writeSpeakerLoadFile(
 /** adapt 가 낸 모양 그대로 — 🔴 `detail` 과 `raw-detail` **쌍**으로 낸다 */
 function writeAdaptPair(
   dd: string,
-  rows: { id: string; comments: number; posted: string; lane?: string; axis?: string }[],
+  rows: { id: string; comments: number; posted: string; lane?: string; axis?: string
+    /** 🔴 합성 원문의 머리를 바꾼다 — 화자 자신의 나이가 든 원문을 만들 때 쓴다 */
+    head?: string }[],
   runId = 'adapt-1',
 ): void {
   const detail = rows.map((r) => JSON.stringify({
     runId, sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
     axis: r.axis ?? SEED_AXIS, lane: r.lane ?? PROVEN_LANE, access: 'ok', safetyVerdict: 'pass', safetyReasons: '',
     title: `우리 나이 이야기 ${r.id}`,
-    bodyHead: `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
+    bodyHead: r.head ?? `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: r.comments, bodyLength: 300, imageCount: 0,
     // 🔴 빈 값이 아니어야 한다 — 지문에서 이 칸이 빠진 것을 검사가 볼 수 있다
     assetAxes: 'sleep|work',
@@ -140,7 +144,7 @@ function writeAdaptPair(
     runId, sourceArticleId: r.id, sourceSite: 'navercafe:wgang',
     axis: r.axis ?? SEED_AXIS, lane: r.lane ?? PROVEN_LANE, accessStatus: 'ok', safetyVerdict: 'pass', safetyReasons: '',
     title: `우리 나이 이야기 ${r.id}`,
-    bodyHead: `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
+    bodyHead: r.head ?? `${r.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
     commentCount: r.comments, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
     sourcePostedAt: r.posted, sourceListedAt: r.posted,
   })).join('\n')
@@ -176,6 +180,14 @@ const runStage = (o: {
   cap: string; bodyLog?: string
   /** 🔴 가짜 provider 가 돌려줄 판정 — 회차마다 다른 결론을 실제로 만들어 본다 */
   judgeDecision?: string
+  /** 🔴 원문에 든 화자 자신의 나이 — 주면 계획이 그 값을 화자 상대 사실로 적어 낸다 */
+  selfAge?: string
+  /** 🔴 그 나이의 materiality — 기본 incidental */
+  selfAgeRole?: 'incidental' | 'loadBearing'
+  /** 🔴 요청의 1인칭 금지를 따르는 모델인가 */
+  obeyForbid?: boolean
+  /** 🔴 초안이 나이 문장을 통째로 뺀다 */
+  dropAge?: boolean
 }): Spawned => {
   const r = spawnSync(TSX, [join(ROOT, o.script), ...o.args], {
     cwd: o.world.root, encoding: 'utf-8',
@@ -185,6 +197,10 @@ const runStage = (o: {
       NODE_OPTIONS: `--import=${HOOK}`,
       ...(o.bodyLog === undefined ? {} : { FAKE_PROVIDER_BODY_LOG: o.bodyLog }),
       ...(o.judgeDecision === undefined ? {} : { FAKE_PROVIDER_JUDGE_DECISION: o.judgeDecision }),
+      ...(o.selfAge === undefined ? {} : { FAKE_PROVIDER_SELF_AGE: o.selfAge }),
+      ...(o.selfAgeRole === undefined ? {} : { FAKE_PROVIDER_SELF_AGE_ROLE: o.selfAgeRole }),
+      ...(o.obeyForbid !== true ? {} : { FAKE_PROVIDER_OBEY_FORBID: '1' }),
+      ...(o.dropAge !== true ? {} : { FAKE_PROVIDER_DROP_AGE: '1' }),
       SORAN_LLM_DAILY_BUDGET_USD: '1000',
       SORAN_LLM_RESERVE_HEADROOM: '1.5',
       SORAN_LLM_RUN_REQUEST_CAP: o.cap,
@@ -355,7 +371,8 @@ function contractBaseOf(world: { root: string; home: string }): ContractBase {
   const probe = join(world.root, 'contract-probe.mts')
   writeFileSync(probe, [
     `import { currentContractBase } from '${join(ROOT, 'scripts/lib/generation-contract.mjs')}'`,
-    'process.stdout.write(JSON.stringify(currentContractBase()))',
+    // 🔴 **러너와 같은 방식으로 시각을 준다** — 없이 부르면 age=∅ 계약이 나온다
+    'process.stdout.write(JSON.stringify(currentContractBase(new Date())))',
   ].join('\n'), 'utf-8')
   const r = spawnSync(TSX, [probe], {
     cwd: world.root, encoding: 'utf-8', env: { ...process.env, HOME: world.home },
@@ -391,7 +408,9 @@ const outcomesOf = (world: { dd: string }, base: ContractBase = BASE) => readPri
       && c.stageMaxOutputLabel === BASE.stageMaxOutputLabel
       && c.personaPoolDigest === BASE.personaPoolDigest
       && JSON.stringify(c.stageModels) === JSON.stringify(BASE.stageModels)),
-    JSON.stringify(contracts[0] ?? {}))
+    Object.keys(BASE).filter((k) => JSON.stringify((contracts[0] ?? {})[k])
+      !== JSON.stringify((BASE as unknown as Record<string, unknown>)[k]))
+      .map((k) => `${k}: ${JSON.stringify((contracts[0] ?? {})[k])} vs ${JSON.stringify((BASE as unknown as Record<string, unknown>)[k])}`).join(' | '))
   check('🔴 🔴 **artifact 의 원천 지문이 공급 러너가 쓰는 지문과 같다** — 칸이 빠지면 영영 다르다',
     arts.every((a) => {
       const c = (a.contract ?? {}) as Record<string, unknown>
@@ -926,6 +945,420 @@ console.log('\n㉑ 🔴 🔴 좁힌 묶음 탓 HOLD 는 다음 회차에 다시 
   check('🔴 🔴 **좁혀졌을 때만 재시도 값으로 적는다**',
     /input\.personas\.length < input\.personaPoolSize/.test(runSrc)
     && /narrowed \? 'speakerSlotNarrowed' as const : 'speakerUnqualified' as const/.test(runSrc))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉒ 🔴 🔴 재계획 — 실제 러너로 세 갈래를 값으로 본다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실제 `micro-seed-auto-draft.mts` 를 같은 세계에서 거듭 spawn 한다.**
+   *    러너가 앞 회차 artifact 를 스스로 읽고 무엇을 바꾸는지 **파일로** 확인한다.
+   *
+   * 🔴 세 갈래를 가른다 (2026-09-23 마스터 P0-1):
+   *    ⓐ 사람을 바꾸면 될 수 있는 실패 → **사람이 실제로 바뀐다**
+   *    ⓑ 사람을 바꿔도 소용없는 실패(load-bearing) → **사람을 태우지 않는다**
+   *    ⓒ 자리를 바꾸면 되는 경우 → **자리가 바뀌어 통과한다**
+   */
+  const SELF_AGE = '44'
+  const mk = (tagBase: string) => {
+    const w = makeWorld({ speakerLoad: 'fresh', speakerLoadRunId: `${tagBase}-0` })
+    const rel = (p: string): string => p.slice(w.root.length + 1)
+    writeAdaptPair(w.dd, [{
+      id: 'rp-0', comments: 21, posted: '2026-09-18T00:00:00.000Z',
+      head: `제가 ${SELF_AGE}인데 요즘 부쩍 그런 생각이 들어요. 다들 어떠세요?`,
+    }])
+    const plan = selectWorkset({
+      rows: rowsOf(w.dd), humanDecided: new Set(), queuePending: new Set(),
+      concluded: new Set(), attempted: new Map(),
+      limit: 5, runId: `${tagBase}-ws`, takenAt: new Date(),
+    })
+    const wsPath = join(w.dd, worksetFileName(`${tagBase}-ws`))
+    writeFileSync(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`, 'utf-8')
+    runStage({
+      script: 'scripts/micro-seed-auto-judge.mts', world: w, cap: '5', judgeDecision: 'AUTO_SEED',
+      args: ['--call', '--apply', `--run-id=${tagBase}-ws`,
+        `--ledger-run-id=${ledgerRunIdOf(`${tagBase}-ws`, 'judge')}`,
+        `--workset=${rel(wsPath)}`,
+        `--shadow-out=${rel(join(w.dd, `auto-judge-${tagBase}-ws.shadow.jsonl`))}`],
+    })
+    return { w, rel, wsPath }
+  }
+  type Shot = { out: string; picked: string[]; stances: string[]; causes: string[] }
+  const draftOnce = (
+    world: { w: { dd: string; root: string; home: string }; rel: (p: string) => string; wsPath: string },
+    tag: string,
+    knobs: { selfAgeRole?: 'incidental' | 'loadBearing'; obeyForbid?: boolean; dropAge?: boolean },
+  ): Shot => {
+    // 🔴 여력 파일은 **그 회차의 것**이어야 한다 — 운영에서도 회차마다 적는다
+    writeSpeakerLoadFile(world.w.dd, 'fresh', tag)
+    const r = runStage({
+      script: 'scripts/micro-seed-auto-draft.mts', world: world.w, cap: '15',
+      selfAge: SELF_AGE, ...knobs,
+      args: ['--call', '--apply', `--run-id=${tag}`,
+        `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`, `--workset=${world.rel(world.wsPath)}`],
+    })
+    const f = readdirSync(world.w.dd).filter((x) => x === `auto-draft-${tag}.artifacts.json`)
+    const arts = f.length === 0 ? [] : JSON.parse(readFileSync(join(world.w.dd, f[0]!), 'utf-8')) as
+      Record<string, unknown>[]
+    const planOf = (a: Record<string, unknown>) => (a.plan ?? {}) as Record<string, unknown>
+    const causeOf = (a: Record<string, unknown>): string => {
+      const rev = a.review as Record<string, unknown> | undefined
+      const c = rev?.semanticCompletion as Record<string, unknown> | undefined
+      return String(c?.cause ?? '')
+    }
+    return {
+      out: r.out,
+      picked: arts.map((a) => String(planOf(a).personaCode ?? '')),
+      stances: arts.map((a) => String(planOf(a).stance ?? '')),
+      causes: arts.map(causeOf),
+    }
+  }
+
+  // ── ⓐ 사람을 바꾸면 될 수 있는 실패 — 초안이 나이를 통째로 뺀다 ──
+  {
+    const world = mk('20260922-ra')
+    const r1 = draftOnce(world, '20260922-ra1', { dropAge: true })
+    check('🔴 🔴 **ⓐ 초안이 나이를 빼면 `personaTransformFailed` 다 — 사람을 바꿔 볼 값이 있다**',
+      r1.causes.join(',') === 'personaTransformFailed' && r1.picked[0] !== '',
+      `${r1.picked.join(',')} · ${r1.causes.join(',')}`)
+    const r2 = draftOnce(world, '20260922-ra2', { dropAge: true })
+    check('🔴 🔴 **ⓐ 다음 회차에 실제로 다른 사람이 나간다**',
+      r2.picked.length === 1 && r2.picked[0] !== '' && r2.picked[0] !== r1.picked[0],
+      `1회차 ${r1.picked.join(',')} → 2회차 ${r2.picked.join(',')}`)
+  }
+
+  /**
+   * ── ⓑ 🔴 **사람을 바꿔도 소용없는 실패** ──
+   *    원문 44 가 결론을 바꾼다. 후보 중 44 인 사람이 없다 —
+   *    앞판은 여기서 **세 명을 차례로 태웠다.** 지금은 태우지 않는다.
+   */
+  {
+    const world = mk('20260922-rb')
+    const r1 = draftOnce(world, '20260922-rb1', { selfAgeRole: 'loadBearing' })
+    check('🔴 🔴 **ⓑ 만족하는 후보가 없으면 `loadBearingSelfImpossible` 이다**',
+      r1.causes.join(',') === 'loadBearingSelfImpossible',
+      `${r1.picked.join(',')} · ${r1.causes.join(',')}`)
+    const r2 = draftOnce(world, '20260922-rb2', { selfAgeRole: 'loadBearing' })
+    check('🔴 🔴 **ⓑ 그 사람을 태우지 않는다 — 다음 회차도 같은 사람이다**',
+      r2.picked.length === 1 && r2.picked[0] === r1.picked[0],
+      `1회차 ${r1.picked.join(',')} → 2회차 ${r2.picked.join(',')}`)
+    check('🔴 🔴 **ⓑ 지시를 무시하고 또 1인칭이면 `meaningUnpreservable` — 한 번에 결론이다**',
+      r2.causes.join(',') === 'meaningUnpreservable', r2.causes.join(','))
+    const r3 = draftOnce(world, '20260922-rb3', { selfAgeRole: 'loadBearing' })
+    check('🔴 🔴 **ⓑ 결론 뒤에는 만들지 않는다 — 세 번째 유료 시도가 없다**',
+      r3.picked.length === 0 && /CONCLUDED/.test(r3.out),
+      `${r3.picked.join(',')} · ${r3.out.slice(-200)}`)
+    /**
+     * 🔴 **운영 경로에서도 결론이다.** 공급 러너는 `concludedSourceIds` 로 먼저 거른다 —
+     *    러너 안의 방어와 **따로** 확인한다. 한쪽만 보면 다른 쪽이 조용히 열려 있어도 모른다.
+     */
+    check('🔴 🔴 **ⓑ 공급 러너의 묶음 선택에서도 빠진다 — 같은 원천을 다시 사지 않는다**', (() => {
+      const outcomes = readPriorOutcomes({
+        dataDir: world.w.dd,
+        hashOf: new Map(rowsOf(world.w.dd).map((r) => [r.sourceArticleId, inputHashOf(r.input)])),
+        canon: CANON, base: contractBaseOf(world.w), artifactVersion: ARTIFACT_VERSION,
+      })
+      const done = concludedSourceIds(outcomes)
+      const next = selectWorkset({
+        rows: rowsOf(world.w.dd), humanDecided: new Set(), queuePending: new Set(),
+        concluded: done, attempted: new Map(),
+        limit: 5, runId: '20260922-rb-next', takenAt: new Date(),
+      })
+      return done.has('rp-0') && !next.workset.sourceIds.includes('rp-0')
+    })())
+  }
+
+  /**
+   * ── ⓒ 🔴 **자리를 바꾸면 된다** ──
+   *    계획기가 요청의 1인칭 금지를 읽고 QUESTION 으로 바꾼다 — 실제 모델이 하는 일이다.
+   */
+  {
+    const world = mk('20260922-rc')
+    const r1 = draftOnce(world, '20260922-rc1', { selfAgeRole: 'loadBearing', obeyForbid: true })
+    check('🔴 🔴 **ⓒ 1회차는 1인칭이라 멈춘다**',
+      r1.causes.join(',') === 'loadBearingSelfImpossible' && r1.stances.join(',') === 'SELF_EXPERIENCE',
+      `${r1.stances.join(',')} · ${r1.causes.join(',')}`)
+    const r2 = draftOnce(world, '20260922-rc2', { selfAgeRole: 'loadBearing', obeyForbid: true })
+    check('🔴 🔴 **ⓒ 2회차는 자리가 바뀐다 — 금지가 요청에 실제로 실렸다**',
+      r2.stances.join(',') !== 'SELF_EXPERIENCE' && r2.stances[0] !== undefined,
+      `${r1.stances.join(',')} → ${r2.stances.join(',')}`)
+    check('🔴 🔴 **ⓒ 그 회차는 load-bearing 으로 멈추지 않는다 — 의미가 보존됐다**',
+      !['loadBearingSelfImpossible', 'meaningUnpreservable', 'loadBearingMismatch']
+        .includes(r2.causes[0] ?? ''),
+      `${r2.causes.join(',')} · ${r2.out.slice(-160)}`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉓ 🔴 🔴 회차 시각 하나 — 부모가 준 값을 자식이 그대로 쓴다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **자식의 벽시계를 부모와 다르게 만들어 본다.** 앞판은 부모·자식이 각자
+   *    `new Date()` 를 만들었다 — KST 자정이나 Persona 생일 경계를 사이에 두면
+   *    **다른 날**을 보고 계약(`personaPoolDigest`)이 갈렸다. 그러면 끝난 원천이
+   *    terminal 로 인정되지 않아 같은 원천을 유료로 되풀이한다.
+   *
+   * 🔴 탐침을 **자식처럼** 띄워, 부모가 준 `SORAN_RUN_AT` 만으로 값이 정해지는지 본다.
+   */
+  const w = makeWorld({})
+  const probe = join(w.root, 'clock-probe.mts')
+  writeFileSync(probe, [
+    `import { currentContractBase } from '${join(ROOT, 'scripts/lib/generation-contract.mjs')}'`,
+    `import { runClockFrom } from '${join(ROOT, 'scripts/lib/run-clock.mjs')}'`,
+    `import { materializePersonaAt } from '${join(ROOT, 'src/lib/persona-birth-anchor')}'`,
+    'const c = runClockFrom(process.env)',
+    "const at = materializePersonaAt({ card: { code: 'P02', birthDate: '1979-06-20', ageBand: '40대 후반' }, now: c.at })",
+    'process.stdout.write(JSON.stringify({',
+    '  from: c.from, iso: c.at.toISOString(),',
+    '  pool: currentContractBase(c.at).personaPoolDigest,',
+    "  age: at.ok ? at.at.exactAge : null, band: at.ok ? at.at.effectiveAgeBand : null,",
+    '}))',
+  ].join('\n'), 'utf-8')
+  const ask = (runAt: string | undefined, tz: string): Record<string, unknown> => {
+    const env: Record<string, string> = { ...process.env as Record<string, string>, HOME: w.home, TZ: tz }
+    if (runAt === undefined) delete env.SORAN_RUN_AT
+    else env.SORAN_RUN_AT = runAt
+    const r = spawnSync(TSX, [probe], { cwd: w.root, encoding: 'utf-8', env })
+    if (r.status !== 0) throw new Error(`탐침 실패: ${r.stderr ?? ''}`)
+    return JSON.parse(r.stdout) as Record<string, unknown>
+  }
+
+  /**
+   * 🔴 KST 자정 경계 — 같은 순간을 서로 **다른 시간대**의 자식이 받는다.
+   *    부모가 준 값을 쓰면 두 자식의 결과가 같아야 한다.
+   */
+  const PARENT = '2026-09-23T15:00:00.000Z'   // KST 2026-09-24 00:00
+  const a = ask(PARENT, 'Asia/Seoul')
+  const b = ask(PARENT, 'America/Los_Angeles')
+  check('🔴 🔴 **① 부모가 준 시각을 썼다고 값으로 말한다**',
+    a.from === 'parent' && b.from === 'parent', JSON.stringify({ a: a.from, b: b.from }))
+  check('🔴 🔴 **① 자식 시간대가 달라도 같은 순간이다**', a.iso === PARENT && b.iso === PARENT,
+    `${String(a.iso)} vs ${String(b.iso)}`)
+  check('🔴 🔴 **① 후보 풀 지문이 같다 — 계약이 갈리지 않는다**',
+    a.pool === b.pool && String(a.pool) !== '', `${String(a.pool)} vs ${String(b.pool)}`)
+  check('🔴 🔴 **① exactAge · effectiveAgeBand 가 같다**',
+    a.age === b.age && a.band === b.band,
+    `${String(a.age)}/${String(a.band)} vs ${String(b.age)}/${String(b.band)}`)
+
+  /**
+   * 🔴 ② **생일 경계** — 부모가 생일 하루 전/당일을 주면 자식은 그대로 다른 나이를 낸다.
+   *    (시각이 실제로 쓰인다는 반례다 — 안 쓰면 둘이 같아진다)
+   */
+  const before = ask('2026-06-19T12:00:00.000Z', 'Asia/Seoul')
+  const after = ask('2026-06-20T12:00:00.000Z', 'Asia/Seoul')
+  check('🔴 🔴 **② 생일 경계에서 부모가 준 날짜대로 나이가 갈린다 — 주입된 값이 실제로 쓰인다**',
+    typeof before.age === 'number' && typeof after.age === 'number'
+    && (after.age as number) === (before.age as number) + 1,
+    `${String(before.age)} → ${String(after.age)}`)
+
+  /** 🔴 ③ 부모가 주지 않으면 자기 시계다 — 단독 실행은 막지 않는다 */
+  check('🔴 🔴 **③ 부모가 없으면 자기 시계라고 값으로 말한다**',
+    ask(undefined, 'Asia/Seoul').from === 'self')
+
+  /** 🔴 ④ 모양이 틀린 값은 조용히 자기 시계로 돌아가지 않는다 — 던진다 */
+  check('🔴 🔴 **④ 모양이 틀린 시각은 조용히 무시되지 않는다 (fail-closed)**', (() => {
+    const env: Record<string, string> = {
+      ...process.env as Record<string, string>, HOME: w.home, SORAN_RUN_AT: 'not-a-time',
+    }
+    const r = spawnSync(TSX, [probe], { cwd: w.root, encoding: 'utf-8', env })
+    return r.status !== 0 && /SORAN_RUN_AT/.test(`${r.stderr ?? ''}`)
+  })())
+
+  /** 🔴 ⑤ 부모가 실제로 그 env 를 자식에게 싣는가 — 배선 검사 */
+  const parentSrc = readFileSync(join(ROOT, 'scripts/supply-process.mts'), 'utf-8')
+  check('🔴 🔴 **⑤ 부모가 회차 시각을 자식 env 에 싣는다**',
+    /\[RUN_AT_ENV\]: RUN_AT\.toISOString\(\)/.test(parentSrc)
+    && /env: \{ \.\.\.process\.env, \.\.\.withClock \}/.test(parentSrc))
+  check('🔴 🔴 **⑤ 부모의 회차 시각은 하나다 — 두 번 만들지 않는다**',
+    (parentSrc.match(/const RUN_AT = new Date\(\)/g) ?? []).length === 1
+    && /const runAt = RUN_AT/.test(parentSrc))
+  const childSrc = readFileSync(join(ROOT, 'scripts/micro-seed-auto-draft.mts'), 'utf-8')
+  check('🔴 🔴 **⑤ 자식은 자기 `new Date()` 로 회차 시각을 만들지 않는다**',
+    /const RUN_CLOCK = runClockFrom\(process\.env\)/.test(childSrc)
+    && !/const RUN_AT = new Date\(\)/.test(childSrc))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉔ 🔴 🔴 후보 봉투 — 실제 writer 가 적은 파일을 그대로 검증한다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **검사가 봉투를 손으로 조립하지 않는다** (2026-09-23 마스터 지적).
+   *    축약본을 조립하면 러너가 칸을 빠뜨려도 검사는 통과한다 — 실제로
+   *    `semanticReview` 가 빠진 채 적재까지 갔다(P07 실측).
+   *    🔴 여기서는 **실제 러너를 임시 디렉터리에서 돌려 산출 파일을 읽는다.**
+   */
+  const tag = '20260922-env'
+  const w = makeWorld({ speakerLoad: 'fresh', speakerLoadRunId: tag })
+  const rel = (p: string): string => p.slice(w.root.length + 1)
+  writeAdaptPair(w.dd, [{ id: 'env-0', comments: 18, posted: '2026-09-18T00:00:00.000Z' }])
+  const plan = selectWorkset({
+    rows: rowsOf(w.dd), humanDecided: new Set(), queuePending: new Set(),
+    concluded: new Set(), attempted: new Map(),
+    limit: 5, runId: tag, takenAt: new Date(),
+  })
+  const wsPath = join(w.dd, worksetFileName(tag))
+  writeFileSync(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`, 'utf-8')
+  runStage({
+    script: 'scripts/micro-seed-auto-judge.mts', world: w, cap: '5', judgeDecision: 'AUTO_SEED',
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'judge')}`, `--workset=${rel(wsPath)}`,
+      `--shadow-out=${rel(join(w.dd, `auto-judge-${tag}.shadow.jsonl`))}`],
+  })
+  runStage({
+    script: 'scripts/micro-seed-auto-draft.mts', world: w, cap: '15',
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`, `--workset=${rel(wsPath)}`],
+  })
+
+  const candPath = join(w.dd, `auto-draft-${tag}.candidates.json`)
+  const artPath = join(w.dd, `auto-draft-${tag}.artifacts.json`)
+  const env = existsSync(candPath)
+    ? JSON.parse(readFileSync(candPath, 'utf-8')) as Record<string, unknown>
+    : {}
+  const items = Array.isArray(env.candidates) ? env.candidates as Record<string, unknown>[] : []
+  check('🔴 🔴 **① 실제 writer 가 후보를 적었다 (검사가 조립한 객체가 아니다)**',
+    items.length === 1, `${items.length}건 · ${candPath}`)
+
+  const it = items[0] ?? {}
+  check('🔴 🔴 **② 운영 봉투의 모든 필수 칸이 실제 파일에 있다**',
+    missingCandidateKeys(it).length === 0, missingCandidateKeys(it).join(' · '))
+
+  /** 🔴 artifactId 는 그 한 장을 정확히 가리켜야 한다 — 사람 검토의 열쇠다 */
+  const arts = existsSync(artPath)
+    ? JSON.parse(readFileSync(artPath, 'utf-8')) as Record<string, unknown>[] : []
+  check('🔴 🔴 **③ `artifactId` 가 실제 artifact 한 장과 이어진다**',
+    String(it.artifactId ?? '') !== ''
+    && arts.some((a) => a.artifactId === it.artifactId),
+    `${String(it.artifactId)} · artifact ${arts.length}장`)
+
+  /** 🔴 원문 쪽 세 시각 — 적재가 신선도를 재는 값이다 */
+  check('🔴 🔴 **④ 원문 세 시각이 값으로 실렸다 — 지금 시각으로 채우지 않았다**',
+    it.sourcePostedAt === '2026-09-18T00:00:00.000Z'
+    && it.sourceListedAt === '2026-09-18T00:00:00.000Z'
+    && String(it.sourceCapturedAt ?? '') !== '',
+    JSON.stringify({ p: it.sourcePostedAt, l: it.sourceListedAt, c: it.sourceCapturedAt }))
+
+  /** 🔴 말투 근거 — 적재 정본이 읽는 `comments` 이름으로 이어져야 한다 */
+  const vp = (it.voiceProvenance ?? null) as Record<string, unknown> | null
+  check('🔴 🔴 **⑤ voiceProvenance 가 적재 정본 모양이다 (`comments` 로 잇는다)**',
+    vp !== null && String(vp.personaCode ?? '') !== '' && typeof vp.comments === 'number'
+    && String(vp.bundleDigest ?? '') !== '' && String(vp.sourceDigest ?? '') !== '',
+    JSON.stringify(vp))
+
+  /** 🔴 의미 검수 요약 — 빠지면 모델이 찾은 결함이 적재까지 오지 못한다 */
+  const sr = (it.semanticReview ?? null) as Record<string, unknown> | null
+  check('🔴 🔴 **⑥ semanticReview 가 실렸다 — P07 에서 통째로 사라졌던 칸이다**',
+    sr !== null && typeof sr === 'object' && Object.keys(sr).length > 0, JSON.stringify(sr))
+
+  /** 🔴 어느 판정에서 왔는가 — 상수를 찍으면 근거가 아니라 장식이다 */
+  check('🔴 🔴 **⑦ autoJudge 근거가 실렸다**',
+    it.autoJudge !== null && it.autoJudge !== undefined, JSON.stringify(it.autoJudge))
+
+  /** 🔴 원문 전문·제목은 담지 않는다 — 대조 결과만이다 */
+  check('🔴 🔴 **⑧ 원문 제목 전문이 봉투에 없다 — 대조 결과만 싣는다**',
+    it.sourceTitleChecked === true && typeof it.sourceTitleCopied === 'boolean'
+    && !JSON.stringify(it).includes('우리 나이 이야기 env-0'),
+    `${String(it.sourceTitleChecked)} · ${String(it.sourceTitleCopied)}`)
+
+  /**
+   * 🔴 ⑨ **러너와 검사가 같은 함수를 부른다.** 축약본을 따로 조립하면
+   *    러너가 칸을 빠뜨려도 검사는 통과한다 — 그 자리를 없앤다.
+   */
+  const runnerSrc = readFileSync(join(ROOT, 'scripts/micro-seed-auto-draft.mts'), 'utf-8')
+  check('🔴 🔴 **⑨ 러너가 공용 조립 함수를 부른다**',
+    /candidateEnvelope\(\{/.test(runnerSrc))
+  check('🔴 🔴 **⑨ 러너가 후보 객체를 따로 조립하지 않는다**',
+    !/candidateType: 'seedOriginality'/.test(runnerSrc),
+    runnerSrc.split('\n').filter((l) => l.includes('candidateType')).join(' | '))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n㉕ 🔴 🔴 신선도 merge — 빈 값이 아는 값을 지우지 않는다 (마스터 P0-4)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 실측 결함(2026-09-23): `.raw-detail.jsonl` 에는 원문 쪽 세 시각이 **아예 없는데**
+   *    같은 원천이 두 파일에 다 있어서(운영 1321건) 나중에 읽은 raw 가 앞서 읽은 시각을
+   *    **빈 문자열로 지웠다.** 실제로 `auto-draft-20260922-131506.candidates.json` 이
+   *    세 칸을 비운 채 나갔다.
+   *
+   * 🔴 여기서는 **실제 러너를 돌려 산출 파일**로 확인한다. 세 파일을 같은 원천에 겹쳐 둔다:
+   *    ① 오래된 detail — 유효한 시각
+   *    ② 더 최신 detail — **다른** 유효한 시각
+   *    ③ raw-detail — 빈 시각
+   *    결과는 **가장 최신의 비어 있지 않은 값**이어야 한다.
+   */
+  const tag = '20260922-fresh'
+  const w = makeWorld({ speakerLoad: 'fresh', speakerLoadRunId: tag })
+  const rel = (p: string): string => p.slice(w.root.length + 1)
+  const ID = 'fr-0'
+  const OLD = '2026-09-10T00:00:00.000Z'
+  const NEW_T = '2026-09-18T00:00:00.000Z'
+  const row = (o: Record<string, unknown>): string => JSON.stringify({
+    sourceArticleId: ID, sourceSite: 'navercafe:wgang',
+    axis: SEED_AXIS, lane: PROVEN_LANE, access: 'ok', accessStatus: 'ok',
+    safetyVerdict: 'pass', safetyReasons: '',
+    title: '우리 나이 이야기 fr-0',
+    bodyHead: 'fr-0 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?',
+    commentCount: 19, bodyLength: 300, imageCount: 0, assetAxes: 'sleep|work', qualityFlags: [],
+    ...o,
+  })
+  // 🔴 파일 이름이 곧 순서다 — 러너는 이름 순으로 읽는다
+  writeFileSync(join(w.dd, 'a-old.detail.jsonl'),
+    `${row({ sourcePostedAt: OLD, sourceListedAt: OLD, sourceCapturedAt: OLD })}\n`, 'utf-8')
+  writeFileSync(join(w.dd, 'b-new.detail.jsonl'),
+    `${row({ sourcePostedAt: NEW_T, sourceListedAt: NEW_T, sourceCapturedAt: NEW_T })}\n`, 'utf-8')
+  // 🔴 운영 raw 파일에는 세 시각이 **아예 없다** — 그 모양 그대로
+  writeFileSync(join(w.dd, 'c-raw.raw-detail.jsonl'), `${row({})}\n`, 'utf-8')
+
+  const plan = selectWorkset({
+    rows: rowsOf(w.dd), humanDecided: new Set(), queuePending: new Set(),
+    concluded: new Set(), attempted: new Map(),
+    limit: 5, runId: tag, takenAt: new Date(),
+  })
+  const wsPath = join(w.dd, worksetFileName(tag))
+  writeFileSync(wsPath, `${JSON.stringify(plan.workset, null, 2)}\n`, 'utf-8')
+  runStage({
+    script: 'scripts/micro-seed-auto-judge.mts', world: w, cap: '5', judgeDecision: 'AUTO_SEED',
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'judge')}`, `--workset=${rel(wsPath)}`,
+      `--shadow-out=${rel(join(w.dd, `auto-judge-${tag}.shadow.jsonl`))}`],
+  })
+  runStage({
+    script: 'scripts/micro-seed-auto-draft.mts', world: w, cap: '15',
+    args: ['--call', '--apply', `--run-id=${tag}`,
+      `--ledger-run-id=${ledgerRunIdOf(tag, 'draft')}`, `--workset=${rel(wsPath)}`],
+  })
+
+  const candPath = join(w.dd, `auto-draft-${tag}.candidates.json`)
+  const env = existsSync(candPath)
+    ? JSON.parse(readFileSync(candPath, 'utf-8')) as Record<string, unknown> : {}
+  const it = (Array.isArray(env.candidates) ? env.candidates as Record<string, unknown>[] : [])[0] ?? {}
+  check('🔴 🔴 **① 실제 러너가 후보를 냈다**', Object.keys(it).length > 0, candPath)
+  check('🔴 🔴 **② raw 의 빈 시각이 아는 시각을 지우지 않았다**',
+    String(it.sourcePostedAt ?? '') !== '' && String(it.sourceListedAt ?? '') !== ''
+    && String(it.sourceCapturedAt ?? '') !== '',
+    JSON.stringify({ p: it.sourcePostedAt, l: it.sourceListedAt, c: it.sourceCapturedAt }))
+  check('🔴 🔴 **③ 남은 값은 더 최신 detail 의 것이다 — 오래된 값이 아니다**',
+    it.sourcePostedAt === NEW_T && it.sourceListedAt === NEW_T && it.sourceCapturedAt === NEW_T,
+    `${String(it.sourcePostedAt)} (기대 ${NEW_T} · 옛값 ${OLD})`)
+
+  /**
+   * 🔴 ④ **정책을 코드에서도 잠근다.** 산출 파일만 보면 파일 순서가 우연히 맞아
+   *    통과할 수 있다 — 빈 값이 덮지 않는다는 규칙 자체를 본다.
+   */
+  const draftSrc = readFileSync(join(ROOT, 'scripts/micro-seed-auto-draft.mts'), 'utf-8')
+  check('🔴 🔴 **④ 빈 값으로 덮지 않는 규칙이 코드에 있다**',
+    /const keep = \(next: string, prev: string \| undefined\): string =>/.test(draftSrc)
+    && /next !== '' \? next : \(prev \?\? ''\)/.test(draftSrc))
+  check('🔴 🔴 **④ 세 시각 모두 그 규칙을 지난다**',
+    /sourcePostedAt: keep\(/.test(draftSrc) && /sourceListedAt: keep\(/.test(draftSrc)
+    && /sourceCapturedAt: keep\(/.test(draftSrc))
+  check('🔴 🔴 **④ 파일 순서는 이름으로 결정적이다 — 읽을 때마다 달라지지 않는다**',
+    /readdirSync\(DATA_DIR\)\.filter\(\(f\) => f\.endsWith\(suffix\)\)\.sort\(\)/.test(draftSrc))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

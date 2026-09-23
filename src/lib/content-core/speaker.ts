@@ -40,8 +40,37 @@ import {
   type ClaimFact, type ClosingIntent, type ContentRole, type DropReason,
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
+import { readSelfAgeClaim, OTHER_MARKERS } from '../persona-self-age'
+import {
+  AXIS_LABEL, expectedSelfFactsIn, type SpeakerRelativeAxis, type FactRole,
+} from './speaker-relative-facts'
 
-export const SPEAKER_PLAN_VERSION = 'speaker-plan-v4'
+/**
+ * 🔴 계획이 싣는 한 줄 — **무엇을 무엇으로 바꾸는가**.
+ *    `personaText` 는 생성 직전에 채운다(그때 Persona 가 정해진다).
+ */
+export type SpeakerRelativeEntry = {
+  axis: SpeakerRelativeAxis
+  sourceText: string
+  /** 원문에서 누구의 사실이었나 */
+  sourceRole: 'self' | 'thirdParty' | 'invariant'
+  evidenceRef: EvidenceRef
+  materiality: FactRole
+}
+
+/**
+ * 🔴 **v6 (2026-09-23)** — 파서 의미가 바뀌었다. `materiality` 미기재는 기본값이 아니라
+ *    모양 오류이고, load-bearing 판정 자리가 `resolveLoadBearing` 으로 옮겨졌다.
+ */
+export const SPEAKER_PLAN_VERSION = 'speaker-plan-v6'
+
+/**
+ * 🔴 **아는 값만 통과시킨다** (2026-09-23). 카드에 적힐 수 있는 값을 **열거**한다 —
+ *    "그 값이 아니면 전부 참" 으로 두면 빈 값·오타가 근거로 선다(fail-open).
+ */
+const MARITAL_SINGLE: readonly string[] = ['미혼', '비혼', '이혼', '사별', '별거']
+const PARENT_CARE_YES: readonly string[] = ['간헐', '상시', '있음', '동거 간병']
+const MENOPAUSE_YES: readonly string[] = ['중', '후', '진행', '완료']
 
 /** 화자가 서는 자리 */
 export const STANCES = ['SELF_EXPERIENCE', 'OBSERVATION', 'REFLECTION', 'QUESTION'] as const
@@ -208,6 +237,12 @@ export type SpeakerPlan = {
   /** 자격이 필요 없다고 본 이유 — `noLifeFactNeeded` 일 때만 */
   universalReason: string
   protectedFacts: ProtectedFact[]
+  /**
+   * 🔴 **원문 화자의 사실과 우리 쪽 대체값** (2026-09-23).
+   *    `protectedFacts` 에서 빼기만 하면 **내용이 사라진다.** 무엇을 무엇으로 바꿀지
+   *    여기 담아 **초안 프롬프트가 실제로 소비**한다.
+   */
+  speakerRelative: SpeakerRelativeEntry[]
   closingIntent: ClosingIntent | null
   contentRoles: ContentRole[]
   reason: string
@@ -230,6 +265,11 @@ export const QUALIFICATION_REJECTIONS = [
 
 /** 🔴 계획 응답이 JSON 조차 아니었다는 표시 — 문자열을 두 곳에 적지 않는다 */
 export const UNPARSABLE_PLAN = 'JSON 이 아니다'
+/**
+ * 🔴 **계획이 화자 상대 사실의 materiality 를 답하지 않았다** (2026-09-23).
+ *    기본값으로 통과시키지 않는다 — 모양 오류로 다시 묻는다.
+ */
+export const MATERIALITY_MISSING = '🔴 materiality 누락'
 
 export type SpeakerPlanParse = {
   plan: SpeakerPlan
@@ -268,17 +308,44 @@ export function hasFact(p: PersonaLifeContract, fact: ClaimFact, requiredValue: 
   const eq = (a: string | null | undefined): boolean =>
     (a ?? '').trim() !== '' && (a ?? '').trim() === want
   switch (fact) {
-    case 'spouse': return want === '있음' ? p.maritalStatus.trim() === '기혼' : false
+    /**
+     * 🔴 **양방향으로 받는다** (2026-09-23). 앞판은 `'있음'` 만 받아
+     *    "원문이 비혼·이혼·사별을 요구한다" 를 표현할 방법이 없었다.
+     *    우리 풀에는 그런 Persona 가 **실제로 있는데도** 자격을 세울 수 없어
+     *    `requiredValueUnmet` → `speakerUnqualified` → **비재시도 결론**으로 갔다.
+     */
+    case 'spouse': {
+      // 🔴 **빈 값·모르는 값은 통과시키지 않는다** (2026-09-23 fail-open 보정).
+      //    앞판은 `!married` 였다 — 카드가 비어 있어도 "없음" 근거가 섰다.
+      const v = p.maritalStatus.trim()
+      if (v === '') return false
+      if (want === '있음') return v === '기혼'
+      if (want === '없음') return MARITAL_SINGLE.includes(v)
+      return false
+    }
     /** 🔴 `없음` 도 견줄 수 있는 축이다 — 카드에 `childrenCount = 0` 이라는 판정값이 있다 */
     case 'children':
       return want === '있음' ? p.childrenCount > 0 : want === '없음' ? p.childrenCount === 0 : false
     case 'childAgeBand': return p.childrenAgeBands.some((b) => b.trim() === want)
-    case 'parentCare': return want === '있음' ? p.parentCare.trim() !== '없음' : false
+    case 'parentCare': {
+      const v = p.parentCare.trim()
+      if (v === '') return false
+      if (want === '있음') return PARENT_CARE_YES.includes(v)
+      if (want === '없음') return v === '없음'
+      return false
+    }
     /** 🔴 `전` 은 아직 겪지 않았다는 뜻이다 — 경험 주장의 근거가 될 수 없다 */
-    case 'menopause': return want === '있음' ? p.menopauseStatus.trim() !== '전' : false
-    case 'work': return eq(p.workStatus)
-    case 'region': return eq(p.region)
-    case 'age': return eq(p.ageBand)
+    case 'menopause': {
+      const v = p.menopauseStatus.trim()
+      if (v === '') return false
+      if (want === '있음') return MENOPAUSE_YES.includes(v)
+      if (want === '없음') return v === '전'
+      return false
+    }
+    // 🔴 빈 값은 통과시키지 않는다 — `eq` 는 빈 값끼리도 같다고 본다
+    case 'work': return p.workStatus.trim() !== '' && eq(p.workStatus)
+    case 'region': return p.region.trim() !== '' && eq(p.region)
+    case 'age': return p.ageBand.trim() !== '' && eq(p.ageBand)
     default: return false
   }
 }
@@ -331,7 +398,7 @@ export function verifySelfWarrants(input: {
 
 const HOLD = (reason: string, rejection: WarrantRejection | null = null): SpeakerPlan => ({
   decision: 'hold', personaCode: null, stance: null, selfBasis: null, warrants: [],
-  universalReason: '', protectedFacts: [], closingIntent: null, contentRoles: [],
+  universalReason: '', protectedFacts: [], speakerRelative: [], closingIntent: null, contentRoles: [],
   reason, rejection, planVersion: SPEAKER_PLAN_VERSION,
 })
 
@@ -357,6 +424,23 @@ export function parseSpeakerPlan(
 
   // ── protectedFacts — 증명 가능한 것만 ──
   const facts: ProtectedFact[] = []
+  const speakerRelative: SpeakerRelativeEntry[] = []
+  /**
+   * 🔴 계획이 적어 낸 화자 상대 사실 — **증거가 맞을 때만** 쓴다.
+   *    같은 `sourceText` + `evidenceRef` 로 찾는다.
+   */
+  const claimed = new Map<string, FactRole>()
+  for (const x of arr(j.speakerRelative)) {
+    const o = x as Record<string, unknown>
+    const t = S(o.sourceText)
+    const r = S(o.evidenceRef)
+    const m = S(o.materiality)
+    if (t === '' || !(EVIDENCE_REFS as readonly string[]).includes(r)) continue
+    if (m !== 'incidental' && m !== 'loadBearing') continue
+    // 🔴 지목한 자리에 실제로 그 말이 있어야 한다 — 없으면 모델이 지어낸 것이다
+    if (!foundInSpan(t, r as EvidenceRef, spans)) continue
+    claimed.set(`${r}\u0001${t}`, m)
+  }
   for (const x of arr(j.protectedFacts)) {
     const o = x as Record<string, unknown>
     const text = S(o.text)
@@ -375,7 +459,79 @@ export function parseSpeakerPlan(
     }
     const verdict = judgeProtectedFact(kind as ProtectedFactKind, text)
     if (!verdict.ok) { dropped.push({ text, why: verdict.why }); continue }
+    /**
+     * 🔴 **원문 화자 자신의 사실은 지키지 않는다** (2026-09-23).
+     *
+     *    P02 실패: 모델이 `{kind:'number', text:'44'}` 를 냈고, 검증은 "증거에 있는가 ·
+     *    개인정보인가 · kind 가 맞는가" 만 물어 **그대로 통과**했다. 그 44 가 초안에
+     *    "제가 곧 44인데" 로 남았고 P02 정본(40대 후반)과 어긋났다.
+     *
+     *    🔴 **제3자의 나이는 걷어내지 않는다** — 그것은 원문 이야기의 일부다.
+     */
+    const selfAxis = speakerRelativeAxisOf({ text, ref: ref as EvidenceRef, spans })
+    if (selfAxis !== null) {
+      dropped.push({ text, why: 'speakerRelative' })
+      // 🔴 **빼기만 하지 않는다.** 무엇을 바꿔야 하는지 남겨 프롬프트가 쓰게 한다
+      /**
+       * 🔴 **계획이 말한 materiality 를 받되, 코드가 증거를 검증한다** (2026-09-23).
+       *    앞판은 전부 `incidental` 로 하드코딩해 `loadBearingMismatch` 가
+       *    **운영상 죽은 경로**였다.
+       *    🔴 모델 말을 그대로 믿지 않는다 — `sourceText`·`evidenceRef` 가
+       *       실제 증거와 맞을 때만 그 값을 쓴다. 아니면 **안전한 쪽(loadBearing)**.
+       */
+      /**
+       * 🔴 **답하지 않았으면 기본값으로 통과시키지 않는다** (2026-09-23 마스터 지적).
+       *
+       *    앞판은 계획이 `speakerRelative` 를 아예 안 쓰면 **검증되지 않은 자기 나이를
+       *    `incidental` 로 간주해 adopt** 했다. artifact 에 경고를 남기는 것은
+       *    안전 검증이 아니다 — 그 글은 그대로 발행 후보가 됐다.
+       *    🔴 지금은 **모양 오류**로 처리한다. 같은 사람에게 다시 묻는 재시도이지
+       *       결론이 아니므로 정상 원천이 영구 제외되지도 않는다.
+       */
+      const claimedRole = materialityFor(text, ref as EvidenceRef, claimed)
+      if (claimedRole === null) {
+        problems.push(MATERIALITY_MISSING
+          + ` — ${AXIS_LABEL[selfAxis]} "${text}"(${ref}) 에 대한 materiality 가 없다`)
+        continue
+      }
+      speakerRelative.push({
+        axis: selfAxis, sourceText: text, sourceRole: 'self',
+        evidenceRef: ref as EvidenceRef,
+        materiality: claimedRole,
+      })
+      continue
+    }
     facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
+  }
+
+  /**
+   * 🔴 **코드가 먼저 찾은 것과 대조한다** (2026-09-23 마스터 P0-1).
+   *
+   *    위 반복은 planner 가 `protectedFacts` 에 적어 준 것만 훑는다. 모델이 원문의
+   *    자기 나이를 **양쪽에서 빠뜨리면** 누락 자체가 발견되지 않았다.
+   *    🔴 정본 parser 가 원문 span 에서 직접 산출한 목록을 기준으로 삼는다.
+   */
+  const expected = expectedSelfFactsIn(spans)
+  for (const e of expected) {
+    const already = speakerRelative.some(
+      (x) => x.sourceText === e.sourceText && x.evidenceRef === e.evidenceRef,
+    )
+    if (already) continue
+    const role = materialityFor(e.sourceText, e.evidenceRef as EvidenceRef, claimed)
+    if (role === null) {
+      problems.push(MATERIALITY_MISSING
+        + ` — 원문에 화자 자신의 ${AXIS_LABEL[e.axis]} "${e.sourceText}"(${e.evidenceRef}) 가 있는데`
+        + ' 계획이 protectedFacts·speakerRelative 어디에도 적지 않았다')
+      continue
+    }
+    /**
+     * 🔴 planner 가 `speakerRelative` 로만 적어 낸 경우다 — 그래도 **변환 대상**이다.
+     *    여기서 싣지 않으면 그 나이가 대체 없이 초안으로 흘러간다.
+     */
+    speakerRelative.push({
+      axis: e.axis, sourceText: e.sourceText, sourceRole: 'self',
+      evidenceRef: e.evidenceRef as EvidenceRef, materiality: role,
+    })
   }
 
   const roles: ContentRole[] = []
@@ -388,7 +544,7 @@ export function parseSpeakerPlan(
   const closingIntent = (CLOSING_INTENTS as readonly string[]).includes(closing)
     ? (closing as ClosingIntent) : null
   const base = {
-    protectedFacts: facts, closingIntent, contentRoles: [...new Set(roles)],
+    protectedFacts: facts, speakerRelative, closingIntent, contentRoles: [...new Set(roles)],
     planVersion: SPEAKER_PLAN_VERSION,
   }
   const withBase = (p: SpeakerPlan): SpeakerPlan => ({ ...p, ...base })
@@ -482,6 +638,12 @@ export function parseSpeakerPlan(
  */
 export function planSchemaFailed(parse: SpeakerPlanParse): boolean {
   if (parse.schemaProblems.includes(UNPARSABLE_PLAN)) return true
+  /**
+   * 🔴 **materiality 누락은 모양 오류다** (2026-09-23 마스터 지적).
+   *    앞판은 기본값 `incidental` 로 통과시켜 **검증되지 않은 자기 나이**가
+   *    발행 후보가 됐다. 다시 물으면 달라질 수 있으므로 결론이 아니라 재시도다.
+   */
+  if (parse.schemaProblems.some((x) => x.startsWith(MATERIALITY_MISSING))) return true
   const r = parse.plan.rejection
   return r !== null && !(QUALIFICATION_REJECTIONS as readonly string[]).includes(r)
 }
@@ -497,4 +659,102 @@ export function canGenerate(
     return { ok: false, why: plan.reason }
   }
   return { ok: true, why: '' }
+}
+
+/**
+ * 🔴 **이 사실이 원문 화자 자신의 것인가.** 맞으면 축을, 아니면 `null`.
+ *
+ * 🔴 판정 계약을 새로 만들지 않는다 — 나이는 `readSelfAgeClaim` 정본이 본다.
+ *    그 함수가 제3자·과거 시점·근사 표현 오탐을 이미 걸러 준다.
+ */
+export function speakerRelativeAxisOf(input: {
+  text: string
+  ref: EvidenceRef
+  spans: readonly EvidenceSpan[]
+}): SpeakerRelativeAxis | null {
+  const host = input.spans.find((s) => s.kind === input.ref)?.text ?? ''
+  if (host === '') return null
+  for (const clause of host.split(/[\n.!?]|(?<=[다요죠])\s/)) {
+    if (!clause.includes(input.text)) continue
+    // 🔴 1인칭 표지가 뚜렷하면 정본이 바로 잡는다
+    if (readSelfAgeClaim(clause) !== null) return 'age'
+    /**
+     * 🔴 **판정을 뒤집는다** (2026-09-23). 원문은 카페 글이라 1인칭 표지를 자주 생략한다 —
+     *    실제 P02 원문이 *"낼44인데 아직도 어리단소리들어요"* 였고, 보수적 정본은
+     *    주어가 없어 읽지 못했다.
+     *
+     *    🔴 **원문 화자의 나이를 지켜서 우리가 얻는 것은 없다.** 그래서 여기서는
+     *       "자기 나이가 확실한가" 가 아니라 **"제3자 것이 확실한가"** 를 묻는다.
+     *       제3자 표지가 없으면 화자 상대로 보고 걷어낸다 — 걷어내도 손해가 없고,
+     *       남기면 P02 처럼 남의 나이가 우리 글에 박힌다.
+     */
+    if (AGE_LIKE.test(clause) && clause.includes(input.text)
+      && !OTHER_MARKERS.some((w) => clause.includes(w))) return 'age'
+    /**
+     * 🔴 **관계·직업·지역·갱년기는 아직 켜지 않는다** (2026-09-23 마스터 판정).
+     *
+     *    걷어내기만 하고 **완전한 변환과 검증이 없으면 내용이 사라진다.**
+     *    공통 타입(`SpeakerRelativeAxis`)은 두되, 미지원 축은 활성화하지 않는다.
+     *    `relationAxisOf` 는 그 축들을 켤 때 쓸 자리로 남겨 둔다 — 지금은 부르지 않는다.
+     */
+    void relationAxisOf
+  }
+  return null
+}
+
+/** 🔴 나이로 읽히는 모양 — `80퍼` · `3일` 과 갈린다 */
+const AGE_LIKE = /(?:^|[^0-9])([2-9][0-9])\s*(?:살|세|인데|이고|이라|예요|이에요|입니다|이면)/
+
+/**
+ * 🔴 **관계 낱말 → 화자 상대 축** (2026-09-23).
+ *
+ *    `남편`·`아들`·`시어머니` 는 **원문 화자의 가족**이다. 우리 화자의 가족이 아니다.
+ *    이것을 `protectedFacts` 로 지키면 프롬프트가 "이 말들은 **그대로** 씁니다" 라고
+ *    지시하고(`content-core-prompts.mts`), 이혼·무자녀 Persona 에게 남편·딸이 박힌다.
+ *    그다음은 양쪽 다 막히는 협공이다 —
+ *      · 원문 값을 쓰면 `lifeContradictions` → hold
+ *      · 우리 값을 쓰면 `protectedFactMissing` → 실패
+ *    그리고 그 hold 는 `terminal` 이라 **원천이 영구히 탄다**(`supply-workset.ts`).
+ */
+const RELATION_AXIS: ReadonlyArray<[SpeakerRelativeAxis, readonly string[]]> = [
+  ['maritalStatus', ['남편', '신랑', '애들아빠', '아이아빠', '아내', '와이프',
+    '시어머니', '시아버지', '시댁', '시누이', '장인', '장모', '처가', '며느리', '사위']],
+  ['children', ['아들', '딸', '애들', '아이들', '큰애', '작은애', '자식', '손주']],
+  ['parentCare', ['친정', '부모님']],
+]
+
+/**
+ * 🔴 **제3자의 것인가.** 관계 낱말 **바로 앞**에 남을 가리키는 말이 붙으면 그 사람 것이다
+ *    — "아는 분 남편" · "친구 아들". 그때는 원문 이야기의 일부이므로 지킨다.
+ */
+const THIRD_PARTY_OWNER = /(아는\s*[가-힣]{0,3}|친구|이웃|동료|옆집|주변\s*[가-힣]{0,3}|언니|오빠|형님|동서|올케)\s*$/
+
+function relationAxisOf(clause: string, text: string): SpeakerRelativeAxis | null {
+  for (const [axis, words] of RELATION_AXIS) {
+    for (const w of words) {
+      if (!text.includes(w)) continue
+      const at = clause.indexOf(text)
+      if (at < 0) continue
+      // 🔴 바로 앞 12자만 본다 — 문장 전체를 보면 멀리 있는 낱말에 끌려간다
+      if (THIRD_PARTY_OWNER.test(clause.slice(Math.max(0, at - 12), at))) return null
+      return axis
+    }
+  }
+  return null
+}
+
+/**
+ * 🔴 **계획이 말한 값을 쓰되, 증거가 맞을 때만 쓴다.** 증거가 어긋난 주장은
+ *    `claimed` 에 들어가지도 않는다 — 지어낸 계획을 통과시키지 않는다.
+ *
+ * 🔴 **없으면 `null` 이다. 기본값을 만들지 않는다** (2026-09-23 마스터 지적).
+ *
+ *    앞판은 계획이 답하지 않으면 `incidental` 로 두고 artifact 에 경고만 남겼다.
+ *    경고는 안전 검증이 아니다 — 검증되지 않은 자기 나이가 그대로 발행 후보가 됐다.
+ *    부르는 쪽이 `null` 을 **모양 오류**로 올려 다시 묻는다.
+ */
+export function materialityFor(
+  text: string, ref: EvidenceRef, claimed: ReadonlyMap<string, FactRole>,
+): FactRole | null {
+  return claimed.get(`${ref}\u0001${text}`) ?? null
 }

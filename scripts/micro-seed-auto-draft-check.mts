@@ -122,8 +122,9 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
       violatesDraftProvenance({ ...row, provenance: pv }).length > 0)
   }
   // 🔴 후보 파일이 사람 판정으로 위장하지 않는지
+  // 🔴 봉투 조립은 `candidate-envelope` 하나다(2026-09-23) — 옮긴 자리에서 본다
   check('🔴 후보 파일의 sourceDecision 이 AUTO_ADOPT 다', (() => {
-    const r = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const r = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
     return /sourceDecision: 'AUTO_ADOPT'/.test(r) && !/sourceDecision: 'ADOPT'/.test(r)
   })())
   /**
@@ -133,7 +134,7 @@ console.log('\n① 🔴 사람의 ADOPT 를 사칭하지 않는다')
    *    막는 것은 그 다음 단계, 발행 전 사람 검토다.
    */
   check('🔴 🔴 **note 가 현실을 적는다 — autofill 은 받고, 발행은 사람 검토가 연다**', (() => {
-    const r = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const r = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
     return /supply-autofill 은 이 후보를 큐에 올리지만/.test(r)
       && /publish:machine-review 로 검토를 마쳐야 열린다/.test(r)
       && !/supply-autofill 이 받지 않는다/.test(r)
@@ -358,7 +359,9 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
     const r = codeOf('scripts/lib/voice-runtime.mts')
     return /planBundles\(\{ rows: asset\.rows, personaCodes: PRODUCTION_PERSONA_CODES \}\)/.test(r)
       && !/voice-a/.test(r)
-      && /loadVoice\(\)/.test(codeOf('scripts/micro-seed-auto-draft.mts'))
+      // 🔴 `loadVoice` 가 시각을 받게 됐다 (2026-09-23) — 후보 풀 지문에 그날 나이가 들어간다.
+      //    묶는 곳이 하나라는 계약은 그대로다.
+      && /loadVoice\(/.test(codeOf('scripts/micro-seed-auto-draft.mts'))
   })())
   check('🔴 판 값이 세 곳에 흩어져 있지 않다 — 정본 하나에서 나온다', (() => {
     const af = codeOf('src/lib/micro-seed-supply-autofill.ts')

@@ -90,6 +90,7 @@ import { PRODUCTION_PERSONA_CODES } from '../src/lib/persona-cohort'
  *    `voice-persona-plan` 이 그 둘을 맞춰 볼 뿐이다.
  */
 import { parsePoolDoc, type PoolCard } from '../src/lib/persona-pool-card'
+import { materializePersonaAt } from '../src/lib/persona-birth-anchor'
 
 /** 🔴 정본 문서 경로 — `persona-pool-card` 파일 머리가 가리키는 그 문서다 */
 import type { VoiceReferenceBundle } from '../src/lib/persona-voice-reference'
@@ -130,15 +131,35 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { judgeCrisisSignal, SAFETY_SIGNAL_VERSION } from '../src/lib/micro-seed-safety-signals'
 import { SEMANTIC_RISKS, DRAFT_HARM_AXES } from '../src/lib/micro-seed-auto-judge'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { runClockFrom, RUN_AT_ENV } from './lib/run-clock.mjs'
+import { candidateEnvelope } from './lib/candidate-envelope.mjs'
 import { maskSensitive } from './lib/micro-seed-raw-originality.mjs'
 import { inputHashOf, SEMANTIC_DROP } from '../src/lib/micro-seed-auto-judge'
+/**
+ * 🔴 **같은 사람으로 같은 실패를 되풀이하지 않는다** (2026-09-23).
+ *    지난 회차가 화자 탓으로 멈춘 원천은 **그 화자를 빼고** 다시 계획한다.
+ *    읽는 코드·정하는 코드는 러너와 검사가 **같은 것**을 쓴다.
+ */
+import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { personasForAttempt } from './lib/replan-personas.mjs'
 
 export const DATA_DIR = '.microseed-data'
 /**
  * 🔴 **이 회차의 생성 계약 — 원천과 무관한 칸.** 공급 러너와 **같은 함수**로 만든다.
  *    두 곳에서 따로 조립하면 한쪽이 낡아 "같은 계약" 판정이 틀어진다.
  */
-const CONTRACT_BASE = currentContractBase()
+/**
+ * 🔴 **회차 시각.** 계약·후보 풀 지문·생성이 **모두 이 값 하나**를 쓴다.
+ *    🔴 module-level 에서 `currentContractBase()` 를 시각 없이 만들면
+ *       운영 계약에 `age=∅` 가 들어간다(실측 결함).
+ */
+/**
+ * 🔴 **부모가 준 시각을 쓴다** (2026-09-23 마스터 지적). 부모와 자식이 각자
+ *    `new Date()` 를 만들면 KST 자정·생일 경계에서 **다른 날**을 보고, 계약이 갈려
+ *    끝난 원천이 terminal 로 인정되지 않는다.
+ */
+const RUN_CLOCK = runClockFrom(process.env)
+const RUN_AT = RUN_CLOCK.at
 
 const argv = process.argv.slice(2)
 /**
@@ -581,13 +602,27 @@ function loadMeta(): Map<string, Meta> {
         const id = S(r.sourceArticleId)
         const t = S(r.title)
         if (id === '' || t === '') continue
+        /**
+         * 🔴 **아는 값을 모르는 값으로 덮어쓰지 않는다** (2026-09-23 실측 결함).
+         *
+         *    `.raw-detail.jsonl` 에는 원문 쪽 세 시각이 **아예 없다**(운영 파일 확인).
+         *    그런데 같은 원천이 두 파일에 다 있고(운영 1321건) raw 를 나중에 읽으므로,
+         *    앞서 읽은 세 시각이 **빈 문자열로 지워졌다.** 실제로
+         *    `auto-draft-20260922-131506.candidates.json` 이 세 칸을 빈 값으로 내보냈다 —
+         *    적재가 신선도를 재지 못한다.
+         *    🔴 빈 값은 "모른다" 이지 "없다" 가 아니다. 모른다로 아는 것을 지우지 않는다.
+         */
+        const was = out.get(id)
+        const keep = (next: string, prev: string | undefined): string =>
+          next !== '' ? next : (prev ?? '')
         out.set(id, {
-          title: t, site: S(r.sourceSite), bodyHead: S(r.bodyHead),
-          axis: S(r.axis), lane: S(r.lane), angle: '', assetAxes: S(r.assetAxes),
-          // 🔴 옛 파일에는 이 키가 없다 — 그러면 빈 문자열(모른다)이다
-          sourcePostedAt: S(r.sourcePostedAt),
-          sourceListedAt: S(r.sourceListedAt),
-          sourceCapturedAt: S(r.sourceCapturedAt),
+          title: t, site: keep(S(r.sourceSite), was?.site), bodyHead: keep(S(r.bodyHead), was?.bodyHead),
+          axis: keep(S(r.axis), was?.axis), lane: keep(S(r.lane), was?.lane), angle: '',
+          assetAxes: keep(S(r.assetAxes), was?.assetAxes),
+          // 🔴 옛 파일에는 이 키가 없다 — 그러면 앞서 읽은 값을 지키고, 그것도 없으면 빈 문자열이다
+          sourcePostedAt: keep(S(r.sourcePostedAt), was?.sourcePostedAt),
+          sourceListedAt: keep(S(r.sourceListedAt), was?.sourceListedAt),
+          sourceCapturedAt: keep(S(r.sourceCapturedAt), was?.sourceCapturedAt),
         })
       }
     }
@@ -665,6 +700,9 @@ async function main(): Promise<void> {
   const mode = !CALL ? '오프라인 계획' : APPLY ? '생성 + 파일' : '생성 (파일 write 0 · cache write 있음)'
   console.log(`\n══ ${mode} ══\n`)
   console.log(`  규칙 ${DRAFT_RULE_VERSION} · provenance ${DRAFT_PROVENANCE}`)
+  // 🔴 어느 시계를 썼는지 회차마다 찍는다 — 문서에만 적으면 아무도 읽지 않는다
+  console.log(`  🔴 회차 시각 ${RUN_AT.toISOString()} (${RUN_CLOCK.from === 'parent'
+    ? `부모가 준 ${RUN_AT_ENV}` : '자기 시계 — 단독 실행'})`)
   console.log(`  🔴 생성 경로 Content Core v2 — `
     + Object.entries(STAGE_MODEL).map(([k, v]) => `${k}:${v}`).join(' · '))
   // 🔴 회차마다 찍는다 — 문서에만 적으면 아무도 읽지 않는다
@@ -729,7 +767,8 @@ async function main(): Promise<void> {
   }
   const metas = loadMeta()
   const seen = seenFromCandidates()
-  const now = new Date()
+  // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
+  const now = RUN_AT
   const nowIso = now.toISOString()
   console.log(`① AUTO_SEED ${seeds.length}건`)
 
@@ -780,7 +819,11 @@ async function main(): Promise<void> {
    *    원문의 생활사 요구를 정본 판정으로 읽고, 쓸 수 있는 Persona 중에서 고른다.
    *    쓸 수 없는 사람의 목소리로 AI 를 부르지 않는다.
    */
-  const voice = loadVoice()
+  /**
+   * 🔴 **그날 시각을 넘긴다** (2026-09-23). 후보 풀 지문에 나이가 들어가
+   *    생일이 지나면 옛 artifact 가 재사용되지 않는다.
+   */
+  const voice = loadVoice(RUN_AT)
   console.log(voice.describe)
   const cache = loadCache()
   let hit = 0
@@ -796,6 +839,8 @@ async function main(): Promise<void> {
   const artifacts: HumanReviewArtifact[] = []
   /** 🔴 v2 가 초안을 만들지 않고 멈춘 원천 수 (자격 없음 · 근거 부족 · 미완주) */
   let v2Held = 0
+  /** 🔴 적격 화자를 다 써서 더 시도하지 않은 원천 — 유료 호출 0 */
+  let replanExhausted = 0
   const usedSources = new Set<string>()
   const seenTitles = new Set(seen.titles)
   const seenBodies = new Set(seen.bodies)
@@ -894,6 +939,26 @@ async function main(): Promise<void> {
     console.log(`      ${sl.sourceKey} → ${sl.codes.join(' ') || '🔴 보류(배정할 화자 없음)'}`)
   }
 
+  /**
+   * ── 🔴 **지난 시도를 읽는다 — 유료 호출보다 먼저** (2026-09-23) ──
+   *
+   *    같은 원천·같은 계약에서 화자 탓으로 멈춘 기록이 있으면 그 사람을 뺀다.
+   *    🔴 **판정 canon 은 주지 않는다** — 여기서 필요한 것은 "누구로 실패했나" 뿐이고
+   *       그 값은 artifact 에만 있다. 판정 결론은 공급 러너가 본다.
+   *    🔴 못 읽는 파일은 건너뛸 뿐 제외를 만들지 않는다(`readPriorOutcomes` 계약).
+   */
+  const priorOutcomes = readPriorOutcomes({
+    dataDir: DATA_DIR,
+    hashOf: new Map(
+      seeds.flatMap((j) => {
+        const m = metas.get(j.sourceArticleId)
+        return m === undefined ? [] : [[j.sourceArticleId, sourceIdentityHash(m)] as const]
+      }),
+    ),
+    base: currentContractBase(RUN_AT),
+    artifactVersion: ARTIFACT_VERSION,
+  })
+
   for (const j of seeds) {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
     BUDGET.enter(j.sourceArticleId)
@@ -922,7 +987,7 @@ async function main(): Promise<void> {
      *    그것들이 바뀌면 캐시는 miss 되는데 지난 HOLD 는 "지금 계약의 결론" 으로 남았다.
      */
     const contract: GenerationContract = {
-      ...CONTRACT_BASE, sourceInputHash: sourceIdentityHash(meta),
+      ...currentContractBase(RUN_AT), sourceInputHash: sourceIdentityHash(meta),
     }
     /**
      * 🔴 **캐시 key = 원천 id + 스키마 판 + 계약 identity.**
@@ -940,8 +1005,35 @@ async function main(): Promise<void> {
      */
     const slotCodes = slotOf.get(j.sourceArticleId) ?? []
     if (slotCodes.length === 0) { voiceHeld += 1; holdPick(); continue }
+    /**
+     * 🔴 **지난 시도에서 화자 탓으로 실패했으면 그 사람을 뺀다** (2026-09-23).
+     *    유료 호출보다 앞이다. 남은 사람이 없거나 시도 상한을 넘으면 **만들지 않는다** —
+     *    같은 원천을 무한히 다시 사는 경로가 여기서 끊긴다.
+     */
+    const replan = personasForAttempt({
+      outcomes: priorOutcomes, sourceArticleId: j.sourceArticleId,
+      slotCodes, candidates: voice.candidates,
+    })
+    if (!replan.ok) {
+      replanExhausted += 1
+      /**
+       * 🔴 `CONCLUDED` 는 "이미 결론난 원천" 이다 — 이 회차의 실패가 아니다.
+       *    같은 칸으로 세도 값이 흐려지지 않게 사유를 그대로 찍는다.
+       */
+      console.log(`   🟡 ${j.sourceArticleId} — ${replan.code}: ${replan.reason}`
+        + `${replan.excluded.length > 0 ? ` (제외 ${replan.excluded.join(' ')})` : ''}`)
+      holdPick()
+      continue
+    }
+    /**
+     * 🔴 **캐시 key 도 제외 목록을 담는다.** 담지 않으면 사람을 바꾼 시도가
+     *    **바뀌기 전 결과**를 캐시에서 받아 그대로 또 실패한다.
+     *    🔴 제외가 없을 때는 칸을 붙이지 않는다 — 평상시 key 를 바꾸지 않기 위해서다.
+     */
     const slotDigest = digest16(slotCodes.join(','))
-    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}`
+    const exclPart = replan.excluded.length === 0
+      ? '' : `|excl=${digest16([...replan.excluded].sort().join(','))}`
+    const v2Key = `v2|${j.sourceArticleId}|${ARTIFACT_VERSION}|${generationIdentity(contract)}|speakers=${slotDigest}${exclPart}`
 
     const cached = cache.get(v2Key)
     let art: HumanReviewArtifact
@@ -963,8 +1055,17 @@ async function main(): Promise<void> {
          *    제목에 있으면 그대로 provider 로 나갔다. 정본 함수를 그대로 쓴다.
          */
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
-        // 🔴 **좁힌 묶음만 보낸다** — 회차 안에서 서로 겹치지 않는다
-        personas: voice.candidates.filter((c) => slotCodes.includes(c.code)),
+        /**
+         * 🔴 **좁힌 묶음에서 지난 실패 화자를 뺀 것만 보낸다** — 회차 안에서 겹치지 않고,
+         *    같은 사람으로 같은 실패를 되풀이하지도 않는다. 이 값을 여기서 다시
+         *    조립하지 않는다 — 조립하면 제외가 조용히 사라진다.
+         */
+        personas: replan.personas,
+        /**
+         * 🔴 **지난 실패를 계획기의 입력으로 넘긴다** (2026-09-23). 사람만 빼면
+         *    같은 1인칭 계획이 되풀이된다. 유료 호출은 늘지 않는다 — 입력 한 칸이다.
+         */
+        priorFailures: replan.priorFailures,
         // 🔴 좁히기 전의 수 — "이번 묶음에만 없다" 와 "전체에도 없다" 를 가른다
         personaPoolSize: voice.candidates.length,
         /**
@@ -1026,6 +1127,14 @@ async function main(): Promise<void> {
      *    `selfBasis` 를 채택 판정에 넘긴다 — **여기가 adopt 를 정하는 가장 이른 자리**다.
      *    🔴 카드를 못 찾으면 `null` 을 넘기고, 판정이 fail-closed 로 막는다.
      */
+    /** 🔴 그날 나이 — 한 번만 계산한다 */
+    const personaAgeOf = (c: { code: string; birthDate?: string; ageBand: string } | undefined): number | null => {
+      if (c === undefined) return null
+      const v = materializePersonaAt({
+        card: { code: c.code, birthDate: c.birthDate ?? '', ageBand: c.ageBand }, now: RUN_AT,
+      })
+      return v.ok ? v.at.exactAge : null
+    }
     const planned = art.plan?.personaCode ?? null
     const card = planned === null ? undefined
       : voice.candidates.find((c) => c.code === planned)
@@ -1036,7 +1145,11 @@ async function main(): Promise<void> {
       machineReason: art.review.machineReason,
       sourceTitleCopied: copiesSourceTitle(meta.title, cand.title),
       crisisStop: crisis,
-      ageFact: { ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null },
+      ageFact: {
+        ageBand: card?.ageBand ?? null, selfBasis: art.plan?.selfBasis ?? null,
+        // 🔴 생성이 쓴 그날 나이 — 그 값이면 우리가 넣은 것이라 자격을 다시 묻지 않는다
+        personaExactAge: personaAgeOf(card),
+      },
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {
@@ -1080,6 +1193,9 @@ async function main(): Promise<void> {
   console.log(`   🔴 위기 소재로 **부르기 전에** 멈춘 원천 ${sourceCrisisHeld}건 — AI 를 부르지 않았다 (정본 §4)`)
   console.log(`      위기 신호로 멈춘 회차 ${crisisHeld}건 — 사람이 본다`)
   console.log(`      자기 나이 모순(결정론) ${selfAgeCaught}건`)
+  if (replanExhausted > 0) {
+    console.log(`   🟡 적격 화자를 다 써서 더 시도하지 않은 원천 ${replanExhausted}건 — AI 를 부르지 않았다`)
+  }
   if (voiceHeld > 0) {
     console.log(`   🟡 쓸 Persona 가 없어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
   }
@@ -1149,82 +1265,41 @@ async function main(): Promise<void> {
   writeFileSync(pickPath, `${picks.map((pp) => JSON.stringify(pp)).join('\n')}\n`, 'utf-8')
   // 🔴 후보마다 "어느 판정에서 왔는지"를 실어 보낸다. 상수를 찍으면 근거가 아니라 장식이 된다 —
   //    supply-autofill 은 이 값이 없으면 큐 payload 를 만들지 않는다 (§4-AT)
-  writeFileSync(candPath, `${JSON.stringify({
-    /**
-     * 🔴 **설명을 사실에 맞춘다** (2026-09-20). 앞판은 *"AUTO_ADOPT 라 autofill 이
-     *    받지 않는다"* 라고 적혀 있었다 — 지금은 **정확히 반대**다.
-     *    `MACHINE_PROFILE.sourceDecision === 'AUTO_ADOPT'` 이므로 autofill 은 받는다.
-     *    막는 것은 그 다음 단계, **발행 전 사람 검토**(`publish:machine-review`)다.
-     */
-    note: '🔴 기계가 만들고 기계가 고른 초안이다. 사람의 ADOPT 가 아니다 —'
-      + ' supply-autofill 은 이 후보를 큐에 올리지만,'
-      + ' 발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다.',
+  /**
+   * 🔴 **봉투는 공용 함수 하나가 조립한다** (2026-09-23 마스터 지적).
+   *    검사가 축약본을 손으로 조립하면 러너가 칸을 빠뜨려도 검사는 통과한다 —
+   *    실제로 `semanticReview` 가 빠진 채 적재까지 갔다(P07 실측).
+   */
+  writeFileSync(candPath, `${JSON.stringify(candidateEnvelope({
     generatedAt: nowIso, ruleVersion: DRAFT_RULE_VERSION,
-    /**
-     * 🔴 **단계마다 모델이 다르다.** 한 칸에 하나만 적으면 거짓이 된다 —
-     *    `stageModels` 로 통째로 싣고, 봉투 profile 이 정본과 대조한다.
-     */
-    promptVersion: CONTENT_CORE_PROMPT_VERSION,
-    pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
-    stageModels: STAGE_MODEL, provenance: DRAFT_PROVENANCE,
-    candidates: adopted.map((a) => ({
-      candidateType: 'seedOriginality',
-      /** 🔴 사람 검토가 이 한 장을 정확히 찾는 열쇠 — 원문에서 유도하지 않은 값이다 */
-      artifactId: a.art.artifactId,
+    provenance: DRAFT_PROVENANCE, stageModels: STAGE_MODEL,
+    items: adopted.map((a) => ({
+      artifact: a.art,
       sourceArticleId: a.pick.sourceArticleId,
-      sourceSite: a.meta.site,
-      /**
-       * 🔴 **대조 결과만 싣는다** (2026-09-14).
-       *    원문 제목은 바로 위 `a.meta.title` 에 **메모리로만** 있다 —
-       *    전문도 해시도 파일·DB 어디에도 남기지 않는다(§4-AF ⑤).
-       *    🔴 `copied` 는 **제목을 다시 쓴 뒤에도 같았다**는 뜻이다.
-       */
-      sourceTitleChecked: true,
-      sourceTitleCopied: copiesSourceTitle(a.meta.title, a.draft.title),
-      sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
-      sourceInput: 'auto-judge',
-      sourceDecision: 'AUTO_ADOPT',
-      // 🔴 정본을 읽는다 — 여기에 판 이름을 다시 적지 않는다
-      draftFrom: CONTENT_CORE_PIPELINE_VERSION,
-      title: a.draft.title, body: a.draft.body,
-      safetyVerdict: a.draft.safetyVerdict,
-      // 🔴 **잰 값을 싣는다. 판정이 아니다.** 적재 쪽이 같은 정본으로 다시 판정한다
-      originality: a.draft.originality,
-      // 🔴 **어떤 말투 근거로 썼는지.** 텍스트도 작성자도 남기지 않는다 — 근거의 신원뿐이다
-      /**
-       * 🔴 **적재 정본(`readVoiceProvenance`)이 요구하는 모양으로 잇는다** (2026-09-20).
-       *    v2 는 `sampleCount` 로 세고 적재는 `comments` 로 읽는다 — 이름이 달라
-       *    그대로 실으면 `voiceProvenance 가 없거나 깨졌다` 로 전량 제외된다.
-       *    🔴 두 계약을 잇는 자리는 여기 하나다. 값을 지어내지 않는다.
-       */
-      voiceProvenance: a.art.voice.provenance === null ? null : {
-        personaCode: a.art.voice.provenance.personaCode,
-        comments: a.art.voice.provenance.sampleCount,
-        bundleDigest: a.art.voice.provenance.bundleDigest,
-        sourceDigest: a.art.voice.provenance.sourceDigest,
+      meta: {
+        site: a.meta.site,
+        sourcePostedAt: a.meta.sourcePostedAt,
+        sourceListedAt: a.meta.sourceListedAt,
+        sourceCapturedAt: a.meta.sourceCapturedAt,
+      },
+      draft: {
+        title: a.draft.title, body: a.draft.body,
+        safetyVerdict: a.draft.safetyVerdict,
+        originality: a.draft.originality,
+        generatedAt: a.draft.generatedAt,
       },
       /**
-       * 🔴 **의미 검수 요약을 싣는다** (2026-09-22). 앞판은 `review` 를 아예 싣지
-       *    않아서, 모델이 찾은 결함이 적재까지 오지 못했다(P07 실측).
-       *    🔴 문장이 아니라 **수와 완전성**이다 — 원문도 근거 문장도 나르지 않는다.
+       * 🔴 **대조 결과만 싣는다** (2026-09-14). 원문 제목은 메모리에만 있다 —
+       *    전문도 해시도 파일·DB 어디에도 남기지 않는다(§4-AF ⑤).
        */
-      semanticReview: semanticSummaryOf(a.art.review),
-      leakedTokens: '', reviewedAt: nowIso, writtenAt: a.draft.generatedAt,
-      /**
-       * 🔴 **원문 쪽 세 시각** (2026-09-17) — 적재가 신선도를 제대로 재려면 여기를 지나야 한다.
-       *
-       *    🔴 `sourcePostedAt` 은 **원문이 올라온 시각**이다. 사건·방송·발언 시각이 아니다.
-       *    🔴 `writtenAt`(= 우리가 초안을 쓴 시각)과 섞지 않는다. 재생성해도 원문 시각은 안 바뀐다.
-       *    🔴 모르면 빈 문자열이다 — 지금 시각으로 채우지 않는다.
-       */
-      sourcePostedAt: a.meta.sourcePostedAt,
-      sourceListedAt: a.meta.sourceListedAt,
-      sourceCapturedAt: a.meta.sourceCapturedAt,
-      // 🔴 판 이름은 정본을 읽는다 — 여기에 다시 적지 않는다
-      provenanceNote: `기계 생성 · ${DRAFT_RULE_VERSION} · ${DRAFT_PROVENANCE} · ${CONTENT_CORE_PIPELINE_VERSION}`,
+      sourceTitleCopied: copiesSourceTitle(a.meta.title, a.draft.title),
+      sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
       autoJudge: seedProv.get(a.pick.sourceArticleId) ?? null,
+      ruleVersion: DRAFT_RULE_VERSION,
+      provenance: DRAFT_PROVENANCE,
+      reviewedAt: nowIso,
     })),
-  }, null, 2)}\n`, 'utf-8')
+  }), null, 2)}\n`, 'utf-8')
   writeFileSync(artPath, `${JSON.stringify(artifacts, null, 2)}\n`, 'utf-8')
   saveCache(cache)
   console.log(`\n⑥ 🔴 파일 3개`)

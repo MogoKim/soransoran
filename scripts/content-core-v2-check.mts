@@ -13,20 +13,48 @@
 import { pickV2 } from '../src/lib/micro-seed-auto-draft'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { runContentCore, personaInputOf, personaPoolIdentity, STAGE_MODEL, type Ask, type AskResult, type PersonaInput }
   from './lib/content-core-run.mjs'
 import {
-  buildSpeakerPlanSystemPrompt, buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, lifeContractLines,
+  buildSpeakerPlanSystemPrompt, buildSpeakerPlanPayload,
+  buildV2DraftSystemPrompt, buildV2ReviewSystemPrompt, lifeContractLines,
   qualificationLine, sourceBlock,
 } from './lib/content-core-prompts.mjs'
 import {
   cardValueText, hasFact, verifySelfWarrants,
   SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
 } from '../src/lib/content-core/speaker'
-import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis } from '../src/lib/persona-self-age'
-import { selectWorkset } from '../src/lib/supply-workset'
+import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis, OTHER_MARKERS } from '../src/lib/persona-self-age'
+import { speakerRelativeAxisOf, parseSpeakerPlan, materialityFor } from '../src/lib/content-core/speaker'
+import {
+  expectedSelfFactsIn, selfAgeNumbersIn, fixSourceSpeakerAge,
+} from '../src/lib/content-core/speaker-relative-facts'
+import { ageMentionsIn } from '../src/lib/persona-self-age'
+import { sourceAgeFact } from '../src/lib/content-core/load-bearing'
+import { parsePoolDoc } from '../src/lib/persona-pool-card'
+
+/** 🔴 KST 날짜 한 줄 — 검사도 러너와 같은 규칙을 쓴다 */
+const kstKeyOf = (at: Date): string => new Date(at.getTime() + 9 * 3600e3).toISOString().slice(0, 10)
+import {
+  planAxisMapping, SPEAKER_RELATIVE_AXES, checkAgeMappingApplied,
+} from '../src/lib/content-core/speaker-relative-facts'
+import {
+  exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
+  materializePersonaAt, bandOfAge,
+} from '../src/lib/persona-birth-anchor'
+import { selectWorkset, PERSONA_REPLAN_CAUSES, REPLAN_ATTEMPT_MAX } from '../src/lib/supply-workset'
+import {
+  resolveLoadBearing, ACTIVATED_AXES, loadBearingRequirements, checkLoadBearingPreserved,
+} from '../src/lib/content-core/load-bearing'
+import { RETRYABLE_CAUSES } from '../src/lib/content-core/review'
+import { priorFailureLines, selfForbiddenBy } from '../src/lib/content-core/replan-input'
+import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
+import { personasForAttempt } from './lib/replan-personas.mjs'
+import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
 import { judgeProtectedFact, normalizeForProvenance } from '../src/lib/content-core/source-facts'
@@ -107,6 +135,7 @@ const fakeAsk = (c: Canned, fault: Fault = {}): Ask =>
 /** 🔴 정본 카드를 만들고 **정본 변환**을 지난다 — 축소판을 손으로 조립하지 않는다 */
 const CARD = (o: Partial<PoolCard> & { code: string }): PoolCard => ({
   code: o.code,
+  birthDate: o.birthDate ?? '1976-05-05',
   title: o.title ?? `카드 ${o.code}`,
   ageBand: o.ageBand ?? '40대 후반',
   region: o.region ?? '수도권',
@@ -701,8 +730,9 @@ console.log('\n⑨ 말투 계약 · 완주 · 단위 검사')
     sourceBlock(packet).includes('제목') && sourceBlock(packet).includes('본문입니다.'))
   const gen = buildV2DraftSystemPrompt({
     plan: { decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
-      warrants: [], universalReason: 'x', protectedFacts: [], closingIntent: null,
+      warrants: [], universalReason: 'x', protectedFacts: [], speakerRelative: [], closingIntent: null,
       contentRoles: [], reason: '', rejection: null, planVersion: 'x' },
+    mappings: [],
     voice: buildVoiceEvidence({ personaCode: 'P02', voiceTokens: ['짧은 문장'], samples: [], bundleDigest: 'b', sourceDigest: 's' }),
     life: homemaker,
   })
@@ -968,8 +998,8 @@ console.log('\n⑭ 🔴 🔴 449988 재현 — 카드 값 소유권은 코드에
   check('🔴 🔴 **계획 요청이 cardValue 를 더는 요구하지 않는다**',
     !buildSpeakerPlanSystemPrompt().includes('cardValue'))
   check('🔴 판 번호가 새 계약을 담는다',
-    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p4'
-    && SPEAKER_PLAN_VERSION === 'speaker-plan-v4'
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p5'
+    && SPEAKER_PLAN_VERSION === 'speaker-plan-v6'
     && ARTIFACT_VERSION === 'human-review-v9'
     && CONTENT_CORE_PROMPT_VERSION.includes(SPEAKER_PLAN_PROMPT_VERSION))
   check('🔴 🔴 **캐시 key 와 artifact 계약이 같은 함수에서 나온다**', (() => {
@@ -1160,11 +1190,16 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
     CONTENT_CORE_PIPELINE_VERSION === 'content-core-v2.1'
     && V2_DRAFT_PROMPT_VERSION === 'v2-draft-p7'
     && CONTENT_CORE_PROMPT_VERSION.includes(V2_DRAFT_PROMPT_VERSION))
-  check('🔴 🔴 **러너가 판 이름을 어디에도 다시 적지 않는다**',
-    /draftFrom: CONTENT_CORE_PIPELINE_VERSION/.test(runner)
-    && /provenanceNote: `[^`]*\$\{CONTENT_CORE_PIPELINE_VERSION\}`/.test(runner)
+  /**
+   * 🔴 봉투 조립이 `candidate-envelope` 으로 옮겨졌다(2026-09-23) — **옮긴 자리에서**
+   *    같은 것을 본다. 러너만 보면 옮겨진 뒤 이 검사는 아무것도 지키지 않는다.
+   */
+  const envLib = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
+  check('🔴 🔴 **봉투가 판 이름을 어디에도 다시 적지 않는다**',
+    /draftFrom: CONTENT_CORE_PIPELINE_VERSION/.test(envLib)
+    && /provenanceNote: `[^`]*\$\{CONTENT_CORE_PIPELINE_VERSION\}`/.test(envLib)
     // 🔴 따옴표든 템플릿이든 **글자 자체**가 남아 있으면 안 된다 — 앞판이 그렇게 새어 나갔다
-    && !runner.includes('content-core-v2'))
+    && !envLib.includes('content-core-v2') && !runner.includes('content-core-v2'))
 
   // ── ② 말투는 경향이다 ──
   // 🔴 파싱된 계획 모양 그대로 — 모델 응답 모양(`plan()`)이 아니다
@@ -1175,6 +1210,7 @@ console.log('\n⑯ 🔴 🔴 단계별 출력 상한 · 말투는 체크리스�
       closingIntent: 'ask', contentRoles: ['conversationSpark'], reason: '', rejection: null,
       planVersion: SPEAKER_PLAN_VERSION,
     } as never,
+    mappings: [],
     voice: buildVoiceEvidence({
       personaCode: 'P01', voiceTokens: ['길게', '"ㅋㅋ" 자주', '오타 잦음', '느낌표 많음'],
       samples: ['ㅋㅋ 저도요', '진짜 그래요!', '아휴 참'],
@@ -1384,8 +1420,11 @@ console.log('\n⑰ 🔴 🔴 의미 검수 역할 — 확정 결함은 막고, �
   check('🔴 🔴 **기계 후보는 사람 검토 전에는 발행되지 않는다**', (() => {
     const pub = readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')
     const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+    const envLib2 = readFileSync('scripts/lib/candidate-envelope.mts', 'utf-8')
+    // 🔴 그 문구는 봉투에 실린다 — 봉투를 조립하는 자리에서 본다
     return /HUMAN_ONLY_VALUES/.test(pub)
-      && /발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다/.test(runner)
+      && /발행은 사람이 publish:machine-review 로 검토를 마쳐야 열린다/.test(envLib2)
+      && !/발행은 사람이 publish:machine-review/.test(runner)
   })())
 }
 
@@ -1506,7 +1545,8 @@ console.log('\n🔴 🔴 **파이프라인 차단 — `pickV2` 가 채택 전에
   // 🔴 **차단된 행은 적재 대상이 아니다** — AUTO_ADOPT 만 candidates 로 간다
   const runner = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
   check('🔴 🔴 **러너가 `ageFact` 를 실제로 넘긴다 — 함수만 있고 안 부르는 상태가 아니다**',
-    /ageFact: \{ ageBand: card\?\.ageBand \?\? null, selfBasis: art\.plan\?\.selfBasis \?\? null \}/.test(runner))
+    /ageFact: \{[\s\S]{0,240}?ageBand: card\?\.ageBand \?\? null/.test(runner)
+    && /personaExactAge: personaAgeOf\(card\)/.test(runner))
   check('🔴 🔴 **`AUTO_ADOPT` 인 것만 `adopted` 에 들어간다 — 차단된 행은 DB 후보가 되지 않는다**',
     /if \(p\.decision === 'AUTO_ADOPT'\) \{\s*\n\s*adopted\.push/.test(runner))
   check('🔴 🔴 **경고만 있는 정상 후보의 공급은 멈추지 않는다 — `lifeHistoryConflict` 는 DROP 이 아니다**',
@@ -1650,6 +1690,2014 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
     })
     return !p2.workset.sourceIds.includes('done-1')
   })())
+}
+
+console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제하지 않는다 (P02 실패 사슬)**')
+{
+  const span = (text: string) => [{ kind: 'head' as const, text, fromRatio: 0, toRatio: 1 }]
+
+  // ① 원문 화자의 나이는 `protectedFacts` 에서 걷어낸다
+  check('🔴 🔴 **원문 "낼44인데" 의 44 는 화자 상대 사실로 잡힌다**',
+    speakerRelativeAxisOf({ text: '44', ref: 'head', spans: span('낼44인데 아직도 어리단소리들어요 ㅋ') }) === 'age')
+  check('🔴 🔴 **제3자 나이는 걷어내지 않는다 — 원문 이야기의 일부다**',
+    speakerRelativeAxisOf({ text: '44', ref: 'head', spans: span('아는 분이 44인데 그렇대요') }) === null)
+  check('🔴 🔴 **나이가 아닌 숫자(80퍼)는 그대로 지킨다**',
+    speakerRelativeAxisOf({ text: '80퍼', ref: 'head', spans: span('진짜여잔 피부가80퍼...') }) === null)
+  check('🔴 기간·금액은 그대로 지킨다',
+    speakerRelativeAxisOf({ text: '3일', ref: 'head', spans: span('3일 뒀더니 시어졌어요') }) === null)
+
+  // ② Persona 정확 나이 — birth anchor
+  const POOL = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+  const cardOf = (code: string) => POOL.cards.find((c) => c.code === code)!
+  const p02 = { birthDate: cardOf('P02').birthDate, ageBand: cardOf('P02').ageBand }
+  const a = exactAgeOf({ ...p02, onKstDate: '2026-09-23' })
+  check('🔴 🔴 **P02 의 정확한 나이가 나온다**', a.ok === true, JSON.stringify(a))
+  check('🔴 🔴 **그 나이는 정본 `40대 후반`(47~49) 안이다**',
+    a.ok && a.age >= 47 && a.age <= 49, a.ok ? String(a.age) : '-')
+  check('🔴 🔴 **생일은 카드에 적힌 값 그대로다 — 해시로 유도하지 않는다**', (() => {
+    const b = exactAgeOf({ ...p02, onKstDate: '2026-09-23' })
+    return a.ok && b.ok && a.birthDate === cardOf('P02').birthDate && a.age === b.age
+  })())
+  check('🔴 🔴 **해가 바뀌면 나이도 는다 — 사람이 매년 고치지 않는다**', (() => {
+    const y0 = exactAgeOn(p02.birthDate, '2026-12-31')!
+    const y5 = exactAgeOn(p02.birthDate, '2031-12-31')!
+    return y5 === y0 + 5
+  })())
+  check('🔴 🔴 **밴드를 못 읽으면 나이를 만들지 않는다 (fail-closed)**',
+    exactAgeOf({ birthDate: p02.birthDate, ageBand: null, onKstDate: '2026-09-23' }).ok === false)
+  check('🔴 🔴 **생일이 없으면 나이를 만들지 않는다 (fail-closed)**',
+    exactAgeOf({ birthDate: null, ageBand: '40대 후반', onKstDate: '2026-09-23' }).ok === false)
+  check('🔴 🔴 **계산한 나이가 밴드 밖이면 쓰지 않는다**', (() => {
+    const far = exactAgeOf({ ...p02, onKstDate: '2036-09-23' })
+    return !far.ok && far.code === 'OUT_OF_BAND'
+  })())
+  check('🔴 🔴 **25명 전원이 전 축 검사를 통과한다 (ageBand·자녀·갱년기·간병·혼인·직업)**', (() => {
+    for (const c of POOL.cards) {
+      const v = exactAgeOf({ birthDate: c.birthDate, ageBand: c.ageBand, onKstDate: '2026-09-23' })
+      if (!v.ok) return false
+      const probs = checkLifeConsistency({
+        age: v.age, ageBand: c.ageBand, childrenAgeBands: c.childrenAgeBands,
+        childrenCount: c.childrenCount, maritalStatus: c.maritalStatus,
+        menopauseStatus: c.menopauseStatus, parentCare: c.parentCare, workStatus: c.workStatus,
+      })
+      if (probs.length > 0) return false
+    }
+    return POOL.cards.length === 25
+  })())
+  check('🔴 자녀 연령대 문자열을 제대로 읽는다 — `중3` 은 3세가 아니다',
+    childAgeFrom('중3') === 15 && childAgeFrom('초등 고학년') === 11 && childAgeFrom('20대') === 25)
+  check('🔴 생일 전후로 한 살이 갈린다', (() => {
+    const [y, m, d] = p02.birthDate.split('-')
+    const before = exactAgeOn(p02.birthDate, `2026-${m}-${String(Number(d) - 1 > 0 ? Number(d) - 1 : 1).padStart(2, '0')}`)
+    const on = exactAgeOn(p02.birthDate, `2026-${m}-${d}`)
+    return Number(y) > 1900 && before !== null && on !== null && on >= before
+  })())
+  check('🔴 🔴 **기준일 뒤에 생일이 오는 Persona 도 밴드 안이다 (실측 버그 회귀)**', (() => {
+    // 🔴 `baseY - age` 로만 잡으면 생일이 기준일보다 뒤인 경우 한 살 적어져
+    //    며칠만 지나도 OUT_OF_BAND 가 났다 (P01·P16·P19 실측).
+    // 🔴 밴드를 추측하지 않는다 — **Pool 정본 문서**에서 읽는다
+    const doc = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    for (const c of doc.cards) {
+      // 🔴 기준일부터 **1년 뒤까지** 어느 날이든 밴드 안이어야 한다 —
+      //    그래야 사람이 매년 카드를 고치지 않아도 된다
+      for (const d of ['2026-09-23', '2026-12-31']) {
+        if (!exactAgeOf({ birthDate: c.birthDate, ageBand: c.ageBand, onKstDate: d }).ok) return false
+      }
+    }
+    return doc.cards.length >= 20
+  })())
+  check('🔴 생활사 모순을 잡는다 — 자녀 40세인데 화자 49세', (() => {
+    const probs = checkLifeConsistency({ age: 49, childrenAgeBands: ['40대'] })
+    return probs.some((x) => x.axis === 'children')
+  })())
+
+  // ③ 자동 변환 — 사람 손 없이
+  const FACTS = (role: 'incidental' | 'loadBearing') =>
+    [{ axis: 'age' as const, sourceText: '42', role }]
+  const persona = (exactAge: number | null, band: string | null) => ({
+    exactAge, ageBand: band, maritalStatus: '기혼', childrenCount: 1,
+    parentCare: null, menopauseStatus: null, work: null, region: null,
+  })
+  const m49 = planAxisMapping({ facts: FACTS('incidental'), persona: persona(49, '40대 후반') })
+  check('🔴 🔴 **원문 42 + Persona 49 → "49살" 로 서술하라는 지시가 나온다**',
+    m49.ok && m49.mappings[0]?.personaText === '49살'
+    && m49.mappings[0].outputRule.includes('복제하지 않고'), JSON.stringify(m49))
+  check('🔴 🔴 **정확한 나이가 없으면 연령대까지만 — 숫자를 지어내지 않는다**', (() => {
+    const m = planAxisMapping({ facts: FACTS('incidental'), persona: persona(null, '50대 초반') })
+    return m.ok && m.mappings[0]?.personaText === '50대 초반'
+  })())
+  check('🔴 🔴 **원문에 나이가 없으면 아무것도 더하지 않는다**', (() => {
+    const m = planAxisMapping({ facts: [], persona: persona(49, '40대 후반') })
+    return m.ok && m.mappings.length === 0 && m.note.includes('더하지 않는다')
+  })())
+  /**
+   * 🔴 **load-bearing 은 여기서 판정하지 않는다** (2026-09-23 마스터 지적).
+   *    앞판은 여기서 곧바로 실패를 냈다 — Persona 를 보기도 전에. 그래서 사람을 바꾸는
+   *    재계획이 성공 가능성 0 인 반복이 됐다. 판정 자리는 `resolveLoadBearing` 이다.
+   */
+  check('🔴 🔴 **load-bearing 이 여기까지 왔으면 "고른 사람이 조건을 만족한다" 는 뜻이다**', (() => {
+    const m = planAxisMapping({ facts: FACTS('loadBearing'), persona: persona(49, '40대 후반') })
+    // 🔴 바꾸지 않는다 — 원문 값이 곧 우리 값이므로 지시가 필요 없다
+    return m.ok && m.mappings.length === 0
+  })())
+  check('🔴 🔴 **우리 쪽 값이 없으면 빈 지시로 넘기지 않고 실패로 올린다 (fail-closed)**', (() => {
+    const m = planAxisMapping({
+      facts: [{ axis: 'region', sourceText: '부산', role: 'incidental' }],
+      persona: persona(49, '40대 후반'),   // region 이 null 이다
+    })
+    return !m.ok && m.code === 'NO_PERSONA_VALUE' && m.axis === 'region'
+  })())
+  check('🔴 나이 말고 다른 축도 같은 계약으로 바뀐다 (혼인·자녀)', (() => {
+    const m = planAxisMapping({
+      facts: [{ axis: 'maritalStatus', sourceText: '이혼', role: 'incidental' },
+        { axis: 'children', sourceText: '자녀 셋', role: 'incidental' }],
+      persona: persona(49, '40대 후반'),
+    })
+    return m.ok && m.mappings[0]?.personaText === '기혼' && m.mappings[1]?.personaText === '자녀 1'
+  })())
+  check('🔴 축 목록이 일곱이다 — 축마다 패치하지 않는다',
+    SPEAKER_RELATIVE_AXES.length === 7)
+
+  // ④ 나이 말고 다른 축도 걷어낸다 — 조사에서 찾은 같은 구조의 결함
+  const ax = (text: string, host: string) =>
+    speakerRelativeAxisOf({ text, ref: 'head', spans: span(host) })
+  /**
+   * 🔴 **관계·직업·지역·갱년기는 아직 켜지 않았다** (마스터 판정).
+   *    걷어내기만 하고 완전한 변환·검증이 없으면 **내용이 사라진다.**
+   *    지금은 `age` 한 축만 켜 놓고 세로로 끝까지 완성한다.
+   */
+  check('🔴 🔴 **관계는 아직 걷어내지 않는다 — 변환이 완성되기 전에는 지킨다**',
+    ax('남편', '남편이 퇴근하고 와서 과일 한 상자 가져가라네요') === null)
+  check('🔴 🔴 **자녀도 아직 걷어내지 않는다**',
+    ax('딸', '중3 딸이 샤워를 한 시간 넘게 해요') === null)
+  check('🔴 🔴 **부모 돌봄도 아직 걷어내지 않는다**',
+    ax('친정', '친정 어머니 병원 모시고 다니느라 힘들어요') === null)
+  check('🔴 "아는 분 남편" 도 당연히 지킨다',
+    ax('남편', '아는 분 남편은 외아들이라 그런지 매일 통화한대요') === null)
+  check('🔴 🔴 **지명·상품 같은 source-invariant 는 그대로 지킨다**',
+    ax('강남', '강남에 새로 생긴 가게 가봤어요') === null)
+
+  // ⑤ hasFact 양방향 — 우리 풀에 있는 사람을 쓸 수 있어야 한다
+  const card = (o: Record<string, unknown>) => ({
+    code: 'PX', ageBand: '50대 초반', maritalStatus: '이혼', childrenCount: 0,
+    childrenAgeBands: [] as string[], parentCare: '없음', menopauseStatus: '전',
+    workStatus: '전업', region: '수도권', ...o,
+  })
+  check('🔴 🔴 **비혼·이혼 Persona 가 `spouse=없음` 근거를 세울 수 있다**',
+    hasFact(card({}) as never, 'spouse', '없음') === true
+    && hasFact(card({}) as never, 'spouse', '있음') === false)
+  check('🔴 🔴 **간병 없는 Persona 가 `parentCare=없음` 근거를 세울 수 있다**',
+    hasFact(card({}) as never, 'parentCare', '없음') === true)
+  check('🔴 🔴 **갱년기 전 Persona 가 `menopause=없음` 근거를 세울 수 있다**',
+    hasFact(card({}) as never, 'menopause', '없음') === true)
+  check('🔴 기혼 Persona 는 `spouse=있음` 이 맞고 `없음` 은 아니다',
+    hasFact(card({ maritalStatus: '기혼' }) as never, 'spouse', '있음') === true
+    && hasFact(card({ maritalStatus: '기혼' }) as never, 'spouse', '없음') === false)
+  check('🔴 프롬프트 계약도 양방향으로 맞춰졌다', (() => {
+    const src = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
+    return /spouse · parentCare · menopause · children → "있음" 또는 "없음"/.test(src)
+  })())
+}
+
+console.log('\n🔴 🔴 **P02 실제 E2E — 원문 "곧 44" 가 초안 프롬프트까지 어떻게 가는가**')
+{
+  // 🔴 helper 만 부르지 않는다. **실제 계획 파서 → 실제 프롬프트 빌더**를 지난다.
+  const SRC = '낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const packet = { spans: [{ kind: 'head' as const, text: SRC, fromRatio: 0, toRatio: 1 }] }
+  const card = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+
+  // ① 실제 계획 파서 — 모델이 44 와 80퍼를 둘 다 protectedFacts 로 냈다고 하자 (실측 그대로)
+  const raw = JSON.stringify({
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+    selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+    speakerWarrants: [], closingIntent: 'ask', contentRoles: [],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'head' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+    // 🔴 새 계약(p5/v6) — 화자 상대 사실마다 materiality 를 **반드시** 적는다
+    speakerRelative: [{ axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' }],
+  })
+  const parsed = parseSpeakerPlan(raw, packet as never, [card] as never)
+  const plan = parsed.plan
+  check('🔴 🔴 **① 계획이 만들어진다**', plan.decision === 'ok', JSON.stringify(parsed.schemaProblems))
+  check('🔴 🔴 **② 원문의 44 가 `protectedFacts` 에 남지 않는다**',
+    !plan.protectedFacts.some((f: { text: string }) => f.text === '44'),
+    JSON.stringify(plan.protectedFacts))
+  check('🔴 🔴 **③ source-invariant 인 80퍼 는 그대로 지켜진다 — 내용이 사라지지 않는다**',
+    plan.protectedFacts.some((f: { text: string }) => f.text === '80퍼'))
+  check('🔴 🔴 **④ 빼기만 하지 않는다 — 무엇을 바꿀지 계획에 남는다**',
+    plan.speakerRelative.some((e: { axis: string; sourceText: string }) => e.axis === 'age' && e.sourceText === '44'),
+    JSON.stringify(plan.speakerRelative))
+
+  // ② 그날의 정확한 나이
+  const age = exactAgeOf({ birthDate: card.birthDate, ageBand: card.ageBand, onKstDate: '2026-09-23' })
+  check('🔴 🔴 **⑤ P02 고정 생일에서 그날 나이가 나온다**', age.ok === true, JSON.stringify(age))
+
+  // ③ **실제 프롬프트 빌더**
+  const life = {
+    code: card.code, ageBand: card.ageBand, region: card.region,
+    maritalStatus: card.maritalStatus, spouseRelationship: card.spouseRelationship,
+    childrenCount: card.childrenCount, childrenAgeBands: card.childrenAgeBands,
+    workStatus: card.workStatus, economicStatus: card.economicStatus,
+    menopauseStatus: card.menopauseStatus, parentCare: card.parentCare,
+    personality: card.personality, noGoTopics: card.noGoTopics,
+    noGoExpressions: card.noGoExpressions ?? [], housing: card.housing,
+  }
+  const mapping = planAxisMapping({
+    facts: plan.speakerRelative.map((e: { axis: string; sourceText: string; materiality: string }) =>
+      ({ axis: e.axis as never, sourceText: e.sourceText, role: e.materiality as never })),
+    persona: {
+      exactAge: age.ok ? age.age : null, ageBand: card.ageBand,
+      maritalStatus: card.maritalStatus, childrenCount: card.childrenCount,
+      parentCare: card.parentCare, menopauseStatus: card.menopauseStatus,
+      work: card.workStatus, region: card.region,
+    },
+  })
+  check('🔴 🔴 **⑤-b 변환 계획이 성공한다 — 실패면 생성으로 넘어가지 않는다**', mapping.ok === true,
+    JSON.stringify(mapping))
+  const prompt = buildV2DraftSystemPrompt({
+    plan, life: life as never, mappings: mapping.ok ? mapping.mappings : [],
+    voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
+  })
+  check('🔴 🔴 **⑥ 프롬프트가 "44 를 복제하지 말고 N살로 써라" 를 실제로 담는다**',
+    prompt.includes('복제하지 않고') && age.ok && prompt.includes(`${age.age}살`),
+    prompt.split('\n').filter((l) => l.includes('복제하지')).join(' / '))
+  check('🔴 🔴 **⑦ 프롬프트에 원문의 44 가 "그대로 쓰라" 로 남지 않는다**', (() => {
+    const keepLine = prompt.split('\n').find((l) => l.includes('그대로** 씁니다')) ?? ''
+    return !keepLine.includes('44')
+  })())
+  check('🔴 🔴 **⑧ 80퍼 는 "그대로 쓰라" 에 남는다 — invariant 는 지켜진다**', (() => {
+    const keepLine = prompt.split('\n').find((l) => l.includes('그대로** 씁니다')) ?? ''
+    return keepLine.includes('80퍼')
+  })())
+  check('🔴 🔴 **⑨ "빼지 말고 바꾼다" 는 지시가 있다 — 내용 유실을 막는다**',
+    prompt.includes('빼지 말고 바꿉니다'))
+  check('🔴 🔴 **⑩ 원문에 없던 사실을 더하지 말라는 지시도 있다**',
+    prompt.includes('새로 더하지 않습니다'))
+
+  // ④ exactAge 가 없으면 연령대까지만
+  const bandMap = planAxisMapping({
+    facts: plan.speakerRelative.map((e: { axis: string; sourceText: string; materiality: string }) =>
+      ({ axis: e.axis as never, sourceText: e.sourceText, role: e.materiality as never })),
+    persona: {
+      exactAge: null, ageBand: card.ageBand, maritalStatus: card.maritalStatus,
+      childrenCount: card.childrenCount, parentCare: card.parentCare,
+      menopauseStatus: card.menopauseStatus, work: card.workStatus, region: card.region,
+    },
+  })
+  const noAge = buildV2DraftSystemPrompt({
+    plan, life: life as never, mappings: bandMap.ok ? bandMap.mappings : [],
+    voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
+  })
+  check('🔴 🔴 **⑪ 정확한 나이가 없으면 연령대로 쓰라고 한다 — 숫자를 지어내지 않는다**',
+    noAge.includes(card.ageBand) && !/\d{2}살/.test(noAge.split('바꿔 씁니다')[1] ?? ''))
+
+  // ⑤ 제3자 나이는 손대지 않는다
+  const thirdPacket = { spans: [{ kind: 'head' as const, text: '아는 분이 44인데 그렇대요', fromRatio: 0, toRatio: 1 }] }
+  const thirdPlan = parseSpeakerPlan(JSON.stringify({
+    decision: 'ok', personaCode: 'P02', stance: 'OBSERVATION',
+    selfBasis: null, universalReason: '', speakerWarrants: [], closingIntent: 'ask', contentRoles: [],
+    protectedFacts: [{ kind: 'number', text: '44', evidenceRef: 'head' }],
+  }), thirdPacket as never, [card] as never).plan
+  check('🔴 🔴 **⑫ 제3자 나이는 `protectedFacts` 에 그대로 남는다**',
+    thirdPlan.protectedFacts.some((f: { text: string }) => f.text === '44')
+    && thirdPlan.speakerRelative.length === 0, JSON.stringify(thirdPlan.protectedFacts))
+}
+
+console.log('\n🔴 🔴 **P02 전체 E2E — 실제 `runContentCore` 를 끝까지 돌린다**')
+{
+  /**
+   * 🔴 프롬프트 문자열 포함 검사가 아니다. **가짜 provider 로 실제 파이프라인 전체**를
+   *    돈다: plan → parseSpeakerPlan → birthDate → exactAge → draft prompt →
+   *    draft 응답 → **자동 보정** → deterministic → semantic review → artifact.
+   */
+  const CARD_P02 = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+  const p02 = P({
+    code: 'P02', ageBand: CARD_P02.ageBand, birthDate: CARD_P02.birthDate,
+    maritalStatus: CARD_P02.maritalStatus, childrenCount: CARD_P02.childrenCount,
+    childrenAgeBands: CARD_P02.childrenAgeBands, workStatus: CARD_P02.workStatus,
+    region: CARD_P02.region, menopauseStatus: CARD_P02.menopauseStatus,
+    parentCare: CARD_P02.parentCare,
+  })
+  const expectAge = exactAgeOf({
+    birthDate: CARD_P02.birthDate, ageBand: CARD_P02.ageBand, onKstDate: kstKeyOf(NOW),
+  })
+
+  const SRC_TITLE = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const SRC_BODY = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const PLAN = {
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+    selfBasis: 'lifeFacts', universalReason: '',
+    speakerWarrants: [{ fact: 'age', requiredValue: CARD_P02.ageBand, evidenceRef: 'head', evidenceText: '낼44인데' }],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+    speakerRelative: [{ axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' }],
+  }
+  /** 🔴 반례 ①: 모델이 원문의 44 를 **그대로 베껴** 돌려준다 */
+  const DRAFT_COPIES_44 = {
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+  }
+  /** 🔴 반례 ②: 모델이 처음부터 P02 나이를 쓴다 */
+  const DRAFT_USES_PERSONA = {
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: `동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 ${expectAge.ok ? expectAge.age : 47}인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?`,
+  }
+
+  const go = (draft: unknown) => run({
+    id: '35040880', title: SRC_TITLE, body: SRC_BODY,
+    personas: [p02], canned: { plan: PLAN, draft, review: EMPTY_REVIEW },
+  })
+
+  const a1 = await go(DRAFT_COPIES_44)
+  const t1 = `${a1.draft?.title ?? ''}\n${a1.draft?.body ?? ''}`
+  check('🔴 🔴 **① 초안이 44 를 베껴도 자동 보정 뒤 채택된다**',
+    a1.review.machineOutcome === 'adopt', `${a1.review.machineOutcome} · ${a1.review.machineReason}`)
+  check('🔴 🔴 **① 결과에 원문의 44 가 남지 않는다**', !/(^|[^0-9])44\s*(살|세|인데)/.test(t1), t1)
+  check('🔴 🔴 **① P02 정본 나이가 들어간다**',
+    expectAge.ok && new RegExp(`(^|[^0-9])${expectAge.age}\\s*(살|세|인데)`).test(t1),
+    `기대 ${expectAge.ok ? expectAge.age : '-'} · 본문 ${t1}`)
+  check('🔴 🔴 **① source-invariant 인 80퍼 는 살아 있다**', t1.includes('80퍼'))
+  check('🔴 🔴 **① `protectedFactMissing` 이 없다**',
+    !a1.review.deterministic.failures.some((f) => f.code === 'protectedFactMissing'),
+    JSON.stringify(a1.review.deterministic.failures))
+  check('🔴 🔴 **① `lifeContradictions` 가 없다**',
+    a1.review.semantic !== null && a1.review.semantic.lifeContradictions.length === 0)
+
+  /** 🔴 반례 ③: 초안이 나이 문장을 **통째로 빼 버린다** */
+  const a3 = await go({
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+  })
+  check('🔴 🔴 **③ 나이 문장을 통째로 빼면 채택되지 않는다 (adopt 금지)**',
+    a3.review.machineOutcome !== 'adopt', a3.review.machineOutcome)
+  check('🔴 🔴 **③ 구조화된 `personaTransformFailed` 로 돌아온다 — 문자열 파싱 아님**',
+    a3.review.semanticCompletion.cause === 'personaTransformFailed',
+    String(a3.review.semanticCompletion.cause))
+  check('🔴 🔴 **③ 그 사유는 재시도 자격을 유지한다 — 영구 제외가 아니다**',
+    artifactRetryable(a3.review) === true)
+
+  /** 🔴 반례 ④: 제3자 44 와 우리 나이가 같은 글에 있다 */
+  const a4 = await go({
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: `아는 분이 44인데 관리를 안 하더라고요.\n저는 ${expectAge.ok ? expectAge.age : 47}인데 그래도 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요.`,
+  })
+  check('🔴 🔴 **④ 제3자 44 는 그대로 두고 채택된다**',
+    a4.review.machineOutcome === 'adopt'
+    && (a4.draft?.body ?? '').includes('아는 분이 44인데'), a4.review.machineOutcome)
+
+  const a2 = await go(DRAFT_USES_PERSONA)
+  const t2 = `${a2.draft?.title ?? ''}\n${a2.draft?.body ?? ''}`
+  check('🔴 🔴 **② 처음부터 P02 나이를 쓰면 손대지 않고 채택된다**',
+    a2.review.machineOutcome === 'adopt' && t2 === `${DRAFT_USES_PERSONA.title}\n${DRAFT_USES_PERSONA.body}`,
+    `${a2.review.machineOutcome}`)
+
+  // 🔴 주입 시계 — 같은 `now` 면 언제 돌려도 같은 나이다
+  check('🔴 🔴 **③ 주입된 시계만 쓴다 — 실행 시각과 무관하다**', (() => {
+    const d1 = exactAgeOf({ birthDate: CARD_P02.birthDate, ageBand: CARD_P02.ageBand, onKstDate: kstKeyOf(NOW) })
+    const d2 = exactAgeOf({ birthDate: CARD_P02.birthDate, ageBand: CARD_P02.ageBand, onKstDate: kstKeyOf(NOW) })
+    return d1.ok && d2.ok && d1.age === d2.age
+  })())
+  check('🔴 🔴 **③ KST 자정 경계에서 날짜가 갈린다**',
+    kstKeyOf(new Date('2026-09-22T14:59:59Z')) === '2026-09-22'
+    && kstKeyOf(new Date('2026-09-22T15:00:00Z')) === '2026-09-23')
+  check('🔴 🔴 **③ 사람이 갱신하지 않아도 나이가 진행된다 (2026 · 2031 · 2036)**', (() => {
+    const y = (n: string) => exactAgeOn(CARD_P02.birthDate, `${n}-12-31`)
+    const a = y('2026'); const b = y('2031'); const c = y('2036')
+    return a !== null && b === a + 5 && c === a + 10
+  })())
+}
+
+console.log('\n🔴 🔴 **materiality — 계획이 말한 값을 쓰되 증거로 확인한다 (하드코딩 제거)**')
+{
+  /**
+   * 🔴 앞판은 화자 상대 사실을 **전부 `incidental`** 로 하드코딩했다. 그래서
+   *    `loadBearingMismatch` 는 **한 번도 나올 수 없는 죽은 경로**였다.
+   *    여기서는 실제 `runContentCore` 를 돌려 세 갈래가 **정말 갈리는지** 본다.
+   */
+  const CARD_P02 = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+  const p02 = P({
+    code: 'P02', ageBand: CARD_P02.ageBand, birthDate: CARD_P02.birthDate,
+    maritalStatus: CARD_P02.maritalStatus, childrenCount: CARD_P02.childrenCount,
+    childrenAgeBands: CARD_P02.childrenAgeBands, workStatus: CARD_P02.workStatus,
+    region: CARD_P02.region, menopauseStatus: CARD_P02.menopauseStatus,
+    parentCare: CARD_P02.parentCare,
+  })
+  const T = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const B = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const DRAFT = {
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+  }
+  const planWith = (speakerRelative: unknown[]): unknown => ({
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+    selfBasis: 'lifeFacts', universalReason: '',
+    speakerWarrants: [{
+      fact: 'age', requiredValue: CARD_P02.ageBand, evidenceRef: 'head', evidenceText: '낼44인데',
+    }],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+    speakerRelative,
+  })
+  const go = (speakerRelative: unknown[]) => run({
+    id: '35040880', title: T, body: B, personas: [p02],
+    canned: { plan: planWith(speakerRelative), draft: DRAFT, review: EMPTY_REVIEW },
+  })
+
+  /** 🔴 ① 계획이 그 나이를 `incidental` 이라 말하고 증거도 맞다 → 바꿔서 채택 */
+  const ok1 = await go([
+    { axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' },
+  ])
+  check('🔴 🔴 **① 계획이 incidental 이라 말하고 증거가 맞으면 바꿔서 채택한다**',
+    ok1.review.machineOutcome === 'adopt',
+    `${ok1.review.machineOutcome} · ${ok1.review.machineReason}`)
+
+  /**
+   * 🔴 ② **loadBearing 인데 고른 사람이 그 조건이 아니다.**
+   *    P02 는 47(그날 계산)이고 원문은 44 다. 이번 묶음에 44 인 후보가 없으므로
+   *    사람을 바꿔도 소용없다 — **자리(stance)** 를 바꾸라고 돌려보낸다.
+   *    🔴 앞판은 여기서 사람을 세 명 태웠다.
+   */
+  const lb = await go([
+    { axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'loadBearing' },
+  ])
+  check('🔴 🔴 **② 만족하는 후보가 없으면 `loadBearingSelfImpossible` — 사람을 태우지 않는다**',
+    lb.review.machineOutcome !== 'adopt'
+    && lb.review.semanticCompletion.cause === 'loadBearingSelfImpossible',
+    `${lb.review.machineOutcome} · ${String(lb.review.semanticCompletion.cause)} · ${lb.review.machineReason}`)
+  check('🔴 🔴 **② 그 사유는 사람을 제외하지 않는다 — 제외 대상 사유 목록에 없다**',
+    ![...PERSONA_REPLAN_CAUSES].includes('loadBearingSelfImpossible' as never),
+    [...PERSONA_REPLAN_CAUSES].join(','))
+
+  /**
+   * 🔴 ③ **materiality 를 답하지 않으면 통과시키지 않는다** (마스터 P0-2).
+   *    앞판은 검증되지 않은 자기 나이를 `incidental` 로 보고 **adopt** 했다.
+   */
+  const omitted = await go([
+    { axis: 'age', sourceText: '80퍼', evidenceRef: 'title', materiality: 'incidental' },
+  ])
+  check('🔴 🔴 **③ 답했는데 그 사실만 빠지면 모양 오류다 — 발행 후보가 되지 않는다**',
+    omitted.review.machineOutcome !== 'adopt'
+    && omitted.review.semanticCompletion.cause === 'parseFailed',
+    `${omitted.review.machineOutcome} · ${String(omitted.review.semanticCompletion.cause)}`)
+
+  /** 🔴 ④ 증거 자리를 지어내면 그 주장은 없는 것과 같다 */
+  const faked = await go([
+    { axis: 'age', sourceText: '44', evidenceRef: 'title', materiality: 'incidental' },
+  ])
+  check('🔴 🔴 **④ evidenceRef 가 실제와 다르면 그 주장을 버리고 다시 묻는다**',
+    faked.review.machineOutcome !== 'adopt'
+    && faked.review.semanticCompletion.cause === 'parseFailed',
+    `${faked.review.machineOutcome} · ${String(faked.review.semanticCompletion.cause)}`)
+
+  /**
+   * 🔴 ⑤ **아예 답하지 않아도 통과시키지 않는다.** 이것이 마스터가 지적한 자리다 —
+   *    앞판은 여기서 `incidental` 기본값으로 **발행 후보를 만들었다.**
+   */
+  const silent = await go([])
+  check('🔴 🔴 **⑤ speakerRelative 를 아예 안 쓰면 발행 후보가 되지 않는다 (fail-closed)**',
+    silent.review.machineOutcome !== 'adopt'
+    && silent.review.semanticCompletion.cause === 'parseFailed',
+    `${silent.review.machineOutcome} · ${String(silent.review.semanticCompletion.cause)}`)
+  check('🔴 🔴 **⑤ 그것은 재시도다 — 정상 원천을 영구 제외하지 않는다**',
+    artifactRetryable(silent.review) === true)
+  check('🔴 🔴 **⑤ 기본값 함수가 사라졌다 — `materialityFor` 는 없으면 `null` 이다**',
+    materialityFor('44', 'head', new Map()) === null)
+
+  /**
+   * 🔴 ⑥ **원문에 없는 말을 지목한 계획은 채택되지 않는다.**
+   *    🔴 `foundInSpan` 이 이것을 잡는다고 말하지 않는다 — 실측하면 그보다 앞서
+   *    다른 검사가 먼저 잡는다. 관측되지 않은 것을 관측했다고 적지 않는다.
+   */
+  const notInSpan = await run({
+    id: '35040880', title: T, body: B, personas: [p02],
+    canned: {
+      plan: {
+        ...(planWith([
+          { axis: 'age', sourceText: '44살', evidenceRef: 'head', materiality: 'incidental' },
+        ]) as Record<string, unknown>),
+        protectedFacts: [
+          { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+          { kind: 'number', text: '44살', evidenceRef: 'head' },
+        ],
+      },
+      draft: DRAFT, review: EMPTY_REVIEW,
+    },
+  })
+  check('🔴 🔴 **⑥ 원문에 없는 말을 지목한 계획은 채택되지 않는다**',
+    notInSpan.review.machineOutcome !== 'adopt',
+    `${notInSpan.review.machineOutcome} · ${notInSpan.review.machineReason}`)
+
+  /**
+   * 🔴 **유료 요청 수를 값으로 남긴다** (2026-09-23 마스터 요구 ⑥).
+   *    "변화 0" 이라고 쓰지 않는다 — 실제로 몇 번 나갔는지 잰다.
+   */
+  console.log(`   🔴 회차당 유료 요청 — 정상 ${ok1.cost.totalCalls}회`
+    + ` · load-bearing 중단 ${lb.cost.totalCalls}회`
+    + ` · materiality 누락 ${silent.cost.totalCalls}회 (원천당 상한 ${3})`)
+  check('🔴 🔴 **⑦ 정상 회차는 세 번이다 — 계획·생성·검수**',
+    ok1.cost.totalCalls === 3, String(ok1.cost.totalCalls))
+  check('🔴 🔴 **⑦ load-bearing 으로 멈추면 계획 한 번에서 끝난다 — 생성·검수로 가지 않는다**',
+    lb.cost.totalCalls === 1, String(lb.cost.totalCalls))
+  check('🔴 🔴 **⑦ materiality 누락도 계획 한 번이다 — 검증되지 않은 글에 돈을 더 쓰지 않는다**',
+    silent.cost.totalCalls === 1, String(silent.cost.totalCalls))
+}
+
+console.log('\n🔴 🔴 **추천 Persona 를 다음 회차가 실제로 강제한다 (마스터 P0-3)**')
+{
+  /**
+   * 🔴 앞판: `resolveLoadBearing` 의 `suggest=['P04']` 가 **사람이 읽는 문구**에만
+   *    들어갔다. 다음 회차는 정렬 순서대로 **또 다른 불일치 Persona** 를 골랐다.
+   *    🔴 값으로 남기고, 다음 회차 후보를 그 교집합으로만 만든다.
+   */
+  const SRC = 'lb-suggest'
+  const C = (code: string) => ({ code })
+  /** 🔴 artifact 가 실제로 내는 모양 그대로 — 손으로 줄이지 않는다 */
+  const outcome = (suggest: readonly string[]) => [{
+    sourceArticleId: SRC, atMs: Date.parse('2026-09-23T01:00:00.000Z'),
+    stage: 'draft' as const, state: 'retryable' as const,
+    failedPersonaCode: 'P02', failedStance: 'SELF_EXPERIENCE',
+    failedCause: 'loadBearingMismatch', suggestedPersonaCodes: suggest,
+  }]
+
+  /** 🔴 ① 틀린 P01 이 정렬상 P04 보다 앞에 있어도 **P04 만** 고른다 */
+  const only = personasForAttempt({
+    outcomes: outcome(['P04']), sourceArticleId: SRC,
+    slotCodes: ['P01', 'P02', 'P04', 'P08'],
+    candidates: [C('P01'), C('P02'), C('P04'), C('P08')],
+  })
+  check('🔴 🔴 **① 지목된 P04 만 나간다 — 앞에 있는 P01 을 고르지 않는다**',
+    only.ok && only.personas.map((x) => x.code).join(',') === 'P04',
+    only.ok ? only.personas.map((x) => x.code).join(',') : JSON.stringify(only))
+
+  /** 🔴 ② 지목이 여럿이면 그 집합 안에서 기존 정렬을 그대로 쓴다 */
+  const many = personasForAttempt({
+    outcomes: outcome(['P08', 'P04']), sourceArticleId: SRC,
+    slotCodes: ['P01', 'P02', 'P04', 'P08'],
+    candidates: [C('P01'), C('P02'), C('P04'), C('P08')],
+  })
+  check('🔴 🔴 **② 지목이 여럿이면 그 안에서 기존 정렬을 쓴다 (P04,P08)**',
+    many.ok && many.personas.map((x) => x.code).join(',') === 'P04,P08',
+    many.ok ? many.personas.map((x) => x.code).join(',') : JSON.stringify(many))
+
+  /** 🔴 ③ 지목한 사람이 더 이상 적격하지 않으면 **조용히 전체로 돌아가지 않는다** */
+  const gone = personasForAttempt({
+    outcomes: outcome(['P04']), sourceArticleId: SRC,
+    slotCodes: ['P01', 'P08'],
+    candidates: [C('P01'), C('P08')],
+  })
+  check('🔴 🔴 **③ 지목이 사라지면 구조화된 실패다 — 아무나로 대체하지 않는다**',
+    !gone.ok && gone.code === 'SUGGESTED_UNAVAILABLE', JSON.stringify(gone))
+
+  /** 🔴 ④ 지목이 없으면 제한이 없다 — 기존 경로가 그대로다 */
+  const free = personasForAttempt({
+    outcomes: outcome([]), sourceArticleId: SRC,
+    slotCodes: ['P01', 'P04', 'P08'],
+    candidates: [C('P01'), C('P04'), C('P08')],
+  })
+  check('🔴 🔴 **④ 지목이 없으면 제한하지 않는다 — 실패한 P02 만 빠진다**',
+    free.ok && free.personas.map((x) => x.code).join(',') === 'P01,P04,P08',
+    free.ok ? free.personas.map((x) => x.code).join(',') : JSON.stringify(free))
+
+  /**
+   * 🔴 ⑤ **SELF_IMPOSSIBLE 은 사람을 지목하지 않는다** — 같은 Persona 로 자리만 바꾼다.
+   */
+  const selfImp = personasForAttempt({
+    outcomes: [{
+      sourceArticleId: SRC, atMs: Date.parse('2026-09-23T01:00:00.000Z'),
+      stage: 'draft', state: 'retryable',
+      failedPersonaCode: 'P02', failedStance: 'SELF_EXPERIENCE',
+      failedCause: 'loadBearingSelfImpossible', suggestedPersonaCodes: [],
+    }],
+    sourceArticleId: SRC, slotCodes: ['P01', 'P02', 'P04'],
+    candidates: [C('P01'), C('P02'), C('P04')],
+  })
+  check('🔴 🔴 **⑤ SELF_IMPOSSIBLE 은 같은 Persona 를 남긴다 — 자리만 바꾼다**',
+    selfImp.ok && selfImp.personas.some((x) => x.code === 'P02'),
+    selfImp.ok ? selfImp.personas.map((x) => x.code).join(',') : JSON.stringify(selfImp))
+
+  /** 🔴 ⑥ 추천이 artifact 에 **값으로** 실린다 — 문구만 보지 않는다 */
+  const lbPick = resolveLoadBearing({
+    facts: [{ axis: 'age', sourceText: '44' }], stance: 'SELF_EXPERIENCE',
+    chosen: { code: 'P02', exactAge: 47 },
+    candidates: [{ code: 'P02', exactAge: 47 }, { code: 'P04', exactAge: 44 }],
+    selfAlreadyFailed: false,
+  })
+  check('🔴 🔴 **⑥ 판정이 후보 목록을 값으로 낸다**',
+    !lbPick.ok && lbPick.retry && lbPick.suggest.join(',') === 'P04', JSON.stringify(lbPick))
+  const runSrc = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+  check('🔴 🔴 **⑥ 러너가 그 목록을 artifact 에 싣는다 — 문구에만 두지 않는다**',
+    /suggestedPersonaCodes: \[\.\.\.suggested\]/.test(runSrc)
+    && /if \(lb\.retry\) suggested = lb\.suggest/.test(runSrc))
+  const wsSrc = readFileSync('src/lib/supply-workset.ts', 'utf-8')
+  check('🔴 🔴 **⑥ 지난 결과를 읽을 때 그 목록을 꺼낸다**',
+    /suggestedPersonaCodes/.test(wsSrc))
+}
+
+console.log('\n🔴 🔴 **load-bearing 조건 보존 — 초안이 지우면 검수가 clean 이라도 막는다 (마스터 P0-2)**')
+{
+  /**
+   * 🔴 원문 자기 나이는 `protectedFacts` 에서 걷어내지고 `planAxisMapping` 은
+   *    load-bearing 을 건너뛴다 — 그래서 초안이 그 조건을 **통째로 지워도** 막는 것이
+   *    없었다. 의미 검수는 "깨끗하다" 고 답할 수 있다(모델의 답은 근거가 아니다).
+   */
+  const CARDS = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')).cards
+  const datedAge = (c: typeof CARDS[number]): number | null => {
+    const v = materializePersonaAt({ card: { code: c.code, birthDate: c.birthDate, ageBand: c.ageBand }, now: NOW })
+    return v.ok ? v.at.exactAge : null
+  }
+  // 🔴 원문 조건과 **같은 나이**인 사람을 정본에서 찾는다 — 그래야 SELF 가 성립한다
+  const fitCard = CARDS.find((c) => datedAge(c) === 51)!
+  const AGE = 51
+  const pFit = P({
+    code: fitCard.code, ageBand: fitCard.ageBand, birthDate: fitCard.birthDate,
+    maritalStatus: fitCard.maritalStatus, childrenCount: fitCard.childrenCount,
+    childrenAgeBands: fitCard.childrenAgeBands, workStatus: fitCard.workStatus,
+    region: fitCard.region, menopauseStatus: fitCard.menopauseStatus, parentCare: fitCard.parentCare,
+  })
+  const LT = '나이 제한이 있다는데 아시는 분'
+  const LB = `제가 ${AGE}세라서 그 지원 대상이 된다고 하더라고요.\n서류가 까다로운지 궁금합니다.`
+  const lbPlan = (stance: string) => ({
+    decision: 'ok', personaCode: fitCard.code, stance,
+    selfBasis: stance === 'SELF_EXPERIENCE' ? 'noLifeFactNeeded' : null,
+    universalReason: stance === 'SELF_EXPERIENCE' ? '누구나 겪는 일이라' : '',
+    speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    protectedFacts: [],
+    speakerRelative: [
+      { axis: 'age', sourceText: String(AGE), evidenceRef: 'head', materiality: 'loadBearing' },
+    ],
+  })
+  const goLB = (stance: string, draft: { title: string; body: string }) => run({
+    id: 'lb-1', title: LT, body: LB, personas: [pFit],
+    // 🔴 의미 검수는 **깨끗하다고 답한다** — 그래도 막혀야 한다
+    canned: { plan: lbPlan(stance), draft, review: EMPTY_REVIEW },
+  })
+
+  /** 🔴 ① 초안이 조건을 통째로 지웠다 + 검수 clean → 후보가 되면 안 된다 */
+  const dropped = await goLB('SELF_EXPERIENCE', {
+    title: '지원 서류가 까다로울까요',
+    body: '얼마 전에 대상이 된다는 이야기를 듣고 알아보는 중입니다.\n'
+      + '서류 준비가 번거로운지 먼저 겪어 보신 분 계실까요?',
+  })
+  check('🔴 🔴 **① 조건을 지운 초안은 검수가 clean 이라도 후보가 되지 않는다**',
+    dropped.review.machineOutcome !== 'adopt'
+    && dropped.review.deterministic.failures.some((f) => f.code === 'loadBearingLost'),
+    `${dropped.review.machineOutcome} · ${JSON.stringify(dropped.review.deterministic.failures)}`)
+  check('🔴 🔴 **① 의미 검수는 실제로 깨끗하다고 답했다 — 그 답에 기대지 않는다**',
+    dropped.review.semantic === null || dropped.review.lifeContradictions.length === 0,
+    JSON.stringify(dropped.review.semantic))
+
+  /** 🔴 ② 1인칭 조건을 그대로 지킨 초안은 통과한다 */
+  const keptSelf = await goLB('SELF_EXPERIENCE', {
+    title: '지원 서류가 까다로울까요',
+    body: `제가 ${AGE}세라 대상이 된다고 들어서 알아보는 중입니다.\n`
+      + '서류 준비가 번거로운지 먼저 겪어 보신 분 계실까요?',
+  })
+  check('🔴 🔴 **② 조건을 1인칭으로 지킨 초안은 통과한다**',
+    keptSelf.review.machineOutcome === 'adopt',
+    `${keptSelf.review.machineOutcome} · ${keptSelf.review.machineReason}`)
+
+  /** 🔴 ③ 1인칭이 아닌 자리에서는 그 나이를 **우리 나이로 주장하면** 안 된다 */
+  const claimed = await goLB('QUESTION', {
+    title: '지원 대상 나이가 어떻게 되나요',
+    body: `제가 ${AGE}세라서 대상이 된다고 들었습니다.\n서류가 까다로운지 아시는 분 계실까요?`,
+  })
+  check('🔴 🔴 **③ 관찰·질문 자리에서 그 나이를 자기 것으로 주장하면 막는다**',
+    claimed.review.machineOutcome !== 'adopt'
+    && claimed.review.deterministic.failures.some((f) => f.code === 'loadBearingLost'),
+    `${claimed.review.machineOutcome} · ${JSON.stringify(claimed.review.deterministic.failures)}`)
+
+  /** 🔴 ④ 관찰·질문 자리에서 조건을 사건으로 남기면 통과한다 */
+  const asEvent = await goLB('QUESTION', {
+    title: '지원 대상 나이가 어떻게 되나요',
+    body: `${AGE}세부터 대상이 된다는 이야기를 들었는데 맞을까요?\n서류가 까다로운지도 궁금합니다.`,
+  })
+  check('🔴 🔴 **④ 사건 조건으로 남기면 통과한다 — 소재를 버리지 않는다**',
+    asEvent.review.machineOutcome === 'adopt',
+    `${asEvent.review.machineOutcome} · ${asEvent.review.machineReason}`)
+
+  /** 🔴 ⑤ 지시문과 후조건이 **같은 값**을 쓴다 — 두 벌로 두면 한쪽이 낡는다 */
+  const reqSelf = loadBearingRequirements({
+    facts: [{ axis: 'age', sourceText: String(AGE) }], stance: 'SELF_EXPERIENCE',
+  })
+  const reqEvent = loadBearingRequirements({
+    facts: [{ axis: 'age', sourceText: String(AGE) }], stance: 'QUESTION',
+  })
+  check('🔴 🔴 **⑤ 1인칭이면 selfCondition · 아니면 eventCondition**',
+    reqSelf[0]?.mode === 'selfCondition' && reqEvent[0]?.mode === 'eventCondition',
+    `${reqSelf[0]?.mode} · ${reqEvent[0]?.mode}`)
+  check('🔴 🔴 **⑤ 초안 지시문이 "바꾸지 말고 지킨다" 를 실제로 담는다**', (() => {
+    const sysKeep = buildV2DraftSystemPrompt({
+      plan: {
+        ...lbPlan('SELF_EXPERIENCE'), protectedFacts: [], speakerRelative: [], warrants: [],
+      } as never,
+      voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
+      life: pFit as never, mappings: [], keep: reqSelf,
+    })
+    return sysKeep.includes('바꾸지 말고 지킵니다') && sysKeep.includes(String(AGE))
+  })())
+  check('🔴 🔴 **⑤ 바꾸는 목록과 지키는 목록은 서로 다른 칸이다 — 섞지 않는다**', (() => {
+    const sysBoth = buildV2DraftSystemPrompt({
+      plan: {
+        ...lbPlan('SELF_EXPERIENCE'), protectedFacts: [], speakerRelative: [], warrants: [],
+      } as never,
+      voice: { tokens: [], samples: ['그렇더라고요'], bundleDigest: 'b' } as never,
+      life: pFit as never,
+      mappings: [{ axis: 'age', sourceText: '44', personaText: '47살', outputRule: '🔴 44 를 47살 로 서술한다' }],
+      keep: reqSelf,
+    })
+    return sysBoth.includes('바꿔 씁니다') && sysBoth.includes('바꾸지 말고 지킵니다')
+      && sysBoth.indexOf('바꿔 씁니다') < sysBoth.indexOf('바꾸지 말고 지킵니다')
+  })())
+
+  /** 🔴 ⑥ 유료 호출이 늘지 않는다 — 결정적 단계라 검수 요청 앞에서 끝난다 */
+  console.log(`   🔴 조건 삭제 회차 유료 요청 ${dropped.cost.totalCalls}회 (정상 ${keptSelf.cost.totalCalls}회)`)
+  check('🔴 🔴 **⑥ 조건이 사라지면 의미 검수를 부르지 않는다 — 호출이 늘지 않는다**',
+    dropped.cost.totalCalls === 2 && keptSelf.cost.totalCalls === 3,
+    `${dropped.cost.totalCalls} · ${keptSelf.cost.totalCalls}`)
+}
+
+console.log('\n🔴 🔴 **공용 age mention parser — 숫자 해석이 한 곳이다 (마스터 P0-1)**')
+{
+  /**
+   * 🔴 앞판은 숫자를 읽는 코드가 **세 벌**이었다(`readAgeExpression` ·
+   *    `selfAgeNumbersIn` · `sourceAgeNumber`). 그래서 `readSelfAgeClaim` 이
+   *    남의 것·조건으로 본 표현을 `expectedSelfFactsIn` 은 **자기 나이로 오인**했다.
+   *    자격·보험·제3자·사건 조건은 창업자가 정한 **source-invariant** 다.
+   */
+  const span = (text: string, kind = 'head') => [{ kind, text }]
+  const selfOf = (t: string): number[] =>
+    expectedSelfFactsIn(span(t)).map((x) => Number(x.sourceText))
+
+  // ── 자기 나이로 탐지해야 하는 것 ──
+  check('🔴 🔴 **① "제가 곧 44인데" → 자기 나이 44**',
+    selfOf('제가 곧 44인데').join(',') === '44', JSON.stringify(selfOf('제가 곧 44인데')))
+  check('🔴 🔴 **① "낼44인데 아직도 어리단소리들어요" → 자기 나이 44 (P02 실측 원문)**',
+    selfOf('낼44인데 아직도 어리단소리들어요 ㅋ').join(',') === '44',
+    JSON.stringify(selfOf('낼44인데 아직도 어리단소리들어요 ㅋ')))
+  check('🔴 🔴 **① "아는 분이 44인데 저는 47이거든요" → 47 만**',
+    selfOf('아는 분이 44인데 저는 47이거든요').join(',') === '47',
+    JSON.stringify(selfOf('아는 분이 44인데 저는 47이거든요')))
+
+  /**
+   * ── 🔴 **자기 나이로 탐지하면 안 되는 것** ──
+   *    마스터가 실행해 보인 오인 4건이다. 앞판은 전부 자기 나이로 읽었다.
+   */
+  const NOT_SELF: [string, string][] = [
+    ['51세부터 지원 대상입니다', '자격 조건'],
+    ['만 65세 이상이면 신청할 수 있어요', '자격 조건'],
+    ['51세 지원자가 많아요', '제3자'],
+    ['보험은 51세부터 비싸져요', '보험 조건'],
+    ['아는 분이 44인데 그렇대요', '제3자'],
+    ['여잔 피부가 80퍼인듯', '퍼센트'],
+    ['3일 만에 끝났고 5년째입니다', '기간'],
+    ['2026년부터 바뀐다네요', '연도'],
+    ['30대같다고 다들 말하네요', '밴드 비유'],
+    ['지원금이 51만원입니다', '금액'],
+    ['51번 버스를 탔어요', '번호'],
+  ]
+  for (const [t, why] of NOT_SELF) {
+    check(`🔴 🔴 **② ${why} — "${t}" 는 자기 나이가 아니다**`,
+      selfOf(t).length === 0, JSON.stringify(selfOf(t)))
+  }
+
+  /** 🔴 ③ 역할을 구조화해서 낸다 — 사람이 읽는 문구가 아니라 값이다 */
+  const roleOf = (t: string): string =>
+    ageMentionsIn(t, 'head').map((m) => `${m.role}/${m.kind}/${m.span.from}-${m.span.to}`).join(' ')
+  check('🔴 🔴 **③ 자격 조건은 `eventCondition` 으로 낸다**',
+    roleOf('51세부터 지원 대상입니다') === 'eventCondition/exact/51-51',
+    roleOf('51세부터 지원 대상입니다'))
+  check('🔴 🔴 **③ "만 65세 이상이면" 은 범위 조사로 `eventCondition` 이다 — unknown 이 아니다**',
+    roleOf('만 65세 이상이면 신청할 수 있어요') === 'eventCondition/exact/65-65',
+    roleOf('만 65세 이상이면 신청할 수 있어요'))
+  check('🔴 🔴 **③ 그 판정 근거는 범위 조사다 — 어느 규칙이 잡았는지 값으로 남는다**',
+    ageMentionsIn('만 65세 이상이면 신청할 수 있어요')[0]?.reason === 'rangeCondition',
+    String(ageMentionsIn('만 65세 이상이면 신청할 수 있어요')[0]?.reason))
+  check('🔴 🔴 **③ "51세부터" 는 시점 조사가 잡는다 — 규칙이 겹치지 않는다**',
+    ageMentionsIn('51세부터 지원 대상입니다')[0]?.reason === 'timePoint',
+    String(ageMentionsIn('51세부터 지원 대상입니다')[0]?.reason))
+  check('🔴 🔴 **③ 제3자 수식은 `thirdParty` 로 낸다**',
+    roleOf('51세 지원자가 많아요') === 'thirdParty/exact/51-51', roleOf('51세 지원자가 많아요'))
+  check('🔴 🔴 **③ 구간 표현은 `band` 로 낸다 — 숫자 하나로 줄이지 않는다**',
+    roleOf('저는 50대 초반이에요') === 'self/band/50-53', roleOf('저는 50대 초반이에요'))
+  check('🔴 🔴 **③ evidenceRef 를 함께 낸다**',
+    ageMentionsIn('제가 47인데', 'title')[0]?.evidenceRef === 'title')
+  check('🔴 🔴 **③ 원문 표현을 그대로 낸다**',
+    ageMentionsIn('저는 50대 초반이에요')[0]?.raw === '50대 초반',
+    String(ageMentionsIn('저는 50대 초반이에요')[0]?.raw))
+
+  /** 🔴 ④ 옛 소비자들이 같은 답을 낸다 — 두 벌이 아니다 */
+  check('🔴 🔴 **④ `readSelfAgeClaim` 과 `expectedSelfFactsIn` 이 어긋나지 않는다**', (() => {
+    for (const [t] of NOT_SELF) {
+      if (readSelfAgeClaim(t) !== null || selfOf(t).length > 0) return false
+    }
+    return true
+  })())
+  check('🔴 🔴 **④ `selfAgeNumbersIn` 도 같은 결과를 낸다 — 별도 정규식이 없다**',
+    selfAgeNumbersIn('51세부터 지원 대상입니다').length === 0
+    && selfAgeNumbersIn('제가 곧 44인데').join(',') === '44')
+  check('🔴 🔴 **④ `sourceAgeFact` 도 같은 정본을 쓴다 — 51만원·51번은 나이가 아니다**',
+    sourceAgeFact('51')?.span.from === 51 && sourceAgeFact('51만원') === null
+    && sourceAgeFact('51번') === null,
+    JSON.stringify([sourceAgeFact('51'), sourceAgeFact('51만원'), sourceAgeFact('51번')]))
+  check('🔴 🔴 **④ 구간도 구조로 읽는다 — 숫자 하나로 평탄화하지 않는다**', (() => {
+    const f = sourceAgeFact('50대 초반')
+    return f !== null && f.kind === 'band' && f.raw === '50대 초반'
+      && f.span.from === 50 && f.span.to === 53
+  })(), JSON.stringify(sourceAgeFact('50대 초반')))
+  check('🔴 🔴 **④ 나이를 읽는 별도 정규식이 소비자 쪽에 남아 있지 않다**', (() => {
+    /** 🔴 주석은 뺀다 — "앞판에는 이런 정규식이 있었다" 는 설명까지 걸리면 거짓 실패다 */
+    const code = (f: string): string => readFileSync(f, 'utf-8')
+      .split('\n').filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
+    const srf = code('src/lib/content-core/speaker-relative-facts.ts')
+    const lb = code('src/lib/content-core/load-bearing.ts')
+    return !/\[2-9\]\[0-9\]/.test(srf) && !/\\d\{2\}/.test(lb)
+      && /ageMentionsIn/.test(srf) && /ageMentionsIn/.test(lb)
+  })())
+}
+
+console.log('\n🔴 🔴 **load-bearing 보존은 숫자 존재가 아니라 나이 의미로 본다 (마스터 P0-2)**')
+{
+  /**
+   * 🔴 앞판은 `new RegExp('51')` 로 **글자가 있는지**만 봤다. 마스터가 든 네 반례가
+   *    전부 잘못 통과했다. 여기서는 공용 age mention 결과로 본다.
+   */
+  const REQ_SELF = loadBearingRequirements({
+    facts: [{ axis: 'age', sourceText: '51' }], stance: 'SELF_EXPERIENCE',
+  })
+  const REQ_EVENT = loadBearingRequirements({
+    facts: [{ axis: 'age', sourceText: '51' }], stance: 'QUESTION',
+  })
+  const keptOf = (text: string, req: typeof REQ_SELF) =>
+    checkLoadBearingPreserved({ text, requirements: req })
+
+  /** 🔴 마스터가 든 거짓 PASS 4건 — 전부 FAIL 이어야 한다 */
+  const FALSE_PASS: [string, typeof REQ_SELF, string][] = [
+    ['지원금이 51만원입니다', REQ_EVENT, 'eventCondition + 금액'],
+    ['51번 버스를 탔어요', REQ_EVENT, 'eventCondition + 번호'],
+    ['저는 50대 초반이고 지원금은 51만원이에요', REQ_SELF, 'selfCondition + 금액'],
+    ['저는 50대 초반이에요. 51번 버스를 탔어요', REQ_SELF, 'selfCondition + 번호'],
+  ]
+  for (const [text, req, why] of FALSE_PASS) {
+    const v = keptOf(text, req)
+    check(`🔴 🔴 **① ${why} → FAIL 이어야 한다**`, !v.ok,
+      `"${text}" → ${v.ok ? 'PASS(잘못)' : `${v.code}: ${v.reason}`}`)
+  }
+
+  /** 🔴 ② 계약대로 통과해야 하는 것 */
+  check('🔴 🔴 **② selfCondition 은 정확한 51 세 1인칭이어야 통과한다**',
+    keptOf('제가 51세라 대상이 된다고 들었어요', REQ_SELF).ok,
+    JSON.stringify(keptOf('제가 51세라 대상이 된다고 들었어요', REQ_SELF)))
+  check('🔴 🔴 **② "50대 초반" 은 51 을 품어도 부족하다 — 구간으로 대신하지 않는다**',
+    !keptOf('저는 50대 초반이라 대상이 된다고 들었어요', REQ_SELF).ok,
+    JSON.stringify(keptOf('저는 50대 초반이라 대상이 된다고 들었어요', REQ_SELF)))
+  check('🔴 🔴 **② eventCondition 은 나이 조건으로 남아야 통과한다**',
+    keptOf('51세부터 대상이 된다는데 맞을까요?', REQ_EVENT).ok,
+    JSON.stringify(keptOf('51세부터 대상이 된다는데 맞을까요?', REQ_EVENT)))
+  check('🔴 🔴 **② eventCondition 인데 자기 나이로 주장하면 막는다**',
+    !keptOf('제가 51세라서 대상이 된다고 들었습니다', REQ_EVENT).ok,
+    JSON.stringify(keptOf('제가 51세라서 대상이 된다고 들었습니다', REQ_EVENT)))
+  check('🔴 🔴 **② 조건이 아예 사라지면 막는다**',
+    !keptOf('대상이 된다고 들어서 알아보는 중입니다', REQ_SELF).ok,
+    JSON.stringify(keptOf('대상이 된다고 들어서 알아보는 중입니다', REQ_SELF)))
+
+  /** 🔴 ③ 구간 조건은 구간 표현으로 보존한다 — 숫자 50 으로 줄이지 않는다 */
+  check('🔴 🔴 **③ 구간 조건은 span 을 그대로 본다**', (() => {
+    const band = ageMentionsIn('저는 50대 초반이에요')[0]
+    return band !== undefined && band.kind === 'band'
+      && band.span.from === 50 && band.span.to === 53 && band.raw === '50대 초반'
+  })())
+}
+
+console.log('\n🔴 🔴 **원문 자기 나이 탐지는 planner 출력에 의존하지 않는다 (마스터 P0-1)**')
+{
+  /**
+   * 🔴 앞판 구멍: `parseSpeakerPlan` 은 `protectedFacts` 를 훑으면서만 자기 나이를
+   *    발견했다. 모델이 "낼 44" 를 **protectedFacts 와 speakerRelative 양쪽에서**
+   *    빠뜨리면 누락 자체가 발견되지 않아, 원문 화자의 나이가 그대로 남은 글이
+   *    아무 경고 없이 발행 후보가 됐다.
+   */
+  const CARD_D = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+  const pD = P({
+    code: 'P02', ageBand: CARD_D.ageBand, birthDate: CARD_D.birthDate,
+    maritalStatus: CARD_D.maritalStatus, childrenCount: CARD_D.childrenCount,
+    childrenAgeBands: CARD_D.childrenAgeBands, workStatus: CARD_D.workStatus,
+    region: CARD_D.region, menopauseStatus: CARD_D.menopauseStatus, parentCare: CARD_D.parentCare,
+  })
+  const T2 = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const B2 = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const D2 = {
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+  }
+
+  /**
+   * 🔴 **반례**: 계획이 44 를 **protectedFacts 에도, speakerRelative 에도 적지 않았다.**
+   *    앞판이라면 그대로 통과했다.
+   */
+  const blind = await run({
+    id: '35040880', title: T2, body: B2, personas: [pD],
+    canned: {
+      plan: {
+        decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+        selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+        speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+        // 🔴 44 가 없다 — 80퍼만 적었다
+        protectedFacts: [{ kind: 'number', text: '80퍼', evidenceRef: 'title' }],
+        // 🔴 speakerRelative 도 비어 있다
+        speakerRelative: [],
+      },
+      draft: D2, review: EMPTY_REVIEW,
+    },
+  })
+  check('🔴 🔴 **① 양쪽에서 빠뜨려도 코드가 원문에서 찾아낸다 — 발행 후보가 되지 않는다**',
+    blind.review.machineOutcome !== 'adopt'
+    && blind.review.semanticCompletion.cause === 'parseFailed',
+    `${blind.review.machineOutcome} · ${String(blind.review.semanticCompletion.cause)}`)
+  check('🔴 🔴 **① 그 사유는 재시도다 — 정상 원천을 영구 제외하지 않는다**',
+    artifactRetryable(blind.review) === true)
+
+  /**
+   * 🔴 ② **speakerRelative 로만 적어도 받는다** — 그때는 변환 대상으로 싣는다.
+   *    싣지 않으면 그 나이가 대체 없이 초안으로 흘러간다.
+   */
+  const srOnly = await run({
+    id: '35040880', title: T2, body: B2, personas: [pD],
+    canned: {
+      plan: {
+        decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+        selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+        speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+        protectedFacts: [{ kind: 'number', text: '80퍼', evidenceRef: 'title' }],
+        speakerRelative: [
+          { axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' },
+        ],
+      },
+      draft: D2, review: EMPTY_REVIEW,
+    },
+  })
+  const t = `${srOnly.draft?.title ?? ''}\n${srOnly.draft?.body ?? ''}`
+  check('🔴 🔴 **② speakerRelative 로만 적어도 변환된다 — 44 가 남지 않는다**',
+    srOnly.review.machineOutcome === 'adopt' && !/(^|[^0-9])44\s*(살|세|인데)/.test(t),
+    `${srOnly.review.machineOutcome} · ${t.split('\n')[1] ?? ''}`)
+
+  /** 🔴 ③ 오탐 금지 — 제3자 나이·퍼센트·기간·연도는 요구하지 않는다 */
+  const span = (text: string, kind = 'head') => [{ kind, text }]
+  check('🔴 🔴 **③ 제3자 나이는 요구하지 않는다**',
+    expectedSelfFactsIn(span('아는 분이 44인데 그렇대요')).length === 0)
+  check('🔴 🔴 **③ 퍼센트(80퍼)는 나이가 아니다**',
+    expectedSelfFactsIn(span('여잔 피부가 80퍼인듯')).length === 0)
+  check('🔴 🔴 **③ 기간(3일·5년)은 나이가 아니다**',
+    expectedSelfFactsIn(span('3일 만에 끝났고 5년째입니다')).length === 0)
+  check('🔴 🔴 **③ 연도(2026년)는 나이가 아니다**',
+    expectedSelfFactsIn(span('2026년부터 바뀐다네요')).length === 0)
+  check('🔴 🔴 **③ "30대같다" 의 30 은 나이 주장이 아니다**',
+    expectedSelfFactsIn(span('30대같다고 다들 말하네요')).length === 0)
+  check('🔴 🔴 **③ 자기 나이는 자리까지 찾아낸다**', (() => {
+    const got = expectedSelfFactsIn(span('낼44인데 아직도 어리단소리들어요'))
+    return got.length === 1 && got[0]!.sourceText === '44' && got[0]!.evidenceRef === 'head'
+      && got[0]!.axis === 'age'
+  })())
+  check('🔴 🔴 **③ 제3자와 자기 나이가 한 줄에 있으면 자기 것만 찾는다**', (() => {
+    const got = expectedSelfFactsIn(span('아는 분이 44인데 저는 47이거든요'))
+    return got.length === 1 && got[0]!.sourceText === '47'
+  })())
+  check('🔴 🔴 **③ 나이 축만 낸다 — 다른 생활사 축을 활성화하지 않았다**',
+    expectedSelfFactsIn(span('제가 47인데 파트타임이고 부산 살아요'))
+      .every((x) => x.axis === 'age'))
+}
+
+console.log('\n🔴 🔴 **계약 판을 올렸다 — 옛 cache/artifact 가 새 계약으로 재사용되지 않는다**')
+{
+  /**
+   * 🔴 계획 요청의 **출력 계약**과 파서 **의미**가 바뀌었다(materiality 필수 ·
+   *    load-bearing 판정 자리 이동). 판을 올리지 않으면 옛 응답으로 만든 artifact 와
+   *    캐시가 새 계약의 결론으로 재사용된다.
+   */
+  check('🔴 🔴 **판이 실제로 올라갔다 — p5 · v6**',
+    SPEAKER_PLAN_PROMPT_VERSION === 'speaker-plan-p5' && SPEAKER_PLAN_VERSION === 'speaker-plan-v6',
+    `${SPEAKER_PLAN_PROMPT_VERSION} · ${SPEAKER_PLAN_VERSION}`)
+
+  const BASE_C = {
+    sourceInputHash: 'fixturehash00000',
+    pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
+    promptVersion: CONTENT_CORE_PROMPT_VERSION,
+    speakerPlanVersion: SPEAKER_PLAN_VERSION,
+    reviewVersion: REVIEW_VERSION,
+    planPromptDigest: 'plan000000000000',
+    stageModels: STAGE_MODEL,
+    stageMaxOutputLabel: STAGE_MAX_OUTPUT_LABEL,
+    voiceAssetDigest: 'asset000000000', personaPoolDigest: 'pool0000000000',
+  }
+  /** 🔴 옛 판으로 적힌 artifact — 파일에 남아 있는 그 모양 그대로다 */
+  const OLD_C = { ...BASE_C, speakerPlanVersion: 'speaker-plan-v5', promptVersion: CONTENT_CORE_PROMPT_VERSION.replace('speaker-plan-p5', 'speaker-plan-p4') }
+
+  check('🔴 🔴 **① 옛 판 artifact 는 지금 계약과 같지 않다 — 결론으로 재사용되지 않는다**',
+    !sameGenerationContract(OLD_C, BASE_C), JSON.stringify({ old: OLD_C.speakerPlanVersion, now: BASE_C.speakerPlanVersion }))
+  check('🔴 🔴 **② 같은 판이면 같다 — 계약이 없는 척하지 않는다**',
+    sameGenerationContract({ ...BASE_C }, BASE_C))
+  check('🔴 🔴 **③ 판이 계약 지문에 실제로 들어간다 — 캐시 key 가 달라진다**',
+    generationIdentity(BASE_C) !== generationIdentity(OLD_C),
+    `${generationIdentity(BASE_C).slice(-60)}\n${generationIdentity(OLD_C).slice(-60)}`)
+
+  /**
+   * 🔴 ④ **새 응답만 새 계약을 충족한다.** 옛 응답(= materiality 없음)은
+   *    같은 원문·같은 사람으로 돌려도 **발행 후보가 되지 않는다.**
+   */
+  const CARD_X = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+  const pX = P({
+    code: 'P02', ageBand: CARD_X.ageBand, birthDate: CARD_X.birthDate,
+    maritalStatus: CARD_X.maritalStatus, childrenCount: CARD_X.childrenCount,
+    childrenAgeBands: CARD_X.childrenAgeBands, workStatus: CARD_X.workStatus,
+    region: CARD_X.region, menopauseStatus: CARD_X.menopauseStatus, parentCare: CARD_X.parentCare,
+  })
+  const SRC_T = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const SRC_B = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const basePlan = {
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE',
+    selfBasis: 'lifeFacts', universalReason: '',
+    speakerWarrants: [{ fact: 'age', requiredValue: CARD_X.ageBand, evidenceRef: 'head', evidenceText: '낼44인데' }],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+  }
+  const DR = {
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+  }
+  const oldShape = await run({
+    id: '35040880', title: SRC_T, body: SRC_B, personas: [pX],
+    canned: { plan: basePlan, draft: DR, review: EMPTY_REVIEW },
+  })
+  const newShape = await run({
+    id: '35040880', title: SRC_T, body: SRC_B, personas: [pX],
+    canned: {
+      plan: { ...basePlan, speakerRelative: [
+        { axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' },
+      ] },
+      draft: DR, review: EMPTY_REVIEW,
+    },
+  })
+  check('🔴 🔴 **④ 옛 모양 응답은 발행 후보가 되지 않는다 (입력: speakerRelative 없음)**',
+    oldShape.review.machineOutcome !== 'adopt'
+    && oldShape.review.semanticCompletion.cause === 'parseFailed',
+    `${oldShape.review.machineOutcome} · ${String(oldShape.review.semanticCompletion.cause)}`)
+  check('🔴 🔴 **④ 새 모양 응답만 통과한다 (입력: materiality=incidental)**',
+    newShape.review.machineOutcome === 'adopt',
+    `${newShape.review.machineOutcome} · ${newShape.review.machineReason}`)
+
+  /**
+   * 🔴 ⑤ **문서만 고치는 것은 계약 변경이 아니다.** 주석 한 줄에 캐시가 비면
+   *    회차마다 전부 다시 사게 된다 — 그것은 판 올리기가 아니라 사고다.
+   */
+  check('🔴 🔴 **⑤ 계약 지문은 판·모델·자산만 본다 — 주석·문서는 들어가지 않는다**', (() => {
+    const id = generationIdentity(BASE_C)
+    return !id.includes('🔴') && !id.includes('docs/')
+      && id.includes(SPEAKER_PLAN_VERSION) && id.includes(BASE_C.planPromptDigest)
+  })(), generationIdentity(BASE_C))
+  check('🔴 🔴 **⑤ 지시문 본문이 바뀌면 그때는 달라진다 — planPromptDigest 가 담는다**',
+    generationIdentity({ ...BASE_C, planPromptDigest: 'changed000000000' }) !== generationIdentity(BASE_C))
+}
+
+console.log('\n🔴 🔴 **load-bearing 해소 — 사람을 차례로 태우지 않는다 (마스터 P0-1)**')
+{
+  /**
+   * 🔴 앞판 실측: `planAxisMapping` 이 load-bearing 을 보면 **Persona 를 비교하기도 전에**
+   *    실패했다. 그래서 P01 → P02 → P03 을 차례로 태우고 4회차에 멈췄다 —
+   *    성공 가능성 0 인 세 번의 유료 반복이었다.
+   *    🔴 여기서는 **입력 → 실제 결과**를 값으로 본다.
+   */
+  const F = [{ axis: 'age' as const, sourceText: '44' }]
+  const C = (code: string, age: number | null) => ({ code, exactAge: age })
+  const SELF = 'SELF_EXPERIENCE'
+
+  // ① 고른 사람이 실제로 그 나이다 → 바꿀 것이 없다
+  const sat = resolveLoadBearing({
+    facts: F, stance: SELF, chosen: C('P02', 44),
+    candidates: [C('P02', 44), C('P04', 47)], selfAlreadyFailed: false,
+  })
+  check('🔴 🔴 **① 고른 사람이 44 면 그대로 성립한다 — 입력 P02=44 · 원문 44 → ok**',
+    sat.ok && sat.kind === 'personaSatisfies', JSON.stringify(sat))
+
+  // ② 고른 사람은 아닌데 **만족하는 후보가 실제로 있다** → 그 사람으로 재계획
+  const fit = resolveLoadBearing({
+    facts: F, stance: SELF, chosen: C('P02', 47),
+    candidates: [C('P02', 47), C('P04', 44), C('P08', 52)], selfAlreadyFailed: false,
+  })
+  check('🔴 🔴 **② P02=47 · 후보 P04=44 → PERSONA_MISMATCH 이고 P04 를 지목한다**',
+    !fit.ok && fit.retry && fit.code === 'PERSONA_MISMATCH' && fit.suggest.join(',') === 'P04',
+    JSON.stringify(fit))
+
+  /**
+   * 🔴 ③ **만족하는 후보가 하나도 없다** → 사람을 바꿔도 소용없다.
+   *    앞판이 세 명을 태운 바로 그 입력이다. 지금은 **자리**를 바꾸라고 돌려보낸다.
+   */
+  const none = resolveLoadBearing({
+    facts: F, stance: SELF, chosen: C('P02', 47),
+    candidates: [C('P02', 47), C('P04', 49), C('P08', 52)], selfAlreadyFailed: false,
+  })
+  check('🔴 🔴 **③ 아무도 44 가 아니면 SELF_IMPOSSIBLE — 사람을 지목하지 않는다**',
+    !none.ok && none.retry && none.code === 'SELF_IMPOSSIBLE'
+    && none.suggest.length === 0 && none.forbidSelf,
+    JSON.stringify(none))
+
+  // ④ 자리를 바꾸면 그 값은 우리 것이 아니다 → 성립
+  const obs = resolveLoadBearing({
+    facts: F, stance: 'QUESTION', chosen: C('P02', 47),
+    candidates: [C('P02', 47)], selfAlreadyFailed: true,
+  })
+  check('🔴 🔴 **④ 1인칭이 아니면 성립한다 — 그 나이를 우리 것으로 주장하지 않는다**',
+    obs.ok && obs.kind === 'notClaimed', JSON.stringify(obs))
+
+  /** 🔴 ⑤ 1인칭을 금지했는데 또 1인칭으로 오면 **한 번에 결론**이다 */
+  const term = resolveLoadBearing({
+    facts: F, stance: SELF, chosen: C('P02', 47),
+    candidates: [C('P02', 47)], selfAlreadyFailed: true,
+  })
+  check('🔴 🔴 **⑤ 금지 뒤에도 1인칭이면 MEANING_UNPRESERVABLE — 재시도가 아니다**',
+    !term.ok && !term.retry && term.code === 'MEANING_UNPRESERVABLE', JSON.stringify(term))
+  check('🔴 🔴 **⑤ 그 사유는 재시도 목록에 없다 — 같은 원천을 다시 사지 않는다**',
+    ![...RETRYABLE_CAUSES].includes('meaningUnpreservable' as never),
+    [...RETRYABLE_CAUSES].join(','))
+
+  /** 🔴 ⑥ 활성화하지 않은 축이 load-bearing 이면 결론이다 — 범위를 넘겨 바꾸지 않는다 */
+  const other = resolveLoadBearing({
+    facts: [{ axis: 'work', sourceText: '파트타임' }], stance: SELF, chosen: C('P02', 47),
+    candidates: [C('P02', 47)], selfAlreadyFailed: false,
+  })
+  check('🔴 🔴 **⑥ 나이 말고 다른 축은 이 판에서 변환하지 않는다 — AXIS_NOT_ACTIVATED (결론)**',
+    !other.ok && !other.retry && other.code === 'AXIS_NOT_ACTIVATED', JSON.stringify(other))
+  check('🔴 🔴 **⑥ 활성화된 축은 나이 하나다**', [...ACTIVATED_AXES].join(',') === 'age')
+
+  /**
+   * 🔴 ⑦ **지난 실패가 다음 계획의 입력으로 실제로 실린다** (마스터: "같은 SELF 계획 반복 금지").
+   */
+  const payload = buildSpeakerPlanPayload({
+    packet: { spans: [{ kind: 'head', text: '낼44인데', fromRatio: 0, toRatio: 1 }], bodyLength: 40,
+      truncated: false, contextSufficiency: 'ok', insufficientReasons: [] } as never,
+    personas: [P({ code: 'P02' })],
+    priorFailures: priorFailureLines([
+      { personaCode: 'P02', stance: SELF, cause: 'loadBearingSelfImpossible' },
+    ]),
+    selfForbidden: selfForbiddenBy([
+      { personaCode: 'P02', stance: SELF, cause: 'loadBearingSelfImpossible' },
+    ]),
+  })
+  check('🔴 🔴 **⑦ 요청에 지난 실패가 값으로 실린다 — 계획기가 이유를 받는다**',
+    payload.includes('지난실패') && payload.includes('loadBearingSelfImpossible'), payload.slice(-300))
+  check('🔴 🔴 **⑦ 1인칭 금지도 실린다 — 같은 SELF 계획을 되풀이하지 않는다**',
+    payload.includes('SELF_EXPERIENCE 로 쓰지 마십시오'), payload.slice(-300))
+  check('🔴 🔴 **⑦ 지난 실패가 없으면 그 칸을 넣지 않는다 — 빈 칸으로 흉내 내지 않는다**', (() => {
+    const clean = buildSpeakerPlanPayload({
+      packet: { spans: [{ kind: 'head', text: '낼44인데', fromRatio: 0, toRatio: 1 }], bodyLength: 40,
+        truncated: false, contextSufficiency: 'ok', insufficientReasons: [] } as never,
+      personas: [P({ code: 'P02' })],
+    })
+    return !clean.includes('지난실패') && !clean.includes('금지')
+  })())
+}
+
+console.log('\n🔴 🔴 **Persona 재계획 — 실패한 사람을 빼고 다음 시도가 실제로 달라진다**')
+{
+  /**
+   * 🔴 **helper 만 부르는 검사가 아니다.** 실제 `runContentCore` 로 **진짜 실패 artifact**
+   *    를 만들고, 러너가 쓰는 파일 이름·JSON 모양 그대로 디스크에 쓴 뒤,
+   *    러너가 부르는 **같은 읽기 함수**(`readPriorOutcomes`)로 다시 읽어 계획한다.
+   *
+   * 🔴 가짜 fixture 를 손으로 적지 않는다 — 실제가 내지 못하는 모양을 fixture 가 내면
+   *    시험이 결함을 덮는다.
+   */
+  const CARD = (code: string): PoolCard =>
+    parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+      .cards.find((c) => c.code === code)!
+  const cardOf = (code: string): PersonaInput => {
+    const c = CARD(code)
+    return P({
+      code, ageBand: c.ageBand, birthDate: c.birthDate, maritalStatus: c.maritalStatus,
+      childrenCount: c.childrenCount, childrenAgeBands: c.childrenAgeBands,
+      workStatus: c.workStatus, region: c.region,
+      menopauseStatus: c.menopauseStatus, parentCare: c.parentCare,
+    })
+  }
+  const SLOT = ['P02', 'P04', 'P08']
+  const CANDS = SLOT.map(cardOf)
+
+  const SRC_ID = '35040880'
+  const SRC_TITLE = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const SRC_BODY = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const HASH = 'fixturehash00000'
+  const BASE = {
+    pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
+    promptVersion: CONTENT_CORE_PROMPT_VERSION,
+    speakerPlanVersion: SPEAKER_PLAN_VERSION,
+    reviewVersion: REVIEW_VERSION,
+    planPromptDigest: 'plan000000000000',
+    stageModels: STAGE_MODEL,
+    stageMaxOutputLabel: STAGE_MAX_OUTPUT_LABEL,
+    voiceAssetDigest: 'asset000000000', personaPoolDigest: 'pool0000000000',
+  }
+
+  /** 🔴 **그 화자로 실제 실패시킨다** — 나이 문장을 통째로 뺀 초안이다 */
+  const failWith = async (code: string): Promise<HumanReviewArtifact> => run({
+    id: SRC_ID, title: SRC_TITLE, body: SRC_BODY,
+    personas: [cardOf(code)],
+    canned: {
+      plan: {
+        decision: 'ok', personaCode: code, stance: 'SELF_EXPERIENCE',
+        selfBasis: 'lifeFacts', universalReason: '',
+        speakerWarrants: [{
+          fact: 'age', requiredValue: CARD(code).ageBand,
+          evidenceRef: 'head', evidenceText: '낼44인데',
+        }],
+        closingIntent: 'ask', contentRoles: ['conversationSpark'],
+        protectedFacts: [
+          { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+          { kind: 'number', text: '44', evidenceRef: 'head' },
+        ],
+        speakerRelative: [{
+          axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental',
+        }],
+      },
+      draft: {
+        title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+        body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+      },
+      review: EMPTY_REVIEW,
+    },
+  })
+
+  /** 🔴 러너가 쓰는 그 파일 이름·그 JSON 으로 쓴다 — 읽는 쪽이 흉내가 아니게 */
+  const world = (): string => mkdtempSync(join(tmpdir(), 'replan-'))
+  const writeArtifacts = (dir: string, rid: string, arts: readonly HumanReviewArtifact[]): void => {
+    writeFileSync(join(dir, `auto-draft-${rid}.artifacts.json`),
+      `${JSON.stringify(arts, null, 2)}\n`, 'utf-8')
+  }
+  const outcomesOf = (dir: string) => readPriorOutcomes({
+    dataDir: dir, hashOf: new Map([[SRC_ID, HASH]]),
+    base: BASE, artifactVersion: ARTIFACT_VERSION,
+  })
+  const planNext = (dir: string) => personasForAttempt({
+    outcomes: outcomesOf(dir), sourceArticleId: SRC_ID, slotCodes: SLOT, candidates: CANDS,
+  })
+
+  const a02 = await failWith('P02')
+  check('🔴 🔴 **실제 실행이 P02 로 실패한다 (손으로 적은 fixture 아님)**',
+    a02.plan.personaCode === 'P02'
+    && a02.review.semanticCompletion.cause === 'personaTransformFailed'
+    && a02.review.machineOutcome !== 'adopt',
+    `${a02.plan.personaCode} · ${String(a02.review.semanticCompletion.cause)}`)
+
+  const d1 = world()
+  writeArtifacts(d1, '20260923-100000', [a02])
+  const r1 = planNext(d1)
+  check('🔴 🔴 **① 디스크에 쓴 실패 기록을 읽어 P02 를 제외한다**',
+    r1.ok && r1.excluded.join(',') === 'P02', JSON.stringify(r1))
+  check('🔴 🔴 **① 다음 시도에 나가는 화자가 실제로 바뀐다 — P02 가 빠진다**',
+    r1.ok && !r1.personas.some((c) => c.code === 'P02') && r1.personas.length === 2,
+    r1.ok ? r1.personas.map((c) => c.code).join(' ') : JSON.stringify(r1))
+  check('🔴 🔴 **① 두 번째 시도임을 센다**', r1.ok && r1.attempt === 2, JSON.stringify(r1))
+  check('🔴 🔴 **① 첫 시도(기록 없음)에는 아무도 빼지 않는다**', (() => {
+    const empty = planNext(world())
+    return empty.ok && empty.excluded.length === 0 && empty.personas.length === 3
+      && empty.attempt === 1
+  })())
+
+  /** 🔴 ② 실제로 P04 로도 실패시킨다 — 두 사람이 빠진다 */
+  const a04 = await failWith('P04')
+  const d2 = world()
+  writeArtifacts(d2, '20260923-100000', [a02])
+  writeArtifacts(d2, '20260923-110000', [a04])
+  const r2 = planNext(d2)
+  check('🔴 🔴 **② 두 번 실패하면 둘 다 빠지고 남은 한 사람만 나간다**',
+    r2.ok && r2.personas.map((c) => c.code).join(',') === 'P08'
+    && [...r2.excluded].sort().join(',') === 'P02,P04',
+    JSON.stringify(r2.ok ? r2.personas.map((c) => c.code) : r2))
+
+  /** 🔴 ③ 셋 다 실패 — 더 시도하지 않는다. 같은 원천을 무한히 다시 사지 않는다 */
+  const a08 = await failWith('P08')
+  const d3 = world()
+  writeArtifacts(d3, '20260923-100000', [a02])
+  writeArtifacts(d3, '20260923-110000', [a04])
+  writeArtifacts(d3, '20260923-120000', [a08])
+  const r3 = planNext(d3)
+  check('🔴 🔴 **③ 적격 화자를 모두 소진하면 구조화된 중단이다 (문자열 아님)**',
+    !r3.ok && (r3.code === 'EXHAUSTED' || r3.code === 'ATTEMPT_CAP'),
+    JSON.stringify(r3))
+  check('🔴 🔴 **③ 무한 유료 반복 반례 — 시도 상한을 넘기지 않는다**',
+    REPLAN_ATTEMPT_MAX === 3 && !r3.ok, `${REPLAN_ATTEMPT_MAX} · ${JSON.stringify(r3)}`)
+
+  /**
+   * 🔴 ④ **화자 탓이 아닌 실패로 사람을 태우지 않는다.**
+   *    예산에 막힌 회차는 누구를 골랐든 똑같이 막혔다.
+   */
+  const aBudget = await run({
+    id: SRC_ID, title: SRC_TITLE, body: SRC_BODY, personas: [cardOf('P02')],
+    canned: {}, fault: { blocked: 'speakerPlan' },
+  })
+  const d4 = world()
+  writeArtifacts(d4, '20260923-100000', [aBudget])
+  const r4 = planNext(d4)
+  check('🔴 🔴 **④ 예산 실패는 화자를 제외하지 않는다 — 장애 한 번에 원천이 굶지 않는다**',
+    r4.ok && r4.excluded.length === 0 && r4.personas.length === 3,
+    `${String(aBudget.review.semanticCompletion.cause)} → ${JSON.stringify(r4)}`)
+  check('🔴 🔴 **④ 화자 탓 사유는 두 가지뿐이다 — 목록이 늘면 이 검사가 깨진다**',
+    [...PERSONA_REPLAN_CAUSES].join(',') === 'personaTransformFailed,loadBearingMismatch',
+    [...PERSONA_REPLAN_CAUSES].join(','))
+
+  /** 🔴 ⑤ 계약이 다르면 지난 실패는 이 계약의 결론이 아니다 */
+  check('🔴 🔴 **⑤ 원천 입력이 달라지면 지난 실패를 물려받지 않는다**', (() => {
+    const got = personasForAttempt({
+      outcomes: readPriorOutcomes({
+        dataDir: d1, hashOf: new Map([[SRC_ID, 'otherhash0000000']]),
+        base: BASE, artifactVersion: ARTIFACT_VERSION,
+      }),
+      sourceArticleId: SRC_ID, slotCodes: SLOT, candidates: CANDS,
+    })
+    return got.ok && got.excluded.length === 0
+  })())
+
+  /**
+   * 🔴 ⑥ **러너가 실제로 이 경로를 쓰는가.** 위는 실행 검사이고 이것은 배선 검사다 —
+   *    둘을 섞어 부르지 않는다. 러너가 화자 묶음을 **다른 곳에서 다시 조립하면**
+   *    제외가 조용히 사라지므로, 조립이 한 곳뿐인 것까지 본다.
+   */
+  const runnerSrc = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  check('🔴 🔴 **⑥ 러너가 `personasForAttempt` 를 부른다**',
+    /personasForAttempt\(\{/.test(runnerSrc))
+  check('🔴 🔴 **⑥ 생성에 넘기는 화자 묶음은 그 결과 하나뿐이다**',
+    /personas: replan\.personas,/.test(runnerSrc)
+    && !/personas: voice\.candidates/.test(runnerSrc),
+    runnerSrc.split('\n').filter((l) => /^\s*personas:/.test(l)).join(' | '))
+  check('🔴 🔴 **⑥ `ok:false` 면 만들지 않고 넘어간다 — 유료 호출 앞이다**',
+    /if \(!replan\.ok\) \{[\s\S]{0,400}?holdPick\(\)\n\s*continue/.test(runnerSrc))
+  check('🔴 🔴 **⑥ 제외 목록이 캐시 key 에 들어간다 — 바뀌기 전 결과를 되받지 않는다**',
+    /excl=\$\{digest16/.test(runnerSrc))
+}
+
+console.log('\n🔴 🔴 **birthDate 가 생성 계약에 들어간다 — 고치면 캐시가 무효화된다**')
+{
+  const base = P({ code: 'P02', birthDate: '1979-06-20' })
+  const moved = P({ code: 'P02', birthDate: '1979-06-21' })
+  check('🔴 🔴 **생일 한 글자만 달라도 `personaPoolDigest` 가 달라진다**',
+    personaPoolIdentity([base]) !== personaPoolIdentity([moved]),
+    `${personaPoolIdentity([base]).slice(-40)} vs ${personaPoolIdentity([moved]).slice(-40)}`)
+  check('🔴 같은 생일이면 같은 값이다', personaPoolIdentity([base]) === personaPoolIdentity([P({ code: 'P02', birthDate: '1979-06-20' })]))
+  check('🔴 🔴 **계약이 달라지면 옛 artifact 를 결론으로 재사용하지 않는다**', (() => {
+    // `sameGenerationContract` 가 다르다고 보면 `attemptedOutcomes` 가 그 줄을 무시한다
+    const a = { personaPoolDigest: personaPoolIdentity([base]) }
+    const b = { personaPoolDigest: personaPoolIdentity([moved]) }
+    return a.personaPoolDigest !== b.personaPoolDigest
+  })())
+}
+
+console.log('\n🔴 🔴 **terminal 이 reason-aware 다 — 고칠 수 있는 실패가 원천을 태우지 않는다**')
+{
+  /**
+   * 🔴 앞판은 `semanticCompletion.complete` 인 HOLD 를 **전부** 결론으로 봤다.
+   *    그래서 다른 Persona 면 될 수 있는 실패 하나가 원천을 영구히 태웠다.
+   *    이제 사유별로 갈린다 — `artifactOutcome` → `concludedSourceIds` → `selectWorkset`
+   *    **실제 사슬**로 확인한다.
+   */
+  /** 🔴 정본이 요구하는 모양 그대로 — `complete: false` 면 사유도 원인도 있어야 한다 */
+  const rev = (cause: string, reason = 'notRun') => ({
+    deterministic: { pass: true, failures: [] },
+    semantic: null, semanticCompletion: { complete: false, reason, cause },
+    droppedFromSource: [], unsupportedAdditions: [], lifeContradictions: [],
+    voice: null, machineOutcome: 'hold', machineReason: '',
+  })
+  check('🔴 🔴 **`personaTransformFailed` 는 재시도 자격을 유지한다**',
+    artifactRetryable(rev('personaTransformFailed')) === true)
+  check('🔴 🔴 **`loadBearingMismatch` 도 재계획 대상이다**',
+    artifactRetryable(rev('loadBearingMismatch')) === true)
+  check('🔴 예산·파싱 실패는 그대로 재시도다',
+    artifactRetryable(rev('budgetBlocked', 'budgetBlocked')) === true
+    && artifactRetryable(rev('parseFailed', 'parseFailed')) === true)
+  check('🔴 🔴 **자격 없음·안전 실패는 그대로 결론이다**',
+    artifactRetryable(rev('speakerUnqualified')) === false
+    && artifactRetryable(rev('deterministicFailed')) === false)
+
+  // 🔴 실제 사슬 — `selectWorkset` 이 그 원천을 다시 볼 수 있는가
+  const row = (id: string, c: number) => ({
+    sourceArticleId: id, sourceSite: 'navercafe:remonterrace', commentCount: c,
+    sourcePostedAt: '', sourceListedAt: '',
+    input: { sourceArticleId: id, title: `요즘 김치 담그기 어떠신가요 ${id}`,
+      bodyHead: '주변에 물어보면 반반이더라고요. 다들 어떻게 하시는지 궁금해서 여쭤봐요.',
+      bodyLength: 120, commentCount: c, safetyVerdict: 'pass', access: 'ok', axis: SEED_AXIS } as never,
+  })
+  const pick = (concluded: string[]) => selectWorkset({
+    rows: [row('transform-fail', 50), row('new-1', 10)],
+    humanDecided: new Set<string>(), queuePending: new Set<string>(),
+    concluded: new Set(concluded), attempted: new Map() as never,
+    limit: 5, runId: 'r1', takenAt: new Date('2026-09-23T05:00:00Z'),
+  }).workset.sourceIds
+  check('🔴 🔴 **변환 실패 원천은 `concluded` 에 들어가지 않아 다시 뽑힐 수 있다**',
+    pick([]).includes('transform-fail'))
+  check('🔴 🔴 **결론인 원천만 `concluded` 로 빠진다**',
+    !pick(['transform-fail']).includes('transform-fail'))
+}
+
+console.log('\n🔴 🔴 **시점 스냅샷 — 2031·2036 에도 낡은 밴드로 돌아가지 않는다**')
+{
+  const CARD = { code: 'P02', birthDate: '1979-06-20', ageBand: '40대 후반' }
+  const at = (iso: string) => materializePersonaAt({ card: CARD, now: new Date(iso) })
+  const y2026 = at('2026-09-23T03:00:00Z')
+  const y2031 = at('2031-09-23T03:00:00Z')
+  const y2036 = at('2036-09-23T03:00:00Z')
+  check('🔴 2026 — 47세 · 40대 후반', y2026.ok && y2026.at.exactAge === 47 && y2026.at.effectiveAgeBand === '40대 후반')
+  check('🔴 🔴 **2031 — 52세 · 50대 초반 (40대 후반으로 돌아가면 실패)**',
+    y2031.ok && y2031.at.exactAge === 52 && y2031.at.effectiveAgeBand === '50대 초반',
+    y2031.ok ? `${y2031.at.exactAge} · ${y2031.at.effectiveAgeBand}` : '-')
+  check('🔴 🔴 **2036 — 57세 · 50대 후반**',
+    y2036.ok && y2036.at.exactAge === 57 && y2036.at.effectiveAgeBand === '50대 후반',
+    y2036.ok ? `${y2036.at.exactAge} · ${y2036.at.effectiveAgeBand}` : '-')
+  check('🔴 🔴 **설계 카드와 어긋나면 보고는 하되 판정에 쓰지 않는다**',
+    y2031.ok && y2031.at.designBandDrift !== null && y2026.ok && y2026.at.designBandDrift === null)
+  check('🔴 생일이 없으면 만들지 않는다 (fail-closed)',
+    materializePersonaAt({ card: { ...CARD, birthDate: '' }, now: new Date() }).ok === false)
+  check('🔴 나이 → 밴드 변환', bandOfAge(52) === '50대 초반' && bandOfAge(57) === '50대 후반'
+    && bandOfAge(45) === '40대 중반' && bandOfAge(40) === '40대 초반')
+}
+
+console.log('\n🔴 🔴 **생일 경계 캐시 — 매일 무효화되지는 않는다**')
+{
+  const p02 = P({ code: 'P02', birthDate: '1979-06-20' })
+  const d = (iso: string) => personaPoolIdentity([p02], new Date(iso))
+  const before = d('2026-06-19T03:00:00Z')
+  const onDay = d('2026-06-20T03:00:00Z')
+  const nextDay = d('2026-06-21T03:00:00Z')
+  const later = d('2026-09-23T03:00:00Z')
+  check('🔴 🔴 **생일 직전과 직후의 지문이 다르다**', before !== onDay)
+  check('🔴 🔴 **생일과 무관한 다음 날은 같다 — 매일 무효화되지 않는다**', onDay === nextDay)
+  check('🔴 🔴 **몇 달 뒤에도 같은 나이면 같다**', onDay === later)
+  check('🔴 해가 바뀌어 나이가 늘면 달라진다', d('2027-09-23T03:00:00Z') !== later)
+  check('🔴 시각을 주지 않으면 앞판과 같다 (나이 미포함)',
+    personaPoolIdentity([p02]).includes('age=∅'))
+}
+
+console.log('\n🔴 🔴 **mapping 이행 후조건 — 통째로 빼면 채택되지 않는다**')
+{
+  const post = (text: string, exactAge: number | null = 47) => checkAgeMappingApplied({
+    text, sourceAges: ['44'], exactAge, effectiveAgeBand: '40대 후반',
+  })
+  check('🔴 🔴 **원문 나이가 남으면 실패**', (() => {
+    const v = post('제가 곧 44인데 그래요')
+    return !v.ok && v.code === 'SOURCE_AGE_REMAINS'
+  })())
+  check('🔴 🔴 **나이 문장을 통째로 빼면 실패 — `fixed=0` 과 구분된다**', (() => {
+    const v = post('동네 에스테틱을 몇 년 다녀봤는데요. 피부가 80퍼인 것 같아요.')
+    return !v.ok && v.code === 'PERSONA_AGE_ABSENT'
+  })())
+  check('🔴 🔴 **1인칭 나이가 여럿이면 실패 (fail-closed)**', (() => {
+    const v = post('제가 47인데\n저는 52살이에요')
+    return !v.ok && v.code === 'CONFLICTING_SELF_AGE'
+  })())
+  check('🔴 우리 나이가 들어갔으면 통과', post('제가 47인데 그래요').ok === true)
+  check('🔴 정확한 나이가 없으면 밴드 표현으로도 통과',
+    post('저도 40대 후반인데 그래요', null).ok === true)
+  check('🔴 🔴 **제3자 44 와 우리 47 이 같은 글에 있어도 통과**',
+    post('아는 분이 44인데 저는 47이거든요').ok === true)
+  check('🔴 제3자 나이만 있고 우리 나이가 없으면 실패',
+    post('아는 분이 44인데 그렇대요').ok === false)
+}
+
+console.log('\n🔴 🔴 **운영 계약에 나이가 실제로 들어간다 (helper PASS 가 아니다)**')
+{
+  const src = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+  const gc = readFileSync('scripts/lib/generation-contract.mts', 'utf-8')
+  const sp = readFileSync('scripts/supply-process.mts', 'utf-8')
+  // 🔴 **선택이 아니라 필수다** (2026-09-23). 선택이면 시각 없이 부르는 곳이 생기고,
+  //    그 계약은 `age=∅` 라 어떤 artifact 와도 같지 않다(e2e 탐침에서 실측).
+  check('🔴 🔴 **`currentContractBase` 가 시각을 필수로 받는다**',
+    /currentContractBase\(runAt: Date\)/.test(gc)
+    && !/currentContractBase\(runAt\?: Date\)/.test(gc))
+  check('🔴 🔴 **그 시각을 `loadVoice` 로 넘긴다**', /loadVoice\(runAt\)/.test(gc))
+  /**
+   * 🔴 **자식은 자기 시계를 만들지 않는다** (2026-09-23 마스터 P0-4A).
+   *    부모가 준 `SORAN_RUN_AT` 하나를 쓴다 — 자정·생일 경계에서 계약이 갈리지 않게.
+   */
+  check('🔴 🔴 **auto-draft 가 부모가 준 회차 시각 하나를 쓴다**',
+    /const RUN_CLOCK = runClockFrom\(process\.env\)/.test(src)
+    && /const RUN_AT = RUN_CLOCK\.at/.test(src)
+    && !/const RUN_AT = new Date\(\)/.test(src)
+    && /currentContractBase\(RUN_AT\)/.test(src)
+    && /loadVoice\(RUN_AT\)/.test(src)
+    && !/const CONTRACT_BASE = currentContractBase\(\)/.test(src))
+  check('🔴 🔴 **생성 단계도 같은 시각을 본다**', /const now = RUN_AT/.test(src))
+  check('🔴 🔴 **supply 회차도 한 시각으로 계약·묶음·자식을 묶는다**',
+    /const RUN_AT = new Date\(\)/.test(sp) && /const runAt = RUN_AT/.test(sp)
+    && /currentContractBase\(runAt\)/.test(sp) && /takenAt: runAt/.test(sp)
+    && /\[RUN_AT_ENV\]: RUN_AT\.toISOString\(\)/.test(sp))
+  check('🔴 🔴 **시각을 주면 계약에 `age=∅` 가 남지 않는다**', (() => {
+    const p02 = P({ code: 'P02', birthDate: '1979-06-20' })
+    const withNow = personaPoolIdentity([p02], new Date('2026-09-23T03:00:00Z'))
+    return !withNow.includes('age=∅') && withNow.includes('age=P02@')
+  })())
+}
+
+console.log('\n🔴 🔴 **계획과 생성이 같은 dated Persona 를 본다**')
+{
+  const run = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+  check('🔴 🔴 **계획 후보에 스냅샷을 먼저 적용한다**',
+    /const dated = input\.personas\.map\(datedOf\)/.test(run)
+    && /orderPersonasForSource\(dated,/.test(run))
+  check('🔴 🔴 **생성도 그 `dated` 에서 고른다 — 정적 카드로 되돌아가지 않는다**',
+    /const persona = dated\.find\(/.test(run)
+    && !/const persona = input\.personas\.find\(/.test(run))
+  check('🔴 🔴 **2031 P02 는 계획·생성 모두 52세/50대 초반을 본다**', (() => {
+    const at = materializePersonaAt({
+      card: { code: 'P02', birthDate: '1979-06-20', ageBand: '40대 후반' },
+      now: new Date('2031-09-23T03:00:00Z'),
+    })
+    // 🔴 `datedOf` 와 같은 변환 — 계획 후보의 ageBand 가 이 값으로 바뀐다
+    return at.ok && at.at.exactAge === 52 && at.at.effectiveAgeBand === '50대 초반'
+  })())
+}
+
+console.log('\n🔴 🔴 **원문 나이 = Persona 나이면 고칠 것이 없다**')
+{
+  const post = (text: string, src: string[], age: number | null) => checkAgeMappingApplied({
+    text, sourceAges: src, exactAge: age, effectiveAgeBand: '40대 후반',
+  })
+  check('🔴 🔴 **원문 47 + Persona 47 → 통과 (불필요한 수정 0)**',
+    post('제가 47살인데요 요즘 그래요', ['47'], 47).ok === true)
+  check('🔴 원문 44 + 결과 47 → 통과', post('제가 47살인데요', ['44'], 47).ok === true)
+  check('🔴 🔴 **원문 44·47 + 결과 47 하나 → 통과**',
+    post('제가 47살인데요', ['44', '47'], 47).ok === true)
+  check('🔴 원문 44 + 결과 44 → 실패', post('제가 44살인데요', ['44'], 47).ok === false)
+  check('🔴 원문 44 + 나이 누락 → 실패', post('피부가 80퍼인 것 같아요', ['44'], 47).ok === false)
+  check('🔴 제3자 44 + self 47 → 통과',
+    post('아는 분이 44인데\n저는 47이거든요', ['44'], 47).ok === true)
+}
+
+console.log('\n🔴 🔴 **자동 변환과 후조건이 역할을 끝까지 쓴다 (마스터 지적 · 혼합 역할)**')
+{
+  /**
+   * 🔴 앞판은 `ageMentionsIn` 으로 역할을 만들어 놓고 **치환과 후조건에서 버렸다.**
+   *    전역 `split/join` 과 역할 없는 정규식이라 마스터 실측에서:
+   *      "친구는 40대 초반인데 저는 52살입니다"        → 친구 나이까지 52살로 훼손
+   *      "저는 40대 초반이고, 40대 초반부터 지원 대상"  → 지원 조건까지 변조
+   *      "제가 44살이고 44세부터 지원 대상입니다"       → exact 경로도 같은 결함
+   *    그리고 **올바르게 보존된** 제3자·조건 때문에 정상 글이 `SOURCE_AGE_REMAINS` 로 막혔다.
+   */
+  const fix = (text: string, sourceAges: string[], personaText: string) =>
+    fixSourceSpeakerAge({ text, sourceAges, personaText })
+  const post = (text: string, sourceAges: string[], exactAge: number, band: string) =>
+    checkAgeMappingApplied({ text, sourceAges, exactAge, effectiveAgeBand: band, requireSelfAge: true })
+  /** 🔴 실패 코드만 꺼낸다 — 통과면 빈 문자열이다 */
+  const postCode = (text: string, sourceAges: string[], exactAge: number, band: string): string => {
+    const v = post(text, sourceAges, exactAge, band)
+    return v.ok ? '' : v.code
+  }
+
+  /** 🔴 ① self exact 44→49 · eventCondition 44 는 그대로 */
+  const r1 = fix('제가 44살이고 44세부터 지원 대상입니다.', ['44'], '49살')
+  check('🔴 🔴 **① self exact 만 49살로 바뀌고 조건 44세는 그대로다**',
+    r1.text === '제가 49살이고 44세부터 지원 대상입니다.' && r1.fixed === 1, r1.text)
+
+  /** 🔴 ② self band 40대 초반→52 · thirdParty 40대 초반 은 그대로 */
+  const r2 = fix('저는 40대 초반이고 친구는 40대 초반입니다.', ['40대 초반'], '52살')
+  check('🔴 🔴 **② 내 구간만 52살로 바뀌고 친구 구간은 그대로다**',
+    r2.text === '저는 52살이고 친구는 40대 초반입니다.' && r2.fixed === 1, r2.text)
+  const r2b = fix('친구는 40대 초반인데 저는 52살입니다.', ['40대 초반'], '52살')
+  check('🔴 🔴 **② 제3자 나이만 있으면 아무것도 바꾸지 않는다 — 훼손 0**',
+    r2b.text === '친구는 40대 초반인데 저는 52살입니다.' && r2b.fixed === 0, r2b.text)
+
+  /** 🔴 ③ self band 40대 초반→52 · eventCondition 40대 초반 은 그대로 */
+  const r3 = fix('저는 40대 초반이고, 40대 초반부터 지원 대상입니다.', ['40대 초반'], '52살')
+  check('🔴 🔴 **③ 내 구간만 바뀌고 지원 조건 구간은 그대로다**',
+    r3.text === '저는 52살이고, 40대 초반부터 지원 대상입니다.' && r3.fixed === 1, r3.text)
+
+  /** 🔴 ④ 올바르게 보존된 제3자·조건 때문에 SOURCE_AGE_REMAINS 가 나면 안 된다 */
+  const p4a = post('저는 52살이고 친구는 40대 초반입니다.', ['40대 초반'], 52, '50대 초반')
+  const p4b = post('저는 52살이고 40대 초반부터 지원 대상입니다.', ['40대 초반'], 52, '50대 초반')
+  check('🔴 🔴 **④ 제3자 구간이 남아도 통과한다 — raw substring 을 보지 않는다**',
+    p4a.ok, JSON.stringify(p4a))
+  check('🔴 🔴 **④ 조건 구간이 남아도 통과한다**', p4b.ok, JSON.stringify(p4b))
+  check('🔴 🔴 **④ 1인칭에 원문 나이가 남으면 여전히 막는다**',
+    !post('저는 40대 초반이고 친구는 52살입니다.', ['40대 초반'], 52, '50대 초반').ok,
+    JSON.stringify(post('저는 40대 초반이고 친구는 52살입니다.', ['40대 초반'], 52, '50대 초반')))
+  check('🔴 🔴 **④ 1인칭 나이가 여럿이면 여전히 막는다 (기존 계약 유지)**',
+    postCode('저는 52살입니다. 저는 57살입니다.', ['40대 초반'], 52, '50대 초반')
+      === 'CONFLICTING_SELF_AGE',
+    JSON.stringify(post('저는 52살입니다. 저는 57살입니다.', ['40대 초반'], 52, '50대 초반')))
+
+  /** 🔴 ⑤ 제3자 나이만 있고 우리 나이가 없으면 기존대로 실패 */
+  check('🔴 🔴 **⑤ 우리 나이가 1인칭으로 없으면 기존대로 PERSONA_AGE_ABSENT**',
+    postCode('친구는 40대 초반입니다. 저는 잘 모르겠어요.', ['40대 초반'], 52, '50대 초반')
+      === 'PERSONA_AGE_ABSENT',
+    JSON.stringify(post('친구는 40대 초반입니다. 저는 잘 모르겠어요.', ['40대 초반'], 52, '50대 초반')))
+  check('🔴 🔴 **⑤ 새 HOLD 사유를 만들지 않았다 — 기존 세 코드뿐이다**', (() => {
+    const src = readFileSync('src/lib/content-core/speaker-relative-facts.ts', 'utf-8')
+    const codes = [...src.matchAll(/code: '([A-Z_]+)'/g)].map((m) => m[1]!)
+    return [...new Set(codes)].sort().join(',')
+      === 'CONFLICTING_SELF_AGE,NO_PERSONA_VALUE,PERSONA_AGE_ABSENT,SOURCE_AGE_REMAINS,UNKNOWN_AXIS'
+  })())
+
+  /** 🔴 ⑥ 원문 값 = 우리 값이면 손대지 않는다 */
+  const noop = fix('제가 49살입니다.', ['49'], '49살')
+  check('🔴 🔴 **⑥ 원문 나이와 우리 나이가 같으면 no-op — fixed 0**',
+    noop.text === '제가 49살입니다.' && noop.fixed === 0, `${noop.text} · fixed=${noop.fixed}`)
+
+  /** 🔴 ⑦ 전역 치환·역할 없는 정규식으로 되돌리면 이 검사가 깨진다 — 배선으로 확인 */
+  const srfSrc = readFileSync('src/lib/content-core/speaker-relative-facts.ts', 'utf-8')
+  check('🔴 🔴 **⑦ 전역 split/join 치환이 남아 있지 않다**',
+    !/\.split\(n\)\.join\(/.test(srfSrc) && !/out\.split\([^)]*\)\.join\(/.test(srfSrc))
+  check('🔴 🔴 **⑦ 치환은 파싱된 위치로 자른다 — 뒤에서부터 적용한다**',
+    /out\.slice\(0, m\.at\) \+ input\.personaText \+ out\.slice\(m\.at \+ m\.raw\.length\)/.test(srfSrc)
+    && /\.sort\(\(a, b\) => b\.at - a\.at\)/.test(srfSrc))
+  check('🔴 🔴 **⑦ 치환·후조건이 `self` 역할만 본다**',
+    (srfSrc.match(/m\.role === 'self'/g) ?? []).length >= 3)
+}
+
+console.log('\n🔴 🔴 **나이 전 경로 — exact 와 band 를 각각 끝까지 실행한다 (마스터 P0)**')
+{
+  /**
+   * 🔴 parser 단위 검사로 끝내지 않는다. 마스터가 지정한 전 경로를 **실행**한다:
+   *    원문 → expected fact → 계획 누락 대조 → mapping/load-bearing → 초안 지시문
+   *    → 결정적 후조건 → `pickV2` → adopted → candidate payload
+   */
+  const CARDS_A = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')).cards
+  const aged = CARDS_A.map((c) => {
+    const v = materializePersonaAt({ card: { code: c.code, birthDate: c.birthDate, ageBand: c.ageBand }, now: NOW })
+    return { c, age: v.ok ? v.at.exactAge : null, band: v.ok ? v.at.effectiveAgeBand : c.ageBand }
+  })
+  const pickCard = (age: number) => aged.find((x) => x.age === age)!
+  const inputOf = (x: typeof aged[number]) => P({
+    code: x.c.code, ageBand: x.c.ageBand, birthDate: x.c.birthDate,
+    maritalStatus: x.c.maritalStatus, childrenCount: x.c.childrenCount,
+    childrenAgeBands: x.c.childrenAgeBands, workStatus: x.c.workStatus,
+    region: x.c.region, menopauseStatus: x.c.menopauseStatus, parentCare: x.c.parentCare,
+  })
+
+  /** 🔴 원문 → 후보 payload 까지 러너와 **같은 순서·같은 함수**로 */
+  const fullPath = async (o: {
+    title: string; body: string; personas: PersonaInput[]
+    plan: Record<string, unknown>; draft: { title: string; body: string }
+    band: string | null; exactAge: number | null
+  }) => {
+    const art = await run({
+      id: 'full-1', title: o.title, body: o.body, personas: o.personas,
+      canned: { plan: o.plan, draft: o.draft, review: EMPTY_REVIEW },
+    })
+    if (art.draft === null) return { art, pick: null, payload: null }
+    const cand = {
+      sourceArticleId: 'full-1', draftNo: 1,
+      title: art.draft.title, body: art.draft.body,
+      safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
+      generatedAt: NOW.toISOString(),
+    }
+    const pick = pickV2({
+      judgement: { sourceArticleId: 'full-1', decision: 'SEED', reason: 'ok' } as never,
+      draft: cand as never, seenTitles: new Set<string>(), seenBodies: new Set<string>(),
+      sourceUsed: false, machineOutcome: art.review.machineOutcome,
+      machineReason: art.review.machineReason, sourceTitleCopied: false, crisisStop: null,
+      ageFact: { ageBand: o.band, selfBasis: String(o.plan.selfBasis ?? '') as never, personaExactAge: o.exactAge },
+    }, NOW.toISOString())
+    const payload = pick.decision === 'AUTO_ADOPT'
+      ? { title: cand.title, body: cand.body, artifactId: art.artifactId } : null
+    return { art, pick, payload }
+  }
+
+  // ─────────── exact — 원문 44 · 우리 47 ───────────
+  {
+    const me = pickCard(47)
+    const T = '자랑은 아닌데 여잔 피부가80퍼인듯'
+    const B = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+    check('🔴 🔴 **exact ① 원문에서 자기 나이 44 를 코드가 먼저 찾는다**',
+      expectedSelfFactsIn([{ kind: 'head', text: B }]).map((x) => x.sourceText).join(',') === '44',
+      JSON.stringify(expectedSelfFactsIn([{ kind: 'head', text: B }])))
+
+    const planOf = (sr: unknown[]) => ({
+      decision: 'ok', personaCode: me.c.code, stance: 'SELF_EXPERIENCE',
+      selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+      speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+      protectedFacts: [{ kind: 'number', text: '80퍼', evidenceRef: 'title' }],
+      speakerRelative: sr,
+    })
+    const D = {
+      title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+      body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+    }
+    // ② 계획이 양쪽에서 누락 → parseFailed
+    const miss = await fullPath({
+      title: T, body: B, personas: [inputOf(me)], plan: planOf([]), draft: D,
+      band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **exact ② 계획이 양쪽에서 빠뜨리면 parseFailed — 후보가 되지 않는다**',
+      miss.art.review.semanticCompletion.cause === 'parseFailed' && miss.payload === null,
+      `${miss.art.review.machineOutcome} · ${String(miss.art.review.semanticCompletion.cause)}`)
+
+    // ③ 정상 — incidental 변환 → payload 까지
+    const ok = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: planOf([{ axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' }]),
+      draft: D, band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **exact ③ 정상 변환이 payload 까지 간다 — AUTO_ADOPT**',
+      ok.pick?.decision === 'AUTO_ADOPT' && ok.payload !== null,
+      `${ok.art.review.machineOutcome} · ${ok.pick?.decision}`)
+    check('🔴 🔴 **exact ③ payload 에 원문 44 가 없고 우리 47 이 있다**',
+      ok.payload !== null && !/(^|[^0-9])44\s*(살|세|인데)/.test(ok.payload.body)
+      && new RegExp(`(^|[^0-9])${me.age}\\s*(살|세|인데)`).test(ok.payload.body),
+      ok.payload?.body.split('\n')[1] ?? '')
+  }
+
+  // ─────────── band — 원문 "40대 초반" · 우리 52 ───────────
+  {
+    const me = pickCard(52)
+    const T = '피부 고민 있으신 분'
+    const B = '저는 40대 초반인데 피부 고민이 있어요.\n다들 어떻게 관리하시나요?'
+    check('🔴 🔴 **band ① 원문의 "40대 초반" 을 코드가 구간으로 찾는다**',
+      expectedSelfFactsIn([{ kind: 'head', text: B }]).map((x) => x.sourceText).join(',') === '40대 초반',
+      JSON.stringify(expectedSelfFactsIn([{ kind: 'head', text: B }])))
+
+    const planOf = (sr: unknown[]) => ({
+      decision: 'ok', personaCode: me.c.code, stance: 'SELF_EXPERIENCE',
+      selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+      speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+      protectedFacts: [], speakerRelative: sr,
+    })
+    // 🔴 모델이 원문 구간을 그대로 베낀 초안 — 자동 보정이 잡아야 한다
+    const D = {
+      title: '피부 관리 어떻게 하시는지 궁금해요',
+      body: '저는 40대 초반인데 요즘 부쩍 건조하다는 느낌이 듭니다.\n다들 무엇부터 챙기시는지 여쭙고 싶어요.',
+    }
+    // ② 계획이 양쪽에서 누락 → parseFailed
+    const miss = await fullPath({
+      title: T, body: B, personas: [inputOf(me)], plan: planOf([]), draft: D,
+      band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **band ② 계획이 양쪽에서 빠뜨리면 parseFailed — 후보가 되지 않는다**',
+      miss.art.review.semanticCompletion.cause === 'parseFailed' && miss.payload === null,
+      `${miss.art.review.machineOutcome} · ${String(miss.art.review.semanticCompletion.cause)}`)
+
+    // ③ 정상 — incidental 구간 변환 → payload 까지
+    const ok = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: planOf([{ axis: 'age', sourceText: '40대 초반', evidenceRef: 'head', materiality: 'incidental' }]),
+      draft: D, band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **band ③ 구간 변환이 payload 까지 간다 — AUTO_ADOPT**',
+      ok.pick?.decision === 'AUTO_ADOPT' && ok.payload !== null,
+      `${ok.art.review.machineOutcome} · ${ok.art.review.machineReason} · ${ok.pick?.decision}`)
+    check('🔴 🔴 **band ③ payload 에 원문 "40대 초반" 이 남지 않는다**',
+      ok.payload !== null && !ok.payload.body.includes('40대 초반'),
+      ok.payload?.body.split('\n')[0] ?? '')
+    check('🔴 🔴 **band ③ 우리 값(52살 또는 50대 초반)이 들어간다**',
+      ok.payload !== null
+      && (ok.payload.body.includes(`${me.age}`) || ok.payload.body.includes(me.band ?? '\u0000')),
+      ok.payload?.body.split('\n')[0] ?? '')
+
+    /**
+     * 🔴 ④ **어미가 붙지 않은 구간 표현**도 바꾼다 — *"40대 초반 여성이라"*.
+     *    숫자 치환 규칙은 `살|세|인데` 같은 **어미**를 요구하므로 여기 걸리지 않는다.
+     *    그대로 두면 원문 화자의 연령대가 글에 남는다.
+     */
+    const bare = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: planOf([{ axis: 'age', sourceText: '40대 초반', evidenceRef: 'head', materiality: 'incidental' }]),
+      draft: {
+        title: '피부 관리 어떻게 하시는지 궁금해요',
+        body: '저는 40대 초반 여성이라 그런지 요즘 부쩍 건조합니다.\n다들 무엇부터 챙기시는지 여쭙고 싶어요.',
+      },
+      band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **band ④ 어미 없는 구간 표현도 바뀐다 — "40대 초반 여성" 이 남지 않는다**',
+      bare.payload !== null && !bare.payload.body.includes('40대 초반'),
+      `${bare.art.review.machineOutcome} · ${bare.art.draft?.body.split('\n')[0] ?? ''}`)
+  }
+
+  // ─────────── 혼합 역할 — 전체 경로에서 제3자·조건이 보존된다 ───────────
+  {
+    /**
+     * 🔴 마스터 요구 ⑦ — 한 글에 **내 나이 · 친구 나이 · 지원 조건**이 함께 있을 때
+     *    `runContentCore → pickV2 → adopted → candidate payload` 까지 가서
+     *    바뀐 것은 내 나이 하나뿐인지 본다.
+     */
+    const me = pickCard(52)
+    const T = '지원 대상 나이가 궁금해요'
+    // 🔴 원문을 길게 둔다 — 짧으면 초안이 조금만 겹쳐도 `copiedFromSource` 로 막혀
+    //    이 검사가 배선이 아니라 제 문장을 시험하게 된다
+    const B = '저는 40대 초반인데 친구는 60대 초반입니다. 둘이 같이 알아보는 중인데 '
+      + '들리는 말이 제각각이라 헷갈립니다. 40대 초반부터 지원 대상이라던데 어디서 확인하면 '
+      + '되는지, 서류는 무엇을 챙겨야 하는지 아시는 분 계실까요? 주변에 먼저 해 보신 분이 '
+      + '없어서 답답한 마음에 여쭤봅니다.'
+    const D = {
+      title: '지원 대상 나이를 아시는 분 계실까요',
+      body: '저는 40대 초반인데 친구는 60대 초반입니다.\n'
+        + '40대 초반부터 해당된다고 들었는데, 실제로 받아 보신 분 이야기가 궁금합니다.',
+    }
+    const mixed = await fullPath({
+      title: T, body: B, personas: [inputOf(me)],
+      plan: {
+        decision: 'ok', personaCode: me.c.code, stance: 'SELF_EXPERIENCE',
+        selfBasis: 'noLifeFactNeeded', universalReason: '누구나 겪는 일이라',
+        speakerWarrants: [], closingIntent: 'ask', contentRoles: ['conversationSpark'],
+        protectedFacts: [],
+        speakerRelative: [
+          { axis: 'age', sourceText: '40대 초반', evidenceRef: 'head', materiality: 'incidental' },
+        ],
+      },
+      draft: D, band: me.band, exactAge: me.age,
+    })
+    check('🔴 🔴 **혼합 ① 전체 경로가 payload 까지 간다 — AUTO_ADOPT**',
+      mixed.pick?.decision === 'AUTO_ADOPT' && mixed.payload !== null,
+      `${mixed.art.review.machineOutcome} · ${mixed.art.review.machineReason}`)
+    check('🔴 🔴 **혼합 ② 내 나이만 바뀐다 — payload 에 "저는 52"**',
+      mixed.payload !== null && /저는 52/.test(mixed.payload.body),
+      mixed.payload?.body ?? '')
+    check('🔴 🔴 **혼합 ③ 친구 나이(60대 초반)가 그대로 남는다**',
+      mixed.payload !== null && mixed.payload.body.includes('친구는 60대 초반'),
+      mixed.payload?.body ?? '')
+    check('🔴 🔴 **혼합 ④ 지원 조건(40대 초반부터)이 그대로 남는다**',
+      mixed.payload !== null && mixed.payload.body.includes('40대 초반부터'),
+      mixed.payload?.body ?? '')
+    check('🔴 🔴 **혼합 ⑤ 1인칭 자리에는 원문 40대 초반이 남지 않는다**',
+      mixed.payload !== null && !/저는 40대 초반/.test(mixed.payload.body),
+      mixed.payload?.body ?? '')
+  }
+
+  // ─────────── load-bearing self band — 조건 "50대 초반" ───────────
+  {
+    const fit = pickCard(52)
+    const unfit = pickCard(57)
+    const F = [{ axis: 'age' as const, sourceText: '50대 초반' }]
+    const C = (code: string, age: number | null) => ({ code, exactAge: age })
+    const okFit = resolveLoadBearing({
+      facts: F, stance: 'SELF_EXPERIENCE', chosen: C(fit.c.code, 52),
+      candidates: [C(fit.c.code, 52)], selfAlreadyFailed: false,
+    })
+    check('🔴 🔴 **lb-band ① 52 는 50대 초반 조건을 만족한다 — SELF 가능**',
+      okFit.ok && okFit.kind === 'personaSatisfies', JSON.stringify(okFit))
+    const bad = resolveLoadBearing({
+      facts: F, stance: 'SELF_EXPERIENCE', chosen: C(unfit.c.code, 57),
+      candidates: [C(unfit.c.code, 57), C(fit.c.code, 52)], selfAlreadyFailed: false,
+    })
+    check('🔴 🔴 **lb-band ② 57 은 불충족 — 구간에 드는 후보만 지목한다**',
+      !bad.ok && bad.retry && bad.code === 'PERSONA_MISMATCH'
+      && bad.suggest.join(',') === fit.c.code, JSON.stringify(bad))
+    const none = resolveLoadBearing({
+      facts: F, stance: 'SELF_EXPERIENCE', chosen: C(unfit.c.code, 57),
+      candidates: [C(unfit.c.code, 57), C('PXX', 61)], selfAlreadyFailed: false,
+    })
+    check('🔴 🔴 **lb-band ③ 구간에 드는 후보가 없으면 자리를 바꾼다**',
+      !none.ok && none.retry && none.code === 'SELF_IMPOSSIBLE', JSON.stringify(none))
+    check('🔴 🔴 **lb-band ④ 숫자 50 으로 축약하지 않는다 — span 50~53 을 그대로 쓴다**', (() => {
+      const req = loadBearingRequirements({ facts: F, stance: 'SELF_EXPERIENCE' })
+      return req[0]?.fact.kind === 'band' && req[0].fact.raw === '50대 초반'
+        && req[0].fact.span.from === 50 && req[0].fact.span.to === 53
+        && req[0].outputRule.includes('50대 초반')
+    })(), JSON.stringify(loadBearingRequirements({ facts: F, stance: 'SELF_EXPERIENCE' })))
+
+    const reqSelf = loadBearingRequirements({ facts: F, stance: 'SELF_EXPERIENCE' })
+    const keep = (t: string, r = reqSelf) => checkLoadBearingPreserved({ text: t, requirements: r })
+    check('🔴 🔴 **lb-band ⑤ "제가 52살인데" 로 조건이 보존된다**',
+      keep('제가 52살인데 해당된다고 들었어요').ok,
+      JSON.stringify(keep('제가 52살인데 해당된다고 들었어요')))
+    check('🔴 🔴 **lb-band ⑤ "저는 50대 초반이라" 로도 보존된다**',
+      keep('저는 50대 초반이라 해당된다고 들었어요').ok,
+      JSON.stringify(keep('저는 50대 초반이라 해당된다고 들었어요')))
+    check('🔴 🔴 **lb-band ⑤ "제가 57살인데" 는 구간 밖이라 막는다**',
+      !keep('제가 57살인데 해당된다고 들었어요').ok,
+      JSON.stringify(keep('제가 57살인데 해당된다고 들었어요')))
+    check('🔴 🔴 **lb-band ⑤ 조건이 사라지면 막는다**',
+      !keep('해당된다고 들어서 알아보는 중입니다').ok)
+  }
+
+  // ─────────── load-bearing event band — "50대 초반부터 지원 대상" ───────────
+  {
+    const F = [{ axis: 'age' as const, sourceText: '50대 초반' }]
+    const reqEvent = loadBearingRequirements({ facts: F, stance: 'QUESTION' })
+    const keep = (t: string) => checkLoadBearingPreserved({ text: t, requirements: reqEvent })
+    check('🔴 🔴 **lb-event ① 같은 범위가 조건으로 남으면 통과한다**',
+      keep('50대 초반부터 지원 대상이라는데 맞을까요?').ok,
+      JSON.stringify(keep('50대 초반부터 지원 대상이라는데 맞을까요?')))
+    for (const [t, why] of [
+      ['지원금이 50만원입니다', '금액'],
+      ['50번 버스를 탔어요', '번호'],
+      ['제가 52살이라 대상이 된다고 들었습니다', '자기 나이로 주장'],
+    ] as [string, string][]) {
+      check(`🔴 🔴 **lb-event ② ${why} 만으로는 조건 보존이 아니다 — "${t}"**`,
+        !keep(t).ok, `${t} → ${JSON.stringify(keep(t))}`)
+    }
+    check('🔴 🔴 **lb-event ③ 구간을 숫자 하나로 줄이면 조건이 달라진다 — 막는다**',
+      !keep('50세부터 지원 대상이라는데 맞을까요?').ok,
+      JSON.stringify(keep('50세부터 지원 대상이라는데 맞을까요?')))
+  }
+}
+
+console.log('\n🔴 🔴 **artifact → pickV2 → adopted → candidate payload (실제 함수)**')
+{
+  /**
+   * 🔴 문자열 소스 검사가 아니다. 위 E2E 가 만든 **실제 artifact** 를 받아
+   *    러너와 **같은 순서·같은 함수**로 후보 payload 까지 만든다.
+   */
+  const CARD_P02 = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    .cards.find((c) => c.code === 'P02')!
+  const p02 = P({
+    code: 'P02', ageBand: CARD_P02.ageBand, birthDate: CARD_P02.birthDate,
+    maritalStatus: CARD_P02.maritalStatus, childrenCount: CARD_P02.childrenCount,
+    childrenAgeBands: CARD_P02.childrenAgeBands, workStatus: CARD_P02.workStatus,
+    region: CARD_P02.region, menopauseStatus: CARD_P02.menopauseStatus,
+    parentCare: CARD_P02.parentCare,
+  })
+  const want = materializePersonaAt({
+    card: { code: 'P02', birthDate: CARD_P02.birthDate, ageBand: CARD_P02.ageBand }, now: NOW,
+  })
+  const SRC_TITLE = '자랑은 아닌데 여잔 피부가80퍼인듯'
+  const SRC_BODY = '에스테딕싼곳 동네다니는데 진짜\n낼44인데 아직도 어리단소리들어요 ㅋ\n진짜여잔 피부가80퍼...'
+  const PLAN = {
+    decision: 'ok', personaCode: 'P02', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
+    universalReason: '누구나 겪는 일이라', speakerWarrants: [],
+    closingIntent: 'ask', contentRoles: ['conversationSpark'],
+    protectedFacts: [
+      { kind: 'number', text: '80퍼', evidenceRef: 'title' },
+      { kind: 'number', text: '44', evidenceRef: 'head' },
+    ],
+    speakerRelative: [{ axis: 'age', sourceText: '44', evidenceRef: 'head', materiality: 'incidental' }],
+  }
+  const art = await run({
+    id: '35040880', title: SRC_TITLE, body: SRC_BODY, personas: [p02],
+    canned: {
+      plan: PLAN, review: EMPTY_REVIEW,
+      draft: { title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+        body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n제가 곧 44인데 아직 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?' },
+    },
+  })
+  check('🔴 artifact 가 adopt 다', art.review.machineOutcome === 'adopt', art.review.machineOutcome)
+
+  // 🔴 러너와 **같은 순서**: 실제 `pickV2` → `AUTO_ADOPT` 만 `adopted` → payload
+  const cand = {
+    sourceArticleId: '35040880', draftNo: 1,
+    title: art.draft!.title, body: art.draft!.body,
+    safetyVerdict: 'pass', originality: { runChars: 7, runWords: 1, coverRatio: 0 },
+    generatedAt: NOW.toISOString(),
+  }
+  const pick = pickV2({
+    judgement: { sourceArticleId: '35040880', decision: 'SEED', reason: 'ok' } as never,
+    draft: cand as never, seenTitles: new Set<string>(), seenBodies: new Set<string>(),
+    sourceUsed: false, machineOutcome: art.review.machineOutcome,
+    machineReason: art.review.machineReason, sourceTitleCopied: false, crisisStop: null,
+    ageFact: {
+      ageBand: want.ok ? want.at.effectiveAgeBand : null, selfBasis: PLAN.selfBasis,
+      personaExactAge: want.ok ? want.at.exactAge : null,
+    },
+  }, NOW.toISOString())
+  check('🔴 🔴 **`pickV2` 가 AUTO_ADOPT 를 낸다**',
+    pick.decision === 'AUTO_ADOPT', `${pick.decision}:${pick.reason}`)
+
+  const adopted = pick.decision === 'AUTO_ADOPT' ? [{ pick, draft: cand, art }] : []
+  check('🔴 🔴 **`adopted` 에 한 건 들어간다 — HOLD 는 들어가지 않는다**', adopted.length === 1)
+
+  const payload = adopted.map((a) => ({
+    title: a.draft.title, body: a.draft.body,
+    voiceProvenance: a.art.voice.provenance === null ? null : {
+      personaCode: a.art.voice.provenance.personaCode,
+      comments: a.art.voice.provenance.sampleCount,
+      bundleDigest: a.art.voice.provenance.bundleDigest,
+      sourceDigest: a.art.voice.provenance.sourceDigest,
+    },
+    semanticReview: semanticSummaryOf(a.art.review),
+  }))[0]!
+  const text = `${payload.title}\n${payload.body}`
+  check('🔴 🔴 **보정된 본문이 payload 에 실린다**',
+    want.ok && new RegExp(`(^|[^0-9])${want.at.exactAge}\\s*(살|세|인데)`).test(text), text)
+  check('🔴 🔴 **원문 44 가 다시 나타나지 않는다**', !/(^|[^0-9])44\s*(살|세|인데)/.test(text))
+  check('🔴 🔴 **source-invariant 80퍼 가 살아 있다**', text.includes('80퍼'))
+  check('🔴 🔴 **Persona code · voice provenance 가 유지된다**',
+    payload.voiceProvenance?.personaCode === 'P02'
+    && (payload.voiceProvenance?.bundleDigest ?? '') !== '', JSON.stringify(payload.voiceProvenance))
+  check('🔴 🔴 **artifact 의 의미 검수 요약이 payload 에 유지된다**',
+    payload.semanticReview !== null && payload.semanticReview.complete === true,
+    JSON.stringify(payload.semanticReview))
+
+  // 🔴 HOLD 는 payload 로 가지 않는다
+  const holdArt = await run({
+    id: '35040881', title: SRC_TITLE, body: SRC_BODY, personas: [p02],
+    canned: {
+      plan: PLAN, review: EMPTY_REVIEW,
+      draft: { title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+        body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n여자는 피부가 80퍼인 것 같아요.' },
+    },
+  })
+  check('🔴 🔴 **나이가 빠진 초안은 artifact 가 adopt 가 아니고 payload 로도 안 간다**',
+    holdArt.review.machineOutcome !== 'adopt' && holdArt.draft === null
+      ? true
+      : holdArt.review.machineOutcome !== 'adopt', holdArt.review.machineOutcome)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

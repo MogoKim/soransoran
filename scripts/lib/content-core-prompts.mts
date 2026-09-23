@@ -10,6 +10,8 @@
  *    보내면 남의 글이 화자 선택에 섞인다.
  */
 import type { SourceEvidencePacket } from '../../src/lib/content-core/evidence'
+import { type AxisMapping } from '../../src/lib/content-core/speaker-relative-facts'
+import type { LoadBearingRequirement } from '../../src/lib/content-core/load-bearing'
 import { CLAIM_FACT_LABEL } from '../../src/lib/content-core/source-facts'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
 import { STANCE_LABEL } from '../../src/lib/content-core/speaker'
@@ -93,8 +95,7 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '**자기 경험으로** 말하는 경우다. `speakerWarrants` 에 한 줄씩 적는다:',
     `- fact: ${Object.entries(CLAIM_FACT_LABEL).map(([k, v]) => `${k}(${v})`).join(' · ')}`,
     '- requiredValue: 그 사람에게 있어야 하는 값',
-    '   · spouse · parentCare · menopause → "있음"',
-    '   · children → "있음" 또는 "없음"',
+    '   · spouse · parentCare · menopause · children → "있음" 또는 "없음"',
     '   · work · region · age · childAgeBand → **[후보] 줄에 적힌 글자 그대로**',
     '- evidenceRef / evidenceText: 그 요구가 나온 **[원문]의 실제 문장 조각**',
     '',
@@ -119,6 +120,26 @@ export function buildSpeakerPlanSystemPrompt(): string {
     '🔴 목록 순서는 이 원문에 대해 미리 정해져 있다 — 원문마다 다르다.',
     '🔴 앞에 있다는 이유로 **자격 없는 사람을 고르지 않는다.**',
     '',
+    /**
+     * 🔴 **원문 화자 자신의 사실은 따로 적는다** (2026-09-23).
+     *    우리는 원문 작성자를 복제하지 않는다 — 그 값은 지키는 것이 아니라 **바꾼다.**
+     *    다만 나이가 **결론을 바꾸는** 글(지원 자격·의료·임신·보험)은 숫자만 바꿀 수 없다.
+     */
+    '## speakerRelative — 🔴 **원문 화자 자신의** 사실',
+    '- 원문을 쓴 사람의 나이·혼인·자녀 같은 값이다. **우리 사람 값으로 바꿔 쓸 것**이다.',
+    '- axis: age (지금은 나이만 받습니다)',
+    '- sourceText: 원문에 있는 그 값 **그대로** (예 "44" · "40대 초반")',
+    '  🔴 구간은 구간 그대로 적습니다. "40대 초반" 을 "40" 으로 줄이지 마십시오.',
+    '- evidenceRef: title|head|tail — 그 값이 나온 자리',
+    '- materiality:',
+    '   · incidental — 나이를 바꿔도 글의 뜻이 그대로다 (피부·패션·일상·감정)',
+    '   · loadBearing — 나이가 **결론을 바꾼다** (지원 자격·연령 제한·의료·임신·보험)',
+    '- 🔴 **제3자(아는 분·친구)의 나이는 여기 넣지 않습니다.** 그것은 원문 이야기의 일부입니다.',
+    '- 🔴 **원문 화자 자신의 값을 protectedFacts 에 적었다면 여기에도 반드시 적습니다.**',
+    '  한 건이라도 빠지면 그 답은 **버려지고 다시 묻습니다** — 기본값으로 통과시키지 않습니다.',
+    '- 🔴 materiality 가 loadBearing 이면, **그 조건을 실제로 만족하는 후보**를 personaCode 로',
+    '  고르십시오. 그런 후보가 없으면 stance 를 OBSERVATION · QUESTION 으로 바꾸십시오.',
+    '',
     '## protectedFacts — 🔴 글자 자체를 지켜야 하는 **원자적 사실**만',
     '- kind: number(숫자+단위) · publicEntity(공개 프로그램·상품·장소 이름)',
     '        · relation(관계) · searchTerm(검색창에 칠 핵심 용어)',
@@ -140,6 +161,8 @@ export function buildSpeakerPlanSystemPrompt(): string {
     ' "speakerWarrants":[{"fact":"work","requiredValue":"파트타임",',
     '                     "evidenceRef":"title|head|tail","evidenceText":"원문에 있는 조각"}],',
     ' "universalReason":"noLifeFactNeeded 일 때 한 줄",',
+    ' "speakerRelative":[{"axis":"age","sourceText":"44","evidenceRef":"head",',
+    '                      "materiality":"incidental|loadBearing"}],',
     ' "protectedFacts":[{"kind":"...","text":"...","evidenceRef":"title|head|tail"}],',
     ' "closingIntent":"ask|vent|share|none",',
     ' "contentRoles":["..."]}',
@@ -166,8 +189,17 @@ export function buildSpeakerPlanSystemPrompt(): string {
 export function buildSpeakerPlanPayload(input: {
   packet: SourceEvidencePacket
   personas: readonly PersonaLifeContract[]
+  /**
+   * 🔴 **같은 원천의 지난 실패** (2026-09-23 마스터 지적). 빼기만 하면 계획기는
+   *    왜 실패했는지 모른 채 **같은 1인칭 계획**을 또 세운다. 유료 호출은 늘지 않는다 —
+   *    같은 요청의 입력 한 칸이다.
+   */
+  priorFailures?: readonly string[]
+  /** 🔴 지난 시도가 "조건을 만족하는 사람이 없다" 로 멈췄다 — 1인칭을 쓰면 안 된다 */
+  selfForbidden?: boolean
 }): string {
   const p = input.packet
+  const prior = input.priorFailures ?? []
   return JSON.stringify({
     원문: {
       // 🔴 packet 에 **실제로 있는 span 만** — 없는 자리를 지어내 보내지 않는다
@@ -176,6 +208,13 @@ export function buildSpeakerPlanPayload(input: {
       truncated: p.truncated,
     },
     후보: input.personas.map((x) => qualificationLine(x)),
+    // 🔴 빈 칸을 넣지 않는다 — 빈 배열은 "지난 시도가 없다" 와 구분되지 않는다
+    ...(prior.length === 0 ? {} : { 지난실패: prior }),
+    ...(input.selfForbidden !== true ? {} : {
+      금지: ['🔴 stance 를 SELF_EXPERIENCE 로 쓰지 마십시오 — '
+        + '원문의 핵심 조건을 만족하는 사람이 없습니다. '
+        + 'OBSERVATION · QUESTION · REFLECTION 중에서 고르고 selfBasis 는 비웁니다.'],
+    }),
   })
 }
 
@@ -187,8 +226,23 @@ export function buildV2DraftSystemPrompt(input: {
   plan: SpeakerPlan
   voice: VoiceEvidence
   life: PersonaLifeContract
+  /**
+   * 🔴 **성공한 변환 계획만 받는다** (2026-09-23 fail-closed).
+   *    앞판은 여기서 `planAxisMapping` 을 부르고 `mapping.ok ? … : []` 로 넘겼다 —
+   *    실패해도 **빈 지시로 조용히 생성**됐고, 그러면 `protectedFacts` 에서 빠진
+   *    사실이 대체 없이 사라진다. 이제 **부르는 쪽(`runContentCore`)이 먼저 판정**하고,
+   *    성공했을 때만 그 결과를 여기로 넘긴다.
+   */
+  mappings: readonly AxisMapping[]
+  /**
+   * 🔴 **바꾸지 말고 지켜야 하는 조건** (2026-09-23 마스터 P0-2).
+   *    `mappings`(바꿔라)와 **섞지 않는다** — 반대 지시다.
+   */
+  keep?: readonly LoadBearingRequirement[]
 }): string {
   const { plan, voice, life } = input
+  const replacements = input.mappings.map((m) => m.outputRule)
+  const keeps = (input.keep ?? []).map((k) => k.outputRule)
   return [
     '당신은 40대 중반~60대 중반 여성들이 모인 커뮤니티의 회원입니다.',
     '[원문]은 다른 커뮤니티에서 사람들이 실제로 반응한 글입니다.',
@@ -198,6 +252,25 @@ export function buildV2DraftSystemPrompt(input: {
     '- 원문의 주제 · 핵심 낱말 · 숫자 · 관계 · 상황 · 질문',
     ...(plan.protectedFacts.length > 0
       ? [`- 🔴 이 말들은 **그대로** 씁니다: ${plan.protectedFacts.map((f) => f.text).join(' · ')}`]
+      : []),
+    /**
+     * 🔴 **원문 작성자를 복제하지 않습니다** (2026-09-23).
+     *    원문 화자의 나이·혼인·자녀 같은 사실은 **지키는 것이 아니라 바꾸는 것**입니다.
+     *    🔴 빼기만 하면 내용이 사라집니다 — 여기서 **무엇으로 바꿀지**를 줍니다.
+     */
+    ...(replacements.length > 0
+      ? ['', '## 🔴 원문 작성자의 사실 → 당신의 사실로 바꿔 씁니다',
+        ...replacements.map((r) => `- ${r}`),
+        '- 🔴 위 값을 **빼지 말고 바꿉니다.** 그 자리를 비우면 글이 어색해집니다.',
+        '- 🔴 원문에 없던 사실을 **새로 더하지 않습니다.**']
+      : []),
+    /**
+     * 🔴 **결론을 만드는 조건은 반대로 지킵니다** (2026-09-23).
+     *    바꾸면 글이 성립하지 않습니다 — 위 "바꿔 씁니다" 와 **다른 목록**입니다.
+     */
+    ...(keeps.length > 0
+      ? ['', '## 🔴 이 값은 **바꾸지 말고 지킵니다** (바꾸면 글이 성립하지 않습니다)',
+        ...keeps.map((r) => `- ${r}`)]
       : []),
     ...(plan.closingIntent === 'ask'
       ? ['- 원문은 묻고 끝납니다. 그 물음이 살아 있어야 합니다.']
