@@ -29,6 +29,14 @@ import type { SoranEventName } from './analytics/events'
 export const EXISTING_ANALYTICS_EVENTS = [
   'write_login_prompt', 'write_auth_start', 'sign_up',
   'write_draft_restored', 'post_publish', 'comment_publish',
+  /**
+   * 🔴 매거진 연관 글 이동. **North Star 가 아니다** — 수단이다.
+   *    검색으로 들어온 사람이 두 번째 글로 갔는지를 볼 뿐,
+   *    "다른 날 또 와서 글이나 댓글을 썼는가" 는 여전히 아래 세 이벤트가 있어야 센다.
+   */
+  'magazine_related_click',
+  /** 🔴 클릭률의 분모. 이것도 North Star 가 아니라 수단이다 */
+  'magazine_related_impression',
 ] as const satisfies readonly SoranEventName[]
 
 /** 🔴 전수 확인 — `events.ts` 에 새 이벤트가 생기면 여기서 컴파일이 멈춘다 */

@@ -6,7 +6,8 @@ import { notFound } from 'next/navigation'
 import PageShell from '@/components/layouts/PageShell'
 import MagazineBody from '@/components/features/MagazineBody'
 import RelatedMagazineList from '@/components/features/RelatedMagazineList'
-import { getMagazineArticleBySlug, getRelatedMagazineArticles } from '@/lib/magazine'
+import { getMagazineArticleBySlug } from '@/lib/magazine'
+import { resolveRelatedMagazine } from '@/lib/magazine-graph'
 import { formatMagazinePublishedDate } from '@/lib/magazine-date'
 import { MAGAZINE_CLUSTER_LABELS, type MagazineArticle } from '@/content/magazine/types'
 import { SITE } from '@/lib/brand'
@@ -109,7 +110,11 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
   const article = getMagazineArticleBySlug(params.slug)
   if (!article) notFound()
 
-  const related = getRelatedMagazineArticles(article)
+  /**
+   * 🔴 그래프가 답을 못 내면 resolver 안에서 예전 방식으로 되돌아온다.
+   *    이 화면은 성공·실패를 구분하지 않는다 — 구분하면 여기에 두 번째 판정이 생긴다.
+   */
+  const related = resolveRelatedMagazine(article)
   const structuredData = buildStructuredData(article)
 
   return (
@@ -160,7 +165,8 @@ export default function MagazineArticlePage({ params }: { params: { slug: string
           </div>
         </article>
 
-        <RelatedMagazineList articles={related} />
+        {/* 🔴 graphVersion 은 넘기지 않는다 — 항목마다 다르다 (보충은 'none') */}
+        <RelatedMagazineList items={related.items} fromSlug={article.slug} />
       </main>
     </PageShell>
   )

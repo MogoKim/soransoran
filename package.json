@@ -21,6 +21,7 @@
     "check:workflow-budget": "tsx --tsconfig tsconfig.ops.json scripts/workflow-budget-check.mts",
     "check:hero-banner": "tsx --tsconfig tsconfig.ops.json scripts/hero-banner-check.mts",
     "check:ga4-events": "tsx scripts/ga4-participation-events-check.mts",
+    "check:magazine-graph": "tsx scripts/magazine-graph-check.mts",
     "check:content-guard": "tsx scripts/content-guard-feedback-check.mts",
     "micro-seed:validate": "node scripts/micro-seed-validate.mjs",
     "micro-seed:read": "node scripts/micro-seed-read.mjs",
