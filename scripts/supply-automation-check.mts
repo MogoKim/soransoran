@@ -21,6 +21,12 @@ import {
   judgeProductionRate, AUTO_READY_CONTRACT, AUTO_READY_STEPS, describeSupplySchedule,
 } from '../src/lib/supply-schedule-contract'
 import { WORKSET_DEFAULT_LIMIT, WORKSET_TOTAL_PER_SOURCE } from '../src/lib/supply-workset'
+import { CONTENT_CORE_STAGES, STAGE_MODEL } from '../src/lib/content-core/pipeline'
+import {
+  sourceCapturedAtOf, SOURCE_CAPTURED_KNOWN_KEY, buildQueuePayload,
+} from '../src/lib/micro-seed-supply-autofill'
+import { capturedAtOfRow, ageDaysAt } from '../src/lib/supply-candidates'
+import { freshnessOf, isAutoPublishable } from '../src/lib/supply-freshness'
 import { judgeSpend, judgeSettle, tallyOf, type DayTally } from '../src/lib/llm-ledger'
 import {
   profileOf, selectAutoTargets, voiceInputOf, judgeApply, judgePublishDefects,
@@ -665,6 +671,202 @@ console.log('\n②-d5 🔴 🔴 D3 기간 운영 + D5 하루 시험이 겹치는
     check('🔴 판정을 만드는 함수가 하나다 — 창이 달라지지 않는다',
       (src.match(/const dayFor = \(stage: ReleaseStage\)/g) ?? []).length === 1
       && (src.match(/anchor: 'now'/g) ?? []).length === 1)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n②-f 🔴 🔴 원천을 언제 봤는가 — 지어내지 않는다')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **실측 결함** (2026-09-22). 적재기가 `MicroSeedRawContent.sourceCapturedAt` 에
+   *    **검토 시각**(`reviewedAt`, 없으면 `new Date()`)을 넣었고, 발행기가 그 값으로
+   *    TTL 을 쟀다. 큐 `cmuc80gx4…` 의 실제 원천은 **9/17** 인데 DB 는 9/22 14:15 였다.
+   *    시의성 있는 소재라면 오래된 원천이 새 글로 그대로 나간다.
+   *
+   * 🔴 스키마는 바꾸지 않는다(컬럼 non-null · migration 금지).
+   *    아는 값이면 그 값을 넣고, 모르면 `gateResults` 에 사실을 남겨 읽는 쪽이 `null` 로 돌린다.
+   */
+  const NOW = new Date('2026-09-22T05:15:00.000Z')
+  const OLD = new Date('2026-09-17T00:00:00.000Z')
+
+  check('🔴 🔴 **원천 시각을 알면 그 값을 그대로 쓴다**',
+    sourceCapturedAtOf({ sourceCapturedAt: OLD.toISOString() })?.toISOString() === OLD.toISOString())
+  check('🔴 🔴 **모르면 `null` 이다 — 오늘로 지어내지 않는다**',
+    sourceCapturedAtOf({ sourceCapturedAt: null }) === null
+    && sourceCapturedAtOf({}) === null
+    && sourceCapturedAtOf({ sourceCapturedAt: '말이 안 되는 값' }) === null)
+
+  const rowWith = (known: boolean, at: Date | null) => ({
+    sourceCapturedAt: at,
+    gateResults: { autoDraft: { [SOURCE_CAPTURED_KNOWN_KEY]: known } },
+  })
+  check('🔴 🔴 **안다고 적힌 행은 컬럼 값을 쓴다**',
+    capturedAtOfRow(rowWith(true, OLD))?.toISOString() === OLD.toISOString())
+  check('🔴 🔴 **모른다고 적힌 행은 `null` 이다 — 적재 시각이 나이가 되지 않는다**',
+    capturedAtOfRow(rowWith(false, NOW)) === null)
+  /**
+   * 🔴 **이 PR 은 기존 행을 소급 수정하지 않는다.**
+   *    표식(`sourceCapturedKnown`)은 **앞으로 적재되는 행**에만 붙는다.
+   *    이미 큐에 있는 P03(`cmuc80gx4…`) 같은 행은 표식이 없어 **옛 DB 시각을 계속 읽는다** —
+   *    즉 그 행의 나이는 여전히 "적재 시각 기준" 이다. DB 를 고치지 않는다.
+   */
+  check('🔴 🔴 **기존 행은 소급 수정되지 않는다 — 표식이 없으면 옛 DB 시각 그대로**', (() => {
+    const legacyLoadedToday = capturedAtOfRow({ sourceCapturedAt: NOW, gateResults: { autoDraft: {} } })
+    return legacyLoadedToday?.toISOString() === NOW.toISOString()
+      && ageDaysAt(legacyLoadedToday, NOW) === 0
+  })())
+  check('🔴 표식이 없는 옛 행·사람 후보는 지금 동작 그대로다', (() => {
+    const legacy = capturedAtOfRow({ sourceCapturedAt: OLD, gateResults: { autoDraft: {} } })
+    const human = capturedAtOfRow({ sourceCapturedAt: OLD })
+    return legacy?.toISOString() === OLD.toISOString() && human?.toISOString() === OLD.toISOString()
+  })())
+
+  // ── 🔴 실제 신선도 판정까지 이어진다 ──
+  const age = (at: Date | null) => ageDaysAt(at, NOW)
+  check('🔴 🔴 **모르면 나이가 `null` 이고 판정은 `unknown` 이다**', (() => {
+    const a = age(capturedAtOfRow(rowWith(false, NOW)))
+    return a === null && freshnessOf({ ageDays: a, topic: 'timely' }) === 'unknown'
+  })())
+  check('🔴 🔴 **`unknown` 은 자동 발행 대상이 아니다 — 사람 검수로 간다**',
+    isAutoPublishable('unknown') === false)
+  /**
+   * 🔴 **앞판 검사는 거짓을 통과시켰다** (2026-09-22 정정).
+   *    "5일 된 시의성 원천은 자동 발행에서 빠진다" 고 적고
+   *    `f === 'expired' || !isAutoPublishable(f) || f === 'warm'` 로 판정했다 —
+   *    마지막 항 때문에 **어떤 결과든 통과**했다. 실제 정본은 5일이면 `warm` 이고
+   *    **자동 발행 대상이다**. 설명과 조건이 둘 다 틀렸다.
+   *
+   * 🔴 이제 정본 경계를 **값으로 단정**한다. TTL 은 `TTL_DAYS` 하나가 정한다:
+   *    hot ≤ 2일 · 시의성 warm ≤ 7일 · 그 뒤 expired · 상시 warm ≤ 28일 · 시각 미상 unknown
+   */
+  const f = (d: number | null, t: 'timely' | 'evergreen') => freshnessOf({ ageDays: d, topic: t })
+  check('🔴 2일까지는 hot 이다', f(2, 'timely') === 'hot' && f(2, 'evergreen') === 'hot')
+  check('🔴 🔴 **시의성 5일은 `warm` 이고 자동 발행 대상이다** (앞판 설명이 틀렸다)',
+    f(5, 'timely') === 'warm' && isAutoPublishable(f(5, 'timely')), f(5, 'timely'))
+  check('🔴 시의성 7일도 아직 warm 이다',
+    f(7, 'timely') === 'warm' && isAutoPublishable(f(7, 'timely')), f(7, 'timely'))
+  check('🔴 🔴 **시의성 8일은 `expired` — 자동 발행에서 빠진다**',
+    f(8, 'timely') === 'expired' && !isAutoPublishable(f(8, 'timely')), f(8, 'timely'))
+  check('🔴 🔴 **상시 8일은 여전히 `warm` — 시의성과 다른 창이다**',
+    f(8, 'evergreen') === 'warm' && isAutoPublishable(f(8, 'evergreen')), f(8, 'evergreen'))
+  check('🔴 상시 28일까지는 warm 이다', f(28, 'evergreen') === 'warm')
+  check('🔴 🔴 **시각 미상은 `unknown` — 두 소재 모두 자동 발행에서 빠진다**',
+    f(null, 'timely') === 'unknown' && f(null, 'evergreen') === 'unknown'
+    && !isAutoPublishable('unknown'))
+  check('🔴 🔴 **이 PR 이 고치는 것은 "모름" 한 칸뿐이다 — 5일 원천은 그대로 나간다**', (() => {
+    /** 🔴 아는 5일 원천: 보정 뒤에도 자동 발행 대상 — 새 병목을 만들지 않았다는 증거 */
+    const known = age(capturedAtOfRow(rowWith(true, OLD)))
+    return known === 5 && isAutoPublishable(f(known, 'timely'))
+  })())
+  check('🔴 🔴 **앞판 동작이면 같은 원천이 `hot` 으로 통과한다 (회귀 재현)**', (() => {
+    /** 🔴 앞판: 컬럼에 적재 시각이 들어가고 표식이 없다 */
+    const a = ageDaysAt(NOW, NOW)
+    return a === 0 && freshnessOf({ ageDays: a, topic: 'timely' }) === 'hot'
+  })())
+  check('🔴 🔴 **상시 소재는 막지 않는다 — 오늘 수집분은 그대로 hot**', (() => {
+    const a = age(capturedAtOfRow(rowWith(true, new Date(NOW.getTime() - 6 * 3600e3))))
+    return a === 0 && isAutoPublishable(freshnessOf({ ageDays: a, topic: 'evergreen' }))
+  })())
+
+  // ── 🔴 🔴 artifact → fill → Queue 저장형식 → 발행 후보 선택 (행동 사슬) ──
+  {
+    /**
+     * 🔴 **순수 함수만 보면 배선이 끊겨도 통과한다.** 그래서 실제 적재 payload 를
+     *    `buildQueuePayload` 로 만들고, 그 결과를 **발행 러너가 읽는 모양 그대로**
+     *    `capturedAtOfRow` → `ageDaysAt` → `freshnessOf` 까지 잇는다.
+     */
+    /** 🔴 정본 상수를 그대로 쓴다 — 손으로 적으면 갈라진다 */
+    const envelope = {
+      provenance: MACHINE_PROFILE.envelopeProvenance,
+      ruleVersion: MACHINE_PROFILE.envelopeRuleVersion,
+      promptVersion: MACHINE_PROFILE.envelopePromptVersion,
+      pipelineVersion: MACHINE_PROFILE.envelopePipelineVersion,
+      stageModels: Object.fromEntries(CONTENT_CORE_STAGES.map((x) => [x, STAGE_MODEL[x]])),
+    }
+    const candidateOf = (capturedAt: string | null) => ({
+      artifactId: 'af-1',
+      candidateType: MACHINE_PROFILE.candidateType,
+      sourceArticleId: '35029911',
+      sourceSite: `${MACHINE_SITE_PREFIX}navercafe:remonterrace`,
+      sourceInput: MACHINE_PROFILE.sourceInput,
+      sourceDecision: MACHINE_PROFILE.sourceDecision,
+      title: '중3 딸 샤워 이야기', body: '매일 한 시간씩 욕실에 있습니다.',
+      safetyVerdict: 'pass',
+      originality: { runChars: 9, runWords: 2, coverRatio: 0 },
+      voiceProvenance: { personaCode: 'P03', comments: 3, bundleDigest: 'b', sourceDigest: 's' },
+      leakedTokens: '',
+      ...(capturedAt === null ? {} : { sourceCapturedAt: capturedAt }),
+    })
+    const payloadOf = (capturedAt: string | null) => buildQueuePayload({
+      envelope: envelope as never, candidate: candidateOf(capturedAt) as never,
+      autoJudge: { ruleVersion: 'judge-v1', provenance: 'auto-judge' } as never,
+      now: NOW.toISOString(),
+    })
+    /** 🔴 적재기가 컬럼에 넣는 값 — 러너 코드와 같은 식 */
+    const columnOf = (capturedAt: string | null): Date => {
+      const real = sourceCapturedAtOf(candidateOf(capturedAt))
+      return real ?? NOW
+    }
+    /** 🔴 발행 러너가 읽는 자리 그대로 */
+    const asRunnerSees = (capturedAt: string | null) => {
+      const pl = payloadOf(capturedAt)
+      return capturedAtOfRow({
+        sourceCapturedAt: columnOf(capturedAt),
+        gateResults: pl?.gateResults ?? null,
+      })
+    }
+
+    check('🔴 🔴 **payload 가 만들어진다 (machine profile)**', payloadOf(OLD.toISOString()) !== null)
+    check('🔴 🔴 **새 행 · 시각 아는 경우 — 컬럼도 표식도 실제 시각을 가리킨다**', (() => {
+      const pl = payloadOf(OLD.toISOString())
+      const a = (pl?.gateResults as Record<string, unknown> | undefined)?.autoDraft as Record<string, unknown>
+      const seen = asRunnerSees(OLD.toISOString())
+      return a[SOURCE_CAPTURED_KNOWN_KEY] === true
+        && columnOf(OLD.toISOString()).toISOString() === OLD.toISOString()
+        && seen?.toISOString() === OLD.toISOString()
+        && ageDaysAt(seen, NOW) === 5
+        && freshnessOf({ ageDays: ageDaysAt(seen, NOW), topic: 'timely' }) === 'warm'
+    })())
+    check('🔴 🔴 **새 행 · 시각 모르는 경우 — 컬럼은 적재 시각이지만 러너는 `null` 로 본다**', (() => {
+      const pl = payloadOf(null)
+      const a = (pl?.gateResults as Record<string, unknown> | undefined)?.autoDraft as Record<string, unknown>
+      const seen = asRunnerSees(null)
+      return a[SOURCE_CAPTURED_KNOWN_KEY] === false
+        && columnOf(null).toISOString() === NOW.toISOString()
+        && seen === null
+        && freshnessOf({ ageDays: ageDaysAt(seen, NOW), topic: 'evergreen' }) === 'unknown'
+        && !isAutoPublishable('unknown')
+    })())
+    check('🔴 🔴 **표식 없는 기존 행 — 옛 동작 그대로 (소급 수정 없음)**', (() => {
+      const seen = capturedAtOfRow({ sourceCapturedAt: NOW, gateResults: { autoDraft: { provenance: 'x' } } })
+      return seen?.toISOString() === NOW.toISOString()
+        && freshnessOf({ ageDays: ageDaysAt(seen, NOW), topic: 'timely' }) === 'hot'
+    })())
+    /**
+     * 🔴 **P03 문제는 이것으로 풀리지 않는다.**
+     *    "오늘도 … 아직도 안 나오고 있어요" 는 **원문에 없던 시점을 초안이 만든 것**이다.
+     *    수집 시각을 보존해도 그 문장은 그대로 남는다 — 별도 **편집** 문제다.
+     */
+    check('🔴 🔴 **시점 이동은 신선도로 풀리지 않는다 — 별도 편집 문제다**', (() => {
+      const drifted = '오늘도 10시 전에 들어갔는데 아직도 안 나오고 있어요'
+      const seen = asRunnerSees(OLD.toISOString())
+      /** 원천 시각을 완벽히 보존해도(5일·warm·자동 발행 가능) 본문의 시점 이동은 남는다 */
+      return isAutoPublishable(freshnessOf({ ageDays: ageDaysAt(seen, NOW), topic: 'timely' }))
+        && /오늘|아직도/.test(drifted)
+    })())
+  }
+
+  // ── 🔴 적재기가 실제로 그 값을 쓰는가 ──
+  {
+    const src = readFileSync('scripts/micro-seed-supply-autofill.mts', 'utf-8')
+    check('🔴 🔴 **적재기가 원천 수집 시각을 먼저 쓴다**',
+      /const realCaptured = sourceCapturedAtOf\(c\)/.test(src)
+      && /const at = realCaptured \?\?/.test(src))
+    const run = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+    check('🔴 🔴 **발행 러너가 정본 함수로 읽는다 — 컬럼을 직접 쓰지 않는다**',
+      /capturedAtOfRow\(\{/.test(run)
+      && !/\[r\.id, r\.rawContent\?\.sourceCapturedAt \?\? null\]/.test(run))
   }
 }
 

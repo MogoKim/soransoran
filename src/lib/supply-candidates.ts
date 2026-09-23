@@ -62,6 +62,34 @@ export type QueueCandidate = {
   profile: CandidateProfile
 }
 
+/**
+ * 🔴 **원천을 언제 봤는가 — 큐 행에서 읽는 단일 지점** (2026-09-22).
+ *
+ *    `MicroSeedRawContent.sourceCapturedAt` 은 non-null 컬럼이라 적재기가 모를 때도
+ *    무언가를 넣어야 한다. 앞판은 **검토 시각**을 넣었고, 발행기가 그 값으로 TTL 을 쟀다.
+ *    그래서 9/17 원천이 "오늘 수집" 으로 보였다(실측).
+ *
+ * 🔴 이제 적재기가 모를 때 `gateResults.autoDraft.sourceCapturedKnown = false` 를 남긴다.
+ *    여기서 그 표식을 보고 **`null` 로 돌린다** — `null` 은 이미 `unknown` 으로 판정돼
+ *    자동 발행에서 빠지고 사람 검수로 간다. 새 상태도 새 게이트도 만들지 않는다.
+ *
+ * 🔴 표식이 없으면(옛 행 · 사람 후보) 지금 동작 그대로 컬럼 값을 쓴다.
+ */
+export function capturedAtOfRow(input: {
+  sourceCapturedAt: Date | null
+  gateResults?: unknown
+}): Date | null {
+  const g = input.gateResults
+  if (g !== null && typeof g === 'object') {
+    const a = (g as Record<string, unknown>).autoDraft
+    if (a !== null && typeof a === 'object') {
+      // 🔴 `false` 일 때만 모른다 — 없으면 옛 행이고, 건드리지 않는다
+      if ((a as Record<string, unknown>).sourceCapturedKnown === false) return null
+    }
+  }
+  return input.sourceCapturedAt
+}
+
 /** 🔴 그 시점의 나이 (일). 모르면 null */
 export function ageDaysAt(capturedAt: Date | null, at: Date): number | null {
   if (capturedAt === null) return null

@@ -35,6 +35,7 @@ import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { planBatch, POST_CAP_PER_WEEK, MIN_DAYS_BETWEEN_POSTS } from '../src/lib/original-post-persona-match'
 // 🔴 생성 말투 → 최종 author. 러너 · 관제 · 예측 · 준비도가 이 함수 하나를 쓴다
 import { voiceInputOf } from '../src/lib/original-post-auto-publish'
+import { capturedAtOfRow } from '../src/lib/supply-candidates'
 // 🔴 생성 말투 → 최종 author. 여기서 읽지 않으면 연결이 끊긴다
 
 import { planStore } from '../src/lib/original-post-match-store'
@@ -141,7 +142,10 @@ if (rejected.length > 0) {
 }
 
 // 🔴 신선도 근거 — queueId → 원문 확인 시각
-const capturedAtOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
+/** 🔴 원천 시각은 정본 한 함수가 읽는다 — 모른다고 적힌 행은 `null` 이다 */
+const capturedAtOf = new Map(raw.map((r) => [r.id, capturedAtOfRow({
+  sourceCapturedAt: r.rawContent?.sourceCapturedAt ?? null, gateResults: r.gateResults,
+})]))
 
 // ── ③ persona 배정 가능성 ──
 const WEEK_AGO = new Date(Date.now() - 7 * 864e5)

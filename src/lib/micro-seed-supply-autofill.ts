@@ -610,6 +610,32 @@ export function queueSourceTimesOf(c: {
   }
 }
 
+/**
+ * 🔴 **원천을 언제 봤는가 — 지어내지 않는다** (2026-09-22).
+ *
+ *    앞판 적재기는 `MicroSeedRawContent.sourceCapturedAt` 에 **검토 시각**
+ *    (`reviewedAt`, 없으면 `new Date()`)을 넣었다. 그 칸은 발행기가 TTL 을 재는
+ *    바로 그 값이다. 그래서 **9/17 에 수집한 원천이 오늘 수집한 것으로 보였다**(실측:
+ *    큐 `cmuc80gx4…` 가 실제 9/17 원천인데 DB 는 9/22 14:15 로 기록).
+ *    시의성 있는 소재라면 오래된 원천이 새 글로 그대로 나간다.
+ *
+ * 🔴 **스키마를 바꾸지 않는다.** `sourceCapturedAt` 은 non-null 컬럼이고
+ *    migration 은 금지다. 그래서 **아는 값이면 그 값을 넣고**, 모르면 컬럼에는
+ *    적재 시각을 넣되 `gateResults` 에 **모른다는 사실을 남긴다**.
+ *    읽는 쪽(`draftOf`)이 그 표식을 보고 나이를 `null` 로 돌린다 —
+ *    `null` 은 이미 `unknown` 으로 판정돼 **자동 발행에서 빠지고 사람 검수로 간다.**
+ *    (새 상태도, 새 게이트도 만들지 않는다.)
+ *
+ * 🔴 9/18 이후 수집분은 **100% 실제 시각을 싣고 있다**(실측 463/463).
+ *    그래서 이 보정이 지금 흐름에 새 병목을 만들지 않는다 — 옛 백로그만 사람에게 간다.
+ */
+export const SOURCE_CAPTURED_KNOWN_KEY = 'sourceCapturedKnown'
+
+export function sourceCapturedAtOf(c: unknown): Date | null {
+  if (c === null || typeof c !== 'object') return null
+  return isoOrNull((c as Record<string, unknown>).sourceCapturedAt)
+}
+
 export function buildQueuePayload(input: {
   envelope: Envelope
   candidate: Candidate
@@ -672,6 +698,14 @@ export function buildQueuePayload(input: {
            */
           artifactId: S((c as unknown as Record<string, unknown>).artifactId),
           sourceArticleId: S(c.sourceArticleId),
+          /**
+           * 🔴 **원천을 언제 봤는지 아는가** (2026-09-22).
+           *    `MicroSeedRawContent.sourceCapturedAt` 은 non-null 이라 모를 때도
+           *    값이 들어간다. 그 값을 TTL 로 쓰면 **옛 원천이 오늘 것으로 보인다**.
+           *    그래서 여기 사실을 남기고, `capturedAtOfRow` 가 읽어 나이를 `null` 로 돌린다.
+           *    🔴 `null` 은 이미 `unknown` 판정이라 자동 발행에서 빠지고 사람 검수로 간다.
+           */
+          [SOURCE_CAPTURED_KNOWN_KEY]: sourceCapturedAtOf(c) !== null,
           draftRuleVersion: S(env.ruleVersion),
           draftPromptVersion: S(env.promptVersion),
           // 🔴 단계별 모델을 그대로 남긴다 — 한 칸으로 뭉개지 않는다
