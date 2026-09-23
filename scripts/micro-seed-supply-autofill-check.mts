@@ -568,12 +568,33 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     if (real !== null) break
   }
 
-  if (real === null) {
-    // 🔴 파일이 없으면 **건너뛰지 않는다.** 없는 것을 통과로 읽지 않는다.
-    check('🔴 🔴 **결함이 실린 실제 artifact 를 찾았다**', false)
-  } else {
-    const sum = semanticSummaryOf(real.review)!
-    check('🔴 ① 실제 artifact 에서 결함을 읽는다', sum.unsupportedAdditions === real.n)
+  /**
+   * 🔴 **CI 에는 `.microseed-data` 가 없다** — 그 파일은 운영 머신의 로컬 산출물이다.
+   *    그래서 "파일이 없으면 실패" 로 두면 CI 가 언제나 빨갛다.
+   *
+   * 🔴 대신 **실제 artifact 에서 그대로 옮겨 온 값**으로 같은 경로를 검증한다.
+   *    아래 값은 2026-09-22 22:15 회차 원천 35019068(P07) 의 `review` 다 —
+   *    지어낸 모양이 아니라 운영이 실제로 낸 판정이고, 그렇게 적는다.
+   *    로컬에서는 위에서 찾은 **실제 파일**이 이 자리를 대신한다.
+   */
+  const SNAPSHOT_35019068 = {
+    deterministic: { pass: true, failures: [] },
+    semantic: {
+      issues: [], unknownIssues: [], droppedFromSource: [],
+      unsupportedAdditions: [
+        { evidence: '어디서 글을 읽다 보니까 …', why: "원문에는 '아들 낳으면 왜 안쓰럽게 보는지' 궁금해하는 주제인데, 초안은 구체적 행동을 추가했다" },
+        { evidence: '주변 보면 … 많잖아요.', why: "원문은 '봤거든요'(경험)인데, 초안은 '주변 보면' 으로 바꿨다" },
+      ],
+      lifeContradictions: [], confidence: 0.75,
+    },
+    semanticCompletion: { complete: true, reason: null, cause: null },
+  }
+  const src = real ?? { file: '(스냅샷 — 실제 22:15 회차 값)', review: SNAPSHOT_35019068, n: 2 }
+  check('🔴 결함이 실린 판정을 근거로 쓴다 (로컬=실제 파일 · CI=실제 값 스냅샷)',
+    semanticSummaryOf(src.review) !== null)
+  {
+    const sum = semanticSummaryOf(src.review)!
+    check('🔴 ① 그 판정에서 결함을 읽는다', sum.unsupportedAdditions === src.n && sum.unsupportedAdditions > 0)
 
     // ② 후보 파일이 나르는 모양 (micro-seed-auto-draft 가 싣는 값)
     const carried = { semantic: sum, deterministic: { pass: sum.deterministicPass },
