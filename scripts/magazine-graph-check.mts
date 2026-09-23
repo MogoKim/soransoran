@@ -69,6 +69,16 @@ import {
   type StepResult,
 } from './magazine-graph-watch.mjs'
 import {
+  PRODUCTION_HOST,
+  checkAuth,
+  redeployProduction,
+  resolveBin,
+  resolveProdDeployment,
+  resolveProject,
+  setKillEnv as vercelSetKillEnv,
+  type VercelDeps,
+} from './lib/mgraph-vercel.mjs'
+import {
   GRAPH_BRANCH_PREFIX,
   isGraphLaneFile,
   judgeGraphMerge,
@@ -917,7 +927,18 @@ const fakeDeps = (
     },
     now: () => new Date('2026-09-23T12:00:00+09:00'),
     vercel: {
-      hasCredentials: () => opts.vercelCreds ?? true,
+      preflight: () => {
+        calls.push('preflight')
+        if (opts.vercelCreds === false) return { ok: false, why: '🔴 Vercel CLI 에 로그인돼 있지 않다' }
+        return {
+          ok: true,
+          value: {
+            who: 'tester',
+            project: { dir: '/p', projectId: 'prj_test', orgId: 'team_test', projectName: 'soransoran' },
+            deployment: { id: 'dpl_test', target: 'production', status: 'Ready', url: 'https://x' },
+          },
+        }
+      },
       setKillEnv: () => {
         calls.push('setKillEnv')
         return opts.setEnv ?? { ok: true, detail: 'MGRAPH_GRAPH_KILL=1' }
@@ -1035,7 +1056,7 @@ const fakeDeps = (
     const full = fakeDeps(leakPages)
     const applied = await runGraphWatch({ deps: full, articles: arts, apply: true })
     check('--apply 면 네 단계가 순서대로 불린다',
-      full.calls.join('→') === 'setKillEnv→redeploy→writeControl→commitAndMerge',
+      full.calls.join('→') === 'preflight→setKillEnv→redeploy→writeControl→commitAndMerge',
       full.calls.join(' → '))
     check('  환경변수만 바꾸고 끝내지 않는다 (재배포까지 부른다)', full.calls.includes('redeploy'))
     check('  전부 성공하면 자동화 실패가 아니다', applied.automationFailed === false)
@@ -1044,8 +1065,9 @@ const fakeDeps = (
     /** 🔴 credential 이 없으면 **성공으로 속이지 않는다** */
     const noCreds = fakeDeps(leakPages, { vercelCreds: false })
     const r1 = await runGraphWatch({ deps: noCreds, articles: arts, apply: true })
-    check('Vercel credential 이 없으면 자동화 실패다', r1.automationFailed === true)
-    check('  끄지도 않고 부르지도 않는다', !noCreds.calls.includes('setKillEnv'))
+    check('Vercel 로그인이 없으면 자동화 실패다', r1.automationFailed === true)
+    check('  🔴 준비가 서지 않으면 끄지도 재배포하지도 않는다',
+      !noCreds.calls.includes('setKillEnv') && !noCreds.calls.includes('redeploy'))
     check('  그래도 층2 는 계속 간다 (할 수 있는 것은 한다)', noCreds.calls.includes('writeControl'))
 
     const noGh = fakeDeps(leakPages, { laneCreds: false })
@@ -1054,10 +1076,18 @@ const fakeDeps = (
     check('  영구 반영을 시도하지 않는다', !noGh.calls.includes('commitAndMerge'))
 
     /** 🔴 한 단계가 실패해도 실패로 끝난다 — 알림으로 갈음하지 않는다 */
-    const envFail = fakeDeps(leakPages, { setEnv: { ok: false, detail: '토큰 거부' } })
+    const envFail = fakeDeps(leakPages, { setEnv: { ok: false, detail: '설정 거부' } })
     const r3 = await runGraphWatch({ deps: envFail, articles: arts, apply: true })
-    check('한 단계라도 실패하면 자동화 실패다', r3.automationFailed === true)
-    check('  나머지 단계는 계속 시도한다', envFail.calls.includes('commitAndMerge'))
+    check('env 설정이 실패하면 자동화 실패다', r3.automationFailed === true)
+    check('  🔴 값이 안 들어갔으면 재배포하지 않는다 (끄지 않은 채 다시 배포하는 꼴)',
+      !envFail.calls.includes('redeploy'))
+    check('  층2 는 계속 시도한다', envFail.calls.includes('commitAndMerge'))
+
+    const redeployFail = fakeDeps(leakPages, { redeploy: { ok: false, detail: '재배포 거부' } })
+    const r3b = await runGraphWatch({ deps: redeployFail, articles: arts, apply: true })
+    check('재배포가 실패하면 자동화 실패다 — env 만 성공은 성공이 아니다',
+      r3b.automationFailed === true)
+    check('  env 는 실제로 불렸다', redeployFail.calls.includes('setKillEnv'))
 
     /** 🔴 누출이 없으면 --apply 여도 아무것도 하지 않는다 */
     const cleanApply = fakeDeps({ [a]: pageWith([b]) })
@@ -1121,7 +1151,8 @@ check(
   const src = readFileSync(join(ROOT, 'scripts/magazine-graph-watch.mts'), 'utf8')
   check('  환경변수만 바꾸면 반영되지 않는다는 사실이 적혀 있다',
     /값만 바꾸면 현재 배포는 그대로다/.test(src))
-  check('  그래서 재배포를 호출하는 자리가 있다', /deps\.vercel\.redeploy\(\)/.test(src))
+  check('  그래서 재배포를 호출하는 자리가 있다', /deps\.vercel\.redeploy\(\{/.test(src))
+  check('  재배포에 프로젝트와 배포 대상을 넘긴다', /deps\.vercel\.redeploy\(\{ project, deployment \}\)/.test(src))
 }
 
 // ── ⑨-B 🔴 실제 롤백 동작 — resolver 를 직접 돌린다 ──────
@@ -1236,6 +1267,223 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
   const curSrc = readFileSync(curPath, 'utf8')
   check('current.ts 가 2파일 전환을 요구한다고 적고 있다',
     curSrc.includes('control.ts') && curSrc.includes('VERSION_MISMATCH'))
+}
+
+// ── ⑨-C 🔴 Vercel 자동 차단 — 최종 argv 까지 본다 ────────
+console.log('\n⑨-C Vercel 자동 차단 (argv · 해석)')
+
+/**
+ * 🔴 **함수 호출 mock 만으로 PASS 시키지 않는다.**
+ *    앞판은 `setKillEnv()` 가 불렸는지만 봤고, 그 안에서 만들어지는 명령이
+ *    `--value` 없이 stdin 을 기다리는 명령이라는 것을 못 잡았다.
+ *    여기서는 **가짜 CLI 를 놓고 최종 argv 를 통째로 대조한다.**
+ */
+{
+  /** 호출된 argv 를 전부 기록하는 가짜 CLI */
+  const makeFake = (
+    responses: Record<string, { code: number; out: string; err?: string }>,
+  ) => {
+    const argvLog: string[][] = []
+    const deps: VercelDeps = {
+      bin: '/fake/vercel',
+      projectDirs: ['/link-a'],
+      exists: (p) => p === '/link-a/.vercel/project.json',
+      readFile: () =>
+        JSON.stringify({ projectId: 'prj_AAA', orgId: 'team_AAA', projectName: 'soransoran' }),
+      run: (_bin, args) => {
+        argvLog.push(args)
+        const key = args[0] === 'env' ? 'env' : args[0]
+        const r = responses[key] ?? { code: 0, out: '' }
+        return { code: r.code, out: r.out, err: r.err ?? '' }
+      },
+    }
+    return { deps, argvLog }
+  }
+
+  const INSPECT_OK = [
+    '  General',
+    '    id\t\tdpl_REAL123',
+    '    name\tsoransoran',
+    '    target\tproduction',
+    '    status\t● Ready',
+    '    url\t\thttps://soransoran-xxx.vercel.app',
+  ].join('\n')
+
+  // ── ① 정상 경로: env 설정 → 정확한 Production 재배포 ──
+  {
+    const { deps, argvLog } = makeFake({ inspect: { code: 0, out: INSPECT_OK } })
+    const project = resolveProject(deps)
+    check('연결된 프로젝트를 명시적으로 찾는다', project.ok && project.value.projectId === 'prj_AAA')
+    if (!project.ok) throw new Error('표본 실패')
+
+    const dep = resolveProdDeployment(deps, project.value)
+    check('운영 도메인이 가리키는 배포를 해석한다', dep.ok && dep.value.id === 'dpl_REAL123',
+      dep.ok ? dep.value.id : dep.why)
+    if (!dep.ok) throw new Error('표본 실패')
+
+    check(`  inspect 가 ${PRODUCTION_HOST} 를 대상으로 돈다`,
+      argvLog.some((a) => a[0] === 'inspect' && a[1] === PRODUCTION_HOST))
+    check('  🔴 --cwd 로 프로젝트를 명시한다 (현재 디렉터리에 의존하지 않는다)',
+      argvLog.every((a) => a.includes('--cwd') && a[a.indexOf('--cwd') + 1] === '/link-a'))
+
+    const env = vercelSetKillEnv(deps, project.value)
+    check('env 설정이 성공한다', env.ok)
+    const envArgv = argvLog.find((a) => a[0] === 'env') ?? []
+    check(
+      '🔴 env argv 가 실제 CLI 계약과 같다',
+      envArgv.join(' ') ===
+        'env add MGRAPH_GRAPH_KILL production --value 1 --yes --force --cwd /link-a',
+      envArgv.join(' '),
+    )
+    check('  🔴 --value 1 이 있다 (없으면 stdin 을 기다려 launchd 에서 멈춘다)',
+      envArgv.includes('--value') && envArgv[envArgv.indexOf('--value') + 1] === '1')
+    check('  🔴 --yes 가 있다 (확인 프롬프트가 뜨지 않는다)', envArgv.includes('--yes'))
+    check('  🔴 --force 가 있다 (두 번째 차단도 된다)', envArgv.includes('--force'))
+    check('  🔴 토큰을 argv 에 싣지 않는다', !envArgv.includes('--token'))
+
+    const re = redeployProduction(deps, project.value, dep.value)
+    check('재배포가 성공한다', re.ok)
+    const reArgv = argvLog.find((a) => a[0] === 'redeploy') ?? []
+    check(
+      '🔴 redeploy argv 가 대상을 명시한다',
+      reArgv.join(' ') === 'redeploy dpl_REAL123 --target production --cwd /link-a',
+      reArgv.join(' '),
+    )
+    check('  🔴 배포 id 가 위치 인자로 들어간다 (없으면 무엇을 재배포할지 모른다)',
+      reArgv[1] === 'dpl_REAL123')
+    check('  🔴 --target production 이 있다', reArgv.includes('--target') && reArgv.includes('production'))
+
+    // 🔴 순서: env 가 redeploy 보다 먼저다
+    const iEnv = argvLog.findIndex((a) => a[0] === 'env')
+    const iRe = argvLog.findIndex((a) => a[0] === 'redeploy')
+    check('🔴 env 설정이 재배포보다 먼저 일어난다', iEnv >= 0 && iRe > iEnv, `env@${iEnv} redeploy@${iRe}`)
+  }
+
+  // ── ② 로그인 없음 ──
+  {
+    const { deps } = makeFake({ whoami: { code: 1, out: '', err: 'Not authorized' } })
+    const r = checkAuth(deps)
+    check('🔴 로그인이 없으면 실패한다', !r.ok && r.why.includes('로그인'))
+  }
+
+  // ── ③ 프로젝트 연결 없음 ──
+  {
+    const { deps } = makeFake({})
+    const noLink: VercelDeps = { ...deps, exists: () => false }
+    const r = resolveProject(noLink)
+    check('🔴 프로젝트 연결이 없으면 실패한다', !r.ok && r.why.includes('찾지 못했다'))
+  }
+
+  // ── ④ 프로젝트가 모호함 (서로 다른 projectId) ──
+  {
+    const { deps } = makeFake({})
+    const two: VercelDeps = {
+      ...deps,
+      projectDirs: ['/a', '/b'],
+      exists: () => true,
+      readFile: (p) =>
+        JSON.stringify({
+          projectId: p.startsWith('/a') ? 'prj_AAA' : 'prj_BBB',
+          orgId: 'team_X',
+          projectName: 'x',
+        }),
+    }
+    const r = resolveProject(two)
+    check('🔴 서로 다른 프로젝트가 보이면 확정하지 않고 실패한다', !r.ok && r.why.includes('확정할 수 없다'))
+  }
+  {
+    // 같은 projectId 가 여러 곳이면 문제없다
+    const { deps } = makeFake({})
+    const same: VercelDeps = { ...deps, projectDirs: ['/a', '/b'], exists: () => true }
+    const r = resolveProject(same)
+    check('  같은 프로젝트가 여러 곳에 링크돼 있으면 정상이다', r.ok)
+  }
+
+  // ── ⑤ Production 배포가 모호함 ──
+  for (const [why, out] of [
+    ['id 를 못 읽음', '  General\n    name\tsoransoran'],
+    ['target 이 preview', '    id\t\tdpl_X\n    target\tpreview\n    status\t● Ready'],
+    ['status 가 Building', '    id\t\tdpl_X\n    target\tproduction\n    status\t● Building'],
+    ['status 가 Error', '    id\t\tdpl_X\n    target\tproduction\n    status\t● Error'],
+  ] as const) {
+    const { deps } = makeFake({ inspect: { code: 0, out } })
+    const project = resolveProject(deps)
+    const r = project.ok ? resolveProdDeployment(deps, project.value) : { ok: false as const, why: 'x' }
+    check(`🔴 Production 배포가 확정되지 않으면 실패한다 — ${why}`, !r.ok)
+  }
+  {
+    const { deps } = makeFake({ inspect: { code: 1, out: '', err: 'not found' } })
+    const project = resolveProject(deps)
+    const r = project.ok ? resolveProdDeployment(deps, project.value) : { ok: false as const, why: 'x' }
+    check('🔴 inspect 자체가 실패하면 실패한다', !r.ok)
+  }
+
+  // ── ⑥ env 설정 실패 · 재배포 실패 ──
+  {
+    const { deps } = makeFake({ env: { code: 1, out: '', err: 'forbidden' } })
+    const project = resolveProject(deps)
+    const r = project.ok ? vercelSetKillEnv(deps, project.value) : { ok: false as const, why: 'x' }
+    check('🔴 env 설정이 실패하면 실패로 돌려준다', !r.ok)
+  }
+  {
+    const { deps } = makeFake({ inspect: { code: 0, out: INSPECT_OK }, redeploy: { code: 1, out: '', err: 'nope' } })
+    const project = resolveProject(deps)
+    if (!project.ok) throw new Error('표본 실패')
+    const dep = resolveProdDeployment(deps, project.value)
+    if (!dep.ok) throw new Error('표본 실패')
+    const r = redeployProduction(deps, project.value, dep.value)
+    check('🔴 재배포가 실패하면 실패로 돌려준다', !r.ok)
+  }
+
+  // ── ⑦ 실행 파일을 못 찾으면 실패 ──
+  check('🔴 vercel 실행 파일이 없으면 실패한다',
+    !resolveBin(['/no/such/vercel'], () => false).ok)
+  check('  PATH 이름은 그대로 쓴다', resolveBin(['vercel'], () => false).ok)
+
+  /**
+   * 🔴 **stderr 로만 오는 출력을 놓치지 않는가.**
+   *    `vercel inspect` 는 사람이 읽는 출력을 전부 stderr 로 보낸다(실측).
+   *    stdout 만 읽는 실행기를 쓰면 배포 id 를 영영 못 읽는다 —
+   *    실제로 그 결함을 겪었다. 파서가 둘을 합쳐 보는지 고정한다.
+   */
+  {
+    const { deps } = makeFake({})
+    const onlyStderr: VercelDeps = {
+      ...deps,
+      run: (_b, args) =>
+        args[0] === 'inspect'
+          ? { code: 0, out: '', err: INSPECT_OK }   // 🔴 stdout 은 비어 있다
+          : { code: 0, out: '', err: '' },
+    }
+    const project = resolveProject(onlyStderr)
+    const r = project.ok ? resolveProdDeployment(onlyStderr, project.value) : { ok: false as const, why: 'x' }
+    check('🔴 출력이 stderr 로만 와도 배포를 해석한다', r.ok && r.value.id === 'dpl_REAL123',
+      r.ok ? r.value.id : r.why)
+  }
+  {
+    const vercelSrc = readFileSync(join(ROOT, 'scripts/lib/mgraph-vercel.mts'), 'utf8')
+    const code = vercelSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    check('  🔴 execFileSync 를 쓰지 않는다 (성공 시 stderr 를 버린다)',
+      !/execFileSync/.test(code))
+    check('  spawnSync 로 stdout·stderr 를 둘 다 받는다', /spawnSync/.test(code))
+  }
+
+  // ── ⑧ 🔴 비밀값이 새지 않는다 ──
+  {
+    const watchSrc = readFileSync(join(ROOT, 'scripts/magazine-graph-watch.mts'), 'utf8')
+    const vercelSrc = readFileSync(join(ROOT, 'scripts/lib/mgraph-vercel.mts'), 'utf8')
+    const plist = readFileSync(
+      join(ROOT, 'docs/operations/launchd/magazine/com.soransoran.magazine-graph-watch.plist.template'),
+      'utf8',
+    )
+    for (const [name, src] of [['watch', watchSrc], ['vercel 모듈', vercelSrc], ['plist', plist]] as const) {
+      check(`🔴 ${name} 에 토큰 원문이 없다`,
+        !/VERCEL_TOKEN\s*[:=]\s*['"][^'"]+['"]|--token\s+[A-Za-z0-9]{10,}/.test(src))
+    }
+    check('🔴 plist 에 Vercel 환경변수를 두지 않는다 (PATH·HOME 뿐)',
+      !/VERCEL_/.test(plist))
+    check('🔴 argv 에 --token 을 넣지 않는다', !/'--token'/.test(vercelSrc))
+  }
 }
 
 // ── ⑩ 그래프 전용 병합 레인 ──────────────────────────────
