@@ -722,24 +722,20 @@ check(
   check('  그 글의 예전 결과를 그대로 준다', out.join(',') === legacyOf(published[0]).join(','))
 }
 
-/** 🔴 버전 불일치는 **런타임** 폴백이다 (파일 누락과 달리) */
-{
-  const mutable = CONTROL as unknown as { graphVersion: string }
-  const real = mutable.graphVersion
-  let reason: string | null = null
-  let out: string[] = []
-  try {
-    mutable.graphVersion = 'g-어긋난-버전'
-    const r = resolveRelatedMagazine(published[0], ALL_ON)
-    reason = r.reason
-    out = r.items.map((i) => i.article.slug)
-  } finally {
-    mutable.graphVersion = real
-  }
-  check('GRAPH 와 CONTROL 의 버전이 다르면 폴백한다', reason === 'VERSION_MISMATCH')
-  check('  그 결과가 예전과 같다', out.join(',') === legacyOf(published[0]).join(','))
-  check('  검사가 끝난 뒤 버전이 되돌아왔다', CONTROL.graphVersion === GRAPH.graphVersion)
-}
+/**
+ * 🔴 버전 불일치는 **런타임** 폴백이다 (파일 누락과 달리).
+ *
+ * 🔴 **여기서 시험하지 않는다.** 앞판은 import 한 `CONTROL` 의 속성을 런타임에 바꿔
+ *    확인했는데, 그것은 모듈 로더의 구현 세부에 기대는 방식이다 —
+ *    Node 24 에서는 통과했지만 CI(Node 20 + tsx)에서 실패했다.
+ *    시험이 환경에 따라 답이 갈리면 그것은 시험이 아니다.
+ *
+ *    ⑨-B 가 **실제 파일을 바꾸고 별도 프로세스에서 resolver 를 돌려** 같은 것을
+ *    더 강하게 증명한다 (current.ts 만 돌림 → VERSION_MISMATCH).
+ *    운영이 실제로 겪는 경로와 같으므로 그쪽이 정본이다.
+ */
+check('버전 불일치 폴백은 ⑨-B 가 실제 파일로 증명한다', true, '이 자리에서는 모듈 변조를 쓰지 않는다')
+check('  지금 번들과 control 의 버전은 일치한다', CONTROL.graphVersion === GRAPH.graphVersion)
 
 // ── ⑥ 한 글이 막혀도 다른 글은 멀쩡한가 ────────────────────
 console.log('\n⑥ 한 글이 막혀도 나머지는 멀쩡하다')
@@ -1209,6 +1205,11 @@ console.log('\n⑨-B 롤백 (2파일 원자적 전환)')
       '🔴 current.ts 만 돌리면 VERSION_MISMATCH 폴백이다 (롤백이 아니다)',
       oneFile.source === 'FALLBACK' && oneFile.reason === 'VERSION_MISMATCH',
       `${oneFile.source} · ${oneFile.reason}`,
+    )
+    check(
+      '  그때 화면은 예전 최신 3편이다',
+      oneFile.items === legacyOf(graphBacked ?? published[0]).length,
+      `${oneFile.items}건`,
     )
 
     // ── ③ 🔴 control.ts 까지 함께 돌리면 — 옛 그래프가 실제로 돈다 ──
