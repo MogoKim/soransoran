@@ -26,6 +26,12 @@ import {
   SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
 } from '../src/lib/content-core/speaker'
 import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis } from '../src/lib/persona-self-age'
+import { speakerRelativeAxisOf } from '../src/lib/content-core/speaker'
+import { parsePoolDoc } from '../src/lib/persona-pool-card'
+import { planAxisMapping, SPEAKER_RELATIVE_AXES } from '../src/lib/content-core/speaker-relative-facts'
+import {
+  exactAgeOf, birthAnchorOf, exactAgeOn, checkLifeConsistency,
+} from '../src/lib/persona-birth-anchor'
 import { selectWorkset } from '../src/lib/supply-workset'
 import { SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
 import { EVIDENCE_CHAR_BUDGET, buildEvidencePacket } from '../src/lib/content-core/evidence'
@@ -1650,6 +1656,111 @@ console.log('\n🔴 🔴 **재시도 자격 — `selectWorkset` 실행으로 확
     })
     return !p2.workset.sourceIds.includes('done-1')
   })())
+}
+
+console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제하지 않는다 (P02 실패 사슬)**')
+{
+  const span = (text: string) => [{ kind: 'head' as const, text, fromRatio: 0, toRatio: 1 }]
+
+  // ① 원문 화자의 나이는 `protectedFacts` 에서 걷어낸다
+  check('🔴 🔴 **원문 "낼44인데" 의 44 는 화자 상대 사실로 잡힌다**',
+    speakerRelativeAxisOf({ text: '44', ref: 'head', spans: span('낼44인데 아직도 어리단소리들어요 ㅋ') }) === 'age')
+  check('🔴 🔴 **제3자 나이는 걷어내지 않는다 — 원문 이야기의 일부다**',
+    speakerRelativeAxisOf({ text: '44', ref: 'head', spans: span('아는 분이 44인데 그렇대요') }) === null)
+  check('🔴 🔴 **나이가 아닌 숫자(80퍼)는 그대로 지킨다**',
+    speakerRelativeAxisOf({ text: '80퍼', ref: 'head', spans: span('진짜여잔 피부가80퍼...') }) === null)
+  check('🔴 기간·금액은 그대로 지킨다',
+    speakerRelativeAxisOf({ text: '3일', ref: 'head', spans: span('3일 뒀더니 시어졌어요') }) === null)
+
+  // ② Persona 정확 나이 — birth anchor
+  const p02 = { code: 'P02', ageBand: '40대 후반' }
+  const a = exactAgeOf({ ...p02, onKstDate: '2026-09-23' })
+  check('🔴 🔴 **P02 의 정확한 나이가 나온다**', a.ok === true, JSON.stringify(a))
+  check('🔴 🔴 **그 나이는 정본 `40대 후반`(47~49) 안이다**',
+    a.ok && a.age >= 47 && a.age <= 49, a.ok ? String(a.age) : '-')
+  check('🔴 🔴 **같은 code 면 언제나 같은 값 — 무작위가 아니다**', (() => {
+    const b = exactAgeOf({ ...p02, onKstDate: '2026-09-23' })
+    return a.ok && b.ok && a.age === b.age && a.birthDate === b.birthDate
+  })())
+  check('🔴 🔴 **해가 바뀌면 나이도 는다 — 사람이 매년 고치지 않는다**', (() => {
+    const anchor = birthAnchorOf(p02)!
+    const y0 = exactAgeOn(anchor.birthDate, '2026-12-31')!
+    const y5 = exactAgeOn(anchor.birthDate, '2031-12-31')!
+    return y5 === y0 + 5
+  })())
+  check('🔴 🔴 **밴드를 못 읽으면 나이를 만들지 않는다 (fail-closed)**',
+    exactAgeOf({ code: 'PX', ageBand: null, onKstDate: '2026-09-23' }).ok === false)
+  check('🔴 🔴 **계산한 나이가 밴드 밖이면 쓰지 않는다**', (() => {
+    const far = exactAgeOf({ ...p02, onKstDate: '2036-09-23' })
+    return !far.ok && far.code === 'OUT_OF_BAND'
+  })())
+  check('🔴 생일 전후로 한 살이 갈린다', (() => {
+    const anchor = birthAnchorOf(p02)!
+    const [y, m, d] = anchor.birthDate.split('-')
+    const before = exactAgeOn(anchor.birthDate, `2026-${m}-${String(Number(d) - 1 > 0 ? Number(d) - 1 : 1).padStart(2, '0')}`)
+    const on = exactAgeOn(anchor.birthDate, `2026-${m}-${d}`)
+    return Number(y) > 1900 && before !== null && on !== null && on >= before
+  })())
+  check('🔴 🔴 **기준일 뒤에 생일이 오는 Persona 도 밴드 안이다 (실측 버그 회귀)**', (() => {
+    // 🔴 `baseY - age` 로만 잡으면 생일이 기준일보다 뒤인 경우 한 살 적어져
+    //    며칠만 지나도 OUT_OF_BAND 가 났다 (P01·P16·P19 실측).
+    // 🔴 밴드를 추측하지 않는다 — **Pool 정본 문서**에서 읽는다
+    const doc = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8'))
+    for (const c of doc.cards) {
+      // 🔴 기준일부터 **1년 뒤까지** 어느 날이든 밴드 안이어야 한다 —
+      //    그래야 사람이 매년 카드를 고치지 않아도 된다
+      for (const d of ['2026-08-30', '2026-09-23', '2026-12-31', '2027-08-29']) {
+        if (!exactAgeOf({ code: c.code, ageBand: c.ageBand, onKstDate: d }).ok) return false
+      }
+    }
+    return doc.cards.length >= 20
+  })())
+  check('🔴 생활사 모순을 잡는다 — 자녀 40세인데 화자 49세', (() => {
+    const probs = checkLifeConsistency({ age: 49, childrenAgeBands: ['40대'] })
+    return probs.some((x) => x.axis === 'children')
+  })())
+
+  // ③ 자동 변환 — 사람 손 없이
+  const FACTS = (role: 'incidental' | 'loadBearing') =>
+    [{ axis: 'age' as const, sourceText: '42', role }]
+  const persona = (exactAge: number | null, band: string | null) => ({
+    exactAge, ageBand: band, maritalStatus: '기혼', childrenCount: 1,
+    parentCare: null, menopauseStatus: null, work: null, region: null,
+  })
+  const m49 = planAxisMapping({ facts: FACTS('incidental'), persona: persona(49, '40대 후반') })
+  check('🔴 🔴 **원문 42 + Persona 49 → "49살" 로 서술하라는 지시가 나온다**',
+    m49.ok && m49.mappings[0]?.personaText === '49살'
+    && m49.mappings[0].outputRule.includes('복제하지 않고'), JSON.stringify(m49))
+  check('🔴 🔴 **정확한 나이가 없으면 연령대까지만 — 숫자를 지어내지 않는다**', (() => {
+    const m = planAxisMapping({ facts: FACTS('incidental'), persona: persona(null, '50대 초반') })
+    return m.ok && m.mappings[0]?.personaText === '50대 초반'
+  })())
+  check('🔴 🔴 **원문에 나이가 없으면 아무것도 더하지 않는다**', (() => {
+    const m = planAxisMapping({ facts: [], persona: persona(49, '40대 후반') })
+    return m.ok && m.mappings.length === 0 && m.note.includes('더하지 않는다')
+  })())
+  check('🔴 🔴 **결론을 바꾸는 나이는 숫자만 바꾸지 않는다 — 재계획 또는 HOLD**', (() => {
+    const m = planAxisMapping({ facts: FACTS('loadBearing'), persona: persona(49, '40대 후반') })
+    return !m.ok && m.code === 'LOAD_BEARING' && m.axis === 'age'
+  })())
+  check('🔴 우리 쪽 값이 없으면 그 축을 언급하지 않는다', (() => {
+    const m = planAxisMapping({
+      facts: [{ axis: 'region', sourceText: '부산', role: 'incidental' }],
+      persona: persona(49, '40대 후반'),
+    })
+    return m.ok && m.mappings[0]?.personaText === null
+      && m.mappings[0].outputRule.includes('언급하지 않는다')
+  })())
+  check('🔴 나이 말고 다른 축도 같은 계약으로 바뀐다 (혼인·자녀)', (() => {
+    const m = planAxisMapping({
+      facts: [{ axis: 'maritalStatus', sourceText: '이혼', role: 'incidental' },
+        { axis: 'children', sourceText: '자녀 셋', role: 'incidental' }],
+      persona: persona(49, '40대 후반'),
+    })
+    return m.ok && m.mappings[0]?.personaText === '기혼' && m.mappings[1]?.personaText === '자녀 1'
+  })())
+  check('🔴 축 목록이 일곱이다 — 축마다 패치하지 않는다',
+    SPEAKER_RELATIVE_AXES.length === 7)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

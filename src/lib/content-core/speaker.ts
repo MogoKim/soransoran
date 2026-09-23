@@ -40,6 +40,8 @@ import {
   type ClaimFact, type ClosingIntent, type ContentRole, type DropReason,
   type EvidenceRef, type ProtectedFact, type ProtectedFactKind,
 } from './source-facts'
+import { readSelfAgeClaim, OTHER_MARKERS } from '../persona-self-age'
+import { type SpeakerRelativeAxis } from './speaker-relative-facts'
 
 export const SPEAKER_PLAN_VERSION = 'speaker-plan-v4'
 
@@ -375,6 +377,17 @@ export function parseSpeakerPlan(
     }
     const verdict = judgeProtectedFact(kind as ProtectedFactKind, text)
     if (!verdict.ok) { dropped.push({ text, why: verdict.why }); continue }
+    /**
+     * 🔴 **원문 화자 자신의 사실은 지키지 않는다** (2026-09-23).
+     *
+     *    P02 실패: 모델이 `{kind:'number', text:'44'}` 를 냈고, 검증은 "증거에 있는가 ·
+     *    개인정보인가 · kind 가 맞는가" 만 물어 **그대로 통과**했다. 그 44 가 초안에
+     *    "제가 곧 44인데" 로 남았고 P02 정본(40대 후반)과 어긋났다.
+     *
+     *    🔴 **제3자의 나이는 걷어내지 않는다** — 그것은 원문 이야기의 일부다.
+     */
+    const selfAxis = speakerRelativeAxisOf({ text, ref: ref as EvidenceRef, spans })
+    if (selfAxis !== null) { dropped.push({ text, why: 'speakerRelative' }); continue }
     facts.push({ kind: kind as ProtectedFactKind, text, evidenceRef: ref as EvidenceRef })
   }
 
@@ -498,3 +511,39 @@ export function canGenerate(
   }
   return { ok: true, why: '' }
 }
+
+/**
+ * 🔴 **이 사실이 원문 화자 자신의 것인가.** 맞으면 축을, 아니면 `null`.
+ *
+ * 🔴 판정 계약을 새로 만들지 않는다 — 나이는 `readSelfAgeClaim` 정본이 본다.
+ *    그 함수가 제3자·과거 시점·근사 표현 오탐을 이미 걸러 준다.
+ */
+export function speakerRelativeAxisOf(input: {
+  text: string
+  ref: EvidenceRef
+  spans: readonly EvidenceSpan[]
+}): SpeakerRelativeAxis | null {
+  const host = input.spans.find((s) => s.kind === input.ref)?.text ?? ''
+  if (host === '') return null
+  for (const clause of host.split(/[\n.!?]|(?<=[다요죠])\s/)) {
+    if (!clause.includes(input.text)) continue
+    // 🔴 1인칭 표지가 뚜렷하면 정본이 바로 잡는다
+    if (readSelfAgeClaim(clause) !== null) return 'age'
+    /**
+     * 🔴 **판정을 뒤집는다** (2026-09-23). 원문은 카페 글이라 1인칭 표지를 자주 생략한다 —
+     *    실제 P02 원문이 *"낼44인데 아직도 어리단소리들어요"* 였고, 보수적 정본은
+     *    주어가 없어 읽지 못했다.
+     *
+     *    🔴 **원문 화자의 나이를 지켜서 우리가 얻는 것은 없다.** 그래서 여기서는
+     *       "자기 나이가 확실한가" 가 아니라 **"제3자 것이 확실한가"** 를 묻는다.
+     *       제3자 표지가 없으면 화자 상대로 보고 걷어낸다 — 걷어내도 손해가 없고,
+     *       남기면 P02 처럼 남의 나이가 우리 글에 박힌다.
+     */
+    if (AGE_LIKE.test(clause) && clause.includes(input.text)
+      && !OTHER_MARKERS.some((w) => clause.includes(w))) return 'age'
+  }
+  return null
+}
+
+/** 🔴 나이로 읽히는 모양 — `80퍼` · `3일` 과 갈린다 */
+const AGE_LIKE = /(?:^|[^0-9])([2-9][0-9])\s*(?:살|세|인데|이고|이라|예요|이에요|입니다|이면)/
