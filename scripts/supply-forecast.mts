@@ -25,15 +25,33 @@ const SNAPSHOT = new Date()
 const kst = (d: Date) => new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')
 console.log(`\n══ 공급 예측 (스냅샷 ${kst(SNAPSHOT)} KST · read-only) ══\n`)
 
-// ── 9/22 실적은 고정한다 ──
-const dayStart = new Date('2026-09-21T15:00:00Z')
-const published = await prisma.post.findMany({
-  where: { createdAt: { gte: dayStart } },
+/**
+ * 🔴 **KST 날짜 경계로 나눠 센다** (2026-09-23 보정).
+ *
+ *    앞판은 `dayStart = 9/22 00:00 KST` 이후 **전부**를 "9/22 실제 발행" 으로 셌다.
+ *    그래서 9/23 발행 2건이 9/22 에 얹혀 "9/22 4건" 이라는 틀린 값이 나왔다.
+ *    🔴 `Post.createdAt` 은 UTC 다. **+9시간을 더한 뒤** 날짜를 잘라야 KST 하루가 된다.
+ */
+const kstDayKey = (d: Date): string => new Date(d.getTime() + 9 * 3600e3).toISOString().slice(0, 10)
+const FROM = new Date('2026-09-21T15:00:00Z')   // 9/22 00:00 KST
+const allPublished = await prisma.post.findMany({
+  where: { createdAt: { gte: FROM } },
   select: { id: true, title: true, createdAt: true },
   orderBy: { createdAt: 'asc' },
 })
-console.log(`① 9/22 실제 발행 ${published.length}건 — 고정값이다`)
-for (const p of published) console.log(`   ${kst(p.createdAt)}  ${p.title.slice(0, 34)}`)
+const byDay = new Map<string, typeof allPublished>()
+for (const x of allPublished) {
+  const k = kstDayKey(x.createdAt)
+  byDay.set(k, [...(byDay.get(k) ?? []), x])
+}
+console.log('① 실제 발행 — KST 날짜별 (고정값이다)')
+for (const [day, list] of [...byDay].sort()) {
+  console.log(`   ${day}  ${list.length}건`)
+  for (const x of list) console.log(`      ${kst(x.createdAt)}  ${x.title.slice(0, 32)}`)
+}
+const todayKstKey = kstDayKey(SNAPSHOT)
+const publishedToday = (byDay.get(todayKstKey) ?? []).length
+console.log(`   🔴 오늘(${todayKstKey}) 이미 ${publishedToday}건 나갔다 — 남은 몫만 예측한다`)
 
 // ── READY 재고 ──
 const rows = await prisma.originalPostApprovalQueue.findMany({
@@ -182,6 +200,8 @@ const plan = [
   { day: '9/23', iso: '2026-09-23' },
   { day: '9/24', iso: '2026-09-24' },
 ]
+/** 🔴 오늘은 이미 나간 몫을 뺀 **남은 슬롯**만 본다 */
+const alreadyOn = (iso: string): number => (byDay.get(iso) ?? []).length
 let live = personas.map((p) => ({ ...p }))
 for (const p of plan) {
   const envAuth = stageOfDay(p.iso)
@@ -190,9 +210,11 @@ for (const p of plan) {
   const auth = override === undefined ? envAuth
     : { stage, why: [`🔴 --stage 로 주입된 값이다 (env 판정은 ${envAuth.stage}) — 실제 값은 GHA vars 에 있다`] }
   const prof = PROFILES[stage]
-  const need = prof.dailyTarget
+  const need = Math.max(0, prof.dailyTarget - alreadyOn(p.iso))
+  const done = alreadyOn(p.iso)
   const weekCap = effectiveWeeklyCap(prof.postsPerWeek, prof.minDaysBetween)
-  console.log(`\n③ ${p.day} — 설치되는 단계 **${stage}** (상한 ${need}건/일 · 주 ${weekCap} · 간격 ${prof.minDaysBetween}일)`)
+  console.log(`\n③ ${p.day} — 설치되는 단계 **${stage}** (상한 ${prof.dailyTarget}건/일`
+    + `${done > 0 ? ` · 이미 ${done}건 발행 → 남은 ${need}건` : ''} · 주 ${weekCap} · 간격 ${prof.minDaysBetween}일)`)
   for (const w of auth.why) console.log(`     · ${w}`)
 
   // 🔴 배정·신선도는 러너와 **같은 `prepareCandidates`** 가 한다.
@@ -237,7 +259,8 @@ for (const p of plan) {
           : `⏭️ ${who} — 그날 상한 ${need}건 초과`
     console.log(`   ${why.startsWith('🔴') ? '🔴' : '⏭️'} ${c.id} · ${c.speaker} · ${why}`)
   }
-  console.log(`   → **${p.day} ${stage} 예측 ${take.length}/${need}** · 부족 글 ${Math.max(0, need - take.length)}건`
+  console.log(`   → **${p.day} ${stage} ${done > 0 ? `실적 ${done} + ` : ''}예측 ${take.length}/${need}`
+    + ` = 하루 ${done + take.length}/${prof.dailyTarget}** · 부족 글 ${Math.max(0, need - take.length)}건`
     + ` · 부족 화자 ${Math.max(0, need - used.size)}명`)
 
   // 🔴 소비를 반영한다 — 주 cap 이 줄고 마지막 발행일이 오늘이 된다
