@@ -141,3 +141,46 @@ source evidence 로 판단한다.
 - 🔴 자동 보정(생성 후 남은 원문 나이를 Persona 나이로 고치는 단계)은 **아직 미구현**.
   지금은 분류·변환 계획·정확 나이까지다
 - 🔴 age 외 여섯 축의 전수 조사 결과는 별도 보고로 올린다
+
+## 8. age 외 여섯 축 전수 조사 — 같은 구조의 결함이 있다
+
+🔴 조사 결과를 **직접 코드로 재확인**한 것만 적는다.
+
+| 축 | protectedFacts 로 보호되나 | 자동 변환 가능 | Persona 재선택 | 진짜 HOLD | 처리량 병목 |
+|---|---|---|---|---|---|
+| maritalStatus | 🔴 `relation`(남편·시어머니…) | ✅ | 경로 없음 | 드묾 | **높음** |
+| children | 🔴 `relation`(아들·딸·큰애…) | ✅ | 경로 없음 | 드묾 | **높음** |
+| work | 🔴 `number`(근무시간) | ✅ | 경로 없음 | 드묾 | 중간 |
+| region | 🔴 `publicEntity`(지명) | ✅ | 경로 없음 | 드묾 | 중간 |
+| parentCare | 🔴 `relation`(친정·부모님) | ✅ | 경로 없음 | 드묾 | 중간 |
+| menopause | 🟢 `searchTerm`(갱년기)은 지키는 게 맞다 | 부분 | 경로 없음 | 드묾 | 낮음 |
+
+### 🔴 확인된 협공 구조
+
+1. `protectedFacts` 가 원문 화자의 관계를 잡는다
+2. 프롬프트가 **"이 말들은 그대로 씁니다"** 로 지시한다
+   (`content-core-prompts.mts:199-201` — 직접 확인)
+3. 생성기가 원문 값을 쓰면 → `lifeContradictions` → hold
+4. 생성기가 우리 값을 쓰면 → `protectedFactMissing` → 실패
+5. 🔴 그 hold 는 **`terminal`** 이라 원천이 **영구 제외**된다
+   (`review.ts:377` `if (c.complete) return false` → `supply-workset.ts:253-257` — 직접 확인)
+
+**자동으로 고칠 수 있는 축 불일치 하나가 원천을 영구히 태운다.**
+
+### 이번에 고친 것
+
+- `speakerRelativeAxisOf` 가 **관계 낱말도** 축으로 판정한다 (maritalStatus·children·parentCare)
+  🔴 "아는 분 남편" 처럼 **제3자 소유면 지킨다** — 원문 이야기의 일부다
+- `hasFact` 를 **양방향**으로 받는다 (`spouse`·`parentCare`·`menopause`)
+  앞판은 `'있음'` 만 받아, 우리 풀에 **실제로 있는** 이혼·무간병·갱년기 전 Persona 의
+  자격을 세울 수 없었다 → `requiredValueUnmet` → `speakerUnqualified` → **비재시도 결론**
+- 프롬프트 계약도 같이 맞췄다
+
+### 아직 안 고친 것
+
+- 🔴 **`terminal` 판정 자체** — 자동 변환 가능한 불일치까지 영구 제외한다.
+  `artifactRetryable` 이 `semanticCompletion.complete` 면 무조건 `false` 를 낸다.
+  이것은 별도 판단이 필요하다 (재시도 자격을 넓히면 같은 원천을 반복해서 돌 위험)
+- 🔴 `work`·`region` 은 `hasFact` 가 **카드 값을 그대로 비교**해 항상 참이다
+  (프롬프트가 카드 값을 베끼라고 지시한다). 계획 단계 검증이 사실상 없다
+- 🔴 **자동 보정** — 생성 후 남은 원문 값을 Persona 값으로 고치는 단계

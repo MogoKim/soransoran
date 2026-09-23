@@ -270,14 +270,31 @@ export function hasFact(p: PersonaLifeContract, fact: ClaimFact, requiredValue: 
   const eq = (a: string | null | undefined): boolean =>
     (a ?? '').trim() !== '' && (a ?? '').trim() === want
   switch (fact) {
-    case 'spouse': return want === '있음' ? p.maritalStatus.trim() === '기혼' : false
+    /**
+     * 🔴 **양방향으로 받는다** (2026-09-23). 앞판은 `'있음'` 만 받아
+     *    "원문이 비혼·이혼·사별을 요구한다" 를 표현할 방법이 없었다.
+     *    우리 풀에는 그런 Persona 가 **실제로 있는데도** 자격을 세울 수 없어
+     *    `requiredValueUnmet` → `speakerUnqualified` → **비재시도 결론**으로 갔다.
+     */
+    case 'spouse': {
+      const married = p.maritalStatus.trim() === '기혼'
+      return want === '있음' ? married : want === '없음' ? !married : false
+    }
     /** 🔴 `없음` 도 견줄 수 있는 축이다 — 카드에 `childrenCount = 0` 이라는 판정값이 있다 */
     case 'children':
       return want === '있음' ? p.childrenCount > 0 : want === '없음' ? p.childrenCount === 0 : false
     case 'childAgeBand': return p.childrenAgeBands.some((b) => b.trim() === want)
-    case 'parentCare': return want === '있음' ? p.parentCare.trim() !== '없음' : false
+    case 'parentCare': {
+      const caring = p.parentCare.trim() !== '없음'
+      return want === '있음' ? caring : want === '없음' ? !caring : false
+    }
     /** 🔴 `전` 은 아직 겪지 않았다는 뜻이다 — 경험 주장의 근거가 될 수 없다 */
-    case 'menopause': return want === '있음' ? p.menopauseStatus.trim() !== '전' : false
+    case 'menopause': {
+      // 🔴 `전` 은 아직 겪지 않았다는 뜻이다 — 경험 주장의 근거가 될 수 없다.
+      //    다만 **"아직 전이다" 를 근거로 삼는 글**은 있을 수 있어 `없음` 도 받는다
+      const after = p.menopauseStatus.trim() !== '전'
+      return want === '있음' ? after : want === '없음' ? !after : false
+    }
     case 'work': return eq(p.workStatus)
     case 'region': return eq(p.region)
     case 'age': return eq(p.ageBand)
@@ -541,9 +558,50 @@ export function speakerRelativeAxisOf(input: {
      */
     if (AGE_LIKE.test(clause) && clause.includes(input.text)
       && !OTHER_MARKERS.some((w) => clause.includes(w))) return 'age'
+    // 🔴 나이 말고 다른 축도 **같은 계약**으로 본다 — 축마다 패치하지 않는다
+    const rel = relationAxisOf(clause, input.text)
+    if (rel !== null) return rel
   }
   return null
 }
 
 /** 🔴 나이로 읽히는 모양 — `80퍼` · `3일` 과 갈린다 */
 const AGE_LIKE = /(?:^|[^0-9])([2-9][0-9])\s*(?:살|세|인데|이고|이라|예요|이에요|입니다|이면)/
+
+/**
+ * 🔴 **관계 낱말 → 화자 상대 축** (2026-09-23).
+ *
+ *    `남편`·`아들`·`시어머니` 는 **원문 화자의 가족**이다. 우리 화자의 가족이 아니다.
+ *    이것을 `protectedFacts` 로 지키면 프롬프트가 "이 말들은 **그대로** 씁니다" 라고
+ *    지시하고(`content-core-prompts.mts`), 이혼·무자녀 Persona 에게 남편·딸이 박힌다.
+ *    그다음은 양쪽 다 막히는 협공이다 —
+ *      · 원문 값을 쓰면 `lifeContradictions` → hold
+ *      · 우리 값을 쓰면 `protectedFactMissing` → 실패
+ *    그리고 그 hold 는 `terminal` 이라 **원천이 영구히 탄다**(`supply-workset.ts`).
+ */
+const RELATION_AXIS: ReadonlyArray<[SpeakerRelativeAxis, readonly string[]]> = [
+  ['maritalStatus', ['남편', '신랑', '애들아빠', '아이아빠', '아내', '와이프',
+    '시어머니', '시아버지', '시댁', '시누이', '장인', '장모', '처가', '며느리', '사위']],
+  ['children', ['아들', '딸', '애들', '아이들', '큰애', '작은애', '자식', '손주']],
+  ['parentCare', ['친정', '부모님']],
+]
+
+/**
+ * 🔴 **제3자의 것인가.** 관계 낱말 **바로 앞**에 남을 가리키는 말이 붙으면 그 사람 것이다
+ *    — "아는 분 남편" · "친구 아들". 그때는 원문 이야기의 일부이므로 지킨다.
+ */
+const THIRD_PARTY_OWNER = /(아는\s*[가-힣]{0,3}|친구|이웃|동료|옆집|주변\s*[가-힣]{0,3}|언니|오빠|형님|동서|올케)\s*$/
+
+function relationAxisOf(clause: string, text: string): SpeakerRelativeAxis | null {
+  for (const [axis, words] of RELATION_AXIS) {
+    for (const w of words) {
+      if (!text.includes(w)) continue
+      const at = clause.indexOf(text)
+      if (at < 0) continue
+      // 🔴 바로 앞 12자만 본다 — 문장 전체를 보면 멀리 있는 낱말에 끌려간다
+      if (THIRD_PARTY_OWNER.test(clause.slice(Math.max(0, at - 12), at))) return null
+      return axis
+    }
+  }
+  return null
+}

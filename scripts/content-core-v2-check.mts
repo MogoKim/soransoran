@@ -1761,6 +1761,42 @@ console.log('\n🔴 🔴 **화자 상대 사실 — 원문 작성자를 복제�
   })())
   check('🔴 축 목록이 일곱이다 — 축마다 패치하지 않는다',
     SPEAKER_RELATIVE_AXES.length === 7)
+
+  // ④ 나이 말고 다른 축도 걷어낸다 — 조사에서 찾은 같은 구조의 결함
+  const ax = (text: string, host: string) =>
+    speakerRelativeAxisOf({ text, ref: 'head', spans: span(host) })
+  check('🔴 🔴 **원문 화자의 "남편" 은 걷어낸다 — 이혼·사별 Persona 에게 박히면 안 된다**',
+    ax('남편', '남편이 퇴근하고 와서 과일 한 상자 가져가라네요') === 'maritalStatus')
+  check('🔴 🔴 **원문 화자의 "딸" 은 걷어낸다 — 무자녀 Persona 에게 박히면 안 된다**',
+    ax('딸', '중3 딸이 샤워를 한 시간 넘게 해요') === 'children')
+  check('🔴 🔴 **"아는 분 남편" 은 지킨다 — 제3자 이야기다**',
+    ax('남편', '아는 분 남편은 외아들이라 그런지 매일 통화한대요') === null)
+  check('🔴 "친구 아들" 도 지킨다', ax('아들', '친구 아들이 이번에 대학 갔대요') === null)
+  check('🔴 부모 돌봄 축도 같은 계약으로 걷어낸다',
+    ax('친정', '친정 어머니 병원 모시고 다니느라 힘들어요') === 'parentCare')
+  check('🔴 🔴 **지명·상품 같은 source-invariant 는 그대로 지킨다**',
+    ax('강남', '강남에 새로 생긴 가게 가봤어요') === null)
+
+  // ⑤ hasFact 양방향 — 우리 풀에 있는 사람을 쓸 수 있어야 한다
+  const card = (o: Record<string, unknown>) => ({
+    code: 'PX', ageBand: '50대 초반', maritalStatus: '이혼', childrenCount: 0,
+    childrenAgeBands: [] as string[], parentCare: '없음', menopauseStatus: '전',
+    workStatus: '전업', region: '수도권', ...o,
+  })
+  check('🔴 🔴 **비혼·이혼 Persona 가 `spouse=없음` 근거를 세울 수 있다**',
+    hasFact(card({}) as never, 'spouse', '없음') === true
+    && hasFact(card({}) as never, 'spouse', '있음') === false)
+  check('🔴 🔴 **간병 없는 Persona 가 `parentCare=없음` 근거를 세울 수 있다**',
+    hasFact(card({}) as never, 'parentCare', '없음') === true)
+  check('🔴 🔴 **갱년기 전 Persona 가 `menopause=없음` 근거를 세울 수 있다**',
+    hasFact(card({}) as never, 'menopause', '없음') === true)
+  check('🔴 기혼 Persona 는 `spouse=있음` 이 맞고 `없음` 은 아니다',
+    hasFact(card({ maritalStatus: '기혼' }) as never, 'spouse', '있음') === true
+    && hasFact(card({ maritalStatus: '기혼' }) as never, 'spouse', '없음') === false)
+  check('🔴 프롬프트 계약도 양방향으로 맞춰졌다', (() => {
+    const src = readFileSync('scripts/lib/content-core-prompts.mts', 'utf-8')
+    return /spouse · parentCare · menopause · children → "있음" 또는 "없음"/.test(src)
+  })())
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
