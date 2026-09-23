@@ -177,3 +177,78 @@ export function childAgeFrom(band: string): number | null {
   if (plain !== null) { const n = Number(plain[1]); if (n >= 0 && n <= 60) return n }
   return null
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **그 시점의 Persona** (2026-09-23 보정)
+//
+//   실측 반례: `birthDate 1979-06-20` 인 P02 를 2031년에 돌리면 실제 52세인데
+//   `exactAgeOf` 가 `OUT_OF_BAND` 를 내고, 부르는 쪽이 `exactAge=null` + **정적**
+//   `ageBand='40대 후반'` 을 넘겨 "40대 후반으로 서술" 이 나왔다.
+//   **낡은 밴드로 조용히 되돌아간 것이다.**
+//
+//   🔴 정본은 `birthDate` 하나다. **나이도 밴드도 그날에서 파생한다.**
+//      정적 `ageBand` 는 초기 설계가 맞았는지 보는 **검증값**일 뿐,
+//      런타임 fallback 으로 쓰지 않는다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 나이 → 그 시점의 밴드. `52` → `50대 초반` */
+export function bandOfAge(age: number): string {
+  const base = Math.floor(age / 10) * 10
+  const part = age - base
+  const label = part <= 3 ? '초반' : part <= 6 ? '중반' : '후반'
+  return `${base}대 ${label}`
+}
+
+export type PersonaAtTime = {
+  /** 정본 — 바뀌지 않는다 */
+  birthDate: string
+  /** 그날의 만 나이 */
+  exactAge: number
+  /** 🔴 **그날에서 파생한** 밴드. 정적 카드 값이 아니다 */
+  effectiveAgeBand: string
+  /** 기준이 된 KST 날짜 */
+  kstDate: string
+  /**
+   * 🔴 **나이가 바뀌는 시점의 지문.** 생성 계약에 넣어 생일이 지나면 캐시가 무효화된다.
+   *    날짜가 아니라 **나이**를 담으므로 매일 무효화되지 않는다.
+   */
+  ageEpoch: string
+  /** 🔴 설계 당시 카드 값과 어긋나는가 — 보고용이다. 판정에 쓰지 않는다 */
+  designBandDrift: string | null
+}
+
+export type PersonaAtVerdict =
+  | { ok: true; at: PersonaAtTime }
+  | { ok: false; code: 'NO_BIRTHDATE' | 'BAD_DATE'; reason: string }
+
+/**
+ * 🔴 **그 시점의 Persona 를 한 번에 만든다.** 계획 후보·생성 프롬프트·나이 충돌 검사가
+ *    **같은 스냅샷**을 쓴다 — 각자 계산하면 어긋난다.
+ */
+export function materializePersonaAt(input: {
+  card: { code: string; birthDate: string; ageBand: string }
+  /** 주입된 시각. 🔴 `Date.now()` 를 쓰지 않는다 */
+  now: Date
+}): PersonaAtVerdict {
+  const bd = (input.card.birthDate ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(bd)) {
+    return { ok: false, code: 'NO_BIRTHDATE', reason: `생일을 읽을 수 없다 — ${bd || '(없음)'}` }
+  }
+  const kstDate = new Date(input.now.getTime() + 9 * 3600e3).toISOString().slice(0, 10)
+  const age = exactAgeOn(bd, kstDate)
+  if (age === null) return { ok: false, code: 'BAD_DATE', reason: `날짜를 읽을 수 없다 — ${kstDate}` }
+  const effectiveAgeBand = bandOfAge(age)
+  const design = parseAgeBand(input.card.ageBand)
+  const drift = design !== null && (age < design.from || age > design.to)
+    ? `설계 카드는 ${input.card.ageBand}(${design.from}~${design.to}) 인데 지금 ${age}세다`
+    : null
+  return {
+    ok: true,
+    at: {
+      birthDate: bd, exactAge: age, effectiveAgeBand, kstDate,
+      // 🔴 나이가 바뀔 때만 달라진다 — 날짜를 넣으면 매일 캐시가 깨진다
+      ageEpoch: `${input.card.code}@${age}`,
+      designBandDrift: drift,
+    },
+  }
+}

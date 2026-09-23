@@ -358,7 +358,9 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
     const r = codeOf('scripts/lib/voice-runtime.mts')
     return /planBundles\(\{ rows: asset\.rows, personaCodes: PRODUCTION_PERSONA_CODES \}\)/.test(r)
       && !/voice-a/.test(r)
-      && /loadVoice\(\)/.test(codeOf('scripts/micro-seed-auto-draft.mts'))
+      // 🔴 `loadVoice` 가 시각을 받게 됐다 (2026-09-23) — 후보 풀 지문에 그날 나이가 들어간다.
+      //    묶는 곳이 하나라는 계약은 그대로다.
+      && /loadVoice\(/.test(codeOf('scripts/micro-seed-auto-draft.mts'))
   })())
   check('🔴 판 값이 세 곳에 흩어져 있지 않다 — 정본 하나에서 나온다', (() => {
     const af = codeOf('src/lib/micro-seed-supply-autofill.ts')

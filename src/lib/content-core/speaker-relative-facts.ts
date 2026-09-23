@@ -226,3 +226,75 @@ export function fixSourceSpeakerAge(input: {
   }
   return { text: out, fixed, remaining: [...new Set(remaining)] }
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **변환이 실제로 이뤄졌는가** (2026-09-23)
+//
+//   자동 보정만으로는 부족하다. 초안이 나이 문장을 **통째로 빼 버리면**
+//   `fixed=0 · remaining=[]` 이 되어 "고칠 것이 없었다" 와 구분되지 않고 채택된다.
+//   그래서 생성·보정이 끝난 뒤 **이행 여부를 따로 묻는다.**
+// ─────────────────────────────────────────────────────────
+
+export type MappingPostVerdict =
+  | { ok: true; note: string }
+  | { ok: false; code: 'SOURCE_AGE_REMAINS' | 'PERSONA_AGE_ABSENT' | 'CONFLICTING_SELF_AGE'; reason: string }
+
+/** 🔴 글에서 **1인칭으로 쓰인** 나이 숫자들. 제3자 절은 세지 않는다 */
+export function selfAgeNumbersIn(text: string, otherMarkers: readonly string[]): number[] {
+  const out: number[] = []
+  const re = /(?:^|[^0-9])([2-9][0-9])\s*(?:살|세|인데|이고|이라|예요|이에요|입니다|이면|이거든요|이라서)/g
+  for (const m of text.matchAll(re)) {
+    const at = m.index ?? 0
+    /**
+     * 🔴 **절 단위로 본다** (2026-09-23). 줄 단위로 자르면
+     *    *"아는 분이 44인데 저는 47이거든요"* 가 한 덩이가 되어 **우리 나이 47 까지**
+     *    제3자로 처리된다. 쉼표·연결어미에서도 끊는다.
+     */
+    const head = text.slice(0, at)
+    const cut = Math.max(
+      head.lastIndexOf('\n'), head.lastIndexOf(','), head.lastIndexOf('.'),
+      head.lastIndexOf('만'), head.lastIndexOf('데 '), head.lastIndexOf('고 '),
+    )
+    const from = cut < 0 ? 0 : cut + 1
+    const clause = text.slice(from, at + m[0].length + 8)
+    if (otherMarkers.some((w) => clause.includes(w))) continue
+    out.push(Number(m[1]))
+  }
+  return out
+}
+
+/**
+ * 🔴 **age mapping 이 이행됐는지 확인한다.**
+ *    · 원문 화자 나이가 남아 있으면 실패
+ *    · 우리 나이(또는 허용된 밴드 표현)가 **없으면** 실패 — 통째로 뺀 경우다
+ *    · 1인칭 나이가 **여럿**이면 실패 (fail-closed)
+ */
+export function checkAgeMappingApplied(input: {
+  text: string
+  sourceAges: readonly string[]
+  exactAge: number | null
+  effectiveAgeBand: string
+  otherMarkers: readonly string[]
+}): MappingPostVerdict {
+  const selfAges = selfAgeNumbersIn(input.text, input.otherMarkers)
+  const srcNums = input.sourceAges.map((a) => Number(a)).filter((n) => Number.isFinite(n))
+  const left = selfAges.filter((n) => srcNums.includes(n))
+  if (left.length > 0) {
+    return { ok: false, code: 'SOURCE_AGE_REMAINS', reason: `원문 화자 나이가 남았다 — ${left.join('·')}` }
+  }
+  const distinct = [...new Set(selfAges)]
+  if (distinct.length > 1) {
+    return { ok: false, code: 'CONFLICTING_SELF_AGE', reason: `1인칭 나이가 여럿이다 — ${distinct.join('·')}` }
+  }
+  // 🔴 우리 값이 실제로 들어갔는가 — 숫자든 밴드 표현이든 하나는 있어야 한다
+  const hasExact = input.exactAge !== null && distinct.includes(input.exactAge)
+  const hasBand = input.text.includes(input.effectiveAgeBand)
+  if (!hasExact && !hasBand) {
+    return {
+      ok: false, code: 'PERSONA_AGE_ABSENT',
+      reason: `우리 쪽 나이(${input.exactAge ?? input.effectiveAgeBand})가 글에 없다`
+        + ' — 원문 나이를 바꾸지 않고 통째로 뺐다',
+    }
+  }
+  return { ok: true, note: hasExact ? `정확한 나이 ${input.exactAge} 로 서술됐다` : `${input.effectiveAgeBand} 로 서술됐다` }
+}

@@ -26,8 +26,10 @@ import {
   canGenerate, lifeContractIdentity, orderPersonasForSource, parseSpeakerPlan, planSchemaFailed,
 } from '../../src/lib/content-core/speaker'
 import type { PersonaLifeContract, SpeakerPlan } from '../../src/lib/content-core/speaker'
-import { exactAgeOf } from '../../src/lib/persona-birth-anchor'
-import { planAxisMapping, fixSourceSpeakerAge } from '../../src/lib/content-core/speaker-relative-facts'
+import { materializePersonaAt } from '../../src/lib/persona-birth-anchor'
+import {
+  planAxisMapping, fixSourceSpeakerAge, checkAgeMappingApplied,
+} from '../../src/lib/content-core/speaker-relative-facts'
 import { OTHER_MARKERS } from '../../src/lib/persona-self-age'
 
 /** 🔴 KST 날짜 한 줄 — 주입된 시각에서만 만든다 */
@@ -113,16 +115,27 @@ export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> &
  *    🔴 **댓글 원문은 넣지 않는다.** 말투 근거는 `bundleDigest` 가 대신한다.
  *    🔴 후보 순서는 코드 오름차순으로 고정한다 — 읽는 순서가 달라도 같은 값이어야 한다.
  */
-export function personaPoolIdentity(cands: readonly PersonaInput[]): string {
+export function personaPoolIdentity(cands: readonly PersonaInput[], now?: Date): string {
   return [...cands]
     .sort((a, b) => a.code.localeCompare(b.code))
     /**
      * 🔴 **`birthDate` 도 넣는다** (2026-09-23). 그 값이 프롬프트의 나이 지시를 바꾸므로
      *    계약에 들어가야 한다. 빠지면 생일을 고쳐도 **옛 artifact 가 그대로 재사용**된다.
      */
-    .map((c) => `${lifeContractIdentity(c)}\u0001birth=${c.birthDate ?? '∅'}`
-      + `\u0001voice=${c.voiceTokens.join('\u0002')}`
-      + `\u0001bundle=${c.bundleDigest}`)
+    .map((c) => {
+      /**
+       * 🔴 **생일이 지나면 나이가 바뀌므로 캐시도 바뀌어야 한다** (2026-09-23).
+       *    `birthDate` 만 넣으면 생일 전후 artifact 가 같은 계약으로 재사용된다.
+       *    🔴 날짜가 아니라 **나이**(`ageEpoch`)를 넣는다 — 그래야 매일 무효화되지 않는다.
+       */
+      const snap = now === undefined ? null
+        : materializePersonaAt({ card: { code: c.code, birthDate: c.birthDate ?? '', ageBand: c.ageBand }, now })
+      const epoch = snap !== null && snap.ok ? snap.at.ageEpoch : '∅'
+      return `${lifeContractIdentity(c)}\u0001birth=${c.birthDate ?? '∅'}`
+        + `\u0001age=${epoch}`
+        + `\u0001voice=${c.voiceTokens.join('\u0002')}`
+        + `\u0001bundle=${c.bundleDigest}`
+    })
     .join('\u0003')
 }
 
@@ -411,10 +424,20 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    * 🔴 **주입된 시계를 쓴다** (2026-09-23). `Date.now()` 를 부르면 같은 입력이
    *    실행 시각에 따라 다른 나이를 내고, 과거 재현도 되지 않는다.
    */
-  const todayKst = kstDateKey(input.now)
-  const ageV = exactAgeOf({
-    birthDate: persona.birthDate ?? null, ageBand: persona.ageBand, onKstDate: todayKst,
+  /**
+   * 🔴 **그 시점의 Persona 를 한 번 만든다** — 계획·프롬프트·검사가 같은 값을 쓴다.
+   *    🔴 정적 `ageBand` 를 런타임 fallback 으로 쓰지 않는다. 그러면 2031년에도
+   *       "40대 후반" 으로 돌아간다(실측 반례).
+   */
+  const snap = materializePersonaAt({
+    card: { code: persona.code, birthDate: persona.birthDate ?? '', ageBand: persona.ageBand },
+    now: input.now,
   })
+  if (!snap.ok) {
+    return blank(plan, dropped, null, null, noDet, null, notRun('personaTransformFailed' as const),
+      'hold', `Persona 시점 계산 실패 — ${snap.reason}`)
+  }
+  const at = snap.at
 
   /**
    * 🔴 **변환 계획을 먼저 판정한다** (2026-09-23 fail-closed).
@@ -428,8 +451,9 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
       axis: e.axis, sourceText: e.sourceText, role: e.materiality,
     })),
     persona: {
-      exactAge: ageV.ok ? ageV.age : null,
-      ageBand: persona.ageBand, maritalStatus: persona.maritalStatus,
+      // 🔴 그날 계산한 값만 쓴다 — 정적 카드 값이 아니다
+      exactAge: at.exactAge, ageBand: at.effectiveAgeBand,
+      maritalStatus: persona.maritalStatus,
       childrenCount: persona.childrenCount, parentCare: persona.parentCare,
       menopauseStatus: persona.menopauseStatus, work: persona.workStatus, region: persona.region,
     },
@@ -471,21 +495,35 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    *    🔴 유료 호출을 더 쓰지 않는다 — 문자열 치환이다.
    *    🔴 고친 뒤 아래 deterministic·semantic 검사를 **그대로 다시 지난다.**
    */
-  const ageMap = mapping.mappings.find((m) => m.axis === 'age')
-  const fixed = ageMap === undefined || ageMap.personaText === null
-    ? { title: draft.title, body: draft.body, fixed: 0, remaining: [] as string[] }
-    : (() => {
-      const t = fixSourceSpeakerAge({
-        text: draft.title, sourceAges: [ageMap.sourceText],
-        personaText: ageMap.personaText, otherMarkers: OTHER_MARKERS,
-      })
-      const b = fixSourceSpeakerAge({
-        text: draft.body, sourceAges: [ageMap.sourceText],
-        personaText: ageMap.personaText, otherMarkers: OTHER_MARKERS,
-      })
-      return { title: t.text, body: b.text, fixed: t.fixed + b.fixed, remaining: [...t.remaining, ...b.remaining] }
-    })()
-  if (fixed.fixed > 0) draft = { ...draft, title: fixed.title, body: fixed.body }
+  // 🔴 **모든** age mapping 을 본다 — `.find()` 로 첫 개만 처리하면 나머지가 남는다
+  const ageMaps = mapping.mappings.filter((m) => m.axis === 'age')
+  const sourceAges = ageMaps.map((m) => m.sourceText)
+  if (ageMaps.length > 0) {
+    const personaText = ageMaps[0]!.personaText!
+    const t = fixSourceSpeakerAge({
+      text: draft.title, sourceAges, personaText, otherMarkers: OTHER_MARKERS,
+    })
+    const b = fixSourceSpeakerAge({
+      text: draft.body, sourceAges, personaText, otherMarkers: OTHER_MARKERS,
+    })
+    if (t.fixed + b.fixed > 0) draft = { ...draft, title: t.text, body: b.text }
+
+    /**
+     * 🔴 **이행 후조건** — 고쳤든 안 고쳤든 결과를 확인한다.
+     *    초안이 나이 문장을 통째로 빼면 `fixed=0 · remaining=[]` 이라
+     *    "고칠 것이 없었다" 와 구분되지 않는다. 그래서 따로 묻는다.
+     *    🔴 실패하면 **구조화된 사유**로 돌려보낸다 — 문자열을 파싱하지 않는다.
+     */
+    const post = checkAgeMappingApplied({
+      text: `${draft.title}\n${draft.body}`,
+      sourceAges, exactAge: at.exactAge, effectiveAgeBand: at.effectiveAgeBand,
+      otherMarkers: OTHER_MARKERS,
+    })
+    if (!post.ok) {
+      return blank(plan, dropped, null, null, noDet, null,
+        notRun('personaTransformFailed' as const), 'hold', `${post.code}: ${post.reason}`)
+    }
+  }
 
   // ── ④ deterministic — 확정 가능한 것만 ──
   const draftText = `${draft.title}\n${draft.body}`

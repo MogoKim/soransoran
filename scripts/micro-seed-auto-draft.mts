@@ -780,7 +780,11 @@ async function main(): Promise<void> {
    *    원문의 생활사 요구를 정본 판정으로 읽고, 쓸 수 있는 Persona 중에서 고른다.
    *    쓸 수 없는 사람의 목소리로 AI 를 부르지 않는다.
    */
-  const voice = loadVoice()
+  /**
+   * 🔴 **그날 시각을 넘긴다** (2026-09-23). 후보 풀 지문에 나이가 들어가
+   *    생일이 지나면 옛 artifact 가 재사용되지 않는다.
+   */
+  const voice = loadVoice(new Date(nowIso))
   console.log(voice.describe)
   const cache = loadCache()
   let hit = 0

@@ -25,15 +25,18 @@ import {
   cardValueText, hasFact, verifySelfWarrants,
   SPEAKER_PLAN_VERSION, WARRANT_REJECTIONS, WARRANT_REJECTION_LABEL,
 } from '../src/lib/content-core/speaker'
-import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis } from '../src/lib/persona-self-age'
+import { parseAgeBand, readSelfAgeClaim, judgeSelfAgeBasis, OTHER_MARKERS } from '../src/lib/persona-self-age'
 import { speakerRelativeAxisOf, parseSpeakerPlan } from '../src/lib/content-core/speaker'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 
 /** 🔴 KST 날짜 한 줄 — 검사도 러너와 같은 규칙을 쓴다 */
 const kstKeyOf = (at: Date): string => new Date(at.getTime() + 9 * 3600e3).toISOString().slice(0, 10)
-import { planAxisMapping, SPEAKER_RELATIVE_AXES } from '../src/lib/content-core/speaker-relative-facts'
+import {
+  planAxisMapping, SPEAKER_RELATIVE_AXES, checkAgeMappingApplied,
+} from '../src/lib/content-core/speaker-relative-facts'
 import {
   exactAgeOf, exactAgeOn, checkLifeConsistency, childAgeFrom,
+  materializePersonaAt, bandOfAge,
 } from '../src/lib/persona-birth-anchor'
 import { selectWorkset } from '../src/lib/supply-workset'
 import { SEED_AXIS } from '../src/lib/micro-seed-auto-judge'
@@ -1993,6 +1996,28 @@ console.log('\n🔴 🔴 **P02 전체 E2E — 실제 `runContentCore` 를 끝까
   check('🔴 🔴 **① `lifeContradictions` 가 없다**',
     a1.review.semantic !== null && a1.review.semantic.lifeContradictions.length === 0)
 
+  /** 🔴 반례 ③: 초안이 나이 문장을 **통째로 빼 버린다** */
+  const a3 = await go({
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: '동네 저렴한 에스테틱을 몇 년 다녀봤는데요.\n여자는 피부가 80퍼인 것 같아요. 다들 어떠세요?',
+  })
+  check('🔴 🔴 **③ 나이 문장을 통째로 빼면 채택되지 않는다 (adopt 금지)**',
+    a3.review.machineOutcome !== 'adopt', a3.review.machineOutcome)
+  check('🔴 🔴 **③ 구조화된 `personaTransformFailed` 로 돌아온다 — 문자열 파싱 아님**',
+    a3.review.semanticCompletion.cause === 'personaTransformFailed',
+    String(a3.review.semanticCompletion.cause))
+  check('🔴 🔴 **③ 그 사유는 재시도 자격을 유지한다 — 영구 제외가 아니다**',
+    artifactRetryable(a3.review) === true)
+
+  /** 🔴 반례 ④: 제3자 44 와 우리 나이가 같은 글에 있다 */
+  const a4 = await go({
+    title: '여자는 피부가 80퍼라는 말이 맞는 것 같아요',
+    body: `아는 분이 44인데 관리를 안 하더라고요.\n저는 ${expectAge.ok ? expectAge.age : 47}인데 그래도 어리단 소리를 들어요.\n여자는 피부가 80퍼인 것 같아요.`,
+  })
+  check('🔴 🔴 **④ 제3자 44 는 그대로 두고 채택된다**',
+    a4.review.machineOutcome === 'adopt'
+    && (a4.draft?.body ?? '').includes('아는 분이 44인데'), a4.review.machineOutcome)
+
   const a2 = await go(DRAFT_USES_PERSONA)
   const t2 = `${a2.draft?.title ?? ''}\n${a2.draft?.body ?? ''}`
   check('🔴 🔴 **② 처음부터 P02 나이를 쓰면 손대지 않고 채택된다**',
@@ -2075,6 +2100,71 @@ console.log('\n🔴 🔴 **terminal 이 reason-aware 다 — 고칠 수 있는 �
     pick([]).includes('transform-fail'))
   check('🔴 🔴 **결론인 원천만 `concluded` 로 빠진다**',
     !pick(['transform-fail']).includes('transform-fail'))
+}
+
+console.log('\n🔴 🔴 **시점 스냅샷 — 2031·2036 에도 낡은 밴드로 돌아가지 않는다**')
+{
+  const CARD = { code: 'P02', birthDate: '1979-06-20', ageBand: '40대 후반' }
+  const at = (iso: string) => materializePersonaAt({ card: CARD, now: new Date(iso) })
+  const y2026 = at('2026-09-23T03:00:00Z')
+  const y2031 = at('2031-09-23T03:00:00Z')
+  const y2036 = at('2036-09-23T03:00:00Z')
+  check('🔴 2026 — 47세 · 40대 후반', y2026.ok && y2026.at.exactAge === 47 && y2026.at.effectiveAgeBand === '40대 후반')
+  check('🔴 🔴 **2031 — 52세 · 50대 초반 (40대 후반으로 돌아가면 실패)**',
+    y2031.ok && y2031.at.exactAge === 52 && y2031.at.effectiveAgeBand === '50대 초반',
+    y2031.ok ? `${y2031.at.exactAge} · ${y2031.at.effectiveAgeBand}` : '-')
+  check('🔴 🔴 **2036 — 57세 · 50대 후반**',
+    y2036.ok && y2036.at.exactAge === 57 && y2036.at.effectiveAgeBand === '50대 후반',
+    y2036.ok ? `${y2036.at.exactAge} · ${y2036.at.effectiveAgeBand}` : '-')
+  check('🔴 🔴 **설계 카드와 어긋나면 보고는 하되 판정에 쓰지 않는다**',
+    y2031.ok && y2031.at.designBandDrift !== null && y2026.ok && y2026.at.designBandDrift === null)
+  check('🔴 생일이 없으면 만들지 않는다 (fail-closed)',
+    materializePersonaAt({ card: { ...CARD, birthDate: '' }, now: new Date() }).ok === false)
+  check('🔴 나이 → 밴드 변환', bandOfAge(52) === '50대 초반' && bandOfAge(57) === '50대 후반'
+    && bandOfAge(45) === '40대 중반' && bandOfAge(40) === '40대 초반')
+}
+
+console.log('\n🔴 🔴 **생일 경계 캐시 — 매일 무효화되지는 않는다**')
+{
+  const p02 = P({ code: 'P02', birthDate: '1979-06-20' })
+  const d = (iso: string) => personaPoolIdentity([p02], new Date(iso))
+  const before = d('2026-06-19T03:00:00Z')
+  const onDay = d('2026-06-20T03:00:00Z')
+  const nextDay = d('2026-06-21T03:00:00Z')
+  const later = d('2026-09-23T03:00:00Z')
+  check('🔴 🔴 **생일 직전과 직후의 지문이 다르다**', before !== onDay)
+  check('🔴 🔴 **생일과 무관한 다음 날은 같다 — 매일 무효화되지 않는다**', onDay === nextDay)
+  check('🔴 🔴 **몇 달 뒤에도 같은 나이면 같다**', onDay === later)
+  check('🔴 해가 바뀌어 나이가 늘면 달라진다', d('2027-09-23T03:00:00Z') !== later)
+  check('🔴 시각을 주지 않으면 앞판과 같다 (나이 미포함)',
+    personaPoolIdentity([p02]).includes('age=∅'))
+}
+
+console.log('\n🔴 🔴 **mapping 이행 후조건 — 통째로 빼면 채택되지 않는다**')
+{
+  const post = (text: string, exactAge: number | null = 47) => checkAgeMappingApplied({
+    text, sourceAges: ['44'], exactAge, effectiveAgeBand: '40대 후반',
+    otherMarkers: OTHER_MARKERS,
+  })
+  check('🔴 🔴 **원문 나이가 남으면 실패**', (() => {
+    const v = post('제가 곧 44인데 그래요')
+    return !v.ok && v.code === 'SOURCE_AGE_REMAINS'
+  })())
+  check('🔴 🔴 **나이 문장을 통째로 빼면 실패 — `fixed=0` 과 구분된다**', (() => {
+    const v = post('동네 에스테틱을 몇 년 다녀봤는데요. 피부가 80퍼인 것 같아요.')
+    return !v.ok && v.code === 'PERSONA_AGE_ABSENT'
+  })())
+  check('🔴 🔴 **1인칭 나이가 여럿이면 실패 (fail-closed)**', (() => {
+    const v = post('제가 47인데\n저는 52살이에요')
+    return !v.ok && v.code === 'CONFLICTING_SELF_AGE'
+  })())
+  check('🔴 우리 나이가 들어갔으면 통과', post('제가 47인데 그래요').ok === true)
+  check('🔴 정확한 나이가 없으면 밴드 표현으로도 통과',
+    post('저도 40대 후반인데 그래요', null).ok === true)
+  check('🔴 🔴 **제3자 44 와 우리 47 이 같은 글에 있어도 통과**',
+    post('아는 분이 44인데 저는 47이거든요').ok === true)
+  check('🔴 제3자 나이만 있고 우리 나이가 없으면 실패',
+    post('아는 분이 44인데 그렇대요').ok === false)
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

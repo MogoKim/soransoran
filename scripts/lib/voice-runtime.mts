@@ -59,7 +59,11 @@ export type VoiceRuntime = {
  *    모든 원천에 같은 원인 코드를 남긴다. 예전에는 "말투 근거 없이 씁니다" 하고
  *    그냥 진행했는데, 그렇게 만든 글은 누구 이름으로 낼지 정할 수 없어 전량 보류됐다.
  */
-export function loadVoice(): VoiceRuntime {
+/**
+ * 🔴 `now` 를 주면 후보 풀 지문에 **그날의 나이**(`ageEpoch`)가 들어간다 —
+ *    생일이 지나면 캐시가 무효화된다. 주지 않으면 앞판과 같다(나이 미포함).
+ */
+export function loadVoice(now?: Date): VoiceRuntime {
   const none: VoiceRuntime = {
     describe: '', candidates: [], sourceDigest: '', poolDigest: '',
     blockAllCode: null, blockReason: null,
@@ -120,7 +124,7 @@ export function loadVoice(): VoiceRuntime {
    *    말투 묶음 지문 — 프롬프트에 실려 결과를 바꾸는 값만이다.
    *    🔴 조립은 정본 `personaPoolIdentity` 하나가 한다.
    */
-  const poolDigest = digest16(personaPoolIdentity(candidates))
+  const poolDigest = digest16(personaPoolIdentity(candidates, now))
   return {
     describe: `  🟢 말투 근거·나이대 모두 선 ${usable.length}명 — v2 계획 호출이 이 중에서 고른다`
       + (noAge.length > 0 ? `\n     🔴 나이대(ageBand) 없어 제외 ${noAge.length}명: ${noAge.map((x) => x.code).join(' · ')}` : '')
