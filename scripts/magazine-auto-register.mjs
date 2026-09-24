@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /**
- * LOW/MEDIUM 단일 slug 자동 후속 처리 — 원고 회수부터 등록 PR 까지.
+ * 단일 slug 자동 후속 처리 — 원고 회수부터 등록 PR 까지.
+ *
+ * 🔴 등급으로 거르지 않는다. validationProfile 이 QA 강도를 정하고,
+ *    QA 실패는 **자동 재생성**으로 되살린다 (최대 2회, 그 뒤 이 slug 만 HOLD).
  *
  *   producer(00:10 KST) 가 brief.md 를 만들어 두면 그 다음을 이 스크립트가 잇는다.
  *
@@ -10,13 +13,12 @@
  * 🔴 기본이 dry-run 이다. --write 없이는 파일을 하나도 만들지 않는다.
  *    register 뿐 아니라 회수·변환·hero 까지 전부 --write 아래에서만 쓴다.
  *
- * 🔴 HIGH 는 첫 단계에서 끝난다.
+ * 🔴 프로필을 정할 수 없는 항목만 첫 단계에서 끝난다.
  *    `magazine-auto-lane.mjs` 의 gate 가 topic-queue 를 정본으로 등급을 본다.
  *    batch-qa 의 READY 를 그대로 믿지 않는다 — 큐에 없는 slug 는 batch-qa 가
  *    등급을 검사하지 않기 때문이다(모듈 주석 참조).
  *
- * 🔴 --founder-approved 를 register 에 넘기지 않는다.
- *    그 손잡이는 사람이 직접 register 를 부를 때만 쓴다. 자동 레인에는 자리가 없다.
+ * 🔴 사람 승인 손잡이는 없다 (M3-A 에서 제거).
  *
  * 🔴 앞 단계가 실패하면 뒤로 가지 않는다.
  *    QA FAIL 이면 batch-qa 를 부르지 않고, batch-qa BLOCKED 면 register 를 부르지 않는다.
@@ -31,12 +33,15 @@
  * 종료 코드: BLOCKED 면 1, 아니면 0
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadQueue } from './lib/magazine-load.mjs'
 import { gate, progress, heroPlan, paths } from './lib/magazine-auto-lane.mjs'
 import { resolveHeroBrief } from './lib/magazine-hero-brief.mjs'
+import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+import { attemptRegeneration, clearRegen, MAX_REGEN_CALLS } from './lib/magazine-regen.mjs'
+import { fingerprintOf } from './lib/magazine-quarantine.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -67,7 +72,39 @@ function run(file, args, { json = false } = {}) {
  * 한 slug 를 끝까지 몰고 간다.
  * 각 단계는 { stage, status, detail } 로 남는다 — status 는 ok · skip · blocked 셋뿐이다.
  */
-export function drive(slug, opts) {
+/**
+ * 🔴 **기존 ChatGPT 웹 UI 경로 어댑터.**
+ *    새 API 를 부르지 않는다. 지금 쓰는 그 스크립트에 **실패 패킷 경로만** 더 준다.
+ */
+function webuiRegenRunner({ slug, packetPath }) {
+  const r = run(WEBUI, ['--fetch', slug, '--force', '--regen-packet', packetPath])
+  if (r.code !== 0) {
+    const why = /login_required/i.test(r.stdout + r.stderr) ? 'ChatGPT login_required' : '재생성 회수 실패'
+    return { ok: false, why: `${why} — ${(r.stderr || r.stdout).trim().split('\n').pop()}` }
+  }
+  return { ok: true }
+}
+
+/**
+ * 한 slug 를 끝까지 몰고 간다.
+ *
+ * @param {object} [deps] 🔴 시험이 실제 orchestration 을 돌리기 위한 주입 지점.
+ *        운영에서는 비워 둔다 — 그러면 진짜 스크립트가 돈다.
+ */
+export function drive(slug, opts, deps = {}) {
+  const runStep = deps.run ?? run
+  const regenRunner = deps.regenRunner ?? webuiRegenRunner
+  const regen = deps.attemptRegeneration ?? attemptRegeneration
+  const quarantinePath = deps.quarantinePath
+  /** 🔴 원고가 실제로 바뀌었는지 보는 값. 시험은 실제 draft 를 건드리지 않으므로 주입한다 */
+  const draftFingerprint = deps.draftFingerprint
+  const packetDir = deps.packetDir
+  /**
+   * 🔴 큐 읽기도 주입점이다. 시험이 **운영 큐 내용에 기대지 않게** 하기 위한 자리다.
+   *    큐는 등록될 때마다 줄어든다 — 시험이 "큐에 후보가 있다" 에 기대면
+   *    성공할수록 CI 가 깨진다. 기본값은 실제 loadQueue 그대로다.
+   */
+  const loadQueueFn = deps.loadQueue ?? loadQueue
   /**
    * 🔴 `autoLane` — 이 회차를 사람이 아니라 **자동 레인이** 돌리고 있는가.
    *    자동 레인에서는 대표 이미지가 선택이 아니라 필수다 (2026-09-21 사고).
@@ -83,14 +120,14 @@ export function drive(slug, opts) {
   }
 
   // ── ① gate — 등급·큐·brief ────────────────────────────────
-  const g = gate(slug, loadQueue())
+  const g = gate(slug, loadQueueFn())
   if (!g.ok) {
     for (const b of g.blockedBy) blockedBy.push(b)
     add('gate', 'blocked', g.blockedBy.map((b) => b.message).join(' · '))
     return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, item: g.item }
   }
   const item = g.item
-  add('gate', 'ok', `${item.riskLevel} · auto=true · image=${item.imageMode ?? '-'}`)
+  add('gate', 'ok', `${isAutoLaneEligible(item).profile ?? '-'} · image=${item.imageMode ?? '-'}`)
 
   const p = paths(slug)
 
@@ -100,7 +137,7 @@ export function drive(slug, opts) {
   } else if (!write) {
     add('draft', 'skip', 'dry-run — 회수하지 않는다 (draft.md 없음)')
   } else {
-    const r = run(WEBUI, ['--fetch', slug])
+    const r = runStep(WEBUI, ['--fetch', slug])
     if (r.code !== 0) {
       const why = /login_required/i.test(r.stdout + r.stderr) ? 'ChatGPT login_required' : '회수 실패'
       return stop('draft', 'FETCH_FAILED', `${why} — ${(r.stderr || r.stdout).trim().split('\n').pop()}`)
@@ -115,7 +152,7 @@ export function drive(slug, opts) {
   {
     // --out 없이 부르면 검사만 한다. dry-run 은 그 모드를 쓴다.
     const args = write ? ['--in', p.draftMd, '--out', p.articleTs] : ['--in', p.draftMd]
-    const r = run(MD2DRAFT, args)
+    const r = runStep(MD2DRAFT, args)
     if (r.code !== 0) {
       return stop('article', 'CONVERT_FAILED', (r.stderr || r.stdout).trim().split('\n').slice(-2).join(' '))
     }
@@ -128,25 +165,54 @@ export function drive(slug, opts) {
     return { slug, verdict: 'DRY_RUN_INCOMPLETE', steps, blockedBy, write, dryRun: !write, item }
   }
 
+  /**
+   * 🔴 **QA 실패는 끝이 아니라 재생성 신호다** (M3-A).
+   *    실패 패킷을 만들어 **기존 ChatGPT 웹 UI 경로**에 넘기고, 회수된 원고를
+   *    다시 변환해 같은 QA 를 돌린다. 상한은 장부가 센다 (`MAX_REGEN_CALLS`).
+   *    상한에 닿으면 **이 slug 만** HOLD 다 — 호출부는 다음 후보로 간다.
+   */
+  const laneProfile = isAutoLaneEligible(item).profile ?? 'STANDARD'
+  let regenCalls = 0
+  const regenOnce = (stage, failures) => {
+    if (!write) return { ok: false, code: 'DRY_RUN', why: 'dry-run — 재생성하지 않는다' }
+    // 🔴 재생성 전후로 원고가 실제로 바뀌었는지 본다
+    const fp = draftFingerprint ?? (() => {
+      try { return fingerprintOf(readFileSync(p.draftMd, 'utf8')) } catch { return null }
+    })
+    const rr = regen({ slug, profile: laneProfile, failures, runner: regenRunner,
+      previousFingerprint: fp(), fingerprintOf: fp,
+      ...(quarantinePath ? { quarantinePath } : {}),
+      ...(packetDir ? { packetDir } : {}) })
+    regenCalls = rr.regenCalls ?? regenCalls
+    if (!rr.ok) { add(stage, 'blocked', `재생성 중단: ${rr.code} — ${rr.why}`); return rr }
+    add(stage, 'ok', `재생성 ${rr.regenCalls}/${MAX_REGEN_CALLS} — 실패 패킷 전달 후 원고 회수`)
+    // 🔴 회수된 draft.md 를 다시 변환한다. 변환 없이 QA 를 돌리면 옛 원고를 본다.
+    const c = runStep(MD2DRAFT, ['--in', p.draftMd, '--out', p.articleTs])
+    if (c.code !== 0) return { ok: false, code: 'CONVERT_FAILED', why: (c.stderr || c.stdout).trim().split('\n').pop() }
+    return rr
+  }
+
   // ── ④ magazine QA ─────────────────────────────────────────
   {
-    const r = run(QA, ['--draft', p.articleTs])
-    if (r.code !== 0) {
-      return stop('qa', 'QA_FAIL', 'magazine QA FAIL — register 로 가지 않는다')
+    let r = runStep(QA, ['--draft', p.articleTs])
+    while (r.code !== 0) {
+      const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL',
+        sentence: (r.stdout || r.stderr).trim().split('\n').slice(-3).join(' ') }])
+      if (!rr.ok) return stop('qa', 'QA_FAIL', `magazine QA FAIL — ${rr.code}: ${rr.why}`)
+      r = runStep(QA, ['--draft', p.articleTs])
     }
-    add('qa', 'ok', 'QA FAIL 0')
+    add('qa', 'ok', regenCalls ? `QA FAIL 0 (재생성 ${regenCalls}회 뒤)` : 'QA FAIL 0')
   }
 
   // ── ⑤ hero (REQUIRED) ─────────────────────────────────────
   // batch-qa 앞에 둔다. hero 가 없으면 batch-qa 가 HERO_MISSING 으로 막기 때문이다.
   //
-  // 🔴 **alt 는 review.ts 에서 온다** (2026-09-15 복구).
-  //    옛 판은 호출부가 `alt: null` 을 고정으로 넘겨 `imageMode=REQUIRED` 인 글이
-  //    구조적으로 언제나 HERO_ALT_REQUIRED 로 막혔다. alt 를 자동으로 **지어내지는 않는다** —
-  //    검수 단계에서 사람이 적어 둔 값을 읽을 뿐이다(lib/magazine-hero-brief.mjs).
-  //    `--alt` 를 직접 준 경우에는 그쪽이 이긴다. 사람이 그 자리에 서 있다는 뜻이다.
+  // 🔴 **alt 는 review.ts → cluster 기본값 순서로 온다** (M3-A).
+  //    사람에게 입력을 요구하지 않는다. 지어내지도 않는다 —
+  //    미리 정해 둔 표를 읽을 뿐이다 (lib/magazine-hero-brief.mjs).
+  //    `--alt` 를 직접 준 경우에는 그쪽이 이긴다.
   let heroBrief = { ok: true, alt: null, scene: null, reasons: [] }
-  if (!alt) heroBrief = resolveHeroBrief(slug)
+  if (!alt) heroBrief = resolveHeroBrief(slug, item)
   const heroAlt = alt ?? heroBrief.alt
 
   // 🔴 자동 레인이면 OPTIONAL 도 필수다 — 판단할 사람이 없는 자리에서 "선택" 은 "없음" 이 된다
@@ -166,7 +232,7 @@ export function drive(slug, opts) {
     if (heroBrief.scene) args.push('--prompt', heroBrief.scene)
     // 🔴 자동 레인이 강제한 경우에도 runner 에게 OPTIONAL 을 허용한다고 알려야 만든다
     if (hp.mode !== 'REQUIRED') args.push('--allow-optional')
-    const r = run(HERO, args)
+    const r = runStep(HERO, args)
     if (r.code !== 0) {
       return stop('hero', 'HERO_FAILED', (r.stderr || r.stdout).trim().split('\n').slice(-2).join(' '))
     }
@@ -175,16 +241,29 @@ export function drive(slug, opts) {
 
   // ── ⑥ batch-qa ────────────────────────────────────────────
   {
-    const r = run(BATCH_QA, [slug, '--strict-auto', '--json', ...(autoLane ? ['--require-hero'] : [])], { json: true })
-    const rows = Array.isArray(r.json) ? r.json : r.json?.results ?? []
-    const row = rows.find((x) => x.slug === slug) ?? null
+    const runBatch = () => {
+      const r = runStep(BATCH_QA, [slug, '--strict-auto', '--json', ...(autoLane ? ['--require-hero'] : [])], { json: true })
+      const rows = Array.isArray(r.json) ? r.json : r.json?.results ?? []
+      return rows.find((x) => x.slug === slug) ?? null
+    }
+    let row = runBatch()
     if (!row) return stop('batch', 'BATCH_QA_UNREADABLE', 'batch-qa 결과를 읽지 못했다')
+    /** 🔴 원고 문장이 문제면 재생성한다. 재료(hero·큐)가 문제면 재생성해도 같다 */
+    const CONTENT_CODES = /^(MED_|FIN_|SEN_|AGE_WORDING|BRAND_LEAK|DUPLICATE_SENTENCE|UNSUPPORTED_NUMERIC_CLAIM)/
+    while (row.verdict !== 'READY_TO_SCHEDULE') {
+      const content = (row.blockedBy ?? []).filter((b) => CONTENT_CODES.test(b.code))
+      if (!content.length) break
+      const rr = regenOnce('batch', content.map((b) => ({ code: b.code, label: b.message, sentence: '' })))
+      if (!rr.ok) break
+      row = runBatch()
+      if (!row) return stop('batch', 'BATCH_QA_UNREADABLE', 'batch-qa 결과를 읽지 못했다')
+    }
     if (row.verdict !== 'READY_TO_SCHEDULE') {
       for (const b of row.blockedBy ?? []) blockedBy.push(b)
       add('batch', 'blocked', (row.reasons ?? []).join(' · '))
-      return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, item, batch: row.checks }
+      return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, item, batch: row.checks, regenCalls }
     }
-    add('batch', 'ok', `READY · ${row.checks.riskLevel} · hero=${row.checks.heroOk ?? '-'}`)
+    add('batch', 'ok', `READY · ${laneProfile}${regenCalls ? ` · 재생성 ${regenCalls}회` : ''} · hero=${row.checks.heroOk ?? '-'}`)
   }
 
   // ── ⑦ register ────────────────────────────────────────────
@@ -192,10 +271,10 @@ export function drive(slug, opts) {
     return stop('register', 'PUBLISH_AT_REQUIRED', '--publish-at 이 없다')
   }
   {
-    // 🔴 --founder-approved 를 넘기지 않는다. dry-run 은 --write 를 빼는 것으로 만든다.
+    // 🔴 dry-run 은 --write 를 빼는 것으로 만든다.
     const args = ['--slug', slug, '--publish-at', publishAt, '--json']
     if (write) args.push('--write')
-    const r = run(REGISTER, args, { json: true })
+    const r = runStep(REGISTER, args, { json: true })
     const verdict = r.json?.verdict ?? (r.code === 0 ? 'READY' : 'BLOCKED')
     if (verdict === 'BLOCKED' || r.code !== 0) {
       const reasons = r.json?.reasons ?? [(r.stderr || r.stdout).trim().split('\n').pop()]
@@ -215,13 +294,15 @@ export function drive(slug, opts) {
     add('pr', 'ok', 'PR 대상 (호출부가 만든다)')
   }
 
-  return { slug, verdict: write ? 'DONE' : 'DRY_RUN_OK', steps, blockedBy, write, dryRun: !write, item }
+  // 🔴 등록까지 갔으면 재생성 기록을 지운다 — 옛 실패를 다음 회차가 이어받지 않는다
+  if (write) { try { clearRegen(slug, quarantinePath) } catch { /* 장부 문제로 성공을 되돌리지 않는다 */ } }
+  return { slug, verdict: write ? 'DONE' : 'DRY_RUN_OK', steps, blockedBy, write, dryRun: !write, item, regenCalls }
 }
 
 // ── CLI ────────────────────────────────────────────────────
 
 function help() {
-  console.log(`LOW/MEDIUM 단일 slug 자동 후속 처리
+  console.log(`단일 slug 자동 후속 처리 (등급으로 거르지 않는다)
 
   node scripts/magazine-auto-register.mjs --slug <slug> --dry-run
   node scripts/magazine-auto-register.mjs --slug <slug> --publish-at YYYY-MM-DD --write
@@ -231,12 +312,12 @@ function help() {
   --dry-run   파일 변경 0건 (기본)
   --write     회수·변환·hero·register 를 실제로 수행
   --pr        register write 후 PR 대상으로 표시 (-ready 가 실제 PR 을 만든다)
-  --alt       imageMode=REQUIRED 일 때 hero alt (사람이 적는다)
+  --alt       hero alt 를 직접 지정한다 (없으면 review.ts → cluster 기본값)
   --allow-optional  OPTIONAL 도 hero 를 만든다 (기본 스킵)
   --json      결과를 JSON 으로
 
-🔴 HIGH · autoEligible=false · 큐에 없는 slug 는 gate 에서 끝난다.
-🔴 --founder-approved 는 이 경로에 없다.`)
+🔴 큐에 없거나 validationProfile 을 정할 수 없는 slug 만 gate 에서 끝난다.
+🔴 사람 승인 손잡이는 없다.`)
 }
 
 function main() {

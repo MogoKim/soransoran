@@ -221,6 +221,10 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *       `micro-seed:safety-check` 를 무조건으로 둔 것과 같은 이유다.
  *
  * 🔴 68 → 69 (2026-09-21). 목록 쪽 이동 경계값 fixture 1 개를 무조건 실행으로 더했다.
+ * 🔴 69 → 70 (2026-09-24, M3-A). `check:m3a` 1 개를 **무조건 실행**으로 더했다.
+ *    heavy 조건에 넣지 않은 이유: 이 관문이 무너지면 자동 공급이 통째로 멈추거나
+ *    반대로 검증 없이 나간다. 둘 다 조용히 지나가면 안 되는 일이라 경로와 무관하게 돈다.
+ *    🔴 상한을 올린 것은 **이 한 개 때문**이다. 다음에 또 올리려면 같은 크기의 근거를 적는다.
  *    실측 0.19 초(3 회 · 0.20 / 0.18 / 0.19). 지금까지 더한 어느 무조건 step 보다 싸고
  *    DB · 네트워크 · write 가 0 이다 — `src/lib/list-query.ts` 는 import 가 하나도 없다.
  *
@@ -230,7 +234,7 @@ console.log('\n④ 무조건 실행 step 이 말없이 늘지 않는다')
  *       경로 조건은 후자에서 생략되는데, 이 fixture 의 aria-current 가드는
  *       바로 그 화면 전용 PR 이 깨뜨리는 것이다. 한쪽만 보면 가드가 절반만 닫힌다.
  */
-const MAX_UNCONDITIONAL_STEPS = 69
+const MAX_UNCONDITIONAL_STEPS = 70
 
 let total = 0
 let gated = 0

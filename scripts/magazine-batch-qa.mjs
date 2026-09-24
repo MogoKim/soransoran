@@ -2,8 +2,9 @@
 /**
  * 매거진 일괄 자동 승인 게이트
  *
- * producer 가 선정한 글들을 예약 등록하기 전에, **창업자 검수 없이 나가도 되는지**를
- * 건별로 판정한다. LOW/MEDIUM 자동 승인을 성립시키는 마지막 관문이다.
+ * producer 가 선정한 글들을 예약 등록하기 전에, **사람 없이 나가도 되는지**를
+ * 건별로 판정한다. 사람 없이 나가도 되는지를 정하는 마지막 관문이다.
+ * 🔴 등급이 아니라 `validationProfile` 별 결정론적 규칙으로 본다 (M3-A).
  *
  * 🔴 이 스크립트가 하지 않는 것
  *    파일을 고치지 않는다 · articles.ts 에 쓰지 않는다 · 예약하지 않는다
@@ -16,11 +17,11 @@
  *    그 층을 review.ts 의 forbiddenPatterns 로 받아 여기서 대조한다.
  *
  * 자동 승인 조건 (전부 AND)
- *   ① riskLevel ∈ {LOW, MEDIUM}
- *   ② autoEligible = true
+ *   ① validationProfile 이 정해진다 (큐 정본 또는 고정표)
+ *   ② 그 프로필의 결정론적 규칙 위반 0 (magazine-profile-qa.mjs)
  *   ③ magazine-qa FAIL 0
  *   ④ forbiddenPatterns 위반 0
- *   ⑤ riskSentences 5/5 원고 대조 통과 (MEDIUM/HIGH 필수)
+ *   ⑤ riskSentences 5/5 원고 대조 통과 (STANDARD 아닌 프로필 필수)
  *   ⑥ imageMode ≠ REQUIRED 또는 hero 존재
  *
  * 자동화 모드(--strict-auto · --run)에서만 더 보는 것
@@ -50,8 +51,10 @@ import { join, isAbsolute, basename } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { loadQueue, sliceLiteral, evalLiteral, DRAFTS_DIR, ROOT } from './lib/magazine-load.mjs'
 import { runQa } from './magazine-qa.mjs'
+import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+import { runProfileQA } from './lib/magazine-profile-qa.mjs'
 
-const AUTO_RISK = new Set(['LOW', 'MEDIUM'])
+// 🔴 AUTO_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 승인을 가르지 않는다
 
 /**
  * 본문 길이 — 기존 공개·예약 13건 실측이 1294~2028자다.
@@ -78,8 +81,8 @@ const REFUSAL_PATTERNS = [
   'I apologize',
   'language model',
 ]
-/** 이 등급은 riskSentences 5개가 필수다 (전략 §5.1) */
-const RISK_SENTENCES_REQUIRED = new Set(['MEDIUM', 'HIGH'])
+// 🔴 RISK_SENTENCES_REQUIRED 제거 (M3-A · SUPERSEDED)
+//    옛 판은 riskLevel 로 위험 문장 필수 여부를 정했다. 지금은 validationProfile 이 정한다.
 
 // ── 로드 ───────────────────────────────────────────────────
 
@@ -153,11 +156,20 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
   if (!queueItem) {
     notes.push(
       'topic-queue 에 없다 — 이미 등록됐거나 큐 밖에서 만든 글이다. ' +
-        '자동 승인 조건 ①riskLevel ②autoEligible 은 검사하지 않았다',
+        'validationProfile 을 정할 정본이 없어 프로필 검사를 하지 않았다',
     )
   } else {
-    if (!AUTO_RISK.has(queueItem.riskLevel)) block('RISK_LEVEL', `riskLevel=${queueItem.riskLevel} — 창업자 검수 대상`)
-    if (queueItem.autoEligible !== true) block('AUTO_INELIGIBLE', 'autoEligible=false — 민감 주제')
+    /**
+     * 🔴 **riskLevel·autoEligible 로 막지 않는다** (M3-A).
+     *    프로필을 정해 그 프로필의 결정론적 규칙으로 검사한다.
+     */
+    const lane = isAutoLaneEligible(queueItem)
+    if (!lane.ok) block(lane.code, lane.why)
+    else {
+      const pq = runProfileQA({ profile: lane.profile, title: article?.title ?? '',
+        bodyText: bodyText(article), sources: article?.sources ?? review?.sources ?? [] })
+      for (const f of pq.failures) block(f.code, `${f.label}: "${f.sentence}"`)
+    }
   }
 
   // ③ magazine-qa
@@ -200,11 +212,16 @@ export function judge(slug, { dir, queueItem, strictAuto = false, requireHero = 
   }
 
   // ⑤ riskSentences
-  const needRisk = riskLevel ? RISK_SENTENCES_REQUIRED.has(riskLevel) : false
+  /**
+   * 🔴 **위험 문장 요구도 등급이 아니라 프로필이 정한다** (M3-A).
+   *    riskLevel 은 호환 필드로만 남는다.
+   */
+  const laneForRisk = isAutoLaneEligible(queueItem ?? {})
+  const needRisk = laneForRisk.ok && laneForRisk.profile !== 'STANDARD'
   const sentences = Array.isArray(review?.riskSentences) ? review.riskSentences : null
   let riskMatched = null
   if (needRisk && !sentences) {
-    block('RISK_SENTENCES_MISSING', `${riskLevel} 인데 riskSentences 가 없다 (5개 필수)`)
+    block('RISK_SENTENCES_MISSING', `${laneForRisk.profile} 인데 riskSentences 가 없다 (5개 필수)`)
   } else if (sentences) {
     if (sentences.length !== 5) block('RISK_SENTENCES_COUNT', `riskSentences ${sentences.length}개 — 5개여야 한다`)
     riskMatched = 0
@@ -320,7 +337,7 @@ function help() {
   node scripts/magazine-batch-qa.mjs ... --json
 
 자동 승인 조건 (전부 AND)
-  ① riskLevel LOW/MEDIUM  ② autoEligible=true  ③ QA FAIL 0
+  ① validationProfile 확정  ② 프로필 규칙 위반 0  ③ QA FAIL 0
   ④ forbiddenPatterns 위반 0  ⑤ riskSentences 5/5  ⑥ REQUIRED 면 hero 존재
 
 이 스크립트는 파일을 고치지 않는다. 예약도 하지 않는다. 판정만 한다.`)

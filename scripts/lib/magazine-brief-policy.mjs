@@ -18,6 +18,7 @@ import { HOMOGRAPH_PATTERNS, judgeForbidden } from './magazine-forbidden.mjs'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT } from './magazine-load.mjs'
+import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 
 // ─────────────────────────────────────────────────────────
 // 공통 금지어 — magazine-qa.mjs 의 거울
@@ -86,20 +87,26 @@ export const TODO_MARKERS = ['TODO(세션)', '<!-- TODO', '(여기에', 'TODO:']
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 HIGH 는 자동 생성하지 않는다. 큐가 "창업자 검수 대상" 으로 표시한 등급이다.
+ * 🔴 M3-A — 등급으로 생성을 막지 않는다. 프로필을 정할 수 없을 때만 HOLD 한다.
  *
  * 허용 목록이 아니라 **차단 목록**으로 둔다.
  *    등급은 두 곳에서 온다 — 큐의 riskLevel(LOW/MEDIUM/HIGH)과
  *    review.risk.medical(NONE 도 있다). 허용 목록으로 두면 NONE 이 HIGH 와
  *    같이 걸린다. 실제로 회귀에서 그렇게 잘못 잡혔다.
  */
-export const BLOCKED_RISK_LEVELS = ['HIGH']
+// 🔴 BLOCKED_RISK_LEVELS 제거 (M3-A · SUPERSEDED) — 등급으로 brief 를 막지 않는다
 
 /** 알려진 등급 값. 이 밖의 값은 "모른다" 로 본다 */
 export const KNOWN_RISK_LEVELS = ['NONE', 'LOW', 'MEDIUM', 'HIGH']
 
 /** 이 등급부터 riskSentences 5개가 필수다 (magazine-batch-qa ⑤ 와 같은 기준) */
-export const RISK_SENTENCE_REQUIRED_LEVELS = ['MEDIUM', 'HIGH']
+// 🔴 RISK_SENTENCE_REQUIRED_LEVELS 제거 (M3-A · SUPERSEDED) — needsRiskSentences() 가 판정한다
+/** 이 프로필들은 위험 문장을 요구한다 */
+export const RISK_SENTENCE_PROFILES = ['MEDICAL', 'FINANCIAL', 'SENSITIVE']
+export function needsRiskSentences(queueItem) {
+  const lane = isAutoLaneEligible(queueItem ?? {})
+  return lane.ok && RISK_SENTENCE_PROFILES.includes(lane.profile)
+}
 
 export const RISK_SENTENCE_COUNT = 5
 
@@ -126,13 +133,13 @@ export const MONEY_ASSERTION_SEEDS = ['무조건', '확정 수익', '보장됩�
 // 게이트
 // ─────────────────────────────────────────────────────────
 
-/** 사람 승인 없이 fetch 로 넘어가려면 이 여섯을 전부 통과해야 한다 */
+/** fetch 로 넘어가려면 이 여섯을 전부 통과해야 한다 (사람 승인 단계는 없다) */
 export const GATES = {
   G1: '필수 섹션 6개가 있고 TODO 가 남아 있지 않다',
   G2: 'brief 의 5문장이 review.riskSentences 와 문자열까지 같다',
   G3: '5문장에 공통 금지어·의료 단정·forbiddenPatterns 가 하나도 없다',
   G4: 'forbiddenPatterns 가 비어 있지 않다',
-  G5: 'riskLevel 을 알 수 있고 HIGH 가 아니다 (HIGH 는 창업자 검수 → HOLD)',
+  G5: 'validationProfile 을 정할 수 있다 (못 정하면 HOLD — 등급은 보지 않는다)',
   G6: '큐가 위험하다고 한 주제는 review.risk 도 위험하고, 확인 권고 문장이 있다',
   G7: 'review.ts 가 ReviewData 스키마를 만족한다 (필수 필드 · 스키마 외 필드 0)',
 }
@@ -254,12 +261,17 @@ export function verifyBrief({ briefText, review, queueItem }) {
   const money = review?.risk?.money ?? 'NONE'
 
   // ── G5 먼저 본다. HIGH 면 나머지를 볼 이유가 없다 ──
-  if (!riskLevel || !KNOWN_RISK_LEVELS.includes(riskLevel)) {
-    add('G5', false, `등급을 알 수 없다 (${riskLevel ?? '없음'}) — 큐에도 review.risk 에도 쓸 값이 없다`)
-  } else if (BLOCKED_RISK_LEVELS.includes(riskLevel)) {
-    add('G5', false, `riskLevel=${riskLevel} — 창업자 검수 대상이다. auto-brief 하지 않는다 (HOLD)`)
+  /**
+   * 🔴 G5 는 이제 **프로필을 정할 수 있는가**를 본다.
+   *    등급을 몰라서가 아니라, 어떤 강도로 검사할지 모를 때만 멈춘다.
+   */
+  const lane = isAutoLaneEligible(queueItem ?? {})
+  if (!lane.ok) {
+    add('G5', false, `${lane.code} — ${lane.why}`)
+  } else if (false) {
+    add('G5', false, 'unreachable')
   } else {
-    add('G5', true, `riskLevel=${riskLevel}`)
+    add('G5', true, `validationProfile=${lane.profile} (${lane.why})`)
   }
 
   // ── G1 섹션 · TODO ──
@@ -276,7 +288,7 @@ export function verifyBrief({ briefText, review, queueItem }) {
   )
 
   // ── G2 brief 5문장 == review.riskSentences ──
-  const needSentences = RISK_SENTENCE_REQUIRED_LEVELS.includes(riskLevel)
+  const needSentences = needsRiskSentences(queueItem)
   if (!needSentences && markers.length === 0 && riskSentences.length === 0) {
     add('G2', true, `riskLevel=${riskLevel} — riskSentences 선택. 양쪽 다 없다`)
   } else if (markers.length !== RISK_SENTENCE_COUNT) {
@@ -336,7 +348,7 @@ export function verifyBrief({ briefText, review, queueItem }) {
   //    최소 하나가 MEDIUM 이상이어야 한다. 위험을 스스로 낮춰 적는 길을 막는다.
   const needMedical = medical === 'MEDIUM' || medical === 'HIGH'
   const needMoney = money === 'MEDIUM' || money === 'HIGH'
-  const queueSaysRisky = RISK_SENTENCE_REQUIRED_LEVELS.includes(queueItem?.riskLevel)
+  const queueSaysRisky = needsRiskSentences(queueItem)
 
   if (queueSaysRisky && !needMedical && !needMoney) {
     add(

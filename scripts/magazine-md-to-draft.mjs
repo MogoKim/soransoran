@@ -213,7 +213,7 @@ function q(value) {
 function renderDraft(meta, blocks, sourceName) {
   const L = []
   L.push('/**')
-  L.push(` * ChatGPT 원고를 변환한 draft — 창업자 검수용.`)
+  L.push(` * ChatGPT 원고를 변환한 draft — 결정론적 QA 입력.`)
   L.push(' *')
   L.push(` * 원본: ${sourceName}`)
   L.push(' * 변환: scripts/magazine-md-to-draft.mjs (형식 변환만. 문장은 손대지 않았다)')

@@ -19,15 +19,15 @@
  *    정본은 세션이 TODO 를 채운 뒤에 만든다.
  *
  * 🔴 HIGH 도 초안까지는 만든다 (전략 §5.1)
- *    HIGH 의 정의는 "만들지 않는다" 가 아니라 "창업자가 본문 전문을 읽는다" 이다.
+ *    🔴 M3-A — 등급은 검증 강도다. 만들지 않는 주제도, 사람이 읽는 주제도 없다.
  *    초안을 만들지 않으면 검수할 것이 없어 큐가 그 자리에서 멈춘다.
- *    그래서 레인을 둘로 나눈다 — auto(LOW·MEDIUM, produceCount) 와
- *    review(HIGH, reviewCount). 예산이 갈려 있어 HIGH 가 LOW·MEDIUM 을 밀어내지 않는다.
- *    자동 등록·자동 공개는 magazine-register.mjs 의 AUTO_RISK 가 그대로 막는다.
+ *    🔴 M3-A 이후 레인은 **하나다.** 등급으로 가르지 않는다 —
+ *    `validationProfile` 을 정할 수 있는 주제가 produceCount 만큼 들어온다.
+ *    등록 판정은 magazine-register.mjs 가, 자동 승인 판정은 magazine-batch-qa.mjs 가
+ *    프로필별 결정론적 규칙으로 한다.
  *
- *    ⚠️ 이 수동 게이트는 최종 상태가 아니다. 최종 목표는 고강도 자동 검수가
- *       PASS/FAIL/UNKNOWN 을 내고, PASS 면 HIGH 도 자동 등록되는 것이다.
- *       UNKNOWN 만 창업자가 본다 — 제작 전략 §13.7.
+ *    🔴 사람이 보는 중간 게이트는 없앴다 (M3-A). 프로필 검사가 FAIL 이면 그 slug 만
+ *       최대 2회 자동 재생성하고, 계속 실패하면 그 slug 만 HOLD 된다.
  *
  * 사용법
  *   node scripts/magazine-producer-plan.mjs              실행 (파일 생성)
@@ -41,6 +41,7 @@ import { join } from 'node:path'
 import { loadArticles, loadQueue, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import { calculateInventory } from './magazine-inventory.mjs'
 import { MEDICAL_REQUIRED, MEDICAL_SUGGESTED } from './magazine-qa.mjs'
+import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 
@@ -58,15 +59,11 @@ function produceCountFor(inventoryDays) {
 /**
  * HIGH 는 하루 1건까지만 만든다.
  *
- * 🔴 이 값은 **사람이 읽는 동안만 유효한 상한**이다. 자동 고강도 검수가 붙으면
- *    검수 시간이 상한을 정하지 않으므로 다시 계산해야 한다 (제작 전략 §13.7).
+ * 🔴 (역사 · SUPERSEDED) 이 값은 사람이 본문 전문을 읽던 시절의 상한이었다.
+ *    M3-A 로 사람이 읽는 단계가 없어져 상한의 근거도 사라졌다.
  *
- * 전략 §5.1 이 HIGH 검수를 **본문 전문 10~15분**으로 잡았다. 하루 2건이면
- * 검수만 30분이고, 밀리기 시작하면 창업자가 전문을 읽지 않게 된다 —
- * 그 순간 HIGH 등급은 이름만 남는다.
- *
- * 재고가 목표(14일) 이상이면 0 이다. HIGH 라고 재고 정책을 비켜가지 않는다 —
- * 만들 이유가 없을 때 검수 대기만 쌓으면 그것도 병목이다.
+ * 지금 이 값이 하는 일은 하나다 — 재고가 목표(14일) 이상이면 0 이다.
+ * 만들 이유가 없을 때 대기만 쌓으면 그것도 병목이다.
  */
 function reviewCountFor(produceCount) {
   return produceCount > 0 ? 1 : 0
@@ -85,19 +82,19 @@ function kstDate(ms) {
  *
  * 🔴 레인이 둘이다.
  *
- *    auto    LOW·MEDIUM 이면서 autoEligible=true. produceCount 만큼 뽑는다.
- *    review  riskLevel=HIGH. reviewCount 만큼 따로 뽑는다.
+ *    auto    validationProfile 을 정할 수 있는 주제. produceCount 만큼 뽑는다.
+ *    🔴 review 레인은 없다 (M3-A · SUPERSEDED). reviewCount 는 호환 인자다.
  *
  *    HIGH 를 auto 레인에 섞지 않는 이유는 예산 때문이다. 큐 정렬이 day 순이라
  *    HIGH 가 앞자리(day 10·18·22)를 차지하면 produceCount 를 다 먹고
- *    LOW·MEDIUM 이 밀려난다 — 고치려던 병목이 옆으로 옮겨갈 뿐이다.
- *    auto 레인을 **먼저** 기존 로직 그대로 돌리고 review 레인을 뒤에 붙인다.
+ *    뒤 후보가 밀려난다 — 고치려던 병목이 옆으로 옮겨갈 뿐이다.
+ *    🔴 M3-A 이후 레인은 하나다 (검수 레인 SUPERSEDED).
  *
  * 🔴 HIGH 를 skip 하지 않는 이유 (전략 §5.1)
- *    HIGH 의 정의는 "만들지 않는다" 가 아니라 "창업자가 본문 전문을 읽는다" 이다.
+ *    🔴 M3-A — 등급은 검증 강도다. 만들지 않는 주제도, 사람이 읽는 주제도 없다.
  *    초안을 만들지 않으면 읽을 것이 없어 큐가 그 자리에서 영구히 막힌다.
  *    지금 자동화된 것은 **초안까지**이고, 등록은 magazine-register.mjs 의
- *    AUTO_RISK(LOW·MEDIUM) 가 막는다. 이 선은 최종이 아니라 자동 고강도 검수가
+ *    🔴 M3-A 이후 등급은 막지 않는다. 막는 것은 결정론적 QA 실패뿐이며, 그것도
  *    붙기 전까지의 임시 위치다 — 제작 전략 §13.7.
  */
 export function selectItems({ queue, articles, today, produceCount, reviewCount = 0, draftExists }) {
@@ -115,14 +112,17 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
   }
 
   const eligible = []
-  const reviewEligible = []
   for (const item of queue) {
-    // HIGH 는 autoEligible 과 무관하게 review 레인으로 간다.
-    // 반대로 HIGH 가 아니면서 autoEligible=false 인 항목(민감 주제)은 예전처럼 뺀다 —
-    // 그쪽은 "초안이 없어서" 막힌 게 아니라 주제 자체를 사람이 정해야 하는 자리다.
-    const needsFullReview = item.riskLevel === 'HIGH'
-    if (!item.autoEligible && !needsFullReview) {
-      skip(item, 'autoEligible=false — 민감 주제')
+    // 🔴 등급으로 레인을 가르지 않는다. 프로필을 정할 수 있으면 자동 레인이다.
+    /**
+     * 🔴 **riskLevel·autoEligible 로 주제를 버리지 않는다.**
+     *    등급은 검증 강도이지 발행 차단이 아니다 (M3-A).
+     *    못 고르는 유일한 이유는 **프로필을 정할 근거가 없을 때**다.
+     */
+    const lane = isAutoLaneEligible(item)
+    const needsFullReview = false   // 🔴 호환 필드 — 더 이상 레인을 가르지 않는다
+    if (!lane.ok) {
+      skip(item, `${lane.code} — ${lane.why}`)
       continue
     }
     if (takenSlugs.has(item.slug)) {
@@ -145,7 +145,8 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
         continue
       }
     }
-    ;(needsFullReview ? reviewEligible : eligible).push(item)
+    // 🔴 프로필이 정해진 주제는 전부 자동 레인으로 간다
+    eligible.push({ ...item, validationProfile: lane.profile })
   }
 
   // 정렬 — SEASONAL 은 마감이 가까운 순. day 는 큐 고유번호일 뿐 우선순위가 아니다.
@@ -164,7 +165,6 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
     return a.day - b.day
   }
   eligible.sort(byUrgency)
-  reviewEligible.sort(byUrgency)
 
   // 같은 시리즈는 하루 1건. 5편을 3편보다 먼저 만들면 시리즈가 깨진다.
   const selected = []
@@ -182,22 +182,12 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
     selected.push(item)
   }
 
-  // review 레인은 auto 레인이 끝난 뒤에 붙는다. 순서를 바꾸면 seriesUsed 를
-  // HIGH 가 먼저 선점해 LOW·MEDIUM 이 밀린다 — auto 레인 결과가 달라진다.
-  const review = []
-  for (const item of reviewEligible) {
-    if (review.length >= reviewCount) {
-      skip(item, 'HIGH 는 하루 ' + reviewCount + '건까지 — 다음 회차로 넘긴다')
-      continue
-    }
-    if (item.seriesId && seriesUsed.has(item.seriesId)) {
-      skip(item, item.seriesId + ' 는 오늘 이미 1건 선정됐다')
-      continue
-    }
-    if (item.seriesId) seriesUsed.add(item.seriesId)
-    review.push(item)
-  }
-  return { selected, review, skipped }
+  /**
+   * 🔴 **검수 레인을 없앴다** (M3-A · SUPERSEDED).
+   *    등급으로 주제를 가르지 않으므로 `reviewEligible` 에 아무것도 들어오지 않았고,
+   *    이 블록은 빈 배열을 도는 죽은 코드였다. 호출부 호환을 위해 `review: []` 만 남긴다.
+   */
+  return { selected, review: [], skipped }
 }
 
 // ── 작업 패키지 ────────────────────────────────────────────
@@ -227,21 +217,9 @@ const TODO = (what) => '<!-- TODO(세션): ' + what + ' -->'
  *    HIGH 가 영원히 손으로 검수할 등급이어서가 아니다. 표지가 그렇게 읽히면
  *    임시 게이트가 영구 운영으로 굳는다.
  */
-function fullReviewBanner(item) {
-  if (item.riskLevel !== 'HIGH') return ''
-  return `> 🔴 **현재 임시 수동 검수 게이트 (riskLevel: HIGH)**
->
-> 이 주제는 지금 초안까지만 자동으로 만든다. 창업자가 본문 전문을 읽고 승인하기
-> 전에는 \`magazine-register.mjs\` 가 \`articles.ts\` 등록을 막는다.
->
-> **최종 목표는 고강도 자동 검수를 통과하면 자동 등록하는 것이다** (제작 전략 §13.7).
-> 지금 사람이 서 있는 이유는 등급이 HIGH 라서가 아니라 자동 검수가 아직
-> 사실관계·배치·톤을 판정하지 못해서다. 이 게이트는 M-AUTO-3(PASS/FAIL/UNKNOWN
-> 리포트) 이후 유형 단위로 열린다.
->
-> 큐가 지정한 금지선: ${item.notes}
-
-`
+function fullReviewBanner() {
+  // 🔴 수동 검수 게이트를 없앴다 (M3-A · SUPERSEDED). 붙일 표지가 없다.
+  return ''
 }
 
 /**
@@ -463,13 +441,12 @@ function help() {
 이 스크립트는 원고를 쓰지 않는다. LLM 을 호출하지 않는다.
 brief.md / review.ts 정본을 만들지 않는다 — _runs 에 작업 패키지만 놓는다.
 
-레인이 둘이다.
-  auto    LOW·MEDIUM · autoEligible=true      하루 produceCount 건
-  review  HIGH                                 하루 reviewCount 건 (초안까지만)
+🔴 레인은 **하나다** (M3-A). 등급으로 가르지 않는다.
+  auto    validationProfile 을 정할 수 있는 모든 주제   하루 produceCount 건
 
-HIGH 는 초안을 만들되, 지금은 창업자가 본문 전문을 읽기 전에는 등록되지 않는다.
-이 수동 게이트는 임시다 — 최종 목표는 고강도 자동 검수 PASS 시 자동 등록(제작 전략 §13.7).
-등록 차단은 magazine-register.mjs 의 AUTO_RISK 가 한다 — 여기서 풀지 않는다.`)
+검증 강도는 프로필이 정하고, QA 실패는 자동 재생성으로 되살린다 (최대 2회).
+두 번 실패하면 그 글만 HOLD 되고 다른 글은 계속 간다. 사람 승인 단계는 없다.
+등록 판정은 magazine-register.mjs 가 한다 — 여기서 풀지 않는다.`)
 }
 
 function main() {
@@ -560,7 +537,8 @@ function main() {
        * true 면 지금은 창업자가 본문 전문을 읽기 전까지 등록되지 않는다.
        * 임시 수동 게이트다 — 최종 목표는 고강도 자동 검수 PASS 시 자동 등록(§13.7).
        */
-      needsFullReview: i.riskLevel === 'HIGH',
+      // 🔴 호환 필드 — 자동 진행을 가르지 않는다
+      needsFullReview: false,
       packageWritten: false,
     })),
     skipped,
@@ -596,7 +574,7 @@ function report(run) {
   const L = []
   L.push(`# producer 준비 리포트 — ${run.date}${run.dryRun ? ' (dry-run)' : ''}`)
   L.push('')
-  const highs = run.selected.filter((s) => s.needsFullReview).length
+  const highs = 0   // 🔴 등급으로 따로 세는 칸이 없다
   L.push(
     `재고 ${run.inventoryDays}일 · 오늘 생산 ${run.produceCount}건` +
       ` · HIGH ${run.reviewCount ?? 0}건 · 선정 ${run.selected.length}건`,
@@ -614,7 +592,7 @@ function report(run) {
   } else {
     for (const s of run.selected) {
       const win = s.publishWindow ? ` · 창 ${s.publishWindow.after}~${s.publishWindow.before}` : ''
-      const gate = s.needsFullReview ? ' · 🔴 현재 임시 수동 검수 게이트 (자동 등록 대기)' : ''
+      const gate = ''   // 🔴 붙일 표지가 없다
       L.push(`- day ${s.day} \`${s.slug}\` — ${s.title}`)
       L.push(`  ${s.contentType} · ${s.riskLevel}${win}${s.packageWritten ? '' : ' · 패키지 미생성'}${gate}`)
     }

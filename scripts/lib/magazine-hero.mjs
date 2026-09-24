@@ -7,7 +7,7 @@
  *    이미지 생성 없이 테스트할 수 있다.
  *
  * 🔴 이 파일은 등록 게이트를 열지 않는다.
- *    hero 가 생겨도 `riskLevel=HIGH` · `autoEligible=false` 는 그대로 막는다.
+ *    🔴 M3-A — 등급은 아무것도 막지 않는다. hero 는 등록 관문과 무관하다.
  *    hero 는 batch-qa 의 ⑥번 조건 하나일 뿐이다.
  */
 

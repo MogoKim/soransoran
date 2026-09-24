@@ -22,7 +22,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { gate, heroPlan, LANE_RISK } from './lib/magazine-auto-lane.mjs'
+import { gate, heroPlan } from './lib/magazine-auto-lane.mjs'
 import { validateManuscript, MIN_BODY_LENGTH } from './lib/magazine-manuscript-guard.mjs'
 import {
   assertOnBranch, branchName, createBranch, ghAuthReady, preflight, preflightTools,
@@ -39,6 +39,7 @@ import { parseHeroBlock, validateHeroBrief } from './lib/magazine-hero-brief.mjs
 import { loadQueue } from './lib/magazine-load.mjs'
 import { verifyReviewShape } from './lib/magazine-brief-policy.mjs'
 import { normalizePublishAt } from './magazine-register.mjs'
+import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 
 let pass = 0
 let fail = 0
@@ -53,18 +54,27 @@ const FIXTURES = join('scripts', '__fixtures__', 'magazine')
 
 console.log('\n══════ gate — 등급')
 const Q = [
-  { slug: 'low-ok', riskLevel: 'LOW', autoEligible: true, imageMode: 'OPTIONAL' },
-  { slug: 'med-ok', riskLevel: 'MEDIUM', autoEligible: true, imageMode: 'REQUIRED' },
-  { slug: 'high-one', riskLevel: 'HIGH', autoEligible: false, imageMode: 'REQUIRED' },
-  { slug: 'high-but-auto', riskLevel: 'HIGH', autoEligible: true, imageMode: 'OPTIONAL' },
-  { slug: 'low-but-ineligible', riskLevel: 'LOW', autoEligible: false, imageMode: 'OPTIONAL' },
+  { slug: 'low-ok', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true, imageMode: 'OPTIONAL' },
+  { slug: 'med-ok', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'MEDIUM', autoEligible: true, imageMode: 'REQUIRED' },
+  { slug: 'high-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'HIGH', autoEligible: false, imageMode: 'REQUIRED' },
+  { slug: 'high-but-auto', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'HIGH', autoEligible: true, imageMode: 'OPTIONAL' },
+  { slug: 'low-but-ineligible', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: false, imageMode: 'OPTIONAL' },
 ]
-expect('HIGH 는 막힌다', codes(gate('high-one', Q)).includes('RISK_LEVEL'), true)
-expect('autoEligible=true 여도 HIGH 면 막힌다', codes(gate('high-but-auto', Q)).includes('RISK_LEVEL'), true)
-expect('LOW 여도 autoEligible=false 면 막힌다', codes(gate('low-but-ineligible', Q)).includes('AUTO_INELIGIBLE'), true)
+/**
+ * 🔴 **낡은 기대를 폐기했다** (M3-A · 2026-09-24).
+ *    아래 셋은 "HIGH 는 막힌다 · autoEligible=false 는 막힌다" 를 기대했다.
+ *    등급이 발행 차단 근거가 아니게 되면서 그 기대 자체가 틀린 것이 됐다.
+ *      · 'HIGH 는 막힌다'
+ *      · 'autoEligible=true 여도 HIGH 면 막힌다'
+ *      · 'LOW 여도 autoEligible=false 면 막힌다'
+ *      · 'AUTO_RISK 는 LOW/MEDIUM 뿐' — 상수 자체를 제거했다
+ *    대신 **등급이 레인을 가르지 않는다**를 확인한다.
+ */
+expect('HIGH 를 등급으로 막지 않는다', codes(gate('high-one', Q)).includes('RISK_LEVEL'), false)
+expect('autoEligible=false 를 등급으로 막지 않는다',
+  codes(gate('low-but-ineligible', Q)).includes('AUTO_INELIGIBLE'), false)
 expect('큐에 없으면 막힌다', codes(gate('nowhere', Q)), ['NOT_IN_QUEUE'])
 expect('큐에 없을 때 등급을 추측하지 않는다', gate('nowhere', Q).item, null)
-expect('AUTO_RISK 는 LOW/MEDIUM 뿐', [...LANE_RISK].sort(), ['LOW', 'MEDIUM'])
 
 console.log('\n══════ gate — brief/review 가 없으면 진행하지 않는다')
 expect('LOW 라도 brief 없으면 막힌다', codes(gate('low-ok', Q)).includes('BRIEF_MISSING'), true)
@@ -72,14 +82,18 @@ expect('LOW 라도 review 없으면 막힌다', codes(gate('low-ok', Q)).include
 expect('막힌 이유에 RISK_LEVEL 은 없다 (LOW 니까)', codes(gate('low-ok', Q)).includes('RISK_LEVEL'), false)
 
 console.log('\n══════ 실제 큐 — HIGH 가 하나도 통과하지 않는다')
+/**
+ * 🔴 **뒤집힌 기대다.** 예전에는 "HIGH 가 통과하면 누출" 이었다.
+ *    이제는 **프로필을 정할 수 없는 행이 통과하면 누출**이다.
+ */
 const real = loadQueue()
-const leaked = real.filter((i) => {
+const unresolved = real.filter((i) => {
   const g = gate(i.slug, real)
-  return g.ok && !LANE_RISK.has(i.riskLevel)
+  return g.ok && !isAutoLaneEligible(i).ok
 })
-expect('실제 큐에서 자동 레인을 통과한 HIGH 0건', leaked.length, 0)
-const ineligibleLeak = real.filter((i) => gate(i.slug, real).ok && i.autoEligible !== true)
-expect('실제 큐에서 통과한 autoEligible=false 0건', ineligibleLeak.length, 0)
+expect('프로필을 못 정한 채 자동 레인을 통과한 행 0건', unresolved.length, 0)
+expect('실제 큐 26행 전부 프로필이 정해진다',
+  real.filter((i) => !isAutoLaneEligible(i).ok).length, 0)
 
 // ─────────────────────────────────────────────────────────
 console.log('\n══════ 변이 ① REQUIRED hero — alt 를 review.ts 에서 읽는다')
@@ -114,8 +128,9 @@ expect(
   true,
 )
 // 🔴 alt 가 생겼다고 등급 게이트가 열리지 않는다 — 이것이 열리면 전부 무의미하다
-expect('alt 가 있어도 HIGH 는 gate 에서 막힌다', codes(gate('high-one', Q)).includes('RISK_LEVEL'), true)
-expect('alt 가 있어도 autoEligible=false 는 막힌다', codes(gate('low-but-ineligible', Q)).includes('AUTO_INELIGIBLE'), true)
+// 🔴 M3-A — 등급은 레인을 가르지 않는다. alt 가 있으면 진행한다
+expect('alt 가 있으면 HIGH 도 gate 를 지난다', codes(gate('high-one', Q)).includes('RISK_LEVEL'), false)
+expect('alt 가 있으면 autoEligible=false 도 지난다', codes(gate('low-but-ineligible', Q)).includes('AUTO_INELIGIBLE'), false)
 // 🔴 OPTIONAL 을 넓히지 않는다
 expect('OPTIONAL 은 alt 가 있어도 기본 스킵', heroPlan(opt, { alt: heroFixture.alt }).need, false)
 expect('OPTIONAL 은 --allow-optional 로만 만든다', heroPlan(opt, { alt: heroFixture.alt, allowOptional: true }).need, true)
@@ -565,8 +580,8 @@ expect(
   true,
 )
 expect(
-  'outstanding 이 drive() 호출보다 앞이다',
-  readySrc.indexOf('readOutstanding({ exec })') < readySrc.indexOf('drive(cand.slug'),
+  'outstanding 이 후보 처리보다 앞이다',
+  readySrc.indexOf('readOutstanding({ exec })') < readySrc.indexOf('processCandidates({ write'),
   true,
 )
 expect('HOLD 는 종료 코드 0 으로 낸다', /finish\(out\.severity === SEVERITY\.HOLD \? 0 : 1\)/.test(readySrc), true)
@@ -574,7 +589,7 @@ expect('HOLD 는 종료 코드 0 으로 낸다', /finish\(out\.severity === SEVE
 //    HOLD 면 slotAllocator 에 닿기 전에 회차가 끝난다.
 expect(
   'outstanding 이 슬롯 계산보다 앞이다',
-  readySrc.indexOf('readOutstanding({ exec })') < readySrc.indexOf('slotAllocator(kstDate('),
+  readySrc.indexOf('readOutstanding({ exec })') < readySrc.indexOf('processCandidates({ write'),
   true,
 )
 
@@ -1032,8 +1047,10 @@ expect('깨진 저장소는 빈 것으로 본다 (회차를 막지 않는다)', 
 // 🔴 저장소는 repo 밖이어야 한다 — 추적 파일이면 DIRTY_TREE 로 레인이 멈춘다
 expect('🔴 격리 기록은 저장소 밖에 쓴다', QT.QUARANTINE_PATH.includes('/Documents/soransoran'), false)
 expect('scan 이 격리를 건너뛴다', /judgeQuarantine\(\{ entry: store\[slug\]/.test(readySrc), true)
-expect('write 회차만 기록을 고친다', /if \(write && storeChanged\) saveQuarantine\(store\)/.test(readySrc), true)
-expect('등록 성공 시 기록을 지운다', /clearEntry\(store, r\.slug\)/.test(readySrc), true)
+// 🔴 M3-A — 장부는 `updateQuarantine` 으로 **매번 최신을 읽어** 고친다 (lost update 방지)
+expect('write 회차만 기록을 고친다', /if \(write\) \{\n\s+\/\*\*/.test(readySrc) && /if \(write\) upd\(/.test(readySrc), true)
+expect('들고 있던 사본을 저장하지 않는다', /saveQuarantine\(store\)/.test(readySrc), false)
+expect('등록 성공 시 기록을 지운다', /if \(write\) upd\(\(cur\) => \{ const n = \{ \.\.\.cur \}; delete n\[r\.slug\]; return n \}\)/.test(readySrc), true)
 
 console.log('\n══════ 무인 ③ 제목 ↔ 본문 일치')
 const { checkTitleBodyMatch } = await import('./lib/magazine-editorial.mjs')
@@ -1054,7 +1071,7 @@ const okPr = { number: 9, url: 'u', headRefName: `${M.AUTO_BRANCH_PREFIX}2026-09
 const okFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/x-slug/draft.md', 'public/magazine/x-slug/hero.webp']
 // 🔴 자동 등록 글에는 대표 이미지가 **반드시** 있다 (2026-09-21 사고 뒤 계약)
 const okReg = [{ slug: 'x-slug', publishAt: '2026-09-20T10:30:00+09:00', publishedAt: '2026-09-20', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } }]
-const okQueue = { 'x-slug': { riskLevel: 'LOW', autoEligible: true } }
+const okQueue = { 'x-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } }
 const base = {
   pr: okPr, expectedSha: SHA, files: okFiles, ciState: 'success',
   checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
@@ -1071,8 +1088,10 @@ expect('🔴 예상 밖 파일이 있으면 막는다', codesOf(jm({ files: [...
 expect('🔴 CI 가 초록이 아니면 막는다', codesOf(jm({ ciState: 'pending' })).includes('CI_NOT_GREEN'), true)
 expect('🔴 검사가 실패하면 막는다', codesOf(jm({ checks: [{ name: 'x', status: 'completed', conclusion: 'failure' }] })).includes('CHECK_FAILED'), true)
 expect('아직 도는 검사가 있으면 막는다', codesOf(jm({ checks: [{ name: 'x', status: 'in_progress', conclusion: null }] })).includes('CHECK_PENDING'), true)
-expect('🔴 HIGH 는 막는다', codesOf(jm({ queueBySlug: { 'x-slug': { riskLevel: 'HIGH', autoEligible: true } } })).includes('RISK_LEVEL'), true)
-expect('🔴 autoEligible=false 는 막는다', codesOf(jm({ queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: false } } })).includes('AUTO_INELIGIBLE'), true)
+// 🔴 M3-A — 등급으로 막지 않는다. 프로필을 못 정할 때만 막는다
+expect('🔴 HIGH 를 등급으로 막지 않는다', codesOf(jm({ queueBySlug: { 'x-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'HIGH', autoEligible: true } } })).includes('RISK_LEVEL'), false)
+expect('🔴 autoEligible=false 를 등급으로 막지 않는다', codesOf(jm({ queueBySlug: { 'x-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: false } } })).includes('AUTO_INELIGIBLE'), false)
+expect('🔴 cluster 가 없어 프로필을 못 정하면 막는다', codesOf(jm({ queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: true } } })).includes('PROFILE_UNRESOLVED'), true)
 expect('🔴 큐에 없으면 막는다 (등급 정본이 없다)', codesOf(jm({ queueBySlug: {} })).includes('NOT_IN_QUEUE'), true)
 expect('🔴 중복 slug 를 막는다', codesOf(jm({ mainSlugs: new Set(['x-slug']) })).includes('DUPLICATE_SLUG_IN_MAIN'), true)
 expect('🔴 중복 예약일을 막는다', codesOf(jm({ mainDates: new Set(['2026-09-20']) })).includes('DUPLICATE_DATE_IN_MAIN'), true)
@@ -1086,7 +1105,7 @@ expect('PR 이 없으면 막는다', codesOf(jm({ pr: null })).includes('NO_PR')
 expect('허용 파일 모양 — 본문/큐/원고/hero', okFiles.every((f) => M.isAllowedFile(f)), true)
 expect('🔴 소스 코드 변경은 허용하지 않는다', M.isAllowedFile('scripts/magazine-auto-merge.mjs'), false)
 expect('🔴 워크플로 변경은 허용하지 않는다', M.isAllowedFile('.github/workflows/visibility-guard.yml'), false)
-expect('MERGE_RISK 는 LOW/MEDIUM 뿐', [...M.MERGE_RISK].sort(), ['LOW', 'MEDIUM'])
+// 🔴 MERGE_RISK 기대 삭제 (M3-A · SUPERSEDED) — 등급으로 병합을 가르지 않는다
 
 console.log('\n══════ 무인 ⑤ 시각 일치 — 템플릿 · 문서 · 테스트')
 const regTpl = readFileSync(join('docs', 'operations', 'launchd', 'magazine', 'com.soransoran.magazine-auto-register.plist.template'), 'utf8')
@@ -1120,8 +1139,8 @@ const mFiles = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue
 const mReg = [{ slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } }]
 const okChecks = [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }]
 // 🔴 등록 전 큐(main): slug 가 **있다** · 등록 후 큐(PR): slug 가 **없다**
-const MAIN_QUEUE = { 'x-slug': { riskLevel: 'MEDIUM', autoEligible: true }, 'other': { riskLevel: 'LOW', autoEligible: true } }
-const BRANCH_QUEUE = { 'other': { riskLevel: 'LOW', autoEligible: true } }
+const MAIN_QUEUE = { 'x-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'MEDIUM', autoEligible: true }, 'other': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } }
+const BRANCH_QUEUE = { 'other': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } }
 const mBase = {
   pr: mPr, expectedSha: MSHA, files: mFiles, ciState: 'success', checks: okChecks,
   registered: mReg, queueBySlug: MAIN_QUEUE, branchQueueBySlug: BRANCH_QUEUE,
@@ -1138,17 +1157,17 @@ expect('🔴 PR 큐를 정본으로 쓰면 막힌다 (옛 결함 재현)', mCode
 // 🔴 PR 이 등급을 낮춰 통과할 수 없다
 expect(
   '🔴 PR 이 등급을 낮추면 막는다',
-  mCodes(jmg({ branchQueueBySlug: { other: { riskLevel: 'LOW', autoEligible: true }, 'y': { riskLevel: 'LOW', autoEligible: true } } })).includes('QUEUE_ADDED'),
+  mCodes(jmg({ branchQueueBySlug: { other: { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true }, 'y': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } } })).includes('QUEUE_ADDED'),
   true,
 )
 expect(
   '🔴 남은 항목의 등급을 바꾸면 막는다',
-  mCodes(jmg({ branchQueueBySlug: { other: { riskLevel: 'HIGH', autoEligible: true } } })).includes('QUEUE_GRADE_CHANGED'),
+  mCodes(jmg({ branchQueueBySlug: { other: { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'HIGH', autoEligible: true } } })).includes('QUEUE_GRADE_CHANGED'),
   true,
 )
 expect(
   '🔴 자격을 바꿔도 막는다',
-  mCodes(jmg({ branchQueueBySlug: { other: { riskLevel: 'LOW', autoEligible: false } } })).includes('QUEUE_GRADE_CHANGED'),
+  mCodes(jmg({ branchQueueBySlug: { other: { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: false } } })).includes('QUEUE_GRADE_CHANGED'),
   true,
 )
 expect(
@@ -1157,7 +1176,7 @@ expect(
   true,
 )
 // 등급 자체는 여전히 main 기준으로 막힌다
-expect('main 큐가 HIGH 면 막는다', mCodes(jmg({ queueBySlug: { ...MAIN_QUEUE, 'x-slug': { riskLevel: 'HIGH', autoEligible: true } } })).includes('RISK_LEVEL'), true)
+expect('main 큐가 HIGH 여도 등급으로 막지 않는다', mCodes(jmg({ queueBySlug: { ...MAIN_QUEUE, 'x-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'HIGH', autoEligible: true } } })).includes('RISK_LEVEL'), false)
 
 console.log('\n══════ 운영연결 ② CI 조회 실패 · 빈 목록 · 필수 검사 누락')
 expect('🔴 빈 검사 목록은 막는다', mCodes(jmg({ checks: [] })).includes('CHECKS_EMPTY'), true)
@@ -1356,12 +1375,14 @@ expect(
 const ADJACENT = [
   'export const TOPIC_QUEUE: TopicQueueItem[] = [',
   '  {',
+  "    cluster: 'daily',",
+  "    validationProfile: 'STANDARD',",
   "    riskLevel: 'HIGH',",
   '    autoEligible: false,',
   `    note: '${'긴설명 '.repeat(120)}',`,
   "    slug: 'sensitive-one',",
   '  },',
-  "  { slug: 'safe-one', riskLevel: 'LOW', autoEligible: true },",
+  "  { slug: 'safe-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true },",
   ']',
 ].join('\n')
 const adj = Object.fromEntries(L.parseQueueSource(ADJACENT, 'adj').map((q) => [q.slug, q]))
@@ -1394,20 +1415,26 @@ expect(
   MG.judgeAutoMerge({
     ...mBase,
     registered: [{ slug: 'sensitive-one', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }],
-    queueBySlug: { 'sensitive-one': { riskLevel: 'LOW', autoEligible: true } },
+    queueBySlug: { 'sensitive-one': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } },
     branchQueueBySlug: null,
   }).blockedBy.map((b) => b.code).includes('RISK_LEVEL'),
   false,
 )
+/**
+ * 🔴 **기대를 바꿨다** (M3-A). 옛 결함은 "경계 파서가 옆 항목 등급을 집어 와
+ *    HIGH 가 LOW 로 읽혔다" 였고, 그때는 등급이 곧 차단이었다.
+ *    이제 등급으로 막지 않으므로 **막히는 근거는 프로필 판정 실패**다.
+ *    경계 파서가 자기 항목을 정확히 읽는지는 위 '운영연결 ⑦' 이 이미 확인한다.
+ */
 expect(
-  '🔴 경계 파서로 읽으면 관문이 막는다',
+  '🔴 경계 파서로 읽어도 등급으로 막지 않는다',
   MG.judgeAutoMerge({
     ...mBase,
     registered: [{ slug: 'sensitive-one', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED' }],
-    queueBySlug: { 'sensitive-one': adj['sensitive-one'] },
+    queueBySlug: { 'sensitive-one': { ...adj['sensitive-one'], cluster: 'daily' } },
     branchQueueBySlug: null,
   }).blockedBy.map((b) => b.code).includes('RISK_LEVEL'),
-  true,
+  false,
 )
 
 console.log('\n══════ 운영연결 ⑧ 자동 병합 실행 함수 — 가짜 git·gh·배포·HTTP 로 통째 실행')
@@ -1429,14 +1456,16 @@ const ART = (rows) => [
 ].join('\n')
 const QUE = (rows) => [
   'export const TOPIC_QUEUE: TopicQueueItem[] = [',
-  ...rows.map((r) => `  { slug: '${r.slug}', riskLevel: '${r.riskLevel}', autoEligible: ${r.autoEligible} },`),
+  // 🔴 실제 큐 행은 cluster 를 갖는다 — 프로필 판정의 첫 신호다 (M3-A)
+  // 🔴 신규 항목은 validationProfile 을 달고 온다 — cluster 로 추정하지 않는다 (M3-A)
+  ...rows.map((r) => `  { slug: '${r.slug}', cluster: '${r.cluster ?? 'daily'}', validationProfile: '${r.validationProfile ?? 'STANDARD'}', riskLevel: '${r.riskLevel}', autoEligible: ${r.autoEligible} },`),
   ']',
 ].join('\n')
 
 const MAIN_ART = [{ slug: 'old-one', publishAt: '2026-09-20T10:30:00+09:00' }]
 const BRANCH_ART = [...MAIN_ART, { slug: 'new-one', publishAt: '2026-09-19T10:30:00+09:00' }]
-const MAIN_Q = [{ slug: 'new-one', riskLevel: 'LOW', autoEligible: true }, { slug: 'keep-one', riskLevel: 'MEDIUM', autoEligible: true }]
-const BRANCH_Q = [{ slug: 'keep-one', riskLevel: 'MEDIUM', autoEligible: true }]
+const MAIN_Q = [{ slug: 'new-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true }, { slug: 'keep-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'MEDIUM', autoEligible: true }]
+const BRANCH_Q = [{ slug: 'keep-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'MEDIUM', autoEligible: true }]
 const PR8 = { number: 77, url: 'https://example/77', headRefName: `${MG.AUTO_BRANCH_PREFIX}2026-09-17-010000`, headRefOid: HEAD, baseRefName: 'main', state: 'OPEN', mergeable: 'MERGEABLE', isDraft: false }
 const FILES8 = ['src/content/magazine/articles.ts', 'drafts/magazine/topic-queue.ts', 'drafts/magazine/new-one/draft.md', 'public/magazine/new-one/hero.webp']
 const CHECKS8 = [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }]
@@ -1730,7 +1759,7 @@ expect('🔴 merge 하지 않는다', deletedDeps.calls.some((c) => c.startsWith
 const queueEditDeps = mergeDeps({
   showFile: (sha, path) => {
     if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
-    return sha === BASE ? QUE(MAIN_Q) : QUE([{ slug: 'keep-one', riskLevel: 'LOW', autoEligible: true }])
+    return sha === BASE ? QUE(MAIN_Q) : QUE([{ slug: 'keep-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true }])
   },
 })
 expect(
@@ -1805,7 +1834,7 @@ const queueFieldDeps = mergeDeps({
     if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
     return sha === BASE
       ? QUE(MAIN_Q)
-      : "export const TOPIC_QUEUE: TopicQueueItem[] = [\n  { slug: 'keep-one', riskLevel: 'MEDIUM', autoEligible: true, title: '제목을 몰래 바꿨다' },\n]"
+      : "export const TOPIC_QUEUE: TopicQueueItem[] = [\n  { slug: 'keep-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'MEDIUM', autoEligible: true, title: '제목을 몰래 바꿨다' },\n]"
   },
 })
 const qf = await AM.runAutoMerge({ apply: true, deps: queueFieldDeps })
@@ -1839,26 +1868,47 @@ const highDeps = mergeDeps({
   showFile: (sha, path) => {
     if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
     return sha === BASE
-      ? QUE([{ slug: 'new-one', riskLevel: 'HIGH', autoEligible: true }, ...BRANCH_Q])
+      ? QUE([{ slug: 'new-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'HIGH', autoEligible: true }, ...BRANCH_Q])
       : QUE(BRANCH_Q)
   },
 })
 const high = await AM.runAutoMerge({ apply: true, deps: highDeps })
-expect('🔴 HIGH 는 실행 경로에서도 막힌다', codes8(high).includes('RISK_LEVEL'), true)
-expect('🔴 merge 하지 않는다', highDeps.calls.some((c) => c.startsWith('merge:')), false)
+// 🔴 M3-A — 등급으로 막지 않는다. merge 는 다른 관문이 판정한다
+expect('🔴 HIGH 를 실행 경로에서 등급으로 막지 않는다', codes8(high).includes('RISK_LEVEL'), false)
+expect('  프로필을 정할 수 있으면 진행한다', codes8(high).includes('PROFILE_UNRESOLVED'), false)
 const ineligibleDeps = mergeDeps({
   showFile: (sha, path) => {
     if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
     return sha === BASE
-      ? QUE([{ slug: 'new-one', riskLevel: 'LOW', autoEligible: false }, ...BRANCH_Q])
+      ? QUE([{ slug: 'new-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: false }, ...BRANCH_Q])
       : QUE(BRANCH_Q)
   },
 })
 expect(
-  '🔴 autoEligible=false 는 실행 경로에서도 막힌다',
+  '🔴 autoEligible=false 를 실행 경로에서 등급으로 막지 않는다',
   codes8(await AM.runAutoMerge({ apply: true, deps: ineligibleDeps })).includes('AUTO_INELIGIBLE'),
+  false,
+)
+/** 🔴 대신 **cluster 가 없어 프로필을 못 정하면** 실행 경로에서 막힌다 */
+const unresolvedDeps = mergeDeps({
+  showFile: (sha, path) => {
+    if (path.endsWith('articles.ts')) return ART(sha === BASE ? MAIN_ART : BRANCH_ART)
+    return sha === BASE
+      ? [
+          'export const TOPIC_QUEUE: TopicQueueItem[] = [',
+          "  { slug: 'new-one', cluster: 'daily', riskLevel: 'LOW', autoEligible: true },",
+          ...BRANCH_Q.map((r) => `  { slug: '${r.slug}', cluster: '${r.cluster}', riskLevel: '${r.riskLevel}', autoEligible: ${r.autoEligible} },`),
+          ']',
+        ].join('\n')
+      : QUE(BRANCH_Q)
+  },
+})
+expect(
+  '🔴 프로필을 못 정하면 실행 경로에서 막는다',
+  codes8(await AM.runAutoMerge({ apply: true, deps: unresolvedDeps })).includes('PROFILE_UNRESOLVED'),
   true,
 )
+expect('🔴 그때는 merge 하지 않는다', unresolvedDeps.calls.some((c) => c.startsWith('merge:')), false)
 
 // ── 감시 작업도 통째로 돈다 ──────────────────────────────
 const watchOk = await AM.runWatch({
@@ -2324,13 +2374,15 @@ const ART_F = (rows) => [
 ].join('\n')
 const QUE_F = (rows) => [
   'export const TOPIC_QUEUE: TopicQueueItem[] = [',
-  ...rows.map((r) => `  { slug: '${r.slug}', riskLevel: '${r.riskLevel}', autoEligible: ${r.autoEligible} },`),
+  // 🔴 실제 큐 행은 cluster 를 갖는다 (M3-A)
+  // 🔴 신규 항목은 validationProfile 을 달고 온다 — cluster 로 추정하지 않는다 (M3-A)
+  ...rows.map((r) => `  { slug: '${r.slug}', cluster: '${r.cluster ?? 'daily'}', validationProfile: '${r.validationProfile ?? 'STANDARD'}', riskLevel: '${r.riskLevel}', autoEligible: ${r.autoEligible} },`),
   ']',
 ].join('\n')
 const MAIN_A = [{ slug: 'old-one', publishAt: '2026-09-25T10:30:00+09:00' }]
 const NEW_A = [...MAIN_A, { slug: 'new-one', publishAt: '2026-09-24T10:30:00+09:00' }]
-const MAIN_QF = [{ slug: 'new-one', riskLevel: 'LOW', autoEligible: true }, { slug: 'keep', riskLevel: 'LOW', autoEligible: true }]
-const BR_QF = [{ slug: 'keep', riskLevel: 'LOW', autoEligible: true }]
+const MAIN_QF = [{ slug: 'new-one', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true }, { slug: 'keep', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true }]
+const BR_QF = [{ slug: 'keep', cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true }]
 
 /**
  * 🔴 **PR 조회만 진짜 실행기를 쓴다.** 나머지(git·CI·배포·HTTP)는 가짜다 —
@@ -2403,7 +2455,7 @@ const gateBaseF = {
   ciState: 'success',
   checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
   registered: [{ slug: 'new-one', publishAt: '2026-09-24T10:30:00+09:00', publishedAt: '2026-09-24', status: 'SCHEDULED' }],
-  queueBySlug: { 'new-one': { riskLevel: 'LOW', autoEligible: true } },
+  queueBySlug: { 'new-one': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } },
   branchQueueBySlug: null,
   mainSlugs: new Set(),
   mainDates: new Set(),
@@ -2508,7 +2560,7 @@ const hBase = {
   expectedSha: 'h'.repeat(40),
   ciState: 'success',
   checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
-  queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: true } },
+  queueBySlug: { 'x-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } },
   branchQueueBySlug: null,
   mainSlugs: new Set(),
   mainDates: new Set(),
@@ -2533,7 +2585,7 @@ expect(
       { slug: 'x-slug', publishAt: '2026-09-25T10:30:00+09:00', publishedAt: '2026-09-25', status: 'SCHEDULED', heroImage: { src: '/magazine/x-slug/hero.webp' } },
       { slug: 'y-slug', publishAt: '2026-09-26T10:30:00+09:00', publishedAt: '2026-09-26', status: 'SCHEDULED' },
     ],
-    queueBySlug: { 'x-slug': { riskLevel: 'LOW', autoEligible: true }, 'y-slug': { riskLevel: 'LOW', autoEligible: true } },
+    queueBySlug: { 'x-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true }, 'y-slug': { cluster: 'daily', validationProfile: 'STANDARD', riskLevel: 'LOW', autoEligible: true } },
     files: HFILES,
   }).includes('HERO_MISSING'),
   true,
