@@ -8,7 +8,8 @@
  *    env 원천을 읽는다. 2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.
  *    두 러너가 **같은 행 하나**를 읽어야 그 일이 다시 나지 않는다.
  *
- * 🔴 **하루 결정은 최초 확정 뒤 바뀌지 않는다(immutable).**
+ * 🔴 **하루 결정은 최초 확정 뒤 바뀌지 않는다(immutable) — app-level 계약이다.**
+ *    DB 가 막아 주지 않는다. 저장 adapter 가 create/read 만 내주는 것으로 지킨다.
  *    바뀌면 아침에 d5 로 낸 글이 낮의 d3 결정 아래에서 상한 초과가 된다.
  *    그래서 갱신·덮어쓰기가 없다 — `ensureStageDecision` 은 **만들거나 읽거나** 둘뿐이다.
  */
@@ -228,8 +229,15 @@ export async function ensureStageDecision(io: {
  * 🔴 **JSON 왕복이 검증을 통과해야 한다.** `decidedAt` 은 DateTime 이므로 읽을 때
  *    `toISOString()` 으로 되돌린다 — 그 문자열의 KST 날짜가 `kstDate` 와 같아야 한다.
  *
- * 🔴 **갱신 칼럼이 없다.** immutable 이므로 `revision` 도 `updatedAt` 도 두지 않는다 —
- *    두면 누군가 갱신할 수 있게 되고, 그 순간 하루 결정이 흔들린다.
+ * 🔴 **불변은 app-level 계약이다 — 칼럼을 안 두는 것으로 지켜지지 않는다**
+ *    (2026-09-25 마스터 정정). 앞판은 "`updatedAt` 이 없어서 immutable" 이라고 적었다.
+ *    **사실이 아니다.** `updatedAt` 이 없어도 `UPDATE`·`upsert`·`deleteMany` 는 그대로
+ *    돈다. Postgres 는 이 표를 append-only 로 알지 못한다.
+ *    🔴 실제로 불변을 지키는 것은 **저장 adapter 가 create/read 만 제공하는 것**이다:
+ *      · `stage-decision-repo` 에 `update`·`upsert`·`delete*` 경로가 **하나도 없다**
+ *      · 검사가 그 파일에서 해당 호출을 찾아 0 인지 본다(변이로 확인)
+ *      · `kstDate` 기본키가 **같은 날 두 번째 행**을 DB 수준에서 막는다
+ *    `revision`·`updatedAt` 칼럼을 두지 않는 것은 그 계약의 **표시**이지 강제가 아니다.
  * 🔴 **보존 기간 규칙을 두지 않는다.** 지울 근거가 아직 없다.
  * 🔴 **rollback 은 `STAGE_CONTROLLER_ENABLED=off`** 다 — 행을 지우거나 판을 되돌리지 않는다.
  */

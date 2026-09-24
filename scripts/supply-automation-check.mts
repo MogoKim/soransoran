@@ -662,9 +662,16 @@ console.log('\n②-d5 🔴 🔴 D3 기간 운영 + D5 하루 시험이 겹치는
     const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
     check('🔴 🔴 **러너의 그날 문이 설치된 단계 판정을 쓴다**',
       /publishable: effectiveVerdict\.can/.test(src) && !/publishable: windowVerdict\.can/.test(src))
+    /**
+     * 🔴 `dayFor` 는 공용 `resolvePublishScale` 로 옮겨졌다(2026-09-24) —
+     *    러너와 관제가 같은 창을 보게 하려고 뺐다. **지키는 것은 같다: 하나뿐이다.**
+     */
+    const shared = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
     check('🔴 판정을 만드는 함수가 하나다 — 창이 달라지지 않는다',
-      (src.match(/const dayFor = \(stage: ReleaseStage\)/g) ?? []).length === 1
-      && (src.match(/anchor: 'now'/g) ?? []).length === 1)
+      (shared.match(/const dayFor = \(stage: ReleaseStage\)/g) ?? []).length === 1
+      && (shared.match(/anchor: 'now'/g) ?? []).length === 1
+      // 🔴 러너 안에 사본이 남아 있지 않다
+      && !/const dayFor = /.test(src) && !/anchor: 'now'/.test(src))
   }
 }
 

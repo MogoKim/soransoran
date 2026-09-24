@@ -7,7 +7,7 @@
  *
  * 🔴 DB 0 · 네트워크 0 · 파일 write 0 · LLM 0.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 
 import {
   previousKstDate, nextStage, isCalendarDate, DECISION_WRITER, BLOCK_CODES,
@@ -81,6 +81,25 @@ const validatePrev = (row: unknown): ValidatedStageDecision | null => {
 }
 const prevDecision = (release: ReleaseStage, o: Record<string, unknown> = {}) =>
   validatePrev(prevRow(release, o))
+
+/**
+ * 🔴 **하드코딩한 목록은 새 파일을 놓친다** (2026-09-25 마스터 지적).
+ *    앞판은 6개 파일만 봤다 — 내일 누가 `src/lib/stage-x.ts` 를 만들면 그 파일은
+ *    아무도 보지 않는다. 🔴 **production TS/MTS 를 전부 훑는다.**
+ */
+const PRODUCTION_FILES = (() => {
+  const out: string[] = []
+  const walk = (dir: string): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = `${dir}/${e.name}`
+      if (e.isDirectory()) { if (e.name !== 'node_modules' && e.name !== 'generated') walk(full) }
+      else if (/\.(ts|tsx|mts)$/.test(e.name)) out.push(full)
+    }
+  }
+  walk('src'); walk('scripts')
+  // 🔴 contract 는 유일한 materialize 지점이고, 검사 파일은 production 이 아니다
+  return out.filter((f) => f !== 'src/lib/stage-decision-contract.ts' && !/-check\.mts$/.test(f))
+})()
 
 /** 🔴 정본 조립 — 손으로 verdict 를 만들지 않는다 */
 const assemble = (o: { stock: number; publishedToday: number }) => {
@@ -808,13 +827,6 @@ console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 �
    * 🔴 **검증을 건너뛸 길이 없다.** brand 심볼은 contract 파일 밖으로 나가지 않는다 —
    *    다른 파일이 그 타입을 만들려면 `as unknown as` 를 써야 하고, 그것을 금지한다.
    */
-  check('🔴 🔴 **brand 를 캐스팅으로 우회하는 곳이 없다**', (() => {
-    const files = [
-      'src/lib/stage-ladder.ts', 'src/lib/stage-decision-store.ts',
-      'scripts/stage-decision-probe.mts', 'scripts/original-post-auto-publish.mts',
-    ]
-    return files.every((f) => !/as unknown as ValidatedStageDecision/.test(readFileSync(f, 'utf-8')))
-  })())
   check('🔴 🔴 **사다리가 검증 로직을 두 벌로 복제하지 않는다**', (() => {
     const ladder = readFileSync('src/lib/stage-ladder.ts', 'utf-8')
     // 🔴 계약·writer·enum 검사는 contract 한 곳에만 있다
@@ -1123,22 +1135,19 @@ console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
     return /assertion/.test(src) && /brand 를 그대로 통과한다|우회할 수 있다|사실이 아니다/.test(src)
       && /진짜 안전 경계는 타입이 아니라 값이다/.test(src)
   })())
-  check('🔴 🔴 **contract 밖 production 에 직접 cast·이중 cast 가 없다**', (() => {
-    const files = [
-      'src/lib/stage-ladder.ts', 'src/lib/stage-decision-store.ts', 'src/lib/stage-source.ts',
-      'scripts/stage-decision-probe.mts', 'scripts/original-post-auto-publish.mts',
-      'scripts/lib/publishable-stock.mts',
-    ]
-    const bad = files.filter((f) => {
+  check('🔴 자동 탐색이 실제로 파일을 찾았다 — 빈 목록으로 초록이 되지 않는다',
+    PRODUCTION_FILES.length > 50, `${PRODUCTION_FILES.length}개`)
+  check('🔴 🔴 **contract 밖 production 어디에도 직접·이중 cast 가 없다**', (() => {
+    const bad = PRODUCTION_FILES.filter((f) => {
       const code = readFileSync(f, 'utf-8')
         .split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
       return /as\s+(unknown\s+as\s+)?ValidatedStageDecision/.test(code)
         || /<ValidatedStageDecision>/.test(code)
-        || /as\s+never\s*\)?\s*as\s+ValidatedStageDecision/.test(code)
+        || /as\s+\w+\s+as\s+ValidatedStageDecision/.test(code)
         || /satisfies\s+ValidatedStageDecision/.test(code)
     })
     return bad.length === 0
-  })())
+  })(), '')
   check('🔴 🔴 **cast 는 contract 안 materialize 한 줄에만 있다**', (() => {
     // 🔴 주석에 적힌 설명은 코드가 아니다 — 코드 줄만 센다
     const code = readFileSync('src/lib/stage-decision-contract.ts', 'utf-8')
@@ -1215,6 +1224,94 @@ console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 vali
         const fatal = TRANSITION_FATAL_BLOCKS[c.d.state as 'TRIAL' | 'SUSTAIN']
         return c.d.blocks.every((b) => !fatal.includes(b.code))
       }))
+}
+
+console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag 는 꺼져 있다')
+{
+  const REPO = 'src/lib/stage-decision-repo.ts'
+  const repoCode = readFileSync(REPO, 'utf-8')
+    .split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+
+  /**
+   * 🔴 **불변은 DB 가 지켜 주지 않는다** (2026-09-25 마스터 정정).
+   *    `updatedAt` 칼럼이 없어도 `UPDATE`·`upsert`·`deleteMany` 는 그대로 돈다.
+   *    실제로 지키는 것은 **adapter 가 그 경로를 내주지 않는 것**이다.
+   */
+  const FORBIDDEN = [
+    'update', 'updateMany', 'upsert', 'delete', 'deleteMany',
+    'createMany', 'executeRaw', 'queryRaw',
+  ]
+  const found = FORBIDDEN.filter((m) => new RegExp(`stageDecision\\.${m}\\b`).test(repoCode)
+    || new RegExp(`\\$${m}\\b`).test(repoCode))
+  check('🔴 🔴 **adapter 에 갱신·삭제 경로가 하나도 없다**',
+    found.length === 0, found.join(',') || '(없음)')
+  check('🔴 🔴 **쓰는 길은 `create` 하나뿐이다**',
+    (repoCode.match(/stageDecision\.create\(/g) ?? []).length === 1
+    && /stageDecision\.findUnique\(/.test(repoCode),
+    `${(repoCode.match(/stageDecision\.create\(/g) ?? []).length}회`)
+  check('🔴 유일키 충돌을 예외로 삼키지 않고 값으로 낸다',
+    /P2002/.test(repoCode) && /return 'conflict'/.test(repoCode))
+  /**
+   * 🔴 **nullable JSON 은 `JsonNull` 하나로 쓴다.** `DbNull` 과 섞이면 읽을 때
+   *    한쪽이 `undefined` 로 와 validator 가 필수 키 누락으로 거절한다.
+   */
+  check('🔴 🔴 **JsonNull 로 쓰고 DbNull 을 쓰지 않는다**',
+    (repoCode.match(/Prisma\.JsonNull/g) ?? []).length === 2 && !/Prisma\.DbNull/.test(repoCode))
+  /**
+   * 🔴 **빠진 칼럼을 `null` 로 메우지 않는다.** 메우면 select 가 칼럼을 빠뜨린 행이
+   *    "값 없음" 으로 통과한다(fail-open). 빠진 것과 없는 것은 다른 사실이다.
+   */
+  check('🔴 🔴 **읽기가 `undefined` 를 `null` 로 메우지 않는다**',
+    !/row\.supply \?\? null/.test(repoCode) && !/row\.transition \?\? null/.test(repoCode)
+    && /supply: row\.supply,/.test(repoCode) && /transition: row\.transition,/.test(repoCode))
+  check('🔴 읽은 원본을 그대로 흘리지 않는다 — 정본 validator 를 지난다',
+    /validateStoredDecision\(\{ row: rowToValidatorInput\(row\)/.test(repoCode))
+
+  /** 🔴 모델이 validator 가 요구하는 칸을 전부 갖는가 — 주석이 아니라 schema 를 본다 */
+  const model = (readFileSync('prisma/schema.prisma', 'utf-8')
+    .match(/model StageDecision \{([\s\S]*?)\n\}/)?.[1] ?? '')
+  check('🔴 🔴 **schema 에 StageDecision 모델이 있다**', model.trim() !== '')
+  check('🔴 🔴 **유일키는 `kstDate` 하나다 — 같은 날 두 번째 행을 DB 가 막는다**',
+    /kstDate\s+String\s+@id/.test(model) && !/@@unique\(/.test(model),
+    model.split('\n')[1] ?? '')
+  check('🔴 🔴 **validator 가 요구하는 칸이 전부 있다**',
+    STORED_COLUMNS.every((c) => new RegExp(`^\\s*${c}\\s+\\w`, 'm').test(model)),
+    STORED_COLUMNS.filter((c) => !new RegExp(`^\\s*${c}\\s+\\w`, 'm').test(model)).join(',') || '(빠짐 없음)')
+  check('🔴 갱신 칼럼을 두지 않는다 — 계약의 표시다(강제는 adapter 가 한다)',
+    !/updatedAt/.test(model) && !/revision/.test(model))
+  check('🔴 migration 파일이 있고 기존 표를 건드리지 않는다', (() => {
+    // 🔴 주석에 적힌 되돌리기 설명은 실행되는 SQL 이 아니다 — 코드 줄만 본다
+    const sql = readFileSync('prisma/migrations/0028_stage_decision/migration.sql', 'utf-8')
+      .split('\n').filter((l) => !/^\s*--/.test(l)).join('\n')
+    return /CREATE TABLE "StageDecision"/.test(sql)
+      && /PRIMARY KEY \("kstDate"\)/.test(sql)
+      && !/ALTER TABLE/.test(sql) && !/DROP /.test(sql) && !/TRUNCATE/.test(sql)
+  })())
+
+  /** 🔴 **아직 아무도 부르지 않는다** — 배선은 승인되지 않았다 */
+  check('🔴 🔴 **controller job·supply·publish 가 adapter 를 부르지 않는다**', (() => {
+    // 🔴 주석에서 이름을 부르는 것은 배선이 아니다 — **실제 import 문**만 본다
+    const wired = PRODUCTION_FILES.filter((f) => f !== REPO
+      && /^\s*import[^\n]*['"][^'"]*stage-decision-repo[^'"]*['"]/m.test(readFileSync(f, 'utf-8')))
+    return wired.length === 0
+  })(), '')
+  check('🔴 🔴 **feature flag 기본값이 꺼짐이다 — 켜야만 켜진다**',
+    !controllerEnabled({}) && !controllerEnabled({ [CONTROLLER_ENV]: '' })
+    && !controllerEnabled({ [CONTROLLER_ENV]: 'true' })
+    && !controllerEnabled({ [CONTROLLER_ENV]: '1' })
+    && controllerEnabled({ [CONTROLLER_ENV]: 'on' }))
+  check('🔴 canonical env 에 그 값이 들어 있지 않다 — 운영 변수 0', (() => {
+    const home = process.env.HOME ?? ''
+    const envPath = `${home}/Library/Application Support/soransoran/env.local`
+    if (!existsSync(envPath)) return true
+    return !new RegExp(`^\\s*(export\\s+)?${CONTROLLER_ENV}=`, 'm')
+      .test(readFileSync(envPath, 'utf-8'))
+  })())
+  check('🔴 DB 검사는 CI 게이트가 아니다 — 격리 Postgres 를 요구한다', (() => {
+    const db = readFileSync('scripts/stage-decision-db-check.mts', 'utf-8')
+    return /격리 DB 가 아니다/.test(db) && /process\.exit\(2\)/.test(db)
+      && /127\\\.0\\\.0\\\.1\|localhost/.test(db)
+  })())
 }
 
 console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fake store · 같은 runAt')

@@ -277,6 +277,7 @@ model Post {
   // 판정은 src/lib/post-visibility.ts 3축 함수가 유일한 지점이다 (C-2).
   //   각 파일에서 이 값을 직접 비교하지 마라.
   /**
+   * /**
    * /** Micro Seed 레인 발행물인가. 커뮤니티에는 보이되 색인·추천에서는 빠진다.
    */
   isMicroSeed           Boolean @default(false)
@@ -300,6 +301,7 @@ model Post {
   //
   // 전부 nullable 이다. 회원 글(대다수)에는 채워지지 않는다.
   /**
+   * /**
    * /** Sheet 후보 행의 불변 id. 양방향 키의 한쪽이다 (§6-1).
    */
   sheetCandidateId String?   @unique
@@ -1897,4 +1899,58 @@ model OperatorWriteLog {
   @@index([operatorWriterId, createdAt])
   @@index([createdAt])
   @@index([kind, createdAt])
+}
+
+/// 🔴 **하루 단계 결정 — KST 날짜당 하나** (2026-09-25)
+///
+///    공급(로컬 launchd)과 발행(GitHub Actions)은 서로 다른 env 원천을 읽는다.
+///    2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.
+///    두 러너가 **같은 행 하나**를 읽어야 그 일이 다시 나지 않는다.
+///
+/// 🔴 **불변은 app-level 계약이다.** Postgres 는 이 표를 append-only 로 알지 못한다 —
+///    `src/lib/stage-decision-repo.ts` 가 create/read 만 내주는 것으로 지킨다.
+///    `revision`·`updatedAt` 칼럼을 두지 않은 것은 그 계약의 **표시**이지 강제가 아니다.
+///
+/// 🔴 `contractVersion` 은 유일키가 **아니다**. 키에 넣으면 같은 날 판을 올릴 때
+///    두 번째 행이 생기고, 아침과 낮의 상한이 갈린다.
+model StageDecision {
+  /// 🔴 유일키다 — 하루에 결정은 하나뿐이다 (`YYYY-MM-DD`, KST 기준)
+  kstDate String @id
+
+  /// 🔴 계약 판. 현재 판이 아닌 행은 validator 가 거절한다(fail-closed)
+  contractVersion String
+
+  /// 사람이 승인한 천장. 어떤 판정도 이 값을 올리지 않는다 (d1|d3|d5|d10)
+  capacity String
+  /// 실제 공개 단계. 🔴 release rank <= capacity rank
+  release  String
+  /// SUSTAIN|TRIAL|PREPARE|HOLD
+  state    String
+
+  /// string[]
+  reasons Json
+  /// { code: BlockCode, reason: string }[]
+  blocks  Json
+
+  /// 그날 단계를 고정했는가
+  dayPinned Boolean
+
+  /// 🔴 `{ eligibleSpeakers, excluded: [{reason, codes}] }` 또는 **JSON null**.
+  ///    Prisma 의 `DbNull`(칼럼이 SQL NULL) 과 `JsonNull`(값이 JSON `null`) 을
+  ///    섞으면 읽을 때 한쪽이 `undefined` 로 와 validator 가 거절한다.
+  ///    🔴 adapter 가 언제나 `JsonNull` 로 쓴다 — 그래야 왕복이 `null` 로 돌아온다.
+  supply Json?
+
+  /// 🔴 전이 근거. TRIAL/SUSTAIN 이면 구조가 있고 나머지는 JSON null.
+  ///    `{kind:'TRIAL',trialBase,previousKstDate,target}` | `{kind:'SUSTAIN',from,to}`
+  transition Json?
+
+  /// 🔴 언제나 `controller` — supply/publish 는 읽기만 한다
+  decidedBy String
+  /// 🔴 그 KST 날짜 안이어야 한다. validator 가 되돌려 찍어 대조한다
+  decidedAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

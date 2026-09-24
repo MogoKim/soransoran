@@ -170,7 +170,8 @@
     "operator:compose-check": "tsx scripts/operator-compose-check.mts",
     "operator:compose-db-check": "tsx scripts/operator-compose-db-check.mts",
     "check:comment-compose": "tsx scripts/comment-compose-check.mts",
-    "persona:birth-anchors": "tsx scripts/persona-birth-anchor-table.mts"
+    "persona:birth-anchors": "tsx scripts/persona-birth-anchor-table.mts",
+    "stage:db-check": "tsx scripts/stage-decision-db-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
