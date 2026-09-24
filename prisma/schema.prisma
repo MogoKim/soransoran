@@ -277,7 +277,6 @@ model Post {
   // 판정은 src/lib/post-visibility.ts 3축 함수가 유일한 지점이다 (C-2).
   //   각 파일에서 이 값을 직접 비교하지 마라.
   /**
-   * /**
    * /** Micro Seed 레인 발행물인가. 커뮤니티에는 보이되 색인·추천에서는 빠진다.
    */
   isMicroSeed           Boolean @default(false)
@@ -301,7 +300,6 @@ model Post {
   //
   // 전부 nullable 이다. 회원 글(대다수)에는 채워지지 않는다.
   /**
-   * /**
    * /** Sheet 후보 행의 불변 id. 양방향 키의 한쪽이다 (§6-1).
    */
   sheetCandidateId String?   @unique
@@ -1935,15 +1933,16 @@ model StageDecision {
   /// 그날 단계를 고정했는가
   dayPinned Boolean
 
-  /// 🔴 `{ eligibleSpeakers, excluded: [{reason, codes}] }` 또는 **JSON null**.
-  ///    Prisma 의 `DbNull`(칼럼이 SQL NULL) 과 `JsonNull`(값이 JSON `null`) 을
-  ///    섞으면 읽을 때 한쪽이 `undefined` 로 와 validator 가 거절한다.
-  ///    🔴 adapter 가 언제나 `JsonNull` 로 쓴다 — 그래야 왕복이 `null` 로 돌아온다.
-  supply Json?
+  /// 🔴 **필수 칼럼이다 (`Json?` 이 아니다).** 계약은 "키는 언제나 있고,
+  ///    값이 없으면 **JSON `null`**" 이다. `Json?` 로 두면 SQL NULL 행이 생길 수 있고,
+  ///    그 행은 읽을 때 "값 없음" 과 구분되지 않는다.
+  ///    🔴 adapter 는 `Prisma.JsonNull` 로만 쓴다. `DbNull`(SQL NULL)은 DB 가 거절한다.
+  ///    `{ eligibleSpeakers, excluded: [{reason, codes}] }` 또는 JSON `null`
+  supply Json
 
-  /// 🔴 전이 근거. TRIAL/SUSTAIN 이면 구조가 있고 나머지는 JSON null.
+  /// 🔴 필수 칼럼이다. 전이 근거 — TRIAL/SUSTAIN 이면 구조가 있고 나머지는 JSON `null`.
   ///    `{kind:'TRIAL',trialBase,previousKstDate,target}` | `{kind:'SUSTAIN',from,to}`
-  transition Json?
+  transition Json
 
   /// 🔴 언제나 `controller` — supply/publish 는 읽기만 한다
   decidedBy String

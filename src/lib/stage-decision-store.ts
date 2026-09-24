@@ -1,8 +1,13 @@
 /**
- * 🔴 **하루 StageDecision 저장 설계 — 아직 구현하지 않는다** (2026-09-24)
+ * 🔴 **하루 StageDecision 저장 — 계약과 순서** (2026-09-25 갱신)
  *
- *   이 파일은 **계약과 순서만** 정의한다. Prisma 모델도 migration 도 DB write 도 없다.
- *   승인 뒤에 이 계약대로 구현한다.
+ *   이 파일은 **순서만** 정의한다: 읽고 · 없으면 계산하고 · 넣고 · 충돌이면 다시 읽는다.
+ *   Prisma 는 `stage-decision-repo` 가 끼워 넣고, 검증은 `stage-decision-contract` 가 한다.
+ *
+ * 🔴 **지금 상태** — schema·migration(`0028_stage_decision`)·adapter 는 **있다.**
+ *    격리 DB 에서 검증까지 마쳤다. 다만 **운영에는 적용하지 않았고**
+ *    controller job·supply·publish 배선과 `STAGE_CONTROLLER_ENABLED` ON 은
+ *    승인되지 않았다. 지금 이 경로를 부르는 production 파일은 **0개**다.
  *
  * 🔴 **왜 저장이 필요한가.** 공급(로컬 launchd)과 발행(GitHub Actions)은 서로 다른
  *    env 원천을 읽는다. 2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.
@@ -23,6 +28,7 @@ import {
   DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision,
   type StageDecision, type ValidatedStageDecision, type ValidateResult, type DecisionWriter,
 } from './stage-decision-contract'
+
 
 export { DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision }
 export type { DecisionWriter, ValidatedStageDecision, ValidateResult }
@@ -137,14 +143,21 @@ export const ENSURE_STEPS: EnsureSteps = ['read', 'compute', 'insert', 'reread']
 
 /**
  * 🔴 **순수 뼈대.** DB 는 부르는 쪽이 넣는다 — 이 파일은 순서만 강제한다.
- *    구현 전에도 이 순서를 검사가 잠근다.
+ *    배선 전에도 이 순서를 검사가 잠근다.
  */
 export async function ensureStageDecision(io: {
   /** 🔴 **`unknown` 이다** — 저장소가 무엇을 돌려줄지 약속하지 않는다 */
   read: () => Promise<unknown>
   compute: () => StageDecision
-  /** 🔴 unique 충돌이면 `'conflict'` 를 돌려준다 — 예외를 삼키지 않는다 */
-  insert: (d: StageDecision) => Promise<'inserted' | 'conflict'>
+  /**
+   * 🔴 **검증된 값만 받는다** (2026-09-25 마스터 지적).
+   *    앞판은 `StageDecision` 을 받았고, 이 함수는 **검증 전 원본 `fresh`** 를 넘겼다 —
+   *    validator 가 만든 불변 사본이 아니라 계산기가 들고 있던 그 객체였다.
+   *    계산기가 나중에 그 객체를 바꾸면 저장된 값과 갈린다.
+   * 🔴 unique 충돌이면 `'conflict'`, 계약 위반이면 `'rejected'` 를 돌려준다 —
+   *    예외를 삼키지 않는다.
+   */
+  insert: (d: ValidatedStageDecision) => Promise<'inserted' | 'conflict' | 'rejected'>
   /**
    * 🔴 **consumer 와 같은 validator 다** (2026-09-24 6차 · 마스터 지적).
    *    앞판은 controller 가 읽은 행을 **검증 없이** `ok:true` 로 돌려줬다 —
@@ -171,7 +184,14 @@ export async function ensureStageDecision(io: {
   const fv = io.validate(fresh)
   if (!fv.ok) return broken('계산한', fv.reason)
 
-  const r = await io.insert(fresh)
+  /**
+   * 🔴 **`fresh` 가 아니라 `fv.decision` 을 넣는다** (2026-09-25 마스터 지적).
+   *    앞판은 검증 전 원본을 넘겼다. 그 객체는 계산기가 여전히 참조를 들고 있고
+   *    얼어 있지도 않다 — 저장된 값과 검증한 값이 **다른 객체**였다.
+   *    `fv.decision` 은 검증기가 검증한 필드만으로 새로 만들어 깊게 언 값이다.
+   */
+  const r = await io.insert(fv.decision)
+  if (r === 'rejected') return broken('저장 직전 다시 검증한', '저장 경계가 거절했다')
   if (r === 'inserted') return { ok: true, decision: fv.decision, created: true, by: io.by }
 
   // ③ 충돌 — 남이 먼저 만들었다. 🔴 덮지 않고 그 행을 읽고, **그 행도 검증한다**
@@ -188,7 +208,10 @@ export async function ensureStageDecision(io: {
 }
 
 /**
- * 🔴 **제안하는 모델** (구현 전 · migration 없음 · 2026-09-24 7차 보완)
+ * 🔴 **구현된 모델** (`prisma/schema.prisma` · migration `0028_stage_decision`)
+ *
+ *   🔴 아래는 **정본이 아니라 읽기용 사본**이다. 정본은 `schema.prisma` 이고,
+ *      검사가 그 파일을 직접 읽어 칸이 빠지지 않았는지 본다.
  *
  *   🔴 **validator 가 요구하는 값을 손실 없이 담는다.** 앞판 제안에는
  *      `dayPinned`·`supply`·`transition` 칸이 없었다 — 그 모델로 저장하면
@@ -207,11 +230,10 @@ export async function ensureStageDecision(io: {
  *   blocks          Json     // { code: BlockCode, reason: string }[]
  *   /// 🔴 그날 단계를 고정했는가 — 없으면 읽을 때 검증이 막힌다
  *   dayPinned       Boolean
- *   /// 🔴 { eligibleSpeakers: number, excluded: {reason, codes[]}[] } | null
- *   supply          Json?
- *   /// 🔴 전이 근거 — TRIAL/SUSTAIN 이면 필수, 나머지는 null
- *   /// { kind:'TRIAL', trialBase, previousKstDate, target } | { kind:'SUSTAIN', from, to }
- *   transition      Json?
+ *   /// 🔴 **필수 칼럼이다.** 값이 없으면 JSON `null` — SQL NULL 은 DB 가 거절한다
+ *   supply          Json
+ *   /// 🔴 필수 칼럼. TRIAL/SUSTAIN 이면 구조가 있고 나머지는 JSON `null`
+ *   transition      Json
  *   decidedBy       String   // 🔴 언제나 'controller'
  *   decidedAt       DateTime // 🔴 그 KST 날짜 안이어야 한다
  *   createdAt       DateTime @default(now())
@@ -228,6 +250,7 @@ export async function ensureStageDecision(io: {
  *
  * 🔴 **JSON 왕복이 검증을 통과해야 한다.** `decidedAt` 은 DateTime 이므로 읽을 때
  *    `toISOString()` 으로 되돌린다 — 그 문자열의 KST 날짜가 `kstDate` 와 같아야 한다.
+ *    격리 DB 에서 실제로 왕복시켜 값 손실 0 을 확인했다(`stage:db-check`).
  *
  * 🔴 **불변은 app-level 계약이다 — 칼럼을 안 두는 것으로 지켜지지 않는다**
  *    (2026-09-25 마스터 정정). 앞판은 "`updatedAt` 이 없어서 immutable" 이라고 적었다.

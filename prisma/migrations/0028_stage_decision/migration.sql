@@ -27,9 +27,11 @@ CREATE TABLE "StageDecision" (
     "reasons" JSONB NOT NULL,
     "blocks" JSONB NOT NULL,
     "dayPinned" BOOLEAN NOT NULL,
-    -- 🔴 nullable JSON — adapter 는 언제나 JSON `null` 로 쓴다(SQL NULL 이 아니다)
-    "supply" JSONB,
-    "transition" JSONB,
+    -- 🔴 **NOT NULL 이다.** 계약은 "키는 언제나 있고, 값이 없으면 JSON `null`" 이다.
+    --    nullable 로 두면 SQL NULL 행이 생기고, 그 행은 "값 없음" 과 구분되지 않는다.
+    --    adapter 는 `Prisma.JsonNull` 로만 쓴다 — `DbNull`(SQL NULL)은 여기서 거절된다.
+    "supply" JSONB NOT NULL,
+    "transition" JSONB NOT NULL,
     -- 🔴 언제나 'controller'
     "decidedBy" TEXT NOT NULL,
     "decidedAt" TIMESTAMP(3) NOT NULL,

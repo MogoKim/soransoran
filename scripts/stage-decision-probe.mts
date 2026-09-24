@@ -199,7 +199,8 @@ async function main(): Promise<void> {
       authorizedCapacityCeiling: ok(ceiling) ? ceiling : 'd1',
       verdicts, daily,
       /**
-       * 🔴 **전날 결정을 이 명령은 읽지 않는다** (저장 모델이 아직 없다 · migration 0).
+       * 🔴 **전날 결정을 이 명령은 읽지 않는다.** 표와 adapter 는 있지만
+       *    **운영에 적용하지 않았고** 배선도 승인되지 않았다(`STAGE_CONTROLLER_ENABLED` OFF).
        *    그래서 `null` 이고, 그 결과 **시험은 열리지 않는다**(fail-closed).
        *    🔴 이것이 정상 동작이다 — 기반을 아무도 판단하지 않았는데 단계를 올리지 않는다.
        */

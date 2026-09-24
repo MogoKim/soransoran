@@ -8,6 +8,7 @@
  * 🔴 DB 0 · 네트워크 0 · 파일 write 0 · LLM 0.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 
 import {
   previousKstDate, nextStage, isCalendarDate, DECISION_WRITER, BLOCK_CODES,
@@ -1258,6 +1259,28 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
   check('🔴 🔴 **JsonNull 로 쓰고 DbNull 을 쓰지 않는다**',
     (repoCode.match(/Prisma\.JsonNull/g) ?? []).length === 2 && !/Prisma\.DbNull/.test(repoCode))
   /**
+   * 🔴 **저장 경계는 검증된 값만 받는다** (2026-09-25 마스터 지적).
+   *    앞판 `createStageDecision`·`decisionToCreateInput` 은 `StageDecision` 을 받았다 —
+   *    계산만 하고 검증을 지나지 않은 객체가 그대로 저장 입력이 됐다.
+   *    저장은 되돌릴 수 없다(immutable). 타입으로 좁히고, 런타임에서 한 번 더 본다.
+   */
+  check('🔴 🔴 **create 경계가 ValidatedStageDecision 만 받는다**',
+    /createStageDecision\(\s*\n?\s*db: StageDecisionDb, d: ValidatedStageDecision,/.test(repoCode)
+    && /decisionToCreateInput\(d: ValidatedStageDecision\)/.test(repoCode))
+  check('🔴 🔴 **저장 직전에 정본 validator 를 한 번 더 지난다 — 실패면 create 를 안 부른다**',
+    /const v = validateStoredDecision\(\{ row: d, expectKstDate: d\.kstDate \}\)/.test(repoCode)
+    && /if \(!v\.ok\) return 'rejected'/.test(repoCode)
+    // 🔴 검증기가 만든 **사본**을 넣는다 — 들어온 객체를 그대로 쓰지 않는다
+    && /decisionToCreateInput\(v\.decision\)/.test(repoCode))
+  const storeCode = readFileSync('src/lib/stage-decision-store.ts', 'utf-8')
+    .split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  check('🔴 🔴 **ensure 가 검증 전 원본이 아니라 불변 사본을 넣는다**',
+    /await io\.insert\(fv\.decision\)/.test(storeCode)
+    && !/await io\.insert\(fresh\)/.test(storeCode)
+    && /insert: \(d: ValidatedStageDecision\)/.test(storeCode))
+  check('🔴 저장 경계가 거절하면 BROKEN 이다 — 성공으로 넘기지 않는다',
+    /if \(r === 'rejected'\) return broken\(/.test(storeCode))
+  /**
    * 🔴 **빠진 칼럼을 `null` 로 메우지 않는다.** 메우면 select 가 칼럼을 빠뜨린 행이
    *    "값 없음" 으로 통과한다(fail-open). 빠진 것과 없는 것은 다른 사실이다.
    */
@@ -1279,6 +1302,21 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
     STORED_COLUMNS.filter((c) => !new RegExp(`^\\s*${c}\\s+\\w`, 'm').test(model)).join(',') || '(빠짐 없음)')
   check('🔴 갱신 칼럼을 두지 않는다 — 계약의 표시다(강제는 adapter 가 한다)',
     !/updatedAt/.test(model) && !/revision/.test(model))
+  /**
+   * 🔴 **`supply`·`transition` 은 `Json?` 이 아니라 `Json` 이다.**
+   *    nullable 로 두면 SQL NULL 행이 생기고, 그 행은 "값 없음" 과 구분되지 않는다.
+   */
+  // 🔴 주석에 적힌 `Json?` 은 설명이지 칼럼이 아니다 — 필드 줄만 본다
+  const modelFields = model.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+  check('🔴 🔴 **supply·transition 이 필수 칼럼이다 (Json? 아님)**',
+    /^\s*supply Json$/m.test(modelFields) && /^\s*transition Json$/m.test(modelFields)
+    && !/Json\?/.test(modelFields),
+    modelFields.split('\n').filter((l) => /supply|transition/.test(l)).join(' | '))
+  check('🔴 🔴 **migration 도 JSONB NOT NULL 이다**', (() => {
+    const sql = readFileSync('prisma/migrations/0028_stage_decision/migration.sql', 'utf-8')
+      .split('\n').filter((l) => !/^\s*--/.test(l)).join('\n')
+    return /"supply" JSONB NOT NULL/.test(sql) && /"transition" JSONB NOT NULL/.test(sql)
+  })())
   check('🔴 migration 파일이 있고 기존 표를 건드리지 않는다', (() => {
     // 🔴 주석에 적힌 되돌리기 설명은 실행되는 SQL 이 아니다 — 코드 줄만 본다
     const sql = readFileSync('prisma/migrations/0028_stage_decision/migration.sql', 'utf-8')
@@ -1307,6 +1345,47 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
     return !new RegExp(`^\\s*(export\\s+)?${CONTROLLER_ENV}=`, 'm')
       .test(readFileSync(envPath, 'utf-8'))
   })())
+  /**
+   * ── 🔴 **비밀값을 찍지 않는다** (2026-09-25 마스터 지적) ──
+   *    앞판은 실패 메시지에 `DATABASE_URL` 앞 40자를 찍었다. 주소에는 사용자명이,
+   *    때로는 비밀번호가 들어간다. **잘못 붙였을 때**가 정확히 그 값이 새는 순간이다.
+   */
+  {
+    const db = readFileSync('scripts/stage-decision-db-check.mts', 'utf-8')
+    const dbCode = db.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+    check('🔴 🔴 **소스 어디에도 URL 을 출력하는 줄이 없다**',
+      !/console\.(log|error|warn)\([^)]*\bURL\b/.test(dbCode)
+      && !/console\.(log|error|warn)\([^)]*DATABASE_URL/.test(dbCode)
+      && !/URL\.(slice|replace|substring)/.test(dbCode))
+    check('🔴 🔴 **격리 sentinel · localhost · 고정 DB 이름을 모두 요구한다**',
+      /SORAN_ISOLATED_DB/.test(dbCode) && /yes-throwaway/.test(dbCode)
+      && /127\\\.0\\\.0\\\.1\|localhost/.test(dbCode) && /soran_test/.test(dbCode)
+      && (dbCode.match(/problems\.push\(/g) ?? []).length === 3)
+    /**
+     * 🔴 **실제로 돌려서 본다.** 소스를 읽는 것만으로는 "찍지 않는다" 를 증명하지 못한다.
+     *    가짜 비밀번호가 든 운영처럼 보이는 주소를 주고, stdout·stderr 어디에도
+     *    그 값이 나오지 않는지 확인한다.
+     */
+    const SECRET = 'PW-ZZTOP-9931-DO-NOT-PRINT'
+    const r = spawnSync('npx', ['tsx', 'scripts/stage-decision-db-check.mts'], {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        DATABASE_URL: `postgresql://soran:${SECRET}@db.prod.example.com:5432/soran_prod`,
+        DIRECT_URL: `postgresql://soran:${SECRET}@db.prod.example.com:5432/soran_prod`,
+        SORAN_ISOLATED_DB: '',
+      },
+    })
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
+    check('🔴 🔴 **격리 DB 가 아니면 실행되지 않는다 (exit 2)**', r.status === 2, `exit=${String(r.status)}`)
+    check('🔴 🔴 **가짜 비밀번호가 stdout·stderr 어디에도 없다**',
+      !out.includes(SECRET), out.slice(0, 160))
+    check('🔴 🔴 **주소의 host·DB 이름도 새지 않는다**',
+      !out.includes('db.prod.example.com') && !out.includes('soran_prod'),
+      out.slice(0, 160))
+    check('🔴 그래도 무엇이 틀렸는지는 말한다 — 조용히 죽지 않는다',
+      /격리 DB 가 아니다/.test(out) && /sentinel|SORAN_ISOLATED_DB/.test(out))
+  }
   check('🔴 DB 검사는 CI 게이트가 아니다 — 격리 Postgres 를 요구한다', (() => {
     const db = readFileSync('scripts/stage-decision-db-check.mts', 'utf-8')
     return /격리 DB 가 아니다/.test(db) && /process\.exit\(2\)/.test(db)
