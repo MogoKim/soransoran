@@ -164,6 +164,8 @@
     "publish:catchup-check": "tsx scripts/publish-slot-catchup-check.mts",
     "micro-seed:navercafe-run": "tsx scripts/micro-seed-navercafe-run.mts",
     "publish:trigger-preflight": "tsx scripts/publish-trigger-preflight.mts",
+    "stage:ladder-check": "tsx scripts/stage-ladder-check.mts",
+    "stage:probe": "tsx scripts/stage-decision-probe.mts",
     "publish:machine-review": "tsx scripts/original-post-machine-review.mts",
     "operator:compose-check": "tsx scripts/operator-compose-check.mts",
     "operator:compose-db-check": "tsx scripts/operator-compose-db-check.mts",

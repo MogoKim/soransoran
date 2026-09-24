@@ -1,25 +1,27 @@
 /**
- * 🔴 **단계 결정은 정본이 이미 갖고 있다 — 새 규칙도 새 숫자도 만들지 않는다** (2026-09-24 3차)
+ * 🔴 **단계 결정 — 정본 넷을 묶기만 한다. 새 규칙도 새 숫자도 만들지 않는다** (2026-09-24 4차)
  *
- *   이 파일이 하는 일은 **정본 넷을 한 결정으로 묶는 것**뿐이다.
- *   ```
- *   judgeOneDayCanary (release-canary)   오늘 하루 그 단계로 낼 수 있는가   → TRIAL
- *   judgePromotion    (d100-capacity)    지속 승격(stable+preflight)        → SUSTAIN / PREPARE
- *   stageVerdicts     (scale-readiness)  14일 지속 readiness (실제 배정 시뮬)
- *   safeStageFor      (scale-profile)    감속
- *   ```
+ * 🔴 **capacity 는 이 판정이 올리는 값이 아니다** (마스터 지적).
+ *   `authorizedCapacityCeiling` 은 **예산·운영 승인을 받은 천장**이다.
+ *   · 공개 승격(SUSTAIN)이 천장을 올리지 않는다 — D3→D5 공개가 D10 승인을 뜻하지 않는다
+ *   · `nextPreflight.ready` 도 천장을 만들지 않는다 — 그것은 **준비 진행률과 시험 가능 여부**다
+ *   · 공개가 천장을 넘으려 하면 **공개를 막는다**(천장을 올리지 않는다)
  *
- * 🔴 **capacity 와 release 는 다른 눈금이다** (2026-09-24 마스터 지적).
- *   · `capacity` — **다음 단계 재고를 준비하는 내부 생산 눈금.** 공개보다 앞서 갈 수 있다.
- *   · `release`  — **실제 공개 단계.** capacity 를 넘지 못한다.
- *   D3 로 공개하면서 capacity D5 로 재고를 쌓는 것이 정상 운영이다 —
- *   두 값을 늘 같게 돌려주면 그 상태를 표현할 수 없다.
+ * 🔴 **세 입력은 서로 다른 것이다.**
+ *   · `sustainedRelease`          지속 운영으로 확정된 공개 단계
+ *   · `authorizedCapacityCeiling` 승인된 내부 생산·비용 천장
+ *   · `daily`                     그 KST 날짜의 하루 판정 (TRIAL 근거)
  *
- * 🔴 **지속 readiness 와 하루 시험을 섞지 않는다.**
- *   2026-09-24 실제: 지속 14일 readiness 는 **미달**인데 D5 는 **하루짜리 canary 로 GO** 였다.
- *   7일 안정화는 *지속 승격* 조건이지 *하루 시험*의 선행조건이 아니다.
+ * 🔴 **PREPARE 는 승인된 천장이 공개보다 높을 때 그 차이로 재고를 쌓는 상태다.**
+ *   앞판은 `nextPreflight.ready` 를 보고 천장을 올렸다 — 순서가 반대였다.
  *
- * 🔴 공급 생성 가용성은 결정에 쓰지 않는다 — 발행 배정 가능성과 다른 값이다.
+ * 정본:
+ * ```
+ * judgeOneDayCanary (release-canary)  하루 시험      → TRIAL
+ * judgePromotion    (d100-capacity)   지속 승격      → SUSTAIN
+ * stageVerdicts     (scale-readiness) 14일 readiness
+ * safeStageFor      (scale-profile)   감속
+ * ```
  */
 import {
   PROFILES, RELEASE_STAGES, SAFEST_STAGE, safeStageFor, stageRank,
@@ -28,17 +30,29 @@ import {
 import type { CanaryVerdict } from './release-canary'
 import type { PromotionVerdict } from './d100-capacity'
 
-export const STAGE_DECISION_VERSION = 'stage-decision-v2'
+export const STAGE_DECISION_VERSION = 'stage-decision-v3'
 
-/**
- * 🔴 **전환 상태 넷.** 하나의 stage 값으로는 "지금 무엇을 하는 중인가" 를 말할 수 없다.
- *   · `SUSTAIN`  — 지속 승격 조건을 채웠다. 공개 단계를 올린다
- *   · `TRIAL`    — 지속은 아직이지만 **오늘 하루** 그 단계로 낼 수 있다
- *   · `PREPARE`  — 공개는 지금 단계, **capacity 만** 다음 단계로 올려 재고를 쌓는다
- *   · `HOLD`     — 셋 다 아니다
- */
 export const TRANSITION_STATES = ['SUSTAIN', 'TRIAL', 'PREPARE', 'HOLD'] as const
 export type TransitionState = (typeof TRANSITION_STATES)[number]
+
+/** 🔴 왜 막혔나 — 문구가 아니라 코드다 */
+export const BLOCK_CODES = [
+  'CEILING', 'PROVENANCE_CURRENT', 'PROVENANCE_NEXT', 'PROVENANCE_STAGE', 'STALE_DAILY',
+] as const
+export type BlockCode = (typeof BLOCK_CODES)[number]
+
+/**
+ * 🔴 **하루 판정에 날짜와 대상 단계를 붙인다.** `CanaryVerdict` 자체에는 날짜가 없어서
+ *    어제 결과를 오늘 결정에 넣어도 알 수 없었다. assembler 가 같은 `runAt` 에서 만든다.
+ */
+export type DatedCanary = {
+  kstDate: string
+  /** 시험 대상 단계 */
+  stage: ReleaseStage
+  verdict: CanaryVerdict
+  /** assembler 가 쓴 시각 — 같은 회차에서 나왔는지 본다 */
+  builtAt: string
+}
 
 /** 🔴 보고용 신호 — 결정에 쓰지 않는다 */
 export type SupplySignal = {
@@ -48,27 +62,32 @@ export type SupplySignal = {
 
 export type StageInputs = {
   kstDate: string
-  /** 지금 공개 단계 */
-  currentRelease: ReleaseStage
-  /** 지금 내부 생산 눈금 */
-  currentCapacity: ReleaseStage
-  /** 🔴 정본 `stageVerdicts` — 14일 지속 readiness */
+  /** 지속 운영으로 확정된 공개 단계 */
+  sustainedRelease: ReleaseStage
+  /** 🔴 **승인된 내부 생산·비용 천장.** 이 판정이 올리지 않는다 */
+  authorizedCapacityCeiling: ReleaseStage
+  /** 정본 `stageVerdicts` — 14일 지속 readiness */
   verdicts: readonly StageVerdict[]
-  /** 🔴 정본 `judgeOneDayCanary` — 오늘 하루 판정. 없으면 `null`(못 물었다) */
-  today: CanaryVerdict | null
-  /** 🔴 정본 `judgePromotion` — 지속 승격. 없으면 `null` */
+  /** 그 KST 날짜의 하루 판정. 없으면 `null` */
+  daily: DatedCanary | null
+  /** 정본 `judgePromotion`. 없으면 `null` */
   promotion: PromotionVerdict | null
   publishedToday: number
   supply?: SupplySignal
   decidedAt: string
 }
 
+export type StageBlock = { code: BlockCode; reason: string }
+
 export type StageDecision = {
   kstDate: string
+  /** 🔴 승인 천장 그대로 — 이 판정은 올리지 않는다 */
   capacity: ReleaseStage
   release: ReleaseStage
   state: TransitionState
   reasons: string[]
+  /** 🔴 막힌 것 — 코드로 분기한다 */
+  blocks: StageBlock[]
   dayPinned: boolean
   supply: SupplySignal | null
   decidedAt: string
@@ -81,105 +100,173 @@ const next = (s: ReleaseStage): ReleaseStage | null => {
 }
 
 /**
- * 🔴 **정본 넷을 한 결정으로 묶는다.**
- *
- *   ① `judgePromotion.ready`               → **SUSTAIN**
- *   ② `judgeOneDayCanary.ok`               → **TRIAL** (오늘만 공개를 올린다)
- *   ③ `judgePromotion.nextPreflight.ready` → **PREPARE** (capacity 만 올린다)
- *   ④ 그 밖                                 → **HOLD**
- *   ⑤ 감속은 `safeStageFor`, 그날 이미 낸 편수는 고정
- *
- * 🔴 여기서 새 문턱값을 만들지 않는다 — 판정은 전부 정본이 낸 것이다.
+ * 🔴 **판정의 출처를 검증한다** — 외부에서 아무 verdict 나 끼워 넣지 못하게.
+ *    막힌 것은 코드로 남기고, 그 판정은 **쓰지 않는다**(fail-closed).
+ */
+function checkProvenance(input: StageInputs): StageBlock[] {
+  const out: StageBlock[] = []
+  const up = next(input.sustainedRelease)
+  const p = input.promotion
+  if (p !== null) {
+    if (p.current !== input.sustainedRelease) {
+      out.push({
+        code: 'PROVENANCE_CURRENT',
+        reason: `promotion.current ${p.current} ≠ 지속 공개 단계 ${input.sustainedRelease}`,
+      })
+    }
+    if (up !== null && String(p.next) !== String(up)) {
+      out.push({
+        code: 'PROVENANCE_NEXT',
+        reason: `promotion.next ${String(p.next)} ≠ 바로 다음 단계 ${up}`,
+      })
+    }
+  }
+  const d = input.daily
+  if (d !== null) {
+    if (d.kstDate !== input.kstDate) {
+      out.push({
+        code: 'STALE_DAILY',
+        reason: `하루 판정 날짜 ${d.kstDate} ≠ 결정 날짜 ${input.kstDate} — 전날 결과를 쓰지 않는다`,
+      })
+    }
+    if (d.verdict.stage !== d.stage) {
+      out.push({
+        code: 'PROVENANCE_STAGE',
+        reason: `하루 판정 대상 ${d.stage} ≠ verdict.stage ${d.verdict.stage}`,
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * 🔴 **정본 넷을 한 결정으로 묶는다.** 여기서 천장을 올리지 않고 새 문턱값도 만들지 않는다.
  */
 export function planStageDecision(input: StageInputs): StageDecision {
+  const ceiling = input.authorizedCapacityCeiling
   const base = {
     kstDate: input.kstDate,
+    // 🔴 **승인 천장 그대로.** 어떤 판정도 이 값을 올리지 않는다
+    capacity: ceiling,
     supply: input.supply ?? null,
     decidedAt: input.decidedAt,
     contractVersion: STAGE_DECISION_VERSION,
   } as const
-  const reasons: string[] = []
-  const up = next(input.currentRelease)
-  const upCap = next(input.currentCapacity)
+  const blocks = checkProvenance(input)
+  const reasons: string[] = blocks.map((b) => `🔴 ${b.code}: ${b.reason}`)
 
-  /**
-   * 🔴 **새 KST 날짜에 판정이 하나도 없으면 d1 이다** (fail-closed).
-   *    빈 verdict 를 근거로 어제의 D5 를 이어 가지 않는다 — 모르는 것은 근거가 아니다.
-   */
-  if (input.verdicts.length === 0 && input.today === null) {
+  /** 🔴 출처가 어긋난 판정은 **쓰지 않는다** */
+  const promotion = blocks.some((b) => b.code.startsWith('PROVENANCE_C') || b.code === 'PROVENANCE_NEXT')
+    ? null : input.promotion
+  const daily = blocks.some((b) => b.code === 'STALE_DAILY' || b.code === 'PROVENANCE_STAGE')
+    ? null : input.daily
+
+  /** 🔴 새 KST 날짜에 판정이 하나도 없으면 d1 — 빈 값을 근거로 어제를 잇지 않는다 */
+  if (input.verdicts.length === 0 && daily === null) {
     return {
-      ...base, capacity: SAFEST_STAGE, release: SAFEST_STAGE, state: 'HOLD', dayPinned: false,
-      reasons: [`🔴 ${input.kstDate} 판정이 하나도 없다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다`],
+      ...base, capacity: SAFEST_STAGE, release: SAFEST_STAGE, state: 'HOLD',
+      dayPinned: false, blocks,
+      reasons: [...reasons, `🔴 ${input.kstDate} 판정이 하나도 없다 — 가장 안전한 ${SAFEST_STAGE}`],
     }
   }
 
-  let release = input.currentRelease
-  let capacity = input.currentCapacity
+  let release = input.sustainedRelease
   let state: TransitionState = 'HOLD'
+  const up = next(input.sustainedRelease)
 
-  if (input.promotion?.ready === true && up !== null) {
-    // ── ① 지속 승격 ──
-    release = up
-    capacity = next(up) ?? up
-    state = 'SUSTAIN'
-    reasons.push(`🟢 지속 승격 조건 충족(정본 judgePromotion) — 공개 ${input.currentRelease} → ${up}`)
-  } else if (input.today?.ok === true) {
+  if (promotion?.ready === true && up !== null) {
+    /**
+     * ── ① 지속 승격 ──
+     * 🔴 **천장은 그대로다.** D3→D5 공개 승격이 D10 승인을 뜻하지 않는다.
+     */
+    if (stageRank(up) > stageRank(ceiling)) {
+      blocks.push({
+        code: 'CEILING',
+        reason: `지속 승격 대상 ${up} 가 승인 천장 ${ceiling} 를 넘는다 — 공개를 올리지 않는다`,
+      })
+      reasons.push(`🔴 CEILING: ${up} > 승인 천장 ${ceiling} — 승격을 보류한다(천장을 올리지 않는다)`)
+    } else {
+      release = up
+      state = 'SUSTAIN'
+      reasons.push(`🟢 지속 승격(정본 judgePromotion) — 공개 ${input.sustainedRelease} → ${up}`)
+      reasons.push(`🔴 승인 천장 ${ceiling} 는 그대로다 — 자동으로 올라가지 않는다`)
+    }
+  } else if (daily?.verdict.ok === true) {
     /**
      * ── ② 하루 시험 ──
-     * 🔴 지속 readiness 가 미달이어도 **오늘 하루는** 낼 수 있다.
-     *    7일 안정화는 지속 승격 조건이지 하루 시험의 선행조건이 아니다.
+     * 🔴 지속 미달이어도 열린다. 다만 **승인 천장을 넘지 못한다.**
      */
-    release = input.today.stage
-    state = 'TRIAL'
-    reasons.push(`🟢 오늘 하루 ${input.today.stage} 로 낼 수 있다(정본 judgeOneDayCanary)`)
-    if (input.promotion !== null && !input.promotion.currentStable.ready) {
-      reasons.push('🔴 지속 승격은 아직이다 — 오늘만이다(내일 다시 판정한다)')
+    if (stageRank(daily.stage) > stageRank(ceiling)) {
+      blocks.push({
+        code: 'CEILING',
+        reason: `하루 시험 대상 ${daily.stage} 가 승인 천장 ${ceiling} 를 넘는다 — 공개하지 않는다`,
+      })
+      reasons.push(`🔴 CEILING: 하루 시험 ${daily.stage} > 승인 천장 ${ceiling} — 시험을 열지 않는다`)
+    } else {
+      release = daily.stage
+      state = 'TRIAL'
+      reasons.push(`🟢 오늘 하루 ${daily.stage} 로 낸다(정본 judgeOneDayCanary)`)
+      if (promotion !== null && !promotion.currentStable.ready) {
+        reasons.push('🔴 지속 승격은 아직이다 — 오늘만이다')
+      }
     }
-  } else if (input.promotion?.nextPreflight.ready === true && upCap !== null) {
-    // ── ③ 재고 준비 — 공개는 그대로, 생산 눈금만 올린다 ──
-    capacity = upCap
-    state = 'PREPARE'
-    reasons.push(`🟢 다음 단계 사전 준비 완료(정본 nextPreflight) — 공개는 ${release} 유지, `
-      + `생산 눈금만 ${input.currentCapacity} → ${upCap}`)
-  } else {
-    const why = input.promotion?.nextAction ?? input.today?.reasons.join(' / ') ?? '판정 근거 없음'
-    reasons.push(`유지 — ${why}`)
   }
 
-  // ── ⑤ 감속은 정본에 맡긴다 ──
+  /**
+   * ── ③ PREPARE ──
+   * 🔴 **이미 승인된 천장이 공개보다 높으면** 그 차이로 다음 단계 재고를 쌓는다.
+   *    `nextPreflight` 는 준비 진행률·시험 가능 여부를 말할 뿐 천장을 만들지 않는다.
+   */
+  if (state === 'HOLD' && stageRank(ceiling) > stageRank(release)) {
+    state = 'PREPARE'
+    const pct = promotion?.nextPreflight.ready === true ? '준비 완료'
+      : `준비 중 — ${promotion?.nextPreflight.blocking[0] ?? '진행률 미측정'}`
+    reasons.push(`🟢 PREPARE — 공개 ${release} · 승인 천장 ${ceiling} 로 재고를 쌓는다 (${pct})`)
+  }
+
+  // ── ④ 감속은 정본에 맡긴다 ──
   const safe = safeStageFor(release, input.verdicts)
   if (safe.reason !== null) reasons.push(safe.reason)
   if (safe.unknown) reasons.push('🔴 지속 판정을 받지 못했다 — `chosenReady` 를 신뢰하지 않는다')
-  /**
-   * 🔴 **하루 시험은 지속 판정으로 깎지 않는다.** 그것이 하루 시험의 뜻이다 —
-   *    지속이 미달이라서 시험을 하는 것이므로, 여기서 다시 지속을 물으면 시험이 영영 열리지 않는다.
-   */
+  // 🔴 하루 시험은 지속 판정으로 깎지 않는다 — 그러면 시험이 영영 열리지 않는다
   if (state !== 'TRIAL') release = safe.stage
 
   let dayPinned = false
-  if (stageRank(release) < stageRank(input.currentRelease)
+  if (stageRank(release) < stageRank(input.sustainedRelease)
     && input.publishedToday > PROFILES[release].dailyTarget) {
     reasons.push(
       `🔴 오늘 이미 ${input.publishedToday}건 냈다 — ${release} 로 내리면 상한 초과가 된다. `
-      + `오늘은 ${input.currentRelease} 를 고정한다`,
+      + `오늘은 ${input.sustainedRelease} 를 고정한다`,
     )
-    release = input.currentRelease
+    release = input.sustainedRelease
     dayPinned = true
   }
 
-  /** 🔴 **release 는 capacity 를 넘지 못한다** — 준비한 것보다 많이 낼 수 없다 */
-  if (stageRank(release) > stageRank(capacity)) {
-    reasons.push(`🔴 공개 ${release} 가 생산 눈금 ${capacity} 를 넘는다 — 생산 눈금을 맞춘다`)
-    capacity = release
+  /**
+   * 🔴 **공개가 천장을 넘으면 공개를 제한한다 — 천장을 올리지 않는다.**
+   *    준비되지 않은 양을 내보내는 길은 어떤 경우에도 열지 않는다.
+   */
+  if (stageRank(release) > stageRank(ceiling)) {
+    blocks.push({
+      code: 'CEILING',
+      reason: `공개 ${release} 가 승인 천장 ${ceiling} 를 넘는다 — ${ceiling} 로 제한한다`,
+    })
+    reasons.push(`🔴 CEILING: 공개 ${release} > 승인 천장 ${ceiling} — ${ceiling} 로 제한한다`)
+    release = ceiling
+    if (state === 'TRIAL' || state === 'SUSTAIN') state = 'HOLD'
   }
-  return { ...base, capacity, release, state, dayPinned, reasons }
+  if (state === 'HOLD' && reasons.length === 0) {
+    reasons.push(`유지 — ${promotion?.nextAction ?? '판정 근거 없음'}`)
+  }
+  return { ...base, release, state, blocks, dayPinned, reasons }
 }
 
 /** 🔴 아무것도 읽지 못했을 때 */
 export function safestDecision(kstDate: string, decidedAt: string): StageDecision {
   return {
     kstDate, capacity: SAFEST_STAGE, release: SAFEST_STAGE, state: 'HOLD',
-    dayPinned: false, supply: null, decidedAt, contractVersion: STAGE_DECISION_VERSION,
+    dayPinned: false, blocks: [], supply: null, decidedAt,
+    contractVersion: STAGE_DECISION_VERSION,
     reasons: [`🔴 단계 입력을 읽지 못했다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다`],
   }
 }
