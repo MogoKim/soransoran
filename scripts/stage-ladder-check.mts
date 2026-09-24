@@ -14,7 +14,8 @@ import {
   type DatedCanary,
 } from '../src/lib/stage-ladder'
 import {
-  ensureStageDecision, controllerEnabled, CONTROLLER_ENV, ENSURE_STEPS,
+  ensureStageDecision, consumeStageDecision, validateStoredDecision,
+  controllerEnabled, CONTROLLER_ENV, ENSURE_STEPS, DECISION_WRITER, DECISION_CONSUMERS,
 } from '../src/lib/stage-decision-store'
 import { sameStageSnapshot, reconcileStageSources, type StageSnapshot } from '../src/lib/stage-source'
 import { PROFILES, RELEASE_STAGES, SAFEST_STAGE, type ReleaseStage } from '../src/lib/scale-profile'
@@ -55,13 +56,13 @@ const assemble = (o: { stock: number; publishedToday: number }) => {
   const axis = { now: NOW, publishedToday: o.publishedToday }
   const verdicts = stageVerdicts({ queue, personas: PERSONAS, axis })
   /** 🔴 같은 `runAt` 에서 날짜와 대상 단계를 함께 붙인다 */
-  const daily = (stage: ReleaseStage, kstDate = DATE): DatedCanary => {
+  const daily = (stage: ReleaseStage, kstDate = DATE, base: ReleaseStage = 'd3'): DatedCanary => {
     const slotsLeft = Math.max(0, PROFILES[stage].dailyTarget - o.publishedToday)
     const sim = simulateStage({
       stage, queue, personas: PERSONAS, axis, days: 1, anchor: 'now', dailyCap: slotsLeft,
     })
     return {
-      kstDate, stage, builtAt: AT,
+      kstDate, stage, builtAt: AT, trialBase: base,
       verdict: judgeOneDayCanary(sim, { publishedToday: o.publishedToday, slotsLeft }),
     }
   }
@@ -285,17 +286,17 @@ console.log('\n⑩ 🔴 writer · 동시성 · rollback')
   let inserted = 0
   const first = await ensureStageDecision({
     read: async () => null, compute: () => D({ release: 'd5' }),
-    insert: async () => { inserted += 1; return 'inserted' }, by: 'supply',
+    insert: async () => { inserted += 1; return 'inserted' }, by: DECISION_WRITER,
   })
-  check('🔴 🔴 **행이 없으면 먼저 온 러너가 만든다**',
-    first.ok && first.created && first.by === 'supply' && inserted === 1, JSON.stringify(first))
+  check('🔴 🔴 **결정은 controller 하나가 만든다 (first-writer 폐기)**',
+    first.ok && first.created && first.by === DECISION_WRITER && inserted === 1, JSON.stringify(first))
 
   /** ② 이미 있으면 읽기만 한다 — 다시 계산하지 않는다 */
   let computed = 0
   const second = await ensureStageDecision({
     read: async () => D({ release: 'd3' }),
     compute: () => { computed += 1; return D({ release: 'd5' }) },
-    insert: async () => 'inserted', by: 'publish',
+    insert: async () => 'inserted', by: DECISION_WRITER,
   })
   check('🔴 🔴 **이미 있으면 그 행을 쓴다 — 계산도 덮어쓰기도 하지 않는다**',
     second.ok && !second.created && second.decision.release === 'd3' && computed === 0,
@@ -306,15 +307,15 @@ console.log('\n⑩ 🔴 writer · 동시성 · rollback')
   const raced = await ensureStageDecision({
     read: async () => { reads += 1; return reads === 1 ? null : D({ release: 'd3' }) },
     compute: () => D({ release: 'd5' }),
-    insert: async () => 'conflict', by: 'publish',
+    insert: async () => 'conflict', by: DECISION_WRITER,
   })
-  check('🔴 🔴 **동시 시작에서 진 쪽은 자기 계산을 버리고 이긴 행을 읽는다**',
+  check('🔴 유일키 충돌이면 자기 계산을 버리고 그 행을 읽는다',
     raced.ok && !raced.created && raced.decision.release === 'd3',
     JSON.stringify(raced.ok && raced.decision.release))
 
   /** ④ 만들지도 읽지도 못하면 UNAVAILABLE — 부르는 쪽이 안전 단계로 간다 */
   const gone = await ensureStageDecision({
-    read: async () => null, compute: () => D(), insert: async () => 'conflict', by: 'supply',
+    read: async () => null, compute: () => D(), insert: async () => 'conflict', by: DECISION_WRITER,
   })
   check('🔴 🔴 **행을 끝내 못 읽으면 `UNAVAILABLE` — "모른다" 를 어제 값으로 채우지 않는다**',
     !gone.ok && gone.code === 'UNAVAILABLE', JSON.stringify(gone))
@@ -352,6 +353,138 @@ console.log('\n⑪ 🔴 결정 하나에 여섯 칸이 남는다')
   check('🔴 다르면 막는다', !sameStageSnapshot(S({}), S({ decidedBy: 'publish', capacity: 'd3' })).ok)
   check('🔴 진단 도구는 따로 있다',
     reconcileStageSources({ canonical: {}, github: {} }).capacity === SAFEST_STAGE)
+}
+
+console.log('\n⑫ 🔴 🔴 단계 점프를 하루 시험으로 우회하지 못한다')
+{
+  const a = assemble({ stock: 12, publishedToday: 0 })
+  /** 🔴 d1 기반인데 d5 를 시험하려 한다 */
+  const jump = planStageDecision({
+    kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd10',
+    verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd1'),
+    promotion: null, publishedToday: 0, decidedAt: AT,
+  })
+  check('🔴 🔴 **d1 기반에서 d5 시험은 막힌다 (바로 다음 칸이 아니다)**',
+    jump.state !== 'TRIAL' && jump.blocks.some((b) => b.code === 'PROVENANCE_STAGE'),
+    `${jump.state} · ${JSON.stringify(jump.blocks)}`)
+  const jump2 = planStageDecision({
+    kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd10',
+    verdicts: a.verdicts, daily: a.daily('d10', DATE, 'd3'),
+    promotion: null, publishedToday: 0, decidedAt: AT,
+  })
+  check('🔴 🔴 **d3 기반에서 d10 시험도 막힌다**',
+    jump2.state !== 'TRIAL' && jump2.blocks.some((b) => b.code === 'PROVENANCE_STAGE'))
+  const good = planStageDecision({
+    kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
+    verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
+    promotion: null, publishedToday: 0, decidedAt: AT,
+  })
+  check('🔴 유효한 d3 기반 뒤 d5 시험은 열린다 (현재 운영 모양)',
+    good.state === 'TRIAL' && good.release === 'd5', `${good.state}/${good.release}`)
+  const wrongBase = planStageDecision({
+    kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
+    verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd1'),
+    promotion: null, publishedToday: 0, decidedAt: AT,
+  })
+  check('🔴 🔴 **시험 기반이 지속 공개 단계와 다르면 막는다**',
+    wrongBase.state !== 'TRIAL' && wrongBase.blocks.some((b) => b.code === 'PROVENANCE_STAGE'))
+  /**
+   * 🔴 **기반 검증만이 잡는 경우.** `trialBase=d1 · stage=d3` 은 "바로 다음 칸" 규칙을
+   *    만족한다 — 기반이 지속 공개 단계(d3)와 다르다는 것만이 이것을 막는다.
+   *    (겹치는 두 검사 중 어느 쪽이 실제로 일하는지 가른다)
+   */
+  const baseOnly = planStageDecision({
+    kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
+    verdicts: a.verdicts, daily: a.daily('d3', DATE, 'd1'),
+    promotion: null, publishedToday: 0, decidedAt: AT,
+  })
+  check('🔴 🔴 **기반 d1·대상 d3 은 "다음 칸" 이지만 기반이 달라서 막힌다**',
+    baseOnly.state !== 'TRIAL'
+    && baseOnly.blocks.some((b) => b.code === 'PROVENANCE_STAGE'
+      && b.reason.includes('지속 공개 단계')),
+    `${baseOnly.state} · ${JSON.stringify(baseOnly.blocks)}`)
+  /** 🔴 `builtAt` 의 KST 날짜가 다르면 라벨만 맞춰도 막힌다 */
+  const relabeled = planStageDecision({
+    kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
+    verdicts: a.verdicts,
+    daily: { ...a.daily('d5', DATE, 'd3'), builtAt: '2026-09-23T10:00:00.000Z' },
+    promotion: null, publishedToday: 0, decidedAt: AT,
+  })
+  check('🔴 🔴 **kstDate 라벨만 오늘로 바꾼 어제 판정은 막힌다 (builtAt 검증)**',
+    relabeled.state !== 'TRIAL' && relabeled.blocks.some((b) => b.code === 'STALE_DAILY'),
+    JSON.stringify(relabeled.blocks))
+}
+
+console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 생성하지 않는다')
+{
+  const D = (o: Partial<ReturnType<typeof safestDecision>> = {}) =>
+    ({ ...safestDecision(DATE, AT), ...o })
+  const off = await consumeStageDecision({
+    read: async () => D(), validate: () => ({ ok: true }), controllerOn: false, by: 'supply',
+  })
+  check('🔴 🔴 **kill switch 가 꺼져 있으면 기존 경로로 간다**',
+    !off.ok && off.fallback === 'legacy', JSON.stringify(off))
+  const none = await consumeStageDecision({
+    read: async () => null, validate: () => ({ ok: true }), controllerOn: true, by: 'publish',
+  })
+  check('🔴 🔴 **결정이 없으면 높은 단계를 사후 생성하지 않고 안전 단계로 간다**',
+    !none.ok && none.code === 'NO_DECISION' && none.fallback === 'safest', JSON.stringify(none))
+  const broken = await consumeStageDecision({
+    read: async () => D(), validate: () => ({ ok: false, reason: '계약 판이 다르다' }),
+    controllerOn: true, by: 'publish',
+  })
+  check('🔴 🔴 **깨진 행은 쓰지 않는다 (BROKEN → 안전 단계)**',
+    !broken.ok && broken.code === 'BROKEN' && broken.fallback === 'safest')
+  const good = await consumeStageDecision({
+    read: async () => D({ release: 'd5' }), validate: () => ({ ok: true }),
+    controllerOn: true, by: 'supply',
+  })
+  check('정상 행은 그대로 쓴다', good.ok && good.decision.release === 'd5')
+  check('🔴 consumer 는 둘이다 — writer 는 하나다',
+    DECISION_CONSUMERS.join(',') === 'supply,publish' && DECISION_WRITER === 'controller')
+
+  /** 🔴 저장된 행 검증 — 계약 판·날짜·enum·시각 */
+  const V = (o: Partial<ReturnType<typeof safestDecision>>) => validateStoredDecision({
+    row: D(o), expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+    allowedStages: RELEASE_STAGES, allowedStates: TRANSITION_STATES,
+  })
+  check('🔴 계약 판이 다르면 거절', !V({ contractVersion: 'old' as never }).ok)
+  check('🔴 날짜가 다르면 거절', !V({ kstDate: '2026-09-23' }).ok)
+  check('🔴 모르는 단계면 거절', !V({ release: 'd7' as never }).ok)
+  check('🔴 모르는 상태면 거절', !V({ state: 'WAT' as never }).ok)
+  check('🔴 결정 시각을 못 읽으면 거절', !V({ decidedAt: 'nope' }).ok)
+  check('정상 행은 통과', V({}).ok)
+}
+
+console.log('\n⑭ 🔴 🔴 probe 와 발행 러너가 같은 조립 함수를 쓴다')
+{
+  const loader = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
+  const probe = readFileSync('scripts/stage-decision-probe.mts', 'utf-8')
+  const runner = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
+  check('🔴 🔴 **공용 로더가 정본 `selectAutoTargets` 와 안전 재판정을 쓴다**',
+    /selectAutoTargets\(/.test(loader) && /safetyFilter\(/.test(loader))
+  check('🔴 🔴 **공용 로더가 `voiceInputOf` 로 profile 을 만든다 — 하드코딩 없음**',
+    /\.\.\.voiceInputOf\(t\)/.test(loader) && !/profile: 'human'/.test(loader))
+  check('🔴 🔴 **probe 는 조립을 직접 하지 않는다 — 공용 로더만 부른다**',
+    /loadPublishableStock\(/.test(probe)
+    && !/profile: 'human'/.test(probe) && !/selectAutoTargets\(/.test(probe))
+  check('🔴 러너와 로더가 같은 where 조건을 쓴다', (() => {
+    const w = /status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null/
+    return w.test(loader) && w.test(runner)
+  })())
+  check('🔴 러너와 로더가 같은 select 칸을 쓴다', (() => {
+    const keys = ['gateResults: true', 'decidedBy: true', 'sourceCapturedAt: true',
+      'promptVersion: true', 'model: true', 'matchedPersonaId: true']
+    return keys.every((k) => loader.includes(k) && runner.includes(k))
+  })())
+  check('🔴 🔴 **네 수를 서로 다른 값으로 낸다**',
+    /queueTotal/.test(loader) && /machineCandidates/.test(loader)
+    && /humanReviewed/.test(loader) && /targets: AutoRow\[\]/.test(loader))
+  check('🔴 제외 사유별 개수와 ID 를 낸다',
+    /rejectedByCode/.test(loader) && /ids: string\[\]/.test(loader))
+  check('🔴 🔴 **probe 가 사전/사후 스냅샷을 나눠 출력한다**',
+    /사전\(첫 발행 전/.test(probe) && /사후\(현재\)/.test(probe)
+    && /개방 가능 증명으로 쓰지 않는다/.test(probe))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

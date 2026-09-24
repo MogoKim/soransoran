@@ -14,9 +14,21 @@
  */
 import type { StageDecision } from './stage-ladder'
 
-/** 🔴 결정을 만드는 쪽 — 먼저 도착한 쪽이 만든다 */
-export const DECISION_WRITERS = ['supply', 'publish'] as const
-export type DecisionWriter = (typeof DECISION_WRITERS)[number]
+/**
+ * 🔴 **writer 는 하나다** (2026-09-24 마스터 지적 · first-writer 구조 폐기).
+ *
+ *    앞판은 supply/publish 중 **먼저 INSERT 한 쪽**이 그날 결정을 고정했다.
+ *    상호 배제는 **입력이 같다는 것을 증명하지 않는다** — 두 러너는 서로 다른 시각에
+ *    서로 다른 DB 스냅샷을 읽는다. 먼저 온 쪽의 스냅샷이 하루를 지배하면
+ *    "왜 오늘 이 단계인가" 를 아무도 설명할 수 없다.
+ *
+ * 🔴 **전용 daily controller 하나만 쓴다.** 첫 공급·첫 발행보다 **먼저** 돈다.
+ *    supply 와 publish 는 저장된 결정을 **읽기만** 한다(consumer).
+ */
+export const DECISION_WRITER = 'controller' as const
+export type DecisionWriter = typeof DECISION_WRITER
+export const DECISION_CONSUMERS = ['supply', 'publish'] as const
+export type DecisionConsumer = (typeof DECISION_CONSUMERS)[number]
 
 /**
  * 🔴 **kill switch.** rollback 은 `contractVersion` 되돌리기가 아니다 —
@@ -39,15 +51,85 @@ export const decisionKeyOf = (d: StageDecision): DecisionKey =>
   ({ kstDate: d.kstDate, contractVersion: d.contractVersion })
 
 export type EnsureOutcome =
-  /** 이 러너가 처음 만들었다 */
+  /** controller 가 그날 결정을 만들었다 */
   | { ok: true; decision: StageDecision; created: true; by: DecisionWriter }
   /** 이미 있어서 읽었다 — 🔴 다시 계산하지도 덮지도 않는다 */
   | { ok: true; decision: StageDecision; created: false; by: DecisionWriter }
   /**
-   * 🔴 **만들지도 읽지도 못했다.** 두 러너는 **가장 안전한 단계**로 간다 —
+   * 🔴 **만들지도 읽지도 못했다.** 부르는 쪽은 **기존 경로 또는 가장 안전한 단계**로 간다 —
    *    "모른다" 를 "어제 값" 으로 채우지 않는다.
    */
   | { ok: false; code: 'UNAVAILABLE'; reason: string }
+
+/**
+ * 🔴 **consumer 가 결정을 읽는다. 없으면 사후 생성하지 않는다** (마스터 지적).
+ *
+ *    첫 발행 전에 행이 없다는 것은 controller 가 돌지 않았다는 뜻이다.
+ *    그때 발행 러너가 **높은 단계를 사후에 만들어** 내보내면, 아무도 판단하지 않은
+ *    양이 나간다. 기존 env/canary 경로로 가거나 가장 안전한 단계로 간다.
+ */
+export type ConsumeOutcome =
+  | { ok: true; decision: StageDecision }
+  | { ok: false; code: 'NO_DECISION' | 'BROKEN'; reason: string; fallback: 'legacy' | 'safest' }
+
+export async function consumeStageDecision(io: {
+  read: () => Promise<StageDecision | null>
+  /** 🔴 읽은 행이 계약을 지키는가 — 깨졌으면 쓰지 않는다 */
+  validate: (d: StageDecision) => { ok: true } | { ok: false; reason: string }
+  /** kill switch 가 꺼져 있으면 기존 경로로 간다 */
+  controllerOn: boolean
+  by: DecisionConsumer
+}): Promise<ConsumeOutcome> {
+  void io.by
+  if (!io.controllerOn) {
+    return {
+      ok: false, code: 'NO_DECISION', fallback: 'legacy',
+      reason: `${CONTROLLER_ENV} 가 켜져 있지 않다 — 기존 env/canary 경로로 간다`,
+    }
+  }
+  const row = await io.read()
+  if (row === null) {
+    return {
+      ok: false, code: 'NO_DECISION', fallback: 'safest',
+      reason: '그날 결정이 없다 — 🔴 사후에 만들지 않는다. 가장 안전한 단계로 간다',
+    }
+  }
+  const v = io.validate(row)
+  if (!v.ok) {
+    return { ok: false, code: 'BROKEN', fallback: 'safest', reason: `저장된 행이 깨졌다 — ${v.reason}` }
+  }
+  return { ok: true, decision: row }
+}
+
+/**
+ * 🔴 **저장된 행을 읽을 때 검증한다.** 계약 판·날짜·enum·키·provenance 를 본다 —
+ *    깨진 행은 `UNAVAILABLE` 로 처리하고 쓰지 않는다.
+ */
+export function validateStoredDecision(input: {
+  row: StageDecision
+  expectKstDate: string
+  expectContractVersion: string
+  allowedStages: readonly string[]
+  allowedStates: readonly string[]
+}): { ok: true } | { ok: false; reason: string } {
+  const r = input.row
+  if (r.contractVersion !== input.expectContractVersion) {
+    return { ok: false, reason: `계약 판 ${r.contractVersion} ≠ ${input.expectContractVersion}` }
+  }
+  if (r.kstDate !== input.expectKstDate) {
+    return { ok: false, reason: `날짜 ${r.kstDate} ≠ ${input.expectKstDate}` }
+  }
+  if (!input.allowedStages.includes(r.capacity) || !input.allowedStages.includes(r.release)) {
+    return { ok: false, reason: `모르는 단계 — capacity=${r.capacity} release=${r.release}` }
+  }
+  if (!input.allowedStates.includes(r.state)) {
+    return { ok: false, reason: `모르는 상태 ${r.state}` }
+  }
+  if (r.decidedAt.trim() === '' || Number.isNaN(Date.parse(r.decidedAt))) {
+    return { ok: false, reason: `결정 시각을 읽을 수 없다 — "${r.decidedAt}"` }
+  }
+  return { ok: true }
+}
 
 /**
  * 🔴 **두 러너가 부르는 한 경로.**
@@ -75,6 +157,7 @@ export async function ensureStageDecision(io: {
   compute: () => StageDecision
   /** 🔴 unique 충돌이면 `'conflict'` 를 돌려준다 — 예외를 삼키지 않는다 */
   insert: (d: StageDecision) => Promise<'inserted' | 'conflict'>
+  /** 🔴 controller 하나뿐이다 — 러너는 이 함수를 부르지 않는다 */
   by: DecisionWriter
 }): Promise<EnsureOutcome> {
   const existing = await io.read()
@@ -106,7 +189,7 @@ export async function ensureStageDecision(io: {
  *   state           String   // SUSTAIN|TRIAL|PREPARE|HOLD
  *   reasons         Json
  *   blocks          Json
- *   decidedBy       String   // supply|publish — 먼저 만든 쪽
+ *   decidedBy       String   // 🔴 언제나 'controller' — 러너는 쓰지 않는다
  *   decidedAt       DateTime
  *   createdAt       DateTime @default(now())
  *   @@unique([kstDate, contractVersion])

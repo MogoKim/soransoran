@@ -50,8 +50,21 @@ export type DatedCanary = {
   /** 시험 대상 단계 */
   stage: ReleaseStage
   verdict: CanaryVerdict
-  /** assembler 가 쓴 시각 — 같은 회차에서 나왔는지 본다 */
+  /** assembler 가 쓴 시각 — 같은 회차·같은 KST 날짜에서 나왔는지 본다 */
   builtAt: string
+  /**
+   * 🔴 **무엇을 기반으로 한 시험인가** (2026-09-24).
+   *    하루 시험은 **지금 기반 단계의 바로 다음 칸**만 열 수 있다 —
+   *    d1→d5 나 d3→d10 같은 점프를 허용하면 "하루 시험" 이 승격 우회로가 된다.
+   */
+  trialBase: ReleaseStage
+}
+
+/** 🔴 ISO 시각의 KST 날짜 — 정본과 같은 경계다 */
+export function kstDateOfIso(iso: string): string | null {
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return null
+  return new Date(ms + 9 * 3600_000).toISOString().slice(0, 10)
 }
 
 /** 🔴 보고용 신호 — 결정에 쓰지 않는다 */
@@ -129,11 +142,44 @@ function checkProvenance(input: StageInputs): StageBlock[] {
         reason: `하루 판정 날짜 ${d.kstDate} ≠ 결정 날짜 ${input.kstDate} — 전날 결과를 쓰지 않는다`,
       })
     }
+    /**
+     * 🔴 **`builtAt` 의 KST 날짜도 같아야 한다.** `kstDate` 칸만 맞춰 놓고
+     *    어제 만든 verdict 를 넣는 것을 막는다 — 라벨이 아니라 만든 시각을 본다.
+     */
+    const builtDate = kstDateOfIso(d.builtAt)
+    if (builtDate === null) {
+      out.push({ code: 'STALE_DAILY', reason: `builtAt 을 읽을 수 없다 — "${d.builtAt}"` })
+    } else if (builtDate !== input.kstDate) {
+      out.push({
+        code: 'STALE_DAILY',
+        reason: `builtAt 의 KST 날짜 ${builtDate} ≠ 결정 날짜 ${input.kstDate}`
+          + ' — 라벨만 바꾼 어제 판정을 쓰지 않는다',
+      })
+    }
     if (d.verdict.stage !== d.stage) {
       out.push({
         code: 'PROVENANCE_STAGE',
         reason: `하루 판정 대상 ${d.stage} ≠ verdict.stage ${d.verdict.stage}`,
       })
+    }
+    /**
+     * 🔴 **시험은 기반 단계의 바로 다음 칸만이다.** d1→d5 · d3→d10 점프를 막는다.
+     *    기반은 지속 공개 단계여야 한다 — 임의 기반을 실어 우회하지 못하게.
+     */
+    if (d.trialBase !== input.sustainedRelease) {
+      out.push({
+        code: 'PROVENANCE_STAGE',
+        reason: `시험 기반 ${d.trialBase} ≠ 지속 공개 단계 ${input.sustainedRelease}`,
+      })
+    } else {
+      const base = next(d.trialBase)
+      if (base === null || d.stage !== base) {
+        out.push({
+          code: 'PROVENANCE_STAGE',
+          reason: `시험 대상 ${d.stage} 가 기반 ${d.trialBase} 의 바로 다음 칸(${base ?? '없음'})이 아니다`
+            + ' — 단계 점프를 하루 시험으로 우회하지 않는다',
+        })
+      }
     }
   }
   return out
