@@ -11,6 +11,34 @@
  *    "아침에 D5 를 열 수 있었다" 는 증명으로 쓰지 않는다.
  *
  * 🔴 DB write 0 · 네트워크 0 · LLM 0 · 발행 0 · 결정 저장 0.
+ *
+ * ── 🔴 **운영 실측 — 21:15 회차 `20260924-121505`** ────────────────────────────
+ *
+ *   ```
+ *   capacity        d5
+ *   판정(judge)     5회 · $0.010040
+ *   초안(draft)     6회 · $0.021865
+ *   화자 여력       2명
+ *   산출            artifact 2건 · candidate 2건 · DB 2건
+ *   사람 READY 증가 0건   ← 🔴 적재(APPROVED) 증가를 READY 로 세지 않는다
+ *   ```
+ *
+ *   🔴 **`#566` 은 이 회차로 운영 PASS 다** — 코드 PASS 가 아니라 운영 진입점에서
+ *      실제로 돌아 산출이 나온 것을 확인했다.
+ *   🔴 **`#568` 은 아직 미관측이다.** 배포는 됐지만 그 경로를 지나간 회차를
+ *      관측하지 못했다 — 미관측은 미관측이지 PASS 가 아니다.
+ *
+ * ── 🔴 **러너 ↔ probe 대조 (2026-09-24 21:57 · dry-run · DB write 0)** ────────
+ *
+ *   같은 시각 `original-post:auto-publish`(--apply 없음)와 이 명령을 나란히 돌려
+ *   **모든 단계가 일치**했다. 조립이 한 곳이라는 말의 운영 근거다.
+ *
+ *   ```
+ *   대기열 225 · selector 1건(cmtqhtw7x…) · 신선도 통과 0건
+ *   제외 214 PROFILE · 7 HUMAN_REVIEW_REQUIRED · 3 GATE
+ *   hold TTL_EXPIRED 1건(같은 id) · 오늘 발행 5건
+ *   capacity d5 · release d1 · 이번에 낼 건 없음
+ *   ```
  */
 import { PrismaClient } from '@prisma/client'
 
@@ -18,7 +46,8 @@ import { planStageDecision, type DatedCanary } from '../src/lib/stage-ladder'
 import { PROFILES, RELEASE_STAGES, type ReleaseStage } from '../src/lib/scale-profile'
 import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
 import { judgeOneDayCanary, kstDateString } from '../src/lib/release-canary'
-import { loadPublishableStock } from './lib/publishable-stock.mjs'
+import { loadPublishableStock, stageStock, releaseCapsOf } from './lib/publishable-stock.mjs'
+import { installFromEnv } from '../src/lib/scale-runtime'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const NOW = new Date()
@@ -34,20 +63,38 @@ async function main(): Promise<void> {
   console.log('   🔴 발행 러너와 같은 함수(loadPublishableStock)로 조립한다\n')
 
   const s = await loadPublishableStock(prisma, NOW)
+  /** 🔴 상한은 러너와 **같은 함수**가 만든다 — 여기서 지어내지 않는다 */
+  const RELEASE_CAPS = releaseCapsOf(installFromEnv(process.env).releaseProfile)
 
-  console.log('① 재고 — 네 수는 서로 다른 값이다')
-  console.log(`   대기열(APPROVED·EDITED·미발행)   ${s.queueTotal}건`)
-  console.log(`   기계가 만든 후보                 ${s.machineCandidates}건`)
-  console.log(`   사람이 검토를 마친 행            ${s.humanReviewed}건`)
-  console.log(`   🔴 **실제 발행 가능 재고**       ${s.targets.length}건`)
-  if (s.rejectedByCode.length > 0) {
-    console.log('\n② 제외 사유별 (정본 selectAutoTargets)')
-    for (const r of s.rejectedByCode) console.log(`   ${String(r.count).padStart(3)}건  ${r.code}`)
+  /**
+   * 🔴 **재고를 단계로 나눈다.** `selectAutoTargets` 통과 수를
+   *    "실제 발행 가능 재고" 라고 부르지 않는다 — TTL·배정을 지나야 그 수가 나온다.
+   */
+  const st = stageStock({ loaded: s, caps: RELEASE_CAPS, at: NOW })
+  console.log('① 재고 단계 — 여섯 수는 서로 다른 값이다')
+  console.log(`   queueTotal            ${st.queueTotal}건`)
+  console.log(`   selectorTargets       ${st.selectorTargets.count}건  ${st.selectorTargets.ids.join(' ')}`)
+  console.log(`   freshnessPassed       ${st.freshnessPassed.count}건  ${st.freshnessPassed.ids.join(' ')}`)
+  console.log(`   successfullyAssigned  ${st.successfullyAssigned.count}건  ${st.successfullyAssigned.ids.join(' ')}`)
+  console.log(`   🔴 runnableNow         ${st.runnableNow.count}건  ${st.runnableNow.ids.join(' ')}`)
+  console.log(`   🔴 nextPickedId        ${st.nextPickedId ?? '(없음)'}`)
+  if (st.brokenRecovery.length > 0) {
+    console.log(`   🔴 배정 깨짐 ${st.brokenRecovery.length}건 — publisher 는 전체를 중단한다`)
+    for (const b of st.brokenRecovery) console.log(`      ${b.id}  ${b.problem}`)
   }
-  console.log('\n③ 발행 후보 ID')
-  if (s.targets.length === 0) console.log('   (없음)')
-  for (const t of s.targets.slice(0, 10)) {
-    console.log(`   ${t.id}  persona=${t.matchedPersonaId ?? '미배정'}  decidedBy=${String(t.decidedBy ?? '')}`)
+  console.log(`   (참고) 기계가 만든 후보 ${s.machineCandidates}건`
+    + ` · 사람 검토 완료 ${s.humanReviewed}건 — 정본 machineReviewedByHuman 로 센다`)
+  if (s.rejectedByCode.length > 0) {
+    console.log('\n② selector 제외 사유별 (정본 selectAutoTargets)')
+    for (const r of s.rejectedByCode) {
+      console.log(`   ${String(r.count).padStart(3)}건  ${r.code}  ${r.ids.slice(0, 3).join(' ')}`)
+    }
+  }
+  if (st.holdsByReason.length > 0) {
+    console.log('\n③ hold 사유별 (정본 prepareCandidates)')
+    for (const h of st.holdsByReason) {
+      console.log(`   ${String(h.count).padStart(3)}건  ${h.reason}  ${h.ids.slice(0, 3).join(' ')}`)
+    }
   }
 
   const ceiling = (process.env.SORAN_CAPACITY_STAGE ?? 'd1') as ReleaseStage

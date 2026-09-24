@@ -794,7 +794,8 @@ function always0Diff(): number {
   const offenders: string[] = []
   /** 🔴 `PersonaForMatch` 를 DB 에서 만드는 곳 전부. 늘어나면 여기 추가한다 */
   const PRODUCERS = [
-    'scripts/original-post-auto-publish.mts',
+    // 🔴 auto-publish 의 조립은 공용 로더로 옮겨졌다(2026-09-24) — 정본 위치를 본다
+    'scripts/lib/publishable-stock.mts',
     'scripts/original-post-match-assign.mts',
     'scripts/original-post-persona-match-dry-run.mts',
     'scripts/supply-health.mts',
@@ -1275,7 +1276,8 @@ export function hasDirectAccountCompare(src: string): boolean {
    */
   {
     const SITES = [
-      'scripts/original-post-auto-publish.mts',
+      // 🔴 auto-publish 의 Persona 조립 정본은 공용 로더다
+      'scripts/lib/publishable-stock.mts',
       'scripts/persona-capacity-planner.mts',
       'scripts/supply-health.mts',
     ]

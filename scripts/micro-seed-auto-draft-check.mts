@@ -258,7 +258,11 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
       && /profile: profileOf\(r\) === 'human' \? 'human' : 'machine'/.test(c)
   })())
   for (const f of [
-    'scripts/original-post-auto-publish.mts',
+    /**
+     * 🔴 auto-publish 의 조립은 `scripts/lib/publishable-stock.mts` 로 옮겨졌다
+     *    (2026-09-24 — 러너와 관제가 같은 함수를 쓰게 하려고). 그 자리를 본다.
+     */
+    'scripts/lib/publishable-stock.mts',
     'scripts/supply-health.mts',
     'scripts/persona-capacity-planner.mts',
     'scripts/original-post-match-assign.mts',
@@ -266,6 +270,8 @@ console.log('\n⑭ 🔴 생성 말투 → 후보 → 발행 author 가 이어진
   ]) {
     check(`🔴 ${f.split('/').pop()} 가 그 함수를 쓴다`, /voiceInputOf\(/.test(codeOf(f)))
   }
+  check('🔴 🔴 **발행 러너가 그 조립 결과를 실제로 소비한다**',
+    /loadPublishableStock\(/.test(codeOf('scripts/original-post-auto-publish.mts')))
   check('🔴 중간 단계가 voice·profile 을 떨어뜨리지 않는다',
     /voice: c\.voice, profile: c\.profile/.test(codeOf('src/lib/supply-candidates.ts')))
   check('🔴 profile 을 optional 로 두고 human 으로 떨어뜨리지 않는다', (() => {

@@ -19,8 +19,12 @@
 import type { PrismaClient } from '@prisma/client'
 
 import {
-  selectAutoTargets, voiceInputOf, type AutoRow,
+  selectAutoTargets, voiceInputOf, profileOf, machineReviewedByHuman, pickPublishTarget,
+  type AutoRow, type Reject,
 } from '../../src/lib/original-post-auto-publish'
+import { prepareCandidates } from '../../src/lib/supply-candidates'
+import type { HoldReason } from '../../src/lib/supply-freshness'
+import { effectiveWeeklyCap, type ScaleProfile } from '../../src/lib/scale-profile'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
@@ -29,6 +33,8 @@ export type LoadedStock = {
   queueTotal: number
   /** 🔴 `selectAutoTargets` 를 통과한 자동 발행 후보 */
   targets: AutoRow[]
+  /** 🔴 정본 `selectAutoTargets` 가 낸 제외 목록 그대로 — 러너가 그대로 소비한다 */
+  rejected: Reject[]
   /** 제외 사유별 개수 — 값이다 */
   rejectedByCode: { code: string; count: number; ids: string[] }[]
   /** 정본과 같은 모양의 후보 — 여기서 profile 을 하드코딩하지 않는다 */
@@ -40,6 +46,8 @@ export type LoadedStock = {
   personas: Record<string, unknown>[]
   history: { code: string; matchedAts: Date[] }[]
   publishedToday: number
+  /** 🔴 이미 배정된 행을 code 로 바꾸는 표 — 러너가 쓰던 것과 같다 */
+  codeOfPersonaId: Map<string, string>
 }
 
 const kstDayStart = (now: Date): Date => {
@@ -107,6 +115,12 @@ export async function loadPublishableStock(
       where: { matchedPersona: { code: r.code } },
       orderBy: { matchedAt: 'desc' }, select: { matchedAt: true },
     })
+    const vc = (r.voiceCore ?? {}) as Record<string, unknown>
+    /**
+     * 🔴 **발행 러너의 의미를 그대로 옮긴다** — 값을 늘리거나 바꾸지 않는다.
+     *    `workStatus`·`economicStatus`·`region` 은 러너가 `null` 로 넘긴다.
+     *    여기서 채우면 **배정 결과가 러너와 달라진다** — 그것이 이 함수의 목적을 깬다.
+     */
     personas.push({
       code: r.code, status: r.status,
       providerId: r.user?.providerId ?? null,
@@ -114,10 +128,12 @@ export async function loadPublishableStock(
       ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
       maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
       childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
-      childrenAgeBands: Array.isArray(id.childrenAgeBands) ? id.childrenAgeBands : [],
-      region: typeof id.region === 'string' ? id.region : null,
-      lifeStage: typeof id.lifeStage === 'string' ? id.lifeStage : null,
-      noGoTopics: Array.isArray(r.noGoTopics) ? r.noGoTopics : [],
+      ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands } : {}),
+      parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
+      menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
+      workStatus: null, economicStatus: null, region: null,
+      noGoTopics: r.noGoTopics,
+      voiceLength: typeof vc.length === 'string' ? vc.length : null,
       postsThisWeek,
       daysSinceLastPost: last?.matchedAt == null ? null
         : Math.floor((now.getTime() - last.matchedAt.getTime()) / 864e5),
@@ -145,15 +161,130 @@ export async function loadPublishableStock(
     where: { kind: 'post', createdAt: { gte: kstDayStart(now) } },
   })
 
-  /** 🔴 세 수를 서로 다른 값으로 낸다 — 섞으면 "재고가 있다" 는 거짓이 된다 */
-  const machineCandidates = rows.filter((r) => String(r.decidedBy ?? '').startsWith('machine:')).length
-  const humanReviewed = rows.filter((r) => {
-    const d = String(r.decidedBy ?? '')
-    return d !== '' && !d.startsWith('machine:')
-  }).length
+  /**
+   * 🔴 **사람 검토는 정본 계약으로 센다** (2026-09-24 마스터 지적).
+   *    임의의 non-machine 문자열을 사람 검토로 세면 `null`·모르는 값까지 사람이 본 것이 된다.
+   */
+  const machineCandidates = rows.filter((r) => profileOf(r) === 'machine').length
+  const humanReviewed = rows.filter((r) => machineReviewedByHuman(r.decidedBy)).length
 
   return {
-    queueTotal: rows.length, targets, rejectedByCode, queueCandidates,
+    queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineCandidates, humanReviewed, personas, history, publishedToday,
+    codeOfPersonaId,
+  }
+}
+
+/**
+ * 🔴 **재고를 단계로 나눈다** (2026-09-24 마스터 지적).
+ *    `targets.length` 를 "실제 발행 가능 재고" 라고 부르지 않는다 —
+ *    TTL·배정을 거쳐야 그날 낼 수 있는 수가 나온다.
+ */
+/**
+ * 🔴 **발행 상한도 한 곳에서 만든다.** 러너와 probe 가 각자 계산하면
+ *    같은 단계인데 다른 배정이 나온다 — 그것이 이 파일의 목적을 깬다.
+ */
+export const releaseCapsOf = (p: ScaleProfile): { postsPerWeek: number; minDaysBetween: number } => ({
+  postsPerWeek: effectiveWeeklyCap(p.postsPerWeek, p.minDaysBetween),
+  minDaysBetween: p.minDaysBetween,
+})
+
+/**
+ * 🔴 **publisher 의 실제 계약대로 센다** (2026-09-24 마스터 지적).
+ *
+ *    앞판은 `prepared.auto` 를 "publishable" 이라 불렀다. 그것은 **신선도 통과 목록**이지
+ *    최종 발행 가능 목록이 아니다. 그리고 `batch.assignments` 에는 `assigned === null`
+ *    행도 들어 있다 — 그것을 배정 성공으로 세면 재고가 부풀어 오른다.
+ *
+ * 🔴 publisher 가 실제로 하는 일:
+ *    ```
+ *    prepared.auto 로 freshOrdered 를 세우고
+ *    brokenRecovery(=recoveryProblem !== null)가 하나라도 있으면 **전체 중단**
+ *    pickPublishTarget(freshOrdered, assignedOf, isRecovery) → 이번에 나갈 한 건
+ *    ```
+ */
+export type StockStages = {
+  /** ① 전체 미발행 queue */
+  queueTotal: number
+  /** ② `selectAutoTargets` 통과 */
+  selectorTargets: { count: number; ids: string[] }
+  /** ③ 신선도 통과 — 🔴 `prepared.auto` 에서 **직접** 가져온다(정규식 분류 없음) */
+  freshnessPassed: { count: number; ids: string[] }
+  /** ④ 🔴 배정 **성공** — `assigned !== null` 이고 `recoveryProblem === null` 인 행만 */
+  successfullyAssigned: { count: number; ids: string[] }
+  /**
+   * ⑤ 🔴 **지금 돌릴 수 있는가.** broken recovery 가 하나라도 있으면 publisher 는
+   *    전체를 중단하므로 0 이다 — 배정이 아무리 많아도 그렇다.
+   */
+  runnableNow: { count: number; ids: string[] }
+  /** 🔴 이번 회차에 실제로 집히는 한 건 — `pickPublishTarget` 결과 */
+  nextPickedId: string | null
+  /** 🔴 전체 중단 사유 — 있으면 `runnableNow` 는 0 이다 */
+  brokenRecovery: { id: string; problem: string }[]
+  /** hold 사유별 — 🔴 닫힌 enum 값 그대로다 */
+  holdsByReason: { reason: HoldReason; count: number; ids: string[] }[]
+}
+
+export function stageStock(input: {
+  loaded: LoadedStock
+  caps: Parameters<typeof prepareCandidates>[0]['caps']
+  at: Date
+}): StockStages {
+  const { loaded } = input
+  /** 🔴 러너와 **같은 `prepareCandidates`** 를 부른다 — 여기서 다시 판정하지 않는다 */
+  const prepared = prepareCandidates({
+    candidates: loaded.queueCandidates, personas: loaded.personas as never,
+    caps: input.caps, at: input.at,
+  })
+  /** 🔴 `HoldReason` 은 닫힌 enum 이다 — 정규식으로 분류하지 않는다 */
+  const holdIds = new Map<HoldReason, string[]>()
+  for (const h of prepared.held) {
+    holdIds.set(h.hold, [...(holdIds.get(h.hold) ?? []), h.queueId])
+  }
+
+  const selectorIds = loaded.targets.map((t) => t.id)
+  /** 🔴 신선도 통과는 `prepared.auto` 가 정본이다 */
+  const freshIds = prepared.auto.map((c) => c.queueId)
+
+  const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
+  /**
+   * 🔴 **배정 성공** — `assigned === null` 은 "이 배치에서 발행하지 않는다" 이고,
+   *    `recoveryProblem !== null` 은 기존 배정이 깨진 것이다. 둘 다 성공이 아니다.
+   */
+  const assignedIds = prepared.batch.assignments
+    .filter((a) => a.assigned !== null && (a.recoveryProblem ?? null) === null)
+    .map((a) => a.queueId)
+
+  /** 🔴 publisher 와 같은 순서 — `prepared.auto` 순서로 selector 대상을 세운다 */
+  const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
+  const freshOrdered = loaded.targets
+    .filter((t) => orderById.has(t.id))
+    .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
+
+  /** 🔴 publisher 는 broken recovery 가 하나라도 있으면 **전체 중단**한다 */
+  const brokenRecovery = loaded.targets
+    .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
+    .filter((x): x is { id: string; problem: string } => x.problem !== null)
+
+  const picked = brokenRecovery.length > 0 ? null : pickPublishTarget({
+    ordered: freshOrdered,
+    assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
+    isRecovery: (id) => assignOf.get(id)?.recovery === true,
+  }).picked
+  const runnableIds = brokenRecovery.length > 0
+    ? []
+    : freshOrdered.filter((t) => (assignOf.get(t.id)?.assigned ?? null) !== null).map((t) => t.id)
+
+  return {
+    queueTotal: loaded.queueTotal,
+    selectorTargets: { count: selectorIds.length, ids: selectorIds },
+    freshnessPassed: { count: freshIds.length, ids: freshIds },
+    successfullyAssigned: { count: assignedIds.length, ids: assignedIds },
+    runnableNow: { count: runnableIds.length, ids: runnableIds },
+    nextPickedId: picked?.id ?? null,
+    brokenRecovery,
+    holdsByReason: [...holdIds]
+      .map(([reason, ids]) => ({ reason, count: ids.length, ids }))
+      .sort((a, b) => b.count - a.count),
   }
 }

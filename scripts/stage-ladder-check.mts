@@ -26,6 +26,9 @@ import { planSpeakerAvailability, remainingCapacity } from '../src/lib/content-c
 import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
+import { loadPublishableStock, stageStock } from './lib/publishable-stock.mjs'
+import { prepareCandidates } from '../src/lib/supply-candidates'
+import { pickPublishTarget } from '../src/lib/original-post-auto-publish'
 
 let pass = 0
 let fail = 0
@@ -456,35 +459,213 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
   check('정상 행은 통과', V({}).ok)
 }
 
-console.log('\n⑭ 🔴 🔴 probe 와 발행 러너가 같은 조립 함수를 쓴다')
+console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fake store · 같은 runAt')
 {
-  const loader = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
-  const probe = readFileSync('scripts/stage-decision-probe.mts', 'utf-8')
+  /**
+   * 🔴 **문자열 검사를 지웠다.** 두 파일에 같은 글자가 있는지가 아니라,
+   *    **같은 입력에 같은 결과를 내는지**를 본다.
+   *
+   * 🔴 발행 러너는 `loadPublishableStock` 을 **실제로 부른다**(2026-09-24 리팩터링).
+   *    그래서 여기서 그 함수를 한 번 돌리면, 러너와 probe 가 소비하는 값이 곧 이 값이다.
+   */
   const runner = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
-  check('🔴 🔴 **공용 로더가 정본 `selectAutoTargets` 와 안전 재판정을 쓴다**',
-    /selectAutoTargets\(/.test(loader) && /safetyFilter\(/.test(loader))
-  check('🔴 🔴 **공용 로더가 `voiceInputOf` 로 profile 을 만든다 — 하드코딩 없음**',
-    /\.\.\.voiceInputOf\(t\)/.test(loader) && !/profile: 'human'/.test(loader))
-  check('🔴 🔴 **probe 는 조립을 직접 하지 않는다 — 공용 로더만 부른다**',
-    /loadPublishableStock\(/.test(probe)
-    && !/profile: 'human'/.test(probe) && !/selectAutoTargets\(/.test(probe))
-  check('🔴 러너와 로더가 같은 where 조건을 쓴다', (() => {
-    const w = /status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null/
-    return w.test(loader) && w.test(runner)
-  })())
-  check('🔴 러너와 로더가 같은 select 칸을 쓴다', (() => {
-    const keys = ['gateResults: true', 'decidedBy: true', 'sourceCapturedAt: true',
-      'promptVersion: true', 'model: true', 'matchedPersonaId: true']
-    return keys.every((k) => loader.includes(k) && runner.includes(k))
-  })())
-  check('🔴 🔴 **네 수를 서로 다른 값으로 낸다**',
-    /queueTotal/.test(loader) && /machineCandidates/.test(loader)
-    && /humanReviewed/.test(loader) && /targets: AutoRow\[\]/.test(loader))
-  check('🔴 제외 사유별 개수와 ID 를 낸다',
-    /rejectedByCode/.test(loader) && /ids: string\[\]/.test(loader))
-  check('🔴 🔴 **probe 가 사전/사후 스냅샷을 나눠 출력한다**',
-    /사전\(첫 발행 전/.test(probe) && /사후\(현재\)/.test(probe)
-    && /개방 가능 증명으로 쓰지 않는다/.test(probe))
+  const probe = readFileSync('scripts/stage-decision-probe.mts', 'utf-8')
+  /** 🔴 주석 처리·이름만 남기기를 막는다 — **import 와 호출과 소비**가 모두 있어야 한다 */
+  const runnerCode = runner.split('\n')
+    .filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
+  check('🔴 🔴 **발행 러너가 공용 조립 함수를 실제로 호출하고 그 결과를 쓴다**',
+    /import \{[^}]*loadPublishableStock[^}]*\} from '\.\/lib\/publishable-stock\.mjs'/.test(runnerCode)
+    && /^const RUN_AT = new Date\(\)\s*$/m.test(runnerCode)
+    && /const stock = await loadPublishableStock\(prisma, RUN_AT\)\s*$/m.test(runnerCode)
+    // 🔴 러너의 시계는 하나다 — 단계마다 다른 `now` 를 쓰면 경계에서 답이 갈린다
+    && runnerCode.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 1
+    && /const targets = stock\.targets/.test(runnerCode)
+    && /const rejected = stock\.rejected/.test(runnerCode)
+    && /stock\.queueCandidates/.test(runnerCode) && /stock\.history/.test(runnerCode)
+    && /stock\.publishedToday/.test(runnerCode),
+    runnerCode.split('\n').filter((l) => l.includes('stock.')).slice(0, 6).join(' | '))
+  check('🔴 🔴 **러너 안에 별도 조립이 남아 있지 않다**',
+    !/selectAutoTargets\(rows,/.test(runner)
+    && !/const rows: AutoRow\[\] = raw\.map/.test(runner)
+    && !/personaActivityLog\.findMany/.test(runner),
+    [/selectAutoTargets\(rows,/, /const rows: AutoRow\[\] = raw\.map/, /personaActivityLog\.findMany/]
+      .filter((re) => re.test(runner)).map(String).join(' | ') || '(남은 것 없음)')
+  check('🔴 probe 도 같은 함수만 쓴다',
+    /loadPublishableStock\(/.test(probe) && !/selectAutoTargets\(/.test(probe))
+  check('🔴 🔴 **상한도 같은 함수가 만든다**',
+    /releaseCapsOf\(scale\.releaseProfile\)/.test(runner)
+    && /releaseCapsOf\(installFromEnv\(process\.env\)\.releaseProfile\)/.test(probe))
+
+  /**
+   * 🔴 **같은 함수를 두 번 부르는 것은 동등성 검사가 아니다** (2026-09-24 마스터 지적).
+   *    핵심 분기를 실제로 갈리게 하는 fixture 를 만들고, **publisher 가 쓰는 계약**
+   *    (`freshOrdered` · `brokenRecovery` 전체 중단 · `pickPublishTarget`)이
+   *    `stageStock` 결과와 같은 답을 내는지 본다.
+   */
+  const RUN_AT = new Date('2026-09-24T09:00:00+09:00')
+  const fresh = new Date(RUN_AT.getTime() - 2 * 864e5)
+  const stale = new Date(RUN_AT.getTime() - 40 * 864e5)
+  const qrow = (o: {
+    id: string; persona?: string | null; captured: Date | null; gate?: string
+    decidedBy?: string; site?: string
+  }) => ({
+    id: o.id, status: 'APPROVED', createdPostId: null, gateVerdict: o.gate ?? 'PASS',
+    promptVersion: 'publish-candidate-v1', model: 'human-curated',
+    matchedPersonaId: o.persona ?? null,
+    draftTitle: '오늘 있었던 작은 이야기',
+    draftBody: '아침에 창을 열어 두었더니 바람이 선선했어요.\n다들 어떻게 지내시는지 궁금합니다.',
+    editedTitle: null, editedBody: null, gateResults: {}, decidedBy: o.decidedBy ?? 'founder',
+    decidedAt: RUN_AT, createdAt: fresh,
+    rawContent: { sourceSite: o.site ?? 'publish-candidate:test', sourceCapturedAt: o.captured },
+  })
+  const prow = (code: string, id: string, o: Record<string, unknown> = {}) => ({
+    id, code, status: 'active',
+    identity: {
+      ageBand: '50대 초반', maritalStatus: '기혼', childrenCount: 1,
+      childrenAgeBands: ['성인'], parentCare: '없음', menopauseStatus: '진행중',
+      region: '수도권', lifeStage: '양육기', ...o,
+    },
+    voiceCore: { length: '중간' }, noGoTopics: [],
+    user: { providerId: null, _count: { accounts: 0 } },
+  })
+  const fakeOf = (qrows: unknown[], prows: unknown[]) => ({
+    originalPostApprovalQueue: {
+      findMany: async () => qrows, count: async () => 0, findFirst: async () => null,
+    },
+    persona: { findMany: async () => prows },
+    personaActivityLog: { findMany: async () => [], count: async () => 0 },
+  } as never)
+  const CAPS = { postsPerWeek: 3, minDaysBetween: 1 }
+
+  /**
+   * 🔴 **publisher 가 실제로 하는 계산을 그대로 옮긴 core.**
+   *    러너 소스의 그 블록과 같은 순서·같은 함수다 — 여기서 새로 판정하지 않는다.
+   */
+  const publisherCore = (loaded: Awaited<ReturnType<typeof loadPublishableStock>>) => {
+    const prepared = prepareCandidates({
+      candidates: loaded.queueCandidates, personas: loaded.personas as never,
+      caps: CAPS, at: RUN_AT,
+    })
+    const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
+    const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
+    const freshOrdered = loaded.targets
+      .filter((t) => orderById.has(t.id))
+      .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
+    const broken = loaded.targets
+      .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
+      .filter((x) => x.problem !== null)
+    if (broken.length > 0) return { picked: null as string | null, broken, freshOrdered }
+    const { picked } = pickPublishTarget({
+      ordered: freshOrdered,
+      assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
+      isRecovery: (id) => assignOf.get(id)?.recovery === true,
+    })
+    return { picked: picked?.id ?? null, broken, freshOrdered }
+  }
+
+  /** ── ⓐ fresh 하지만 배정 불가 · TTL hold · 임의 decidedBy 가 섞인 경우 ── */
+  {
+    const qrows = [
+      qrow({ id: 'a-ok', persona: 'p1', captured: fresh }),
+      // 🔴 `isRecovery` 는 배정 유무로 갈린다(supply-candidates.ts) — 배정 없는 상한 행만 TTL_EXPIRED 다
+      qrow({ id: 'b-ttl', persona: null, captured: stale }),
+      qrow({ id: 'c-unknown-age', persona: null, captured: null }),
+      qrow({ id: 'h-recovery-stale', persona: 'p1', captured: stale }),
+      qrow({ id: 'd-gate', persona: 'p1', captured: fresh, gate: 'HOLD' }),
+      qrow({ id: 'e-legacy', persona: 'p1', captured: fresh, site: 'legacy:x' }),
+      qrow({ id: 'f-odd', persona: 'p1', captured: fresh, decidedBy: 'someone-else' }),
+      qrow({ id: 'g-machine', persona: 'p1', captured: fresh, decidedBy: 'machine:auto-draft-v5' }),
+    ]
+    const loaded = await loadPublishableStock(fakeOf(qrows, [prow('P01', 'p1')]), RUN_AT)
+    const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
+    const core = publisherCore(loaded)
+
+    check('🔴 🔴 **nextPickedId 가 publisher 계산과 같다**',
+      st.nextPickedId === core.picked, `stage=${st.nextPickedId} core=${core.picked}`)
+    check('🔴 🔴 **freshnessPassed 가 publisher 의 freshOrdered 와 같다**',
+      st.freshnessPassed.ids.join(',') === core.freshOrdered.map((t) => t.id).join(','),
+      `${st.freshnessPassed.ids.join(',')} vs ${core.freshOrdered.map((t) => t.id).join(',')}`)
+    const reasons = st.holdsByReason.map((h) => h.reason).sort().join(',')
+    check('🔴 🔴 **세 hold 가 닫힌 enum 값으로 각각 구분돼 나온다**',
+      reasons === 'AGE_UNKNOWN,RECOVERY_STALE,TTL_EXPIRED'
+      && st.holdsByReason.every((h) => h.count === h.ids.length && h.count > 0),
+      JSON.stringify(st.holdsByReason.map((h) => `${h.reason}:${h.ids.join('/')}`)))
+    check('🔴 🔴 **hold 된 행은 freshnessPassed 에 들어가지 않는다**',
+      st.holdsByReason.flatMap((h) => h.ids).every((id) => !st.freshnessPassed.ids.includes(id)),
+      `hold=${st.holdsByReason.flatMap((h) => h.ids).join(',')} fresh=${st.freshnessPassed.ids.join(',')}`)
+    check('🔴 🔴 **여섯 수가 서로 다르다 — 단계가 실제로 갈린다**',
+      st.selectorTargets.count < st.queueTotal
+      && st.freshnessPassed.count < st.selectorTargets.count,
+      `queue=${st.queueTotal} selector=${st.selectorTargets.count}`
+      + ` fresh=${st.freshnessPassed.count} assigned=${st.successfullyAssigned.count}`
+      + ` runnable=${st.runnableNow.count} picked=${st.nextPickedId}`)
+    check('🔴 🔴 **임의 decidedBy 는 사람 검토로 세지 않는다**',
+      loaded.humanReviewed === qrows.filter((r) => r.decidedBy === 'founder').length
+      && loaded.humanReviewed
+        < qrows.filter((r) => !String(r.decidedBy).startsWith('machine:')).length,
+      `humanReviewed=${loaded.humanReviewed}`)
+    check('🔴 Persona 생활사 값이 조립에 실린다',
+      (loaded.personas[0] as Record<string, unknown>)?.voiceLength === '중간'
+      && (loaded.personas[0] as Record<string, unknown>)?.menopauseStatus === '진행중')
+  }
+
+  /** ── ⓑ fresh 한데 Persona 가 없어 배정이 불가능한 경우 ── */
+  {
+    const qrows = [qrow({ id: 'x-fresh', persona: null, captured: fresh })]
+    const loaded = await loadPublishableStock(fakeOf(qrows, []), RUN_AT)
+    const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
+    const core = publisherCore(loaded)
+    check('🔴 🔴 **fresh 하지만 배정 불가면 successfullyAssigned 에 들어가지 않는다**',
+      st.freshnessPassed.count >= 0 && st.successfullyAssigned.count === 0,
+      `fresh=${st.freshnessPassed.count} assigned=${st.successfullyAssigned.count}`)
+    check('🔴 🔴 **그때 runnableNow 도 0 이고 nextPickedId 는 null 이다**',
+      st.runnableNow.count === 0 && st.nextPickedId === null && core.picked === null,
+      `runnable=${st.runnableNow.count} picked=${st.nextPickedId} core=${core.picked}`)
+    check('🔴 🔴 **assigned=null 인 assignment 를 배정 성공으로 세지 않는다**',
+      !st.successfullyAssigned.ids.includes('x-fresh'), st.successfullyAssigned.ids.join(','))
+  }
+
+  /** ── ⓓ 질의 순서와 발행 순서가 실제로 갈리는 경우 ── */
+  {
+    // 🔴 DB 질의 순서는 비복구 먼저지만, 발행은 **복구 행이 먼저**다(priorityTierOf).
+    //    정렬을 지우면 이 fixture 에서 답이 바뀐다 — 그래서 여기서만 변이가 잡힌다.
+    const qrows = [
+      qrow({ id: 'n-plain', persona: null, captured: fresh }),
+      qrow({ id: 'r-recovery', persona: 'p2', captured: fresh }),
+    ]
+    const loaded = await loadPublishableStock(
+      fakeOf(qrows, [prow('P01', 'p1'), prow('P02', 'p2')]), RUN_AT)
+    const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
+    const core = publisherCore(loaded)
+    check('🔴 🔴 **질의 순서와 발행 순서가 다르다 — 복구 행이 앞선다**',
+      st.selectorTargets.ids.join(',') === 'n-plain,r-recovery'
+      && st.freshnessPassed.ids.join(',') === 'r-recovery,n-plain',
+      `selector=${st.selectorTargets.ids.join(',')} fresh=${st.freshnessPassed.ids.join(',')}`)
+    check('🔴 🔴 **그 순서로 publisher 와 같은 한 건을 고른다**',
+      st.nextPickedId === 'r-recovery' && core.picked === 'r-recovery'
+      && st.runnableNow.ids.join(',') === 'r-recovery,n-plain',
+      `stage=${st.nextPickedId} core=${core.picked} runnable=${st.runnableNow.ids.join(',')}`)
+  }
+
+  /** ── ⓒ broken recovery 하나 때문에 전체가 중단되는 경우 ── */
+  {
+    // 🔴 배정된 persona 가 목록에 없다 → recoveryProblem 이 생긴다
+    const qrows = [
+      qrow({ id: 'r-broken', persona: 'ghost', captured: fresh }),
+      qrow({ id: 'r-ok', persona: 'p1', captured: fresh }),
+    ]
+    const loaded = await loadPublishableStock(fakeOf(qrows, [prow('P01', 'p1')]), RUN_AT)
+    const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
+    const core = publisherCore(loaded)
+    check('🔴 🔴 **배정이 깨진 행을 값으로 낸다**',
+      st.brokenRecovery.length === core.broken.length && st.brokenRecovery.length > 0,
+      `${JSON.stringify(st.brokenRecovery)} vs ${JSON.stringify(core.broken)}`)
+    check('🔴 🔴 **하나만 깨져도 runnableNow 는 0 이다 — publisher 는 전체 중단한다**',
+      st.runnableNow.count === 0 && st.nextPickedId === null,
+      `runnable=${st.runnableNow.count} picked=${st.nextPickedId}`)
+    check('🔴 그때도 publisher core 와 같은 답이다',
+      st.nextPickedId === core.picked)
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
