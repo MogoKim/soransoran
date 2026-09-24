@@ -198,6 +198,12 @@ async function main(): Promise<void> {
       sustainedRelease: ok(sustained) ? sustained : 'd1',
       authorizedCapacityCeiling: ok(ceiling) ? ceiling : 'd1',
       verdicts, daily,
+      /**
+       * 🔴 **전날 결정을 이 명령은 읽지 않는다** (저장 모델이 아직 없다 · migration 0).
+       *    그래서 `null` 이고, 그 결과 **시험은 열리지 않는다**(fail-closed).
+       *    🔴 이것이 정상 동작이다 — 기반을 아무도 판단하지 않았는데 단계를 올리지 않는다.
+       */
+      previousDecision: null,
       // 🔴 `judgePromotion` 입력을 이 명령이 재지 않는다 — 재지 않은 것을 지어내지 않는다
       promotion: null,
       publishedToday, decidedAt: NOW.toISOString(),

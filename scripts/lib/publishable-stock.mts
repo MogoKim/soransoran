@@ -28,7 +28,8 @@ import {
   effectiveWeeklyCap, PROFILES, RELEASE_STAGES,
   type ScaleProfile, type ReleaseStage,
 } from '../../src/lib/scale-profile'
-import { installFromEnv } from '../../src/lib/scale-runtime'
+// 🔴 `installFromEnv` 를 쓰지 않는다 — 그것은 module-global 을 바꾼다(아래 주석)
+import { resolveScale } from '../../src/lib/scale-runtime'
 import { stageVerdicts, simulateStage } from '../../src/lib/scale-readiness'
 import {
   canaryAuthorization, judgeOneDayCanary, slotsLeftToday, windowAuthorization,
@@ -307,8 +308,11 @@ export function stageStock(input: {
 const dailyTargetOf = (st: ReleaseStage): number => PROFILES[st].dailyTarget
 
 export type ResolvedScale = {
-  /** 🔴 readiness·canary·window 를 **넣어** 설치한 결과 — bare env 가 아니다 */
-  scale: ReturnType<typeof installFromEnv>
+  /**
+   * 🔴 readiness·canary·window 를 **넣어 계산한** 결과 — bare env 가 아니다.
+   * 🔴 **계산했을 뿐 설치하지 않았다.** 설치는 publisher 만 한다(`applyScale`).
+   */
+  scale: ReturnType<typeof resolveScale>
   caps: { postsPerWeek: number; minDaysBetween: number }
   dailyCap: number
   readiness: ReturnType<typeof stageVerdicts>
@@ -328,7 +332,13 @@ export type ResolvedScale = {
 
 /**
  * 🔴 **러너가 실제로 쓰는 상한을 만드는 유일한 경로.**
- *    순수 함수다 — DB 도 파일도 네트워크도 모른다. 입력은 이미 읽어 둔 재고와 env 뿐이다.
+ *
+ * 🔴 **정말로 순수하다** (2026-09-24 6차 · 마스터 지적).
+ *    앞판은 "순수 함수다" 라고 적어 두고 `installFromEnv` 를 불렀다 —
+ *    그 함수는 `applyScale` 을 거쳐 **module-global `installed` 를 바꾼다.**
+ *    그래서 probe 를 한 번 돌리거나 fixture 검사를 돌리기만 해도
+ *    그 프로세스의 `activeScale()` 이 조용히 바뀌었다. 계산과 설치를 섞은 것이다.
+ *    🔴 지금은 `resolveScale` 만 쓴다. **설치는 publisher 가 한 번만 한다.**
  */
 export function resolvePublishScale(input: {
   env: Readonly<Record<string, string | undefined>>
@@ -365,7 +375,7 @@ export function resolvePublishScale(input: {
     ? dayFor(windowAuth.stage) : null
   const windowVerdict = windowDay?.verdict ?? null
 
-  const scale = installFromEnv(env as never, {
+  const scale = resolveScale(env as never, {
     readiness,
     canary: { now, verdict: canaryVerdict },
     window: {

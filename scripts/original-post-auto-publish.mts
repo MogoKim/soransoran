@@ -39,7 +39,7 @@ import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
-import { activeScale, describeScale } from '../src/lib/scale-runtime'
+import { activeScale, applyScale, describeScale } from '../src/lib/scale-runtime'
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
 import {
@@ -157,6 +157,14 @@ const axisPublishedToday = stock.publishedToday
  *    **같은 DB 에서 다른 재고·다른 picked** 가 나온다. 그래서 여기서 부른다.
  */
 const resolved = resolvePublishScale({ env: process.env, loaded: stock, now: axisNow })
+/**
+ * 🔴 **설치는 여기 한 곳뿐이다** (2026-09-24 6차 · 마스터 지적).
+ *    `resolvePublishScale` 은 계산만 한다 — module-global 을 건드리지 않는다.
+ *    그래서 probe·검사를 돌려도 `activeScale()` 이 바뀌지 않는다.
+ *    🔴 **실제로 발행하는 이 러너만** 그 결과를 정확히 한 번 설치한다.
+ *    화면·JSON·supply 가 읽는 `activeScale()` 이 지금 회차의 값이 되게 하려는 것이다.
+ */
+applyScale(resolved.scale)
 const readiness = resolved.readiness
 const canaryVerdict = resolved.canaryVerdict
 const windowVerdict = resolved.windowVerdict

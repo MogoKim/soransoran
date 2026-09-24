@@ -30,7 +30,16 @@ import {
 import type { CanaryVerdict } from './release-canary'
 import type { PromotionVerdict } from './d100-capacity'
 
-export const STAGE_DECISION_VERSION = 'stage-decision-v3'
+export const STAGE_DECISION_VERSION = 'stage-decision-v4'
+
+/**
+ * 🔴 **결정을 쓰는 주체는 하나다** — 전용 daily controller 뿐이다.
+ *    `StageDecision.decidedBy` 가 이 값인 행만 기반·소비 대상이 된다.
+ *    🔴 정본을 여기 둔다 — 저장 계약(`stage-decision-store`)이 이것을 가져다 쓴다.
+ *       반대로 두면 `stage-ladder` 가 저장 파일을 import 해 순환이 생긴다.
+ */
+export const DECISION_WRITER = 'controller' as const
+export type DecisionWriter = typeof DECISION_WRITER
 
 export const TRANSITION_STATES = ['SUSTAIN', 'TRIAL', 'PREPARE', 'HOLD'] as const
 export type TransitionState = (typeof TRANSITION_STATES)[number]
@@ -38,6 +47,8 @@ export type TransitionState = (typeof TRANSITION_STATES)[number]
 /** 🔴 왜 막혔나 — 문구가 아니라 코드다 */
 export const BLOCK_CODES = [
   'CEILING', 'PROVENANCE_CURRENT', 'PROVENANCE_NEXT', 'PROVENANCE_STAGE', 'STALE_DAILY',
+  /** 🔴 시험 기반을 **전날 실제 결정**에서 못 가져왔다 (2026-09-24 6차) */
+  'PROVENANCE_PREVIOUS',
 ] as const
 export type BlockCode = (typeof BLOCK_CODES)[number]
 
@@ -54,11 +65,49 @@ export type DatedCanary = {
   builtAt: string
   /**
    * 🔴 **무엇을 기반으로 한 시험인가** (2026-09-24).
-   *    하루 시험은 **지금 기반 단계의 바로 다음 칸**만 열 수 있다 —
+   *    하루 시험은 **기반 단계의 바로 다음 칸**만 열 수 있다 —
    *    d1→d5 나 d3→d10 같은 점프를 허용하면 "하루 시험" 이 승격 우회로가 된다.
+   *
+   * 🔴 **이 값은 주장일 뿐 근거가 아니다** (2026-09-24 6차 · 마스터 지적).
+   *    정본은 **바로 전 KST 날짜의 검증된 StageDecision 의 `release`** 다.
+   *    여기 적힌 값이 그 정본과 다르면 `PROVENANCE_PREVIOUS` 로 막는다 —
+   *    잘못된 전날 결정을 caller 문자열로 우회하지 못하게 한다.
    */
   trialBase: ReleaseStage
 }
+
+/** 🔴 KST 기준 바로 전날 — 문자열 날짜 하나로 정한다 */
+export function previousKstDate(kstDate: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(kstDate)) return null
+  const ms = Date.parse(`${kstDate}T00:00:00Z`)
+  if (!Number.isFinite(ms)) return null
+  return new Date(ms - 864e5).toISOString().slice(0, 10)
+}
+
+/** 🔴 저장 검증이 쓰는 정본 단계 목록 — 저장 파일이 다시 적지 않는다 */
+export const RELEASE_STAGES_FOR_DECISION: readonly string[] = RELEASE_STAGES
+
+/** 🔴 다음 칸 — 여기가 정본이다. 다른 파일이 다시 적지 않는다 */
+export function nextStage(s: ReleaseStage): ReleaseStage | null {
+  const i = RELEASE_STAGES.indexOf(s)
+  return i < 0 || i + 1 >= RELEASE_STAGES.length ? null : RELEASE_STAGES[i + 1]!
+}
+
+/**
+ * 🔴 **왜 그 상태가 됐는가 — 문구가 아니라 구조화된 값이다** (2026-09-24 6차).
+ *    저장된 행을 검증할 때 `reasons` 문자열을 파싱하지 않으려면 이것이 있어야 한다.
+ */
+export type TransitionProvenance =
+  | {
+    kind: 'TRIAL'
+    /** 🔴 전날 결정의 `release` — 이것이 기반의 정본이다 */
+    trialBase: ReleaseStage
+    /** 그 결정의 KST 날짜 — 바로 전날이어야 한다 */
+    previousKstDate: string
+    /** 오늘 시험 대상 — `nextStage(trialBase)` 여야 한다 */
+    target: ReleaseStage
+  }
+  | { kind: 'SUSTAIN'; from: ReleaseStage; to: ReleaseStage }
 
 /** 🔴 ISO 시각의 KST 날짜 — 정본과 같은 경계다 */
 export function kstDateOfIso(iso: string): string | null {
@@ -83,6 +132,13 @@ export type StageInputs = {
   verdicts: readonly StageVerdict[]
   /** 그 KST 날짜의 하루 판정. 없으면 `null` */
   daily: DatedCanary | null
+  /**
+   * 🔴 **바로 전 KST 날짜의 저장된 결정.** 시험 기반(`trialBase`)의 **유일한 정본**이다.
+   *    없으면 시험을 열지 않는다(fail-closed) — 첫 controller 실행일이 그렇다.
+   * 🔴 `sustainedRelease` 와 합치지 않는다. 그쪽은 **지속 승격** 판단용이고,
+   *    이쪽은 **전날 실제로 공개한 단계**다. 둘은 자주 다르다.
+   */
+  previousDecision: StageDecision | null
   /** 정본 `judgePromotion`. 없으면 `null` */
   promotion: PromotionVerdict | null
   publishedToday: number
@@ -105,12 +161,17 @@ export type StageDecision = {
   supply: SupplySignal | null
   decidedAt: string
   contractVersion: typeof STAGE_DECISION_VERSION
+  /** 🔴 누가 썼나 — controller 하나뿐이다. 저장 검증이 이 값을 본다 */
+  decidedBy: string
+  /**
+   * 🔴 **전이 근거 — 구조화된 값이다** (2026-09-24 6차 · 마스터 지적).
+   *    `TRIAL`·`SUSTAIN` 이면 반드시 있어야 하고, 나머지 상태에서는 `null` 이다.
+   *    저장 검증이 이것을 보고 판단한다 — `reasons` 문구를 파싱하지 않는다.
+   */
+  transition: TransitionProvenance | null
 }
 
-const next = (s: ReleaseStage): ReleaseStage | null => {
-  const i = RELEASE_STAGES.indexOf(s)
-  return i < 0 || i + 1 >= RELEASE_STAGES.length ? null : RELEASE_STAGES[i + 1]!
-}
+const next = nextStage
 
 /**
  * 🔴 **판정의 출처를 검증한다** — 외부에서 아무 verdict 나 끼워 넣지 못하게.
@@ -163,26 +224,85 @@ function checkProvenance(input: StageInputs): StageBlock[] {
       })
     }
     /**
-     * 🔴 **시험은 기반 단계의 바로 다음 칸만이다.** d1→d5 · d3→d10 점프를 막는다.
-     *    기반은 지속 공개 단계여야 한다 — 임의 기반을 실어 우회하지 못하게.
+     * 🔴 **시험 기반의 정본은 전날 실제 결정이다** (2026-09-24 6차 · 마스터 지적).
+     *
+     *    앞판은 기반을 `sustainedRelease`(= env 문자열)에서 가져왔다. 그러면
+     *    전날 D3 로 실제 공개한 날에도 env 가 d1 이면 D3→D5 시험이 **막혔다.**
+     *    반대로 env 만 올려 두면 있지도 않은 기반으로 시험이 열렸다.
+     *    🔴 이제 기반은 **바로 전 KST 날짜의 검증된 StageDecision 의 `release`** 뿐이다.
+     *    `sustainedRelease` 는 **지속 승격** 판단에만 남는다 — 두 축을 합치지 않는다.
      */
-    if (d.trialBase !== input.sustainedRelease) {
-      out.push({
-        code: 'PROVENANCE_STAGE',
-        reason: `시험 기반 ${d.trialBase} ≠ 지속 공개 단계 ${input.sustainedRelease}`,
-      })
-    } else {
-      const base = next(d.trialBase)
-      if (base === null || d.stage !== base) {
+    const base = authoritativeTrialBase(input, out)
+    if (base !== null) {
+      /** 🔴 caller 가 적어 온 `trialBase` 는 **주장**이다 — 정본과 다르면 막는다 */
+      if (d.trialBase !== base) {
+        out.push({
+          code: 'PROVENANCE_PREVIOUS',
+          reason: `시험 기반 주장 ${d.trialBase} ≠ 전날 실제 결정의 공개 단계 ${base}`
+            + ' — caller 문자열로 전날 결정을 우회하지 않는다',
+        })
+      }
+      const up = next(base)
+      if (up === null || d.stage !== up) {
         out.push({
           code: 'PROVENANCE_STAGE',
-          reason: `시험 대상 ${d.stage} 가 기반 ${d.trialBase} 의 바로 다음 칸(${base ?? '없음'})이 아니다`
+          reason: `시험 대상 ${d.stage} 가 기반 ${base} 의 바로 다음 칸(${up ?? '없음'})이 아니다`
             + ' — 단계 점프를 하루 시험으로 우회하지 않는다',
         })
       }
     }
   }
   return out
+}
+
+/**
+ * 🔴 **전날 결정에서 시험 기반을 꺼낸다 — 못 꺼내면 `null` 이고 시험은 열리지 않는다.**
+ *
+ *    🔴 **첫 controller 실행일에는 전날 결정이 없다.** 그때 시험을 여는 것은
+ *       "아무도 판단하지 않은 기반" 위에서 단계를 올리는 것이다. 열지 않는다(fail-closed).
+ *       그날은 legacy 경로(`STAGE_CONTROLLER_ENABLED` 가 꺼진 상태)가 그대로 돈다.
+ */
+function authoritativeTrialBase(input: StageInputs, out: StageBlock[]): ReleaseStage | null {
+  const prev = input.previousDecision
+  const want = previousKstDate(input.kstDate)
+  if (want === null) {
+    out.push({ code: 'PROVENANCE_PREVIOUS', reason: `결정 날짜를 읽을 수 없다 — "${input.kstDate}"` })
+    return null
+  }
+  if (prev === null) {
+    out.push({
+      code: 'PROVENANCE_PREVIOUS',
+      reason: `${want} 결정이 없다 — 🔴 시험을 열지 않는다(기반을 아무도 판단하지 않았다)`,
+    })
+    return null
+  }
+  if (prev.kstDate !== want) {
+    out.push({
+      code: 'PROVENANCE_PREVIOUS',
+      reason: `이전 결정 날짜 ${prev.kstDate} ≠ 바로 전날 ${want} — 이틀 전 결정을 기반으로 쓰지 않는다`,
+    })
+    return null
+  }
+  if (prev.contractVersion !== STAGE_DECISION_VERSION) {
+    out.push({
+      code: 'PROVENANCE_PREVIOUS',
+      reason: `이전 결정 계약 판 ${prev.contractVersion} ≠ ${STAGE_DECISION_VERSION}`
+        + ' — 판이 다르면 뜻이 다르다',
+    })
+    return null
+  }
+  if (prev.decidedBy !== DECISION_WRITER) {
+    out.push({
+      code: 'PROVENANCE_PREVIOUS',
+      reason: `이전 결정을 쓴 것이 ${prev.decidedBy} 다 — ${DECISION_WRITER} 가 쓴 행만 기반이 된다`,
+    })
+    return null
+  }
+  if (!(RELEASE_STAGES as readonly string[]).includes(prev.release)) {
+    out.push({ code: 'PROVENANCE_PREVIOUS', reason: `이전 결정의 공개 단계가 정본이 아니다 — ${prev.release}` })
+    return null
+  }
+  return prev.release
 }
 
 /**
@@ -197,6 +317,8 @@ export function planStageDecision(input: StageInputs): StageDecision {
     supply: input.supply ?? null,
     decidedAt: input.decidedAt,
     contractVersion: STAGE_DECISION_VERSION,
+    /** 🔴 이 함수가 만든 결정은 언제나 controller 의 것이다 */
+    decidedBy: DECISION_WRITER as string,
   } as const
   const blocks = checkProvenance(input)
   const reasons: string[] = blocks.map((b) => `🔴 ${b.code}: ${b.reason}`)
@@ -204,20 +326,28 @@ export function planStageDecision(input: StageInputs): StageDecision {
   /** 🔴 출처가 어긋난 판정은 **쓰지 않는다** */
   const promotion = blocks.some((b) => b.code.startsWith('PROVENANCE_C') || b.code === 'PROVENANCE_NEXT')
     ? null : input.promotion
-  const daily = blocks.some((b) => b.code === 'STALE_DAILY' || b.code === 'PROVENANCE_STAGE')
+  /**
+   * 🔴 **`PROVENANCE_PREVIOUS` 도 여기 들어간다** (2026-09-24 6차).
+   *    앞판은 이 코드를 `blocks` 에 적기만 하고 **그 판정을 그대로 썼다** —
+   *    "막았다" 고 기록해 놓고 시험을 연 것이다. 죽은 게이트였다.
+   */
+  const daily = blocks.some((b) =>
+    b.code === 'STALE_DAILY' || b.code === 'PROVENANCE_STAGE' || b.code === 'PROVENANCE_PREVIOUS')
     ? null : input.daily
 
   /** 🔴 새 KST 날짜에 판정이 하나도 없으면 d1 — 빈 값을 근거로 어제를 잇지 않는다 */
   if (input.verdicts.length === 0 && daily === null) {
     return {
       ...base, capacity: SAFEST_STAGE, release: SAFEST_STAGE, state: 'HOLD',
-      dayPinned: false, blocks,
+      dayPinned: false, blocks, transition: null,
       reasons: [...reasons, `🔴 ${input.kstDate} 판정이 하나도 없다 — 가장 안전한 ${SAFEST_STAGE}`],
     }
   }
 
   let release = input.sustainedRelease
   let state: TransitionState = 'HOLD'
+  /** 🔴 전이 근거 — 구조화된 값으로 남긴다. 저장 검증이 문구를 파싱하지 않게 한다 */
+  let transition: TransitionProvenance | null = null
   const up = next(input.sustainedRelease)
 
   if (promotion?.ready === true && up !== null) {
@@ -234,6 +364,7 @@ export function planStageDecision(input: StageInputs): StageDecision {
     } else {
       release = up
       state = 'SUSTAIN'
+      transition = { kind: 'SUSTAIN', from: input.sustainedRelease, to: up }
       reasons.push(`🟢 지속 승격(정본 judgePromotion) — 공개 ${input.sustainedRelease} → ${up}`)
       reasons.push(`🔴 승인 천장 ${ceiling} 는 그대로다 — 자동으로 올라가지 않는다`)
     }
@@ -251,6 +382,12 @@ export function planStageDecision(input: StageInputs): StageDecision {
     } else {
       release = daily.stage
       state = 'TRIAL'
+      /** 🔴 기반은 전날 결정에서 나온 값이다 — caller 주장이 아니다(위에서 대조했다) */
+      transition = {
+        kind: 'TRIAL', trialBase: daily.trialBase,
+        previousKstDate: input.previousDecision?.kstDate ?? '',
+        target: daily.stage,
+      }
       reasons.push(`🟢 오늘 하루 ${daily.stage} 로 낸다(정본 judgeOneDayCanary)`)
       if (promotion !== null && !promotion.currentStable.ready) {
         reasons.push('🔴 지속 승격은 아직이다 — 오늘만이다')
@@ -299,12 +436,13 @@ export function planStageDecision(input: StageInputs): StageDecision {
     })
     reasons.push(`🔴 CEILING: 공개 ${release} > 승인 천장 ${ceiling} — ${ceiling} 로 제한한다`)
     release = ceiling
-    if (state === 'TRIAL' || state === 'SUSTAIN') state = 'HOLD'
+    // 🔴 천장에 걸려 상태가 내려가면 그 전이 근거도 함께 버린다 — 남기면 거짓이 된다
+    if (state === 'TRIAL' || state === 'SUSTAIN') { state = 'HOLD'; transition = null }
   }
   if (state === 'HOLD' && reasons.length === 0) {
     reasons.push(`유지 — ${promotion?.nextAction ?? '판정 근거 없음'}`)
   }
-  return { ...base, release, state, blocks, dayPinned, reasons }
+  return { ...base, release, state, blocks, dayPinned, reasons, transition }
 }
 
 /** 🔴 아무것도 읽지 못했을 때 */
@@ -312,7 +450,7 @@ export function safestDecision(kstDate: string, decidedAt: string): StageDecisio
   return {
     kstDate, capacity: SAFEST_STAGE, release: SAFEST_STAGE, state: 'HOLD',
     dayPinned: false, blocks: [], supply: null, decidedAt,
-    contractVersion: STAGE_DECISION_VERSION,
+    contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER, transition: null,
     reasons: [`🔴 단계 입력을 읽지 못했다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다`],
   }
 }
