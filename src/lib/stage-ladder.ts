@@ -27,30 +27,31 @@ import {
   PROFILES, RELEASE_STAGES, SAFEST_STAGE, safeStageFor, stageRank,
   type ReleaseStage, type StageVerdict,
 } from './scale-profile'
+import {
+  STAGE_DECISION_VERSION, DECISION_WRITER, TRANSITION_STATES, BLOCK_CODES,
+  SUPPLY_EXCLUDE_REASONS, previousKstDate, nextStage, kstDateOfIso, isCalendarDate,
+  validateStoredDecision,
+  type DecisionWriter, type TransitionState, type BlockCode, type StageBlock,
+  type SupplySignal, type TransitionProvenance, type StageDecision,
+  type ValidatedStageDecision, type ValidateResult,
+} from './stage-decision-contract'
 import type { CanaryVerdict } from './release-canary'
 import type { PromotionVerdict } from './d100-capacity'
 
-export const STAGE_DECISION_VERSION = 'stage-decision-v4'
-
 /**
- * 🔴 **결정을 쓰는 주체는 하나다** — 전용 daily controller 뿐이다.
- *    `StageDecision.decidedBy` 가 이 값인 행만 기반·소비 대상이 된다.
- *    🔴 정본을 여기 둔다 — 저장 계약(`stage-decision-store`)이 이것을 가져다 쓴다.
- *       반대로 두면 `stage-ladder` 가 저장 파일을 import 해 순환이 생긴다.
+ * 🔴 **계약 정의는 `stage-decision-contract` 하나다** (2026-09-24 7차).
+ *    여기서 다시 적으면 두 벌이 되고, 갈라진 순간부터 한쪽만 고쳐진다.
+ *    호출부 호환을 위해 그대로 재수출한다.
  */
-export const DECISION_WRITER = 'controller' as const
-export type DecisionWriter = typeof DECISION_WRITER
-
-export const TRANSITION_STATES = ['SUSTAIN', 'TRIAL', 'PREPARE', 'HOLD'] as const
-export type TransitionState = (typeof TRANSITION_STATES)[number]
-
-/** 🔴 왜 막혔나 — 문구가 아니라 코드다 */
-export const BLOCK_CODES = [
-  'CEILING', 'PROVENANCE_CURRENT', 'PROVENANCE_NEXT', 'PROVENANCE_STAGE', 'STALE_DAILY',
-  /** 🔴 시험 기반을 **전날 실제 결정**에서 못 가져왔다 (2026-09-24 6차) */
-  'PROVENANCE_PREVIOUS',
-] as const
-export type BlockCode = (typeof BLOCK_CODES)[number]
+export {
+  STAGE_DECISION_VERSION, DECISION_WRITER, TRANSITION_STATES, BLOCK_CODES,
+  SUPPLY_EXCLUDE_REASONS, previousKstDate, nextStage, kstDateOfIso, isCalendarDate,
+  validateStoredDecision,
+}
+export type {
+  DecisionWriter, TransitionState, BlockCode, StageBlock, SupplySignal,
+  TransitionProvenance, StageDecision, ValidatedStageDecision, ValidateResult,
+}
 
 /**
  * 🔴 **하루 판정에 날짜와 대상 단계를 붙인다.** `CanaryVerdict` 자체에는 날짜가 없어서
@@ -64,111 +65,38 @@ export type DatedCanary = {
   /** assembler 가 쓴 시각 — 같은 회차·같은 KST 날짜에서 나왔는지 본다 */
   builtAt: string
   /**
-   * 🔴 **무엇을 기반으로 한 시험인가** (2026-09-24).
-   *    하루 시험은 **기반 단계의 바로 다음 칸**만 열 수 있다 —
-   *    d1→d5 나 d3→d10 같은 점프를 허용하면 "하루 시험" 이 승격 우회로가 된다.
-   *
-   * 🔴 **이 값은 주장일 뿐 근거가 아니다** (2026-09-24 6차 · 마스터 지적).
-   *    정본은 **바로 전 KST 날짜의 검증된 StageDecision 의 `release`** 다.
-   *    여기 적힌 값이 그 정본과 다르면 `PROVENANCE_PREVIOUS` 로 막는다 —
-   *    잘못된 전날 결정을 caller 문자열로 우회하지 못하게 한다.
+   * 🔴 **이 값은 주장일 뿐 근거가 아니다.** 정본은 **바로 전 KST 날짜의 검증된
+   *    StageDecision 의 `release`** 다. 다르면 `PROVENANCE_PREVIOUS` 로 막는다.
    */
   trialBase: ReleaseStage
-}
-
-/** 🔴 KST 기준 바로 전날 — 문자열 날짜 하나로 정한다 */
-export function previousKstDate(kstDate: string): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(kstDate)) return null
-  const ms = Date.parse(`${kstDate}T00:00:00Z`)
-  if (!Number.isFinite(ms)) return null
-  return new Date(ms - 864e5).toISOString().slice(0, 10)
-}
-
-/** 🔴 저장 검증이 쓰는 정본 단계 목록 — 저장 파일이 다시 적지 않는다 */
-export const RELEASE_STAGES_FOR_DECISION: readonly string[] = RELEASE_STAGES
-
-/** 🔴 다음 칸 — 여기가 정본이다. 다른 파일이 다시 적지 않는다 */
-export function nextStage(s: ReleaseStage): ReleaseStage | null {
-  const i = RELEASE_STAGES.indexOf(s)
-  return i < 0 || i + 1 >= RELEASE_STAGES.length ? null : RELEASE_STAGES[i + 1]!
-}
-
-/**
- * 🔴 **왜 그 상태가 됐는가 — 문구가 아니라 구조화된 값이다** (2026-09-24 6차).
- *    저장된 행을 검증할 때 `reasons` 문자열을 파싱하지 않으려면 이것이 있어야 한다.
- */
-export type TransitionProvenance =
-  | {
-    kind: 'TRIAL'
-    /** 🔴 전날 결정의 `release` — 이것이 기반의 정본이다 */
-    trialBase: ReleaseStage
-    /** 그 결정의 KST 날짜 — 바로 전날이어야 한다 */
-    previousKstDate: string
-    /** 오늘 시험 대상 — `nextStage(trialBase)` 여야 한다 */
-    target: ReleaseStage
-  }
-  | { kind: 'SUSTAIN'; from: ReleaseStage; to: ReleaseStage }
-
-/** 🔴 ISO 시각의 KST 날짜 — 정본과 같은 경계다 */
-export function kstDateOfIso(iso: string): string | null {
-  const ms = Date.parse(iso)
-  if (!Number.isFinite(ms)) return null
-  return new Date(ms + 9 * 3600_000).toISOString().slice(0, 10)
-}
-
-/** 🔴 보고용 신호 — 결정에 쓰지 않는다 */
-export type SupplySignal = {
-  eligibleSpeakers: number
-  excluded: { reason: 'noOpenDay' | 'holdingStock'; codes: string[] }[]
 }
 
 export type StageInputs = {
   kstDate: string
   /** 지속 운영으로 확정된 공개 단계 */
   sustainedRelease: ReleaseStage
-  /** 🔴 **승인된 내부 생산·비용 천장.** 이 판정이 올리지 않는다 */
+  /** 🔴 사람이 승인한 천장 — 이 판정이 올리지 않는다 */
   authorizedCapacityCeiling: ReleaseStage
-  /** 정본 `stageVerdicts` — 14일 지속 readiness */
   verdicts: readonly StageVerdict[]
   /** 그 KST 날짜의 하루 판정. 없으면 `null` */
   daily: DatedCanary | null
   /**
-   * 🔴 **바로 전 KST 날짜의 저장된 결정.** 시험 기반(`trialBase`)의 **유일한 정본**이다.
-   *    없으면 시험을 열지 않는다(fail-closed) — 첫 controller 실행일이 그렇다.
-   * 🔴 `sustainedRelease` 와 합치지 않는다. 그쪽은 **지속 승격** 판단용이고,
-   *    이쪽은 **전날 실제로 공개한 단계**다. 둘은 자주 다르다.
+   * 🔴 **바로 전 KST 날짜의 저장된 결정 — `ValidatedStageDecision` 만 받는다.**
+   *
+   *    앞판은 raw `StageDecision` 을 받았고, 사다리는 날짜·판·writer·release **넷만**
+   *    봤다. 그래서 아래 행이 기반으로 통과했다(2026-09-24 7차 실측):
+   *    `capacity=d1 · release=d3 · decidedAt=2020-01-01` → `TRIAL d5 · blocks=[]`.
+   *    🔴 이제 `validateStoredDecision` 을 지나지 않은 값은 **타입이 막는다.**
+   *    검증 로직을 여기 복제하지 않고 게이트를 하나로 만든 것이다.
+   *
+   * 🔴 `sustainedRelease` 와 합치지 않는다 — 그쪽은 **지속 승격** 판단용이다.
    */
-  previousDecision: StageDecision | null
+  previousDecision: ValidatedStageDecision | null
   /** 정본 `judgePromotion`. 없으면 `null` */
   promotion: PromotionVerdict | null
   publishedToday: number
   supply?: SupplySignal
   decidedAt: string
-}
-
-export type StageBlock = { code: BlockCode; reason: string }
-
-export type StageDecision = {
-  kstDate: string
-  /** 🔴 승인 천장 그대로 — 이 판정은 올리지 않는다 */
-  capacity: ReleaseStage
-  release: ReleaseStage
-  state: TransitionState
-  reasons: string[]
-  /** 🔴 막힌 것 — 코드로 분기한다 */
-  blocks: StageBlock[]
-  dayPinned: boolean
-  supply: SupplySignal | null
-  decidedAt: string
-  contractVersion: typeof STAGE_DECISION_VERSION
-  /** 🔴 누가 썼나 — controller 하나뿐이다. 저장 검증이 이 값을 본다 */
-  decidedBy: string
-  /**
-   * 🔴 **전이 근거 — 구조화된 값이다** (2026-09-24 6차 · 마스터 지적).
-   *    `TRIAL`·`SUSTAIN` 이면 반드시 있어야 하고, 나머지 상태에서는 `null` 이다.
-   *    저장 검증이 이것을 보고 판단한다 — `reasons` 문구를 파싱하지 않는다.
-   */
-  transition: TransitionProvenance | null
 }
 
 const next = nextStage
@@ -266,7 +194,7 @@ function authoritativeTrialBase(input: StageInputs, out: StageBlock[]): ReleaseS
   const prev = input.previousDecision
   const want = previousKstDate(input.kstDate)
   if (want === null) {
-    out.push({ code: 'PROVENANCE_PREVIOUS', reason: `결정 날짜를 읽을 수 없다 — "${input.kstDate}"` })
+    out.push({ code: 'PROVENANCE_PREVIOUS', reason: `결정 날짜가 달력에 없다 — "${input.kstDate}"` })
     return null
   }
   if (prev === null) {
@@ -276,30 +204,18 @@ function authoritativeTrialBase(input: StageInputs, out: StageBlock[]): ReleaseS
     })
     return null
   }
+  /**
+   * 🔴 **계약·writer·enum·불변식은 여기서 다시 보지 않는다.**
+   *    `prev` 는 `ValidatedStageDecision` 이다 — `validateStoredDecision` 을 지나야만
+   *    그 타입이 된다. 여기서 같은 검사를 또 적으면 **두 벌**이 되고, 갈라진 순간부터
+   *    한쪽만 고쳐진다. 이 함수가 묻는 것은 **저장 검증이 알 수 없는 것 하나**뿐이다:
+   *    "그 행이 **오늘의** 직전 날짜인가."
+   */
   if (prev.kstDate !== want) {
     out.push({
       code: 'PROVENANCE_PREVIOUS',
       reason: `이전 결정 날짜 ${prev.kstDate} ≠ 바로 전날 ${want} — 이틀 전 결정을 기반으로 쓰지 않는다`,
     })
-    return null
-  }
-  if (prev.contractVersion !== STAGE_DECISION_VERSION) {
-    out.push({
-      code: 'PROVENANCE_PREVIOUS',
-      reason: `이전 결정 계약 판 ${prev.contractVersion} ≠ ${STAGE_DECISION_VERSION}`
-        + ' — 판이 다르면 뜻이 다르다',
-    })
-    return null
-  }
-  if (prev.decidedBy !== DECISION_WRITER) {
-    out.push({
-      code: 'PROVENANCE_PREVIOUS',
-      reason: `이전 결정을 쓴 것이 ${prev.decidedBy} 다 — ${DECISION_WRITER} 가 쓴 행만 기반이 된다`,
-    })
-    return null
-  }
-  if (!(RELEASE_STAGES as readonly string[]).includes(prev.release)) {
-    out.push({ code: 'PROVENANCE_PREVIOUS', reason: `이전 결정의 공개 단계가 정본이 아니다 — ${prev.release}` })
     return null
   }
   return prev.release

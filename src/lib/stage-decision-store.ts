@@ -12,14 +12,19 @@
  *    바뀌면 아침에 d5 로 낸 글이 낮의 d3 결정 아래에서 상한 초과가 된다.
  *    그래서 갱신·덮어쓰기가 없다 — `ensureStageDecision` 은 **만들거나 읽거나** 둘뿐이다.
  */
+/**
+ * 🔴 **검증은 계약 정본 한 벌뿐이다** (2026-09-24 7차).
+ *    앞판은 이 파일이 validator 를 들고 있었다 — 그래서 `stage-ladder` 가 그것을
+ *    부를 수 없었고(순환 import), 사다리는 자기만의 얕은 검사를 따로 했다.
+ *    지금은 양쪽이 `stage-decision-contract` 를 향한다.
+ */
 import {
-  DECISION_WRITER, STAGE_DECISION_VERSION, RELEASE_STAGES_FOR_DECISION,
-  TRANSITION_STATES, nextStage, kstDateOfIso,
-  type StageDecision, type DecisionWriter,
-} from './stage-ladder'
+  DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision,
+  type StageDecision, type ValidatedStageDecision, type ValidateResult, type DecisionWriter,
+} from './stage-decision-contract'
 
-export { DECISION_WRITER }
-export type { DecisionWriter }
+export { DECISION_WRITER, STAGE_DECISION_VERSION, validateStoredDecision }
+export type { DecisionWriter, ValidatedStageDecision, ValidateResult }
 
 /**
  * 🔴 **writer 는 하나다** (2026-09-24 마스터 지적 · first-writer 구조 폐기).
@@ -47,19 +52,23 @@ export function controllerEnabled(env: Readonly<Record<string, string | undefine
 }
 
 /**
- * 🔴 **유일키는 (KST 날짜 + 계약 판)** 이다.
- *    계약 판이 바뀌면 그날의 옛 결정을 재사용하지 않는다 — 판이 다르면 뜻이 다르다.
+ * 🔴 **유일키는 KST 날짜 하나다** (2026-09-24 7차 · 마스터 지적).
+ *
+ *    앞판은 `(kstDate, contractVersion)` 이었다. 그러면 **같은 날 판을 올리는 순간
+ *    두 번째 행이 만들어진다** — 하루 결정이 둘이 되고, 아침에 옛 판으로 낸 글과
+ *    낮에 새 판으로 낸 글이 서로 다른 상한 아래 놓인다. immutable 이 깨지는 것이다.
+ *    🔴 하루에 결정은 하나다. 같은 날 판이 달라지면 **두 번째 행을 만들지 않고**
+ *    fail-closed(`BROKEN`) 로 간다 — 그러면 consumer 는 legacy/가장 안전한 단계로 간다.
  */
-export type DecisionKey = { kstDate: string; contractVersion: string }
+export type DecisionKey = { kstDate: string }
 
-export const decisionKeyOf = (d: StageDecision): DecisionKey =>
-  ({ kstDate: d.kstDate, contractVersion: d.contractVersion })
+export const decisionKeyOf = (d: StageDecision): DecisionKey => ({ kstDate: d.kstDate })
 
 export type EnsureOutcome =
   /** controller 가 그날 결정을 만들었다 */
-  | { ok: true; decision: StageDecision; created: true; by: DecisionWriter }
+  | { ok: true; decision: ValidatedStageDecision; created: true; by: DecisionWriter }
   /** 이미 있어서 읽었다 — 🔴 다시 계산하지도 덮지도 않는다 */
-  | { ok: true; decision: StageDecision; created: false; by: DecisionWriter }
+  | { ok: true; decision: ValidatedStageDecision; created: false; by: DecisionWriter }
   /**
    * 🔴 **만들지도 읽지도 못했다.** 부르는 쪽은 **기존 경로 또는 가장 안전한 단계**로 간다 —
    *    "모른다" 를 "어제 값" 으로 채우지 않는다.
@@ -74,7 +83,7 @@ export type EnsureOutcome =
  *    양이 나간다. 기존 env/canary 경로로 가거나 가장 안전한 단계로 간다.
  */
 export type ConsumeOutcome =
-  | { ok: true; decision: StageDecision }
+  | { ok: true; decision: ValidatedStageDecision }
   | { ok: false; code: 'NO_DECISION' | 'BROKEN'; reason: string; fallback: 'legacy' | 'safest' }
 
 export async function consumeStageDecision(io: {
@@ -106,125 +115,6 @@ export async function consumeStageDecision(io: {
   }
   // 🔴 검증을 통과한 값만 나간다 — 읽은 원본을 그대로 흘리지 않는다
   return { ok: true, decision: v.decision }
-}
-
-/**
- * 🔴 **저장된 행 검증 — 입력은 `unknown` 이다** (2026-09-24 6차 · 마스터 지적).
- *
- *    앞판은 `row: StageDecision` 을 받았다. 그 타입은 **저장소에서 읽은 값에 대한
- *    약속이 아니라 희망**이다 — JSON 칼럼이 깨졌거나 판이 다른 행을 읽으면
- *    `r.decidedAt.trim()` 에서 그대로 **throw** 했고, consumer 가 죽었다.
- *    🔴 이 함수는 어떤 입력에도 던지지 않는다. 모르는 것은 전부 `ok:false` 다.
- *
- * 🔴 **문구를 파싱해 상태를 검증하지 않는다.** `state` 는 구조화된
- *    `transition` 값과 대조한다(`TRIAL` → `release === nextStage(trialBase)`).
- */
-export type ValidateResult = { ok: true; decision: StageDecision } | { ok: false; reason: string }
-
-const isRec = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v)
-const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
-const rank = (s: string): number => RELEASE_STAGES_FOR_DECISION.indexOf(s)
-
-export function validateStoredDecision(input: {
-  row: unknown
-  expectKstDate: string
-  expectContractVersion: string
-  allowedStages?: readonly string[]
-  allowedStates?: readonly string[]
-}): ValidateResult {
-  const stages = input.allowedStages ?? RELEASE_STAGES_FOR_DECISION
-  const states = input.allowedStates ?? (TRANSITION_STATES as readonly string[])
-  const no = (reason: string): ValidateResult => ({ ok: false, reason })
-
-  if (!isRec(input.row)) return no(`행이 객체가 아니다 — ${typeof input.row}`)
-  const r = input.row
-
-  const contractVersion = str(r.contractVersion)
-  if (contractVersion !== input.expectContractVersion) {
-    return no(`계약 판 ${String(r.contractVersion)} ≠ ${input.expectContractVersion}`)
-  }
-  const kstDate = str(r.kstDate)
-  if (kstDate === null || !/^\d{4}-\d{2}-\d{2}$/.test(kstDate)) {
-    return no(`날짜 형식이 아니다 — ${String(r.kstDate)}`)
-  }
-  if (kstDate !== input.expectKstDate) return no(`날짜 ${kstDate} ≠ ${input.expectKstDate}`)
-
-  const decidedAt = str(r.decidedAt)
-  if (decidedAt === null || decidedAt.trim() === '' || !Number.isFinite(Date.parse(decidedAt))) {
-    return no(`결정 시각을 읽을 수 없다 — ${String(r.decidedAt)}`)
-  }
-  /** 🔴 라벨과 실제 시각이 어긋난 행을 받지 않는다 — 날짜 칸만 고쳐 넣는 것을 막는다 */
-  const decidedDate = kstDateOfIso(decidedAt)
-  if (decidedDate !== kstDate) {
-    return no(`decidedAt 의 KST 날짜 ${String(decidedDate)} ≠ kstDate ${kstDate}`)
-  }
-  if (str(r.decidedBy) !== DECISION_WRITER) {
-    return no(`쓴 것이 ${String(r.decidedBy)} 다 — ${DECISION_WRITER} 만 쓴다`)
-  }
-
-  const capacity = str(r.capacity)
-  const release = str(r.release)
-  if (capacity === null || !stages.includes(capacity)) return no(`모르는 천장 — ${String(r.capacity)}`)
-  if (release === null || !stages.includes(release)) return no(`모르는 공개 단계 — ${String(r.release)}`)
-  /** 🔴 공개가 승인 천장을 넘은 행은 쓰지 않는다 — 승인되지 않은 양이 나간다 */
-  if (rank(release) > rank(capacity)) {
-    return no(`공개 ${release} 가 승인 천장 ${capacity} 를 넘는다`)
-  }
-
-  const state = str(r.state)
-  if (state === null || !states.includes(state)) return no(`모르는 상태 — ${String(r.state)}`)
-
-  if (!Array.isArray(r.reasons) || r.reasons.some((x) => typeof x !== 'string')) {
-    return no('reasons 모양이 깨졌다 — 문자열 배열이어야 한다')
-  }
-  if (!Array.isArray(r.blocks)
-    || r.blocks.some((b) => !isRec(b) || typeof b.code !== 'string' || typeof b.reason !== 'string')) {
-    return no('blocks 모양이 깨졌다 — {code, reason} 배열이어야 한다')
-  }
-  if (typeof r.dayPinned !== 'boolean') return no(`dayPinned 가 boolean 이 아니다 — ${typeof r.dayPinned}`)
-  if (r.supply !== null && r.supply !== undefined) {
-    const sp = r.supply
-    if (!isRec(sp) || typeof sp.eligibleSpeakers !== 'number' || !Array.isArray(sp.excluded)) {
-      return no('supply 모양이 깨졌다 — {eligibleSpeakers, excluded[]} 이거나 null 이어야 한다')
-    }
-  }
-
-  /** ── 🔴 상태와 전이 근거의 대조 — **문구가 아니라 구조화된 값** ── */
-  const t = r.transition
-  if (state === 'TRIAL') {
-    if (!isRec(t) || t.kind !== 'TRIAL') return no('TRIAL 인데 구조화된 시험 근거가 없다')
-    const base = str(t.trialBase)
-    const target = str(t.target)
-    const prevDate = str(t.previousKstDate)
-    if (base === null || !stages.includes(base)) return no(`시험 기반이 정본이 아니다 — ${String(t.trialBase)}`)
-    if (prevDate === null || !/^\d{4}-\d{2}-\d{2}$/.test(prevDate)) {
-      return no(`시험 근거의 이전 결정 날짜가 없다 — ${String(t.previousKstDate)}`)
-    }
-    const up = nextStage(base as never)
-    if (up === null || release !== up) {
-      return no(`TRIAL 공개 ${release} 가 기반 ${base} 의 바로 다음 칸(${String(up)})이 아니다`)
-    }
-    if (target !== release) return no(`시험 대상 ${String(target)} ≠ 공개 ${release}`)
-  } else if (state === 'SUSTAIN') {
-    if (!isRec(t) || t.kind !== 'SUSTAIN') return no('SUSTAIN 인데 구조화된 승격 근거가 없다')
-    const from = str(t.from)
-    const to = str(t.to)
-    if (from === null || !stages.includes(from)) return no(`승격 출발이 정본이 아니다 — ${String(t.from)}`)
-    if (to === null || to !== release) return no(`승격 도착 ${String(t.to)} ≠ 공개 ${release}`)
-    const up = nextStage(from as never)
-    if (up === null || to !== up) return no(`승격 ${from}→${to} 가 바로 다음 칸(${String(up)})이 아니다`)
-  } else {
-    if (t !== null && t !== undefined) return no(`${state} 인데 전이 근거가 붙어 있다`)
-    /**
-     * 🔴 **PREPARE 는 천장이 공개보다 높다는 뜻이다.** 같거나 낮으면 그 상태일 수 없다 —
-     *    쌓을 다음 칸이 없는데 "쌓는 중" 이라고 적힌 행이다.
-     */
-    if (state === 'PREPARE' && rank(capacity) <= rank(release)) {
-      return no(`PREPARE 인데 천장 ${capacity} 가 공개 ${release} 보다 높지 않다`)
-    }
-  }
-  return { ok: true, decision: r as unknown as StageDecision }
 }
 
 /**
@@ -297,28 +187,83 @@ export async function ensureStageDecision(io: {
 }
 
 /**
- * 🔴 **제안하는 최소 모델** (구현 전 · migration 없음)
+ * 🔴 **제안하는 모델** (구현 전 · migration 없음 · 2026-09-24 7차 보완)
+ *
+ *   🔴 **validator 가 요구하는 값을 손실 없이 담는다.** 앞판 제안에는
+ *      `dayPinned`·`supply`·`transition` 칸이 없었다 — 그 모델로 저장하면
+ *      다시 읽을 때 `validateStoredDecision` 이 **전부 거절**한다.
+ *      저장할 수 없는 계약은 계약이 아니다.
  *
  * ```prisma
  * model StageDecision {
- *   kstDate         String
+ *   /// 🔴 유일키다 — 하루에 결정은 하나뿐이다
+ *   kstDate         String   @id
  *   contractVersion String
- *   capacity        String   // 승인 천장 그대로
- *   release         String
+ *   capacity        String   // 승인 천장 그대로 (d1|d3|d5|d10)
+ *   release         String   // 🔴 release rank <= capacity rank
  *   state           String   // SUSTAIN|TRIAL|PREPARE|HOLD
- *   reasons         Json
- *   blocks          Json
- *   decidedBy       String   // 🔴 언제나 'controller' — 러너는 쓰지 않는다
- *   decidedAt       DateTime
+ *   reasons         Json     // string[]
+ *   blocks          Json     // { code: BlockCode, reason: string }[]
+ *   /// 🔴 그날 단계를 고정했는가 — 없으면 읽을 때 검증이 막힌다
+ *   dayPinned       Boolean
+ *   /// 🔴 { eligibleSpeakers: number, excluded: {reason, codes[]}[] } | null
+ *   supply          Json?
+ *   /// 🔴 전이 근거 — TRIAL/SUSTAIN 이면 필수, 나머지는 null
+ *   /// { kind:'TRIAL', trialBase, previousKstDate, target } | { kind:'SUSTAIN', from, to }
+ *   transition      Json?
+ *   decidedBy       String   // 🔴 언제나 'controller'
+ *   decidedAt       DateTime // 🔴 그 KST 날짜 안이어야 한다
  *   createdAt       DateTime @default(now())
- *   @@unique([kstDate, contractVersion])
  * }
  * ```
+ *
+ * 🔴 **유일키가 `@@unique([kstDate, contractVersion])` 이 아니다.**
+ *    그 키는 **같은 날 판을 올리면 두 번째 행**을 허용한다. 그러면 하루 결정이 둘이 되고,
+ *    아침에 옛 판으로 낸 글과 낮에 새 판으로 낸 글이 서로 다른 상한 아래 놓인다.
+ *    🔴 `kstDate` 를 기본키로 둬 **KST 날짜당 하나**를 DB 가 강제한다.
+ *    같은 날 판이 달라지면 두 번째 행을 만들지 않는다 — 읽은 행의 판이 현재 판과
+ *    다르므로 `validateStoredDecision` 이 거절하고, `ensureStageDecision` 은 `BROKEN`,
+ *    consumer 는 legacy 또는 가장 안전한 단계로 간다(fail-closed).
+ *
+ * 🔴 **JSON 왕복이 검증을 통과해야 한다.** `decidedAt` 은 DateTime 이므로 읽을 때
+ *    `toISOString()` 으로 되돌린다 — 그 문자열의 KST 날짜가 `kstDate` 와 같아야 한다.
+ *
  * 🔴 **갱신 칼럼이 없다.** immutable 이므로 `revision` 도 `updatedAt` 도 두지 않는다 —
  *    두면 누군가 갱신할 수 있게 되고, 그 순간 하루 결정이 흔들린다.
- * 🔴 **보존 기간 규칙을 두지 않는다.** 지울 근거가 아직 없다 —
- *    근거 없는 삭제 규칙은 나중에 이력을 잃는 쪽으로만 작동한다.
- * 🔴 **rollback 은 `STAGE_CONTROLLER_ENABLED=off`** 다. 그러면 두 러너가
- *    기존 env/canary 경로로 그대로 돌아간다 — 행을 지우거나 판을 되돌리지 않는다.
+ * 🔴 **보존 기간 규칙을 두지 않는다.** 지울 근거가 아직 없다.
+ * 🔴 **rollback 은 `STAGE_CONTROLLER_ENABLED=off`** 다 — 행을 지우거나 판을 되돌리지 않는다.
  */
 export const PROPOSED_MODEL_NAME = 'StageDecision'
+
+/**
+ * 🔴 **저장 ↔ 검증 왕복.** 모델이 값을 잃지 않는지 코드로 고정한다 —
+ *    주석으로만 적으면 칸 하나가 빠져도 아무도 모른다.
+ */
+export const STORED_COLUMNS = [
+  'kstDate', 'contractVersion', 'capacity', 'release', 'state',
+  'reasons', 'blocks', 'dayPinned', 'supply', 'transition', 'decidedBy', 'decidedAt',
+] as const
+
+/** 🔴 DB 행 모양 → 검증 입력. `decidedAt` 은 DateTime 이라 되돌려 찍는다 */
+export function rowToDecisionInput(row: {
+  kstDate: string; contractVersion: string; capacity: string; release: string; state: string
+  reasons: unknown; blocks: unknown; dayPinned: boolean; supply: unknown; transition: unknown
+  decidedBy: string; decidedAt: Date
+}): unknown {
+  return { ...row, decidedAt: row.decidedAt.toISOString() }
+}
+
+/** 🔴 결정 → DB 행 모양. 칸이 빠지면 왕복 검사가 빨개진다 */
+export function decisionToRow(d: StageDecision): {
+  kstDate: string; contractVersion: string; capacity: string; release: string; state: string
+  reasons: unknown; blocks: unknown; dayPinned: boolean; supply: unknown; transition: unknown
+  decidedBy: string; decidedAt: Date
+} {
+  return {
+    kstDate: d.kstDate, contractVersion: d.contractVersion,
+    capacity: d.capacity, release: d.release, state: d.state,
+    reasons: d.reasons, blocks: d.blocks, dayPinned: d.dayPinned,
+    supply: d.supply, transition: d.transition,
+    decidedBy: d.decidedBy, decidedAt: new Date(d.decidedAt),
+  }
+}
