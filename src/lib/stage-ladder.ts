@@ -1,196 +1,163 @@
 /**
- * 🔴 **단계는 사람이 날짜를 바꿔 주지 않아도 오르내려야 한다** (2026-09-24)
+ * 🔴 **단계 결정은 정본이 이미 갖고 있다 — 새 규율을 만들지 않는다** (2026-09-24 재작성)
  *
- *   지금 운영: `SORAN_RELEASE_CANARY_DATE` 를 **매일** 손으로 바꾸고,
- *   `SORAN_RELEASE_WINDOW_FROM/UNTIL` 을 **주마다** 갱신한다. 사람이 하루 잊으면
- *   그날은 조용히 d1 로 떨어진다. 반대로 올려 둔 값을 잊으면 재고·화자가 말라도
- *   단계가 그대로 남는다 — 2026-09-24 실측: capacity 만 d5 로 올리고 공급 쪽
- *   canonical 을 d3 로 둔 채 하루가 갔고, 화자 여력이 0명이 되어 후보가 0건이었다.
+ *   앞판(088b134)은 `STAGE_REQUIREMENTS`(재고 1/6/15/40 · 화자 1/3/5/8 · 연속 0/2/3/5일)와
+ *   전역 감속(하드 차단 1건이면 전체 감속 · 검토 적체면 전체 감속)을 **새로 만들었다.**
+ *   승인되지 않은 규율이었고, 검사 42건은 *그 새 규칙이 자기 자신과 맞는다*는 것만 증명했다.
  *
- * 🔴 **이 파일은 순수 함수다.** DB·env·파일을 모른다 — 관측치를 받아 **다음 단계**만 낸다.
- *    그래야 러너·관제·검사가 같은 답을 낸다.
+ * 🔴 **정본 경로를 그대로 쓴다.**
+ *   ```
+ *   simulateStage → judgeReadiness → stageVerdicts   (실제 배정 시뮬레이션)
+ *        └ forecastPublishing 안에서 TTL · 주 cap · 최소 간격 · 생활사 · Persona 배정
+ *   safeStageFor(requested, verdicts)                (감속 — 기존 계약)
+ *   ```
+ *   이 파일이 더하는 것은 **`requested` 를 사람 env 가 아니라 판정에서 고르는 것** 하나다.
  *
- * 🔴 **한 번에 한 칸만 움직인다.** 재고가 아무리 많아도 d1 → d10 으로 뛰지 않는다.
- *    올라간 단계가 유지되는지 하루 더 보고 다음 칸으로 간다.
+ * 🔴 **공급 가용성과 발행 배정 가능성을 합치지 않는다** (2026-09-24 실측).
+ *   같은 날 공급 생성 가능 화자는 **1명**(P14)이었는데 발행은 **P10·P06·P02** 가 가능했고
+ *   P10 은 실제로 15:49 에 나갔다. 공급 여력은 `max(0, openDays − readyCount)` 로
+ *   *앞으로 7일 안에 더 만들 수 있는가* 를 묻고, 발행은 *지금 재고에서 낼 수 있는가* 를 묻는다.
+ *   🔴 공급 부족은 **단계를 내리는 근거가 아니다** — 재고가 줄면 정본 판정이 알아서 내린다.
  */
 import {
-  PROFILES, RELEASE_STAGES, SAFEST_STAGE, stageRank, type ReleaseStage,
+  PROFILES, RELEASE_STAGES, SAFEST_STAGE, safeStageFor, stageRank,
+  type ReleaseStage, type StageVerdict,
 } from './scale-profile'
 
+/** 🔴 이 결정이 어느 계약으로 내려졌나 — 저장된 결정을 뒤에 읽을 때 필요하다 */
+export const STAGE_DECISION_VERSION = 'stage-decision-v1'
+
 /**
- * 🔴 **한 단계를 유지하려면 있어야 하는 것.**
- *    `dailyTarget` 에서 파생하지 않고 **명시**한다 — 파생하면 프로필을 손댈 때
- *    요구치가 조용히 따라 움직여서, 무엇이 기준이었는지 뒤에 알 수 없다.
+ * 🔴 **공급 쪽 신호.** 단계를 바꾸지 않는다 — 사람이 병목을 보라고 싣는다.
+ *    `planSpeakerAvailability` 가 내는 값을 그대로 옮긴다.
  */
-export type StageRequirement = {
-  /** 사람이 검토를 마친 발행 가능 재고 (`decidedBy` 가 machine: 이 아닌 행) */
-  readyStock: number
-  /** 그날 배정 가능한 화자 수 — 슬롯을 채우려면 서로 다른 사람이 필요하다 */
+export type SupplySignal = {
+  /** 이 회차에 **새로 만들 수 있는** 화자 수 */
   eligibleSpeakers: number
-  /** 🔴 **올라가기 전에** 이 상태가 며칠 연속이어야 하는가 */
-  goodDaysToEnter: number
+  /** 제외된 화자를 사유별로 — 값이다. 문구를 파싱하지 않는다 */
+  excluded: { reason: 'noOpenDay' | 'holdingStock'; codes: string[] }[]
 }
 
-/**
- * 🔴 **요구치는 슬롯 수보다 넉넉하다.** 딱 맞게 두면 하루만 어긋나도 곧바로 감속한다 —
- *    올랐다 내렸다 하는 것이 사람 눈에는 "글이 들쭉날쭉한 커뮤니티" 로 보인다.
- */
-export const STAGE_REQUIREMENTS: Readonly<Record<ReleaseStage, StageRequirement>> = Object.freeze({
-  d1: { readyStock: 1, eligibleSpeakers: 1, goodDaysToEnter: 0 },
-  d3: { readyStock: 6, eligibleSpeakers: 3, goodDaysToEnter: 2 },
-  d5: { readyStock: 15, eligibleSpeakers: 5, goodDaysToEnter: 3 },
-  d10: { readyStock: 40, eligibleSpeakers: 8, goodDaysToEnter: 5 },
-})
-
-/** 🔴 안전·비용은 **올리는 조건이 아니라 내리는 조건**이다 */
-export type LadderSafety = {
-  /** 발행 전 사람 검토를 기다리는 건수 */
-  auditPending: number
-  /** 그날 하드 차단이 몇 건 있었나 */
-  hardBlocks: number
-}
-
-export type LadderObservation = {
-  /** 판정 기준 KST 날짜 — 스냅샷에 그대로 남는다 */
+export type StageInputs = {
+  /** 판정 기준 KST 날짜 */
   kstDate: string
   /** 지금 지속 단계 */
   currentStage: ReleaseStage
-  readyStock: number
-  eligibleSpeakers: number
+  /**
+   * 🔴 **정본 `stageVerdicts` 결과 그대로.** 이 파일은 재고도 화자도 직접 세지 않는다 —
+   *    세면 정본과 두 벌이 되고, 한쪽이 낡는다.
+   */
+  verdicts: readonly StageVerdict[]
   /** 그날 이미 낸 편수 */
   publishedToday: number
-  /**
-   * 🔴 **현 단계 요구를 연속으로 충족한 날 수** (오늘 포함 전까지).
-   *    부르는 쪽이 기록에서 센다 — 이 파일은 과거를 모른다.
-   */
-  goodDays: number
-  safety: LadderSafety
-  /** 그날 쓴 금액과 상한 */
-  costUsdToday: number
-  budgetUsd: number
+  /** 🔴 보고용 신호. 결정에 쓰지 않는다 */
+  supply?: SupplySignal
+  /** 결정 시각 (ISO) */
+  decidedAt: string
 }
 
-export const LADDER_DIRECTIONS = ['up', 'hold', 'down'] as const
-export type LadderDirection = (typeof LADDER_DIRECTIONS)[number]
+export const STAGE_DIRECTIONS = ['up', 'hold', 'down'] as const
+export type StageDirection = (typeof STAGE_DIRECTIONS)[number]
 
-export type LadderDecision = {
-  stage: ReleaseStage
-  direction: LadderDirection
-  /** 왜 그렇게 정했나 — 사람이 읽는 줄 */
+/**
+ * 🔴 **공급과 발행이 함께 소비하는 하나의 결정.**
+ *    날짜·단계·근거·시각·계약 판을 담는다 — 이 값 하나만 보면 그날 무엇으로 돌았는지 안다.
+ */
+export type StageDecision = {
+  kstDate: string
+  /** 내부 생산 눈금 */
+  capacity: ReleaseStage
+  /** 공개 눈금 — 현재 계약상 capacity 를 넘지 못한다 */
+  release: ReleaseStage
+  direction: StageDirection
+  /** 판정 근거 — 정본이 낸 문구를 그대로 옮긴다 */
   reasons: string[]
-  /** 🔴 다음 칸에 가려면 무엇이 얼마나 모자란가 — 값으로 낸다 */
-  needs: string[]
-  /** 🔴 그날 이미 낸 것 때문에 단계를 내리지 못했는가 */
+  /** 그날 이미 낸 편수 때문에 내리지 못했는가 */
   dayPinned: boolean
+  /** 🔴 결정에 쓰이지 않은 참고 신호 */
+  supply: SupplySignal | null
+  decidedAt: string
+  contractVersion: typeof STAGE_DECISION_VERSION
 }
 
 const next = (s: ReleaseStage): ReleaseStage | null => {
   const i = RELEASE_STAGES.indexOf(s)
   return i < 0 || i + 1 >= RELEASE_STAGES.length ? null : RELEASE_STAGES[i + 1]!
 }
-const prev = (s: ReleaseStage): ReleaseStage | null => {
-  const i = RELEASE_STAGES.indexOf(s)
-  return i <= 0 ? null : RELEASE_STAGES[i - 1]!
-}
-
-/** 🔴 그 단계를 **버틸 수 있는가** — 올라갈 수 있는가와 다르다(연속일수는 보지 않는다) */
-export function sustains(o: LadderObservation, s: ReleaseStage): { ok: boolean; missing: string[] } {
-  const r = STAGE_REQUIREMENTS[s]
-  const missing: string[] = []
-  if (o.readyStock < r.readyStock) missing.push(`재고 ${o.readyStock}/${r.readyStock}`)
-  if (o.eligibleSpeakers < r.eligibleSpeakers) {
-    missing.push(`화자 ${o.eligibleSpeakers}/${r.eligibleSpeakers}`)
-  }
-  return { ok: missing.length === 0, missing }
-}
 
 /**
- * 🔴 **다음 단계를 정한다.**
+ * 🔴 **다음 단계를 정한다 — 정본 판정만 본다.**
  *
- *    ① 안전·비용이 걸리면 무조건 감속한다 — 올릴 이유가 아무리 많아도 먼저다
- *    ② 현 단계를 못 버티면 한 칸 내린다
- *    ③ 다음 칸을 버틸 수 있고 연속일수를 채웠으면 한 칸 올린다
- *    ④ 그 밖에는 유지한다
+ *    ① 한 칸 위가 `ready` 면 그것을 `requested` 로 삼는다. 아니면 지금 단계다.
+ *       🔴 한 칸씩만 올리는 이유: 올린 단계를 하루 버티는 것을 보고 다음 칸으로 간다.
+ *          정본 `safeStageFor` 는 **감속**만 하므로, 승격 폭은 부르는 쪽이 정한다.
+ *    ② `safeStageFor` 에 맡긴다 — 감속 규칙은 기존 계약 그대로다.
+ *    ③ 그날 이미 낸 편수가 내리려는 단계 상한을 넘으면 **그날 단계를 고정**한다.
+ *       (기존 `resolveScale` 과 같은 계약 — 내리면 이미 낸 글이 상한 초과가 된다)
  *
- * 🔴 **그날 이미 냈으면 내리지 않는다.** 아침에 3편을 내고 낮에 d1 로 내려가면
- *    이미 나간 그 3편이 상한 초과가 된다 — 기존 `resolveScale` 과 같은 계약이다.
+ * 🔴 **하드 차단·검토 적체로 전체 단계를 내리지 않는다.** 후보 하나의 결함을
+ *    생산 전체 중단으로 키우지 않는다 — 그것은 기존 kill switch 와 정산 fail-closed 의 일이다.
  */
-export function planStage(o: LadderObservation): LadderDecision {
-  const reasons: string[] = []
-  const needs: string[] = []
-  const cur = o.currentStage
-  const down = prev(cur)
-  const up = next(cur)
+export function planStageDecision(input: StageInputs): StageDecision {
+  const base = {
+    kstDate: input.kstDate,
+    supply: input.supply ?? null,
+    decidedAt: input.decidedAt,
+    contractVersion: STAGE_DECISION_VERSION,
+  } as const
 
-  /** 🔴 그날 이미 낸 편수가 내리려는 단계의 상한을 넘으면 내릴 수 없다 */
-  const pinnedBy = (to: ReleaseStage): boolean => o.publishedToday > PROFILES[to].dailyTarget
-  const godown = (why: string): LadderDecision => {
-    if (down === null) {
-      reasons.push(`${why} — 이미 가장 낮은 단계 ${cur} 다`)
-      return { stage: cur, direction: 'hold', reasons, needs, dayPinned: false }
-    }
-    if (pinnedBy(down)) {
-      reasons.push(`${why} — 그러나 오늘 이미 ${o.publishedToday}건 냈다`)
-      reasons.push(`🔴 ${down} 으로 내리면 이미 낸 것이 상한 초과가 된다 — 오늘은 ${cur} 를 고정한다`)
-      return { stage: cur, direction: 'hold', reasons, needs, dayPinned: true }
-    }
-    reasons.push(`${why} — ${cur} → ${down} 으로 한 칸 내린다`)
-    return { stage: down, direction: 'down', reasons, needs, dayPinned: false }
-  }
-
-  // ① 안전 — 사람 검토 적체·하드 차단은 올릴 이유를 이긴다
-  if (o.safety.hardBlocks > 0) {
-    return godown(`🔴 하드 차단 ${o.safety.hardBlocks}건`)
-  }
   /**
-   * 🔴 **검토 적체는 단계에 비례한다.** d10 에서 10건 밀린 것과 d1 에서 10건 밀린 것은
-   *    다르다 — 그날 목표의 2배를 넘으면 사람이 따라오지 못하는 것이다.
+   * 🔴 **판정이 비었을 때를 여기서 다시 처리하지 않는다** (2026-09-24 변이 시험에서 확인).
+   *    정본 `safeStageFor` 가 `unknown: true` 로 `requested` 를 그대로 돌려준다 —
+   *    같은 일을 두 번 적으면 한쪽이 낡고, 어느 쪽이 결정했는지 알 수 없게 된다.
+   *    아래 `safe.unknown` 가 그 사실을 근거로 남긴다.
    */
-  const auditCap = PROFILES[cur].dailyTarget * 2
-  if (o.safety.auditPending > auditCap) {
-    return godown(`🔴 사람 검토 대기 ${o.safety.auditPending}건 > ${cur} 허용 ${auditCap}건`)
-  }
-  // ① -b 비용 — 상한을 넘겼으면 내린다
-  if (o.budgetUsd > 0 && o.costUsdToday > o.budgetUsd) {
-    return godown(`🔴 당일 비용 $${o.costUsdToday.toFixed(4)} > 상한 $${o.budgetUsd.toFixed(2)}`)
+  const up = next(input.currentStage)
+  const byStage = new Map(input.verdicts.map((v) => [v.stage, v]))
+  const upReady = up !== null && byStage.get(up)?.ready === true
+  const requested = upReady ? up! : input.currentStage
+
+  const safe = safeStageFor(requested, input.verdicts)
+  const reasons: string[] = []
+  if (upReady) reasons.push(`🟢 ${up} 가 정본 판정에서 ready 다 — 한 칸 올려 본다`)
+  if (safe.reason !== null) reasons.push(safe.reason)
+  if (safe.unknown) reasons.push('🔴 판정을 받지 못했다 — `chosenReady` 를 신뢰하지 않는다')
+
+  let stage = safe.stage
+  let dayPinned = false
+  /**
+   * 🔴 **그날 이미 낸 편수가 새 단계 상한을 넘으면 내리지 않는다.**
+   *    아침에 4건 내고 낮에 d3 로 내려가면 그 4건이 상한 초과가 된다.
+   */
+  if (stageRank(stage) < stageRank(input.currentStage)
+    && input.publishedToday > PROFILES[stage].dailyTarget) {
+    reasons.push(
+      `🔴 오늘 이미 ${input.publishedToday}건 냈다 — ${stage} 로 내리면 상한 초과가 된다. `
+      + `오늘은 ${input.currentStage} 를 고정한다`,
+    )
+    stage = input.currentStage
+    dayPinned = true
   }
 
-  // ② 현 단계를 못 버티는가
-  const now = sustains(o, cur)
-  if (!now.ok) return godown(`🔴 ${cur} 를 버티지 못한다 — ${now.missing.join(' · ')}`)
+  const direction: StageDirection = stageRank(stage) > stageRank(input.currentStage) ? 'up'
+    : stageRank(stage) < stageRank(input.currentStage) ? 'down' : 'hold'
+  if (direction === 'hold' && reasons.length === 0) {
+    reasons.push(`${input.currentStage} 를 유지한다 — 한 칸 위(${up ?? '없음'})가 아직 ready 가 아니다`)
+  }
 
-  // ③ 한 칸 올릴 수 있는가
-  if (up === null) {
-    reasons.push(`${cur} 가 가장 높은 단계다 — 유지한다`)
-    return { stage: cur, direction: 'hold', reasons, needs, dayPinned: false }
-  }
-  const upOk = sustains(o, up)
-  const needDays = STAGE_REQUIREMENTS[up].goodDaysToEnter
-  if (!upOk.ok) needs.push(...upOk.missing.map((m) => `${up}: ${m}`))
-  if (o.goodDays < needDays) needs.push(`${up}: 연속 충족 ${o.goodDays}/${needDays}일`)
-  if (upOk.ok && o.goodDays >= needDays) {
-    reasons.push(`🟢 ${up} 요구를 충족했고 ${o.goodDays}일 연속이다 — ${cur} → ${up} 한 칸 올린다`)
-    return { stage: up, direction: 'up', reasons, needs: [], dayPinned: false }
-  }
-  reasons.push(`${cur} 를 유지한다 — 다음 칸까지 ${needs.join(' · ') || '조건 없음'}`)
-  return { stage: cur, direction: 'hold', reasons, needs, dayPinned: false }
+  /**
+   * 🔴 **release 는 capacity 를 넘지 못한다** — 기존 `resolveScale` ① 과 같은 계약이다.
+   *    이 판정은 내부 생산 눈금(capacity)을 정하고, 공개 눈금은 그 이하다.
+   */
+  return { ...base, capacity: stage, release: stage, direction, dayPinned, reasons }
 }
 
-/**
- * 🔴 **관측을 못 했으면 올리지 않는다** (fail-closed).
- *    값이 하나라도 비면 가장 안전한 단계로 내려간다 — "모른다" 를 "괜찮다" 로 읽지 않는다.
- */
-export function planStageSafe(o: Partial<LadderObservation>): LadderDecision {
-  const missing = (['currentStage', 'readyStock', 'eligibleSpeakers', 'publishedToday',
-    'goodDays', 'safety', 'costUsdToday', 'budgetUsd'] as const)
-    .filter((k) => o[k] === undefined || o[k] === null)
-  if (missing.length > 0) {
-    return {
-      stage: SAFEST_STAGE, direction: stageRank(o.currentStage ?? SAFEST_STAGE) > stageRank(SAFEST_STAGE)
-        ? 'down' : 'hold',
-      reasons: [`🔴 관측값이 없다(${missing.join(' · ')}) — 가장 안전한 ${SAFEST_STAGE} 로 둔다`],
-      needs: [], dayPinned: false,
-    }
+/** 🔴 아무것도 읽지 못했을 때 — 가장 안전한 단계. 이 값도 날짜와 시각을 갖는다 */
+export function safestDecision(kstDate: string, decidedAt: string): StageDecision {
+  return {
+    kstDate, capacity: SAFEST_STAGE, release: SAFEST_STAGE,
+    direction: 'hold', dayPinned: false, supply: null, decidedAt,
+    contractVersion: STAGE_DECISION_VERSION,
+    reasons: [`🔴 단계 입력을 읽지 못했다 — 가장 안전한 ${SAFEST_STAGE} 로 둔다`],
   }
-  return planStage(o as LadderObservation)
 }

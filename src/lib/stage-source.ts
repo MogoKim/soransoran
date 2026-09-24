@@ -17,7 +17,14 @@
  * 🔴 **canary·window 는 canonical 에 아예 없다.** 그래서 공급은 그 값을 **영영 보지 못한다** —
  *    발행이 기간 허가로 d5 를 열어도 공급은 d1/d3 재고만 만든다.
  *
- * 이 파일은 두 원천을 **하나로 화해**시키고, 갈라진 지점을 값으로 낸다.
+ * 🔴 **이 화해기는 임시 방어다 — 최종 설계가 아니다.**
+ *    최종은 공급과 발행이 **함께 소비하는 authoritative dated StageDecision 하나**다.
+ *    (`stage-ladder.ts` 의 `StageDecision`). 그 결정을 **어디에 두는가**는 아직 정하지 못했다:
+ *      · DB — 담을 모델이 없다. 새 migration 은 승인 없이 하지 않는다
+ *      · canonical 파일 — 공급(로컬)은 읽지만 발행(GitHub Actions)은 읽지 못한다
+ *      · GitHub Variables — 발행은 읽지만 쓰기가 운영 변수 변경이라 금지다
+ *    그때까지는 **낮은 쪽을 쓰고 갈라진 사실을 값으로 남긴다.**
+ *
  * 🔴 순수 함수다 — 파일도 네트워크도 모른다.
  */
 import { RELEASE_STAGES, resolveStage, stageRank, SAFEST_STAGE, type ReleaseStage } from './scale-profile'
