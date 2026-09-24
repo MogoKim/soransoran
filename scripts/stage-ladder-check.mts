@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 
 import {
   previousKstDate, nextStage, isCalendarDate, DECISION_WRITER, BLOCK_CODES,
+  REQUIRED_KEYS, TRANSITION_FATAL_BLOCKS,
   type StageDecision, type ValidatedStageDecision,
   planStageDecision, safestDecision, STAGE_DECISION_VERSION, TRANSITION_STATES,
   type DatedCanary,
@@ -75,7 +76,7 @@ const prevRow = (release: ReleaseStage, o: Record<string, unknown> = {}): unknow
  *    🔴 거절되면 `null` 이다. 운영에서도 consumer 가 그렇게 한다.
  */
 const validatePrev = (row: unknown): ValidatedStageDecision | null => {
-  const v = validateStoredDecision({ row, expectKstDate: PREV_DATE, expectContractVersion: STAGE_DECISION_VERSION })
+  const v = validateStoredDecision({ row, expectKstDate: PREV_DATE })
   return v.ok ? v.decision : null
 }
 const prevDecision = (release: ReleaseStage, o: Record<string, unknown> = {}) =>
@@ -339,7 +340,7 @@ console.log('\n⑩ 🔴 writer · 동시성 · rollback · 🔴 세 지점 전�
 {
   /** 🔴 검사도 **운영과 같은 validator** 를 쓴다 — 여기서 느슨하게 만들면 뜻이 없다 */
   const validate = (row: unknown) => validateStoredDecision({
-    row, expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+    row, expectKstDate: DATE
   })
   /** 🔴 `safestDecision` 은 HOLD·d1/d1 이다 — 그대로는 PREPARE 불변식에 걸리지 않는다 */
   const D = (o: Partial<StageDecision> = {}): StageDecision =>
@@ -551,7 +552,7 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
    *    을 지나야만 `ok:true` 를 만들 수 있다 — 느슨한 가짜 validator 를 못 쓴다.
    */
   const pass = (row: unknown) => validateStoredDecision({
-    row, expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+    row, expectKstDate: DATE
   })
   const off = await consumeStageDecision({
     read: async () => D(), validate: pass, controllerOn: false, by: 'supply',
@@ -579,20 +580,22 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
 
   /** 🔴 저장된 행 검증 — 계약 판·날짜·enum·시각 */
   const V = (o: Record<string, unknown>) => validateStoredDecision({
-    row: { ...D(), ...o }, expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
-    allowedStages: RELEASE_STAGES, allowedStates: TRANSITION_STATES,
+    row: { ...D(), ...o }, expectKstDate: DATE
   })
   check('🔴 계약 판이 다르면 거절', !V({ contractVersion: 'old' }).ok)
   /**
-   * 🔴 **caller 기대값만 보면 brand 가 아무것도 보장하지 않는다.**
-   *    `expectContractVersion: 'stage-decision-v3'` 로 옛 행을 승인시킬 수 있다면,
-   *    검증을 통과한 타입이 "현재 판" 을 뜻하지 않게 된다.
+   * 🔴 **계약 판은 매개변수가 아니다** (2026-09-24 8차). 호출자가 기대 판을 줄 수
+   *    있으면 옛 행을 승인시킬 수 있고, 그러면 검증을 통과한 타입이 "현재 판" 을
+   *    뜻하지 않게 된다. 🔴 시그니처에서 아예 없앴다 — 줄 자리가 없다.
    */
-  check('🔴 🔴 **caller 가 옛 판을 기대해도 옛 행은 통과하지 못한다**',
+  check('🔴 🔴 **옛 판 행은 통과하지 못한다 (기대값을 줄 수 없다)**',
     !validateStoredDecision({
       row: { ...safestDecision(DATE, AT), capacity: 'd10', contractVersion: 'stage-decision-v3' },
-      expectKstDate: DATE, expectContractVersion: 'stage-decision-v3',
-    }).ok)
+      expectKstDate: DATE,
+    }).ok
+    && !/expectContractVersion|allowedStages|allowedStates/.test(
+      readFileSync('src/lib/stage-decision-contract.ts', 'utf-8')
+        .split('export function validateStoredDecision')[1] ?? ''))
   check('🔴 날짜가 다르면 거절', !V({ kstDate: '2026-09-23' }).ok)
   check('🔴 모르는 단계면 거절', !V({ release: 'd7' }).ok)
   check('🔴 모르는 상태면 거절', !V({ state: 'WAT' }).ok)
@@ -614,7 +617,7 @@ console.log('\n⑬ 🔴 🔴 consumer 는 읽기만 한다 — 없으면 사후 
   const verdicts2 = ROT.map((row) => {
     try {
       return validateStoredDecision({
-        row, expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+        row, expectKstDate: DATE
       })
     } catch (e) { threw = `${String(row)} → ${String(e)}`; return { ok: true as const } }
   })
@@ -766,8 +769,7 @@ console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 �
    */
   const rot = (label: string, o: Record<string, unknown>, want: string) => {
     const v = validateStoredDecision({
-      row: prevRow('d3', o), expectKstDate: PREV_DATE,
-      expectContractVersion: STAGE_DECISION_VERSION,
+      row: prevRow('d3', o), expectKstDate: PREV_DATE
     })
     check(`🔴 🔴 **${label} — 저장 검증이 거절한다**`,
       !v.ok && v.reason.includes(want), v.ok ? '🔴 통과해 버림' : v.reason)
@@ -792,7 +794,7 @@ console.log('\n⑯ 🔴 🔴 검증되지 않은 전날 결정으로 시험이 �
   const TWO_AGO = previousKstDate(PREV_DATE)!
   const twoAgo = validateStoredDecision({
     row: { ...(prevRow('d3') as Record<string, unknown>), kstDate: TWO_AGO, decidedAt: `${TWO_AGO}T01:00:00.000Z` },
-    expectKstDate: TWO_AGO, expectContractVersion: STAGE_DECISION_VERSION,
+    expectKstDate: TWO_AGO
   })
   check('🔴 이틀 전 행 자체는 저장 검증을 통과한다 — 그 행이 깨진 것은 아니다',
     twoAgo.ok, twoAgo.ok ? '' : twoAgo.reason)
@@ -829,7 +831,7 @@ console.log('\n⑰ 🔴 🔴 TRIAL 의 previousKstDate 는 정확히 직전 날�
       transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate: PREV_DATE, target: 'd3' },
       ...o,
     },
-    expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+    expectKstDate: DATE
   })
   const withPrev = (previousKstDate: string) => V({
     transition: { kind: 'TRIAL', trialBase: 'd1', previousKstDate, target: 'd3' },
@@ -861,7 +863,7 @@ console.log('\n⑰ 🔴 🔴 TRIAL 의 previousKstDate 는 정확히 직전 날�
   check('🔴 kstDate 자체도 달력에 있는 날이어야 한다',
     !validateStoredDecision({
       row: { ...safestDecision('2026-02-30', AT), capacity: 'd10' },
-      expectKstDate: '2026-02-30', expectContractVersion: STAGE_DECISION_VERSION,
+      expectKstDate: '2026-02-30'
     }).ok)
 }
 
@@ -871,7 +873,9 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
   const full: StageDecision = {
     kstDate: DATE, capacity: 'd10', release: 'd5', state: 'TRIAL',
     reasons: ['🟢 오늘 하루 d5 로 낸다'],
-    blocks: [{ code: 'CEILING', reason: '천장에 닿았다' }],
+    // 🔴 TRIAL 을 무효로 만들지 않는 block 이어야 한다 — 승격 출처 어긋남은
+    //    승격만 버리고 하루 시험은 그대로 연다(planStageDecision 이 실제로 만드는 조합)
+    blocks: [{ code: 'PROVENANCE_NEXT', reason: 'promotion.next 가 다음 칸이 아니다' }],
     dayPinned: true,
     supply: { eligibleSpeakers: 3, excluded: [{ reason: 'noOpenDay', codes: ['P01', 'P02'] }] },
     decidedAt: `${DATE}T02:15:00.000Z`,
@@ -888,7 +892,7 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
   const row = decisionToRow(full)
   const back = rowToDecisionInput(row)
   const v = validateStoredDecision({
-    row: back, expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+    row: back, expectKstDate: DATE
   })
   check('🔴 🔴 **완전한 저장 모델 왕복이 검증을 통과한다**', v.ok, v.ok ? '' : v.reason)
   /** 🔴 키 순서는 뜻이 아니다 — 정렬해 비교한다 */
@@ -923,7 +927,7 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
     compute: () => full,
     insert: async () => { inserts += 1; return 'inserted' },
     validate: (row) => validateStoredDecision({
-      row, expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+      row, expectKstDate: DATE
     }),
     by: DECISION_WRITER,
   })
@@ -933,7 +937,7 @@ console.log('\n⑱ 🔴 🔴 저장 모델 왕복 · KST 날짜당 결정 하나
   const consumed = await consumeStageDecision({
     read: async () => rowToDecisionInput(oldVersionRow),
     validate: (row) => validateStoredDecision({
-      row, expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+      row, expectKstDate: DATE
     }),
     controllerOn: true, by: 'publish',
   })
@@ -954,7 +958,7 @@ console.log('\n⑲ 🔴 🔴 supply · blocks 모양 검증')
 {
   const V = (o: Record<string, unknown>) => validateStoredDecision({
     row: { ...safestDecision(DATE, AT), capacity: 'd10', ...o },
-    expectKstDate: DATE, expectContractVersion: STAGE_DECISION_VERSION,
+    expectKstDate: DATE
   })
   check('🔴 정상 supply 는 통과',
     V({ supply: { eligibleSpeakers: 0, excluded: [{ reason: 'holdingStock', codes: [] }] } }).ok)
@@ -977,6 +981,240 @@ console.log('\n⑲ 🔴 🔴 supply · blocks 모양 검증')
     && BLOCK_CODES.includes('PROVENANCE_PREVIOUS'))
   check('🔴 blocks 항목 모양이 깨지면 거절',
     !V({ blocks: [{ code: 'CEILING' }] }).ok && !V({ blocks: ['CEILING'] }).ok)
+}
+
+console.log('\n⑳ 🔴 🔴 validator 는 fail-open 이 아니다')
+{
+  const raw = (o: Record<string, unknown> = {}): Record<string, unknown> => ({
+    kstDate: DATE, capacity: 'd10', release: 'd5', state: 'HOLD',
+    reasons: ['유지'], blocks: [], dayPinned: false, supply: null,
+    decidedAt: `${DATE}T01:00:00.000Z`,
+    contractVersion: STAGE_DECISION_VERSION, decidedBy: DECISION_WRITER, transition: null, ...o,
+  })
+  const V = (row: unknown) => validateStoredDecision({ row, expectKstDate: DATE })
+
+  /** ── ① 🔴 호출자가 정본 enum 을 주입할 수 없다 ── */
+  check('🔴 🔴 **allowedStages 로 `evil` 단계를 통과시킬 수 없다**',
+    !V({ ...raw({ release: 'evil', capacity: 'evil' }), allowedStages: ['d1', 'evil'] }).ok,
+    JSON.stringify(V({ ...raw({ release: 'evil', capacity: 'evil' }) }).ok))
+  check('🔴 🔴 **allowedStates 로 `EVIL` 상태를 통과시킬 수 없다**',
+    !V({ ...raw({ state: 'EVIL' }), allowedStates: ['EVIL'] }).ok)
+  /** 🔴 **각 칸이 단독으로 결정하는 입력** — 하나만 어긋나게 해 서로 가리지 않게 한다 */
+  /**
+   * 🔴 **거절만으로는 모자란다.** 천장 값이 쓰레기일 때 순위 비교 규칙도 거절하지만,
+   *    그 메시지는 "공개 d1 이 승인 천장 evil 를 넘는다" 다 — **공개가 잘못됐다**고
+   *    읽힌다. 실제로 고칠 칸은 천장이다. 어느 칸이 깨졌는지 맞게 말해야 한다.
+   */
+  const badCap = V(raw({ capacity: 'evil', release: 'd1' }))
+  check('🔴 🔴 **천장만 어긋나도 거절하고, 천장이 문제라고 말한다**',
+    !badCap.ok && badCap.reason.includes('모르는 천장'),
+    badCap.ok ? '🔴 통과해 버림' : badCap.reason)
+  check('🔴 공개만 어긋나도 거절 (capacity 는 정상)', !V(raw({ release: 'evil' })).ok)
+  check('🔴 상태만 어긋나도 거절', !V(raw({ state: 'EVIL' })).ok)
+  check('🔴 🔴 **시그니처에 주입 자리가 없다 — 줄 수가 없다**', (() => {
+    const src = readFileSync('src/lib/stage-decision-contract.ts', 'utf-8')
+    const fn = src.split('export function validateStoredDecision')[1] ?? ''
+    const sig = fn.slice(0, fn.indexOf('}): ValidateResult'))
+    return !/allowedStages|allowedStates|expectContractVersion/.test(sig)
+      && /expectKstDate: string/.test(sig)
+  })())
+
+  /** ── ② 🔴 검증된 결정은 입력과 참조를 공유하지 않는다 ── */
+  const mutable = raw({
+    state: 'TRIAL', release: 'd5',
+    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5' },
+    reasons: ['처음'],
+    blocks: [{ code: 'PROVENANCE_NEXT', reason: '어긋남' }],
+    supply: { eligibleSpeakers: 2, excluded: [{ reason: 'noOpenDay', codes: ['P01'] }] },
+  })
+  const got = V(mutable)
+  check('🔴 기준선 — 그 행은 통과한다', got.ok, got.ok ? '' : got.reason)
+  if (got.ok) {
+    const d = got.decision
+    const snapshot = JSON.stringify(d)
+    /** 🔴 원본을 통째로 흔든다 — 하나라도 따라 바뀌면 그 검증은 사진이 아니다 */
+    mutable.capacity = 'evil'
+    mutable.release = 'evil'
+    mutable.decidedAt = '2020-01-01T00:00:00.000Z'
+    mutable.state = 'EVIL'
+    ;(mutable.reasons as string[]).push('나중')
+    ;(mutable.blocks as { code: string }[])[0]!.code = 'EVIL'
+    ;(mutable.blocks as unknown[]).push({ code: 'CEILING', reason: 'x' })
+    const sp = mutable.supply as { eligibleSpeakers: number; excluded: { codes: string[] }[] }
+    sp.eligibleSpeakers = -9
+    sp.excluded[0]!.codes.push('P99')
+    ;(mutable.transition as { trialBase: string }).trialBase = 'evil'
+    check('🔴 🔴 **검증 뒤 원본을 바꿔도 결정은 그대로다 (깊은 스냅샷)**',
+      JSON.stringify(d) === snapshot, `${JSON.stringify(d).slice(0, 160)}`)
+    check('🔴 🔴 **중첩까지 얼어 있다 — 받은 쪽도 못 고친다**', (() => {
+      const before = JSON.stringify(d)
+      try {
+        (d.blocks as unknown as { code: string }[])[0]!.code = 'EVIL'
+        ;(d.reasons as unknown as string[]).push('침입')
+        ;(d.supply?.excluded[0]?.codes as unknown as string[])?.push('P99')
+      } catch { /* strict mode 에서는 던진다 — 그것도 막힌 것이다 */ }
+      return JSON.stringify(d) === before
+        && Object.isFrozen(d) && Object.isFrozen(d.blocks) && Object.isFrozen(d.supply)
+    })())
+  }
+
+  /** ── ③ 🔴 필수 키 — DB select 에서 칼럼 하나가 빠진 행 ── */
+  for (const k of REQUIRED_KEYS) {
+    const missing = raw()
+    delete missing[k]
+    const v = V(missing)
+    /**
+     * 🔴 **거절만으로는 모자란다 — 어느 칸이 빠졌는지 맞게 말해야 한다.**
+     *    칸별 규칙도 `undefined` 는 거절하지만, `transition` 누락을 "붙어 있다" 로
+     *    말한다. 없는 것을 있다고 하는 메시지는 사람을 엉뚱한 칼럼으로 보낸다.
+     */
+    check(`🔴 필수 키 \`${k}\` 누락을 거절하고 그 칸 이름을 맞게 말한다`,
+      !v.ok && v.reason.includes(k) && !/붙어 있다/.test(v.reason),
+      v.ok ? '🔴 통과해 버림' : v.reason)
+  }
+  check('🔴 🔴 **`supply`·`transition` 이 `undefined` 면 거절 (null 과 다르다)**',
+    !V(raw({ supply: undefined })).ok && !V(raw({ transition: undefined })).ok)
+  check('🔴 `null` 은 정상이다 — "값이 없음" 을 뜻한다',
+    V(raw({ supply: null, transition: null })).ok)
+
+  /** ── ④ 🔴 선택된 전이를 무효로 만드는 block ── */
+  const trialWith = (code: string) => V(raw({
+    state: 'TRIAL', release: 'd5',
+    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5' },
+    blocks: [{ code, reason: 'x' }],
+  }))
+  for (const code of TRANSITION_FATAL_BLOCKS.TRIAL) {
+    check(`🔴 🔴 **TRIAL 인데 \`${code}\` 가 있으면 거절**`, !trialWith(code).ok,
+      trialWith(code).ok ? '🔴 통과해 버림' : '')
+  }
+  check('🔴 TRIAL 을 무효로 만들지 않는 block 은 허용한다 — 승격만 버려진 경우다',
+    trialWith('PROVENANCE_NEXT').ok && trialWith('PROVENANCE_CURRENT').ok)
+  const sustainWith = (code: string) => V(raw({
+    state: 'SUSTAIN', release: 'd5',
+    transition: { kind: 'SUSTAIN', from: 'd3', to: 'd5' },
+    blocks: [{ code, reason: 'x' }],
+  }))
+  for (const code of TRANSITION_FATAL_BLOCKS.SUSTAIN) {
+    check(`🔴 🔴 **SUSTAIN 인데 \`${code}\` 가 있으면 거절**`, !sustainWith(code).ok)
+  }
+  check('🔴 SUSTAIN 을 무효로 만들지 않는 block 은 허용한다',
+    sustainWith('STALE_DAILY').ok)
+  check('🔴 🔴 **PREPARE·HOLD 는 block 이 있어도 정상이다 — 비었는지로 보지 않는다**',
+    V(raw({ state: 'PREPARE', release: 'd3', capacity: 'd10', blocks: [{ code: 'CEILING', reason: 'x' }] })).ok
+    && V(raw({ state: 'HOLD', blocks: [{ code: 'CEILING', reason: 'x' }] })).ok)
+
+  /** 🔴 실측 반례 — consumer 까지 fail-closed 인가 */
+  const badTrial = raw({
+    state: 'TRIAL', release: 'd5',
+    transition: { kind: 'TRIAL', trialBase: 'd3', previousKstDate: PREV_DATE, target: 'd5' },
+    blocks: [{ code: 'PROVENANCE_PREVIOUS', reason: '전날 결정이 없다' }],
+  })
+  const consumed = await consumeStageDecision({
+    read: async () => badTrial, validate: (row) => validateStoredDecision({ row, expectKstDate: DATE }),
+    controllerOn: true, by: 'publish',
+  })
+  check('🔴 🔴 **`TRIAL d5 + PROVENANCE_PREVIOUS` → consumer 가 fail-closed 로 간다**',
+    !consumed.ok && consumed.code === 'BROKEN' && consumed.fallback === 'safest',
+    JSON.stringify(consumed))
+
+  /** ── ⑤ 🔴 brand 는 실수를 막을 뿐이다 — production 전체에서 cast 를 금지한다 ── */
+  check('🔴 🔴 **brand 설명이 사실이다 — "만들어 낼 수 없다" 고 쓰지 않는다**', (() => {
+    const src = readFileSync('src/lib/stage-decision-contract.ts', 'utf-8')
+    return /assertion/.test(src) && /brand 를 그대로 통과한다|우회할 수 있다|사실이 아니다/.test(src)
+      && /진짜 안전 경계는 타입이 아니라 값이다/.test(src)
+  })())
+  check('🔴 🔴 **contract 밖 production 에 직접 cast·이중 cast 가 없다**', (() => {
+    const files = [
+      'src/lib/stage-ladder.ts', 'src/lib/stage-decision-store.ts', 'src/lib/stage-source.ts',
+      'scripts/stage-decision-probe.mts', 'scripts/original-post-auto-publish.mts',
+      'scripts/lib/publishable-stock.mts',
+    ]
+    const bad = files.filter((f) => {
+      const code = readFileSync(f, 'utf-8')
+        .split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+      return /as\s+(unknown\s+as\s+)?ValidatedStageDecision/.test(code)
+        || /<ValidatedStageDecision>/.test(code)
+        || /as\s+never\s*\)?\s*as\s+ValidatedStageDecision/.test(code)
+        || /satisfies\s+ValidatedStageDecision/.test(code)
+    })
+    return bad.length === 0
+  })())
+  check('🔴 🔴 **cast 는 contract 안 materialize 한 줄에만 있다**', (() => {
+    // 🔴 주석에 적힌 설명은 코드가 아니다 — 코드 줄만 센다
+    const code = readFileSync('src/lib/stage-decision-contract.ts', 'utf-8')
+      .split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+    return (code.match(/as ValidatedStageDecision/g) ?? []).length === 1
+      && /deepFreeze\(decision\) as ValidatedStageDecision/.test(code)
+  })())
+}
+
+console.log('\n㉑ 🔴 🔴 정본 결정기가 만드는 결과는 정본 validator 를 통과한다')
+{
+  /**
+   * 🔴 **불변식을 지어내지 않았다는 증거.** `TRANSITION_FATAL_BLOCKS` 가 너무 세면
+   *    `planStageDecision` 이 정상적으로 만든 결정을 validator 가 거절하게 된다 —
+   *    그러면 controller 는 자기가 계산한 값을 저장도 못 한다.
+   *    🔴 그래서 여러 시나리오를 실제로 돌려 **만든 것 ↔ 검증**을 대조한다.
+   */
+  const a = assemble({ stock: 12, publishedToday: 0 })
+  const thin = assemble({ stock: 0, publishedToday: 0 })
+  const cases: { label: string; d: ReturnType<typeof planStageDecision> }[] = [
+    { label: 'TRIAL (전날 d3 → 오늘 d5)',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd5',
+        verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
+        previousDecision: prevDecision('d3'), promotion: null, publishedToday: 0, decidedAt: AT }) },
+    { label: 'TRIAL + 승격 출처 어긋남(PROVENANCE_NEXT)',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd5',
+        verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
+        previousDecision: prevDecision('d3'),
+        promotion: promo({ current: 'd1', next: 'd10' }), publishedToday: 0, decidedAt: AT }) },
+    { label: 'TRIAL 이 천장에 막힘(CEILING)',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd3',
+        verdicts: a.verdicts, daily: a.daily('d5', DATE, 'd3'),
+        previousDecision: prevDecision('d3'), promotion: null, publishedToday: 0, decidedAt: AT }) },
+    { label: 'PREPARE (천장이 공개보다 높다)',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
+        verdicts: a.verdicts, daily: null, previousDecision: null,
+        promotion: promo({ current: 'd3', next: 'd5' }), publishedToday: 0, decidedAt: AT }) },
+    { label: 'HOLD (전날 결정 없음)',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd1',
+        verdicts: a.verdicts, daily: a.daily('d3', DATE, 'd1'),
+        previousDecision: null, promotion: null, publishedToday: 0, decidedAt: AT }) },
+    { label: 'SUSTAIN (정본 승격)',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd3', authorizedCapacityCeiling: 'd5',
+        verdicts: a.verdicts, daily: null, previousDecision: null,
+        promotion: promoReady('d3', 'd5'), publishedToday: 0, decidedAt: AT }) },
+    { label: '판정이 하나도 없다',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd5',
+        verdicts: [], daily: null, previousDecision: null,
+        promotion: null, publishedToday: 0, decidedAt: AT }) },
+    { label: '재고 0 · 하루 판정 NO-GO',
+      d: planStageDecision({
+        kstDate: DATE, sustainedRelease: 'd1', authorizedCapacityCeiling: 'd5',
+        verdicts: thin.verdicts, daily: thin.daily('d3', DATE, 'd1'),
+        previousDecision: prevDecision('d1'), promotion: null, publishedToday: 0, decidedAt: AT }) },
+  ]
+  const states = new Set(cases.map((c) => c.d.state))
+  check('🔴 시나리오가 여러 상태를 실제로 만든다 — 한 가지만 보고 통과시키지 않는다',
+    states.size >= 3, [...states].join(','))
+  for (const c of cases) {
+    const v = validateStoredDecision({ row: c.d, expectKstDate: DATE })
+    check(`🔴 🔴 **${c.label} → state=${c.d.state} · validator 통과**`,
+      v.ok, v.ok ? '' : `${v.reason} · blocks=${JSON.stringify(c.d.blocks.map((b) => b.code))}`)
+  }
+  check('🔴 🔴 **TRIAL·SUSTAIN 결과에 치명 block 이 실제로 붙지 않는다**',
+    cases.filter((c) => c.d.state === 'TRIAL' || c.d.state === 'SUSTAIN')
+      .every((c) => {
+        const fatal = TRANSITION_FATAL_BLOCKS[c.d.state as 'TRIAL' | 'SUSTAIN']
+        return c.d.blocks.every((b) => !fatal.includes(b.code))
+      }))
 }
 
 console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fake store · 같은 runAt')

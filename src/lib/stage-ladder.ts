@@ -30,7 +30,7 @@ import {
 import {
   STAGE_DECISION_VERSION, DECISION_WRITER, TRANSITION_STATES, BLOCK_CODES,
   SUPPLY_EXCLUDE_REASONS, previousKstDate, nextStage, kstDateOfIso, isCalendarDate,
-  validateStoredDecision,
+  validateStoredDecision, REQUIRED_KEYS, TRANSITION_FATAL_BLOCKS,
   type DecisionWriter, type TransitionState, type BlockCode, type StageBlock,
   type SupplySignal, type TransitionProvenance, type StageDecision,
   type ValidatedStageDecision, type ValidateResult,
@@ -46,7 +46,7 @@ import type { PromotionVerdict } from './d100-capacity'
 export {
   STAGE_DECISION_VERSION, DECISION_WRITER, TRANSITION_STATES, BLOCK_CODES,
   SUPPLY_EXCLUDE_REASONS, previousKstDate, nextStage, kstDateOfIso, isCalendarDate,
-  validateStoredDecision,
+  validateStoredDecision, REQUIRED_KEYS, TRANSITION_FATAL_BLOCKS,
 }
 export type {
   DecisionWriter, TransitionState, BlockCode, StageBlock, SupplySignal,
@@ -316,12 +316,8 @@ export function planStageDecision(input: StageInputs): StageDecision {
    * 🔴 **이미 승인된 천장이 공개보다 높으면** 그 차이로 다음 단계 재고를 쌓는다.
    *    `nextPreflight` 는 준비 진행률·시험 가능 여부를 말할 뿐 천장을 만들지 않는다.
    */
-  if (state === 'HOLD' && stageRank(ceiling) > stageRank(release)) {
-    state = 'PREPARE'
-    const pct = promotion?.nextPreflight.ready === true ? '준비 완료'
-      : `준비 중 — ${promotion?.nextPreflight.blocking[0] ?? '진행률 미측정'}`
-    reasons.push(`🟢 PREPARE — 공개 ${release} · 승인 천장 ${ceiling} 로 재고를 쌓는다 (${pct})`)
-  }
+  // 🔴 **PREPARE 판단은 공개가 확정된 뒤에 한다** — 아래 ⑤ 로 옮겼다(2026-09-24 8차).
+  //    감속·고정·천장 제한이 공개를 바꾸므로, 여기서 정하면 "쌓는 중" 이 거짓이 될 수 있다
 
   // ── ④ 감속은 정본에 맡긴다 ──
   const safe = safeStageFor(release, input.verdicts)
@@ -354,6 +350,36 @@ export function planStageDecision(input: StageInputs): StageDecision {
     release = ceiling
     // 🔴 천장에 걸려 상태가 내려가면 그 전이 근거도 함께 버린다 — 남기면 거짓이 된다
     if (state === 'TRIAL' || state === 'SUSTAIN') { state = 'HOLD'; transition = null }
+  }
+  /**
+   * ── 🔴 **전이 근거와 실제 공개가 어긋나면 그 전이는 사실이 아니다** (2026-09-24 8차) ──
+   *
+   *    실측 결함: `sustainedRelease=d3` · 승격 ready · 천장 d5 인데 **준비도 감속**(④)이
+   *    공개를 d1 로 내렸다. 그런데 `state` 는 `SUSTAIN` 이고 전이 근거는 `d3→d5` 로
+   *    남아 있었다 — **"d5 로 올렸다" 고 적힌 행이 실제로는 d1 로 낸다.**
+   *    정본 validator 가 이 모순을 잡아 드러났다(자기 일관성 검사).
+   */
+  if (transition !== null) {
+    const target = transition.kind === 'TRIAL' ? transition.target : transition.to
+    if (release !== target) {
+      reasons.push(
+        `🔴 ${state} 전이 대상 ${target} 와 실제 공개 ${release} 가 다르다 — 그 전이를 되돌린다`,
+      )
+      state = 'HOLD'
+      transition = null
+    }
+  }
+
+  /**
+   * ── ⑤ PREPARE ──
+   * 🔴 **이미 승인된 천장이 공개보다 높으면** 그 차이로 다음 단계 재고를 쌓는다.
+   *    🔴 공개가 **확정된 뒤**에 판단한다 — 감속·고정·천장 제한 전에 정하면 거짓이 된다.
+   */
+  if (state === 'HOLD' && stageRank(ceiling) > stageRank(release)) {
+    state = 'PREPARE'
+    const pct = promotion?.nextPreflight.ready === true ? '준비 완료'
+      : `준비 중 — ${promotion?.nextPreflight.blocking[0] ?? '진행률 미측정'}`
+    reasons.push(`🟢 PREPARE — 공개 ${release} · 승인 천장 ${ceiling} 로 재고를 쌓는다 (${pct})`)
   }
   if (state === 'HOLD' && reasons.length === 0) {
     reasons.push(`유지 — ${promotion?.nextAction ?? '판정 근거 없음'}`)
