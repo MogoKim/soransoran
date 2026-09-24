@@ -1,95 +1,100 @@
 #!/usr/bin/env node
 /**
- * register 승인 옵션 회귀 테스트 (§13.9)
+ * register 판정 회귀 테스트 — **M3-A 로 다시 썼다** (2026-09-24).
  *
- * `--founder-approved` 가 **두 줄만** 완화하는지 본다. 이 테스트가 지키는 것은
- * "옵션을 켜도 나머지 검사는 그대로 돈다" 하나다. 여기가 무너지면 HIGH 가
- * hero 없이, 슬롯 충돌인 채로, 큐 밖에서 등록될 수 있다.
+ * 🔴 **옛 판은 `--founder-approved` 플래그가 주제였다.**
+ *    "창업자가 건별로 켜면 HIGH 두 줄이 완화된다" 를 지키는 시험이었다.
+ *    그 플래그는 M3-A 에서 **아무것도 열지 않는다** — 등급으로 막지 않으므로
+ *    우회로가 필요했던 이유가 사라졌다. 그래서 다음 기대를 **폐기**했다:
+ *      · 'BLOCKED' (HIGH 라서)
+ *      · 'riskLevel 사유가 있다'
+ *      · 'autoEligible 사유가 있다'
+ *      · 'checks.founderApproved 는 false' · 'checks.approvalMode 는 manual-high'
+ *      · 'notes 에 승인 흔적이 남는다'
  *
- * 🔴 plan() 만 부른다. 파일을 쓰지 않는다 (--write 경로를 타지 않는다).
+ * 🔴 대신 이것을 지킨다:
+ *      ① 등급 사유가 **영영 나오지 않는다**
+ *      ② 플래그를 켜도 결과가 **한 글자도 달라지지 않는다**
+ *      ③ 슬롯·중복·큐·hero·삽입 위치 검사는 **그대로 막는다**
+ *
+ * 🔴 plan() 만 부른다. 파일을 쓰지 않는다.
  *
  * 실행: node scripts/magazine-register-check.mjs
  */
 
 import { plan } from './magazine-register.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
+import { resolveValidationProfile } from './lib/magazine-validation-profile.mjs'
 
 let failed = 0
 let passed = 0
-
 function expect(label, actual, want) {
   const ok = actual === want
   ok ? (passed += 1) : (failed += 1)
   console.log(`  ${ok ? '✅' : '🔴'} ${label}`)
   if (!ok) console.log(`       기대 ${want} · 실제 ${actual}`)
 }
-
-/** reasons 에 그 사유가 들어 있는가 */
 const has = (p, frag) => p.reasons.some((r) => r.includes(frag))
+const LEGACY = ['riskLevel=', 'autoEligible=false', '창업자 검수', '창업자 승인']
 
-/**
- * 🔴 **등록되면 큐에서 빠진다.** 특정 slug 가 "큐에 있는 HIGH" 로 남아 있을 거라고
- *    가정하면 그 글을 등록한 날 테스트가 깨진다 — 실제로 `which-clinic-menopause` 를
- *    등록한 뒤 5건이 깨졌다.
- *
- *    그래서 slug 를 박지 않고 **큐에서 HIGH 를 골라 쓴다.** 그리고 verdict 가 아니라
- *    **사유 문자열의 유무**를 본다. 큐의 HIGH 는 대개 draft 가 아직 없어서 어차피
- *    BLOCKED 인데, 이 테스트가 확인할 것은 "그 두 줄이 사라지는가" 하나다.
- */
-const highInQueue = loadQueue().find((i) => i.riskLevel === 'HIGH' && i.autoEligible !== true)
-if (!highInQueue) {
-  console.log('  🔴 큐에 HIGH 항목이 없다 — 이 테스트를 돌릴 수 없다')
-  process.exit(1)
-}
+/** 🔴 slug 를 박지 않는다 — 등록되면 큐에서 빠진다 */
+const queue = loadQueue()
+const highInQueue = queue.find((i) => i.riskLevel === 'HIGH' && i.autoEligible !== true)
+if (!highInQueue) { console.log('  🔴 큐에 HIGH 항목이 없다'); process.exit(1) }
 const HIGH_SLUG = highInQueue.slug
 
-console.log(`\n══════ 플래그 없음 — 지금과 100% 같아야  (${HIGH_SLUG})`)
+console.log(`\n══════ ① 등급 사유는 영영 나오지 않는다 (${HIGH_SLUG})`)
 {
   const p = plan({ slug: HIGH_SLUG, publishAtInput: '2027-01-05' })
-  expect('BLOCKED', p.verdict, 'BLOCKED')
-  expect('riskLevel 사유가 있다', has(p, 'riskLevel=HIGH'), true)
-  expect('autoEligible 사유가 있다', has(p, 'autoEligible=false'), true)
-  expect('checks.founderApproved 는 false', p.checks.founderApproved, false)
+  for (const frag of LEGACY) expect(`"${frag}" 사유가 없다`, has(p, frag), false)
+  expect('프로필이 notes 에 남는다', p.notes.some((n) => n.startsWith('validationProfile=')), true)
+  expect('  그 프로필은 어댑터 판정과 같다',
+    p.notes.some((n) => n === `validationProfile=${resolveValidationProfile(highInQueue).profile}`), true)
   expect('checks.approvalMode 는 null', p.checks.approvalMode, null)
+  expect('🔴 사람 승인 흔적이 없다', 'founderApproved' in p.checks, false)
 }
 
-console.log('\n══════ 플래그 있음 — 두 줄만 완화')
+console.log('\n══════ ② 플래그를 켜도 결과가 달라지지 않는다')
 {
-  const p = plan({ slug: HIGH_SLUG, publishAtInput: '2027-01-05', founderApproved: true })
-  expect('riskLevel 사유가 사라졌다', has(p, 'riskLevel=HIGH'), false)
-  expect('autoEligible 사유가 사라졌다', has(p, 'autoEligible=false'), false)
-  expect('checks.approvalMode', p.checks.approvalMode, 'manual-high')
-  expect('notes 에 승인 흔적이 남는다', p.notes.some((n) => n.includes('창업자 승인으로 통과')), true)
-  // 나머지 검사는 그대로 돈다 — 이 항목은 draft 가 없어 여전히 BLOCKED 다
-  expect('다른 사유는 살아 있다', has(p, 'article-draft.ts 가 없다'), true)
+  const slugs = [HIGH_SLUG, ...queue.slice(0, 4).map((i) => i.slug)]
+  for (const slug of [...new Set(slugs)]) {
+    const off = plan({ slug, publishAtInput: '2027-01-05' })
+    const on = plan({ slug, publishAtInput: '2027-01-05', founderApproved: true })
+    expect(`${slug} — verdict 동일`, on.verdict, off.verdict)
+    expect(`${slug} — 사유가 완전히 동일`, JSON.stringify(on.reasons), JSON.stringify(off.reasons))
+    expect(`${slug} — notes 도 동일`, JSON.stringify(on.notes), JSON.stringify(off.notes))
+  }
 }
 
-console.log('\n══════ 플래그가 있어도 막아야 하는 것')
+console.log('\n══════ ③ 나머지 관문은 그대로 막는다')
 {
-  // 슬롯 — 2026-09-14 는 memory-worry-menopause 가 점유
-  const slot = plan({ slug: 'which-clinic-menopause', publishAtInput: '2026-09-14', founderApproved: true })
-  expect('슬롯 충돌은 BLOCKED', slot.verdict, 'BLOCKED')
-  expect('  사유가 슬롯이다', has(slot, '슬롯이 이미 차 있다'), true)
+  const registered = plan({ slug: 'memory-worry-menopause', publishAtInput: '2027-01-06' })
+  expect('이미 articles.ts 에 있으면 BLOCKED', registered.verdict, 'BLOCKED')
+  expect('  사유가 중복이다', has(registered, '이미 articles.ts 에 있다'), true)
+  expect('  큐에 없다는 사유도 함께', has(registered, 'topic-queue.ts 에 없다'), true)
 
-  // 이미 등록됨 + 큐에 없음
-  const dup = plan({ slug: 'memory-worry-menopause', publishAtInput: '2026-09-25', founderApproved: true })
-  expect('이미 articles.ts 에 있으면 BLOCKED', dup.verdict, 'BLOCKED')
-  expect('  사유가 중복이다', has(dup, '이미 articles.ts 에 있다'), true)
-  expect('  큐에 없다는 사유도 함께', has(dup, 'topic-queue.ts 에 없다'), true)
+  const nowhere = plan({ slug: 'no-such-slug-at-all', publishAtInput: '2027-01-07' })
+  expect('큐에도 없고 원고도 없으면 BLOCKED', nowhere.verdict, 'BLOCKED')
+  expect('  article-draft.ts 없음을 잡는다', has(nowhere, 'article-draft.ts 가 없다'), true)
+  expect('  review.ts 없음도 잡는다', has(nowhere, 'review.ts 가 없다'), true)
 
-  // hero 없음 + 패킷 없음
-  const noHero = plan({ slug: 'checkup-items-50s', publishAtInput: '2026-09-22', founderApproved: true })
-  expect('hero 없으면 BLOCKED', noHero.verdict, 'BLOCKED')
-  expect('  사유가 hero 다', has(noHero, 'imageMode=REQUIRED 인데 hero 가 없다'), true)
-  expect('  article-draft.ts 없음도 잡는다', has(noHero, 'article-draft.ts 가 없다'), true)
+  const badDate = plan({ slug: HIGH_SLUG, publishAtInput: '아무날' })
+  expect('날짜가 이상하면 BLOCKED', badDate.verdict, 'BLOCKED')
+
+  /** 🔴 이미 찬 날짜 — 슬롯 검사는 그대로 산다 */
+  const { loadArticles } = await import('./lib/magazine-load.mjs')
+  const takenDate = String(loadArticles()[0]?.publishAt ?? '').slice(0, 10)
+  if (takenDate) {
+    const slot = plan({ slug: HIGH_SLUG, publishAtInput: takenDate })
+    expect('슬롯이 차 있으면 BLOCKED', slot.verdict, 'BLOCKED')
+    expect('  사유가 슬롯이다', has(slot, '슬롯이 이미 차 있다'), true)
+  }
 }
 
-console.log('\n══════ LOW/MEDIUM 은 플래그 유무로 달라지지 않는다')
-for (const slug of ['memory-worry-menopause', 'avoiding-gatherings', 'back-to-work-homemaker']) {
-  const off = plan({ slug, publishAtInput: '2026-09-25' })
-  const on = plan({ slug, publishAtInput: '2026-09-25', founderApproved: true })
-  expect(`${slug} — verdict 동일`, off.verdict === on.verdict, true)
-  expect(`${slug} — 사유 수 동일`, off.reasons.length === on.reasons.length, true)
+console.log('\n══════ ④ 프로필을 못 정하면 막는다 (조용히 통과시키지 않는다)')
+{
+  const unresolved = queue.filter((i) => !resolveValidationProfile(i).profile)
+  expect('🔴 실제 큐에는 판정 불가 행이 없다', unresolved.length, 0)
 }
 
 console.log(`\n${failed === 0 ? '✅' : '🔴'} ${passed} PASS · ${failed} FAIL`)

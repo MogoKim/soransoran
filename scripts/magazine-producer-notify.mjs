@@ -120,7 +120,8 @@ export function judge({ date, run, runExists }) {
   if (selected > 0) {
     const missing = (run.selected ?? [])
       .map((x) => (typeof x === 'string' ? { slug: x, needsFullReview: false } : x))
-      .filter((x) => x?.slug && !x.needsFullReview)
+      // 🔴 needsFullReview 로 자동 진행 목록에서 빼지 않는다 (M3-A)
+      .filter((x) => x?.slug)
       .filter((x) => !existsSync(join(DRAFTS_DIR, x.slug, 'draft.md')))
       .map((x) => x.slug)
 

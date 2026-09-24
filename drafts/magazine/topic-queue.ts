@@ -67,13 +67,20 @@ export type TopicQueueItem = {
   intent: SearchIntent
   cluster: MagazineCluster
   target: string
+  /**
+   * 🔴 **검증 강도** (M3-A). 발행 차단 등급이 아니다.
+   *    신규 항목은 이 값을 **반드시** 달고 온다.
+   *    기존 26건은 값이 없어도 `scripts/lib/magazine-validation-profile.mjs` 의
+   *    호환 표가 받는다 — 그 표에 새 주제를 추가하지 않는다.
+   */
+  validationProfile?: 'STANDARD' | 'MEDICAL' | 'FINANCIAL' | 'SENSITIVE'
   riskLevel: RiskLevel
   reviewMode: ReviewMode
   imageMode: ImageMode
   /**
-   * producer 가 창업자 승인 없이 예약해도 되는가.
-   * HIGH 는 항상 false. LOW·MEDIUM 이라도 의료 판단·제품 언급 위험이 있으면 false.
-   * false 인 항목은 status: 'BLOCKED' 로 등록해 공개 관문에서 막는다.
+   * 🔴 **호환 필드다** (M3-A). 아무 판정에도 쓰이지 않는다 — 값이 무엇이든
+   *    자동 진행·등록·공개는 달라지지 않는다. 판정은 `validationProfile` 과
+   *    결정론적 QA 가 한다. 기존 26행의 값을 보존하려고 남겨 둔 것뿐이다.
    */
   autoEligible: boolean
   /** 없으면 단발 글 */

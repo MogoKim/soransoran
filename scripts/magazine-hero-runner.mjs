@@ -7,7 +7,7 @@
  *                    ↑ 여기
  *
  * 🔴 **등록 게이트를 열지 않는다.**
- *    hero 가 생겨도 riskLevel=HIGH · autoEligible=false 는 그대로 막는다.
+ *    🔴 M3-A — 등급은 아무것도 막지 않는다. hero 는 등록 관문과 무관하다.
  *    hero 는 batch-qa 의 ⑥번 조건 하나일 뿐이다.
  *
  * 🔴 기본은 dry-run. `--write` 없이는 아무 파일도 쓰지 않는다.
@@ -151,7 +151,7 @@ function help() {
 🔴 기본은 dry-run. --write 를 명시해야만 파일을 쓴다.
 🔴 imageMode=OPTIONAL 은 만들지 않는다 — --allow-optional 을 사람이 붙인다.
 🔴 hero 가 이미 있으면 BLOCKED. 덮어쓰려면 --force.
-🔴 등록 게이트를 열지 않는다 — HIGH · autoEligible=false 는 그대로 막힌다.
+🔴 등록 게이트를 열지 않는다 — hero 를 만드는 것과 등록 판정은 별개다.
 
 alt
   "…여성" 으로 끝내고 화면에 무엇이 있는지 적는다 (등록 17건이 전부 그 형태다).

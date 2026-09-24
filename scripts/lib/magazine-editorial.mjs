@@ -23,7 +23,7 @@
  *    magazine-qa.mjs 안에 인라인하면 그때 다시 빼내야 한다.
  *
  * 🔴 이 파일은 등록을 열지 않는다.
- *    AUTO_RISK · brief G5 · batch-qa 의 HIGH 차단은 그대로다.
+ *    (역사 · SUPERSEDED) 옛 판에는 AUTO_RISK · brief G5 · batch-qa 의 HIGH 차단이 있었다.
  *    검사를 늘리는 것과 게이트를 여는 것은 다른 일이다.
  */
 

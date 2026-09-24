@@ -44,6 +44,7 @@ import {
   chromeArgs, CHROME_APP, CDP_PORT,
   STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE,
 } from './lib/chatgpt-session.mjs'
+import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 
@@ -96,6 +97,8 @@ function help() {
   node scripts/magazine-webui-runner.mjs --login             전용 Chrome 을 띄운다 (닫지 말 것)
   node scripts/magazine-webui-runner.mjs --fetch <slug>      한 건 회수
   node scripts/magazine-webui-runner.mjs --fetch <slug> --force
+  node scripts/magazine-webui-runner.mjs --fetch <slug> --force --regen-packet <경로>
+                                                             🔴 QA 실패 패킷을 같이 보낸다 (자동 재생성)
                                                              이미 있는 draft.md 를 덮어쓴다 (사람이 켠다)
   node scripts/magazine-webui-runner.mjs --fetch-run --dry-run
                                                              오늘 selected 순회 계획만 (전송 0건)
@@ -174,7 +177,72 @@ async function login() {
  * 🔴 이미 draft.md 가 있으면 전송하지 않는다. 재실행이 원고를 날리면 안 된다.
  * 🔴 brief 가 없으면 만들지 않는다 — 지시서는 세션이 쓴다(§13.1).
  */
-async function fetchSlug(slug, { quiet = false, force = false } = {}) {
+/** 🔴 패킷 계약 — 이 판만 받는다 */
+export const REGEN_PACKET_SCHEMA = 'regen-packet/2'
+
+/**
+ * 🔴 `--regen-packet` **인자 자체**를 검사한다.
+ *    옵션을 쓰지 않았으면 `path: null` 로 정상. 썼는데 값이 없으면 실패다.
+ *
+ * @returns {{ok:true, path:string|null}|{ok:false, code:string, why:string}}
+ */
+export function readRegenPacketArg(argv) {
+  const i = argv.indexOf('--regen-packet')
+  if (i === -1) return { ok: true, path: null }
+  const next = argv[i + 1]
+  if (next === undefined || next === null || String(next).trim() === '') {
+    return { ok: false, code: 'REGEN_PACKET_PATH_MISSING', why: '--regen-packet 뒤에 경로가 없다' }
+  }
+  if (String(next).startsWith('--')) {
+    return { ok: false, code: 'REGEN_PACKET_PATH_MISSING',
+      why: `--regen-packet 뒤가 경로가 아니라 다른 옵션이다: ${next}` }
+  }
+  return { ok: true, path: String(next) }
+}
+
+/**
+ * 🔴 **재생성 패킷** — QA 가 무엇에 걸렸는지 같은 프롬프트에 덧붙인다.
+ *    새 경로도 새 API 도 만들지 않는다. 쓰던 ChatGPT 대화에 **한 문단 더** 넣을 뿐이다.
+ *
+ * 🔴 **fail-closed 다.** 옛 판은 읽지 못한 패킷을 `null` 로 바꿔 **일반 생성으로 그냥 진행**했다.
+ *    그러면 "실패를 고쳐 다시 써라" 가 사라진 채 같은 원고가 다시 나오고,
+ *    재생성 횟수만 한 번 줄어든다. 게다가 **다른 slug 의 패킷**도 그대로 실렸다.
+ *    옵션을 명시했는데 패킷이 성하지 않으면 **한 글자도 보내지 않고 멈춘다.**
+ *
+ * @returns {{ok:true, packet:object}|{ok:false, code:string, why:string}}
+ */
+export function readRegenPacket(packetPath, slug) {
+  if (!packetPath) return { ok: false, code: 'REGEN_PACKET_PATH_MISSING', why: '--regen-packet 경로가 비었다' }
+  if (!existsSync(packetPath)) {
+    return { ok: false, code: 'REGEN_PACKET_NOT_FOUND', why: `패킷 파일이 없다: ${packetPath}` }
+  }
+  let raw
+  try { raw = readFileSync(packetPath, 'utf8') }
+  catch (e) { return { ok: false, code: 'REGEN_PACKET_UNREADABLE', why: `패킷을 읽지 못했다: ${e.message}` } }
+  let packet
+  try { packet = JSON.parse(raw) }
+  catch (e) { return { ok: false, code: 'REGEN_PACKET_BAD_JSON', why: `패킷이 JSON 이 아니다: ${e.message}` } }
+  if (!packet || typeof packet !== 'object' || Array.isArray(packet)) {
+    return { ok: false, code: 'REGEN_PACKET_BAD_JSON', why: '패킷이 객체가 아니다' }
+  }
+  if (packet.schemaVersion !== REGEN_PACKET_SCHEMA) {
+    return { ok: false, code: 'REGEN_PACKET_SCHEMA',
+      why: `패킷 판이 다르다 (${String(packet.schemaVersion)} ≠ ${REGEN_PACKET_SCHEMA})` }
+  }
+  if (typeof packet.instruction !== 'string' || !packet.instruction.trim()) {
+    return { ok: false, code: 'REGEN_PACKET_NO_INSTRUCTION', why: '패킷에 instruction 이 없다' }
+  }
+  if (!Array.isArray(packet.failures) || packet.failures.length === 0) {
+    return { ok: false, code: 'REGEN_PACKET_NO_FAILURES', why: '패킷에 failures 가 없다 — 고칠 대상이 없다' }
+  }
+  if (slug && packet.slug !== slug) {
+    return { ok: false, code: 'REGEN_PACKET_SLUG_MISMATCH',
+      why: `🔴 패킷의 slug 가 다르다 (${String(packet.slug)} ≠ ${slug}) — 남의 지적을 이 글에 보내지 않는다` }
+  }
+  return { ok: true, packet }
+}
+
+async function fetchSlug(slug, { quiet = false, force = false, regenPacket = null } = {}) {
   const dir = join(DRAFTS_DIR, slug)
   const briefPath = join(dir, 'brief.md')
   const outPath = join(dir, 'draft.md')
@@ -196,6 +264,17 @@ async function fetchSlug(slug, { quiet = false, force = false } = {}) {
 
   if (!quiet) console.log(`     전송 — 대조 문장 ${markers.length}개`)
 
+  /** 🔴 옵션을 명시했으면 패킷이 성해야 한다. 아니면 **보내지 않는다** */
+  let packet = null
+  if (regenPacket) {
+    const pr = readRegenPacket(regenPacket, slug)
+    if (!pr.ok) {
+      return { slug, status: 'failed', reason: pr.code, detail: pr.why, sent: false }
+    }
+    packet = pr.packet
+    if (!quiet) console.log(`     재생성 — 실패 ${packet.failures.length}건을 같이 보낸다`)
+  }
+
   const prompt = [
     '첨부한 brief.md 의 지시를 그대로 따라 최종 원고를 작성하세요.',
     '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
@@ -203,6 +282,8 @@ async function fetchSlug(slug, { quiet = false, force = false } = {}) {
     'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
     // 🔴 관문이 막는 것을 프롬프트에서도 한 번 말한다. 막는 것보다 안 나오게 하는 편이 싸다.
     '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
+    // 🔴 재생성이면 무엇이 걸렸는지 그대로 붙인다
+    ...(packet ? ['', '--- 이전 원고가 자동 검사에 걸렸습니다 ---', packet.instruction] : []),
   ].join(' ')
 
   // 🔴 관문을 쓰기 직전에 건넨다. 막히면 파일이 생기지 않는다.
@@ -242,9 +323,27 @@ function describeDraft(slug) {
 }
 
 /** 단건 CLI — 사람이 부르는 경로 */
-async function fetchOne(slug, { force = false } = {}) {
+async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
   console.log('')
   console.log(`  원고 요청 — ${slug}`)
+
+  /**
+   * 🔴 **패킷 검사가 브라우저보다 앞이다.**
+   *    접근 확인을 먼저 하면 세션을 열어 놓고 나서 멈춘다.
+   *    성하지 않은 패킷이면 **아무것도 시작하지 않는다.**
+   */
+  if (regenPacket) {
+    const pr = readRegenPacket(regenPacket, slug)
+    if (!pr.ok) {
+      console.error('')
+      console.error(`  ⛔ ${pr.code} — ${pr.why}`)
+      console.error('     한 글자도 보내지 않았다. (전송 0건)')
+      console.error('')
+      process.exit(1)
+    }
+    console.log(`  0) 재생성 패킷 확인 — 실패 ${pr.packet.failures.length}건`)
+  }
+
   console.log('  1) 접근 확인')
   const p = await probe({ autoStart: true })
   console.log(`     status ${p.status}`)
@@ -259,14 +358,14 @@ async function fetchOne(slug, { force = false } = {}) {
   }
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
-  const r = await fetchSlug(slug, { force })
+  const r = await fetchSlug(slug, { force, regenPacket })
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
     process.exit(r.reason === 'brief_missing' ? 1 : 0)
   }
   if (r.status === 'failed') {
-    console.error(`     ⛔ ${r.reason}${r.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''} · 전송 ${r.sent ? '1건' : '0건'}`)
+    console.error(`     ⛔ ${r.reason}${r.detail ? ` — ${r.detail}` : ''}${r.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''} · 전송 ${r.sent ? '1건' : '0건'}`)
     // 🔴 관문에 막혔으면 무엇이 걸렸는지 한 줄씩 말한다. 코드만 찍으면 고칠 수가 없다.
     if (r.invalid?.length) {
       console.error('     관문에 막혔다 — 저장하지 않았다:')
@@ -404,7 +503,7 @@ function status() {
     else if (draft) stage = 'md-to-draft 대기'
     else if (brief && review) stage = '원고 회수 대기'
     else if (brief || review) stage = 'brief 불완전'
-    return { slug: q.slug, riskLevel: q.riskLevel, autoEligible: q.autoEligible === true, brief, review, draft, article, stage }
+    return { slug: q.slug, queueItem: q, riskLevel: q.riskLevel, autoEligible: q.autoEligible === true, brief, review, draft, article, stage }
   })
 
   if (process.argv.includes('--json')) {
@@ -424,9 +523,10 @@ function status() {
   console.log('')
 
   // 지금 회수할 수 있는 것만 따로 보여준다 — 자동 레인이 실제로 태울 대상이다
-  const ready = rows.filter((r) => r.stage === '원고 회수 대기' && r.autoEligible && r.riskLevel !== 'HIGH')
-  console.log(`  지금 회수 가능(LOW/MEDIUM · autoEligible): ${ready.length}건`)
-  for (const r of ready) console.log(`    ${r.slug.padEnd(34)}${r.riskLevel}`)
+  /** 🔴 등급으로 가르지 않는다 (M3-A). 프로필을 정할 수 있으면 회수 대상이다 */
+  const ready = rows.filter((r) => r.stage === '원고 회수 대기' && isAutoLaneEligible(r.queueItem ?? r).ok)
+  console.log(`  지금 회수 가능(프로필 확정): ${ready.length}건`)
+  for (const r of ready) console.log(`    ${r.slug.padEnd(34)}${isAutoLaneEligible(r.queueItem ?? r).profile ?? '-'}`)
   console.log('')
 }
 
@@ -441,7 +541,22 @@ async function main() {
       console.error('  --fetch <slug> 가 필요하다')
       process.exit(2)
     }
-    return await fetchOne(slug, { force: argv.includes('--force') })
+    /**
+     * 🔴 **옵션이 있는데 값이 없으면 그대로 멈춘다.**
+     *    옛 판은 `--regen-packet` 이 마지막 인자면 `undefined` 가 나왔고,
+     *    그 값이 falsy 라 **검사를 통째로 건너뛰고 일반 생성을 보냈다** —
+     *    "재생성하라" 고 적은 명령이 조용히 새 원고를 덮어썼다.
+     *    값이 다른 `--옵션` 인 경우도 경로가 아니다.
+     */
+    const rp = readRegenPacketArg(argv)
+    if (!rp.ok) {
+      console.error('')
+      console.error(`  ⛔ ${rp.code} — ${rp.why}`)
+      console.error('     한 글자도 보내지 않았다. (전송 0건)')
+      console.error('')
+      process.exit(1)
+    }
+    return await fetchOne(slug, { force: argv.includes('--force'), regenPacket: rp.path })
   }
   if (argv.includes('--fetch-run')) {
     const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : todayKst()

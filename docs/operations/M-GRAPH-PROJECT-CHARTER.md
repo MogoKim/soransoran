@@ -127,6 +127,82 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 🔴 자동화를 이유로 의료·재정·안전 관문을 약화하지 않는다 (§4 와 같은 뜻이다).
 자동화는 관문을 없애는 것이 아니라 **사람 대기를 없애는 것**이다.
 
+### 3-B-1. 🔴 M3-A 구현 확정 (창업자 확정 · 2026-09-24) — **상태 LOCAL_COMPLETE**
+
+> 🔴 계약은 확정이고 **구현 상태는 LOCAL_COMPLETE** 다.
+> 로컬 검증을 전부 통과했고 이 커밋에 담겼다.
+> **push · PR · 병합 · 배포 · 운영 등록은 하지 않았다.**
+>
+> **실연 ① 자동 재생성 (2026-09-24)**
+> 실제 결정론적 QA 실패(`MED_CARE_LINE`) → `drive()` 가 실패 패킷 생성
+> → 기존 ChatGPT 웹 UI 경로(`--regen-packet`) **1회 호출** → 원고 회수
+> → 재변환 → 재QA **PASS**(프로필 QA · `magazine-qa` FAIL 0) 까지 한 번에 확인했다.
+> 같은 회차에서 다른 두 글은 `DRY_RUN_OK` 로 계속 진행했다.
+> 실연에 쓴 원고·운영 장부는 바이트 단위로 복원했다.
+> 🔴 그 실연에서 `magazine-hero-runner` 와 `magazine-register` 는 **stub** 이었다 —
+> 아래 실연 ②가 그 자리를 실제 실행으로 채웠다.
+>
+> **실연 ② hero 생성 + 실제 등록 (2026-09-24 · 격리 복제본)**
+> 미커밋 worktree 전체를 임시 디렉터리로 복제하고 **임시 HOME** 으로 돌렸다
+> (`node_modules` 는 `package-lock.json` 해시가 같을 때만 재사용했다).
+> `checkup-items-50s` 한 건에 실제 `drive(--write)` 를 돌려 전 단계를 확인했다.
+>
+> | 단계 | 결과 |
+> |---|---|
+> | gate | `MEDICAL` · `imageMode=REQUIRED` |
+> | draft 회수 | **생략** — `draft.md` 가 이미 있다 → 🔴 **텍스트 원고 ChatGPT 호출 0회** |
+> | article-draft.ts | `md-to-draft` 재변환 |
+> | magazine QA | FAIL 0 |
+> | hero | `magazine-hero-runner` 실행 · ChatGPT **이미지 1회** 생성 · `1200×675` WEBP(VP8X · 51,364 bytes) · `article-draft.ts` 에 `heroImage` 4필드 주입 |
+> | batch-qa | `READY_TO_SCHEDULE` (`MEDICAL` · `hero=true`) |
+> | register | `articles.ts` 에 `status: 'SCHEDULED'` · `publishAt 2026-09-27T10:30:00+09:00` (비어 있던 날짜) |
+> | topic-queue | **정확히 1건**(`checkup-items-50s`) 제거 — 26 → 25 |
+> | 최종 판정 | 🔴 **DONE** · 재생성 0회 |
+>
+> 임시본에서 `tsc --noEmit` 도 통과했다 — 등록된 `articles.ts` 가 실제로 컴파일된다.
+>
+> **운영에 남긴 흔적 0**
+> 임시 디렉터리를 지운 뒤 바이트 해시로 대조했다. 운영 `articles.ts` ·
+> `topic-queue.ts` · `draft.md` · `article-draft.ts` · `review.ts` ·
+> `public` hero · 운영 격리 장부 **전부 변화 없음**, `regen-packets` 없음.
+>
+> **아직 하지 않은 것**
+> - Codex 재검토 · push · PR · 병합 · 배포 · 운영 등록.
+> - 운영 `launchd` 설치는 supervised 1회 성공 뒤에만 연다 (변경 없음).
+
+**검증은 결정론적 코드가 한다. 제3의 모델이 문장 의미를 다시 심사하지 않는다.**
+
+```text
+Claude CLI(구독) brief  →  ChatGPT 웹 UI(구독) 원고  →  결정론적 코드 QA
+  →  자동 등록 · PR · 병합 · 공개
+실패하면 그 slug 만 최대 2회 자동 재생성 → 계속 실패하면 그 글만 HOLD → 다른 글은 계속 간다
+```
+
+- 🔴 **새 유료 AI API 0.** 제3 AI 모델·별도 의미 검증 API 를 도입하지 않는다.
+- `validationProfile` 은 **발행 차단 등급이 아니라 brief 와 QA 의 강도**를 정한다.
+  - 프로필은 `cluster` 와 큐가 적어 둔 **위험 사유**에서 정한다
+    (`scripts/lib/magazine-validation-profile.mjs`).
+  - 🔴 근거 없이 판정할 수 없는 행은 **조용히 STANDARD 로 보내지 않고 멈추고 보고**한다.
+- 코드가 보는 것은 **패턴·존재·중복·출처 유무**처럼 틀림없이 판정 가능한 것뿐이다
+  (`scripts/lib/magazine-profile-qa.mjs`).
+- 재시도 횟수는 **재시작해도 초기화되지 않는다**.
+  🔴 장부는 **하나**다 — `scripts/lib/magazine-quarantine.mjs` (저장소 밖 · 원자 저장).
+  깨진 장부를 빈 것으로 보지 않는다. 읽지 못하면 그 회차 후보를 전부 HOLD 한다.
+- 재생성은 **기존 경로**로 나간다 —
+  `magazine-webui-runner.mjs --fetch <slug> --force --regen-packet <경로>`.
+  새 스크립트도 새 API 도 없다. 쓰던 프롬프트에 실패 패킷 한 문단이 더 붙을 뿐이다.
+- 🔴 `HOLD` 는 사람 승인 대기열이 아니다. **이번 공급에서 빠진다**는 표시다.
+
+### 3-B-2. 🔴 매거진의 종료 목적
+
+매거진을 **영원히 매일 생산하는 것 자체가 목표가 아니다.**
+
+- 초기에는 검색 자산과 커뮤니티 분위기를 만드는 **입구**로 쓴다.
+- 커뮤니티 글·참여·재방문이 스스로 돌기 시작하면 **발행량을 줄일 수 있다.**
+- 🔴 150편·300편을 억지로 채우지 않는다. **근거 있는 주제만** 발행한다.
+- North Star 는 발행 편수가 아니라
+  `7일 안에 다시 방문해 글이나 댓글을 남긴 실제 사용자 수` 다.
+
 ---
 
 ## 4. 하지 않는 것
@@ -615,7 +691,7 @@ M-GRAPH 가 매거진 발행량을 늘린다는 이유로 제출 게이트를 �
 - 🔴 자동 레인 PR 의 **변경 파일 허용 목록** `ALLOWED_FILE_RULES`
   (`scripts/lib/magazine-merge-gate.mjs`) — 목록 밖 파일은 `UNEXPECTED_FILES` 로 병합이 막힌다
 - 🔴 자동 병합의 **위험 등급 정본** `drafts/magazine/topic-queue.ts`
-  — LOW/MEDIUM 이고 `autoEligible=true` 인 것만 자동으로 나간다
+  — 🔴 `validationProfile` 을 정할 수 있고 결정론적 QA 를 통과한 글이 자동으로 나간다
 - 예약 전 비공개
 - Production SHA와 도메인 서빙 확인
 - 공개 후 본문·이미지·목록 watch
@@ -769,7 +845,8 @@ M-GRAPH 가 검색 의도를 정한다고 해서 이 분리를 합치지 않는�
 - G0 검색 정체성과 첫 검색 영토는 창업자가 승인한다.
 - 첫 1~2개 실제 캠페인은 Codex가 설계와 결과를 전수 검토한다.
 - 이후 창업자는 매일 주제를 고르지 않는다.
-- LOW/MEDIUM의 반복 실행은 자동화하고, HIGH·브랜드 경계·새 검색 영토만 사람 판단으로 남긴다.
+- 🔴 **원고의 반복 실행은 전부 자동화한다** (M3-A). 등급으로 사람에게 넘기지 않는다.
+  사람이 판단하는 것은 브랜드 경계와 새 검색 영토뿐이다.
 
 ---
 
