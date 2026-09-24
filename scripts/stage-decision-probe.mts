@@ -28,6 +28,28 @@
  *   🔴 **`#568` 은 아직 미관측이다.** 배포는 됐지만 그 경로를 지나간 회차를
  *      관측하지 못했다 — 미관측은 미관측이지 PASS 가 아니다.
  *
+ * ── 🔴 **기계 지표 두 축의 실측 차이** (2026-09-24 22:30) ────────────────────
+ *
+ *   ```
+ *   decidedBy=machine:  216건   ← 실제로 기계가 만든 행
+ *   profileOf=machine     7건   ← machine profile 계약에 맞는 행
+ *   사람 검토 완료         9건   ← machineReviewedByHuman
+ *   ```
+ *   앞판은 **7건**을 `machineCandidates` 라 부르며 "기계가 만든 후보" 로 보고했다.
+ *   실제 기계 생성 행은 216건이다 — 31배 차이다. 두 수는 다른 질문의 답이고,
+ *   합쳐도 전체가 되지 않는다. 🔴 **한 이름으로 묶지 않는다.**
+ *
+ * ── 🔴 **`operator:compose-db-check` 는 CI FAIL 이 아니다** (2026-09-24 확인) ──
+ *
+ *   격리 `DATABASE_URL` 을 요구하는 통합 검사다. 어느 GitHub workflow 에도
+ *   연결돼 있지 않다(`grep -rn operator:compose-db-check .github/` → 0건).
+ *   같은 조건(격리 DB 없음)에서 **이 브랜치와 `origin/main` 이 같은 결과**다:
+ *   ```
+ *   exit=2 · "🔴 격리 DB 가 아니다. 멈춘다. DATABASE_URL="   (출력 바이트 동일)
+ *   ```
+ *   스크립트 내용도 `origin/main` 과 동일하고, 이 브랜치는 그 경로를 건드리지 않았다.
+ *   🔴 **운영 DB 로 억지 실행하지 않았다** — 격리 DB 가 없으면 미실행으로 남긴다.
+ *
  * ── 🔴 **러너 ↔ probe 대조 (2026-09-24 21:57 · dry-run · DB write 0)** ────────
  *
  *   같은 시각 `original-post:auto-publish`(--apply 없음)와 이 명령을 나란히 돌려
@@ -39,6 +61,11 @@
  *   hold TTL_EXPIRED 1건(같은 id) · 오늘 발행 5건
  *   capacity d5 · release d1 · 이번에 낼 건 없음
  *   ```
+ *
+ *   🔴 **이 일치는 부분 증명이다** (2026-09-24 마스터 지적). 그날은 canary·window
+ *      허가가 **꺼져** 있어 양쪽 다 d1 이었다. 허가가 켜진 날의 일치는 이것으로
+ *      증명되지 않는다 — 그래서 허가 반례를 `stage:ladder-check` 에 넣었다
+ *      (bare d1 / canary d3 · 주1↔주3 · 최소5일↔2일 · 배정 30↔40건).
  */
 import { PrismaClient } from '@prisma/client'
 
@@ -46,8 +73,7 @@ import { planStageDecision, type DatedCanary } from '../src/lib/stage-ladder'
 import { PROFILES, RELEASE_STAGES, type ReleaseStage } from '../src/lib/scale-profile'
 import { simulateStage, stageVerdicts } from '../src/lib/scale-readiness'
 import { judgeOneDayCanary, kstDateString } from '../src/lib/release-canary'
-import { loadPublishableStock, stageStock, releaseCapsOf } from './lib/publishable-stock.mjs'
-import { installFromEnv } from '../src/lib/scale-runtime'
+import { loadPublishableStock, stageStock, resolvePublishScale } from './lib/publishable-stock.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 
 const NOW = new Date()
@@ -63,8 +89,21 @@ async function main(): Promise<void> {
   console.log('   🔴 발행 러너와 같은 함수(loadPublishableStock)로 조립한다\n')
 
   const s = await loadPublishableStock(prisma, NOW)
-  /** 🔴 상한은 러너와 **같은 함수**가 만든다 — 여기서 지어내지 않는다 */
-  const RELEASE_CAPS = releaseCapsOf(installFromEnv(process.env).releaseProfile)
+  /**
+   * 🔴 **상한은 러너와 같은 경로로 만든다** (2026-09-24 5차 · 마스터 지적).
+   *    앞판은 `installFromEnv(process.env)` 만 불렀다 — readiness·canary·window 가 빠진
+   *    **bare env** 다. 그래서 허가로 d3·d5 가 열린 날 러너는 그 상한으로 배정하는데
+   *    probe 는 d1 상한으로 배정해 **다른 재고·다른 picked** 를 냈다.
+   *    오늘 둘 다 d1 이 나온 것은 허가가 꺼져 있었기 때문이지 같은 계산이어서가 아니다.
+   */
+  const resolved = resolvePublishScale({ env: process.env, loaded: s, now: NOW })
+  const RELEASE_CAPS = resolved.caps
+  console.log(`   설치된 규모  release=${resolved.scale.releaseStage}`
+    + ` · capacity=${resolved.scale.capacityStage} · 일 ${resolved.dailyCap}건`
+    + ` · persona 주 ${RELEASE_CAPS.postsPerWeek}건 · 최소 ${RELEASE_CAPS.minDaysBetween}일`)
+  console.log(`   허가  canary=${resolved.canaryAuth.activeToday ? resolved.canaryAuth.stage : '꺼짐'}`
+    + ` · window=${resolved.windowAuth.activeToday ? resolved.windowAuth.stage : '꺼짐'}`
+    + ' — 🔴 허가가 꺼진 날의 일치는 허가가 켜진 날의 일치를 증명하지 않는다')
 
   /**
    * 🔴 **재고를 단계로 나눈다.** `selectAutoTargets` 통과 수를
@@ -76,14 +115,18 @@ async function main(): Promise<void> {
   console.log(`   selectorTargets       ${st.selectorTargets.count}건  ${st.selectorTargets.ids.join(' ')}`)
   console.log(`   freshnessPassed       ${st.freshnessPassed.count}건  ${st.freshnessPassed.ids.join(' ')}`)
   console.log(`   successfullyAssigned  ${st.successfullyAssigned.count}건  ${st.successfullyAssigned.ids.join(' ')}`)
-  console.log(`   🔴 runnableNow         ${st.runnableNow.count}건  ${st.runnableNow.ids.join(' ')}`)
+  console.log(`   🔴 assignmentReady     ${st.assignmentReady.count}건  ${st.assignmentReady.ids.join(' ')}`)
   console.log(`   🔴 nextPickedId        ${st.nextPickedId ?? '(없음)'}`)
+  console.log('   🔴 위 둘은 **재고**다 — 슬롯·일 상한·kill switch·day guard·--apply 를 보지 않는다.'
+    + ' 실행 허가가 아니다')
   if (st.brokenRecovery.length > 0) {
     console.log(`   🔴 배정 깨짐 ${st.brokenRecovery.length}건 — publisher 는 전체를 중단한다`)
     for (const b of st.brokenRecovery) console.log(`      ${b.id}  ${b.problem}`)
   }
-  console.log(`   (참고) 기계가 만든 후보 ${s.machineCandidates}건`
-    + ` · 사람 검토 완료 ${s.humanReviewed}건 — 정본 machineReviewedByHuman 로 센다`)
+  console.log(`   (참고) 기계가 만든 행 ${s.machineDecided}건 (decidedBy=machine:)`
+    + ` · machine profile 유효 ${s.machineProfiled}건 (profileOf)`
+    + ` · 사람 검토 완료 ${s.humanReviewed}건 (machineReviewedByHuman)`)
+  console.log('   🔴 세 수는 서로 다른 축이다 — profile 유효를 "기계가 만든 후보" 로 읽지 않는다')
   if (s.rejectedByCode.length > 0) {
     console.log('\n② selector 제외 사유별 (정본 selectAutoTargets)')
     for (const r of s.rejectedByCode) {

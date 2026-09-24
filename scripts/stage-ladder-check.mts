@@ -27,8 +27,7 @@ import { parsePoolDoc, cardToPersona } from '../src/lib/persona-pool-card'
 import { PERSONA_POOL_DOC } from './lib/voice-runtime.mjs'
 import type { QueueCandidate } from '../src/lib/supply-candidates'
 import { loadPublishableStock, stageStock } from './lib/publishable-stock.mjs'
-import { prepareCandidates } from '../src/lib/supply-candidates'
-import { pickPublishTarget } from '../src/lib/original-post-auto-publish'
+import { planPublishBatch, resolvePublishScale } from './lib/publishable-stock.mjs'
 
 let pass = 0
 let fail = 0
@@ -481,8 +480,10 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     && runnerCode.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 1
     && /const targets = stock\.targets/.test(runnerCode)
     && /const rejected = stock\.rejected/.test(runnerCode)
-    && /stock\.queueCandidates/.test(runnerCode) && /stock\.history/.test(runnerCode)
-    && /stock\.publishedToday/.test(runnerCode),
+    && /stock\.queueCandidates/.test(runnerCode) && /stock\.publishedToday/.test(runnerCode)
+    // 🔴 조립 결과가 판정 함수 둘로 **그대로** 흘러간다 — 러너가 중간에 다시 읽지 않는다
+    && /resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/.test(runnerCode)
+    && /planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runnerCode),
     runnerCode.split('\n').filter((l) => l.includes('stock.')).slice(0, 6).join(' | '))
   check('🔴 🔴 **러너 안에 별도 조립이 남아 있지 않다**',
     !/selectAutoTargets\(rows,/.test(runner)
@@ -492,9 +493,35 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
       .filter((re) => re.test(runner)).map(String).join(' | ') || '(남은 것 없음)')
   check('🔴 probe 도 같은 함수만 쓴다',
     /loadPublishableStock\(/.test(probe) && !/selectAutoTargets\(/.test(probe))
-  check('🔴 🔴 **상한도 같은 함수가 만든다**',
-    /releaseCapsOf\(scale\.releaseProfile\)/.test(runner)
-    && /releaseCapsOf\(installFromEnv\(process\.env\)\.releaseProfile\)/.test(probe))
+  /**
+   * 🔴 **상한은 resolved scale 에서만 나온다** (2026-09-24 5차).
+   *    `installFromEnv(process.env)` 를 직접 부르는 소비자가 있으면 bare env 로
+   *    돌아간다 — 허가가 켜진 날 러너와 다른 상한을 쓰게 된다.
+   */
+  check('🔴 🔴 **러너와 probe 가 같은 resolvePublishScale 로 상한을 만든다**',
+    /const resolved = resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/.test(runner)
+    && /const RELEASE_CAPS = resolved\.caps/.test(runner)
+    && /resolvePublishScale\(\{ env: process\.env, loaded: s, now: NOW \}\)/.test(probe)
+    && /const RELEASE_CAPS = resolved\.caps/.test(probe))
+  /** 🔴 주석에 적힌 과거 사례는 세지 않는다 — **코드 줄**만 본다 */
+  const codeLinesOf = (src: string): string => src.split('\n')
+    .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+  check('🔴 🔴 **어느 쪽도 bare env 로 되돌아가지 않는다**',
+    !/installFromEnv\(process\.env\)/.test(codeLinesOf(runner))
+    && !/installFromEnv\(process\.env\)/.test(codeLinesOf(probe)),
+    [runner, probe].filter((f) => /installFromEnv\(process\.env\)/.test(codeLinesOf(f))).length + '곳')
+  /**
+   * 🔴 **배정 계획도 러너가 공용 함수를 부른다.** 이 호출을 떼면 아래 fixture 검사가
+   *    아니라 **이 줄**이 먼저 빨개진다 — 사본 비교가 아니라 실제 소비 경로다.
+   */
+  check('🔴 🔴 **러너가 planPublishBatch 를 부르고 그 결과만 쓴다**',
+    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runner)
+    && /const assignOf = plan\.assignOf/.test(runner)
+    && /const freshOrdered = plan\.freshOrdered/.test(runner)
+    && /const brokenRecovery = plan\.brokenRecovery/.test(runner)
+    && /\{ picked, recovered, skipped, waiting \} = plan/.test(runner)
+    // 🔴 러너 안에 같은 계산이 다시 있으면 안 된다
+    && !/prepareCandidates\(\{/.test(runner) && !/pickPublishTarget\(\{/.test(runner))
 
   /**
    * 🔴 **같은 함수를 두 번 부르는 것은 동등성 검사가 아니다** (2026-09-24 마스터 지적).
@@ -507,14 +534,16 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
   const stale = new Date(RUN_AT.getTime() - 40 * 864e5)
   const qrow = (o: {
     id: string; persona?: string | null; captured: Date | null; gate?: string
-    decidedBy?: string; site?: string
+    // 🔴 `null` 을 **명시적으로** 넘길 수 있어야 한다 — `?? 'founder'` 로 뭉개면
+    //    "값이 없는 행" 을 사람 검토로 세는 결함을 fixture 가 표현하지 못한다
+    decidedBy?: string | null; site?: string
   }) => ({
     id: o.id, status: 'APPROVED', createdPostId: null, gateVerdict: o.gate ?? 'PASS',
     promptVersion: 'publish-candidate-v1', model: 'human-curated',
     matchedPersonaId: o.persona ?? null,
     draftTitle: '오늘 있었던 작은 이야기',
     draftBody: '아침에 창을 열어 두었더니 바람이 선선했어요.\n다들 어떻게 지내시는지 궁금합니다.',
-    editedTitle: null, editedBody: null, gateResults: {}, decidedBy: o.decidedBy ?? 'founder',
+    editedTitle: null, editedBody: null, gateResults: {}, decidedBy: o.decidedBy === undefined ? 'founder' : o.decidedBy,
     decidedAt: RUN_AT, createdAt: fresh,
     rawContent: { sourceSite: o.site ?? 'publish-candidate:test', sourceCapturedAt: o.captured },
   })
@@ -538,30 +567,14 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
   const CAPS = { postsPerWeek: 3, minDaysBetween: 1 }
 
   /**
-   * 🔴 **publisher 가 실제로 하는 계산을 그대로 옮긴 core.**
-   *    러너 소스의 그 블록과 같은 순서·같은 함수다 — 여기서 새로 판정하지 않는다.
+   * 🔴 **검사는 러너 계산을 베끼지 않는다** (2026-09-24 5차 · 마스터 지적).
+   *    앞판은 `prepareCandidates → freshOrdered → brokenRecovery → pickPublishTarget`
+   *    을 검사 안에 **복사**해 두고 결과를 비교했다. 사본은 러너가 바뀌어도 함께
+   *    바뀌지 않는다 — 갈라진 순간부터 조용히 거짓 초록이 된다.
+   *    🔴 지금은 **러너가 부르는 그 함수**(`planPublishBatch`)를 직접 부른다.
    */
-  const publisherCore = (loaded: Awaited<ReturnType<typeof loadPublishableStock>>) => {
-    const prepared = prepareCandidates({
-      candidates: loaded.queueCandidates, personas: loaded.personas as never,
-      caps: CAPS, at: RUN_AT,
-    })
-    const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
-    const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
-    const freshOrdered = loaded.targets
-      .filter((t) => orderById.has(t.id))
-      .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
-    const broken = loaded.targets
-      .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
-      .filter((x) => x.problem !== null)
-    if (broken.length > 0) return { picked: null as string | null, broken, freshOrdered }
-    const { picked } = pickPublishTarget({
-      ordered: freshOrdered,
-      assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
-      isRecovery: (id) => assignOf.get(id)?.recovery === true,
-    })
-    return { picked: picked?.id ?? null, broken, freshOrdered }
-  }
+  const core = (loaded: Awaited<ReturnType<typeof loadPublishableStock>>, caps = CAPS) =>
+    planPublishBatch({ loaded, caps, at: RUN_AT })
 
   /** ── ⓐ fresh 하지만 배정 불가 · TTL hold · 임의 decidedBy 가 섞인 경우 ── */
   {
@@ -578,13 +591,13 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     ]
     const loaded = await loadPublishableStock(fakeOf(qrows, [prow('P01', 'p1')]), RUN_AT)
     const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
-    const core = publisherCore(loaded)
+    const c = core(loaded)
 
     check('🔴 🔴 **nextPickedId 가 publisher 계산과 같다**',
-      st.nextPickedId === core.picked, `stage=${st.nextPickedId} core=${core.picked}`)
+      st.nextPickedId === c.nextPickedId, `stage=${st.nextPickedId} core=${c.nextPickedId}`)
     check('🔴 🔴 **freshnessPassed 가 publisher 의 freshOrdered 와 같다**',
-      st.freshnessPassed.ids.join(',') === core.freshOrdered.map((t) => t.id).join(','),
-      `${st.freshnessPassed.ids.join(',')} vs ${core.freshOrdered.map((t) => t.id).join(',')}`)
+      st.freshnessPassed.ids.join(',') === c.freshOrdered.map((t) => t.id).join(','),
+      `${st.freshnessPassed.ids.join(',')} vs ${c.freshOrdered.map((t) => t.id).join(',')}`)
     const reasons = st.holdsByReason.map((h) => h.reason).sort().join(',')
     check('🔴 🔴 **세 hold 가 닫힌 enum 값으로 각각 구분돼 나온다**',
       reasons === 'AGE_UNKNOWN,RECOVERY_STALE,TTL_EXPIRED'
@@ -598,7 +611,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
       && st.freshnessPassed.count < st.selectorTargets.count,
       `queue=${st.queueTotal} selector=${st.selectorTargets.count}`
       + ` fresh=${st.freshnessPassed.count} assigned=${st.successfullyAssigned.count}`
-      + ` runnable=${st.runnableNow.count} picked=${st.nextPickedId}`)
+      + ` runnable=${st.assignmentReady.count} picked=${st.nextPickedId}`)
     check('🔴 🔴 **임의 decidedBy 는 사람 검토로 세지 않는다**',
       loaded.humanReviewed === qrows.filter((r) => r.decidedBy === 'founder').length
       && loaded.humanReviewed
@@ -614,15 +627,90 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     const qrows = [qrow({ id: 'x-fresh', persona: null, captured: fresh })]
     const loaded = await loadPublishableStock(fakeOf(qrows, []), RUN_AT)
     const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
-    const core = publisherCore(loaded)
+    const c = core(loaded)
     check('🔴 🔴 **fresh 하지만 배정 불가면 successfullyAssigned 에 들어가지 않는다**',
       st.freshnessPassed.count >= 0 && st.successfullyAssigned.count === 0,
       `fresh=${st.freshnessPassed.count} assigned=${st.successfullyAssigned.count}`)
     check('🔴 🔴 **그때 runnableNow 도 0 이고 nextPickedId 는 null 이다**',
-      st.runnableNow.count === 0 && st.nextPickedId === null && core.picked === null,
-      `runnable=${st.runnableNow.count} picked=${st.nextPickedId} core=${core.picked}`)
+      st.assignmentReady.count === 0 && st.nextPickedId === null && c.nextPickedId === null,
+      `runnable=${st.assignmentReady.count} picked=${st.nextPickedId} core=${c.nextPickedId}`)
     check('🔴 🔴 **assigned=null 인 assignment 를 배정 성공으로 세지 않는다**',
       !st.successfullyAssigned.ids.includes('x-fresh'), st.successfullyAssigned.ids.join(','))
+  }
+
+  /** ── ⓔ 🔴 **허가로 단계가 열리는 날 — bare env 를 쓰면 갈린다** ── */
+  {
+    /**
+     * 🔴 앞판 probe 는 `installFromEnv(process.env)` 만 불렀다(= bare env).
+     *    러너는 readiness·canary·window 를 넣어 설치한다. 아래가 그 차이가
+     *    **실제로 다른 상한·다른 배정**을 만드는 반례다.
+     */
+    const qrows = Array.from({ length: 40 }, (_, i) =>
+      qrow({ id: `q${String(i).padStart(2, '0')}`, persona: null, captured: fresh }))
+    const prows = Array.from({ length: 30 }, (_, i) => prow(`P${String(i).padStart(2, '0')}`, `p${i}`))
+    const loaded = await loadPublishableStock(fakeOf(qrows, prows), RUN_AT)
+    const BASE = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
+    const at = (env: Record<string, string>) => {
+      const r = resolvePublishScale({ env, loaded, now: RUN_AT })
+      return { r, plan: core(loaded, r.caps) }
+    }
+    const bare = at(BASE)
+    const canary = at({ ...BASE, SORAN_RELEASE_CANARY_STAGE: 'd3', SORAN_RELEASE_CANARY_DATE: '2026-09-24' })
+
+    check('🔴 🔴 **허가가 없으면 d1 이다 — 여기까지는 bare env 와 같다**',
+      bare.r.scale.releaseStage === 'd1' && bare.r.caps.postsPerWeek === 1
+      && bare.r.caps.minDaysBetween === 5,
+      `${bare.r.scale.releaseStage} 주${bare.r.caps.postsPerWeek} 최소${bare.r.caps.minDaysBetween}`)
+    check('🔴 🔴 **하루 허가가 켜지면 같은 DB·같은 시각인데 d3 가 설치된다**',
+      canary.r.scale.releaseStage === 'd3' && canary.r.dailyCap === 3,
+      `${canary.r.scale.releaseStage} 일${canary.r.dailyCap}`)
+    check('🔴 🔴 **그때 상한이 달라진다 — bare env 로는 이 값을 낼 수 없다**',
+      canary.r.caps.postsPerWeek === 3 && canary.r.caps.minDaysBetween === 2
+      && canary.r.caps.postsPerWeek !== bare.r.caps.postsPerWeek,
+      `bare 주${bare.r.caps.postsPerWeek}/최소${bare.r.caps.minDaysBetween}`
+      + ` vs canary 주${canary.r.caps.postsPerWeek}/최소${canary.r.caps.minDaysBetween}`)
+    check('🔴 🔴 **상한이 다르면 배정 수도 다르다 — 재고가 갈린다**',
+      canary.plan.assignmentReady.length > bare.plan.assignmentReady.length
+      && bare.plan.assignmentReady.length === 30 && canary.plan.assignmentReady.length === 40,
+      `bare ${bare.plan.assignmentReady.length}건 vs canary ${canary.plan.assignmentReady.length}건`)
+    check('🔴 🔴 **같은 resolved scale 을 주면 probe 와 publisher 가 같은 picked 를 낸다**',
+      stageStock({ loaded, caps: canary.r.caps, at: RUN_AT }).nextPickedId === canary.plan.nextPickedId
+      && stageStock({ loaded, caps: canary.r.caps, at: RUN_AT }).assignmentReady.count
+        === canary.plan.freshOrdered.filter((t) =>
+          (canary.plan.assignOf.get(t.id)?.assigned ?? null) !== null).length,
+      `${canary.plan.nextPickedId}`)
+    // 🔴 기간 허가는 최대 7일이다(WINDOW_MAX_DAYS) — 그보다 길면 열리지 않는다
+    const wLong = at({ ...BASE, SORAN_RELEASE_WINDOW_STAGE: 'd3',
+      SORAN_RELEASE_WINDOW_FROM: '2026-09-20', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-30' })
+    check('🔴 7일을 넘는 기간 허가는 열리지 않는다 — 잊고 두는 것을 막는다',
+      wLong.r.scale.releaseStage === 'd1' && wLong.r.windowAuth.activeToday === false,
+      `${wLong.r.scale.releaseStage} · ${wLong.r.windowAuth.note ?? ''}`)
+  }
+
+  /** ── ⓕ 🔴 **기계 지표 두 축을 섞지 않는다** ── */
+  {
+    const qrows = [
+      // 🔴 기계가 만든 행 — decidedBy 가 machine:
+      qrow({ id: 'm-made', persona: null, captured: fresh, decidedBy: 'machine:auto-draft-v5' }),
+      // 🔴 사람이 넣었지만 machine profile 계약에는 맞는 행
+      qrow({ id: 'h-made', persona: null, captured: fresh, decidedBy: 'founder' }),
+      // 🔴 어느 축에도 들어가지 않는 행 — 기계도 아니고 사람 검토도 아니다
+      qrow({ id: 'x-odd', persona: null, captured: fresh, decidedBy: 'someone-else' }),
+      qrow({ id: 'y-null', persona: null, captured: fresh, decidedBy: null }),
+    ]
+    const loaded = await loadPublishableStock(fakeOf(qrows, [prow('P01', 'p1')]), RUN_AT)
+    check('🔴 🔴 **`decidedBy=machine:` 인 행만 "기계가 만든 행" 으로 센다**',
+      loaded.machineDecided === 1, `machineDecided=${loaded.machineDecided}`)
+    check('🔴 🔴 **profile 유효 수는 그것과 다른 축이다 — 같은 이름으로 부르지 않는다**',
+      loaded.machineProfiled !== loaded.machineDecided
+      || loaded.machineProfiled === 0,
+      `machineProfiled=${loaded.machineProfiled} machineDecided=${loaded.machineDecided}`)
+    check('🔴 🔴 **사람 검토는 `founder` 1건뿐 — 임의 문자열도 null 도 세지 않는다**',
+      loaded.humanReviewed === 1 && loaded.queueTotal === 4,
+      `humanReviewed=${loaded.humanReviewed} queueTotal=${loaded.queueTotal}`)
+    check('🔴 🔴 **세 축을 합쳐도 전체가 되지 않는다 — 서로 다른 질문이다**',
+      loaded.machineDecided + loaded.humanReviewed < loaded.queueTotal,
+      `machine=${loaded.machineDecided} human=${loaded.humanReviewed} total=${loaded.queueTotal}`)
   }
 
   /** ── ⓓ 질의 순서와 발행 순서가 실제로 갈리는 경우 ── */
@@ -636,15 +724,15 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     const loaded = await loadPublishableStock(
       fakeOf(qrows, [prow('P01', 'p1'), prow('P02', 'p2')]), RUN_AT)
     const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
-    const core = publisherCore(loaded)
+    const c = core(loaded)
     check('🔴 🔴 **질의 순서와 발행 순서가 다르다 — 복구 행이 앞선다**',
       st.selectorTargets.ids.join(',') === 'n-plain,r-recovery'
       && st.freshnessPassed.ids.join(',') === 'r-recovery,n-plain',
       `selector=${st.selectorTargets.ids.join(',')} fresh=${st.freshnessPassed.ids.join(',')}`)
     check('🔴 🔴 **그 순서로 publisher 와 같은 한 건을 고른다**',
-      st.nextPickedId === 'r-recovery' && core.picked === 'r-recovery'
-      && st.runnableNow.ids.join(',') === 'r-recovery,n-plain',
-      `stage=${st.nextPickedId} core=${core.picked} runnable=${st.runnableNow.ids.join(',')}`)
+      st.nextPickedId === 'r-recovery' && c.nextPickedId === 'r-recovery'
+      && st.assignmentReady.ids.join(',') === 'r-recovery,n-plain',
+      `stage=${st.nextPickedId} core=${c.nextPickedId} runnable=${st.assignmentReady.ids.join(',')}`)
   }
 
   /** ── ⓒ broken recovery 하나 때문에 전체가 중단되는 경우 ── */
@@ -656,15 +744,15 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
     ]
     const loaded = await loadPublishableStock(fakeOf(qrows, [prow('P01', 'p1')]), RUN_AT)
     const st = stageStock({ loaded, caps: CAPS, at: RUN_AT })
-    const core = publisherCore(loaded)
+    const c = core(loaded)
     check('🔴 🔴 **배정이 깨진 행을 값으로 낸다**',
-      st.brokenRecovery.length === core.broken.length && st.brokenRecovery.length > 0,
-      `${JSON.stringify(st.brokenRecovery)} vs ${JSON.stringify(core.broken)}`)
+      st.brokenRecovery.length === c.brokenRecovery.length && st.brokenRecovery.length > 0,
+      `${JSON.stringify(st.brokenRecovery)} vs ${JSON.stringify(c.brokenRecovery)}`)
     check('🔴 🔴 **하나만 깨져도 runnableNow 는 0 이다 — publisher 는 전체 중단한다**',
-      st.runnableNow.count === 0 && st.nextPickedId === null,
-      `runnable=${st.runnableNow.count} picked=${st.nextPickedId}`)
+      st.assignmentReady.count === 0 && st.nextPickedId === null,
+      `runnable=${st.assignmentReady.count} picked=${st.nextPickedId}`)
     check('🔴 그때도 publisher core 와 같은 답이다',
-      st.nextPickedId === core.picked)
+      st.nextPickedId === c.nextPickedId)
   }
 }
 

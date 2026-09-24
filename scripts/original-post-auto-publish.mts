@@ -39,7 +39,7 @@ import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
-import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
+import { activeScale, describeScale } from '../src/lib/scale-runtime'
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
 import {
@@ -53,7 +53,7 @@ const scaleTargetOf = (st: (typeof RELEASE_STAGES)[number]): number => PROFILES[
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
-import { loadPublishableStock, releaseCapsOf } from './lib/publishable-stock.mjs'
+import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -150,91 +150,23 @@ const queueCandidates: QueueCandidate[] = stock.queueCandidates
 //    러너와 관제가 각자 시작점을 정하면 같은 DB 를 보고 다른 준비도를 말한다
 const axisNow = RUN_AT
 const axisPublishedToday = stock.publishedToday
-const readiness = stageVerdicts({
-  // 🔴 **거르지 않은 후보**를 넘긴다 — 자동/hold 갈림과 배정을 단계마다 그 cap 으로 다시 정한다.
-  //    d1 로 한 번 준비한 목록을 d10 계산에 돌려쓰면 cap 이 다른데도 같은 글이 빠진다
-  queue: queueCandidates,
-  personas: personas as never,
-  history: stock.history,
-  axis: { now: axisNow, publishedToday: axisPublishedToday },
-})
 /**
- * 🔴 **하루짜리 첫 시험 판정** (2026-09-21).
- *
- *    `readiness` 네 조건은 전부 14일 지속성이라 "내일 하루 3편을 안전하게 낼 수
- *    있는가" 를 묻는 자리가 없었다. 그래서 같은 `simulateStage` 를 **지평 1일**로
- *    한 번 더 돌린다 — 🔴 새 계산이 아니라 같은 함수에 다른 창을 준다.
- *
- * 🔴 허가된 단계에 대해서만 돌린다. 허가가 없으면 판정 자체를 만들지 않는다.
+ * 🔴 **규모 설치는 공용 함수 하나가 한다** (2026-09-24 5차 · 마스터 지적).
+ *    readiness · canary · window 를 넣어 설치하는 이 경로를 러너만 갖고 있으면,
+ *    관제(probe)는 bare env 로 d1 을 보고 러너는 window 허가로 d5 를 열어
+ *    **같은 DB 에서 다른 재고·다른 picked** 가 나온다. 그래서 여기서 부른다.
  */
-/**
- * 🔴 **그날치 판정을 단계마다 같은 방식으로 만든다** (2026-09-22).
- *
- *    앞판은 하루짜리(canary)와 기간형(window)이 각자 `simulateStage` 를 불렀고,
- *    그러다 보니 **그날 실제로 설치된 단계**의 판정이 없는 경우가 생겼다.
- *    D3 기간 운영과 D5 하루 시험이 겹치면 단계는 d5 인데 판정은 d3 것이었다.
- */
-const personasForSim = personas as never
-/** 🔴 history 도 공용 조립 결과를 그대로 쓴다 */
-const historyForSim = stock.history
-/** 🔴 예측과 판정을 **함께** 낸다 — 결함 신호(`recoveryBroken`)는 예측 쪽에만 있다 */
-const dayFor = (stage: ReleaseStage) => {
-  const sim = simulateStage({
-    stage,
-    queue: queueCandidates,
-    personas: personasForSim,
-    history: historyForSim,
-    axis: { now: axisNow, publishedToday: axisPublishedToday },
-    /**
-     * 🔴 **하루**다. 이 값이 14 가 되면 하루 판정이 14일 판정으로 바뀐다.
-     * 🔴 **지금 이 순간부터** 본다 — 기본 지평은 다음 KST 자정이라
-     *    그날 시험의 GO/NO-GO 가 이튿날 사정에 끌려갔다(2026-09-21 실측).
-     */
-    days: 1,
-    anchor: 'now',
-    /**
-     * 🔴 **오늘 남은 발행분만큼만** 낸다고 본다. 프로필 상한을 그대로 쓰면
-     *    이미 낸 몫 위에 하루 상한이 통째로 다시 얹힌다.
-     */
-    dailyCap: Math.max(0, scaleTargetOf(stage) - axisPublishedToday),
-  })
-  /**
-   * 🔴 **오늘 이미 낸 수와 남은 슬롯을 넘긴다** (2026-09-21 보정).
-   *    넘기지 않으면 회차마다 하루치 전체를 다시 요구해,
-   *    마지막 슬롯에서 재고가 줄었다는 이유로 그날 목표를 못 채운다.
-   */
-  const verdict = judgeOneDayCanary(sim, {
-    publishedToday: axisPublishedToday,
-    slotsLeft: slotsLeftToday(stage, axisNow),
-  })
-  return { sim, verdict }
-}
-
-/**
- * 🔴 **하루짜리 첫 시험 판정** — 허가된 단계에 대해서만 만든다.
- *    허가가 없으면 판정 자체를 만들지 않는다.
- */
-const canaryAuth = canaryAuthorization(process.env, axisNow, RELEASE_STAGES)
-const canaryDay = canaryAuth.activeToday && canaryAuth.stage !== null ? dayFor(canaryAuth.stage) : null
-const canaryVerdict = canaryDay?.verdict ?? null
-/**
- * 🔴 **기간형 제한 운영** — 하루짜리와 같은 그날치 판정을 쓰되, 기간 안이면 켠다.
- */
-const windowAuth = windowAuthorization(process.env, axisNow, RELEASE_STAGES)
-const windowDay = windowAuth.activeToday && windowAuth.stage !== null ? dayFor(windowAuth.stage) : null
-const windowVerdict = windowDay?.verdict ?? null
-const scale = installFromEnv(process.env, {
-  readiness,
-  canary: { now: axisNow, verdict: canaryVerdict },
-  window: {
-    now: axisNow, verdict: windowVerdict, dayVerdict: windowVerdict,
-    publishedToday: axisPublishedToday,
-  },
-})
+const resolved = resolvePublishScale({ env: process.env, loaded: stock, now: axisNow })
+const readiness = resolved.readiness
+const canaryVerdict = resolved.canaryVerdict
+const windowVerdict = resolved.windowVerdict
+const scale = resolved.scale
+const canaryAuth = resolved.canaryAuth
+const windowAuth = resolved.windowAuth
 // 🔴 여기서부터 쓰기 판정에 쓰이는 값은 전부 `scale` 에서 나온다
-const RELEASE_DAILY_CAP = scale.releaseProfile.dailyTarget
+const RELEASE_DAILY_CAP = resolved.dailyCap
 /** 🔴 상한도 공용 함수가 만든다 — 러너와 관제가 같은 값을 쓴다 */
-const RELEASE_CAPS = releaseCapsOf(scale.releaseProfile)
+const RELEASE_CAPS = resolved.caps
 console.log(`\n③-c 규모 설정  ${describeScale(scale)}`)
 for (const n of scale.notes) console.log(`     · ${n}`)
 console.log(`     적용된 발행 상한  일 ${RELEASE_DAILY_CAP}건 · persona 주 ${RELEASE_CAPS.postsPerWeek}건`
@@ -262,17 +194,15 @@ if (scale.canaryStage) {
   console.log(`        14일 누적·공백·재고 조건은 그대로 미달이다 (허가 날짜 ${scale.canaryDate})`)
 }
 
-// 🔴 확정된 release cap · **지금 시각**으로 계획한다. 관제·예측이 부르는 함수와 같다
-const prepared = prepareCandidates({
-  candidates: queueCandidates, personas, caps: RELEASE_CAPS, at: axisNow,
-})
-
 /**
- * 🔴 **배정은 준비 함수가 이미 했다** — 우선순위(복구 → hot → warm → 상시 적합도)를
- *    반영한 최대 매칭이다. 여기서 다시 돌리면 hold 된 글이 자리를 선점한다.
+ * 🔴 **배정 계획도 공용 함수 하나가 만든다** (2026-09-24 5차 · 마스터 지적).
+ *    `prepareCandidates` → 발행 순서 → 깨진 복구 → `pickPublishTarget` 까지
+ *    한 덩어리다. 검사가 이 계산을 **베껴 두면** 러너가 바뀌어도 사본은 그대로여서
+ *    갈라진 순간부터 조용히 거짓 초록이 된다. 그래서 러너가 여기서 부른다.
  */
-const batch = prepared.batch
-const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
+const plan = planPublishBatch({ loaded: stock, caps: RELEASE_CAPS, at: axisNow })
+const prepared = plan.prepared
+const assignOf = plan.assignOf
 
 console.log(`\n③ persona 배정 가능성 (active ${personas.length}명)`)
 for (const t of targets) {
@@ -309,17 +239,12 @@ for (const h of prepared.held) {
 if (prepared.held.length > 0) {
   console.log('   🔴 위 행은 자동 발행에서만 빠졌다 — 큐에 그대로 있고 사람이 확인해야 한다')
 }
-const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
-const freshOrdered = targets
-  .filter((t) => orderById.has(t.id))
-  .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
+const freshOrdered = plan.freshOrdered
 
 // ── ③-a 🔴 기존 배정이 깨졌으면 **여기서 멈춘다** ──
 //    없는 persona · 비활성 · 실계정이 붙은 사람을 가리키는 배정은 조용히 바꾸지 않는다.
 //    바꾸면 화면이 보여준 사람과 실제로 글을 쓴 사람이 달라진다
-const brokenRecovery = targets
-  .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
-  .filter((x) => x.problem !== null)
+const brokenRecovery = plan.brokenRecovery
 if (brokenRecovery.length > 0) {
   console.log(`\n🔴 기존 배정을 쓸 수 없습니다 — ${brokenRecovery.length}건. 아무것도 발행하지 않습니다.`)
   for (const b of brokenRecovery) console.log(`   ${b.id}  ${b.problem}`)
@@ -328,12 +253,8 @@ if (brokenRecovery.length > 0) {
 }
 
 // ── ③-b 🔴 이번에 나갈 한 건 — **복구가 먼저, 그다음 배정이 있는 첫 글** ──
-const { picked, recovered, skipped, waiting } = pickPublishTarget({
-  // 🔴 신선도로 다시 세운 줄이다 — 복구는 그 안에서도 맨 앞이다
-  ordered: freshOrdered,
-  assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
-  isRecovery: (id) => assignOf.get(id)?.recovery === true,
-})
+// 🔴 신선도로 다시 세운 줄이다 — 복구는 그 안에서도 맨 앞이다
+const { picked, recovered, skipped, waiting } = plan
 if (skipped.length > 0) {
   // 🔴 건너뛴 글을 숨기지 않는다. 지우지도 상태를 바꾸지도 않았고, 다음 회차에 다시 맨 앞이다
   console.log(`\n   ⏭️  이번에 나가지 않는 앞줄 ${skipped.length}건 (상태 그대로 · 다음 회차 재시도)`)
@@ -399,12 +320,8 @@ if (catchUp.due.length > 0) {
  * 🔴 그래서 설치가 끝난 뒤 **그 단계로 다시 판정한다.** 판정을 만드는 함수는 하나뿐이라
  *    창이 달라지지 않는다. 허가가 하나도 없는 날에는 `null` 이고, 그때 동작은 이전과 같다.
  */
-const effectiveDay = (canaryAuth.activeToday || windowAuth.activeToday)
-  ? (scale.releaseStage === windowAuth.stage ? windowDay
-    : scale.releaseStage === canaryAuth.stage ? canaryDay
-      : dayFor(scale.releaseStage))
-  : null
-const effectiveVerdict = effectiveDay?.verdict ?? null
+/** 🔴 설치 후 판정도 공용 함수가 낸다 — 러너와 관제가 같은 문을 본다 */
+const effectiveVerdict = resolved.effectiveVerdict
 
 /**
  * 🔴 **그날 판정 — 로그가 아니라 문이다** (2026-09-22).
@@ -428,7 +345,7 @@ const effectiveVerdict = effectiveDay?.verdict ?? null
 /** 🔴 조립은 `src/lib` 한 함수가 한다 — 러너 안에 두면 검사가 닿지 않는다 */
 const defects = judgePublishDefects({
   publishedToday, dailyCap: RELEASE_DAILY_CAP,
-  recoveryBroken: effectiveDay?.sim.recoveryBroken ?? 0,
+  recoveryBroken: resolved.effectiveRecoveryBroken,
   rejected,
 })
 const hardDefects = defects.hardDefects

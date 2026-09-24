@@ -24,7 +24,15 @@ import {
 } from '../../src/lib/original-post-auto-publish'
 import { prepareCandidates } from '../../src/lib/supply-candidates'
 import type { HoldReason } from '../../src/lib/supply-freshness'
-import { effectiveWeeklyCap, type ScaleProfile } from '../../src/lib/scale-profile'
+import {
+  effectiveWeeklyCap, PROFILES, RELEASE_STAGES,
+  type ScaleProfile, type ReleaseStage,
+} from '../../src/lib/scale-profile'
+import { installFromEnv } from '../../src/lib/scale-runtime'
+import { stageVerdicts, simulateStage } from '../../src/lib/scale-readiness'
+import {
+  canaryAuthorization, judgeOneDayCanary, slotsLeftToday, windowAuthorization,
+} from '../../src/lib/release-canary'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
@@ -39,8 +47,20 @@ export type LoadedStock = {
   rejectedByCode: { code: string; count: number; ids: string[] }[]
   /** 정본과 같은 모양의 후보 — 여기서 profile 을 하드코딩하지 않는다 */
   queueCandidates: QueueCandidate[]
-  /** 🔴 기계가 만든 후보 수 (decidedBy 가 machine:) */
-  machineCandidates: number
+  /**
+   * 🔴 **실제로 기계가 만든 행 수** — `decidedBy` 가 `machine:` 으로 시작한다.
+   *    이것이 "기계가 만든 후보" 다.
+   */
+  machineDecided: number
+  /**
+   * 🔴 **machine profile 로 유효하게 분류된 행 수** — `profileOf(row) === 'machine'`.
+   *    promptVersion·model·출처·gateResults 가 기계 계약에 맞는다는 뜻이지,
+   *    그 행을 기계가 만들었다는 뜻이 **아니다**. 사람이 손으로 넣어도 여기 들어온다.
+   *
+   * 🔴 앞판은 이 값 하나를 `machineCandidates` 라 부르며 "기계가 만든 후보" 로
+   *    보고했다(2026-09-24 마스터 지적). 두 수는 같지 않다 — 따로 낸다.
+   */
+  machineProfiled: number
   /** 🔴 사람이 검토를 마친 행 수 */
   humanReviewed: number
   personas: Record<string, unknown>[]
@@ -165,12 +185,13 @@ export async function loadPublishableStock(
    * 🔴 **사람 검토는 정본 계약으로 센다** (2026-09-24 마스터 지적).
    *    임의의 non-machine 문자열을 사람 검토로 세면 `null`·모르는 값까지 사람이 본 것이 된다.
    */
-  const machineCandidates = rows.filter((r) => profileOf(r) === 'machine').length
+  const machineDecided = rows.filter((r) => (r.decidedBy ?? '').startsWith('machine:')).length
+  const machineProfiled = rows.filter((r) => profileOf(r) === 'machine').length
   const humanReviewed = rows.filter((r) => machineReviewedByHuman(r.decidedBy)).length
 
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
-    machineCandidates, humanReviewed, personas, history, publishedToday,
+    machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
     codeOfPersonaId,
   }
 }
@@ -213,11 +234,19 @@ export type StockStages = {
   /** ④ 🔴 배정 **성공** — `assigned !== null` 이고 `recoveryProblem === null` 인 행만 */
   successfullyAssigned: { count: number; ids: string[] }
   /**
-   * ⑤ 🔴 **지금 돌릴 수 있는가.** broken recovery 가 하나라도 있으면 publisher 는
+   * ⑤ 🔴 **배정까지 끝난 재고.** broken recovery 가 하나라도 있으면 publisher 는
    *    전체를 중단하므로 0 이다 — 배정이 아무리 많아도 그렇다.
+   *
+   * 🔴 **`runnableNow` 가 아니다** (2026-09-24 마스터 지적). 이 값은
+   *    슬롯 · 일 상한 · kill switch · day guard · `--apply` 를 **하나도 보지 않는다.**
+   *    그것들을 통과해야 실제로 실행된다 — 여기서 "지금 실행 가능" 이라 부르면
+   *    단계 결정이 있지도 않은 실행 허가를 근거로 오른다.
    */
-  runnableNow: { count: number; ids: string[] }
-  /** 🔴 이번 회차에 실제로 집히는 한 건 — `pickPublishTarget` 결과 */
+  assignmentReady: { count: number; ids: string[] }
+  /**
+   * 🔴 **재고 기준으로** 이번 회차에 집히는 한 건 — `pickPublishTarget` 결과다.
+   *    🔴 이것도 실행 허가가 아니다. 실행 게이트는 러너의 `judgeApply` 가 따로 본다.
+   */
   nextPickedId: string | null
   /** 🔴 전체 중단 사유 — 있으면 `runnableNow` 는 0 이다 */
   brokenRecovery: { id: string; problem: string }[]
@@ -231,60 +260,189 @@ export function stageStock(input: {
   at: Date
 }): StockStages {
   const { loaded } = input
-  /** 🔴 러너와 **같은 `prepareCandidates`** 를 부른다 — 여기서 다시 판정하지 않는다 */
-  const prepared = prepareCandidates({
-    candidates: loaded.queueCandidates, personas: loaded.personas as never,
-    caps: input.caps, at: input.at,
-  })
+  /** 🔴 러너와 **같은 `planPublishBatch`** 를 부른다 — 여기서 다시 판정하지 않는다 */
+  const plan = planPublishBatch({ loaded, caps: input.caps, at: input.at })
+
   /** 🔴 `HoldReason` 은 닫힌 enum 이다 — 정규식으로 분류하지 않는다 */
   const holdIds = new Map<HoldReason, string[]>()
-  for (const h of prepared.held) {
+  for (const h of plan.prepared.held) {
     holdIds.set(h.hold, [...(holdIds.get(h.hold) ?? []), h.queueId])
   }
-
   const selectorIds = loaded.targets.map((t) => t.id)
   /** 🔴 신선도 통과는 `prepared.auto` 가 정본이다 */
-  const freshIds = prepared.auto.map((c) => c.queueId)
-
-  const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
-  /**
-   * 🔴 **배정 성공** — `assigned === null` 은 "이 배치에서 발행하지 않는다" 이고,
-   *    `recoveryProblem !== null` 은 기존 배정이 깨진 것이다. 둘 다 성공이 아니다.
-   */
-  const assignedIds = prepared.batch.assignments
-    .filter((a) => a.assigned !== null && (a.recoveryProblem ?? null) === null)
-    .map((a) => a.queueId)
-
-  /** 🔴 publisher 와 같은 순서 — `prepared.auto` 순서로 selector 대상을 세운다 */
-  const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
-  const freshOrdered = loaded.targets
-    .filter((t) => orderById.has(t.id))
-    .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
-
-  /** 🔴 publisher 는 broken recovery 가 하나라도 있으면 **전체 중단**한다 */
-  const brokenRecovery = loaded.targets
-    .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
-    .filter((x): x is { id: string; problem: string } => x.problem !== null)
-
-  const picked = brokenRecovery.length > 0 ? null : pickPublishTarget({
-    ordered: freshOrdered,
-    assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
-    isRecovery: (id) => assignOf.get(id)?.recovery === true,
-  }).picked
-  const runnableIds = brokenRecovery.length > 0
+  const freshIds = plan.prepared.auto.map((c) => c.queueId)
+  const readyIds = plan.brokenRecovery.length > 0
     ? []
-    : freshOrdered.filter((t) => (assignOf.get(t.id)?.assigned ?? null) !== null).map((t) => t.id)
+    : plan.freshOrdered.filter((t) => (plan.assignOf.get(t.id)?.assigned ?? null) !== null)
+      .map((t) => t.id)
 
   return {
     queueTotal: loaded.queueTotal,
     selectorTargets: { count: selectorIds.length, ids: selectorIds },
     freshnessPassed: { count: freshIds.length, ids: freshIds },
-    successfullyAssigned: { count: assignedIds.length, ids: assignedIds },
-    runnableNow: { count: runnableIds.length, ids: runnableIds },
-    nextPickedId: picked?.id ?? null,
-    brokenRecovery,
+    successfullyAssigned: { count: plan.assignmentReady.length, ids: plan.assignmentReady },
+    assignmentReady: { count: readyIds.length, ids: readyIds },
+    nextPickedId: plan.nextPickedId,
+    brokenRecovery: plan.brokenRecovery,
     holdsByReason: [...holdIds]
       .map(([reason, ids]) => ({ reason, count: ids.length, ids }))
       .sort((a, b) => b.count - a.count),
+  }
+}
+
+/**
+ * ══ 🔴 **여기부터 — 러너의 판정 경로를 소비자 셋이 함께 부른다** (2026-09-24 5차) ══
+ *
+ * 🔴 **왜 옮기나.** 앞판은 probe 가 `installFromEnv(process.env)` 만 불렀다.
+ *    러너는 거기에 **readiness · canary · window** 를 넣어 설치한다. 그래서
+ *    bare env 가 d1 이어도 러너는 window 허가로 d3·d5 를 열 수 있고, 그때
+ *    probe 는 여전히 d1 상한으로 배정해 **다른 재고·다른 picked** 를 냈다.
+ *    오늘 둘 다 d1 이 나온 것은 허가가 꺼져 있었기 때문이지 같은 계산이어서가 아니다.
+ *
+ * 🔴 **검사 안에 러너 계산을 베껴 두지 않는다.** 베낀 사본은 러너가 바뀌어도
+ *    같이 바뀌지 않아, 갈라진 순간부터 조용히 거짓 초록이 된다.
+ */
+
+/** 🔴 단계의 하루 목표 — 어느 소비자도 숫자를 손으로 적지 않는다 */
+const dailyTargetOf = (st: ReleaseStage): number => PROFILES[st].dailyTarget
+
+export type ResolvedScale = {
+  /** 🔴 readiness·canary·window 를 **넣어** 설치한 결과 — bare env 가 아니다 */
+  scale: ReturnType<typeof installFromEnv>
+  caps: { postsPerWeek: number; minDaysBetween: number }
+  dailyCap: number
+  readiness: ReturnType<typeof stageVerdicts>
+  canaryVerdict: ReturnType<typeof judgeOneDayCanary> | null
+  windowVerdict: ReturnType<typeof judgeOneDayCanary> | null
+  canaryAuth: ReturnType<typeof canaryAuthorization>
+  windowAuth: ReturnType<typeof windowAuthorization>
+  /**
+   * 🔴 **설치가 끝난 뒤 그 단계로 다시 낸 판정** — 이것이 실제로 문을 여닫는다.
+   *    D3 기간 운영과 D5 하루 시험이 겹치면 설치는 d5 인데 판정은 d3 것이 된다.
+   *    허가가 하나도 없는 날에는 `null` 이고, 그때 동작은 허가 이전과 같다.
+   */
+  effectiveVerdict: ReturnType<typeof judgeOneDayCanary> | null
+  /** 🔴 그 단계 예측이 센 **깨진 복구 배정** 수 — 판정이 아니라 결함 신호다 */
+  effectiveRecoveryBroken: number
+}
+
+/**
+ * 🔴 **러너가 실제로 쓰는 상한을 만드는 유일한 경로.**
+ *    순수 함수다 — DB 도 파일도 네트워크도 모른다. 입력은 이미 읽어 둔 재고와 env 뿐이다.
+ */
+export function resolvePublishScale(input: {
+  env: Readonly<Record<string, string | undefined>>
+  loaded: LoadedStock
+  now: Date
+}): ResolvedScale {
+  const { loaded, now, env } = input
+  const axis = { now, publishedToday: loaded.publishedToday }
+  const readiness = stageVerdicts({
+    queue: loaded.queueCandidates, personas: loaded.personas as never,
+    history: loaded.history, axis,
+  })
+  /** 🔴 러너의 `dayFor` 와 같은 계산이다 — 같은 함수에 지평 1일을 준다 */
+  const dayFor = (stage: ReleaseStage): {
+    sim: ReturnType<typeof simulateStage>; verdict: ReturnType<typeof judgeOneDayCanary>
+  } => {
+    const sim = simulateStage({
+      stage, queue: loaded.queueCandidates, personas: loaded.personas as never,
+      history: loaded.history, axis, days: 1, anchor: 'now',
+      dailyCap: Math.max(0, dailyTargetOf(stage) - loaded.publishedToday),
+    })
+    const verdict = judgeOneDayCanary(sim, {
+      publishedToday: loaded.publishedToday,
+      slotsLeft: slotsLeftToday(stage, now),
+    })
+    return { sim, verdict }
+  }
+  const canaryAuth = canaryAuthorization(env as never, now, RELEASE_STAGES)
+  const canaryDay = canaryAuth.activeToday && canaryAuth.stage !== null
+    ? dayFor(canaryAuth.stage) : null
+  const canaryVerdict = canaryDay?.verdict ?? null
+  const windowAuth = windowAuthorization(env as never, now, RELEASE_STAGES)
+  const windowDay = windowAuth.activeToday && windowAuth.stage !== null
+    ? dayFor(windowAuth.stage) : null
+  const windowVerdict = windowDay?.verdict ?? null
+
+  const scale = installFromEnv(env as never, {
+    readiness,
+    canary: { now, verdict: canaryVerdict },
+    window: {
+      now, verdict: windowVerdict, dayVerdict: windowVerdict,
+      publishedToday: loaded.publishedToday,
+    },
+  })
+  const effectiveDay = (canaryAuth.activeToday || windowAuth.activeToday)
+    ? (scale.releaseStage === windowAuth.stage ? windowDay
+      : scale.releaseStage === canaryAuth.stage ? canaryDay
+        : dayFor(scale.releaseStage))
+    : null
+  return {
+    scale, caps: releaseCapsOf(scale.releaseProfile),
+    dailyCap: scale.releaseProfile.dailyTarget,
+    readiness, canaryVerdict, windowVerdict, canaryAuth, windowAuth,
+    effectiveVerdict: effectiveDay?.verdict ?? null,
+    /** 🔴 `recoveryBroken` 은 판정이 아니라 예측 쪽에만 있다 — 결함 신호다 */
+    effectiveRecoveryBroken: effectiveDay?.sim.recoveryBroken ?? 0,
+  }
+}
+
+/**
+ * 🔴 **배정 계획 — 러너의 ③ ~ ③-b 를 그대로 옮긴 순수 함수.**
+ *    러너 · `stageStock`/probe · 실행 검사 셋이 **이 함수를 부른다.**
+ *    러너에서 이 호출을 떼면 검사가 빨개진다(사본 비교가 아니라 실제 소비다).
+ */
+export type PublishPlan = {
+  prepared: ReturnType<typeof prepareCandidates>
+  assignOf: Map<string, ReturnType<typeof prepareCandidates>['batch']['assignments'][number]>
+  /** 🔴 `prepared.auto` 순서로 세운 발행 줄 — DB 질의 순서가 아니다 */
+  freshOrdered: AutoRow[]
+  /** 🔴 하나라도 있으면 러너는 **전체 중단**한다 */
+  brokenRecovery: { id: string; problem: string }[]
+  /** 배정 성공 — `assigned !== null` 이고 `recoveryProblem === null` */
+  assignmentReady: string[]
+  /** 🔴 **재고 기준으로** 이번에 집히는 한 건. 실행 허가가 아니다 */
+  nextPickedId: string | null
+  picked: AutoRow | null
+  recovered: boolean
+  skipped: AutoRow[]
+  waiting: AutoRow[]
+}
+
+export function planPublishBatch(input: {
+  loaded: LoadedStock
+  caps: Parameters<typeof prepareCandidates>[0]['caps']
+  at: Date
+}): PublishPlan {
+  const { loaded } = input
+  const prepared = prepareCandidates({
+    candidates: loaded.queueCandidates, personas: loaded.personas as never,
+    caps: input.caps, at: input.at,
+  })
+  const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
+  const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
+  const freshOrdered = loaded.targets
+    .filter((t) => orderById.has(t.id))
+    .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
+  const brokenRecovery = loaded.targets
+    .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
+    .filter((x): x is { id: string; problem: string } => x.problem !== null)
+  const assignmentReady = prepared.batch.assignments
+    .filter((a) => a.assigned !== null && (a.recoveryProblem ?? null) === null)
+    .map((a) => a.queueId)
+
+  /** 🔴 배정이 깨졌으면 아무것도 집지 않는다 — 러너가 여기서 멈추기 때문이다 */
+  const r = brokenRecovery.length > 0
+    ? { picked: null, recovered: false, skipped: [] as AutoRow[], waiting: [] as AutoRow[] }
+    : pickPublishTarget({
+      ordered: freshOrdered,
+      assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
+      isRecovery: (id) => assignOf.get(id)?.recovery === true,
+    })
+  return {
+    prepared, assignOf, freshOrdered, brokenRecovery, assignmentReady,
+    nextPickedId: r.picked?.id ?? null,
+    picked: r.picked, recovered: r.recovered, skipped: r.skipped, waiting: r.waiting,
   }
 }
