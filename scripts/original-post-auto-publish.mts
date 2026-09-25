@@ -39,7 +39,7 @@ import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 
 import { planStore } from '../src/lib/original-post-match-store'
 import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
-import { installFromEnv, activeScale, describeScale } from '../src/lib/scale-runtime'
+import { activeScale, applyScale, describeScale } from '../src/lib/scale-runtime'
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
 import {
@@ -53,6 +53,7 @@ const scaleTargetOf = (st: (typeof RELEASE_STAGES)[number]): number => PROFILES[
 import { prepareCandidates, describePrepared, type QueueCandidate } from '../src/lib/supply-candidates'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
+import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -93,99 +94,33 @@ console.log(`  안전 기본값 일 ${DAILY_PUBLISH_CAP}건 · persona 주 ${POS
 console.log('  🔴 실제 상한은 아래 ③-c 에서 설치한다 — 설치 전에는 이 안전값이다\n')
 
 // ── ① 후보 수집 — 🔴 읽기만 한다 ──
-const raw = await prisma.originalPostApprovalQueue.findMany({
-  where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
-  select: {
-    id: true, status: true, createdPostId: true, gateVerdict: true,
-    promptVersion: true, model: true, matchedPersonaId: true,
-    draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-    // 🔴 기계 profile 은 게이트 기록까지 본다 — 큐 컬럼 셋만으로는 손으로 넣을 수 있다
-    gateResults: true,
-    // 🔴 **발행 판정이 이 값을 본다** — 기계 후보는 사람이 확인한 것만 나간다
-    decidedBy: true,
-    decidedAt: true, createdAt: true,
-    // 🔴 신선도 판정 근거 — 원문을 언제 봤는가
-    rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
-  },
-  orderBy: { createdAt: 'asc' },
-})
-const rows: AutoRow[] = raw.map((r) => ({
-  id: r.id, status: r.status, createdPostId: r.createdPostId, gateVerdict: r.gateVerdict,
-  promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
-  // 🔴 수정본이 있으면 그것이 발행될 글이다
-  gateResults: r.gateResults,
-  title: r.editedTitle ?? r.draftTitle,
-  body: r.editedBody ?? r.draftBody,
-  sourceSite: r.rawContent.sourceSite,
-  // 🔴 제목 복제 판정은 gateResults 의 **기록**이 한다 — 원문 제목도 해시도 저장하지 않는다.
-  //    여기서는 "사람이 실제로 다시 지었는가" 를 물을 두 값만 넘긴다
-  draftTitle: r.draftTitle,
-  editedTitle: r.editedTitle,
-  decidedBy: r.decidedBy,
-  decidedAt: r.decidedAt, createdAt: r.createdAt,
-}))
+/**
+ * 🔴 **조립은 공용 함수 하나가 한다** (2026-09-24 마스터 지적).
+ *
+ *    앞판은 여기서 직접 select · AutoRow 조립 · Persona 조립 · history 조립을 했고,
+ *    관제(`stage:probe`)는 따로 조립했다. 그래서 두 경로가 **같은 DB 를 보고 다른 재고**를
+ *    말했다 — probe 가 223건을 재고로 세어 d5 READY 라는 거짓 판정을 냈다.
+ *    🔴 이제 러너와 probe 가 `loadPublishableStock` **하나**를 부른다.
+ */
+/**
+ * 🔴 **이 회차의 시각 하나** (2026-09-24 마스터 지적). 조립·상한·판정·슬롯이 전부 이 값을 쓴다 —
+ *    두 번 만들면 같은 회차 안에서 서로 다른 순간을 본다.
+ */
+const RUN_AT = new Date()
+const stock = await loadPublishableStock(prisma, RUN_AT)
+const targets = stock.targets
+const rejected = stock.rejected
+const codeOfPersonaId = stock.codeOfPersonaId
+const personas = stock.personas as never[]
 
-// ── ② 안전 재판정 — 🔴 저장된 값을 믿지 않는다 ──
-const { targets, rejected } = selectAutoTargets(rows, (t, b) => safetyFilter({ title: t, body: b }).verdict)
-
-// 🔴 발행 대상은 **배정을 끝낸 뒤** 고른다 (③ 아래). 맨 앞 한 건을 미리 집으면,
-//    그 글이 배정되지 않았을 때 뒤에 배정된 글이 있어도 하루를 통째로 버린다.
-console.log(`① 대기열 ${rows.length}건 → 자동 발행 후보 ${targets.length}건`)
-if (rejected.length > 0) {
-  const by = new Map<string, number>()
-  for (const r of rejected) by.set(r.code, (by.get(r.code) ?? 0) + 1)
-  console.log(`\n② 제외 ${rejected.length}건 — 🔴 legacy 글이 섞이지 않는다`)
-  for (const [code, n] of [...by].sort((a, b) => b[1] - a[1])) {
-    console.log(`   ${String(n).padStart(2)}건  ${REJECT_LABEL[code as keyof typeof REJECT_LABEL]}`)
+console.log(`① 대기열 ${stock.queueTotal}건 → 자동 발행 후보 ${targets.length}건`)
+if (stock.rejectedByCode.length > 0) {
+  const total = stock.rejectedByCode.reduce((n, r) => n + r.count, 0)
+  console.log(`\n② 제외 ${total}건 — 🔴 legacy 글이 섞이지 않는다`)
+  for (const r of stock.rejectedByCode) {
+    console.log(`   ${String(r.count).padStart(2)}건  ${REJECT_LABEL[r.code as keyof typeof REJECT_LABEL] ?? r.code}`)
   }
 }
-
-// 🔴 신선도 근거 — queueId → 원문 확인 시각
-const capturedAtOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
-
-// ── ③ persona 배정 가능성 ──
-const WEEK_AGO = new Date(Date.now() - 7 * 864e5)
-const personaRows = await prisma.persona.findMany({
-  where: { status: 'active' },
-  select: { id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-            user: { select: { providerId: true, _count: { select: { accounts: true } } } } },
-})
-const personas = []
-for (const r of personaRows) {
-  const id = (r.identity ?? {}) as Record<string, unknown>
-  const vc = (r.voiceCore ?? {}) as Record<string, unknown>
-  const postsThisWeek = await prisma.originalPostApprovalQueue.count({
-    where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO } },
-  })
-  const last = await prisma.originalPostApprovalQueue.findFirst({
-    where: { matchedPersona: { code: r.code } }, orderBy: { matchedAt: 'desc' }, select: { matchedAt: true },
-  })
-  personas.push({
-    code: r.code, status: r.status,
-    // 🔴 실계정이 붙은 페르소나는 쓰지 않는다 (REAL_MEMBER 차단의 입력)
-    providerId: r.user?.providerId ?? null,
-    // 🔴 실회원 판별 정본. 넘기지 않으면 hardFilter 가 fail-closed 로 막는다
-    accountCount: r.user?._count.accounts ?? null,
-    ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
-    maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
-    // 🔴 **이것이 빠지면 모든 persona 가 무자녀로 판정된다.**
-    //    hardFilter 는 `p.childrenCount ?? 0` 로 읽으므로, 넘기지 않으면 0 이 되어
-    //    자녀 글이 전부 NO_CHILDREN 으로 막힌다 — match-assign 은 넘기는데 여기만 빠져 있었다.
-    //    2026-09-07 실측: "아이랑 같이 갈 숙소" 글에서 P10·P17 이 부당하게 차단됐다.
-    childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
-    ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands as never } : {}),
-    parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
-    menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
-    workStatus: null, economicStatus: null, region: null,
-    noGoTopics: r.noGoTopics,
-    voiceLength: typeof vc.length === 'string' ? vc.length : null,
-    postsThisWeek,
-    daysSinceLastPost: last?.matchedAt == null ? null : Math.floor((Date.now() - last.matchedAt.getTime()) / 864e5),
-  })
-}
-// 🔴 이미 배정된 행은 기존 배정이 정본이다 — id → code 로 바꿔 넘긴다.
-//    넘기지 않으면 planBatch 가 그 행을 새로 매칭해 **다른 사람에게** 줄 수 있다
-const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
 
 /**
  * ── ②-b 🔴 **후보 준비 — 관제·예측·준비도와 같은 함수다** (2026-09-08) ──
@@ -200,17 +135,8 @@ const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
  * 🔴 `capturedAt` 을 **그대로** 넘긴다 — 나이를 여기서 굳히지 않는다.
  *    예측은 하루씩 밀며 그날의 나이로 다시 판정해야 하므로 스냅숏을 주면 안 된다.
  */
-const queueCandidates: QueueCandidate[] = targets.map((t, i) => ({
-  queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: i,
-  // 🔴 배정된 persona 를 못 찾으면 빈 문자열이 아니라 **모르는 코드**를 넘긴다 —
-  //    planBatch 가 fail-closed 로 잡아 멈춘다. 조용히 재배정되면 안 된다
-  assignedPersonaCode: t.matchedPersonaId === null
-    ? null
-    : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
-  // 🔴 말투·profile 은 **정본 한 함수**가 만든다. 호출부마다 따로 부르면 한 곳이 빠진다
-  ...voiceInputOf(t),
-  capturedAt: capturedAtOf.get(t.id) ?? null,
-}))
+/** 🔴 후보 조립도 공용 함수가 이미 했다 — 여기서 다시 만들지 않는다 */
+const queueCandidates: QueueCandidate[] = stock.queueCandidates
 
 /**
  * ── ③-c 🔴 **규모 설정 설치** — `loadEnvLocal()` 뒤, 쓰기 판정 **앞**이다 ──
@@ -219,107 +145,36 @@ const queueCandidates: QueueCandidate[] = targets.map((t, i) => ({
  *    ② 그 판정을 넘겨 `release` 단계를 **실제로** 낮춘다.
  *    화면 문구가 아니라 아래 `dailyCap`·`caps` 가 바뀐다 — 그것이 이 설치의 목적이다.
  */
-const historyRows = await prisma.personaActivityLog.findMany({
-  where: { kind: 'post' }, select: { createdAt: true, persona: { select: { code: true } } },
-})
+/** 🔴 history 도 공용 함수가 이미 조립했다 */
 // 🔴 **시간축은 하나다** — `now` 와 오늘 발행 수만 넘기고 단계별 시작점은 lib 이 만든다.
 //    러너와 관제가 각자 시작점을 정하면 같은 DB 를 보고 다른 준비도를 말한다
-const axisNow = new Date()
-const axisPublishedToday = await prisma.personaActivityLog.count({
-  where: { kind: 'post', createdAt: { gte: kstDayStart(axisNow) } },
-})
-const readiness = stageVerdicts({
-  // 🔴 **거르지 않은 후보**를 넘긴다 — 자동/hold 갈림과 배정을 단계마다 그 cap 으로 다시 정한다.
-  //    d1 로 한 번 준비한 목록을 d10 계산에 돌려쓰면 cap 이 다른데도 같은 글이 빠진다
-  queue: queueCandidates,
-  personas: personas as never,
-  history: personas.map((p) => ({
-    code: p.code,
-    matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
-  })),
-  axis: { now: axisNow, publishedToday: axisPublishedToday },
-})
+const axisNow = RUN_AT
+const axisPublishedToday = stock.publishedToday
 /**
- * 🔴 **하루짜리 첫 시험 판정** (2026-09-21).
- *
- *    `readiness` 네 조건은 전부 14일 지속성이라 "내일 하루 3편을 안전하게 낼 수
- *    있는가" 를 묻는 자리가 없었다. 그래서 같은 `simulateStage` 를 **지평 1일**로
- *    한 번 더 돌린다 — 🔴 새 계산이 아니라 같은 함수에 다른 창을 준다.
- *
- * 🔴 허가된 단계에 대해서만 돌린다. 허가가 없으면 판정 자체를 만들지 않는다.
+ * 🔴 **규모 설치는 공용 함수 하나가 한다** (2026-09-24 5차 · 마스터 지적).
+ *    readiness · canary · window 를 넣어 설치하는 이 경로를 러너만 갖고 있으면,
+ *    관제(probe)는 bare env 로 d1 을 보고 러너는 window 허가로 d5 를 열어
+ *    **같은 DB 에서 다른 재고·다른 picked** 가 나온다. 그래서 여기서 부른다.
  */
+const resolved = resolvePublishScale({ env: process.env, loaded: stock, now: axisNow })
 /**
- * 🔴 **그날치 판정을 단계마다 같은 방식으로 만든다** (2026-09-22).
- *
- *    앞판은 하루짜리(canary)와 기간형(window)이 각자 `simulateStage` 를 불렀고,
- *    그러다 보니 **그날 실제로 설치된 단계**의 판정이 없는 경우가 생겼다.
- *    D3 기간 운영과 D5 하루 시험이 겹치면 단계는 d5 인데 판정은 d3 것이었다.
+ * 🔴 **설치는 여기 한 곳뿐이다** (2026-09-24 6차 · 마스터 지적).
+ *    `resolvePublishScale` 은 계산만 한다 — module-global 을 건드리지 않는다.
+ *    그래서 probe·검사를 돌려도 `activeScale()` 이 바뀌지 않는다.
+ *    🔴 **실제로 발행하는 이 러너만** 그 결과를 정확히 한 번 설치한다.
+ *    화면·JSON·supply 가 읽는 `activeScale()` 이 지금 회차의 값이 되게 하려는 것이다.
  */
-const personasForSim = personas as never
-const historyForSim = personas.map((p) => ({
-  code: p.code,
-  matchedAts: historyRows.filter((l) => l.persona?.code === p.code).map((l) => l.createdAt),
-}))
-/** 🔴 예측과 판정을 **함께** 낸다 — 결함 신호(`recoveryBroken`)는 예측 쪽에만 있다 */
-const dayFor = (stage: ReleaseStage) => {
-  const sim = simulateStage({
-    stage,
-    queue: queueCandidates,
-    personas: personasForSim,
-    history: historyForSim,
-    axis: { now: axisNow, publishedToday: axisPublishedToday },
-    /**
-     * 🔴 **하루**다. 이 값이 14 가 되면 하루 판정이 14일 판정으로 바뀐다.
-     * 🔴 **지금 이 순간부터** 본다 — 기본 지평은 다음 KST 자정이라
-     *    그날 시험의 GO/NO-GO 가 이튿날 사정에 끌려갔다(2026-09-21 실측).
-     */
-    days: 1,
-    anchor: 'now',
-    /**
-     * 🔴 **오늘 남은 발행분만큼만** 낸다고 본다. 프로필 상한을 그대로 쓰면
-     *    이미 낸 몫 위에 하루 상한이 통째로 다시 얹힌다.
-     */
-    dailyCap: Math.max(0, scaleTargetOf(stage) - axisPublishedToday),
-  })
-  /**
-   * 🔴 **오늘 이미 낸 수와 남은 슬롯을 넘긴다** (2026-09-21 보정).
-   *    넘기지 않으면 회차마다 하루치 전체를 다시 요구해,
-   *    마지막 슬롯에서 재고가 줄었다는 이유로 그날 목표를 못 채운다.
-   */
-  const verdict = judgeOneDayCanary(sim, {
-    publishedToday: axisPublishedToday,
-    slotsLeft: slotsLeftToday(stage, axisNow),
-  })
-  return { sim, verdict }
-}
-
-/**
- * 🔴 **하루짜리 첫 시험 판정** — 허가된 단계에 대해서만 만든다.
- *    허가가 없으면 판정 자체를 만들지 않는다.
- */
-const canaryAuth = canaryAuthorization(process.env, axisNow, RELEASE_STAGES)
-const canaryDay = canaryAuth.activeToday && canaryAuth.stage !== null ? dayFor(canaryAuth.stage) : null
-const canaryVerdict = canaryDay?.verdict ?? null
-/**
- * 🔴 **기간형 제한 운영** — 하루짜리와 같은 그날치 판정을 쓰되, 기간 안이면 켠다.
- */
-const windowAuth = windowAuthorization(process.env, axisNow, RELEASE_STAGES)
-const windowDay = windowAuth.activeToday && windowAuth.stage !== null ? dayFor(windowAuth.stage) : null
-const windowVerdict = windowDay?.verdict ?? null
-const scale = installFromEnv(process.env, {
-  readiness,
-  canary: { now: axisNow, verdict: canaryVerdict },
-  window: {
-    now: axisNow, verdict: windowVerdict, dayVerdict: windowVerdict,
-    publishedToday: axisPublishedToday,
-  },
-})
+applyScale(resolved.scale)
+const readiness = resolved.readiness
+const canaryVerdict = resolved.canaryVerdict
+const windowVerdict = resolved.windowVerdict
+const scale = resolved.scale
+const canaryAuth = resolved.canaryAuth
+const windowAuth = resolved.windowAuth
 // 🔴 여기서부터 쓰기 판정에 쓰이는 값은 전부 `scale` 에서 나온다
-const RELEASE_DAILY_CAP = scale.releaseProfile.dailyTarget
-const RELEASE_CAPS = {
-  postsPerWeek: effectiveWeeklyCap(scale.releaseProfile.postsPerWeek, scale.releaseProfile.minDaysBetween),
-  minDaysBetween: scale.releaseProfile.minDaysBetween,
-}
+const RELEASE_DAILY_CAP = resolved.dailyCap
+/** 🔴 상한도 공용 함수가 만든다 — 러너와 관제가 같은 값을 쓴다 */
+const RELEASE_CAPS = resolved.caps
 console.log(`\n③-c 규모 설정  ${describeScale(scale)}`)
 for (const n of scale.notes) console.log(`     · ${n}`)
 console.log(`     적용된 발행 상한  일 ${RELEASE_DAILY_CAP}건 · persona 주 ${RELEASE_CAPS.postsPerWeek}건`
@@ -347,17 +202,15 @@ if (scale.canaryStage) {
   console.log(`        14일 누적·공백·재고 조건은 그대로 미달이다 (허가 날짜 ${scale.canaryDate})`)
 }
 
-// 🔴 확정된 release cap · **지금 시각**으로 계획한다. 관제·예측이 부르는 함수와 같다
-const prepared = prepareCandidates({
-  candidates: queueCandidates, personas, caps: RELEASE_CAPS, at: axisNow,
-})
-
 /**
- * 🔴 **배정은 준비 함수가 이미 했다** — 우선순위(복구 → hot → warm → 상시 적합도)를
- *    반영한 최대 매칭이다. 여기서 다시 돌리면 hold 된 글이 자리를 선점한다.
+ * 🔴 **배정 계획도 공용 함수 하나가 만든다** (2026-09-24 5차 · 마스터 지적).
+ *    `prepareCandidates` → 발행 순서 → 깨진 복구 → `pickPublishTarget` 까지
+ *    한 덩어리다. 검사가 이 계산을 **베껴 두면** 러너가 바뀌어도 사본은 그대로여서
+ *    갈라진 순간부터 조용히 거짓 초록이 된다. 그래서 러너가 여기서 부른다.
  */
-const batch = prepared.batch
-const assignOf = new Map(batch.assignments.map((a) => [a.queueId, a]))
+const plan = planPublishBatch({ loaded: stock, caps: RELEASE_CAPS, at: axisNow })
+const prepared = plan.prepared
+const assignOf = plan.assignOf
 
 console.log(`\n③ persona 배정 가능성 (active ${personas.length}명)`)
 for (const t of targets) {
@@ -394,17 +247,12 @@ for (const h of prepared.held) {
 if (prepared.held.length > 0) {
   console.log('   🔴 위 행은 자동 발행에서만 빠졌다 — 큐에 그대로 있고 사람이 확인해야 한다')
 }
-const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
-const freshOrdered = targets
-  .filter((t) => orderById.has(t.id))
-  .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
+const freshOrdered = plan.freshOrdered
 
 // ── ③-a 🔴 기존 배정이 깨졌으면 **여기서 멈춘다** ──
 //    없는 persona · 비활성 · 실계정이 붙은 사람을 가리키는 배정은 조용히 바꾸지 않는다.
 //    바꾸면 화면이 보여준 사람과 실제로 글을 쓴 사람이 달라진다
-const brokenRecovery = targets
-  .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
-  .filter((x) => x.problem !== null)
+const brokenRecovery = plan.brokenRecovery
 if (brokenRecovery.length > 0) {
   console.log(`\n🔴 기존 배정을 쓸 수 없습니다 — ${brokenRecovery.length}건. 아무것도 발행하지 않습니다.`)
   for (const b of brokenRecovery) console.log(`   ${b.id}  ${b.problem}`)
@@ -413,12 +261,8 @@ if (brokenRecovery.length > 0) {
 }
 
 // ── ③-b 🔴 이번에 나갈 한 건 — **복구가 먼저, 그다음 배정이 있는 첫 글** ──
-const { picked, recovered, skipped, waiting } = pickPublishTarget({
-  // 🔴 신선도로 다시 세운 줄이다 — 복구는 그 안에서도 맨 앞이다
-  ordered: freshOrdered,
-  assignedOf: (id) => assignOf.get(id)?.assigned ?? null,
-  isRecovery: (id) => assignOf.get(id)?.recovery === true,
-})
+// 🔴 신선도로 다시 세운 줄이다 — 복구는 그 안에서도 맨 앞이다
+const { picked, recovered, skipped, waiting } = plan
 if (skipped.length > 0) {
   // 🔴 건너뛴 글을 숨기지 않는다. 지우지도 상태를 바꾸지도 않았고, 다음 회차에 다시 맨 앞이다
   console.log(`\n   ⏭️  이번에 나가지 않는 앞줄 ${skipped.length}건 (상태 그대로 · 다음 회차 재시도)`)
@@ -445,11 +289,11 @@ if (waiting.length > 0) {
 // ── ④ 오늘 상황 ──
 // 🔴 KST 자정은 기존 함수를 쓴다 (publish-live 와 같은 것) —
 //    setUTCHours(-9) 는 UTC 15시 이후에 어제로 밀려 cap 을 잘못 센다
-const dayStart = kstDayStart(new Date())
+const dayStart = kstDayStart(RUN_AT)
 const publishedToday = await prisma.personaActivityLog.count({ where: { kind: 'post', createdAt: { gte: dayStart } } })
 const sw = await prisma.personaGlobalSwitch.findUnique({ where: { id: 'global' }, select: { enabled: true } })
 const killed = sw?.enabled === true
-console.log(`\n④ 오늘(${kst(new Date())}) 발행 ${publishedToday} / ${RELEASE_DAILY_CAP}건 · 전체 중지 ${killed ? '🔴 켜짐' : '꺼짐'}`)
+console.log(`\n④ 오늘(${kst(RUN_AT)}) 발행 ${publishedToday} / ${RELEASE_DAILY_CAP}건 · 전체 중지 ${killed ? '🔴 켜짐' : '꺼짐'}`)
 
 // ── ⑤ 실행 판정 ──
 /**
@@ -461,7 +305,7 @@ console.log(`\n④ 오늘(${kst(new Date())}) 발행 ${publishedToday} / ${RELEA
  */
 const catchUp = judgeCatchUp({
   stage: scale.releaseStage,
-  now: new Date(),
+  now: RUN_AT,
   trigger: TRIGGER,
   cron: SLOT_CRON,
   publishedToday,
@@ -484,12 +328,8 @@ if (catchUp.due.length > 0) {
  * 🔴 그래서 설치가 끝난 뒤 **그 단계로 다시 판정한다.** 판정을 만드는 함수는 하나뿐이라
  *    창이 달라지지 않는다. 허가가 하나도 없는 날에는 `null` 이고, 그때 동작은 이전과 같다.
  */
-const effectiveDay = (canaryAuth.activeToday || windowAuth.activeToday)
-  ? (scale.releaseStage === windowAuth.stage ? windowDay
-    : scale.releaseStage === canaryAuth.stage ? canaryDay
-      : dayFor(scale.releaseStage))
-  : null
-const effectiveVerdict = effectiveDay?.verdict ?? null
+/** 🔴 설치 후 판정도 공용 함수가 낸다 — 러너와 관제가 같은 문을 본다 */
+const effectiveVerdict = resolved.effectiveVerdict
 
 /**
  * 🔴 **그날 판정 — 로그가 아니라 문이다** (2026-09-22).
@@ -513,7 +353,7 @@ const effectiveVerdict = effectiveDay?.verdict ?? null
 /** 🔴 조립은 `src/lib` 한 함수가 한다 — 러너 안에 두면 검사가 닿지 않는다 */
 const defects = judgePublishDefects({
   publishedToday, dailyCap: RELEASE_DAILY_CAP,
-  recoveryBroken: effectiveDay?.sim.recoveryBroken ?? 0,
+  recoveryBroken: resolved.effectiveRecoveryBroken,
   rejected,
 })
 const hardDefects = defects.hardDefects
@@ -562,7 +402,7 @@ if (target.matchedPersonaId === null) {
   // 🔴 조건부 UPDATE — 읽은 뒤 쓰는 사이에 누가 배정했으면 0건이 되어 멈춘다
   const u = await prisma.originalPostApprovalQueue.updateMany({
     where: { id: target.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null, matchedPersonaId: null },
-    data: { matchedPersonaId: persona.id, matchedAt: new Date(), matchMeta: plan.meta as never },
+    data: { matchedPersonaId: persona.id, matchedAt: RUN_AT, matchMeta: plan.meta as never },
   })
   if (u.count !== 1) { await prisma.$disconnect(); fail('배정 중 상태가 바뀌었습니다. 아무것도 발행하지 않았습니다.') }
   console.log(`   ✅ 배정 ${plan.personaCode} (${plan.meta.total}점)`)

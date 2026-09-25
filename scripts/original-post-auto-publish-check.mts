@@ -304,10 +304,16 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
     /updateMany\([\s\S]{0,400}?matchedPersonaId: null/.test(runnerSrc))
   check('🔴 기존 배정 행은 배정 저장 블록에 들어가지 않는다',
     /if \(target\.matchedPersonaId === null\) \{/.test(runnerSrc))
+  // 🔴 러너의 시계는 `RUN_AT` 하나다(2026-09-24) — 쓰는 자리도 하나여야 한다
   check('🔴 matchedAt 을 다시 쓰는 경로가 하나뿐이다',
-    (runnerSrc.match(/matchedAt: new Date\(\)/g) ?? []).length === 1)
+    (runnerSrc.match(/matchedAt: RUN_AT/g) ?? []).length === 1
+    && !/matchedAt: new Date\(\)/.test(runnerSrc))
+  /**
+   * 🔴 조립이 `scripts/lib/publishable-stock.mts` 로 옮겨졌다(2026-09-24) —
+   *    러너와 관제가 같은 함수를 쓰게 하려고 뺀 것이다. 지키는 것은 같다.
+   */
   check('🔴 기존 배정을 planBatch 에 정본으로 넘긴다',
-    /assignedPersonaCode:/.test(runnerSrc))
+    /assignedPersonaCode:/.test(readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')))
   check('🔴 배정이 깨졌으면 발행하지 않고 멈춘다',
     /recoveryProblem/.test(runnerSrc) && /brokenRecovery/.test(runnerSrc))
   check('🔴 예고한 persona 와 발행된 persona 를 대조한다',
@@ -492,13 +498,21 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
 
   // 🔴 러너가 실제로 그 필드를 넘기는지 소스로 고정한다
   const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
-  check('🔴 [회귀] auto-publish 가 childrenCount 를 넘긴다',
-    /childrenCount: typeof id\.childrenCount === 'number' \? id\.childrenCount : null/.test(src))
+  /** 🔴 Persona 조립이 공용 로더로 옮겨졌다 — 그 자리를 본다 */
+  const stockSrc = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
+  check('🔴 [회귀] auto-publish 경로가 childrenCount 를 넘긴다',
+    /childrenCount: typeof id\.childrenCount === 'number' \? id\.childrenCount : null/.test(stockSrc))
   check('🔴 [회귀] match-assign 과 같은 필드 집합을 넘긴다', (() => {
     const assign = readFileSync('scripts/original-post-match-assign.mts', 'utf-8')
     const fields = ['childrenCount', 'childrenAgeBands', 'maritalStatus', 'parentCare', 'menopauseStatus', 'noGoTopics']
-    return fields.every((f) => src.includes(f) && assign.includes(f))
+    return fields.every((f) => stockSrc.includes(f) && assign.includes(f))
   })())
+  check('🔴 🔴 **러너가 그 조립을 실제로 소비한다 — 옮기고 안 쓰면 아무 뜻이 없다**',
+    /^const RUN_AT = new Date\(\)\s*$/m.test(src)
+    && /const stock = await loadPublishableStock\(prisma, RUN_AT\)/.test(src)
+    && /stock\.personas/.test(src)
+    // 🔴 러너 전체에 시계가 하나뿐이다 — 단계마다 다른 `now` 는 경계에서 답을 가른다
+    && (src.match(/new Date\(\)/g) ?? []).length === 1)
 }
 
 console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발행 대상이다 (2026-09-14)')
@@ -572,9 +586,12 @@ console.log('\n⑳ 🔴 기계 후보는 사람이 확인한 것만 자동 발�
   check('🔴 [회귀] 발행 판정이 MACHINE_AGE_HUMAN_REVIEW_REQUIRED 를 실제로 읽는다',
     /MACHINE_AGE_HUMAN_REVIEW_REQUIRED && profile === 'machine'/.test(pubLib))
   check('🔴 [회귀] AutoRow 에 decidedBy 가 있다', /decidedBy: string \| null/.test(pubLib))
-  check('🔴 [회귀] 러너 select 가 decidedBy 를 읽고 넘긴다', (() => {
+  check('🔴 [회귀] 발행 경로의 select 가 decidedBy 를 읽고 넘긴다', (() => {
+    // 🔴 조립은 공용 로더에 있다 — 러너는 그 결과를 소비한다
+    const loader = codeOf('scripts/lib/publishable-stock.mts')
     const runner = codeOf('scripts/original-post-auto-publish.mts')
-    return /decidedBy: true,/.test(runner) && /decidedBy: r\.decidedBy,/.test(runner)
+    return /decidedBy: true,/.test(loader) && /decidedBy: r\.decidedBy,/.test(loader)
+      && /loadPublishableStock\(/.test(runner)
   })())
   check('🔴 [회귀] 예측기도 같은 게이트를 본다', (() => {
     const planner = codeOf('scripts/persona-capacity-planner.mts')
@@ -920,9 +937,12 @@ console.log('\n⑧ 🔴 외부 원문 제목 복제 — 생성 시점 대조 결
   check('🔴 [회귀] 발행 판정이 대조 기록을 실제로 읽는다',
     /sourceTitleCheckOf\(r\.gateResults\)/.test(pubLib)
     && /titleCheck\.checked && titleCheck\.copied && !founderRetitled\(r\)/.test(pubLib))
-  check('🔴 [회귀] 러너가 draftTitle·editedTitle 을 넘긴다',
-    /draftTitle: r\.draftTitle/.test(RUNNER) && /editedTitle: r\.editedTitle/.test(RUNNER))
-  check('🔴 [회귀] 러너가 rawTitle 을 select 하지 않는다', !/rawTitle: true/.test(RUNNER))
+  /** 🔴 조립은 공용 로더에 있다 — 두 값을 넘기는지는 그 자리에서 본다 */
+  const STOCK = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
+  check('🔴 [회귀] 발행 경로가 draftTitle·editedTitle 을 넘긴다',
+    /draftTitle: r\.draftTitle/.test(STOCK) && /editedTitle: r\.editedTitle/.test(STOCK))
+  check('🔴 [회귀] 발행 경로가 rawTitle 을 select 하지 않는다',
+    !/rawTitle: true/.test(STOCK) && !/rawTitle: true/.test(RUNNER))
   check('🔴 [회귀] 적재기가 세 값을 남긴다',
     /sourceTitleChecked: c\.sourceTitleChecked === true/.test(AUTOFILL)
     && /sourceTitleCopied: c\.sourceTitleCopied === true/.test(AUTOFILL))

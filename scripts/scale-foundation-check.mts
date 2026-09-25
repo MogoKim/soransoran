@@ -265,7 +265,12 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     // 🔴 주석 제거본으로 본다 — 주석 속 예시가 순서 검사를 통과시키면 안 된다
     const src = codeOf(f)
     const envAt = src.indexOf('await loadEnvLocal()')
-    const instAt = src.indexOf('installFromEnv(')
+    /**
+     * 🔴 발행 러너는 `installFromEnv`(계산+설치) 대신 `resolvePublishScale`(계산) 뒤
+     *    `applyScale`(설치) 로 나뉘었다(2026-09-24) — 관제가 전역을 바꾸지 않게 하려고 뺐다.
+     *    🔴 **지키는 것은 같다: env 를 읽은 뒤에 설치한다.**
+     */
+    const instAt = Math.max(src.indexOf('installFromEnv('), src.indexOf('applyScale('))
     check(`C 🔴 ${f.split('/').pop()} 은 loadEnvLocal 뒤에 설치한다`, envAt >= 0 && instAt > envAt)
   }
   // 🔴 수동 발행기는 **설치하지 않는 것이 정상**이다 (H 에서 이유를 검사한다)
@@ -349,11 +354,23 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     'supply-autofill': read('scripts/micro-seed-supply-autofill.mts'),
   }
   for (const [name, src] of Object.entries(users)) {
-    check(`G 🔴 ${name} 이 installFromEnv 로 설치한다`, src.includes('installFromEnv('))
+    /**
+     * 🔴 발행 러너만 계산(`resolvePublishScale`)과 설치(`applyScale`)를 나눴다 —
+     *    관제·검사가 그 계산을 불러도 전역이 바뀌지 않게 하려는 것이다.
+     *    나머지는 여전히 편의 함수 하나를 쓴다. **설치한다는 사실은 같다.**
+     */
+    check(`G 🔴 ${name} 이 규모를 설치한다`,
+      src.includes('installFromEnv(') || /applyScale\(resolved\.scale\)/.test(src))
     check(`G 🔴 ${name} 이 스스로 단계를 정하지 않는다`, !/resolveStage\(/.test(src) && !/safeStageFor\(/.test(src))
   }
   check('G 🔴 발행 러너는 설치된 release 프로필로 상한을 만든다',
-    /RELEASE_DAILY_CAP = scale\.releaseProfile\.dailyTarget/.test(users['auto-publish']))
+    /const RELEASE_DAILY_CAP = resolved\.dailyCap/.test(users['auto-publish'])
+    && /applyScale\(resolved\.scale\)/.test(users['auto-publish']))
+  /** 🔴 **계산만 하는 함수가 전역을 바꾸지 않는다** — 관제가 돌아도 운영 값이 안 흔들린다 */
+  check('G 🔴 🔴 **공용 조립은 resolveScale 만 쓴다 (installFromEnv 아님)**', (() => {
+    const stock = codeOf('scripts/lib/publishable-stock.mts')
+    return !/installFromEnv\(/.test(stock) && /resolveScale\(/.test(stock)
+  })())
   check('G 🔴 발행 러너가 그 값을 write 경로에 넘긴다',
     /publishOriginalPostTx\(prisma, \{ queueId: target\.id, publishedToday, dailyCap: RELEASE_DAILY_CAP \}\)/
       .test(users['auto-publish']))

@@ -233,21 +233,39 @@ console.log('① 준비도 시간축 (지평 ≠ 다음 발행 슬롯)')
   // 🔴 세 곳이 같은 시간축을 쓴다
   for (const f of ['scripts/supply-health.mts', 'scripts/persona-capacity-planner.mts',
     'scripts/original-post-auto-publish.mts'] as const) {
-    check(`🔴 ${f.split('/').pop()} 이 axis 로 넘긴다`, /axis: \{ now/.test(codeOf(f)))
+    /**
+     * 🔴 러너의 축 계산은 `scripts/lib/publishable-stock.mts` 의
+     *    `resolvePublishScale` 로 옮겨졌다(2026-09-24 5차) — 러너와 관제가 같은
+     *    축을 보게 하려고 뺐다. **지키는 것은 같다**: 축을 넘기고, 시작점을 짓지 않는다.
+     */
+    const axisSrc = f === 'scripts/original-post-auto-publish.mts'
+      ? codeOf('scripts/lib/publishable-stock.mts') : codeOf(f)
+    check(`🔴 ${f.split('/').pop()} 이 axis 로 넘긴다`,
+      /axis: \{ now/.test(axisSrc) || /const axis = \{ now, publishedToday: loaded\.publishedToday \}/.test(axisSrc))
     check(`🔴 ${f.split('/').pop()} 이 시작점을 직접 만들지 않는다`,
       !/startAt: (now|new Date\(\))/.test(codeOf(f)))
   }
   // 🔴 오늘 발행 수를 실제로 세어 넘기는가 (다음 슬롯 표시가 거짓말하지 않게)
   for (const [f, expr] of [
-    ['scripts/original-post-auto-publish.mts', /publishedToday: axisPublishedToday/],
+    // 🔴 러너는 `loaded: stock` 을 그대로 넘기고, 공용 함수가 실측값을 읽는다
+    ['scripts/original-post-auto-publish.mts', /resolvePublishScale\(\{ env: process\.env, loaded: stock, now: axisNow \}\)/],
     ['scripts/supply-health.mts', /publishedToday: todayCount/],
     ['scripts/persona-capacity-planner.mts', /publishedToday: todayCount/],
   ] as const) {
     check(`🔴 ${f.split('/').pop()} 이 오늘 발행 수를 실측해 넘긴다`, expr.test(codeOf(f)))
     check(`🔴 ${f.split('/').pop()} 이 0 을 박아 넘기지 않는다`, !/axis: \{ now[^}]*publishedToday: 0/.test(codeOf(f)))
   }
-  check('🔴 러너가 그 수를 PersonaActivityLog 로 센다',
-    /axisPublishedToday = await prisma\.personaActivityLog\.count/.test(codeOf('scripts/original-post-auto-publish.mts')))
+  /**
+   * 🔴 조립이 `scripts/lib/publishable-stock.mts` 로 옮겨졌다(2026-09-24) —
+   *    러너와 관제가 같은 함수를 쓰게 하려고 뺀 것이다. 지키는 것은 같다:
+   *    **그 수를 PersonaActivityLog 로 세고, 러너가 그 값을 실제로 쓴다.**
+   */
+  check('🔴 발행 경로가 그 수를 PersonaActivityLog 로 센다', (() => {
+    const stock = codeOf('scripts/lib/publishable-stock.mts')
+    const runner = codeOf('scripts/original-post-auto-publish.mts')
+    return /publishedToday = await prisma\.personaActivityLog\.count/.test(stock)
+      && /axisPublishedToday = stock\.publishedToday/.test(runner)
+  })())
   /**
    * 🔴 lib 이 지평을 만든다 — 호출부가 만들면 두 화면이 갈린다.
    *
@@ -530,13 +548,30 @@ console.log('\n③ freshness (TTL · 시각 미상 hold · 상한 복구 · 오�
 
   // 🔴 러너가 실제로 쓰는가 — **공용 준비 함수 하나**로 바뀌었다 (⑨에서 행동까지 본다)
   const runner = codeOf('scripts/original-post-auto-publish.mts')
-  check('🔴 러너가 공용 준비 함수를 쓴다', /prepareCandidates\(\{/.test(runner))
-  check('🔴 러너가 그 순서를 pickPublishTarget 에 넘긴다', /ordered: freshOrdered/.test(runner))
-  check('🔴 러너가 원문 확인 시각을 읽는다', /sourceCapturedAt: true/.test(runner))
-  check('🔴 러너가 복구 여부를 배정 코드로 넘긴다', /assignedPersonaCode: t\.matchedPersonaId === null/.test(runner))
+  /**
+   * 🔴 `prepareCandidates → freshOrdered → pickPublishTarget` 은
+   *    `planPublishBatch` (publishable-stock.mts) 한 함수로 묶였다(2026-09-24 5차).
+   *    러너·probe·검사 셋이 그 함수를 부른다 — 러너 안에 사본을 두지 않는다.
+   */
+  const planSrc = codeOf('scripts/lib/publishable-stock.mts')
+  check('🔴 공용 준비 함수가 한 곳에 있다', /export function planPublishBatch\(/.test(planSrc)
+    && /prepareCandidates\(\{/.test(planSrc))
+  check('🔴 그 순서를 pickPublishTarget 에 넘긴다', /ordered: freshOrdered/.test(planSrc))
+  check('🔴 🔴 **러너가 그 함수를 실제로 부르고 결과만 쓴다**',
+    /const plan = planPublishBatch\(\{ loaded: stock, caps: RELEASE_CAPS, at: axisNow \}\)/.test(runner)
+    && /const freshOrdered = plan\.freshOrdered/.test(runner)
+    && !/pickPublishTarget\(\{/.test(runner))
+  /** 🔴 조립 정본은 공용 로더다 — 러너는 그 결과를 소비한다 */
+  const stockSrc = codeOf('scripts/lib/publishable-stock.mts')
+  check('🔴 발행 경로가 원문 확인 시각을 읽는다', /sourceCapturedAt: true/.test(stockSrc))
+  check('🔴 발행 경로가 복구 여부를 배정 코드로 넘긴다',
+    /assignedPersonaCode: t\.matchedPersonaId === null/.test(stockSrc))
+  check('🔴 🔴 **러너가 그 조립 결과를 실제로 소비한다**',
+    /await loadPublishableStock\(prisma, RUN_AT\)/.test(runner)
+    && /const queueCandidates: QueueCandidate\[\] = stock\.queueCandidates/.test(runner))
   check('🔴 러너가 사람 검수 목록을 출력한다', /prepared\.held/.test(runner))
   check('🔴 legacy 제외·안전 판정은 그대로다',
-    /selectAutoTargets\(/.test(runner) && /safetyFilter/.test(runner))
+    /selectAutoTargets\(/.test(stockSrc) && /safetyFilter/.test(stockSrc))
   check('🔴 최대 매칭 계약도 그대로다 — 준비 함수가 planBatch 를 부른다',
     /planBatch\(/.test(codeOf('src/lib/supply-candidates.ts')))
 }
@@ -1419,18 +1454,26 @@ console.log('\n⑨ freshness — 러너 · 관제 · 예측 · 준비도가 같�
   // 🔴 생산 경로가 그 함수를 실제로 부르는가
   const runner = codeOf('scripts/original-post-auto-publish.mts')
   const health = codeOf('scripts/supply-health.mts')
-  check('🔴 러너가 prepareCandidates 결과를 **그대로** 쓴다 — 대체 경로를 두지 않는다',
-    /\nconst prepared = prepareCandidates\(\{\n/.test(runner)
-    && !/const prepared = [^\n]*\?\?/.test(runner))
+  const planSrc2 = codeOf('scripts/lib/publishable-stock.mts')
+  check('🔴 prepareCandidates 결과를 **그대로** 쓴다 — 대체 경로를 두지 않는다',
+    /const prepared = prepareCandidates\(\{/.test(planSrc2)
+    && !/const prepared = [^\n]*\?\?/.test(planSrc2)
+    // 🔴 러너는 공용 결과만 쓴다 — 자기 자리에서 다시 준비하지 않는다
+    && /const prepared = plan\.prepared/.test(runner)
+    && !/prepareCandidates\(\{/.test(runner))
   check('🔴 러너가 자체 planBatch 를 다시 돌리지 않는다', !/const batch = planBatch\(/.test(runner))
   check('🔴 관제도 같은 함수를 쓴다', /prepareCandidates\(\{/.test(health))
   check('🔴 관제가 예측에 **거르지 않은 후보**를 넘긴다 — 예측기가 날짜마다 다시 판정한다',
     /const forecastQueue = queueCandidates/.test(health))
-  check('🔴 러너 stageVerdicts 도 거르지 않은 후보를 넘긴다 — 단계마다 그 cap 으로 다시 정한다',
-    /queue: queueCandidates,/.test(runner))
-  check('🔴 러너가 assignedPersonaCode 를 null 로 박지 않는다',
-    !/assignedPersonaCode: null,\n\s*\}\)\),\n\s*personas: personas as never/.test(runner)
-    && /assignedPersonaCode: t\.matchedPersonaId === null/.test(runner))
+  check('🔴 stageVerdicts 도 거르지 않은 후보를 넘긴다 — 단계마다 그 cap 으로 다시 정한다',
+    /queue: loaded\.queueCandidates, personas: loaded\.personas as never,/.test(planSrc2)
+    && /stageVerdicts\(\{/.test(planSrc2))
+  check('🔴 발행 경로가 assignedPersonaCode 를 null 로 박지 않는다', (() => {
+    const stock = codeOf('scripts/lib/publishable-stock.mts')
+    return !/assignedPersonaCode: null,\n\s*\}\)\),\n\s*personas: personas as never/.test(stock)
+      && /assignedPersonaCode: t\.matchedPersonaId === null/.test(stock)
+      && /loadPublishableStock\(/.test(runner)
+  })())
   check('🔴 관제 JSON 이 자동 대상·hold 를 낸다', /candidates: \{/.test(health) && /held: prepared\.held/.test(health))
   check('🔴 관제 화면도 같은 값을 읽는다', /describePrepared\(prepared\)/.test(health))
 }

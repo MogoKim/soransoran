@@ -1898,3 +1898,58 @@ model OperatorWriteLog {
   @@index([createdAt])
   @@index([kind, createdAt])
 }
+
+/// 🔴 **하루 단계 결정 — KST 날짜당 하나** (2026-09-25)
+///
+///    공급(로컬 launchd)과 발행(GitHub Actions)은 서로 다른 env 원천을 읽는다.
+///    2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.
+///    두 러너가 **같은 행 하나**를 읽어야 그 일이 다시 나지 않는다.
+///
+/// 🔴 **불변은 app-level 계약이다.** Postgres 는 이 표를 append-only 로 알지 못한다 —
+///    `src/lib/stage-decision-repo.ts` 가 create/read 만 내주는 것으로 지킨다.
+///    `revision`·`updatedAt` 칼럼을 두지 않은 것은 그 계약의 **표시**이지 강제가 아니다.
+///
+/// 🔴 `contractVersion` 은 유일키가 **아니다**. 키에 넣으면 같은 날 판을 올릴 때
+///    두 번째 행이 생기고, 아침과 낮의 상한이 갈린다.
+model StageDecision {
+  /// 🔴 유일키다 — 하루에 결정은 하나뿐이다 (`YYYY-MM-DD`, KST 기준)
+  kstDate String @id
+
+  /// 🔴 계약 판. 현재 판이 아닌 행은 validator 가 거절한다(fail-closed)
+  contractVersion String
+
+  /// 사람이 승인한 천장. 어떤 판정도 이 값을 올리지 않는다 (d1|d3|d5|d10)
+  capacity String
+  /// 실제 공개 단계. 🔴 release rank <= capacity rank
+  release  String
+  /// SUSTAIN|TRIAL|PREPARE|HOLD
+  state    String
+
+  /// string[]
+  reasons Json
+  /// { code: BlockCode, reason: string }[]
+  blocks  Json
+
+  /// 그날 단계를 고정했는가
+  dayPinned Boolean
+
+  /// 🔴 **필수 칼럼이다 (`Json?` 이 아니다).** 계약은 "키는 언제나 있고,
+  ///    값이 없으면 **JSON `null`**" 이다. `Json?` 로 두면 SQL NULL 행이 생길 수 있고,
+  ///    그 행은 읽을 때 "값 없음" 과 구분되지 않는다.
+  ///    🔴 adapter 는 `Prisma.JsonNull` 로만 쓴다. `DbNull`(SQL NULL)은 DB 가 거절한다.
+  ///    `{ eligibleSpeakers, excluded: [{reason, codes}] }` 또는 JSON `null`
+  supply Json
+
+  /// 🔴 필수 칼럼이다. 전이 근거 — TRIAL/SUSTAIN 이면 구조가 있고 나머지는 JSON `null`.
+  ///    `{kind:'TRIAL',trialBase,previousKstDate,target}` | `{kind:'SUSTAIN',from,to}`
+  transition Json
+
+  /// 🔴 언제나 `controller` — supply/publish 는 읽기만 한다
+  decidedBy String
+  /// 🔴 그 KST 날짜 안이어야 한다. validator 가 되돌려 찍어 대조한다
+  decidedAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
