@@ -1,5 +1,6 @@
 /**
- * LOW/MEDIUM 자동 발행 레인 — 단계 판정만 한다.
+ * 자동 발행 레인 — 단계 판정만 한다.
+ * 🔴 등급으로 가르지 않는다 (M3-A). `validationProfile` 을 정할 수 있으면 태운다.
  *
  * 🔴 이 모듈은 파일을 쓰지 않는다. 자식 프로세스도 띄우지 않는다.
  *    "지금 이 slug 가 어느 단계까지 왔고 다음에 무엇을 해야 하는가"만 계산한다.
@@ -17,9 +18,9 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { DRAFTS_DIR } from './magazine-load.mjs'
+import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 
-/** 자동 등록이 허용되는 위험 등급. register.mjs 의 AUTO_RISK 와 같은 값이다 */
-export const LANE_RISK = new Set(['LOW', 'MEDIUM'])
+// 🔴 LANE_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 레인을 가르지 않는다
 
 /** 단계 순서 — 리포트와 진행 판단이 같은 이름을 쓴다 */
 export const STAGES = ['gate', 'draft', 'article', 'qa', 'batch', 'hero', 'register', 'pr']
@@ -44,8 +45,8 @@ export function paths(slug) {
  *
  * 통과 조건 (전부 AND)
  *   ① topic-queue 에 있다        — 없으면 등급을 확인할 정본이 없다
- *   ② riskLevel ∈ {LOW, MEDIUM}  — HIGH 는 여기서 끝난다
- *   ③ autoEligible === true      — 민감 주제는 등급과 무관하게 막는다
+ *   ② validationProfile 을 정할 수 있다 — 🔴 등급으로 가르지 않는다 (M3-A)
+ *                                  못 정하면 멈춘다. 정해지면 태운다.
  *   ④ brief.md 와 review.ts 가 있다 — 없으면 회수도 대조도 못 한다
  */
 export function gate(slug, queue) {
@@ -57,12 +58,15 @@ export function gate(slug, queue) {
     block('NOT_IN_QUEUE', 'topic-queue 에 없다 — 자동 레인은 큐에 있는 글만 태운다')
     return { ok: false, item: null, blockedBy }
   }
-  if (!LANE_RISK.has(item.riskLevel)) {
-    block('RISK_LEVEL', `riskLevel=${item.riskLevel} — 자동 레인은 LOW/MEDIUM 만 태운다`)
+  /**
+   * 🔴 **자동 레인은 등급으로 가르지 않는다** (M3-A).
+   *    프로필을 정할 수 있으면 태운다. 못 나가는 이유는 QA 실패뿐이다.
+   */
+  const lane = isAutoLaneEligible(item)
+  if (!lane.ok) {
+    block(lane.code, lane.why)
   }
-  if (item.autoEligible !== true) {
-    block('AUTO_INELIGIBLE', 'autoEligible=false — 민감 주제')
-  }
+  // 🔴 autoEligible 은 호환 필드로만 읽는다 — 자동 진행을 막지 않는다
 
   const p = paths(slug)
   if (!existsSync(p.brief)) block('BRIEF_MISSING', 'brief.md 가 없다 — brief-auto 가 먼저 돌아야 한다')
@@ -113,7 +117,7 @@ export function heroPlan(item, { alt = null, allowOptional = false, autoLane = f
       need: true,
       mode,
       alt: null,
-      blocked: { code: 'HERO_ALT_REQUIRED', message: `imageMode=${mode} 인데 --alt 가 없다 — alt 는 사람이 적는다` },
+      blocked: { code: 'HERO_ALT_REQUIRED', message: `imageMode=${mode} 인데 alt 를 구하지 못했다 (review.ts·cluster 기본값 모두 실패)` },
     }
   }
   return { need: true, mode, alt, blocked: null, enforcedByLane: autoLane && mode !== 'REQUIRED' }

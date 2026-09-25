@@ -2,7 +2,8 @@
 /**
  * 매거진 자동화 산출물 → 브랜치 · 커밋 · PR
  *
- * 🔴 merge 하지 않는다. 이 스크립트의 종점은 `[merge 금지]` PR 이다.
+ * 🔴 이 스크립트는 merge 하지 않는다 — PR 까지가 종점이다.
+ *    🔴 M3-A 이후 merge 판정은 사람이 아니라 `magazine-merge-gate.mjs` 가 한다.
  *    사람이 diff 를 본 뒤에만 나간다 — 운영 전략 §13.5.
  *
  * 🔴 왜 allowlist 인가
@@ -131,7 +132,7 @@ ${files.map((f) => `- \`${f}\``).join('\n')}
 - \`magazine-batch-qa\` READY (BLOCKED 0)
 - 금지 파일 변경 0건 (package.json · prisma/** · post-visibility · queries/posts · sitemap · community/** · page.tsx)
 
-## merge 금지
+## merge 판정
 
 자동화가 만든 PR 이다. **사람이 diff 를 본 뒤에만 merge 한다.**
 자동 merge 하지 않는다.
@@ -181,7 +182,8 @@ function main() {
   }
 
   const r = inspect()
-  const prTitle = title.startsWith('[merge 금지]') ? title : `[merge 금지] ${title}`
+  // 🔴 M3-A — "[merge 금지]" 를 붙이지 않는다. merge 여부는 자동 관문이 판정한다
+  const prTitle = title.replace(/^\[merge 금지\]\s*/, '')
   const steps = []
 
   if (push && r.verdict === 'READY') {
@@ -213,7 +215,7 @@ function main() {
         gitQuiet('restore', '--staged', '.')
       } else if (added) {
         steps.push({ label: '커밋 직전 재대조', ok: true, out: `${stagedList.length}개 일치` })
-        if (run('commit', 'commit', '-m', prTitle.replace('[merge 금지] ', ''))) {
+        if (run('commit', 'commit', '-m', prTitle)) {
           if (run(`push ${branch}`, 'push', '-u', 'origin', branch)) {
             const body = bodyFile ? readFileSync(bodyFile, 'utf8') : defaultBody(r.files.allowed, title)
             try {

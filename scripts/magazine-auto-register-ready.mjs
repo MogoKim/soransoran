@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * LOW/MEDIUM 자동 발행 레인 — 후보 스캐너 · 일괄 실행 · 리포트.
+ * 자동 발행 레인 — 후보 스캐너 · 일괄 실행 · 리포트.
+ *
+ * 🔴 등급으로 후보를 가르지 않는다 (M3-A). `validationProfile` 이 검증 강도를 정한다.
  *
  *   00:10 KST  magazine-producer-run.mjs        선정 · brief · 원고 회수 · 알림
  *   02:00 KST  이 스크립트 (auto-register-run)  변환 · QA · batch-qa · hero · register · PR
@@ -23,8 +25,8 @@
  *    나중에 만들면 articles.ts 가 먼저 바뀐 뒤 브랜치 생성에 실패했을 때
  *    그 변경이 main 에 남는다. 순서를 뒤집으면 실패가 "아무 일도 없음"으로 끝난다.
  *
- * 🔴 HIGH · autoEligible=false · 큐에 없는 slug 는 gate 에서 끝난다 (magazine-auto-lane.mjs).
- * 🔴 register 에 --founder-approved 를 넘기지 않는다.
+ * 🔴 큐에 없거나 validationProfile 을 정할 수 없는 slug 만 gate 에서 끝난다 (magazine-auto-lane.mjs).
+ * 🔴 사람 승인 손잡이는 없다 (M3-A 에서 제거).
  *
  * 사용법
  *   node scripts/magazine-auto-register-ready.mjs --dry-run
@@ -45,7 +47,7 @@ import { branchName, writePreflight, createBranch, assertOnBranch, stageCheck, r
 import { acquireLock } from './lib/magazine-auto-lock.mjs'
 import { readOutstanding, SEVERITY } from './lib/magazine-outstanding.mjs'
 import {
-  clearEntry, fingerprintOf, judgeQuarantine, loadQuarantine, recordFailure, saveQuarantine,
+  fingerprintOf, judgeQuarantine, readQuarantine, recordFailure, updateQuarantine,
 } from './lib/magazine-quarantine.mjs'
 import { drive } from './magazine-auto-register.mjs'
 import { buildMessage, send, webhookStatus } from './lib/slack-notify.mjs'
@@ -236,12 +238,16 @@ export const ATTEMPT_CEILING_MAX = 9
 export const ceilingFor = (limit) => Math.min(ATTEMPT_CEILING_MAX, Math.max(limit, limit * 3))
 
 /** 자동 레인 후보 — gate 를 통과하고 brief 가 이미 있는 것만 */
-export function scan({ runDate = null } = {}) {
+/**
+ * @param {{runDate?:string|null, store?:object}} p
+ *   🔴 `store` 는 **호출부가 한 번 읽어 넘긴다.** scan 이 따로 읽으면
+ *      한 회차에 장부를 두 번 읽게 되고, 그 사이 값이 달라지면 판정이 엇갈린다.
+ */
+export function scan({ runDate = null, store = {} } = {}) {
   const queue = loadQueue()
   const fromRun = runDate ? slugsFromRun(runDate) : null
   const pool = fromRun ?? queue.map((q) => q.slug)
 
-  const store = loadQuarantine()
   const now = Date.now()
 
   const eligible = []
@@ -263,6 +269,96 @@ export function scan({ runDate = null } = {}) {
     eligible.push({ slug, item: g.item, progress: progress(slug) })
   }
   return { source: fromRun ? `run:${runDate}` : 'queue', pool: pool.length, eligible, skipped, quarantined }
+}
+
+/**
+ * 🔴 **한 회차의 후보 처리 — 실제 운영 루프.**
+ *
+ *    `main()` 안에 있으면 시험이 닿지 못한다. 그래서 앞판은 `drive` 단독 fake 로만
+ *    "재생성이 된다" 를 확인했고, **ready 가 장부를 덮어쓰는 결함**은 아무도 보지 못했다.
+ *    여기로 꺼내 두면 실제 루프를 그대로 돌려 볼 수 있다.
+ *
+ * @param {object} p
+ * @param {(slug:string, opts:object, deps?:object)=>object} [p.driveFn] 🔴 시험 주입용
+ * @param {string} [p.quarantinePath] 🔴 시험 주입용 — 운영 장부를 건드리지 않는다
+ */
+export function processCandidates({
+  write, wantPr, limit, runDate = null, report,
+  driveFn = drive, quarantinePath = undefined, driveDeps = {},
+  /**
+   * 🔴 후보 스캔도 주입점이다 — **운영 큐가 0건이어도 orchestration 을 검증**하려면
+   *    고정 fixture 후보를 넣을 자리가 필요하다. 기본값은 실제 scan 그대로다.
+   */
+  scanFn = scan,
+}) {
+  const upd = (fn) => updateQuarantine(fn, ...(quarantinePath ? [quarantinePath] : []))
+  const ledger = readQuarantine(...(quarantinePath ? [quarantinePath] : []))
+  if (!ledger.ok) {
+    /**
+     * 🔴 **깨진 장부는 예외 종료가 아니라 「전체 후보 HOLD」다.**
+     *    예외로 끝내면 lock 도 안 풀리고 Slack 도 안 나가고 무엇이 문제인지도 안 남는다.
+     */
+    report.ledgerHold = { code: 'QUARANTINE_UNREADABLE', message: ledger.why }
+    report.blocked.push({ slug: '(ledger)', blockedBy: [{ code: 'QUARANTINE_UNREADABLE', message: ledger.why }] })
+  }
+  const scanned = scanFn({ runDate, store: ledger.store })
+  const slots = slotAllocator(kstDate(SLOT_START_OFFSET_DAYS))
+
+  const done = []
+  const blocked = []
+  const results = []
+
+  // 🔴 등록 예산과 시도 상한을 따로 센다 — 막힌 후보가 정상 후보를 굶기지 않는다
+  const ceiling = ceilingFor(limit)
+  let registered = 0
+  let budgetStop = null
+  // 🔴 장부를 못 읽었으면 한 건도 태우지 않는다 — 전부 HOLD 로 보고하고 끝낸다
+  for (const cand of (ledger.ok ? scanned.eligible : [])) {
+    const b = judgeBudget({ registered, attempted: results.length, limit, ceiling })
+    if (b.stop) { budgetStop = b; break }
+    // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
+    const publishAt = slots.peek()
+    // 🔴 자동 레인이다 — alt 는 review.ts 또는 cluster 기본값에서 나온다 (사람 입력 없음)
+    const r = driveFn(cand.slug,
+      { write, pr: wantPr, publishAt, alt: null, allowOptional: false, autoLane: true },
+      { ...driveDeps, ...(quarantinePath ? { quarantinePath } : {}) })
+    r.publishAt = publishAt
+    // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
+    if (CONSUMES_SLOT.has(r.verdict)) { slots.commit(); registered += 1 }
+    results.push(r)
+
+    if (r.verdict === 'BLOCKED') {
+      blocked.push(r)
+      if (write) {
+        /**
+         * 🔴 **매번 최신 장부를 다시 읽어 갱신한다.**
+         *    drive 가 방금 기록한 `regenCalls` 를 들고 있던 사본으로 덮으면
+         *    2회 소진한 글이 0회로 되살아난다 (lost update).
+         */
+        const u = upd((cur) => ({
+          ...cur,
+          [r.slug]: {
+            ...cur[r.slug],
+            ...recordFailure({
+              entry: cur[r.slug],
+              fingerprint: draftFingerprint(r.slug),
+              now: Date.now(),
+              reasons: (r.blockedBy ?? []).map((x) => `${x.code}: ${x.message}`),
+            }),
+            // 🔴 drive 가 센 재생성 횟수를 보존한다
+            ...(cur[r.slug]?.regenCalls !== undefined ? { regenCalls: cur[r.slug].regenCalls } : {}),
+            ...(cur[r.slug]?.lastPacketHash !== undefined ? { lastPacketHash: cur[r.slug].lastPacketHash } : {}),
+          },
+        }))
+        if (!u.ok) report.blocked.push({ slug: r.slug, blockedBy: [{ code: 'QUARANTINE_UNREADABLE', message: u.why }] })
+      }
+    } else if (r.verdict === 'DONE') {
+      done.push(r)
+      // 🔴 등록에 성공하면 기록을 지운다. 옛 실패를 남겨 두면 다음에 오해한다.
+      if (write) upd((cur) => { const n = { ...cur }; delete n[r.slug]; return n })
+    }
+  }
+  return { ledger, scanned, done, blocked, results, registered, ceiling, budgetStop }
 }
 
 // ── PR ─────────────────────────────────────────────────────
@@ -307,22 +403,24 @@ export function finishPr(branch, doneSlugs, { exec: run = exec } = {}) {
     return { made: false, branch, reason: check.blockedBy[0].message, staged: check.staged, pushed: false }
   }
 
-  const title = `[merge 금지] feat(magazine): LOW/MEDIUM 자동 등록 ${doneSlugs.length}건 (${kstDate()})`
+  // 🔴 M3-A — 등급으로 가르지 않는다. merge 는 자동 관문이 판정한다 (사람 승인 없음)
+  const title = `feat(magazine): 자동 등록 ${doneSlugs.length}건 (${kstDate()})`
   const body = [
     '자동 레인(`magazine-auto-register-ready.mjs`)이 만든 등록 PR 이다.',
     '',
     `등록: ${doneSlugs.join(', ')}`,
     '',
-    '게이트: topic-queue 정본 · riskLevel LOW/MEDIUM · autoEligible=true ·',
+    '게이트: topic-queue 정본 · validationProfile 별 결정론적 QA ·',
     'magazine QA FAIL 0 · batch-qa READY(--strict-auto) · register 통과.',
-    'HIGH 와 autoEligible=false 는 gate 에서 제외됐다. --founder-approved 는 쓰지 않았다.',
+    '🔴 등급(riskLevel·autoEligible)으로 거르지 않는다 — 검증 강도만 정한다.',
+    '🔴 QA 실패는 실패 패킷과 함께 최대 2회 자동 재생성한다. 그래도 실패하면 그 글만 HOLD.',
     '',
     `staged 파일: ${check.staged.join(', ')}`,
     '',
-    '🔴 merge 는 창업자 승인 후에 한다.',
+    '🔴 merge 는 자동 병합 관문(magazine-merge-gate)이 판정한다 — 사람 승인 단계는 없다.',
   ].join('\n')
 
-  const committed = run('git', ['commit', '-m', title.replace('[merge 금지] ', ''), '-m', body])
+  const committed = run('git', ['commit', '-m', title, '-m', body])
   if (committed.code !== 0) return { made: false, branch, reason: `commit 실패: ${committed.err.split('\n').pop()}`, pushed: false }
 
   const pushed = run('git', ['push', '-u', 'origin', branch])
@@ -424,7 +522,7 @@ async function notifySlack(report, { actuallySend, dryRunLane }) {
 // ── CLI ────────────────────────────────────────────────────
 
 function help() {
-  console.log(`LOW/MEDIUM 자동 발행 레인 — 후보 스캔 · 일괄 실행
+  console.log(`자동 발행 레인 — 후보 스캔 · 일괄 실행 (등급으로 가르지 않는다)
 
   node scripts/magazine-auto-register-ready.mjs --dry-run
   node scripts/magazine-auto-register-ready.mjs --dry-run --json
@@ -434,14 +532,14 @@ function help() {
 
   --dry-run       repo 파일 변경 0건 (기본). 리포트 JSON 도 쓰지 않는다
   --write         회수·변환·hero·register 를 실제로 수행 (깨끗한 main 에서만)
-  --pr            register write 앞에 PR 브랜치를 만들고, 끝나면 [merge 금지] PR
+  --pr            register write 앞에 PR 브랜치를 만들고, 끝나면 PR (merge 는 자동 관문이 판정)
   --notify        Slack 문구만 만들어 보여준다 (발송 0)
   --notify-send   Slack 실제 발송
   --limit N       한 번에 처리할 최대 건수 (기본 3)
   --run DATE      그날 producer 선정분만 (없으면 큐 전체)
   --json          리포트를 JSON 으로
 
-🔴 HIGH · autoEligible=false · 큐에 없는 slug 는 gate 에서 제외된다.
+🔴 gate 는 등급으로 거르지 않는다 — 큐에 없거나 프로필을 정할 수 없는 slug 만 제외된다.
 🔴 새벽 dry-run 회차의 감시 기준은 launchd 로그다 (Slack 발송 없음).`)
 }
 
@@ -567,54 +665,16 @@ async function main() {
     }
   }
 
+  /**
+   * 🔴 **여기부터는 무슨 일이 나도 `finish()` 를 지난다.**
+   *    앞판은 처리 중 예상 못 한 예외가 나면 그대로 프로세스가 죽었다 —
+   *    lock 이 잠긴 채 남고, 작업 브랜치에 선 채로 끝나고, Slack 도 안 나갔다.
+   *    다음 회차는 `LOCK_HELD` 와 `NOT_ON_MAIN` 으로 이어서 멈춘다.
+   */
+  try {
   // ── 처리 ─────────────────────────────────────────────────
-  const scanned = scan({ runDate: arg('--run') })
-  const slots = slotAllocator(kstDate(SLOT_START_OFFSET_DAYS))
-
-  const done = []
-  const blocked = []
-  const results = []
-  // 🔴 격리 기록은 **write 회차만** 고친다. dry-run 은 아무것도 남기지 않는다.
-  let store = loadQuarantine()
-  let storeChanged = false
-
-  // 🔴 등록 예산과 시도 상한을 따로 센다 — 막힌 후보가 정상 후보를 굶기지 않는다
-  const ceiling = ceilingFor(limit)
-  let registered = 0
-  let budgetStop = null
-  for (const cand of scanned.eligible) {
-    const b = judgeBudget({ registered, attempted: results.length, limit, ceiling })
-    if (b.stop) { budgetStop = b; break }
-    // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
-    const publishAt = slots.peek()
-    // 🔴 자동 레인이다 — 대표 이미지는 선택이 아니라 필수다 (2026-09-21 사고)
-    const r = drive(cand.slug, { write, pr: wantPr, publishAt, alt: null, allowOptional: false, autoLane: true })
-    r.publishAt = publishAt
-    // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
-    if (CONSUMES_SLOT.has(r.verdict)) { slots.commit(); registered += 1 }
-    results.push(r)
-
-    if (r.verdict === 'BLOCKED') {
-      blocked.push(r)
-      // 🔴 실패를 센다. 정해진 횟수를 넘으면 다음 회차부터 비켜 준다 —
-      //    고쳐 주지는 않는다. 같은 후보가 매일 앞자리를 차지하면 재고가 멈춘다.
-      if (write) {
-        store = { ...store, [r.slug]: recordFailure({
-          entry: store[r.slug],
-          fingerprint: draftFingerprint(r.slug),
-          now: Date.now(),
-          reasons: (r.blockedBy ?? []).map((b) => `${b.code}: ${b.message}`),
-        }) }
-        storeChanged = true
-      }
-    } else if (r.verdict === 'DONE') {
-      done.push(r)
-      // 🔴 등록에 성공하면 기록을 지운다. 옛 실패를 남겨 두면 다음에 오해한다.
-      if (write && store[r.slug]) { store = clearEntry(store, r.slug); storeChanged = true }
-    }
-  }
-  if (write && storeChanged) saveQuarantine(store)
-
+  const { scanned, done, blocked, results, registered, ceiling, budgetStop } =
+    processCandidates({ write, wantPr, limit, runDate: arg('--run'), report })
   Object.assign(report, {
     source: scanned.source,
     pool: scanned.pool,
@@ -622,7 +682,14 @@ async function main() {
     processed: results.length,
     budget: { limit, ceiling, registered, stoppedBy: budgetStop?.code ?? 'EXHAUSTED', stopMessage: budgetStop?.message ?? '후보를 전부 보았다' },
     done: done.map((r) => ({ slug: r.slug, publishAt: r.publishAt })),
-    blocked: blocked.map((r) => ({ slug: r.slug, blockedBy: r.blockedBy })),
+    /**
+     * 🔴 **덮어쓰지 않고 이어 붙인다.**
+     *    옛 판은 `blocked` 를 후보 결과로 **통째로 교체**했다. 그래서
+     *    `processCandidates` 가 넣어 둔 `(ledger) QUARANTINE_UNREADABLE` 가 사라지고,
+     *    깨진 장부로 한 건도 못 돌린 회차가 **종료코드 0 (성공)** 으로 끝났다.
+     *    "아무 일도 안 한 것" 과 "잘 끝난 것" 은 다르다.
+     */
+    blocked: [...(report.blocked ?? []), ...blocked.map((r) => ({ slug: r.slug, blockedBy: r.blockedBy }))],
     dryRunOk: results.filter((r) => r.verdict === 'DRY_RUN_OK').map((r) => r.slug),
     dryRunIncomplete: results.filter((r) => r.verdict === 'DRY_RUN_INCOMPLETE').map((r) => r.slug),
     gateSkipped: scanned.skipped.map((s) => ({ slug: s.slug, riskLevel: s.riskLevel, codes: s.blockedBy.map((b) => b.code) })),
@@ -645,7 +712,16 @@ async function main() {
   report.reportPath = saved.path
   report.results = results
 
-  return finish(report.blocked.length > 0 ? 1 : 0)
+  // 🔴 장부를 못 읽은 회차는 반드시 실패다 — 후보가 0건이라 blocked 가 비어도 마찬가지
+  return finish(report.blocked.length > 0 || report.ledgerHold ? 1 : 0)
+  } catch (err) {
+    // 🔴 예외를 삼키지 않는다. 남기고, 정리하고, 실패로 끝낸다.
+    report.blocked.push({ slug: '(unexpected)', blockedBy: [{ code: 'UNEXPECTED_ERROR',
+      message: `${err?.name ?? 'Error'}: ${err?.message ?? String(err)}` }] })
+    report.unexpected = { name: err?.name ?? 'Error', message: String(err?.message ?? err),
+      stack: String(err?.stack ?? '').split('\n').slice(0, 4).join(' | ') }
+    return finish(1)
+  }
 }
 
 /** 사람이 읽는 출력 — 🔴 로그가 새벽 감시의 유일한 기준이다. 빠뜨리면 안 보인다 */

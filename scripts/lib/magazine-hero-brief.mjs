@@ -4,7 +4,7 @@
  * 🔴 **왜 생겼나** (2026-09-15 진단).
  *    `magazine-auto-register-ready.mjs` 가 `drive()` 에 `alt: null` 을 고정으로 넘겼다.
  *    그래서 `imageMode=REQUIRED` 인 글은 **구조적으로 언제나** `HERO_ALT_REQUIRED` 로 막혔다.
- *    "alt 는 사람이 적는다" 는 원칙은 옳았지만, 사람이 적을 **자리가 없었다** —
+ *    (역사) 옛 원칙은 "alt 는 사람이 적는다" 였으나 적을 자리가 없었다 —
  *    자동 레인이 읽을 수 있는 곳에 alt 가 저장된 적이 없다.
  *
  * 🔴 **그 자리를 review.ts 로 정한다.**
@@ -15,12 +15,18 @@
  *    G7 스키마 검사가 형식을 본다.
  *
  * 🔴 **이것은 등급 게이트를 열지 않는다.**
- *    alt 가 생겼다고 HIGH 나 `autoEligible=false` 가 통과하지 않는다 —
+ *    (역사) 그때는 alt 가 생겨도 등급이 막았다 — 지금은 등급이 막지 않는다.
  *    `gate()` 는 hero 보다 앞이고, 이 모듈은 gate 를 통과한 뒤에만 불린다.
  *
- * 🔴 **OPTIONAL 을 REQUIRED 로 만들지 않는다.**
- *    여기서 하는 일은 "REQUIRED 인데 alt 가 없어서 막히던 것" 을 없애는 것뿐이다.
- *    `imageMode=OPTIONAL` 은 여전히 기본 스킵이고 `--allow-optional` 이 있어야 만든다.
+ * 🔴 **자동 레인에는 alt 를 적어 줄 사람이 없다** (2026-09-24 실측).
+ *    gate 를 통과한 후보 3건이 전부 `HERO_BRIEF_MISSING` 으로 막혔다 —
+ *    review.ts 에 hero 블록이 한 번도 쓰인 적이 없기 때문이다.
+ *    "사람이 적는다" 는 곧 "아무도 안 적는다" 였고, 자동 공급이 0건이 됐다.
+ *
+ *    그래서 **결정론적 기본값**을 둔다.
+ *      ① review.ts 의 hero 가 있으면 그것이 정본이다 (Claude 가 적은 값)
+ *      ② 없으면 cluster 별 고정 기본값을 쓴다 — 같은 cluster 는 늘 같은 값이다
+ *    사람에게 입력을 요구하지 않는다. 지어내지도 않는다 — **미리 정해 둔 표**를 읽는다.
  *
  * 🔴 파일을 쓰지 않는다. 읽고 판정만 한다.
  */
@@ -90,7 +96,7 @@ export function validateHeroBrief({ alt, scene } = {}) {
 
   const altValue = String(alt ?? '').trim()
   if (!altValue) {
-    fail('HERO_ALT_MISSING', 'review.ts 에 hero.alt 가 없다 — 검수 단계에서 사람이 적는다')
+    fail('HERO_ALT_MISSING', 'hero.alt 가 없다 — review.ts 에 없으면 cluster 기본값을 쓴다')
     return { ok: false, reasons }
   }
 
@@ -119,16 +125,59 @@ export function validateHeroBrief({ alt, scene } = {}) {
  * 한 slug 의 hero 정보를 읽고 판정까지 한 결과.
  * `alt` 는 **통과했을 때만** 값이 있다 — 반쯤 맞는 alt 를 넘기지 않는다.
  */
-export function resolveHeroBrief(slug) {
+/**
+ * 🔴 **cluster 별 고정 기본값.** 사람이 미리 정해 둔 표다 — 실행할 때 만들지 않는다.
+ *    alt 는 `checkAlt` 규칙(10~120자 · "…여성" 종결 · 금지 호칭 없음)을 지킨다.
+ *    scene 은 `FORBIDDEN_SCENE_TERMS` 를 피한다 (병원·의사·약 등).
+ */
+export const CLUSTER_HERO_DEFAULT = {
+  clinic: { alt: '창가에서 서류를 들여다보며 생각에 잠긴 50대 한국 여성',
+    scene: '밝은 창가에 앉아 종이 한 장을 들고 차분히 생각하는 모습' },
+  'menopause-symptom': { alt: '이른 아침 창가에서 차를 마시며 숨을 고르는 50대 한국 여성',
+    scene: '아침 햇살이 드는 거실에서 따뜻한 차를 들고 잠시 쉬는 모습' },
+  sleep: { alt: '늦은 밤 스탠드 불빛 아래 조용히 앉아 있는 50대 한국 여성',
+    scene: '어두운 방에 작은 조명만 켜 두고 침대 가에 앉아 있는 모습' },
+  'money-work': { alt: '식탁에서 수첩에 무언가 적어 보는 50대 한국 여성',
+    scene: '식탁에 앉아 수첩과 펜을 놓고 천천히 적어 보는 모습' },
+  emotion: { alt: '창밖을 바라보며 생각에 잠긴 50대 한국 여성',
+    scene: '흐린 날 창가에 서서 바깥을 바라보는 모습' },
+  daily: { alt: '동네 길을 천천히 걷는 50대 한국 여성',
+    scene: '가을 햇살이 드는 동네 길을 편한 옷차림으로 걷는 모습' },
+  family: { alt: '부엌에서 식재료를 정리하는 50대 한국 여성',
+    scene: '부엌 조리대에서 장바구니를 정리하는 모습' },
+  relationship: { alt: '거실 소파에 앉아 휴대폰을 내려다보는 50대 한국 여성',
+    scene: '저녁 거실 소파에 앉아 잠시 생각하는 모습' },
+}
+/** 🔴 cluster 를 모르면 쓰는 값. 이것도 고정이다 */
+export const FALLBACK_HERO_DEFAULT = {
+  alt: '창가에 앉아 잠시 생각에 잠긴 50대 한국 여성',
+  scene: '밝은 창가에 앉아 차분히 생각하는 모습',
+}
+
+/**
+ * 한 slug 의 hero 정보를 읽고 판정까지 한 결과.
+ *
+ * @param {string} slug
+ * @param {{cluster?:string|null}} [item] 큐 항목 — cluster 기본값을 고르는 데만 쓴다
+ */
+export function resolveHeroBrief(slug, item = null) {
   const raw = readHeroBrief(slug)
-  if (!raw.present) {
-    return {
-      ok: false,
-      alt: null,
-      scene: null,
-      reasons: [{ code: 'HERO_BRIEF_MISSING', why: `review.ts 에 hero 블록이 없다 — drafts/magazine/${slug}/review.ts` }],
+  if (raw.present) {
+    const verdict = validateHeroBrief(raw)
+    if (verdict.ok) {
+      return { ok: true, alt: raw.alt, scene: raw.scene, source: 'review', reasons: [] }
     }
+    // 🔴 review 에 적혀 있는데 규칙에 어긋나면 **기본값으로 덮지 않는다.**
+    //    누가 잘못 적었다는 뜻이고, 그건 조용히 고칠 일이 아니다.
+    return { ok: false, alt: null, scene: null, source: 'review', reasons: verdict.reasons }
   }
-  const verdict = validateHeroBrief(raw)
-  return { ok: verdict.ok, alt: verdict.ok ? raw.alt : null, scene: verdict.ok ? raw.scene : null, reasons: verdict.reasons }
+
+  // 🔴 없으면 고정 기본값 — 사람에게 입력을 요구하지 않는다
+  const d = CLUSTER_HERO_DEFAULT[item?.cluster] ?? FALLBACK_HERO_DEFAULT
+  const verdict = validateHeroBrief(d)
+  if (!verdict.ok) {
+    return { ok: false, alt: null, scene: null, source: 'default',
+      reasons: [{ code: 'HERO_DEFAULT_INVALID', why: `기본값이 규칙을 어긴다: ${verdict.reasons.map((r) => r.why).join(' · ')}` }] }
+  }
+  return { ok: true, alt: d.alt, scene: d.scene, source: 'default', reasons: [] }
 }

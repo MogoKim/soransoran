@@ -14,7 +14,7 @@
  * 🔴 **모르면 막는다.** 확인하지 못한 항목이 하나라도 있으면 merge 하지 않는다.
  *    "아마 괜찮을 것" 으로 main 을 고치는 자리는 만들지 않는다.
  *
- * 🔴 **LOW/MEDIUM 만이다.** HIGH·autoEligible=false 는 gate 에서 이미 막히지만,
+ * 🔴 **등급으로 막지 않는다** (M3-A). 프로필을 정할 수 없는 항목만 멈춘다.
  *    여기서 **다시** 본다 — 두 겹으로 막는 것은 register 와 같은 원칙이다.
  *    등급 정본은 언제나 `topic-queue.ts` 다.
  *
@@ -40,6 +40,7 @@
  * 🔴 **그래서 목록과 상세가 같은 목록을 쓴다.** 조회하는 쪽이 각자 필드를
  *    적으면 언젠가 또 갈라진다. 관문이 보는 것을 관문 옆에 적어 둔다.
  */
+import { isAutoLaneEligible } from './magazine-validation-profile.mjs'
 export const PR_FIELDS = [
   'number',
   'url',
@@ -58,7 +59,7 @@ export const PR_FIELDS_ARG = PR_FIELDS.join(',')
 export const AUTO_BRANCH_PREFIX = 'feat/magazine-auto-register-'
 
 /** 자동 병합이 허용하는 위험 등급 */
-export const MERGE_RISK = new Set(['LOW', 'MEDIUM'])
+// 🔴 MERGE_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 병합을 가르지 않는다
 
 /**
  * 🔴 **이 검사가 초록이 아니면 merge 하지 않는다.**
@@ -303,10 +304,14 @@ export function judgeAutoMerge({
     const item = lookup(r.slug)
     if (!item) {
       block('NOT_IN_QUEUE', `${r.slug} 가 **등록 전 큐(main)** 에 없다 — 등급을 확인할 정본이 없다`)
-    } else if (!MERGE_RISK.has(item.riskLevel)) {
-      block('RISK_LEVEL', `${r.slug} 는 riskLevel=${item.riskLevel} — 자동 병합은 LOW/MEDIUM 만 한다`)
-    } else if (item.autoEligible !== true) {
-      block('AUTO_INELIGIBLE', `${r.slug} 는 autoEligible=false — 민감 주제다`)
+    } else {
+      /**
+       * 🔴 **병합을 등급으로 막지 않는다** (M3-A).
+       *    프로필을 정할 수 없을 때만 멈춘다. 등급·자격 **변조** 검사(QUEUE_GRADE_CHANGED)는
+       *    그대로 둔다 — 그건 "PR 이 큐를 몰래 고쳤나" 를 보는 다른 검사다.
+       */
+      const lane = isAutoLaneEligible(item)
+      if (!lane.ok) block(lane.code, `${r.slug} — ${lane.why}`)
     }
 
     // 중복 slug — PR 안에서도, main 과도

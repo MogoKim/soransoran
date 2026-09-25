@@ -140,24 +140,96 @@ export function recordFailure({ entry, fingerprint = null, now, reasons = [] }) 
 // 저장 — 🔴 원자적으로 쓴다
 // ─────────────────────────────────────────────────────────
 
-export function loadQuarantine(path = QUARANTINE_PATH) {
-  if (!existsSync(path)) return {}
+/**
+ * 🔴 **깨진 장부를 빈 장부로 초기화하지 않는다.**
+ *
+ *    옛 판은 파싱 실패를 `{}` 로 돌려줬다. 그러면 모든 slug 의 시도 횟수가 0 이 되고,
+ *    **영원히 실패하는 글이 매 회차 재생성 예산을 다시 먹는다** — 격리가 사라진다.
+ *    장부를 읽지 못하는 것은 "아무 일도 없었다" 가 아니라 **모른다**는 뜻이다.
+ *
+ *    그래서 읽기 실패는 `{ ok:false }` 로 알린다. 호출부는 그 회차의 후보를
+ *    **전부 HOLD** 로 두고 다음 회차를 기다린다 — 새 글을 태우지도, 옛 실패를 지우지도 않는다.
+ */
+export function readQuarantine(path = QUARANTINE_PATH) {
+  if (!existsSync(path)) return { ok: true, store: {}, why: '장부 없음 — 처음이다' }
+  let raw
+  try { raw = readFileSync(path, 'utf8') }
+  catch (e) { return { ok: false, store: {}, why: `🔴 장부를 읽지 못했다: ${e.message}` } }
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'))
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
-  } catch {
-    // 🔴 깨진 기록을 빈 것으로 본다. 격리는 **막는 장치가 아니라 비켜 주는 장치**라
-    //    읽지 못했다고 회차를 멈출 이유가 없다 — 최악이라도 한 번 더 시도할 뿐이다.
-    return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, store: {}, why: '🔴 장부가 객체가 아니다' }
+    }
+    return { ok: true, store: parsed, why: null }
+  } catch (e) {
+    return { ok: false, store: {}, why: `🔴 장부가 깨졌다: ${e.message}` }
   }
+}
+
+/** 옛 호출부 호환 — 🔴 깨졌을 때 빈 것으로 보지 않도록 던진다 */
+export function loadQuarantine(path = QUARANTINE_PATH) {
+  const r = readQuarantine(path)
+  if (!r.ok) {
+    const err = new Error(r.why)
+    err.code = 'QUARANTINE_UNREADABLE'
+    throw err
+  }
+  return r.store
 }
 
 export function saveQuarantine(store, path = QUARANTINE_PATH) {
   mkdirSync(dirname(path), { recursive: true })
+  const text = `${JSON.stringify(store, null, 2)}\n`
   const tmp = `${path}.tmp-${process.pid}`
-  writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, 'utf8')
+  writeFileSync(tmp, text, 'utf8')
   renameSync(tmp, path)
+  // 🔴 썼다고 말한 것이 실제로 읽히는지 확인한다 — 반쪽 파일은 격리를 지운다
+  if (readFileSync(path, 'utf8') !== text) {
+    throw new Error('🔴 장부 저장 확인 실패 — 쓴 내용과 읽은 내용이 다르다')
+  }
   return path
+}
+
+/**
+ * 🔴 **재생성 시도도 같은 장부에 센다.** 장부를 둘로 나누지 않는다 —
+ *    두 장부가 따로 돌면 한쪽은 HOLD, 다른 쪽은 재시도가 되어 무엇이 참인지 알 수 없다.
+ */
+export const MAX_REGEN_CALLS = MAX_ATTEMPTS
+
+/** 이 slug 를 이번 회차에 몇 번 더 재생성할 수 있나 */
+export function regenBudget({ entry, maxCalls = MAX_REGEN_CALLS }) {
+  const used = Number.isFinite(entry?.regenCalls) ? entry.regenCalls : 0
+  return { used, left: Math.max(0, maxCalls - used), exhausted: used >= maxCalls }
+}
+
+/** 재생성 호출 1회를 기록한 새 entry */
+export function recordRegenCall({ entry, now, packetHash = null }) {
+  const prev = entry && typeof entry === 'object' ? entry : {}
+  return {
+    ...prev,
+    attempts: Number.isFinite(prev.attempts) ? prev.attempts : 0,
+    regenCalls: (Number.isFinite(prev.regenCalls) ? prev.regenCalls : 0) + 1,
+    lastRegenAt: now,
+    lastPacketHash: packetHash,
+  }
+}
+
+/**
+ * 🔴 **읽기-수정-쓰기를 한 번에.** 장부를 고치는 자리는 전부 이것을 쓴다.
+ *
+ *    앞판은 `ready` 가 회차 시작에 store 를 통째로 읽어 두고 끝에 그대로 저장했다.
+ *    그 사이 `drive` 가 같은 장부에 `regenCalls` 를 기록하면 **덮여서 사라진다**
+ *    (lost update). 그러면 2회 소진한 글이 다음 회차에 0회로 되살아난다.
+ *
+ *    그래서 **매 변경마다 최신 장부를 다시 읽는다.** 들고 있던 사본을 쓰지 않는다.
+ */
+export function updateQuarantine(mutate, path = QUARANTINE_PATH) {
+  const read = readQuarantine(path)
+  if (!read.ok) return { ok: false, why: read.why }
+  const next = mutate({ ...read.store })
+  if (!next || typeof next !== 'object') return { ok: false, why: '🔴 갱신 함수가 장부를 돌려주지 않았다' }
+  saveQuarantine(next, path)
+  return { ok: true, store: next }
 }
 
 /** 격리에서 완전히 지운다 — 등록에 성공한 후보 */

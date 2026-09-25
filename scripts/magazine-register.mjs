@@ -25,27 +25,17 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadArticles, loadQueue, sliceLiteral, evalLiteral, ROOT, ARTICLES_TS, QUEUE_TS, DRAFTS_DIR } from './lib/magazine-load.mjs'
+import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 
 /** 운영 전략서 §4. 공개 시각은 하나로 고정한다 */
 const KST_TIME = 'T10:30:00+09:00'
-const AUTO_RISK = new Set(['LOW', 'MEDIUM'])
+// 🔴 AUTO_RISK 제거 (M3-A · SUPERSEDED) — 등급으로 등록을 막지 않는다
 
 /**
- * `--founder-approved` 를 켰을 때 출력·JSON 에 함께 나가는 문구.
- *
- * 🔴 이 옵션은 **HIGH 자동 등록을 연 것이 아니다.**
- *    창업자가 본문 전문을 읽고 승인한 글 하나를 등록하기 위한 손잡이다.
- *    자동 경로는 `AUTO_RISK` 그대로 LOW/MEDIUM 이고, brief G5 와 batch-qa 의
- *    HIGH 차단도 손대지 않았다. 유형 단위로 자동 등록을 여는 것은 M-AUTO-4 의 일이다.
- *
- * 왜 승인을 **파일이 아니라 명령**에 두는가 (전략 §13.9)
- *    review.ts 에 승인 플래그를 두는 안이 있었다. 그런데 review.ts 는 Claude Code 가
- *    쓰는 파일이라, 검수 데이터를 적으면서 같은 파일에 승인까지 적을 수 있다 —
- *    "쓴 사람이 곧 승인하는 사람"이 되어 원칙 4(자동 발행 경로 없음)가 무너진다.
- *    명령에 두면 자동화가 조용히 켤 자리가 없다.
+ * 🔴 **사람 승인 손잡이는 M3-A 에서 없앴다.**
+ *    등급으로 등록을 막지 않으므로 "창업자가 건별로 여는 문" 이 필요 없다.
+ *    `--founder-approved` 인자는 옛 호출부 호환을 위해 받기만 하고 **아무것도 열지 않는다.**
  */
-const MANUAL_HIGH_NOTE =
-  'HIGH 자동 등록을 연 것이 아니라 창업자 건별 승인 등록이다 (AUTO_RISK · G5 · batch-qa 차단은 그대로)'
 /** 이 앵커 앞에 레코드를 넣는다. 없으면 파일 구조가 바뀐 것이므로 멈춘다 */
 const ANCHOR = '} satisfies Record<string, MagazineArticleBody>'
 
@@ -122,7 +112,13 @@ export function buildRecord(slug, literal, date, publishAt) {
 
 // ── 판정 ───────────────────────────────────────────────────
 
+/**
+  * 🔴 **`founderApproved` 우회로를 없앴다** (M3-A).
+  *    등급으로 막지 않으므로 "창업자가 건별로 열어 주는 문" 이 필요 없다.
+  *    인자는 호환을 위해 받되 **판정에 쓰지 않는다.**
+  */
 export function plan({ slug, publishAtInput, founderApproved = false }) {
+  void founderApproved   // 🔴 읽기만 한다 — 등록 여부를 바꾸지 않는다
   const reasons = []
   const notes = []
 
@@ -140,7 +136,7 @@ export function plan({ slug, publishAtInput, founderApproved = false }) {
     queue = loadQueue()
   } catch (err) {
     reasons.push(`파일 파싱 실패: ${err.message}`)
-    return { slug, verdict: 'BLOCKED', reasons, notes, checks: { founderApproved, approvalMode: founderApproved ? 'manual-high' : null } }
+    return { slug, verdict: 'BLOCKED', reasons, notes, checks: { approvalMode: null } }
   }
 
   // 중복 — 상태를 가리지 않는다. 예약분도 이미 쓴 slug 다
@@ -155,17 +151,14 @@ export function plan({ slug, publishAtInput, founderApproved = false }) {
 
   const item = inQueue[0]
   if (item) {
-    // 🔴 --founder-approved 가 완화하는 것은 **이 두 줄뿐**이다.
-    //    아래 publishWindow 부터 hero·슬롯·중복·QA 까지 나머지 검사는 전부 그대로 돈다.
-    //    자동 경로(AUTO_RISK)는 손대지 않는다 — 이것은 사람이 건별로 켜는 손잡이다.
-    if (!AUTO_RISK.has(item.riskLevel)) {
-      if (founderApproved) notes.push(`riskLevel=${item.riskLevel} — 창업자 승인으로 통과 (자동 등록이 아니다)`)
-      else reasons.push(`riskLevel=${item.riskLevel} — 창업자 검수 대상`)
-    }
-    if (item.autoEligible !== true) {
-      if (founderApproved) notes.push('autoEligible=false — 창업자 승인으로 통과 (자동 등록이 아니다)')
-      else reasons.push('autoEligible=false — 민감 주제')
-    }
+
+    /**
+     * 🔴 **등록을 등급으로 막지 않는다** (M3-A).
+     *    `founderApproved` 우회로도 함께 없앤다 — 우회로가 필요했던 이유가 사라졌다.
+     */
+    const lane = isAutoLaneEligible(item)
+    if (!lane.ok) reasons.push(`${lane.code} — ${lane.why}`)
+    else notes.push(`validationProfile=${lane.profile}`)
     if (item.publishWindow && norm.ok) {
       const { after, before } = item.publishWindow
       if (norm.date < after) reasons.push(`publishWindow 이전 (after ${after})`)
@@ -207,8 +200,7 @@ export function plan({ slug, publishAtInput, founderApproved = false }) {
       imageMode: item?.imageMode ?? null,
       queueDay: item?.day ?? null,
       slotFree: norm.ok ? !taken.has(norm.date) : null,
-      founderApproved,
-      approvalMode: founderApproved ? 'manual-high' : null,
+      approvalMode: null,
     },
     _internal: { dir, draft, norm, item, articlesSrc },
   }
@@ -247,21 +239,13 @@ function help() {
   node scripts/magazine-register.mjs --slug <slug> --publish-at 2026-09-02
   node scripts/magazine-register.mjs --slug <slug> --publish-at 2026-09-02 --write
   node scripts/magazine-register.mjs --slug <slug> --publish-at ... --json
-  node scripts/magazine-register.mjs --slug <slug> --publish-at ... --founder-approved
-                                              창업자가 승인한 HIGH 1건
 
 🔴 기본은 dry-run. --write 를 명시해야만 파일을 고친다.
 🔴 하루 1건. 슬롯이 차 있으면 BLOCKED.
 🔴 공개 시각은 10:30 KST 고정. 날짜만 주면 자동 보정한다.
-🔴 HIGH · autoEligible=false · REQUIRED hero 없음 → BLOCKED
-
---founder-approved
-  창업자가 본문 전문을 읽고 승인한 HIGH 를 등록한다. 완화하는 것은 두 줄뿐이다 —
-  riskLevel 과 autoEligible. hero · 슬롯 · publishWindow · 중복 · 큐 존재 ·
-  publishedAt 주입은 그대로 검사한다.
-
-  🔴 HIGH 자동 등록을 여는 옵션이 아니다. 자동 경로는 LOW/MEDIUM 그대로다.
-     사람이 명령에 직접 적어야 켜진다. 스크립트가 스스로 붙이지 않는다.`)
+🔴 등급으로 막지 않는다 (M3-A). 막는 것은 프로필 미정 · 슬롯 · 중복 · 큐 부재 ·
+   REQUIRED hero 없음 · 삽입 위치 부재다.
+🔴 사람 승인 손잡이는 없다. --founder-approved 는 아무것도 열지 않는다.`)
 }
 
 function main() {
@@ -275,7 +259,8 @@ function main() {
   const slug = arg('--slug')
   const write = argv.includes('--write')
   const asJson = argv.includes('--json')
-  const founderApproved = argv.includes('--founder-approved')
+  // 🔴 `--founder-approved` 는 더 이상 아무것도 열지 않는다
+  const founderApproved = false
 
   if (!slug) {
     console.error('  --slug 가 필요하다')
@@ -298,9 +283,8 @@ function main() {
     slug: p.slug,
     verdict: p.verdict,
     mode: write ? 'write' : 'dry-run',
-    founderApproved,
-    approvalMode: founderApproved ? 'manual-high' : null,
-    approvalNote: founderApproved ? MANUAL_HIGH_NOTE : null,
+    approvalMode: null,
+    approvalNote: null,
     applied,
     reasons: p.reasons,
     notes: p.notes,
@@ -313,20 +297,19 @@ function main() {
     console.log('')
     console.log(`  매거진 예약 등록 — ${p.slug}`)
     console.log(`  모드     : ${write ? 'write' : 'dry-run (파일 수정 0건)'}`)
-    if (founderApproved) {
-      console.log('  승인     : 🔴 manual-high — 창업자 건별 승인')
-      console.log(`             ${MANUAL_HIGH_NOTE}`)
-    }
+    // 🔴 사람 승인 표기 없음 (M3-A)
     const c = p.checks
     console.log(`  publishAt: ${c.publishAt ?? '-'}`)
-    console.log(`  큐        : day ${c.queueDay ?? '-'} · ${c.riskLevel ?? '-'} · auto=${c.autoEligible ?? '-'} · image ${c.imageMode ?? '-'}`)
+    // 🔴 상태 출력도 프로필 기준이다. riskLevel·autoEligible 은 호환 표기로만 남긴다
+    console.log(`  큐        : day ${c.queueDay ?? '-'} · image ${c.imageMode ?? '-'}`)
+    console.log(`  프로필    : ${(p.notes ?? []).find((n) => n.startsWith('validationProfile=')) ?? '-'}`)
     console.log(`  슬롯      : ${c.slotFree === null ? '-' : c.slotFree ? '비어 있음' : '🔴 차 있음'}`)
     console.log('')
     if (p.verdict === 'READY') {
       if (write && applied) {
         console.log('  ✅ 등록 완료')
         console.log('     articles.ts 에 SCHEDULED 로 추가 · topic-queue.ts 에서 제거')
-        if (founderApproved) console.log("     approvalMode: 'manual-high' — 창업자 건별 승인으로 등록됐다")
+        // 🔴 사람 승인 경로 없음 (M3-A)
       } else {
         console.log('  ✅ READY — 등록 가능')
         console.log('     변경 예정:')

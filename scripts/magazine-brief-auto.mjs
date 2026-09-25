@@ -6,7 +6,7 @@
  *
  * 🔴 --write 의 안전장치 (전부 코드다. 순서를 지킨다)
  *    ① verifyBrief() 가 G1~G6 를 전부 통과해야 쓴다. 판정 전에는 한 글자도 안 쓴다
- *    ② HIGH 는 생성 자체를 하지 않는다 (큐가 창업자 검수 대상으로 표시한 등급)
+ *    ② 🔴 M3-A — 등급으로 생성을 막지 않는다. 프로필을 정할 수 없을 때만 HOLD 한다.
  *    ③ brief.md 나 review.ts 가 이미 있으면 **덮어쓰지 않고 건너뛴다**
  *       사람이 쓴 지시서를 기계가 지우는 일은 없어야 한다
  *    ④ 쓴 뒤 디스크에서 다시 읽어 검증한다. 통과 못 하면 실패로 보고한다
@@ -37,7 +37,6 @@ import { join } from 'node:path'
 import { DRAFTS_DIR, loadArticles, loadQueue } from './lib/magazine-load.mjs'
 import {
   BANNED_WORDS,
-  BLOCKED_RISK_LEVELS,
   MEDICAL_ASSERTIONS,
   MEDICAL_REFERRAL_HINTS,
   MONEY_ASSERTION_SEEDS,
@@ -47,6 +46,7 @@ import {
   assertQaWordsInSync,
   verifyBrief,
 } from './lib/magazine-brief-policy.mjs'
+import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 const BRIEF_MARK = '===BRIEF==='
@@ -349,8 +349,10 @@ async function main() {
       reports.push({ slug, status: 'NO_TODO', detail: 'brief.todo.md 가 없다' })
       continue
     }
-    if (queueItem && BLOCKED_RISK_LEVELS.includes(queueItem.riskLevel)) {
-      reports.push({ slug, status: 'HOLD', detail: `riskLevel=${queueItem.riskLevel} — 창업자 검수 대상` })
+    // 🔴 riskLevel 로 brief 를 막지 않는다. 프로필을 못 정할 때만 멈춘다 (M3-A)
+    const lane = isAutoLaneEligible(queueItem ?? {})
+    if (queueItem && !lane.ok) {
+      reports.push({ slug, status: 'HOLD', detail: `${lane.code} — ${lane.why}` })
       continue
     }
 
