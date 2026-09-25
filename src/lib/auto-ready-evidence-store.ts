@@ -15,7 +15,8 @@
 import { Prisma, type PrismaClient } from '@prisma/client'
 
 import {
-  restoreRow, humanSampleOf, digestOf, bindingOf, EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, readEvidenceReviews,
+  restoreRow, humanSampleOf, digestOf, bindingOf, bindingHolds, effectiveHumanReviews,
+  EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, readEvidenceReviews,
   type ArtifactDoc, type CandidateDoc, type DecidedRow, type EvidenceReview, type HumanSampleVerdict, type RestoreClass,
 } from './auto-ready-evidence'
 import { HUMAN_DECIDER } from './auto-ready-v2'
@@ -161,6 +162,25 @@ function mergeReview(editDiff: unknown, entry: EvidenceReview):
   return { kind: 'write', next: { ...ed, [EVIDENCE_REVIEW_KEY]: [...prev, entry] } }
 }
 
+/**
+ * 🔴 **사람 기록 — 덮지 않고 쌓는다(append-only)** (2026-09-25 마스터 P0).
+ *    이 사용자의 **지금 결속에 맞는 최신 기록**이 같은 판정(hardDefect · 근거)이면 `unchanged`.
+ *    그 밖이면 새 기록을 뒤에 붙인다 — 판정을 바꾸거나, 결속이 깨진 뒤 새 상태를 다시 검토하는 경우다.
+ *    옛 기록은 지우지 않는다(이력).
+ */
+function appendHumanReview(editDiff: unknown, entry: EvidenceReview, row: Parameters<typeof bindingHolds>[1]):
+  | { kind: 'write'; next: Record<string, unknown> } | { kind: 'unchanged' } {
+  const mine = readEvidenceReviews(editDiff)
+    .filter((r) => r.reviewerUserId === entry.reviewerUserId && isHumanReviewer(r.reviewer) && bindingHolds(r, row))
+  const latest = effectiveHumanReviews(mine)[0]
+  if (latest !== undefined && latest.hardDefect === entry.hardDefect && stable(latest.reasons) === stable(entry.reasons)) {
+    return { kind: 'unchanged' }
+  }
+  const ed = rec(editDiff)
+  const prev = Array.isArray(ed[EVIDENCE_REVIEW_KEY]) ? ed[EVIDENCE_REVIEW_KEY] as unknown[] : []
+  return { kind: 'write', next: { ...ed, [EVIDENCE_REVIEW_KEY]: [...prev, entry] } }
+}
+
 const readDefect = (it: Record<string, unknown>):
   { ok: true; hardDefect: EvidenceReview['hardDefect']; reasons: string[] } | { ok: false; why: string } => {
   // 🔴 비어 있으면 unmeasured — `no` 로 읽지 않는다
@@ -270,7 +290,7 @@ export type HumanBatchEntry = {
   reasons?: unknown
 }
 
-export type HumanBatchResult = { queueId: string; result: 'recorded' | 'decidedAndRecorded' | 'unchanged' | 'reject'; why: string }
+export type HumanBatchResult = { queueId: string; result: 'recorded' | 'decidedAndRecorded' | 'unchanged' | 'skip' | 'reject'; why: string }
 
 class Abort extends Error {}
 
@@ -280,7 +300,10 @@ class Abort extends Error {}
  *    · 결정 전 그림자(`machine:*`): `ready`(그대로) · `reject`(폐기) 결정을 **정본 `completeReview`** 로
  *      같은 트랜잭션 안에서 저장한 뒤, 그 결과 상태를 결속해 사람 기록을 붙인다.
  *      결정이 저장되지 않으면 기록도 없다(함께 되돌아간다).
- *    · 🔴 `edit` 은 받지 않는다 — 수정본은 artifact 원문으로 게이트를 다시 재야 하는데
+ *    · 🔴 중대 결함을 비운 행은 건너뛴다(결정·기록 0). 사람 기록은 yes·no 를 명시한 행만 쓴다
+ *    · 🔴 사람 기록은 쌓는다 — 같은 사람의 지금 판정과 같으면 unchanged, 다르면 새 기록(이력 보존)
+ *    · 🔴 `edit` 은 받지 않는다(batch edit 미지원) — 편집이 필요한 그림자는 결정 전으로 남아 표본이 아니다.
+ *      수정본은 artifact 원문으로 게이트를 다시 재야 하는데
  *      그 게이트는 로컬 artifact 를 읽는다. 서버는 그 파일이 없다. 수정은 게이트가 있는
  *      기존 명령으로 먼저 저장하고, 이 경로는 그 **최종 상태**를 사람이 확정하게 한다.
  */
@@ -306,6 +329,14 @@ export async function recordHumanBatch(prisma: PrismaClient, i: {
     seen.add(e.queueId)
     const b = inBundle.get(e.queueId)
     if (b === undefined) { reject('묶음에 없는 행이다'); continue }
+    /**
+     * 🔴 **중대 결함을 비운 행은 건너뛴다 — 결정도 기록도 0** (2026-09-25 마스터 P0).
+     *    앞판은 빈 값을 `unmeasured` 사람 기록으로 저장했다. 그러면 같은 사람이 나중에 yes·no 를
+     *    내려도 막혔고, 다른 사람의 no 도 가렸다. 사람 표본 기록은 yes·no 를 **명시한** 행만 쓴다.
+     */
+    const blank = e.hardDefect === undefined || e.hardDefect === null || e.hardDefect === ''
+    if (blank) { out.push({ queueId: e.queueId, result: 'skip', why: '중대 결함을 비웠다 — 기록하지 않는다(DB write 0)' }); continue }
+    if (e.hardDefect !== 'yes' && e.hardDefect !== 'no') { reject(`중대 결함 "${String(e.hardDefect)}" 은 yes·no 가 아니다 — 사람 기록은 둘 중 하나만 받는다`); continue }
     const d = readDefect(e as Record<string, unknown>)
     if (!d.ok) { reject(d.why); continue }
     const decision = e.decision === undefined || e.decision === null || e.decision === '' ? null : e.decision
@@ -375,9 +406,8 @@ export async function recordHumanBatch(prisma: PrismaClient, i: {
           contract: EVIDENCE_REVIEW_CONTRACT, reviewer: i.actor.reviewer, reviewerUserId: i.actor.userId, ...bindingOf(now),
           hardDefect: d.hardDefect, reasons: d.reasons, bundleDigest: i.bundle.digest, reviewedAt: i.now.toISOString(),
         }
-        const m = mergeReview(now.editDiff, entry)
-        if (m.kind === 'unchanged') return { queueId: row.id, result: 'unchanged', why: '같은 사람 기록이 이미 있다' }
-        if (m.kind === 'conflict') throw new Abort('이 검토자의 다른 기록이 이미 있다 — 덮지 않는다')
+        const m = appendHumanReview(now.editDiff, entry, now)
+        if (m.kind === 'unchanged') return { queueId: row.id, result: 'unchanged', why: '이 사람의 지금 판정과 같다' }
         const n = await tx.originalPostApprovalQueue.updateMany({
           where: casWhere(snapshotOf(now)), data: { editDiff: m.next as Prisma.InputJsonValue },
         })

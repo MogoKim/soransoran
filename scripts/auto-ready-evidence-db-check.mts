@@ -13,7 +13,7 @@
 import { PrismaClient } from '@prisma/client'
 
 import {
-  digestOf, bindingOf, EVIDENCE_REVIEW_CONTRACT, readEvidenceReviews, type ArtifactDoc, type CandidateDoc,
+  digestOf, bindingOf, humanSampleOf, EVIDENCE_REVIEW_CONTRACT, readEvidenceReviews, type ArtifactDoc, type CandidateDoc,
 } from '../src/lib/auto-ready-evidence'
 import {
   planSemanticRestore, applySemanticRestore, planNonHumanImport, applyReviewImport, recordHumanBatch, SEMANTIC_RESTORE_KEY,
@@ -185,7 +185,10 @@ async function main(): Promise<void> {
   }
 
   const founderUser = (await prisma.user.create({ data: { nickname: '창업자', isAdmin: true }, select: { id: true } })).id
-  const FOUNDER: HumanActor = { userId: founderUser, reviewer: 'human:founder' }
+  /** 🔴 인증된 관리자는 human:operator — 사람을 가르는 정본은 userId 다 */
+  const FOUNDER: HumanActor = { userId: founderUser, reviewer: 'human:operator' }
+  const opB = (await prisma.user.create({ data: { nickname: '운영자B', isAdmin: true }, select: { id: true } })).id
+  const OP_B: HumanActor = { userId: opB, reviewer: 'human:operator' }
   const bundleOf = (rows: { id: string; title: string; body: string }[], tag: string) => ({
     digest: digestOf(`bundle-${tag}`),
     items: rows.map((r) => ({ queueId: r.id, draftTitleDigest: digestOf(r.title), draftBodyDigest: digestOf(r.body) })),
@@ -256,15 +259,21 @@ async function main(): Promise<void> {
       actor: FOUNDER, now: later, bundle,
       entries: [{ queueId: a.id, hardDefect: 'no', reviewer: 'codex:master-review', reviewedAt: '2099-01-01T00:00:00Z' } as never],
     })
-    const rec0 = readEvidenceReviews((await snap(a.id)).editDiff).find((x) => x.reviewer === 'human:founder')
+    const rec0 = readEvidenceReviews((await snap(a.id)).editDiff).find((x) => x.reviewerUserId === founderUser)
     check('🔴 🔴 **서버가 검토자·시각을 정한다 — 요청의 reviewer·reviewedAt 은 무시**',
       r[0]?.result === 'recorded' && rec0?.reviewerUserId === founderUser && rec0.reviewedAt === later.toISOString(), JSON.stringify(r))
     check('🔴 🔴 **인증된 사람 기록 → 사람 표본 1**', (await ev()).eligible === 1)
     const again = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(later.getTime() + 1000), bundle, entries: [{ queueId: a.id, hardDefect: 'no' }] })
     check('🔴 같은 사람·같은 결속 재실행 → unchanged · write 0', again[0]?.result === 'unchanged')
-    const conflict = await recordHumanBatch(prisma, { actor: FOUNDER, now: later, bundle, entries: [{ queueId: a.id, hardDefect: 'yes', reasons: ['모순'] }] })
-    check('🔴 같은 사람의 다른 판정 → 덮지 않고 거절', conflict[0]?.result === 'reject')
-    const noDecisionChange = await recordHumanBatch(prisma, { actor: FOUNDER, now: later, bundle, entries: [{ queueId: a.id, decision: 'reject', declineReason: 'TOPIC_UNFIT' }] })
+    const rejudge = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(later.getTime() + 2000), bundle, entries: [{ queueId: a.id, hardDefect: 'yes', reasons: ['모순'] }] })
+    const mine = readEvidenceReviews((await snap(a.id)).editDiff).filter((x) => x.reviewerUserId === founderUser)
+    check('🔴 🔴 **같은 사람의 재판정 → 새 기록을 쌓는다 · 옛 기록 보존 · 최신이 유효(yes)**',
+      rejudge[0]?.result === 'recorded' && mine.length === 2 && (await ev()).hardDefects === 1, JSON.stringify(rejudge))
+    await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(later.getTime() + 3000), bundle, entries: [{ queueId: a.id, hardDefect: 'no' }] })
+    const back = await ev()
+    check('🔴 🔴 **같은 사람이 yes 뒤에 no 로 다시 판정 → 최신 no 가 유효 · 기록 3개 이력 보존**',
+      back.hardDefects === 0 && readEvidenceReviews((await snap(a.id)).editDiff).filter((x) => x.reviewerUserId === founderUser).length === 3, JSON.stringify(back))
+    const noDecisionChange = await recordHumanBatch(prisma, { actor: FOUNDER, now: later, bundle, entries: [{ queueId: a.id, decision: 'reject', declineReason: 'TOPIC_UNFIT', hardDefect: 'no' }] })
     check('🔴 이미 결정된 행의 결정은 바꾸지 않는다', noDecisionChange[0]?.result === 'reject' && (await snap(a.id)).status === 'APPROVED')
     // 🔴 서버를 거치지 않고 DB 에 직접 넣은 사람 기록 — 사용자 id 가 없으면 무효
     const forged = await restored()
@@ -300,7 +309,7 @@ async function main(): Promise<void> {
     const e1 = await ev()
     check('🔴 🔴 **noEdit · edited · declined 각각 결속 기록 · 표본 +4**',
       r.every((x) => x.result === 'recorded') && e1.eligible === base0 + 4, JSON.stringify(r))
-    const outs = await Promise.all([ne, ed, dc, lg].map(async (x) => readEvidenceReviews((await snap(x.id)).editDiff).find((y) => y.reviewer === 'human:founder')?.outcome))
+    const outs = await Promise.all([ne, ed, dc, lg].map(async (x) => readEvidenceReviews((await snap(x.id)).editDiff).find((y) => y.reviewerUserId === founderUser)?.outcome))
     const e0 = await ev()
     check('🔴 🔴 **표본의 결과 집계도 기록에서 온다 — 옛 수정 표식 행은 noEdit 로 센다**',
       e0.noEdit - e1b.noEdit === 2 && e0.edited - e1b.edited === 1 && e0.declined - e1b.declined === 1,
@@ -349,6 +358,69 @@ async function main(): Promise<void> {
     check('🔴 폐기 사유 없는 reject → 결정·기록 모두 0', badR[0]?.result === 'reject' && (await snap(bad.id)).decidedBy === 'machine:auto-draft-v5')
   }
 
+  console.log('\nB-5. 🔴 🔴 빈 판정 건너뜀 · 재검토 append-only · 사용자별 최신 판정 (마스터 반례 8)')
+  {
+    const hdOf = async (id: string) => { const r = await snap(id); const v = humanSampleOf(r); return v.counted ? v.hardDefect : `excluded:${v.why}` }
+    // ① blank 제출 → 기록 0
+    const x = await restored()
+    const bx = bundleOf([x], 'b5-x')
+    const r1 = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bx, entries: [{ queueId: x.id }, ] })
+    check('🔴 🔴 **① blank 제출 → 기록 0 · write 0**', r1[0]?.result === 'skip' && readEvidenceReviews((await snap(x.id)).editDiff).length === 0)
+    const blankShadow = await restored({ undecided: true })
+    const r1b = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bundleOf([blankShadow], 'b5-bs'), entries: [{ queueId: blankShadow.id, decision: 'ready' }] })
+    check('🔴 blank 인 그림자는 결정도 하지 않는다 (결정·기록 0)', r1b[0]?.result === 'skip' && (await snap(blankShadow.id)).decidedBy === 'machine:auto-draft-v5')
+    // ② blank 후 no → 표본 no
+    const r2 = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 1000), bundle: bx, entries: [{ queueId: x.id, hardDefect: 'no' }] })
+    check('🔴 🔴 **② blank 후 no → 표본 no**', r2[0]?.result === 'recorded' && await hdOf(x.id) === 'no')
+    // ③ no 검토 후 본문 변경 → 기존 표본 제외
+    await prisma.originalPostApprovalQueue.update({ where: { id: x.id }, data: { status: 'EDITED', editedBody: `${x.body} 고친 문안` } })
+    check('🔴 🔴 **③ no 검토 후 본문 변경 → 표본 제외 (bindingBroken)**', await hdOf(x.id) === 'excluded:bindingBroken')
+    // ④ 같은 사용자가 바뀐 본문을 재검토 → 새 표본 복구 · 옛 기록 보존
+    const r4 = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 2000), bundle: bx, entries: [{ queueId: x.id, hardDefect: 'no' }] })
+    const hist = readEvidenceReviews((await snap(x.id)).editDiff).filter((r) => r.reviewerUserId === founderUser)
+    const v4 = humanSampleOf(await snap(x.id))
+    check('🔴 🔴 **④ 바뀐 본문을 같은 사용자가 재검토 → 새 표본(edited · no) 복구 · 옛 기록 보존**',
+      r4[0]?.result === 'recorded' && v4.counted && v4.outcome === 'edited' && v4.hardDefect === 'no' && hist.length === 2, JSON.stringify(r4))
+    // ⑤ 같은 binding 동일 재제출 → unchanged
+    const r5 = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 3000), bundle: bx, entries: [{ queueId: x.id, hardDefect: 'no' }] })
+    check('🔴 🔴 **⑤ 같은 binding 동일 재제출 → unchanged · 기록 수 그대로**',
+      r5[0]?.result === 'unchanged' && readEvidenceReviews((await snap(x.id)).editDiff).filter((r) => r.reviewerUserId === founderUser).length === 2)
+    // ⑥ 동시 재검토 → 유효 최신 기록 1개
+    const y = await restored()
+    const by = bundleOf([y], 'b5-y')
+    const [c1, c2] = await Promise.all([
+      recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 4000), bundle: by, entries: [{ queueId: y.id, hardDefect: 'no' }] }),
+      recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 4000), bundle: by, entries: [{ queueId: y.id, hardDefect: 'no' }] }),
+    ])
+    const ys = readEvidenceReviews((await snap(y.id)).editDiff).filter((r) => r.reviewerUserId === founderUser)
+    check('🔴 🔴 **⑥ 동시 재검토 → 기록 1개 · 둘 다 예외 없이 끝난다(값으로)**',
+      ys.length === 1 && [c1[0]?.result, c2[0]?.result].filter((k) => k === 'recorded').length === 1, `${c1[0]?.result}/${c2[0]?.result} · ${ys.length}`)
+    // ⑦ A unmeasured + B no → no  (A 의 unmeasured 는 앞판 경로가 남긴 기록 — DB 에 그대로 둔다)
+    const z = await restored()
+    const zr = await snap(z.id)
+    await prisma.originalPostApprovalQueue.update({
+      where: { id: z.id },
+      data: { editDiff: { evidenceReviews: [{
+        contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:operator', reviewerUserId: founderUser, ...bindingOf(zr),
+        hardDefect: 'unmeasured', reasons: [], bundleDigest: digestOf('old'), reviewedAt: NOW.toISOString(),
+      }] } as never },
+    })
+    check('선행 — A 의 unmeasured 기록만 있으면 unmeasured', await hdOf(z.id) === 'unmeasured')
+    await recordHumanBatch(prisma, { actor: OP_B, now: new Date(NOW.getTime() + 5000), bundle: bundleOf([z], 'b5-z'), entries: [{ queueId: z.id, hardDefect: 'no' }] })
+    check('🔴 🔴 **⑦ A unmeasured + B no → no**', await hdOf(z.id) === 'no')
+    // ⑧ A no + B yes → yes
+    const w = await restored()
+    const bw = bundleOf([w], 'b5-w')
+    await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 6000), bundle: bw, entries: [{ queueId: w.id, hardDefect: 'no' }] })
+    await recordHumanBatch(prisma, { actor: OP_B, now: new Date(NOW.getTime() + 7000), bundle: bw, entries: [{ queueId: w.id, hardDefect: 'yes', reasons: ['생활사 모순'] }] })
+    check('🔴 🔴 **⑧ A no + B yes → yes**', await hdOf(w.id) === 'yes')
+    check('🔴 사람 경로는 unmeasured 를 명시해도 받지 않는다',
+      (await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bw, entries: [{ queueId: w.id, hardDefect: 'unmeasured' }] }))[0]?.result === 'reject')
+    check('🔴 🔴 **기록의 사람 식별은 세션 User.id — 두 관리자 모두 human:operator**',
+      readEvidenceReviews((await snap(w.id)).editDiff).every((r) => r.reviewer === 'human:operator')
+      && new Set(readEvidenceReviews((await snap(w.id)).editDiff).map((r) => r.reviewerUserId)).size === 2)
+  }
+
   console.log('\nC. 🔴 게이트 — 29 닫힘 · 30·90%·0 열림 · 기준 불변')
   {
     await prisma.$executeRawUnsafe('TRUNCATE TABLE "OriginalPostApprovalQueue","MicroSeedRawContent" CASCADE')
@@ -363,9 +435,10 @@ async function main(): Promise<void> {
     const g30 = await ev()
     check('🔴 🔴 **30건 · 무수정 27(90%) · 결함 0 → 열림**', g30.eligible === 30 && g30.noEdit === 27 && g30.hardDefects === 0 && g30.meetsContract, JSON.stringify(g30))
     const um = await restored()
-    await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bundleOf([um], 'um'), entries: [{ queueId: um.id }] })
+    const skip = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bundleOf([um], 'um'), entries: [{ queueId: um.id }] })
     const g31 = await ev()
-    check('🔴 🔴 **hardDefect 비움 → unmeasured 기록 → 게이트 닫힘**', g31.eligible === 31 && g31.hardDefects === null && !g31.meetsContract)
+    check('🔴 🔴 **빈 판정은 건너뜀 — 기록 0 · 표본도 게이트도 그대로(30 · 열림)**',
+      skip[0]?.result === 'skip' && readEvidenceReviews((await snap(um.id)).editDiff).length === 0 && g31.eligible === 30 && g31.meetsContract)
     check('🔴 🔴 **기준은 30 · 90% · 0 그대로**', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9 && CONTRACT.hardDefectMax === 0)
   }
 

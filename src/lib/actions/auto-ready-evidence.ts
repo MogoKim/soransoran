@@ -14,11 +14,12 @@ import { resolveHumanReviewer } from '@/lib/review-provenance'
  * 🔴 **자동 READY 증거 — 사람 검토 기록의 유일한 서버 경계** (2026-09-25 마스터 P0-1)
  *
  *   · 누가 검토했나 — **로그인 세션**(`auth()`)과 관리자 판정(`requireAdmin`)으로 서버가 정한다.
- *     `SORAN_FOUNDER_EMAILS` 에 있으면 `human:founder`, 그 밖의 관리자는 `human:operator`.
+ *     인증된 관리자는 `human:operator` 이고, 사람을 가르는 정본은 세션의 `User.id`(reviewerUserId)다.
  *   · 언제 검토했나 — **서버 시계**다.
  *   · 🔴 요청 본문의 `reviewer`·`reviewedAt` 은 **읽지 않는다.** 칸을 골라 받지 않는다 —
  *     아래에서 queueId · decision · declineReason · hardDefect · reasons 다섯 칸만 꺼낸다.
  *   · 인증되지 않았거나 관리자가 아니면 DB write 0.
+ *   · 🔴 중대 결함을 비운 행은 **건너뛴다(DB write 0)** — 사람 기록은 yes·no 를 명시한 행만 쓴다.
  *
  * 🔴 이 경계가 쓰는 칸 — 큐의 `editDiff.evidenceReviews` 와, 결정 전 그림자에 한해
  *    정본 `completeReview` 가 쓰는 결정 칸(status · declineReason · decidedBy · decidedAt).
@@ -36,10 +37,10 @@ export async function submitEvidenceBatch(input: { bundleText: string; entries: 
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: '로그인이 필요합니다.' }
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
   if (user === null) return { error: '사용자를 찾을 수 없습니다.' }
-  // 🔴 requireAdmin 을 통과했다 = 관리자다. 종류는 세션의 이메일로만 정한다
-  const reviewer = resolveHumanReviewer({ isAdmin: true, email: user.email }, process.env)
+  // 🔴 requireAdmin 을 통과했다 = 관리자다. 누구인지는 세션의 User.id 가 정본이다
+  const reviewer = resolveHumanReviewer({ isAdmin: true })
   if (reviewer === null) return { error: '검토자를 정할 수 없습니다.' }
 
   if (typeof input.bundleText !== 'string' || input.bundleText.length === 0) return { error: '검토 묶음이 없습니다.' }

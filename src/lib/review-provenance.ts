@@ -21,6 +21,7 @@ export const LEGACY_DECISION_MARK = 'founder'
 
 /** 🔴 검토자 종류 — 닫힌 목록이다. 새 종류는 여기에만 더한다 */
 export const REVIEWER_KINDS = [
+  /** 🔴 예약값 — 지금 어떤 경로도 이 값을 쓰지 않는다. 사람 기록은 human:operator + reviewerUserId 다 */
   'human:founder',
   'human:operator',
   'codex:master-review',
@@ -49,14 +50,9 @@ export function isHumanReviewer(v: unknown): v is HumanReviewerKind {
 /**
  * 🔴 **로그인 세션 → 사람 검토자 종류** — 서버 경계만 부른다. 요청 본문은 이 값을 정하지 못한다.
  *    · 관리자가 아니면 null(기록 거절)
- *    · `SORAN_FOUNDER_EMAILS` allowlist 에 있으면 `human:founder`
- *    · 그 밖의 관리자는 `human:operator`
- *    🔴 allowlist 가 비어 있으면 아무도 founder 가 아니다(fail-closed) — 운영자로 기록된다.
+ *    · 인증된 관리자는 모두 `human:operator` 다 — **누구인지의 정본은 `reviewerUserId`(User.id)** 다
+ *    🔴 `human:founder` 는 예약값이다. env allowlist 로 나누지 않는다(2026-09-25 마스터 운영 단순화).
  */
-export function resolveHumanReviewer(
-  user: { isAdmin: boolean; email: string | null }, env: Readonly<Record<string, string | undefined>>,
-): HumanReviewerKind | null {
-  if (!user.isAdmin) return null
-  const founders = new Set((env.SORAN_FOUNDER_EMAILS ?? '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))
-  return user.email !== null && founders.has(user.email.toLowerCase()) ? 'human:founder' : 'human:operator'
+export function resolveHumanReviewer(user: { isAdmin: boolean }): HumanReviewerKind | null {
+  return user.isAdmin ? 'human:operator' : null
 }

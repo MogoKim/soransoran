@@ -224,11 +224,26 @@ console.log('\n③ 🔴 표본 — 인증된 사람 v2 기록만 · 결과도 �
   check('🔴 사람 결정 표식이 없는 행(기계·자동)은 표본이 아니다',
     cohortSampleOf([{ ...noEditRow(), decidedBy: 'machine:auto-draft-v5' }, { ...noEditRow(), decidedBy: AUTO_DECIDER }]).eligible === 0)
   // ── 서버 검토자 결정 ──
-  check('🔴 🔴 **검토자는 세션으로만 — 관리자 아니면 null · allowlist 면 founder · 그 밖은 operator · 비면 아무도 founder 아님**',
-    resolveHumanReviewer({ isAdmin: false, email: 'a@x' }, { SORAN_FOUNDER_EMAILS: 'a@x' }) === null
-    && resolveHumanReviewer({ isAdmin: true, email: 'A@x' }, { SORAN_FOUNDER_EMAILS: 'a@x' }) === 'human:founder'
-    && resolveHumanReviewer({ isAdmin: true, email: 'b@x' }, { SORAN_FOUNDER_EMAILS: 'a@x' }) === 'human:operator'
-    && resolveHumanReviewer({ isAdmin: true, email: 'a@x' }, {}) === 'human:operator')
+  check('🔴 🔴 **검토자는 세션으로만 — 관리자면 human:operator · 아니면 null · env 의존 없음**',
+    resolveHumanReviewer({ isAdmin: false }) === null && resolveHumanReviewer({ isAdmin: true }) === 'human:operator'
+    && !/SORAN_FOUNDER_EMAILS/.test(codeOnly('src/lib/review-provenance.ts').replace(/\/\*\*[\s\S]*?\*\//g, '')
+      + codeOnly('src/lib/actions/auto-ready-evidence.ts')))
+  // ── 사용자별 최신 판정 합산 (2026-09-25 마스터 P0) ──
+  const r0 = base()
+  const at = (u: string, hd: EvidenceReview['hardDefect'], t: string, reasons: string[] = hd === 'yes' ? ['근거'] : []) =>
+    rv(r0, { reviewer: 'human:operator', reviewerUserId: u, hardDefect: hd, reasons, reviewedAt: t })
+  const hdOf = (...recs: EvidenceReview[]) => { const v = humanSampleOf({ ...r0, editDiff: { [EVIDENCE_REVIEW_KEY]: recs } }); return v.counted ? v.hardDefect : 'excluded' }
+  check('🔴 🔴 **A unmeasured + B no → no**', hdOf(at('A', 'unmeasured', '2026-09-25T01:00:00Z'), at('B', 'no', '2026-09-25T01:00:00Z')) === 'no')
+  check('🔴 🔴 **A no + B yes → yes**', hdOf(at('A', 'no', '2026-09-25T01:00:00Z'), at('B', 'yes', '2026-09-25T01:00:00Z')) === 'yes')
+  check('🔴 모두 미측정일 때만 unmeasured', hdOf(at('A', 'unmeasured', '2026-09-25T01:00:00Z'), at('B', 'unmeasured', '2026-09-25T01:00:00Z')) === 'unmeasured')
+  check('🔴 🔴 **같은 사람은 최신 기록만 — 앞의 yes 뒤에 no 면 no**',
+    hdOf(at('A', 'yes', '2026-09-25T01:00:00Z'), at('A', 'no', '2026-09-25T02:00:00Z')) === 'no'
+    && hdOf(at('A', 'no', '2026-09-25T02:00:00Z'), at('A', 'yes', '2026-09-25T01:00:00Z')) === 'no')
+  check('🔴 🔴 **결속이 깨진 옛 기록은 쓰지 않고 새 결속 기록을 쓴다 (이력은 남는다)**',
+    (() => { const changed = { ...r0, editedBody: `${B} 새 문안`, status: 'EDITED' }
+      const old = at('A', 'yes', '2026-09-25T01:00:00Z'); const fresh = { ...rv(changed, { reviewer: 'human:operator', reviewerUserId: 'A', hardDefect: 'no', reviewedAt: '2026-09-25T02:00:00Z' }) }
+      const v = humanSampleOf({ ...changed, editDiff: { [EVIDENCE_REVIEW_KEY]: [old, fresh] } })
+      return v.counted && v.outcome === 'edited' && v.hardDefect === 'no' && readEvidenceReviews({ [EVIDENCE_REVIEW_KEY]: [old, fresh] }).length === 2 })())
   check('🔴 🔴 **계약 값은 정본 그대로다 — 30 · 90% · 0**', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9
     && CONTRACT.hardDefectMax === 0 && CONTRACT.sampledAuditRatio === 0.2)
   check('🔴 🔴 **검토자 계약·운영 표식은 review-provenance 한 곳에서만 정의된다**',
@@ -240,13 +255,17 @@ console.log('\n③ 🔴 표본 — 인증된 사람 v2 기록만 · 결과도 �
   const action = codeOnly('src/lib/actions/auto-ready-evidence.ts')
   check('🔴 🔴 **서버 경계는 requireAdmin · 세션 · resolveHumanReviewer · 서버 시계로 기록한다**',
     /const \{ ok \} = await requireAdmin\(\)\s*if \(!ok\) return \{ error/.test(action) && /const session = await auth\(\)/.test(action)
-    && /resolveHumanReviewer\(\{ isAdmin: true, email: user\.email \}, process\.env\)/.test(action)
+    && /resolveHumanReviewer\(\{ isAdmin: true \}\)/.test(action)
     && /actor: \{ userId, reviewer \}, now: new Date\(\)/.test(action))
   check('🔴 🔴 **요청 본문의 reviewer · reviewedAt 은 읽지 않는다 — 다섯 칸만 꺼낸다**',
     !/\.reviewer\b|\.reviewedAt\b|reviewedAt:/.test(action.replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''))
-    && (action.match(/const reviewer = resolveHumanReviewer\(\{ isAdmin: true, email: user\.email \}, process\.env\)\n/g) ?? []).length === 1
+    && (action.match(/const reviewer = resolveHumanReviewer\(\{ isAdmin: true \}\)\n/g) ?? []).length === 1
     && /decision: r\.decision, declineReason: r\.declineReason, hardDefect: r\.hardDefect, reasons: r\.reasons/.test(action))
   const store = codeOnly('src/lib/auto-ready-evidence-store.ts')
+  check('🔴 🔴 **사람 경로 — 빈 판정은 건너뜀(write 0) · yes·no 만 · 기록은 쌓는다(append-only)**',
+    /if \(blank\) \{ out\.push\(\{ queueId: e\.queueId, result: 'skip'/.test(store)
+    && /if \(e\.hardDefect !== 'yes' && e\.hardDefect !== 'no'\) \{ reject/.test(store)
+    && /const m = appendHumanReview\(now\.editDiff, entry, now\)/.test(store) && !/if \(m\.kind === 'conflict'\) throw/.test(store))
   check('🔴 🔴 **CLI importer 는 사람 기록을 만들지 못한다 · 시각은 프로세스 시계 · 결과는 지금 상태로 결속**',
     /if \(isHumanReviewer\(reviewer\)\) \{\s*return \{ ok: false/.test(store) && /reviewedAt: now\.toISOString\(\)/.test(store)
     && !/file\.reviewedAt/.test(store) && /reviewerUserId: null, \.\.\.bindingOf\(row\)/.test(store))

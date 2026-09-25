@@ -10,9 +10,10 @@ import { DECLINE_REASONS } from '@/lib/original-post-decision'
  * 🔴 글마다 따로 묻지 않는다. 로컬에서 만든 `bundle.json` 하나를 올리면 모든 행이 한 화면에 나오고,
  *    한 번에 제출한다.
  * 🔴 검토자·검토 시각을 고르는 칸이 **없다** — 서버가 로그인 세션과 서버 시계로 정한다.
- * 🔴 결정 전 그림자는 그대로(ready) · 폐기(reject)만 여기서 정한다. 수정은 게이트가 있는
- *    기존 명령으로 먼저 저장한 뒤, 그 최종 상태를 여기서 확정한다.
- * 🔴 중대 결함을 비워 두면 "미측정" 으로 남는다 — 없음(no)으로 읽지 않는다.
+ * 🔴 결정 전 그림자는 그대로(ready) · 폐기(reject)만 여기서 정한다. **이 화면은 수정(edit)을 받지 않는다.**
+ *    고쳐야 하는 글은 게이트가 있는 기존 명령으로 먼저 저장해야 하고, 그 전까지는 표본이 아니다.
+ * 🔴 중대 결함을 비운 행은 **건너뛴다(기록 0)**. 사람 기록은 있음·없음을 고른 행만 남는다.
+ * 🔴 같은 사람이 다시 판정하면 새 기록이 쌓인다(이전 기록은 이력으로 남는다).
  */
 
 type Item = {
@@ -84,7 +85,8 @@ export default function EvidenceBatchReview() {
         <input id="bundle-file" type="file" accept="application/json" disabled={pending}
           onChange={(e) => { void onFile(e.target.files?.[0]) }} className="block w-full text-sm" />
         <p className="mt-2 text-content-muted">
-          검토자와 시각은 로그인한 계정과 서버 시계로 기록됩니다. 중대 결함을 비워 두면 미측정으로 남습니다.
+          검토자와 시각은 로그인한 계정과 서버 시계로 기록됩니다. 중대 결함을 고르지 않은 행은 건너뜁니다(기록하지 않음).
+          고쳐야 하는 글은 이 화면에서 처리하지 않습니다 — 기존 수정 명령으로 먼저 저장해 주세요.
         </p>
       </div>
 
@@ -124,7 +126,7 @@ export default function EvidenceBatchReview() {
                     <span className="text-xs font-bold">결정</span>
                     <select value={e.decision} disabled={pending} onChange={(ev) => set(i.queueId, { decision: ev.target.value as Entry['decision'] })}
                       className="min-h-[52px] rounded border px-2">
-                      <option value="">정하지 않음 (기록하지 않음)</option>
+                      <option value="">정하지 않음 (고쳐야 하면 여기서 처리 안 함)</option>
                       <option value="ready">그대로 내보내도 된다</option>
                       <option value="reject">폐기</option>
                     </select>
@@ -145,7 +147,7 @@ export default function EvidenceBatchReview() {
                 <span className="text-xs font-bold">중대 결함</span>
                 <select value={e.hardDefect} disabled={pending} onChange={(ev) => set(i.queueId, { hardDefect: ev.target.value as Entry['hardDefect'] })}
                   className="min-h-[52px] rounded border px-2">
-                  <option value="">비움 (미측정)</option>
+                  <option value="">건너뜀 (기록하지 않음)</option>
                   <option value="no">없음</option>
                   <option value="yes">있음</option>
                 </select>

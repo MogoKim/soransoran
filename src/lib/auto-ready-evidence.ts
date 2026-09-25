@@ -297,6 +297,23 @@ export function readEvidenceReviews(editDiff: unknown): EvidenceReview[] {
   return out
 }
 
+/**
+ * 🔴 **사람 기록은 이력이다 — 덮지 않고 쌓는다.** 유효한 것은 **지금 결속에 맞는 기록 중
+ *    사용자(reviewerUserId)별 최신 하나**다. 최신은 `reviewedAt`(서버 시계), 같으면 나중에 쌓인 것.
+ *    결속이 깨진 옛 기록은 남아 있지만 판정에 쓰이지 않는다 — 같은 사람이 새 상태를 다시 검토하면
+ *    그 새 기록이 유효해진다.
+ */
+export function effectiveHumanReviews(bound: readonly EvidenceReview[]): EvidenceReview[] {
+  const byUser = new Map<string, { r: EvidenceReview; at: number; i: number }>()
+  bound.forEach((r, i) => {
+    const key = r.reviewerUserId ?? ''
+    const at = Date.parse(r.reviewedAt)
+    const cur = byUser.get(key)
+    if (cur === undefined || at > cur.at || (at === cur.at && i > cur.i)) byUser.set(key, { r, at, i })
+  })
+  return [...byUser.values()].map((x) => x.r)
+}
+
 export type HumanSampleVerdict =
   | { counted: true; outcome: HumanOutcome; hardDefect: 'yes' | 'no' | 'unmeasured'; reviewers: ReviewerKind[] }
   | { counted: false; why: 'notHumanDecision' | 'noReview' | 'nonHumanOnly' | 'bindingBroken' }
@@ -307,6 +324,7 @@ export type HumanSampleVerdict =
  *    ② 서버 경계가 쓴 `human:*` v2 기록이 있다(사용자 id 포함)
  *    ③ 그 기록의 결속(초안·최종 문안·폐기 사유·결과)이 **지금 행과 같다**
  *    (결속이 맞는 기록의 결과는 언제나 지금 상태의 결과다 — 사람 기록끼리 결과가 갈릴 수 없다)
+ *    ④ 사용자별 **최신** 기록만 쓴다(`effectiveHumanReviews`)
  *    결과는 **기록이 확정한 값**이다 — 행의 옛 editDiff·declineReason 을 다시 읽지 않는다.
  */
 export function humanSampleOf(
@@ -319,9 +337,15 @@ export function humanSampleOf(
   if (human.length === 0) return { counted: false, why: 'nonHumanOnly' }
   const bound = human.filter((r) => bindingHolds(r, row))
   if (bound.length === 0) return { counted: false, why: 'bindingBroken' }
-  const hardDefect = bound.some((r) => r.hardDefect === 'yes') ? 'yes'
-    : bound.some((r) => r.hardDefect === 'unmeasured') ? 'unmeasured' : 'no'
-  return { counted: true, outcome: bound[0]!.outcome, hardDefect, reviewers: bound.map((r) => r.reviewer) }
+  const latest = effectiveHumanReviews(bound)
+  /**
+   * 🔴 **사용자별 최신 판정을 모은다** (2026-09-25 마스터 P0).
+   *    누군가 yes 면 yes · 아니면 누군가 no 면 no · 모두 미측정일 때만 unmeasured.
+   *    앞판은 미측정 기록 하나가 다른 사람의 no 를 영원히 가렸다.
+   */
+  const hardDefect = latest.some((r) => r.hardDefect === 'yes') ? 'yes'
+    : latest.some((r) => r.hardDefect === 'no') ? 'no' : 'unmeasured'
+  return { counted: true, outcome: latest[0]!.outcome, hardDefect, reviewers: latest.map((r) => r.reviewer) }
 }
 
 export type CohortSample = {
