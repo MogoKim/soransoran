@@ -69,6 +69,34 @@ export type LoadedStock = {
   publishedToday: number
   /** 🔴 이미 배정된 행을 code 로 바꾸는 표 — 러너가 쓰던 것과 같다 */
   codeOfPersonaId: Map<string, string>
+  /**
+   * 🔴 **셀렉터가 거른 행까지 포함한 전체 행** (2026-09-25 · auto-ready-v2).
+   *    자동 READY 그림자 판정은 `HUMAN_REVIEW_REQUIRED` 로 거른 기계 후보를 봐야 한다.
+   *    다시 읽으면 두 번째 조립이 생기므로 여기서 같이 돌려준다. 러너는 쓰지 않는다.
+   */
+  allRows: AutoRow[]
+  /** 원천 수집 시각 — `queueCandidateOf` 가 쓴다 */
+  capturedAtOf: Map<string, Date | null>
+}
+
+/**
+ * 🔴 **한 행 → 계획 입력 — 매핑은 여기 하나다** (2026-09-25).
+ *    실제 재고(`queueCandidates`)와 자동 READY 그림자 재고가 **같은 함수**로 만들어진다.
+ *    둘이 따로 조립하면 그림자 판정이 실제보다 강해진다.
+ */
+export function queueCandidateOf(
+  t: AutoRow, order: number,
+  codeOfPersonaId: ReadonlyMap<string, string>,
+  capturedAt: Date | null,
+): QueueCandidate {
+  return {
+    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: order,
+    assignedPersonaCode: t.matchedPersonaId === null
+      ? null
+      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+    ...voiceInputOf(t),
+    capturedAt,
+  }
 }
 
 const kstDayStart = (now: Date): Date => {
@@ -162,14 +190,8 @@ export async function loadPublishableStock(
   }
 
   /** 🔴 말투·profile 은 정본 `voiceInputOf` 가 만든다 — 여기서 하드코딩하지 않는다 */
-  const queueCandidates: QueueCandidate[] = targets.map((t, i) => ({
-    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: i,
-    assignedPersonaCode: t.matchedPersonaId === null
-      ? null
-      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
-    ...voiceInputOf(t),
-    capturedAt: capturedAtOf.get(t.id) ?? null,
-  }))
+  const queueCandidates: QueueCandidate[] = targets.map((t, i) =>
+    queueCandidateOf(t, i, codeOfPersonaId, capturedAtOf.get(t.id) ?? null))
 
   const historyRows = await prisma.personaActivityLog.findMany({
     where: { kind: 'post' }, select: { createdAt: true, persona: { select: { code: true } } },
@@ -193,7 +215,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId,
+    codeOfPersonaId, allRows: rows, capturedAtOf,
   }
 }
 
