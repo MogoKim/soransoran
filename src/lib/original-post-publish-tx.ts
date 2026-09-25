@@ -30,11 +30,9 @@
  *
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
-import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf } from './persona-for-match'
-import { hardFilter, readPostRequirements } from './original-post-persona-match'
+import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from './persona-for-match'
 import { PROFILES, releaseCapsOf, type ReleaseStage } from './scale-profile'
 import { boundedReleaseStage } from './scale-runtime'
-import { judgeVoiceMatch, voiceOfGateResults } from './original-post-voice-match'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
 import type { Prisma, PrismaClient } from '@prisma/client'
@@ -89,6 +87,10 @@ export type PublishTxInput = {
    *    모듈 상수를 읽으면 `loadEnvLocal()`·GHA vars 로 정한 단계가 이 쓰기 경로에
    *    도달하지 못한다 — 관제는 감속했다고 말하는데 여기서는 옛 값으로 나간다.
    *    주지 않으면 `judgePublish` 가 가장 안전한 상수(1건)로 떨어뜨린다.
+   *
+   * 🔴 **계약 부채 (2026-09-25 · auto-ready-v2 PR #573)** — Persona 상한은 이제 단계 이름을 받아
+   *    env 천장으로 누르지만(`releaseStage`), 이 하루 상한은 **아직 호출자가 넘기는 숫자**다.
+   *    같은 방식(단계 → `PROFILES[stage].dailyTarget`)으로 옮기는 일은 기반 PR 밖에서 한다.
    */
   dailyCap: number
   /**
@@ -198,17 +200,19 @@ export async function publishOriginalPostTx(
         const pr = await tx.persona.findUnique({ where: { id: personaId }, select: PERSONA_FOR_MATCH_SELECT })
         const which = pinned ? '기존 배정' : '계획한 배정'
         if (pr === null) return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${which} Persona 가 없다` }
-        const title = row.editedTitle ?? row.draftTitle
-        const body = row.editedBody ?? row.draftBody
         const forMatch = await personaForMatchOf(tx, pr, txNow, { excludeQueueId: row.id })
-        const voice = judgeVoiceMatch({
-          voice: voiceOfGateResults(row.gateResults), personaCode: pr.code, profile: 'machine',
-        })
         const stage = boundedReleaseStage(input.releaseStage, input.autoReadyEnv ?? {}, txNow)
-        const blocks = hardFilter(forMatch, readPostRequirements(title, body), title, body, releaseCapsOf(PROFILES[stage]))
-        const reasons = [...(voice.ok ? [] : [`VOICE_MISMATCH(${voice.code})`]), ...blocks.map((b) => b.code)]
-        if (reasons.length > 0) {
-          return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${which} ${pr.code} (${stage}) — ${reasons.join(', ')}` }
+        // 🔴 계획기(`planPublishBatch`)와 **같은 판정 함수**다 — 둘이 갈리면 막히는 행이 선두를 차지한다
+        const v = judgeAutoAssignment({
+          persona: forMatch, gateResults: row.gateResults,
+          title: row.editedTitle ?? row.draftTitle, body: row.editedBody ?? row.draftBody,
+          caps: releaseCapsOf(PROFILES[stage]),
+        })
+        if (!v.ok) {
+          return {
+            kind: 'blocked', code: 'AUTO_ASSIGN_STALE',
+            detail: `${which} ${pr.code} (${stage}) — ${v.route === 'defer' ? '유예' : '예외'}: ${v.codes.join(', ')}`,
+          }
         }
         personaRow = { id: pr.id, code: pr.code, status: pr.status, userId: pr.userId, user: pr.user }
       }

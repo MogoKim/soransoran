@@ -35,7 +35,9 @@ import {
   canaryAuthorization, judgeOneDayCanary, slotsLeftToday, windowAuthorization,
 } from '../../src/lib/release-canary'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
-import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf } from '../../src/lib/persona-for-match'
+import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from '../../src/lib/persona-for-match'
+import type { PersonaForMatch } from '../../src/lib/original-post-persona-match'
+import { AUTO_DECIDER } from '../../src/lib/auto-ready-v2'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
 export type LoadedStock = {
@@ -78,6 +80,13 @@ export type LoadedStock = {
   allRows: AutoRow[]
   /** 원천 수집 시각 — `queueCandidateOf` 가 쓴다 */
   capturedAtOf: Map<string, Date | null>
+  /**
+   * 🔴 **기존 배정 자동 행 → 그 Persona 의 지금 상태(자기 배정 제외)** (2026-09-25 마스터 P0).
+   *    발행 트랜잭션과 같은 조립(`personaForMatchOf(…, { excludeQueueId })`)이다.
+   *    Persona 가 없으면 `null`. 상한은 여기서 모른다(규모가 이 재고로 정해진다) —
+   *    판정은 상한을 받는 `planPublishBatch` 가 `judgeAutoAssignment` 로 한다.
+   */
+  pinnedAutoPersona: Map<string, PersonaForMatch | null>
 }
 
 /**
@@ -160,6 +169,18 @@ export async function loadPublishableStock(
   const personas: Record<string, unknown>[] = []
   for (const r of personaRows) personas.push(await personaForMatchOf(prisma, r, now) as unknown as Record<string, unknown>)
 
+  /**
+   * 🔴 **기존 배정 자동 행은 그 Persona 를 자기 배정을 빼고 다시 조립한다** (2026-09-25 마스터 P0).
+   *    위 `personas` 는 Persona 당 한 번 조립한 값이라 **자기 배정도 센다** — 그대로 판정하면
+   *    정상 행이 자기 `matchedAt` 으로 WEEKLY_CAP·TOO_SOON 이 된다. 비활성 Persona 도 읽는다.
+   */
+  const pinnedAutoPersona = new Map<string, PersonaForMatch | null>()
+  for (const t of targets) {
+    if ((t.decidedBy ?? '').trim() !== AUTO_DECIDER || t.matchedPersonaId === null) continue
+    const pr = await prisma.persona.findUnique({ where: { id: t.matchedPersonaId }, select: PERSONA_FOR_MATCH_SELECT })
+    pinnedAutoPersona.set(t.id, pr === null ? null : await personaForMatchOf(prisma, pr, now, { excludeQueueId: t.id }))
+  }
+
   /** 🔴 말투·profile 은 정본 `voiceInputOf` 가 만든다 — 여기서 하드코딩하지 않는다 */
   const queueCandidates: QueueCandidate[] = targets.map((t, i) =>
     queueCandidateOf(t, i, codeOfPersonaId, capturedAtOf.get(t.id) ?? null))
@@ -186,7 +207,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId, allRows: rows, capturedAtOf,
+    codeOfPersonaId, allRows: rows, capturedAtOf, pinnedAutoPersona,
   }
 }
 
@@ -409,6 +430,14 @@ export type PublishPlan = {
   recovered: boolean
   skipped: AutoRow[]
   waiting: AutoRow[]
+  /**
+   * 🔴 **기존 배정 자동 행 중 이번 회차에서 뺀 것** (2026-09-25 마스터 P0) — 발행 트랜잭션과
+   *    같은 `judgeAutoAssignment` 가 막는 행이다. 🔴 재배정하지 않는다 · 큐 상태도 바꾸지 않는다.
+   *    · `autoDeferred`   시간 상한(WEEKLY_CAP·TOO_SOON) — 풀리면 다음 회차에 다시 선두다
+   *    · `autoExceptions` 말투·생활사·비활성·실회원·Persona 없음 — 자동 발행에서 빠진 예외다
+   */
+  autoDeferred: { id: string; codes: string[] }[]
+  autoExceptions: { id: string; codes: string[] }[]
 }
 
 export function planPublishBatch(input: {
@@ -417,16 +446,34 @@ export function planPublishBatch(input: {
   at: Date
 }): PublishPlan {
   const { loaded } = input
+  /**
+   * 🔴 **기존 배정 자동 행을 발행 트랜잭션과 같은 판정으로 먼저 본다** (2026-09-25 마스터 P0).
+   *    막히는 행을 줄에 두면 "복구 먼저" 규칙이 그 행을 매 회차 선두에 세운다 —
+   *    트랜잭션은 막고, 러너는 멈추고, 뒤의 정상 행은 영원히 나가지 못한다.
+   *    그래서 그 행만 이번 줄에서 뺀다. 배정은 그대로 두고 다른 Persona 로 바꾸지 않는다.
+   */
+  const autoDeferred: { id: string; codes: string[] }[] = []
+  const autoExceptions: { id: string; codes: string[] }[] = []
+  for (const t of loaded.targets) {
+    if (!loaded.pinnedAutoPersona.has(t.id)) continue
+    const v = judgeAutoAssignment({
+      persona: loaded.pinnedAutoPersona.get(t.id) ?? null, gateResults: t.gateResults,
+      title: t.title, body: t.body, caps: input.caps ?? {},
+    })
+    if (!v.ok) (v.route === 'defer' ? autoDeferred : autoExceptions).push({ id: t.id, codes: v.codes })
+  }
+  const blocked = new Set([...autoDeferred, ...autoExceptions].map((x) => x.id))
+  const targets = loaded.targets.filter((t) => !blocked.has(t.id))
   const prepared = prepareCandidates({
-    candidates: loaded.queueCandidates, personas: loaded.personas as never,
+    candidates: loaded.queueCandidates.filter((c) => !blocked.has(c.queueId)), personas: loaded.personas as never,
     caps: input.caps, at: input.at,
   })
   const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
   const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
-  const freshOrdered = loaded.targets
+  const freshOrdered = targets
     .filter((t) => orderById.has(t.id))
     .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
-  const brokenRecovery = loaded.targets
+  const brokenRecovery = targets
     .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
     .filter((x): x is { id: string; problem: string } => x.problem !== null)
   const assignmentReady = prepared.batch.assignments
@@ -445,5 +492,6 @@ export function planPublishBatch(input: {
     prepared, assignOf, freshOrdered, brokenRecovery, assignmentReady,
     nextPickedId: r.picked?.id ?? null,
     picked: r.picked, recovered: r.recovered, skipped: r.skipped, waiting: r.waiting,
+    autoDeferred, autoExceptions,
   }
 }

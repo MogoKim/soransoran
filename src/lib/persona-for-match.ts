@@ -13,7 +13,11 @@
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
 
-import type { ChildAgeBand, PersonaForMatch } from './original-post-persona-match'
+import {
+  hardFilter, readPostRequirements,
+  type BatchCaps, type ChildAgeBand, type PersonaForMatch,
+} from './original-post-persona-match'
+import { judgeVoiceMatch, voiceOfGateResults } from './original-post-voice-match'
 
 export const PERSONA_FOR_MATCH_SELECT = {
   id: true, code: true, status: true, userId: true, identity: true, voiceCore: true, noGoTopics: true,
@@ -59,4 +63,38 @@ export async function personaForMatchOf(
     daysSinceLastPost: last?.matchedAt == null ? null
       : Math.floor((now.getTime() - last.matchedAt.getTime()) / 864e5),
   }
+}
+
+/**
+ * 🔴 **자동 행 배정 판정 — 계획기와 발행 트랜잭션이 이 함수 하나를 쓴다** (2026-09-25 마스터 P0).
+ *
+ *    앞판은 발행 트랜잭션만 기존 배정을 다시 판정했다. 계획기는 기존 배정을 "복구" 로 보고
+ *    맨 앞에 세웠다 — 그래서 트랜잭션이 막는 행이 **매 회차 선두를 차지하고** 러너가 멈춰,
+ *    뒤의 정상 행이 굶었다(격리 DB 러너 사슬에서 재현). 이제 둘이 같은 판정을 본다.
+ *
+ * 🔴 **갈래는 정본 코드에서 나온다 — 새 상수가 아니다.**
+ *    · `defer`     — 사유가 **전부** `hardFilter` 의 시간 상한(`WEEKLY_CAP`·`TOO_SOON`)이다.
+ *                    시간이 지나면 풀린다. 그 행만 이번 회차에서 빼고 다른 정상 행을 진행한다.
+ *    · `exception` — 말투·생활사·비활성·실회원·Persona 없음. 시간이 지나도 풀리지 않는다.
+ *                    자동 발행에서 빼고 예외로 드러낸다. 🔴 다른 Persona 로 바꾸지 않는다.
+ */
+export const TIME_BOUND_ASSIGN_CODES: readonly string[] = ['WEEKLY_CAP', 'TOO_SOON']
+
+export type AutoAssignVerdict =
+  | { ok: true }
+  | { ok: false; route: 'defer' | 'exception'; codes: string[] }
+
+export function judgeAutoAssignment(i: {
+  persona: PersonaForMatch | null
+  gateResults: unknown
+  title: string
+  body: string
+  caps: BatchCaps
+}): AutoAssignVerdict {
+  if (i.persona === null) return { ok: false, route: 'exception', codes: ['PERSONA_MISSING'] }
+  const voice = judgeVoiceMatch({ voice: voiceOfGateResults(i.gateResults), personaCode: i.persona.code, profile: 'machine' })
+  const blocks = hardFilter(i.persona, readPostRequirements(i.title, i.body), i.title, i.body, i.caps)
+  const codes = [...(voice.ok ? [] : [`VOICE_MISMATCH(${voice.code})`]), ...blocks.map((b) => b.code)]
+  if (codes.length === 0) return { ok: true }
+  return { ok: false, route: codes.every((c) => TIME_BOUND_ASSIGN_CODES.includes(c)) ? 'defer' : 'exception', codes }
 }

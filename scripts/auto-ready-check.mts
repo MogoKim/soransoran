@@ -425,18 +425,27 @@ console.log('\n⑬ 🔴 🔴 발행 트랜잭션이 계획된 Persona 를 다시
   const at = (re: RegExp): number => { const m = re.exec(tx); return m === null ? -1 : m.index }
   const reread = at(/tx\.persona\.findUnique\(\{ where: \{ id: personaId \}, select: PERSONA_FOR_MATCH_SELECT \}\)/)
   const assemble = at(/personaForMatchOf\(tx, pr, txNow, \{ excludeQueueId: row\.id \}\)/)
-  const voice = at(/judgeVoiceMatch\(\{/)
-  const hard = at(/hardFilter\(forMatch, readPostRequirements\(title, body\), title, body, releaseCapsOf\(PROFILES\[stage\]\)\)/)
-  const staleRet = at(/code: 'AUTO_ASSIGN_STALE', detail: `\$\{which\} \$\{pr\.code\}/)
+  const judge = at(/const v = judgeAutoAssignment\(\{\s*persona: forMatch, gateResults: row\.gateResults,/)
+  const staleRet = at(/kind: 'blocked', code: 'AUTO_ASSIGN_STALE',\s*detail: `\$\{which\} \$\{pr\.code\}/)
+  const pfm = codeOnly('src/lib/persona-for-match.ts')
+  const judgeFn = pfm.slice(pfm.indexOf('export function judgeAutoAssignment'))
   const assignWrite = at(/const assigned = await tx\.originalPostApprovalQueue\.updateMany/)
   const postCreate = at(/const post = await tx\.post\.create/)
   check('🔴 🔴 **트랜잭션 안에서 Persona 를 다시 읽고 로더와 같은 조립(personaForMatchOf)을 쓴다**', reread > 0 && assemble > reread)
-  check('🔴 🔴 **정본 판정 재사용 — judgeVoiceMatch · readPostRequirements · hardFilter**', voice > assemble && hard > voice)
+  check('🔴 🔴 **트랜잭션은 정본 판정 함수 judgeAutoAssignment 를 쓴다 (단계 상한과 함께)**',
+    judge > assemble && /caps: releaseCapsOf\(PROFILES\[stage\]\),/.test(tx))
+  check('🔴 🔴 **정본 판정 안에서 judgeVoiceMatch · readPostRequirements · hardFilter 를 재사용한다**',
+    /judgeVoiceMatch\(\{ voice: voiceOfGateResults\(i\.gateResults\), personaCode: i\.persona\.code, profile: 'machine' \}\)/.test(judgeFn)
+    && /hardFilter\(i\.persona, readPostRequirements\(i\.title, i\.body\), i\.title, i\.body, i\.caps\)/.test(judgeFn))
   check('🔴 🔴 **탈락은 배정·Post 쓰기보다 먼저 AUTO_ASSIGN_STALE 로 돌아간다**',
-    staleRet > hard && assignWrite > staleRet && postCreate > assignWrite)
-  check('🔴 🔴 **말투 불일치와 hardFilter 탈락이 둘 다 탈락 사유가 되고, 사유가 있으면 막는다**',
-    /\.\.\.\(voice\.ok \? \[\] : \[`VOICE_MISMATCH/.test(tx) && /\.\.\.blocks\.map\(\(b\) => b\.code\)\]/.test(tx)
-    && /if \(reasons\.length > 0\) \{\s*return \{ kind: 'blocked', code: 'AUTO_ASSIGN_STALE'/.test(tx))
+    staleRet > judge && assignWrite > staleRet && postCreate > assignWrite && /if \(!v\.ok\) \{\s*return \{/.test(tx))
+  check('🔴 🔴 **말투 불일치와 hardFilter 탈락이 둘 다 탈락 사유 · Persona 없음은 예외**',
+    /\.\.\.\(voice\.ok \? \[\] : \[`VOICE_MISMATCH/.test(judgeFn) && /\.\.\.blocks\.map\(\(b\) => b\.code\)\]/.test(judgeFn)
+    && /if \(codes\.length === 0\) return \{ ok: true \}/.test(judgeFn)
+    && /if \(i\.persona === null\) return \{ ok: false, route: 'exception'/.test(judgeFn))
+  check('🔴 🔴 **유예는 사유가 전부 hardFilter 시간 상한일 때만 — 그 밖은 예외**',
+    /TIME_BOUND_ASSIGN_CODES: readonly string\[\] = \['WEEKLY_CAP', 'TOO_SOON'\]/.test(pfm)
+    && /route: codes\.every\(\(c\) => TIME_BOUND_ASSIGN_CODES\.includes\(c\)\) \? 'defer' : 'exception'/.test(judgeFn))
   check('🔴 🔴 **기존 배정 행도 재판정한다 — 자동 행이면 pinned 든 계획이든 같은 블록**',
     /if \(isAuto && \(pinned \|\| pendingAssign\)\) \{/.test(tx)
     && /const personaId = pinned \? row\.matchedPersona!\.id : input\.autoAssign!\.personaId/.test(tx))
@@ -451,8 +460,19 @@ console.log('\n⑬ 🔴 🔴 발행 트랜잭션이 계획된 Persona 를 다시
     && /kstDayStart\(txNow\)/.test(tx))
   check('🔴 로더도 같은 조립을 쓴다 — 계획과 쓰기가 갈리지 않는다',
     /select: PERSONA_FOR_MATCH_SELECT/.test(loader) && /personaForMatchOf\(prisma, r, now\)/.test(loader))
-  check('🔴 새 규칙·키워드를 만들지 않았다 — persona-for-match 에 정규식·판정 없음',
-    !/new RegExp|\/[^/\n]+\/[gimsuy]*\.test\(|hardFilter|judgeVoiceMatch/.test(codeOnly('src/lib/persona-for-match.ts')))
+  check('🔴 새 규칙·키워드를 만들지 않았다 — persona-for-match 에 정규식 없음 (판정은 정본 함수 호출뿐)',
+    !/new RegExp|\/[^/\n]+\/[gimsuy]*\.test\(/.test(pfm))
+  // 🔴 P0 — 계획기가 같은 판정을 소비한다
+  check('🔴 🔴 **계획기가 기존 배정 자동 행을 같은 judgeAutoAssignment 로 판정하고 줄에서 뺀다**',
+    /const v = judgeAutoAssignment\(\{\s*persona: loaded\.pinnedAutoPersona\.get\(t\.id\) \?\? null/.test(loader)
+    && /const blocked = new Set\(\[\.\.\.autoDeferred, \.\.\.autoExceptions\]\.map\(\(x\) => x\.id\)\)/.test(loader)
+    && /if \(!v\.ok\) \(v\.route === 'defer' \? autoDeferred : autoExceptions\)\.push/.test(loader)
+    && /candidates: loaded\.queueCandidates\.filter\(\(c\) => !blocked\.has\(c\.queueId\)\)/.test(loader)
+    && /const freshOrdered = targets\s*\.filter/.test(loader) && /const brokenRecovery = targets/.test(loader))
+  check('🔴 🔴 **로더는 기존 배정 자동 행을 자기 배정 제외로 조립한다 (트랜잭션과 같은 조립)**',
+    /personaForMatchOf\(prisma, pr, now, \{ excludeQueueId: t\.id \}\)/.test(loader))
+  check('🔴 🔴 **계획기는 재배정하지 않는다 — 뺀 행에 쓰기가 없다**',
+    !/originalPostApprovalQueue\.(update|updateMany)/.test(loader.slice(loader.indexOf('export function planPublishBatch'))))
 }
 
 console.log('\n⑭ 🔴 🔴 감사 저장 경계는 판정자를 믿지 않는다')

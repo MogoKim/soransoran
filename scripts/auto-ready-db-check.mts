@@ -32,7 +32,8 @@ import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
 } from '../src/lib/micro-seed-supply-autofill'
-import { loadPublishableStock } from './lib/publishable-stock.mjs'
+import { loadPublishableStock, planPublishBatch } from './lib/publishable-stock.mjs'
+import { PROFILES, releaseCapsOf } from '../src/lib/scale-profile'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
@@ -488,6 +489,47 @@ async function main(): Promise<void> {
     const qv = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idV } })
     check('🔴 🔴 **기존 배정은 재배정하지 않는다 — 넘긴 계획은 무시된다**',
       pv.kind === 'published' && qv.matchedPersonaId !== other.id && pv.personaCode !== other.code, JSON.stringify(pv))
+  }
+
+  console.log('\n⑧-c 🔴 🔴 계획기와 발행 트랜잭션이 같은 판정을 본다 — 막히는 기존 배정 행은 줄에서 빠진다')
+  {
+    const caps = releaseCapsOf(PROFILES.d1)
+    const pinned = async (p: { id: string; code: string }, body?: string) => {
+      const r = await machineRow({ persona: p.id, voice: p.code, body })
+      await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
+      return r.id
+    }
+    const life = await freshPersona({ maritalStatus: '기혼' })
+    const idLife = await pinned(life, '남편이 요즘 퇴근이 늦어요. 다들 어떻게 지내세요?')
+    await prisma.persona.update({ where: { id: life.id }, data: { identity: { maritalStatus: '미혼' } as never } })
+    const busy = await freshPersona()
+    const idBusy = await pinned(busy)
+    const used = await machineRow({ persona: busy.id, voice: busy.code })
+    await prisma.originalPostApprovalQueue.update({ where: { id: used.id }, data: { status: 'EXPIRED', matchedAt: new Date(NOW.getTime() - 6 * 864e5) } })
+    const off = await freshPersona()
+    const idOff = await pinned(off)
+    await prisma.persona.update({ where: { id: off.id }, data: { status: 'paused' } })
+    const good = await freshPersona()
+    const idGood = await pinned(good)
+    const loaded = await loadPublishableStock(prisma, NOW, { autoReadyOpen: true })
+    const plan = planPublishBatch({ loaded, caps, at: NOW })
+    const exc = new Map(plan.autoExceptions.map((x) => [x.id, x.codes]))
+    const def = new Map(plan.autoDeferred.map((x) => [x.id, x.codes]))
+    check('🔴 🔴 **계획기 — 생활사 충돌은 예외로 뺀다**', exc.get(idLife)?.includes('MARITAL_CONFLICT') === true, JSON.stringify(exc.get(idLife)))
+    check('🔴 🔴 **계획기 — 주 상한 소진은 유예로 뺀다**', def.get(idBusy)?.includes('WEEKLY_CAP') === true, JSON.stringify(def.get(idBusy)))
+    check('🔴 🔴 **계획기 — 비활성 Persona 는 예외로 뺀다 (러너 전체 중단이 아니다)**',
+      exc.get(idOff)?.includes('NOT_ACTIVE') === true && !plan.brokenRecovery.some((b) => b.id === idOff), JSON.stringify(exc.get(idOff)))
+    check('🔴 🔴 **계획기 — 정상 기존 배정 행은 자기 배정 때문에 빠지지 않는다**', !exc.has(idGood) && !def.has(idGood)
+      && plan.freshOrdered.some((t) => t.id === idGood))
+    check('🔴 뺀 행은 발행 줄에 없다', ![idLife, idBusy, idOff].some((id) => plan.freshOrdered.some((t) => t.id === id)))
+    // 🔴 같은 행을 발행 트랜잭션에 직접 넣으면 같은 갈래로 막힌다 — 계획기와 트랜잭션이 갈리지 않는다
+    for (const [id, route] of [[idLife, '예외'], [idBusy, '유예'], [idOff, '예외']] as const) {
+      const r = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, releaseStage: 'd1' })
+      check(`🔴 🔴 **트랜잭션도 같은 갈래 (${route})**`, r.kind === 'blocked' && r.code === 'AUTO_ASSIGN_STALE' && r.detail.includes(`${route}:`), JSON.stringify(r))
+    }
+    for (const id of [idLife, idBusy, idOff, idGood]) {
+      await prisma.originalPostApprovalQueue.update({ where: { id }, data: { status: 'EXPIRED' } })
+    }
   }
 
   console.log('\n⑨ 🔴 발행 — 스위치·동시성')

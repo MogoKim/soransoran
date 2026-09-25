@@ -176,6 +176,7 @@
     "auto-ready:probe": "tsx scripts/auto-ready-v2-probe.mts",
     "auto-ready:check": "tsx scripts/auto-ready-check.mts",
     "auto-ready:db-check": "tsx scripts/auto-ready-db-check.mts",
+    "auto-ready:runner-check": "tsx scripts/auto-ready-runner-chain-check.mts",
     "auto-ready:evidence-scan": "tsx scripts/auto-ready-evidence-scan.mts"
   },
   "dependencies": {

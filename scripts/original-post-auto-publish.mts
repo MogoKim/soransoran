@@ -233,6 +233,18 @@ const plan = planPublishBatch({ loaded: stock, caps: RELEASE_CAPS, at: axisNow }
 const prepared = plan.prepared
 const assignOf = plan.assignOf
 
+/**
+ * ── ③-0 🔴 **기존 배정 자동 행 중 이번 회차에서 뺀 것** (2026-09-25 마스터 P0) ──
+ *    발행 트랜잭션과 같은 판정(`judgeAutoAssignment`)이 막는 행이다. 줄에 남기면 "복구 먼저" 가
+ *    그 행을 매 회차 선두에 세워 뒤의 정상 행을 굶긴다. 🔴 재배정하지 않고 상태도 바꾸지 않는다.
+ */
+for (const d of plan.autoDeferred) {
+  console.log(`   ⏸️  자동 배정 유예  ${d.id}  [${d.codes.join(', ')}] — 시간 상한이 풀리면 다음 회차에 다시 본다`)
+}
+for (const e of plan.autoExceptions) {
+  console.log(`   🔴 자동 배정 예외  ${e.id}  [${e.codes.join(', ')}] — 자동 발행에서 뺐다 · 다른 Persona 로 바꾸지 않는다 · 사람이 본다`)
+}
+
 console.log(`\n③ persona 배정 가능성 (active ${personas.length}명)`)
 for (const t of targets) {
   const rec = assignOf.get(t.id)
