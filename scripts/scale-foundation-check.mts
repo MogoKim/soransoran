@@ -372,7 +372,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     return !/installFromEnv\(/.test(stock) && /resolveScale\(/.test(stock)
   })())
   check('G 🔴 발행 러너가 그 값을 write 경로에 넘긴다',
-    /publishOriginalPostTx\(prisma, \{ queueId: target\.id, publishedToday, dailyCap: RELEASE_DAILY_CAP \}\)/
+    /publishOriginalPostTx\(prisma, \{\s*queueId: target\.id, publishedToday, dailyCap: RELEASE_DAILY_CAP,/
       .test(users['auto-publish']))
   // 🔴 러너는 이제 공용 준비 함수(`prepareCandidates`)를 통해 매칭한다.
   //    **주입 자체가 사라지면 안 된다** — 그 함수가 caps 를 planBatch 로 넘기는지도 함께 본다

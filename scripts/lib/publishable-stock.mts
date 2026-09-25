@@ -25,8 +25,8 @@ import {
 import { prepareCandidates } from '../../src/lib/supply-candidates'
 import type { HoldReason } from '../../src/lib/supply-freshness'
 import {
-  effectiveWeeklyCap, PROFILES, RELEASE_STAGES,
-  type ScaleProfile, type ReleaseStage,
+  releaseCapsOf, PROFILES, RELEASE_STAGES,
+  type ReleaseStage,
 } from '../../src/lib/scale-profile'
 // 🔴 `installFromEnv` 를 쓰지 않는다 — 그것은 module-global 을 바꾼다(아래 주석)
 import { resolveScale } from '../../src/lib/scale-runtime'
@@ -35,6 +35,9 @@ import {
   canaryAuthorization, judgeOneDayCanary, slotsLeftToday, windowAuthorization,
 } from '../../src/lib/release-canary'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
+import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from '../../src/lib/persona-for-match'
+import type { PersonaForMatch } from '../../src/lib/original-post-persona-match'
+import { AUTO_DECIDER } from '../../src/lib/auto-ready-v2'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
 export type LoadedStock = {
@@ -69,6 +72,41 @@ export type LoadedStock = {
   publishedToday: number
   /** 🔴 이미 배정된 행을 code 로 바꾸는 표 — 러너가 쓰던 것과 같다 */
   codeOfPersonaId: Map<string, string>
+  /**
+   * 🔴 **셀렉터가 거른 행까지 포함한 전체 행** (2026-09-25 · auto-ready-v2).
+   *    자동 READY 그림자 판정은 `HUMAN_REVIEW_REQUIRED` 로 거른 기계 후보를 봐야 한다.
+   *    다시 읽으면 두 번째 조립이 생기므로 여기서 같이 돌려준다. 러너는 쓰지 않는다.
+   */
+  allRows: AutoRow[]
+  /** 원천 수집 시각 — `queueCandidateOf` 가 쓴다 */
+  capturedAtOf: Map<string, Date | null>
+  /**
+   * 🔴 **기존 배정 자동 행 → 그 Persona 의 지금 상태(자기 배정 제외)** (2026-09-25 마스터 P0).
+   *    발행 트랜잭션과 같은 조립(`personaForMatchOf(…, { excludeQueueId })`)이다.
+   *    Persona 가 없으면 `null`. 상한은 여기서 모른다(규모가 이 재고로 정해진다) —
+   *    판정은 상한을 받는 `planPublishBatch` 가 `judgeAutoAssignment` 로 한다.
+   */
+  pinnedAutoPersona: Map<string, PersonaForMatch | null>
+}
+
+/**
+ * 🔴 **한 행 → 계획 입력 — 매핑은 여기 하나다** (2026-09-25).
+ *    실제 재고(`queueCandidates`)와 자동 READY 그림자 재고가 **같은 함수**로 만들어진다.
+ *    둘이 따로 조립하면 그림자 판정이 실제보다 강해진다.
+ */
+export function queueCandidateOf(
+  t: AutoRow, order: number,
+  codeOfPersonaId: ReadonlyMap<string, string>,
+  capturedAt: Date | null,
+): QueueCandidate {
+  return {
+    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: order,
+    assignedPersonaCode: t.matchedPersonaId === null
+      ? null
+      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
+    ...voiceInputOf(t),
+    capturedAt,
+  }
 }
 
 const kstDayStart = (now: Date): Date => {
@@ -82,6 +120,8 @@ const kstDayStart = (now: Date): Date => {
  */
 export async function loadPublishableStock(
   prisma: PrismaClient, now: Date,
+  /** 🔴 자동 READY 가 열려 있는가 — 부르는 쪽이 판정해 넘긴다. **기본 닫힘** */
+  opts: { autoReadyOpen?: boolean } = {},
 ): Promise<LoadedStock> {
   const raw = await prisma.originalPostApprovalQueue.findMany({
     where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
@@ -89,7 +129,7 @@ export async function loadPublishableStock(
       id: true, status: true, createdPostId: true, gateVerdict: true,
       promptVersion: true, model: true, matchedPersonaId: true,
       draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true,
+      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true, editDiff: true,
       rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
     orderBy: { createdAt: 'asc' },
@@ -102,12 +142,13 @@ export async function loadPublishableStock(
     body: r.editedBody ?? r.draftBody,
     sourceSite: r.rawContent.sourceSite,
     draftTitle: r.draftTitle, editedTitle: r.editedTitle,
-    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt,
+    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt, editDiff: r.editDiff,
   }))
 
   // 🔴 안전 재판정 — 저장된 값을 믿지 않는다. 러너와 **같은 함수**다
   const { targets, rejected } = selectAutoTargets(
     rows, (t, b) => safetyFilter({ title: t, body: b }).verdict,
+    { autoReadyOpen: opts.autoReadyOpen === true },
   )
   const byCode = new Map<string, string[]>()
   for (const r of rejected) byCode.set(r.code, [...(byCode.get(r.code) ?? []), r.id])
@@ -117,59 +158,32 @@ export async function loadPublishableStock(
 
   const capturedAtOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
 
-  const WEEK_AGO = new Date(now.getTime() - 7 * 864e5)
   const personaRows = await prisma.persona.findMany({
-    where: { status: 'active' },
-    select: {
-      id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-      user: { select: { providerId: true, _count: { select: { accounts: true } } } },
-    },
+    where: { status: 'active' }, select: PERSONA_FOR_MATCH_SELECT,
   })
   const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
+  /**
+   * 🔴 **조립은 `personaForMatchOf` 하나다** (2026-09-25). 발행 트랜잭션도 자동 행 배정 때
+   *    같은 함수로 Persona 를 다시 조립한다 — 계획할 때와 쓸 때의 판정이 갈리지 않는다.
+   */
   const personas: Record<string, unknown>[] = []
-  for (const r of personaRows) {
-    const id = (r.identity ?? {}) as Record<string, unknown>
-    const postsThisWeek = await prisma.originalPostApprovalQueue.count({
-      where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO } },
-    })
-    const last = await prisma.originalPostApprovalQueue.findFirst({
-      where: { matchedPersona: { code: r.code } },
-      orderBy: { matchedAt: 'desc' }, select: { matchedAt: true },
-    })
-    const vc = (r.voiceCore ?? {}) as Record<string, unknown>
-    /**
-     * 🔴 **발행 러너의 의미를 그대로 옮긴다** — 값을 늘리거나 바꾸지 않는다.
-     *    `workStatus`·`economicStatus`·`region` 은 러너가 `null` 로 넘긴다.
-     *    여기서 채우면 **배정 결과가 러너와 달라진다** — 그것이 이 함수의 목적을 깬다.
-     */
-    personas.push({
-      code: r.code, status: r.status,
-      providerId: r.user?.providerId ?? null,
-      accountCount: r.user?._count.accounts ?? null,
-      ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
-      maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
-      childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
-      ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands } : {}),
-      parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
-      menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
-      workStatus: null, economicStatus: null, region: null,
-      noGoTopics: r.noGoTopics,
-      voiceLength: typeof vc.length === 'string' ? vc.length : null,
-      postsThisWeek,
-      daysSinceLastPost: last?.matchedAt == null ? null
-        : Math.floor((now.getTime() - last.matchedAt.getTime()) / 864e5),
-    })
+  for (const r of personaRows) personas.push(await personaForMatchOf(prisma, r, now) as unknown as Record<string, unknown>)
+
+  /**
+   * 🔴 **기존 배정 자동 행은 그 Persona 를 자기 배정을 빼고 다시 조립한다** (2026-09-25 마스터 P0).
+   *    위 `personas` 는 Persona 당 한 번 조립한 값이라 **자기 배정도 센다** — 그대로 판정하면
+   *    정상 행이 자기 `matchedAt` 으로 WEEKLY_CAP·TOO_SOON 이 된다. 비활성 Persona 도 읽는다.
+   */
+  const pinnedAutoPersona = new Map<string, PersonaForMatch | null>()
+  for (const t of targets) {
+    if ((t.decidedBy ?? '').trim() !== AUTO_DECIDER || t.matchedPersonaId === null) continue
+    const pr = await prisma.persona.findUnique({ where: { id: t.matchedPersonaId }, select: PERSONA_FOR_MATCH_SELECT })
+    pinnedAutoPersona.set(t.id, pr === null ? null : await personaForMatchOf(prisma, pr, now, { excludeQueueId: t.id }))
   }
 
   /** 🔴 말투·profile 은 정본 `voiceInputOf` 가 만든다 — 여기서 하드코딩하지 않는다 */
-  const queueCandidates: QueueCandidate[] = targets.map((t, i) => ({
-    queueId: t.id, title: t.title, body: t.body, gateVerdict: t.gateVerdict, createdAt: i,
-    assignedPersonaCode: t.matchedPersonaId === null
-      ? null
-      : (codeOfPersonaId.get(t.matchedPersonaId) ?? `__unknown:${t.matchedPersonaId}`),
-    ...voiceInputOf(t),
-    capturedAt: capturedAtOf.get(t.id) ?? null,
-  }))
+  const queueCandidates: QueueCandidate[] = targets.map((t, i) =>
+    queueCandidateOf(t, i, codeOfPersonaId, capturedAtOf.get(t.id) ?? null))
 
   const historyRows = await prisma.personaActivityLog.findMany({
     where: { kind: 'post' }, select: { createdAt: true, persona: { select: { code: true } } },
@@ -193,7 +207,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId,
+    codeOfPersonaId, allRows: rows, capturedAtOf, pinnedAutoPersona,
   }
 }
 
@@ -205,11 +219,9 @@ export async function loadPublishableStock(
 /**
  * 🔴 **발행 상한도 한 곳에서 만든다.** 러너와 probe 가 각자 계산하면
  *    같은 단계인데 다른 배정이 나온다 — 그것이 이 파일의 목적을 깬다.
+ *    정본은 `src/lib/scale-profile.ts` 다 — 발행 트랜잭션도 같은 함수를 쓴다(2026-09-25).
  */
-export const releaseCapsOf = (p: ScaleProfile): { postsPerWeek: number; minDaysBetween: number } => ({
-  postsPerWeek: effectiveWeeklyCap(p.postsPerWeek, p.minDaysBetween),
-  minDaysBetween: p.minDaysBetween,
-})
+export { releaseCapsOf }
 
 /**
  * 🔴 **publisher 의 실제 계약대로 센다** (2026-09-24 마스터 지적).
@@ -418,6 +430,14 @@ export type PublishPlan = {
   recovered: boolean
   skipped: AutoRow[]
   waiting: AutoRow[]
+  /**
+   * 🔴 **기존 배정 자동 행 중 이번 회차에서 뺀 것** (2026-09-25 마스터 P0) — 발행 트랜잭션과
+   *    같은 `judgeAutoAssignment` 가 막는 행이다. 🔴 재배정하지 않는다 · 큐 상태도 바꾸지 않는다.
+   *    · `autoDeferred`   시간 상한(WEEKLY_CAP·TOO_SOON) — 풀리면 다음 회차에 다시 선두다
+   *    · `autoExceptions` 말투·생활사·비활성·실회원·Persona 없음 — 자동 발행에서 빠진 예외다
+   */
+  autoDeferred: { id: string; codes: string[] }[]
+  autoExceptions: { id: string; codes: string[] }[]
 }
 
 export function planPublishBatch(input: {
@@ -426,16 +446,34 @@ export function planPublishBatch(input: {
   at: Date
 }): PublishPlan {
   const { loaded } = input
+  /**
+   * 🔴 **기존 배정 자동 행을 발행 트랜잭션과 같은 판정으로 먼저 본다** (2026-09-25 마스터 P0).
+   *    막히는 행을 줄에 두면 "복구 먼저" 규칙이 그 행을 매 회차 선두에 세운다 —
+   *    트랜잭션은 막고, 러너는 멈추고, 뒤의 정상 행은 영원히 나가지 못한다.
+   *    그래서 그 행만 이번 줄에서 뺀다. 배정은 그대로 두고 다른 Persona 로 바꾸지 않는다.
+   */
+  const autoDeferred: { id: string; codes: string[] }[] = []
+  const autoExceptions: { id: string; codes: string[] }[] = []
+  for (const t of loaded.targets) {
+    if (!loaded.pinnedAutoPersona.has(t.id)) continue
+    const v = judgeAutoAssignment({
+      persona: loaded.pinnedAutoPersona.get(t.id) ?? null, gateResults: t.gateResults,
+      title: t.title, body: t.body, caps: input.caps ?? {},
+    })
+    if (!v.ok) (v.route === 'defer' ? autoDeferred : autoExceptions).push({ id: t.id, codes: v.codes })
+  }
+  const blocked = new Set([...autoDeferred, ...autoExceptions].map((x) => x.id))
+  const targets = loaded.targets.filter((t) => !blocked.has(t.id))
   const prepared = prepareCandidates({
-    candidates: loaded.queueCandidates, personas: loaded.personas as never,
+    candidates: loaded.queueCandidates.filter((c) => !blocked.has(c.queueId)), personas: loaded.personas as never,
     caps: input.caps, at: input.at,
   })
   const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
   const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
-  const freshOrdered = loaded.targets
+  const freshOrdered = targets
     .filter((t) => orderById.has(t.id))
     .sort((a, b) => orderById.get(a.id)! - orderById.get(b.id)!)
-  const brokenRecovery = loaded.targets
+  const brokenRecovery = targets
     .map((t) => ({ id: t.id, problem: assignOf.get(t.id)?.recoveryProblem ?? null }))
     .filter((x): x is { id: string; problem: string } => x.problem !== null)
   const assignmentReady = prepared.batch.assignments
@@ -454,5 +492,6 @@ export function planPublishBatch(input: {
     prepared, assignOf, freshOrdered, brokenRecovery, assignmentReady,
     nextPickedId: r.picked?.id ?? null,
     picked: r.picked, recovered: r.recovered, skipped: r.skipped, waiting: r.waiting,
+    autoDeferred, autoExceptions,
   }
 }

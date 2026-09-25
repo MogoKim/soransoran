@@ -324,3 +324,32 @@ export function describeScale(r: ResolvedScale): string {
     + ` · release=${r.releaseStage}(공개 ${r.releaseProfile.dailyTarget}/day)`
     + (r.requestedRelease !== r.releaseStage ? ` · 요청 ${r.requestedRelease} 에서 감속` : '')
 }
+
+/**
+ * 🔴 **env 만으로 정하는 공개 단계 천장** (2026-09-25 · auto-ready-v2).
+ *
+ *    `resolveScale` 은 준비도·그날치 판정으로 단계를 **낮추고**, 기간·첫 시험 허가로만
+ *    `release` 위로 **올린다** — 그리고 어떤 경우에도 capacity 를 넘지 않는다.
+ *    그래서 `resolveScale` 이 낼 수 있는 가장 높은 단계는 env 만으로 정해진다:
+ *      min(capacity, max(release, 오늘 유효한 기간 허가, 오늘 유효한 첫 시험 허가))
+ *    발행 트랜잭션은 호출자가 넘긴 단계를 이 천장으로 누른다 — 넘긴 값이 더 높으면
+ *    천장을 쓴다. 호출자 숫자가 상한을 여는 길을 없앤다.
+ */
+export function releaseStageCeiling(env: Readonly<Record<string, string | undefined>>, now: Date): ReleaseStage {
+  const cap = resolveStage(env[CAPACITY_ENV], 'capacity').stage
+  let top = resolveStage(env[RELEASE_ENV], 'release').stage
+  for (const a of [windowAuthorization(env, now, RELEASE_STAGES), canaryAuthorization(env, now, RELEASE_STAGES)]) {
+    if (a.activeToday && a.stage !== null && stageRank(a.stage) > stageRank(top)) top = a.stage
+  }
+  return stageRank(top) > stageRank(cap) ? cap : top
+}
+
+/** 🔴 넘겨받은 단계(모르는 값은 가장 안전한 단계)를 env 천장으로 누른다 */
+export function boundedReleaseStage(
+  requested: unknown, env: Readonly<Record<string, string | undefined>>, now: Date,
+): ReleaseStage {
+  const asked: ReleaseStage = typeof requested === 'string' && (RELEASE_STAGES as readonly string[]).includes(requested)
+    ? requested as ReleaseStage : SAFEST_STAGE
+  const ceil = releaseStageCeiling(env, now)
+  return stageRank(asked) > stageRank(ceil) ? ceil : asked
+}

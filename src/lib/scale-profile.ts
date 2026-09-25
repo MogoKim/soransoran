@@ -386,3 +386,13 @@ export const HORIZON_ANCHOR_DAYS = HORIZON_DAYS
 
 /** 🔴 주입을 잊었을 때 쓰이는 값. 지금 운영값과 정확히 같다 */
 export const SAFEST_PROFILE: ScaleProfile = PROFILES[SAFEST_STAGE]
+
+/**
+ * 🔴 **단계 → Persona 발행 상한 — 정본은 여기 하나다** (2026-09-25 자리 이동).
+ *    공용 로더에 있던 것을 발행 트랜잭션도 쓰도록 `src/lib` 로 옮겼다. 러너·probe·발행
+ *    트랜잭션이 **같은 단계에서 같은 상한**을 얻는다. 숫자를 따로 받지 않는다.
+ */
+export const releaseCapsOf = (p: ScaleProfile): { postsPerWeek: number; minDaysBetween: number } => ({
+  postsPerWeek: effectiveWeeklyCap(p.postsPerWeek, p.minDaysBetween),
+  minDaysBetween: p.minDaysBetween,
+})

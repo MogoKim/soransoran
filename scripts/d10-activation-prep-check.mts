@@ -567,7 +567,7 @@ console.log('\n③ freshness (TTL · 시각 미상 hold · 상한 복구 · 오�
   check('🔴 발행 경로가 복구 여부를 배정 코드로 넘긴다',
     /assignedPersonaCode: t\.matchedPersonaId === null/.test(stockSrc))
   check('🔴 🔴 **러너가 그 조립 결과를 실제로 소비한다**',
-    /await loadPublishableStock\(prisma, RUN_AT\)/.test(runner)
+    /await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)/.test(runner)
     && /const queueCandidates: QueueCandidate\[\] = stock\.queueCandidates/.test(runner))
   check('🔴 러너가 사람 검수 목록을 출력한다', /prepared\.held/.test(runner))
   check('🔴 legacy 제외·안전 판정은 그대로다',

@@ -175,6 +175,10 @@ export function judgeManualLimit(limit: number | null): { ok: boolean; reason: s
 export const PUBLISH_BLOCK_CODES = [
   'KILL_SWITCH', 'NOT_PUBLISHABLE', 'ALREADY_PUBLISHED', 'NO_MATCH',
   'PERSONA_NOT_ACTIVE', 'REAL_MEMBER', 'GATE_NOT_PASS', 'DAILY_CAP',
+  /** 🔴 자동 도장 행을 트랜잭션 안에서 다시 봤더니 내보낼 수 없다 */
+  'AUTO_READY_RECHECK',
+  /** 🔴 자동 행에 계획한 Persona 를 트랜잭션 안에서 다시 판정했더니 탈락했다 */
+  'AUTO_ASSIGN_STALE',
 ] as const
 export type PublishBlockCode = (typeof PUBLISH_BLOCK_CODES)[number]
 
@@ -187,6 +191,8 @@ export const PUBLISH_BLOCK_LABEL: Record<PublishBlockCode, string> = {
   REAL_MEMBER: '🔴 실회원 계정이다 — 실회원 이름으로 발행하지 않는다',
   GATE_NOT_PASS: '첫 발행은 gate=PASS 만 (HOLD 는 다음 판단)',
   DAILY_CAP: '오늘 상한을 채웠다',
+  AUTO_READY_RECHECK: '🔴 자동 도장 행을 발행 직전에 다시 봤더니 내보낼 수 없다 — 스위치·도장·경고·결함',
+  AUTO_ASSIGN_STALE: '🔴 계획한 Persona 를 발행 직전에 다시 판정했더니 탈락했다 — 말투·생활사·실회원·주간 상한·최소 간격',
 }
 
 export type PublishCandidate = {

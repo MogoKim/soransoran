@@ -25,6 +25,7 @@ export const AUTO_SITE_PREFIX = 'publish-candidate:'
 export const AUTO_GATE_VERDICT = 'PASS'
 
 // 🔴 profile 판정의 단일 지점 — 적재기(§4-AN)와 같은 함수를 쓴다
+import { AUTO_DECIDER, readStamp, stampValidFor } from './auto-ready-v2'
 import { titleKey } from './draft-originality'
 import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
@@ -92,6 +93,8 @@ export type AutoRow = {
   editedTitle?: string | null
   /** 🔴 기계 후보 확인용 — 큐에 남긴 표시를 다시 본다 */
   gateResults?: unknown
+  /** 🔴 자동 도장 기록(`editDiff.autoReady`)을 다시 본다 — 도장 뒤 본문이 바뀌었는지 */
+  editDiff?: unknown
   /**
    * 🔴 **누가 이 후보를 승인했는가** (2026-09-14).
    *
@@ -166,6 +169,10 @@ export function machineReviewedByHuman(decidedBy: string | null | undefined): bo
 export type RejectCode =
   | 'STATUS' | 'ALREADY_PUBLISHED' | 'GATE' | 'PROMPT_VERSION' | 'MODEL' | 'SITE' | 'SAFETY' | 'EMPTY'
   | 'PROFILE' | 'HUMAN_REVIEW_REQUIRED' | 'TITLE_COPIES_SOURCE'
+  /** 🔴 자동 도장 행인데 자동 READY 가 닫혀 있다(스위치 OFF · 증거 미달 · 확정 결함) */
+  | 'AUTO_READY_CLOSED'
+  /** 🔴 자동 도장 뒤에 제목·본문·판정 계약이 바뀌었다 */
+  | 'AUTO_READY_STALE'
 
 export const REJECT_LABEL: Record<RejectCode, string> = {
   STATUS: 'APPROVED · EDITED 가 아니다',
@@ -184,6 +191,8 @@ export const REJECT_LABEL: Record<RejectCode, string> = {
     + ' (공백·문장부호만 바꾼 것은 바꾼 것이 아니다)',
   SAFETY: 'safety 재판정이 pass 가 아니다',
   EMPTY: '제목이나 본문이 비었다',
+  AUTO_READY_CLOSED: '🔴 자동 도장 행인데 자동 READY 가 닫혀 있다 — 스위치·증거·결함을 본다',
+  AUTO_READY_STALE: '🔴 자동 도장 뒤에 제목·본문·판정 계약이 바뀌었다 — 그 도장은 무효다',
 }
 
 export type Reject = { id: string; code: RejectCode }
@@ -293,6 +302,11 @@ export function founderRetitled(r: { draftTitle?: string; editedTitle?: string |
 
 export function selectAutoTargets(
   rows: readonly AutoRow[], safetyOf: SafetyVerdictOf,
+  /**
+   * 🔴 **자동 READY 수용** (2026-09-25 · auto-ready-v2). 기본은 닫힘이다.
+   *    열려 있어도 도장이 **지금 내보낼 제목·본문**과 판정 계약에 유효할 때만 받는다.
+   */
+  opts: { autoReadyOpen?: boolean } = {},
 ): { targets: AutoRow[]; rejected: Reject[] } {
   const targets: AutoRow[] = []
   const rejected: Reject[] = []
@@ -317,7 +331,14 @@ export function selectAutoTargets(
      */
     if (MACHINE_AGE_HUMAN_REVIEW_REQUIRED && profile === 'machine'
       && !machineReviewedByHuman(r.decidedBy)) {
-      push(r.id, 'HUMAN_REVIEW_REQUIRED'); continue
+      /**
+       * 🔴 **자동 도장은 사람 도장이 아니다.** `founder` 로 위장하지 않고 별개 표식
+       *    `auto-ready:v1` 로 들어온다. 닫혀 있거나 도장이 지금 글과 다르면 거절한다.
+       */
+      if ((r.decidedBy ?? '').trim() !== AUTO_DECIDER) { push(r.id, 'HUMAN_REVIEW_REQUIRED'); continue }
+      if (opts.autoReadyOpen !== true) { push(r.id, 'AUTO_READY_CLOSED'); continue }
+      if (!stampValidFor(readStamp(r.editDiff), r.title, r.body).ok) { push(r.id, 'AUTO_READY_STALE'); continue }
+
     }
     if (r.title.trim() === '' || r.body.trim() === '') { push(r.id, 'EMPTY'); continue }
     /**

@@ -30,6 +30,11 @@
  *
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
+import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from './persona-for-match'
+import { PROFILES, releaseCapsOf, type ReleaseStage } from './scale-profile'
+import { boundedReleaseStage } from './scale-runtime'
+import { AUTO_DECIDER } from './auto-ready-v2'
+import { recheckAutoReadyInTx } from './auto-ready-repo'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
@@ -82,8 +87,41 @@ export type PublishTxInput = {
    *    모듈 상수를 읽으면 `loadEnvLocal()`·GHA vars 로 정한 단계가 이 쓰기 경로에
    *    도달하지 못한다 — 관제는 감속했다고 말하는데 여기서는 옛 값으로 나간다.
    *    주지 않으면 `judgePublish` 가 가장 안전한 상수(1건)로 떨어뜨린다.
+   *
+   * 🔴 **계약 부채 (2026-09-25 · auto-ready-v2 PR #573)** — Persona 상한은 이제 단계 이름을 받아
+   *    env 천장으로 누르지만(`releaseStage`), 이 하루 상한은 **아직 호출자가 넘기는 숫자**다.
+   *    같은 방식(단계 → `PROFILES[stage].dailyTarget`)으로 옮기는 일은 기반 PR 밖에서 한다.
    */
   dailyCap: number
+  /**
+   * 🔴 **자동 READY env** (2026-09-25 · auto-ready-v2). 스위치는 여기서 읽고, 증거·결함은
+   *    **이 트랜잭션 안에서 DB 로** 다시 판정한다 — 호출자가 "열림" 을 정하지 않는다.
+   *    주지 않으면 `{}` = 꺼짐. 사람 결정 행에는 아무 영향이 없다.
+   */
+  autoReadyEnv?: Readonly<Record<string, string | undefined>>
+  /**
+   * 🔴 **자동 행의 Persona 배정 — 발행 트랜잭션 안에서 쓴다** (2026-09-25 마스터 지적).
+   *    앞판은 러너가 트랜잭션 **밖에서 먼저** 배정을 쓰고, 그 뒤 재검증이 실패하면
+   *    Post 는 0 인데 `matchedPersonaId`·`matchedAt` 만 바뀐 채 남았다.
+   *    이제 자동 행은 재검증 → 발행 판정 → **배정 쓰기** → Post 가 한 트랜잭션이다.
+   *    🔴 사람 결정 행에는 쓰지 않는다 — 그 경로의 기존 동작은 그대로다.
+   */
+  autoAssign?: {
+    /**
+     * 🔴 **권위값이 아니다.** "누구를 검토할지" 일 뿐이다. 트랜잭션 안에서 그 Persona 를
+     *    다시 읽어 말투·생활사·실회원·주간 사용량·최소 간격을 정본 함수로 다시 판정한다.
+     */
+    personaId: string
+    matchMeta: unknown
+  }
+  /**
+   * 🔴 **자동 행 Persona 재판정에 쓸 공개 단계** (2026-09-25 마스터 지적).
+   *    앞판은 `caps` 숫자를 그대로 받았다 — 호출자가 `{ postsPerWeek: 1e9 }` 를 넘기면 상한이 열렸다.
+   *    이제 단계 이름만 받고, 상한은 정본 `releaseCapsOf(PROFILES[stage])` 에서 얻는다.
+   *    그 단계도 env 천장(`boundedReleaseStage`)으로 누른다. 없거나 모르는 값이면 가장 안전한 단계.
+   *    🔴 `matchedAt` 도 받지 않는다 — 배정 시각은 이 트랜잭션의 시계 하나다.
+   */
+  releaseStage?: ReleaseStage
 }
 
 /**
@@ -96,11 +134,20 @@ export async function publishOriginalPostTx(
 ): Promise<PublishResult> {
   try {
     return await prisma.$transaction(async (tx) => {
+      /**
+       * 🔴 **이 트랜잭션의 시계는 하나다** (2026-09-25 마스터 지적). 배정 시각 · 주간 사용량 ·
+       *    최소 간격 · 오늘 발행 수 · 단계 천장이 모두 이 값을 쓴다. 호출자 시각을 받지 않는다 —
+       *    미래 `matchedAt` 을 넘겨 간격 계산을 틀어지게 하는 길을 없앤다.
+       */
+      const txNow = new Date()
       const row = await tx.originalPostApprovalQueue.findUnique({
         where: { id: input.queueId },
         select: {
           id: true, status: true, createdPostId: true, gateVerdict: true,
           draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+          // 🔴 자동 도장 재검증용 — 누가 결정했고 무엇을 보고 찍었나
+          decidedBy: true, editDiff: true, gateResults: true,
+          rawContent: { select: { sourceCapturedAt: true } },
           matchedPersona: {
             select: {
               id: true, code: true, status: true, userId: true,
@@ -112,6 +159,63 @@ export async function publishOriginalPostTx(
         },
       })
       if (row === null) return { kind: 'error', message: '대상을 찾을 수 없습니다.' }
+
+      /**
+       * ── ⓪ 🔴 **자동 도장 행은 가장 먼저 다시 본다** (2026-09-25) ──
+       *    배정·Post 어떤 쓰기보다 **앞**이다. 스위치 · 도장(실제로 발행할 제목·본문) ·
+       *    경고 · **DB 증거 30/90%/결함 0** · 확정 결함을 이 트랜잭션 안에서 판정한다.
+       *    여기서 막히면 이 트랜잭션은 아무것도 쓰지 않는다.
+       */
+      const isAuto = (row.decidedBy ?? '').trim() === AUTO_DECIDER
+      if (isAuto) {
+        const recheck = await recheckAutoReadyInTx(tx, {
+          env: input.autoReadyEnv ?? {},
+          title: row.editedTitle ?? row.draftTitle,
+          body: row.editedBody ?? row.draftBody,
+          editDiff: row.editDiff, gateVerdict: row.gateVerdict, gateResults: row.gateResults,
+          sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
+        })
+        if (!recheck.ok) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason }
+      }
+
+      /**
+       * 🔴 **자동 행의 배정은 아직 쓰지 않는다.** 배정할 Persona 를 읽어 발행 판정에 쓰고,
+       *    판정을 통과한 뒤에만 이 트랜잭션 안에서 쓴다.
+       */
+      const pinned = row.matchedPersona !== null
+      const pendingAssign = isAuto && !pinned && input.autoAssign !== undefined
+      let personaRow = row.matchedPersona
+      if (isAuto && (pinned || pendingAssign)) {
+        /**
+         * 🔴 **자동 행의 Persona 를 트랜잭션 안에서 다시 판정한다** (2026-09-25 마스터 지적 ×2).
+         *    · 계획한 Persona — 호출자가 넘긴 id 를 믿으면 상한이 찼거나 말투가 다르거나
+         *      아무 active id 여도 그대로 나간다.
+         *    · **이미 배정된 Persona 도 같다** — 배정 뒤 말투·생활사·상태·Account 가 바뀌었을 수 있다.
+         *      🔴 재배정하지 않는다. 부적격이면 막고, 행은 큐에 그대로 남는다.
+         *    로더와 **같은 조립**(`personaForMatchOf`)과 **같은 판정**(`judgeVoiceMatch` ·
+         *    `readPostRequirements` · `hardFilter`)을 쓴다. 주간 사용량·최소 간격에서는
+         *    **이 행 자신의 배정을 뺀다** — 넣으면 정상 행이 자기 `matchedAt` 으로 막힌다.
+         */
+        const personaId = pinned ? row.matchedPersona!.id : input.autoAssign!.personaId
+        const pr = await tx.persona.findUnique({ where: { id: personaId }, select: PERSONA_FOR_MATCH_SELECT })
+        const which = pinned ? '기존 배정' : '계획한 배정'
+        if (pr === null) return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${which} Persona 가 없다` }
+        const forMatch = await personaForMatchOf(tx, pr, txNow, { excludeQueueId: row.id })
+        const stage = boundedReleaseStage(input.releaseStage, input.autoReadyEnv ?? {}, txNow)
+        // 🔴 계획기(`planPublishBatch`)와 **같은 판정 함수**다 — 둘이 갈리면 막히는 행이 선두를 차지한다
+        const v = judgeAutoAssignment({
+          persona: forMatch, gateResults: row.gateResults,
+          title: row.editedTitle ?? row.draftTitle, body: row.editedBody ?? row.draftBody,
+          caps: releaseCapsOf(PROFILES[stage]),
+        })
+        if (!v.ok) {
+          return {
+            kind: 'blocked', code: 'AUTO_ASSIGN_STALE',
+            detail: `${which} ${pr.code} (${stage}) — ${v.route === 'defer' ? '유예' : '예외'}: ${v.codes.join(', ')}`,
+          }
+        }
+        personaRow = { id: pr.id, code: pr.code, status: pr.status, userId: pr.userId, user: pr.user }
+      }
 
       // 🔴 kill switch — 행이 없으면 "중지 꺼짐" 과 같다 (schema 주석)
       const sw = await tx.personaGlobalSwitch.findUnique({
@@ -128,7 +232,7 @@ export async function publishOriginalPostTx(
        *    러너·화면·이 트랜잭션이 **같은 표를 같은 경계(KST 자정)로** 세야 한다.
        */
       const publishedTodayInTx = await tx.personaActivityLog.count({
-        where: { kind: 'post', createdAt: { gte: kstDayStart(new Date()) } },
+        where: { kind: 'post', createdAt: { gte: kstDayStart(txNow) } },
       })
 
       // 🔴 트랜잭션 안에서 다시 판정한다. 배정 시점의 판정을 믿지 않는다
@@ -137,12 +241,12 @@ export async function publishOriginalPostTx(
           status: row.status,
           createdPostId: row.createdPostId,
           gateVerdict: row.gateVerdict,
-          matchedPersonaCode: row.matchedPersona?.code ?? null,
-          personaStatus: row.matchedPersona?.status ?? null,
-          personaProviderId: row.matchedPersona?.user?.providerId ?? null,
+          matchedPersonaCode: personaRow?.code ?? null,
+          personaStatus: personaRow?.status ?? null,
+          personaProviderId: personaRow?.user?.providerId ?? null,
           // 🔴 persona 가 없으면 `null` 이고, judgePublish 가 fail-closed 로 막는다.
           //    여기서 0 으로 눙치면 "없는 persona" 가 실회원 검사를 통과한 것처럼 된다
-          personaAccountCount: row.matchedPersona?.user?._count.accounts ?? null,
+          personaAccountCount: personaRow?.user?._count.accounts ?? null,
         },
         {
           killSwitchEnabled: sw?.enabled === true,
@@ -156,7 +260,23 @@ export async function publishOriginalPostTx(
         return { kind: 'blocked', code: verdict.code, detail: verdict.detail, publishedTodayInTx }
       }
 
-      const persona = row.matchedPersona!
+      const persona = personaRow!
+
+      // ── ⓪-b 🔴 자동 행 배정 — 재검증·발행 판정을 모두 통과한 뒤, 같은 트랜잭션에서 ──
+      if (pendingAssign) {
+        const assigned = await tx.originalPostApprovalQueue.updateMany({
+          where: {
+            id: row.id, matchedPersonaId: null, decidedBy: AUTO_DECIDER,
+            status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null,
+          },
+          data: {
+            matchedPersonaId: persona.id, matchedAt: txNow,
+            matchMeta: input.autoAssign!.matchMeta as Prisma.InputJsonValue,
+          },
+        })
+        // 🔴 그 사이 누가 배정했으면 롤백한다 — 뒤의 쓰기와 함께 되돌아간다
+        if (assigned.count !== 1) throw new Error(QUEUE_RACE)
+      }
 
       // ── ① Post ──
       // 🔴 수정본이 있으면 그것이 발행될 글이다
@@ -176,7 +296,8 @@ export async function publishOriginalPostTx(
       // ── ② Queue ──
       // 🔴 조건부 UPDATE. 읽은 뒤 쓰는 사이에 누가 먼저 발행했으면 0건이 되어 롤백한다
       const updated = await tx.originalPostApprovalQueue.updateMany({
-        where: { id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
+        // 🔴 결정자도 읽은 그대로여야 한다 — 그 사이 도장이 바뀌었으면 0건이 되어 롤백한다
+        where: { id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null, decidedBy: row.decidedBy },
         data: { status: 'PUBLISHED', createdPostId: post.id },
       })
       if (updated.count === 0) throw new Error(QUEUE_RACE)
@@ -190,7 +311,7 @@ export async function publishOriginalPostTx(
           targetId: post.id,
           gateStatus: row.gateVerdict,
           decidedBy: 'operator',
-          publishedAt: new Date(),
+          publishedAt: txNow,
         },
       })
 

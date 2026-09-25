@@ -81,9 +81,11 @@ console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
     return seen === 'T|B'
   })())
   check('EDITED 도 대상이다', selectAutoTargets([ok({ status: 'EDITED' })], allPass).targets.length === 1)
-  // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED · TITLE_COPIES_SOURCE 를 더해 11개다.
+  // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED · TITLE_COPIES_SOURCE 를 더해 11개였다.
+  //    2026-09-25 — 자동 READY 의 AUTO_READY_CLOSED · AUTO_READY_STALE 를 더해 13개다.
   //    코드와 라벨이 1:1 이어야 한다
-  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 11)
+  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 13
+    && 'AUTO_READY_CLOSED' in REJECT_LABEL && 'AUTO_READY_STALE' in REJECT_LABEL)
 }
 
 console.log('\n①-b 🔴 기계 profile — 통째로 맞아야 발행 후보다')
@@ -304,10 +306,19 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
     /updateMany\([\s\S]{0,400}?matchedPersonaId: null/.test(runnerSrc))
   check('🔴 기존 배정 행은 배정 저장 블록에 들어가지 않는다',
     /if \(target\.matchedPersonaId === null\) \{/.test(runnerSrc))
-  // 🔴 러너의 시계는 `RUN_AT` 하나다(2026-09-24) — 쓰는 자리도 하나여야 한다
-  check('🔴 matchedAt 을 다시 쓰는 경로가 하나뿐이다',
-    (runnerSrc.match(/matchedAt: RUN_AT/g) ?? []).length === 1
-    && !/matchedAt: new Date\(\)/.test(runnerSrc))
+  /**
+   * 🔴 러너의 시계는 `RUN_AT` 하나다(2026-09-24). **matchedAt 을 쓰는 자리는 정확히 둘**이다
+   *    (2026-09-25 auto-ready-v2): 사람 행은 러너의 조건부 UPDATE, 자동 도장 행은 발행
+   *    트랜잭션 안(재검증·발행 판정 뒤 · 트랜잭션 시계 `txNow`). 러너가 자동 행에 넘기는 것은
+   *    **계획**이지 쓰기가 아니고, 시각도 넘기지 않는다.
+   */
+  const txSrc = readFileSync('src/lib/original-post-publish-tx.ts', 'utf-8')
+  check('🔴 matchedAt 을 쓰는 경로가 사람 행 하나 · 자동 행 하나뿐이다',
+    (runnerSrc.match(/data: \{ matchedPersonaId: persona\.id, matchedAt: RUN_AT/g) ?? []).length === 1
+    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/g) ?? []).length === 1
+    && (txSrc.match(/matchedPersonaId: persona\.id, matchedAt: txNow,/g) ?? []).length === 1
+    && !/matchedAt: RUN_AT, matchMeta: plan\.meta, caps/.test(runnerSrc)
+    && !/matchedAt: new Date\(\)/.test(runnerSrc) && !/matchedAt: new Date\(\)/.test(txSrc))
   /**
    * 🔴 조립이 `scripts/lib/publishable-stock.mts` 로 옮겨졌다(2026-09-24) —
    *    러너와 관제가 같은 함수를 쓰게 하려고 뺀 것이다. 지키는 것은 같다.
@@ -498,10 +509,16 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
 
   // 🔴 러너가 실제로 그 필드를 넘기는지 소스로 고정한다
   const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
-  /** 🔴 Persona 조립이 공용 로더로 옮겨졌다 — 그 자리를 본다 */
-  const stockSrc = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
+  /**
+   * 🔴 Persona 조립이 `src/lib/persona-for-match.ts` 로 옮겨졌다(2026-09-25) — 로더와 발행
+   *    트랜잭션이 같은 함수를 쓰게 하려고 뺐다. **정본 위치를 보고, 로더가 그것을 부르는지도 본다.**
+   */
+  const stockSrc = readFileSync('src/lib/persona-for-match.ts', 'utf-8')
+  const loaderSrc = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
   check('🔴 [회귀] auto-publish 경로가 childrenCount 를 넘긴다',
-    /childrenCount: typeof id\.childrenCount === 'number' \? id\.childrenCount : null/.test(stockSrc))
+    /childrenCount: typeof id\.childrenCount === 'number' \? id\.childrenCount : null/.test(stockSrc)
+    && /personaForMatchOf\(prisma, r, now\)/.test(loaderSrc)
+    && !/childrenCount: typeof id\.childrenCount/.test(loaderSrc))
   check('🔴 [회귀] match-assign 과 같은 필드 집합을 넘긴다', (() => {
     const assign = readFileSync('scripts/original-post-match-assign.mts', 'utf-8')
     const fields = ['childrenCount', 'childrenAgeBands', 'maritalStatus', 'parentCare', 'menopauseStatus', 'noGoTopics']
@@ -509,7 +526,7 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
   })())
   check('🔴 🔴 **러너가 그 조립을 실제로 소비한다 — 옮기고 안 쓰면 아무 뜻이 없다**',
     /^const RUN_AT = new Date\(\)\s*$/m.test(src)
-    && /const stock = await loadPublishableStock\(prisma, RUN_AT\)/.test(src)
+    && /const stock = await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)/.test(src)
     && /stock\.personas/.test(src)
     // 🔴 러너 전체에 시계가 하나뿐이다 — 단계마다 다른 `now` 는 경계에서 답을 가른다
     && (src.match(/new Date\(\)/g) ?? []).length === 1)

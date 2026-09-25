@@ -54,6 +54,8 @@ import { prepareCandidates, describePrepared, type QueueCandidate } from '../src
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
+import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
+import { authoritativeGate, stampRound, selectAudits } from '../src/lib/auto-ready-repo'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -107,7 +109,26 @@ console.log('  🔴 실제 상한은 아래 ③-c 에서 설치한다 — 설치
  *    두 번 만들면 같은 회차 안에서 서로 다른 순간을 본다.
  */
 const RUN_AT = new Date()
-const stock = await loadPublishableStock(prisma, RUN_AT)
+/**
+ * 🔴 **자동 READY v2** (2026-09-25). 스위치 **기본 OFF** — 꺼져 있으면 감사 표를 읽지 않고
+ *    도장도 찍지 않는다. 그래서 지금 운영 동작은 이 줄이 없던 때와 같다.
+ *    켜져 있어도 증거 표본이 계약을 채우고 확정 결함이 0 일 때만 열린다.
+ */
+const AUTO_READY_ON = autoReadyEnabled(process.env)
+/**
+ * 🔴 **이 값은 화면·selector 용이다. 쓰기의 근거가 아니다.** 도장과 발행 트랜잭션은
+ *    각자 자기 트랜잭션 안에서 스위치·DB 증거·확정 결함을 다시 판정한다.
+ */
+const autoOpen = await authoritativeGate(prisma, process.env)
+if (AUTO_READY_ON) {
+  console.log(`\n⓪ 자동 READY ${autoOpen.open ? '🟢 열림' : '🔴 닫힘'}${autoOpen.reasons.length > 0 ? ` — ${autoOpen.reasons.join(' · ')}` : ''}`)
+}
+if (APPLY && autoOpen.open) {
+  // 🔴 기계 도장 행만 — 한 행씩 조건부로 찍는다. 사람 결정 행은 건드리지 않는다
+  const tally = await stampRound(prisma, { env: process.env, now: RUN_AT })
+  console.log(`   도장 ${[...tally].map(([k, v]) => `${k} ${v}`).join(' · ') || '대상 없음'}`)
+}
+const stock = await loadPublishableStock(prisma, RUN_AT, { autoReadyOpen: autoOpen.open })
 const targets = stock.targets
 const rejected = stock.rejected
 const codeOfPersonaId = stock.codeOfPersonaId
@@ -211,6 +232,18 @@ if (scale.canaryStage) {
 const plan = planPublishBatch({ loaded: stock, caps: RELEASE_CAPS, at: axisNow })
 const prepared = plan.prepared
 const assignOf = plan.assignOf
+
+/**
+ * ── ③-0 🔴 **기존 배정 자동 행 중 이번 회차에서 뺀 것** (2026-09-25 마스터 P0) ──
+ *    발행 트랜잭션과 같은 판정(`judgeAutoAssignment`)이 막는 행이다. 줄에 남기면 "복구 먼저" 가
+ *    그 행을 매 회차 선두에 세워 뒤의 정상 행을 굶긴다. 🔴 재배정하지 않고 상태도 바꾸지 않는다.
+ */
+for (const d of plan.autoDeferred) {
+  console.log(`   ⏸️  자동 배정 유예  ${d.id}  [${d.codes.join(', ')}] — 시간 상한이 풀리면 다음 회차에 다시 본다`)
+}
+for (const e of plan.autoExceptions) {
+  console.log(`   🔴 자동 배정 예외  ${e.id}  [${e.codes.join(', ')}] — 자동 발행에서 뺐다 · 다른 Persona 로 바꾸지 않는다 · 구조화 예외로 남는다 · 영속 관제 경로는 아직 미연결`)
+}
 
 console.log(`\n③ persona 배정 가능성 (active ${personas.length}명)`)
 for (const t of targets) {
@@ -390,7 +423,28 @@ console.log(`\n⑤ 🔴 실행 — ${target.id}`)
 // ── ⑥ 배정 (없을 때만) ──
 // 🔴 기존 배정 행은 여기 들어오지 않는다 — matchedPersonaId · matchedAt · matchMeta 를 다시 쓰지 않는다.
 //    다시 쓰면 matchedAt 이 밀려 주간 여력이 한 번 더 열리고, 이력이 두 번 세어진다
-if (target.matchedPersonaId === null) {
+/**
+ * 🔴 **자동 도장 행은 여기서 배정을 쓰지 않는다** (2026-09-25 마스터 지적).
+ *    배정 계획만 세우고, 쓰기는 발행 트랜잭션에 넘긴다 — 재검증·발행 판정을 통과해야만
+ *    같은 트랜잭션 안에서 쓰이고, 실패하면 배정도 함께 되돌아간다.
+ *    사람 결정 행은 기존 동작 그대로다.
+ */
+const isAutoTarget = (target.decidedBy ?? '').trim() === AUTO_DECIDER
+let autoAssign: { personaId: string; matchMeta: unknown } | undefined
+if (target.matchedPersonaId === null && isAutoTarget) {
+  const a = assignOf.get(target.id)
+  const plan = planStore({
+    status: target.status as never, createdPostId: target.createdPostId,
+    seed: target.id,
+    assigned: a?.assigned ?? null, eligible: a?.eligible ?? [], top: a?.top ?? [], blockedCount: a?.blocked.length ?? 0,
+  })
+  if (!plan.ok) { await prisma.$disconnect(); fail(`배정할 수 없습니다 — ${plan.reason}`) }
+  const persona = await prisma.persona.findUniqueOrThrow({ where: { code: plan.personaCode }, select: { id: true } })
+  // 🔴 personaId 는 "누구를 검토할지" 일 뿐이다 — 발행 트랜잭션이 정본 단계 상한으로 다시 판정한다.
+  //    배정 시각은 트랜잭션의 시계가 정한다(여기서 넘기지 않는다)
+  autoAssign = { personaId: persona.id, matchMeta: plan.meta }
+  console.log(`   ⏳ 배정 계획 ${plan.personaCode} — 발행 트랜잭션 안에서 쓴다`)
+} else if (target.matchedPersonaId === null) {
   const a = assignOf.get(target.id)
   const plan = planStore({
     status: target.status as never, createdPostId: target.createdPostId,
@@ -410,7 +464,15 @@ if (target.matchedPersonaId === null) {
 
 // ── ⑦ 발행 — 🔴 되돌릴 수 없다 ──
 // 🔴 상한을 주입한다 — 트랜잭션 안 재판정도 같은 값을 쓴다
-const res = await publishOriginalPostTx(prisma, { queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP })
+const res = await publishOriginalPostTx(prisma, {
+  queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP,
+  // 🔴 자동 도장 행은 트랜잭션 안에서 스위치·도장·경고·DB 증거·결함을 다시 본다
+  autoReadyEnv: process.env,
+  // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)
+  autoAssign,
+  // 🔴 숫자 상한이 아니라 **단계**를 넘긴다 — 트랜잭션이 env 천장으로 누르고 정본 상한을 얻는다
+  releaseStage: scale.releaseStage,
+})
 if (res.kind !== 'published') {
   await prisma.$disconnect()
   fail(res.kind === 'blocked' ? `발행이 막혔습니다 — ${res.code} · ${res.detail}` : `발행 오류 — ${res.message}`)
@@ -443,5 +505,29 @@ for (const p of v.problems) console.log(`   🔴 ${p}`)
 console.log(`   Queue ${after.status} · createdPostId ${after.createdPostId} · ActivityLog ${logCount}건`)
 console.log('\n   🔴 되돌리려면 내리는 것(status=HIDDEN)이지 없던 일이 되지 않습니다.\n')
 
+/**
+ * ── ⑨ 🔴 **사후 감사 선정 — DB 에 남긴다** ──
+ *    자동 도장으로 나간 글이 늘었으면 ceil(N×0.2) 까지 모자란 만큼 고른다.
+ *    판정 **대기**는 다음 회차를 막지 않는다 — 확정 결함(yes)만 막는다.
+ */
+let auditIntegrityOk = true
+if (AUTO_READY_ON) {
+  const au = await selectAudits(prisma)
+  console.log(au.kind === 'ok'
+    ? `⑨ 감사 선정 — 자동 발행 ${au.n}건 · 목표 ${au.target} · 이번에 고른 ${au.picked.length}건`
+    : `⑨ 감사 선정 — ${au.reason}`)
+  /**
+   * 🔴 **글이 사라진 자동 발행 행을 로그로만 흘리지 않는다** (2026-09-25 마스터 지적).
+   *    열림 판정(`missingAutoPostCount`)이 같은 DB 상태를 다시 세서 다음 도장·발행을 닫는다.
+   *    이 회차도 실패로 끝낸다 — 성공 종료로 보이면 아무도 보지 않는다.
+   */
+  if (au.kind === 'ok' && au.missingPost.length > 0) {
+    auditIntegrityOk = false
+    console.log(`   🔴 무결성 — 글이 사라진 자동 발행 ${au.missingPost.length}건: ${au.missingPost.join(', ')}`)
+    const g = await authoritativeGate(prisma, process.env)
+    console.log(`   🔴 열림 판정 ${g.open ? '열림 — 🔴 닫혀야 한다' : '닫힘'} · ${g.reasons.join(' · ')}`)
+  }
+}
+
 await prisma.$disconnect()
-process.exit(v.ok ? 0 : 1)
+process.exit(v.ok && auditIntegrityOk ? 0 : 1)

@@ -1414,7 +1414,7 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
   check('🔴 🔴 **발행 러너가 공용 조립 함수를 실제로 호출하고 그 결과를 쓴다**',
     /import \{[^}]*loadPublishableStock[^}]*\} from '\.\/lib\/publishable-stock\.mjs'/.test(runnerCode)
     && /^const RUN_AT = new Date\(\)\s*$/m.test(runnerCode)
-    && /const stock = await loadPublishableStock\(prisma, RUN_AT\)\s*$/m.test(runnerCode)
+    && /const stock = await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)\s*$/m.test(runnerCode)
     // 🔴 러너의 시계는 하나다 — 단계마다 다른 `now` 를 쓰면 경계에서 답이 갈린다
     && runnerCode.split('\n').filter((l) => /new Date\(\)/.test(l)).length === 1
     && /const targets = stock\.targets/.test(runnerCode)
