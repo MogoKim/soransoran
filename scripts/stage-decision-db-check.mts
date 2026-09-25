@@ -2,7 +2,8 @@
 /**
  * 🔴 **StageDecision 저장 — 실제 DB 왕복 검증** (2026-09-25)
  *
- * 🔴 **CI 에 넣지 않는다.** Postgres 가 필요하고 CI 에는 DB 가 없다.
+ * 🔴 **CI 에서는 격리 Postgres 17 컨테이너로 돈다** (`visibility-guard` · heavy 조건).
+ *    주소는 그 step 에만 주고, 다른 step 에는 DATABASE_URL 이 없다. 운영 DB 0.
  *    순수 계약은 `stage:ladder-check` 가 본다. 이 파일은 **fixture 로는 잴 수 없는 것**만
  *    본다: 유일키 충돌, JSON null 왕복, DateTime 왕복, 동시 create.
  *

@@ -794,6 +794,44 @@ jobs:
         if: steps.scope.outputs.heavy == 'true'
         run: npm run d10:prep-check
 
+      # 🔴 자동 단계 사다리 — 순수 계약 (DB 0 · 네트워크 0).
+      #    승인 천장을 올리지 않는가 · 시험 기반이 전날 실제 결정에서만 오는가 ·
+      #    저장 validator 가 fail-closed 인가 · 발행 러너가 공용 조립을 실제로 쓰는가.
+      #    🔴 heavy 조건 뒤에 둔다 — 무조건 step 은 상한(70)에 닿아 있다. 이 검사가 보는
+      #       코드(src/lib · scripts · prisma)는 전부 ALLOW 밖이라, 그 코드를 건드리는 PR 은
+      #       언제나 heavy 로 판정돼 이 step 이 돈다. 매일 main 예약 실행도 heavy 다.
+      - name: 자동 단계 사다리 (승인 천장 · 전날 결정 · 저장 계약)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run stage:ladder-check
+
+      # 🔴 StageDecision 저장 왕복 — **격리 Postgres 17 컨테이너**에서만 돈다. 운영 DB 0.
+      #    fixture 로는 잴 수 없는 것(유일키 충돌 · 동시 create · JSON null · NOT NULL 제약)을
+      #    실제 DB 로 본다. 주소는 이 step 에만 준다 — 다른 step 에는 DATABASE_URL 이 없다.
+      #    🔴 주소·비밀값을 출력하지 않는다. migrate 로그는 파일로만 받고 찍지 않는다
+      #       (Prisma 는 접속 host · DB 이름을 출력한다). 검사 자신도 주소를 찍지 않는다.
+      - name: StageDecision 저장 왕복 (격리 Postgres 17 · 운영 DB 0)
+        if: steps.scope.outputs.heavy == 'true'
+        env:
+          DATABASE_URL: postgresql://soran@127.0.0.1:54329/soran_test
+          DIRECT_URL: postgresql://soran@127.0.0.1:54329/soran_test
+          SORAN_ISOLATED_DB: yes-throwaway
+        run: |
+          docker run -d --name soran-stage-pg -p 127.0.0.1:54329:5432 \
+            -e POSTGRES_USER=soran -e POSTGRES_DB=soran_test \
+            -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17 >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec soran-stage-pg pg_isready -U soran -d soran_test >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != 1 ]; then echo '🔴 격리 Postgres 가 뜨지 않았다'; exit 1; fi
+          if ! npx prisma migrate deploy >/tmp/stage-migrate.log 2>&1; then
+            echo '🔴 격리 DB migrate deploy 실패 (로그는 주소를 담고 있어 출력하지 않는다)'
+            exit 1
+          fi
+          echo 'migrate deploy 완료 (격리 DB)'
+          npm run stage:db-check
+
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
       # mkdtemp 안에서만 돌고 저장소 .microseed-data 는 건드리지 않는다.

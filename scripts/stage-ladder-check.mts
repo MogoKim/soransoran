@@ -1390,7 +1390,7 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
     check('🔴 그래도 무엇이 틀렸는지는 말한다 — 조용히 죽지 않는다',
       /격리 DB 가 아니다/.test(out) && /sentinel|SORAN_ISOLATED_DB/.test(out))
   }
-  check('🔴 DB 검사는 CI 게이트가 아니다 — 격리 Postgres 를 요구한다', (() => {
+  check('🔴 DB 검사는 격리 Postgres 에서만 돈다 — 아니면 exit 2 로 멈춘다', (() => {
     const db = readFileSync('scripts/stage-decision-db-check.mts', 'utf-8')
     return /격리 DB 가 아니다/.test(db) && /process\.exit\(2\)/.test(db)
       && /127\\\.0\\\.0\\\.1\|localhost/.test(db)
