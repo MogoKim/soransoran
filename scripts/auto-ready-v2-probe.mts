@@ -154,12 +154,31 @@ async function main(): Promise<void> {
     console.log(`     ${g.padEnd(4)} ${String(total).padStart(4)}  ${[...m].map(([k, v]) => `${k}=${v}`).join(' · ')}`)
   }
 
-  /** 부족량 */
-  const short = Math.max(0, PROFILES.d10.dailyTarget - plan.assignmentReady.length)
+  /**
+   * 🔴 **부족량을 한 줄로 뭉개지 않는다** (2026-09-25 마스터 정정).
+   *    앞판은 "Persona 병목 없음" 이라고 적었다. 틀렸다 — 신선한 글 중에서도 배정에서
+   *    잃는 것이 있고, 아직 없는 글이 들어왔을 때 Persona 가 받을 수 있는지는 재지 않았다.
+   *      1차  글 부족       목표 − 신선 글
+   *      2차  배정 손실      신선 글 − 배정 가능 글  (지금 Persona 로 받지 못한 것)
+   *      미측정  없는 글의 Persona 적합성 — 글이 없으니 잴 수 없다
+   */
+  const target = PROFILES.d10.dailyTarget
+  const fresh = plan.prepared.auto.length
+  const ready = plan.assignmentReady.length
+  const short = Math.max(0, target - ready)
+  const lackPosts = Math.max(0, target - fresh)
+  const lostInAssign = Math.max(0, fresh - ready)
   console.log('\n⑤ D10 판정')
-  console.log(short === 0
-    ? '   🟢 GO — 배정 가능 글이 하루 목표 이상이다'
-    : `   🔴 NO-GO — 오늘 배정 가능 ${plan.assignmentReady.length}건 / 목표 ${PROFILES.d10.dailyTarget}건 · **${short}건 부족**`)
+  if (short === 0) {
+    console.log('   🟢 GO — 배정 가능 글이 하루 목표 이상이다')
+  } else {
+    console.log(`   🔴 NO-GO — 배정 가능 ${ready}건 / 목표 ${target}건 · **${short}건 부족**`)
+    console.log(`     글 부족이 1차        ${lackPosts}건  (목표 ${target} − 신선 글 ${fresh})`)
+    console.log(`     현재 배정 손실이 2차  ${lostInAssign}건  (신선 글 ${fresh} − 배정 가능 ${ready})`)
+    // 🔴 목표까지 **더 필요한 배정 가능 글**은 short 건이다. 그 글들이 아직 없으니
+    //    어떤 Persona 가 받을 수 있는지는 잴 수 없다(앞판은 lackPosts 로 적어 1 이 모자랐다)
+    console.log(`     미래 ${short}건의 Persona 적합성은 미측정 — 목표까지 더 필요한 글이 아직 없다`)
+  }
 
   /** 참고 — 지금 운영 상한 */
   const r = resolvePublishScale({ env: process.env, loaded: s, now: NOW })

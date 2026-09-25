@@ -81,9 +81,11 @@ console.log('\n① 대상 조건 — 일곱 개를 모두 통과해야 한다')
     return seen === 'T|B'
   })())
   check('EDITED 도 대상이다', selectAutoTargets([ok({ status: 'EDITED' })], allPass).targets.length === 1)
-  // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED · TITLE_COPIES_SOURCE 를 더해 11개다.
+  // 🔴 2026-09-14 — HUMAN_REVIEW_REQUIRED · TITLE_COPIES_SOURCE 를 더해 11개였다.
+  //    2026-09-25 — 자동 READY 의 AUTO_READY_CLOSED · AUTO_READY_STALE 를 더해 13개다.
   //    코드와 라벨이 1:1 이어야 한다
-  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 11)
+  check('제외 사유에 라벨이 있다 — 코드와 1:1', Object.keys(REJECT_LABEL).length === 13
+    && 'AUTO_READY_CLOSED' in REJECT_LABEL && 'AUTO_READY_STALE' in REJECT_LABEL)
 }
 
 console.log('\n①-b 🔴 기계 profile — 통째로 맞아야 발행 후보다')
@@ -509,7 +511,7 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
   })())
   check('🔴 🔴 **러너가 그 조립을 실제로 소비한다 — 옮기고 안 쓰면 아무 뜻이 없다**',
     /^const RUN_AT = new Date\(\)\s*$/m.test(src)
-    && /const stock = await loadPublishableStock\(prisma, RUN_AT\)/.test(src)
+    && /const stock = await loadPublishableStock\(prisma, RUN_AT, \{ autoReadyOpen: autoOpen\.open \}\)/.test(src)
     && /stock\.personas/.test(src)
     // 🔴 러너 전체에 시계가 하나뿐이다 — 단계마다 다른 `now` 는 경계에서 답을 가른다
     && (src.match(/new Date\(\)/g) ?? []).length === 1)

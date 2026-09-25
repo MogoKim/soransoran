@@ -837,6 +837,43 @@ jobs:
           echo 'migrate deploy 완료 (격리 DB)'
           npm run stage:db-check
 
+      # 🔴 자동 READY v2 — 순수 계약 (DB 0 · 네트워크 0 · LLM 0).
+      #    semanticReview fail-closed · 증거 복원 6분류 · 계약 값 불변 · 도장 hash ·
+      #    selector 기본 닫힘 · 감사 ceil(N×0.2) · yes 끈적함 · founder 기록 0 · 스위치 기본 OFF.
+      - name: 자동 READY v2 계약 (fail-closed · founder 0 · 스위치 OFF)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run auto-ready:check
+
+      # 🔴 자동 READY v2 실행 사슬 — 격리 Postgres 17 에서만. 운영 DB 0.
+      #    후보 → 도장 → selector → 발행 트랜잭션 재검증 → Post → 감사 저장 → 결함 시 자동 중지,
+      #    그리고 동시 도장·동시 발행·동시 감사 선정의 경쟁 조건을 실제 DB 로 부딪혀 본다.
+      #    🔴 앞 step 이 띄운 격리 컨테이너를 그대로 쓴다(없으면 새로 띄운다).
+      #    🔴 주소를 `env:` 에 적지 않는다 — 조각으로 만들고 즉시 mask 한다.
+      - name: 자동 READY v2 실행 사슬 (격리 Postgres 17 · 운영 DB 0)
+        if: steps.scope.outputs.heavy == 'true'
+        env:
+          SORAN_ISOLATED_DB: yes-throwaway
+        run: |
+          pg_user=soran; pg_host=127.0.0.1; pg_port=54329; pg_db=soran_test
+          DATABASE_URL="postgresql://${pg_user}@${pg_host}:${pg_port}/${pg_db}"
+          echo "::add-mask::$DATABASE_URL"
+          export DATABASE_URL
+          export DIRECT_URL="$DATABASE_URL"
+          if ! docker ps --format '{{.Names}}' | grep -qx soran-stage-pg; then
+            docker run -d --name soran-stage-pg -p "${pg_host}:${pg_port}:5432" \
+              -e POSTGRES_USER="$pg_user" -e POSTGRES_DB="$pg_db" \
+              -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17 >/dev/null
+            for i in $(seq 1 60); do
+              docker exec soran-stage-pg pg_isready -U "$pg_user" -d "$pg_db" >/dev/null 2>&1 && break
+              sleep 1
+            done
+          fi
+          if ! npx prisma migrate deploy >/tmp/ar-migrate.log 2>&1; then
+            echo '🔴 격리 DB migrate deploy 실패 (로그는 주소를 담고 있어 출력하지 않는다)'
+            exit 1
+          fi
+          npm run auto-ready:db-check
+
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.
       # mkdtemp 안에서만 돌고 저장소 .microseed-data 는 건드리지 않는다.

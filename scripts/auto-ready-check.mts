@@ -1,0 +1,307 @@
+#!/usr/bin/env tsx
+/**
+ * 🔴 **자동 READY v2 — 순수 계약 검사** (DB 0 · 네트워크 0 · LLM 0)
+ *
+ * 실행 경로(격리 DB)는 `auto-ready:db-check` 가 본다. 여기는 판정 규칙이 fail-closed 인지,
+ * 계약 값을 낮추지 않았는지, founder 를 쓰지 않는지, 스위치가 기본 OFF 인지를 본다.
+ */
+import { readFileSync } from 'node:fs'
+
+import {
+  warningsOfGate, semanticIssues, eligibilityOf, judgeRow, CONTRACT, AUTO_DECIDER, HUMAN_DECIDER,
+  NO_SEMANTIC_RECORD, SEMANTIC_INVALID, SEMANTIC_HOLDS_MISMATCH,
+  makeStamp, readStamp, stampValidFor, AUTO_READY_RECORD_KEY, JUDGE_CONTRACT_DIGEST,
+  autoReadyEnabled, AUTO_READY_ENV, judgeOpen, auditTarget, pickAudits, mergeDefect, isHumanEditRecord,
+} from '../src/lib/auto-ready-v2'
+import {
+  restoreRow, cohortSampleOf, hardDefectOf, outcomeOf,
+  type ArtifactDoc, type CandidateDoc, type DecidedRow,
+} from '../src/lib/auto-ready-evidence'
+import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
+import {
+  MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticHoldsOf,
+} from '../src/lib/micro-seed-supply-autofill'
+
+let pass = 0
+let fail = 0
+function check(label: string, ok: boolean, detail = ''): void {
+  if (ok) { pass += 1; console.log(`  ✅ ${label}`) } else {
+    fail += 1; console.log(`  🔴 FAIL ${label}${detail === '' ? '' : ` — ${detail}`}`)
+  }
+}
+const codeOnly = (f: string): string => readFileSync(f, 'utf-8')
+  .split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+
+/** 🔴 온전한 의미 검수 요약 — 이것에서 한 칸씩만 망가뜨린다 */
+const GOOD_SR = {
+  complete: true, deterministicPass: true,
+  unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9,
+}
+const gateWith = (sr: unknown, holds: string[] = []): Record<string, unknown> => ({
+  holds, blocks: [], semanticReview: sr,
+  autoDraft: {
+    provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
+    draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
+  },
+})
+const CAP = new Date('2026-09-24T11:30:00Z')
+const elig = (gate: unknown, title = '평범한 하루 이야기', body = '아침에 산책을 다녀왔어요. 다들 어떻게 지내세요?') =>
+  eligibilityOf({ gateVerdict: 'PASS', gateResults: gate, title, body, sourceCapturedAt: CAP })
+
+console.log('\n① 🔴 semanticReview 는 fail-closed 다 — "객체이기만 하면 통과" 가 아니다')
+{
+  check('기준선 — 온전한 요약은 자동 대상이다', elig(gateWith(GOOD_SR)).auto, elig(gateWith(GOOD_SR)).reasons.join(','))
+  const bad: [string, unknown, string][] = [
+    ['기록 없음', undefined, NO_SEMANTIC_RECORD],
+    ['null', null, NO_SEMANTIC_RECORD],
+    ['빈 객체 {}', {}, `${SEMANTIC_INVALID}:complete`],
+    ['배열', [], NO_SEMANTIC_RECORD],
+    ['complete=false', { ...GOOD_SR, complete: false }, `${SEMANTIC_INVALID}:complete`],
+    ['complete="true" (문자열)', { ...GOOD_SR, complete: 'true' }, `${SEMANTIC_INVALID}:complete`],
+    ['deterministicPass 누락', { ...GOOD_SR, deterministicPass: undefined }, `${SEMANTIC_INVALID}:deterministicPass`],
+    ['unsupportedAdditions="0" (문자열)', { ...GOOD_SR, unsupportedAdditions: '0' }, `${SEMANTIC_INVALID}:unsupportedAdditions`],
+    ['lifeContradictions=-1 (음수)', { ...GOOD_SR, lifeContradictions: -1 }, `${SEMANTIC_INVALID}:lifeContradictions`],
+    ['droppedFromSource=1.5 (정수 아님)', { ...GOOD_SR, droppedFromSource: 1.5 }, `${SEMANTIC_INVALID}:droppedFromSource`],
+    ['droppedFromSource=NaN', { ...GOOD_SR, droppedFromSource: Number.NaN }, `${SEMANTIC_INVALID}:droppedFromSource`],
+    ['confidence=null', { ...GOOD_SR, confidence: null }, `${SEMANTIC_INVALID}:confidence`],
+    ['confidence=NaN', { ...GOOD_SR, confidence: Number.NaN }, `${SEMANTIC_INVALID}:confidence`],
+    ['confidence=1.2', { ...GOOD_SR, confidence: 1.2 }, `${SEMANTIC_INVALID}:confidence`],
+    ['confidence=-0.1', { ...GOOD_SR, confidence: -0.1 }, `${SEMANTIC_INVALID}:confidence`],
+    ['confidence="0.9" (문자열)', { ...GOOD_SR, confidence: '0.9' }, `${SEMANTIC_INVALID}:confidence`],
+    ['confidence=Infinity', { ...GOOD_SR, confidence: Number.POSITIVE_INFINITY }, `${SEMANTIC_INVALID}:confidence`],
+  ]
+  for (const [label, sr, code] of bad) {
+    const v = elig(gateWith(sr))
+    check(`🔴 🔴 **${label} → 예외 검토 (${code})**`, !v.auto && v.reasons.join(',').includes(code), v.reasons.join(','))
+  }
+  /** 🔴 요약과 holds 가 같은 말을 해야 한다 — 기대 holds 는 정본 `semanticHoldsOf` 가 만든다 */
+  const one = { ...GOOD_SR, unsupportedAdditions: 1 }
+  const expected = semanticHoldsOf(one as never)
+  check('기준선 — 요약 1건 · holds 1건이면 불일치는 아니다(그래도 경고라 예외)',
+    !warningsOfGate(gateWith(one, expected)).includes(SEMANTIC_HOLDS_MISMATCH)
+    && !elig(gateWith(one, expected)).auto)
+  check('🔴 🔴 **요약은 추가 1건인데 holds 가 비었다 → 불일치 예외**',
+    warningsOfGate(gateWith(one, [])).includes(SEMANTIC_HOLDS_MISMATCH))
+  check('🔴 🔴 **요약은 0 인데 holds 에 의미 경고가 있다 → 불일치 예외**',
+    warningsOfGate(gateWith(GOOD_SR, ['SEMANTIC_DROPPED_FROM_SOURCE:2'])).includes(SEMANTIC_HOLDS_MISMATCH))
+  check('🔴 confidence 에 통과 임계값을 만들지 않았다 — 0 도 유효한 값이다',
+    elig(gateWith({ ...GOOD_SR, confidence: 0 })).auto && semanticIssues({ ...GOOD_SR, confidence: 0 }).issues.length === 0)
+  check('🔴 경고는 후보 생성을 막지 않는다 — 적재 경로가 이 판정을 부르지 않는다',
+    !/auto-ready-v2/.test(readFileSync('src/lib/micro-seed-supply-autofill.ts', 'utf-8')))
+}
+
+console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지')
+{
+  const ART = 'a'.repeat(32)
+  const base = 'A100'
+  const draft = { title: '초안 제목', body: '초안 본문입니다.' }
+  const artifact = (o: Partial<ArtifactDoc> = {}): ArtifactDoc => ({
+    file: 'auto-draft-x.artifacts.json', artifactId: ART, sourceArticleId: base,
+    contract: {
+      pipelineVersion: 'content-core-v2.1', promptVersion: 'p7',
+      stageModels: { draftGen: 'g', speakerPlan: 'g', semanticReview: 'h' },
+    },
+    planPersonaCode: 'P04',
+    voice: { personaCode: 'P04', bundleDigest: 'bd', sourceDigest: 'sd' },
+    draft,
+    review: {
+      deterministic: { pass: true }, semanticCompletion: { complete: true },
+      semantic: { unsupportedAdditions: [], lifeContradictions: [], droppedFromSource: [], confidence: 0.95 },
+    },
+    ...o,
+  })
+  const cand = (o: Partial<CandidateDoc> = {}): CandidateDoc =>
+    ({ file: 'auto-draft-x.candidates.json', artifactId: ART, sourceArticleId: base, sourceSite: 'navercafe:x', ...o })
+  const row = (o: Partial<DecidedRow> = {}, ad: Record<string, unknown> = {}): DecidedRow => ({
+    id: 'q1', decidedBy: HUMAN_DECIDER, draftTitle: draft.title, draftBody: draft.body,
+    gateVerdict: 'PASS',
+    gateResults: {
+      holds: [], blocks: [],
+      autoDraft: {
+        artifactId: ART, sourceArticleId: base, pipelineVersion: 'content-core-v2.1',
+        draftPromptVersion: 'p7', stageModels: { speakerPlan: 'g', draftGen: 'g', semanticReview: 'h' },
+        voice: { personaCode: 'P04', bundleDigest: 'bd', sourceDigest: 'sd' }, ...ad,
+      },
+    },
+    editDiff: null, declineReason: null,
+    rawSourceSite: `${MACHINE_SITE_PREFIX}navercafe:x`, rawSourceArticleId: `${base}-deadbeef`,
+    sourceCapturedAt: CAP, ...o,
+  })
+  const idx = (arts: ArtifactDoc[], cands: CandidateDoc[]) => ({
+    a: new Map([[ART, arts]]), c: new Map([[ART, cands]]),
+  })
+  const run = (r: DecidedRow, arts = [artifact()], cands = [cand()]) => {
+    const i = idx(arts, cands); return restoreRow(r, i.a, i.c)
+  }
+  check('기준선 — 모두 맞으면 clean', run(row()).klass === 'clean', JSON.stringify(run(row())))
+  check('🔴 🔴 **artifactId 없는 옛 행 → missing (sourceArticleId 가 같아도)**',
+    run(row({}, { artifactId: '' })).klass === 'missing')
+  check('🔴 🔴 **정본 디렉터리에 그 artifact 가 없다 → missing**', run(row(), []).klass === 'missing')
+  check('🔴 🔴 **같은 artifactId 가 두 장 → ambiguous**', run(row(), [artifact(), artifact({ file: 'b' })]).klass === 'ambiguous')
+  check('🔴 candidates 가 두 줄 → ambiguous', run(row(), [artifact()], [cand(), cand({ file: 'c2' })]).klass === 'ambiguous')
+  check('🔴 🔴 **원래 초안 본문이 다르다 → draftMismatch**', run(row({ draftBody: '다른 본문' })).klass === 'draftMismatch')
+  check('🔴 원래 초안 제목이 다르다 → draftMismatch', run(row({ draftTitle: '다른 제목' })).klass === 'draftMismatch')
+  check('🔴 🔴 **Persona 말투 출처가 다르다 → provenanceMismatch**',
+    run(row({}, { voice: { personaCode: 'P09', bundleDigest: 'bd', sourceDigest: 'sd' } })).klass === 'provenanceMismatch')
+  check('🔴 🔴 **sourceSite 가 다르다 → provenanceMismatch**',
+    run(row({ rawSourceSite: `${MACHINE_SITE_PREFIX}navercafe:y` })).klass === 'provenanceMismatch')
+  check('🔴 🔴 **원천 글 번호가 다르다 → provenanceMismatch**',
+    run(row({ rawSourceArticleId: 'A999-deadbeef' })).klass === 'provenanceMismatch')
+  check('🔴 생성 계약(pipeline)이 다르다 → provenanceMismatch',
+    run(row({}, { pipelineVersion: 'content-core-v2.0' })).klass === 'provenanceMismatch')
+  check('🔴 plan 과 voice 의 Persona 가 다르다 → provenanceMismatch',
+    run(row(), [artifact({ planPersonaCode: 'P01' })]).klass === 'provenanceMismatch')
+  check('🔴 🔴 **artifact 의 의미 검수가 불완전 → warning**',
+    run(row(), [artifact({ review: { deterministic: { pass: true }, semanticCompletion: { complete: false }, semantic: { confidence: 0.9 } } })]).klass === 'warning')
+  check('🔴 원문에 차단 표현이 있다 → warning', run(row({ draftBody: '오늘도 산책했어요', draftTitle: draft.title }), [artifact({ draft: { title: draft.title, body: '오늘도 산책했어요' } })]).klass === 'warning')
+}
+
+console.log('\n③ 🔴 표본 — unmeasured 를 0 으로 읽지 않는다 · 계약을 낮추지 않는다')
+{
+  const r = (o: Partial<DecidedRow> = {}) => ({ decidedBy: HUMAN_DECIDER, editDiff: null, declineReason: null, ...o })
+  const s0 = cohortSampleOf([r(), r({ editDiff: { bodyChanged: true } })])
+  check('🔴 🔴 **수정 행에 hardDefect 표식이 없으면 unmeasured → null**', s0.hardDefects === null && s0.hardDefectUnmeasured === 1)
+  check('🔴 표식이 있으면 센다', cohortSampleOf([r({ editDiff: { bodyChanged: true, hardDefect: 'no' } })]).hardDefects === 0)
+  check('🔴 hardDefect 는 yes|no 만 값이다 — "false"·true 는 unmeasured',
+    hardDefectOf({ hardDefect: 'false' }) === 'unmeasured' && hardDefectOf({ hardDefect: true }) === 'unmeasured')
+  const n = (k: number, noEdit: number) => [
+    ...Array.from({ length: noEdit }, () => r()),
+    ...Array.from({ length: k - noEdit }, () => r({ editDiff: { bodyChanged: true, hardDefect: 'no' } })),
+  ]
+  check('🔴 🔴 **30건 · 무수정 27(90.0%) · 결함 0 → 계약 충족**', cohortSampleOf(n(30, 27)).meetsContract)
+  check('🔴 🔴 **29건이면 무수정률이 높아도 미달 (30 을 낮추지 않았다)**', !cohortSampleOf(n(29, 29)).meetsContract)
+  check('🔴 🔴 **30건 · 무수정 26(86.7%) → 미달 (90% 를 낮추지 않았다)**', !cohortSampleOf(n(30, 26)).meetsContract)
+  check('🔴 결함 yes 하나면 미달', !cohortSampleOf([...n(30, 29).slice(0, 29), r({ editDiff: { bodyChanged: true, hardDefect: 'yes' } })]).meetsContract)
+  check('🔴 사람(founder) 결정만 센다 — 기계·자동 결정은 표본이 아니다',
+    cohortSampleOf([r({ decidedBy: 'machine:auto-draft-v5' }), r({ decidedBy: AUTO_DECIDER })]).eligible === 0)
+  check('🔴 계약 값은 정본 그대로다', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9
+    && CONTRACT.hardDefectMax === 0 && CONTRACT.sampledAuditRatio === 0.2)
+  check('🔴 자동 도장만 담긴 editDiff 는 사람 수정이 아니다',
+    !isHumanEditRecord({ [AUTO_READY_RECORD_KEY]: {} }) && outcomeOf({ editDiff: { autoReady: {} }, declineReason: null }) === 'noEdit')
+}
+
+console.log('\n④ 🔴 도장 — 본문·제목·계약 판 hash')
+{
+  const st = makeStamp('제목', '본문', new Date('2026-09-25T00:00:00Z'))
+  check('도장은 자동 표식이다 — founder 가 아니다', st.decidedBy === AUTO_DECIDER && (AUTO_DECIDER as string) !== HUMAN_DECIDER)
+  check('기준선 — 같은 글이면 유효', stampValidFor(st, '제목', '본문').ok)
+  check('🔴 🔴 **도장 뒤 본문이 한 글자 바뀌면 무효**', !stampValidFor(st, '제목', '본문.').ok)
+  check('🔴 🔴 **도장 뒤 제목이 바뀌면 무효**', !stampValidFor(st, '제목!', '본문').ok)
+  check('🔴 🔴 **판정 계약이 바뀌면 옛 도장은 무효**', !stampValidFor({ ...st, contractDigest: 'old' }, '제목', '본문').ok)
+  check('🔴 도장 기록 왕복', JSON.stringify(readStamp({ [AUTO_READY_RECORD_KEY]: st })) === JSON.stringify(st))
+  check('🔴 모양이 깨진 도장은 없는 것과 같다',
+    readStamp({ [AUTO_READY_RECORD_KEY]: { ...st, bodyHash: '' } }) === null
+    && readStamp({ [AUTO_READY_RECORD_KEY]: { ...st, decidedBy: HUMAN_DECIDER } }) === null
+    && readStamp(null) === null && readStamp({}) === null)
+  check('🔴 계약 판 digest 가 비어 있지 않다', JUDGE_CONTRACT_DIGEST.length === 32)
+}
+
+console.log('\n⑤ 🔴 selector — 기본 닫힘 · 도장이 지금 글과 같을 때만')
+{
+  const mk = (o: Partial<AutoRow> = {}): AutoRow => ({
+    id: 'm1', status: 'APPROVED', createdPostId: null, gateVerdict: 'PASS',
+    promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL, matchedPersonaId: null,
+    title: '제목', body: '본문', sourceSite: `${MACHINE_SITE_PREFIX}navercafe:x`,
+    gateResults: gateWith(GOOD_SR), decidedBy: AUTO_DECIDER, decidedAt: new Date(), createdAt: new Date(),
+    editDiff: { [AUTO_READY_RECORD_KEY]: makeStamp('제목', '본문', new Date()) },
+    ...o,
+  } as AutoRow)
+  const pass0 = () => 'pass'
+  const codeOf = (r: AutoRow, open?: boolean) => {
+    const x = selectAutoTargets([r], pass0, open === undefined ? {} : { autoReadyOpen: open })
+    return x.targets.length === 1 ? 'TARGET' : x.rejected[0]?.code
+  }
+  check('🔴 🔴 **기본(옵션 없음)은 닫힘 → AUTO_READY_CLOSED**', codeOf(mk()) === 'AUTO_READY_CLOSED', String(codeOf(mk())))
+  check('🔴 명시적으로 닫힘 → AUTO_READY_CLOSED', codeOf(mk(), false) === 'AUTO_READY_CLOSED')
+  check('🔴 🔴 **열림 + 유효한 도장 → 대상**', codeOf(mk(), true) === 'TARGET', String(codeOf(mk(), true)))
+  check('🔴 🔴 **열림이어도 도장 뒤 본문이 바뀌었으면 → AUTO_READY_STALE**', codeOf(mk({ body: '바뀐 본문' }), true) === 'AUTO_READY_STALE')
+  check('🔴 열림이어도 도장이 없으면 → AUTO_READY_STALE', codeOf(mk({ editDiff: null }), true) === 'AUTO_READY_STALE')
+  check('🔴 🔴 **기계 도장(machine:*)은 열려 있어도 사람 검토가 필요하다**',
+    codeOf(mk({ decidedBy: 'machine:auto-draft-v5' }), true) === 'HUMAN_REVIEW_REQUIRED')
+  check('🔴 사람(founder) 결정 행 동작은 그대로다 — 옵션과 무관하게 대상',
+    codeOf(mk({ decidedBy: HUMAN_DECIDER, editDiff: null })) === 'TARGET')
+}
+
+console.log('\n⑥ 🔴 열림 · 스위치 · 감사')
+{
+  const ev = { meetsContract: true, reasons: [] as string[] }
+  check('🔴 🔴 **스위치 기본 OFF**', !autoReadyEnabled({}) && !autoReadyEnabled({ [AUTO_READY_ENV]: '' })
+    && !autoReadyEnabled({ [AUTO_READY_ENV]: 'true' }) && !autoReadyEnabled({ [AUTO_READY_ENV]: '1' })
+    && autoReadyEnabled({ [AUTO_READY_ENV]: 'on' }))
+  check('기준선 — 셋 다 참이면 열림', judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0 }).open)
+  check('🔴 스위치가 꺼져 있으면 닫힘', !judgeOpen({ enabled: false, evidence: ev, confirmedDefects: 0 }).open)
+  check('🔴 🔴 **증거 미달이면 닫힘**', !judgeOpen({ enabled: true, evidence: { meetsContract: false, reasons: ['8/30'] }, confirmedDefects: 0 }).open)
+  check('🔴 🔴 **확정 결함 하나면 닫힘 — 다음 회차를 멈춘다**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 1 }).open)
+  check('🔴 결함 수를 못 읽으면(음수·NaN) 닫힘',
+    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: Number.NaN }).open
+    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: -1 }).open)
+  check('🔴 🔴 **감사 대기는 열림 판정의 입력이 아니다 — 매 회차 사람 허가가 아니다**',
+    !/pending|대기/.test(codeOnly('src/lib/auto-ready-v2.ts').split('export function judgeOpen')[1]?.split('export function auditTarget')[0] ?? 'x'))
+  let exact = true
+  for (let n = 0; n <= 2000; n += 1) if (auditTarget(n) !== (n === 0 ? 0 : Math.floor((n + 4) / 5))) { exact = false; break }
+  check('🔴 🔴 **감사 수 = 정확히 ceil(N×0.2) (N 0~2000 전수)**', exact)
+  check('🔴 비율이 바뀌어도 정수로 맞다 — 100×0.55 → 55 (부동소수 곱은 56)',
+    auditTarget(100, 0.55) === 55 && Math.ceil(100 * 0.55) === 56)
+  const ids = Array.from({ length: 23 }, (_, i) => `q${i}`)
+  const p1 = pickAudits({ autoPublished: ids, alreadySelected: new Set() })
+  check('🔴 🔴 **23건이면 정확히 5건을 고른다**', p1.target === 5 && p1.pick.length === 5 && new Set(p1.pick).size === 5)
+  const p2 = pickAudits({ autoPublished: [...ids, 'q23', 'q24', 'q25'], alreadySelected: new Set(p1.pick) })
+  check('🔴 🔴 **이미 고른 것은 다시 고르지 않고 모자란 만큼만 더 고른다**',
+    p2.target === 6 && p2.pick.length === 1 && !p1.pick.includes(p2.pick[0]!))
+  check('🔴 다시 돌려도 같은 답이다', JSON.stringify(pickAudits({ autoPublished: ids, alreadySelected: new Set() }).pick) === JSON.stringify(p1.pick))
+  check('🔴 🔴 **결함 판정은 끈적하다 — yes 는 no 로 덮이지 않는다**',
+    mergeDefect('yes', 'no') === 'yes' && mergeDefect('no', 'yes') === 'yes' && mergeDefect(null, 'no') === 'no')
+}
+
+console.log('\n⑦ 🔴 founder 기록 0 · 쓰기 경로 모양')
+{
+  const repo = codeOnly('src/lib/auto-ready-repo.ts')
+  /** 🔴 쓰기(`data:`) 블록 안의 decidedBy 만 본다 — 조회 조건(`where:`)은 쓰기가 아니다 */
+  const writes = [...repo.matchAll(/data: \{\s*decidedBy: ([A-Za-z_.']+),/g)].map((m) => m[1])
+  /** 모든 `data: { ... }` 쓰기 블록 — 여기에 founder 가 나오면 안 된다 */
+  const dataBlocks = [...repo.matchAll(/data: \{[^}]*\}/g)].map((m) => m[0])
+  check('🔴 🔴 **저장 경로가 decidedBy 에 쓰는 값은 AUTO_DECIDER 하나뿐이다**',
+    writes.length === 1 && writes[0] === 'AUTO_DECIDER'
+    && dataBlocks.length >= 2
+    && dataBlocks.every((b) => !/HUMAN_DECIDER|'founder'/.test(b)),
+    `쓰기 ${JSON.stringify(writes)} · data 블록 ${dataBlocks.length}개`)
+  check('🔴 🔴 **감사자는 founder 일 수 없다**', /auditor === HUMAN_DECIDER/.test(repo)
+    && /AutoReadyAudit_auditor_not_founder/.test(readFileSync('prisma/migrations/0029_auto_ready_audit/migration.sql', 'utf-8')))
+  check('🔴 🔴 **도장은 조건부 쓰기(CAS) + Serializable 이다**',
+    /updatedAt: row\.updatedAt/.test(repo) && /decidedBy: row\.decidedBy/.test(repo)
+    && /isolationLevel: 'Serializable'/.test(repo))
+  check('🔴 🔴 **도장은 기계 도장 행만 — 사람·자동 결정 행을 건드리지 않는다**',
+    /if \(!d\.startsWith\('machine:'\)\) return \{ kind: 'skip'/.test(repo))
+  check('🔴 🔴 **yes 를 no 로 덮지 못하게 조건부로 쓴다**',
+    /OR: \[\{ defect: null \}, \{ defect: 'no' \}\]/.test(repo))
+  check('🔴 🔴 **스위치가 꺼져 있으면 감사 표를 읽지 않는다**',
+    /if \(!enabled\) return judgeOpen\(/.test(repo)
+    && /if \(!i\.enabled\) return \{ ok: false, reason: '자동 READY 스위치가 꺼져 있다' \}/.test(repo))
+  const tx = codeOnly('src/lib/original-post-publish-tx.ts')
+  check('🔴 🔴 **발행 트랜잭션이 실제로 발행할 본문으로 재검증한다**',
+    /recheckAutoReadyInTx\(tx, \{/.test(tx) && /title: row\.editedTitle \?\? row\.draftTitle/.test(tx)
+    && /body: row\.editedBody \?\? row\.draftBody/.test(tx))
+  check('🔴 발행 조건부 쓰기가 결정자도 대조한다', /createdPostId: null, decidedBy: row\.decidedBy \}/.test(tx))
+  const runner = codeOnly('scripts/original-post-auto-publish.mts')
+  check('🔴 🔴 **러너 스위치 기본 OFF — env 에서만 켠다**',
+    /const AUTO_READY_ON = autoReadyEnabled\(process\.env\)/.test(runner)
+    && /autoReadyEnabled: AUTO_READY_ON/.test(runner))
+  check('🔴 도장은 --apply 이고 열렸을 때만', /if \(APPLY && autoOpen\.open\) \{/.test(runner))
+  check('🔴 🔴 **감사 기록은 로컬 파일이 아니라 DB 다**',
+    !/writeFileSync|appendFileSync/.test(repo) && /tx\.autoReadyAudit\.create\(/.test(repo))
+  check('🔴 새 대기 기간·pending 상수를 만들지 않았다',
+    !/PENDING|WAIT_DAYS|GRACE|COOLDOWN/i.test(repo + codeOnly('src/lib/auto-ready-v2.ts')))
+}
+
+console.log('\n⑧ 🔴 D10 보고 문구 — 병목을 한 줄로 뭉개지 않는다')
+{
+  // 🔴 출력 문장은 코드 줄에서 본다 — 주석 속 "앞판은 이렇게 적었다" 인용은 출력이 아니다
+  const probe = codeOnly('scripts/auto-ready-v2-probe.mts')
+  check('🔴 🔴 **"글 부족 1차 · 배정 손실 2차 · 미래 Persona 적합성 미측정" 으로 나눈다**',
+    /글 부족이 1차/.test(probe) && /배정 손실이 2차/.test(probe) && /Persona 적합성은 미측정/.test(probe)
+    && !/Persona 병목 없음/.test(probe))
+}
+
+console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
+console.log('🔴 순수 검사다 — 실행 경로(도장→selector→트랜잭션→감사→중지)는 auto-ready:db-check 가 본다\n')
+if (fail > 0) process.exit(1)

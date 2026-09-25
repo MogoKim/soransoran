@@ -54,6 +54,8 @@ import { prepareCandidates, describePrepared, type QueueCandidate } from '../src
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
+import { autoReadyEnabled } from '../src/lib/auto-ready-v2'
+import { autoReadyOpenState, stampRound, selectAudits } from '../src/lib/auto-ready-repo'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -107,7 +109,22 @@ console.log('  🔴 실제 상한은 아래 ③-c 에서 설치한다 — 설치
  *    두 번 만들면 같은 회차 안에서 서로 다른 순간을 본다.
  */
 const RUN_AT = new Date()
-const stock = await loadPublishableStock(prisma, RUN_AT)
+/**
+ * 🔴 **자동 READY v2** (2026-09-25). 스위치 **기본 OFF** — 꺼져 있으면 감사 표를 읽지 않고
+ *    도장도 찍지 않는다. 그래서 지금 운영 동작은 이 줄이 없던 때와 같다.
+ *    켜져 있어도 증거 표본이 계약을 채우고 확정 결함이 0 일 때만 열린다.
+ */
+const AUTO_READY_ON = autoReadyEnabled(process.env)
+const autoOpen = await autoReadyOpenState(prisma, AUTO_READY_ON)
+if (AUTO_READY_ON) {
+  console.log(`\n⓪ 자동 READY ${autoOpen.open ? '🟢 열림' : '🔴 닫힘'}${autoOpen.reasons.length > 0 ? ` — ${autoOpen.reasons.join(' · ')}` : ''}`)
+}
+if (APPLY && autoOpen.open) {
+  // 🔴 기계 도장 행만 — 한 행씩 조건부로 찍는다. 사람 결정 행은 건드리지 않는다
+  const tally = await stampRound(prisma, { open: autoOpen, now: RUN_AT })
+  console.log(`   도장 ${[...tally].map(([k, v]) => `${k} ${v}`).join(' · ') || '대상 없음'}`)
+}
+const stock = await loadPublishableStock(prisma, RUN_AT, { autoReadyOpen: autoOpen.open })
 const targets = stock.targets
 const rejected = stock.rejected
 const codeOfPersonaId = stock.codeOfPersonaId
@@ -410,7 +427,11 @@ if (target.matchedPersonaId === null) {
 
 // ── ⑦ 발행 — 🔴 되돌릴 수 없다 ──
 // 🔴 상한을 주입한다 — 트랜잭션 안 재판정도 같은 값을 쓴다
-const res = await publishOriginalPostTx(prisma, { queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP })
+const res = await publishOriginalPostTx(prisma, {
+  queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP,
+  // 🔴 자동 도장 행은 트랜잭션 안에서 이 스위치와 도장·경고·결함을 다시 본다
+  autoReadyEnabled: AUTO_READY_ON,
+})
 if (res.kind !== 'published') {
   await prisma.$disconnect()
   fail(res.kind === 'blocked' ? `발행이 막혔습니다 — ${res.code} · ${res.detail}` : `발행 오류 — ${res.message}`)
@@ -442,6 +463,18 @@ console.log(`\n⑥ 정합 ${v.ok ? '✅ 통과' : '🔴 이상'}`)
 for (const p of v.problems) console.log(`   🔴 ${p}`)
 console.log(`   Queue ${after.status} · createdPostId ${after.createdPostId} · ActivityLog ${logCount}건`)
 console.log('\n   🔴 되돌리려면 내리는 것(status=HIDDEN)이지 없던 일이 되지 않습니다.\n')
+
+/**
+ * ── ⑨ 🔴 **사후 감사 선정 — DB 에 남긴다** ──
+ *    자동 도장으로 나간 글이 늘었으면 ceil(N×0.2) 까지 모자란 만큼 고른다.
+ *    판정 **대기**는 다음 회차를 막지 않는다 — 확정 결함(yes)만 막는다.
+ */
+if (AUTO_READY_ON) {
+  const au = await selectAudits(prisma)
+  console.log(au.kind === 'ok'
+    ? `⑨ 감사 선정 — 자동 발행 ${au.n}건 · 목표 ${au.target} · 이번에 고른 ${au.picked.length}건`
+    : `⑨ 감사 선정 — ${au.reason}`)
+}
 
 await prisma.$disconnect()
 process.exit(v.ok ? 0 : 1)

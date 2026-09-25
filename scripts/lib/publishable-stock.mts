@@ -110,6 +110,8 @@ const kstDayStart = (now: Date): Date => {
  */
 export async function loadPublishableStock(
   prisma: PrismaClient, now: Date,
+  /** 🔴 자동 READY 가 열려 있는가 — 부르는 쪽이 판정해 넘긴다. **기본 닫힘** */
+  opts: { autoReadyOpen?: boolean } = {},
 ): Promise<LoadedStock> {
   const raw = await prisma.originalPostApprovalQueue.findMany({
     where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
@@ -117,7 +119,7 @@ export async function loadPublishableStock(
       id: true, status: true, createdPostId: true, gateVerdict: true,
       promptVersion: true, model: true, matchedPersonaId: true,
       draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true,
+      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true, editDiff: true,
       rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
     orderBy: { createdAt: 'asc' },
@@ -130,12 +132,13 @@ export async function loadPublishableStock(
     body: r.editedBody ?? r.draftBody,
     sourceSite: r.rawContent.sourceSite,
     draftTitle: r.draftTitle, editedTitle: r.editedTitle,
-    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt,
+    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt, editDiff: r.editDiff,
   }))
 
   // 🔴 안전 재판정 — 저장된 값을 믿지 않는다. 러너와 **같은 함수**다
   const { targets, rejected } = selectAutoTargets(
     rows, (t, b) => safetyFilter({ title: t, body: b }).verdict,
+    { autoReadyOpen: opts.autoReadyOpen === true },
   )
   const byCode = new Map<string, string[]>()
   for (const r of rejected) byCode.set(r.code, [...(byCode.get(r.code) ?? []), r.id])

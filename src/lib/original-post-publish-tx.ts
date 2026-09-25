@@ -30,6 +30,8 @@
  *
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
+import { AUTO_DECIDER } from './auto-ready-v2'
+import { recheckAutoReadyInTx } from './auto-ready-repo'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
@@ -84,6 +86,12 @@ export type PublishTxInput = {
    *    주지 않으면 `judgePublish` 가 가장 안전한 상수(1건)로 떨어뜨린다.
    */
   dailyCap: number
+  /**
+   * 🔴 **자동 READY 스위치** (2026-09-25 · auto-ready-v2). 부르는 쪽이 env 에서 읽어 넘긴다.
+   *    기본 `false` — 자동 도장 행은 이 값이 참일 때만, 그리고 트랜잭션 안의 재검증을
+   *    통과할 때만 나간다. 사람 결정 행에는 아무 영향이 없다.
+   */
+  autoReadyEnabled?: boolean
 }
 
 /**
@@ -101,6 +109,9 @@ export async function publishOriginalPostTx(
         select: {
           id: true, status: true, createdPostId: true, gateVerdict: true,
           draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+          // 🔴 자동 도장 재검증용 — 누가 결정했고 무엇을 보고 찍었나
+          decidedBy: true, editDiff: true, gateResults: true,
+          rawContent: { select: { sourceCapturedAt: true } },
           matchedPersona: {
             select: {
               id: true, code: true, status: true, userId: true,
@@ -158,6 +169,24 @@ export async function publishOriginalPostTx(
 
       const persona = row.matchedPersona!
 
+      /**
+       * ── ⓪ 🔴 **자동 도장 행은 여기서 다시 본다** (2026-09-25) ──
+       *    밖에서 고른 순간과 지금 사이에 본문이 바뀌었거나, 감사가 결함을 확정했거나,
+       *    스위치가 꺼졌을 수 있다. **실제로 발행할 제목·본문**으로 도장을 다시 대조한다.
+       */
+      if ((row.decidedBy ?? '').trim() === AUTO_DECIDER) {
+        const recheck = await recheckAutoReadyInTx(tx, {
+          enabled: input.autoReadyEnabled === true,
+          title: row.editedTitle ?? row.draftTitle,
+          body: row.editedBody ?? row.draftBody,
+          editDiff: row.editDiff, gateVerdict: row.gateVerdict, gateResults: row.gateResults,
+          sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
+        })
+        if (!recheck.ok) {
+          return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason, publishedTodayInTx }
+        }
+      }
+
       // ── ① Post ──
       // 🔴 수정본이 있으면 그것이 발행될 글이다
       const data = buildOriginalPostData({
@@ -176,7 +205,8 @@ export async function publishOriginalPostTx(
       // ── ② Queue ──
       // 🔴 조건부 UPDATE. 읽은 뒤 쓰는 사이에 누가 먼저 발행했으면 0건이 되어 롤백한다
       const updated = await tx.originalPostApprovalQueue.updateMany({
-        where: { id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
+        // 🔴 결정자도 읽은 그대로여야 한다 — 그 사이 도장이 바뀌었으면 0건이 되어 롤백한다
+        where: { id: row.id, status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null, decidedBy: row.decidedBy },
         data: { status: 'PUBLISHED', createdPostId: post.id },
       })
       if (updated.count === 0) throw new Error(QUEUE_RACE)

@@ -173,7 +173,10 @@
     "persona:birth-anchors": "tsx scripts/persona-birth-anchor-table.mts",
     "stage:db-check": "tsx scripts/stage-decision-db-check.mts",
     "check:m3a": "node scripts/magazine-m3a-check.mjs",
-    "auto-ready:probe": "tsx scripts/auto-ready-v2-probe.mts"
+    "auto-ready:probe": "tsx scripts/auto-ready-v2-probe.mts",
+    "auto-ready:check": "tsx scripts/auto-ready-check.mts",
+    "auto-ready:db-check": "tsx scripts/auto-ready-db-check.mts",
+    "auto-ready:evidence-scan": "tsx scripts/auto-ready-evidence-scan.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
