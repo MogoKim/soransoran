@@ -418,7 +418,7 @@ console.log(`\n⑤ 🔴 실행 — ${target.id}`)
  *    사람 결정 행은 기존 동작 그대로다.
  */
 const isAutoTarget = (target.decidedBy ?? '').trim() === AUTO_DECIDER
-let autoAssign: { personaId: string; matchedAt: Date; matchMeta: unknown; caps: typeof RELEASE_CAPS } | undefined
+let autoAssign: { personaId: string; matchMeta: unknown } | undefined
 if (target.matchedPersonaId === null && isAutoTarget) {
   const a = assignOf.get(target.id)
   const plan = planStore({
@@ -428,8 +428,9 @@ if (target.matchedPersonaId === null && isAutoTarget) {
   })
   if (!plan.ok) { await prisma.$disconnect(); fail(`배정할 수 없습니다 — ${plan.reason}`) }
   const persona = await prisma.persona.findUniqueOrThrow({ where: { code: plan.personaCode }, select: { id: true } })
-  // 🔴 personaId 는 "누구를 검토할지" 일 뿐이다 — 발행 트랜잭션이 같은 상한으로 다시 판정한다
-  autoAssign = { personaId: persona.id, matchedAt: RUN_AT, matchMeta: plan.meta, caps: RELEASE_CAPS }
+  // 🔴 personaId 는 "누구를 검토할지" 일 뿐이다 — 발행 트랜잭션이 정본 단계 상한으로 다시 판정한다.
+  //    배정 시각은 트랜잭션의 시계가 정한다(여기서 넘기지 않는다)
+  autoAssign = { personaId: persona.id, matchMeta: plan.meta }
   console.log(`   ⏳ 배정 계획 ${plan.personaCode} — 발행 트랜잭션 안에서 쓴다`)
 } else if (target.matchedPersonaId === null) {
   const a = assignOf.get(target.id)
@@ -457,6 +458,8 @@ const res = await publishOriginalPostTx(prisma, {
   autoReadyEnv: process.env,
   // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)
   autoAssign,
+  // 🔴 숫자 상한이 아니라 **단계**를 넘긴다 — 트랜잭션이 env 천장으로 누르고 정본 상한을 얻는다
+  releaseStage: scale.releaseStage,
 })
 if (res.kind !== 'published') {
   await prisma.$disconnect()
@@ -495,12 +498,24 @@ console.log('\n   🔴 되돌리려면 내리는 것(status=HIDDEN)이지 없던
  *    자동 도장으로 나간 글이 늘었으면 ceil(N×0.2) 까지 모자란 만큼 고른다.
  *    판정 **대기**는 다음 회차를 막지 않는다 — 확정 결함(yes)만 막는다.
  */
+let auditIntegrityOk = true
 if (AUTO_READY_ON) {
   const au = await selectAudits(prisma)
   console.log(au.kind === 'ok'
     ? `⑨ 감사 선정 — 자동 발행 ${au.n}건 · 목표 ${au.target} · 이번에 고른 ${au.picked.length}건`
     : `⑨ 감사 선정 — ${au.reason}`)
+  /**
+   * 🔴 **글이 사라진 자동 발행 행을 로그로만 흘리지 않는다** (2026-09-25 마스터 지적).
+   *    열림 판정(`missingAutoPostCount`)이 같은 DB 상태를 다시 세서 다음 도장·발행을 닫는다.
+   *    이 회차도 실패로 끝낸다 — 성공 종료로 보이면 아무도 보지 않는다.
+   */
+  if (au.kind === 'ok' && au.missingPost.length > 0) {
+    auditIntegrityOk = false
+    console.log(`   🔴 무결성 — 글이 사라진 자동 발행 ${au.missingPost.length}건: ${au.missingPost.join(', ')}`)
+    const g = await authoritativeGate(prisma, process.env)
+    console.log(`   🔴 열림 판정 ${g.open ? '열림 — 🔴 닫혀야 한다' : '닫힘'} · ${g.reasons.join(' · ')}`)
+  }
 }
 
 await prisma.$disconnect()
-process.exit(v.ok ? 0 : 1)
+process.exit(v.ok && auditIntegrityOk ? 0 : 1)

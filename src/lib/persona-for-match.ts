@@ -22,16 +22,23 @@ export const PERSONA_FOR_MATCH_SELECT = {
 
 export type PersonaRowForMatch = Prisma.PersonaGetPayload<{ select: typeof PERSONA_FOR_MATCH_SELECT }>
 
+/**
+ * 🔴 `excludeQueueId` — 이미 이 Persona 에 배정된 큐 행을 **자기 자신**으로 다시 판정할 때 쓴다
+ *    (2026-09-25 마스터 지적). 자기 배정을 주간 사용량·최소 간격에 넣으면 정상 행이
+ *    자기 `matchedAt` 때문에 WEEKLY_CAP·TOO_SOON 으로 막힌다 — 이중 계산이다.
+ */
 export async function personaForMatchOf(
   db: PrismaClient | Prisma.TransactionClient, r: PersonaRowForMatch, now: Date,
+  opts: { excludeQueueId?: string } = {},
 ): Promise<PersonaForMatch> {
   const WEEK_AGO = new Date(now.getTime() - 7 * 864e5)
   const id = (r.identity ?? {}) as Record<string, unknown>
+  const notSelf = opts.excludeQueueId === undefined ? {} : { id: { not: opts.excludeQueueId } }
   const postsThisWeek = await db.originalPostApprovalQueue.count({
-    where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO } },
+    where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO }, ...notSelf },
   })
   const last = await db.originalPostApprovalQueue.findFirst({
-    where: { matchedPersona: { code: r.code } },
+    where: { matchedPersona: { code: r.code }, ...notSelf },
     orderBy: { matchedAt: 'desc' }, select: { matchedAt: true },
   })
   const vc = (r.voiceCore ?? {}) as Record<string, unknown>

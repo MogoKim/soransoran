@@ -15,6 +15,7 @@ import {
   AUDIT_CONTRACT_VERSION, verdictShapeOk,
 } from '../src/lib/auto-ready-v2'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
+import { releaseStageCeiling, boundedReleaseStage, resolveScale } from '../src/lib/scale-runtime'
 import {
   restoreRow, cohortSampleOf, hardDefectOf, outcomeOf,
   type ArtifactDoc, type CandidateDoc, type DecidedRow,
@@ -230,13 +231,18 @@ console.log('\n⑥ 🔴 열림 · 스위치 · 감사')
   check('🔴 🔴 **스위치 기본 OFF**', !autoReadyEnabled({}) && !autoReadyEnabled({ [AUTO_READY_ENV]: '' })
     && !autoReadyEnabled({ [AUTO_READY_ENV]: 'true' }) && !autoReadyEnabled({ [AUTO_READY_ENV]: '1' })
     && autoReadyEnabled({ [AUTO_READY_ENV]: 'on' }))
-  check('기준선 — 셋 다 참이면 열림', judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0 }).open)
-  check('🔴 스위치가 꺼져 있으면 닫힘', !judgeOpen({ enabled: false, evidence: ev, confirmedDefects: 0 }).open)
-  check('🔴 🔴 **증거 미달이면 닫힘**', !judgeOpen({ enabled: true, evidence: { meetsContract: false, reasons: ['8/30'] }, confirmedDefects: 0 }).open)
-  check('🔴 🔴 **확정 결함 하나면 닫힘 — 다음 회차를 멈춘다**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 1 }).open)
+  check('기준선 — 넷 다 참이면 열림', judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 스위치가 꺼져 있으면 닫힘', !judgeOpen({ enabled: false, evidence: ev, confirmedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **증거 미달이면 닫힘**', !judgeOpen({ enabled: true, evidence: { meetsContract: false, reasons: ['8/30'] }, confirmedDefects: 0, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **확정 결함 하나면 닫힘 — 다음 회차를 멈춘다**', !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 1, missingAutoPosts: 0 }).open)
   check('🔴 결함 수를 못 읽으면(음수·NaN) 닫힘',
-    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: Number.NaN }).open
-    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: -1 }).open)
+    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: Number.NaN, missingAutoPosts: 0 }).open
+    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: -1, missingAutoPosts: 0 }).open)
+  check('🔴 🔴 **글이 사라진 자동 발행이 하나면 닫힘 — 감사로 뽑히지 않았어도**',
+    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: 1 }).open)
+  check('🔴 글 유실 수를 못 읽으면(음수·NaN) 닫힘',
+    !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: Number.NaN }).open
+    && !judgeOpen({ enabled: true, evidence: ev, confirmedDefects: 0, missingAutoPosts: -1 }).open)
   check('🔴 🔴 **감사 대기는 열림 판정의 입력이 아니다 — 매 회차 사람 허가가 아니다**',
     !/pending|대기/.test(codeOnly('src/lib/auto-ready-v2.ts').split('export function judgeOpen')[1]?.split('export function auditTarget')[0] ?? 'x'))
   let exact = true
@@ -277,7 +283,7 @@ console.log('\n⑦ 🔴 founder 기록 0 · 쓰기 경로 모양')
   check('🔴 🔴 **yes 를 no 로 덮지 못하게 조건부로 쓴다**',
     /OR: \[\{ defect: null \}, \{ defect: 'no' \}\]/.test(repo))
   check('🔴 🔴 **스위치가 꺼져 있으면 감사 표를 읽지 않는다**',
-    /if \(!enabled\) return judgeOpen\(/.test(repo)
+    /if \(!enabled\) \{\s*return judgeOpen\(/.test(repo)
     && /if \(!autoReadyEnabled\(i\.env\)\) return \{ ok: false, reason: '자동 READY 스위치가 꺼져 있다' \}/.test(repo)
     && /if \(!autoReadyEnabled\(i\.env\)\) return \{ kind: 'off' \}/.test(repo))
   const tx = codeOnly('src/lib/original-post-publish-tx.ts')
@@ -330,7 +336,7 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   const body = tx.split('return await prisma.$transaction(async (tx) => {')[1] ?? ''
   const at = (re: RegExp): number => { const m = re.exec(body); return m === null ? -1 : m.index }
   const iRecheck = at(/recheckAutoReadyInTx\(tx,/)
-  const iAssign = at(/matchedPersonaId: persona\.id, matchedAt: input\.autoAssign!\.matchedAt/)
+  const iAssign = at(/matchedPersonaId: persona\.id, matchedAt: txNow,/)
   const iJudge = at(/const verdict = judgePublish\(/)
   const iPost = at(/tx\.post\.create\(/)
   const firstWrite = Math.min(...[at(/\.updateMany\(/), at(/\.create\(/)].filter((x) => x >= 0))
@@ -338,12 +344,14 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   check('🔴 🔴 **배정 쓰기는 발행 판정 뒤 · Post 앞 — 같은 트랜잭션**',
     iJudge >= 0 && iAssign > iJudge && iPost > iAssign, `${iJudge} < ${iAssign} < ${iPost}`)
   check('🔴 배정 쓰기는 자동 행에만 — pendingAssign 이 isAuto 를 요구한다',
-    /const pendingAssign = isAuto && row\.matchedPersona === null && input\.autoAssign !== undefined/.test(tx))
+    /const pendingAssign = isAuto && !pinned && input\.autoAssign !== undefined/.test(tx)
+    && /const pinned = row\.matchedPersona !== null/.test(tx))
   check('🔴 배정이 경쟁에 지면 롤백한다', /if \(assigned\.count !== 1\) throw new Error\(QUEUE_RACE\)/.test(tx))
   const runner = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
     /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
-    && /autoAssign = \{ personaId: persona\.id, matchedAt: RUN_AT, matchMeta: plan\.meta, caps: RELEASE_CAPS \}/.test(runner)
+    && /autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/.test(runner)
+    && /releaseStage: scale\.releaseStage,/.test(runner)
     && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
   check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',
     /where: \{ id: target\.id, status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null, matchedPersonaId: null \}/.test(runner))
@@ -357,8 +365,13 @@ console.log('\n⑪ 🔴 감사 — 묶음 대조 · 옛 판정 거절 · 규칙 
     && /stampContractDigest: readStamp\(row\.editDiff\)\?\.contractDigest/.test(repo))
   check('🔴 🔴 **다른 감사 계약 판의 결과는 받지 않는다**',
     /if \(i\.verdict\.contractVersion !== AUDIT_CONTRACT_VERSION\) return 'staleContract'/.test(repo))
-  check('🔴 🔴 **판정한 글이 묶은 글과 다르면 받지 않는다**', /return 'hashMismatch'/.test(repo))
-  check('🔴 🔴 **고른 뒤 글이 바뀌었으면 받지 않는다**', /return 'postChanged'/.test(repo))
+  check('🔴 🔴 **판정한 글이 묶은 글과 다르면 무결성 yes — 대기(hashMismatch)로 남기지 않는다**',
+    /i\.verdict\.judgedTitleHash !== row\.publishedTitleHash \|\| i\.verdict\.judgedBodyHash !== row\.publishedBodyHash\s*\? '판정자가 발행 글이 아닌 글을 판정했다'/.test(repo)
+    && !/'hashMismatch'/.test(repo))
+  check('🔴 🔴 **고른 뒤 글이 사라지거나 바뀌면 무결성 yes — 대기(postChanged)로 남기지 않는다**',
+    /post === null \? '감사 대상 Post 가 없다'/.test(repo)
+    && /digestOf\(post\.title\) !== row\.publishedTitleHash \|\| digestOf\(post\.content\) !== row\.publishedBodyHash\s*\? '선정 뒤 발행 글의 제목·본문이 바뀌었다'/.test(repo)
+    && !/'postChanged'/.test(repo))
   check('🔴 판정 전 감사를 개수 제한 없이 전부 읽는다',
     /autoReadyAudit\.findMany\(\{ where: \{ defect: null \}, orderBy: \{ selectedAt: 'asc' \} \}\)/.test(repo))
   const sql = readFileSync('prisma/migrations/0029_auto_ready_audit/migration.sql', 'utf-8')
@@ -410,11 +423,11 @@ console.log('\n⑬ 🔴 🔴 발행 트랜잭션이 계획된 Persona 를 다시
   const tx = codeOnly('src/lib/original-post-publish-tx.ts')
   const loader = codeOnly('scripts/lib/publishable-stock.mts')
   const at = (re: RegExp): number => { const m = re.exec(tx); return m === null ? -1 : m.index }
-  const reread = at(/tx\.persona\.findUnique\(\{\s*where: \{ id: input\.autoAssign!\.personaId \}, select: PERSONA_FOR_MATCH_SELECT,?\s*\}\)/)
-  const assemble = at(/personaForMatchOf\(tx, pr, input\.autoAssign!\.matchedAt\)/)
+  const reread = at(/tx\.persona\.findUnique\(\{ where: \{ id: personaId \}, select: PERSONA_FOR_MATCH_SELECT \}\)/)
+  const assemble = at(/personaForMatchOf\(tx, pr, txNow, \{ excludeQueueId: row\.id \}\)/)
   const voice = at(/judgeVoiceMatch\(\{/)
-  const hard = at(/hardFilter\(forMatch, readPostRequirements\(title, body\), title, body, input\.autoAssign!\.caps \?\? \{\}\)/)
-  const staleRet = at(/code: 'AUTO_ASSIGN_STALE', detail: `\$\{pr\.code\}/)
+  const hard = at(/hardFilter\(forMatch, readPostRequirements\(title, body\), title, body, releaseCapsOf\(PROFILES\[stage\]\)\)/)
+  const staleRet = at(/code: 'AUTO_ASSIGN_STALE', detail: `\$\{which\} \$\{pr\.code\}/)
   const assignWrite = at(/const assigned = await tx\.originalPostApprovalQueue\.updateMany/)
   const postCreate = at(/const post = await tx\.post\.create/)
   check('🔴 🔴 **트랜잭션 안에서 Persona 를 다시 읽고 로더와 같은 조립(personaForMatchOf)을 쓴다**', reread > 0 && assemble > reread)
@@ -424,6 +437,18 @@ console.log('\n⑬ 🔴 🔴 발행 트랜잭션이 계획된 Persona 를 다시
   check('🔴 🔴 **말투 불일치와 hardFilter 탈락이 둘 다 탈락 사유가 되고, 사유가 있으면 막는다**',
     /\.\.\.\(voice\.ok \? \[\] : \[`VOICE_MISMATCH/.test(tx) && /\.\.\.blocks\.map\(\(b\) => b\.code\)\]/.test(tx)
     && /if \(reasons\.length > 0\) \{\s*return \{ kind: 'blocked', code: 'AUTO_ASSIGN_STALE'/.test(tx))
+  check('🔴 🔴 **기존 배정 행도 재판정한다 — 자동 행이면 pinned 든 계획이든 같은 블록**',
+    /if \(isAuto && \(pinned \|\| pendingAssign\)\) \{/.test(tx)
+    && /const personaId = pinned \? row\.matchedPersona!\.id : input\.autoAssign!\.personaId/.test(tx))
+  check('🔴 🔴 **자기 배정은 주간 사용량·최소 간격에서 뺀다 — 이중 계산 없음**',
+    /const notSelf = opts\.excludeQueueId === undefined \? \{\} : \{ id: \{ not: opts\.excludeQueueId \} \}/.test(codeOnly('src/lib/persona-for-match.ts'))
+    && (codeOnly('src/lib/persona-for-match.ts').match(/\.\.\.notSelf/g) ?? []).length === 2)
+  check('🔴 🔴 **상한은 숫자가 아니라 단계에서 — env 천장으로 누른 단계의 정본 상한**',
+    /const stage = boundedReleaseStage\(input\.releaseStage, input\.autoReadyEnv \?\? \{\}, txNow\)/.test(tx)
+    && !/caps\?: BatchCaps/.test(tx) && !/autoAssign!\.caps/.test(tx))
+  check('🔴 🔴 **시계는 트랜잭션 하나 — 호출자 matchedAt 을 받지 않는다**',
+    /const txNow = new Date\(\)/.test(tx) && !/autoAssign!\.matchedAt/.test(tx) && !/matchedAt: Date/.test(tx)
+    && /kstDayStart\(txNow\)/.test(tx))
   check('🔴 로더도 같은 조립을 쓴다 — 계획과 쓰기가 갈리지 않는다',
     /select: PERSONA_FOR_MATCH_SELECT/.test(loader) && /personaForMatchOf\(prisma, r, now\)/.test(loader))
   check('🔴 새 규칙·키워드를 만들지 않았다 — persona-for-match 에 정규식·판정 없음',
@@ -439,7 +464,8 @@ console.log('\n⑭ 🔴 🔴 감사 저장 경계는 판정자를 믿지 않는�
   check('🔴 🔴 **저장 경계가 지금 큐 도장의 제목·본문 hash 를 발행 hash 와 대조한다**',
     /cur\.titleHash !== row\.publishedTitleHash \|\| cur\.bodyHash !== row\.publishedBodyHash/.test(rec))
   check('🔴 🔴 **어긋나면 판정자 값이 아니라 무결성 yes 를 기록한다**',
-    /markIntegrityDefect\(tx, i\.queueId, broken, i\.now\)/.test(rec) && rec.indexOf('broken !== null') < rec.indexOf('i.verdict.judgedTitleHash'))
+    /markIntegrityDefect\(tx, i\.queueId, broken, i\.now\)/.test(rec)
+    && rec.indexOf('if (broken !== null)') < rec.indexOf('const data = {'))
   check('🔴 🔴 **어긋남이 있으면 반드시 그 분기로 들어간다**', /if \(broken !== null\) \{\s*await markIntegrityDefect\(tx/.test(rec))
   check('🔴 무결성 기록은 founder 가 아니다', /INTEGRITY_AUDITOR = 'system:integrity'/.test(repo))
 }
@@ -457,8 +483,57 @@ console.log('\n⑮ 🔴 🔴 감사 대상 유실은 대기가 아니라 무결�
     && /post\s+Post\s+@relation\(fields: \[postId\], references: \[id\], onDelete: Restrict\)/.test(schema)
     && /FOREIGN KEY \("queueId"\) REFERENCES "OriginalPostApprovalQueue"\("id"\) ON DELETE RESTRICT/.test(sql)
     && /FOREIGN KEY \("postId"\) REFERENCES "Post"\("id"\) ON DELETE RESTRICT/.test(sql))
+  const runnerSrc = codeOnly('scripts/original-post-auto-publish.mts')
+  check('🔴 🔴 **열림 판정이 글 유실을 직접 센다 — 감사 선정과 무관하게 닫는다**',
+    /const missingAutoPosts = await missingAutoPostCount\(db\)/.test(repo)
+    && /return judgeOpen\(\{ enabled, evidence, confirmedDefects, missingAutoPosts \}\)/.test(repo)
+    && !/createdPost: \{ is: null \}/.test(repo))
+  check('🔴 🔴 **러너는 missingPost 를 로그로만 흘리지 않는다 — 회차를 실패로 끝낸다**',
+    /if \(au\.kind === 'ok' && au\.missingPost\.length > 0\) \{\s*auditIntegrityOk = false/.test(runnerSrc)
+    && /process\.exit\(v\.ok && auditIntegrityOk \? 0 : 1\)/.test(runnerSrc))
+  check('🔴 🔴 **큐 createdPostId → Post FK RESTRICT — 스키마와 0029 둘 다**',
+    /createdPost\s+Post\?\s+@relation\(fields: \[createdPostId\], references: \[id\], onDelete: Restrict\)/.test(schema)
+    && /FOREIGN KEY \("createdPostId"\) REFERENCES "Post"\("id"\) ON DELETE RESTRICT/.test(sql))
   check('🔴 선정은 Post 유실 하나로 전체가 멈추지 않는다 — findUniqueOrThrow 없음 · missingPost 로 보고',
     !/\.findUniqueOrThrow\(/.test(repo) && /missingPost/.test(repo))
+}
+
+console.log('\n⑰ 🔴 🔴 도장 회차는 bounded Serializable batch — 묶음마다 열림 한 번 · 행별 적격·CAS 유지')
+{
+  const repo = codeOnly('src/lib/auto-ready-repo.ts')
+  const round = repo.slice(repo.indexOf('export async function stampRound'), repo.indexOf('/**\n * 🔴 **발행 트랜잭션 안의 재검증.**'))
+  check('🔴 🔴 **묶음 트랜잭션 안에서 열림을 한 번 판정하고 행마다 stampRowInTx**',
+    /const gate = await authoritativeGate\(tx, i\.env\)\s*if \(!gate\.open\) return batch\.map/.test(round)
+    && /for \(const r of batch\) got\.push\(\(await stampRowInTx\(tx, r\.id, i\.now\)\)\.kind\)/.test(round)
+    && /\}, SERIALIZABLE\)/.test(round))
+  check('🔴 🔴 **행별 CAS 는 그대로 — 읽은 decidedBy·updatedAt 일 때만 쓴다**',
+    /id: row\.id, decidedBy: row\.decidedBy, status: 'APPROVED', createdPostId: null,\s*updatedAt: row\.updatedAt,/.test(repo))
+  check('🔴 묶음 충돌은 조용히 잃지 않는다 — race 로 센다', /bump\('race', batch\.length\)/.test(round))
+  check('🔴 묶음 크기는 총량 제한이 아니다 — 모든 행을 순회한다',
+    /for \(let at = 0; at < rows\.length; at \+= STAMP_BATCH_SIZE\)/.test(round))
+  check('🔴 🔴 **증거 지문 재사용 설계를 쓰지 않는다**', !/fingerprint|지문\(/.test(round.replace(/\/\*\*[\s\S]*?\*\//g, '')))
+}
+
+console.log('\n⑱ 🔴 🔴 공개 단계 천장 — 호출자 단계는 env 천장을 넘지 못한다')
+{
+  const T = new Date('2026-09-25T03:00:00Z')
+  const E = (rel?: string, cap?: string): Record<string, string> => ({
+    ...(rel === undefined ? {} : { SORAN_RELEASE_STAGE: rel }), ...(cap === undefined ? {} : { SORAN_CAPACITY_STAGE: cap }),
+  })
+  check('🔴 설정 없음 → d1', releaseStageCeiling({}, T) === 'd1')
+  check('🔴 🔴 **release d10 · capacity d3 → d3 (capacity 가 천장)**', releaseStageCeiling(E('d10', 'd3'), T) === 'd3')
+  check('release d5 · capacity d10 → d5', releaseStageCeiling(E('d5', 'd10'), T) === 'd5')
+  check('🔴 모르는 값 → d1', releaseStageCeiling(E('d999', 'd10'), T) === 'd1')
+  check('🔴 🔴 **기간 허가(오늘 유효)는 release 위로 올리되 capacity 는 못 넘는다**',
+    releaseStageCeiling({ ...E('d1', 'd5'), SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd3'
+    && releaseStageCeiling({ ...E('d1', 'd3'), SORAN_RELEASE_WINDOW_STAGE: 'd5', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-27' }, T) === 'd3')
+  check('🔴 🔴 **호출자 d10 · env 천장 d1 → d1**', boundedReleaseStage('d10', {}, T) === 'd1')
+  check('호출자 d3 · env 천장 d10 → d3 (낮추는 것은 받는다)', boundedReleaseStage('d3', E('d10', 'd10'), T) === 'd3')
+  check('🔴 호출자 값이 없거나 모르면 가장 안전한 d1', boundedReleaseStage(undefined, E('d10', 'd10'), T) === 'd1'
+    && boundedReleaseStage(1e9, E('d10', 'd10'), T) === 'd1')
+  const envs = [E(), E('d10', 'd3'), E('d5', 'd10'), E('d3', 'd3'), E('d10', 'd10'), E('x', 'd5')]
+  check('🔴 🔴 **정본 resolveScale 이 낸 단계는 언제나 천장 이하다**',
+    envs.every((e) => { const r = resolveScale(e, {}).releaseStage; return boundedReleaseStage(r, e, T) === r }))
 }
 
 console.log('\n⑯ 🔴 rule 감사자는 "무결성·안전 감사" 다 — 의미 감사라고 부르지 않는다')

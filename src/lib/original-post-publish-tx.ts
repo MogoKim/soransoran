@@ -31,7 +31,9 @@
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
 import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf } from './persona-for-match'
-import { hardFilter, readPostRequirements, type BatchCaps } from './original-post-persona-match'
+import { hardFilter, readPostRequirements } from './original-post-persona-match'
+import { PROFILES, releaseCapsOf, type ReleaseStage } from './scale-profile'
+import { boundedReleaseStage } from './scale-runtime'
 import { judgeVoiceMatch, voiceOfGateResults } from './original-post-voice-match'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
@@ -108,11 +110,16 @@ export type PublishTxInput = {
      *    다시 읽어 말투·생활사·실회원·주간 사용량·최소 간격을 정본 함수로 다시 판정한다.
      */
     personaId: string
-    matchedAt: Date
     matchMeta: unknown
-    /** 러너가 설치한 발행 상한 — `dailyCap` 과 같은 방식으로 주입한다. 없으면 가장 안전한 기본값 */
-    caps?: BatchCaps
   }
+  /**
+   * 🔴 **자동 행 Persona 재판정에 쓸 공개 단계** (2026-09-25 마스터 지적).
+   *    앞판은 `caps` 숫자를 그대로 받았다 — 호출자가 `{ postsPerWeek: 1e9 }` 를 넘기면 상한이 열렸다.
+   *    이제 단계 이름만 받고, 상한은 정본 `releaseCapsOf(PROFILES[stage])` 에서 얻는다.
+   *    그 단계도 env 천장(`boundedReleaseStage`)으로 누른다. 없거나 모르는 값이면 가장 안전한 단계.
+   *    🔴 `matchedAt` 도 받지 않는다 — 배정 시각은 이 트랜잭션의 시계 하나다.
+   */
+  releaseStage?: ReleaseStage
 }
 
 /**
@@ -125,6 +132,12 @@ export async function publishOriginalPostTx(
 ): Promise<PublishResult> {
   try {
     return await prisma.$transaction(async (tx) => {
+      /**
+       * 🔴 **이 트랜잭션의 시계는 하나다** (2026-09-25 마스터 지적). 배정 시각 · 주간 사용량 ·
+       *    최소 간격 · 오늘 발행 수 · 단계 천장이 모두 이 값을 쓴다. 호출자 시각을 받지 않는다 —
+       *    미래 `matchedAt` 을 넘겨 간격 계산을 틀어지게 하는 길을 없앤다.
+       */
+      const txNow = new Date()
       const row = await tx.originalPostApprovalQueue.findUnique({
         where: { id: input.queueId },
         select: {
@@ -167,29 +180,35 @@ export async function publishOriginalPostTx(
        * 🔴 **자동 행의 배정은 아직 쓰지 않는다.** 배정할 Persona 를 읽어 발행 판정에 쓰고,
        *    판정을 통과한 뒤에만 이 트랜잭션 안에서 쓴다.
        */
-      const pendingAssign = isAuto && row.matchedPersona === null && input.autoAssign !== undefined
+      const pinned = row.matchedPersona !== null
+      const pendingAssign = isAuto && !pinned && input.autoAssign !== undefined
       let personaRow = row.matchedPersona
-      if (pendingAssign) {
+      if (isAuto && (pinned || pendingAssign)) {
         /**
-         * 🔴 **계획한 Persona 를 트랜잭션 안에서 다시 판정한다** (2026-09-25 마스터 지적).
-         *    호출자가 넘긴 id 를 믿으면, 계획 뒤 주간 상한이 찼거나 말투가 다른 사람이거나
-         *    아무 active Persona id 여도 그대로 나간다. 로더와 **같은 조립**(`personaForMatchOf`)과
-         *    **같은 판정**(`judgeVoiceMatch` · `readPostRequirements` · `hardFilter`)을 쓴다.
+         * 🔴 **자동 행의 Persona 를 트랜잭션 안에서 다시 판정한다** (2026-09-25 마스터 지적 ×2).
+         *    · 계획한 Persona — 호출자가 넘긴 id 를 믿으면 상한이 찼거나 말투가 다르거나
+         *      아무 active id 여도 그대로 나간다.
+         *    · **이미 배정된 Persona 도 같다** — 배정 뒤 말투·생활사·상태·Account 가 바뀌었을 수 있다.
+         *      🔴 재배정하지 않는다. 부적격이면 막고, 행은 큐에 그대로 남는다.
+         *    로더와 **같은 조립**(`personaForMatchOf`)과 **같은 판정**(`judgeVoiceMatch` ·
+         *    `readPostRequirements` · `hardFilter`)을 쓴다. 주간 사용량·최소 간격에서는
+         *    **이 행 자신의 배정을 뺀다** — 넣으면 정상 행이 자기 `matchedAt` 으로 막힌다.
          */
-        const pr = await tx.persona.findUnique({
-          where: { id: input.autoAssign!.personaId }, select: PERSONA_FOR_MATCH_SELECT,
-        })
-        if (pr === null) return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: '계획한 Persona 가 없다' }
+        const personaId = pinned ? row.matchedPersona!.id : input.autoAssign!.personaId
+        const pr = await tx.persona.findUnique({ where: { id: personaId }, select: PERSONA_FOR_MATCH_SELECT })
+        const which = pinned ? '기존 배정' : '계획한 배정'
+        if (pr === null) return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${which} Persona 가 없다` }
         const title = row.editedTitle ?? row.draftTitle
         const body = row.editedBody ?? row.draftBody
-        const forMatch = await personaForMatchOf(tx, pr, input.autoAssign!.matchedAt)
+        const forMatch = await personaForMatchOf(tx, pr, txNow, { excludeQueueId: row.id })
         const voice = judgeVoiceMatch({
           voice: voiceOfGateResults(row.gateResults), personaCode: pr.code, profile: 'machine',
         })
-        const blocks = hardFilter(forMatch, readPostRequirements(title, body), title, body, input.autoAssign!.caps ?? {})
+        const stage = boundedReleaseStage(input.releaseStage, input.autoReadyEnv ?? {}, txNow)
+        const blocks = hardFilter(forMatch, readPostRequirements(title, body), title, body, releaseCapsOf(PROFILES[stage]))
         const reasons = [...(voice.ok ? [] : [`VOICE_MISMATCH(${voice.code})`]), ...blocks.map((b) => b.code)]
         if (reasons.length > 0) {
-          return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${pr.code} — ${reasons.join(', ')}` }
+          return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${which} ${pr.code} (${stage}) — ${reasons.join(', ')}` }
         }
         personaRow = { id: pr.id, code: pr.code, status: pr.status, userId: pr.userId, user: pr.user }
       }
@@ -209,7 +228,7 @@ export async function publishOriginalPostTx(
        *    러너·화면·이 트랜잭션이 **같은 표를 같은 경계(KST 자정)로** 세야 한다.
        */
       const publishedTodayInTx = await tx.personaActivityLog.count({
-        where: { kind: 'post', createdAt: { gte: kstDayStart(new Date()) } },
+        where: { kind: 'post', createdAt: { gte: kstDayStart(txNow) } },
       })
 
       // 🔴 트랜잭션 안에서 다시 판정한다. 배정 시점의 판정을 믿지 않는다
@@ -247,7 +266,7 @@ export async function publishOriginalPostTx(
             status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null,
           },
           data: {
-            matchedPersonaId: persona.id, matchedAt: input.autoAssign!.matchedAt,
+            matchedPersonaId: persona.id, matchedAt: txNow,
             matchMeta: input.autoAssign!.matchMeta as Prisma.InputJsonValue,
           },
         })
@@ -288,7 +307,7 @@ export async function publishOriginalPostTx(
           targetId: post.id,
           gateStatus: row.gateVerdict,
           decidedBy: 'operator',
-          publishedAt: new Date(),
+          publishedAt: txNow,
         },
       })
 

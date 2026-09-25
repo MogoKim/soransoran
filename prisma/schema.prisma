@@ -357,6 +357,8 @@ model Post {
   @@index([sourceUrl])
   /// 🔴 자동 READY 감사 역관계 — 칼럼 없음
   autoReadyAudit AutoReadyAudit?
+  /// 🔴 이 글을 낸 오리지널 큐 행 역관계 — 칼럼 없음 (OriginalPostApprovalQueue.createdPostId FK)
+  originalPostQueue OriginalPostApprovalQueue?
 }
 
 // ─────────── 댓글 ───────────
@@ -1683,8 +1685,11 @@ model OriginalPostApprovalQueue {
   decidedBy     String?
   decidedAt     DateTime?
 
-  /// 🔴 발행 연결. 이번 PR 에서는 아무도 채우지 않는다
-  createdPostId String? @unique
+  /// 🔴 발행 연결 — 발행 트랜잭션이 Post 와 함께 쓴다.
+  /// 🔴 FK · Restrict (2026-09-25 · 0029) — 큐 행이 가리키는 글은 지울 수 없다.
+  ///    운영 사전 점검(읽기 전용)에서 가리키는 글이 없는 행 0건을 확인하고 걸었다.
+  createdPostId String?  @unique
+  createdPost   Post?    @relation(fields: [createdPostId], references: [id], onDelete: Restrict)
 
   /// 이 글을 쓸 페르소나.
   ///

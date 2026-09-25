@@ -25,8 +25,8 @@ import {
 import { prepareCandidates } from '../../src/lib/supply-candidates'
 import type { HoldReason } from '../../src/lib/supply-freshness'
 import {
-  effectiveWeeklyCap, PROFILES, RELEASE_STAGES,
-  type ScaleProfile, type ReleaseStage,
+  releaseCapsOf, PROFILES, RELEASE_STAGES,
+  type ReleaseStage,
 } from '../../src/lib/scale-profile'
 // 🔴 `installFromEnv` 를 쓰지 않는다 — 그것은 module-global 을 바꾼다(아래 주석)
 import { resolveScale } from '../../src/lib/scale-runtime'
@@ -198,11 +198,9 @@ export async function loadPublishableStock(
 /**
  * 🔴 **발행 상한도 한 곳에서 만든다.** 러너와 probe 가 각자 계산하면
  *    같은 단계인데 다른 배정이 나온다 — 그것이 이 파일의 목적을 깬다.
+ *    정본은 `src/lib/scale-profile.ts` 다 — 발행 트랜잭션도 같은 함수를 쓴다(2026-09-25).
  */
-export const releaseCapsOf = (p: ScaleProfile): { postsPerWeek: number; minDaysBetween: number } => ({
-  postsPerWeek: effectiveWeeklyCap(p.postsPerWeek, p.minDaysBetween),
-  minDaysBetween: p.minDaysBetween,
-})
+export { releaseCapsOf }
 
 /**
  * 🔴 **publisher 의 실제 계약대로 센다** (2026-09-24 마스터 지적).

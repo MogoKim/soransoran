@@ -42,6 +42,26 @@ export async function confirmedDefectCount(db: Db): Promise<number> {
 }
 
 /**
+ * 🔴 **글이 사라진 자동 발행 행 수** — 하나라도 있으면 자동 회차가 닫힌다 (2026-09-25 마스터 지적).
+ *    `createdPostId` 는 FK(Restrict)라 정상 경로로는 생기지 않는다. 그래도 생겼다면
+ *    감사 선정 여부와 상관없이 시스템 결함이다 — `selectAudits.missingPost` 를 로그로만
+ *    흘려보내지 않고, 열림 판정이 이 값을 **매번 DB 에서** 다시 센다.
+ */
+export async function missingAutoPostCount(db: Db): Promise<number> {
+  /**
+   * 🔴 관계 필터(`createdPost: { is: null }`)를 쓰지 않는다 — Prisma 는 FK 가 이쪽에 있는
+   *    to-one 관계의 null 검사를 `createdPostId IS NULL` 로 바꿔 버려, `createdPostId` 가 있는
+   *    유실 행을 **영원히 0 으로 센다**(격리 DB 실측). id 목록과 실제 Post 수를 직접 대조한다.
+   */
+  const rows = await db.originalPostApprovalQueue.findMany({
+    where: { decidedBy: AUTO_DECIDER, createdPostId: { not: null } }, select: { createdPostId: true },
+  })
+  if (rows.length === 0) return 0
+  const found = await db.post.count({ where: { id: { in: rows.map((r) => r.createdPostId!) } } })
+  return rows.length - found
+}
+
+/**
  * 🔴 **런타임 증거** — DB 에 **저장된** 근거만으로 잰다(fail-closed).
  *    로컬 artifact 로 복원한 근거는 GitHub Actions 러너가 읽을 수 없다. 그것을 여기서
  *    쓰려면 복원 결과를 durable 하게 저장해야 하는데, 그 쓰기는 아직 승인되지 않았다.
@@ -67,16 +87,19 @@ export async function evidenceFromDb(db: Db): Promise<ReturnType<typeof cohortSa
 }
 
 /**
- * 🔴 **권위 있는 열림 판정** — 스위치 · DB 증거 · 확정 결함을 **넘겨받은 db 에서** 직접 읽는다.
+ * 🔴 **권위 있는 열림 판정** — 스위치 · DB 증거 · 확정 결함 · 글 유실을 **넘겨받은 db 에서** 직접 읽는다.
  *    도장·발행 트랜잭션은 자기 `tx` 를 넘겨 같은 스냅샷에서 판정한다.
  *    스위치가 꺼져 있으면 DB 를 읽지 않고 닫힘이다.
  */
 export async function authoritativeGate(db: Db, env: Env): Promise<OpenState> {
   const enabled = autoReadyEnabled(env)
-  if (!enabled) return judgeOpen({ enabled: false, evidence: { meetsContract: false, reasons: [] }, confirmedDefects: 0 })
+  if (!enabled) {
+    return judgeOpen({ enabled: false, evidence: { meetsContract: false, reasons: [] }, confirmedDefects: 0, missingAutoPosts: 0 })
+  }
   const evidence = await evidenceFromDb(db)
   const confirmedDefects = await confirmedDefectCount(db)
-  return judgeOpen({ enabled, evidence, confirmedDefects })
+  const missingAutoPosts = await missingAutoPostCount(db)
+  return judgeOpen({ enabled, evidence, confirmedDefects, missingAutoPosts })
 }
 
 export type StampOutcome =
@@ -100,45 +123,7 @@ export async function stampAutoReady(
     return await prisma.$transaction(async (tx): Promise<StampOutcome> => {
       const gate = await authoritativeGate(tx, i.env)
       if (!gate.open) return { kind: 'closed', reason: gate.reasons.join(' · ') }
-      const row = await tx.originalPostApprovalQueue.findUnique({
-        where: { id: i.queueId },
-        select: {
-          id: true, status: true, createdPostId: true, decidedBy: true, updatedAt: true,
-          draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-          gateVerdict: true, gateResults: true, editDiff: true, promptVersion: true, model: true,
-          rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
-        },
-      })
-      if (row === null) return { kind: 'skip', reason: '행이 없다' }
-      if (row.status !== 'APPROVED' || row.createdPostId !== null) return { kind: 'skip', reason: `상태 ${row.status}` }
-      const d = (row.decidedBy ?? '').trim()
-      // 🔴 사람이 결정한 행 · 이미 자동 도장된 행은 건드리지 않는다
-      if (!d.startsWith('machine:')) return { kind: 'skip', reason: `decidedBy=${d || '(없음)'} — 기계 도장 행이 아니다` }
-      if (profileOf({
-        promptVersion: row.promptVersion, model: row.model, sourceSite: row.rawContent.sourceSite,
-        gateResults: row.gateResults,
-      } as never) !== 'machine') return { kind: 'skip', reason: '기계 profile 이 아니다' }
-      const title = row.editedTitle ?? row.draftTitle
-      const body = row.editedBody ?? row.draftBody
-      const v = eligibilityOf({
-        gateVerdict: row.gateVerdict, gateResults: row.gateResults,
-        title, body, sourceCapturedAt: row.rawContent.sourceCapturedAt,
-      })
-      if (!v.auto) return { kind: 'exception', reasons: v.reasons }
-      const updated = await tx.originalPostApprovalQueue.updateMany({
-        where: {
-          id: row.id, decidedBy: row.decidedBy, status: 'APPROVED', createdPostId: null,
-          updatedAt: row.updatedAt,
-        },
-        data: {
-          // 🔴 자동 표식이다. founder 가 아니다
-          decidedBy: AUTO_DECIDER,
-          decidedAt: i.now,
-          editDiff: { ...rec(row.editDiff), [AUTO_READY_RECORD_KEY]: makeStamp(title, body, i.now) } as Prisma.InputJsonValue,
-        },
-      })
-      if (updated.count !== 1) return { kind: 'race', reason: '읽은 뒤 행이 바뀌었다 — 이 회차는 진다' }
-      return { kind: 'stamped' }
+      return stampRowInTx(tx, i.queueId, i.now)
     }, SERIALIZABLE)
   } catch (e) {
     if (isConflict(e)) return { kind: 'race', reason: '직렬화 충돌 — 다른 회차가 먼저 썼다' }
@@ -147,16 +132,71 @@ export async function stampAutoReady(
 }
 
 /**
- * 🔴 도장 회차 — 기계 도장 행 전부를 한 행씩. 러너는 이 함수 하나만 부른다
+ * 🔴 **한 행 도장 — 열림 판정은 부르는 쪽이 같은 트랜잭션에서 이미 했다.**
+ *    행별 적격 판정(지금 내보낼 제목·본문)과 CAS(읽은 `decidedBy`·`updatedAt`)는 행마다 한다.
+ */
+async function stampRowInTx(tx: Tx, queueId: string, now: Date): Promise<StampOutcome> {
+  const row = await tx.originalPostApprovalQueue.findUnique({
+    where: { id: queueId },
+    select: {
+      id: true, status: true, createdPostId: true, decidedBy: true, updatedAt: true,
+      draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+      gateVerdict: true, gateResults: true, editDiff: true, promptVersion: true, model: true,
+      rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
+    },
+  })
+  if (row === null) return { kind: 'skip', reason: '행이 없다' }
+  if (row.status !== 'APPROVED' || row.createdPostId !== null) return { kind: 'skip', reason: `상태 ${row.status}` }
+  const d = (row.decidedBy ?? '').trim()
+  // 🔴 사람이 결정한 행 · 이미 자동 도장된 행은 건드리지 않는다
+  if (!d.startsWith('machine:')) return { kind: 'skip', reason: `decidedBy=${d || '(없음)'} — 기계 도장 행이 아니다` }
+  if (profileOf({
+    promptVersion: row.promptVersion, model: row.model, sourceSite: row.rawContent.sourceSite,
+    gateResults: row.gateResults,
+  } as never) !== 'machine') return { kind: 'skip', reason: '기계 profile 이 아니다' }
+  const title = row.editedTitle ?? row.draftTitle
+  const body = row.editedBody ?? row.draftBody
+  const v = eligibilityOf({
+    gateVerdict: row.gateVerdict, gateResults: row.gateResults,
+    title, body, sourceCapturedAt: row.rawContent.sourceCapturedAt,
+  })
+  if (!v.auto) return { kind: 'exception', reasons: v.reasons }
+  const updated = await tx.originalPostApprovalQueue.updateMany({
+    where: {
+      id: row.id, decidedBy: row.decidedBy, status: 'APPROVED', createdPostId: null,
+      updatedAt: row.updatedAt,
+    },
+    data: {
+      // 🔴 자동 표식이다. founder 가 아니다
+      decidedBy: AUTO_DECIDER,
+      decidedAt: now,
+      editDiff: { ...rec(row.editDiff), [AUTO_READY_RECORD_KEY]: makeStamp(title, body, now) } as Prisma.InputJsonValue,
+    },
+  })
+  if (updated.count !== 1) return { kind: 'race', reason: '읽은 뒤 행이 바뀌었다 — 이 회차는 진다' }
+  return { kind: 'stamped' }
+}
+
+/**
+ * 🔴 **도장 회차 묶음 크기.** 한 Serializable 트랜잭션이 다루는 행 수의 상한이다 —
+ *    회차가 처리하는 **총량의 상한이 아니다**(행은 전부 본다). 너무 크면 트랜잭션이 길어져
+ *    발행 트랜잭션과 직렬화 충돌이 잦아지고 timeout(20초)에 닿는다.
+ */
+export const STAMP_BATCH_SIZE = 20
+
+/**
+ * 🔴 **도장 회차 — bounded Serializable batch** (2026-09-25 마스터 권고).
  *
- * 비용 (2026-09-25 격리 DB 실측 · 로컬 왕복): 행마다 트랜잭션 안에서 `authoritativeGate` 가
- *   founder 증거 전부를 다시 읽는다 — 행당 쿼리 9개 고정, 시간은 증거 수 E 에 비례한다.
- *   E30·K100 191ms · E300·K100 597ms · E1000·K100 1.72s (행당 1.9 → 6.0 → 17.2ms).
- *   운영은 왕복이 원격이라 쿼리 수가 먼저 비용이 된다.
- * 다음 커밋 설계(아직 구현하지 않는다): 회차 시작에 증거를 한 번 판정하고, 각 행 트랜잭션은
- *   증거 지문(founder 행 수 · 그 행들의 max(updatedAt) · 확정 결함 수)만 aggregate 로 다시 읽어
- *   같을 때만 그 판정을 쓴다. 다르면 그 트랜잭션에서 전체 판정을 다시 한다 — 열림 판정은
- *   여전히 같은 스냅샷에서 끝난다. 발행 트랜잭션의 재검증은 그대로 둔다(행당 한 번뿐이다).
+ *    앞판은 행마다 트랜잭션을 열고 그 안에서 `authoritativeGate` 를 불렀다 — founder 증거
+ *    전부를 행마다 다시 읽었다(격리 DB 실측: 행당 쿼리 9개 고정, 증거 E 에 비례 —
+ *    E30·K100 191ms · E300·K100 597ms · E1000·K100 1.72s).
+ *    이제 **묶음마다 한 번** 열림을 판정하고, 같은 트랜잭션 안에서 묶음의 행을 한 행씩 본다.
+ *    · 행별 적격 판정과 CAS 는 그대로다 — 한 행이 지면 그 행만 `race` 다
+ *    · 열림 판정과 도장 쓰기가 **같은 스냅샷**이다 — 그 사이 증거·결함이 바뀌면 직렬화 충돌로
+ *      묶음 전체가 롤백되고 `race` 로 센다(다음 회차가 다시 본다)
+ *    · 발행 트랜잭션의 재검증은 그대로 둔다(행당 한 번뿐이다)
+ *    🔴 "증거 지문" 으로 판정을 재사용하는 설계는 쓰지 않는다 — 큐 `updatedAt` 은
+ *       rawContent 변경을 잡지 못한다(마스터 지적).
  */
 export async function stampRound(
   prisma: PrismaClient, i: { env: Env; now: Date },
@@ -167,9 +207,23 @@ export async function stampRound(
     where: { status: 'APPROVED', createdPostId: null, decidedBy: { startsWith: 'machine:' } },
     select: { id: true }, orderBy: { createdAt: 'asc' },
   })
-  for (const r of rows) {
-    const o = await stampAutoReady(prisma, { queueId: r.id, env: i.env, now: i.now })
-    tally.set(o.kind, (tally.get(o.kind) ?? 0) + 1)
+  const bump = (k: StampOutcome['kind'], n = 1): void => { tally.set(k, (tally.get(k) ?? 0) + n) }
+  for (let at = 0; at < rows.length; at += STAMP_BATCH_SIZE) {
+    const batch = rows.slice(at, at + STAMP_BATCH_SIZE)
+    try {
+      const outs = await prisma.$transaction(async (tx): Promise<StampOutcome['kind'][]> => {
+        const gate = await authoritativeGate(tx, i.env)
+        if (!gate.open) return batch.map(() => 'closed' as const)
+        const got: StampOutcome['kind'][] = []
+        for (const r of batch) got.push((await stampRowInTx(tx, r.id, i.now)).kind)
+        return got
+      }, SERIALIZABLE)
+      for (const k of outs) bump(k)
+    } catch (e) {
+      if (!isConflict(e)) throw e
+      // 🔴 묶음 전체가 롤백됐다 — 쓴 것이 없다. 조용히 잃지 않고 race 로 센다
+      bump('race', batch.length)
+    }
   }
   return tally
 }
@@ -218,6 +272,8 @@ export async function selectAudits(prisma: PrismaClient): Promise<
        * 🔴 **Post 가 사라진 자동 발행 행은 고르지 않고 값으로 알린다** (2026-09-25).
        *    앞판은 `findUniqueOrThrow` 라 그런 행이 하나만 있어도 **선정 전체가 예외로 멈췄다.**
        *    감사 행은 Post FK 가 있어 만들 수 없으므로, 이 행들은 `missingPost` 로 돌려준다.
+       *    🔴 돌려주기만 하지 않는다 — 열림 판정(`missingAutoPostCount`)이 같은 상태를 세서
+       *    다음 도장·발행을 닫고, 러너는 이 값이 있으면 회차를 실패로 끝낸다.
        */
       const posts = await tx.post.findMany({
         where: { id: { in: published.map((p) => p.createdPostId!) } }, select: { id: true, title: true, content: true },
@@ -255,15 +311,13 @@ export type RecordOutcome =
   | 'staleContract'
   /** 🔴 결과 모양이 깨졌다(모델·프롬프트 없음 · hash 아님) */
   | 'badVerdict'
-  /** 🔴 판정한 글이 고를 때 묶은 글과 다르다 */
-  | 'hashMismatch'
-  /** 🔴 고른 뒤 발행된 글이 바뀌었다 — 지금 글에 옛 판정을 붙이지 않는다 */
-  | 'postChanged'
   /** 🔴 다른 감사 기록과 동시에 부딪혔다 — 조용히 잃지 않고 값으로 알린다(다음 회차가 다시 본다) */
   | 'race'
   /**
    * 🔴 **시스템 무결성 결함** — 판정자가 무엇을 말했든, 감사 대상의 도장·글·행이 선정 때
    *    묶음과 어긋나거나 사라졌다. 스스로 `yes` 를 기록하고 다음 자동 회차를 닫는다.
+   *    🔴 앞판의 `postChanged`·`hashMismatch` 는 여기로 합쳤다 (2026-09-25 마스터 지적) —
+   *    그 둘은 감사를 판정 전 대기로 **영원히** 남겼고 아무것도 닫지 않았다.
    */
   | 'integrityDefect'
 
@@ -290,8 +344,8 @@ async function markIntegrityDefect(db: Db, queueId: string, reason: string, now:
 /**
  * 🔴 **감사 결과 기록 — 묶음을 대조하고, 끈적하다.**
  *    · 감사 계약 판이 지금 판이어야 한다 · 모델·프롬프트 판이 있어야 한다
- *    · 판정한 글의 hash 가 고를 때 묶은 hash 와 같아야 한다
- *    · 지금 Post 의 hash 도 그대로여야 한다(그 사이 글이 바뀌었으면 받지 않는다)
+ *    · 지금 큐 도장 · 지금 Post · 판정한 글의 hash 가 고를 때 묶은 값과 같아야 한다 —
+ *      🔴 하나라도 어긋나면 판정자 값 대신 **무결성 yes** 를 남긴다(대기로 두지 않는다)
  *    · `yes` 는 `no` 로 덮이지 않는다
  */
 export async function recordAuditResult(prisma: PrismaClient, i: {
@@ -314,21 +368,25 @@ export async function recordAuditResult(prisma: PrismaClient, i: {
      */
     const queue = await tx.originalPostApprovalQueue.findUnique({ where: { id: i.queueId }, select: { editDiff: true } })
     const cur = queue === null ? null : readStamp(queue.editDiff)
+    /**
+     * 🔴 **지금 Post 도 저장 경계가 직접 본다** (2026-09-25 마스터 지적). 선정 뒤 글이 사라졌거나
+     *    제목·본문이 바뀌었으면, 판정자가 무엇을 봤든 **그 판정보다 먼저** 무결성 yes 다.
+     *    판정자가 발행 글이 아닌 다른 글을 판정했다고 말해도(hash 불일치) 같다 — 판정자 결함이다.
+     */
+    const post = await tx.post.findUnique({ where: { id: row.postId }, select: { title: true, content: true } })
     const broken = queue === null ? '감사 대상 큐 행이 없다'
       : cur === null ? '큐의 도장 기록이 없거나 깨졌다'
         : cur.contractDigest !== row.stampContractDigest ? '도장 계약 판이 선정 때와 다르다'
           : cur.titleHash !== row.publishedTitleHash || cur.bodyHash !== row.publishedBodyHash
-            ? '도장의 제목·본문 hash 가 발행 글과 다르다' : null
+            ? '도장의 제목·본문 hash 가 발행 글과 다르다'
+            : post === null ? '감사 대상 Post 가 없다'
+              : digestOf(post.title) !== row.publishedTitleHash || digestOf(post.content) !== row.publishedBodyHash
+                ? '선정 뒤 발행 글의 제목·본문이 바뀌었다'
+                : i.verdict.judgedTitleHash !== row.publishedTitleHash || i.verdict.judgedBodyHash !== row.publishedBodyHash
+                  ? '판정자가 발행 글이 아닌 글을 판정했다' : null
     if (broken !== null) {
       await markIntegrityDefect(tx, i.queueId, broken, i.now)
       return 'integrityDefect'
-    }
-    if (i.verdict.judgedTitleHash !== row.publishedTitleHash || i.verdict.judgedBodyHash !== row.publishedBodyHash) {
-      return 'hashMismatch'
-    }
-    const post = await tx.post.findUnique({ where: { id: row.postId }, select: { title: true, content: true } })
-    if (post === null || digestOf(post.title) !== row.publishedTitleHash || digestOf(post.content) !== row.publishedBodyHash) {
-      return 'postChanged'
     }
     const data = {
       defect: i.verdict.defect, judgedAt: i.now, auditor,

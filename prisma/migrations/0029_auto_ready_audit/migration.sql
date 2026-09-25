@@ -52,3 +52,10 @@ ALTER TABLE "AutoReadyAudit" ADD CONSTRAINT "AutoReadyAudit_queueId_fkey"
 ALTER TABLE "AutoReadyAudit" ADD CONSTRAINT "AutoReadyAudit_postId_fkey"
   FOREIGN KEY ("postId") REFERENCES "Post"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 CREATE INDEX "AutoReadyAudit_defect_idx" ON "AutoReadyAudit"("defect");
+
+-- 🔴 FK · RESTRICT — 큐 행이 가리키는 발행 글은 지울 수 없다 (2026-09-25 마스터 지적).
+--    감사로 뽑히지 않은 자동 발행 글이 사라지면 감사 행이 없어 아무것도 닫히지 않았다.
+--    운영 읽기 전용 사전 점검: createdPostId 있는 행 29 · 가리키는 Post 없음 0 (2026-09-25).
+--    🔴 고아 행이 생겼다면 이 제약은 걸리지 않고 migration 이 실패한다 — 그때는 멈추고 사람이 본다.
+ALTER TABLE "OriginalPostApprovalQueue" ADD CONSTRAINT "OriginalPostApprovalQueue_createdPostId_fkey"
+  FOREIGN KEY ("createdPostId") REFERENCES "Post"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

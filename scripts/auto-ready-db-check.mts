@@ -26,7 +26,7 @@ import {
 } from '../src/lib/auto-ready-v2'
 import {
   authoritativeGate, stampAutoReady, stampRound, selectAudits, recordAuditResult,
-  confirmedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL,
+  confirmedDefectCount, runAuditRound, INTEGRITY_AUDITOR, INTEGRITY_MODEL, STAMP_BATCH_SIZE,
 } from '../src/lib/auto-ready-repo'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import {
@@ -107,11 +107,28 @@ async function main(): Promise<void> {
       select: { id: true },
     })
   }
-  /** 기계 행 — persona 를 null 로 주면 배정 없는 행이다 */
+  /**
+   * 🔴 **행마다 새 Persona** (2026-09-25). 발행 트랜잭션이 이미 배정된 자동 행의 Persona 도
+   *    정본 상한(가장 안전한 d1: 주 1 · 최소 5일)으로 다시 판정한다. 세 Persona 를 돌려 쓰면
+   *    정상 행이 **다른 행의** 배정 때문에 막힌다 — 실제 배정기는 상한을 지켜 배정한다.
+   *    상한 반례는 ⑧ 에서 따로 만든다.
+   */
+  let fresh = 0
+  const freshPersona = async (identity: Record<string, unknown> = {}) => {
+    fresh += 1
+    const u = await prisma.user.create({ data: { nickname: `새${fresh}` }, select: { id: true } })
+    const p = await prisma.persona.create({
+      data: { code: `F${String(fresh).padStart(3, '0')}`, userId: u.id, status: 'active', identity: identity as never },
+      select: { id: true, code: true },
+    })
+    personas.push(p)
+    return p
+  }
+  /** 기계 행 — persona 를 null 로 주면 배정 없는 행이다 · 주지 않으면 새 Persona 에 배정한다 */
   const codeOf = (id: string | null | undefined): string | null => personas.find((p) => p.id === id)?.code ?? null
   const machineRow = async (o: { sr?: unknown; persona?: string | null; voice?: string; body?: string } = {}) => {
     const r = await raw()
-    const personaId = o.persona === null ? null : (o.persona ?? personas[seq % 3]!.id)
+    const personaId = o.persona === null ? null : (o.persona ?? (await freshPersona()).id)
     return prisma.originalPostApprovalQueue.create({
       data: {
         sourceRawContentId: r.id, status: 'APPROVED', draftTitle: `평범한 하루 이야기 ${seq}`,
@@ -126,13 +143,19 @@ async function main(): Promise<void> {
     })
   }
   const evidenceIds: string[] = []
+  const evidenceAuthor = (await prisma.user.create({ data: { nickname: '증거작성' }, select: { id: true } })).id
   const evidenceRow = async (i: number) => {
     const r = await raw()
+    // 🔴 createdPostId 는 FK(Restrict)다 — 가짜 id 를 넣지 않고 실제 글을 만든다
+    const ep = await prisma.post.create({
+      data: { boardType: 'FREE', title: `사람이 본 글 ${i}`, content: `사람이 본 본문 ${i}`, authorId: evidenceAuthor },
+      select: { id: true },
+    })
     const q = await prisma.originalPostApprovalQueue.create({
       data: {
         sourceRawContentId: r.id, status: 'PUBLISHED', draftTitle: `사람이 본 글 ${i}`, draftBody: `사람이 본 본문 ${i}`,
         gateVerdict: 'PASS', gateResults: gate() as never, promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
-        decidedBy: HUMAN_DECIDER, createdPostId: `evidence-post-${i}`, dedupKey: `ev-${i}`,
+        decidedBy: HUMAN_DECIDER, createdPostId: ep.id, dedupKey: `ev-${i}`,
       },
       select: { id: true },
     })
@@ -173,7 +196,7 @@ async function main(): Promise<void> {
 
   console.log('\n② 🔴 🔴 증거 0/30 인데 호출자가 "열림" 을 넘겨도 — 도장 0 · Post 0')
   {
-    const r = await machineRow({ persona: personas[0]!.id })
+    const r = await machineRow()
     // 🔴 앞판 시그니처처럼 `open: { open: true }` 를 억지로 넘긴다 — 이제 받는 자리가 없다
     const o = await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW, open: { open: true, reasons: [] } } as never)
     check('🔴 🔴 **증거 0/30 · 호출자 open:true → closed · 도장 0**',
@@ -204,17 +227,47 @@ async function main(): Promise<void> {
   }
 
   console.log('\n⑤ 🔴 도장 — 조건부 · 본문 hash · founder 0 · 동시 도장 1회')
-  const a = await machineRow({ persona: personas[0]!.id })
+  const a = await machineRow()
   {
     check('도장이 찍힌다', (await stampAutoReady(prisma, { queueId: a.id, env: ON, now: NOW })).kind === 'stamped')
     const row = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: a.id } })
     const st = readStamp(row.editDiff)
     check('🔴 🔴 **decidedBy 는 auto-ready:v1 · hash 가 실제 글과 같다**',
       row.decidedBy === AUTO_DECIDER && st !== null && st.bodyHash === digestOf(row.draftBody))
-    const r = await machineRow({ persona: personas[1]!.id })
+    const r = await machineRow()
     const res = await Promise.all(Array.from({ length: 4 }, () => stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })))
     check('🔴 🔴 **네 회차가 동시에 찍어도 도장은 정확히 한 번**',
       res.filter((x) => x.kind === 'stamped').length === 1, res.map((x) => x.kind).join(','))
+  }
+
+  console.log('\n⑤-b 🔴 🔴 도장 회차 — bounded Serializable batch · 총량 제한 없음 · 동시 회차에도 한 번')
+  {
+    const autoBefore = await prisma.originalPostApprovalQueue.count({ where: { decidedBy: AUTO_DECIDER } })
+    const many: string[] = []
+    for (let i = 0; i < STAMP_BATCH_SIZE * 2 + 3; i += 1) many.push((await machineRow()).id)
+    const [r1, r2] = await Promise.all([stampRound(prisma, { env: ON, now: NOW }), stampRound(prisma, { env: ON, now: NOW })])
+    const stampedRows = (await prisma.originalPostApprovalQueue.count({ where: { decidedBy: AUTO_DECIDER } })) - autoBefore
+    const first = (r1.get('stamped') ?? 0) + (r2.get('stamped') ?? 0)
+    // 🔴 한 회차가 진 묶음은 쓴 것이 없다 — 남은 행은 다음 회차가 찍는다
+    const r3 = await stampRound(prisma, { env: ON, now: NOW })
+    const all = await prisma.originalPostApprovalQueue.count({ where: { id: { in: many }, decidedBy: AUTO_DECIDER } })
+    check(`🔴 🔴 **묶음 크기(${STAMP_BATCH_SIZE})를 넘는 ${many.length}행도 전부 찍힌다 — 총량 제한이 아니다**`,
+      all === many.length, `${all}/${many.length}`)
+    check('🔴 🔴 **동시 두 회차 — 행마다 도장은 정확히 한 번 (보고한 stamped 수 = 실제 찍힌 행 수)**',
+      first === stampedRows
+      && first + (r3.get('stamped') ?? 0) === (await prisma.originalPostApprovalQueue.count({ where: { decidedBy: AUTO_DECIDER } })) - autoBefore,
+      `r1 ${[...r1].map(([k, v]) => `${k} ${v}`).join(' ')} / r2 ${[...r2].map(([k, v]) => `${k} ${v}`).join(' ')} / r3 ${[...r3].map(([k, v]) => `${k} ${v}`).join(' ')}`)
+    check('🔴 도장 회차가 founder 를 쓰지 않았다', await prisma.originalPostApprovalQueue.count({ where: { id: { in: many }, decidedBy: HUMAN_DECIDER } }) === 0)
+    await breakOneEvidence(true)
+    const extra = await machineRow()
+    const rc = await stampRound(prisma, { env: ON, now: NOW })
+    await breakOneEvidence(false)
+    check('🔴 🔴 **증거 29/30 이면 묶음 회차도 도장 0 (closed)**',
+      (rc.get('stamped') ?? 0) === 0 && (rc.get('closed') ?? 0) >= 1
+      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: extra.id } })).decidedBy === 'machine:auto-draft-v5',
+      [...rc].map(([k, v]) => `${k} ${v}`).join(' '))
+    // 🔴 이 행들은 이후 구간의 발행 대상이 되지 않게 치운다(도장만 찍힌 채 남으면 selector 가 고른다)
+    await prisma.originalPostApprovalQueue.updateMany({ where: { id: { in: [...many, extra.id] } }, data: { status: 'EXPIRED' } })
   }
 
   console.log('\n⑥ 🔴 selector — 열림일 때만 · 도장이 지금 글과 같을 때만')
@@ -227,7 +280,7 @@ async function main(): Promise<void> {
 
   console.log('\n⑦ 🔴 🔴 선택 뒤 증거가 30→29 로 무너졌다 — Post 0')
   {
-    const r = await machineRow({ persona: personas[2]!.id })
+    const r = await machineRow()
     await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
     check('선택 시점에는 발행 대상이었다', (await loadPublishableStock(prisma, NOW, { autoReadyOpen: true })).targets.some((t) => t.id === r.id))
     await breakOneEvidence(true)
@@ -242,12 +295,11 @@ async function main(): Promise<void> {
 
   console.log('\n⑧ 🔴 🔴 자동 행 배정은 발행 트랜잭션 안에서 — 실패하면 배정도 불변')
   {
-    const assignTo: { personaId: string; matchedAt: Date; matchMeta: unknown; caps?: { postsPerWeek?: number; minDaysBetween?: number } } =
-      // 🔴 통과해야 하는 경우는 넉넉한 상한을 **명시**한다 — 앞 구간이 P02 에 이미 배정을 줬고,
-      //    기본(가장 안전한) 상한이면 재판정이 WEEKLY_CAP·TOO_SOON 으로 떨어뜨린다(실측)
-      { personaId: personas[1]!.id, matchedAt: NOW, matchMeta: { test: true }, caps: { postsPerWeek: 100, minDaysBetween: 0 } }
-    const unassigned = async (o: { voice?: string; body?: string } = {}) => {
-      const r = await machineRow({ persona: null, voice: o.voice ?? personas[1]!.code, body: o.body })
+    /** 🔴 계획 — personaId 와 근거만 넘긴다. 시각·상한 숫자는 넘기지 않는다(트랜잭션이 정한다) */
+    type Assign = { personaId: string; matchMeta: unknown }
+    const planFor = (p: { id: string }): Assign => ({ personaId: p.id, matchMeta: { test: true } })
+    const unassigned = async (o: { voice: string; body?: string }) => {
+      const r = await machineRow({ persona: null, voice: o.voice, body: o.body })
       await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
       return r.id
     }
@@ -255,14 +307,16 @@ async function main(): Promise<void> {
       const q = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { matchedPersonaId: true, matchedAt: true, createdPostId: true } })
       return q.matchedPersonaId === null && q.matchedAt === null && q.createdPostId === null
     }
-    const idA = await unassigned()
+    const pA = await freshPersona()
+    const idA = await unassigned({ voice: pA.code })
     await prisma.originalPostApprovalQueue.update({ where: { id: idA }, data: { editedBody: '도장 뒤에 바뀐 본문' } })
     check('🔴 🔴 **도장 뒤 본문이 바뀌면 selector 가 먼저 AUTO_READY_STALE 로 거절한다**',
       (await loadPublishableStock(prisma, NOW, { autoReadyOpen: true })).rejected.some((x) => x.id === idA && x.code === 'AUTO_READY_STALE'))
-    const pa = await publishOriginalPostTx(prisma, { queueId: idA, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: assignTo })
+    const pa = await publishOriginalPostTx(prisma, { queueId: idA, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(pA) })
     check('🔴 🔴 **재검증 실패(본문 변경) → Post 0 · matchedPersonaId/matchedAt 불변**',
       pa.kind === 'blocked' && pa.code === 'AUTO_READY_RECHECK' && await untouched(idA), JSON.stringify(pa))
-    const idB = await unassigned()
+    const pB = await freshPersona()
+    const idB = await unassigned({ voice: pB.code })
     /**
      * 🔴 일 상한에 **실제로** 걸리게 한다. `dailyCap: 0` 은 "주입 안 됨" 으로 읽혀 가장 안전한
      *    상수 1 로 떨어지는 기존 계약이다(첫 판이 그 값을 넣어 오히려 발행됐다).
@@ -271,21 +325,31 @@ async function main(): Promise<void> {
     await prisma.personaActivityLog.create({
       data: { personaId: personas[2]!.id, kind: 'post', targetId: 'cap-fixture', gateStatus: 'PASS', decidedBy: 'operator', publishedAt: new Date() },
     })
-    const pb = await publishOriginalPostTx(prisma, { queueId: idB, publishedToday: 1, dailyCap: 1, autoReadyEnv: ON, autoAssign: assignTo })
+    const pb = await publishOriginalPostTx(prisma, { queueId: idB, publishedToday: 1, dailyCap: 1, autoReadyEnv: ON, autoAssign: planFor(pB) })
     check('🔴 🔴 **발행 판정 실패(일 상한) → 배정 불변**',
       pb.kind === 'blocked' && pb.code === 'DAILY_CAP' && await untouched(idB), JSON.stringify(pb))
-    const idC = await unassigned()
+    const pC = await freshPersona()
+    const idC = await unassigned({ voice: pC.code })
     await breakOneEvidence(true)
-    const pc = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: assignTo })
+    const pc = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(pC) })
     await breakOneEvidence(false)
     check('🔴 🔴 **증거 게이트 실패 → 배정 불변**', pc.kind === 'blocked' && await untouched(idC), JSON.stringify(pc))
-    const pd = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: OFF, autoAssign: assignTo })
+    const pd = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: OFF, autoAssign: planFor(pC) })
     check('🔴 스위치 OFF → 배정 불변', pd.kind === 'blocked' && await untouched(idC))
-    const pe = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: assignTo })
+    const beforeE = Date.now()
+    // 🔴 미래 matchedAt 을 억지로 넘긴다 — 받는 자리가 없다. 배정 시각은 트랜잭션 시계다
+    const future = new Date(NOW.getTime() + 30 * 864e5)
+    const pe = await publishOriginalPostTx(prisma, {
+      queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON,
+      autoAssign: { ...planFor(pC), matchedAt: future } as never,
+    })
     const qe = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idC } })
     check('🔴 🔴 **통과하면 한 트랜잭션에서 배정 + Post**',
-      pe.kind === 'published' && pe.personaCode === personas[1]!.code && qe.matchedPersonaId === personas[1]!.id
+      pe.kind === 'published' && pe.personaCode === pC.code && qe.matchedPersonaId === pC.id
       && qe.createdPostId !== null, JSON.stringify(pe))
+    check('🔴 🔴 **미래 matchedAt 을 넘겨도 배정 시각은 트랜잭션 시계다**',
+      qe.matchedAt !== null && qe.matchedAt.getTime() >= beforeE && qe.matchedAt.getTime() <= Date.now(),
+      String(qe.matchedAt?.toISOString()))
     /**
      * ── 🔴 🔴 **계획한 Persona 를 트랜잭션 안에서 다시 판정한다** (2026-09-25 마스터 지적) ──
      *    호출자가 넘긴 personaId 는 "누구를 검토할지" 일 뿐이다. 정본 judgeVoiceMatch ·
@@ -295,47 +359,76 @@ async function main(): Promise<void> {
       const u = await prisma.user.create({ data: { nickname: `생활사${code}` }, select: { id: true } })
       return prisma.persona.create({ data: { code, userId: u.id, status: 'active', identity: identity as never }, select: { id: true, code: true } })
     }
-    const stale = async (label: string, id: string, assign: typeof assignTo, want: string) => {
+    type Extra = { releaseStage?: string; env?: Record<string, string>; caps?: unknown }
+    const stale = async (label: string, id: string, assign: Assign | undefined, want: string, x: Extra = {}) => {
       const before = await postCount()
-      const r = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: assign })
+      const q0 = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { matchedPersonaId: true, matchedAt: true } })
+      const r = await publishOriginalPostTx(prisma, {
+        queueId: id, publishedToday: 0, dailyCap: 100, autoReadyEnv: x.env ?? ON,
+        ...(assign === undefined ? {} : { autoAssign: (x.caps === undefined ? assign : { ...assign, caps: x.caps }) as never }),
+        ...(x.releaseStage === undefined ? {} : { releaseStage: x.releaseStage as never }),
+      })
+      const q1 = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { matchedPersonaId: true, matchedAt: true, createdPostId: true } })
       check(`🔴 🔴 **${label} → AUTO_ASSIGN_STALE · Post 0 · 배정 불변**`,
         r.kind === 'blocked' && r.code === 'AUTO_ASSIGN_STALE' && r.detail.includes(want)
-        && (await postCount()) === before && await untouched(id), JSON.stringify(r))
+        && (await postCount()) === before && q1.createdPostId === null
+        && q1.matchedPersonaId === q0.matchedPersonaId && q1.matchedAt?.getTime() === q0.matchedAt?.getTime(), JSON.stringify(r))
     }
-    // (g) 말투가 다른 사람 — 글은 P01 말투인데 P02 로 계획
-    await stale('VOICE_MISMATCH (말투 P01 · 계획 P02)', await unassigned({ voice: personas[0]!.code }), assignTo, 'VOICE_MISMATCH')
+    // (g) 말투가 다른 사람 — 글은 P01 말투인데 새 Persona 로 계획
+    const pG = await freshPersona()
+    await stale('VOICE_MISMATCH (말투 P01 · 계획은 다른 사람)', await unassigned({ voice: personas[0]!.code }), planFor(pG), 'VOICE_MISMATCH')
     // (h) 임의의 active Persona id — 글을 쓴 사람이 아니다
     const stranger = await personaWith('P90', {})
-    await stale('임의 active Persona id', await unassigned(), { ...assignTo, personaId: stranger.id }, 'VOICE_MISMATCH')
-    await stale('존재하지 않는 Persona id', await unassigned(), { ...assignTo, personaId: 'no-such-persona' }, '없다')
+    await stale('임의 active Persona id', await unassigned({ voice: pG.code }), planFor(stranger), 'VOICE_MISMATCH')
+    await stale('존재하지 않는 Persona id', await unassigned({ voice: pG.code }), { personaId: 'no-such-persona', matchMeta: {} }, '없다')
     // (i) 혼인 충돌 — 미혼 Persona 에 현재형 배우자 글
     const single = await personaWith('P91', { maritalStatus: '미혼', childrenCount: 0, childrenAgeBands: [] })
     await stale('혼인 충돌 (미혼 · "남편이")',
-      await unassigned({ voice: single.code, body: '남편이 요즘 퇴근이 늦어요. 다들 어떻게 지내세요?' }),
-      { ...assignTo, personaId: single.id }, 'MARITAL_CONFLICT')
+      await unassigned({ voice: single.code, body: '남편이 요즘 퇴근이 늦어요. 다들 어떻게 지내세요?' }), planFor(single), 'MARITAL_CONFLICT')
     // (j) 자녀 충돌 — 무자녀 Persona 에 자녀 글
     const noKids = await personaWith('P92', { maritalStatus: '기혼', childrenCount: 0, childrenAgeBands: [] })
     await stale('자녀 충돌 (무자녀 · "딸아이가")',
-      await unassigned({ voice: noKids.code, body: '딸아이가 수능을 봐요. 다들 어떻게 지내세요?' }),
-      { ...assignTo, personaId: noKids.id }, 'NO_CHILDREN')
-    // (k) 계획 뒤 주 cap 소진 — 계획한 뒤 그 Persona 가 이번 주 한 편을 더 받았다
+      await unassigned({ voice: noKids.code, body: '딸아이가 수능을 봐요. 다들 어떻게 지내세요?' }), planFor(noKids), 'NO_CHILDREN')
+    /** 🔴 이 Persona 가 다른 글을 `daysAgo` 일 전에 받았다 */
+    const usedBefore = async (p: { id: string; code: string }, daysAgo: number) => {
+      const other = await machineRow({ persona: p.id, voice: p.code })
+      await prisma.originalPostApprovalQueue.update({ where: { id: other.id }, data: { matchedAt: new Date(NOW.getTime() - daysAgo * 864e5) } })
+    }
+    // (k) 계획 뒤 주 cap 소진 — 정본 단계(설정 없음 = d1 · 주 1)에서 이번 주 한 편을 이미 받았다
     const busy = await personaWith('P93', {})
     const idK = await unassigned({ voice: busy.code })
-    await machineRow({ persona: busy.id, voice: busy.code })
-    await prisma.originalPostApprovalQueue.updateMany({
-      where: { matchedPersonaId: busy.id }, data: { matchedAt: new Date(NOW.getTime() - 2 * 864e5) },
-    })
-    await stale('계획 뒤 주 cap 소진 (주 1 · 이번 주 1)', idK,
-      { ...assignTo, personaId: busy.id, caps: { postsPerWeek: 1, minDaysBetween: 1 } }, 'WEEKLY_CAP')
-    // (l) 최소 간격 소진 — 어제 한 편을 받았는데 최소 간격이 5일
+    await usedBefore(busy, 6)
+    await stale('계획 뒤 주 cap 소진 (d1 · 주 1 · 이번 주 1)', idK, planFor(busy), 'WEEKLY_CAP')
+    // (l) 최소 간격 소진 — 어제 한 편 · d1 최소 5일
     const recent = await personaWith('P94', {})
     const idL = await unassigned({ voice: recent.code })
-    await machineRow({ persona: recent.id, voice: recent.code })
-    await prisma.originalPostApprovalQueue.updateMany({
-      where: { matchedPersonaId: recent.id }, data: { matchedAt: new Date(NOW.getTime() - 1 * 864e5) },
+    await usedBefore(recent, 1)
+    await stale('최소 간격 소진 (d1 · 어제 · 최소 5일)', idL, planFor(recent), 'TOO_SOON')
+    /**
+     * (m) 🔴 🔴 **과도한 상한** — 호출자가 `releaseStage: 'd10'` 과 자유형 `caps` 숫자를 넘긴다.
+     *    env 천장이 d1 이면 d1 상한이다. 같은 행을 env 가 d10 을 허락할 때 다시 내면 나간다 —
+     *    막은 것이 호출자 값이 아니라 **env 천장**이라는 대조다.
+     */
+    const greedy = await personaWith('P95', {})
+    const idM = await unassigned({ voice: greedy.code })
+    await usedBefore(greedy, 2)
+    await stale('과도한 상한 (d10 요청 + caps 1e9 · env 천장 d1)', idM, planFor(greedy), '(d1)',
+      { releaseStage: 'd10', caps: { postsPerWeek: 1e9, minDaysBetween: 0 } })
+    await stale('모르는 단계 문자열 → 가장 안전한 d1', idM, planFor(greedy), '(d1)', { releaseStage: 'd999' })
+    const pm = await publishOriginalPostTx(prisma, {
+      queueId: idM, publishedToday: 0, dailyCap: 100, releaseStage: 'd10', autoAssign: planFor(greedy),
+      autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' },
     })
-    await stale('최소 간격 소진 (어제 · 최소 5일)', idL,
-      { ...assignTo, personaId: recent.id, caps: { postsPerWeek: 10, minDaysBetween: 5 } }, 'TOO_SOON')
+    check('🔴 대조 — env 가 d10 을 허락하면 같은 행이 나간다 (2일 전 · d10 최소 1일)', pm.kind === 'published', JSON.stringify(pm))
+    const pm2 = await (async () => {
+      const id = await unassigned({ voice: greedy.code })
+      return publishOriginalPostTx(prisma, {
+        queueId: id, publishedToday: 0, dailyCap: 100, releaseStage: 'd10', autoAssign: planFor(greedy),
+        autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd3' },
+      })
+    })()
+    check('🔴 🔴 **env release 가 d10 이어도 capacity d3 이 천장이다**',
+      pm2.kind === 'blocked' && pm2.code === 'AUTO_ASSIGN_STALE' && pm2.detail.includes('(d3)'), JSON.stringify(pm2))
 
     const hr = await raw()
     const human = await prisma.originalPostApprovalQueue.create({
@@ -346,9 +439,55 @@ async function main(): Promise<void> {
       },
       select: { id: true },
     })
-    const ph = await publishOriginalPostTx(prisma, { queueId: human.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: assignTo })
+    const ph = await publishOriginalPostTx(prisma, { queueId: human.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(pG) })
     check('🔴 사람 행은 autoAssign 을 쓰지 않는다 — 배정 없으면 기존처럼 NO_MATCH',
       ph.kind === 'blocked' && ph.code === 'NO_MATCH' && await untouched(human.id), JSON.stringify(ph))
+
+    console.log('\n⑧-b 🔴 🔴 이미 배정된 자동 행도 발행 트랜잭션에서 다시 판정한다 — 재배정 없음')
+    const pinnedRow = async (p: { id: string; code: string }, body?: string) => {
+      const r = await machineRow({ persona: p.id, voice: p.code, body })
+      check(`   (${p.code} 도장)`, (await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })).kind === 'stamped')
+      return r.id
+    }
+    // (p) 정상 — 자기 matchedAt(지금) 때문에 WEEKLY_CAP·TOO_SOON 으로 막히지 않는다
+    const ok = await freshPersona()
+    const idP = await pinnedRow(ok)
+    const pp = await publishOriginalPostTx(prisma, { queueId: idP, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+    check('🔴 🔴 **정상 기존 배정 행은 자기 배정 때문에 막히지 않는다 (d1 · 주 1 · 최소 5일)**',
+      pp.kind === 'published' && pp.personaCode === ok.code, JSON.stringify(pp))
+    // (q) 배정 뒤 말투가 바뀌었다 — 글의 말투 기록이 다른 사람
+    const vq = await freshPersona()
+    const idQ = await pinnedRow(vq)
+    await prisma.originalPostApprovalQueue.update({ where: { id: idQ }, data: { gateResults: gate(GOOD_SR, [], personas[0]!.code) as never } })
+    await stale('[기존 배정] 배정 뒤 말투 변경', idQ, undefined, 'VOICE_MISMATCH')
+    // (r) 배정 뒤 Persona 생활사가 바뀌었다 — 기혼 → 미혼인데 글은 "남편이"
+    const life = await freshPersona({ maritalStatus: '기혼' })
+    const idR = await pinnedRow(life, '남편이 요즘 퇴근이 늦어요. 다들 어떻게 지내세요?')
+    await prisma.persona.update({ where: { id: life.id }, data: { identity: { maritalStatus: '미혼' } as never } })
+    await stale('[기존 배정] 배정 뒤 Persona 생활사 변경 (기혼 → 미혼)', idR, undefined, 'MARITAL_CONFLICT')
+    // (s) 배정 뒤 Persona 비활성화
+    const off = await freshPersona()
+    const idS = await pinnedRow(off)
+    await prisma.persona.update({ where: { id: off.id }, data: { status: 'paused' } })
+    await stale('[기존 배정] 배정 뒤 Persona 비활성화', idS, undefined, 'NOT_ACTIVE')
+    // (t) 배정 뒤 그 Persona 계정에 실제 로그인 Account 가 생겼다
+    const acct = await freshPersona()
+    const idT = await pinnedRow(acct)
+    const acctUser = (await prisma.persona.findUniqueOrThrow({ where: { id: acct.id }, select: { userId: true } })).userId
+    await prisma.account.create({ data: { userId: acctUser, type: 'oauth', provider: 'kakao', providerAccountId: `k-${acct.code}` } })
+    await stale('[기존 배정] 배정 뒤 실회원 Account 생김', idT, undefined, 'REAL_MEMBER')
+    // (u) 자기 배정만 뺀다 — 같은 Persona 가 이번 주 **다른** 글을 받았으면 막힌다
+    const two = await freshPersona()
+    const idU = await pinnedRow(two)
+    await usedBefore(two, 6)
+    await stale('[기존 배정] 같은 Persona 의 다른 배정은 센다 (d1 · 주 1)', idU, undefined, 'WEEKLY_CAP')
+    // (v) 기존 배정 행에 다른 Persona 계획을 넘겨도 재배정하지 않는다
+    const idV = await pinnedRow(await freshPersona())
+    const other = await freshPersona()
+    const pv = await publishOriginalPostTx(prisma, { queueId: idV, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(other) })
+    const qv = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idV } })
+    check('🔴 🔴 **기존 배정은 재배정하지 않는다 — 넘긴 계획은 무시된다**',
+      pv.kind === 'published' && qv.matchedPersonaId !== other.id && pv.personaCode !== other.code, JSON.stringify(pv))
   }
 
   console.log('\n⑨ 🔴 발행 — 스위치·동시성')
@@ -367,7 +506,7 @@ async function main(): Promise<void> {
   console.log('\n⑩ 🔴 감사 선정 — ceil(N×0.2) · 중복 0 · 무엇을 감사하는지 묶는다')
   {
     for (let i = 0; i < 9; i += 1) {
-      const r = await machineRow({ persona: personas[i % 3]!.id })
+      const r = await machineRow()
       await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
       await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
     }
@@ -388,24 +527,24 @@ async function main(): Promise<void> {
 
   console.log('\n⑪ 🔴 🔴 결과 기록 — 잘못된 글·옛 판정·깨진 결과는 붙지 않는다')
   {
+    // 🔴 개수에 기대지 않는다 — 감사가 셋이 될 때까지 자동 발행을 늘리고 고른다
+    for (let i = 0; i < 20 && (await prisma.autoReadyAudit.count()) < 3; i += 1) {
+      const r = await machineRow()
+      await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
+      await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+      await selectAudits(prisma)
+    }
     const audits = await prisma.autoReadyAudit.findMany({ orderBy: { queueId: 'asc' } })
+    check('기록을 시험할 감사가 셋 이상 있다', audits.length >= 3, `${audits.length}건`)
     const au = audits[0]!
     const post = await prisma.post.findUniqueOrThrow({ where: { id: au.postId } })
     const stampOf = async (id: string) => readStamp((await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id } })).editDiff)
     const good = await ruleAuditJudge({ queueId: au.queueId, postId: au.postId, title: post.title, body: post.content, stamp: await stampOf(au.queueId) })
     const rec = (v: typeof good, auditor = 'rule-auditor') => recordAuditResult(prisma, { queueId: au.queueId, verdict: v, auditor, now: NOW })
     check('🔴 🔴 **다른 감사 계약 판의 결과 → staleContract**', await rec({ ...good, contractVersion: 'auto-ready-audit-v0' }) === 'staleContract')
-    check('🔴 🔴 **다른 글을 판정한 결과 → hashMismatch**', await rec({ ...good, judgedBodyHash: digestOf('다른 글') }) === 'hashMismatch')
     check('🔴 모델·프롬프트 판이 없는 결과 → badVerdict', await rec({ ...good, model: '' }) === 'badVerdict')
     check('🔴 🔴 **감사자 founder → rejectedAuditor**', await rec(good, 'founder') === 'rejectedAuditor')
     check('🔴 그 사이 아무것도 기록되지 않았다', (await prisma.autoReadyAudit.findUniqueOrThrow({ where: { queueId: au.queueId } })).defect === null)
-    const other = audits[1]!
-    const op = await prisma.post.findUniqueOrThrow({ where: { id: other.postId } })
-    const ov = await ruleAuditJudge({ queueId: other.queueId, postId: other.postId, title: op.title, body: op.content, stamp: await stampOf(other.queueId) })
-    await prisma.post.update({ where: { id: other.postId }, data: { content: `${op.content} (고른 뒤 수정)` } })
-    check('🔴 🔴 **고른 뒤 글이 바뀌었다 → postChanged**',
-      await recordAuditResult(prisma, { queueId: other.queueId, verdict: ov, auditor: 'rule-auditor', now: NOW }) === 'postChanged')
-    await prisma.post.update({ where: { id: other.postId }, data: { content: op.content } })
     check('🔴 🔴 **정상 결과는 기록된다**', await rec(good) === 'recorded')
     const saved = await prisma.autoReadyAudit.findUniqueOrThrow({ where: { queueId: au.queueId } })
     check('기록에 감사 계약·모델·프롬프트가 남는다',
@@ -416,11 +555,35 @@ async function main(): Promise<void> {
       await prisma.$executeRawUnsafe(`UPDATE "AutoReadyAudit" SET "auditModel"=NULL WHERE "queueId"=$1`, au.queueId)
     } catch { dbBlocked = true }
     check('🔴 DB 제약도 판정에 출처가 빠지는 것을 막는다', dbBlocked)
+    /**
+     * 🔴 🔴 **대기로 남기지 않는다** (2026-09-25 마스터 지적). 앞판은 아래 둘을
+     *    `hashMismatch`·`postChanged` 로 돌려주고 감사를 판정 전으로 영원히 남겼다.
+     */
+    const h = audits[1]!
+    const hp = await prisma.post.findUniqueOrThrow({ where: { id: h.postId } })
+    const hv = await ruleAuditJudge({ queueId: h.queueId, postId: h.postId, title: hp.title, body: hp.content, stamp: await stampOf(h.queueId) })
+    const hr = await recordAuditResult(prisma, { queueId: h.queueId, verdict: { ...hv, defect: 'no', reasons: [], judgedBodyHash: digestOf('다른 글') }, auditor: 'rule-auditor', now: NOW })
+    const hs = await prisma.autoReadyAudit.findUniqueOrThrow({ where: { queueId: h.queueId } })
+    check('🔴 🔴 **판정자가 다른 글을 판정했다(no) → 무결성 yes · 대기 아님**',
+      hr === 'integrityDefect' && hs.defect === 'yes' && hs.auditor === INTEGRITY_AUDITOR, `${hr} · ${String(hs.defect)}`)
+    const c = audits[2]!
+    const cp = await prisma.post.findUniqueOrThrow({ where: { id: c.postId } })
+    const cv = await ruleAuditJudge({ queueId: c.queueId, postId: c.postId, title: cp.title, body: cp.content, stamp: await stampOf(c.queueId) })
+    await prisma.post.update({ where: { id: c.postId }, data: { content: `${cp.content} (고른 뒤 수정)` } })
+    const cr = await recordAuditResult(prisma, { queueId: c.queueId, verdict: { ...cv, defect: 'no', reasons: [] }, auditor: 'rule-auditor', now: NOW })
+    const cs = await prisma.autoReadyAudit.findUniqueOrThrow({ where: { queueId: c.queueId } })
+    check('🔴 🔴 **고른 뒤 글이 바뀌었다(판정 no) → 무결성 yes · 대기 아님**',
+      cr === 'integrityDefect' && cs.defect === 'yes' && cs.auditor === INTEGRITY_AUDITOR, `${cr} · ${String(cs.defect)}`)
+    await prisma.post.update({ where: { id: c.postId }, data: { content: cp.content } })
+    check('확정 결함이 생겨 닫혔다', !(await authoritativeGate(prisma, ON)).open)
+    // 🔴 검사 파일의 초기화다 — 다음 구간이 열린 상태에서 시작하도록 감사 표를 비운다
+    await prisma.$executeRawUnsafe('TRUNCATE TABLE "AutoReadyAudit"')
+    check('감사 표를 비우면 다시 열린다 (다음 구간의 출발점)', (await authoritativeGate(prisma, ON)).open)
   }
 
   console.log('\n⑫ 🔴 🔴 감사 회차 → 결함 yes → 다음 자동 도장과 발행이 실제로 닫힌다')
   {
-    const waiting = await machineRow({ persona: personas[0]!.id })
+    const waiting = await machineRow()
     check('결함 전 도장', (await stampAutoReady(prisma, { queueId: waiting.id, env: ON, now: NOW })).kind === 'stamped')
     check('판정 전 대기는 열림을 막지 않는다 (대기 개수 제한 없음)', (await authoritativeGate(prisma, ON)).open)
     /**
@@ -429,17 +592,18 @@ async function main(): Promise<void> {
      *    저장 경계가 직접 대조해 둘 다 `yes`(시스템 무결성)로 남겨야 한다.
      */
     const alwaysNo: AuditJudge = async (i) => ({ ...(await ruleAuditJudge(i)), defect: 'no', reasons: [] })
-    /** 🔴 개수에 기대지 않는다 — 판정 전 감사가 셋(바꿀 둘 + 그대로 둘 하나)이 될 때까지 자동 발행을 늘리고 고른다 */
-    for (let i = 0; i < 20 && (await prisma.autoReadyAudit.count({ where: { defect: null } })) < 3; i += 1) {
-      const r = await machineRow({ persona: personas[i % 3]!.id })
+    /** 🔴 개수에 기대지 않는다 — 판정 전 감사가 넷(바꿀 셋 + 그대로 둘 하나)이 될 때까지 자동 발행을 늘리고 고른다 */
+    for (let i = 0; i < 30 && (await prisma.autoReadyAudit.count({ where: { defect: null } })) < 4; i += 1) {
+      const r = await machineRow()
       await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
       await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
       await selectAudits(prisma)
     }
     const pend = await prisma.autoReadyAudit.findMany({ where: { defect: null }, orderBy: { queueId: 'asc' } })
-    check('도장을 바꿔 볼 둘 + 그대로 둘 하나 — 판정 전 감사가 셋 이상 있다', pend.length >= 3, `${pend.length}건`)
+    check('바꿔 볼 셋 + 그대로 둘 하나 — 판정 전 감사가 넷 이상 있다', pend.length >= 4, `${pend.length}건`)
     const target = pend[0]!
     const target2 = pend[1]!
+    const target3 = pend[2]!
     const tamper = async (queueId: string, patch: Record<string, unknown>) => {
       const q = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: queueId } })
       await prisma.originalPostApprovalQueue.update({
@@ -449,6 +613,9 @@ async function main(): Promise<void> {
     }
     await tamper(target.queueId, { bodyHash: digestOf('도장이 본 것은 다른 본문이었다') })
     await tamper(target2.queueId, { contractDigest: 'other-contract-digest' })
+    // 🔴 선정 뒤 **발행 글** 본문이 바뀌었다 — 판정자는 바뀐 글을 보고 no 라고 한다
+    const p3 = await prisma.post.findUniqueOrThrow({ where: { id: target3.postId } })
+    await prisma.post.update({ where: { id: target3.postId }, data: { content: `${p3.content} (선정 뒤 수정)` } })
     const pendingBefore = await prisma.autoReadyAudit.count({ where: { defect: null } })
     const round = await runAuditRound(prisma, { env: ON, judge: alwaysNo, auditor: 'always-no-auditor', now: NOW })
     check('🔴 🔴 **감사 회차가 판정 전 감사를 전부 판정했다 (개수 제한 없음)**',
@@ -460,12 +627,15 @@ async function main(): Promise<void> {
       t1.defect === 'yes' && t1.auditor === INTEGRITY_AUDITOR && t1.auditModel === INTEGRITY_MODEL, `${t1.defect} · ${t1.auditor}`)
     check('🔴 🔴 **판정자는 no 인데 도장 계약 판이 바뀌었다 → 저장 경계가 yes(무결성)**',
       t2.defect === 'yes' && t2.auditor === INTEGRITY_AUDITOR, `${t2.defect} · ${t2.auditor}`)
+    const t3 = await prisma.autoReadyAudit.findUniqueOrThrow({ where: { queueId: target3.queueId } })
+    check('🔴 🔴 **판정자는 no 인데 선정 뒤 Post 본문이 바뀌었다 → 저장 경계가 yes(무결성)**',
+      t3.defect === 'yes' && t3.auditor === INTEGRITY_AUDITOR && (t3.note ?? '').includes('바뀌었다'), `${t3.defect} · ${t3.auditor} · ${t3.note}`)
     check('🔴 바뀌지 않은 감사는 판정자의 no 가 그대로 기록됐다 — 과하게 막지 않는다',
       (await prisma.autoReadyAudit.count({ where: { defect: 'no', auditor: 'always-no-auditor' } })) >= 1)
     check('확정 결함 ≥ 1', await confirmedDefectCount(prisma) >= 1)
     const next = await authoritativeGate(prisma, ON)
     check('🔴 🔴 **다음 회차 열림 판정 → 닫힘**', !next.open && next.reasons.some((x) => x.includes('확정 결함')))
-    const fresh = await machineRow({ persona: personas[1]!.id })
+    const fresh = await machineRow()
     check('🔴 🔴 **다음 자동 도장 → closed · 도장 0**', (await stampAutoReady(prisma, { queueId: fresh.id, env: ON, now: NOW })).kind === 'closed'
       && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: fresh.id } })).decidedBy === 'machine:auto-draft-v5')
     const before = await postCount()
@@ -484,7 +654,7 @@ async function main(): Promise<void> {
     // 판정 전 감사 하나를 새로 만든다 — 자동 발행을 늘리고 모자란 만큼 고른다
     let fresh: string | null = null
     for (let i = 0; i < 5 && fresh === null; i += 1) {
-      const r = await machineRow({ persona: personas[i % 3]!.id })
+      const r = await machineRow()
       await prisma.originalPostApprovalQueue.update({ where: { id: r.id }, data: { decidedBy: AUTO_DECIDER } })
       const row = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: r.id } })
       await prisma.originalPostApprovalQueue.update({
@@ -530,17 +700,24 @@ async function main(): Promise<void> {
     const fkCode = async (f: () => Promise<unknown>): Promise<string> => {
       try { await f(); return 'deleted' } catch (e) { return (e as { code?: string }).code ?? 'error' }
     }
-    for (const kind of ['Queue', 'Post'] as const) {
+    /** 🔴 무조건 no — 판정자를 믿지 않는다는 것을 보이려고 넣는다 */
+    const alwaysNo14: AuditJudge = async (i) => ({ ...(await ruleAuditJudge(i)), defect: 'no', reasons: [] })
+    for (const kind of ['PostEdit', 'Queue', 'Post'] as const) {
       await resetAudits()
+      const lab = kind === 'PostEdit' ? 'Post 본문 변경' : `${kind} 유실`
       check(`[${kind}] 시작 — 확정 결함 0 · 열림`, (await authoritativeGate(prisma, ON)).open)
-      const waiting = await machineRow({ persona: personas[2]!.id })
+      const waiting = await machineRow()
       check(`[${kind}] 유실 전에 찍힌 대기 도장`, (await stampAutoReady(prisma, { queueId: waiting.id, env: ON, now: NOW })).kind === 'stamped')
       const sel = await selectAudits(prisma)
       const au = sel.kind === 'ok' ? sel.picked[0] : undefined
       check(`[${kind}] 감사 대상이 골라졌다`, au !== undefined, JSON.stringify(sel))
       if (au === undefined) continue
       const row = await prisma.autoReadyAudit.findUniqueOrThrow({ where: { queueId: au } })
-      if (kind === 'Post') {
+      if (kind === 'PostEdit') {
+        // 🔴 선정 뒤 발행 글 본문이 바뀌었다 — 지우지 않고 고친다
+        const p0 = await prisma.post.findUniqueOrThrow({ where: { id: row.postId } })
+        await prisma.post.update({ where: { id: row.postId }, data: { content: `${p0.content} (선정 뒤 수정)` } })
+      } else if (kind === 'Post') {
         const code = await fkCode(() => prisma.post.delete({ where: { id: row.postId } }))
         check('🔴 🔴 **FK RESTRICT — 감사 중인 Post 는 지울 수 없다 (P2003)**', code === 'P2003', code)
         await lose('Post', row.postId)
@@ -549,22 +726,66 @@ async function main(): Promise<void> {
         check('🔴 🔴 **FK RESTRICT — 감사 중인 큐 행은 지울 수 없다 (P2003)**', code === 'P2003', code)
         await lose('OriginalPostApprovalQueue', row.queueId)
       }
-      const round = await runAuditRound(prisma, { env: ON, judge: ruleAuditJudge, auditor: 'rule-auditor', now: NOW })
+      const round = await runAuditRound(prisma, {
+        env: ON, judge: kind === 'PostEdit' ? alwaysNo14 : ruleAuditJudge, auditor: 'rule-auditor', now: NOW,
+      })
       const after = await prisma.autoReadyAudit.findUnique({ where: { queueId: au } })
-      check(`🔴 🔴 **[${kind} 유실] 대기로 남기지 않고 시스템 무결성 yes 를 기록했다**`,
+      check(`🔴 🔴 **[${lab}] 대기로 남기지 않고 시스템 무결성 yes 를 기록했다${kind === 'PostEdit' ? ' (판정자는 무조건 no)' : ''}**`,
         after?.defect === 'yes' && after.auditor === INTEGRITY_AUDITOR
         && round.kind === 'ok' && (round.tally.get('integrityDefect') ?? 0) >= 1,
         `${String(after?.defect)} · ${String(after?.auditor)} · ${round.kind === 'ok' ? [...round.tally].map(([k, v]) => `${k} ${v}`).join(' ') : 'off'}`)
-      check(`[${kind} 유실] 판정 전 감사가 남지 않았다`, (await prisma.autoReadyAudit.count({ where: { defect: null } })) === 0)
-      const fresh = await machineRow({ persona: personas[0]!.id })
+      check(`[${lab}] 판정 전 감사가 남지 않았다`, (await prisma.autoReadyAudit.count({ where: { defect: null } })) === 0)
+      const fresh = await machineRow()
       const st = await stampAutoReady(prisma, { queueId: fresh.id, env: ON, now: NOW })
-      check(`🔴 🔴 **[${kind} 유실] 다음 자동 도장 0**`,
+      check(`🔴 🔴 **[${lab}] 다음 자동 도장 0**`,
         st.kind === 'closed' && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: fresh.id } })).decidedBy === 'machine:auto-draft-v5',
         JSON.stringify(st))
       const before = await postCount()
       const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
-      check(`🔴 🔴 **[${kind} 유실] 유실 전에 찍힌 도장 행도 발행 0**`,
+      check(`🔴 🔴 **[${lab}] 유실 전에 찍힌 도장 행도 발행 0**`,
         pw.kind === 'blocked' && pw.code === 'AUTO_READY_RECHECK' && (await postCount()) === before, JSON.stringify(pw))
+    }
+  }
+
+  console.log('\n⑭-b 🔴 🔴 감사로 뽑히지 않은 자동 발행 글이 사라져도 — 열림이 닫힌다 (감사 행 없음)')
+  {
+    // 🔴 검사 파일의 초기화 — 앞 구간이 남긴 유실 행(글 없는 큐 행)과 감사 표를 치운다
+    await prisma.$executeRawUnsafe('TRUNCATE TABLE "AutoReadyAudit"')
+    const pubRows = await prisma.originalPostApprovalQueue.findMany({ where: { createdPostId: { not: null } }, select: { id: true, createdPostId: true } })
+    const alive = new Set((await prisma.post.findMany({ where: { id: { in: pubRows.map((x) => x.createdPostId!) } }, select: { id: true } })).map((x) => x.id))
+    for (const o of pubRows.filter((x) => !alive.has(x.createdPostId!))) await prisma.originalPostApprovalQueue.delete({ where: { id: o.id } })
+    check('시작 — 열림', (await authoritativeGate(prisma, ON)).open, (await authoritativeGate(prisma, ON)).reasons.join(' · '))
+    const waiting = await machineRow()
+    check('유실 전에 찍힌 대기 도장', (await stampAutoReady(prisma, { queueId: waiting.id, env: ON, now: NOW })).kind === 'stamped')
+    const r = await machineRow()
+    await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
+    const pub = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+    check('자동 발행 1건 — 감사 선정은 돌리지 않는다', pub.kind === 'published', JSON.stringify(pub))
+    if (pub.kind === 'published') {
+      check('🔴 그 글에는 감사 행이 없다', (await prisma.autoReadyAudit.count({ where: { queueId: r.id } })) === 0)
+      let code = 'deleted'
+      try { await prisma.post.delete({ where: { id: pub.postId } }) } catch (e) { code = (e as { code?: string }).code ?? 'error' }
+      check('🔴 🔴 **FK RESTRICT — 큐 행이 가리키는 발행 글은 지울 수 없다 (P2003)**', code === 'P2003', code)
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL session_replication_role = replica')
+        await tx.$executeRawUnsafe('DELETE FROM "Post" WHERE "id" = $1', pub.postId)
+      })
+      const g = await authoritativeGate(prisma, ON)
+      check('🔴 🔴 **감사 행이 없어도 열림 판정이 닫힌다 — 글이 사라진 자동 발행**',
+        !g.open && g.reasons.some((x) => x.includes('글이 사라진 자동 발행 1건')), g.reasons.join(' · '))
+      const next = await machineRow()
+      const st = await stampAutoReady(prisma, { queueId: next.id, env: ON, now: NOW })
+      check('🔴 🔴 **다음 자동 도장 0**', st.kind === 'closed', JSON.stringify(st))
+      const round = await stampRound(prisma, { env: ON, now: NOW })
+      check('🔴 🔴 **도장 회차(묶음)도 0**', (round.get('stamped') ?? 0) === 0, [...round].map(([k, v]) => `${k} ${v}`).join(' '))
+      const before = await postCount()
+      const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+      check('🔴 🔴 **유실 전에 찍힌 도장 행도 발행 0**',
+        pw.kind === 'blocked' && pw.code === 'AUTO_READY_RECHECK' && (await postCount()) === before, JSON.stringify(pw))
+      const sel = await selectAudits(prisma)
+      check('🔴 선정은 멈추지 않고 유실을 값으로 알린다 (러너는 이 값이 있으면 실패로 끝낸다)',
+        sel.kind === 'ok' && sel.missingPost.includes(r.id), JSON.stringify(sel))
+      check('🔴 선정 뒤에도 닫힘은 그대로다 — 로그가 아니라 DB 상태가 닫는다', !(await authoritativeGate(prisma, ON)).open)
     }
   }
 
