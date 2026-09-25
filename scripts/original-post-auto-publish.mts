@@ -242,7 +242,7 @@ for (const d of plan.autoDeferred) {
   console.log(`   ⏸️  자동 배정 유예  ${d.id}  [${d.codes.join(', ')}] — 시간 상한이 풀리면 다음 회차에 다시 본다`)
 }
 for (const e of plan.autoExceptions) {
-  console.log(`   🔴 자동 배정 예외  ${e.id}  [${e.codes.join(', ')}] — 자동 발행에서 뺐다 · 다른 Persona 로 바꾸지 않는다 · 사람이 본다`)
+  console.log(`   🔴 자동 배정 예외  ${e.id}  [${e.codes.join(', ')}] — 자동 발행에서 뺐다 · 다른 Persona 로 바꾸지 않는다 · 구조화 예외로 남는다 · 영속 관제 경로는 아직 미연결`)
 }
 
 console.log(`\n③ persona 배정 가능성 (active ${personas.length}명)`)
