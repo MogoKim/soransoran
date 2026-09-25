@@ -73,6 +73,8 @@ export async function evidenceFromDb(db: Db): Promise<ReturnType<typeof cohortSa
     select: {
       decidedBy: true, gateVerdict: true, gateResults: true, draftTitle: true, draftBody: true,
       editDiff: true, declineReason: true, promptVersion: true, model: true,
+      // 🔴 사람 기록 v2 의 결속을 지금 행과 견준다 — 최종 문안·상태가 필요하다
+      status: true, editedTitle: true, editedBody: true,
       rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
   })

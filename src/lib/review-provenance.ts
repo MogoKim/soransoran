@@ -30,14 +30,33 @@ export const REVIEWER_KINDS = [
 export type ReviewerKind = (typeof REVIEWER_KINDS)[number]
 
 /** 🔴 사람 정답 표본이 될 수 있는 종류 — 이 둘뿐이다 */
-export const HUMAN_REVIEWER_KINDS: readonly ReviewerKind[] = ['human:founder', 'human:operator']
+export const HUMAN_REVIEWER_KINDS = ['human:founder', 'human:operator'] as const satisfies readonly ReviewerKind[]
+export type HumanReviewerKind = (typeof HUMAN_REVIEWER_KINDS)[number]
+
+/** 🔴 CLI importer 가 쓸 수 있는 종류 — 비사람뿐이다. 사람 기록은 관리자 서버 경계만 쓴다 */
+export const NON_HUMAN_IMPORTABLE: readonly ReviewerKind[] = ['codex:master-review', 'model:semantic-audit']
 
 /** 🔴 정확히 일치할 때만 종류로 인정한다 — 대소문자·공백·접두사 추정 없음 */
 export function parseReviewerKind(v: unknown): ReviewerKind | null {
   return typeof v === 'string' && (REVIEWER_KINDS as readonly string[]).includes(v) ? v as ReviewerKind : null
 }
 
-export function isHumanReviewer(v: unknown): boolean {
+export function isHumanReviewer(v: unknown): v is HumanReviewerKind {
   const k = parseReviewerKind(v)
-  return k !== null && HUMAN_REVIEWER_KINDS.includes(k)
+  return k !== null && (HUMAN_REVIEWER_KINDS as readonly string[]).includes(k)
+}
+
+/**
+ * 🔴 **로그인 세션 → 사람 검토자 종류** — 서버 경계만 부른다. 요청 본문은 이 값을 정하지 못한다.
+ *    · 관리자가 아니면 null(기록 거절)
+ *    · `SORAN_FOUNDER_EMAILS` allowlist 에 있으면 `human:founder`
+ *    · 그 밖의 관리자는 `human:operator`
+ *    🔴 allowlist 가 비어 있으면 아무도 founder 가 아니다(fail-closed) — 운영자로 기록된다.
+ */
+export function resolveHumanReviewer(
+  user: { isAdmin: boolean; email: string | null }, env: Readonly<Record<string, string | undefined>>,
+): HumanReviewerKind | null {
+  if (!user.isAdmin) return null
+  const founders = new Set((env.SORAN_FOUNDER_EMAILS ?? '').split(',').map((v) => v.trim().toLowerCase()).filter(Boolean))
+  return user.email !== null && founders.has(user.email.toLowerCase()) ? 'human:founder' : 'human:operator'
 }

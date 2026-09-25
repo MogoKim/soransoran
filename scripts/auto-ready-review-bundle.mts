@@ -22,12 +22,13 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
-import { restoreRow, outcomeOf, humanSampleOf, digestOf, EVIDENCE_REVIEW_CONTRACT } from '../src/lib/auto-ready-evidence'
+import { restoreRow, legacyOutcomeOf, stateOutcomeOf, humanSampleOf, digestOf, EVIDENCE_REVIEW_CONTRACT } from '../src/lib/auto-ready-evidence'
+import { readReviewArtifact, sourceEvidenceOf } from '../src/lib/original-post-machine-review'
 import { EVIDENCE_ROW_SELECT, decidedRowOf, type BundleItem, type EvidenceRow } from '../src/lib/auto-ready-evidence-store'
 import { HUMAN_DECIDER, CONTRACT, eligibilityOf } from '../src/lib/auto-ready-v2'
 import { profileOf } from '../src/lib/original-post-auto-publish'
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
-import { REVIEWER_KINDS } from '../src/lib/review-provenance'
+import { NON_HUMAN_IMPORTABLE } from '../src/lib/review-provenance'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { loadArtifactIndex, DEFAULT_ARTIFACT_DIR } from './lib/microseed-artifacts.mjs'
 
@@ -70,10 +71,17 @@ async function main(): Promise<void> {
       group, queueId: r.id,
       decision: {
         decidedBy: r.decidedBy, status: r.status, published: r.createdPostId !== null,
-        outcome: group === 'decided' ? outcomeOf(r) : null,
+        // 🔴 지금 행 상태의 결과 — 사람 기록은 이 값을 결속한다. legacy 표식은 참고로만 보인다
+        outcome: group === 'decided' ? stateOutcomeOf(r) : null,
+        legacyOutcome: group === 'decided' ? legacyOutcomeOf(r) : null,
         humanSampleNow: humanSampleOf(r),
       },
-      source: { site: r.rawContent.sourceSite, articleId: r.rawContent.sourceArticleId, capturedAt: r.rawContent.sourceCapturedAt, title: r.rawContent.rawTitle, body: r.rawContent.rawBody },
+      /**
+       * 🔴 원문 근거는 artifact 의 마스킹된 근거다 — DB `rawContent` 는 기계 후보에서 AI 초안의 사본이다
+       *    (`publish:machine-review` 와 같은 이유). DB 값은 참고로만 남긴다.
+       */
+      artifactSource: (() => { const ra = a === null ? null : readReviewArtifact(a); return ra === null ? null : sourceEvidenceOf(ra) })(),
+      source: { site: r.rawContent.sourceSite, articleId: r.rawContent.sourceArticleId, capturedAt: r.rawContent.sourceCapturedAt, dbRawTitle: r.rawContent.rawTitle, dbRawBody: r.rawContent.rawBody },
       draft: { title: r.draftTitle, body: r.draftBody, titleDigest: digestOf(r.draftTitle), bodyDigest: digestOf(r.draftBody) },
       edit: r.editedTitle !== null || r.editedBody !== null
         ? { before: { title: r.draftTitle, body: r.draftBody }, after: { title: r.editedTitle, body: r.editedBody }, editDiff: r.editDiff } : null,
@@ -94,8 +102,9 @@ async function main(): Promise<void> {
     generatedAt: NOW.toISOString(),
     gate: CONTRACT,
     rule: [
-      '사람 정답 표본은 reviewer 가 human:founder · human:operator 일 때만 센다',
-      'codex:master-review · model:semantic-audit 기록은 남지만 표본이 아니다',
+      '사람 정답 표본은 관리자 화면(/admin/auto-ready-evidence)에 이 묶음을 올려 로그인 세션으로 기록한 것만 센다',
+      'review-template.json(CLI importer)은 codex:master-review · model:semantic-audit 기록만 만든다 — 표본이 아니다',
+      '결과(무수정/수정/폐기)는 기록 시점의 행 상태로 결속된다 — 이후 수정본·폐기가 바뀌면 표본에서 빠진다',
       'hardDefect 를 비우면 unmeasured — 게이트는 닫힌 채다',
       'undecidedShadow 행은 결정(approve/edit/decline)이 따로 기록되기 전에는 표본이 아니다',
     ],
@@ -107,9 +116,9 @@ async function main(): Promise<void> {
   const template = {
     contract: EVIDENCE_REVIEW_CONTRACT,
     reviewer: '',
-    reviewerChoices: REVIEWER_KINDS.filter((k) => k !== 'machine:auto-ready'),
+    /** 🔴 이 양식은 비사람 기록 전용이다. 사람 검토는 관리자 화면에서 이 묶음을 올려 기록한다 */
+    reviewerChoices: NON_HUMAN_IMPORTABLE,
     bundleDigest,
-    reviewedAt: '',
     items: items.map((it): BundleItem & { hardDefect: null; reasons: string[] } => ({
       queueId: it.queueId, draftTitleDigest: it.draft.titleDigest, draftBodyDigest: it.draft.bodyDigest, hardDefect: null, reasons: [],
     })),

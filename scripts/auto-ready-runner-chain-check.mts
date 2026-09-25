@@ -27,11 +27,15 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
 } from '../src/lib/micro-seed-supply-autofill'
 
-import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
-/** 🔴 증거 픽스처의 사람 검토 기록 — 운영에서는 배치 검토 importer 가 쓴다 */
+import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
+/**
+ * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
+ *    발행된 사람 결정 행 · 수정·폐기 없음 → noEdit 로 결속한다.
+ */
 const humanReviewed = (title: string, body: string) => ({
   [EVIDENCE_REVIEW_KEY]: [{
-    contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:founder', draftTitleDigest: evDigest(title), draftBodyDigest: evDigest(body),
+    contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:founder', reviewerUserId: 'fixture-founder',
+    ...bindingOf({ status: 'PUBLISHED', draftTitle: title, draftBody: body, editedTitle: null, editedBody: null, declineReason: null }),
     hardDefect: 'no', reasons: [], bundleDigest: evDigest('fixture-bundle'), reviewedAt: '2026-09-25T00:00:00Z',
   }],
 })

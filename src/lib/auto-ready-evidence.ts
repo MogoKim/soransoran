@@ -59,6 +59,8 @@ export type DecidedRow = {
   rawSourceSite: string
   rawSourceArticleId: string
   sourceCapturedAt: Date | null
+  /** 🔴 큐에 배정된 Persona code — 미배정 그림자는 null */
+  matchedPersonaCode: string | null
 }
 
 export type RestoreResult = {
@@ -122,6 +124,15 @@ export function restoreRow(
   for (const k of ['personaCode', 'bundleDigest', 'sourceDigest'] as const) {
     if (S(rv[k]) === '' || S(rv[k]) !== S(a.voice[k])) prov.push(`voice.${k} — 행 ${S(rv[k])} · artifact ${S(a.voice[k])}`)
   }
+  /**
+   * 🔴 **배정된 Persona 가 있으면 artifact 의 plan·voice Persona 와 같아야 한다** (2026-09-25 마스터 F).
+   *    다른 사람의 말투로 쓴 글을 다른 사람이 낸 것이면, 그 artifact 의 판정은 이 글의 근거가 아니다.
+   *    미배정(null) 그림자는 허용한다.
+   */
+  if (row.matchedPersonaCode !== null
+    && (row.matchedPersonaCode !== a.planPersonaCode || row.matchedPersonaCode !== S(a.voice.personaCode))) {
+    prov.push(`matchedPersona ${row.matchedPersonaCode} ≠ artifact plan ${String(a.planPersonaCode)} · voice ${S(a.voice.personaCode)}`)
+  }
   if (a.planPersonaCode !== S(a.voice.personaCode)) {
     prov.push(`plan.personaCode ${String(a.planPersonaCode)} ≠ voice.personaCode ${S(a.voice.personaCode)}`)
   }
@@ -162,42 +173,100 @@ export function restoreRow(
 }
 
 /**
- * 🔴 **사람 결정의 결과** — 무수정 · 수정 · 폐기.
- *    `editDiff` 에 수정 기록(`bodyChanged`·`titleChanged` 가 true)이 있으면 수정이다.
- *    자동 도장 기록만 있는 editDiff 는 수정이 아니다.
+ * 🔴 **옛 결과 표식(legacy)** — `editDiff` 의 수정 표식 · `declineReason` 으로 읽는다.
+ *    출처를 증명하지 못하므로 **표본 계산에 쓰지 않는다**(검토 묶음에서 참고로만 보인다).
  */
-export type HumanOutcome = 'noEdit' | 'edited' | 'declined'
-export function outcomeOf(row: Pick<DecidedRow, 'editDiff' | 'declineReason'>): HumanOutcome {
+export function legacyOutcomeOf(row: Pick<DecidedRow, 'editDiff' | 'declineReason'>): HumanOutcome {
   if ((row.declineReason ?? '').trim() !== '') return 'declined'
   return isHumanEditRecord(row.editDiff) ? 'edited' : 'noEdit'
 }
 
 /**
- * ── 🔴 **증거 검토 기록 — 누가 이 초안을 보고 무엇이라 했나** (2026-09-25) ──
+ * ── 🔴 **증거 검토 기록 v2 — 누가 무엇을 최종으로 확정했나** (2026-09-25 마스터 P0 ×2) ──
  *
- *    `editDiff.evidenceReviews` 에 **검토자 종류별로 한 줄**씩 남긴다(배치 검토 importer 가 쓴다).
- *    · `reviewer`     — `review-provenance` 의 닫힌 목록. 사람 종류만 정답 표본이 된다
- *    · 초안 digest    — 이 기록이 **바로 이 초안**에 대한 것인지 묶는다. 다르면 무효
- *    · `hardDefect`   — `yes`|`no`|`unmeasured`. 🔴 비어 있으면 `no` 가 아니라 `unmeasured` 다
- *    · `bundleDigest` — 어느 검토 묶음을 보고 판정했나
+ *    v1 은 두 가지가 틀렸다(격리 DB 에서 네 반례 모두 재현).
+ *      ① 검토자가 **자기신고 문자열**이었다 — 파일에 `human:founder` 를 적으면 사람이 됐다.
+ *      ② 사람 기록이 `hardDefect` 만 확정했다 — 무수정/수정/폐기는 출처 불명의 옛
+ *         `editDiff`·`declineReason` 에서 다시 읽었고, 검토 뒤 수정본·폐기가 바뀌어도 표본이 남았다.
+ *
+ *    v2 는 **최종 결과를 기록 자체가 확정한다.**
+ *      · `outcome` — noEdit | edited | declined
+ *      · 원본 초안 digest + **최종 발행 문안 digest**(edited 면 수정본, 아니면 초안) + 폐기 사유
+ *      · 검토 뒤 이 값 중 하나라도 DB 와 달라지면 그 기록은 **즉시 무효**다(표본에서 빠진다)
+ *    🔴 사람 기록(`human:*`)은 **관리자 서버 경계만** 쓴다 — 로그인 세션으로 검토자와 사용자 id 를,
+ *       서버 시계로 시각을 정한다. CLI importer 는 사람 기록을 만들지 못한다(`recordNonHumanReviews`).
+ *    🔴 v1 기록은 읽지 않는다 — 출처를 증명하지 못한다.
  */
 export const EVIDENCE_REVIEW_KEY = 'evidenceReviews'
-export const EVIDENCE_REVIEW_CONTRACT = 'evidence-review-v1'
+export const EVIDENCE_REVIEW_CONTRACT = 'evidence-review-v2'
+
+export type HumanOutcome = 'noEdit' | 'edited' | 'declined'
 
 export type EvidenceReview = {
   contract: typeof EVIDENCE_REVIEW_CONTRACT
   reviewer: ReviewerKind
+  /** 🔴 사람 기록이면 로그인 세션의 User.id — 서버가 채운다. 비사람 기록은 null */
+  reviewerUserId: string | null
+  outcome: HumanOutcome
   draftTitleDigest: string
   draftBodyDigest: string
+  /** 🔴 최종 발행 문안 — edited 면 수정본, noEdit·declined 면 초안 */
+  finalTitleDigest: string
+  finalBodyDigest: string
+  /** 🔴 declined 일 때만 값 — 그 밖은 null */
+  declineReason: string | null
   hardDefect: 'yes' | 'no' | 'unmeasured'
   reasons: string[]
   bundleDigest: string
+  /** 🔴 서버(또는 importer 프로세스) 시계 — 호출자가 넣은 값이 아니다 */
   reviewedAt: string
+}
+
+/** 결속을 재는 데 필요한 지금 행의 값 */
+export type BoundRow = {
+  status: string
+  draftTitle: string
+  draftBody: string
+  editedTitle: string | null
+  editedBody: string | null
+  declineReason: string | null
+}
+
+/**
+ * 🔴 **지금 행 상태에서 결과를 읽는다 — 옛 editDiff 표식을 믿지 않는다.**
+ *    폐기 상태면 declined, 최종 문안이 초안과 다르면 edited, 같으면 noEdit.
+ */
+export function stateOutcomeOf(r: BoundRow): HumanOutcome {
+  if (r.status === 'DECLINED') return 'declined'
+  const t = r.editedTitle ?? r.draftTitle
+  const b = r.editedBody ?? r.draftBody
+  return t !== r.draftTitle || b !== r.draftBody ? 'edited' : 'noEdit'
+}
+
+/** 🔴 지금 상태 그대로의 결속 값 — 서버·importer 가 기록할 때 이 함수 하나로 만든다 */
+export function bindingOf(r: BoundRow): Pick<EvidenceReview,
+  'outcome' | 'draftTitleDigest' | 'draftBodyDigest' | 'finalTitleDigest' | 'finalBodyDigest' | 'declineReason'> {
+  const outcome = stateOutcomeOf(r)
+  return {
+    outcome,
+    draftTitleDigest: digestOf(r.draftTitle), draftBodyDigest: digestOf(r.draftBody),
+    finalTitleDigest: digestOf(r.editedTitle ?? r.draftTitle), finalBodyDigest: digestOf(r.editedBody ?? r.draftBody),
+    declineReason: outcome === 'declined' ? (r.declineReason ?? '') : null,
+  }
+}
+
+/** 🔴 기록이 **지금 행**과 여전히 맞는가 — 하나라도 다르면 무효 */
+export function bindingHolds(rec: EvidenceReview, r: BoundRow): boolean {
+  const now = bindingOf(r)
+  return rec.outcome === now.outcome
+    && rec.draftTitleDigest === now.draftTitleDigest && rec.draftBodyDigest === now.draftBodyDigest
+    && rec.finalTitleDigest === now.finalTitleDigest && rec.finalBodyDigest === now.finalBodyDigest
+    && rec.declineReason === now.declineReason
 }
 
 const HEX64 = /^[0-9a-f]{64}$/
 
-/** 🔴 모양이 계약과 정확히 맞는 기록만 읽는다 — 하나라도 어긋나면 그 기록은 없는 것이다 */
+/** 🔴 모양이 v2 계약과 정확히 맞는 기록만 읽는다 — 하나라도 어긋나면 그 기록은 없는 것이다 */
 export function readEvidenceReviews(editDiff: unknown): EvidenceReview[] {
   if (editDiff === null || typeof editDiff !== 'object' || Array.isArray(editDiff)) return []
   const arr = (editDiff as Record<string, unknown>)[EVIDENCE_REVIEW_KEY]
@@ -208,47 +277,51 @@ export function readEvidenceReviews(editDiff: unknown): EvidenceReview[] {
     const r = x as Record<string, unknown>
     const reviewer = parseReviewerKind(r.reviewer)
     if (r.contract !== EVIDENCE_REVIEW_CONTRACT || reviewer === null) continue
-    if (typeof r.draftTitleDigest !== 'string' || !HEX64.test(r.draftTitleDigest)) continue
-    if (typeof r.draftBodyDigest !== 'string' || !HEX64.test(r.draftBodyDigest)) continue
+    const human = isHumanReviewer(reviewer)
+    if (human ? (typeof r.reviewerUserId !== 'string' || r.reviewerUserId === '') : r.reviewerUserId !== null) continue
+    if (r.outcome !== 'noEdit' && r.outcome !== 'edited' && r.outcome !== 'declined') continue
+    const hashes = [r.draftTitleDigest, r.draftBodyDigest, r.finalTitleDigest, r.finalBodyDigest, r.bundleDigest]
+    if (!hashes.every((h) => typeof h === 'string' && HEX64.test(h))) continue
+    if (r.outcome === 'declined' ? typeof r.declineReason !== 'string' || r.declineReason === '' : r.declineReason !== null) continue
     if (r.hardDefect !== 'yes' && r.hardDefect !== 'no' && r.hardDefect !== 'unmeasured') continue
     if (!Array.isArray(r.reasons) || !r.reasons.every((v) => typeof v === 'string')) continue
-    if (typeof r.bundleDigest !== 'string' || !HEX64.test(r.bundleDigest)) continue
     if (typeof r.reviewedAt !== 'string' || Number.isNaN(Date.parse(r.reviewedAt))) continue
     out.push({
-      contract: EVIDENCE_REVIEW_CONTRACT, reviewer, draftTitleDigest: r.draftTitleDigest,
-      draftBodyDigest: r.draftBodyDigest, hardDefect: r.hardDefect, reasons: r.reasons as string[],
-      bundleDigest: r.bundleDigest, reviewedAt: r.reviewedAt,
+      contract: EVIDENCE_REVIEW_CONTRACT, reviewer, reviewerUserId: human ? r.reviewerUserId as string : null,
+      outcome: r.outcome, draftTitleDigest: r.draftTitleDigest as string, draftBodyDigest: r.draftBodyDigest as string,
+      finalTitleDigest: r.finalTitleDigest as string, finalBodyDigest: r.finalBodyDigest as string,
+      declineReason: r.outcome === 'declined' ? r.declineReason as string : null,
+      hardDefect: r.hardDefect, reasons: r.reasons as string[], bundleDigest: r.bundleDigest as string, reviewedAt: r.reviewedAt,
     })
   }
   return out
 }
 
 export type HumanSampleVerdict =
-  | { counted: true; hardDefect: 'yes' | 'no' | 'unmeasured'; reviewers: ReviewerKind[] }
-  | { counted: false; why: 'notHumanDecision' | 'noReview' | 'nonHumanOnly' | 'draftMismatch' }
+  | { counted: true; outcome: HumanOutcome; hardDefect: 'yes' | 'no' | 'unmeasured'; reviewers: ReviewerKind[] }
+  | { counted: false; why: 'notHumanDecision' | 'noReview' | 'nonHumanOnly' | 'bindingBroken' }
 
 /**
- * 🔴 **이 행이 사람 정답 표본인가.** 셋 다 참이어야 한다:
- *    ① 사람 결정 경로의 표식(`decidedBy='founder'`)이 있다 — 기계·자동 결정 행이 아니다
- *    ② `human:*` 검토 기록이 **이 초안**(제목·본문 digest)에 묶여 있다
- *    ③ (없으면) Codex·Claude·모델 기록만 있는 행은 운영 근거일 수는 있어도 **표본이 아니다**
- *    중대 결함은 사람 기록에서만 읽는다 — 하나라도 yes 면 yes, 아니면 하나라도 미측정이면 미측정.
+ * 🔴 **이 행이 사람 정답 표본인가.**
+ *    ① 사람 결정 경로 표식(`decidedBy='founder'`)이 있다
+ *    ② 서버 경계가 쓴 `human:*` v2 기록이 있다(사용자 id 포함)
+ *    ③ 그 기록의 결속(초안·최종 문안·폐기 사유·결과)이 **지금 행과 같다**
+ *    (결속이 맞는 기록의 결과는 언제나 지금 상태의 결과다 — 사람 기록끼리 결과가 갈릴 수 없다)
+ *    결과는 **기록이 확정한 값**이다 — 행의 옛 editDiff·declineReason 을 다시 읽지 않는다.
  */
 export function humanSampleOf(
-  row: Pick<DecidedRow, 'decidedBy' | 'editDiff' | 'draftTitle' | 'draftBody'>,
+  row: Pick<DecidedRow, 'decidedBy' | 'editDiff'> & BoundRow,
 ): HumanSampleVerdict {
   if ((row.decidedBy ?? '').trim() !== HUMAN_DECIDER) return { counted: false, why: 'notHumanDecision' }
   const all = readEvidenceReviews(row.editDiff)
   if (all.length === 0) return { counted: false, why: 'noReview' }
   const human = all.filter((r) => isHumanReviewer(r.reviewer))
   if (human.length === 0) return { counted: false, why: 'nonHumanOnly' }
-  const t = digestOf(row.draftTitle)
-  const b = digestOf(row.draftBody)
-  const bound = human.filter((r) => r.draftTitleDigest === t && r.draftBodyDigest === b)
-  if (bound.length === 0) return { counted: false, why: 'draftMismatch' }
+  const bound = human.filter((r) => bindingHolds(r, row))
+  if (bound.length === 0) return { counted: false, why: 'bindingBroken' }
   const hardDefect = bound.some((r) => r.hardDefect === 'yes') ? 'yes'
     : bound.some((r) => r.hardDefect === 'unmeasured') ? 'unmeasured' : 'no'
-  return { counted: true, hardDefect, reviewers: bound.map((r) => r.reviewer) }
+  return { counted: true, outcome: bound[0]!.outcome, hardDefect, reviewers: bound.map((r) => r.reviewer) }
 }
 
 export type CohortSample = {
@@ -270,21 +343,18 @@ export type CohortSample = {
 }
 
 /**
- * 🔴 **증거 표본 — 사람 정답만 센다** (2026-09-25 개정).
- *    앞판은 `decidedBy='founder'` 이기만 하면 사람 표본으로 셌다. 그 값은 실행자와 무관하게
- *    써진다(founder 위장). 이제 `humanSampleOf` 가 사람 검토 기록을 요구한다.
- * 🔴 **중대 결함은 표본 전부에서 잰다** — 앞판은 수정·폐기 행만 요구해, 무수정 행은
- *    판정 없이 "결함 없음" 으로 읽혔다. 사람 판정이 없으면 unmeasured 이고 게이트는 닫힌다.
+ * 🔴 **증거 표본 — 서버가 인증한 사람 v2 기록만 센다.**
+ *    결과(무수정/수정/폐기)도 그 기록에서 온다. 중대 결함은 표본 전부에서 잰다(미측정=닫힘).
  * 🔴 기준 30 · 90% · 0 은 `CONTRACT` 그대로다.
  */
 export function cohortSampleOf(
-  rows: readonly Pick<DecidedRow, 'decidedBy' | 'editDiff' | 'declineReason' | 'draftTitle' | 'draftBody'>[],
+  rows: readonly (Pick<DecidedRow, 'decidedBy' | 'editDiff'> & BoundRow)[],
 ): CohortSample {
-  const excluded = { notHumanDecision: 0, noReview: 0, nonHumanOnly: 0, draftMismatch: 0 }
+  const excluded = { notHumanDecision: 0, noReview: 0, nonHumanOnly: 0, bindingBroken: 0 }
   const samples: { o: HumanOutcome; d: 'yes' | 'no' | 'unmeasured' }[] = []
   for (const r of rows) {
     const v = humanSampleOf(r)
-    if (v.counted) samples.push({ o: outcomeOf(r), d: v.hardDefect })
+    if (v.counted) samples.push({ o: v.outcome, d: v.hardDefect })
     else excluded[v.why] += 1
   }
   const noEdit = samples.filter((x) => x.o === 'noEdit').length

@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   const clean = plan.filter((p) => p.klass === 'clean')
   const humanClean = clean.filter((p) => p.human.counted)
   console.log(`\n③-0 적용 시 예상 — 복원으로 적격이 되는 행 ${clean.length}건 · 그중 사람 정답 표본 ${humanClean.length}건`)
-  console.log(`   사람 표본이 아닌 이유 ${JSON.stringify(Object.fromEntries(['notHumanDecision', 'noReview', 'nonHumanOnly', 'draftMismatch']
+  console.log(`   사람 표본이 아닌 이유 ${JSON.stringify(Object.fromEntries(['notHumanDecision', 'noReview', 'nonHumanOnly', 'bindingBroken']
     .map((w) => [w, clean.filter((p) => !p.human.counted && p.human.why === w).length])))}`)
   const after = await evidenceFromDb(prisma)
   console.log(`\n③ 쓰기 ${written}건 · CAS 실패 ${lost}건${APPLY ? '' : ' · 🟡 dry-run — 쓰지 않았다'}`)

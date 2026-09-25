@@ -15,13 +15,17 @@
 import { Prisma, type PrismaClient } from '@prisma/client'
 
 import {
-  restoreRow, humanSampleOf, digestOf, EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, readEvidenceReviews,
+  restoreRow, humanSampleOf, digestOf, bindingOf, EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, readEvidenceReviews,
   type ArtifactDoc, type CandidateDoc, type DecidedRow, type EvidenceReview, type HumanSampleVerdict, type RestoreClass,
 } from './auto-ready-evidence'
 import { HUMAN_DECIDER } from './auto-ready-v2'
 import { profileOf } from './original-post-auto-publish'
 import { semanticSummaryOf } from './micro-seed-supply-autofill'
-import { parseReviewerKind, type ReviewerKind } from './review-provenance'
+import { completeReview, type ReviewAction, type ReviewRow } from './original-post-machine-review'
+import { isDeclineReasonCode } from './original-post-decision'
+import {
+  parseReviewerKind, isHumanReviewer, LEGACY_DECISION_MARK, NON_HUMAN_IMPORTABLE, type ReviewerKind, type HumanReviewerKind,
+} from './review-provenance'
 
 type Db = PrismaClient | Prisma.TransactionClient
 
@@ -32,7 +36,8 @@ const stable = (v: unknown): string =>
     ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort()) : x)) ?? 'undefined'
 
 export const EVIDENCE_ROW_SELECT = {
-  id: true, updatedAt: true, decidedBy: true, status: true, createdPostId: true, matchedPersonaId: true,
+  id: true, updatedAt: true, decidedBy: true, decidedAt: true, status: true, createdPostId: true, matchedPersonaId: true,
+  matchedPersona: { select: { code: true } },
   draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
   gateVerdict: true, gateResults: true, editDiff: true, declineReason: true, promptVersion: true, model: true,
   rawContent: { select: { sourceSite: true, sourceArticleId: true, sourceCapturedAt: true } },
@@ -45,6 +50,7 @@ export const decidedRowOf = (r: EvidenceRow): DecidedRow => ({
   gateVerdict: r.gateVerdict, gateResults: r.gateResults, editDiff: r.editDiff,
   declineReason: r.declineReason, rawSourceSite: r.rawContent.sourceSite,
   rawSourceArticleId: r.rawContent.sourceArticleId, sourceCapturedAt: r.rawContent.sourceCapturedAt,
+  matchedPersonaCode: r.matchedPersona?.code ?? null,
 })
 
 /**
@@ -103,7 +109,7 @@ export async function planSemanticRestore(
   } as never) === 'machine')
   return rows.map((r) => {
     const res = restoreRow(decidedRowOf(r), artifacts, candidates)
-    const base = { id: r.id, klass: res.klass, reasons: res.reasons, snapshot: snapshotOf(r), human: humanSampleOf(decidedRowOf(r)) }
+    const base = { id: r.id, klass: res.klass, reasons: res.reasons, snapshot: snapshotOf(r), human: humanSampleOf(r) }
     if (res.klass !== 'clean') return { ...base, action: 'skip' as const, changes: null, nextGateResults: null }
     const a = artifacts.get(String(rec(rec(r.gateResults).autoDraft).artifactId))![0]!
     const g = rec(r.gateResults)
@@ -136,20 +142,38 @@ export async function applySemanticRestore(db: Db, item: RestorePlanItem): Promi
 }
 
 // ─────────────────────────────────────────────────────────
-// B. 배치 검토 기록
+// B. 검토 기록 — 🔴 사람 기록과 비사람 기록의 **경로가 다르다**
 // ─────────────────────────────────────────────────────────
 
-/** 검토 묶음 한 줄 — 생성기가 쓰고 importer 가 대조한다 */
+/** 검토 묶음 한 줄 — 생성기가 쓰고 기록 경로가 대조한다 */
 export type BundleItem = { queueId: string; draftTitleDigest: string; draftBodyDigest: string }
 
-/** 검토자가 돌려준 파일 */
-export type ReviewFile = {
-  contract: unknown
-  reviewer: unknown
-  bundleDigest: unknown
-  reviewedAt: unknown
-  items: unknown
+const stableNoTime = (r: EvidenceReview): string => stable({ ...r, reviewedAt: '' })
+
+/** 🔴 기존 기록과 견주어 새 기록을 붙인다 — 같은 검토자(사람이면 같은 사용자)의 다른 기록은 덮지 않는다 */
+function mergeReview(editDiff: unknown, entry: EvidenceReview):
+  | { kind: 'write'; next: Record<string, unknown> } | { kind: 'unchanged' } | { kind: 'conflict' } {
+  const same = readEvidenceReviews(editDiff).filter((r) => r.reviewer === entry.reviewer && r.reviewerUserId === entry.reviewerUserId)
+  if (same.some((r) => stableNoTime(r) === stableNoTime(entry))) return { kind: 'unchanged' }
+  if (same.length > 0) return { kind: 'conflict' }
+  const ed = rec(editDiff)
+  const prev = Array.isArray(ed[EVIDENCE_REVIEW_KEY]) ? ed[EVIDENCE_REVIEW_KEY] as unknown[] : []
+  return { kind: 'write', next: { ...ed, [EVIDENCE_REVIEW_KEY]: [...prev, entry] } }
 }
+
+const readDefect = (it: Record<string, unknown>):
+  { ok: true; hardDefect: EvidenceReview['hardDefect']; reasons: string[] } | { ok: false; why: string } => {
+  // 🔴 비어 있으면 unmeasured — `no` 로 읽지 않는다
+  const hd = it.hardDefect === undefined || it.hardDefect === null || it.hardDefect === '' ? 'unmeasured' : it.hardDefect
+  if (hd !== 'yes' && hd !== 'no' && hd !== 'unmeasured') return { ok: false, why: `hardDefect "${String(hd)}" 는 yes|no 가 아니다` }
+  const reasons = Array.isArray(it.reasons) ? it.reasons.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : []
+  if (hd === 'yes' && reasons.length === 0) return { ok: false, why: 'hardDefect yes 인데 근거가 없다' }
+  return { ok: true, hardDefect: hd, reasons }
+}
+
+// ── B-1. CLI importer — 🔴 비사람 기록만 ──
+
+export type ReviewFile = { contract: unknown; reviewer: unknown; bundleDigest: unknown; items: unknown; reviewedAt?: unknown }
 
 export type ImportPlanItem = {
   queueId: string
@@ -165,23 +189,23 @@ export type ImportPlan =
   | { ok: true; reviewer: ReviewerKind; items: ImportPlanItem[] }
 
 /**
- * 🔴 **검토 기록 계획 — 읽기만 한다.**
- *    · 검토자 종류는 닫힌 목록과 **정확히** 같아야 한다 — 아니면 파일 전체를 거절한다
- *    · 파일이 가리키는 묶음 digest 가 실제 묶음과 같아야 한다
- *    · 각 줄의 초안 digest 가 묶음과 **지금 DB** 모두와 같아야 한다 — 그 사이 초안이 바뀌면 거절
- *    · `hardDefect` 가 비었으면 `unmeasured` 다(`no` 가 아니다). 모르는 값이면 그 줄을 거절한다
- *    · 같은 검토자의 기록이 이미 있으면: 같으면 `unchanged`, 다르면 **덮지 않고 거절**
+ * 🔴 **CLI 가 만들 수 있는 기록은 비사람 기록뿐이다** (2026-09-25 마스터 P0-1).
+ *    파일의 `reviewer` 는 자기신고 문자열이다 — 닫힌 목록 철자가 맞아도 신원 증명이 아니다.
+ *    그래서 `human:*` 이면 **파일 전체를 거절**한다. 사람 기록은 관리자 서버 경계(`recordHumanBatch`)만 쓴다.
+ * 🔴 시각은 파일 값을 쓰지 않는다 — 이 프로세스의 시계(`now`)다.
+ * 🔴 결과(outcome)도 파일이 정하지 않는다 — 지금 행 상태로 결속한다(`bindingOf`).
  */
-export async function planReviewImport(
-  db: Db, file: ReviewFile, bundle: { digest: string; items: readonly BundleItem[] },
+export async function planNonHumanImport(
+  db: Db, file: ReviewFile, bundle: { digest: string; items: readonly BundleItem[] }, now: Date,
 ): Promise<ImportPlan> {
   if (file.contract !== EVIDENCE_REVIEW_CONTRACT) return { ok: false, why: `contract 가 ${EVIDENCE_REVIEW_CONTRACT} 가 아니다`, items: [] }
   const reviewer = parseReviewerKind(file.reviewer)
   if (reviewer === null) return { ok: false, why: `검토자 "${String(file.reviewer)}" 는 계약 목록에 없다`, items: [] }
-  if (file.bundleDigest !== bundle.digest) return { ok: false, why: '검토 파일이 가리키는 묶음 digest 가 이 묶음과 다르다', items: [] }
-  if (typeof file.reviewedAt !== 'string' || Number.isNaN(Date.parse(file.reviewedAt))) {
-    return { ok: false, why: 'reviewedAt 이 시각이 아니다', items: [] }
+  if (isHumanReviewer(reviewer)) {
+    return { ok: false, why: `${reviewer} 기록은 CLI 로 만들 수 없다 — 사람 검토는 관리자 화면(로그인 세션)에서만 기록한다`, items: [] }
   }
+  if (!NON_HUMAN_IMPORTABLE.includes(reviewer)) return { ok: false, why: `${reviewer} 는 importer 가 쓰는 종류가 아니다`, items: [] }
+  if (file.bundleDigest !== bundle.digest) return { ok: false, why: '검토 파일이 가리키는 묶음 digest 가 이 묶음과 다르다', items: [] }
   if (!Array.isArray(file.items)) return { ok: false, why: 'items 가 배열이 아니다', items: [] }
   const inBundle = new Map(bundle.items.map((b) => [b.queueId, b]))
   const out: ImportPlanItem[] = []
@@ -199,10 +223,8 @@ export async function planReviewImport(
     if (it.draftTitleDigest !== b.draftTitleDigest || it.draftBodyDigest !== b.draftBodyDigest) {
       out.push(reject(queueId, '검토 파일의 초안 digest 가 묶음과 다르다')); continue
     }
-    const hd = it.hardDefect === undefined || it.hardDefect === null ? 'unmeasured' : it.hardDefect
-    if (hd !== 'yes' && hd !== 'no' && hd !== 'unmeasured') { out.push(reject(queueId, `hardDefect "${String(hd)}" 는 yes|no 가 아니다`)); continue }
-    const reasons = Array.isArray(it.reasons) ? it.reasons.filter((x): x is string => typeof x === 'string') : []
-    if (hd === 'yes' && reasons.length === 0) { out.push(reject(queueId, 'hardDefect yes 인데 근거가 없다')); continue }
+    const d = readDefect(it)
+    if (!d.ok) { out.push(reject(queueId, d.why)); continue }
     const row = await db.originalPostApprovalQueue.findUnique({ where: { id: queueId }, select: EVIDENCE_ROW_SELECT })
     if (row === null) { out.push(reject(queueId, 'DB 에 행이 없다')); continue }
     const snap = snapshotOf(row)
@@ -210,20 +232,13 @@ export async function planReviewImport(
       out.push(reject(queueId, '묶음을 만든 뒤 DB 초안이 바뀌었다', snap)); continue
     }
     const entry: EvidenceReview = {
-      contract: EVIDENCE_REVIEW_CONTRACT, reviewer, draftTitleDigest: b.draftTitleDigest, draftBodyDigest: b.draftBodyDigest,
-      hardDefect: hd, reasons, bundleDigest: bundle.digest, reviewedAt: file.reviewedAt,
+      contract: EVIDENCE_REVIEW_CONTRACT, reviewer, reviewerUserId: null, ...bindingOf(row),
+      hardDefect: d.hardDefect, reasons: d.reasons, bundleDigest: bundle.digest, reviewedAt: now.toISOString(),
     }
-    const existing = readEvidenceReviews(row.editDiff).filter((r) => r.reviewer === reviewer)
-    if (existing.some((r) => stable(r) === stable(entry))) {
-      out.push({ queueId, action: 'unchanged', why: '같은 검토 기록이 이미 있다', snapshot: snap, entry, nextEditDiff: null }); continue
-    }
-    if (existing.length > 0) { out.push(reject(queueId, `${reviewer} 의 다른 기록이 이미 있다 — 덮지 않는다`, snap)); continue }
-    const ed = rec(row.editDiff)
-    const prev = Array.isArray(ed[EVIDENCE_REVIEW_KEY]) ? ed[EVIDENCE_REVIEW_KEY] as unknown[] : []
-    out.push({
-      queueId, action: 'write', why: '새 검토 기록', snapshot: snap, entry,
-      nextEditDiff: { ...ed, [EVIDENCE_REVIEW_KEY]: [...prev, entry] },
-    })
+    const m = mergeReview(row.editDiff, entry)
+    if (m.kind === 'unchanged') { out.push({ queueId, action: 'unchanged', why: '같은 검토 기록이 이미 있다', snapshot: snap, entry, nextEditDiff: null }); continue }
+    if (m.kind === 'conflict') { out.push(reject(queueId, `${reviewer} 의 다른 기록이 이미 있다 — 덮지 않는다`, snap)); continue }
+    out.push({ queueId, action: 'write', why: '새 검토 기록', snapshot: snap, entry, nextEditDiff: m.next })
   }
   return { ok: true, reviewer, items: out }
 }
@@ -236,4 +251,145 @@ export async function applyReviewImport(db: Db, item: ImportPlanItem): Promise<n
     data: { editDiff: item.nextEditDiff as Prisma.InputJsonValue },
   })
   return r.count
+}
+
+// ── B-2. 사람 기록 — 🔴 관리자 서버 경계의 핵심. 로그인 세션이 정한 검토자만 받는다 ──
+
+/** 🔴 서버 경계가 세션으로 정한 검토자 — 요청 본문에서 오지 않는다 */
+export type HumanActor = { userId: string; reviewer: HumanReviewerKind }
+
+/**
+ * 한 줄 입력 — 🔴 `reviewer`·`reviewedAt` 칸이 **없다.** 들어와도 읽지 않는다.
+ *    결정 전 그림자면 `decision` 이 있어야 하고, 이미 결정된 행이면 없어야 한다.
+ */
+export type HumanBatchEntry = {
+  queueId: string
+  decision?: unknown
+  declineReason?: unknown
+  hardDefect?: unknown
+  reasons?: unknown
+}
+
+export type HumanBatchResult = { queueId: string; result: 'recorded' | 'decidedAndRecorded' | 'unchanged' | 'reject'; why: string }
+
+class Abort extends Error {}
+
+/**
+ * 🔴 **사람 검토 한 묶음을 기록한다 — 행마다 한 Serializable 트랜잭션.**
+ *    · 이미 사람 결정 표식이 있는 행: 결정을 바꾸지 않는다. 지금 상태를 결속해 사람 기록을 붙인다
+ *    · 결정 전 그림자(`machine:*`): `ready`(그대로) · `reject`(폐기) 결정을 **정본 `completeReview`** 로
+ *      같은 트랜잭션 안에서 저장한 뒤, 그 결과 상태를 결속해 사람 기록을 붙인다.
+ *      결정이 저장되지 않으면 기록도 없다(함께 되돌아간다).
+ *    · 🔴 `edit` 은 받지 않는다 — 수정본은 artifact 원문으로 게이트를 다시 재야 하는데
+ *      그 게이트는 로컬 artifact 를 읽는다. 서버는 그 파일이 없다. 수정은 게이트가 있는
+ *      기존 명령으로 먼저 저장하고, 이 경로는 그 **최종 상태**를 사람이 확정하게 한다.
+ */
+export async function recordHumanBatch(prisma: PrismaClient, i: {
+  actor: HumanActor
+  now: Date
+  bundle: { digest: string; items: readonly BundleItem[] }
+  entries: readonly HumanBatchEntry[]
+}): Promise<HumanBatchResult[]> {
+  if (!isHumanReviewer(i.actor.reviewer) || i.actor.userId.trim() === '') {
+    return i.entries.map((e) => ({ queueId: e.queueId, result: 'reject' as const, why: '인증된 사람 검토자가 아니다' }))
+  }
+  const actorUser = await prisma.user.findUnique({ where: { id: i.actor.userId }, select: { id: true } })
+  if (actorUser === null) {
+    return i.entries.map((e) => ({ queueId: e.queueId, result: 'reject' as const, why: '검토자 사용자가 DB 에 없다' }))
+  }
+  const inBundle = new Map(i.bundle.items.map((b) => [b.queueId, b]))
+  const out: HumanBatchResult[] = []
+  const seen = new Set<string>()
+  for (const e of i.entries) {
+    const reject = (why: string): void => { out.push({ queueId: e.queueId, result: 'reject', why }) }
+    if (seen.has(e.queueId)) { reject('같은 행이 두 번 있다'); continue }
+    seen.add(e.queueId)
+    const b = inBundle.get(e.queueId)
+    if (b === undefined) { reject('묶음에 없는 행이다'); continue }
+    const d = readDefect(e as Record<string, unknown>)
+    if (!d.ok) { reject(d.why); continue }
+    const decision = e.decision === undefined || e.decision === null || e.decision === '' ? null : e.decision
+    if (decision !== null && decision !== 'ready' && decision !== 'reject') {
+      reject(`결정 "${String(decision)}" 은 이 화면에서 받지 않는다 (ready · reject 만 — 수정은 게이트가 있는 기존 명령으로)`); continue
+    }
+    if (decision === 'reject' && !isDeclineReasonCode(e.declineReason)) { reject('폐기에는 사유 코드가 필요하다'); continue }
+    try {
+      const res = await prisma.$transaction(async (tx): Promise<HumanBatchResult> => {
+        const row = await tx.originalPostApprovalQueue.findUnique({ where: { id: e.queueId }, select: EVIDENCE_ROW_SELECT })
+        if (row === null) throw new Abort('DB 에 행이 없다')
+        if (digestOf(row.draftTitle) !== b.draftTitleDigest || digestOf(row.draftBody) !== b.draftBodyDigest) {
+          throw new Abort('묶음을 만든 뒤 DB 초안이 바뀌었다')
+        }
+        const machine = profileOf({
+          promptVersion: row.promptVersion, model: row.model, sourceSite: row.rawContent.sourceSite, gateResults: row.gateResults,
+        } as never) === 'machine'
+        if (!machine) throw new Abort('기계 후보가 아니다')
+        const decidedBy = (row.decidedBy ?? '').trim()
+        let decided = false
+        if (decidedBy.startsWith('machine:')) {
+          // ── 결정 전 그림자 — 결정을 먼저 정본 경로로 저장한다 ──
+          if (decision === null) throw new Abort('결정 전 행이다 — ready · reject 중 하나를 골라야 기록한다')
+          if (row.createdPostId !== null) throw new Abort('이미 발행된 행이다')
+          const before: ReviewRow = {
+            status: row.status, createdPostId: row.createdPostId, decidedBy: row.decidedBy, updatedAt: row.updatedAt,
+            title: row.editedTitle ?? row.draftTitle, body: row.editedBody ?? row.draftBody,
+            promptVersion: row.promptVersion, model: row.model, gateResults: row.gateResults,
+            decidedAt: row.decidedAt, editDiff: row.editDiff, declineReason: row.declineReason,
+          }
+          const action: ReviewAction = decision === 'reject'
+            ? { decision: 'reject', declineReason: e.declineReason as string } : { decision: 'ready' }
+          const v = await completeReview({
+            id: row.id, before, decidedBy: LEGACY_DECISION_MARK, now: i.now, action,
+            draftTitle: row.draftTitle, draftBody: row.draftBody,
+            store: {
+              transaction: async (fn) => fn({
+                read: async (id) => {
+                  const r = await tx.originalPostApprovalQueue.findUnique({ where: { id }, select: EVIDENCE_ROW_SELECT })
+                  return r === null ? null : {
+                    status: r.status, createdPostId: r.createdPostId, decidedBy: r.decidedBy, updatedAt: r.updatedAt,
+                    decidedAt: r.decidedAt, title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
+                    promptVersion: r.promptVersion, model: r.model, gateResults: r.gateResults,
+                    editDiff: r.editDiff, declineReason: r.declineReason,
+                  }
+                },
+                stamp: async (s) => (await tx.originalPostApprovalQueue.updateMany({
+                  where: { id: s.id, status: row.status, createdPostId: null, decidedBy: s.where.decidedBy, updatedAt: s.where.updatedAt },
+                  data: {
+                    decidedBy: s.decidedBy, decidedAt: s.decidedAt, status: s.patch.status as never,
+                    ...(s.patch.declineReason === undefined ? {} : { declineReason: s.patch.declineReason as never }),
+                  },
+                })).count,
+              }),
+            },
+          })
+          if (!v.ok) throw new Abort(`결정 저장 실패 — ${v.reason}`)
+          decided = true
+        } else if (decidedBy === HUMAN_DECIDER) {
+          if (decision !== null) throw new Abort('이미 결정된 행이다 — 결정을 바꾸지 않는다(결과 확정만 한다)')
+        } else {
+          throw new Abort(`decidedBy=${decidedBy || '(없음)'} — 사람 결정 경로의 행이 아니다`)
+        }
+        // ── 결정 뒤(또는 기존) 상태를 다시 읽어 결속한다 ──
+        const now = await tx.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: row.id }, select: EVIDENCE_ROW_SELECT })
+        const entry: EvidenceReview = {
+          contract: EVIDENCE_REVIEW_CONTRACT, reviewer: i.actor.reviewer, reviewerUserId: i.actor.userId, ...bindingOf(now),
+          hardDefect: d.hardDefect, reasons: d.reasons, bundleDigest: i.bundle.digest, reviewedAt: i.now.toISOString(),
+        }
+        const m = mergeReview(now.editDiff, entry)
+        if (m.kind === 'unchanged') return { queueId: row.id, result: 'unchanged', why: '같은 사람 기록이 이미 있다' }
+        if (m.kind === 'conflict') throw new Abort('이 검토자의 다른 기록이 이미 있다 — 덮지 않는다')
+        const n = await tx.originalPostApprovalQueue.updateMany({
+          where: casWhere(snapshotOf(now)), data: { editDiff: m.next as Prisma.InputJsonValue },
+        })
+        if (n.count !== 1) throw new Abort('기록 중 행이 바뀌었다(CAS 0)')
+        return { queueId: row.id, result: decided ? 'decidedAndRecorded' : 'recorded', why: '' }
+      }, { isolationLevel: 'Serializable', maxWait: 5_000, timeout: 20_000 })
+      out.push(res)
+    } catch (err) {
+      if (err instanceof Abort) { reject(err.message); continue }
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') { reject('직렬화 충돌 — 다시 시도한다'); continue }
+      throw err
+    }
+  }
+  return out
 }

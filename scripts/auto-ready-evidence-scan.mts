@@ -12,7 +12,7 @@
 import { PrismaClient } from '@prisma/client'
 
 import { RESTORE_CLASSES, cohortSampleOf } from '../src/lib/auto-ready-evidence'
-import { planSemanticRestore, EVIDENCE_ROW_SELECT, decidedRowOf } from '../src/lib/auto-ready-evidence-store'
+import { planSemanticRestore, EVIDENCE_ROW_SELECT } from '../src/lib/auto-ready-evidence-store'
 import { CONTRACT } from '../src/lib/auto-ready-v2'
 import { evidenceFromDb } from '../src/lib/auto-ready-repo'
 import { loadArtifactIndex, DEFAULT_ARTIFACT_DIR } from './lib/microseed-artifacts.mjs'
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   for (const k of RESTORE_CLASSES) console.log(`   ${k.padEnd(20)} ${String(plan.filter((p) => p.klass === k).length).padStart(3)}`)
   const cleanIds = new Set(plan.filter((p) => p.klass === 'clean').map((p) => p.id))
   const rows = await prisma.originalPostApprovalQueue.findMany({ where: { id: { in: [...cleanIds] } }, select: EVIDENCE_ROW_SELECT })
-  const sample = cohortSampleOf(rows.map(decidedRowOf))
+  const sample = cohortSampleOf(rows)
   console.log('\n③ 복원한다면 — clean 행 중 사람 정답 표본 (계약을 낮추지 않는다)')
   console.log(`   적격 ${sample.eligible}/${CONTRACT.reviewSampleMin} · 무수정 ${sample.noEdit} · 수정 ${sample.edited} · 폐기 ${sample.declined}`
     + ` · 중대 결함 ${sample.hardDefects === null ? `unmeasured(${sample.hardDefectUnmeasured})` : sample.hardDefects}`)
