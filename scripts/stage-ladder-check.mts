@@ -458,7 +458,11 @@ console.log('\n⑩ 🔴 writer · 동시성 · rollback · 🔴 세 지점 전�
     /immutable/.test(store) && !/revision\s*Int/.test(store))
   check('🔴 🔴 **근거 없는 90일 삭제 규칙이 없다**',
     !/90일|retention|보존 기간 규칙을 둔다/.test(store))
-  check('🔴 migration 도 DB write 도 아직 없다',
+  /**
+   * 🔴 이 파일은 **순서만** 정의하는 순수 계약 모듈이다. Prisma 는
+   *    `stage-decision-repo` 가 끼워 넣는다 — 계약과 I/O 를 섞지 않는다.
+   */
+  check('🔴 store 순수 계약 모듈은 Prisma/DB I/O 를 직접 하지 않는다',
     !/prisma\.|\$transaction|migration\.sql/.test(store))
 }
 
@@ -1729,5 +1733,6 @@ console.log('\n⑭ 🔴 🔴 publisher 와 probe 실행 동등성 — 같은 fak
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 순수 함수 검사다 — 러너가 이 결정을 쓰는 **배선은 아직 없다**.')
-console.log('🔴 migration 0 · DB write 0. 실제 운영 조립은 `stage:probe` 가 따로 한다.\n')
+console.log('🔴 production migration apply 0 · 운영 DB write 0.'
+  + ' 실제 운영 조립은 `stage:probe` 가, 저장 왕복은 `stage:db-check`(격리 DB)가 따로 본다.\n')
 if (fail > 0) process.exit(1)

@@ -23,17 +23,28 @@ supply/publish 소비 배선 · feature flag ON 은 **승인되지 않았다.**
 ③ 그 뒤에 controller 배선·flag ON 을 **따로 승인받아** 진행한다
 ```
 
-## 되돌리기
+## 되돌리기 — 정본은 `STAGE_CONTROLLER_ENABLED=off` 다
 
-새 표 하나뿐이다.
-
-```sql
-DROP TABLE "StageDecision";
+```
+STAGE_CONTROLLER_ENABLED=off
 ```
 
-🔴 **행을 남긴 채 되돌리지 않는다.** 되돌린 뒤 다시 적용하면 그날 결정이 사라진
-상태로 시작하는데, 그때 consumer 는 "결정 없음 → 가장 안전한 단계" 로 간다.
-그것이 의도한 동작이다(fail-closed).
+이 한 줄이 일반 rollback 절차의 **전부**다. 두 러너는 기존 env/canary 경로로
+그대로 돌아간다.
+
+🔴 **이때 `StageDecision` 표와 그때까지의 결정 행은 그대로 보존한다.**
+지우지 않는다. 표가 남아 있어도 아무도 읽지 않으므로 운영에 영향이 없고,
+나중에 다시 켤 때 이력이 이어진다.
+
+### schema 제거는 일반 rollback 이 아니다
+
+표 자체를 없애는 일(`DROP TABLE`)은 **이 절차에 포함되지 않는다.**
+결정 이력을 잃는 별개의 작업이고, 하려면
+
+- **별도 승인**을 받고
+- **별도 migration** 으로 만든다
+
+flag 를 끄는 것으로 되돌리기가 끝나므로, 표를 지울 이유는 평소에 없다.
 
 ## 왜 `kstDate` 가 기본키인가
 

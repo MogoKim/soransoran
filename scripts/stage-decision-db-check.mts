@@ -177,9 +177,6 @@ async function main(): Promise<void> {
       seen !== rawComputed, seen === rawComputed ? '🔴 같은 객체다' : '')
     check('🔴 raw 원본은 얼어 있지 않다 — 그래서 넘기면 안 됐다',
       !Object.isFrozen(rawComputed))
-    {
-      const one = 1
-    }
   }
 
   console.log('\n② 🔴 JSON null 왕복 — DbNull 과 JsonNull 을 섞지 않는다')
