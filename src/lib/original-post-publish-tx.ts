@@ -87,11 +87,19 @@ export type PublishTxInput = {
    */
   dailyCap: number
   /**
-   * 🔴 **자동 READY 스위치** (2026-09-25 · auto-ready-v2). 부르는 쪽이 env 에서 읽어 넘긴다.
-   *    기본 `false` — 자동 도장 행은 이 값이 참일 때만, 그리고 트랜잭션 안의 재검증을
-   *    통과할 때만 나간다. 사람 결정 행에는 아무 영향이 없다.
+   * 🔴 **자동 READY env** (2026-09-25 · auto-ready-v2). 스위치는 여기서 읽고, 증거·결함은
+   *    **이 트랜잭션 안에서 DB 로** 다시 판정한다 — 호출자가 "열림" 을 정하지 않는다.
+   *    주지 않으면 `{}` = 꺼짐. 사람 결정 행에는 아무 영향이 없다.
    */
-  autoReadyEnabled?: boolean
+  autoReadyEnv?: Readonly<Record<string, string | undefined>>
+  /**
+   * 🔴 **자동 행의 Persona 배정 — 발행 트랜잭션 안에서 쓴다** (2026-09-25 마스터 지적).
+   *    앞판은 러너가 트랜잭션 **밖에서 먼저** 배정을 쓰고, 그 뒤 재검증이 실패하면
+   *    Post 는 0 인데 `matchedPersonaId`·`matchedAt` 만 바뀐 채 남았다.
+   *    이제 자동 행은 재검증 → 발행 판정 → **배정 쓰기** → Post 가 한 트랜잭션이다.
+   *    🔴 사람 결정 행에는 쓰지 않는다 — 그 경로의 기존 동작은 그대로다.
+   */
+  autoAssign?: { personaId: string; matchedAt: Date; matchMeta: unknown }
 }
 
 /**
@@ -124,6 +132,39 @@ export async function publishOriginalPostTx(
       })
       if (row === null) return { kind: 'error', message: '대상을 찾을 수 없습니다.' }
 
+      /**
+       * ── ⓪ 🔴 **자동 도장 행은 가장 먼저 다시 본다** (2026-09-25) ──
+       *    배정·Post 어떤 쓰기보다 **앞**이다. 스위치 · 도장(실제로 발행할 제목·본문) ·
+       *    경고 · **DB 증거 30/90%/결함 0** · 확정 결함을 이 트랜잭션 안에서 판정한다.
+       *    여기서 막히면 이 트랜잭션은 아무것도 쓰지 않는다.
+       */
+      const isAuto = (row.decidedBy ?? '').trim() === AUTO_DECIDER
+      if (isAuto) {
+        const recheck = await recheckAutoReadyInTx(tx, {
+          env: input.autoReadyEnv ?? {},
+          title: row.editedTitle ?? row.draftTitle,
+          body: row.editedBody ?? row.draftBody,
+          editDiff: row.editDiff, gateVerdict: row.gateVerdict, gateResults: row.gateResults,
+          sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
+        })
+        if (!recheck.ok) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason }
+      }
+
+      /**
+       * 🔴 **자동 행의 배정은 아직 쓰지 않는다.** 배정할 Persona 를 읽어 발행 판정에 쓰고,
+       *    판정을 통과한 뒤에만 이 트랜잭션 안에서 쓴다.
+       */
+      const pendingAssign = isAuto && row.matchedPersona === null && input.autoAssign !== undefined
+      const personaRow = pendingAssign
+        ? await tx.persona.findUnique({
+          where: { id: input.autoAssign!.personaId },
+          select: {
+            id: true, code: true, status: true, userId: true,
+            user: { select: { providerId: true, _count: { select: { accounts: true } } } },
+          },
+        })
+        : row.matchedPersona
+
       // 🔴 kill switch — 행이 없으면 "중지 꺼짐" 과 같다 (schema 주석)
       const sw = await tx.personaGlobalSwitch.findUnique({
         where: { id: 'global' },
@@ -148,12 +189,12 @@ export async function publishOriginalPostTx(
           status: row.status,
           createdPostId: row.createdPostId,
           gateVerdict: row.gateVerdict,
-          matchedPersonaCode: row.matchedPersona?.code ?? null,
-          personaStatus: row.matchedPersona?.status ?? null,
-          personaProviderId: row.matchedPersona?.user?.providerId ?? null,
+          matchedPersonaCode: personaRow?.code ?? null,
+          personaStatus: personaRow?.status ?? null,
+          personaProviderId: personaRow?.user?.providerId ?? null,
           // 🔴 persona 가 없으면 `null` 이고, judgePublish 가 fail-closed 로 막는다.
           //    여기서 0 으로 눙치면 "없는 persona" 가 실회원 검사를 통과한 것처럼 된다
-          personaAccountCount: row.matchedPersona?.user?._count.accounts ?? null,
+          personaAccountCount: personaRow?.user?._count.accounts ?? null,
         },
         {
           killSwitchEnabled: sw?.enabled === true,
@@ -167,24 +208,22 @@ export async function publishOriginalPostTx(
         return { kind: 'blocked', code: verdict.code, detail: verdict.detail, publishedTodayInTx }
       }
 
-      const persona = row.matchedPersona!
+      const persona = personaRow!
 
-      /**
-       * ── ⓪ 🔴 **자동 도장 행은 여기서 다시 본다** (2026-09-25) ──
-       *    밖에서 고른 순간과 지금 사이에 본문이 바뀌었거나, 감사가 결함을 확정했거나,
-       *    스위치가 꺼졌을 수 있다. **실제로 발행할 제목·본문**으로 도장을 다시 대조한다.
-       */
-      if ((row.decidedBy ?? '').trim() === AUTO_DECIDER) {
-        const recheck = await recheckAutoReadyInTx(tx, {
-          enabled: input.autoReadyEnabled === true,
-          title: row.editedTitle ?? row.draftTitle,
-          body: row.editedBody ?? row.draftBody,
-          editDiff: row.editDiff, gateVerdict: row.gateVerdict, gateResults: row.gateResults,
-          sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
+      // ── ⓪-b 🔴 자동 행 배정 — 재검증·발행 판정을 모두 통과한 뒤, 같은 트랜잭션에서 ──
+      if (pendingAssign) {
+        const assigned = await tx.originalPostApprovalQueue.updateMany({
+          where: {
+            id: row.id, matchedPersonaId: null, decidedBy: AUTO_DECIDER,
+            status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null,
+          },
+          data: {
+            matchedPersonaId: persona.id, matchedAt: input.autoAssign!.matchedAt,
+            matchMeta: input.autoAssign!.matchMeta as Prisma.InputJsonValue,
+          },
         })
-        if (!recheck.ok) {
-          return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason, publishedTodayInTx }
-        }
+        // 🔴 그 사이 누가 배정했으면 롤백한다 — 뒤의 쓰기와 함께 되돌아간다
+        if (assigned.count !== 1) throw new Error(QUEUE_RACE)
       }
 
       // ── ① Post ──

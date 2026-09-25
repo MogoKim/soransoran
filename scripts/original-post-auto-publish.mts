@@ -54,8 +54,8 @@ import { prepareCandidates, describePrepared, type QueueCandidate } from '../src
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
-import { autoReadyEnabled } from '../src/lib/auto-ready-v2'
-import { autoReadyOpenState, stampRound, selectAudits } from '../src/lib/auto-ready-repo'
+import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
+import { authoritativeGate, stampRound, selectAudits } from '../src/lib/auto-ready-repo'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -115,13 +115,17 @@ const RUN_AT = new Date()
  *    켜져 있어도 증거 표본이 계약을 채우고 확정 결함이 0 일 때만 열린다.
  */
 const AUTO_READY_ON = autoReadyEnabled(process.env)
-const autoOpen = await autoReadyOpenState(prisma, AUTO_READY_ON)
+/**
+ * 🔴 **이 값은 화면·selector 용이다. 쓰기의 근거가 아니다.** 도장과 발행 트랜잭션은
+ *    각자 자기 트랜잭션 안에서 스위치·DB 증거·확정 결함을 다시 판정한다.
+ */
+const autoOpen = await authoritativeGate(prisma, process.env)
 if (AUTO_READY_ON) {
   console.log(`\n⓪ 자동 READY ${autoOpen.open ? '🟢 열림' : '🔴 닫힘'}${autoOpen.reasons.length > 0 ? ` — ${autoOpen.reasons.join(' · ')}` : ''}`)
 }
 if (APPLY && autoOpen.open) {
   // 🔴 기계 도장 행만 — 한 행씩 조건부로 찍는다. 사람 결정 행은 건드리지 않는다
-  const tally = await stampRound(prisma, { open: autoOpen, now: RUN_AT })
+  const tally = await stampRound(prisma, { env: process.env, now: RUN_AT })
   console.log(`   도장 ${[...tally].map(([k, v]) => `${k} ${v}`).join(' · ') || '대상 없음'}`)
 }
 const stock = await loadPublishableStock(prisma, RUN_AT, { autoReadyOpen: autoOpen.open })
@@ -407,7 +411,26 @@ console.log(`\n⑤ 🔴 실행 — ${target.id}`)
 // ── ⑥ 배정 (없을 때만) ──
 // 🔴 기존 배정 행은 여기 들어오지 않는다 — matchedPersonaId · matchedAt · matchMeta 를 다시 쓰지 않는다.
 //    다시 쓰면 matchedAt 이 밀려 주간 여력이 한 번 더 열리고, 이력이 두 번 세어진다
-if (target.matchedPersonaId === null) {
+/**
+ * 🔴 **자동 도장 행은 여기서 배정을 쓰지 않는다** (2026-09-25 마스터 지적).
+ *    배정 계획만 세우고, 쓰기는 발행 트랜잭션에 넘긴다 — 재검증·발행 판정을 통과해야만
+ *    같은 트랜잭션 안에서 쓰이고, 실패하면 배정도 함께 되돌아간다.
+ *    사람 결정 행은 기존 동작 그대로다.
+ */
+const isAutoTarget = (target.decidedBy ?? '').trim() === AUTO_DECIDER
+let autoAssign: { personaId: string; matchedAt: Date; matchMeta: unknown } | undefined
+if (target.matchedPersonaId === null && isAutoTarget) {
+  const a = assignOf.get(target.id)
+  const plan = planStore({
+    status: target.status as never, createdPostId: target.createdPostId,
+    seed: target.id,
+    assigned: a?.assigned ?? null, eligible: a?.eligible ?? [], top: a?.top ?? [], blockedCount: a?.blocked.length ?? 0,
+  })
+  if (!plan.ok) { await prisma.$disconnect(); fail(`배정할 수 없습니다 — ${plan.reason}`) }
+  const persona = await prisma.persona.findUniqueOrThrow({ where: { code: plan.personaCode }, select: { id: true } })
+  autoAssign = { personaId: persona.id, matchedAt: RUN_AT, matchMeta: plan.meta }
+  console.log(`   ⏳ 배정 계획 ${plan.personaCode} — 발행 트랜잭션 안에서 쓴다`)
+} else if (target.matchedPersonaId === null) {
   const a = assignOf.get(target.id)
   const plan = planStore({
     status: target.status as never, createdPostId: target.createdPostId,
@@ -429,8 +452,10 @@ if (target.matchedPersonaId === null) {
 // 🔴 상한을 주입한다 — 트랜잭션 안 재판정도 같은 값을 쓴다
 const res = await publishOriginalPostTx(prisma, {
   queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP,
-  // 🔴 자동 도장 행은 트랜잭션 안에서 이 스위치와 도장·경고·결함을 다시 본다
-  autoReadyEnabled: AUTO_READY_ON,
+  // 🔴 자동 도장 행은 트랜잭션 안에서 스위치·도장·경고·DB 증거·결함을 다시 본다
+  autoReadyEnv: process.env,
+  // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)
+  autoAssign,
 })
 if (res.kind !== 'published') {
   await prisma.$disconnect()

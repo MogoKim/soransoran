@@ -1975,12 +1975,24 @@ model AutoReadyAudit {
   selectedTarget   Int
   selectedAt       DateTime @default(now())
 
+  /// 🔴 **무엇을 감사하는가 — 고를 때 묶어 둔다** (2026-09-25 마스터 지적).
+  ///    결과는 이 hash 와 같은 글에만 붙는다. 그 사이 글이 바뀌었거나 다른 글을 판정했으면
+  ///    결과를 받지 않는다. 도장이 어느 판정 계약으로 찍혔는지도 함께 남긴다.
+  publishedTitleHash  String
+  publishedBodyHash   String
+  stampContractDigest String
+
   /// 🔴 null = 판정 전 · 'yes' = 중대 결함 · 'no' = 결함 없음
   defect   String?
   judgedAt DateTime?
   /// 누가 판정했나 — 🔴 'founder' 를 기계가 쓰지 않는다
   auditor  String?
   note     String?
+  /// 🔴 **어느 판으로 판정했는가** — 옛 감사 계약·모델·프롬프트의 결과가 붙지 않게 한다.
+  ///    판정이 있으면 셋 다 있어야 한다(DB CHECK).
+  auditContractVersion String?
+  auditModel           String?
+  auditPromptVersion   String?
 
   @@index([defect])
 }

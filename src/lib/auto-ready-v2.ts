@@ -306,3 +306,52 @@ export type DefectMark = 'yes' | 'no'
 export function mergeDefect(prev: DefectMark | null, next: DefectMark): DefectMark {
   return prev === 'yes' ? 'yes' : next
 }
+
+// ─────────────────────────────────────────────────────────
+// 🔴 독립 감사 — 판정의 모양 (2026-09-25 마스터 지적)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **감사 계약의 판.** 판정 규칙·출력 모양이 바뀌면 이 값을 올린다.
+ *    다른 판으로 낸 결과는 기록되지 않는다 — 옛 판정이 새 감사 자리에 붙지 않게 한다.
+ */
+export const AUDIT_CONTRACT_VERSION = 'auto-ready-audit-v1'
+
+/** 감사자에게 주는 것 — **실제로 발행된** 글과, 그 글에 찍혀 있던 도장 */
+export type AuditJudgeInput = {
+  queueId: string
+  postId: string
+  /** 🔴 발행된 Post 의 제목·본문 — 큐의 값이 아니다 */
+  title: string
+  body: string
+  stamp: AutoReadyStamp | null
+}
+
+/**
+ * 🔴 감사자가 돌려주는 것. **무엇을 보고**(judged hash) **어느 판으로**(계약·모델·프롬프트)
+ *    판정했는지가 함께 와야 기록된다.
+ */
+export type AuditVerdict = {
+  defect: DefectMark
+  reasons: string[]
+  contractVersion: string
+  model: string
+  promptVersion: string
+  judgedTitleHash: string
+  judgedBodyHash: string
+}
+
+/** 🔴 독립 감사자 — 도장을 찍은 판정과 다른 경로로, 발행된 글을 다시 본다 */
+export type AuditJudge = (i: AuditJudgeInput) => Promise<AuditVerdict>
+
+/** 🔴 판정 결과의 모양 검사 — 하나라도 비었으면 기록하지 않는다 */
+export function verdictShapeOk(v: AuditVerdict): { ok: boolean; reason: string } {
+  if (v.defect !== 'yes' && v.defect !== 'no') return { ok: false, reason: `defect=${String(v.defect)}` }
+  for (const k of ['contractVersion', 'model', 'promptVersion'] as const) {
+    if (typeof v[k] !== 'string' || v[k].trim() === '') return { ok: false, reason: `${k} 가 비었다` }
+  }
+  for (const k of ['judgedTitleHash', 'judgedBodyHash'] as const) {
+    if (!/^[0-9a-f]{64}$/.test(v[k])) return { ok: false, reason: `${k} 가 sha256 이 아니다` }
+  }
+  return { ok: true, reason: '' }
+}

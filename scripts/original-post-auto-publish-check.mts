@@ -306,10 +306,17 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
     /updateMany\([\s\S]{0,400}?matchedPersonaId: null/.test(runnerSrc))
   check('🔴 기존 배정 행은 배정 저장 블록에 들어가지 않는다',
     /if \(target\.matchedPersonaId === null\) \{/.test(runnerSrc))
-  // 🔴 러너의 시계는 `RUN_AT` 하나다(2026-09-24) — 쓰는 자리도 하나여야 한다
-  check('🔴 matchedAt 을 다시 쓰는 경로가 하나뿐이다',
-    (runnerSrc.match(/matchedAt: RUN_AT/g) ?? []).length === 1
-    && !/matchedAt: new Date\(\)/.test(runnerSrc))
+  /**
+   * 🔴 러너의 시계는 `RUN_AT` 하나다(2026-09-24). **matchedAt 을 쓰는 자리는 정확히 둘**이다
+   *    (2026-09-25 auto-ready-v2): 사람 행은 러너의 조건부 UPDATE, 자동 도장 행은 발행
+   *    트랜잭션 안(재검증·발행 판정 뒤). 러너가 자동 행에 넘기는 것은 **계획**이지 쓰기가 아니다.
+   */
+  const txSrc = readFileSync('src/lib/original-post-publish-tx.ts', 'utf-8')
+  check('🔴 matchedAt 을 쓰는 경로가 사람 행 하나 · 자동 행 하나뿐이다',
+    (runnerSrc.match(/data: \{ matchedPersonaId: persona\.id, matchedAt: RUN_AT/g) ?? []).length === 1
+    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchedAt: RUN_AT, matchMeta: plan\.meta \}/g) ?? []).length === 1
+    && (txSrc.match(/matchedAt: input\.autoAssign!\.matchedAt/g) ?? []).length === 1
+    && !/matchedAt: new Date\(\)/.test(runnerSrc) && !/matchedAt: new Date\(\)/.test(txSrc))
   /**
    * 🔴 조립이 `scripts/lib/publishable-stock.mts` 로 옮겨졌다(2026-09-24) —
    *    러너와 관제가 같은 함수를 쓰게 하려고 뺀 것이다. 지키는 것은 같다.

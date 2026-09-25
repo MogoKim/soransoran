@@ -12,7 +12,9 @@ import {
   NO_SEMANTIC_RECORD, SEMANTIC_INVALID, SEMANTIC_HOLDS_MISMATCH,
   makeStamp, readStamp, stampValidFor, AUTO_READY_RECORD_KEY, JUDGE_CONTRACT_DIGEST,
   autoReadyEnabled, AUTO_READY_ENV, judgeOpen, auditTarget, pickAudits, mergeDefect, isHumanEditRecord,
+  AUDIT_CONTRACT_VERSION, verdictShapeOk,
 } from '../src/lib/auto-ready-v2'
+import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import {
   restoreRow, cohortSampleOf, hardDefectOf, outcomeOf,
   type ArtifactDoc, type CandidateDoc, type DecidedRow,
@@ -276,7 +278,8 @@ console.log('\n⑦ 🔴 founder 기록 0 · 쓰기 경로 모양')
     /OR: \[\{ defect: null \}, \{ defect: 'no' \}\]/.test(repo))
   check('🔴 🔴 **스위치가 꺼져 있으면 감사 표를 읽지 않는다**',
     /if \(!enabled\) return judgeOpen\(/.test(repo)
-    && /if \(!i\.enabled\) return \{ ok: false, reason: '자동 READY 스위치가 꺼져 있다' \}/.test(repo))
+    && /if \(!autoReadyEnabled\(i\.env\)\) return \{ ok: false, reason: '자동 READY 스위치가 꺼져 있다' \}/.test(repo)
+    && /if \(!autoReadyEnabled\(i\.env\)\) return \{ kind: 'off' \}/.test(repo))
   const tx = codeOnly('src/lib/original-post-publish-tx.ts')
   check('🔴 🔴 **발행 트랜잭션이 실제로 발행할 본문으로 재검증한다**',
     /recheckAutoReadyInTx\(tx, \{/.test(tx) && /title: row\.editedTitle \?\? row\.draftTitle/.test(tx)
@@ -285,12 +288,112 @@ console.log('\n⑦ 🔴 founder 기록 0 · 쓰기 경로 모양')
   const runner = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **러너 스위치 기본 OFF — env 에서만 켠다**',
     /const AUTO_READY_ON = autoReadyEnabled\(process\.env\)/.test(runner)
-    && /autoReadyEnabled: AUTO_READY_ON/.test(runner))
+    && /autoReadyEnv: process\.env/.test(runner))
   check('🔴 도장은 --apply 이고 열렸을 때만', /if \(APPLY && autoOpen\.open\) \{/.test(runner))
   check('🔴 🔴 **감사 기록은 로컬 파일이 아니라 DB 다**',
     !/writeFileSync|appendFileSync/.test(repo) && /tx\.autoReadyAudit\.create\(/.test(repo))
-  check('🔴 새 대기 기간·pending 상수를 만들지 않았다',
-    !/PENDING|WAIT_DAYS|GRACE|COOLDOWN/i.test(repo + codeOnly('src/lib/auto-ready-v2.ts')))
+  /**
+   * 🔴 **새 대기 기간·pending 상수·개수 제한 0.** 변수 이름 `pending` 은 "판정 전 목록" 이지
+   *    상수가 아니다 — 대문자 상수와 조회 개수 제한(`take:`)을 본다.
+   */
+  const both = repo + codeOnly('src/lib/auto-ready-v2.ts')
+  check('🔴 새 대기 기간·pending 상수·개수 제한을 만들지 않았다',
+    !/\b[A-Z_]*(PENDING|WAIT_DAYS|GRACE|COOLDOWN|MAX_PENDING|AUDIT_LIMIT)[A-Z_]*\s*=/.test(both)
+    && !/defect: null \}[^)]*take:/.test(repo),
+    (both.match(/\b[A-Z_]*(PENDING|WAIT|GRACE|COOLDOWN)[A-Z_]*\s*=/g) ?? []).join(','))
+}
+
+console.log('\n⑨ 🔴 열림은 호출자가 정하지 않는다 — 쓰기 경계가 DB 로 판정한다')
+{
+  const repo = codeOnly('src/lib/auto-ready-repo.ts')
+  const stampSig = repo.split('export async function stampAutoReady(')[1]?.split('): Promise<StampOutcome>')[0] ?? ''
+  check('🔴 🔴 **도장 함수가 `open` 을 받지 않는다 — env 만 받는다**',
+    !/open/.test(stampSig) && /env: Env/.test(stampSig), stampSig.replace(/\s+/g, ' '))
+  const stampBody = repo.split('export async function stampAutoReady(')[1]?.split('export async function stampRound')[0] ?? ''
+  check('🔴 🔴 **도장 트랜잭션 안에서 스위치·DB 증거·결함을 판정한다**',
+    /const gate = await authoritativeGate\(tx, i\.env\)/.test(stampBody)
+    && stampBody.indexOf('authoritativeGate(tx') < stampBody.indexOf('updateMany('))
+  const recheck = repo.split('export async function recheckAutoReadyInTx(')[1]?.split('export async function selectAudits')[0] ?? ''
+  check('🔴 🔴 **발행 재검증도 같은 DB 증거 게이트를 트랜잭션 안에서 본다**',
+    /const gate = await authoritativeGate\(tx, i\.env\)/.test(recheck))
+  const gate = repo.split('export async function authoritativeGate(')[1]?.split('export type StampOutcome')[0] ?? ''
+  check('🔴 🔴 **게이트가 증거를 DB 에서 직접 읽는다 (정본 cohortSampleOf)**',
+    /evidenceFromDb\(db\)/.test(gate) && /confirmedDefectCount\(db\)/.test(gate)
+    && /return cohortSampleOf\(eligible\)/.test(repo))
+  check('🔴 OpenState 를 받는 쓰기 함수가 없다',
+    !/open: OpenState/.test(repo) && !/i\.open\b/.test(repo))
+}
+
+console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — 재검증이 모든 쓰기보다 먼저')
+{
+  const tx = codeOnly('src/lib/original-post-publish-tx.ts')
+  const body = tx.split('return await prisma.$transaction(async (tx) => {')[1] ?? ''
+  const at = (re: RegExp): number => { const m = re.exec(body); return m === null ? -1 : m.index }
+  const iRecheck = at(/recheckAutoReadyInTx\(tx,/)
+  const iAssign = at(/matchedPersonaId: persona\.id, matchedAt: input\.autoAssign!\.matchedAt/)
+  const iJudge = at(/const verdict = judgePublish\(/)
+  const iPost = at(/tx\.post\.create\(/)
+  const firstWrite = Math.min(...[at(/\.updateMany\(/), at(/\.create\(/)].filter((x) => x >= 0))
+  check('🔴 🔴 **재검증이 트랜잭션의 첫 쓰기보다 앞선다**', iRecheck >= 0 && iRecheck < firstWrite, `${iRecheck} < ${firstWrite}`)
+  check('🔴 🔴 **배정 쓰기는 발행 판정 뒤 · Post 앞 — 같은 트랜잭션**',
+    iJudge >= 0 && iAssign > iJudge && iPost > iAssign, `${iJudge} < ${iAssign} < ${iPost}`)
+  check('🔴 배정 쓰기는 자동 행에만 — pendingAssign 이 isAuto 를 요구한다',
+    /const pendingAssign = isAuto && row\.matchedPersona === null && input\.autoAssign !== undefined/.test(tx))
+  check('🔴 배정이 경쟁에 지면 롤백한다', /if \(assigned\.count !== 1\) throw new Error\(QUEUE_RACE\)/.test(tx))
+  const runner = codeOnly('scripts/original-post-auto-publish.mts')
+  check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
+    /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
+    && /autoAssign = \{ personaId: persona\.id, matchedAt: RUN_AT, matchMeta: plan\.meta \}/.test(runner)
+    && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
+  check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',
+    /where: \{ id: target\.id, status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null, matchedPersonaId: null \}/.test(runner))
+}
+
+console.log('\n⑪ 🔴 독립 감사 — 묶음 대조 · 옛 판정 거절 · 규칙 감사자')
+{
+  const repo = codeOnly('src/lib/auto-ready-repo.ts')
+  check('🔴 🔴 **고를 때 발행 글 hash 와 도장 계약 판을 묶는다**',
+    /publishedTitleHash: digestOf\(post\.title\), publishedBodyHash: digestOf\(post\.content\)/.test(repo)
+    && /stampContractDigest: readStamp\(row\.editDiff\)\?\.contractDigest/.test(repo))
+  check('🔴 🔴 **다른 감사 계약 판의 결과는 받지 않는다**',
+    /if \(i\.verdict\.contractVersion !== AUDIT_CONTRACT_VERSION\) return 'staleContract'/.test(repo))
+  check('🔴 🔴 **판정한 글이 묶은 글과 다르면 받지 않는다**', /return 'hashMismatch'/.test(repo))
+  check('🔴 🔴 **고른 뒤 글이 바뀌었으면 받지 않는다**', /return 'postChanged'/.test(repo))
+  check('🔴 판정 전 감사를 개수 제한 없이 전부 읽는다',
+    /autoReadyAudit\.findMany\(\{ where: \{ defect: null \}, orderBy: \{ selectedAt: 'asc' \} \}\)/.test(repo))
+  const sql = readFileSync('prisma/migrations/0029_auto_ready_audit/migration.sql', 'utf-8')
+  check('🔴 🔴 **0029 가 묶음 칸과 판정 출처 CHECK 를 갖는다**',
+    /"publishedTitleHash" TEXT NOT NULL/.test(sql) && /"stampContractDigest" TEXT NOT NULL/.test(sql)
+    && /AutoReadyAudit_judged_has_provenance/.test(sql) && /"auditModel" IS NOT NULL/.test(sql))
+  const st = makeStamp('평범한 하루', '산책을 다녀왔어요. 다들 어떠세요?', new Date())
+  const good = await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '산책을 다녀왔어요. 다들 어떠세요?', stamp: st })
+  check('기준선 — 도장과 같고 깨끗한 글은 no', good.defect === 'no' && verdictShapeOk(good).ok, good.reasons.join(','))
+  const changed = await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '바뀐 본문', stamp: st })
+  check('🔴 🔴 **발행 본문이 도장 본문과 다르면 yes**', changed.defect === 'yes')
+  const noStamp = await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '산책을 다녀왔어요. 다들 어떠세요?', stamp: null })
+  check('🔴 도장이 없으면 yes', noStamp.defect === 'yes')
+  const drift = makeStamp('평범한 하루', '오늘도 산책했어요', new Date())
+  check('🔴 발행 글에 차단 표현이 있으면 yes',
+    (await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '오늘도 산책했어요', stamp: drift })).defect === 'yes')
+  check('🔴 규칙 감사자는 자기 판을 밝힌다 — 모델·프롬프트·감사 계약',
+    good.model === 'rule:auto-ready-audit-judge' && good.promptVersion === 'rule-judge-v1'
+    && good.contractVersion === AUDIT_CONTRACT_VERSION)
+  check('🔴 판정 모양이 깨지면 기록하지 않는다',
+    !verdictShapeOk({ ...good, model: '' }).ok && !verdictShapeOk({ ...good, judgedBodyHash: 'x' }).ok
+    && !verdictShapeOk({ ...good, defect: 'maybe' as never }).ok)
+  check('🔴 🔴 **감사 회차가 모델을 부르지 않는다 — 유료 호출 0**',
+    !/anthropic|openai|gemini|fetch\(/i.test(codeOnly('scripts/lib/auto-ready-rule-judge.mts') + codeOnly('scripts/auto-ready-audit.mts') + repo))
+  check('🔴 감사 회차는 운영 스케줄에 연결되지 않았다',
+    !/auto-ready-audit/.test(readFileSync('.github/workflows/visibility-guard.yml', 'utf-8').replace(/auto-ready:(db-)?check/g, ''))
+    && !/auto-ready-audit/.test(readFileSync('.github/workflows/auto-publish.yml', 'utf-8')))
+}
+
+console.log('\n⑫ 🔴 probe 는 표본을 따로 세지 않는다 — 정본을 부른다')
+{
+  const probe = codeOnly('scripts/auto-ready-v2-probe.mts')
+  check('🔴 🔴 **probe 가 evidenceFromDb(정본 cohortSampleOf)를 부른다**', /const sample = await evidenceFromDb\(prisma\)/.test(probe))
+  check('🔴 🔴 **probe 안에 무수정·수정·폐기를 직접 세는 코드가 없다**',
+    !/bodyChanged|titleChanged|declineReason|noEdit = /.test(probe))
 }
 
 console.log('\n⑧ 🔴 D10 보고 문구 — 병목을 한 줄로 뭉개지 않는다')

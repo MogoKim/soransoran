@@ -21,7 +21,8 @@ import {
   loadPublishableStock, queueCandidateOf, planPublishBatch, releaseCapsOf, resolvePublishScale,
   type LoadedStock,
 } from './lib/publishable-stock.mjs'
-import { AUTO_DECIDER, HUMAN_DECIDER, CONTRACT, eligibilityOf } from '../src/lib/auto-ready-v2'
+import { AUTO_DECIDER, CONTRACT, eligibilityOf } from '../src/lib/auto-ready-v2'
+import { evidenceFromDb } from '../src/lib/auto-ready-repo'
 import { profileOf } from '../src/lib/original-post-auto-publish'
 import { PROFILES } from '../src/lib/scale-profile'
 import { simulateStage } from '../src/lib/scale-readiness'
@@ -75,36 +76,19 @@ async function main(): Promise<void> {
   for (const [k, v] of [...why].sort((a, b) => b[1] - a[1])) console.log(`     ${String(v).padStart(3)}  ${k}`)
   console.log('   🔴 그림자 수는 실제 READY 가 아니다 — 도장은 0 이다')
 
-  /** ── ③ 증거 cohort — 사람이 이미 결정한 기계 후보 ── */
-  const decided = await prisma.originalPostApprovalQueue.findMany({
-    where: { decidedBy: HUMAN_DECIDER },
-    select: {
-      id: true, gateVerdict: true, gateResults: true, draftTitle: true, draftBody: true,
-      editDiff: true, declineReason: true, promptVersion: true, model: true,
-      rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
-    },
-  })
-  const machineDecided = decided.filter((r) => profileOf({
-    promptVersion: r.promptVersion, model: r.model, sourceSite: r.rawContent.sourceSite,
-    gateResults: r.gateResults,
-  } as never) === 'machine')
-  const eligible = machineDecided.filter((r) => eligibilityOf({
-    gateVerdict: r.gateVerdict, gateResults: r.gateResults,
-    title: r.draftTitle, body: r.draftBody, sourceCapturedAt: r.rawContent.sourceCapturedAt,
-  }).auto)
-  const edited = eligible.filter((r) => r.editDiff !== null && typeof r.editDiff === 'object'
-    && ('bodyChanged' in (r.editDiff as object) || 'titleChanged' in (r.editDiff as object)))
-  const declined = eligible.filter((r) => (r.declineReason ?? '').trim() !== '')
-  const noEdit = eligible.length - edited.length - declined.length
-  console.log('\n③ 증거 cohort — 사람(founder)이 이미 결정한 기계 후보')
-  console.log(`   founder 결정 ${decided.length}건 · 그중 기계 profile ${machineDecided.length}건`
-    + ` · 적격(경고 0) ${eligible.length}건`)
-  console.log(`   적격 표본 ${eligible.length}/${CONTRACT.reviewSampleMin}`
-    + ` · 무수정 ${noEdit} · 수정 ${edited.length} · 폐기 ${declined.length}`
-    + (eligible.length > 0 ? ` · 무수정률 ${(noEdit / eligible.length * 100).toFixed(1)}%` : ''))
-  console.log(`   🔴 ${CONTRACT.reviewSampleMin - eligible.length > 0
-    ? `표본이 ${CONTRACT.reviewSampleMin - eligible.length}건 모자라다 — 계약상 자동 READY 를 열 수 없다`
-    : '표본 수는 채웠다'}`)
+  /**
+   * ── ③ 증거 cohort — **정본 `evidenceFromDb` → `cohortSampleOf` 하나를 부른다** ──
+   *    (2026-09-25 마스터 지적) 앞판은 여기서 무수정·수정·폐기를 **따로** 셌다.
+   *    런타임 게이트와 probe 가 다른 셈을 하면 "열린다" 는 말이 둘이 된다.
+   *    🔴 DB 에 저장된 근거만 센다 — 로컬 artifact 복원 결과는 `auto-ready:evidence-scan` 이 따로 낸다.
+   */
+  const sample = await evidenceFromDb(prisma)
+  console.log('\n③ 증거 cohort — 런타임 게이트와 같은 정본 계산 (DB 저장 근거만)')
+  console.log(`   적격 표본 ${sample.eligible}/${CONTRACT.reviewSampleMin}`
+    + ` · 무수정 ${sample.noEdit} · 수정 ${sample.edited} · 폐기 ${sample.declined}`
+    + ` · 무수정률 ${sample.noEditRate === null ? '측정 불가' : `${(sample.noEditRate * 100).toFixed(1)}%`}`
+    + ` · 중대 결함 ${sample.hardDefects === null ? `unmeasured(${sample.hardDefectUnmeasured})` : sample.hardDefects}`)
+  console.log(`   계약 충족 ${sample.meetsContract ? '🟢 예' : `🔴 아니오 — ${sample.reasons.join(' · ')}`}`)
 
   /** ── ④ D10 — 실제 재고 ∪ 그림자 자동 대상 ── */
   const d10caps = releaseCapsOf(PROFILES.d10)
