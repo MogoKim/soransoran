@@ -418,7 +418,7 @@ console.log(`\n⑤ 🔴 실행 — ${target.id}`)
  *    사람 결정 행은 기존 동작 그대로다.
  */
 const isAutoTarget = (target.decidedBy ?? '').trim() === AUTO_DECIDER
-let autoAssign: { personaId: string; matchedAt: Date; matchMeta: unknown } | undefined
+let autoAssign: { personaId: string; matchedAt: Date; matchMeta: unknown; caps: typeof RELEASE_CAPS } | undefined
 if (target.matchedPersonaId === null && isAutoTarget) {
   const a = assignOf.get(target.id)
   const plan = planStore({
@@ -428,7 +428,8 @@ if (target.matchedPersonaId === null && isAutoTarget) {
   })
   if (!plan.ok) { await prisma.$disconnect(); fail(`배정할 수 없습니다 — ${plan.reason}`) }
   const persona = await prisma.persona.findUniqueOrThrow({ where: { code: plan.personaCode }, select: { id: true } })
-  autoAssign = { personaId: persona.id, matchedAt: RUN_AT, matchMeta: plan.meta }
+  // 🔴 personaId 는 "누구를 검토할지" 일 뿐이다 — 발행 트랜잭션이 같은 상한으로 다시 판정한다
+  autoAssign = { personaId: persona.id, matchedAt: RUN_AT, matchMeta: plan.meta, caps: RELEASE_CAPS }
   console.log(`   ⏳ 배정 계획 ${plan.personaCode} — 발행 트랜잭션 안에서 쓴다`)
 } else if (target.matchedPersonaId === null) {
   const a = assignOf.get(target.id)

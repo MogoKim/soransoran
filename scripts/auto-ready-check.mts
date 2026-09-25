@@ -343,13 +343,13 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   const runner = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
     /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
-    && /autoAssign = \{ personaId: persona\.id, matchedAt: RUN_AT, matchMeta: plan\.meta \}/.test(runner)
+    && /autoAssign = \{ personaId: persona\.id, matchedAt: RUN_AT, matchMeta: plan\.meta, caps: RELEASE_CAPS \}/.test(runner)
     && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
   check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',
     /where: \{ id: target\.id, status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null, matchedPersonaId: null \}/.test(runner))
 }
 
-console.log('\n⑪ 🔴 독립 감사 — 묶음 대조 · 옛 판정 거절 · 규칙 감사자')
+console.log('\n⑪ 🔴 감사 — 묶음 대조 · 옛 판정 거절 · 규칙 무결성·안전 감사자')
 {
   const repo = codeOnly('src/lib/auto-ready-repo.ts')
   check('🔴 🔴 **고를 때 발행 글 hash 와 도장 계약 판을 묶는다**',
@@ -376,7 +376,7 @@ console.log('\n⑪ 🔴 독립 감사 — 묶음 대조 · 옛 판정 거절 · 
   check('🔴 발행 글에 차단 표현이 있으면 yes',
     (await ruleAuditJudge({ queueId: 'q', postId: 'p', title: '평범한 하루', body: '오늘도 산책했어요', stamp: drift })).defect === 'yes')
   check('🔴 규칙 감사자는 자기 판을 밝힌다 — 모델·프롬프트·감사 계약',
-    good.model === 'rule:auto-ready-audit-judge' && good.promptVersion === 'rule-judge-v1'
+    good.model === 'rule:integrity-safety-audit' && good.promptVersion === 'integrity-safety-v1'
     && good.contractVersion === AUDIT_CONTRACT_VERSION)
   check('🔴 판정 모양이 깨지면 기록하지 않는다',
     !verdictShapeOk({ ...good, model: '' }).ok && !verdictShapeOk({ ...good, judgedBodyHash: 'x' }).ok
@@ -403,6 +403,72 @@ console.log('\n⑧ 🔴 D10 보고 문구 — 병목을 한 줄로 뭉개지 않
   check('🔴 🔴 **"글 부족 1차 · 배정 손실 2차 · 미래 Persona 적합성 미측정" 으로 나눈다**',
     /글 부족이 1차/.test(probe) && /배정 손실이 2차/.test(probe) && /Persona 적합성은 미측정/.test(probe)
     && !/Persona 병목 없음/.test(probe))
+}
+
+console.log('\n⑬ 🔴 🔴 발행 트랜잭션이 계획된 Persona 를 다시 판정한다 — 호출자 personaId 를 믿지 않는다')
+{
+  const tx = codeOnly('src/lib/original-post-publish-tx.ts')
+  const loader = codeOnly('scripts/lib/publishable-stock.mts')
+  const at = (re: RegExp): number => { const m = re.exec(tx); return m === null ? -1 : m.index }
+  const reread = at(/tx\.persona\.findUnique\(\{\s*where: \{ id: input\.autoAssign!\.personaId \}, select: PERSONA_FOR_MATCH_SELECT,?\s*\}\)/)
+  const assemble = at(/personaForMatchOf\(tx, pr, input\.autoAssign!\.matchedAt\)/)
+  const voice = at(/judgeVoiceMatch\(\{/)
+  const hard = at(/hardFilter\(forMatch, readPostRequirements\(title, body\), title, body, input\.autoAssign!\.caps \?\? \{\}\)/)
+  const staleRet = at(/code: 'AUTO_ASSIGN_STALE', detail: `\$\{pr\.code\}/)
+  const assignWrite = at(/const assigned = await tx\.originalPostApprovalQueue\.updateMany/)
+  const postCreate = at(/const post = await tx\.post\.create/)
+  check('🔴 🔴 **트랜잭션 안에서 Persona 를 다시 읽고 로더와 같은 조립(personaForMatchOf)을 쓴다**', reread > 0 && assemble > reread)
+  check('🔴 🔴 **정본 판정 재사용 — judgeVoiceMatch · readPostRequirements · hardFilter**', voice > assemble && hard > voice)
+  check('🔴 🔴 **탈락은 배정·Post 쓰기보다 먼저 AUTO_ASSIGN_STALE 로 돌아간다**',
+    staleRet > hard && assignWrite > staleRet && postCreate > assignWrite)
+  check('🔴 🔴 **말투 불일치와 hardFilter 탈락이 둘 다 탈락 사유가 되고, 사유가 있으면 막는다**',
+    /\.\.\.\(voice\.ok \? \[\] : \[`VOICE_MISMATCH/.test(tx) && /\.\.\.blocks\.map\(\(b\) => b\.code\)\]/.test(tx)
+    && /if \(reasons\.length > 0\) \{\s*return \{ kind: 'blocked', code: 'AUTO_ASSIGN_STALE'/.test(tx))
+  check('🔴 로더도 같은 조립을 쓴다 — 계획과 쓰기가 갈리지 않는다',
+    /select: PERSONA_FOR_MATCH_SELECT/.test(loader) && /personaForMatchOf\(prisma, r, now\)/.test(loader))
+  check('🔴 새 규칙·키워드를 만들지 않았다 — persona-for-match 에 정규식·판정 없음',
+    !/new RegExp|\/[^/\n]+\/[gimsuy]*\.test\(|hardFilter|judgeVoiceMatch/.test(codeOnly('src/lib/persona-for-match.ts')))
+}
+
+console.log('\n⑭ 🔴 🔴 감사 저장 경계는 판정자를 믿지 않는다')
+{
+  const repo = codeOnly('src/lib/auto-ready-repo.ts')
+  const rec = repo.slice(repo.indexOf('export async function recordAuditResult'), repo.indexOf('export async function runAuditRound'))
+  check('🔴 🔴 **저장 경계가 지금 큐 도장의 계약 판을 선정 때 묶은 값과 대조한다**',
+    /cur\.contractDigest !== row\.stampContractDigest/.test(rec))
+  check('🔴 🔴 **저장 경계가 지금 큐 도장의 제목·본문 hash 를 발행 hash 와 대조한다**',
+    /cur\.titleHash !== row\.publishedTitleHash \|\| cur\.bodyHash !== row\.publishedBodyHash/.test(rec))
+  check('🔴 🔴 **어긋나면 판정자 값이 아니라 무결성 yes 를 기록한다**',
+    /markIntegrityDefect\(tx, i\.queueId, broken, i\.now\)/.test(rec) && rec.indexOf('broken !== null') < rec.indexOf('i.verdict.judgedTitleHash'))
+  check('🔴 🔴 **어긋남이 있으면 반드시 그 분기로 들어간다**', /if \(broken !== null\) \{\s*await markIntegrityDefect\(tx/.test(rec))
+  check('🔴 무결성 기록은 founder 가 아니다', /INTEGRITY_AUDITOR = 'system:integrity'/.test(repo))
+}
+
+console.log('\n⑮ 🔴 🔴 감사 대상 유실은 대기가 아니라 무결성 결함이다')
+{
+  const repo = codeOnly('src/lib/auto-ready-repo.ts')
+  const round = repo.slice(repo.indexOf('export async function runAuditRound'))
+  const schema = codeOnly('prisma/schema.prisma')
+  const sql = codeOnly('prisma/migrations/0029_auto_ready_audit/migration.sql')
+  check('🔴 🔴 **감사 회차에 noPost 대기가 없다 — 유실은 markIntegrityDefect**',
+    !/bump\('noPost'\)|'noPost'/.test(repo) && /if \(post === null \|\| queue === null\) \{\s*await markIntegrityDefect\(/.test(round))
+  check('🔴 🔴 **FK RESTRICT — 스키마와 0029 둘 다**',
+    /queue\s+OriginalPostApprovalQueue @relation\(fields: \[queueId\], references: \[id\], onDelete: Restrict\)/.test(schema)
+    && /post\s+Post\s+@relation\(fields: \[postId\], references: \[id\], onDelete: Restrict\)/.test(schema)
+    && /FOREIGN KEY \("queueId"\) REFERENCES "OriginalPostApprovalQueue"\("id"\) ON DELETE RESTRICT/.test(sql)
+    && /FOREIGN KEY \("postId"\) REFERENCES "Post"\("id"\) ON DELETE RESTRICT/.test(sql))
+  check('🔴 선정은 Post 유실 하나로 전체가 멈추지 않는다 — findUniqueOrThrow 없음 · missingPost 로 보고',
+    !/\.findUniqueOrThrow\(/.test(repo) && /missingPost/.test(repo))
+}
+
+console.log('\n⑯ 🔴 rule 감사자는 "무결성·안전 감사" 다 — 의미 감사라고 부르지 않는다')
+{
+  const judge = codeOnly('scripts/lib/auto-ready-rule-judge.mts')
+  const runner = codeOnly('scripts/auto-ready-audit.mts')
+  check('🔴 🔴 **모델·프롬프트 이름이 integrity-safety**',
+    /RULE_JUDGE_MODEL = 'rule:integrity-safety-audit'/.test(judge) && /RULE_JUDGE_PROMPT_VERSION = 'integrity-safety-v1'/.test(judge))
+  const claims = (t: string): boolean => t.split('\n').some((l) => /독립 (의미 )?감사/.test(l) && !/아니다|별도|나중|못/.test(l))
+  check('🔴 🔴 **"독립 (의미) 감사" 를 한다고 주장하는 줄이 없다**', !claims(judge) && !claims(runner) && !claims(codeOnly('src/lib/auto-ready-v2.ts')))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

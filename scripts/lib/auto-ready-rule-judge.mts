@@ -1,8 +1,9 @@
 /**
- * 🔴 **규칙 기반 독립 감사자** (2026-09-25 · auto-ready-v2)
+ * 🔴 **규칙 기반 무결성·안전 감사자** (2026-09-25 · auto-ready-v2)
  *
- * 도장을 찍은 판정과 **다른 경로**로, **실제로 발행된 Post** 를 다시 본다.
- * 모델을 부르지 않는다 — 유료 호출 0.
+ * 🔴 **이것은 "독립 의미 감사" 가 아니다.** 이름 그대로 **무결성·안전** 만 본다.
+ *    도장을 찍은 판정과 다른 경로로 **실제로 발행된 Post** 를 다시 보지만, 원문과의 의미
+ *    대조(없는 사실을 지어냈는가 · 생활사가 어긋나는가)는 하지 못한다. 모델을 부르지 않는다.
  *
  * 무엇을 결함(yes)으로 보나
  *   ① 발행된 제목·본문이 도장이 본 제목·본문과 다르다(hash) — 판정받지 않은 글이 나갔다
@@ -23,8 +24,8 @@ import {
 } from '../../src/lib/auto-ready-v2'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
 
-export const RULE_JUDGE_MODEL = 'rule:auto-ready-audit-judge'
-export const RULE_JUDGE_PROMPT_VERSION = 'rule-judge-v1'
+export const RULE_JUDGE_MODEL = 'rule:integrity-safety-audit'
+export const RULE_JUDGE_PROMPT_VERSION = 'integrity-safety-v1'
 
 export const ruleAuditJudge: AuditJudge = async (i): Promise<AuditVerdict> => {
   const reasons: string[] = []

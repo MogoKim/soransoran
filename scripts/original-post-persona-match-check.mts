@@ -794,8 +794,9 @@ function always0Diff(): number {
   const offenders: string[] = []
   /** 🔴 `PersonaForMatch` 를 DB 에서 만드는 곳 전부. 늘어나면 여기 추가한다 */
   const PRODUCERS = [
-    // 🔴 auto-publish 의 조립은 공용 로더로 옮겨졌다(2026-09-24) — 정본 위치를 본다
-    'scripts/lib/publishable-stock.mts',
+    // 🔴 auto-publish 의 조립은 공용 로더로(2026-09-24), 다시 로더와 발행 트랜잭션이 함께 쓰는
+    //    `persona-for-match.ts` 로 옮겨졌다(2026-09-25) — 정본 위치를 본다
+    'src/lib/persona-for-match.ts',
     'scripts/original-post-match-assign.mts',
     'scripts/original-post-persona-match-dry-run.mts',
     'scripts/supply-health.mts',
@@ -805,6 +806,14 @@ function always0Diff(): number {
     const src = readFileSync(join(HERE, '..', f), 'utf-8')
     if (!/_count:\s*\{\s*select:\s*\{\s*accounts:\s*true/.test(src)) offenders.push(`${f}: Account 를 select 하지 않는다`)
     if (!/accountCount:\s*r\.user\?\._count\.accounts/.test(src)) offenders.push(`${f}: accountCount 를 넘기지 않는다`)
+  }
+  // 🔴 공용 로더는 조립을 직접 하지 않고 정본을 부른다 — 위 목록에서 빠진 대신 여기서 본다
+  {
+    const f = 'scripts/lib/publishable-stock.mts'
+    const src = readFileSync(join(HERE, '..', f), 'utf-8')
+    if (!/select: PERSONA_FOR_MATCH_SELECT/.test(src) || !/personaForMatchOf\(prisma, r, now\)/.test(src)) {
+      offenders.push(`${f}: persona-for-match 정본을 쓰지 않는다`)
+    }
   }
   // 🔴 발행 직전 게이트 두 곳도 같은 계약이다
   for (const f of ['src/lib/original-post-publish-tx.ts', 'scripts/original-post-publish-live.mts'] as const) {
@@ -1276,8 +1285,8 @@ export function hasDirectAccountCompare(src: string): boolean {
    */
   {
     const SITES = [
-      // 🔴 auto-publish 의 Persona 조립 정본은 공용 로더다
-      'scripts/lib/publishable-stock.mts',
+      // 🔴 auto-publish 의 Persona 조립 정본은 persona-for-match.ts 다 (로더·발행 트랜잭션 공용)
+      'src/lib/persona-for-match.ts',
       'scripts/persona-capacity-planner.mts',
       'scripts/supply-health.mts',
     ]

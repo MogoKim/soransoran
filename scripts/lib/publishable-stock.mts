@@ -35,6 +35,7 @@ import {
   canaryAuthorization, judgeOneDayCanary, slotsLeftToday, windowAuthorization,
 } from '../../src/lib/release-canary'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
+import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf } from '../../src/lib/persona-for-match'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
 export type LoadedStock = {
@@ -148,49 +149,16 @@ export async function loadPublishableStock(
 
   const capturedAtOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
 
-  const WEEK_AGO = new Date(now.getTime() - 7 * 864e5)
   const personaRows = await prisma.persona.findMany({
-    where: { status: 'active' },
-    select: {
-      id: true, code: true, status: true, identity: true, voiceCore: true, noGoTopics: true,
-      user: { select: { providerId: true, _count: { select: { accounts: true } } } },
-    },
+    where: { status: 'active' }, select: PERSONA_FOR_MATCH_SELECT,
   })
   const codeOfPersonaId = new Map(personaRows.map((r) => [r.id, r.code]))
+  /**
+   * 🔴 **조립은 `personaForMatchOf` 하나다** (2026-09-25). 발행 트랜잭션도 자동 행 배정 때
+   *    같은 함수로 Persona 를 다시 조립한다 — 계획할 때와 쓸 때의 판정이 갈리지 않는다.
+   */
   const personas: Record<string, unknown>[] = []
-  for (const r of personaRows) {
-    const id = (r.identity ?? {}) as Record<string, unknown>
-    const postsThisWeek = await prisma.originalPostApprovalQueue.count({
-      where: { matchedPersona: { code: r.code }, matchedAt: { gte: WEEK_AGO } },
-    })
-    const last = await prisma.originalPostApprovalQueue.findFirst({
-      where: { matchedPersona: { code: r.code } },
-      orderBy: { matchedAt: 'desc' }, select: { matchedAt: true },
-    })
-    const vc = (r.voiceCore ?? {}) as Record<string, unknown>
-    /**
-     * 🔴 **발행 러너의 의미를 그대로 옮긴다** — 값을 늘리거나 바꾸지 않는다.
-     *    `workStatus`·`economicStatus`·`region` 은 러너가 `null` 로 넘긴다.
-     *    여기서 채우면 **배정 결과가 러너와 달라진다** — 그것이 이 함수의 목적을 깬다.
-     */
-    personas.push({
-      code: r.code, status: r.status,
-      providerId: r.user?.providerId ?? null,
-      accountCount: r.user?._count.accounts ?? null,
-      ageBand: typeof id.ageBand === 'string' ? id.ageBand : null,
-      maritalStatus: typeof id.maritalStatus === 'string' ? id.maritalStatus : null,
-      childrenCount: typeof id.childrenCount === 'number' ? id.childrenCount : null,
-      ...(Array.isArray(id.childrenAgeBands) ? { childrenAgeBands: id.childrenAgeBands } : {}),
-      parentCare: typeof id.parentCare === 'string' ? id.parentCare : null,
-      menopauseStatus: typeof id.menopauseStatus === 'string' ? id.menopauseStatus : null,
-      workStatus: null, economicStatus: null, region: null,
-      noGoTopics: r.noGoTopics,
-      voiceLength: typeof vc.length === 'string' ? vc.length : null,
-      postsThisWeek,
-      daysSinceLastPost: last?.matchedAt == null ? null
-        : Math.floor((now.getTime() - last.matchedAt.getTime()) / 864e5),
-    })
-  }
+  for (const r of personaRows) personas.push(await personaForMatchOf(prisma, r, now) as unknown as Record<string, unknown>)
 
   /** 🔴 말투·profile 은 정본 `voiceInputOf` 가 만든다 — 여기서 하드코딩하지 않는다 */
   const queueCandidates: QueueCandidate[] = targets.map((t, i) =>

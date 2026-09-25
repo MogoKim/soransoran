@@ -314,7 +314,7 @@ console.log('\n③-c 🔴 복구 우선 — 배정만 하고 발행 못 한 행�
   const txSrc = readFileSync('src/lib/original-post-publish-tx.ts', 'utf-8')
   check('🔴 matchedAt 을 쓰는 경로가 사람 행 하나 · 자동 행 하나뿐이다',
     (runnerSrc.match(/data: \{ matchedPersonaId: persona\.id, matchedAt: RUN_AT/g) ?? []).length === 1
-    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchedAt: RUN_AT, matchMeta: plan\.meta \}/g) ?? []).length === 1
+    && (runnerSrc.match(/autoAssign = \{ personaId: persona\.id, matchedAt: RUN_AT, matchMeta: plan\.meta, caps: RELEASE_CAPS \}/g) ?? []).length === 1
     && (txSrc.match(/matchedAt: input\.autoAssign!\.matchedAt/g) ?? []).length === 1
     && !/matchedAt: new Date\(\)/.test(runnerSrc) && !/matchedAt: new Date\(\)/.test(txSrc))
   /**
@@ -507,10 +507,16 @@ console.log('\n⑦ 🔴 pacing 상수를 건드리지 않았다')
 
   // 🔴 러너가 실제로 그 필드를 넘기는지 소스로 고정한다
   const src = readFileSync('scripts/original-post-auto-publish.mts', 'utf-8')
-  /** 🔴 Persona 조립이 공용 로더로 옮겨졌다 — 그 자리를 본다 */
-  const stockSrc = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
+  /**
+   * 🔴 Persona 조립이 `src/lib/persona-for-match.ts` 로 옮겨졌다(2026-09-25) — 로더와 발행
+   *    트랜잭션이 같은 함수를 쓰게 하려고 뺐다. **정본 위치를 보고, 로더가 그것을 부르는지도 본다.**
+   */
+  const stockSrc = readFileSync('src/lib/persona-for-match.ts', 'utf-8')
+  const loaderSrc = readFileSync('scripts/lib/publishable-stock.mts', 'utf-8')
   check('🔴 [회귀] auto-publish 경로가 childrenCount 를 넘긴다',
-    /childrenCount: typeof id\.childrenCount === 'number' \? id\.childrenCount : null/.test(stockSrc))
+    /childrenCount: typeof id\.childrenCount === 'number' \? id\.childrenCount : null/.test(stockSrc)
+    && /personaForMatchOf\(prisma, r, now\)/.test(loaderSrc)
+    && !/childrenCount: typeof id\.childrenCount/.test(loaderSrc))
   check('🔴 [회귀] match-assign 과 같은 필드 집합을 넘긴다', (() => {
     const assign = readFileSync('scripts/original-post-match-assign.mts', 'utf-8')
     const fields = ['childrenCount', 'childrenAgeBands', 'maritalStatus', 'parentCare', 'menopauseStatus', 'noGoTopics']

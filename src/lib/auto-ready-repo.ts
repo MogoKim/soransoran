@@ -3,7 +3,7 @@
  *
  *   candidate → row eligibility → **auto-ready:v1 도장** → selector 수용
  *   → publish transaction 내부 재검증(+ 자동 행 배정) → Post
- *   → **감사 선정(hash 묶음) → 독립 감사 판정 → 결과 저장** → 결함 시 다음 회차 자동 중지
+ *   → **감사 선정(hash 묶음) → 감사 판정(지금은 규칙 무결성·안전) → 저장 경계의 도장 정합성 대조 → 결과 저장** → 결함 시 다음 회차 자동 중지
  *
  * 🔴 **스위치 기본 OFF** (`SORAN_AUTO_READY_ENABLED`). 꺼져 있으면 이 파일의 쓰기 경로는
  *    돌지 않고, 감사 표(`AutoReadyAudit`)도 읽지 않는다 — 표가 운영에 없어도 깨지지 않는다.
@@ -146,7 +146,18 @@ export async function stampAutoReady(
   }
 }
 
-/** 🔴 도장 회차 — 기계 도장 행 전부를 한 행씩. 러너는 이 함수 하나만 부른다 */
+/**
+ * 🔴 도장 회차 — 기계 도장 행 전부를 한 행씩. 러너는 이 함수 하나만 부른다
+ *
+ * 비용 (2026-09-25 격리 DB 실측 · 로컬 왕복): 행마다 트랜잭션 안에서 `authoritativeGate` 가
+ *   founder 증거 전부를 다시 읽는다 — 행당 쿼리 9개 고정, 시간은 증거 수 E 에 비례한다.
+ *   E30·K100 191ms · E300·K100 597ms · E1000·K100 1.72s (행당 1.9 → 6.0 → 17.2ms).
+ *   운영은 왕복이 원격이라 쿼리 수가 먼저 비용이 된다.
+ * 다음 커밋 설계(아직 구현하지 않는다): 회차 시작에 증거를 한 번 판정하고, 각 행 트랜잭션은
+ *   증거 지문(founder 행 수 · 그 행들의 max(updatedAt) · 확정 결함 수)만 aggregate 로 다시 읽어
+ *   같을 때만 그 판정을 쓴다. 다르면 그 트랜잭션에서 전체 판정을 다시 한다 — 열림 판정은
+ *   여전히 같은 스냅샷에서 끝난다. 발행 트랜잭션의 재검증은 그대로 둔다(행당 한 번뿐이다).
+ */
 export async function stampRound(
   prisma: PrismaClient, i: { env: Env; now: Date },
 ): Promise<Map<StampOutcome['kind'], number>> {
@@ -195,7 +206,7 @@ export async function recheckAutoReadyInTx(tx: Tx, i: {
  *    결과는 이 묶음과 같은 글에만 붙는다.
  */
 export async function selectAudits(prisma: PrismaClient): Promise<
-  { kind: 'ok'; n: number; target: number; picked: string[] } | { kind: 'race'; reason: string }
+  { kind: 'ok'; n: number; target: number; picked: string[]; missingPost: string[] } | { kind: 'race'; reason: string }
 > {
   try {
     return await prisma.$transaction(async (tx) => {
@@ -203,17 +214,25 @@ export async function selectAudits(prisma: PrismaClient): Promise<
         where: { decidedBy: AUTO_DECIDER, createdPostId: { not: null } },
         select: { id: true, createdPostId: true, editDiff: true },
       })
+      /**
+       * 🔴 **Post 가 사라진 자동 발행 행은 고르지 않고 값으로 알린다** (2026-09-25).
+       *    앞판은 `findUniqueOrThrow` 라 그런 행이 하나만 있어도 **선정 전체가 예외로 멈췄다.**
+       *    감사 행은 Post FK 가 있어 만들 수 없으므로, 이 행들은 `missingPost` 로 돌려준다.
+       */
+      const posts = await tx.post.findMany({
+        where: { id: { in: published.map((p) => p.createdPostId!) } }, select: { id: true, title: true, content: true },
+      })
+      const postOf = new Map(posts.map((p) => [p.id, p]))
+      const missingPost = published.filter((p) => !postOf.has(p.createdPostId!)).map((p) => p.id)
       const existing = await tx.autoReadyAudit.findMany({ select: { queueId: true } })
       const { target, pick } = pickAudits({
-        autoPublished: published.map((p) => p.id),
+        autoPublished: published.filter((p) => postOf.has(p.createdPostId!)).map((p) => p.id),
         alreadySelected: new Set(existing.map((e) => e.queueId)),
       })
       const byId = new Map(published.map((p) => [p.id, p]))
       for (const q of pick) {
         const row = byId.get(q)!
-        const post = await tx.post.findUniqueOrThrow({
-          where: { id: row.createdPostId! }, select: { title: true, content: true },
-        })
+        const post = postOf.get(row.createdPostId!)!
         await tx.autoReadyAudit.create({
           data: {
             queueId: q, postId: row.createdPostId!, selectedAtN: published.length, selectedTarget: target,
@@ -222,7 +241,7 @@ export async function selectAudits(prisma: PrismaClient): Promise<
           },
         })
       }
-      return { kind: 'ok' as const, n: published.length, target, picked: pick }
+      return { kind: 'ok' as const, n: published.length, target, picked: pick, missingPost }
     }, SERIALIZABLE)
   } catch (e) {
     if (isConflict(e)) return { kind: 'race', reason: '다른 선정이 먼저 돌았다 — 다음 회차가 모자란 만큼 고른다' }
@@ -242,6 +261,31 @@ export type RecordOutcome =
   | 'postChanged'
   /** 🔴 다른 감사 기록과 동시에 부딪혔다 — 조용히 잃지 않고 값으로 알린다(다음 회차가 다시 본다) */
   | 'race'
+  /**
+   * 🔴 **시스템 무결성 결함** — 판정자가 무엇을 말했든, 감사 대상의 도장·글·행이 선정 때
+   *    묶음과 어긋나거나 사라졌다. 스스로 `yes` 를 기록하고 다음 자동 회차를 닫는다.
+   */
+  | 'integrityDefect'
+
+/**
+ * 🔴 **시스템 무결성 결함 기록** (2026-09-25 마스터 지적).
+ *    판정자 구현을 믿지 않는다 — 도장 변경·글 유실·행 유실은 **이 저장 경계가 직접** 잡아
+ *    `yes` 로 남긴다. `yes` 는 끈적하므로 어떤 판정도 이것을 덮지 못한다.
+ *    감사 출처 칸에는 시스템 값을 적는다(DB CHECK 가 출처 누락을 막는다).
+ */
+export const INTEGRITY_AUDITOR = 'system:integrity'
+export const INTEGRITY_MODEL = 'system:integrity-check'
+export const INTEGRITY_PROMPT_VERSION = 'integrity-v1'
+async function markIntegrityDefect(db: Db, queueId: string, reason: string, now: Date): Promise<void> {
+  await db.autoReadyAudit.updateMany({
+    where: { queueId },
+    data: {
+      defect: 'yes', judgedAt: now, auditor: INTEGRITY_AUDITOR, note: `🔴 무결성 — ${reason}`.slice(0, 2000),
+      auditContractVersion: AUDIT_CONTRACT_VERSION, auditModel: INTEGRITY_MODEL,
+      auditPromptVersion: INTEGRITY_PROMPT_VERSION,
+    },
+  })
+}
 
 /**
  * 🔴 **감사 결과 기록 — 묶음을 대조하고, 끈적하다.**
@@ -263,6 +307,22 @@ export async function recordAuditResult(prisma: PrismaClient, i: {
     const row = await tx.autoReadyAudit.findUnique({ where: { queueId: i.queueId } })
     if (row === null) return 'notSelected'
     if (row.defect === 'yes' && i.verdict.defect === 'no') return 'stickyYes'
+    /**
+     * 🔴 **도장 정합성은 저장 경계가 직접 본다** — 판정자가 `no` 라고 해도 통과시키지 않는다.
+     *    선정 때 묶은 도장 계약 판 · 발행 글 hash 와, **지금 큐에 남은 도장**이 같아야 한다.
+     *    다르면 누군가 발행 뒤 도장을 바꿨거나 다른 글에 붙었다 — 시스템 결함이다.
+     */
+    const queue = await tx.originalPostApprovalQueue.findUnique({ where: { id: i.queueId }, select: { editDiff: true } })
+    const cur = queue === null ? null : readStamp(queue.editDiff)
+    const broken = queue === null ? '감사 대상 큐 행이 없다'
+      : cur === null ? '큐의 도장 기록이 없거나 깨졌다'
+        : cur.contractDigest !== row.stampContractDigest ? '도장 계약 판이 선정 때와 다르다'
+          : cur.titleHash !== row.publishedTitleHash || cur.bodyHash !== row.publishedBodyHash
+            ? '도장의 제목·본문 hash 가 발행 글과 다르다' : null
+    if (broken !== null) {
+      await markIntegrityDefect(tx, i.queueId, broken, i.now)
+      return 'integrityDefect'
+    }
     if (i.verdict.judgedTitleHash !== row.publishedTitleHash || i.verdict.judgedBodyHash !== row.publishedBodyHash) {
       return 'hashMismatch'
     }
@@ -291,10 +351,10 @@ export async function recordAuditResult(prisma: PrismaClient, i: {
 
 export type AuditRoundResult =
   | { kind: 'off' }
-  | { kind: 'ok'; pending: number; tally: Map<RecordOutcome | 'noPost', number> }
+  | { kind: 'ok'; pending: number; tally: Map<RecordOutcome, number> }
 
 /**
- * 🔴 **독립 감사 회차** — 판정 전(`defect IS NULL`) 감사를 **전부** 읽고, 발행된 글을
+ * 🔴 **감사 회차** — 판정 전(`defect IS NULL`) 감사를 **전부** 읽고, 발행된 글을
  *    감사자에게 보이고, 결과를 기록한다.
  *    🔴 개수 제한을 두지 않는다. 사람의 매 회차 허가를 요구하지 않는다.
  *    🔴 감사자는 주입받는다 — 이 파일은 모델을 부르지 않는다(유료 호출 0).
@@ -304,12 +364,20 @@ export async function runAuditRound(prisma: PrismaClient, i: {
 }): Promise<AuditRoundResult> {
   if (!autoReadyEnabled(i.env)) return { kind: 'off' }
   const pending = await prisma.autoReadyAudit.findMany({ where: { defect: null }, orderBy: { selectedAt: 'asc' } })
-  const tally = new Map<RecordOutcome | 'noPost', number>()
-  const bump = (k: RecordOutcome | 'noPost'): void => { tally.set(k, (tally.get(k) ?? 0) + 1) }
+  const tally = new Map<RecordOutcome, number>()
+  const bump = (k: RecordOutcome): void => { tally.set(k, (tally.get(k) ?? 0) + 1) }
   for (const a of pending) {
     const post = await prisma.post.findUnique({ where: { id: a.postId }, select: { title: true, content: true } })
     const queue = await prisma.originalPostApprovalQueue.findUnique({ where: { id: a.queueId }, select: { editDiff: true } })
-    if (post === null || queue === null) { bump('noPost'); continue }
+    /**
+     * 🔴 **감사 대상이 사라졌으면 대기로 남기지 않는다** (2026-09-25 마스터 지적).
+     *    앞판은 `noPost` 로 세고 넘어갔다 — 그 감사는 영원히 판정 전으로 남고 아무것도 닫지 않았다.
+     *    FK(RESTRICT)가 삭제를 막지만, 그래도 사라졌다면 시스템 결함이다. 스스로 `yes` 를 기록한다.
+     */
+    if (post === null || queue === null) {
+      await markIntegrityDefect(prisma, a.queueId, post === null ? '감사 대상 Post 가 없다' : '감사 대상 큐 행이 없다', i.now)
+      bump('integrityDefect'); continue
+    }
     const verdict = await i.judge({
       queueId: a.queueId, postId: a.postId, title: post.title, body: post.content,
       stamp: readStamp(queue.editDiff),

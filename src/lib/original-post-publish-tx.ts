@@ -30,6 +30,9 @@
  *
  * 🔴 예외 원문을 호출부로 흘리지 않는다.
  */
+import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf } from './persona-for-match'
+import { hardFilter, readPostRequirements, type BatchCaps } from './original-post-persona-match'
+import { judgeVoiceMatch, voiceOfGateResults } from './original-post-voice-match'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
 import type { Prisma, PrismaClient } from '@prisma/client'
@@ -99,7 +102,17 @@ export type PublishTxInput = {
    *    이제 자동 행은 재검증 → 발행 판정 → **배정 쓰기** → Post 가 한 트랜잭션이다.
    *    🔴 사람 결정 행에는 쓰지 않는다 — 그 경로의 기존 동작은 그대로다.
    */
-  autoAssign?: { personaId: string; matchedAt: Date; matchMeta: unknown }
+  autoAssign?: {
+    /**
+     * 🔴 **권위값이 아니다.** "누구를 검토할지" 일 뿐이다. 트랜잭션 안에서 그 Persona 를
+     *    다시 읽어 말투·생활사·실회원·주간 사용량·최소 간격을 정본 함수로 다시 판정한다.
+     */
+    personaId: string
+    matchedAt: Date
+    matchMeta: unknown
+    /** 러너가 설치한 발행 상한 — `dailyCap` 과 같은 방식으로 주입한다. 없으면 가장 안전한 기본값 */
+    caps?: BatchCaps
+  }
 }
 
 /**
@@ -155,15 +168,31 @@ export async function publishOriginalPostTx(
        *    판정을 통과한 뒤에만 이 트랜잭션 안에서 쓴다.
        */
       const pendingAssign = isAuto && row.matchedPersona === null && input.autoAssign !== undefined
-      const personaRow = pendingAssign
-        ? await tx.persona.findUnique({
-          where: { id: input.autoAssign!.personaId },
-          select: {
-            id: true, code: true, status: true, userId: true,
-            user: { select: { providerId: true, _count: { select: { accounts: true } } } },
-          },
+      let personaRow = row.matchedPersona
+      if (pendingAssign) {
+        /**
+         * 🔴 **계획한 Persona 를 트랜잭션 안에서 다시 판정한다** (2026-09-25 마스터 지적).
+         *    호출자가 넘긴 id 를 믿으면, 계획 뒤 주간 상한이 찼거나 말투가 다른 사람이거나
+         *    아무 active Persona id 여도 그대로 나간다. 로더와 **같은 조립**(`personaForMatchOf`)과
+         *    **같은 판정**(`judgeVoiceMatch` · `readPostRequirements` · `hardFilter`)을 쓴다.
+         */
+        const pr = await tx.persona.findUnique({
+          where: { id: input.autoAssign!.personaId }, select: PERSONA_FOR_MATCH_SELECT,
         })
-        : row.matchedPersona
+        if (pr === null) return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: '계획한 Persona 가 없다' }
+        const title = row.editedTitle ?? row.draftTitle
+        const body = row.editedBody ?? row.draftBody
+        const forMatch = await personaForMatchOf(tx, pr, input.autoAssign!.matchedAt)
+        const voice = judgeVoiceMatch({
+          voice: voiceOfGateResults(row.gateResults), personaCode: pr.code, profile: 'machine',
+        })
+        const blocks = hardFilter(forMatch, readPostRequirements(title, body), title, body, input.autoAssign!.caps ?? {})
+        const reasons = [...(voice.ok ? [] : [`VOICE_MISMATCH(${voice.code})`]), ...blocks.map((b) => b.code)]
+        if (reasons.length > 0) {
+          return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${pr.code} — ${reasons.join(', ')}` }
+        }
+        personaRow = { id: pr.id, code: pr.code, status: pr.status, userId: pr.userId, user: pr.user }
+      }
 
       // 🔴 kill switch — 행이 없으면 "중지 꺼짐" 과 같다 (schema 주석)
       const sw = await tx.personaGlobalSwitch.findUnique({

@@ -44,4 +44,11 @@ CREATE TABLE "AutoReadyAudit" (
 );
 
 CREATE UNIQUE INDEX "AutoReadyAudit_postId_key" ON "AutoReadyAudit"("postId");
+
+-- 🔴 FK · RESTRICT — 감사 중인 글·큐 행은 지울 수 없다. 운영 코드에는 Post·큐 하드 삭제 경로가 없다
+--    (2026-09-25 전수 확인). 그래도 사라지면 감사 회차가 시스템 결함 yes 를 기록한다.
+ALTER TABLE "AutoReadyAudit" ADD CONSTRAINT "AutoReadyAudit_queueId_fkey"
+  FOREIGN KEY ("queueId") REFERENCES "OriginalPostApprovalQueue"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "AutoReadyAudit" ADD CONSTRAINT "AutoReadyAudit_postId_fkey"
+  FOREIGN KEY ("postId") REFERENCES "Post"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 CREATE INDEX "AutoReadyAudit_defect_idx" ON "AutoReadyAudit"("defect");

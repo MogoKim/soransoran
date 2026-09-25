@@ -355,6 +355,8 @@ model Post {
   @@index([status, isMicroSeed, permanentNoindex])
   // takedown 역조회 — sheetCandidateId(@unique) 와 함께 §6-6 의 성립 조건이다.
   @@index([sourceUrl])
+  /// 🔴 자동 READY 감사 역관계 — 칼럼 없음
+  autoReadyAudit AutoReadyAudit?
 }
 
 // ─────────── 댓글 ───────────
@@ -1709,6 +1711,8 @@ model OriginalPostApprovalQueue {
   @@index([status, createdAt])
   @@index([sourceRawContentId, createdAt])
   @@index([matchedPersonaId, matchedAt])
+  /// 🔴 자동 READY 감사 역관계 — 칼럼 없음
+  autoReadyAudit AutoReadyAudit?
 }
 
 enum OriginalPostCandidateStatus {
@@ -1969,6 +1973,10 @@ model AutoReadyAudit {
   queueId String @id
   /// 그 행이 만든 글
   postId  String @unique
+  /// 🔴 **FK · RESTRICT** — 감사 중인 글과 큐 행은 지울 수 없다(유실을 DB 가 막는다).
+  ///    그래도 사라졌다면 감사 회차가 시스템 결함 yes 를 기록한다(이중 방어).
+  queue   OriginalPostApprovalQueue @relation(fields: [queueId], references: [id], onDelete: Restrict)
+  post    Post                      @relation(fields: [postId], references: [id], onDelete: Restrict)
 
   /// 고를 때의 자동 발행 누적 수 N 과 목표 ceil(N×0.2) — 왜 이 시점에 골랐는지 남긴다
   selectedAtN      Int
