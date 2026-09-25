@@ -16,6 +16,7 @@ import {
 import {
   semanticIssues, warningsOfGate, judgeRow, HUMAN_DECIDER, CONTRACT, digestOf, isHumanEditRecord,
 } from './auto-ready-v2'
+import { parseReviewerKind, isHumanReviewer, type ReviewerKind } from './review-provenance'
 
 export { digestOf }
 
@@ -172,41 +173,126 @@ export function outcomeOf(row: Pick<DecidedRow, 'editDiff' | 'declineReason'>): 
 }
 
 /**
- * 🔴 **중대 결함 표식** — `editDiff.hardDefect` 가 `'yes'|'no'` 일 때만 값이다.
- *    없거나 다른 값이면 **unmeasured** 다. 0 으로 읽지 않는다.
+ * ── 🔴 **증거 검토 기록 — 누가 이 초안을 보고 무엇이라 했나** (2026-09-25) ──
+ *
+ *    `editDiff.evidenceReviews` 에 **검토자 종류별로 한 줄**씩 남긴다(배치 검토 importer 가 쓴다).
+ *    · `reviewer`     — `review-provenance` 의 닫힌 목록. 사람 종류만 정답 표본이 된다
+ *    · 초안 digest    — 이 기록이 **바로 이 초안**에 대한 것인지 묶는다. 다르면 무효
+ *    · `hardDefect`   — `yes`|`no`|`unmeasured`. 🔴 비어 있으면 `no` 가 아니라 `unmeasured` 다
+ *    · `bundleDigest` — 어느 검토 묶음을 보고 판정했나
  */
-export function hardDefectOf(editDiff: unknown): 'yes' | 'no' | 'unmeasured' {
-  if (editDiff === null || typeof editDiff !== 'object') return 'unmeasured'
-  const v = (editDiff as Record<string, unknown>).hardDefect
-  return v === 'yes' || v === 'no' ? v : 'unmeasured'
+export const EVIDENCE_REVIEW_KEY = 'evidenceReviews'
+export const EVIDENCE_REVIEW_CONTRACT = 'evidence-review-v1'
+
+export type EvidenceReview = {
+  contract: typeof EVIDENCE_REVIEW_CONTRACT
+  reviewer: ReviewerKind
+  draftTitleDigest: string
+  draftBodyDigest: string
+  hardDefect: 'yes' | 'no' | 'unmeasured'
+  reasons: string[]
+  bundleDigest: string
+  reviewedAt: string
+}
+
+const HEX64 = /^[0-9a-f]{64}$/
+
+/** 🔴 모양이 계약과 정확히 맞는 기록만 읽는다 — 하나라도 어긋나면 그 기록은 없는 것이다 */
+export function readEvidenceReviews(editDiff: unknown): EvidenceReview[] {
+  if (editDiff === null || typeof editDiff !== 'object' || Array.isArray(editDiff)) return []
+  const arr = (editDiff as Record<string, unknown>)[EVIDENCE_REVIEW_KEY]
+  if (!Array.isArray(arr)) return []
+  const out: EvidenceReview[] = []
+  for (const x of arr) {
+    if (x === null || typeof x !== 'object') continue
+    const r = x as Record<string, unknown>
+    const reviewer = parseReviewerKind(r.reviewer)
+    if (r.contract !== EVIDENCE_REVIEW_CONTRACT || reviewer === null) continue
+    if (typeof r.draftTitleDigest !== 'string' || !HEX64.test(r.draftTitleDigest)) continue
+    if (typeof r.draftBodyDigest !== 'string' || !HEX64.test(r.draftBodyDigest)) continue
+    if (r.hardDefect !== 'yes' && r.hardDefect !== 'no' && r.hardDefect !== 'unmeasured') continue
+    if (!Array.isArray(r.reasons) || !r.reasons.every((v) => typeof v === 'string')) continue
+    if (typeof r.bundleDigest !== 'string' || !HEX64.test(r.bundleDigest)) continue
+    if (typeof r.reviewedAt !== 'string' || Number.isNaN(Date.parse(r.reviewedAt))) continue
+    out.push({
+      contract: EVIDENCE_REVIEW_CONTRACT, reviewer, draftTitleDigest: r.draftTitleDigest,
+      draftBodyDigest: r.draftBodyDigest, hardDefect: r.hardDefect, reasons: r.reasons as string[],
+      bundleDigest: r.bundleDigest, reviewedAt: r.reviewedAt,
+    })
+  }
+  return out
+}
+
+export type HumanSampleVerdict =
+  | { counted: true; hardDefect: 'yes' | 'no' | 'unmeasured'; reviewers: ReviewerKind[] }
+  | { counted: false; why: 'notHumanDecision' | 'noReview' | 'nonHumanOnly' | 'draftMismatch' }
+
+/**
+ * 🔴 **이 행이 사람 정답 표본인가.** 셋 다 참이어야 한다:
+ *    ① 사람 결정 경로의 표식(`decidedBy='founder'`)이 있다 — 기계·자동 결정 행이 아니다
+ *    ② `human:*` 검토 기록이 **이 초안**(제목·본문 digest)에 묶여 있다
+ *    ③ (없으면) Codex·Claude·모델 기록만 있는 행은 운영 근거일 수는 있어도 **표본이 아니다**
+ *    중대 결함은 사람 기록에서만 읽는다 — 하나라도 yes 면 yes, 아니면 하나라도 미측정이면 미측정.
+ */
+export function humanSampleOf(
+  row: Pick<DecidedRow, 'decidedBy' | 'editDiff' | 'draftTitle' | 'draftBody'>,
+): HumanSampleVerdict {
+  if ((row.decidedBy ?? '').trim() !== HUMAN_DECIDER) return { counted: false, why: 'notHumanDecision' }
+  const all = readEvidenceReviews(row.editDiff)
+  if (all.length === 0) return { counted: false, why: 'noReview' }
+  const human = all.filter((r) => isHumanReviewer(r.reviewer))
+  if (human.length === 0) return { counted: false, why: 'nonHumanOnly' }
+  const t = digestOf(row.draftTitle)
+  const b = digestOf(row.draftBody)
+  const bound = human.filter((r) => r.draftTitleDigest === t && r.draftBodyDigest === b)
+  if (bound.length === 0) return { counted: false, why: 'draftMismatch' }
+  const hardDefect = bound.some((r) => r.hardDefect === 'yes') ? 'yes'
+    : bound.some((r) => r.hardDefect === 'unmeasured') ? 'unmeasured' : 'no'
+  return { counted: true, hardDefect, reviewers: bound.map((r) => r.reviewer) }
 }
 
 export type CohortSample = {
-  /** clean 으로 복원된 사람 결정 수 = 적격 표본 */
+  /** 사람 정답 표본 수 = 적격 표본 */
   eligible: number
   noEdit: number
   edited: number
   declined: number
   /** 무수정 ÷ 적격. 표본 0 이면 null — 0% 가 아니다 */
   noEditRate: number | null
-  /** 수정·폐기 중 표식이 있는 것만 센다. 하나라도 unmeasured 면 null */
+  /** 표본 전부에 사람 판정이 있을 때만 값이다. 하나라도 unmeasured 면 null */
   hardDefects: number | null
   hardDefectUnmeasured: number
+  /** 🔴 표본에서 뺀 행 — 사유별. 숨기지 않는다 */
+  excluded: Record<Exclude<HumanSampleVerdict, { counted: true }>['why'], number>
   /** 계약을 채웠는가 — 낮추지 않는다 */
   meetsContract: boolean
   reasons: string[]
 }
 
-export function cohortSampleOf(rows: readonly Pick<DecidedRow, 'decidedBy' | 'editDiff' | 'declineReason'>[]): CohortSample {
-  const human = rows.filter((r) => (r.decidedBy ?? '').trim() === HUMAN_DECIDER)
-  const outs = human.map((r) => ({ o: outcomeOf(r), d: hardDefectOf(r.editDiff) }))
-  const noEdit = outs.filter((x) => x.o === 'noEdit').length
-  const edited = outs.filter((x) => x.o === 'edited').length
-  const declined = outs.filter((x) => x.o === 'declined').length
-  const marked = outs.filter((x) => x.o !== 'noEdit')
-  const unmeasured = marked.filter((x) => x.d === 'unmeasured').length
-  const hardDefects = unmeasured > 0 ? null : marked.filter((x) => x.d === 'yes').length
-  const eligible = human.length
+/**
+ * 🔴 **증거 표본 — 사람 정답만 센다** (2026-09-25 개정).
+ *    앞판은 `decidedBy='founder'` 이기만 하면 사람 표본으로 셌다. 그 값은 실행자와 무관하게
+ *    써진다(founder 위장). 이제 `humanSampleOf` 가 사람 검토 기록을 요구한다.
+ * 🔴 **중대 결함은 표본 전부에서 잰다** — 앞판은 수정·폐기 행만 요구해, 무수정 행은
+ *    판정 없이 "결함 없음" 으로 읽혔다. 사람 판정이 없으면 unmeasured 이고 게이트는 닫힌다.
+ * 🔴 기준 30 · 90% · 0 은 `CONTRACT` 그대로다.
+ */
+export function cohortSampleOf(
+  rows: readonly Pick<DecidedRow, 'decidedBy' | 'editDiff' | 'declineReason' | 'draftTitle' | 'draftBody'>[],
+): CohortSample {
+  const excluded = { notHumanDecision: 0, noReview: 0, nonHumanOnly: 0, draftMismatch: 0 }
+  const samples: { o: HumanOutcome; d: 'yes' | 'no' | 'unmeasured' }[] = []
+  for (const r of rows) {
+    const v = humanSampleOf(r)
+    if (v.counted) samples.push({ o: outcomeOf(r), d: v.hardDefect })
+    else excluded[v.why] += 1
+  }
+  const noEdit = samples.filter((x) => x.o === 'noEdit').length
+  const edited = samples.filter((x) => x.o === 'edited').length
+  const declined = samples.filter((x) => x.o === 'declined').length
+  const unmeasured = samples.filter((x) => x.d === 'unmeasured').length
+  const hardDefects = unmeasured > 0 ? null : samples.filter((x) => x.d === 'yes').length
+  const eligible = samples.length
   const noEditRate = eligible === 0 ? null : noEdit / eligible
   const reasons: string[] = []
   if (eligible < CONTRACT.reviewSampleMin) reasons.push(`적격 표본 ${eligible}/${CONTRACT.reviewSampleMin}`)
@@ -218,6 +304,6 @@ export function cohortSampleOf(rows: readonly Pick<DecidedRow, 'decidedBy' | 'ed
   else if (hardDefects > CONTRACT.hardDefectMax) reasons.push(`중대 결함 ${hardDefects}`)
   return {
     eligible, noEdit, edited, declined, noEditRate, hardDefects,
-    hardDefectUnmeasured: unmeasured, meetsContract: reasons.length === 0, reasons,
+    hardDefectUnmeasured: unmeasured, excluded, meetsContract: reasons.length === 0, reasons,
   }
 }

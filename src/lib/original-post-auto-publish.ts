@@ -26,6 +26,7 @@ export const AUTO_GATE_VERDICT = 'PASS'
 
 // 🔴 profile 판정의 단일 지점 — 적재기(§4-AN)와 같은 함수를 쓴다
 import { AUTO_DECIDER, readStamp, stampValidFor } from './auto-ready-v2'
+import { LEGACY_DECISION_MARK } from './review-provenance'
 import { titleKey } from './draft-originality'
 import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
@@ -116,7 +117,7 @@ export type AutoRow = {
  *    새 컬럼을 만들지 않는다 — 큐에 이미 있는 `decidedBy` 를 쓴다.
  *    `machine:*` · `null` · 모르는 값은 전부 "사람이 본 적 없다" 다(fail-closed).
  */
-export const MACHINE_REVIEWED_BY = 'founder'
+export const MACHINE_REVIEWED_BY = LEGACY_DECISION_MARK
 
 /**
  * 🔴 **사람이 본 그 글이 맞는가** — 검토 완료 표시를 붙이기 전후로 대조한다 (2026-09-14).

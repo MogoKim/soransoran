@@ -36,6 +36,15 @@ import { loadPublishableStock, planPublishBatch } from './lib/publishable-stock.
 import { PROFILES, releaseCapsOf } from '../src/lib/scale-profile'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 
+import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
+/** 🔴 증거 픽스처의 사람 검토 기록 — 운영에서는 배치 검토 importer 가 쓴다 */
+const humanReviewed = (title: string, body: string) => ({
+  [EVIDENCE_REVIEW_KEY]: [{
+    contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:founder', draftTitleDigest: evDigest(title), draftBodyDigest: evDigest(body),
+    hardDefect: 'no', reasons: [], bundleDigest: evDigest('fixture-bundle'), reviewedAt: '2026-09-25T00:00:00Z',
+  }],
+})
+
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -157,6 +166,8 @@ async function main(): Promise<void> {
         sourceRawContentId: r.id, status: 'PUBLISHED', draftTitle: `사람이 본 글 ${i}`, draftBody: `사람이 본 본문 ${i}`,
         gateVerdict: 'PASS', gateResults: gate() as never, promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
         decidedBy: HUMAN_DECIDER, createdPostId: ep.id, dedupKey: `ev-${i}`,
+        // 🔴 사람 정답 표본 — human:founder 검토 기록이 이 초안에 묶여 있다(결함 no)
+        editDiff: humanReviewed(`사람이 본 글 ${i}`, `사람이 본 본문 ${i}`) as never,
       },
       select: { id: true },
     })

@@ -21,6 +21,8 @@
  *    PUBLISHED 는 발행 성공을 확인한 경로만 설정할 수 있다(MicroSeed · Persona 와 같은 원칙).
  */
 
+import { LEGACY_DECISION_MARK } from './review-provenance'
+
 /** 대기열 상태 — Prisma enum OriginalPostCandidateStatus 와 같은 값 */
 export const ORIGINAL_POST_STATUSES = [
   'PENDING', 'APPROVED', 'EDITED', 'DECLINED', 'PUBLISHED', 'EXPIRED',
@@ -42,7 +44,7 @@ export type DecidedStatus = Extract<OriginalPostStatus, 'APPROVED' | 'DECLINED' 
  * 🔴 자유 텍스트가 아니라 목록인 이유는 폐기 사유와 같다. 오타로 만들어진
  *    'Founder' · 'founder ' 가 섞이면 집계가 무너진다.
  */
-export const DECIDED_BY_VALUES = ['founder'] as const
+export const DECIDED_BY_VALUES = [LEGACY_DECISION_MARK] as const
 export type DecidedBy = (typeof DECIDED_BY_VALUES)[number]
 
 const DECIDED_BY_SET: ReadonlySet<string> = new Set(DECIDED_BY_VALUES)

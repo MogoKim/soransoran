@@ -17,9 +17,11 @@ import {
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { releaseStageCeiling, boundedReleaseStage, resolveScale } from '../src/lib/scale-runtime'
 import {
-  restoreRow, cohortSampleOf, hardDefectOf, outcomeOf,
-  type ArtifactDoc, type CandidateDoc, type DecidedRow,
+  restoreRow, cohortSampleOf, outcomeOf, humanSampleOf, readEvidenceReviews, digestOf,
+  EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT,
+  type ArtifactDoc, type CandidateDoc, type DecidedRow, type EvidenceReview,
 } from '../src/lib/auto-ready-evidence'
+import { isHumanReviewer, LEGACY_DECISION_MARK } from '../src/lib/review-provenance'
 import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticHoldsOf,
@@ -159,28 +161,57 @@ console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지'
   check('🔴 원문에 차단 표현이 있다 → warning', run(row({ draftBody: '오늘도 산책했어요', draftTitle: draft.title }), [artifact({ draft: { title: draft.title, body: '오늘도 산책했어요' } })]).klass === 'warning')
 }
 
-console.log('\n③ 🔴 표본 — unmeasured 를 0 으로 읽지 않는다 · 계약을 낮추지 않는다')
+console.log('\n③ 🔴 표본 — 사람 정답만 · unmeasured 를 0 으로 읽지 않는다 · 계약을 낮추지 않는다')
 {
-  const r = (o: Partial<DecidedRow> = {}) => ({ decidedBy: HUMAN_DECIDER, editDiff: null, declineReason: null, ...o })
-  const s0 = cohortSampleOf([r(), r({ editDiff: { bodyChanged: true } })])
-  check('🔴 🔴 **수정 행에 hardDefect 표식이 없으면 unmeasured → null**', s0.hardDefects === null && s0.hardDefectUnmeasured === 1)
-  check('🔴 표식이 있으면 센다', cohortSampleOf([r({ editDiff: { bodyChanged: true, hardDefect: 'no' } })]).hardDefects === 0)
-  check('🔴 hardDefect 는 yes|no 만 값이다 — "false"·true 는 unmeasured',
-    hardDefectOf({ hardDefect: 'false' }) === 'unmeasured' && hardDefectOf({ hardDefect: true }) === 'unmeasured')
-  const n = (k: number, noEdit: number) => [
-    ...Array.from({ length: noEdit }, () => r()),
-    ...Array.from({ length: k - noEdit }, () => r({ editDiff: { bodyChanged: true, hardDefect: 'no' } })),
+  const T = '평범한 하루'
+  const B = '아침에 산책을 다녀왔어요'
+  /** 검토 기록 한 줄 — 기본은 이 초안에 묶인 human:founder · 결함 no */
+  const rv = (o: Partial<EvidenceReview> = {}): EvidenceReview => ({
+    contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:founder', draftTitleDigest: digestOf(T), draftBodyDigest: digestOf(B),
+    hardDefect: 'no', reasons: [], bundleDigest: digestOf('bundle'), reviewedAt: '2026-09-25T00:00:00Z', ...o,
+  })
+  const r = (o: { decidedBy?: string | null; edited?: boolean; declined?: boolean; reviews?: unknown[] } = {}) => ({
+    decidedBy: o.decidedBy === undefined ? HUMAN_DECIDER : o.decidedBy, draftTitle: T, draftBody: B,
+    declineReason: o.declined === true ? 'TOPIC_UNFIT' : null,
+    editDiff: { ...(o.edited === true ? { bodyChanged: true } : {}), [EVIDENCE_REVIEW_KEY]: o.reviews ?? [rv()] },
+  })
+  const n = (k: number, noEdit: number, hd: EvidenceReview['hardDefect'] = 'no') => [
+    ...Array.from({ length: noEdit }, () => r({ reviews: [rv({ hardDefect: hd })] })),
+    ...Array.from({ length: k - noEdit }, () => r({ edited: true, reviews: [rv({ hardDefect: hd })] })),
   ]
-  check('🔴 🔴 **30건 · 무수정 27(90.0%) · 결함 0 → 계약 충족**', cohortSampleOf(n(30, 27)).meetsContract)
-  check('🔴 🔴 **29건이면 무수정률이 높아도 미달 (30 을 낮추지 않았다)**', !cohortSampleOf(n(29, 29)).meetsContract)
+  check('🔴 🔴 **30건 · 무수정 27(90.0%) · 결함 0 · 전부 사람 판정 → 계약 충족 (열림)**', cohortSampleOf(n(30, 27)).meetsContract)
+  check('🔴 🔴 **29건 → 미달 (30 을 낮추지 않았다)**', !cohortSampleOf(n(29, 29)).meetsContract)
   check('🔴 🔴 **30건 · 무수정 26(86.7%) → 미달 (90% 를 낮추지 않았다)**', !cohortSampleOf(n(30, 26)).meetsContract)
-  check('🔴 결함 yes 하나면 미달', !cohortSampleOf([...n(30, 29).slice(0, 29), r({ editDiff: { bodyChanged: true, hardDefect: 'yes' } })]).meetsContract)
-  check('🔴 사람(founder) 결정만 센다 — 기계·자동 결정은 표본이 아니다',
+  check('🔴 결함 yes 하나면 미달',
+    !cohortSampleOf([...n(29, 29), r({ edited: true, reviews: [rv({ hardDefect: 'yes', reasons: ['생활사 모순'] })] })]).meetsContract)
+  const um = cohortSampleOf([...n(29, 29), r({ reviews: [rv({ hardDefect: 'unmeasured' })] })])
+  check('🔴 🔴 **hardDefect 미측정 하나 → null · 게이트 닫힘 (무수정 행도 판정이 필요하다)**',
+    um.hardDefects === null && um.hardDefectUnmeasured === 1 && !um.meetsContract)
+  const codex = cohortSampleOf([...n(29, 29), r({ reviews: [rv({ reviewer: 'codex:master-review' })] }), r({ reviews: [rv({ reviewer: 'model:semantic-audit' })] })])
+  check('🔴 🔴 **Codex·모델 검토만 있는 행은 사람 표본이 아니다 → 29 · 닫힘**',
+    codex.eligible === 29 && codex.excluded.nonHumanOnly === 2 && !codex.meetsContract)
+  check('🔴 🔴 **legacy founder 표식만 있고 검토 기록이 없으면 표본이 아니다**',
+    humanSampleOf(r({ reviews: [] })).counted === false && cohortSampleOf([r({ reviews: [] })]).excluded.noReview === 1)
+  check('🔴 🔴 **human:operator 도 계약을 채우면 센다**', humanSampleOf(r({ reviews: [rv({ reviewer: 'human:operator' })] })).counted)
+  check('🔴 🔴 **임의 문자열 검토자는 사람이 아니다 — 기록 자체가 무효**',
+    readEvidenceReviews({ [EVIDENCE_REVIEW_KEY]: [rv({ reviewer: 'founder' as never }), rv({ reviewer: 'Human:founder' as never }), rv({ reviewer: 'human:founder ' as never })] }).length === 0
+    && !isHumanReviewer('founder') && !isHumanReviewer('human') && !isHumanReviewer('codex:master-review') && isHumanReviewer('human:founder'))
+  check('🔴 🔴 **다른 초안에 대한 사람 기록은 이 행의 표본이 아니다**',
+    (() => { const v = humanSampleOf(r({ reviews: [rv({ draftBodyDigest: digestOf('다른 본문') })] })); return !v.counted && v.why === 'draftMismatch' })())
+  check('🔴 사람 결정 표식이 없는 행(기계·자동)은 사람 기록이 있어도 표본이 아니다',
     cohortSampleOf([r({ decidedBy: 'machine:auto-draft-v5' }), r({ decidedBy: AUTO_DECIDER })]).eligible === 0)
-  check('🔴 계약 값은 정본 그대로다', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9
+  check('🔴 모양이 깨진 기록(hash 아님 · 모르는 hardDefect)은 읽지 않는다',
+    readEvidenceReviews({ [EVIDENCE_REVIEW_KEY]: [rv({ draftTitleDigest: 'x' }), rv({ hardDefect: 'false' as never })] }).length === 0)
+  check('🔴 🔴 **계약 값은 정본 그대로다 — 30 · 90% · 0**', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9
     && CONTRACT.hardDefectMax === 0 && CONTRACT.sampledAuditRatio === 0.2)
   check('🔴 자동 도장만 담긴 editDiff 는 사람 수정이 아니다',
     !isHumanEditRecord({ [AUTO_READY_RECORD_KEY]: {} }) && outcomeOf({ editDiff: { autoReady: {} }, declineReason: null }) === 'noEdit')
+  // 🔴 계약 정의는 한 곳 — 'founder' 리터럴이 운영 상수 셋에 따로 없다
+  check('🔴 🔴 **검토자 계약·운영 표식은 review-provenance 한 곳에서만 정의된다**',
+    !/export const (HUMAN_DECIDER|MACHINE_REVIEWED_BY) = 'founder'|DECIDED_BY_VALUES = \['founder'\]/.test(
+      codeOnly('src/lib/auto-ready-v2.ts') + codeOnly('src/lib/original-post-auto-publish.ts') + codeOnly('src/lib/original-post-decision.ts'))
+    && HUMAN_DECIDER === LEGACY_DECISION_MARK
+    && (codeOnly('src/lib/auto-ready-evidence.ts') + codeOnly('src/lib/auto-ready-evidence-store.ts')).match(/'human:founder'/g) === null)
 }
 
 console.log('\n④ 🔴 도장 — 본문·제목·계약 판 hash')

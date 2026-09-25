@@ -873,6 +873,8 @@ jobs:
             exit 1
           fi
           npm run auto-ready:db-check
+          # 🔴 증거 복원·배치 검토 기록 — 같은 격리 DB 를 스스로 비우고 쓴다
+          npm run auto-ready:evidence-db-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.

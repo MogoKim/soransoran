@@ -177,7 +177,11 @@
     "auto-ready:check": "tsx scripts/auto-ready-check.mts",
     "auto-ready:db-check": "tsx scripts/auto-ready-db-check.mts",
     "auto-ready:runner-check": "tsx scripts/auto-ready-runner-chain-check.mts",
-    "auto-ready:evidence-scan": "tsx scripts/auto-ready-evidence-scan.mts"
+    "auto-ready:evidence-scan": "tsx scripts/auto-ready-evidence-scan.mts",
+    "auto-ready:evidence-restore": "tsx scripts/auto-ready-evidence-restore.mts",
+    "auto-ready:review-bundle": "tsx scripts/auto-ready-review-bundle.mts",
+    "auto-ready:review-import": "tsx scripts/auto-ready-review-import.mts",
+    "auto-ready:evidence-db-check": "tsx scripts/auto-ready-evidence-db-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

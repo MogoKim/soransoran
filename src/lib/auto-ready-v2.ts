@@ -11,12 +11,16 @@
 import { createHash } from 'node:crypto'
 
 import { AUTO_READY_CONTRACT } from './supply-schedule-contract'
+import { LEGACY_DECISION_MARK } from './review-provenance'
 import {
   SEMANTIC_SUMMARY_KEY, semanticHoldsOf, type SemanticSummary,
 } from './micro-seed-supply-autofill'
 
-/** 🔴 사람 결정의 표식 — 기계는 이 값을 **절대** 쓰지 않는다(founder 위장 금지) */
-export const HUMAN_DECIDER = 'founder'
+/**
+ * 🔴 사람 결정 경로의 표식 — 기계 자동 판정은 이 값을 **절대** 쓰지 않는다(founder 위장 금지).
+ *    🔴 이 값만으로는 **사람 정답 표본이 아니다** — 누가 봤는지는 `review-provenance` 가 정한다.
+ */
+export const HUMAN_DECIDER = LEGACY_DECISION_MARK
 /** 🔴 자동 판정의 표식 — 사람 값과 섞이지 않는 별개 문자열이다 */
 export const AUTO_DECIDER = 'auto-ready:v1'
 
