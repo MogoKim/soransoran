@@ -95,6 +95,21 @@ export function restoreSnapshot(snap) {
   return restored
 }
 
+/**
+ * 🔴 **자식 프로세스 출력에서 뜻이 있는 줄을 고른다** (2026-09-27 사고).
+ *
+ *    앞판은 마지막 1~2줄을 그대로 썼다. 자식이 스택을 뱉고 죽으면 그 자리에
+ *    `Node.js v24.14.0` 이 남는다 — `HERO_FAILED — Node.js v24.14.0` 이 실제로 남았고
+ *    무엇이 왜 터졌는지 알 수 없었다.
+ */
+const NOISE = /^(Node\.js v[\d.]+|\s*at\s|\s*\^+\s*$|\s*$)/
+export function meaningfulLine(out, max = 2) {
+  const lines = String(out ?? '').split('\n').map((x) => x.trimEnd())
+  const marked = lines.filter((x) => /⛔|Error:|error:/.test(x) && !NOISE.test(x))
+  const pick = marked.length ? marked.slice(-max) : lines.filter((x) => !NOISE.test(x)).slice(-max)
+  return pick.join(' ').trim().slice(0, 300) || '(출력 없음)'
+}
+
 function run(file, args, { json = false } = {}) {
   const r = spawnSync(NODE, [file, ...args], { cwd: ROOT, encoding: 'utf8' })
   if (r.error) return { code: 1, stdout: '', stderr: String(r.error.message ?? r.error), json: null }
@@ -204,7 +219,7 @@ export function drive(slug, opts, deps = {}) {
     const r = runStep(WEBUI, ['--fetch', slug])
     if (r.code !== 0) {
       const why = /login_required/i.test(r.stdout + r.stderr) ? 'ChatGPT login_required' : '회수 실패'
-      return stop('draft', 'FETCH_FAILED', `${why} — ${(r.stderr || r.stdout).trim().split('\n').pop()}`)
+      return stop('draft', 'FETCH_FAILED', `${why} — ${meaningfulLine(r.stderr || r.stdout)}`)
     }
     add('draft', 'ok', 'draft.md 회수')
   }
@@ -298,7 +313,7 @@ export function drive(slug, opts, deps = {}) {
     if (hp.mode !== 'REQUIRED') args.push('--allow-optional')
     const r = runStep(HERO, args)
     if (r.code !== 0) {
-      return stop('hero', 'HERO_FAILED', (r.stderr || r.stdout).trim().split('\n').slice(-2).join(' '))
+      return stop('hero', 'HERO_FAILED', meaningfulLine(r.stderr || r.stdout))
     }
     add('hero', 'ok', `hero 생성 (${hp.mode ?? '-'}${hp.enforcedByLane ? ' · 자동 레인 강제' : ''}${heroBrief.scene ? ' · review scene' : ' · 기본 장면'})`)
   }

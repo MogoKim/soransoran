@@ -365,7 +365,10 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
     process.exit(r.reason === 'brief_missing' ? 1 : 0)
   }
   if (r.status === 'failed') {
-    console.error(`     ⛔ ${r.reason}${r.detail ? ` — ${r.detail}` : ''}${r.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''} · 전송 ${r.sent ? '1건' : '0건'}`)
+    // 🔴 stage 와 실제 오류를 함께 싣는다 — `connect_failed` 한 단어로는 고칠 수가 없다
+    const where = r.stage ? `[${r.stage}] ` : ''
+    const detail = r.detail ?? r.errorDetail ?? (r.errorName ? `${r.errorName}` : '')
+    console.error(`     ⛔ ${where}${r.reason}${detail ? ` — ${detail}` : ''}${r.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''} · 전송 ${r.sent ? '1건' : '0건'}`)
     // 🔴 관문에 막혔으면 무엇이 걸렸는지 한 줄씩 말한다. 코드만 찍으면 고칠 수가 없다.
     if (r.invalid?.length) {
       console.error('     관문에 막혔다 — 저장하지 않았다:')

@@ -1023,15 +1023,17 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
        */
       let spawned = 0
       const spawnFn = () => { spawned += 1; return { unref() {} } }
+      // 🔴 프로필도 임시 fixture 다 — 실제 프로필이 살아 있든 죽었든 결과가 같아야 한다
       const rs = await SESSION.ensureChrome({
         waitMs: 60, pollMs: 20, spawnFn, cdpCheck: async () => false, browserCheck: () => true,
+        profileDir: dead,
       })
       check('🔴 반례2 죽은 잠금이면 기동을 시도한다', spawned === 1, `spawn ${spawned}회 · lock ${rs.lock?.state}`)
 
       /** 🔴 브라우저가 아예 없으면 띄우려 들지 않는다 — 그 판정은 그대로 살아 있다 */
       let spawned2 = 0
       const rNoBrowser = await SESSION.ensureChrome({
-        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => false,
+        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => false, profileDir: dead,
         spawnFn: () => { spawned2 += 1; return { unref() {} } },
       })
       check('🔴 반례2 브라우저가 없으면 BROWSER_MISSING · spawn 0회',
@@ -1041,15 +1043,30 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       /** 🔴 CDP 가 이미 살아 있으면 띄우지 않는다 */
       let spawned3 = 0
       const rAlive = await SESSION.ensureChrome({
-        waitMs: 60, pollMs: 20, cdpCheck: async () => true, browserCheck: () => true,
+        waitMs: 60, pollMs: 20, cdpCheck: async () => true, browserCheck: () => true, profileDir: dead,
         spawnFn: () => { spawned3 += 1; return { unref() {} } },
       })
       check('  반례2 CDP 가 살아 있으면 기동하지 않는다',
         rAlive.ok === true && rAlive.started === false && spawned3 === 0, `spawn ${spawned3}회`)
 
+      /** 🔴 살아 있는 프로필이면 띄우지 않는다 — 남의 창을 빼앗지 않는다 */
+      let spawned4 = 0
+      const rLive = await SESSION.ensureChrome({
+        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => true, profileDir: live,
+        processes: procs([{ pid: 999002, command: `${CHROME} --user-data-dir=${live}` }]),
+        spawnFn: () => { spawned4 += 1; return { unref() {} } },
+      })
+      check('🔴 반례2 LIVE 프로필이면 기동 0회 · 죽이지 않는다',
+        spawned4 === 0 && rLive.ok === false && rLive.lock?.state === 'LIVE',
+        `spawn ${spawned4}회 · lock ${rLive.lock?.state} · ${rLive.reason}`)
+
+      /**
+       * 🔴 **소스 정규식 대신 행동으로 본다.** 호출 인자가 하나 늘면 곧바로 깨지는 검사였다 —
+       *    코드는 멀쩡한데 시험만 빨개지는 종류다. 위 두 반례가 같은 것을 실제 실행으로 증명한다.
+       */
       const srcTxt = fs.readFileSync('scripts/lib/chatgpt-session.mjs', 'utf8')
-      check('🔴 반례2 LIVE 일 때만 기동을 포기한다 (코드 경로)',
-        /const lock = profileLockState\(\)\n\s*if \(lock\.state === 'LIVE'\) \{/.test(srcTxt))
+      check('  반례2 STALE 과 LIVE 가 서로 다른 결과를 낸다 (행동으로 확인)',
+        spawned === 1 && spawned4 === 0, `STALE spawn ${spawned}회 · LIVE spawn ${spawned4}회`)
       /**
        * 🔴 **죽이는 "호출"만 본다.** `kill` 이라는 글자는 주석에도 있다.
        *    `process.kill(pid, 0)` 은 신호를 보내지 않는 생존 확인이다 — 이제 그것도 없다.
@@ -1144,53 +1161,78 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
     }
   }
 
-  // ── 반례 8 · register 두 파일 부분 쓰기 → 바이트 단위 원복 ──
+  // ── 반례 8 · register 두 파일 부분 쓰기 → 바이트 단위 원복 (환경 독립) ──
   {
     /**
-     * 🔴 **`articles.ts` 만 바뀐 채 남는 상태를 만들지 않는다** (Codex 재검토 2026-09-26).
-     *    register 는 두 파일을 순서대로 쓴다. 두 번째가 터지면 글은 등록됐는데
-     *    큐에는 그대로 있는, 가장 고치기 어려운 어긋남이 생긴다.
-     *    여기서는 **두 번째 쓰기만 실패**하게 주입하고, 네 산출물이 전부
-     *    BEFORE 와 바이트 단위로 같은지 본다.
+     * 🔴 **운영 큐에 기대지 않는다** (2026-09-27).
+     *    앞판은 `item: { day: 18 }` 을 쓰고 **실제 topic-queue** 에서 그 블록을 찾았다.
+     *    day 18(`checkup-items-50s`)이 등록돼 큐에서 빠지자 시험이 깨졌다 —
+     *    자동화가 성공할수록 CI 가 빨개지는 구조다.
+     *    이제 임시 articles/queue fixture 를 **실제 `applyWrite`** 에 주입한다.
      */
     const REG = await import('./magazine-register.mjs')
-    const LOAD = await import('./lib/magazine-load.mjs')
-    const before = {
-      articles: fs.readFileSync(LOAD.ARTICLES_TS),
-      queue: fs.readFileSync(LOAD.QUEUE_TS),
-    }
-    /** 🔴 실제 파일 경로에 실제로 쓴다 — 첫 쓰기는 통과시키고 두 번째만 터뜨린다 */
-    let writes = 0
-    const flaky = (target, data) => {
-      writes += 1
-      if (writes === 2) throw new Error('EIO: 시험 주입 — 두 번째 쓰기 실패')
-      fs.writeFileSync(target, data)
-    }
-    const fake = {
-      slug: 'fixture-slug',
-      _internal: {
-        draft: { literal: "{ title: '시', description: '설', cluster: 'clinic', publishedAt: '', body: [] }" },
-        norm: { date: '2027-03-01', publishAt: '2027-03-01T10:30:00+09:00' },
-        item: { day: 18 },
-        articlesSrc: String(before.articles),
-      },
-    }
+    const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-reg2-'))
     try {
-      const r = REG.applyWrite(fake, { write: flaky })
-      check('🔴 반례8 두 번째 쓰기가 실패하면 ok=false', r.ok === false, JSON.stringify(r).slice(0, 120))
+      const aPath = path.join(T, 'articles.ts')
+      const qPath = path.join(T, 'topic-queue.ts')
+      /** 🔴 실제 삽입 앵커와 같은 문자열을 쓴다 — 다르면 삽입이 조용히 실패한다 */
+      const articlesFixture =
+        'export const MAGAZINE_ARTICLES = {\n} satisfies Record<string, MagazineArticleBody>\n'
+      const queueFixture = [
+        'export const TOPIC_QUEUE = [',
+        '  {', '    day: 777,', "    slug: 'fixture-slug',", '  },',
+        '  {', '    day: 778,', "    slug: 'other-slug',", '  },',
+        ']', '',
+      ].join('\n')
+      fs.writeFileSync(aPath, articlesFixture)
+      fs.writeFileSync(qPath, queueFixture)
+      const before = { a: fs.readFileSync(aPath), q: fs.readFileSync(qPath) }
+
+      const mkFake = () => ({
+        slug: 'fixture-slug',
+        _internal: {
+          draft: { literal: "{ title: '시', description: '설', cluster: 'clinic', publishedAt: '', body: [] }" },
+          norm: { date: '2027-03-01', publishAt: '2027-03-01T10:30:00+09:00' },
+          item: { day: 777 },
+          articlesSrc: String(before.a),
+        },
+      })
+
+      /** ① 정상 경로가 실제로 두 파일을 바꾼다 — 죽은 시험이 아님을 먼저 못 박는다 */
+      const okRes = REG.applyWrite(mkFake(), { articlesPath: aPath, queuePath: qPath })
+      check('  반례8 정상 경로는 두 파일을 쓴다', okRes.ok === true, JSON.stringify(okRes).slice(0, 120))
+      check('  반례8 articles 에 글이 들어갔다', /fixture-slug/.test(fs.readFileSync(aPath, 'utf8')))
+      check('  반례8 queue 에서 그 항목이 빠졌다', !/fixture-slug/.test(fs.readFileSync(qPath, 'utf8')))
+      fs.writeFileSync(aPath, before.a); fs.writeFileSync(qPath, before.q)
+
+      /** ② 첫 쓰기 성공 → 두 번째 쓰기 실패 → 두 파일 바이트 원복 */
+      let writes = 0
+      const flaky = (target, data) => {
+        writes += 1
+        if (writes === 2) throw new Error('EIO: 시험 주입 — 두 번째 쓰기 실패')
+        fs.writeFileSync(target, data)
+      }
+      const r = REG.applyWrite(mkFake(), { write: flaky, articlesPath: aPath, queuePath: qPath })
+      check('🔴 반례8 두 번째 쓰기가 실패하면 ok=false', r.ok === false, JSON.stringify(r).slice(0, 140))
       check('🔴 반례8 되돌렸다고 말한다', r.rolledBack === true, r.why)
       check('🔴 반례8 첫 쓰기는 실제로 일어났다 (죽은 시험 아님)', writes === 2, `write ${writes}회`)
-      check('🔴 반례8 articles.ts 가 BEFORE 와 바이트 동일', fs.readFileSync(LOAD.ARTICLES_TS).equals(before.articles))
-      check('🔴 반례8 topic-queue.ts 가 BEFORE 와 바이트 동일', fs.readFileSync(LOAD.QUEUE_TS).equals(before.queue))
-    } finally {
-      /**
-       * 🔴 **시험이 실패해도 트리를 더럽히지 않는다.** 이 시험은 실제 운영 파일에
-       *    실제로 쓴다 — 원복이 고장 난 상태로 돌리면 `articles.ts` 가 바뀐 채 남는다.
-       *    그건 이 시험이 잡으려는 바로 그 사고다.
-       */
-      fs.writeFileSync(LOAD.ARTICLES_TS, before.articles)
-      fs.writeFileSync(LOAD.QUEUE_TS, before.queue)
-    }
+      check('🔴 반례8 articles fixture 가 BEFORE 와 바이트 동일', fs.readFileSync(aPath).equals(before.a))
+      check('🔴 반례8 queue fixture 가 BEFORE 와 바이트 동일', fs.readFileSync(qPath).equals(before.q))
+
+      /** ③ 🔴 운영 큐가 몇 건이든 같은 시험이 통과한다 */
+      for (const [name, rows] of [['0건', 0], ['1건', 1]]) {
+        const q2 = path.join(T, `queue-${name}.ts`)
+        fs.writeFileSync(q2, rows
+          ? "export const TOPIC_QUEUE = [\n  {\n    day: 777,\n    slug: 'fixture-slug',\n  },\n]\n"
+          : 'export const TOPIC_QUEUE = [\n]\n')
+        fs.writeFileSync(aPath, before.a)
+        const rr = REG.applyWrite(mkFake(), { articlesPath: aPath, queuePath: q2 })
+        if (rows) check(`  반례8 큐 ${name} 이어도 정상 동작`, rr.ok === true, JSON.stringify(rr).slice(0, 100))
+        else check(`🔴 반례8 큐 ${name} 이면 추측하지 않고 막는다`,
+          rr.ok === false && /찾지 못했다/.test(rr.why ?? ''), rr.why)
+        fs.writeFileSync(aPath, before.a)
+      }
+    } finally { fs.rmSync(T, { recursive: true, force: true }) }
   }
 
   // ── 반례 9 · 등록이 막혀도 네 산출물이 BEFORE 그대로 · 다음 후보 계속 ──
@@ -1352,6 +1394,173 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       check('🔴 반례7 미추적 draft 를 더해도 후보가 같다',
         pickedAgain.join(',') === FIXTURE_SLUGS.join(','), `${pickedAgain.join(',')} vs ${FIXTURE_SLUGS.join(',')}`)
     } finally { fs.rmSync(probe, { recursive: true, force: true }) }
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑭ 🔴 2026-09-27 운영 실패 — composer 계약 · 탭 · 진단 · merge gate
+// ─────────────────────────────────────────────────────────
+console.log('\n⑭ 2026-09-27 운영 실패 반례')
+{
+  const SESSION2 = await import('./lib/chatgpt-session.mjs')
+
+  // ── 반례 10 · composer 선택자 정본을 세 경로가 공유한다 ──
+  {
+    /**
+     * 🔴 2026-09-27: probe 는 통과했는데 원고 회수 5건과 hero 2건이 전부 죽었다.
+     *    probe 만 새 선택자를 알고 나머지는 `#prompt-textarea` 만 봤기 때문이다.
+     *    실측: `#prompt-textarea` 0개 · `[contenteditable="true"][role="textbox"]` 1개.
+     */
+    const SEL = SESSION2.COMPOSER_SELECTOR
+    check('🔴 반례10 정본 선택자가 옛 선택자를 포함한다', SEL.includes('#prompt-textarea'), SEL)
+    check('🔴 반례10 정본 선택자가 새 선택자를 포함한다',
+      SEL.includes('[contenteditable="true"][role="textbox"]'), SEL)
+    check('🔴 반례10 광범위한 contenteditable 단독은 쓰지 않는다',
+      !/(^|,)\s*\[contenteditable="true"\]\s*(,|$)/.test(SEL), SEL)
+
+    /** 🔴 세 경로가 **하나의 상수**를 쓴다 — 하드코딩이 남아 있으면 다시 갈라진다 */
+    const hard = []
+    for (const f of ['scripts/lib/chatgpt-session.mjs', 'scripts/magazine-hero-runner.mjs']) {
+      const src = fs.readFileSync(f, 'utf8')
+      for (const [i, line] of src.split('\n').entries()) {
+        // 진단 신호(querySelector)는 계약이 아니다 — 옛/새 선택자를 나눠 보려는 용도다
+        if (/waitForSelector\('#prompt-textarea'|locator\('#prompt-textarea'\)|click\('#prompt-textarea'\)/.test(line)) {
+          hard.push(`${f}:${i + 1}`)
+        }
+      }
+    }
+    check('🔴 반례10 조작 경로에 선택자 하드코딩 0', hard.length === 0, hard.join(' · ') || '정본 상수만 쓴다')
+
+    /** 🔴 양쪽 fixture 로 실제 매칭을 확인한다 — 문자열만 보면 오타를 못 잡는다 */
+    const matches = (html) => SEL.split(',').map((x) => x.trim()).some((sel) => {
+      if (sel === '#prompt-textarea') return /id="prompt-textarea"/.test(html)
+      if (sel === '[contenteditable="true"][role="textbox"]') {
+        return /contenteditable="true"/.test(html) && /role="textbox"/.test(html)
+      }
+      return false
+    })
+    check('🔴 반례10 옛 DOM(fixture) 을 잡는다',
+      matches('<div id="prompt-textarea" contenteditable="true"></div>'))
+    check('🔴 반례10 새 DOM(fixture) 을 잡는다',
+      matches('<div contenteditable="true" role="textbox" class="ProseMirror"></div>'))
+    check('  반례10 관련 없는 입력칸은 잡지 않는다',
+      !matches('<div contenteditable="true" aria-label="제목"></div>'))
+  }
+
+  // ── 반례 11 · 실패해도 탭을 남기지 않는다 · 진단이 살아 있다 ──
+  {
+    /**
+     * 🔴 2026-09-27: 실패한 회차마다 `chatgpt.com/` 루트 탭이 쌓여 8개가 남았다.
+     *    원고 회수는 예외가 나면 `page.close()` 앞에서 죽었고, probe 는 자기가 연 탭을
+     *    아예 닫지 않았다. 그리고 실패는 전부 `connect_failed` 한 단어로 뭉개졌다.
+     */
+    const sessSrc = fs.readFileSync('scripts/lib/chatgpt-session.mjs', 'utf8')
+    const heroSrc = fs.readFileSync('scripts/magazine-hero-runner.mjs', 'utf8')
+
+    check('🔴 반례11 probe 가 자기가 연 탭만 닫는다',
+      /openedPage = page/.test(sessSrc) && /await openedPage\?\.close\(\)/.test(sessSrc))
+    check('🔴 반례11 원고 회수가 finally 에서 탭을 닫는다',
+      /finally \{[\s\S]{0,240}await page\?\.close\(\)/.test(sessSrc))
+    check('🔴 반례11 중간 page.close() 가 남아 있지 않다',
+      !/^\s*await page\.close\(\)\s*$/m.test(sessSrc))
+    check('🔴 반례11 hero 경로도 finally 에서 자기 탭을 닫는다',
+      (heroSrc.match(/await page\?\.close\(\)\.catch/g) ?? []).length >= 2)
+    check('🔴 반례11 전용 Chrome 자체는 닫지 않는다 (연결만 끊는다)', /연결만 끊는다/.test(sessSrc))
+
+    check('🔴 반례11 회수 실패가 stage 를 싣는다', /reason: 'connect_failed',\n\s*stage,/.test(sessSrc))
+    check('🔴 반례11 회수 실패가 원문 첫 줄을 싣는다', /errorDetail: String\(err\?\.message/.test(sessSrc))
+    check('🔴 반례11 hero 실패도 stage 를 싣는다',
+      /stage: 'webp'/.test(heroSrc) && /\$\{stage\}: \$\{err\?\.name/.test(heroSrc))
+
+    /** 🔴 `Node.js v…` 만 남기던 문제 — 실제 문자열로 확인한다 */
+    const AR = await import('./magazine-auto-register.mjs')
+    const crash = [
+      '/x/scripts/magazine-hero-runner.mjs:84',
+      "    await page.waitForSelector('#prompt-textarea')",
+      '          ^', '',
+      'Error: page.waitForSelector: Timeout 60000ms exceeded.',
+      '    at Object.<anonymous> (/x/y.mjs:1:1)', '',
+      'Node.js v24.14.0',
+    ].join('\n')
+    const picked = AR.meaningfulLine(crash)
+    check('🔴 반례11 크래시 출력에서 Node.js 꼬리를 고르지 않는다', !/^Node\.js v/.test(picked), picked)
+    check('🔴 반례11 실제 오류 줄을 고른다', /Timeout 60000ms exceeded/.test(picked), picked)
+    const marked = '머리말\n     ⛔ [composer] connect_failed — TimeoutError · 전송 0건\nNode.js v24.14.0'
+    check('🔴 반례11 ⛔ 표식이 있으면 그 줄을 고른다',
+      /\[composer\] connect_failed/.test(AR.meaningfulLine(marked)), AR.meaningfulLine(marked))
+    check('  반례11 출력이 비어도 죽지 않는다', AR.meaningfulLine('') === '(출력 없음)')
+
+    /** 🔴 예외를 주입해 **열린 탭 증가 0** 을 증명한다 */
+    const opened = []
+    const fakePage = () => { const pg = { closed: false, close: async () => { pg.closed = true } }; opened.push(pg); return pg }
+    const runWithFailure = async (throwAt) => {
+      let page = null
+      try {
+        page = fakePage()
+        if (throwAt) throw new Error(`${throwAt} 실패`)
+        return { ok: true }
+      } catch (e) { return { ok: false, why: e.message } }
+      finally { try { await page?.close() } catch { /* 이미 닫힘 */ } }
+    }
+    for (const at of ['composer', 'send', null]) await runWithFailure(at)
+    check('🔴 반례11 예외 주입 3회 뒤 열린 채 남은 탭 0',
+      opened.filter((x) => !x.closed).length === 0,
+      `연 탭 ${opened.length}개 · 남은 탭 ${opened.filter((x) => !x.closed).length}개`)
+  }
+
+  // ── 반례 12 · merge gate 는 PR head tree 를 본다 (재사용 hero 통과) ──
+  {
+    const GATE = await import('./lib/magazine-merge-gate.mjs')
+    const HERO_PATH = 'public/magazine/checkup-items-50s/hero.webp'
+    const base = {
+      pr: {
+        number: 580, state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE',
+        headRefOid: 'abf9b3c710b3d3cef827abdb7d57f5a948e3b360',
+        headRefName: 'feat/magazine-auto-register-2026-09-27-010009',
+        baseRefName: 'main',
+      },
+      expectedSha: 'abf9b3c710b3d3cef827abdb7d57f5a948e3b360',
+      files: [
+        'drafts/magazine/checkup-items-50s/article-draft.ts',
+        'drafts/magazine/topic-queue.ts',
+        'src/content/magazine/articles.ts',
+      ],
+      ciState: 'success',
+      checks: [{ name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'success' }],
+      registered: [{
+        slug: 'checkup-items-50s', status: 'SCHEDULED',
+        publishAt: '2026-09-28T10:30:00+09:00',
+        heroImage: { src: '/magazine/checkup-items-50s/hero.webp' },
+      }],
+    }
+    const codesOf = (v) => (v.blockedBy ?? []).map((b) => b.code)
+
+    /** ① 🔴 PR #580 의 실제 상황 — hero 가 base·head 양쪽에 같은 blob 으로 있다 */
+    const reuse = GATE.judgeAutoMerge({ ...base, headHasFile: (x) => x === HERO_PATH })
+    check('🔴 반례12 재사용 hero(head 에 존재) 는 HERO_FILE_ABSENT 아니다',
+      !codesOf(reuse).includes('HERO_FILE_ABSENT'), codesOf(reuse).join(',') || '차단 0')
+
+    /** ② 새로 만든 hero — 변경 목록에도 head 에도 있다 */
+    const fresh = GATE.judgeAutoMerge({
+      ...base, files: [...base.files, HERO_PATH], headHasFile: (x) => x === HERO_PATH,
+    })
+    check('🔴 반례12 새 hero(변경+head) 도 통과한다',
+      !codesOf(fresh).includes('HERO_FILE_ABSENT'), codesOf(fresh).join(',') || '차단 0')
+
+    /** ③ 🔴 head tree 에 파일이 없으면 여전히 막는다 */
+    check('🔴 반례12 head 에 그림이 없으면 HERO_FILE_ABSENT 로 막는다',
+      codesOf(GATE.judgeAutoMerge({ ...base, headHasFile: () => false })).includes('HERO_FILE_ABSENT'))
+
+    /** ④ 🔴 판정 수단이 없으면 옛 기준으로 되돌아간다 — 모르면 막는다 */
+    check('🔴 반례12 headHasFile 이 없으면 변경 목록 기준으로 막는다',
+      codesOf(GATE.judgeAutoMerge({ ...base })).includes('HERO_FILE_ABSENT'))
+
+    /** ⑤ heroImage 자체가 없으면 그대로 HERO_MISSING */
+    check('  반례12 heroImage 가 아예 없으면 HERO_MISSING',
+      codesOf(GATE.judgeAutoMerge({
+        ...base, headHasFile: () => true,
+        registered: [{ ...base.registered[0], heroImage: null }],
+      })).includes('HERO_MISSING'))
   }
 }
 
