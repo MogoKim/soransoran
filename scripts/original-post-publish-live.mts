@@ -255,7 +255,8 @@ for (const id of take) {
   const today = await prisma.personaActivityLog.count({
     where: { kind: 'post', createdAt: { gte: dayStart } },
   })
-  const res = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: today, dailyCap: RELEASE_DAILY_CAP })
+  // 🔴 사람이 부르는 긴급 단건 경로 — 기존 동작 그대로(주입 상한 · 슬롯 게이트 없음)
+  const res = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: today, mode: { kind: 'manual-live', dailyCap: RELEASE_DAILY_CAP } })
   if (res.kind === 'published') {
     done += 1
     console.log(`  ✅ ${id}\n     Post ${res.postId} · ${res.personaCode} · ${res.boardType}`)

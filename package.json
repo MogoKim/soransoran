@@ -182,6 +182,7 @@
     "auto-ready:review-bundle": "tsx scripts/auto-ready-review-bundle.mts",
     "auto-ready:review-import": "tsx scripts/auto-ready-review-import.mts",
     "auto-ready:evidence-db-check": "tsx scripts/auto-ready-evidence-db-check.mts",
+    "publish:slot-db-check": "tsx scripts/publish-slot-db-check.mts",
     "auto-ready:evidence-http-check": "tsx scripts/auto-ready-evidence-http-check.mts"
   },
   "dependencies": {

@@ -129,7 +129,7 @@ export async function loadPublishableStock(
       id: true, status: true, createdPostId: true, gateVerdict: true,
       promptVersion: true, model: true, matchedPersonaId: true,
       draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true, editDiff: true,
+      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true, editDiff: true, updatedAt: true,
       rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
     orderBy: { createdAt: 'asc' },
@@ -142,7 +142,7 @@ export async function loadPublishableStock(
     body: r.editedBody ?? r.draftBody,
     sourceSite: r.rawContent.sourceSite,
     draftTitle: r.draftTitle, editedTitle: r.editedTitle,
-    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt, editDiff: r.editDiff,
+    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt, editDiff: r.editDiff, updatedAt: r.updatedAt,
   }))
 
   // 🔴 안전 재판정 — 저장된 값을 믿지 않는다. 러너와 **같은 함수**다

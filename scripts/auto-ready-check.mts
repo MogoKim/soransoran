@@ -459,7 +459,7 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
     /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
     && /autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/.test(runner)
-    && /releaseStage: scale\.releaseStage,/.test(runner)
+    && /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/.test(runner)
     && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
   check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',
     /where: \{ id: target\.id, status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null, matchedPersonaId: null \}/.test(runner))
@@ -561,10 +561,10 @@ console.log('\n⑬ 🔴 🔴 발행 트랜잭션이 계획된 Persona 를 다시
     /const notSelf = opts\.excludeQueueId === undefined \? \{\} : \{ id: \{ not: opts\.excludeQueueId \} \}/.test(codeOnly('src/lib/persona-for-match.ts'))
     && (codeOnly('src/lib/persona-for-match.ts').match(/\.\.\.notSelf/g) ?? []).length === 2)
   check('🔴 🔴 **상한은 숫자가 아니라 단계에서 — env 천장으로 누른 단계의 정본 상한**',
-    /const stage = boundedReleaseStage\(input\.releaseStage, input\.autoReadyEnv \?\? \{\}, txNow\)/.test(tx)
+    /const stage = boundedReleaseStage\(input\.mode\.releaseStage, input\.autoReadyEnv \?\? \{\}, txNow\)/.test(tx)
     && !/caps\?: BatchCaps/.test(tx) && !/autoAssign!\.caps/.test(tx))
   check('🔴 🔴 **시계는 트랜잭션 하나 — 호출자 matchedAt 을 받지 않는다**',
-    /const txNow = new Date\(\)/.test(tx) && !/autoAssign!\.matchedAt/.test(tx) && !/matchedAt: Date/.test(tx)
+    /const txNow = \(deps\.now \?\? \(\(\) => new Date\(\)\)\)\(\)/.test(tx) && !/autoAssign!\.matchedAt/.test(tx) && !/matchedAt: Date/.test(tx)
     && /kstDayStart\(txNow\)/.test(tx))
   check('🔴 로더도 같은 조립을 쓴다 — 계획과 쓰기가 갈리지 않는다',
     /select: PERSONA_FOR_MATCH_SELECT/.test(loader) && /personaForMatchOf\(prisma, r, now\)/.test(loader))
@@ -662,6 +662,51 @@ console.log('\n⑱ 🔴 🔴 공개 단계 천장 — 호출자 단계는 env �
   const envs = [E(), E('d10', 'd3'), E('d5', 'd10'), E('d3', 'd3'), E('d10', 'd10'), E('x', 'd5')]
   check('🔴 🔴 **정본 resolveScale 이 낸 단계는 언제나 천장 이하다**',
     envs.every((e) => { const r = resolveScale(e, {}).releaseStage; return boundedReleaseStage(r, e, T) === r }))
+}
+
+console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안 슬롯 재계산 (2026-09-26 마스터 P0)')
+{
+  const tx = codeOnly('src/lib/original-post-publish-tx.ts')
+  const runner = codeOnly('scripts/original-post-auto-publish.mts')
+  const live = codeOnly('scripts/original-post-publish-live.mts')
+  const sched = tx.slice(tx.indexOf("if (input.mode.kind === 'scheduled') {"), tx.indexOf('dailyCap = input.mode.dailyCap'))
+  check('🔴 🔴 **scheduled — 트랜잭션 시계·트랜잭션 발행 수로 기존 judgeCatchUp 을 다시 부른다(복제 없음)**',
+    /const slot = judgeCatchUp\(\{ stage, now: txNow, trigger: 'local', cron: null, publishedToday: publishedTodayInTx \}\)/.test(sched)
+    && !/function dueSlots|dueCountAt\(/.test(tx))
+  check('🔴 🔴 **허용은 publishedTodayInTx < min(도래 슬롯, 정본 하루 목표) 일 때만**',
+    /const target = PROFILES\[stage\]\.dailyTarget/.test(sched) && /const limit = Math\.min\(slot\.dueCount, target\)/.test(sched)
+    && /if \(!slot\.run \|\| !\(publishedTodayInTx < limit\)\) \{/.test(sched) && /dailyCap = target/.test(sched))
+  check('🔴 🔴 **발행 방식은 필수 판별 유니온 — optional boolean 게이트 없음 · top-level dailyCap 없음**',
+    /mode: PublishMode\n/.test(tx) && !/mode\?:/.test(tx) && !/slotGate|useSlots|slotGated/.test(tx)
+    && /\| \{ kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget \}/.test(tx) && /\| \{ kind: 'manual-live'; dailyCap: number; releaseStage\?: ReleaseStage \}/.test(tx)
+    && !/^\s*dailyCap: number$/m.test(tx.slice(tx.indexOf('export type PublishTxInput'), tx.indexOf('export async function publishOriginalPostTx'))))
+  check('🔴 🔴 **자동 러너는 scheduled 만 — manual-live · 숫자 상한을 넘기지 않는다**',
+    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \}/.test(runner) && !/manual-live/.test(runner)
+    && !/publishOriginalPostTx\(prisma, \{[^}]*dailyCap/.test(runner))
+  check('🔴 🔴 **슬롯 경쟁 패자(SLOT_*)는 러너가 정상 무발행 exit 0 — 그 밖은 기존처럼 실패**',
+    /if \(res\.kind === 'blocked' && \(NORMAL_NO_PUBLISH_CODES as readonly string\[\]\)\.includes\(res\.code\)\) \{[\s\S]{0,300}process\.exit\(0\)/.test(runner)
+    && /if \(res\.kind !== 'published'\) \{\s*await prisma\.\$disconnect\(\)\s*fail\(/.test(runner))
+  const pub = codeOnly('src/lib/original-post-publish.ts')
+  check('🔴 🔴 **정상 무발행 코드는 정확히 셋 — ALREADY_PUBLISHED 는 여기 없다(선택기 결함을 숨기지 않는다)**',
+    /export const NORMAL_NO_PUBLISH_CODES = \['SLOT_CONSUMED', 'SLOT_CLOSED', 'TARGET_RACE_LOST'\] as const/.test(pub))
+  check('🔴 🔴 **TARGET_RACE_LOST 는 대상 자신의 전환으로만 — 계획 스냅샷(이 행 · 미발행 · 발행 가능 · 같은 결정자) → 지금 발행 · updatedAt 이 계획 뒤**',
+    /const plannedPublishable = p\.queueId === row\.id && p\.createdPostId === null\s*&& \(p\.status === 'APPROVED' \|\| p\.status === 'EDITED'\) && p\.decidedBy === row\.decidedBy/.test(sched)
+    && /const transitionedAfterPlan = row\.createdPostId !== null && row\.status === 'PUBLISHED'\s*&& row\.updatedAt\.getTime\(\) > p\.updatedAt\.getTime\(\)/.test(sched)
+    && /if \(plannedPublishable && transitionedAfterPlan && publishedTodayInTx > input\.publishedToday\) \{/.test(sched)
+    && /where: \{ kind: 'post', targetId: row\.createdPostId!, createdAt: \{ gte: kstDayStart\(txNow\) \} \}/.test(sched)
+    && /if \(mine > 0\) \{\s*return \{\s*kind: 'blocked', publishedTodayInTx, code: 'TARGET_RACE_LOST'/.test(sched))
+  check('🔴 🔴 **러너는 선택기 스냅샷을 그대로 넘긴다 — updatedAt 없으면 발행하지 않는다**',
+    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/.test(runner)
+    && /queueId: target\.id, status: target\.status, createdPostId: target\.createdPostId,\s*updatedAt: target\.updatedAt!, decidedBy: target\.decidedBy,/.test(runner)
+    && /if \(target\.updatedAt === undefined\) \{\s*await prisma\.\$disconnect\(\)\s*fail\(/.test(runner)
+    && /editDiff: true, updatedAt: true,/.test(codeOnly('scripts/lib/publishable-stock.mts')))
+  check('🔴 manual-live 는 사람이 부르는 publish-live 만 쓴다', /mode: \{ kind: 'manual-live', dailyCap: RELEASE_DAILY_CAP \}/.test(live))
+  check('🔴 🔴 **운영 호출자는 시계를 주입하지 않는다 — 두 호출 모두 인자 둘**',
+    [runner, live].every((c) => { const m = c.match(/publishOriginalPostTx\(prisma, \{[\s\S]*?\}\)/); return m !== null && !/\}, \{ now/.test(m[0]) }))
+  check('🔴 🔴 **직렬화 충돌은 한 번만 재시도 — 재시도도 처음부터 다시 센다 · 두 번째 충돌은 실패**',
+    (tx.match(/await publishAttempt\(prisma, input, deps\)/g) ?? []).length === 2
+    && /if \(second\.kind === 'conflict'\) \{\s*return \{ kind: 'error'/.test(tx))
+  check('🔴 슬롯 소비 기록 시각도 트랜잭션 시계 — ActivityLog.createdAt = txNow', /publishedAt: txNow,[\s\S]{0,400}createdAt: txNow,/.test(tx))
 }
 
 console.log('\n⑯ 🔴 rule 감사자는 "무결성·안전 감사" 다 — 의미 감사라고 부르지 않는다')

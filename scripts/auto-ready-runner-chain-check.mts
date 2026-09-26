@@ -19,7 +19,7 @@
  *
  *   npm run auto-ready:runner-check
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { PrismaClient } from '@prisma/client'
 
 import { AUTO_DECIDER, HUMAN_DECIDER, AUTO_READY_RECORD_KEY, makeStamp } from '../src/lib/auto-ready-v2'
@@ -80,6 +80,21 @@ function runRunner(): { code: number; out: string } {
   const r = spawnSync('npx', ['tsx', 'scripts/original-post-auto-publish.mts', '--apply', '--limit=1', '--trigger=local'],
     { env, encoding: 'utf-8', timeout: 300_000 })
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}\n${r.stderr ?? ''}` }
+}
+
+/** 🔴 두 러너를 **동시에** 띄운다 — 같은 도래 슬롯을 두 프로세스가 노린다 */
+function runRunnerAsync(): Promise<{ code: number; out: string }> {
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '',
+    DATABASE_URL: URL, DIRECT_URL: URL, SORAN_AUTO_READY_ENABLED: 'on',
+  }
+  return new Promise((resolve) => {
+    const c = spawn('npx', ['tsx', 'scripts/original-post-auto-publish.mts', '--apply', '--limit=1', '--trigger=local'], { env })
+    let out = ''
+    c.stdout.on('data', (d: Buffer) => { out += d.toString() })
+    c.stderr.on('data', (d: Buffer) => { out += d.toString() })
+    c.on('close', (code) => resolve({ code: code ?? -1, out }))
+  })
 }
 
 async function main(): Promise<void> {
@@ -184,6 +199,31 @@ async function main(): Promise<void> {
     check(`🔴 🔴 **[${scenario}] 둘째 행은 굶지 않고 발행됐다**`, s.createdPostId !== null && s.status === 'PUBLISHED', `${s.status}`)
     check(`🔴 🔴 **[${scenario}] 첫 행 때문에 러너가 죽지 않는다 — 두 회차 모두 exit 0**`, r1.code === 0 && r2.code === 0, `${r1.code}/${r2.code}`)
     check(`[${scenario}] 두 회차를 합쳐 발행은 정확히 1건 (d1 하루 상한)`, (await prisma.post.count()) === 31, `${await prisma.post.count()}`)
+  }
+
+  /**
+   * ── C. 🔴 🔴 슬롯 경쟁 — 두 러너가 같은 도래 슬롯을 동시에 노린다 (2026-09-26 마스터 P0) ──
+   *    정상 후보 둘 · 도래 슬롯 1(d1) · 오늘 발행 0. 두 프로세스 모두 밖에서 "발행 0" 을 본다.
+   *    🔴 발행은 정확히 1건 · 두 러너 모두 exit 0(패자는 사전 필터 또는 트랜잭션의 정상 무발행).
+   */
+  console.log('\n── C 슬롯 경쟁 (두 러너 동시) ──')
+  {
+    await wipe()
+    await seedEvidence()
+    const now = new Date()
+    const p1 = await persona('PC1')
+    const p2 = await persona('PC2')
+    const c1 = await autoRow(p1, '아침에 산책을 다녀왔어요. 다들 어떻게 지내세요?', new Date(now.getTime() - 3 * 3600e3))
+    const c2 = await autoRow(p2, '오늘 시장에서 호박을 샀어요. 다들 어떻게 지내세요?', new Date(now.getTime() - 2 * 3600e3))
+    const [r1, r2] = await Promise.all([runRunnerAsync(), runRunnerAsync()])
+    const observed = !/운영 창|아직 오지 않았다|트리거가/.test(r1.out + r2.out)
+    check('[C] 발행 경로를 실제로 탔다 (슬롯·운영 창 안) — 밖이면 미관측', observed)
+    const published = await prisma.originalPostApprovalQueue.count({ where: { id: { in: [c1.id, c2.id] }, status: 'PUBLISHED' } })
+    const tail = (o: string) => o.split('\n').filter((l) => /⑤|✅ Post|중단|정상 무발행/.test(l)).slice(0, 2).join(' ⏎ ')
+    console.log(`   러너1 exit ${r1.code} · ${tail(r1.out)}`)
+    console.log(`   러너2 exit ${r2.code} · ${tail(r2.out)}`)
+    check('🔴 🔴 **[C] 두 러너 동시 — 발행 정확히 1건 (Post 30+1)**', published === 1 && (await prisma.post.count()) === 31, `${published}`)
+    check('🔴 🔴 **[C] 슬롯 경쟁 패자도 exit 0 — 두 러너 모두 0**', r1.code === 0 && r2.code === 0, `${r1.code}/${r2.code}`)
   }
 
   await wipe()
