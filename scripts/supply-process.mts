@@ -63,13 +63,19 @@ import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 /** 🔴 생성 계약 정본 — 생성 러너와 **같은 함수**를 쓴다 */
 import { currentContractBase } from './lib/generation-contract.mjs'
 import { readPriorOutcomes } from './lib/prior-outcomes.mjs'
-import { RUN_AT_ENV } from './lib/run-clock.mjs'
+import { RUN_AT_ENV, runClockFrom } from './lib/run-clock.mjs'
 
 /**
  * 🔴 **이 회차의 시각 하나** (2026-09-23 마스터 지적). 여기서 만들고,
  *    계약·묶음·자식 프로세스가 **전부 이 값**을 쓴다. 두 번 만들지 않는다.
+ * 🔴 **회차 id · 재고 판정 · 화자 여력 파일(`writtenAt`) · 자식의 여력 검증 시각까지 이 값이다** (2026-09-26).
+ *    앞판은 `main` 이 `new Date()` 를 다시 만들고, 화자 여력도 제 시계로 적었다 —
+ *    KST 자정을 사이에 두면 회차 id 의 날짜 · 지평 첫날 · 자식의 날짜가 서로 달랐다.
+ * 🔴 읽는 규칙은 자식과 **같은 함수**(`runClockFrom`)다 — 비어 있으면 자기 시계(launchd 정기 회차),
+ *    모양이 틀리면 던진다. 검사는 이 값을 넣어 KST 자정 · 생일 경계를 실제로 재현한다.
  */
-const RUN_AT = new Date()
+export const RUN_CLOCK = runClockFrom(process.env)
+export const RUN_AT = RUN_CLOCK.at
 import {
   SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
 } from '../src/lib/content-core/speaker-load-file'
@@ -208,7 +214,7 @@ const fail: (m: string) => never = (m) => { console.error(`\n🔴 중단: ${m}\n
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : String(v ?? '').trim())
 
 /** 단계 → 실제 스크립트. 🔴 여기 없는 것은 이 러너가 부르지 않는다 — **수집 스크립트는 없다** */
-const STAGE_SCRIPT: Record<ProcessStage, string> = {
+export const STAGE_SCRIPT: Record<ProcessStage, string> = {
   cafeThin: 'scripts/micro-seed-navercafe-thin.mts',
   adapt: 'scripts/micro-seed-82cook-thin-adapt.mts',
   judge: 'scripts/micro-seed-auto-judge.mts',
@@ -240,6 +246,8 @@ const STAGE_SCRIPT: Record<ProcessStage, string> = {
  * 🔴 **WIP 는 공용 분류에서 받는다** (2026-09-26). 앞판은 여기서 selector 를 따로 불러
  *    `HUMAN_REVIEW_REQUIRED` 를 직접 세었다 — 발행 러너와 다른 조립(editDiff 없음 · 자동 READY 닫힘 가정)이었다.
  *    🔴 검토 대기는 **WIP 에 남는다**(같은 화자로 또 만들지 않는다). 발행 가능 재고로는 세지 않는다.
+ *    🔴 **WIP 여부는 칸마다 정해져 있다**(`STOCK_BUCKET_META`) — TTL 만료 · 영구 배정 예외 · 깨진 복구 ·
+ *       스스로 풀리지 않는 신선도 실패는 화자를 **영구 점유하지 않는다**. 시간성 유예(WEEKLY_CAP · TOO_SOON)는 점유한다.
  */
 export async function buildSpeakerLoad(
   prisma: PrismaClient, runId: string,
@@ -299,7 +307,8 @@ export async function buildSpeakerLoad(
     }
   }
   return {
-    writtenAt: new Date().toISOString(), runId, horizonDays, byCode,
+    // 🔴 회차 시각으로 적는다 — 자식이 같은 시각으로 검증한다
+    writtenAt: opts.now.toISOString(), runId, horizonDays, byCode,
     byDate: plan.byDate,
     /** 🔴 어느 눈금으로 셌는지 남긴다 — 사람이 "이 계획은 capacity d5 기준이다" 를 알 수 있게 */
     stageByDate: days.map((at) => ({ date: kstDateString(at), stage: planning.stage })),
@@ -322,10 +331,10 @@ export function supplyPlanningProfile(scale: ResolvedScale): { stage: string; pr
 }
 
 /** 🔴 값을 만들어 파일로 적는다 — 만드는 것은 위 함수 하나다 */
-async function writeSpeakerLoad(
+export async function writeSpeakerLoad(
   prisma: PrismaClient, runId: string, scale: ResolvedScale,
 ): Promise<Awaited<ReturnType<typeof buildSpeakerLoad>>> {
-  const payload = await buildSpeakerLoad(prisma, runId, { env: process.env, now: new Date(), scale })
+  const payload = await buildSpeakerLoad(prisma, runId, { env: process.env, now: RUN_AT, scale })
   mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), JSON.stringify(payload, null, 2))
   return payload
@@ -347,7 +356,7 @@ function writeAtomic(path: string, body: string): void {
  * 🔴 **error 를 받지 않으면 Promise 가 영원히 안 끝난다.** 실행 파일이 없거나
  *    프로세스가 뜨지 못하면 close 가 오지 않는다 — 그러면 lock 을 쥔 채 매달린다.
  */
-function run(
+export function run(
   script: string, args: readonly string[], env?: Readonly<Record<string, string>>,
 ): Promise<{ code: number | null; out: string; spawnError: string }> {
   /**
@@ -481,7 +490,8 @@ async function main(): Promise<number> {
   const limits: StockLimits = { warn: capD.stockWarn, min: capD.stockMin, target: STOCK_BANDS.target }
 
   const killOpen = S(process.env[PROCESS_KILL_SWITCH_ENV]) === 'true'
-  const now = new Date()
+  // 🔴 회차 시각은 하나다 — 여기서 다시 만들지 않는다
+  const now = RUN_AT
   const runId = runIdOf(now)
 
   console.log(`\n══ 공급 처리(drain) — ${LIVE ? '🔴 live' : 'dry-run (네트워크 0 · LLM 0 · DB write 0)'} ══\n`)
@@ -885,7 +895,7 @@ async function main(): Promise<number> {
 
   let ok = record.status === 'done'
   if (before !== null) {
-    const after = await snapshot(prisma, limits, { env: process.env, now: new Date() })
+    const after = await snapshot(prisma, limits, { env: process.env, now: RUN_AT })
     const queuedMachine = after.machine - before.machine
     const queuedNonMachine = (after.profiled - before.profiled) - queuedMachine
     const v = verifyRun({

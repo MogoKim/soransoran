@@ -3198,7 +3198,9 @@ console.log('\n🔴 🔴 **운영 계약에 나이가 실제로 들어간다 (he
     && !/const CONTRACT_BASE = currentContractBase\(\)/.test(src))
   check('🔴 🔴 **생성 단계도 같은 시각을 본다**', /const now = RUN_AT/.test(src))
   check('🔴 🔴 **supply 회차도 한 시각으로 계약·묶음·자식을 묶는다**',
-    /const RUN_AT = new Date\(\)/.test(sp) && /const runAt = RUN_AT/.test(sp)
+    // 🔴 2026-09-26 — 부모도 자식과 같은 규칙(`runClockFrom`)으로 한 번만 만든다. 벽시계를 다시 만들지 않는다
+    /export const RUN_CLOCK = runClockFrom\(process\.env\)/.test(sp) && /export const RUN_AT = RUN_CLOCK\.at/.test(sp)
+    && !/const RUN_AT = new Date\(\)/.test(sp) && /const runAt = RUN_AT/.test(sp)
     && /currentContractBase\(runAt\)/.test(sp) && /takenAt: runAt/.test(sp)
     && /\[RUN_AT_ENV\]: RUN_AT\.toISOString\(\)/.test(sp))
   check('🔴 🔴 **시각을 주면 계약에 `age=∅` 가 남지 않는다**', (() => {

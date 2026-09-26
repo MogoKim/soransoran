@@ -36,8 +36,10 @@ import {
   canaryAuthorization, judgeOneDayCanary, slotsLeftToday, windowAuthorization,
 } from '../../src/lib/release-canary'
 import { safetyFilter } from './micro-seed-safety-filter.mjs'
-import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from '../../src/lib/persona-for-match'
-import type { PersonaForMatch } from '../../src/lib/original-post-persona-match'
+import {
+  PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment, TIME_BOUND_ASSIGN_CODES,
+} from '../../src/lib/persona-for-match'
+import type { PersonaForMatch, BatchAssignment } from '../../src/lib/original-post-persona-match'
 import { AUTO_DECIDER } from '../../src/lib/auto-ready-v2'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
@@ -507,40 +509,60 @@ export function planPublishBatch(input: {
  *
  * 🔴 **그래서 판정을 새로 적지 않는다.** 아래는 이미 계산된 정본 결과를 **나누기만** 한다.
  *    · profile · gate · 검토 — `selectAutoTargets` 가 낸 `rejected` 코드
- *    · 배정 예외 — `planPublishBatch` 의 `autoDeferred` · `autoExceptions`
- *    · TTL · 신선도 — `prepareCandidates` 의 `held`
- *    · 배정 — `batch.assignments` · `brokenRecovery`
- *    러너와 같은 `loaded` · 같은 `plan` 을 넣으면 러너와 같은 답이 나온다.
+ *    · 기존 배정 — `planPublishBatch` 의 `autoDeferred`(route defer) · `autoExceptions`(route exception)
+ *    · TTL · 신선도 — `prepareCandidates` 의 `held`(닫힌 enum `HoldReason`)
+ *    · 새 배정 — `batch.assignments` 의 `deferredBy` · `blocked` 사유 · `recoveryProblem` · `brokenRecovery`
+ *    시간성 판정은 정본 `TIME_BOUND_ASSIGN_CODES`(WEEKLY_CAP · TOO_SOON) 하나다 — 새 숫자·새 상한이 없다.
+ *
+ * 🔴 **칸마다 WIP 여부와 복구 주체가 정해져 있다** (2026-09-26 2차 · 마스터 지적).
+ *    Persona WIP 는 "그 화자가 곧 낼 글" 이다. 사람 손이 닿거나 시간이 지나면 나갈 글만 WIP 다 —
+ *    TTL 만료 · 영구 예외 · 깨진 복구 · 스스로 풀리지 않는 신선도 실패가 WIP 를 **영구 점유**하면
+ *    그 화자에게는 새 글이 영영 배정되지 않는다(앞판이 그랬다).
  *
  * 🔴 **칸은 겹치지 않고 빠지지 않는다** — 합이 `queueTotal` 이다. 검사가 그것을 단정한다.
  */
 export type StockBucket =
-  | 'publishableNow' | 'humanReviewPending' | 'ttlExpired' | 'freshnessHeld'
-  | 'profileMismatch' | 'gateBlocked' | 'assignmentBlocked'
+  | 'publishableNow' | 'haltedByBrokenRecovery'
+  | 'humanReviewPending' | 'autoReadyClosed' | 'autoReadyStale'
+  | 'assignmentDeferred'
+  | 'ttlExpired' | 'freshnessHeld' | 'recoveryBroken' | 'assignmentException'
+  | 'profileMismatch' | 'gateBlocked'
 
-export const STOCK_BUCKETS: readonly StockBucket[] = [
-  'publishableNow', 'humanReviewPending', 'ttlExpired', 'freshnessHeld',
-  'profileMismatch', 'gateBlocked', 'assignmentBlocked',
-]
+/**
+ * 🔴 **누가 풀 수 있는가.**
+ *    `none`           풀 것이 없다(지금 나간다) — 또는 영영 나가지 않는다(legacy)
+ *    `time`           시간이 지나면 저절로 풀린다(주간 상한 · 최소 간격)
+ *    `human`          사람이 검토 · 수정 · 폐기해야 풀린다
+ *    `autoReadyGate`  자동 READY 문(스위치 · 증거 · 결함)이 열리면 풀린다 — 사람 검토로도 풀린다
+ */
+export type RecoveryOwner = 'none' | 'time' | 'human' | 'autoReadyGate'
 
-export const STOCK_BUCKET_LABEL: Record<StockBucket, string> = {
-  publishableNow: '지금 발행 가능 (배정까지 끝남)',
-  humanReviewPending: '사람 검토 대기 (기계 초안)',
-  ttlExpired: 'TTL 만료',
-  freshnessHeld: '신선도 보류 (시각 미상 · 복구 글 상함)',
-  profileMismatch: 'profile 불일치 (legacy)',
-  gateBlocked: 'gate · 안전 · 제목 복제 · 빈 글',
-  assignmentBlocked: 'Persona 배정 불가 (여력 · 생활사 · 복구 중단)',
+export const STOCK_BUCKET_META: Record<StockBucket, { wip: boolean; owner: RecoveryOwner; label: string }> = {
+  publishableNow: { wip: true, owner: 'none', label: '지금 발행 가능 (배정까지 끝남)' },
+  haltedByBrokenRecovery: { wip: true, owner: 'human', label: '배정은 됐지만 다른 행의 깨진 복구로 러너 전체가 멈췄다' },
+  humanReviewPending: { wip: true, owner: 'human', label: '사람 검토 대기 (기계 초안)' },
+  autoReadyClosed: { wip: true, owner: 'autoReadyGate', label: '자동 도장 행 · 자동 READY 문이 닫혔다' },
+  autoReadyStale: { wip: true, owner: 'human', label: '자동 도장 뒤 글이 바뀌었다 — 도장 무효 · 사람이 다시 본다' },
+  assignmentDeferred: { wip: true, owner: 'time', label: '배정 유예 — 주간 상한 · 최소 간격 (시간이 풀면 나간다)' },
+  ttlExpired: { wip: false, owner: 'human', label: 'TTL 만료 — 사람이 버릴지 살릴지' },
+  freshnessHeld: { wip: false, owner: 'human', label: '신선도 보류 — 시각 미상 · 복구 글 상함' },
+  recoveryBroken: { wip: false, owner: 'human', label: '깨진 복구 — 기존 배정이 쓸 수 없는 Persona' },
+  assignmentException: { wip: false, owner: 'human', label: '배정 예외 — 말투 · 생활사 · 비활성 (시간이 풀지 않는다)' },
+  profileMismatch: { wip: false, owner: 'none', label: 'profile 불일치 (legacy · 영영 나가지 않는다)' },
+  gateBlocked: { wip: false, owner: 'human', label: 'gate · 안전 · 제목 복제 · 빈 글' },
 }
+
+export const STOCK_BUCKETS: readonly StockBucket[] = Object.keys(STOCK_BUCKET_META) as StockBucket[]
 
 /** 🔴 정본 거절 코드 → 칸. `switch` 라서 코드가 늘면 컴파일이 깨진다 */
 function bucketOfReject(code: RejectCode): StockBucket {
   switch (code) {
     case 'PROFILE': case 'PROMPT_VERSION': case 'MODEL': case 'SITE':
       return 'profileMismatch'
-    // 🔴 기계 초안인데 사람이 보지 않았다 — 자동 도장이 닫혔거나 낡은 것도 같은 처지다
-    case 'HUMAN_REVIEW_REQUIRED': case 'AUTO_READY_CLOSED': case 'AUTO_READY_STALE':
-      return 'humanReviewPending'
+    case 'HUMAN_REVIEW_REQUIRED': return 'humanReviewPending'
+    // 🔴 한 칸에 합치지 않는다 — 푸는 주체가 다르다
+    case 'AUTO_READY_CLOSED': return 'autoReadyClosed'
+    case 'AUTO_READY_STALE': return 'autoReadyStale'
     case 'GATE': case 'SAFETY': case 'EMPTY': case 'TITLE_COPIES_SOURCE':
     case 'STATUS': case 'ALREADY_PUBLISHED':
       return 'gateBlocked'
@@ -551,15 +573,40 @@ function bucketOfReject(code: RejectCode): StockBucket {
   }
 }
 
+/** 🔴 정본 신선도 보류 → 칸. 닫힌 enum 이다 */
+function bucketOfHold(hold: HoldReason): StockBucket {
+  switch (hold) {
+    case 'TTL_EXPIRED': return 'ttlExpired'
+    case 'AGE_UNKNOWN': case 'RECOVERY_STALE': return 'freshnessHeld'
+    default: {
+      const never: never = hold
+      return never
+    }
+  }
+}
+
+/**
+ * 🔴 **새 배정이 안 된 행 — 시간이 풀어 주는가.** 판정을 새로 하지 않는다:
+ *    · 후보가 있었는데 자리가 없어 밀렸다(`deferredBy`) → 시간이 푼다
+ *    · 막힌 Persona 중 **시간성 사유(`TIME_BOUND_ASSIGN_CODES`)만** 가진 사람이 있다 → 시간이 푼다
+ *    · 그 밖(말투 · 생활사 · 비활성으로만 막혔다) → 시간이 풀지 않는다
+ */
+function unassignedRoute(a: BatchAssignment | undefined): 'defer' | 'exception' {
+  if (a === undefined) return 'exception'
+  if (a.deferredBy.length > 0) return 'defer'
+  const timeOnly = a.blocked.some((b) => b.reasons.length > 0
+    && b.reasons.every((r) => TIME_BOUND_ASSIGN_CODES.includes(r.code)))
+  return timeOnly ? 'defer' : 'exception'
+}
+
 export type StockClassification = {
   queueTotal: number
   /** 칸별 행 id — 🔴 합이 `queueTotal` 이다 */
   ids: Record<StockBucket, string[]>
   counts: Record<StockBucket, number>
   /**
-   * 🔴 **Persona 가 들고 있는 글(WIP)** — 공급이 같은 화자로 또 만들지 않게 센다.
-   *    발행 가능 재고가 아니다. 🔴 검토 대기는 **여기 남는다** — 사람이 READY 로 정하는 순간
-   *    그 화자의 자리를 차지한다. profile 불일치(legacy)와 gate 탈락은 영영 나가지 않으므로 빠진다.
+   * 🔴 **Persona 가 들고 있는 글(WIP)** — `STOCK_BUCKET_META[b].wip` 인 칸의 합이다.
+   *    공급이 같은 화자로 또 만들지 않게 센다. 발행 가능 재고가 아니다.
    */
   personaWipIds: string[]
 }
@@ -569,29 +616,38 @@ export function classifyStock(input: { loaded: LoadedStock; plan: PublishPlan })
   const ids = Object.fromEntries(STOCK_BUCKETS.map((b) => [b, [] as string[]])) as Record<StockBucket, string[]>
   for (const r of loaded.rejected) ids[bucketOfReject(r.code)].push(r.id)
 
-  const pinnedBlocked = new Set([...plan.autoDeferred, ...plan.autoExceptions].map((x) => x.id))
+  const deferredPinned = new Set(plan.autoDeferred.map((x) => x.id))
+  const exceptionPinned = new Set(plan.autoExceptions.map((x) => x.id))
   const heldOf = new Map(plan.prepared.held.map((h) => [h.queueId, h.hold]))
+  const brokenIds = new Set(plan.brokenRecovery.map((x) => x.id))
   const halted = plan.brokenRecovery.length > 0
   const ready = new Set(plan.assignmentReady)
   for (const t of loaded.targets) {
-    if (pinnedBlocked.has(t.id)) { ids.assignmentBlocked.push(t.id); continue }
+    // 🔴 기존 배정 자동 행 — 발행 트랜잭션과 같은 `judgeAutoAssignment` 의 route 그대로
+    if (deferredPinned.has(t.id)) { ids.assignmentDeferred.push(t.id); continue }
+    if (exceptionPinned.has(t.id)) { ids.assignmentException.push(t.id); continue }
     const hold = heldOf.get(t.id)
-    if (hold !== undefined) { (hold === 'TTL_EXPIRED' ? ids.ttlExpired : ids.freshnessHeld).push(t.id); continue }
-    // 🔴 깨진 복구가 하나라도 있으면 러너는 전체를 멈춘다 — 배정이 있어도 지금 나갈 수 없다
-    if (!halted && ready.has(t.id)) ids.publishableNow.push(t.id)
-    else ids.assignmentBlocked.push(t.id)
+    if (hold !== undefined) { ids[bucketOfHold(hold)].push(t.id); continue }
+    if (brokenIds.has(t.id)) { ids.recoveryBroken.push(t.id); continue }
+    if (ready.has(t.id)) {
+      // 🔴 깨진 복구가 하나라도 있으면 러너는 전체를 멈춘다 — 이 행 탓은 아니다
+      (halted ? ids.haltedByBrokenRecovery : ids.publishableNow).push(t.id)
+      continue
+    }
+    const route = unassignedRoute(plan.assignOf.get(t.id))
+    ;(route === 'defer' ? ids.assignmentDeferred : ids.assignmentException).push(t.id)
   }
   const counts = Object.fromEntries(STOCK_BUCKETS.map((b) => [b, ids[b].length])) as Record<StockBucket, number>
-  const personaWipIds = [
-    ...ids.publishableNow, ...ids.humanReviewPending, ...ids.ttlExpired,
-    ...ids.freshnessHeld, ...ids.assignmentBlocked,
-  ]
+  const personaWipIds = STOCK_BUCKETS.filter((b) => STOCK_BUCKET_META[b].wip).flatMap((b) => ids[b])
   return { queueTotal: loaded.queueTotal, ids, counts, personaWipIds }
 }
 
 /** 사람이 읽는 줄 — 공급 러너 · 보충기가 같은 줄을 찍는다 */
 export function describeStockClassification(c: StockClassification): string[] {
-  return STOCK_BUCKETS.map((b) => `${String(c.counts[b]).padStart(3)}건  ${b} — ${STOCK_BUCKET_LABEL[b]}`)
+  return STOCK_BUCKETS.map((b) => {
+    const m = STOCK_BUCKET_META[b]
+    return `${String(c.counts[b]).padStart(3)}건  ${b} — ${m.label} · WIP ${m.wip ? '유지' : '아님'} · 복구 ${m.owner}`
+  })
 }
 
 /**

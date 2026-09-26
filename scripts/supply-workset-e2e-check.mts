@@ -1172,7 +1172,11 @@ console.log('\n㉓ 🔴 🔴 회차 시각 하나 — 부모가 준 값을 자�
     /\[RUN_AT_ENV\]: RUN_AT\.toISOString\(\)/.test(parentSrc)
     && /env: \{ \.\.\.process\.env, \.\.\.withClock \}/.test(parentSrc))
   check('🔴 🔴 **⑤ 부모의 회차 시각은 하나다 — 두 번 만들지 않는다**',
-    (parentSrc.match(/const RUN_AT = new Date\(\)/g) ?? []).length === 1
+    // 🔴 2026-09-26 — 부모도 `runClockFrom` 으로 **한 번** 만든다. main 도 그 값을 쓴다
+    (parentSrc.match(/export const RUN_AT = RUN_CLOCK\.at/g) ?? []).length === 1
+    && /export const RUN_CLOCK = runClockFrom\(process\.env\)/.test(parentSrc)
+    && !/const RUN_AT = new Date\(\)/.test(parentSrc)
+    && /const now = RUN_AT\n/.test(parentSrc)
     && /const runAt = RUN_AT/.test(parentSrc))
   const childSrc = readFileSync(join(ROOT, 'scripts/micro-seed-auto-draft.mts'), 'utf-8')
   check('🔴 🔴 **⑤ 자식은 자기 `new Date()` 로 회차 시각을 만들지 않는다**',

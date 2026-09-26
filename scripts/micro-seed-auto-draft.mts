@@ -825,6 +825,8 @@ async function main(): Promise<void> {
    */
   const voice = loadVoice(RUN_AT)
   console.log(voice.describe)
+  // 🔴 이 회차가 본 후보 풀 지문(나이 포함) — 부모 계약과 같은 날을 봤는지 사람이·검사가 대조한다
+  console.log(`   🔴 후보 풀 지문 ${voice.poolDigest || '∅'} (회차 시각 ${RUN_AT.toISOString()} 기준)`)
   const cache = loadCache()
   let hit = 0
   let miss = 0
@@ -877,7 +879,12 @@ async function main(): Promise<void> {
     try {
       return readSpeakerLoad(
         JSON.parse(readFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), 'utf-8')),
-        new Date(),
+        /**
+         * 🔴 **회차 시각으로 검증한다** (2026-09-26). 부모가 같은 시각으로 `writtenAt` 을 적었다 —
+         *    제 시계로 재면 부모가 다른 시각을 주입한 회차(자정·생일 경계 재현)에서 파일이 낡거나
+         *    미래로 보인다. 단독 실행이면 `RUN_AT` 이 곧 자기 시계다.
+         */
+        RUN_AT,
         /**
          * 🔴 **유료 회차는 이 회차의 기록만 쓴다** (2026-09-22).
          *    공급 러너가 적다가 실패해도 6시간 안에 쓴 이전 파일이 남아 있으면

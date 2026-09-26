@@ -212,6 +212,8 @@ async function main(): Promise<void> {
       same(c.ids.humanReviewPending, reviewIds) && !c.ids.publishableNow.some((id) => reviewIds.includes(id)))
     check('🔴 TTL 만료 1건은 ttlExpired — 신선 재고로 합치지 않는다',
       same(c.ids.ttlExpired, [ttlId]) && !c.ids.publishableNow.includes(ttlId))
+    check('🔴 🔴 **TTL 만료는 WIP 를 점유하지 않는다 · 검토 대기는 점유한다**',
+      !c.personaWipIds.includes(ttlId) && reviewIds.every((id) => c.personaWipIds.includes(id)))
     check('profile 불일치 1건 · gate 탈락 1건',
       same(c.ids.profileMismatch, [legacyId]) && same(c.ids.gateBlocked, [gateId]))
     const total = STOCK_BUCKETS.reduce((n, b) => n + c.counts[b], 0)
@@ -264,8 +266,8 @@ async function main(): Promise<void> {
     const freshId = await humanRow(new Date(NOW.getTime() - 1 * DAY), '가을 옷장 정리', '가을 옷을 꺼내다가 작년에 산 니트를 찾았어요. 다들 옷장 정리 하셨어요?')
     const pub = await publisherView(prisma, envOf('d1', 'd5'))
     const sup = (await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: envOf('d1', 'd5'), now: NOW })).classification!
-    check('🔴 d1(최소 5일) — 이틀 전에 쓴 Persona 뿐이라 배정 불가 → 러너 0 · 공급 0',
-      pub.runnable.length === 0 && sup.counts.publishableNow === 0 && sup.ids.assignmentBlocked.includes(freshId),
+    check('🔴 d1(최소 5일) — 이틀 전에 쓴 Persona 뿐이라 배정 유예(시간성) → 러너 0 · 공급 0',
+      pub.runnable.length === 0 && sup.counts.publishableNow === 0 && sup.ids.assignmentDeferred.includes(freshId),
       `러너 ${pub.runnable.length} · 공급 ${sup.counts.publishableNow}`)
     /**
      * 🔴 **최근에 쓰지 않은 Persona 가 들어오면** 러너가 d1 로도 낸다 — 공급도 같은 한 건을 센다.
@@ -278,6 +280,7 @@ async function main(): Promise<void> {
     check('🔴 쉰 Persona 가 생기면 — 같은 글이 러너에서 나가고 공급도 같은 한 건을 센다',
       pub5.runnable.length === 1 && same(sup5.ids.publishableNow, pub5.runnable) && sup5.ids.publishableNow[0] === freshId,
       `러너 ${pub5.runnable.join(',')} · 공급 ${sup5.ids.publishableNow.join(',')}`)
+    check('🔴 시간성 유예 글은 WIP 에 남는다 (d1 에서 밀린 그 글)', sup.personaWipIds.includes(freshId))
     check('🔴 발행 가능 글도 그 화자 WIP 다', sup5.personaWipIds.includes(freshId))
     check('🔴 legacy · gate 탈락은 WIP 가 아니다', !sup5.personaWipIds.includes(legacyId) && !sup5.personaWipIds.includes(gateId))
   }
