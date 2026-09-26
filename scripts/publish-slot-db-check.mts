@@ -13,7 +13,7 @@
  */
 import { PrismaClient } from '@prisma/client'
 
-import { publishOriginalPostTx, type PublishResult } from '../src/lib/original-post-publish-tx'
+import { publishOriginalPostTx, type PlannedTarget, type PublishResult } from '../src/lib/original-post-publish-tx'
 
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
@@ -60,9 +60,19 @@ async function cand(): Promise<string> {
   })
   return q.id
 }
-/** 🔴 예약 러너가 부르는 그대로 — 밖에서 센 발행 수는 로그용(판정에 쓰이지 않는다) */
-const scheduled = (id: string, at: Date, stage: string, env: Record<string, string>, outsideSeen = 0): Promise<PublishResult> =>
-  publishOriginalPostTx(prisma, { queueId: id, publishedToday: outsideSeen, mode: { kind: 'scheduled', releaseStage: stage }, autoReadyEnv: env }, { now: () => at })
+/** 🔴 선택기가 고른 순간의 스냅샷 — 러너가 `publishable-stock` 행에서 만드는 것과 같은 칸이다 */
+const planOf = async (id: string): Promise<PlannedTarget> => {
+  const r = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { id: true, status: true, createdPostId: true, updatedAt: true, decidedBy: true } })
+  return { queueId: r.id, status: r.status, createdPostId: r.createdPostId, updatedAt: r.updatedAt, decidedBy: r.decidedBy }
+}
+/**
+ * 🔴 예약 러너가 부르는 그대로 — 밖에서 센 발행 수와 계획 스냅샷을 넘긴다.
+ *    스냅샷을 주지 않으면 **부르기 직전에** 뜬다(러너가 막 선택한 경우). 경합 반례는 미리 떠서 넘긴다.
+ */
+const scheduled = async (id: string, at: Date, stage: string, env: Record<string, string>, outsideSeen = 0, plan?: PlannedTarget): Promise<PublishResult> =>
+  publishOriginalPostTx(prisma, {
+    queueId: id, publishedToday: outsideSeen, mode: { kind: 'scheduled', releaseStage: stage, planned: plan ?? await planOf(id) }, autoReadyEnv: env,
+  }, { now: () => at })
 const posts = () => prisma.post.count()
 const logs = () => prisma.personaActivityLog.count({ where: { kind: 'post' } })
 const q = (id: string) => prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { status: true, createdPostId: true } })
@@ -150,11 +160,11 @@ async function main(): Promise<void> {
     const r0810 = await scheduled(a, K('2026-10-10T08:10:00'), 'd10', env)
     check('🔴 🔴 **08:10 — d10 이면 도래 1이지만 d1 은 아직 0 → SLOT_CLOSED**', r0810.kind === 'blocked' && r0810.code === 'SLOT_CLOSED' && /^d1 /.test(r0810.detail), JSON.stringify(r0810))
     const huge = await publishOriginalPostTx(prisma, {
-      queueId: a, publishedToday: 0, mode: { kind: 'scheduled', releaseStage: 'd10', dailyCap: 1e9 } as never, autoReadyEnv: env,
+      queueId: a, publishedToday: 0, mode: { kind: 'scheduled', releaseStage: 'd10', dailyCap: 1e9, planned: await planOf(a) } as never, autoReadyEnv: env,
     }, { now: () => K('2026-10-10T09:30:00') })
     // 🔴 두 번째도 거대 상한을 끼워 넣는다 — 호출자 숫자가 권위면 여기서 2건째가 나간다
     const second = await publishOriginalPostTx(prisma, {
-      queueId: b, publishedToday: 0, mode: { kind: 'scheduled', releaseStage: 'd10', dailyCap: 1e9 } as never, autoReadyEnv: env,
+      queueId: b, publishedToday: 0, mode: { kind: 'scheduled', releaseStage: 'd10', dailyCap: 1e9, planned: await planOf(b) } as never, autoReadyEnv: env,
     }, { now: () => K('2026-10-10T13:30:00') })
     check('🔴 🔴 **거대 dailyCap 을 끼워 넣어도 무시 — 09:30 1건 · 13:30 두 번째는 SLOT_CONSUMED (d1 하루 1)**',
       huge.kind === 'published' && second.kind === 'blocked' && second.code === 'SLOT_CONSUMED' && (await posts()) === 1, `${huge.kind}/${JSON.stringify(second)}`)
@@ -176,8 +186,10 @@ async function main(): Promise<void> {
     await wipe()
     const [a, b] = [await cand(), await cand()]
     const at = K('2026-10-13T09:30:00')
-    const r1 = await scheduled(a, at, 'd10', envOf('d10'), 0)
-    const r2 = await scheduled(a, K('2026-10-13T09:31:00'), 'd10', envOf('d10'), 0) // 같은 바깥 스냅샷(발행 0)
+    // 🔴 두 러너가 같은 순간 같은 후보를 골랐다 — 둘 다 이 행을 미발행으로 본 스냅샷을 들고 있다
+    const [plan1, plan2] = [await planOf(a), await planOf(a)]
+    const r1 = await scheduled(a, at, 'd10', envOf('d10'), 0, plan1)
+    const r2 = await scheduled(a, K('2026-10-13T09:31:00'), 'd10', envOf('d10'), 0, plan2) // 같은 바깥 스냅샷(발행 0)
     const qa = await q(a)
     check('🔴 🔴 **순차 — Post 정확히 1 · Queue·ActivityLog 중복 0**',
       r1.kind === 'published' && (await posts()) === 1 && (await logs()) === 1 && r1.kind === 'published' && qa.createdPostId === r1.postId, `${r1.kind}/${r2.kind}`)
@@ -188,7 +200,8 @@ async function main(): Promise<void> {
 
     await wipe()
     const c = await cand()
-    const [c1, c2] = await Promise.all([scheduled(c, at, 'd10', envOf('d10'), 0), scheduled(c, at, 'd10', envOf('d10'), 0)])
+    const [pc1, pc2] = [await planOf(c), await planOf(c)]
+    const [c1, c2] = await Promise.all([scheduled(c, at, 'd10', envOf('d10'), 0, pc1), scheduled(c, at, 'd10', envOf('d10'), 0, pc2)])
     const loser = c1.kind === 'published' ? c2 : c1
     check('🔴 🔴 **동시 — Post 정확히 1 · 패자는 재시도 뒤 TARGET_RACE_LOST**',
       (await posts()) === 1 && (await logs()) === 1 && [c1, c2].filter((x) => x.kind === 'published').length === 1
@@ -211,6 +224,34 @@ async function main(): Promise<void> {
     const seen = await scheduled(td, K('2026-10-15T09:30:00'), 'd10', envOf('d10'), 1)
     check('🔴 🔴 **오늘 발행된 행이지만 계획 때 이미 그 발행을 봤다(밖 1 = 안 1) → ALREADY_PUBLISHED(실패)**',
       t0.kind === 'published' && seen.kind === 'blocked' && seen.code === 'ALREADY_PUBLISHED', JSON.stringify(seen))
+  }
+
+  console.log('\n⑨ 🔴 🔴 [마스터 반례] A 는 오늘 이미 발행 · 계획은 A 포함 1 · stale plan 이 A 를 다시 고름 · 계획 뒤 무관한 B 발행')
+  {
+    await wipe()
+    const [A, B] = [await cand(), await cand()]
+    const pa = await scheduled(A, K('2026-10-16T08:10:00'), 'd10', envOf('d10'), 0) // A 오늘 발행
+    const planA = await planOf(A) // 🔴 계획 — A 는 이미 발행된 채로 스냅샷에 들어 있다
+    const pb = await scheduled(B, K('2026-10-16T09:30:00'), 'd10', envOf('d10'), 1) // 계획 뒤 무관한 B 발행 → 안 2
+    const stale = await scheduled(A, K('2026-10-16T10:50:00'), 'd10', envOf('d10'), 1, planA) // 도래 3 · 안 2 · 밖 1
+    check('🔴 🔴 **A 는 계획 뒤 발행된 것이 아니다 → ALREADY_PUBLISHED(실패) · TARGET_RACE_LOST 아님**',
+      pa.kind === 'published' && pb.kind === 'published' && stale.kind === 'blocked' && stale.code === 'ALREADY_PUBLISHED', JSON.stringify(stale))
+    // 🔴 스냅샷이 다른 행을 가리키면 경합이 아니다
+    await wipe()
+    const [X, Y] = [await cand(), await cand()]
+    const planY = await planOf(Y)
+    await scheduled(X, K('2026-10-17T08:10:00'), 'd10', envOf('d10'), 0)
+    const wrong = await scheduled(X, K('2026-10-17T09:30:00'), 'd10', envOf('d10'), 0, planY)
+    check('🔴 계획 스냅샷의 queueId 가 이 행이 아니면 경합이 아니다 → ALREADY_PUBLISHED', wrong.kind === 'blocked' && wrong.code === 'ALREADY_PUBLISHED', JSON.stringify(wrong))
+    // 🔴 스냅샷이 "미발행" 이라 주장하지만 그 시각이 발행 뒤다 — 대상 자신의 전환이 계획 뒤가 아니다
+    await wipe()
+    const [F, G] = [await cand(), await cand()]
+    await scheduled(F, K('2026-10-18T08:10:00'), 'd10', envOf('d10'), 0)
+    await scheduled(G, K('2026-10-18T09:30:00'), 'd10', envOf('d10'), 1)
+    const after = await planOf(F)
+    const forged: PlannedTarget = { ...after, status: 'APPROVED', createdPostId: null }
+    const fr = await scheduled(F, K('2026-10-18T10:50:00'), 'd10', envOf('d10'), 1, forged)
+    check('🔴 🔴 **미발행이라 주장하는 스냅샷의 updatedAt 이 발행 뒤 → 경합 아님 · ALREADY_PUBLISHED**', fr.kind === 'blocked' && fr.code === 'ALREADY_PUBLISHED', JSON.stringify(fr))
   }
 
   console.log('\n⑦ 🔴 정상 발행 — Post · Queue · ActivityLog 원자적 정합')

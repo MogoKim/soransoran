@@ -377,7 +377,7 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
    *    설치된 단계가 write 경로에 도달해야 한다는 원래 목적은 그대로다 — 값이 숫자에서 단계로 바뀌었다.
    */
   check('G 🔴 발행 러너가 설치된 단계를 write 경로에 넘긴다 (scheduled)',
-    /publishOriginalPostTx\(prisma, \{\s*queueId: target\.id, publishedToday,\s*mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage \},/
+    /publishOriginalPostTx\(prisma, \{\s*queueId: target\.id, publishedToday,\s*mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/
       .test(users['auto-publish']))
   // 🔴 러너는 이제 공용 준비 함수(`prepareCandidates`)를 통해 매칭한다.
   //    **주입 자체가 사라지면 안 된다** — 그 함수가 caps 를 planBatch 로 넘기는지도 함께 본다

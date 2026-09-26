@@ -459,7 +459,7 @@ console.log('\n⑩ 🔴 자동 행 배정은 발행 트랜잭션 안에서 — �
   check('🔴 🔴 **러너는 자동 행 배정을 미리 쓰지 않는다 — 계획만 넘긴다**',
     /if \(target\.matchedPersonaId === null && isAutoTarget\) \{/.test(runner)
     && /autoAssign = \{ personaId: persona\.id, matchMeta: plan\.meta \}/.test(runner)
-    && /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage \},/.test(runner)
+    && /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/.test(runner)
     && /\} else if \(target\.matchedPersonaId === null\) \{/.test(runner))
   check('🔴 사람 행 배정 경로는 그대로다 — 기존 조건부 UPDATE 가 남아 있다',
     /where: \{ id: target\.id, status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null, matchedPersonaId: null \}/.test(runner))
@@ -678,10 +678,10 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
     && /if \(!slot\.run \|\| !\(publishedTodayInTx < limit\)\) \{/.test(sched) && /dailyCap = target/.test(sched))
   check('🔴 🔴 **발행 방식은 필수 판별 유니온 — optional boolean 게이트 없음 · top-level dailyCap 없음**',
     /mode: PublishMode\n/.test(tx) && !/mode\?:/.test(tx) && !/slotGate|useSlots|slotGated/.test(tx)
-    && /\| \{ kind: 'scheduled'; releaseStage: unknown \}/.test(tx) && /\| \{ kind: 'manual-live'; dailyCap: number; releaseStage\?: ReleaseStage \}/.test(tx)
+    && /\| \{ kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget \}/.test(tx) && /\| \{ kind: 'manual-live'; dailyCap: number; releaseStage\?: ReleaseStage \}/.test(tx)
     && !/^\s*dailyCap: number$/m.test(tx.slice(tx.indexOf('export type PublishTxInput'), tx.indexOf('export async function publishOriginalPostTx'))))
   check('🔴 🔴 **자동 러너는 scheduled 만 — manual-live · 숫자 상한을 넘기지 않는다**',
-    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage \}/.test(runner) && !/manual-live/.test(runner)
+    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \}/.test(runner) && !/manual-live/.test(runner)
     && !/publishOriginalPostTx\(prisma, \{[^}]*dailyCap/.test(runner))
   check('🔴 🔴 **슬롯 경쟁 패자(SLOT_*)는 러너가 정상 무발행 exit 0 — 그 밖은 기존처럼 실패**',
     /if \(res\.kind === 'blocked' && \(NORMAL_NO_PUBLISH_CODES as readonly string\[\]\)\.includes\(res\.code\)\) \{[\s\S]{0,300}process\.exit\(0\)/.test(runner)
@@ -689,10 +689,17 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
   const pub = codeOnly('src/lib/original-post-publish.ts')
   check('🔴 🔴 **정상 무발행 코드는 정확히 셋 — ALREADY_PUBLISHED 는 여기 없다(선택기 결함을 숨기지 않는다)**',
     /export const NORMAL_NO_PUBLISH_CODES = \['SLOT_CONSUMED', 'SLOT_CLOSED', 'TARGET_RACE_LOST'\] as const/.test(pub))
-  check('🔴 🔴 **TARGET_RACE_LOST 는 좁다 — 행 발행됨 · 계획 뒤 발행 수 증가 · 그 글의 발행 기록이 오늘**',
-    /if \(row\.createdPostId !== null && publishedTodayInTx > input\.publishedToday\) \{/.test(sched)
-    && /where: \{ kind: 'post', targetId: row\.createdPostId, createdAt: \{ gte: kstDayStart\(txNow\) \} \}/.test(sched)
+  check('🔴 🔴 **TARGET_RACE_LOST 는 대상 자신의 전환으로만 — 계획 스냅샷(이 행 · 미발행 · 발행 가능 · 같은 결정자) → 지금 발행 · updatedAt 이 계획 뒤**',
+    /const plannedPublishable = p\.queueId === row\.id && p\.createdPostId === null\s*&& \(p\.status === 'APPROVED' \|\| p\.status === 'EDITED'\) && p\.decidedBy === row\.decidedBy/.test(sched)
+    && /const transitionedAfterPlan = row\.createdPostId !== null && row\.status === 'PUBLISHED'\s*&& row\.updatedAt\.getTime\(\) > p\.updatedAt\.getTime\(\)/.test(sched)
+    && /if \(plannedPublishable && transitionedAfterPlan && publishedTodayInTx > input\.publishedToday\) \{/.test(sched)
+    && /where: \{ kind: 'post', targetId: row\.createdPostId!, createdAt: \{ gte: kstDayStart\(txNow\) \} \}/.test(sched)
     && /if \(mine > 0\) \{\s*return \{\s*kind: 'blocked', publishedTodayInTx, code: 'TARGET_RACE_LOST'/.test(sched))
+  check('🔴 🔴 **러너는 선택기 스냅샷을 그대로 넘긴다 — updatedAt 없으면 발행하지 않는다**',
+    /mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage, planned \},/.test(runner)
+    && /queueId: target\.id, status: target\.status, createdPostId: target\.createdPostId,\s*updatedAt: target\.updatedAt!, decidedBy: target\.decidedBy,/.test(runner)
+    && /if \(target\.updatedAt === undefined\) \{\s*await prisma\.\$disconnect\(\)\s*fail\(/.test(runner)
+    && /editDiff: true, updatedAt: true,/.test(codeOnly('scripts/lib/publishable-stock.mts')))
   check('🔴 manual-live 는 사람이 부르는 publish-live 만 쓴다', /mode: \{ kind: 'manual-live', dailyCap: RELEASE_DAILY_CAP \}/.test(live))
   check('🔴 🔴 **운영 호출자는 시계를 주입하지 않는다 — 두 호출 모두 인자 둘**',
     [runner, live].every((c) => { const m = c.match(/publishOriginalPostTx\(prisma, \{[\s\S]*?\}\)/); return m !== null && !/\}, \{ now/.test(m[0]) }))

@@ -77,6 +77,11 @@ export type PublishProfile = 'human' | 'machine'
 export type AutoRow = {
   id: string
   status: string
+  /**
+   * 🔴 **선택 당시 행의 updatedAt** (2026-09-26) — 예약 발행이 계획 스냅샷을 트랜잭션까지 넘길 때 쓴다.
+   *    공용 로더(`publishable-stock`)만 채운다. 없으면 러너는 발행하지 않는다.
+   */
+  updatedAt?: Date
   createdPostId: string | null
   gateVerdict: string
   promptVersion: string

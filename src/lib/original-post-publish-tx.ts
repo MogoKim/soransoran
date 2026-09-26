@@ -73,8 +73,18 @@ export type PublishResult =
   | { kind: 'blocked'; code: PublishBlockCode; detail: string; publishedTodayInTx?: number }
   | { kind: 'error'; message: string }
 
+/**
+ * 🔴 **계획 스냅샷 — 선택기가 고른 그 순간의 큐 행** (2026-09-26 마스터).
+ *    기존 CAS 칸 그대로다(queueId · status · createdPostId · updatedAt · decidedBy). 같은 후보 경합의
+ *    패배를 인정하려면 "계획 때는 미발행·발행 가능이던 **이 행**이 계획 뒤 발행으로 바뀌었다" 가
+ *    DB 로 확인돼야 한다. 전체 발행 수 증가만으로는 증명이 아니다 — 무관한 다른 글 때문일 수 있다.
+ */
+export type PlannedTarget = {
+  queueId: string; status: string; createdPostId: string | null; updatedAt: Date; decidedBy: string | null
+}
+
 export type PublishMode =
-  | { kind: 'scheduled'; releaseStage: unknown }
+  | { kind: 'scheduled'; releaseStage: unknown; planned: PlannedTarget }
   | { kind: 'manual-live'; dailyCap: number; releaseStage?: ReleaseStage }
 
 /**
@@ -169,7 +179,7 @@ async function publishAttempt(
       const row = await tx.originalPostApprovalQueue.findUnique({
         where: { id: input.queueId },
         select: {
-          id: true, status: true, createdPostId: true, gateVerdict: true,
+          id: true, status: true, createdPostId: true, gateVerdict: true, updatedAt: true,
           draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
           // 🔴 자동 도장 재검증용 — 누가 결정했고 무엇을 보고 찍었나
           decidedBy: true, editDiff: true, gateResults: true,
@@ -288,16 +298,23 @@ async function publishAttempt(
         /**
          * 🔴 **같은 후보 경합의 패자** (2026-09-26 마스터). 도래 슬롯이 2 이상이면 슬롯 게이트는
          *    열려 있는데, 이 러너가 고른 후보를 다른 러너가 계획 뒤 먼저 발행했을 수 있다.
-         *    그 경우만 정상 무발행으로 가른다 — 셋 다 참이어야 한다:
-         *      ① 행이 이미 발행됐다(createdPostId)
-         *      ② 그 글의 발행 기록이 **오늘**(txNow 의 KST 날짜) 있다
-         *      ③ 트랜잭션 안 오늘 발행 수가 러너가 밖에서 본 수보다 늘었다 — 계획 **뒤**에 누가 냈다
+         *    그 경우만 정상 무발행으로 가른다 — 넷 다 참이어야 한다:
+         *      ① 계획 스냅샷이 **이 행**을 미발행·발행 가능으로 봤다(queueId · status · createdPostId · decidedBy)
+         *      ② 지금 이 행이 발행 상태로 바뀌었고 updatedAt 이 계획 뒤다 — 대상 자신의 전환이다
+         *      ③ 트랜잭션 안 오늘 발행 수가 러너가 밖에서 본 수보다 늘었다
+         *      ④ 그 글의 발행 기록이 **오늘**(txNow 의 KST 날짜) 있다
+         *    🔴 전체 발행 수 증가만으로 대상 경합을 증명하지 않는다 — 무관한 다른 글 때문일 수 있다(마스터 반례)
          *    하나라도 아니면(예: 전날 발행된 행을 고른 선택기 결함) 아래 judgePublish 가
          *    ALREADY_PUBLISHED 로 막고 러너는 실패한다.
          */
-        if (row.createdPostId !== null && publishedTodayInTx > input.publishedToday) {
+        const p = input.mode.planned
+        const plannedPublishable = p.queueId === row.id && p.createdPostId === null
+          && (p.status === 'APPROVED' || p.status === 'EDITED') && p.decidedBy === row.decidedBy
+        const transitionedAfterPlan = row.createdPostId !== null && row.status === 'PUBLISHED'
+          && row.updatedAt.getTime() > p.updatedAt.getTime()
+        if (plannedPublishable && transitionedAfterPlan && publishedTodayInTx > input.publishedToday) {
           const mine = await tx.personaActivityLog.count({
-            where: { kind: 'post', targetId: row.createdPostId, createdAt: { gte: kstDayStart(txNow) } },
+            where: { kind: 'post', targetId: row.createdPostId!, createdAt: { gte: kstDayStart(txNow) } },
           })
           if (mine > 0) {
             return {

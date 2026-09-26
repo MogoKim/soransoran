@@ -468,9 +468,21 @@ if (target.matchedPersonaId === null && isAutoTarget) {
  *    위의 `judgeCatchUp` 은 로그·사전 필터다. 최종 발행 권한은 트랜잭션 안에서 **트랜잭션 시계**로
  *    다시 센 도래 슬롯과 오늘 발행 수에 있다. 단계는 env 천장으로 누르고 하루 목표는 정본에서 온다.
  */
+/**
+ * 🔴 **선택기가 만든 대상 스냅샷을 그대로 넘긴다** (2026-09-26 마스터). 트랜잭션은 이 행이 계획 뒤
+ *    발행으로 바뀌었는지를 이 값과 대조해서만 같은 후보 경합의 패배를 인정한다.
+ */
+if (target.updatedAt === undefined) {
+  await prisma.$disconnect()
+  fail('선택기 스냅샷에 updatedAt 이 없다 — 계획을 트랜잭션에 결속할 수 없어 발행하지 않는다')
+}
+const planned = {
+  queueId: target.id, status: target.status, createdPostId: target.createdPostId,
+  updatedAt: target.updatedAt!, decidedBy: target.decidedBy,
+}
 const res = await publishOriginalPostTx(prisma, {
   queueId: target.id, publishedToday,
-  mode: { kind: 'scheduled', releaseStage: scale.releaseStage },
+  mode: { kind: 'scheduled', releaseStage: scale.releaseStage, planned },
   // 🔴 자동 도장 행은 트랜잭션 안에서 스위치·도장·경고·DB 증거·결함을 다시 본다 · 단계 천장도 이 env 다
   autoReadyEnv: process.env,
   // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)
