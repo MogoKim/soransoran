@@ -39,7 +39,7 @@
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { loadQueue } from './lib/magazine-load.mjs'
-import { CDP_URL, ensurePageTarget, CDP_CONNECT_TIMEOUT_MS } from './lib/chatgpt-session.mjs'
+import { CDP_URL, ensureChrome, ensurePageTarget, CDP_CONNECT_TIMEOUT_MS } from './lib/chatgpt-session.mjs'
 import {
   planHero, buildPrompt, injectHeroImage, verifyHeroFile,
   heroFilePath, heroPublicPath, HERO_WIDTH, HERO_HEIGHT,
@@ -63,6 +63,14 @@ async function chromium() {
  *    폭으로 거르는 편이 호스트 변화에 강하다.
  */
 async function generateImage(prompt) {
+  /**
+   * 🔴 **raw ensurePageTarget 앞에 ensureChrome 을 먼저 부른다** (2026-09-26 사고).
+   *    앞판은 곧바로 탭을 열려 했고, Chrome 이 안 떠 있으면 그대로 실패했다.
+   *    producer 쪽에는 자동 기동이 있는데 hero 쪽에는 없어서, 같은 회차 안에서
+   *    한쪽은 뜨고 한쪽은 못 뜨는 어긋남이 생겼다. 경로를 하나로 맞춘다.
+   */
+  const boot = await ensureChrome()
+  if (!boot.ok) return { ok: false, why: `${boot.reason ?? 'CHROME_NOT_RUNNING'} — Chrome 을 띄우지 못했다` }
   const tab = await ensurePageTarget()
   if (!tab.ok) return { ok: false, why: 'CHROME_NOT_RUNNING — magazine-webui-runner.mjs --login 으로 창을 띄운다' }
 
@@ -219,13 +227,30 @@ async function main() {
  * **검증에 실패하면 파일을 지운다.** 반쯤 남기면 magazine-qa 가 FAIL 을 낸다.
  */
 async function apply(p, prompt, alt) {
+  const file = heroFilePath(p.slug)
+
+  /**
+   * 🔴 **재사용 경로 — 이미지를 만들지 않는다.**
+   *    유효한 hero 가 이미 있으면 Chrome 도, ChatGPT 도 부르지 않는다.
+   *    할 일은 "다시 검증하고 heroImage 4필드를 다시 주입" 뿐이다.
+   */
+  if (p.checks.reuseExisting) {
+    const check = verifyHeroFile(p.slug)
+    if (!check.ok) return { ok: false, why: `기존 hero 가 검증을 통과하지 못했다 — ${check.why}` }
+    if (p.checks.willInject) {
+      const injected = injectHeroImage(p._meta.src, p.slug, alt)
+      if (!injected.ok) return { ok: false, why: `${injected.why} (기존 hero 파일은 그대로 두었다)` }
+      writeFileSync(p._meta.path, injected.text)
+    }
+    return { ok: true, reused: true }
+  }
+
   const gen = await generateImage(prompt)
   if (!gen.ok) return gen
 
   const webp = await toHeroWebp(gen.buffer)
   if (!webp.ok) return webp
 
-  const file = heroFilePath(p.slug)
   const hadFile = existsSync(file)
   const backup = hadFile ? readFileSync(file) : null
   mkdirSync(dirname(file), { recursive: true })
@@ -256,14 +281,14 @@ function printHuman(p, prompt, write, applied) {
   console.log(`  hero 생성 — ${p.slug ?? '(slug 없음)'}`)
   console.log(`  모드     : ${write ? 'write' : 'dry-run (파일 수정 0건)'}`)
   console.log(`  imageMode: ${c.imageMode ?? '-'}${c.allowOptional ? ' · --allow-optional' : ''}`)
-  console.log(`  hero     : ${c.heroExists ? '🔴 이미 있음' : '없음'}${c.force ? ' · --force' : ''}`)
+  console.log(`  hero     : ${c.heroExists ? (c.reuseExisting ? `있음 — 재사용 (${c.heroSize?.width}×${c.heroSize?.height})` : '🔴 이미 있음') : '없음'}${c.force ? ' · --force' : ''}`)
   console.log(`  주입     : ${c.willInject ? `article-draft.ts 에 heroImage 4필드` : '하지 않음'}`)
   console.log('')
 
   if (p.verdict === 'READY') {
     if (write && applied) {
       console.log('  ✅ 완료')
-      console.log(`     public${c.publicPath}  ${HERO_WIDTH}×${HERO_HEIGHT} webp`)
+      console.log(`     public${c.publicPath}  ${HERO_WIDTH}×${HERO_HEIGHT} webp${c.reuseExisting ? ' (기존 파일 재사용 · 이미지 생성 0회)' : ''}`)
       if (c.willInject) console.log('     article-draft.ts 에 heroImage 주입')
     } else {
       console.log('  ✅ READY — 생성 가능')

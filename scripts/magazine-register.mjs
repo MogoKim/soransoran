@@ -22,7 +22,7 @@
  *
  * 종료 코드: BLOCKED 면 1, 아니면 0
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadArticles, loadQueue, sliceLiteral, evalLiteral, ROOT, ARTICLES_TS, QUEUE_TS, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
@@ -208,8 +208,19 @@ export function plan({ slug, publishAtInput, founderApproved = false }) {
 
 // ── 쓰기 ───────────────────────────────────────────────────
 
-/** 두 파일을 메모리에서 다 만든 뒤 한꺼번에 쓴다. 중간 실패 시 아무것도 안 쓴다 */
-function applyWrite(p) {
+/**
+ * 두 파일을 메모리에서 다 만든 뒤 쓴다.
+ *
+ * 🔴 **"한꺼번에" 는 말뿐이었다** (Codex 재검토 2026-09-26).
+ *    앞판은 계산 실패만 막았다. `articles.ts` 를 쓴 **뒤** `topic-queue.ts` 쓰기가
+ *    터지면(디스크·권한·EIO) `articles.ts` 만 바뀐 채 남는다 — 글은 등록됐는데
+ *    큐에는 그대로 있는, 가장 고치기 어려운 상태다.
+ *    이제 쓰기 전에 두 파일의 **바이트를 떠 두고**, 어느 쪽이 터지든 둘 다 되돌린다.
+ *
+ * @param {object} p
+ * @param {{write?:Function}} [deps] 🔴 시험이 **두 번째 쓰기 실패**를 주입하기 위한 자리
+ */
+export function applyWrite(p, { write = writeFileSync } = {}) {
   const { draft, norm, item, articlesSrc } = p._internal
 
   const rec = buildRecord(p.slug, draft.literal, norm.date, norm.publishAt)
@@ -225,9 +236,31 @@ function applyWrite(p) {
   const nextQueue = queueSrc.replace(re, '')
   if (nextQueue === queueSrc) return { ok: false, why: 'topic-queue.ts 제거에 실패했다' }
 
-  // 여기까지 오면 둘 다 성공. 이제 쓴다
-  writeFileSync(ARTICLES_TS, nextArticles)
-  writeFileSync(QUEUE_TS, nextQueue)
+  // 여기까지 오면 계산은 둘 다 성공. 이제 쓴다 — **되돌릴 수 있는 상태로**.
+  const before = [
+    { path: ARTICLES_TS, bytes: existsSync(ARTICLES_TS) ? readFileSync(ARTICLES_TS) : null },
+    { path: QUEUE_TS, bytes: existsSync(QUEUE_TS) ? readFileSync(QUEUE_TS) : null },
+  ]
+  const rollback = () => {
+    const failed = []
+    for (const f of before) {
+      try {
+        if (f.bytes === null) rmSync(f.path, { force: true })
+        else writeFileSync(f.path, f.bytes)
+      } catch (e) { failed.push(`${f.path}: ${e.message}`) }
+    }
+    return failed
+  }
+  try {
+    write(ARTICLES_TS, nextArticles)
+    write(QUEUE_TS, nextQueue)
+  } catch (e) {
+    const failed = rollback()
+    return { ok: false, rolledBack: true,
+      why: failed.length
+        ? `🔴 쓰기 실패 후 원복도 실패했다 — ${e.message} · 원복 실패: ${failed.join(' / ')}`
+        : `쓰기 실패 — ${e.message} (두 파일을 바이트 단위로 되돌렸다)` }
+  }
   return { ok: true }
 }
 

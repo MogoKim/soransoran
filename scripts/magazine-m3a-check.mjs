@@ -22,6 +22,14 @@ import { readQuarantine, saveQuarantine } from './lib/magazine-quarantine.mjs'
 import { drive } from './magazine-auto-register.mjs'
 import { gate } from './lib/magazine-auto-lane.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
+import { spawnSync as nodeSpawnSync } from 'node:child_process'
+
+/** 🔴 저장소가 **추적하는** 파일 목록을 읽는다 — 환경에 따라 달라지지 않는 유일한 기준 */
+function spawnSyncTop(cmd, args) {
+  const r = nodeSpawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 1e8 })
+  if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} → exit ${r.status}: ${r.stderr}`)
+  return (r.stdout ?? '').trim()
+}
 
 let pass = 0, fail = 0
 const fails = []
@@ -124,16 +132,34 @@ console.log('\n② 프로필별 결정론적 QA')
     numCodes('MEDICAL', '검사는 50세부터 2년마다 권고되니 의료진에게 확인해 보세요.').length > 0)
   check('  소관 기관 안내 + 가변성은 여전히 통과',
     numCodes('FINANCIAL', '공제 한도는 조건에 따라 다르니 국세청에 문의해 보세요.').length === 0)
-  /** 🔴 실제 큐 원고가 이 규칙으로 막히지 않는다 */
+  /**
+   * 🔴 **저장소에 커밋된 원고**가 이 규칙에 막히지 않는다.
+   *
+   *    앞판은 큐 전체를 돌며 `drafts/magazine/<slug>/article-draft.ts` 가 **있으면** 검사했다.
+   *    그 파일이 있는지는 환경마다 다르다 — runtime 에는 미추적 원고가 더 있어서
+   *    CI 초록 / runtime 빨강이 됐다(2026-09-26 실측 3건). 필수 시험은 추적본만 본다.
+   *    🔴 **실제 운영 원고의 상태는 여기서 판정하지 않는다** — 운영 dry-run 보고가 본다
+   *    (`magazine-auto-register-ready.mjs --dry-run --json` 의 blocked 목록).
+   */
   {
     const { resolveValidationProfile: rvp } = await import('./lib/magazine-validation-profile.mjs')
-    const blocked = loadQueue().filter((it) => {
+    /**
+     * 🔴 **큐 ∩ 추적 원고** 만 본다. 둘 다 저장소 안의 값이라 환경에 흔들리지 않는다.
+     *    🔴 이미 발행돼 큐에서 빠진 글은 제외한다 — 후보가 아니고 프로필도 없는 것이 정상이다
+     *       (그걸 섞었더니 37건이 `PROFILE_UNKNOWN` 으로 떴다. 시험 쪽 잘못이었다).
+     */
+    const trackedDrafts = new Set(
+      spawnSyncTop('git', ['ls-files', '--', 'drafts/magazine']).split('\n')
+        .filter((f) => f.endsWith('/article-draft.ts')).map((f) => f.split('/')[2]),
+    )
+    const subjects = loadQueue().filter((it) => trackedDrafts.has(it.slug))
+    const blocked = subjects.filter((it) => {
       const f = `drafts/magazine/${it.slug}/article-draft.ts`
-      if (!fs.existsSync(f)) return false
       const body = [...fs.readFileSync(f, 'utf8').matchAll(/text:\s*'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]).join('\n')
       return !runProfileQA({ profile: rvp(it).profile, title: '', bodyText: body }).ok
-    })
-    check('🔴 실제 큐 원고가 이 규칙에 막히지 않는다', blocked.length === 0, blocked.map((i) => i.slug).join(','))
+    }).map((it) => it.slug)
+    check('🔴 큐에 있고 추적되는 원고가 이 규칙에 막히지 않는다', blocked.length === 0,
+      blocked.join(',') || `${subjects.length}건 검사 (큐 ∩ 추적본)`)
   }
 }
 
@@ -150,13 +176,23 @@ console.log('\n③ 실제 drive() — QA 실패 → 실패 패킷 → ChatGPT �
  *    파일은 실제 파일이고 gate·progress·존재 검사도 실제로 돈다 — 약해지지 않는다.
  */
 const DRAFT_ROOT = 'drafts/magazine'
-const FIXTURE_SLUGS = fs.readdirSync(DRAFT_ROOT, { withFileTypes: true })
-  .filter((e) => e.isDirectory() && !e.name.startsWith('_'))
-  .map((e) => e.name).sort()
-  .filter((name) => ['brief.md', 'review.ts', 'draft.md', 'article-draft.ts']
-    .every((f) => fs.existsSync(path.join(DRAFT_ROOT, name, f))))
+/**
+ * 🔴 **추적되는 파일만 본다** (2026-09-26 운영 사고).
+ *
+ *    앞판은 `drafts/magazine/*` 를 디렉터리로 훑었다. 그런데 운영 runtime 에는
+ *    **미추적 원고**(사람이 만든 brief·review·draft)가 수십 건 더 있다. 그래서
+ *    같은 코드가 CI 에서는 초록, runtime 에서는 빨강이 됐다 — 시험이 **환경을**
+ *    읽고 있었던 것이다. 필수 시험은 저장소에 커밋된 것만 본다.
+ */
+const TRACKED = new Set(
+  spawnSyncTop('git', ['ls-files', '--', DRAFT_ROOT]).split('\n').filter(Boolean),
+)
+const hasTracked = (slug, f) => TRACKED.has(`${DRAFT_ROOT}/${slug}/${f}`)
+const FIXTURE_SLUGS = [...new Set([...TRACKED].map((f) => f.split('/')[2]))]
+  .filter((name) => name && !name.startsWith('_')).sort()
+  .filter((name) => ['brief.md', 'review.ts', 'draft.md', 'article-draft.ts'].every((f) => hasTracked(name, f)))
   .slice(0, 3)
-check('🔴 시험 후보 3건을 저장소 draft 폴더에서 찾았다 (큐 의존 아님)',
+check('🔴 시험 후보 3건을 **추적 파일**에서만 골랐다 (환경 독립)',
   FIXTURE_SLUGS.length === 3, FIXTURE_SLUGS.join(' · ') || '(없음)')
 const SLUG = FIXTURE_SLUGS[0]
 
@@ -855,6 +891,440 @@ console.log('\n⑫ --regen-packet fail-closed')
     check('🔴 [CLI] draft.md 가 바뀌지 않았다',
       Buffer.compare(before, fs.readFileSync('drafts/magazine/checkup-items-50s/draft.md')) === 0)
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑬ 🔴 2026-09-26 운영 사고 — 필수 반례
+// ─────────────────────────────────────────────────────────
+console.log('\n⑬ 2026-09-26 운영 사고 반례')
+{
+  const HERO_LIB = await import('./lib/magazine-hero.mjs')
+  const SESSION = await import('./lib/chatgpt-session.mjs')
+
+  // ── 반례 1 · 기존 유효 hero + 변환기 자리표시자 → 이미지 호출 0 · 재주입 ──
+  {
+    const fx = `_m3a-reuse-${process.pid}`
+    const draftDir = path.join('drafts/magazine', fx)
+    const heroDir = path.join('public/magazine', fx)
+    try {
+      fs.mkdirSync(draftDir, { recursive: true }); fs.mkdirSync(heroDir, { recursive: true })
+      /** 🔴 진짜 1200×675 webp 를 만든다 — 가짜 헤더로는 verifyHeroFile 을 속일 뿐이다 */
+      const src = 'public/magazine/checkup-items-50s/hero.webp'
+      check('  반례1 재료: 저장소에 유효한 hero 가 있다', fs.existsSync(src), src)
+      fs.copyFileSync(src, path.join(heroDir, 'hero.webp'))
+      fs.writeFileSync(path.join(draftDir, 'article-draft.ts'),
+        "export const DRAFT = {\n  title: '시험',\n  cluster: 'clinic',\n  // heroImage 는 이미지 회수 후 채운다\n  body: [],\n}\n")
+
+      const plan = HERO_LIB.planHero({ slug: fx, alt: '창가에서 서류를 보는 50대 여성', queueItem: { imageMode: 'REQUIRED' } })
+      check('🔴 반례1 유효한 기존 hero 는 BLOCKED 가 아니다', plan.verdict === 'READY', `${plan.verdict} · ${plan.reasons.join('/')}`)
+      check('🔴 반례1 재사용으로 표시된다 (이미지 생성 안 함)', plan.checks.reuseExisting === true)
+      check('  반례1 크기를 확인했다', plan.checks.heroSize?.width === 1200 && plan.checks.heroSize?.height === 675)
+      check('  반례1 주입 대상이다 (draft 가 자리표시자)', plan.checks.willInject === true)
+
+      /** 🔴 실제 CLI 를 --write 로 돌린다. Chrome 이 없어도 통과해야 한다 */
+      const { spawnSync } = await import('node:child_process')
+      const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-reuse-home-'))
+      const r = spawnSync(process.execPath,
+        ['scripts/magazine-hero-runner.mjs', '--slug', fx, '--alt', '창가에서 서류를 보는 50대 여성', '--write', '--json'],
+        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T } })
+      fs.rmSync(T, { recursive: true, force: true })
+      let j = null; try { j = JSON.parse(r.stdout) } catch { /* 아래에서 잡는다 */ }
+      check('🔴 반례1 CLI 가 성공으로 끝난다 (exit 0)', r.status === 0, `exit ${r.status} · ${String(r.stderr).slice(0, 80)}`)
+      check('🔴 반례1 applied=true', j?.applied === true, JSON.stringify(j?.reasons ?? []))
+      const after = fs.readFileSync(path.join(draftDir, 'article-draft.ts'), 'utf8')
+      check('🔴 반례1 heroImage 4필드가 다시 주입됐다',
+        /heroImage: \{/.test(after) && /width: 1200/.test(after) && /height: 675/.test(after))
+      check('🔴 반례1 hero 파일 바이트가 그대로다 (새로 만들지 않았다)',
+        fs.readFileSync(path.join(heroDir, 'hero.webp')).equals(fs.readFileSync(src)))
+    } finally {
+      fs.rmSync(draftDir, { recursive: true, force: true })
+      fs.rmSync(heroDir, { recursive: true, force: true })
+    }
+  }
+
+  // ── 반례 1-B · 손상된 hero 만 실패한다 ──
+  {
+    const fx = `_m3a-broken-${process.pid}`
+    const draftDir = path.join('drafts/magazine', fx)
+    const heroDir = path.join('public/magazine', fx)
+    try {
+      fs.mkdirSync(draftDir, { recursive: true }); fs.mkdirSync(heroDir, { recursive: true })
+      fs.writeFileSync(path.join(heroDir, 'hero.webp'), Buffer.from('not a webp at all'))
+      fs.writeFileSync(path.join(draftDir, 'article-draft.ts'),
+        "export const DRAFT = {\n  title: '시험',\n  cluster: 'clinic',\n  // heroImage 는 이미지 회수 후 채운다\n  body: [],\n}\n")
+      const plan = HERO_LIB.planHero({ slug: fx, alt: '창가에서 서류를 보는 50대 여성', queueItem: { imageMode: 'REQUIRED' } })
+      check('🔴 반례1-B 손상된 hero 는 BLOCKED 다', plan.verdict === 'BLOCKED', plan.reasons.join('/'))
+      check('  반례1-B 사유가 "손상" 이다', plan.reasons.some((x) => /손상/.test(x)))
+    } finally {
+      fs.rmSync(draftDir, { recursive: true, force: true })
+      fs.rmSync(heroDir, { recursive: true, force: true })
+    }
+  }
+
+  // ── 반례 2 · Chrome 없음 + 죽은 잠금 → 자동 기동한다 ──
+  {
+    const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-lock-'))
+    try {
+      /**
+       * 🔴 **실제 `profileLockState` 를 돌린다.** 앞 판은 시험 안에서 판정 규칙을
+       *    복제한 `judge()` 를 썼다 — 제품 코드가 틀려도 복제본이 맞으면 초록이 뜬다.
+       *    이제 임시 프로필과 가짜 프로세스 목록을 **주입해** 그 함수를 그대로 돌린다.
+       */
+      const mk = (name, lockPid) => {
+        const dir = path.join(T, name)
+        fs.mkdirSync(dir, { recursive: true })
+        if (lockPid !== null) fs.symlinkSync(`host-${lockPid}`, path.join(dir, 'SingletonLock'))
+        return dir
+      }
+      const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+      const procs = (rows) => () => rows
+
+      /** ① 잠금 PID 가 아예 없다 → STALE */
+      const dead = mk('dead', 999001)
+      const r1 = SESSION.profileLockState({ profileDir: dead, processes: procs([{ pid: 4242, command: '/bin/zsh' }]) })
+      check('🔴 반례2-① 죽은 PID 잠금 → STALE', r1.state === 'STALE', `${r1.state} · ${r1.why}`)
+
+      /** ② 이 프로필을 쓰는 Chrome 이 실재 → LIVE (죽이지 않는다) */
+      const live = mk('live', 999002)
+      const r2 = SESSION.profileLockState({ profileDir: live,
+        processes: procs([{ pid: 999002, command: `${CHROME} --user-data-dir=${live} --remote-debugging-port=9333` }]) })
+      check('🔴 반례2-② 이 프로필의 Chrome 이 돌면 → LIVE', r2.state === 'LIVE', `${r2.state} · ${r2.why}`)
+
+      /** ③ 🔴 **PID 재사용** — 번호는 살아 있지만 Chrome 이 아니다 → STALE 이어야 한다 */
+      const reused = mk('reused', 999003)
+      const r3 = SESSION.profileLockState({ profileDir: reused,
+        processes: procs([{ pid: 999003, command: '/usr/bin/python3 some-unrelated-script.py' }]) })
+      check('🔴 반례2-③ PID 재사용(다른 프로그램) → STALE', r3.state === 'STALE', `${r3.state} · ${r3.why}`)
+      check('  반례2-③ 사유가 재사용임을 밝힌다', /재사용/.test(r3.why), r3.why)
+
+      /** ④ Chrome 이긴 한데 **다른 프로필** → 우리 것이 아니다 → STALE */
+      const other = mk('other', 999004)
+      const r4 = SESSION.profileLockState({ profileDir: other,
+        processes: procs([{ pid: 999004, command: `${CHROME} --user-data-dir=/somewhere/else` }]) })
+      check('🔴 반례2-④ 다른 프로필의 Chrome → STALE', r4.state === 'STALE', `${r4.state} · ${r4.why}`)
+
+      /** ⑤ 목록을 못 얻으면 **모른다** → 보수적으로 LIVE */
+      const unknown = mk('unknown', 999005)
+      const r5 = SESSION.profileLockState({ profileDir: unknown, processes: () => null })
+      check('🔴 반례2-⑤ 프로세스 조회 실패 → 보수적으로 LIVE', r5.state === 'LIVE', `${r5.state} · ${r5.why}`)
+
+      /** ⑥ 잠금 파일이 없으면 NONE */
+      const none = mk('none', null)
+      check('  반례2-⑥ 잠금 파일이 없으면 NONE',
+        SESSION.profileLockState({ profileDir: none, processes: procs([]) }).state === 'NONE')
+
+      /** 🔴 ensureChrome 이 실제로 **띄우려 드는지** (진짜 Chrome 은 띄우지 않는다) */
+      let spawned = 0
+      const spawnFn = () => { spawned += 1; return { unref() {} } }
+      const rs = await SESSION.ensureChrome({ waitMs: 60, pollMs: 20, spawnFn, cdpCheck: async () => false })
+      check('🔴 반례2 죽은 잠금이면 기동을 시도한다', spawned === 1, `spawn ${spawned}회 · lock ${rs.lock?.state}`)
+
+      const srcTxt = fs.readFileSync('scripts/lib/chatgpt-session.mjs', 'utf8')
+      check('🔴 반례2 LIVE 일 때만 기동을 포기한다 (코드 경로)',
+        /const lock = profileLockState\(\)\n\s*if \(lock\.state === 'LIVE'\) \{/.test(srcTxt))
+      /**
+       * 🔴 **죽이는 "호출"만 본다.** `kill` 이라는 글자는 주석에도 있다.
+       *    `process.kill(pid, 0)` 은 신호를 보내지 않는 생존 확인이다 — 이제 그것도 없다.
+       */
+      const killCalls = [...srcTxt.matchAll(/process\.kill\(([^)]*)\)/g)].map((m) => m[1])
+        .filter((a) => !/,\s*0\s*$/.test(a))
+      check('🔴 반례2 살아 있는 Chrome 을 죽이는 코드가 없다',
+        killCalls.length === 0 && !/pkill|killall|SIGKILL|SIGTERM/.test(srcTxt),
+        killCalls.join(' · ') || '신호를 보내는 호출 0건')
+    } finally { fs.rmSync(T, { recursive: true, force: true }) }
+  }
+
+  // ── 반례 3 · 로그인 만료 → 자동 우회 없음 · 전송 0 ──
+  {
+    check('🔴 반례3 login_required 는 치명으로 분류된다', SESSION.isFatal(SESSION.STATUS.LOGIN_REQUIRED))
+    const wsrc = fs.readFileSync('scripts/magazine-webui-runner.mjs', 'utf8')
+    check('🔴 반례3 로그인 만료를 자동 우회하지 않는다 (재시도·자동 로그인 없음)',
+      !/auto.?login|자동 로그인|credentials|password/i.test(wsrc))
+    check('  반례3 치명이면 전송 0건이라고 말한다', /한 글자도 보내지 않았다/.test(wsrc))
+  }
+
+  // ── 반례 4 · hero 실패 → article-draft 원상복구 ──
+  // ── 반례 5 · 후보 1 실패 → 후보 2 계속 ──
+  {
+    const AR = await import('./magazine-auto-register.mjs')
+    const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-atomic-'))
+    const ledgerPath = path.join(T, 'q.json')
+    try {
+      const target = `drafts/magazine/${SLUG}/article-draft.ts`
+      const before = fs.readFileSync(target)
+      const calls = []
+      const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls })
+      /** 🔴 변환기가 실제로 하듯 heroImage 를 지운다 — 그 뒤 hero 가 실패한다 */
+      const baseRun = deps.run
+      deps.run = (f, a, o) => {
+        const name = path.basename(String(f))
+        if (name === 'magazine-md-to-draft.mjs') {
+          calls.push(name)
+          /**
+           * 🔴 **반드시 바뀌게 쓴다.** 앞 판은 heroImage 블록을 정규식으로 지우려 했는데
+           *    그 블록이 없는 원고에서는 아무것도 바뀌지 않아, "원상복구됐다" 가
+           *    **저절로** 통과하는 죽은 시험이 됐다. 실제 변환기도 머리말을 바꾼다.
+           */
+          fs.writeFileSync(target, `// 변환기가 다시 쓴 흔적 (시험)\n${String(before)}`)
+          return { code: 0, stdout: '변환', stderr: '', json: null }
+        }
+        if (name === 'magazine-hero-runner.mjs') { calls.push(name); return { code: 1, stdout: '', stderr: 'hero 실패(시험)', json: null } }
+        return baseRun(f, a, o)
+      }
+      const r = drive(SLUG, { write: true, pr: false, publishAt: '2027-02-01', alt: '시험 여성', allowOptional: true, autoLane: false }, deps)
+      check('  반례4 변환기가 실제로 파일을 바꿨다 (죽은 시험 아님)',
+        calls.includes('magazine-md-to-draft.mjs'), calls.join('>'))
+      check('🔴 반례4 hero 실패면 BLOCKED 다', r.verdict === 'BLOCKED', r.verdict)
+      check('🔴 반례4 article-draft.ts 가 원상복구됐다', fs.readFileSync(target).equals(before),
+        '중간 변경이 남았다 — RETURN_DIRTY 재발')
+      check('  반례4 되돌렸다고 보고한다', r.steps.some((x) => x.stage === 'rollback'),
+        r.steps.map((x) => x.stage).join('>'))
+
+      /** 🔴 반례5 — 첫 후보가 막혀도 다음 후보는 계속 간다 */
+      const results = []
+      for (const [i, sl] of FIXTURE_SLUGS.entries()) {
+        const c2 = []
+        const d2 = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls: c2 })
+        const b2 = d2.run
+        d2.run = (f, a, o) => {
+          const name = path.basename(String(f))
+          if (i === 0 && name === 'magazine-hero-runner.mjs') return { code: 1, stdout: '', stderr: '첫 후보만 실패', json: null }
+          const rr = b2(f, a, o)
+          if (name === 'magazine-batch-qa.mjs') return { ...rr, json: [{ slug: sl, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [], reasons: [] }] }
+          if (name === 'magazine-register.mjs') return { ...rr, json: { verdict: 'READY', slug: sl } }
+          return rr
+        }
+        results.push(drive(sl, { write: true, pr: false, publishAt: `2027-02-0${i + 2}`, alt: '시험 여성', allowOptional: true, autoLane: false }, d2))
+      }
+      check('🔴 반례5 첫 후보는 BLOCKED', results[0].verdict === 'BLOCKED', results[0].verdict)
+      check('🔴 반례5 나머지 후보는 계속 진행했다', results.slice(1).every((x) => x.verdict === 'DONE'),
+        results.map((x) => `${x.slug}:${x.verdict}`).join(' · '))
+      /** 🔴 회차가 건드릴 수 있는 곳만 본다 — 개발 중인 scripts/ 변경과 섞으면 뜻이 흐려진다 */
+      const dirty = spawnSyncTop('git', ['status', '--porcelain', '--untracked-files=no', '--', 'drafts', 'public', 'src'])
+      check('🔴 반례5 회차 뒤 원고·이미지·콘텐츠에 추적 변경 0건', dirty === '', dirty.slice(0, 160))
+    } finally {
+      /**
+       * 🔴 **시험이 실패해도 작업 트리를 더럽히지 않는다.**
+       *    되돌리기가 고장 난 상태로 이 시험을 돌리면 추적 파일이 바뀐 채 남는다.
+       *    그건 이 시험이 잡으려는 바로 그 사고다 — 시험이 그 사고를 일으키면 안 된다.
+       */
+      for (const sl of FIXTURE_SLUGS) {
+        const f = `drafts/magazine/${sl}/article-draft.ts`
+        try { fs.writeFileSync(f, spawnSyncTop('git', ['show', `HEAD:${f}`]) + '\n') } catch { /* 없으면 그만 */ }
+      }
+      fs.rmSync(T, { recursive: true, force: true })
+    }
+  }
+
+  // ── 반례 8 · register 두 파일 부분 쓰기 → 바이트 단위 원복 ──
+  {
+    /**
+     * 🔴 **`articles.ts` 만 바뀐 채 남는 상태를 만들지 않는다** (Codex 재검토 2026-09-26).
+     *    register 는 두 파일을 순서대로 쓴다. 두 번째가 터지면 글은 등록됐는데
+     *    큐에는 그대로 있는, 가장 고치기 어려운 어긋남이 생긴다.
+     *    여기서는 **두 번째 쓰기만 실패**하게 주입하고, 네 산출물이 전부
+     *    BEFORE 와 바이트 단위로 같은지 본다.
+     */
+    const REG = await import('./magazine-register.mjs')
+    const LOAD = await import('./lib/magazine-load.mjs')
+    const before = {
+      articles: fs.readFileSync(LOAD.ARTICLES_TS),
+      queue: fs.readFileSync(LOAD.QUEUE_TS),
+    }
+    /** 🔴 실제 파일 경로에 실제로 쓴다 — 첫 쓰기는 통과시키고 두 번째만 터뜨린다 */
+    let writes = 0
+    const flaky = (target, data) => {
+      writes += 1
+      if (writes === 2) throw new Error('EIO: 시험 주입 — 두 번째 쓰기 실패')
+      fs.writeFileSync(target, data)
+    }
+    const fake = {
+      slug: 'fixture-slug',
+      _internal: {
+        draft: { literal: "{ title: '시', description: '설', cluster: 'clinic', publishedAt: '', body: [] }" },
+        norm: { date: '2027-03-01', publishAt: '2027-03-01T10:30:00+09:00' },
+        item: { day: 18 },
+        articlesSrc: String(before.articles),
+      },
+    }
+    try {
+      const r = REG.applyWrite(fake, { write: flaky })
+      check('🔴 반례8 두 번째 쓰기가 실패하면 ok=false', r.ok === false, JSON.stringify(r).slice(0, 120))
+      check('🔴 반례8 되돌렸다고 말한다', r.rolledBack === true, r.why)
+      check('🔴 반례8 첫 쓰기는 실제로 일어났다 (죽은 시험 아님)', writes === 2, `write ${writes}회`)
+      check('🔴 반례8 articles.ts 가 BEFORE 와 바이트 동일', fs.readFileSync(LOAD.ARTICLES_TS).equals(before.articles))
+      check('🔴 반례8 topic-queue.ts 가 BEFORE 와 바이트 동일', fs.readFileSync(LOAD.QUEUE_TS).equals(before.queue))
+    } finally {
+      /**
+       * 🔴 **시험이 실패해도 트리를 더럽히지 않는다.** 이 시험은 실제 운영 파일에
+       *    실제로 쓴다 — 원복이 고장 난 상태로 돌리면 `articles.ts` 가 바뀐 채 남는다.
+       *    그건 이 시험이 잡으려는 바로 그 사고다.
+       */
+      fs.writeFileSync(LOAD.ARTICLES_TS, before.articles)
+      fs.writeFileSync(LOAD.QUEUE_TS, before.queue)
+    }
+  }
+
+  // ── 반례 9 · 등록이 막혀도 네 산출물이 BEFORE 그대로 · 다음 후보 계속 ──
+  {
+    const LOAD = await import('./lib/magazine-load.mjs')
+    const HERO = await import('./lib/magazine-hero.mjs')
+    const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-reg-atomic-'))
+    const ledgerPath = path.join(T, 'q.json')
+    const sl0 = FIXTURE_SLUGS[0]
+    const target = `drafts/magazine/${sl0}/article-draft.ts`
+    const heroPath = HERO.heroFilePath(sl0)
+    const before = {
+      articles: fs.readFileSync(LOAD.ARTICLES_TS),
+      queue: fs.readFileSync(LOAD.QUEUE_TS),
+      draft: fs.readFileSync(target),
+      hero: fs.existsSync(heroPath) ? fs.readFileSync(heroPath) : null,
+    }
+    /** 🔴 어느 후보를 register 에서 막을지 — 시나리오별로 바꾼다 */
+    let blockAt = (i) => i === 0
+    const runRound = () => {
+      const results = []
+      for (const [i, sl] of FIXTURE_SLUGS.entries()) {
+        const calls = []
+        const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets'), calls })
+        const base = deps.run
+        deps.run = (f, a, o) => {
+          const name = path.basename(String(f))
+          if (name === 'magazine-md-to-draft.mjs') {
+            calls.push(name)
+            fs.writeFileSync(`drafts/magazine/${sl}/article-draft.ts`, `// 변환 흔적 (시험)\n${fs.readFileSync(`drafts/magazine/${sl}/article-draft.ts`, 'utf8')}`)
+            return { code: 0, stdout: '변환', stderr: '', json: null }
+          }
+          // 🔴 막을 후보는 바깥에서 정한다 — 섞인 회차와 전부 막힌 회차를 둘 다 본다
+          if (blockAt(i) && name === 'magazine-register.mjs') {
+            calls.push(name)
+            return { code: 1, stdout: '', stderr: '', json: { verdict: 'BLOCKED', slug: sl, reasons: ['시험 주입: 등록 실패'] } }
+          }
+          const rr = base(f, a, o)
+          if (name === 'magazine-batch-qa.mjs') return { ...rr, json: [{ slug: sl, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [], reasons: [] }] }
+          if (name === 'magazine-register.mjs') return { ...rr, json: { verdict: 'READY', slug: sl } }
+          return rr
+        }
+        results.push(drive(sl, { write: true, pr: false, publishAt: `2027-03-0${i + 1}`, alt: '시험 여성', allowOptional: true, autoLane: false }, deps))
+      }
+      return results
+    }
+    const restoreAll = () => {
+      fs.writeFileSync(LOAD.ARTICLES_TS, before.articles)
+      fs.writeFileSync(LOAD.QUEUE_TS, before.queue)
+      for (const sl of FIXTURE_SLUGS) {
+        const f = `drafts/magazine/${sl}/article-draft.ts`
+        try { fs.writeFileSync(f, spawnSyncTop('git', ['show', `HEAD:${f}`]) + '\n') } catch { /* 없으면 그만 */ }
+      }
+    }
+    try {
+      /** 9-A · 섞인 회차 — 첫 후보만 막힌다. **막힌 후보**가 아무것도 남기지 않아야 한다 */
+      blockAt = (i) => i === 0
+      const mixed = runRound()
+      check('🔴 반례9-A register 가 막으면 BLOCKED 다', mixed[0].verdict === 'BLOCKED', mixed[0].verdict)
+      check('🔴 반례9-A 다음 후보는 계속 진행한다', mixed.slice(1).every((x) => x.verdict === 'DONE'),
+        mixed.map((x) => `${x.slug}:${x.verdict}`).join(' · '))
+      check('🔴 반례9-A articles.ts 가 BEFORE 와 동일', fs.readFileSync(LOAD.ARTICLES_TS).equals(before.articles))
+      check('🔴 반례9-A topic-queue.ts 가 BEFORE 와 동일', fs.readFileSync(LOAD.QUEUE_TS).equals(before.queue))
+      check('🔴 반례9-A 막힌 후보의 article-draft.ts 가 BEFORE 와 동일', fs.readFileSync(target).equals(before.draft))
+      check('🔴 반례9-A 막힌 후보의 hero 가 BEFORE 와 동일',
+        before.hero === null ? !fs.existsSync(heroPath) : fs.readFileSync(heroPath).equals(before.hero))
+      /**
+       * 🔴 **성공한 후보의 변경은 남는 것이 정상이다.** 그 파일은 PR 에 실려 나간다.
+       *    남으면 안 되는 것은 **막힌 후보**가 만든 중간 변경뿐이다.
+       */
+      const dirtyMixed = spawnSyncTop('git', ['status', '--porcelain', '--untracked-files=no', '--', 'drafts', 'public', 'src'])
+        .split('\n').filter(Boolean).map((x) => x.trim().split(/\s+/).pop())
+      check('🔴 반례9-A 막힌 후보의 파일은 남지 않았다', !dirtyMixed.includes(target), dirtyMixed.join(' · ') || '(없음)')
+      check('  반례9-A 남은 것은 성공한 후보의 것뿐이다',
+        dirtyMixed.every((f) => FIXTURE_SLUGS.slice(1).some((sl) => f.includes(`/${sl}/`))), dirtyMixed.join(' · ') || '(없음)')
+      restoreAll()
+
+      /** 9-B · 전부 막힌 회차 — **최종 tracked diff 0** 이어야 한다 */
+      blockAt = () => true
+      const allBlocked = runRound()
+      check('🔴 반례9-B 전부 BLOCKED', allBlocked.every((x) => x.verdict === 'BLOCKED'),
+        allBlocked.map((x) => x.verdict).join(','))
+      const dirty = spawnSyncTop('git', ['status', '--porcelain', '--untracked-files=no', '--', 'drafts', 'public', 'src'])
+      check('🔴 반례9-B 최종 tracked diff 0', dirty === '', dirty.slice(0, 200))
+      restoreAll()
+
+      /**
+       * 9-C · 🔴 **이중 방어가 실제로 잡는가.**
+       *    register 안의 원복까지 실패해서 `articles.ts` 가 바뀐 채 BLOCKED 로 돌아오는
+       *    최악의 경우를 만든다. 그때 drive 의 스냅샷이 한 번 더 잡아야 한다.
+       *    (이 반례가 없으면 drive 쪽 스냅샷은 **시험되지 않는 죽은 게이트**다 —
+       *     실제로 ARTICLES_TS·QUEUE_TS 를 빼 봐도 아무 시험이 깨지지 않았다.)
+       */
+      const sl = FIXTURE_SLUGS[0]
+      const calls = []
+      const deps = makeDeps({ qaFailsUntil: 0, ledgerPath, packetDir: path.join(T, 'packets2'), calls })
+      const base = deps.run
+      deps.run = (f, a, o) => {
+        const name = path.basename(String(f))
+        if (name === 'magazine-register.mjs') {
+          calls.push(name)
+          // 🔴 부분 쓰기를 남긴 채 실패한다 (register 내부 원복까지 실패한 상황)
+          fs.writeFileSync(LOAD.ARTICLES_TS, `${String(before.articles)}\n// 부분 쓰기 잔여 (시험)\n`)
+          fs.writeFileSync(LOAD.QUEUE_TS, String(before.queue).replace(/\n$/, '\n// 부분 쓰기 잔여 (시험)\n'))
+          return { code: 1, stdout: '', stderr: '', json: { verdict: 'BLOCKED', slug: sl, reasons: ['시험 주입: 부분 쓰기 후 실패'] } }
+        }
+        const rr = base(f, a, o)
+        if (name === 'magazine-batch-qa.mjs') return { ...rr, json: [{ slug: sl, verdict: 'READY_TO_SCHEDULE', checks: { heroOk: true }, blockedBy: [], reasons: [] }] }
+        return rr
+      }
+      const rc = drive(sl, { write: true, pr: false, publishAt: '2027-03-09', alt: '시험 여성', allowOptional: true, autoLane: false }, deps)
+      check('  반례9-C 부분 쓰기가 실제로 일어났다 (죽은 시험 아님)', calls.includes('magazine-register.mjs'), calls.join('>'))
+      check('🔴 반례9-C BLOCKED 로 끝난다', rc.verdict === 'BLOCKED', rc.verdict)
+      check('🔴 반례9-C drive 스냅샷이 articles.ts 를 되돌린다',
+        fs.readFileSync(LOAD.ARTICLES_TS).equals(before.articles))
+      check('🔴 반례9-C drive 스냅샷이 topic-queue.ts 를 되돌린다',
+        fs.readFileSync(LOAD.QUEUE_TS).equals(before.queue))
+      check('  반례9-C 되돌렸다고 보고한다', rc.steps.some((x) => x.stage === 'rollback'),
+        rc.steps.map((x) => x.stage).join('>'))
+    } finally {
+      /** 🔴 시험이 실패해도 트리를 더럽히지 않는다 */
+      restoreAll()
+      fs.rmSync(T, { recursive: true, force: true })
+    }
+  }
+
+  // ── 반례 6 · 복귀 실패도 report JSON 에 남는다 ──
+  {
+    const rsrc = fs.readFileSync('scripts/magazine-auto-register-ready.mjs', 'utf8')
+    const finishBody = rsrc.slice(rsrc.indexOf('const finish = async'), rsrc.indexOf('// ── write 전 안전장치'))
+    check('🔴 반례6 report 를 finish() 안에서 쓴다', /writeReport\(report, \{ write \}\)/.test(finishBody))
+    check('🔴 반례6 returned 를 정한 뒤에 쓴다',
+      finishBody.indexOf('report.returned =') < finishBody.indexOf('writeReport(report'))
+    check('🔴 반례6 leftOnBranch 를 정한 뒤에 쓴다',
+      finishBody.indexOf('report.leftOnBranch =') < finishBody.indexOf('writeReport(report'))
+    check('🔴 반례6 exitCode 를 담는다',
+      finishBody.indexOf('report.exitCode = exitCode') < finishBody.indexOf('writeReport(report'))
+    // 🔴 `function writeReport(report, …)` 선언부는 호출이 아니다 — 세지 않는다
+    check('🔴 반례6 finish() 밖에서 report 를 쓰지 않는다',
+      (rsrc.match(/(?<!function )writeReport\(report/g) ?? []).length === 1,
+      `호출 ${(rsrc.match(/(?<!function )writeReport\(report/g) ?? []).length}회`)
+    check('  반례6 report 뼈대에 세 칸이 있다',
+      /returned: null,/.test(rsrc) && /leftOnBranch: null,/.test(rsrc) && /exitCode: null,/.test(rsrc))
+  }
+
+  // ── 반례 7 · CI 와 runtime 의 파일 유무가 달라도 결과가 같다 ──
+  {
+    check('🔴 반례7 후보 선택이 git 추적본만 본다',
+      /spawnSyncTop\('git', \['ls-files'/.test(fs.readFileSync('scripts/magazine-m3a-check.mjs', 'utf8')))
+    const probe = `drafts/magazine/_m3a-env-probe-${process.pid}`
+    try {
+      fs.mkdirSync(probe, { recursive: true })
+      for (const f of ['brief.md', 'review.ts', 'draft.md', 'article-draft.ts']) fs.writeFileSync(path.join(probe, f), '// probe\n')
+      const tracked = new Set(spawnSyncTop('git', ['ls-files', '--', 'drafts/magazine']).split('\n').filter(Boolean))
+      const pickedAgain = [...new Set([...tracked].map((f) => f.split('/')[2]))]
+        .filter((n) => n && !n.startsWith('_')).sort()
+        .filter((n) => ['brief.md', 'review.ts', 'draft.md', 'article-draft.ts'].every((f) => tracked.has(`drafts/magazine/${n}/${f}`)))
+        .slice(0, 3)
+      check('🔴 반례7 미추적 draft 를 더해도 후보가 같다',
+        pickedAgain.join(',') === FIXTURE_SLUGS.join(','), `${pickedAgain.join(',')} vs ${FIXTURE_SLUGS.join(',')}`)
+    } finally { fs.rmSync(probe, { recursive: true, force: true }) }
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)

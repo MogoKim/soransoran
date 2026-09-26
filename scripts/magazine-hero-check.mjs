@@ -48,10 +48,18 @@ console.log('\n══════ 실패 케이스')
   expect('  사유가 imageMode 다', has(p, 'imageMode=OPTIONAL'), true)
 }
 {
-  // hero 이미 있음 + force 없음 — which-clinic 은 등록돼 큐에 없다
+  /**
+   * 🔴 **낡은 기대를 폐기했다** (2026-09-26 운영 사고 · SUPERSEDED).
+   *    앞판은 `hero 이미 있음 + force 없음 → BLOCKED` 를 기대했다.
+   *    그 규칙 때문에, 변환기가 `heroImage` 자리표시자를 되돌려 놓은 글은
+   *    **파일이 멀쩡히 있는데도** 매 회차 HERO_FAILED 로 막혔다.
+   *    지금은 유효한 hero 를 **재사용**한다. 막는 것은 손상된 hero 뿐이다.
+   */
   const p = planHero({ slug: 'which-clinic-menopause', alt: GOOD_ALT, queueItem: null })
-  expect('hero 이미 있음 + force 없음 → BLOCKED', p.verdict, 'BLOCKED')
-  expect('  사유가 hero 존재다', has(p, 'hero 가 이미 있다'), true)
+  expect('hero 이미 있음 + force 없음 → READY (재사용)', p.verdict, 'READY')
+  expect('  hero 존재가 더 이상 사유가 아니다', has(p, 'hero 가 이미 있다'), false)
+  expect('  재사용으로 표시된다', p.checks.reuseExisting, true)
+  expect('  크기를 확인했다', p.checks.heroSize?.width, 1200)
 }
 {
   const p = planHero({ slug: 'which-clinic-menopause', alt: undefined, queueItem: null, force: true })
@@ -77,7 +85,12 @@ console.log('\n══════ 성공 경로 (파일은 쓰지 않는다)')
 {
   const required = queue.find((i) => i.imageMode === 'REQUIRED')
   const p = planHero({ slug: required.slug, alt: GOOD_ALT, queueItem: required })
-  expect(`REQUIRED(${required.slug}) 은 draft 가 없어 BLOCKED`, p.verdict, 'BLOCKED')
+  /**
+   * 🔴 **이름이 틀린 시험이었다** (SUPERSEDED). "draft 가 없어" 라고 적혀 있었지만
+   *    실제로 막던 것은 `hero 가 이미 있다` 쪽이었다 — 재료는 네 개 다 있었다.
+   *    재사용이 들어오면서 이 조합은 READY 가 맞다.
+   */
+  expect(`REQUIRED(${required.slug}) 은 재료가 갖춰져 READY`, p.verdict, 'READY')
   expect('  imageMode 사유는 없다 — REQUIRED 라서', has(p, 'imageMode='), false)
 }
 
