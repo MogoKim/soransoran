@@ -255,8 +255,17 @@ console.log('\n⑨ 배선 — 🔴 판정이 실제 쓰기 경로에 닿는가')
     /publishedTodayInTx = await tx\.personaActivityLog\.count/.test(tx))
   check('🔴 [회귀] 판정이 밖에서 받은 값을 쓰지 않는다',
     /publishedToday: publishedTodayInTx/.test(tx) && !/publishedToday: input\.publishedToday/.test(tx))
-  check('🔴 직렬화 충돌을 재시도하지 않는다',
-    /isSerializationConflict\(err\)/.test(tx) && !/retry|재시도한다/.test(tx))
+  /**
+   * 🔴 **재시도 계약 — 정확히 한 번** (2026-09-26 개정). 앞판 문구("재시도하지 않는다")는 코드가
+   *    바뀐 뒤에도 초록이었다(거짓 초록). 지금 계약: 충돌이면 한 번만 다시 시도하고(처음부터 다시 셈),
+   *    두 번째 충돌은 실패다. 시도 횟수를 소스 구조로 고정한다 — 재시도를 없애도 늘려도 빨개진다.
+   */
+  const outer = tx.slice(tx.indexOf('export async function publishOriginalPostTx'), tx.indexOf('async function publishAttempt'))
+  check('🔴 🔴 **직렬화 충돌은 정확히 한 번 재시도 — 두 번째 충돌은 실패**',
+    /if \(isSerializationConflict\(err\)\) return \{ kind: 'conflict' \}/.test(tx)
+    && (outer.match(/await publishAttempt\(prisma, input, deps\)/g) ?? []).length === 2
+    && /const first = await publishAttempt\(prisma, input, deps\)\s*if \(first\.kind === 'conflict'\) \{\s*const second = await publishAttempt\(prisma, input, deps\)\s*if \(second\.kind === 'conflict'\) \{\s*return \{ kind: 'error'/.test(outer)
+    && !/while\s*\(|for\s*\(/.test(outer))
   check('🔴 조건부 UPDATE 가 그대로 있다',
     /status: \{ in: \['APPROVED', 'EDITED'\] \}, createdPostId: null/.test(tx))
   check('🔴 cap 정본(ActivityLog) write 가 그대로 있다', /kind: 'post'/.test(tx))

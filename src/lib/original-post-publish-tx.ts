@@ -285,6 +285,27 @@ async function publishAttempt(
             detail: `${stage} · 도래 ${slot.dueCount} · 하루 목표 ${target} · 오늘 발행 ${publishedTodayInTx} — ${slot.reason}`,
           }
         }
+        /**
+         * 🔴 **같은 후보 경합의 패자** (2026-09-26 마스터). 도래 슬롯이 2 이상이면 슬롯 게이트는
+         *    열려 있는데, 이 러너가 고른 후보를 다른 러너가 계획 뒤 먼저 발행했을 수 있다.
+         *    그 경우만 정상 무발행으로 가른다 — 셋 다 참이어야 한다:
+         *      ① 행이 이미 발행됐다(createdPostId)
+         *      ② 그 글의 발행 기록이 **오늘**(txNow 의 KST 날짜) 있다
+         *      ③ 트랜잭션 안 오늘 발행 수가 러너가 밖에서 본 수보다 늘었다 — 계획 **뒤**에 누가 냈다
+         *    하나라도 아니면(예: 전날 발행된 행을 고른 선택기 결함) 아래 judgePublish 가
+         *    ALREADY_PUBLISHED 로 막고 러너는 실패한다.
+         */
+        if (row.createdPostId !== null && publishedTodayInTx > input.publishedToday) {
+          const mine = await tx.personaActivityLog.count({
+            where: { kind: 'post', targetId: row.createdPostId, createdAt: { gte: kstDayStart(txNow) } },
+          })
+          if (mine > 0) {
+            return {
+              kind: 'blocked', publishedTodayInTx, code: 'TARGET_RACE_LOST',
+              detail: `계획 때 발행 ${input.publishedToday} → 지금 ${publishedTodayInTx} · 이 후보는 오늘 다른 러너가 먼저 냈다`,
+            }
+          }
+        }
         dailyCap = target
       } else {
         dailyCap = input.mode.dailyCap

@@ -183,13 +183,19 @@ export const PUBLISH_BLOCK_CODES = [
   'SLOT_CONSUMED',
   /** 🔴 예약 발행 — 운영 창 밖이거나 아직 도래한 슬롯이 없다. 정상 무발행이다 */
   'SLOT_CLOSED',
+  /**
+   * 🔴 예약 발행 — 이 러너가 계획한 **같은 후보**를 계획 뒤 다른 러너가 **오늘** 먼저 발행했다.
+   *    정상 무발행이다. 🔴 `ALREADY_PUBLISHED` 전체를 정상으로 보지 않는다 — 전날 발행된 행을
+   *    고른 선택기 결함은 여전히 실패다.
+   */
+  'TARGET_RACE_LOST',
 ] as const
 /**
  * 🔴 **정상 무발행** — 예약 러너가 이 코드로 막히면 실패가 아니다(exit 0).
  *    슬롯은 트랜잭션 안에서 다시 세므로, 늦게 온 러너가 이미 소비된 슬롯을 본 것뿐이다.
  *    그 밖의 차단·오류(무결성·DB·정합)는 기존처럼 실패다.
  */
-export const NORMAL_NO_PUBLISH_CODES = ['SLOT_CONSUMED', 'SLOT_CLOSED'] as const satisfies readonly (typeof PUBLISH_BLOCK_CODES)[number][]
+export const NORMAL_NO_PUBLISH_CODES = ['SLOT_CONSUMED', 'SLOT_CLOSED', 'TARGET_RACE_LOST'] as const satisfies readonly (typeof PUBLISH_BLOCK_CODES)[number][]
 export type PublishBlockCode = (typeof PUBLISH_BLOCK_CODES)[number]
 
 export const PUBLISH_BLOCK_LABEL: Record<PublishBlockCode, string> = {
@@ -205,6 +211,7 @@ export const PUBLISH_BLOCK_LABEL: Record<PublishBlockCode, string> = {
   AUTO_ASSIGN_STALE: '🔴 계획한 Persona 를 발행 직전에 다시 판정했더니 탈락했다 — 말투·생활사·실회원·주간 상한·최소 간격',
   SLOT_CONSUMED: '도래한 슬롯을 이미 다 냈다 — 다른 러너가 먼저 소비했다(정상 무발행)',
   SLOT_CLOSED: '운영 창 밖이거나 아직 도래한 슬롯이 없다(정상 무발행)',
+  TARGET_RACE_LOST: '계획한 후보를 다른 러너가 계획 뒤 오늘 먼저 발행했다(정상 무발행)',
 }
 
 export type PublishCandidate = {

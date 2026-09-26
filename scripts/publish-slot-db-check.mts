@@ -171,6 +171,48 @@ async function main(): Promise<void> {
       m1.kind === 'published' && m2.kind === 'blocked' && m2.code === 'DAILY_CAP', `${m1.kind}/${JSON.stringify(m2)}`)
   }
 
+  console.log('\n⑧ 🔴 🔴 같은 후보 경합 — 09:30 d10 · 도래 2 · 두 러너가 같은 후보를 골랐다')
+  {
+    await wipe()
+    const [a, b] = [await cand(), await cand()]
+    const at = K('2026-10-13T09:30:00')
+    const r1 = await scheduled(a, at, 'd10', envOf('d10'), 0)
+    const r2 = await scheduled(a, K('2026-10-13T09:31:00'), 'd10', envOf('d10'), 0) // 같은 바깥 스냅샷(발행 0)
+    const qa = await q(a)
+    check('🔴 🔴 **순차 — Post 정확히 1 · Queue·ActivityLog 중복 0**',
+      r1.kind === 'published' && (await posts()) === 1 && (await logs()) === 1 && r1.kind === 'published' && qa.createdPostId === r1.postId, `${r1.kind}/${r2.kind}`)
+    check('🔴 🔴 **패자 — TARGET_RACE_LOST (정상 무발행 · ALREADY_PUBLISHED 아님)**',
+      r2.kind === 'blocked' && r2.code === 'TARGET_RACE_LOST', JSON.stringify(r2))
+    const r3 = await scheduled(b, K('2026-10-13T09:40:00'), 'd10', envOf('d10'), 1)
+    check('🔴 🔴 **남은 두 번째 슬롯 — 다음 heartbeat 가 다른 후보로 소비**', r3.kind === 'published' && (await posts()) === 2, JSON.stringify(r3))
+
+    await wipe()
+    const c = await cand()
+    const [c1, c2] = await Promise.all([scheduled(c, at, 'd10', envOf('d10'), 0), scheduled(c, at, 'd10', envOf('d10'), 0)])
+    const loser = c1.kind === 'published' ? c2 : c1
+    check('🔴 🔴 **동시 — Post 정확히 1 · 패자는 재시도 뒤 TARGET_RACE_LOST**',
+      (await posts()) === 1 && (await logs()) === 1 && [c1, c2].filter((x) => x.kind === 'published').length === 1
+      && loser.kind === 'blocked' && loser.code === 'TARGET_RACE_LOST', `${c1.kind}/${JSON.stringify(loser)}`)
+
+    // 🔴 선택기 결함은 여전히 실패다 — 전날 발행된 행을 오늘 골랐다
+    await wipe()
+    const [old, other] = [await cand(), await cand()]
+    const y = await scheduled(old, K('2026-10-13T09:30:00'), 'd10', envOf('d10'), 0) // 전날 발행
+    const t1 = await scheduled(other, K('2026-10-14T08:10:00'), 'd10', envOf('d10'), 0) // 오늘 다른 글 1
+    const bug = await scheduled(old, K('2026-10-14T09:30:00'), 'd10', envOf('d10'), 0) // 밖 0 · 안 1 · 대상은 어제 발행
+    check('🔴 🔴 **전날 발행된 행을 고른 선택기 결함 → ALREADY_PUBLISHED(실패) · 정상 무발행으로 숨기지 않는다**',
+      y.kind === 'published' && t1.kind === 'published' && bug.kind === 'blocked' && bug.code === 'ALREADY_PUBLISHED', JSON.stringify(bug))
+    const bug2 = await scheduled(old, K('2026-10-14T09:31:00'), 'd10', envOf('d10'), 1) // 밖 1 · 안 1 — 계획 뒤 변화 없음
+    check('🔴 계획 뒤 발행 수가 늘지 않았으면 경합이 아니다 → ALREADY_PUBLISHED', bug2.kind === 'blocked' && bug2.code === 'ALREADY_PUBLISHED', JSON.stringify(bug2))
+    // 🔴 오늘 발행된 행 — 러너가 밖에서 이미 그 발행을 보고도(밖 1 · 안 1) 그 행을 골랐다 → 선택기 결함
+    await wipe()
+    const td = await cand()
+    const t0 = await scheduled(td, K('2026-10-15T08:10:00'), 'd10', envOf('d10'), 0)
+    const seen = await scheduled(td, K('2026-10-15T09:30:00'), 'd10', envOf('d10'), 1)
+    check('🔴 🔴 **오늘 발행된 행이지만 계획 때 이미 그 발행을 봤다(밖 1 = 안 1) → ALREADY_PUBLISHED(실패)**',
+      t0.kind === 'published' && seen.kind === 'blocked' && seen.code === 'ALREADY_PUBLISHED', JSON.stringify(seen))
+  }
+
   console.log('\n⑦ 🔴 정상 발행 — Post · Queue · ActivityLog 원자적 정합')
   {
     await wipe()

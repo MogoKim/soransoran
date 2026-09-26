@@ -686,6 +686,13 @@ console.log('\n⑲ 🔴 🔴 예약 발행 — 최종 권한은 트랜잭션 안
   check('🔴 🔴 **슬롯 경쟁 패자(SLOT_*)는 러너가 정상 무발행 exit 0 — 그 밖은 기존처럼 실패**',
     /if \(res\.kind === 'blocked' && \(NORMAL_NO_PUBLISH_CODES as readonly string\[\]\)\.includes\(res\.code\)\) \{[\s\S]{0,300}process\.exit\(0\)/.test(runner)
     && /if \(res\.kind !== 'published'\) \{\s*await prisma\.\$disconnect\(\)\s*fail\(/.test(runner))
+  const pub = codeOnly('src/lib/original-post-publish.ts')
+  check('🔴 🔴 **정상 무발행 코드는 정확히 셋 — ALREADY_PUBLISHED 는 여기 없다(선택기 결함을 숨기지 않는다)**',
+    /export const NORMAL_NO_PUBLISH_CODES = \['SLOT_CONSUMED', 'SLOT_CLOSED', 'TARGET_RACE_LOST'\] as const/.test(pub))
+  check('🔴 🔴 **TARGET_RACE_LOST 는 좁다 — 행 발행됨 · 계획 뒤 발행 수 증가 · 그 글의 발행 기록이 오늘**',
+    /if \(row\.createdPostId !== null && publishedTodayInTx > input\.publishedToday\) \{/.test(sched)
+    && /where: \{ kind: 'post', targetId: row\.createdPostId, createdAt: \{ gte: kstDayStart\(txNow\) \} \}/.test(sched)
+    && /if \(mine > 0\) \{\s*return \{\s*kind: 'blocked', publishedTodayInTx, code: 'TARGET_RACE_LOST'/.test(sched))
   check('🔴 manual-live 는 사람이 부르는 publish-live 만 쓴다', /mode: \{ kind: 'manual-live', dailyCap: RELEASE_DAILY_CAP \}/.test(live))
   check('🔴 🔴 **운영 호출자는 시계를 주입하지 않는다 — 두 호출 모두 인자 둘**',
     [runner, live].every((c) => { const m = c.match(/publishOriginalPostTx\(prisma, \{[\s\S]*?\}\)/); return m !== null && !/\}, \{ now/.test(m[0]) }))
