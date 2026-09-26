@@ -465,7 +465,7 @@ async function main(): Promise<void> {
       after.decidedBy === before.decidedBy && after.decidedAt?.getTime() === before.decidedAt?.getTime()
       && wd?.prevStatus === 'APPROVED' && wd.withdrawnByUserId === founderUser && wd.reasonCode === 'GATE_MISS_AI_TONE')
     const stock1 = await loadPublishableStock(prisma, NOW, { autoReadyOpen: false })
-    const pub1 = await publishOriginalPostTx(prisma, { queueId: ap.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: {} })
+    const pub1 = await publishOriginalPostTx(prisma, { queueId: ap.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: {} })
     check('🔴 🔴 **철회된 행 — selector 대상 0 · 발행 트랜잭션 0**',
       !stock1.targets.some((t) => t.id === ap.id) && pub1.kind === 'blocked' && (await snap(ap.id)).createdPostId === null, JSON.stringify(pub1))
     const ed = await restored({ edited: true })
@@ -484,7 +484,7 @@ async function main(): Promise<void> {
     check('🔴 DECLINED + yes → 기록', (await one(dc, { hardDefect: 'yes', reasons: ['원래 문제'] }, 'b6-dc'))?.result === 'recorded' && await hd(dc.id) === 'declined/yes')
     // ── 발행 · 철회 순서 — 먼저 성공한 쪽만 남는다 ──
     const alone = await restored()
-    const pa = await publishOriginalPostTx(prisma, { queueId: alone.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: {} })
+    const pa = await publishOriginalPostTx(prisma, { queueId: alone.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: {} })
     check('선행 — 이 행은 단독이면 실제로 발행된다 (경쟁 검사가 공허하지 않다)', pa.kind === 'published', JSON.stringify(pa))
     const late = await one(alone, { hardDefect: 'yes', reasons: ['발행 뒤 철회 시도'], withdraw: true, declineReason: 'TOPIC_UNFIT' }, 'b6-late')
     check('🔴 🔴 **발행 → 철회 순서 — 철회 거절 · 기록 0 · PUBLISHED 그대로**',
@@ -495,7 +495,7 @@ async function main(): Promise<void> {
     for (let k = 0; k < 4; k += 1) {
       const race = await restored()
       const [p, w] = await Promise.all([
-        publishOriginalPostTx(prisma, { queueId: race.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: {} }),
+        publishOriginalPostTx(prisma, { queueId: race.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: {} }),
         one(race, { hardDefect: 'yes', reasons: ['경쟁'], withdraw: true, declineReason: 'TOPIC_UNFIT' }, `b6-race-${k}`),
       ])
       const q = await snap(race.id)

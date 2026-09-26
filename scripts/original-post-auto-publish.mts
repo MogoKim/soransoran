@@ -38,7 +38,7 @@ import { voiceInputOf } from '../src/lib/original-post-auto-publish'
 // 🔴 생성 말투 → 최종 author. 여기서 읽지 않으면 연결이 끊긴다
 
 import { planStore } from '../src/lib/original-post-match-store'
-import { DAILY_PUBLISH_CAP, kstDayStart } from '../src/lib/original-post-publish'
+import { DAILY_PUBLISH_CAP, kstDayStart, NORMAL_NO_PUBLISH_CODES } from '../src/lib/original-post-publish'
 import { activeScale, applyScale, describeScale } from '../src/lib/scale-runtime'
 import { judgeCatchUp, type TriggerKind } from '../src/lib/publish-slot-catchup'
 import { stageVerdicts, simulateStage } from '../src/lib/scale-readiness'
@@ -463,16 +463,30 @@ if (target.matchedPersonaId === null && isAutoTarget) {
 }
 
 // ── ⑦ 발행 — 🔴 되돌릴 수 없다 ──
-// 🔴 상한을 주입한다 — 트랜잭션 안 재판정도 같은 값을 쓴다
+/**
+ * 🔴 **예약 발행이다 — 숫자 상한을 넘기지 않는다** (2026-09-26 마스터 P0 · 예약 지연).
+ *    위의 `judgeCatchUp` 은 로그·사전 필터다. 최종 발행 권한은 트랜잭션 안에서 **트랜잭션 시계**로
+ *    다시 센 도래 슬롯과 오늘 발행 수에 있다. 단계는 env 천장으로 누르고 하루 목표는 정본에서 온다.
+ */
 const res = await publishOriginalPostTx(prisma, {
-  queueId: target.id, publishedToday, dailyCap: RELEASE_DAILY_CAP,
-  // 🔴 자동 도장 행은 트랜잭션 안에서 스위치·도장·경고·DB 증거·결함을 다시 본다
+  queueId: target.id, publishedToday,
+  mode: { kind: 'scheduled', releaseStage: scale.releaseStage },
+  // 🔴 자동 도장 행은 트랜잭션 안에서 스위치·도장·경고·DB 증거·결함을 다시 본다 · 단계 천장도 이 env 다
   autoReadyEnv: process.env,
   // 🔴 자동 행의 배정은 트랜잭션 안에서 쓴다(사람 행은 undefined)
   autoAssign,
-  // 🔴 숫자 상한이 아니라 **단계**를 넘긴다 — 트랜잭션이 env 천장으로 누르고 정본 상한을 얻는다
-  releaseStage: scale.releaseStage,
 })
+/**
+ * 🔴 **슬롯 경쟁 패자는 정상 무발행이다 — exit 0.** 다른 러너가 이미 이 슬롯을 소비했거나(늦게 온
+ *    GitHub 예약 · 정시 launchd), 그 사이 운영 창이 닫혔다. 아무것도 쓰지 않았다.
+ *    🔴 그 밖의 차단·오류는 기존처럼 실패다(non-zero).
+ */
+if (res.kind === 'blocked' && (NORMAL_NO_PUBLISH_CODES as readonly string[]).includes(res.code)) {
+  console.log(`\n⑤ 발행하지 않는다 — 정상 무발행 · ${res.code} · ${res.detail}`)
+  console.log('   🔴 Post 0 · Queue 변화 0 · ActivityLog 0 — 슬롯은 트랜잭션 안에서 다시 셌다\n')
+  await prisma.$disconnect()
+  process.exit(0)
+}
 if (res.kind !== 'published') {
   await prisma.$disconnect()
   fail(res.kind === 'blocked' ? `발행이 막혔습니다 — ${res.code} · ${res.detail}` : `발행 오류 — ${res.message}`)

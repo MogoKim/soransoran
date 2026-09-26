@@ -371,8 +371,13 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
     const stock = codeOf('scripts/lib/publishable-stock.mts')
     return !/installFromEnv\(/.test(stock) && /resolveScale\(/.test(stock)
   })())
-  check('G 🔴 발행 러너가 그 값을 write 경로에 넘긴다',
-    /publishOriginalPostTx\(prisma, \{\s*queueId: target\.id, publishedToday, dailyCap: RELEASE_DAILY_CAP,/
+  /**
+   * 🔴 **예약 러너는 숫자 상한이 아니라 단계를 넘긴다** (2026-09-26 마스터 P0 · 예약 지연).
+   *    트랜잭션이 그 단계를 env 천장으로 누르고, 하루 목표·도래 슬롯을 트랜잭션 시계로 다시 센다.
+   *    설치된 단계가 write 경로에 도달해야 한다는 원래 목적은 그대로다 — 값이 숫자에서 단계로 바뀌었다.
+   */
+  check('G 🔴 발행 러너가 설치된 단계를 write 경로에 넘긴다 (scheduled)',
+    /publishOriginalPostTx\(prisma, \{\s*queueId: target\.id, publishedToday,\s*mode: \{ kind: 'scheduled', releaseStage: scale\.releaseStage \},/
       .test(users['auto-publish']))
   // 🔴 러너는 이제 공용 준비 함수(`prepareCandidates`)를 통해 매칭한다.
   //    **주입 자체가 사라지면 안 된다** — 그 함수가 caps 를 planBatch 로 넘기는지도 함께 본다
@@ -390,8 +395,9 @@ console.log('\n③-A~G 필수 행동 (설치·주입·강제)')
   check('G 🔴 write 경로가 모듈 상수를 상한으로 쓰지 않는다',
     !/dailyCap: DAILY_PUBLISH_CAP/.test(users['auto-publish'])
     && !/dailyCap: DAILY_PUBLISH_CAP/.test(read('scripts/original-post-publish-live.mts')))
-  check('G 🔴 트랜잭션 write 도 주입값을 쓴다',
-    /dailyCap: input\.dailyCap/.test(read('src/lib/original-post-publish-tx.ts')))
+  check('G 🔴 트랜잭션 write — 예약은 정본 단계 목표 · 수동 단건은 주입값',
+    /dailyCap = target/.test(read('src/lib/original-post-publish-tx.ts'))
+    && /dailyCap = input\.mode\.dailyCap/.test(read('src/lib/original-post-publish-tx.ts')))
   resetScale()
 }
 
@@ -426,8 +432,9 @@ console.log('\n③-H 수동 발행기 상한 · health 판정 (행동)')
     resolveScale({ [CAPACITY_ENV]: 'd10', [RELEASE_ENV]: 'd10' }, { readiness: allReady })
       .releaseProfile.dailyTarget === 10)
   // 🔴 트랜잭션 재판정은 그대로다
-  check('H 🔴 트랜잭션 재판정이 주입 상한을 쓴다',
-    /dailyCap: input\.dailyCap/.test(read('src/lib/original-post-publish-tx.ts')))
+  check('H 🔴 트랜잭션 재판정 — 수동 단건(manual-live)은 주입 상한 · 예약은 단계 목표로 다시 판정한다',
+    /dailyCap = input\.mode\.dailyCap/.test(read('src/lib/original-post-publish-tx.ts'))
+    && /const target = PROFILES\[stage\]\.dailyTarget/.test(read('src/lib/original-post-publish-tx.ts')))
 
   // ── health 판정을 **실제 함수로** 구성해 본다 ──
   //    🔴 필드 존재가 아니라 level·target·dailyCap 이 맞는지 본다

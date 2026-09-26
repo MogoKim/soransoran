@@ -33,6 +33,7 @@
 import { PERSONA_FOR_MATCH_SELECT, personaForMatchOf, judgeAutoAssignment } from './persona-for-match'
 import { PROFILES, releaseCapsOf, type ReleaseStage } from './scale-profile'
 import { boundedReleaseStage } from './scale-runtime'
+import { judgeCatchUp, kstMinuteOfDay, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
 import type { Prisma, PrismaClient } from '@prisma/client'
@@ -72,6 +73,16 @@ export type PublishResult =
   | { kind: 'blocked'; code: PublishBlockCode; detail: string; publishedTodayInTx?: number }
   | { kind: 'error'; message: string }
 
+export type PublishMode =
+  | { kind: 'scheduled'; releaseStage: unknown }
+  | { kind: 'manual-live'; dailyCap: number; releaseStage?: ReleaseStage }
+
+/**
+ * 🔴 **시계 주입점 — 검사 전용이다.** 운영 호출자(러너 · publish-live)는 이 인자를 넘기지 않는다
+ *    (소스 검사가 막는다). 트랜잭션 시도마다 **한 번** 읽는다 — 그 값이 txNow 다.
+ */
+export type PublishTxDeps = { now?: () => Date }
+
 export type PublishTxInput = {
   queueId: string
   /**
@@ -83,16 +94,19 @@ export type PublishTxInput = {
    */
   publishedToday: number
   /**
-   * 🔴 **하루 상한을 주입받는다** (2026-09-08).
-   *    모듈 상수를 읽으면 `loadEnvLocal()`·GHA vars 로 정한 단계가 이 쓰기 경로에
-   *    도달하지 못한다 — 관제는 감속했다고 말하는데 여기서는 옛 값으로 나간다.
-   *    주지 않으면 `judgePublish` 가 가장 안전한 상수(1건)로 떨어뜨린다.
+   * 🔴 **발행 방식 — 필수이고 둘 중 하나다** (2026-09-26 마스터 P0 · 예약 지연).
    *
-   * 🔴 **계약 부채 (2026-09-25 · auto-ready-v2 PR #573)** — Persona 상한은 이제 단계 이름을 받아
-   *    env 천장으로 누르지만(`releaseStage`), 이 하루 상한은 **아직 호출자가 넘기는 숫자**다.
-   *    같은 방식(단계 → `PROFILES[stage].dailyTarget`)으로 옮기는 일은 기반 PR 밖에서 한다.
+   *    · `scheduled` — 예약 러너. **단계 이름만** 받는다. 하루 목표는 정본 `PROFILES[stage].dailyTarget`,
+   *      슬롯은 `judgeCatchUp`(기존 catch-up 계약)으로 **이 트랜잭션의 시계**로 다시 센다.
+   *      발행은 `오늘 발행 수 < min(도래 슬롯 수, 하루 목표)` 일 때만이다. 호출자 숫자 상한은 없다.
+   *      단계는 env 천장(`boundedReleaseStage` · `autoReadyEnv`)으로 누른다.
+   *    · `manual-live` — 사람이 부르는 긴급 단건 경로(`original-post-publish-live`). 기존 동작 그대로 —
+   *      주입된 `dailyCap` 을 쓰고 슬롯 게이트를 적용하지 않는다.
+   *
+   * 🔴 앞판은 `dailyCap` 숫자 하나를 두 경로가 같이 썼다. 러너 밖에서 센 "발행 0" 사진을 믿은 두 러너가
+   *    순차로 들어오면, 도래 슬롯이 1건인데 2건이 나갔다(격리 DB 재현) — 트랜잭션은 상한만 다시 셌다.
    */
-  dailyCap: number
+  mode: PublishMode
   /**
    * 🔴 **자동 READY env** (2026-09-25 · auto-ready-v2). 스위치는 여기서 읽고, 증거·결함은
    *    **이 트랜잭션 안에서 DB 로** 다시 판정한다 — 호출자가 "열림" 을 정하지 않는다.
@@ -114,14 +128,6 @@ export type PublishTxInput = {
     personaId: string
     matchMeta: unknown
   }
-  /**
-   * 🔴 **자동 행 Persona 재판정에 쓸 공개 단계** (2026-09-25 마스터 지적).
-   *    앞판은 `caps` 숫자를 그대로 받았다 — 호출자가 `{ postsPerWeek: 1e9 }` 를 넘기면 상한이 열렸다.
-   *    이제 단계 이름만 받고, 상한은 정본 `releaseCapsOf(PROFILES[stage])` 에서 얻는다.
-   *    그 단계도 env 천장(`boundedReleaseStage`)으로 누른다. 없거나 모르는 값이면 가장 안전한 단계.
-   *    🔴 `matchedAt` 도 받지 않는다 — 배정 시각은 이 트랜잭션의 시계 하나다.
-   */
-  releaseStage?: ReleaseStage
 }
 
 /**
@@ -131,7 +137,27 @@ export type PublishTxInput = {
 export async function publishOriginalPostTx(
   prisma: PrismaClient,
   input: PublishTxInput,
+  deps: PublishTxDeps = {},
 ): Promise<PublishResult> {
+  /**
+   * 🔴 **직렬화 충돌은 한 번만 다시 시도한다** (2026-09-26 마스터 P0).
+   *    다시 시도해도 슬롯·오늘 발행 수·상태를 **처음부터 다시 센다** — 이미 소비됐으면
+   *    `SLOT_CONSUMED`(정상 무발행)이고, 두 번째도 충돌하면 실패다. 상한을 넘기려는 재시도가 아니다.
+   */
+  const first = await publishAttempt(prisma, input, deps)
+  if (first.kind === 'conflict') {
+    const second = await publishAttempt(prisma, input, deps)
+    if (second.kind === 'conflict') {
+      return { kind: 'error', message: '다른 발행과 두 번 연속 부딪혔다 — 이 회차는 실패다. 공개 write 는 남지 않았다.' }
+    }
+    return second
+  }
+  return first
+}
+
+async function publishAttempt(
+  prisma: PrismaClient, input: PublishTxInput, deps: PublishTxDeps,
+): Promise<PublishResult | { kind: 'conflict' }> {
   try {
     return await prisma.$transaction(async (tx) => {
       /**
@@ -139,7 +165,7 @@ export async function publishOriginalPostTx(
        *    최소 간격 · 오늘 발행 수 · 단계 천장이 모두 이 값을 쓴다. 호출자 시각을 받지 않는다 —
        *    미래 `matchedAt` 을 넘겨 간격 계산을 틀어지게 하는 길을 없앤다.
        */
-      const txNow = new Date()
+      const txNow = (deps.now ?? (() => new Date()))()
       const row = await tx.originalPostApprovalQueue.findUnique({
         where: { id: input.queueId },
         select: {
@@ -201,7 +227,7 @@ export async function publishOriginalPostTx(
         const which = pinned ? '기존 배정' : '계획한 배정'
         if (pr === null) return { kind: 'blocked', code: 'AUTO_ASSIGN_STALE', detail: `${which} Persona 가 없다` }
         const forMatch = await personaForMatchOf(tx, pr, txNow, { excludeQueueId: row.id })
-        const stage = boundedReleaseStage(input.releaseStage, input.autoReadyEnv ?? {}, txNow)
+        const stage = boundedReleaseStage(input.mode.releaseStage, input.autoReadyEnv ?? {}, txNow)
         // 🔴 계획기(`planPublishBatch`)와 **같은 판정 함수**다 — 둘이 갈리면 막히는 행이 선두를 차지한다
         const v = judgeAutoAssignment({
           persona: forMatch, gateResults: row.gateResults,
@@ -235,6 +261,35 @@ export async function publishOriginalPostTx(
         where: { kind: 'post', createdAt: { gte: kstDayStart(txNow) } },
       })
 
+      /**
+       * ── 🔴 **예약 발행의 최종 권한은 여기다** (2026-09-26 마스터 P0 · 예약 지연) ──
+       *    러너 밖의 `judgeCatchUp` 은 로그·사전 필터다. GitHub 예약은 110~408분 늦게 오고,
+       *    두 러너가 같은 "발행 0" 사진을 볼 수 있다. 그래서 **같은 판정 함수**를 이 트랜잭션의
+       *    시계와 이 트랜잭션이 다시 센 오늘 발행 수로 한 번 더 부른다.
+       *    · 운영 창·KST 날짜·도래 슬롯은 `judgeCatchUp` 계약 그대로(시각이 근거 → `local`)
+       *    · 하루 목표는 정본 `PROFILES[stage].dailyTarget` — 호출자 숫자가 아니다
+       *    · 허용: 오늘 발행 수 < min(도래 슬롯 수, 하루 목표)
+       *    막히면 아무것도 쓰지 않는다(Post 0 · Queue 0 · ActivityLog 0) — 정상 무발행이다.
+       */
+      let dailyCap: number
+      if (input.mode.kind === 'scheduled') {
+        const stage = boundedReleaseStage(input.mode.releaseStage, input.autoReadyEnv ?? {}, txNow)
+        const target = PROFILES[stage].dailyTarget
+        const slot = judgeCatchUp({ stage, now: txNow, trigger: 'local', cron: null, publishedToday: publishedTodayInTx })
+        const limit = Math.min(slot.dueCount, target)
+        if (!slot.run || !(publishedTodayInTx < limit)) {
+          return {
+            kind: 'blocked', publishedTodayInTx,
+            // 🔴 창 밖이거나 아직 도래 슬롯이 없으면 CLOSED · 도래한 만큼 이미 냈으면 CONSUMED
+            code: kstMinuteOfDay(txNow) > PUBLISH_WINDOW_END_MINUTE || slot.dueCount === 0 ? 'SLOT_CLOSED' : 'SLOT_CONSUMED',
+            detail: `${stage} · 도래 ${slot.dueCount} · 하루 목표 ${target} · 오늘 발행 ${publishedTodayInTx} — ${slot.reason}`,
+          }
+        }
+        dailyCap = target
+      } else {
+        dailyCap = input.mode.dailyCap
+      }
+
       // 🔴 트랜잭션 안에서 다시 판정한다. 배정 시점의 판정을 믿지 않는다
       const verdict = judgePublish(
         {
@@ -252,8 +307,8 @@ export async function publishOriginalPostTx(
           killSwitchEnabled: sw?.enabled === true,
           // 🔴 **트랜잭션 안에서 다시 센 값**이다. 밖에서 받은 사진을 쓰지 않는다
           publishedToday: publishedTodayInTx,
-          // 🔴 주입값이다. 트랜잭션 안에서 다시 판정할 때도 같은 상한을 쓴다
-          dailyCap: input.dailyCap,
+          // 🔴 예약이면 정본 단계 목표 · 수동 단건이면 주입값 — 위에서 mode 로 정했다
+          dailyCap,
         },
       )
       if (!verdict.ok) {
@@ -312,6 +367,12 @@ export async function publishOriginalPostTx(
           gateStatus: row.gateVerdict,
           decidedBy: 'operator',
           publishedAt: txNow,
+          /**
+           * 🔴 **슬롯 소비 기록의 시각도 트랜잭션 시계다** (2026-09-26). 오늘 발행 수는
+           *    `createdAt >= kstDayStart(txNow)` 로 센다 — 이 칸을 DB 시계에 맡기면 판정과 기록이
+           *    서로 다른 시계를 보게 된다. 운영에서는 두 시계가 같은 순간이다.
+           */
+          createdAt: txNow,
         },
       })
 
@@ -335,14 +396,10 @@ export async function publishOriginalPostTx(
       return { kind: 'error', message: '이미 발행된 후보입니다. 다시 확인해 주세요.' }
     }
     /**
-     * 🔴 **직렬화 실패는 실패다. 재시도하지 않는다.**
-     *    P2034 는 "다른 트랜잭션이 먼저 자리를 가져갔다" 는 뜻이다. 여기서 재시도하면
-     *    상한을 넘기려고 다시 시도하는 셈이 된다 — 막으려던 바로 그 일이다.
-     *    이 회차는 그냥 지고, 공개 write 는 남지 않는다. 밀린 것은 다음 run 이 본다.
+     * 🔴 **직렬화 실패 — 부르는 쪽이 한 번만 다시 시도한다.** 공개 write 는 남지 않았다.
+     *    다시 시도는 슬롯·오늘 발행 수를 처음부터 다시 세므로, 이미 소비됐으면 정상 무발행이 된다.
      */
-    if (isSerializationConflict(err)) {
-      return { kind: 'error', message: '다른 발행이 먼저 진행됐습니다. 잠시 후 다시 확인해 주세요.' }
-    }
+    if (isSerializationConflict(err)) return { kind: 'conflict' }
     // 🔴 예외 원문을 호출부로 흘리지 않는다
     return { kind: 'error', message: '발행하지 못했습니다.' }
   }

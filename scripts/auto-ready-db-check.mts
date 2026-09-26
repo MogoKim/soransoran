@@ -220,7 +220,7 @@ async function main(): Promise<void> {
     check('그 행은 기계 도장 그대로', (await prisma.originalPostApprovalQueue.findUnique({ where: { id: r.id } }))?.decidedBy === 'machine:auto-draft-v5')
     await forceStamp(r.id)
     const before = await postCount()
-    const p = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+    const p = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
     check('🔴 🔴 **우회해 찍힌 도장도 발행 트랜잭션이 증거 0/30 으로 막는다 · Post 0**',
       p.kind === 'blocked' && p.code === 'AUTO_READY_RECHECK' && (await postCount()) === before, JSON.stringify(p))
   }
@@ -301,7 +301,7 @@ async function main(): Promise<void> {
     check('선택 시점에는 발행 대상이었다', (await loadPublishableStock(prisma, NOW, { autoReadyOpen: true })).targets.some((t) => t.id === r.id))
     await breakOneEvidence(true)
     const before = await postCount()
-    const p = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+    const p = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
     check('🔴 🔴 **선택 뒤 증거 29/30 → 발행 트랜잭션이 막는다 · Post 0**',
       p.kind === 'blocked' && p.code === 'AUTO_READY_RECHECK' && p.detail.includes('29/30') && (await postCount()) === before,
       JSON.stringify(p))
@@ -328,7 +328,7 @@ async function main(): Promise<void> {
     await prisma.originalPostApprovalQueue.update({ where: { id: idA }, data: { editedBody: '도장 뒤에 바뀐 본문' } })
     check('🔴 🔴 **도장 뒤 본문이 바뀌면 selector 가 먼저 AUTO_READY_STALE 로 거절한다**',
       (await loadPublishableStock(prisma, NOW, { autoReadyOpen: true })).rejected.some((x) => x.id === idA && x.code === 'AUTO_READY_STALE'))
-    const pa = await publishOriginalPostTx(prisma, { queueId: idA, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(pA) })
+    const pa = await publishOriginalPostTx(prisma, { queueId: idA, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON, autoAssign: planFor(pA) })
     check('🔴 🔴 **재검증 실패(본문 변경) → Post 0 · matchedPersonaId/matchedAt 불변**',
       pa.kind === 'blocked' && pa.code === 'AUTO_READY_RECHECK' && await untouched(idA), JSON.stringify(pa))
     const pB = await freshPersona()
@@ -341,22 +341,22 @@ async function main(): Promise<void> {
     await prisma.personaActivityLog.create({
       data: { personaId: personas[2]!.id, kind: 'post', targetId: 'cap-fixture', gateStatus: 'PASS', decidedBy: 'operator', publishedAt: new Date() },
     })
-    const pb = await publishOriginalPostTx(prisma, { queueId: idB, publishedToday: 1, dailyCap: 1, autoReadyEnv: ON, autoAssign: planFor(pB) })
+    const pb = await publishOriginalPostTx(prisma, { queueId: idB, publishedToday: 1, mode: { kind: 'manual-live', dailyCap: 1 }, autoReadyEnv: ON, autoAssign: planFor(pB) })
     check('🔴 🔴 **발행 판정 실패(일 상한) → 배정 불변**',
       pb.kind === 'blocked' && pb.code === 'DAILY_CAP' && await untouched(idB), JSON.stringify(pb))
     const pC = await freshPersona()
     const idC = await unassigned({ voice: pC.code })
     await breakOneEvidence(true)
-    const pc = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(pC) })
+    const pc = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON, autoAssign: planFor(pC) })
     await breakOneEvidence(false)
     check('🔴 🔴 **증거 게이트 실패 → 배정 불변**', pc.kind === 'blocked' && await untouched(idC), JSON.stringify(pc))
-    const pd = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: OFF, autoAssign: planFor(pC) })
+    const pd = await publishOriginalPostTx(prisma, { queueId: idC, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: OFF, autoAssign: planFor(pC) })
     check('🔴 스위치 OFF → 배정 불변', pd.kind === 'blocked' && await untouched(idC))
     const beforeE = Date.now()
     // 🔴 미래 matchedAt 을 억지로 넘긴다 — 받는 자리가 없다. 배정 시각은 트랜잭션 시계다
     const future = new Date(NOW.getTime() + 30 * 864e5)
     const pe = await publishOriginalPostTx(prisma, {
-      queueId: idC, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON,
+      queueId: idC, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON,
       autoAssign: { ...planFor(pC), matchedAt: future } as never,
     })
     const qe = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idC } })
@@ -380,9 +380,8 @@ async function main(): Promise<void> {
       const before = await postCount()
       const q0 = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { matchedPersonaId: true, matchedAt: true } })
       const r = await publishOriginalPostTx(prisma, {
-        queueId: id, publishedToday: 0, dailyCap: 100, autoReadyEnv: x.env ?? ON,
+        queueId: id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: x.releaseStage as never }, autoReadyEnv: x.env ?? ON,
         ...(assign === undefined ? {} : { autoAssign: (x.caps === undefined ? assign : { ...assign, caps: x.caps }) as never }),
-        ...(x.releaseStage === undefined ? {} : { releaseStage: x.releaseStage as never }),
       })
       const q1 = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id }, select: { matchedPersonaId: true, matchedAt: true, createdPostId: true } })
       check(`🔴 🔴 **${label} → AUTO_ASSIGN_STALE · Post 0 · 배정 불변**`,
@@ -432,14 +431,14 @@ async function main(): Promise<void> {
       { releaseStage: 'd10', caps: { postsPerWeek: 1e9, minDaysBetween: 0 } })
     await stale('모르는 단계 문자열 → 가장 안전한 d1', idM, planFor(greedy), '(d1)', { releaseStage: 'd999' })
     const pm = await publishOriginalPostTx(prisma, {
-      queueId: idM, publishedToday: 0, dailyCap: 100, releaseStage: 'd10', autoAssign: planFor(greedy),
+      queueId: idM, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: 'd10' }, autoAssign: planFor(greedy),
       autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd10' },
     })
     check('🔴 대조 — env 가 d10 을 허락하면 같은 행이 나간다 (2일 전 · d10 최소 1일)', pm.kind === 'published', JSON.stringify(pm))
     const pm2 = await (async () => {
       const id = await unassigned({ voice: greedy.code })
       return publishOriginalPostTx(prisma, {
-        queueId: id, publishedToday: 0, dailyCap: 100, releaseStage: 'd10', autoAssign: planFor(greedy),
+        queueId: id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: 'd10' }, autoAssign: planFor(greedy),
         autoReadyEnv: { ...ON, SORAN_RELEASE_STAGE: 'd10', SORAN_CAPACITY_STAGE: 'd3' },
       })
     })()
@@ -455,7 +454,7 @@ async function main(): Promise<void> {
       },
       select: { id: true },
     })
-    const ph = await publishOriginalPostTx(prisma, { queueId: human.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(pG) })
+    const ph = await publishOriginalPostTx(prisma, { queueId: human.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON, autoAssign: planFor(pG) })
     check('🔴 사람 행은 autoAssign 을 쓰지 않는다 — 배정 없으면 기존처럼 NO_MATCH',
       ph.kind === 'blocked' && ph.code === 'NO_MATCH' && await untouched(human.id), JSON.stringify(ph))
 
@@ -468,7 +467,7 @@ async function main(): Promise<void> {
     // (p) 정상 — 자기 matchedAt(지금) 때문에 WEEKLY_CAP·TOO_SOON 으로 막히지 않는다
     const ok = await freshPersona()
     const idP = await pinnedRow(ok)
-    const pp = await publishOriginalPostTx(prisma, { queueId: idP, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+    const pp = await publishOriginalPostTx(prisma, { queueId: idP, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
     check('🔴 🔴 **정상 기존 배정 행은 자기 배정 때문에 막히지 않는다 (d1 · 주 1 · 최소 5일)**',
       pp.kind === 'published' && pp.personaCode === ok.code, JSON.stringify(pp))
     // (q) 배정 뒤 말투가 바뀌었다 — 글의 말투 기록이 다른 사람
@@ -500,7 +499,7 @@ async function main(): Promise<void> {
     // (v) 기존 배정 행에 다른 Persona 계획을 넘겨도 재배정하지 않는다
     const idV = await pinnedRow(await freshPersona())
     const other = await freshPersona()
-    const pv = await publishOriginalPostTx(prisma, { queueId: idV, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, autoAssign: planFor(other) })
+    const pv = await publishOriginalPostTx(prisma, { queueId: idV, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON, autoAssign: planFor(other) })
     const qv = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: idV } })
     check('🔴 🔴 **기존 배정은 재배정하지 않는다 — 넘긴 계획은 무시된다**',
       pv.kind === 'published' && qv.matchedPersonaId !== other.id && pv.personaCode !== other.code, JSON.stringify(pv))
@@ -539,7 +538,7 @@ async function main(): Promise<void> {
     check('🔴 뺀 행은 발행 줄에 없다', ![idLife, idBusy, idOff].some((id) => plan.freshOrdered.some((t) => t.id === id)))
     // 🔴 같은 행을 발행 트랜잭션에 직접 넣으면 같은 갈래로 막힌다 — 계획기와 트랜잭션이 갈리지 않는다
     for (const [id, route] of [[idLife, '예외'], [idBusy, '유예'], [idOff, '예외']] as const) {
-      const r = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON, releaseStage: 'd1' })
+      const r = await publishOriginalPostTx(prisma, { queueId: id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100, releaseStage: 'd1' }, autoReadyEnv: ON })
       check(`🔴 🔴 **트랜잭션도 같은 갈래 (${route})**`, r.kind === 'blocked' && r.code === 'AUTO_ASSIGN_STALE' && r.detail.includes(`${route}:`), JSON.stringify(r))
     }
     for (const id of [idLife, idBusy, idOff, idGood]) {
@@ -550,11 +549,11 @@ async function main(): Promise<void> {
   console.log('\n⑨ 🔴 발행 — 스위치·동시성')
   {
     check('🔴 🔴 **스위치 OFF → 도장 행도 발행 안 됨**',
-      (await publishOriginalPostTx(prisma, { queueId: a.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: OFF })).kind === 'blocked')
+      (await publishOriginalPostTx(prisma, { queueId: a.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: OFF })).kind === 'blocked')
     const before = await postCount()
     const [p1, p2] = await Promise.all([
-      publishOriginalPostTx(prisma, { queueId: a.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON }),
-      publishOriginalPostTx(prisma, { queueId: a.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON }),
+      publishOriginalPostTx(prisma, { queueId: a.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON }),
+      publishOriginalPostTx(prisma, { queueId: a.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON }),
     ])
     check('🔴 🔴 **같은 행을 동시에 발행해도 한 번만 나간다**',
       [p1, p2].filter((x) => x.kind === 'published').length === 1 && (await postCount()) === before + 1, `${p1.kind}/${p2.kind}`)
@@ -565,7 +564,7 @@ async function main(): Promise<void> {
     for (let i = 0; i < 9; i += 1) {
       const r = await machineRow()
       await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
-      await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+      await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
     }
     const n = await prisma.originalPostApprovalQueue.count({ where: { decidedBy: AUTO_DECIDER, createdPostId: { not: null } } })
     const s1 = await selectAudits(prisma)
@@ -588,7 +587,7 @@ async function main(): Promise<void> {
     for (let i = 0; i < 20 && (await prisma.autoReadyAudit.count()) < 3; i += 1) {
       const r = await machineRow()
       await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
-      await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+      await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
       await selectAudits(prisma)
     }
     const audits = await prisma.autoReadyAudit.findMany({ orderBy: { queueId: 'asc' } })
@@ -653,7 +652,7 @@ async function main(): Promise<void> {
     for (let i = 0; i < 30 && (await prisma.autoReadyAudit.count({ where: { defect: null } })) < 4; i += 1) {
       const r = await machineRow()
       await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
-      await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+      await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
       await selectAudits(prisma)
     }
     const pend = await prisma.autoReadyAudit.findMany({ where: { defect: null }, orderBy: { queueId: 'asc' } })
@@ -696,7 +695,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **다음 자동 도장 → closed · 도장 0**', (await stampAutoReady(prisma, { queueId: fresh.id, env: ON, now: NOW })).kind === 'closed'
       && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: fresh.id } })).decidedBy === 'machine:auto-draft-v5')
     const before = await postCount()
-    const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+    const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
     check('🔴 🔴 **결함 전에 찍힌 도장 행도 발행 트랜잭션에서 막힌다 · Post 0**',
       pw.kind === 'blocked' && pw.code === 'AUTO_READY_RECHECK' && (await postCount()) === before, JSON.stringify(pw))
     const noJudge: AuditJudge = async (i) => ({ ...(await ruleAuditJudge(i)), defect: 'no', reasons: [] })
@@ -798,7 +797,7 @@ async function main(): Promise<void> {
         st.kind === 'closed' && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: fresh.id } })).decidedBy === 'machine:auto-draft-v5',
         JSON.stringify(st))
       const before = await postCount()
-      const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+      const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
       check(`🔴 🔴 **[${lab}] 유실 전에 찍힌 도장 행도 발행 0**`,
         pw.kind === 'blocked' && pw.code === 'AUTO_READY_RECHECK' && (await postCount()) === before, JSON.stringify(pw))
     }
@@ -816,7 +815,7 @@ async function main(): Promise<void> {
     check('유실 전에 찍힌 대기 도장', (await stampAutoReady(prisma, { queueId: waiting.id, env: ON, now: NOW })).kind === 'stamped')
     const r = await machineRow()
     await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
-    const pub = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+    const pub = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
     check('자동 발행 1건 — 감사 선정은 돌리지 않는다', pub.kind === 'published', JSON.stringify(pub))
     if (pub.kind === 'published') {
       check('🔴 그 글에는 감사 행이 없다', (await prisma.autoReadyAudit.count({ where: { queueId: r.id } })) === 0)
@@ -836,7 +835,7 @@ async function main(): Promise<void> {
       const round = await stampRound(prisma, { env: ON, now: NOW })
       check('🔴 🔴 **도장 회차(묶음)도 0**', (round.get('stamped') ?? 0) === 0, [...round].map(([k, v]) => `${k} ${v}`).join(' '))
       const before = await postCount()
-      const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: ON })
+      const pw = await publishOriginalPostTx(prisma, { queueId: waiting.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
       check('🔴 🔴 **유실 전에 찍힌 도장 행도 발행 0**',
         pw.kind === 'blocked' && pw.code === 'AUTO_READY_RECHECK' && (await postCount()) === before, JSON.stringify(pw))
       const sel = await selectAudits(prisma)
