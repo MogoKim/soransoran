@@ -24,6 +24,7 @@
  * 사용법
  *   npx tsx scripts/original-post-auto-publish.mts                # dry-run
  *   npx tsx scripts/original-post-auto-publish.mts --apply --limit=1   🔴 실제 발행
+ *   … --apply --limit=1 --trigger=local --heartbeat   🔴 heartbeat 후보(설치 전) — 창 밖 생략 · 틱 잠금만 더한다
  */
 import { PrismaClient } from '@prisma/client'
 import {
@@ -56,6 +57,8 @@ import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { loadPublishableStock, resolvePublishScale, planPublishBatch } from './lib/publishable-stock.mjs'
 import { autoReadyEnabled, AUTO_DECIDER } from '../src/lib/auto-ready-v2'
 import { authoritativeGate, stampRound, selectAudits } from '../src/lib/auto-ready-repo'
+import { HEARTBEAT_FLAG, stageInputsOf, describeStageInputs } from './lib/original-post-runner-template'
+import { claimHeartbeatTick, heartbeatInWindow, heartbeatTickKey, HEARTBEAT_TICK_DIR } from './lib/publish-heartbeat-tick.mjs'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -87,6 +90,45 @@ const kst = (d: Date): string =>
 /** 🔴 전문을 남기지 않는다 — 앞부분 + 길이 */
 const brief = (v: string): string => `"${[...v][0] ?? ''}…" (${[...v].length}자)`
 
+/**
+ * 🔴 **이 회차의 시각 하나** (2026-09-24 마스터 지적). 조립·상한·판정·슬롯이 전부 이 값을 쓴다 —
+ *    두 번 만들면 같은 회차 안에서 서로 다른 순간을 본다. 🔴 heartbeat 틱·창 판정도 이 값이다
+ *    (2026-09-26) — 틱을 판정한 순간과 재고를 읽은 순간이 달라지지 않게 맨 위로 올렸다.
+ */
+const RUN_AT = new Date()
+/**
+ * 🔴 **heartbeat 모드** (2026-09-26 · 후보 — 설치는 별도 승인).
+ *    launchd 가 운영 창 안에서 10분마다 깨운다. 깨운다는 것은 **물으러 간다**는 뜻일 뿐이다 —
+ *    낼지·몇 건인지는 아래 발행 트랜잭션이 도래 슬롯 − 오늘 발행 수로 정한다(트리거와 무관).
+ *    이 블록이 더하는 것은 **줄이는 것 둘**뿐이다 —
+ *      ① 창 밖이면 DB 에 붙지 않고 끝낸다(트랜잭션도 SLOT_CLOSED 로 막을 자리다)
+ *      ② 같은 10분 틱의 두 번째 wake 는 선택 단계 전에 물러난다(틱 잠금 · `--apply` 일 때만)
+ *    🔴 둘 다 발행을 **여는** 길이 아니다. 정시판(플래그 없음)은 이 블록을 지나치고 이전과 같다.
+ */
+const HEARTBEAT = argv.includes(HEARTBEAT_FLAG)
+if (HEARTBEAT) {
+  if (TRIGGER !== 'local') fail(`${HEARTBEAT_FLAG} 는 --trigger=local 과만 쓴다 — 지금 ${TRIGGER}`)
+  console.log(`\n⓪-h heartbeat 틱 ${heartbeatTickKey(RUN_AT)} (${kst(RUN_AT)})`)
+  if (!heartbeatInWindow(RUN_AT)) {
+    console.log('   운영 창(08:00~22:00 KST) 밖 heartbeat — DB 0 · 발행 0 · 정상 종료\n')
+    process.exit(0)
+  }
+  if (APPLY) {
+    /** 🔴 시험만 다른 디렉터리를 준다 — 운영 plist 인자에는 없다 */
+    const dir = argv.find((a) => a.startsWith('--heartbeat-tick-dir='))?.slice(21) ?? HEARTBEAT_TICK_DIR
+    const claim = claimHeartbeatTick(dir, RUN_AT)
+    if (!claim.ok) {
+      if (claim.kind === 'UNWRITABLE') fail(`틱 잠금을 만들지 못했다 — 발행하지 않는다(fail-closed) · ${claim.reason}`)
+      console.log(`   ⏭️  TICK_TAKEN — ${claim.reason}`)
+      console.log('   🔴 DB 0 · 발행 0 · 정상 종료 — 같은 틱의 다른 wake 가 이미 물으러 갔다\n')
+      process.exit(0)
+    }
+    console.log(`   틱 차지 ${claim.tick}${claim.pruned > 0 ? ` · 지난 날짜 표식 ${claim.pruned}개 정리` : ''}`)
+  } else {
+    console.log('   dry-run — 틱을 차지하지 않는다(실제 wake 를 막지 않기 위해)')
+  }
+}
+
 await loadEnvLocal()
 const prisma = new PrismaClient()
 
@@ -104,11 +146,7 @@ console.log('  🔴 실제 상한은 아래 ③-c 에서 설치한다 — 설치
  *    말했다 — probe 가 223건을 재고로 세어 d5 READY 라는 거짓 판정을 냈다.
  *    🔴 이제 러너와 probe 가 `loadPublishableStock` **하나**를 부른다.
  */
-/**
- * 🔴 **이 회차의 시각 하나** (2026-09-24 마스터 지적). 조립·상한·판정·슬롯이 전부 이 값을 쓴다 —
- *    두 번 만들면 같은 회차 안에서 서로 다른 순간을 본다.
- */
-const RUN_AT = new Date()
+/** 🔴 이 회차의 시각은 맨 위 `RUN_AT` 하나다 — heartbeat 틱·창 판정도 같은 값을 쓴다 */
 /**
  * 🔴 **자동 READY v2** (2026-09-25). 스위치 **기본 OFF** — 꺼져 있으면 감사 표를 읽지 않고
  *    도장도 찍지 않는다. 그래서 지금 운영 동작은 이 줄이 없던 때와 같다.
@@ -178,6 +216,12 @@ const axisPublishedToday = stock.publishedToday
  *    **같은 DB 에서 다른 재고·다른 picked** 가 나온다. 그래서 여기서 부른다.
  */
 const resolved = resolvePublishScale({ env: process.env, loaded: stock, now: axisNow })
+/**
+ * 🔴 **이 러너가 본 단계 입력 — 값으로 남긴다** (2026-09-26). GitHub 에는 기간형 변수가 있고
+ *    로컬 정본 env 에는 없을 수 있다(알려진 분기). 트랜잭션은 이 env 의 천장으로 단계를 누르므로,
+ *    로컬 회차는 여기 찍힌 천장보다 많이 내지 못한다 — 모자란 입력은 좁히는 쪽으로만 작동한다.
+ */
+console.log(`\n③-s 단계 입력  ${describeStageInputs(stageInputsOf(process.env, axisNow))} · 트리거 ${TRIGGER}${HEARTBEAT ? ' · heartbeat' : ''}`)
 /**
  * 🔴 **설치는 여기 한 곳뿐이다** (2026-09-24 6차 · 마스터 지적).
  *    `resolvePublishScale` 은 계산만 한다 — module-global 을 건드리지 않는다.

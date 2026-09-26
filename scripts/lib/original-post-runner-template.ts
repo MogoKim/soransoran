@@ -39,10 +39,15 @@ import { join } from 'node:path'
 
 import { allStageSlots } from '../../src/lib/scale-workflow-render'
 import {
-  slotLabel, resolveStage, stageRank, RELEASE_STAGES, CAPACITY_ENV, RELEASE_ENV,
+  slotLabel, resolveStage, stageRank, RELEASE_STAGES, CAPACITY_ENV, RELEASE_ENV, PROFILES,
   type ReleaseStage, type Slot,
 } from '../../src/lib/scale-profile'
 import { PUBLISH_WINDOW_END_MINUTE, PUBLISH_WINDOW_START_MINUTE } from '../../src/lib/publish-slot-catchup'
+import { releaseStageCeiling } from '../../src/lib/scale-runtime'
+import {
+  windowAuthorization, canaryAuthorization,
+  WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, CANARY_STAGE_ENV, CANARY_DATE_ENV,
+} from '../../src/lib/release-canary'
 
 /**
  * 🔴 **PATH 정본은 `launchd-template-check.mts` 의 `PATH_VALUE` 하나다.**
@@ -68,6 +73,9 @@ export function runnerPathValue(nodeBinDir: string): string {
 }
 
 export const PUBLISH_RUNNER_LABEL = 'com.soransoran.original-post-runner'
+
+/** 🔴 두 트리거 preflight 가 GitHub Variables 를 읽는 대상 저장소 — cwd 의 git remote 에 기대지 않는다 */
+export const PUBLISH_REPO = 'MogoKim/soransoran'
 
 /**
  * 🔴 **local 설정의 정본은 이 파일 하나다** (2026-09-14 정정).
@@ -121,7 +129,7 @@ export function verifyRunnerSlotsInWindow(slots: readonly Slot[]): string[] {
   return out
 }
 
-export function renderPublishRunnerPlist(input: {
+export type RunnerPlistInput = {
   /** runtime worktree 절대 경로 */
   runtimeRoot: string
   /** npx 절대 경로 */
@@ -132,14 +140,21 @@ export function renderPublishRunnerPlist(input: {
    *    🔴 버전 문자열을 박지 않는다. nvm 을 올리면 그 순간 예약 실행이 죽는다.
    */
   nodeBinDir: string
-}): string {
+}
+
+/**
+ * 🔴 **plist 뼈대는 하나다** (2026-09-26 heartbeat 후보). 정시판·heartbeat 판이 다른 것은
+ *    **인자와 깨우는 시각** 둘뿐이다 — label · PATH · WorkingDirectory · 로그 · RunAtLoad 는 같다.
+ *    뼈대를 두 벌 두면 PATH 를 한쪽만 고치는 2026-09-15 사고가 다시 난다.
+ */
+function renderRunnerPlistWith(input: RunnerPlistInput, runArgs: readonly string[], wakes: readonly Slot[]): string {
   const args = [
     `        <string>${input.npxPath}</string>`,
     '        <string>tsx</string>',
     `        <string>${input.runtimeRoot}/${PUBLISH_RUNNER_SCRIPT}</string>`,
-    ...PUBLISH_RUNNER_ARGS.map((a) => `        <string>${a}</string>`),
+    ...runArgs.map((a) => `        <string>${a}</string>`),
   ].join('\n')
-  const slots = publishRunnerSlots().map((s) =>
+  const slots = wakes.map((s) =>
     `        <dict><key>Hour</key><integer>${s.hour}</integer>`
     + `<key>Minute</key><integer>${s.minute}</integer></dict>`).join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -167,6 +182,268 @@ ${slots}
 </plist>
 `
 }
+
+/**
+ * 🔴 **정시판 — 지금 설치된 기본값이자 heartbeat 의 rollback 대상이다.**
+ *    출력은 heartbeat 도입 전과 **바이트 단위로 같다**(검사가 설치본과 대조한다).
+ */
+export function renderPublishRunnerPlist(input: RunnerPlistInput): string {
+  return renderRunnerPlistWith(input, PUBLISH_RUNNER_ARGS, publishRunnerSlots())
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 heartbeat 후보 (2026-09-26) — **설치하지 않는다. 명시적으로 고를 때만 렌더한다**
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **러너 트리거 모드.** `fixed` 가 지금 설치된 기본값이고 rollback 이다.
+ *    `heartbeat` 는 후보다 — 이 PR 은 문자열을 만들 뿐 등록하지 않는다.
+ */
+export type RunnerTriggerMode = 'fixed' | 'heartbeat'
+export const DEFAULT_RUNNER_TRIGGER_MODE: RunnerTriggerMode = 'fixed'
+
+/**
+ * 🔴 **깨우는 간격(분).** 이 값은 "몇 건 낼까" 와 무관하다 — 깨울 뿐이다.
+ *    낼지·몇 건인지는 발행 트랜잭션이 **도래 슬롯 − 오늘 발행 수**(기존 catch-up 계약)로 정한다.
+ *    한 번 깨우면 `--limit=1` · `PER_RUN_MAX=1` 이라 최대 1건이다.
+ */
+export const HEARTBEAT_INTERVAL_MINUTES = 10
+
+/**
+ * 🔴 **heartbeat 는 이 인자 하나만 더한다.** `--apply --limit=1 --trigger=local` 은 그대로다 —
+ *    트랜잭션은 트리거 종류와 무관하게 `local` 계약(시각이 근거)으로 슬롯을 다시 센다.
+ */
+export const HEARTBEAT_FLAG = '--heartbeat'
+export const PUBLISH_HEARTBEAT_ARGS: readonly string[] = [...PUBLISH_RUNNER_ARGS, HEARTBEAT_FLAG]
+
+/**
+ * 🔴 **깨우는 시각 — `StartInterval` 이 아니라 달력 항목이다.**
+ *
+ *    · `StartInterval=600` 은 위상이 **load 한 순간**에 묶인다. 16:03 에 올리면 09:33 에 깬다 —
+ *      09:30 슬롯이 최대 10분 늦는다. 달력 항목은 슬롯 분(`:00 :10 … :50`)에 정확히 깬다.
+ *    · 운영 창(08:00~22:00) 밖에는 **깨우지 않는다.** 밤에 144번 DB 에 붙을 이유가 없다.
+ *    · 절전 중 지나간 항목은 wake 때 **1회로 합쳐진다**(man launchd.plist) — 그 1회는 1건만 내고,
+ *      나머지 밀린 것은 다음 10분 틱들이 하나씩 메운다. 같은 KST 날짜 · 운영 창 안에서만이다.
+ *
+ * 🔴 숫자를 새로 만들지 않는다 — 창은 catch-up 정본(`PUBLISH_WINDOW_*`)에서 온다.
+ */
+export function heartbeatWakeTimes(): Slot[] {
+  const out: Slot[] = []
+  for (let m = PUBLISH_WINDOW_START_MINUTE; m <= PUBLISH_WINDOW_END_MINUTE; m += HEARTBEAT_INTERVAL_MINUTES) {
+    out.push({ hour: Math.floor(m / 60), minute: m % 60, count: 0 })
+  }
+  return out
+}
+
+/**
+ * 🔴 **heartbeat 격자가 정시판을 빠짐없이 덮는가** — 순수 판정.
+ *    슬롯 하나라도 격자에 없으면 그 슬롯은 다음 틱까지 늦는다. 창 밖 틱은 트랜잭션이 버린다.
+ */
+export function verifyHeartbeatGrid(wakes: readonly Slot[]): string[] {
+  const out: string[] = []
+  const minutes = wakes.map((s) => s.hour * 60 + s.minute)
+  for (let i = 1; i < minutes.length; i += 1) {
+    if (minutes[i]! - minutes[i - 1]! !== HEARTBEAT_INTERVAL_MINUTES) {
+      out.push(`${slotLabel(wakes[i - 1]!)} → ${slotLabel(wakes[i]!)} 간격이 ${HEARTBEAT_INTERVAL_MINUTES}분이 아니다`)
+    }
+  }
+  for (const s of publishRunnerSlots()) {
+    if (!minutes.includes(s.hour * 60 + s.minute)) out.push(`🔴 슬롯 ${slotLabel(s)} 가 heartbeat 격자에 없다 — 그 슬롯이 늦는다`)
+  }
+  out.push(...verifyRunnerSlotsInWindow(wakes))
+  return out
+}
+
+/**
+ * 🔴 **heartbeat 판 plist** — label 은 정시판과 **같다.** 둘이 동시에 등록되는 길을 없앤다 —
+ *    설치는 교체(bootout → bootstrap)이고 rollback 은 정시판을 같은 자리에 다시 까는 것이다.
+ */
+export function renderPublishHeartbeatPlist(input: RunnerPlistInput): string {
+  return renderRunnerPlistWith(input, PUBLISH_HEARTBEAT_ARGS, heartbeatWakeTimes())
+}
+
+/** 🔴 모드를 **명시해야** heartbeat 가 나온다. 모르는 값은 기본(정시판)이 아니라 오류다 */
+export function renderRunnerPlistFor(mode: RunnerTriggerMode, input: RunnerPlistInput): string {
+  if (mode === 'heartbeat') return renderPublishHeartbeatPlist(input)
+  if (mode === 'fixed') return renderPublishRunnerPlist(input)
+  throw new Error(`모르는 러너 트리거 모드 — ${String(mode)}`)
+}
+
+/**
+ * 🔴 **로컬 러너가 본 단계 입력 — 값으로 남긴다** (2026-09-26).
+ *
+ *    GitHub 에는 기간형 변수(d3 · 2026-09-23~29)가 있고 로컬 정본 env 에는 없다(알려진 분기).
+ *    그 사실을 문장이 아니라 **값**으로 남긴다 — 러너 로그 한 줄 · preflight 표 한 줄.
+ *    🔴 천장은 `releaseStageCeiling` 정본 하나다. 발행 트랜잭션도 같은 함수로 단계를 누른다.
+ */
+export type StageInputs = {
+  capacity: string | null
+  release: string | null
+  window: { stage: string | null; from: string | null; until: string | null; activeToday: boolean; note: string | null }
+  canary: { stage: string | null; date: string | null; activeToday: boolean }
+  /** 🔴 이 env 로 발행 트랜잭션이 허용하는 가장 높은 단계 */
+  ceiling: ReleaseStage
+  /** 그 천장의 하루 목표 — 이 트리거 혼자서는 이보다 많이 내지 못한다 */
+  ceilingDailyTarget: number
+}
+
+const rawOf = (env: Readonly<Record<string, string | undefined>>, k: string): string | null => {
+  const v = (env[k] ?? '').trim()
+  return v === '' ? null : v
+}
+
+export function stageInputsOf(env: Readonly<Record<string, string | undefined>>, now: Date): StageInputs {
+  const w = windowAuthorization(env, now, RELEASE_STAGES)
+  const c = canaryAuthorization(env, now, RELEASE_STAGES)
+  const ceiling = releaseStageCeiling(env, now)
+  return {
+    capacity: rawOf(env, CAPACITY_ENV), release: rawOf(env, RELEASE_ENV),
+    window: {
+      stage: rawOf(env, WINDOW_STAGE_ENV), from: rawOf(env, WINDOW_FROM_ENV), until: rawOf(env, WINDOW_UNTIL_ENV),
+      activeToday: w.activeToday, note: w.note,
+    },
+    canary: { stage: rawOf(env, CANARY_STAGE_ENV), date: rawOf(env, CANARY_DATE_ENV), activeToday: c.activeToday },
+    ceiling, ceilingDailyTarget: PROFILES[ceiling].dailyTarget,
+  }
+}
+
+/** 🔴 러너 로그 한 줄 — 비밀값은 없다(단계 키 일곱 개만 읽는다) */
+export function describeStageInputs(s: StageInputs): string {
+  const v = (x: string | null): string => x ?? '(없음)'
+  return `capacity=${v(s.capacity)} · release=${v(s.release)}`
+    + ` · window=${v(s.window.stage)}[${v(s.window.from)}~${v(s.window.until)}]${s.window.activeToday ? ' 오늘 유효' : ''}`
+    + ` · canary=${v(s.canary.stage)}@${v(s.canary.date)}${s.canary.activeToday ? ' 오늘 유효' : ''}`
+    + ` → 천장 ${s.ceiling} (하루 ${s.ceilingDailyTarget}건)`
+}
+
+/** 🔴 정본 env 에서 읽는 단계 키 — 비밀값 키는 읽지 않는다 */
+export const STAGE_INPUT_KEYS: readonly string[] = [
+  CAPACITY_ENV, RELEASE_ENV, WINDOW_STAGE_ENV, WINDOW_FROM_ENV, WINDOW_UNTIL_ENV, CANARY_STAGE_ENV, CANARY_DATE_ENV,
+]
+
+/** 🔴 `KEY=VALUE` 텍스트에서 **단계 키만** 뽑는다. 다른 줄은 메모리에도 올리지 않는다 */
+export function pickStageInputKeys(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line)
+    if (m === null || !STAGE_INPUT_KEYS.includes(m[1]!)) continue
+    let v = m[2] ?? ''
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+    out[m[1]!] = v
+  }
+  return out
+}
+
+export type StageInputVerdict = {
+  /** 🔴 heartbeat 를 등록해도 되는가 */
+  ok: boolean
+  local: StageInputs
+  github: StageInputs | null
+  /** 값으로 드러난 분기 — 막지 않는 것도 여기 적힌다 */
+  divergences: readonly string[]
+  blockers: readonly string[]
+}
+
+/**
+ * 🔴 **로컬과 GitHub 의 단계 입력 — 설치하려면 두 트리거의 실효 천장이 같아야 한다** (2026-09-26 마스터 보정).
+ *
+ *    · GitHub 을 못 읽었다 → 막는다(모를 때 등록하지 않는다)
+ *    · 로컬 천장 **≠** GitHub 천장 → 막는다. 어느 방향이든 막는다:
+ *        - 로컬이 높다 — 새로 자주 깨는 쪽이 백업보다 넓으면 fail-open 이다
+ *        - 로컬이 낮다 — 안전하지만 heartbeat 가 하루 첫 글 하나만 제때 내고 나머지는 늦은 GitHub 예약을
+ *          기다린다. 설치해도 목적(제때 발행)을 이루지 못하므로 **설치 가능으로 세지 않는다**
+ *          (실측 모양 2026-09-26: local d1 · GitHub d3)
+ *    · 천장이 같다 → 통과. raw 문자열이 달라도(지난 canary · 끝난 기간) **분기로 적을 뿐** 그 이유로 막지 않는다
+ *
+ * 🔴 판정에 쓰는 천장은 `releaseStageCeiling` 하나다. 이 함수가 숫자를 새로 만들지 않고 env 도 바꾸지 않는다.
+ */
+export function judgeHeartbeatStageInputs(input: {
+  local: Readonly<Record<string, string | undefined>>
+  github: Readonly<Record<string, string | undefined>> | null
+  now: Date
+}): StageInputVerdict {
+  const local = stageInputsOf(input.local, input.now)
+  if (input.github === null) {
+    return {
+      ok: false, local, github: null, divergences: [],
+      blockers: ['GitHub Variables 를 읽지 못했다 — 두 트리거의 천장을 대조할 수 없다(fail-closed)'],
+    }
+  }
+  const github = stageInputsOf(input.github, input.now)
+  const divergences: string[] = []
+  for (const k of STAGE_INPUT_KEYS) {
+    const a = rawOf(input.local, k)
+    const b = rawOf(input.github, k)
+    if (a !== b) divergences.push(`${k} — local ${a ?? '(없음)'} · GitHub ${b ?? '(없음)'}`)
+  }
+  const blockers: string[] = []
+  if (local.ceiling !== github.ceiling) {
+    const dir = stageRank(local.ceiling) > stageRank(github.ceiling)
+      ? '자주 깨는 쪽이 더 넓다 — fail-open 이다'
+      : 'heartbeat 가 로컬 천장까지만 제때 내고 나머지는 늦은 GitHub 예약을 기다린다 — 설치 목적을 이루지 못한다'
+    blockers.push(`🔴 실효 천장 불일치 — local ${local.ceiling}(하루 ${local.ceilingDailyTarget}) ≠ GitHub ${github.ceiling}(하루 ${github.ceilingDailyTarget}) · ${dir}`)
+  }
+  return { ok: blockers.length === 0, local, github, divergences, blockers }
+}
+
+/**
+ * 🔴 **설치본에서 렌더 입력을 되읽는다** — 순수 파싱. 새 plist 가 설치본과 **트리거만** 다르게 하려는 것이다.
+ *    하나라도 못 읽으면 `null` — 추측으로 채우지 않는다(부르는 쪽이 기본값을 쓰고 그 사실을 적는다).
+ */
+export function parseInstalledRunnerPlist(xml: string): RunnerPlistInput | null {
+  const one = (re: RegExp): string | null => re.exec(xml)?.[1] ?? null
+  const args = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)?.[1] ?? ''
+  const npxPath = /<string>([^<]+)<\/string>/.exec(args)?.[1] ?? null
+  const runtimeRoot = one(/<key>WorkingDirectory<\/key>\s*<string>([^<]+)<\/string>/)
+  const out = one(/<key>StandardOutPath<\/key>\s*<string>([^<]+)\/original-post-runner\.log<\/string>/)
+  const path = one(/<key>PATH<\/key>\s*<string>([^<]+)<\/string>/)
+  const nodeBinDir = path === null ? null : (path.split(':')[0] ?? null)
+  if (npxPath === null || runtimeRoot === null || out === null || nodeBinDir === null || nodeBinDir === '') return null
+  return { npxPath, runtimeRoot, logDir: out, nodeBinDir }
+}
+
+/**
+ * 🔴 **설치·rollback 명령 — 문자열만 만든다. 실행하지 않는다.**
+ *    같은 label 을 교체한다. 설치 전에 지금 설치본을 백업하고, rollback 은 그 백업을 되돌려 까는 것이다.
+ */
+export function heartbeatCommands(input: {
+  agentPlist: string
+  renderedHeartbeat: string
+  renderedFixed: string
+  backupPlist: string
+}): { install: string[]; rollback: string[] } {
+  const q = (p: string): string => `"${p}"`
+  const target = `gui/$(id -u)/${PUBLISH_RUNNER_LABEL}`
+  return {
+    install: [
+      `mkdir -p ${q(input.backupPlist.replace(/\/[^/]+$/, ''))}`,
+      `cp -p ${q(input.agentPlist)} ${q(input.backupPlist)}`,
+      `launchctl bootout ${target}`,
+      `cp ${q(input.renderedHeartbeat)} ${q(input.agentPlist)}`,
+      `plutil -lint ${q(input.agentPlist)}`,
+      `launchctl bootstrap gui/$(id -u) ${q(input.agentPlist)}`,
+      `launchctl print ${target} | grep -E 'state|program|--heartbeat|path'`,
+    ],
+    rollback: [
+      `launchctl bootout ${target}`,
+      `cp ${q(input.backupPlist)} ${q(input.agentPlist)}    # 백업이 없으면: cp ${q(input.renderedFixed)} ${q(input.agentPlist)}`,
+      `plutil -lint ${q(input.agentPlist)}`,
+      `launchctl bootstrap gui/$(id -u) ${q(input.agentPlist)}`,
+      `launchctl print ${target} | grep -E 'state|program|path'`,
+    ],
+  }
+}
+
+/** 🔴 heartbeat 등록 절차 — **이 PR 은 실행하지 않는다.** 사람이 읽는 순서다 */
+export const HEARTBEAT_INSTALL_STEPS: readonly string[] = [
+  '① 이 PR 은 등록하지 않는다 — 아래는 별도 승인 뒤의 순서다',
+  '🔴 ② runtime 을 이 커밋 이상으로 배포한다 — 옛 러너는 --heartbeat 를 **조용히 무시하고** 틱 잠금·창 밖 생략 없이 돈다(트랜잭션 게이트는 그대로지만 매 틱 DB 에 붙는다)',
+  '🔴 ③ npm run publish:heartbeat-preflight -- --check-runtime — runtime 인지 · plutil lint(임시 파일) · 설치본 대조 · 단계 입력 분기 · 명령 출력',
+  '🔴 ④ **exit 0 일 때만** 출력된 설치 명령을 사람이 실행한다. 먼저 설치본을 백업한다',
+  '⑤ 같은 label 을 교체한다 — 정시판과 heartbeat 가 동시에 등록되는 길이 없다',
+  '🔴 ⑥ GitHub 예약은 **끄지 않는다** — 맥이 꺼져 있으면 남는 것은 그것뿐이다',
+  '⑦ rollback 은 백업한 정시판을 같은 자리에 다시 까는 것이다(출력된 rollback 명령)',
+]
 
 /**
  * 🔴 **등록한 러너가 실제로 돌 수 있는 상태인가** — 순수 판정.

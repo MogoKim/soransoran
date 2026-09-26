@@ -879,6 +879,9 @@ jobs:
           npm run auto-ready:evidence-db-check
           # 🔴 예약 발행 슬롯 — 트랜잭션 안 슬롯 재계산(같은 격리 DB 를 스스로 비우고 쓴다)
           npm run publish:slot-db-check
+          # 🔴 발행 heartbeat 후보 — 10분 wake 하루 · 절전 catch-up · 로컬 천장 · 로컬+GitHub 동시 중복 0 · 러너 틱 잠금
+          #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
+          npm run publish:heartbeat-db-check
           # 🔴 공급 capacity · 발행 release · 재고 분류 일치(공급 9 · 발행 0 반례) — 같은 격리 DB 를 스스로 비우고 쓴다
           npm run supply:stock-parity-db-check
           # 🔴 부모 → 자식 실제 경로 — 회차 시각 하나(KST 자정·생일 경계) · 여력 0 → provider 0 → personaCapacityDeferred
@@ -901,8 +904,14 @@ jobs:
       #    사람이 알아채는 데 며칠이 걸리고, 그동안 공급은 멈추고 큐는 비어간다.
       #
       # 🔴 파일만 읽는다 — launchctl 0 · 네트워크 0 · DB 0.
+      #
+      # 🔴 발행 heartbeat 후보(2026-09-26)도 같은 자리다 — 새 step 을 만들지 않는다.
+      #    정시판 불변(rollback) · 10분 격자 · 틱 잠금 다중 프로세스 경쟁 · 단계 입력 fail-closed ·
+      #    예약 수 불변. DB 0 · 네트워크 0 · launchctl 0 (쓰기는 mkdtemp 안에서만).
       - name: launchd 템플릿 (PATH · 로그 위치 · placeholder · 불변 계약)
-        run: npm run launchd:template-check
+        run: |
+          npm run launchd:template-check
+          npm run publish:heartbeat-check
 
       # 🔴 예약 실행이 개발 브랜치를 돌면 여기서 FAIL 한다.
       #    CI 에는 runtime worktree 가 없으므로 **판정 규칙**만 시험한다 —
