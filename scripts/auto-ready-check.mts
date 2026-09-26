@@ -22,6 +22,7 @@ import {
   type ArtifactDoc, type CandidateDoc, type DecidedRow, type EvidenceReview,
 } from '../src/lib/auto-ready-evidence'
 import { isHumanReviewer, resolveHumanReviewer, LEGACY_DECISION_MARK } from '../src/lib/review-provenance'
+import { planOriginalPostWithdrawal } from '../src/lib/original-post-withdrawal'
 import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticHoldsOf,
@@ -236,9 +237,11 @@ console.log('\n③ 🔴 표본 — 인증된 사람 v2 기록만 · 결과도 �
   check('🔴 🔴 **A unmeasured + B no → no**', hdOf(at('A', 'unmeasured', '2026-09-25T01:00:00Z'), at('B', 'no', '2026-09-25T01:00:00Z')) === 'no')
   check('🔴 🔴 **A no + B yes → yes**', hdOf(at('A', 'no', '2026-09-25T01:00:00Z'), at('B', 'yes', '2026-09-25T01:00:00Z')) === 'yes')
   check('🔴 모두 미측정일 때만 unmeasured', hdOf(at('A', 'unmeasured', '2026-09-25T01:00:00Z'), at('B', 'unmeasured', '2026-09-25T01:00:00Z')) === 'unmeasured')
-  check('🔴 🔴 **같은 사람은 최신 기록만 — 앞의 yes 뒤에 no 면 no**',
-    hdOf(at('A', 'yes', '2026-09-25T01:00:00Z'), at('A', 'no', '2026-09-25T02:00:00Z')) === 'no'
-    && hdOf(at('A', 'no', '2026-09-25T02:00:00Z'), at('A', 'yes', '2026-09-25T01:00:00Z')) === 'no')
+  check('🔴 🔴 **같은 사람은 마지막에 붙은 기록만 — 앞의 yes 뒤에 no 면 no**',
+    hdOf(at('A', 'yes', '2026-09-25T01:00:00Z'), at('A', 'no', '2026-09-25T02:00:00Z')) === 'no')
+  check('🔴 🔴 **최신의 정본은 append 순서 — 나중에 붙은 기록의 시각이 더 과거여도 그 기록이 최신**',
+    hdOf(at('A', 'no', '2026-09-25T02:00:00Z'), at('A', 'yes', '2026-09-25T01:00:00Z')) === 'yes'
+    && !/Date\.parse|reviewedAt/.test(codeOnly('src/lib/auto-ready-evidence.ts').split('export function effectiveHumanReviews')[1]!.split('export type HumanSampleVerdict')[0]!))
   check('🔴 🔴 **결속이 깨진 옛 기록은 쓰지 않고 새 결속 기록을 쓴다 (이력은 남는다)**',
     (() => { const changed = { ...r0, editedBody: `${B} 새 문안`, status: 'EDITED' }
       const old = at('A', 'yes', '2026-09-25T01:00:00Z'); const fresh = { ...rv(changed, { reviewer: 'human:operator', reviewerUserId: 'A', hardDefect: 'no', reviewedAt: '2026-09-25T02:00:00Z' }) }
@@ -260,12 +263,29 @@ console.log('\n③ 🔴 표본 — 인증된 사람 v2 기록만 · 결과도 �
   check('🔴 🔴 **요청 본문의 reviewer · reviewedAt 은 읽지 않는다 — 다섯 칸만 꺼낸다**',
     !/\.reviewer\b|\.reviewedAt\b|reviewedAt:/.test(action.replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''))
     && (action.match(/const reviewer = resolveHumanReviewer\(\{ isAdmin: true \}\)\n/g) ?? []).length === 1
-    && /decision: r\.decision, declineReason: r\.declineReason, hardDefect: r\.hardDefect, reasons: r\.reasons/.test(action))
+    && /decision: r\.decision, declineReason: r\.declineReason, hardDefect: r\.hardDefect, reasons: r\.reasons,\s*withdraw: r\.withdraw === true,/.test(action))
   const store = codeOnly('src/lib/auto-ready-evidence-store.ts')
   check('🔴 🔴 **사람 경로 — 빈 판정은 건너뜀(write 0) · yes·no 만 · 기록은 쌓는다(append-only)**',
     /if \(blank\) \{ out\.push\(\{ queueId: e\.queueId, result: 'skip'/.test(store)
     && /if \(e\.hardDefect !== 'yes' && e\.hardDefect !== 'no'\) \{ reject/.test(store)
     && /const m = appendHumanReview\(now\.editDiff, entry, now\)/.test(store) && !/if \(m\.kind === 'conflict'\) throw/.test(store))
+  // ── 🔴 결함 yes 인데 발행 가능한 상태를 남기지 않는다 (2026-09-26 마스터 P0) ──
+  check('🔴 🔴 **결정 전 행 — ready + 결함 yes 는 전체 거절**',
+    /if \(decision === 'ready' && d\.hardDefect === 'yes'\) \{ reject\(/.test(store))
+  check('🔴 🔴 **승인 미발행 + 결함 yes — 명시적 철회가 없으면 기록하지 않는다 · 철회 실패면 되돌린다**',
+    /if \(d\.hardDefect === 'yes'\) \{\s*if \(!withdraw\) throw new Abort\(/.test(store)
+    && /const w = await withdrawOriginalPostInTx\(tx, \{ row, reason: e\.declineReason, actorUserId: i\.actor\.userId, now: i\.now \}\)\s*if \(!w\.ok\) throw new Abort/.test(store))
+  const W = codeOnly('src/lib/original-post-withdrawal.ts')
+  check('🔴 🔴 **철회 계약 — APPROVED·EDITED 만 · 발행됨 불가 · 사유 코드 필수(기본값 없음)**',
+    !planOriginalPostWithdrawal({ status: 'APPROVED', createdPostId: 'p1', reason: 'TOPIC_UNFIT' }).ok
+    && !planOriginalPostWithdrawal({ status: 'DECLINED', createdPostId: null, reason: 'TOPIC_UNFIT' }).ok
+    && !planOriginalPostWithdrawal({ status: 'PUBLISHED', createdPostId: null, reason: 'TOPIC_UNFIT' }).ok
+    && !planOriginalPostWithdrawal({ status: 'APPROVED', createdPostId: null, reason: '' }).ok
+    && !planOriginalPostWithdrawal({ status: 'APPROVED', createdPostId: null, reason: 'MADE_UP' }).ok
+    && planOriginalPostWithdrawal({ status: 'EDITED', createdPostId: null, reason: 'TOPIC_UNFIT' }).ok)
+  check('🔴 🔴 **철회는 승인 도장(decidedBy·decidedAt)을 덮지 않는다 · 조건부 쓰기(createdPostId null · updatedAt · editDiff)**',
+    !/decidedBy:|decidedAt:/.test(W.split('data: {')[1]!.split('editDiff:')[0]!)
+    && /createdPostId: null, updatedAt: i\.row\.updatedAt,/.test(W))
   check('🔴 🔴 **CLI importer 는 사람 기록을 만들지 못한다 · 시각은 프로세스 시계 · 결과는 지금 상태로 결속**',
     /if \(isHumanReviewer\(reviewer\)\) \{\s*return \{ ok: false/.test(store) && /reviewedAt: now\.toISOString\(\)/.test(store)
     && !/file\.reviewedAt/.test(store) && /reviewerUserId: null, \.\.\.bindingOf\(row\)/.test(store))

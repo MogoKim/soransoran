@@ -21,6 +21,8 @@ import {
 } from '../src/lib/auto-ready-evidence-store'
 import { HUMAN_DECIDER, CONTRACT } from '../src/lib/auto-ready-v2'
 import { evidenceFromDb } from '../src/lib/auto-ready-repo'
+import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
+import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticSummaryOf,
 } from '../src/lib/micro-seed-supply-autofill'
@@ -74,7 +76,7 @@ async function main(): Promise<void> {
    */
   const seed = async (o: {
     artifactId?: string; addArtifact?: boolean; artifactDraftBody?: string; artifactVoice?: string
-    edited?: boolean; body?: string; declined?: boolean; undecided?: boolean; matchedPersonaId?: string
+    edited?: boolean; body?: string; declined?: boolean; undecided?: boolean; matchedPersonaId?: string; published?: boolean
   } = {}) => {
     seq += 1
     const art = o.artifactId ?? digestOf(`art-${seq}`).slice(0, 32)
@@ -111,6 +113,11 @@ async function main(): Promise<void> {
       },
       select: { id: true },
     })
+    if (o.published === true) {
+      // 🔴 발행된 행 — 실제 글을 가리킨다(createdPostId FK)
+      const post = await prisma.post.create({ data: { boardType: 'FREE', title, content: body, authorId: u.id }, select: { id: true } })
+      await prisma.originalPostApprovalQueue.update({ where: { id: row.id }, data: { status: 'PUBLISHED', createdPostId: post.id } })
+    }
     if (o.addArtifact !== false && o.artifactId !== '') {
       const doc: ArtifactDoc = {
         file: `auto-draft-${seq}.artifacts.json`, artifactId: art, sourceArticleId: base, contract: CONTRACT_A,
@@ -242,7 +249,8 @@ async function main(): Promise<void> {
 
   console.log('\nB-2. 🔴 서버 경계 — 인증된 검토자만 · 요청의 reviewer·reviewedAt 무시')
   {
-    const a = await restored()
+    // 🔴 발행된 행 — 결함 yes 도 사후 기록으로 받는다(재판정 반례에 쓴다)
+    const a = await restored({ published: true })
     const bundle = bundleOf([a], 'auth')
     const before = await snap(a.id)
     for (const [label, actor] of [
@@ -274,7 +282,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **같은 사람이 yes 뒤에 no 로 다시 판정 → 최신 no 가 유효 · 기록 3개 이력 보존**',
       back.hardDefects === 0 && readEvidenceReviews((await snap(a.id)).editDiff).filter((x) => x.reviewerUserId === founderUser).length === 3, JSON.stringify(back))
     const noDecisionChange = await recordHumanBatch(prisma, { actor: FOUNDER, now: later, bundle, entries: [{ queueId: a.id, decision: 'reject', declineReason: 'TOPIC_UNFIT', hardDefect: 'no' }] })
-    check('🔴 이미 결정된 행의 결정은 바꾸지 않는다', noDecisionChange[0]?.result === 'reject' && (await snap(a.id)).status === 'APPROVED')
+    check('🔴 이미 결정된 행의 결정은 바꾸지 않는다', noDecisionChange[0]?.result === 'reject' && (await snap(a.id)).status === 'PUBLISHED')
     // 🔴 서버를 거치지 않고 DB 에 직접 넣은 사람 기록 — 사용자 id 가 없으면 무효
     const forged = await restored()
     const fr = await snap(forged.id)
@@ -409,7 +417,7 @@ async function main(): Promise<void> {
     await recordHumanBatch(prisma, { actor: OP_B, now: new Date(NOW.getTime() + 5000), bundle: bundleOf([z], 'b5-z'), entries: [{ queueId: z.id, hardDefect: 'no' }] })
     check('🔴 🔴 **⑦ A unmeasured + B no → no**', await hdOf(z.id) === 'no')
     // ⑧ A no + B yes → yes
-    const w = await restored()
+    const w = await restored({ published: true })
     const bw = bundleOf([w], 'b5-w')
     await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 6000), bundle: bw, entries: [{ queueId: w.id, hardDefect: 'no' }] })
     await recordHumanBatch(prisma, { actor: OP_B, now: new Date(NOW.getTime() + 7000), bundle: bw, entries: [{ queueId: w.id, hardDefect: 'yes', reasons: ['생활사 모순'] }] })
@@ -419,6 +427,98 @@ async function main(): Promise<void> {
     check('🔴 🔴 **기록의 사람 식별은 세션 User.id — 두 관리자 모두 human:operator**',
       readEvidenceReviews((await snap(w.id)).editDiff).every((r) => r.reviewer === 'human:operator')
       && new Set(readEvidenceReviews((await snap(w.id)).editDiff).map((r) => r.reviewerUserId)).size === 2)
+  }
+
+  console.log('\nB-6. 🔴 🔴 중대 결함이 있는데 발행 가능한 상태가 남지 않는다 (마스터 P0)')
+  {
+    const hd = async (id: string) => { const v = humanSampleOf(await snap(id)); return v.counted ? `${v.outcome}/${v.hardDefect}` : `excluded:${v.why}` }
+    const one = async (x: { id: string; title: string; body: string }, entry: Record<string, unknown>, tag: string) =>
+      (await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bundleOf([x], tag), entries: [{ queueId: x.id, ...entry }] }))[0]
+    // ── 결정 전 그림자 ──
+    const s1 = await restored({ undecided: true })
+    const r1 = await one(s1, { decision: 'ready', hardDefect: 'yes', reasons: ['생활사 모순'] }, 'b6-s1')
+    const q1 = await snap(s1.id)
+    check('🔴 🔴 **그림자 ready + yes → 전체 거절 · write 0**',
+      r1?.result === 'reject' && q1.decidedBy === 'machine:auto-draft-v5' && q1.status === 'APPROVED' && readEvidenceReviews(q1.editDiff).length === 0, JSON.stringify(r1))
+    const s2 = await restored({ undecided: true })
+    const r2 = await one(s2, { decision: 'reject', declineReason: 'TOPIC_UNFIT', hardDefect: 'yes', reasons: ['생활사 모순'] }, 'b6-s2')
+    check('🔴 🔴 **그림자 reject + yes + 사유 → DECLINED · 표본 declined/yes**',
+      r2?.result === 'decidedAndRecorded' && (await snap(s2.id)).status === 'DECLINED' && await hd(s2.id) === 'declined/yes', JSON.stringify(r2))
+    // ── 이미 결정된 미발행 승인 행 ──
+    const ap = await restored()
+    const before = await snap(ap.id)
+    const stock0 = await loadPublishableStock(prisma, NOW, { autoReadyOpen: false })
+    check('선행 — 승인 미발행 행은 발행 대상이다', stock0.targets.some((t) => t.id === ap.id))
+    const noW = await one(ap, { hardDefect: 'yes', reasons: ['단정'] }, 'b6-ap')
+    check('🔴 🔴 **승인 행 yes 인데 철회 선택 없음 → 기록·상태 변경 0**',
+      noW?.result === 'reject' && (await snap(ap.id)).status === 'APPROVED' && readEvidenceReviews((await snap(ap.id)).editDiff).length === 0
+      && (await snap(ap.id)).updatedAt.getTime() === before.updatedAt.getTime(), JSON.stringify(noW))
+    const noReason = await one(ap, { hardDefect: 'yes', reasons: ['단정'], withdraw: true }, 'b6-ap')
+    check('🔴 🔴 **철회는 골랐지만 사유 없음 → 철회·기록 0 (기본 사유 없음)**',
+      noReason?.result === 'reject' && (await snap(ap.id)).status === 'APPROVED' && readEvidenceReviews((await snap(ap.id)).editDiff).length === 0)
+    const w1 = await one(ap, { hardDefect: 'yes', reasons: ['단정'], withdraw: true, declineReason: 'GATE_MISS_AI_TONE' }, 'b6-ap')
+    const after = await snap(ap.id)
+    const wd = (after.editDiff as Record<string, unknown>).withdrawal as Record<string, unknown> | undefined
+    check('🔴 🔴 **APPROVED 미발행 + yes + 철회 → DECLINED · 표본 declined/yes**',
+      w1?.result === 'withdrawnAndRecorded' && after.status === 'DECLINED' && after.declineReason === 'GATE_MISS_AI_TONE' && await hd(ap.id) === 'declined/yes', JSON.stringify(w1))
+    check('🔴 🔴 **철회는 원래 승인 도장을 덮지 않는다 — decidedBy·decidedAt 그대로 · 철회 기록은 따로**',
+      after.decidedBy === before.decidedBy && after.decidedAt?.getTime() === before.decidedAt?.getTime()
+      && wd?.prevStatus === 'APPROVED' && wd.withdrawnByUserId === founderUser && wd.reasonCode === 'GATE_MISS_AI_TONE')
+    const stock1 = await loadPublishableStock(prisma, NOW, { autoReadyOpen: false })
+    const pub1 = await publishOriginalPostTx(prisma, { queueId: ap.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: {} })
+    check('🔴 🔴 **철회된 행 — selector 대상 0 · 발행 트랜잭션 0**',
+      !stock1.targets.some((t) => t.id === ap.id) && pub1.kind === 'blocked' && (await snap(ap.id)).createdPostId === null, JSON.stringify(pub1))
+    const ed = await restored({ edited: true })
+    const w2 = await one(ed, { hardDefect: 'yes', reasons: ['단정'], withdraw: true, declineReason: 'TITLE_WEAK' }, 'b6-ed')
+    check('🔴 🔴 **EDITED 미발행 + yes + 철회 → DECLINED**', w2?.result === 'withdrawnAndRecorded' && (await snap(ed.id)).status === 'DECLINED', JSON.stringify(w2))
+    const okNo = await restored()
+    check('🔴 승인 미발행 + no → 기록 · 상태 그대로', (await one(okNo, { hardDefect: 'no' }, 'b6-no'))?.result === 'recorded' && (await snap(okNo.id)).status === 'APPROVED')
+    check('🔴 결함 없음(no)에 철회를 붙이면 거절', (await one(await restored(), { hardDefect: 'no', withdraw: true, declineReason: 'TOPIC_UNFIT' }, 'b6-nw'))?.result === 'reject')
+    // ── 발행된 행 · 폐기된 행 ──
+    const pb = await restored({ published: true })
+    const rp = await one(pb, { hardDefect: 'yes', reasons: ['사후 발견'] }, 'b6-pb')
+    check('🔴 🔴 **PUBLISHED + yes → 사후 기록만 · 상태 그대로**',
+      rp?.result === 'recorded' && (await snap(pb.id)).status === 'PUBLISHED' && await hd(pb.id) === 'noEdit/yes', JSON.stringify(rp))
+    check('🔴 발행된 행은 철회 불가', (await one(pb, { hardDefect: 'yes', reasons: ['사후 발견 2'], withdraw: true, declineReason: 'TOPIC_UNFIT' }, 'b6-pb'))?.result === 'reject')
+    const dc = await restored({ declined: true })
+    check('🔴 DECLINED + yes → 기록', (await one(dc, { hardDefect: 'yes', reasons: ['원래 문제'] }, 'b6-dc'))?.result === 'recorded' && await hd(dc.id) === 'declined/yes')
+    // ── 발행 · 철회 순서 — 먼저 성공한 쪽만 남는다 ──
+    const alone = await restored()
+    const pa = await publishOriginalPostTx(prisma, { queueId: alone.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: {} })
+    check('선행 — 이 행은 단독이면 실제로 발행된다 (경쟁 검사가 공허하지 않다)', pa.kind === 'published', JSON.stringify(pa))
+    const late = await one(alone, { hardDefect: 'yes', reasons: ['발행 뒤 철회 시도'], withdraw: true, declineReason: 'TOPIC_UNFIT' }, 'b6-late')
+    check('🔴 🔴 **발행 → 철회 순서 — 철회 거절 · 기록 0 · PUBLISHED 그대로**',
+      late?.result === 'reject' && (await snap(alone.id)).status === 'PUBLISHED' && readEvidenceReviews((await snap(alone.id)).editDiff).length === 0)
+    // ── 동시 발행 · 철회 경쟁 — 둘 중 하나만 ──
+    let publishWins = 0
+    let withdrawWins = 0
+    for (let k = 0; k < 4; k += 1) {
+      const race = await restored()
+      const [p, w] = await Promise.all([
+        publishOriginalPostTx(prisma, { queueId: race.id, publishedToday: 0, dailyCap: 100, autoReadyEnv: {} }),
+        one(race, { hardDefect: 'yes', reasons: ['경쟁'], withdraw: true, declineReason: 'TOPIC_UNFIT' }, `b6-race-${k}`),
+      ])
+      const q = await snap(race.id)
+      const both = p.kind === 'published' && w?.result === 'withdrawnAndRecorded'
+      const neither = p.kind !== 'published' && w?.result !== 'withdrawnAndRecorded'
+      if (p.kind === 'published') publishWins += 1
+      if (w?.result === 'withdrawnAndRecorded') withdrawWins += 1
+      check(`🔴 🔴 **동시 발행/철회 경쟁 #${k + 1} — 둘 중 하나만 성공 · 최종 상태가 그 쪽과 같다**`,
+        !both && !neither && (p.kind === 'published' ? q.status === 'PUBLISHED' && readEvidenceReviews(q.editDiff).length === 0 : q.status === 'DECLINED' && q.createdPostId === null),
+        `${p.kind}/${w?.result} → ${q.status}`)
+    }
+    console.log(`     (경쟁 결과 — 발행 ${publishWins} · 철회 ${withdrawWins})`)
+    // ── D. 최신의 정본은 append 순서 ──
+    const od = await restored({ published: true })
+    const odr = await snap(od.id)
+    const mk = (hdv: 'yes' | 'no', at: string, reasons: string[]) => ({
+      contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:operator', reviewerUserId: founderUser, ...bindingOf(odr),
+      hardDefect: hdv, reasons, bundleDigest: digestOf('order'), reviewedAt: at,
+    })
+    await prisma.originalPostApprovalQueue.update({ where: { id: od.id }, data: { editDiff: { evidenceReviews: [
+      mk('no', '2026-09-26T05:00:00Z', []), mk('yes', '2026-09-26T01:00:00Z', ['나중에 붙었지만 시각은 과거']),
+    ] } as never } })
+    check('🔴 🔴 **D. 나중에 붙은 기록의 시각이 더 과거여도 그 기록이 최신 (yes)**', await hd(od.id) === 'noEdit/yes')
   }
 
   console.log('\nC. 🔴 게이트 — 29 닫힘 · 30·90%·0 열림 · 기준 불변')

@@ -299,19 +299,17 @@ export function readEvidenceReviews(editDiff: unknown): EvidenceReview[] {
 
 /**
  * 🔴 **사람 기록은 이력이다 — 덮지 않고 쌓는다.** 유효한 것은 **지금 결속에 맞는 기록 중
- *    사용자(reviewerUserId)별 최신 하나**다. 최신은 `reviewedAt`(서버 시계), 같으면 나중에 쌓인 것.
+ *    사용자(reviewerUserId)별 마지막 하나**다.
+ * 🔴 **최신의 정본은 append 순서다** (2026-09-26 마스터). `reviewedAt` 은 감사 표시용일 뿐이다 —
+ *    나중에 붙은 기록의 시각이 더 과거여도 그 기록이 최신이다. 배열 순서는 `readEvidenceReviews` 가
+ *    저장된 순서 그대로 보존한다.
  *    결속이 깨진 옛 기록은 남아 있지만 판정에 쓰이지 않는다 — 같은 사람이 새 상태를 다시 검토하면
  *    그 새 기록이 유효해진다.
  */
 export function effectiveHumanReviews(bound: readonly EvidenceReview[]): EvidenceReview[] {
-  const byUser = new Map<string, { r: EvidenceReview; at: number; i: number }>()
-  bound.forEach((r, i) => {
-    const key = r.reviewerUserId ?? ''
-    const at = Date.parse(r.reviewedAt)
-    const cur = byUser.get(key)
-    if (cur === undefined || at > cur.at || (at === cur.at && i > cur.i)) byUser.set(key, { r, at, i })
-  })
-  return [...byUser.values()].map((x) => x.r)
+  const byUser = new Map<string, EvidenceReview>()
+  for (const r of bound) byUser.set(r.reviewerUserId ?? '', r)
+  return [...byUser.values()]
 }
 
 export type HumanSampleVerdict =

@@ -20,6 +20,7 @@ import { resolveHumanReviewer } from '@/lib/review-provenance'
  *     아래에서 queueId · decision · declineReason · hardDefect · reasons 다섯 칸만 꺼낸다.
  *   · 인증되지 않았거나 관리자가 아니면 DB write 0.
  *   · 🔴 중대 결함을 비운 행은 **건너뛴다(DB write 0)** — 사람 기록은 yes·no 를 명시한 행만 쓴다.
+ *   · 🔴 결함 yes 인 미발행 승인 글은 **명시적 철회(사유 필수)** 와 함께만 기록된다 — 같은 트랜잭션.
  *
  * 🔴 이 경계가 쓰는 칸 — 큐의 `editDiff.evidenceReviews` 와, 결정 전 그림자에 한해
  *    정본 `completeReview` 가 쓰는 결정 칸(status · declineReason · decidedBy · decidedAt).
@@ -55,12 +56,13 @@ export async function submitEvidenceBatch(input: { bundleText: string; entries: 
   }
   if (items.length === 0) return { error: '검토 묶음에 행이 없습니다.' }
   if (!Array.isArray(input.entries)) return { error: '입력이 배열이 아닙니다.' }
-  // 🔴 다섯 칸만 꺼낸다 — reviewer · reviewedAt 이 들어와도 버려진다
+  // 🔴 여섯 칸만 꺼낸다 — reviewer · reviewedAt 이 들어와도 버려진다. 철회는 true 일 때만이다
   const entries: HumanBatchEntry[] = (input.entries as unknown[]).map((raw) => {
     const r = rec(raw)
     return {
       queueId: typeof r.queueId === 'string' ? r.queueId : '',
       decision: r.decision, declineReason: r.declineReason, hardDefect: r.hardDefect, reasons: r.reasons,
+      withdraw: r.withdraw === true,
     }
   }).filter((e) => e.queueId !== '')
 

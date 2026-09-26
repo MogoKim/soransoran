@@ -106,6 +106,32 @@ async function main(): Promise<void> {
   const blank = await call({ bundleText, entries: [{ queueId: row.id }] }, await cookieFor(admin.id))
   check('🔴 빈 판정 제출 → 기록 수 그대로', blank.status === 200 && (await reviews()).length === 1)
 
+  // ── 🔴 결함 yes 인 미발행 승인 글 — 철회를 명시해야만 기록된다 ──
+  const raw2 = await prisma.microSeedRawContent.create({
+    data: { origin: 'live', sourceSite: `${MACHINE_SITE_PREFIX}navercafe:x`, sourceUrl: 'https://example.invalid/h2', sourceArticleId: 'H2-x', sourceCapturedAt: new Date(Date.now() - 864e5), rawTitle: 't', rawBody: 'b' },
+    select: { id: true },
+  })
+  const src = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: row.id }, select: { gateResults: true } })
+  const t2 = '두 번째 하루 이야기'
+  const b2 = '저녁에 동네를 한 바퀴 돌았어요. 다들 어떻게 지내세요?'
+  const row2 = await prisma.originalPostApprovalQueue.create({
+    data: { sourceRawContentId: raw2.id, status: 'APPROVED', draftTitle: t2, draftBody: b2, gateVerdict: 'PASS', promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL, decidedBy: HUMAN_DECIDER, decidedAt: new Date('2026-09-20T00:00:00Z'), dedupKey: 'h2', gateResults: src.gateResults as never },
+    select: { id: true },
+  })
+  const bundle2 = JSON.stringify({ items: [{ queueId: row2.id, draft: { titleDigest: digestOf(t2), bodyDigest: digestOf(b2) } }] })
+  const q2 = () => prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: row2.id } })
+  const noWithdraw = await call({ bundleText: bundle2, entries: [{ queueId: row2.id, hardDefect: 'yes', reasons: ['단정'] }] }, await cookieFor(admin.id))
+  check('🔴 🔴 **결함 yes · 철회 선택 없음 → 상태·기록 0**',
+    noWithdraw.status === 200 && (await q2()).status === 'APPROVED' && readEvidenceReviews((await q2()).editDiff).length === 0)
+  const plainW = await call({ bundleText: bundle2, entries: [{ queueId: row2.id, hardDefect: 'yes', reasons: ['단정'], withdraw: true, declineReason: 'TOPIC_UNFIT' }] }, await cookieFor(plain.id))
+  check('🔴 🔴 **비관리자의 철회 요청 → 상태·기록 0**', (await q2()).status === 'APPROVED', `status ${plainW.status}`)
+  const okW = await call({ bundleText: bundle2, entries: [{ queueId: row2.id, hardDefect: 'yes', reasons: ['단정'], withdraw: true, declineReason: 'TOPIC_UNFIT' }] }, await cookieFor(admin.id))
+  const after2 = await q2()
+  check('🔴 🔴 **관리자 철회 → DECLINED · 사유 그대로 · 승인 시각 보존 · 결함 기록 1**',
+    okW.status === 200 && after2.status === 'DECLINED' && after2.declineReason === 'TOPIC_UNFIT'
+    && after2.decidedAt?.toISOString() === '2026-09-20T00:00:00.000Z' && readEvidenceReviews(after2.editDiff).length === 1,
+    `${after2.status} · ${after2.declineReason} · ${after2.decidedAt?.toISOString()}`)
+
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "AutoReadyAudit","OriginalPostApprovalQueue","MicroSeedRawContent","Post","Persona","User" CASCADE')
   await prisma.$disconnect()
   console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

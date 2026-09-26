@@ -24,6 +24,7 @@ import { profileOf } from './original-post-auto-publish'
 import { semanticSummaryOf } from './micro-seed-supply-autofill'
 import { completeReview, type ReviewAction, type ReviewRow } from './original-post-machine-review'
 import { isDeclineReasonCode } from './original-post-decision'
+import { withdrawOriginalPostInTx } from './original-post-withdrawal'
 import {
   parseReviewerKind, isHumanReviewer, LEGACY_DECISION_MARK, NON_HUMAN_IMPORTABLE, type ReviewerKind, type HumanReviewerKind,
 } from './review-provenance'
@@ -288,9 +289,11 @@ export type HumanBatchEntry = {
   declineReason?: unknown
   hardDefect?: unknown
   reasons?: unknown
+  /** 🔴 미발행 승인 행에 결함 yes 를 기록할 때 **명시적으로** 철회한다(true 일 때만) */
+  withdraw?: unknown
 }
 
-export type HumanBatchResult = { queueId: string; result: 'recorded' | 'decidedAndRecorded' | 'unchanged' | 'skip' | 'reject'; why: string }
+export type HumanBatchResult = { queueId: string; result: 'recorded' | 'decidedAndRecorded' | 'withdrawnAndRecorded' | 'unchanged' | 'skip' | 'reject'; why: string }
 
 class Abort extends Error {}
 
@@ -344,6 +347,13 @@ export async function recordHumanBatch(prisma: PrismaClient, i: {
       reject(`결정 "${String(decision)}" 은 이 화면에서 받지 않는다 (ready · reject 만 — 수정은 게이트가 있는 기존 명령으로)`); continue
     }
     if (decision === 'reject' && !isDeclineReasonCode(e.declineReason)) { reject('폐기에는 사유 코드가 필요하다'); continue }
+    /**
+     * 🔴 **중대 결함이 있는데 발행 가능한 상태를 남기지 않는다** (2026-09-26 마스터 P0).
+     *    결정 전 행에 "그대로 내보낸다" + 결함 yes 는 모순이다 — 전체 거절, write 0.
+     */
+    if (decision === 'ready' && d.hardDefect === 'yes') { reject('중대 결함이 있으면 그대로 내보낼 수 없다 — 폐기(사유 필수)만 받는다'); continue }
+    const withdraw = e.withdraw === true
+    if (withdraw && decision !== null) { reject('결정 전 행은 철회가 아니라 결정(ready·reject)으로 처리한다'); continue }
     try {
       const res = await prisma.$transaction(async (tx): Promise<HumanBatchResult> => {
         const row = await tx.originalPostApprovalQueue.findUnique({ where: { id: e.queueId }, select: EVIDENCE_ROW_SELECT })
@@ -357,6 +367,7 @@ export async function recordHumanBatch(prisma: PrismaClient, i: {
         if (!machine) throw new Abort('기계 후보가 아니다')
         const decidedBy = (row.decidedBy ?? '').trim()
         let decided = false
+        let withdrawn = false
         if (decidedBy.startsWith('machine:')) {
           // ── 결정 전 그림자 — 결정을 먼저 정본 경로로 저장한다 ──
           if (decision === null) throw new Abort('결정 전 행이다 — ready · reject 중 하나를 골라야 기록한다')
@@ -397,6 +408,30 @@ export async function recordHumanBatch(prisma: PrismaClient, i: {
           decided = true
         } else if (decidedBy === HUMAN_DECIDER) {
           if (decision !== null) throw new Abort('이미 결정된 행이다 — 결정을 바꾸지 않는다(결과 확정만 한다)')
+          /**
+           * 🔴 **이미 결정된 행 — 상태별로 받는 것이 다르다** (2026-09-26 마스터 P0).
+           *    · 발행됨: 결함 yes·no 모두 사후 기록만. 상태는 바꾸지 않는다(철회 불가)
+           *    · 폐기됨: 결함 yes·no 기록
+           *    · 승인·수정 미발행 + no: 기록
+           *    · 승인·수정 미발행 + yes: **같은 트랜잭션에서 명시적 철회**(사유 필수)가 있어야 기록한다.
+           *      철회가 실패하면 기록도 0 — 결함 기록과 발행 가능 상태가 공존하지 않는다
+           */
+          const published = row.createdPostId !== null
+          const openApproved = !published && (row.status === 'APPROVED' || row.status === 'EDITED')
+          if (published || row.status === 'DECLINED') {
+            if (withdraw) throw new Abort(published ? '이미 발행된 글은 철회할 수 없다 — 사후 기록만 남긴다' : '이미 폐기된 글이다 — 철회할 것이 없다')
+          } else if (openApproved) {
+            if (d.hardDefect === 'yes') {
+              if (!withdraw) throw new Abort('중대 결함이 있는 미발행 승인 글이다 — 철회와 폐기 사유를 함께 골라야 기록한다')
+              const w = await withdrawOriginalPostInTx(tx, { row, reason: e.declineReason, actorUserId: i.actor.userId, now: i.now })
+              if (!w.ok) throw new Abort(`철회 실패 — ${w.error}`)
+              withdrawn = true
+            } else if (withdraw) {
+              throw new Abort('결함 없음이면 철회하지 않는다')
+            }
+          } else {
+            throw new Abort(`상태 ${row.status} 인 행은 기록하지 않는다`)
+          }
         } else {
           throw new Abort(`decidedBy=${decidedBy || '(없음)'} — 사람 결정 경로의 행이 아니다`)
         }
@@ -412,7 +447,7 @@ export async function recordHumanBatch(prisma: PrismaClient, i: {
           where: casWhere(snapshotOf(now)), data: { editDiff: m.next as Prisma.InputJsonValue },
         })
         if (n.count !== 1) throw new Abort('기록 중 행이 바뀌었다(CAS 0)')
-        return { queueId: row.id, result: decided ? 'decidedAndRecorded' : 'recorded', why: '' }
+        return { queueId: row.id, result: withdrawn ? 'withdrawnAndRecorded' : decided ? 'decidedAndRecorded' : 'recorded', why: '' }
       }, { isolationLevel: 'Serializable', maxWait: 5_000, timeout: 20_000 })
       out.push(res)
     } catch (err) {

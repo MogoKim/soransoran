@@ -19,7 +19,7 @@ import { DECLINE_REASONS } from '@/lib/original-post-decision'
 type Item = {
   group: 'decided' | 'undecidedShadow'
   queueId: string
-  decision: { status: string; outcome: string | null }
+  decision: { status: string; outcome: string | null; published: boolean }
   source: { title: string; body: string } | null
   artifactSource?: { rawTitle: string; rawBody: string } | null
   draft: { title: string; body: string }
@@ -31,9 +31,9 @@ type Item = {
   restore: { klass: string }
 }
 
-type Entry = { decision: '' | 'ready' | 'reject'; declineReason: string; hardDefect: '' | 'no' | 'yes'; reasons: string }
+type Entry = { decision: '' | 'ready' | 'reject'; declineReason: string; hardDefect: '' | 'no' | 'yes'; reasons: string; withdraw: boolean }
 
-const EMPTY: Entry = { decision: '', declineReason: '', hardDefect: '', reasons: '' }
+const EMPTY: Entry = { decision: '', declineReason: '', hardDefect: '', reasons: '', withdraw: false }
 
 export default function EvidenceBatchReview() {
   const [bundleText, setBundleText] = useState<string | null>(null)
@@ -68,6 +68,7 @@ export default function EvidenceBatchReview() {
         declineReason: e.declineReason === '' ? null : e.declineReason,
         hardDefect: e.hardDefect === '' ? null : e.hardDefect,
         reasons: e.reasons.split('\n').map((s) => s.trim()).filter(Boolean),
+        withdraw: e.withdraw,
       }
     })
     if (!window.confirm(`${list.length}건을 한 번에 기록합니다. 결정 전 행의 ready · 폐기는 되돌리는 버튼이 없습니다. 계속할까요?`)) return
@@ -95,6 +96,9 @@ export default function EvidenceBatchReview() {
       {items.map((i) => {
         const e = entries[i.queueId] ?? EMPTY
         const shadow = i.group === 'undecidedShadow'
+        // 🔴 결함 있음 + 미발행 승인 글 → 철회와 사유를 **직접** 고른다(기본값 없음)
+        const openApproved = !shadow && !i.decision.published && (i.decision.status === 'APPROVED' || i.decision.status === 'EDITED')
+        const needWithdraw = openApproved && e.hardDefect === 'yes'
         return (
           <section key={i.queueId} className="rounded-lg border border-gray-200 px-4 py-3 text-sm">
             <header className="mb-2 flex flex-wrap items-center gap-2">
@@ -152,6 +156,23 @@ export default function EvidenceBatchReview() {
                   <option value="yes">있음</option>
                 </select>
               </label>
+              {needWithdraw && (
+                <div className="flex flex-col rounded bg-red-50 px-3 py-2">
+                  <label className="flex items-center gap-2 font-bold text-red-900">
+                    <input type="checkbox" checked={e.withdraw} disabled={pending} onChange={(ev) => set(i.queueId, { withdraw: ev.target.checked })} className="h-6 w-6" />
+                    철회 — 승인을 거둬들여 발행 대상에서 뺀다
+                  </label>
+                  <select value={e.declineReason} disabled={pending || !e.withdraw} onChange={(ev) => set(i.queueId, { declineReason: ev.target.value })}
+                    className="mt-2 min-h-[52px] rounded border px-2">
+                    <option value="">철회 사유 선택 (필수)</option>
+                    {DECLINE_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+                  </select>
+                  <span className="mt-1 text-xs text-red-900">철회하지 않으면 이 행은 기록되지 않습니다. 원래 승인 기록은 그대로 남습니다.</span>
+                </div>
+              )}
+              {shadow && e.decision === 'ready' && e.hardDefect === 'yes' && (
+                <span className="text-xs font-bold text-red-900">결함이 있으면 그대로 내보낼 수 없습니다 — 폐기를 고르세요</span>
+              )}
               <label className="flex min-w-[240px] flex-1 flex-col">
                 <span className="text-xs font-bold">근거 (있음이면 필수 · 줄마다 하나)</span>
                 <textarea value={e.reasons} disabled={pending} rows={2} onChange={(ev) => set(i.queueId, { reasons: ev.target.value })}
