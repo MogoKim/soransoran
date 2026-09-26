@@ -400,13 +400,63 @@ export type SelfClaim = {
   owner: 'explicit' | 'elided'
 }
 
-/** 한 문장 → (절, 세상 이야기 틀인가) — `readPostRequirements` 와 같은 경계다 */
-function* clausesOf(title: string, body: string): Generator<{ clause: string; general: boolean }> {
+/**
+ * 🔴 **절 머리의 주어가 누구인가** (2026-09-26 마스터 재검토 · 과차단 반례).
+ *
+ *    `친구 남편이 육아휴직 쓰고 초1 아이를 돌봐요` 는 절 경계(`쓰고`)에서 잘리면 뒤 절
+ *    `초1 아이를 돌봐요` 가 **주어 없는 절**이 되고, 생략된 1인칭 규칙이 그것을 글쓴이 아이로 읽었다.
+ *    한국어 `-고` 이음은 앞 절의 주어를 뒤 절로 넘긴다 — 그래서 **앞 절 주어의 임자**를 들고 간다.
+ *
+ *    🔴 사람 명사 목록을 쓰지 않는다. 구조만 본다:
+ *      · 절 머리 세 어절 안에서 **주격·화제 조사**로 끝나는 첫 어절이 주어다
+ *      · 그 주어가 1인칭 낱말(`제가` · `저는` …)이면 → 글쓴이
+ *      · 그 주어가 소재어(`남편이` · `애들이`)면 → 그 앞 어절로 임자를 가린다(`ownerOfPrefix`)
+ *        — 비었거나 1인칭이면 글쓴이, **누군가 앞에 서 있으면**(`친구 남편이`) 남
+ *      · 그 밖의 명사가 주어면(`동료가` · `언니가`) → 남. 누구인지 알 필요가 없다
+ *    🔴 **주어가 없는 절만** 앞 절의 값을 이어 받는다. 문장 첫 절에 주어가 없으면 `null` — 생략된 1인칭 규칙 그대로다.
+ */
+type Carry = 'self' | 'other' | null
+const CLAUSE_SUBJECT_RE = /(?:께서|이|가|은|는)(?:도|만)?$/
+const subjectOwnerOf = (clause: string): Carry => {
+  const words = clause.trim().split(/\s+/).filter((w) => w !== '')
+  for (let k = 0; k < Math.min(3, words.length); k += 1) {
+    const w = words[k]!
+    if (SELF_WORD_RE.test(w)) return 'self'
+    if (ADVERBIAL_RE.test(w) || !CLAUSE_SUBJECT_RE.test(w) || w.length < 2) continue
+    if (TOPIC_WORD_RES.some((re) => has(w, re))) {
+      const o = ownerOfPrefix(words.slice(0, k).join(' '))
+      return o === 'unknown' ? 'other' : 'self'
+    }
+    // 🔴 소재어도 1인칭도 아닌 주어 — 남이다
+    return 'other'
+  }
+  return null
+}
+
+/**
+ * 🔴 **들고 온 주어가 남이면 생략된 1인칭을 세우지 않는다.**
+ *    명시된 1인칭(`우리 애`)은 들고 온 주어보다 세다 — 그 절이 스스로 임자를 밝혔다.
+ */
+const withCarry = <T extends 'explicit' | 'elided' | null>(owner: T, carry: Carry): T | null =>
+  owner === 'elided' && carry === 'other' ? null : owner
+
+/** 한 문장 → (절, 세상 이야기 틀인가, 이어 받은 주어) — `readPostRequirements` 와 같은 경계다 */
+function* clausesOf(title: string, body: string): Generator<{ clause: string; general: boolean; carry: Carry }> {
   for (const sentence of `${title}\n${body}`.split(SENTENCE_SPLIT_RE)) {
     if (sentence.trim() === '') continue
     const general = GENERAL_FRAME_RE.test(sentence) || ASKING_RE.test(sentence.trim())
+    // 🔴 문장이 바뀌면 들고 온 주어를 놓는다 — 문장을 넘어 이어 받지 않는다
+    let carry: Carry = null
     for (const clause of sentence.split(CLAUSE_SPLIT_RE)) {
-      if (clause.trim() !== '') yield { clause, general }
+      if (clause.trim() === '') continue
+      const own = subjectOwnerOf(clause)
+      /**
+       * 🔴 **주어를 밝힌 절에는 이어 받은 값을 씌우지 않는다** — 그 절의 임자는 기존 규칙
+       *    (`ownerOfPrefix`)이 가린다. `부모님이 은퇴하셨는데` 의 부모님을 "남" 으로 지우지 않는다.
+       *    주어 없는 절만 앞 절 주어를 이어 받는다.
+       */
+      yield { clause, general, carry: own === null ? carry : null }
+      carry = own ?? carry
     }
   }
 }
@@ -425,10 +475,10 @@ export function readSelfClaims(title: string, body: string): SelfClaim[] {
     { axis: 'work', re: WORK_RE },
     { axis: 'assets', re: ASSET_RE },
   ]
-  for (const { clause, general } of clausesOf(title, body)) {
+  for (const { clause, general, carry } of clausesOf(title, body)) {
     for (const a of axisRes) {
       const c = a.strip === undefined ? clause : clause.replace(a.strip, ' ')
-      const owner = claimOwnerInClause(c, a.re, general)
+      const owner = withCarry(claimOwnerInClause(c, a.re, general), carry)
       if (owner === null) continue
       if (EXPLICIT_ONLY_AXES.has(a.axis) && owner !== 'explicit') continue
       out.push({ axis: a.axis, clause: clause.trim(), owner })
@@ -438,13 +488,14 @@ export function readSelfClaims(title: string, body: string): SelfClaim[] {
      *    생략된 1인칭 조사 규칙이 맞지 않는다 — 명시된 1인칭(`우리 엄마 치매`)만 센다.
      */
     const careState = claimOwnerInClause(clause, CARE_STATE_RE, general)
-    const care = (careState === 'explicit' ? careState : null) ?? claimOwnerInClause(clause, CARE_ACT_RE, general)
+    const care = (careState === 'explicit' ? careState : null)
+      ?? withCarry(claimOwnerInClause(clause, CARE_ACT_RE, general), carry)
     if (care !== null) out.push({ axis: 'parentCare', clause: clause.trim(), owner: care })
     /**
      * 🔴 자녀 — 자녀 낱말의 임자만 본다. 나이대 낱말(`초1`)만 있는 절은 여기서 세지 않는다 —
      *    그것은 `readSelfChildBands` 가 카드와 견준다.
      */
-    const kid = claimOwnerInClause(clause, CHILDREN_RE, general)
+    const kid = withCarry(claimOwnerInClause(clause, CHILDREN_RE, general), carry)
     if (kid !== null) out.push({ axis: 'children', clause: clause.trim(), owner: kid })
   }
   return out
@@ -455,6 +506,8 @@ export type SelfChildBandMention = {
   /** 🔴 절에서 실제로 잡힌 낱말 — 밴드 이름 자체(`중고등`)인지 학년(`고3`)인지 가른다 */
   token: string
   clause: string
+  /** 🔴 임자를 어떻게 알았나 — 명시된 1인칭(`우리 사위`)인지 생략된 1인칭인지 */
+  owner: 'explicit' | 'elided'
 }
 
 /**
@@ -464,14 +517,16 @@ export type SelfChildBandMention = {
  */
 export function readSelfChildBands(title: string, body: string): SelfChildBandMention[] {
   const out: SelfChildBandMention[] = []
-  for (const { clause, general } of clausesOf(title, body)) {
+  for (const { clause, general, carry } of clausesOf(title, body)) {
     const mentionsChild = has(clause, CHILDREN_RE)
-    const ownChild = ownsInClause(clause, CHILDREN_RE, general)
+    // 🔴 앞 절에서 이어 받은 주어가 남이면 주어 없는 절의 아이는 그 사람 아이다(`친구 남편이 … 쓰고 초1 아이를`)
+    const childOwner = withCarry(ownerInClause(clause, CHILDREN_RE, general), carry)
     for (const x of CHILD_AGE_TOKENS) {
       if (!has(clause, x.re)) continue
-      if (mentionsChild ? !ownChild : !ownsInClause(clause, x.re, general)) continue
+      const owner = mentionsChild ? childOwner : withCarry(ownerInClause(clause, x.re, general), carry)
+      if (owner === null) continue
       for (const m of clause.matchAll(new RegExp(x.re.source, 'g'))) {
-        out.push({ band: x.band, token: m[0], clause: clause.trim() })
+        out.push({ band: x.band, token: m[0], clause: clause.trim(), owner })
       }
     }
   }

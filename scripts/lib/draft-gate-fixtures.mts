@@ -256,6 +256,81 @@ export const FIXTURES: readonly GateFixture[] = [
   },
 ]
 
+/**
+ * 🔴 **마스터 재검토 반례** (2026-09-26 · ae18012 과차단 2종) — 운영 실측이 아니라 **말바꿈**이다.
+ *    · 남의 집안(`친구 남편이 … 쓰고 초1 아이를`)은 성인 자녀 Persona 에게도 통과해야 한다
+ *    · `돼서 요즘 …` 은 이미 된 일이다 — 중고등 자녀 Persona 에게 지금이다
+ *    · 맨 `남편이 … 쓰고 초1 아이를` · `되면` 은 여전히 막혀야 한다
+ *    원문·초안·계획은 러너가 받아들이는 모양 그대로다(근거 문장이 원문에 있다 · 복제 아님).
+ */
+const thirdParty = (id: string, who: string, title: string): GateFixture => ({
+  queueId: `master-review-${id}`, label: `🟢 남의 집안 "${who} … 쓰고 초1 아이" · P14 성인 자녀`,
+  source: {
+    id: `fx-${id}`, title: '주변에 육아휴직 쓰는 아빠들 많나요',
+    body: `${who} 요즘 육아휴직을 냈대요. 아침마다 초1 아이 등교시키고 도시락도 싼다네요. 세상 많이 변했어요.`,
+  },
+  draft: {
+    title,
+    body: `${who} 육아휴직 쓰고 초1 아이를 돌봐요.\n\n아침에 학교 데려다주고 점심 도시락까지 챙긴다고 하더라고요.\n\n`
+      + '저희 때랑은 참 많이 달라졌지요?',
+  },
+  plan: planOf({
+    personaCode: 'P14', stance: 'OBSERVATION', selfBasis: null,
+    protectedFacts: [{ kind: 'searchTerm', text: '초1', evidenceRef: 'head' }],
+  }),
+  card: P14, expect: [],
+})
+const teenSource = {
+  title: '애들 중고등 되니 대화가 없네요',
+  body: '애들이 중고등학생 되고 나니까 방에만 있고 말을 안 해요. 저녁 먹을 때도 휴대폰만 봐요. 다른 집도 그런가요?',
+}
+const teenPlan = planOf({
+  personaCode: 'P01', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+  speakerWarrants: [
+    { fact: 'children', requiredValue: '있음', evidenceRef: 'head', evidenceText: '애들이 중고등학생' },
+    { fact: 'childAgeBand', requiredValue: '중고등', evidenceRef: 'head', evidenceText: '애들이 중고등학생' },
+  ],
+})
+export const REVIEW_FIXTURES: readonly GateFixture[] = [
+  thirdParty('friend', '친구 남편이', '친구네는 남편이 육아휴직 중이래요'),
+  thirdParty('colleague', '회사 동료가', '회사 동료가 육아휴직을 냈어요'),
+  thirdParty('neighbor', '이웃집 남편이', '이웃집 아빠 육아휴직 이야기'),
+  {
+    queueId: 'master-review-bare-spouse', label: '🔴 맨 "남편이 … 쓰고 초1 아이" · P14 성인 자녀 (지금 집안 모순)',
+    source: {
+      id: 'fx-bare', title: '주변에 육아휴직 쓰는 아빠들 많나요',
+      body: '요즘 육아휴직을 냈대요. 아침마다 초1 아이 등교시키고 도시락도 싼다네요. 세상 많이 변했어요.',
+    },
+    draft: {
+      title: '남편 육아휴직 이야기',
+      body: '남편이 육아휴직 쓰고 초1 아이를 돌봐요.\n\n아침에 학교 데려다주고 점심 도시락까지 챙기더라고요.\n\n다들 어떻게 보세요?',
+    },
+    plan: planOf({
+      personaCode: 'P14', stance: 'SELF_EXPERIENCE', selfBasis: 'lifeFacts',
+      speakerWarrants: [{ fact: 'spouse', requiredValue: '있음', evidenceRef: 'title', evidenceText: '아빠들' }],
+    }),
+    card: P14, expect: ['lifeStageTenseConflict'],
+  },
+  {
+    queueId: 'master-review-teen-now', label: '🟢 "중고등학생이 돼서 요즘 …" · P01 중고등 (지금)',
+    source: { id: 'fx-teen-now', ...teenSource },
+    draft: {
+      title: '사춘기 애들이랑 말 섞기가 어려워요',
+      body: '애들이 중고등학생이 돼서 요즘 대화가 줄었어요.\n\n밥 먹을 때도 각자 폰 보느라 조용하고요.\n\n다들 어떻게 말 붙이세요?',
+    },
+    plan: teenPlan, card: P01, expect: [],
+  },
+  {
+    queueId: 'master-review-teen-future', label: '🔴 "중고등학생이 되면 …" · P01 중고등 (지금 밴드를 미래로)',
+    source: { id: 'fx-teen-future', ...teenSource },
+    draft: {
+      title: '사춘기 오면 말 섞기 어렵다던데요',
+      body: '애들이 중고등학생이 되면 대화가 확 준다던데요.\n\n밥 먹을 때도 각자 폰만 본다고 하고요.\n\n미리 걱정이 되네요.',
+    },
+    plan: teenPlan, card: P01, expect: ['lifeStageTenseConflict'],
+  },
+]
+
 /** 🔴 운영에서 실제로 돌아온 의미 검수 — 넷 다 `clean` 이었다 */
 export const CLEAN_REVIEW = {
   issues: [], droppedFromSource: [], unsupportedAdditions: [], lifeContradictions: [],

@@ -11,6 +11,7 @@
  *       → 격리 DB 의 `OriginalPostApprovalQueue`
  *
  *   기대: 반례 4편은 큐 행 0 · 대조 2편(P13 · P19)만 APPROVED 로 들어간다.
+ *   재검토 반례(2026-09-26): 남의 집안 3편 · `돼서 요즘` 1편은 들어가고, 맨 `남편이` · `되면` 2편은 막힌다.
  *
  *   🔴 임시 cwd(`.microseed-data` · 보류 목록)와 임시 HOME 에서 돈다. 저장소 · 운영 장부 · 운영 자산 0.
  *   🔴 운영 DB 에 절대 붙이지 않는다 — sentinel · localhost · 고정 DB 이름을 요구하고 주소를 찍지 않는다.
@@ -45,7 +46,10 @@ const check = (label: string, ok: boolean, detail = ''): void => {
 
 const REPO = process.cwd()
 const { PrismaClient } = await import('@prisma/client')
-const { FIXTURES, runFixturePath, FIXTURE_NOW } = await import('./lib/draft-gate-fixtures.mjs')
+const fxMod = await import('./lib/draft-gate-fixtures.mjs')
+const { runFixturePath, FIXTURE_NOW } = fxMod
+/** 🔴 운영 실측 6 + 마스터 재검토 반례 6(남의 집안 3 · 맨 남편 · 돼서 지금 · 되면 미래) */
+const FIXTURES = [...fxMod.FIXTURES, ...fxMod.REVIEW_FIXTURES]
 const { candidateEnvelope } = await import('./lib/candidate-envelope.mjs')
 const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
 const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
@@ -122,7 +126,7 @@ async function main(): Promise<void> {
       check(`🔴 🔴 **${fx.label} — 큐 행이 되지 않는다**`, !inQueue, inQueue ? '큐에 들어갔다' : '')
     }
   }
-  check('큐 행 수 = 대조군 수 (2)', rows.length === FIXTURES.filter((f) => f.expect.length === 0).length, `${rows.length}행`)
+  check(`큐 행 수 = 대조군 수 (${FIXTURES.filter((f) => f.expect.length === 0).length})`, rows.length === FIXTURES.filter((f) => f.expect.length === 0).length, `${rows.length}행`)
   check('🔴 공급은 발행하지 않는다 — Post 0', (await prisma.post.count()) === 0)
 
   await prisma.$disconnect()

@@ -25,6 +25,7 @@
  * 🔴 순수 함수다. DB · 네트워크 · 파일 IO 없음.
  */
 import { readMediaDependency } from './evidence'
+import { RELATION_NAMES } from './source-facts'
 import type { PoolCard } from '../persona-pool-card'
 import {
   CHILD_AGE_BANDS, judgeLifeHistory, readSelfChildBands, readSelfClaims,
@@ -78,11 +79,14 @@ const WARRANT_OF: Readonly<Record<SelfClaimAxis, readonly string[]>> = {
 }
 
 /**
- * 🔴 **미래·과거로 말하는 절** — 절 안의 시간 틀만 본다.
+ * 🔴 **미래·과거로 말하는 절** — 절 안의 시간 틀만 본다. **조건·앞날을 여는 어미만** 넣는다.
  *    `커서` 는 넣지 않는다 — `다 커서 편해요` 는 이미 지난 일이다.
  *    `곧` 도 넣지 않는다 — `곧 고3인데` 는 지금 중고등이다.
+ *    🔴 `돼서` · `되어서` 도 넣지 않는다 (2026-09-26 마스터 재검토) — **이미 된 까닭**이다.
+ *       `애들이 중고등학생이 돼서 요즘 대화가 줄었어요` 는 지금이다. P01 반례가 막힌 것은
+ *       같은 절의 `시기가 오면` 때문이지 `돼서` 때문이 아니다.
  */
-const FUTURE_FRAME_RE = /되면|돼서|되어서|될\s*(?:때|즈음|무렵|쯤)|되고\s*나면|오면|크면|가면|갈\s*때|나중에|앞으로|언젠가/
+const FUTURE_FRAME_RE = /되면|될\s*(?:때|즈음|무렵|쯤)|되고\s*나면|오면|크면|가면|갈\s*때|나중에|앞으로|언젠가/
 const PAST_FRAME_RE = /였을\s*때|었을\s*때|이었을\s*때|던\s*(?:때|시절)|시절|적에|적엔/
 
 const bandIdx = (b: string): number => (CHILD_AGE_BANDS as readonly string[]).indexOf(b)
@@ -140,6 +144,13 @@ export function judgeDraftGates(input: {
     const minIdx = kids ? Math.min(...bands.map(bandIdx)) : -1
     const maxIdx = kids ? Math.max(...bands.map(bandIdx)) : -1
     for (const m of readSelfChildBands(title, body)) {
+      /**
+       * 🔴 **관계 명칭(`사위` · `며느리` · `손주`)은 나이 표기가 아니다** (2026-09-26 운영 초안 재측정).
+       *    `사위가 돼서 자꾸 그러니까` 의 사위는 글쓴이 **남편**이다(친정 쪽에서 본 이름).
+       *    관계 명칭은 누구 기준인지가 문장마다 달라, 명시된 1인칭(`우리 사위`)이 아니면
+       *    임자를 확정할 수 없다 — 확정할 수 없으면 막지 않는다. 목록은 기존 `RELATION_NAMES` 그대로다.
+       */
+      if (RELATION_NAMES.includes(m.token) && m.owner !== 'explicit') continue
       const i = bandIdx(m.band)
       const exact = namesBand(m.token, m.band)
       if (FUTURE_FRAME_RE.test(m.clause)) {

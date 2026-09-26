@@ -20,8 +20,12 @@ import { DETERMINISTIC_CODES, DETERMINISTIC_LABEL } from '../src/lib/content-cor
 import { DRAFT_REASON_LABEL } from '../src/lib/micro-seed-auto-draft'
 import { readPostRequirements, readSelfClaims } from '../src/lib/original-post-persona-match'
 import type { PoolCard } from '../src/lib/persona-pool-card'
-import { FIXTURES, P01, P02, P12, P13, P14, P19, runFixturePath, type GateFixture }
-  from './lib/draft-gate-fixtures.mjs'
+import {
+  FIXTURES as OPS_FIXTURES, REVIEW_FIXTURES, P01, P02, P12, P13, P14, P19, runFixturePath, type GateFixture,
+} from './lib/draft-gate-fixtures.mjs'
+
+/** 🔴 운영 실측 6 + 마스터 재검토 반례 6 — 셋 다(게이트 · 러너 경로 · 캐시) 같은 목록을 돈다 */
+const FIXTURES: readonly GateFixture[] = [...OPS_FIXTURES, ...REVIEW_FIXTURES]
 
 let pass = 0
 let fail = 0
@@ -46,7 +50,7 @@ const codes = (title: string, body: string, plan: PlanLike | null, card: PoolCar
 
 console.log('\n══ 초안 게이트 (자료 의존 · 1인칭 허가 · 지금 삶과 시제) — 🔴 provider 0 · DB 0 ══\n')
 
-console.log('① 운영 반례 4 · 대조 2 — 게이트 정본')
+console.log('① 운영 반례 4 · 대조 2 + 재검토 반례 6 — 게이트 정본')
 for (const fx of FIXTURES) {
   const got = codes(fx.draft.title, fx.draft.body, planLike(fx), fx.card)
   if (fx.expect.length === 0) {
@@ -144,6 +148,12 @@ console.log('\n⑤ B 1인칭 허가 없는 생활사 — selfBasis=null 에서�
       `${g.join(',')} · ${JSON.stringify(readSelfClaims(t, b))}`)
   }
   // 🔴 같은 글도 1인칭 허가가 있으면 B 는 막지 않는다 (카드 모순은 C 가 본다)
+  // 🔴 재검토 — 남의 집안이 `-고` 로 이어져도 B 는 그 사람 아이를 글쓴이 자녀로 세지 않는다
+  check('🟢 QUESTION · "친구 남편이 육아휴직 쓰고 애들이랑 놀아줘요" — B 통과',
+    !codes('육아휴직', '친구 남편이 육아휴직 쓰고 애들이랑 놀아줘요.', QUESTION, P13).includes('unwarrantedSelfClaim'),
+    JSON.stringify(readSelfClaims('육아휴직', '친구 남편이 육아휴직 쓰고 애들이랑 놀아줘요.')))
+  check('🔴 QUESTION · 맨 "남편이 육아휴직 쓰고 애들이랑 놀아줘요" — B 는 여전히 막는다',
+    codes('육아휴직', '남편이 육아휴직 쓰고 애들이랑 놀아줘요.', QUESTION, P13).includes('unwarrantedSelfClaim'))
   check('🟢 같은 "남편이 요즘 퇴근이 늦어요" 도 lifeFacts 허가면 B 통과',
     !codes('남편 이야기', '남편이 요즘 퇴근이 늦어요.', SELF, P13).includes('unwarrantedSelfClaim'))
   const passed: [string, string, string][] = [
@@ -171,6 +181,15 @@ console.log('\n⑥ C 카드의 지금 삶과 시제')
     ['대학 시절', '애들이 대학생이었을 때 용돈을 얼마나 줬었는지 가물가물해요.', P01, '중고등 카드 · 오지 않은 밴드를 과거로'],
     ['아침밥', '초2 아이 아침밥으로 김밥을 싸 줬어요.', P14, '성인 카드 · 지금 초등 아이'],
     ['아침밥', '남편이 초1 아이 등교를 맡았어요.', P19, '성인 카드 · 지금 초등 아이'],
+    // 🔴 재검토 ③ — 맨 `남편이` 는 글쓴이 남편이다. `-고` 뒤 주어 없는 절이 그 주어를 이어 받는다
+    ['육아휴직', '남편이 육아휴직 쓰고 초1 아이를 돌봐요.', P14, '성인 카드 · 맨 "남편이 … 쓰고 초1 아이"'],
+    ['육아휴직', '제가 초1 아이를 돌보고 있어요.', P14, '성인 카드 · 1인칭 주어'],
+    // 🔴 재검토 ⑥ — 앞날을 여는 틀은 그대로 미래다
+    ['중고등', '애들이 중고등학생이 되면 대화가 줄겠죠.', P01, '중고등 카드 · "되면"'],
+    ['중고등', '애들이 중고등학생이 될 때 대화가 준다고 하네요.', P01, '중고등 카드 · "될 때"'],
+    ['중고등', '애들이 중고등 시기가 오면 방에만 있겠죠.', P01, '중고등 카드 · "시기가 오면"'],
+    // 🔴 관계 명칭도 **명시된 1인칭**이면 그대로 센다
+    ['사위', '우리 사위가 요즘 많이 바빠요.', P01, '중고등 카드 · "우리 사위"'],
   ]
   for (const [t, b, card, why] of blocked) {
     const g = codes(t, b, SELF, card)
@@ -182,6 +201,20 @@ console.log('\n⑥ C 카드의 지금 삶과 시제')
     ['옛날 생각', '애들 초등 시절에 도시락 싸던 생각이 나네요.', P14, '성인 카드 · 지난 밴드를 과거로'],
     ['손주', '애들 다 커서 이제 명절에 사위 며느리까지 모여요.', P19, '성인 카드 · 지금으로 말함'],
     ['수학', '초등학생 수학 문제 요즘 어렵다는데 어떤가요?', P14, '성인 카드 · 묻는 일반론'],
+    // 🔴 재검토 ①④ — 남의 집안. 앞 절 주어의 임자를 `-고` 뒤 절이 이어 받는다 (사람 명사 목록 없음)
+    ['육아휴직', '친구 남편이 육아휴직 쓰고 초1 아이를 돌봐요.', P14, '성인 카드 · "친구 남편이 … 쓰고"'],
+    ['육아휴직', '회사 동료가 육아휴직 쓰고 초1 아이를 돌봐요.', P14, '성인 카드 · "회사 동료가 … 쓰고"'],
+    ['육아휴직', '이웃집 남편이 육아휴직 쓰고 초1 아이를 돌봐요.', P14, '성인 카드 · "이웃집 남편이 … 쓰고"'],
+    ['육아휴직', '동생이 육아휴직 쓰고 초1 아이를 돌보면서 힘들어해요.', P14, '성인 카드 · 소재어 아닌 주어가 두 절을 넘어간다'],
+    // 🔴 재검토 ⑤ — `돼서` 는 이미 된 까닭이다
+    ['중고등', '애들이 중고등학생이 돼서 요즘 대화가 줄었어요.', P01, '중고등 카드 · "돼서 요즘" 은 지금'],
+    /**
+     * 🔴 운영 P07 초안(2026-09-26 재측정) — `사위` 는 글쓴이 남편을 친정 쪽에서 부른 이름이다.
+     *    `돼서` 를 미래에서 빼자 이 절이 "지금 성인 자녀" 로 읽혀 새로 막혔다 — 관계 명칭은
+     *    명시된 1인칭이 아니면 임자를 확정할 수 없으므로 막지 않는다.
+     */
+    ['호칭', '사위가 돼서 자꾸 그러니까 듣다 보니 서운하더라고요.',
+      { ...P01, code: 'P07', childrenAgeBands: ['대학·취준'] }, '대학·취준 카드 · 생략된 "사위가 돼서"'],
   ]
   for (const [t, b, card, why] of passed) {
     const g = codes(t, b, SELF, card)
