@@ -1013,11 +1013,39 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       check('  반례2-⑥ 잠금 파일이 없으면 NONE',
         SESSION.profileLockState({ profileDir: none, processes: procs([]) }).state === 'NONE')
 
-      /** 🔴 ensureChrome 이 실제로 **띄우려 드는지** (진짜 Chrome 은 띄우지 않는다) */
+      /**
+       * 🔴 ensureChrome 이 실제로 **띄우려 드는지** (진짜 Chrome 은 띄우지 않는다).
+       *
+       *    🔴 `browserCheck` 까지 주입한다. 앞판은 실제 `browserAvailable()` 을 썼고,
+       *       그건 macOS Chrome 경로를 본다 — CI 러너(Linux)에는 없으니 `BROWSER_MISSING`
+       *       으로 먼저 빠져 `spawn 0회 · lock undefined` 가 됐다. 로컬 초록 / CI 빨강.
+       *       시험이 환경을 읽으면 안 된다.
+       */
       let spawned = 0
       const spawnFn = () => { spawned += 1; return { unref() {} } }
-      const rs = await SESSION.ensureChrome({ waitMs: 60, pollMs: 20, spawnFn, cdpCheck: async () => false })
+      const rs = await SESSION.ensureChrome({
+        waitMs: 60, pollMs: 20, spawnFn, cdpCheck: async () => false, browserCheck: () => true,
+      })
       check('🔴 반례2 죽은 잠금이면 기동을 시도한다', spawned === 1, `spawn ${spawned}회 · lock ${rs.lock?.state}`)
+
+      /** 🔴 브라우저가 아예 없으면 띄우려 들지 않는다 — 그 판정은 그대로 살아 있다 */
+      let spawned2 = 0
+      const rNoBrowser = await SESSION.ensureChrome({
+        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => false,
+        spawnFn: () => { spawned2 += 1; return { unref() {} } },
+      })
+      check('🔴 반례2 브라우저가 없으면 BROWSER_MISSING · spawn 0회',
+        rNoBrowser.ok === false && rNoBrowser.reason === SESSION.STATUS.BROWSER_MISSING && spawned2 === 0,
+        `${rNoBrowser.reason} · spawn ${spawned2}회`)
+
+      /** 🔴 CDP 가 이미 살아 있으면 띄우지 않는다 */
+      let spawned3 = 0
+      const rAlive = await SESSION.ensureChrome({
+        waitMs: 60, pollMs: 20, cdpCheck: async () => true, browserCheck: () => true,
+        spawnFn: () => { spawned3 += 1; return { unref() {} } },
+      })
+      check('  반례2 CDP 가 살아 있으면 기동하지 않는다',
+        rAlive.ok === true && rAlive.started === false && spawned3 === 0, `spawn ${spawned3}회`)
 
       const srcTxt = fs.readFileSync('scripts/lib/chatgpt-session.mjs', 'utf8')
       check('🔴 반례2 LIVE 일 때만 기동을 포기한다 (코드 경로)',

@@ -442,10 +442,16 @@ export async function ensureChrome({
   spawnFn = spawn,
   /** 🔴 시험이 포트 판정을 고정하기 위한 자리. 기본은 실제 CDP 조회 */
   cdpCheck = cdpAvailable,
+  /**
+   * 🔴 브라우저 존재 판정도 주입점이다. CI 러너(Linux)에는 macOS Chrome 경로가 없다 —
+   *    시험이 이 함수를 그대로 쓰면 **환경을 읽게 되어** 로컬 초록 / CI 빨강이 된다.
+   *    기본은 실제 확인이고, 판정 자체는 그대로 돈다.
+   */
+  browserCheck = browserAvailable,
 } = {}) {
   const alive = await cdpCheck()
   if (alive) return { ok: true, started: false }
-  if (!browserAvailable()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
+  if (!browserCheck()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
 
   /**
    * CDP 는 없는데 프로필을 **실제로** 쓰는 프로세스가 있다 = 포트 없이 띄운 창이 있다.
