@@ -644,14 +644,28 @@ export async function probe({
 export async function fetchManuscript({
   briefPath, outPath, promptText, requiredMarkers = [], validate = null, timeoutMs = 300000,
   connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
+  /**
+   * 🔴 **실제 이 함수를 시험이 돌리기 위한 자리.** 가짜 browser/page 를 넣어
+   *    composer·send·응답 대기 예외를 각각 주입하고, **자기가 연 탭만 1회 닫는지**를
+   *    실제 경로로 확인한다. 시험 안에서 계약을 흉내 낸 함수를 검사하면
+   *    제품이 틀려도 초록이 뜬다 (2026-09-27 Codex 재검토 지적).
+   *    기본값은 실제 CDP 연결과 실제 탭 확보 그대로다.
+   * @type {((url: string, opts: object) => Promise<object>) | undefined}
+   */
+  connect,
+  /** @type {(() => Promise<{ok: boolean}>) | undefined} */
+  ensureTab,
 }) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
   // probe 와 같은 이유로 탭을 먼저 확보한다 — 여기만 빠뜨리면 회수 단계에서 같은 실패가 난다
-  const tab = await ensurePageTarget()
+  const tab = await (ensureTab ?? ensurePageTarget)()
   if (!tab.ok) return { ok: false, reason: STATUS.CHROME_NOT_RUNNING, sent: false }
 
-  const { chromium } = await import('playwright-core')
+  const connectFn = connect ?? (async (url, opts) => {
+    const { chromium } = await import('playwright-core')
+    return chromium.connectOverCDP(url, opts)
+  })
   let browser = null
   let page = null
   let sent = false
@@ -659,7 +673,7 @@ export async function fetchManuscript({
   let stage = 'connect'
 
   try {
-    browser = await chromium.connectOverCDP(CDP_URL, { timeout: connectTimeoutMs })
+    browser = await connectFn(CDP_URL, { timeout: connectTimeoutMs })
     const ctx = browser.contexts()[0]
     if (!ctx) return { ok: false, reason: 'no_context', stage, sent }
 

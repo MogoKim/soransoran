@@ -1403,6 +1403,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
 console.log('\n⑭ 2026-09-27 운영 실패 반례')
 {
   const SESSION2 = await import('./lib/chatgpt-session.mjs')
+  const WEBUI = await import('./magazine-webui-runner.mjs')
 
   // ── 반례 10 · composer 선택자 정본을 세 경로가 공유한다 ──
   {
@@ -1490,22 +1491,117 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
       /\[composer\] connect_failed/.test(AR.meaningfulLine(marked)), AR.meaningfulLine(marked))
     check('  반례11 출력이 비어도 죽지 않는다', AR.meaningfulLine('') === '(출력 없음)')
 
-    /** 🔴 예외를 주입해 **열린 탭 증가 0** 을 증명한다 */
-    const opened = []
-    const fakePage = () => { const pg = { closed: false, close: async () => { pg.closed = true } }; opened.push(pg); return pg }
-    const runWithFailure = async (throwAt) => {
-      let page = null
-      try {
-        page = fakePage()
-        if (throwAt) throw new Error(`${throwAt} 실패`)
-        return { ok: true }
-      } catch (e) { return { ok: false, why: e.message } }
-      finally { try { await page?.close() } catch { /* 이미 닫힘 */ } }
-    }
-    for (const at of ['composer', 'send', null]) await runWithFailure(at)
-    check('🔴 반례11 예외 주입 3회 뒤 열린 채 남은 탭 0',
-      opened.filter((x) => !x.closed).length === 0,
-      `연 탭 ${opened.length}개 · 남은 탭 ${opened.filter((x) => !x.closed).length}개`)
+    /**
+     * 🔴 **실제 `fetchManuscript` 를 돌린다** (Codex 재검토 2026-09-27).
+     *    앞판은 시험 안에서 만든 `runWithFailure` 를 검사했다 — 계약을 흉내 낸 함수라
+     *    제품이 틀려도 초록이 떴다. 이제 가짜 browser/page 를 **실제 함수에 주입**한다.
+     */
+    const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-fetch-'))
+    try {
+      const briefPath = path.join(TMP, 'brief.md')
+      fs.writeFileSync(briefPath, '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+      const outPath = path.join(TMP, 'draft.md')
+
+      /** 기존 탭 — 이 탭은 **절대** 닫히면 안 된다 */
+      const makeWorld = (throwAt) => {
+        const existing = { closes: 0, url: () => 'https://chatgpt.com/', close: async () => { existing.closes += 1 } }
+        const opened = []
+        const world = { existing, opened, browserCloses: 0, killed: 0 }
+        const newPage = () => {
+          const pg = {
+            closes: 0,
+            waits: 0,
+            async close() { pg.closes += 1 },
+            async goto() {},
+            async waitForSelector() { if (throwAt === 'composer') throw new Error('page.waitForSelector: Timeout 60000ms exceeded.') },
+            locator() {
+              return {
+                first: () => ({ async click() { if (throwAt === 'send') throw new Error('click: element is not visible') } }),
+                async all() { return [{ async setInputFiles() {} }] },
+                async click() { if (throwAt === 'send') throw new Error('click: element is not visible') },
+              }
+            },
+            keyboard: { async insertText() {}, async press() {} },
+            async waitForTimeout() {},
+            /**
+             * 🔴 `waitForFunction` 은 **두 번** 불린다 — ① 업로드 완료(stage attach)
+             *    ② 응답 완료(stage await-response). 첫 번째에서 터뜨리면 제품은 올바르게
+             *    `[attach] upload_timeout` 을 낸다. 단계를 구분해 주입해야 의미가 있다.
+             */
+            async waitForFunction() {
+              pg.waits += 1
+              if (throwAt === 'await-response' && pg.waits >= 2) throw new Error('waitForFunction: Timeout')
+            },
+            async evaluate() { return '---\n본문\n[CTA]' },
+          }
+          opened.push(pg)
+          return pg
+        }
+        world.browser = {
+          contexts: () => [{ pages: () => [existing], newPage: async () => newPage() }],
+          async close() { world.browserCloses += 1 },
+        }
+        return world
+      }
+
+      for (const at of ['composer', 'send', 'await-response']) {
+        const w = makeWorld(at)
+        const r = await SESSION2.fetchManuscript({
+          briefPath, outPath, promptText: '시험', requiredMarkers: [],
+          timeoutMs: 200, connectTimeoutMs: 200,
+          ensureTab: async () => ({ ok: true }),
+          connect: async () => w.browser,
+        })
+        check(`🔴 반례11 [${at}] 실패로 끝난다`, r.ok === false, `${r.reason} · stage ${r.stage}`)
+        check(`🔴 반례11 [${at}] stage 가 그 단계를 가리킨다`, r.stage === at, `${r.stage}`)
+        check(`🔴 반례11 [${at}] 자기가 연 탭을 정확히 1회 닫는다`,
+          w.opened.length === 1 && w.opened[0].closes === 1,
+          `연 탭 ${w.opened.length}개 · close ${w.opened.map((x) => x.closes).join(',')}`)
+        check(`🔴 반례11 [${at}] 기존 탭은 닫지 않는다`, w.existing.closes === 0, `close ${w.existing.closes}회`)
+        check(`  반례11 [${at}] Chrome 종료 0회 (연결만 끊는다)`, w.killed === 0)
+
+        /** 🔴 최상위 출력까지 stage·원문이 남는가 — fetchSlug 가 버리면 여기서 깨진다 */
+        const line = WEBUI.describeFetchFailure({
+          reason: r.reason, stage: r.stage, errorName: r.errorName, errorDetail: r.errorDetail, sent: r.sent,
+        })
+        check(`🔴 반례11 [${at}] 최상위 한 줄에 stage 가 있다`, line.includes(`[${at}]`), line)
+        if (at !== 'await-response') {
+          check(`🔴 반례11 [${at}] 최상위 한 줄에 실제 오류가 있다`,
+            /Timeout 60000ms exceeded|not visible/.test(line), line)
+        }
+        /**
+         * 🔴 **전송 여부는 단계에 따라 다르다.** `await-response` 는 이미 보낸 뒤 터진 것이라
+         *    `전송 1건` 이 사실이다. 그걸 0건으로 적으면 "보냈는데 안 보냈다" 는 거짓말이 된다.
+         */
+        const sentBefore = at === 'await-response'
+        check(`🔴 반례11 [${at}] 전송 여부를 사실대로 적는다`,
+          line.includes(sentBefore ? '전송 1건' : '전송 0건'), line)
+      }
+
+      /** 🔴 정상 경로도 자기 탭을 닫는다 — 실패 경로만 닫으면 성공할 때마다 샌다 */
+      const wOk = makeWorld(null)
+      await SESSION2.fetchManuscript({
+        briefPath, outPath, promptText: '시험', requiredMarkers: [],
+        timeoutMs: 200, connectTimeoutMs: 200,
+        ensureTab: async () => ({ ok: true }),
+        connect: async () => wOk.browser,
+      })
+      check('🔴 반례11 [정상] 자기가 연 탭을 정확히 1회 닫는다',
+        wOk.opened.length === 1 && wOk.opened[0].closes === 1,
+        `close ${wOk.opened.map((x) => x.closes).join(',')}`)
+      check('🔴 반례11 [정상] 기존 탭은 닫지 않는다', wOk.existing.closes === 0)
+
+      /** 🔴 **fetchSlug 가 필드를 버리면 깨진다** — 보존 계약을 실제 소스로 확인한다 */
+      const webuiSrc = fs.readFileSync('scripts/magazine-webui-runner.mjs', 'utf8')
+      const slugBody = webuiSrc.slice(webuiSrc.indexOf('async function fetchSlug'), webuiSrc.indexOf('/** 저장된 원고를 기계 검사만 한다'))
+      for (const f of ['stage', 'errorName', 'errorDetail']) {
+        check(`🔴 반례11 fetchSlug 가 ${f} 를 보존한다`,
+          new RegExp(`${f}: r\\.${f}`).test(slugBody), f)
+      }
+      /** 🔴 그리고 그 보존이 **실제로 한 줄에 나타나는지**까지 본다 (문자열 검사로 끝내지 않는다) */
+      const dropped = WEBUI.describeFetchFailure({ reason: 'connect_failed', sent: false })
+      check('  반례11 stage 가 없으면 한 줄에도 없다 (대조군)', !dropped.includes('['), dropped)
+    } finally { fs.rmSync(TMP, { recursive: true, force: true }) }
   }
 
   // ── 반례 12 · merge gate 는 PR head tree 를 본다 (재사용 hero 통과) ──
