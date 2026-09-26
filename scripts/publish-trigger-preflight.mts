@@ -39,12 +39,12 @@ import { execFileSync } from 'node:child_process'
 
 import {
   judgeTriggerParity, readCanonicalStages, CANONICAL_ENV_PATH, CANONICAL_STAGE_KEYS,
-  PARITY_STAGES, type StageSetting,
+  PARITY_STAGES, PUBLISH_REPO, type StageSetting,
 } from './lib/original-post-runner-template'
 import { CAPACITY_ENV, RELEASE_ENV } from '../src/lib/scale-profile'
 
-/** 🔴 대상 저장소를 명시한다 — cwd 의 git remote 에 기대지 않는다 */
-export const PUBLISH_REPO = 'MogoKim/soransoran'
+/** 🔴 대상 저장소 정본은 template 파일 하나다 — heartbeat preflight 와 같은 값을 쓴다 */
+export { PUBLISH_REPO }
 
 const WANT_JSON = process.argv.includes('--json')
 

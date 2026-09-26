@@ -290,3 +290,21 @@ npm run typecheck · lint · build
 | **launchd 등록 후 정시성 실측** | 등록 자체가 별도 승인 건이다 |
 | **설정 분리 해소** | runtime `env.local` 과 GitHub Variables 중 **어느 쪽을 맞출지**는 창업자 결정이다 |
 | **09:30 회차 최종 판정** | 15:10 KST 관측 이후 — 그 전까지는 **미도착·판정 대기** |
+
+## 11. heartbeat 후보 (2026-09-26 · 코드·검사·dry-run 만 — 등록 0)
+
+🔴 **깨우기만 바꾼다. 발행 권한은 그대로 트랜잭션이다.** 정시판(10슬롯)이 지금 설치된 기본값이고 rollback 이다.
+
+| 항목 | 정시판(설치됨) | heartbeat 후보 |
+|---|---|---|
+| 깨우는 시각 | 10슬롯 | 08:00~22:00 · 10분 달력 항목 85개(슬롯 10개 전부 포함 → 지연 0) |
+| 인자 | `--apply --limit=1 --trigger=local` | 같음 + `--heartbeat` |
+| label · PATH · 로그 · RunAtLoad | — | 정시판과 같다(같은 label 교체 → 동시 등록 불가) |
+| 한 wake 가 내는 최대 | 1건 | 1건 |
+| 몇 건·언제 | 트랜잭션: `오늘 발행 < min(도래 슬롯, 하루 목표)` · env 천장 | **같다** — 트리거 종류와 무관 |
+
+- 러너가 더하는 것은 **줄이는 것 둘**: 창 밖 wake 는 DB 0 으로 종료 · 같은 10분 틱의 두 번째 wake 는 `TICK_TAKEN`(틱 키 경로 `wx` — 쥔 채 죽어도 그 틱 하나만 잃는다)
+- 러너 로그 `③-s 단계 입력` 에 capacity · release · window · canary · **천장**을 값으로 남긴다
+- 🔴 **알려진 분기** — GitHub 은 기간 d3(09-23~29), 로컬 정본은 기간 변수 없음 → 로컬 천장 d1. 로컬 heartbeat 는 d1(하루 1건)까지만 내고 13:30·19:00 은 여전히 늦은 GitHub 예약이 채운다. 로컬 천장이 GitHub 보다 **높으면** preflight 가 막는다(fail-open 방향)
+- 검사: `publish:heartbeat-check`(순수) · `publish:heartbeat-db-check`(격리 DB) · `publish:heartbeat-preflight`(plutil lint 임시 파일 · 설치본 대조 · 설치/rollback 명령 **출력만**)
+- GitHub Actions 예약 변화 0 — auto-publish cron 10 · visibility-guard cron 1 그대로

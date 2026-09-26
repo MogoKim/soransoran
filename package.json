@@ -186,6 +186,9 @@
     "auto-ready:review-import": "tsx scripts/auto-ready-review-import.mts",
     "auto-ready:evidence-db-check": "tsx scripts/auto-ready-evidence-db-check.mts",
     "publish:slot-db-check": "tsx scripts/publish-slot-db-check.mts",
+    "publish:heartbeat-check": "tsx scripts/publish-heartbeat-check.mts",
+    "publish:heartbeat-db-check": "tsx scripts/publish-heartbeat-db-check.mts",
+    "publish:heartbeat-preflight": "tsx scripts/publish-heartbeat-preflight.mts",
     "auto-ready:evidence-http-check": "tsx scripts/auto-ready-evidence-http-check.mts"
   },
   "dependencies": {

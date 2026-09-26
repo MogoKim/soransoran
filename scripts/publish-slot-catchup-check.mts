@@ -577,7 +577,9 @@ console.log('\n⑬ 🔴 설정 분리 preflight — 두 트리거가 같은 단�
   check('🔴 preflight 가 정본을 못 읽으면 대조 전에 exit 1 한다',
     /if \(!canonical\.ok\)/.test(pre) && pre.indexOf('if (!canonical.ok)') < pre.indexOf('judgeTriggerParity('))
   check('🔴 gh variable list 가 --repo 를 명시한다',
-    /'--repo', PUBLISH_REPO/.test(pre) && /PUBLISH_REPO = 'MogoKim\/soransoran'/.test(pre))
+    // 🔴 정본은 template 한 곳이다(2026-09-26) — heartbeat preflight 와 같은 값을 import 한다
+    /'--repo', PUBLISH_REPO/.test(pre) && /PUBLISH_REPO,/.test(pre)
+    && /PUBLISH_REPO = 'MogoKim\/soransoran'/.test(codeOf('scripts/lib/original-post-runner-template.ts')))
 }
 
 // ─────────────────────────────────────────────────────────
