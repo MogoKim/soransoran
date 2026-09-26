@@ -13,7 +13,7 @@
  *    ⑦ 러너 배선 — 창 밖 생략·틱 잠금이 DB 연결 **앞**에 있고, 발행 권한은 트랜잭션 그대로다
  *    ⑧ GitHub Actions 예약 수 불변 — heartbeat 는 어느 워크플로우에도 없다
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -219,9 +219,13 @@ console.log('\n⑥ 로컬/GitHub 단계 입력 분기 — 값으로 · fail-clos
   const gi = stageInputsOf(github, NOW)
   check('🟢 GitHub(기간 d3 · 오늘 유효) — 천장 d3', gi.ceiling === 'd3' && gi.window.activeToday)
   const v = judgeHeartbeatStageInputs({ local, github, now: NOW })
-  check('🔴 로컬 < GitHub — 통과하되 분기를 값으로 적는다', v.ok && v.divergences.some((d) => d.includes('천장 — local d1')) && v.divergences.some((d) => d.includes('SORAN_RELEASE_WINDOW_STAGE')))
+  check('🔴 🔴 **로컬 d1 < GitHub d3 — 막는다(설치 목적을 이루지 못한다) · 분기는 값으로 적는다**',
+    !v.ok && v.blockers.some((b) => b.includes('local d1') && b.includes('GitHub d3'))
+    && v.divergences.some((d) => d.includes('SORAN_RELEASE_WINDOW_STAGE')))
   const flip = judgeHeartbeatStageInputs({ local: github, github: local, now: NOW })
-  check('🔴 🔴 **로컬 > GitHub — 막는다(자주 깨는 쪽이 더 넓으면 fail-open)**', !flip.ok && flip.blockers.some((b) => b.includes('보다 높다')))
+  check('🔴 🔴 **로컬 > GitHub — 막는다(자주 깨는 쪽이 더 넓으면 fail-open)**', !flip.ok && flip.blockers.some((b) => b.includes('fail-open')))
+  const both3 = judgeHeartbeatStageInputs({ local: github, github, now: NOW })
+  check('🟢 실효 천장이 같으면(d3 · d3) 통과', both3.ok && both3.blockers.length === 0)
   const none = judgeHeartbeatStageInputs({ local, github: null, now: NOW })
   check('🔴 GitHub 을 못 읽으면 막는다', !none.ok)
   check('🟢 기간이 끝난 날은 GitHub 도 d1 — 분기 없이 같은 천장',
@@ -229,6 +233,49 @@ console.log('\n⑥ 로컬/GitHub 단계 입력 분기 — 값으로 · fail-clos
   const picked = pickStageInputKeys('DATABASE_URL=postgres://secret\nSORAN_RELEASE_STAGE=d1\nSORAN_RELEASE_WINDOW_STAGE="d3"\nGEMINI_API_KEY=x')
   check('🔴 정본 env 에서 단계 키만 뽑는다 — 비밀값 키는 메모리에도 없다',
     Object.keys(picked).sort().join(',') === 'SORAN_RELEASE_STAGE,SORAN_RELEASE_WINDOW_STAGE' && picked.SORAN_RELEASE_WINDOW_STAGE === 'd3')
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑥-b 🔴 실행 반례 — 실제 preflight 프로세스(`--stage-only`)의 종료 코드')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 판정 함수가 아니라 **preflight 프로세스**를 띄워 종료 코드를 본다. 단계 게이트는 전체 실행과
+   *    같은 함수(`stageGate`)다. 입력은 임시 파일 — 정본 env · gh 를 읽지 않는다.
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'soran-hb-stage-'))
+  const envFile = (name: string, kv: Record<string, string>): string => {
+    const f = join(dir, `${name}.env`)
+    writeFileSync(f, Object.entries(kv).map(([k, v]) => `${k}=${v}`).join('\n') + '\nDATABASE_URL=must-not-be-read\n')
+    return f
+  }
+  const ghFile = (name: string, kv: Record<string, string>): string => {
+    const f = join(dir, `${name}.json`)
+    writeFileSync(f, JSON.stringify(Object.entries(kv).map(([k, v]) => ({ name: k, value: v }))))
+    return f
+  }
+  const AT = '2026-09-26T07:00:00Z'
+  const base = { SORAN_CAPACITY_STAGE: 'd5', SORAN_RELEASE_STAGE: 'd1' }
+  const w3 = { SORAN_RELEASE_WINDOW_STAGE: 'd3', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29' }
+  const w5 = { SORAN_RELEASE_WINDOW_STAGE: 'd5', SORAN_RELEASE_WINDOW_FROM: '2026-09-23', SORAN_RELEASE_WINDOW_UNTIL: '2026-09-29' }
+  const oldCanary = { SORAN_RELEASE_CANARY_STAGE: 'd5', SORAN_RELEASE_CANARY_DATE: '2026-09-24' }
+  const run = (local: string, gh: string): { code: number | null; out: string } => {
+    const r = spawnSync(process.execPath, [...process.execArgv, 'scripts/publish-heartbeat-preflight.mts',
+      '--stage-only', `--local-env-file=${local}`, `--github-vars-file=${gh}`, `--now=${AT}`], { encoding: 'utf-8' })
+    return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+  }
+  const c1 = run(envFile('l1', base), ghFile('g1', { ...base, ...w3, ...oldCanary }))
+  check('🔴 🔴 **① 실측 모양 local d1 / GitHub d3 → exit 1**', c1.code === 1 && c1.out.includes('실효 천장 불일치 — local d1'), `exit ${c1.code}`)
+  const c2 = run(envFile('l2', { ...base, ...w3 }), ghFile('g2', { ...base, ...w3 }))
+  check('🟢 ② local d3 / GitHub d3 → exit 0', c2.code === 0 && c2.out.includes('🟢 같다'), `exit ${c2.code}`)
+  const c3 = run(envFile('l3', { ...base, ...w3 }), ghFile('g3', { ...base, ...w5 }))
+  check('🔴 🔴 **③ local d3 / GitHub d5 → exit 1**', c3.code === 1 && c3.out.includes('local d3') && c3.out.includes('GitHub d5'), `exit ${c3.code}`)
+  const c4 = run(envFile('l4', { ...base, ...w3 }), ghFile('g4', { ...base, ...w3, ...oldCanary }))
+  check('🟢 ④ 지난 canary 문자열만 다르고 양쪽 천장 d3 → 분기 표시 · exit 0',
+    c4.code === 0 && c4.out.includes('분기 SORAN_RELEASE_CANARY_STAGE') && !c4.out.includes('실효 천장 불일치'), `exit ${c4.code}`)
+  const c5 = run(envFile('l5', { ...base, ...w3 }), join(dir, 'missing.json'))
+  check('🔴 ⑤ GitHub 을 못 읽으면 → exit 1 (fail-closed)', c5.code === 1 && c5.out.includes('읽지 못했다'), `exit ${c5.code}`)
+  check('🔴 단계 게이트는 env 에서 단계 키만 읽는다 — 비밀값 줄이 출력에 없다', ![c1, c2, c3, c4, c5].some((c) => c.out.includes('must-not-be-read')))
 }
 
 // ─────────────────────────────────────────────────────────

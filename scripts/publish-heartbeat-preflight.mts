@@ -8,7 +8,7 @@
  *    ③ 둘 다 **임시 파일**에 쓰고 `plutil -lint` 한다 — 설치 경로에는 쓰지 않는다
  *    ④ 정시판 렌더가 설치본과 바이트 단위로 같은지 본다(= rollback 대상이 지금 설치본이다)
  *    ⑤ 설치본 → heartbeat 차이를 줄 단위로 보인다(트리거만 달라야 한다)
- *    ⑥ 단계 입력 — 정본 env(단계 키 일곱 개만) vs GitHub Variables. 로컬 천장이 더 높으면 막는다
+ *    ⑥ 단계 입력 — 정본 env(단계 키 일곱 개만) vs GitHub Variables. **실효 천장이 다르면 막는다**(어느 방향이든)
  *    ⑦ 기존 트리거 parity(capacity · release)도 그대로 본다 — 정시판 등록 게이트와 같은 판정이다
  *    ⑧ 설치·rollback 명령을 **출력만** 한다
  *
@@ -17,6 +17,7 @@
  *
  *   npm run publish:heartbeat-preflight                      runtime 미관측(막힘으로 끝난다)
  *   npm run publish:heartbeat-preflight -- --check-runtime   설치 직전 — runtime 에 heartbeat 코드가 있는지 stat
+ *   npm run publish:heartbeat-preflight -- --stage-only      단계 게이트만(실행 반례 · 설치 판정 아님)
  *
  * 종료 코드 — 0 이면 설치 가능 · 1 이면 막힘(이유 출력). 어느 쪽이든 아무것도 바꾸지 않는다.
  */
@@ -33,11 +34,71 @@ import {
 } from './lib/original-post-runner-template'
 import { CAPACITY_ENV, RELEASE_ENV } from '../src/lib/scale-profile'
 
-const NOW = new Date()
+/**
+ * 🔴 **시험용 입력 경로** (2026-09-26) — 실행 반례를 실제 이 프로세스로 돌리기 위한 것이다.
+ *    `--local-env-file=`  정본 env 대신 읽을 파일(단계 키만 뽑는다)
+ *    `--github-vars-file=` `gh variable list --json name,value` 대신 읽을 JSON. 못 읽으면 GitHub 미관측(막힘)
+ *    `--now=`             판정 시각(ISO)
+ *    `--stage-only`       ⑥·⑦ 단계 게이트만 돌리고 그 결과로 종료한다 — 설치 판정이 아니다(설치는 전체 실행)
+ *    🔴 어느 것도 기본 경로를 느슨하게 하지 않는다. 주지 않으면 정본 env · gh · 지금 시각이다.
+ */
+const argOf = (k: string): string | null => {
+  const hit = process.argv.slice(2).find((a) => a.startsWith(`--${k}=`))
+  return hit === undefined ? null : hit.slice(k.length + 3)
+}
+const NOW = argOf('now') === null ? new Date() : new Date(argOf('now')!)
+const STAGE_ONLY = process.argv.includes('--stage-only')
 const blockers: string[] = []
 const AGENT = join(homedir(), 'Library', 'LaunchAgents', `${PUBLISH_RUNNER_LABEL}.plist`)
 
+/** ── ⑥·⑦ 단계 입력 게이트 — 전체 실행과 `--stage-only` 가 **같은 함수**를 부른다 ── */
+function stageGate(): void {
+  const envPath = argOf('local-env-file') ?? CANONICAL_ENV_PATH
+  let localEnv: Record<string, string> | null = null
+  try { localEnv = pickStageInputKeys(readFileSync(envPath, 'utf-8')) } catch { localEnv = null }
+  const githubEnv: Record<string, string> | null = ((): Record<string, string> | null => {
+    try {
+      const fixture = argOf('github-vars-file')
+      const out = fixture !== null
+        ? readFileSync(fixture, 'utf-8')
+        : execFileSync('gh', ['variable', 'list', '--repo', PUBLISH_REPO, '--json', 'name,value'],
+          { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] })
+      const rows = JSON.parse(out.trim() === '' ? '[]' : out) as { name: string; value: string }[]
+      if (!Array.isArray(rows)) return null
+      const o: Record<string, string> = {}
+      for (const r of rows) if (STAGE_INPUT_KEYS.includes(r.name)) o[r.name] = r.value
+      return o
+    } catch { return null }
+  })()
+  console.log(`\n⑥ 단계 입력 (정본 env · 단계 키 ${STAGE_INPUT_KEYS.length}개만 읽는다 · 판정 시각 ${NOW.toISOString()})`)
+  if (localEnv === null) {
+    console.log(`   🔴 정본 env 를 읽지 못했다 — ${envPath}`)
+    blockers.push('정본 env 를 읽지 못했다(fail-closed)')
+    return
+  }
+  const v = judgeHeartbeatStageInputs({ local: localEnv, github: githubEnv, now: NOW })
+  console.log(`   local   ${describeStageInputs(v.local)}`)
+  console.log(`   GitHub  ${v.github === null ? '🔴 읽지 못했다' : describeStageInputs(v.github)}`)
+  for (const d of v.divergences) console.log(`   ⚠️ 분기 ${d}`)
+  console.log(`   실효 천장 parity  ${v.ok ? '🟢 같다' : '🔴 설치 불가'}`)
+  for (const b of v.blockers) { console.log(`   🔴 ${b}`); blockers.push(b) }
+  // ── ⑦ 기존 parity(정시판 등록 게이트와 같은 판정) ──
+  const parity = judgeTriggerParity({
+    local: { capacity: localEnv[CAPACITY_ENV], release: localEnv[RELEASE_ENV] },
+    github: githubEnv === null ? null : { capacity: githubEnv[CAPACITY_ENV], release: githubEnv[RELEASE_ENV] },
+  })
+  console.log(`\n⑦ capacity · release parity  ${parity.ok ? '🟢' : '🔴'} ${parity.reason}`)
+  for (const b of parity.blockers) blockers.push(`parity — ${b}`)
+}
+
 console.log('\n══ 발행 heartbeat preflight (dry-run · launchctl 0 · LaunchAgents write 0) ══\n')
+
+if (STAGE_ONLY) {
+  stageGate()
+  console.log(`\n${blockers.length === 0 ? '🟢 단계 게이트 통과' : `🔴 단계 게이트 막힘 ${blockers.length}건`} — 🔴 이것은 설치 판정이 아니다(전체 실행이 한다)`)
+  for (const b of blockers) console.log(`   · ${b}`)
+  process.exit(blockers.length === 0 ? 0 : 1)
+}
 
 // ── ① 설치본 — 읽기만 ──
 let installed: string | null = null
@@ -122,38 +183,7 @@ if (installed !== null) {
   if (outsideTrigger.length > 0) blockers.push('heartbeat 판이 트리거 밖(경로·PATH·로그·label)에서도 설치본과 다르다')
 }
 
-// ── ⑥ 단계 입력 — 정본 env(단계 키만) vs GitHub ──
-let localEnv: Record<string, string> | null = null
-try { localEnv = pickStageInputKeys(readFileSync(CANONICAL_ENV_PATH, 'utf-8')) } catch { localEnv = null }
-const githubEnv: Record<string, string> | null = ((): Record<string, string> | null => {
-  try {
-    const out = execFileSync('gh', ['variable', 'list', '--repo', PUBLISH_REPO, '--json', 'name,value'],
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] })
-    const rows = JSON.parse(out.trim() === '' ? '[]' : out) as { name: string; value: string }[]
-    if (!Array.isArray(rows)) return null
-    const o: Record<string, string> = {}
-    for (const r of rows) if (STAGE_INPUT_KEYS.includes(r.name)) o[r.name] = r.value
-    return o
-  } catch { return null }
-})()
-console.log(`\n⑥ 단계 입력 (정본 env · 단계 키 ${STAGE_INPUT_KEYS.length}개만 읽는다)`)
-if (localEnv === null) {
-  console.log(`   🔴 정본 env 를 읽지 못했다 — ${CANONICAL_ENV_PATH}`)
-  blockers.push('정본 env 를 읽지 못했다(fail-closed)')
-} else {
-  const v = judgeHeartbeatStageInputs({ local: localEnv, github: githubEnv, now: NOW })
-  console.log(`   local   ${describeStageInputs(v.local)}`)
-  console.log(`   GitHub  ${v.github === null ? '🔴 읽지 못했다' : describeStageInputs(v.github)}`)
-  for (const d of v.divergences) console.log(`   ⚠️ 분기 ${d}`)
-  for (const b of v.blockers) { console.log(`   🔴 ${b}`); blockers.push(b) }
-  // ── ⑦ 기존 parity(정시판 등록 게이트와 같은 판정) ──
-  const parity = judgeTriggerParity({
-    local: { capacity: localEnv[CAPACITY_ENV], release: localEnv[RELEASE_ENV] },
-    github: githubEnv === null ? null : { capacity: githubEnv[CAPACITY_ENV], release: githubEnv[RELEASE_ENV] },
-  })
-  console.log(`\n⑦ capacity · release parity  ${parity.ok ? '🟢' : '🔴'} ${parity.reason}`)
-  for (const b of parity.blockers) blockers.push(`parity — ${b}`)
-}
+stageGate()
 
 // ── ⑧ 명령 — 출력만 ──
 const stamp = NOW.toISOString().replace(/[:.]/g, '-')

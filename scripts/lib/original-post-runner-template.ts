@@ -345,14 +345,17 @@ export type StageInputVerdict = {
 }
 
 /**
- * 🔴 **로컬과 GitHub 의 단계 입력 분기 — fail-closed 방향만 허용한다.**
+ * 🔴 **로컬과 GitHub 의 단계 입력 — 설치하려면 두 트리거의 실효 천장이 같아야 한다** (2026-09-26 마스터 보정).
  *
  *    · GitHub 을 못 읽었다 → 막는다(모를 때 등록하지 않는다)
- *    · 로컬 천장 **>** GitHub 천장 → 막는다. 새로 자주 깨는 쪽이 백업보다 넓으면 fail-open 이다
- *    · 로컬 천장 **≤** GitHub 천장 → 통과하되 분기를 값으로 적는다. 로컬은 자기 천장까지만 내고,
- *      그 위는 GitHub 예약(늦게 온다)만 채운다 — 트랜잭션이 각자 env 천장으로 누르기 때문이다
+ *    · 로컬 천장 **≠** GitHub 천장 → 막는다. 어느 방향이든 막는다:
+ *        - 로컬이 높다 — 새로 자주 깨는 쪽이 백업보다 넓으면 fail-open 이다
+ *        - 로컬이 낮다 — 안전하지만 heartbeat 가 하루 첫 글 하나만 제때 내고 나머지는 늦은 GitHub 예약을
+ *          기다린다. 설치해도 목적(제때 발행)을 이루지 못하므로 **설치 가능으로 세지 않는다**
+ *          (실측 모양 2026-09-26: local d1 · GitHub d3)
+ *    · 천장이 같다 → 통과. raw 문자열이 달라도(지난 canary · 끝난 기간) **분기로 적을 뿐** 그 이유로 막지 않는다
  *
- * 🔴 판정에 쓰는 천장은 `releaseStageCeiling` 하나다. 이 함수가 숫자를 새로 만들지 않는다.
+ * 🔴 판정에 쓰는 천장은 `releaseStageCeiling` 하나다. 이 함수가 숫자를 새로 만들지 않고 env 도 바꾸지 않는다.
  */
 export function judgeHeartbeatStageInputs(input: {
   local: Readonly<Record<string, string | undefined>>
@@ -374,11 +377,11 @@ export function judgeHeartbeatStageInputs(input: {
     if (a !== b) divergences.push(`${k} — local ${a ?? '(없음)'} · GitHub ${b ?? '(없음)'}`)
   }
   const blockers: string[] = []
-  if (stageRank(local.ceiling) > stageRank(github.ceiling)) {
-    blockers.push(`🔴 로컬 천장 ${local.ceiling} 가 GitHub 천장 ${github.ceiling} 보다 높다 — 자주 깨는 쪽이 더 넓으면 fail-open 이다`)
-  } else if (local.ceiling !== github.ceiling) {
-    divergences.push(`천장 — local ${local.ceiling}(하루 ${local.ceilingDailyTarget}) < GitHub ${github.ceiling}(하루 ${github.ceilingDailyTarget})`
-      + ' · 로컬 heartbeat 는 로컬 천장까지만 낸다(fail-closed). 그 위는 GitHub 예약만 채운다')
+  if (local.ceiling !== github.ceiling) {
+    const dir = stageRank(local.ceiling) > stageRank(github.ceiling)
+      ? '자주 깨는 쪽이 더 넓다 — fail-open 이다'
+      : 'heartbeat 가 로컬 천장까지만 제때 내고 나머지는 늦은 GitHub 예약을 기다린다 — 설치 목적을 이루지 못한다'
+    blockers.push(`🔴 실효 천장 불일치 — local ${local.ceiling}(하루 ${local.ceilingDailyTarget}) ≠ GitHub ${github.ceiling}(하루 ${github.ceilingDailyTarget}) · ${dir}`)
   }
   return { ok: blockers.length === 0, local, github, divergences, blockers }
 }
