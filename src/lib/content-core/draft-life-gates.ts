@@ -26,6 +26,8 @@
  */
 import { readMediaDependency } from './evidence'
 import { RELATION_NAMES } from './source-facts'
+/** 🔴 "다른 사람을 가리키는 말" 의 정본 — 여기서 목록을 다시 만들지 않는다 */
+import { OTHER_MARKERS } from '../persona-self-age'
 import type { PoolCard } from '../persona-pool-card'
 import {
   CHILD_AGE_BANDS, judgeLifeHistory, readSelfChildBands, readSelfClaims,
@@ -94,6 +96,20 @@ const bandIdx = (b: string): number => (CHILD_AGE_BANDS as readonly string[]).in
 const namesBand = (token: string, band: ChildAgeBand): boolean => token.includes(band.split('·')[0]!)
 
 /**
+ * 🔴 **화제 틀 어절** (2026-09-26 마스터 재검토 2차 · fail-open 수정).
+ *    `지금은 남편이 …` 의 `지금은` 은 장면을 여는 화제이지 남편의 임자가 아니다 —
+ *    앞판은 그것을 "누군가 앞에 섰다" 로 읽어 글쓴이 남편의 초1 아이가 두 게이트를 모두 지났다.
+ *    `친구는 남편이 …` 의 `친구는` 은 임자다. 둘 다 `X은/는` 이라 모양으로는 못 가른다.
+ *    🔴 시간 낱말 목록을 만들지 않는다. 기존 정본 `OTHER_MARKERS`(다른 사람을 가리키는 말)를
+ *       담은 `은/는` 어절만 임자로 남기고, 나머지 `은/는` 어절은 화제 틀로 건너뛴다.
+ *    🔴 목록 밖 사람(`시누는 남편이`)은 틀로 읽혀 **막는 쪽**으로 기운다 — 새는 쪽이 아니다.
+ *    🔴 매칭 규칙 모듈에는 넣지 않는다(사람 명사 목록 금지 · fixture 강제). 판정을 넘겨 준다.
+ */
+const isTopicFrame = (w: string): boolean =>
+  /(?:은|는)$/.test(w) && !OTHER_MARKERS.some((m) => w.includes(m))
+const OWNER_OPTS = { isFrameWord: isTopicFrame } as const
+
+/**
  * 🔴 **세 게이트를 한 번에.** 빈 배열이면 통과다.
  *    `plan` 이 없으면 B 를, `card` 가 없으면 C 를 **판정하지 않는다** — 모르는 것을
  *    결함으로 세지 않는다. 카드를 못 찾은 경우는 나이 판정(`judgeSelfAgeBasis`)이 이미 막는다.
@@ -120,7 +136,7 @@ export function judgeDraftGates(input: {
    *    부모·자녀를 사실로 말하면 **카드로 검증받지 않은 생활사**가 된다.
    *    🔴 `lifeFacts` 의 허가 밖 주장은 여기서 세지 않는다 — 카드 모순은 C 와 의미 검수가 본다.
    */
-  const claims = readSelfClaims(title, body)
+  const claims = readSelfClaims(title, body, OWNER_OPTS)
   if (input.plan !== null && input.plan.selfBasis === null) {
     const warranted = new Set(input.plan.warrants.map((w) => w.fact))
     const bad = claims
@@ -143,7 +159,7 @@ export function judgeDraftGates(input: {
     const kids = card.childrenCount > 0 && bands.length > 0
     const minIdx = kids ? Math.min(...bands.map(bandIdx)) : -1
     const maxIdx = kids ? Math.max(...bands.map(bandIdx)) : -1
-    for (const m of readSelfChildBands(title, body)) {
+    for (const m of readSelfChildBands(title, body, OWNER_OPTS)) {
       /**
        * 🔴 **관계 명칭(`사위` · `며느리` · `손주`)은 나이 표기가 아니다** (2026-09-26 운영 초안 재측정).
        *    `사위가 돼서 자꾸 그러니까` 의 사위는 글쓴이 **남편**이다(친정 쪽에서 본 이름).

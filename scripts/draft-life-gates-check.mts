@@ -226,6 +226,23 @@ console.log('\n⑥ C 카드의 지금 삶과 시제')
   check('🟢 "최초1" 은 학년이 아니다', readPostRequirements('', '최초1 등을 했어요').needsChildAgeBands.length === 0)
 }
 
+console.log('\n⑥-b 절 머리 주어 — 첫 은/는 어절에서 멈추지 않는다 (재검토 2차)')
+{
+  for (const head of ['지금은', '오늘은', '요즘은']) {
+    const b = `${head} 남편이 육아휴직 쓰고 초1 아이를 돌봐요.`
+    const g = codes('육아휴직', b, QUESTION, P14)
+    check(`🔴 🔴 **"${head} 남편이 … 초1 아이" · P14 · QUESTION — C 와 B 둘 다 막는다**`,
+      g.includes('lifeStageTenseConflict') && g.includes('unwarrantedSelfClaim'), g.join(','))
+  }
+  check('🔴 맨 "남편이 … 초1 아이" · QUESTION — C 와 B',
+    sameSet(codes('육아휴직', '남편이 육아휴직 쓰고 초1 아이를 돌봐요.', QUESTION, P14),
+      ['lifeStageTenseConflict', 'unwarrantedSelfClaim']))
+  for (const b of ['오늘은 친구 남편이 육아휴직 쓰고 초1 아이를 돌봐요.', '친구는 남편이 육아휴직 쓰고 초1 아이를 돌봐요.']) {
+    const g = codes('육아휴직', b, QUESTION, P14)
+    check(`🟢 "${b.slice(0, 12)}…" — 남의 집안 · 둘 다 통과`, g.length === 0, g.join(','))
+  }
+}
+
 console.log('\n⑦ 배선 — 코드 한 벌 · 러너가 실제로 넘긴다')
 {
   check('🔴 deterministic 코드에 게이트 셋이 다 있다 (값으로)',

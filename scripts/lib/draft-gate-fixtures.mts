@@ -295,6 +295,25 @@ export const REVIEW_FIXTURES: readonly GateFixture[] = [
   thirdParty('friend', '친구 남편이', '친구네는 남편이 육아휴직 중이래요'),
   thirdParty('colleague', '회사 동료가', '회사 동료가 육아휴직을 냈어요'),
   thirdParty('neighbor', '이웃집 남편이', '이웃집 아빠 육아휴직 이야기'),
+  /**
+   * 🔴 **재검토 2차** (08affd6 fail-open) — 절 머리 첫 `은/는` 어절에서 주어를 확정하면 안 된다.
+   *    `지금은 남편이` 는 글쓴이 남편이고, `친구는 남편이` · `오늘은 친구 남편이` 는 남의 집이다.
+   */
+  thirdParty('friend-topic', '친구는 남편이', '친구네 남편 육아휴직 소식'),
+  thirdParty('today-friend', '오늘은 친구 남편이', '오늘 들은 친구네 육아휴직 이야기'),
+  {
+    queueId: 'master-review-frame-spouse', label: '🔴 "지금은 남편이 … 쓰고 초1 아이" · P14 · QUESTION (C + B)',
+    source: {
+      id: 'fx-frame', title: '주변에 육아휴직 쓰는 아빠들 많나요',
+      body: '요즘 육아휴직을 냈대요. 아침마다 초1 아이 등교시키고 도시락도 싼다네요. 세상 많이 변했어요.',
+    },
+    draft: {
+      title: '요즘 우리 집 아침 풍경',
+      body: '지금은 남편이 육아휴직 쓰고 초1 아이를 돌봐요.\n\n아침에 학교 데려다주고 점심 도시락까지 챙기더라고요.\n\n다들 어떻게 보세요?',
+    },
+    plan: planOf({ personaCode: 'P14', stance: 'QUESTION', selfBasis: null }),
+    card: P14, expect: ['lifeStageTenseConflict', 'unwarrantedSelfClaim'],
+  },
   {
     queueId: 'master-review-bare-spouse', label: '🔴 맨 "남편이 … 쓰고 초1 아이" · P14 성인 자녀 (지금 집안 모순)',
     source: {

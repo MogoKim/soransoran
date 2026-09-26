@@ -71,6 +71,15 @@ async function main(): Promise<void> {
     const r = await runFixturePath(fx)
     console.log(`   · ${fx.card.code} → ${r.pick?.decision ?? '(초안 없음)'} · ${r.pick?.reason ?? r.art.review.machineReason}`)
     if (r.pick?.decision === 'AUTO_ADOPT') adopted.push({ fx, r })
+    /**
+     * 🔴 **큐에 없다는 것만으로는 부족하다** — 게이트 하나가 빠져도 다른 게이트가 막으면 큐는 같다.
+     *    기대한 사유가 **전부** pick 에 남았는지 본다(재검토 2차: C 가 빠지고 B 만 남은 경우).
+     */
+    if (fx.expect.length > 0) {
+      const got = (r.pick?.rejected ?? []).map((x) => x.reason as string)
+      check(`🔴 ${fx.label} — pick AUTO_HOLD · 사유 ${fx.expect.join('+')} 전부`,
+        r.pick?.decision === 'AUTO_HOLD' && fx.expect.every((c) => got.includes(c)), `${r.pick?.decision} · ${got.join(',')}`)
+    }
   }
 
   // ── 임시 cwd — 러너가 쓰는 자리 그대로(.microseed-data) ──
