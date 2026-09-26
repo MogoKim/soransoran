@@ -985,21 +985,66 @@ const fakeDeps = (
   check('정상 화면이면 조치가 없다', clean.ok && clean.action === 'NONE', `확인 ${clean.checked}편`)
 
   /**
-   * 🔴 표본으로 **실제 미공개 글**을 쓴다. 지어낸 문자열을 쓰면 시험이 실제보다 약해진다 —
-   *    매거진 slug 는 영문 kebab-case 라(types.ts) 한글 표본은 감시의 정규식에 아예 걸리지 않고,
-   *    그러면 "샌 것을 못 잡는" 결함을 "표본이 이상해서" 로 덮게 된다.
+   * 🔴 **표본을 운영 날짜에서 떼어냈다** (2026-09-26 CI 사고).
+   *
+   *    앞판은 `[...unpublishedSlugs][0]` — 실제 예약 글 한 건을 표본으로 썼다.
+   *    예약 글은 `publishAt` 이 지나면 공개로 바뀐다. 마지막 예약 글이
+   *    `2026-09-26T01:30Z` 에 공개되면서 표본이 `undefined` 가 됐고,
+   *    **코드가 한 줄도 바뀌지 않았는데** CI 가 빨개졌다. 같은 트리가 그 시각
+   *    **전에는** 초록이었다 (9/25 nightly 통과). 시험이 시계를 읽고 있었던 것이다.
+   *
+   *    🔴 **운영 미공개 글이 0편인 것은 정상이다.** 공급이 잠시 비었다는 뜻일 뿐,
+   *       감시가 고장 났다는 뜻이 아니다. 감시 시험이 그 숫자에 기대면 안 된다.
+   *
+   *    🔴 **표본이 없다고 건너뛰지 않는다.** 고정 fixture 로 **언제나** 돌린다.
+   *       감시가 보는 "공개 목록" 은 `runGraphWatch({ articles })` 인자다 —
+   *       그 목록에 없는 slug 가 곧 미공개다. 실제 `articles.ts` 는 건드리지 않는다.
+   *
+   *    🔴 **slug 모양은 실제와 같아야 한다.** 매거진 slug 는 영문 kebab-case 라
+   *       (types.ts) 한글 표본은 감시의 정규식에 아예 걸리지 않고, 그러면
+   *       "샌 것을 못 잡는" 결함을 "표본이 이상해서" 로 덮게 된다.
    */
-  const realUnpublished = [...unpublishedSlugs][0]
-  check('시험에 쓸 실제 미공개 글이 있다', typeof realUnpublished === 'string', realUnpublished)
+  const UNPUBLISHED_FIXTURE = 'mgraph-unpublished-fixture'
+  check(
+    '  fixture 가 kebab-case 다 — 감시 정규식이 잡는 모양',
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(UNPUBLISHED_FIXTURE),
+    UNPUBLISHED_FIXTURE,
+  )
+  check(
+    '🔴 fixture 는 공개 글에도 articles.ts 에도 없다 (진짜 미공개다)',
+    !publicSlugs.has(UNPUBLISHED_FIXTURE) &&
+      !MAGAZINE_ARTICLES.some((x) => x.slug === UNPUBLISHED_FIXTURE),
+    `운영 미공개 ${unpublishedSlugs.size}편 — 0편이어도 이 시험은 그대로 돈다`,
+  )
+  check(
+    '🔴 fixture 가 화면 링크에서 실제로 추출된다 (죽은 표본 아님)',
+    extractRelatedLinks(pageWith([UNPUBLISHED_FIXTURE])).includes(UNPUBLISHED_FIXTURE),
+    extractRelatedLinks(pageWith([UNPUBLISHED_FIXTURE])).join(','),
+  )
 
   const leak = await runGraphWatch({
-    deps: fakeDeps({ [a]: pageWith([realUnpublished]) }),
+    deps: fakeDeps({ [a]: pageWith([UNPUBLISHED_FIXTURE]) }),
     articles: [{ slug: a }, { slug: b }],
   })
-  check('미공개 글이 링크에 뜨면 전체 차단을 요구한다', leak.action === 'TRIP_GLOBAL')
+  check('미공개 글이 링크에 뜨면 전체 차단을 요구한다', leak.action === 'TRIP_GLOBAL', leak.action)
   check(
     '  그 사유가 UNPUBLISHED_LEAK 다',
-    leak.findings.some((f) => f.code === 'UNPUBLISHED_LEAK' && f.targetSlug === realUnpublished),
+    leak.findings.some((f) => f.code === 'UNPUBLISHED_LEAK' && f.targetSlug === UNPUBLISHED_FIXTURE),
+    leak.findings.map((f) => `${f.code}:${f.targetSlug ?? '-'}`).join(' · ') || '(판정 없음)',
+  )
+
+  /**
+   * 🔴 **대조군** — 같은 slug 를 **공개 목록에 넣으면** 누출 판정이 사라져야 한다.
+   *    이게 없으면 위 검사는 "무조건 TRIP_GLOBAL 이 나온다" 와 구별되지 않는다.
+   */
+  const notLeak = await runGraphWatch({
+    deps: fakeDeps({ [a]: pageWith([UNPUBLISHED_FIXTURE]) }),
+    articles: [{ slug: a }, { slug: b }, { slug: UNPUBLISHED_FIXTURE }],
+  })
+  check(
+    '🔴 같은 fixture 가 공개 목록에 있으면 누출이 아니다',
+    !notLeak.findings.some((f) => f.code === 'UNPUBLISHED_LEAK') && notLeak.action !== 'TRIP_GLOBAL',
+    `${notLeak.action} · ${notLeak.findings.map((f) => f.code).join(',') || '판정 없음'}`,
   )
 
   const selfLink = await runGraphWatch({
@@ -1046,7 +1091,8 @@ const fakeDeps = (
 
   // ── 🔴 자동 차단 체인 — 사람 승인 없이 네 단계가 실제로 불린다 ──
   {
-    const leakPages = { [a]: pageWith([realUnpublished]) }
+    // 🔴 자동 차단 체인도 같은 고정 fixture 로 태운다 — 운영 예약 글에 기대지 않는다
+    const leakPages = { [a]: pageWith([UNPUBLISHED_FIXTURE]) }
     const arts = [{ slug: a }, { slug: b }]
 
     const dryRun = fakeDeps(leakPages)
