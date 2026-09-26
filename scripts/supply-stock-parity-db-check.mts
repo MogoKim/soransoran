@@ -234,7 +234,8 @@ async function main(): Promise<void> {
     const scale = resolveScale(E15)
     check('정본이 release d1 · capacity d5 로 읽는다', scale.releaseStage === 'd1' && scale.capacityStage === 'd5')
     check('🔴 공급 계획 눈금은 capacity 다', supplyPlanningProfile(scale).stage === 'd5'
-      && supplyPlanningProfile(scale).profile === PROFILES.d5)
+      // 🔴 값으로 비교한다 — Node 20 의 tsx 는 같은 모듈을 두 인스턴스로 적재할 수 있다
+      && JSON.stringify(supplyPlanningProfile(scale).profile) === JSON.stringify(PROFILES.d5))
     const load = await buildSpeakerLoad(prisma, 'parity-run', { env: E15, now: NOW, scale })
     const totalOpen = Object.values(load.byCode).reduce((n, r) => n + r.openDays, 0)
     check('🔴 🔴 **지평 7일의 자리 = capacity d5 × 7 = 35** (앞판 release d1: 7)',

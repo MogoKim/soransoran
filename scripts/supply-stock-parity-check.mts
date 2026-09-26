@@ -31,6 +31,11 @@ const check = (label: string, ok: boolean, detail = ''): void => {
     fail += 1; console.log(`  ❌ ${label}${detail === '' ? '' : ` — ${detail}`}`)
   }
 }
+/**
+ * 🔴 **프로필은 값으로 비교한다.** CI(Node 20)의 tsx 는 같은 파일을 ESM·CJS 두 인스턴스로 적재할 수 있어
+ *    `===` 가 값이 같아도 거짓이 된다(PR #578 첫 CI 실측). 검사의 뜻은 "같은 눈금" 이지 "같은 객체" 가 아니다.
+ */
+const sameProfile = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 const same = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|')
 
@@ -188,7 +193,8 @@ console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽
     for (const cap of RELEASE_STAGES) {
       const scale = resolveScale({ [RELEASE_ENV]: rel, [CAPACITY_ENV]: cap })
       const p = supplyPlanningProfile(scale)
-      if (!(p.stage === scale.capacityStage && p.profile === scale.capacityProfile && p.profile === PROFILES[scale.capacityStage])) {
+      if (!(p.stage === scale.capacityStage && sameProfile(p.profile, scale.capacityProfile)
+        && sameProfile(p.profile, PROFILES[scale.capacityStage]))) {
         check(`release ${rel} · capacity ${cap}`, false, `${p.stage}`)
       }
     }
@@ -196,7 +202,7 @@ console.log('\n② 공급은 capacity · 발행은 release — 정본 값을 읽
   check('🔴 모든 release × capacity 조합에서 공급 눈금 = capacity (새 단계 없음)', true)
   const s15 = resolveScale({ [RELEASE_ENV]: 'd1', [CAPACITY_ENV]: 'd5' })
   check('🔴 🔴 **release d1 · capacity d5 → 공급 d5 · 발행 d1**',
-    supplyPlanningProfile(s15).stage === 'd5' && s15.releaseStage === 'd1' && s15.releaseProfile === PROFILES.d1)
+    supplyPlanningProfile(s15).stage === 'd5' && s15.releaseStage === 'd1' && sameProfile(s15.releaseProfile, PROFILES.d1))
 }
 
 console.log('\n③ Persona 여력 대기 — 초안 실패가 아니다')
