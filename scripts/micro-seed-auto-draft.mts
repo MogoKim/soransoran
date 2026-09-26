@@ -829,8 +829,10 @@ async function main(): Promise<void> {
   let hit = 0
   let miss = 0
   /** 🔴 겹쳐서 다시 쓴 횟수 — 화면에 찍는다. 안 보이면 늘어도 모른다 */
-  /** 🔴 쓸 Persona 가 없어 **생성 전에** 멈춘 원천 수 */
+  /** 🔴 말투 정본을 못 읽어 **생성 전에** 멈춘 원천 수 */
   let voiceHeld = 0
+  /** 🔴 화자 여력 계획이 화자를 주지 못해 **생성 전에** 미룬 원천 수 — 초안 실패가 아니다 */
+  let capacityDeferred = 0
   const statusCount = new Map<string, number>()
 
   const picks: Pick[] = []
@@ -963,9 +965,10 @@ async function main(): Promise<void> {
     // 🔴 지금부터 나가는 요청은 이 원천의 것으로 센다 (공동 예산 · 원천별 관측)
     BUDGET.enter(j.sourceArticleId)
     const meta = metas.get(j.sourceArticleId)
-    const holdPick = (): void => {
+    const holdPick = (o: { personaDeferred?: boolean } = {}): void => {
       picks.push(pickDraft({
         judgement: j, drafts: [], seenTitles, seenBodies, sourceUsed: false,
+        personaDeferred: o.personaDeferred === true,
       }, nowIso))
     }
     if (meta === undefined) { holdPick(); continue }
@@ -1004,7 +1007,8 @@ async function main(): Promise<void> {
      *       캐시·기록이 같은 것을 가리킨다. 그것이 앞판이 깨뜨린 지점이다.
      */
     const slotCodes = slotOf.get(j.sourceArticleId) ?? []
-    if (slotCodes.length === 0) { voiceHeld += 1; holdPick(); continue }
+    // 🔴 **여력 대기로 적는다** — 초안 실패(`noDraft`)가 아니다. 부르기 전이다(provider 호출 0)
+    if (slotCodes.length === 0) { capacityDeferred += 1; holdPick({ personaDeferred: true }); continue }
     /**
      * 🔴 **지난 시도에서 화자 탓으로 실패했으면 그 사람을 뺀다** (2026-09-23).
      *    유료 호출보다 앞이다. 남은 사람이 없거나 시도 상한을 넘으면 **만들지 않는다** —
@@ -1197,7 +1201,11 @@ async function main(): Promise<void> {
     console.log(`   🟡 적격 화자를 다 써서 더 시도하지 않은 원천 ${replanExhausted}건 — AI 를 부르지 않았다`)
   }
   if (voiceHeld > 0) {
-    console.log(`   🟡 쓸 Persona 가 없어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
+    console.log(`   🟡 말투 정본을 못 읽어 생성 전에 멈춘 원천 ${voiceHeld}건 — AI 를 부르지 않았다`)
+  }
+  if (capacityDeferred > 0) {
+    console.log(`   🟡 Persona 여력 대기로 미룬 원천 ${capacityDeferred}건 — AI 를 부르지 않았다 · 초안 실패 아님`
+      + ' (원천은 끝나지 않았다 — 판정 seeded 그대로 남는다)')
   }
   {
     /**

@@ -74,14 +74,14 @@ import {
   SPEAKER_LOAD_FILE, draftSpeakerOf, type SpeakerLoadFile,
 } from '../src/lib/content-core/speaker-load-file'
 import { planOpenDays } from '../src/lib/content-core/speaker-availability'
-import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
-import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
-import { canaryAuthorization, kstDateString } from '../src/lib/release-canary'
+import { kstDateString } from '../src/lib/release-canary'
 import { availablePersonasAt } from '../src/lib/supply-capacity-forecast'
+import { horizonStart, type ScaleProfile } from '../src/lib/scale-profile'
+import type { ResolvedScale } from '../src/lib/scale-runtime'
+/** 🔴 재고 분류 정본 — 발행 러너와 **같은 조립 · 같은 판정**을 나눠 읽는다 */
 import {
-  horizonStart, PROFILES, RELEASE_STAGES, type ScaleProfile,
-} from '../src/lib/scale-profile'
-import { activeScale } from '../src/lib/scale-runtime'
+  loadStockClassification, describeStockClassification, type StockClassification,
+} from './lib/publishable-stock.mjs'
 
 /**
  * 🔴 **화자 여력을 며칠 앞까지 보는가.** 발행 쪽 최소 간격(d3 은 2일)보다 넉넉해야
@@ -221,154 +221,114 @@ const STAGE_SCRIPT: Record<ProcessStage, string> = {
  *
  *    `openDays`  지평 안에서 그 화자가 **배정 가능한 날 수**.
  *                발행 정본(`availablePersonasAt`)이 판정한다 — 여기서 규칙을 다시 적지 않는다.
- *    `readyCount` 이미 발행 대기 재고에 있는 그 화자의 글 수.
+ *    `readyCount` 그 화자가 **들고 있는 글(WIP)** 수 — 공용 분류 `personaWipIds` 다.
  *                🔴 이미 들고 있으면 더 만들어도 같은 날 못 나간다.
+ *
+ * 🔴 **값을 만드는 곳과 적는 곳을 나눈다** (2026-09-22).
+ *    적는 함수 안에만 있으면 read-only 로 확인할 방법이 없다 — 값을 돌려주는 함수를 따로 둔다.
  */
 /**
- * 🔴 **값을 만드는 곳과 적는 곳을 나눈다** (2026-09-22).
+ * 🔴 **공급은 capacity 로 준비하고, 발행은 release 로 제한한다** (2026-09-26).
  *
- *    적는 함수 안에만 있으면 **read-only 로 확인할 방법이 없다** — 파일을 쓰지 않고는
- *    "지금 이 DB 로 무엇이 계획되는가" 를 볼 수 없었다. 값을 돌려주는 함수를 따로 둔다.
+ *    앞판은 지평의 하루하루를 **release** 프로필로 채웠다. release=d1 이면 7일에 자리가 7개뿐이고,
+ *    사람 검토를 기다리는 기계 초안 8건이 그중 6자리를 차지해 **여력 있는 화자 1명** 이 남았다 —
+ *    SEED 6건이 초안 시도 2건으로 줄었다(실측 2026-09-26). 발행이 d1 이어도 공급이 d1 로
+ *    맞춰지면 d1 을 넘는 단계는 **재고가 영영 차지 않아** 준비도 판정을 받을 수 없다.
+ *    🔴 이제 **capacity** 프로필로 센다. 발행 러너 · 슬롯 게이트는 그대로 release 다 — 여기서 건드리지 않는다.
+ *    🔴 canary · window 는 **발행 허가**다. 공급 지평에는 쓰지 않는다 — release 천장은 capacity 를 넘지 않는다.
+ *
+ * 🔴 **WIP 는 공용 분류에서 받는다** (2026-09-26). 앞판은 여기서 selector 를 따로 불러
+ *    `HUMAN_REVIEW_REQUIRED` 를 직접 세었다 — 발행 러너와 다른 조립(editDiff 없음 · 자동 READY 닫힘 가정)이었다.
+ *    🔴 검토 대기는 **WIP 에 남는다**(같은 화자로 또 만들지 않는다). 발행 가능 재고로는 세지 않는다.
  */
 export async function buildSpeakerLoad(
   prisma: PrismaClient, runId: string,
-): Promise<SpeakerLoadFile & { stageByDate: readonly { date: string; stage: string }[] }> {
-  const personas = await prisma.persona.findMany({
-    where: { status: 'active' }, select: { code: true },
-  })
+  opts: { env: Readonly<Record<string, string | undefined>>; now: Date; scale: ResolvedScale },
+): Promise<SpeakerLoadFile & {
+  stageByDate: readonly { date: string; stage: string }[]
+  planningStage: string
+  releaseStage: string
+  wip: { total: number; humanReviewPending: number; publishableNow: number }
+}> {
+  const { loaded, classification } = await loadStockClassification(prisma, opts.env, opts.now)
+  const planning = supplyPlanningProfile(opts.scale)
+  const wip = new Set(classification.personaWipIds)
+  const byId = new Map(loaded.allRows.map((r) => [r.id, r]))
+  const speakerOf = (id: string): string | null => {
+    const r = byId.get(id)
+    if (r === undefined) return null
+    return (r.matchedPersonaId === null ? null : loaded.codeOfPersonaId.get(r.matchedPersonaId) ?? null)
+      ?? draftSpeakerOf(r.gateResults)
+  }
+  const wipCodes = [...wip].map(speakerOf)
+  /**
+   * 🔴 **이력은 배정기(`personaForMatchOf`)가 보는 것과 같다** — 큐의 `matchedAt`.
+   *    발행 트랜잭션이 배정할 때 쓰는 근거다. 여기서 다른 표(ActivityLog)를 보면 두 계산이 갈린다.
+   */
   const logs = await prisma.originalPostApprovalQueue.findMany({
     where: { matchedAt: { not: null } },
     select: { matchedAt: true, matchedPersona: { select: { code: true } } },
   })
-  /**
-   * 🔴 **재고에 든 그 화자의 글** — 배정된 것과 **아직 배정되지 않은 것**을 함께 센다.
-   *
-   *    앞판은 `matchedPersona` 만 봤다. 그런데 갓 만들어진 READY 는 **배정 전**이고,
-   *    그 글의 화자는 `gateResults.autoDraft.voice.personaCode` 에 있다 —
-   *    실측(2026-09-21): P01 글 2건이 둘 다 `matchedPersonaId=null` 이라
-   *    재고에서 **한 건도 세어지지 않았다.** 그래서 P01 은 여력이 가득한 것처럼 보였다.
-   */
-  /**
-   * 🔴 **발행 러너가 인정하는 행만 센다** (2026-09-22 2차 보정).
-   *
-   *    앞판은 미발행 `APPROVED·EDITED` 를 **전부** 셌다. 그런데 큐에는 계약이
-   *    어긋나 **영영 발행되지 않는 legacy 217건**이 들어 있다 — 실측에서
-   *    P01 13건 · P08 14건으로 잡혀 `여력 = 열린날 − 재고` 가 전부 0 이 됐고,
-   *    🔴 **여력 있는 화자 0명 → 원천 5건 전부 보류**로 공급이 통째로 멎었다.
-   *
-   *    재고는 "그 화자가 **낼 수 있는** 글을 몇 편 들고 있나" 다.
-   *    🔴 판정은 발행 정본(`selectAutoTargets`) 하나가 한다 — 여기서 다시 적지 않는다.
-   */
-  const pendingRaw = await prisma.originalPostApprovalQueue.findMany({
-    where: { status: { in: ['APPROVED', 'EDITED'] }, createdPostId: null },
-    select: {
-      id: true, status: true, createdPostId: true, gateVerdict: true,
-      promptVersion: true, model: true, matchedPersonaId: true,
-      draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
-      gateResults: true, decidedBy: true, decidedAt: true, createdAt: true,
-      matchedPersona: { select: { code: true } },
-      rawContent: { select: { sourceSite: true } },
-    },
-  })
-  const codeOfId = new Map(personas.map((p) => [p.code, p.code]))
-  void codeOfId
-  const pendingRows: AutoRow[] = pendingRaw.map((r) => ({
-    id: r.id, status: r.status, createdPostId: r.createdPostId, gateVerdict: r.gateVerdict,
-    promptVersion: r.promptVersion, model: r.model, matchedPersonaId: r.matchedPersonaId,
-    gateResults: r.gateResults,
-    title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
-    sourceSite: r.rawContent.sourceSite,
-    draftTitle: r.draftTitle, editedTitle: r.editedTitle,
-    decidedBy: r.decidedBy, decidedAt: r.decidedAt, createdAt: r.createdAt,
-  } as AutoRow))
-  const sel = selectAutoTargets(pendingRows, (t, b) => safetyFilter({ title: t, body: b }).verdict)
-  /**
-   * 🔴 **사람 검토를 기다리는 같은 화자 글도 센다** (2026-09-22).
-   *
-   *    `HUMAN_REVIEW_REQUIRED` 로 빠진 행은 **곧 재고가 될 글**이다 —
-   *    창업자가 READY 로 정하는 순간 그 화자의 자리를 차지한다.
-   *    그것을 안 세면 같은 화자로 또 만들게 되고, 실측(2026-09-21)의
-   *    **P01 두 건**이 정확히 그렇게 생겼다.
-   *
-   * 🔴 `PROFILE` 로 빠진 legacy 는 세지 않는다 — 영영 발행되지 않는다.
-   */
-  const awaitingIds = new Set(
-    sel.rejected.filter((r) => r.code === 'HUMAN_REVIEW_REQUIRED').map((r) => r.id),
-  )
-  const usableIds = new Set([...sel.targets.map((t) => t.id), ...awaitingIds])
-  const pending = pendingRaw.filter((r) => usableIds.has(r.id))
-  const pendingSpeakerOf = (r: { matchedPersona: { code: string } | null; gateResults: unknown }): string | null =>
-    r.matchedPersona?.code ?? draftSpeakerOf(r.gateResults)
-  const history = personas.map((p) => ({
-    code: p.code,
+  const history = loaded.personas.map((p) => ({
+    code: String(p.code),
     matchedAts: logs.filter((l) => l.matchedPersona?.code === p.code && l.matchedAt !== null)
       .map((l) => l.matchedAt as Date),
   }))
-  /**
-   * 🔴 **날짜마다 그날의 상한을 쓴다** (2026-09-22).
-   *
-   *    하루짜리 첫 시험(canary)은 **그 KST 날짜 하루만** 산다. 그날은 d3(주 3건 ·
-   *    최소 2일)이고 다음 날은 다시 d1(주 1건 · 최소 5일)이다 —
-   *    한 프로필로 지평 전체를 재면 그 다음 날들의 여력이 **과하게 잡힌다.**
-   */
-  const now = new Date()
-  const scale = activeScale()
-  const sustained = scale.releaseProfile
-  const canaryAuth = canaryAuthorization(process.env, now, RELEASE_STAGES)
-  const profileForDay = (at: Date): ScaleProfile =>
-    (canaryAuth.stage !== null && canaryAuth.date === kstDateString(at))
-      ? PROFILES[canaryAuth.stage]
-      : sustained
   const horizonDays = SPEAKER_LOAD_HORIZON_DAYS
-  const start = horizonStart(now)
-  /**
-   * 🔴 **정본 하나가 하루하루를 채워 본다.** 앞판은 날마다
-   *    `availablePersonasAt(...).slice(0, dailyTarget)` 을 썼는데, 그 목록은
-   *    **코드순**이라 d1 7일이면 P01 이 7일을 다 가져갔다(실측).
-   *    이제 고른 날을 이력에 쌓아 다음 날 판정이 그 사람을 빼게 한다.
-   */
+  const start = horizonStart(opts.now)
+  const days = Array.from({ length: horizonDays }, (_, i) => new Date(start.getTime() + i * 86_400_000))
+  /** 🔴 **정본 하나가 하루하루를 채워 본다.** 고른 날을 이력에 쌓아 다음 날 판정이 그 사람을 뺀다 */
   const plan = planOpenDays({
-    days: Array.from({ length: horizonDays }, (_, i) => new Date(start.getTime() + i * 86_400_000)),
-    profileOf: (at) => {
-      const p = profileForDay(at)
-      return { dailyTarget: p.dailyTarget, postsPerWeek: p.postsPerWeek, minDaysBetween: p.minDaysBetween }
-    },
+    days,
+    profileOf: () => ({
+      dailyTarget: planning.profile.dailyTarget,
+      postsPerWeek: planning.profile.postsPerWeek,
+      minDaysBetween: planning.profile.minDaysBetween,
+    }),
     history,
     availableAt: (h, at, caps) => availablePersonasAt(
       h.map((x) => ({ code: x.code, matchedAts: [...x.matchedAts] })), at, caps),
     dateLabel: (at) => kstDateString(at),
   })
-  const openDays = plan.openDays
   const byCode: Record<string, { openDays: number; readyCount: number }> = {}
-  for (const p of personas) {
-    byCode[p.code] = {
-      openDays: openDays.get(p.code) ?? 0,
-      readyCount: pending.filter((r) => pendingSpeakerOf(r) === p.code).length,
+  for (const p of loaded.personas) {
+    const code = String(p.code)
+    byCode[code] = {
+      openDays: plan.openDays.get(code) ?? 0,
+      readyCount: wipCodes.filter((c) => c === code).length,
     }
   }
-  /**
-   * 🔴 **어느 날을 어느 단계로 봤는지 남긴다** (2026-09-22).
-   *
-   *    로컬 공급 회차는 GitHub 전용 canary 변수를 볼 수 없다 — 그래서 시험 날짜도
-   *    지속 단계(d1)로 계획한다. 그것이 틀린 것은 아니지만(적게 잡는 쪽이다),
-   *    **무엇을 보고 세었는지 모르면 나중에 값을 믿을 수 없다.**
-   *    🔴 사람이 읽고 "이 계획은 d1 기준이다" 를 알 수 있게 적는다.
-   */
-  const stageByDate = Array.from({ length: horizonDays }, (_, i) => {
-    const at = new Date(start.getTime() + i * 86_400_000)
-    return { date: kstDateString(at), stage: profileForDay(at) === sustained ? scale.releaseStage : (canaryAuth.stage ?? '?') }
-  })
   return {
     writtenAt: new Date().toISOString(), runId, horizonDays, byCode,
-    byDate: plan.byDate, stageByDate,
+    byDate: plan.byDate,
+    /** 🔴 어느 눈금으로 셌는지 남긴다 — 사람이 "이 계획은 capacity d5 기준이다" 를 알 수 있게 */
+    stageByDate: days.map((at) => ({ date: kstDateString(at), stage: planning.stage })),
+    planningStage: planning.stage,
+    releaseStage: opts.scale.releaseStage,
+    wip: {
+      total: wip.size,
+      humanReviewPending: classification.counts.humanReviewPending,
+      publishableNow: classification.counts.publishableNow,
+    },
   }
 }
 
+/**
+ * 🔴 **공급 계획의 눈금은 capacity 다** — 이 한 곳에서 정한다. release 는 발행 쪽 눈금이다.
+ *    새 단계·새 숫자를 만들지 않는다 — scale 정본(`resolveScale`)이 낸 값을 그대로 읽는다.
+ */
+export function supplyPlanningProfile(scale: ResolvedScale): { stage: string; profile: ScaleProfile } {
+  return { stage: scale.capacityStage, profile: scale.capacityProfile }
+}
+
 /** 🔴 값을 만들어 파일로 적는다 — 만드는 것은 위 함수 하나다 */
-async function writeSpeakerLoad(prisma: PrismaClient, runId: string): Promise<void> {
-  const payload = await buildSpeakerLoad(prisma, runId)
+async function writeSpeakerLoad(
+  prisma: PrismaClient, runId: string, scale: ResolvedScale,
+): Promise<Awaited<ReturnType<typeof buildSpeakerLoad>>> {
+  const payload = await buildSpeakerLoad(prisma, runId, { env: process.env, now: new Date(), scale })
   mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(join(DATA_DIR, SPEAKER_LOAD_FILE), JSON.stringify(payload, null, 2))
+  return payload
 }
 
 const runIdOf = (d: Date): string =>
@@ -443,9 +403,27 @@ type QueueRow = {
   rawContent: { sourceSite: string } | null
 }
 
-async function snapshot(
+/**
+ * 🔴 **두 수를 섞지 않는다** (2026-09-26).
+ *
+ *    `profiled`  형식(profile)이 맞는 미발행 행 — **버퍼 천장과 적재 정합**에만 쓴다.
+ *                사람 검토를 기다리는 기계 초안도 여기 들어간다. 발행 가능 재고가 **아니다**.
+ *    `classification` 발행 러너와 같은 분류 — `publishableNow` 가 지금 낼 수 있는 재고다.
+ *
+ *    앞판은 `profiled` 를 "발행 러너가 먹을 수 있는 것" 이라 찍었다. 같은 DB 에서 발행 러너는
+ *    0건이었다(실측 2026-09-26: 공급 9 · 발행 0). 그 문구가 거짓 지표였다.
+ *    🔴 분류를 읽지 못하면 `null` 이다 — 0 으로 적지 않는다.
+ */
+export type SupplySnapshot = {
+  profiled: number; human: number; machine: number; post: number; legacy: number
+  classification: StockClassification | null
+  classifyError: string | null
+}
+
+export async function snapshot(
   prisma: PrismaClient, limits: StockLimits,
-): Promise<{ usable: number; human: number; machine: number; post: number; legacy: number }> {
+  opts: { env: Readonly<Record<string, string | undefined>>; now: Date },
+): Promise<SupplySnapshot> {
   const rows: QueueRow[] = await prisma.originalPostApprovalQueue.findMany({
     select: {
       status: true, createdPostId: true, promptVersion: true, model: true,
@@ -461,11 +439,19 @@ async function snapshot(
   const liveRows = mapped.filter((r) =>
     (r.status === 'APPROVED' || r.status === 'EDITED')
     && (r.createdPostId === null || r.createdPostId === ''))
+  let classification: StockClassification | null = null
+  let classifyError: string | null = null
+  try {
+    classification = (await loadStockClassification(prisma, opts.env, opts.now)).classification
+  } catch (e) {
+    classifyError = e instanceof Error ? e.message : String(e)
+  }
   return {
-    usable: st.usable, human: st.human, machine: st.machine,
+    profiled: st.usable, human: st.human, machine: st.machine,
     post: await prisma.post.count(),
     // 🔴 legacy 는 세기만 한다. 후보에도 재고에도 발행 대상에도 넣지 않는다
     legacy: liveRows.length - st.usable,
+    classification, classifyError,
   }
 }
 
@@ -562,18 +548,26 @@ async function main(): Promise<number> {
   let before: Awaited<ReturnType<typeof snapshot>> | null = null
   if (SIM === null) {
     try {
-      before = await snapshot(prisma, limits)
+      before = await snapshot(prisma, limits, { env: process.env, now })
     } catch (e) {
       console.log(`\n③ 재고  🔴 읽지 못했다 — ${e instanceof Error ? e.message : String(e)}`)
     }
   }
-  const usable = SIM ?? before?.usable ?? null
+  /** 🔴 버퍼 천장은 형식 행 수로 잰다 — 발행 가능 재고가 아니다(아래에 따로 찍는다) */
+  const usable = SIM ?? before?.profiled ?? null
   const policy = judgeBuffer(usable)
   console.log('\n③ 재고')
   if (SIM !== null) console.log(`   🟡 모의 재고 ${SIM}건으로 계획만 본다 (DB 를 읽지 않았다)`)
   else if (before !== null) {
-    console.log(`   발행 러너가 먹을 수 있는 것 ${before.usable}건`
-      + ` (사람 ${before.human} · 기계 ${before.machine})`)
+    console.log(`   형식이 맞는 미발행 행 ${before.profiled}건 (사람 ${before.human} · 기계 ${before.machine})`
+      + ' — 🔴 버퍼 천장 계산용 · 발행 가능 재고가 아니다')
+    if (before.classification !== null) {
+      console.log(`   🔴 발행 러너 기준 — 지금 발행 가능 ${before.classification.counts.publishableNow}건`
+        + ` (분류 정본 · release 상한)`)
+      for (const line of describeStockClassification(before.classification)) console.log(`      ${line}`)
+    } else {
+      console.log(`   🔴 발행 가능 재고를 분류하지 못했다 — ${before.classifyError ?? 'unknown'} (0 으로 적지 않는다)`)
+    }
     console.log(`   legacy ${before.legacy}건 — 🔴 재고에도 후보에도 넣지 않는다`)
     console.log(`   Post ${before.post}건`)
   }
@@ -657,7 +651,9 @@ async function main(): Promise<number> {
      */
     if (plan.stage === 'draft') {
       try {
-        await writeSpeakerLoad(prisma, runId)
+        const load = await writeSpeakerLoad(prisma, runId, scale)
+        console.log(`   🟢 화자 여력 — 공급 눈금 ${load.planningStage}(capacity) · 발행 눈금 ${load.releaseStage}(release)`
+          + ` · WIP ${load.wip.total}건 (사람 검토 대기 ${load.wip.humanReviewPending} · 발행 가능 ${load.wip.publishableNow})`)
       } catch (e) {
         const why = e instanceof Error ? e.message : 'unknown'
         console.log(`   🔴 화자 여력을 적지 못했다 — ${why}`)
@@ -889,16 +885,19 @@ async function main(): Promise<number> {
 
   let ok = record.status === 'done'
   if (before !== null) {
-    const after = await snapshot(prisma, limits)
+    const after = await snapshot(prisma, limits, { env: process.env, now: new Date() })
     const queuedMachine = after.machine - before.machine
-    const queuedNonMachine = (after.usable - before.usable) - queuedMachine
+    const queuedNonMachine = (after.profiled - before.profiled) - queuedMachine
     const v = verifyRun({
       postBefore: before.post, postAfter: after.post,
-      stockBefore: before.usable, stockAfter: after.usable,
+      stockBefore: before.profiled, stockAfter: after.profiled,
       machineBefore: before.machine, machineAfter: after.machine,
       queuedMachine, queuedNonMachine,
     })
-    console.log(`   재고     ${before.usable} → ${after.usable} (버퍼 목표 ${STOCK_BANDS.target})`)
+    console.log(`   형식 행  ${before.profiled} → ${after.profiled} (버퍼 목표 ${STOCK_BANDS.target})`)
+    const pn = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.publishableNow))
+    const hr = (x: SupplySnapshot): string => (x.classification === null ? '—' : String(x.classification.counts.humanReviewPending))
+    console.log(`   발행 가능 ${pn(before)} → ${pn(after)} · 사람 검토 대기 ${hr(before)} → ${hr(after)}`)
     console.log(`   Post     ${before.post} → ${after.post} ${after.post === before.post ? '✅ 불변' : '🔴 변했다'}`)
     console.log(`\n⑦ 정합 ${v.ok ? '✅ 통과' : '🔴 이상'}`)
     for (const p of v.problems) console.log(`   ${p}`)

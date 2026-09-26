@@ -782,6 +782,8 @@ jobs:
           npm run release:canary-check
           npm run speaker:availability-check
           npm run supply:automation-check
+          # 🔴 공급 capacity 준비 · 재고 분류 일치 · Persona 여력 대기 (순수 · DB 0)
+          npm run supply:stock-parity-check
 
       # 목적·North Star·Lane·AI 모델·현재 운영 상태의 단일 진입점.
       # 날짜별 문서가 다시 현재 정본을 자처하거나 코드의 기본 모델·d1 workflow와
@@ -877,6 +879,8 @@ jobs:
           npm run auto-ready:evidence-db-check
           # 🔴 예약 발행 슬롯 — 트랜잭션 안 슬롯 재계산(같은 격리 DB 를 스스로 비우고 쓴다)
           npm run publish:slot-db-check
+          # 🔴 공급 capacity · 발행 release · 재고 분류 일치(공급 9 · 발행 0 반례) — 같은 격리 DB 를 스스로 비우고 쓴다
+          npm run supply:stock-parity-db-check
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.

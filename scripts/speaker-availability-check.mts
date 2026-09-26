@@ -511,13 +511,18 @@ console.log('\n⑪ 🔴 🔴 재고는 **낼 수 있는 글**만 센다 — lega
     && publishableOnly.notes.some((n) => n.includes('P01(열린날 1·재고 2)')),
     publishableOnly.notes.join(' | '))
 
-  /** 🔴 공급 러너가 발행 정본으로 거르고, 검토 대기도 함께 센다 */
+  /**
+   * 🔴 공급 러너가 발행 러너와 **같은 분류**에서 WIP 를 받는다 (2026-09-26).
+   *    앞판은 여기서 selector 를 따로 불러 `HUMAN_REVIEW_REQUIRED` 를 직접 셌다.
+   *    분류의 행동(검토 대기는 WIP · legacy 는 아님)은 `supply:stock-parity-check` 가 실행으로 단정한다.
+   */
   const src = readFileSync('scripts/supply-process.mts', 'utf-8')
-  check('🔴 🔴 **재고 판정을 발행 정본(`selectAutoTargets`)에 맡긴다**',
-    /selectAutoTargets\(pendingRows/.test(src))
-  check('🔴 🔴 **검토 대기는 세고 legacy 는 세지 않는다**',
-    /r\.code === 'HUMAN_REVIEW_REQUIRED'/.test(src)
-    && /legacy 는 세지 않는다/.test(src))
+  check('🔴 🔴 **재고 판정을 공용 분류(`loadStockClassification`)에 맡긴다**',
+    /loadStockClassification\(prisma, opts\.env, opts\.now\)/.test(src)
+    && !/selectAutoTargets\(/.test(src))
+  check('🔴 🔴 **WIP 는 분류의 `personaWipIds` 다 — 여기서 다시 세지 않는다**',
+    /classification\.personaWipIds/.test(src)
+    && !/'HUMAN_REVIEW_REQUIRED'/.test(src))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)

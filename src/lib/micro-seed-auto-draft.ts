@@ -66,6 +66,12 @@ export type DraftReason =
   | 'qualitySchemaMismatch'
   /** 🔴 다 쓴 글이 그 Persona 의 삶과 명백히 어긋난다 — 다시 써도 그대로였다 */
   | 'lifeHistoryConflict' | 'generatedHarm'
+  /**
+   * 🔴 **Persona 여력 대기 — 초안 실패가 아니다** (2026-09-26).
+   *    이 회차에 배정할 화자가 없어 **부르기 전에** 미뤘다. 소재도 초안도 판정받지 않았다.
+   *    앞판은 이것을 `noDraft`(초안을 못 만듦)로 적어 초안 실패처럼 보였다.
+   */
+  | 'personaCapacityDeferred'
 
 export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   lifeHistoryConflict: '글쓴이의 삶과 어긋나는 1인칭 경험',
@@ -89,6 +95,7 @@ export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   lowConfidence: '모델이 확신하지 못했다',
   qualitySchemaMismatch: '🔴 품질 판정이 우리 축이 아닌 이름만 돌려줬다 — 다시 물어도 같았다',
   generatedHarm: '🔴 생성된 글에 위해가 있다 (개인 특정 · 명예훼손 · 위협 · 위험한 의료 지시)',
+  personaCapacityDeferred: '🟡 Persona 여력 대기 — 이 회차에 배정할 화자가 없어 부르기 전에 미뤘다 (초안 실패 아님)',
 }
 
 /** 왜 복제로 봤는지 한 줄 — 🔴 사유 이름을 여기서 다시 적지 않는다 */
@@ -395,6 +402,11 @@ export type PickInput = {
   seenBodies: ReadonlySet<string>
   /** 이미 이 원천에서 하나를 골랐는가 */
   sourceUsed: boolean
+  /**
+   * 🔴 **화자 여력 계획이 이 원천에 준 화자가 없다** — 부르기 전에 미룬다(2026-09-26).
+   *    `drafts` 가 비었다는 사실만으로는 "초안 실패" 와 "여력 대기" 를 가를 수 없다 — 그래서 따로 받는다.
+   */
+  personaDeferred?: boolean
 }
 
 export type Pick = {
@@ -430,6 +442,8 @@ export function pickDraft(input: PickInput, now: string): Pick {
   if (risks.some((r) => BLOCKING_RISKS.includes(String(r)))) return no('AUTO_DROP', 'laneRisk')
   // ② 원천당 하나
   if (input.sourceUsed) return no('AUTO_HOLD', 'sourceAlreadyUsed')
+  // 🔴 여력 대기는 초안 실패가 아니다 — `noDraft` 보다 먼저 가른다
+  if (input.personaDeferred === true) return no('AUTO_HOLD', 'personaCapacityDeferred')
   if (input.drafts.length === 0) return no('AUTO_HOLD', 'noDraft')
 
   const rejected: { draftNo: number; reason: DraftReason }[] = []

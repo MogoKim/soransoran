@@ -20,8 +20,9 @@ import type { PrismaClient } from '@prisma/client'
 
 import {
   selectAutoTargets, voiceInputOf, profileOf, machineReviewedByHuman, pickPublishTarget,
-  type AutoRow, type Reject,
+  type AutoRow, type Reject, type RejectCode,
 } from '../../src/lib/original-post-auto-publish'
+import { authoritativeGate } from '../../src/lib/auto-ready-repo'
 import { prepareCandidates } from '../../src/lib/supply-candidates'
 import type { HoldReason } from '../../src/lib/supply-freshness'
 import {
@@ -494,4 +495,117 @@ export function planPublishBatch(input: {
     picked: r.picked, recovered: r.recovered, skipped: r.skipped, waiting: r.waiting,
     autoDeferred, autoExceptions,
   }
+}
+
+/**
+ * ══ 🔴 **재고 분류 — 공급과 발행이 같은 답을 쓴다** (2026-09-26) ══
+ *
+ * 🔴 **무엇이 틀렸나.** 공급 러너(`snapshot`)와 보충기(autofill)는 `readStock` 으로
+ *    **형식(profile)만** 셌다. 같은 DB 에서 공급은 "러너가 먹을 수 있는 것 9건",
+ *    발행 러너는 "자동 발행 후보 1건 → TTL 만료 → 0건" 이었다(실측 2026-09-26).
+ *    9 중 8건은 사람 검토를 기다리는 기계 초안이었다 — 발행 가능 재고가 아니다.
+ *
+ * 🔴 **그래서 판정을 새로 적지 않는다.** 아래는 이미 계산된 정본 결과를 **나누기만** 한다.
+ *    · profile · gate · 검토 — `selectAutoTargets` 가 낸 `rejected` 코드
+ *    · 배정 예외 — `planPublishBatch` 의 `autoDeferred` · `autoExceptions`
+ *    · TTL · 신선도 — `prepareCandidates` 의 `held`
+ *    · 배정 — `batch.assignments` · `brokenRecovery`
+ *    러너와 같은 `loaded` · 같은 `plan` 을 넣으면 러너와 같은 답이 나온다.
+ *
+ * 🔴 **칸은 겹치지 않고 빠지지 않는다** — 합이 `queueTotal` 이다. 검사가 그것을 단정한다.
+ */
+export type StockBucket =
+  | 'publishableNow' | 'humanReviewPending' | 'ttlExpired' | 'freshnessHeld'
+  | 'profileMismatch' | 'gateBlocked' | 'assignmentBlocked'
+
+export const STOCK_BUCKETS: readonly StockBucket[] = [
+  'publishableNow', 'humanReviewPending', 'ttlExpired', 'freshnessHeld',
+  'profileMismatch', 'gateBlocked', 'assignmentBlocked',
+]
+
+export const STOCK_BUCKET_LABEL: Record<StockBucket, string> = {
+  publishableNow: '지금 발행 가능 (배정까지 끝남)',
+  humanReviewPending: '사람 검토 대기 (기계 초안)',
+  ttlExpired: 'TTL 만료',
+  freshnessHeld: '신선도 보류 (시각 미상 · 복구 글 상함)',
+  profileMismatch: 'profile 불일치 (legacy)',
+  gateBlocked: 'gate · 안전 · 제목 복제 · 빈 글',
+  assignmentBlocked: 'Persona 배정 불가 (여력 · 생활사 · 복구 중단)',
+}
+
+/** 🔴 정본 거절 코드 → 칸. `switch` 라서 코드가 늘면 컴파일이 깨진다 */
+function bucketOfReject(code: RejectCode): StockBucket {
+  switch (code) {
+    case 'PROFILE': case 'PROMPT_VERSION': case 'MODEL': case 'SITE':
+      return 'profileMismatch'
+    // 🔴 기계 초안인데 사람이 보지 않았다 — 자동 도장이 닫혔거나 낡은 것도 같은 처지다
+    case 'HUMAN_REVIEW_REQUIRED': case 'AUTO_READY_CLOSED': case 'AUTO_READY_STALE':
+      return 'humanReviewPending'
+    case 'GATE': case 'SAFETY': case 'EMPTY': case 'TITLE_COPIES_SOURCE':
+    case 'STATUS': case 'ALREADY_PUBLISHED':
+      return 'gateBlocked'
+    default: {
+      const never: never = code
+      return never
+    }
+  }
+}
+
+export type StockClassification = {
+  queueTotal: number
+  /** 칸별 행 id — 🔴 합이 `queueTotal` 이다 */
+  ids: Record<StockBucket, string[]>
+  counts: Record<StockBucket, number>
+  /**
+   * 🔴 **Persona 가 들고 있는 글(WIP)** — 공급이 같은 화자로 또 만들지 않게 센다.
+   *    발행 가능 재고가 아니다. 🔴 검토 대기는 **여기 남는다** — 사람이 READY 로 정하는 순간
+   *    그 화자의 자리를 차지한다. profile 불일치(legacy)와 gate 탈락은 영영 나가지 않으므로 빠진다.
+   */
+  personaWipIds: string[]
+}
+
+export function classifyStock(input: { loaded: LoadedStock; plan: PublishPlan }): StockClassification {
+  const { loaded, plan } = input
+  const ids = Object.fromEntries(STOCK_BUCKETS.map((b) => [b, [] as string[]])) as Record<StockBucket, string[]>
+  for (const r of loaded.rejected) ids[bucketOfReject(r.code)].push(r.id)
+
+  const pinnedBlocked = new Set([...plan.autoDeferred, ...plan.autoExceptions].map((x) => x.id))
+  const heldOf = new Map(plan.prepared.held.map((h) => [h.queueId, h.hold]))
+  const halted = plan.brokenRecovery.length > 0
+  const ready = new Set(plan.assignmentReady)
+  for (const t of loaded.targets) {
+    if (pinnedBlocked.has(t.id)) { ids.assignmentBlocked.push(t.id); continue }
+    const hold = heldOf.get(t.id)
+    if (hold !== undefined) { (hold === 'TTL_EXPIRED' ? ids.ttlExpired : ids.freshnessHeld).push(t.id); continue }
+    // 🔴 깨진 복구가 하나라도 있으면 러너는 전체를 멈춘다 — 배정이 있어도 지금 나갈 수 없다
+    if (!halted && ready.has(t.id)) ids.publishableNow.push(t.id)
+    else ids.assignmentBlocked.push(t.id)
+  }
+  const counts = Object.fromEntries(STOCK_BUCKETS.map((b) => [b, ids[b].length])) as Record<StockBucket, number>
+  const personaWipIds = [
+    ...ids.publishableNow, ...ids.humanReviewPending, ...ids.ttlExpired,
+    ...ids.freshnessHeld, ...ids.assignmentBlocked,
+  ]
+  return { queueTotal: loaded.queueTotal, ids, counts, personaWipIds }
+}
+
+/** 사람이 읽는 줄 — 공급 러너 · 보충기가 같은 줄을 찍는다 */
+export function describeStockClassification(c: StockClassification): string[] {
+  return STOCK_BUCKETS.map((b) => `${String(c.counts[b]).padStart(3)}건  ${b} — ${STOCK_BUCKET_LABEL[b]}`)
+}
+
+/**
+ * 🔴 **발행 러너가 보는 재고를 공급 쪽에서 똑같이 읽는다** — 조립 순서도 러너와 같다:
+ *    `authoritativeGate` → `loadPublishableStock` → `resolvePublishScale` → `planPublishBatch`.
+ *    🔴 발행 상한은 **release** 다(러너와 같다). 공급 준비의 capacity 눈금은 여기서 쓰지 않는다.
+ *    🔴 읽기만 한다 — `applyScale` 을 부르지 않는다(module-global 불변) · DB write 0.
+ */
+export async function loadStockClassification(
+  prisma: PrismaClient, env: Readonly<Record<string, string | undefined>>, now: Date,
+): Promise<{ loaded: LoadedStock; resolved: ResolvedScale; plan: PublishPlan; classification: StockClassification }> {
+  const autoOpen = await authoritativeGate(prisma, env as never)
+  const loaded = await loadPublishableStock(prisma, now, { autoReadyOpen: autoOpen.open })
+  const resolved = resolvePublishScale({ env, loaded, now })
+  const plan = planPublishBatch({ loaded, caps: resolved.caps, at: now })
+  return { loaded, resolved, plan, classification: classifyStock({ loaded, plan }) }
 }
