@@ -228,11 +228,14 @@ export const SAFEST_STOCK_LIMITS: StockLimits = { warn: STOCK_WARN, min: STOCK_M
 export type StockLevel = 'critical' | 'low' | 'ok'
 
 /**
- * 재고를 읽는다 — 🔴 **세는 대상은 "러너가 실제로 먹을 수 있는 것"** 이다.
+ * **형식이 맞는 미발행 행**을 센다 — 🔴 **발행 가능 재고가 아니다** (2026-09-26 정정).
  *
- * APPROVED 라도 이미 발행됐으면 재고가 아니고, legacy 판은 러너가 쳐다보지도 않는다.
- * 그래서 큐 전체 건수를 세면 재고를 과대평가한다 — 2026-09-07 에 큐가 9건인데
- * 러너 후보는 0건이었던 것이 그 경우다.
+ * APPROVED 라도 이미 발행됐으면 빼고, legacy 판(profile 불일치)도 뺀다 — 거기까지다.
+ * 🔴 사람 검토를 기다리는 기계 초안 · TTL 만료 · 배정 불가도 **여기 들어간다.**
+ *    앞판 주석은 이것을 "러너가 실제로 먹을 수 있는 것" 이라 불렀고, 같은 DB 에서
+ *    이 값은 9 · 발행 러너는 0 이었다(실측 2026-09-26).
+ * 🔴 쓰임은 **적재 천장·적재 정합**뿐이다. 발행 가능 재고는 `scripts/lib/publishable-stock`
+ *    의 `classifyStock().counts.publishableNow` 가 정본이다.
  */
 /** 🔴 러너가 먹는 판 — 사람 것과 기계 것 둘 다 */
 export const USABLE_PROMPT_VERSIONS: readonly string[] = [
@@ -253,8 +256,19 @@ limits: StockLimits = SAFEST_STOCK_LIMITS,
   const human = live.filter((r) => queueProfileOf(r) === 'human').length
   const machine = live.filter((r) => queueProfileOf(r) === 'machine').length
   const usable = human + machine
-  const level: StockLevel = usable <= limits.warn ? 'critical' : usable < limits.min ? 'low' : 'ok'
-  return { usable, level, shortfall: Math.max(0, limits.target - usable), human, machine }
+  return { usable, ...stockBandOf(usable, limits), human, machine }
+}
+
+/**
+ * 🔴 **경고선 · 부족분 판정 하나** (2026-09-26). 무엇을 넣을지는 부르는 쪽이 정한다 —
+ *    발행 가능 재고를 재려면 **발행 러너 분류의 `publishableNow`** 를 넣는다.
+ *    `readStock().usable` 은 형식이 맞는 행 수라 사람 검토 대기 기계 초안도 들어 있다.
+ */
+export function stockBandOf(
+  n: number, limits: StockLimits = SAFEST_STOCK_LIMITS,
+): { level: StockLevel; shortfall: number } {
+  const level: StockLevel = n <= limits.warn ? 'critical' : n < limits.min ? 'low' : 'ok'
+  return { level, shortfall: Math.max(0, limits.target - n) }
 }
 
 export type Candidate = {

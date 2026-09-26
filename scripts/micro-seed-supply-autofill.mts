@@ -30,7 +30,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PrismaClient } from '@prisma/client'
 import {
-  planRefill, judgeApply, readStock, verifyAfterRefill, provenanceKeyOf, baseArticleId,
+  planRefill, judgeApply, readStock, stockBandOf, verifyAfterRefill, provenanceKeyOf, baseArticleId,
   SKIP_LABEL, STOCK_TARGET, STOCK_MIN, STOCK_WARN,
   AUTOFILL_PROMPT_VERSION, AUTOFILL_MODEL, AUTOFILL_SITE_PREFIX,
   type Candidate, type HeldEntry,
@@ -49,6 +49,7 @@ import { RULE_VERSION as AUTO_JUDGE_RULE_VERSION, PROMPT_VERSION as AUTO_JUDGE_P
 import { safetyFilter } from './lib/micro-seed-safety-filter.mjs'
 import { loadEnvLocal } from './lib/micro-seed-time.mjs'
 import { installFromEnv, describeScale } from '../src/lib/scale-runtime'
+import { loadStockClassification, describeStockClassification } from './lib/publishable-stock.mjs'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
 
 const DATA_DIR = '.microseed-data'
@@ -246,11 +247,21 @@ async function main(): Promise<void> {
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   })), LIMITS)
-  const mark = stock.level === 'critical' ? '🔴' : stock.level === 'low' ? '🟡' : '🟢'
-  console.log(`① 재고  ${mark} 러너가 먹을 수 있는 것 ${stock.usable}건`)
-  console.log(`   큐 전체 ${queueRows.length}건 중 발행 러너가 인정하는 것만 센다`
-    + ` — 사람 ${stock.human} · 기계 ${stock.machine}`)
-  if (stock.shortfall > 0) console.log(`   목표까지 ${stock.shortfall}건 부족`)
+  /**
+   * 🔴 **두 수를 섞지 않는다** (2026-09-26). `stock.usable` 은 형식이 맞는 미발행 행이다 —
+   *    사람 검토를 기다리는 기계 초안도 들어간다. **적재 천장**(700)에만 쓴다.
+   *    발행 가능 재고 · 경고선 · 부족분은 발행 러너와 같은 분류(`publishableNow`)로 잰다.
+   *    앞판은 형식 행을 "러너가 먹을 수 있는 것" 이라 찍었다 — 같은 DB 에서 러너는 0건이었다.
+   */
+  const view = await loadStockClassification(prisma, process.env, new Date())
+  const publishableNow = view.classification.counts.publishableNow
+  const band = stockBandOf(publishableNow, LIMITS)
+  const mark = band.level === 'critical' ? '🔴' : band.level === 'low' ? '🟡' : '🟢'
+  console.log(`① 재고  ${mark} 발행 러너 기준 지금 발행 가능 ${publishableNow}건 (release 상한 · 분류 정본)`)
+  for (const line of describeStockClassification(view.classification)) console.log(`   ${line}`)
+  if (band.shortfall > 0) console.log(`   capacity 목표까지 ${band.shortfall}건 부족 (발행 가능 기준)`)
+  console.log(`   형식이 맞는 미발행 행 ${stock.usable}건 (사람 ${stock.human} · 기계 ${stock.machine})`
+    + ` / 큐 ${queueRows.length}건 — 🔴 적재 천장 계산용 · 발행 가능 재고가 아니다`)
 
   // 이미 올라간 것 — synthetic RawContent 기준으로 되돌린 키
   const existing = new Set<string>()
@@ -442,7 +453,7 @@ async function main(): Promise<void> {
     promptVersion: r.promptVersion, model: r.model,
     sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
   })))
-  console.log(`   재고 ${stock.usable} → ${stockAfter.usable}건 (버퍼 목표 ${BUFFER_TARGET})`)
+  console.log(`   형식 행 ${stock.usable} → ${stockAfter.usable}건 (버퍼 목표 ${BUFFER_TARGET}) — 🔴 발행 가능 재고가 아니다`)
   console.log('\n   🔴 발행하지 않았다. 다음 발행은 auto-publish 러너가 스케줄에 따라 한다.\n')
   await prisma.$disconnect()
   process.exit(v.ok ? 0 : 1)

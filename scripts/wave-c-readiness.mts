@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { PrismaClient } from '@prisma/client'
 
 import { budgetOf, guardSnapshot, type SourceId } from '../src/lib/collect-guard'
-import { readStock } from '../src/lib/micro-seed-supply-autofill'
+import { loadStockClassification } from './lib/publishable-stock.mjs'
 import { derive as deriveProfile } from '../src/lib/scale-profile'
 import { installFromEnv } from '../src/lib/scale-runtime'
 import {
@@ -70,21 +70,10 @@ const now = new Date()
 console.log('\n══ Wave C 준비도 — 공개 d3 승격 (read-only · 승격 0) ══\n')
 console.log(`  지금 설정  capacity=${scale.capacityStage} · release=${scale.releaseStage}`)
 
-// ── ① 재고 — 🔴 러너와 **같은 함수**로 센다. 여기서 따로 세면 두 숫자가 갈린다 ──
-const queueRows = await prisma.originalPostApprovalQueue.findMany({
-  select: {
-    status: true, createdPostId: true, promptVersion: true, model: true,
-    gateResults: true, rawContent: { select: { sourceSite: true } },
-  },
-})
-const stock = readStock(
-  queueRows.map((r) => ({
-    status: r.status, createdPostId: r.createdPostId,
-    promptVersion: r.promptVersion, model: r.model,
-    sourceSite: r.rawContent?.sourceSite ?? '', gateResults: r.gateResults,
-  })),
-  { warn: capD.stockWarn, min: capD.stockMin, target: capD.stockTarget },
-)
+// ── ① 재고 — 🔴 발행 러너와 **같은 분류**로 센다 (2026-09-26) ──
+//    앞판은 `readStock`(형식이 맞는 행)을 썼다 — 사람 검토 대기 기계 초안까지 준비도 재고로 세었다.
+//    준비도는 **지금 발행 가능한 것**(`publishableNow`)으로만 잰다.
+const stock = { usable: (await loadStockClassification(prisma, process.env, new Date())).classification.counts.publishableNow }
 
 // ── 🔴 runtime 배포 기록 — 무엇이 언제부터 돌고 있는가 ──
 type Manifest = { sha?: string; deployedAt?: string }
