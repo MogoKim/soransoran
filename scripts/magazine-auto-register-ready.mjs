@@ -576,6 +576,8 @@ async function main() {
     pr: null,
     returned: null,
     leftOnBranch: null,
+    /** 🔴 실제로 프로세스가 끝낸 코드. 복귀 판정 뒤에 채운다 */
+    exitCode: null,
   }
 
   /**
@@ -605,6 +607,17 @@ async function main() {
       }
     }
     lock.release()
+
+    /**
+     * 🔴 **report 는 복귀 판정 뒤에 쓴다** (2026-09-26 운영 사고).
+     *    앞판은 `finish()` 앞에서 썼다. 그래서 `RETURN_DIRTY` 로 끝난 회차의
+     *    report JSON 에 `returned: null · leftOnBranch: null · exitCode: null` 이
+     *    남았다 — 로그는 빨간데 파일은 조용한, **서로 다른 두 진실**이 생겼다.
+     *    이제 returned·leftOnBranch·최종 blocked·exitCode 가 전부 확정된 뒤에 쓴다.
+     */
+    report.exitCode = exitCode
+    const saved = writeReport(report, { write })
+    report.reportPath = saved.path
 
     if (wantNotify) report.slack = await notifySlack(report, { actuallySend: notifySend, dryRunLane: !write })
     if (asJson) console.log(JSON.stringify(report, null, 2))
@@ -708,10 +721,9 @@ async function main() {
     }
   }
 
-  const saved = writeReport(report, { write })
-  report.reportPath = saved.path
   report.results = results
 
+  // 🔴 report 쓰기는 finish() 가 한다 — 복귀 판정까지 담아야 로그와 파일이 같은 말을 한다
   // 🔴 장부를 못 읽은 회차는 반드시 실패다 — 후보가 0건이라 blocked 가 비어도 마찬가지
   return finish(report.blocked.length > 0 || report.ledgerHold ? 1 : 0)
   } catch (err) {

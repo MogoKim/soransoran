@@ -145,7 +145,23 @@ export function planHero({ slug, alt, queueItem = null, force = false, allowOpti
 
   const filePath = heroFilePath(slug)
   const exists = existsSync(filePath)
-  if (exists && !force) reasons.push(`hero 가 이미 있다 (public${heroPublicPath(slug)}) — 덮어쓰려면 --force`)
+  /**
+   * 🔴 **있는 hero 는 다시 만들지 않고 다시 쓴다** (2026-09-26 운영 사고).
+   *
+   *    앞판은 `hero 가 이미 있다 → BLOCKED` 였다. 그런데 `magazine-md-to-draft` 가
+   *    article-draft.ts 를 다시 만들면 `heroImage` 4필드가 **자리표시자로 되돌아간다.**
+   *    그래서 "파일은 멀쩡히 있는데 draft 에는 없는" 상태가 매 회차 생기고,
+   *    그때마다 hero 단계가 BLOCKED 되어 그 글은 영영 등록되지 못했다.
+   *    실측: `checkup-items-50s` — hero.webp 1200×675 정상, 그런데 HERO_FAILED.
+   *
+   *    이제 **유효한 파일이 있으면 재사용**한다. 이미지 호출 0회로 통과해야 한다.
+   *    막는 것은 **손상된 hero 하나**다.
+   */
+  const reuse = exists && !force ? verifyHeroFile(slug) : null
+  if (exists && !force) {
+    if (reuse.ok) notes.push(`기존 hero 를 재사용한다 (public${heroPublicPath(slug)} · ${reuse.size.width}×${reuse.size.height}) — 새로 만들지 않는다`)
+    else reasons.push(`기존 hero 가 손상됐다 — ${reuse.why} (public${heroPublicPath(slug)}). 새로 만들려면 --force`)
+  }
   if (exists && force) notes.push('기존 hero 를 덮어쓴다 (--force)')
 
   const altCheck = checkAlt(alt)
@@ -172,6 +188,9 @@ export function planHero({ slug, alt, queueItem = null, force = false, allowOpti
       cluster: meta?.cluster ?? null,
       willInject: Boolean(meta && !meta.hasHeroImage),
       publicPath: heroPublicPath(slug),
+      /** 🔴 true 면 **이미지를 만들지 않는다** — 있는 파일을 검증하고 주입만 한다 */
+      reuseExisting: Boolean(reuse?.ok),
+      heroSize: reuse?.size ?? null,
     },
     _meta: meta,
   }

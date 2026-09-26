@@ -24,8 +24,8 @@
  *    Cloudflare challenge URL 의 __cf_chl_rt_tk 는 계정과 연결되고,
  *    로그인 화면 스크린샷에는 계정명이 찍힌다. 불리언 플래그와 상태 코드만 남긴다.
  */
-import { spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, chmodSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, lstatSync, readlinkSync, mkdirSync, chmodSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -147,13 +147,107 @@ export async function cdpAvailable(timeoutMs = 2000) {
   }
 }
 
-/** 전용 프로필로 Chrome 이 돌고 있는가 (CDP 포트와 무관하게 프로세스 존재만) */
-export function profileInUse() {
-  if (!existsSync(PROFILE_DIR)) return false
-  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
-    try { lstatSync(join(PROFILE_DIR, name)); return true } catch { /* 없으면 다음 */ }
+/**
+ * 프로필 잠금의 **실제 상태**.
+ *
+ * 🔴 **파일이 있다 ≠ 쓰고 있다** (2026-09-26 운영 사고).
+ *    앞판은 `SingletonLock` 같은 파일이 **존재하기만 하면** "쓰는 중" 으로 보았다.
+ *    그런데 이 파일들은 Chrome 이 비정상 종료(강제 종료·절전 중 kill·크래시)하면
+ *    **그대로 남는다.** 그래서 죽은 잠금 하나 때문에 `ensureChrome` 이 자동 기동을
+ *    통째로 포기했고, `autoStart: true` 인데도 `chrome_not_running` 이 나왔다.
+ *    실측: lock → `…-22457`, PID 22457 은 존재하지 않았다. 원고 4건이 전송 0으로 끝났다.
+ *
+ * 🔴 **살아 있는 Chrome·프로필은 절대 죽이지 않는다.** 이 함수는 읽기만 한다.
+ *    판정이 애매하면 LIVE 로 본다 — 남의 창을 빼앗는 쪽보다 한 회차 쉬는 쪽이 싸다.
+ *
+ * @returns {{state:'LIVE'|'STALE'|'NONE', pid:number|null, why:string}}
+ */
+/**
+ * 지금 도는 프로세스 목록. `null` 은 **모른다** 는 뜻이다 (조회 실패).
+ *
+ * 🔴 `pgrep` 로 "있다/없다" 만 묻지 않는다. **명령줄이 필요하다** —
+ *    PID 만으로는 그 PID 가 Chrome 인지, 우리 프로필을 쓰는지 알 수 없다.
+ */
+export function listProcesses() {
+  const r = spawnSync('ps', ['-Ao', 'pid=,command='], { encoding: 'utf8', maxBuffer: 1 << 24 })
+  if (r.error || r.status !== 0 || typeof r.stdout !== 'string') return null
+  const rows = []
+  for (const line of r.stdout.split('\n')) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line)
+    if (m) rows.push({ pid: Number(m[1]), command: m[2] })
   }
-  return false
+  return rows
+}
+
+/** 이 명령줄이 **Chrome 이면서 이 프로필을 쓰는가** */
+function usesProfile(command, profileDir) {
+  if (!command) return false
+  const isChrome = /Google Chrome|Chromium|chrome_crashpad_handler/.test(command)
+  return isChrome && command.includes(`user-data-dir=${profileDir}`)
+}
+
+/**
+ * 프로필 잠금의 **실제 상태**.
+ *
+ * 🔴 **파일이 있다 ≠ 쓰고 있다** (2026-09-26 운영 사고).
+ *    이 파일들은 Chrome 이 비정상 종료(강제 종료·절전 중 kill·크래시)하면 **그대로 남는다.**
+ *    죽은 잠금 하나 때문에 `ensureChrome` 이 자동 기동을 통째로 포기했고,
+ *    `autoStart: true` 인데도 `chrome_not_running` 이 나왔다.
+ *    실측: lock → `…-22457`, PID 22457 은 존재하지 않았다. 원고 4건이 전송 0으로 끝났다.
+ *
+ * 🔴 **PID 가 살아 있다 ≠ 그 Chrome 이 살아 있다** (Codex 재검토 2026-09-26).
+ *    PID 는 재사용된다. 죽은 잠금이 가리키던 번호를 **전혀 다른 프로그램**이 물려받으면,
+ *    "PID 가 있다" 만 보는 판정은 그 프로그램을 우리 Chrome 으로 착각한다.
+ *    그러면 다시 기동을 포기하고 같은 사고가 난다. 그래서 **명령줄까지 본다** —
+ *    Chrome 이면서 이 `user-data-dir` 을 쓰는 프로세스일 때만 LIVE 다.
+ *
+ * 🔴 **살아 있는 Chrome·프로필은 절대 죽이지 않는다.** 이 함수는 읽기만 한다.
+ *    판정이 **불가능**할 때만 보수적으로 LIVE 로 본다 — 남의 창을 빼앗는 쪽보다
+ *    한 회차 쉬는 쪽이 싸다. "모른다" 와 "죽었다" 를 섞지 않는다.
+ *
+ * @param {{profileDir?:string, processes?:() => ({pid:number,command:string}[]|null)}} [deps]
+ *        🔴 시험이 **실제 이 함수**를 임시 프로필·가짜 프로세스 목록으로 돌리기 위한 자리.
+ * @returns {{state:'LIVE'|'STALE'|'NONE', pid:number|null, why:string}}
+ */
+export function profileLockState({ profileDir = PROFILE_DIR, processes = listProcesses } = {}) {
+  if (!existsSync(profileDir)) return { state: 'NONE', pid: null, why: '프로필 폴더가 없다' }
+
+  const present = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'].filter((n) => {
+    try { lstatSync(join(profileDir, n)); return true } catch { return false }
+  })
+  if (!present.length) return { state: 'NONE', pid: null, why: '잠금 파일이 없다' }
+
+  const procs = processes()
+  /** 🔴 목록을 못 얻었다 = **모른다.** 모르면 LIVE 다 (죽었다고 단정하지 않는다) */
+  if (!Array.isArray(procs)) {
+    return { state: 'LIVE', pid: null, why: '프로세스 목록을 얻지 못했다 — 쓰는 중일 수 있다고 본다' }
+  }
+
+  /** ① 이 프로필을 쓰는 Chrome 이 실재하는가. 본체든 Helper 든 하나면 충분하다 */
+  const owners = procs.filter((x) => x.pid !== process.pid && usesProfile(x.command, profileDir))
+  if (owners.length) {
+    return { state: 'LIVE', pid: owners[0].pid, why: `이 프로필을 쓰는 Chrome ${owners.length}개가 돌고 있다` }
+  }
+
+  /** ② `SingletonLock` 은 `<host>-<pid>` 를 가리킨다. 그 PID 가 **무엇인지**까지 본다 */
+  let target = null
+  try { target = readlinkSync(join(profileDir, 'SingletonLock')) } catch { /* 없거나 심링크가 아니다 */ }
+  if (target) {
+    const pid = Number(target.slice(target.lastIndexOf('-') + 1))
+    if (Number.isInteger(pid) && pid > 0) {
+      const holder = procs.find((x) => x.pid === pid)
+      if (!holder) return { state: 'STALE', pid, why: `잠금은 PID ${pid} 를 가리키는데 그런 프로세스가 없다` }
+      /** 🔴 **PID 재사용** — 번호는 살아 있지만 우리 Chrome 이 아니다. 죽은 잠금이 맞다 */
+      return { state: 'STALE', pid,
+        why: `PID ${pid} 는 살아 있지만 이 프로필의 Chrome 이 아니다 (${holder.command.slice(0, 60)}) — 번호가 재사용됐다` }
+    }
+  }
+  return { state: 'STALE', pid: null, why: `잠금 파일 ${present.join('·')} 만 남아 있고 쓰는 Chrome 이 없다` }
+}
+
+/** 전용 프로필로 Chrome 이 **실제로** 돌고 있는가 */
+export function profileInUse() {
+  return profileLockState().state === 'LIVE'
 }
 
 /**
@@ -342,30 +436,50 @@ export function classifyPage({ httpStatus, title, signals = {} }) {
  *
  * @returns {{ ok: boolean, started: boolean, reason?: string }}
  */
-export async function ensureChrome({ waitMs = 30000, pollMs = 1000 } = {}) {
-  if (await cdpAvailable()) return { ok: true, started: false }
+export async function ensureChrome({
+  waitMs = 30000, pollMs = 1000,
+  /** 🔴 시험이 **진짜 Chrome 을 띄우지 않고** 기동 여부를 확인하기 위한 자리. 기본은 실제 spawn */
+  spawnFn = spawn,
+  /** 🔴 시험이 포트 판정을 고정하기 위한 자리. 기본은 실제 CDP 조회 */
+  cdpCheck = cdpAvailable,
+  /**
+   * 🔴 브라우저 존재 판정도 주입점이다. CI 러너(Linux)에는 macOS Chrome 경로가 없다 —
+   *    시험이 이 함수를 그대로 쓰면 **환경을 읽게 되어** 로컬 초록 / CI 빨강이 된다.
+   *    기본은 실제 확인이고, 판정 자체는 그대로 돈다.
+   */
+  browserCheck = browserAvailable,
+} = {}) {
+  const alive = await cdpCheck()
+  if (alive) return { ok: true, started: false }
+  if (!browserCheck()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
 
-  if (!browserAvailable()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
-
-  // CDP 는 없는데 프로필은 쓰이고 있다 = 포트 없이 띄운 창이 있다.
-  // 죽이면 사람의 작업을 날린다. 알리고 끝낸다.
-  if (profileInUse()) {
-    return { ok: false, started: false, reason: STATUS.CHROME_NOT_RUNNING }
+  /**
+   * CDP 는 없는데 프로필을 **실제로** 쓰는 프로세스가 있다 = 포트 없이 띄운 창이 있다.
+   * 죽이면 사람의 작업을 날린다. 알리고 끝낸다.
+   *
+   * 🔴 죽은 잠금(STALE)은 여기서 멈출 이유가 아니다. Chrome 은 시작할 때 죽은 잠금을
+   *    스스로 거둬 간다 — 우리가 지울 것도 없다. 그냥 띄우면 된다.
+   */
+  const lock = profileLockState()
+  if (lock.state === 'LIVE') {
+    return { ok: false, started: false, reason: STATUS.CHROME_NOT_RUNNING, lock }
   }
 
   if (!existsSync(PROFILE_DIR)) mkdirSync(PROFILE_DIR, { recursive: true })
   try { chmodSync(PROFILE_DIR, 0o700) } catch { /* 이미 맞으면 그만 */ }
 
-  const child = spawn(CHROME_APP, chromeArgs(), { detached: true, stdio: 'ignore' })
-  child.unref()
+  const child = spawnFn(CHROME_APP, chromeArgs(), { detached: true, stdio: 'ignore' })
+  child?.unref?.()
+  // 🔴 죽은 잠금 위에서 띄운 경우를 기록에 남긴다 — 다음 사고 때 이 줄이 단서다
+  const startedOverStaleLock = lock.state === 'STALE'
 
   // 포트가 열릴 때까지 기다린다. Chrome 은 뜨는 데 몇 초 걸린다
   const deadline = Date.now() + waitMs
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollMs))
-    if (await cdpAvailable()) return { ok: true, started: true }
+    if (await cdpCheck()) return { ok: true, started: true, startedOverStaleLock, lock }
   }
-  return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING }
+  return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING, startedOverStaleLock, lock }
 }
 
 export async function probe({

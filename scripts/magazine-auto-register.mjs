@@ -33,15 +33,16 @@
  * 종료 코드: BLOCKED 면 1, 아니면 0
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadQueue } from './lib/magazine-load.mjs'
+import { loadQueue, ARTICLES_TS, QUEUE_TS } from './lib/magazine-load.mjs'
 import { gate, progress, heroPlan, paths } from './lib/magazine-auto-lane.mjs'
 import { resolveHeroBrief } from './lib/magazine-hero-brief.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { attemptRegeneration, clearRegen, MAX_REGEN_CALLS } from './lib/magazine-regen.mjs'
 import { fingerprintOf } from './lib/magazine-quarantine.mjs'
+import { heroFilePath } from './lib/magazine-hero.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -53,6 +54,46 @@ const QA = join(ROOT, 'scripts/magazine-qa.mjs')
 const BATCH_QA = join(ROOT, 'scripts/magazine-batch-qa.mjs')
 const HERO = join(ROOT, 'scripts/magazine-hero-runner.mjs')
 const REGISTER = join(ROOT, 'scripts/magazine-register.mjs')
+
+/**
+ * 🔴 **한 후보가 등록 전에 막히면, 그 후보가 만든 추적 파일 변경만 되돌린다**
+ *    (2026-09-26 운영 사고).
+ *
+ *    그날 회차는 `article-draft.ts` 3건을 고쳐 놓고 hero 에서 막혔다. 되돌리는 코드가
+ *    없어서 작업 브랜치에 미커밋 변경 3건이 남았고, 복귀가 `RETURN_DIRTY` 로 끝나
+ *    **다음 회차까지 더러운 트리를 물려받는** 상태가 됐다.
+ *
+ *    되돌리는 대상은 **추적 파일뿐**이다. 미추적 원고(brief·review·draft.md)는
+ *    사람이 만든 자산이고, 다른 후보의 변경도 건드리지 않는다 — 이 후보의 경로만 본다.
+ */
+function isTracked(path) {
+  const r = spawnSync('git', ['ls-files', '--error-unmatch', '--', path], { cwd: ROOT, encoding: 'utf8' })
+  return r.status === 0
+}
+
+export function trackedSnapshot(paths) {
+  return paths.filter(Boolean).filter(isTracked).map((path) => ({
+    path,
+    existed: existsSync(path),
+    bytes: existsSync(path) ? readFileSync(path) : null,
+  }))
+}
+
+export function restoreSnapshot(snap) {
+  const restored = []
+  for (const f of snap) {
+    try {
+      const now = existsSync(f.path) ? readFileSync(f.path) : null
+      if (f.existed) {
+        if (!now || !now.equals(f.bytes)) { writeFileSync(f.path, f.bytes); restored.push(f.path) }
+      } else if (now) {
+        // 🔴 추적 파일인데 스냅샷 시점에 없었다 = 이 회차가 만들었다. 지운다.
+        rmSync(f.path, { force: true }); restored.push(f.path)
+      }
+    } catch { /* 되돌리기 실패가 회차 판정을 뒤집지 않는다 — 아래에서 보고만 한다 */ }
+  }
+  return restored
+}
 
 function run(file, args, { json = false } = {}) {
   const r = spawnSync(NODE, [file, ...args], { cwd: ROOT, encoding: 'utf8' })
@@ -113,9 +154,21 @@ export function drive(slug, opts, deps = {}) {
   const steps = []
   const blockedBy = []
   const add = (stage, status, detail) => steps.push({ stage, status, detail })
+  /**
+   * 🔴 이 후보가 등록 전에 만든 **추적 파일** 변경을 되돌리기 위한 스냅샷.
+   *    gate 를 지나 경로가 정해진 뒤에 채운다. dry-run 은 파일을 쓰지 않으니 비워 둔다.
+   */
+  let snapshot = []
+  const rollback = () => {
+    if (!write || !snapshot.length) return []
+    const r = restoreSnapshot(snapshot)
+    if (r.length) add('rollback', 'ok', `등록 전 중간 변경 ${r.length}건 원상복구: ${r.map((x) => x.split('/').pop()).join(', ')}`)
+    return r
+  }
   const stop = (stage, code, message) => {
     blockedBy.push({ code, message })
     add(stage, 'blocked', message)
+    rollback()
     return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write }
   }
 
@@ -130,6 +183,17 @@ export function drive(slug, opts, deps = {}) {
   add('gate', 'ok', `${isAutoLaneEligible(item).profile ?? '-'} · image=${item.imageMode ?? '-'}`)
 
   const p = paths(slug)
+  /**
+   * 🔴 **손대기 전에 찍는다.** 이 후보가 바꿀 수 있는 추적 파일을 전부 담는다 —
+   *    변환 산출물 · hero 이미지 · 회수된 원고 · **등록 대상 두 파일**.
+   *    다른 후보의 파일은 목록에 없다.
+   *
+   * 🔴 `articles.ts` · `topic-queue.ts` 를 넣는 이유는 **이중 방어**다
+   *    (Codex 재검토 2026-09-26). register 안에서도 되돌리지만, 그 원복까지
+   *    실패하면 회차가 두 파일이 어긋난 채로 끝난다. 그때 여기서 한 번 더 잡는다.
+   *    🔴 등록에 **성공**하면 되돌리지 않는다 — rollback 은 BLOCKED 경로에서만 돈다.
+   */
+  if (write) snapshot = trackedSnapshot([p.articleTs, heroFilePath(slug), p.draftMd, ARTICLES_TS, QUEUE_TS])
 
   // ── ② draft.md 회수 ───────────────────────────────────────
   if (progress(slug).hasDraftMd) {
@@ -261,6 +325,7 @@ export function drive(slug, opts, deps = {}) {
     if (row.verdict !== 'READY_TO_SCHEDULE') {
       for (const b of row.blockedBy ?? []) blockedBy.push(b)
       add('batch', 'blocked', (row.reasons ?? []).join(' · '))
+      rollback()
       return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, item, batch: row.checks, regenCalls }
     }
     add('batch', 'ok', `READY · ${laneProfile}${regenCalls ? ` · 재생성 ${regenCalls}회` : ''} · hero=${row.checks.heroOk ?? '-'}`)
@@ -280,6 +345,9 @@ export function drive(slug, opts, deps = {}) {
       const reasons = r.json?.reasons ?? [(r.stderr || r.stdout).trim().split('\n').pop()]
       blockedBy.push({ code: 'REGISTER_BLOCKED', message: reasons.join(' · ') })
       add('register', 'blocked', reasons.join(' · '))
+      // 🔴 register 가 스스로 막은 것이다 — articles.ts·큐는 건드리지 않았다.
+      //    이 후보가 만든 중간 산출물만 되돌린다.
+      rollback()
       return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write, item }
     }
     add('register', write ? 'ok' : 'skip', write ? `등록 (publishAt ${publishAt})` : `dry-run 통과 (publishAt ${publishAt})`)
