@@ -32,6 +32,8 @@ import {
 } from './lib/publishable-stock.mjs'
 import { snapshot, buildSpeakerLoad, supplyPlanningProfile } from './supply-process.mjs'
 import { planSpeakerAvailability, remainingCapacity } from '../src/lib/content-core/speaker-availability'
+import { MACHINE_REVIEWED_BY } from '../src/lib/original-post-auto-publish'
+import { readPostRequirements } from '../src/lib/original-post-persona-match'
 
 // ── 🔴 격리 가드 — 주소를 찍지 않는다 ──
 const URL = process.env.DATABASE_URL ?? ''
@@ -303,6 +305,64 @@ async function main(): Promise<void> {
         && open <= PROFILES[cap].dailyTarget * 7,
         `열린 자리 ${open} · 발행 일 ${pub.resolved.dailyCap}`)
     }
+  }
+
+  console.log('\n⑤ 🔴 마스터 반례 — 배정기(planBatch) → classifyStock 실제 경로 · 말투를 보지 않고 유예를 추정하지 않는다')
+  {
+    /**
+     * voice=P03 · 성인 딸 글 · P03 무자녀(NO_CHILDREN) · P01·P02 는 자녀(성인)가 있지만 이틀 전에 썼다
+     * → d1(주 1 · 최소 5일)에서 WEEKLY_CAP + TOO_SOON · 말투는 P03 뿐이라 deferredBy 없음.
+     * 🔴 기계 글은 사람 검토를 마친 모양(`MACHINE_REVIEWED_BY`)이어야 배정기에 들어간다 — 격리 DB fixture 다.
+     */
+    const TITLE = '성인 된 딸이 독립해서 나갔어요'
+    const BODY = '우리 딸이 올해 서른이 되어 따로 나가 살아요. 다 큰 딸 독립, 다들 어떻게 받아들이셨어요?'
+    const req = readPostRequirements(TITLE, BODY)
+    check('fixture 글이 자녀 요구를 가진다 (정본 판정)', req.needsChildren, JSON.stringify(req.needsChildAgeBands))
+    const bands = req.needsChildAgeBands.length > 0 ? req.needsChildAgeBands : ['성인']
+    for (const code of ['P01', 'P02']) {
+      await prisma.persona.update({ where: { code }, data: { identity: { childrenCount: 1, childrenAgeBands: bands } as never } })
+    }
+    await prisma.persona.update({ where: { code: 'P03' }, data: { identity: { childrenCount: 0 } as never } })
+    const machineReviewed = async (voice: string): Promise<string> => {
+      const r = await raw(`${MACHINE_SITE_PREFIX}navercafe:t`, new Date(NOW.getTime() - 1 * DAY))
+      return (await prisma.originalPostApprovalQueue.create({
+        data: {
+          sourceRawContentId: r.id, status: 'APPROVED', draftTitle: TITLE, draftBody: `${BODY} (${seq})`,
+          gateVerdict: 'PASS', gateResults: machineGate(voice) as never,
+          promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+          decidedBy: MACHINE_REVIEWED_BY, dedupKey: `pp-v-${seq}`,
+        },
+        select: { id: true },
+      })).id
+    }
+    const negId = await machineReviewed('P03')
+    const posId = await machineReviewed('P01')
+    const pub = await publisherView(prisma, envOf('d1', 'd5'))
+    const neg = pub.plan.assignOf.get(negId)
+    const blockedOf = (a: typeof neg, code: string): string[] =>
+      (a?.blocked.find((b) => b.code === code)?.reasons ?? []).map((r) => r.code).sort()
+    check('반례 모양이 실제로 나온다 — 배정 없음 · deferredBy 없음',
+      neg !== undefined && neg.assigned === null && neg.deferredBy.length === 0, JSON.stringify(neg?.deferredBy))
+    check('반례 모양 — P03 은 NO_CHILDREN · P01·P02 는 TOO_SOON + WEEKLY_CAP 뿐 (배정기는 그들의 말투를 보지 않았다)',
+      blockedOf(neg, 'P03').includes('NO_CHILDREN')
+      && blockedOf(neg, 'P01').join(',') === 'TOO_SOON,WEEKLY_CAP' && blockedOf(neg, 'P02').join(',') === 'TOO_SOON,WEEKLY_CAP',
+      `P01 ${blockedOf(neg, 'P01')} · P02 ${blockedOf(neg, 'P02')} · P03 ${blockedOf(neg, 'P03')}`)
+    const c = pub.classification
+    check('🔴 🔴 **voice=P03 글은 assignmentException · WIP 아님** (앞판: 유예 · WIP)',
+      c.ids.assignmentException.includes(negId) && !c.personaWipIds.includes(negId))
+    const pos = pub.plan.assignOf.get(posId)
+    check('양성 모양 — voice=P01 · 배정 없음 · deferredBy 없음 · P01 은 리듬 사유뿐',
+      pos !== undefined && pos.assigned === null && pos.deferredBy.length === 0
+      && blockedOf(pos, 'P01').join(',') === 'TOO_SOON,WEEKLY_CAP')
+    check('🔴 🔴 **voice=P01 글(글쓴이 본인 리듬만) → assignmentDeferred · WIP**',
+      c.ids.assignmentDeferred.includes(posId) && c.personaWipIds.includes(posId))
+    const sup = (await snapshot(prisma, SAFEST_STOCK_LIMITS, { env: envOf('d1', 'd5'), now: NOW })).classification!
+    check('🔴 공급 분류도 같은 답이다', sup.ids.assignmentException.includes(negId) && sup.ids.assignmentDeferred.includes(posId))
+    const load = await buildSpeakerLoad(prisma, 'parity-voice', { env: envOf('d1', 'd5'), now: NOW, scale: resolveScale(envOf('d1', 'd5')) })
+    const load0 = { P01: 1, P03: 0 }
+    check('🔴 화자 WIP — P01 은 그 글을 든다 · P03 은 예외 글로 점유되지 않는다',
+      (load.byCode.P01?.readyCount ?? -1) === load0.P01 + 1 && (load.byCode.P03?.readyCount ?? -1) === load0.P03,
+      `P01 ${load.byCode.P01?.readyCount} · P03 ${load.byCode.P03?.readyCount}`)
   }
 
   await prisma.$disconnect()

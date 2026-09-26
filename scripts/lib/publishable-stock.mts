@@ -24,6 +24,7 @@ import {
 } from '../../src/lib/original-post-auto-publish'
 import { authoritativeGate } from '../../src/lib/auto-ready-repo'
 import { prepareCandidates } from '../../src/lib/supply-candidates'
+import { judgeVoiceMatch } from '../../src/lib/original-post-voice-match'
 import type { HoldReason } from '../../src/lib/supply-freshness'
 import {
   releaseCapsOf, PROFILES, RELEASE_STAGES,
@@ -588,15 +589,24 @@ function bucketOfHold(hold: HoldReason): StockBucket {
 /**
  * 🔴 **새 배정이 안 된 행 — 시간이 풀어 주는가.** 판정을 새로 하지 않는다:
  *    · 후보가 있었는데 자리가 없어 밀렸다(`deferredBy`) → 시간이 푼다
- *    · 막힌 Persona 중 **시간성 사유(`TIME_BOUND_ASSIGN_CODES`)만** 가진 사람이 있다 → 시간이 푼다
- *    · 그 밖(말투 · 생활사 · 비활성으로만 막혔다) → 시간이 풀지 않는다
+ *    · 그 밖에는 **시간이 풀리면 이 글을 쓸 수 있는 Persona** 가 있어야 유예다. 그 사람은 셋을 모두 만족한다:
+ *        ① 말투가 맞다 — 정본 `judgeVoiceMatch`(기계 글은 **그 글을 쓴 voice Persona 한 사람**뿐이다)
+ *        ② 비시간성 조건(생활사 · 활성 · 실회원)을 통과한다 — `hardFilter` 가 막은 사유가 없다
+ *        ③ 남은 사유가 **시간성(`TIME_BOUND_ASSIGN_CODES`)뿐**이다
+ *    · 아무도 없으면 예외다 — WIP 를 점유하지 않는다.
+ *
+ * 🔴 **왜 ①이 필요한가** (2026-09-26 3차 · 마스터 반례). 배정기는 `hardFilter` 가 막은 사람의 말투를
+ *    **보지 않는다** — 막힌 사유 목록에 VOICE_MISMATCH 가 없다. 그래서 "시간 코드만 가진 사람이 있다" 로
+ *    추정하면, voice=P03(무자녀 → NO_CHILDREN)인 성인 딸 글이 P01·P02(자녀 있음 · 주간 상한 · 최소 간격)
+ *    때문에 유예로 잡혔다. 시간이 풀려도 P01·P02 는 남의 말투이고 P03 은 계속 무자녀다.
  */
-function unassignedRoute(a: BatchAssignment | undefined): 'defer' | 'exception' {
-  if (a === undefined) return 'exception'
+function unassignedRoute(a: BatchAssignment | undefined, c: QueueCandidate | undefined): 'defer' | 'exception' {
+  if (a === undefined || c === undefined) return 'exception'
   if (a.deferredBy.length > 0) return 'defer'
-  const timeOnly = a.blocked.some((b) => b.reasons.length > 0
+  const futureWriter = a.blocked.some((b) => b.reasons.length > 0
+    && judgeVoiceMatch({ voice: c.voice, personaCode: b.code, profile: c.profile }).ok
     && b.reasons.every((r) => TIME_BOUND_ASSIGN_CODES.includes(r.code)))
-  return timeOnly ? 'defer' : 'exception'
+  return futureWriter ? 'defer' : 'exception'
 }
 
 export type StockClassification = {
@@ -622,6 +632,8 @@ export function classifyStock(input: { loaded: LoadedStock; plan: PublishPlan })
   const brokenIds = new Set(plan.brokenRecovery.map((x) => x.id))
   const halted = plan.brokenRecovery.length > 0
   const ready = new Set(plan.assignmentReady)
+  /** 🔴 말투 · profile 은 러너가 배정기에 넘긴 그 후보에서 읽는다(`voiceInputOf`) */
+  const candidateOf = new Map(loaded.queueCandidates.map((c) => [c.queueId, c]))
   for (const t of loaded.targets) {
     // 🔴 기존 배정 자동 행 — 발행 트랜잭션과 같은 `judgeAutoAssignment` 의 route 그대로
     if (deferredPinned.has(t.id)) { ids.assignmentDeferred.push(t.id); continue }
@@ -634,7 +646,7 @@ export function classifyStock(input: { loaded: LoadedStock; plan: PublishPlan })
       (halted ? ids.haltedByBrokenRecovery : ids.publishableNow).push(t.id)
       continue
     }
-    const route = unassignedRoute(plan.assignOf.get(t.id))
+    const route = unassignedRoute(plan.assignOf.get(t.id), candidateOf.get(t.id))
     ;(route === 'defer' ? ids.assignmentDeferred : ids.assignmentException).push(t.id)
   }
   const counts = Object.fromEntries(STOCK_BUCKETS.map((b) => [b, ids[b].length])) as Record<StockBucket, number>

@@ -45,10 +45,18 @@ function fixture(o: {
   broken?: string[]
   /** 새 배정이 안 된 행 — 정본 `BatchAssignment` 의 `deferredBy` · `blocked` 그대로 */
   unassigned?: { id: string; deferredBy?: string[]; blocked?: { code: string; reasons: { code: string }[] }[] }[]
+  /** 기계 글의 말투 — 주지 않으면 사람 profile(말투 없음)이다 */
+  voiceOf?: Record<string, string>
 }): { loaded: LoadedStock; plan: PublishPlan } {
   const rejected = o.rejected ?? []
   const targets = (o.targets ?? []).map((id) => ({ id }))
-  const loaded = { queueTotal: rejected.length + targets.length, rejected, targets } as unknown as LoadedStock
+  const queueCandidates = (o.targets ?? []).map((id) => {
+    const v = o.voiceOf?.[id]
+    return v === undefined
+      ? { queueId: id, voice: null, profile: 'human' }
+      : { queueId: id, voice: { personaCode: v, bundleDigest: `bd-${v}`, comments: 3 }, profile: 'machine' }
+  })
+  const loaded = { queueTotal: rejected.length + targets.length, rejected, targets, queueCandidates } as unknown as LoadedStock
   const assignOf = new Map((o.unassigned ?? []).map((u) => [u.id, {
     queueId: u.id, assigned: null, deferredBy: u.deferredBy ?? [], blocked: u.blocked ?? [], recoveryProblem: null,
   }]))
@@ -126,6 +134,37 @@ console.log('① 재고 분류 — 정본 결과를 나누기만 한다 · 칸�
     g.ids.assignmentException.includes('life') && !wip(g, 'life'))
   check('🔴 스스로 풀리지 않는 신선도 실패(시각 미상 · 복구 글 상함) → WIP 아님',
     same(g.ids.freshnessHeld, ['age', 'stale']) && !wip(g, 'age') && !wip(g, 'stale'))
+
+  /**
+   * 🔴 **마스터 반례 (2026-09-26 3차)** — voice=P03 · 성인 딸 글 · P03 무자녀(NO_CHILDREN) ·
+   *    P01·P02 는 자녀가 있지만 주간 상한 + 최소 간격 · deferredBy 없음.
+   *    시간이 풀려도 P01·P02 는 남의 말투, P03 은 계속 무자녀 → **예외 · WIP 아님**.
+   */
+  const cx = classifyStock(fixture({
+    targets: ['daughter'], voiceOf: { daughter: 'P03' },
+    unassigned: [{ id: 'daughter', blocked: [
+      { code: 'P01', reasons: [{ code: 'WEEKLY_CAP' }, { code: 'TOO_SOON' }] },
+      { code: 'P02', reasons: [{ code: 'WEEKLY_CAP' }, { code: 'TOO_SOON' }] },
+      { code: 'P03', reasons: [{ code: 'NO_CHILDREN' }] },
+    ] }],
+  }))
+  check('🔴 🔴 **남의 말투 Persona 의 시간 코드로 유예를 추정하지 않는다 → 예외 · WIP 아님**',
+    same(cx.ids.assignmentException, ['daughter']) && !wip(cx, 'daughter'))
+  /** 🔴 같은 글쓴이의 리듬만 막힌 경우 — 유예 · WIP */
+  const cy = classifyStock(fixture({
+    targets: ['own'], voiceOf: { own: 'P01' },
+    unassigned: [{ id: 'own', blocked: [
+      { code: 'P01', reasons: [{ code: 'WEEKLY_CAP' }, { code: 'TOO_SOON' }] },
+      { code: 'P03', reasons: [{ code: 'NO_CHILDREN' }] },
+    ] }],
+  }))
+  check('🔴 🔴 **글쓴이 본인이 리듬(주간 상한 · 최소 간격)만 막혔다 → 유예 · WIP**',
+    same(cy.ids.assignmentDeferred, ['own']) && wip(cy, 'own'))
+  const cz = classifyStock(fixture({
+    targets: ['mix'], voiceOf: { mix: 'P01' },
+    unassigned: [{ id: 'mix', blocked: [{ code: 'P01', reasons: [{ code: 'WEEKLY_CAP' }, { code: 'NO_CHILDREN' }] }] }],
+  }))
+  check('🔴 글쓴이 본인에게 비시간성 사유가 섞였다 → 예외', same(cz.ids.assignmentException, ['mix']))
 
   const h = classifyStock(fixture({ targets: ['a', 'b'], ready: ['a'], broken: ['b'] }))
   check('🔴 깨진 복구가 있으면 러너가 멈춘다 → 발행 가능 0', h.counts.publishableNow === 0)
