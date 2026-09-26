@@ -27,6 +27,19 @@ import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE,
 } from '../src/lib/micro-seed-supply-autofill'
 
+import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
+/**
+ * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
+ *    발행된 사람 결정 행 · 수정·폐기 없음 → noEdit 로 결속한다.
+ */
+const humanReviewed = (title: string, body: string) => ({
+  [EVIDENCE_REVIEW_KEY]: [{
+    contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:founder', reviewerUserId: 'fixture-founder',
+    ...bindingOf({ status: 'PUBLISHED', draftTitle: title, draftBody: body, editedTitle: null, editedBody: null, declineReason: null }),
+    hardDefect: 'no', reasons: [], bundleDigest: evDigest('fixture-bundle'), reviewedAt: '2026-09-25T00:00:00Z',
+  }],
+})
+
 const URL = process.env.DATABASE_URL ?? ''
 const problems: string[] = []
 if ((process.env.SORAN_ISOLATED_DB ?? '').trim() !== 'yes-throwaway') problems.push('SORAN_ISOLATED_DB=yes-throwaway 가 없다')
@@ -102,6 +115,8 @@ async function main(): Promise<void> {
           sourceRawContentId: r.id, status: 'PUBLISHED', draftTitle: `사람이 본 글 ${i}`, draftBody: `사람이 본 본문 ${i}`,
           gateVerdict: 'PASS', gateResults: gate(null) as never, promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
           decidedBy: HUMAN_DECIDER, createdPostId: p.id, dedupKey: `ev-${seq}`,
+          // 🔴 사람 정답 표본 — human:founder 검토 기록이 이 초안에 묶여 있다(결함 no)
+          editDiff: humanReviewed(`사람이 본 글 ${i}`, `사람이 본 본문 ${i}`) as never,
         },
       })
     }

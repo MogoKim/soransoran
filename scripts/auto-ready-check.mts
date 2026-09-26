@@ -17,9 +17,12 @@ import {
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { releaseStageCeiling, boundedReleaseStage, resolveScale } from '../src/lib/scale-runtime'
 import {
-  restoreRow, cohortSampleOf, hardDefectOf, outcomeOf,
-  type ArtifactDoc, type CandidateDoc, type DecidedRow,
+  restoreRow, cohortSampleOf, humanSampleOf, readEvidenceReviews, digestOf, bindingOf,
+  EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT,
+  type ArtifactDoc, type CandidateDoc, type DecidedRow, type EvidenceReview,
 } from '../src/lib/auto-ready-evidence'
+import { isHumanReviewer, resolveHumanReviewer, LEGACY_DECISION_MARK } from '../src/lib/review-provenance'
+import { planOriginalPostWithdrawal } from '../src/lib/original-post-withdrawal'
 import { selectAutoTargets, type AutoRow } from '../src/lib/original-post-auto-publish'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticHoldsOf,
@@ -128,7 +131,7 @@ console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지'
     },
     editDiff: null, declineReason: null,
     rawSourceSite: `${MACHINE_SITE_PREFIX}navercafe:x`, rawSourceArticleId: `${base}-deadbeef`,
-    sourceCapturedAt: CAP, ...o,
+    sourceCapturedAt: CAP, matchedPersonaCode: null, ...o,
   })
   const idx = (arts: ArtifactDoc[], cands: CandidateDoc[]) => ({
     a: new Map([[ART, arts]]), c: new Map([[ART, cands]]),
@@ -154,33 +157,138 @@ console.log('\n② 🔴 증거 복원 — 여섯 갈래 · 추정 매칭 금지'
     run(row({}, { pipelineVersion: 'content-core-v2.0' })).klass === 'provenanceMismatch')
   check('🔴 plan 과 voice 의 Persona 가 다르다 → provenanceMismatch',
     run(row(), [artifact({ planPersonaCode: 'P01' })]).klass === 'provenanceMismatch')
+  check('🔴 🔴 **배정 Persona 가 artifact plan·voice 와 같으면 clean**', run(row({ matchedPersonaCode: 'P04' })).klass === 'clean')
+  check('🔴 🔴 **배정 Persona 가 artifact 와 다르면 provenanceMismatch (clean 복원 아님)**',
+    run(row({ matchedPersonaCode: 'P05' })).klass === 'provenanceMismatch')
+  check('🔴 미배정(null) 그림자는 허용', run(row({ matchedPersonaCode: null })).klass === 'clean')
   check('🔴 🔴 **artifact 의 의미 검수가 불완전 → warning**',
     run(row(), [artifact({ review: { deterministic: { pass: true }, semanticCompletion: { complete: false }, semantic: { confidence: 0.9 } } })]).klass === 'warning')
   check('🔴 원문에 차단 표현이 있다 → warning', run(row({ draftBody: '오늘도 산책했어요', draftTitle: draft.title }), [artifact({ draft: { title: draft.title, body: '오늘도 산책했어요' } })]).klass === 'warning')
 }
 
-console.log('\n③ 🔴 표본 — unmeasured 를 0 으로 읽지 않는다 · 계약을 낮추지 않는다')
+console.log('\n③ 🔴 표본 — 인증된 사람 v2 기록만 · 결과도 기록이 확정 · 결속이 깨지면 제외 · 기준 불변')
 {
-  const r = (o: Partial<DecidedRow> = {}) => ({ decidedBy: HUMAN_DECIDER, editDiff: null, declineReason: null, ...o })
-  const s0 = cohortSampleOf([r(), r({ editDiff: { bodyChanged: true } })])
-  check('🔴 🔴 **수정 행에 hardDefect 표식이 없으면 unmeasured → null**', s0.hardDefects === null && s0.hardDefectUnmeasured === 1)
-  check('🔴 표식이 있으면 센다', cohortSampleOf([r({ editDiff: { bodyChanged: true, hardDefect: 'no' } })]).hardDefects === 0)
-  check('🔴 hardDefect 는 yes|no 만 값이다 — "false"·true 는 unmeasured',
-    hardDefectOf({ hardDefect: 'false' }) === 'unmeasured' && hardDefectOf({ hardDefect: true }) === 'unmeasured')
-  const n = (k: number, noEdit: number) => [
-    ...Array.from({ length: noEdit }, () => r()),
-    ...Array.from({ length: k - noEdit }, () => r({ editDiff: { bodyChanged: true, hardDefect: 'no' } })),
-  ]
-  check('🔴 🔴 **30건 · 무수정 27(90.0%) · 결함 0 → 계약 충족**', cohortSampleOf(n(30, 27)).meetsContract)
-  check('🔴 🔴 **29건이면 무수정률이 높아도 미달 (30 을 낮추지 않았다)**', !cohortSampleOf(n(29, 29)).meetsContract)
+  const T = '평범한 하루'
+  const B = '아침에 산책을 다녀왔어요'
+  type Row = { decidedBy: string | null; status: string; draftTitle: string; draftBody: string; editedTitle: string | null; editedBody: string | null; declineReason: string | null; editDiff: unknown }
+  const base = (o: Partial<Row> = {}): Row => ({
+    decidedBy: HUMAN_DECIDER, status: 'APPROVED', draftTitle: T, draftBody: B, editedTitle: null, editedBody: null, declineReason: null, editDiff: null, ...o,
+  })
+  /** 지금 행 상태로 결속한 기록 — 기본은 서버가 쓴 human:founder · 결함 no */
+  const rv = (row: Row, o: Partial<EvidenceReview> = {}): EvidenceReview => ({
+    contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:founder', reviewerUserId: 'u-founder', ...bindingOf(row),
+    hardDefect: 'no', reasons: [], bundleDigest: digestOf('bundle'), reviewedAt: '2026-09-25T00:00:00Z', ...o,
+  })
+  const withReview = (row: Row, o: Partial<EvidenceReview> = {}): Row => ({ ...row, editDiff: { [EVIDENCE_REVIEW_KEY]: [rv(row, o)] } })
+  const noEditRow = (o: Partial<EvidenceReview> = {}) => withReview(base(), o)
+  const editedRow = (o: Partial<EvidenceReview> = {}) => withReview(base({ status: 'EDITED', editedBody: `${B} 고침` }), o)
+  const declinedRow = (o: Partial<EvidenceReview> = {}) => withReview(base({ status: 'DECLINED', declineReason: 'TOPIC_UNFIT' }), o)
+  const n = (k: number, noEdit: number) => [...Array.from({ length: noEdit }, () => noEditRow()), ...Array.from({ length: k - noEdit }, () => editedRow())]
+  check('🔴 🔴 **30건 · 무수정 27(90.0%) · 결함 0 → 계약 충족 (열림)**', cohortSampleOf(n(30, 27)).meetsContract)
+  check('🔴 🔴 **29건 → 미달 (30 을 낮추지 않았다)**', !cohortSampleOf(n(29, 29)).meetsContract)
   check('🔴 🔴 **30건 · 무수정 26(86.7%) → 미달 (90% 를 낮추지 않았다)**', !cohortSampleOf(n(30, 26)).meetsContract)
-  check('🔴 결함 yes 하나면 미달', !cohortSampleOf([...n(30, 29).slice(0, 29), r({ editDiff: { bodyChanged: true, hardDefect: 'yes' } })]).meetsContract)
-  check('🔴 사람(founder) 결정만 센다 — 기계·자동 결정은 표본이 아니다',
-    cohortSampleOf([r({ decidedBy: 'machine:auto-draft-v5' }), r({ decidedBy: AUTO_DECIDER })]).eligible === 0)
-  check('🔴 계약 값은 정본 그대로다', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9
+  check('🔴 결함 yes 하나면 미달', !cohortSampleOf([...n(29, 29), editedRow({ hardDefect: 'yes', reasons: ['생활사 모순'] })]).meetsContract)
+  const um = cohortSampleOf([...n(29, 29), noEditRow({ hardDefect: 'unmeasured' })])
+  check('🔴 🔴 **hardDefect 미측정 하나 → null · 게이트 닫힘**', um.hardDefects === null && um.hardDefectUnmeasured === 1 && !um.meetsContract)
+  // ── 결과는 기록이 확정한다 — noEdit · edited · declined 각각 결속 ──
+  const v1 = humanSampleOf(noEditRow()); const v2 = humanSampleOf(editedRow()); const v3 = humanSampleOf(declinedRow())
+  check('🔴 🔴 **noEdit · edited · declined 각각 기록이 결과를 확정한다**',
+    v1.counted && v1.outcome === 'noEdit' && v2.counted && v2.outcome === 'edited' && v3.counted && v3.outcome === 'declined')
+  // ── 검토 뒤 최종 상태가 바뀌면 즉시 제외 ──
+  const e = editedRow()
+  check('🔴 🔴 **edited 검토 뒤 수정본이 바뀌면 제외 (bindingBroken)**',
+    (() => { const x = humanSampleOf({ ...e, editedBody: `${B} 또 고침` }); return !x.counted && x.why === 'bindingBroken' })())
+  const nr = noEditRow()
+  check('🔴 🔴 **noEdit 검토 뒤 수정본이 생기면 제외**', !humanSampleOf({ ...nr, editedTitle: '새 제목', status: 'EDITED' }).counted)
+  check('🔴 🔴 **noEdit 검토 뒤 폐기되면 제외**', !humanSampleOf({ ...nr, status: 'DECLINED', declineReason: 'TOPIC_UNFIT' }).counted)
+  const dr = declinedRow()
+  check('🔴 🔴 **declined 검토 뒤 폐기 사유가 바뀌면 제외**', !humanSampleOf({ ...dr, declineReason: 'TITLE_WEAK' }).counted)
+  check('🔴 🔴 **초안이 바뀌면 제외**', !humanSampleOf({ ...nr, draftBody: `${B}!` }).counted)
+  // ── legacy editDiff 표식은 결과를 정하지 않는다 ──
+  const legacy = { ...noEditRow(), editDiff: { bodyChanged: true, [EVIDENCE_REVIEW_KEY]: [rv(base())] } }
+  check('🔴 🔴 **옛 editDiff 수정 표식(Codex 기록일 수 있다)은 결과를 바꾸지 않는다 — 기록의 noEdit 그대로**',
+    (() => { const x = humanSampleOf(legacy); return x.counted && x.outcome === 'noEdit' })())
+  // ── 출처 ──
+  const codex = cohortSampleOf([...n(29, 29), noEditRow({ reviewer: 'codex:master-review', reviewerUserId: null }), noEditRow({ reviewer: 'model:semantic-audit', reviewerUserId: null })])
+  check('🔴 🔴 **Codex·모델 기록만 있는 행은 사람 표본이 아니다 → 29 · 닫힘**', codex.eligible === 29 && codex.excluded.nonHumanOnly === 2 && !codex.meetsContract)
+  check('🔴 🔴 **사람 기록에 사용자 id 가 없으면 기록 자체가 무효 (서버가 쓰지 않은 기록)**',
+    readEvidenceReviews(noEditRow({ reviewerUserId: null }).editDiff).length === 0 && readEvidenceReviews(noEditRow({ reviewerUserId: '' }).editDiff).length === 0)
+  check('🔴 비사람 기록에 사용자 id 가 있으면 무효', readEvidenceReviews(noEditRow({ reviewer: 'codex:master-review', reviewerUserId: 'u' }).editDiff).length === 0)
+  check('🔴 🔴 **legacy founder 표식만 있고 기록이 없으면 표본이 아니다**', cohortSampleOf([base()]).excluded.noReview === 1)
+  check('🔴 🔴 **v1 기록은 읽지 않는다 (출처 증명 없음)**',
+    readEvidenceReviews({ [EVIDENCE_REVIEW_KEY]: [{ ...rv(base()), contract: 'evidence-review-v1' }] }).length === 0)
+  check('🔴 🔴 **임의 문자열 검토자는 기록 자체가 무효**',
+    readEvidenceReviews({ [EVIDENCE_REVIEW_KEY]: [rv(base(), { reviewer: 'founder' as never }), rv(base(), { reviewer: 'Human:founder' as never })] }).length === 0
+    && !isHumanReviewer('founder') && isHumanReviewer('human:founder'))
+  check('🔴 결속이 맞지 않는 사람 기록은 무시 — 맞는 기록의 결과만 쓴다',
+    (() => { const r0 = base(); const x = humanSampleOf({ ...r0, editDiff: { [EVIDENCE_REVIEW_KEY]: [{ ...rv(r0), reviewerUserId: 'u2', outcome: 'edited' }, rv(r0)] } }); return x.counted && x.outcome === 'noEdit' && x.reviewers.length === 1 })())
+  check('🔴 사람 결정 표식이 없는 행(기계·자동)은 표본이 아니다',
+    cohortSampleOf([{ ...noEditRow(), decidedBy: 'machine:auto-draft-v5' }, { ...noEditRow(), decidedBy: AUTO_DECIDER }]).eligible === 0)
+  // ── 서버 검토자 결정 ──
+  check('🔴 🔴 **검토자는 세션으로만 — 관리자면 human:operator · 아니면 null · env 의존 없음**',
+    resolveHumanReviewer({ isAdmin: false }) === null && resolveHumanReviewer({ isAdmin: true }) === 'human:operator'
+    && !/SORAN_FOUNDER_EMAILS/.test(codeOnly('src/lib/review-provenance.ts').replace(/\/\*\*[\s\S]*?\*\//g, '')
+      + codeOnly('src/lib/actions/auto-ready-evidence.ts')))
+  // ── 사용자별 최신 판정 합산 (2026-09-25 마스터 P0) ──
+  const r0 = base()
+  const at = (u: string, hd: EvidenceReview['hardDefect'], t: string, reasons: string[] = hd === 'yes' ? ['근거'] : []) =>
+    rv(r0, { reviewer: 'human:operator', reviewerUserId: u, hardDefect: hd, reasons, reviewedAt: t })
+  const hdOf = (...recs: EvidenceReview[]) => { const v = humanSampleOf({ ...r0, editDiff: { [EVIDENCE_REVIEW_KEY]: recs } }); return v.counted ? v.hardDefect : 'excluded' }
+  check('🔴 🔴 **A unmeasured + B no → no**', hdOf(at('A', 'unmeasured', '2026-09-25T01:00:00Z'), at('B', 'no', '2026-09-25T01:00:00Z')) === 'no')
+  check('🔴 🔴 **A no + B yes → yes**', hdOf(at('A', 'no', '2026-09-25T01:00:00Z'), at('B', 'yes', '2026-09-25T01:00:00Z')) === 'yes')
+  check('🔴 모두 미측정일 때만 unmeasured', hdOf(at('A', 'unmeasured', '2026-09-25T01:00:00Z'), at('B', 'unmeasured', '2026-09-25T01:00:00Z')) === 'unmeasured')
+  check('🔴 🔴 **같은 사람은 마지막에 붙은 기록만 — 앞의 yes 뒤에 no 면 no**',
+    hdOf(at('A', 'yes', '2026-09-25T01:00:00Z'), at('A', 'no', '2026-09-25T02:00:00Z')) === 'no')
+  check('🔴 🔴 **최신의 정본은 append 순서 — 나중에 붙은 기록의 시각이 더 과거여도 그 기록이 최신**',
+    hdOf(at('A', 'no', '2026-09-25T02:00:00Z'), at('A', 'yes', '2026-09-25T01:00:00Z')) === 'yes'
+    && !/Date\.parse|reviewedAt/.test(codeOnly('src/lib/auto-ready-evidence.ts').split('export function effectiveHumanReviews')[1]!.split('export type HumanSampleVerdict')[0]!))
+  check('🔴 🔴 **결속이 깨진 옛 기록은 쓰지 않고 새 결속 기록을 쓴다 (이력은 남는다)**',
+    (() => { const changed = { ...r0, editedBody: `${B} 새 문안`, status: 'EDITED' }
+      const old = at('A', 'yes', '2026-09-25T01:00:00Z'); const fresh = { ...rv(changed, { reviewer: 'human:operator', reviewerUserId: 'A', hardDefect: 'no', reviewedAt: '2026-09-25T02:00:00Z' }) }
+      const v = humanSampleOf({ ...changed, editDiff: { [EVIDENCE_REVIEW_KEY]: [old, fresh] } })
+      return v.counted && v.outcome === 'edited' && v.hardDefect === 'no' && readEvidenceReviews({ [EVIDENCE_REVIEW_KEY]: [old, fresh] }).length === 2 })())
+  check('🔴 🔴 **계약 값은 정본 그대로다 — 30 · 90% · 0**', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9
     && CONTRACT.hardDefectMax === 0 && CONTRACT.sampledAuditRatio === 0.2)
-  check('🔴 자동 도장만 담긴 editDiff 는 사람 수정이 아니다',
-    !isHumanEditRecord({ [AUTO_READY_RECORD_KEY]: {} }) && outcomeOf({ editDiff: { autoReady: {} }, declineReason: null }) === 'noEdit')
+  check('🔴 🔴 **검토자 계약·운영 표식은 review-provenance 한 곳에서만 정의된다**',
+    !/export const (HUMAN_DECIDER|MACHINE_REVIEWED_BY) = 'founder'|DECIDED_BY_VALUES = \['founder'\]/.test(
+      codeOnly('src/lib/auto-ready-v2.ts') + codeOnly('src/lib/original-post-auto-publish.ts') + codeOnly('src/lib/original-post-decision.ts'))
+    && HUMAN_DECIDER === LEGACY_DECISION_MARK
+    && (codeOnly('src/lib/auto-ready-evidence.ts') + codeOnly('src/lib/auto-ready-evidence-store.ts')).match(/'human:founder'/g) === null)
+  // ── 서버 경계 소스 계약 ──
+  const action = codeOnly('src/lib/actions/auto-ready-evidence.ts')
+  check('🔴 🔴 **서버 경계는 requireAdmin · 세션 · resolveHumanReviewer · 서버 시계로 기록한다**',
+    /const \{ ok \} = await requireAdmin\(\)\s*if \(!ok\) return \{ error/.test(action) && /const session = await auth\(\)/.test(action)
+    && /resolveHumanReviewer\(\{ isAdmin: true \}\)/.test(action)
+    && /actor: \{ userId, reviewer \}, now: new Date\(\)/.test(action))
+  check('🔴 🔴 **요청 본문의 reviewer · reviewedAt 은 읽지 않는다 — 다섯 칸만 꺼낸다**',
+    !/\.reviewer\b|\.reviewedAt\b|reviewedAt:/.test(action.replace(/\/\*\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''))
+    && (action.match(/const reviewer = resolveHumanReviewer\(\{ isAdmin: true \}\)\n/g) ?? []).length === 1
+    && /decision: r\.decision, declineReason: r\.declineReason, hardDefect: r\.hardDefect, reasons: r\.reasons,\s*withdraw: r\.withdraw === true,/.test(action))
+  const store = codeOnly('src/lib/auto-ready-evidence-store.ts')
+  check('🔴 🔴 **사람 경로 — 빈 판정은 건너뜀(write 0) · yes·no 만 · 기록은 쌓는다(append-only)**',
+    /if \(blank\) \{ out\.push\(\{ queueId: e\.queueId, result: 'skip'/.test(store)
+    && /if \(e\.hardDefect !== 'yes' && e\.hardDefect !== 'no'\) \{ reject/.test(store)
+    && /const m = appendHumanReview\(now\.editDiff, entry, now\)/.test(store) && !/if \(m\.kind === 'conflict'\) throw/.test(store))
+  // ── 🔴 결함 yes 인데 발행 가능한 상태를 남기지 않는다 (2026-09-26 마스터 P0) ──
+  check('🔴 🔴 **결정 전 행 — ready + 결함 yes 는 전체 거절**',
+    /if \(decision === 'ready' && d\.hardDefect === 'yes'\) \{ reject\(/.test(store))
+  check('🔴 🔴 **승인 미발행 + 결함 yes — 명시적 철회가 없으면 기록하지 않는다 · 철회 실패면 되돌린다**',
+    /if \(d\.hardDefect === 'yes'\) \{\s*if \(!withdraw\) throw new Abort\(/.test(store)
+    && /const w = await withdrawOriginalPostInTx\(tx, \{ row, reason: e\.declineReason, actorUserId: i\.actor\.userId, now: i\.now \}\)\s*if \(!w\.ok\) throw new Abort/.test(store))
+  const W = codeOnly('src/lib/original-post-withdrawal.ts')
+  check('🔴 🔴 **철회 계약 — APPROVED·EDITED 만 · 발행됨 불가 · 사유 코드 필수(기본값 없음)**',
+    !planOriginalPostWithdrawal({ status: 'APPROVED', createdPostId: 'p1', reason: 'TOPIC_UNFIT' }).ok
+    && !planOriginalPostWithdrawal({ status: 'DECLINED', createdPostId: null, reason: 'TOPIC_UNFIT' }).ok
+    && !planOriginalPostWithdrawal({ status: 'PUBLISHED', createdPostId: null, reason: 'TOPIC_UNFIT' }).ok
+    && !planOriginalPostWithdrawal({ status: 'APPROVED', createdPostId: null, reason: '' }).ok
+    && !planOriginalPostWithdrawal({ status: 'APPROVED', createdPostId: null, reason: 'MADE_UP' }).ok
+    && planOriginalPostWithdrawal({ status: 'EDITED', createdPostId: null, reason: 'TOPIC_UNFIT' }).ok)
+  check('🔴 🔴 **철회는 승인 도장(decidedBy·decidedAt)을 덮지 않는다 · 조건부 쓰기(createdPostId null · updatedAt · editDiff)**',
+    !/decidedBy:|decidedAt:/.test(W.split('data: {')[1]!.split('editDiff:')[0]!)
+    && /createdPostId: null, updatedAt: i\.row\.updatedAt,/.test(W))
+  check('🔴 🔴 **CLI importer 는 사람 기록을 만들지 못한다 · 시각은 프로세스 시계 · 결과는 지금 상태로 결속**',
+    /if \(isHumanReviewer\(reviewer\)\) \{\s*return \{ ok: false/.test(store) && /reviewedAt: now\.toISOString\(\)/.test(store)
+    && !/file\.reviewedAt/.test(store) && /reviewerUserId: null, \.\.\.bindingOf\(row\)/.test(store))
 }
 
 console.log('\n④ 🔴 도장 — 본문·제목·계약 판 hash')
