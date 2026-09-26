@@ -559,9 +559,18 @@ console.log('\n⑥ 🔴 허가 실패는 HOLD · 처음부터 고른 낮은 자�
         { fact: 'spouse', drafted: '남편이 있다', card: '비혼',
           evidence: '저희 남편은 집안일을 통 안 해요.' },
       ] } } })
-  check('🔴 🔴 **낮춘 자리에서 자기 경험을 말하면 adopt 아님**',
+  /**
+   * 🔴 **이제 의미 검수까지 가지 않는다** (2026-09-26 초안 게이트). 비혼 P08 이 QUESTION 자리에서
+   *    "저희 남편은" 을 말하면 **구조화된 사유 두 개**로 결정적으로 막힌다 — 유료 검수 요청 0.
+   *    앞판은 모델이 `lifeContradictions` 를 답해 줘야만 막혔다(운영 4편은 모델이 답하지 않았다).
+   */
+  const vCodes = violates.review.deterministic.failures.map((f) => f.code)
+  check('🔴 🔴 **낮춘 자리에서 자기 경험을 말하면 adopt 아님 — 의미 검수 전에 구조화된 사유로 막는다**',
     violates.review.machineOutcome === 'hold'
-    && violates.review.lifeContradictions[0]!.fact === 'spouse')
+    && vCodes.includes('unwarrantedSelfClaim') && vCodes.includes('lifeStageTenseConflict')
+    && violates.review.semanticCompletion.cause === 'deterministicFailed'
+    && sentOf('semanticReview').length === 0,
+    `${violates.review.machineOutcome} · ${vCodes.join(',')} · 검수 요청 ${sentOf('semanticReview').length}`)
 
   const modelHold = await run({ id: SRC.A.id, title: SRC.A.title, body: SRC.A.body,
     personas: [single], canned: { plan: { decision: 'hold', holdReason: '쓸 사람이 없다' }, draft: DRAFT } })
