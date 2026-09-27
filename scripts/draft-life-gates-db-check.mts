@@ -138,6 +138,14 @@ async function main(): Promise<void> {
   check(`큐 행 수 = 대조군 수 (${FIXTURES.filter((f) => f.expect.length === 0).length})`, rows.length === FIXTURES.filter((f) => f.expect.length === 0).length, `${rows.length}행`)
   check('🔴 공급은 발행하지 않는다 — Post 0', (await prisma.post.count()) === 0)
 
+  /**
+   * 🔴 **적재 재시도 · 이월** (2026-09-27) — 같은 실제 적재기 경로다. 새 npm 명령 · 새 step 없이 여기서 함께 돈다.
+   *    DB 끊김 → 재시도 → 정확히 한 번 · 다시 돌려도 중복 0 · 이월 상한 · 옛 계약 파일 0행.
+   *    같은 격리 DB 를 스스로 비우고 쓴다(Prisma deleteMany).
+   */
+  const { runFillRetryDbScenarios } = await import('./supply-fill-retry-db-check.mjs')
+  await runFillRetryDbScenarios(check, prisma)
+
   await prisma.$disconnect()
   rmSync(T, { recursive: true, force: true })
   rmSync(H, { recursive: true, force: true })

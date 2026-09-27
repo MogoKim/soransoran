@@ -23,6 +23,10 @@
  *   npx tsx scripts/micro-seed-supply-autofill.mts                    ← dry-run
  *   npx tsx scripts/micro-seed-supply-autofill.mts --apply --limit=3  ← 실제 보충
  *   npx tsx scripts/micro-seed-supply-autofill.mts --input=<path>     ← 후보 파일 지정
+ *   npx tsx scripts/micro-seed-supply-autofill.mts --input=<a>,<b>    ← 여러 파일 (공급 러너의 이월)
+ *
+ * 🔴 끝에 `FILL_REPORT {json}` 한 줄을 찍는다 — 파일별 적재·제외(코드)·상한 컷.
+ *    공급 러너가 그 줄로 "그 파일을 끝냈는가" 를 기록한다(`src/lib/supply-fill-retry`).
  */
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -38,6 +42,7 @@ import {
   buildQueuePayload, queueProfileOf, machineProfileMismatch, isOurSite,
   type Envelope, type AutoJudgeProvenance,
 } from '../src/lib/micro-seed-supply-autofill'
+import { FILL_REPORT_PREFIX, type FillReport, type FillReportFile, type FillSkipCode } from '../src/lib/supply-fill-retry'
 // 🔴 적재 직전 재검증 — 새 판정을 만들지 않고 §4-AS 의 함수를 그대로 쓴다
 import { echoesTitleAtEnd, hasBannedWord } from '../src/lib/micro-seed-auto-draft'
 /** 🔴 독창성 정본 — 생성 · 적재 · 여기가 같은 함수를 쓴다 */
@@ -94,6 +99,37 @@ function latestOfEach(dir: string): string[] {
 const envMap = new WeakMap<object, Envelope>()
 const ajMap = new WeakMap<object, AutoJudgeProvenance>()
 function envelopeOf(c: Candidate): Envelope { return envMap.get(c as object) ?? {} }
+/** 후보마다 어느 파일에서 왔는지 — 🔴 보고서가 파일별로 센다 */
+const fileMap = new WeakMap<object, string>()
+
+/**
+ * 🔴 **파일별 결과 한 줄** — 공급 러너가 이것으로 "그 파일을 끝냈는가" 를 기록한다.
+ *    `cut` 은 관문은 지났지만 상한 때문에 이번에 넣지 못한 수다. 0 이 아니면 그 파일은 안 끝났다.
+ */
+function fillReport(input: {
+  files: readonly { name: string; candidates: number }[]
+  skipped: readonly { c: Candidate; code: FillSkipCode }[]
+  loaded: readonly Candidate[]
+  cut: readonly Candidate[]
+  applied: boolean
+}): FillReport {
+  const byName = new Map<string, FillReportFile>(input.files.map((f) => [f.name, {
+    name: f.name, candidates: f.candidates, loaded: 0, skipped: {}, cut: 0,
+  }]))
+  const total: Partial<Record<FillSkipCode, number>> = {}
+  const fileOf = (c: Candidate): FillReportFile | undefined => byName.get(fileMap.get(c as object) ?? '')
+  for (const s of input.skipped) {
+    total[s.code] = (total[s.code] ?? 0) + 1
+    const f = fileOf(s.c)
+    if (f !== undefined) f.skipped[s.code] = (f.skipped[s.code] ?? 0) + 1
+  }
+  for (const c of input.loaded) { const f = fileOf(c); if (f !== undefined) f.loaded += 1 }
+  for (const c of input.cut) { const f = fileOf(c); if (f !== undefined) f.cut += 1 }
+  return {
+    applied: input.applied, loaded: input.loaded.length, cut: input.cut.length,
+    skipped: total, files: [...byName.values()],
+  }
+}
 function autoJudgeOf(c: Candidate): AutoJudgeProvenance { return ajMap.get(c as object) ?? {} }
 
 /**
@@ -192,19 +228,26 @@ async function main(): Promise<void> {
   const LIMITS = { warn: capD.stockWarn, min: capD.stockMin, target: capD.stockTarget }
   const BUFFER_TARGET = STOCK_BANDS.target
   const override = arg('input')
-  const inputPaths = override !== null ? [override] : latestOfEach(DATA_DIR)
+  // 🔴 쉼표로 여러 파일 — 공급 러너가 이번 회차 파일에 **끝내지 못한 앞 회차 파일**을 얹는다
+  const inputPaths = override !== null
+    ? override.split(',').map((x) => x.trim()).filter((x) => x !== '')
+    : latestOfEach(DATA_DIR)
   if (inputPaths.length === 0) fail(`${DATA_DIR} 에 후보 파일이 없습니다`)
   for (const p2 of inputPaths) if (!existsSync(p2)) fail(`후보 파일을 찾지 못했습니다: ${p2}`)
 
   // 🔴 파일을 합치되 **봉투를 잃지 않는다.** 후보마다 어느 봉투에서 왔는지 기억한다
   const candidates: Candidate[] = []
   const fileNote: string[] = []
+  const fileCounts: { name: string; candidates: number }[] = []
   for (const p2 of inputPaths) {
     const { envelope: env, candidates: rows } = readCandidateFile(p2)
     const isM = S(env.provenance) === MACHINE_PROFILE.envelopeProvenance
-    fileNote.push(`${p2.split('/').pop()} (${isM ? '기계' : '사람'} ${rows.length}건)`)
+    const fname = p2.split('/').pop() ?? p2
+    fileNote.push(`${fname} (${isM ? '기계' : '사람'} ${rows.length}건)`)
+    fileCounts.push({ name: fname, candidates: rows.length })
     for (const r of rows) {
       envMap.set(r as object, env)
+      fileMap.set(r as object, fname)
       // 🔴 후보에 실려 온 판정 출처를 이관한다 — 상수를 찍지 않는다
       const aj = (r as unknown as Record<string, unknown>).autoJudge
       if (aj !== null && typeof aj === 'object') ajMap.set(r as object, aj as AutoJudgeProvenance)
@@ -286,6 +329,8 @@ async function main(): Promise<void> {
   // 🔴 후보마다 자기 봉투로 판정한다 — 합친 뒤에도 어느 갈래인지 잃지 않는다
   const targets: Candidate[] = []
   const skipped: { title: string; code: string }[] = []
+  /** 🔴 보고서용 — 제목이 아니라 후보 자체를 잡아 둔다(파일별로 센다) */
+  const skippedC: { c: Candidate; code: FillSkipCode }[] = []
   const seenKeys = new Set(existing)
   const siblingSeen = [...queueForSibling]
   for (const c of candidates) {
@@ -301,7 +346,10 @@ async function main(): Promise<void> {
         sourceArticleId: syntheticArticleId(S(c.sourceArticleId), S(c.title)),
         status: 'APPROVED', createdPostId: null,
       })
-    } else if (r.skipped[0] !== undefined) skipped.push(r.skipped[0])
+    } else if (r.skipped[0] !== undefined) {
+      skipped.push(r.skipped[0])
+      skippedC.push({ c, code: r.skipped[0].code })
+    }
   }
   console.log(`\n② 파일 ${candidates.length}건 → 보충 후보 ${targets.length}건`)
   for (const t of targets) {
@@ -360,6 +408,10 @@ async function main(): Promise<void> {
   const gate = judgeApply({ targets, apply: APPLY, limit: LIMIT, upTo: UP_TO, usable: stock.usable, target: BUFFER_TARGET })
   if (!gate.ok) {
     console.log(`\n④ 보충하지 않는다 — ${gate.reason}`)
+    // 🔴 관문을 지난 후보가 있었는데 넣지 않았으면 전부 `cut` 이다 — 끝낸 것이 아니다
+    console.log(`${FILL_REPORT_PREFIX}${JSON.stringify(fillReport({
+      files: fileCounts, skipped: skippedC, loaded: [], cut: targets, applied: APPLY,
+    }))}`)
     if (!APPLY) {
       console.log('   🟡 dry-run 입니다. DB write 0 · Post 0'
         + ' · 실행하려면 --apply 와 --limit=N(정확히) 또는 --up-to=N(상한까지) 을 붙이세요.')
@@ -377,6 +429,7 @@ async function main(): Promise<void> {
   }
   console.log(`\n⑤ 🔴 보충 ${gate.take.length}건 (${UP_TO !== null ? `--up-to ${UP_TO} · 상한까지` : `--limit ${LIMIT} · 정확히`})`)
   let done = 0
+  const loadedC: Candidate[] = []
   for (const c of gate.take) {
     const title = S(c.title)
     const body = S(c.body)
@@ -385,6 +438,7 @@ async function main(): Promise<void> {
     const bad = recheck(title, body, c.originality)
     if (bad.length > 0) {
       console.log(`   ⏭ 건너뜀 ${title.slice(0, 20)} — ${bad.join(' · ')}`)
+      skippedC.push({ c, code: 'RECHECK' })
       continue
     }
     // 🔴 큐에 넣을 값을 순수 함수가 만든다 — 러너가 접두를 붙이다 P0 를 냈다
@@ -394,6 +448,7 @@ async function main(): Promise<void> {
     })
     if (payload === null) {
       console.log(`   ⏭ 건너뜀 ${title.slice(0, 20)} — profile 이 어긋나 payload 를 만들지 않는다`)
+      skippedC.push({ c, code: 'PAYLOAD' })
       continue
     }
     // 🔴 건별 트랜잭션. 한 건이 걸려도 나머지가 통째로 사라지지 않는다 (enqueue 와 같은 원칙)
@@ -430,6 +485,7 @@ async function main(): Promise<void> {
       return { rawId: raw.id, queueId: q.id, status: q.status }
     })
     done += 1
+    loadedC.push(c)
     console.log(`   ✅ queue=${res.queueId} · ${res.status}  ${title.slice(0, 24)}`)
   }
 
@@ -458,6 +514,12 @@ async function main(): Promise<void> {
   })))
   console.log(`   형식 행 ${stock.usable} → ${stockAfter.usable}건 (버퍼 목표 ${BUFFER_TARGET}) — 🔴 발행 가능 재고가 아니다`)
   console.log('\n   🔴 발행하지 않았다. 다음 발행은 auto-publish 러너가 스케줄에 따라 한다.\n')
+  // 🔴 상한 때문에 이번에 못 넣은 것 — `take` 밖의 관문 통과 후보
+  const takenSet = new Set<object>(gate.take as object[])
+  console.log(`${FILL_REPORT_PREFIX}${JSON.stringify(fillReport({
+    files: fileCounts, skipped: skippedC, loaded: loadedC,
+    cut: targets.filter((c) => !takenSet.has(c as object)), applied: true,
+  }))}`)
   await prisma.$disconnect()
   process.exit(v.ok ? 0 : 1)
 }

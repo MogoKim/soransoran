@@ -41,6 +41,8 @@ import { BOARD_TARGETS, pagesOf } from './lib/micro-seed-navercafe.mjs'
 import { MAX_REQUESTS_PER_DAY, RUNS_PER_DAY, THIN_82COOK_RUNS_PER_DAY, thin82cookCapPerRun } from '../src/lib/collect-schedule'
 /** 🔴 운영 job 정본 — 여기에 label 을 다시 적지 않는다 */
 import { RETIRED_JOBS, RUNTIME_JOBS } from '../src/lib/runtime-isolation'
+/** 🔴 적재 재시도 · 이월 (2026-09-27) — 새 npm 명령 · 새 step 없이 이 검사가 함께 돈다 */
+import { runFillRetryChecks } from './supply-fill-retry-check.mjs'
 
 /** 🔴 큐 스냅샷이 준비된 상태 — 기존 기대(draft 계획됨)를 그대로 본다 */
 const GATE_READY = { kind: 'ready', snapshotPath: '.microseed-data/snap.json', runId: 'R1' } as const
@@ -1383,6 +1385,8 @@ console.log('\n⑧ 🔴 데이터 디렉터리 이름은 정본 하나다')
   check('🔴 [FC] 보류 사유에 "다음 회차가 다시 집는다" 를 남긴다',
     r2.outcomes.some((o) => o.stage === 'draft' && /다음 회차가 다시 집는다/.test(o.note)))
 }
+
+await runFillRetryChecks((n, ok) => { check(n, ok) })
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail\n`)
 process.exit(fail === 0 ? 0 : 1)
