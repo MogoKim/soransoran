@@ -102,10 +102,19 @@ const FIRST_PERSON_ACTOR_RE = /제가|내가|저는|나는|나도|저도/
 const MENOPAUSE_RE = /갱년기|폐경|호르몬|열이 확|안면홍조/g
 
 /** 글에 나온 말 → 자녀 나이대 밴드 */
+/**
+ * 🔴 **학년 표기(`초1` · `중2`)와 밴드 이름(`중고등`)도 읽는다** (2026-09-26 실측).
+ *    P14 초안 *"남편이 육아휴직 쓰고 초1 아이를 돌보기로"* 의 `초1` 을 읽지 못해
+ *    성인 자녀 Persona 의 **지금 집안**에 초등 아이가 들어갔는데도 모순이 0 이었다.
+ *    `고1~고3` 은 이미 읽고 있었다 — 같은 모양의 초·중 학년을 빼 둘 이유가 없다.
+ *    🔴 앞이 한글이면 학년이 아니다(`최초1` 류) — 뒤에 숫자가 이어져도 아니다.
+ *    `중고등` 을 `고등학생` 보다 **먼저** 둔다 — `중고등학생` 이 밴드 이름으로 잡혀야
+ *    "지금 밴드를 미래로 말했다" 를 가를 수 있다(`draft-life-gates`).
+ */
 const CHILD_AGE_TOKENS: { re: RegExp; band: ChildAgeBand }[] = [
   { re: /어린이집|유치원|기저귀/g, band: '영유아' },
-  { re: /초등|초딩/g, band: '초등' },
-  { re: /중학생|중딩|고등학생|고딩|고1|고2|고3|수능|야자|입시/g, band: '중고등' },
+  { re: /초등|초딩|(?<![가-힣])초[1-6](?![0-9])/g, band: '초등' },
+  { re: /중고등|중학생|중딩|(?<![가-힣])중[1-3](?![0-9])|고등학생|고딩|고1|고2|고3|수능|야자|입시/g, band: '중고등' },
   { re: /대학생|대학교|복학|취준|재수|스무살|스물|신입생/g, band: '대학·취준' },
   { re: /서른|시집|장가|결혼시키|사위|며느리 볼|손주/g, band: '성인' },
 ]
@@ -226,7 +235,16 @@ const TOPIC_WORD_RES: readonly RegExp[] = [
  * 🔴 소재 바로 앞 어절들을 훑어 **임자**를 가린다.
  *    소재어가 이어지면 건너뛴다 — `요양` 앞의 `치매라` 는 임자가 아니다.
  */
-const ownerOfPrefix = (before: string): MentionOwner => {
+/**
+ * 🔴 **화제 틀 어절 판정은 부르는 쪽이 준다** (초안 게이트 전용 · 2026-09-26 마스터 재검토).
+ *    `지금은 남편이` 의 `지금은` 은 장면을 여는 화제이지 남편의 임자가 아니고,
+ *    `친구는 남편이` 의 `친구는` 은 임자다. 모양(`X은/는`)이 같아 **이 모듈은 가르지 않는다** —
+ *    이 모듈에는 사람 명사 목록이 없어야 한다(매칭 fixture 가 강제). 판정은 초안 게이트가
+ *    기존 정본으로 만들어 넘긴다. 넘기지 않으면(매칭 경로) 기존 규칙 그대로다.
+ */
+export type FrameWordJudge = (word: string) => boolean
+
+const ownerOfPrefix = (before: string, isFrame?: FrameWordJudge): MentionOwner => {
   const words = before.trim().split(/\s+/).filter((w) => w !== '')
   for (let k = words.length - 1; k >= 0; k -= 1) {
     const w = words[k]!
@@ -234,6 +252,8 @@ const ownerOfPrefix = (before: string): MentionOwner => {
     // 소재어 · 부사구는 임자가 아니다 — 한 칸 더 앞을 본다
     if (TOPIC_WORD_RES.some((re) => has(w, re)) || CARE_STATE_RE.test(w) || CARE_ACT_RE.test(w)) continue
     if (ADVERBIAL_RE.test(w)) continue
+    // 🔴 초안 게이트만 — 장면을 여는 화제 틀(`지금은`)은 임자가 아니다
+    if (isFrame !== undefined && isFrame(w)) continue
     // 🔴 **누군가가 앞에 서 있다.** 누구인지 알 필요 없이 이미 모호하다
     return 'unknown'
   }
@@ -248,18 +268,28 @@ const ownerOfPrefix = (before: string): MentionOwner => {
  *    **생략된 1인칭만** 덮는다 — `우리 남편` 처럼 **명시된 자기 근거**는 덮지 못한다.
  *    `다들 그렇겠지만 우리 남편이 어제도 늦게 들어왔어요` 는 내 이야기다.
  */
-const ownsInClause = (clause: string, re: RegExp, general: boolean): boolean => {
+/**
+ * 🔴 **임자를 값으로 돌려준다** (2026-09-26). `ownsInClause` 는 이것의 얇은 소비자다 —
+ *    초안 게이트가 "명시된 내 것" 만 세야 하는 축(일·자산)을 가르려면 둘을 구분해야 한다.
+ *    판정 규칙은 그대로다: 명시된 근거가 하나라도 있으면 `explicit`, 없고 생략된 1인칭이면 `elided`.
+ */
+const ownerInClause = (
+  clause: string, re: RegExp, general: boolean, isFrame?: FrameWordJudge,
+): 'explicit' | 'elided' | null => {
+  let elided = false
   for (const m of clause.matchAll(new RegExp(re.source, 'g'))) {
     // ① 소재 낱말 자체가 내 것 — 세상 이야기 틀보다 세다
-    if (SELF_OWNED_RE.test(m[0]) || SELF_LEADING_RE.test(m[0])) return true
-    const owner = ownerOfPrefix(clause.slice(0, m.index ?? 0))
+    if (SELF_OWNED_RE.test(m[0]) || SELF_LEADING_RE.test(m[0])) return 'explicit'
+    const owner = ownerOfPrefix(clause.slice(0, m.index ?? 0), isFrame)
     // ② 바로 앞 어절이 1인칭 — 이것도 명시된 근거다
-    if (owner === 'self-explicit') return true
+    if (owner === 'self-explicit') return 'explicit'
     // ③ 생략된 1인칭 — 세상 이야기 틀 안에서는 세우지 않는다
-    if (owner === 'self-elided' && !general) return true
+    if (owner === 'self-elided' && !general) elided = true
   }
-  return false
+  return elided ? 'elided' : null
 }
+const ownsInClause = (clause: string, re: RegExp, general: boolean): boolean =>
+  ownerInClause(clause, re, general) !== null
 
 /** 🔴 판정만 한다. 원문도 초안도 저장하지 않는다 */
 export function readPostRequirements(title: string, body: string): PostRequirements {
@@ -308,6 +338,233 @@ export function readPostRequirements(title: string, body: string): PostRequireme
     needsCurrentSpouse, needsChildren, needsChildAgeBands,
     needsParentCare, needsMenopauseExperience, labels,
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// ①-b 🔴 **다 쓴 초안이 글쓴이 자신의 일로 말한 것** (2026-09-26)
+// ─────────────────────────────────────────────────────────
+//
+// `readPostRequirements` 는 참/거짓만 돌려준다. 초안 게이트(`content-core/draft-life-gates`)는
+// **어느 절이 무엇을 주장했는지**와 **그 절이 미래·과거로 말하는지**를 봐야 한다.
+// 🔴 새 extractor 를 만들지 않는다 — 같은 문장·절 경계 · 같은 임자 규칙(`ownerInClause`) ·
+//    같은 세상 이야기 틀을 그대로 돈다. 규칙이 두 벌이 되면 한쪽이 낡는다.
+
+/** 🔴 원문이 1인칭 자격으로 부르지 않았는데 초안이 자기 일로 말하면 막을 축 */
+export const SELF_CLAIM_AXES = [
+  'spouse', 'children', 'parents', 'parentCare', 'menopause', 'work', 'assets',
+] as const
+export type SelfClaimAxis = (typeof SELF_CLAIM_AXES)[number]
+
+/**
+ * 🔴 부모 **존재·사정** — 돌봄(`CARE_*`)과 다르다. `부모님이 은퇴하셨는데` 는 돌봄 행위가 아니지만
+ *    글쓴이 집안의 사실이다(P02 실측). 낱말은 `RELATION_NAMES` 의 부모·시가 쪽 그대로다.
+ *    🔴 `엄마` · `아빠` 는 넣지 않는다 — 글쓴이 자신이 `엄마` 다(`엄마 음식이 제일 맛있다고`).
+ */
+const PARENTS_RE = /부모님|친정|시댁|시부모|시어머니|시아버지/g
+/**
+ * 🔴 일 · 자산은 **명시된 내 것**(`제 직장` · `저희 아파트`)만 센다.
+ *    생략된 1인칭으로 세면 `회사 일이 바빠서` 가 누구 회사인지 모르는 채로 막힌다 —
+ *    과차단은 곧 공급 0 이다.
+ */
+const WORK_RE = /직장|회사|알바|출근|퇴근|근무/g
+const ASSET_RE = /아파트|전세|월세|대출|재산|자산|현금|연금|주식|적금/g
+
+const EXPLICIT_ONLY_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['work', 'assets'])
+
+/**
+ * 🔴 **생략된 1인칭은 "그 사람이 무엇을 했다" 일 때만 주장이다** (2026-09-26 실측).
+ *
+ *    `readPostRequirements` 는 관문이 아니라 매칭 우선권용이라 생략된 1인칭을 넓게 받는다.
+ *    초안을 **막는** 데 그대로 쓰면 P07 *"아들 낳았다고 하면 … 시선"* · *"딸도 딸 나름이고"* 같은
+ *    일반론이 "내 자녀" 로 막혔다(운영 초안 10편 중 1편 과차단).
+ *    🔴 그래서 생략된 1인칭은 소재 낱말이 **주어·화제·함께하는 사람 자리**(`남편이` ·
+ *       `부모님은` · `애들이랑` · `남편하고도`)에 설 때만 센다. 명시된 1인칭(`우리 딸`)은 그대로다.
+ *    낱말이 아니라 **조사**를 본다 — `ADVERBIAL_RE` 와 같은 방식이라 목록이 자라지 않는다.
+ */
+const SUBJECT_PARTICLE_RE = /^(?:이랑|이|가|은|는|께서|하고|랑|과|와)(?:도|는)?(?![가-힣])/
+
+/**
+ * 🔴 **초안을 막는 쪽의 임자 판정** — `ownerInClause` 보다 좁다. 넓은 판정은 매칭 우선권용이다.
+ *    · 세상 이야기 틀(`?` · `다들` …) 안에서는 **1인칭 낱말이 절에 있어야** 센다.
+ *      P18 *"친정엄마나 시어머니랑 매일 통화하시나요?"* 는 읽는 사람의 친정이다 —
+ *      `친정` 이 낱말 자체로 '내 것' 이라는 매칭 규칙을 여기 그대로 쓰면 막힌다(실측).
+ *    · 소재 낱말 자체의 '내 것' 표시(`친정`)로 곧장 세지 않는다 — **앞 어절**로만 가른다.
+ *      *"딸들은 친정엄마랑 가까이 살아도"* 의 친정은 딸들의 것이다.
+ *    · 생략된 1인칭은 소재 낱말이 주어·화제·함께하는 자리일 때만 센다(위 조사).
+ */
+const claimOwnerInClause = (
+  clause: string, re: RegExp, general: boolean, isFrame?: FrameWordJudge,
+): 'explicit' | 'elided' | null => {
+  if (general && !clause.trim().split(/\s+/).some((w) => SELF_WORD_RE.test(w))) return null
+  let elided = false
+  for (const m of clause.matchAll(new RegExp(re.source, 'g'))) {
+    if (SELF_LEADING_RE.test(m[0])) return 'explicit'
+    const at = m.index ?? 0
+    const owner = ownerOfPrefix(clause.slice(0, at), isFrame)
+    if (owner === 'self-explicit') return 'explicit'
+    if (owner === 'self-elided' && !general
+      && SUBJECT_PARTICLE_RE.test(clause.slice(at + m[0].length))) elided = true
+  }
+  return elided ? 'elided' : null
+}
+
+export type SelfClaim = {
+  axis: SelfClaimAxis
+  /** 🔴 초안에 **실제로 있는** 절 — 근거 없는 판정을 내지 않는다 */
+  clause: string
+  owner: 'explicit' | 'elided'
+}
+
+/**
+ * 🔴 **절 머리의 주어가 누구인가** (2026-09-26 마스터 재검토 · 과차단 반례).
+ *
+ *    `친구 남편이 육아휴직 쓰고 초1 아이를 돌봐요` 는 절 경계(`쓰고`)에서 잘리면 뒤 절
+ *    `초1 아이를 돌봐요` 가 **주어 없는 절**이 되고, 생략된 1인칭 규칙이 그것을 글쓴이 아이로 읽었다.
+ *    한국어 `-고` 이음은 앞 절의 주어를 뒤 절로 넘긴다 — 그래서 **앞 절 주어의 임자**를 들고 간다.
+ *
+ *    🔴 사람 명사 목록을 쓰지 않는다. 구조만 본다:
+ *      · 절 머리 세 어절 안에서 **주격·화제 조사**로 끝나는 첫 어절이 주어다
+ *      · 그 주어가 1인칭 낱말(`제가` · `저는` …)이면 → 글쓴이
+ *      · 그 주어가 소재어(`남편이` · `애들이`)면 → 그 앞 어절로 임자를 가린다(`ownerOfPrefix`)
+ *        — 비었거나 1인칭이면 글쓴이, **누군가 앞에 서 있으면**(`친구 남편이`) 남
+ *      · 그 밖의 명사가 주어면(`동료가` · `언니가`) → 남. 누구인지 알 필요가 없다
+ *    🔴 **주어가 없는 절만** 앞 절의 값을 이어 받는다. 문장 첫 절에 주어가 없으면 `null` — 생략된 1인칭 규칙 그대로다.
+ */
+type Carry = 'self' | 'other' | null
+const CLAUSE_SUBJECT_RE = /(?:께서|이|가|은|는)(?:도|만)?$/
+/** 🔴 절 머리 창 — 주어를 찾는 범위. 이 밖의 어절은 주어로 보지 않는다 */
+const HEAD_WINDOW = 4
+const subjectOwnerOf = (clause: string, isFrame?: FrameWordJudge): Carry => {
+  const words = clause.trim().split(/\s+/).filter((w) => w !== '')
+  /**
+   * 🔴 **첫 조사 어절에서 멈추지 않는다** (2026-09-26 마스터 재검토 · fail-open).
+   *    앞판은 `지금은 남편이 …` 의 `지금은` 을 곧장 "남" 주어로 확정해 뒤의 진짜 주어
+   *    `남편이` 를 보지 못했다 — 글쓴이 남편의 초1 아이가 두 게이트를 모두 지나갔다.
+   *    창 전체를 훑고 **1인칭 낱말 · 소재어 주어**를 먼저 쓴다. 일반 명사 주어는 **후보로만**
+   *    들고 있다가, 창 끝까지 더 구체적인 주어가 없을 때만 "남" 으로 정한다.
+   */
+  let generic: Carry = null
+  for (let k = 0; k < Math.min(HEAD_WINDOW, words.length); k += 1) {
+    const w = words[k]!
+    if (SELF_WORD_RE.test(w)) return 'self'
+    if (ADVERBIAL_RE.test(w) || !CLAUSE_SUBJECT_RE.test(w) || w.length < 2) continue
+    if (TOPIC_WORD_RES.some((re) => has(w, re))) {
+      // 🔴 임자는 기존 경로(`ownerOfPrefix`)로 — 화제 틀(`지금은`)은 건너뛰고, `친구는` 은 임자로 남는다
+      const o = ownerOfPrefix(words.slice(0, k).join(' '), isFrame)
+      return o === 'unknown' ? 'other' : 'self'
+    }
+    // 🔴 소재어도 1인칭도 아닌 주어 — **후보**다. 뒤에 소재어 주어가 오면 그쪽이 이긴다
+    if (generic === null) generic = 'other'
+  }
+  return generic
+}
+
+/**
+ * 🔴 **들고 온 주어가 남이면 생략된 1인칭을 세우지 않는다.**
+ *    명시된 1인칭(`우리 애`)은 들고 온 주어보다 세다 — 그 절이 스스로 임자를 밝혔다.
+ */
+const withCarry = <T extends 'explicit' | 'elided' | null>(owner: T, carry: Carry): T | null =>
+  owner === 'elided' && carry === 'other' ? null : owner
+
+/** 한 문장 → (절, 세상 이야기 틀인가, 이어 받은 주어) — `readPostRequirements` 와 같은 경계다 */
+function* clausesOf(
+  title: string, body: string, isFrame?: FrameWordJudge,
+): Generator<{ clause: string; general: boolean; carry: Carry }> {
+  for (const sentence of `${title}\n${body}`.split(SENTENCE_SPLIT_RE)) {
+    if (sentence.trim() === '') continue
+    const general = GENERAL_FRAME_RE.test(sentence) || ASKING_RE.test(sentence.trim())
+    // 🔴 문장이 바뀌면 들고 온 주어를 놓는다 — 문장을 넘어 이어 받지 않는다
+    let carry: Carry = null
+    for (const clause of sentence.split(CLAUSE_SPLIT_RE)) {
+      if (clause.trim() === '') continue
+      const own = subjectOwnerOf(clause, isFrame)
+      /**
+       * 🔴 **주어를 밝힌 절에는 이어 받은 값을 씌우지 않는다** — 그 절의 임자는 기존 규칙
+       *    (`ownerOfPrefix`)이 가린다. `부모님이 은퇴하셨는데` 의 부모님을 "남" 으로 지우지 않는다.
+       *    주어 없는 절만 앞 절 주어를 이어 받는다.
+       */
+      yield { clause, general, carry: own === null ? carry : null }
+      carry = own ?? carry
+    }
+  }
+}
+
+/**
+ * 🔴 **초안이 글쓴이 자신의 생활사로 말한 절.** 판정은 하지 않는다 — 무엇을 막을지는
+ *    부르는 쪽이 계획(`selfBasis` · `warrants`)과 카드를 보고 정한다.
+ */
+export function readSelfClaims(
+  title: string, body: string, opts: { isFrameWord?: FrameWordJudge } = {},
+): SelfClaim[] {
+  const isFrame = opts.isFrameWord
+  const out: SelfClaim[] = []
+  const axisRes: { axis: SelfClaimAxis; re: RegExp; strip?: RegExp }[] = [
+    // 🔴 전남편은 현재형 배우자가 아니다 — `readPostRequirements` 와 같이 먼저 지운다
+    { axis: 'spouse', re: SPOUSE_RE, strip: EX_SPOUSE_RE },
+    { axis: 'parents', re: PARENTS_RE },
+    { axis: 'menopause', re: MENOPAUSE_RE },
+    { axis: 'work', re: WORK_RE },
+    { axis: 'assets', re: ASSET_RE },
+  ]
+  for (const { clause, general, carry } of clausesOf(title, body, isFrame)) {
+    for (const a of axisRes) {
+      const c = a.strip === undefined ? clause : clause.replace(a.strip, ' ')
+      const owner = withCarry(claimOwnerInClause(c, a.re, general, isFrame), carry)
+      if (owner === null) continue
+      if (EXPLICIT_ONLY_AXES.has(a.axis) && owner !== 'explicit') continue
+      out.push({ axis: a.axis, clause: clause.trim(), owner })
+    }
+    /**
+     * 🔴 돌봄 — **행위**(`병간호`)는 행위자를 본다(정본과 같다). 상태(`치매`)는 대상 쪽 말이라
+     *    생략된 1인칭 조사 규칙이 맞지 않는다 — 명시된 1인칭(`우리 엄마 치매`)만 센다.
+     */
+    const careState = claimOwnerInClause(clause, CARE_STATE_RE, general, isFrame)
+    const care = (careState === 'explicit' ? careState : null)
+      ?? withCarry(claimOwnerInClause(clause, CARE_ACT_RE, general, isFrame), carry)
+    if (care !== null) out.push({ axis: 'parentCare', clause: clause.trim(), owner: care })
+    /**
+     * 🔴 자녀 — 자녀 낱말의 임자만 본다. 나이대 낱말(`초1`)만 있는 절은 여기서 세지 않는다 —
+     *    그것은 `readSelfChildBands` 가 카드와 견준다.
+     */
+    const kid = withCarry(claimOwnerInClause(clause, CHILDREN_RE, general, isFrame), carry)
+    if (kid !== null) out.push({ axis: 'children', clause: clause.trim(), owner: kid })
+  }
+  return out
+}
+
+export type SelfChildBandMention = {
+  band: ChildAgeBand
+  /** 🔴 절에서 실제로 잡힌 낱말 — 밴드 이름 자체(`중고등`)인지 학년(`고3`)인지 가른다 */
+  token: string
+  clause: string
+  /** 🔴 임자를 어떻게 알았나 — 명시된 1인칭(`우리 사위`)인지 생략된 1인칭인지 */
+  owner: 'explicit' | 'elided'
+}
+
+/**
+ * 🔴 **글쓴이 자기 아이의 나이대를 말한 절** — `readPostRequirements` 의 밴드 규칙 그대로다
+ *    (같은 절 안에서만 잇는다 · 자녀 낱말이 있으면 그 자녀가 내 아이일 때만).
+ *    미래·과거로 말하는지는 여기서 정하지 않는다 — 절을 돌려주고 부르는 쪽이 본다.
+ */
+export function readSelfChildBands(
+  title: string, body: string, opts: { isFrameWord?: FrameWordJudge } = {},
+): SelfChildBandMention[] {
+  const isFrame = opts.isFrameWord
+  const out: SelfChildBandMention[] = []
+  for (const { clause, general, carry } of clausesOf(title, body, isFrame)) {
+    const mentionsChild = has(clause, CHILDREN_RE)
+    // 🔴 앞 절에서 이어 받은 주어가 남이면 주어 없는 절의 아이는 그 사람 아이다(`친구 남편이 … 쓰고 초1 아이를`)
+    const childOwner = withCarry(ownerInClause(clause, CHILDREN_RE, general, isFrame), carry)
+    for (const x of CHILD_AGE_TOKENS) {
+      if (!has(clause, x.re)) continue
+      const owner = mentionsChild ? childOwner : withCarry(ownerInClause(clause, x.re, general, isFrame), carry)
+      if (owner === null) continue
+      for (const m of clause.matchAll(new RegExp(x.re.source, 'g'))) {
+        out.push({ band: x.band, token: m[0], clause: clause.trim(), owner })
+      }
+    }
+  }
+  return out
 }
 
 // ─────────────────────────────────────────────────────────

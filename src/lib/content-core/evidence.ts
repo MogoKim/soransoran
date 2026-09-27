@@ -94,6 +94,75 @@ const NEEDS_LINK_RE = /\[링크\][^.!?\n]{0,12}?(?:보시고|보세요|확인|�
 /** 🔴 앞 글을 **명시적으로 가리킬 때만** — `이어서` 같은 흔한 말은 세지 않는다 */
 const NEEDS_PRIOR_RE = /지난\s*(?:글|번\s*글)|앞\s*글|이전\s*글|전에\s*쓴\s*글|앞\s*글에\s*이어/
 
+// ─────────────────────────────────────────────────────────
+// 🔴 **초안 쪽 자료 의존** (2026-09-26 P12 실측)
+//
+//   우리 글에는 **사진·첨부가 없다.** 기계 초안은 글자만 올라간다. 그런데 원문이 사진을
+//   붙인 글(*"전 아렇게 펌한뒤"*)이면 초안이 그 사진을 **있는 것처럼** 말한다:
+//     제목 *"예전에 했던 파마머리 생각나서 올려봐요"*
+//     본문 *"이런 스타일 잘 소화하시는 분들도 계실까요?"*
+//   읽는 사람은 "무엇을 올렸다는 거지? 어떤 스타일?" 에서 멈춘다 — 댓글이 나올 자리가 없다.
+//
+//   🔴 **같은 자료 사전(`VISUAL` · `ASK_TO_SEE_RE`)을 쓴다.** 원천 쪽 판정과 두 벌이 되면
+//      한쪽이 낡는다. 원천 쪽 carve-out 도 그대로다 —
+//      *"이 사진 정리하다 울었어요"* 는 **올리는 동작이 없으므로** 완결된 글이다.
+//   🔴 **두 조건이 함께 있을 때만** 막는다(보수적). 하나만으로는 모호하다:
+//      · `올려봐요` 만 — *"궁금해서 올려봐요"* 는 글을 올린다는 뜻일 수 있다
+//      · `이런 스타일` 만 — 앞 문장이 글로 설명한 스타일을 받을 수 있다
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 **올리는 동작** — 사진을 붙일 때의 말. 목적어가 글이면 자료가 아니다(아래 `TEXT_OBJECT_RE`) */
+const PRESENT_VERB_RE =
+  /올려\s*(?:봐요|봅니다|볼게요|봐용|드려요|드립니다|드릴게요|요)|올립니다|첨부\s*(?:해요|합니다|했어요|했습니다)|보여\s*드(?:려요|릴게요|립니다)/
+/** 🔴 올리는 것이 **글**이다 — `글 올려봐요` · `질문 올립니다` 는 자료 의존이 아니다 */
+const TEXT_OBJECT_RE = /글|질문|얘기|이야기|사연|고민|하소연|푸념|후기|사정/
+/**
+ * 🔴 **눈으로 봐야 하는 것을 가리키는 지시어** — `이런 스타일` · `요런 머리` · `이 모습`.
+ *    `이런 경우` · `이런 일` 은 글이 가리킬 수 있으므로 여기 없다.
+ *    🔴 지시어는 **어절 머리**여야 한다 — `딸아이 머리` 의 `이` 는 지시어가 아니다.
+ *    🔴 `저` 는 넣지 않는다 — `저 머리 잘랐어요` 의 `저` 는 글쓴이 자신이다.
+ */
+const DEICTIC_VISUAL_RE = new RegExp(
+  `(?<![가-힣])(?:이런|요런|저런|이|요)\\s*(?:${VISUAL}|스타일|머리|헤어|모습|옷|코디|색깔|색상|디자인|모양)`,
+)
+
+export const MEDIA_DEPENDENCY_KINDS = ['askToSee', 'presentsVisual', 'deicticPresentation'] as const
+export type MediaDependencyKind = (typeof MEDIA_DEPENDENCY_KINDS)[number]
+
+export type MediaDependency = {
+  kind: MediaDependencyKind
+  /** 🔴 글에 **실제로 있는** 문장 — 근거 없이 막지 않는다 */
+  evidence: string
+}
+
+/** 문장 단위 — 마침표 없이 쓰는 글이 많아 줄바꿈도 경계다 */
+const sentencesOf = (t: string): string[] =>
+  t.split(/(?<=[.!?？。])\s+|\n+/).map((x) => x.trim()).filter((x) => x !== '')
+
+/**
+ * 🔴 **이 글이 우리 글에 없는 자료(사진·첨부)에 기대는가.** 초안 게이트가 부른다.
+ *    · `askToSee`   — 원천 쪽과 같은 규칙: 자료를 보고 답해 달라
+ *    · `presentsVisual` — 자료 낱말과 올리는 동작이 한 문장에 있다(`사진 올려봐요`)
+ *    · `deicticPresentation` — 목적어 없는 올리는 동작 + 눈으로 봐야 하는 지시어(`이런 스타일`)
+ *    못 찾으면 `null` 이다.
+ */
+export function readMediaDependency(text: string): MediaDependency | null {
+  const t = S(text)
+  const ss = sentencesOf(t)
+  const ask = ss.find((x) => ASK_TO_SEE_RE.test(x))
+  if (ask !== undefined) return { kind: 'askToSee', evidence: ask }
+  const visual = new RegExp(VISUAL)
+  const shown = ss.find((x) => PRESENT_VERB_RE.test(x) && visual.test(x))
+  if (shown !== undefined) return { kind: 'presentsVisual', evidence: shown }
+  // 🔴 올리는 것이 글이면 자료가 아니다 — 목적어가 비었을 때만 자료를 올린 것으로 본다
+  const bare = ss.find((x) => PRESENT_VERB_RE.test(x) && !TEXT_OBJECT_RE.test(x))
+  const deictic = ss.find((x) => DEICTIC_VISUAL_RE.test(x))
+  if (bare !== undefined && deictic !== undefined) {
+    return { kind: 'deicticPresentation', evidence: bare === deictic ? bare : `${bare} / ${deictic}` }
+  }
+  return null
+}
+
 /** 마무리를 보여 주는가 — 물음표 · 종결 어미 · 부르는 말 중 하나라도 */
 const CLOSING_RE = /[?？]|(?:요|다|죠|네요|까요|세요|군요|네|음)\s*[.!…]*\s*$/
 

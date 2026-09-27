@@ -1161,6 +1161,11 @@ async function main(): Promise<void> {
         // 🔴 생성이 쓴 그날 나이 — 그 값이면 우리가 넣은 것이라 자격을 다시 묻지 않는다
         personaExactAge: personaAgeOf(card),
       },
+      /**
+       * 🔴 **초안 게이트** (2026-09-26). 캐시 hit artifact 는 새 deterministic 을 거치지 않았다 —
+       *    채택 자리에서 계획과 정본 카드로 다시 건다. 카드를 못 찾으면 `null` 이다.
+       */
+      draftGate: { plan: art.plan ?? null, card: card ?? null },
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {

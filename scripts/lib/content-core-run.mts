@@ -41,6 +41,8 @@ import {
 import {
   selfForbiddenBy, priorFailureLines, type PriorPlanFailure,
 } from '../../src/lib/content-core/replan-input'
+/** 🔴 초안 게이트 — 자료 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제 (2026-09-26) */
+import { judgeDraftGates } from '../../src/lib/content-core/draft-life-gates'
 
 /** 🔴 KST 날짜 한 줄 — 주입된 시각에서만 만든다 */
 function kstDateKey(at: Date): string {
@@ -651,6 +653,15 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
     const sa = judgeSelfAgeConflict({ ageBand: persona.ageBand, text: draftText })
     if (sa !== null && sa.conflict) failures.push({ code: 'selfAgeConflict', detail: sa.evidence })
   }
+  /**
+   * 🔴 **초안이 우리 글·우리 화자와 맞는가** (2026-09-26 운영 초안 4편 실측).
+   *    넷 다 의미 검수가 `clean` 이라 답했다 — 원문과 견주는 검수는 "우리 글에 사진이 없다" ·
+   *    "계획이 1인칭을 허가하지 않았다" · "카드의 아이는 이미 중고등이다" 를 볼 자리가 없다.
+   *    🔴 계획과 **같은 dated 스냅샷의 정본 카드**로 본다. 유료 검수 요청 **앞**이다.
+   */
+  for (const g of judgeDraftGates({
+    title: draft.title, body: draft.body, plan, card: persona,
+  })) failures.push(g)
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {
     const stop = notRun('deterministicFailed')
