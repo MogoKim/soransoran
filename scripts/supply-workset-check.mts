@@ -19,7 +19,7 @@ import {
   WORKSET_VERSION, worksetFileName, type WorksetRow,
 } from '../src/lib/supply-workset'
 import {
-  ledgerRunIdOf, planBoundedCommonPhase, planCommonPhase, type Pending,
+  ledgerRunIdOf, planBoundedCommonPhase, planCarryOverFill, planCommonPhase, type Pending,
 } from '../src/lib/supply-process'
 import {
   AUTO_DECISIONS, holdBeforeAsking, mergeJudgeRows, PROVEN_LANES, SEED_AXIS,
@@ -924,8 +924,14 @@ console.log('\n⑨ 🔴 버퍼가 차 있거나 고를 것이 0건이면 정상 
     /if \(plan\.picked\.length === 0\) \{[\s\S]{0,140}worksetEmpty = true/.test(runner))
   check('🔴 🔴 **못 만든 회차만 실패다**',
     /} else \{[\s\S]{0,160}작업 묶음을 만들지 못했다[\s\S]{0,160}return 1/.test(runner))
-  check('🔴 묶음이 없으면 공통 단계 계획이 비어 있다',
-    /const common = workset === undefined\s*\n\s*\? \[\]/.test(runner))
+  /**
+   * 🔴 묶음이 없으면 **모델 단계가 없다** (2026-09-27 보정). 예외는 고를 원천이 0건인 회차의
+   *    **이월 적재(fill 하나)** 뿐이다 — 판정·초안은 여전히 0회다(`planCarryOverFill` 은 fill 만 낸다).
+   */
+  check('🔴 묶음이 없으면 공통 단계는 이월 fill 뿐이다 — judge·draft 0회',
+    /const common = workset === undefined\s*\n\s*\? \(worksetEmpty \? planCarryOverFill\(policy, carryPaths, WORKSET_LIMIT\) : \[\]\)/.test(runner)
+    && planCarryOverFill({ llm: true, fill: true, upTo: 9, reason: '' }, ['/d/a.candidates.json'], 5)
+      .every((p) => p.stage === 'fill' && !p.llm))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
