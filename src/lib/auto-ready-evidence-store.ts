@@ -28,6 +28,7 @@ import { withdrawOriginalPostInTx } from './original-post-withdrawal'
 import {
   parseReviewerKind, isHumanReviewer, LEGACY_DECISION_MARK, NON_HUMAN_IMPORTABLE, type ReviewerKind, type HumanReviewerKind,
 } from './review-provenance'
+import type { EvidenceRowState, MyReview } from './auto-ready-evidence-batch-plan'
 
 type Db = PrismaClient | Prisma.TransactionClient
 
@@ -298,6 +299,33 @@ export type HumanBatchResult = { queueId: string; result: 'recorded' | 'decidedA
 class Abort extends Error {}
 
 /**
+ * 🔴 **같은 사람 · 같은 묶음 · 같은 판정의 재제출인가** (2026-09-27 운영 P0 — 반복 클릭).
+ *    결정 전 그림자에 ready·reject 를 낸 뒤 같은 요청이 한 번 더 오면, 행은 이미 사람 결정 표식이다.
+ *    앞판은 이것을 "이미 결정된 행" **거절**로 돌려줘 운영자가 실패로 읽고 또 눌렀다.
+ *    이 사람의 지금 결속 최신 기록이 **같은 묶음 digest · 같은 결함 · 같은 근거**이고,
+ *    지금 상태가 요청한 결정(ready → 무수정 · reject/철회 → 같은 사유로 폐기)과 같으면
+ *    **이미 기록됨(unchanged)** 이다 — 결정도 기록도 다시 쓰지 않는다.
+ *    하나라도 다르면 null — 부르는 쪽이 그대로 거절한다(결정을 바꾸지 않는다 · 다시 폐기하지 않는다).
+ */
+function sameReplay(
+  row: EvidenceRow, userId: string, bundleDigest: string,
+  want: { decision: 'ready' | 'reject' | null; withdraw: boolean; declineReason: unknown; hardDefect: EvidenceReview['hardDefect']; reasons: string[] },
+): boolean {
+  const mine = readEvidenceReviews(row.editDiff)
+    .filter((r) => r.reviewerUserId === userId && isHumanReviewer(r.reviewer) && bindingHolds(r, row))
+  const latest = effectiveHumanReviews(mine)[0]
+  if (latest === undefined || latest.bundleDigest !== bundleDigest) return false
+  if (latest.hardDefect !== want.hardDefect || stable(latest.reasons) !== stable(want.reasons)) return false
+  const b = bindingOf(row)
+  if (want.decision === 'ready') return b.outcome === 'noEdit'
+  if (want.decision === 'reject' || want.withdraw) return b.outcome === 'declined' && b.declineReason === want.declineReason
+  return false
+}
+
+/** 🔴 직렬화 충돌(P2034)은 같은 행을 다시 읽어 한 번 더 잰다 — 두 번째는 대개 unchanged 로 끝난다 */
+const SERIALIZATION_RETRIES = 3
+
+/**
  * 🔴 **사람 검토 한 묶음을 기록한다 — 행마다 한 Serializable 트랜잭션.**
  *    · 이미 사람 결정 표식이 있는 행: 결정을 바꾸지 않는다. 지금 상태를 결속해 사람 기록을 붙인다
  *    · 결정 전 그림자(`machine:*`): `ready`(그대로) · `reject`(폐기) 결정을 **정본 `completeReview`** 로
@@ -305,6 +333,9 @@ class Abort extends Error {}
  *      결정이 저장되지 않으면 기록도 없다(함께 되돌아간다).
  *    · 🔴 중대 결함을 비운 행은 건너뛴다(결정·기록 0). 사람 기록은 yes·no 를 명시한 행만 쓴다
  *    · 🔴 사람 기록은 쌓는다 — 같은 사람의 지금 판정과 같으면 unchanged, 다르면 새 기록(이력 보존)
+ *    · 🔴 같은 사람 · 같은 묶음 · 같은 결정·판정의 재제출(더블 클릭 · 재시도)은 **unchanged** 다(`sameReplay`).
+ *      이미 결정된 행을 다시 결정하지 않고 · 폐기된 행을 다시 폐기하지 않으며 · 기록을 두 번 붙이지 않는다.
+ *      직렬화 충돌은 최대 3번 다시 읽어 잰다 — 동시 두 요청도 기록 1 · unchanged 1 로 끝난다
  *    · 🔴 `edit` 은 받지 않는다(batch edit 미지원) — 편집이 필요한 그림자는 결정 전으로 남아 표본이 아니다.
  *      수정본은 artifact 원문으로 게이트를 다시 재야 하는데
  *      그 게이트는 로컬 artifact 를 읽는다. 서버는 그 파일이 없다. 수정은 게이트가 있는
@@ -354,107 +385,165 @@ export async function recordHumanBatch(prisma: PrismaClient, i: {
     if (decision === 'ready' && d.hardDefect === 'yes') { reject('중대 결함이 있으면 그대로 내보낼 수 없다 — 폐기(사유 필수)만 받는다'); continue }
     const withdraw = e.withdraw === true
     if (withdraw && decision !== null) { reject('결정 전 행은 철회가 아니라 결정(ready·reject)으로 처리한다'); continue }
-    try {
-      const res = await prisma.$transaction(async (tx): Promise<HumanBatchResult> => {
-        const row = await tx.originalPostApprovalQueue.findUnique({ where: { id: e.queueId }, select: EVIDENCE_ROW_SELECT })
-        if (row === null) throw new Abort('DB 에 행이 없다')
-        if (digestOf(row.draftTitle) !== b.draftTitleDigest || digestOf(row.draftBody) !== b.draftBodyDigest) {
-          throw new Abort('묶음을 만든 뒤 DB 초안이 바뀌었다')
-        }
-        const machine = profileOf({
-          promptVersion: row.promptVersion, model: row.model, sourceSite: row.rawContent.sourceSite, gateResults: row.gateResults,
-        } as never) === 'machine'
-        if (!machine) throw new Abort('기계 후보가 아니다')
-        const decidedBy = (row.decidedBy ?? '').trim()
-        let decided = false
-        let withdrawn = false
-        if (decidedBy.startsWith('machine:')) {
-          // ── 결정 전 그림자 — 결정을 먼저 정본 경로로 저장한다 ──
-          if (decision === null) throw new Abort('결정 전 행이다 — ready · reject 중 하나를 골라야 기록한다')
-          if (row.createdPostId !== null) throw new Abort('이미 발행된 행이다')
-          const before: ReviewRow = {
-            status: row.status, createdPostId: row.createdPostId, decidedBy: row.decidedBy, updatedAt: row.updatedAt,
-            title: row.editedTitle ?? row.draftTitle, body: row.editedBody ?? row.draftBody,
-            promptVersion: row.promptVersion, model: row.model, gateResults: row.gateResults,
-            decidedAt: row.decidedAt, editDiff: row.editDiff, declineReason: row.declineReason,
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const res = await prisma.$transaction(async (tx): Promise<HumanBatchResult> => {
+          const row = await tx.originalPostApprovalQueue.findUnique({ where: { id: e.queueId }, select: EVIDENCE_ROW_SELECT })
+          if (row === null) throw new Abort('DB 에 행이 없다')
+          if (digestOf(row.draftTitle) !== b.draftTitleDigest || digestOf(row.draftBody) !== b.draftBodyDigest) {
+            throw new Abort('묶음을 만든 뒤 DB 초안이 바뀌었다')
           }
-          const action: ReviewAction = decision === 'reject'
-            ? { decision: 'reject', declineReason: e.declineReason as string } : { decision: 'ready' }
-          const v = await completeReview({
-            id: row.id, before, decidedBy: LEGACY_DECISION_MARK, now: i.now, action,
-            draftTitle: row.draftTitle, draftBody: row.draftBody,
-            store: {
-              transaction: async (fn) => fn({
-                read: async (id) => {
-                  const r = await tx.originalPostApprovalQueue.findUnique({ where: { id }, select: EVIDENCE_ROW_SELECT })
-                  return r === null ? null : {
-                    status: r.status, createdPostId: r.createdPostId, decidedBy: r.decidedBy, updatedAt: r.updatedAt,
-                    decidedAt: r.decidedAt, title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
-                    promptVersion: r.promptVersion, model: r.model, gateResults: r.gateResults,
-                    editDiff: r.editDiff, declineReason: r.declineReason,
-                  }
-                },
-                stamp: async (s) => (await tx.originalPostApprovalQueue.updateMany({
-                  where: { id: s.id, status: row.status, createdPostId: null, decidedBy: s.where.decidedBy, updatedAt: s.where.updatedAt },
-                  data: {
-                    decidedBy: s.decidedBy, decidedAt: s.decidedAt, status: s.patch.status as never,
-                    ...(s.patch.declineReason === undefined ? {} : { declineReason: s.patch.declineReason as never }),
+          const machine = profileOf({
+            promptVersion: row.promptVersion, model: row.model, sourceSite: row.rawContent.sourceSite, gateResults: row.gateResults,
+          } as never) === 'machine'
+          if (!machine) throw new Abort('기계 후보가 아니다')
+          const decidedBy = (row.decidedBy ?? '').trim()
+          let decided = false
+          let withdrawn = false
+          if (decidedBy.startsWith('machine:')) {
+            // ── 결정 전 그림자 — 결정을 먼저 정본 경로로 저장한다 ──
+            if (decision === null) throw new Abort('결정 전 행이다 — ready · reject 중 하나를 골라야 기록한다')
+            if (row.createdPostId !== null) throw new Abort('이미 발행된 행이다')
+            const before: ReviewRow = {
+              status: row.status, createdPostId: row.createdPostId, decidedBy: row.decidedBy, updatedAt: row.updatedAt,
+              title: row.editedTitle ?? row.draftTitle, body: row.editedBody ?? row.draftBody,
+              promptVersion: row.promptVersion, model: row.model, gateResults: row.gateResults,
+              decidedAt: row.decidedAt, editDiff: row.editDiff, declineReason: row.declineReason,
+            }
+            const action: ReviewAction = decision === 'reject'
+              ? { decision: 'reject', declineReason: e.declineReason as string } : { decision: 'ready' }
+            const v = await completeReview({
+              id: row.id, before, decidedBy: LEGACY_DECISION_MARK, now: i.now, action,
+              draftTitle: row.draftTitle, draftBody: row.draftBody,
+              store: {
+                transaction: async (fn) => fn({
+                  read: async (id) => {
+                    const r = await tx.originalPostApprovalQueue.findUnique({ where: { id }, select: EVIDENCE_ROW_SELECT })
+                    return r === null ? null : {
+                      status: r.status, createdPostId: r.createdPostId, decidedBy: r.decidedBy, updatedAt: r.updatedAt,
+                      decidedAt: r.decidedAt, title: r.editedTitle ?? r.draftTitle, body: r.editedBody ?? r.draftBody,
+                      promptVersion: r.promptVersion, model: r.model, gateResults: r.gateResults,
+                      editDiff: r.editDiff, declineReason: r.declineReason,
+                    }
                   },
-                })).count,
-              }),
-            },
-          })
-          if (!v.ok) throw new Abort(`결정 저장 실패 — ${v.reason}`)
-          decided = true
-        } else if (decidedBy === HUMAN_DECIDER) {
-          if (decision !== null) throw new Abort('이미 결정된 행이다 — 결정을 바꾸지 않는다(결과 확정만 한다)')
-          /**
-           * 🔴 **이미 결정된 행 — 상태별로 받는 것이 다르다** (2026-09-26 마스터 P0).
-           *    · 발행됨: 결함 yes·no 모두 사후 기록만. 상태는 바꾸지 않는다(철회 불가)
-           *    · 폐기됨: 결함 yes·no 기록
-           *    · 승인·수정 미발행 + no: 기록
-           *    · 승인·수정 미발행 + yes: **같은 트랜잭션에서 명시적 철회**(사유 필수)가 있어야 기록한다.
-           *      철회가 실패하면 기록도 0 — 결함 기록과 발행 가능 상태가 공존하지 않는다
-           */
-          const published = row.createdPostId !== null
-          const openApproved = !published && (row.status === 'APPROVED' || row.status === 'EDITED')
-          if (published || row.status === 'DECLINED') {
-            if (withdraw) throw new Abort(published ? '이미 발행된 글은 철회할 수 없다 — 사후 기록만 남긴다' : '이미 폐기된 글이다 — 철회할 것이 없다')
-          } else if (openApproved) {
-            if (d.hardDefect === 'yes') {
-              if (!withdraw) throw new Abort('중대 결함이 있는 미발행 승인 글이다 — 철회와 폐기 사유를 함께 골라야 기록한다')
-              const w = await withdrawOriginalPostInTx(tx, { row, reason: e.declineReason, actorUserId: i.actor.userId, now: i.now })
-              if (!w.ok) throw new Abort(`철회 실패 — ${w.error}`)
-              withdrawn = true
-            } else if (withdraw) {
-              throw new Abort('결함 없음이면 철회하지 않는다')
+                  stamp: async (s) => (await tx.originalPostApprovalQueue.updateMany({
+                    where: { id: s.id, status: row.status, createdPostId: null, decidedBy: s.where.decidedBy, updatedAt: s.where.updatedAt },
+                    data: {
+                      decidedBy: s.decidedBy, decidedAt: s.decidedAt, status: s.patch.status as never,
+                      ...(s.patch.declineReason === undefined ? {} : { declineReason: s.patch.declineReason as never }),
+                    },
+                  })).count,
+                }),
+              },
+            })
+            if (!v.ok) throw new Abort(`결정 저장 실패 — ${v.reason}`)
+            decided = true
+          } else if (decidedBy === HUMAN_DECIDER) {
+            if ((decision !== null || withdraw) && sameReplay(row, i.actor.userId, i.bundle.digest, {
+              decision: decision as 'ready' | 'reject' | null, withdraw, declineReason: e.declineReason, hardDefect: d.hardDefect, reasons: d.reasons,
+            })) {
+              return { queueId: row.id, result: 'unchanged', why: '이미 기록됐다 — 같은 묶음 · 같은 판정의 재제출이라 다시 쓰지 않는다' }
+            }
+            if (decision !== null) throw new Abort('이미 결정된 행이다 — 결정을 바꾸지 않는다(결과 확정만 한다)')
+            /**
+             * 🔴 **이미 결정된 행 — 상태별로 받는 것이 다르다** (2026-09-26 마스터 P0).
+             *    · 발행됨: 결함 yes·no 모두 사후 기록만. 상태는 바꾸지 않는다(철회 불가)
+             *    · 폐기됨: 결함 yes·no 기록
+             *    · 승인·수정 미발행 + no: 기록
+             *    · 승인·수정 미발행 + yes: **같은 트랜잭션에서 명시적 철회**(사유 필수)가 있어야 기록한다.
+             *      철회가 실패하면 기록도 0 — 결함 기록과 발행 가능 상태가 공존하지 않는다
+             */
+            const published = row.createdPostId !== null
+            const openApproved = !published && (row.status === 'APPROVED' || row.status === 'EDITED')
+            if (published || row.status === 'DECLINED') {
+              if (withdraw) throw new Abort(published ? '이미 발행된 글은 철회할 수 없다 — 사후 기록만 남긴다' : '이미 폐기된 글이다 — 철회할 것이 없다')
+            } else if (openApproved) {
+              if (d.hardDefect === 'yes') {
+                if (!withdraw) throw new Abort('중대 결함이 있는 미발행 승인 글이다 — 철회와 폐기 사유를 함께 골라야 기록한다')
+                const w = await withdrawOriginalPostInTx(tx, { row, reason: e.declineReason, actorUserId: i.actor.userId, now: i.now })
+                if (!w.ok) throw new Abort(`철회 실패 — ${w.error}`)
+                withdrawn = true
+              } else if (withdraw) {
+                throw new Abort('결함 없음이면 철회하지 않는다')
+              }
+            } else {
+              throw new Abort(`상태 ${row.status} 인 행은 기록하지 않는다`)
             }
           } else {
-            throw new Abort(`상태 ${row.status} 인 행은 기록하지 않는다`)
+            throw new Abort(`decidedBy=${decidedBy || '(없음)'} — 사람 결정 경로의 행이 아니다`)
           }
-        } else {
-          throw new Abort(`decidedBy=${decidedBy || '(없음)'} — 사람 결정 경로의 행이 아니다`)
+          // ── 결정 뒤(또는 기존) 상태를 다시 읽어 결속한다 ──
+          const now = await tx.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: row.id }, select: EVIDENCE_ROW_SELECT })
+          const entry: EvidenceReview = {
+            contract: EVIDENCE_REVIEW_CONTRACT, reviewer: i.actor.reviewer, reviewerUserId: i.actor.userId, ...bindingOf(now),
+            hardDefect: d.hardDefect, reasons: d.reasons, bundleDigest: i.bundle.digest, reviewedAt: i.now.toISOString(),
+          }
+          const m = appendHumanReview(now.editDiff, entry, now)
+          if (m.kind === 'unchanged') return { queueId: row.id, result: 'unchanged', why: '이 사람의 지금 판정과 같다' }
+          const n = await tx.originalPostApprovalQueue.updateMany({
+            where: casWhere(snapshotOf(now)), data: { editDiff: m.next as Prisma.InputJsonValue },
+          })
+          if (n.count !== 1) throw new Abort('기록 중 행이 바뀌었다(CAS 0)')
+          return { queueId: row.id, result: withdrawn ? 'withdrawnAndRecorded' : decided ? 'decidedAndRecorded' : 'recorded', why: '' }
+        }, { isolationLevel: 'Serializable', maxWait: 5_000, timeout: 20_000 })
+        out.push(res)
+        break
+      } catch (err) {
+        if (err instanceof Abort) { reject(err.message); break }
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') {
+          if (attempt < SERIALIZATION_RETRIES) continue
+          reject('직렬화 충돌 — 잠시 뒤 다시 시도해 주세요'); break
         }
-        // ── 결정 뒤(또는 기존) 상태를 다시 읽어 결속한다 ──
-        const now = await tx.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: row.id }, select: EVIDENCE_ROW_SELECT })
-        const entry: EvidenceReview = {
-          contract: EVIDENCE_REVIEW_CONTRACT, reviewer: i.actor.reviewer, reviewerUserId: i.actor.userId, ...bindingOf(now),
-          hardDefect: d.hardDefect, reasons: d.reasons, bundleDigest: i.bundle.digest, reviewedAt: i.now.toISOString(),
-        }
-        const m = appendHumanReview(now.editDiff, entry, now)
-        if (m.kind === 'unchanged') return { queueId: row.id, result: 'unchanged', why: '이 사람의 지금 판정과 같다' }
-        const n = await tx.originalPostApprovalQueue.updateMany({
-          where: casWhere(snapshotOf(now)), data: { editDiff: m.next as Prisma.InputJsonValue },
-        })
-        if (n.count !== 1) throw new Abort('기록 중 행이 바뀌었다(CAS 0)')
-        return { queueId: row.id, result: withdrawn ? 'withdrawnAndRecorded' : decided ? 'decidedAndRecorded' : 'recorded', why: '' }
-      }, { isolationLevel: 'Serializable', maxWait: 5_000, timeout: 20_000 })
-      out.push(res)
-    } catch (err) {
-      if (err instanceof Abort) { reject(err.message); continue }
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2034') { reject('직렬화 충돌 — 다시 시도한다'); continue }
-      throw err
+        throw err
+      }
     }
   }
   return out
+}
+
+/**
+ * 🔴 **화면이 믿는 지금 상태 — 읽기만 한다(write 0)** (2026-09-27 운영 P0).
+ *    묶음을 올릴 때와 제출 직후, 화면은 이 값으로 행마다 입력 칸을 정한다.
+ *    · 이미 결정된 행은 ready · reject 칸이 **다시 나오지 않는다**(decided · recorded)
+ *    · 이 사용자의 지금 결속 기록이 있으면 `recorded` — 화면이 잠근다
+ *    · 묶음의 초안 digest 와 DB 가 다르면 `stale` — 새 묶음이 필요하다
+ *    판정 규칙은 `recordHumanBatch` 와 같은 순서다(행 없음 → 초안 digest → 기계 후보 → 결정 경로 → 상태).
+ */
+export async function readHumanRowStates(db: Db, i: { userId: string; items: readonly BundleItem[] }): Promise<EvidenceRowState[]> {
+  const ids = [...new Set(i.items.map((b) => b.queueId))]
+  const rows = await db.originalPostApprovalQueue.findMany({ where: { id: { in: ids } }, select: EVIDENCE_ROW_SELECT })
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  return i.items.map((b): EvidenceRowState => {
+    const row = byId.get(b.queueId)
+    const base = { queueId: b.queueId, status: null, decidedBy: null, published: false, outcome: null, declineReason: null, mine: null }
+    if (row === undefined) return { ...base, phase: 'missing', why: 'DB 에 행이 없다' }
+    const bound = bindingOf(row)
+    const cur = {
+      ...base, status: row.status as string, decidedBy: row.decidedBy, published: row.createdPostId !== null,
+      outcome: bound.outcome, declineReason: bound.declineReason,
+    }
+    if (digestOf(row.draftTitle) !== b.draftTitleDigest || digestOf(row.draftBody) !== b.draftBodyDigest) {
+      return { ...cur, phase: 'stale', why: '묶음을 만든 뒤 DB 초안이 바뀌었다 — 새 묶음이 필요하다' }
+    }
+    const machine = profileOf({
+      promptVersion: row.promptVersion, model: row.model, sourceSite: row.rawContent.sourceSite, gateResults: row.gateResults,
+    } as never) === 'machine'
+    if (!machine) return { ...cur, phase: 'unsupported', why: '기계 후보가 아니다' }
+    const decidedBy = (row.decidedBy ?? '').trim()
+    if (decidedBy.startsWith('machine:')) {
+      return row.createdPostId === null
+        ? { ...cur, phase: 'undecided', why: '' }
+        : { ...cur, phase: 'unsupported', why: '이미 발행된 행이다' }
+    }
+    if (decidedBy !== HUMAN_DECIDER) return { ...cur, phase: 'unsupported', why: '사람 결정 경로의 행이 아니다' }
+    const published = row.createdPostId !== null
+    if (!published && !['DECLINED', 'APPROVED', 'EDITED'].includes(row.status)) {
+      return { ...cur, phase: 'unsupported', why: `상태 ${row.status} 인 행은 기록하지 않는다` }
+    }
+    const latest = effectiveHumanReviews(readEvidenceReviews(row.editDiff)
+      .filter((r) => r.reviewerUserId === i.userId && isHumanReviewer(r.reviewer) && bindingHolds(r, row)))[0]
+    const mine: MyReview | null = latest === undefined ? null
+      : { hardDefect: latest.hardDefect, reasons: latest.reasons, reviewedAt: latest.reviewedAt, bundleDigest: latest.bundleDigest }
+    return mine === null ? { ...cur, phase: 'decided', why: '' } : { ...cur, phase: 'recorded', mine, why: '' }
+  })
 }
