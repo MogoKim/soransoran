@@ -16,7 +16,7 @@ import {
   digestOf, bindingOf, humanSampleOf, EVIDENCE_REVIEW_CONTRACT, readEvidenceReviews, type ArtifactDoc, type CandidateDoc,
 } from '../src/lib/auto-ready-evidence'
 import {
-  planSemanticRestore, applySemanticRestore, planNonHumanImport, applyReviewImport, recordHumanBatch, SEMANTIC_RESTORE_KEY,
+  planSemanticRestore, applySemanticRestore, planNonHumanImport, applyReviewImport, recordHumanBatch, readHumanRowStates, SEMANTIC_RESTORE_KEY,
   type HumanActor, type ReviewFile,
 } from '../src/lib/auto-ready-evidence-store'
 import { HUMAN_DECIDER, CONTRACT } from '../src/lib/auto-ready-v2'
@@ -519,6 +519,156 @@ async function main(): Promise<void> {
       mk('no', '2026-09-26T05:00:00Z', []), mk('yes', '2026-09-26T01:00:00Z', ['나중에 붙었지만 시각은 과거']),
     ] } as never } })
     check('🔴 🔴 **D. 나중에 붙은 기록의 시각이 더 과거여도 그 기록이 최신 (yes)**', await hd(od.id) === 'noEdit/yes')
+  }
+
+  console.log('\nB-7. 🔴 🔴 반복 클릭 · 같은 요청 재제출 · 이미 결정된 행 · 지금 상태 (2026-09-27 운영 P0)')
+  {
+    const mineOf = async (id: string, uid = founderUser) => readEvidenceReviews((await snap(id)).editDiff).filter((r) => r.reviewerUserId === uid)
+    // ① 결정 전 그림자 — ready + no, 같은 요청 두 번
+    const s1 = await restored({ undecided: true })
+    const b1 = bundleOf([s1], 'b7-s1')
+    const e1 = [{ queueId: s1.id, decision: 'ready', hardDefect: 'no' }]
+    const first = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: b1, entries: e1 })
+    const u1 = (await snap(s1.id)).updatedAt.getTime()
+    const second = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 1000), bundle: b1, entries: e1 })
+    check('🔴 🔴 **① 같은 사람 · 같은 묶음 · 같은 결정 재제출 → unchanged(성공 동급) · 기록 1 · 행 write 0**',
+      first[0]?.result === 'decidedAndRecorded' && second[0]?.result === 'unchanged'
+      && (await mineOf(s1.id)).length === 1 && (await snap(s1.id)).updatedAt.getTime() === u1, `${first[0]?.result}/${second[0]?.result}`)
+
+    // ② 운영 uili19gp 모양 — 폐기(OTHER) + 결함 yes 로 결정된 행
+    const s2 = await restored({ undecided: true })
+    const b2 = bundleOf([s2], 'b7-s2')
+    const e2 = { queueId: s2.id, decision: 'reject', declineReason: 'OTHER', hardDefect: 'yes', reasons: ['생활사 모순'] }
+    await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: b2, entries: [e2] })
+    const d0 = await snap(s2.id)
+    const again = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 1000), bundle: b2, entries: [e2] })
+    check('🔴 🔴 **② 폐기된 행 같은 요청 재제출 → unchanged · 재폐기 0 · 기록 1**',
+      again[0]?.result === 'unchanged' && (await mineOf(s2.id)).length === 1 && (await snap(s2.id)).updatedAt.getTime() === d0.updatedAt.getTime())
+    const other = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: b2, entries: [{ ...e2, declineReason: 'TOPIC_UNFIT' }] })
+    check('🔴 🔴 **② 다른 사유로 다시 폐기 → 거절 · 사유 OTHER 그대로 · 기록 1**',
+      other[0]?.result === 'reject' && (await snap(s2.id)).declineReason === 'OTHER' && (await mineOf(s2.id)).length === 1, JSON.stringify(other))
+    const b2x = bundleOf([s2], 'b7-s2-new-bundle')
+    const otherBundle = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: b2x, entries: [e2] })
+    check('🔴 🔴 **② 다른 묶음으로 같은 결정 → 거절(결정은 한 번뿐) · 기록 1**',
+      otherBundle[0]?.result === 'reject' && (await mineOf(s2.id)).length === 1, JSON.stringify(otherBundle))
+    const byB = await recordHumanBatch(prisma, { actor: OP_B, now: NOW, bundle: b2, entries: [e2] })
+    check('🔴 🔴 **② 다른 관리자가 같은 결정을 보냄 → 거절 · 재폐기 0 · B 기록 0**',
+      byB[0]?.result === 'reject' && (await mineOf(s2.id, OP_B.userId)).length === 0 && (await snap(s2.id)).updatedAt.getTime() === d0.updatedAt.getTime())
+
+    // ③ 더블 클릭 — 같은 요청 둘이 동시에
+    const s3 = await restored({ undecided: true })
+    const b3 = bundleOf([s3], 'b7-s3')
+    const e3 = [{ queueId: s3.id, decision: 'ready', hardDefect: 'no' }]
+    const [c1, c2] = await Promise.all([
+      recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: b3, entries: e3 }),
+      recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: b3, entries: e3 }),
+    ])
+    const pair = [c1[0]?.result, c2[0]?.result].sort().join('/')
+    check('🔴 🔴 **③ 동시 두 요청 → 기록 1 · 결과 decidedAndRecorded + unchanged (거절 0)**',
+      (await mineOf(s3.id)).length === 1 && pair === 'decidedAndRecorded/unchanged', pair)
+
+    // ④ 철회 재제출 — 미발행 승인 + yes + 철회
+    const ap = await restored()
+    const bap = bundleOf([ap], 'b7-ap')
+    const eap = [{ queueId: ap.id, hardDefect: 'yes', reasons: ['단정'], withdraw: true, declineReason: 'TOPIC_UNFIT' }]
+    const w1 = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bap, entries: eap })
+    const w2 = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bap, entries: eap })
+    check('🔴 🔴 **④ 철회 같은 요청 재제출 → unchanged · 기록 1 · DECLINED 그대로**',
+      w1[0]?.result === 'withdrawnAndRecorded' && w2[0]?.result === 'unchanged' && (await mineOf(ap.id)).length === 1
+      && (await snap(ap.id)).status === 'DECLINED', `${w1[0]?.result}/${w2[0]?.result}`)
+
+    // ⑤ 부분 성공 — 하나는 정상, 하나는 묶음 이후 초안이 바뀜
+    const g = await restored({ undecided: true })
+    const st = await restored({ undecided: true })
+    const bp = bundleOf([g, st], 'b7-partial')
+    await prisma.originalPostApprovalQueue.update({ where: { id: st.id }, data: { draftBody: `${st.body} (묶음 뒤 수정)` } })
+    const stBefore = await snap(st.id)
+    const pr = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bp, entries: [
+      { queueId: g.id, decision: 'ready', hardDefect: 'no' }, { queueId: st.id, decision: 'ready', hardDefect: 'no' },
+    ] })
+    const stAfter = await snap(st.id)
+    check('🔴 🔴 **⑤ 부분 성공 — 정상 행만 결정·기록 · stale 행은 거절(사유 그대로) · write 0**',
+      pr[0]?.result === 'decidedAndRecorded' && pr[1]?.result === 'reject' && pr[1]?.why.includes('초안이 바뀌었다')
+      && stAfter.decidedBy === 'machine:auto-draft-v5' && stAfter.updatedAt.getTime() === stBefore.updatedAt.getTime()
+      && readEvidenceReviews(stAfter.editDiff).length === 0, JSON.stringify(pr))
+
+    // ⑥ 지금 상태 — 화면이 믿는 값 · 읽기만
+    const fresh = await restored({ undecided: true })
+    const dec = await restored()
+    const items = [...bundleOf([s2, g, st, fresh, dec], 'b7-state').items, { queueId: 'no-such-row', draftTitleDigest: 'x', draftBodyDigest: 'y' }]
+    const beforeRows = await prisma.originalPostApprovalQueue.findMany({ select: { id: true, updatedAt: true }, orderBy: { id: 'asc' } })
+    const mine = await readHumanRowStates(prisma, { userId: founderUser, items })
+    const theirs = await readHumanRowStates(prisma, { userId: OP_B.userId, items })
+    const afterRows = await prisma.originalPostApprovalQueue.findMany({ select: { id: true, updatedAt: true }, orderBy: { id: 'asc' } })
+    const ph = (xs: typeof mine) => xs.map((x) => x.phase).join(',')
+    check('🔴 🔴 **⑥ 지금 상태 — 내가 결정한 행 recorded · stale · 결정 전 · 결정됨 · 없음**',
+      ph(mine) === 'recorded,recorded,stale,undecided,decided,missing', ph(mine))
+    check('🔴 🔴 **⑥ 같은 행이 다른 관리자에게는 decided — 결정 칸 없음 · 결함 기록만**',
+      ph(theirs) === 'decided,decided,stale,undecided,decided,missing', ph(theirs))
+    const u = mine[0]!
+    check('🔴 🔴 **⑥ uili19gp 모양 — DECLINED · OTHER · 내 기록 yes 가 보인다**',
+      u.status === 'DECLINED' && u.declineReason === 'OTHER' && u.outcome === 'declined' && u.mine?.hardDefect === 'yes' && u.mine.bundleDigest === b2.digest, JSON.stringify(u))
+    check('🔴 🔴 **⑥ 상태 읽기는 write 0**',
+      beforeRows.length === afterRows.length && beforeRows.every((r, k) => afterRows[k]!.id === r.id && afterRows[k]!.updatedAt.getTime() === r.updatedAt.getTime()))
+  }
+
+  console.log('\nB-8. 🔴 🔴 같은 사람의 재검토 — 판정 변경은 append-only · no→yes 는 철회 동반 (2026-09-27 P0 정정)')
+  {
+    const mineOf = async (id: string) => readEvidenceReviews((await snap(id)).editDiff).filter((r) => r.reviewerUserId === founderUser)
+    const hd = async (id: string) => { const v = humanSampleOf(await snap(id)); return v.counted ? `${v.outcome}/${v.hardDefect}` : `excluded:${v.why}` }
+    const phaseOf = async (x: { id: string; title: string; body: string }, tag: string) =>
+      (await readHumanRowStates(prisma, { userId: founderUser, items: bundleOf([x], tag).items }))[0]!
+    // ① 미발행 승인 — 처음 no 로 잘못 기록
+    const ap = await restored()
+    const bap = bundleOf([ap], 'b8-ap')
+    const one = async (entry: Record<string, unknown>, at: number) =>
+      (await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + at), bundle: bap, entries: [{ queueId: ap.id, ...entry }] }))[0]
+    check('선행 — 처음 no 기록', (await one({ hardDefect: 'no' }, 0))?.result === 'recorded' && (await phaseOf(ap, 'b8-ap')).phase === 'recorded')
+    const before = await snap(ap.id)
+    const noW = await one({ hardDefect: 'yes', reasons: ['생활사 모순'] }, 1000)
+    check('🔴 🔴 **no → yes · 철회 없음 → 거절 · 상태·기록 write 0**',
+      noW?.result === 'reject' && (await mineOf(ap.id)).length === 1 && (await snap(ap.id)).updatedAt.getTime() === before.updatedAt.getTime())
+    const noReason = await one({ hardDefect: 'yes', reasons: ['생활사 모순'], withdraw: true }, 1500)
+    check('🔴 🔴 **no → yes · 철회했지만 사유 없음 → 거절 · write 0**', noReason?.result === 'reject' && (await mineOf(ap.id)).length === 1 && (await snap(ap.id)).status === 'APPROVED')
+    const noWhy = await one({ hardDefect: 'yes', withdraw: true, declineReason: 'TOPIC_UNFIT' }, 1700)
+    check('🔴 🔴 **no → yes · 근거 없음 → 거절 · write 0**', noWhy?.result === 'reject' && (await mineOf(ap.id)).length === 1 && (await snap(ap.id)).status === 'APPROVED')
+    const w = await one({ hardDefect: 'yes', reasons: ['생활사 모순'], withdraw: true, declineReason: 'TOPIC_UNFIT' }, 2000)
+    const hist = await mineOf(ap.id)
+    const stock = await loadPublishableStock(prisma, NOW, { autoReadyOpen: false })
+    const pub = await publishOriginalPostTx(prisma, { queueId: ap.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: {} })
+    check('🔴 🔴 **같은 사람 no → yes + 철회 → +1 기록 · 옛 no 보존 · 최신 yes · DECLINED**',
+      w?.result === 'withdrawnAndRecorded' && hist.length === 2 && hist[0]?.hardDefect === 'no' && hist[1]?.hardDefect === 'yes'
+      && (await snap(ap.id)).status === 'DECLINED' && await hd(ap.id) === 'declined/yes', `${w?.result} · ${hist.map((r) => r.hardDefect).join(',')}`)
+    check('🔴 🔴 **철회 뒤 selector 대상 0 · 발행 트랜잭션 0**', !stock.targets.some((t) => t.id === ap.id) && pub.kind === 'blocked' && (await snap(ap.id)).createdPostId === null, JSON.stringify(pub))
+    const st1 = await phaseOf(ap, 'b8-ap')
+    check('🔴 🔴 **재검토 뒤 지금 상태 — 다시 recorded · 최신 판정 yes**', st1.phase === 'recorded' && st1.mine?.hardDefect === 'yes' && st1.status === 'DECLINED')
+    const same = await one({ hardDefect: 'yes', reasons: ['생활사 모순'], withdraw: true, declineReason: 'TOPIC_UNFIT' }, 3000)
+    check('🔴 🔴 **같은 판정 재제출 → unchanged · +0**', same?.result === 'unchanged' && (await mineOf(ap.id)).length === 2)
+    // ② 이미 폐기된 행 — yes → no 재검토 (폐기는 다시 하지 않는다)
+    const dSnap = await snap(ap.id)
+    const back = await one({ hardDefect: 'no' }, 4000)
+    const hist2 = await mineOf(ap.id)
+    const dAfter = await snap(ap.id)
+    check('🔴 🔴 **같은 사람 yes → no (폐기된 행) → +1 · 옛 기록 보존 · 최신 no · 상태·사유 그대로**',
+      back?.result === 'recorded' && hist2.length === 3 && hist2.map((r) => r.hardDefect).join(',') === 'no,yes,no'
+      && dAfter.status === 'DECLINED' && dAfter.declineReason === dSnap.declineReason && await hd(ap.id) === 'declined/no', `${back?.result} · ${hist2.map((r) => r.hardDefect).join(',')}`)
+    check('🔴 폐기된 행에 철회를 다시 붙이면 거절 · 기록 +0',
+      (await one({ hardDefect: 'yes', reasons: ['x'], withdraw: true, declineReason: 'OTHER' }, 5000))?.result === 'reject' && (await mineOf(ap.id)).length === 3)
+    // ③ 발행된 행 — 사후 재판정만
+    const pb = await restored({ published: true })
+    const bpb = bundleOf([pb], 'b8-pb')
+    await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bpb, entries: [{ queueId: pb.id, hardDefect: 'no' }] })
+    const r3 = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 1000), bundle: bpb, entries: [{ queueId: pb.id, hardDefect: 'yes', reasons: ['사후 발견'] }] })
+    check('🔴 🔴 **발행된 행 no → yes → 사후 기록 +1 · PUBLISHED 그대로**',
+      r3[0]?.result === 'recorded' && (await mineOf(pb.id)).length === 2 && (await snap(pb.id)).status === 'PUBLISHED' && await hd(pb.id) === 'noEdit/yes')
+    // ④ 철회가 실패하면 결함 기록도 0 — 재검토 직전에 발행이 끼어든다
+    const race = await restored()
+    const brace = bundleOf([race], 'b8-race')
+    await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: brace, entries: [{ queueId: race.id, hardDefect: 'no' }] })
+    const pr = await publishOriginalPostTx(prisma, { queueId: race.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: {} })
+    const late = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 1000), bundle: brace, entries: [{ queueId: race.id, hardDefect: 'yes', reasons: ['늦은 발견'], withdraw: true, declineReason: 'TOPIC_UNFIT' }] })
+    check('🔴 🔴 **no 뒤 발행 → no → yes 철회 시도 → 철회 실패 · 결함 기록 +0 · PUBLISHED 그대로**',
+      pr.kind === 'published' && late[0]?.result === 'reject' && (await mineOf(race.id)).length === 1 && (await snap(race.id)).status === 'PUBLISHED', JSON.stringify(late))
   }
 
   console.log('\nC. 🔴 게이트 — 29 닫힘 · 30·90%·0 열림 · 기준 불변')

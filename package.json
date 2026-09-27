@@ -187,11 +187,13 @@
     "auto-ready:review-bundle": "tsx scripts/auto-ready-review-bundle.mts",
     "auto-ready:review-import": "tsx scripts/auto-ready-review-import.mts",
     "auto-ready:evidence-db-check": "tsx scripts/auto-ready-evidence-db-check.mts",
+    "auto-ready:evidence-plan-check": "tsx scripts/auto-ready-evidence-batch-plan-check.mts",
     "publish:slot-db-check": "tsx scripts/publish-slot-db-check.mts",
     "publish:heartbeat-check": "tsx scripts/publish-heartbeat-check.mts",
     "publish:heartbeat-db-check": "tsx scripts/publish-heartbeat-db-check.mts",
     "publish:heartbeat-preflight": "tsx scripts/publish-heartbeat-preflight.mts",
-    "auto-ready:evidence-http-check": "tsx scripts/auto-ready-evidence-http-check.mts"
+    "auto-ready:evidence-http-check": "tsx scripts/auto-ready-evidence-http-check.mts",
+    "auto-ready:evidence-ui-check": "tsx scripts/auto-ready-evidence-ui-check.mts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

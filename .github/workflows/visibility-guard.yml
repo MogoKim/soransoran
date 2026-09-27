@@ -849,9 +849,13 @@ jobs:
       # 🔴 자동 READY v2 — 순수 계약 (DB 0 · 네트워크 0 · LLM 0).
       #    semanticReview fail-closed · 증거 복원 6분류 · 계약 값 불변 · 도장 hash ·
       #    selector 기본 닫힘 · 감사 ceil(N×0.2) · yes 끈적함 · founder 기록 0 · 스위치 기본 OFF.
+      #    🔴 증거 배치 검토 화면의 제출 계획(손댄 행만 · 빈 판정 막힘 · 성공 행 잠금 · 기본 확인창 0)도
+      #       같은 step 에서 잰다 — 새 step 이 아니다(무조건 step 상한 불변).
       - name: 자동 READY v2 계약 (fail-closed · founder 0 · 스위치 OFF)
         if: steps.scope.outputs.heavy == 'true'
-        run: npm run auto-ready:check
+        run: |
+          npm run auto-ready:check
+          npm run auto-ready:evidence-plan-check
 
       # 🔴 자동 READY v2 실행 사슬 — 격리 Postgres 17 에서만. 운영 DB 0.
       #    후보 → 도장 → selector → 발행 트랜잭션 재검증 → Post → 감사 저장 → 결함 시 자동 중지,
