@@ -37,7 +37,33 @@ export const FINGERPRINT_FILES = [
   'src/lib/original-post-persona-match.ts',
   'scripts/lib/content-core-run.mts',
   'scripts/lib/content-core-prompts.mts',
+  // 🔴 표본·cohort 판정 (2026-09-27 P1) — 첫 30건 연속 · 순서 · 선행 미검토 닫힘 · 현재 계약 필터 ·
+  //    사람별 최신 판정 · 사람 출처 인정. 게이트만 보고 이 판정을 빼면 30건 기준을 조용히 바꿀 수 있다
+  'src/lib/auto-ready-quality-cohort.ts',
+  'src/lib/auto-ready-repo.ts',
+  'src/lib/auto-ready-evidence.ts',
+  'src/lib/review-provenance.ts',
 ] as const
+
+/**
+ * 🔴 **판정 함수 → 정의 파일** (2026-09-27 P1). 함수를 지문 밖 파일로 옮기면 가드가 그 행동을 못 본다.
+ *    `auto-ready:quality-check` 가 실제 소스에서 정의 위치를 찾아 이 표와 대조한다.
+ */
+export const JUDGE_DEFINITIONS: Readonly<Record<string, string>> = {
+  qualityCohortOf: 'src/lib/auto-ready-quality-cohort.ts',
+  humanDefectOf: 'src/lib/auto-ready-quality-cohort.ts',
+  evidenceFromDb: 'src/lib/auto-ready-repo.ts',
+  authoritativeGate: 'src/lib/auto-ready-repo.ts',
+  humanSampleOf: 'src/lib/auto-ready-evidence.ts',
+  effectiveHumanReviews: 'src/lib/auto-ready-evidence.ts',
+  readEvidenceReviews: 'src/lib/auto-ready-evidence.ts',
+  bindingHolds: 'src/lib/auto-ready-evidence.ts',
+  isHumanReviewer: 'src/lib/review-provenance.ts',
+  semanticSummaryOf: 'src/lib/semantic-summary-codes.ts',
+  semanticHoldsOf: 'src/lib/semantic-summary-codes.ts',
+  eligibilityOf: 'src/lib/auto-ready-v2.ts',
+  isCurrentQualityContract: 'src/lib/quality-contract.ts',
+}
 
 export const FINGERPRINT_PATH = 'src/lib/quality-contract.fingerprint.json'
 

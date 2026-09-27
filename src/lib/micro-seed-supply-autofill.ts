@@ -26,7 +26,7 @@ import {
   CONTENT_CORE_MODEL_LABEL, CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   stageModelsMismatch,
 } from './content-core/pipeline'
-import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES } from './semantic-summary-codes'
+import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, type SemanticSummary } from './semantic-summary-codes'
 /** 🔴 품질 계약 — 적재기가 저장하는 값은 이 파일의 코드 상수다(후보 파일 값이 아니다) */
 import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } from './quality-contract'
 
@@ -791,73 +791,9 @@ export function buildQueuePayload(input: {
 //   🔴 원문 전문을 DB 로 복제하지 않는다 — **개수와 완전성**만 싣는다.
 // ─────────────────────────────────────────────────────────
 
-/** 🔴 적재가 싣는 의미 검수 요약 — 문장이 아니라 **수와 완전성**이다 */
-export type SemanticSummary = {
-  /** 판정이 끝까지 돌았는가. `false` 면 **재지 못한 것**이다 */
-  complete: boolean
-  /** 규칙 검사 통과 여부 */
-  deterministicPass: boolean
-  unsupportedAdditions: number
-  lifeContradictions: number
-  droppedFromSource: number
-  /** 0~1. 🔴 **이 값만으로 READY 를 정하지 않는다** — 참고 수치다 */
-  confidence: number | null
-}
-
 /**
- * 🔴 칸 이름과 경고 코드의 정본은 `semantic-summary-codes.ts`(의존 없는 파일)다 (2026-09-27).
- *    품질 계약 digest 가 이 코드를 담는데, 그 파일이 이 파일을 거꾸로 부르면 순환 로드에서
- *    값이 비어 읽힌다. 여기서는 그대로 다시 내보낸다 — 부르는 쪽은 바뀌지 않는다.
+ * 🔴 **의미 검수 요약 파서의 정본은 `semantic-summary-codes.ts`(의존 없는 파일)다** (2026-09-27).
+ *    자동 READY 표본의 적격을 정하는 판정이라 품질 계약 CI 지문 대상이다. 이 파일(공급 적재기 전체)을
+ *    지문에 넣으면 무관한 수정마다 세대가 바뀐다 — 그래서 판정만 옮겼다. 부르는 쪽은 바뀌지 않는다.
  */
-export { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES }
-
-/** artifact 의 review 블록 → 적재가 실을 요약. 모양이 아니면 `null` 이다 */
-export function semanticSummaryOf(review: unknown): SemanticSummary | null {
-  if (review === null || typeof review !== 'object') return null
-  const r = review as Record<string, unknown>
-  const sem = (r.semantic !== null && typeof r.semantic === 'object')
-    ? r.semantic as Record<string, unknown> : null
-  if (sem === null) return null
-  /**
-   * 🔴 두 모양을 다 받는다 — artifact 는 **배열**로, 후보가 나르는 요약은 **수**로 온다.
-   *    한쪽만 보면 나르는 도중에 값이 0 으로 바뀐다.
-   */
-  const n = (k: string): number => {
-    const v = sem[k] ?? r[k]
-    if (Array.isArray(v)) return v.length
-    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0
-  }
-  const det = (r.deterministic !== null && typeof r.deterministic === 'object')
-    ? (r.deterministic as Record<string, unknown>).pass === true : false
-  const comp = (r.semanticCompletion !== null && typeof r.semanticCompletion === 'object')
-    ? (r.semanticCompletion as Record<string, unknown>).complete === true : false
-  const conf = typeof sem.confidence === 'number' ? sem.confidence : null
-  return {
-    complete: comp,
-    deterministicPass: det,
-    unsupportedAdditions: n('unsupportedAdditions'),
-    lifeContradictions: n('lifeContradictions'),
-    droppedFromSource: n('droppedFromSource'),
-    confidence: conf,
-  }
-}
-
-/**
- * 🔴 요약 → 경고 목록. **판정 기록이 없으면 그것도 경고다** — 재지 못한 것을
- *    "이상 없음" 으로 읽지 않는다.
- */
-export function semanticHoldsOf(sum: SemanticSummary | null): string[] {
-  if (sum === null) return [SEMANTIC_HOLD_CODES.incomplete]
-  const out: string[] = []
-  if (!sum.complete || !sum.deterministicPass) out.push(SEMANTIC_HOLD_CODES.incomplete)
-  if (sum.unsupportedAdditions > 0) {
-    out.push(`${SEMANTIC_HOLD_CODES.unsupportedAdditions}:${sum.unsupportedAdditions}`)
-  }
-  if (sum.lifeContradictions > 0) {
-    out.push(`${SEMANTIC_HOLD_CODES.lifeContradictions}:${sum.lifeContradictions}`)
-  }
-  if (sum.droppedFromSource > 0) {
-    out.push(`${SEMANTIC_HOLD_CODES.droppedFromSource}:${sum.droppedFromSource}`)
-  }
-  return out
-}
+export { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, type SemanticSummary }

@@ -13,6 +13,7 @@
  */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 
 // 🔴 **import 보다 먼저** env 를 오염시킨다 — 구현이 env 를 읽으면 digest 가 이 값이 된다(변이 검사)
 const FORGED = 'f'.repeat(64)
@@ -32,7 +33,7 @@ const { bindingOf, digestOf, EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT } = a
 const { judgeOpen, CONTRACT } = await import('../src/lib/auto-ready-v2')
 const af = await import('../src/lib/micro-seed-supply-autofill')
 const { STAGE_MODEL } = await import('../src/lib/content-core/pipeline')
-const { judgeFingerprint, FINGERPRINT_FILES, FINGERPRINT_PATH } = await import('./quality-contract-check.mjs')
+const { judgeFingerprint, FINGERPRINT_FILES, FINGERPRINT_PATH, JUDGE_DEFINITIONS } = await import('./quality-contract-check.mjs')
 const fxMod = await import('./lib/draft-gate-fixtures.mjs')
 
 let pass = 0
@@ -285,6 +286,25 @@ console.log('\nD. 🔴 CI 지문 가드')
   check('🔴 지문 대상에 게이트·검수·판정 파일이 있다',
     ['src/lib/content-core/draft-life-gates.ts', 'src/lib/content-core/review.ts', 'src/lib/auto-ready-v2.ts', 'scripts/lib/content-core-run.mts', 'src/lib/quality-contract.ts']
       .every((f) => (FINGERPRINT_FILES as readonly string[]).includes(f)))
+  // 🔴 P1 — 표본·cohort·의미 요약 판정도 지문 대상이다. 게이트만 보면 30건 판정을 판 없이 바꿀 수 있다
+  const watched = FINGERPRINT_FILES as readonly string[]
+  check('🔴 🔴 **지문 대상에 cohort · repo · evidence · 사람 출처 · 의미 요약 파서가 있다**',
+    ['src/lib/auto-ready-quality-cohort.ts', 'src/lib/auto-ready-repo.ts', 'src/lib/auto-ready-evidence.ts', 'src/lib/review-provenance.ts', 'src/lib/semantic-summary-codes.ts']
+      .every((f) => watched.includes(f)))
+  // 🔴 정의 위치 — 저장소 src/·scripts/ 전체에서 `function <이름>` 정의를 찾는다. 딱 한 곳 · 표의 파일 · 지문 대상
+  const defs = Object.entries(JUDGE_DEFINITIONS as Record<string, string>)
+  const misplaced = defs.flatMap(([name, file]) => {
+    let out = ''
+    try {
+      out = execFileSync('git', ['grep', '-lE', `^export (async )?function ${name}[(<]`, '--', 'src', 'scripts'], { encoding: 'utf8' })
+    } catch { out = '' } // 🔴 git grep 은 못 찾으면 exit 1 — 정의 없음으로 센다(통과가 아니다)
+    const found = out.split('\n').filter(Boolean)
+    return found.length === 1 && found[0] === file && watched.includes(file) ? [] : [`${name}→${found.join('|') || '없음'}`]
+  })
+  check('🔴 🔴 **판정 함수가 전부 지문 대상 파일 한 곳에 정의돼 있다** (지문 밖으로 옮기면 실패)', misplaced.length === 0, misplaced.join(' · '))
+  check('🔴 의미 요약 파서는 의존 없는 파일이다 (공급 적재기 전체를 지문에 넣지 않는다)',
+    !/^import /m.test(readFileSync('src/lib/semantic-summary-codes.ts', 'utf8'))
+      && !watched.includes('src/lib/micro-seed-supply-autofill.ts'))
 }
 
 // ─────────────────────────────────────────────────────────
