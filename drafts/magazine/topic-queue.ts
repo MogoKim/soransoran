@@ -101,23 +101,6 @@ export type TopicQueueItem = {
 
 export const TOPIC_QUEUE: TopicQueueItem[] = [
   {
-    day: 18,
-    slug: 'checkup-items-50s',
-    title: '50대 건강검진 꼭 챙겨야 할 항목',
-    contentType: 'EVERGREEN',
-    intent: '방법',
-    cluster: 'clinic',
-    target: '50대 전반',
-    riskLevel: 'HIGH',
-    reviewMode: 'FULL_REVIEW',
-    imageMode: 'REQUIRED',
-    autoEligible: false,
-    ctaBoard: '/community/menopause',
-    internalLinks: ['which-clinic-menopause'],
-    whyNow: '검진 항목이 너무 많아 무엇을 고를지 모른다',
-    notes: 'HIGH — 항목 사실관계 검증 필수. 수치·정상범위는 다루지 않는다',
-  },
-  {
     day: 22,
     slug: 'palpitations-menopause',
     title: '갱년기 심장이 두근거릴 때',

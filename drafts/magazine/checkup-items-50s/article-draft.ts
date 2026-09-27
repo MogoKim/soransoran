@@ -1,5 +1,5 @@
 /**
- * ChatGPT 원고를 변환한 draft — 창업자 검수용.
+ * ChatGPT 원고를 변환한 draft — 결정론적 QA 입력.
  *
  * 원본: drafts/magazine/checkup-items-50s/draft.md
  * 변환: scripts/magazine-md-to-draft.mjs (형식 변환만. 문장은 손대지 않았다)
@@ -18,7 +18,7 @@ export const DRAFT: MagazineArticleBody = {
 
   heroImage: {
     src: '/magazine/checkup-items-50s/hero.webp',
-    alt: '식탁에 펼친 건강검진 안내문을 들여다보는 50대 여성',
+    alt: '창가에서 서류를 들여다보며 생각에 잠긴 50대 한국 여성',
     width: 1200,
     height: 675,
   },
