@@ -211,6 +211,61 @@ async function main(): Promise<void> {
       && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: c.id } })).decidedBy === 'machine:auto-draft-v5')
     check('🔴 stale 행은 다시 보낼 입력이 없다(새 묶음 필요)', await row(page, c.id).getAttribute('data-phase') === 'stale' && await row(page, c.id).locator('select').count() === 0)
     check('🔴 🔴 **이번 제출도 요청 1번 · 보낸 행 둘(b · c)뿐**', submits.length === 2 && sentIds(submits[1]).sort().join(',') === [b.id, c.id].sort().join(','), sentIds(submits[1]).join(','))
+
+    console.log('\n6. 🔴 🔴 재검토 — 기본 잠금 · 누를 때만 결함 칸 · 결정 칸 0 · 성공하면 다시 잠금 (2026-09-27 P0 정정)')
+    await load()
+    const submitsBefore = submits.length
+    const hist = async (id: string) => readEvidenceReviews((await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id } })).editDiff).map((r) => r.hardDefect).join(',')
+    check('🔴 🔴 **기록 행은 기본 잠금 — 입력 칸 0 · 재검토 버튼 있음**',
+      await row(page, a.id).getAttribute('data-locked') === 'yes' && await row(page, a.id).locator('select, textarea').count() === 0
+      && await row(page, a.id).locator('[data-cta="rereview"]').count() === 1)
+    check('🔴 🔴 **재검토를 누르지 않은 기록 행 → 보낼 행 0 · CTA 닫힘 · 요청 0**',
+      await page.locator('[data-cta="review"]').isDisabled() && submits.length === submitsBefore)
+    await row(page, a.id).locator('[data-cta="rereview"]').click()
+    check('🔴 🔴 **재검토 중 — 결정(ready/reject) 칸 0 · 결함 칸 1 · 다른 행은 잠긴 그대로**',
+      await row(page, a.id).locator('select[name="decision"]').count() === 0 && await row(page, a.id).locator('select[name="hardDefect"]').count() === 1
+      && await row(page, b.id).locator('select').count() === 0)
+    await pick(page, a.id, 'hardDefect', 'yes')
+    await row(page, a.id).locator('textarea[name="reasons"]').fill('생활사 모순')
+    check('🔴 🔴 **미발행 승인 no → yes · 철회 없음 → 막힘(사유: 철회 필요) · CTA 닫힘**',
+      (await row(page, a.id).locator('[data-row-issue]').innerText()).includes('철회와 철회 사유를 함께') && await page.locator('[data-cta="review"]').isDisabled())
+    await row(page, a.id).locator('input[name="withdraw"]').check()
+    check('🔴 철회만 하고 사유 없음 → 여전히 막힘', await page.locator('[data-cta="review"]').isDisabled())
+    await pick(page, a.id, 'withdrawReason', 'TOPIC_UNFIT')
+    await page.locator('[data-cta="review"]').click()
+    await page.locator('[data-cta="submit"]').click()
+    await page.locator('[data-cta="review"]').waitFor()
+    await row(page, a.id).locator('[data-cta="rereview"]').waitFor()
+    const aRow = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: a.id } })
+    check('🔴 🔴 **no → yes + 철회 → DECLINED · 기록 no,yes (+1 · 옛 기록 보존)**',
+      aRow.status === 'DECLINED' && aRow.declineReason === 'TOPIC_UNFIT' && await hist(a.id) === 'no,yes', `${aRow.status} · ${await hist(a.id)}`)
+    check('🔴 🔴 **요청 1번 · 보낸 행은 재검토한 행 하나뿐**', submits.length === submitsBefore + 1 && sentIds(submits[submits.length - 1]).join(',') === a.id)
+    check('🔴 🔴 **성공 뒤 다시 잠금 — 입력 0 · 재검토 버튼 · 최신 판정 "있음" 표시**',
+      await row(page, a.id).getAttribute('data-locked') === 'yes' && await row(page, a.id).locator('select, textarea').count() === 0
+      && (await row(page, a.id).innerText()).includes('중대 결함 있음'))
+    // 같은 판정 재제출 → unchanged · +0 (이제 폐기된 행이라 철회 칸은 없다)
+    await row(page, a.id).locator('[data-cta="rereview"]').click()
+    check('🔴 🔴 **이미 폐기된 행 재검토 — 철회 칸 0 (재폐기 없음)**',
+      await (async () => { await pick(page, a.id, 'hardDefect', 'yes'); return await row(page, a.id).locator('input[name="withdraw"]').count() === 0 })())
+    await row(page, a.id).locator('textarea[name="reasons"]').fill('생활사 모순')
+    await page.locator('[data-cta="review"]').click()
+    await page.locator('[data-cta="submit"]').click()
+    await row(page, a.id).locator('[data-cta="rereview"]').waitFor()
+    check('🔴 🔴 **같은 판정 재제출 → "성공 — 이미 기록" · 기록 +0**',
+      (await row(page, a.id).locator('[data-result-tone="성공"]').innerText()).includes('이미 기록') && await hist(a.id) === 'no,yes')
+    // yes → no
+    await row(page, a.id).locator('[data-cta="rereview"]').click()
+    await pick(page, a.id, 'hardDefect', 'no')
+    await page.locator('[data-cta="review"]').click()
+    await page.locator('[data-cta="submit"]').click()
+    await row(page, a.id).locator('[data-cta="rereview"]').waitFor()
+    const aNo = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: a.id } })
+    check('🔴 🔴 **yes → no → 기록 no,yes,no (+1) · DECLINED·사유 그대로 · 최신 "없음" 표시**',
+      await hist(a.id) === 'no,yes,no' && aNo.status === 'DECLINED' && aNo.declineReason === 'TOPIC_UNFIT'
+      && (await row(page, a.id).innerText()).includes('중대 결함 없음'), await hist(a.id))
+    await load()
+    check('🔴 🔴 **새로 불러와도 다시 잠김 · 최신 판정 없음**',
+      await row(page, a.id).getAttribute('data-locked') === 'yes' && (await row(page, a.id).innerText()).includes('중대 결함 없음'))
     check('🔴 🔴 **끝까지 브라우저 기본 확인창 0**', dialogs === 0)
   } finally {
     await browser.close()

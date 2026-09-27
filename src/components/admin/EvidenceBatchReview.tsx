@@ -6,7 +6,7 @@ import {
 } from '@/lib/actions/auto-ready-evidence'
 import {
   EMPTY_ENTRY, planBatch, canSubmit, editableOf, rowIssue, isOpenApproved, toneOf, resultLabel, lockAfter,
-  describeSend, phaseLabel, type Entry, type EvidenceRowState, type BatchPlan, type RowResult,
+  canReview, reviewingAfter, describeSend, phaseLabel, type Entry, type EvidenceRowState, type BatchPlan, type RowResult,
 } from '@/lib/auto-ready-evidence-batch-plan'
 import { DECLINE_REASONS } from '@/lib/original-post-decision'
 
@@ -25,6 +25,9 @@ import { DECLINE_REASONS } from '@/lib/original-post-decision'
  *    · 브라우저 기본 확인창을 쓰지 않는다. 화면 안 **확인 단계**(무엇을 기록하는지 목록 + 두 번째 버튼)다.
  *    · 보내는 중에는 버튼이 닫히고(ref 잠금 — 같은 틱의 두 번째 클릭도 막는다), 끝나면 서버가 **다시 읽은**
  *      상태로 행을 그린다. 성공한 행은 즉시 잠긴다. 결과는 행마다 성공 · 건너뜀 · 거절로 보인다.
+ * 🔴 **재검토**(2026-09-27 P0 정정) — 내 기록이 있는 행은 기본으로 잠기고 `재검토` 버튼만 있다.
+ *    누르면 중대 결함 · 근거 칸만 열린다(결정 칸은 없다). 같은 판정이면 서버가 unchanged, 다르면 새 기록을
+ *    덧붙인다. 미발행 승인 글을 결함 있음으로 바꾸면 철회 · 사유 · 근거 셋이 다 있어야 보낸다. 성공하면 다시 잠긴다.
  */
 
 type Item = {
@@ -52,6 +55,7 @@ export default function EvidenceBatchReview() {
   const [states, setStates] = useState<ReadonlyMap<string, EvidenceRowState>>(new Map())
   const [stateLoaded, setStateLoaded] = useState(false)
   const [locked, setLocked] = useState<ReadonlySet<string>>(new Set())
+  const [reviewing, setReviewing] = useState<ReadonlySet<string>>(new Set())
   const [results, setResults] = useState<ReadonlyMap<string, RowResult>>(new Map())
   const [reviewer, setReviewer] = useState<string | null>(null)
   const [step, setStep] = useState<Step>('edit')
@@ -62,7 +66,7 @@ export default function EvidenceBatchReview() {
   const inFlight = useRef(false)
 
   const queueIds = useMemo(() => items.map((i) => i.queueId), [items])
-  const plan = useMemo(() => planBatch(queueIds, states, entries, locked), [queueIds, states, entries, locked])
+  const plan = useMemo(() => planBatch(queueIds, states, entries, locked, reviewing), [queueIds, states, entries, locked, reviewing])
   const frozen = busy !== null || step === 'confirm'
 
   function applyState(res: EvidenceBatchState): void {
@@ -89,7 +93,7 @@ export default function EvidenceBatchReview() {
   }
 
   async function onFile(file: File | undefined): Promise<void> {
-    setError(null); setResults(new Map()); setLocked(new Set()); setStates(new Map()); setStateLoaded(false)
+    setError(null); setResults(new Map()); setLocked(new Set()); setReviewing(new Set()); setStates(new Map()); setStateLoaded(false)
     setStep('edit'); setConfirmed(null)
     if (file === undefined) return
     const text = await file.text()
@@ -104,6 +108,12 @@ export default function EvidenceBatchReview() {
 
   const set = (id: string, patch: Partial<Entry>): void =>
     setEntries((e) => ({ ...e, [id]: { ...(e[id] ?? EMPTY_ENTRY), ...patch } }))
+
+  /** 🔴 재검토 열기·닫기 — 열 때도 닫을 때도 입력은 비운 채로 시작한다(예전 값이 따라오지 않는다) */
+  function toggleReview(id: string, open: boolean): void {
+    setReviewing((prev) => { const next = new Set(prev); if (open) next.add(id); else next.delete(id); return next })
+    setEntries((e) => ({ ...e, [id]: EMPTY_ENTRY }))
+  }
 
   function openConfirm(): void {
     if (!canSubmit(plan)) return
@@ -124,6 +134,8 @@ export default function EvidenceBatchReview() {
       const rs = res.results ?? []
       setResults((prev) => new Map([...prev, ...rs.map((r) => [r.queueId, r] as const)]))
       setLocked((prev) => lockAfter(prev, rs))
+      // 🔴 재검토가 성공한 행은 다시 잠긴다 — 최신 판정은 서버가 다시 읽은 `mine` 으로 보인다
+      setReviewing((prev) => reviewingAfter(prev, rs))
       // 🔴 성공한 행의 입력은 비운다 — 다시 보낼 값이 화면에 남지 않는다
       setEntries((prev) => {
         const next = { ...prev }
@@ -180,8 +192,9 @@ export default function EvidenceBatchReview() {
       {stateLoaded && items.map((i) => {
         const s = states.get(i.queueId)
         const e = entries[i.queueId] ?? EMPTY_ENTRY
-        const ed = editableOf(s, locked)
-        const issue = rowIssue(s, e, locked)
+        const ed = editableOf(s, locked, reviewing)
+        const issue = rowIssue(s, e, locked, reviewing)
+        const inReview = s !== undefined && s.phase === 'recorded' && reviewing.has(i.queueId)
         const result = results.get(i.queueId)
         const needWithdraw = ed === 'record' && s !== undefined && isOpenApproved(s) && e.hardDefect === 'yes'
         return (
@@ -206,8 +219,24 @@ export default function EvidenceBatchReview() {
             {s !== undefined && s.mine !== null && (
               <p className="mb-2 font-bold text-state-success">
                 ✓ 내 기록 있음 — 중대 결함 {s.mine.hardDefect === 'yes' ? '있음' : s.mine.hardDefect === 'no' ? '없음' : '미측정'}
-                {' · '}{new Date(s.mine.reviewedAt).toLocaleString('ko-KR')} · 이 행은 다시 보내지 않습니다
+                {' · '}{new Date(s.mine.reviewedAt).toLocaleString('ko-KR')}
+                {inReview ? '' : ' · 재검토를 누르지 않으면 보내지 않습니다'}
               </p>
+            )}
+            {canReview(s, reviewing) && (
+              <button type="button" onClick={() => toggleReview(i.queueId, true)} disabled={frozen} data-cta="rereview"
+                className="mb-2 min-h-[52px] rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+                재검토 — 중대 결함 판정 다시 하기
+              </button>
+            )}
+            {inReview && (
+              <div className="mb-2 flex flex-wrap items-center gap-2" data-review-open="">
+                <span className="font-bold">재검토 중 — 결정은 바꾸지 않습니다. 중대 결함 판정만 새로 기록합니다(이전 기록은 남습니다).</span>
+                <button type="button" onClick={() => toggleReview(i.queueId, false)} disabled={frozen} data-cta="rereview-cancel"
+                  className="min-h-[52px] rounded-lg border border-interactive px-4 font-bold text-content-primary disabled:opacity-50">
+                  재검토 취소
+                </button>
+              </div>
             )}
             {s !== undefined && ed === null && s.mine === null && s.why !== '' && (
               <p className="mb-2 text-content-muted">{s.why}</p>

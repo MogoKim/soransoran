@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  EMPTY_ENTRY, planBatch, canSubmit, editableOf, rowIssue, lockAfter, toneOf, resultLabel, describeSend,
+  EMPTY_ENTRY, planBatch, canSubmit, editableOf, rowIssue, lockAfter, toneOf, resultLabel, describeSend, canReview, reviewingAfter,
   type Entry, type EvidenceRowState, type RowPhase,
 } from '../src/lib/auto-ready-evidence-batch-plan'
 
@@ -126,6 +126,52 @@ console.log('\n5. 결과 표시 — 성공 · 건너뜀 · 거절')
     describeSend({ queueId: 'x', decision: 'reject', declineReason: 'OTHER', hardDefect: 'yes', reasons: ['a'], withdraw: false }) === '결정: 폐기 (기타) · 중대 결함: 있음 · 근거 1줄')
 }
 
+console.log('\n5b. 🔴 🔴 재검토 — 내 기록이 있는 행은 기본 잠금 · 재검토를 눌렀을 때만 결함 칸 (2026-09-27 P0 정정)')
+{
+  const mine = { hardDefect: 'no' as const, reasons: [], reviewedAt: '2026-09-27T00:00:00Z', bundleDigest: 'd' }
+  const openRec = st('o', 'recorded', { status: 'APPROVED', mine })
+  const declRec = st('x', 'recorded', { status: 'DECLINED', outcome: 'declined', declineReason: 'OTHER', mine })
+  const pubRec = st('p', 'recorded', { status: 'PUBLISHED', published: true, mine })
+  const R = (...ids: string[]): ReadonlySet<string> => new Set(ids)
+  const toYes = en({ hardDefect: 'yes', reasons: '생활사 모순', withdraw: true, declineReason: 'TOPIC_UNFIT' })
+
+  check('🔴 🔴 **재검토 전 — 입력 없음 · 재검토 버튼 있음**', editableOf(openRec, NONE, NONE) === null && canReview(openRec, NONE))
+  const noPress = planBatch(['o'], new Map([['o', openRec]]), { o: toYes }, NONE, NONE)
+  check('🔴 🔴 **재검토를 누르지 않은 기록 행 → 보내는 행 0 (입력이 남아 있어도)**', noPress.send.length === 0 && noPress.locked === 1, JSON.stringify(noPress))
+  check('🔴 🔴 **재검토 중 → 결함 기록(record)만 · 결정 칸(decide) 아님 · 버튼 숨김**',
+    editableOf(openRec, NONE, R('o')) === 'record' && !canReview(openRec, R('o')))
+  check('🔴 🔴 **이번 화면에서 성공해 잠긴 행도 재검토를 누르면 열린다**', editableOf(openRec, R('o'), R('o')) === 'record')
+  check('🔴 재검토는 recorded 에서만 — undecided · stale 에 재검토 표시가 있어도 결정 전은 decide · stale 은 닫힘',
+    editableOf(st('u', 'undecided'), NONE, R('u')) === 'decide' && editableOf(st('s', 'stale'), NONE, R('s')) === null && !canReview(st('u', 'undecided'), NONE))
+  const withDecision = planBatch(['o'], new Map([['o', openRec]]), { o: en({ decision: 'reject', declineReason: 'OTHER', hardDefect: 'no' }) }, NONE, R('o'))
+  check('🔴 🔴 **재검토 중 결정 값이 남아 있어도 보내지 않는다(decision null)**', withDecision.send[0]?.decision === null && withDecision.send[0]?.declineReason === null, JSON.stringify(withDecision))
+
+  const noToYes = planBatch(['o'], new Map([['o', openRec]]), { o: toYes }, NONE, R('o'))
+  check('🔴 🔴 **미발행 승인 no → yes + 철회 + 사유 + 근거 → 철회와 함께 보낸다**',
+    noToYes.send.length === 1 && noToYes.send[0]?.withdraw === true && noToYes.send[0]?.declineReason === 'TOPIC_UNFIT' && noToYes.send[0]?.hardDefect === 'yes', JSON.stringify(noToYes))
+  for (const [label, e] of [
+    ['철회 없음', en({ hardDefect: 'yes', reasons: '모순', declineReason: 'TOPIC_UNFIT' })],
+    ['사유 없음', en({ hardDefect: 'yes', reasons: '모순', withdraw: true })],
+    ['근거 없음', en({ hardDefect: 'yes', withdraw: true, declineReason: 'TOPIC_UNFIT' })],
+  ] as const) {
+    const p = planBatch(['o'], new Map([['o', openRec]]), { o: e }, NONE, R('o'))
+    check(`🔴 🔴 **미발행 승인 no → yes · ${label} → 막힘 · 보내는 행 0**`, p.send.length === 0 && p.blocking.length === 1 && !canSubmit(p), JSON.stringify(p))
+  }
+  const declYes = planBatch(['x'], new Map([['x', declRec]]), { x: toYes }, NONE, R('x'))
+  check('🔴 🔴 **이미 폐기된 행 재검토 → 판정만 · 철회·폐기 사유는 보내지 않는다(재폐기 0)**',
+    declYes.send[0]?.withdraw === false && declYes.send[0]?.declineReason === null && declYes.send[0]?.hardDefect === 'yes')
+  const pubYes = planBatch(['p'], new Map([['p', pubRec]]), { p: en({ hardDefect: 'yes', reasons: '사후', withdraw: true, declineReason: 'OTHER' }) }, NONE, R('p'))
+  check('🔴 🔴 **발행된 행 재검토 → 사후 판정만 · 철회 0**', pubYes.send[0]?.withdraw === false && pubYes.send[0]?.hardDefect === 'yes')
+  const yesToNo = planBatch(['x'], new Map([['x', { ...declRec, mine: { ...mine, hardDefect: 'yes' as const } }]]), { x: en({ hardDefect: 'no' }) }, NONE, R('x'))
+  check('yes → no 재검토 → no 로 보낸다', yesToNo.send[0]?.hardDefect === 'no' && yesToNo.send[0]?.withdraw === false)
+
+  const after = reviewingAfter(R('o', 'x'), [{ queueId: 'o', result: 'withdrawnAndRecorded', why: '' }, { queueId: 'x', result: 'reject', why: '' }])
+  check('🔴 🔴 **성공한 재검토는 닫힌다(다시 잠금) · 거절은 열린 채로 남는다**', !after.has('o') && after.has('x'))
+  check('🔴 🔴 **unchanged 도 성공 — 재검토가 닫힌다**', !reviewingAfter(R('o'), [{ queueId: 'o', result: 'unchanged', why: '' }]).has('o'))
+  check('🔴 🔴 **다시 잠긴 뒤 계획 — 보내는 행 0 · 재검토 버튼 다시 보임**',
+    planBatch(['o'], new Map([['o', openRec]]), { o: toYes }, R('o'), after).send.length === 0 && canReview(openRec, after))
+}
+
 console.log('\n6. 🔴 화면 소스 — 브라우저 기본 확인창 0 · 계획의 send 만 보낸다')
 {
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src/components/admin/EvidenceBatchReview.tsx'), 'utf8')
@@ -134,6 +180,9 @@ console.log('\n6. 🔴 화면 소스 — 브라우저 기본 확인창 0 · 계�
   check('🔴 🔴 **제출 payload 는 확인 단계 스냅샷의 send 하나**',
     /submitEvidenceBatch\(\{\s*bundleText,\s*entries:\s*confirmed\.send\s*\}\)/.test(code) && (code.match(/submitEvidenceBatch\(/g) ?? []).length === 1)
   check('🔴 결정 칸은 decide 행에서만 그린다', /ed === 'decide' &&/.test(code) && !/ed !== 'record' &&/.test(code))
+  check('🔴 🔴 **재검토 버튼은 canReview 로만 · 계획에 reviewing 을 넘긴다**',
+    /canReview\(s, reviewing\) &&/.test(code) && /planBatch\(queueIds, states, entries, locked, reviewing\)/.test(code)
+    && /editableOf\(s, locked, reviewing\)/.test(code) && /setReviewing\(\(prev\) => reviewingAfter\(prev, rs\)\)/.test(code))
   check('🔴 보내는 중 ref 잠금', /inFlight\.current\) return/.test(code) || /inFlight\.current\)\s*return/.test(code))
 }
 

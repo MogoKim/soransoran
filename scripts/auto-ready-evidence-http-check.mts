@@ -21,6 +21,8 @@ import { PrismaClient } from '@prisma/client'
 
 import { digestOf, readEvidenceReviews } from '../src/lib/auto-ready-evidence'
 import { HUMAN_DECIDER } from '../src/lib/auto-ready-v2'
+import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
+import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import {
   MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE, semanticSummaryOf,
 } from '../src/lib/micro-seed-supply-autofill'
@@ -261,6 +263,41 @@ async function main(): Promise<void> {
     && (pr.find((r) => r.queueId === stl.id)?.why ?? '').includes('초안이 바뀌었다')
     && await recCount(g.id) === 1 && await recCount(stl.id) === 0 && (await qrow(stl.id)).updatedAt.getTime() === stlBefore.updatedAt.getTime(), JSON.stringify(pr))
   check('🔴 부분 성공 응답의 상태 — recorded · stale', partial.payload?.rows?.map((r) => r.phase).join(',') === 'recorded,stale')
+
+  // ── 🔴 🔴 재검토 — 같은 사람의 판정 변경 (2026-09-27 P0 정정) ──
+  console.log('\n── 재검토 — 같은 사람 no → yes(철회) · yes → no · 같은 판정 재제출 ──')
+  const rv = await shadowRow('재검토')
+  const bundleR = bundleFor([rv])
+  const rvCall = (entry: Record<string, unknown>) => call({ bundleText: bundleR, entries: [{ queueId: rv.id, ...entry }] }, adminCookie)
+  const rv0 = await rvCall({ decision: 'ready', hardDefect: 'no' })
+  check('선행 — 결정 전 행을 ready · 결함 없음으로 결정 · 기록 1', rv0.payload?.results?.[0]?.result === 'decidedAndRecorded' && await recCount(rv.id) === 1)
+  const rvBefore = await qrow(rv.id)
+  const rvNoWithdraw = await rvCall({ hardDefect: 'yes', reasons: ['생활사 모순'] })
+  check('🔴 🔴 **no → yes · 철회 없음 → 거절 · write 0**',
+    rvNoWithdraw.payload?.results?.[0]?.result === 'reject' && await recCount(rv.id) === 1 && (await qrow(rv.id)).updatedAt.getTime() === rvBefore.updatedAt.getTime())
+  const reDecide = await rvCall({ decision: 'reject', declineReason: 'OTHER', hardDefect: 'yes', reasons: ['생활사 모순'] })
+  check('🔴 🔴 **재검토에 결정(reject)을 섞어 보내면 거절 · write 0 (결정은 한 번뿐)**',
+    reDecide.payload?.results?.[0]?.result === 'reject' && (await qrow(rv.id)).status === 'APPROVED' && await recCount(rv.id) === 1)
+  const toYes = await rvCall({ hardDefect: 'yes', reasons: ['생활사 모순'], withdraw: true, declineReason: 'TOPIC_UNFIT' })
+  const rvAfter = await qrow(rv.id)
+  const hist = readEvidenceReviews(rvAfter.editDiff)
+  const stockR = await loadPublishableStock(prisma, new Date(), { autoReadyOpen: false })
+  const pubR = await publishOriginalPostTx(prisma, { queueId: rv.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: {} })
+  check('🔴 🔴 **같은 사람 no → yes + 철회 → withdrawnAndRecorded · +1 · 옛 no 보존 · 최신 yes · DECLINED**',
+    toYes.payload?.results?.[0]?.result === 'withdrawnAndRecorded' && hist.map((r) => r.hardDefect).join(',') === 'no,yes'
+    && rvAfter.status === 'DECLINED' && rvAfter.declineReason === 'TOPIC_UNFIT', toYes.text.slice(0, 300))
+  check('🔴 🔴 **철회 뒤 selector 대상 0 · 발행 트랜잭션 0**', !stockR.targets.some((t) => t.id === rv.id) && pubR.kind === 'blocked' && (await qrow(rv.id)).createdPostId === null)
+  check('🔴 🔴 **응답의 지금 상태 — 다시 recorded · 최신 yes**', toYes.payload?.rows?.[0]?.phase === 'recorded' && toYes.payload.rows[0]?.mine?.hardDefect === 'yes')
+  const sameYes = await rvCall({ hardDefect: 'yes', reasons: ['생활사 모순'], withdraw: true, declineReason: 'TOPIC_UNFIT' })
+  check('🔴 🔴 **같은 판정 재제출 → unchanged · +0**', sameYes.payload?.results?.[0]?.result === 'unchanged' && await recCount(rv.id) === 2)
+  const toNo = await rvCall({ hardDefect: 'no' })
+  const rvNo = await qrow(rv.id)
+  check('🔴 🔴 **같은 사람 yes → no → +1 · 옛 기록 보존 · 최신 no · DECLINED·사유 그대로(재폐기 0)**',
+    toNo.payload?.results?.[0]?.result === 'recorded' && readEvidenceReviews(rvNo.editDiff).map((r) => r.hardDefect).join(',') === 'no,yes,no'
+    && rvNo.status === 'DECLINED' && rvNo.declineReason === 'TOPIC_UNFIT' && toNo.payload.rows?.[0]?.mine?.hardDefect === 'no', toNo.text.slice(0, 300))
+  const sameNo = await rvCall({ hardDefect: 'no' })
+  check('🔴 🔴 **철회 없는 같은 판정(no) 재제출 → unchanged · +0 · 행 write 0**',
+    sameNo.payload?.results?.[0]?.result === 'unchanged' && await recCount(rv.id) === 3 && (await qrow(rv.id)).updatedAt.getTime() === rvNo.updatedAt.getTime(), sameNo.text.slice(0, 300))
 
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "AutoReadyAudit","OriginalPostApprovalQueue","MicroSeedRawContent","Post","Persona","User" CASCADE')
   await prisma.$disconnect()

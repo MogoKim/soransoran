@@ -11,7 +11,11 @@
  *    · 손대지 않은 행은 **보내지 않는다** (건너뜀 결과도 만들지 않는다)
  *    · 손댄 행에 빈칸·모순이 있으면 **막는다**(blocking) — 막힌 행이 하나라도 있으면 CTA 가 닫힌다
  *    · 서버의 지금 상태(authoritative)가 없거나 기록 대상이 아닌 행은 **입력 자체가 없다**(fail-closed)
- *    · 이미 이 사람이 기록한 행(`recorded`) · 이번 화면에서 성공한 행은 **잠긴다** — 다시 보낼 길이 없다
+ *    · 이미 이 사람이 기록한 행(`recorded`) · 이번 화면에서 성공한 행은 **기본으로 잠긴다**
+ *    · 🔴 **재검토**(2026-09-27 P0 정정) — 잠긴 `recorded` 행은 운영자가 `재검토` 를 **명시적으로** 눌렀을 때만
+ *      중대 결함 · 근거 칸이 다시 열린다(`reviewing`). 서버 계약은 같은 사람의 판정 변경을 append-only 로
+ *      받는다 — 화면이 영구 잠금이면 "결함 없음" 을 잘못 누른 운영자가 고쳐서 철회할 길이 없다.
+ *      재검토에서도 ready · reject 결정 칸은 **절대 다시 열리지 않는다**(결정은 한 번뿐). 성공하면 다시 잠긴다.
  * 🔴 결정 전 그림자(`undecided`)만 ready · reject 를 고른다. 이미 결정된 행(`decided`)에는
  *    결정 칸이 **없다** — 들어와도 계획이 버린다(결정을 바꾸지 않는다 · 폐기된 글을 다시 폐기하지 않는다).
  * 🔴 서버(`recordHumanBatch`)도 같은 규칙을 다시 잰다. 이 파일은 화면의 1차 방어이지 정본 경계가 아니다.
@@ -80,8 +84,14 @@ export type BatchPlan = {
 /** 🔴 입력 칸 종류 — `decide`(결정 + 결함) · `record`(결함만) · null(입력 없음 · 잠금) */
 export type Editable = 'decide' | 'record' | null
 
-export function editableOf(state: EvidenceRowState | undefined, lockedIds: ReadonlySet<string>): Editable {
+const NO_IDS: ReadonlySet<string> = new Set()
+
+export function editableOf(
+  state: EvidenceRowState | undefined, lockedIds: ReadonlySet<string>, reviewing: ReadonlySet<string> = NO_IDS,
+): Editable {
   if (state === undefined) return null
+  // 🔴 재검토는 `recorded` 행에서만 · 결함 기록(record)만 연다 — 결정 칸(decide)은 없다
+  if (state.phase === 'recorded' && reviewing.has(state.queueId)) return 'record'
   if (lockedIds.has(state.queueId)) return null
   if (state.phase === 'undecided') return 'decide'
   if (state.phase === 'decided') return 'record'
@@ -106,8 +116,10 @@ export function isTouched(editable: Editable, e: Entry): boolean {
  * 🔴 한 행의 막힘 사유 — 손대지 않았으면 null(보내지 않을 뿐 막지 않는다).
  *    손댔다면 서버가 거절할 조합을 **보내기 전에** 막는다.
  */
-export function rowIssue(state: EvidenceRowState | undefined, e: Entry, lockedIds: ReadonlySet<string>): string | null {
-  const ed = editableOf(state, lockedIds)
+export function rowIssue(
+  state: EvidenceRowState | undefined, e: Entry, lockedIds: ReadonlySet<string>, reviewing: ReadonlySet<string> = NO_IDS,
+): string | null {
+  const ed = editableOf(state, lockedIds, reviewing)
   if (ed === null || state === undefined || !isTouched(ed, e)) return null
   const reasons = reasonLines(e.reasons)
   if (ed === 'decide') {
@@ -136,6 +148,7 @@ export function planBatch(
   states: ReadonlyMap<string, EvidenceRowState>,
   entries: Readonly<Record<string, Entry>>,
   lockedIds: ReadonlySet<string>,
+  reviewing: ReadonlySet<string> = NO_IDS,
 ): BatchPlan {
   const send: SendEntry[] = []
   const blocking: Blocking[] = []
@@ -144,10 +157,10 @@ export function planBatch(
   for (const id of queueIds) {
     const s = states.get(id)
     const e = entries[id] ?? EMPTY_ENTRY
-    const ed = editableOf(s, lockedIds)
+    const ed = editableOf(s, lockedIds, reviewing)
     if (ed === null || s === undefined) { locked += 1; continue }
     if (!isTouched(ed, e)) { untouched += 1; continue }
-    const why = rowIssue(s, e, lockedIds)
+    const why = rowIssue(s, e, lockedIds, reviewing)
     if (why !== null) { blocking.push({ queueId: id, why }); continue }
     if (e.hardDefect === '') { blocking.push({ queueId: id, why: '중대 결함을 골라 주세요' }); continue }
     // 🔴 결정 칸은 결정 전 행에서만 보낸다. 철회는 미발행 승인 + 결함 yes 에서만 보낸다
@@ -192,6 +205,17 @@ export function resultLabel(r: RowResult): string {
 export function lockAfter(prev: ReadonlySet<string>, results: readonly RowResult[]): Set<string> {
   const next = new Set(prev)
   for (const r of results) if (toneOf(r.result) === '성공') next.add(r.queueId)
+  return next
+}
+
+/** 🔴 `재검토` 버튼을 보이는가 — 잠긴 `recorded` 행이고 아직 재검토 중이 아닐 때만 */
+export const canReview = (state: EvidenceRowState | undefined, reviewing: ReadonlySet<string>): boolean =>
+  state !== undefined && state.phase === 'recorded' && !reviewing.has(state.queueId)
+
+/** 🔴 성공한 행은 재검토를 닫는다 — 다시 잠기고 최신 판정만 보인다 */
+export function reviewingAfter(prev: ReadonlySet<string>, results: readonly RowResult[]): Set<string> {
+  const next = new Set(prev)
+  for (const r of results) if (toneOf(r.result) === '성공') next.delete(r.queueId)
   return next
 }
 
