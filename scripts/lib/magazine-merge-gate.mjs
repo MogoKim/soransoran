@@ -171,6 +171,12 @@ function stableJson(v) {
 
 export function judgeAutoMerge({
   pr, expectedSha, files, ciState, checks = [],
+  /**
+   * 🔴 PR **head tree** 에 그 경로의 파일이 실제로 있는가. 변경 파일 목록과 다른 질문이다.
+   *    주입되지 않으면 `null` 판정 → 변경 파일 목록으로 되돌아간다(모르면 막는다).
+   * @type {((path: string) => boolean) | undefined}
+   */
+  headHasFile,
   registered, queueBySlug, branchQueueBySlug = null, mainSlugs, mainDates, now,
 }) {
   const blockedBy = []
@@ -359,8 +365,22 @@ export function judgeAutoMerge({
     } else {
       // heroImage.src 는 `/magazine/<slug>/hero.webp` · 저장소 경로는 `public` 이 앞에 붙는다
       const expected = `public${heroSrc.startsWith('/') ? '' : '/'}${heroSrc}`
-      if (!(files ?? []).includes(expected)) {
-        block('HERO_FILE_ABSENT', `${r.slug} 의 대표 이미지 파일이 PR 에 없다 (${expected}) — 경로만 있고 그림이 없다`)
+      /**
+       * 🔴 **"PR 이 바꾼 파일" 과 "PR head 에 있는 파일" 은 다르다** (2026-09-27 사고).
+       *
+       *    앞판은 변경 파일 목록(`files`)만 봤다. 그래서 **이미 저장소에 있던 hero 를
+       *    재사용**한 글이 `HERO_FILE_ABSENT` 로 막혔다 — 파일은 head tree 에 멀쩡히
+       *    있는데 "이번 PR 이 건드리지 않았다" 는 이유로 막은 것이다.
+       *    실측: PR #580 의 `checkup-items-50s` hero 는 base·head 양쪽에 같은 blob 이 있었다.
+       *
+       *    막아야 하는 것은 **head 에 그림이 없는 경우** 하나다.
+       *    🔴 판정 수단이 없으면(주입 안 됨) 옛 기준으로 되돌아간다 — 모르면 막는다.
+       */
+      const inChangedFiles = (files ?? []).includes(expected)
+      const inHead = typeof headHasFile === 'function' ? headHasFile(expected) : null
+      const heroPresent = inHead === null ? inChangedFiles : inHead
+      if (!heroPresent) {
+        block('HERO_FILE_ABSENT', `${r.slug} 의 대표 이미지 파일이 PR head 에 없다 (${expected}) — 경로만 있고 그림이 없다`)
       }
     }
   }

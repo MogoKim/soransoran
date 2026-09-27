@@ -242,6 +242,25 @@ export function readRegenPacket(packetPath, slug) {
   return { ok: true, packet }
 }
 
+/**
+ * 🔴 **실패 한 줄의 정본.** 회수 결과를 사람이 읽을 한 문장으로 만든다.
+ *
+ *    2026-09-27 사고: `fetchManuscript` 는 `stage`·`errorName`·`errorDetail` 을 만들었는데
+ *    `fetchSlug` 가 `reason`·`sent` 만 돌려주며 **세 필드를 버렸다.** 그래서 운영 로그에는
+ *    끝까지 `connect_failed` 한 단어만 남았고, 실제 원인(composer 선택자)을 알 수 없었다.
+ *    만들어 두고 전달하지 않으면 없는 것과 같다.
+ *
+ *    🔴 원문은 첫 줄·200자까지만 싣는다. 쿠키·토큰·본문은 기록하지 않는다.
+ */
+export function describeFetchFailure(r) {
+  const where = r?.stage ? `[${r.stage}] ` : ''
+  const detail = r?.detail
+    ?? (r?.errorName && r?.errorDetail ? `${r.errorName}: ${r.errorDetail}`
+      : r?.errorDetail ?? (r?.errorName ? String(r.errorName) : ''))
+  const extra = r?.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''
+  return `${where}${r?.reason ?? 'unknown'}${detail ? ` — ${detail}` : ''}${extra} · 전송 ${r?.sent ? '1건' : '0건'}`
+}
+
 async function fetchSlug(slug, { quiet = false, force = false, regenPacket = null } = {}) {
   const dir = join(DRAFTS_DIR, slug)
   const briefPath = join(dir, 'brief.md')
@@ -302,6 +321,10 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     sent: r.sent,
     missingCount: r.missingCount,
     invalid: r.invalid ?? null,
+    // 🔴 여기서 버리면 운영 로그까지 `connect_failed` 한 단어로 도착한다 (2026-09-27)
+    stage: r.stage ?? null,
+    errorName: r.errorName ?? null,
+    errorDetail: r.errorDetail ?? null,
   }
 }
 
@@ -365,7 +388,7 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
     process.exit(r.reason === 'brief_missing' ? 1 : 0)
   }
   if (r.status === 'failed') {
-    console.error(`     ⛔ ${r.reason}${r.detail ? ` — ${r.detail}` : ''}${r.missingCount ? ` (지정 문장 ${r.missingCount}개 누락)` : ''} · 전송 ${r.sent ? '1건' : '0건'}`)
+    console.error(`     ⛔ ${describeFetchFailure(r)}`)
     // 🔴 관문에 막혔으면 무엇이 걸렸는지 한 줄씩 말한다. 코드만 찍으면 고칠 수가 없다.
     if (r.invalid?.length) {
       console.error('     관문에 막혔다 — 저장하지 않았다:')
@@ -464,7 +487,8 @@ async function fetchBatch({ date, dryRun, limit }) {
       const d = describeDraft(p.slug)
       console.log(`     ✅ ${d.length}자 · h2 ${d.h2} · CTA ${d.cta}`)
     } else if (r.status === 'failed') {
-      console.log(`     ⛔ ${r.reason}${r.invalid?.length ? ` — ${describeReasons(r.invalid)}` : ''}`)
+      // 🔴 stage·원문을 여기서도 싣는다 — 일괄 회수 로그가 운영에서 제일 많이 읽힌다
+      console.log(`     ⛔ ${describeFetchFailure(r)}${r.invalid?.length ? ` — ${describeReasons(r.invalid)}` : ''}`)
       // 전역 실패면 나머지를 시도하지 않는다
       if (isFatal(r.reason)) { fatal = r.reason; console.log('     전역 실패 — 나머지를 시도하지 않는다'); break }
       console.log('     다음 글로 넘어간다')

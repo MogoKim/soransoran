@@ -39,7 +39,10 @@
 import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { loadQueue } from './lib/magazine-load.mjs'
-import { CDP_URL, ensureChrome, ensurePageTarget, CDP_CONNECT_TIMEOUT_MS } from './lib/chatgpt-session.mjs'
+import {
+  CDP_URL, ensureChrome, ensurePageTarget, CDP_CONNECT_TIMEOUT_MS,
+  COMPOSER_SELECTOR, composerLocator,
+} from './lib/chatgpt-session.mjs'
 import {
   planHero, buildPrompt, injectHeroImage, verifyHeroFile,
   heroFilePath, heroPublicPath, HERO_WIDTH, HERO_HEIGHT,
@@ -70,19 +73,24 @@ async function generateImage(prompt) {
    *    한쪽은 뜨고 한쪽은 못 뜨는 어긋남이 생겼다. 경로를 하나로 맞춘다.
    */
   const boot = await ensureChrome()
-  if (!boot.ok) return { ok: false, why: `${boot.reason ?? 'CHROME_NOT_RUNNING'} — Chrome 을 띄우지 못했다` }
+  if (!boot.ok) return { ok: false, stage: 'chrome', why: `${boot.reason ?? 'CHROME_NOT_RUNNING'} — Chrome 을 띄우지 못했다` }
   const tab = await ensurePageTarget()
-  if (!tab.ok) return { ok: false, why: 'CHROME_NOT_RUNNING — magazine-webui-runner.mjs --login 으로 창을 띄운다' }
+  if (!tab.ok) return { ok: false, stage: 'tab', why: 'CHROME_NOT_RUNNING — magazine-webui-runner.mjs --login 으로 창을 띄운다' }
 
-  const browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: CDP_CONNECT_TIMEOUT_MS })
-  const ctx = browser.contexts()[0]
-  if (!ctx) return { ok: false, why: 'no_context' }
-  const page = await ctx.newPage()
-
+  let browser = null
+  let page = null
+  let stage = 'connect'
   try {
+    browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: CDP_CONNECT_TIMEOUT_MS })
+    const ctx = browser.contexts()[0]
+    if (!ctx) return { ok: false, stage, why: 'no_context' }
+    stage = 'open-tab'
+    page = await ctx.newPage()
     await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded', timeout: 60000 })
-    await page.waitForSelector('#prompt-textarea', { timeout: 60000 })
-    await page.click('#prompt-textarea')
+    // 🔴 정본 선택자 하나만 쓴다 (chatgpt-session.mjs · COMPOSER_SELECTOR)
+    stage = 'composer'
+    await page.waitForSelector(COMPOSER_SELECTOR, { timeout: 60000 })
+    await composerLocator(page).click()
     await page.keyboard.insertText(prompt)
     await page.waitForTimeout(700)
     await page.keyboard.press('Enter')
@@ -108,18 +116,30 @@ async function generateImage(prompt) {
       return btoa(s)
     }, src)
     return { ok: true, buffer: Buffer.from(b64, 'base64') }
+  } catch (err) {
+    /**
+     * 🔴 **예외를 밖으로 흘리지 않는다** (2026-09-27 사고).
+     *    앞판은 여기서 던진 예외가 `main()` 까지 올라가 프로세스가 죽었고,
+     *    호출부(drive)는 stderr 의 **마지막 두 줄**만 취해 `HERO_FAILED — Node.js v24.14.0`
+     *    을 남겼다. 무엇이 왜 터졌는지가 통째로 사라진 것이다.
+     */
+    return { ok: false, stage, why: `${stage}: ${err?.name ?? 'Error'} — ${String(err?.message ?? '').split('\n')[0].slice(0, 200)}` }
   } finally {
-    await page.close().catch(() => {})
-    await browser.close().catch(() => {})
+    // 🔴 성공·실패·예외 모두에서 **내가 연 탭만** 닫는다. Chrome 자체는 끊기만 한다.
+    await page?.close().catch(() => {})
+    await browser?.close().catch(() => {})
   }
 }
 
 /** PNG 버퍼 → 1200×675 webp 버퍼. Chrome 내장 인코더를 쓴다 */
 async function toHeroWebp(pngBuffer) {
-  const browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: CDP_CONNECT_TIMEOUT_MS })
-  const ctx = browser.contexts()[0]
-  const page = await ctx.newPage()
+  let browser = null
+  let page = null
   try {
+    browser = await (await chromium()).connectOverCDP(CDP_URL, { timeout: CDP_CONNECT_TIMEOUT_MS })
+    const ctx = browser.contexts()[0]
+    if (!ctx) return { ok: false, stage: 'webp', why: 'no_context' }
+    page = await ctx.newPage()
     await page.goto('about:blank')
     const out = await page.evaluate(
       async ({ b64, w, h, q }) => {
@@ -138,11 +158,13 @@ async function toHeroWebp(pngBuffer) {
       },
       { b64: pngBuffer.toString('base64'), w: HERO_WIDTH, h: HERO_HEIGHT, q: WEBP_QUALITY },
     )
-    if (out.type !== 'image/webp') return { ok: false, why: `webp 인코딩 미지원 — ${out.type}` }
+    if (out.type !== 'image/webp') return { ok: false, stage: 'webp', why: `webp 인코딩 미지원 — ${out.type}` }
     return { ok: true, buffer: Buffer.from(out.data, 'base64') }
+  } catch (err) {
+    return { ok: false, stage: 'webp', why: `webp: ${err?.name ?? 'Error'} — ${String(err?.message ?? '').split('\n')[0].slice(0, 200)}` }
   } finally {
-    await page.close().catch(() => {})
-    await browser.close().catch(() => {})
+    await page?.close().catch(() => {})
+    await browser?.close().catch(() => {})
   }
 }
 
@@ -310,4 +332,13 @@ function printHuman(p, prompt, write, applied) {
   console.log('')
 }
 
-if (process.argv[1] && process.argv[1].endsWith('magazine-hero-runner.mjs')) main()
+/**
+ * 🔴 **프로세스가 스택만 남기고 죽지 않게 한다.** 호출부는 마지막 몇 줄만 읽는다 —
+ *    그 자리에 `Node.js v24.14.0` 이 남으면 진단이 통째로 사라진다.
+ */
+if (process.argv[1] && process.argv[1].endsWith('magazine-hero-runner.mjs')) {
+  main().catch((err) => {
+    console.error(`⛔ HERO_UNEXPECTED ${err?.name ?? 'Error'} — ${String(err?.message ?? '').split('\n')[0].slice(0, 200)}`)
+    process.exit(1)
+  })
+}

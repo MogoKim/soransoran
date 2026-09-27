@@ -220,7 +220,16 @@ export function plan({ slug, publishAtInput, founderApproved = false }) {
  * @param {object} p
  * @param {{write?:Function}} [deps] 🔴 시험이 **두 번째 쓰기 실패**를 주입하기 위한 자리
  */
-export function applyWrite(p, { write = writeFileSync } = {}) {
+export function applyWrite(p, {
+  write = writeFileSync,
+  /**
+   * 🔴 두 파일 경로도 주입점이다. 시험이 **실제 topic-queue 의 특정 day 블록**에
+   *    기대면, 그 글이 등록돼 큐에서 빠지는 순간 시험이 깨진다 — 자동화가 성공할수록
+   *    CI 가 빨개지는 구조다 (2026-09-27). 기본값은 실제 경로 그대로다.
+   */
+  articlesPath = ARTICLES_TS,
+  queuePath = QUEUE_TS,
+} = {}) {
   const { draft, norm, item, articlesSrc } = p._internal
 
   const rec = buildRecord(p.slug, draft.literal, norm.date, norm.publishAt)
@@ -229,7 +238,7 @@ export function applyWrite(p, { write = writeFileSync } = {}) {
   const nextArticles = articlesSrc.replace(ANCHOR, rec.text + ANCHOR)
   if (nextArticles === articlesSrc) return { ok: false, why: 'articles.ts 삽입에 실패했다' }
 
-  const queueSrc = readFileSync(QUEUE_TS, 'utf8')
+  const queueSrc = readFileSync(queuePath, 'utf8')
   const re = new RegExp(`  \\{\\n    day: ${item.day},[\\s\\S]*?\\n  \\},\\n`, 'm')
   const hits = queueSrc.match(re)
   if (!hits) return { ok: false, why: `topic-queue.ts 에서 day ${item.day} 블록을 찾지 못했다` }
@@ -238,8 +247,8 @@ export function applyWrite(p, { write = writeFileSync } = {}) {
 
   // 여기까지 오면 계산은 둘 다 성공. 이제 쓴다 — **되돌릴 수 있는 상태로**.
   const before = [
-    { path: ARTICLES_TS, bytes: existsSync(ARTICLES_TS) ? readFileSync(ARTICLES_TS) : null },
-    { path: QUEUE_TS, bytes: existsSync(QUEUE_TS) ? readFileSync(QUEUE_TS) : null },
+    { path: articlesPath, bytes: existsSync(articlesPath) ? readFileSync(articlesPath) : null },
+    { path: queuePath, bytes: existsSync(queuePath) ? readFileSync(queuePath) : null },
   ]
   const rollback = () => {
     const failed = []
@@ -252,8 +261,8 @@ export function applyWrite(p, { write = writeFileSync } = {}) {
     return failed
   }
   try {
-    write(ARTICLES_TS, nextArticles)
-    write(QUEUE_TS, nextQueue)
+    write(articlesPath, nextArticles)
+    write(queuePath, nextQueue)
   } catch (e) {
     const failed = rollback()
     return { ok: false, rolledBack: true,
