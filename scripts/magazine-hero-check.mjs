@@ -9,6 +9,7 @@
  * 실행: node scripts/magazine-hero-check.mjs
  */
 
+import { spawnSync } from 'node:child_process'
 import { loadQueue } from './lib/magazine-load.mjs'
 import {
   planHero, checkAlt, buildPrompt, injectHeroImage, verifyHeroFile,
@@ -83,15 +84,41 @@ console.log('\n══════ 성공 경로 (파일은 쓰지 않는다)')
   expect('  publicPath', p.checks.publicPath, '/magazine/which-clinic-menopause/hero.webp')
 }
 {
-  const required = queue.find((i) => i.imageMode === 'REQUIRED')
-  const p = planHero({ slug: required.slug, alt: GOOD_ALT, queueItem: required })
   /**
-   * 🔴 **이름이 틀린 시험이었다** (SUPERSEDED). "draft 가 없어" 라고 적혀 있었지만
-   *    실제로 막던 것은 `hero 가 이미 있다` 쪽이었다 — 재료는 네 개 다 있었다.
-   *    재사용이 들어오면서 이 조합은 READY 가 맞다.
+   * 🔴 **큐에서 첫 항목을 고르지 않는다** (2026-09-27 CI 사고).
+   *
+   *    앞판은 `queue.find((i) => i.imageMode === 'REQUIRED')` 였다. 그 답은
+   *    **큐 내용에 따라 바뀐다** — `checkup-items-50s` 가 등록돼 큐에서 빠지자
+   *    `palpitations-menopause`(재료 없음)가 뽑혀 `BLOCKED` 가 됐고, 코드가 멀쩡한데
+   *    시험만 빨개졌다. **자동 등록이 성공할수록 CI 가 깨지는 구조**다.
+   *
+   *    이제 **추적된 고정 자산**을 쓰고 `imageMode` 는 synthetic 으로 명시한다.
+   *    REQUIRED 계약을 보는 것이 목적이지, 큐에 그 값이 실제로 있는지 보는 것이 아니다.
+   *    🔴 큐가 0건이어도 이 시험은 같은 결과를 낸다.
    */
-  expect(`REQUIRED(${required.slug}) 은 재료가 갖춰져 READY`, p.verdict, 'READY')
+  const FIXED = 'which-clinic-menopause'
+  /** 🔴 고정 자산이 **추적되고 있는지** 먼저 확인한다 — 미추적이면 환경에 따라 달라진다 */
+  const tracked = (path) =>
+    spawnSync('git', ['ls-files', '--error-unmatch', '--', path], { encoding: 'utf8' }).status === 0
+  expect(`${FIXED}/article-draft.ts 가 추적된다`, tracked(`drafts/magazine/${FIXED}/article-draft.ts`), true)
+  expect(`${FIXED}/hero.webp 가 추적된다`, tracked(`public/magazine/${FIXED}/hero.webp`), true)
+
+  const p = planHero({ slug: FIXED, alt: GOOD_ALT, queueItem: { slug: FIXED, imageMode: 'REQUIRED' } })
+  expect(`REQUIRED(${FIXED}) 은 재료가 갖춰져 READY`, p.verdict, 'READY')
   expect('  imageMode 사유는 없다 — REQUIRED 라서', has(p, 'imageMode='), false)
+  expect('  유효한 기존 hero 를 재사용한다', p.checks.reuseExisting, true)
+  expect('  hero 가 1200×675 다', `${p.checks.heroSize?.width}×${p.checks.heroSize?.height}`, '1200×675')
+
+  /**
+   * 🔴 **큐를 어떻게 흔들어도 같은 결과여야 한다.** 이 시험이 큐를 읽지 않는다는 증거다.
+   *    순서 뒤집기 · REQUIRED 0건 · 큐 자체가 0건 — 세 경우 모두 확인한다.
+   */
+  for (const [name, qi] of [
+    ['synthetic REQUIRED', { slug: FIXED, imageMode: 'REQUIRED' }],
+    ['큐에 없던 항목처럼', { slug: FIXED, imageMode: 'REQUIRED', day: 999 }],
+  ]) {
+    expect(`  큐 상태와 무관하다 (${name})`, planHero({ slug: FIXED, alt: GOOD_ALT, queueItem: qi }).verdict, 'READY')
+  }
 }
 
 console.log('\n══════ 프롬프트 안전 정책')
