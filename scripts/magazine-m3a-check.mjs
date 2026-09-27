@@ -1604,6 +1604,89 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
     } finally { fs.rmSync(TMP, { recursive: true, force: true }) }
   }
 
+  // ── 반례 13 · 재생성 실패 사유에 Node.js 스택 꼬리가 남지 않는다 (실제 경로) ──
+  {
+    /**
+     * 🔴 **실제 `webuiRegenRunner` 를 탄다** (Codex 재검토 2026-09-27).
+     *    앞판은 그 함수가 모듈 스코프 `run` 을 직접 써서 `deps.run` 을 우회했다 —
+     *    그래서 한 번도 시험되지 않았고, 거기 남아 있던 `split('\n').pop()` 이
+     *    자식 크래시의 `Node.js v…` 를 그대로 사유로 흘려보냈다.
+     *    이제 주입된 run 을 타므로, 크래시 출력을 넣어 **최종 사유**까지 확인할 수 있다.
+     */
+    const AR2 = await import('./magazine-auto-register.mjs')
+    const READY = await import('./magazine-auto-register-ready.mjs')
+
+    /** 자식이 스택을 뱉고 죽은 출력 — 마지막 줄은 `Node.js v24.14.0` 이다 */
+    const CRASH_STDERR = [
+      '/x/scripts/magazine-webui-runner.mjs:660',
+      "    await page.waitForSelector(COMPOSER_SELECTOR)",
+      '          ^', '',
+      'Error: page.waitForSelector: Timeout 60000ms exceeded.',
+      '    at fetchManuscript (/x/scripts/lib/chatgpt-session.mjs:660:5)', '',
+      'Node.js v24.14.0',
+    ].join('\n')
+
+    /** ① 실제 runner 를 그대로 호출한다 — 주입은 `runFn` 하나뿐이다 */
+    let sawArgs = null
+    const rr = AR2.webuiRegenRunner(
+      { slug: 'x-slug', packetPath: '/tmp/x.json' },
+      { runFn: (file, args) => { sawArgs = args; return { code: 1, stdout: '', stderr: CRASH_STDERR, json: null } } },
+    )
+    check('  반례13 실제 runner 가 --regen-packet 으로 부른다', (sawArgs ?? []).includes('--regen-packet'), (sawArgs ?? []).join(' '))
+    check('🔴 반례13 runner 사유에 Node.js 꼬리가 없다', !/Node\.js v/.test(rr.why ?? ''), rr.why)
+    check('🔴 반례13 runner 사유에 실제 오류가 있다', /Timeout 60000ms exceeded/.test(rr.why ?? ''), rr.why)
+
+    /** ② 🔴 drive 의 실제 재생성 경로로 같은 출력을 흘린다 — 최종 BLOCKED 사유를 본다 */
+    const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-crash-'))
+    const ledgerPath = path.join(T, 'q.json')
+    try {
+      const calls = []
+      const deps = makeDeps({ qaFailsUntil: 99, ledgerPath, packetDir: path.join(T, 'packets'), calls })
+      // 🔴 `regenRunner` 를 주입하지 않는다 — **실제 webuiRegenRunner** 가 돌아야 한다
+      delete deps.regenRunner
+      const base = deps.run
+      deps.run = (f, a, o) => {
+        const name = path.basename(String(f))
+        if (name === 'magazine-webui-runner.mjs') {
+          calls.push('WEBUI')
+          return { code: 1, stdout: '', stderr: CRASH_STDERR, json: null }
+        }
+        if (name === 'magazine-qa.mjs') { calls.push(name); return { code: 1, stdout: 'QA FAIL', stderr: '', json: null } }
+        return base(f, a, o)
+      }
+      const r = drive(SLUG, { write: true, pr: false, publishAt: '2027-04-01', alt: '시험 여성', allowOptional: true, autoLane: false }, deps)
+      check('  반례13 실제 runner 가 불렸다 (죽은 시험 아님)', calls.includes('WEBUI'), calls.join('>'))
+      check('🔴 반례13 drive 가 BLOCKED 로 끝난다', r.verdict === 'BLOCKED', r.verdict)
+      const msg = (r.blockedBy ?? []).map((b) => b.message).join(' | ')
+      check('🔴 반례13 최종 사유에 Node.js 꼬리가 없다', !/Node\.js v/.test(msg), msg.slice(0, 160))
+      check('🔴 반례13 최종 사유에 실제 오류가 남는다', /Timeout 60000ms exceeded/.test(msg), msg.slice(0, 160))
+
+      /** ③ 🔴 장부 사유까지 같은 문장이 간다 */
+      const report = { blocked: [], done: [] }
+      READY.processCandidates({
+        write: true, wantPr: false, limit: 1, report,
+        quarantinePath: ledgerPath,
+        scanFn: () => ({
+          source: 'fixture', pool: 1,
+          eligible: [{ slug: SLUG, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: true } }],
+          skipped: [], quarantined: [],
+        }),
+        driveFn: (sl, opts) => drive(sl, opts, deps),
+      })
+      const entry = readQuarantine(ledgerPath).store[SLUG]
+      const reasons = (entry?.reasons ?? []).join(' | ')
+      check('  반례13 장부에 사유가 남는다', reasons.length > 0, reasons.slice(0, 120))
+      check('🔴 반례13 장부 사유에도 Node.js 꼬리가 없다', !/Node\.js v/.test(reasons), reasons.slice(0, 160))
+      check('🔴 반례13 장부 사유에 실제 오류가 남는다', /Timeout 60000ms exceeded/.test(reasons), reasons.slice(0, 160))
+    } finally {
+      for (const sl of FIXTURE_SLUGS) {
+        const f = `drafts/magazine/${sl}/article-draft.ts`
+        try { fs.writeFileSync(f, spawnSyncTop('git', ['show', `HEAD:${f}`]) + '\n') } catch { /* 없으면 그만 */ }
+      }
+      fs.rmSync(T, { recursive: true, force: true })
+    }
+  }
+
   // ── 반례 12 · merge gate 는 PR head tree 를 본다 (재사용 hero 통과) ──
   {
     const GATE = await import('./lib/magazine-merge-gate.mjs')
