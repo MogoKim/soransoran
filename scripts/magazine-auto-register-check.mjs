@@ -36,7 +36,7 @@ import { judgeProducerRun, stage } from './lib/magazine-producer-exit.mjs'
 import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
 import { exitCodeFor } from './lib/magazine-auto-exit.mjs'
 import { parseHeroBlock, validateHeroBrief } from './lib/magazine-hero-brief.mjs'
-import { loadQueue } from './lib/magazine-load.mjs'
+import { loadQueue, sliceLiteral, evalLiteral } from './lib/magazine-load.mjs'
 import { verifyReviewShape } from './lib/magazine-brief-policy.mjs'
 import { normalizePublishAt } from './magazine-register.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
@@ -2665,10 +2665,83 @@ for (const [slug, ghost, why] of GHOSTS) {
   const a = altRows.find((x) => x.slug === slug)
   expect(`🔴 ${slug}: "${ghost}" 가 없다 (${why})`, a ? a.heroImage.alt.includes(ghost) : true, false)
 }
-// alt 는 초안과 발행본이 같아야 한다 — 한쪽만 고치면 다음 회차가 옛 값을 되살린다
+/**
+ * alt 는 초안과 발행본이 같아야 한다 — 한쪽만 고치면 다음 회차가 옛 값을 되살린다.
+ *
+ * 🔴 **따옴표 모양을 비교하지 않는다** (2026-09-27 CI 사고).
+ *    앞판은 `draft.includes(JSON.stringify(alt))` 였다. `JSON.stringify` 는 **쌍따옴표**를
+ *    만드는데 `injectHeroImage` 는 **홑따옴표**로 쓴다. 그래서 사람이 손으로 고친 초안
+ *    8건은 통과하고, **자동화가 쓴 초안은 구조적으로 통과할 수 없었다** —
+ *    alt 값은 글자 하나까지 같았는데도 `checkup-items-50s` 가 FAIL 했다.
+ *    검사의 뜻은 "값이 같은가" 다. 이제 **구조화된 값**을 꺼내 strict 비교한다.
+ *
+ * 🔴 읽지 못하거나 파싱하지 못하면 **조용히 건너뛰지 않고 FAIL** 한다.
+ *    건너뛰면 "검사했다" 는 착각만 남는다.
+ */
+function draftHeroAlt(slug) {
+  const file = join('drafts', 'magazine', slug, 'article-draft.ts')
+  if (!existsSync(file)) return { ok: false, why: 'article-draft.ts 가 없다' }
+  let src
+  try { src = readFileSync(file, 'utf8') } catch (e) { return { ok: false, why: `읽지 못했다: ${e.message}` } }
+  const anchor = src.indexOf('export const DRAFT')
+  if (anchor === -1) return { ok: false, why: 'export const DRAFT 를 찾지 못했다' }
+  const literal = sliceLiteral(src, src.indexOf('=', anchor), '{', '}')
+  if (!literal) return { ok: false, why: 'DRAFT 리터럴을 잘라내지 못했다' }
+  try {
+    const value = evalLiteral(literal, `${slug}/article-draft.ts`)
+    return { ok: true, alt: value?.heroImage?.alt ?? null }
+  } catch (e) { return { ok: false, why: e.message } }
+}
+
+/**
+ * 🔴 **반례 — 이 비교가 따옴표에 흔들리지 않는지 실제로 확인한다.**
+ *    같은 값을 홑따옴표·쌍따옴표로 써도 PASS 여야 하고, 글자 하나가 다르면 FAIL 이어야 한다.
+ *    임시 파일에 실제 `export const DRAFT` 를 써서 **같은 파서**로 읽는다.
+ */
+{
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+  const os = await import('node:os')
+  const ALT = "창가에서 서류를 들여다보며 생각에 잠긴 50대 한국 여성"
+  const T = mkdtempSync(join(os.tmpdir(), 'alt-cmp-'))
+  const prevCwd = process.cwd()
+  try {
+    const mk = (slug, body) => {
+      mkdirSync(join(T, 'drafts', 'magazine', slug), { recursive: true })
+      writeFileSync(join(T, 'drafts', 'magazine', slug, 'article-draft.ts'), body)
+    }
+    // 🔴 홑따옴표 — 자동화(injectHeroImage)가 쓰는 모양
+    mk('single', `export const DRAFT = {\n  heroImage: {\n    alt: '${ALT}',\n  },\n}\n`)
+    // 🔴 쌍따옴표 — 사람이 손으로 고친 모양
+    mk('double', `export const DRAFT = {\n  heroImage: {\n    alt: "${ALT}",\n  },\n}\n`)
+    // 🔴 글자 하나만 다르다
+    mk('typo', `export const DRAFT = {\n  heroImage: {\n    alt: '${ALT.replace('창가', '창문')}',\n  },\n}\n`)
+    // 🔴 파싱이 안 되는 경우
+    mk('broken', 'export const DRAFT = { heroImage: { alt: \n')
+
+    process.chdir(T)
+    const single = draftHeroAlt('single')
+    const double = draftHeroAlt('double')
+    const typo = draftHeroAlt('typo')
+    const broken = draftHeroAlt('broken')
+    const missing = draftHeroAlt('nope')
+    process.chdir(prevCwd)
+
+    expect('🔴 alt 반례: 홑따옴표도 값이 같다', single.ok && single.alt === ALT, true)
+    expect('🔴 alt 반례: 쌍따옴표도 값이 같다', double.ok && double.alt === ALT, true)
+    expect('🔴 alt 반례: 따옴표가 달라도 서로 같다', single.alt === double.alt, true)
+    expect('🔴 alt 반례: 글자 하나 다르면 다르다', typo.ok && typo.alt === ALT, false)
+    expect('🔴 alt 반례: 파싱 실패는 조용히 넘기지 않는다', broken.ok, false)
+    expect('🔴 alt 반례: 파일이 없으면 FAIL 이다', missing.ok, false)
+  } finally {
+    process.chdir(prevCwd)
+    rmSync(T, { recursive: true, force: true })
+  }
+}
+
 for (const a of altRows) {
-  const draft = readFileSync(join('drafts', 'magazine', a.slug, 'article-draft.ts'), 'utf8')
-  expect(`${a.slug}: 초안 alt 가 발행본과 같다`, draft.includes(JSON.stringify(a.heroImage.alt)), true)
+  const d = draftHeroAlt(a.slug)
+  expect(`${a.slug}: 초안 DRAFT 를 파싱했다`, d.ok, true, d.why)
+  expect(`${a.slug}: 초안 alt 가 발행본과 같다`, d.alt, a.heroImage.alt)
 }
 
 console.log('\n══════ 변이 ⑨ 원고 관문 — tracked fixture 로 시험한다')
