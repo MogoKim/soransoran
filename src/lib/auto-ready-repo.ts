@@ -24,6 +24,9 @@ import {
 } from './auto-ready-v2'
 import { cohortSampleOf } from './auto-ready-evidence'
 import { profileOf } from './original-post-auto-publish'
+import { qualityCohortOf, type QualityCohortVerdict } from './auto-ready-quality-cohort'
+import { isCurrentQualityContract, qualityContractDigest, QUALITY_CONTRACT_KEY } from './quality-contract'
+import { MACHINE_PROMPT_VERSION } from './micro-seed-supply-autofill'
 
 type Tx = Prisma.TransactionClient
 type Db = PrismaClient | Tx
@@ -62,12 +65,13 @@ export async function missingAutoPostCount(db: Db): Promise<number> {
 }
 
 /**
- * 🔴 **런타임 증거** — DB 에 **저장된** 근거만으로 잰다(fail-closed).
- *    로컬 artifact 로 복원한 근거는 GitHub Actions 러너가 읽을 수 없다. 그것을 여기서
- *    쓰려면 복원 결과를 durable 하게 저장해야 하는데, 그 쓰기는 아직 승인되지 않았다.
- *    표본 계산은 정본 `cohortSampleOf` 하나다 — 여기서 다시 세지 않는다.
+ * 🔴 **옛 증거 보고 — 판정에 쓰지 않는다** (2026-09-27 이름 변경 · 앞판 `evidenceFromDb`).
+ *    사람 결정 표식이 있는 기계 후보 중 **지금 품질 계약이 아닌 행**(표식 없음 · 다른 판)을 센다. 감사 이력과 표본 기록 규칙
+ *    (출처 · 결속 · 사용자별 최신)을 보이는 용도로만 남긴다. 옛 결함(예: 옛 세대의 hardDefect yes)도
+ *    여기 그대로 보인다 — 지우지도 고치지도 않는다.
+ *    🔴 열림 판정은 `evidenceFromDb`(지금 품질 계약 cohort)다.
  */
-export async function evidenceFromDb(db: Db): Promise<ReturnType<typeof cohortSampleOf>> {
+export async function legacyEvidenceFromDb(db: Db): Promise<ReturnType<typeof cohortSampleOf>> {
   const rows = await db.originalPostApprovalQueue.findMany({
     where: { decidedBy: HUMAN_DECIDER },
     select: {
@@ -78,7 +82,7 @@ export async function evidenceFromDb(db: Db): Promise<ReturnType<typeof cohortSa
       rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
   })
-  const eligible = rows.filter((r) => profileOf({
+  const eligible = rows.filter((r) => !isCurrentQualityContract(r.gateResults) && profileOf({
     promptVersion: r.promptVersion, model: r.model, sourceSite: r.rawContent.sourceSite,
     gateResults: r.gateResults,
   } as never) === 'machine' && eligibilityOf({
@@ -86,6 +90,36 @@ export async function evidenceFromDb(db: Db): Promise<ReturnType<typeof cohortSa
     title: r.draftTitle, body: r.draftBody, sourceCapturedAt: r.rawContent.sourceCapturedAt,
   }).auto)
   return cohortSampleOf(eligible)
+}
+
+/**
+ * 🔴 **런타임 증거 — 지금 품질 계약 cohort** (2026-09-27 마스터 결정). DB 에 **저장된** 근거만 쓴다.
+ *    · 지금 코드의 digest 로 먼저 좁히고(JSON path), 행마다 **코드 상수와 다시 견준다**
+ *    · 결정 전 행도 읽는다 — 창 안의 미검토 선행 행이 열림을 막아야 하기 때문이다
+ *    · 판정은 정본 `qualityCohortOf` 하나다 — 여기서 다시 세지 않는다
+ */
+export async function evidenceFromDb(db: Db): Promise<QualityCohortVerdict> {
+  const rows = await db.originalPostApprovalQueue.findMany({
+    where: {
+      promptVersion: MACHINE_PROMPT_VERSION,
+      gateResults: { path: [QUALITY_CONTRACT_KEY, 'digest'], equals: qualityContractDigest() },
+    },
+    select: {
+      id: true, createdAt: true, decidedBy: true, gateVerdict: true, gateResults: true,
+      draftTitle: true, draftBody: true, editedTitle: true, editedBody: true,
+      editDiff: true, declineReason: true, status: true, promptVersion: true, model: true,
+      rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
+    },
+  })
+  return qualityCohortOf(rows.map((r) => ({
+    id: r.id, createdAt: r.createdAt, decidedBy: r.decidedBy, editDiff: r.editDiff,
+    status: r.status, draftTitle: r.draftTitle, draftBody: r.draftBody,
+    editedTitle: r.editedTitle, editedBody: r.editedBody, declineReason: r.declineReason,
+    gateVerdict: r.gateVerdict, gateResults: r.gateResults, sourceCapturedAt: r.rawContent.sourceCapturedAt,
+    machine: profileOf({
+      promptVersion: r.promptVersion, model: r.model, sourceSite: r.rawContent.sourceSite, gateResults: r.gateResults,
+    } as never) === 'machine',
+  })))
 }
 
 /**
@@ -156,6 +190,14 @@ async function stampRowInTx(tx: Tx, queueId: string, now: Date): Promise<StampOu
     promptVersion: row.promptVersion, model: row.model, sourceSite: row.rawContent.sourceSite,
     gateResults: row.gateResults,
   } as never) !== 'machine') return { kind: 'skip', reason: '기계 profile 이 아니다' }
+  /**
+   * 🔴 **지금 품질 계약으로 만든 행만 자동 도장한다** (2026-09-27 마스터 Q1).
+   *    열림은 지금 계약 cohort 가 증명한 것이다 — 옛 계약(legacy) 행은 그 증거의 대상이 아니다.
+   *    legacy 행은 사람 검토 경로로만 나간다.
+   */
+  if (!isCurrentQualityContract(row.gateResults)) {
+    return { kind: 'skip', reason: '지금 품질 계약 행이 아니다(legacy) — 사람 검토 경로로만 나간다' }
+  }
   const title = row.editedTitle ?? row.draftTitle
   const body = row.editedBody ?? row.draftBody
   const v = eligibilityOf({
@@ -246,6 +288,8 @@ export async function recheckAutoReadyInTx(tx: Tx, i: {
   if (!autoReadyEnabled(i.env)) return { ok: false, reason: '자동 READY 스위치가 꺼져 있다' }
   const sv = stampValidFor(readStamp(i.editDiff), i.title, i.body)
   if (!sv.ok) return { ok: false, reason: sv.reason }
+  // 🔴 발행 순간에도 지금 품질 계약인지 **지금 코드 상수**로 다시 본다 — 옛 계약 행은 자동으로 나가지 않는다
+  if (!isCurrentQualityContract(i.gateResults)) return { ok: false, reason: '지금 품질 계약 행이 아니다(legacy) — 자동 발행하지 않는다' }
   const v = eligibilityOf({
     gateVerdict: i.gateVerdict, gateResults: i.gateResults,
     title: i.title, body: i.body, sourceCapturedAt: i.sourceCapturedAt,

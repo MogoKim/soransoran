@@ -20,7 +20,8 @@ import {
   type HumanActor, type ReviewFile,
 } from '../src/lib/auto-ready-evidence-store'
 import { HUMAN_DECIDER, CONTRACT } from '../src/lib/auto-ready-v2'
-import { evidenceFromDb } from '../src/lib/auto-ready-repo'
+import { evidenceFromDb, legacyEvidenceFromDb } from '../src/lib/auto-ready-repo'
+import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import {
@@ -77,6 +78,8 @@ async function main(): Promise<void> {
   const seed = async (o: {
     artifactId?: string; addArtifact?: boolean; artifactDraftBody?: string; artifactVoice?: string
     edited?: boolean; body?: string; declined?: boolean; undecided?: boolean; matchedPersonaId?: string; published?: boolean
+    /** 🔴 지금 품질 계약으로 적재된 행 — 적재 때 의미 검수 요약과 계약 표식이 함께 저장돼 있다 */
+    current?: boolean
   } = {}) => {
     seq += 1
     const art = o.artifactId ?? digestOf(`art-${seq}`).slice(0, 32)
@@ -105,6 +108,7 @@ async function main(): Promise<void> {
             draftPromptVersion: CONTRACT_A.promptVersion, stageModels: CONTRACT_A.stageModels,
             voice: { personaCode: 'P04', bundleDigest: 'bd', sourceDigest: 'sd' },
           },
+          ...(o.current === true ? { semanticReview: semanticSummaryOf(REVIEW), [QUALITY_CONTRACT_KEY]: currentQualityContract() } : {}),
         } as never,
         editDiff: o.edited === true ? { bodyChanged: true, titleChanged: false } as never : undefined,
         // 🔴 결정 전 그림자는 기계 표식 · 미배정이다(운영의 HUMAN_REVIEW_REQUIRED 행과 같은 모양)
@@ -214,7 +218,11 @@ async function main(): Promise<void> {
     }
     return r
   }
-  const ev = () => evidenceFromDb(prisma)
+  /**
+   * 🔴 B 구간은 **사람 기록 규칙**(출처 · 결속 · 사용자별 최신)을 잰다 — 옛 계약 행의 보고(legacy)로 센다.
+   *    열림 판정(지금 품질 계약 cohort)은 C 구간과 `auto-ready:quality-db-check` 가 본다.
+   */
+  const ev = () => legacyEvidenceFromDb(prisma)
 
   console.log('\nB-1. 🔴 CLI importer — 사람 기록을 만들지 못한다 (P0-1 반례)')
   {
@@ -676,17 +684,18 @@ async function main(): Promise<void> {
     await prisma.$executeRawUnsafe('TRUNCATE TABLE "OriginalPostApprovalQueue","MicroSeedRawContent" CASCADE')
     artifacts.clear(); candidates.clear()
     const rows: { id: string; title: string; body: string }[] = []
-    for (let k = 0; k < 30; k += 1) rows.push(await restored({ edited: k >= 27 }))
+    // 🔴 열림 판정은 지금 품질 계약 cohort 다 — 적재 때 저장된 모양 그대로 만든다(복원 경로가 아니다)
+    for (let k = 0; k < 30; k += 1) rows.push(await seed({ edited: k >= 27, current: true }))
     const bundle = bundleOf(rows, 'gate')
     await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle, entries: rows.slice(0, 29).map((x) => ({ queueId: x.id, hardDefect: 'no' })) })
-    const g29 = await ev()
+    const g29 = await evidenceFromDb(prisma)
     check('🔴 🔴 **사람 표본 29건 → 닫힘**', g29.eligible === 29 && !g29.meetsContract, JSON.stringify(g29.reasons))
     await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle, entries: [{ queueId: rows[29]!.id, hardDefect: 'no' }] })
-    const g30 = await ev()
+    const g30 = await evidenceFromDb(prisma)
     check('🔴 🔴 **30건 · 무수정 27(90%) · 결함 0 → 열림**', g30.eligible === 30 && g30.noEdit === 27 && g30.hardDefects === 0 && g30.meetsContract, JSON.stringify(g30))
-    const um = await restored()
+    const um = await seed({ current: true })
     const skip = await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle: bundleOf([um], 'um'), entries: [{ queueId: um.id }] })
-    const g31 = await ev()
+    const g31 = await evidenceFromDb(prisma)
     check('🔴 🔴 **빈 판정은 건너뜀 — 기록 0 · 표본도 게이트도 그대로(30 · 열림)**',
       skip[0]?.result === 'skip' && readEvidenceReviews((await snap(um.id)).editDiff).length === 0 && g31.eligible === 30 && g31.meetsContract)
     check('🔴 🔴 **기준은 30 · 90% · 0 그대로**', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9 && CONTRACT.hardDefectMax === 0)

@@ -28,6 +28,7 @@ import {
 } from '../src/lib/micro-seed-supply-autofill'
 
 import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
+import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 /**
  * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
  *    발행된 사람 결정 행 · 수정·폐기 없음 → noEdit 로 결속한다.
@@ -62,8 +63,9 @@ const check = (label: string, ok: boolean, detail = ''): void => {
 const NOW = new Date()
 const CAP = new Date(NOW.getTime() - 2 * 864e5)
 const SR = { complete: true, deterministicPass: true, unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9 }
+/** 🔴 지금 품질 계약으로 적재된 행 (2026-09-27) — 증거 cohort 와 자동 도장 대상은 이 표식이 있는 행뿐이다 */
 const gate = (voiceCode: string | null) => ({
-  holds: [], blocks: [], semanticReview: SR,
+  holds: [], blocks: [], semanticReview: SR, [QUALITY_CONTRACT_KEY]: currentQualityContract(),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
@@ -130,6 +132,8 @@ async function main(): Promise<void> {
           sourceRawContentId: r.id, status: 'PUBLISHED', draftTitle: `사람이 본 글 ${i}`, draftBody: `사람이 본 본문 ${i}`,
           gateVerdict: 'PASS', gateResults: gate(null) as never, promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
           decidedBy: HUMAN_DECIDER, createdPostId: p.id, dedupKey: `ev-${seq}`,
+          // 🔴 증거는 **생성 순서상 먼저**다 — 품질 계약 cohort 는 첫 30건을 생성 순서로 본다
+          createdAt: new Date(NOW.getTime() - 60 * 864e5 + i * 60_000),
           // 🔴 사람 정답 표본 — human:founder 검토 기록이 이 초안에 묶여 있다(결함 no)
           editDiff: humanReviewed(`사람이 본 글 ${i}`, `사람이 본 본문 ${i}`) as never,
         },

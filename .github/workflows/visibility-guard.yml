@@ -856,6 +856,10 @@ jobs:
         run: |
           npm run auto-ready:check
           npm run auto-ready:evidence-plan-check
+          # 🔴 품질 계약 cohort(2026-09-27) — 게이트·검수 소스가 바뀌었는데 판·확인이 그대로면 실패 ·
+          #    legacy 제외 · 판 섞기 불가 · 선행 미검토 닫힘 · 창 안팎 결함 · env/호출자 digest 무시. 새 step 이 아니다
+          npm run check:quality-contract
+          npm run auto-ready:quality-check
 
       # 🔴 자동 READY v2 실행 사슬 — 격리 Postgres 17 에서만. 운영 DB 0.
       #    후보 → 도장 → selector → 발행 트랜잭션 재검증 → Post → 감사 저장 → 결함 시 자동 중지,
@@ -888,6 +892,9 @@ jobs:
           npm run auto-ready:db-check
           # 🔴 증거 복원·배치 검토 기록 — 같은 격리 DB 를 스스로 비우고 쓴다
           npm run auto-ready:evidence-db-check
+          # 🔴 품질 계약 cohort 실행 반례 — legacy 결함 이력 보존 · 첫 30건 연속 · legacy 도장 0 · 실제 적재기 digest
+          #    같은 격리 DB 를 스스로 비우고 쓴다. 새 step 이 아니다(무조건 step 상한 불변)
+          npm run auto-ready:quality-db-check
           # 🔴 예약 발행 슬롯 — 트랜잭션 안 슬롯 재계산(같은 격리 DB 를 스스로 비우고 쓴다)
           npm run publish:slot-db-check
           # 🔴 발행 heartbeat 후보 — 10분 wake 하루 · 절전 catch-up · 로컬 천장 · 로컬+GitHub 동시 중복 0 · 러너 틱 잠금

@@ -31,8 +31,10 @@ import { DECLINE_REASONS } from '@/lib/original-post-decision'
  */
 
 type Item = {
-  group: 'decided' | 'undecidedShadow'
+  group: 'cohortWindow' | 'decided' | 'undecidedShadow'
   queueId: string
+  /** 🔴 지금 품질 계약 창의 자리 — 첫 차단 행부터 봐야 자동 READY 판정이 진행된다 */
+  cohort?: { index: number; firstBlocking: boolean; contractVersion: string } | null
   source: { title: string; body: string } | null
   artifactSource?: { rawTitle: string; rawBody: string } | null
   draft: { title: string; body: string }
@@ -209,6 +211,13 @@ export default function EvidenceBatchReview() {
                 </span>
               )}
               <span className="text-content-muted">복원 {i.restore.klass}</span>
+              {i.cohort != null ? (
+                <span data-cohort-index={i.cohort.index} className={i.cohort.firstBlocking ? 'font-bold text-state-danger' : 'text-content-muted'}>
+                  품질 계약 {i.cohort.contractVersion} · {i.cohort.index}번째{i.cohort.firstBlocking ? ' · 첫 차단 — 이 행부터 검토' : ''}
+                </span>
+              ) : (
+                <span className="text-content-muted">옛 계약 — 열림 판정 표본 아님</span>
+              )}
             </header>
 
             {result !== undefined && (

@@ -11,6 +11,7 @@
 import { CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION }
   from '../../src/lib/content-core/pipeline'
 import { semanticSummaryOf } from '../../src/lib/micro-seed-supply-autofill'
+import { qualityContractDigest } from '../../src/lib/quality-contract'
 import type { HumanReviewArtifact } from '../../src/lib/content-core/artifact'
 
 /** 🔴 적재 정본이 읽는 모양 — v2 의 `sampleCount` 를 `comments` 로 잇는다 */
@@ -127,6 +128,12 @@ export function candidateEnvelope(input: {
     pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
     stageModels: input.stageModels,
     provenance: input.provenance,
+    /**
+     * 🔴 **이 파일을 만든 코드의 품질 계약** (2026-09-27). 적재기는 이 값을 저장하지 않고
+     *    **자기 코드 상수와 같은지만** 본다 — 다르면 적재 0(SkipCode CONTRACT).
+     *    입력으로 받지 않는다 — 이 함수를 부른 코드의 상수다.
+     */
+    qualityContractDigest: qualityContractDigest(),
     candidates: input.items.map(candidateEnvelopeItem),
   }
 }

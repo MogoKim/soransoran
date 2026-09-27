@@ -35,6 +35,7 @@ import {
 import { loadPublishableStock, planPublishBatch } from './lib/publishable-stock.mjs'
 import { PROFILES, releaseCapsOf } from '../src/lib/scale-profile'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
+import { currentQualityContract, QUALITY_CONTRACT_KEY } from '../src/lib/quality-contract'
 
 import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as evDigest } from '../src/lib/auto-ready-evidence'
 /**
@@ -78,8 +79,13 @@ const GOOD_SR = {
   complete: true, deterministicPass: true,
   unsupportedAdditions: 0, lifeContradictions: 0, droppedFromSource: 0, confidence: 0.9,
 }
-const gate = (sr: unknown = GOOD_SR, holds: string[] = [], voiceCode: string | null = null) => ({
+/**
+ * 🔴 **지금 품질 계약으로 적재된 행** (2026-09-27) — 적재기가 남기는 표식 그대로다.
+ *    `legacy: true` 면 표식이 없다(옛 계약 행) — 증거 표본도 자동 도장 대상도 아니다.
+ */
+const gate = (sr: unknown = GOOD_SR, holds: string[] = [], voiceCode: string | null = null, legacy = false) => ({
   holds, blocks: [], semanticReview: sr,
+  ...(legacy ? {} : { [QUALITY_CONTRACT_KEY]: currentQualityContract() }),
   autoDraft: {
     provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
     draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion,
@@ -140,14 +146,14 @@ async function main(): Promise<void> {
   }
   /** 기계 행 — persona 를 null 로 주면 배정 없는 행이다 · 주지 않으면 새 Persona 에 배정한다 */
   const codeOf = (id: string | null | undefined): string | null => personas.find((p) => p.id === id)?.code ?? null
-  const machineRow = async (o: { sr?: unknown; persona?: string | null; voice?: string; body?: string } = {}) => {
+  const machineRow = async (o: { sr?: unknown; persona?: string | null; voice?: string; body?: string; legacy?: boolean } = {}) => {
     const r = await raw()
     const personaId = o.persona === null ? null : (o.persona ?? (await freshPersona()).id)
     return prisma.originalPostApprovalQueue.create({
       data: {
         sourceRawContentId: r.id, status: 'APPROVED', draftTitle: `평범한 하루 이야기 ${seq}`,
         draftBody: o.body ?? `아침에 산책을 다녀왔어요 ${seq}. 다들 어떻게 지내세요?`,
-        gateVerdict: 'PASS', gateResults: gate(o.sr, [], o.voice ?? codeOf(personaId)) as never,
+        gateVerdict: 'PASS', gateResults: gate(o.sr, [], o.voice ?? codeOf(personaId), o.legacy === true) as never,
         promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
         decidedBy: 'machine:auto-draft-v5', dedupKey: `dk-${seq}`,
         matchedPersonaId: personaId,
@@ -195,7 +201,12 @@ async function main(): Promise<void> {
 
   console.log('① 🔴 스위치 OFF — 도장 0 · selector 닫힘 · 감사 표를 읽지 않는다')
   {
-    const m = await machineRow()
+    /**
+     * 🔴 ①② 의 행은 **옛 계약(legacy)** 이다 (2026-09-27). 지금 계약 행이면 증거 창의 **미검토 선행 행**이
+     *    되어 이후 구간이 열리지 않는다(그것이 새 규칙이다). 지금 계약 행의 같은 반례는
+     *    `auto-ready:quality-db-check` 가 따로 본다.
+     */
+    const m = await machineRow({ legacy: true })
     await prisma.$executeRawUnsafe('ALTER TABLE "AutoReadyAudit" RENAME TO "AutoReadyAudit_hidden"')
     let threw = ''
     try {
@@ -212,7 +223,7 @@ async function main(): Promise<void> {
 
   console.log('\n② 🔴 🔴 증거 0/30 인데 호출자가 "열림" 을 넘겨도 — 도장 0 · Post 0')
   {
-    const r = await machineRow()
+    const r = await machineRow({ legacy: true })
     // 🔴 앞판 시그니처처럼 `open: { open: true }` 를 억지로 넘긴다 — 이제 받는 자리가 없다
     const o = await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW, open: { open: true, reasons: [] } } as never)
     check('🔴 🔴 **증거 0/30 · 호출자 open:true → closed · 도장 0**',

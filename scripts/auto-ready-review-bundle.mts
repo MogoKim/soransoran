@@ -24,12 +24,12 @@ import { PrismaClient } from '@prisma/client'
 
 import { restoreRow, legacyOutcomeOf, stateOutcomeOf, humanSampleOf, digestOf, EVIDENCE_REVIEW_CONTRACT } from '../src/lib/auto-ready-evidence'
 import { readReviewArtifact, sourceEvidenceOf } from '../src/lib/original-post-machine-review'
-import { EVIDENCE_ROW_SELECT, decidedRowOf, type BundleItem, type EvidenceRow } from '../src/lib/auto-ready-evidence-store'
-import { HUMAN_DECIDER, CONTRACT, eligibilityOf } from '../src/lib/auto-ready-v2'
-import { profileOf } from '../src/lib/original-post-auto-publish'
+import { decidedRowOf, type BundleItem } from '../src/lib/auto-ready-evidence-store'
+import { HUMAN_DECIDER, CONTRACT } from '../src/lib/auto-ready-v2'
+import { describeCohort } from '../src/lib/auto-ready-quality-cohort'
+import { selectBundleRows, type BundleRow, type CohortSlot } from './lib/auto-ready-bundle-select.mjs'
 import { semanticSummaryOf } from '../src/lib/micro-seed-supply-autofill'
 import { NON_HUMAN_IMPORTABLE } from '../src/lib/review-provenance'
-import { loadPublishableStock } from './lib/publishable-stock.mjs'
 import { loadArtifactIndex, DEFAULT_ARTIFACT_DIR } from './lib/microseed-artifacts.mjs'
 
 const argv = process.argv.slice(2)
@@ -43,37 +43,28 @@ const rec = (v: unknown): Record<string, unknown> =>
 async function main(): Promise<void> {
   const prisma = new PrismaClient()
   const idx = loadArtifactIndex(DIR)
-  const select = {
-    ...EVIDENCE_ROW_SELECT,
-    matchedPersona: { select: { code: true, status: true, identity: true } },
-    rawContent: { select: { ...EVIDENCE_ROW_SELECT.rawContent.select, rawTitle: true, rawBody: true } },
-  } as const
-  type Row = EvidenceRow & { matchedPersona: { code: string; status: string; identity: unknown } | null; rawContent: EvidenceRow['rawContent'] & { rawTitle: string; rawBody: string } }
-  const machine = (r: Row) => profileOf({ promptVersion: r.promptVersion, model: r.model, sourceSite: r.rawContent.sourceSite, gateResults: r.gateResults } as never) === 'machine'
+  /**
+   * 🔴 **고르는 규칙은 한 함수다**(`selectBundleRows`) — 격리 DB 검사가 같은 함수를 부른다.
+   *    ① 지금 품질 계약 창(생성 순서 · 첫 차단 표시) ② legacy 결정 행 ③ legacy 그림자
+   */
+  const { cohort, window, decided, shadow } = await selectBundleRows(prisma, NOW)
+  type Row = BundleRow
 
-  /** ① 사람 결정 표식이 있는 기계 후보 — 결과(무수정/수정/폐기)가 이미 있다 */
-  const decided = (await prisma.originalPostApprovalQueue.findMany({ where: { decidedBy: HUMAN_DECIDER }, select, orderBy: { createdAt: 'asc' } }) as Row[]).filter(machine)
-  /** ② 현재 그림자 — 사람 검토를 기다리는 기계 후보 중 경고 없는 것. 🔴 결정이 없으므로 기록해도 아직 표본이 아니다 */
-  const stock = await loadPublishableStock(prisma, NOW)
-  const waitIds = stock.rejected.filter((r) => r.code === 'HUMAN_REVIEW_REQUIRED').map((r) => r.id)
-  const shadow = (await prisma.originalPostApprovalQueue.findMany({ where: { id: { in: waitIds } }, select, orderBy: { createdAt: 'asc' } }) as Row[])
-    .filter((r) => eligibilityOf({
-      gateVerdict: r.gateVerdict, gateResults: r.gateResults, title: r.editedTitle ?? r.draftTitle,
-      body: r.editedBody ?? r.draftBody, sourceCapturedAt: r.rawContent.sourceCapturedAt,
-    }).auto)
-
-  const entry = (group: 'decided' | 'undecidedShadow', r: Row) => {
+  const entry = (group: 'cohortWindow' | 'decided' | 'undecidedShadow', r: Row, cohortSlot: CohortSlot | null = null) => {
+    const humanDecided = (r.decidedBy ?? '').trim() === HUMAN_DECIDER
     const res = restoreRow(decidedRowOf(r), idx.artifacts, idx.candidates)
     const artifactId = String(rec(rec(r.gateResults).autoDraft).artifactId ?? '')
     const a = res.artifactFile === null ? null : idx.raw.get(`${res.artifactFile}#${artifactId}`) ?? null
     const g = rec(r.gateResults)
     return {
       group, queueId: r.id,
+      /** 🔴 지금 품질 계약 창의 자리 — 첫 차단 행이면 이 행부터 봐야 열림이 풀린다 */
+      cohort: cohortSlot,
       decision: {
         decidedBy: r.decidedBy, status: r.status, published: r.createdPostId !== null,
         // 🔴 지금 행 상태의 결과 — 사람 기록은 이 값을 결속한다. legacy 표식은 참고로만 보인다
-        outcome: group === 'decided' ? stateOutcomeOf(r) : null,
-        legacyOutcome: group === 'decided' ? legacyOutcomeOf(r) : null,
+        outcome: humanDecided ? stateOutcomeOf(r) : null,
+        legacyOutcome: humanDecided ? legacyOutcomeOf(r) : null,
         humanSampleNow: humanSampleOf(r),
       },
       /**
@@ -94,7 +85,10 @@ async function main(): Promise<void> {
       toFill: { hardDefect: 'yes | no (비우면 unmeasured)', reasons: 'yes 면 근거 필수' },
     }
   }
-  const items = [...decided.map((r) => entry('decided', r)), ...shadow.map((r) => entry('undecidedShadow', r))]
+  const items = [
+    ...window.map((w) => entry('cohortWindow', w.row, w.slot)),
+    ...decided.map((r) => entry('decided', r)), ...shadow.map((r) => entry('undecidedShadow', r)),
+  ]
   const bundle = {
     kind: 'auto-ready evidence batch review bundle',
     contract: EVIDENCE_REVIEW_CONTRACT,
@@ -107,8 +101,12 @@ async function main(): Promise<void> {
       '결과(무수정/수정/폐기)는 기록 시점의 행 상태로 결속된다 — 이후 수정본·폐기가 바뀌면 표본에서 빠진다',
       'hardDefect 를 비우면 unmeasured — 게이트는 닫힌 채다',
       'undecidedShadow 행은 결정(approve/edit/decline)이 따로 기록되기 전에는 표본이 아니다',
+      'cohortWindow 는 지금 품질 계약의 첫 30건이다(생성 순서) — 앞의 행이 미검토면 뒤의 좋은 행으로 열리지 않는다. firstBlocking 행부터 본다',
+      'decided · undecidedShadow 는 옛 계약(legacy) 행이다 — 감사·운영 재고에는 남지만 열림 판정 표본이 아니다',
     ],
-    counts: { decided: decided.length, undecidedShadow: shadow.length },
+    counts: { cohortWindow: window.length, decided: decided.length, undecidedShadow: shadow.length },
+    /** 🔴 열림 판정 — 지금 품질 계약 cohort(첫 30건 · 생성 순서 · 선행 미검토면 닫힘) */
+    cohort: { summary: describeCohort(cohort), meetsContract: cohort.meetsContract, reasons: cohort.reasons, firstBlocking: cohort.firstBlocking },
     items,
   }
   const text = JSON.stringify(bundle, null, 2)
@@ -128,7 +126,8 @@ async function main(): Promise<void> {
   writeFileSync(join(outDir, 'bundle.json'), text)
   writeFileSync(join(outDir, 'review-template.json'), JSON.stringify(template, null, 2))
   console.log('\n══ 자동 READY 증거 — 배치 검토 묶음 (DB read-only · 저장소 밖) ══')
-  console.log(`   결정된 기계 후보 ${decided.length}건 · 결정 전 그림자 ${shadow.length}건 · 합계 ${items.length}건`)
+  console.log(`   품질 계약 창 ${window.length}건 · legacy 결정 ${decided.length}건 · legacy 그림자 ${shadow.length}건 · 합계 ${items.length}건`)
+  console.log(`   ${describeCohort(cohort)}`)
   console.log(`   복원 분류(결정된 행) ${JSON.stringify(Object.fromEntries(['clean', 'warning', 'missing', 'ambiguous', 'draftMismatch', 'provenanceMismatch']
     .map((k) => [k, items.filter((i) => i.group === 'decided' && i.restore.klass === k).length])))}`)
   console.log(`   ${join(outDir, 'bundle.json').replace(homedir(), '~')}`)

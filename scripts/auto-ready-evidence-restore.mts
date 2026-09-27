@@ -20,7 +20,8 @@ import { PrismaClient } from '@prisma/client'
 
 import { planSemanticRestore, applySemanticRestore } from '../src/lib/auto-ready-evidence-store'
 import { RESTORE_CLASSES } from '../src/lib/auto-ready-evidence'
-import { evidenceFromDb } from '../src/lib/auto-ready-repo'
+import { evidenceFromDb, legacyEvidenceFromDb } from '../src/lib/auto-ready-repo'
+import { describeCohort } from '../src/lib/auto-ready-quality-cohort'
 import { loadArtifactIndex, DEFAULT_ARTIFACT_DIR } from './lib/microseed-artifacts.mjs'
 
 const argv = process.argv.slice(2)
@@ -33,7 +34,8 @@ async function main(): Promise<void> {
   console.log(APPLY ? '\n══ 🔴 의미 검수 복원 (--apply) ══\n' : '\n══ 의미 검수 복원 (dry-run · DB write 0) ══\n')
   const idx = loadArtifactIndex(DIR)
   console.log(`   artifact 파일 ${idx.files.artifacts} · candidates 파일 ${idx.files.candidates} · artifactId ${idx.artifacts.size}종`)
-  const before = await evidenceFromDb(prisma)
+  // 🔴 복원은 legacy(품질 계약 표식 없는) 행만 쓴다 — 지금 계약 cohort 는 복원 대상이 아니다
+  const before = await legacyEvidenceFromDb(prisma)
   const plan = await planSemanticRestore(prisma, idx.artifacts, idx.candidates, NOW)
   console.log(`\n① 사람 결정 표식 · 기계 profile 행 ${plan.length}건`)
   for (const k of RESTORE_CLASSES) console.log(`   ${k.padEnd(20)} ${plan.filter((p) => p.klass === k).length}`)
@@ -58,10 +60,11 @@ async function main(): Promise<void> {
   console.log(`\n③-0 적용 시 예상 — 복원으로 적격이 되는 행 ${clean.length}건 · 그중 사람 정답 표본 ${humanClean.length}건`)
   console.log(`   사람 표본이 아닌 이유 ${JSON.stringify(Object.fromEntries(['notHumanDecision', 'noReview', 'nonHumanOnly', 'bindingBroken']
     .map((w) => [w, clean.filter((p) => !p.human.counted && p.human.why === w).length])))}`)
-  const after = await evidenceFromDb(prisma)
+  const after = await legacyEvidenceFromDb(prisma)
   console.log(`\n③ 쓰기 ${written}건 · CAS 실패 ${lost}건${APPLY ? '' : ' · 🟡 dry-run — 쓰지 않았다'}`)
-  console.log(`   runtime evidence 전 ${before.eligible}/30 → 후 ${after.eligible}/30`
+  console.log(`   legacy 증거(판정 밖 · 감사 이력) 전 ${before.eligible} → 후 ${after.eligible}`
     + ` (사람 검토 기록이 없으면 복원해도 표본이 아니다 — 제외 ${JSON.stringify(after.excluded)})`)
+  console.log(`   🔴 열림 판정(지금 품질 계약 cohort) — ${describeCohort(await evidenceFromDb(prisma))}`)
   console.log('\n🔴 유료 호출 0 · decidedBy·status·createdPostId·Post·Persona 쓰기 0\n')
   await prisma.$disconnect()
 }

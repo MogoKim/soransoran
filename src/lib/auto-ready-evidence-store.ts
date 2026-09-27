@@ -29,6 +29,7 @@ import {
   parseReviewerKind, isHumanReviewer, LEGACY_DECISION_MARK, NON_HUMAN_IMPORTABLE, type ReviewerKind, type HumanReviewerKind,
 } from './review-provenance'
 import type { EvidenceRowState, MyReview } from './auto-ready-evidence-batch-plan'
+import { readQualityContract } from './quality-contract'
 
 type Db = PrismaClient | Prisma.TransactionClient
 
@@ -113,6 +114,14 @@ export async function planSemanticRestore(
   return rows.map((r) => {
     const res = restoreRow(decidedRowOf(r), artifacts, candidates)
     const base = { id: r.id, klass: res.klass, reasons: res.reasons, snapshot: snapshotOf(r), human: humanSampleOf(r) }
+    /**
+     * 🔴 **품질 계약 표식이 있는 행은 복원하지 않는다** (2026-09-27). 그 행은 적재 때 이미
+     *    `semanticReview` 를 저장했고, 표본 판정은 그 저장값 그대로다. 사후에 gateResults 를 바꾸면
+     *    cohort 의 적격(수열)이 바뀐다 — 복원은 표식 없는 legacy 행만 다룬다.
+     */
+    if (readQualityContract(r.gateResults) !== null) {
+      return { ...base, reasons: ['품질 계약 표식이 있는 행 — 복원 대상이 아니다(적재 때 저장값이 정본)', ...res.reasons], action: 'skip' as const, changes: null, nextGateResults: null }
+    }
     if (res.klass !== 'clean') return { ...base, action: 'skip' as const, changes: null, nextGateResults: null }
     const a = artifacts.get(String(rec(rec(r.gateResults).autoDraft).artifactId))![0]!
     const g = rec(r.gateResults)
@@ -137,6 +146,8 @@ export async function planSemanticRestore(
 /** 🔴 한 건 적용 — 스냅샷이 그대로일 때만 `gateResults` 한 칸을 쓴다. 돌려주는 값은 바뀐 행 수(0|1) */
 export async function applySemanticRestore(db: Db, item: RestorePlanItem): Promise<number> {
   if (item.action !== 'write' || item.nextGateResults === null) return 0
+  // 🔴 두 겹째 — 계획이 어떻게 만들어졌든 품질 계약 행의 gateResults 는 쓰지 않는다
+  if (readQualityContract(item.snapshot.gateResults) !== null || readQualityContract(item.nextGateResults) !== null) return 0
   const r = await db.originalPostApprovalQueue.updateMany({
     where: casWhere(item.snapshot),
     data: { gateResults: item.nextGateResults as Prisma.InputJsonValue },

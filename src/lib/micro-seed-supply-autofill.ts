@@ -26,6 +26,9 @@ import {
   CONTENT_CORE_MODEL_LABEL, CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   stageModelsMismatch,
 } from './content-core/pipeline'
+import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES } from './semantic-summary-codes'
+/** 🔴 품질 계약 — 적재기가 저장하는 값은 이 파일의 코드 상수다(후보 파일 값이 아니다) */
+import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } from './quality-contract'
 
 /** 이 판으로 만든 것만 다룬다 (enqueue 브리지와 같은 값) */
 export const AUTOFILL_PROMPT_VERSION = 'publish-candidate-v1'
@@ -117,6 +120,12 @@ export type Envelope = {
    */
   stageModels?: unknown
   pipelineVersion?: string
+  /**
+   * 🔴 **생성한 코드의 품질 계약 digest** (2026-09-27). 생성기가 적는다.
+   *    적재기는 이 값을 **저장하지 않는다** — 자기 코드 상수와 같은지만 본다.
+   *    다르거나 없으면 그 파일은 다른 계약(수정 전 코드)이 만든 것이다 → SkipCode CONTRACT.
+   */
+  qualityContractDigest?: string
 }
 
 /**
@@ -125,6 +134,23 @@ export type Envelope = {
  * 🔴 어긋난 항목을 전부 돌려준다 — "무엇이 안 맞았나" 를 조용히 삼키지 않는다.
  */
 export function machineProfileMismatch(
+  env: Envelope, c: Candidate,
+): string[] {
+  return [...machineShapeMismatch(env, c), ...qualityContractMismatch(env)]
+}
+
+/**
+ * 🔴 **품질 계약 대조** (2026-09-27) — 봉투의 digest 가 **지금 코드의 digest** 와 같은가.
+ *    같아도 저장은 코드 상수로 한다. 이 함수는 **거르기만** 한다.
+ */
+export function qualityContractMismatch(env: Envelope): string[] {
+  const got = S(env.qualityContractDigest)
+  const want = qualityContractDigest()
+  return got === want ? [] : [`envelope.qualityContractDigest=${got === '' ? '(없음)' : `${got.slice(0, 12)}…`} (기대 ${want.slice(0, 12)}…)`]
+}
+
+/** 🔴 기계 profile 의 모양 — 품질 계약을 뺀 나머지 전부 */
+export function machineShapeMismatch(
   env: Envelope, c: Candidate,
 ): string[] {
   const bad: string[] = []
@@ -308,7 +334,7 @@ export type HeldEntry = { sourceArticleId: string; title: string; reason?: strin
 export type SkipCode =
   | 'TYPE' | 'DECISION' | 'SAFETY' | 'COPIED' | 'UNMEASURED' | 'LEAK' | 'EMPTY'
   | 'ALREADY' | 'HELD' | 'SIBLING'
-  | 'PROFILE' | 'IMPERSONATION'
+  | 'PROFILE' | 'IMPERSONATION' | 'CONTRACT'
 
 export const SKIP_LABEL: Record<SkipCode, string> = {
   TYPE: 'seedOriginality · rawOriginality 가 아니다 (SRN 은 경로가 다르다)',
@@ -323,6 +349,7 @@ export const SKIP_LABEL: Record<SkipCode, string> = {
   SIBLING: '같은 원문의 형제가 아직 큐에서 안 나갔다',
   PROFILE: '🔴 사람 profile 도 기계 profile 도 아니다 — 섞인 조합은 받지 않는다',
   IMPERSONATION: '🔴 기계 후보가 사람 값을 쓰고 있다',
+  CONTRACT: '🔴 기계 후보 파일의 품질 계약이 지금 코드와 다르다 — 다른(수정 전) 코드가 만든 파일이다',
 }
 
 export type Skip = { title: string; code: SkipCode }
@@ -441,6 +468,14 @@ export function planRefill(input: RefillInput): { targets: Candidate[]; skipped:
       && S(env.provenance) !== MACHINE_PROFILE.envelopeProvenance
     const machineBad = machineProfileMismatch(env, c)
     const isMachineShape = machineBad.length === 0
+    /**
+     * 🔴 **모양은 기계 후보인데 품질 계약만 다르다** (2026-09-27) — PROFILE 로 뭉개지 않는다.
+     *    다른 코드가 만든 파일이라는 뜻이다. 적재하지 않는다.
+     */
+    if (!isHumanShape && !isMachineShape
+      && machineShapeMismatch(env, c).length === 0 && qualityContractMismatch(env).length > 0) {
+      push(title, 'CONTRACT'); continue
+    }
     if (!isHumanShape && !isMachineShape) { push(title, 'PROFILE'); continue }
     // 🔴 기계 후보가 사람 값을 쓰고 있으면 거절한다 — 사칭이다
     if (isMachineShape && impersonatesHuman(env, c)) { push(title, 'IMPERSONATION'); continue }
@@ -660,6 +695,11 @@ export function buildQueuePayload(input: {
         holds: semanticHoldsOf(semanticSummaryOf(input.review)),
         blocks: [],
         [SEMANTIC_SUMMARY_KEY]: semanticSummaryOf(input.review),
+        /**
+         * 🔴 **품질 계약 — 지금 코드 상수다** (2026-09-27). 봉투 값을 옮기지 않는다 —
+         *    봉투는 위 `machineProfileMismatch` 에서 **같은지만** 봤다. 입력으로 바꿀 칸이 없다.
+         */
+        [QUALITY_CONTRACT_KEY]: currentQualityContract(),
         autofill: {
           note: '🔴 기계가 만들고 기계가 고른 글이다. 사람이 고른 것이 아니다',
           candidateType: S(c.candidateType),
@@ -764,15 +804,12 @@ export type SemanticSummary = {
   confidence: number | null
 }
 
-export const SEMANTIC_SUMMARY_KEY = 'semanticReview'
-
-/** 🔴 경고 코드 — 사람 화면과 자동 판정이 **같은 이름**을 읽는다 */
-export const SEMANTIC_HOLD_CODES = {
-  unsupportedAdditions: 'SEMANTIC_UNSUPPORTED_ADDITION',
-  lifeContradictions: 'SEMANTIC_LIFE_CONTRADICTION',
-  droppedFromSource: 'SEMANTIC_DROPPED_FROM_SOURCE',
-  incomplete: 'SEMANTIC_REVIEW_INCOMPLETE',
-} as const
+/**
+ * 🔴 칸 이름과 경고 코드의 정본은 `semantic-summary-codes.ts`(의존 없는 파일)다 (2026-09-27).
+ *    품질 계약 digest 가 이 코드를 담는데, 그 파일이 이 파일을 거꾸로 부르면 순환 로드에서
+ *    값이 비어 읽힌다. 여기서는 그대로 다시 내보낸다 — 부르는 쪽은 바뀌지 않는다.
+ */
+export { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES }
 
 /** artifact 의 review 블록 → 적재가 실을 요약. 모양이 아니면 `null` 이다 */
 export function semanticSummaryOf(review: unknown): SemanticSummary | null {

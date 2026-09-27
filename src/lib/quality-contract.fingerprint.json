@@ -1,0 +1,40 @@
+{
+  "version": "quality-v1",
+  "digest": "ef015df61306aaabffedfbff66105023e86217ea09b31eb339fb763973618139",
+  "files": {
+    "src/lib/quality-contract.ts": "832c0a264fd2f49c253cb67c586761b4fcb15d98119f81d3f441cf8a253546b2",
+    "src/lib/semantic-summary-codes.ts": "e6e485da43d4ab966cf6986a53680a6ec89ee19008e849a2132bef8e5c19c3d7",
+    "src/lib/content-core/draft-life-gates.ts": "468a9065eeb6d5d0f6f18c7ed6db4c6e452d08de02cd11b8595d09d873639601",
+    "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
+    "src/lib/content-core/pipeline.ts": "a20b40cdb7ca8e2030b3e25ab10d53739435e1f946b7fa10da79beed4a2a90b3",
+    "src/lib/content-core/evidence.ts": "399fb19ea5cd4817210b3ecb04ad5c2dd0477ba7052c628b48eae043085c3eae",
+    "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
+    "src/lib/micro-seed-auto-draft.ts": "7bc13f6a496fd3d02f168eb7d61bcbce53588ef652f475b6ca137e294ec67242",
+    "src/lib/auto-ready-v2.ts": "5853c144bec97bbff67417569d01f6aa3907ceef1271d31d6ef3cf5915e6e678",
+    "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
+    "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
+    "src/lib/original-post-persona-match.ts": "64660186c4381a6b7953f7e1948851e92233534d65dba870c1b62cf503d157e1",
+    "scripts/lib/content-core-run.mts": "8bccb1e0394ecd5e74afb6970571f98ac9eed3efd1119a6aa43eca21da77713a",
+    "scripts/lib/content-core-prompts.mts": "b3d2a4a22966d822d114d1162f57b0606c92aec0db1d40e7ae59d5b174112751"
+  },
+  "acknowledgement": {
+    "kind": "initial",
+    "reason": "첫 기록 — quality-v1",
+    "changedFiles": [
+      "src/lib/quality-contract.ts",
+      "src/lib/semantic-summary-codes.ts",
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/content-core/review.ts",
+      "src/lib/content-core/pipeline.ts",
+      "src/lib/content-core/evidence.ts",
+      "src/lib/content-core/load-bearing.ts",
+      "src/lib/micro-seed-auto-draft.ts",
+      "src/lib/auto-ready-v2.ts",
+      "src/lib/draft-originality.ts",
+      "src/lib/persona-self-age.ts",
+      "src/lib/original-post-persona-match.ts",
+      "scripts/lib/content-core-run.mts",
+      "scripts/lib/content-core-prompts.mts"
+    ]
+  }
+}

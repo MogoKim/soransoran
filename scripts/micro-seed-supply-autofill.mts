@@ -118,12 +118,15 @@ export function readCandidateFile(path: string): { envelope: Envelope; candidate
   const j = JSON.parse(readFileSync(path, 'utf-8')) as {
     candidates?: Candidate[]; provenance?: string; ruleVersion?: string
     promptVersion?: string; pipelineVersion?: string; stageModels?: unknown
+    qualityContractDigest?: string
   }
   return {
     envelope: {
       provenance: j.provenance, ruleVersion: j.ruleVersion,
       promptVersion: j.promptVersion, pipelineVersion: j.pipelineVersion,
       stageModels: j.stageModels,
+      // 🔴 대조용으로만 읽는다 — 저장은 적재기의 코드 상수다(`buildQueuePayload`)
+      qualityContractDigest: j.qualityContractDigest,
     },
     candidates: Array.isArray(j.candidates) ? j.candidates : [],
   }
