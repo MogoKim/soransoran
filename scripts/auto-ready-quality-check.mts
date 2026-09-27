@@ -342,6 +342,40 @@ console.log('\nF. 🔴 (Q3) 옛 계약 캐시 artifact + 게이트 위반 초안
   }
 }
 
+// ─────────────────────────────────────────────────────────
+console.log('\nG. 🔴 의미 검수 요약 파서 — complete · deterministic · 개수 (P1 · 표본 적격을 정한다)')
+// ─────────────────────────────────────────────────────────
+{
+  const { semanticSummaryOf, semanticHoldsOf, SEMANTIC_HOLD_CODES: H } = await import('../src/lib/semantic-summary-codes')
+  const review = (o: { complete?: boolean; det?: boolean; add?: unknown; life?: unknown; drop?: unknown }) => ({
+    deterministic: { pass: o.det ?? true },
+    semanticCompletion: { complete: o.complete ?? true },
+    semantic: { unsupportedAdditions: o.add ?? [], lifeContradictions: o.life ?? [], droppedFromSource: o.drop ?? [], confidence: 0.9 },
+  })
+  const clean = semanticSummaryOf(review({}))
+  check('깨끗한 검수 → complete · deterministic 통과 · 개수 0 · 경고 0',
+    clean?.complete === true && clean.deterministicPass === true && clean.unsupportedAdditions === 0 && semanticHoldsOf(clean).length === 0)
+  const inc = semanticSummaryOf(review({ complete: false }))
+  check('🔴 🔴 **검수 미완료 → complete false · 경고 incomplete** (재지 못한 것을 이상 없음으로 읽지 않는다)',
+    inc?.complete === false && semanticHoldsOf(inc).includes(H.incomplete))
+  const det = semanticSummaryOf(review({ det: false }))
+  check('🔴 🔴 **규칙 검사 실패 → deterministicPass false · 경고 incomplete**',
+    det?.deterministicPass === false && semanticHoldsOf(det).includes(H.incomplete))
+  check('🔴 deterministic 블록이 없으면 통과가 아니다',
+    semanticSummaryOf({ semanticCompletion: { complete: true }, semantic: {} })?.deterministicPass === false)
+  const arr = semanticSummaryOf(review({ add: ['a', 'b'], life: ['x'], drop: ['p', 'q', 'r'] }))
+  check('🔴 🔴 **artifact 배열 → 개수 그대로 (2 · 1 · 3) · 경고 3종에 개수가 붙는다**',
+    arr?.unsupportedAdditions === 2 && arr.lifeContradictions === 1 && arr.droppedFromSource === 3
+      && stableJson(semanticHoldsOf(arr)) === stableJson([`${H.unsupportedAdditions}:2`, `${H.lifeContradictions}:1`, `${H.droppedFromSource}:3`]))
+  const num = semanticSummaryOf(review({ add: 2, life: 1.7, drop: -3 }))
+  check('🔴 후보가 나르는 수 → 그대로 (정수 내림 · 음수·비정상은 0)',
+    num?.unsupportedAdditions === 2 && num.lifeContradictions === 1 && num.droppedFromSource === 0)
+  check('🔴 요약 자체가 없으면 경고 incomplete', stableJson(semanticHoldsOf(null)) === stableJson([H.incomplete]))
+  check('🔴 모양이 아니면 null', semanticSummaryOf(null) === null && semanticSummaryOf({ semantic: null }) === null)
+  check('공급 적재기가 다시 내보내는 파서가 같은 값을 낸다',
+    stableJson(af.semanticSummaryOf(review({ add: ['a'] }))) === stableJson(semanticSummaryOf(review({ add: ['a'] }))))
+}
+
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
 console.log('🔴 DB 0 · 네트워크 0 · 유료 호출 0\n')
 if (fail > 0) process.exit(1)
