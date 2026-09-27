@@ -23,6 +23,7 @@ import { PrismaClient } from '@prisma/client'
 import { planNonHumanImport, applyReviewImport, type BundleItem, type ReviewFile } from '../src/lib/auto-ready-evidence-store'
 import { digestOf } from '../src/lib/auto-ready-evidence'
 import { evidenceFromDb } from '../src/lib/auto-ready-repo'
+import { describeCohort } from '../src/lib/auto-ready-quality-cohort'
 
 const argv = process.argv.slice(2)
 const APPLY = argv.includes('--apply')
@@ -61,7 +62,8 @@ async function main(): Promise<void> {
   }
   const after = await evidenceFromDb(prisma)
   console.log(`\n   쓰기 ${written} · CAS 실패 ${lost}${APPLY ? '' : ' · 🟡 dry-run — 쓰지 않았다'}`)
-  console.log(`   runtime evidence ${before.eligible}/30 → ${after.eligible}/30 · 중대 결함 ${after.hardDefects === null ? `unmeasured(${after.hardDefectUnmeasured})` : after.hardDefects}`)
+  console.log(`   runtime evidence ${before.eligible}/30 → ${after.eligible}/30 (비사람 기록은 표본이 아니다)`)
+  console.log(`   ${describeCohort(after)}`)
   console.log('\n🔴 decidedBy·status·createdPostId·Post·Persona 쓰기 0 · 유료 호출 0\n')
   await prisma.$disconnect()
 }

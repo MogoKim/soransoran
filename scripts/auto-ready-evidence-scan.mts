@@ -15,6 +15,7 @@ import { RESTORE_CLASSES, cohortSampleOf } from '../src/lib/auto-ready-evidence'
 import { planSemanticRestore, EVIDENCE_ROW_SELECT } from '../src/lib/auto-ready-evidence-store'
 import { CONTRACT } from '../src/lib/auto-ready-v2'
 import { evidenceFromDb } from '../src/lib/auto-ready-repo'
+import { describeCohort } from '../src/lib/auto-ready-quality-cohort'
 import { loadArtifactIndex, DEFAULT_ARTIFACT_DIR } from './lib/microseed-artifacts.mjs'
 
 const argv = process.argv.slice(2)
@@ -37,7 +38,7 @@ async function main(): Promise<void> {
     + ` · 중대 결함 ${sample.hardDefects === null ? `unmeasured(${sample.hardDefectUnmeasured})` : sample.hardDefects}`)
   console.log(`   표본에서 뺀 행 ${JSON.stringify(sample.excluded)}`)
   const now = await evidenceFromDb(prisma)
-  console.log(`\n④ 지금 runtime evidence ${now.eligible}/${CONTRACT.reviewSampleMin} · 계약 충족 ${now.meetsContract ? '예' : '아니오'}`)
+  console.log(`\n④ 지금 runtime evidence — ${describeCohort(now)} · 계약 충족 ${now.meetsContract ? '예' : '아니오'}`)
   console.log('\n🔴 DB write 0 · 유료 호출 0\n')
   await prisma.$disconnect()
 }

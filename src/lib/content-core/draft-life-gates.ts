@@ -49,6 +49,15 @@ export const DRAFT_GATE_CODES = [
 ] as const
 export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
 
+/**
+ * 🔴 **초안 게이트 판** (2026-09-27). 게이트의 판정이 바뀌면 올린다.
+ *    2026-09-26 게이트 3종(d750b72)은 어떤 판 값도 올리지 않아, 수정 전·후 후보를 저장값으로
+ *    가를 수 없었다. 이 값은 **품질 계약 digest**(`src/lib/quality-contract.ts`)에 들어간다 —
+ *    올리면 자동 READY 증거 cohort 가 새로 시작한다. CI(`check:quality-contract`)가 이 파일의
+ *    지문이 바뀌었는데 판도 확인도 그대로면 막는다.
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v1'
+
 export const DRAFT_GATE_LABEL: Readonly<Record<DraftGateCode, string>> = {
   mediaDependentDraft: '🔴 우리 글에 없는 사진·첨부에 기댄다 — 읽는 사람이 무엇을 보라는지 모른다',
   unwarrantedSelfClaim: '🔴 1인칭 허가 없이 글쓴이 자신의 가족·집안·일을 사실로 말한다',

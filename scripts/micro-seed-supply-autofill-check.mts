@@ -22,6 +22,7 @@ import {
   type Envelope, type QueueProfileRow,
   queueSourceTimesOf,
 } from '../src/lib/micro-seed-supply-autofill'
+import { qualityContractDigest, QUALITY_CONTRACT_VERSION } from '../src/lib/quality-contract'
 import { STAGE_MODEL } from '../src/lib/content-core/pipeline'
 import { planBoundedCommonPhase, planCommonPhase, type Pending } from '../src/lib/supply-process'
 
@@ -160,7 +161,7 @@ console.log('\n④ 값이 어긋난 후보를 거른다')
   check('허용 유형은 둘뿐', AUTOFILL_ALLOWED_TYPES.length === 2)
   check('유형마다 요구 결정이 다르다',
     REQUIRED_DECISION.seedOriginality === 'ADOPT' && REQUIRED_DECISION.rawOriginality === 'SAVE')
-  check('제외 사유에 라벨이 하나씩 있다', Object.keys(SKIP_LABEL).length === 12)
+  check('제외 사유에 라벨이 하나씩 있다', Object.keys(SKIP_LABEL).length === 13)
 }
 
 console.log('\n⑤ 재고 계산 — 🔴 발행 러너가 인정하는 행만 센다')
@@ -216,6 +217,8 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     promptVersion: MACHINE_PROFILE.envelopePromptVersion,
     pipelineVersion: MACHINE_PROFILE.envelopePipelineVersion,
     stageModels: STAGE_MODEL,
+    // 🔴 생성기가 적는 값 — 적재기는 자기 코드 상수와 같은지만 본다 (2026-09-27)
+    qualityContractDigest: qualityContractDigest(),
   }
   const mc = ok({
     sourceDecision: 'AUTO_ADOPT', sourceInput: 'auto-judge',
@@ -239,6 +242,10 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     const g = p1?.gateResults.autoJudge as Record<string, unknown> | undefined
     return g?.ruleVersion === 'auto-judge-v3' && g?.inputHash === 'abc123'
   })())
+  check('🔴 🔴 **적재가 품질 계약을 코드 상수로 남긴다**', (() => {
+    const q = p1?.gateResults.qualityContract as Record<string, unknown> | undefined
+    return q?.digest === qualityContractDigest() && q?.version === QUALITY_CONTRACT_VERSION
+  })())
   check('🔴 판정 출처가 없으면 payload 를 만들지 않는다',
     buildQueuePayload({ envelope: mEnv, candidate: mc, now: NOW }) === null)
   check('🔴 provenance 에 원문·제목·본문이 없다', (() => {
@@ -261,6 +268,9 @@ console.log('\n⑤-b 🔴 통합 — 만들어질 행이 발행 러너에게 mac
     ['stageModels 가 없음', { stageModels: undefined }],
     ['stageModels 한 칸이 다름', { stageModels: { ...STAGE_MODEL, draftGen: 'claude-haiku-4.5' } }],
     ['stageModels 에 모르는 단계', { stageModels: { ...STAGE_MODEL, extra: 'x' } }],
+    // 🔴 품질 계약 — 다른(수정 전) 코드가 만든 파일은 적재하지 않는다 (2026-09-27)
+    ['품질 계약 digest 없음', { qualityContractDigest: undefined }],
+    ['품질 계약 digest 가 다름', { qualityContractDigest: '0'.repeat(64) }],
   ] as const) {
     check(`🔴 ${label} → payload 없음`,
       buildQueuePayload({ envelope: { ...mEnv, ...patch }, candidate: mc, autoJudge: aj, now: NOW }) === null)
@@ -537,6 +547,8 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     promptVersion: MACHINE_PROFILE.envelopePromptVersion,
     pipelineVersion: MACHINE_PROFILE.envelopePipelineVersion,
     stageModels: STAGE_MODEL,
+    // 🔴 생성기가 적는 값 — 적재기는 자기 코드 상수와 같은지만 본다 (2026-09-27)
+    qualityContractDigest: qualityContractDigest(),
   }
   const eC = ok({
     sourceDecision: 'AUTO_ADOPT', sourceInput: 'auto-judge',

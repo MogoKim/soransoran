@@ -22,7 +22,8 @@ import {
   type LoadedStock,
 } from './lib/publishable-stock.mjs'
 import { AUTO_DECIDER, CONTRACT, eligibilityOf } from '../src/lib/auto-ready-v2'
-import { evidenceFromDb } from '../src/lib/auto-ready-repo'
+import { evidenceFromDb, legacyEvidenceFromDb } from '../src/lib/auto-ready-repo'
+import { describeCohort } from '../src/lib/auto-ready-quality-cohort'
 import { profileOf } from '../src/lib/original-post-auto-publish'
 import { PROFILES } from '../src/lib/scale-profile'
 import { simulateStage } from '../src/lib/scale-readiness'
@@ -84,10 +85,9 @@ async function main(): Promise<void> {
    */
   const sample = await evidenceFromDb(prisma)
   console.log('\n③ 증거 cohort — 런타임 게이트와 같은 정본 계산 (DB 저장 근거만)')
-  console.log(`   적격 표본 ${sample.eligible}/${CONTRACT.reviewSampleMin}`
-    + ` · 무수정 ${sample.noEdit} · 수정 ${sample.edited} · 폐기 ${sample.declined}`
-    + ` · 무수정률 ${sample.noEditRate === null ? '측정 불가' : `${(sample.noEditRate * 100).toFixed(1)}%`}`
-    + ` · 중대 결함 ${sample.hardDefects === null ? `unmeasured(${sample.hardDefectUnmeasured})` : sample.hardDefects}`)
+  console.log(`   ${describeCohort(sample)}`)
+  const legacy = await legacyEvidenceFromDb(prisma)
+  console.log(`   legacy(판정 밖 · 감사 이력) 사람 표본 ${legacy.eligible} · 중대 결함 ${legacy.hardDefects === null ? `unmeasured(${legacy.hardDefectUnmeasured})` : legacy.hardDefects} — 지우지도 고치지도 않는다`)
   console.log(`   계약 충족 ${sample.meetsContract ? '🟢 예' : `🔴 아니오 — ${sample.reasons.join(' · ')}`}`)
 
   /** ── ④ D10 — 실제 재고 ∪ 그림자 자동 대상 ── */

@@ -12,9 +12,9 @@ import { createHash } from 'node:crypto'
 
 import { AUTO_READY_CONTRACT } from './supply-schedule-contract'
 import { LEGACY_DECISION_MARK } from './review-provenance'
-import {
-  SEMANTIC_SUMMARY_KEY, semanticHoldsOf, type SemanticSummary,
-} from './micro-seed-supply-autofill'
+import { semanticHoldsOf, type SemanticSummary } from './micro-seed-supply-autofill'
+// 🔴 모듈 로드 때 읽는 값은 의존 없는 정본에서 — 품질 계약 순환 안에서도 비지 않는다
+import { SEMANTIC_SUMMARY_KEY } from './semantic-summary-codes'
 
 /**
  * 🔴 사람 결정 경로의 표식 — 기계 자동 판정은 이 값을 **절대** 쓰지 않는다(founder 위장 금지).
