@@ -616,9 +616,16 @@ jobs:
       # 🔴 정규식 존재 검사가 아니다. 통과 수는 제품 성공이 아니다.
       # 🔴 무조건 실행 step 상한(68)을 올리지 않는다 — 경로 조건 뒤에 둔다.
       #    화면만 고친 PR 은 content-core 를 건드릴 수 없다.
+      #
+      # 🔴 **초안 게이트**(2026-09-26)도 같은 자리다 — 새 step 을 만들지 않는다.
+      #    운영 기계 초안 4편(사진 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제)이
+      #    `runContentCore → pickV2` 에서 구조화된 사유로 AUTO_HOLD 되는지, 대조 2편은 채택되는지 본다.
+      #    가짜 provider · DB 0 · 네트워크 0.
       - name: Content Core v2 세로 경로 (근거·소재·화자 자격·말투·검수 완주)
         if: steps.scope.outputs.heavy == 'true'
-        run: npm run check:content-core-v2
+        run: |
+          npm run check:content-core-v2
+          npm run check:draft-life-gates
 
       # 🔴 **CI 에 없던 검사다.** 그래서 HEAD 에서 이미 깨져 있는 줄 아무도 몰랐다.
       #    세션 정본 경로·권한·모양 계약도 여기서 지킨다 —
@@ -887,6 +894,9 @@ jobs:
           # 🔴 부모 → 자식 실제 경로 — 회차 시각 하나(KST 자정·생일 경계) · 여력 0 → provider 0 → personaCapacityDeferred
           #    임시 cwd · 임시 HOME · 합성 말투 자산 · 가짜 키 — 운영 장부·자산 0
           npm run supply:draft-deferral-e2e-db-check
+          # 🔴 초안 게이트 → 적재 실제 경로 — 운영 반례 4편은 큐 행이 되지 않고 대조 2편만 APPROVED 로 적재된다
+          #    runContentCore → pickV2 → 후보 봉투 → 실제 supply-autofill --apply (임시 cwd · 가짜 provider)
+          npm run check:draft-life-gates-db
 
       # 수집 차단기 잠금은 **두 프로세스가 같은 순간에** 같은 파일을 볼 때만 깨진다.
       # 소스 문자열 검사로는 잡을 수 없어 실제 spawn 으로 확인한다.

@@ -26,6 +26,11 @@ import { SEMANTIC_DROP, DRAFT_HARM_AXES } from './micro-seed-auto-judge'
 // 🔴 위기 판정의 정본은 안전 신호 모듈 하나다 — 여기서 규칙을 다시 쓰지 않는다
 import { judgeCrisisSignal } from './micro-seed-safety-signals'
 import type { PersonaForMatch } from './original-post-persona-match'
+/** 🔴 초안 게이트 정본 — 채택 판정이 규칙을 다시 쓰지 않는다 (2026-09-26) */
+import {
+  judgeDraftGates, DRAFT_GATE_LABEL,
+  type DraftGateCard, type DraftGateCode, type DraftGatePlan,
+} from './content-core/draft-life-gates'
 
 export const AUTO_DRAFT_DECISIONS = ['AUTO_ADOPT', 'AUTO_HOLD', 'AUTO_DROP'] as const
 export type AutoDraftDecision = (typeof AUTO_DRAFT_DECISIONS)[number]
@@ -72,6 +77,11 @@ export type DraftReason =
    *    앞판은 이것을 `noDraft`(초안을 못 만듦)로 적어 초안 실패처럼 보였다.
    */
   | 'personaCapacityDeferred'
+  /**
+   * 🔴 **초안 게이트** (2026-09-26) — 이름은 게이트 정본(`DRAFT_GATE_CODES`)과 같다.
+   *    캐시에서 꺼낸 옛 artifact 는 그 판정을 거치지 않았으므로 **채택 자리에서 다시 건다.**
+   */
+  | DraftGateCode
 
 export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   lifeHistoryConflict: '글쓴이의 삶과 어긋나는 1인칭 경험',
@@ -96,6 +106,8 @@ export const DRAFT_REASON_LABEL: Record<DraftReason, string> = {
   qualitySchemaMismatch: '🔴 품질 판정이 우리 축이 아닌 이름만 돌려줬다 — 다시 물어도 같았다',
   generatedHarm: '🔴 생성된 글에 위해가 있다 (개인 특정 · 명예훼손 · 위협 · 위험한 의료 지시)',
   personaCapacityDeferred: '🟡 Persona 여력 대기 — 이 회차에 배정할 화자가 없어 부르기 전에 미뤘다 (초안 실패 아님)',
+  // 🔴 게이트 라벨은 정본에서 읽는다 — 여기서 다시 적지 않는다
+  ...DRAFT_GATE_LABEL,
 }
 
 /** 왜 복제로 봤는지 한 줄 — 🔴 사유 이름을 여기서 다시 적지 않는다 */
@@ -338,6 +350,17 @@ export type PickV2Input = {
     /** 🔴 우리 정본이 정한 그날 나이 — 이 값이면 우리가 넣은 것이다 */
     personaExactAge?: number | null
   }
+  /**
+   * 🔴 **초안 게이트 입력** (2026-09-26). 계획(`selfBasis` · `warrants`)과 화자 정본 카드.
+   *    넘기지 않으면 검사하지 않는다 — 기존 호출부의 동작이 바뀌지 않는다.
+   *    🔴 넘기면 **채택 전에** 막는다. `runContentCore` 의 deterministic 이 이미 막았어도
+   *       캐시에서 꺼낸 옛 artifact 는 그 판정을 거치지 않았다 — 그래서 여기서 다시 건다.
+   *    🔴 카드를 못 찾으면 `null` — 시제 게이트는 판정하지 않는다(나이 판정이 fail-closed 로 막는다).
+   */
+  draftGate?: {
+    plan: DraftGatePlan | null
+    card: DraftGateCard | null
+  }
 }
 
 export function pickV2(input: PickV2Input, now: string): Pick {
@@ -357,6 +380,24 @@ export function pickV2(input: PickV2Input, now: string): Pick {
   // 🔴 위기 신호가 먼저다 — 정상 초안이 함께 있어도 채택하지 않는다 (정본 §4)
   if (input.crisisStop !== null) return held('semanticHold')
   if (input.machineOutcome === 'drop') return held('generatedHarm')
+  /**
+   * 🔴 **초안 게이트** (2026-09-26) — 자료 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제.
+   *    `hold` 를 `semanticHold` 로 뭉개기 **전에** 본다 — `runContentCore` 가 이미 같은 이유로
+   *    막았어도 pick 에는 **구조화된 사유 이름**이 남아야 사람이 원인을 바로 안다.
+   *    🔴 걸린 사유를 **전부** `rejected` 에 남긴다. 대표 사유는 게이트 정본 순서의 첫째다.
+   *    🔴 `AUTO_DROP` 이 아니다 — 다른 Persona·자리면 쓸 수 있는 원천이다.
+   */
+  if (input.draftGate !== undefined) {
+    const gate = judgeDraftGates({
+      title: d.title, body: d.body, plan: input.draftGate.plan, card: input.draftGate.card,
+    })
+    if (gate.length > 0) {
+      return {
+        ...base, decision: 'AUTO_HOLD', draftNo: null, reason: gate[0]!.code,
+        rejected: gate.map((g) => ({ draftNo: d.draftNo, reason: g.code })),
+      }
+    }
+  }
   if (input.machineOutcome === 'hold') return held('semanticHold')
   // ── 기계가 adopt — 여기서 기존 정본 검사를 다시 건다 ──
   const own = checkDraft(d, {

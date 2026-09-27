@@ -18,6 +18,7 @@
  * 🔴 **machine 판정은 READY 가 아니다.** 최종 READY/EDIT_REQUIRED/HOLD 는 사람이 정한다.
  */
 import { CLAIM_FACTS } from './source-facts'
+import { DRAFT_GATE_CODES, DRAFT_GATE_LABEL } from './draft-life-gates'
 
 export const REVIEW_VERSION = 'review-v7'
 
@@ -29,6 +30,12 @@ export const DETERMINISTIC_CODES = [
    *    의미 검수가 `clean` 이라 답해도 이 결함은 그 답으로 드러나지 않는다.
    */
   'loadBearingLost',
+  /**
+   * 🔴 **초안이 우리 글·우리 화자와 어긋난다** (2026-09-26 운영 초안 4편 실측).
+   *    자료 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제 모순 — 정본은
+   *    `draft-life-gates.ts` 하나다. 원문과 견주는 의미 검수는 이 셋을 볼 자리가 없다.
+   */
+  ...DRAFT_GATE_CODES,
 ] as const
 export type DeterministicCode = (typeof DETERMINISTIC_CODES)[number]
 
@@ -40,6 +47,8 @@ export const DETERMINISTIC_LABEL: Readonly<Record<DeterministicCode, string>> = 
   selfAgeConflict: '글쓴이 나이와 어긋난다',
   protectedFactMissing: '글자 그대로 지켜야 할 사실이 사라졌다',
   loadBearingLost: '🔴 글의 결론을 만드는 조건이 사라지거나 뒤바뀌었다',
+  // 🔴 라벨도 게이트 정본에서 읽는다 — 여기서 다시 적지 않는다
+  ...DRAFT_GATE_LABEL,
 }
 
 export type DeterministicFailure = { code: DeterministicCode; detail: string }

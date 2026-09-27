@@ -263,6 +263,8 @@ export async function runAutoMerge({ apply = false, deps }) {
   // ── ⑥ 관문 ──────────────────────────────────────────────
   const verdict = judgeAutoMerge({
     pr, expectedSha: sha, files: deps.listPrFiles(pr0.number),
+    // 🔴 재사용 hero 를 막지 않기 위해 head tree 의 실재 여부를 넘긴다 (head SHA 로 묶는다)
+    headHasFile: deps.headHasFile ? (path) => deps.headHasFile(path, sha) : undefined,
     ciState: ci.ciState, checks: ci.checks,
     registered, queueBySlug: bySlug(mainQueue), branchQueueBySlug: bySlug(branchQueue),
     mainSlugs: new Set(mainArticles.map((a) => a.slug)),
@@ -514,6 +516,18 @@ export function makeRealDeps(exec, { log: logFn = line } = {}) {
     const r = exec('gh', ['pr', 'view', String(number), '--json', 'files'])
     if (r.code !== 0) return []
     try { return (JSON.parse(r.out || '{}').files ?? []).map((f) => f.path) } catch { return [] }
+  },
+  /**
+   * 🔴 **PR head tree 에 그 파일이 실제로 있는가.** 변경 파일 목록과는 다른 질문이다.
+   *    이미 저장소에 있던 hero 를 재사용한 글은 "이번 PR 이 바꾼 파일" 에는 없지만
+   *    head 에는 멀쩡히 있다 — 그걸 막으면 재사용 자체가 불가능해진다 (2026-09-27).
+   *    🔴 조회가 실패하면 `null` 을 돌려 판정을 **옛 기준** 으로 되돌린다.
+   */
+  headHasFile: (path, sha) => {
+    if (!sha) return null
+    const r = exec('gh', ['api', `repos/{owner}/{repo}/contents/${path}?ref=${sha}`, '--jq', '.sha'])
+    if (r.code === 0) return Boolean(r.out.trim())
+    return /404|Not Found/i.test(r.err || r.out) ? false : null
   },
   getChecks: (sha) => {
     const s = exec('gh', ['api', `repos/{owner}/{repo}/commits/${sha}/status`, '--jq', '.state'])

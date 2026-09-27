@@ -95,6 +95,21 @@ export function restoreSnapshot(snap) {
   return restored
 }
 
+/**
+ * 🔴 **자식 프로세스 출력에서 뜻이 있는 줄을 고른다** (2026-09-27 사고).
+ *
+ *    앞판은 마지막 1~2줄을 그대로 썼다. 자식이 스택을 뱉고 죽으면 그 자리에
+ *    `Node.js v24.14.0` 이 남는다 — `HERO_FAILED — Node.js v24.14.0` 이 실제로 남았고
+ *    무엇이 왜 터졌는지 알 수 없었다.
+ */
+const NOISE = /^(Node\.js v[\d.]+|\s*at\s|\s*\^+\s*$|\s*$)/
+export function meaningfulLine(out, max = 2) {
+  const lines = String(out ?? '').split('\n').map((x) => x.trimEnd())
+  const marked = lines.filter((x) => /⛔|Error:|error:/.test(x) && !NOISE.test(x))
+  const pick = marked.length ? marked.slice(-max) : lines.filter((x) => !NOISE.test(x)).slice(-max)
+  return pick.join(' ').trim().slice(0, 300) || '(출력 없음)'
+}
+
 function run(file, args, { json = false } = {}) {
   const r = spawnSync(NODE, [file, ...args], { cwd: ROOT, encoding: 'utf8' })
   if (r.error) return { code: 1, stdout: '', stderr: String(r.error.message ?? r.error), json: null }
@@ -117,11 +132,12 @@ function run(file, args, { json = false } = {}) {
  * 🔴 **기존 ChatGPT 웹 UI 경로 어댑터.**
  *    새 API 를 부르지 않는다. 지금 쓰는 그 스크립트에 **실패 패킷 경로만** 더 준다.
  */
-function webuiRegenRunner({ slug, packetPath }) {
-  const r = run(WEBUI, ['--fetch', slug, '--force', '--regen-packet', packetPath])
+export function webuiRegenRunner({ slug, packetPath }, { runFn = run } = {}) {
+  const r = runFn(WEBUI, ['--fetch', slug, '--force', '--regen-packet', packetPath])
   if (r.code !== 0) {
     const why = /login_required/i.test(r.stdout + r.stderr) ? 'ChatGPT login_required' : '재생성 회수 실패'
-    return { ok: false, why: `${why} — ${(r.stderr || r.stdout).trim().split('\n').pop()}` }
+    // 🔴 마지막 줄을 그대로 쓰면 자식이 스택을 뱉고 죽었을 때 `Node.js v…` 만 남는다
+    return { ok: false, why: `${why} — ${meaningfulLine(r.stderr || r.stdout)}` }
   }
   return { ok: true }
 }
@@ -134,7 +150,12 @@ function webuiRegenRunner({ slug, packetPath }) {
  */
 export function drive(slug, opts, deps = {}) {
   const runStep = deps.run ?? run
-  const regenRunner = deps.regenRunner ?? webuiRegenRunner
+  /**
+   * 🔴 기본 runner 도 **주입된 run 을 탄다.** 앞판은 모듈 스코프 `run` 을 직접 써서
+   *    `deps.run` 을 우회했다 — 그래서 실제 `webuiRegenRunner` 가 한 번도 시험되지 않았고,
+   *    거기 남아 있던 `split('\\n').pop()` 이 `Node.js v…` 를 사유로 흘려보냈다.
+   */
+  const regenRunner = deps.regenRunner ?? ((ctx) => webuiRegenRunner(ctx, { runFn: runStep }))
   const regen = deps.attemptRegeneration ?? attemptRegeneration
   const quarantinePath = deps.quarantinePath
   /** 🔴 원고가 실제로 바뀌었는지 보는 값. 시험은 실제 draft 를 건드리지 않으므로 주입한다 */
@@ -204,7 +225,7 @@ export function drive(slug, opts, deps = {}) {
     const r = runStep(WEBUI, ['--fetch', slug])
     if (r.code !== 0) {
       const why = /login_required/i.test(r.stdout + r.stderr) ? 'ChatGPT login_required' : '회수 실패'
-      return stop('draft', 'FETCH_FAILED', `${why} — ${(r.stderr || r.stdout).trim().split('\n').pop()}`)
+      return stop('draft', 'FETCH_FAILED', `${why} — ${meaningfulLine(r.stderr || r.stdout)}`)
     }
     add('draft', 'ok', 'draft.md 회수')
   }
@@ -218,7 +239,7 @@ export function drive(slug, opts, deps = {}) {
     const args = write ? ['--in', p.draftMd, '--out', p.articleTs] : ['--in', p.draftMd]
     const r = runStep(MD2DRAFT, args)
     if (r.code !== 0) {
-      return stop('article', 'CONVERT_FAILED', (r.stderr || r.stdout).trim().split('\n').slice(-2).join(' '))
+      return stop('article', 'CONVERT_FAILED', meaningfulLine(r.stderr || r.stdout))
     }
     add('article', write ? 'ok' : 'skip', write ? 'article-draft.ts 생성' : 'dry-run — 변환 검사만 통과')
   }
@@ -252,7 +273,7 @@ export function drive(slug, opts, deps = {}) {
     add(stage, 'ok', `재생성 ${rr.regenCalls}/${MAX_REGEN_CALLS} — 실패 패킷 전달 후 원고 회수`)
     // 🔴 회수된 draft.md 를 다시 변환한다. 변환 없이 QA 를 돌리면 옛 원고를 본다.
     const c = runStep(MD2DRAFT, ['--in', p.draftMd, '--out', p.articleTs])
-    if (c.code !== 0) return { ok: false, code: 'CONVERT_FAILED', why: (c.stderr || c.stdout).trim().split('\n').pop() }
+    if (c.code !== 0) return { ok: false, code: 'CONVERT_FAILED', why: meaningfulLine(c.stderr || c.stdout) }
     return rr
   }
 
@@ -298,7 +319,7 @@ export function drive(slug, opts, deps = {}) {
     if (hp.mode !== 'REQUIRED') args.push('--allow-optional')
     const r = runStep(HERO, args)
     if (r.code !== 0) {
-      return stop('hero', 'HERO_FAILED', (r.stderr || r.stdout).trim().split('\n').slice(-2).join(' '))
+      return stop('hero', 'HERO_FAILED', meaningfulLine(r.stderr || r.stdout))
     }
     add('hero', 'ok', `hero 생성 (${hp.mode ?? '-'}${hp.enforcedByLane ? ' · 자동 레인 강제' : ''}${heroBrief.scene ? ' · review scene' : ' · 기본 장면'})`)
   }
@@ -342,7 +363,7 @@ export function drive(slug, opts, deps = {}) {
     const r = runStep(REGISTER, args, { json: true })
     const verdict = r.json?.verdict ?? (r.code === 0 ? 'READY' : 'BLOCKED')
     if (verdict === 'BLOCKED' || r.code !== 0) {
-      const reasons = r.json?.reasons ?? [(r.stderr || r.stdout).trim().split('\n').pop()]
+      const reasons = r.json?.reasons ?? [meaningfulLine(r.stderr || r.stdout)]
       blockedBy.push({ code: 'REGISTER_BLOCKED', message: reasons.join(' · ') })
       add('register', 'blocked', reasons.join(' · '))
       // 🔴 register 가 스스로 막은 것이다 — articles.ts·큐는 건드리지 않았다.

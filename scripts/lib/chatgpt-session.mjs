@@ -41,13 +41,37 @@ const CHATGPT_URL = 'https://chatgpt.com/'
  * CDP 포트. 이 포트로 떠 있는 Chrome 에만 붙는다.
  * 9222 는 흔히 쓰여 충돌하므로 이 프로젝트 전용 번호를 쓴다.
  */
+/**
+ * 🔴 **composer 선택자 정본.** 세 경로(probe · 원고 회수 · hero 생성)가 **이 하나**를 쓴다.
+ *
+ *    2026-09-27 회차에서 원고 회수 5건과 hero 2건이 전부 실패했다. probe 는 통과했는데
+ *    그 둘만 죽었다 — probe 만 새 선택자를 알고 있었고 나머지는 `#prompt-textarea` 만
+ *    봤기 때문이다. 계약이 세 군데로 갈라져 있으면 ChatGPT 가 DOM 을 바꿀 때마다
+ *    **일부만 고쳐지고 일부는 조용히 죽는다.**
+ *
+ *    실측 (2026-09-27, 전용 프로필):
+ *      #prompt-textarea                          → 0개
+ *      [contenteditable="true"][role="textbox"]  → 1개
+ *
+ *    🔴 `[contenteditable="true"]` 만으로 넓히지 않는다. 그 속성은 제목·메모 같은 다른
+ *       입력에도 붙는다 — 엉뚱한 칸에 원고를 써 넣는 사고가 난다. `role=textbox` 까지
+ *       요구해 **입력 역할이 선언된 것**만 고른다.
+ *    🔴 옛 선택자를 지우지 않는다. 되돌아올 수 있고, 둘 다 있어도 해는 없다.
+ */
+export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]'
+
+/** 정본 선택자로 composer 를 잡는다 — 여러 개면 첫 번째 */
+export function composerLocator(page) {
+  return page.locator(COMPOSER_SELECTOR).first()
+}
+
 export const CDP_PORT = 9333
 export const CDP_URL = `http://127.0.0.1:${CDP_PORT}`
 
 /** --login 이 Chrome 에 넘기는 인자. --no-sandbox 도 --enable-automation 도 없다 */
-export function chromeArgs() {
+export function chromeArgs(profileDir = PROFILE_DIR) {
   return [
-    `--user-data-dir=${PROFILE_DIR}`,
+    `--user-data-dir=${profileDir}`,
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run',
     '--no-default-browser-check',
@@ -448,6 +472,13 @@ export async function ensureChrome({
    *    기본은 실제 확인이고, 판정 자체는 그대로 돈다.
    */
   browserCheck = browserAvailable,
+  /**
+   * 🔴 프로필 경로도 주입점이다. 시험이 실제 프로필을 읽으면 **그때 Chrome 이 떠 있었는지**에
+   *    따라 결과가 달라진다 (2026-09-27: 살아 있는 프로필 때문에 죽은 잠금 반례가 깨졌다).
+   */
+  profileDir = PROFILE_DIR,
+  /** 🔴 프로세스 목록도 그대로 넘긴다 — 잠금 판정을 시험이 고정할 수 있어야 한다 */
+  processes,
 } = {}) {
   const alive = await cdpCheck()
   if (alive) return { ok: true, started: false }
@@ -460,15 +491,15 @@ export async function ensureChrome({
    * 🔴 죽은 잠금(STALE)은 여기서 멈출 이유가 아니다. Chrome 은 시작할 때 죽은 잠금을
    *    스스로 거둬 간다 — 우리가 지울 것도 없다. 그냥 띄우면 된다.
    */
-  const lock = profileLockState()
+  const lock = profileLockState({ profileDir, ...(processes ? { processes } : {}) })
   if (lock.state === 'LIVE') {
     return { ok: false, started: false, reason: STATUS.CHROME_NOT_RUNNING, lock }
   }
 
-  if (!existsSync(PROFILE_DIR)) mkdirSync(PROFILE_DIR, { recursive: true })
-  try { chmodSync(PROFILE_DIR, 0o700) } catch { /* 이미 맞으면 그만 */ }
+  if (!existsSync(profileDir)) mkdirSync(profileDir, { recursive: true })
+  try { chmodSync(profileDir, 0o700) } catch { /* 이미 맞으면 그만 */ }
 
-  const child = spawnFn(CHROME_APP, chromeArgs(), { detached: true, stdio: 'ignore' })
+  const child = spawnFn(CHROME_APP, chromeArgs(profileDir), { detached: true, stdio: 'ignore' })
   child?.unref?.()
   // 🔴 죽은 잠금 위에서 띄운 경우를 기록에 남긴다 — 다음 사고 때 이 줄이 단서다
   const startedOverStaleLock = lock.state === 'STALE'
@@ -516,6 +547,8 @@ export async function probe({
 
   const { chromium } = await import('playwright-core')
   let browser = null
+  /** 🔴 이 호출이 **직접 연** 탭. 기존 탭을 재사용했으면 null 이다 */
+  let openedPage = null
 
   try {
     browser = await chromium.connectOverCDP(CDP_URL, { timeout: connectTimeoutMs })
@@ -529,6 +562,8 @@ export async function probe({
     let page = pages.find((pg) => pg.url().includes('chatgpt.com'))
     if (!page) {
       page = await ctx.newPage()
+      // 🔴 **내가 연 탭이다.** 끝나면 내가 닫는다 — 남의 탭은 건드리지 않는다
+      openedPage = page
       const res = await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
       out.httpStatus = res?.status() ?? null
     } else {
@@ -538,7 +573,7 @@ export async function probe({
 
     // SPA 라 composer 가 늦게 뜬다. 고정 대기로는 못 잡아 login_required 로 오진했다
     try {
-      await page.waitForSelector('#prompt-textarea, [contenteditable="true"][role="textbox"]', { timeout: composerWaitMs })
+      await page.waitForSelector(COMPOSER_SELECTOR, { timeout: composerWaitMs })
     } catch { /* 없으면 아래 신호로 본다 */ }
 
     // 불리언만 꺼낸다. DOM 도 본문도 URL 도 쿠키도 반환하지 않는다
@@ -567,6 +602,13 @@ export async function probe({
     //    Protocol error 문구에는 URL·계정·쿠키가 실리지 않는다 — 첫 줄만 자른다.
     out.errorDetail = String(err?.message ?? '').split('\n')[0].slice(0, 200)
   } finally {
+    /**
+     * 🔴 **내가 연 탭은 내가 닫는다** (2026-09-27 탭 누수).
+     *    앞판은 닫지 않았다. 실패한 회차마다 `chatgpt.com/` 루트 탭이 하나씩 쌓여
+     *    실측에서 8개가 남아 있었다. 기존 탭을 재사용한 경우에는 닫지 않는다 —
+     *    사람이 보고 있던 창일 수 있다.
+     */
+    try { await openedPage?.close() } catch { /* 이미 닫혔으면 그만 */ }
     // 🔴 close() 가 아니라 disconnect 다. 사람이 띄운 Chrome 을 죽이지 않는다
     try { await browser?.close() } catch { /* 연결만 끊는다 */ }
   }
@@ -602,34 +644,54 @@ export async function probe({
 export async function fetchManuscript({
   briefPath, outPath, promptText, requiredMarkers = [], validate = null, timeoutMs = 300000,
   connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
+  /**
+   * 🔴 **실제 이 함수를 시험이 돌리기 위한 자리.** 가짜 browser/page 를 넣어
+   *    composer·send·응답 대기 예외를 각각 주입하고, **자기가 연 탭만 1회 닫는지**를
+   *    실제 경로로 확인한다. 시험 안에서 계약을 흉내 낸 함수를 검사하면
+   *    제품이 틀려도 초록이 뜬다 (2026-09-27 Codex 재검토 지적).
+   *    기본값은 실제 CDP 연결과 실제 탭 확보 그대로다.
+   * @type {((url: string, opts: object) => Promise<object>) | undefined}
+   */
+  connect,
+  /** @type {(() => Promise<{ok: boolean}>) | undefined} */
+  ensureTab,
 }) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
   // probe 와 같은 이유로 탭을 먼저 확보한다 — 여기만 빠뜨리면 회수 단계에서 같은 실패가 난다
-  const tab = await ensurePageTarget()
+  const tab = await (ensureTab ?? ensurePageTarget)()
   if (!tab.ok) return { ok: false, reason: STATUS.CHROME_NOT_RUNNING, sent: false }
 
-  const { chromium } = await import('playwright-core')
+  const connectFn = connect ?? (async (url, opts) => {
+    const { chromium } = await import('playwright-core')
+    return chromium.connectOverCDP(url, opts)
+  })
   let browser = null
+  let page = null
   let sent = false
+  /** 🔴 어디까지 갔는지 남긴다 — `connect_failed` 한 단어로는 고칠 수가 없다 */
+  let stage = 'connect'
 
   try {
-    browser = await chromium.connectOverCDP(CDP_URL, { timeout: connectTimeoutMs })
+    browser = await connectFn(CDP_URL, { timeout: connectTimeoutMs })
     const ctx = browser.contexts()[0]
-    if (!ctx) return { ok: false, reason: 'no_context', sent }
+    if (!ctx) return { ok: false, reason: 'no_context', stage, sent }
 
     // 새 대화로 시작한다 — 앞 원고의 톤이 다음 글에 섞이지 않게
-    const page = await ctx.newPage()
+    stage = 'open-tab'
+    page = await ctx.newPage()
     await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded', timeout: 60000 })
-    await page.waitForSelector('#prompt-textarea', { timeout: 60000 })
+    stage = 'composer'
+    await page.waitForSelector(COMPOSER_SELECTOR, { timeout: 60000 })
 
     // ── 첨부 ──
+    stage = 'attach'
     const inputs = await page.locator('input[type=file]').all()
     let attached = false
     for (const input of inputs) {
       try { await input.setInputFiles(briefPath); attached = true; break } catch { /* 다음 input */ }
     }
-    if (!attached) { await page.close(); return { ok: false, reason: 'attach_failed', sent } }
+    if (!attached) return { ok: false, reason: 'attach_failed', stage, sent }
 
     // ② 업로드 완료를 기다린다. 이걸 안 하면 제출이 통째로 무시된다
     try {
@@ -637,20 +699,22 @@ export async function fetchManuscript({
         const t = document.body.innerText || ''
         return t.includes('brief') && !/업로드 중|Uploading/i.test(t)
       }, null, { timeout: 60000 })
-    } catch { await page.close(); return { ok: false, reason: 'upload_timeout', sent } }
+    } catch { return { ok: false, reason: 'upload_timeout', stage, sent } }
 
     // ── 전송 ──
-    await page.locator('#prompt-textarea').click()
+    stage = 'send'
+    await composerLocator(page).click()
     await page.keyboard.insertText(promptText) // ① 백틱 없음
     await page.waitForTimeout(600)
 
     // ① Enter 를 쓰지 않는다
     const sendBtn = page.locator('[data-testid="send-button"], button[aria-label*="보내기"], button[aria-label*="Send"]').first()
     try { await sendBtn.click({ timeout: 15000 }) }
-    catch { await page.close(); return { ok: false, reason: 'send_button_missing', sent } }
+    catch { return { ok: false, reason: 'send_button_missing', stage, sent } }
     sent = true
 
     // ── 완료 대기 ──
+    stage = 'await-response'
     // 판정은 텍스트가 아니라 불리언이다 — 길이 · 코드블록 · frontmatter 시작 · [CTA]
     try {
       await page.waitForFunction(() => {
@@ -661,8 +725,8 @@ export async function fetchManuscript({
         return t.length > 900 && t.includes('[CTA]') && t.trimStart().startsWith('---')
       }, null, { timeout: timeoutMs, polling: 3000 })
     } catch {
-      await page.close()
-      return { ok: false, reason: 'response_timeout', sent }
+      // 🔴 닫기는 finally 가 한다 — 여기서 닫으면 뒤 경로가 닫힌 page 를 만진다
+      return { ok: false, reason: 'response_timeout', stage, sent }
     }
 
     // ③ pre code 의 textContent — 렌더된 <hr>/<h2> 가 아니라 원본 표기가 그대로 있다
@@ -670,7 +734,6 @@ export async function fetchManuscript({
       const codes = [...document.querySelectorAll('pre code')]
       return codes[codes.length - 1].textContent || ''
     })
-    await page.close()
 
     // 지정 문장이 빠졌으면 저장하지 않는다 — 원고를 고치지 않고 되돌린다
     const missing = requiredMarkers.filter((m) => !text.includes(m))
@@ -686,8 +749,23 @@ export async function fetchManuscript({
     writeFileSync(outPath, text)
     return { ok: true, length: text.length, sent }
   } catch (err) {
-    return { ok: false, reason: 'connect_failed', errorName: err?.name ?? 'Error', sent }
+    /**
+     * 🔴 **`connect_failed` 한 단어로 삼키지 않는다** (2026-09-27 사고).
+     *    그날 5건이 전부 이 한 단어로 끝났다. 실제 원인은 composer 선택자였는데
+     *    로그만 보고는 알 수 없었다. 이제 **어느 단계**에서 **무슨 오류**였는지 남긴다.
+     *    원문은 첫 줄만, 200자까지 — URL·계정·쿠키가 실리지 않는 구간이다.
+     */
+    return {
+      ok: false,
+      reason: 'connect_failed',
+      stage,
+      errorName: err?.name ?? 'Error',
+      errorDetail: String(err?.message ?? '').split('\n')[0].slice(0, 200),
+      sent,
+    }
   } finally {
+    // 🔴 성공·실패·예외 모두에서 **내가 연 탭**을 닫는다. Chrome 자체는 끊기만 한다.
+    try { await page?.close() } catch { /* 이미 닫혔으면 그만 */ }
     try { await browser?.close() } catch { /* 연결만 끊는다 */ }
   }
 }
