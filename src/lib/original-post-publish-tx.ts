@@ -36,6 +36,7 @@ import { boundedReleaseStage } from './scale-runtime'
 import { judgeCatchUp, kstMinuteOfDay, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
+import { overdueBlockInTx } from './auto-ready-audit-store'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
@@ -212,6 +213,12 @@ async function publishAttempt(
           sourceCapturedAt: row.rawContent?.sourceCapturedAt ?? null,
         })
         if (!recheck.ok) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason }
+        /**
+         * 🔴 **판정 대기 시한** (2026-09-27) — 감사 러너가 멈춰 판정 없이 시한을 넘긴 감사가 있으면
+         *    같은 트랜잭션 안에서 막는다. 감사가 끝나면 다시 열린다(끈적하지 않다).
+         */
+        const overdue = await overdueBlockInTx(tx, input.autoReadyEnv ?? {}, txNow)
+        if (overdue !== null) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: overdue }
       }
 
       /**

@@ -502,7 +502,12 @@ console.log('\n⑪ 🔴 감사 — 묶음 대조 · 옛 판정 거절 · 규칙 
   check('🔴 판정 모양이 깨지면 기록하지 않는다',
     !verdictShapeOk({ ...good, model: '' }).ok && !verdictShapeOk({ ...good, judgedBodyHash: 'x' }).ok
     && !verdictShapeOk({ ...good, defect: 'maybe' as never }).ok)
-  check('🔴 🔴 **감사 회차가 모델을 부르지 않는다 — 유료 호출 0**',
+  /**
+   * 🔴 2026-09-27 — 감사 러너는 이제 의미 감사(모델)도 돌린다. 모델 호출은 **의미 감사 제공사 한 곳**
+   *    (`auto-ready-semantic-provider` → 공급 장부)뿐이고 기본 OFF 다 — `auto-ready:audit-check` 가 본다.
+   *    규칙 감사자와 repo 는 여전히 모델을 모른다. 러너도 직접 부르지 않는다.
+   */
+  check('🔴 🔴 **규칙 감사자·repo·러너는 모델을 직접 부르지 않는다 — 모델 호출은 장부를 지나는 의미 감사 제공사 한 곳**',
     !/anthropic|openai|gemini|fetch\(/i.test(codeOnly('scripts/lib/auto-ready-rule-judge.mts') + codeOnly('scripts/auto-ready-audit.mts') + repo))
   check('🔴 감사 회차는 운영 스케줄에 연결되지 않았다',
     !/auto-ready-audit/.test(readFileSync('.github/workflows/visibility-guard.yml', 'utf-8').replace(/auto-ready:(db-)?check/g, ''))
@@ -716,7 +721,10 @@ console.log('\n⑯ 🔴 rule 감사자는 "무결성·안전 감사" 다 — 의
   check('🔴 🔴 **모델·프롬프트 이름이 integrity-safety**',
     /RULE_JUDGE_MODEL = 'rule:integrity-safety-audit'/.test(judge) && /RULE_JUDGE_PROMPT_VERSION = 'integrity-safety-v1'/.test(judge))
   const claims = (t: string): boolean => t.split('\n').some((l) => /독립 (의미 )?감사/.test(l) && !/아니다|별도|나중|못/.test(l))
-  check('🔴 🔴 **"독립 (의미) 감사" 를 한다고 주장하는 줄이 없다**', !claims(judge) && !claims(runner) && !claims(codeOnly('src/lib/auto-ready-v2.ts')))
+  // 🔴 러너는 이제 의미 감사를 실제로 돈다(2026-09-27) — 주장 금지는 규칙 감사자와 판정 조각에만 건다
+  check('🔴 🔴 **규칙 감사자·판정 조각이 "독립 (의미) 감사" 를 한다고 주장하지 않는다**', !claims(judge) && !claims(codeOnly('src/lib/auto-ready-v2.ts')))
+  check('🔴 🔴 **러너는 의미 감사를 실제로 부른다 — 규칙 감사만으로 기록하지 않는다**',
+    /runCombinedAuditRound\(/.test(runner) && /makeAuditContextLoader\(/.test(runner) && !/runAuditRound\(/.test(runner))
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
