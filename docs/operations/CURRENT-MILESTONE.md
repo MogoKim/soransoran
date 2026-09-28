@@ -40,7 +40,7 @@
 
 | 축 | 현재 | 판정 |
 |---|---|---|
-| 제품 코드 기준 / runtime·pin | `7d29dbf` / `7d29dbf` | main·runtime·pin·manifest 일치 |
+| 제품 코드 기준 / runtime·pin | `7d29dbf` / `7d29dbf` | 코드 일치 · 이 문서만 바꾸는 merge SHA는 runtime 기준이 아님 |
 | 공급/발행 단계 | capacity d10 / release d1 | 공급 여력과 공개량 분리 |
 | 발행 가능 재고 | 22건 | 당장 d1 발행 가능 |
 | 자동 READY | ON | 첫 무인 도장·발행·감사·다음 회차 열림 운영 PASS |
