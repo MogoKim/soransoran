@@ -67,3 +67,24 @@ export function observeJobsSafe(): { observed: ObservedJob[]; problem: string | 
     return { observed: [], problem: `launchctl 관측 실패: ${(e as Error).message}` }
   }
 }
+
+/**
+ * 🔴 **`launchctl print gui/<uid>/<label>` 한 번 — read-only.** 결과를 그대로 돌려준다.
+ *    판정(loaded/unloaded/unknown)은 정본 `judgeJobState`, 회차 정보는 `parseLaunchdRunInfo` 가 한다.
+ *    명령 자체를 못 돌렸으면 `exitCode: null` — "없다" 로 읽지 않는다.
+ */
+export function printJob(label: string): { exitCode: number | null; stdout: string; stderr: string } {
+  const uid = process.getuid?.() ?? 0
+  try {
+    const stdout = execFileSync('launchctl', ['print', `gui/${uid}/${label}`], {
+      encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return { exitCode: 0, stdout, stderr: '' }
+  } catch (e) {
+    const err = e as { status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer }
+    return {
+      exitCode: typeof err.status === 'number' ? err.status : null,
+      stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? ''),
+    }
+  }
+}

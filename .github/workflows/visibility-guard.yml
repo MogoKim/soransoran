@@ -812,6 +812,11 @@ jobs:
       - name: 자동 단계 사다리 (승인 천장 · 전날 결정 · 저장 계약)
         if: steps.scope.outputs.heavy == 'true'
         run: npm run stage:ladder-check
+      # 🔴 무인 운영 루프 — 순수 fixture (DB 0 · launchctl 0). readiness 오판 반례 · 비용 판정 ·
+      #    controller 감속/유지/실패 유지 · consumer legacy · keep-awake/복구 템플릿.
+      - name: 무인 운영 루프 (readiness 반례 · controller fail-closed · consumer · 템플릿)
+        if: steps.scope.outputs.heavy == 'true'
+        run: npm run ops:loop-check
 
       # 🔴 StageDecision 저장 왕복 — **격리 Postgres 17 컨테이너**에서만 돈다. 운영 DB 0.
       #    fixture 로는 잴 수 없는 것(유일키 충돌 · 동시 create · JSON null · NOT NULL 제약)을
@@ -845,6 +850,8 @@ jobs:
           fi
           echo 'migrate deploy 완료 (격리 DB)'
           npm run stage:db-check
+          # 🔴 controller·consumer 실제 진입점 — 같은 격리 DB · 가짜 HOME (운영 env·장부 0)
+          npm run ops:loop-db-check
 
       # 🔴 자동 READY v2 — 순수 계약 (DB 0 · 네트워크 0 · LLM 0).
       #    semanticReview fail-closed · 증거 복원 6분류 · 계약 값 불변 · 도장 hash ·

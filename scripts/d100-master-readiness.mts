@@ -40,6 +40,8 @@ import {
 import { SNAPSHOT_PATH } from './lib/d100-ready-snapshot.mjs'
 import { describeProduction, MIN_PRODUCTION_DAYS } from '../src/lib/d100-supply-funnel'
 import { NORTH_STAR_MISSING_EVENTS, northStar } from '../src/lib/north-star'
+import { collectCapabilityFailing } from '../src/lib/job-health'
+import { observeJob, readProcessRuns, supplyFailing } from './lib/runner-health.mjs'
 
 const JSON_OUT = process.argv.slice(2).includes('--json')
 
@@ -146,12 +148,20 @@ const personaReady = read.ok ? read.personaReady : false
  *    설치·load·스위치·최근 실패·용량을 각각 들고 다닌다 — 하나로 뭉치면
  *    "왜 안 도는가" 에 답할 수 없고, 도는데 모자란 경우를 `ready` 로 읽는다.
  */
-const factsOf = (label: string, enabled: boolean, cap?: {
+/**
+ * 🔴 **최근 회차 성패를 실제로 읽어 넘긴다** (2026-09-28 · readiness 오판 근본 수정).
+ *
+ *    앞판은 여기서 `failing: null` 을 **상수로** 넘겼다. `runnerFactsOf` 는 null 을
+ *    `healthUnknown` 으로 읽으므로(그것은 옳다), load 돼 있고 최근 회차가 정상인 job 도
+ *    **언제나** 돌 수 없다고 나왔다 — collect·generate·publish 가 매일 빨갰다.
+ *    이제 근거를 읽는다: launchd `last exit code` + 공급 회차 기록 + 수집 회차 기록.
+ *    🔴 근거가 없으면 여전히 `null`(모른다)이다 — false 로 채우지 않는다.
+ */
+const factsOf = (label: string, enabled: boolean, failing: boolean | null, cap?: {
   requiredPerDay: number; observedPerDay: Measured
 }): RunnerFacts => runnerFactsOf({
   installed: installed(label), loaded: loadedJobs.has(label), enabled,
-  // 🔴 최근 회차 성패는 이 명령이 읽지 않는다 — false 로 채우지 않고 모른다고 둔다
-  failing: null,
+  failing,
   requiredPerDay: cap?.requiredPerDay,
   observedPerDay: cap?.observedPerDay ?? null,
 })
@@ -165,33 +175,6 @@ function measureFacts(): RunnerFacts {
   const missing: readonly string[] = NORTH_STAR_MISSING_EVENTS
   const have = missing.length === 0
   return runnerFactsOf({ installed: have, loaded: have, enabled: true, failing: null })
-}
-
-const facts: Readonly<Record<Capability, RunnerFacts>> = {
-  /**
-   * 🔴 수집은 job 이 올라와 있는 것으로 끝나지 않는다 —
-   *    **이 단계가 요구하는 상세 건수를 실제로 채우는가**까지 본다.
-   */
-  /**
-   * 🔴 **수집은 job 하나가 아니다** (2026-09-21 3차 보정).
-   *    앞판은 wgang 하나만 보고 `collect: ready` 라 적었다 — remonterrace 도 82cook 도
-   *    같은 능력에 들어가는데 화면에 없었다. 아래 `collectJobs` 가 전부를 따로 보여 주고,
-   *    능력 판정은 **목표 단계의 실측 상세/day** 로 한다.
-   */
-  collect: factsOf('com.soransoran.navercafe-collect-wgang-multi', true, {
-    requiredPerDay: plan.detailedSourcesRequiredPerDay, observedPerDay: detailPerDay,
-  }),
-  generate: factsOf('com.soransoran.supply-process', envFlag('SORAN_SUPPLY_PROCESS_ENABLED'), {
-    // 🔴 생성 능력이 답할 질문은 "얼마나 **만드는가**" 다 — 재고가 얼마나 늘었나가 아니다
-    requiredPerDay: plan.readyQualifiedRequiredPerDay, observedPerDay: readyQualifiedPerDay,
-  }),
-  publish: factsOf('com.soransoran.original-post-runner', true),
-  comment: factsOf('com.soransoran.persona-comment-runner', true),
-  /**
-   * 🔴 계측은 job 이 아니다 — **재방문 이벤트가 없으면 잴 수 없다.**
-   *    지금은 `session_start`·`engaged_session`·`return_visit` 가 없어 미등록이다.
-   */
-  measure: measureFacts(),
 }
 
 /** 🔴 공급원별 수집 job — 하나만 보여 주면 나머지가 죽어도 초록이다 */
@@ -215,6 +198,43 @@ const collectJobs = COLLECT_JOBS.map((j) => ({
     failing: read.ok ? (read.collectFailing[j.source] ?? null) : null,
   }),
 }))
+
+/** 🔴 공급·발행·댓글 job 의 launchd 관측 — read-only (`launchctl print`) */
+const SUPPLY_LABEL = 'com.soransoran.supply-process'
+const COMMENT_LABEL = 'com.soransoran.persona-comment-runner'
+const supplyObs = observeJob(SUPPLY_LABEL)
+const publishObs = observeJob(PUBLISH_LABEL)
+const commentObs = observeJob(COMMENT_LABEL)
+
+const facts: Readonly<Record<Capability, RunnerFacts>> = {
+  /**
+   * 🔴 수집은 job 이 올라와 있는 것으로 끝나지 않는다 —
+   *    **이 단계가 요구하는 상세 건수를 실제로 채우는가**까지 본다.
+   */
+  /**
+   * 🔴 **수집은 job 하나가 아니다** (2026-09-21 3차 보정).
+   *    앞판은 wgang 하나만 보고 `collect: ready` 라 적었다 — remonterrace 도 82cook 도
+   *    같은 능력에 들어가는데 화면에 없었다. 아래 `collectJobs` 가 전부를 따로 보여 주고,
+   *    능력 판정은 **목표 단계의 실측 상세/day** 로 한다.
+   */
+  collect: factsOf('com.soransoran.navercafe-collect-wgang-multi', true,
+    // 🔴 켜져 있는 공급원 **전부**의 최근 회차 — 이미 위에서 읽은 값을 능력 판정에도 넘긴다
+    collectCapabilityFailing(collectJobs.map((j) => ({ enabled: j.facts.enabled, failing: j.facts.failing }))), {
+    requiredPerDay: plan.detailedSourcesRequiredPerDay, observedPerDay: detailPerDay,
+  }),
+  generate: factsOf(SUPPLY_LABEL, envFlag('SORAN_SUPPLY_PROCESS_ENABLED'),
+    supplyFailing(supplyObs, readProcessRuns().runs), {
+    // 🔴 생성 능력이 답할 질문은 "얼마나 **만드는가**" 다 — 재고가 얼마나 늘었나가 아니다
+    requiredPerDay: plan.readyQualifiedRequiredPerDay, observedPerDay: readyQualifiedPerDay,
+  }),
+  publish: factsOf(PUBLISH_LABEL, true, publishObs.launchdFailing),
+  comment: factsOf(COMMENT_LABEL, true, commentObs.launchdFailing),
+  /**
+   * 🔴 계측은 job 이 아니다 — **재방문 이벤트가 없으면 잴 수 없다.**
+   *    지금은 `session_start`·`engaged_session`·`return_visit` 가 없어 미등록이다.
+   */
+  measure: measureFacts(),
+}
 
 const readiness: CapabilityReadiness = {
   collect: facts.collect.state, generate: facts.generate.state,

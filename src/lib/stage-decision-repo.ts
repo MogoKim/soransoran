@@ -18,9 +18,10 @@
  *    🔴 읽을 때 `undefined` 를 `null` 로 **메우지 않는다**. 메우면 select 가 칼럼을
  *       빠뜨린 행이 "값 없음" 으로 통과한다(fail-open).
  *
- * 🔴 이 파일은 아직 **아무도 부르지 않는다.** `STAGE_CONTROLLER_ENABLED` 가 꺼져 있고
- *    controller job·supply·publish 배선은 승인되지 않았다.
- *    검사가 이 파일을 import 하는 production 파일이 0개임을 잠근다.
+ * 🔴 **부르는 곳은 셋뿐이다** (2026-09-28 운영 루프 배선): `scripts/stage-controller.mts`(쓰기 —
+ *    `ensureStageDecision` 경유 · `--apply` + `STAGE_CONTROLLER_ENABLED=on` 일 때만) ·
+ *    `scripts/stage-consume-exec.mts`(읽기 — 러너를 감싸 env 로 옮긴다) · `scripts/ops-status.mts`(읽기).
+ *    발행·공급 러너 파일은 부르지 않는다. `stage:ladder-check` 가 그 목록을 잠근다.
  *
  * 🔴 **되돌리기는 flag OFF 다(runtime rollback).** 표를 지우는 것(schema rollback)은
  *    결정 이력을 잃는 별개의 일이고, 평소에는 할 이유가 없다.
