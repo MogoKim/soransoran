@@ -31,6 +31,7 @@ import {
   writeFileSync, writeSync,
 } from 'node:fs'
 import { homedir, hostname } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 
 /** 🔴 저장소 밖이다. runtime 을 더럽히지 않는다 */
@@ -500,7 +501,7 @@ function sleepSync(ms) {
  *
  * @returns {{state:'LIVE'|'DEAD'|'UNKNOWN', owner:object|null, why:string}}
  */
-export function inspectQuarantineLock(lock) {
+export function inspectQuarantineLock(lock, { identityOf = processIdentity } = {}) {
   let owner
   try { owner = JSON.parse(readFileSync(lock, 'utf8')) }
   catch (e) {
@@ -511,11 +512,26 @@ export function inspectQuarantineLock(lock) {
     return { state: 'UNKNOWN', owner, why: '잠금 내용이 규약과 다르다' }
   }
   if (owner.host !== hostname()) return { state: 'UNKNOWN', owner, why: `다른 호스트의 잠금이다 (${owner.host})` }
-  try { process.kill(owner.pid, 0); return { state: 'LIVE', owner, why: `pid ${owner.pid} 가 살아 있다` } }
+  try { process.kill(owner.pid, 0) }
   catch (e) {
     if (e?.code === 'ESRCH') return { state: 'DEAD', owner, why: `pid ${owner.pid} 가 없다` }
-    return { state: 'LIVE', owner, why: `pid ${owner.pid} 확인 불가(${e?.code}) — 살아 있는 것으로 본다` }
+    // EPERM 등 — 존재는 한다. 아래 정체 대조로 넘어간다
   }
+  /**
+   * 🔴 **PID 가 있다 ≠ 주인이 살아 있다.** 시작 시각·명령줄이 기록과 **둘 다** 같아야 같은 주인이다.
+   *    다르면 PID 가 재사용된 것 — 옛 주인은 죽었다(DEAD, 거둘 때 token 을 다시 확인한다).
+   *    지금 PID 의 정체를 못 읽거나 기록에 정체가 없으면 판단하지 않는다(UNKNOWN — 빼앗지 않는다).
+   */
+  const now = identityOf(owner.pid)
+  if (!now) return { state: 'UNKNOWN', owner, why: `pid ${owner.pid} 의 정체를 읽지 못했다 — 판단하지 않는다` }
+  if (!owner.start || !owner.cmd) {
+    return { state: 'UNKNOWN', owner, why: `기록에 주인 정체(시작 시각·명령줄)가 없다 — pid ${owner.pid} 를 판단하지 않는다` }
+  }
+  if (now.start !== owner.start || now.cmd !== owner.cmd) {
+    return { state: 'DEAD', owner,
+      why: `pid ${owner.pid} 가 다른 프로세스로 재사용됐다 (${now.start !== owner.start ? '시작 시각' : '명령줄'} 불일치)` }
+  }
+  return { state: 'LIVE', owner, why: `pid ${owner.pid} 가 살아 있다 (시작 시각·명령줄 일치)` }
 }
 
 /** 내 토큰일 때만 지운다 — 🔴 남이 쥔 잠금은 절대 지우지 않는다 */
@@ -526,8 +542,46 @@ function releaseIfMine(lock, token) {
   } catch { /* 이미 없거나 읽을 수 없다 — 건드리지 않는다 */ }
 }
 
+/**
+ * 🔴 **PID 만으로는 주인을 알 수 없다** (2026-09-28 · Codex P1).
+ *    주인이 죽은 뒤 같은 PID 가 전혀 다른 프로세스(또는 다른 magazine 실행)에 재사용되면,
+ *    "PID 가 살아 있다" 만 보고 **영원히 LIVE** 로 오판해 slug 가 막힌다.
+ *    그래서 잠금·lease 를 만들 때 **프로세스 시작 시각 + 명령줄**을 같이 적고,
+ *    판정할 때 지금 그 PID 의 값과 **둘 다 같을 때만** 같은 주인으로 인정한다.
+ *
+ * 🔴 ps 출력은 환경을 탄다 — 로캘·시간대가 다르면 같은 프로세스의 시작 시각 문자열이 달라져
+ *    **살아 있는 주인을 죽었다고 오판**한다(빼앗는 방향의 오류). 그래서 `LC_ALL=C` · `TZ=UTC` 로
+ *    고정하고, 명령줄은 `-ww` 로 자르지 않는다. 읽지 못하면 `null` — 호출부가 UNKNOWN 으로 막는다.
+ *
+ * @returns {{start:string, cmd:string}|null}
+ */
+export function processIdentity(pid, { run = spawnSync } = {}) {
+  const env = { ...process.env, LC_ALL: 'C', LANG: 'C', TZ: 'UTC' }
+  const ask = (field) => {
+    const r = run('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8', env, timeout: 3000 })
+    if (!r || r.error || r.status !== 0) return null
+    const v = String(r.stdout ?? '').trim()
+    return v || null
+  }
+  try {
+    const start = ask('lstart')
+    const cmd = ask('command')
+    return start && cmd ? { start, cmd } : null
+  } catch { return null }
+}
+
+/** 이 프로세스의 정체 — 한 번만 읽는다 (잠금마다 ps 를 부르지 않는다) */
+let selfIdentity
+const ownIdentity = () => {
+  if (selfIdentity === undefined) selfIdentity = processIdentity(process.pid)
+  return selfIdentity
+}
+
 function createLock(lock, extra = {}) {
-  const owner = { token: randomUUID(), pid: process.pid, host: hostname(), at: new Date().toISOString(), ...extra }
+  const me = ownIdentity()
+  const owner = { token: randomUUID(), pid: process.pid, host: hostname(), at: new Date().toISOString(),
+    // 🔴 못 읽었으면 null 로 적는다 — 그 잠금은 나중에 "살아 있음 확인 불가(UNKNOWN)" 로 막힌다
+    start: me?.start ?? null, cmd: me?.cmd ?? null, ...extra }
   const fd = openSync(lock, 'wx', 0o600)
   try { writeSync(fd, JSON.stringify(owner)); fsyncSync(fd) }
   finally { closeSync(fd) }
@@ -541,12 +595,12 @@ function createLock(lock, extra = {}) {
  *    그 안에서 **같은 토큰·여전히 죽음**을 다시 확인한 뒤에만 지운다.
  *    `.reclaim` 이 남아 있으면(거두던 쪽이 급사) 기다리다 시간 초과로 끝난다 — 전송 금지.
  */
-function reclaimDeadLock(lock, seenToken) {
+function reclaimDeadLock(lock, seenToken, inspectOpts = {}) {
   const rlock = `${lock}.reclaim`
   let mine
   try { mine = createLock(rlock) } catch { return false }
   try {
-    const again = inspectQuarantineLock(lock)
+    const again = inspectQuarantineLock(lock, inspectOpts)
     if (again.state !== 'DEAD' || again.owner?.token !== seenToken) return false
     unlinkSync(lock)
     return true
@@ -604,65 +658,62 @@ export function clearEntry(store, slug) {
 }
 
 // ─────────────────────────────────────────────────────────
-// slug 별 재생성 lease — 🔴 같은 slug 의 재생성 수명주기 전체를 하나로 직렬화한다
+// slug 별 원고 작업 lease — 🔴 같은 slug 의 원고 작업(일반 회수·재생성) 전체를 하나로 직렬화한다
 // ─────────────────────────────────────────────────────────
 
 /**
- * 🔴 **왜 필요한가** (2026-09-28 · Codex P0).
- *    `deliveryHoldsFetch` 는 **같은 지문**만 막는다. 같은 slug 에 지문이 다른 재생성 두 건이
- *    동시에 돌면 둘 다 보내고, 둘 다 **같은 draft.md** 를 썼다 — 나중에 쓴 쪽이 이긴다.
+ * 🔴 **왜 필요한가** (2026-09-28 · Codex P0 두 번).
+ *    ① `deliveryHoldsFetch` 는 **같은 지문**만 막는다 — 지문이 다른 재생성 두 건이 같은 slug 에서
+ *       동시에 보내고 같은 draft.md 를 썼다.
+ *    ② 그래서 재생성 전용 lease 를 만들었는데, 일반 회수는 **보기만** 했다. 본 직후 재생성이 lease 를
+ *       잡으면 일반 회수와 재생성이 둘 다 보내고 같은 draft.md 를 썼다 (실측: send 2 · draft write 2).
  *
- *    그래서 재생성은 **probe 전에** slug 별 lease 를 잡고, 응답 수신·검증·draft 저장이 끝날 때까지
- *    쥔다. 전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다 — lease 는 slug 하나만 막는다.
- *    규약은 장부 잠금과 같다: `openSync wx` · token·pid·host 기록 · 살아 있는 주인은 빼앗지 않음 ·
- *    죽은 주인은 `.reclaim` 안에서 token 재확인 후에만 거둠 · 해제는 내 token 일 때만.
+ *    이제 **일반 회수·재생성 모두** 같은 slug lease 를 **실제로 잡는다.** brief 확인부터 응답 수신·검증·
+ *    draft 저장까지 쥐고, 못 잡으면 `MANUSCRIPT_IN_PROGRESS` 로 멈춘다 (probe·send·draft·횟수 0).
+ *    전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다 — lease 는 slug 하나만 막는다.
+ *    규약은 장부 잠금과 같다: `openSync wx` · token·pid·host·시작 시각·명령줄 기록 · 살아 있는 주인은
+ *    빼앗지 않음 · 죽은(PID 없음·재사용) 주인은 `.reclaim` 안에서 token 재확인 후에만 거둠 · 판단 불가는 멈춤.
  */
-export const REGEN_IN_PROGRESS_REASON = 'REGEN_IN_PROGRESS'
+export const MANUSCRIPT_IN_PROGRESS_REASON = 'MANUSCRIPT_IN_PROGRESS'
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,120}$/
 
-export const regenLeaseDir = (path = QUARANTINE_PATH) => join(dirname(path), 'magazine-regen-leases')
-export function regenLeasePath(slug, path = QUARANTINE_PATH) {
+export const manuscriptLeaseDir = (path = QUARANTINE_PATH) => join(dirname(path), 'magazine-manuscript-leases')
+export function manuscriptLeasePath(slug, path = QUARANTINE_PATH) {
   if (!SLUG_RE.test(String(slug ?? ''))) throw new TypeError(`lease 를 만들 수 없는 slug 다: ${slug}`)
-  return join(regenLeaseDir(path), `${slug}.lease`)
+  return join(manuscriptLeaseDir(path), `${slug}.lease`)
 }
 
 /**
+ * @param {object} p
+ * @param {'fetch'|'regen'} p.work  어떤 원고 작업인가 (기록용 — 판정은 같다)
+ * @param {(pid:number)=>({start:string,cmd:string}|null)} [p.identityOf]  🔴 정체 조회 — 운영은 실제 ps
  * @returns {{ok:true, token:string, release:()=>void}
- *          |{ok:false, code:'REGEN_IN_PROGRESS'|'REGEN_LEASE_ERROR', why:string, owner?:object}}
+ *          |{ok:false, code:'MANUSCRIPT_IN_PROGRESS'|'MANUSCRIPT_LEASE_ERROR', why:string, owner?:object}}
  */
-export function acquireRegenLease({ slug, attemptId = null, path = QUARANTINE_PATH }) {
+export function acquireManuscriptLease({ slug, work, attemptId = null, path = QUARANTINE_PATH, identityOf = processIdentity }) {
   let lease
   try {
-    lease = regenLeasePath(slug, path)
-    mkdirSync(regenLeaseDir(path), { recursive: true, mode: 0o700 })
+    lease = manuscriptLeasePath(slug, path)
+    mkdirSync(manuscriptLeaseDir(path), { recursive: true, mode: 0o700 })
   } catch (e) {
-    return { ok: false, code: 'REGEN_LEASE_ERROR', why: `lease 를 준비하지 못했다: ${e?.message ?? e}` }
+    return { ok: false, code: 'MANUSCRIPT_LEASE_ERROR', why: `lease 를 준비하지 못했다: ${e?.message ?? e}` }
   }
   for (let tries = 0; tries < 2; tries += 1) {
     try {
-      const owner = createLock(lease, { slug, attemptId })
+      const owner = createLock(lease, { slug, work, attemptId })
       return { ok: true, token: owner.token, lease, release: () => releaseIfMine(lease, owner.token) }
     } catch (e) {
       if (e?.code !== 'EEXIST') {
-        return { ok: false, code: 'REGEN_LEASE_ERROR', why: `lease 를 만들지 못했다: ${e?.message ?? e}` }
+        return { ok: false, code: 'MANUSCRIPT_LEASE_ERROR', why: `lease 를 만들지 못했다: ${e?.message ?? e}` }
       }
-      const seen = inspectQuarantineLock(lease)
+      const seen = inspectQuarantineLock(lease, { identityOf })
       // 🔴 죽은 주인만, token 을 다시 확인한 뒤에만 거둔다 — 그 뒤 한 번 더 잡아 본다
-      if (seen.state === 'DEAD' && reclaimDeadLock(lease, seen.owner.token)) continue
+      if (seen.state === 'DEAD' && reclaimDeadLock(lease, seen.owner.token, { identityOf })) continue
       return {
-        ok: false, code: REGEN_IN_PROGRESS_REASON, owner: seen.owner ?? null,
-        why: `같은 slug 의 재생성이 진행 중이다 (${seen.state}: ${seen.why}) — 기다리지 않고 멈춘다`,
+        ok: false, code: MANUSCRIPT_IN_PROGRESS_REASON, owner: seen.owner ?? null,
+        why: `같은 slug 의 원고 작업(${seen.owner?.work ?? '?'})이 진행 중이다 (${seen.state}: ${seen.why}) — 기다리지 않고 멈춘다`,
       }
     }
   }
-  return { ok: false, code: REGEN_IN_PROGRESS_REASON, why: '죽은 lease 를 거둔 뒤에도 잡지 못했다 — 다른 재생성이 먼저 잡았다' }
-}
-
-/** 일반 회수가 "지금 이 slug 를 재생성 중인가" 를 본다 — 🔴 판정 불가는 진행 중으로 본다 */
-export function regenLeaseActive({ slug, path = QUARANTINE_PATH }) {
-  let lease
-  try { lease = regenLeasePath(slug, path) } catch { return { active: true, why: 'slug 판정 불가' } }
-  if (!existsSync(lease)) return { active: false }
-  const seen = inspectQuarantineLock(lease)
-  return { active: seen.state !== 'DEAD', why: seen.why, owner: seen.owner ?? null }
+  return { ok: false, code: MANUSCRIPT_IN_PROGRESS_REASON, why: '죽은 lease 를 거둔 뒤에도 잡지 못했다 — 다른 작업이 먼저 잡았다' }
 }

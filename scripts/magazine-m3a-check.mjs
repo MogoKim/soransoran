@@ -3683,12 +3683,17 @@ syncBuiltinESMExports()
     check('🔴 ㉝ 권한을 얻은 프로세스는 하나 — 나머지 하나는 send 0',
       winners.length === 1 && losers.length === 1, `winners ${winners.length} · losers ${losers.length}`)
     const lr = losers[0]?.row ?? {}
-    check('🔴 ㉝ 진 쪽은 status=held · DELIVERY_UNCERTAIN_HOLD · sent=false',
-      lr.status === 'held' && lr.reason === QN33.DELIVERY_HOLD_REASON && lr.sent === false,
+    /**
+     * 🔴 같은 slug 의 원고 작업은 lease 하나다 (2026-09-28 · Codex P0) — 일반+일반도 진 쪽은 **lease 에서**
+     *    멈춘다. 앞판은 장부 예약에서 DELIVERY_UNCERTAIN_HOLD 로 멈췄지만, 그 전에 probe 까지 했다.
+     */
+    check('🔴 ㉝ 진 쪽은 status=held · MANUSCRIPT_IN_PROGRESS(lease) · sent=false · probe 0',
+      lr.status === 'held' && lr.reason === QN33.MANUSCRIPT_IN_PROGRESS_REASON && lr.stage === 'lease' && lr.sent === false
+        && s1.events.filter((e) => e.ev === 'probe' && e.pid === losers[0]?.pid).length === 0,
       JSON.stringify({ status: lr.status, reason: lr.reason, stage: lr.stage, sent: lr.sent }))
     const d1 = QN33.readQuarantine(s1.L).store['cc-a']?.delivery ?? {}
     check('  ㉝ 장부에는 이긴 쪽의 예약 하나 — DELIVERY_UNCERTAIN · 예약 ID 있음',
-      d1.kind === 'DELIVERY_UNCERTAIN' && typeof d1.reservationId === 'string' && d1.messageFingerprint === lr.messageFingerprint,
+      d1.kind === 'DELIVERY_UNCERTAIN' && typeof d1.reservationId === 'string' && /^sha256:/.test(d1.messageFingerprint ?? ''),
       JSON.stringify({ kind: d1.kind, rid: !!d1.reservationId }))
     check('  ㉝ 잠금 파일이 남지 않는다', !s1.lockLeft, '남았다')
 
@@ -4045,7 +4050,7 @@ export const connect = async () => ({
       // 🔴 원고에 **이 자식이 보낸 지시의 코드**를 식별 문장으로 박는다 — 최종 draft 가 누구 것인지 가린다
       async evaluate() {
         rec('evaluate')
-        return ${JSON.stringify(GOOD)}.replace('[CTA]', '식별 ' + [...typed.matchAll(/\\[([A-Z_]+)\\]/g)].map((m) => m[1]).join(',') + '\\n\\n[CTA]')
+        return ${JSON.stringify(GOOD)}.replace('[CTA]', '식별 ' + ([...typed.matchAll(/\\[([A-Z_]+)\\]/g)].map((m) => m[1]).join(',') || 'NORMAL') + '\\n\\n[CTA]')
       },
       locator(sel) {
         const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
@@ -4104,8 +4109,8 @@ fs.writeFileSync(process.env.RR_OUT, JSON.stringify({ ...r, pid: process.pid }))
   }
   const row = (sl = slug) => readQuarantine(L).store[sl] ?? {}
   const draft = (sl = slug) => (fs.existsSync(path.join(D, sl, 'draft.md')) ? fs.readFileSync(path.join(D, sl, 'draft.md'), 'utf8') : '')
-  const leasesLeft = () => (fs.existsSync(path.join(T, name, 'magazine-regen-leases'))
-    ? fs.readdirSync(path.join(T, name, 'magazine-regen-leases')) : [])
+  const leasesLeft = () => (fs.existsSync(path.join(T, name, 'magazine-manuscript-leases'))
+    ? fs.readdirSync(path.join(T, name, 'magazine-manuscript-leases')) : [])
   const events = (ev) => readEvents(LOG).filter((e) => e.ev === ev)
   const sends = () => readEvents(LOG).filter((e) => e.ev === 'send')
   const arrivals = () => (fs.existsSync(`${BAR}.log`)
@@ -4116,8 +4121,15 @@ fs.writeFileSync(process.env.RR_OUT, JSON.stringify({ ...r, pid: process.pid }))
   /** 이 무대 환경으로 실제 CLI 를 한 번 돈다 (일반 회수 등) */
   const runCli = (args) => spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', ...args],
     { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, ...ENV, HOME: T } })
+  /** 같은 환경으로 실제 CLI 를 **비동기로** 띄운다 — 재생성과 동시에 도는 일반 회수 등 */
+  const startCli = (args, rj) => {
+    const c = spawn(process.execPath, ['scripts/magazine-webui-runner.mjs', ...args, '--result-json', rj],
+      { cwd: process.cwd(), env: { ...process.env, ...ENV }, stdio: 'ignore' })
+    const done = new Promise((ok) => c.once('exit', (code) => ok(code)))
+    return { c, done, row: () => (fs.existsSync(rj) ? JSON.parse(fs.readFileSync(rj, 'utf8')).results?.[0] ?? null : null) }
+  }
   const untilTrue = async (fn, ms = 15000) => { const t = Date.now() + ms; while (!fn() && Date.now() < t) await new Promise((ok) => setTimeout(ok, 10)); return fn() }
-  return { slug, L, D, PK, start, row, sends, arrivals, release, firstExit, childArrivals, draft, leasesLeft, events, untilTrue, runCli }
+  return { slug, L, D, PK, start, row, sends, arrivals, release, firstExit, childArrivals, draft, leasesLeft, events, untilTrue, runCli, startCli }
 }
 
 console.log('\n㊱ 동시 재생성 — 판정·예약·횟수가 한 임계구역 (실제 driver 2개 · barrier · SIGKILL)')
@@ -4292,7 +4304,7 @@ console.log('\n㊲ 같은 slug 재생성은 수명주기 전체가 하나 — �
     // lease 주인 — 살아 있으면 빼앗지 않고 멈춘다 · 죽었으면 token 재확인 뒤 거둔다
     const Z = await regenStage(T, 'owner')
     Z.release()
-    const LEASE = QN37.regenLeasePath('rr-a', Z.L)
+    const LEASE = QN37.manuscriptLeasePath('rr-a', Z.L)
     fs.mkdirSync(path.dirname(LEASE), { recursive: true })
     const live = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
     try {
@@ -4308,8 +4320,8 @@ console.log('\n㊲ 같은 slug 재생성은 수명주기 전체가 하나 — �
       const RJN = path.join(T, 'normal-during-lease.json')
       const n1 = Z.runCli(['--fetch', 'rr-a', '--result-json', RJN])
       const nrow = fs.existsSync(RJN) ? JSON.parse(fs.readFileSync(RJN, 'utf8')).results?.[0] ?? {} : {}
-      check('🔴 ㊲ 재생성 중인 slug 의 일반 회수 — REGEN_IN_PROGRESS · probe 0 · send 0',
-        n1.status !== 0 && nrow.reason === 'REGEN_IN_PROGRESS' && Z.events('probe').length === 0 && Z.sends().length === 0,
+      check('🔴 ㊲ 재생성 중인 slug 의 일반 회수 — MANUSCRIPT_IN_PROGRESS · probe 0 · send 0',
+        n1.status !== 0 && nrow.reason === 'MANUSCRIPT_IN_PROGRESS' && Z.events('probe').length === 0 && Z.sends().length === 0,
         `exit ${n1.status} · ${nrow.reason} · probe ${Z.events('probe').length}`)
     } finally { live.kill('SIGKILL') }
     const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8', env: { ...process.env, HOME: T } })
@@ -4397,6 +4409,152 @@ export const connect = async () => { rec('connect'); throw new Error('불려서�
     }
     check('  ㊳ 패킷 생성자가 쓰는 판이 소비자가 받는 판과 같다 (regen-packet/3)',
       base.schemaVersion === 'regen-packet/3', base.schemaVersion)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊴ 같은 slug 원고 작업은 하나 — 일반+재생성 동시 · lease 주인 정체(PID 재사용) 판정')
+{
+  /**
+   * 🔴 **앞판의 구멍** (2026-09-28 · Codex P0). 일반 회수는 재생성 lease 를 **보기만** 했다.
+   *    본 직후 재생성이 lease 를 잡으면 둘 다 보내고 같은 draft.md 를 썼다 (수정 전 실측 send 2 · draft write 2).
+   *    실제 CLI 자식 2개(일반 `--fetch` · 재생성 driver)를 probe barrier 에서 만나게 한다.
+   */
+  const { spawn, spawnSync } = await import('node:child_process')
+  const QN39 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-manuscript-lease-'))
+  try {
+    const S = await regenStage(T, 'mix')
+    S.release()
+    const normal = S.startCli(['--fetch', 'rr-a'], path.join(T, 'normal.json'))
+    const regen = S.start([{ code: 'MED_REGEN', label: '재' }])
+    await Promise.all([normal.done, regen.done])
+    const nr = normal.row() ?? {}
+    const rr = regen.result() ?? {}
+    const normalWon = nr.status === 'ok'
+    check('🔴 ㊴ 일반+재생성 동시 — 한쪽만 진행 · 다른 쪽은 구조화된 IN_PROGRESS',
+      normalWon ? (rr.code === 'REGEN_IN_PROGRESS') : (rr.code === 'REGENERATED' && nr.status === 'held' && nr.reason === 'MANUSCRIPT_IN_PROGRESS' && nr.stage === 'lease'),
+      JSON.stringify({ normal: `${nr.status}/${nr.reason}`, regen: rr.code }))
+    check('🔴 ㊴ send 1 · draft write 1 · probe 1 (패자는 probe 전에 멈춤 · barrier 1)',
+      S.sends().length === 1 && S.events('evaluate').length === 1 && S.events('probe').length === 1 && S.childArrivals() === 1,
+      `send ${S.sends().length} · write ${S.events('evaluate').length} · probe ${S.events('probe').length} · barrier ${S.childArrivals()}`)
+    check('🔴 ㊴ 최종 draft 에는 승자의 식별 문장만',
+      S.draft().includes(normalWon ? '식별 NORMAL' : '식별 MED_REGEN') && !S.draft().includes(normalWon ? 'MED_REGEN' : 'NORMAL'),
+      `${normalWon ? '일반' : '재생성'} 승 · ${(S.draft().match(/식별 [A-Z_,]+/) ?? ['없음'])[0]}`)
+    check('  ㊴ 패자는 regenCalls·attempts 를 쓰지 않았다',
+      (S.row().attempts ?? 0) === 0 && (S.row().regenCalls ?? 0) === (normalWon ? 0 : 1),
+      `regen ${S.row().regenCalls} · attempts ${S.row().attempts}`)
+    check('  ㊴ lease 잔여 0', S.leasesLeft().length === 0, S.leasesLeft().join(','))
+
+    // 승자 종료 뒤 다음 요청은 순차로 된다 — 진 쪽을 다시 돌린다
+    if (normalWon) {
+      const again = S.start([{ code: 'MED_REGEN', label: '재' }])
+      await again.done
+      check('🔴 ㊴ 승자 종료 후 다음 요청은 순차 진행 (재생성 REGENERATED)',
+        again.result()?.code === 'REGENERATED' && S.draft().includes('식별 MED_REGEN'), `${again.result()?.code}`)
+    } else {
+      const again = S.startCli(['--fetch', 'rr-a', '--force'], path.join(T, 'normal2.json'))
+      await again.done
+      check('🔴 ㊴ 승자 종료 후 다음 요청은 순차 진행 (일반 회수 ok)',
+        again.row()?.status === 'ok' && S.draft().includes('식별 NORMAL'), `${again.row()?.status}/${again.row()?.reason}`)
+    }
+
+    // 다른 slug 두 건(일반 + 재생성)은 동시에 된다
+    const M = await regenStage(T, 'multi', { slugs: ['rr-a', 'rr-b'] })
+    M.release()
+    const mn = M.startCli(['--fetch', 'rr-a'], path.join(T, 'mn.json'))
+    const mr = M.start([{ code: 'MED_B', label: '나' }], { slug: 'rr-b' })
+    await Promise.all([mn.done, mr.done])
+    check('🔴 ㊴ 다른 slug 일반+재생성 — 둘 다 성공 · send 2 · 두 자식 모두 barrier 도착',
+      mn.row()?.status === 'ok' && mr.result()?.code === 'REGENERATED' && M.sends().length === 2 && M.childArrivals() === 2,
+      `${mn.row()?.status} · ${mr.result()?.code} · send ${M.sends().length} · barrier ${M.childArrivals()}`)
+
+    /**
+     * 🔴 **lease 주인 정체** (2026-09-28 · Codex P1). PID 가 있다고 주인이 살아 있는 것이 아니다.
+     *    실제 주인 프로세스가 production `acquireManuscriptLease` 로 lease 를 잡게 한 뒤 판정을 본다.
+     */
+    const L = path.join(T, 'owner', 'ledger.json')
+    fs.mkdirSync(path.dirname(L), { recursive: true })
+    const LEASE = QN39.manuscriptLeasePath('own-a', L)
+    const qUrl = JSON.stringify(new URL(`file://${path.resolve('scripts/lib/magazine-quarantine.mjs')}`).href)
+    const OWNER = writeFixture(path.join(T, 'owner.mjs'), `import fs from 'node:fs'
+const Q = await import(${qUrl})
+const r = Q.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: ${JSON.stringify(L)} })
+fs.writeFileSync(process.argv[2], JSON.stringify({ ok: r.ok }))
+setTimeout(() => {}, 60000)
+`)
+    const startOwner = async (env = {}) => {
+      const ready = path.join(T, `ready-${Math.random()}`)
+      // 주인은 장부 경로를 명시로 받는다 — HOME 에 기대는 기본 경로를 쓰지 않는다
+      const c = spawn(process.execPath, [OWNER, ready], { stdio: 'ignore', env: { ...process.env, ...env } })
+      const until = Date.now() + 10000
+      while (!fs.existsSync(ready) && Date.now() < until) await new Promise((ok) => setTimeout(ok, 10))
+      return c
+    }
+    const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+    const writeLease = (o) => fs.writeFileSync(LEASE, JSON.stringify({ token: `t-${Math.random()}`, host: os.hostname(), at: 'x', slug: 'own-a', work: 'fetch', ...o }))
+
+    // ① 실제 주인 생존 — 로캘·시간대가 달라도 탈취하지 않는다
+    const own = await startOwner({ TZ: 'America/New_York', LC_ALL: 'de_DE.UTF-8' })
+    try {
+      const body = fs.readFileSync(LEASE, 'utf8')
+      const r1 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'regen', path: L })
+      check('🔴 ㊴ [주인 생존 · 다른 TZ/로캘] 탈취하지 않는다 — IN_PROGRESS · lease 그대로',
+        r1.ok === false && r1.code === 'MANUSCRIPT_IN_PROGRESS' && fs.readFileSync(LEASE, 'utf8') === body, `${r1.code} — ${String(r1.why).slice(0, 80)}`)
+
+      // ⑤ 프로세스 조회 실패 — 판단하지 않는다 (주입 · 실제 CLI 의 PATH 제거 둘 다)
+      const r5 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'regen', path: L, identityOf: () => null })
+      check('🔴 ㊴ [조회 실패] 진행 금지 — IN_PROGRESS(UNKNOWN) · lease 그대로',
+        r5.ok === false && /UNKNOWN/.test(r5.why) && fs.readFileSync(LEASE, 'utf8') === body, String(r5.why).slice(0, 90))
+      const P = await regenStage(T, 'nopath', { slug: 'own-a' })
+      fs.mkdirSync(path.dirname(QN39.manuscriptLeasePath('own-a', P.L)), { recursive: true })
+      fs.copyFileSync(LEASE, QN39.manuscriptLeasePath('own-a', P.L))
+      const RJ = path.join(T, 'nopath.json')
+      const cli = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch', 'own-a', '--result-json', RJ],
+        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T, PATH: path.join(T, 'no-bin'),
+          SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: P.D, SORAN_MAGAZINE_TEST_FIXTURE: path.join(T, 'nopath-fx.mjs') } })
+      const crow = fs.existsSync(RJ) ? JSON.parse(fs.readFileSync(RJ, 'utf8')).results?.[0] ?? {} : {}
+      check('🔴 ㊴ [조회 실패 · 실제 CLI · ps 없음] 진행 금지 — MANUSCRIPT_IN_PROGRESS · probe 0 · lease 그대로',
+        cli.status !== 0 && crow.reason === 'MANUSCRIPT_IN_PROGRESS' && /UNKNOWN/.test(crow.errorDetail ?? '')
+          && P.events('probe').length === 0 && fs.readFileSync(QN39.manuscriptLeasePath('own-a', P.L), 'utf8') === body,
+        `exit ${cli.status} · ${crow.reason} · ${String(crow.errorDetail).slice(0, 60)}`)
+    } finally { own.kill('SIGKILL') }
+
+    // ② PID 없음 — 안전 회수
+    const gone = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8', env: { ...process.env, HOME: T } })
+    writeLease({ pid: Number(gone.stdout), start: 'Mon Jan  1 00:00:00 2024', cmd: 'node x' })
+    const r2 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+    check('  ㊴ [PID 없음] 안전 회수 — 새 lease 획득', r2.ok === true, `${r2.code ?? 'ok'}`)
+    r2.release?.()
+
+    // ③ PID 가 unrelated process 로 재사용 — 명령줄이 다르다
+    const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+    try {
+      await new Promise((ok) => setTimeout(ok, 150))
+      const oid = QN39.processIdentity(other.pid)
+      writeLease({ pid: other.pid, start: oid?.start, cmd: 'node scripts/magazine-webui-runner.mjs --fetch own-a' })
+      const r3 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+      check('🔴 ㊴ [PID → unrelated 프로세스] 안전 회수 · 그 프로세스는 건드리지 않는다',
+        Boolean(oid) && r3.ok === true && alive(other.pid), `${r3.code ?? 'ok'} · alive ${alive(other.pid)}`)
+      r3.release?.()
+    } finally { other.kill('SIGKILL') }
+
+    // ④ PID 가 다른 magazine 실행으로 재사용 — 명령줄은 같지만 시작 시각이 다르다
+    const mag = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)', 'scripts/magazine-webui-runner.mjs', '--fetch', 'own-a'], { stdio: 'ignore' })
+    try {
+      await new Promise((ok) => setTimeout(ok, 150))
+      const mid = QN39.processIdentity(mag.pid)
+      writeLease({ pid: mag.pid, start: 'Mon Jan  1 00:00:00 2024', cmd: mid?.cmd })
+      const r4 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+      check('🔴 ㊴ [PID → 다른 magazine 실행 · 시작 시각 불일치] 안전 회수',
+        /magazine-webui-runner/.test(mid?.cmd ?? '') && r4.ok === true && alive(mag.pid), `${r4.code ?? 'ok'} · ${String(mid?.cmd).slice(-50)}`)
+      r4.release?.()
+      // 같은 명령줄 · 같은 시작 시각이면 같은 주인이다 — 빼앗지 않는다 (위 판정이 공허하지 않다는 대조군)
+      writeLease({ pid: mag.pid, start: mid?.start, cmd: mid?.cmd })
+      const body4 = fs.readFileSync(LEASE, 'utf8')
+      const r4b = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+      check('  ㊴ [대조군] 시작 시각·명령줄이 모두 같으면 살아 있는 주인 — 빼앗지 않는다',
+        r4b.ok === false && fs.readFileSync(LEASE, 'utf8') === body4, `${r4b.code ?? 'ok'}`)
+    } finally { mag.kill('SIGKILL'); fs.rmSync(LEASE, { force: true }) }
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 

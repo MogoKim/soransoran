@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, updateQuarantine,
-  regenBudget, DELIVERY_HOLD_REASON, REGEN_EXHAUSTED_REASON, REGEN_IN_PROGRESS_REASON, revertRegenAttempt,
+  regenBudget, DELIVERY_HOLD_REASON, REGEN_EXHAUSTED_REASON, MANUSCRIPT_IN_PROGRESS_REASON, revertRegenAttempt,
 } from './magazine-quarantine.mjs'
 import { deliveryGate } from './magazine-delivery-gate.mjs'
 import { DRAFTS_DIR } from './magazine-load.mjs'
@@ -204,13 +204,13 @@ export function attemptRegeneration({
     }
   }
   /**
-   * 🔴 **같은 slug 의 다른 재생성이 진행 중이다** — 자식은 lease 를 못 잡아 probe·send·draft·횟수 전부 0.
+   * 🔴 **같은 slug 의 다른 원고 작업(일반 회수·재생성)이 진행 중이다** — 자식은 lease 를 못 잡아 probe·send·draft·횟수 전부 0.
    *    부모도 아무것도 바꾸지 않는다. 승자가 끝난 뒤 다음 회차가 (지문이 바뀌었으면) 다시 시도한다.
    */
-  if (r?.reason === REGEN_IN_PROGRESS_REASON) {
+  if (r?.reason === MANUSCRIPT_IN_PROGRESS_REASON) {
     return { ok: false, code: 'REGEN_IN_PROGRESS', kind: 'DELIVERY_UNCERTAIN', held: true, sent: false,
       attemptId, childAttemptId: r.attemptId ?? null, packetHash: hash,
-      why: `같은 slug 의 재생성이 진행 중이다 — 기다리지 않고 멈춘다 (전송 0건): ${r?.why ?? ''}`,
+      why: `같은 slug 의 원고 작업이 진행 중이다 — 기다리지 않고 멈춘다 (전송 0건): ${r?.why ?? ''}`,
       regenCalls: usedNow() }
   }
   /**

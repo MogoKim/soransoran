@@ -183,11 +183,14 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   보수적으로 남긴다(재전송 금지). 예약을 못 얻은 시도는 어디서 죽어도 횟수를 쓰지 않는다.
 >   부모의 `deliveryGate` 확인은 불필요한 Chrome 을 피하는 앞단 확인일 뿐이다.
 >   자기 몫 되돌리기는 **최신 장부에 내 attemptId 가 있을 때만** 하고, 없으면 장부를 한 바이트도 안 쓴다.
-> - 🔴 **같은 slug 의 재생성은 수명주기 전체가 하나다** — 지문이 달라도. 재생성 자식은 probe 전에
->   slug lease(`magazine-regen-leases/<slug>.lease` · wx · token·pid·host·attemptId)를 잡고 응답·검증·
->   draft 저장까지 쥔다. 못 잡으면 `REGEN_IN_PROGRESS`(probe·send·draft·regenCalls 0). 다른 slug 는 동시에 돈다.
->   전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다. 살아 있는 주인은 빼앗지 않고, 죽은 주인은
->   `.reclaim` 안에서 token 재확인 뒤에만 거둔다. 일반 회수도 그 slug 가 재생성 중이면 멈춘다.
+> - 🔴 **같은 slug 의 원고 작업은 하나다** — 일반 회수·재생성 모두, 지문이 달라도. 자식은 probe 전에
+>   slug lease(`magazine-manuscript-leases/<slug>.lease` · wx · token·pid·host·시작 시각·명령줄)를 **실제로 잡고**
+>   brief 확인부터 응답·검증·draft 저장까지 쥔다. 못 잡으면 `MANUSCRIPT_IN_PROGRESS`(probe·send·draft·횟수 0).
+>   다른 slug 는 동시에 돈다. 전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다.
+>   (앞판은 일반 회수가 lease 를 **보기만** 해서, 본 직후 재생성이 잡으면 둘 다 보내고 같은 draft 를 썼다.)
+> - 🔴 **잠금·lease 주인은 PID 만으로 판정하지 않는다.** 기록한 시작 시각·명령줄이 지금 그 PID 와 **둘 다** 같을
+>   때만 살아 있는 주인이다. PID 없음·재사용(명령줄 또는 시작 시각 불일치)은 죽은 옛 주인 — `.reclaim` 안에서
+>   token 재확인 뒤에만 거둔다. 정체를 못 읽으면 UNKNOWN 으로 멈춘다. ps 는 `LC_ALL=C · TZ=UTC · -ww` 로 읽는다.
 > - 🔴 **재생성 패킷은 `regen-packet/3` · `slug.<attemptId>.json`** — attemptId 는 필수 UUID 이고 파일
 >   이름과 본문이 같아야 한다. 시도마다 자기 파일만 쓰고, 자기 파일만 읽히고, 자기 파일만 지운다.
 > - 🔴 **CLI 시험의 브라우저·spawn 주입은 `SORAN_MAGAZINE_TEST_MODE=1` 에서만** 열린다

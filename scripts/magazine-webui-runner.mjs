@@ -63,7 +63,7 @@ import {
   readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
   recordDelivery, QUARANTINE_PATH, DELIVERY_HOLD_REASON,
   reserveDelivery, releaseDeliveryReservation, regenBudget, REGEN_EXHAUSTED_REASON,
-  acquireRegenLease, regenLeaseActive, REGEN_IN_PROGRESS_REASON,
+  acquireManuscriptLease, MANUSCRIPT_IN_PROGRESS_REASON,
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
@@ -371,35 +371,36 @@ function heldResult(slug, gate, stage) {
 }
 
 /**
- * 🔴 **같은 slug 의 재생성은 수명주기 전체를 하나만** (2026-09-28 · Codex P0).
+ * 🔴 **같은 slug 의 원고 작업은 하나만** (2026-09-28 · Codex P0).
  *
- *    지문이 다른 재생성 두 건이 같은 slug 에서 동시에 돌면 둘 다 보내고 둘 다 같은 draft.md 를 썼다.
- *    그래서 재생성은 **probe 전에** slug lease 를 잡고, 응답 수신·검증·draft 저장이 끝날 때까지 쥔다.
- *    못 잡으면 `REGEN_IN_PROGRESS` 로 멈춘다 — probe·Chrome·send·draft write·regenCalls 전부 0.
+ *    일반 회수와 재생성 **모두** 같은 slug lease 를 실제로 잡는다 — brief 확인부터 응답 수신·검증·
+ *    draft 저장까지 쥐고 끝에서 푼다. 못 잡으면 `MANUSCRIPT_IN_PROGRESS` 로 멈춘다 —
+ *    probe·Chrome·send·draft write·regenCalls·attempts 전부 0.
+ *
+ *    앞판은 재생성만 lease 를 잡고 일반 회수는 **보기만** 했다. 본 직후 재생성이 lease 를 잡으면
+ *    둘 다 보내고 같은 draft.md 를 썼다 (실측 send 2 · draft write 2).
  *    전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다 (예약·기록 순간에만 짧게 잡는다).
- *
- *    일반 회수는 lease 를 잡지 않되, **그 slug 가 재생성 중이면** 같은 이유로 멈춘다.
  */
 async function fetchSlug(slug, opts = {}) {
   const quarantinePath = opts.quarantinePath ?? QUARANTINE_PATH
-  const leaseHeld = (code, why, attemptId = null) => ({
-    slug, status: code === REGEN_IN_PROGRESS_REASON ? 'held' : 'failed', reason: code, stage: 'lease',
-    sent: false, attemptId, errorDetail: `${why} (브라우저를 열지 않았고 한 글자도 보내지 않았다)`,
-  })
-  if (!opts.regenPacket) {
-    const act = regenLeaseActive({ slug, path: quarantinePath })
-    if (act.active) return leaseHeld(REGEN_IN_PROGRESS_REASON, `이 slug 를 재생성 중이다 (${act.why})`)
-    return fetchSlugUnderLease(slug, opts)
+  let attemptId = null
+  if (opts.regenPacket) {
+    // 🔴 패킷이 성하지 않으면 안쪽이 같은 사유로 **아무것도 시작하지 않고** 끝낸다 — lease 도 필요 없다
+    const pr = readRegenPacket(opts.regenPacket, slug)
+    if (!pr.ok) return fetchSlugUnderLease(slug, opts)
+    attemptId = pr.packet.attemptId
   }
-  // 🔴 패킷이 성하지 않으면 안쪽이 같은 사유로 **아무것도 시작하지 않고** 끝낸다 — lease 도 필요 없다
-  const pr = readRegenPacket(opts.regenPacket, slug)
-  if (!pr.ok) return fetchSlugUnderLease(slug, opts)
-  const attemptId = pr.packet.attemptId
-  const lease = acquireRegenLease({ slug, attemptId, path: quarantinePath })
-  if (!lease.ok) return leaseHeld(lease.code, lease.why, attemptId)
+  const lease = acquireManuscriptLease({ slug, work: opts.regenPacket ? 'regen' : 'fetch', attemptId, path: quarantinePath })
+  if (!lease.ok) {
+    return {
+      slug, status: lease.code === MANUSCRIPT_IN_PROGRESS_REASON ? 'held' : 'failed', reason: lease.code, stage: 'lease',
+      sent: false, attemptId, errorDetail: `${lease.why} (브라우저를 열지 않았고 한 글자도 보내지 않았다)`,
+    }
+  }
   try {
-    // 🔴 이 시도의 표식을 결과에 싣는다 — 부모는 **자기 패킷을 읽은 자식인지** 대조한다
-    return { ...(await fetchSlugUnderLease(slug, opts)), attemptId }
+    const r = await fetchSlugUnderLease(slug, opts)
+    // 🔴 재생성이면 이 시도의 표식을 결과에 싣는다 — 부모는 **자기 패킷을 읽은 자식인지** 대조한다
+    return attemptId ? { ...r, attemptId } : r
   } finally {
     lease.release()
   }
