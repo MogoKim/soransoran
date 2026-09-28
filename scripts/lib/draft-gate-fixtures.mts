@@ -44,6 +44,8 @@ export type GateFixture = {
    *    (회차와 같은 날 올라온 커뮤니티 글 · 사진 수 미상)이다. 러너가 meta 에서 만드는 칸과 같다.
    */
   sourceMeta?: Partial<Omit<DraftGateSource, 'title' | 'body'>>
+  /** 🔴 (quality-v4) 회차 시각 — 없으면 `FIXTURE_NOW`. 창업자 gold 는 운영에서 판정한 그 회차 시각을 준다 */
+  at?: Date
 }
 
 const card = (o: Omit<PoolCard, 'forbiddenReactionRoles' | 'variationCount' | 'voiceLength'>
@@ -379,7 +381,7 @@ export const sourceMetaOf = (fx: GateFixture): Omit<DraftGateSource, 'title' | '
   ...fx.sourceMeta,
 })
 export const gateContextOf = (fx: GateFixture): DraftGateContext => ({
-  at: FIXTURE_NOW,
+  at: fx.at ?? FIXTURE_NOW,
   source: { title: fx.source.title, body: fx.source.body, ...sourceMetaOf(fx) },
 })
 const SAMPLES = ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요', '저희도 그랬어요']
@@ -419,7 +421,7 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
     // 🔴 (quality-v3) 러너와 같다 — 원천 사실은 채택 자리와 같은 함수에서 온다
     sourceMeta: sourceMetaOf(fx),
     personas: [persona], personaPoolSize: 1, voiceSourceDigest: 'asset000000000',
-    ask: cannedAsk(fx, asks), now: FIXTURE_NOW, callCap: 6,
+    ask: cannedAsk(fx, asks), now: fx.at ?? FIXTURE_NOW, callCap: 6,
     contract: {
       sourceInputHash: `fx-${fx.card.code}`, pipelineVersion: CONTENT_CORE_PIPELINE_VERSION,
       promptVersion: CONTENT_CORE_PROMPT_VERSION, speakerPlanVersion: SPEAKER_PLAN_VERSION,
@@ -432,7 +434,7 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
     art = { ...art, review: { ...art.review, machineOutcome: 'adopt', machineReason: '' } }
   }
   if (art.draft === null) return { art, pick: null, cand: null, asks }
-  const nowIso = FIXTURE_NOW.toISOString()
+  const nowIso = (fx.at ?? FIXTURE_NOW).toISOString()
   const cand: DraftCandidate = {
     sourceArticleId: fx.source.id, draftNo: 1,
     title: art.draft.title, body: art.draft.body,
@@ -450,7 +452,7 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
       // 🔴 러너와 같다 — 그날 나이
       personaExactAge: (() => {
         const v = materializePersonaAt({
-          card: { code: fx.card.code, birthDate: fx.card.birthDate, ageBand: fx.card.ageBand }, now: FIXTURE_NOW,
+          card: { code: fx.card.code, birthDate: fx.card.birthDate, ageBand: fx.card.ageBand }, now: fx.at ?? FIXTURE_NOW,
         })
         return v.ok ? v.at.exactAge : null
       })(),

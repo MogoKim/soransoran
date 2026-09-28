@@ -3,8 +3,8 @@
  * 🔴 **자동 READY 품질 계약 cohort — 실행 반례 (격리 Postgres 전용)** (2026-09-27 마스터 결정)
  *
  *   ① legacy 결함 yes(uili 모양)는 이력으로 남고 새 cohort 를 막지 않는다 — 30건(27 무수정 · 3 폐기) → 열림
- *   ② 1번 미검토 + 뒤 30건 좋음 → 닫힘 · 도장 0 → 1번 결정 뒤 열림
- *   ③ 창 안 · 창 밖 결함 yes → 닫힘 · 26/30 → 닫힘 · 같은 사람 정정(append-only) 존중
+ *   ② 1번 미검토 + 뒤 30건 좋음 → 첫 차단 #1 은 그대로 계산 · (quality-v4) 열림 근거는 창업자 gold 라 열림
+ *   ③ 창 안 · 창 밖 결함 yes → 닫힘 · 26/30 은 그대로 센다(v4 열림 근거 아님) · 같은 사람 정정(append-only) 존중
  *   ④ 열림이어도 legacy 결정 전 행은 도장 0 · 우회 도장도 발행 재검증이 막는다(Post 0) · 지금 계약 행은 찍힌다
  *   ⑤ 열림이어도 발행 뒤 감사 결함 1 → 닫힘(전역 차단)
  *   ⑥ 의미 검수 복원은 지금 계약 행을 쓰지 않는다(계획 skip · 위조 계획도 적용 0)
@@ -150,7 +150,12 @@ async function main(): Promise<void> {
   for (let i = 0; i < 30; i += 1) cur.push(await seed())
   {
     const v0 = await evidenceFromDb(prisma)
-    check('🔴 🔴 **#4 지금 계약 30건 모두 미검토 → 닫힘 · 첫 차단 #1**', !v0.meetsContract && v0.firstBlocking?.index === 1 && v0.firstBlocking.id === cur[0]!.id, v0.reasons.join(' · '))
+    /**
+     * 🔴 (quality-v4) 첫 차단 행은 **그대로 계산**한다(사람 표본 보고용). 다만 v4 열림 근거는 창업자 gold 라
+     *    미검토 선행 행이 열림을 막지 않는다 — v3 의 "사람 30건" 요구를 v4 가 의도적으로 대체했다.
+     */
+    check('🔴 🔴 **#4 지금 계약 30건 모두 미검토 → 첫 차단 #1 은 그대로 · v4 열림은 창업자 gold**',
+      v0.meetsContract && v0.basis === 'founderGold' && v0.firstBlocking?.index === 1 && v0.firstBlocking.id === cur[0]!.id, v0.reasons.join(' · '))
     await review(cur.slice(0, 27), { decision: 'ready', hardDefect: 'no' }, 'c-ready')
     await review(cur.slice(27), { decision: 'reject', hardDefect: 'no' }, 'c-reject')
     const v = await evidenceFromDb(prisma)
@@ -238,9 +243,10 @@ async function main(): Promise<void> {
     for (let i = 0; i < 30; i += 1) rest.push(await seed())
     await review(rest, { decision: 'ready', hardDefect: 'no' }, 'rest')
     const v = await evidenceFromDb(prisma)
-    check('🔴 🔴 **#4 1번 미검토 + 뒤 30건 좋음 → 닫힘 · 첫 차단 #1**', !v.meetsContract && v.firstBlocking?.id === first.id && v.eligible === 29, v.reasons.join(' · '))
-    const t = await stampRound(prisma, { env: ON, now: NOW })
-    check('🔴 #4 그 상태에서 도장 0 (closed)', (t.get('stamped') ?? 0) === 0 && (t.get('closed') ?? 0) >= 1)
+    check('🔴 🔴 **#4 1번 미검토 + 뒤 30건 좋음 → 첫 차단 #1 · 표본 29 그대로 셈 · v4 열림(gold)**',
+      v.meetsContract && v.firstBlocking?.id === first.id && v.eligible === 29, v.reasons.join(' · '))
+    // 🔴 도장 회차는 돌리지 않는다 — 열려 있으니 미검토 1번에 실제로 도장이 찍혀 뒤 단계(사람 기록)가 달라진다. 게이트만 본다
+    check('🔴 #4 그 상태에서 게이트(스위치 ON)는 열림(v4 · 증거 충족)', (await authoritativeGate(prisma, ON)).open)
     await review([first], { decision: 'reject', hardDefect: 'no' }, 'first')
     const v2 = await evidenceFromDb(prisma)
     check('🔴 🔴 **#4 1번을 폐기(no)로 기록 → 창 1~30 · 무수정 29 · 열림**', v2.meetsContract && v2.declined === 1 && v2.noEdit === 29 && v2.windowIds[0] === first.id, v2.reasons.join(' · '))
@@ -279,7 +285,9 @@ async function main(): Promise<void> {
     await review(rows.slice(0, 26), { decision: 'ready', hardDefect: 'no' }, 'r26')
     await review(rows.slice(26), { decision: 'reject', hardDefect: 'no' }, 'x4')
     const v = await evidenceFromDb(prisma)
-    check('🔴 🔴 **#6 26/30 → 닫힘 (폐기도 표본)**', !v.meetsContract && v.noEdit === 26 && v.declined === 4, v.reasons.join(' · '))
+    // 🔴 (quality-v4) 사람 표본은 그대로 센다(무수정 26 · 폐기 4) — 사람 비율은 v4 열림 근거가 아니다(창업자 gold)
+    check('🔴 🔴 **#6 26/30 — 무수정 26 · 폐기 4 로 그대로 센다(폐기도 표본) · v4 열림은 gold**',
+      v.meetsContract && v.basis === 'founderGold' && v.noEdit === 26 && v.declined === 4, v.reasons.join(' · '))
     // 미검토 경고 행이 끼어도 수열 밖
     const warn = await seed({ holds: ['SEMANTIC_UNSUPPORTED_ADDITION:1'] })
     check('🔴 경고 행은 수열에 들지 않는다', !(await evidenceFromDb(prisma)).windowIds.includes(warn.id))
@@ -288,7 +296,7 @@ async function main(): Promise<void> {
     for (let i = 0; i < 3; i += 1) lg.push(await seed({ legacy: true }))
     await review(lg, { decision: 'ready', hardDefect: 'no' }, 'lg3')
     const v2 = await evidenceFromDb(prisma)
-    check('🔴 🔴 **#3 판이 섞여도 합치지 않는다 — legacy 무수정 3건이 26/30 을 29 로 만들지 못한다**', !v2.meetsContract && v2.noEdit === 26 && v2.legacyRows === 0)
+    check('🔴 🔴 **#3 판이 섞여도 합치지 않는다 — legacy 무수정 3건이 26/30 을 29 로 만들지 못한다**', v2.noEdit === 26 && v2.legacyRows === 0)
   }
 
   // ─────────────────────────────────────────────────────────
@@ -370,7 +378,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 저장값은 코드 상수**',
       marks.length > 0 && marks.every((m) => m?.digest === qualityContractDigest() && m?.version === QUALITY_CONTRACT_VERSION), JSON.stringify(marks[0]))
     const v = await evidenceFromDb(prisma)
-    check('🔴 적재된 행은 지금 계약 cohort 수열에 들어간다(미검토 — 닫힘)', v.sequence === rows.length && !v.meetsContract)
+    check('🔴 적재된 행은 지금 계약 cohort 수열에 들어간다(미검토 · v4 열림 근거는 gold)', v.sequence === rows.length && v.basis === 'founderGold')
     rmSync(T, { recursive: true, force: true })
     rmSync(H, { recursive: true, force: true })
   }

@@ -47,6 +47,9 @@ export const FINGERPRINT_FILES = [
   'src/lib/persona-pool-card.ts',
   // 🔴 (quality-v3) 초안 게이트의 시점 축이 읽는 KST 하루 경계 — 바뀌면 "원문이 같은 날인가" 판정이 바뀐다
   'src/lib/persona-cap.ts',
+  // 🔴 (quality-v4) 창업자 gold 재생과 데이터 — 열림 근거 자체다
+  'src/lib/founder-gold.ts',
+  'src/lib/founder-gold-v1.data.ts',
 ] as const
 
 /**

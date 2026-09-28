@@ -60,6 +60,29 @@ export type QualityCohortVerdict = {
   legacyRows: number
   meetsContract: boolean
   reasons: string[]
+  /**
+   * 🔴 (quality-v4) **열림 근거** — `humanCohort`(첫 30건 사람 표본 · v1~v3) 또는 `founderGold`(창업자 gold 재생 +
+   *    지금 계약 행의 사람 중대 결함 0). 없으면 `humanCohort` 다.
+   */
+  basis?: 'humanCohort' | 'founderGold'
+  /** 🔴 (founderGold) 재생 요약 — 화면·로그용 */
+  founderGold?: string
+}
+
+/**
+ * 🔴 **후속 계약의 열림 근거를 적용한다** (quality-v4 · 2026-09-28 창업자 결정) — 순수.
+ *    사람 30건 표본 대신 **창업자 gold 재생**이 근거다. cohort 는 그대로 계산해 보고하고(지우지 않는다),
+ *    그중 **사람 중대 결함**(창 밖 포함 `cohortHardDefects`)은 여전히 닫는다 — 운영 중 사람이 결함을 적으면 멈춘다.
+ *    🔴 발행 뒤 감사 결함 · 재시도 가능 실패 · 판정 대기 시한 · 글 유실은 여기가 아니라 `judgeOpen` · 감사 저장소가 닫는다.
+ */
+export function applyFounderGoldBasis(
+  cohort: QualityCohortVerdict,
+  gold: { pass: boolean; reasons: readonly string[]; summary: string },
+): QualityCohortVerdict {
+  const reasons: string[] = []
+  if (!gold.pass) reasons.push(`🔴 창업자 gold 재현 실패 — ${gold.reasons.slice(0, 3).join(' · ') || '사유 없음'}`)
+  if (cohort.cohortHardDefects > 0) reasons.push(`🔴 지금 품질 계약 사람 중대 결함 ${cohort.cohortHardDefects}건 — 닫는다`)
+  return { ...cohort, basis: 'founderGold', founderGold: gold.summary, meetsContract: reasons.length === 0, reasons }
 }
 
 /** 🔴 무수정 최소 수 — 정수 계산(부동소수 ceil 어긋남 방지) */
@@ -150,4 +173,5 @@ export function describeCohort(v: QualityCohortVerdict): string {
     + ` · 창 결함 ${v.hardDefects === null ? '미측정 있음' : v.hardDefects} · cohort 결함 ${v.cohortHardDefects}`
     + `${v.firstBlocking === null ? '' : ` · 첫 차단 #${v.firstBlocking.index} ${v.firstBlocking.id}(${v.firstBlocking.why})`}`
     + ` · legacy 행 ${v.legacyRows}(판정 밖)`
+    + `${v.basis === 'founderGold' ? ` · 🔴 열림 근거 창업자 gold(${v.founderGold ?? '?'}) — 사람 표본 30건은 요구하지 않는다` : ''}`
 }

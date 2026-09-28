@@ -57,7 +57,7 @@ const D = qualityContractDigest()
 const INDEPENDENT = createHash('sha256').update(stableJson(qualityContractComponents()), 'utf8').digest('hex')
 check('digest 는 sha256 hex 64', /^[0-9a-f]{64}$/.test(D))
 check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 digest 는 코드 상수 그대로 (독립 재계산과 같다)**',
-  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v3', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
+  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v4', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
 const comps = qualityContractComponents()
 check('🔴 digest 구성 — 게이트·검수·판정 판이 들어 있다',
   ['version', 'pipelineVersion', 'promptVersion', 'reviewVersion', 'draftRuleVersion', 'draftGateVersion', 'draftGateCodes', 'judgeContractDigest', 'semanticHoldCodes']
@@ -318,7 +318,9 @@ console.log('\nE. 🔴 배선 — 판정 시점 재검증 · 생성 캐시 key')
   const recheck = repo.split('export async function recheckAutoReadyInTx(')[1]?.split('export async function selectAudits')[0] ?? ''
   check('🔴 🔴 **#13 발행 재검증도 지금 품질 계약 행만**', /isCurrentQualityContract\(i\.gateResults\)/.test(recheck))
   const ev = repo.split('export async function evidenceFromDb(')[1]?.split('export async function authoritativeGate')[0] ?? ''
-  check('🔴 증거는 정본 qualityCohortOf 하나', /return qualityCohortOf\(/.test(ev))
+  // 🔴 (quality-v4) cohort 는 여전히 정본 qualityCohortOf 하나로 세고, 열림 근거는 순수 applyFounderGoldBasis 하나가 적용한다
+  check('🔴 증거는 정본 qualityCohortOf 하나 · 열림 근거는 applyFounderGoldBasis 하나',
+    /const cohort = qualityCohortOf\(/.test(ev) && /return applyFounderGoldBasis\(cohort,/.test(ev) && !/return qualityCohortOf\(/.test(ev))
   const gate = repo.split('export async function authoritativeGate(')[1]?.split('export type StampOutcome')[0] ?? ''
   check('🔴 전역 차단(감사 결함 · 글 유실)은 그대로 게이트에 있다', /confirmedDefectCount\(db\)/.test(gate) && /missingAutoPostCount\(db\)/.test(gate))
   const coh = readFileSync('src/lib/auto-ready-quality-cohort.ts', 'utf8')

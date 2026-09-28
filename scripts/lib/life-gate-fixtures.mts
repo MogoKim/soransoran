@@ -545,7 +545,10 @@ export type SourcePhrase = {
   card: string
   title: string
   body: string
-  plan?: { selfBasis: string | null; warrants: { fact: string; evidenceText?: string }[] }
+  plan?: {
+    selfBasis: string | null; warrants: { fact: string; evidenceText?: string }[]
+    closingIntent?: string | null; contentRoles?: string[]
+  }
   source?: Partial<DraftGateSource>
   want: string
 }
@@ -678,4 +681,56 @@ export const LIFE_PHRASES: readonly [string, string, string, string][] = [
   ['P01', '군대', '아들이 나중에 군대 가면 어쩌나 싶어요.', 'pass'],
   ['P11', '명절', '큰애가 명절에 내려왔어요.', 'pass'],
   ['P14', '결혼식', '딸 결혼식 준비하느라 바빠요.', 'pass'],
+]
+
+/**
+ * 🔴 **(quality-v4) 창업자 gold 에서 나온 규칙의 문장 대조표** — 규칙마다 확정 반례 · 정상 대조 · 과차단 반례.
+ *    기본 원천은 ⑩ 과 같다(회차와 같은 날 · 커뮤니티 · 사진 수 미상 · 본문 없음).
+ */
+const LIFE = { selfBasis: 'lifeFacts', warrants: [{ fact: 'children' }] }
+const NOLIFE = { selfBasis: 'noLifeFactNeeded', warrants: [] }
+export const V4_PHRASES: readonly SourcePhrase[] = [
+  // 자녀 수 — 자녀 1명 카드(P07)의 명시적 `우리 아이들`
+  { card: 'P07', title: '차례', body: '우리 아이들 세대쯤 가면 차례도 없어지겠죠.', plan: LIFE, want: 'hold:childLifeStageConflict' },
+  { card: 'P01', title: '차례', body: '우리 아이들 세대쯤 가면 차례도 없어지겠죠.', plan: LIFE, want: 'pass' },
+  { card: 'P07', title: '요즘', body: '요즘 아이들은 차례를 잘 모르더라고요.', plan: LIFE, want: 'pass' },
+  // 결혼 햇수 < 카드 자녀 최소 나이
+  { card: 'P07', title: '결혼', body: '저는 결혼 10년차라 명절마다 음식을 해요.', plan: LIFE, want: 'hold:childLifeStageConflict' },
+  { card: 'P07', title: '결혼', body: '저는 결혼 25년차라 명절마다 음식을 해요.', plan: LIFE, want: 'pass' },
+  { card: 'P01', title: '결혼', body: '저는 결혼 15년차라 이제 요령이 생겼어요.', plan: LIFE, want: 'pass' },
+  { card: 'P03', title: '예전', body: '결혼 5년 만에 이혼하고 혼자 키웠어요.', plan: LIFE, want: 'pass' },
+  // 출생 뒤 햇수
+  { card: 'P07', title: '각방', body: '아이 태어나고 각방을 쓰게 됐는데 벌써 5년이나 됐네요.', plan: LIFE, want: 'hold:childLifeStageConflict' },
+  { card: 'P12', title: '세월', body: '첫째 낳고 벌써 30년이 흘렀네요.', plan: LIFE, want: 'pass' },
+  { card: 'P07', title: '친구', body: '친구가 아이 낳고 벌써 5년이 지났대요.', plan: LIFE, want: 'pass' },
+  // 성인 자녀 카드의 학령기 학습
+  { card: 'P08', title: '과외', body: '딸한테 수학 과외를 붙여줬더니 너무 좋아하네요.', plan: LIFE, want: 'hold:childLifeStageConflict' },
+  { card: 'P01', title: '과외', body: '딸한테 수학 과외를 붙여줬더니 너무 좋아하네요.', plan: LIFE, want: 'pass' },
+  { card: 'P08', title: '손주', body: '손주 숙제를 봐 주다 보니 하루가 가요.', plan: LIFE, want: 'pass' },
+  { card: 'P08', title: '딸', body: '딸이 요즘 과외 선생님을 해요.', plan: LIFE, want: 'pass' },
+  // 결혼 전 연애 단계(50·60대 · 기혼 카드) — 사람 검토
+  { card: 'P18', title: '호칭', body: '연상연하 커플인데요. 결혼하면 호칭이 궁금해요.', want: 'review:maritalStatusConflict' },
+  { card: 'P03', title: '호칭', body: '연상연하 커플인데요. 결혼하면 호칭이 궁금해요.', want: 'pass' },
+  { card: 'P18', title: '딸', body: '딸이 남친을 데려왔는데 참 싹싹하더라고요.', want: 'pass' },
+  // 다가오는 명절 · 명절 글의 날짜 말
+  { card: 'P04', title: '추석', body: '이번 추석에 시댁 가기 전에 장을 봐야 해요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
+  { card: 'P10', title: '선물', body: '어떤 친구가 추석 선물로 양갱을 준비하겠다고 하더라고요.', source: { postedAt: BEFORE }, want: 'pass' },
+  { card: 'P06', title: '명절', body: '명절 음식 중에서도 동태전은 별로 안 좋아해요.', source: { postedAt: BEFORE }, want: 'pass' },
+  { card: 'P12', title: '굴비', body: '명절 때마다 시어머니가 굴비를 챙겨 주세요.', source: { postedAt: BEFORE }, want: 'pass' },
+  { card: 'P12', title: '굴비', body: '명절에 받아온 굴비 구웠어요. 이제 오늘 할 일은 끝났네요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
+  { card: 'P12', title: '굴비', body: '명절에 받아온 굴비 구웠어요. 이제 할 일은 끝났네요.', source: { postedAt: BEFORE }, want: 'pass' },
+  // 1인칭 금융 행동 — 계획이 생활사를 허가하지 않았다
+  { card: 'P19', title: '보험', body: '얼마 전에 보험 싹 리모델링해서 바꿨거든요.', plan: NOLIFE, want: 'review:unwarrantedSelfClaim' },
+  { card: 'P19', title: '보험', body: '보험 리모델링 해 보신 분 계세요?', plan: NOLIFE, want: 'pass' },
+  { card: 'P19', title: '보험', body: '친구가 보험을 갈아탔대요.', plan: NOLIFE, want: 'pass' },
+  { card: 'P19', title: '보험', body: '얼마 전에 보험 싹 리모델링해서 바꿨거든요.', plan: LIFE, want: 'pass' },
+  // 받아칠 거리가 없는 하소연(소프트 품질) — 사람 검토
+  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'review:thinVentDraft' },
+  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['experienceResonance', 'conversationSpark'] }, want: 'pass' },
+  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요. 다들 어떠세요?', plan: { ...NOLIFE, closingIntent: 'vent', contentRoles: ['conversationSpark'] }, want: 'pass' },
+  { card: 'P03', title: '사교육', body: '사교육 얘기만 나오면 학원 쪽 사람들이 난리네요.', plan: { ...NOLIFE, closingIntent: 'share', contentRoles: ['conversationSpark'] }, want: 'pass' },
+  // 🔴 창업자가 통과시킨 소재 — 논쟁 · 이혼 · 돈 · 건강 질문은 소재로 막지 않는다
+  { card: 'P16', title: '이혼', body: '다들 어느 정도 마음이어야 이혼을 결심하시나요?', want: 'pass' },
+  { card: 'P10', title: '치즈', body: '치즈 매일 챙겨 먹는 거 몸에 안 좋을까요?', want: 'pass' },
+  { card: 'P05', title: '반반', body: '결혼전쟁 보면서 드는 생각인데 반반 결혼은 어떠세요?', want: 'pass' },
 ]

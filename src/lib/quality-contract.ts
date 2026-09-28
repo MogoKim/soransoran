@@ -39,6 +39,7 @@ import { DRAFT_RULE_VERSION } from './micro-seed-auto-draft'
 import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
 import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
+import { FOUNDER_GOLD_VERSION, FOUNDER_GOLD_PINNED_DIGEST, FOUNDER_GOLD_SHAPE } from './founder-gold'
 
 /**
  * 🔴 **품질 계약 판** — 게이트·검수의 판정이 바뀌면 올린다.
@@ -52,8 +53,19 @@ import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
  *      v1 cohort 가 사람 손이 필요하다고 권고된 13건 중 v2 가 막지 못한 모양이다. 원천(시각 · 사이트 · 사진 수)을
  *      게이트 입력으로 받는다 — 새 생성 · 캐시 채택이 같은 값을 넘긴다. v2 는 운영 행이 없는 채로 대체된다
  *      (배포 전 판). 🔴 v1 행을 고치거나 지우지 않는다.
+ *    `quality-v4` (2026-09-28 창업자 결정) = **후속 계약**. v3 는 첫 30건 사람 검토에서 실패했다(무수정 22 · 중대 결함 3) —
+ *      그 기록은 그대로 둔다. v4 는 ① 초안 게이트 보정(카드 자녀 수·결혼 햇수·출생 경과·성인 자녀 학령기 학습 확정 ·
+ *      다가오는 명절 · 1인칭 금융 행동 · 결혼 전 연애 단계 · 받아칠 거리 없는 하소연 사람 검토) ② **열림 근거를 창업자 gold
+ *      재생으로** 바꾼다(`QUALITY_EVIDENCE_BASIS`) — 새 30건 사람 검토를 요구하지 않는다. 감사 결함 · 재시도 가능 실패 ·
+ *      판정 대기 시한 · 글 유실 · 사람 중대 결함은 그대로 닫는다. 🔴 v3 행을 고치거나 지우지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v3'
+export const QUALITY_CONTRACT_VERSION = 'quality-v4'
+
+/**
+ * 🔴 **열림 근거** (quality-v4) — `founderGold`: 창업자 gold 재생(`founder-gold.ts`)이 30/30 이고 지금 계약 행에
+ *    사람 중대 결함이 없어야 연다. `humanCohort`: v1~v3 의 첫 30건 사람 표본. 판정 정본은 `evidenceFromDb` 하나다.
+ */
+export const QUALITY_EVIDENCE_BASIS: 'humanCohort' | 'founderGold' = 'founderGold'
 
 /** 🔴 `gateResults` 안의 칸 이름 */
 export const QUALITY_CONTRACT_KEY = 'qualityContract'
@@ -83,6 +95,9 @@ export function qualityContractComponents(): Record<string, unknown> {
     //    (v3) 원천·시점 축 넷과 `noLifeFactNeeded` 가족사가 이 목록에 더해졌다
     draftLifeReviewCodes: DRAFT_LIFE_REVIEW_CODES,
     draftLifeReviewHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
+    // 🔴 (v4) 열림 근거와 창업자 gold — gold 를 한 글자라도 바꾸면 이 digest 가 바뀌어 판을 올려야 한다
+    evidenceBasis: QUALITY_EVIDENCE_BASIS,
+    founderGold: { version: FOUNDER_GOLD_VERSION, digest: FOUNDER_GOLD_PINNED_DIGEST, shape: FOUNDER_GOLD_SHAPE },
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
     semanticHoldCodes: SEMANTIC_HOLD_CODES,
     judgeContractDigest: JUDGE_CONTRACT_DIGEST,

@@ -446,8 +446,8 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v3 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v3')
-    check(`초안 게이트 판 = draft-gates-v3.1 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v3.1')
+    check(`품질 계약 판 = quality-v4 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v4')
+    check(`초안 게이트 판 = draft-gates-v4 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v4')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })
@@ -521,6 +521,25 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     const core = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     check('🔴 runContentCore 의 결정 단계 게이트가 at: input.now · 모델에 준 원문을 쓴다',
       /at:\s*input\.now,\s*source:\s*\{\s*title:\s*input\.title,\s*body:\s*input\.maskedBody,\s*\.\.\.input\.sourceMeta\s*\}/.test(core))
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑪ quality-v4 — 창업자 gold 에서 나온 규칙 (확정 반례 · 정상 대조 · 과차단 반례)
+// ─────────────────────────────────────────────────────────
+{
+  const { judgeDraftLife } = await import('../src/lib/content-core/draft-life-gates')
+  const { V4_PHRASES, realCard } = await import('./lib/life-gate-fixtures.mjs')
+  console.log('\n⑪ v4 문장 대조표 — 자녀 수 · 결혼 햇수 · 출생 경과 · 학령기 학습 · 연애 단계 · 다가오는 명절 · 금융 행동 · 얇은 하소연')
+  for (const ph of V4_PHRASES) {
+    const r = judgeDraftLife({
+      title: ph.title, body: ph.body, card: realCard(ph.card), plan: ph.plan ?? null,
+      context: { at: FIXTURE_NOW, source: { ...NEUTRAL.source!, ...ph.source } },
+    })
+    const hard = r.failures.map((f) => f.code as string)
+    const rev = r.reviews.map((f) => f.code as string)
+    const got = hard.length > 0 ? `hold:${hard.join('+')}` : rev.length > 0 ? `review:${rev.join('+')}` : 'pass'
+    check(`${ph.want === 'pass' ? '🟢' : ph.want.startsWith('hold') ? '🔴' : '🟡'} ${ph.card} "${ph.body.slice(0, 30)}" → ${ph.want}`, got === ph.want, got)
   }
 }
 
