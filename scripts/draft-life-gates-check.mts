@@ -447,7 +447,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   {
     const comp = qualityContractComponents()
     check(`품질 계약 판 = quality-v3 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v3')
-    check(`초안 게이트 판 = draft-gates-v3 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v3')
+    check(`초안 게이트 판 = draft-gates-v3.1 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v3.1')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })

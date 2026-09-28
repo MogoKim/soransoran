@@ -1,10 +1,10 @@
 {
   "version": "quality-v3",
-  "digest": "d1bc0579b21e9ccdeccd5ce6d73de5b75c68ac491297509c4f64dfafdc017c46",
+  "digest": "99ff9c92de3c6cb05f552d88180e387d18111ea7ac540b4bf99a4045dd909ad7",
   "files": {
     "src/lib/quality-contract.ts": "102c39deb05278fa42d92879d54310301669644900632ded2c130f6dbcfafb5b",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "f7c24060220bcadc453892566b740ade7c48fdab9ba04276271b84175115fc91",
+    "src/lib/content-core/draft-life-gates.ts": "ff1112727726aa8ee551bd56be19c0a04dcdbabb5ec0ae3f723786a647298928",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
     "src/lib/content-core/pipeline.ts": "a20b40cdb7ca8e2030b3e25ab10d53739435e1f946b7fa10da79beed4a2a90b3",
     "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
@@ -24,15 +24,10 @@
     "src/lib/persona-cap.ts": "83744d04e42d76a4402d31ff743c0da94db7456efe89091084ec87968cadbf50"
   },
   "acknowledgement": {
-    "kind": "bump",
-    "reason": "판 quality-v2 → quality-v3",
+    "kind": "revise",
+    "reason": "quality-v3 digest d1bc0579b21e… → 99ff9c92de3c… · 같은 날 시간 의존 문장도 사람 검토 · 명사 뒤 '중' 은 상태 (draft-gates-v3.1) · 운영 quality-v3 행 0",
     "changedFiles": [
-      "src/lib/quality-contract.ts",
-      "src/lib/content-core/draft-life-gates.ts",
-      "src/lib/content-core/evidence.ts",
-      "src/lib/micro-seed-auto-draft.ts",
-      "scripts/lib/content-core-run.mts",
-      "src/lib/persona-cap.ts"
+      "src/lib/content-core/draft-life-gates.ts"
     ]
   }
 }

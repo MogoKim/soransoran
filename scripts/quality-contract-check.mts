@@ -78,7 +78,7 @@ type Record_ = {
   version: string
   digest: string
   files: Record<string, string>
-  acknowledgement: { kind: 'bump' | 'behaviorUnchanged' | 'initial'; reason: string; changedFiles: string[] }
+  acknowledgement: { kind: 'bump' | 'revise' | 'behaviorUnchanged' | 'initial'; reason: string; changedFiles: string[] }
 }
 
 const ROOT = process.cwd()
@@ -115,10 +115,18 @@ function main(): void {
   const argv = process.argv.slice(2)
   const bump = argv.includes('--bump')
   const unchangedArg = argv.find((a) => a.startsWith('--behavior-unchanged='))
-  const reason = unchangedArg === undefined ? '' : unchangedArg.slice('--behavior-unchanged='.length).trim()
+  /**
+   * 🔴 **`--revise="사유"`** (2026-09-28) — 판 이름은 그대로 두고 **digest 가 바뀐 것**을 기록한다.
+   *    쓸 수 있는 때는 하나다: 그 판으로 만든 운영 행이 아직 없어(배포 전) 판 이름으로 cohort 를 가를 일이 없을 때.
+   *    판 이름이 같아도 cohort·도장은 digest 까지 견준다(`isCurrentQualityContract`) — 옛 digest 행은 섞이지 않는다.
+   *    digest 가 그대로면 거절한다(행동 변경인데 digest 가 안 바뀐 것은 구성 누락이다).
+   */
+  const reviseArg = argv.find((a) => a.startsWith('--revise='))
+  const reason = unchangedArg !== undefined ? unchangedArg.slice('--behavior-unchanged='.length).trim()
+    : reviseArg !== undefined ? reviseArg.slice('--revise='.length).trim() : ''
   const now = { version: QUALITY_CONTRACT_VERSION, digest: qualityContractDigest(), files: currentFiles() }
   const rec = readRecord()
-  if (!bump && unchangedArg === undefined) {
+  if (!bump && unchangedArg === undefined && reviseArg === undefined) {
     const bad = judgeFingerprint(rec, now)
     console.log('\n══ 품질 계약 CI 가드 (DB 0 · 네트워크 0) ══')
     console.log(`   판 ${now.version} · digest ${now.digest.slice(0, 16)}… · 지문 파일 ${FINGERPRINT_FILES.length}개`)
@@ -129,13 +137,19 @@ function main(): void {
     console.log('  ✅ 기록과 코드가 같다\n')
     return
   }
-  if (bump && unchangedArg !== undefined) { console.error('🔴 --bump 와 --behavior-unchanged 를 함께 주지 않는다'); process.exit(2) }
+  if ([bump, unchangedArg !== undefined, reviseArg !== undefined].filter(Boolean).length > 1) {
+    console.error('🔴 --bump · --revise · --behavior-unchanged 는 하나만 준다'); process.exit(2)
+  }
   const changedFiles = Object.keys(now.files).filter((f) => rec?.files?.[f] !== now.files[f])
   if (bump) {
     if (rec !== null && rec.version === now.version) {
       console.error(`🔴 --bump 인데 QUALITY_CONTRACT_VERSION 이 기록(${rec.version})과 같다 — 코드의 판을 먼저 올린다`)
       process.exit(2)
     }
+  } else if (reviseArg !== undefined) {
+    if (reason === '') { console.error('🔴 --revise 에는 사유가 필요하다'); process.exit(2) }
+    if (rec === null || rec.version !== now.version) { console.error('🔴 --revise 는 판 이름이 같을 때만 — 판이 바뀌었으면 --bump'); process.exit(2) }
+    if (rec.digest === now.digest) { console.error('🔴 --revise 인데 digest 가 그대로다 — 행동이 바뀌었으면 digest 구성(판 값)을 바꾼다'); process.exit(2) }
   } else {
     if (reason === '') { console.error('🔴 --behavior-unchanged 에는 사유가 필요하다'); process.exit(2) }
     if (rec !== null && (rec.version !== now.version || rec.digest !== now.digest)) {
@@ -149,6 +163,8 @@ function main(): void {
       ? { kind: 'initial', reason: `첫 기록 — ${now.version}`, changedFiles }
       : bump
       ? { kind: 'bump', reason: `판 ${rec.version} → ${now.version}`, changedFiles }
+      : reviseArg !== undefined
+      ? { kind: 'revise', reason: `${now.version} digest ${rec.digest.slice(0, 12)}… → ${now.digest.slice(0, 12)}… · ${reason}`, changedFiles }
       : { kind: 'behaviorUnchanged', reason, changedFiles },
   }
   writeFileSync(join(ROOT, FINGERPRINT_PATH), `${JSON.stringify(next, null, 2)}\n`)

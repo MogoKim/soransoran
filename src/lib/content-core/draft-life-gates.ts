@@ -76,7 +76,11 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    올리면 자동 READY 증거 cohort 가 새로 시작한다. CI(`check:quality-contract`)가 이 파일의
  *    지문이 바뀌었는데 판도 확인도 그대로면 막는다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v3'
+/**
+ * 🔴 `draft-gates-v3.1` (2026-09-28) — 같은 날 시간 의존 문장도 사람 검토. 운영 v3 행이 0 이라 품질 계약 판 이름
+ *    (`quality-v3`)은 그대로 두고 이 값으로 digest 를 바꾼다(`check:quality-contract -- --revise`).
+ */
+export const DRAFT_GATE_VERSION = 'draft-gates-v3.1'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -753,9 +757,10 @@ const NOW_RE = /지금|방금|이제\s*막|실시간|현재/
 /**
  * 🔴 **하는 중** — 끝나지 않은 동작. 명절·현장 맥락에서만 본다.
  *    🔴 `길` 은 **서술로 끝날 때만**(`가는 길이에요`) — `오는 길에 꽃 사고` 는 다녀온 이야기다(운영 P07 송편 글).
+ *    🔴 `중` 은 **동사 뒤에서만**(`만드는 중`) — `별거 중` · `치료 중` 같은 명사 뒤 `중` 은 이어지는 상태다.
  */
 const IN_PROGRESS_RE =
-  /(?:는|가는|오는|하는)\s*길(?:이에요|입니다|이네요|인데|이야|이다)|(?:는|하는|보는|가는|먹는)\s*중(?:이|입니다|이에요|인데|이네요)?|중(?:이에요|입니다|이네요|인데요?)/
+  /(?:는|가는|오는|하는)\s*길(?:이에요|입니다|이네요|인데|이야|이다)|(?:는|하는|보는|가는|먹는)\s*중(?:이|입니다|이에요|인데|이네요)?/
 /** 🔴 **날짜에 묶인 말** — 명절·현장과 함께일 때만 본다 */
 const DAY_RE = /오늘|어제|내일|엊그제|그저께|모레/
 /** 🔴 명절이 **아직 오지 않은** 자리의 말 — 인사 · 계획 */
@@ -802,14 +807,19 @@ function judgeStaleTime(frames: readonly ClauseFrame[], ctx: DraftGateContext): 
   const claims = readTimeClaims(frames)
   if (claims.length === 0) return []
   const day = sourceDayOf(ctx)
-  // 🔴 원문이 오늘 올라왔다 — 지금 말해도 시점이 맞는다
-  if (day === 'same') return []
+  /**
+   * 🔴 **같은 날이어도 통과시키지 않는다** (2026-09-28 마스터 재리뷰). 초안이 발행되는 시각은 판정 시각이
+   *    아니다 — `지금 콘서트 보는 중` · `오늘 추석 음식 만드는 중` 은 몇 시간 뒤에도 틀린다. 발행 신선도(TTL)에
+   *    맡기지 않는다. 같은 날 · 시각 모름은 사람 검토, 앞 날짜의 강한 실시간 주장만 확정(AUTO_HOLD)이다.
+   *    회고 · 시간 표현이 없는 글은 `readTimeClaims` 에서 이미 걸리지 않는다.
+   */
   const posted = ctx.source?.postedAt?.toISOString() ?? '미상'
+  const when = day === 'before' ? '앞 날짜' : day === 'same' ? '같은 날' : '시각 미상'
   return claims.map((t) => ({
     code: 'staleTimeClaim' as const,
     // 🔴 원문이 앞 날짜인데 "지금 ○○ 중" 이다 — 확정. 인사·계획·날짜 말은 명절이 아직일 수 있다 → 사람
     level: t.strong && day === 'before' ? 'hard' as const : 'review' as const,
-    detail: `원문 ${day === 'before' ? '앞 날짜' : '시각 미상'}(posted ${posted}) · ${t.strong ? '지금·하는 중' : '날짜·인사·계획'} · "${t.clause}"`,
+    detail: `원문 ${when}(posted ${posted}) · ${t.strong ? '지금·하는 중' : '날짜·인사·계획'} · "${t.clause}"`,
   }))
 }
 

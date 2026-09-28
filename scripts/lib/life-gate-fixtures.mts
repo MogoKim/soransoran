@@ -456,7 +456,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
     card: realCard('P01'), ...pass,
   },
   {
-    queueId: 'control-v3-same-day-live', label: '🟢 대조 · 원문이 회차와 같은 날 · "지금 콘서트 보는 중인데"',
+    queueId: 'review-v3-same-day-live', label: '🟡 원문이 회차와 같은 날이어도 "지금 콘서트 보는 중" 은 사람 검토(발행 때는 지금이 아니다)',
     source: { id: 'fx-v3-clive', ...SRC_CONCERT },
     draft: {
       title: '콘서트 보다가 잠깐 올려요',
@@ -466,7 +466,7 @@ const V3_FIXTURES: readonly LifeFixture[] = [
       personaCode: 'P15', stance: 'SELF_EXPERIENCE', selfBasis: 'noLifeFactNeeded',
       universalReason: '공연 감상은 누구나 하는 이야기다',
     }),
-    card: realCard('P15'), ...pass,
+    card: realCard('P15'), ...review(['staleTimeClaim']),
   },
   {
     queueId: 'control-v3-photo-source', label: '🟢 대조 · 원천에 사진 3장 — 초안은 글로 설명하고 봐 달라지 않는다',
@@ -553,7 +553,14 @@ const Q = { selfBasis: null, warrants: [] }
 export const SOURCE_PHRASES: readonly SourcePhrase[] = [
   // 5 시점 — 명절·현장 × 원문 시각
   { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
-  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', want: 'pass' },
+  // 🔴 같은 날이어도 시간 의존 문장은 사람 검토 — 발행 시각은 판정 시각이 아니다(TTL 에 맡기지 않는다)
+  { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', want: 'review:staleTimeClaim' },
+  { card: 'P15', title: '콘서트', body: '지금 콘서트 보는 중인데 게스트가 나왔어요.', want: 'review:staleTimeClaim' },
+  { card: 'P01', title: '추석', body: '오늘 추석 음식 만드는 중이에요.', want: 'review:staleTimeClaim' },
+  { card: 'P01', title: '추석', body: '오늘 추석 음식 만드는 중이에요.', source: { postedAt: BEFORE }, want: 'hold:staleTimeClaim' },
+  { card: 'P15', title: '공연', body: '지난 공연을 보고 왔는데 여운이 길어요.', want: 'pass' },
+  { card: 'P15', title: '공연', body: '지난 공연을 보고 왔는데 여운이 길어요.', source: { postedAt: BEFORE }, want: 'pass' },
+  { card: 'P01', title: '요즘', body: '요즘 애들 시험 기간이라 저녁을 일찍 먹어요.', want: 'pass' },
   { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요. 다들 명절 잘 보내세요.', source: { postedAt: null, capturedAt: null }, want: 'review:staleTimeClaim' },
   // 🔴 가져온 날이 앞 날짜면 올라온 날도 앞 날짜다 — capturedAt 만으로 "앞" 을 확정한다
   { card: 'P01', title: '명절', body: '이제 시댁에서 집으로 가는 길이에요.\n명절 잘 보내세요.', source: { postedAt: null, capturedAt: BEFORE }, want: 'hold:staleTimeClaim' },
