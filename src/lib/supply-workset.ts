@@ -1,5 +1,5 @@
 import {
-  AUTO_DECISIONS, HARD_BLOCK, hardGate, holdBeforeAsking,
+  AUTO_DECISIONS, HARD_BLOCK, hardGate, holdBeforeAsking, RAW_AXIS,
   type AutoDecision, type JudgeInput,
 } from './micro-seed-auto-judge'
 import {
@@ -96,6 +96,82 @@ export type WorksetPlan = {
   dropped: Record<WorksetDrop, number>
   /** 조건은 맞지만 이번 묶음에 못 들어간 것 — 🔴 **그대로 남는다** */
   deferred: number
+  /**
+   * 🔴 **축별 수** (2026-09-28) — 적격 · 이번 자리(quota) · 실제로 고른 수.
+   *    사람이 "왜 raw 가 1건뿐인가 · 왜 자리가 비었나" 를 로그에서 바로 본다.
+   */
+  axis: Readonly<Record<'eligible' | 'quota' | 'picked', Readonly<Record<WorksetAxis, number>>>>
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **축별 자리** (2026-09-28)
+//
+//   생성 레인은 판정이 `AUTO_SEED` 를 준 원천만 읽는다(`micro-seed-auto-draft` 의 입력).
+//   `rawOriginality` 축 원천은 판정이 `AUTO_RAW`(다른 레인) 이거나, 모델이 SEED 라고
+//   답하면 정책이 `axisMismatch` HOLD 로 바꾼다 — **어느 쪽이든 이 레인에서 초안이 0 이다.**
+//
+//   실측(2026-09-21~27, 39회차 195자리): raw 85자리 → AUTO_RAW 23 · HOLD 62(그중 axisMismatch 61)
+//   · 초안 0 · 채택 0. seed 110자리 → AUTO_SEED 90 · 초안 50 · 채택 33.
+//   댓글 수만 보고 고르니 raw 가 43% 자리를 먹었고, 마지막 두 회차는 5자리 중 3자리가 raw 였다.
+//
+//   🔴 **raw 를 영구 제외하지 않는다.** raw 레인의 판정도 이 회차가 내는 결론이고,
+//      제외하면 raw 원천은 영영 판정되지 않는다. 대신 **자리를 제한한다.**
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 원천의 축 — 판정기 정본(`RAW_AXIS`) 하나로 가른다 */
+export const WORKSET_AXES = ['seed', 'raw'] as const
+export type WorksetAxis = (typeof WORKSET_AXES)[number]
+
+/**
+ * 🔴 **raw 한 자리당 묶음 크기.** 상한 5 → raw 최대 1 · seed 최소 4 (seed 가 있으면).
+ *
+ *    다른 상한은 비례로 늘린다 — `floor(limit / 5)` 자리를 raw 에 **남기고**, 그만큼이 raw 의 상한이다.
+ *      limit 5 → raw ≤1 (1 자리 보장)   limit 10 → raw ≤2 (2 자리 보장)   limit 7 → raw ≤1
+ *    🔴 상한이 5 보다 작으면(1~4) raw 한 자리가 20% 를 넘는다. 그래서 **자리를 남기지 않고**,
+ *       seed 가 채우지 못한 자리에만 raw 가 **최대 1** 건 들어온다 — 그래도 raw 가 판정 대상에서
+ *       빠지지는 않는다.
+ */
+export const WORKSET_RAW_SLOT_EVERY = 5
+
+/**
+ * 🔴 **축 판정은 정본 값 하나로.** `rawOriginality` 만 raw 다.
+ *    묶음에 들어오는 원천은 `holdBeforeAsking`(→ `preSemanticGate`)을 통과했으므로
+ *    축이 `seedOriginality` 아니면 `rawOriginality` 둘 중 하나다 — 그 밖의 값은 여기 오지 않는다.
+ */
+export const worksetAxisOf = (r: WorksetRow): WorksetAxis =>
+  S(r.input.axis) === RAW_AXIS ? 'raw' : 'seed'
+
+export type WorksetAxisCaps = {
+  /** raw 가 가질 수 있는 최대 자리 */
+  rawCap: number
+  /** raw 가 있으면 **seed 가 많아도** raw 에 남기는 자리 */
+  rawReserve: number
+}
+
+/** 🔴 상한 → raw 자리. 러너 · 검사 · 재현이 **같은 함수**를 쓴다 */
+export function worksetAxisCaps(limit: number): WorksetAxisCaps {
+  const n = Number.isInteger(limit) && limit > 0 ? limit : 0
+  if (n === 0) return { rawCap: 0, rawReserve: 0 }
+  const share = Math.floor(n / WORKSET_RAW_SLOT_EVERY)
+  return { rawCap: Math.max(1, share), rawReserve: share }
+}
+
+/**
+ * 🔴 **이번 회차의 축별 자리.**
+ *    ① raw 가 있으면 `rawReserve` 만큼 먼저 남긴다 (raw 영구 제외 금지)
+ *    ② seed 는 나머지를 **전부** 쓸 수 있다
+ *    ③ seed 가 모자라 빈 자리는 raw 가 `rawCap` 까지만 채운다 —
+ *       🔴 **그 이상은 비워 둔다.** seed 가 없다고 묶음을 raw 로 채우면 초안 0 짜리 판정만 는다.
+ */
+export function worksetAxisQuota(
+  limit: number, available: Readonly<Record<WorksetAxis, number>>,
+): Record<WorksetAxis, number> {
+  const n = Number.isInteger(limit) && limit > 0 ? limit : 0
+  const caps = worksetAxisCaps(n)
+  const reserved = Math.min(caps.rawReserve, available.raw)
+  const seed = Math.min(available.seed, n - reserved)
+  const raw = Math.min(caps.rawCap, available.raw, n - seed)
+  return { seed, raw }
 }
 
 /**
@@ -419,6 +495,11 @@ export const WORKSET_RETRY_STARVE_MS = 6 * 60 * 60 * 1000
  * 🔴 자리를 둘로 나눈다: **한 번도 안 본 원천**과 **이미 본 원천(재시도)**.
  *    한쪽이 다른 쪽을 굶기지 않는 것이 이 함수의 계약이다.
  *
+ * 🔴 **그 전에 축으로 자리를 나눈다** (2026-09-28, `worksetAxisQuota`).
+ *    상한 5 → raw 최대 1 · seed 가 충분하면 seed 4 이상. raw 는 빼지 않고,
+ *    seed 가 모자란 자리를 raw 로 전부 채우지도 않는다(빈 자리는 비워 둔다).
+ *    신규/재시도 나눔과 각 줄의 순서(댓글 수 · 오래 기다린 것부터)는 축 자리 **안에서** 그대로다.
+ *
  * 🔴 같은 입력이면 같은 결과다. 사람이 대조할 수 있어야 한다.
  */
 export function selectWorkset(input: {
@@ -489,20 +570,65 @@ export function selectWorkset(input: {
       || byWeight(a, b))
 
   const limit = Number.isInteger(input.limit) && input.limit > 0 ? input.limit : 0
+
+  /**
+   * 🔴 **축별 자리를 먼저 정한다** (2026-09-28). 신규/재시도 자리 나눔은 그 **안에서** 그대로 돈다.
+   *    원천이 전부 seed 이면 quota 가 `{ seed: limit, raw: 0 }` 이 되어 앞판과 **같은 결과**다.
+   */
+  const count = (axis: WorksetAxis): number => eligible.filter((r) => worksetAxisOf(r) === axis).length
+  const eligibleByAxis: Record<WorksetAxis, number> = { seed: count('seed'), raw: count('raw') }
+  const quota = worksetAxisQuota(limit, eligibleByAxis)
+  const used: Record<WorksetAxis, number> = { seed: 0, raw: 0 }
+  const hasRoom = (r: WorksetRow): boolean => used[worksetAxisOf(r)] < quota[worksetAxisOf(r)]
+  const take = (r: WorksetRow): boolean => {
+    if (!hasRoom(r)) return false
+    used[worksetAxisOf(r)] += 1
+    return true
+  }
+  // 🔴 자리가 0 인 축의 원천은 이번 회차 후보가 아니다 — 재시도 자리도 그 축으로 새지 않는다
+  const freshOpen = fresh.filter(hasRoom)
+  const retryOpen = retry.filter(hasRoom)
+
   /**
    * 🔴 **재시도에 남길 자리.** 상한이 2 이상이면 한 자리를 늘 남기고,
    *    상한이 1 이면 **가장 오래 기다린 재시도**가 기준을 넘었을 때만 그 자리를 가져간다.
+   *    🔴 기준은 **자리가 있는 축의** 재시도 가운데 가장 오래 기다린 것이다.
    */
-  const waitedMs = retry.length === 0 ? 0
-    : input.takenAt.getTime() - (input.attempted.get(retry[0]!.sourceArticleId)?.atMs ?? 0)
-  const reserve = retry.length === 0 ? 0
+  const waitedMs = retryOpen.length === 0 ? 0
+    : input.takenAt.getTime() - (input.attempted.get(retryOpen[0]!.sourceArticleId)?.atMs ?? 0)
+  const reserve = retryOpen.length === 0 ? 0
     : limit >= WORKSET_RETRY_RESERVE + 1 ? WORKSET_RETRY_RESERVE
       : waitedMs >= WORKSET_RETRY_STARVE_MS ? limit : 0
 
-  const freshPicked = fresh.slice(0, Math.max(0, limit - reserve))
-  // 🔴 신규가 자리를 다 못 채우면 재시도가 남은 칸을 쓴다 — 자리를 비워 두지 않는다
-  const retryPicked = retry.slice(0, Math.max(0, limit - freshPicked.length))
+  /**
+   * 🔴 ① 재시도 자리를 **먼저** 잡는다 — 오래 기다린 순서 그대로, 축 자리가 남은 것만.
+   *    신규가 먼저 축 자리를 다 채워 버리면 남긴 재시도 자리가 비어 버린다(재시도 굶김).
+   */
+  const reserved = new Set<string>()
+  for (const r of retryOpen) {
+    if (reserved.size >= reserve) break
+    if (take(r)) reserved.add(r.sourceArticleId)
+  }
+  // 🔴 ② 신규 — 댓글 수 순서 그대로, 남긴 재시도 자리를 빼고 축 자리 안에서
+  const freshPicked: WorksetRow[] = []
+  for (const r of freshOpen) {
+    if (freshPicked.length >= limit - reserved.size) break
+    if (take(r)) freshPicked.push(r)
+  }
+  // 🔴 ③ 신규가 자리를 다 못 채우면 재시도가 남은 칸을 쓴다 — 축 자리 안에서만
+  const retryIds = new Set(reserved)
+  for (const r of retryOpen) {
+    if (freshPicked.length + retryIds.size >= limit) break
+    if (retryIds.has(r.sourceArticleId)) continue
+    if (take(r)) retryIds.add(r.sourceArticleId)
+  }
+  // 🔴 재시도는 **오래 기다린 순서** 그대로 적는다 — 먼저 잡은 자리가 앞에 오는 것이 아니다
+  const retryPicked = retryOpen.filter((r) => retryIds.has(r.sourceArticleId))
   const picked = [...freshPicked, ...retryPicked]
+  const pickedByAxis: Record<WorksetAxis, number> = {
+    seed: picked.filter((r) => worksetAxisOf(r) === 'seed').length,
+    raw: picked.filter((r) => worksetAxisOf(r) === 'raw').length,
+  }
 
   return {
     workset: {
@@ -514,6 +640,7 @@ export function selectWorkset(input: {
     dropped,
     // 🔴 조건은 맞는데 이번에 못 들어간 것 — 다음 회차가 집는다
     deferred: Math.max(0, eligible.length - picked.length),
+    axis: { eligible: eligibleByAxis, quota, picked: pickedByAxis },
   }
 }
 

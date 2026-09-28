@@ -704,6 +704,13 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
     rows: rows4, humanDecided: new Set(), queuePending: new Set(),
     concluded: new Set(), attempted: new Map(), limit: 5, runId: tag, takenAt: new Date(),
   })
+  /**
+   * 🔴 **raw 는 상한 5 에서 한 회차 1 건이다** (2026-09-28 축별 자리). seed 가 없어도
+   *    묶음을 raw 로 채우지 않는다 — 그래서 raw 두 건은 **두 회차에 걸쳐** 판정된다.
+   */
+  check('🔴 🔴 **seed 가 없어도 raw 는 한 회차 1 건 — 나머지 자리는 비운다**',
+    first.workset.sourceIds.join(',') === 'raw1' && first.axis.quota.raw === 1,
+    `${first.workset.sourceIds.join(',')} · raw 자리 ${first.axis.quota.raw}`)
   const ws = join(w4.dd, worksetFileName(tag))
   writeFileSync(ws, `${JSON.stringify(first.workset, null, 2)}\n`, 'utf-8')
   const log = join(w4.root, 'raw.log')
@@ -719,20 +726,21 @@ console.log('\n⑧ 🔴 🔴 AUTO_RAW — 한 번 판정되면 이 레인에서 
   const shadow = readFileSync(join(w4.dd, `auto-judge-${tag}.shadow.jsonl`), 'utf-8')
     .split('\n').filter((l) => l.trim() !== '')
     .map((l) => JSON.parse(l) as { sourceArticleId: string; decision: string })
-  check('🔴 🔴 **판정 러너가 실제로 AUTO_RAW 를 냈다**',
-    r.code === 0 && shadow.length === 2 && shadow.every((x) => x.decision === 'AUTO_RAW'),
+  check('🔴 🔴 **판정 러너가 실제로 AUTO_RAW 를 냈다 — 묶음의 1 건만**',
+    r.code === 0 && shadow.length === 1 && shadow.every((x) => x.decision === 'AUTO_RAW'),
     `code=${r.code} · ${shadow.map((x) => x.decision).join(',')}\n${r.out.slice(-400)}`)
 
   const states = [...latestOutcomes(out4()).values()].map((o) => o.state)
   check('🔴 🔴 **AUTO_RAW 는 unknown 이 아니라 rawLane 이다**',
-    states.length === 2 && states.every((x) => x === 'rawLane'), states.join(','))
+    states.length === 1 && states.every((x) => x === 'rawLane'), states.join(','))
   const next = selectWorkset({
     rows: rows4, humanDecided: new Set(), queuePending: new Set(),
     concluded: concludedSourceIds(out4()), attempted: attemptedOutcomes(out4()),
     limit: 5, runId: `${tag}-2`, takenAt: new Date(),
   })
-  check('🔴 🔴 **다음 회차에 다시 올라오지 않는다**',
-    next.picked.length === 0 && next.dropped.terminal === 2,
+  // 🔴 판정이 끝난 raw1 은 빠지고, 기다리던 raw2 가 그 raw 자리를 받는다 — raw 는 굶지 않는다
+  check('🔴 🔴 **다음 회차에 다시 올라오지 않는다 — 다음 raw 가 차례를 받는다**',
+    next.workset.sourceIds.join(',') === 'raw2' && next.dropped.terminal === 1,
     `${next.workset.sourceIds.join(',')} · 제외 ${next.dropped.terminal}`)
 
   // 🔴 생성 러너가 AUTO_RAW 를 초안 대상으로 집지 않는다 — 유료 호출 0

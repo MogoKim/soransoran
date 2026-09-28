@@ -11,6 +11,8 @@
  *        자식이 제 시계로 여력 파일을 검증하면 "미래 기록" 으로 멈춘다.
  *   ② 화자 여력이 **전원 0** 인 회차 — AUTO_SEED 3건
  *      → provider 호출 0(장부 0줄) · picks 3건 전부 `personaCapacityDeferred` · `noDraft` 0 · artifact 0.
+ *   ⑤ 부모 러너 `main --live` 를 **실제로** 돌린다 (2026-09-28 축별 자리) — seed 6 · raw 4(댓글이 더 많다) ·
+ *      격리 DB 큐에 형제 1건 → 러너가 적은 묶음이 raw 1 · seed 4 이고 판정이 그 묶음만 봤는지 대조한다.
  *
  *   🔴 임시 디렉터리에서 돈다: cwd(`.microseed-data`)와 HOME(장부 · 말투 자산)이 모두 mkdtemp 안이다.
  *      저장소 · 운영 장부 · 운영 말투 자산을 건드리지 않는다. 말투 자산은 **합성**이다(실제 댓글 0).
@@ -21,6 +23,7 @@ import { createHash } from 'node:crypto'
 import {
   chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -250,6 +253,8 @@ async function main(): Promise<void> {
   check('🔴 화면이 초안 실패가 아니라 여력 대기라고 적는다',
     /Persona 여력 대기로 미룬 원천 3건 — AI 를 부르지 않았다 · 초안 실패 아님/.test(res.out))
 
+  await worksetAxisRunner(prisma, codes)
+
   await prisma.$disconnect()
   process.chdir(REPO)
   rmSync(T, { recursive: true, force: true })
@@ -257,6 +262,103 @@ async function main(): Promise<void> {
   console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
   console.log('🔴 격리 DB · 임시 cwd · 임시 HOME · 합성 말투 자산 · provider 0 · 운영 장부 0\n')
   if (fail > 0) process.exit(1)
+}
+
+/**
+ * ⑤ 🔴 🔴 **부모 러너 `main --live` 를 실제로 돌려 묶음을 본다** (2026-09-28 축별 자리).
+ *
+ *    순수 검사(`supply:workset-check` ⑩)는 `selectWorkset` 이 옳다는 것만 증명한다.
+ *    러너가 **그 함수의 결과로** 묶음 파일을 쓰는지는 러너를 돌려야 안다 — 그래서 여기서 돈다.
+ *    · 큐 스냅샷은 **이 격리 DB** 에서 러너가 직접 읽는다 (같은 원문의 미발행 형제 1건을 넣어 둔다)
+ *    · fixture 는 raw 의 댓글 수가 더 크다 — 옛 규칙이면 raw 4 · seed 1 이다
+ *    · provider 는 가짜다(`fake-provider-hook`) — 네트워크 0 · 운영 장부 0
+ *    🔴 임시 cwd 는 ①~④ 와 **따로** 만든다 — 앞 절의 파일이 이 회차 입력에 섞이지 않게.
+ */
+async function worksetAxisRunner(
+  prisma: InstanceType<typeof import('@prisma/client').PrismaClient>, codes: readonly string[],
+): Promise<void> {
+  console.log('\n⑤ 🔴 🔴 부모 러너(main --live)가 축별 자리로 묶음을 고른다 — 격리 DB 큐 · 가짜 provider')
+  const { PROVEN_LANES, SEED_AXIS, RAW_AXIS } = await import('../src/lib/micro-seed-auto-judge')
+  const T2 = realpathSync(mkdtempSync(join(tmpdir(), 'soran-wsaxis-cwd-')))
+  for (const x of ['scripts', 'src', 'package.json', 'tsconfig.json']) cpSync(join(REPO, x), join(T2, x), { recursive: true })
+  mkdirSync(join(T2, 'docs', 'operations'), { recursive: true })
+  cpSync(join(REPO, POOL_DOC), join(T2, POOL_DOC))
+  symlinkSync(realpathSync(join(REPO, 'node_modules')), join(T2, 'node_modules'))
+  const D2 = join(T2, '.microseed-data')
+  mkdirSync(D2, { recursive: true })
+
+  /** seed 6건(댓글 10~5) · raw 4건(댓글 50~47) — 모양은 adapt 가 내는 `detail`/`raw-detail` 쌍 그대로 */
+  const src = [
+    ...[10, 9, 8, 7, 6, 5].map((c, i) => ({ id: `wsxs${i + 1}`, c, axis: SEED_AXIS })),
+    ...[50, 49, 48, 47].map((c, i) => ({ id: `wsxw${i + 1}`, c, axis: RAW_AXIS })),
+  ]
+  const common = (x: { id: string; c: number; axis: string }) => ({
+    runId: 'wsaxis-1', sourceArticleId: x.id, sourceSite: 'navercafe:wgang',
+    axis: x.axis, lane: PROVEN_LANES[0] ?? '', safetyVerdict: 'pass', safetyReasons: '',
+    title: `우리 나이 이야기 ${x.id}`,
+    bodyHead: `${x.id} 원문 머리입니다. 사람들이 반응한 이야기이고 질문으로 끝납니다. 다들 어떠세요?`,
+    commentCount: x.c, bodyLength: 300, assetAxes: 'sleep|work', qualityFlags: [],
+    sourcePostedAt: '2026-09-27T00:00:00Z', sourceListedAt: '2026-09-27T00:00:00Z',
+  })
+  writeFileSync(join(D2, 'wsaxis-1.detail.jsonl'),
+    `${src.map((x) => JSON.stringify({ ...common(x), access: 'ok', imageCount: 0 })).join('\n')}\n`)
+  writeFileSync(join(D2, 'wsaxis-1.raw-detail.jsonl'),
+    `${src.map((x) => JSON.stringify({ ...common(x), accessStatus: 'ok' })).join('\n')}\n`)
+
+  // 🔴 같은 원문의 미발행 형제 — 러너가 **이 DB 를 읽어야만** wsxs1 을 뺄 수 있다.
+  //    적재 행의 id 는 `<원문id>-<해시8>` 이다(`baseArticleId` 가 뒤를 뗀다) — 그 모양 그대로 넣는다
+  const raw = await prisma.microSeedRawContent.create({
+    data: {
+      origin: 'live', sourceSite: `${MACHINE_SITE_PREFIX}navercafe:wgang`, sourceUrl: 'https://example.invalid/wsxs1',
+      sourceArticleId: 'wsxs1-0000beef', sourceCapturedAt: new Date(RUN_AT.getTime() - 864e5), rawTitle: '형제 원문', rawBody: '형제 원문',
+    },
+    select: { id: true },
+  })
+  await prisma.originalPostApprovalQueue.create({
+    data: {
+      sourceRawContentId: raw.id, status: 'APPROVED', draftTitle: '형제 글', draftBody: '형제 본문. 다들 어떠세요?',
+      gateVerdict: 'PASS', promptVersion: MACHINE_PROMPT_VERSION, model: MACHINE_MODEL,
+      gateResults: { holds: [], blocks: [], autoDraft: {
+        provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
+        draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: codes[0] ?? 'P01', bundleDigest: 'bd-wsx', comments: 3 },
+      } } as never,
+      decidedBy: 'machine:auto-draft-v5', dedupKey: 'wsx-dd-1',
+    },
+  })
+
+  const fakeLog = join(T2, 'fake-provider.log')
+  writeFileSync(fakeLog, '')
+  const fakeKeys = Object.fromEntries([...new Set(Object.values(PROVIDER_KEY_ENV as Record<string, string>))].map((k) => [k, 'fixture-not-a-key']))
+  const child = spawnSync(join(REPO, 'node_modules', '.bin', 'tsx'), [join(T2, 'scripts', 'supply-process.mts'), '--live'], {
+    cwd: T2, encoding: 'utf-8', timeout: 600_000,
+    env: {
+      ...process.env, ...fakeKeys, HOME: H,
+      SORAN_SUPPLY_PROCESS_ENABLED: 'true',
+      NODE_OPTIONS: `--import=${join(REPO, 'scripts', 'lib', 'fake-provider-hook.mjs')}`,
+      FAKE_PROVIDER_LOG: fakeLog,
+    },
+  })
+  const out = `${child.stdout ?? ''}${child.stderr ?? ''}`
+  const wsFile = readdirSync(D2).find((f) => /^supply-workset-.*\.json$/.test(f))
+  const ws = wsFile === undefined ? null
+    : JSON.parse(readFileSync(join(D2, wsFile), 'utf-8')) as { runId: string; sourceIds: string[] }
+  check('🔴 러너가 실제로 돌아 묶음 파일을 적었다', ws !== null, `출력 끝: ${out.slice(-600)}`)
+  const got = ws?.sourceIds.join(',') ?? ''
+  check('🔴 🔴 **러너가 적은 묶음 = raw 1 (댓글 최상위) + seed 4 (형제 뺀 상위 4)** — 옛 규칙이면 raw 4 · seed 1',
+    got === 'wsxw1,wsxs2,wsxs3,wsxs4,wsxs5', got)
+  check('🔴 🔴 **러너가 격리 DB 큐를 읽어 형제를 뺐다** — wsxs1 없음 · 제외 사유 1건',
+    ws !== null && !ws.sourceIds.includes('wsxs1') && /같은 원문의 미발행 형제가 큐에 있다 1/.test(out))
+  check('🔴 러너 로그가 축별 자리를 적는다 (정본 plan.axis)',
+    /축 {2}seed 적격 5 · 자리 4 · 고름 4 {2}\| {2}raw 적격 4 · 자리 1 · 고름 1/.test(out),
+    (/축 .*/.exec(out) ?? [''])[0])
+  const shadowFile = ws === null ? '' : join(D2, `auto-judge-${ws.runId}.shadow.jsonl`)
+  const judged = shadowFile !== '' && existsSync(shadowFile)
+    ? readFileSync(shadowFile, 'utf-8').split('\n').filter((l) => l.trim() !== '')
+      .map((l) => (JSON.parse(l) as { sourceArticleId: string }).sourceArticleId)
+    : []
+  check('🔴 🔴 **판정 단계가 그 묶음만 판정했다** — 묶음 밖 raw 3건 · 형제 0건',
+    ws !== null && same(judged, ws.sourceIds), `판정 ${judged.join(',')}`)
+  rmSync(T2, { recursive: true, force: true })
 }
 
 function same(a: readonly string[], b: readonly string[]): boolean {
