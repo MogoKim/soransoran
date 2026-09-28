@@ -1,5 +1,11 @@
 /**
- * 댓글 runner **schedule 템플릿** — 🔴 이번 PR 에서는 **등록하지 않는다**
+ * 댓글 runner **schedule 템플릿** — 🔴 문자열만 만든다. **등록하지 않는다**
+ *
+ * 🔴 **예약 대상은 무인 루프다** (2026-09-28 · Track B).
+ *    이 label 이 가리키는 스크립트는 `scripts/persona-comment-loop.mts` 다 —
+ *    대상 선정 → 생성 → 9관문 → PENDING → 발행을 한 회차로 잇는다.
+ *    옛 `scripts/persona-comment-runner.mts` 는 **사람이 승인한 행만** 내는 수동 CLI 로 남는다
+ *    (`npm run persona:comment-runner`). 두 스크립트가 같은 label 을 다투지 않는다.
  *
  * 🔴 만들어 두되 올리지 않는 이유.
  *
@@ -14,7 +20,9 @@
 export const COMMENT_RUNNER_LABEL = 'com.soransoran.persona-comment-runner'
 
 /** 🔴 runner 는 runtime worktree 에서 돈다. 개발 작업트리를 가리키면 격리가 깨진다 */
-export const COMMENT_RUNNER_SCRIPT = 'scripts/persona-comment-runner.mts'
+export const COMMENT_RUNNER_SCRIPT = 'scripts/persona-comment-loop.mts'
+/** 🔴 예약 실행은 쓴다(`--live`). 그래도 단계가 bootstrap-auto 가 아니면 provider 0 · write 0 이다 */
+export const COMMENT_RUNNER_ARGS: readonly string[] = ['--live']
 
 /**
  * 🔴 **슬롯은 손으로 적지 않고 하루 상한에서 역산한다** (2026-09-11).
@@ -30,16 +38,21 @@ export const COMMENT_RUNNER_SCRIPT = 'scripts/persona-comment-runner.mts'
  *    이 상수는 그 결과다. 두 곳에 적으면 반드시 한쪽이 낡는다.
  */
 
-export function renderCommentRunnerPlist(input: {
-  /** runtime worktree 절대 경로 */
-  runtimeRoot: string
-  /** npx 절대 경로 */
-  npxPath: string
-  logDir: string
-}): string {
+/**
+ * 🔴 **PATH 를 준다** (2026-09-28). 옛 판은 `EnvironmentVariables` 가 없었다 —
+ *    launchd 기본 PATH 에는 nvm 의 node 가 없어 `npx` 가 **뜨기도 전에** 죽는다(발행 러너 exit 127 과 같은 모양).
+ *    값의 정본은 `runnerPathValue` 하나다 — 발행 러너 · 감사 러너와 같은 형태.
+ */
+export function renderCommentRunnerPlist(input: RunnerPlistInput): string {
   const slots = COMMENT_RUNNER_SLOTS.map((s) =>
     `        <dict><key>Hour</key><integer>${s.hour}</integer>`
     + `<key>Minute</key><integer>${s.minute}</integer></dict>`).join('\n')
+  const args = [
+    `        <string>${input.npxPath}</string>`,
+    '        <string>tsx</string>',
+    `        <string>${input.runtimeRoot}/${COMMENT_RUNNER_SCRIPT}</string>`,
+    ...COMMENT_RUNNER_ARGS.map((a) => `        <string>${a}</string>`),
+  ].join('\n')
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -47,10 +60,12 @@ export function renderCommentRunnerPlist(input: {
     <key>Label</key><string>${COMMENT_RUNNER_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${input.npxPath}</string>
-        <string>tsx</string>
-        <string>${input.runtimeRoot}/${COMMENT_RUNNER_SCRIPT}</string>
+${args}
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>${runnerPathValue(input.nodeBinDir)}</string>
+    </dict>
     <key>WorkingDirectory</key><string>${input.runtimeRoot}</string>
     <key>StartCalendarInterval</key>
     <array>
@@ -64,15 +79,18 @@ ${slots}
 `
 }
 
-/** 🔴 등록 절차를 코드가 아니라 **사람이 읽는 순서**로 남긴다 */
+/** 🔴 등록 절차를 코드가 아니라 **사람이 읽는 순서**로 남긴다 — 설치 명령은 `npm run persona:comment-loop-install` */
 export const COMMENT_RUNNER_INSTALL_STEPS: readonly string[] = [
   '① 이 PR 은 등록하지 않는다 — 아래는 별도 승인 뒤의 순서다',
-  '② 모델이 확정(winner)되고 ratio 여유가 1 이상이어야 한다',
-  '③ 사람이 승인한 Queue 후보가 있어야 한다',
-  `④ plist 를 ~/Library/LaunchAgents/${COMMENT_RUNNER_LABEL}.plist 로 쓴다`,
-  '⑤ plutil -lint 로 문법을 확인한다',
-  `⑥ launchctl load 로 올리고 launchctl print 로 실제 경로가 runtime 인지 대조한다`,
-  '⑦ npm run runtime:isolation-check -- --require-runtime 으로 격리를 확인한다',
+  '② runtime 을 이 코드가 든 SHA 로 배포한다 — npm run runtime:deploy -- --apply --target=<sha>',
+  '③ 정본 env 에 단계를 올린다 — SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto (창업자 결정)',
+  '      예산 env 는 선택이다 — 없으면 코드 기본값(하루 $0.20 · 회차 6건 · 여유 1.5)이고 하루 상한은 $0.20 을 넘지 못한다',
+  '      GEMINI_API_KEY 가 정본 env 에 있어야 한다 — 확정 모델 gemini-3.7-flash',
+  '④ 첫 회차를 사람이 본다 — (runtime 에서) npx tsx scripts/persona-comment-loop.mts   ← dry-run · provider 0 · write 0',
+  '⑤ 설치 — (runtime 에서) npm run persona:comment-loop-install -- --apply',
+  '      = render → ~/Library/LaunchAgents/com.soransoran.persona-comment-runner.plist → plutil -lint → launchctl load → print 대조',
+  '⑥ npm run runtime:isolation-check -- --require-runtime 으로 경로·인자·원문·SHA 를 대조한다',
+  '⑦ 되돌리기 — launchctl unload 후 plist 를 보관소로 옮기거나, 더 빠르게 SORAN_PERSONA_COMMENT_STAGE 를 내린다',
 ]
 
 // ─────────────────────────────────────────────────────────
@@ -86,6 +104,8 @@ import { join } from 'node:path'
 
 import { judgeJobPath, parseLaunchctlPrint } from '../../src/lib/runtime-isolation'
 import { BOOTSTRAP_DAILY_MAX } from '../../src/lib/persona-comment-bootstrap-budget'
+import { AUTO_FIRST_COMMENT_WINDOW_MINUTES } from '../../src/lib/persona-comment-auto-lane'
+import { runnerPathValue, type RunnerPlistInput } from './original-post-runner-template'
 
 export type RunnerState = {
   /** plist 파일이 그 자리에 있는가 */
@@ -207,8 +227,11 @@ export const RUNNER_WINDOW_END_HOUR = 22
  */
 export const RUNNER_WINDOW_OFFSET_MINUTES = 7
 
-/** 🔴 새 글에 첫 댓글이 붙기까지의 목표 — 단기 정본(§9.5-g)에서 온 수다 */
-export const FIRST_COMMENT_MAX_MINUTES = 60
+/**
+ * 🔴 새 글에 첫 댓글이 붙기까지의 목표 — 단기 정본(§9.5-g)에서 온 수다.
+ *    값의 정본은 무인 레인 규칙(`AUTO_FIRST_COMMENT_WINDOW_MINUTES`)이다 — 발행 트랜잭션이 그 값으로 막는다.
+ */
+export const FIRST_COMMENT_MAX_MINUTES = AUTO_FIRST_COMMENT_WINDOW_MINUTES
 
 export type RunnerSchedule = {
   /** 하루 몇 번 도는가 */

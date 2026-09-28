@@ -2,9 +2,9 @@
 /**
  * 댓글 **runner** — 🔴 기본 shadow. 공개 write 는 release 조건이 전부 맞아야만
  *
- * 🔴 이 파일은 schedule 템플릿이 가리키는 실체다.
- *    템플릿이 없는 파일을 가리키면 등록하는 순간 조용히 실패한다 —
- *    launchd 는 실행 파일이 없어도 job 을 올리고, 로그에만 오류가 남는다.
+ * 🔴 **예약 대상이 아니다** (2026-09-28 · Track B). schedule 템플릿(`com.soransoran.persona-comment-runner`)은
+ *    이제 무인 루프 `scripts/persona-comment-loop.mts` 를 가리킨다 — 후보 생성부터 발행까지 한 회차로 잇는다.
+ *    이 파일은 **사람이 승인한 행(APPROVED·EDITED)만** 내는 수동 CLI 로 남는다(`npm run persona:comment-runner`).
  *
  * 🔴 세 모드
  *    · `inspect` — 준비도만 본다

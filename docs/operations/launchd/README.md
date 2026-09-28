@@ -321,3 +321,20 @@ wgang         09:30 · 11:30 · 15:30 · 20:30 KST (4회)
 > 그 job 도 템플릿도 지금은 없다. 아래 문서에 남은 09:20/13:20 표기는 **그때의 기록**이지
 > 운영 정본이 아니다: `2026-09-08-scale-foundation.md` · `2026-09-08-d10-activation-prep.md` ·
 > `2026-09-03-raw-supply-chain-design.md`.
+
+## 무인 Persona 댓글 루프 — 설치는 선택 (2026-09-28 · Track B)
+
+🔴 **파일 템플릿이 아니다.** plist 는 `scripts/lib/persona-comment-runner-template.ts` 가 코드로 렌더한다
+(Label `com.soransoran.persona-comment-runner` · 실행 `scripts/persona-comment-loop.mts --live` ·
+하루 20회 08:07~22:00 · 회차 간격 최대 44분 ≤ 첫 댓글 시한 60분). 공급 job(`RUNTIME_JOBS`)이 아니고,
+배포 동안만 잠시 멈추는 job(`DEPLOY_QUIESCE_JOBS`)이다 — 격리 검사가 설치됐으면 원문·인자·SHA 를 대조한다.
+
+```bash
+# runtime 트리에서 — 계획만(변경 0) → 실제 설치
+npm run persona:comment-loop-install
+npm run persona:comment-loop-install -- --apply
+npm run runtime:isolation-check -- --require-runtime
+```
+
+🔴 설치해도 `SORAN_PERSONA_COMMENT_STAGE=bootstrap-auto` 가 아니면 매 회차 provider 0 · write 0 이다.
+멈추는 가장 빠른 방법은 plist 가 아니라 그 env 를 내리는 것이다.

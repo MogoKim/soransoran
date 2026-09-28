@@ -57,6 +57,8 @@ export type PublishBlockCode =
    *    코드를 캐스팅으로 밀어 넣지 않고 여기 정식으로 둔다.
    */
   | 'COMMENT_RECHECK'
+  /** 🔴 무인 레인(bootstrap-auto) 규칙이 막았다 — 60분 · 글당 1건 · 자기 글 · 단계·주체·상태 */
+  | 'AUTO_LANE'
 
 export type PublishBlock = { code: PublishBlockCode; message: string }
 
