@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs'
 import {
   artifactOutcome, baseIdOf, judgementOutcome, judgeStageBudget, readWorkset, selectWorkset,
   concludedSourceIds, attemptedOutcomes, latestOutcomes, parseInstantMs,
+  worksetAxisCaps, worksetAxisOf, worksetAxisQuota, WORKSET_RAW_SLOT_EVERY,
   OUTCOME_STATES, CONCLUDED_STATES, STAGE_RANK, WORKSET_RETRY_RESERVE, WORKSET_RETRY_STARVE_MS,
   type PriorArtifactRow, type PriorJudgementRow, type PriorOutcome,
   WORKSET_DEFAULT_LIMIT, WORKSET_KIND, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
@@ -22,7 +23,7 @@ import {
   ledgerRunIdOf, planBoundedCommonPhase, planCarryOverFill, planCommonPhase, type Pending,
 } from '../src/lib/supply-process'
 import {
-  AUTO_DECISIONS, holdBeforeAsking, mergeJudgeRows, PROVEN_LANES, SEED_AXIS,
+  AUTO_DECISIONS, holdBeforeAsking, mergeJudgeRows, PROVEN_LANES, RAW_AXIS, SEED_AXIS,
 } from '../src/lib/micro-seed-auto-judge'
 import { ARTIFACT_VERSION } from '../src/lib/content-core/artifact'
 import {
@@ -932,6 +933,171 @@ console.log('\n⑨ 🔴 버퍼가 차 있거나 고를 것이 0건이면 정상 
     /const common = workset === undefined\s*\n\s*\? \(worksetEmpty \? planCarryOverFill\(policy, carryPaths, WORKSET_LIMIT\) : \[\]\)/.test(runner)
     && planCarryOverFill({ llm: true, fill: true, upTo: 9, reason: '' }, ['/d/a.candidates.json'], 5)
       .every((p) => p.stage === 'fill' && !p.llm))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n⑩ 🔴 🔴 축별 자리 — raw 는 자리를 제한하고, 빼지는 않는다 (2026-09-28)')
+// ─────────────────────────────────────────────────────────
+/**
+ * 🔴 실측(2026-09-21~27, 39회차 195자리): raw 85자리 → 초안 0 · 채택 0.
+ *    seed 110자리 → 채택 33. 댓글 수만 보고 고르면 raw 가 자리를 먹는다.
+ *    fixture 는 **raw 의 댓글 수를 더 크게** 둔다 — 옛 규칙이면 raw 가 자리를 다 가져가는 모양이다.
+ */
+{
+  const at = (h: number): string => `2026-09-20T${String(h).padStart(2, '0')}:00:00.000Z`
+  const SEED = (id: string, c: number): WorksetRow => ROW({ sourceArticleId: id, commentCount: c, axis: SEED_AXIS })
+  const RAW = (id: string, c: number): WorksetRow => ROW({ sourceArticleId: id, commentCount: c, axis: RAW_AXIS })
+  const seeds = (n: number, base = 10): WorksetRow[] => Array.from({ length: n }, (_, i) => SEED(`s${i}`, base - i))
+  const raws = (n: number, base = 90): WorksetRow[] => Array.from({ length: n }, (_, i) => RAW(`w${i}`, base - i))
+  const axisCount = (p: ReturnType<typeof sel>) => ({
+    seed: p.picked.filter((r) => worksetAxisOf(r) === 'seed').length,
+    raw: p.picked.filter((r) => worksetAxisOf(r) === 'raw').length,
+  })
+  const ids = (p: ReturnType<typeof sel>): string => p.workset.sourceIds.join(',')
+
+  // ── 상한 → 자리 ──
+  check('🔴 fixture 가 정본 축을 탄다 — raw 행은 raw, seed 행은 seed',
+    worksetAxisOf(RAW('x', 1)) === 'raw' && worksetAxisOf(SEED('y', 1)) === 'seed'
+    && holdBeforeAsking(RAW('x', 1).input).length === 0 && holdBeforeAsking(SEED('y', 1).input).length === 0)
+  check('🔴 🔴 **상한 5 → raw 최대 1 · raw 자리 1 보장**',
+    WORKSET_RAW_SLOT_EVERY === 5
+    && JSON.stringify(worksetAxisCaps(5)) === JSON.stringify({ rawCap: 1, rawReserve: 1 }))
+  check('🔴 상한 10 → raw 최대 2 · 상한 7 → raw 최대 1 (비례)',
+    JSON.stringify(worksetAxisCaps(10)) === JSON.stringify({ rawCap: 2, rawReserve: 2 })
+    && JSON.stringify(worksetAxisCaps(7)) === JSON.stringify({ rawCap: 1, rawReserve: 1 }))
+  check('🔴 상한 1~4 → raw 최대 1 · 남기는 자리 0 (20% 를 넘기지 않는다)',
+    [1, 2, 3, 4].every((n) => JSON.stringify(worksetAxisCaps(n)) === JSON.stringify({ rawCap: 1, rawReserve: 0 })))
+  check('🔴 상한이 양의 정수가 아니면 자리 0',
+    [0, -1, 1.5, Number.NaN].every((n) => JSON.stringify(worksetAxisCaps(n)) === JSON.stringify({ rawCap: 0, rawReserve: 0 })))
+  check('🔴 🔴 **quota — seed 충분 · raw 있음 → seed 4 · raw 1**',
+    JSON.stringify(worksetAxisQuota(5, { seed: 10, raw: 10 })) === JSON.stringify({ seed: 4, raw: 1 }))
+  check('🔴 🔴 **quota — seed 2 · raw 10 → seed 2 · raw 1 (빈 자리 2 는 비운다)**',
+    JSON.stringify(worksetAxisQuota(5, { seed: 2, raw: 10 })) === JSON.stringify({ seed: 2, raw: 1 }))
+  check('🔴 quota — raw 가 없으면 seed 가 5 자리를 다 쓴다',
+    JSON.stringify(worksetAxisQuota(5, { seed: 10, raw: 0 })) === JSON.stringify({ seed: 5, raw: 0 }))
+
+  // ── 실제 선택 ──
+  {
+    const p = sel({ rows: [...raws(10), ...seeds(10)], limit: 5 })
+    check('🔴 🔴 **raw 댓글이 더 많아도 seed 4 · raw 1**',
+      axisCount(p).seed === 4 && axisCount(p).raw === 1, JSON.stringify(axisCount(p)))
+    check('🔴 🔴 **각 축 안에서는 댓글 수 순서 그대로** — seed 상위 4 · raw 상위 1',
+      ids(p) === 'w0,s0,s1,s2,s3', ids(p))
+    check('🔴 plan.axis 가 실제 고른 수와 같다',
+      p.axis.picked.seed === 4 && p.axis.picked.raw === 1
+      && p.axis.quota.seed === 4 && p.axis.quota.raw === 1
+      && p.axis.eligible.seed === 10 && p.axis.eligible.raw === 10)
+    check('🔴 고르지 않은 15건은 그대로 남는다', p.deferred === 15, `${p.deferred}`)
+  }
+  check('🔴 🔴 **raw 를 영구 제외하지 않는다 — seed 가 넘쳐도 raw 1 자리**', (() => {
+    const p = sel({ rows: [...seeds(50, 200), RAW('only-raw', 0)], limit: 5 })
+    return p.workset.sourceIds.includes('only-raw') && axisCount(p).raw === 1
+  })())
+  check('🔴 🔴 **seed 가 모자라도 raw 로 채우지 않는다 — seed 2 · raw 1 · 2 자리 빈다**', (() => {
+    const p = sel({ rows: [...seeds(2), ...raws(10)], limit: 5 })
+    return axisCount(p).seed === 2 && axisCount(p).raw === 1 && p.picked.length === 3 && p.deferred === 9
+  })())
+  check('🔴 🔴 **seed 가 0 이면 raw 1 건만** — 묶음 전체를 raw 로 채우지 않는다', (() => {
+    const p = sel({ rows: raws(10), limit: 5 })
+    return ids(p) === 'w0' && p.deferred === 9
+  })())
+  check('🔴 raw 가 없으면 seed 가 5 자리를 다 쓴다 (앞판과 같다)',
+    ids(sel({ rows: seeds(10), limit: 5 })) === 's0,s1,s2,s3,s4')
+  check('🔴 상한 10 → seed 8 · raw 2', (() => {
+    const c = axisCount(sel({ rows: [...raws(10), ...seeds(20)], limit: 10 }))
+    return c.seed === 8 && c.raw === 2
+  })())
+  check('🔴 상한 3 · seed 충분 → seed 3 · raw 0 (작은 상한은 raw 자리를 남기지 않는다)', (() => {
+    const c = axisCount(sel({ rows: [...raws(10), ...seeds(10)], limit: 3 }))
+    return c.seed === 3 && c.raw === 0
+  })())
+  check('🔴 🔴 **상한 1 · seed 0 → raw 1 건 (작은 상한에서도 raw 가 빠지지 않는다)**',
+    ids(sel({ rows: raws(3), limit: 1 })) === 'w0')
+  check('🔴 상한 3 · seed 1 → seed 1 · raw 1 (나머지 1 자리는 빈다)', (() => {
+    const c = axisCount(sel({ rows: [...raws(10), ...seeds(1)], limit: 3 }))
+    return c.seed === 1 && c.raw === 1
+  })())
+
+  // ── 신규/재시도 자리가 축 자리 안에서 그대로인가 ──
+  {
+    const rows = [...seeds(10, 90), SEED('rs1', 1), SEED('rs2', 1), SEED('rs3', 1), ...raws(5, 200)]
+    const p = sel({ rows, attempted: { rs1: at(5), rs2: at(2), rs3: at(9) }, limit: 5 })
+    check('🔴 🔴 **재시도 자리 1 이 유지된다 — 신규 seed 가 축 자리를 먼저 채워도**',
+      ids(p) === 'w0,s0,s1,s2,rs2', ids(p))
+  }
+  {
+    const rows = [...seeds(10, 90), RAW('rw1', 1), RAW('rw2', 1)]
+    const p = sel({ rows, attempted: { rw1: at(5), rw2: at(2) }, limit: 5 })
+    check('🔴 🔴 **재시도가 raw 뿐이면 그 raw 재시도가 raw 자리로 들어온다** — 오래 기다린 것',
+      ids(p) === 's0,s1,s2,s3,rw2', ids(p))
+  }
+  {
+    const rows = [SEED('n0', 90), SEED('r1', 1), SEED('r2', 1), SEED('r3', 1), SEED('r4', 1), ...raws(3)]
+    const p = sel({ rows, attempted: { r1: at(4), r2: at(1), r3: at(3), r4: at(2) }, limit: 5 })
+    check('🔴 🔴 **신규가 모자라면 재시도가 채운다 — 오래 기다린 순서로 · 축 자리 안에서**',
+      ids(p) === 'n0,w0,r2,r4,r3', ids(p))
+  }
+  {
+    // 🔴 raw 재시도가 가장 오래 기다렸어도 raw 자리를 신규 raw 가 이미 쓰면 들어오지 못한다 — 대신 seed 재시도가 자리를 받는다
+    const rows = [...seeds(10, 90), SEED('rs', 1), RAW('rw', 1), ...raws(2, 300)]
+    const p = sel({ rows, attempted: { rw: at(1), rs: at(3) }, limit: 5 })
+    const c = axisCount(p)
+    check('🔴 raw 자리는 1 을 넘지 않는다 — 재시도라도',
+      c.raw === 1 && c.seed === 4 && p.workset.sourceIds.some((x) => x === 'rs' || x === 'rw'), ids(p))
+  }
+  // ── 상한 1 · 기다린 시간 규칙이 축 자리와 함께 그대로 ──
+  {
+    const rows = [SEED('n0', 90), SEED('r1', 10)]
+    check('🔴 🔴 **상한 1 · 오래 기다린 seed 재시도가 그 자리를 가져간다 (앞판 규칙 유지)**',
+      ids(sel({ rows, attempted: { r1: at(10) }, limit: 1,
+        takenAt: new Date(Date.parse(at(10)) + WORKSET_RETRY_STARVE_MS) })) === 'r1'
+      && ids(sel({ rows, attempted: { r1: at(10) }, limit: 1, takenAt: new Date('2026-09-20T11:00:00.000Z') })) === 'n0')
+  }
+
+  // ── 🔴 원천이 전부 seed 이면 앞판과 **값이 같다** — 축 자리가 다른 규칙을 몰래 바꾸지 않는다 ──
+  {
+    /** 🔴 2026-09-27 판(`720fc98`)의 신규/재시도 나눔을 그대로 적은 기준 — 비교용이다 */
+    const reference = (rows: readonly WorksetRow[], attempted: ReadonlyMap<string, PriorOutcome>, limit: number, takenAt: Date): string => {
+      const byWeight = (a: WorksetRow, b: WorksetRow): number =>
+        b.commentCount - a.commentCount
+        || (b.sourcePostedAt || b.sourceListedAt).localeCompare(a.sourcePostedAt || a.sourceListedAt)
+        || a.sourceArticleId.localeCompare(b.sourceArticleId)
+      const fresh = rows.filter((r) => !attempted.has(r.sourceArticleId)).sort(byWeight)
+      const retry = rows.filter((r) => attempted.has(r.sourceArticleId))
+        .sort((a, b) => (attempted.get(a.sourceArticleId)?.atMs ?? 0) - (attempted.get(b.sourceArticleId)?.atMs ?? 0) || byWeight(a, b))
+      const waited = retry.length === 0 ? 0 : takenAt.getTime() - (attempted.get(retry[0]!.sourceArticleId)?.atMs ?? 0)
+      const reserve = retry.length === 0 ? 0 : limit >= 2 ? 1 : waited >= WORKSET_RETRY_STARVE_MS ? limit : 0
+      const f = fresh.slice(0, Math.max(0, limit - reserve))
+      const r = retry.slice(0, Math.max(0, limit - f.length))
+      return [...f, ...r].map((x) => x.sourceArticleId).join(',')
+    }
+    let seed = 20260928
+    const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
+    let same = 0
+    let firstDiff = ''
+    const CASES = 300
+    for (let k = 0; k < CASES; k += 1) {
+      const n = 1 + rnd(12)
+      const rows = Array.from({ length: n }, (_, i) =>
+        ROW({ sourceArticleId: `c${k}-${i}`, commentCount: rnd(6), sourcePostedAt: `2026-09-${String(10 + rnd(9))}T00:00:00Z` }))
+      const att: Record<string, string> = {}
+      for (const r of rows) if (rnd(3) === 0) att[r.sourceArticleId] = at(1 + rnd(20))
+      const limit = 1 + rnd(8)
+      const takenAt = new Date(`2026-09-2${String(rnd(2))}T0${String(rnd(9))}:00:00.000Z`)
+      const got = ids(sel({ rows, attempted: att, limit, takenAt }))
+      const want = reference(rows, attemptedMap(att), limit, takenAt)
+      if (got === want) same += 1
+      else if (firstDiff === '') firstDiff = `case ${k}: ${got} ≠ ${want}`
+    }
+    check(`🔴 🔴 **seed 만 있는 무작위 ${CASES} 경우 — 앞판과 선택·순서가 모두 같다**`, same === CASES, `${same}/${CASES} ${firstDiff}`)
+  }
+
+  // ── 러너가 이 결과를 쓰는가 — 실행 증명은 `supply:draft-deferral-e2e-db-check` ⑤ 가 한다 ──
+  {
+    const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+    check('🔴 러너가 축별 자리를 로그에 적는다 (정본 plan.axis)',
+      /plan\.axis\.quota\.seed/.test(runner) && /plan\.axis\.quota\.raw/.test(runner) && /worksetAxisOf\(r\)/.test(runner))
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} pass · ${fail} fail`)
