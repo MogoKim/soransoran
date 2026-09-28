@@ -4,10 +4,10 @@
  *   이 파일은 **순서만** 정의한다: 읽고 · 없으면 계산하고 · 넣고 · 충돌이면 다시 읽는다.
  *   Prisma 는 `stage-decision-repo` 가 끼워 넣고, 검증은 `stage-decision-contract` 가 한다.
  *
- * 🔴 **지금 상태** — schema·migration(`0028_stage_decision`)·adapter 는 **있다.**
- *    격리 DB 에서 검증까지 마쳤다. 다만 **운영에는 적용하지 않았고**
- *    controller job·supply·publish 배선과 `STAGE_CONTROLLER_ENABLED` ON 은
- *    승인되지 않았다. 지금 이 경로를 부르는 production 파일은 **0개**다.
+ * 🔴 **지금 상태** (2026-09-28 read-only 확인) — 운영 DB 에 `StageDecision` 표가 **있고 행은 0** 이다.
+ *    controller(`scripts/stage-controller.mts`) · consumer 감싸기(`scripts/stage-consume-exec.mts`)가
+ *    이 순서를 부른다. 🔴 `STAGE_CONTROLLER_ENABLED` 는 정본 env 에 없다(꺼짐) — 켜기 전까지
+ *    controller 는 저장하지 않고 consumer 는 legacy 로 그대로 통과한다.
  *
  * 🔴 **왜 저장이 필요한가.** 공급(로컬 launchd)과 발행(GitHub Actions)은 서로 다른
  *    env 원천을 읽는다. 2026-09-24 에 canonical d3 · GitHub d5 로 갈려 하루가 갔다.

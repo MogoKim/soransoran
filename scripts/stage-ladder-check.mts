@@ -1330,12 +1330,21 @@ console.log('\n㉒ 🔴 🔴 저장 adapter 는 create/read 뿐이다 · flag �
       && !/ALTER TABLE/.test(sql) && !/DROP /.test(sql) && !/TRUNCATE/.test(sql)
   })())
 
-  /** 🔴 **아직 아무도 부르지 않는다** — 배선은 승인되지 않았다 */
-  check('🔴 🔴 **controller job·supply·publish 가 adapter 를 부르지 않는다**', (() => {
+  /**
+   * 🔴 **adapter 를 부르는 곳은 정해진 셋뿐이다** (2026-09-28 운영 루프 배선).
+   *    controller(쓰기 — `ensureStageDecision` 경유) · consumer 감싸기(읽기) · 운영 화면(읽기).
+   *    🔴 발행·공급 **러너 파일은 여전히 부르지 않는다** — 러너는 consumer 가 넣어 준 env 만 본다.
+   *    목록 밖에서 import 가 생기면 빨개진다(두 번째 writer 를 막는다).
+   */
+  const ADAPTER_CALLERS = [
+    'scripts/stage-controller.mts', 'scripts/stage-consume-exec.mts', 'scripts/ops-status.mts',
+  ]
+  check('🔴 🔴 **adapter 호출은 controller·consumer·운영 화면 셋뿐 — 발행·공급 러너는 부르지 않는다**', (() => {
     // 🔴 주석에서 이름을 부르는 것은 배선이 아니다 — **실제 import 문**만 본다
     const wired = PRODUCTION_FILES.filter((f) => f !== REPO
       && /^\s*import[^\n]*['"][^'"]*stage-decision-repo[^'"]*['"]/m.test(readFileSync(f, 'utf-8')))
-    return wired.length === 0
+    return wired.every((f) => ADAPTER_CALLERS.includes(f))
+      && !wired.some((f) => /original-post-auto-publish|supply-process\.mts/.test(f))
   })(), '')
   check('🔴 🔴 **feature flag 기본값이 꺼짐이다 — 켜야만 켜진다**',
     !controllerEnabled({}) && !controllerEnabled({ [CONTROLLER_ENV]: '' })
