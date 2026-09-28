@@ -7,7 +7,7 @@ import {
 } from '../src/lib/persona-comment-bootstrap-budget'
 import { PERSONA_COMMENTS_PER_POST_MAX } from '../src/lib/persona-target-rules'
 import {
-  planRunnerSchedule, FIRST_COMMENT_MAX_MINUTES,
+  planCommentLoopSchedule, FIRST_COMMENT_MAX_MINUTES,
   RUNNER_WINDOW_START_HOUR, RUNNER_WINDOW_END_HOUR,
 } from './lib/persona-comment-runner-template'
 import { COMMENT_STAGES } from '../src/lib/persona-comment-stage'
@@ -791,7 +791,7 @@ check('🔴 다른 Gate 실패는 그대로 막는다고 적는다',
   master.includes('① 유출이 `reject` 면 Gate 재검사에서 그대로 막힌다'))
 /** 🔴 schedule 실측을 문서가 그대로 적는다 */
 {
-  const plan = planRunnerSchedule(BOOTSTRAP_DAILY_MAX)
+  const plan = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX)
   check('🔴 슬롯 수·간격·야간 공백을 실제 계산과 같이 적는다',
     master.includes(`회차당 25건 × **${plan.runs}회**`)
     && master.includes(`회차 간격 최대 ${plan.maxGapMinutes}분`)
@@ -828,7 +828,7 @@ check('🔴 글 100/day 확장은 별도 승인 대상이라고 적는다',
  *    문자열을 세지 않고 **실제 슬롯과 실제 댓글 회차**를 대조한다.
  */
 {
-  const commentMins = planRunnerSchedule(BOOTSTRAP_DAILY_MAX).slots
+  const commentMins = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX).slots
     .map(minuteOfDay).sort((a, b) => a - b)
   const winStart = RUNNER_WINDOW_START_HOUR * 60
   const winEnd = RUNNER_WINDOW_END_HOUR * 60

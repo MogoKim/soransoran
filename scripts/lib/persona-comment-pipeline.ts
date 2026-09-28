@@ -176,7 +176,14 @@ export async function runEnqueuePipeline(args: {
       isBootstrap: g.isBootstrap,
       modelConfirmed: true,
     })
-    if (!plan.ok) { at('ENQUEUE_BLOCKED', plan.summary, plan); continue }
+    if (!plan.ok) {
+      // 🔴 어느 관문이 막았는지 **코드로만** 남긴다 — 댓글 본문 · detail 은 싣지 않는다.
+      //    (2026-09-28) 요약 한 줄만 남아 무엇이 막았는지 아무 기록에도 없었다
+      const failed = plan.gates.filter((x) => x.outcome !== 'pass').map((x) => `${x.gate}:${x.outcome}`)
+      const codes = plan.blocks.map((b) => b.code)
+      at('ENQUEUE_BLOCKED', `${plan.summary} · 막힘 [${codes.join(',')}] · 관문 [${failed.join(',')}]`, plan)
+      continue
+    }
 
     if (args.writer === undefined) {
       // 🔴 dry-run — 여기까지 판정하고 멈춘다. DB write 0

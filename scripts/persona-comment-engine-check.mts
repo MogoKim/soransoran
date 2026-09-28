@@ -51,7 +51,7 @@ import { FIRST_COMMENT_MAX_MINUTES } from './lib/persona-comment-runner-template
 import {
   readCommentStage, stagePowers, COMMENT_STAGES, COMMENT_STAGE_ENV,
 } from '../src/lib/persona-comment-stage'
-import { planRunnerSchedule } from './lib/persona-comment-runner-template'
+import { planRunnerSchedule, planCommentLoopSchedule, FIRST_COMMENT_ATTEMPTS, COMMENT_RUNNER_MAX_GAP_MINUTES } from './lib/persona-comment-runner-template'
 
 const mkdirDeep = (dir: string): void => { mkdirSync(dir, { recursive: true }) }
 
@@ -2953,7 +2953,7 @@ console.log('㉘ runner schedule 템플릿 — 만들되 올리지 않는다')
    *    schedule 만으로 이미 25/day 가 천장이었고, 500/day 목표와 정면으로 어긋났다.
    */
   check('🔴 슬롯이 하루 상한에서 역산한 값이다',
-    COMMENT_RUNNER_SLOTS.length === planRunnerSchedule(BOOTSTRAP_DAILY_MAX).runs)
+    COMMENT_RUNNER_SLOTS.length === planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX).runs)
   check('🔴 plist 가 그 슬롯을 전부 적는다',
     COMMENT_RUNNER_SLOTS.every((sl) =>
       plist.includes(`<key>Hour</key><integer>${sl.hour}</integer>`
@@ -4965,13 +4965,19 @@ console.log('㊺ bootstrap 단계 — 아무도 없을 때 먼저 말을 건다'
       plan.runs === runs && plan.capacity >= target && plan.slots.length === runs)
   }
   {
-    const plan = planRunnerSchedule(BOOTSTRAP_DAILY_MAX)
+    const plan = planCommentLoopSchedule(BOOTSTRAP_DAILY_MAX)
     check('🟢 500/day schedule 의 회차 간격이 60분 계약 안이다',
       plan.maxGapMinutes !== null && plan.maxGapMinutes <= FIRST_COMMENT_MAX_MINUTES)
     check('🔴 야간 공백은 사실대로 낸다 — 0 이라고 말하지 않는다',
       plan.nightGapMinutes > 0)
     check('🔴 회차가 1회면 간격은 0 이 아니라 null 이다',
       planRunnerSchedule(1).maxGapMinutes === null)
+    check(`🔴 한 글이 시한 안에 ${FIRST_COMMENT_ATTEMPTS}번 시도를 받는다 — 간격 ≤ ${COMMENT_RUNNER_MAX_GAP_MINUTES}분`,
+      plan.maxGapMinutes !== null && plan.maxGapMinutes <= COMMENT_RUNNER_MAX_GAP_MINUTES
+      && COMMENT_RUNNER_MAX_GAP_MINUTES * FIRST_COMMENT_ATTEMPTS <= FIRST_COMMENT_MAX_MINUTES)
+    check('🔴 재시도 바닥은 용량 역산을 줄이지 않는다',
+      plan.runs >= planRunnerSchedule(BOOTSTRAP_DAILY_MAX).runs
+      && planCommentLoopSchedule(0).runs === 0)
     check('🔴 template 슬롯은 하루 상한에서 역산한 값이다 — 손으로 적지 않는다',
       COMMENT_RUNNER_SLOTS.length === plan.runs
       && COMMENT_RUNNER_SLOTS.every((sl, i) =>
