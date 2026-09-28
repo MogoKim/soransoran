@@ -119,6 +119,13 @@ export function prepareCandidates(input: {
   caps?: BatchCaps
   /** 🔴 기준 시각. 러너는 지금, 예측은 그 날 */
   at: Date
+  /**
+   * 🔴 **발행 lane 공정성** (2026-09-28 마스터 정책) — 참이면 이번 회차에 앞세울 lane 의 행이다.
+   *    신선도 순서 안에서 **복구 행 → 앞세울 lane → 나머지 lane** 으로 안정 분할한다(각 묶음 안 순서 불변).
+   *    배정 우선권(`priorityOf`)도 이 순서라 앞세운 lane 이 Persona 자리를 먼저 얻는다.
+   *    🔴 주지 않으면 기존 동작 그대로다. 발행 권한(슬롯 · 상한 · 트랜잭션)은 바꾸지 않는다.
+   */
+  preferLane?: (queueId: string) => boolean
 }): PreparedCandidates {
   const caps = input.caps ?? {}
   const at = input.at
@@ -165,7 +172,13 @@ export function prepareCandidates(input: {
     fitScore: scoreFrom(probe, c.queueId),
     seq: i,
   }))
-  const ordered = orderForPublish(withFit).ordered
+  const fresh = orderForPublish(withFit).ordered
+  const pref = input.preferLane
+  const ordered = pref === undefined ? fresh : [
+    ...fresh.filter((c) => c.isRecovery),
+    ...fresh.filter((c) => !c.isRecovery && pref(c.queueId)),
+    ...fresh.filter((c) => !c.isRecovery && !pref(c.queueId)),
+  ]
   const rank = new Map(ordered.map((c, i) => [c.queueId, i]))
 
   // ── ④ 우선권을 반영한 최대 매칭 ──

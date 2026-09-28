@@ -45,9 +45,37 @@ import { AUTO_DECIDER } from '../../src/lib/auto-ready-v2'
 import { isCurrentQualityContract } from '../../src/lib/quality-contract'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
+export type PublishLane = 'auto' | 'human'
+/** 🔴 발행 lane — 자동 도장 행(`auto-ready:v1`)은 auto, 그 밖(사람 결정)은 human */
+export const laneOf = (decidedBy: string | null): PublishLane =>
+  (decidedBy ?? '').trim() === AUTO_DECIDER ? 'auto' : 'human'
+
+/**
+ * 🔴 **이번 회차에 앞세울 lane** (2026-09-28 마스터 정책 · 순수). 두 lane 이 모두 대기 중일 때만 고른다.
+ *    · 발행 이력이 없는 lane 이 먼저다 — 둘 다 없으면 auto(첫 자동 행 우선)
+ *    · 둘 다 있으면 **가장 최근에 발행되지 않은**(마지막 발행이 더 오래된) lane
+ *    d1 에서는 날마다, d3 이상에서는 슬롯마다 번갈아 나간다 — 한 번 나가면 그 lane 이 최근이 되기 때문이다.
+ *    🔴 한 lane 만 대기 중이면 `null`(기존 순서 그대로). 상한 · 슬롯 · 트랜잭션은 이 값과 무관하다.
+ */
+export function preferredLane(input: {
+  waiting: ReadonlySet<PublishLane>
+  lastPublishedAt: { auto: Date | null; human: Date | null }
+}): PublishLane | null {
+  if (!input.waiting.has('auto') || !input.waiting.has('human')) return null
+  const { auto, human } = input.lastPublishedAt
+  if (auto === null) return 'auto'
+  if (human === null) return 'human'
+  return auto.getTime() <= human.getTime() ? 'auto' : 'human'
+}
+
 export type LoadedStock = {
   /** 대기열 전체 (APPROVED·EDITED · 미발행) */
   queueTotal: number
+  /**
+   * 🔴 (2026-09-28) lane 별 마지막 발행 시각 — Post 생성 시각 기준. 없으면 `null`(이력 0).
+   *    fixture 가 주지 않으면 둘 다 이력 0 으로 본다.
+   */
+  laneLastPublishedAt?: { auto: Date | null; human: Date | null }
   /** 🔴 `selectAutoTargets` 를 통과한 자동 발행 후보 */
   targets: AutoRow[]
   /** 🔴 정본 `selectAutoTargets` 가 낸 제외 목록 그대로 — 러너가 그대로 소비한다 */
@@ -163,6 +191,20 @@ export async function loadPublishableStock(
 
   const capturedAtOf = new Map(raw.map((r) => [r.id, r.rawContent?.sourceCapturedAt ?? null]))
 
+  /** 🔴 lane 별 마지막 발행 — 발행된 큐 행의 Post 생성 시각. 읽기만 한다 */
+  const publishedRows = await prisma.originalPostApprovalQueue.findMany({
+    where: { createdPostId: { not: null } },
+    select: { decidedBy: true, createdPost: { select: { createdAt: true } } },
+  })
+  const laneLastPublishedAt: { auto: Date | null; human: Date | null } = { auto: null, human: null }
+  for (const p of publishedRows) {
+    const at = p.createdPost?.createdAt ?? null
+    if (at === null) continue
+    const l = laneOf(p.decidedBy)
+    const cur = laneLastPublishedAt[l]
+    if (cur === null || at.getTime() > cur.getTime()) laneLastPublishedAt[l] = at
+  }
+
   const personaRows = await prisma.persona.findMany({
     where: { status: 'active' }, select: PERSONA_FOR_MATCH_SELECT,
   })
@@ -212,7 +254,7 @@ export async function loadPublishableStock(
   return {
     queueTotal: rows.length, targets, rejected, rejectedByCode, queueCandidates,
     machineDecided, machineProfiled, humanReviewed, personas, history, publishedToday,
-    codeOfPersonaId, allRows: rows, capturedAtOf, pinnedAutoPersona,
+    codeOfPersonaId, allRows: rows, capturedAtOf, pinnedAutoPersona, laneLastPublishedAt,
   }
 }
 
@@ -469,9 +511,16 @@ export function planPublishBatch(input: {
   }
   const blocked = new Set([...autoDeferred, ...autoExceptions].map((x) => x.id))
   const targets = loaded.targets.filter((t) => !blocked.has(t.id))
+  /** 🔴 lane 공정성 — 두 lane 이 모두 대기 중이면 가장 최근에 발행되지 않은 lane 을 앞세운다 */
+  const laneById = new Map(targets.map((t) => [t.id, laneOf(t.decidedBy)]))
+  const lane = preferredLane({
+    waiting: new Set(targets.map((t) => laneById.get(t.id)!)),
+    lastPublishedAt: loaded.laneLastPublishedAt ?? { auto: null, human: null },
+  })
   const prepared = prepareCandidates({
     candidates: loaded.queueCandidates.filter((c) => !blocked.has(c.queueId)), personas: loaded.personas as never,
     caps: input.caps, at: input.at,
+    ...(lane === null ? {} : { preferLane: (id: string) => laneById.get(id) === lane }),
   })
   const assignOf = new Map(prepared.batch.assignments.map((a) => [a.queueId, a]))
   const orderById = new Map(prepared.auto.map((c, i) => [c.queueId, i]))
