@@ -196,6 +196,19 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   하나뿐이다 — 지우지 않고 고유 이름으로 보존한 뒤 잠금 안에서 새로 계산한다. 그날 이미 한 후속 작업은 회차를
 >   막지 않고 slug 별로 다룬다(전송불명·깨진 증거는 그 slug 만 HOLD · draft/hero 는 재사용). 모르는 판은 fail-closed
 >   — producer 는 exit 3 이고, 회수·등록도 큐 전체로 되돌아가지 않는다(2026-09-28 배포 당일 공급 0 사고).
+> - 🔴 **응답 회수는 "전송 뒤 새로 생긴 assistant 응답 하나" 만 읽는다** (`chatgpt-response.mjs`).
+>   전송 전 대화 상태를 기준선으로 적고, 새 응답이 정확히 하나 · 생성 중 표시 없음 · 턴 수준 완료 액션 있음 ·
+>   원문이 연속 관찰에서 같을 때만 끝난 것으로 본다. 코드블록(`<pre>` 없는 새 DOM 포함)과 일반 마크다운 응답을 둘 다
+>   읽고, 원고 관문(frontmatter·H2·CTA)은 그대로다. 새 응답이 둘 이상·식별자 없음·기준선 소실은
+>   `response_ambiguous`, 끝나지 않으면 `response_timeout` — 둘 다 저장 0 · 전송불명 HOLD 다. 시간을 늘려 풀지 않는다.
+>   (2026-09-28: 옛 판은 `pre code` 만 봐서 원고가 다 왔는데도 회수 4/5 · 재생성 4/4 가 timeout 으로 끝났다.)
+> - 🔴 **등록 경로는 회수 결과를 자식의 구조화 결과 파일(`--result-json`)로만 분류한다** — stdout 을 파싱하지 않는다.
+>   HOLD·보낸 뒤 timeout 은 DELIVERY_UNCERTAIN(attempts +0 · 7일 격리 0 · 재전송 0). 결과 파일이 없거나 깨졌으면
+>   CONTENT 로 추정하지 않고 `FETCH_RESULT_MISSING`(전송 모름 · 재전송 0)으로 멈춘다.
+>   (2026-09-28: stdout HOLD 문장이 CONTENT 로 분류돼 4건이 attempts +1 · 7일 격리 — 장부 대조 뒤 증가분만 되돌렸다.
+>   감사 기록: `incident-2026-09-28-supply-zero/ledger-repair-*/`.)
+> - 🔴 **자동 병합의 CI 관찰 한도는 20분이다** — 필수 검사 실측 13분 남짓보다 길다. 명시적 실패는 즉시 멈추고,
+>   누락·진행 중은 20분까지 본 뒤 `CI_OBSERVE_TIMEOUT`. PR head SHA 의 검사만 센다.
 > - 🔴 **재생성 패킷은 `regen-packet/3` · `slug.<attemptId>.json`** — attemptId 는 필수 UUID 이고 파일
 >   이름과 본문이 같아야 한다. 시도마다 자기 파일만 쓰고, 자기 파일만 읽히고, 자기 파일만 지운다.
 > - 🔴 **CLI 시험의 브라우저·spawn 주입은 `SORAN_MAGAZINE_TEST_MODE=1` 에서만** 열린다

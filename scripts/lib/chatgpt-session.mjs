@@ -29,6 +29,13 @@ import { existsSync, lstatSync, readlinkSync, mkdirSync, chmodSync, writeFileSyn
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { deliveryFingerprintOf } from './magazine-quarantine.mjs'
+import { readConversationDom, createResponseWatch } from './chatgpt-response.mjs'
+
+/** 🔴 응답 관찰 — 간격 2초 · 연속 3번 같으면 안정 (전체 한도는 `timeoutMs` 그대로) */
+export const RESPONSE_POLL_MS = 2000
+export const RESPONSE_STABLE_POLLS = 3
+/** 대화 주소만 남긴다 — 경로(`/c/<id>`) 외 쿼리·해시는 버린다 */
+const safeUrl = (page) => { try { const u = new URL(page.url()); return u.origin + u.pathname } catch { return null } }
 import {
   AUTOMATION_PROFILE_DIR, AUTOMATION_CDP_PORT, judgeAutomationProfile, readMarker,
   listChromeCommandLines, MISMATCH,
@@ -842,6 +849,12 @@ export async function fetchManuscript({
    *    갈라진 날 지문이 달라져 **막아야 할 것을 못 막는다.** 주면 그대로 보낸다.
    */
   message: plannedMessage = null,
+  /**
+   * 🔴 응답 관찰 간격과 "안정됐다" 로 볼 연속 동일 관찰 수. 전체 한도(`timeoutMs`)는 그대로다 —
+   *    시간을 늘려 해결하지 않는다. 시험은 짧은 값을 준다.
+   */
+  pollMs = RESPONSE_POLL_MS,
+  stablePolls = RESPONSE_STABLE_POLLS,
 }) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
@@ -923,6 +936,17 @@ export async function fetchManuscript({
      *    누르기 **전에** 적는다. 적지 못하면 **한 글자도 보내지 않는다** —
      *    기억할 수 없는 전송은 하지 않는 편이 낫다.
      */
+    /**
+     * 🔴 **전송 전 기준선** (2026-09-28 · 응답 회수 재설계).
+     *    지금 화면에 있는 assistant 응답을 적어 둔다. 전송 뒤에는 **여기 없던 응답 하나만** 원고 후보다.
+     *    기준선을 못 읽으면 새 응답을 가릴 수 없다 — **보내지 않는다** (예약 전이라 장부도 그대로다).
+     */
+    const baseline = await page.evaluate(readConversationDom).catch(() => null)
+    if (!baseline?.readOk) {
+      return { ok: false, reason: 'response_baseline_unreadable', stage, sent: false, messageFingerprint,
+        errorDetail: '전송 전 대화 상태를 읽지 못했다 (한 글자도 보내지 않았다)' }
+    }
+
     if (onBeforeSend) {
       const pre = await onBeforeSend({ messageFingerprint, stage: 'send' })
       if (!pre?.ok) {
@@ -954,25 +978,32 @@ export async function fetchManuscript({
 
     // ── 완료 대기 ──
     stage = 'await-response'
-    // 판정은 텍스트가 아니라 불리언이다 — 길이 · 코드블록 · frontmatter 시작 · [CTA]
-    try {
-      await page.waitForFunction(() => {
-        if (document.querySelector('[data-testid="stop-button"]')) return false
-        const codes = [...document.querySelectorAll('pre code')]
-        if (!codes.length) return false
-        const t = codes[codes.length - 1].textContent || ''
-        return t.length > 900 && t.includes('[CTA]') && t.trimStart().startsWith('---')
-      }, null, { timeout: timeoutMs, polling: 3000 })
-    } catch {
-      // 🔴 닫기는 finally 가 한다 — 여기서 닫으면 뒤 경로가 닫힌 page 를 만진다
-      return { ok: false, reason: 'response_timeout', stage, sent, messageFingerprint, preRecorded }
+    /**
+     * 🔴 **새로 생긴 assistant 응답 하나 · 생성 끝 · 내용 안정** 일 때만 읽는다 (chatgpt-response.mjs).
+     *    `pre code`·`data-message-author-role` 를 전제로 하지 않는다 — 2026-09-28 에 둘 다 사라졌다.
+     *    판정 불가면 저장하지 않는다. 보낸 뒤이므로 결말은 전송불명(DELIVERY_UNCERTAIN)이다.
+     */
+    const watch = createResponseWatch(baseline, { stablePolls })
+    const deadline = Date.now() + timeoutMs
+    let seen = null
+    let text = null
+    for (;;) {
+      const snap = await page.evaluate(readConversationDom).catch(() => null)
+      const o = watch.observe(snap ?? { readOk: false, stop: false, units: [] })
+      if (o.done) { text = o.text; seen = o; break }
+      if (o.abort) {
+        return { ok: false, reason: o.code, stage, sent, messageFingerprint, preRecorded,
+          conversationUrl: safeUrl(page), errorDetail: `${o.why} — 저장하지 않았다` }
+      }
+      seen = o
+      if (Date.now() >= deadline) {
+        // 🔴 닫기는 finally 가 한다 — 여기서 닫으면 뒤 경로가 닫힌 page 를 만진다
+        return { ok: false, reason: 'response_timeout', stage, sent, messageFingerprint, preRecorded,
+          conversationUrl: safeUrl(page),
+          errorDetail: `응답이 끝나지 않았다 (${seen?.phase ?? '-'}${seen?.partial ? ` · 부분 ${seen.partial}자` : ''}) — 저장하지 않았다` }
+      }
+      await page.waitForTimeout(pollMs)
     }
-
-    // ③ pre code 의 textContent — 렌더된 <hr>/<h2> 가 아니라 원본 표기가 그대로 있다
-    const text = await page.evaluate(() => {
-      const codes = [...document.querySelectorAll('pre code')]
-      return codes[codes.length - 1].textContent || ''
-    })
 
     // 지정 문장이 빠졌으면 저장하지 않는다 — 원고를 고치지 않고 되돌린다
     const missing = requiredMarkers.filter((m) => !text.includes(m))
@@ -986,7 +1017,8 @@ export async function fetchManuscript({
 
     // 🔴 여기서 처음이자 마지막으로 원고가 디스크에 닿는다. 문자열을 손대지 않는다
     writeFileSync(outPath, text)
-    return { ok: true, length: text.length, sent, messageFingerprint, preRecorded }
+    return { ok: true, length: text.length, sent, messageFingerprint, preRecorded, via: seen?.via ?? null,
+      conversationUrl: safeUrl(page) }
   } catch (err) {
     /**
      * 🔴 **`connect_failed` 한 단어로 삼키지 않는다** (2026-09-27 사고).
