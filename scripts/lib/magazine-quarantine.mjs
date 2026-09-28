@@ -42,7 +42,7 @@ export const QUARANTINE_PATH = join(
  *    실측한 두 건은 **구조적 실패**였다 — 제목 형태·1인칭·description 길이는
  *    다시 돌린다고 달라지지 않는다. 한 번 더 확인하고 빼는 것으로 충분하다.
  */
-import { classifyFailure, consumesAttempt, cooldownFor } from './magazine-failure-kind.mjs'
+import { classifyFailure, consumesAttempt, cooldownFor, sentOf, normalizeSent } from './magazine-failure-kind.mjs'
 
 export const MAX_ATTEMPTS = 2
 
@@ -151,11 +151,13 @@ export function entryKind(entry) {
   if (!entry) return 'CONTENT'
   if (entry.kind) return entry.kind
   const text = (entry.reasons ?? []).join(' | ')
-  return classifyFailure({ message: text, sent: Boolean(entry.sent) }).kind
+  return classifyFailure({ message: text, sent: sentOf(entry) }).kind
 }
 
 /** 실패를 한 번 센 뒤의 새 기록. **기존 객체를 고치지 않는다** */
 export function recordFailure({ entry, fingerprint = null, now, reasons = [], kind = null, sent = false }) {
+  // 🔴 모름(null)을 false 로 굳히지 않는다 — 굳히면 다시 보낸다
+  const sentValue = normalizeSent(sent)
   const prev = entry && Number.isFinite(entry.attempts) ? entry : { attempts: 0 }
   // 🔴 원고가 바뀌었으면 횟수를 처음부터 센다 — 고친 원고에 옛 실패를 얹지 않는다
   const changed = fingerprint && prev.fingerprint && fingerprint !== prev.fingerprint
@@ -163,11 +165,11 @@ export function recordFailure({ entry, fingerprint = null, now, reasons = [], ki
    * 🔴 **인프라 실패는 attempts 를 올리지 않는다.** 원고가 틀린 횟수를 세는 칸이기 때문이다.
    *    대신 종류와 시각을 남겨 backoff 가 그것을 읽게 한다.
    */
-  const resolved = kind ?? classifyFailure({ message: reasons.join(' | '), sent }).kind
+  const resolved = kind ?? classifyFailure({ message: reasons.join(' | '), sent: sentValue }).kind
   const bump = consumesAttempt(resolved) ? 1 : 0
   return {
     kind: resolved,
-    sent: Boolean(sent),
+    sent: sentValue,
     attempts: (changed ? 0 : prev.attempts) + bump,
     lastAt: now,
     fingerprint,

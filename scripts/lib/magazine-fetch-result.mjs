@@ -19,6 +19,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { normalizeSent, classifyFailure } from './magazine-failure-kind.mjs'
+import { readRunTargets } from './magazine-run-targets.mjs'
 
 export const RESULT_SCHEMA_VERSION = 1
 
@@ -49,8 +51,8 @@ export function normalizeFetchResult(r = {}) {
     status: r.status ?? (r.ok === true ? 'ok' : 'failed'),
     reason: r.reason ?? null,
     stage: r.stage ?? null,
-    // 🔴 `Boolean()` 으로 굳힌다. `undefined` 를 그대로 두면 JSON 에서 키가 사라진다.
-    sent: Boolean(r.sent),
+    // 🔴 세 값을 그대로 적는다. `Boolean()` 은 모름(null)을 "안 보냄" 으로 바꾼다.
+    sent: normalizeSent(r.sent),
     errorName: r.errorName ?? null,
     errorDetail: r.errorDetail ?? null,
   }
@@ -64,6 +66,8 @@ export function writeFetchResults(path, payload) {
   const body = {
     version: RESULT_SCHEMA_VERSION,
     date: payload.date ?? null,
+    // 🔴 회차 지문 — 같은 날 다시 돌면 목록이 달라진다. 날짜만으로는 못 가린다.
+    runId: payload.runId ?? null,
     mode: payload.mode ?? null,
     sentTotal: payload.sentTotal ?? 0,
     fatal: payload.fatal ?? null,
@@ -83,17 +87,69 @@ export function writeFetchResults(path, payload) {
   return body
 }
 
-export function readFetchResults(path) {
+export function readFetchResults(path, { expectDate = null, expectRunId = null } = {}) {
   if (!existsSync(path)) return { ok: false, why: '회수 결과 파일이 없다' }
+  let body
   try {
-    const body = JSON.parse(readFileSync(path, 'utf8'))
-    if (body.version !== RESULT_SCHEMA_VERSION) {
-      return { ok: false, why: `모르는 스키마 판 ${body.version}` }
-    }
-    return { ok: true, body }
+    body = JSON.parse(readFileSync(path, 'utf8'))
   } catch (e) {
     return { ok: false, why: `회수 결과 파싱 실패: ${e.message}` }
   }
+  if (body.version !== RESULT_SCHEMA_VERSION) {
+    return { ok: false, why: `모르는 스키마 판 ${body.version}` }
+  }
+  /**
+   * 🔴 **신원이 맞아야 이번 회차 결과다.** 날짜 칸이 비어 있는 것도 불일치로 본다 —
+   *    "언제 것인지 모르는 기록" 으로 후보를 멈추면 그 멈춤을 풀 방법이 없다.
+   */
+  if (expectDate && body.date !== expectDate) {
+    return { ok: false, stale: true, body, why: `다른 날짜의 결과다 (${body.date ?? '날짜 없음'} ≠ ${expectDate})` }
+  }
+  if (expectRunId && body.runId !== expectRunId) {
+    return { ok: false, stale: true, body, why: `다른 회차의 결과다 (${body.runId ?? '지문 없음'} ≠ ${expectRunId})` }
+  }
+  return { ok: true, body }
+}
+
+/**
+ * 🔴 **다시 보내면 안 되는 후보** — 이전 결과가 "보냈는데 모른다" 인 것들.
+ *
+ *    2026-09-28 이후 구조: `sent=true` 뒤 `response_timeout` 은 **실패가 아니라 모름**이다.
+ *    그 글의 brief 는 이미 ChatGPT 대화에 올라가 있다. 다시 보내면 같은 요청이 두 번 쌓인다.
+ *
+ *    🔴 **그 후보만 멈춘다.** 한 건이 모름이라고 회차 전체를 멈추지 않는다 —
+ *       그렇게 하면 한 글의 사고가 그날 공급 전부를 없앤다.
+ *
+ * @returns {Map<string, {reason:string|null, stage:string|null, sent:boolean|null, why:string}>}
+ */
+export function deliveryHold(body) {
+  const held = new Map()
+  for (const r of body?.results ?? []) {
+    if (!r.slug || r.slug === '-') continue
+    if (r.status === 'ok') continue
+    const k = classifyFailure({
+      code: r.reason, stage: r.stage,
+      message: [r.errorName, r.errorDetail].filter(Boolean).join(' · '),
+      sent: r.sent,
+    })
+    if (k.kind === 'DELIVERY_UNCERTAIN') held.set(r.slug, { ...r, why: k.why })
+  }
+  return held
+}
+
+/**
+ * 회차의 전송 상태를 **한 자리에서** 읽는다 — 회수 경로와 등록 경로가 같은 값을 본다.
+ *
+ * 🔴 낡은 파일을 이번 회차 결과로 읽지 않는다. 날짜와 회차 지문이 **둘 다** 맞아야 한다.
+ *    안 맞으면 "기록 없음" 으로 둔다 — 낡은 기록으로 영구 HOLD 를 만드는 쪽이 더 나쁘다.
+ *    (공급이 마르는 방향으로 틀리지 않는다. 대신 안 맞았다는 사실을 말한다.)
+ */
+export function readRunFetchState({ draftsDir, date, resultPath = null, dir = FETCH_RESULT_DIR }) {
+  const r = readRunTargets({ draftsDir, date })
+  const runId = r.ok ? r.runId : null
+  const path = resultPath ?? fetchResultPath(date, dir)
+  const prior = readFetchResults(path, { expectDate: date, expectRunId: runId })
+  return { runId, path, prior, hold: prior.ok ? deliveryHold(prior.body) : new Map() }
 }
 
 /** 한 slug 의 결과 — 없으면 `null` (모름이지 성공이 아니다) */

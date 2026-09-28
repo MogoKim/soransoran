@@ -16,8 +16,29 @@
  * 🔴 **폴더 존재로 판정하지 않는다.** 폴더가 있어도 `brief.md` 가 없으면 회수할 수 없고,
  *    `draft.md` 가 없으면 변환할 수 없다. 단계별 상태를 나눠 소비자가 고르게 한다.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+
+/**
+ * 🔴 **회차 식별** — 날짜만으로는 "같은 회차" 를 가릴 수 없다.
+ *
+ *    회수 결과는 날짜로 이름 붙은 파일에 남는다. 그런데 같은 날 producer 가 다시 돌면
+ *    선정 목록이 달라진다. 그때 **어제 파일이나 앞 회차 파일**을 이번 회차 결과로 읽으면
+ *    보내지도 않은 글이 "이미 보냈다" 가 되어 **영영 HOLD** 된다 — 공급이 마른다.
+ *
+ *    목록과 상태가 같으면 같은 회차다. 지문으로 굳혀 결과 파일에 같이 적는다.
+ */
+export function runIdOf(run) {
+  const slugs = (list) => (Array.isArray(list) ? list : [])
+    .map((x) => (typeof x === 'string' ? x : x?.slug)).filter(Boolean)
+  const body = JSON.stringify({
+    status: run?.status ?? null,
+    selected: slugs(run?.selected),
+    reusable: slugs(run?.reusable),
+  })
+  return createHash('sha256').update(body).digest('hex').slice(0, 16)
+}
 
 /** 한 주제의 재료가 어디까지 있는가 */
 export function materialState(dir) {
@@ -72,7 +93,8 @@ export function readRunTargets({ draftsDir, date, exists = existsSync, read = re
       targets.push({ slug, origin, material: materialState(join(draftsDir, slug)) })
     }
   }
-  return { ok: true, targets, status: run.status ?? null, inventoryDays: run.inventoryDays ?? null }
+  return { ok: true, targets, run, runId: runIdOf(run),
+    status: run.status ?? null, inventoryDays: run.inventoryDays ?? null }
 }
 
 /**

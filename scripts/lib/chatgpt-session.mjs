@@ -61,48 +61,6 @@ const CHATGPT_URL = 'https://chatgpt.com/'
 export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]'
 
 /**
- * 🔴 **문서를 받는 file input 을 고른다** (2026-09-28 실측).
- *
- *    ChatGPT 화면에는 file input 이 **3개**다. 실측(전용 프로필):
- *      `accept="image/*,video/*"` · `accept="image/*"` · `accept=""`(제한 없음)
- *
- *    앞판은 `locator('input[type=file]').all()` 로 **첫 번째부터 시도하고 성공하면 멈췄다.**
- *    `setInputFiles` 는 `accept` 를 검증하지 않으므로 **이미지 전용 input 에 .md 를 넣어도
- *    예외가 나지 않는다.** 그래서 `attached=true` 가 되고 문서용 input 까지 가지 않았다.
- *    ChatGPT 핸들러는 그 파일을 무시했고, 코드는 완료 신호를 60초 기다리다
- *    `[attach] upload_timeout` 으로 끝났다 — 2026-09-28 회차의 4건이 이것이다.
- *
- *    🔴 무차별 순회를 하지 않는다. 엉뚱한 칸에 원고가 들어가는 사고를 만들 수 있다.
- *       `accept` 가 비었거나 문서 확장자를 허용하는 input **하나**만 고른다.
- */
-export function pickDocumentFileInput(inputs) {
-  const accepts = (a) => {
-    const v = String(a ?? '').trim()
-    if (!v) return true                       // 제한 없음 = 무엇이든 받는다
-    if (/image\/\*|video\/\*/.test(v) && !/text|\.md|\.txt|application/.test(v)) return false
-    return /text|\.md|\.txt|application|\*\/\*/.test(v)
-  }
-  return inputs.find((x) => accepts(x.accept))
-}
-
-/**
- * 🔴 **업로드 완료 계약** (2026-09-28 실측).
- *
- *    실측에서 본 것:
- *      +400ms  chip `brief.md`                      · spinner 1 → 업로드 중
- *      +3000ms chip `brief(20260927-235049).md`     · spinner 0 → 완료
- *
- *    🔴 **ChatGPT 가 이름을 바꾼다.** 같은 이름이 이미 있으면 시각 도장을 붙인다.
- *       그래서 "정확한 파일명" 을 그대로 기다리면 영원히 못 만난다.
- *       대신 **어간과 확장자**로 본다 — `brief` 로 시작하고 `.md` 로 끝나는 chip.
- *
- *    🔴 `body.innerText.includes('brief')` 를 쓰지 않는다. 본문 어디에나 있을 수 있는
- *       단어라 **첨부와 무관하게 참이 된다**(실측: 사이드바 대화 제목에 "brief" 가 있었다).
- *       첨부에만 붙는 **제거 버튼의 aria-label** 을 본다.
- *
- *    완료 = ① 어간·확장자가 맞는 제거 버튼이 있다 ② 진행 표시 0 ③ 오류 0
- */
-/**
  * 🔴 **brief 를 파일로 붙이지 않는다 — 본문에 그대로 넣는다** (2026-09-28 · Codex P1).
  *
  *    2026-09-28 회차에서 막힌 6건 중 4건이 `[attach] upload_timeout` 이었다.
@@ -154,32 +112,12 @@ export function judgeComposerReadback({ expected, actual, markers = [] }) {
   return { ok: true, ratio, length: a.length }
 }
 
-export const UPLOAD_DONE_CONTRACT = 'remove-chip + no-progress + no-error'
-/**
- * 🔴 실측에서 완료까지 3초 안쪽이었다. 넉넉히 두되 **늘려서 해결하지 않는다** —
- *    판정이 틀렸을 때 기다림을 늘리면 실패가 느려질 뿐이다.
- */
 /**
  * 🔴 본문 삽입은 업로드가 아니다 — 네트워크를 타지 않는다. 오래 기다릴 이유가 없고,
  *    안 들어갔으면 **안 보내는 것**이 맞다. 시간을 늘려 초록을 만들지 않는다.
  */
 export const COMPOSE_WAIT_MS = 15_000
 export const COMPOSE_POLL_MS = 300
-
-export const UPLOAD_WAIT_MS = 60_000
-export const UPLOAD_POLL_MS = 400
-
-/** 화면에서 읽어 판정한다. 이 함수는 **브라우저 안에서** 돌 문자열을 만들지 않는다 */
-export function judgeUploadState({ chips, progress, errors }, { stem, ext }) {
-  const match = (chips ?? []).find((n) => {
-    const base = String(n ?? '')
-    return base.toLowerCase().startsWith(stem.toLowerCase()) && base.toLowerCase().endsWith(ext.toLowerCase())
-  })
-  if ((errors ?? []).length) return { done: false, state: 'error', detail: errors.join(' / ').slice(0, 160) }
-  if (!match) return { done: false, state: 'no-chip' }
-  if ((progress ?? 0) > 0) return { done: false, state: 'uploading', detail: match }
-  return { done: true, state: 'done', detail: match }
-}
 
 /** 정본 선택자로 composer 를 잡는다 — 여러 개면 첫 번째 */
 export function composerLocator(page) {

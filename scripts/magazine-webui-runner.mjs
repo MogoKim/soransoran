@@ -46,7 +46,7 @@ import {
 } from './lib/chatgpt-session.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { readRunTargets, materialState, fetchTargets } from './lib/magazine-run-targets.mjs'
-import { writeFetchResults, fetchResultPath, todayKst } from './lib/magazine-fetch-result.mjs'
+import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 
@@ -462,16 +462,19 @@ async function fetchOne(slug, { force = false, regenPacket = null, resultPath = 
  * 🔴 `draftsDir` 는 **시험이 실제 이 함수를 돌리기 위한** 최소 주입점이다.
  *    기본값은 운영 경로 그대로다 — 소스 문자열 검사로 대신하지 않기 위해 연다.
  */
-export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, resultPath = null }) {
+export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, resultPath = null,
+  /** 🔴 시험이 브라우저를 켜지 않고 실패 경로를 태우기 위한 자리. 운영은 실제 probe 다 */
+  probeFn = probe }) {
   /**
    * 🔴 **일괄 회수도 같은 계약으로 끝난다.** 중간에 끊기든 전역 실패든,
    *    돌려주기 전에 무엇을 보냈는지 적는다. dry-run 은 한 글자도 안 보내므로
    *    기록도 남기지 않는다 — 안 보낸 회차를 "보낸 적 있음" 으로 오염시키지 않는다.
    */
+  let runId = null
   const finishBatch = (out) => {
     if (resultPath && !dryRun) {
       try {
-        writeFetchResults(resultPath, { date, mode: 'fetch-run', ...out })
+        writeFetchResults(resultPath, { date, runId, mode: 'fetch-run', ...out })
       } catch (e) {
         console.log(`  🔴 회수 결과를 적지 못했다 — ${e.message}`)
       }
@@ -499,19 +502,41 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
    *    회수 대상은 `fetchTargets()` 하나가 정한다 — 등록 경로와 같은 계약이다.
    */
   const fetchSet = new Set(fetchTargets(targets).map((t) => t.slug))
-  const planned = targets.map((t) => ({
-    slug: t.slug,
-    stage: t.stage,
-    action: fetchSet.has(t.slug) ? 'fetch' : `skip:${String(t.stage ?? 'UNKNOWN').toLowerCase()}`,
-  }))
+
+  /**
+   * 🔴 **이미 보낸 글은 다시 보내지 않는다** (2026-09-28 · Codex 재검토 1번).
+   *    앞 회차가 `sent=true` 로 끝났는데 응답을 못 받은 글은 brief 가 이미
+   *    ChatGPT 대화에 올라가 있다. 대상 선택이 이 사실을 읽지 않으면
+   *    같은 회차를 다시 돌릴 때마다 **같은 요청이 한 번씩 더 쌓인다.**
+   *    그 후보만 멈추고 나머지는 그대로 간다.
+   */
+  const state = readRunFetchState({ draftsDir, date, resultPath })
+  runId = state.runId
+  const hold = state.hold
+  if (state.prior.stale) console.log(`  (앞 회수 결과를 쓰지 않는다 — ${state.prior.why})`)
+  if (hold.size) console.log(`  🔴 전송불명 ${hold.size}건은 다시 보내지 않는다`)
+
+  const planned = targets.map((t) => {
+    const held = hold.get(t.slug)
+    if (fetchSet.has(t.slug) && held) {
+      return { slug: t.slug, stage: t.stage, action: 'hold:delivery_uncertain', why: held.why, prior: held }
+    }
+    return {
+      slug: t.slug,
+      stage: t.stage,
+      action: fetchSet.has(t.slug) ? 'fetch' : `skip:${String(t.stage ?? 'UNKNOWN').toLowerCase()}`,
+    }
+  })
   for (const p of planned) {
-    const mark = p.action === 'fetch' ? '→ 전송' : `– 건너뜀 (${p.action.split(':')[1]})`
+    const mark = p.action === 'fetch' ? '→ 전송'
+      : p.action === 'hold:delivery_uncertain' ? `⏸ HOLD (${p.why})`
+        : `– 건너뜀 (${p.action.split(':')[1]})`
     console.log(`    ${p.slug.padEnd(34)}${mark}`)
   }
   const toFetch = planned.filter((p) => p.action === 'fetch')
+  const heldPlans = planned.filter((p) => p.action === 'hold:delivery_uncertain')
   console.log('')
-  console.log(`  전송 예정 ${toFetch.length}건 · 건너뜀 ${planned.length - toFetch.length}건`)
-
+  console.log(`  전송 예정 ${toFetch.length}건 · HOLD ${heldPlans.length}건 · 건너뜀 ${planned.length - toFetch.length - heldPlans.length}건`)
   if (dryRun) {
     console.log('')
     console.log('  🔴 dry-run — 한 글자도 보내지 않았다.')
@@ -519,20 +544,34 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     return finishBatch({ planned, results: [], sentTotal: 0 })
   }
 
-  const results = []
+  /**
+   * 🔴 **HOLD 사실을 다음 회차로 넘긴다.** 이번 결과 파일에 안 적으면
+   *    다음 실행은 "기록 없음" 으로 읽고 **그 글을 다시 보낸다.**
+   *    앞 회차가 적어 둔 행을 그대로 이어 붙인다 — 새로 지어내지 않는다.
+   */
+  const results = heldPlans.map((p) => ({ ...p.prior, slug: p.slug, status: 'held' }))
   let sentTotal = 0
 
   if (toFetch.length) {
     console.log('')
     console.log('  접근 확인')
-    const p = await probe({ autoStart: true })
+    const p = await probeFn({ autoStart: true })
     console.log(`    status ${p.status}`)
     if (p.status !== STATUS.OK) {
       console.log('')
       console.log(`  ⛔ ${MESSAGE[p.status] ?? MESSAGE[STATUS.UNKNOWN]} — 한 글자도 보내지 않았다`)
       if (p.errorDetail) console.log(`     ${p.errorDetail}`)
       console.log('')
-      return finishBatch({ planned, results: [{ slug: '-', status: 'failed', reason: p.status, stage: 'connect', sent: false, errorDetail: p.errorDetail ?? null }], sentTotal: 0, fatal: p.status })
+      /**
+       * 🔴 **접근에 실패해도 HOLD 사실은 같이 적는다.** 여기서 빠뜨리면 다음 실행이
+       *    "기록 없음" 으로 읽고 **이미 보낸 글을 다시 보낸다.** 브라우저가 안 열린 것과
+       *    앞서 보낸 사실은 아무 상관이 없다.
+       */
+      return finishBatch({
+        planned,
+        results: [...results, { slug: '-', status: 'failed', reason: p.status, stage: 'connect', sent: false, errorDetail: p.errorDetail ?? null }],
+        sentTotal: 0, fatal: p.status,
+      })
     }
   }
 
@@ -563,7 +602,9 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   console.log('')
   const ok = results.filter((r) => r.status === 'ok').length
   const failed = results.filter((r) => r.status === 'failed').length
-  console.log(`  결과: 저장 ${ok} · 실패 ${failed} · 건너뜀 ${results.filter((r) => r.status === 'skipped').length} · 전송 ${sentTotal}건`)
+  // 🔴 HOLD 는 실패가 아니다 — 따로 센다. 실패로 세면 회차가 빨갛게 보여 판단을 흐린다.
+  console.log(`  결과: 저장 ${ok} · 실패 ${failed} · HOLD ${results.filter((r) => r.status === 'held').length}` +
+    ` · 건너뜀 ${results.filter((r) => r.status === 'skipped').length} · 전송 ${sentTotal}건`)
   console.log('')
   console.log('  🔴 md-to-draft · batch-qa · register 는 실행하지 않았다.')
   console.log('')

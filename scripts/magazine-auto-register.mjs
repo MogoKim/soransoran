@@ -36,13 +36,13 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadQueue, ARTICLES_TS, QUEUE_TS } from './lib/magazine-load.mjs'
+import { loadQueue, ARTICLES_TS, QUEUE_TS, DRAFTS_DIR } from './lib/magazine-load.mjs'
 import { gate, progress, heroPlan, paths } from './lib/magazine-auto-lane.mjs'
 import { resolveHeroBrief } from './lib/magazine-hero-brief.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { attemptRegeneration, clearRegen, MAX_REGEN_CALLS } from './lib/magazine-regen.mjs'
 import { PACKET_DIR } from './lib/magazine-regen.mjs'
-import { readFetchResults, fetchResultFor, removeFetchResults, fetchResultPath, todayKst } from './lib/magazine-fetch-result.mjs'
+import { readFetchResults, fetchResultFor, removeFetchResults, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { classifyFailure } from './lib/magazine-failure-kind.mjs'
 import { describeFetchFailure } from './magazine-webui-runner.mjs'
 import { fingerprintOf } from './lib/magazine-quarantine.mjs'
@@ -153,15 +153,42 @@ export function webuiRegenRunner({ slug, packetPath }, { runFn = run, resultDir 
   const row = structured.ok ? fetchResultFor(structured.body, slug) : null
   removeFetchResults(resultPath)
 
+  /**
+   * 🔴 **성공은 둘이 같이 있을 때만이다** (2026-09-28 · Codex 재검토).
+   *    ① 자식이 정상 종료했고 ② **그 slug 의 행이 `status=ok`** 다.
+   *
+   *    앞판은 종료 코드 0 만 보고 `ok: true` 를 돌려줬다. 자식이 아무것도 안 하고
+   *    0으로 끝나도 상위는 "재생성 성공" 으로 읽었고, 바뀌지 않은 옛 원고로 QA 를 돌렸다.
+   *    **거짓 성공은 실패보다 나쁘다** — 실패는 다시 보지만 거짓 성공은 그냥 지나간다.
+   */
   if (r.code === 0 && row?.status === 'ok') return { ok: true, sent: true, resultSource: 'file' }
-  if (r.code === 0) {
-    // 종료 코드는 0인데 결과가 없다 — 모름이다. 성공으로 세지 않는다.
-    return { ok: true, sent: Boolean(row?.sent), resultSource: structured.ok ? 'file' : 'exitcode' }
-  }
 
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
   const why = /login_required/i.test(out) ? 'ChatGPT login_required' : '재생성 회수 실패'
   const line = meaningfulLine(r.stderr || r.stdout)
+
+  if (r.code === 0) {
+    /**
+     * 🔴 **종료 코드만 0인 경우** — 행이 없거나 `ok` 가 아니다.
+     *    행이 있으면 그 사실(`sent` 포함)을 그대로 올리고,
+     *    없으면 **보냈는지조차 모른다.** 모름은 `null` 이다 — 다시 보내지 않는다.
+     */
+    if (row) {
+      return {
+        ok: false, sent: row.sent, resultSource: 'file',
+        reason: row.reason ?? 'REGEN_RESULT_NOT_OK', stage: row.stage,
+        errorName: row.errorName, errorDetail: row.errorDetail,
+        why: `${why} — ${describeFetchFailure(row)}`,
+      }
+    }
+    return {
+      ok: false, sent: null, resultSource: 'missing',
+      reason: 'REGEN_RESULT_MISSING', stage: null,
+      errorName: null, errorDetail: structured.why ?? null,
+      why: `재생성이 조용히 끝났다 (종료 코드 0 · 결과 행 없음: ${structured.why}) — 보냈는지 알 수 없다`,
+    }
+  }
+
   if (row) {
     /**
      * 🔴 `reason`·`stage`·`errorName`·`errorDetail` 을 **그대로** 올린다.
@@ -231,11 +258,18 @@ export function drive(slug, opts, deps = {}) {
     if (r.length) add('rollback', 'ok', `등록 전 중간 변경 ${r.length}건 원상복구: ${r.map((x) => x.split('/').pop()).join(', ')}`)
     return r
   }
+  /**
+   * 🔴 **`sent` 를 장부까지 들고 간다** (2026-09-28 · Codex 재검토 3번).
+   *    막힌 이유가 "이미 보냈다" 인데 장부에 `sent:false` 가 남으면, 다음 회차는
+   *    그 행을 보고 **안 보낸 글로 판단한다.** 세 값(true/false/null)을 그대로 올린다.
+   */
+  let lastSent
   const stop = (stage, code, message) => {
     blockedBy.push({ code, message })
     add(stage, 'blocked', message)
     rollback()
-    return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write }
+    return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write,
+      ...(lastSent !== undefined ? { sent: lastSent } : {}) }
   }
 
   // ── ① gate — 등급·큐·brief ────────────────────────────────
@@ -314,8 +348,16 @@ export function drive(slug, opts, deps = {}) {
    */
   const firstFetch = (() => {
     if (deps.firstFetchResult !== undefined) return deps.firstFetchResult
-    const f = readFetchResults(deps.fetchResultPath ?? fetchResultPath(todayKst()))
-    return f.ok ? fetchResultFor(f.body, slug) : null
+    /**
+     * 🔴 회수 경로와 **같은 진입점**으로 읽는다. 각자 읽으면 신원 검사가 한쪽에만 붙고,
+     *    그 한쪽이 낡은 파일을 이번 회차 결과로 읽는다.
+     */
+    const date = deps.runDate ?? todayKst()
+    const st = readRunFetchState({
+      draftsDir: deps.draftsDir ?? DRAFTS_DIR, date,
+      ...(deps.fetchResultPath ? { resultPath: deps.fetchResultPath } : {}),
+    })
+    return st.prior.ok ? fetchResultFor(st.prior.body, slug) : null
   })()
   const alreadySent = firstFetch
     ? classifyFailure({
@@ -329,6 +371,7 @@ export function drive(slug, opts, deps = {}) {
     if (!write) return { ok: false, code: 'DRY_RUN', why: 'dry-run — 재생성하지 않는다' }
     if (firstFetch && firstFetch.status !== 'ok' && alreadySent?.kind === 'DELIVERY_UNCERTAIN') {
       const why = `첫 회수에서 이미 전송됐다 (${firstFetch.stage ?? '-'} ${firstFetch.reason ?? '-'}) — 다시 보내지 않는다`
+      lastSent = firstFetch.sent
       add(stage, 'blocked', `[DELIVERY_UNCERTAIN] 재생성 건너뜀: ${why}`)
       return { ok: false, code: 'REGEN_SKIPPED_ALREADY_SENT', kind: 'DELIVERY_UNCERTAIN', why, sent: true }
     }
@@ -341,6 +384,7 @@ export function drive(slug, opts, deps = {}) {
       ...(quarantinePath ? { quarantinePath } : {}),
       ...(packetDir ? { packetDir } : {}) })
     regenCalls = rr.regenCalls ?? regenCalls
+    if (rr.sent !== undefined) lastSent = rr.sent
     if (!rr.ok) {
       /**
        * 🔴 인프라·전송불명은 **원고 문제가 아니다.** 사유에 그 사실을 적어
@@ -363,7 +407,15 @@ export function drive(slug, opts, deps = {}) {
     while (r.code !== 0) {
       const rr = regenOnce('qa', [{ code: 'QA_FAIL', label: 'magazine QA FAIL',
         sentence: (r.stdout || r.stderr).trim().split('\n').slice(-3).join(' ') }])
-      if (!rr.ok) return stop('qa', 'QA_FAIL', `magazine QA FAIL — ${rr.code}: ${rr.why}`)
+      /**
+       * 🔴 **종류를 최종 사유에 싣는다.** 장부는 이 문장을 읽어 종류를 파생한다
+       *    (`entryKind`). 여기서 떨어뜨리면 인프라·전송불명 실패가 **내용 실패로 기록되어**
+       *    멀쩡한 원고가 긴 격리에 들어간다 — 2026-09-28 에 실제로 그랬다.
+       */
+      if (!rr.ok) {
+        const kindTag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
+        return stop('qa', 'QA_FAIL', `${kindTag}magazine QA FAIL — ${rr.code}: ${rr.why}`)
+      }
       r = runStep(QA, ['--draft', p.articleTs])
     }
     add('qa', 'ok', regenCalls ? `QA FAIL 0 (재생성 ${regenCalls}회 뒤)` : 'QA FAIL 0')

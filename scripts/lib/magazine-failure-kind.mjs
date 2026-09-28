@@ -19,6 +19,30 @@
  *    같은 대화에 두 번 요청이 쌓이고, 계정에도 우리에게도 손해다.
  */
 
+/**
+ * 🔴 **`sent` 는 세 값이다** — 보냈다(`true`) / 안 보냈다(`false`) / **모른다**(`null`).
+ *
+ *    `Boolean(sent)` 는 모름을 **"안 보냈다" 로 바꿔 버린다.** 그러면 이미 ChatGPT 에
+ *    올라간 brief 를 다시 보낸다 — 같은 대화에 요청이 두 번 쌓인다.
+ *    그래서 파일·장부·분류기 어디에서도 `Boolean()` 으로 굳히지 않는다.
+ *
+ * 🔴 다만 **필드가 아예 없는 것**(`undefined`)은 모름이 아니라 **말하지 않은 것**이다.
+ *    그것까지 `null` 로 올리면 옛 장부 행 전부가 DELIVERY_UNCERTAIN 이 되어
+ *    **재시도 상한이 사라진다.** 말하지 않은 경로는 안 보낸 것으로 세고 상한 안에 둔다.
+ */
+export function sentOf(src) {
+  if (src && typeof src === 'object' && Object.prototype.hasOwnProperty.call(src, 'sent')) return src.sent
+  return false
+}
+
+/** 값 하나를 세 값으로 굳힌다 — `undefined` 만 `false` 로 내린다 */
+export function normalizeSent(v) {
+  if (v === true) return true
+  if (v === null) return null
+  if (v === undefined) return false
+  return Boolean(v) === true ? true : false
+}
+
 /** 브라우저·연결·업로드 — 원고와 무관하다 */
 const INFRA_CODES = new Set([
   'connect_failed',
@@ -28,6 +52,12 @@ const INFRA_CODES = new Set([
   'permission_blocked',
   'cloudflare_blocked',
   'login_required',
+  /**
+   * 🔴 아래 넷은 **더 이상 새로 생기지 않는다** — brief 첨부 경로를 없앴기 때문이다.
+   *    그래도 지우지 않는다. 2026-09-28 회차가 남긴 **장부 행에 이 사유가 들어 있고**,
+   *    지우면 그 행들이 내용 실패로 재분류되어 멀쩡한 원고가 긴 격리에 들어간다.
+   *    과거를 읽기 위한 칸이다.
+   */
   'attach_failed',
   'attach_rejected',
   'attach_no_document_input',
@@ -44,6 +74,12 @@ const INFRA_CODES = new Set([
   'composer_short',
   'composer_dirty',
   'send_button_missing',
+  /**
+   * 🔴 **응답을 못 받은 것은 원고 탓이 아니다.** `sent=true` 면 위에서 이미
+   *    DELIVERY_UNCERTAIN 으로 갈린다. 여기 남는 것은 `sent=false`·모름 아닌 경우인데,
+   *    그것도 내용 실패로 세면 멀쩡한 글이 재시도 상한을 까먹는다.
+   */
+  'response_timeout',
   'CHROME_NOT_RUNNING',
 ])
 

@@ -27,7 +27,18 @@ const HERE = dirname(fileURLToPath(import.meta.url)) // scripts/lib
 export const ROOT = resolve(HERE, '..', '..')
 export const ARTICLES_TS = join(ROOT, 'src/content/magazine/articles.ts')
 export const QUEUE_TS = join(ROOT, 'drafts/magazine/topic-queue.ts')
-export const DRAFTS_DIR = join(ROOT, 'drafts/magazine')
+/**
+ * 🔴 **시험만 옮길 수 있는 자리.** 기본은 저장소의 실제 폴더다.
+ *
+ *    통합 시험이 임시 fixture 를 만들어도 최상위 CLI 가 운영 폴더를 보면
+ *    시험은 **운영 상태**를 검사하는 셈이 된다 — 운영이 비면 초록, 차면 빨강.
+ *    그건 코드 판정이 아니다. 그래서 하위 프로세스에 폴더를 넘길 길을 하나 둔다.
+ *
+ *    🔴 운영 경로에서는 이 변수를 **설정하지 않는다.** launchd 도 넘기지 않는다.
+ */
+export const DRAFTS_DIR = process.env.SORAN_MAGAZINE_DRAFTS_DIR
+  ? resolve(process.env.SORAN_MAGAZINE_DRAFTS_DIR)
+  : join(ROOT, 'drafts/magazine')
 
 /**
  * 객체·배열 리터럴을 문자열에서 통째로 떼어낸다.

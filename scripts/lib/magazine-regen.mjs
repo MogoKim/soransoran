@@ -20,22 +20,8 @@ import {
   MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, saveQuarantine,
   recordRegenCall, regenBudget,
 } from './magazine-quarantine.mjs'
-import { classifyFailure, consumesAttempt } from './magazine-failure-kind.mjs'
+import { classifyFailure, consumesAttempt, sentOf } from './magazine-failure-kind.mjs'
 
-/**
- * 🔴 **`sent` 없음과 `sent: null` 은 다르다** (2026-09-28).
- *    `null` 은 runner 가 **"보냈는지 모른다" 고 말한 것**이다 — 자식이 결과를 적기 전에
- *    죽은 경우다. 다시 보내지 않는 게 맞다.
- *
- *    그런데 필드 자체가 없는 것(`undefined`)까지 모름으로 삼키면
- *    **모든 재생성 실패가 DELIVERY_UNCERTAIN 이 되어 재시도 상한이 사라진다** —
- *    실패한 원고를 끝없이 다시 돌린다. 막는 기본값이 정상 경로를 막는 전형이다.
- *    말하지 않은 경로는 **안 보낸 것**으로 세고, 상한 안에 둔다.
- */
-export function sentOf(r) {
-  if (r && Object.prototype.hasOwnProperty.call(r, 'sent')) return r.sent
-  return false
-}
 
 export { MAX_REGEN_CALLS }
 

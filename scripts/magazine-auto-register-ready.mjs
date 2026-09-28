@@ -353,6 +353,8 @@ export function processCandidates({
               fingerprint: draftFingerprint(r.slug),
               now: Date.now(),
               reasons: (r.blockedBy ?? []).map((x) => `${x.code}: ${x.message}`),
+              // 🔴 drive 가 아는 전송 여부를 그대로 넘긴다 — 모르면 말하지 않는다(= false)
+              ...(r.sent !== undefined ? { sent: r.sent } : {}),
             }),
             // 🔴 drive 가 센 재생성 횟수를 보존한다
             ...(cur[r.slug]?.regenCalls !== undefined ? { regenCalls: cur[r.slug].regenCalls } : {}),
