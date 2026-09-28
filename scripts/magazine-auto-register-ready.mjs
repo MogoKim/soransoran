@@ -173,6 +173,8 @@ export const CONSUMES_SLOT = new Set(['DONE', 'DRY_RUN_OK'])
  */
 function slugsFromRun(date, draftsDir = DRAFTS_DIR) {
   const r = readRunTargets({ draftsDir, date })
+  // 🔴 모르는 판이면 **큐 전체로 되돌아가지 않는다** — 빈 목록 (fail-closed · 전송 0)
+  if (r.failClosed) return []
   if (!r.ok) return null
   return registerTargets(r.targets).map((t) => t.slug)
 }

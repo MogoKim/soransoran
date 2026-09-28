@@ -95,6 +95,11 @@ function loadRun(date, draftsDir = DRAFTS_DIR) {
  */
 function inspectTargets(run, date, draftsDir = DRAFTS_DIR) {
   const r = readRunTargets({ draftsDir, date })
+  // 🔴 모르는 판이면 옛 목록으로도 되돌아가지 않는다 — 대상 0 (fail-closed · 전송 0)
+  if (r.failClosed) {
+    console.log(`  ⛔ ${r.code} — ${r.why}`)
+    return []
+  }
   const rows = r.ok
     ? r.targets
     // 🔴 run.json 을 못 읽었으면 넘겨받은 객체로라도 본다 — 조용히 0건으로 끝내지 않는다
