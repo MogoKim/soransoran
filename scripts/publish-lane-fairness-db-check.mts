@@ -105,8 +105,13 @@ async function main(): Promise<void> {
     const resolved = resolvePublishScale({ env: E, loaded, now: NOW })
     return { E, gate, loaded, plan: planPublishBatch({ loaded, caps: resolved.caps, at: NOW }) }
   }
+  let publishSeq = 0
   /** 🔴 러너와 같은 순서 — 사람 행은 배정 먼저 쓰고, 자동 행은 배정 계획을 트랜잭션에 넘긴다 */
   const publish = async (v: Awaited<ReturnType<typeof view>>, id: string) => {
+    // Fast CI can commit adjacent posts in the same millisecond. Give each
+    // transaction a stable past timestamp so lane recency has a strict order.
+    const txNow = new Date(NOW.getTime() - 60_000 + publishSeq * 1000)
+    publishSeq += 1
     const t = v.loaded.targets.find((x) => x.id === id)!
     const a = v.plan.assignOf.get(id)
     const plan = planStore({ status: t.status as never, createdPostId: null, seed: id,
@@ -119,7 +124,8 @@ async function main(): Promise<void> {
     }
     const today = await prisma.post.count()
     return publishOriginalPostTx(prisma, { queueId: id, publishedToday: today, mode: { kind: 'manual-live', dailyCap: 100 },
-      autoReadyEnv: v.E, ...(isAuto ? { autoAssign: { personaId: persona.id, matchMeta: plan.meta } } : {}) })
+      autoReadyEnv: v.E, ...(isAuto ? { autoAssign: { personaId: persona.id, matchMeta: plan.meta } } : {}) },
+    { now: () => txNow })
   }
 
   console.log('\n── ① 자동 발행 이력 0 · 두 lane 대기 → 첫 자동 행이 먼저 (사람 재고 6건이 앞에 있어도) ──')
