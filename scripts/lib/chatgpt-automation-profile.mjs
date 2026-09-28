@@ -121,15 +121,43 @@ export function judgePortOwner(lines, { profileDir, port, portInUse }) {
   return { ok: false, why: `다른 프로세스가 포트 ${port} 를 쓰고 있다` }
 }
 
-/** 🔴 열려 있는 page 가 전부 chatgpt.com 인가 */
-export function judgePages(pages) {
+/**
+ * 🔴 **모드마다 허용하는 페이지가 다르다.**
+ *    `operate` — 무인 실행이다. **chatgpt.com 만** 허용한다. 다른 페이지가 있으면
+ *              그 창은 우리가 아는 창이 아니다.
+ *    `login`   — 사람이 처음 로그인하는 중이다. 그때만 `auth.openai.com` 을 허용한다.
+ *              운영 실행에서는 절대 허용하지 않는다.
+ */
+export const OPERATE_HOSTS = new Set(['chatgpt.com'])
+export const LOGIN_HOSTS = new Set(['chatgpt.com', 'auth.openai.com'])
+
+function hostOf(url) {
+  try { return new URL(String(url ?? '')).hostname.replace(/^www\./, '') }
+  catch { return null }
+}
+
+/**
+ * 🔴 **fail-closed 다.** 페이지 목록을 못 읽은 것과 "페이지가 없다" 를 **정상으로 바꾸지 않는다.**
+ *    못 읽었으면 그 창이 무엇인지 모르는 것이고, 모르는 창에 글을 넣으면 안 된다.
+ *    `operate` 에서 page 0건도 실패다 — 붙을 대상이 없는데 ok 를 돌려주면
+ *    다음 단계가 엉뚱하게 죽는다.
+ */
+export function judgePages(pages, { mode = 'operate', readOk = true } = {}) {
+  if (!readOk || pages === null || pages === undefined) {
+    return { ok: false, why: 'CDP 페이지 목록을 읽지 못했다 — 어떤 창인지 모른다' }
+  }
+  const allowed = mode === 'login' ? LOGIN_HOSTS : OPERATE_HOSTS
   const list = (pages ?? []).filter((t) => t?.type === 'page')
-  const bad = list.filter((t) => {
-    try { return new URL(String(t.url ?? '')).hostname.replace(/^www\./, '') !== 'chatgpt.com' }
-    catch { return true }
-  })
+  const bad = list.filter((t) => !allowed.has(hostOf(t.url)))
   if (bad.length) {
-    return { ok: false, why: `ChatGPT 가 아닌 페이지가 있다: ${bad.map((t) => String(t.url ?? '').slice(0, 60)).join(' | ')}` }
+    return {
+      ok: false,
+      why: `${mode === 'login' ? '로그인 중에도' : '운영 실행에서'} 허용되지 않는 페이지가 있다: `
+        + bad.map((t) => String(t.url ?? '').slice(0, 60)).join(' | '),
+    }
+  }
+  if (mode !== 'login' && list.length === 0) {
+    return { ok: false, why: 'ChatGPT page 가 0건이다 — 붙을 창이 없다' }
   }
   return { ok: true, pages: list.length }
 }
@@ -143,8 +171,10 @@ export function judgeAutomationProfile({
   profileDir = AUTOMATION_PROFILE_DIR,
   port = AUTOMATION_CDP_PORT,
   marker = null, markerMode = null, dirMode = null,
-  commandLines = [], pages = [], portInUse = false,
+  commandLines = [], pages = [], portInUse = false, pagesReadOk = true,
   requireRunning = true,
+  /** 🔴 'operate' 는 무인 실행 · 'login' 은 사람이 처음 로그인하는 중 */
+  mode = 'operate',
 }) {
   const checked = { profileDir, port }
   if (isForbiddenProfileDir(profileDir)) {
@@ -176,7 +206,18 @@ export function judgeAutomationProfile({
   if (!cmd.ok && (requireRunning || cmd.running)) {
     return { ok: false, code: MISMATCH, why: cmd.why, checked }
   }
-  const pg = judgePages(pages)
-  if (!pg.ok) return { ok: false, code: MISMATCH, why: pg.why, checked }
-  return { ok: true, checked: { ...checked, pages: pg.pages, running: cmd.running } }
+  /**
+   * 🔴 **떠 있으면 무슨 창인지 반드시 본다.** 포트가 열려 있는데 페이지를 안 보면,
+   *    `ensureChrome` 이 "CDP 살아 있음 → ok" 로 끝내던 옛 결함이 그대로 돌아온다.
+   *    떠 있지 않으면 볼 페이지가 없으므로 이 검사는 건너뛴다.
+   */
+  if (portInUse) {
+    const pg = judgePages(pages, { mode, readOk: pagesReadOk })
+    if (!pg.ok) return { ok: false, code: MISMATCH, why: pg.why, checked }
+    return { ok: true, checked: { ...checked, mode, pages: pg.pages, running: cmd.running } }
+  }
+  if (requireRunning) {
+    return { ok: false, code: MISMATCH, why: `포트 ${port} 가 열려 있지 않다 — 붙을 창이 없다`, checked }
+  }
+  return { ok: true, checked: { ...checked, mode, pages: 0, running: cmd.running } }
 }

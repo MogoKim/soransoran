@@ -43,9 +43,11 @@ import {
   probe, fetchManuscript, isFatal, browserAvailable, profileExists, profileInUse, cdpAvailable,
   chromeArgs, CHROME_APP, CDP_PORT,
   STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE, buildManuscriptMessage,
+  verifyAutomationProfile,
 } from './lib/chatgpt-session.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { classifyFailure } from './lib/magazine-failure-kind.mjs'
+import { ensureAutomationProfile, MARKER_FILE } from './lib/chatgpt-automation-profile.mjs'
 import { readRunTargets, materialState, fetchTargets } from './lib/magazine-run-targets.mjs'
 import {
   readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
@@ -155,9 +157,40 @@ async function login() {
     console.error(`  ⛔ ${MESSAGE[STATUS.BROWSER_MISSING]}`)
     process.exit(1)
   }
+  /**
+   * 🔴 **표식을 만드는 곳은 여기 하나다** (2026-09-28 · P0-1).
+   *    자동 실행이 표식을 만들어 주면 "확인했다" 가 아니라 "덮어썼다" 가 된다 —
+   *    엉뚱한 폴더에 도장을 찍고 통과시키는 셈이다.
+   *    사람이 명시적으로 `--login` 을 칠 때만 만든다.
+   */
+  const made = ensureAutomationProfile({ profileDir: PROFILE_DIR, port: CDP_PORT })
+  if (!made.ok) {
+    console.error('')
+    console.error(`  ⛔ ${made.code} — ${made.why}`)
+    console.error('')
+    process.exit(1)
+  }
+  console.log('')
+  console.log(`  자동화 전용 프로필 준비 — ${PROFILE_DIR}`)
+  console.log(`    용도 표식 ${MARKER_FILE} (0600) · 폴더 0700 · 포트 ${CDP_PORT}`)
+
   if (await cdpAvailable()) {
+    /**
+     * 🔴 **이미 떠 있으면 주인을 확인한 뒤에만 쓴다.** 포트가 열려 있다는 것은
+     *    누군가 쓰고 있다는 뜻일 뿐, 그게 우리 창이라는 뜻이 아니다.
+     *    로그인 중에는 `auth.openai.com` 까지만 봐준다.
+     */
+    const id = await verifyAutomationProfile({ mode: 'login', requireRunning: true })
+    if (!id.ok) {
+      console.error('')
+      console.error(`  ⛔ ${id.code} — ${id.why}`)
+      console.error(`     포트 ${CDP_PORT} 를 쓰는 창이 자동화 전용 창이 아니다. 그 창은 건드리지 않는다.`)
+      console.error('     다른 프로그램이 그 포트를 쓰고 있다면 그것을 먼저 정리해야 한다.')
+      console.error('')
+      process.exit(1)
+    }
     console.log('')
-    console.log(`  이미 전용 Chrome 이 CDP 포트 ${CDP_PORT} 로 떠 있습니다.`)
+    console.log(`  이미 전용 Chrome 이 CDP 포트 ${CDP_PORT} 로 떠 있습니다 (주인 확인됨).`)
     console.log('  그 창에서 로그인하면 됩니다. 새로 띄우지 않습니다.')
     console.log('')
     return
@@ -170,9 +203,7 @@ async function login() {
     process.exit(1)
   }
 
-  // 쿠키가 들어갈 자리라 권한을 좁혀 둔다
-  if (!profileExists()) mkdirSync(PROFILE_DIR, { recursive: true })
-  try { chmodSync(PROFILE_DIR, 0o700) } catch { /* 이미 맞으면 그만 */ }
+  // 🔴 폴더·권한·표식은 위 ensureAutomationProfile 이 이미 맞춰 뒀다 (0700 · 0600)
 
   console.log('')
   console.log(`  전용 Chrome 을 띄웁니다 (일반 Chrome · CDP 포트 ${CDP_PORT}).`)
@@ -315,8 +346,21 @@ export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
 }
 
 async function fetchSlug(slug, { quiet = false, force = false, regenPacket = null,
-  quarantinePath = QUARANTINE_PATH, runIdHint = null, dateHint = null } = {}) {
-  const dir = join(DRAFTS_DIR, slug)
+  quarantinePath = QUARANTINE_PATH, runIdHint = null, dateHint = null,
+  /**
+   * 🔴 **시험이 실제 `fetchSlug` 를 태우기 위한 자리.** 여기가 없으면 시험은
+   *    `fetchManuscript` 만 따로 부르게 되고, 그 사이의 장부 처리(선기록을
+   *    덮어쓰지 않는 규칙)는 **한 번도 실행되지 않는다** — 죽은 게이트가 된다.
+   *    운영에서는 비어 있어 실제 CDP 가 돈다.
+   */
+  browserDeps = {},
+  /**
+   * 🔴 **계획과 회수가 같은 폴더를 봐야 한다.** `fetchBatch` 는 주입된 폴더로 계획을 세우는데
+   *    `fetchSlug` 는 모듈 상수를 쓰고 있었다 — 운영에서는 같은 값이라 드러나지 않지만,
+   *    시험에서는 "계획은 했는데 brief 가 없다" 가 되고, 폴더가 갈라지는 날 조용히 틀린다.
+   */
+  draftsDir = DRAFTS_DIR } = {}) {
+  const dir = join(draftsDir, slug)
   const briefPath = join(dir, 'brief.md')
   const outPath = join(dir, 'draft.md')
 
@@ -351,37 +395,69 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
   const prompt = manuscriptPromptText(packet)
 
   // 🔴 관문을 쓰기 직전에 건넨다. 막히면 파일이 생기지 않는다.
+  /**
+   * 🔴 **누르기 전에 적는다** (P0-2). `fetchManuscript` 가 send 직전에 이 함수를 부른다.
+   *    여기서 적지 못하면 그쪽이 **한 글자도 보내지 않고** 끝낸다.
+   *    적는 값은 `DELIVERY_UNCERTAIN` 이다 — 누른 뒤 무슨 일이 생길지 모르기 때문이다.
+   *    받아낸 뒤에야 지운다.
+   */
+  const recordBeforeSend = async ({ messageFingerprint }) => {
+    if (quarantinePath === false) return { ok: true }
+    try {
+      updateQuarantine((cur) => ({
+        ...cur,
+        [slug]: recordDelivery(cur[slug], {
+          sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',
+          reason: 'sending', stage: 'send', now: Date.now(),
+          runId: runIdHint, date: dateHint,
+        }),
+      }), quarantinePath)
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, why: `장부 선기록 실패: ${e.message}` }
+    }
+  }
+
   const r = await fetchManuscript({
     briefPath,
     outPath,
     promptText: prompt,
     requiredMarkers: markers,
     validate: validateManuscript,
+    onBeforeSend: recordBeforeSend,
+    ...browserDeps,
   })
 
   /**
-   * 🔴 **보낸 사실을 그 자리에서 장부에 적는다** (P0-1).
-   *    적는 것은 `slug` + **실제로 보낸 글자의 지문**이다. 회차도 날짜도 판정에 쓰지 않는다.
-   *    받아냈으면 기록을 지운다 — 고쳐서 다시 부를 수 있어야 한다.
-   *    🔴 `attempts` · `regenCalls` 는 건드리지 않는다. 보낸 것은 원고가 틀린 횟수가 아니다.
+   * 🔴 **선기록을 함부로 지우지 않는다.**
+   *    누르기 전에 적었다면, 그 뒤의 실패는 **보냈는지 확정할 수 없다** —
+   *    클릭이 먹고 나서 터졌을 수도 있다. 그때 기록을 INFRA 로 덮으면 HOLD 가 풀리고
+   *    다음 회차가 같은 brief 를 다시 보낸다.
+   *
+   *    ① 받아냈다        → 지운다 (고쳐서 다시 부를 수 있어야 한다)
+   *    ② 선기록 뒤 실패  → 그대로 둔다 (DELIVERY_UNCERTAIN 유지)
+   *    ③ 선기록 전 실패  → 그 실패의 성격대로 적는다 (보내지 않은 것이 확실하다)
    */
   if (quarantinePath !== false) {
-    const kind = classifyFailure({
-      code: r.reason, stage: r.stage,
-      message: [r.errorName, r.errorDetail].filter(Boolean).join(' · '),
-      sent: r.sent,
-    }).kind
     try {
-      updateQuarantine((cur) => ({
-        ...cur,
-        [slug]: r.ok
-          ? clearDelivery(cur[slug]) ?? undefined
-          : recordDelivery(cur[slug], {
+      if (r.ok) {
+        updateQuarantine((cur) => ({ ...cur, [slug]: clearDelivery(cur[slug]) ?? undefined }), quarantinePath)
+      } else if (!r.preRecorded) {
+        const kind = classifyFailure({
+          code: r.reason, stage: r.stage,
+          message: [r.errorName, r.errorDetail].filter(Boolean).join(' · '),
+          sent: r.sent,
+        }).kind
+        updateQuarantine((cur) => ({
+          ...cur,
+          [slug]: recordDelivery(cur[slug], {
             sent: r.sent, messageFingerprint: r.messageFingerprint ?? null, kind,
             reason: r.reason ?? null, stage: r.stage ?? null, now: Date.now(),
             runId: runIdHint, date: dateHint,
           }),
-      }), quarantinePath)
+        }), quarantinePath)
+      }
+      // ② 는 아무것도 하지 않는다 — 선기록이 사실이다
     } catch (e) {
       // 🔴 장부에 못 적었으면 **말한다.** 조용히 넘기면 다음 회차가 또 보낸다.
       console.error(`     🔴 전송 사실을 장부에 적지 못했다 — ${e.message}`)
@@ -397,6 +473,7 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     missingCount: r.missingCount,
     invalid: r.invalid ?? null,
     messageFingerprint: r.messageFingerprint ?? null,
+    preRecorded: r.preRecorded ?? false,
     // 🔴 여기서 버리면 운영 로그까지 `connect_failed` 한 단어로 도착한다 (2026-09-27)
     stage: r.stage ?? null,
     errorName: r.errorName ?? null,
@@ -523,7 +600,9 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   /** 🔴 전송 사실의 정본. 시험은 임시 파일을 준다 — 운영 장부를 건드리지 않는다 */
   quarantinePath = QUARANTINE_PATH,
   /** 🔴 시험이 브라우저를 켜지 않고 실패 경로를 태우기 위한 자리. 운영은 실제 probe 다 */
-  probeFn = probe }) {
+  probeFn = probe,
+  /** 🔴 실제 회수 경로를 가짜 브라우저로 태우기 위한 자리 (운영은 비어 있다) */
+  browserDeps = {} }) {
   /**
    * 🔴 **일괄 회수도 같은 계약으로 끝난다.** 중간에 끊기든 전역 실패든,
    *    돌려주기 전에 무엇을 보냈는지 적는다. dry-run 은 한 글자도 안 보내므로
@@ -661,7 +740,7 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     }
     console.log('')
     console.log(`  ${p.slug}`)
-    const r = await fetchSlug(p.slug, { quarantinePath, runIdHint: runId, dateHint: date })
+    const r = await fetchSlug(p.slug, { quarantinePath, runIdHint: runId, dateHint: date, browserDeps, draftsDir })
     if (r.sent) sentTotal += 1
     results.push(r)
 

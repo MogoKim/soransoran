@@ -565,9 +565,41 @@ export async function ensureChrome({
   profileDir = PROFILE_DIR,
   /** 🔴 프로세스 목록도 그대로 넘긴다 — 잠금 판정을 시험이 고정할 수 있어야 한다 */
   processes,
+  /**
+   * 🔴 **신원 판정의 정본은 여기다** (2026-09-28 · P0-1).
+   *    앞판은 `cdpAvailable()` 하나만 보고 `ok` 를 돌려줬다. 그래서 **이미 떠 있기만 하면**
+   *    폴더·표식·포트 주인·열린 페이지를 하나도 보지 않았고,
+   *    `magazine-hero-runner` 처럼 `ensureChrome` 을 직접 부르는 경로는
+   *    **엉뚱한 프로필에 그대로 붙었다.** 모든 호출 경로가 여기를 지나므로
+   *    검사도 여기 있어야 한다.
+   */
+  verifyProfileFn = verifyAutomationProfile,
+  /** 'operate' 는 무인 실행 · 'login' 은 사람이 처음 로그인하는 중 */
+  mode = 'operate',
 } = {}) {
+  const port = CDP_PORT
+  /**
+   * ① 🔴 **띄우기 전에 본다.** 폴더·표식·권한·포트 주인이 맞아야 spawn 한다.
+   *    표식이 없으면 **여기서 만들지 않는다** — 표식 생성은 `--login` 만 한다.
+   *    자동 실행이 표식을 만들어 주면 "확인했다" 가 아니라 "덮어썼다" 가 된다.
+   */
+  const pre = await verifyProfileFn({ profileDir, port, mode, requireRunning: false })
+  if (!pre.ok) {
+    return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: pre.why, identity: pre }
+  }
+
   const alive = await cdpCheck()
-  if (alive) return { ok: true, started: false }
+  if (alive) {
+    /**
+     * ② 🔴 **떠 있어도 그냥 통과시키지 않는다.** 살아 있는 포트가 우리 창이라는 보장은 없다.
+     *    떠 있는 상태 그대로 **전체 신원**을 다시 본다 (열린 페이지 포함).
+     */
+    const post = await verifyProfileFn({ profileDir, port, mode, requireRunning: true })
+    if (!post.ok) {
+      return { ok: false, started: false, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post }
+    }
+    return { ok: true, started: false, identity: post }
+  }
   if (!browserCheck()) return { ok: false, started: false, reason: STATUS.BROWSER_MISSING }
 
   /**
@@ -582,9 +614,6 @@ export async function ensureChrome({
     return { ok: false, started: false, reason: STATUS.CHROME_NOT_RUNNING, lock }
   }
 
-  if (!existsSync(profileDir)) mkdirSync(profileDir, { recursive: true })
-  try { chmodSync(profileDir, 0o700) } catch { /* 이미 맞으면 그만 */ }
-
   const child = spawnFn(CHROME_APP, chromeArgs(profileDir), { detached: true, stdio: 'ignore' })
   child?.unref?.()
   // 🔴 죽은 잠금 위에서 띄운 경우를 기록에 남긴다 — 다음 사고 때 이 줄이 단서다
@@ -594,30 +623,38 @@ export async function ensureChrome({
   const deadline = Date.now() + waitMs
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, pollMs))
-    if (await cdpCheck()) return { ok: true, started: true, startedOverStaleLock, lock }
+    if (!(await cdpCheck())) continue
+    /**
+     * ③ 🔴 **띄운 뒤에도 다시 본다.** 우리가 spawn 했다고 해서 붙는 창이 우리 창이라는
+     *    보장은 없다 — 같은 포트를 다른 프로세스가 먼저 잡았을 수 있다.
+     */
+    const post = await verifyProfileFn({ profileDir, port, mode, requireRunning: true })
+    if (!post.ok) {
+      return { ok: false, started: true, reason: STATUS.AUTOMATION_PROFILE_MISMATCH, why: post.why, identity: post, startedOverStaleLock, lock }
+    }
+    return { ok: true, started: true, startedOverStaleLock, lock, identity: post }
   }
   return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING, startedOverStaleLock, lock }
 }
 
-/**
- * 🔴 **프로필 신원 관문** — 첫 AI 호출·파일 write 전에 선다 (2026-09-28 · P0-2).
- *
- *    폴더·표식·포트 주인·명령줄·열린 페이지를 **한 번에** 본다.
- *    하나라도 어긋나면 `AUTOMATION_PROFILE_MISMATCH` 로 끝낸다 —
- *    기본 Chrome·사람 프로필·옛 폴더로 **폴백하지 않는다.**
- *    남의 페이지를 navigate·close 해서 고치지도 않는다.
- */
 export async function verifyAutomationProfile({
   profileDir = PROFILE_DIR,
   port = CDP_PORT,
   requireRunning = true,
+  /** 🔴 'operate' 는 무인 실행 · 'login' 은 사람이 처음 로그인하는 중 */
+  mode = 'operate',
   readMarkerFn = readMarker,
   commandLinesFn = listChromeCommandLines,
+  /**
+   * 🔴 **읽기 실패와 "0건" 을 구분해 돌려준다.** 예전처럼 `catch → []` 로 뭉개면
+   *    "못 읽었다" 가 "페이지가 없다" 가 되고, 그게 다시 정상으로 통과한다.
+   */
   listTargets = async () => {
     try {
       const r = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(4000) })
-      return await r.json()
-    } catch { return [] }
+      if (!r.ok) return { readOk: false, pages: null }
+      return { readOk: true, pages: await r.json() }
+    } catch { return { readOk: false, pages: null } }
   },
   portInUseFn = async () => {
     try {
@@ -628,14 +665,14 @@ export async function verifyAutomationProfile({
 } = {}) {
   const m = readMarkerFn(profileDir)
   const portInUse = await portInUseFn()
-  const pages = portInUse ? await listTargets() : []
+  const t = portInUse ? await listTargets() : { readOk: true, pages: [] }
   return judgeAutomationProfile({
-    profileDir, port,
+    profileDir, port, mode,
     marker: m.ok ? m.marker : null,
     markerMode: m.ok ? m.mode : null,
     dirMode: m.ok ? m.dirMode : null,
     commandLines: commandLinesFn(),
-    pages, portInUse, requireRunning,
+    pages: t.pages, pagesReadOk: t.readOk, portInUse, requireRunning,
   })
 }
 
@@ -793,6 +830,12 @@ export async function fetchManuscript({
   connect,
   /** @type {(() => Promise<{ok: boolean}>) | undefined} */
   ensureTab,
+  /**
+   * 🔴 **send 를 누르기 직전에 불린다.** 여기서 단일 격리 장부에 원자적으로 적는다.
+   *    실패하면 누르지 않는다. 이 함수는 장부를 모른다 — 호출부가 준다.
+   * @type {((ctx: {messageFingerprint: string|null, stage: string}) => Promise<{ok: boolean, why?: string}>) | undefined}
+   */
+  onBeforeSend,
 }) {
   if (!existsSync(briefPath)) return { ok: false, reason: 'brief_missing', sent: false }
 
@@ -811,6 +854,8 @@ export async function fetchManuscript({
   let stage = 'connect'
   /** 🔴 실제로 composer 에 넣은 글자의 지문. 보내기 전에도 만들어 둔다 */
   let messageFingerprint = null
+  /** 🔴 누르기 전에 장부에 적었는가. 적었다면 그 뒤 실패는 **전송 여부를 확정할 수 없다** */
+  let preRecorded = false
 
   try {
     browser = await connectFn(CDP_URL, { timeout: connectTimeoutMs })
@@ -860,6 +905,26 @@ export async function fetchManuscript({
         errorDetail: `${readback.why} (한 글자도 보내지 않았다)` }
     }
 
+    /**
+     * 🔴 **보내기 전에 먼저 적는다** (2026-09-28 · P0-2).
+     *
+     *    앞판은 send 를 누르고 **돌아온 뒤에** 장부를 적었다. 전송 직후 프로세스가
+     *    죽으면(맥이 잠들거나, launchd 가 끊거나, 예외로 터지거나) 기록이 없다 —
+     *    다음 회차는 "안 보냈다" 로 읽고 **같은 brief 를 다시 보낸다.**
+     *
+     *    그래서 순서를 뒤집는다. readback 이 끝나 보낼 글자가 확정된 **그 순간**,
+     *    누르기 **전에** 적는다. 적지 못하면 **한 글자도 보내지 않는다** —
+     *    기억할 수 없는 전송은 하지 않는 편이 낫다.
+     */
+    if (onBeforeSend) {
+      const pre = await onBeforeSend({ messageFingerprint, stage: 'send' })
+      if (!pre?.ok) {
+        return { ok: false, reason: 'predelivery_record_failed', stage: 'compose', sent: false, messageFingerprint,
+          errorDetail: `${pre?.why ?? '전송 사실을 미리 적지 못했다'} (한 글자도 보내지 않았다)` }
+      }
+      preRecorded = true
+    }
+
     // ── 전송 ──
     stage = 'send'
     await page.waitForTimeout(300)
@@ -874,7 +939,7 @@ export async function fetchManuscript({
        *    코드 한 단어만 남기면 운영 로그로는 어느 쪽인지 알 수 없다 —
        *    2026-09-27 의 `connect_failed` 와 같은 실수다.
        */
-      return { ok: false, reason: 'send_button_missing', stage, sent, messageFingerprint,
+      return { ok: false, reason: 'send_button_missing', stage, sent, messageFingerprint, preRecorded,
         errorName: e?.name ?? 'Error',
         errorDetail: String(e?.message ?? '').split('\n')[0].slice(0, 200) }
     }
@@ -893,7 +958,7 @@ export async function fetchManuscript({
       }, null, { timeout: timeoutMs, polling: 3000 })
     } catch {
       // 🔴 닫기는 finally 가 한다 — 여기서 닫으면 뒤 경로가 닫힌 page 를 만진다
-      return { ok: false, reason: 'response_timeout', stage, sent, messageFingerprint }
+      return { ok: false, reason: 'response_timeout', stage, sent, messageFingerprint, preRecorded }
     }
 
     // ③ pre code 의 textContent — 렌더된 <hr>/<h2> 가 아니라 원본 표기가 그대로 있다
@@ -904,17 +969,17 @@ export async function fetchManuscript({
 
     // 지정 문장이 빠졌으면 저장하지 않는다 — 원고를 고치지 않고 되돌린다
     const missing = requiredMarkers.filter((m) => !text.includes(m))
-    if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length, length: text.length, sent, messageFingerprint }
+    if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length, length: text.length, sent, messageFingerprint, preRecorded }
 
     // 🔴 관문. 여기서 막히면 파일이 생기지 않는다 — 다음 실행이 깨끗한 상태에서 다시 받는다.
     if (validate) {
       const v = validate(text)
-      if (!v.ok) return { ok: false, reason: 'invalid_manuscript', invalid: v.reasons ?? [], length: text.length, sent, messageFingerprint }
+      if (!v.ok) return { ok: false, reason: 'invalid_manuscript', invalid: v.reasons ?? [], length: text.length, sent, messageFingerprint, preRecorded }
     }
 
     // 🔴 여기서 처음이자 마지막으로 원고가 디스크에 닿는다. 문자열을 손대지 않는다
     writeFileSync(outPath, text)
-    return { ok: true, length: text.length, sent, messageFingerprint }
+    return { ok: true, length: text.length, sent, messageFingerprint, preRecorded }
   } catch (err) {
     /**
      * 🔴 **`connect_failed` 한 단어로 삼키지 않는다** (2026-09-27 사고).
@@ -927,6 +992,7 @@ export async function fetchManuscript({
       reason: 'connect_failed',
       stage,
       messageFingerprint,
+      preRecorded,
       errorName: err?.name ?? 'Error',
       errorDetail: String(err?.message ?? '').split('\n')[0].slice(0, 200),
       sent,
