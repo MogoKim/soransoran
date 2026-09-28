@@ -27,7 +27,9 @@
  *    의 `reviews` → 적재 `DRAFT_LIFE_REVIEW:<코드>` 경고)로 보낸다. 아래 「생활 일관성 게이트 넷」 참고.
  * 🔴 순수 함수다. DB · 네트워크 · 파일 IO 없음.
  */
-import { readMediaDependency } from './evidence'
+import { readMediaDependency, CLOSING_RE } from './evidence'
+/** 🔴 KST 하루 경계의 정본 — 발행 일일 상한과 같은 함수다 */
+import { kstDayStart } from '../persona-cap'
 import { RELATION_NAMES } from './source-facts'
 /** 🔴 "다른 사람을 가리키는 말" 의 정본 — 여기서 목록을 다시 만들지 않는다 */
 import { OTHER_MARKERS } from '../persona-self-age'
@@ -54,8 +56,14 @@ export const DRAFT_GATE_CODES = [
   'childLifeStageConflict',
   /** 🔴 (v2) 근거·카드·계획 어디에도 없는 1인칭 정신건강·질병 경험 */
   'unsupportedHealthClaim',
+  /** 🔴 (v3) 원문 시점에만 맞는 명절·실시간 현장 표현을 게시 시점의 지금처럼 말한다 */
+  'staleTimeClaim',
+  /** 🔴 (v3) 다른 커뮤니티에서 본 회원·글의 움직임을 이 곳 이야기처럼 말한다 */
+  'externalCommunityClaim',
   /** 🔴 우리 글에 없는 사진·첨부에 기댄다 */
   'mediaDependentDraft',
+  /** 🔴 (v3) 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다 */
+  'truncatedSourceCompletion',
   /** 🔴 1인칭 허가(selfBasis) 없이 자기 생활사를 주장한다 */
   'unwarrantedSelfClaim',
 ] as const
@@ -68,7 +76,7 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  *    올리면 자동 READY 증거 cohort 가 새로 시작한다. CI(`check:quality-contract`)가 이 파일의
  *    지문이 바뀌었는데 판도 확인도 그대로면 막는다.
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v2'
+export const DRAFT_GATE_VERSION = 'draft-gates-v3'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -86,6 +94,13 @@ export const DRAFT_GATE_VERSION = 'draft-gates-v2'
  */
 export const DRAFT_LIFE_REVIEW_CODES = [
   'maritalStatusConflict', 'careHouseholdConflict', 'childLifeStageConflict', 'unsupportedHealthClaim',
+  /**
+   * 🔴 (quality-v3 · 2026-09-28) 원천·시점과 대조하는 넷 — 확정할 수 없으면 같은 사람 검토 경고로 간다.
+   *    경고 이름(`DRAFT_LIFE_REVIEW:<코드>`)은 v2 와 같다 — 적재기·자동 READY 가 이미 이 접두를 읽는다.
+   */
+  'staleTimeClaim', 'externalCommunityClaim', 'mediaDependentDraft', 'truncatedSourceCompletion',
+  /** 🔴 (v3) 계획이 `noLifeFactNeeded` 인데 자기 가족사를 명시해 말한다 — `selfBasis=null` 은 여전히 확정(AUTO_HOLD)이다 */
+  'unwarrantedSelfClaim',
 ] as const satisfies readonly DraftGateCode[]
 export type DraftLifeReviewCode = (typeof DRAFT_LIFE_REVIEW_CODES)[number]
 export type DraftLifeReview = { code: DraftLifeReviewCode; detail: string }
@@ -98,6 +113,9 @@ export const DRAFT_GATE_LABEL: Readonly<Record<DraftGateCode, string>> = {
   careHouseholdConflict: '🔴 Persona 가 늘 돌보거나 함께 사는 부모와 연락이 끊겼다·따로 산다고 말한다',
   childLifeStageConflict: '🔴 Persona 의 자녀 나이대·동거와 다른 자녀의 삶(돈을 건넴·입대·결혼·따로 삶)을 말한다',
   unsupportedHealthClaim: '🔴 근거·카드·계획 어디에도 없는 1인칭 정신건강·질병 경험을 말한다',
+  staleTimeClaim: '🔴 원문이 올라온 날에만 맞는 명절·실시간 현장 표현을 게시 시점의 지금처럼 말한다',
+  externalCommunityClaim: '🔴 다른 커뮤니티에서 본 회원·글의 움직임을 이 곳에서 본 것처럼 말한다',
+  truncatedSourceCompletion: '🔴 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다',
 }
 
 export type DraftGateFailure = { code: DraftGateCode; detail: string }
@@ -175,6 +193,37 @@ export type DraftGateInput = {
   body: string
   plan: DraftGatePlan | null
   card: DraftGateCard | null
+  /**
+   * 🔴 **원천과 판정 시각** (2026-09-28 quality-v3) — 필수다. 새 생성(`runContentCore`)과 캐시 채택(`pickV2`)이
+   *    **같은 값**을 넘긴다. 빠뜨리면 컴파일이 깨진다 — 조용히 판정을 건너뛰는 호출부가 생기지 않는다.
+   */
+  context: DraftGateContext
+}
+
+/**
+ * 🔴 **초안 밖에서 가져오는 사실** — 원천 글과 판정 시각. 모르는 것은 `null` 이다(지어내지 않는다).
+ *    `source` 가 `null` 이면 원천을 모른다 — 시점·자료·잘림·출처 축에서 무엇이 걸렸을 때
+ *    통과시키지 않고 **사람 검토**로 보낸다.
+ */
+export type DraftGateContext = {
+  /** 🔴 판정 시각 — 회차 시각(`RUN_AT`)이다. 벽시계를 따로 읽지 않는다 */
+  at: Date
+  source: DraftGateSource | null
+}
+export type DraftGateSource = {
+  /** 🔴 모델에 준 것과 같은 원문 — 마스킹된 제목 · `bodyHead` (근거 packet 을 만든 그 글자) */
+  title: string
+  body: string
+  /** 🔴 원천 사이트(`navercafe:wgang` …) — 비어 있으면 모른다 */
+  site: string
+  /** 🔴 원문이 올라온 시각 · 우리가 가져온 시각. `capturedAt` 을 `postedAt` 대신 쓰지 않는다 */
+  postedAt: Date | null
+  capturedAt: Date | null
+  /**
+   * 🔴 **양수만 증거다.** 수집기 여럿이 이미지를 세지 않고 `0` 을 적는다(`micro-seed-collect-navercafe` ·
+   *    thin 경로) — `0` 은 "없다" 가 아니라 "안 셌다" 다.
+   */
+  imageCount: number | null
 }
 
 /**
@@ -186,12 +235,15 @@ export type DraftGateInput = {
 export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFailure[]; reviews: DraftLifeReview[] } {
   const failures = judgeCoreGates(input)
   const life = input.card === null ? { hard: [], review: [] } : judgeLifeConsistency(input.title, input.body, input.plan, input.card)
-  const all = [...failures, ...life.hard]
+  const ctx = judgeSourceContext(input.title, input.body, input.context)
+  const basis = judgeNoLifeFactClaims(input.title, input.body, input.plan)
+  const all = [...failures, ...life.hard, ...ctx.hard]
   const rank = (c: DraftGateCode): number => DRAFT_GATE_CODES.indexOf(c)
   const hardCodes = new Set(all.map((f) => f.code))
   return {
     failures: [...all].sort((a, b) => rank(a.code) - rank(b.code)),
-    reviews: life.review.filter((r) => !hardCodes.has(r.code)).sort((a, b) => rank(a.code) - rank(b.code)),
+    reviews: [...life.review, ...ctx.review, ...basis]
+      .filter((r) => !hardCodes.has(r.code)).sort((a, b) => rank(a.code) - rank(b.code)),
   }
 }
 
@@ -211,12 +263,15 @@ function judgeCoreGates(input: DraftGateInput): DraftGateFailure[] {
    *    (`STANCE_LABEL`: 관찰·질문·생각은 *겪었다고 말하지 않는다*). 그 자리에서 자기 남편·
    *    부모·자녀를 사실로 말하면 **카드로 검증받지 않은 생활사**가 된다.
    *    🔴 `lifeFacts` 의 허가 밖 주장은 여기서 세지 않는다 — 카드 모순은 C 와 의미 검수가 본다.
+   *    🔴 (quality-v3) 축 낱말 없이 글의 사정을 통째로 자기 집안 일로 두는 말(`우리 집도 그래요`)도 센다.
+   *       `noLifeFactNeeded` 는 여기가 아니라 `judgeNoLifeFactClaims`(사람 검토)가 본다.
    */
   const claims = readSelfClaims(title, body, OWNER_OPTS)
   if (input.plan !== null && input.plan.selfBasis === null) {
     const warranted = new Set(input.plan.warrants.map((w) => w.fact))
-    const bad = claims
+    const bad: { axis: string; clause: string }[] = claims
       .filter((c) => !WARRANT_OF[c.axis].some((f) => warranted.has(f)))
+    bad.push(...readSelfFamilyLikeTopic(title, body).map((clause) => ({ axis: 'family', clause })))
     if (bad.length > 0) {
       const axes = [...new Set(bad.map((c) => c.axis))]
       out.push({
@@ -601,6 +656,297 @@ export function judgeLifeConsistency(
     ...judgeCare(frames, all, card),
     ...judgeChildren(title, body, frames, card),
     ...judgeHealth(frames, plan, card),
+  ]
+  const fold = (level: 'hard' | 'review'): DraftLifeReview[] => {
+    const by = new Map<DraftLifeReviewCode, string[]>()
+    for (const h of hits.filter((x) => x.level === level)) by.set(h.code, [...(by.get(h.code) ?? []), h.detail])
+    return [...by].map(([code, ds]) => ({ code, detail: [...new Set(ds)].slice(0, 3).join(' / ') }))
+  }
+  return { hard: fold('hard'), review: fold('review') }
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 원천·시점 대조 게이트 넷 (2026-09-28 quality-v3)
+// ─────────────────────────────────────────────────────────
+//
+// 🔴 **왜 있나.** quality-v1 cohort 30건 중 사람이 고치거나 버려야 할 글 13건 가운데 아래 모양은
+//    카드 게이트(v2)로도 잡히지 않았다 — 넷 다 **초안만 봐서는 틀린 곳이 없고, 원천·시각과 견줘야 보인다.**
+//    ```
+//    #8   원문 09-24 · "이제 집으로 퇴근하는 길이에요 · 다들 명절 잘 보내세요"     → 회차 09-28 에는 끝난 명절
+//    #21  원문 09-24 · "지금 이승철 콘서트인데 박보검이 나왔어요"                   → 게시 때는 지금이 아니다
+//    #9   원문 시각 미상 · 제목 "명절에…" + "이번에 … 가기로 했는데요"              → 이미 지났을 수 있는 계획
+//    #18  원천 카페 · "자주 바꾸시는 분들이 꽤 보이네요"                            → 다른 카페 회원을 본 말
+//    #19  원천 카페 · "요즘 비슷한 이야기들이 자주 보여"                            → 다른 카페 글을 본 말
+//    #7   "한번 봐주세요 · 회원님들이 보시기엔 어떠신가요?"                        → 우리 글에는 볼 것이 없다
+//    #2   원문 끝 "남편이 아침을 주니까 / 야" → 초안 "…챙겨주니 본체만체하네요."     → 없는 결말
+//    ```
+// 🔴 **낱말 하나로 막지 않는다.** 네 축 모두 **초안의 모양 + 원천의 사실(시각 · 사이트 · 사진 수 · 끝맺음)**
+//    둘이 함께 있을 때만 걸린다. `요즘` · `이번에` · `오늘` 만으로는 걸리지 않는다.
+// 🔴 **확정할 수 있을 때만 막는다(AUTO_HOLD).** 원천 사실을 모르거나 해석이 둘이면 사람 검토다 —
+//    통과시키지 않는다.
+
+/**
+ * 🔴 **"우리 집도/만 그렇다"** — 축 낱말(남편 · 부모 …) 없이 글의 사정을 통째로 자기 집안 사실로 둔다.
+ *    `readSelfClaims` 는 축 낱말이 있어야 센다 — #19 `우리 집만 그런 게 아니었구나` 는 축 낱말이 없다.
+ *    🔴 전언(`~대요`)은 남의 집 이야기다.
+ */
+const FAMILY_LIKE_TOPIC_RE =
+  /(?:우리|저희|울)\s*(?:집|집안|식구|친정|시댁)(?:도|만|이|은|이나)?\s*(?:그런|그래|그렇|마찬가지|똑같|비슷)/
+function readSelfFamilyLikeTopic(title: string, body: string): string[] {
+  return readClauseFrames(title, body, OWNER_OPTS)
+    .filter((f) => FAMILY_LIKE_TOPIC_RE.test(f.clause) && !REPORTED_RE.test(f.clause))
+    .map((f) => f.clause)
+}
+
+/**
+ * 🔴 **`noLifeFactNeeded` 계획의 자기 가족사** (2026-09-28 quality-v3 · cohort #19) — 사람 검토.
+ *    계획이 "생활사 없이 쓰는 보편 감정 글" 이라고 정했는데 초안이 `우리 집만 그런 게 아니었구나` 로
+ *    자기 집안 사정을 사실로 뒀다. 생활사가 필요 없다고 한 계획은 **허가가 아니다**(근거도 비어 있다).
+ *    🔴 확정(AUTO_HOLD)으로 두지 않는다 — 카드가 그 사실을 뒷받침할 수도 있다(P08 은 성인 자녀 둘이 있다).
+ *       카드와 **어긋나면** C 게이트 · 생활 일관성 게이트가 따로 막는다.
+ *    🔴 가족 축(배우자 · 자녀 · 부모 · 돌봄)만, 그리고 **명시된 1인칭**(`우리 남편` · `저희 애들`)만 센다 —
+ *       생략된 1인칭은 일반론(`친정이나 처가는 친정댁이라고 안 부르잖아요` · cohort #26)까지 잡는다.
+ *       집 · 일(`저희 아파트는` · cohort #12)은 가족사가 아니다.
+ */
+/**
+ * 🔴 정본 파서는 `친정` 을 낱말 자체로 '내 것' 으로 읽는다 — 호칭 이야기(`친정이나 처가는 …`)까지 명시로 센다.
+ *    사람 검토로 보내는 자리라 **1인칭 한정사가 절에 실제로 있을 때만** 센다.
+ */
+const SELF_OWNER_WORD_RE = /(?<![가-힣])(?:우리|저희|울|제|내)\s?[가-힣]/
+const FAMILY_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['spouse', 'children', 'parents', 'parentCare'])
+function judgeNoLifeFactClaims(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
+  if (plan === null || plan.selfBasis !== 'noLifeFactNeeded') return []
+  const clauses = [
+    ...readSelfClaims(title, body, OWNER_OPTS)
+      .filter((c) => FAMILY_AXES.has(c.axis) && c.owner === 'explicit' && SELF_OWNER_WORD_RE.test(c.clause))
+      .map((c) => c.clause),
+    ...readSelfFamilyLikeTopic(title, body),
+  ]
+  if (clauses.length === 0) return []
+  return [{ code: 'unwarrantedSelfClaim', detail: `계획 noLifeFactNeeded · 자기 가족사 — ${[...new Set(clauses)].slice(0, 3).join(' / ')}` }]
+}
+
+type SourceDay = 'same' | 'before' | 'unknown'
+/**
+ * 🔴 **원문이 판정 시각과 같은 KST 날짜에 올라왔는가.**
+ *    · `postedAt` 이 있으면 그것으로 가른다
+ *    · 없으면 `capturedAt` 이 **앞 날짜일 때만** "앞" 이다 — 올라온 시각은 가져온 시각보다 늦을 수 없다.
+ *      같은 날 가져왔으면 올라온 날은 모른다(며칠 전 글을 오늘 가져올 수 있다)
+ *    🔴 `capturedAt` 을 `postedAt` 대신 쓰지 않는다 — 오래된 글을 오늘 다시 가져온 것이 오늘 글이 된다.
+ */
+const sourceDayOf = (ctx: DraftGateContext): SourceDay => {
+  const s = ctx.source
+  if (s === null) return 'unknown'
+  const today = kstDayStart(ctx.at).getTime()
+  if (s.postedAt !== null) return kstDayStart(s.postedAt).getTime() < today ? 'before' : 'same'
+  if (s.capturedAt !== null && kstDayStart(s.capturedAt).getTime() < today) return 'before'
+  return 'unknown'
+}
+
+// ── 5. 시점 — 원문 날에만 맞는 명절 · 실시간 현장 ──
+/** 🔴 날짜가 정해진 명절 — 끝나면 "지금" 이 아니다. `제사` 는 넣지 않는다(집마다 날이 다르다) */
+const HOLIDAY_RE = /명절|추석|한가위|설날|구정|설\s*연휴|연휴|차례|성묘|귀성|귀경/
+/** 🔴 날짜가 정해진 공개 현장 — 게시 때 "지금 ○○ 중" 이면 거짓이 된다 */
+const LIVE_EVENT_RE = /콘서트|공연|경기|생방송|생중계|중계|시상식|축제|뮤지컬|방송/
+/** 🔴 **지금 이 순간** — 쓴 사람의 시계에 묶인 말. `이제` 는 홀로 넣지 않는다(`이제 애들 다 컸어요` 는 지금 삶이다) */
+const NOW_RE = /지금|방금|이제\s*막|실시간|현재/
+/**
+ * 🔴 **하는 중** — 끝나지 않은 동작. 명절·현장 맥락에서만 본다.
+ *    🔴 `길` 은 **서술로 끝날 때만**(`가는 길이에요`) — `오는 길에 꽃 사고` 는 다녀온 이야기다(운영 P07 송편 글).
+ */
+const IN_PROGRESS_RE =
+  /(?:는|가는|오는|하는)\s*길(?:이에요|입니다|이네요|인데|이야|이다)|(?:는|하는|보는|가는|먹는)\s*중(?:이|입니다|이에요|인데|이네요)?|중(?:이에요|입니다|이네요|인데요?)/
+/** 🔴 **날짜에 묶인 말** — 명절·현장과 함께일 때만 본다 */
+const DAY_RE = /오늘|어제|내일|엊그제|그저께|모레/
+/** 🔴 명절이 **아직 오지 않은** 자리의 말 — 인사 · 계획 */
+const HOLIDAY_GREETING_RE =
+  /(?:잘|즐겁게|편안히|행복하게|건강하게|넉넉하게)\s*(?:보내세요|보내시길|보내시고|쇠세요|쉬세요)|(?:즐거운|행복한|풍성한|넉넉한|편안한)\s*(?:명절|추석|한가위|연휴)/
+const PLAN_AHEAD_RE =
+  /기로\s*(?:했|해|하)|려고\s*(?:해요|합니다|하는데|해서|하고)|예정이|(?:할|갈|올)\s*거(?:예요|에요|야|라|든)|앞두고|코앞|다가오/
+/**
+ * 🔴 **돌아보는 말** — 명절·현장이 끝난 자리에서 쓴 것이다(과거 회고는 통과).
+ *    🔴 `왔어요` 같은 흔한 과거 어미는 넣지 않는다 — `지금 콘서트인데 박보검이 나왔어요` 의 `나왔어요` 는
+ *       지금 무대 이야기다(cohort #21 을 앞판이 이렇게 놓쳤다). **끝남 · 지남 · 다녀옴**만 센다.
+ */
+const RETRO_RE = /지난|지나고|지나서|지났|끝나고|끝났|끝내고|쇠고|보냈|지냈|다녀왔|다녀온|치렀|했었|였었|었던|았던|했던|갔었|보고\s*왔/
+
+type TimeHit = { strong: boolean; clause: string }
+
+function readTimeClaims(frames: readonly ClauseFrame[]): TimeHit[] {
+  const retro = (c: string): boolean => RETRO_RE.test(c) || PAST_CUE_RE.test(c) || PAST_FRAME_RE.test(c)
+  // 🔴 이 글에서 명절이 **아직 끝나지 않은 것**으로 말해지는가 — 모든 명절 언급이 회고면 아니다
+  const holidayLive = frames.some((f) => HOLIDAY_RE.test(f.clause) && !retro(f.clause))
+  const sentenceOf = (f: ClauseFrame): string => frames.filter((x) => x.sentence === f.sentence).map((x) => x.clause).join(' ')
+  const out: TimeHit[] = []
+  for (const f of frames) {
+    const c = f.clause
+    // 🔴 들은 말(`~대요`)은 글쓴이의 지금이 아니다
+    if (REPORTED_RE.test(c)) continue
+    const live = LIVE_EVENT_RE.test(c)
+    const holiday = HOLIDAY_RE.test(c)
+    // ① 지금 현장에 있다 · 명절 한가운데 무엇을 하는 중이다 — 쓴 순간에만 참이다
+    if (!retro(c) && ((NOW_RE.test(c) && live) || (IN_PROGRESS_RE.test(c) && (live || holidayLive)))) {
+      out.push({ strong: true, clause: c })
+      continue
+    }
+    // ② 날짜 말(`오늘` …)이 명절·현장에 붙었다 — 회고여도 그 날짜가 원문의 날이다
+    if (DAY_RE.test(c) && (holiday || live)) { out.push({ strong: false, clause: c }); continue }
+    // ③ 아직 오지 않은 명절 — 인사 · 계획
+    if (HOLIDAY_GREETING_RE.test(c) && HOLIDAY_RE.test(sentenceOf(f))) { out.push({ strong: false, clause: c }); continue }
+    if (holidayLive && PLAN_AHEAD_RE.test(c) && !retro(c)) out.push({ strong: false, clause: c })
+  }
+  return out
+}
+
+function judgeStaleTime(frames: readonly ClauseFrame[], ctx: DraftGateContext): LifeHit[] {
+  const claims = readTimeClaims(frames)
+  if (claims.length === 0) return []
+  const day = sourceDayOf(ctx)
+  // 🔴 원문이 오늘 올라왔다 — 지금 말해도 시점이 맞는다
+  if (day === 'same') return []
+  const posted = ctx.source?.postedAt?.toISOString() ?? '미상'
+  return claims.map((t) => ({
+    code: 'staleTimeClaim' as const,
+    // 🔴 원문이 앞 날짜인데 "지금 ○○ 중" 이다 — 확정. 인사·계획·날짜 말은 명절이 아직일 수 있다 → 사람
+    level: t.strong && day === 'before' ? 'hard' as const : 'review' as const,
+    detail: `원문 ${day === 'before' ? '앞 날짜' : '시각 미상'}(posted ${posted}) · ${t.strong ? '지금·하는 중' : '날짜·인사·계획'} · "${t.clause}"`,
+  }))
+}
+
+// ── 6. 출처 — 다른 커뮤니티에서 본 움직임 ──
+/**
+ * 🔴 **회원·글의 움직임을 봤다** — `분들이 꽤 보이네요` · `비슷한 이야기들이 자주 보여` · `글이 많이 올라오네요`.
+ *    우리 게시판에 올라가면 **이 곳의 움직임**을 말한 것이 된다. 원천이 다른 커뮤니티 글이면 그 움직임은
+ *    그 커뮤니티의 것이다 — 없는 활동을 있는 것처럼 보이게 한다(활발한 척 금지).
+ */
+const ACTIVITY_SEEN_RE = new RegExp([
+  '(?:분들|회원|글|이야기|얘기|사연|질문|후기)(?:들)?(?:이|가|도)?\\s*(?:꽤|많이|자주|종종|부쩍|계속|여기저기|은근)?\\s*(?:많이\\s*)?(?:보이|보여|보입|올라오|올라와|올라옵)',
+  // 🔴 어순이 뒤집힌 모양 — `게시판에 올라오는 명절 글들을 보다 보면`(운영 P15)
+  '(?:올라오는|올라온|자주\\s*보이는)\\s*(?:[가-힣]+\\s+)?(?:글|이야기|얘기|사연|질문|후기)',
+].join('|'))
+/** 🔴 **다른 곳을 말했다** — 길 · 동네 · 방송에서 본 것은 커뮤니티의 움직임이 아니다. `카페` 는 넣지 않는다 */
+const ELSEWHERE_RE =
+  /(?:길|밖|동네|마트|시장|거리|지하철|버스|공원|티비|TV|뉴스|방송|유튜브|드라마|주변|회사|직장|병원|학교|식당)(?:에서|에|엔|을|를|서)?(?![가-힣])/
+
+function judgeExternalCommunity(frames: readonly ClauseFrame[], ctx: DraftGateContext): LifeHit[] {
+  const out: LifeHit[] = []
+  const site = (ctx.source?.site ?? '').trim()
+  for (const f of frames) {
+    const c = f.clause
+    if (!ACTIVITY_SEEN_RE.test(c) || REPORTED_RE.test(c)) continue
+    const sentence = frames.filter((x) => x.sentence === f.sentence).map((x) => x.clause).join(' ')
+    if (ELSEWHERE_RE.test(sentence)) continue
+    // 🔴 원천이 커뮤니티 글이다 — 그 움직임은 그 커뮤니티의 것이다(확정). 원천을 모르면 사람
+    out.push({
+      code: 'externalCommunityClaim', level: site === '' ? 'review' : 'hard',
+      detail: `원천 ${site === '' ? '미상' : site} · "${c}"`,
+    })
+  }
+  return out
+}
+
+// ── 7. 자료 — 보여 줄 것이 없는데 봐 달라 ──
+/**
+ * 🔴 **눈으로 보고 판단해 달라** — `한번 봐주세요` · `보시기엔 어떠신가요` · `어때 보이나요`.
+ *    기존 `readMediaDependency` 는 자료 낱말(`사진` …)이 있어야 잡는다 — #7 은 자료 낱말 없이 봐 달라고 했다.
+ *    🔴 `봐` 바로 앞이 한글이면 다른 말이다(`들어봐 주세요` · `읽어봐 주세요`).
+ *    🔴 인사말(`예쁘게 봐주세요`)은 판단 요청이 아니다.
+ */
+const LOOK_ASK_RE =
+  /(?<![가-힣])봐\s*주(?:세요|실래요|시겠어요|셔요|실\s*분|시면)|보시기(?:엔|에|에는)\s*(?:어떠|어때|괜찮|이상)|(?:어때|괜찮아|이상해|예뻐)\s*보이(?:나요|세요|는지|시나요|죠|나)/
+const LOOK_COURTESY_RE = /(?:예쁘게|이쁘게|좋게|너그럽게|귀엽게|곱게)\s*봐\s*주/
+/**
+ * 🔴 **아는 사람에게 묻는 것**은 조언 요청이다 — `요리 잘 아시는 분들 좀 봐주세요` 는 글로 설명한 것을
+ *    봐 달라는 말이다(cohort #16 · 권고 무수정). 모양을 보고 판단해 달라는 것이 아니다.
+ */
+const LOOK_ADVICE_RE = /(?:아시는|아는|경험\s*있으신|해\s*보신|써\s*보신|겪어\s*보신)\s*분/
+
+function judgeLookAsk(title: string, body: string, ctx: DraftGateContext): LifeHit[] {
+  const sentences = `${title}\n${body}`.split(/(?<=[.!?？。])\s+|\n+/).map((x) => x.trim()).filter((x) => x !== '')
+  const ask = sentences.find((x) => LOOK_ASK_RE.test(x) && !LOOK_COURTESY_RE.test(x) && !LOOK_ADVICE_RE.test(x))
+  if (ask === undefined) return []
+  const images = ctx.source?.imageCount ?? null
+  return [{
+    code: 'mediaDependentDraft',
+    // 🔴 원천에 사진이 **실제로 있었다** — 그 사진을 봐 달라는 글이다(확정). 모르면 사람이 본다
+    level: images !== null && images > 0 ? 'hard' : 'review',
+    detail: `원천 사진 ${images !== null && images > 0 ? `${images}장` : '미상'} · 우리 글엔 사진이 없다 · "${ask}"`,
+  }]
+}
+
+// ── 8. 잘린 원문 — 없는 결말 ──
+const HANGUL_WORD_RE = /[가-힣]{2,}/g
+const stemOf = (w: string): string => w.replace(PARTICLE_TAIL_RE, '').slice(0, 2)
+const squash = (s: string): string => s.replace(/\s+/g, '')
+
+/**
+ * 🔴 **원문 끝이 끝맺지 못했다** — 끝 줄이 정본 `CLOSING_RE` 를 지나지 못한다. 한두 글자 조각(`야`)은
+ *    앞 줄에 붙여 본다. 🔴 **수집 반복**(본문 일부가 두 번 캡처돼 두 번째가 중간에 끊김)은 잘림이 아니다 —
+ *    끝 줄이 본문 앞쪽에 이미 있으면 뒤는 되풀이다(운영 cohort #6 · #10 · #22).
+ */
+function openTailOf(sourceBody: string): string | null {
+  const lines = sourceBody.split(/\n+/).map((x) => x.trim()).filter((x) => /[가-힣]/.test(x))
+  if (lines.length === 0) return null
+  let tail = lines[lines.length - 1]!
+  if ((tail.match(/[가-힣]/g) ?? []).length <= 2 && lines.length >= 2) {
+    const prev = lines[lines.length - 2]!
+    /**
+     * 🔴 앞 줄이 이미 끝맺었으면 **문장 경계에서** 잘린 것이다 — 조각(`우`)에는 이어 받을 내용이 없다
+     *    (cohort #3 `…아주 가끔 드십니다. 우`). 앞 줄이 끝맺지 못했을 때만 붙여 본다(#2 `…주니까 / 야`).
+     */
+    if (CLOSING_RE.test(prev.split(/(?<=[.!?？。])\s+/).pop() ?? prev)) return null
+    tail = `${prev} ${tail}`
+  }
+  if (CLOSING_RE.test(tail)) return null
+  const all = squash(sourceBody)
+  const t = squash(tail)
+  if (all.indexOf(t) < all.lastIndexOf(t)) return null
+  /**
+   * 🔴 **끝맺지 못한 마지막 절만** 본다 — 마지막 문장 경계 뒤, 여덟 어절까지. 긴 줄 통째(기사 캡처의
+   *    `… 공유하기` 같은 화면 글자)를 끝으로 보면 초안의 아무 문장이나 겹친다(운영 기사 글 과차단).
+   */
+  const open = (tail.split(/(?<=[.!?？。])\s+/).pop() ?? tail).trim().split(/\s+/).slice(-8).join(' ')
+  return open === '' ? null : open
+}
+
+function judgeTruncatedCompletion(title: string, body: string, ctx: DraftGateContext): LifeHit[] {
+  const src = ctx.source
+  if (src === null) return []
+  const tail = openTailOf(src.body)
+  if (tail === null) return []
+  const tailStems = [...new Set((tail.match(HANGUL_WORD_RE) ?? []).map(stemOf).filter((s) => s.length === 2))]
+  const known = squash(`${src.title}\n${src.body}`)
+  // 🔴 원문 끝 절을 이어 받은 초안 문장 — 겹치는 어절이 가장 많은 한 문장(둘 이상 겹칠 때만)
+  let best: { words: string[]; last: number; n: number } | null = null
+  for (const s of `${title}\n${body}`.split(/(?<=[.!?？。])\s+|\n+/)) {
+    const words = s.trim().split(/\s+/).filter((w) => w !== '')
+    const hits = words.map((w, i) => (tailStems.some((st) => w.includes(st)) ? i : -1)).filter((i) => i >= 0)
+    if (hits.length >= 2 && (best === null || hits.length > best.n)) best = { words, last: hits[hits.length - 1]!, n: hits.length }
+  }
+  if (best === null) return []
+  // 🔴 그 문장이 원문 끝 뒤로 **원문에 없는 말**을 더 이었는가 — 원문이 멈춘 자리 뒤는 우리가 모른다
+  const novel = best.words.slice(best.last + 1)
+    .flatMap((w) => w.match(HANGUL_WORD_RE) ?? [])
+    .filter((w) => !known.includes(stemOf(w)))
+  if (novel.length === 0) return []
+  return [{
+    code: 'truncatedSourceCompletion', level: 'review',
+    detail: `원문 끝 "${tail}" · 초안이 이어 붙인 말 "${novel.join(' ')}"`,
+  }]
+}
+
+/**
+ * 🔴 **원천·시점 대조 넷을 한 번에.** 카드가 없어도 돈다 — 카드와 무관한 축이다.
+ */
+export function judgeSourceContext(
+  title: string, body: string, ctx: DraftGateContext,
+): { hard: DraftLifeReview[]; review: DraftLifeReview[] } {
+  const frames = readClauseFrames(title, body, OWNER_OPTS)
+  const hits: LifeHit[] = [
+    ...judgeStaleTime(frames, ctx),
+    ...judgeExternalCommunity(frames, ctx),
+    ...judgeLookAsk(title, body, ctx),
+    ...judgeTruncatedCompletion(title, body, ctx),
   ]
   const fold = (level: 'hard' | 'review'): DraftLifeReview[] => {
     const by = new Map<DraftLifeReviewCode, string[]>()

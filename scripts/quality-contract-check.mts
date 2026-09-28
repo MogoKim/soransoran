@@ -45,6 +45,8 @@ export const FINGERPRINT_FILES = [
   'src/lib/review-provenance.ts',
   // 🔴 (quality-v2) 초안 게이트가 읽는 카드 집안 구성(`household`)의 파서 — 바뀌면 게이트 판정이 바뀐다
   'src/lib/persona-pool-card.ts',
+  // 🔴 (quality-v3) 초안 게이트의 시점 축이 읽는 KST 하루 경계 — 바뀌면 "원문이 같은 날인가" 판정이 바뀐다
+  'src/lib/persona-cap.ts',
 ] as const
 
 /**

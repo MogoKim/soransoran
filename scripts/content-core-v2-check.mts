@@ -185,6 +185,8 @@ const run = (o: {
     // 🔴 fixture 도 회차마다 새 불투명 id 를 준다 — 원문에서 유도하지 않는다
     artifactId: randomUUID().replace(/-/g, ''),
     sourceArticleId: o.id, title: o.title, maskedBody: o.body,
+    // 🔴 (quality-v3) 회차와 같은 날 올라온 커뮤니티 글 · 사진 수 미상 — 이 검사의 원문은 시점·출처 축을 부르지 않는다
+    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null },
     personas: o.personas ?? ALL,
     /**
      * 🔴 **넘긴 목록이 곧 전체다** — 따로 주지 않는 한.

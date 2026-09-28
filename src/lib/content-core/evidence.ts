@@ -163,8 +163,11 @@ export function readMediaDependency(text: string): MediaDependency | null {
   return null
 }
 
-/** 마무리를 보여 주는가 — 물음표 · 종결 어미 · 부르는 말 중 하나라도 */
-const CLOSING_RE = /[?？]|(?:요|다|죠|네요|까요|세요|군요|네|음)\s*[.!…]*\s*$/
+/**
+ * 마무리를 보여 주는가 — 물음표 · 종결 어미 · 부르는 말 중 하나라도.
+ * 🔴 (quality-v3) 초안 게이트가 **원문 끝이 잘렸는가**를 이 판정 하나로 본다 — 두 벌을 만들지 않는다.
+ */
+export const CLOSING_RE = /[?？]|(?:요|다|죠|네요|까요|세요|군요|네|음)\s*[.!…]*\s*$/
 
 /**
  * 🔴 **머리와 꼬리를 겹치지 않게 자른다.**

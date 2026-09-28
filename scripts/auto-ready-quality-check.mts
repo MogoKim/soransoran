@@ -57,7 +57,7 @@ const D = qualityContractDigest()
 const INDEPENDENT = createHash('sha256').update(stableJson(qualityContractComponents()), 'utf8').digest('hex')
 check('digest 는 sha256 hex 64', /^[0-9a-f]{64}$/.test(D))
 check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 digest 는 코드 상수 그대로 (독립 재계산과 같다)**',
-  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v2', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
+  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v3', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
 const comps = qualityContractComponents()
 check('🔴 digest 구성 — 게이트·검수·판정 판이 들어 있다',
   ['version', 'pipelineVersion', 'promptVersion', 'reviewVersion', 'draftRuleVersion', 'draftGateVersion', 'draftGateCodes', 'judgeContractDigest', 'semanticHoldCodes']
@@ -88,7 +88,7 @@ check('fixture 후보는 기계 profile 을 통째로 만족한다', measured.le
 const p1 = af.buildQueuePayload({ envelope: mEnv, candidate: mc as never, autoJudge: { ...aj, qualityContract: FORGED } as never, review: { qualityContract: FORGED }, now: '2026-09-27T00:00:00Z' })
 const stored = readQualityContract(p1?.gateResults)
 check('🔴 🔴 **적재가 남기는 값은 코드 상수다 — 후보·autoJudge·review·env 에 실린 값이 아니다**',
-  stored !== null && stored.digest === INDEPENDENT && stored.version === 'quality-v2', JSON.stringify(stored))
+  stored !== null && stored.digest === INDEPENDENT && stored.version === QUALITY_CONTRACT_VERSION, JSON.stringify(stored))
 check('🔴 저장된 표식은 판정 때 지금 계약이다', isCurrentQualityContract(p1?.gateResults))
 const forgedEnv = af.buildQueuePayload({ envelope: { ...mEnv, qualityContractDigest: FORGED }, candidate: mc as never, autoJudge: aj, now: 'x' })
 check('🔴 🔴 **#9 봉투 digest 가 다르면(호출자 주입) payload 없음**', forgedEnv === null)

@@ -208,6 +208,18 @@ async function main(): Promise<void> {
         holds !== null && life.join('|') === want.join('|'), holds === null ? '큐에 없다' : JSON.stringify(life))
     }
     check(`${tag} · 큐 행 수 = 채택 수 (${lifeAdopted.length})`, rows2.length === lifeAdopted.length, `${rows2.length}행`)
+    /**
+     * 🔴 (quality-v3) **같은 원천 큐 중복 0** — 같은 파일로 적재기를 한 번 더 돌려도 행이 늘지 않고,
+     *    원천(raw content)마다 큐 행은 하나다. 게이트가 바뀌어도 적재의 멱등은 그대로여야 한다.
+     */
+    const res3 = spawnSync(process.execPath, [join(T, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+      join(T, 'scripts', 'micro-seed-supply-autofill.mts'), '--apply', `--up-to=${LIFE.length}`], {
+      cwd: T, encoding: 'utf-8', env: { ...process.env, HOME: H, DATABASE_URL: URL, DIRECT_URL: URL },
+    })
+    const rows3 = await prisma.originalPostApprovalQueue.findMany({ select: { sourceRawContentId: true } })
+    check(`🔴 ${tag} · 다시 적재해도 큐 행이 늘지 않고 원천마다 한 행 (중복 0)`,
+      res3.status === 0 && rows3.length === rows2.length && new Set(rows3.map((x) => x.sourceRawContentId)).size === rows3.length,
+      `exit ${String(res3.status)} · ${rows3.length}행 · 원천 ${new Set(rows3.map((x) => x.sourceRawContentId)).size}`)
   }
   await prisma.originalPostApprovalQueue.deleteMany({})
 

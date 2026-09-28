@@ -47,8 +47,13 @@ import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
  *      확정 모순은 적재 전 AUTO_HOLD, 모호하면 `DRAFT_LIFE_REVIEW:<코드>` 경고로 사람 검토.
  *      v1 cohort 30건 중 중대 결함 4건이 게이트를 전부 지나갔다. v1 행은 digest 가 달라 legacy 가 된다
  *      — 🔴 v1 행을 고치거나 지우지 않는다.
+ *    `quality-v3` (2026-09-28) = 원천·시점 대조 게이트 4종(끝난 명절·실시간 현장 · 다른 커뮤니티 움직임 ·
+ *      사진 없이 봐 달라 · 잘린 원문 뒤 없는 결말) + `noLifeFactNeeded` 계획의 자기 가족사 사람 검토.
+ *      v1 cohort 가 사람 손이 필요하다고 권고된 13건 중 v2 가 막지 못한 모양이다. 원천(시각 · 사이트 · 사진 수)을
+ *      게이트 입력으로 받는다 — 새 생성 · 캐시 채택이 같은 값을 넘긴다. v2 는 운영 행이 없는 채로 대체된다
+ *      (배포 전 판). 🔴 v1 행을 고치거나 지우지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v2'
+export const QUALITY_CONTRACT_VERSION = 'quality-v3'
 
 /** 🔴 `gateResults` 안의 칸 이름 */
 export const QUALITY_CONTRACT_KEY = 'qualityContract'
@@ -75,6 +80,7 @@ export function qualityContractComponents(): Record<string, unknown> {
     draftGateVersion: DRAFT_GATE_VERSION,
     draftGateCodes: DRAFT_GATE_CODES,
     // 🔴 (v2) 모호 → 사람 검토로 보내는 축과 그 경고 이름 — 바뀌면 자동 READY 표본의 적격이 바뀐다
+    //    (v3) 원천·시점 축 넷과 `noLifeFactNeeded` 가족사가 이 목록에 더해졌다
     draftLifeReviewCodes: DRAFT_LIFE_REVIEW_CODES,
     draftLifeReviewHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,

@@ -29,7 +29,7 @@ import type { PersonaForMatch } from './original-post-persona-match'
 /** 🔴 초안 게이트 정본 — 채택 판정이 규칙을 다시 쓰지 않는다 (2026-09-26) */
 import {
   judgeDraftLife, DRAFT_GATE_LABEL,
-  type DraftGateCard, type DraftGateCode, type DraftGatePlan, type DraftLifeReviewCode,
+  type DraftGateCard, type DraftGateCode, type DraftGatePlan, type DraftLifeReviewCode, type DraftGateContext,
 } from './content-core/draft-life-gates'
 
 export const AUTO_DRAFT_DECISIONS = ['AUTO_ADOPT', 'AUTO_HOLD', 'AUTO_DROP'] as const
@@ -360,6 +360,11 @@ export type PickV2Input = {
   draftGate?: {
     plan: DraftGatePlan | null
     card: DraftGateCard | null
+    /**
+     * 🔴 **원천과 회차 시각** (2026-09-28 quality-v3) — 새 생성의 deterministic 과 **같은 값**이다.
+     *    시점 · 출처 · 자료 · 잘린 원문 축이 이것으로 판정한다. 캐시 artifact 도 여기서 다시 본다.
+     */
+    context: DraftGateContext
   }
 }
 
@@ -395,6 +400,7 @@ export function pickV2(input: PickV2Input, now: string): Pick {
   if (input.draftGate !== undefined) {
     const life = judgeDraftLife({
       title: d.title, body: d.body, plan: input.draftGate.plan, card: input.draftGate.card,
+      context: input.draftGate.context,
     })
     const gate = life.failures
     lifeReview = life.reviews.map((r) => r.code)

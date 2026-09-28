@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolCard } from '../../src/lib/persona-pool-card'
 import type { ChildAgeBand } from '../../src/lib/original-post-persona-match'
-import type { DraftGateCode } from '../../src/lib/content-core/draft-life-gates'
+import type { DraftGateCode, DraftGateContext, DraftGateSource } from '../../src/lib/content-core/draft-life-gates'
 import { pickV2, type DraftCandidate, type Pick } from '../../src/lib/micro-seed-auto-draft'
 import { measureOriginality, copiesSourceTitle } from '../../src/lib/draft-originality'
 import { SPEAKER_PLAN_VERSION } from '../../src/lib/content-core/speaker'
@@ -39,6 +39,11 @@ export type GateFixture = {
   card: PoolCard
   /** 🔴 막혀야 하는 구조화 사유. 빈 배열이면 대조군 — 채택까지 가야 한다 */
   expect: DraftGateCode[]
+  /**
+   * 🔴 **원천 사실** (2026-09-28 quality-v3) — 시각 · 사이트 · 사진 수. 없으면 `sourceMetaOf` 기본값
+   *    (회차와 같은 날 올라온 커뮤니티 글 · 사진 수 미상)이다. 러너가 meta 에서 만드는 칸과 같다.
+   */
+  sourceMeta?: Partial<Omit<DraftGateSource, 'title' | 'body'>>
 }
 
 const card = (o: Omit<PoolCard, 'forbiddenReactionRoles' | 'variationCount' | 'voiceLength'>
@@ -363,6 +368,20 @@ export const CLEAN_REVIEW = {
 }
 
 export const FIXTURE_NOW = new Date('2026-09-26T03:00:00.000Z')
+
+/**
+ * 🔴 **초안 게이트의 원천·시각 입력** — 러너(`gateSourceMetaOf`)와 같은 칸이다. 새 생성과 캐시 채택이
+ *    **이 함수 하나**로 같은 값을 받는다. 기본값은 "회차와 같은 날 커뮤니티에 올라온 글 · 사진 수 미상" —
+ *    운영 원천의 흔한 모양이다(사진 수는 대부분 세지 않았다).
+ */
+export const sourceMetaOf = (fx: GateFixture): Omit<DraftGateSource, 'title' | 'body'> => ({
+  site: 'navercafe:fixture', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null,
+  ...fx.sourceMeta,
+})
+export const gateContextOf = (fx: GateFixture): DraftGateContext => ({
+  at: FIXTURE_NOW,
+  source: { title: fx.source.title, body: fx.source.body, ...sourceMetaOf(fx) },
+})
 const SAMPLES = ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요', '저희도 그랬어요']
 
 /** 🔴 요청 수를 센다 — 게이트가 유료 검수 **앞**에서 막는지 값으로 본다 */
@@ -397,6 +416,8 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
   let art = await runContentCore({
     artifactId: randomUUID().replace(/-/g, ''),
     sourceArticleId: fx.source.id, title: fx.source.title, maskedBody: fx.source.body,
+    // 🔴 (quality-v3) 러너와 같다 — 원천 사실은 채택 자리와 같은 함수에서 온다
+    sourceMeta: sourceMetaOf(fx),
     personas: [persona], personaPoolSize: 1, voiceSourceDigest: 'asset000000000',
     ask: cannedAsk(fx, asks), now: FIXTURE_NOW, callCap: 6,
     contract: {
@@ -434,7 +455,7 @@ export async function runFixturePath(fx: GateFixture, opt: { cachedAdopt?: boole
         return v.ok ? v.at.exactAge : null
       })(),
     },
-    draftGate: { plan: art.plan ?? null, card: fx.card },
+    draftGate: { plan: art.plan ?? null, card: fx.card, context: gateContextOf(fx) },
   }, nowIso)
   return { art, pick, cand, asks }
 }

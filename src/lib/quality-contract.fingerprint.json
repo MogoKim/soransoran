@@ -1,38 +1,38 @@
 {
-  "version": "quality-v2",
-  "digest": "4bcb1f7d4cfd0aacdec8f9eaeee42528540eaa41454f7251bd3594a589d48f86",
+  "version": "quality-v3",
+  "digest": "d1bc0579b21e9ccdeccd5ce6d73de5b75c68ac491297509c4f64dfafdc017c46",
   "files": {
-    "src/lib/quality-contract.ts": "4ff83fc4b8dba2c962025c3a97384d347539115c3d21ddf9476a4bb1400d1c7f",
+    "src/lib/quality-contract.ts": "102c39deb05278fa42d92879d54310301669644900632ded2c130f6dbcfafb5b",
     "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
-    "src/lib/content-core/draft-life-gates.ts": "cdad5b08e02c4eeb97e2e0027bd8bdb2ad90694a863a83e050df4139e9070390",
+    "src/lib/content-core/draft-life-gates.ts": "f7c24060220bcadc453892566b740ade7c48fdab9ba04276271b84175115fc91",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
     "src/lib/content-core/pipeline.ts": "a20b40cdb7ca8e2030b3e25ab10d53739435e1f946b7fa10da79beed4a2a90b3",
-    "src/lib/content-core/evidence.ts": "399fb19ea5cd4817210b3ecb04ad5c2dd0477ba7052c628b48eae043085c3eae",
+    "src/lib/content-core/evidence.ts": "3a046d6921cb8bec01d9102cf6734698e48d5e8367fa539dec2479417f7a44ab",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
-    "src/lib/micro-seed-auto-draft.ts": "7c153c3126c97dd9efe2ad3ab22c06ae451fce1fd715d7e375236328f2efeac2",
+    "src/lib/micro-seed-auto-draft.ts": "d122b6778a8687e2031c9b62cb23509bc61ecfe1dc4eeb2ed62ab58e0967c3f2",
     "src/lib/auto-ready-v2.ts": "5853c144bec97bbff67417569d01f6aa3907ceef1271d31d6ef3cf5915e6e678",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
     "src/lib/original-post-persona-match.ts": "c4fd83b706912022c221b8e0db09fec90f911028782e29a701f97ef544aa6751",
-    "scripts/lib/content-core-run.mts": "60d3106fa9787463d5b79a71056a0f98f0dc273c6cd11f46dbcf215a3cdc1edc",
+    "scripts/lib/content-core-run.mts": "9f76ffba824a151d360740ed4d0109bdf6c49a169387210a4edc2859e963ac51",
     "scripts/lib/content-core-prompts.mts": "b3d2a4a22966d822d114d1162f57b0606c92aec0db1d40e7ae59d5b174112751",
     "src/lib/auto-ready-quality-cohort.ts": "5c6619101a1e1f0dac42bc9c1d38a14879d403b0779e0fb6bb203905797686ab",
     "src/lib/auto-ready-repo.ts": "9a4c4d9dc240dca05a407aba97c373ca46e85839c4ef73d577615bdd1af1f9a5",
     "src/lib/auto-ready-evidence.ts": "44876509f73df30bc067263cf3040203a44aafd93863b611a96ed2beee1f1503",
     "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
-    "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d"
+    "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d",
+    "src/lib/persona-cap.ts": "83744d04e42d76a4402d31ff743c0da94db7456efe89091084ec87968cadbf50"
   },
   "acknowledgement": {
     "kind": "bump",
-    "reason": "판 quality-v1 → quality-v2",
+    "reason": "판 quality-v2 → quality-v3",
     "changedFiles": [
       "src/lib/quality-contract.ts",
-      "src/lib/semantic-summary-codes.ts",
       "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/content-core/evidence.ts",
       "src/lib/micro-seed-auto-draft.ts",
-      "src/lib/original-post-persona-match.ts",
       "scripts/lib/content-core-run.mts",
-      "src/lib/persona-pool-card.ts"
+      "src/lib/persona-cap.ts"
     ]
   }
 }

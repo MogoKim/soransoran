@@ -123,6 +123,7 @@ import {
 import { SPEAKER_PLAN_VERSION } from '../src/lib/content-core/speaker'
 import { REVIEW_VERSION, reviewWarnings } from '../src/lib/content-core/review'
 import { VOICE_SAMPLE_MAX } from '../src/lib/content-core/voice-evidence'
+import type { DraftGateSource } from '../src/lib/content-core/draft-life-gates'
 import {
   ARTIFACT_VERSION, violatesArtifact, type CallMeta, type HumanReviewArtifact,
 } from '../src/lib/content-core/artifact'
@@ -582,7 +583,27 @@ type Meta = {
   /** 🔴 원천 지문에 들어가는 값이다 — 빠뜨리면 공급 러너의 지문과 영영 달라진다 */
   assetAxes: string
   sourcePostedAt: string; sourceListedAt: string; sourceCapturedAt: string
+  /**
+   * 🔴 **원천 사진 수** (2026-09-28 quality-v3) — 초안 게이트의 자료 축이 읽는다. 원천 지문에 넣지 않는다.
+   *    🔴 **양수만 증거다** — 수집기 여럿이 세지 않고 `0` 을 적는다. `null` 은 파일에 칸이 없다는 뜻이다.
+   */
+  imageCount: number | null
 }
+
+/**
+ * 🔴 **초안 게이트의 원천·시각 입력** (2026-09-28 quality-v3) — 새 생성(`runContentCore`)과 캐시 채택
+ *    (`pickV2`)이 **이 함수 하나**로 같은 값을 만든다. 두 곳에서 따로 조립하면 한쪽이 낡는다.
+ *    🔴 모르는 시각은 `null` 이다 — `sourceCapturedAt` 을 `sourcePostedAt` 대신 쓰지 않는다.
+ */
+const isoOrNull = (v: string): Date | null => {
+  if (v.trim() === '') return null
+  const d = new Date(v)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+const gateSourceMetaOf = (m: Meta): Omit<DraftGateSource, 'title' | 'body'> => ({
+  site: m.site, postedAt: isoOrNull(m.sourcePostedAt), capturedAt: isoOrNull(m.sourceCapturedAt),
+  imageCount: m.imageCount,
+})
 
 /**
  * 🔴 **원천 입력 identity 는 하나다** (2026-09-20). 판정기가 shadow 에 적는 `inputHash`,
@@ -623,6 +644,10 @@ function loadMeta(): Map<string, Meta> {
           sourcePostedAt: keep(S(r.sourcePostedAt), was?.sourcePostedAt),
           sourceListedAt: keep(S(r.sourceListedAt), was?.sourceListedAt),
           sourceCapturedAt: keep(S(r.sourceCapturedAt), was?.sourceCapturedAt),
+          // 🔴 센 값(양수)만 앞 값을 이긴다 — `0` 은 "안 셌다" 일 수 있어 아는 값을 지우지 않는다
+          imageCount: typeof r.imageCount === 'number' && Number.isFinite(r.imageCount) && r.imageCount > 0
+            ? r.imageCount
+            : (was?.imageCount ?? (typeof r.imageCount === 'number' && Number.isFinite(r.imageCount) ? r.imageCount : null)),
         })
       }
     }
@@ -1066,6 +1091,8 @@ async function main(): Promise<void> {
          *    제목에 있으면 그대로 provider 로 나갔다. 정본 함수를 그대로 쓴다.
          */
         title: maskSensitive(meta.title), maskedBody: meta.bodyHead,
+        // 🔴 (quality-v3) 초안 게이트의 원천·시각 — 채택 자리(`pickV2`)와 같은 함수로 만든다
+        sourceMeta: gateSourceMetaOf(meta),
         /**
          * 🔴 **좁힌 묶음에서 지난 실패 화자를 뺀 것만 보낸다** — 회차 안에서 겹치지 않고,
          *    같은 사람으로 같은 실패를 되풀이하지도 않는다. 이 값을 여기서 다시
@@ -1165,7 +1192,17 @@ async function main(): Promise<void> {
        * 🔴 **초안 게이트** (2026-09-26). 캐시 hit artifact 는 새 deterministic 을 거치지 않았다 —
        *    채택 자리에서 계획과 정본 카드로 다시 건다. 카드를 못 찾으면 `null` 이다.
        */
-      draftGate: { plan: art.plan ?? null, card: card ?? null },
+      draftGate: {
+        plan: art.plan ?? null, card: card ?? null,
+        /**
+         * 🔴 (quality-v3) 원천·회차 시각 — 새 생성과 **같은 원문 · 같은 함수**다. 캐시 hit 도 여기서 다시 본다.
+         *    회차 시각(`RUN_AT`)으로 판정한다 — 캐시에 적힌 옛 판정 시각이 아니다.
+         */
+        context: {
+          at: RUN_AT,
+          source: { title: maskSensitive(meta.title), body: meta.bodyHead, ...gateSourceMetaOf(meta) },
+        },
+      },
     }, nowIso)
     picks.push(p)
     if (p.decision === 'AUTO_ADOPT') {

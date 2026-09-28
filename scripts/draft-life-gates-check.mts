@@ -22,7 +22,19 @@ import { readPostRequirements, readSelfClaims } from '../src/lib/original-post-p
 import type { PoolCard } from '../src/lib/persona-pool-card'
 import {
   FIXTURES as OPS_FIXTURES, REVIEW_FIXTURES, P01, P02, P12, P13, P14, P19, runFixturePath, FIXTURE_NOW, type GateFixture,
+  gateContextOf,
 } from './lib/draft-gate-fixtures.mjs'
+import type { DraftGateContext } from '../src/lib/content-core/draft-life-gates'
+
+/**
+ * 🔴 **원천이 문장 판정에 끼지 않는 자리** (quality-v3) — 문장 대조표는 초안 모양만 본다.
+ *    회차와 같은 날 올라온 커뮤니티 글 · 본문 비움(잘림 판정 0) · 사진 수 미상.
+ *    원천·시각을 보는 축은 ⑩ 에서 원천을 바꿔 가며 따로 본다.
+ */
+const NEUTRAL: DraftGateContext = {
+  at: FIXTURE_NOW,
+  source: { title: '', body: '', site: 'navercafe:fixture', postedAt: FIXTURE_NOW, capturedAt: FIXTURE_NOW, imageCount: null },
+}
 
 /** 🔴 운영 실측 6 + 마스터 재검토 반례 6 — 셋 다(게이트 · 러너 경로 · 캐시) 같은 목록을 돈다 */
 const FIXTURES: readonly GateFixture[] = [...OPS_FIXTURES, ...REVIEW_FIXTURES]
@@ -46,13 +58,15 @@ const planLike = (fx: GateFixture): PlanLike => ({
 const QUESTION: PlanLike = { selfBasis: null, warrants: [] }
 const SELF: PlanLike = { selfBasis: 'lifeFacts', warrants: [{ fact: 'spouse' }] }
 const codes = (title: string, body: string, plan: PlanLike | null, card: PoolCard | null): DraftGateCode[] =>
-  judgeDraftGates({ title, body, plan, card }).map((g) => g.code)
+  judgeDraftGates({ title, body, plan, card, context: NEUTRAL }).map((g) => g.code)
 
 console.log('\n══ 초안 게이트 (자료 의존 · 1인칭 허가 · 지금 삶과 시제) — 🔴 provider 0 · DB 0 ══\n')
 
 console.log('① 운영 반례 4 · 대조 2 + 재검토 반례 6 — 게이트 정본')
 for (const fx of FIXTURES) {
-  const got = codes(fx.draft.title, fx.draft.body, planLike(fx), fx.card)
+  const got = judgeDraftGates({
+    title: fx.draft.title, body: fx.draft.body, plan: planLike(fx), card: fx.card, context: gateContextOf(fx),
+  }).map((g) => g.code)
   if (fx.expect.length === 0) {
     check(`🟢 ${fx.label} — 통과`, got.length === 0, got.join(','))
   } else {
@@ -260,7 +274,8 @@ console.log('\n⑦ 배선 — 코드 한 벌 · 러너가 실제로 넘긴다')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
   const call = /pickV2\(\{[\s\S]*?\}, nowIso\)/.exec(code)?.[0] ?? ''
   check('🔴 🔴 **채택 루프가 pickV2 에 draftGate(계획·정본 카드)를 넘긴다**',
-    /draftGate:\s*\{\s*plan:\s*art\.plan\s*\?\?\s*null,\s*card:\s*card\s*\?\?\s*null\s*\}/.test(call), call.slice(-200))
+    // 🔴 (quality-v3) 원천·시각 context 가 함께 간다 — 모양은 ⑩-c 가 자세히 본다
+    /draftGate:\s*\{\s*plan:\s*art\.plan\s*\?\?\s*null,\s*card:\s*card\s*\?\?\s*null,\s*context:\s*\{/.test(call), call.slice(-200))
   const run = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
   const detAt = run.indexOf('judgeDraftGates(')
@@ -304,7 +319,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   for (const fx of LIFE_FIXTURES) {
     const p = fx.plan as { selfBasis?: string | null; speakerWarrants?: { fact: string; evidenceText: string }[] }
     const r = judgeDraftLife({
-      title: fx.draft.title, body: fx.draft.body, card: fx.card,
+      title: fx.draft.title, body: fx.draft.body, card: fx.card, context: gateContextOf(fx),
       plan: { selfBasis: p.selfBasis ?? null, warrants: (p.speakerWarrants ?? []).map((w) => ({ fact: w.fact, evidenceText: w.evidenceText })) },
     })
     const hard = r.failures.map((f) => f.code as string)
@@ -348,7 +363,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
 
   console.log('\n⑨-d 문장 대조표 — 결함마다 반례 · 남의 일 · 묻는 글 · 지난 일 · 가정 · 카드가 뒷받침')
   for (const [code, t, b, want] of LIFE_PHRASES) {
-    const r = judgeDraftLife({ title: t, body: b, plan: null, card: realCard(code) })
+    const r = judgeDraftLife({ title: t, body: b, plan: null, card: realCard(code), context: NEUTRAL })
     const hard = r.failures.map((f) => f.code as string).filter((c) => LIFE.includes(c))
     const rev = r.reviews.map((f) => f.code as string)
     const got = hard.length > 0 ? `hold:${hard.join('+')}` : rev.length > 0 ? `review:${rev.join('+')}` : 'pass'
@@ -356,9 +371,9 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   }
   // 🔴 계획이 원문 근거로 허가한 1인칭 증상은 통과한다 — 원문 근거는 검증된 근거 문장으로만 들어온다
   {
-    const withWarrant = judgeDraftLife({ title: '요즘', body: '공황장애 때문에 요즘 정신과 다니고 있어요.', card: realCard('P19'),
+    const withWarrant = judgeDraftLife({ title: '요즘', body: '공황장애 때문에 요즘 정신과 다니고 있어요.', card: realCard('P19'), context: NEUTRAL,
       plan: { selfBasis: 'lifeFacts', warrants: [{ fact: 'menopause', evidenceText: '공황장애가 와서' }] } })
-    const without = judgeDraftLife({ title: '요즘', body: '공황장애 때문에 요즘 정신과 다니고 있어요.', card: realCard('P19'),
+    const without = judgeDraftLife({ title: '요즘', body: '공황장애 때문에 요즘 정신과 다니고 있어요.', card: realCard('P19'), context: NEUTRAL,
       plan: { selfBasis: 'noLifeFactNeeded', warrants: [] } })
     check('🟢 계획 근거 문장에 같은 증상이 있으면(lifeFacts) 통과', withWarrant.failures.length === 0 && withWarrant.reviews.length === 0,
       JSON.stringify(withWarrant))
@@ -368,7 +383,7 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
   // 🔴 카드 집안 구성이 없으면 모르는 것이다 — 통과시키지 않고 사람 검토
   {
     const { household: _h, ...noHousehold } = realCard('P05')
-    const r = judgeDraftLife({ title: '시댁', body: '시어머니께 한동안 연락도 못 드렸어요.', plan: null, card: noHousehold })
+    const r = judgeDraftLife({ title: '시댁', body: '시어머니께 한동안 연락도 못 드렸어요.', plan: null, card: noHousehold, context: NEUTRAL })
     check('🟡 카드 집안 구성 미상 + 상시 돌봄 + 연락 끊김 → 사람 검토(통과 아님)',
       r.failures.length === 0 && r.reviews.some((x) => x.code === 'careHouseholdConflict'), JSON.stringify(r))
   }
@@ -417,13 +432,22 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
       unread.holds.includes(DRAFT_LIFE_REVIEW_UNREAD) && unread.warnings.length > 0, JSON.stringify(unread.holds))
     check('🔴 모양이 어긋난 lifeReview → unread', sameSet(lifeReviewHoldsOf([1, 'x']), [DRAFT_LIFE_REVIEW_UNREAD])
       && sameSet(lifeReviewHoldsOf('maritalStatusConflict'), [DRAFT_LIFE_REVIEW_UNREAD]) && lifeReviewHoldsOf([]).length === 0)
+    // 🔴 (quality-v3) 원천·시점 경고도 같은 경고 이름으로 적재된다 — 모호한 시점(#9)은 자동 READY 에서 빠진다
+    {
+      const id9 = 'cmukma5l200012y4j1adoopkz'
+      const r9 = fresh.get(id9)!
+      const t = make(id9, r9.pick!.lifeReview ?? null)
+      check('🟡 🟡 **v3 · #9 원문 시각 모름 + 명절 계획 → 적재 holds 에 DRAFT_LIFE_REVIEW:staleTimeClaim · 자동 READY 경고**',
+        t.holds.includes(`${DRAFT_LIFE_REVIEW_HOLD}:staleTimeClaim`) && t.warnings.length > 0, JSON.stringify(t.holds))
+    }
+
   }
 
   console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
   {
     const comp = qualityContractComponents()
-    check(`품질 계약 판 = quality-v2 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v2')
-    check(`초안 게이트 판 = draft-gates-v2 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v2')
+    check(`품질 계약 판 = quality-v3 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v3')
+    check(`초안 게이트 판 = draft-gates-v3 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v3')
     check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
       JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
       && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })
@@ -443,6 +467,60 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
     check('P05 정본 — 시댁 쪽 · 한집 · 자녀 동거 · 기혼(원만) · 간병 상시',
       p05 !== undefined && p05.household.careSide === '시댁' && p05.household.careCohabit === true
       && p05.household.childrenLiving === '동거' && p05.spouseRelationship === '원만' && p05.parentCare === '상시')
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑩ quality-v3 — 원천·시점 대조 (끝난 명절·실시간 현장 · 다른 커뮤니티 움직임 · 사진 없이 봐 달라 · 잘린 원문)
+// ─────────────────────────────────────────────────────────
+{
+  const { judgeDraftLife, DRAFT_LIFE_REVIEW_CODES } = await import('../src/lib/content-core/draft-life-gates')
+  const { SOURCE_PHRASES, realCard } = await import('./lib/life-gate-fixtures.mjs')
+  const REVIEWABLE = DRAFT_LIFE_REVIEW_CODES as readonly string[]
+
+  console.log('\n⑩-a 원천 문장 대조표 — 같은 초안이라도 원천 사실(시각 · 사이트 · 사진 수 · 끝맺음)에 따라 갈린다')
+  for (const ph of SOURCE_PHRASES) {
+    const r = judgeDraftLife({
+      title: ph.title, body: ph.body, card: realCard(ph.card), plan: ph.plan ?? null,
+      context: { at: FIXTURE_NOW, source: { ...NEUTRAL.source!, ...ph.source } },
+    })
+    const hard = r.failures.map((f) => f.code as string)
+    const rev = r.reviews.map((f) => f.code as string)
+    const got = hard.length > 0 ? `hold:${hard.join('+')}` : rev.length > 0 ? `review:${rev.join('+')}` : 'pass'
+    const src = ph.source === undefined ? '' : ` · 원천 ${JSON.stringify(ph.source).slice(0, 60)}`
+    check(`${ph.want === 'pass' ? '🟢' : ph.want.startsWith('hold') ? '🔴' : '🟡'} ${ph.card} "${ph.body.slice(0, 28)}"${src} → ${ph.want}`,
+      got === ph.want, got)
+  }
+
+  console.log('\n⑩-b 원천을 모르면(source=null) 걸린 것은 사람 검토 — 통과가 아니다')
+  {
+    const at = FIXTURE_NOW
+    const r1 = judgeDraftLife({ title: '명절', body: '이제 집으로 가는 길이에요. 명절 잘 보내세요.', card: realCard('P01'), plan: null, context: { at, source: null } })
+    check('🟡 명절 하는 중 + 원천 모름 → review:staleTimeClaim', r1.failures.length === 0 && r1.reviews.some((x) => x.code === 'staleTimeClaim'), JSON.stringify(r1))
+    const r2 = judgeDraftLife({ title: '닉네임', body: '자주 바꾸시는 분들이 꽤 보이네요.', card: realCard('P13'), plan: null, context: { at, source: null } })
+    check('🟡 움직임 관찰 + 원천 모름 → review:externalCommunityClaim', r2.failures.length === 0 && r2.reviews.some((x) => x.code === 'externalCommunityClaim'), JSON.stringify(r2))
+    const r3 = judgeDraftLife({ title: '목도리', body: '다 떴는데 한번 봐주세요.', card: realCard('P10'), plan: null, context: { at, source: null } })
+    check('🟡 봐 달라 + 원천 모름 → review:mediaDependentDraft', r3.failures.length === 0 && r3.reviews.some((x) => x.code === 'mediaDependentDraft'), JSON.stringify(r3))
+    // 🔴 사람 검토로 갈 수 있는 코드는 전부 적재 경고 목록에 있다 — 목록 밖 코드는 경고로 가지 못한다
+    const all = [r1, r2, r3].flatMap((r) => r.reviews.map((x) => x.code as string))
+    check('🔴 사람 검토 코드는 전부 DRAFT_LIFE_REVIEW_CODES 안이다', all.every((c) => REVIEWABLE.includes(c)), all.join(','))
+  }
+
+  console.log('\n⑩-c 배선 — 새 생성 · 캐시 채택이 같은 원천·시각을 받는다 (러너 소스)')
+  {
+    const code = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    check('🔴 🔴 **runContentCore 에 sourceMeta: gateSourceMetaOf(meta)**', /sourceMeta:\s*gateSourceMetaOf\(meta\)/.test(code))
+    check('🔴 🔴 **pickV2 초안 게이트 context 가 같은 함수 · 같은 원문 · 회차 시각(RUN_AT)**',
+      /context:\s*\{\s*at:\s*RUN_AT,\s*source:\s*\{\s*title:\s*maskSensitive\(meta\.title\),\s*body:\s*meta\.bodyHead,\s*\.\.\.gateSourceMetaOf\(meta\)\s*\}/.test(code))
+    check('🔴 runContentCore 는 같은 원문(maskSensitive(meta.title) · meta.bodyHead)을 받는다',
+      /title:\s*maskSensitive\(meta\.title\),\s*maskedBody:\s*meta\.bodyHead/.test(code))
+    check('🔴 gateSourceMetaOf 는 postedAt 을 sourcePostedAt 에서만 읽는다(capturedAt 으로 대신하지 않는다)',
+      // 🔴 칸 끝(`,`)까지 본다 — `isoOrNull(m.sourcePostedAt) ?? isoOrNull(m.sourceCapturedAt)` 같은 대체를 놓치지 않는다(변이 M18)
+      /postedAt:\s*isoOrNull\(m\.sourcePostedAt\),/.test(code) && /capturedAt:\s*isoOrNull\(m\.sourceCapturedAt\),/.test(code))
+    const core = readFileSync('scripts/lib/content-core-run.mts', 'utf-8')
+    check('🔴 runContentCore 의 결정 단계 게이트가 at: input.now · 모델에 준 원문을 쓴다',
+      /at:\s*input\.now,\s*source:\s*\{\s*title:\s*input\.title,\s*body:\s*input\.maskedBody,\s*\.\.\.input\.sourceMeta\s*\}/.test(core))
   }
 }
 
