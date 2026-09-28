@@ -22,6 +22,8 @@ import {
   type RealReactions,
 } from '../src/lib/best-ranking'
 import { BEST_PAGE_SIZE, bestLastPage, buildListHref, parsePageParam } from '../src/lib/list-query'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
 let pass = 0
 let fail = 0
@@ -200,6 +202,27 @@ const minPer = Math.min(...passing.map((k) => Number(k.split('/')[0])))
 check('두 배당 시간은 기준을 지나는 값 중 가장 작다 (반응이 순위를 붙드는 시간을 최소로)', REACTION_HOURS_PER_DOUBLING === minPer)
 const capsAtPer = passing.filter((k) => Number(k.split('/')[0]) === REACTION_HOURS_PER_DOUBLING).map((k) => Number(k.split('/')[1]))
 check('상한은 그 두 배당 시간에서 기준을 지나는 값 중 가장 작다 (가장 빨리 내려간다)', REACTION_BOOST_MAX_HOURS === Math.min(...capsAtPer))
+
+console.log('\n■ 7. 기록 연결 단계 — 지금 판(PR-A)은 backfill 만 기록한다')
+{
+  // 🔴 새 /best 화면을 켜는 PR-B 가 이벤트 기록을 연결하면서 이 기대값을 바꾼다.
+  //    그 전에 쓰기 경로가 기록을 부르면 backfill 전의 불완전한 12개가 영구 기록으로 남는다.
+  const files: string[] = []
+  const walk = (d: string) => {
+    for (const n of readdirSync(d)) {
+      const f = join(d, n)
+      if (statSync(f).isDirectory()) walk(f)
+      else if (/\.(ts|tsx)$/.test(n)) files.push(f)
+    }
+  }
+  walk('src')
+  const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+  const callers = files.filter((f) => !f.endsWith('best-ranking-db.ts') && /\brecordBestEntries\s*\(/.test(strip(readFileSync(f, 'utf-8'))))
+  check('src/ 의 쓰기 경로가 기록 판정(recordBestEntries)을 부르지 않는다', callers.length === 0, callers.join(', '))
+  const db = strip(readFileSync('src/lib/best-ranking-db.ts', 'utf-8'))
+  check('best-ranking-db.ts 안에서도 기록 판정 호출은 backfill 한 곳뿐이다 (정의 1 + 호출 1)', (db.match(/\brecordBestEntries\s*\(/g) ?? []).length === 2)
+  check('재계산+기록을 묶은 refreshBestRanking 이 없다', !/\brefreshBestRanking\b/.test(files.map((f) => strip(readFileSync(f, 'utf-8'))).join('\n')))
+}
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} best-ranking-check: ${pass} 통과 · ${fail} 실패`)
 process.exit(fail === 0 ? 0 : 1)

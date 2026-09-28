@@ -1,8 +1,9 @@
-import type { BoardType, Prisma } from '@prisma/client'
+import type { BoardType, Prisma, PrismaClient } from '@prisma/client'
 import { COMMUNITY_BOARDS } from '@/lib/board-registry'
 import {
   DISCOVERY_ELIGIBLE_WHERE,
   POST_VISIBILITY_SELECT,
+  isDiscoveryEligible,
   isPromotionWriteBlocked,
   pickPostVisibility,
 } from '@/lib/post-visibility'
@@ -19,13 +20,22 @@ import {
 } from '@/lib/best-ranking'
 
 /**
- * /best 순위 입력을 쓰는 곳 — 반응·노출이 바뀌는 쓰기 경로가 **자기 트랜잭션 안에서** 부른다.
+ * /best 순위 입력을 쓰는 곳 — 반응이 바뀌는 쓰기 경로가 **자기 트랜잭션 안에서** 부른다.
  *
  * 🔴 페이지 조회(GET)는 여기 어떤 함수도 부르지 않는다. 읽기는 queries/best.ts 다.
  * 🔴 `prisma` 를 import 하지 않는다. 호출부의 tx 를 받는다 — 원본 반응 저장과
- *    순위 갱신·기록이 한 트랜잭션이라 하나만 남는 부분 실패가 없다.
+ *    순위 키 갱신이 한 트랜잭션이라 하나만 남는 부분 실패가 없다.
  *
- * 🔴 잠금 순서: 글 행 하나를 먼저 잠그고(lockPost) → BestSelection 을 postId 순으로 쓴다.
+ * ── 기록(BestSelection)은 언제 생기는가 ─────────────────────────────
+ *   🔴 지금 판(PR-A)에서 쓰기 경로는 **순위 키만** 갱신한다(recomputePostRanking).
+ *      과거 기록을 만드는 것은 도입 backfill(backfillBestRanking) 하나뿐이다.
+ *      backfill 전에는 기존 글이 초기값(작성 시각)이라 12개가 불완전하다 — 그때 기록하면
+ *      틀린 순위에서 만든 영구 행이 남고, backfill 은 기록을 지우지 않으므로 복구되지 않는다.
+ *   🔴 반응·노출 변경 때 기록하는 연결은 새 /best 화면과 함께 켠다(PR-B).
+ *      과거 베스트는 그 활성화 시점부터 이벤트로 쌓인다 — 켜기 직전 backfill 을 한 번 더 돌려
+ *      그 순간의 12개를 초기 기록으로 맞춘다. 그 사이 12위에 잠깐 들었다 빠진 글은 기록되지 않는다.
+ *
+ * 🔴 잠금 순서: 글 행을 postId 순으로 잠그고(lockPost) → BestSelection 을 postId 순으로 쓴다.
  *    모든 호출부가 이 순서라 두 트랜잭션이 서로를 기다리는 고리가 생기지 않는다.
  */
 
@@ -219,10 +229,116 @@ export async function recordBestEntries(
 }
 
 /**
- * 공감·댓글·댓글 숨김처럼 **실반응이 바뀐 뒤** 부른다. 재계산 + 기록.
- * 🔴 반응이 줄어도 부른다 — 이 글이 내려가면 13위가 12위로 올라와 기록될 수 있다.
+ * 회원 차단·해제 — 차단 여부를 바꾸고, 그 회원이 반응한 글의 순위 키를 다시 계산한다.
+ *
+ * 🔴 차단 여부는 실회원 판정의 입력이다(BEST_REAL_MEMBER_WHERE). 바꾸기만 하고 다시 세지 않으면
+ *    차단 회원의 공감·댓글이 다른 반응이 생길 때까지 순위에 남는다(해제도 반대로 복구되지 않는다).
+ * 🔴 호출부 트랜잭션 안에서 부른다 — 차단과 재계산이 함께 커밋되거나 함께 되돌아간다.
+ * 🔴 영향 글만 센다: 그 회원의 공감 글 ∪ MEMBER 댓글 글. 한 글은 한 번만(공감+댓글이어도).
+ *    전체 글을 다시 계산하지 않는다. 동시 Promise 를 만들지 않고 postId 순으로 하나씩 —
+ *    글 행 잠금을 늘 같은 순서로 잡아 다른 트랜잭션과 고리가 생기지 않는다.
+ * 🔴 과거 기록(BestSelection)은 지우지 않는다. 작성자 본인 제외·같은 회원 한 번 규칙은
+ *    countRealReactions 가 그대로 지킨다.
  */
-export async function refreshBestRanking(db: Db, postId: string): Promise<void> {
-  await recomputePostRanking(db, postId)
-  await recordBestEntries(db)
+export async function applyMemberBlock(
+  db: Db,
+  userId: string,
+  blocked: boolean,
+): Promise<{ affectedPosts: number }> {
+  await db.user.update({ where: { id: userId }, data: { isBlocked: blocked }, select: { id: true } })
+  const [liked, commented] = await Promise.all([
+    db.like.findMany({ where: { userId }, distinct: ['postId'], select: { postId: true } }),
+    db.comment.findMany({
+      where: { authorId: userId, commentOrigin: 'MEMBER' },
+      distinct: ['postId'],
+      select: { postId: true },
+    }),
+  ])
+  const postIds = [...new Set([...liked, ...commented].map((r) => r.postId))].sort()
+  for (const postId of postIds) await recomputePostRanking(db, postId)
+  return { affectedPosts: postIds.length }
+}
+
+export type BackfillSummary = {
+  scanned: number
+  /** C-4 로 계산하지 않은 글 */
+  blocked: number
+  /** 순위 키·가중치가 식과 달랐던 글 */
+  changed: number
+  /** 실제로 다시 쓴 글(apply 일 때만) */
+  written: number
+  /** 식으로 계산한 전역 12개 — 기록 후보 판단의 근거 */
+  top: { id: string; title: string; boardType: BoardType; score: number; weight: number; recorded: boolean }[]
+  /** 새로 만들 기록 수(apply 전 판단) */
+  toCreate: number
+  created: number
+  peakRaised: number
+}
+
+/**
+ * 도입 backfill — 모든 글의 순위 키를 식으로 다시 계산하고, 끝난 뒤 **한 번** 지금 12개 중
+ * 실반응 글만 기록한다(recordedBy='backfill', 그 시각이 최초 진입 시각).
+ *
+ * 🔴 기본은 dry-run 이다. apply 가 아니면 아무것도 쓰지 않는다.
+ * 🔴 멱등이다 — 두 번째 apply 는 쓰기 0 이다.
+ * 🔴 과거 12위 진입을 재현하지 않는다(취소된 공감은 행이 없다). 추정 기록을 만들지 않는다.
+ * 🔴 쓰기는 쓰기 경로와 같은 recomputePostRanking 이다 — 글 행을 잠그고 그 순간의 원본으로 계산한다.
+ *    글마다 짧은 트랜잭션이라 운영 중에 돌려도 한 글 이상 오래 잡지 않는다.
+ */
+export async function backfillBestRanking(
+  db: PrismaClient,
+  { apply, batchSize = 200 }: { apply: boolean; batchSize?: number },
+): Promise<BackfillSummary> {
+  const sum: BackfillSummary = {
+    scanned: 0, blocked: 0, changed: 0, written: 0, top: [], toCreate: 0, created: 0, peakRaised: 0,
+  }
+  const keep: Omit<BackfillSummary['top'][number], 'recorded'>[] = []
+  let cursor: string | undefined
+  for (;;) {
+    const rows = await db.post.findMany({
+      take: batchSize,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      orderBy: { id: 'asc' },
+      select: {
+        id: true, title: true, boardType: true, authorId: true, createdAt: true,
+        bestRankScore: true, bestReactionWeight: true, ...POST_VISIBILITY_SELECT,
+      },
+    })
+    if (rows.length === 0) break
+    cursor = rows[rows.length - 1].id
+    for (const row of rows) {
+      sum.scanned += 1
+      const vis = pickPostVisibility(row)
+      if (isPromotionWriteBlocked(vis)) {
+        sum.blocked += 1
+        continue
+      }
+      const weight = reactionWeight(await countRealReactions(db, row))
+      const score = bestRankScore({ createdAt: row.createdAt, weight })
+      if (weight !== row.bestReactionWeight || !sameRankScore(score, row.bestRankScore)) {
+        sum.changed += 1
+        if (apply) {
+          await db.$transaction((tx) => recomputePostRanking(tx, row.id))
+          sum.written += 1
+        }
+      }
+      if (isDiscoveryEligible(vis) && COMMUNITY_BOARD_TYPES.includes(row.boardType)) {
+        keep.push({ id: row.id, title: row.title, boardType: row.boardType, score, weight })
+        keep.sort((a, b) => b.score - a.score || (a.id < b.id ? 1 : -1))
+        if (keep.length > BEST_CURRENT_SIZE) keep.pop()
+      }
+    }
+  }
+  const recorded = new Set(
+    (await db.bestSelection.findMany({ where: { postId: { in: keep.map((t) => t.id) } }, select: { postId: true } }))
+      .map((r) => r.postId),
+  )
+  sum.top = keep.map((t) => ({ ...t, recorded: recorded.has(t.id) }))
+  sum.toCreate = sum.top.filter((t) => hasValidReaction(t.weight) && !t.recorded).length
+  if (apply) {
+    const r = await db.$transaction((tx) => recordBestEntries(tx, BEST_RECORDED_BY.backfill))
+    sum.created = r.created
+    sum.peakRaised = r.peakRaised
+  }
+  return sum
 }

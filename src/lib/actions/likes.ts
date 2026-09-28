@@ -7,7 +7,7 @@ import { checkActionRateLimit, retryMessage } from '@/lib/rate-limit'
 import { requireOnboarded } from '@/lib/onboarding-guard'
 import { COMMUNITY_VISIBLE_WHERE } from '@/lib/post-visibility'
 import { POST_NOT_FOUND } from '@/lib/post-policy'
-import { refreshBestRanking } from '@/lib/best-ranking-db'
+import { recomputePostRanking } from '@/lib/best-ranking-db'
 
 /** 공감: 사용자당 1분에 30건. 누르고 취소하는 일이 잦아 넉넉히 둔다 */
 const LIKE_LIMIT = 30
@@ -69,8 +69,8 @@ export async function togglePostLike(postId: string): Promise<LikeToggleState> {
         })
       }
 
-      // /best 순위와 기록 — 공감과 같은 트랜잭션이다. 하나만 남는 부분 실패가 없다.
-      await refreshBestRanking(tx, postId)
+      // /best 순위 키 — 공감과 같은 트랜잭션이다. 하나만 남는 부분 실패가 없다.
+      await recomputePostRanking(tx, postId)
 
       const after = await tx.post.findUnique({
         where: { id: postId },

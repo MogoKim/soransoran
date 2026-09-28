@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * /best 순위·기록 — **실제 DB 트랜잭션** 검증
+ * /best 순위 키·기록 — **실제 DB 트랜잭션** 검증
  *
  * 🔴 CI 에 넣지 않는다. Postgres 가 필요하다. 식의 성질은 `npm run check:best` 가 본다.
  * 🔴 운영 DB 에 절대 붙이지 않는다. 아래 가드가 주소를 보고 아니면 즉시 멈춘다.
@@ -9,15 +9,19 @@
  * (DB 이름 soran_test · `npx prisma migrate deploy` 로 0030 까지 올린 뒤 실행).
  *
  * 쓰기 경로(actions)가 트랜잭션 안에서 부르는 함수를 **그대로** 부른다 —
- * refreshBestRanking · recordBestEntries. 목록은 화면과 같은 loadBestPage 다.
+ * recomputePostRanking · applyMemberBlock · backfillBestRanking. 목록은 새 /best 가 쓸 loadBestPage 다.
+ *
+ * 🔴 지금 판(PR-A)의 쓰기 경로는 순위 키만 갱신하고 기록하지 않는다. 기록 판정(recordBestEntries)은
+ *    backfill 과 새 화면 활성화(PR-B)가 켠다 — 여기서 기록 판정은 그 함수를 **직접** 불러 검사한다.
  */
 import { PrismaClient, type Prisma } from '@prisma/client'
 
 import {
   countRealReactions,
   recomputePostRanking,
+  applyMemberBlock,
+  backfillBestRanking,
   recordBestEntries,
-  refreshBestRanking,
 } from '../src/lib/best-ranking-db'
 import { bestRankScore, reactionWeight, sameRankScore } from '../src/lib/best-ranking'
 import { loadBestPage } from '../src/lib/queries/best'
@@ -78,14 +82,14 @@ async function like(postId: string, userId: string) {
   await prisma.$transaction(async (tx) => {
     await tx.like.create({ data: { postId, userId } })
     await tx.post.update({ where: { id: postId }, data: { likeCount: { increment: 1 } }, select: { id: true } })
-    await refreshBestRanking(tx, postId)
+    await recomputePostRanking(tx, postId)
   })
 }
 async function unlike(postId: string, userId: string) {
   await prisma.$transaction(async (tx) => {
     await tx.like.delete({ where: { postId_userId: { postId, userId } } })
     await tx.post.updateMany({ where: { id: postId, likeCount: { gt: 0 } }, data: { likeCount: { decrement: 1 } } })
-    await refreshBestRanking(tx, postId)
+    await recomputePostRanking(tx, postId)
   })
 }
 /** actions/comments.ts · guest-comments.ts 와 같은 트랜잭션 모양 */
@@ -93,7 +97,7 @@ async function comment(postId: string, data: Partial<Prisma.CommentUncheckedCrea
   let id = ''
   await prisma.$transaction(async (tx) => {
     id = (await tx.comment.create({ data: { postId, content: 'x', ...data }, select: { id: true } })).id
-    await refreshBestRanking(tx, postId)
+    await recomputePostRanking(tx, postId)
   })
   return id
 }
@@ -167,27 +171,29 @@ async function main(): Promise<void> {
   console.log('\n■ 2. 취소·삭제·복구가 현재 점수에 반영된다')
   await prisma.$transaction(async (tx) => {
     for (const id of guests) await tx.comment.update({ where: { id }, data: { isDeleted: true }, select: { id: true } })
-    await refreshBestRanking(tx, P)
+    await recomputePostRanking(tx, P)
   })
   expect('비회원 댓글 전부 삭제 → 가중치 3', await weightOf(P), 3)
   await prisma.$transaction(async (tx) => {
     await tx.comment.updateMany({ where: { postId: P, authorId: m2 }, data: { isDeleted: true } })
-    await refreshBestRanking(tx, P)
+    await recomputePostRanking(tx, P)
   })
   expect('회원 댓글 삭제 → 가중치 1', await weightOf(P), 1)
   await prisma.$transaction(async (tx) => {
     await tx.comment.update({ where: { id: c1 }, data: { isDeleted: false }, select: { id: true } })
-    await refreshBestRanking(tx, P)
+    await recomputePostRanking(tx, P)
   })
   expect('어드민 댓글 복구 → 가중치 3', await weightOf(P), 3)
   const beforePersona = await prisma.post.findUniqueOrThrow({ where: { id: P }, select: { bestRankScore: true } })
   await comment(P, { authorId: personaUser.id, source: 'SYSTEM', commentOrigin: 'PERSONA', personaId: persona.id })
   expect('Persona 댓글을 더 달아도 키가 그대로', (await prisma.post.findUniqueOrThrow({ where: { id: P }, select: { bestRankScore: true } })).bestRankScore, beforePersona.bestRankScore)
-  expect('P 는 지금 12개 안 + 실반응 → 기록 1건', await selCount(P), 1)
+  expect('쓰기 경로(PR-A)는 기록하지 않는다 — 12개 안 + 실반응이어도 0', await selCount(P), 0)
+  await prisma.$transaction((tx) => recordBestEntries(tx))
+  expect('기록 판정을 부르면 P(12개 안 + 실반응) 1건', await selCount(P), 1)
   await unlike(P, m1)
   await prisma.$transaction(async (tx) => {
     await tx.comment.updateMany({ where: { postId: P }, data: { isDeleted: true } })
-    await refreshBestRanking(tx, P)
+    await recomputePostRanking(tx, P)
   })
   expect('공감 취소·댓글 전부 삭제 → 가중치 0', await weightOf(P), 0)
   expect('이미 남은 과거 기록은 지우지 않는다', await selCount(P), 1)
@@ -199,8 +205,8 @@ async function main(): Promise<void> {
   try {
     await prisma.$transaction(async (tx) => {
       await tx.comment.create({ data: { postId: P, authorId: m3, content: 'x' }, select: { id: true } })
-      await refreshBestRanking(tx, P)
-      throw new Error('기록 뒤 실패 흉내')
+      await recomputePostRanking(tx, P)
+      throw new Error('순위 갱신 뒤 실패 흉내')
     })
   } catch {
     threw = true
@@ -216,7 +222,7 @@ async function main(): Promise<void> {
     await prisma.$transaction(async (tx) => {
       await tx.like.create({ data: { postId: P, userId: m3 } })
       await tx.post.update({ where: { id: P }, data: { likeCount: { increment: 1 } }, select: { id: true } })
-      await refreshBestRanking(tx, P)
+      await recomputePostRanking(tx, P)
       throw new Error('순위 갱신 뒤 실패 흉내')
     })
   } catch {
@@ -226,7 +232,7 @@ async function main(): Promise<void> {
     [likeThrew, await prisma.like.count({ where: { postId: P } }), await prisma.post.findUniqueOrThrow({ where: { id: P }, select: { likeCount: true, bestRankScore: true, bestReactionWeight: true, updatedAt: true } })],
     [true, likesBefore, likeBefore])
 
-  console.log('\n■ 4. 12위 경계 — 조회수는 입력이 아니고, 끌려 올라온 글은 기록된다')
+  console.log('\n■ 4. 12위 경계 — 조회수는 입력이 아니고, 기록 판정은 끌려 올라온 글을 잡는다')
   await reset()
   const a = await member('작성')
   const u1 = await member('u1')
@@ -236,7 +242,7 @@ async function main(): Promise<void> {
   await like(thirteenth, u1)
   const top = async () => (await loadBestPage(prisma, { page: 1, blockedIds: [] })) as Extract<Awaited<ReturnType<typeof loadBestPage>>, { outOfRange: false }>
   const inTop = (await top()).posts.some((p) => p.id === thirteenth)
-  expect('공감 1 로 12개 안에 들어온 글은 즉시 기록된다', await selCount(thirteenth), inTop ? 1 : 0)
+  expect('공감으로 12개 안에 들어와도 쓰기 경로는 기록하지 않는다(PR-A)', [inTop, await selCount(thirteenth)], [true, 0])
 
   await reset()
   const b = await member('작성2')
@@ -264,7 +270,7 @@ async function main(): Promise<void> {
     await tx.post.update({ where: { id: list[0] }, data: { status: 'HIDDEN' }, select: { id: true } })
     await recordBestEntries(tx)
   })
-  expect('위 글이 숨겨져 13위가 12위로 끌려 올라오면 그 순간 기록된다', await selCount(edge), 1)
+  expect('기록 판정: 위 글이 숨겨져 13위가 12위로 끌려 올라오면 그 순간 기록된다', await selCount(edge), 1)
   const again = await prisma.$transaction((tx) => recordBestEntries(tx))
   expect('다시 불러도 새 행 0 (멱등)', again.created, 0)
   expect('다른 글의 기록 판정이 여러 번 돌아도 반응 0 글은 끝까지 기록 0',
@@ -279,9 +285,9 @@ async function main(): Promise<void> {
   const results = await Promise.allSettled(fans.map((f) => like(hot, f)))
   expect('8명이 동시에 공감 → 전부 성공', results.filter((r) => r.status === 'rejected').length, 0)
   expect('공감 원본 8건 · 가중치 8', [await prisma.like.count({ where: { postId: hot } }), await weightOf(hot)], [8, 8])
-  expect('기록은 1건', await selCount(hot), 1)
+  expect('쓰기 경로만으로는 기록 0 (PR-A)', await selCount(hot), 0)
   const recs = await Promise.allSettled(Array.from({ length: 10 }, () => prisma.$transaction((tx) => recordBestEntries(tx))))
-  expect('기록 함수 10번 동시 호출 → 오류 0 · 행 그대로 1', [recs.filter((r) => r.status === 'rejected').length, await selCount(hot)], [0, 1])
+  expect('기록 함수 10번 동시 호출 → 오류 0 · 행 1 (중복 0)', [recs.filter((r) => r.status === 'rejected').length, await selCount(hot)], [0, 1])
   const commenters = [await member('c1'), await member('c2'), await member('c3'), await member('c4')]
   const mixed = await Promise.allSettled([
     ...commenters.map((c) => comment(hot, { authorId: c })),
@@ -306,10 +312,12 @@ async function main(): Promise<void> {
   const blocked = await member('차단될사람')
   const fan = await member('팬')
   const ids: string[] = []
-  // 30개 글: 모두 실반응 1(공감)로 12개 안에 드는 순간마다 기록되게, 오래된 글부터 순서대로 만든다.
+  // 30개 글: 모두 실반응 1(공감). 오래된 글부터 만들고, 공감마다 기록 판정을 직접 불러
+  // 이벤트 기록(PR-B)이 켜진 상태의 기록을 쌓는다.
   for (let i = 29; i >= 0; i -= 1) {
     const id = await post(i % 5 === 0 ? blocked : writer, i * 3)
     await like(id, fan)
+    await prisma.$transaction((tx) => recordBestEntries(tx))
     ids.push(id)
   }
   const total = await selCount()
@@ -378,7 +386,7 @@ async function main(): Promise<void> {
   await comment(U, { commentOrigin: 'GUEST', guestNickname: '시각손님' })
   await prisma.$transaction(async (tx) => {
     await tx.comment.update({ where: { id: uc1 }, data: { isDeleted: true }, select: { id: true } })
-    await refreshBestRanking(tx, U)
+    await recomputePostRanking(tx, U)
   })
   await prisma.$transaction((tx) => recomputePostRanking(tx, U))
   await prisma.$transaction((tx) => recordBestEntries(tx))
@@ -387,7 +395,7 @@ async function main(): Promise<void> {
   const likeTrace = await prisma.$transaction(async (tx) => {
     await tx.like.create({ data: { postId: U, userId: uc } })
     const afterCount = await tx.post.update({ where: { id: U }, data: { likeCount: { increment: 1 } }, select: { updatedAt: true } })
-    await refreshBestRanking(tx, U)
+    await recomputePostRanking(tx, U)
     const afterRank = await tx.post.findUniqueOrThrow({ where: { id: U }, select: { updatedAt: true } })
     return [afterCount.updatedAt.toISOString(), afterRank.updatedAt.toISOString()]
   })
@@ -413,7 +421,7 @@ async function main(): Promise<void> {
   let editedAt2 = ''
   const rank2 = prisma.$transaction(async (tx) => {
     await tx.comment.create({ data: { postId: U, content: 'x', commentOrigin: 'GUEST', guestNickname: '경합손님' }, select: { id: true } })
-    await refreshBestRanking(tx, U)
+    await recomputePostRanking(tx, U)
     await pause(400) // 잠금을 쥔 채 머문다
   }, { timeout: 10_000 })
   await pause(100)
@@ -431,6 +439,92 @@ async function main(): Promise<void> {
   const burst = await Promise.allSettled(burstUsers.map((u) => comment(U, { authorId: u })))
   expect('회원 6명 동시 댓글 → 오류 0 · 키 = 식 · updatedAt 그대로',
     [burst.filter((r) => r.status === 'rejected').length, await invariantHolds(U), await at()], [0, true, beforeBurst])
+
+  console.log('\n■ 9. backfill 전에는 기록 0 · backfill 이 초기 순위와 초기 기록을 만든다')
+  await reset()
+  const bw = await member('백필작가')
+  const bf = [await member('백필독자1'), await member('백필독자2'), await member('백필독자3')]
+  const bposts: string[] = []
+  for (let i = 0; i < 16; i += 1) bposts.push(await post(bw, i * 5)) // 0,5,…,75 시간 전
+  // 운영 배포 직후처럼: 반응은 쓰기 경로(PR-A)로 생긴다 — 순위 키만 바뀌고 기록은 0
+  await like(bposts[14], bf[0]) // 70h 전 + 8h
+  await comment(bposts[15], { authorId: bf[1] }) // 75h 전 + 12.7h
+  await like(bposts[2], bf[2]) // 10h 전 + 8h
+  expect('backfill 전: 반응이 생겨도 BestSelection 0', await selCount(), 0)
+  // 운영 초기 상태를 흉내 — 0030 이 기존 글을 작성 시각·가중치 0 으로 채운 뒤 아직 backfill 전인 글
+  const stale = bposts[5]
+  await comment(stale, { authorId: bf[0] })
+  await prisma.post.update({ where: { id: stale }, data: { bestReactionWeight: 0, bestRankScore: (BASE - 25 * H) / 1000 }, select: { id: true } })
+  const dry = await backfillBestRanking(prisma, { apply: false })
+  expect('dry-run: 바뀔 글을 찾고 아무것도 쓰지 않는다',
+    [dry.changed >= 1, dry.written, dry.created, await selCount(), await weightOf(stale)], [true, 0, 0, 0, 0])
+  const run1 = await backfillBestRanking(prisma, { apply: true })
+  const top12 = await prisma.post.findMany({ where: { status: 'PUBLISHED' }, orderBy: [{ bestRankScore: 'desc' }, { id: 'desc' }], take: 12, select: { id: true, bestReactionWeight: true } })
+  const expectRec = top12.filter((p) => p.bestReactionWeight > 0).map((p) => p.id).sort()
+  const gotRec = (await prisma.bestSelection.findMany({ select: { postId: true, recordedBy: true } }))
+  expect('apply: 모든 글의 키 = 식 (초기값이던 글 포함)',
+    (await Promise.all(bposts.map((id) => invariantHolds(id)))).every(Boolean), true)
+  expect('apply: 기록 = 지금 12개 중 실반응 글 정확히 · recordedBy=backfill',
+    [gotRec.map((r) => r.postId).sort(), gotRec.every((r) => r.recordedBy === 'backfill')], [expectRec, true])
+  expect('12위 밖 실반응 글(70h·75h 전)은 기록하지 않는다',
+    [await selCount(bposts[14]), await selCount(bposts[15])], [top12.some((p) => p.id === bposts[14]) ? 1 : 0, top12.some((p) => p.id === bposts[15]) ? 1 : 0])
+  const run2 = await backfillBestRanking(prisma, { apply: true })
+  expect('두 번째 apply: 쓰기 0 (키 0 · 기록 0 · 최고 순위 0)', [run2.written, run2.created, run2.peakRaised], [0, 0, 0])
+  expect('첫 apply 가 쓴 양 = dry-run 예측', [run1.written, run1.created], [dry.changed, dry.toCreate])
+
+  console.log('\n■ 10. 회원 차단·해제 — 그 회원이 반응한 글만 다시 계산한다')
+  await reset()
+  const owner = await member('차단시험작가')
+  const likerOnly = await member('공감만')
+  const commenterOnly = await member('댓글만')
+  const both = await member('공감과댓글')
+  const X1 = await post(owner, 1)
+  const X2 = await post(owner, 2)
+  const X3 = await post(owner, 3)
+  const X4 = await post(owner, 4)
+  const X5 = await post(owner, 5)
+  const untouched = await post(owner, 6)
+  await like(X1, likerOnly)
+  await like(X1, owner) // 작성자 본인 공감 — 원래 세지 않는다
+  await comment(X2, { authorId: commenterOnly })
+  await comment(X2, { authorId: commenterOnly })
+  await like(X3, both)
+  await comment(X3, { authorId: both })
+  await like(X4, both)
+  await comment(X5, { authorId: both })
+  const block = (u: string, b: boolean) => prisma.$transaction((tx) => applyMemberBlock(tx, u, b), { timeout: 60_000 })
+  const weights = async () => Promise.all([X1, X2, X3, X4, X5, untouched].map(weightOf))
+  expect('차단 전 가중치 [X1 공감1 · X2 한 명 댓글 · X3 공감+댓글 · X4 공감 · X5 댓글 · 무관]', await weights(), [1, 2, 3, 1, 2, 0])
+  const untouchedUpdated = (await prisma.post.findUniqueOrThrow({ where: { id: untouched } })).updatedAt.toISOString()
+  expect('공감만 한 회원 차단 → X1 만 0 (영향 글 1)', [(await block(likerOnly, true)).affectedPosts, await weights()], [1, [0, 2, 3, 1, 2, 0]])
+  expect('해제 → X1 복구', [(await block(likerOnly, false)).affectedPosts, (await weights())[0]], [1, 1])
+  expect('댓글만(같은 글 2개) 회원 차단 → X2 0 (영향 글 1)', [(await block(commenterOnly, true)).affectedPosts, (await weights())[1]], [1, 0])
+  await block(commenterOnly, false)
+  expect('해제 → X2 복구(한 명 = 2)', (await weights())[1], 2)
+  await prisma.$transaction((tx) => recordBestEntries(tx))
+  const x3Rec = await selCount(X3)
+  expect('공감+댓글·여러 글 회원 차단 → X3·X4·X5 에서 빠진다 (같은 글 한 번 · 영향 글 3)',
+    [(await block(both, true)).affectedPosts, await weights()], [3, [1, 2, 0, 0, 0, 0]])
+  expect('차단해도 과거 기록은 지우지 않는다', [x3Rec, await selCount(X3)], [1, 1])
+  expect('이미 차단된 회원을 다시 차단 → 오류 0 · 결과 같음', [(await block(both, true)).affectedPosts, await weights()], [3, [1, 2, 0, 0, 0, 0]])
+  await block(both, false)
+  expect('해제 → X3·X4·X5 복구', await weights(), [1, 2, 3, 1, 2, 0])
+  expect('작성자 본인 차단 → 본인 공감은 원래 0 이라 X1 그대로', [(await block(owner, true)).affectedPosts, (await weights())[0]], [1, 1])
+  await block(owner, false)
+  expect('반응 없는 글은 건드리지 않는다(updatedAt 그대로)', (await prisma.post.findUniqueOrThrow({ where: { id: untouched } })).updatedAt.toISOString(), untouchedUpdated)
+  const blockedBefore = (await prisma.user.findUniqueOrThrow({ where: { id: both } })).isBlocked
+  let blockThrew = false
+  try {
+    await prisma.$transaction(async (tx) => {
+      await applyMemberBlock(tx, both, true)
+      throw new Error('재계산 뒤 실패 흉내')
+    }, { timeout: 60_000 })
+  } catch {
+    blockThrew = true
+  }
+  expect('차단 트랜잭션이 실패하면 isBlocked 와 모든 글 점수가 그대로',
+    [blockThrew, (await prisma.user.findUniqueOrThrow({ where: { id: both } })).isBlocked, await weights()], [true, blockedBefore, [1, 2, 3, 1, 2, 0]])
+  expect('차단·해제 뒤 모든 글의 키 = 식', (await Promise.all([X1, X2, X3, X4, X5].map(invariantHolds))).every(Boolean), true)
 
   console.log(`\n${fail === 0 ? '✅' : '🔴'} best-ranking-db-check: ${pass} 통과 · ${fail} 실패`)
 }

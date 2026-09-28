@@ -14,7 +14,7 @@ import {
 import { checkContent } from '@/lib/content-guard'
 import { sanitizePostHtml, isHtmlContent } from '@/lib/post-html'
 import { firstImageUrl } from '@/lib/post-media'
-import { recordBestEntries, refreshBestRanking } from '@/lib/best-ranking-db'
+import { applyMemberBlock, recomputePostRanking } from '@/lib/best-ranking-db'
 
 /**
  * 어드민 1차 MVP — 운영 write 경로. 🔴 이 파일이 유일한 지점이다.
@@ -120,14 +120,9 @@ export async function setPostHidden(postId: string, hidden: boolean): Promise<Ad
   // DELETED 는 이 화면이 만드는 상태가 아니다. 되돌리는 것도 여기서 하지 않는다.
   if (post.status === 'DELETED') return { error: '삭제 상태인 글은 여기서 바꾸지 않습니다.' }
 
-  // 숨기면 13위가 올라오고, 되살리면 이 글이 다시 들어온다 — 같은 트랜잭션에서 기록한다.
-  await prisma.$transaction(async (tx) => {
-    await tx.post.update({
-      where: { id: postId },
-      data: { status: hidden ? 'HIDDEN' : 'PUBLISHED' },
-      select: { id: true },
-    })
-    await recordBestEntries(tx)
+  await prisma.post.update({
+    where: { id: postId },
+    data: { status: hidden ? 'HIDDEN' : 'PUBLISHED' },
   })
 
   revalidatePath(`/admin/content/${postId}`)
@@ -153,10 +148,10 @@ export async function setCommentHidden(
   })
   if (!comment) return { error: '댓글을 찾지 못했습니다.' }
 
-  // 숨김·복구 모두 실반응 수가 바뀐다. /best 순위를 같은 트랜잭션에서 다시 계산한다.
+  // 숨김·복구 모두 실반응 수가 바뀐다. /best 순위 키를 같은 트랜잭션에서 다시 계산한다.
   await prisma.$transaction(async (tx) => {
     await tx.comment.update({ where: { id: commentId }, data: { isDeleted: hidden }, select: { id: true } })
-    await refreshBestRanking(tx, comment.postId)
+    await recomputePostRanking(tx, comment.postId)
   })
 
   revalidatePath(`/admin/content/${comment.postId}`)
@@ -235,7 +230,15 @@ export async function setMemberBlocked(
   if (!user) return { error: '회원을 찾지 못했습니다.' }
   if (user.isAdmin && blocked) return { error: '관리자는 차단할 수 없습니다.' }
 
-  await prisma.user.update({ where: { id: userId }, data: { isBlocked: blocked } })
+  /**
+   * 차단 여부는 /best 실회원 판정의 입력이다(best-ranking-db.ts BEST_REAL_MEMBER_WHERE).
+   * 🔴 차단·해제와 그 회원이 반응한 글들의 순위 재계산이 한 트랜잭션이다 — 둘 중 하나만 남지 않는다.
+   * 🔴 영향 글이 많으면 길어진다. 기본 5초 대신 넉넉히 준다(글당 수 ms · 실측은 PR 본문).
+   */
+  await prisma.$transaction((tx) => applyMemberBlock(tx, userId, blocked), {
+    maxWait: 10_000,
+    timeout: 60_000,
+  })
 
   revalidatePath(`/admin/members/${userId}`)
   revalidatePath('/admin/members')
