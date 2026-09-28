@@ -54,6 +54,11 @@
   <array>
     <string>__NPX__</string>
     <string>tsx</string>
+    <string>__REPO__/scripts/stage-consume-exec.mts</string>
+    <string>--by=supply</string>
+    <string>--</string>
+    <string>__NPX__</string>
+    <string>tsx</string>
     <string>__REPO__/scripts/supply-process.mts</string>
     <string>--live</string>
   </array>
