@@ -15,7 +15,8 @@ import {
   readdirSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { statSync } from 'node:fs'
 
@@ -25,6 +26,7 @@ import {
   judgeCanonicalMode, judgeJobPath, judgeJobState, judgeLoadedConfig, judgeLoadedJobs,
   judgeRuntimeClean, judgeRuntimeSetup, judgeRuntimeSha, judgeRetiredPlists, judgeDisabledPlists,
   parseLaunchctlPrint, type JobState,
+  judgeOptionalRuntimeJob, parseLaunchctlPlistPath,
 } from '../src/lib/runtime-isolation'
 import {
   judgeCheckpointFreshness, judgePromotionFreshness, judgeSlotEvidence, parseSuccessRuns, runIdToMs,
@@ -33,9 +35,13 @@ import {
   judgeDeploy, judgeDeployLock, judgeLockRelease, runDeploy, type DeployEffects,
 } from '../src/lib/runtime-deploy'
 /** 🔴 보관소 이름의 정본 — 배포기와 **같은 상수**를 쓴다. 문자열을 다시 적지 않는다 */
-import { rollbackDirOf, sameArgs } from './lib/launchd-install.mjs'
+import { programArguments, rollbackDirOf, sameArgs } from './lib/launchd-install.mjs'
 /** 🔴 발행 러너 label 의 정본 — 여기에 문자열을 다시 적지 않는다 */
 import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
+/** 🔴 감사 러너 label · 렌더 입력 형식의 정본 */
+import { AUDIT_RUNNER_LABEL } from './lib/auto-ready-audit-template'
+/** 🔴 배포기가 잠시 멈출 job 목록의 정본 — 배포기와 **같은 상수** */
+import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeEnv } from './lib/runtime-env.mjs'
 
 /** 🔴 예약 실행 전용 worktree — 개발 작업트리와 **다른 곳**이다 */
@@ -417,6 +423,15 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
    *    운영에서는 `com.soransoran.original-post-runner` 다.
    */
   const QJOB = 'job-publish'
+  /**
+   * 🔴 **실제 배포기가 넘기는 잠시 멈출 job 목록 그대로** (2026-09-28).
+   *    fixture 가 이름을 다시 적으면 배포기 목록에서 label 이 빠져도 시험은 초록이다 —
+   *    그래서 [QA] 는 **이 상수**로 배포를 돌린다. 발행 러너·감사 러너의 진짜 label 이다.
+   */
+  const RQ = DEPLOY_QUIESCE_JOBS
+  const AJOB = AUDIT_RUNNER_LABEL
+  /** fixture 세계에 있는 job 전부 — 가짜 공급 job · 퇴역 · 가짜 발행 러너 · 진짜 잠시 멈출 job */
+  const UNIVERSE = (): string[] => [...new Set([...J, ...RETIRED, QJOB, ...RQ])]
   // 🔴 40자리 **hex** 여야 한다 — judgeDeploy 가 축약·비-SHA 를 막는다
   const PREV = 'c'.repeat(40)
   const NEXT = 'd'.repeat(40)
@@ -549,6 +564,15 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
      *    끼어든다. 배포가 "안 건드렸다" 를 **값으로 확인하는지** 보는 결함이다.
      */
     quiesceDrift?: 'loaded' | 'plist' | 'unknown'
+    /** 🔴 `quiesceDrift` 를 걸 job — 기본은 가짜 발행 러너(QJOB) */
+    quiesceDriftJob?: string
+    /**
+     * 🔴 **감사 러너의 배포 전 모양** (2026-09-28). 기본은 `absent` — 지금 운영이 그렇다.
+     *    absent            설치본 없음 · unloaded
+     *    loaded            설치본 있음 · loaded
+     *    installed-unloaded 설치본 있음 · unloaded
+     */
+    audit?: 'absent' | 'loaded' | 'installed-unloaded'
     /** 처음부터 이 상태로 시작한다 */
     initial?: Readonly<Record<string, JobState>>
     /** 실제 loaded 설정이 개발 트리를 가리키는 job */
@@ -632,14 +656,20 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
     if (f.noPrevManifest !== true) writeFileSync(manifestFile, JSON.stringify({ sha: PREV }), 'utf-8')
     writeFileSync(pinFile, `${PREV}\n`, 'utf-8')
 
+    const audit = f.audit ?? 'absent'
+    const defaultState = (l: string): JobState => {
+      if (l === AJOB) return audit === 'loaded' ? 'loaded' : 'unloaded'
+      return J.includes(l) || l === QJOB || RQ.includes(l) ? 'loaded' : 'unloaded'
+    }
     const state = new Map<string, JobState>(
-      [...J, ...RETIRED, QJOB].map((l) =>
-        [l, f.initial?.[l] ?? (J.includes(l) || l === QJOB ? 'loaded' : 'unloaded')]),
+      UNIVERSE().map((l) => [l, f.initial?.[l] ?? defaultState(l)]),
     )
     // 🔴 배포 전 설치본 — 옛 내용이 들어 있다. `noInstalledPlist` 면 아예 없다
     const plists = new Map<string, string>()
-    for (const l of [...J, ...RETIRED, QJOB]) {
+    for (const l of UNIVERSE()) {
       if ((f.noInstalledPlist ?? []).includes(l)) continue
+      // 🔴 감사 러너는 설치가 선택이다 — absent 면 설치본이 없다
+      if (l === AJOB && audit === 'absent') continue
       plists.set(l, OLD_PLIST(l))
     }
     const w: World = {
@@ -683,7 +713,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
           // 🔴 내려간 job 은 돌 수 없다
           running: [...(f.running ?? []), ...later].filter((l) => state.get(l) === 'loaded'),
           unknown: [
-            ...(f.probeUnknown ?? []).filter((l) => [...J, ...RETIRED, QJOB].includes(l)),
+            ...(f.probeUnknown ?? []).filter((l) => UNIVERSE().includes(l)),
             ...(probes >= 2 ? (f.runningUnknownLater ?? []) : []),
           ],
         }
@@ -724,7 +754,7 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         return true
       },
       probeJob: (l) => (
-        (f.probeUnknown ?? []).includes(l) || (driftUnknown && l === QJOB)
+        (f.probeUnknown ?? []).includes(l) || (driftUnknown && l === (f.quiesceDriftJob ?? QJOB))
           ? 'unknown' : state.get(l)!),
       load: (l) => {
         rec(`load:${l}`); loads += 1
@@ -828,8 +858,9 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       writeManifest: (j) => {
         rec('write-manifest')
         // 🔴 배포 막바지에 잠시 멈춘 job 이 어긋나는 상황을 여기서 끼워 넣는다
-        if (f.quiesceDrift === 'loaded') state.set(QJOB, 'loaded')
-        if (f.quiesceDrift === 'plist') plists.set(QJOB, '<plist>job-publish:new:누가 바꿨다</plist>')
+        const dj = f.quiesceDriftJob ?? QJOB
+        if (f.quiesceDrift === 'loaded') state.set(dj, 'loaded')
+        if (f.quiesceDrift === 'plist') plists.set(dj, `<plist>${dj}:new:누가 바꿨다</plist>`)
         if (f.quiesceDrift === 'unknown') driftUnknown = true
         writeFileSync(manifestFile, j, 'utf-8'); return true
       },
@@ -1593,14 +1624,273 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       !Object.keys(JOB_ENV_REQUIREMENTS).includes(PUBLISH_RUNNER_LABEL))
     check('🔴 [Q] 🔴 **label 을 새로 적지 않고 정본을 쓴다**', (() => {
       const src = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
-      return /import \{ PUBLISH_RUNNER_LABEL \}/.test(src)
-        && /QUIESCE_JOBS: readonly string\[\] = \[PUBLISH_RUNNER_LABEL\]/.test(src)
+      return /import \{ DEPLOY_QUIESCE_JOBS \} from '\.\/lib\/runtime-quiesce-jobs'/.test(src)
+        && /QUIESCE_JOBS: readonly string\[\] = DEPLOY_QUIESCE_JOBS\n/.test(src)
+        && /quiesceJobs: QUIESCE_JOBS/.test(src)
+        && /\.\.\.QUIESCE_JOBS\]/.test(src)
         && !/'com\.soransoran\.original-post-runner'/.test(src)
+        && !/'com\.soransoran\.auto-ready-audit'/.test(src)
     })())
+    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행 러너 + 감사 러너**',
+      DEPLOY_QUIESCE_JOBS.length === 2 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
+      && DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL))
+    check('🔴 [Q] 🔴 **감사 러너도 공급·퇴역·스위치 목록 밖이다**',
+      !RUNTIME_JOBS.includes(AUDIT_RUNNER_LABEL) && !RETIRED_JOBS.includes(AUDIT_RUNNER_LABEL)
+      && !Object.keys(JOB_ENV_REQUIREMENTS).includes(AUDIT_RUNNER_LABEL))
     check('🔴 [Q] 🔴 **매거진 job 은 대상이 아니다** — 다른 runtime 을 쓴다', (() => {
       const src = readFileSync('scripts/runtime-deploy.mts', 'utf-8')
       return !/magazine/.test(src)
     })())
+  }
+
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [QA] **자동 READY 감사 러너도 배포 동안 멈춘다** (2026-09-28)
+  //
+  //    `com.soransoran.auto-ready-audit` 는 같은 runtime 트리에서 30분마다 깬다. 앞선 배포는
+  //    이 label 을 관측·정지·복구 어디에도 넣지 않았다 — checkout 중에 회차가 뜨면 반쯤 바뀐 트리로
+  //    감사 행을 쓴다. 🔴 **설치는 선택이다** — 설치되지 않았으면 배포 뒤에도 설치되지 않아야 한다.
+  //
+  //    🔴 여기서는 **배포기가 쓰는 정본 목록(`DEPLOY_QUIESCE_JOBS`)** 으로 돌린다.
+  //       목록에서 감사 label 을 빼면 아래가 곧바로 빨개진다.
+  // ─────────────────────────────────────────────────────────
+  {
+    const noAuditTouch = (w: World): boolean =>
+      countOf(w, `unload:${AJOB}`) === 0 && countOf(w, `load:${AJOB}`) === 0
+      && countOf(w, `bootout:${AJOB}`) === 0 && countOf(w, `render:${AJOB}`) === 0
+      && countOf(w, `write-plist:${AJOB}`) === 0 && countOf(w, `remove-plist:${AJOB}`) === 0
+      && countOf(w, `retire:${AJOB}`) === 0
+
+    // ── ① 미설치(지금 운영) — 배포는 통과하고 감사 러너는 **끝까지 미설치**다 ──
+    {
+      const w = makeWorld({ audit: 'absent' })
+      const r = await deploy(w, [], RQ)
+      check('🟢 [QA] 감사 러너 미설치여도 배포가 통과한다', r.ok)
+      check('🔴 [QA] 🔴 **미설치 → 끝까지 미설치 · unloaded** — 배포가 설치하지 않는다',
+        !w.plists.has(AJOB) && w.state.get(AJOB) === 'unloaded')
+      check('🔴 [QA] 🔴 **미설치 → unload·load·render·write·retire 0**', noAuditTouch(w))
+      check('🔴 [QA] 발행 러너는 여전히 내렸다 되올린다(같은 목록)',
+        r.steps.includes(`quiesce-unload:${PUBLISH_RUNNER_LABEL}`) && w.state.get(PUBLISH_RUNNER_LABEL) === 'loaded')
+    }
+
+    // ── ② 설치·loaded — checkout 전에 내리고, 성공 뒤 **같은 설치본으로** 되올린다 ──
+    {
+      const w = makeWorld({ audit: 'loaded' })
+      const r = await deploy(w, [], RQ)
+      check('🟢 [QA] 감사 러너 설치·loaded 여도 배포가 통과한다', r.ok)
+      check('🔴 [QA] 🔴 **checkout 전에 감사 러너가 내려간다**',
+        r.steps.includes(`quiesce-unload:${AJOB}`)
+        && idx(w, `unload:${AJOB}`) !== -1 && idx(w, `unload:${AJOB}`) < idx(w, 'checkout:target'))
+      check('🔴 [QA] 🔴 **성공 뒤 감사 러너가 다시 loaded 다**', w.state.get(AJOB) === 'loaded')
+      check('🔴 [QA] 🔴 **plist 원문이 배포 전과 같다 · render·write·retire 0**',
+        w.plists.get(AJOB) === OLD_PLIST(AJOB) && countOf(w, `render:${AJOB}`) === 0
+        && countOf(w, `write-plist:${AJOB}`) === 0 && countOf(w, `retire:${AJOB}`) === 0)
+      check('🔴 [QA] 🔴 **되올린 인자가 설치본과 같다 · WD 는 runtime**',
+        sameArgs(PARSE_ARGS(w.plists.get(AJOB)!), w.fx.loadedConfig(AJOB).args)
+        && w.fx.loadedConfig(AJOB).workingDirectory === RTDIR)
+      check('🔴 [QA] 되올림은 격리 검사보다 앞이다',
+        idx(w, `load:${AJOB}`) !== -1 && idx(w, `load:${AJOB}`) < idx(w, 'isolation-gate'))
+    }
+
+    // ── ③ 설치됐지만 unloaded — 그대로 둔다 (올리지 않는다) ──
+    {
+      const w = makeWorld({ audit: 'installed-unloaded' })
+      const r = await deploy(w, [], RQ)
+      check('🟢 [QA] 설치·unloaded 여도 배포가 통과한다', r.ok)
+      check('🔴 [QA] 🔴 **원래 unloaded → 끝까지 unloaded · plist 그대로 · load 0**',
+        w.state.get(AJOB) === 'unloaded' && w.plists.get(AJOB) === OLD_PLIST(AJOB) && noAuditTouch(w))
+    }
+
+    // ── ④ 🔴 반례: 감사 회차가 돌고 있다 — 배포가 겹치지 않는다 (기존 정책: 멈춘다) ──
+    {
+      const w = makeWorld({ audit: 'loaded', running: [AJOB] })
+      const r = await deploy(w, [], RQ)
+      check('🔴 [QA] 🔴 **감사 회차가 돌고 있으면 배포하지 않는다**',
+        !r.ok && r.phase === 'preflight' && r.problems.some((p) => p.includes(AJOB) || p.includes('실행 중')))
+      check('🔴 [QA] 🔴 **그때 unload 0 · checkout 0 · write 0 — 도는 회차를 자르지 않았다**',
+        idx(w, 'unload:') === -1 && idx(w, 'checkout:target') === -1 && idx(w, 'write-plist:') === -1)
+      check('🔴 [QA] 감사 러너는 그대로 loaded 다', w.state.get(AJOB) === 'loaded')
+    }
+    {
+      // 🔴 preflight 뒤·첫 unload 앞에 시작한 감사 회차
+      const w = makeWorld({ audit: 'loaded', runningLater: [AJOB] })
+      const r = await deploy(w, [], RQ)
+      check('🔴 [QA] 🔴 **preflight 뒤에 시작한 감사 회차도 첫 unload 앞에서 잡는다**',
+        !r.ok && r.phase === 'pre-unload-recheck'
+        && idx(w, 'unload:') === -1 && idx(w, 'checkout:target') === -1)
+    }
+    {
+      const w = makeWorld({ audit: 'loaded', probeUnknown: [AJOB] })
+      const r = await deploy(w, [], RQ)
+      check('🔴 [QA] 감사 러너 상태를 모르면 배포하지 않는다(fail-closed)',
+        !r.ok && idx(w, 'checkout:target') === -1)
+    }
+
+    // ── ⑤ 내려가지 않으면 checkout 0 · 원래대로 ──
+    {
+      const w = makeWorld({ audit: 'loaded', unloadEffect: { [AJOB]: 'keep' } })
+      const r = await deploy(w, [], RQ)
+      check('🔴 [QA] 🔴 **감사 러너가 내려가지 않으면 checkout 0**',
+        !r.ok && r.phase === 'unload' && idx(w, 'checkout:target') === -1)
+      check('🔴 [QA] 그때도 감사 러너·발행 러너가 loaded 다',
+        w.state.get(AJOB) === 'loaded' && w.state.get(PUBLISH_RUNNER_LABEL) === 'loaded')
+    }
+
+    // ── ⑥ 실패 → rollback 이 **배포 전 상태 그대로** 되돌린다 (설치·미설치 둘 다) ──
+    for (const [name, fault] of [
+      ['checkout 실패', { checkout: true }],
+      ['offline 게이트 실패', { gateFail: 'gate2' }],
+      ['격리 검사 실패', { isolation: true }],
+    ] as const) {
+      {
+        const w = makeWorld({ ...fault, audit: 'loaded' })
+        const r = await deploy(w, [], RQ)
+        check(`🔴 [QA] ${name} → 배포 멈춤 · rollback 완전`, !r.ok && r.rollback?.complete === true)
+        check(`🔴 [QA] 🔴 **${name} 뒤 감사 러너가 원래대로 loaded · plist 그대로**`,
+          w.state.get(AJOB) === 'loaded' && w.plists.get(AJOB) === OLD_PLIST(AJOB))
+        check(`🔴 [QA] ${name} 뒤 감사 러너 인자가 설치본 그대로`,
+          sameArgs(PARSE_ARGS(OLD_PLIST(AJOB)), w.fx.loadedConfig(AJOB).args))
+      }
+      {
+        const w = makeWorld({ ...fault, audit: 'absent' })
+        const r = await deploy(w, [], RQ)
+        check(`🔴 [QA] 🔴 **${name} · 미설치 → rollback 뒤에도 미설치 · unloaded · 손댐 0**`,
+          !r.ok && r.rollback?.complete === true && !w.plists.has(AJOB)
+          && w.state.get(AJOB) === 'unloaded' && noAuditTouch(w))
+      }
+      {
+        const w = makeWorld({ ...fault, audit: 'installed-unloaded' })
+        const r = await deploy(w, [], RQ)
+        check(`🔴 [QA] ${name} · 설치·unloaded → rollback 뒤에도 unloaded · plist 그대로`,
+          !r.ok && r.rollback?.complete === true && w.state.get(AJOB) === 'unloaded'
+          && w.plists.get(AJOB) === OLD_PLIST(AJOB))
+      }
+    }
+
+    // ── ⑦ 🔴 "설치하지 않았다" 를 값으로 확인한다 — 배포 중 누가 깔면 성공으로 적지 않는다 ──
+    {
+      const w = makeWorld({ audit: 'absent', quiesceDrift: 'plist', quiesceDriftJob: AJOB })
+      const r = await deploy(w, [], RQ)
+      check('🔴 [QA] 🔴 **미설치였는데 배포 뒤 설치본이 생기면 실패다**', !r.ok && r.phase === 'quiesce-restore')
+    }
+    {
+      const w = makeWorld({ audit: 'absent', quiesceDrift: 'loaded', quiesceDriftJob: AJOB })
+      const r = await deploy(w, [], RQ)
+      check('🔴 [QA] 🔴 **미설치였는데 배포 뒤 loaded 면 실패다**', !r.ok && r.phase === 'quiesce-restore')
+    }
+    {
+      const w = makeWorld({ audit: 'loaded', quiesceDrift: 'plist', quiesceDriftJob: AJOB })
+      const r = await deploy(w, [], RQ)
+      check('🔴 [QA] 🔴 **loaded 였는데 배포 중 설치본이 바뀌면 실패다**', !r.ok && r.phase === 'quiesce-restore')
+    }
+  }
+
+
+  // ─────────────────────────────────────────────────────────
+  // 🔴 [QI] **감사 러너 격리 판정** — 설치됐으면 경로·인자·원문·loaded·SHA 를 값으로 본다 (2026-09-28)
+  //
+  //    앞선 격리 검사는 이 label 을 전혀 보지 않았다(`judgeLoadedJobs` 는 여분 label 을 문제 삼지 않는다).
+  //    누가 개발 트리 경로로 다시 깔거나, 템플릿이 바뀐 뒤 옛 설치본이 돌아도 잡는 게이트가 없었다.
+  // ─────────────────────────────────────────────────────────
+  {
+    const NPX = '/Users/x/.nvm/versions/node/v24.14.0/bin/npx'
+    const AGENT_PLIST = `/Users/x/Library/LaunchAgents/${AJOB}.plist`
+    const argsFor = (root: string): string[] => [NPX, 'tsx', `${root}/scripts/auto-ready-audit.mts`, '--apply']
+    const xmlFor = (root: string, wd: string = root): string =>
+      `<plist><key>Label</key><string>${AJOB}</string>`
+      + `<key>ProgramArguments</key><array>${argsFor(root).map((a) => `<string>${a}</string>`).join('')}</array>`
+      + `<key>WorkingDirectory</key><string>${wd}</string></plist>`
+    const auditPrint = (o: { path?: string; args?: readonly string[]; wd?: string } = {}): string =>
+      `gui/501/${AJOB} = {\n`
+      + '\tactive count = 0\n'
+      + `\tpath = ${o.path ?? AGENT_PLIST}\n`
+      + '\ttype = LaunchAgent\n'
+      + '\tstate = not running\n\n'
+      + `\tprogram = ${NPX}\n`
+      + '\targuments = {\n'
+      + (o.args ?? argsFor(RTDIR)).map((a) => `\t\t${a}\n`).join('')
+      + '\t}\n\n'
+      + `\tworking directory = ${o.wd ?? RTDIR}\n\n`
+      + '\tstdout path = /Users/x/Library/Logs/soransoran/auto-ready-audit.log\n'
+      + '\tstderr path = /Users/x/Library/Logs/soransoran/auto-ready-audit-error.log\n'
+      + '}\n'
+    type In = Parameters<typeof judgeOptionalRuntimeJob>[0]
+    const base = (o: Partial<In> = {}): In => ({
+      label: AJOB, expectedPlistPath: AGENT_PLIST,
+      installedXml: xmlFor(RTDIR), installedArgs: argsFor(RTDIR), installedWorkingDirectory: RTDIR,
+      state: 'loaded', loadedPlistPath: parseLaunchctlPlistPath(auditPrint()),
+      loaded: parseLaunchctlPrint(auditPrint()), expectedXml: xmlFor(RTDIR),
+      runtimeRoot: RTDIR, devRoots: [DEVDIR], runtimeHead: PREV, pinnedSha: PREV, programTrackedAtHead: true,
+      ...o,
+    })
+    const j = (o: Partial<In> = {}) => judgeOptionalRuntimeJob(base(o))
+
+    check('🔴 [QI] 파서가 plist 경로만 뽑는다 (stdout/stderr path 는 아니다)',
+      parseLaunchctlPlistPath(auditPrint()) === AGENT_PLIST && parseLaunchctlPlistPath(null) === null)
+    check('🟢 [QI] 설치·loaded · 전부 runtime 과 같으면 통과', j().ok && j().installed)
+
+    // ── 미설치 ──
+    const absent = j({ installedXml: null, installedArgs: [], installedWorkingDirectory: null, state: 'unloaded', loadedPlistPath: null, loaded: parseLaunchctlPrint(null), expectedXml: null })
+    check('🟢 [QI] 🔴 **미설치 + unloaded → 통과(필수 아님)**', absent.ok && !absent.installed)
+    check('🔴 [QI] 미설치도 **보고한다** — 조용히 넘기지 않는다', absent.notes.some((n) => n.includes('필수 아님')))
+    check('🟢 [QI] 미설치면 runtime SHA 가 어긋나도 이 판정은 막지 않는다(SHA 는 따로 본다)',
+      judgeOptionalRuntimeJob({ ...base(), installedXml: null, installedArgs: [], installedWorkingDirectory: null, state: 'unloaded', runtimeHead: NEXT }).ok)
+
+    // ── 🔴 loaded 상태 대조 ──
+    check('🔴 [QI] 🔴 **설치본 없이 loaded → 실패** (다른 자리 plist 로 올라와 있다)',
+      !j({ installedXml: null, installedArgs: [], installedWorkingDirectory: null, loadedPlistPath: `${DEVDIR}/ops/${AJOB}.plist` }).ok)
+    {
+      const v = j({ state: 'unloaded', loadedPlistPath: null, loaded: parseLaunchctlPrint(null) })
+      check('🔴 [QI] 🔴 **설치본은 있는데 unloaded → 실패** (다음 로그인에 등록된다) · 사유가 loaded 상태다',
+        !v.ok && v.problems.some((p) => p.includes('loaded 가 아니다')))
+    }
+    check('🔴 [QI] 🔴 **관측 unknown → 실패(fail-closed)** — 미설치여도',
+      !j({ state: 'unknown' }).ok && !j({ state: 'unknown', installedXml: null }).ok)
+
+    // ── 🔴 설치 경로 대조 ──
+    {
+      const v = j({ loadedPlistPath: `${DEVDIR}/docs/operations/launchd/${AJOB}.plist` })
+      check('🔴 [QI] 🔴 **실제 load 된 plist 가 정본 자리가 아니면 실패** (원문·인자가 같아도)',
+        !v.ok && v.problems.some((p) => p.includes('정본 자리가 아니다')))
+    }
+    check('🔴 [QI] load 된 plist 경로를 못 읽으면 실패', !j({ loadedPlistPath: null }).ok)
+
+    // ── 🔴 runtime 경로 · SHA 대조 ──
+    {
+      const v = j({ runtimeHead: NEXT })
+      check('🔴 [QI] 🔴 **runtime HEAD ≠ 고정 SHA → 실패**', !v.ok && v.problems.some((p) => p.includes('고정 SHA 와 다르다')))
+    }
+    check('🔴 [QI] 🔴 **실행 스크립트가 runtime HEAD 에 없으면 실패**', !j({ programTrackedAtHead: false }).ok)
+    check('🔴 [QI] HEAD·pin·추적 여부를 못 보면 실패(fail-closed)',
+      !j({ runtimeHead: null }).ok && !j({ pinnedSha: null }).ok && !j({ programTrackedAtHead: null }).ok)
+    {
+      // 🔴 render 입력까지 개발 트리로 틀어진 경우 — 원문 대조는 같다고 나온다. 경로 판정이 따로 잡아야 한다
+      const devXml = xmlFor(DEVDIR)
+      const v = j({
+        installedXml: devXml, expectedXml: devXml, installedArgs: argsFor(DEVDIR), installedWorkingDirectory: DEVDIR,
+        loaded: parseLaunchctlPrint(auditPrint({ args: argsFor(DEVDIR), wd: DEVDIR })),
+      })
+      check('🔴 [QI] 🔴 **설치본·loaded 가 개발 트리를 실행하면 실패** (원문 대조가 같다고 나와도)', !v.ok
+        && v.problems.some((p) => p.includes('개발 작업트리')))
+    }
+
+    // ── 🔴 인자·원문 대조 ──
+    check('🔴 [QI] 🔴 **loaded 인자가 설치본과 다르면 실패** (옛 인자로 load 된 채)',
+      !j({ loaded: parseLaunchctlPrint(auditPrint({ args: [NPX, 'tsx', `${RTDIR}/scripts/auto-ready-audit.mts`] })) }).ok)
+    check('🔴 [QI] 🔴 **loaded WD 가 설치본과 다르면 실패**',
+      !j({ loaded: parseLaunchctlPrint(auditPrint({ wd: `${RTDIR}/scripts` })) }).ok)
+    check('🔴 [QI] 🔴 **설치본이 runtime 템플릿 render 와 다르면 실패** (템플릿이 바뀌었는데 옛 설치본)',
+      !j({ expectedXml: xmlFor(RTDIR).replace('--apply', '--apply --x') }).ok)
+    check('🔴 [QI] runtime 템플릿을 render 하지 못하면 실패(fail-closed)', !j({ expectedXml: null }).ok)
+  }
+
+  // ── 🔴 실제 관측 배선이 이 판정을 부른다 — 부르지 않으면 판정은 죽은 코드다 ──
+  {
+    const src = readFileSync('scripts/runtime-isolation-check.mts', 'utf-8')
+    const real = src.slice(src.indexOf('② 이 기계의 실제 상태'))
+    check('🔴 [QI] 실제 관측 구간이 judgeOptionalRuntimeJob 으로 감사 러너를 판정한다',
+      /judgeOptionalRuntimeJob\(/.test(real) && /AUDIT_RUNNER_LABEL/.test(real)
+      && /check\(`🔴 \$\{AUDIT_RUNNER_LABEL\}/.test(real))
   }
 
 
@@ -2057,6 +2347,69 @@ if (!existsSync(RUNTIME_ROOT)) {
   for (const p of sha.problems) console.log(`      ${p}`)
   console.log(`   고정 SHA ${(pinned ?? '(없음)').slice(0, 7)} · HEAD ${(head ?? '?').slice(0, 7)}`
     + ` · detached ${detached ? 'yes' : 'no'} · main 계보 ${ancestor === null ? '확인 못함' : ancestor ? 'yes' : 'no'}`)
+
+  /**
+   * ── 🔴 감사 러너 (설치는 선택) — 설치됐으면 값으로 대조한다 (2026-09-28) ──
+   *
+   *    🔴 **read-only.** plist 를 읽고 `launchctl print` 로 관측하고 runtime 템플릿을 import 해 문자열만 만든다.
+   *       파일 쓰기 · launchctl 변경 · DB 0.
+   *    🔴 기대 원문은 **runtime 작업 트리의 템플릿**으로 render 한다 — 검사를 돌린 트리의 템플릿이 아니다.
+   *    🔴 node 경로(npx · PATH 앞 bin)만 설치본에서 읽는다 — 검사를 돌린 node 버전이 설치 node 와 달라도
+   *       거짓 실패가 나지 않게. 스크립트 · 인자 · WD · 예약 시각 · 로그 · PATH 구성은 전부 템플릿과 바이트로 같아야 한다.
+   */
+  {
+    const label = AUDIT_RUNNER_LABEL
+    const expectedPlistPath = join(AGENT_DIR, `${label}.plist`)
+    const installedXml = ((): string | null => {
+      try { return existsSync(expectedPlistPath) ? readFileSync(expectedPlistPath, 'utf-8') : null } catch { return null }
+    })()
+    const probe = ((): { exitCode: number | null; stdout: string; stderr: string } => {
+      try {
+        const out = execFileSync('launchctl', ['print', `gui/${process.getuid?.() ?? 0}/${label}`], {
+          encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+        })
+        return { exitCode: 0, stdout: out, stderr: '' }
+      } catch (e) {
+        const x = e as { status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer }
+        return { exitCode: typeof x.status === 'number' ? x.status : null, stdout: String(x.stdout ?? ''), stderr: String(x.stderr ?? '') }
+      }
+    })()
+    const { state } = judgeJobState(probe)
+    const printed = state === 'loaded' ? probe.stdout : null
+    const installedArgs = installedXml === null ? [] : programArguments(installedXml)
+    const npxPath = installedArgs[0] ?? null
+    const expectedXml = installedXml === null || npxPath === null ? null : await (async (): Promise<string | null> => {
+      try {
+        const mod: unknown = await import(pathToFileURL(join(RUNTIME_ROOT, 'scripts', 'lib', 'auto-ready-audit-template.ts')).href)
+        const fn = (mod as { renderAuditRunnerPlist?: unknown }).renderAuditRunnerPlist
+        if (typeof fn !== 'function') return null
+        const out: unknown = fn({
+          runtimeRoot: RUNTIME_ROOT, npxPath, nodeBinDir: dirname(npxPath),
+          logDir: join(homedir(), 'Library', 'Logs', 'soransoran'),
+        })
+        return typeof out === 'string' ? out : null
+      } catch { return null }
+    })()
+    const program = installedArgs.find((a) => a.endsWith('.mts')) ?? null
+    const rel = program !== null && program.startsWith(`${RUNTIME_ROOT}/`) ? program.slice(RUNTIME_ROOT.length + 1) : null
+    const tracked = head === null ? null : rel === null ? false : ((): boolean => {
+      try { execFileSync('git', ['cat-file', '-e', `${head}:${rel}`], { cwd: RUNTIME_ROOT, stdio: 'ignore' }); return true } catch { return false }
+    })()
+    const v = judgeOptionalRuntimeJob({
+      label, expectedPlistPath, installedXml, installedArgs,
+      installedWorkingDirectory: installedXml === null ? null : valueOf(installedXml, 'WorkingDirectory'),
+      state, loadedPlistPath: parseLaunchctlPlistPath(printed), loaded: parseLaunchctlPrint(printed), expectedXml,
+      runtimeRoot: RUNTIME_ROOT, devRoots: DEV_ROOTS, runtimeHead: head, pinnedSha: pinned, programTrackedAtHead: tracked,
+    })
+    // 🔴 관측 실패는 --require-runtime 에서만 실패로 본다 (다른 job 과 같은 규칙)
+    if (state === 'unknown' && !REQUIRE_RUNTIME) {
+      console.log(`   ⚪ ${label}: launchctl 관측 불가 — --require-runtime 에서만 막는다`)
+    } else {
+      check(`🔴 ${AUDIT_RUNNER_LABEL} (설치 선택) — 미설치면 통과 · 설치됐으면 경로·인자·원문·loaded·SHA 가 runtime 과 같다`, v.ok)
+    }
+    for (const p of v.problems) console.log(`      ${p}`)
+    for (const n of v.notes) console.log(`   ${v.installed ? '🟢' : '⚪'} ${n}`)
+  }
 
   // ── 자립성 ──
   const devData = DEV_ROOTS.map((d) => real(join(d, '.microseed-data'))).filter((x): x is string => x !== null)
