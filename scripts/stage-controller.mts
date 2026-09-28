@@ -133,7 +133,8 @@ async function main(): Promise<number> {
     } catch (e) { signals.push(qualitySignalOf(null, (e as Error).name)) }
     const cost = readCostSignals(NOW)
     signals.push(costSignalOf([
-      { name: '공급·댓글 장부', health: cost.supplyLedger.health, reasons: cost.supplyLedger.reasons },
+      { name: '공급 장부', health: cost.supplyLedger.health, reasons: cost.supplyLedger.reasons },
+      { name: '댓글 장부', health: cost.commentLedger.health, reasons: cost.commentLedger.reasons },
       { name: '감사 장부', health: cost.auditLedger.health, reasons: cost.auditLedger.reasons },
     ]))
     const pub = observeJob('com.soransoran.original-post-runner')

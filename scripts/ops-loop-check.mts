@@ -9,7 +9,11 @@
  *   ⑤ keep-awake · controller · 복구 템플릿 — sudo/pmset 0 · 발행 창 전 · 수집 job 제외
  *   ⑥ 복구 판정 — 모르면 건드리지 않는다 · 같은 창에서 한 번만
  */
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ledgerDateOf } from '../src/lib/llm-ledger'
+import { readCostSignals } from './lib/ops-signals.mjs'
 
 import {
   parseLaunchdRunInfo, failingFromLaunchd, failingFromProcessRuns, combineFailing, collectCapabilityFailing,
@@ -123,6 +127,32 @@ console.log('\n② 운영 한 화면 — 비용 · 실패 이유 · 비밀값')
   })())
   check('상한 미설정 → NO_BUDGET · unknown', judgeCost({ uses: true, tally: t(0), ledgerError: null, settleHold: null, capUsd: null }).health === 'unknown')
   check('유료 호출 없는 레인(발행) → ok', judgeCost({ uses: false, tally: null, ledgerError: null, settleHold: null, capUsd: null }).health === 'ok')
+
+  /**
+   * 🔴 (2026-09-29) 무인 댓글 루프는 **자기 장부**에 쓴다 — 앞판은 공급 장부만 읽어 댓글 지출이 $0 으로 보였다.
+   *    반례: 댓글 장부에만 상한($0.20) 초과 지출 → 댓글 축은 bad, 공급 축은 그대로 ok.
+   */
+  {
+    const root = mkdtempSync(join(tmpdir(), 'ops-cost-'))
+    const dirs = { supply: join(root, 's'), audit: join(root, 'a'), comment: join(root, 'c') }
+    for (const d of Object.values(dirs)) mkdirSync(d)
+    const now = new Date('2026-09-29T02:00:00Z')
+    const line = (usd: number) => JSON.stringify({
+      runId: 'comment-loop-x', stage: 'commentGen', attemptId: 'a1', requestNo: 0, provider: 'google',
+      apiModelId: 'gemini-3.7-flash', model: 'gemini-3.7-flash', status: 'settled', blockCode: null,
+      countedInputTokens: 1, maxOutputTokens: 800, reservedUsd: usd, inputTokens: 1, outputTokens: 1,
+      cacheWriteTokens: 0, cacheReadTokens: 0, usageKeys: [], settledUsd: usd, pricingVersion: 'supply-2026-09-19',
+      startedAt: now.toISOString(), endedAt: now.toISOString(), errorCode: null,
+    })
+    writeFileSync(join(dirs.comment, `${ledgerDateOf(now)}.jsonl`), `${line(0.25)}\n`)
+    const env = { SORAN_LLM_DAILY_BUDGET_USD: '0.50', SORAN_AUDIT_LLM_DAILY_BUDGET_USD: '0.30' }
+    const c = readCostSignals(now, env, dirs)
+    check('🔴 댓글 장부 초과 지출을 댓글 축이 본다 (공급 장부가 아니라 전용 장부)',
+      c.commentLedger.health === 'bad' && c.commentLedger.codes.includes('DAILY_EXHAUSTED') && c.commentLedger.spentUsd === 0.25)
+    check('🔴 댓글 상한은 댓글 계약값 $0.20 이다 (env 미설정 → 기본값)', c.commentLedger.capUsd === 0.2)
+    check('댓글 지출이 공급 축을 오염시키지 않는다', c.supplyLedger.spentUsd === 0 && c.supplyLedger.health !== 'bad')
+    rmSync(root, { recursive: true, force: true })
+  }
 
   const prismaLog = [
     'PrismaClientInitializationError: ',

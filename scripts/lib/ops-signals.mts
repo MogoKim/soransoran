@@ -17,6 +17,8 @@ import { defaultLedgerDir, ledgerPathOf, readLedgerDay, readSettleHold } from '.
 import { BUDGET_ENV, limitsFromEnv } from './supply-llm-call.mjs'
 import { auditLedgerDir, auditLimitsFromEnv } from './auto-ready-semantic-provider.mjs'
 import { AUDIT_BUDGET_ENV } from '../../src/lib/auto-ready-semantic-audit'
+import { COMMENT_LOOP_BUDGET_ENV, commentLoopLimitsFromEnv } from '../../src/lib/persona-comment-auto-lane'
+import { commentLoopLedgerDir } from './persona-comment-loop.mjs'
 
 export const CANONICAL_ENV_FILE = join(homedir(), 'Library', 'Application Support', 'soransoran', 'env.local')
 export const LOG_DIR = join(homedir(), 'Library', 'Logs', 'soransoran')
@@ -52,8 +54,15 @@ export function fillDbConnection(): boolean {
   return (process.env.DATABASE_URL ?? '') !== ''
 }
 
-/** 🔴 공급 장부에서 댓글이 쓰는 단계 — 같은 장부 · 같은 상한이다(두 번째 장부를 만들지 않는다) */
+/**
+ * 🔴 공급 장부에 남은 댓글 단계 — 옛 수동 댓글 경로(runner)가 쓰던 자리다.
+ *    (2026-09-29) 무인 댓글 루프는 **자기 장부**(`persona-comment-ledger`)에 쓴다. 앞판은 공급 장부만 읽어
+ *    9-28 댓글 지출 $0.0024 가 화면에 $0 으로 나왔고, 단계 controller 의 비용 축이 댓글을 보지 못했다.
+ */
 const COMMENT_STAGES: readonly LedgerStage[] = ['commentGen']
+
+/** 🔴 댓글 전용 장부의 상한을 정하는 env 이름 — 부르는 쪽이 env 를 넘길 때도 이 키를 함께 읽는다 */
+export const COMMENT_LEDGER_ENV_KEYS: readonly string[] = Object.values(COMMENT_LOOP_BUDGET_ENV)
 
 export type LedgerDayRead = { entries: LedgerEntry[] | null; error: string | null }
 
@@ -65,18 +74,25 @@ export function readLedgerToday(dir: string, now: Date): LedgerDayRead {
 export type CostSignals = {
   /** 공급 장부 전체(공급 + 댓글) — 상한은 하나다 */
   supplyLedger: CostVerdict
-  /** 그중 댓글 단계만 쓴 금액 */
+  /** 공급 장부 안의 댓글 단계만 쓴 금액(옛 경로) */
   commentSpentUsd: number | null
+  /** 🔴 무인 댓글 루프 전용 장부 — 상한은 `SORAN_PERSONA_COMMENT_DAILY_BUDGET_USD`(기본·최대 0.20) */
+  commentLedger: CostVerdict
   /** 감사 전용 장부 — 공급과 섞이지 않는다 */
   auditLedger: CostVerdict
 }
 
-export function readCostSignals(now: Date, env?: Record<string, string>): CostSignals {
+export function readCostSignals(
+  now: Date, env?: Record<string, string>,
+  /** 🔴 시험용 — 운영은 기본 디렉터리만 쓴다 */
+  dirs: { supply?: string; audit?: string; comment?: string } = {},
+): CostSignals {
   const envVals = env ?? readEnvKeys([
     BUDGET_ENV.dailyUsd, BUDGET_ENV.runRequestCap, BUDGET_ENV.headroomMultiplier,
     AUDIT_BUDGET_ENV.dailyUsd, AUDIT_BUDGET_ENV.runRequestCap, AUDIT_BUDGET_ENV.headroomMultiplier,
+    ...COMMENT_LEDGER_ENV_KEYS,
   ]).values
-  const supplyDir = defaultLedgerDir()
+  const supplyDir = dirs.supply ?? defaultLedgerDir()
   const s = readLedgerToday(supplyDir, now)
   const supplyLedger = judgeCost({
     uses: true,
@@ -89,7 +105,7 @@ export function readCostSignals(now: Date, env?: Record<string, string>): CostSi
     const t = tallyOf(s.entries.filter((e) => COMMENT_STAGES.includes(e.stage)))
     return Math.round((t.settledUsd + t.openReservedUsd) * 1e6) / 1e6
   })()
-  const auditDir = auditLedgerDir()
+  const auditDir = dirs.audit ?? auditLedgerDir()
   const a = readLedgerToday(auditDir, now)
   const auditLedger = judgeCost({
     uses: true,
@@ -98,7 +114,16 @@ export function readCostSignals(now: Date, env?: Record<string, string>): CostSi
     settleHold: readSettleHold(auditDir),
     capUsd: auditLimitsFromEnv(envVals).dailyUsd,
   })
-  return { supplyLedger, commentSpentUsd, auditLedger }
+  const commentDir = dirs.comment ?? commentLoopLedgerDir()
+  const c = readLedgerToday(commentDir, now)
+  const commentLedger = judgeCost({
+    uses: true,
+    tally: c.entries === null ? null : tallyOf(c.entries),
+    ledgerError: c.error,
+    settleHold: readSettleHold(commentDir),
+    capUsd: commentLoopLimitsFromEnv(envVals).limits.dailyUsd,
+  })
+  return { supplyLedger, commentSpentUsd, auditLedger, commentLedger }
 }
 
 /** 🔴 로그 끝만 읽는다 — 큰 로그를 통째로 올리지 않는다 */
