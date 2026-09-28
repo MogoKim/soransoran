@@ -717,6 +717,8 @@ export const V4_PHRASES: readonly SourcePhrase[] = [
   { card: 'P10', title: '선물', body: '어떤 친구가 추석 선물로 양갱을 준비하겠다고 하더라고요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P06', title: '명절', body: '명절 음식 중에서도 동태전은 별로 안 좋아해요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P12', title: '굴비', body: '명절 때마다 시어머니가 굴비를 챙겨 주세요.', source: { postedAt: BEFORE }, want: 'pass' },
+  // 🔴 습관으로 말한 명절은 살아 있는 명절이 아니다 — 같은 글의 날짜 말도 명절의 날이 아니다(변이 V09)
+  { card: 'P12', title: '굴비', body: '명절 때마다 시어머니가 굴비를 챙겨 주세요. 오늘은 그걸로 밥을 했어요.', source: { postedAt: BEFORE }, want: 'pass' },
   { card: 'P12', title: '굴비', body: '명절에 받아온 굴비 구웠어요. 이제 오늘 할 일은 끝났네요.', source: { postedAt: BEFORE }, want: 'review:staleTimeClaim' },
   { card: 'P12', title: '굴비', body: '명절에 받아온 굴비 구웠어요. 이제 할 일은 끝났네요.', source: { postedAt: BEFORE }, want: 'pass' },
   // 1인칭 금융 행동 — 계획이 생활사를 허가하지 않았다

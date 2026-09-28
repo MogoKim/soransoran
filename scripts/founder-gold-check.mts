@@ -66,6 +66,18 @@ check('모양 = 창업자 확정값(30 · 통과 22 · 수정 2 · 폐기 6 · �
   }
 }
 
+// 🔴 행 판정 자체 — 폐기 행(#1)이 게이트를 통과하게 되면 그 행은 불일치다(digest 와 별개로 · 변이 V16)
+{
+  const t = clone()
+  t[0]!.plan = { ...t[0]!.plan, closingIntent: 'share' }
+  const r1 = replayFounderGold(t).results.find((x) => x.n === 1)!
+  check('🔴 🔴 **폐기 행이 게이트를 통과하게 되면 그 행 = 불일치(자동 READY 누출로 센다)**', r1.got === 'pass' && !r1.ok, JSON.stringify(r1))
+  const t2 = clone()
+  t2[3]!.draft = { ...t2[3]!.draft, body: '요즘 젊은 분들은 차례 안 지내나요?' }
+  const r4 = replayFounderGold(t2).results.find((x) => x.n === 4)!
+  check('🔴 🔴 **중대 결함 행이 확정 차단을 벗어나면 그 행 = 불일치**', r4.got !== 'hold' && !r4.ok, JSON.stringify(r4))
+}
+
 console.log('\n③ 카드 스냅샷 = 정본 카드(게이트 칸)')
 for (const { row, fx } of GOLD_FIXTURES) {
   const snap = row.card as unknown as Record<string, unknown>
