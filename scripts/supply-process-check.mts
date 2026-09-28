@@ -426,6 +426,9 @@ check('🔴 모든 경로에서 finally 로 푼다 — process.exit 으로 빠�
   const LOCK_NAME = 'supply-process.lock'
   const OBSERVE_MS = 6000
   const WAIT_MS = 4000
+  // `npx tsx` startup can exceed 10 seconds on a loaded CI runner. The barrier
+  // timeout is machine headroom, not part of the lock contract being tested.
+  const READY_WAIT_MS = 60_000
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
   const lockLib = resolve('scripts/lib/collect-lock.mts')
 
@@ -538,9 +541,18 @@ if (got) {
         ]
         // 🔴 **둘 다 관측을 마친 뒤에** 출발시킨다 — 안무를 운에 맡기지 않는다
         const readyCount = (): number => readdirSync(dir).filter((f) => f.startsWith('READY.')).length
-        for (let k = 0; k < 400 && readyCount() < 2; k += 1) await sleep(25)
+        const readyDeadline = Date.now() + READY_WAIT_MS
+        while (readyCount() < 2 && Date.now() < readyDeadline) await sleep(25)
+        if (readyCount() < 2) {
+          writeFileSync(base.START, 'abort')
+          const codes = await Promise.all(running)
+          throw new Error(`lock race children did not become ready: ready=${readyCount()} codes=${codes.join(',')}`)
+        }
         writeFileSync(base.START, 'go')
-        await Promise.all(running)
+        const codes = await Promise.all(running)
+        if (codes.some((code) => code !== 0)) {
+          throw new Error(`lock race child failed: codes=${codes.join(',')}`)
+        }
         const evs = readFileSync(out, 'utf-8').split('\n').filter(Boolean)
           .map((l) => JSON.parse(l) as { ev: string; t: number })
           .sort((a, b) => a.t - b.t)
