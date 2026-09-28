@@ -318,6 +318,13 @@ export function processCandidates({
   const done = []
   const blocked = []
   const results = []
+  /**
+   * 🔴 **같은 지문 HOLD 는 시도로 세지 않는다** (2026-09-29 · 01:00 실측).
+   *    HOLD 8건이 시도 상한 9 중 8을 먹어 뒤의 후보가 볼 자리가 없었다.
+   *    후보 목록은 **한 번만** 훑는다(유한) — 실제 작업한 후보만 `attempted` 를 올린다.
+   */
+  const heldResults = []
+  let attempted = 0
 
   // 🔴 등록 예산과 시도 상한을 따로 센다 — 막힌 후보가 정상 후보를 굶기지 않는다
   const ceiling = ceilingFor(limit)
@@ -325,7 +332,7 @@ export function processCandidates({
   let budgetStop = null
   // 🔴 장부를 못 읽었으면 한 건도 태우지 않는다 — 전부 HOLD 로 보고하고 끝낸다
   for (const cand of (ledger.ok ? scanned.eligible : [])) {
-    const b = judgeBudget({ registered, attempted: results.length, limit, ceiling })
+    const b = judgeBudget({ registered, attempted, limit, ceiling })
     if (b.stop) { budgetStop = b; break }
     // 🔴 **보기만 한다.** 이 후보가 QA 에 막히면 이 날짜는 다음 후보가 그대로 받는다.
     const publishAt = slots.peek()
@@ -337,6 +344,25 @@ export function processCandidates({
     // 🔴 실제로 등록되는 후보만 날짜를 쓴다. 막힌 후보가 빈 예약일을 태우지 않는다.
     if (CONSUMES_SLOT.has(r.verdict)) { slots.commit(); registered += 1 }
     results.push(r)
+
+    /**
+     * 🔴 **HOLD 여부를 판정하지 못했다(장부를 못 읽음) — 회차 전체를 멈춘다.**
+     *    한 후보라도 모르면 다음 후보도 같은 장부를 본다. 이어 가면 모르는 채로 보낸다.
+     */
+    if (r.failClosed) {
+      blocked.push(r)
+      const why = (r.blockedBy ?? []).map((x) => x.message).join(' · ')
+      report.ledgerHold = { code: 'QUARANTINE_UNREADABLE', message: why }
+      budgetStop = { stop: true, code: 'LEDGER_UNREADABLE', message: `장부를 읽지 못해 HOLD 여부를 모른다 — 회차를 멈춘다 (${r.slug})` }
+      break
+    }
+    // 🔴 HOLD 는 자리도 장부 쓰기도 쓰지 않는다 — 이미 적힌 전송 사실이 정본이다. 보고만 한다
+    if (r.held) {
+      heldResults.push(r)
+      blocked.push(r)
+      continue
+    }
+    attempted += 1
 
     if (r.verdict === 'BLOCKED') {
       blocked.push(r)
@@ -371,7 +397,7 @@ export function processCandidates({
       if (write) upd((cur) => { const n = { ...cur }; delete n[r.slug]; return n })
     }
   }
-  return { ledger, scanned, done, blocked, results, registered, ceiling, budgetStop }
+  return { ledger, scanned, done, blocked, results, registered, ceiling, budgetStop, attempted, held: heldResults }
 }
 
 // ── PR ─────────────────────────────────────────────────────
@@ -699,13 +725,15 @@ async function main() {
    */
   try {
   // ── 처리 ─────────────────────────────────────────────────
-  const { scanned, done, blocked, results, registered, ceiling, budgetStop } =
+  const { scanned, done, blocked, results, registered, ceiling, budgetStop, attempted, held } =
     processCandidates({ write, wantPr, limit, runDate: arg('--run'), report })
   Object.assign(report, {
     source: scanned.source,
     pool: scanned.pool,
     eligible: scanned.eligible.length,
     processed: results.length,
+    attempted,
+    held: held.map((r) => ({ slug: r.slug, code: r.blockedBy?.[0]?.code ?? null })),
     budget: { limit, ceiling, registered, stoppedBy: budgetStop?.code ?? 'EXHAUSTED', stopMessage: budgetStop?.message ?? '후보를 전부 보았다' },
     done: done.map((r) => ({ slug: r.slug, publishAt: r.publishAt })),
     /**
@@ -769,7 +797,11 @@ function printHuman(report, { write }) {
     console.log(`  후보 ${report.pool}건 중 gate 통과 ${report.eligible}건 · 처리 ${report.processed}건`)
     // 🔴 왜 거기서 멈췄는지 로그만 보고 알 수 있어야 한다 — 새벽 감시의 유일한 기준이다
     if (report.budget) {
-      console.log(`  예산: 등록 ${report.budget.registered}/${report.budget.limit} · 시도 ${report.processed}/${report.budget.ceiling} — ${report.budget.stopMessage}`)
+      console.log(`  예산: 등록 ${report.budget.registered}/${report.budget.limit} · 시도 ${report.attempted ?? report.processed}/${report.budget.ceiling} — ${report.budget.stopMessage}`)
+    }
+    // 🔴 HOLD 는 자리를 쓰지 않았다는 것을 로그에 남긴다 — "왜 다 봤는데 0건인가" 를 여기서 읽는다
+    if (report.held?.length) {
+      console.log(`  HOLD ${report.held.length}건 — 이미 보낸 같은 요청이라 다시 보내지 않는다 (시도·등록 자리 소비 0 · 전송 0): ${report.held.map((h) => `${h.slug}(${h.code})`).join(' · ')}`)
     }
   }
   if (report.branch) console.log(`  PR 브랜치: ${report.branch} (register write 앞에 생성)`)

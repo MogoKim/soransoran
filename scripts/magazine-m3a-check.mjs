@@ -2160,6 +2160,9 @@ console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재�
      */
     const QN16 = await import('./lib/magazine-quarantine.mjs')
     const L3 = path.join(T, 'q3.json')
+    // 🔴 앞선 전송 사실(모름)이 이미 적혀 있다 — HOLD 뒤에도 그대로여야 한다 (㊸: HOLD 는 장부를 쓰지 않는다)
+    const seeded3 = { delivery: { sent: null, messageFingerprint: 'sha256:earlier-attempt', kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', at: 1, runId: null, date: DATE, reservationId: 'r0' } }
+    saveQuarantine({ [SLUG]: seeded3 }, L3)
     const deps3 = makeDeps({ qaFailsUntil: 99, ledgerPath: L3, packetDir: path.join(T, 'p3'), calls: [] })
     deps3.regenRunner = () => ({ ok: false, sent: false, reason: QN16.DELIVERY_HOLD_REASON, stage: 'gate',
       prior: { sent: null, kind: 'DELIVERY_UNCERTAIN' }, why: '이미 보낸 글이다' })
@@ -2174,8 +2177,8 @@ console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재�
       driveFn: (sl, o) => drive(sl, o, deps3),
     })
     const e3 = readQuarantine(L3).store[SLUG] ?? {}
-    check('🔴 ⑯ HOLD 뒤 장부 sent 는 앞선 모름(null) 그대로 — "안 보냄" 으로 덮지 않는다',
-      e3.sent === null && e3.kind === 'DELIVERY_UNCERTAIN', JSON.stringify({ sent: e3.sent, kind: e3.kind }))
+    check('🔴 ⑯ HOLD 뒤 장부는 앞선 전송 사실(모름) 그대로 — "안 보냄" 으로 덮지 않는다 · 행 불변',
+      JSON.stringify(e3) === JSON.stringify(seeded3) && e3.sent !== false, JSON.stringify({ sent: e3.sent, kind: e3.kind, delivery: e3.delivery?.sent }))
     check('🔴 ⑯ HOLD 는 attempts·regenCalls 를 쓰지 않는다',
       (e3.attempts ?? 0) === 0 && (e3.regenCalls ?? 0) === 0, `attempts ${e3.attempts} · regen ${e3.regenCalls}`)
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
@@ -5118,9 +5121,10 @@ console.log('\n㊷ 등록 경로의 회수 결과 — 구조화 결과가 정본
       return { res, e, msg: (res.blockedBy ?? []).map((b) => `${b.code}: ${b.message}`).join(' | ') }
     }
     const held = run('held', { status: 'held', reason: 'DELIVERY_UNCERTAIN_HOLD', stage: 'gate', sent: false, errorDetail: '이미 보낸 글이다' })
-    check('🔴 ㊷ HOLD 결과 → [DELIVERY_UNCERTAIN] · attempts 증가 0 · 7일 CONTENT 격리 0',
-      /\[DELIVERY_UNCERTAIN\]/.test(held.msg) && held.e.attempts === 2 && held.e.kind === 'DELIVERY_UNCERTAIN',
-      `attempts ${held.e.attempts} · kind ${held.e.kind} · ${held.msg.slice(0, 80)}`)
+    // 🔴 HOLD 는 장부를 쓰지 않는다 (㊸) — 이미 적힌 전송 사실이 정본이다. 원고 격리도 없다
+    check('🔴 ㊷ HOLD 결과 → [DELIVERY_UNCERTAIN] · attempts 증가 0 · 7일 CONTENT 격리 0 · 장부 쓰기 0',
+      /\[DELIVERY_UNCERTAIN\]/.test(held.msg) && held.e.attempts === 2 && held.e.kind === undefined && held.res.held === true,
+      `attempts ${held.e.attempts} · kind ${held.e.kind} · held ${held.res.held} · ${held.msg.slice(0, 80)}`)
     const tout = run('timeout', { status: 'failed', reason: 'response_timeout', stage: 'await-response', sent: true })
     check('🔴 ㊷ 보낸 뒤 응답 timeout → DELIVERY_UNCERTAIN · attempts 증가 0 · sent 보존',
       tout.e.attempts === 2 && tout.e.kind === 'DELIVERY_UNCERTAIN' && tout.e.sent === true, `attempts ${tout.e.attempts} · kind ${tout.e.kind} · sent ${tout.e.sent}`)
@@ -5138,6 +5142,139 @@ console.log('\n㊷ 등록 경로의 회수 결과 — 구조화 결과가 정본
     const okRun = run('ok', { status: 'ok', sent: true }, { code: 0 })
     check('  ㊷ 성공 결과는 회수로 친다 (결과 파일 행 · status ok)', !/FETCH_/.test(okRun.msg) && (okRun.res.steps ?? []).some((s) => s.stage === 'draft' && s.status === 'ok'),
       (okRun.res.steps ?? []).map((s) => `${s.stage}:${s.status}`).join(' '))
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊸ HOLD 는 처리 자리를 쓰지 않는다 — 시도·등록 상한 소비 0 · runner·전송 0')
+{
+  /**
+   * 🔴 **2026-09-29 01:00 실측.** gate 통과 8건이 전부 같은 지문 HOLD 였고, 시도 상한 9 중 8을 먹었다.
+   *    전송 0 · 등록 0 · PR 0. HOLD 는 할 일이 없다는 뜻이지 시도가 아니다.
+   *    ① 실제 drive → 실제 ready (추적 fixture 3건) 로 배선을 본다  ② 그 결과 객체를 복제해 예산 계약을 본다.
+   */
+  const READY43 = await import('./magazine-auto-register-ready.mjs')
+  const DG43 = await import('./lib/magazine-delivery-gate.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-hold-budget-'))
+  const [A, B, C] = FIXTURE_SLUGS
+  const holdRow = (fp) => ({ attempts: 2, delivery: { sent: null, messageFingerprint: fp, kind: 'DELIVERY_UNCERTAIN', reason: 'sending', stage: 'send', at: 1, runId: null, date: '2026-09-28', reservationId: 'r-old' } })
+  try {
+    // ── 재생성 HOLD 에 쓸 실제 패킷 지문을 잡는다 (첫 실행: runner 가 패킷을 받고 실패) ──
+    const L0 = path.join(T, 'capture.json')
+    saveQuarantine({}, L0)
+    const seen0 = []
+    const d0 = makeDeps({ qaFailsUntil: 9, ledgerPath: L0, packetDir: path.join(T, 'p0'), calls: [], packetsSeen: seen0, runnerFails: true })
+    d0.progress = () => ({ hasBrief: true, hasReview: true, hasDraftMd: true, hasArticleTs: true })
+    d0.firstFetchResult = null
+    drive(B, { write: true, pr: false, publishAt: '2027-01-05', alt: '테스트', allowOptional: true, autoLane: true }, d0)
+    const regenFp = seen0[0] ? DG43.deliveryGate({ slug: B, packet: seen0[0].packet, quarantinePath: L0 }).messageFingerprint : null
+    const fetchFp = DG43.deliveryGate({ slug: A, quarantinePath: L0 }).messageFingerprint
+    check('  ㊸ 시험 전제 — 실제 회수·재생성 메시지 지문을 잡았다', Boolean(regenFp && fetchFp), `${fetchFp?.slice(0, 16)} · ${regenFp?.slice(0, 16)}`)
+
+    // ── ① 실제 drive → 실제 ready: 직접 회수 HOLD(A) · 재생성 HOLD(B) · 정상(C) ──
+    const L = path.join(T, 'q.json')
+    saveQuarantine({ [A]: holdRow(fetchFp), [B]: holdRow(regenFp) }, L)
+    const calls = []
+    const d1 = makeDeps({ qaFailsUntil: 9, ledgerPath: L, packetDir: path.join(T, 'p1'), calls, runnerFails: true })
+    d1.progress = (sl) => ({ hasBrief: true, hasReview: true, hasDraftMd: sl === B, hasArticleTs: sl === B })
+    d1.firstFetchResult = null
+    d1.fetchResultDir = T
+    const report = { blocked: [], done: [] }
+    const r1 = READY43.processCandidates({ write: true, wantPr: false, limit: 1, report, quarantinePath: L,
+      scanFn: () => ({ source: 'fixture', pool: 3, eligible: [A, B, C].map((sl) => ({ slug: sl, item: FIXTURE_QUEUE.find((q) => q.slug === sl), progress: d1.progress(sl) })), skipped: [], quarantined: [] }),
+      driveFn: (sl, o) => drive(sl, o, d1) })
+    const byA = r1.results.find((x) => x.slug === A)
+    const byB = r1.results.find((x) => x.slug === B)
+    const webui = calls.filter((c) => c === 'magazine-webui-runner.mjs').length
+    const regenCallsN = calls.filter((c) => c.startsWith('REGEN:')).length
+    check('🔴 ㊸ 직접 회수 HOLD — runner 0 · 전송 0 · held (부모 앞단 판정)',
+      byA?.held === true && byA.blockedBy?.[0]?.code === 'DELIVERY_UNCERTAIN_HOLD', `${byA?.blockedBy?.[0]?.code} · held ${byA?.held}`)
+    check('🔴 ㊸ 재생성 HOLD — 재생성 runner 0 · held',
+      byB?.held === true && regenCallsN === 0, `${byB?.blockedBy?.[0]?.message?.slice(0, 60)} · held ${byB?.held} · regen ${regenCallsN}`)
+    check('🔴 ㊸ HOLD 두 건 뒤 정상 후보가 처리된다 (회수 runner 는 정상 후보 1번만)',
+      webui === 1 && r1.results.some((x) => x.slug === C && !x.held), `webui ${webui} · ${r1.results.map((x) => `${x.slug}:${x.held ? 'H' : x.verdict}`).join(' ')}`)
+    check('🔴 ㊸ 시도 수는 실제 작업한 후보만 — attempted 1 · HOLD 2 (직접·재생성 혼합 모두 소비 0)',
+      r1.attempted === 1 && r1.held.length === 2, `attempted ${r1.attempted} · held ${r1.held.length}`)
+    const st1 = readQuarantine(L).store
+    check('🔴 ㊸ HOLD 행은 장부에서 한 글자도 바뀌지 않는다 (전송 사실 보존)',
+      JSON.stringify(st1[A]) === JSON.stringify(holdRow(fetchFp)) && JSON.stringify(st1[B]) === JSON.stringify(holdRow(regenFp)),
+      JSON.stringify([st1[A]?.attempts, st1[B]?.attempts, st1[A]?.kind, st1[B]?.kind]))
+
+    // ── 지문 변경 → 새 작업 ──
+    const L2 = path.join(T, 'changed.json')
+    saveQuarantine({ [A]: holdRow('sha256:brief-before-change') }, L2)
+    const c2 = []
+    const d2 = makeDeps({ qaFailsUntil: 0, ledgerPath: L2, packetDir: path.join(T, 'p2'), calls: c2 })
+    d2.progress = () => ({ hasBrief: true, hasReview: true, hasDraftMd: false, hasArticleTs: false })
+    d2.fetchResultDir = T
+    const r2 = drive(A, { write: true, pr: false, publishAt: '2027-01-05', alt: '테스트', allowOptional: true, autoLane: true }, d2)
+    check('🔴 ㊸ brief 가 바뀌어 지문이 다르면 HOLD 가 아니다 — 새 작업으로 runner 가 돈다',
+      !r2.held && c2.includes('magazine-webui-runner.mjs'), `held ${r2.held} · ${c2.join(' → ')}`)
+
+    // ── 장부 손상 → runner 0 · failClosed · 회차 정지 ──
+    const L3 = path.join(T, 'broken.json')
+    fs.writeFileSync(L3, '{ 깨진')
+    const c3 = []
+    const d3 = makeDeps({ qaFailsUntil: 0, ledgerPath: L3, packetDir: path.join(T, 'p3'), calls: c3 })
+    d3.progress = () => ({ hasBrief: true, hasReview: true, hasDraftMd: false, hasArticleTs: false })
+    d3.fetchResultDir = T
+    const r3 = drive(A, { write: true, pr: false, publishAt: '2027-01-05', alt: '테스트', allowOptional: true, autoLane: true }, d3)
+    check('🔴 ㊸ 장부 손상 — HOLD 여부를 모르면 runner 0 · 전송 0 · failClosed',
+      r3.failClosed === true && !r3.held && !c3.includes('magazine-webui-runner.mjs'), `failClosed ${r3.failClosed} · ${c3.join(' → ')}`)
+    const report3 = { blocked: [], done: [] }
+    const r3b = READY43.processCandidates({ write: true, wantPr: false, limit: 3, report: report3, quarantinePath: L3,
+      scanFn: () => ({ source: 'fixture', pool: 3, eligible: [A, B, C].map((sl) => ({ slug: sl, item: FIXTURE_QUEUE.find((q) => q.slug === sl) })), skipped: [], quarantined: [] }),
+      driveFn: (sl, o) => drive(sl, o, d3) })
+    check('🔴 ㊸ 장부 손상 회차 — 후보 0건 구동 · 전체 fail-closed 보고',
+      r3b.results.length === 0 && report3.ledgerHold?.code === 'QUARANTINE_UNREADABLE', `구동 ${r3b.results.length} · ${report3.ledgerHold?.code}`)
+
+    // ── ② 예산 계약 — 실제 drive 가 돌려준 HOLD·failClosed 결과를 복제한다 (가짜가 실제보다 강하지 않게) ──
+    const heldProto = byA
+    const closedProto = r3
+    const clone = (proto, slug) => ({ ...JSON.parse(JSON.stringify(proto)), slug })
+    const budgetRun = (plan, limit) => {
+      const LB = path.join(T, `b-${Math.random().toString(36).slice(2)}.json`)
+      saveQuarantine(Object.fromEntries(plan.filter((x) => x.kind === 'hold').map((x) => [x.slug, holdRow('sha256:x')])), LB)
+      const driven = []
+      const rep = { blocked: [], done: [] }
+      const r = READY43.processCandidates({ write: true, wantPr: false, limit, report: rep, quarantinePath: LB,
+        scanFn: () => ({ source: 'fixture', pool: plan.length, eligible: plan.map((x) => ({ slug: x.slug })), skipped: [], quarantined: [] }),
+        driveFn: (sl) => {
+          driven.push(sl)
+          const x = plan.find((y) => y.slug === sl)
+          if (x.kind === 'hold') return clone(heldProto, sl)
+          if (x.kind === 'closed') return clone(closedProto, sl)
+          if (x.kind === 'done') return { slug: sl, verdict: 'DONE', steps: [], blockedBy: [] }
+          return { slug: sl, verdict: 'BLOCKED', steps: [], blockedBy: [{ code: 'QA_FAIL', message: 'magazine QA FAIL — 시험' }], sent: false }
+        } })
+      return { r, driven, rep, LB }
+    }
+    const H = (n, p = 'h') => Array.from({ length: n }, (_, i) => ({ slug: `${p}${i + 1}`, kind: 'hold' }))
+    const N = (n, kind = 'fail', p = 'n') => Array.from({ length: n }, (_, i) => ({ slug: `${p}${i + 1}`, kind }))
+    const b1 = budgetRun([...H(8), ...N(1)], 3)
+    check('🔴 ㊸ 앞에 HOLD 8건 · 뒤에 정상 1건 → 정상 후보 처리 · attempted 1',
+      b1.driven.includes('n1') && b1.r.attempted === 1 && b1.r.held.length === 8, `attempted ${b1.r.attempted} · held ${b1.r.held.length}`)
+    const b2 = budgetRun([...H(9), ...N(3)], 3)
+    check('🔴 ㊸ HOLD 9건 · 정상 3건 · 시도 상한 9 → 정상 3건 모두 처리 · attempted 3',
+      ['n1', 'n2', 'n3'].every((x) => b2.driven.includes(x)) && b2.r.attempted === 3 && b2.r.ceiling === 9,
+      `attempted ${b2.r.attempted} · ceiling ${b2.r.ceiling} · stop ${b2.r.budgetStop?.code ?? '-'}`)
+    const b3 = budgetRun(H(30), 3)
+    check('🔴 ㊸ HOLD 만 있는 회차 → 유한 종료 · 등록 0 · attempted 0 · HOLD 30건 보고',
+      b3.r.results.length === 30 && b3.r.registered === 0 && b3.r.attempted === 0 && b3.r.held.length === 30 && b3.r.budgetStop === null,
+      `results ${b3.r.results.length} · held ${b3.r.held.length} · stop ${b3.r.budgetStop?.code ?? 'EXHAUSTED'}`)
+    const b4 = budgetRun(N(12), 3)
+    check('🔴 ㊸ 기존 시도 상한 유지 — 정상 실패 12건이면 9건에서 멈춘다',
+      b4.r.attempted === 9 && b4.driven.length === 9 && b4.r.budgetStop?.code === 'ATTEMPT_CEILING', `attempted ${b4.r.attempted} · driven ${b4.driven.length}`)
+    const b5 = budgetRun([...H(4), ...N(5, 'done', 'd')], 3)
+    check('🔴 ㊸ 기존 등록 상한 유지 — HOLD 사이에서도 등록 3건에서 멈춘다',
+      b5.r.registered === 3 && b5.r.budgetStop?.code === 'BUDGET_MET' && b5.r.held.length === 4, `registered ${b5.r.registered} · ${b5.r.budgetStop?.code}`)
+    const b6 = budgetRun([...N(1, 'fail', 'a'), { slug: 'x1', kind: 'closed' }, ...N(3, 'fail', 'z')], 3)
+    check('🔴 ㊸ 회차 중 HOLD 판정 불가(장부 못 읽음) → 그 자리에서 회차 정지 · 뒤 후보 구동 0',
+      b6.driven.join(',') === 'a1,x1' && b6.r.budgetStop?.code === 'LEDGER_UNREADABLE' && b6.rep.ledgerHold?.code === 'QUARANTINE_UNREADABLE',
+      `driven ${b6.driven.join(',')} · ${b6.r.budgetStop?.code}`)
+    const st6 = readQuarantine(b1.LB).store
+    check('  ㊸ HOLD 는 장부를 쓰지 않고 정상 실패만 센다 (대조군)',
+      st6.h1?.attempts === 2 && st6.h1?.kind === undefined && st6.n1?.attempts === 1 && st6.n1?.kind === 'CONTENT',
+      JSON.stringify([st6.h1, st6.n1?.attempts, st6.n1?.kind]))
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
