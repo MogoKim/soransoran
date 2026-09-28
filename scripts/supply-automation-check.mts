@@ -18,9 +18,16 @@ import {
   SUPPLY_RUNS_PER_DAY, SUPPLY_RUN_SLOTS_KST, SUPPLY_BUDGET_ENV_NAMES,
   SUPPLY_DAILY_USD_APPROVED, SUPPLY_UNDETECTED_LIMITS, SUPPLY_REQUESTS_PER_RUN,
   SUPPLY_WORKSET_PER_RUN, SUPPLY_RESERVE_HEADROOM, SUPPLY_ENV_FILE_REL, SUPPLY_ENABLE_ENV,
+  SUPPLY_JUDGE_REQUESTS_PER_RUN, SUPPLY_DRAFT_REQUESTS_PER_RUN, estimateSupplySpend,
   judgeProductionRate, AUTO_READY_CONTRACT, AUTO_READY_STEPS, describeSupplySchedule,
 } from '../src/lib/supply-schedule-contract'
-import { WORKSET_DEFAULT_LIMIT, WORKSET_TOTAL_PER_SOURCE } from '../src/lib/supply-workset'
+import {
+  WORKSET_DEFAULT_LIMIT, WORKSET_MAX_LIMIT, WORKSET_STAGE_PER_SOURCE, WORKSET_TOTAL_PER_SOURCE,
+  judgeStageBudget, resolveWorksetLimit,
+} from '../src/lib/supply-workset'
+import {
+  FILL_ROUND_CAP, fillUpToOf, planBoundedCommonPhase, planCarryOverFill, type Pending,
+} from '../src/lib/supply-process'
 import { judgeSpend, judgeSettle, tallyOf, type DayTally } from '../src/lib/llm-ledger'
 import {
   profileOf, selectAutoTargets, voiceInputOf, judgeApply, judgePublishDefects,
@@ -756,8 +763,13 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
       check('🔴 🔴 **하루 예산이 승인값 이하다**',
         Number.isFinite(daily) && daily <= SUPPLY_DAILY_USD_APPROVED,
         `${daily} / 승인 ${SUPPLY_DAILY_USD_APPROVED}`)
-      check('🔴 🔴 **회차 요청 상한이 정본과 같다**',
-        cap === SUPPLY_REQUESTS_PER_RUN, `${cap} / 정본 ${SUPPLY_REQUESTS_PER_RUN}`)
+      /**
+       * 🔴 **env 상한은 손으로 부른 단독 실행의 상한이다** (2026-09-28). 공급 러너의 자식은 이 값을 보지 않는다 —
+       *    단계 env(judge 10 · draft 30)가 덮는다(아래 ③-b 가 실제 계획으로 본다). 그래서 **정본 합 이하의 양의 정수**면 된다.
+       *    🔴 운영 값(20)을 이 PR 이 바꾸지 않는다.
+       */
+      check('🔴 🔴 **env 회차 요청 상한은 양의 정수이고 정본 합 이하다 — 무제한이 아니다**',
+        Number.isInteger(cap) && cap > 0 && cap <= SUPPLY_REQUESTS_PER_RUN, `${cap} / 정본 합 ${SUPPLY_REQUESTS_PER_RUN}`)
       check('🔴 🔴 **여유 배수가 정본과 같고 1 이상이다**',
         head === SUPPLY_RESERVE_HEADROOM && head >= 1, `${head} / 정본 ${SUPPLY_RESERVE_HEADROOM}`)
       check('🔴 🔴 **회차당 원천 × 원천당 요청 = 회차 요청 상한**',
@@ -792,8 +804,13 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
      * 🔴 **$0.30 은 하루 총액이다** — 공급·판정·초안·댓글이 같은 장부를 쓴다.
      *    그날 이미 정산된 액수가 이 상한에 함께 든다. 회차마다 새로 $0.30 이 아니다.
      */
+    /**
+     * 🔴 **장부는 env 값으로 막는다** — 운영 env 는 $0.30 (계약 천장 $0.50 이하, 2026-09-28).
+     *    아래 사례의 금액(0.28 · 0.19 …)은 그 운영 값 기준이다.
+     */
+    const OPERATING_DAILY_USD = 0.30
     const limits = {
-      dailyUsd: SUPPLY_DAILY_USD_APPROVED,
+      dailyUsd: OPERATING_DAILY_USD,
       runRequestCap: SUPPLY_REQUESTS_PER_RUN,
       headroomMultiplier: SUPPLY_RESERVE_HEADROOM,
     }
@@ -876,6 +893,102 @@ console.log('\n③ 🔴 🔴 공급 회차 — 6회 · 예산 env 경로 · 못 
     && SUPPLY_UNDETECTED_LIMITS.some((x) => x.includes('catch-up 이 없다')))
   check('🔴 템플릿이 RunAtLoad=false 다 — 꺼진 시각은 건너뛴다',
     /<key>RunAtLoad<\/key>\s*<false\/>/.test(tpl))
+}
+
+// ─────────────────────────────────────────────────────────
+console.log('\n③-b 🔴 🔴 회차 상한 정합 — 묶음 10 · judge 10 · draft 30 · 합 40 · 적재 10 (CI 에서도 돈다)')
+// ─────────────────────────────────────────────────────────
+{
+  /**
+   * 🔴 **앞판은 이 대조를 운영 env 가 있을 때만 했다** — CI 에서는 상수끼리 어긋나도 초록이었다.
+   *    이제 어디서나 돈다. 하나라도 어긋나면(예: judge 10 인데 draft 15 · 합 20) 여기서 깨진다.
+   */
+  check('🔴 🔴 **묶음 크기 — 계약 · 기본값 · 천장이 모두 10**',
+    SUPPLY_WORKSET_PER_RUN === 10 && WORKSET_DEFAULT_LIMIT === SUPPLY_WORKSET_PER_RUN
+    && WORKSET_MAX_LIMIT === SUPPLY_WORKSET_PER_RUN && resolveWorksetLimit([]) === SUPPLY_WORKSET_PER_RUN,
+    `${SUPPLY_WORKSET_PER_RUN}/${WORKSET_DEFAULT_LIMIT}/${WORKSET_MAX_LIMIT}`)
+  const b = judgeStageBudget(SUPPLY_WORKSET_PER_RUN)
+  check('🔴 🔴 **정본 계산(judgeStageBudget) = 계약 상수 — judge 10 · draft 30 · 합 40**',
+    b.ok && b.perStage.judge === SUPPLY_JUDGE_REQUESTS_PER_RUN && b.perStage.draft === SUPPLY_DRAFT_REQUESTS_PER_RUN
+    && b.total === SUPPLY_REQUESTS_PER_RUN
+    && SUPPLY_JUDGE_REQUESTS_PER_RUN === 10 && SUPPLY_DRAFT_REQUESTS_PER_RUN === 30 && SUPPLY_REQUESTS_PER_RUN === 40,
+    b.ok ? `${b.perStage.judge}/${b.perStage.draft}/${b.total}` : b.reason)
+  check('🔴 🔴 **단계 합 = 회차 합 · 원천당 1+3=4**',
+    SUPPLY_JUDGE_REQUESTS_PER_RUN + SUPPLY_DRAFT_REQUESTS_PER_RUN === SUPPLY_REQUESTS_PER_RUN
+    && SUPPLY_WORKSET_PER_RUN * WORKSET_TOTAL_PER_SOURCE === SUPPLY_REQUESTS_PER_RUN
+    && SUPPLY_WORKSET_PER_RUN * WORKSET_STAGE_PER_SOURCE.judge === SUPPLY_JUDGE_REQUESTS_PER_RUN
+    && SUPPLY_WORKSET_PER_RUN * WORKSET_STAGE_PER_SOURCE.draft === SUPPLY_DRAFT_REQUESTS_PER_RUN)
+  check('🔴 🔴 **천장 위(11 · 100)는 실행 전에 거부 — 무제한 호출 없음**',
+    !judgeStageBudget(SUPPLY_WORKSET_PER_RUN + 1).ok && !judgeStageBudget(100).ok
+    && resolveWorksetLimit([`--workset-limit=${SUPPLY_WORKSET_PER_RUN + 1}`]) === -1)
+
+  /** 🔴 러너가 실제로 만드는 계획 — 단계 env 와 적재 상한을 값으로 본다 */
+  const pending: Pending = { rawCafe: {}, thin: {}, detail: ['a.detail.jsonl'], shadow: [], candidates: ['x.candidates.json'] }
+  const policy = { llm: true, fill: true, upTo: 700, reason: '' }
+  const carry = ['/d/auto-draft-a.candidates.json', '/d/auto-draft-b.candidates.json', '/d/auto-draft-c.candidates.json']
+  const plans = b.ok ? planBoundedCommonPhase(pending, policy, { kind: 'ready', snapshotPath: '/d/s.json', runId: 'R' }, {
+    manifestPath: '/d/w.json', shadowPath: '/d/s.shadow.jsonl', candidatesPath: '/d/c.candidates.json',
+    limit: SUPPLY_WORKSET_PER_RUN, perStage: b.perStage, carryOverPaths: carry,
+  }) : []
+  const of = (st: string) => plans.find((p) => p.stage === st)
+  check('🔴 🔴 **러너 단계 env — judge 10 · draft 30 (자식에게만 · 장부 id 가 단계별)**',
+    of('judge')?.env?.SORAN_LLM_RUN_REQUEST_CAP === String(SUPPLY_JUDGE_REQUESTS_PER_RUN)
+    && of('draft')?.env?.SORAN_LLM_RUN_REQUEST_CAP === String(SUPPLY_DRAFT_REQUESTS_PER_RUN),
+    `${of('judge')?.env?.SORAN_LLM_RUN_REQUEST_CAP}/${of('draft')?.env?.SORAN_LLM_RUN_REQUEST_CAP}`)
+  check('🔴 🔴 **모델 단계는 모두 요청 상한 env 를 받는다 — 상한 없는 유료 단계가 없다**',
+    plans.filter((p) => p.llm).length === 2
+    && plans.filter((p) => p.llm).every((p) => Number.isInteger(Number(p.env?.SORAN_LLM_RUN_REQUEST_CAP))
+      && Number(p.env?.SORAN_LLM_RUN_REQUEST_CAP) > 0))
+  check('🔴 🔴 **적재 — 버퍼 700 · 이월 3파일이 있어도 --up-to=10 (회차 천장)**',
+    FILL_ROUND_CAP === SUPPLY_WORKSET_PER_RUN
+    && of('fill')?.args.filter((a) => a.startsWith('--up-to=')).join() === `--up-to=${SUPPLY_WORKSET_PER_RUN}`
+    && (of('fill')?.args.find((a) => a.startsWith('--input='))?.split(',').length ?? 0) === 4,
+    of('fill')?.args.join(' '))
+  check('🔴 🔴 **새 묶음 없는 회차의 이월 적재도 10 을 넘지 않는다 — 묶음 크기를 크게 줘도**',
+    planCarryOverFill(policy, carry, SUPPLY_WORKSET_PER_RUN)[0]?.args.includes(`--up-to=${SUPPLY_WORKSET_PER_RUN}`) === true
+    && planCarryOverFill(policy, carry, 50)[0]?.args.includes(`--up-to=${FILL_ROUND_CAP}`) === true
+    && fillUpToOf(700, 50) === FILL_ROUND_CAP && fillUpToOf(3, 10) === 3 && fillUpToOf(0, 10) === 0)
+  {
+    const runner = readFileSync('scripts/supply-process.mts', 'utf-8')
+    const tplP = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
+    check('🔴 러너가 정본 해석(resolveWorksetLimit)과 예산 거부를 쓴다',
+      /const WORKSET_LIMIT = resolveWorksetLimit\(process\.argv\.slice\(2\)\)/.test(runner)
+      && /const budget = judgeStageBudget\(WORKSET_LIMIT\)[\s\S]{0,120}if \(!budget\.ok\)/.test(runner))
+    check('🔴 🔴 **launchd 템플릿은 --workset-limit 를 덮어쓰지 않는다 — 계약 기본값(10)이 돈다**',
+      !tplP.includes('--workset-limit') && /<string>--live<\/string>/.test(tplP))
+    check('🔴 설명 문구가 10 · 40 · judge 10 · draft 30 을 말한다',
+      describeSupplySchedule().includes('회차당 원천 10 · 요청 40 (judge 10 · draft 30)'))
+  }
+
+  // ── 🔴 하루 비용 — 계약 천장 $0.50 · 운영 env 0.30 ──
+  const e10 = estimateSupplySpend(SUPPLY_WORKSET_PER_RUN)
+  const e5 = estimateSupplySpend(5)
+  console.log(`     실측 단가 추정 — 묶음 5: 회차 $${e5.expectedPerRun.toFixed(4)} · 하루 $${e5.expectedPerDay.toFixed(4)}`
+    + `  |  묶음 10: 회차 $${e10.expectedPerRun.toFixed(4)} · 하루 $${e10.expectedPerDay.toFixed(4)}`
+    + ` · 상한 전부 사용 시 회차 $${e10.capPerRun.toFixed(4)} · 하루 $${e10.capPerDay.toFixed(4)}`)
+  check('🔴 🔴 **계약 천장은 $0.50 — 운영 env 는 그 이하여야 한다(지금 0.30)**',
+    SUPPLY_DAILY_USD_APPROVED === 0.50)
+  check('🔴 🔴 **묶음 10 의 실측 기대 하루 지출이 천장 안이다** (공급만 · 장부는 댓글과 함께 쓴다)',
+    SUPPLY_DAILY_USD_APPROVED !== null && e10.expectedPerDay <= SUPPLY_DAILY_USD_APPROVED
+    && Math.abs(e10.expectedPerRun - 2 * e5.expectedPerRun) < 1e-9, `$${e10.expectedPerDay.toFixed(4)}`)
+  {
+    /**
+     * 🔴 **0.30 에서는 늦은 회차가 막힐 수 있다** — 장부가 fail-closed 로 막는 것을 값으로 본다.
+     *    상한을 전부 쓰는 회차 둘이면 0.30 을 넘는다. 0.50 이었다면 세 번째 회차 첫 요청까지 들어간다.
+     */
+    const limits = (daily: number) => ({ dailyUsd: daily, runRequestCap: SUPPLY_JUDGE_REQUESTS_PER_RUN, headroomMultiplier: 1.2 })
+    const t = (settled: number): DayTally => ({
+      settledUsd: settled, openReservedUsd: 0, usageUnknownUsd: 0, paidRequests: 0, countTokensRequests: 0, blocked: 0, overruns: 0,
+    })
+    const req = { known: true as const, usd: 0.005, pricingVersion: 'v' }
+    const at30 = judgeSpend({ limits: limits(0.30), tally: t(2 * e10.capPerRun), runPaid: 0, reserve: req, ledgerOk: true, settleHold: null, unresolved: [] })
+    const at50 = judgeSpend({ limits: limits(0.50), tally: t(2 * e10.capPerRun), runPaid: 0, reserve: req, ledgerOk: true, settleHold: null, unresolved: [] })
+    check('🔴 🔴 **운영 0.30 — 상한을 다 쓴 회차 둘 뒤 다음 요청은 DAILY_EXHAUSTED (fail-closed)**',
+      !at30.ok && at30.code === 'DAILY_EXHAUSTED' && at50.ok, `${JSON.stringify(at30)}`)
+    check('🔴 기대 지출이면 0.30 에서도 6회가 들어간다 (공급만 볼 때) — 다른 사용량이 있으면 늦은 회차부터 막힌다',
+      e10.expectedRunsWithin(0.30) === SUPPLY_RUNS_PER_DAY && estimateSupplySpend(SUPPLY_WORKSET_PER_RUN).capPerDay > 0.30,
+      `${e10.expectedRunsWithin(0.30)}회`)
+  }
 }
 
 // ─────────────────────────────────────────────────────────

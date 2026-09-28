@@ -9,6 +9,10 @@ import {
   readGenerationContract, sameGenerationContract,
   type ContractBase, type GenerationContract,
 } from './content-core/pipeline'
+import {
+  AUTOFILL_SITE_PREFIX, MACHINE_SITE_PREFIX, baseArticleId, isOurSite,
+} from './micro-seed-supply-autofill'
+import { SUPPLY_WORKSET_PER_RUN } from './supply-schedule-contract'
 
 /**
  * 공급 회차의 **작업 묶음** — 🔴 AI 를 부르기 전에 **코드가** 정한다 (2026-09-20)
@@ -47,8 +51,33 @@ export const WORKSET_STAGE_PER_SOURCE = Object.freeze({ judge: 1, draft: 3 } as 
 export type WorksetStage = keyof typeof WORKSET_STAGE_PER_SOURCE
 export const WORKSET_TOTAL_PER_SOURCE = 4
 
-/** 기본 묶음 크기 — 🔴 `--workset-limit` 이 없으면 이 값이다 */
-export const WORKSET_DEFAULT_LIMIT = 5
+/**
+ * 기본 묶음 크기 — 🔴 `--workset-limit` 이 없으면 이 값이다.
+ *
+ * 🔴 **5 → 10** (2026-09-28 공급 가속 P0). 회차 요청 상한도 같이 움직인다 —
+ *    judge 10 · draft 30 · 합 40 (`judgeStageBudget`). 계약 정본은 `SUPPLY_WORKSET_PER_RUN` 이고
+ *    검사가 두 값이 같은지 본다.
+ */
+export const WORKSET_DEFAULT_LIMIT = 10
+
+/**
+ * 🔴 **묶음 크기 천장.** `--workset-limit` 으로도 이보다 크게 부를 수 없다 —
+ *    `judgeStageBudget` 이 거부한다. 손으로 100 을 넣어 judge 100 · draft 300 이 나가는 길을 닫는다.
+ */
+export const WORKSET_MAX_LIMIT = SUPPLY_WORKSET_PER_RUN
+
+/**
+ * 🔴 `--workset-limit=N` 을 읽는다 — 러너와 검사가 **같은 함수**를 쓴다.
+ *    없으면 기본값, 양의 정수가 아니거나 천장을 넘으면 `-1`(러너가 실행 전에 멈춘다).
+ */
+export function resolveWorksetLimit(argv: readonly string[]): number {
+  const hit = argv.find((a) => a.startsWith('--workset-limit='))
+  if (hit === undefined) return WORKSET_DEFAULT_LIMIT
+  const raw = hit.slice('--workset-limit='.length)
+  if (!/^\d+$/.test(raw)) return -1
+  const n = Number.parseInt(raw, 10)
+  return Number.isInteger(n) && n > 0 && n <= WORKSET_MAX_LIMIT ? n : -1
+}
 
 /**
  * 🔴 고를 후보 한 줄. `input` 은 **판정기와 같은 정규화**를 지난 값이다 —
@@ -67,13 +96,15 @@ export type WorksetRow = {
 }
 
 export const WORKSET_DROPS = [
-  'humanDecided', 'queueSibling', 'hardBlocked', 'preGated', 'terminal',
+  'humanDecided', 'queueSibling', 'alreadyQueued', 'carriedOver', 'hardBlocked', 'preGated', 'terminal',
 ] as const
 export type WorksetDrop = (typeof WORKSET_DROPS)[number]
 
 export const WORKSET_DROP_LABEL: Readonly<Record<WorksetDrop, string>> = {
   humanDecided: '사람이 이미 판정한 원천',
   queueSibling: '같은 원문의 미발행 형제가 큐에 있다',
+  alreadyQueued: '같은 원문으로 이미 큐 행이나 글이 있다 (발행된 것 포함 — 두 번째 글을 만들지 않는다)',
+  carriedOver: '적재에 실패한 앞 회차 후보가 이월로 적재된다 — 다시 만들지 않는다',
   hardBlocked: 'deterministic hard block',
   preGated: '접근·안전 조건을 충족하지 않는다',
   terminal: '앞 회차가 이미 끝낸 원천 (HOLD·DROP·생성 hard HOLD)',
@@ -123,7 +154,8 @@ export const WORKSET_AXES = ['seed', 'raw'] as const
 export type WorksetAxis = (typeof WORKSET_AXES)[number]
 
 /**
- * 🔴 **raw 한 자리당 묶음 크기.** 상한 5 → raw 최대 1 · seed 최소 4 (seed 가 있으면).
+ * 🔴 **raw 한 자리당 묶음 크기.** 기본 상한 10 → raw 최대 2 · seed 최소 8 (seed 가 있으면).
+ *    (상한 5 였을 때는 raw 최대 1 · seed 최소 4 — 같은 규칙이다)
  *
  *    다른 상한은 비례로 늘린다 — `floor(limit / 5)` 자리를 raw 에 **남기고**, 그만큼이 raw 의 상한이다.
  *      limit 5 → raw ≤1 (1 자리 보장)   limit 10 → raw ≤2 (2 자리 보장)   limit 7 → raw ≤1
@@ -228,8 +260,39 @@ export type PriorOutcome = {
    *    같은 순간인데 글자로는 다르다.
    */
   atMs: number
+  /**
+   * 🔴 **이 기록을 낸 파이프라인 회차** (2026-09-28 시계 역전 보정).
+   *
+   *    판정은 `decidedAt` 을 **벽시계**로 적고, 생성은 `generatedAt` 을 **회차 시각(RUN_AT)** 으로 적는다.
+   *    그래서 같은 회차 안에서 판정이 생성보다 5~10초 **늦어** 보였다 — 판정 뒤에 돈 생성의
+   *    terminal·candidate 가 `seeded` 에 가려져 재시도 풀에 남았다(운영 33원천, 20260924-051500 이후).
+   *
+   *    `atMs` 는 기록 자체의 시각 그대로 두고, **순서는 이 값으로** 정한다:
+   *      · `atMs`  그 회차의 시각(RUN_AT). 같은 회차면 같은 값이다 → 단계 순서(판정 < 생성)가 가른다
+   *      · `id`    회차 id — 사람이 대조하는 표지. 모르면 `null`
+   *    🔴 없으면 기록 자체의 시각(`atMs`)이 곧 그 회차의 시각이다(손으로 부른 단독 실행).
+   *    🔴 파일 이름에서 읽지 않는다 — 기록의 칸(`runId`·`runAt`)이나 회차 기록의 단계 구간에서만 온다.
+   */
+  run?: { id: string | null; atMs: number }
   stage: OutcomeStage
   state: OutcomeState
+}
+
+/** 🔴 순서를 정하는 시각 — 회차 시각이 있으면 그것, 없으면 기록 자체의 시각 */
+export const runClockOf = (o: PriorOutcome): number => o.run?.atMs ?? o.atMs
+
+/**
+ * 🔴 **`r` 가 `cur` 보다 뒤인가.** 비교 규칙은 이 함수 하나다.
+ *    ① 회차 시각이 다르면 뒤 회차가 이긴다 — 다음 회차의 판정은 앞 회차의 생성보다 뒤다
+ *    ② 같은 회차(같은 회차 시각)면 **단계 순서** — 생성은 언제나 판정 뒤다. 벽시계를 보지 않는다
+ *    ③ 같은 단계면 기록 시각, 그것도 같으면 뒤에 읽은 것
+ */
+export function isLaterOutcome(r: PriorOutcome, cur: PriorOutcome): boolean {
+  const a = runClockOf(r)
+  const b = runClockOf(cur)
+  if (a !== b) return a > b
+  if (r.stage !== cur.stage) return STAGE_RANK[r.stage] > STAGE_RANK[cur.stage]
+  return r.atMs >= cur.atMs
 }
 
 export type WorksetCanon = {
@@ -248,6 +311,12 @@ export type PriorJudgementRow = {
   decision: string
   semanticStatus: string
   decidedAt: string
+  /**
+   * 🔴 **그 판정을 낸 회차** (2026-09-28). 판정 러너가 적는다 — `runId` 는 `--run-id`,
+   *    `runAt` 은 회차 시각(`SORAN_RUN_AT`). 옛 기록에는 없다 → 회차 기록의 단계 구간으로 찾는다.
+   */
+  runId?: string
+  runAt?: string
 }
 
 /** 🔴 지난 artifact 한 장 — 파일에서 읽은 그대로 */
@@ -337,7 +406,16 @@ export function judgementOutcome(
       // 🔴 못 물어본 것은 결론이 아니다
       : S(j.semanticStatus) !== SEMANTIC_OK ? 'retryable'
         : seededState(decision as AutoDecision)
-  return { sourceArticleId: id, atMs, stage: 'judge', state }
+  /**
+   * 🔴 **기록이 회차를 적어 두었으면 그것을 쓴다.** `runAt` 을 읽지 못하면 회차를 모르는 것이지
+   *    기록이 틀린 것은 아니다 — 결론은 그대로 두고 회차만 비운다(뒤에서 회차 기록으로 찾는다).
+   */
+  const runAtMs = j.runAt === undefined ? null : parseInstantMs(j.runAt)
+  const runId = S(j.runId)
+  return {
+    sourceArticleId: id, atMs, stage: 'judge', state,
+    ...(runAtMs === null ? {} : { run: { id: runId === '' ? null : runId, atMs: runAtMs } }),
+  }
 }
 
 /**
@@ -383,6 +461,9 @@ export function shadowRecordOutcome(
     ruleVersion: S(raw.ruleVersion), promptVersion: S(raw.promptVersion), model: S(raw.model),
     decision: S(raw.decision), semanticStatus: S(raw.semanticStatus),
     decidedAt: S(raw.decidedAt),
+    // 🔴 판정 러너가 적은 회차 칸 — 옛 줄에는 없다(없으면 넘기지 않는다)
+    ...(typeof raw.runAt === 'string' ? { runAt: raw.runAt } : {}),
+    ...(typeof raw.runId === 'string' ? { runId: raw.runId } : {}),
   }, hash, canon)
 }
 
@@ -424,24 +505,110 @@ export function artifactRecordOutcome(
   }, { ...base, sourceInputHash: hash }, artifactVersion)
 }
 
-/** 🔴 원천마다 **가장 최신** 하나 — 시각이 같으면 단계 순위로 가른다 */
+/**
+ * 🔴 원천마다 **가장 최신** 하나 — 순서는 `isLaterOutcome` 하나가 정한다.
+ *    같은 회차 안에서는 단계 순서(생성이 판정 뒤), 회차 사이에서는 회차 시각이다.
+ */
 export function latestOutcomes(rows: readonly PriorOutcome[]): Map<string, PriorOutcome> {
   const out = new Map<string, PriorOutcome>()
   for (const r of rows) {
     const cur = out.get(r.sourceArticleId)
-    if (cur === undefined) { out.set(r.sourceArticleId, r); continue }
-    const newer = r.atMs > cur.atMs
-      || (r.atMs === cur.atMs && STAGE_RANK[r.stage] >= STAGE_RANK[cur.stage])
-    if (newer) out.set(r.sourceArticleId, r)
+    if (cur === undefined || isLaterOutcome(r, cur)) out.set(r.sourceArticleId, r)
   }
   return out
+}
+
+// ─────────────────────────────────────────────────────────
+// 🔴 **회차 찾기** — 옛 판정 기록에는 회차 칸이 없다 (2026-09-28)
+//
+//   판정 러너가 `runId`·`runAt` 을 적기 시작한 것은 이 PR 부터다. 그 전 기록은
+//   **공급 러너의 회차 기록**(`supply-process-<runId>.run.json`)으로 찾는다 —
+//   그 기록의 칸(`runId`·`startedAt`·단계별 `startedAt`/`endedAt`)만 읽는다. 파일 이름은 보지 않는다.
+//
+//   판정 기록의 `decidedAt` 은 판정 단계가 도는 동안의 벽시계다. 그래서 **그 회차 판정 단계의
+//   시작~끝 구간 안**에 있으면 그 회차의 판정이다. 고정 초(fudge)를 더하지 않는다 — 실제 구간이다.
+//   🔴 어느 구간에도 없으면(손으로 부른 판정) 회차를 모른다 — 기록 자체의 시각이 그 회차의 시각이다.
+// ─────────────────────────────────────────────────────────
+
+export type RunWindow = {
+  runId: string
+  /**
+   * 회차 시각(RUN_AT) — 자식에게 넘긴 값이고, 생성의 `generatedAt` · 판정의 `runAt` 과 같다.
+   *    🔴 **작업 묶음 manifest 의 `takenAt` 이 있으면 그것이다.** 2026-09-26 전 러너는 회차 기록의
+   *       `startedAt` 을 따로 `new Date()` 로 적어 RUN_AT 과 1ms 어긋났다(실측 20260924-051500).
+   *       manifest 는 처음부터 RUN_AT 을 적었다 — 그래서 manifest 가 정본이고, 없을 때만 `startedAt` 이다.
+   */
+  runAtMs: number
+  /** 그 회차 판정 단계가 돈 구간 — 없으면 `null` (판정을 돌리지 않은 회차) */
+  judge: { startMs: number; endMs: number } | null
+  /** 그 회차 생성 단계가 돈 구간 — 2026-09-23 전 생성은 `generatedAt` 을 벽시계로 적었다 */
+  draft: { startMs: number; endMs: number } | null
+}
+
+/** 한 단계의 구간 — 🔴 여러 번이거나(없어야 한다) 모양이 틀리면 `null` (모르는 것이다) */
+function stageSpan(stages: readonly unknown[], stage: string, floorMs: number): { startMs: number; endMs: number } | null {
+  const hits = stages.filter((s): s is Record<string, unknown> =>
+    s !== null && typeof s === 'object'
+    && (s as Record<string, unknown>).stage === stage
+    && ((s as Record<string, unknown>).source ?? null) === null
+    && (s as Record<string, unknown>).status !== 'skipped')
+  if (hits.length !== 1) return null
+  const startMs = parseInstantMs(hits[0]!.startedAt)
+  const endMs = parseInstantMs(hits[0]!.endedAt)
+  if (startMs === null || endMs === null || endMs < startMs || startMs < floorMs) return null
+  return { startMs, endMs }
+}
+
+/**
+ * 🔴 **회차 기록 한 장(+ 그 회차 manifest) → 구간.** 모양이 틀리면 `null` — 틀린 기록으로 회차를 지어내지 않는다.
+ *    manifest 는 **같은 runId 칸**일 때만 쓴다(`kind` · `runId` · `takenAt` 칸). 파일 이름은 보지 않는다.
+ */
+export function runWindowOf(raw: unknown, manifest?: unknown): RunWindow | null {
+  if (raw === null || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  const runId = S(o.runId)
+  const startedMs = parseInstantMs(o.startedAt)
+  if (runId === '' || startedMs === null) return null
+  const m = manifest !== null && typeof manifest === 'object' ? manifest as Record<string, unknown> : null
+  const takenMs = m !== null && m.kind === WORKSET_KIND && S(m.runId) === runId ? parseInstantMs(m.takenAt) : null
+  const runAtMs = takenMs ?? startedMs
+  const stages = Array.isArray(o.stages) ? o.stages : []
+  const floor = Math.min(runAtMs, startedMs)
+  return { runId, runAtMs, judge: stageSpan(stages, 'judge', floor), draft: stageSpan(stages, 'draft', floor) }
+}
+
+/**
+ * 🔴 **회차 칸이 없는 기록에 회차를 붙인다.** 순수 함수 — 러너와 검사가 같은 것을 부른다.
+ *
+ *    판정  기록 칸이 없고 `decidedAt` 이 어느 회차의 **판정 구간** 안이면 → 그 회차
+ *    생성  `generatedAt` 이 어느 회차의 회차 시각과 **같거나**(2026-09-23 이후), 그 회차의
+ *          **생성 구간** 안이면(그 전 — 벽시계로 적었다) → 그 회차
+ *    붙이면 순서를 정하는 시각은 **그 회차의 회차 시각**이다 — 같은 회차의 판정과 생성이 같은 값을 갖고,
+ *    그러면 단계 순서(`isLaterOutcome`)가 가른다.
+ *    🔴 이미 회차 칸이 있는 기록은 건드리지 않는다 — 기록이 적은 것이 우선이다.
+ *    🔴 두 회차에 동시에 걸리면(겹칠 수 없다) 붙이지 않는다 — 모르는 것을 안다고 하지 않는다.
+ */
+export function attributeRuns(
+  rows: readonly PriorOutcome[], runs: readonly RunWindow[],
+): PriorOutcome[] {
+  const inSpan = (sp: { startMs: number; endMs: number } | null, ms: number): boolean =>
+    sp !== null && sp.startMs <= ms && ms <= sp.endMs
+  return rows.map((r) => {
+    if (r.run !== undefined) return r
+    const hits = r.stage === 'judge'
+      ? runs.filter((w) => inSpan(w.judge, r.atMs))
+      : runs.filter((w) => w.runAtMs === r.atMs || inSpan(w.draft, r.atMs))
+    if (hits.length !== 1) return r
+    return { ...r, run: { id: hits[0]!.runId, atMs: hits[0]!.runAtMs } }
+  })
 }
 
 /**
  * 🔴 **다음 회차에서 뺄 원천.** 최신 상태가 이 레인에서 끝난 것만이다.
  *
  *    `retryable` · `unknown` 은 다시 본다 — 결론이 아니라 못 물어본 것이다.
- *    `candidate` 는 큐 형제로 걸린다 — 여기서 빼면 적재가 실패한 회차를 되살릴 수 없다.
+ *    `candidate` 는 여기서 빼지 않는다 — 큐·글에 이미 있으면 `queuedSources` 가, 적재가 실패했으면
+ *    이월(`carriedOver`)이 묶음에서 뺀다(2026-09-28). 둘 다 아니면(기한 밖 등) 다시 볼 수 있다.
  */
 export function concludedSourceIds(rows: readonly PriorOutcome[]): Set<string> {
   const out = new Set<string>()
@@ -465,6 +632,78 @@ export function attemptedOutcomes(rows: readonly PriorOutcome[]): Map<string, Pr
 /** 🔴 `#` 뒤 조각을 뗀 원문 id — 큐 형제 판정은 이 값으로 한다 */
 export const baseIdOf = (id: string): string => id.split('#')[0] ?? id
 
+// ─────────────────────────────────────────────────────────
+// 🔴 **같은 원문으로 두 번째 글을 만들지 않는다** (2026-09-28 공급 가속 P0-C)
+//
+//   앞판은 큐의 **미발행** 형제만 막았다(`queuePending`). 형제가 발행되고 나면 그 원천은
+//   `candidate` 상태로 재시도 풀에 남아 있다가 다시 뽑혀 **판정 → 생성 → 적재** 를 또 돌았다 —
+//   같은 원문에서 두 번째 글이 나갈 수 있는 길이었다.
+//   이제 **큐 행(상태 무관)이나 글(Post)이 하나라도 있으면** 그 원천을 고르지 않는다.
+//   적재가 **실패한** 후보만 #587 이월(`carryOver`)로 되살린다 — 다시 만들지 않는다.
+// ─────────────────────────────────────────────────────────
+
+/** 🔴 큐·글에 이미 있는 원천. `bySiteId` 는 사이트까지 맞춘 키, `byId` 는 사이트를 모르는 행용 */
+export type SourceKeySet = { bySiteId: ReadonlySet<string>; byId: ReadonlySet<string> }
+
+export const EMPTY_SOURCE_KEYS: SourceKeySet = Object.freeze({
+  bySiteId: new Set<string>(), byId: new Set<string>(),
+})
+
+/** 🔴 원천 키 — 사이트 + (`#` 조각을 뗀) 원문 id */
+export const sourceKeyOf = (site: string, articleId: string): string =>
+  `${site.trim()}\u0000${baseIdOf(articleId.trim())}`
+
+/**
+ * 🔴 **큐 행 · 글 한 줄 → 원래 원천.**
+ *    · 우리 synthetic 행(`publish-candidate:` · `publish-candidate:auto:`): 접두를 떼면 원래 사이트,
+ *      id 는 `<원래id>-<해시8>` 이므로 정본 `baseArticleId` 로 되돌린다
+ *    · 그 밖의 행(legacy · 글): 사이트는 그대로, id 가 `사이트:id` 모양이면 앞을 뗀다(운영 글 실측)
+ *    🔴 id 가 비면 `null` — 빈 키로 전부를 막지 않는다
+ */
+export function originalSourceOf(
+  site: string | null | undefined, articleId: string | null | undefined,
+): { site: string; id: string } | null {
+  const s0 = S(site)
+  const id0 = S(articleId)
+  if (id0 === '') return null
+  if (isOurSite(s0)) {
+    const s = s0.startsWith(MACHINE_SITE_PREFIX) ? s0.slice(MACHINE_SITE_PREFIX.length)
+      : s0.slice(AUTOFILL_SITE_PREFIX.length)
+    return { site: s, id: baseIdOf(baseArticleId(id0)) }
+  }
+  const id = s0 !== '' && id0.startsWith(`${s0}:`) ? id0.slice(s0.length + 1) : id0
+  return id === '' ? null : { site: s0, id: baseIdOf(id) }
+}
+
+/**
+ * 🔴 **이미 큐·글에 있는 원천 집합.** 큐 행은 **상태를 보지 않는다** — 미발행·발행·거절 모두다.
+ *    발행된 것을 빼면 그 원천이 다시 뽑혀 두 번째 글이 나간다(이 절이 막는 길).
+ */
+export function queuedSourceKeysOf(rows: readonly {
+  sourceSite: string | null | undefined; sourceArticleId: string | null | undefined
+}[]): SourceKeySet {
+  const bySiteId = new Set<string>()
+  const byId = new Set<string>()
+  for (const r of rows) {
+    const o = originalSourceOf(r.sourceSite, r.sourceArticleId)
+    if (o === null) continue
+    bySiteId.add(sourceKeyOf(o.site, o.id))
+    byId.add(o.id)
+  }
+  return { bySiteId, byId }
+}
+
+/**
+ * 🔴 **이 행의 원천이 집합에 있는가.** 행의 사이트를 모르면(빈 값) id 만으로 본다 —
+ *    모르는 사이트를 이유로 중복을 통과시키지 않는다(보수 쪽).
+ */
+export function hasSource(keys: SourceKeySet, site: string, articleId: string): boolean {
+  const s = S(site)
+  const id = baseIdOf(S(articleId))
+  if (id === '') return false
+  return s === '' ? keys.byId.has(id) : keys.bySiteId.has(sourceKeyOf(s, id))
+}
+
 const S = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 const N = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
@@ -473,13 +712,37 @@ const timeKeyOf = (r: WorksetRow): string =>
   r.sourcePostedAt !== '' ? r.sourcePostedAt : r.sourceListedAt
 
 /**
- * 🔴 **재시도 자리 하나는 남겨 둔다** (2026-09-20 보정).
+ * 🔴 **재시도 자리를 남겨 둔다** (2026-09-20 보정 · 2026-09-28 비례).
  *
  *    "안 본 것 먼저" 만으로 정렬하면, 신규 원천이 회차마다 상한만큼 들어오는 한
  *    재시도 원천의 차례는 **영영 오지 않는다**(실측: 신규 5건 × 10회차, 0회 선택).
- *    그래서 상한 5 에서 신규는 최대 4, 재시도에 최소 1 을 남긴다.
+ *    그래서 재시도에 자리를 남긴다 — **상한 5 자리마다 1** (최소 1).
+ *      limit 2~9 → 1   limit 10 → 2
+ *    🔴 상한 10 에서 1 자리로 두면 묶음이 두 배가 돼도 재시도 몫은 그대로라 재시도가 두 배로 밀린다.
+ *    🔴 상한 1 은 자리를 나눌 수 없다 — 기다린 시간(`WORKSET_RETRY_STARVE_MS`)이 정한다.
  */
-export const WORKSET_RETRY_RESERVE = 1
+export const WORKSET_RETRY_RESERVE_EVERY = 5
+
+export function worksetRetryReserve(limit: number): number {
+  if (!Number.isInteger(limit) || limit < 2) return 0
+  return Math.max(1, Math.floor(limit / WORKSET_RETRY_RESERVE_EVERY))
+}
+
+/**
+ * 🔴 **재시도 안의 차례** (2026-09-28). 작은 값이 먼저다.
+ *
+ *    0 `seeded`  판정은 통과했는데 **초안이 없다** — 판정 캐시가 있어 다시 물어도 판정은 공짜에 가깝고,
+ *                곧장 초안까지 간다. 재시도 가운데 **후보가 나올 가능성이 가장 크다**
+ *    1 생성 단계 결과(`retryable`·`unknown`·`candidate`) — 판정은 이미 통과했다
+ *    2 판정 단계 `retryable`·`unknown` — 판정부터 다시 물어야 한다
+ *    🔴 같은 차례 안에서는 **오래 기다린 것부터**(회차 시각) — 굶김을 막는 규칙은 그대로다.
+ */
+export function retryTierOf(o: PriorOutcome | undefined): number {
+  if (o === undefined) return 2
+  if (o.stage === 'judge' && o.state === 'seeded') return 0
+  if (o.stage === 'draft') return 1
+  return 2
+}
 
 /**
  * 🔴 **상한이 1 이면 자리를 나눌 수 없다.** 그때는 **기다린 시간**이 정한다 —
@@ -496,7 +759,7 @@ export const WORKSET_RETRY_STARVE_MS = 6 * 60 * 60 * 1000
  *    한쪽이 다른 쪽을 굶기지 않는 것이 이 함수의 계약이다.
  *
  * 🔴 **그 전에 축으로 자리를 나눈다** (2026-09-28, `worksetAxisQuota`).
- *    상한 5 → raw 최대 1 · seed 가 충분하면 seed 4 이상. raw 는 빼지 않고,
+ *    상한 10 → raw 최대 2 · seed 가 충분하면 seed 8 이상 (상한 5 → 1 · 4). raw 는 빼지 않고,
  *    seed 가 모자란 자리를 raw 로 전부 채우지도 않는다(빈 자리는 비워 둔다).
  *    신규/재시도 나눔과 각 줄의 순서(댓글 수 · 오래 기다린 것부터)는 축 자리 **안에서** 그대로다.
  *
@@ -509,6 +772,16 @@ export function selectWorkset(input: {
   humanDecided: ReadonlySet<string>
   /** 큐에 미발행 형제가 있는 원문 (base id) */
   queuePending: ReadonlySet<string>
+  /**
+   * 🔴 **큐 행(상태 무관)이나 글이 이미 있는 원천** (`queuedSourceKeysOf`, 2026-09-28).
+   *    발행된 원천을 다시 뽑아 두 번째 글을 만들지 않는다. 비워 두는 기본값이 없다 — 부르는 쪽이 정한다.
+   */
+  queuedSources: SourceKeySet
+  /**
+   * 🔴 **이번 회차 적재가 이월로 다시 먹는 후보의 원천** (#587). 적재가 실패한 후보는
+   *    **다시 만들지 않고** 그 후보를 적재한다 — 여기서 빼지 않으면 같은 원천을 유료로 또 만든다.
+   */
+  carriedOver: SourceKeySet
   /**
    * 🔴 **이 레인에서 끝난 원천** (`concludedSourceIds`). 이것이 없으면 HOLD/DROP 이
    *    댓글 수 상위 자리를 영구 점유해 다음 회차가 같은 것만 보게 된다.
@@ -525,7 +798,7 @@ export function selectWorkset(input: {
   takenAt: Date
 }): WorksetPlan {
   const dropped: Record<WorksetDrop, number> = {
-    humanDecided: 0, queueSibling: 0, hardBlocked: 0, preGated: 0, terminal: 0,
+    humanDecided: 0, queueSibling: 0, alreadyQueued: 0, carriedOver: 0, hardBlocked: 0, preGated: 0, terminal: 0,
   }
   // 🔴 같은 원천이 여러 파일에 있으면 **마지막 행**만 남긴다
   const byId = new Map<string, WorksetRow>()
@@ -539,6 +812,10 @@ export function selectWorkset(input: {
   for (const r of byId.values()) {
     if (input.humanDecided.has(r.sourceArticleId)) { dropped.humanDecided += 1; continue }
     if (input.queuePending.has(baseIdOf(r.sourceArticleId))) { dropped.queueSibling += 1; continue }
+    // 🔴 발행된 형제까지 — 같은 원문으로 두 번째 글을 만들지 않는다
+    if (hasSource(input.queuedSources, r.sourceSite, r.sourceArticleId)) { dropped.alreadyQueued += 1; continue }
+    // 🔴 적재 실패 후보는 이월이 적재한다 — 다시 만들지 않는다
+    if (hasSource(input.carriedOver, r.sourceSite, r.sourceArticleId)) { dropped.carriedOver += 1; continue }
     if (input.concluded.has(r.sourceArticleId)) { dropped.terminal += 1; continue }
     /**
      * 🔴 **판정기 정본 게이트를 그대로 부른다** — 여기서 규칙을 새로 만들지 않는다.
@@ -562,11 +839,16 @@ export function selectWorkset(input: {
     || a.sourceArticleId.localeCompare(b.sourceArticleId)
 
   const fresh = eligible.filter((r) => !input.attempted.has(r.sourceArticleId)).sort(byWeight)
+  const prior = (r: WorksetRow): PriorOutcome | undefined => input.attempted.get(r.sourceArticleId)
   const retry = eligible.filter((r) => input.attempted.has(r.sourceArticleId))
-    // 🔴 **오래 기다린 것부터.** 그 다음은 신규와 같은 저울을 쓴다
+    /**
+     * 🔴 **차례(`retryTierOf`) → 오래 기다린 것부터 → 신규와 같은 저울.**
+     *    판정은 통과했는데 초안이 없는 원천(`seeded`)이 판정부터 다시 물어야 하는 원천보다 먼저다.
+     *    🔴 기다린 시간은 **회차 시각**으로 잰다(`runClockOf`) — 최신을 가르는 시각과 같은 값이다.
+     */
     .sort((a, b) =>
-      (input.attempted.get(a.sourceArticleId)?.atMs ?? 0)
-      - (input.attempted.get(b.sourceArticleId)?.atMs ?? 0)
+      retryTierOf(prior(a)) - retryTierOf(prior(b))
+      || (prior(a) === undefined ? 0 : runClockOf(prior(a)!)) - (prior(b) === undefined ? 0 : runClockOf(prior(b)!))
       || byWeight(a, b))
 
   const limit = Number.isInteger(input.limit) && input.limit > 0 ? input.limit : 0
@@ -594,10 +876,12 @@ export function selectWorkset(input: {
    *    상한이 1 이면 **가장 오래 기다린 재시도**가 기준을 넘었을 때만 그 자리를 가져간다.
    *    🔴 기준은 **자리가 있는 축의** 재시도 가운데 가장 오래 기다린 것이다.
    */
-  const waitedMs = retryOpen.length === 0 ? 0
-    : input.takenAt.getTime() - (input.attempted.get(retryOpen[0]!.sourceArticleId)?.atMs ?? 0)
+  /** 🔴 상한 1 의 굶김 기준은 **차례와 무관하게** 가장 오래 기다린 재시도다 */
+  const oldestMs = retryOpen.reduce((m, r) => Math.min(m, prior(r) === undefined ? 0 : runClockOf(prior(r)!)),
+    Number.POSITIVE_INFINITY)
+  const waitedMs = retryOpen.length === 0 ? 0 : input.takenAt.getTime() - oldestMs
   const reserve = retryOpen.length === 0 ? 0
-    : limit >= WORKSET_RETRY_RESERVE + 1 ? WORKSET_RETRY_RESERVE
+    : limit >= 2 ? worksetRetryReserve(limit)
       : waitedMs >= WORKSET_RETRY_STARVE_MS ? limit : 0
 
   /**
@@ -712,6 +996,10 @@ export type StageBudgetFail = { ok: false; reason: string }
 export function judgeStageBudget(limit: number): StageBudget | StageBudgetFail {
   if (!Number.isInteger(limit) || limit <= 0) {
     return { ok: false, reason: `workset 상한이 양의 정수가 아니다 (${String(limit)})` }
+  }
+  // 🔴 천장 위는 거부한다 — 무제한 호출의 길을 두지 않는다
+  if (limit > WORKSET_MAX_LIMIT) {
+    return { ok: false, reason: `workset 상한 ${limit} > 천장 ${WORKSET_MAX_LIMIT} — 실행하지 않는다` }
   }
   const perStage = {
     judge: limit * WORKSET_STAGE_PER_SOURCE.judge,

@@ -252,7 +252,14 @@ export type CarryCandidateFile = {
   name: string
   envelope: Envelope | null
   candidateCount: number
+  /**
+   * 🔴 **후보들의 원천** (2026-09-28) — 사이트와 원문 id 만. 제목·본문은 읽지 않는다.
+   *    이월로 적재될 원천을 이번 회차 묶음이 **다시 만들지 않게** 넘긴다(`selectWorkset` 의 `carriedOver`).
+   */
+  sources?: readonly CarrySource[]
 }
+
+export type CarrySource = { sourceSite: string; sourceArticleId: string }
 
 export type CarryRejectCode =
   | 'CURRENT' | 'NAME' | 'NO_RUN' | 'DRAFT_NOT_OK' | 'COMPLETED' | 'STALE' | 'FUTURE'
@@ -295,7 +302,7 @@ export function completedCandidateFiles(runs: readonly CarryRunRecord[]): Set<st
   return done
 }
 
-export type CarryPick = { name: string; runId: string; candidateCount: number }
+export type CarryPick = { name: string; runId: string; candidateCount: number; sources: readonly CarrySource[] }
 
 /**
  * 이월할 후보 파일을 고른다 — 🔴 **순수 함수.**
@@ -343,7 +350,7 @@ export function selectCarryOver(input: {
     if (f.envelope === null) { rejected.push({ name, code: 'UNREADABLE' }); continue }
     if (f.candidateCount < 1) { rejected.push({ name, code: 'EMPTY' }); continue }
     if (qualityContractMismatch(f.envelope).length > 0) { rejected.push({ name, code: 'CONTRACT' }); continue }
-    ok.push({ name, runId, candidateCount: f.candidateCount })
+    ok.push({ name, runId, candidateCount: f.candidateCount, sources: f.sources ?? [] })
   }
   ok.sort((a, b) => a.runId.localeCompare(b.runId))
   const picked = ok.slice(0, Math.max(0, maxFiles))
