@@ -689,7 +689,12 @@ async function main(): Promise<void> {
     const bundle = bundleOf(rows, 'gate')
     await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle, entries: rows.slice(0, 29).map((x) => ({ queueId: x.id, hardDefect: 'no' })) })
     const g29 = await evidenceFromDb(prisma)
-    check('🔴 🔴 **사람 표본 29건 → 닫힘**', g29.eligible === 29 && !g29.meetsContract, JSON.stringify(g29.reasons))
+    /**
+     * 🔴 (quality-v4) 사람 표본은 **그대로 센다**(29) — 지우거나 부풀리지 않는다. 다만 열림 근거가 창업자 gold 로
+     *    바뀌어 사람 표본 수는 열림을 좌우하지 않는다(새 30건 사람 검토 요구 없음). 사람 중대 결함은 여전히 닫는다(아래).
+     */
+    check('🔴 🔴 **사람 표본 29건은 29로 센다 · v4 열림 근거는 창업자 gold(사람 30건 요구 없음)**',
+      g29.eligible === 29 && g29.basis === 'founderGold' && g29.meetsContract, JSON.stringify(g29.reasons))
     await recordHumanBatch(prisma, { actor: FOUNDER, now: NOW, bundle, entries: [{ queueId: rows[29]!.id, hardDefect: 'no' }] })
     const g30 = await evidenceFromDb(prisma)
     check('🔴 🔴 **30건 · 무수정 27(90%) · 결함 0 → 열림**', g30.eligible === 30 && g30.noEdit === 27 && g30.hardDefects === 0 && g30.meetsContract, JSON.stringify(g30))
@@ -699,6 +704,10 @@ async function main(): Promise<void> {
     check('🔴 🔴 **빈 판정은 건너뜀 — 기록 0 · 표본도 게이트도 그대로(30 · 열림)**',
       skip[0]?.result === 'skip' && readEvidenceReviews((await snap(um.id)).editDiff).length === 0 && g31.eligible === 30 && g31.meetsContract)
     check('🔴 🔴 **기준은 30 · 90% · 0 그대로**', CONTRACT.reviewSampleMin === 30 && CONTRACT.noEditAccuracyMin === 0.9 && CONTRACT.hardDefectMax === 0)
+    // 🔴 (quality-v4) 사람 중대 결함은 열림 근거와 무관하게 닫는다 — 관리자 경계로 yes 를 적으면 즉시 닫힘
+    const rd = await recordHumanBatch(prisma, { actor: FOUNDER, now: new Date(NOW.getTime() + 5000), bundle, entries: [{ queueId: rows[0]!.id, hardDefect: 'yes', reasons: ['사후 발견'], withdraw: true, declineReason: 'TOPIC_UNFIT' }] })
+    const gd = await evidenceFromDb(prisma)
+    check('🔴 🔴 **지금 계약 행에 사람 중대 결함 yes → 증거 닫힘(v4)**', rd[0]?.result === 'withdrawnAndRecorded' && !gd.meetsContract && gd.cohortHardDefects >= 1, `${JSON.stringify(rd)} · ${JSON.stringify(gd.reasons)}`)
   }
 
   await prisma.$executeRawUnsafe(

@@ -42,11 +42,11 @@ import { EVIDENCE_REVIEW_KEY, EVIDENCE_REVIEW_CONTRACT, bindingOf, digestOf as e
  * 🔴 증거 픽스처의 사람 검토 기록(v2) — 운영에서는 관리자 서버 경계(로그인 세션)만 쓴다.
  *    발행된 사람 결정 행 · 수정·폐기 없음 → noEdit 로 결속한다.
  */
-const humanReviewed = (title: string, body: string) => ({
+const humanReviewed = (title: string, body: string, hardDefect: 'yes' | 'no' = 'no') => ({
   [EVIDENCE_REVIEW_KEY]: [{
     contract: EVIDENCE_REVIEW_CONTRACT, reviewer: 'human:founder', reviewerUserId: 'fixture-founder',
     ...bindingOf({ status: 'PUBLISHED', draftTitle: title, draftBody: body, editedTitle: null, editedBody: null, declineReason: null }),
-    hardDefect: 'no', reasons: [], bundleDigest: evDigest('fixture-bundle'), reviewedAt: '2026-09-25T00:00:00Z',
+    hardDefect, reasons: hardDefect === 'yes' ? ['fixture 중대 결함'] : [], bundleDigest: evDigest('fixture-bundle'), reviewedAt: '2026-09-25T00:00:00Z',
   }],
 })
 
@@ -183,9 +183,13 @@ async function main(): Promise<void> {
     })
     evidenceIds.push(q.id)
   }
-  /** 🔴 증거를 한 건만 무너뜨린다 — 그 행에 경고를 얹어 적격에서 뺀다(30→29) */
+  /**
+   * 🔴 **증거를 무너뜨린다** (quality-v4) — 열림 근거가 창업자 gold 로 바뀌어 사람 표본 수(30→29)는 더 이상 열림을
+   *    좌우하지 않는다. v4 에서 증거를 무너뜨리는 운영 사건은 **지금 계약 행에 사람이 중대 결함을 적는 것**이다
+   *    (`cohortHardDefects`). 그 행 하나의 사람 기록을 yes/no 로 바꾼다.
+   */
   const breakOneEvidence = (on: boolean) => prisma.originalPostApprovalQueue.update({
-    where: { id: evidenceIds[0]! }, data: { gateResults: gate(GOOD_SR, on ? ['BROKEN_FOR_TEST'] : []) as never },
+    where: { id: evidenceIds[0]! }, data: { editDiff: humanReviewed('사람이 본 글 0', '사람이 본 본문 0', on ? 'yes' : 'no') as never },
   })
   /** 🔴 증거 검사를 우회해 도장만 직접 찍은 행 — 호출자가 게이트를 건너뛴 상황이다 */
   const forceStamp = async (id: string) => {
@@ -221,26 +225,31 @@ async function main(): Promise<void> {
     check('🔴 🔴 **감사 표가 없어도 OFF 경로는 깨지지 않는다 (운영에 아직 표가 없다)**', threw === '', threw)
   }
 
-  console.log('\n② 🔴 🔴 증거 0/30 인데 호출자가 "열림" 을 넘겨도 — 도장 0 · Post 0')
+  // 🔴 (quality-v4) 증거가 닫힌 상태를 만든다 — 지금 계약 행 하나에 사람 중대 결함
+  await evidenceRow(0)
+  await breakOneEvidence(true)
+  console.log('\n② 🔴 🔴 증거가 닫혔는데(사람 중대 결함) 호출자가 "열림" 을 넘겨도 — 도장 0 · Post 0')
   {
     const r = await machineRow({ legacy: true })
     // 🔴 앞판 시그니처처럼 `open: { open: true }` 를 억지로 넘긴다 — 이제 받는 자리가 없다
     const o = await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW, open: { open: true, reasons: [] } } as never)
-    check('🔴 🔴 **증거 0/30 · 호출자 open:true → closed · 도장 0**',
-      o.kind === 'closed' && o.reason.includes('0/30'), JSON.stringify(o))
+    check('🔴 🔴 **증거 닫힘(사람 중대 결함) · 호출자 open:true → closed · 도장 0**',
+      o.kind === 'closed' && o.reason.includes('중대 결함'), JSON.stringify(o))
     check('그 행은 기계 도장 그대로', (await prisma.originalPostApprovalQueue.findUnique({ where: { id: r.id } }))?.decidedBy === 'machine:auto-draft-v5')
     await forceStamp(r.id)
     const before = await postCount()
     const p = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
-    check('🔴 🔴 **우회해 찍힌 도장도 발행 트랜잭션이 증거 0/30 으로 막는다 · Post 0**',
+    check('🔴 🔴 **우회해 찍힌 도장도 발행 트랜잭션이 닫힌 증거로 막는다 · Post 0**',
       p.kind === 'blocked' && p.code === 'AUTO_READY_RECHECK' && (await postCount()) === before, JSON.stringify(p))
   }
 
-  for (let i = 0; i < 29; i += 1) await evidenceRow(i)
-  console.log('\n③ 🔴 증거가 계약을 채워야 열린다 — 29 에서 닫히고 30 에서 열린다')
-  const at29 = await authoritativeGate(prisma, ON)
-  check('🔴 🔴 **증거 29/30 → 닫힘 (30 을 낮추지 않았다)**', !at29.open && at29.reasons.some((x) => x.includes('29/30')), at29.reasons.join(' · '))
-  await evidenceRow(29)
+  console.log('\n③ 🔴 (quality-v4) 열림 근거 = 창업자 gold 재현 + 사람 중대 결함 0 — 사람 표본 수는 요구하지 않는다')
+  const withDefect = await authoritativeGate(prisma, ON)
+  check('🔴 🔴 **사람 중대 결함 1건 → 닫힘**', !withDefect.open && withDefect.reasons.some((x) => x.includes('중대 결함')), withDefect.reasons.join(' · '))
+  await breakOneEvidence(false)
+  const oneSample = await authoritativeGate(prisma, ON)
+  check('🔴 🔴 **사람 표본 1/30 이어도 gold 재현 · 결함 0 → 열림 (새 30건 사람 검토 없음)**', oneSample.open, oneSample.reasons.join(' · '))
+  for (let i = 1; i < 30; i += 1) await evidenceRow(i)
   const founderBefore = await prisma.originalPostApprovalQueue.count({ where: { decidedBy: HUMAN_DECIDER } })
   const open = await authoritativeGate(prisma, ON)
   check('🔴 증거 30/30 · 결함 0 → 열림', open.open, open.reasons.join(' · '))
@@ -289,7 +298,7 @@ async function main(): Promise<void> {
     const extra = await machineRow()
     const rc = await stampRound(prisma, { env: ON, now: NOW })
     await breakOneEvidence(false)
-    check('🔴 🔴 **증거 29/30 이면 묶음 회차도 도장 0 (closed)**',
+    check('🔴 🔴 **증거가 닫히면(사람 중대 결함) 묶음 회차도 도장 0 (closed)**',
       (rc.get('stamped') ?? 0) === 0 && (rc.get('closed') ?? 0) >= 1
       && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: extra.id } })).decidedBy === 'machine:auto-draft-v5',
       [...rc].map(([k, v]) => `${k} ${v}`).join(' '))
@@ -305,7 +314,7 @@ async function main(): Promise<void> {
       (await loadPublishableStock(prisma, NOW, { autoReadyOpen: false })).rejected.some((x) => x.id === a.id && x.code === 'AUTO_READY_CLOSED'))
   }
 
-  console.log('\n⑦ 🔴 🔴 선택 뒤 증거가 30→29 로 무너졌다 — Post 0')
+  console.log('\n⑦ 🔴 🔴 선택 뒤 증거가 무너졌다(사람 중대 결함) — Post 0')
   {
     const r = await machineRow()
     await stampAutoReady(prisma, { queueId: r.id, env: ON, now: NOW })
@@ -313,8 +322,8 @@ async function main(): Promise<void> {
     await breakOneEvidence(true)
     const before = await postCount()
     const p = await publishOriginalPostTx(prisma, { queueId: r.id, publishedToday: 0, mode: { kind: 'manual-live', dailyCap: 100 }, autoReadyEnv: ON })
-    check('🔴 🔴 **선택 뒤 증거 29/30 → 발행 트랜잭션이 막는다 · Post 0**',
-      p.kind === 'blocked' && p.code === 'AUTO_READY_RECHECK' && p.detail.includes('29/30') && (await postCount()) === before,
+    check('🔴 🔴 **선택 뒤 증거 붕괴(사람 중대 결함) → 발행 트랜잭션이 막는다 · Post 0**',
+      p.kind === 'blocked' && p.code === 'AUTO_READY_RECHECK' && p.detail.includes('중대 결함') && (await postCount()) === before,
       JSON.stringify(p))
     await breakOneEvidence(false)
     check('증거를 되돌리면 다시 열린다', (await authoritativeGate(prisma, ON)).open)
