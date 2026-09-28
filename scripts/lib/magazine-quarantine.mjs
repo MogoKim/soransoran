@@ -88,6 +88,86 @@ export function fingerprintOf(input) {
 }
 
 // ─────────────────────────────────────────────────────────
+// 전송 사실 — 🔴 **slug 와 보낸 글자**에 붙는다. 회차·날짜에 붙지 않는다.
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **왜 회차 지문으로는 못 막는가** (2026-09-28 · 재검토 P0-1).
+ *
+ *    앞판은 회수 결과 파일을 `runId`(그 회차 목록의 지문)로 검증했다.
+ *    그런데 `runId` 는 **목록 전체**의 지문이다 — 아무 상관 없는 후보 하나가
+ *    `run.json` 에 추가되기만 해도 값이 바뀐다. 그러면 이미 보낸 `h-b` 의 HOLD 가
+ *    같이 풀리고 **같은 brief 가 두 번째로 전송된다.**
+ *
+ *    보낸 사실은 회차의 성질이 아니라 **그 글의 성질**이다.
+ *    그래서 `slug` + **실제로 보낸 메시지의 지문**에 붙인다.
+ *    날짜가 바뀌어도, 목록이 바뀌어도, 다른 후보가 늘어도 그대로 남는다.
+ *    brief 나 프롬프트가 바뀌어 **보낼 글자가 달라질 때만** 다시 보낸다.
+ *
+ * 🔴 장부는 하나다. 새 파일을 만들지 않는다 — 두 장부는 반드시 어긋난다.
+ */
+export function deliveryFingerprintOf(message) {
+  if (message === null || message === undefined) return null
+  if (typeof message === 'object') {
+    throw new TypeError('deliveryFingerprintOf 는 **보낼 메시지 문자열**을 받는다')
+  }
+  const text = String(message).replace(/\r\n/g, '\n')
+  if (text === '') return null
+  return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`
+}
+
+/**
+ * 전송 사실을 한 줄 적는다. **`attempts` 도 `regenCalls` 도 건드리지 않는다** —
+ * 보낸 것은 원고가 틀린 횟수가 아니다.
+ *
+ * @param {object|null} entry 기존 행 (건드리지 않는다)
+ */
+export function recordDelivery(entry, { sent, messageFingerprint, kind = null, reason = null, stage = null, now, runId = null, date = null }) {
+  return {
+    ...(entry ?? {}),
+    delivery: {
+      sent: normalizeSent(sent),
+      messageFingerprint: messageFingerprint ?? null,
+      kind: kind ?? null,
+      reason: reason ?? null,
+      stage: stage ?? null,
+      at: now,
+      // 🔴 출처 기록용이다. **판정에 쓰지 않는다.**
+      runId: runId ?? null,
+      date: date ?? null,
+    },
+  }
+}
+
+/** 받아냈으면 전송 기록을 지운다 — 다음에 고쳐서 다시 부를 수 있어야 한다 */
+export function clearDelivery(entry) {
+  if (!entry || entry.delivery === undefined) return entry ?? null
+  const { delivery, ...rest } = entry
+  void delivery
+  return rest
+}
+
+/**
+ * 지금 보내려는 메시지를 **다시 보내면 안 되는가.**
+ *
+ * 🔴 막는 조건은 셋이 **모두** 맞을 때뿐이다:
+ *    ① 전송 기록이 있고 ② 지문이 **같고** ③ 그 결말이 DELIVERY_UNCERTAIN 이다.
+ *
+ *    지문이 다르면(=brief 나 프롬프트가 바뀌었으면) 다른 글이므로 보낸다.
+ *    결말이 INFRA·CONTENT 면 여기서 막지 않는다 — 각자 다른 장치가 센다.
+ */
+export function deliveryHoldsFetch(entry, messageFingerprint) {
+  const d = entry?.delivery
+  if (!d || !d.messageFingerprint || !messageFingerprint) return null
+  if (d.messageFingerprint !== messageFingerprint) return null
+  if (d.kind !== 'DELIVERY_UNCERTAIN') return null
+  return {
+    why: `이미 보낸 글이다 (${d.date ?? '날짜 미상'} · ${d.stage ?? '-'} ${d.reason ?? '-'}) — 다시 보내지 않는다`,
+    delivery: d,
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 // 판정 — 🔴 파일을 읽지 않는다
 // ─────────────────────────────────────────────────────────
 

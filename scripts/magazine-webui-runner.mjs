@@ -42,10 +42,15 @@ import { validateManuscript, describeReasons } from './lib/magazine-manuscript-g
 import {
   probe, fetchManuscript, isFatal, browserAvailable, profileExists, profileInUse, cdpAvailable,
   chromeArgs, CHROME_APP, CDP_PORT,
-  STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE,
+  STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE, buildManuscriptMessage,
 } from './lib/chatgpt-session.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+import { classifyFailure } from './lib/magazine-failure-kind.mjs'
 import { readRunTargets, materialState, fetchTargets } from './lib/magazine-run-targets.mjs'
+import {
+  readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
+  recordDelivery, clearDelivery, QUARANTINE_PATH,
+} from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
@@ -279,7 +284,38 @@ export function describeFetchFailure(r) {
   return `${where}${r?.reason ?? 'unknown'}${detail ? ` — ${detail}` : ''}${extra} · 전송 ${r?.sent ? '1건' : '0건'}`
 }
 
-async function fetchSlug(slug, { quiet = false, force = false, regenPacket = null } = {}) {
+/**
+ * 🔴 **프롬프트 조립을 한 자리에 둔다** (2026-09-28 · P0-1).
+ *    "보낼 글자" 의 지문으로 중복 전송을 막으려면, **대상을 고를 때 계산한 글자**와
+ *    **실제로 보내는 글자**가 한 글자도 다르면 안 된다. 두 곳에서 따로 만들면
+ *    언젠가 갈라지고, 갈라진 날 지문이 달라져 **막아야 할 것을 못 막는다.**
+ */
+export function manuscriptPromptText(packet = null) {
+  return [
+    // 🔴 brief 는 파일이 아니라 이 메시지 아래에 그대로 들어간다 (첨부 경로 폐지 · 2026-09-28)
+    '아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요.',
+    '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
+    '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
+    'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
+    // 🔴 관문이 막는 것을 프롬프트에서도 한 번 말한다. 막는 것보다 안 나오게 하는 편이 싸다.
+    '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
+    // 🔴 재생성이면 무엇이 걸렸는지 그대로 붙인다
+    ...(packet ? ['', '--- 이전 원고가 자동 검사에 걸렸습니다 ---', packet.instruction] : []),
+  ].join(' ')
+}
+
+/**
+ * 이 slug 에 **보내게 될 메시지** — 아직 보내지 않는다.
+ * 대상 선택이 지문을 계산하려면 이것이 필요하다. brief 가 없으면 `null`.
+ */
+export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
+  const briefPath = join(draftsDir, slug, 'brief.md')
+  if (!existsSync(briefPath)) return null
+  return buildManuscriptMessage({ promptText: manuscriptPromptText(packet), briefText: readFileSync(briefPath, 'utf8') })
+}
+
+async function fetchSlug(slug, { quiet = false, force = false, regenPacket = null,
+  quarantinePath = QUARANTINE_PATH, runIdHint = null, dateHint = null } = {}) {
   const dir = join(DRAFTS_DIR, slug)
   const briefPath = join(dir, 'brief.md')
   const outPath = join(dir, 'draft.md')
@@ -312,17 +348,7 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     if (!quiet) console.log(`     재생성 — 실패 ${packet.failures.length}건을 같이 보낸다`)
   }
 
-  const prompt = [
-    // 🔴 brief 는 파일이 아니라 이 메시지 아래에 그대로 들어간다 (첨부 경로 폐지 · 2026-09-28)
-    '아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요.',
-    '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
-    '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
-    'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
-    // 🔴 관문이 막는 것을 프롬프트에서도 한 번 말한다. 막는 것보다 안 나오게 하는 편이 싸다.
-    '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
-    // 🔴 재생성이면 무엇이 걸렸는지 그대로 붙인다
-    ...(packet ? ['', '--- 이전 원고가 자동 검사에 걸렸습니다 ---', packet.instruction] : []),
-  ].join(' ')
+  const prompt = manuscriptPromptText(packet)
 
   // 🔴 관문을 쓰기 직전에 건넨다. 막히면 파일이 생기지 않는다.
   const r = await fetchManuscript({
@@ -332,7 +358,37 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     requiredMarkers: markers,
     validate: validateManuscript,
   })
-  if (r.ok) return { slug, status: 'ok', sent: r.sent, length: r.length }
+
+  /**
+   * 🔴 **보낸 사실을 그 자리에서 장부에 적는다** (P0-1).
+   *    적는 것은 `slug` + **실제로 보낸 글자의 지문**이다. 회차도 날짜도 판정에 쓰지 않는다.
+   *    받아냈으면 기록을 지운다 — 고쳐서 다시 부를 수 있어야 한다.
+   *    🔴 `attempts` · `regenCalls` 는 건드리지 않는다. 보낸 것은 원고가 틀린 횟수가 아니다.
+   */
+  if (quarantinePath !== false) {
+    const kind = classifyFailure({
+      code: r.reason, stage: r.stage,
+      message: [r.errorName, r.errorDetail].filter(Boolean).join(' · '),
+      sent: r.sent,
+    }).kind
+    try {
+      updateQuarantine((cur) => ({
+        ...cur,
+        [slug]: r.ok
+          ? clearDelivery(cur[slug]) ?? undefined
+          : recordDelivery(cur[slug], {
+            sent: r.sent, messageFingerprint: r.messageFingerprint ?? null, kind,
+            reason: r.reason ?? null, stage: r.stage ?? null, now: Date.now(),
+            runId: runIdHint, date: dateHint,
+          }),
+      }), quarantinePath)
+    } catch (e) {
+      // 🔴 장부에 못 적었으면 **말한다.** 조용히 넘기면 다음 회차가 또 보낸다.
+      console.error(`     🔴 전송 사실을 장부에 적지 못했다 — ${e.message}`)
+    }
+  }
+
+  if (r.ok) return { slug, status: 'ok', sent: r.sent, length: r.length, messageFingerprint: r.messageFingerprint ?? null }
   return {
     slug,
     status: 'failed',
@@ -340,13 +396,13 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     sent: r.sent,
     missingCount: r.missingCount,
     invalid: r.invalid ?? null,
+    messageFingerprint: r.messageFingerprint ?? null,
     // 🔴 여기서 버리면 운영 로그까지 `connect_failed` 한 단어로 도착한다 (2026-09-27)
     stage: r.stage ?? null,
     errorName: r.errorName ?? null,
     errorDetail: r.errorDetail ?? null,
   }
 }
-
 /** 저장된 원고를 기계 검사만 한다. 내용을 출력하지 않는다 */
 function describeDraft(slug) {
   const t = readFileSync(join(DRAFTS_DIR, slug, 'draft.md'), 'utf8')
@@ -365,7 +421,8 @@ function describeDraft(slug) {
 }
 
 /** 단건 CLI — 사람이 부르는 경로 */
-async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null } = {}) {
+async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null,
+  quarantinePath = QUARANTINE_PATH } = {}) {
   console.log('')
   console.log(`  원고 요청 — ${slug}`)
 
@@ -417,7 +474,7 @@ async function fetchOne(slug, { force = false, regenPacket = null, resultPath = 
   }
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
-  const r = await fetchSlug(slug, { force, regenPacket })
+  const r = await fetchSlug(slug, { force, regenPacket, quarantinePath, dateHint: todayKst() })
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
@@ -463,6 +520,8 @@ async function fetchOne(slug, { force = false, regenPacket = null, resultPath = 
  *    기본값은 운영 경로 그대로다 — 소스 문자열 검사로 대신하지 않기 위해 연다.
  */
 export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, resultPath = null,
+  /** 🔴 전송 사실의 정본. 시험은 임시 파일을 준다 — 운영 장부를 건드리지 않는다 */
+  quarantinePath = QUARANTINE_PATH,
   /** 🔴 시험이 브라우저를 켜지 않고 실패 경로를 태우기 위한 자리. 운영은 실제 probe 다 */
   probeFn = probe }) {
   /**
@@ -504,22 +563,41 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
   const fetchSet = new Set(fetchTargets(targets).map((t) => t.slug))
 
   /**
-   * 🔴 **이미 보낸 글은 다시 보내지 않는다** (2026-09-28 · Codex 재검토 1번).
-   *    앞 회차가 `sent=true` 로 끝났는데 응답을 못 받은 글은 brief 가 이미
-   *    ChatGPT 대화에 올라가 있다. 대상 선택이 이 사실을 읽지 않으면
-   *    같은 회차를 다시 돌릴 때마다 **같은 요청이 한 번씩 더 쌓인다.**
-   *    그 후보만 멈추고 나머지는 그대로 간다.
+   * 🔴 **이미 보낸 글은 다시 보내지 않는다 — 판정 권한은 장부에 있다** (P0-1).
+   *
+   *    앞판은 회수 결과 파일을 `runId` 로 검증해 HOLD 를 유지했다. 그런데 `runId` 는
+   *    **목록 전체**의 지문이라, 상관없는 후보 하나가 `run.json` 에 추가되면 값이 바뀌고
+   *    **HOLD 가 통째로 풀렸다.** 보낸 사실은 회차가 아니라 그 글에 붙어야 한다.
+   *
+   *    이제 `slug` + **보낼 메시지의 지문**으로 단일 격리 장부에서 판정한다.
+   *    날짜·회차·다른 후보가 아무리 바뀌어도 같은 글자면 그대로 막힌다.
+   *    brief 나 프롬프트가 바뀌어 지문이 달라질 때만 다시 보낸다.
    */
   const state = readRunFetchState({ draftsDir, date, resultPath })
   runId = state.runId
-  const hold = state.hold
-  if (state.prior.stale) console.log(`  (앞 회수 결과를 쓰지 않는다 — ${state.prior.why})`)
-  if (hold.size) console.log(`  🔴 전송불명 ${hold.size}건은 다시 보내지 않는다`)
+  const ledger = readQuarantine(quarantinePath)
+  if (!ledger.ok) {
+    console.log('')
+    console.log(`  ⛔ 격리 장부를 읽지 못했다 — ${ledger.why}`)
+    console.log('     한 글자도 보내지 않는다. (전송 0건)')
+    console.log('')
+    return finishBatch({ planned: [], results: [], sentTotal: 0, fatal: 'QUARANTINE_UNREADABLE' })
+  }
+  /** slug → 지금 보내게 될 메시지의 지문 */
+  const wantFp = new Map()
+  const hold = new Map()
+  for (const slug of fetchSet) {
+    const fp = deliveryFingerprintOf(plannedMessageFor(slug, draftsDir))
+    wantFp.set(slug, fp)
+    const h = deliveryHoldsFetch(ledger.store[slug], fp)
+    if (h) hold.set(slug, h)
+  }
+  if (hold.size) console.log(`  🔴 전송불명 ${hold.size}건은 다시 보내지 않는다 (장부 지문 일치)`)
 
   const planned = targets.map((t) => {
     const held = hold.get(t.slug)
     if (fetchSet.has(t.slug) && held) {
-      return { slug: t.slug, stage: t.stage, action: 'hold:delivery_uncertain', why: held.why, prior: held }
+      return { slug: t.slug, stage: t.stage, action: 'hold:delivery_uncertain', why: held.why, prior: held.delivery }
     }
     return {
       slug: t.slug,
@@ -583,7 +661,7 @@ export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, 
     }
     console.log('')
     console.log(`  ${p.slug}`)
-    const r = await fetchSlug(p.slug)
+    const r = await fetchSlug(p.slug, { quarantinePath, runIdHint: runId, dateHint: date })
     if (r.sent) sentTotal += 1
     results.push(r)
 

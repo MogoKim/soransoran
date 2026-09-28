@@ -81,6 +81,8 @@ const INFRA_CODES = new Set([
    */
   'response_timeout',
   'CHROME_NOT_RUNNING',
+  // 🔴 프로필 신원 불일치 — 원고와 무관하다. 사람이 고칠 설정 문제다.
+  'AUTOMATION_PROFILE_MISMATCH',
 ])
 
 /**

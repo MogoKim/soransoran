@@ -36,9 +36,40 @@ export const QUEUE_TS = join(ROOT, 'drafts/magazine/topic-queue.ts')
  *
  *    🔴 운영 경로에서는 이 변수를 **설정하지 않는다.** launchd 도 넘기지 않는다.
  */
-export const DRAFTS_DIR = process.env.SORAN_MAGAZINE_DRAFTS_DIR
-  ? resolve(process.env.SORAN_MAGAZINE_DRAFTS_DIR)
-  : join(ROOT, 'drafts/magazine')
+/**
+ * 🔴 **시험 주입은 시험 모드에서만 열린다** (2026-09-28 · P1).
+ *    폴더를 갈아끼우는 손잡이가 운영에서 켜지면, 자동화가 **엉뚱한 폴더의 원고**를
+ *    읽고 쓴다. 그건 조용히 잘못되는 종류다 — 로그만 보면 정상이다.
+ *    그래서 `SORAN_MAGAZINE_TEST_MODE=1` 이 같이 있어야만 받아들이고,
+ *    없이 설정돼 있으면 **첫 read/write 전에** 멈춘다. 무시하고 기본값으로 가지 않는다 —
+ *    누군가 의도해서 설정한 값을 말없이 버리는 것도 사고다.
+ */
+export const MAGAZINE_TEST_MODE = process.env.SORAN_MAGAZINE_TEST_MODE === '1'
+
+export function resolveDraftsDir(env = process.env) {
+  const injected = env.SORAN_MAGAZINE_DRAFTS_DIR
+  const testMode = env.SORAN_MAGAZINE_TEST_MODE === '1'
+  if (!injected) return { ok: true, dir: join(ROOT, 'drafts/magazine'), injected: false }
+  if (!testMode) {
+    return {
+      ok: false,
+      code: 'DRAFTS_DIR_INJECTION_BLOCKED',
+      why: 'SORAN_MAGAZINE_DRAFTS_DIR 는 SORAN_MAGAZINE_TEST_MODE=1 일 때만 쓴다 — 운영에서는 금지다',
+    }
+  }
+  return { ok: true, dir: resolve(injected), injected: true }
+}
+
+const draftsResolved = resolveDraftsDir()
+if (!draftsResolved.ok) {
+  // 🔴 첫 read/write 전에 끝낸다. 모듈이 적재되는 순간이 가장 이르다.
+  console.error('')
+  console.error(`  ⛔ ${draftsResolved.code} — ${draftsResolved.why}`)
+  console.error('     파일을 하나도 읽거나 쓰지 않았다.')
+  console.error('')
+  process.exit(2)
+}
+export const DRAFTS_DIR = draftsResolved.dir
 
 /**
  * 객체·배열 리터럴을 문자열에서 통째로 떼어낸다.

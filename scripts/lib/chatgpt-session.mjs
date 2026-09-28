@@ -28,9 +28,21 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readlinkSync, mkdirSync, chmodSync, writeFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { deliveryFingerprintOf } from './magazine-quarantine.mjs'
+import {
+  AUTOMATION_PROFILE_DIR, AUTOMATION_CDP_PORT, judgeAutomationProfile, readMarker,
+  listChromeCommandLines, MISMATCH,
+} from './chatgpt-automation-profile.mjs'
 
 /** 프로필은 repo 밖에 둔다. 쿠키가 git 에 닿을 일이 없어야 한다 */
-export const PROFILE_DIR = join(homedir(), 'Library', 'Application Support', 'soransoran-chatgpt')
+/**
+ * 🔴 **자동화 전용 프로필** (2026-09-28 교체).
+ *    옛 값 `soransoran-chatgpt` 는 실제로는 `내 Chrome` · `mogoyongseok@gmail.com` 이었다 —
+ *    자동화 전용도, 소란소란 계정도 아니었다. 신원은
+ *    `chatgpt-automation-profile.mjs` 가 정하고, 여기서는 그 값을 쓴다.
+ *    **여기에 경로를 다시 적지 않는다** — 두 곳에 적으면 한쪽이 낡는다.
+ */
+export const PROFILE_DIR = AUTOMATION_PROFILE_DIR
 
 /** 시스템 Chrome. Playwright 버전과 무관하게 경로가 고정이다 */
 export const CHROME_APP = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
@@ -124,7 +136,8 @@ export function composerLocator(page) {
   return page.locator(COMPOSER_SELECTOR).first()
 }
 
-export const CDP_PORT = 9333
+/** 🔴 전용 포트. 사람 창(9333)과 섞이지 않는다 */
+export const CDP_PORT = AUTOMATION_CDP_PORT
 export const CDP_URL = `http://127.0.0.1:${CDP_PORT}`
 
 /** --login 이 Chrome 에 넘기는 인자. --no-sandbox 도 --enable-automation 도 없다 */
@@ -134,6 +147,16 @@ export function chromeArgs(profileDir = PROFILE_DIR) {
     `--remote-debugging-port=${CDP_PORT}`,
     '--no-first-run',
     '--no-default-browser-check',
+    /**
+     * 🔴 **Chrome 자신의 로그인 권유를 끈다** (2026-09-28 실측).
+     *    새 프로필로 처음 띄우면 Chrome 이 `chrome://signin-dice-web-intercept` 로
+     *    **탭을 가로채** accounts.google.com 을 띄운다. 그러면 chatgpt.com 페이지가
+     *    사라지고, 신원 관문은 "ChatGPT 가 아닌 페이지" 를 보고 막는다.
+     *    자동화 프로필은 Chrome 계정에 로그인할 이유가 없다.
+     */
+    '--disable-features=DiceWebSigninInterception,SigninInterceptBubble',
+    '--disable-sync',
+    '--no-service-autorun',
     CHATGPT_URL,
   ]
 }
@@ -159,6 +182,8 @@ export const STATUS = {
   PERMISSION_BLOCKED: 'permission_blocked',
   CHROME_NOT_RUNNING: 'chrome_not_running',
   CDP_CONNECT_TIMEOUT: 'cdp_connect_timeout',
+  /** 🔴 프로필 신원이 계약과 다르다 — 폴백하지 않고 여기서 끝낸다 */
+  AUTOMATION_PROFILE_MISMATCH: MISMATCH,
   PROTOCOL_ERROR: 'protocol_error',
   UNKNOWN: 'unknown',
 }
@@ -200,6 +225,8 @@ export const MESSAGE = {
   [STATUS.CHROME_NOT_RUNNING]: '전용 Chrome 이 떠 있지 않다 — --login 으로 띄워 두어야 한다',
   [STATUS.CDP_CONNECT_TIMEOUT]: 'Chrome 은 살아 있는데 CDP 연결이 제한 시간을 넘겼다 — 탭이 많으면 오래 걸린다',
   [STATUS.PROTOCOL_ERROR]: 'Chrome 에 붙었지만 CDP 명령이 거부됐다 — 로그의 원문을 본다',
+  [STATUS.AUTOMATION_PROFILE_MISMATCH]:
+    '자동화 전용 프로필이 아니다 — 사람 프로필·옛 폴더로는 돌지 않는다 (폴백 없음)',
   [STATUS.UNKNOWN]: 'ChatGPT 화면을 판정하지 못했다 — UI 가 바뀌었을 수 있다',
 }
 
@@ -572,15 +599,67 @@ export async function ensureChrome({
   return { ok: false, started: true, reason: STATUS.CHROME_NOT_RUNNING, startedOverStaleLock, lock }
 }
 
+/**
+ * 🔴 **프로필 신원 관문** — 첫 AI 호출·파일 write 전에 선다 (2026-09-28 · P0-2).
+ *
+ *    폴더·표식·포트 주인·명령줄·열린 페이지를 **한 번에** 본다.
+ *    하나라도 어긋나면 `AUTOMATION_PROFILE_MISMATCH` 로 끝낸다 —
+ *    기본 Chrome·사람 프로필·옛 폴더로 **폴백하지 않는다.**
+ *    남의 페이지를 navigate·close 해서 고치지도 않는다.
+ */
+export async function verifyAutomationProfile({
+  profileDir = PROFILE_DIR,
+  port = CDP_PORT,
+  requireRunning = true,
+  readMarkerFn = readMarker,
+  commandLinesFn = listChromeCommandLines,
+  listTargets = async () => {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(4000) })
+      return await r.json()
+    } catch { return [] }
+  },
+  portInUseFn = async () => {
+    try {
+      await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) })
+      return true
+    } catch { return false }
+  },
+} = {}) {
+  const m = readMarkerFn(profileDir)
+  const portInUse = await portInUseFn()
+  const pages = portInUse ? await listTargets() : []
+  return judgeAutomationProfile({
+    profileDir, port,
+    marker: m.ok ? m.marker : null,
+    markerMode: m.ok ? m.mode : null,
+    dirMode: m.ok ? m.dirMode : null,
+    commandLines: commandLinesFn(),
+    pages, portInUse, requireRunning,
+  })
+}
+
 export async function probe({
   timeoutMs = 45000,
   composerWaitMs = 20000,
   autoStart = false,
   // 🔴 주입 가능하게 둔다. 정본은 CDP_CONNECT_TIMEOUT_MS 하나다
   connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
+  /** 🔴 시험이 신원 판정을 갈아끼우는 자리. 운영은 실제 검증이다 */
+  verifyProfileFn = verifyAutomationProfile,
 } = {}) {
   // launched 가 아니라 connected 다 — 이 코드는 브라우저를 띄우지 않는다
   const out = { connected: false, httpStatus: null, profileExists: profileExists(), via: 'cdp' }
+
+  /**
+   * 🔴 **무엇보다 먼저 신원을 본다.** 여기서 막히면 브라우저를 켜지도, 붙지도,
+   *    한 글자도 보내지도 않는다. 2026-09-28 에 자동화가 **다른 계정 프로필**로
+   *    돌고 있던 것을 아무도 몰랐다 — 로그만 보면 정상이었기 때문이다.
+   */
+  const identity = await verifyProfileFn({ requireRunning: false })
+  if (!identity.ok) {
+    return { ...out, status: STATUS.AUTOMATION_PROFILE_MISMATCH, errorDetail: identity.why, identity }
+  }
 
   if (!browserAvailable()) {
     return { ...out, status: STATUS.BROWSER_MISSING }
@@ -730,6 +809,8 @@ export async function fetchManuscript({
   let sent = false
   /** 🔴 어디까지 갔는지 남긴다 — `connect_failed` 한 단어로는 고칠 수가 없다 */
   let stage = 'connect'
+  /** 🔴 실제로 composer 에 넣은 글자의 지문. 보내기 전에도 만들어 둔다 */
+  let messageFingerprint = null
 
   try {
     browser = await connectFn(CDP_URL, { timeout: connectTimeoutMs })
@@ -751,6 +832,13 @@ export async function fetchManuscript({
      *    글자는 글자로 넣는다 — 업로드라는 단계 자체를 없앤다.
      */
     const message = buildManuscriptMessage({ promptText, briefText: readFileSync(briefPath, 'utf8') })
+    /**
+     * 🔴 **보낸 글자의 지문**을 만들어 결과에 싣는다 (P0-1).
+     *    상위는 이 값으로 "같은 글을 또 보내는가" 를 판정한다.
+     *    여기서 만들지 않고 상위가 다시 조립하면 언젠가 갈라진다 —
+     *    갈라진 날 지문이 달라져 **막아야 할 것을 못 막는다.**
+     */
+    messageFingerprint = deliveryFingerprintOf(message)
     await composerLocator(page).click()
     await page.keyboard.insertText(message)
 
@@ -768,7 +856,7 @@ export async function fetchManuscript({
       await page.waitForTimeout(COMPOSE_POLL_MS)
     }
     if (!readback.ok) {
-      return { ok: false, reason: readback.code, stage, sent,
+      return { ok: false, reason: readback.code, stage, sent, messageFingerprint,
         errorDetail: `${readback.why} (한 글자도 보내지 않았다)` }
     }
 
@@ -786,7 +874,7 @@ export async function fetchManuscript({
        *    코드 한 단어만 남기면 운영 로그로는 어느 쪽인지 알 수 없다 —
        *    2026-09-27 의 `connect_failed` 와 같은 실수다.
        */
-      return { ok: false, reason: 'send_button_missing', stage, sent,
+      return { ok: false, reason: 'send_button_missing', stage, sent, messageFingerprint,
         errorName: e?.name ?? 'Error',
         errorDetail: String(e?.message ?? '').split('\n')[0].slice(0, 200) }
     }
@@ -805,7 +893,7 @@ export async function fetchManuscript({
       }, null, { timeout: timeoutMs, polling: 3000 })
     } catch {
       // 🔴 닫기는 finally 가 한다 — 여기서 닫으면 뒤 경로가 닫힌 page 를 만진다
-      return { ok: false, reason: 'response_timeout', stage, sent }
+      return { ok: false, reason: 'response_timeout', stage, sent, messageFingerprint }
     }
 
     // ③ pre code 의 textContent — 렌더된 <hr>/<h2> 가 아니라 원본 표기가 그대로 있다
@@ -816,17 +904,17 @@ export async function fetchManuscript({
 
     // 지정 문장이 빠졌으면 저장하지 않는다 — 원고를 고치지 않고 되돌린다
     const missing = requiredMarkers.filter((m) => !text.includes(m))
-    if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length, length: text.length, sent }
+    if (missing.length) return { ok: false, reason: 'markers_missing', missingCount: missing.length, length: text.length, sent, messageFingerprint }
 
     // 🔴 관문. 여기서 막히면 파일이 생기지 않는다 — 다음 실행이 깨끗한 상태에서 다시 받는다.
     if (validate) {
       const v = validate(text)
-      if (!v.ok) return { ok: false, reason: 'invalid_manuscript', invalid: v.reasons ?? [], length: text.length, sent }
+      if (!v.ok) return { ok: false, reason: 'invalid_manuscript', invalid: v.reasons ?? [], length: text.length, sent, messageFingerprint }
     }
 
     // 🔴 여기서 처음이자 마지막으로 원고가 디스크에 닿는다. 문자열을 손대지 않는다
     writeFileSync(outPath, text)
-    return { ok: true, length: text.length, sent }
+    return { ok: true, length: text.length, sent, messageFingerprint }
   } catch (err) {
     /**
      * 🔴 **`connect_failed` 한 단어로 삼키지 않는다** (2026-09-27 사고).
@@ -838,6 +926,7 @@ export async function fetchManuscript({
       ok: false,
       reason: 'connect_failed',
       stage,
+      messageFingerprint,
       errorName: err?.name ?? 'Error',
       errorDetail: String(err?.message ?? '').split('\n')[0].slice(0, 200),
       sent,
@@ -864,6 +953,8 @@ export const FATAL_REASONS = new Set([
   STATUS.CHROME_NOT_RUNNING,
   STATUS.BROWSER_MISSING,
   STATUS.PERMISSION_BLOCKED,
+  // 🔴 신원이 틀리면 **회차 전체**를 멈춘다. 한 후보만 건너뛰면 나머지가 엉뚱한 계정으로 나간다.
+  STATUS.AUTOMATION_PROFILE_MISMATCH,
   'connect_failed',
   'no_context',
 ])

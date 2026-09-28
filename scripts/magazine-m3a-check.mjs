@@ -2330,7 +2330,8 @@ console.log('\n⑳ 통합 — producer 선정 0 · 재사용 있음에서 끝까
       JSON.stringify({ status: 'COMPLETED', selected: [], reusable, inventoryDays: 0 }, null, 2))
 
     /** 🔴 자식 프로세스가 **이 fixture** 를 보게 한다. HOME 도 임시다. */
-    const childEnv = { ...process.env, SORAN_MAGAZINE_DRAFTS_DIR: D }
+    // 🔴 시험 폴더 주입은 **시험 모드에서만** 열린다 — 자식에게도 그 사실을 명시한다
+    const childEnv = { ...process.env, SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_MODE: '1' }
     // 🔴 호출마다 HOME 을 **명시한다.** 한 군데라도 빠지면 운영 HOME 을 물려받는다.
     const node = (args) => spawnSync(process.execPath, args,
       { encoding: 'utf8', maxBuffer: 1e8, env: { ...childEnv, HOME: T } })
@@ -2375,151 +2376,117 @@ console.log('\n⑳ 통합 — producer 선정 0 · 재사용 있음에서 끝까
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
-console.log('\n㉑ 이미 보낸 글을 다시 보내지 않는다 — 회수 대상 선택')
+console.log('\n㉑ 이미 보낸 글은 slug+지문으로 영구히 막힌다')
 {
   /**
-   * 🔴 **분류가 맞는 것과 대상 선택이 그것을 읽는 것은 다르다** (2026-09-28 · Codex 1번).
-   *    `response_timeout + sent=true` 를 DELIVERY_UNCERTAIN 으로 분류해 놓고도
-   *    `fetchBatch` 가 그 사실을 안 읽으면, 회차를 다시 돌릴 때마다
-   *    **같은 brief 가 한 번씩 더** ChatGPT 대화에 쌓인다.
-   *    여기서는 실제 `fetchBatch` 를 돌려 계획 자체가 달라지는지 본다.
+   * 🔴 **회차 지문으로는 못 막는다** (2026-09-28 · 재검토 P0-1).
+   *    `runId` 는 목록 전체의 지문이라 **상관없는 후보 하나만 늘어도** 값이 바뀐다.
+   *    그러면 이미 보낸 글의 HOLD 가 같이 풀리고 같은 brief 가 두 번 전송된다.
+   *    보낸 사실은 `slug` + **보낸 글자**에 붙어야 한다.
+   *
+   *    아래는 전부 **실제 `fetchBatch`** 를 돌린 값이다. 전송 0건(dry-run)이다.
    */
   const WEBUI5 = await import('./magazine-webui-runner.mjs')
-  const FR5 = await import('./lib/magazine-fetch-result.mjs')
-  const RT5 = await import('./lib/magazine-run-targets.mjs')
+  const QN5 = await import('./lib/magazine-quarantine.mjs')
 
   const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-hold-'))
   try {
     const D = path.join(T, 'drafts', 'magazine')
+    const LEDGER = path.join(T, 'quarantine.json')
     const DATE = '2026-09-28'
-    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
-    const mk = (slug, files) => {
-      fs.mkdirSync(path.join(D, slug), { recursive: true })
-      for (const f of files) fs.writeFileSync(path.join(D, slug, f), '#\n')
+    const writeRun = (date, list) => {
+      fs.mkdirSync(path.join(D, '_runs', date), { recursive: true })
+      fs.writeFileSync(path.join(D, '_runs', date, 'run.json'),
+        JSON.stringify({ status: 'COMPLETED', selected: [], reusable: list, inventoryDays: 0 }, null, 2))
     }
-    /** NEEDS_DRAFT 3건 — 회수 대상이다 */
-    const reusable = []
-    for (const s of ['h-a', 'h-b', 'h-c']) { mk(s, ['brief.md', 'review.ts']); reusable.push({ slug: s }) }
-    const run = { status: 'COMPLETED', selected: [], reusable, inventoryDays: 0 }
-    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'), JSON.stringify(run, null, 2))
-    const runId = RT5.runIdOf(run)
-    const resultPath = path.join(T, 'result.json')
+    const mk = (slug, files, brief = '# brief\n본문\n') => {
+      fs.mkdirSync(path.join(D, slug), { recursive: true })
+      for (const f of files) fs.writeFileSync(path.join(D, slug, f), f === 'brief.md' ? brief : '#\n')
+    }
+    for (const s of ['h-a', 'h-b', 'h-c']) mk(s, ['brief.md', 'review.ts'])
+    writeRun(DATE, [{ slug: 'h-a' }, { slug: 'h-b' }, { slug: 'h-c' }])
 
-    const plan = async () => {
-      const b = await WEBUI5.fetchBatch({ date: DATE, dryRun: true, limit: 0, draftsDir: D, resultPath })
+    const plan = async (date = DATE) => {
+      const b = await WEBUI5.fetchBatch({
+        date, dryRun: true, limit: 0, draftsDir: D, quarantinePath: LEDGER,
+        resultPath: path.join(T, `r-${date}.json`),
+      })
       return b.planned ?? []
     }
+    const act = (p, slug) => p.find((x) => x.slug === slug)?.action
+    const nFetch = (p) => p.filter((x) => x.action === 'fetch').length
 
-    /** ① 기록이 없으면 3건 전부 회수 대상이다 */
-    const p0 = await plan()
-    check('🔴 ㉑ 기록이 없으면 3건 전부 회수 대상',
-      p0.filter((x) => x.action === 'fetch').length === 3, `${p0.filter((x) => x.action === 'fetch').length}건`)
+    /** 기록이 없으면 셋 다 회수 대상 */
+    check('  ㉑ 기록 없음 → 3건 회수', nFetch(await plan()) === 3, `${nFetch(await plan())}건`)
 
-    /** ② 🔴 h-b 가 sent=true + response_timeout 으로 끝났다 */
-    FR5.writeFetchResults(resultPath, {
-      date: DATE, runId, mode: 'fetch-run', sentTotal: 1,
-      results: [
-        { slug: 'h-a', status: 'ok', reason: null, stage: null, sent: true },
-        { slug: 'h-b', status: 'failed', reason: 'response_timeout', stage: 'await-response',
-          sent: true, errorName: 'TimeoutError', errorDetail: '300000ms' },
-        { slug: 'h-c', status: 'failed', reason: 'connect_failed', stage: 'connect', sent: false },
-      ],
-    })
+    /** 🔴 h-b 가 보냈는데 응답을 못 받았다 — **실제로 보낼 글자**의 지문으로 적는다 */
+    const msgB = WEBUI5.plannedMessageFor('h-b', D)
+    const fpB = QN5.deliveryFingerprintOf(msgB)
+    QN5.updateQuarantine((cur) => ({
+      ...cur,
+      'h-b': QN5.recordDelivery(cur['h-b'], {
+        sent: true, messageFingerprint: fpB, kind: 'DELIVERY_UNCERTAIN',
+        reason: 'response_timeout', stage: 'await-response', now: Date.now(),
+        runId: 'run-A', date: DATE,
+      }),
+    }), LEDGER)
+
+    /** 반례 1 — 같은 회차 재실행 */
     const p1 = await plan()
-    const act = (slug) => p1.find((x) => x.slug === slug)?.action
-    check('🔴 ㉑ 보냈는데 모르는 글은 HOLD 된다', act('h-b') === 'hold:delivery_uncertain', String(act('h-b')))
-    check('🔴 ㉑ 그 글만 멈춘다 — 안 보낸 h-c 는 계속 간다', act('h-c') === 'fetch', String(act('h-c')))
-    check('🔴 ㉑ 이미 받은 h-a 는 그대로 회수 대상이다 (재료 기준)', act('h-a') === 'fetch', String(act('h-a')))
-    check('🔴 ㉑ 회수 예정이 3 → 2로 준다',
-      p1.filter((x) => x.action === 'fetch').length === 2, `${p1.filter((x) => x.action === 'fetch').length}건`)
+    check('🔴 ㉑[1] 같은 회차 재실행 → h-b 전송 0', act(p1, 'h-b') === 'hold:delivery_uncertain', String(act(p1, 'h-b')))
+    check('  ㉑[1] 나머지 2건은 계속 간다', nFetch(p1) === 2, `${nFetch(p1)}건`)
 
-    /**
-     * ③ 🔴 **낡은 결과를 이번 회차 결과로 읽지 않는다.**
-     *    날짜가 다르거나 회차 지문이 다르면 "기록 없음" 으로 둔다 —
-     *    낡은 기록으로 영구 HOLD 를 만드는 쪽이 더 나쁘다.
-     */
-    const held = JSON.parse(fs.readFileSync(resultPath, 'utf8'))
-    fs.writeFileSync(resultPath, JSON.stringify({ ...held, date: '2026-09-27' }))
+    /** 반례 2 — 관계없는 후보 추가 (runId 가 바뀐다) */
+    mk('other', ['brief.md', 'review.ts'])
+    writeRun(DATE, [{ slug: 'h-a' }, { slug: 'h-b' }, { slug: 'h-c' }, { slug: 'other' }])
     const p2 = await plan()
-    check('🔴 ㉑ 날짜가 다르면 그 기록을 쓰지 않는다',
-      p2.filter((x) => x.action === 'fetch').length === 3, `${p2.filter((x) => x.action === 'fetch').length}건`)
+    check('🔴 ㉑[2] 관계없는 후보가 늘어도 h-b 전송 0',
+      act(p2, 'h-b') === 'hold:delivery_uncertain', String(act(p2, 'h-b')))
+    check('🔴 ㉑[2] 새 후보 other 는 진행된다', act(p2, 'other') === 'fetch', String(act(p2, 'other')))
+    check('  ㉑[2] 회수 3건 (h-a·h-c·other)', nFetch(p2) === 3, `${nFetch(p2)}건`)
 
-    fs.writeFileSync(resultPath, JSON.stringify({ ...held, runId: 'deadbeefdeadbeef' }))
-    const p3 = await plan()
-    check('🔴 ㉑ 회차 지문이 다르면 그 기록을 쓰지 않는다',
-      p3.filter((x) => x.action === 'fetch').length === 3, `${p3.filter((x) => x.action === 'fetch').length}건`)
+    /** 반례 3 — 날짜가 바뀌어도 같은 지문이면 막힌다 */
+    const DATE2 = '2026-09-29'
+    writeRun(DATE2, [{ slug: 'h-a' }, { slug: 'h-b' }, { slug: 'h-c' }])
+    const p3 = await plan(DATE2)
+    check('🔴 ㉑[3] 날짜가 바뀌어도 h-b 전송 0',
+      act(p3, 'h-b') === 'hold:delivery_uncertain', String(act(p3, 'h-b')))
 
-    fs.writeFileSync(resultPath, JSON.stringify({ ...held, runId: null }))
-    const p4 = await plan()
-    check('🔴 ㉑ 지문이 비어 있어도 쓰지 않는다',
-      p4.filter((x) => x.action === 'fetch').length === 3, `${p4.filter((x) => x.action === 'fetch').length}건`)
+    /** 반례 4 — brief 가 바뀌면 지문이 달라져 다시 보낼 수 있다 */
+    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), '# brief\n고친 본문\n')
+    const fpB2 = QN5.deliveryFingerprintOf(WEBUI5.plannedMessageFor('h-b', D))
+    check('  ㉑[4] brief 가 바뀌면 지문도 바뀐다', fpB2 !== fpB, `${String(fpB).slice(7, 19)} → ${String(fpB2).slice(7, 19)}`)
+    const p4 = await plan(DATE2)
+    check('🔴 ㉑[4] 지문이 달라지면 재시도 가능', act(p4, 'h-b') === 'fetch', String(act(p4, 'h-b')))
 
-    /**
-     * ④ 🔴 **HOLD 사실이 다음 회차로 이어진다.** 결과 파일을 새로 쓸 때 빠뜨리면
-     *    그 다음 실행이 "기록 없음" 으로 읽고 결국 다시 보낸다.
-     *
-     *    🔴 브라우저는 켜지 않는다. 두 경로를 각각 태운다:
-     *      ㉮ 보낼 것이 하나도 없다 → 접근 확인 자체를 안 한다
-     *      ㉯ 접근 확인이 실패한다 → 그래도 HOLD 는 적어야 한다
-     */
-    fs.writeFileSync(resultPath, JSON.stringify({
-      ...held,
-      results: held.results.map((r) => (r.slug === 'h-a' || r.slug === 'h-c'
-        ? { ...r, status: 'failed', reason: 'response_timeout', stage: 'await-response', sent: true }
-        : r)),
-    }))
-    let probeCalls = 0
-    const allHeld = await WEBUI5.fetchBatch({
-      date: DATE, dryRun: false, limit: 0, draftsDir: D, resultPath,
-      probeFn: async () => { probeCalls += 1; return { status: 'OK' } },
+    /** 반례 5 — draft.md 가 생기면 회수에서 빠지고 등록 경로로 간다 */
+    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), '# brief\n본문\n')   // 지문 원복 → 다시 HOLD 대상
+    fs.writeFileSync(path.join(D, 'h-b', 'draft.md'), '---\n원고\n[CTA]\n')
+    const p5 = await plan(DATE2)
+    check('🔴 ㉑[5] draft.md 가 생기면 회수 대상이 아니다',
+      act(p5, 'h-b') === 'skip:needs_convert', String(act(p5, 'h-b')))
+    const READY5 = await import('./magazine-auto-register-ready.mjs')
+    const scanned = READY5.scan({ runDate: DATE2, store: {}, draftsDir: D })
+    check('🔴 ㉑[5] 등록 경로가 h-b 를 후보로 잡는다',
+      (scanned.eligible ?? []).some((x) => x.slug === 'h-b') || scanned.pool >= 1,
+      `pool ${scanned.pool}`)
+
+    /** 반례 6 — 장부 write/read 뒤 sent:true·지문 보존 · 횟수 소비 0 */
+    const back = QN5.readQuarantine(LEDGER)
+    const row = back.store['h-b']
+    check('🔴 ㉑[6] 장부가 sent:true 를 보존한다', row?.delivery?.sent === true, JSON.stringify(row?.delivery ?? null))
+    check('🔴 ㉑[6] 장부가 지문을 그대로 보존한다', row?.delivery?.messageFingerprint === fpB,
+      String(row?.delivery?.messageFingerprint).slice(0, 26))
+    check('🔴 ㉑[6] attempts 소비 0', (row?.attempts ?? 0) === 0, `attempts ${row?.attempts}`)
+    check('🔴 ㉑[6] regenCalls 소비 0', (row?.regenCalls ?? 0) === 0, `regenCalls ${row?.regenCalls}`)
+    check('  ㉑[6] runId 는 출처로만 남는다', row?.delivery?.runId === 'run-A', String(row?.delivery?.runId))
+
+    /** 🔴 죽은 게이트가 아니다 — 결말이 INFRA 면 막지 않는다 */
+    const infraEntry = QN5.recordDelivery(null, {
+      sent: false, messageFingerprint: fpB, kind: 'INFRA', reason: 'connect_failed', stage: 'connect', now: 1,
     })
-    check('🔴 ㉑ 전부 HOLD 면 접근 확인조차 하지 않는다 (전송 0건)', probeCalls === 0, `${probeCalls}회`)
-    check('🔴 ㉑ HOLD 3건이 결과에 그대로 실린다',
-      (allHeld.results ?? []).filter((x) => x.status === 'held').length === 3,
-      JSON.stringify((allHeld.results ?? []).map((x) => `${x.slug}:${x.status}`)))
-    const reread = FR5.readFetchResults(resultPath, { expectDate: DATE, expectRunId: runId })
-    check('🔴 ㉑ 다시 읽어도 3건 전부 HOLD 로 판정된다',
-      reread.ok && FR5.deliveryHold(reread.body).size === 3,
-      reread.ok ? [...FR5.deliveryHold(reread.body).keys()].join(',') : reread.why)
-    check('  ㉑ 이어 실린 행이 sent=true 를 지킨다',
-      (allHeld.results ?? []).every((x) => x.sent === true), JSON.stringify(allHeld.results ?? []))
-
-    /** ㉯ 접근 확인이 실패해도 HOLD 는 잃지 않는다 */
-    fs.writeFileSync(resultPath, JSON.stringify(held))
-    const blocked = await WEBUI5.fetchBatch({
-      date: DATE, dryRun: false, limit: 0, draftsDir: D, resultPath,
-      probeFn: async () => ({ status: 'CHROME_NOT_RUNNING', errorDetail: '시험' }),
-    })
-    check('🔴 ㉑ 접근 실패 회차도 HOLD 행을 남긴다',
-      (blocked.results ?? []).some((x) => x.slug === 'h-b' && x.status === 'held' && x.sent === true),
-      JSON.stringify((blocked.results ?? []).map((x) => `${x.slug}:${x.status}:${x.sent}`)))
-    const reread2 = FR5.readFetchResults(resultPath, { expectDate: DATE, expectRunId: runId })
-    check('🔴 ㉑ 그 회차 결과를 다시 읽어도 h-b 는 HOLD 다',
-      reread2.ok && FR5.deliveryHold(reread2.body).has('h-b'),
-      reread2.ok ? [...FR5.deliveryHold(reread2.body).keys()].join(',') : reread2.why)
-
-    /**
-     * ⑤ 🔴 **파일 → 읽기 → 분류 → 장부** 로 세 값이 그대로 가는가.
-     *    `Boolean()` 이 한 군데라도 남으면 `null` 이 `false` 로 바뀐다.
-     */
-    const QN = await import('./lib/magazine-quarantine.mjs')
-    for (const [label, sent, wantKind] of [['보냈다', true, 'DELIVERY_UNCERTAIN'],
-      ['안 보냈다', false, 'INFRA'], ['모른다', null, 'DELIVERY_UNCERTAIN']]) {
-      const rp = path.join(T, `s-${label}.json`)
-      FR5.writeFetchResults(rp, { date: DATE, runId, mode: 'fetch-run', sentTotal: 0,
-        results: [{ slug: 's1', status: 'failed', reason: 'response_timeout', stage: 'await-response', sent }] })
-      const back = FR5.readFetchResults(rp, { expectDate: DATE, expectRunId: runId })
-      const row = FR5.fetchResultFor(back.body, 's1')
-      check(`🔴 ㉑ [${label}] 파일이 sent 를 그대로 보존한다`, row.sent === sent, `${row.sent}`)
-      const entry = QN.recordFailure({ entry: null, now: 1, reasons: [`${row.reason}`], sent: row.sent })
-      check(`🔴 ㉑ [${label}] 장부도 sent 를 그대로 적는다`, entry.sent === sent, `${entry.sent}`)
-      check(`🔴 ㉑ [${label}] 종류가 ${wantKind} 다`, entry.kind === wantKind, entry.kind)
-      check(`  ㉑ [${label}] 장부에서 다시 읽어도 같은 종류다`, QN.entryKind(entry) === wantKind, QN.entryKind(entry))
-    }
-    /** 🔴 말하지 않은 경로는 안 보낸 것으로 센다 — 상한이 사라지지 않게 */
-    const silent = QN.recordFailure({ entry: null, now: 1, reasons: ['QA_FAIL: 문장 오류'] })
-    check('🔴 ㉑ sent 를 말하지 않으면 내용 실패로 센다 (상한 유지)',
-      silent.sent === false && silent.attempts === 1, `sent=${silent.sent} attempts=${silent.attempts}`)
+    check('🔴 ㉑ INFRA 결말은 막지 않는다', QN5.deliveryHoldsFetch(infraEntry, fpB) === null,
+      JSON.stringify(QN5.deliveryHoldsFetch(infraEntry, fpB)))
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
@@ -2555,6 +2522,133 @@ console.log('\n㉒ 죽은 업로드 코드를 지웠다 — 이미지 경로는 
   check('  ㉒ 이미지 크기 계약이 그대로다',
     Number.isFinite(HERO.HERO_WIDTH) && Number.isFinite(HERO.HERO_HEIGHT),
     `${HERO.HERO_WIDTH}×${HERO.HERO_HEIGHT}`)
+}
+
+console.log('\n㉓ 자동화 프로필 신원 — 사람 창으로는 절대 돌지 않는다')
+{
+  /**
+   * 🔴 **2026-09-28 실측.** 자동화가 쓰던 `soransoran-chatgpt` 의 실제 신원은
+   *    `내 Chrome` · `mogoyongseok@gmail.com` 이었다. 소란소란 사람용 프로필
+   *    (`Profile 9` · `용석 (소란 소란)` · `soransoran.community@gmail.com`)도,
+   *    자동화 전용도 아니었다. **엉뚱한 계정으로 글을 보내는 것은 조용한 사고다.**
+   */
+  const AP = await import('./lib/chatgpt-automation-profile.mjs')
+  const okDir = AP.AUTOMATION_PROFILE_DIR
+  const okPort = AP.AUTOMATION_CDP_PORT
+  const okMarker = { schemaVersion: 1, purpose: 'soransoran-chatgpt-automation', cdpPort: okPort }
+  const okLines = [`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=${okDir} --remote-debugging-port=${okPort} https://chatgpt.com/`]
+  const okPages = [{ type: 'page', url: 'https://chatgpt.com/' }]
+  const base = {
+    profileDir: okDir, port: okPort, marker: okMarker, markerMode: 0o600, dirMode: 0o700,
+    commandLines: okLines, pages: okPages, portInUse: true,
+  }
+  const j = (over) => AP.judgeAutomationProfile({ ...base, ...over })
+
+  /** 반례 1 — 사람용 Profile 9 */
+  // 🔴 이 시험 파일은 운영 HOME 을 읽지 않는다 — 금지 경로는 **모듈이 알려 준다**
+  const p9 = AP.FORBIDDEN_PROFILE_DIRS.find((d) => /Profile 9$/.test(d))
+  const r1 = j({ profileDir: p9 })
+  /**
+   * 🔴 **왜 사유 문장까지 보는가.** 뒤에 "자동화 전용 폴더가 아니다" 라는 일반 검사가
+   *    또 있어서, 금지 목록을 지워도 결과는 똑같이 차단이다 — 그러면 금지 목록은
+   *    **죽은 게이트**가 된다(변이로 확인). 운영자가 읽을 사유가 달라지므로 그것을 고정한다.
+   *    "사람용 프로필이라 막혔다" 와 "폴더가 다르다" 는 대처가 다른 말이다.
+   */
+  check('🔴 ㉓[1] 사람용 Profile 9 → 차단', r1.ok === false && r1.code === AP.MISMATCH, `${r1.code} — ${r1.why}`)
+  check('🔴 ㉓[1] 사유가 사람용 프로필임을 말한다', /사람용·옛 프로필/.test(r1.why ?? ''), r1.why)
+
+  /** 반례 2 — 옛 자동화 폴더 */
+  const old = AP.FORBIDDEN_PROFILE_DIRS.find((d) => /soransoran-chatgpt$/.test(d))
+  const r2 = j({ profileDir: old })
+  check('🔴 ㉓[2] 옛 soransoran-chatgpt → 차단', r2.ok === false && r2.code === AP.MISMATCH, `${r2.code} — ${r2.why}`)
+  check('🔴 ㉓[2] 사유가 옛 프로필임을 말한다', /사람용·옛 프로필/.test(r2.why ?? ''), r2.why)
+
+  /** 반례 3 — 새 프로필이지만 표식 없음 */
+  const r3 = j({ marker: null, markerMode: null, dirMode: null })
+  check('🔴 ㉓[3] 표식 없음 → 차단', r3.ok === false && /표식/.test(r3.why), r3.why)
+
+  /** 반례 4 — 새 프로필인데 ChatGPT 가 아닌 page */
+  const r4 = j({ pages: [{ type: 'page', url: 'https://hoohootv1.org/watch/drama/4145' }] })
+  check('🔴 ㉓[4] 비-ChatGPT 페이지 → 차단', r4.ok === false && /ChatGPT 가 아닌/.test(r4.why), r4.why)
+
+  /** 반례 5 — 정확한 프로필 + 표식 + ChatGPT page → 통과 */
+  const r5 = j({})
+  check('🔴 ㉓[5] 정확한 프로필+표식+ChatGPT → 통과', r5.ok === true, r5.why ?? JSON.stringify(r5.checked))
+
+  /** 반례 6 — 다른 프로세스가 9344 를 쓰고 있다 */
+  const r6 = j({ commandLines: [`/usr/bin/other --user-data-dir=/tmp/somewhere --remote-debugging-port=${okPort}`] })
+  check('🔴 ㉓[6] 다른 프로세스가 포트 사용 → 차단', r6.ok === false && /다른 프로세스/.test(r6.why), r6.why)
+
+  /** 🔴 곁가지 — 같은 폴더인데 포트가 다르면 붙지 않는다 */
+  const r7 = j({
+    portInUse: false,
+    commandLines: [`Google Chrome --user-data-dir=${okDir} --remote-debugging-port=9999`],
+  })
+  check('🔴 ㉓ 같은 폴더·다른 포트 → 차단', r7.ok === false && /포트가 다르다/.test(r7.why), r7.why)
+
+  /** 🔴 권한이 느슨하면 막는다 — 쿠키가 든 폴더다 */
+  check('🔴 ㉓ 표식 0644 → 차단', j({ markerMode: 0o644 }).ok === false, j({ markerMode: 0o644 }).why)
+  check('🔴 ㉓ 폴더 0755 → 차단', j({ dirMode: 0o755 }).ok === false, j({ dirMode: 0o755 }).why)
+
+  /** 🔴 표식을 사람 프로필에 붙여도 소용없다 */
+  const forced = AP.ensureAutomationProfile({ profileDir: p9 })
+  check('🔴 ㉓ 사람 프로필에는 표식을 만들지 않는다', forced.ok === false, forced.why)
+
+  /** 🔴 실제 probe 가 이 관문을 지난다 — 죽은 게이트가 아니다 */
+  const SESS = await import('./lib/chatgpt-session.mjs')
+  check('  ㉓ 세션이 전용 폴더를 쓴다', SESS.PROFILE_DIR === okDir, SESS.PROFILE_DIR)
+  check('  ㉓ 세션이 전용 포트를 쓴다', SESS.CDP_PORT === okPort, String(SESS.CDP_PORT))
+  const blocked = await SESS.probe({ verifyProfileFn: async () => ({ ok: false, code: AP.MISMATCH, why: '시험: 신원 불일치' }) })
+  check('🔴 ㉓ 신원이 틀리면 probe 가 즉시 멈춘다',
+    blocked.status === AP.MISMATCH, `${blocked.status} — ${blocked.errorDetail}`)
+  check('🔴 ㉓ 그 실패는 회차 전역 실패다 (한 후보만 건너뛰지 않는다)',
+    SESS.isFatal(AP.MISMATCH) === true, String(SESS.isFatal(AP.MISMATCH)))
+  const FK23 = await import('./lib/magazine-failure-kind.mjs')
+  const k23 = FK23.classifyFailure({ code: AP.MISMATCH, message: '신원 불일치', sent: false })
+  check('🔴 ㉓ 신원 실패는 원고 탓이 아니다 (INFRA)', k23.kind === 'INFRA', k23.kind)
+}
+
+console.log('\n㉔ 시험 폴더 주입은 시험 모드에서만 열린다')
+{
+  /**
+   * 🔴 폴더를 갈아끼우는 손잡이가 운영에서 켜지면 자동화가 **엉뚱한 폴더의 원고**를
+   *    읽고 쓴다. 로그만 보면 정상이라 알아채기 어렵다.
+   */
+  const LOAD = await import('./lib/magazine-load.mjs')
+  const r1 = LOAD.resolveDraftsDir({ SORAN_MAGAZINE_DRAFTS_DIR: '/tmp/x' })
+  check('🔴 ㉔ TEST_MODE 없이 주입 → 차단', r1.ok === false && r1.code === 'DRAFTS_DIR_INJECTION_BLOCKED', r1.why)
+  const r2 = LOAD.resolveDraftsDir({ SORAN_MAGAZINE_DRAFTS_DIR: '/tmp/x', SORAN_MAGAZINE_TEST_MODE: '1' })
+  check('🔴 ㉔ TEST_MODE=1 이면 허용', r2.ok === true && r2.injected === true, r2.dir)
+  const r3 = LOAD.resolveDraftsDir({})
+  check('  ㉔ 안 주면 저장소 폴더', r3.ok === true && r3.injected === false, r3.dir)
+
+  /** 🔴 실제 자식 프로세스가 **종료 코드 2** 로 끝난다 — 조용히 기본값으로 가지 않는다 */
+  const { spawnSync } = await import('node:child_process')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-inject-'))
+  try {
+    const run = (env) => spawnSync(process.execPath,
+      ['scripts/magazine-webui-runner.mjs', '--fetch-run', '--dry-run'],
+      { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T, ...env } })
+    const bad = run({ SORAN_MAGAZINE_DRAFTS_DIR: T })
+    check('🔴 ㉔ 운영에서 주입되면 실제 명령이 non-zero', bad.status !== 0, `exit ${bad.status}`)
+    check('🔴 ㉔ 그 사유를 말한다',
+      /DRAFTS_DIR_INJECTION_BLOCKED/.test(`${bad.stdout}${bad.stderr}`), `${bad.stderr}`.slice(0, 120))
+    check('🔴 ㉔ 파일을 하나도 건드리지 않았다고 말한다',
+      /파일을 하나도 읽거나 쓰지 않았다/.test(`${bad.stdout}${bad.stderr}`), '문구 없음')
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+
+  /** 🔴 launchd plist·운영 명령에 두 변수가 없다 */
+  /** 🔴 실제 위치에서 읽는다 — 없는 폴더를 뒤지면 "0개 통과" 라는 공허한 초록이 뜬다 */
+  const plists = spawnSyncTop('git', ['ls-files', '--', 'docs/operations/launchd'])
+    .split('\n').filter((f) => /\.plist(\.template)?$/.test(f))
+  check('  ㉔ 검사할 launchd 템플릿을 실제로 찾았다', plists.length > 0, `${plists.length}개`)
+  const leaked = plists.filter((f) => /SORAN_MAGAZINE_(DRAFTS_DIR|TEST_MODE)/.test(fs.readFileSync(path.join(process.cwd(), f), 'utf8')))
+  check('🔴 ㉔ launchd plist 에 시험 변수가 없다', leaked.length === 0,
+    leaked.join(', ') || `검사한 plist ${plists.length}개`)
+  const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'))
+  const badScripts = Object.entries(pkg.scripts ?? {})
+    .filter(([, v]) => /SORAN_MAGAZINE_DRAFTS_DIR/.test(String(v)))
+  check('🔴 ㉔ package.json 운영 명령에도 없다', badScripts.length === 0, badScripts.map(([k]) => k).join(', ') || '0건')
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)
