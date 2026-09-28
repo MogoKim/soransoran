@@ -155,7 +155,7 @@ const rows: SnapshotRow[] = []
 for (const label of desired.keys()) {
   const current = readInstalled(agentDir, label)
   const file = current === null ? null : `${label}.plist`
-  if (file !== null) writeFileSync(join(backupDir, file), current, { mode: 0o600 })
+  if (file !== null && current !== null) writeFileSync(join(backupDir, file), current, { mode: 0o600 })
   rows.push({ label, installed: current !== null, loaded: loaded(label), file })
 }
 writeFileSync(join(backupDir, 'manifest.json'), `${JSON.stringify({ createdAt: new Date().toISOString(), rows } satisfies Snapshot, null, 2)}\n`, { mode: 0o600 })
