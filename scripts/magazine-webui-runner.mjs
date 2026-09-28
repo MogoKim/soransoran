@@ -45,16 +45,14 @@ import {
   STATUS, SEVERITY, MESSAGE, PROFILE_DIR, PROFILE_SETUP_GUIDE,
 } from './lib/chatgpt-session.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
+import { readRunTargets, materialState, fetchTargets } from './lib/magazine-run-targets.mjs'
+import { writeFetchResults, fetchResultPath, todayKst } from './lib/magazine-fetch-result.mjs'
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 
-function todayKst() {
-  return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
-}
-
 /** producer 산출물을 읽는다. 없으면 없다고만 한다 — 이 스크립트가 만들지 않는다 */
-function loadRun(date) {
-  const file = join(RUNS_DIR, date, 'run.json')
+function loadRun(date, draftsDir = DRAFTS_DIR) {
+  const file = join(draftsDir, '_runs', date, 'run.json')
   if (!existsSync(file)) return null
   try {
     return JSON.parse(readFileSync(file, 'utf8'))
@@ -63,19 +61,36 @@ function loadRun(date) {
   }
 }
 
-/** 대상별로 무엇이 준비됐는지 본다. 원고가 이미 있으면 다시 만들 필요가 없다 */
-function inspectTargets(run) {
-  const slugs = (run?.selected ?? []).map((s) => (typeof s === 'string' ? s : s?.slug)).filter(Boolean)
-  return slugs.map((slug) => {
-    const dir = join(DRAFTS_DIR, slug)
-    return {
-      slug,
-      brief: existsSync(join(dir, 'brief.md')),
-      review: existsSync(join(dir, 'review.ts')),
-      draftMd: existsSync(join(dir, 'draft.md')),
-      articleDraft: existsSync(join(dir, 'article-draft.ts')),
-    }
-  })
+/**
+ * 대상별로 무엇이 준비됐는지 본다. 원고가 이미 있으면 다시 만들 필요가 없다.
+ *
+ * 🔴 **`selected` 만 보지 않는다** (2026-09-28 공급 0건).
+ *    `reusable` 을 빼고 읽으면 재료 17건이 있는 날에도 회수 대상 0건이 된다.
+ *    대상 계약은 `magazine-run-targets.mjs` 하나다 — 등록 경로와 같은 것을 쓴다.
+ */
+function inspectTargets(run, date, draftsDir = DRAFTS_DIR) {
+  const r = readRunTargets({ draftsDir, date })
+  const rows = r.ok
+    ? r.targets
+    // 🔴 run.json 을 못 읽었으면 넘겨받은 객체로라도 본다 — 조용히 0건으로 끝내지 않는다
+    : [...(run?.selected ?? []), ...(run?.reusable ?? [])]
+      .map((x) => (typeof x === 'string' ? x : x?.slug)).filter(Boolean)
+      .map((slug) => ({ slug, origin: 'selected', material: materialState(join(draftsDir, slug)) }))
+  const seen = new Set()
+  /**
+   * 🔴 **`material` 을 펴서 버리지 않는다.** 계약 함수(`fetchTargets`)는 `t.material.stage`
+   *    를 읽는다 — 평평하게 펴 버리면 조용히 0건이 된다. 표시용 필드만 덧붙인다.
+   */
+  return rows.filter((t) => !seen.has(t.slug) && seen.add(t.slug)).map((t) => ({
+    slug: t.slug,
+    origin: t.origin,
+    material: t.material,
+    brief: t.material.brief,
+    review: t.material.review,
+    draftMd: t.material.draftMd,
+    articleDraft: t.material.articleTs,
+    stage: t.material.stage,
+  }))
 }
 
 function nextActionFor(t) {
@@ -186,18 +201,21 @@ export const REGEN_PACKET_SCHEMA = 'regen-packet/2'
  *
  * @returns {{ok:true, path:string|null}|{ok:false, code:string, why:string}}
  */
-export function readRegenPacketArg(argv) {
-  const i = argv.indexOf('--regen-packet')
+export function readPathArg(argv, flag, code = `${flag.replace(/^--/, '').toUpperCase().replace(/-/g, '_')}_PATH_MISSING`) {
+  const i = argv.indexOf(flag)
   if (i === -1) return { ok: true, path: null }
   const next = argv[i + 1]
   if (next === undefined || next === null || String(next).trim() === '') {
-    return { ok: false, code: 'REGEN_PACKET_PATH_MISSING', why: '--regen-packet 뒤에 경로가 없다' }
+    return { ok: false, code, why: `${flag} 뒤에 경로가 없다` }
   }
   if (String(next).startsWith('--')) {
-    return { ok: false, code: 'REGEN_PACKET_PATH_MISSING',
-      why: `--regen-packet 뒤가 경로가 아니라 다른 옵션이다: ${next}` }
+    return { ok: false, code, why: `${flag} 뒤가 경로가 아니라 다른 옵션이다: ${next}` }
   }
   return { ok: true, path: String(next) }
+}
+
+export function readRegenPacketArg(argv) {
+  return readPathArg(argv, '--regen-packet', 'REGEN_PACKET_PATH_MISSING')
 }
 
 /**
@@ -295,7 +313,8 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
   }
 
   const prompt = [
-    '첨부한 brief.md 의 지시를 그대로 따라 최종 원고를 작성하세요.',
+    // 🔴 brief 는 파일이 아니라 이 메시지 아래에 그대로 들어간다 (첨부 경로 폐지 · 2026-09-28)
+    '아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요.',
     '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
     '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
     'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
@@ -346,9 +365,25 @@ function describeDraft(slug) {
 }
 
 /** 단건 CLI — 사람이 부르는 경로 */
-async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
+async function fetchOne(slug, { force = false, regenPacket = null, resultPath = null } = {}) {
   console.log('')
   console.log(`  원고 요청 — ${slug}`)
+
+  /**
+   * 🔴 **모든 종료 경로가 여기를 지난다.** 한 곳이라도 `process.exit` 를 직접 부르면
+   *    그 경로는 부모에게 아무 말도 하지 않는다 — 부모는 `sent` 를 모른 채 재전송한다.
+   *    기록 자체가 실패해도 회차는 멈추지 않되, **무엇을 못 적었는지는 말한다.**
+   */
+  const finishOne = (r, exitCode) => {
+    if (resultPath) {
+      try {
+        writeFetchResults(resultPath, { mode: 'fetch-one', results: [{ ...r, slug }], sentTotal: r.sent ? 1 : 0 })
+      } catch (e) {
+        console.error(`     🔴 회수 결과를 적지 못했다 — ${e.message}`)
+      }
+    }
+    process.exit(exitCode)
+  }
 
   /**
    * 🔴 **패킷 검사가 브라우저보다 앞이다.**
@@ -362,7 +397,7 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
       console.error(`  ⛔ ${pr.code} — ${pr.why}`)
       console.error('     한 글자도 보내지 않았다. (전송 0건)')
       console.error('')
-      process.exit(1)
+      finishOne({ status: 'failed', reason: pr.code, stage: 'packet', sent: false, errorDetail: pr.why }, 1)
     }
     console.log(`  0) 재생성 패킷 확인 — 실패 ${pr.packet.failures.length}건`)
   }
@@ -377,7 +412,8 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
     if (p.errorDetail) console.error(`     ${p.errorDetail}`)
     console.error('     한 글자도 보내지 않았다.')
     console.error('')
-    process.exit(1)
+    finishOne({ status: 'failed', reason: p.status, stage: 'connect', sent: false,
+      errorName: p.errorName ?? null, errorDetail: p.errorDetail ?? null }, 1)
   }
 
   console.log(`  2) 회수${force ? ' (--force — 기존 draft.md 를 덮어쓴다)' : ''}`)
@@ -385,7 +421,7 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
   if (r.status === 'skipped') {
     console.log(`     건너뜀 — ${r.reason === 'draft_exists' ? '이미 draft.md 가 있다 (덮어쓰려면 --force)' : 'brief.md 가 없다'}`)
     console.log('')
-    process.exit(r.reason === 'brief_missing' ? 1 : 0)
+    finishOne(r, r.reason === 'brief_missing' ? 1 : 0)
   }
   if (r.status === 'failed') {
     console.error(`     ⛔ ${describeFetchFailure(r)}`)
@@ -395,7 +431,7 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
       for (const x of r.invalid) console.error(`       · ${x.code}: ${x.why}`)
     }
     console.error('')
-    process.exit(1)
+    finishOne(r, 1)
   }
 
   const d = describeDraft(slug)
@@ -408,6 +444,8 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
   console.log('')
   console.log('  🔴 md-to-draft · batch-qa · register 는 실행하지 않았다.')
   console.log('')
+  // 🔴 성공도 적는다. 성공을 안 적으면 부모는 "결과가 없다" 를 실패로 읽는다.
+  finishOne(r, 0)
 }
 
 /**
@@ -420,24 +458,51 @@ async function fetchOne(slug, { force = false, regenPacket = null } = {}) {
  * 🔴 register 를 부르지 않는다. articles.ts 도 topic-queue.ts 도 건드리지 않는다.
  *    draft.md 까지가 이 명령의 종점이다.
  */
-async function fetchBatch({ date, dryRun, limit }) {
-  const run = loadRun(date)
-  const targets = inspectTargets(run)
+/**
+ * 🔴 `draftsDir` 는 **시험이 실제 이 함수를 돌리기 위한** 최소 주입점이다.
+ *    기본값은 운영 경로 그대로다 — 소스 문자열 검사로 대신하지 않기 위해 연다.
+ */
+export async function fetchBatch({ date, dryRun, limit, draftsDir = DRAFTS_DIR, resultPath = null }) {
+  /**
+   * 🔴 **일괄 회수도 같은 계약으로 끝난다.** 중간에 끊기든 전역 실패든,
+   *    돌려주기 전에 무엇을 보냈는지 적는다. dry-run 은 한 글자도 안 보내므로
+   *    기록도 남기지 않는다 — 안 보낸 회차를 "보낸 적 있음" 으로 오염시키지 않는다.
+   */
+  const finishBatch = (out) => {
+    if (resultPath && !dryRun) {
+      try {
+        writeFetchResults(resultPath, { date, mode: 'fetch-run', ...out })
+      } catch (e) {
+        console.log(`  🔴 회수 결과를 적지 못했다 — ${e.message}`)
+      }
+    }
+    return out
+  }
+  const run = loadRun(date, draftsDir)
+  const targets = inspectTargets(run, date, draftsDir)
 
   console.log('')
   console.log(`  원고 일괄 회수 — ${date}${dryRun ? ' (dry-run)' : ''}`)
   if (!run) {
     console.log('  producer 산출물이 없다 — 오늘 run.json 을 찾지 못했다')
     console.log('')
-    return { planned: [], results: [], sentTotal: 0 }
+    return finishBatch({ planned: [], results: [], sentTotal: 0 })
   }
-  console.log(`  producer ${run.status} · 재고 ${run.inventoryDays}일 · selected ${targets.length}건`)
+  console.log(`  producer ${run.status} · 재고 ${run.inventoryDays}일 · 대상 ${targets.length}건`)
   console.log('')
 
-  // 무엇을 보낼지 먼저 확정한다. dry-run 은 여기까지만 한다
+  /**
+   * 🔴 **조건을 다시 만들지 않는다** (Codex 재검토 2026-09-28).
+   *
+   *    앞판은 여기서 `t.draftMd ? … : !t.brief ? …` 로 자체 판정을 했다.
+   *    `review` 를 보지 않아, **대조할 `riskSentences` 가 없는 주제에도 ChatGPT 를 불렀다.**
+   *    회수 대상은 `fetchTargets()` 하나가 정한다 — 등록 경로와 같은 계약이다.
+   */
+  const fetchSet = new Set(fetchTargets(targets).map((t) => t.slug))
   const planned = targets.map((t) => ({
     slug: t.slug,
-    action: t.draftMd ? 'skip:draft_exists' : !t.brief ? 'skip:brief_missing' : 'fetch',
+    stage: t.stage,
+    action: fetchSet.has(t.slug) ? 'fetch' : `skip:${String(t.stage ?? 'UNKNOWN').toLowerCase()}`,
   }))
   for (const p of planned) {
     const mark = p.action === 'fetch' ? '→ 전송' : `– 건너뜀 (${p.action.split(':')[1]})`
@@ -451,7 +516,7 @@ async function fetchBatch({ date, dryRun, limit }) {
     console.log('')
     console.log('  🔴 dry-run — 한 글자도 보내지 않았다.')
     console.log('')
-    return { planned, results: [], sentTotal: 0 }
+    return finishBatch({ planned, results: [], sentTotal: 0 })
   }
 
   const results = []
@@ -467,7 +532,7 @@ async function fetchBatch({ date, dryRun, limit }) {
       console.log(`  ⛔ ${MESSAGE[p.status] ?? MESSAGE[STATUS.UNKNOWN]} — 한 글자도 보내지 않았다`)
       if (p.errorDetail) console.log(`     ${p.errorDetail}`)
       console.log('')
-      return { planned, results: [{ slug: '-', status: 'failed', reason: p.status, sent: false }], sentTotal: 0, fatal: p.status }
+      return finishBatch({ planned, results: [{ slug: '-', status: 'failed', reason: p.status, stage: 'connect', sent: false, errorDetail: p.errorDetail ?? null }], sentTotal: 0, fatal: p.status })
     }
   }
 
@@ -502,7 +567,7 @@ async function fetchBatch({ date, dryRun, limit }) {
   console.log('')
   console.log('  🔴 md-to-draft · batch-qa · register 는 실행하지 않았다.')
   console.log('')
-  return { planned, results, sentTotal, fatal }
+  return finishBatch({ planned, results, sentTotal, fatal })
 }
 
 /**
@@ -572,6 +637,19 @@ async function main() {
      *    "재생성하라" 고 적은 명령이 조용히 새 원고를 덮어썼다.
      *    값이 다른 `--옵션` 인 경우도 경로가 아니다.
      */
+    /**
+     * 🔴 **`--result-json` 도 값이 없으면 멈춘다.** `--regen-packet` 과 같은 이유다.
+     *    값이 빠진 채 `undefined` 로 흘러가면 기록이 **조용히 꺼진다** — 그러면
+     *    부모는 `sent` 를 모르고, 모르는 채로 재전송한다.
+     */
+    const rj = readPathArg(argv, '--result-json')
+    if (!rj.ok) {
+      console.error('')
+      console.error(`  ⛔ ${rj.code} — ${rj.why}`)
+      console.error('     한 글자도 보내지 않았다. (전송 0건)')
+      console.error('')
+      process.exit(1)
+    }
     const rp = readRegenPacketArg(argv)
     if (!rp.ok) {
       console.error('')
@@ -580,12 +658,27 @@ async function main() {
       console.error('')
       process.exit(1)
     }
-    return await fetchOne(slug, { force: argv.includes('--force'), regenPacket: rp.path })
+    return await fetchOne(slug, { force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path })
   }
   if (argv.includes('--fetch-run')) {
     const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : todayKst()
     const limitArg = argv.includes('--limit') ? Number(argv[argv.indexOf('--limit') + 1]) : null
-    const r = await fetchBatch({ date, dryRun: argv.includes('--dry-run'), limit: limitArg })
+    const rj = readPathArg(argv, '--result-json')
+    if (!rj.ok) {
+      console.error('')
+      console.error(`  ⛔ ${rj.code} — ${rj.why}`)
+      console.error('     한 글자도 보내지 않았다. (전송 0건)')
+      console.error('')
+      process.exit(1)
+    }
+    /**
+     * 🔴 옵션이 없으면 **표준 자리**에 적는다. 첫 회수의 `sent` 는 그날 하루 내내
+     *    쓰이는 사실이다 — 자동 등록 경로가 "이미 보낸 글" 을 알아야 재전송하지 않는다.
+     */
+    const r = await fetchBatch({
+      date, dryRun: argv.includes('--dry-run'), limit: limitArg,
+      resultPath: rj.path ?? fetchResultPath(date),
+    })
     // 전역 실패만 종료 코드 1 — 개별 실패는 나머지가 성공했을 수 있다
     process.exit(r.fatal ? 1 : 0)
   }
@@ -604,7 +697,7 @@ async function main() {
   const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : todayKst()
 
   const run = loadRun(date)
-  const targets = inspectTargets(run)
+  const targets = inspectTargets(run, date)
 
   let access = { status: null, severity: null, message: null }
   if (wantProbe) {

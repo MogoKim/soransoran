@@ -41,6 +41,10 @@ import { gate, progress, heroPlan, paths } from './lib/magazine-auto-lane.mjs'
 import { resolveHeroBrief } from './lib/magazine-hero-brief.mjs'
 import { isAutoLaneEligible } from './lib/magazine-validation-profile.mjs'
 import { attemptRegeneration, clearRegen, MAX_REGEN_CALLS } from './lib/magazine-regen.mjs'
+import { PACKET_DIR } from './lib/magazine-regen.mjs'
+import { readFetchResults, fetchResultFor, removeFetchResults, fetchResultPath, todayKst } from './lib/magazine-fetch-result.mjs'
+import { classifyFailure } from './lib/magazine-failure-kind.mjs'
+import { describeFetchFailure } from './magazine-webui-runner.mjs'
 import { fingerprintOf } from './lib/magazine-quarantine.mjs'
 import { heroFilePath } from './lib/magazine-hero.mjs'
 
@@ -132,14 +136,55 @@ function run(file, args, { json = false } = {}) {
  * 🔴 **기존 ChatGPT 웹 UI 경로 어댑터.**
  *    새 API 를 부르지 않는다. 지금 쓰는 그 스크립트에 **실패 패킷 경로만** 더 준다.
  */
-export function webuiRegenRunner({ slug, packetPath }, { runFn = run } = {}) {
-  const r = runFn(WEBUI, ['--fetch', slug, '--force', '--regen-packet', packetPath])
-  if (r.code !== 0) {
-    const why = /login_required/i.test(r.stdout + r.stderr) ? 'ChatGPT login_required' : '재생성 회수 실패'
-    // 🔴 마지막 줄을 그대로 쓰면 자식이 스택을 뱉고 죽었을 때 `Node.js v…` 만 남는다
-    return { ok: false, why: `${why} — ${meaningfulLine(r.stderr || r.stdout)}` }
+export function webuiRegenRunner({ slug, packetPath }, { runFn = run, resultDir = PACKET_DIR } = {}) {
+  /**
+   * 🔴 **기계가 읽을 값은 기계용 파일로 받는다** (2026-09-28 · Codex P0-2).
+   *    앞판은 자식의 **사람용 출력**을 `/전송\s*1건/` 로 긁었다. 문구를 한 글자만
+   *    바꿔도 `sent` 가 `false` 로 뒤집히고, 그러면 **같은 brief 를 다시 보낸다.**
+   *    자식이 JSON 에 적고 여기서 읽는다.
+   */
+  const resultPath = join(resultDir, `regen-result-${slug}-${process.pid}.json`)
+  let r
+  try {
+    r = runFn(WEBUI, ['--fetch', slug, '--force', '--regen-packet', packetPath, '--result-json', resultPath])
+  } finally { /* 읽기 전에는 지우지 않는다 */ }
+
+  const structured = readFetchResults(resultPath)
+  const row = structured.ok ? fetchResultFor(structured.body, slug) : null
+  removeFetchResults(resultPath)
+
+  if (r.code === 0 && row?.status === 'ok') return { ok: true, sent: true, resultSource: 'file' }
+  if (r.code === 0) {
+    // 종료 코드는 0인데 결과가 없다 — 모름이다. 성공으로 세지 않는다.
+    return { ok: true, sent: Boolean(row?.sent), resultSource: structured.ok ? 'file' : 'exitcode' }
   }
-  return { ok: true }
+
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
+  const why = /login_required/i.test(out) ? 'ChatGPT login_required' : '재생성 회수 실패'
+  const line = meaningfulLine(r.stderr || r.stdout)
+  if (row) {
+    /**
+     * 🔴 `reason`·`stage`·`errorName`·`errorDetail` 을 **그대로** 올린다.
+     *    여기서 문장으로 뭉개면 상위 분류(`classifyFailure`)가 다시 추측해야 한다.
+     */
+    return {
+      ok: false, sent: row.sent, resultSource: 'file',
+      reason: row.reason, stage: row.stage,
+      errorName: row.errorName, errorDetail: row.errorDetail,
+      why: `${why} — ${describeFetchFailure(row)}`,
+    }
+  }
+  /**
+   * 🔴 **파일이 없으면 `sent` 를 모른다.** 자식이 기록 전에 죽었다는 뜻이다.
+   *    모름을 `false` 로 낮추면 재전송하고, `true` 로 올리면 멀쩡한 재시도를 막는다.
+   *    그래서 **모름 그대로** 올린다 — 상위가 DELIVERY_UNCERTAIN 으로 다룬다.
+   */
+  return {
+    ok: false, sent: null, resultSource: 'missing',
+    reason: 'REGEN_RESULT_MISSING', stage: null,
+    errorName: null, errorDetail: structured.why ?? null,
+    why: `${why} — ${line} (회수 결과 없음: ${structured.why})`,
+  }
 }
 
 /**
@@ -258,8 +303,35 @@ export function drive(slug, opts, deps = {}) {
    */
   const laneProfile = isAutoLaneEligible(item).profile ?? 'STANDARD'
   let regenCalls = 0
+  /**
+   * 🔴 **첫 회수에서 이미 보낸 글은 다시 보내지 않는다** (2026-09-28 · P0-2).
+   *    `--fetch-run` 이 `sent=true` 로 끝났는데 응답을 못 받은 경우가 있다
+   *    (`response_timeout`). 그 글은 ChatGPT 대화에 **요청이 이미 쌓여 있다.**
+   *    여기서 재생성을 걸면 같은 brief 가 두 번 올라간다.
+   *
+   *    그래서 재생성 **전에** 그날 회수 결과를 읽고, 전송불명이면 시도 자체를 0으로 둔다.
+   *    이것은 횟수를 쓰지 않는다 — 원고가 틀린 것이 아니기 때문이다.
+   */
+  const firstFetch = (() => {
+    if (deps.firstFetchResult !== undefined) return deps.firstFetchResult
+    const f = readFetchResults(deps.fetchResultPath ?? fetchResultPath(todayKst()))
+    return f.ok ? fetchResultFor(f.body, slug) : null
+  })()
+  const alreadySent = firstFetch
+    ? classifyFailure({
+      code: firstFetch.reason, stage: firstFetch.stage,
+      message: [firstFetch.errorName, firstFetch.errorDetail].filter(Boolean).join(' · '),
+      sent: firstFetch.sent,
+    })
+    : null
+
   const regenOnce = (stage, failures) => {
     if (!write) return { ok: false, code: 'DRY_RUN', why: 'dry-run — 재생성하지 않는다' }
+    if (firstFetch && firstFetch.status !== 'ok' && alreadySent?.kind === 'DELIVERY_UNCERTAIN') {
+      const why = `첫 회수에서 이미 전송됐다 (${firstFetch.stage ?? '-'} ${firstFetch.reason ?? '-'}) — 다시 보내지 않는다`
+      add(stage, 'blocked', `[DELIVERY_UNCERTAIN] 재생성 건너뜀: ${why}`)
+      return { ok: false, code: 'REGEN_SKIPPED_ALREADY_SENT', kind: 'DELIVERY_UNCERTAIN', why, sent: true }
+    }
     // 🔴 재생성 전후로 원고가 실제로 바뀌었는지 본다
     const fp = draftFingerprint ?? (() => {
       try { return fingerprintOf(readFileSync(p.draftMd, 'utf8')) } catch { return null }
@@ -269,7 +341,15 @@ export function drive(slug, opts, deps = {}) {
       ...(quarantinePath ? { quarantinePath } : {}),
       ...(packetDir ? { packetDir } : {}) })
     regenCalls = rr.regenCalls ?? regenCalls
-    if (!rr.ok) { add(stage, 'blocked', `재생성 중단: ${rr.code} — ${rr.why}`); return rr }
+    if (!rr.ok) {
+      /**
+       * 🔴 인프라·전송불명은 **원고 문제가 아니다.** 사유에 그 사실을 적어
+       *    장부와 다음 회차가 같은 판정을 하게 한다.
+       */
+      const tag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
+      add(stage, 'blocked', `${tag}재생성 중단: ${rr.code} — ${rr.why}`)
+      return rr
+    }
     add(stage, 'ok', `재생성 ${rr.regenCalls}/${MAX_REGEN_CALLS} — 실패 패킷 전달 후 원고 회수`)
     // 🔴 회수된 draft.md 를 다시 변환한다. 변환 없이 QA 를 돌리면 옛 원고를 본다.
     const c = runStep(MD2DRAFT, ['--in', p.draftMd, '--out', p.articleTs])

@@ -42,6 +42,8 @@ export const QUARANTINE_PATH = join(
  *    실측한 두 건은 **구조적 실패**였다 — 제목 형태·1인칭·description 길이는
  *    다시 돌린다고 달라지지 않는다. 한 번 더 확인하고 빼는 것으로 충분하다.
  */
+import { classifyFailure, consumesAttempt, cooldownFor } from './magazine-failure-kind.mjs'
+
 export const MAX_ATTEMPTS = 2
 
 /**
@@ -102,6 +104,24 @@ export function judgeQuarantine({ entry, fingerprint = null, now, maxAttempts = 
   if (!entry || !Number.isFinite(entry.attempts)) {
     return { skip: false, code: 'CLEAR', message: '격리 기록 없음' }
   }
+  /**
+   * 🔴 **인프라 실패는 긴 격리의 근거가 아니다** (2026-09-28).
+   *    `[attach] upload_timeout` 같은 실패로 5~7일을 묶으면, 브라우저를 고쳐도
+   *    공급이 돌아오지 않는다. 원고가 틀린 것이 아니므로 **짧은 backoff** 만 둔다.
+   *    🔴 과거 장부 행을 고치지 않는다 — **읽어서 유효 상태를 파생**할 뿐이다.
+   */
+  const kind = entryKind(entry)
+  if (kind !== 'CONTENT') {
+    const age = now - (entry.lastAt ?? 0)
+    const wait = cooldownFor(kind, cooldownMs)
+    if (age >= wait) {
+      return { skip: false, code: 'INFRA_COOLED', message: `인프라 실패 — backoff 지나 다시 본다 (${kind})` }
+    }
+    return {
+      skip: true, code: 'INFRA_BACKOFF',
+      message: `인프라 실패라 짧게 쉰다 (${kind}) — ${Math.ceil((wait - age) / 60000)}분 뒤 다시 본다`,
+    }
+  }
   if (entry.attempts < maxAttempts) {
     return { skip: false, code: 'RETRYING', message: `막힌 적 ${entry.attempts}회 — ${maxAttempts}회까지는 다시 시도한다` }
   }
@@ -123,13 +143,32 @@ export function judgeQuarantine({ entry, fingerprint = null, now, maxAttempts = 
   }
 }
 
+/**
+ * 🔴 **기록된 사유에서 종류를 파생한다.** 옛 행에는 `kind` 가 없다 —
+ *    그래도 사유 문장으로 판정한다. 장부를 손으로 고치지 않기 위해서다.
+ */
+export function entryKind(entry) {
+  if (!entry) return 'CONTENT'
+  if (entry.kind) return entry.kind
+  const text = (entry.reasons ?? []).join(' | ')
+  return classifyFailure({ message: text, sent: Boolean(entry.sent) }).kind
+}
+
 /** 실패를 한 번 센 뒤의 새 기록. **기존 객체를 고치지 않는다** */
-export function recordFailure({ entry, fingerprint = null, now, reasons = [] }) {
+export function recordFailure({ entry, fingerprint = null, now, reasons = [], kind = null, sent = false }) {
   const prev = entry && Number.isFinite(entry.attempts) ? entry : { attempts: 0 }
   // 🔴 원고가 바뀌었으면 횟수를 처음부터 센다 — 고친 원고에 옛 실패를 얹지 않는다
   const changed = fingerprint && prev.fingerprint && fingerprint !== prev.fingerprint
+  /**
+   * 🔴 **인프라 실패는 attempts 를 올리지 않는다.** 원고가 틀린 횟수를 세는 칸이기 때문이다.
+   *    대신 종류와 시각을 남겨 backoff 가 그것을 읽게 한다.
+   */
+  const resolved = kind ?? classifyFailure({ message: reasons.join(' | '), sent }).kind
+  const bump = consumesAttempt(resolved) ? 1 : 0
   return {
-    attempts: (changed ? 0 : prev.attempts) + 1,
+    kind: resolved,
+    sent: Boolean(sent),
+    attempts: (changed ? 0 : prev.attempts) + bump,
     lastAt: now,
     fingerprint,
     reasons: reasons.slice(0, 4),

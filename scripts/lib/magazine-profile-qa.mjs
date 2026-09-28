@@ -19,7 +19,20 @@ const FORBIDDEN = {
     { code: 'MED_GUARANTEE', label: '효과 보장', re: /반드시 (좋아|나아)|완치(됩니다|된다)|100\s*% ?(효과|낫)/ },
   ],
   FINANCIAL: [
-    { code: 'FIN_RETURN_GUARANTEE', label: '수익·원금 보장', re: /(수익|원금)(을|이) ?보장|무조건 (이익|수익)|손해 ?(는)? ?없습니다/ },
+    /**
+     * 🔴 **방향을 본다** (2026-09-28 오탐).
+     *    앞판 정규식 `(수익|원금)(을|이) ?보장` 은 두 가지를 동시에 틀렸다:
+     *      ① `원금이 보장되는 상품이 **아닙니다**` 를 보장으로 잡았다 — 정반대 뜻이다.
+     *      ② `원금이 **반드시** 보장됩니다` 는 사이에 부사가 끼어 **아예 못 잡았다**.
+     *    넓게 잡고 **부정 범위**로 가른다. 키워드를 지우거나 금융 검사를 완화하지 않는다.
+     */
+    {
+      code: 'FIN_RETURN_GUARANTEE', label: '수익·원금 보장',
+      re: /(수익|원금|이익)[^.!?]{0,24}?보장|무조건\s*(이익|수익)/,
+      negatable: true,
+    },
+    /** 🔴 이 문장은 **부정 자체가 주장**이다 — 부정 예외를 주지 않는다 */
+    { code: 'FIN_NO_LOSS_CLAIM', label: '손실 없음 단정', re: /손해\s*(는)?\s*없습니다|손실\s*(은|이)?\s*없습니다|손실\s*없이/ },
     { code: 'FIN_AMOUNT_CERTAIN', label: '수령액·세액 단정', re: /(수령액|세액|연금액|환급액)(은|이) ?(정확히|반드시|무조건)|받게 됩니다/ },
     { code: 'FIN_PRODUCT_PUSH', label: '특정 상품 정답화', re: /이 (상품|펀드|보험|카드)(을|를) (드세요|추천|가입하세요)|(가장|제일) 유리한 (상품|펀드)은/ },
     { code: 'FIN_RATE_PROMISE', label: '수익률 제시', re: /연\s*\d+(\.\d+)?\s*%\s*(수익|이자)|수익률(은|이)\s*\d/ },
@@ -55,7 +68,16 @@ const REQUIRED = {
   FINANCIAL: [
     { code: 'FIN_AUTHORITY_LINE', label: '소관 기관 확인 안내',
       re: /(공단|국세청|고용센터|금융감독원|소관 기관|해당 기관|홈택스|정부24)[\s\S]{0,40}(확인|문의|알아보|조회)/ },
-    { code: 'FIN_CONDITION_LINE', label: '조건에 따라 다르다', re: /(조건|상황|가입 기간|납입 이력)에 따라|경우에 따라 다르/ },
+    /**
+     * 🔴 **표현 하나만 요구하지 않는다** (2026-09-28 오탐).
+     *    앞판은 `(조건|상황|가입 기간|납입 이력)에 따라` 만 봤다. 실제 원고는
+     *    "시점과 방법에 따라 세금이 달라질 수 있어" · "사람마다 다릅니다" 처럼
+     *    **가변성을 충분히 말하는데도** 표현이 달라 FAIL 했다.
+     *    뜻으로 본다 — `무엇에 따라/무엇마다` + `다르다/달라진다`.
+     *    🔴 가변성 문장이 **아예 없으면** 그대로 FAIL 이다. 완화가 아니라 정정이다.
+     */
+    { code: 'FIN_CONDITION_LINE', label: '조건에 따라 다르다',
+      re: /(에 따라|마다|경우에|상황에|조건에)[\s\S]{0,40}?(다릅니다|다르다|다르니|다른|달라질|달라집니다|갈립니다|차이가)/ },
   ],
   SENSITIVE: [
     { code: 'SEN_VARIES_LINE', label: '경험 차이 문장', re: /사람마다|저마다|다를 수 있|정답(은|이) 없/ },
@@ -159,7 +181,13 @@ export function runProfileQA({ profile, title = '', bodyText = '' }) {
 
   // ① 금지 패턴 — 공통 + 프로필
   for (const rule of [...COMMON_FORBIDDEN, ...(FORBIDDEN[profile] ?? [])]) {
-    const hit = sentences.find((s) => rule.re.test(s))
+    const hit = sentences.find((s) => {
+      const m = rule.re.exec(s)
+      if (!m) return false
+      // 🔴 부정 가능한 규칙만 방향을 본다. 부정 자체가 주장인 규칙은 그대로 막는다.
+      if (rule.negatable && isNegatedClaim(s, m)) return false
+      return true
+    })
     if (hit) add(rule.code, rule.label, hit)
   }
   checked.push(`금지 ${COMMON_FORBIDDEN.length + (FORBIDDEN[profile] ?? []).length}종 대조`)
@@ -210,4 +238,63 @@ export function runProfileQA({ profile, title = '', bodyText = '' }) {
 const VALID = new Set(['STANDARD', 'MEDICAL', 'FINANCIAL', 'SENSITIVE'])
 
 /** 🔴 검사 목록을 밖에서도 읽을 수 있게 — brief 가 같은 목록을 원고 지시서에 싣는다 */
+/**
+ * 🔴 **부정 범위 판정.** 잡힌 표현 **뒤**에 그 주장을 뒤집는 말이 오면 주장이 아니다.
+ *
+ *    `원금이 보장되는 상품이 아닙니다`  → 보장을 **부정**한다 → 통과
+ *    `원금이 반드시 보장됩니다`          → 부정이 없다 → 막는다
+ *
+ *    🔴 앞이 아니라 **뒤**만 본다. 한국어는 서술어가 뒤에 오고, 부정도 서술어에 붙는다.
+ *    🔴 문장 경계를 넘지 않는다. 다음 문장의 부정어를 끌어오면 반대로 새는 판정이 된다.
+ */
+/**
+ * 🔴 **`수 없습니다` 도 부정이다.** "누구도 수익을 보장할 수 없습니다" 는
+ *    보장한다는 말의 정반대인데, 앞판은 이것을 보장 주장으로 걸었다.
+ *    금융 글에서 가장 자주 쓰는 안전 문장을 막으면 멀쩡한 원고가 격리된다.
+ *    🔴 `없` 을 통째로 넣지는 않는다 — "손실이 없습니다" 는 별도 규칙이 잡을 **주장**이다.
+ */
+const NEGATION_TAIL = /(아닙니다|아니다|아니에요|아니라|아니며|아니고|아닌|않습니다|않는다|않아요|않으며|않고|못합니다|어렵습니다|보장하지|보장되지|수\s*없(습니다|다|어요|으며|고))/
+
+/**
+ * 🔴 **절 단위로 가른다** (Codex 재검토 2026-09-28).
+ *
+ *    문장 전체의 뒤를 보면 이런 문장이 통과한다:
+ *      `원금은 보장됩니다**만** 수익은 보장되**지 않습니다**`
+ *    앞절이 원금 보장을 **주장**하는데, 뒷절의 부정을 끌어와 면제해 버린다.
+ *    실제로는 원금 보장을 단정한 문장이므로 막아야 한다.
+ *
+ *    그래서 **연결어미에서 잘라** 잡힌 표현이 든 절만 본다.
+ *    `…만` · `…지만` · `…으나` · 쉼표 — 한국어에서 주장이 갈리는 자리다.
+ */
+const CLAUSE_SPLIT = /(?:니다만|어요만|아요만|하지만|지만|으나|,)\s*/
+
+export function clauseAt(sentence, index) {
+  const text = String(sentence)
+  let cursor = 0
+  for (const part of text.split(CLAUSE_SPLIT)) {
+    const start = text.indexOf(part, cursor)
+    const end = start + part.length
+    if (index >= start && index < end) return { text: part, start }
+    cursor = end
+  }
+  return { text, start: 0 }
+}
+
+/**
+ * 잡힌 표현 **뒤**에 그 주장을 뒤집는 말이 오면 주장이 아니다.
+ *
+ *    `원금이 보장되는 상품이 아닙니다`            → 부정 → 통과
+ *    `원금은 반드시 보장됩니다`                   → 부정 없음 → 막는다
+ *    `원금은 보장됩니다만 수익은 보장되지 않습니다` → **앞절에 부정 없음** → 막는다
+ *
+ * 🔴 앞이 아니라 뒤만 본다. 한국어는 서술어가 뒤에 오고 부정도 서술어에 붙는다.
+ * 🔴 절 경계를 넘지 않는다. 다른 절의 부정어를 끌어오면 반대로 새는 판정이 된다.
+ */
+export function isNegatedClaim(sentence, match) {
+  const at = match.index ?? 0
+  const clause = clauseAt(sentence, at)
+  const tail = clause.text.slice(at - clause.start + String(match[0]).length)
+  return NEGATION_TAIL.test(tail)
+}
+
 export const PROFILE_RULES = { FORBIDDEN, COMMON_FORBIDDEN, REQUIRED, SOURCE_TRIGGER }

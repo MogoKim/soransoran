@@ -25,7 +25,7 @@
  *    로그인 화면 스크린샷에는 계정명이 찍힌다. 불리언 플래그와 상태 코드만 남긴다.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, readlinkSync, mkdirSync, chmodSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readlinkSync, mkdirSync, chmodSync, writeFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -59,6 +59,127 @@ const CHATGPT_URL = 'https://chatgpt.com/'
  *    🔴 옛 선택자를 지우지 않는다. 되돌아올 수 있고, 둘 다 있어도 해는 없다.
  */
 export const COMPOSER_SELECTOR = '#prompt-textarea, [contenteditable="true"][role="textbox"]'
+
+/**
+ * 🔴 **문서를 받는 file input 을 고른다** (2026-09-28 실측).
+ *
+ *    ChatGPT 화면에는 file input 이 **3개**다. 실측(전용 프로필):
+ *      `accept="image/*,video/*"` · `accept="image/*"` · `accept=""`(제한 없음)
+ *
+ *    앞판은 `locator('input[type=file]').all()` 로 **첫 번째부터 시도하고 성공하면 멈췄다.**
+ *    `setInputFiles` 는 `accept` 를 검증하지 않으므로 **이미지 전용 input 에 .md 를 넣어도
+ *    예외가 나지 않는다.** 그래서 `attached=true` 가 되고 문서용 input 까지 가지 않았다.
+ *    ChatGPT 핸들러는 그 파일을 무시했고, 코드는 완료 신호를 60초 기다리다
+ *    `[attach] upload_timeout` 으로 끝났다 — 2026-09-28 회차의 4건이 이것이다.
+ *
+ *    🔴 무차별 순회를 하지 않는다. 엉뚱한 칸에 원고가 들어가는 사고를 만들 수 있다.
+ *       `accept` 가 비었거나 문서 확장자를 허용하는 input **하나**만 고른다.
+ */
+export function pickDocumentFileInput(inputs) {
+  const accepts = (a) => {
+    const v = String(a ?? '').trim()
+    if (!v) return true                       // 제한 없음 = 무엇이든 받는다
+    if (/image\/\*|video\/\*/.test(v) && !/text|\.md|\.txt|application/.test(v)) return false
+    return /text|\.md|\.txt|application|\*\/\*/.test(v)
+  }
+  return inputs.find((x) => accepts(x.accept))
+}
+
+/**
+ * 🔴 **업로드 완료 계약** (2026-09-28 실측).
+ *
+ *    실측에서 본 것:
+ *      +400ms  chip `brief.md`                      · spinner 1 → 업로드 중
+ *      +3000ms chip `brief(20260927-235049).md`     · spinner 0 → 완료
+ *
+ *    🔴 **ChatGPT 가 이름을 바꾼다.** 같은 이름이 이미 있으면 시각 도장을 붙인다.
+ *       그래서 "정확한 파일명" 을 그대로 기다리면 영원히 못 만난다.
+ *       대신 **어간과 확장자**로 본다 — `brief` 로 시작하고 `.md` 로 끝나는 chip.
+ *
+ *    🔴 `body.innerText.includes('brief')` 를 쓰지 않는다. 본문 어디에나 있을 수 있는
+ *       단어라 **첨부와 무관하게 참이 된다**(실측: 사이드바 대화 제목에 "brief" 가 있었다).
+ *       첨부에만 붙는 **제거 버튼의 aria-label** 을 본다.
+ *
+ *    완료 = ① 어간·확장자가 맞는 제거 버튼이 있다 ② 진행 표시 0 ③ 오류 0
+ */
+/**
+ * 🔴 **brief 를 파일로 붙이지 않는다 — 본문에 그대로 넣는다** (2026-09-28 · Codex P1).
+ *
+ *    2026-09-28 회차에서 막힌 6건 중 4건이 `[attach] upload_timeout` 이었다.
+ *    원고에는 아무 문제가 없었다. 업로드는 우리가 통제할 수 없는 단계다 —
+ *    파일 input 이 바뀌고, 칩 라벨이 바뀌고, 업로드가 조용히 멈춘다.
+ *    그때마다 공급이 0이 된다.
+ *
+ *    brief 는 **글자**다. 글자를 파일로 감쌌다가 다시 푸는 과정 전체가
+ *    없어도 되는 실패 지점이었다. 본문에 구분자와 함께 넣으면 업로드 단계가 사라진다.
+ *
+ * 🔴 **구분자는 눈에 띄고 본문에 없을 법한 것**이어야 한다. brief 안의 문장과
+ *    섞이면 어디까지가 지시인지 모델도 우리도 알 수 없다.
+ */
+export const BRIEF_BEGIN = '===== BRIEF 시작 (여기부터 끝까지가 작성 지시다) ====='
+export const BRIEF_END = '===== BRIEF 끝 ====='
+
+export function buildManuscriptMessage({ promptText, briefText }) {
+  return [promptText, '', BRIEF_BEGIN, String(briefText ?? '').trim(), BRIEF_END].join('\n')
+}
+
+/**
+ * 넣은 글이 **실제로 들어갔는지** composer 에서 다시 읽어 확인한다.
+ *
+ * 🔴 **보내기 전에 확인한다.** 긴 글은 조용히 잘린다 — 삽입이 중간에 끊기거나
+ *    에디터가 길이를 제한한다. 잘린 지시로 보내면 원고가 이상해지고,
+ *    우리는 "모델이 이상하다" 고 읽는다. 잘렸으면 **한 글자도 보내지 않는다.**
+ *
+ * 🔴 `includes` 하나로 끝내지 않는다. 시작만 들어가고 뒤가 잘린 경우가 제일 흔하다 —
+ *    끝 구분자와 **지정 문장 전부**를 같이 본다.
+ */
+export function judgeComposerReadback({ expected, actual, markers = [] }) {
+  const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim()
+  const a = norm(actual)
+  const e = norm(expected)
+  if (!a) return { ok: false, code: 'composer_empty', why: 'composer 가 비어 있다' }
+  if (!a.includes(norm(BRIEF_BEGIN))) return { ok: false, code: 'composer_no_begin', why: '시작 구분자가 없다' }
+  if (!a.includes(norm(BRIEF_END))) return { ok: false, code: 'composer_truncated', why: '끝 구분자가 없다 — 뒤가 잘렸다' }
+  const missing = markers.filter((m) => m && !a.includes(norm(m)))
+  if (missing.length) {
+    return { ok: false, code: 'composer_markers_missing', why: `지정 문장 ${missing.length}개가 안 들어갔다` }
+  }
+  const ratio = e.length ? a.length / e.length : 0
+  if (ratio < 0.95) return { ok: false, code: 'composer_short', why: `본문이 짧다 — ${a.length}/${e.length}자` }
+  /**
+   * 🔴 **더 긴 것도 실패다.** 앞 대화의 잔여 글자가 남아 있으면 우리가 쓰지 않은 문장이
+   *    같이 전송된다. 새 탭이면 비어 있어야 한다 — 아니면 우리가 모르는 상태다.
+   */
+  if (ratio > 1.15) return { ok: false, code: 'composer_dirty', why: `본문이 길다 — ${a.length}/${e.length}자` }
+  return { ok: true, ratio, length: a.length }
+}
+
+export const UPLOAD_DONE_CONTRACT = 'remove-chip + no-progress + no-error'
+/**
+ * 🔴 실측에서 완료까지 3초 안쪽이었다. 넉넉히 두되 **늘려서 해결하지 않는다** —
+ *    판정이 틀렸을 때 기다림을 늘리면 실패가 느려질 뿐이다.
+ */
+/**
+ * 🔴 본문 삽입은 업로드가 아니다 — 네트워크를 타지 않는다. 오래 기다릴 이유가 없고,
+ *    안 들어갔으면 **안 보내는 것**이 맞다. 시간을 늘려 초록을 만들지 않는다.
+ */
+export const COMPOSE_WAIT_MS = 15_000
+export const COMPOSE_POLL_MS = 300
+
+export const UPLOAD_WAIT_MS = 60_000
+export const UPLOAD_POLL_MS = 400
+
+/** 화면에서 읽어 판정한다. 이 함수는 **브라우저 안에서** 돌 문자열을 만들지 않는다 */
+export function judgeUploadState({ chips, progress, errors }, { stem, ext }) {
+  const match = (chips ?? []).find((n) => {
+    const base = String(n ?? '')
+    return base.toLowerCase().startsWith(stem.toLowerCase()) && base.toLowerCase().endsWith(ext.toLowerCase())
+  })
+  if ((errors ?? []).length) return { done: false, state: 'error', detail: errors.join(' / ').slice(0, 160) }
+  if (!match) return { done: false, state: 'no-chip' }
+  if ((progress ?? 0) > 0) return { done: false, state: 'uploading', detail: match }
+  return { done: true, state: 'done', detail: match }
+}
 
 /** 정본 선택자로 composer 를 잡는다 — 여러 개면 첫 번째 */
 export function composerLocator(page) {
@@ -684,33 +805,53 @@ export async function fetchManuscript({
     stage = 'composer'
     await page.waitForSelector(COMPOSER_SELECTOR, { timeout: 60000 })
 
-    // ── 첨부 ──
-    stage = 'attach'
-    const inputs = await page.locator('input[type=file]').all()
-    let attached = false
-    for (const input of inputs) {
-      try { await input.setInputFiles(briefPath); attached = true; break } catch { /* 다음 input */ }
-    }
-    if (!attached) return { ok: false, reason: 'attach_failed', stage, sent }
+    // ── 본문 작성 (🔴 첨부하지 않는다) ──
+    stage = 'compose'
+    /**
+     * 🔴 **`setInputFiles` 를 부르지 않는다.** brief 를 파일로 올리던 경로가
+     *    2026-09-28 공급 0건의 최대 원인이었다 (`upload_timeout` 4건).
+     *    글자는 글자로 넣는다 — 업로드라는 단계 자체를 없앤다.
+     */
+    const message = buildManuscriptMessage({ promptText, briefText: readFileSync(briefPath, 'utf8') })
+    await composerLocator(page).click()
+    await page.keyboard.insertText(message)
 
-    // ② 업로드 완료를 기다린다. 이걸 안 하면 제출이 통째로 무시된다
-    try {
-      await page.waitForFunction(() => {
-        const t = document.body.innerText || ''
-        return t.includes('brief') && !/업로드 중|Uploading/i.test(t)
-      }, null, { timeout: 60000 })
-    } catch { return { ok: false, reason: 'upload_timeout', stage, sent } }
+    /**
+     * 🔴 **보내기 전에 다시 읽는다.** 긴 글은 조용히 잘린다.
+     *    React 가 상태를 반영할 시간이 필요하므로 **한 번 보고 포기하지 않고** 폴링한다.
+     *    그래도 안 맞으면 **전송 0건으로 끝낸다** — 잘린 지시를 보내느니 안 보낸다.
+     */
+    let readback = { ok: false, code: 'composer_empty', why: '아직 읽지 못했다' }
+    const composeDeadline = Date.now() + COMPOSE_WAIT_MS
+    while (Date.now() < composeDeadline) {
+      const actual = await composerLocator(page).innerText().catch(() => '')
+      readback = judgeComposerReadback({ expected: message, actual, markers: requiredMarkers })
+      if (readback.ok) break
+      await page.waitForTimeout(COMPOSE_POLL_MS)
+    }
+    if (!readback.ok) {
+      return { ok: false, reason: readback.code, stage, sent,
+        errorDetail: `${readback.why} (한 글자도 보내지 않았다)` }
+    }
 
     // ── 전송 ──
     stage = 'send'
-    await composerLocator(page).click()
-    await page.keyboard.insertText(promptText) // ① 백틱 없음
-    await page.waitForTimeout(600)
+    await page.waitForTimeout(300)
 
     // ① Enter 를 쓰지 않는다
     const sendBtn = page.locator('[data-testid="send-button"], button[aria-label*="보내기"], button[aria-label*="Send"]').first()
     try { await sendBtn.click({ timeout: 15000 }) }
-    catch { return { ok: false, reason: 'send_button_missing', stage, sent } }
+    catch (e) {
+      /**
+       * 🔴 **`catch {}` 로 오류를 버리지 않는다** (2026-09-28).
+       *    버튼이 없는 것과, 있는데 가려진 것과, 눌렀는데 비활성인 것은 다 다르다.
+       *    코드 한 단어만 남기면 운영 로그로는 어느 쪽인지 알 수 없다 —
+       *    2026-09-27 의 `connect_failed` 와 같은 실수다.
+       */
+      return { ok: false, reason: 'send_button_missing', stage, sent,
+        errorName: e?.name ?? 'Error',
+        errorDetail: String(e?.message ?? '').split('\n')[0].slice(0, 200) }
+    }
     sent = true
 
     // ── 완료 대기 ──

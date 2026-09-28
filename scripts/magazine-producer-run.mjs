@@ -53,6 +53,7 @@ import { fileURLToPath } from 'node:url'
 import { preflight, preflightTools } from './lib/magazine-auto-git.mjs'
 import { readOutstanding } from './lib/magazine-outstanding.mjs'
 import { composeProducerMessage, runProducerFlow } from './lib/magazine-producer-flow.mjs'
+import { readFileSync } from 'node:fs'
 import { writeHandoff } from './lib/magazine-handoff.mjs'
 import { acquireLock, PRODUCER_LOCK_PATH } from './lib/magazine-auto-lock.mjs'
 import { buildMessage, send } from './lib/slack-notify.mjs'
@@ -149,6 +150,19 @@ const result = await runProducerFlow({
     checkGit: () => preflight({ exec }),
     checkOutstanding: () => readOutstanding({ exec }),
     runPlan: () => spawnStage([PLAN]),
+    /**
+     * 🔴 producer 가 쓴 run.json 을 읽어 **공급 상태**를 알려 준다.
+     *    selected 0 이어도 `reusable` 이 있으면 "할 일 없음" 이 아니다 (2026-09-28).
+     */
+    readSupply: () => {
+      try {
+        const j = JSON.parse(readFileSync(join(ROOT, 'drafts/magazine/_runs', kstDate(), 'run.json'), 'utf8'))
+        return {
+          selected: Array.isArray(j.selected) ? j.selected.length : null,
+          reusable: Array.isArray(j.reusable) ? j.reusable.length : 0,
+        }
+      } catch { return { selected: null, reusable: 0 } }   // 🔴 모르면 옛 경로 그대로 간다
+    },
     runBrief: () => spawnStage([BRIEF_AUTO, '--run', kstDate(), '--write']),
     runFetch: () => spawnStage([WEBUI, '--fetch-run']),
     notify: notifyOnce,

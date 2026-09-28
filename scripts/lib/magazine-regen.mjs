@@ -20,6 +20,22 @@ import {
   MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, saveQuarantine,
   recordRegenCall, regenBudget,
 } from './magazine-quarantine.mjs'
+import { classifyFailure, consumesAttempt } from './magazine-failure-kind.mjs'
+
+/**
+ * 🔴 **`sent` 없음과 `sent: null` 은 다르다** (2026-09-28).
+ *    `null` 은 runner 가 **"보냈는지 모른다" 고 말한 것**이다 — 자식이 결과를 적기 전에
+ *    죽은 경우다. 다시 보내지 않는 게 맞다.
+ *
+ *    그런데 필드 자체가 없는 것(`undefined`)까지 모름으로 삼키면
+ *    **모든 재생성 실패가 DELIVERY_UNCERTAIN 이 되어 재시도 상한이 사라진다** —
+ *    실패한 원고를 끝없이 다시 돌린다. 막는 기본값이 정상 경로를 막는 전형이다.
+ *    말하지 않은 경로는 **안 보낸 것**으로 세고, 상한 안에 둔다.
+ */
+export function sentOf(r) {
+  if (r && Object.prototype.hasOwnProperty.call(r, 'sent')) return r.sent
+  return false
+}
 
 export { MAX_REGEN_CALLS }
 
@@ -148,7 +164,47 @@ export function attemptRegeneration({
   finally { removePacket(packetPath) }
 
   if (!r?.ok) {
-    return { ok: false, code: 'REGEN_RUNNER_FAILED', why: r?.why ?? '재생성 경로 실패', regenCalls: bumped.regenCalls }
+    /**
+     * 🔴 **인프라 실패는 재생성 횟수를 먹지 않는다** (2026-09-28).
+     *    `[attach] upload_timeout` 으로 두 번 실패하면 원고가 멀쩡한데도 HOLD 가 됐다.
+     *    브라우저가 파일을 못 올린 것을 "이 글은 못 고친다" 로 적은 셈이다.
+     *    호출 **전에** 올려 둔 횟수를 여기서 되돌린다 — 중간에 죽는 경우를 대비해
+     *    먼저 올리는 설계는 그대로 두고, **분류가 끝난 뒤** 제자리로 돌린다.
+     *
+     * 🔴 `sent` 가 참이면 **다시 보내지 않는다.** 보냈는지 모르는 것과 안 보낸 것은 다르다.
+     */
+    /**
+     * 🔴 **구조화된 값을 그대로 넘긴다** (2026-09-28 · P0-2).
+     *    앞판은 `why` 문장 하나만 넘겼다 — 자식이 만든 `reason`·`stage`·`errorDetail`
+     *    을 버린 것이다. 그러면 분류기가 문장에서 다시 추측해야 하고,
+     *    `sent` 는 `Boolean()` 에 뭉개져 **모름이 "안 보냄" 으로 바뀌었다.**
+     */
+    const kind = classifyFailure({
+      code: r?.reason ?? 'REGEN_RUNNER_FAILED',
+      stage: r?.stage ?? null,
+      message: [r?.why, r?.errorName, r?.errorDetail].filter(Boolean).join(' · '),
+      sent: sentOf(r),
+    }).kind
+    if (!consumesAttempt(kind)) {
+      // 올려 둔 횟수를 되돌린다 — 최신 장부를 다시 읽어 덮어쓰기를 피한다
+      const back = readQuarantine(quarantinePath)
+      if (back.ok) {
+        const cur = back.store[slug] ?? {}
+        saveQuarantine({
+          ...back.store,
+          [slug]: { ...cur, kind, sent: sentOf(r), regenCalls: budget.used, lastRegenAt: now },
+        }, quarantinePath)
+      }
+      return {
+        ok: false,
+        code: kind === 'DELIVERY_UNCERTAIN' ? 'REGEN_DELIVERY_UNCERTAIN' : 'REGEN_INFRA_FAILED',
+        kind,
+        sent: sentOf(r),
+        why: `${kind === 'DELIVERY_UNCERTAIN' ? '보냈지만 응답을 확인하지 못했다 — 다시 보내지 않는다' : '인프라 실패 — 원고 문제가 아니다'}: ${r?.why ?? ''}`,
+        regenCalls: budget.used,
+      }
+    }
+    return { ok: false, code: 'REGEN_RUNNER_FAILED', kind, why: r?.why ?? '재생성 경로 실패', regenCalls: bumped.regenCalls }
   }
 
   /**
