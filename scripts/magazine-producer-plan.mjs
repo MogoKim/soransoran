@@ -112,6 +112,8 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
   }
 
   const eligible = []
+  /** 🔴 새로 만들 필요는 없지만 **내보낼 수 있는** 후보 */
+  const reusable = []
   for (const item of queue) {
     // 🔴 등급으로 레인을 가르지 않는다. 프로필을 정할 수 있으면 자동 레인이다.
     /**
@@ -130,7 +132,19 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
       continue
     }
     if (draftExists(item.slug)) {
-      skip(item, 'drafts/magazine/' + item.slug + ' 가 이미 있다')
+      /**
+       * 🔴 **"만들 필요 없음" 과 "후보 아님" 은 다르다** (2026-09-28 공급 0건).
+       *
+       *    앞판은 draft 폴더가 있으면 `skipped` 로 버렸다. 그런데 그 폴더에는
+       *    **이미 만들어 둔 brief·review·draft** 가 들어 있다 — 공급할 재료가 있는데
+       *    "후보가 없다" 고 보고한 것이다. 그날 25건 중 대부분이 이 사유로 빠져
+       *    selected 0 · 재고 0 이 됐고, producer 는 실패로 끝났다.
+       *
+       *    이제 **재사용 후보**로 따로 모아 handoff 에 실어 보낸다.
+       *    새로 만들 것이 없다는 뜻이지, 내보낼 것이 없다는 뜻이 아니다.
+       */
+      reusable.push({ ...item, validationProfile: lane.profile, why: '재료가 이미 있다 — 새로 만들 필요 없음' })
+      skip(item, 'drafts/magazine/' + item.slug + ' 가 이미 있다 (재사용 후보)')
       continue
     }
     if (item.publishWindow) {
@@ -187,7 +201,7 @@ export function selectItems({ queue, articles, today, produceCount, reviewCount 
    *    등급으로 주제를 가르지 않으므로 `reviewEligible` 에 아무것도 들어오지 않았고,
    *    이 블록은 빈 배열을 도는 죽은 코드였다. 호출부 호환을 위해 `review: []` 만 남긴다.
    */
-  return { selected, review: [], skipped }
+  return { selected, review: [], skipped, reusable }
 }
 
 // ── 작업 패키지 ────────────────────────────────────────────
@@ -509,7 +523,7 @@ function main() {
   const reviewCount = reviewCountFor(produceCount)
 
   const draftExists = (slug) => existsSync(join(DRAFTS_DIR, slug))
-  const { selected, review, skipped } = selectItems({
+  const { selected, review, skipped, reusable } = selectItems({
     queue, articles, today, produceCount, reviewCount, draftExists,
   })
 
@@ -542,6 +556,11 @@ function main() {
       packageWritten: false,
     })),
     skipped,
+    /**
+     * 🔴 **재사용 후보.** 새로 만들 필요는 없지만 내보낼 재료가 있는 주제다.
+     *    auto-register 가 이것을 보고 "할 일이 없다" 와 "이미 있다" 를 구분한다.
+     */
+    reusable,
     abortReason: null,
   }
 

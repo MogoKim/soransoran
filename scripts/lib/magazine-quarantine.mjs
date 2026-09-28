@@ -25,9 +25,13 @@
  * 🔴 **저장소 밖에 쓴다.** runtime 작업 트리는 깨끗해야 한다(write preflight).
  *    격리 기록이 추적 파일이면 매 회차 `DIRTY_TREE` 로 레인이 멈춘다.
  */
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync,
+  writeFileSync, writeSync,
+} from 'node:fs'
+import { homedir, hostname } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 
 /** 🔴 저장소 밖이다. runtime 을 더럽히지 않는다 */
@@ -42,6 +46,8 @@ export const QUARANTINE_PATH = join(
  *    실측한 두 건은 **구조적 실패**였다 — 제목 형태·1인칭·description 길이는
  *    다시 돌린다고 달라지지 않는다. 한 번 더 확인하고 빼는 것으로 충분하다.
  */
+import { classifyFailure, consumesAttempt, cooldownFor, sentOf, normalizeSent } from './magazine-failure-kind.mjs'
+
 export const MAX_ATTEMPTS = 2
 
 /**
@@ -86,6 +92,95 @@ export function fingerprintOf(input) {
 }
 
 // ─────────────────────────────────────────────────────────
+// 전송 사실 — 🔴 **slug 와 보낸 글자**에 붙는다. 회차·날짜에 붙지 않는다.
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **왜 회차 지문으로는 못 막는가** (2026-09-28 · 재검토 P0-1).
+ *
+ *    앞판은 회수 결과 파일을 `runId`(그 회차 목록의 지문)로 검증했다.
+ *    그런데 `runId` 는 **목록 전체**의 지문이다 — 아무 상관 없는 후보 하나가
+ *    `run.json` 에 추가되기만 해도 값이 바뀐다. 그러면 이미 보낸 `h-b` 의 HOLD 가
+ *    같이 풀리고 **같은 brief 가 두 번째로 전송된다.**
+ *
+ *    보낸 사실은 회차의 성질이 아니라 **그 글의 성질**이다.
+ *    그래서 `slug` + **실제로 보낸 메시지의 지문**에 붙인다.
+ *    날짜가 바뀌어도, 목록이 바뀌어도, 다른 후보가 늘어도 그대로 남는다.
+ *    brief 나 프롬프트가 바뀌어 **보낼 글자가 달라질 때만** 다시 보낸다.
+ *
+ * 🔴 장부는 하나다. 새 파일을 만들지 않는다 — 두 장부는 반드시 어긋난다.
+ */
+export function deliveryFingerprintOf(message) {
+  if (message === null || message === undefined) return null
+  if (typeof message === 'object') {
+    throw new TypeError('deliveryFingerprintOf 는 **보낼 메시지 문자열**을 받는다')
+  }
+  const text = String(message).replace(/\r\n/g, '\n')
+  if (text === '') return null
+  return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`
+}
+
+/**
+ * 전송 사실을 한 줄 적는다. **`attempts` 도 `regenCalls` 도 건드리지 않는다** —
+ * 보낸 것은 원고가 틀린 횟수가 아니다.
+ *
+ * @param {object|null} entry 기존 행 (건드리지 않는다)
+ */
+export function recordDelivery(entry, { sent, messageFingerprint, kind = null, reason = null, stage = null, now, runId = null, date = null, reservationId = null }) {
+  return {
+    ...(entry ?? {}),
+    delivery: {
+      sent: normalizeSent(sent),
+      messageFingerprint: messageFingerprint ?? null,
+      kind: kind ?? null,
+      reason: reason ?? null,
+      stage: stage ?? null,
+      at: now,
+      // 🔴 출처 기록용이다. **판정에 쓰지 않는다.**
+      runId: runId ?? null,
+      date: date ?? null,
+      // 🔴 send 권한을 얻은 프로세스의 예약 ID — 성공 뒤 **내 예약만** 지우기 위한 표식
+      reservationId: reservationId ?? null,
+    },
+  }
+}
+
+/** 받아냈으면 전송 기록을 지운다 — 다음에 고쳐서 다시 부를 수 있어야 한다 */
+export function clearDelivery(entry) {
+  if (!entry || entry.delivery === undefined) return entry ?? null
+  const { delivery, ...rest } = entry
+  void delivery
+  return rest
+}
+
+/**
+ * 지금 보내려는 메시지를 **다시 보내면 안 되는가.**
+ *
+ * 🔴 막는 조건은 셋이 **모두** 맞을 때뿐이다:
+ *    ① 전송 기록이 있고 ② 지문이 **같고** ③ 그 결말이 DELIVERY_UNCERTAIN 이다.
+ *
+ *    지문이 다르면(=brief 나 프롬프트가 바뀌었으면) 다른 글이므로 보낸다.
+ *    결말이 INFRA·CONTENT 면 여기서 막지 않는다 — 각자 다른 장치가 센다.
+ */
+/**
+ * 🔴 **전송 경계가 HOLD 로 멈췄다는 사유 코드 — 정본은 여기 하나다.**
+ *    전송 경계(`fetchSlug`)가 적고, 재생성(`attemptRegeneration`)이 읽는다.
+ *    이번 실행은 한 글자도 보내지 않았으므로 **재생성 횟수도 전송 기록도 바꾸지 않는다.**
+ */
+export const DELIVERY_HOLD_REASON = 'DELIVERY_UNCERTAIN_HOLD'
+
+export function deliveryHoldsFetch(entry, messageFingerprint) {
+  const d = entry?.delivery
+  if (!d || !d.messageFingerprint || !messageFingerprint) return null
+  if (d.messageFingerprint !== messageFingerprint) return null
+  if (d.kind !== 'DELIVERY_UNCERTAIN') return null
+  return {
+    why: `이미 보낸 글이다 (${d.date ?? '날짜 미상'} · ${d.stage ?? '-'} ${d.reason ?? '-'}) — 다시 보내지 않는다`,
+    delivery: d,
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 // 판정 — 🔴 파일을 읽지 않는다
 // ─────────────────────────────────────────────────────────
 
@@ -101,6 +196,24 @@ export function fingerprintOf(input) {
 export function judgeQuarantine({ entry, fingerprint = null, now, maxAttempts = MAX_ATTEMPTS, cooldownMs = COOLDOWN_MS }) {
   if (!entry || !Number.isFinite(entry.attempts)) {
     return { skip: false, code: 'CLEAR', message: '격리 기록 없음' }
+  }
+  /**
+   * 🔴 **인프라 실패는 긴 격리의 근거가 아니다** (2026-09-28).
+   *    `[attach] upload_timeout` 같은 실패로 5~7일을 묶으면, 브라우저를 고쳐도
+   *    공급이 돌아오지 않는다. 원고가 틀린 것이 아니므로 **짧은 backoff** 만 둔다.
+   *    🔴 과거 장부 행을 고치지 않는다 — **읽어서 유효 상태를 파생**할 뿐이다.
+   */
+  const kind = entryKind(entry)
+  if (kind !== 'CONTENT') {
+    const age = now - (entry.lastAt ?? 0)
+    const wait = cooldownFor(kind, cooldownMs)
+    if (age >= wait) {
+      return { skip: false, code: 'INFRA_COOLED', message: `인프라 실패 — backoff 지나 다시 본다 (${kind})` }
+    }
+    return {
+      skip: true, code: 'INFRA_BACKOFF',
+      message: `인프라 실패라 짧게 쉰다 (${kind}) — ${Math.ceil((wait - age) / 60000)}분 뒤 다시 본다`,
+    }
   }
   if (entry.attempts < maxAttempts) {
     return { skip: false, code: 'RETRYING', message: `막힌 적 ${entry.attempts}회 — ${maxAttempts}회까지는 다시 시도한다` }
@@ -123,13 +236,34 @@ export function judgeQuarantine({ entry, fingerprint = null, now, maxAttempts = 
   }
 }
 
+/**
+ * 🔴 **기록된 사유에서 종류를 파생한다.** 옛 행에는 `kind` 가 없다 —
+ *    그래도 사유 문장으로 판정한다. 장부를 손으로 고치지 않기 위해서다.
+ */
+export function entryKind(entry) {
+  if (!entry) return 'CONTENT'
+  if (entry.kind) return entry.kind
+  const text = (entry.reasons ?? []).join(' | ')
+  return classifyFailure({ message: text, sent: sentOf(entry) }).kind
+}
+
 /** 실패를 한 번 센 뒤의 새 기록. **기존 객체를 고치지 않는다** */
-export function recordFailure({ entry, fingerprint = null, now, reasons = [] }) {
+export function recordFailure({ entry, fingerprint = null, now, reasons = [], kind = null, sent = false }) {
+  // 🔴 모름(null)을 false 로 굳히지 않는다 — 굳히면 다시 보낸다
+  const sentValue = normalizeSent(sent)
   const prev = entry && Number.isFinite(entry.attempts) ? entry : { attempts: 0 }
   // 🔴 원고가 바뀌었으면 횟수를 처음부터 센다 — 고친 원고에 옛 실패를 얹지 않는다
   const changed = fingerprint && prev.fingerprint && fingerprint !== prev.fingerprint
+  /**
+   * 🔴 **인프라 실패는 attempts 를 올리지 않는다.** 원고가 틀린 횟수를 세는 칸이기 때문이다.
+   *    대신 종류와 시각을 남겨 backoff 가 그것을 읽게 한다.
+   */
+  const resolved = kind ?? classifyFailure({ message: reasons.join(' | '), sent: sentValue }).kind
+  const bump = consumesAttempt(resolved) ? 1 : 0
   return {
-    attempts: (changed ? 0 : prev.attempts) + 1,
+    kind: resolved,
+    sent: sentValue,
+    attempts: (changed ? 0 : prev.attempts) + bump,
     lastAt: now,
     fingerprint,
     reasons: reasons.slice(0, 4),
@@ -202,16 +336,110 @@ export function regenBudget({ entry, maxCalls = MAX_REGEN_CALLS }) {
   return { used, left: Math.max(0, maxCalls - used), exhausted: used >= maxCalls }
 }
 
-/** 재생성 호출 1회를 기록한 새 entry */
-export function recordRegenCall({ entry, now, packetHash = null }) {
+/**
+ * 재생성 호출 1회를 기록한 새 entry.
+ * 🔴 `attemptId` 는 "이 횟수를 누가 올렸나" 의 표식이다 — 되돌릴 때 **자기 몫만** 되돌리기 위해 쓴다.
+ */
+export function recordRegenCall({ entry, now, packetHash = null, attemptId = null }) {
   const prev = entry && typeof entry === 'object' ? entry : {}
+  const ids = Array.isArray(prev.regenAttemptIds) ? prev.regenAttemptIds : []
   return {
     ...prev,
     attempts: Number.isFinite(prev.attempts) ? prev.attempts : 0,
     regenCalls: (Number.isFinite(prev.regenCalls) ? prev.regenCalls : 0) + 1,
     lastRegenAt: now,
     lastPacketHash: packetHash,
+    ...(attemptId ? { regenAttemptIds: [...ids, attemptId].slice(-MAX_REGEN_CALLS * 4) } : {}),
   }
+}
+
+/** 전송 경계가 재생성 예산 소진으로 멈췄다는 사유 코드 — 정본은 여기 하나다 */
+export const REGEN_EXHAUSTED_REASON = 'REGEN_EXHAUSTED'
+
+/**
+ * 🔴 **send 직전의 원자적 예약 — 전송 권한과 재생성 횟수의 유일한 정본** (2026-09-28 · Codex P0).
+ *
+ *    앞판은 재생성 부모가 runner **전에** 따로 regenCalls 를 올렸다. 두 부모가 사전 판정을 동시에
+ *    통과하면 **둘 다 올렸고**, 진 쪽이 들고 있던 옛 `budget.used` 로 **이긴 쪽의 횟수까지 되돌렸다.**
+ *    그래서 횟수는 이제 **자식이 send 직전 예약을 적는 바로 그 임계구역**에서만 오른다.
+ *
+ *    하나의 `updateQuarantine` 안에서, 최신 장부 기준으로 **순서대로**:
+ *      ① 같은 지문 DELIVERY_UNCERTAIN HOLD  → 아무것도 바꾸지 않고 held
+ *      ② (재생성이면) 최신 regenBudget 소진   → 아무것도 바꾸지 않고 exhausted
+ *      ③ delivery 예약 생성 (reservationId)
+ *      ④ (재생성이면) regenCalls 증가 (attemptId)
+ *    일반 회수(`regen` 없음)는 ②④ 를 건너뛴다 — regenCalls 를 건드리지 않는다.
+ *
+ * 🔴 예약을 얻은 프로세스가 send 전후에 급사하면 예약과 횟수가 **그대로 남는다** (보수적 — 재전송을 막는다).
+ *    예약을 얻지 못한 프로세스는 이 함수에서 아무것도 쓰지 않았으므로 어디서 죽어도 횟수를 쓰지 않는다.
+ *
+ * @returns {{ok:true}|{ok:false, held?:object, exhausted?:object, code?:string, why:string}}
+ */
+export function reserveDelivery({
+  slug, messageFingerprint, reservationId, regen = null, now = Date.now(),
+  runId = null, date = null, path = QUARANTINE_PATH,
+}) {
+  let out = null
+  const u = updateQuarantine((cur) => {
+    const held = deliveryHoldsFetch(cur[slug], messageFingerprint)
+    if (held) { out = { ok: false, held, why: held.why }; return cur }
+    if (regen) {
+      const b = regenBudget({ entry: cur[slug] })
+      if (b.exhausted) {
+        out = { ok: false, exhausted: b,
+          why: `🔴 재생성 ${b.used}회를 이미 썼다 (상한 ${MAX_REGEN_CALLS}) — 보내지 않는다` }
+        return cur
+      }
+    }
+    let entry = recordDelivery(cur[slug], {
+      sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',
+      reason: 'sending', stage: 'send', now, runId, date, reservationId,
+    })
+    if (regen) entry = recordRegenCall({ entry, now, packetHash: regen.packetHash ?? null, attemptId: regen.attemptId ?? null })
+    out = { ok: true }
+    return { ...cur, [slug]: entry }
+  }, path)
+  // 🔴 잠금 시간 초과·장부 손상·판정 불가 — 전부 전송 금지
+  if (!u?.ok) return { ok: false, code: u?.code ?? 'QUARANTINE_UNREADABLE', why: u?.why ?? '알 수 없음' }
+  return out
+}
+
+/** 🔴 **내 예약일 때만** 전송 기록을 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다 */
+export function releaseDeliveryReservation({ slug, reservationId, path = QUARANTINE_PATH }) {
+  return updateQuarantine((cur) => (cur[slug]?.delivery?.reservationId === reservationId
+    ? { ...cur, [slug]: clearDelivery(cur[slug]) ?? undefined } : cur), path)
+}
+
+/**
+ * 🔴 **자기 몫의 재생성 횟수만 되돌린다** (compare-and-set).
+ *    앞판은 부모가 시작할 때 읽어 둔 `budget.used` 로 덮었다 — 그 사이 다른 프로세스가 올린 횟수가 지워졌다.
+ *    이제는 최신 장부에 **내 attemptId 가 있을 때만** 1 을 빼고 그 표식을 지운다. 없으면 아무것도 안 한다.
+ */
+export function revertRegenAttempt({ slug, attemptId, extra = {}, path = QUARANTINE_PATH }) {
+  let reverted = false
+  const u = updateQuarantine((cur) => {
+    const e = cur[slug]
+    const ids = Array.isArray(e?.regenAttemptIds) ? e.regenAttemptIds : []
+    /**
+     * 🔴 **내 attemptId 가 최신 장부에 있을 때만** 바꾼다 — 횟수도, 부가 필드(kind·sent·lastRegenAt)도.
+     *    앞판은 attemptId 가 사라졌어도 `extra` 가 있으면 부가 필드를 덮어썼다. 그러면 새 시도가
+     *    성공한 뒤 늦게 도착한 옛 인프라 실패가 최신 상태를 "INFRA · 안 보냄" 으로 되돌렸다.
+     *    일치하지 않으면 **한 글자도 바꾸지 않는다** (받은 객체를 그대로 돌려줘 저장 자체를 생략한다).
+     */
+    const mine = Boolean(attemptId) && ids.includes(attemptId)
+    if (!mine) return cur
+    reverted = true
+    return {
+      ...cur,
+      [slug]: {
+        ...(e ?? {}),
+        ...extra,
+        regenCalls: Math.max(0, (Number.isFinite(e.regenCalls) ? e.regenCalls : 0) - 1),
+        regenAttemptIds: ids.filter((x) => x !== attemptId),
+      },
+    }
+  }, path)
+  return { ok: Boolean(u?.ok), reverted, why: u?.why }
 }
 
 /**
@@ -224,12 +452,202 @@ export function recordRegenCall({ entry, now, packetHash = null }) {
  *    그래서 **매 변경마다 최신 장부를 다시 읽는다.** 들고 있던 사본을 쓰지 않는다.
  */
 export function updateQuarantine(mutate, path = QUARANTINE_PATH) {
-  const read = readQuarantine(path)
-  if (!read.ok) return { ok: false, why: read.why }
-  const next = mutate({ ...read.store })
-  if (!next || typeof next !== 'object') return { ok: false, why: '🔴 갱신 함수가 장부를 돌려주지 않았다' }
-  saveQuarantine(next, path)
-  return { ok: true, store: next }
+  /**
+   * 🔴 **읽기·판정·쓰기 전체가 하나의 프로세스 간 임계구역이다** (2026-09-28 · Codex P0).
+   *    앞판은 read → mutate → save 였을 뿐 잠금이 없었다. 두 프로세스가 같은 slug·같은 지문을
+   *    동시에 처리하면 **둘 다 "HOLD 없음" 을 읽고 둘 다 send 권한을 얻었다.**
+   *    tmp → rename 은 파일이 반쪽이 되는 것만 막을 뿐 이 경합은 막지 못한다.
+   *    다른 slug 끼리도 마찬가지다 — 나중에 쓴 쪽이 먼저 쓴 쪽의 행을 지웠다 (lost update).
+   */
+  const locked = withQuarantineLock(path, () => {
+    const read = readQuarantine(path)
+    if (!read.ok) return { ok: false, code: 'QUARANTINE_UNREADABLE', why: read.why }
+    const given = { ...read.store }
+    const next = mutate(given)
+    if (!next || typeof next !== 'object') return { ok: false, why: '🔴 갱신 함수가 장부를 돌려주지 않았다' }
+    // 🔴 받은 것을 그대로 돌려주면 "바꾸지 않는다" 는 뜻이다 — 파일을 한 바이트도 다시 쓰지 않는다
+    if (next === given) return { ok: true, store: next, unchanged: true }
+    saveQuarantine(next, path)
+    return { ok: true, store: next }
+  })
+  if (!locked.ok) return { ok: false, code: locked.code, why: locked.why }
+  return locked.value
+}
+
+// ─────────────────────────────────────────────────────────
+// 잠금 — 🔴 `llm-ledger-store.mts` 의 `withLedgerLock` 과 같은 규약이다.
+//    (그 파일은 TS 라 Node 20 의 .mjs 가 직접 부르지 못한다 — 규약을 그대로 옮긴다)
+//    ① `openSync(…, 'wx')` 로 만든 쪽만 쥔다  ② 잠금 파일에 owner 토큰을 적는다
+//    ③ 정해진 시간만 기다리고, 못 잡으면 **던지지 않고 실패를 돌려준다** (fail-closed)
+//    ④ 풀 때는 **내 토큰일 때만** 지운다  ⑤ 살아 있는 잠금은 오래됐어도 빼앗지 않는다
+// ─────────────────────────────────────────────────────────
+
+export const QUARANTINE_LOCK_WAIT_MS = 10_000
+const LOCK_POLL_MS = 20
+
+export const quarantineLockPath = (path = QUARANTINE_PATH) => `${path}.lock`
+
+/** 🔴 동기 대기 — 임계구역을 async 로 쪼개면 그 사이에 다른 프로세스가 끼어든다 */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * 잠금 파일의 주인이 **확실히 죽었는가.**
+ *
+ * 🔴 확실할 때만 `DEAD` 다. 내용을 못 읽거나(막 만들어져 아직 비었거나 깨졌거나),
+ *    다른 호스트이거나, `kill(pid, 0)` 이 ESRCH 가 아니면 전부 `LIVE`/`UNKNOWN` —
+ *    **빼앗지 않는다.** PID 가 재사용됐으면 살아 있는 것으로 보이므로 틀려도 안전한 쪽이다.
+ *
+ * @returns {{state:'LIVE'|'DEAD'|'UNKNOWN', owner:object|null, why:string}}
+ */
+export function inspectQuarantineLock(lock, { identityOf = processIdentity } = {}) {
+  let owner
+  try { owner = JSON.parse(readFileSync(lock, 'utf8')) }
+  catch (e) {
+    if (e?.code === 'ENOENT') return { state: 'UNKNOWN', owner: null, why: '잠금이 방금 풀렸다' }
+    return { state: 'UNKNOWN', owner: null, why: `잠금 내용을 읽지 못했다: ${e?.message ?? e}` }
+  }
+  if (!owner || typeof owner.token !== 'string' || !Number.isInteger(owner.pid) || owner.pid <= 0) {
+    return { state: 'UNKNOWN', owner, why: '잠금 내용이 규약과 다르다' }
+  }
+  if (owner.host !== hostname()) return { state: 'UNKNOWN', owner, why: `다른 호스트의 잠금이다 (${owner.host})` }
+  try { process.kill(owner.pid, 0) }
+  catch (e) {
+    if (e?.code === 'ESRCH') return { state: 'DEAD', owner, why: `pid ${owner.pid} 가 없다` }
+    // EPERM 등 — 존재는 한다. 아래 정체 대조로 넘어간다
+  }
+  /**
+   * 🔴 **PID 가 있다 ≠ 주인이 살아 있다.** 시작 시각·명령줄이 기록과 **둘 다** 같아야 같은 주인이다.
+   *    다르면 PID 가 재사용된 것 — 옛 주인은 죽었다(DEAD, 거둘 때 token 을 다시 확인한다).
+   *    지금 PID 의 정체를 못 읽거나 기록에 정체가 없으면 판단하지 않는다(UNKNOWN — 빼앗지 않는다).
+   */
+  const now = identityOf(owner.pid)
+  if (!now) return { state: 'UNKNOWN', owner, why: `pid ${owner.pid} 의 정체를 읽지 못했다 — 판단하지 않는다` }
+  if (!owner.start || !owner.cmd) {
+    return { state: 'UNKNOWN', owner, why: `기록에 주인 정체(시작 시각·명령줄)가 없다 — pid ${owner.pid} 를 판단하지 않는다` }
+  }
+  if (now.start !== owner.start || now.cmd !== owner.cmd) {
+    return { state: 'DEAD', owner,
+      why: `pid ${owner.pid} 가 다른 프로세스로 재사용됐다 (${now.start !== owner.start ? '시작 시각' : '명령줄'} 불일치)` }
+  }
+  return { state: 'LIVE', owner, why: `pid ${owner.pid} 가 살아 있다 (시작 시각·명령줄 일치)` }
+}
+
+/** 내 토큰일 때만 지운다 — 🔴 남이 쥔 잠금은 절대 지우지 않는다 */
+function releaseIfMine(lock, token) {
+  try {
+    const cur = JSON.parse(readFileSync(lock, 'utf8'))
+    if (cur?.token === token) unlinkSync(lock)
+  } catch { /* 이미 없거나 읽을 수 없다 — 건드리지 않는다 */ }
+}
+
+/**
+ * 🔴 **PID 만으로는 주인을 알 수 없다** (2026-09-28 · Codex P1).
+ *    주인이 죽은 뒤 같은 PID 가 전혀 다른 프로세스(또는 다른 magazine 실행)에 재사용되면,
+ *    "PID 가 살아 있다" 만 보고 **영원히 LIVE** 로 오판해 slug 가 막힌다.
+ *    그래서 잠금·lease 를 만들 때 **프로세스 시작 시각 + 명령줄**을 같이 적고,
+ *    판정할 때 지금 그 PID 의 값과 **둘 다 같을 때만** 같은 주인으로 인정한다.
+ *
+ * 🔴 ps 출력은 환경을 탄다 — 로캘·시간대가 다르면 같은 프로세스의 시작 시각 문자열이 달라져
+ *    **살아 있는 주인을 죽었다고 오판**한다(빼앗는 방향의 오류). 그래서 `LC_ALL=C` · `TZ=UTC` 로
+ *    고정하고, 명령줄은 `-ww` 로 자르지 않는다. 읽지 못하면 `null` — 호출부가 UNKNOWN 으로 막는다.
+ *
+ * @returns {{start:string, cmd:string}|null}
+ */
+export function processIdentity(pid, { run = spawnSync } = {}) {
+  const env = { ...process.env, LC_ALL: 'C', LANG: 'C', TZ: 'UTC' }
+  const ask = (field) => {
+    const r = run('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8', env, timeout: 3000 })
+    if (!r || r.error || r.status !== 0) return null
+    const v = String(r.stdout ?? '').trim()
+    return v || null
+  }
+  try {
+    const start = ask('lstart')
+    const cmd = ask('command')
+    return start && cmd ? { start, cmd } : null
+  } catch { return null }
+}
+
+/** 이 프로세스의 정체 — 한 번만 읽는다 (잠금마다 ps 를 부르지 않는다) */
+let selfIdentity
+const ownIdentity = () => {
+  if (selfIdentity === undefined) selfIdentity = processIdentity(process.pid)
+  return selfIdentity
+}
+
+function createLock(lock, extra = {}) {
+  const me = ownIdentity()
+  const owner = { token: randomUUID(), pid: process.pid, host: hostname(), at: new Date().toISOString(),
+    // 🔴 못 읽었으면 null 로 적는다 — 그 잠금은 나중에 "살아 있음 확인 불가(UNKNOWN)" 로 막힌다
+    start: me?.start ?? null, cmd: me?.cmd ?? null, ...extra }
+  const fd = openSync(lock, 'wx', 0o600)
+  try { writeSync(fd, JSON.stringify(owner)); fsyncSync(fd) }
+  finally { closeSync(fd) }
+  return owner
+}
+
+/**
+ * 🔴 **죽은 주인의 잠금만 거둔다 — 그것도 거두는 사람을 한 명으로 줄인 뒤에.**
+ *    둘이 동시에 "죽었다" 고 보고 각자 지우면, 먼저 지우고 새로 잡은 쪽의 **살아 있는**
+ *    잠금을 늦은 쪽이 지운다. 그래서 거두기 자체를 `.reclaim` 잠금(wx) 안에서 하고,
+ *    그 안에서 **같은 토큰·여전히 죽음**을 다시 확인한 뒤에만 지운다.
+ *    `.reclaim` 이 남아 있으면(거두던 쪽이 급사) 기다리다 시간 초과로 끝난다 — 전송 금지.
+ */
+function reclaimDeadLock(lock, seenToken, inspectOpts = {}) {
+  const rlock = `${lock}.reclaim`
+  let mine
+  try { mine = createLock(rlock) } catch { return false }
+  try {
+    const again = inspectQuarantineLock(lock, inspectOpts)
+    if (again.state !== 'DEAD' || again.owner?.token !== seenToken) return false
+    unlinkSync(lock)
+    return true
+  } catch { return false }
+  finally { releaseIfMine(rlock, mine.token) }
+}
+
+/**
+ * 잠금을 잡고 `fn` 을 돌린다. **`fn` 은 동기여야 한다.**
+ *
+ * @returns {{ok:true, value:any}|{ok:false, code:string, why:string}}
+ *   🔴 실패는 던지지 않고 돌려준다. 호출부가 `ok:false` 를 "적었다" 로 읽으면 안 된다.
+ *   `fn` 이 던지면 잠금을 푼 뒤 그대로 던진다.
+ */
+export function withQuarantineLock(path, fn, { waitMs = QUARANTINE_LOCK_WAIT_MS } = {}) {
+  const lock = quarantineLockPath(path)
+  try { mkdirSync(dirname(path), { recursive: true }) }
+  catch (e) { return { ok: false, code: 'QUARANTINE_LOCK_ERROR', why: `장부 폴더를 만들지 못했다: ${e.message}` } }
+  const until = Date.now() + waitMs
+  let owner = null
+  let last = null
+  for (;;) {
+    try { owner = createLock(lock); break }
+    catch (e) {
+      if (e?.code !== 'EEXIST') {
+        // 🔴 권한·디스크 같은 오류는 기다려도 풀리지 않는다 — 판정 불가, 전송 금지
+        return { ok: false, code: 'QUARANTINE_LOCK_ERROR', why: `장부 잠금을 만들지 못했다: ${e?.message ?? e}` }
+      }
+      last = inspectQuarantineLock(lock)
+      if (last.state === 'DEAD' && reclaimDeadLock(lock, last.owner.token)) continue
+      if (Date.now() > until) {
+        let age = null
+        try { age = Math.round((Date.now() - statSync(lock).mtimeMs) / 1000) } catch { /* 방금 풀렸다 */ }
+        return {
+          ok: false, code: 'QUARANTINE_LOCK_TIMEOUT',
+          why: `장부 잠금을 ${waitMs}ms 안에 잡지 못했다 (${last?.state}: ${last?.why}${age !== null ? ` · ${age}초째` : ''})`
+            + ' — 🔴 살아 있는 잠금은 지우지 않는다. 전송하지 않는다.',
+        }
+      }
+      sleepSync(LOCK_POLL_MS)
+    }
+  }
+  try {
+    return { ok: true, value: fn() }
+  } finally {
+    releaseIfMine(lock, owner.token)
+  }
 }
 
 /** 격리에서 완전히 지운다 — 등록에 성공한 후보 */
@@ -237,4 +655,65 @@ export function clearEntry(store, slug) {
   const next = { ...store }
   delete next[slug]
   return next
+}
+
+// ─────────────────────────────────────────────────────────
+// slug 별 원고 작업 lease — 🔴 같은 slug 의 원고 작업(일반 회수·재생성) 전체를 하나로 직렬화한다
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **왜 필요한가** (2026-09-28 · Codex P0 두 번).
+ *    ① `deliveryHoldsFetch` 는 **같은 지문**만 막는다 — 지문이 다른 재생성 두 건이 같은 slug 에서
+ *       동시에 보내고 같은 draft.md 를 썼다.
+ *    ② 그래서 재생성 전용 lease 를 만들었는데, 일반 회수는 **보기만** 했다. 본 직후 재생성이 lease 를
+ *       잡으면 일반 회수와 재생성이 둘 다 보내고 같은 draft.md 를 썼다 (실측: send 2 · draft write 2).
+ *
+ *    이제 **일반 회수·재생성 모두** 같은 slug lease 를 **실제로 잡는다.** brief 확인부터 응답 수신·검증·
+ *    draft 저장까지 쥐고, 못 잡으면 `MANUSCRIPT_IN_PROGRESS` 로 멈춘다 (probe·send·draft·횟수 0).
+ *    전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다 — lease 는 slug 하나만 막는다.
+ *    규약은 장부 잠금과 같다: `openSync wx` · token·pid·host·시작 시각·명령줄 기록 · 살아 있는 주인은
+ *    빼앗지 않음 · 죽은(PID 없음·재사용) 주인은 `.reclaim` 안에서 token 재확인 후에만 거둠 · 판단 불가는 멈춤.
+ */
+export const MANUSCRIPT_IN_PROGRESS_REASON = 'MANUSCRIPT_IN_PROGRESS'
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,120}$/
+
+export const manuscriptLeaseDir = (path = QUARANTINE_PATH) => join(dirname(path), 'magazine-manuscript-leases')
+export function manuscriptLeasePath(slug, path = QUARANTINE_PATH) {
+  if (!SLUG_RE.test(String(slug ?? ''))) throw new TypeError(`lease 를 만들 수 없는 slug 다: ${slug}`)
+  return join(manuscriptLeaseDir(path), `${slug}.lease`)
+}
+
+/**
+ * @param {object} p
+ * @param {'fetch'|'regen'} p.work  어떤 원고 작업인가 (기록용 — 판정은 같다)
+ * @param {(pid:number)=>({start:string,cmd:string}|null)} [p.identityOf]  🔴 정체 조회 — 운영은 실제 ps
+ * @returns {{ok:true, token:string, release:()=>void}
+ *          |{ok:false, code:'MANUSCRIPT_IN_PROGRESS'|'MANUSCRIPT_LEASE_ERROR', why:string, owner?:object}}
+ */
+export function acquireManuscriptLease({ slug, work, attemptId = null, path = QUARANTINE_PATH, identityOf = processIdentity }) {
+  let lease
+  try {
+    lease = manuscriptLeasePath(slug, path)
+    mkdirSync(manuscriptLeaseDir(path), { recursive: true, mode: 0o700 })
+  } catch (e) {
+    return { ok: false, code: 'MANUSCRIPT_LEASE_ERROR', why: `lease 를 준비하지 못했다: ${e?.message ?? e}` }
+  }
+  for (let tries = 0; tries < 2; tries += 1) {
+    try {
+      const owner = createLock(lease, { slug, work, attemptId })
+      return { ok: true, token: owner.token, lease, release: () => releaseIfMine(lease, owner.token) }
+    } catch (e) {
+      if (e?.code !== 'EEXIST') {
+        return { ok: false, code: 'MANUSCRIPT_LEASE_ERROR', why: `lease 를 만들지 못했다: ${e?.message ?? e}` }
+      }
+      const seen = inspectQuarantineLock(lease, { identityOf })
+      // 🔴 죽은 주인만, token 을 다시 확인한 뒤에만 거둔다 — 그 뒤 한 번 더 잡아 본다
+      if (seen.state === 'DEAD' && reclaimDeadLock(lease, seen.owner.token, { identityOf })) continue
+      return {
+        ok: false, code: MANUSCRIPT_IN_PROGRESS_REASON, owner: seen.owner ?? null,
+        why: `같은 slug 의 원고 작업(${seen.owner?.work ?? '?'})이 진행 중이다 (${seen.state}: ${seen.why}) — 기다리지 않고 멈춘다`,
+      }
+    }
+  }
+  return { ok: false, code: MANUSCRIPT_IN_PROGRESS_REASON, why: '죽은 lease 를 거둔 뒤에도 잡지 못했다 — 다른 작업이 먼저 잡았다' }
 }

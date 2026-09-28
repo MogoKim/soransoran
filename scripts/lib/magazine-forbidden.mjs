@@ -96,6 +96,52 @@ function isComparativeUse(text, index, pattern) {
 }
 
 /**
+ * 🔴 **"다루지 않는다" 는 주장이 아니다** (2026-09-28 오탐).
+ *
+ *    `certificate-in-50s` 원고가 이 문장으로 막혔다:
+ *      "학원 비교나 시험 일정, **합격률**도 다루지 않고, …"
+ *
+ *    정본을 대조했다. brief 의 「절대 쓰지 말 것」은
+ *      `합격률·취업률 **수치** (출처 없는 통계)`
+ *    이고 review 의 notes 는
+ *      "학원비·합격률을 **구체 숫자로 적었는지**"
+ *    라고 적혀 있다. 즉 계약은 **그 내용을 주장하지 말라**이지
+ *    **그 단어를 절대 쓰지 말라**가 아니다.
+ *
+ *    그래서 **제외·부정 고지**만 면제한다. 검사를 약화하지 않는다 —
+ *    수치를 적거나 주장하면 그대로 막힌다.
+ *
+ * 🔴 창을 좁게 잡는다. 패턴 **뒤 24자** 안에서 제외 서술이 끝나야 한다.
+ *    멀리 있는 "않습니다" 를 끌어오면 진짜 주장이 새어 나간다.
+ */
+const EXCLUSION_RE = /^[^.!?]{0,24}?(다루지\s*않|적지\s*않|언급하지\s*않|말하지\s*않|다루지는\s*않|포함하지\s*않|설명하지\s*않|제외|빼고)/
+
+/**
+ * 🔴 **숫자가 붙으면 제외 고지여도 면제하지 않는다** (Codex 재검토 2026-09-28).
+ *
+ *    `합격률 62%는 다루지 않습니다` — "다루지 않는다" 고 말하면서 **수치를 적었다.**
+ *    brief 가 금지한 것은 `합격률·취업률 **수치**(출처 없는 통계)` 다.
+ *    말로 빼겠다고 해 놓고 숫자를 남기면 독자는 그 숫자를 읽는다.
+ *
+ *    🔴 패턴 주변 짧은 창에서만 본다 — 멀리 있는 다른 숫자를 끌어오지 않는다.
+ */
+const NUMERIC_NEAR = /\d{1,3}(\.\d+)?\s*(%|퍼센트|명|건|배|위)|\d{2,}/
+
+export function hasNumericClaimNear(text, index, pattern) {
+  const body = String(text)
+  const from = Math.max(0, index - 12)
+  const to = Math.min(body.length, index + String(pattern).length + 14)
+  return NUMERIC_NEAR.test(body.slice(from, to))
+}
+
+export function isExclusionNotice(text, index, pattern) {
+  // 🔴 수치가 붙어 있으면 제외 고지로 보지 않는다
+  if (hasNumericClaimNear(text, index, pattern)) return false
+  const after = String(text).slice(index + String(pattern).length)
+  return EXCLUSION_RE.test(after)
+}
+
+/**
  * 본문에서 이 패턴이 **실제 위반으로** 쓰였는가.
  *
  * @returns {{hit:boolean, occurrences:number, exempted:number, samples:string[]}}
@@ -111,7 +157,7 @@ export function judgePattern(text, pattern) {
     const at = body.indexOf(p, from)
     if (at === -1) break
     out.occurrences += 1
-    if (isComparativeUse(body, at, p)) {
+    if (isComparativeUse(body, at, p) || isExclusionNotice(body, at, p)) {
       out.exempted += 1
     } else {
       out.hit = true

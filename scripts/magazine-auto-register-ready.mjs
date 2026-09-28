@@ -51,6 +51,7 @@ import {
 } from './lib/magazine-quarantine.mjs'
 import { drive } from './magazine-auto-register.mjs'
 import { buildMessage, send, webhookStatus } from './lib/slack-notify.mjs'
+import { readRunTargets, registerTargets } from './lib/magazine-run-targets.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -162,14 +163,18 @@ export function slotAllocator(from, { taken: takenInput } = {}) {
 export const CONSUMES_SLOT = new Set(['DONE', 'DRY_RUN_OK'])
 
 /** producer 가 고른 것 (있으면) — 없으면 큐 전체를 훑는다 */
-function slugsFromRun(date) {
-  const file = join(DRAFTS_DIR, '_runs', date, 'run.json')
-  if (!existsSync(file)) return null
-  try {
-    return (JSON.parse(readFileSync(file, 'utf8')).selected ?? []).map((s) => s.slug)
-  } catch {
-    return null
-  }
+/**
+ * 🔴 **`selected` 만 읽지 않는다** (2026-09-28 공급 0건 · Codex 재검토).
+ *    `reusable`(재료가 이미 있는 주제)을 빼면, 재료 17건이 있는 날에도 후보 0건이 된다.
+ *    회수 경로(`magazine-webui-runner --fetch-run`)와 **같은 계약**을 쓴다 —
+ *    둘이 다른 목록을 보면 한쪽이 만든 것을 다른 쪽이 못 받는다.
+ *
+ * 🔴 여기서는 **원고가 있는 대상**만 받는다. brief 만 있는 것은 회수 경로의 몫이다.
+ */
+function slugsFromRun(date, draftsDir = DRAFTS_DIR) {
+  const r = readRunTargets({ draftsDir, date })
+  if (!r.ok) return null
+  return registerTargets(r.targets).map((t) => t.slug)
 }
 
 /**
@@ -243,9 +248,13 @@ export const ceilingFor = (limit) => Math.min(ATTEMPT_CEILING_MAX, Math.max(limi
  *   🔴 `store` 는 **호출부가 한 번 읽어 넘긴다.** scan 이 따로 읽으면
  *      한 회차에 장부를 두 번 읽게 되고, 그 사이 값이 달라지면 판정이 엇갈린다.
  */
-export function scan({ runDate = null, store = {} } = {}) {
+/**
+ * 🔴 `draftsDir` 는 **시험이 실제 이 함수를 돌리기 위한** 최소 주입점이다.
+ *    기본값은 운영 경로 그대로다.
+ */
+export function scan({ runDate = null, store = {}, draftsDir = DRAFTS_DIR } = {}) {
   const queue = loadQueue()
-  const fromRun = runDate ? slugsFromRun(runDate) : null
+  const fromRun = runDate ? slugsFromRun(runDate, draftsDir) : null
   const pool = fromRun ?? queue.map((q) => q.slug)
 
   const now = Date.now()
@@ -344,6 +353,8 @@ export function processCandidates({
               fingerprint: draftFingerprint(r.slug),
               now: Date.now(),
               reasons: (r.blockedBy ?? []).map((x) => `${x.code}: ${x.message}`),
+              // 🔴 drive 가 아는 전송 여부를 그대로 넘긴다 — 모르면 말하지 않는다(= false)
+              ...(r.sent !== undefined ? { sent: r.sent } : {}),
             }),
             // 🔴 drive 가 센 재생성 횟수를 보존한다
             ...(cur[r.slug]?.regenCalls !== undefined ? { regenCalls: cur[r.slug].regenCalls } : {}),

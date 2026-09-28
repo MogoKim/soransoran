@@ -122,11 +122,40 @@ export async function runProducerFlow({ dryRun = false, deps }) {
     else log(`producer 종료 코드 ${planStage.status}`)
   }
   const planOk = planStage.skipped || (!planStage.spawnError && planStage.status === 0)
+  /** 🔴 아래에서 공급 상태를 읽어 brief 호출 여부를 정한다 */
+
+  /**
+   * 🔴 **selected 0 이면 brief 를 부르지 않는다** (2026-09-28 공급 0건).
+   *
+   *    그날 producer 는 선정 0건으로 끝났는데도 brief 를 불렀고,
+   *    `_runs/2026-09-28/selected` 가 없어 **종료 코드 2(SYSTEM)** 로 실패했다.
+   *    그 SYSTEM 실패가 회차 전체를 실패로 물들였다 — 만들 것이 없었을 뿐인데.
+   *
+   *    이제 셋을 구분한다:
+   *      NEW_WORK    새로 만들 주제가 있다 → brief 를 부른다
+   *      REUSE_READY 새로 만들 것은 없지만 **기존 재료가 있다** → auto-register 로 넘긴다
+   *      NO_WORK     큐가 비었다 → 정상적으로 아무것도 하지 않는다
+   */
+  const supply = deps.readSupply ? deps.readSupply() : { selected: null, reusable: 0, queue: null }
+  const selectedCount = Number.isFinite(supply.selected) ? supply.selected : null
+  const reusableCount = Number.isFinite(supply.reusable) ? supply.reusable : 0
+  const supplyState = selectedCount === null
+    ? 'UNKNOWN'
+    : selectedCount > 0 ? 'NEW_WORK' : (reusableCount > 0 ? 'REUSE_READY' : 'NO_WORK')
+  if (supplyState !== 'UNKNOWN' && supplyState !== 'NEW_WORK') {
+    log(`선정 0건 — ${supplyState === 'REUSE_READY'
+      ? `기존 재료 ${reusableCount}건이 있다. brief 를 부르지 않고 auto-register 로 넘긴다`
+      : '큐에 만들 것이 없다 (정상 no-work)'}`)
+  }
 
   // ── 2) brief 생성 (AI 호출) ──────────────────────────────
   let briefStage = stage('brief', { skipped: true })
   if (dryRun) log('dry-run — brief 생성을 실행하지 않는다')
   else if (!planOk) log('producer 가 실패해 brief 생성을 건너뛴다')
+  else if (supplyState === 'REUSE_READY' || supplyState === 'NO_WORK') {
+    // 🔴 없는 selected 경로로 brief 를 부르지 않는다 — 그 호출이 SYSTEM 실패를 만들었다
+    briefStage = stage('brief', { skipped: true, reason: supplyState })
+  }
   else {
     ran.push('brief')
     const r = deps.runBrief()

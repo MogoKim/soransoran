@@ -17,8 +17,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveValidationProfile, isAutoLaneEligible, LEGACY_PROFILE_MAP } from './lib/magazine-validation-profile.mjs'
 import { runProfileQA } from './lib/magazine-profile-qa.mjs'
-import { attemptRegeneration, MAX_REGEN_CALLS, packetPathFor, readPacket } from './lib/magazine-regen.mjs'
-import { readQuarantine, saveQuarantine } from './lib/magazine-quarantine.mjs'
+import { attemptRegeneration, MAX_REGEN_CALLS, packetPathFor, readPacket, packetHashOf, packetsLeftFor } from './lib/magazine-regen.mjs'
+import {
+  readQuarantine, saveQuarantine, reserveDelivery, releaseDeliveryReservation,
+  DELIVERY_HOLD_REASON as HOLD_REASON, REGEN_EXHAUSTED_REASON,
+} from './lib/magazine-quarantine.mjs'
 import { drive } from './magazine-auto-register.mjs'
 import { gate } from './lib/magazine-auto-lane.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
@@ -208,6 +211,25 @@ check('  fixture 후보가 전부 실제 gate 를 통과한다',
   FIXTURE_SLUGS.map((sl) => `${sl}:${gate(sl, FIXTURE_QUEUE).blockedBy.map((b) => b.code).join('/') || 'ok'}`).join(' · '))
 
 /** 🔴 바깥 프로세스만 주입한다. drive 의 판단 로직은 그대로 돈다 */
+/**
+ * 🔴 **가짜 runner 도 실제 자식의 장부 계약을 따른다** (2026-09-28 · Codex P0).
+ *    실제 자식(`fetchSlug`)은 send 직전에 `reserveDelivery` **한 번으로** 예약과 regenCalls 증가를 같이 한다.
+ *    부모는 이제 횟수를 올리지 않으므로, 이 계약을 흉내 내지 않는 가짜는 **실제보다 헐거워진다** —
+ *    횟수가 영영 오르지 않아 소진 판정이 죽는다. 그래서 가짜도 **같은 production 함수**를 부른다.
+ *    `outcome` 이 던지면 예약·횟수는 남는다 (실제 자식이 send 뒤 급사한 것과 같다).
+ */
+function asChild(ctx, ledgerPath, outcome) {
+  const reservationId = `fake-${ctx.packet.attemptId}`
+  const u = reserveDelivery({ slug: ctx.slug, messageFingerprint: `fake:${ctx.packet.attemptId}`, reservationId,
+    regen: { attemptId: ctx.packet.attemptId, packetHash: packetHashOf(ctx.packet) }, path: ledgerPath })
+  if (u.held) return { ok: false, sent: false, reason: HOLD_REASON, why: u.why }
+  if (u.exhausted) return { ok: false, sent: false, reason: REGEN_EXHAUSTED_REASON, why: u.why }
+  if (!u.ok) return { ok: false, sent: false, reason: 'predelivery_record_failed', why: u.why }
+  const r = outcome()
+  if (r?.ok) releaseDeliveryReservation({ slug: ctx.slug, reservationId, path: ledgerPath })
+  return r
+}
+
 function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges = true,
   packetsSeen = [], runnerThrows = false, runnerFails = false }) {
   let qaRuns = 0
@@ -251,10 +273,12 @@ function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges
       calls.push(`REGEN:${slug}`)
       // 🔴 runner 가 읽는 시점에는 **파일이 있어야 한다** — 읽기 전에 지우면 전달이 깨진다
       packetsSeen.push({ packet, existedDuringCall: fs.existsSync(packetPath), packetPath })
-      if (runnerThrows) throw new Error('재생성 경로 폭발')
-      fpN += 1
-      if (runnerFails) return { ok: false, why: '재생성 경로 실패(시험)' }
-      return { ok: true }
+      return asChild({ slug, packet }, ledgerPath, () => {
+        if (runnerThrows) throw new Error('재생성 경로 폭발')
+        fpN += 1
+        if (runnerFails) return { ok: false, why: '재생성 경로 실패(시험)' }
+        return { ok: true }
+      })
     },
   }
 }
@@ -282,7 +306,7 @@ function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges
       packetsSeen[0]?.packet?.failures?.[0]?.code)
     check('🔴 runner 가 읽는 동안에는 패킷 파일이 있었다', packetsSeen[0]?.existedDuringCall === true)
     check('🔴 정상 반환 뒤 패킷 파일이 남지 않는다',
-      !fs.existsSync(packetPathFor(SLUG, packetDir)), packetPathFor(SLUG, packetDir))
+      packetsLeftFor(SLUG, packetDir).length === 0, packetsLeftFor(SLUG, packetDir).join(',') || '0건')
     check('  패킷 폴더에 잔여 파일 0',
       (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).length === 0,
       (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).join(','))
@@ -319,7 +343,7 @@ console.log('\n③-B 패킷 수명주기 — 전달 후 0건')
           // 🔴 읽는 시점에는 반드시 있어야 한다 — 읽기 전에 지우면 전달 자체가 깨진다
           sawFile = fs.existsSync(ctx.packetPath)
           sawPacket = ctx.packet
-          return sc.runner()
+          return asChild(ctx, ledgerPath, sc.runner)
         },
         quarantinePath: ledgerPath, packetDir,
       })
@@ -327,7 +351,7 @@ console.log('\n③-B 패킷 수명주기 — 전달 후 0건')
       check(`  [${sc.name}] runner 가 패킷 내용을 받았다`,
         sawPacket?.slug === 'pkt-slug' && sawPacket?.failures?.[0]?.code === 'MED_DIAGNOSIS')
       check(`🔴 [${sc.name}] 반환 뒤 패킷 파일 0`,
-        !fs.existsSync(packetPathFor('pkt-slug', packetDir)))
+        packetsLeftFor('pkt-slug', packetDir).length === 0, packetsLeftFor('pkt-slug', packetDir).join(','))
       check(`🔴 [${sc.name}] 패킷 폴더 잔여 0`,
         (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).length === 0,
         (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).join(','))
@@ -521,7 +545,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
       for (let i = used; i < MAX_REGEN_CALLS; i++) {
         const rr = attemptRegeneration({ slug, profile: 'MEDICAL',
           failures: [{ code: 'QA_FAIL', label: `유형${i}` }],
-          runner: () => { calls += 1; return { ok: true } },
+          runner: (ctx) => asChild(ctx, qp, () => { calls += 1; return { ok: true } }),
           quarantinePath: qp, packetDir: path.join(T, 'packets'),
           previousFingerprint: `fp-${i}`, fingerprintOf: () => `fp-${i + 1}` })
         if (!rr.ok) break
@@ -557,7 +581,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
     const countingDrive = (s2, opts, deps) => {
       const qp = deps?.quarantinePath
       const rr = attemptRegeneration({ slug: s2, profile: 'MEDICAL', failures: [{ code: 'QA_FAIL' }],
-        runner: () => { runnerCalls2 += 1; return { ok: true } },
+        runner: (ctx) => asChild(ctx, qp, () => { runnerCalls2 += 1; return { ok: true } }),
         quarantinePath: qp, packetDir: path.join(T, 'packets') })
       return { slug: s2, verdict: 'BLOCKED', steps: [], regenCalls: rr.regenCalls,
         blockedBy: [{ code: 'QA_FAIL', message: `${rr.code}: ${rr.why}` }] }
@@ -831,8 +855,10 @@ console.log('\n⑫ --regen-packet fail-closed')
   const { readRegenPacket, REGEN_PACKET_SCHEMA } = await import('./magazine-webui-runner.mjs')
   const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-pkt-'))
   try {
+    // 🔴 regen-packet/3 — attemptId(UUID)는 필수이고 파일 이름과 같아야 한다
+    const GOOD_ID = '1b4e28ba-2fa1-41d2-883f-0016d3cca427'
     const good = { schemaVersion: REGEN_PACKET_SCHEMA, slug: 'sample-slug', profile: 'MEDICAL',
-      attempt: 1, failures: [{ code: 'MED_DIAGNOSIS', label: '진단 확정', sentence: 'x' }],
+      attempt: 1, attemptId: GOOD_ID, failures: [{ code: 'MED_DIAGNOSIS', label: '진단 확정', sentence: 'x' }],
       instruction: '그 문장만 고쳐 다시 써라' }
     const w = (name, body) => { const f = path.join(T, name); fs.writeFileSync(f, body); return f }
     const cases = [
@@ -847,7 +873,7 @@ console.log('\n⑫ --regen-packet fail-closed')
       const r = readRegenPacket(file, 'sample-slug')
       check(`🔴 ${name} → ${code}`, r.ok === false && r.code === code, r.code ?? 'ok')
     }
-    const okRead = readRegenPacket(w('good.json', JSON.stringify(good)), 'sample-slug')
+    const okRead = readRegenPacket(w(`sample-slug.${GOOD_ID}.json`, JSON.stringify(good)), 'sample-slug')
     check('  정상 패킷만 통과한다', okRead.ok === true && okRead.packet.failures.length === 1)
 
     /** 🔴 실제 CLI — 잘못된 패킷이면 브라우저를 열지도 않는다 */
@@ -1021,19 +1047,25 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
        *       으로 먼저 빠져 `spawn 0회 · lock undefined` 가 됐다. 로컬 초록 / CI 빨강.
        *       시험이 환경을 읽으면 안 된다.
        */
+      /**
+       * 🔴 **신원 판정은 여기 시험의 대상이 아니다.** `ensureChrome` 은 이제 프로필 신원의
+       *    정본이라, 임시 fixture 폴더를 주면 당연히 막힌다. 이 구간은 **잠금·기동**을 보므로
+       *    신원은 통과로 고정한다. 신원이 실제로 막는지는 ㉕ 가 따로 증명한다.
+       */
+      const idOk = async () => ({ ok: true })
       let spawned = 0
       const spawnFn = () => { spawned += 1; return { unref() {} } }
       // 🔴 프로필도 임시 fixture 다 — 실제 프로필이 살아 있든 죽었든 결과가 같아야 한다
       const rs = await SESSION.ensureChrome({
         waitMs: 60, pollMs: 20, spawnFn, cdpCheck: async () => false, browserCheck: () => true,
-        profileDir: dead,
+        profileDir: dead, verifyProfileFn: idOk,
       })
       check('🔴 반례2 죽은 잠금이면 기동을 시도한다', spawned === 1, `spawn ${spawned}회 · lock ${rs.lock?.state}`)
 
       /** 🔴 브라우저가 아예 없으면 띄우려 들지 않는다 — 그 판정은 그대로 살아 있다 */
       let spawned2 = 0
       const rNoBrowser = await SESSION.ensureChrome({
-        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => false, profileDir: dead,
+        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => false, profileDir: dead, verifyProfileFn: idOk,
         spawnFn: () => { spawned2 += 1; return { unref() {} } },
       })
       check('🔴 반례2 브라우저가 없으면 BROWSER_MISSING · spawn 0회',
@@ -1043,7 +1075,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       /** 🔴 CDP 가 이미 살아 있으면 띄우지 않는다 */
       let spawned3 = 0
       const rAlive = await SESSION.ensureChrome({
-        waitMs: 60, pollMs: 20, cdpCheck: async () => true, browserCheck: () => true, profileDir: dead,
+        waitMs: 60, pollMs: 20, cdpCheck: async () => true, browserCheck: () => true, profileDir: dead, verifyProfileFn: idOk,
         spawnFn: () => { spawned3 += 1; return { unref() {} } },
       })
       check('  반례2 CDP 가 살아 있으면 기동하지 않는다',
@@ -1052,7 +1084,7 @@ console.log('\n⑬ 2026-09-26 운영 사고 반례')
       /** 🔴 살아 있는 프로필이면 띄우지 않는다 — 남의 창을 빼앗지 않는다 */
       let spawned4 = 0
       const rLive = await SESSION.ensureChrome({
-        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => true, profileDir: live,
+        waitMs: 60, pollMs: 20, cdpCheck: async () => false, browserCheck: () => true, profileDir: live, verifyProfileFn: idOk,
         processes: procs([{ pid: 999002, command: `${CHROME} --user-data-dir=${live}` }]),
         spawnFn: () => { spawned4 += 1; return { unref() {} } },
       })
@@ -1506,33 +1538,76 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
       const makeWorld = (throwAt) => {
         const existing = { closes: 0, url: () => 'https://chatgpt.com/', close: async () => { existing.closes += 1 } }
         const opened = []
-        const world = { existing, opened, browserCloses: 0, killed: 0 }
+        const world = { existing, opened, browserCloses: 0, killed: 0, setInputFilesCalls: 0 }
         const newPage = () => {
           const pg = {
             closes: 0,
             waits: 0,
+            typed: '',
             async close() { pg.closes += 1 },
             async goto() {},
-            async waitForSelector() { if (throwAt === 'composer') throw new Error('page.waitForSelector: Timeout 60000ms exceeded.') },
-            locator() {
+            /**
+             * 🔴 **첨부 계약은 사라졌다** (2026-09-28 · P1).
+             *    brief 는 본문에 들어간다. 그래서 이 가짜 page 에는 file input 도,
+             *    업로드 chip 도 없다 — **제품이 그것을 찾으면 그대로 터진다.**
+             *    `setInputFiles` 는 세어서 **0 인지 본다.**
+             */
+            async evaluate() { return '---\n본문\n[CTA]' },
+            async evaluateHandle() {
               return {
-                first: () => ({ async click() { if (throwAt === 'send') throw new Error('click: element is not visible') } }),
-                async all() { return [{ async setInputFiles() {} }] },
-                async click() { if (throwAt === 'send') throw new Error('click: element is not visible') },
+                asElement: () => ({
+                  async setInputFiles() { world.setInputFilesCalls += 1 },
+                }),
               }
             },
-            keyboard: { async insertText() {}, async press() {} },
-            async waitForTimeout() {},
+            async waitForSelector() { if (throwAt === 'composer') throw new Error('page.waitForSelector: Timeout 60000ms exceeded.') },
             /**
-             * 🔴 `waitForFunction` 은 **두 번** 불린다 — ① 업로드 완료(stage attach)
-             *    ② 응답 완료(stage await-response). 첫 번째에서 터뜨리면 제품은 올바르게
-             *    `[attach] upload_timeout` 을 낸다. 단계를 구분해 주입해야 의미가 있다.
+             * 🔴 **composer 와 send 버튼은 다른 selector 다.** 하나로 뭉뚱그리면
+             *    본문 작성 실패와 전송 실패를 구분하지 못한다 — 실제 DOM 과 다른
+             *    fixture 는 제품이 맞아도 틀렸다고 말한다.
              */
+            locator(sel) {
+              const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+              const composer = {
+                async click() {
+                  if (isSend && throwAt === 'send') throw new Error('click: element is not visible')
+                },
+                /**
+                 * 🔴 **넣은 글을 그대로 돌려준다** — 실제 composer 와 같다.
+                 *    변이 케이스는 일부러 다르게 돌려준다.
+                 */
+                async innerText() {
+                  /**
+                   * 🔴 **제일 흔한 잘림은 "앞은 들어가고 뒤가 없는" 것**이다.
+                   *    앞부분만 40자 남기면 시작 구분자조차 없어 다른 코드로 끝난다 —
+                   *    그건 이 시험이 보려던 상황이 아니다.
+                   */
+                  if (throwAt === 'readback-truncated') {
+                    const cut = pg.typed.indexOf('===== BRIEF 끝')
+                    return cut > 0 ? pg.typed.slice(0, cut) : pg.typed
+                  }
+                  if (throwAt === 'readback-empty') return ''
+                  if (throwAt === 'readback-dirty') return `앞 대화 잔여 ${'가'.repeat(400)}\n${pg.typed}`
+                  return pg.typed
+                },
+                async setInputFiles() { world.setInputFilesCalls += 1 },
+              }
+              return {
+                first: () => composer,
+                async all() { return [composer] },
+                ...composer,
+              }
+            },
+            keyboard: {
+              async insertText(t) { pg.typed += String(t ?? '') },
+              async press() {},
+            },
+            async waitForTimeout() {},
+            /** 🔴 이제 응답 완료 대기에만 쓰인다 (업로드 대기가 없어졌다) */
             async waitForFunction() {
               pg.waits += 1
-              if (throwAt === 'await-response' && pg.waits >= 2) throw new Error('waitForFunction: Timeout')
+              if (throwAt === 'await-response') throw new Error('waitForFunction: Timeout')
             },
-            async evaluate() { return '---\n본문\n[CTA]' },
           }
           opened.push(pg)
           return pg
@@ -1544,10 +1619,15 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
         return world
       }
 
-      for (const at of ['composer', 'send', 'await-response']) {
-        const w = makeWorld(at)
+      /**
+       * 🔴 **stage 가 셋에서 넷으로 바뀌었다** — `attach` 가 사라지고 `compose` 가 왔다.
+       *    본문이 안 들어간 경우는 **보내기 전**이므로 전송 0건이어야 한다.
+       */
+      for (const at of ['composer', 'compose', 'send', 'await-response']) {
+        const throwAt = at === 'compose' ? 'readback-truncated' : at
+        const w = makeWorld(throwAt)
         const r = await SESSION2.fetchManuscript({
-          briefPath, outPath, promptText: '시험', requiredMarkers: [],
+          briefPath, outPath, promptText: '시험', requiredMarkers: ['문장 하나'],
           timeoutMs: 200, connectTimeoutMs: 200,
           ensureTab: async () => ({ ok: true }),
           connect: async () => w.browser,
@@ -1559,15 +1639,23 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
           `연 탭 ${w.opened.length}개 · close ${w.opened.map((x) => x.closes).join(',')}`)
         check(`🔴 반례11 [${at}] 기존 탭은 닫지 않는다`, w.existing.closes === 0, `close ${w.existing.closes}회`)
         check(`  반례11 [${at}] Chrome 종료 0회 (연결만 끊는다)`, w.killed === 0)
+        /** 🔴 **어느 경로로 끝나든 파일은 0번 올린다** */
+        check(`🔴 반례11 [${at}] setInputFiles 0회`, w.setInputFilesCalls === 0, `${w.setInputFilesCalls}회`)
 
         /** 🔴 최상위 출력까지 stage·원문이 남는가 — fetchSlug 가 버리면 여기서 깨진다 */
         const line = WEBUI.describeFetchFailure({
           reason: r.reason, stage: r.stage, errorName: r.errorName, errorDetail: r.errorDetail, sent: r.sent,
         })
         check(`🔴 반례11 [${at}] 최상위 한 줄에 stage 가 있다`, line.includes(`[${at}]`), line)
-        if (at !== 'await-response') {
+        if (at === 'composer' || at === 'send') {
           check(`🔴 반례11 [${at}] 최상위 한 줄에 실제 오류가 있다`,
             /Timeout 60000ms exceeded|not visible/.test(line), line)
+        }
+        if (at === 'compose') {
+          check('🔴 반례11 [compose] 잘린 본문은 composer_truncated 다',
+            r.reason === 'composer_truncated', String(r.reason))
+          check('🔴 반례11 [compose] 사유에 "한 글자도 보내지 않았다" 가 있다',
+            /한 글자도 보내지 않았다/.test(r.errorDetail ?? ''), String(r.errorDetail))
         }
         /**
          * 🔴 **전송 여부는 단계에 따라 다르다.** `await-response` 는 이미 보낸 뒤 터진 것이라
@@ -1576,6 +1664,36 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
         const sentBefore = at === 'await-response'
         check(`🔴 반례11 [${at}] 전송 여부를 사실대로 적는다`,
           line.includes(sentBefore ? '전송 1건' : '전송 0건'), line)
+      }
+
+      /** 🔴 readback 이 다른 이유로 깨지는 경우도 **보내지 않는다** */
+      for (const [mut, want] of [['readback-empty', 'composer_empty'], ['readback-dirty', 'composer_dirty']]) {
+        const w = makeWorld(mut)
+        const r = await SESSION2.fetchManuscript({
+          briefPath, outPath, promptText: '시험', requiredMarkers: ['문장 하나'],
+          timeoutMs: 200, connectTimeoutMs: 200,
+          ensureTab: async () => ({ ok: true }),
+          connect: async () => w.browser,
+        })
+        check(`🔴 반례11 [${mut}] ${want} 로 끝난다`, r.reason === want, `${r.reason}`)
+        check(`🔴 반례11 [${mut}] 전송 0건`, r.sent === false, `sent=${r.sent}`)
+        check(`  반례11 [${mut}] setInputFiles 0회`, w.setInputFilesCalls === 0, `${w.setInputFilesCalls}회`)
+      }
+
+      /** 🔴 **brief 본문이 실제로 메시지에 들어갔는가** — 넣은 척이 아니라 글자를 본다 */
+      {
+        const w = makeWorld(null)
+        await SESSION2.fetchManuscript({
+          briefPath, outPath, promptText: '시험', requiredMarkers: ['문장 하나'],
+          timeoutMs: 200, connectTimeoutMs: 200,
+          ensureTab: async () => ({ ok: true }),
+          connect: async () => w.browser,
+        })
+        const typed = w.opened[0]?.typed ?? ''
+        check('🔴 반례11 보낸 본문에 brief 전문이 있다', typed.includes('문장 하나'), `${typed.length}자`)
+        check('🔴 반례11 보낸 본문에 시작·끝 구분자가 있다',
+          typed.includes(SESSION2.BRIEF_BEGIN) && typed.includes(SESSION2.BRIEF_END), `${typed.length}자`)
+        check('🔴 반례11 정상 경로도 setInputFiles 0회', w.setInputFilesCalls === 0, `${w.setInputFilesCalls}회`)
       }
 
       /** 🔴 정상 경로도 자기 탭을 닫는다 — 실패 경로만 닫으면 성공할 때마다 샌다 */
@@ -1741,6 +1859,2703 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
         registered: [{ ...base.registered[0], heroImage: null }],
       })).includes('HERO_MISSING'))
   }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑮ 🔴 2026-09-28 공급 0건 — 대상 계약 하나 (selected + reusable)
+// ─────────────────────────────────────────────────────────
+console.log('\n⑮ 대상 계약 — selected + reusable')
+{
+  /**
+   * 🔴 2026-09-28: `selected 0 · reusable 17` 인데 회수·등록 후보가 **둘 다 0** 이었다.
+   *    `reusable` 을 만들어 두고 소비자에 **연결하지 않았기** 때문이다.
+   *    만들어만 두면 없는 것과 같다 — 실제 숫자로 고정한다.
+   */
+  const RT = await import('./lib/magazine-run-targets.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-targets-'))
+  const D = path.join(T, 'drafts', 'magazine')
+  const DATE = '2026-09-28'
+  const mk = (slug, { brief = 1, review = 1, draft = 0, article = 0 } = {}) => {
+    fs.mkdirSync(path.join(D, slug), { recursive: true })
+    if (brief) fs.writeFileSync(path.join(D, slug, 'brief.md'), 'b')
+    if (review) fs.writeFileSync(path.join(D, slug, 'review.ts'), 'r')
+    if (draft) fs.writeFileSync(path.join(D, slug, 'draft.md'), 'd')
+    if (article) fs.writeFileSync(path.join(D, slug, 'article-draft.ts'), 'a')
+    return { slug }
+  }
+  const writeRun = (selected, reusable) => {
+    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
+    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
+      JSON.stringify({ status: 'COMPLETED', inventoryDays: 0, selected, reusable }))
+  }
+  try {
+    // ── selected 0 / reusable 17 — 실측과 같은 구성 ──
+    const reusable = []
+    for (let i = 1; i <= 5; i++) reusable.push(mk(`need-${i}`))                          // NEEDS_DRAFT 5
+    for (let i = 1; i <= 2; i++) reusable.push(mk(`conv-${i}`, { draft: 1 }))             // NEEDS_CONVERT 2
+    for (let i = 1; i <= 10; i++) reusable.push(mk(`ready-${i}`, { draft: 1, article: 1 })) // READY 10
+    writeRun([], reusable)
+
+    const r = RT.readRunTargets({ draftsDir: D, date: DATE })
+    check('🔴 ⑮ selected 0 · reusable 17 → 대상 17건', r.ok && r.targets.length === 17,
+      `${r.targets.length}건 · ${r.why ?? ''}`)
+    const dist = r.targets.reduce((a, t) => { a[t.material.stage] = (a[t.material.stage] ?? 0) + 1; return a }, {})
+    check('  ⑮ 단계 분포가 맞다', dist.NEEDS_DRAFT === 5 && dist.NEEDS_CONVERT === 2 && dist.READY === 10,
+      JSON.stringify(dist))
+    check('🔴 ⑮ NEEDS_DRAFT 5 → 회수 대상 정확히 5', RT.fetchTargets(r.targets).length === 5,
+      `${RT.fetchTargets(r.targets).length}건`)
+    check('🔴 ⑮ NEEDS_CONVERT 2 + READY 10 → 등록 대상 정확히 12',
+      RT.registerTargets(r.targets).length === 12, `${RT.registerTargets(r.targets).length}건`)
+
+    // ── review 누락 1건 → 회수·등록 모두 0 (ChatGPT 호출 0) ──
+    const nr = mk('no-review', { review: 0 })
+    writeRun([], [nr])
+    const r2 = RT.readRunTargets({ draftsDir: D, date: DATE })
+    check('🔴 ⑮ review 누락은 NEEDS_BRIEF 다', r2.targets[0]?.material.stage === 'NEEDS_BRIEF',
+      r2.targets[0]?.material.stage)
+    check('🔴 ⑮ review 누락 → 회수 0 · 등록 0 (ChatGPT 호출 0)',
+      RT.fetchTargets(r2.targets).length === 0 && RT.registerTargets(r2.targets).length === 0,
+      `회수 ${RT.fetchTargets(r2.targets).length} · 등록 ${RT.registerTargets(r2.targets).length}`)
+
+    // ── selected/reusable 중복 slug → 한 번만 ──
+    writeRun([{ slug: 'ready-1' }], [{ slug: 'ready-1' }, { slug: 'ready-2' }])
+    const r3 = RT.readRunTargets({ draftsDir: D, date: DATE })
+    check('🔴 ⑮ 중복 slug 는 한 번만 처리한다', r3.targets.length === 2,
+      r3.targets.map((t) => `${t.slug}:${t.origin}`).join(', '))
+    check('  ⑮ 중복이면 selected 를 먼저 센다',
+      r3.targets.find((t) => t.slug === 'ready-1')?.origin === 'selected')
+
+    /**
+     * 🔴 **소스 문자열 검사는 증거가 아니다** (Codex 재검토 2026-09-28).
+     *    정규식은 코드를 조금만 바꿔도 통과하거나, 멀쩡한데 깨진다.
+     *    **실제 production 함수**를 fixture 로 돌려 숫자를 본다.
+     */
+    writeRun([], reusable)
+    const WEBUI = await import('./magazine-webui-runner.mjs')
+    const READY = await import('./magazine-auto-register-ready.mjs')
+
+    /** 🔴 실제 `fetchBatch` — dry-run 이라 한 글자도 보내지 않는다 */
+    const batch = await WEBUI.fetchBatch({ date: DATE, dryRun: true, limit: 0, draftsDir: D })
+    const plannedFetch = (batch.planned ?? []).filter((x) => x.action === 'fetch')
+    check('🔴 ⑮ 실제 fetchBatch — planned fetch 정확히 5',
+      plannedFetch.length === 5, `${plannedFetch.length}건 · ${(batch.planned ?? []).length}개 계획`)
+    check('  ⑮ 실제 fetchBatch — 전송 0건 (dry-run)', (batch.sentTotal ?? 0) === 0, `${batch.sentTotal}`)
+    check('  ⑮ 실제 fetchBatch — 고른 것이 전부 NEEDS_DRAFT 다',
+      plannedFetch.every((x) => x.stage === 'NEEDS_DRAFT'),
+      plannedFetch.map((x) => `${x.slug}:${x.stage}`).join(', '))
+
+    /** 🔴 실제 `scan({ runDate })` — pool 이 등록 대상 수와 같아야 한다 */
+    const scanned = READY.scan({ runDate: DATE, store: {}, draftsDir: D })
+    check('🔴 ⑮ 실제 scan({runDate}) — pool 정확히 12', scanned.pool === 12, `pool ${scanned.pool}`)
+
+    /** 🔴 review 누락 → 실제 fetchBatch 가 0건 (ChatGPT 호출 0) */
+    writeRun([], [nr])
+    const batch2 = await WEBUI.fetchBatch({ date: DATE, dryRun: true, limit: 0, draftsDir: D })
+    const plannedFetch2 = (batch2.planned ?? []).filter((x) => x.action === 'fetch')
+    check('🔴 ⑮ 실제 fetchBatch — review 누락이면 fetch 0',
+      plannedFetch2.length === 0, `${plannedFetch2.length}건`)
+    const scanned2 = READY.scan({ runDate: DATE, store: {}, draftsDir: D })
+    check('🔴 ⑮ 실제 scan — review 누락이면 pool 0', scanned2.pool === 0, `pool ${scanned2.pool}`)
+
+    /** 🔴 중복 slug → 실제 경로에서도 한 번만 */
+    writeRun([{ slug: 'ready-1' }], [{ slug: 'ready-1' }, { slug: 'ready-2' }])
+    const scanned3 = READY.scan({ runDate: DATE, store: {}, draftsDir: D })
+    check('🔴 ⑮ 실제 scan — 중복 slug 는 한 번만', scanned3.pool === 2, `pool ${scanned3.pool}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n⑯ 전송 여부를 사실대로 넘긴다 — sent 3값 · 재전송 0')
+{
+  /**
+   * 🔴 **사람용 출력을 정규식으로 긁지 않는다** (2026-09-28 · Codex P0-2).
+   *    앞판은 자식 stdout 에서 `/전송\s*1건/` 을 찾았다. 문구가 바뀌면 `sent` 가
+   *    뒤집히고 **같은 brief 를 다시 보낸다.**
+   *
+   * 🔴 그리고 **분류만 맞히는 시험은 죽은 시험이다.** 분류가 맞아도 `drive` 가
+   *    그것을 안 읽으면 재전송은 그대로 일어난다. 여기서는 **실제 `drive()`** 를 돌려
+   *    runner 호출 수와 장부 숫자를 본다.
+   */
+  const FR = await import('./lib/magazine-fetch-result.mjs')
+  const AR = await import('./magazine-auto-register.mjs')
+  const FK = await import('./lib/magazine-failure-kind.mjs')
+
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-sent-'))
+  try {
+    /** ① 보냈는데 응답을 못 받았다 — 자식은 사람글에 "전송" 이라는 말조차 안 쓴다 */
+    const r1 = AR.webuiRegenRunner({ slug: 'a-slug', packetPath: '/tmp/p.json' }, {
+      resultDir: T,
+      runFn: (_file, args) => {
+        const rp = args[args.indexOf('--result-json') + 1]
+        FR.writeFetchResults(rp, {
+          mode: 'fetch-one', sentTotal: 1,
+          results: [{ slug: 'a-slug', status: 'failed', reason: 'response_timeout',
+            stage: 'await-response', sent: true, errorName: 'TimeoutError', errorDetail: '60000ms' }],
+        })
+        return { code: 1, stdout: '  ⛔ 실패했다', stderr: '', json: null }
+      },
+    })
+    check('🔴 ⑯ 출력에 "전송" 이 없어도 sent 를 읽는다', r1.sent === true, `sent=${r1.sent} source=${r1.resultSource}`)
+    check('  ⑯ reason·stage·errorDetail 을 그대로 올린다',
+      r1.reason === 'response_timeout' && r1.stage === 'await-response' && r1.errorDetail === '60000ms',
+      `${r1.reason}·${r1.stage}·${r1.errorDetail}`)
+    const k1 = FK.classifyFailure({ code: r1.reason, stage: r1.stage, message: r1.errorDetail, sent: r1.sent })
+    check('🔴 ⑯ 전송 뒤 timeout 은 DELIVERY_UNCERTAIN 이다', k1.kind === 'DELIVERY_UNCERTAIN', k1.kind)
+    check('🔴 ⑯ 그래서 횟수를 소비하지 않는다', FK.consumesAttempt(k1.kind) === false, String(FK.consumesAttempt(k1.kind)))
+
+    /** ② 🔴 **거짓 성공 금지** — 종료 코드 0 인데 결과 행이 없으면 성공이 아니다 */
+    const r0 = AR.webuiRegenRunner({ slug: 'z-slug', packetPath: '/tmp/p.json' }, {
+      resultDir: T, runFn: () => ({ code: 0, stdout: '끝', stderr: '', json: null }),
+    })
+    check('🔴 ⑯ exit 0 + 결과 행 없음 = 성공이 아니다', r0.ok === false, `ok=${r0.ok}`)
+    check('🔴 ⑯ 그때 sent 는 null (모름)', r0.sent === null, String(r0.sent))
+    const k0 = FK.classifyFailure({ code: r0.reason, stage: r0.stage, message: r0.errorDetail, sent: r0.sent })
+    check('🔴 ⑯ 그래서 DELIVERY_UNCERTAIN 이다', k0.kind === 'DELIVERY_UNCERTAIN', k0.kind)
+
+    /** ③ exit 0 인데 행이 ok 가 아니면 그 사실을 그대로 올린다 */
+    const rNotOk = AR.webuiRegenRunner({ slug: 'y-slug', packetPath: '/tmp/p.json' }, {
+      resultDir: T,
+      runFn: (_file, args) => {
+        const rp = args[args.indexOf('--result-json') + 1]
+        FR.writeFetchResults(rp, { mode: 'fetch-one', sentTotal: 0,
+          results: [{ slug: 'y-slug', status: 'skipped', reason: 'draft_exists', stage: null, sent: false }] })
+        return { code: 0, stdout: '', stderr: '', json: null }
+      },
+    })
+    check('🔴 ⑯ exit 0 + status≠ok 도 성공이 아니다', rNotOk.ok === false, `ok=${rNotOk.ok} reason=${rNotOk.reason}`)
+    check('  ⑯ 그 행의 sent(false)를 그대로 올린다', rNotOk.sent === false, String(rNotOk.sent))
+
+    /** ④ 실제로 안 보낸 인프라 실패는 INFRA 다 — 모름과 섞이지 않는다 */
+    const r3 = AR.webuiRegenRunner({ slug: 'c-slug', packetPath: '/tmp/p.json' }, {
+      resultDir: T,
+      runFn: (_file, args) => {
+        const rp = args[args.indexOf('--result-json') + 1]
+        FR.writeFetchResults(rp, { mode: 'fetch-one', sentTotal: 0,
+          results: [{ slug: 'c-slug', status: 'failed', reason: 'connect_failed',
+            stage: 'connect', sent: false, errorName: 'TimeoutError', errorDetail: 'cdp' }] })
+        return { code: 1, stdout: '', stderr: '', json: null }
+      },
+    })
+    const k3 = FK.classifyFailure({ code: r3.reason, stage: r3.stage, message: r3.errorDetail, sent: r3.sent })
+    check('🔴 ⑯ 안 보낸 인프라 실패는 INFRA 다', k3.kind === 'INFRA' && r3.sent === false, `${k3.kind} sent=${r3.sent}`)
+    check('🔴 ⑯ 임시 결과 파일을 치운다',
+      fs.readdirSync(T).filter((f) => f.startsWith('regen-result-')).length === 0,
+      fs.readdirSync(T).join(', ') || '(비어 있다)')
+
+    /**
+     * ⑤ 🔴 **실제 `drive()` 로 확인한다** — 첫 회수가 `sent=true` 로 끝난 글은
+     *    regenRunner 를 **한 번도** 부르지 않고, regenCalls·attempts 도 0이어야 한다.
+     */
+    const ledgerPath = path.join(T, 'q.json')
+    const calls = []
+    const deps = makeDeps({ qaFailsUntil: 99, ledgerPath, packetDir: path.join(T, 'packets'), calls })
+    // 🔴 실제 재생성 경로를 쓴다. 불리면 세어서 0이 아님이 드러난다.
+    let runnerCalls = 0
+    deps.regenRunner = () => { runnerCalls += 1; return { ok: true, sent: true } }
+    // 🔴 첫 회수 결과를 **주입이 아니라 파일로** 넣는다 — 읽는 경로까지 함께 본다
+    const DATE = FR.todayKst()
+    const resultPath = path.join(T, `${DATE}.json`)
+    FR.writeFetchResults(resultPath, {
+      date: DATE, runId: null, mode: 'fetch-run', sentTotal: 1,
+      results: [{ slug: SLUG, status: 'failed', reason: 'response_timeout',
+        stage: 'await-response', sent: true, errorName: 'TimeoutError', errorDetail: '60000ms' }],
+    })
+    deps.fetchResultPath = resultPath
+    deps.runDate = DATE
+    const rd = drive(SLUG, { write: true, pr: false, publishAt: '2027-04-01', alt: '시험 여성', allowOptional: true, autoLane: false }, deps)
+    check('🔴 ⑯ 실제 drive — 첫 회수가 보낸 글이면 regenRunner 호출 0', runnerCalls === 0, `${runnerCalls}회`)
+    check('🔴 ⑯ 실제 drive — regenCalls 0', (rd.regenCalls ?? 0) === 0, String(rd.regenCalls))
+    const msg = (rd.blockedBy ?? []).map((b) => b.message).join(' | ')
+    check('🔴 ⑯ 실제 drive — 사유가 DELIVERY_UNCERTAIN 이다', /DELIVERY_UNCERTAIN/.test(msg), msg.slice(0, 140))
+    /**
+     * 🔴 **"기록이 없다" 는 증거가 약하다.** 실제 등록 루프를 태워 장부에 **쓰게** 한 뒤,
+     *    그 행이 내용 실패로 세어지지 않는지 본다.
+     */
+    const READY16 = await import('./magazine-auto-register-ready.mjs')
+    READY16.processCandidates({
+      write: true, wantPr: false, limit: 1, report: { blocked: [], done: [] },
+      quarantinePath: ledgerPath,
+      scanFn: () => ({ source: 'fixture', pool: 1,
+        eligible: [{ slug: SLUG, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: true } }],
+        skipped: [], quarantined: [] }),
+      driveFn: (sl, o) => drive(sl, o, deps),
+    })
+    const entry = readQuarantine(ledgerPath).store[SLUG]
+    check('🔴 ⑯ 실제 장부 — 행이 실제로 쓰였다', !!entry, JSON.stringify(entry ?? null))
+    check('🔴 ⑯ 실제 장부 — 내용 실패로 세지 않는다 (attempts 0)',
+      entry?.attempts === 0, `attempts ${entry?.attempts}`)
+    check('🔴 ⑯ 실제 장부 — 종류가 DELIVERY_UNCERTAIN 이다',
+      entry?.kind === 'DELIVERY_UNCERTAIN', String(entry?.kind))
+
+    /**
+     * ⑥ 🔴 **2026-09-28 실측 반례** — 전용 Chrome 이 새 탭을 거부했다.
+     *    `Target.createTarget: Failed to open a new tab` (8회 연속).
+     *    사람이 그 브라우저를 쓰고 있으면 실제로 일어난다.
+     *    이것은 **원고 결함이 아니다.** 내용 실패로 세면 멀쩡한 글이 격리된다.
+     */
+    const kTab = FK.classifyFailure({
+      code: 'connect_failed', stage: 'open-tab',
+      message: 'browserContext.newPage: Protocol error (Target.createTarget): Failed to open a new tab',
+      sent: false,
+    })
+    check('🔴 ⑯ 새 탭 거부는 INFRA 다 (실측 2026-09-28)', kTab.kind === 'INFRA', kTab.kind)
+    check('🔴 ⑯ 그래서 내용 재시도 횟수를 쓰지 않는다', FK.consumesAttempt(kTab.kind) === false, String(FK.consumesAttempt(kTab.kind)))
+
+    /** ⑦ 🔴 죽은 게이트가 아니다 — 첫 회수 기록이 없으면 **재생성이 실제로 돈다** */
+    const calls2 = []
+    const deps2 = makeDeps({ qaFailsUntil: 99, ledgerPath: path.join(T, 'q2.json'), packetDir: path.join(T, 'p2'), calls: calls2 })
+    let runnerCalls2 = 0
+    deps2.regenRunner = () => { runnerCalls2 += 1; return { ok: true, sent: true } }
+    deps2.fetchResultPath = path.join(T, 'none.json')
+    deps2.runDate = DATE
+    drive(SLUG, { write: true, pr: false, publishAt: '2027-04-01', alt: '시험 여성', allowOptional: true, autoLane: false }, deps2)
+    check('🔴 ⑯ 기록이 없으면 재생성이 실제로 돈다 (죽은 게이트 아님)', runnerCalls2 > 0, `${runnerCalls2}회`)
+
+    /**
+     * ⑧ 🔴 **재생성이 전송 경계에서 HOLD 로 멈추면** (2026-09-28 · 재생성 중복 전송)
+     *    이번 실행의 `sent:false` 를 그 글의 전송 사실로 올리지 않는다. 실제 drive → 실제 ready 가
+     *    장부에 **앞선 모름(null)** 을 그대로 적고, 횟수를 하나도 쓰지 않아야 한다.
+     */
+    const QN16 = await import('./lib/magazine-quarantine.mjs')
+    const L3 = path.join(T, 'q3.json')
+    const deps3 = makeDeps({ qaFailsUntil: 99, ledgerPath: L3, packetDir: path.join(T, 'p3'), calls: [] })
+    deps3.regenRunner = () => ({ ok: false, sent: false, reason: QN16.DELIVERY_HOLD_REASON, stage: 'gate',
+      prior: { sent: null, kind: 'DELIVERY_UNCERTAIN' }, why: '이미 보낸 글이다' })
+    deps3.fetchResultPath = path.join(T, 'none3.json')
+    deps3.runDate = DATE
+    READY16.processCandidates({
+      write: true, wantPr: false, limit: 1, report: { blocked: [], done: [] },
+      quarantinePath: L3,
+      scanFn: () => ({ source: 'fixture', pool: 1,
+        eligible: [{ slug: SLUG, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: true } }],
+        skipped: [], quarantined: [] }),
+      driveFn: (sl, o) => drive(sl, o, deps3),
+    })
+    const e3 = readQuarantine(L3).store[SLUG] ?? {}
+    check('🔴 ⑯ HOLD 뒤 장부 sent 는 앞선 모름(null) 그대로 — "안 보냄" 으로 덮지 않는다',
+      e3.sent === null && e3.kind === 'DELIVERY_UNCERTAIN', JSON.stringify({ sent: e3.sent, kind: e3.kind }))
+    check('🔴 ⑯ HOLD 는 attempts·regenCalls 를 쓰지 않는다',
+      (e3.attempts ?? 0) === 0 && (e3.regenCalls ?? 0) === 0, `attempts ${e3.attempts} · regen ${e3.regenCalls}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n⑰ 긴 brief 를 본문으로 보낸다 — 첨부 없음')
+{
+  /**
+   * 🔴 **실제 최대 길이에서 돌린다** (2026-09-28 · Codex P1).
+   *    2026-09-28 기준 실제 brief 최대는 `checkup-items-50s` 의 **11,694 bytes** 다.
+   *    짧은 fixture 로만 시험하면 "긴 글이 잘린다" 는 바로 그 결함을 못 본다 —
+   *    가짜가 실제보다 약하면 시험이 결함을 덮는다.
+   */
+  const SESSION3 = await import('./lib/chatgpt-session.mjs')
+  const WEBUI3 = await import('./magazine-webui-runner.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-long-'))
+  try {
+    const REAL_MAX = 11694
+    const marker = '이 문장은 반드시 그대로 들어간다'
+    const makeBrief = (bytes) => {
+      const head = `# brief\n\n## 반드시 그대로 넣을 문장\n1. ${marker}\n\n## 본문\n`
+      const tailMark = '\n<<끝표지>>\n'
+      const fill = '가'.repeat(Math.max(0, bytes - Buffer.byteLength(head + tailMark, 'utf8')) / 3 | 0)
+      return head + fill + tailMark
+    }
+
+    const makeWorld = () => {
+      const opened = []
+      const world = { opened, setInputFilesCalls: 0 }
+      const newPage = () => {
+        const pg = {
+          typed: '', closes: 0,
+          async close() { pg.closes += 1 },
+          async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+          async waitForFunction() {},
+          async evaluate() { return '---\n본문\n[CTA]' },
+          async evaluateHandle() {
+            return { asElement: () => ({ async setInputFiles() { world.setInputFilesCalls += 1 } }) }
+          },
+          locator() {
+            const l = {
+              async click() {}, async innerText() { return pg.typed },
+              async setInputFiles() { world.setInputFilesCalls += 1 },
+            }
+            return { first: () => l, async all() { return [l] }, ...l }
+          },
+          keyboard: { async insertText(t) { pg.typed += String(t ?? '') }, async press() {} },
+        }
+        opened.push(pg)
+        return pg
+      }
+      world.browser = {
+        contexts: () => [{ pages: () => [], newPage: async () => newPage() }],
+        async close() {},
+      }
+      return world
+    }
+
+    for (const [label, bytes] of [['실제 최대', REAL_MAX], ['경계(2배)', REAL_MAX * 2]]) {
+      const briefPath = path.join(T, `brief-${bytes}.md`)
+      fs.writeFileSync(briefPath, makeBrief(bytes))
+      const real = fs.statSync(briefPath).size
+      const w = makeWorld()
+      const r = await SESSION3.fetchManuscript({
+        briefPath, outPath: path.join(T, `out-${bytes}.md`),
+        promptText: '시험', requiredMarkers: [marker],
+        timeoutMs: 200, connectTimeoutMs: 200,
+        ensureTab: async () => ({ ok: true }),
+        connect: async () => w.browser,
+      })
+      const typed = w.opened[0]?.typed ?? ''
+      check(`🔴 ⑰ [${label}] ${real}B brief 가 전송까지 간다`, r.sent === true, `sent=${r.sent} reason=${r.reason ?? '-'}`)
+      check(`🔴 ⑰ [${label}] 지정 문장이 본문에 있다`, typed.includes(marker), `${typed.length}자`)
+      check(`🔴 ⑰ [${label}] 끝표지까지 들어갔다 (안 잘렸다)`, typed.includes('<<끝표지>>'), `${typed.length}자`)
+      check(`🔴 ⑰ [${label}] setInputFiles 0회`, w.setInputFilesCalls === 0, `${w.setInputFilesCalls}회`)
+    }
+
+    /** 🔴 실제 운영 brief 그대로도 본다 — 있으면 */
+    const REAL = '/Users/yanadoo/Documents/soransoran-magazine-runtime/drafts/magazine/checkup-items-50s/brief.md'
+    if (fs.existsSync(REAL)) {
+      const w = makeWorld()
+      const briefText = fs.readFileSync(REAL, 'utf8')
+      const msg = SESSION3.buildManuscriptMessage({ promptText: '시험', briefText })
+      const rb = SESSION3.judgeComposerReadback({ expected: msg, actual: msg, markers: [] })
+      check('🔴 ⑰ 실제 운영 brief 가 readback 을 통과한다', rb.ok === true, `${rb.code ?? ''} ${rb.why ?? ''} ${msg.length}자`)
+      void w
+    } else {
+      check('  ⑰ 실제 운영 brief 없음 — 건너뜀', true, REAL)
+    }
+
+    void WEBUI3
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n⑱ producer 가 기존 재료를 버리지 않는다')
+{
+  /**
+   * 🔴 **2026-09-28 공급 0건의 시작점이 여기였다.**
+   *    draft 폴더가 있으면 `skipped` 로 버렸다 — 그 폴더 안에 brief·review·draft 가
+   *    다 들어 있는데도. 25건 중 대부분이 이 사유로 빠져 `selected 0 · 재고 0` 이 됐고,
+   *    producer 는 "후보가 없다" 고 끝냈다. **만들 것이 없는 것과 내보낼 것이 없는 것은 다르다.**
+   *
+   *    실제 `selectItems` 와 실제 `runProducerFlow` 를 돌린다.
+   */
+  const PLAN = await import('./magazine-producer-plan.mjs')
+  const FLOW = await import('./lib/magazine-producer-flow.mjs')
+
+  const queue = Array.from({ length: 6 }, (_, i) => ({
+    day: i + 1, slug: `q-${i + 1}`, title: `제목 ${i + 1}`, category: '건강',
+    riskLevel: 'LOW', keywords: ['갱년기'],
+    // 🔴 프로필이 있어야 자동 레인을 탄다 — 없으면 PROFILE_UNRESOLVED 로 빠진다
+    validationProfile: 'STANDARD',
+  }))
+  /** 앞 3건은 이미 폴더가 있다 — 재료가 있다는 뜻이다 */
+  const have = new Set(['q-1', 'q-2', 'q-3'])
+
+  const sel = PLAN.selectItems({
+    queue, articles: [], today: '2026-09-28', produceCount: 5,
+    draftExists: (slug) => have.has(slug),
+  })
+  check('🔴 ⑱ 폴더가 있는 3건은 reusable 이다', sel.reusable.length === 3,
+    `reusable ${sel.reusable.length} · selected ${sel.selected.length}`)
+  check('🔴 ⑱ reusable 이 selected 로 새지 않는다',
+    sel.selected.every((x) => !have.has(x.slug)), sel.selected.map((x) => x.slug).join(','))
+  check('  ⑱ 나머지는 새로 만든다', sel.selected.length === 3, `${sel.selected.length}건`)
+
+  /** 🔴 전부 폴더가 있으면 selected 0 이지만 **일이 없는 것이 아니다** */
+  const all = PLAN.selectItems({
+    queue, articles: [], today: '2026-09-28', produceCount: 5,
+    draftExists: () => true,
+  })
+  check('🔴 ⑱ 전부 있으면 selected 0 · reusable 6', all.selected.length === 0 && all.reusable.length === 6,
+    `selected ${all.selected.length} · reusable ${all.reusable.length}`)
+
+  /**
+   * 🔴 **그 상태에서 brief 를 부르면 안 된다.** 만들 것이 없는데 ChatGPT 를 부르는 것이다.
+   *    실제 flow 를 돌려 brief 단계가 실제로 안 불리는지 본다.
+   */
+  const calls = []
+  const flow = await FLOW.runProducerFlow({ deps: {
+    log: () => {},
+    readSupply: () => ({ selected: 0, reusable: 6, queue: 6 }),
+    // 전제 검사는 이 시험의 대상이 아니다 — 통과시키고 brief 호출 여부만 본다
+    checkTools: () => ({ ok: true }),
+    checkGit: () => ({ ok: true }),
+    checkOutstanding: () => ({ ok: true, message: '없음' }),
+    runPlan: () => { calls.push('plan'); return { spawnError: null, status: 0 } },
+    runBrief: () => { calls.push('brief'); return { spawnError: null, status: 0 } },
+    runFetch: () => { calls.push('fetch'); return { spawnError: null, status: 0 } },
+    notify: () => ({ ok: true }),
+  } })
+  check('🔴 ⑱ 선정 0 · 재사용 6 이면 brief 를 부르지 않는다', !calls.includes('brief'), calls.join('>'))
+  check('🔴 ⑱ 그래도 실패로 끝나지 않는다', flow.code === 0, `code ${flow.code} · ${flow.verdict}`)
+
+  /** 🔴 반대로 선정이 있으면 brief 를 **반드시** 부른다 — 죽은 게이트가 아니다 */
+  const calls2 = []
+  await FLOW.runProducerFlow({ deps: {
+    log: () => {},
+    readSupply: () => ({ selected: 3, reusable: 0, queue: 6 }),
+    // 전제 검사는 이 시험의 대상이 아니다 — 통과시키고 brief 호출 여부만 본다
+    checkTools: () => ({ ok: true }),
+    checkGit: () => ({ ok: true }),
+    checkOutstanding: () => ({ ok: true, message: '없음' }),
+    runPlan: () => { calls2.push('plan'); return { spawnError: null, status: 0 } },
+    runBrief: () => { calls2.push('brief'); return { spawnError: null, status: 0 } },
+    runFetch: () => { calls2.push('fetch'); return { spawnError: null, status: 0 } },
+    notify: () => ({ ok: true }),
+  } })
+  check('🔴 ⑱ 선정이 있으면 brief 를 부른다', calls2.includes('brief'), calls2.join('>'))
+}
+
+console.log('\n⑲ 오탐을 내용 결함으로 세지 않는다')
+{
+  /**
+   * 🔴 **규칙이 틀린 것과 원고가 틀린 것은 다르다** (2026-09-28 · Codex P0).
+   *    "보장하지 않습니다" 는 보장한다는 말이 **아니다.** "이 글은 수익률을 다루지 않습니다"
+   *    도 수익률 주장이 **아니다.** 이런 문장을 막으면 멀쩡한 원고가 격리되고,
+   *    공급은 규칙 때문에 마른다. 실제 QA 함수를 돌려 확인한다.
+   */
+  const QA = await import('./lib/magazine-profile-qa.mjs')
+  const FB = await import('./lib/magazine-forbidden.mjs')
+
+  const body = (t) => `# 제목\n\n${t}\n`
+  const fin = (t) => QA.runProfileQA({ profile: 'FINANCIAL', title: '노후 준비', bodyText: t })
+  const codes = (r) => (r.failures ?? r.reasons ?? []).map((f) => f.code)
+
+  /** ① 🔴 부정문은 통과해야 한다 — 절 단위로 본다 */
+  for (const s of [
+    '이 상품이 수익을 보장하지 않습니다.',
+    '원금을 보장하지는 않으며, 손실이 날 수 있습니다.',
+    '누구도 수익을 보장할 수 없습니다.',
+  ]) {
+    const r = fin(body(`${s} 조건에 따라 다릅니다. 투자 판단은 본인 책임입니다.`))
+    check(`🔴 ⑲ 부정문이 보장 주장으로 걸리지 않는다 — "${s.slice(0, 16)}…"`,
+      !codes(r).includes('FIN_RETURN_GUARANTEE'), codes(r).join(',') || '없음')
+  }
+
+  /** ② 🔴 진짜 보장 주장은 **반드시** 걸린다 — 죽은 게이트가 아니다 */
+  for (const s of ['이 상품은 원금을 보장합니다.', '무조건 수익이 납니다.']) {
+    const r = fin(body(`${s} 조건에 따라 다릅니다.`))
+    check(`🔴 ⑲ 진짜 보장 주장은 걸린다 — "${s.slice(0, 14)}…"`,
+      codes(r).includes('FIN_RETURN_GUARANTEE'), codes(r).join(',') || '없음')
+  }
+
+  /** ③ 🔴 "~는 다루지 않습니다" 는 주장이 아니다 */
+  for (const s of ['이 글은 수익률을 다루지 않습니다.', '특정 종목은 언급하지 않습니다.']) {
+    const at = s.indexOf(s.includes('수익률') ? '수익률' : '특정 종목')
+    const pat = s.includes('수익률') ? '수익률' : '특정 종목'
+    check(`🔴 ⑲ 제외 문구는 주장이 아니다 — "${s.slice(0, 14)}…"`,
+      FB.isExclusionNotice(s, at, pat) === true, String(FB.isExclusionNotice(s, at, pat)))
+  }
+
+  /** ④ 🔴 **수치가 붙으면 제외 문구가 아니다** — 숫자를 말하면서 "안 다룬다" 는 없다 */
+  const numeric = '연 12% 수익률은 다루지 않습니다.'
+  check('🔴 ⑲ 수치가 붙으면 제외 예외를 주지 않는다',
+    FB.isExclusionNotice(numeric, numeric.indexOf('수익률'), '수익률') === false,
+    String(FB.isExclusionNotice(numeric, numeric.indexOf('수익률'), '수익률')))
+}
+
+console.log('\n⑳ 통합 — producer 선정 0 · 재사용 있음에서 끝까지 간다')
+{
+  /**
+   * 🔴 **2026-09-28 회차를 그대로 재현한다.**
+   *    그날은 `selected 0 · reusable 17` 이었고 공급이 **0건**으로 끝났다.
+   *    각 조각이 따로 초록인 것과 **사슬이 이어지는 것**은 다르다.
+   *
+   * 🔴 **fixture 가 실제 최상위 명령 안까지 들어가야 한다** (Codex 재검토 4번).
+   *    앞판은 임시 폴더를 만들어 놓고 CLI 는 **운영 폴더**를 봤다 — 그러면 그 검사는
+   *    코드가 아니라 운영 상태를 본 것이고, 운영이 비면 초록이 뜬다.
+   *    `SORAN_MAGAZINE_DRAFTS_DIR` 로 자식 프로세스까지 같은 fixture 를 보게 한다.
+   *
+   * 🔴 **이 검사가 증명하지 않는 것**: 실제 ChatGPT 전송·응답·저장.
+   *    여기는 전송 0건이다. 브라우저에서 무엇이 되는지는 DOM 실측과
+   *    다음 자연 회차만 말할 수 있다.
+   */
+  const { spawnSync } = await import('node:child_process')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-e2e-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const DATE = '2026-09-28'
+    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
+
+    /** 재료가 이미 있는 17건 — 단계는 실측 분포 그대로다 */
+    const mk = (slug, files) => {
+      fs.mkdirSync(path.join(D, slug), { recursive: true })
+      for (const f of files) fs.writeFileSync(path.join(D, slug, f), '#\n')
+    }
+    const reusable = []
+    for (let i = 1; i <= 5; i++) { mk(`e-need-${i}`, ['brief.md', 'review.ts']); reusable.push({ slug: `e-need-${i}` }) }
+    for (let i = 1; i <= 2; i++) { mk(`e-conv-${i}`, ['brief.md', 'review.ts', 'draft.md']); reusable.push({ slug: `e-conv-${i}` }) }
+    for (let i = 1; i <= 10; i++) { mk(`e-ready-${i}`, ['brief.md', 'review.ts', 'draft.md', 'article-draft.ts']); reusable.push({ slug: `e-ready-${i}` }) }
+    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
+      JSON.stringify({ status: 'COMPLETED', selected: [], reusable, inventoryDays: 0 }, null, 2))
+
+    /** 🔴 자식 프로세스가 **이 fixture** 를 보게 한다. HOME 도 임시다. */
+    // 🔴 시험 폴더 주입은 **시험 모드에서만** 열린다 — 자식에게도 그 사실을 명시한다
+    const childEnv = { ...process.env, SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_MODE: '1' }
+    // 🔴 호출마다 HOME 을 **명시한다.** 한 군데라도 빠지면 운영 HOME 을 물려받는다.
+    const node = (args) => spawnSync(process.execPath, args,
+      { encoding: 'utf8', maxBuffer: 1e8, env: { ...childEnv, HOME: T } })
+
+    /** ① 🔴 실제 최상위 회수 명령 — dry-run 이라 전송 0건 */
+    const fetchRun = node(['scripts/magazine-webui-runner.mjs', '--fetch-run', '--date', DATE, '--dry-run'])
+    const out1 = `${fetchRun.stdout}${fetchRun.stderr}`
+    check('🔴 ⑳ 최상위 회수 명령이 fixture 를 본다 — 대상 17건',
+      /대상 17건/.test(out1), out1.split('\n').find((l) => /대상/.test(l)) ?? out1.slice(0, 160))
+    check('🔴 ⑳ selected 0 인데도 전송 예정 5건', /전송 예정 5건/.test(out1),
+      out1.split('\n').find((l) => /전송 예정/.test(l)) ?? '(줄 없음)')
+    check('🔴 ⑳ 한 글자도 보내지 않았다', /한 글자도 보내지 않았다/.test(out1) && !/전송 1건/.test(out1),
+      out1.split('\n').filter((l) => /전송/.test(l)).join(' / ').slice(0, 160))
+
+    /** ② 🔴 실제 최상위 등록 명령 — 같은 회차에서 후보 12건 */
+    const gitStatus = () => spawnSync('git', ['status', '--porcelain'],
+      { encoding: 'utf8', env: { ...childEnv, HOME: T } }).stdout
+    const before = gitStatus()
+    const ready = node(['scripts/magazine-auto-register-ready.mjs', '--run', DATE, '--dry-run', '--json'])
+    const after = gitStatus()
+    const out2 = `${ready.stdout}${ready.stderr}`
+    check('🔴 ⑳ 최상위 등록 명령이 예외 없이 끝난다',
+      !/ReferenceError|TypeError|is not defined/.test(ready.stderr ?? ''), (ready.stderr ?? '').slice(0, 200) || '(없음)')
+    let pool = null
+    try { pool = JSON.parse(out2.slice(out2.indexOf('{'), out2.lastIndexOf('}') + 1)).pool ?? null } catch { /* 아래에서 본문으로 본다 */ }
+    check('🔴 ⑳ 같은 회차에서 등록 후보 12건',
+      pool === 12 || /pool[^0-9]*12|후보 12/.test(out2), `pool=${pool} · ${out2.slice(0, 200)}`)
+    check('🔴 ⑳ dry-run 은 repo 파일을 바꾸지 않는다', before === after, '작업트리가 달라졌다')
+
+    /** ③ 🔴 회차 뒤 남는 것이 없다 */
+    const support = path.join(T, 'Library', 'Application Support', 'soransoran')
+    const leftover = (d) => (fs.existsSync(d) ? fs.readdirSync(d) : [])
+    check('🔴 ⑳ 재생성 패킷 0개', leftover(path.join(support, 'regen-packets')).length === 0,
+      leftover(path.join(support, 'regen-packets')).join(', ') || '(없음)')
+    check('🔴 ⑳ dry-run 은 회수 결과를 남기지 않는다',
+      leftover(path.join(support, 'magazine-fetch-results')).length === 0,
+      leftover(path.join(support, 'magazine-fetch-results')).join(', ') || '(없음)')
+
+    /** ④ 🔴 fixture 가 실제로 쓰였다는 증거 — 운영 slug 가 아니라 이 fixture slug 가 나온다 */
+    check('🔴 ⑳ 출력에 fixture slug 가 있다 (운영 폴더를 본 것이 아니다)',
+      /e-need-1/.test(out1), out1.split('\n').filter((l) => /e-/.test(l)).slice(0, 2).join(' / ') || '(없음)')
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉑ 이미 보낸 글은 slug+지문으로 영구히 막힌다')
+{
+  /**
+   * 🔴 **회차 지문으로는 못 막는다** (2026-09-28 · 재검토 P0-1).
+   *    `runId` 는 목록 전체의 지문이라 **상관없는 후보 하나만 늘어도** 값이 바뀐다.
+   *    그러면 이미 보낸 글의 HOLD 가 같이 풀리고 같은 brief 가 두 번 전송된다.
+   *    보낸 사실은 `slug` + **보낸 글자**에 붙어야 한다.
+   *
+   *    아래는 전부 **실제 `fetchBatch`** 를 돌린 값이다. 전송 0건(dry-run)이다.
+   */
+  const WEBUI5 = await import('./magazine-webui-runner.mjs')
+  const QN5 = await import('./lib/magazine-quarantine.mjs')
+
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-hold-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const LEDGER = path.join(T, 'quarantine.json')
+    const DATE = '2026-09-28'
+    const writeRun = (date, list) => {
+      fs.mkdirSync(path.join(D, '_runs', date), { recursive: true })
+      fs.writeFileSync(path.join(D, '_runs', date, 'run.json'),
+        JSON.stringify({ status: 'COMPLETED', selected: [], reusable: list, inventoryDays: 0 }, null, 2))
+    }
+    const mk = (slug, files, brief = '# brief\n본문\n') => {
+      fs.mkdirSync(path.join(D, slug), { recursive: true })
+      for (const f of files) fs.writeFileSync(path.join(D, slug, f), f === 'brief.md' ? brief : '#\n')
+    }
+    for (const s of ['h-a', 'h-b', 'h-c']) mk(s, ['brief.md', 'review.ts'])
+    writeRun(DATE, [{ slug: 'h-a' }, { slug: 'h-b' }, { slug: 'h-c' }])
+
+    const plan = async (date = DATE) => {
+      const b = await WEBUI5.fetchBatch({
+        date, dryRun: true, limit: 0, draftsDir: D, quarantinePath: LEDGER,
+        resultPath: path.join(T, `r-${date}.json`),
+      })
+      return b.planned ?? []
+    }
+    const act = (p, slug) => p.find((x) => x.slug === slug)?.action
+    const nFetch = (p) => p.filter((x) => x.action === 'fetch').length
+
+    /** 기록이 없으면 셋 다 회수 대상 */
+    check('  ㉑ 기록 없음 → 3건 회수', nFetch(await plan()) === 3, `${nFetch(await plan())}건`)
+
+    /** 🔴 h-b 가 보냈는데 응답을 못 받았다 — **실제로 보낼 글자**의 지문으로 적는다 */
+    const msgB = WEBUI5.plannedMessageFor('h-b', D)
+    const fpB = QN5.deliveryFingerprintOf(msgB)
+    QN5.updateQuarantine((cur) => ({
+      ...cur,
+      'h-b': QN5.recordDelivery(cur['h-b'], {
+        sent: true, messageFingerprint: fpB, kind: 'DELIVERY_UNCERTAIN',
+        reason: 'response_timeout', stage: 'await-response', now: Date.now(),
+        runId: 'run-A', date: DATE,
+      }),
+    }), LEDGER)
+
+    /** 반례 1 — 같은 회차 재실행 */
+    const p1 = await plan()
+    check('🔴 ㉑[1] 같은 회차 재실행 → h-b 전송 0', act(p1, 'h-b') === 'hold:delivery_uncertain', String(act(p1, 'h-b')))
+    check('  ㉑[1] 나머지 2건은 계속 간다', nFetch(p1) === 2, `${nFetch(p1)}건`)
+
+    /** 반례 2 — 관계없는 후보 추가 (runId 가 바뀐다) */
+    mk('other', ['brief.md', 'review.ts'])
+    writeRun(DATE, [{ slug: 'h-a' }, { slug: 'h-b' }, { slug: 'h-c' }, { slug: 'other' }])
+    const p2 = await plan()
+    check('🔴 ㉑[2] 관계없는 후보가 늘어도 h-b 전송 0',
+      act(p2, 'h-b') === 'hold:delivery_uncertain', String(act(p2, 'h-b')))
+    check('🔴 ㉑[2] 새 후보 other 는 진행된다', act(p2, 'other') === 'fetch', String(act(p2, 'other')))
+    check('  ㉑[2] 회수 3건 (h-a·h-c·other)', nFetch(p2) === 3, `${nFetch(p2)}건`)
+
+    /** 반례 3 — 날짜가 바뀌어도 같은 지문이면 막힌다 */
+    const DATE2 = '2026-09-29'
+    writeRun(DATE2, [{ slug: 'h-a' }, { slug: 'h-b' }, { slug: 'h-c' }])
+    const p3 = await plan(DATE2)
+    check('🔴 ㉑[3] 날짜가 바뀌어도 h-b 전송 0',
+      act(p3, 'h-b') === 'hold:delivery_uncertain', String(act(p3, 'h-b')))
+
+    /** 반례 4 — brief 가 바뀌면 지문이 달라져 다시 보낼 수 있다 */
+    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), '# brief\n고친 본문\n')
+    const fpB2 = QN5.deliveryFingerprintOf(WEBUI5.plannedMessageFor('h-b', D))
+    check('  ㉑[4] brief 가 바뀌면 지문도 바뀐다', fpB2 !== fpB, `${String(fpB).slice(7, 19)} → ${String(fpB2).slice(7, 19)}`)
+    const p4 = await plan(DATE2)
+    check('🔴 ㉑[4] 지문이 달라지면 재시도 가능', act(p4, 'h-b') === 'fetch', String(act(p4, 'h-b')))
+
+    /** 반례 5 — draft.md 가 생기면 회수에서 빠지고 등록 경로로 간다 */
+    fs.writeFileSync(path.join(D, 'h-b', 'brief.md'), '# brief\n본문\n')   // 지문 원복 → 다시 HOLD 대상
+    fs.writeFileSync(path.join(D, 'h-b', 'draft.md'), '---\n원고\n[CTA]\n')
+    const p5 = await plan(DATE2)
+    check('🔴 ㉑[5] draft.md 가 생기면 회수 대상이 아니다',
+      act(p5, 'h-b') === 'skip:needs_convert', String(act(p5, 'h-b')))
+    const READY5 = await import('./magazine-auto-register-ready.mjs')
+    const scanned = READY5.scan({ runDate: DATE2, store: {}, draftsDir: D })
+    check('🔴 ㉑[5] 등록 경로가 h-b 를 후보로 잡는다',
+      (scanned.eligible ?? []).some((x) => x.slug === 'h-b') || scanned.pool >= 1,
+      `pool ${scanned.pool}`)
+
+    /** 반례 6 — 장부 write/read 뒤 sent:true·지문 보존 · 횟수 소비 0 */
+    const back = QN5.readQuarantine(LEDGER)
+    const row = back.store['h-b']
+    check('🔴 ㉑[6] 장부가 sent:true 를 보존한다', row?.delivery?.sent === true, JSON.stringify(row?.delivery ?? null))
+    check('🔴 ㉑[6] 장부가 지문을 그대로 보존한다', row?.delivery?.messageFingerprint === fpB,
+      String(row?.delivery?.messageFingerprint).slice(0, 26))
+    check('🔴 ㉑[6] attempts 소비 0', (row?.attempts ?? 0) === 0, `attempts ${row?.attempts}`)
+    check('🔴 ㉑[6] regenCalls 소비 0', (row?.regenCalls ?? 0) === 0, `regenCalls ${row?.regenCalls}`)
+    check('  ㉑[6] runId 는 출처로만 남는다', row?.delivery?.runId === 'run-A', String(row?.delivery?.runId))
+
+    /** 🔴 죽은 게이트가 아니다 — 결말이 INFRA 면 막지 않는다 */
+    const infraEntry = QN5.recordDelivery(null, {
+      sent: false, messageFingerprint: fpB, kind: 'INFRA', reason: 'connect_failed', stage: 'connect', now: 1,
+    })
+    check('🔴 ㉑ INFRA 결말은 막지 않는다', QN5.deliveryHoldsFetch(infraEntry, fpB) === null,
+      JSON.stringify(QN5.deliveryHoldsFetch(infraEntry, fpB)))
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉒ 죽은 업로드 코드를 지웠다 — 이미지 경로는 그대로다')
+{
+  /**
+   * 🔴 brief 첨부를 없앤 뒤 `pickDocumentFileInput` · `judgeUploadState` · `UPLOAD_*` 는
+   *    **부르는 곳이 하나도 없다.** 남겨 두면 다음 사람이 "이 경로가 있구나" 하고
+   *    다시 켠다. 설명도 같이 지운다 — 없는 동작을 설명하는 주석은 거짓말이다.
+   *
+   * 🔴 **이미지 생성 경로는 건드리지 않았다.** 그쪽은 파일을 올리지 않고
+   *    composer 에 문장만 넣은 뒤 결과 이미지를 내려받는다. 실제로 그런지 본다.
+   */
+  const SESS = await import('./lib/chatgpt-session.mjs')
+  for (const name of ['pickDocumentFileInput', 'judgeUploadState', 'UPLOAD_WAIT_MS', 'UPLOAD_POLL_MS', 'UPLOAD_DONE_CONTRACT']) {
+    check(`🔴 ㉒ ${name} 이 더 이상 없다`, SESS[name] === undefined, typeof SESS[name])
+  }
+  check('  ㉒ composer 계약은 그대로 있다',
+    typeof SESS.composerLocator === 'function' && typeof SESS.COMPOSER_SELECTOR === 'string',
+    SESS.COMPOSER_SELECTOR)
+
+  /** 🔴 이미지 경로가 **실제로 적재된다** — 지운 이름을 들고 있으면 여기서 터진다 */
+  let heroLoaded = true
+  let heroErr = ''
+  try { await import('./magazine-hero-runner.mjs') } catch (e) { heroLoaded = false; heroErr = e.message }
+  check('🔴 ㉒ 이미지 생성 경로가 그대로 적재된다', heroLoaded, heroErr)
+
+  /** 🔴 이미지 경로의 순수 함수가 그대로 돈다 */
+  const HERO = await import('./lib/magazine-hero.mjs')
+  const prompt = HERO.buildPrompt({ slug: 'x', title: '제목', alt: '여성', brief: '내용' })
+  check('🔴 ㉒ 이미지 프롬프트가 여전히 만들어진다',
+    typeof prompt === 'string' && prompt.length > 0, `${String(prompt).length}자`)
+  check('  ㉒ 이미지 크기 계약이 그대로다',
+    Number.isFinite(HERO.HERO_WIDTH) && Number.isFinite(HERO.HERO_HEIGHT),
+    `${HERO.HERO_WIDTH}×${HERO.HERO_HEIGHT}`)
+}
+
+console.log('\n㉓ 자동화 프로필 신원 — 사람 창으로는 절대 돌지 않는다')
+{
+  /**
+   * 🔴 **2026-09-28 실측.** 자동화가 쓰던 `soransoran-chatgpt` 의 실제 신원은
+   *    `내 Chrome` · `mogoyongseok@gmail.com` 이었다. 소란소란 사람용 프로필
+   *    (`Profile 9` · `용석 (소란 소란)` · `soransoran.community@gmail.com`)도,
+   *    자동화 전용도 아니었다. **엉뚱한 계정으로 글을 보내는 것은 조용한 사고다.**
+   */
+  const AP = await import('./lib/chatgpt-automation-profile.mjs')
+  const okDir = AP.AUTOMATION_PROFILE_DIR
+  const okPort = AP.AUTOMATION_CDP_PORT
+  const okMarker = { schemaVersion: 1, purpose: 'soransoran-chatgpt-automation', cdpPort: okPort }
+  const okLines = [`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=${okDir} --remote-debugging-port=${okPort} https://chatgpt.com/`]
+  const okPages = [{ type: 'page', url: 'https://chatgpt.com/' }]
+  const base = {
+    profileDir: okDir, port: okPort, marker: okMarker, markerMode: 0o600, dirMode: 0o700,
+    commandLines: okLines, pages: okPages, portInUse: true,
+  }
+  const j = (over) => AP.judgeAutomationProfile({ ...base, ...over })
+
+  /** 반례 1 — 사람용 Profile 9 */
+  // 🔴 이 시험 파일은 운영 HOME 을 읽지 않는다 — 금지 경로는 **모듈이 알려 준다**
+  const p9 = AP.FORBIDDEN_PROFILE_DIRS.find((d) => /Profile 9$/.test(d))
+  const r1 = j({ profileDir: p9 })
+  /**
+   * 🔴 **왜 사유 문장까지 보는가.** 뒤에 "자동화 전용 폴더가 아니다" 라는 일반 검사가
+   *    또 있어서, 금지 목록을 지워도 결과는 똑같이 차단이다 — 그러면 금지 목록은
+   *    **죽은 게이트**가 된다(변이로 확인). 운영자가 읽을 사유가 달라지므로 그것을 고정한다.
+   *    "사람용 프로필이라 막혔다" 와 "폴더가 다르다" 는 대처가 다른 말이다.
+   */
+  check('🔴 ㉓[1] 사람용 Profile 9 → 차단', r1.ok === false && r1.code === AP.MISMATCH, `${r1.code} — ${r1.why}`)
+  check('🔴 ㉓[1] 사유가 사람용 프로필임을 말한다', /사람용·옛 프로필/.test(r1.why ?? ''), r1.why)
+
+  /** 반례 2 — 옛 자동화 폴더 */
+  const old = AP.FORBIDDEN_PROFILE_DIRS.find((d) => /soransoran-chatgpt$/.test(d))
+  const r2 = j({ profileDir: old })
+  check('🔴 ㉓[2] 옛 soransoran-chatgpt → 차단', r2.ok === false && r2.code === AP.MISMATCH, `${r2.code} — ${r2.why}`)
+  check('🔴 ㉓[2] 사유가 옛 프로필임을 말한다', /사람용·옛 프로필/.test(r2.why ?? ''), r2.why)
+
+  /** 반례 3 — 새 프로필이지만 표식 없음 */
+  const r3 = j({ marker: null, markerMode: null, dirMode: null })
+  check('🔴 ㉓[3] 표식 없음 → 차단', r3.ok === false && /표식/.test(r3.why), r3.why)
+
+  /** 반례 4 — 새 프로필인데 ChatGPT 가 아닌 page */
+  const r4 = j({ pages: [{ type: 'page', url: 'https://hoohootv1.org/watch/drama/4145' }] })
+  check('🔴 ㉓[4] 비-ChatGPT 페이지 → 차단', r4.ok === false && /허용되지 않는 페이지/.test(r4.why), r4.why)
+
+  /** 반례 5 — 정확한 프로필 + 표식 + ChatGPT page → 통과 */
+  const r5 = j({})
+  check('🔴 ㉓[5] 정확한 프로필+표식+ChatGPT → 통과', r5.ok === true, r5.why ?? JSON.stringify(r5.checked))
+
+  /** 반례 6 — 다른 프로세스가 9344 를 쓰고 있다 */
+  const r6 = j({ commandLines: [`/usr/bin/other --user-data-dir=/tmp/somewhere --remote-debugging-port=${okPort}`] })
+  check('🔴 ㉓[6] 다른 프로세스가 포트 사용 → 차단', r6.ok === false && /다른 프로세스/.test(r6.why), r6.why)
+
+  /** 🔴 곁가지 — 같은 폴더인데 포트가 다르면 붙지 않는다 */
+  const r7 = j({
+    portInUse: false,
+    commandLines: [`Google Chrome --user-data-dir=${okDir} --remote-debugging-port=9999`],
+  })
+  check('🔴 ㉓ 같은 폴더·다른 포트 → 차단', r7.ok === false && /포트가 다르다/.test(r7.why), r7.why)
+
+  /** 🔴 권한이 느슨하면 막는다 — 쿠키가 든 폴더다 */
+  check('🔴 ㉓ 표식 0644 → 차단', j({ markerMode: 0o644 }).ok === false, j({ markerMode: 0o644 }).why)
+  check('🔴 ㉓ 폴더 0755 → 차단', j({ dirMode: 0o755 }).ok === false, j({ dirMode: 0o755 }).why)
+
+  /** 🔴 표식을 사람 프로필에 붙여도 소용없다 */
+  const forced = AP.ensureAutomationProfile({ profileDir: p9 })
+  check('🔴 ㉓ 사람 프로필에는 표식을 만들지 않는다', forced.ok === false, forced.why)
+
+  /** 🔴 실제 probe 가 이 관문을 지난다 — 죽은 게이트가 아니다 */
+  const SESS = await import('./lib/chatgpt-session.mjs')
+  check('  ㉓ 세션이 전용 폴더를 쓴다', SESS.PROFILE_DIR === okDir, SESS.PROFILE_DIR)
+  check('  ㉓ 세션이 전용 포트를 쓴다', SESS.CDP_PORT === okPort, String(SESS.CDP_PORT))
+  const blocked = await SESS.probe({ verifyProfileFn: async () => ({ ok: false, code: AP.MISMATCH, why: '시험: 신원 불일치' }) })
+  check('🔴 ㉓ 신원이 틀리면 probe 가 즉시 멈춘다',
+    blocked.status === AP.MISMATCH, `${blocked.status} — ${blocked.errorDetail}`)
+  check('🔴 ㉓ 그 실패는 회차 전역 실패다 (한 후보만 건너뛰지 않는다)',
+    SESS.isFatal(AP.MISMATCH) === true, String(SESS.isFatal(AP.MISMATCH)))
+  const FK23 = await import('./lib/magazine-failure-kind.mjs')
+  const k23 = FK23.classifyFailure({ code: AP.MISMATCH, message: '신원 불일치', sent: false })
+  check('🔴 ㉓ 신원 실패는 원고 탓이 아니다 (INFRA)', k23.kind === 'INFRA', k23.kind)
+}
+
+console.log('\n㉔ 시험 폴더 주입은 시험 모드에서만 열린다')
+{
+  /**
+   * 🔴 폴더를 갈아끼우는 손잡이가 운영에서 켜지면 자동화가 **엉뚱한 폴더의 원고**를
+   *    읽고 쓴다. 로그만 보면 정상이라 알아채기 어렵다.
+   */
+  const LOAD = await import('./lib/magazine-load.mjs')
+  const r1 = LOAD.resolveDraftsDir({ SORAN_MAGAZINE_DRAFTS_DIR: '/tmp/x' })
+  check('🔴 ㉔ TEST_MODE 없이 주입 → 차단', r1.ok === false && r1.code === 'DRAFTS_DIR_INJECTION_BLOCKED', r1.why)
+  const r2 = LOAD.resolveDraftsDir({ SORAN_MAGAZINE_DRAFTS_DIR: '/tmp/x', SORAN_MAGAZINE_TEST_MODE: '1' })
+  check('🔴 ㉔ TEST_MODE=1 이면 허용', r2.ok === true && r2.injected === true, r2.dir)
+  const r3 = LOAD.resolveDraftsDir({})
+  check('  ㉔ 안 주면 저장소 폴더', r3.ok === true && r3.injected === false, r3.dir)
+
+  /** 🔴 실제 자식 프로세스가 **종료 코드 2** 로 끝난다 — 조용히 기본값으로 가지 않는다 */
+  const { spawnSync } = await import('node:child_process')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-inject-'))
+  try {
+    const run = (env) => spawnSync(process.execPath,
+      ['scripts/magazine-webui-runner.mjs', '--fetch-run', '--dry-run'],
+      { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T, ...env } })
+    const bad = run({ SORAN_MAGAZINE_DRAFTS_DIR: T })
+    check('🔴 ㉔ 운영에서 주입되면 실제 명령이 non-zero', bad.status !== 0, `exit ${bad.status}`)
+    check('🔴 ㉔ 그 사유를 말한다',
+      /DRAFTS_DIR_INJECTION_BLOCKED/.test(`${bad.stdout}${bad.stderr}`), `${bad.stderr}`.slice(0, 120))
+    check('🔴 ㉔ 파일을 하나도 건드리지 않았다고 말한다',
+      /파일을 하나도 읽거나 쓰지 않았다/.test(`${bad.stdout}${bad.stderr}`), '문구 없음')
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+
+  /** 🔴 launchd plist·운영 명령에 두 변수가 없다 */
+  /** 🔴 실제 위치에서 읽는다 — 없는 폴더를 뒤지면 "0개 통과" 라는 공허한 초록이 뜬다 */
+  const plists = spawnSyncTop('git', ['ls-files', '--', 'docs/operations/launchd'])
+    .split('\n').filter((f) => /\.plist(\.template)?$/.test(f))
+  check('  ㉔ 검사할 launchd 템플릿을 실제로 찾았다', plists.length > 0, `${plists.length}개`)
+  const leaked = plists.filter((f) => /SORAN_MAGAZINE_(DRAFTS_DIR|TEST_MODE|TEST_FIXTURE)/.test(fs.readFileSync(path.join(process.cwd(), f), 'utf8')))
+  check('🔴 ㉔ launchd plist 에 시험 변수가 없다', leaked.length === 0,
+    leaked.join(', ') || `검사한 plist ${plists.length}개`)
+  const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'))
+  const badScripts = Object.entries(pkg.scripts ?? {})
+    .filter(([, v]) => /SORAN_MAGAZINE_(DRAFTS_DIR|TEST_FIXTURE)/.test(String(v)))
+  check('🔴 ㉔ package.json 운영 명령에도 없다', badScripts.length === 0, badScripts.map(([k]) => k).join(', ') || '0건')
+}
+
+console.log('\n㉕ ensureChrome 이 신원 정본이다 — 모든 경로가 여기를 지난다')
+{
+  /**
+   * 🔴 **수정 전 결함** (2026-09-28 · 재검토 P0-1).
+   *    `ensureChrome` 은 `cdpAvailable()` 하나만 보고 `{ok:true}` 를 돌려줬다.
+   *    그래서 **이미 떠 있기만 하면** 폴더·표식·포트 주인·열린 페이지를 하나도 보지 않았다.
+   *    `magazine-hero-runner` 는 `probe` 를 거치지 않고 `ensureChrome` 을 직접 부른다 —
+   *    즉 이미지 경로는 **엉뚱한 프로필에 그대로 붙었다.**
+   */
+  const SESS = await import('./lib/chatgpt-session.mjs')
+  const AP = await import('./lib/chatgpt-automation-profile.mjs')
+
+  /**
+   * 🔴 **환경을 읽지 않는다.** 실제 프로필을 보면 "그때 Chrome 이 떠 있었는지" 에 따라
+   *    결과가 달라진다 — 지금 실제로 전용 창이 떠 있어서 LIVE 잠금에 걸렸다.
+   *    폴더와 프로세스 목록을 고정한다.
+   */
+  const T25 = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-ensure-'))
+  const call = async (over = {}) => {
+    let spawned = 0
+    const r = await SESS.ensureChrome({
+      waitMs: 200, pollMs: 20, browserCheck: () => true,
+      profileDir: T25, processes: () => '',
+      spawnFn: () => { spawned += 1; return { unref() {} } },
+      ...over,
+    })
+    return { r, spawned }
+  }
+
+  /** ① 🔴 **이미 떠 있어도** 신원이 틀리면 막는다 (옛 결함의 정확한 반례) */
+  const a = await call({
+    cdpCheck: async () => true,
+    verifyProfileFn: async ({ requireRunning }) => (requireRunning
+      ? { ok: false, code: AP.MISMATCH, why: '열린 페이지가 ChatGPT 가 아니다' }
+      : { ok: true }),
+  })
+  check('🔴 ㉕ CDP 가 살아 있어도 신원이 틀리면 막는다',
+    a.r.ok === false && a.r.reason === AP.MISMATCH, `${a.r.ok} · ${a.r.reason} — ${a.r.why}`)
+  check('🔴 ㉕ 그때 spawn 0회', a.spawned === 0, `${a.spawned}회`)
+
+  /** ② 🔴 띄우기 전 검사가 막으면 spawn 조차 하지 않는다 */
+  const b = await call({
+    cdpCheck: async () => false,
+    verifyProfileFn: async () => ({ ok: false, code: AP.MISMATCH, why: '용도 표식이 없다' }),
+  })
+  check('🔴 ㉕ 표식이 없으면 띄우지도 않는다', b.r.reason === AP.MISMATCH && b.spawned === 0,
+    `${b.r.reason} · spawn ${b.spawned}회`)
+  check('🔴 ㉕ 자동 실행은 표식을 만들지 않는다 (생성 0)',
+    !fs.existsSync(path.join(os.tmpdir(), 'never')) && /표식/.test(b.r.why ?? ''), b.r.why)
+
+  /** ③ 🔴 **새로 띄운 뒤에도 다시 본다.** 우리가 spawn 했다고 우리 창이라는 보장은 없다 */
+  // 🔴 **spawn 경로를 실제로 태운다** — 처음엔 포트가 닫혀 있다가 띄운 뒤 열린다
+  let cdpPolls = 0
+  const c = await call({
+    cdpCheck: async () => { cdpPolls += 1; return cdpPolls > 1 },
+    verifyProfileFn: async ({ requireRunning }) => (requireRunning
+      ? { ok: false, code: AP.MISMATCH, why: '띄운 뒤 보니 다른 프로세스가 포트를 잡았다' }
+      : { ok: true }),
+  })
+  check('  ㉕ 그 반례가 실제로 spawn 을 탔다', c.spawned === 1, `spawn ${c.spawned}회`)
+  check('🔴 ㉕ 띄운 뒤 신원이 틀리면 ok 를 주지 않는다',
+    c.r.ok === false && c.r.reason === AP.MISMATCH && c.r.started === true,
+    `ok=${c.r.ok} started=${c.r.started} ${c.r.why}`)
+
+  /** ④ 정상 경로는 그대로 통과한다 — 죽은 게이트가 아니다 */
+  const d = await call({ cdpCheck: async () => true, verifyProfileFn: async () => ({ ok: true }) })
+  check('  ㉕ 신원이 맞으면 통과한다', d.r.ok === true && d.r.started === false, JSON.stringify(d.r.reason ?? 'ok'))
+
+  /**
+   * ⑤ 🔴 **fail-closed** — 페이지 목록을 못 읽은 것을 "0건" 으로 바꾸지 않는다.
+   *    옛 판은 `catch → []` 였고, 그 빈 배열이 그대로 정상 통과했다.
+   */
+  const read = (over) => AP.judgeAutomationProfile({
+    profileDir: AP.AUTOMATION_PROFILE_DIR, port: AP.AUTOMATION_CDP_PORT,
+    marker: { schemaVersion: 1, purpose: 'soransoran-chatgpt-automation', cdpPort: AP.AUTOMATION_CDP_PORT },
+    markerMode: 0o600, dirMode: 0o700,
+    commandLines: [`Chrome --user-data-dir=${AP.AUTOMATION_PROFILE_DIR} --remote-debugging-port=${AP.AUTOMATION_CDP_PORT}`],
+    portInUse: true, requireRunning: true, ...over,
+  })
+  /**
+   * 🔴 **"못 읽었다" 와 "0건" 은 다른 말이다.** 운영 모드에서는 0건도 막히므로
+   *    둘을 구분하지 않으면 읽기 실패 분기가 **죽은 게이트**가 된다 (변이로 확인).
+   *    ① 사유가 읽기 실패임을 말하는지 ② 0건이 허용되는 **로그인 모드에서도** 막는지 본다.
+   */
+  const unread = read({ pages: null, pagesReadOk: false })
+  check('🔴 ㉕ 페이지 목록을 못 읽으면 막는다', unread.ok === false, unread.why)
+  check('🔴 ㉕ 사유가 "읽지 못했다" 임을 말한다', /읽지 못했다/.test(unread.why ?? ''), unread.why)
+  const unreadLogin = read({ pages: null, pagesReadOk: false, mode: 'login' })
+  check('🔴 ㉕ 0건이 허용되는 로그인 모드에서도 읽기 실패는 막는다',
+    unreadLogin.ok === false && /읽지 못했다/.test(unreadLogin.why ?? ''), unreadLogin.why)
+  check('  ㉕ 로그인 모드에서 page 0건 자체는 허용된다',
+    read({ pages: [], mode: 'login' }).ok === true, read({ pages: [], mode: 'login' }).why ?? 'ok')
+  check('🔴 ㉕ 운영에서 page 0건도 막는다', read({ pages: [] }).ok === false, read({ pages: [] }).why)
+  check('  ㉕ ChatGPT page 가 있으면 통과',
+    read({ pages: [{ type: 'page', url: 'https://chatgpt.com/' }] }).ok === true, 'ok')
+
+  /** ⑥ 🔴 auth.openai.com 은 **로그인 중에만** 허용된다 */
+  const authPage = [{ type: 'page', url: 'https://auth.openai.com/mfa-challenge/email-otp' }]
+  check('🔴 ㉕ 운영 실행은 auth.openai.com 을 막는다',
+    read({ pages: authPage, mode: 'operate' }).ok === false, read({ pages: authPage, mode: 'operate' }).why)
+  check('🔴 ㉕ 로그인 중에만 auth.openai.com 을 허용한다',
+    read({ pages: authPage, mode: 'login' }).ok === true, read({ pages: authPage, mode: 'login' }).why ?? 'ok')
+  check('🔴 ㉕ 로그인 중에도 엉뚱한 페이지는 막는다',
+    read({ pages: [{ type: 'page', url: 'https://hoohootv1.org/watch' }], mode: 'login' }).ok === false,
+    read({ pages: [{ type: 'page', url: 'https://hoohootv1.org/watch' }], mode: 'login' }).why)
+
+  /**
+   * ⑦ 🔴 **이미지 경로가 실제로 이 관문을 지난다.**
+   *    `magazine-hero-runner` 는 `probe` 를 거치지 않는다 — `ensureChrome` 하나에 달려 있다.
+   */
+  const heroSrc = fs.readFileSync(path.join(process.cwd(), 'scripts/magazine-hero-runner.mjs'), 'utf8')
+  check('  ㉕ hero 가 ensureChrome 을 거친다', /await ensureChrome\(/.test(heroSrc),
+    heroSrc.split('\n').find((l) => /await ensureChrome\(/.test(l))?.trim() ?? '호출 없음')
+  const HERO = await import('./magazine-hero-runner.mjs')
+  check('  ㉕ hero 모듈이 적재된다', typeof HERO === 'object', typeof HERO)
+  fs.rmSync(T25, { recursive: true, force: true })
+}
+
+const KILL_CHILD_SRC = "/**\n * \ud83d\udd34 **\uc804\uc1a1 \uc9c1\ud6c4 \ud504\ub85c\uc138\uc2a4\uac00 \uc8fd\ub294 \uc0c1\ud669\uc744 \uc2e4\uc81c\ub85c \ub9cc\ub4e0\ub2e4.**\n *    \uc2e4\uc81c `fetchManuscript` \ub97c \uac00\uc9dc \ube0c\ub77c\uc6b0\uc800\ub85c \ub3cc\ub9ac\ub418, send \ubc84\ud2bc\uc744 \ub204\ub974\ub294 \uc21c\uac04\n *    `SIGKILL` \ub85c \uc790\uae30 \uc790\uc2e0\uc744 \uc8fd\uc778\ub2e4. \uc815\ub9ac \ucf54\ub4dc\ub3c4, \ubc18\ud658\ub3c4 \uc5c6\ub2e4 \u2014 \uc9c4\uc9dc \uae09\uc0ac\ub2e4.\n */\nimport { writeFileSync, mkdirSync } from 'node:fs'\nimport { join } from 'node:path'\nimport { fetchManuscript } from './scripts/lib/chatgpt-session.mjs'\nimport { updateQuarantine, recordDelivery } from './scripts/lib/magazine-quarantine.mjs'\n/**\n * \ud83d\udd34 **\ud504\ub86c\ud504\ud2b8\ub294 production \uac83\uc744 \uc4f4\ub2e4.** \uc9c0\ubb38\uc740 \"\ubcf4\ub0bc \uae00\uc790\" \ub85c \ub9cc\ub4e0\ub2e4 \u2014\n *    \uc2dc\ud5d8\uc774 \ub2e4\ub978 \ubb38\uc7a5\uc744 \uc4f0\uba74 \uc9c0\ubb38\uc774 \ub2ec\ub77c\uc838, \ub9c9\uc544\uc57c \ud560 \uac83\uc744 \ubabb \ub9c9\uace0\ub3c4 \ucd08\ub85d\uc774 \ub72c\ub2e4.\n */\nimport { manuscriptPromptText } from './scripts/magazine-webui-runner.mjs'\n\n// \ud83d\udd34 `node -e` \ub294 argv \uc5d0 \uc2a4\ud06c\ub9bd\ud2b8 \uacbd\ub85c\ub97c \ub123\uc9c0 \uc54a\ub294\ub2e4 \u2014 \ub4a4\uc5d0\uc11c \uc13c\ub2e4\nconst [briefPath, outPath, ledger, slug, message] = process.argv.slice(-5)\nvoid message\n\nconst makePage = () => {\n  let typed = ''\n  const composer = {\n    async click() {},\n    async innerText() { return typed },\n  }\n  const sendBtn = {\n    async click() {\n      // \ud83d\udd34 \uc5ec\uae30\uac00 \uc804\uc1a1\uc774\ub2e4. \ub204\ub974\ub294 \uc21c\uac04 \uae09\uc0ac\ud55c\ub2e4.\n      process.kill(process.pid, 'SIGKILL')\n      await new Promise(() => {})\n    },\n  }\n  return {\n    async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},\n    async waitForFunction() {},\n    async evaluate() { return '---\\n\ubcf8\ubb38\\n[CTA]' },\n    async evaluateHandle() { return { asElement: () => ({ async setInputFiles() {} }) } },\n    locator(sel) {\n      const isSend = /send-button|\ubcf4\ub0b4\uae30|Send/.test(String(sel ?? ''))\n      const l = isSend ? sendBtn : composer\n      return { first: () => l, async all() { return [l] }, ...l }\n    },\n    keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },\n  }\n}\nconst page = makePage()\nconst browser = {\n  contexts: () => [{ pages: () => [], newPage: async () => page }],\n  async close() {},\n}\n\nmkdirSync(join(outPath, '..'), { recursive: true })\nvoid writeFileSync\n\nconst r = await fetchManuscript({\n  briefPath, outPath, promptText: manuscriptPromptText(null), requiredMarkers: [],\n  timeoutMs: 500, connectTimeoutMs: 500,\n  ensureTab: async () => ({ ok: true }),\n  connect: async () => browser,\n  onBeforeSend: async ({ messageFingerprint }) => {\n    updateQuarantine((cur) => ({\n      ...cur,\n      [slug]: recordDelivery(cur[slug], {\n        sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',\n        reason: 'sending', stage: 'send', now: Date.now(), date: '2026-09-28',\n      }),\n    }), ledger)\n    return { ok: true }\n  },\n})\n// \ud83d\udd34 \uc5ec\uae30 \ub3c4\ub2ec\ud558\uba74 \uae09\uc0ac\uac00 \uc77c\uc5b4\ub098\uc9c0 \uc54a\uc740 \uac83\uc774\ub2e4 \u2014 \uadf8\uac83\ub3c4 \uc0ac\uc2e4\ub300\ub85c \uc54c\ub9b0\ub2e4\nconsole.log(`NOT_KILLED ${JSON.stringify(r)}`)\n"
+
+console.log('\n㉖ 전송 직전에 먼저 적는다 — 급사해도 다시 보내지 않는다')
+{
+  /**
+   * 🔴 **수정 전 결함** (2026-09-28 · 재검토 P0-2).
+   *    앞판은 send 를 누르고 **돌아온 뒤에** 장부를 적었다. 전송 직후 프로세스가 죽으면
+   *    (맥이 잠들거나 launchd 가 끊거나 예외로 터지거나) 기록이 없다 —
+   *    다음 회차는 "안 보냈다" 로 읽고 **같은 brief 를 다시 보낸다.**
+   *
+   *    아래는 **진짜 자식 프로세스**를 띄워 send 를 누르는 순간 `SIGKILL` 로 죽인다.
+   *    정리 코드도 반환도 없다. 그 뒤 장부와 다음 회차 계획을 본다.
+   */
+  const { spawnSync } = await import('node:child_process')
+  const WEBUI6 = await import('./magazine-webui-runner.mjs')
+  const QN6 = await import('./lib/magazine-quarantine.mjs')
+
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-kill-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const LEDGER = path.join(T, 'q.json')
+    const DATE = '2026-09-28'
+    const mk = (slug) => {
+      fs.mkdirSync(path.join(D, slug), { recursive: true })
+      fs.writeFileSync(path.join(D, slug, 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+      fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
+    }
+    for (const s of ['k-a', 'k-b']) mk(s)
+    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
+    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
+      JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'k-a' }, { slug: 'k-b' }], inventoryDays: 0 }))
+
+    const plan = async () => {
+      const b = await WEBUI6.fetchBatch({
+        date: DATE, dryRun: true, limit: 0, draftsDir: D, quarantinePath: LEDGER,
+        resultPath: path.join(T, 'r.json'),
+      })
+      return b.planned ?? []
+    }
+    const act = (p, slug) => p.find((x) => x.slug === slug)?.action
+
+    check('  ㉖ 급사 전에는 2건 다 회수 대상',
+      (await plan()).filter((x) => x.action === 'fetch').length === 2, '2건 아님')
+
+    /** 🔴 실제 자식을 띄워 send 를 누르는 순간 SIGKILL */
+    const child = spawnSync(process.execPath,
+      ['--input-type=module', '-e', KILL_CHILD_SRC,
+        path.join(D, 'k-a', 'brief.md'), path.join(D, 'k-a', 'draft.md'), LEDGER, 'k-a', 'x'],
+      { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T } })
+    check('🔴 ㉖ 자식이 전송 직후 실제로 급사했다 (SIGKILL)',
+      child.signal === 'SIGKILL' || child.status === 137,
+      `signal=${child.signal} status=${child.status} ${String(child.stdout).slice(0, 80)}`)
+    check('🔴 ㉖ 급사라 draft 가 저장되지 않았다',
+      !fs.existsSync(path.join(D, 'k-a', 'draft.md')), 'draft.md 가 있다')
+
+    /** 🔴 그런데도 장부에는 전송 사실이 남아 있다 — 선기록 덕분이다 */
+    const row = QN6.readQuarantine(LEDGER).store['k-a']
+    check('🔴 ㉖ 급사해도 장부에 전송 기록이 남는다', !!row?.delivery, JSON.stringify(row ?? null))
+    check('🔴 ㉖ 그 기록은 DELIVERY_UNCERTAIN 이다', row?.delivery?.kind === 'DELIVERY_UNCERTAIN', String(row?.delivery?.kind))
+    check('🔴 ㉖ sent 는 모름(null) — 눌렀는지 확정할 수 없다', row?.delivery?.sent === null, String(row?.delivery?.sent))
+    check('🔴 ㉖ 지문이 실제 보낼 메시지와 같다',
+      row?.delivery?.messageFingerprint === QN6.deliveryFingerprintOf(WEBUI6.plannedMessageFor('k-a', D)),
+      String(row?.delivery?.messageFingerprint).slice(0, 26))
+    check('🔴 ㉖ attempts 소비 0', (row?.attempts ?? 0) === 0, `attempts ${row?.attempts}`)
+    check('🔴 ㉖ regenCalls 소비 0', (row?.regenCalls ?? 0) === 0, `regenCalls ${row?.regenCalls}`)
+
+    /** 🔴 다음 회차 — 재전송 0 · 다른 후보는 계속 */
+    const p2 = await plan()
+    check('🔴 ㉖ 재실행 시 k-a 전송 0', act(p2, 'k-a') === 'hold:delivery_uncertain', String(act(p2, 'k-a')))
+    check('🔴 ㉖ 다른 후보 k-b 는 계속 진행', act(p2, 'k-b') === 'fetch', String(act(p2, 'k-b')))
+
+    /** 🔴 brief 를 고치면 지문이 달라져 다시 보낼 수 있다 */
+    fs.writeFileSync(path.join(D, 'k-a', 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 고친 문장\n')
+    check('🔴 ㉖ brief 를 고치면 재시도 가능', act(await plan(), 'k-a') === 'fetch', String(act(await plan(), 'k-a')))
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉗ 선기록에 실패하면 한 글자도 보내지 않는다')
+{
+  /**
+   * 🔴 **기억할 수 없는 전송은 하지 않는다.** 장부에 적지 못한 채 보내면,
+   *    다음 회차가 그 사실을 알 길이 없어 같은 brief 를 다시 보낸다.
+   */
+  const SESS27 = await import('./lib/chatgpt-session.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-pre-'))
+  try {
+    const briefPath = path.join(T, 'brief.md')
+    fs.writeFileSync(briefPath, '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+
+    const makeWorld = () => {
+      const w = { sendClicks: 0, setInputFiles: 0, typed: '' }
+      const page = {
+        async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+        async waitForFunction() {},
+        async evaluate() { return '---\n본문\n[CTA]' },
+        async evaluateHandle() { return { asElement: () => ({ async setInputFiles() { w.setInputFiles += 1 } }) } },
+        locator(sel) {
+          const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+          const l = {
+            async click() { if (isSend) w.sendClicks += 1 },
+            async innerText() { return w.typed },
+            async setInputFiles() { w.setInputFiles += 1 },
+          }
+          return { first: () => l, async all() { return [l] }, ...l }
+        },
+        keyboard: { async insertText(t) { w.typed += String(t ?? '') }, async press() {} },
+      }
+      w.browser = { contexts: () => [{ pages: () => [], newPage: async () => page }], async close() {} }
+      return w
+    }
+
+    /** ① 선기록이 실패하면 누르지 않는다 */
+    const w1 = makeWorld()
+    const r1 = await SESS27.fetchManuscript({
+      briefPath, outPath: path.join(T, 'out.md'), promptText: '시험', requiredMarkers: ['문장 하나'],
+      timeoutMs: 300, connectTimeoutMs: 300,
+      ensureTab: async () => ({ ok: true }), connect: async () => w1.browser,
+      onBeforeSend: async () => ({ ok: false, why: '장부 잠김' }),
+    })
+    check('🔴 ㉗ 선기록 실패 → send 클릭 0회', w1.sendClicks === 0, `${w1.sendClicks}회`)
+    check('🔴 ㉗ 전송 0건으로 끝난다', r1.ok === false && r1.sent === false, `ok=${r1.ok} sent=${r1.sent}`)
+    check('🔴 ㉗ 사유가 선기록 실패임을 말한다',
+      r1.reason === 'predelivery_record_failed' && /한 글자도 보내지 않았다/.test(r1.errorDetail ?? ''),
+      `${r1.reason} — ${r1.errorDetail}`)
+    check('  ㉗ setInputFiles 0회', w1.setInputFiles === 0, `${w1.setInputFiles}회`)
+
+    /** ② 🔴 선기록은 **누르기 전**에 불린다 — 순서를 증명한다 */
+    const w2 = makeWorld()
+    const order = []
+    await SESS27.fetchManuscript({
+      briefPath, outPath: path.join(T, 'out2.md'), promptText: '시험', requiredMarkers: ['문장 하나'],
+      timeoutMs: 300, connectTimeoutMs: 300,
+      ensureTab: async () => ({ ok: true }),
+      connect: async () => {
+        const b = w2.browser
+        const origCtx = b.contexts
+        b.contexts = () => origCtx().map((c) => ({
+          ...c,
+          newPage: async () => {
+            const p = await c.newPage()
+            const loc = p.locator.bind(p)
+            p.locator = (sel) => {
+              const l = loc(sel)
+              if (!/send-button|보내기|Send/.test(String(sel ?? ''))) return l
+              return { ...l, first: () => ({ ...l.first(), async click() { order.push('send'); w2.sendClicks += 1 } }) }
+            }
+            return p
+          },
+        }))
+        return b
+      },
+      onBeforeSend: async ({ messageFingerprint }) => { order.push(`record:${String(messageFingerprint).slice(7, 15)}`); return { ok: true } },
+    })
+    check('🔴 ㉗ 기록이 send 보다 먼저다', order[0]?.startsWith('record:') && order[1] === 'send', order.join(' → '))
+
+    /** ③ 🔴 선기록 뒤에 실패하면 **전송 여부를 확정할 수 없다** */
+    // 🔴 readback 은 통과시키고 **응답 대기에서** 터뜨린다 — send 를 누른 뒤의 실패다
+    const w3 = makeWorld()
+    const b3 = w3.browser
+    const ctx3 = b3.contexts()[0]
+    b3.contexts = () => [{
+      ...ctx3,
+      newPage: async () => {
+        const p = await ctx3.newPage()
+        p.waitForFunction = async () => { throw new Error('waitForFunction: Timeout') }
+        return p
+      },
+    }]
+    const r3 = await SESS27.fetchManuscript({
+      briefPath, outPath: path.join(T, 'out3.md'), promptText: '시험', requiredMarkers: ['문장 하나'],
+      timeoutMs: 300, connectTimeoutMs: 300,
+      ensureTab: async () => ({ ok: true }), connect: async () => b3,
+      onBeforeSend: async () => ({ ok: true }),
+    })
+    check('🔴 ㉗ 선기록 뒤 실패는 preRecorded 를 달고 온다', r3.preRecorded === true, String(r3.preRecorded))
+    check('🔴 ㉗ 그 실패는 send 를 누른 뒤다', w3.sendClicks === 1 && r3.sent === true, `send ${w3.sendClicks}회 sent=${r3.sent}`)
+    check('  ㉗ 그래야 호출부가 기록을 지우지 않는다', r3.ok === false && r3.reason === 'response_timeout', `${r3.reason}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉘ --login 만 표식을 만든다 · 포트 주인을 확인한다')
+{
+  const AP28 = await import('./lib/chatgpt-automation-profile.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-login-'))
+  try {
+    /** 🔴 표식 생성은 권한까지 맞춘다 */
+    const made = AP28.ensureAutomationProfile({ profileDir: path.join(T, 'auto'), port: 9344 })
+    check('  ㉘ 금지 폴더가 아니면 표식을 만든다', made.ok === true, made.why ?? 'ok')
+    const f = AP28.markerPath(path.join(T, 'auto'))
+    check('🔴 ㉘ 표식 권한 0600', (fs.statSync(f).mode & 0o777) === 0o600, (fs.statSync(f).mode & 0o777).toString(8))
+    check('🔴 ㉘ 폴더 권한 0700',
+      (fs.statSync(path.join(T, 'auto')).mode & 0o777) === 0o700,
+      (fs.statSync(path.join(T, 'auto')).mode & 0o777).toString(8))
+    const back = AP28.readMarker(path.join(T, 'auto'))
+    check('  ㉘ 표식 내용이 계약대로다',
+      back.marker.schemaVersion === 1 && back.marker.purpose === 'soransoran-chatgpt-automation' && back.marker.cdpPort === 9344,
+      JSON.stringify(back.marker))
+
+    /** 🔴 사람 프로필에는 만들지 않는다 */
+    for (const bad of AP28.FORBIDDEN_PROFILE_DIRS) {
+      const r = AP28.ensureAutomationProfile({ profileDir: bad })
+      check(`🔴 ㉘ 금지 폴더에는 표식을 만들지 않는다 — ${path.basename(bad)}`,
+        r.ok === false && !fs.existsSync(AP28.markerPath(bad)), r.why)
+    }
+
+    /**
+     * 🔴 **자동 실행은 표식을 만들지 않는다.** `--login` 만 만든다.
+     *    소스가 아니라 **실행**으로 본다: 표식 없는 폴더로 ensureChrome 을 부른 뒤
+     *    표식 파일이 생겼는지 확인한다.
+     */
+    const SESS28 = await import('./lib/chatgpt-session.mjs')
+    const blank = path.join(T, 'blank')
+    fs.mkdirSync(blank, { recursive: true, mode: 0o700 })
+    let spawned = 0
+    const r = await SESS28.ensureChrome({
+      waitMs: 60, pollMs: 20, profileDir: blank, processes: () => '',
+      browserCheck: () => true, cdpCheck: async () => false,
+      spawnFn: () => { spawned += 1; return { unref() {} } },
+    })
+    check('🔴 ㉘ 자동 실행은 표식 없는 폴더에서 멈춘다', r.ok === false, `${r.reason} — ${r.why}`)
+    check('🔴 ㉘ 그리고 표식을 만들지 않았다', !fs.existsSync(AP28.markerPath(blank)), '표식이 생겼다')
+    check('🔴 ㉘ spawn 0회', spawned === 0, `${spawned}회`)
+
+    /** 🔴 포트 주인이 남이면 재사용하지 않는다 */
+    const foreign = AP28.judgeAutomationProfile({
+      profileDir: AP28.AUTOMATION_PROFILE_DIR, port: AP28.AUTOMATION_CDP_PORT, mode: 'login',
+      marker: { schemaVersion: 1, purpose: 'soransoran-chatgpt-automation', cdpPort: AP28.AUTOMATION_CDP_PORT },
+      markerMode: 0o600, dirMode: 0o700,
+      commandLines: ['/usr/bin/other --user-data-dir=/tmp/x --remote-debugging-port=9344'],
+      pages: [{ type: 'page', url: 'https://chatgpt.com/' }], portInUse: true, requireRunning: true,
+    })
+    check('🔴 ㉘ 로그인에서도 포트 주인이 남이면 막는다',
+      foreign.ok === false && /다른 프로세스/.test(foreign.why), foreign.why)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮지 않는다')
+{
+  /**
+   * 🔴 **`fetchManuscript` 만 시험하면 그 사이가 비어 있다** (변이로 확인).
+   *    선기록을 "실패 성격" 으로 덮어쓰도록 바꿔도 아무 검사가 깨지지 않았다 —
+   *    `fetchSlug` 의 장부 처리를 **아무도 실행하지 않았기 때문**이다.
+   *    여기서는 실제 `fetchBatch` 를 가짜 브라우저로 끝까지 태운다.
+   */
+  const WEBUI9 = await import('./magazine-webui-runner.mjs')
+  const QN9 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-batch-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const LEDGER = path.join(T, 'q.json')
+    const DATE = '2026-09-28'
+    const mk = (slug) => {
+      fs.mkdirSync(path.join(D, slug), { recursive: true })
+      fs.writeFileSync(path.join(D, slug, 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+      fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
+    }
+    for (const s of ['b-a', 'b-b']) mk(s)
+    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
+    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
+      JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'b-a' }, { slug: 'b-b' }] }))
+
+    /** 보낸 뒤 응답 대기에서 터지는 가짜 브라우저 */
+    const world = { sendClicks: 0 }
+    const makePage = () => {
+      let typed = ''
+      const page = {
+        async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+        async waitForFunction() { throw new Error('waitForFunction: Timeout') },
+        async evaluate() { return '---\n본문\n[CTA]' },
+        async evaluateHandle() { return { asElement: () => ({ async setInputFiles() {} }) } },
+        locator(sel) {
+          const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+          const l = {
+            async click() { if (isSend) world.sendClicks += 1 },
+            async innerText() { return typed },
+            async setInputFiles() {},
+          }
+          return { first: () => l, async all() { return [l] }, ...l }
+        },
+        keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+      }
+      return page
+    }
+    const browserDeps = {
+      ensureTab: async () => ({ ok: true }),
+      connect: async () => ({
+        contexts: () => [{ pages: () => [], newPage: async () => makePage() }],
+        async close() {},
+      }),
+    }
+
+    const live = await WEBUI9.fetchBatch({
+      date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: LEDGER,
+      resultPath: path.join(T, 'r.json'), probeFn: async () => ({ status: 'ok' }), browserDeps,
+    })
+    check('  ㉙ 실제로 두 건을 보냈다', world.sendClicks === 2, `${world.sendClicks}회`)
+    check('  ㉙ 둘 다 실패로 끝났다',
+      (live.results ?? []).filter((r) => r.status === 'failed').length === 2,
+      JSON.stringify((live.results ?? []).map((r) => `${r.slug}:${r.status}:${r.reason}`)))
+
+    /** 🔴 보낸 뒤 실패했으므로 기록이 **그대로** 남아야 한다 */
+    for (const slug of ['b-a', 'b-b']) {
+      const row = QN9.readQuarantine(LEDGER).store[slug]
+      check(`🔴 ㉙ [${slug}] 선기록이 덮이지 않았다 (DELIVERY_UNCERTAIN)`,
+        row?.delivery?.kind === 'DELIVERY_UNCERTAIN', JSON.stringify(row?.delivery ?? null))
+      check(`  ㉙ [${slug}] attempts 소비 0`, (row?.attempts ?? 0) === 0, `attempts ${row?.attempts}`)
+    }
+
+    /** 🔴 그래서 다음 회차는 둘 다 안 보낸다 */
+    const p2 = (await WEBUI9.fetchBatch({
+      date: DATE, dryRun: true, limit: 0, draftsDir: D, quarantinePath: LEDGER,
+      resultPath: path.join(T, 'r2.json'),
+    })).planned ?? []
+    check('🔴 ㉙ 다음 회차 전송 예정 0건',
+      p2.filter((x) => x.action === 'fetch').length === 0,
+      JSON.stringify(p2.map((x) => `${x.slug}:${x.action}`)))
+
+    /**
+     * 🔴 **가장 해로운 경우: send 클릭 자체가 터진다.**
+     *    그때 `sent` 는 `false` 로 온다 — 눌렀는지 알 수 없는데도 그렇다.
+     *    선기록을 그 값으로 덮으면 INFRA 가 되어 **HOLD 가 풀리고 다시 보낸다.**
+     *    (이 경우를 안 보면 "덮어쓰기" 변이가 통과한다 — 다른 경로는 분류가 같아서다.)
+     */
+    const LEDGER3 = path.join(T, 'q3.json')
+    let clicks3 = 0
+    await WEBUI9.fetchBatch({
+      date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: LEDGER3,
+      resultPath: path.join(T, 'r5.json'), probeFn: async () => ({ status: 'ok' }),
+      browserDeps: {
+        ensureTab: async () => ({ ok: true }),
+        connect: async () => ({
+          contexts: () => [{
+            pages: () => [],
+            newPage: async () => {
+              const p = makePage()
+              const loc = p.locator.bind(p)
+              p.locator = (sel) => {
+                const l = loc(sel)
+                if (!/send-button|보내기|Send/.test(String(sel ?? ''))) return l
+                return { ...l, first: () => ({ ...l.first(),
+                  async click() { clicks3 += 1; throw new Error('click: element is not visible') } }) }
+              }
+              return p
+            },
+          }],
+          async close() {},
+        }),
+      },
+    })
+    check('  ㉙ send 클릭이 실제로 시도됐다', clicks3 >= 1, `${clicks3}회`)
+    const row3 = QN9.readQuarantine(LEDGER3).store['b-a']
+    check('🔴 ㉙ send 가 터져도 HOLD 를 유지한다 (sent=false 로 덮지 않는다)',
+      row3?.delivery?.kind === 'DELIVERY_UNCERTAIN', JSON.stringify(row3?.delivery ?? null))
+    const p4 = (await WEBUI9.fetchBatch({
+      date: DATE, dryRun: true, limit: 0, draftsDir: D, quarantinePath: LEDGER3,
+      resultPath: path.join(T, 'r6.json'),
+    })).planned ?? []
+    check('🔴 ㉙ 그래서 다음 회차도 보내지 않는다',
+      p4.filter((x) => x.action === 'fetch').length === 0, JSON.stringify(p4.map((x) => x.action)))
+
+    /**
+     * 🔴 **죽은 게이트가 아니다** — 보내기 **전에** 실패하면 기록이 남지 않아야 한다.
+     *    (그때는 안 보낸 것이 확실하므로 막을 이유가 없다.)
+     */
+    const LEDGER2 = path.join(T, 'q2.json')
+    let sends2 = 0
+    const before = await WEBUI9.fetchBatch({
+      date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: LEDGER2,
+      resultPath: path.join(T, 'r3.json'), probeFn: async () => ({ status: 'ok' }),
+      browserDeps: {
+        ensureTab: async () => ({ ok: true }),
+        connect: async () => ({
+          contexts: () => [{
+            pages: () => [],
+            newPage: async () => {
+              const p = makePage()
+              // composer 를 못 찾아 보내기 전에 끝난다
+              p.waitForSelector = async () => { throw new Error('page.waitForSelector: Timeout 60000ms exceeded.') }
+              const loc = p.locator.bind(p)
+              p.locator = (sel) => {
+                const l = loc(sel)
+                if (!/send-button|보내기|Send/.test(String(sel ?? ''))) return l
+                return { ...l, first: () => ({ ...l.first(), async click() { sends2 += 1 } }) }
+              }
+              return p
+            },
+          }],
+          async close() {},
+        }),
+      },
+    })
+    void before
+    check('  ㉙ 보내기 전 실패 — send 0회', sends2 === 0, `${sends2}회`)
+    const rowBefore = QN9.readQuarantine(LEDGER2).store['b-a']
+    check('🔴 ㉙ 보내기 전 실패는 DELIVERY_UNCERTAIN 이 아니다',
+      rowBefore?.delivery?.kind !== 'DELIVERY_UNCERTAIN', JSON.stringify(rowBefore?.delivery ?? null))
+    const p3 = (await WEBUI9.fetchBatch({
+      date: DATE, dryRun: true, limit: 0, draftsDir: D, quarantinePath: LEDGER2,
+      resultPath: path.join(T, 'r4.json'),
+    })).planned ?? []
+    check('🔴 ㉙ 그래서 다시 보낼 수 있다',
+      p3.filter((x) => x.action === 'fetch').length === 2, JSON.stringify(p3.map((x) => x.action)))
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+/**
+ * 🔴 **시험용 fixture 모듈을 만든다** — CLI 자식이 `SORAN_MAGAZINE_TEST_FIXTURE` 로 읽는다.
+ *    모든 fixture 는 **가짜 spawn 을 반드시 가진다.** 주입 경로가 망가져도(변이 포함)
+ *    실제 Chrome 이 뜨지 않게 하기 위해서다.
+ */
+const writeFixture = (file, body) => { fs.writeFileSync(file, body); return file }
+const fixtureHead = (log) => `import fs from 'node:fs'
+const LOG = ${JSON.stringify(log)}
+const rec = (ev, extra = {}) => fs.appendFileSync(LOG, JSON.stringify({ ev, pid: process.pid, ...extra }) + '\\n')
+export const spawn = (cmd, args) => { rec('spawn', { cmd, args }); return { unref() {} } }
+`
+const readEvents = (log) => (fs.existsSync(log)
+  ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
+const countEv = (log, ev) => readEvents(log).filter((e) => e.ev === ev).length
+/** 🔴 실제 Chrome 이 이 임시 폴더를 쓰고 있는가 — 명령줄로 본다 */
+const chromeUsing = (dir) => spawnSyncTop('ps', ['-Ao', 'command='])
+  .split('\n').filter((l) => /Chrome/.test(l) && l.includes(dir)).length
+
+console.log('\n㉚ --login 만 표식을 만든다 (실제 CLI · 실제 Chrome 없음 · 환경 독립)')
+{
+  /**
+   * 🔴 **`ensureAutomationProfile` 을 직접 부르는 시험만으로는 부족하다** (변이로 확인).
+   *    `login()` 에서 그 호출을 빼도 아무 검사가 깨지지 않았다. 그래서 실제 CLI 를 돌린다.
+   *
+   * 🔴 **앞판은 실제 환경을 읽었다** (2026-09-28 · P0-2).
+   *    Linux CI 에는 macOS Chrome 경로가 없어 표식 전에 `BROWSER_MISSING` 으로 끝났고,
+   *    로컬에서 9344 가 비어 있으면 **실제 Chrome 을 띄웠다.**
+   *    이제 브라우저 판정·spawn 은 `SORAN_MAGAZINE_TEST_MODE=1` 의 fixture 가 준다.
+   *    실제 경로·실제 포트를 한 번도 보지 않으므로 macOS·Linux 결과가 같다.
+   */
+  const { spawnSync } = await import('node:child_process')
+  const AP30 = await import('./lib/chatgpt-automation-profile.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-'))
+  try {
+    const markerIn = (home) => path.join(home, 'Library', 'Application Support',
+      'soransoran-chatgpt-auto', AP30.MARKER_FILE)
+    const LOG = path.join(T, 'events.jsonl')
+    const FX = writeFixture(path.join(T, 'fx-login.mjs'), `${fixtureHead(LOG)}
+export const browserAvailable = () => { rec('browserAvailable'); return true }
+export const cdpAvailable = async () => { rec('cdpAvailable'); return false }
+export const profileInUse = () => false
+`)
+    /**
+     * 🔴 **Linux 조건 재현** — macOS Chrome 절대경로가 없고 9344 에 아무도 없다.
+     *    preload 가 `existsSync(Chrome 경로)` 를 false 로, 9344 로 가는 fetch 를 거부로 바꾼다.
+     *    이 조건에서 **옛 방식(주입 없음)** 은 표식 전에 멈추고, 주입판은 macOS 와 같은 결과를 낸다.
+     */
+    const LINUX = writeFixture(path.join(T, 'linux-preload.mjs'), `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const real = fs.existsSync
+fs.existsSync = (p) => (String(p).startsWith('/Applications/Google Chrome.app') ? false : real(p))
+syncBuiltinESMExports()
+const realFetch = globalThis.fetch
+globalThis.fetch = (u, o) => (/:9344\\//.test(String(u)) ? Promise.reject(new Error('ECONNREFUSED 9344')) : realFetch(u, o))
+`)
+    const runLogin = (home, env, { linux = false } = {}) => spawnSync(process.execPath,
+      [...(linux ? ['--import', LINUX] : []), 'scripts/magazine-webui-runner.mjs', '--login'],
+      { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: home, ...env } })
+    const TEST = { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_TEST_FIXTURE: FX }
+
+    const chromeBefore = chromeUsing(T)
+    check('  ㉚ 시작 전에는 표식이 없다', !fs.existsSync(markerIn(T)), '이미 있다')
+
+    // ── macOS 그대로 ──
+    const r = runLogin(T, TEST)
+    check('🔴 ㉚ --login 이 표식을 실제로 만든다', fs.existsSync(markerIn(T)),
+      `${r.status} · ${String(r.stderr || r.stdout).slice(0, 160)}`)
+    if (fs.existsSync(markerIn(T))) {
+      const body = JSON.parse(fs.readFileSync(markerIn(T), 'utf8'))
+      check('  ㉚ 표식 내용이 계약대로다',
+        body.schemaVersion === 1 && body.purpose === 'soransoran-chatgpt-automation' && body.cdpPort === 9344,
+        JSON.stringify(body))
+      check('🔴 ㉚ 표식 권한 0600', (fs.statSync(markerIn(T)).mode & 0o777) === 0o600,
+        (fs.statSync(markerIn(T)).mode & 0o777).toString(8))
+    }
+    const spawns = readEvents(LOG).filter((e) => e.ev === 'spawn')
+    check('🔴 ㉚ 기동은 주입된 spawn 으로만 — 정확한 폴더 · 9344',
+      spawns.length === 1
+        && spawns[0].args.includes(`--user-data-dir=${path.dirname(markerIn(T))}`)
+        && spawns[0].args.includes('--remote-debugging-port=9344'),
+      JSON.stringify(spawns.map((s) => s.args.slice(0, 2))))
+    check('🔴 ㉚ 로컬 9344 가 실제로 살아 있어도 그 포트를 읽지 않는다 (fixture 판정만)',
+      countEv(LOG, 'cdpAvailable') === 1 && r.status === 0, `exit ${r.status}`)
+
+    // ── Linux 조건 재현 ──
+    const TL = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-linux-'))
+    const TO = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-old-'))
+    try {
+      const LOGL = path.join(TL, 'events.jsonl')
+      const FXL = writeFixture(path.join(TL, 'fx.mjs'), fs.readFileSync(FX, 'utf8').replace(JSON.stringify(LOG), JSON.stringify(LOGL)))
+      const rl = runLogin(TL, { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_TEST_FIXTURE: FXL }, { linux: true })
+      check('🔴 ㉚ [Linux 재현] 주입판은 macOS 와 같은 결과 — 표식 생성 · spawn 1 · exit 0',
+        fs.existsSync(markerIn(TL)) && countEv(LOGL, 'spawn') === 1 && rl.status === 0,
+        `exit ${rl.status} · spawn ${countEv(LOGL, 'spawn')} · ${String(rl.stderr).slice(0, 120)}`)
+      /** 🔴 옛 방식 반례 — 같은 Linux 조건에서 주입 없이 돌리면 표식 전에 멈춘다 (앞판 CI 실패의 재현) */
+      const ro = runLogin(TO, {}, { linux: true })
+      check('  ㉚ [Linux 재현] 주입 없는 옛 방식은 표식 전에 BROWSER_MISSING 으로 끝난다',
+        ro.status === 1 && !fs.existsSync(markerIn(TO)) && /Chrome 을 찾지 못했다/.test(`${ro.stderr}${ro.stdout}`),
+        `exit ${ro.status} · ${String(ro.stderr).trim().slice(0, 100)}`)
+    } finally {
+      fs.rmSync(TL, { recursive: true, force: true })
+      fs.rmSync(TO, { recursive: true, force: true })
+    }
+
+    /** 🔴 fixture 가 자리를 빠뜨려도 **운영 함수로 떨어지지 않는다** — 거부 stub 이 막는다 */
+    const TN = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-noinj-'))
+    try {
+      const LOGN = path.join(TN, 'events.jsonl')
+      const FXN = writeFixture(path.join(TN, 'fx.mjs'), `${fixtureHead(LOGN)}
+export const cdpAvailable = async () => false
+export const profileInUse = () => false
+`)
+      const rn = runLogin(TN, { SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_TEST_FIXTURE: FXN })
+      check('🔴 ㉚ 시험 모드에서 browserAvailable 을 안 주면 실제 경로를 읽지 않고 멈춘다',
+        rn.status !== 0 && /TEST_MODE_NOT_INJECTED/.test(`${rn.stderr}${rn.stdout}`) && countEv(LOGN, 'spawn') === 0,
+        `exit ${rn.status} · spawn ${countEv(LOGN, 'spawn')}`)
+    } finally { fs.rmSync(TN, { recursive: true, force: true }) }
+
+    /** 🔴 운영 모드에서 주입값이 보이면 **첫 read/write 전에** 멈춘다 */
+    const TB = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-login-blocked-'))
+    try {
+      const LOGB = path.join(TB, 'events.jsonl')
+      const FXB = writeFixture(path.join(TB, 'fx.mjs'), fs.readFileSync(FX, 'utf8').replace(JSON.stringify(LOG), JSON.stringify(LOGB)))
+      const rb = runLogin(TB, { SORAN_MAGAZINE_TEST_FIXTURE: FXB })
+      check('🔴 ㉚ 운영 모드 + 시험 주입 → exit 2 · TEST_INJECTION_BLOCKED',
+        rb.status === 2 && /TEST_INJECTION_BLOCKED/.test(`${rb.stderr}${rb.stdout}`), `exit ${rb.status}`)
+      check('🔴 ㉚ 그때 표식·spawn·fixture 호출 0',
+        !fs.existsSync(markerIn(TB)) && readEvents(LOGB).length === 0, JSON.stringify(readEvents(LOGB)))
+      const rb2 = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch-run', '--dry-run'],
+        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: TB, SORAN_MAGAZINE_TEST_FIXTURE: FXB } })
+      check('  ㉚ 다른 명령도 같다 (--fetch-run --dry-run → exit 2)', rb2.status === 2, `exit ${rb2.status}`)
+      const H = await import('./lib/magazine-test-harness.mjs')
+      const h1 = H.resolveTestHarness({ SORAN_MAGAZINE_TEST_FIXTURE: '/x.mjs' })
+      const h2 = H.resolveTestHarness({ SORAN_MAGAZINE_TEST_FIXTURE: '/x.mjs', SORAN_MAGAZINE_TEST_MODE: '1' })
+      const h3 = await H.loadTestHarness({})
+      check('  ㉚ 판정표 — 운영+주입 차단 · 시험+주입 허용 · 운영 무주입은 빈 의존성',
+        h1.ok === false && h2.ok === true && h2.test === true && h3.ok && Object.keys(h3.deps).length === 0,
+        JSON.stringify({ h1: h1.code, h2: h2.ok, h3: Object.keys(h3.deps ?? {}).length }))
+    } finally { fs.rmSync(TB, { recursive: true, force: true }) }
+
+    /** 🔴 자동 실행은 같은 조건에서 표식을 만들지 않는다 */
+    const T2 = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cli-auto-'))
+    try {
+      const auto = spawnSync(process.execPath,
+        ['scripts/magazine-webui-runner.mjs', '--fetch-run', '--dry-run'],
+        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T2, ...TEST } })
+      check('🔴 ㉚ 자동 실행은 표식을 만들지 않는다', !fs.existsSync(markerIn(T2)) && auto.status === 0,
+        `exit ${auto.status}`)
+    } finally { fs.rmSync(T2, { recursive: true, force: true }) }
+
+    check('🔴 ㉚ 이 시험 전체에서 실제 Chrome 이 임시 폴더로 뜨지 않았다',
+      chromeUsing(T) === 0 && chromeBefore === 0, `${chromeBefore} → ${chromeUsing(T)}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉛ 재생성 회수도 같은 지문 HOLD 를 지난다 (실제 CLI 2회 orchestration)')
+{
+  /**
+   * 🔴 **앞판의 구멍** (2026-09-28 · P0-1).
+   *    `fetchBatch` 만 장부 지문을 봤다. `--fetch --force --regen-packet`(`fetchOne`) 은
+   *    probe 부터 하고 곧장 보냈다 — 재생성 요청이 응답 대기에서 끊긴 뒤 다시 실행되면
+   *    **같은 글자를 두 번째로 보냈다.**
+   *
+   *    여기서는 실제 `attemptRegeneration` → 실제 `webuiRegenRunner` → **실제 CLI 자식**
+   *    (`--fetch <slug> --force --regen-packet <경로> --result-json <경로>`) 을 두 번 돌린다.
+   *    브라우저만 fixture 로 바꾼다 — 보내고 나서 응답 대기에서 터진다.
+   */
+  const { spawnSync } = await import('node:child_process')
+  const AR31 = await import('./magazine-auto-register.mjs')
+  const RG31 = await import('./lib/magazine-regen.mjs')
+  const QN31 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-twice-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const LEDGER = path.join(T, 'ledger.json')
+    const LOG = path.join(T, 'events.jsonl')
+    const PK = path.join(T, 'packets')
+    const mk = (slug) => {
+      fs.mkdirSync(path.join(D, slug), { recursive: true })
+      fs.writeFileSync(path.join(D, slug, 'brief.md'), `# ${slug}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
+      fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
+    }
+    for (const s of ['rg-a', 'rg-b']) mk(s)
+    const FX = writeFixture(path.join(T, 'fx-regen.mjs'), `${fixtureHead(LOG)}
+export const quarantinePath = ${JSON.stringify(LEDGER)}
+export const probe = async () => { rec('probe'); return { status: 'ok' } }
+export const ensureTab = async () => { rec('ensureTab'); return { ok: true } }
+export const connect = async () => {
+  rec('connect')
+  return { contexts: () => [{ pages: () => [], newPage: async () => makePage() }], async close() {} }
+}
+function makePage() {
+  let typed = ''
+  return {
+    async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+    // 🔴 보낸 뒤 응답 대기에서 터진다 — response_timeout · sent=true
+    async waitForFunction() { throw new Error('waitForFunction: Timeout 300000ms exceeded') },
+    async evaluate() { return '' },
+    locator(sel) {
+      const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+      const l = { async click() { if (isSend) rec('send', { len: typed.length }) }, async innerText() { return typed } }
+      return { first: () => l, ...l }
+    },
+    keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+  }
+}
+`)
+    const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
+    /** 운영 `run()` 과 같은 모양 — 실제 자식 프로세스를 띄운다. 환경만 시험용이다 */
+    const runFn = (file, args) => {
+      const r = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, ...ENV } })
+      return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
+    }
+    const regen = (slug, failures = [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }]) => RG31.attemptRegeneration({
+      slug, profile: 'MEDICAL', failures, quarantinePath: LEDGER, packetDir: PK,
+      runner: (ctx) => AR31.webuiRegenRunner(ctx, { runFn, resultDir: T }),
+    })
+    const row = (slug) => QN31.readQuarantine(LEDGER).store[slug] ?? {}
+    const ev = () => ({ probe: countEv(LOG, 'probe'), connect: countEv(LOG, 'connect'), send: countEv(LOG, 'send'), spawn: countEv(LOG, 'spawn') })
+
+    // ── 1회차: 보냈는데 응답을 못 받았다 ──
+    const r1 = regen('rg-a')
+    const e1 = ev()
+    const fpA = row('rg-a').delivery?.messageFingerprint
+    check('  ㉛ 1회차 — 실제로 1건 보냈다', e1.send === 1 && e1.probe === 1, JSON.stringify(e1))
+    check('  ㉛ 1회차 — 전송불명으로 분류된다', r1.code === 'REGEN_DELIVERY_UNCERTAIN', `${r1.code} — ${r1.why}`.slice(0, 160))
+    check('🔴 ㉛ 1회차 — 장부에 slug+지문 DELIVERY_UNCERTAIN',
+      row('rg-a').delivery?.kind === 'DELIVERY_UNCERTAIN' && /^sha256:/.test(fpA ?? ''), JSON.stringify(row('rg-a').delivery ?? null))
+    check('  ㉛ 1회차 — regenCalls 0 · attempts 0', (row('rg-a').regenCalls ?? 0) === 0 && (row('rg-a').attempts ?? 0) === 0,
+      `regen ${row('rg-a').regenCalls} · attempts ${row('rg-a').attempts}`)
+
+    /** 🔴 날짜·runId 가 바뀌어도 판정에 들어가지 않는다 — 장부 행의 출처 기록만 바꿔 본다 */
+    QN31.updateQuarantine((cur) => ({ ...cur, 'rg-a': { ...cur['rg-a'], delivery: { ...cur['rg-a'].delivery, date: '2026-10-05', runId: 'other-run' } } }), LEDGER)
+    const deliveryBefore = JSON.stringify(row('rg-a').delivery)
+    const sentBefore = row('rg-a').sent
+
+    // ── 2회차: 같은 재생성 요청 · 새 프로세스(재시작) · 다른 날짜 ──
+    const r2 = regen('rg-a')
+    const e2 = ev()
+    check('🔴 ㉛ 2회차 — send 0 (중복 전송 없음)', e2.send === e1.send, `${e1.send} → ${e2.send}`)
+    check('🔴 ㉛ 2회차 — 브라우저 접근 0 (probe·connect·Chrome 기동 없음)',
+      e2.probe === e1.probe && e2.connect === e1.connect && e2.spawn === 0, JSON.stringify(e2))
+    check('🔴 ㉛ 2회차 — HOLD 로 끝난다', r2.code === 'REGEN_DELIVERY_HOLD' && r2.held === true && r2.sent === false,
+      `${r2.code} — ${String(r2.why).slice(0, 120)}`)
+    check('🔴 ㉛ 2회차 — regenCalls 0 · attempts 0 유지', (row('rg-a').regenCalls ?? 0) === 0 && (row('rg-a').attempts ?? 0) === 0,
+      `regen ${row('rg-a').regenCalls} · attempts ${row('rg-a').attempts}`)
+    check('🔴 ㉛ 2회차 — 앞선 전송 기록·sent 를 덮지 않는다',
+      JSON.stringify(row('rg-a').delivery) === deliveryBefore && row('rg-a').sent === sentBefore,
+      `sent ${sentBefore} → ${row('rg-a').sent}`)
+    check('  ㉛ 2회차 — 판정한 지문이 1회차 지문과 같다', r2.messageFingerprint === fpA, `${r2.messageFingerprint}`)
+    check('  ㉛ 패킷이 남지 않는다', RG31.packetsLeftFor('rg-a', PK).length === 0, RG31.packetsLeftFor('rg-a', PK).join(',') || '0건')
+
+    /** 🔴 다른 후보는 계속 처리된다 */
+    const rb = regen('rg-b')
+    check('🔴 ㉛ 다른 후보(rg-b)는 그대로 보낸다', ev().send === e2.send + 1 && rb.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${rb.code} · send ${ev().send}`)
+
+    // ── fetchOne 구조화 결과 (요구 7) ──
+    const MANUAL_ID = 'c56a4180-65aa-42ec-a945-5fd21dec0538'
+    const PKT = RG31.writePacket(RG31.buildFailurePacket({ slug: 'rg-a', profile: 'MEDICAL',
+      failures: [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }], attempt: 1, attemptId: MANUAL_ID }),
+    RG31.packetPathFor('rg-a', path.join(T, 'manual'), MANUAL_ID))
+    const RJ = path.join(T, 'one.json')
+    const before7 = ev()
+    const c7 = runFn('scripts/magazine-webui-runner.mjs', ['--fetch', 'rg-a', '--force', '--regen-packet', PKT, '--result-json', RJ])
+    const body7 = JSON.parse(fs.readFileSync(RJ, 'utf8'))
+    const row7 = body7.results?.[0] ?? {}
+    check('🔴 ㉛ fetchOne 결과 — held · 사유 · 지문 · sent=false · 앞선 기록',
+      c7.code === 1 && row7.status === 'held' && row7.reason === QN31.DELIVERY_HOLD_REASON
+        && row7.sent === false && row7.messageFingerprint === fpA
+        && row7.prior?.kind === 'DELIVERY_UNCERTAIN' && row7.prior?.messageFingerprint === fpA && body7.sentTotal === 0,
+      JSON.stringify({ exit: c7.code, status: row7.status, reason: row7.reason, sent: row7.sent, prior: row7.prior?.kind }))
+    check('  ㉛ 그 실행도 브라우저 접근 0', JSON.stringify(ev()) === JSON.stringify(before7), JSON.stringify(ev()))
+
+    // ── 달라진 글자만 다시 열린다 ──
+    const r3 = regen('rg-a', [{ code: 'MED_DOSAGE', label: '용량 단정', sentence: '하루 두 알' }])
+    check('🔴 ㉛ 재생성 지시가 바뀌면(지문 다름) 다시 보낸다', ev().send === before7.send + 1 && r3.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${r3.code} · send ${ev().send}`)
+    fs.appendFileSync(path.join(D, 'rg-a', 'brief.md'), '\n## 추가 지시\n- 한 줄 더\n')
+    const s4 = ev().send
+    const r4 = regen('rg-a')
+    check('🔴 ㉛ brief 가 바뀌면(지문 다름) 다시 보낸다', ev().send === s4 + 1 && r4.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${r4.code} · send ${ev().send}`)
+    check('  ㉛ 이 시험은 Chrome 을 한 번도 띄우지 않았다', countEv(LOG, 'spawn') === 0, `${countEv(LOG, 'spawn')}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉜ 전송 직전 재판정 — 다른 프로세스가 먼저 보냈거나 장부를 못 쓰면 누르지 않는다')
+{
+  /**
+   * 🔴 계획표 판정과 send 사이에 다른 프로세스가 **같은 글자**를 보냈을 수 있다.
+   *    `recordBeforeSend` 가 같은 읽기-수정-쓰기 안에서 다시 판정하는지 실제 `fetchBatch` 로 본다.
+   *    🔴 장부를 못 읽는 경우 `updateQuarantine` 은 **예외가 아니라 `ok:false`** 로 돌아온다 —
+   *       앞판은 이 반환값을 보지 않아 "적었다" 로 읽고 눌렀다.
+   */
+  const WEBUI32 = await import('./magazine-webui-runner.mjs')
+  const QN32 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-late-hold-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const DATE = '2026-09-28'
+    fs.mkdirSync(path.join(D, 'lh-a'), { recursive: true })
+    fs.writeFileSync(path.join(D, 'lh-a', 'brief.md'), '# brief\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n')
+    fs.writeFileSync(path.join(D, 'lh-a', 'review.ts'), '#\n')
+    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
+    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
+      JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'lh-a' }] }))
+
+    const deps = (onTyped, world) => ({
+      ensureTab: async () => ({ ok: true }),
+      connect: async () => ({
+        contexts: () => [{ pages: () => [], newPage: async () => {
+          let typed = ''
+          return {
+            async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+            async waitForFunction() { throw new Error('Timeout') }, async evaluate() { return '' },
+            locator(sel) {
+              const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+              const l = { async click() { if (isSend) world.send += 1 }, async innerText() { return typed } }
+              return { first: () => l, ...l }
+            },
+            keyboard: { async insertText(t) { typed += String(t ?? ''); onTyped(typed) }, async press() {} },
+          }
+        } }],
+        async close() {},
+      }),
+    })
+
+    // ① 다른 프로세스가 같은 글자를 먼저 보냈다
+    const L1 = path.join(T, 'q1.json')
+    const w1 = { send: 0 }
+    const b1 = await WEBUI32.fetchBatch({
+      date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: L1, resultPath: path.join(T, 'r1.json'),
+      probeFn: async () => ({ status: 'ok' }),
+      browserDeps: deps((typed) => QN32.updateQuarantine((cur) => ({ ...cur, 'lh-a': QN32.recordDelivery(cur['lh-a'], {
+        sent: null, messageFingerprint: QN32.deliveryFingerprintOf(typed), kind: 'DELIVERY_UNCERTAIN',
+        reason: 'sending', stage: 'send', now: Date.now(), date: DATE }) }), L1), w1),
+    })
+    const res1 = (b1.results ?? []).find((x) => x.slug === 'lh-a') ?? {}
+    check('🔴 ㉜ 계획 뒤 다른 프로세스가 보냈으면 send 0', w1.send === 0, `send ${w1.send}`)
+    check('🔴 ㉜ 그 결과는 held · stage=send · sent=false',
+      res1.status === 'held' && res1.stage === 'send' && res1.sent === false, JSON.stringify(res1).slice(0, 160))
+
+    // ② send 직전에 장부가 깨졌다
+    const L2 = path.join(T, 'q2.json')
+    const w2 = { send: 0 }
+    const b2 = await WEBUI32.fetchBatch({
+      date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: L2, resultPath: path.join(T, 'r2.json'),
+      probeFn: async () => ({ status: 'ok' }),
+      browserDeps: deps(() => fs.writeFileSync(L2, '{ 깨진'), w2),
+    })
+    const res2 = (b2.results ?? []).find((x) => x.slug === 'lh-a') ?? {}
+    check('🔴 ㉜ send 직전 장부를 못 쓰면 누르지 않는다', w2.send === 0 && res2.sent === false,
+      `send ${w2.send} · ${res2.reason} — ${String(res2.errorDetail).slice(0, 80)}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉝ 동시 2프로세스 — 같은 slug·같은 지문은 정확히 한 프로세스만 send 권한을 얻는다')
+{
+  /**
+   * 🔴 **앞판은 장부에 프로세스 간 잠금이 없었다** (2026-09-28 · Codex P0).
+   *    `updateQuarantine` 은 read → mutate → save 뿐이라, 두 프로세스가 동시에
+   *    같은 slug·같은 지문을 들고 오면 **둘 다 "HOLD 없음" 을 읽고 둘 다 send 했다.**
+   *
+   *    여기서는 **실제 CLI 자식 2개**를 띄운다. preload 가 장부 `renameSync`(선기록 저장) 직전에
+   *    barrier 를 건다 — 두 프로세스가 모두 그 지점에 올 때까지(최대 1.5초) 기다린다.
+   *    잠금이 없으면 둘 다 판정을 마친 채 barrier 에 도착하고, 잠금이 있으면 한쪽은 잠금 앞에서
+   *    기다리므로 barrier 에 오지 못한다.
+   */
+  const { spawn } = await import('node:child_process')
+  const QN33 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-race-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    for (const s of ['cc-a', 'cc-b']) {
+      fs.mkdirSync(path.join(D, s), { recursive: true })
+      fs.writeFileSync(path.join(D, s, 'brief.md'), `# ${s}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
+      fs.writeFileSync(path.join(D, s, 'review.ts'), '#\n')
+    }
+    /** 시나리오마다 새 장부·새 barrier */
+    const scenario = async (name, slugs) => {
+      const L = path.join(T, `${name}-ledger.json`)
+      const LOG = path.join(T, `${name}-events.jsonl`)
+      const BAR = path.join(T, `${name}-barrier`)
+      fs.mkdirSync(BAR)
+      const FX = writeFixture(path.join(T, `${name}-fx.mjs`), `${fixtureHead(LOG)}
+export const quarantinePath = ${JSON.stringify(L)}
+export const probe = async () => { rec('probe'); return { status: 'ok' } }
+export const ensureTab = async () => ({ ok: true })
+export const connect = async () => ({
+  contexts: () => [{ pages: () => [], newPage: async () => {
+    let typed = ''
+    return {
+      async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+      async waitForFunction() { throw new Error('waitForFunction: Timeout 300000ms exceeded') },
+      async evaluate() { return '' },
+      locator(sel) {
+        const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+        const l = { async click() { if (isSend) rec('send') }, async innerText() { return typed } }
+        return { first: () => l, ...l }
+      },
+      keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+    }
+  } }],
+  async close() {},
+})
+`)
+      const PRE = writeFixture(path.join(T, `${name}-barrier.mjs`), `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const LEDGER = ${JSON.stringify(L)}, DIR = ${JSON.stringify(BAR)}
+const real = fs.renameSync
+let first = true
+fs.renameSync = (a, b) => {
+  if (first && String(b) === LEDGER) {
+    first = false
+    fs.writeFileSync(DIR + '/' + process.pid, '')
+    const until = Date.now() + 1500
+    while (fs.readdirSync(DIR).length < 2 && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    fs.appendFileSync(DIR + '.log', JSON.stringify({ pid: process.pid, arrivals: fs.readdirSync(DIR).length }) + '\\n')
+  }
+  return real(a, b)
+}
+syncBuiltinESMExports()
+`)
+      const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
+      const kids = await Promise.all(slugs.map((slug, i) => new Promise((ok) => {
+        const RJ = path.join(T, `${name}-r${i}.json`)
+        const c = spawn(process.execPath, ['--import', PRE, 'scripts/magazine-webui-runner.mjs', '--fetch', slug, '--result-json', RJ],
+          { env: { ...process.env, ...ENV }, stdio: ['ignore', 'pipe', 'pipe'] })
+        let out = ''
+        c.stdout.on('data', (d) => { out += d }); c.stderr.on('data', (d) => { out += d })
+        c.on('exit', (code) => ok({ pid: c.pid, code, out, slug,
+          row: fs.existsSync(RJ) ? JSON.parse(fs.readFileSync(RJ, 'utf8')).results?.[0] ?? null : null }))
+      })))
+      const events = readEvents(LOG)
+      const arrivals = fs.existsSync(`${BAR}.log`)
+        ? fs.readFileSync(`${BAR}.log`, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []
+      return { L, kids, events, arrivals, lockLeft: fs.existsSync(QN33.quarantineLockPath(L)) }
+    }
+
+    // ── 같은 slug · 같은 지문 ──
+    const s1 = await scenario('same', ['cc-a', 'cc-a'])
+    const sendsBy = (pid) => s1.events.filter((e) => e.ev === 'send' && e.pid === pid).length
+    const winners = s1.kids.filter((k) => sendsBy(k.pid) === 1)
+    const losers = s1.kids.filter((k) => sendsBy(k.pid) === 0)
+    check('🔴 ㉝ 같은 slug·지문 — 브라우저 send 는 정확히 1회',
+      s1.events.filter((e) => e.ev === 'send').length === 1,
+      `send ${s1.events.filter((e) => e.ev === 'send').length} · barrier 도착 ${JSON.stringify(s1.arrivals.map((a) => a.arrivals))}`)
+    check('🔴 ㉝ 권한을 얻은 프로세스는 하나 — 나머지 하나는 send 0',
+      winners.length === 1 && losers.length === 1, `winners ${winners.length} · losers ${losers.length}`)
+    const lr = losers[0]?.row ?? {}
+    /**
+     * 🔴 같은 slug 의 원고 작업은 lease 하나다 (2026-09-28 · Codex P0) — 일반+일반도 진 쪽은 **lease 에서**
+     *    멈춘다. 앞판은 장부 예약에서 DELIVERY_UNCERTAIN_HOLD 로 멈췄지만, 그 전에 probe 까지 했다.
+     */
+    check('🔴 ㉝ 진 쪽은 status=held · MANUSCRIPT_IN_PROGRESS(lease) · sent=false · probe 0',
+      lr.status === 'held' && lr.reason === QN33.MANUSCRIPT_IN_PROGRESS_REASON && lr.stage === 'lease' && lr.sent === false
+        && s1.events.filter((e) => e.ev === 'probe' && e.pid === losers[0]?.pid).length === 0,
+      JSON.stringify({ status: lr.status, reason: lr.reason, stage: lr.stage, sent: lr.sent }))
+    const d1 = QN33.readQuarantine(s1.L).store['cc-a']?.delivery ?? {}
+    check('  ㉝ 장부에는 이긴 쪽의 예약 하나 — DELIVERY_UNCERTAIN · 예약 ID 있음',
+      d1.kind === 'DELIVERY_UNCERTAIN' && typeof d1.reservationId === 'string' && /^sha256:/.test(d1.messageFingerprint ?? ''),
+      JSON.stringify({ kind: d1.kind, rid: !!d1.reservationId }))
+    check('  ㉝ 잠금 파일이 남지 않는다', !s1.lockLeft, '남았다')
+
+    // ── 서로 다른 slug — lost update ──
+    const s2 = await scenario('diff', ['cc-a', 'cc-b'])
+    const st2 = QN33.readQuarantine(s2.L).store
+    check('🔴 ㉝ 다른 slug 동시 기록 — 두 행이 모두 남는다 (lost update 0)',
+      st2['cc-a']?.delivery?.kind === 'DELIVERY_UNCERTAIN' && st2['cc-b']?.delivery?.kind === 'DELIVERY_UNCERTAIN',
+      `남은 행 ${Object.keys(st2).join(',') || '없음'}`)
+    check('  ㉝ 다른 slug 는 서로 막지 않는다 — 둘 다 보낸다', s2.events.filter((e) => e.ev === 'send').length === 2,
+      `send ${s2.events.filter((e) => e.ev === 'send').length}`)
+
+    // ── 살아 있는 잠금 — 시간 초과면 전송 금지 · 잠금을 건드리지 않는다 (실제 CLI) ──
+    const L3 = path.join(T, 'held-ledger.json')
+    const LOG3 = path.join(T, 'held-events.jsonl')
+    const FX3 = writeFixture(path.join(T, 'held-fx.mjs'), fs.readFileSync(path.join(T, 'same-fx.mjs'), 'utf8')
+      .replace(JSON.stringify(path.join(T, 'same-ledger.json')), JSON.stringify(L3))
+      .replace(JSON.stringify(path.join(T, 'same-events.jsonl')), JSON.stringify(LOG3)))
+    const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+    const LK = QN33.quarantineLockPath(L3)
+    const lockBody = JSON.stringify({ token: 'someone-else', pid: holder.pid, host: os.hostname(), at: new Date().toISOString() })
+    fs.writeFileSync(LK, lockBody)
+    try {
+      const { spawnSync } = await import('node:child_process')
+      const RJ3 = path.join(T, 'held-r.json')
+      spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch', 'cc-a', '--result-json', RJ3],
+        { encoding: 'utf8', maxBuffer: 1e8,
+          env: { ...process.env, HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX3 } })
+      const row3 = JSON.parse(fs.readFileSync(RJ3, 'utf8')).results?.[0] ?? {}
+      check('🔴 ㉝ 살아 있는 잠금에 막혀 시간 초과 → send 0 · QUARANTINE_LOCK_TIMEOUT',
+        countEv(LOG3, 'send') === 0 && row3.sent === false && /QUARANTINE_LOCK_TIMEOUT/.test(row3.errorDetail ?? ''),
+        `send ${countEv(LOG3, 'send')} · ${row3.reason} — ${String(row3.errorDetail).slice(0, 90)}`)
+      check('🔴 ㉝ 살아 있는 남의 잠금은 훔치거나 지우지 않는다', fs.existsSync(LK) && fs.readFileSync(LK, 'utf8') === lockBody, fs.existsSync(LK) ? '바뀌었다' : '지워졌다')
+    } finally { holder.kill('SIGKILL'); fs.rmSync(LK, { force: true }) }
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉝-B 잠금 규약 — 판정 불가는 막고 · 죽은 주인만 거두고 · 내 잠금만 푼다')
+{
+  const QB = await import('./lib/magazine-quarantine.mjs')
+  const { spawnSync, spawn } = await import('node:child_process')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-lock-'))
+  try {
+    const L = path.join(T, 'q.json')
+    const LK = QB.quarantineLockPath(L)
+    // 판정 불가 — 내용이 규약과 다르다
+    fs.writeFileSync(LK, '{ 깨진')
+    const u1 = QB.withQuarantineLock(L, () => 'ran', { waitMs: 200 })
+    check('🔴 ㉝-B 잠금 상태 판정 불가 → 실패 · fn 미실행 · 잠금 그대로',
+      u1.ok === false && u1.code === 'QUARANTINE_LOCK_TIMEOUT' && fs.existsSync(LK) && fs.readFileSync(LK, 'utf8') === '{ 깨진',
+      `${u1.code} — ${String(u1.why).slice(0, 80)}`)
+    fs.rmSync(LK)
+    // 죽은 주인 — 확실히 없는 pid
+    const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8', env: { ...process.env, HOME: T } })
+    fs.writeFileSync(LK, JSON.stringify({ token: 'dead-owner', pid: Number(dead.stdout), host: os.hostname(), at: 'x' }))
+    const u2 = QB.updateQuarantine((cur) => ({ ...cur, a: { attempts: 0 } }), L)
+    check('  ㉝-B 주인이 죽은 잠금은 거두고 진행한다 · 끝나면 잠금 0',
+      u2.ok === true && !fs.existsSync(LK) && QB.readQuarantine(L).store.a, `${u2.ok} · ${u2.why ?? ''}`)
+    // 살아 있는 주인
+    const live = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+    try {
+      const body = JSON.stringify({ token: 'live-owner', pid: live.pid, host: os.hostname(), at: 'x' })
+      fs.writeFileSync(LK, body)
+      const u3 = QB.withQuarantineLock(L, () => 'ran', { waitMs: 200 })
+      check('🔴 ㉝-B 살아 있는 잠금은 빼앗지 않는다 — 시간 초과 · 내용 그대로',
+        u3.ok === false && fs.existsSync(LK) && fs.readFileSync(LK, 'utf8') === body, `${u3.code}`)
+    } finally { live.kill('SIGKILL'); fs.rmSync(LK, { force: true }) }
+    // 내 잠금만 푼다 — 임계구역 안에서 잠금 주인이 바뀌었다면 지우지 않는다
+    const u4 = QB.withQuarantineLock(L, () => {
+      fs.writeFileSync(LK, JSON.stringify({ token: 'intruder', pid: process.pid, host: os.hostname(), at: 'x' }))
+      return 'ran'
+    })
+    check('🔴 ㉝-B 풀 때 토큰이 내 것이 아니면 지우지 않는다',
+      u4.ok === true && fs.existsSync(LK) && JSON.parse(fs.readFileSync(LK, 'utf8')).token === 'intruder', '지웠다')
+    fs.rmSync(LK, { force: true })
+    // 장부 손상 — 잠금은 잡혀도 판정 불가
+    fs.writeFileSync(L, '{ 깨진')
+    const u5 = QB.updateQuarantine((cur) => cur, L)
+    check('  ㉝-B 장부 손상 → ok:false (QUARANTINE_UNREADABLE) · 잠금 0',
+      u5.ok === false && u5.code === 'QUARANTINE_UNREADABLE' && !fs.existsSync(LK), `${u5.code}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉞ 재생성 HOLD 경계에서 급사해도 regenCalls 0 · 재전송 0 (실제 자식 SIGKILL)')
+{
+  /**
+   * 🔴 **앞판의 crash window** (2026-09-28 · Codex P1).
+   *    packet 을 쓰고 regenCalls 를 올린 뒤 runner 를 불렀고, runner 가 HOLD 를 돌려준 뒤에야
+   *    되돌렸다. 그 사이 죽으면 전송 0건인데 regenCalls=1 이 남았다.
+   *
+   *    여기서는 실제 재생성 driver(실제 `attemptRegeneration` + 실제 `webuiRegenRunner` + 실제 CLI)를
+   *    **자식 프로세스**로 띄운다. runner 가 CLI 를 띄우는 순간(= 앞판의 HOLD 경계)을
+   *    fixture 적재 신호로 잡아 프로세스 그룹째 SIGKILL 하고, 여러 시점의 SIGKILL 도 훑는다.
+   */
+  const { spawn, spawnSync } = await import('node:child_process')
+  const QN34 = await import('./lib/magazine-quarantine.mjs')
+  const RG34 = await import('./lib/magazine-regen.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-kill-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const SLUG = 'ck-a'
+    fs.mkdirSync(path.join(D, SLUG), { recursive: true })
+    fs.writeFileSync(path.join(D, SLUG, 'brief.md'), `# ${SLUG}\n\n## 반드시 그대로 넣을 문장\n1. 문장 하나\n`)
+    fs.writeFileSync(path.join(D, SLUG, 'review.ts'), '#\n')
+    const L = path.join(T, 'ledger.json')
+    const LOG = path.join(T, 'events.jsonl')
+    const PK = path.join(T, 'packets')
+    const FX = writeFixture(path.join(T, 'fx.mjs'), `${fixtureHead(LOG)}
+rec('load')
+export const quarantinePath = ${JSON.stringify(L)}
+export const probe = async () => { rec('probe'); return { status: 'ok' } }
+export const ensureTab = async () => ({ ok: true })
+export const connect = async () => ({
+  contexts: () => [{ pages: () => [], newPage: async () => {
+    let typed = ''
+    return {
+      async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+      async waitForFunction() { throw new Error('waitForFunction: Timeout 300000ms exceeded') },
+      async evaluate() { return '' },
+      locator(sel) {
+        const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+        const l = { async click() { if (isSend) rec('send') }, async innerText() { return typed } }
+        return { first: () => l, ...l }
+      },
+      keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+    }
+  } }],
+  async close() {},
+})
+`)
+    const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
+    const url = (f) => JSON.stringify(new URL(`file://${path.resolve(f)}`).href)
+    const DRV = writeFixture(path.join(T, 'driver.mjs'), `import { spawnSync } from 'node:child_process'
+import { attemptRegeneration } from ${url('scripts/lib/magazine-regen.mjs')}
+import { webuiRegenRunner } from ${url('scripts/magazine-auto-register.mjs')}
+const runFn = (file, args) => {
+  const r = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', maxBuffer: 1e8, env: process.env })
+  return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
+}
+const r = attemptRegeneration({ slug: ${JSON.stringify(SLUG)}, profile: 'MEDICAL',
+  failures: [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }],
+  quarantinePath: ${JSON.stringify(L)}, packetDir: ${JSON.stringify(PK)}, draftsDir: ${JSON.stringify(D)},
+  runner: (ctx) => webuiRegenRunner(ctx, { runFn, resultDir: ${JSON.stringify(T)} }) })
+process.stdout.write(JSON.stringify(r))
+`)
+    const runDriver = () => {
+      const r = spawnSync(process.execPath, [DRV], { encoding: 'utf8', maxBuffer: 1e8, cwd: process.cwd(), env: { ...process.env, ...ENV } })
+      try { return JSON.parse(r.stdout) } catch { return { code: 'NO_JSON', why: `${r.stdout}${r.stderr}`.slice(0, 200) } }
+    }
+    /** 프로세스 그룹째 띄워 그룹째 죽인다 — runner 가 띄운 CLI 자식까지 함께 죽는다 */
+    const spawnDriver = () => spawn(process.execPath, [DRV],
+      { cwd: process.cwd(), env: { ...process.env, ...ENV }, detached: true, stdio: 'ignore' })
+    const exited = (c) => new Promise((ok) => (c.exitCode !== null || c.signalCode !== null ? ok() : c.once('exit', ok)))
+    const killGroup = (c) => { try { process.kill(-c.pid, 'SIGKILL') } catch { /* 이미 끝났다 */ } }
+    const row = () => QN34.readQuarantine(L).store[SLUG] ?? {}
+
+    // ① 1회차 — 보냈는데 응답을 못 받았다 (전송불명 기록을 만든다)
+    const r1 = runDriver()
+    check('  ㉞ 1회차 — 실제로 보냈고 전송불명이다', countEv(LOG, 'send') === 1 && r1.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${r1.code} · send ${countEv(LOG, 'send')}`)
+    const deliveryBefore = JSON.stringify(row().delivery)
+    const loads0 = countEv(LOG, 'load')
+
+    // ② HOLD 경계 — runner 가 CLI 를 띄우는 순간 그룹째 SIGKILL
+    const c = spawnDriver()
+    let killedAtBoundary = false
+    const until = Date.now() + 20000
+    while (c.exitCode === null && c.signalCode === null && Date.now() < until) {
+      if (countEv(LOG, 'load') > loads0) { killGroup(c); killedAtBoundary = true; break }
+      await new Promise((ok) => setTimeout(ok, 5))
+    }
+    await exited(c)
+    check('🔴 ㉞ HOLD 경계에 도달하기 전에 끝난다 — runner(CLI) 기동 0',
+      !killedAtBoundary && countEv(LOG, 'load') === loads0, killedAtBoundary ? 'runner 가 불려 SIGKILL 했다' : `load ${countEv(LOG, 'load') - loads0}`)
+    check('🔴 ㉞ 경계 실행 뒤 regenCalls 0 · attempts 0', (row().regenCalls ?? 0) === 0 && (row().attempts ?? 0) === 0,
+      `regen ${row().regenCalls} · attempts ${row().attempts}`)
+
+    // ③ 여러 시점 SIGKILL — 어디서 죽어도 불변식이 유지된다
+    const bad = []
+    for (const ms of [0, 20, 60, 120, 250, 500]) {
+      const k = spawnDriver()
+      await new Promise((ok) => setTimeout(ok, ms))
+      killGroup(k)
+      await exited(k)
+      const e = row()
+      if ((e.regenCalls ?? 0) !== 0 || (e.attempts ?? 0) !== 0 || countEv(LOG, 'send') !== 1
+        || JSON.stringify(e.delivery) !== deliveryBefore || fs.existsSync(QN34.quarantineLockPath(L))) {
+        bad.push(`${ms}ms: regen ${e.regenCalls} · send ${countEv(LOG, 'send')} · lock ${fs.existsSync(QN34.quarantineLockPath(L))}`)
+      }
+    }
+    check('🔴 ㉞ SIGKILL 6개 시점 모두 regenCalls 0 · 재전송 0 · 전송 기록 불변 · 잠금 0', bad.length === 0, bad.join(' | ') || '6/6')
+
+    // ④ 재시작 — 다시 돌려도 HOLD · 아무것도 쓰지 않는다
+    const r4 = runDriver()
+    check('🔴 ㉞ 재시작 후 HOLD · runner 0 · send 0',
+      r4.code === 'REGEN_DELIVERY_HOLD' && countEv(LOG, 'load') === loads0 && countEv(LOG, 'send') === 1,
+      `${r4.code} · load ${countEv(LOG, 'load') - loads0} · send ${countEv(LOG, 'send')}`)
+    check('🔴 ㉞ 앞선 전송 기록(sent=null · prior)을 덮지 않는다',
+      JSON.stringify(row().delivery) === deliveryBefore && row().delivery?.sent === null, JSON.stringify(row().delivery))
+    check('  ㉞ packet 파일 0', RG34.packetsLeftFor(SLUG, PK).length === 0, RG34.packetsLeftFor(SLUG, PK).join(',') || '0건')
+
+    // ⑤ 죽은 게이트가 아니다 — brief 가 바뀌면(지문 다름) 새 시도가 실제로 돈다
+    fs.appendFileSync(path.join(D, SLUG, 'brief.md'), '\n## 추가 지시\n- 한 줄 더\n')
+    const r5 = runDriver()
+    check('🔴 ㉞ brief 가 바뀌면 다시 보낸다', countEv(LOG, 'send') === 2 && r5.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${r5.code} · send ${countEv(LOG, 'send')}`)
+    void QN34
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㉟ 예약은 주인만 지우고 · 실패한 쪽은 남의 예약을 덮지 않는다 (실제 fetchBatch)')
+{
+  /**
+   * 🔴 예약 기록이 send 권한의 정본이면, 그 기록을 **다른 프로세스가 지우거나 덮는 길**도 막아야 한다.
+   *    ① 성공한 프로세스는 **자기 예약 ID 일 때만** 지운다 — 그 사이 다른 지문으로 적힌 남의 예약을 지우면 HOLD 가 풀린다.
+   *    ② 선기록에 실패한 프로세스(잠금 시간 초과)는 사후 기록에서 **같은 지문의 남의 예약을 덮지 않는다.**
+   */
+  const { spawnSync } = await import('node:child_process')
+  const WEBUI35 = await import('./magazine-webui-runner.mjs')
+  const QN35 = await import('./lib/magazine-quarantine.mjs')
+  const MG35 = await import('./lib/magazine-manuscript-guard.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-reservation-'))
+  try {
+    const D = path.join(T, 'drafts', 'magazine')
+    const DATE = '2026-09-28'
+    fs.mkdirSync(path.join(D, 'rs-a'), { recursive: true })
+    fs.writeFileSync(path.join(D, 'rs-a', 'brief.md'), '# brief\n\n본문 지시\n')
+    fs.writeFileSync(path.join(D, 'rs-a', 'review.ts'), '#\n')
+    fs.mkdirSync(path.join(D, '_runs', DATE), { recursive: true })
+    fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
+      JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'rs-a' }] }))
+    const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
+    check('  ㉟ 합성 원고가 실제 관문을 통과한다 (전제)', MG35.validateManuscript(GOOD).ok, JSON.stringify(MG35.validateManuscript(GOOD).reasons ?? []))
+    const deps = ({ onTyped = () => {}, onAwait = () => {}, ok }, world) => ({
+      ensureTab: async () => ({ ok: true }),
+      connect: async () => ({
+        contexts: () => [{ pages: () => [], newPage: async () => {
+          let typed = ''
+          return {
+            async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+            async waitForFunction() { onAwait(); if (!ok) throw new Error('Timeout') },
+            async evaluate() { return GOOD },
+            locator(sel) {
+              const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+              const l = { async click() { if (isSend) world.send += 1 }, async innerText() { return typed } }
+              return { first: () => l, ...l }
+            },
+            keyboard: { async insertText(t) { typed += String(t ?? ''); onTyped(typed) }, async press() {} },
+          }
+        } }],
+        async close() {},
+      }),
+    })
+    const run = (L, d, rp) => WEBUI35.fetchBatch({ date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: L,
+      resultPath: path.join(T, rp), probeFn: async () => ({ status: 'ok' }), browserDeps: d })
+    const other = { sent: null, messageFingerprint: 'sha256:other-brief', kind: 'DELIVERY_UNCERTAIN',
+      reason: 'sending', stage: 'send', at: 1, runId: null, date: DATE, reservationId: 'other-process' }
+
+    // ① 성공 — 내 예약이면 지운다 (기본 동작)
+    const L1 = path.join(T, 'q1.json')
+    const w1 = { send: 0 }
+    const b1 = await run(L1, deps({ ok: true }, w1), 'r1.json')
+    check('  ㉟ 성공하면 내 예약을 지운다', (b1.results ?? [])[0]?.status === 'ok' && !QN35.readQuarantine(L1).store['rs-a']?.delivery,
+      JSON.stringify(QN35.readQuarantine(L1).store['rs-a'] ?? null))
+    fs.rmSync(path.join(D, 'rs-a', 'draft.md'), { force: true })
+
+    // ① 성공 — 그 사이 남의 예약(다른 지문)으로 바뀌었으면 지우지 않는다
+    const L2 = path.join(T, 'q2.json')
+    const w2 = { send: 0 }
+    const b2 = await run(L2, deps({ ok: true, onAwait: () => QN35.updateQuarantine((cur) => ({ ...cur, 'rs-a': { ...(cur['rs-a'] ?? {}), delivery: other } }), L2) }, w2), 'r2.json')
+    check('🔴 ㉟ 성공해도 남의 예약은 지우지 않는다',
+      (b2.results ?? [])[0]?.status === 'ok' && QN35.readQuarantine(L2).store['rs-a']?.delivery?.reservationId === 'other-process',
+      JSON.stringify(QN35.readQuarantine(L2).store['rs-a']?.delivery ?? null))
+    fs.rmSync(path.join(D, 'rs-a', 'draft.md'), { force: true })
+
+    // ② 잠금 시간 초과로 선기록 실패 — 그 사이 같은 지문을 예약한 남의 기록을 덮지 않는다
+    const L3 = path.join(T, 'q3.json')
+    const w3 = { send: 0 }
+    let holderPid = null
+    const b3 = await run(L3, deps({ ok: false, onTyped: (typed) => {
+      // 다른 프로세스가 같은 글자를 예약했고, 아직 잠금을 쥐고 있다 (11초 뒤 죽는다)
+      QN35.saveQuarantine({ 'rs-a': { delivery: { ...other, messageFingerprint: QN35.deliveryFingerprintOf(typed) } } }, L3)
+      /**
+       * 🔴 holder 는 **이 시험 프로세스의 자식이 아니어야 한다.** 자식이면 이 프로세스가 동기 대기 중이라
+       *    끝난 holder 를 거두지 못해 좀비가 되고, 좀비는 `kill(pid, 0)` 에 "살아 있다" 로 답한다 —
+       *    그러면 사후 기록 단계가 잠금을 끝내 못 잡아 **아무것도 안 쓰고** 이 시험이 공허하게 통과했다 (변이로 확인).
+       *    sh 가 띄우고 바로 끝나므로 holder 는 init 이 거둔다.
+       */
+      holderPid = Number(spawnSync('sh', ['-c', `"${process.execPath}" -e "setTimeout(() => {}, 11000)" >/dev/null 2>&1 & echo $!`],
+        { encoding: 'utf8', env: { ...process.env, HOME: T } }).stdout.trim())
+      fs.writeFileSync(QN35.quarantineLockPath(L3), JSON.stringify({ token: 'other-lock', pid: holderPid, host: os.hostname(), at: 'x' }))
+    } }, w3), 'r3.json')
+    try {
+      check('  ㉟ 사후 기록 단계가 실제로 잠금을 잡았다 (죽은 holder 의 잠금을 거뒀다 — 전제)',
+        Number.isInteger(holderPid) && holderPid > 0 && !fs.existsSync(QN35.quarantineLockPath(L3)), `holder ${holderPid}`)
+      const d3 = QN35.readQuarantine(L3).store['rs-a']?.delivery ?? {}
+      check('🔴 ㉟ 선기록 실패(잠금 시간 초과) → send 0', w3.send === 0 && (b3.results ?? [])[0]?.sent === false,
+        `send ${w3.send} · ${(b3.results ?? [])[0]?.reason}`)
+      check('🔴 ㉟ 실패한 쪽이 남의 같은 지문 예약을 덮지 않는다',
+        d3.reservationId === 'other-process' && d3.kind === 'DELIVERY_UNCERTAIN', JSON.stringify(d3))
+    } finally { try { if (holderPid) process.kill(holderPid, 'SIGKILL') } catch { /* 이미 끝났다 */ } }
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+/**
+ * 🔴 ㊱·㊲ 공용 — **실제 재생성 driver 자식**(실제 `attemptRegeneration` + 실제 `webuiRegenRunner` + 실제 CLI)
+ *    를 여러 개 띄우는 무대. 브라우저만 fixture 다. 원고 응답은 `release` 파일이 생길 때까지 기다린다 —
+ *    이긴 쪽이 **예약을 쥔 채 멈춰 있는 동안** 진 쪽을 여러 시점에 죽여 보기 위해서다.
+ */
+async function regenStage(T, name, { slug = 'rr-a', slugs = [slug], ledgerSeed = null, probeHook = '' } = {}) {
+  const { spawn, spawnSync } = await import('node:child_process')
+  const D = path.join(T, `${name}-drafts`)
+  for (const sl of slugs) {
+    fs.mkdirSync(path.join(D, sl), { recursive: true })
+    fs.writeFileSync(path.join(D, sl, 'brief.md'), `# ${sl}\n\n본문 지시\n`)
+    fs.writeFileSync(path.join(D, sl, 'review.ts'), '#\n')
+  }
+  // 🔴 무대마다 장부 폴더를 따로 둔다 — slug lease 폴더가 장부 옆에 생기므로 무대끼리 섞이지 않게
+  fs.mkdirSync(path.join(T, name), { recursive: true })
+  const L = path.join(T, name, 'ledger.json')
+  if (ledgerSeed) saveQuarantine(ledgerSeed, L)
+  const LOG = path.join(T, `${name}-events.jsonl`)
+  const PK = path.join(T, `${name}-packets`)
+  const RELEASE = path.join(T, `${name}-release`)
+  const BAR = path.join(T, `${name}-barrier`)
+  fs.mkdirSync(BAR)
+  /** 🔴 자식 쪽 barrier — 두 자식이 **앞단(잠금 없는) 판정을 모두 지나 예약 직전까지** 오게 한다 */
+  const CBAR = path.join(T, `${name}-child-barrier`)
+  fs.mkdirSync(CBAR)
+  const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
+  const FX = writeFixture(path.join(T, `${name}-fx.mjs`), `${fixtureHead(LOG)}
+export const quarantinePath = ${JSON.stringify(L)}
+export const probe = async () => {
+  rec('probe')
+  ${probeHook}
+  fs.writeFileSync(${JSON.stringify(CBAR)} + '/' + process.pid, '')
+  const until = Date.now() + 3000
+  while (fs.readdirSync(${JSON.stringify(CBAR)}).length < 2 && Date.now() < until) await new Promise((ok) => setTimeout(ok, 5))
+  return { status: 'ok' }
+}
+export const ensureTab = async () => ({ ok: true })
+export const connect = async () => ({
+  contexts: () => [{ pages: () => [], newPage: async () => {
+    let typed = ''
+    return {
+      async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+      async waitForFunction() {
+        const until = Date.now() + 60000
+        while (!fs.existsSync(${JSON.stringify(RELEASE)})) {
+          if (Date.now() > until) throw new Error('waitForFunction: Timeout')
+          await new Promise((ok) => setTimeout(ok, 20))
+        }
+      },
+      // 🔴 원고에 **이 자식이 보낸 지시의 코드**를 식별 문장으로 박는다 — 최종 draft 가 누구 것인지 가린다
+      async evaluate() {
+        rec('evaluate')
+        return ${JSON.stringify(GOOD)}.replace('[CTA]', '식별 ' + ([...typed.matchAll(/\\[([A-Z_]+)\\]/g)].map((m) => m[1]).join(',') || 'NORMAL') + '\\n\\n[CTA]')
+      },
+      locator(sel) {
+        const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+        const l = { async click() { if (isSend) rec('send', { ppid: process.ppid, codes: [...typed.matchAll(/\\[([A-Z_]+)\\]/g)].map((m) => m[1]) }) }, async innerText() { return typed } }
+        return { first: () => l, ...l }
+      },
+      keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+    }
+  } }],
+  async close() {},
+})
+`)
+  /** 부모가 패킷을 쓰는 순간(= 앞단 판정 통과 직후)에 두 부모를 세우는 barrier */
+  const PRE = writeFixture(path.join(T, `${name}-barrier.mjs`), `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const real = fs.renameSync
+let first = true
+fs.renameSync = (a, b) => {
+  if (first && String(b).startsWith(${JSON.stringify(PK + path.sep)})) {
+    first = false
+    fs.writeFileSync(${JSON.stringify(BAR)} + '/' + process.pid, '')
+    const until = Date.now() + 3000
+    while (fs.readdirSync(${JSON.stringify(BAR)}).length < 2 && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    fs.appendFileSync(${JSON.stringify(BAR)} + '.log', JSON.stringify({ pid: process.pid, arrivals: fs.readdirSync(${JSON.stringify(BAR)}).length }) + '\\n')
+  }
+  return real(a, b)
+}
+syncBuiltinESMExports()
+`)
+  const url = (f) => JSON.stringify(new URL(`file://${path.resolve(f)}`).href)
+  const DRV = writeFixture(path.join(T, `${name}-driver.mjs`), `import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { attemptRegeneration } from ${url('scripts/lib/magazine-regen.mjs')}
+import { webuiRegenRunner } from ${url('scripts/magazine-auto-register.mjs')}
+const runFn = (file, args) => {
+  const r = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', maxBuffer: 1e8, env: process.env })
+  return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
+}
+const r = attemptRegeneration({ slug: process.env.RR_SLUG, profile: 'MEDICAL',
+  failures: JSON.parse(process.env.RR_FAILURES),
+  quarantinePath: ${JSON.stringify(L)}, packetDir: ${JSON.stringify(PK)}, draftsDir: ${JSON.stringify(D)},
+  runner: (ctx) => webuiRegenRunner(ctx, { runFn, resultDir: ${JSON.stringify(T)} }) })
+fs.writeFileSync(process.env.RR_OUT, JSON.stringify({ ...r, pid: process.pid }))
+`)
+  const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
+  let n = 0
+  const start = (failures, { barrier = false, slug: sl = slug } = {}) => {
+    n += 1
+    const out = path.join(T, `${name}-out-${n}.json`)
+    const c = spawn(process.execPath, [...(barrier ? ['--import', PRE] : []), DRV],
+      { cwd: process.cwd(), env: { ...process.env, ...ENV, RR_SLUG: sl, RR_FAILURES: JSON.stringify(failures), RR_OUT: out },
+        detached: true, stdio: 'ignore' })
+    const done = new Promise((ok) => c.once('exit', () => ok()))
+    return { c, done, out, result: () => (fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, 'utf8')) : null),
+      kill: () => { try { process.kill(-c.pid, 'SIGKILL') } catch { /* 이미 끝났다 */ } } }
+  }
+  const row = (sl = slug) => readQuarantine(L).store[sl] ?? {}
+  const draft = (sl = slug) => (fs.existsSync(path.join(D, sl, 'draft.md')) ? fs.readFileSync(path.join(D, sl, 'draft.md'), 'utf8') : '')
+  const leasesLeft = () => (fs.existsSync(path.join(T, name, 'magazine-manuscript-leases'))
+    ? fs.readdirSync(path.join(T, name, 'magazine-manuscript-leases')) : [])
+  const events = (ev) => readEvents(LOG).filter((e) => e.ev === ev)
+  const sends = () => readEvents(LOG).filter((e) => e.ev === 'send')
+  const arrivals = () => (fs.existsSync(`${BAR}.log`)
+    ? fs.readFileSync(`${BAR}.log`, 'utf8').trim().split('\n').map((l) => JSON.parse(l).arrivals) : [])
+  const release = () => fs.writeFileSync(RELEASE, '')
+  const firstExit = (a, b) => Promise.race([a.done.then(() => a), b.done.then(() => b)])
+  const childArrivals = () => fs.readdirSync(CBAR).length
+  /** 이 무대 환경으로 실제 CLI 를 한 번 돈다 (일반 회수 등) */
+  const runCli = (args) => spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', ...args],
+    { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, ...ENV, HOME: T } })
+  /** 같은 환경으로 실제 CLI 를 **비동기로** 띄운다 — 재생성과 동시에 도는 일반 회수 등 */
+  const startCli = (args, rj) => {
+    const c = spawn(process.execPath, ['scripts/magazine-webui-runner.mjs', ...args, '--result-json', rj],
+      { cwd: process.cwd(), env: { ...process.env, ...ENV }, stdio: 'ignore' })
+    const done = new Promise((ok) => c.once('exit', (code) => ok(code)))
+    return { c, done, row: () => (fs.existsSync(rj) ? JSON.parse(fs.readFileSync(rj, 'utf8')).results?.[0] ?? null : null) }
+  }
+  const untilTrue = async (fn, ms = 15000) => { const t = Date.now() + ms; while (!fn() && Date.now() < t) await new Promise((ok) => setTimeout(ok, 10)); return fn() }
+  return { slug, L, D, PK, start, row, sends, arrivals, release, firstExit, childArrivals, draft, leasesLeft, events, untilTrue, runCli, startCli }
+}
+
+console.log('\n㊱ 동시 재생성 — 판정·예약·횟수가 한 임계구역 (실제 driver 2개 · barrier · SIGKILL)')
+{
+  /**
+   * 🔴 **앞판의 경합** (2026-09-28 · Codex P0).
+   *    부모가 앞단 판정 뒤 **따로** regenCalls 를 올렸다. 두 부모가 앞단 판정을 동시에 통과하면
+   *    둘 다 올렸고, 진 쪽은 옛 `budget.used` 로 이긴 쪽 횟수까지 되돌렸다.
+   *    여기서는 두 부모를 **패킷을 쓰는 순간(= 앞단 판정 통과 직후)** 에 barrier 로 세운다.
+   */
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-race-'))
+  try {
+    const S = await regenStage(T, 'same')
+    const F = [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }]
+    const a = S.start(F, { barrier: true })
+    const b = S.start(F, { barrier: true })
+    const loser = await S.firstExit(a, b)
+    const winner = loser === a ? b : a
+    const lr = loser.result() ?? {}
+    check('  ㊱ 두 부모가 모두 앞단 판정을 통과했다 (barrier 도착 2 · 전제)',
+      S.arrivals().length === 2 && S.arrivals().includes(2), JSON.stringify(S.arrivals()))
+    /**
+     * 🔴 **같은 slug 재생성은 lease 하나** (2026-09-28 · Codex P0) — 진 쪽 자식은 probe **전에** 멈춘다.
+     *    그래서 자식 barrier 에는 이긴 쪽 하나만 온다. 이긴 쪽이 예약을 쥘 때까지 기다린 뒤에 본다.
+     */
+    await S.untilTrue(() => Boolean(S.row().delivery?.reservationId))
+    check('🔴 ㊱ 진 쪽 — REGEN_IN_PROGRESS · probe 0 · send 0 (자식 barrier 도착 1)',
+      lr.code === 'REGEN_IN_PROGRESS' && S.events('probe').length === 1 && S.childArrivals() === 1 && S.sends().length === 1,
+      `${lr.code} · probe ${S.events('probe').length} · barrier ${S.childArrivals()} · send ${S.sends().length}`)
+    const r1 = S.row()
+    const rid = r1.delivery?.reservationId
+    check('🔴 ㊱ 이긴 쪽이 예약을 쥔 동안 regenCalls 정확히 1 · 예약 1개',
+      r1.regenCalls === 1 && typeof rid === 'string' && r1.delivery?.kind === 'DELIVERY_UNCERTAIN',
+      JSON.stringify({ regenCalls: r1.regenCalls, rid: !!rid, ids: r1.regenAttemptIds?.length }))
+
+    // 진 쪽을 여러 시점에 SIGKILL — 이긴 쪽 횟수·예약이 그대로여야 한다
+    const bad = []
+    for (const ms of [0, 30, 80, 150, 300, 600]) {
+      const k = S.start(F)
+      await new Promise((ok) => setTimeout(ok, ms))
+      k.kill()
+      await k.done
+      const e = S.row()
+      if (e.regenCalls !== 1 || e.delivery?.reservationId !== rid || S.sends().length !== 1) {
+        bad.push(`${ms}ms: regen ${e.regenCalls} · rid ${e.delivery?.reservationId === rid} · send ${S.sends().length}`)
+      }
+    }
+    check('🔴 ㊱ 진 쪽을 6개 시점에 SIGKILL 해도 이긴 쪽 regenCalls·예약 보존 · send 1', bad.length === 0, bad.join(' | ') || '6/6')
+    const extra = S.start(F)
+    await extra.done
+    check('  ㊱ 죽이지 않은 추가 시도도 HOLD · send 0 · 횟수 불변',
+      extra.result()?.code === 'REGEN_DELIVERY_HOLD' && S.sends().length === 1 && S.row().regenCalls === 1,
+      `${extra.result()?.code} · regen ${S.row().regenCalls}`)
+
+    S.release()
+    await winner.done
+    const wr = winner.result() ?? {}
+    check('🔴 ㊱ 최종 — send 합계 1 · regenCalls 정확히 1 · 이긴 쪽 REGENERATED',
+      S.sends().length === 1 && S.row().regenCalls === 1 && wr.code === 'REGENERATED',
+      `${wr.code} · send ${S.sends().length} · regen ${S.row().regenCalls}`)
+    check('  ㊱ 이긴 쪽은 자기 예약만 지웠다 · 패킷 잔여 0',
+      !S.row().delivery && packetsLeftFor(S.slug, S.PK).length === 0, packetsLeftFor(S.slug, S.PK).join(',') || '0건')
+
+    // 소진 직전 — 서로 다른 지문 둘이 마지막 한 번을 두고 경합한다
+    const X = await regenStage(T, 'last', { ledgerSeed: { 'rr-a': { attempts: 0, regenCalls: 1 } } })
+    X.release()
+    const xa = X.start([{ code: 'MED_A', label: '가' }], { barrier: true })
+    const xb = X.start([{ code: 'MED_B', label: '나' }], { barrier: true })
+    await Promise.all([xa.done, xb.done])
+    const codes = [xa.result()?.code, xb.result()?.code].sort()
+    check('  ㊱ [소진 직전] 두 부모 모두 앞단 판정을 통과했다 (전제)', X.arrivals().includes(2), JSON.stringify(X.arrivals()))
+    check('🔴 ㊱ [소진 직전] 한쪽만 — send 1 · regenCalls 2 · 다른 쪽 REGEN_IN_PROGRESS (lease)',
+      X.sends().length === 1 && X.row().regenCalls === 2 && codes.join(',') === 'REGENERATED,REGEN_IN_PROGRESS',
+      `${codes.join(',')} · send ${X.sends().length} · regen ${X.row().regenCalls}`)
+
+    /**
+     * 🔴 **임계구역 안 최신 예산 확인은 여전히 정본이다.** lease 뒤 · 예약 전에 예산이 소진된 경우를
+     *    probe hook 으로 만든다 (앞단 확인은 이미 통과한 뒤다). 예약 임계구역이 막아야 한다.
+     */
+    const Y = await regenStage(T, 'inlock', { ledgerSeed: { 'rr-a': { attempts: 0, regenCalls: 1 } },
+      probeHook: `{ const f = ${JSON.stringify(path.join(T, 'inlock', 'ledger.json'))}; const j = JSON.parse(fs.readFileSync(f, 'utf8')); j['rr-a'].regenCalls = 2; fs.writeFileSync(f, JSON.stringify(j)) }` })
+    Y.release()
+    const ya = Y.start([{ code: 'MED_A', label: '가' }])
+    await ya.done
+    check('🔴 ㊱ [임계구역 예산] 앞단 뒤에 소진되면 예약 임계구역이 막는다 — REGEN_EXHAUSTED · send 0 · 예약 0 · regenCalls 2',
+      ya.result()?.code === 'REGEN_EXHAUSTED' && Y.sends().length === 0 && !Y.row().delivery && Y.row().regenCalls === 2,
+      `${ya.result()?.code} · send ${Y.sends().length} · regen ${Y.row().regenCalls}`)
+
+    // 예약을 얻은 자식이 send 직후 급사 — 예약과 횟수를 보수적으로 남겨 재전송을 막는다
+    const K = await regenStage(T, 'crash')
+    const kk = K.start([{ code: 'QA_FAIL', label: 'magazine QA FAIL' }])
+    const until = Date.now() + 20000
+    while (K.sends().length === 0 && Date.now() < until) await new Promise((ok) => setTimeout(ok, 10))
+    const childPid = K.sends()[0]?.pid
+    try { process.kill(childPid, 'SIGKILL') } catch { /* 이미 끝났다 */ }
+    await kk.done
+    const kr = kk.result() ?? {}
+    check('🔴 ㊱ [급사] 예약을 얻은 자식이 send 뒤 죽으면 regenCalls·예약이 남는다',
+      K.sends().length === 1 && K.row().regenCalls === 1 && K.row().delivery?.kind === 'DELIVERY_UNCERTAIN'
+        && kr.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${kr.code} · regen ${K.row().regenCalls} · delivery ${K.row().delivery?.kind}`)
+    const k2 = K.start([{ code: 'QA_FAIL', label: 'magazine QA FAIL' }])
+    await k2.done
+    check('🔴 ㊱ [급사] 재시작 — HOLD · 재전송 0 · 횟수 불변',
+      k2.result()?.code === 'REGEN_DELIVERY_HOLD' && K.sends().length === 1 && K.row().regenCalls === 1,
+      `${k2.result()?.code} · send ${K.sends().length} · regen ${K.row().regenCalls}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊲ 같은 slug 재생성은 수명주기 전체가 하나 — 다른 지문 2개 동시 · 다른 slug 는 동시 (실제 driver)')
+{
+  /**
+   * 🔴 **앞판의 "둘 다 REGENERATED" 는 성공이 아니라 결함이었다** (2026-09-28 · Codex P0).
+   *    같은 slug · 다른 지문 재생성 두 건이 동시에 보내고 **같은 draft.md 를 둘 다 썼다.**
+   *    이제 slug lease 로 한 건만 진행한다. 패자는 probe·send·draft write·regenCalls 전부 0.
+   *    barrier 로 두 부모가 모두 패킷을 쓴 뒤(= 앞단 판정 통과 뒤)에 자식이 뜨게 한다.
+   */
+  const { spawnSync, spawn } = await import('node:child_process')
+  const QN37 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-slug-lease-'))
+  try {
+    const S = await regenStage(T, 'iso')
+    S.release()
+    const FA = [{ code: 'MED_ALPHA', label: '가' }]
+    const FB = [{ code: 'MED_BETA', label: '나' }]
+    const a = S.start(FA, { barrier: true })
+    const b = S.start(FB, { barrier: true })
+    await Promise.all([a.done, b.done])
+    const ra = a.result() ?? {}
+    const rb = b.result() ?? {}
+    check('  ㊲ 두 부모가 모두 앞단 판정을 지나 패킷을 썼다 (barrier 도착 2 · 전제)', S.arrivals().includes(2), JSON.stringify(S.arrivals()))
+    const [win, lose, winCode, loseCode, winRes, loseRes] = ra.code === 'REGENERATED'
+      ? [a, b, 'MED_ALPHA', 'MED_BETA', ra, rb] : [b, a, 'MED_BETA', 'MED_ALPHA', rb, ra]
+    const byParent = (pid) => S.sends().filter((e) => e.ppid === pid).flatMap((e) => e.codes)
+    check('🔴 ㊲ 승자만 REGENERATED · 패자는 REGEN_IN_PROGRESS',
+      winRes.code === 'REGENERATED' && loseRes.code === 'REGEN_IN_PROGRESS', `${ra.code} · ${rb.code}`)
+    check('🔴 ㊲ 승자만 send 1 · 패자 send 0 · probe 는 승자 1회뿐',
+      S.sends().length === 1 && byParent(lose.c.pid).length === 0 && S.events('probe').length === 1,
+      `send ${S.sends().length} · 패자 ${JSON.stringify(byParent(lose.c.pid))} · probe ${S.events('probe').length}`)
+    check('🔴 ㊲ draft write 는 승자 1회 · 최종 draft 에는 승자의 식별 문장만',
+      S.events('evaluate').length === 1 && S.draft().includes(`식별 ${winCode}`) && !S.draft().includes(loseCode),
+      `evaluate ${S.events('evaluate').length} · ${(S.draft().match(/식별 [A-Z_,]+/) ?? ['없음'])[0]}`)
+    check('  ㊲ 승자는 자기 패킷의 지시만 보냈다', JSON.stringify(byParent(win.c.pid)) === JSON.stringify([winCode]), JSON.stringify(byParent(win.c.pid)))
+    check('🔴 ㊲ 패자 regenCalls 소비 0 (최종 1) · 패자도 자기 패킷을 읽었다 (attemptId 일치)',
+      S.row().regenCalls === 1 && loseRes.childAttemptId === loseRes.attemptId && Boolean(loseRes.attemptId),
+      `regen ${S.row().regenCalls} · ${loseRes.childAttemptId === loseRes.attemptId}`)
+    check('  ㊲ 각자 자기 packetHash (서로 다르다)',
+      winRes.packetHash && loseRes.packetHash && winRes.packetHash !== loseRes.packetHash, `${winRes.packetHash} · ${loseRes.packetHash}`)
+    check('🔴 ㊲ 종료 후 패킷 잔여 0 · lease 잔여 0',
+      packetsLeftFor(S.slug, S.PK).length === 0 && S.leasesLeft().length === 0,
+      `${packetsLeftFor(S.slug, S.PK).join(',') || '패킷 0'} · ${S.leasesLeft().join(',') || 'lease 0'}`)
+
+    // 승자가 끝난 뒤에는 바뀐 지문의 다음 재생성이 순차로 된다
+    const c = S.start(lose === a ? FA : FB)
+    await c.done
+    check('🔴 ㊲ 승자 종료 후 바뀐 지문은 순차 실행된다 — REGENERATED · draft 가 그 식별 문장으로',
+      c.result()?.code === 'REGENERATED' && S.draft().includes(`식별 ${loseCode}`) && S.sends().length === 2,
+      `${c.result()?.code} · send ${S.sends().length}`)
+
+    // 다른 slug 두 건은 동시에 진행한다
+    const M = await regenStage(T, 'multi', { slugs: ['rr-a', 'rr-b'] })
+    M.release()
+    const ma = M.start(FA, { barrier: true, slug: 'rr-a' })
+    const mb = M.start(FB, { barrier: true, slug: 'rr-b' })
+    await Promise.all([ma.done, mb.done])
+    check('🔴 ㊲ 다른 slug 두 건은 동시에 — 둘 다 REGENERATED · send 2 · 각자 자기 draft',
+      ma.result()?.code === 'REGENERATED' && mb.result()?.code === 'REGENERATED' && M.sends().length === 2
+        && M.draft('rr-a').includes('식별 MED_ALPHA') && M.draft('rr-b').includes('식별 MED_BETA'),
+      `${ma.result()?.code} · ${mb.result()?.code} · send ${M.sends().length}`)
+    check('  ㊲ 다른 slug — 두 자식 모두 probe barrier 에 왔다 (서로 막지 않았다)', M.childArrivals() === 2, `${M.childArrivals()}`)
+
+    // lease 주인 — 살아 있으면 빼앗지 않고 멈춘다 · 죽었으면 token 재확인 뒤 거둔다
+    const Z = await regenStage(T, 'owner')
+    Z.release()
+    const LEASE = QN37.manuscriptLeasePath('rr-a', Z.L)
+    fs.mkdirSync(path.dirname(LEASE), { recursive: true })
+    const live = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+    try {
+      const body = JSON.stringify({ token: 'live-owner', pid: live.pid, host: os.hostname(), at: 'x', slug: 'rr-a' })
+      fs.writeFileSync(LEASE, body)
+      const z1 = Z.start(FA)
+      await z1.done
+      check('🔴 ㊲ 살아 있는 lease 주인 — REGEN_IN_PROGRESS · probe 0 · send 0 · lease 그대로',
+        z1.result()?.code === 'REGEN_IN_PROGRESS' && Z.events('probe').length === 0 && Z.sends().length === 0
+          && fs.existsSync(LEASE) && fs.readFileSync(LEASE, 'utf8') === body,
+        `${z1.result()?.code} · probe ${Z.events('probe').length}`)
+      // 🔴 일반 회수(패킷 없음)도 그 slug 가 재생성 중이면 멈춘다 — lease 는 잡지 않고 보기만 한다
+      const RJN = path.join(T, 'normal-during-lease.json')
+      const n1 = Z.runCli(['--fetch', 'rr-a', '--result-json', RJN])
+      const nrow = fs.existsSync(RJN) ? JSON.parse(fs.readFileSync(RJN, 'utf8')).results?.[0] ?? {} : {}
+      check('🔴 ㊲ 재생성 중인 slug 의 일반 회수 — MANUSCRIPT_IN_PROGRESS · probe 0 · send 0',
+        n1.status !== 0 && nrow.reason === 'MANUSCRIPT_IN_PROGRESS' && Z.events('probe').length === 0 && Z.sends().length === 0,
+        `exit ${n1.status} · ${nrow.reason} · probe ${Z.events('probe').length}`)
+    } finally { live.kill('SIGKILL') }
+    const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8', env: { ...process.env, HOME: T } })
+    fs.writeFileSync(LEASE, JSON.stringify({ token: 'dead-owner', pid: Number(dead.stdout), host: os.hostname(), at: 'x', slug: 'rr-a' }))
+    const z2 = Z.start(FA)
+    await z2.done
+    check('  ㊲ 죽은 lease 주인 — token 재확인 뒤 거두고 진행 · 끝나면 lease 0',
+      z2.result()?.code === 'REGENERATED' && !fs.existsSync(LEASE), `${z2.result()?.code}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊳ 늦게 온 옛 실패는 최신 상태를 건드리지 않는다 · 패킷 attemptId fail-closed')
+{
+  const RG38 = await import('./lib/magazine-regen.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-cas-'))
+  try {
+    /**
+     * 🔴 **A. CAS** (2026-09-28 · Codex P1). 옛 시도가 예약·횟수를 얻고 느려진 사이, 새 시도가 성공하고
+     *    등록까지 끝나 재생성 기록이 지워졌다(clearRegen). 그 뒤 옛 시도의 인프라 실패가 늦게 도착한다.
+     *    앞판은 attemptId 가 없어도 kind·sent·lastRegenAt 을 덮어썼다 — 이제 장부는 한 바이트도 안 바뀐다.
+     */
+    const L = path.join(T, 'q.json')
+    const PK = path.join(T, 'packets')
+    let before = null
+    let rNew = null
+    const rOld = attemptRegeneration({ slug: 'cas-a', profile: 'MEDICAL', failures: [{ code: 'QA_FAIL', label: '옛' }],
+      quarantinePath: L, packetDir: PK,
+      runner: (ctxOld) => asChild(ctxOld, L, () => {
+        rNew = attemptRegeneration({ slug: 'cas-a', profile: 'MEDICAL', failures: [{ code: 'MED_NEW', label: '새' }],
+          quarantinePath: L, packetDir: PK, runner: (ctxNew) => asChild(ctxNew, L, () => ({ ok: true })) })
+        RG38.clearRegen('cas-a', L)
+        before = fs.readFileSync(L, 'utf8')
+        return { ok: false, reason: 'connect_failed', stage: 'connect', sent: false, resultSource: 'file', why: '옛 인프라 실패(늦게 도착)' }
+      }),
+    })
+    check('  ㊳ 새 시도는 성공했고 옛 시도는 인프라 실패로 끝났다 (전제)',
+      rNew?.code === 'REGENERATED' && rOld.code === 'REGEN_INFRA_FAILED', `${rNew?.code} · ${rOld.code}`)
+    check('🔴 ㊳ 늦게 온 옛 실패 — 최신 상태·예약·횟수 전부 불변 (장부 바이트 동일)',
+      before !== null && fs.readFileSync(L, 'utf8') === before, '장부가 바뀌었다')
+
+    /**
+     * 🔴 **B. attemptId fail-closed** (regen-packet/3). 실제 CLI · fixture 브라우저 ·
+     *    exit ≠ 0 · probe·connect·send 0 · 장부 바이트 불변.
+     */
+    const { spawnSync } = await import('node:child_process')
+    const QB = await import('./lib/magazine-quarantine.mjs')
+    const D = path.join(T, 'drafts')
+    fs.mkdirSync(path.join(D, 'ai-a'), { recursive: true })
+    fs.writeFileSync(path.join(D, 'ai-a', 'brief.md'), '# ai-a\n\n본문 지시\n')
+    fs.writeFileSync(path.join(D, 'ai-a', 'review.ts'), '#\n')
+    const LB = path.join(T, 'qb.json')
+    QB.saveQuarantine({ 'ai-a': { attempts: 0, regenCalls: 1, note: '불변이어야 한다' } }, LB)
+    const ledgerBefore = fs.readFileSync(LB, 'utf8')
+    const LOG = path.join(T, 'events.jsonl')
+    const FX = writeFixture(path.join(T, 'fx.mjs'), `${fixtureHead(LOG)}
+export const quarantinePath = ${JSON.stringify(LB)}
+export const probe = async () => { rec('probe'); return { status: 'ok' } }
+export const ensureTab = async () => { rec('ensureTab'); return { ok: true } }
+export const connect = async () => { rec('connect'); throw new Error('불려서는 안 된다') }
+`)
+    const A = 'a3bb189e-8bf9-4888-9912-ace4e6543002'
+    const B = '7d444840-9dc0-41d2-9e4b-8a5d6f2b1c3e'
+    const base = RG38.buildFailurePacket({ slug: 'ai-a', profile: 'MEDICAL', failures: [{ code: 'QA_FAIL', label: 'x' }], attempt: 1, attemptId: A })
+    const PD = path.join(T, 'bad-packets')
+    fs.mkdirSync(PD, { recursive: true })
+    const cases = [
+      ['attemptId 누락', (() => { const { attemptId, ...p } = base; void attemptId; return p })(), `ai-a.${A}.json`],
+      ['빈 문자열', { ...base, attemptId: '' }, 'ai-a..json'],
+      ['숫자', { ...base, attemptId: 12345 }, 'ai-a.12345.json'],
+      ['잘못된 UUID', { ...base, attemptId: 'not-a-uuid' }, 'ai-a.not-a-uuid.json'],
+      ['파일명 불일치', { ...base, attemptId: A }, `ai-a.${B}.json`],
+    ]
+    for (const [name, body, file] of cases) {
+      const f = path.join(PD, file)
+      fs.writeFileSync(f, JSON.stringify(body))
+      const RJ = path.join(T, `r-${name}.json`)
+      const r = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch', 'ai-a', '--force', '--regen-packet', f, '--result-json', RJ],
+        { encoding: 'utf8', maxBuffer: 1e8,
+          env: { ...process.env, HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX } })
+      const row = fs.existsSync(RJ) ? JSON.parse(fs.readFileSync(RJ, 'utf8')).results?.[0] ?? {} : {}
+      check(`🔴 ㊳ [${name}] exit≠0 · REGEN_PACKET_ATTEMPT_ID · probe·connect·send 0 · 장부 불변`,
+        r.status !== 0 && row.reason === 'REGEN_PACKET_ATTEMPT_ID' && row.sent === false && readEvents(LOG).length === 0
+          && fs.readFileSync(LB, 'utf8') === ledgerBefore,
+        `exit ${r.status} · ${row.reason} · events ${readEvents(LOG).length}`)
+    }
+    check('  ㊳ 패킷 생성자가 쓰는 판이 소비자가 받는 판과 같다 (regen-packet/3)',
+      base.schemaVersion === 'regen-packet/3', base.schemaVersion)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊴ 같은 slug 원고 작업은 하나 — 일반+재생성 동시 · lease 주인 정체(PID 재사용) 판정')
+{
+  /**
+   * 🔴 **앞판의 구멍** (2026-09-28 · Codex P0). 일반 회수는 재생성 lease 를 **보기만** 했다.
+   *    본 직후 재생성이 lease 를 잡으면 둘 다 보내고 같은 draft.md 를 썼다 (수정 전 실측 send 2 · draft write 2).
+   *    실제 CLI 자식 2개(일반 `--fetch` · 재생성 driver)를 probe barrier 에서 만나게 한다.
+   */
+  const { spawn, spawnSync } = await import('node:child_process')
+  const QN39 = await import('./lib/magazine-quarantine.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-manuscript-lease-'))
+  try {
+    const S = await regenStage(T, 'mix')
+    S.release()
+    const normal = S.startCli(['--fetch', 'rr-a'], path.join(T, 'normal.json'))
+    const regen = S.start([{ code: 'MED_REGEN', label: '재' }])
+    await Promise.all([normal.done, regen.done])
+    const nr = normal.row() ?? {}
+    const rr = regen.result() ?? {}
+    const normalWon = nr.status === 'ok'
+    check('🔴 ㊴ 일반+재생성 동시 — 한쪽만 진행 · 다른 쪽은 구조화된 IN_PROGRESS',
+      normalWon ? (rr.code === 'REGEN_IN_PROGRESS') : (rr.code === 'REGENERATED' && nr.status === 'held' && nr.reason === 'MANUSCRIPT_IN_PROGRESS' && nr.stage === 'lease'),
+      JSON.stringify({ normal: `${nr.status}/${nr.reason}`, regen: rr.code }))
+    check('🔴 ㊴ send 1 · draft write 1 · probe 1 (패자는 probe 전에 멈춤 · barrier 1)',
+      S.sends().length === 1 && S.events('evaluate').length === 1 && S.events('probe').length === 1 && S.childArrivals() === 1,
+      `send ${S.sends().length} · write ${S.events('evaluate').length} · probe ${S.events('probe').length} · barrier ${S.childArrivals()}`)
+    check('🔴 ㊴ 최종 draft 에는 승자의 식별 문장만',
+      S.draft().includes(normalWon ? '식별 NORMAL' : '식별 MED_REGEN') && !S.draft().includes(normalWon ? 'MED_REGEN' : 'NORMAL'),
+      `${normalWon ? '일반' : '재생성'} 승 · ${(S.draft().match(/식별 [A-Z_,]+/) ?? ['없음'])[0]}`)
+    check('  ㊴ 패자는 regenCalls·attempts 를 쓰지 않았다',
+      (S.row().attempts ?? 0) === 0 && (S.row().regenCalls ?? 0) === (normalWon ? 0 : 1),
+      `regen ${S.row().regenCalls} · attempts ${S.row().attempts}`)
+    check('  ㊴ lease 잔여 0', S.leasesLeft().length === 0, S.leasesLeft().join(','))
+
+    // 승자 종료 뒤 다음 요청은 순차로 된다 — 진 쪽을 다시 돌린다
+    if (normalWon) {
+      const again = S.start([{ code: 'MED_REGEN', label: '재' }])
+      await again.done
+      check('🔴 ㊴ 승자 종료 후 다음 요청은 순차 진행 (재생성 REGENERATED)',
+        again.result()?.code === 'REGENERATED' && S.draft().includes('식별 MED_REGEN'), `${again.result()?.code}`)
+    } else {
+      const again = S.startCli(['--fetch', 'rr-a', '--force'], path.join(T, 'normal2.json'))
+      await again.done
+      check('🔴 ㊴ 승자 종료 후 다음 요청은 순차 진행 (일반 회수 ok)',
+        again.row()?.status === 'ok' && S.draft().includes('식별 NORMAL'), `${again.row()?.status}/${again.row()?.reason}`)
+    }
+
+    // 다른 slug 두 건(일반 + 재생성)은 동시에 된다
+    const M = await regenStage(T, 'multi', { slugs: ['rr-a', 'rr-b'] })
+    M.release()
+    const mn = M.startCli(['--fetch', 'rr-a'], path.join(T, 'mn.json'))
+    const mr = M.start([{ code: 'MED_B', label: '나' }], { slug: 'rr-b' })
+    await Promise.all([mn.done, mr.done])
+    check('🔴 ㊴ 다른 slug 일반+재생성 — 둘 다 성공 · send 2 · 두 자식 모두 barrier 도착',
+      mn.row()?.status === 'ok' && mr.result()?.code === 'REGENERATED' && M.sends().length === 2 && M.childArrivals() === 2,
+      `${mn.row()?.status} · ${mr.result()?.code} · send ${M.sends().length} · barrier ${M.childArrivals()}`)
+
+    /**
+     * 🔴 **lease 주인 정체** (2026-09-28 · Codex P1). PID 가 있다고 주인이 살아 있는 것이 아니다.
+     *    실제 주인 프로세스가 production `acquireManuscriptLease` 로 lease 를 잡게 한 뒤 판정을 본다.
+     */
+    const L = path.join(T, 'owner', 'ledger.json')
+    fs.mkdirSync(path.dirname(L), { recursive: true })
+    const LEASE = QN39.manuscriptLeasePath('own-a', L)
+    const qUrl = JSON.stringify(new URL(`file://${path.resolve('scripts/lib/magazine-quarantine.mjs')}`).href)
+    const OWNER = writeFixture(path.join(T, 'owner.mjs'), `import fs from 'node:fs'
+const Q = await import(${qUrl})
+const r = Q.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: ${JSON.stringify(L)} })
+fs.writeFileSync(process.argv[2], JSON.stringify({ ok: r.ok }))
+setTimeout(() => {}, 60000)
+`)
+    const startOwner = async (env = {}) => {
+      const ready = path.join(T, `ready-${Math.random()}`)
+      // 주인은 장부 경로를 명시로 받는다 — HOME 에 기대는 기본 경로를 쓰지 않는다
+      const c = spawn(process.execPath, [OWNER, ready], { stdio: 'ignore', env: { ...process.env, ...env } })
+      const until = Date.now() + 10000
+      while (!fs.existsSync(ready) && Date.now() < until) await new Promise((ok) => setTimeout(ok, 10))
+      return c
+    }
+    const alive = (pid) => { try { process.kill(pid, 0); return true } catch { return false } }
+    const writeLease = (o) => fs.writeFileSync(LEASE, JSON.stringify({ token: `t-${Math.random()}`, host: os.hostname(), at: 'x', slug: 'own-a', work: 'fetch', ...o }))
+
+    // ① 실제 주인 생존 — 로캘·시간대가 달라도 탈취하지 않는다
+    const own = await startOwner({ TZ: 'America/New_York', LC_ALL: 'de_DE.UTF-8' })
+    try {
+      const body = fs.readFileSync(LEASE, 'utf8')
+      const r1 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'regen', path: L })
+      check('🔴 ㊴ [주인 생존 · 다른 TZ/로캘] 탈취하지 않는다 — IN_PROGRESS · lease 그대로',
+        r1.ok === false && r1.code === 'MANUSCRIPT_IN_PROGRESS' && fs.readFileSync(LEASE, 'utf8') === body, `${r1.code} — ${String(r1.why).slice(0, 80)}`)
+
+      // ⑤ 프로세스 조회 실패 — 판단하지 않는다 (주입 · 실제 CLI 의 PATH 제거 둘 다)
+      const r5 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'regen', path: L, identityOf: () => null })
+      check('🔴 ㊴ [조회 실패] 진행 금지 — IN_PROGRESS(UNKNOWN) · lease 그대로',
+        r5.ok === false && /UNKNOWN/.test(r5.why) && fs.readFileSync(LEASE, 'utf8') === body, String(r5.why).slice(0, 90))
+      const P = await regenStage(T, 'nopath', { slug: 'own-a' })
+      fs.mkdirSync(path.dirname(QN39.manuscriptLeasePath('own-a', P.L)), { recursive: true })
+      fs.copyFileSync(LEASE, QN39.manuscriptLeasePath('own-a', P.L))
+      const RJ = path.join(T, 'nopath.json')
+      const cli = spawnSync(process.execPath, ['scripts/magazine-webui-runner.mjs', '--fetch', 'own-a', '--result-json', RJ],
+        { encoding: 'utf8', maxBuffer: 1e8, env: { ...process.env, HOME: T, PATH: path.join(T, 'no-bin'),
+          SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: P.D, SORAN_MAGAZINE_TEST_FIXTURE: path.join(T, 'nopath-fx.mjs') } })
+      const crow = fs.existsSync(RJ) ? JSON.parse(fs.readFileSync(RJ, 'utf8')).results?.[0] ?? {} : {}
+      check('🔴 ㊴ [조회 실패 · 실제 CLI · ps 없음] 진행 금지 — MANUSCRIPT_IN_PROGRESS · probe 0 · lease 그대로',
+        cli.status !== 0 && crow.reason === 'MANUSCRIPT_IN_PROGRESS' && /UNKNOWN/.test(crow.errorDetail ?? '')
+          && P.events('probe').length === 0 && fs.readFileSync(QN39.manuscriptLeasePath('own-a', P.L), 'utf8') === body,
+        `exit ${cli.status} · ${crow.reason} · ${String(crow.errorDetail).slice(0, 60)}`)
+    } finally { own.kill('SIGKILL') }
+
+    // ② PID 없음 — 안전 회수
+    const gone = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8', env: { ...process.env, HOME: T } })
+    writeLease({ pid: Number(gone.stdout), start: 'Mon Jan  1 00:00:00 2024', cmd: 'node x' })
+    const r2 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+    check('  ㊴ [PID 없음] 안전 회수 — 새 lease 획득', r2.ok === true, `${r2.code ?? 'ok'}`)
+    r2.release?.()
+
+    // ③ PID 가 unrelated process 로 재사용 — 명령줄이 다르다
+    const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+    try {
+      await new Promise((ok) => setTimeout(ok, 150))
+      const oid = QN39.processIdentity(other.pid)
+      writeLease({ pid: other.pid, start: oid?.start, cmd: 'node scripts/magazine-webui-runner.mjs --fetch own-a' })
+      const r3 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+      check('🔴 ㊴ [PID → unrelated 프로세스] 안전 회수 · 그 프로세스는 건드리지 않는다',
+        Boolean(oid) && r3.ok === true && alive(other.pid), `${r3.code ?? 'ok'} · alive ${alive(other.pid)}`)
+      r3.release?.()
+    } finally { other.kill('SIGKILL') }
+
+    // ④ PID 가 다른 magazine 실행으로 재사용 — 명령줄은 같지만 시작 시각이 다르다
+    const mag = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)', 'scripts/magazine-webui-runner.mjs', '--fetch', 'own-a'], { stdio: 'ignore' })
+    try {
+      await new Promise((ok) => setTimeout(ok, 150))
+      const mid = QN39.processIdentity(mag.pid)
+      writeLease({ pid: mag.pid, start: 'Mon Jan  1 00:00:00 2024', cmd: mid?.cmd })
+      const r4 = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+      check('🔴 ㊴ [PID → 다른 magazine 실행 · 시작 시각 불일치] 안전 회수',
+        /magazine-webui-runner/.test(mid?.cmd ?? '') && r4.ok === true && alive(mag.pid), `${r4.code ?? 'ok'} · ${String(mid?.cmd).slice(-50)}`)
+      r4.release?.()
+      // 같은 명령줄 · 같은 시작 시각이면 같은 주인이다 — 빼앗지 않는다 (위 판정이 공허하지 않다는 대조군)
+      writeLease({ pid: mag.pid, start: mid?.start, cmd: mid?.cmd })
+      const body4 = fs.readFileSync(LEASE, 'utf8')
+      const r4b = QN39.acquireManuscriptLease({ slug: 'own-a', work: 'fetch', path: L })
+      check('  ㊴ [대조군] 시작 시각·명령줄이 모두 같으면 살아 있는 주인 — 빼앗지 않는다',
+        r4b.ok === false && fs.readFileSync(LEASE, 'utf8') === body4, `${r4b.code ?? 'ok'}`)
+    } finally { mag.kill('SIGKILL'); fs.rmSync(LEASE, { force: true }) }
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)
