@@ -17,8 +17,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { resolveValidationProfile, isAutoLaneEligible, LEGACY_PROFILE_MAP } from './lib/magazine-validation-profile.mjs'
 import { runProfileQA } from './lib/magazine-profile-qa.mjs'
-import { attemptRegeneration, MAX_REGEN_CALLS, packetPathFor, readPacket } from './lib/magazine-regen.mjs'
-import { readQuarantine, saveQuarantine } from './lib/magazine-quarantine.mjs'
+import { attemptRegeneration, MAX_REGEN_CALLS, packetPathFor, readPacket, packetHashOf, packetsLeftFor } from './lib/magazine-regen.mjs'
+import {
+  readQuarantine, saveQuarantine, reserveDelivery, releaseDeliveryReservation,
+  DELIVERY_HOLD_REASON as HOLD_REASON, REGEN_EXHAUSTED_REASON,
+} from './lib/magazine-quarantine.mjs'
 import { drive } from './magazine-auto-register.mjs'
 import { gate } from './lib/magazine-auto-lane.mjs'
 import { loadQueue } from './lib/magazine-load.mjs'
@@ -208,6 +211,25 @@ check('  fixture 후보가 전부 실제 gate 를 통과한다',
   FIXTURE_SLUGS.map((sl) => `${sl}:${gate(sl, FIXTURE_QUEUE).blockedBy.map((b) => b.code).join('/') || 'ok'}`).join(' · '))
 
 /** 🔴 바깥 프로세스만 주입한다. drive 의 판단 로직은 그대로 돈다 */
+/**
+ * 🔴 **가짜 runner 도 실제 자식의 장부 계약을 따른다** (2026-09-28 · Codex P0).
+ *    실제 자식(`fetchSlug`)은 send 직전에 `reserveDelivery` **한 번으로** 예약과 regenCalls 증가를 같이 한다.
+ *    부모는 이제 횟수를 올리지 않으므로, 이 계약을 흉내 내지 않는 가짜는 **실제보다 헐거워진다** —
+ *    횟수가 영영 오르지 않아 소진 판정이 죽는다. 그래서 가짜도 **같은 production 함수**를 부른다.
+ *    `outcome` 이 던지면 예약·횟수는 남는다 (실제 자식이 send 뒤 급사한 것과 같다).
+ */
+function asChild(ctx, ledgerPath, outcome) {
+  const reservationId = `fake-${ctx.packet.attemptId}`
+  const u = reserveDelivery({ slug: ctx.slug, messageFingerprint: `fake:${ctx.packet.attemptId}`, reservationId,
+    regen: { attemptId: ctx.packet.attemptId, packetHash: packetHashOf(ctx.packet) }, path: ledgerPath })
+  if (u.held) return { ok: false, sent: false, reason: HOLD_REASON, why: u.why }
+  if (u.exhausted) return { ok: false, sent: false, reason: REGEN_EXHAUSTED_REASON, why: u.why }
+  if (!u.ok) return { ok: false, sent: false, reason: 'predelivery_record_failed', why: u.why }
+  const r = outcome()
+  if (r?.ok) releaseDeliveryReservation({ slug: ctx.slug, reservationId, path: ledgerPath })
+  return r
+}
+
 function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges = true,
   packetsSeen = [], runnerThrows = false, runnerFails = false }) {
   let qaRuns = 0
@@ -251,10 +273,12 @@ function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges
       calls.push(`REGEN:${slug}`)
       // 🔴 runner 가 읽는 시점에는 **파일이 있어야 한다** — 읽기 전에 지우면 전달이 깨진다
       packetsSeen.push({ packet, existedDuringCall: fs.existsSync(packetPath), packetPath })
-      if (runnerThrows) throw new Error('재생성 경로 폭발')
-      fpN += 1
-      if (runnerFails) return { ok: false, why: '재생성 경로 실패(시험)' }
-      return { ok: true }
+      return asChild({ slug, packet }, ledgerPath, () => {
+        if (runnerThrows) throw new Error('재생성 경로 폭발')
+        fpN += 1
+        if (runnerFails) return { ok: false, why: '재생성 경로 실패(시험)' }
+        return { ok: true }
+      })
     },
   }
 }
@@ -282,7 +306,7 @@ function makeDeps({ qaFailsUntil = 0, ledgerPath, packetDir, calls, draftChanges
       packetsSeen[0]?.packet?.failures?.[0]?.code)
     check('🔴 runner 가 읽는 동안에는 패킷 파일이 있었다', packetsSeen[0]?.existedDuringCall === true)
     check('🔴 정상 반환 뒤 패킷 파일이 남지 않는다',
-      !fs.existsSync(packetPathFor(SLUG, packetDir)), packetPathFor(SLUG, packetDir))
+      packetsLeftFor(SLUG, packetDir).length === 0, packetsLeftFor(SLUG, packetDir).join(',') || '0건')
     check('  패킷 폴더에 잔여 파일 0',
       (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).length === 0,
       (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).join(','))
@@ -319,7 +343,7 @@ console.log('\n③-B 패킷 수명주기 — 전달 후 0건')
           // 🔴 읽는 시점에는 반드시 있어야 한다 — 읽기 전에 지우면 전달 자체가 깨진다
           sawFile = fs.existsSync(ctx.packetPath)
           sawPacket = ctx.packet
-          return sc.runner()
+          return asChild(ctx, ledgerPath, sc.runner)
         },
         quarantinePath: ledgerPath, packetDir,
       })
@@ -327,7 +351,7 @@ console.log('\n③-B 패킷 수명주기 — 전달 후 0건')
       check(`  [${sc.name}] runner 가 패킷 내용을 받았다`,
         sawPacket?.slug === 'pkt-slug' && sawPacket?.failures?.[0]?.code === 'MED_DIAGNOSIS')
       check(`🔴 [${sc.name}] 반환 뒤 패킷 파일 0`,
-        !fs.existsSync(packetPathFor('pkt-slug', packetDir)))
+        packetsLeftFor('pkt-slug', packetDir).length === 0, packetsLeftFor('pkt-slug', packetDir).join(','))
       check(`🔴 [${sc.name}] 패킷 폴더 잔여 0`,
         (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).length === 0,
         (fs.existsSync(packetDir) ? fs.readdirSync(packetDir) : []).join(','))
@@ -521,7 +545,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
       for (let i = used; i < MAX_REGEN_CALLS; i++) {
         const rr = attemptRegeneration({ slug, profile: 'MEDICAL',
           failures: [{ code: 'QA_FAIL', label: `유형${i}` }],
-          runner: () => { calls += 1; return { ok: true } },
+          runner: (ctx) => asChild(ctx, qp, () => { calls += 1; return { ok: true } }),
           quarantinePath: qp, packetDir: path.join(T, 'packets'),
           previousFingerprint: `fp-${i}`, fingerprintOf: () => `fp-${i + 1}` })
         if (!rr.ok) break
@@ -557,7 +581,7 @@ console.log('\n⑧ 실제 ready orchestration — 장부 lost update')
     const countingDrive = (s2, opts, deps) => {
       const qp = deps?.quarantinePath
       const rr = attemptRegeneration({ slug: s2, profile: 'MEDICAL', failures: [{ code: 'QA_FAIL' }],
-        runner: () => { runnerCalls2 += 1; return { ok: true } },
+        runner: (ctx) => asChild(ctx, qp, () => { runnerCalls2 += 1; return { ok: true } }),
         quarantinePath: qp, packetDir: path.join(T, 'packets') })
       return { slug: s2, verdict: 'BLOCKED', steps: [], regenCalls: rr.regenCalls,
         blockedBy: [{ code: 'QA_FAIL', message: `${rr.code}: ${rr.why}` }] }
@@ -3456,7 +3480,7 @@ function makePage() {
       JSON.stringify(row('rg-a').delivery) === deliveryBefore && row('rg-a').sent === sentBefore,
       `sent ${sentBefore} → ${row('rg-a').sent}`)
     check('  ㉛ 2회차 — 판정한 지문이 1회차 지문과 같다', r2.messageFingerprint === fpA, `${r2.messageFingerprint}`)
-    check('  ㉛ 패킷이 남지 않는다', !fs.existsSync(RG31.packetPathFor('rg-a', PK)), '남았다')
+    check('  ㉛ 패킷이 남지 않는다', RG31.packetsLeftFor('rg-a', PK).length === 0, RG31.packetsLeftFor('rg-a', PK).join(',') || '0건')
 
     /** 🔴 다른 후보는 계속 처리된다 */
     const rb = regen('rg-b')
@@ -3860,7 +3884,7 @@ process.stdout.write(JSON.stringify(r))
       `${r4.code} · load ${countEv(LOG, 'load') - loads0} · send ${countEv(LOG, 'send')}`)
     check('🔴 ㉞ 앞선 전송 기록(sent=null · prior)을 덮지 않는다',
       JSON.stringify(row().delivery) === deliveryBefore && row().delivery?.sent === null, JSON.stringify(row().delivery))
-    check('  ㉞ packet 파일 0', !fs.existsSync(RG34.packetPathFor(SLUG, PK)), '남았다')
+    check('  ㉞ packet 파일 0', RG34.packetsLeftFor(SLUG, PK).length === 0, RG34.packetsLeftFor(SLUG, PK).join(',') || '0건')
 
     // ⑤ 죽은 게이트가 아니다 — brief 가 바뀌면(지문 다름) 새 시도가 실제로 돈다
     fs.appendFileSync(path.join(D, SLUG, 'brief.md'), '\n## 추가 지시\n- 한 줄 더\n')
@@ -3962,6 +3986,239 @@ console.log('\n㉟ 예약은 주인만 지우고 · 실패한 쪽은 남의 예�
       check('🔴 ㉟ 실패한 쪽이 남의 같은 지문 예약을 덮지 않는다',
         d3.reservationId === 'other-process' && d3.kind === 'DELIVERY_UNCERTAIN', JSON.stringify(d3))
     } finally { try { if (holderPid) process.kill(holderPid, 'SIGKILL') } catch { /* 이미 끝났다 */ } }
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+/**
+ * 🔴 ㊱·㊲ 공용 — **실제 재생성 driver 자식**(실제 `attemptRegeneration` + 실제 `webuiRegenRunner` + 실제 CLI)
+ *    를 여러 개 띄우는 무대. 브라우저만 fixture 다. 원고 응답은 `release` 파일이 생길 때까지 기다린다 —
+ *    이긴 쪽이 **예약을 쥔 채 멈춰 있는 동안** 진 쪽을 여러 시점에 죽여 보기 위해서다.
+ */
+async function regenStage(T, name, { slug = 'rr-a', ledgerSeed = null } = {}) {
+  const { spawn } = await import('node:child_process')
+  const D = path.join(T, `${name}-drafts`)
+  fs.mkdirSync(path.join(D, slug), { recursive: true })
+  fs.writeFileSync(path.join(D, slug, 'brief.md'), `# ${slug}\n\n본문 지시\n`)
+  fs.writeFileSync(path.join(D, slug, 'review.ts'), '#\n')
+  const L = path.join(T, `${name}-ledger.json`)
+  if (ledgerSeed) saveQuarantine(ledgerSeed, L)
+  const LOG = path.join(T, `${name}-events.jsonl`)
+  const PK = path.join(T, `${name}-packets`)
+  const RELEASE = path.join(T, `${name}-release`)
+  const BAR = path.join(T, `${name}-barrier`)
+  fs.mkdirSync(BAR)
+  /** 🔴 자식 쪽 barrier — 두 자식이 **앞단(잠금 없는) 판정을 모두 지나 예약 직전까지** 오게 한다 */
+  const CBAR = path.join(T, `${name}-child-barrier`)
+  fs.mkdirSync(CBAR)
+  const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
+  const FX = writeFixture(path.join(T, `${name}-fx.mjs`), `${fixtureHead(LOG)}
+export const quarantinePath = ${JSON.stringify(L)}
+export const probe = async () => {
+  rec('probe')
+  fs.writeFileSync(${JSON.stringify(CBAR)} + '/' + process.pid, '')
+  const until = Date.now() + 3000
+  while (fs.readdirSync(${JSON.stringify(CBAR)}).length < 2 && Date.now() < until) await new Promise((ok) => setTimeout(ok, 5))
+  return { status: 'ok' }
+}
+export const ensureTab = async () => ({ ok: true })
+export const connect = async () => ({
+  contexts: () => [{ pages: () => [], newPage: async () => {
+    let typed = ''
+    return {
+      async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+      async waitForFunction() {
+        const until = Date.now() + 60000
+        while (!fs.existsSync(${JSON.stringify(RELEASE)})) {
+          if (Date.now() > until) throw new Error('waitForFunction: Timeout')
+          await new Promise((ok) => setTimeout(ok, 20))
+        }
+      },
+      async evaluate() { return ${JSON.stringify(GOOD)} },
+      locator(sel) {
+        const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+        const l = { async click() { if (isSend) rec('send', { ppid: process.ppid, codes: [...typed.matchAll(/\\[([A-Z_]+)\\]/g)].map((m) => m[1]) }) }, async innerText() { return typed } }
+        return { first: () => l, ...l }
+      },
+      keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+    }
+  } }],
+  async close() {},
+})
+`)
+  /** 부모가 패킷을 쓰는 순간(= 앞단 판정 통과 직후)에 두 부모를 세우는 barrier */
+  const PRE = writeFixture(path.join(T, `${name}-barrier.mjs`), `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const real = fs.renameSync
+let first = true
+fs.renameSync = (a, b) => {
+  if (first && String(b).startsWith(${JSON.stringify(PK + path.sep)})) {
+    first = false
+    fs.writeFileSync(${JSON.stringify(BAR)} + '/' + process.pid, '')
+    const until = Date.now() + 3000
+    while (fs.readdirSync(${JSON.stringify(BAR)}).length < 2 && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    fs.appendFileSync(${JSON.stringify(BAR)} + '.log', JSON.stringify({ pid: process.pid, arrivals: fs.readdirSync(${JSON.stringify(BAR)}).length }) + '\\n')
+  }
+  return real(a, b)
+}
+syncBuiltinESMExports()
+`)
+  const url = (f) => JSON.stringify(new URL(`file://${path.resolve(f)}`).href)
+  const DRV = writeFixture(path.join(T, `${name}-driver.mjs`), `import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { attemptRegeneration } from ${url('scripts/lib/magazine-regen.mjs')}
+import { webuiRegenRunner } from ${url('scripts/magazine-auto-register.mjs')}
+const runFn = (file, args) => {
+  const r = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8', maxBuffer: 1e8, env: process.env })
+  return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', json: null }
+}
+const r = attemptRegeneration({ slug: ${JSON.stringify(slug)}, profile: 'MEDICAL',
+  failures: JSON.parse(process.env.RR_FAILURES),
+  quarantinePath: ${JSON.stringify(L)}, packetDir: ${JSON.stringify(PK)}, draftsDir: ${JSON.stringify(D)},
+  runner: (ctx) => webuiRegenRunner(ctx, { runFn, resultDir: ${JSON.stringify(T)} }) })
+fs.writeFileSync(process.env.RR_OUT, JSON.stringify({ ...r, pid: process.pid }))
+`)
+  const ENV = { HOME: T, SORAN_MAGAZINE_TEST_MODE: '1', SORAN_MAGAZINE_DRAFTS_DIR: D, SORAN_MAGAZINE_TEST_FIXTURE: FX }
+  let n = 0
+  const start = (failures, { barrier = false } = {}) => {
+    n += 1
+    const out = path.join(T, `${name}-out-${n}.json`)
+    const c = spawn(process.execPath, [...(barrier ? ['--import', PRE] : []), DRV],
+      { cwd: process.cwd(), env: { ...process.env, ...ENV, RR_FAILURES: JSON.stringify(failures), RR_OUT: out },
+        detached: true, stdio: 'ignore' })
+    const done = new Promise((ok) => c.once('exit', () => ok()))
+    return { c, done, out, result: () => (fs.existsSync(out) ? JSON.parse(fs.readFileSync(out, 'utf8')) : null),
+      kill: () => { try { process.kill(-c.pid, 'SIGKILL') } catch { /* 이미 끝났다 */ } } }
+  }
+  const row = () => readQuarantine(L).store[slug] ?? {}
+  const sends = () => readEvents(LOG).filter((e) => e.ev === 'send')
+  const arrivals = () => (fs.existsSync(`${BAR}.log`)
+    ? fs.readFileSync(`${BAR}.log`, 'utf8').trim().split('\n').map((l) => JSON.parse(l).arrivals) : [])
+  const release = () => fs.writeFileSync(RELEASE, '')
+  const firstExit = (a, b) => Promise.race([a.done.then(() => a), b.done.then(() => b)])
+  const childArrivals = () => fs.readdirSync(CBAR).length
+  return { slug, L, PK, start, row, sends, arrivals, release, firstExit, childArrivals }
+}
+
+console.log('\n㊱ 동시 재생성 — 판정·예약·횟수가 한 임계구역 (실제 driver 2개 · barrier · SIGKILL)')
+{
+  /**
+   * 🔴 **앞판의 경합** (2026-09-28 · Codex P0).
+   *    부모가 앞단 판정 뒤 **따로** regenCalls 를 올렸다. 두 부모가 앞단 판정을 동시에 통과하면
+   *    둘 다 올렸고, 진 쪽은 옛 `budget.used` 로 이긴 쪽 횟수까지 되돌렸다.
+   *    여기서는 두 부모를 **패킷을 쓰는 순간(= 앞단 판정 통과 직후)** 에 barrier 로 세운다.
+   */
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-regen-race-'))
+  try {
+    const S = await regenStage(T, 'same')
+    const F = [{ code: 'QA_FAIL', label: 'magazine QA FAIL' }]
+    const a = S.start(F, { barrier: true })
+    const b = S.start(F, { barrier: true })
+    const loser = await S.firstExit(a, b)
+    const winner = loser === a ? b : a
+    const lr = loser.result() ?? {}
+    check('  ㊱ 두 부모가 모두 앞단 판정을 통과했다 (barrier 도착 2 · 전제)',
+      S.arrivals().length === 2 && S.arrivals().includes(2), JSON.stringify(S.arrivals()))
+    check('  ㊱ 두 자식이 모두 앞단 판정을 지나 예약 직전까지 왔다 (자식 barrier 도착 2 · 전제)',
+      S.childArrivals() === 2, `${S.childArrivals()}`)
+    check('🔴 ㊱ 진 쪽 — REGEN_DELIVERY_HOLD · send 0',
+      lr.code === 'REGEN_DELIVERY_HOLD' && S.sends().length === 1, `${lr.code} · send ${S.sends().length}`)
+    const r1 = S.row()
+    const rid = r1.delivery?.reservationId
+    check('🔴 ㊱ 이긴 쪽이 예약을 쥔 동안 regenCalls 정확히 1 · 예약 1개',
+      r1.regenCalls === 1 && typeof rid === 'string' && r1.delivery?.kind === 'DELIVERY_UNCERTAIN',
+      JSON.stringify({ regenCalls: r1.regenCalls, rid: !!rid, ids: r1.regenAttemptIds?.length }))
+
+    // 진 쪽을 여러 시점에 SIGKILL — 이긴 쪽 횟수·예약이 그대로여야 한다
+    const bad = []
+    for (const ms of [0, 30, 80, 150, 300, 600]) {
+      const k = S.start(F)
+      await new Promise((ok) => setTimeout(ok, ms))
+      k.kill()
+      await k.done
+      const e = S.row()
+      if (e.regenCalls !== 1 || e.delivery?.reservationId !== rid || S.sends().length !== 1) {
+        bad.push(`${ms}ms: regen ${e.regenCalls} · rid ${e.delivery?.reservationId === rid} · send ${S.sends().length}`)
+      }
+    }
+    check('🔴 ㊱ 진 쪽을 6개 시점에 SIGKILL 해도 이긴 쪽 regenCalls·예약 보존 · send 1', bad.length === 0, bad.join(' | ') || '6/6')
+    const extra = S.start(F)
+    await extra.done
+    check('  ㊱ 죽이지 않은 추가 시도도 HOLD · send 0 · 횟수 불변',
+      extra.result()?.code === 'REGEN_DELIVERY_HOLD' && S.sends().length === 1 && S.row().regenCalls === 1,
+      `${extra.result()?.code} · regen ${S.row().regenCalls}`)
+
+    S.release()
+    await winner.done
+    const wr = winner.result() ?? {}
+    check('🔴 ㊱ 최종 — send 합계 1 · regenCalls 정확히 1 · 이긴 쪽 REGENERATED',
+      S.sends().length === 1 && S.row().regenCalls === 1 && wr.code === 'REGENERATED',
+      `${wr.code} · send ${S.sends().length} · regen ${S.row().regenCalls}`)
+    check('  ㊱ 이긴 쪽은 자기 예약만 지웠다 · 패킷 잔여 0',
+      !S.row().delivery && packetsLeftFor(S.slug, S.PK).length === 0, packetsLeftFor(S.slug, S.PK).join(',') || '0건')
+
+    // 소진 직전 — 서로 다른 지문 둘이 마지막 한 번을 두고 경합한다
+    const X = await regenStage(T, 'last', { ledgerSeed: { 'rr-a': { attempts: 0, regenCalls: 1 } } })
+    X.release()
+    const xa = X.start([{ code: 'MED_A', label: '가' }], { barrier: true })
+    const xb = X.start([{ code: 'MED_B', label: '나' }], { barrier: true })
+    await Promise.all([xa.done, xb.done])
+    const codes = [xa.result()?.code, xb.result()?.code].sort()
+    check('  ㊱ [소진 직전] 두 부모 모두 앞단 판정을 통과했다 (전제)', X.arrivals().includes(2), JSON.stringify(X.arrivals()))
+    check('🔴 ㊱ [소진 직전] 최신 예산으로 한쪽만 — send 1 · regenCalls 2 · 다른 쪽 REGEN_EXHAUSTED',
+      X.sends().length === 1 && X.row().regenCalls === 2 && codes.join(',') === 'REGENERATED,REGEN_EXHAUSTED',
+      `${codes.join(',')} · send ${X.sends().length} · regen ${X.row().regenCalls}`)
+
+    // 예약을 얻은 자식이 send 직후 급사 — 예약과 횟수를 보수적으로 남겨 재전송을 막는다
+    const K = await regenStage(T, 'crash')
+    const kk = K.start([{ code: 'QA_FAIL', label: 'magazine QA FAIL' }])
+    const until = Date.now() + 20000
+    while (K.sends().length === 0 && Date.now() < until) await new Promise((ok) => setTimeout(ok, 10))
+    const childPid = K.sends()[0]?.pid
+    try { process.kill(childPid, 'SIGKILL') } catch { /* 이미 끝났다 */ }
+    await kk.done
+    const kr = kk.result() ?? {}
+    check('🔴 ㊱ [급사] 예약을 얻은 자식이 send 뒤 죽으면 regenCalls·예약이 남는다',
+      K.sends().length === 1 && K.row().regenCalls === 1 && K.row().delivery?.kind === 'DELIVERY_UNCERTAIN'
+        && kr.code === 'REGEN_DELIVERY_UNCERTAIN',
+      `${kr.code} · regen ${K.row().regenCalls} · delivery ${K.row().delivery?.kind}`)
+    const k2 = K.start([{ code: 'QA_FAIL', label: 'magazine QA FAIL' }])
+    await k2.done
+    check('🔴 ㊱ [급사] 재시작 — HOLD · 재전송 0 · 횟수 불변',
+      k2.result()?.code === 'REGEN_DELIVERY_HOLD' && K.sends().length === 1 && K.row().regenCalls === 1,
+      `${k2.result()?.code} · send ${K.sends().length} · regen ${K.row().regenCalls}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊲ 재생성 패킷 격리 — 같은 slug · 다른 실패 패킷 2개 동시 (실제 driver 2개)')
+{
+  /**
+   * 🔴 **앞판은 `${slug}.json` 하나를 같이 썼다** (2026-09-28 · Codex P1).
+   *    두 부모가 거의 동시에 쓰면 뒤에 쓴 쪽이 앞 패킷을 덮어 **두 자식이 같은 지시를 읽고**,
+   *    먼저 끝난 쪽 `finally` 가 **남의 패킷을 지웠다.** barrier 로 두 부모가 모두 쓴 뒤에 자식이 읽게 한다.
+   */
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-packet-iso-'))
+  try {
+    const S = await regenStage(T, 'iso')
+    S.release()
+    const FA = [{ code: 'MED_ALPHA', label: '가' }]
+    const FB = [{ code: 'MED_BETA', label: '나' }]
+    const a = S.start(FA, { barrier: true })
+    const b = S.start(FB, { barrier: true })
+    await Promise.all([a.done, b.done])
+    const ra = a.result() ?? {}
+    const rb = b.result() ?? {}
+    check('  ㊲ 두 부모가 모두 패킷을 쓴 뒤에 진행했다 (barrier 도착 2 · 전제)', S.arrivals().includes(2), JSON.stringify(S.arrivals()))
+    const byParent = (pid) => S.sends().filter((e) => e.ppid === pid).flatMap((e) => e.codes)
+    check('🔴 ㊲ 각 자식이 자기 패킷의 지시만 보냈다',
+      byParent(a.c.pid).includes('MED_ALPHA') && !byParent(a.c.pid).includes('MED_BETA')
+        && byParent(b.c.pid).includes('MED_BETA') && !byParent(b.c.pid).includes('MED_ALPHA'),
+      JSON.stringify({ a: byParent(a.c.pid), b: byParent(b.c.pid) }))
+    check('🔴 ㊲ 둘 다 자기 패킷을 끝까지 읽었다 — 남의 finally 에 지워지지 않았다',
+      ra.code === 'REGENERATED' && rb.code === 'REGENERATED', `${ra.code} · ${rb.code}`)
+    check('  ㊲ 각자 자기 packetHash 를 돌려준다 (서로 다르다)',
+      ra.packetHash && rb.packetHash && ra.packetHash !== rb.packetHash, `${ra.packetHash} · ${rb.packetHash}`)
+    check('🔴 ㊲ 종료 후 패킷 잔여 0', packetsLeftFor(S.slug, S.PK).length === 0, packetsLeftFor(S.slug, S.PK).join(',') || '0건')
+    check('  ㊲ 두 시도가 각자 한 번씩 셌다 (regenCalls 2)', S.row().regenCalls === 2, `${S.row().regenCalls}`)
   } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 

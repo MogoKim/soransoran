@@ -72,5 +72,7 @@ export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quar
   if (!ledger.ok) {
     return { ok: false, code: 'QUARANTINE_UNREADABLE', why: ledger.why, message, messageFingerprint }
   }
-  return { ok: true, message, messageFingerprint, hold: deliveryHoldsFetch(ledger.store[slug], messageFingerprint) }
+  // 🔴 `entry` 는 앞단 확인(불필요한 probe 회피)용이다 — 정본 판정은 send 직전 `reserveDelivery` 가 잠금 안에서 한다
+  return { ok: true, message, messageFingerprint, entry: ledger.store[slug] ?? null,
+    hold: deliveryHoldsFetch(ledger.store[slug], messageFingerprint) }
 }

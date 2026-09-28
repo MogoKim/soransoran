@@ -335,16 +335,106 @@ export function regenBudget({ entry, maxCalls = MAX_REGEN_CALLS }) {
   return { used, left: Math.max(0, maxCalls - used), exhausted: used >= maxCalls }
 }
 
-/** 재생성 호출 1회를 기록한 새 entry */
-export function recordRegenCall({ entry, now, packetHash = null }) {
+/**
+ * 재생성 호출 1회를 기록한 새 entry.
+ * 🔴 `attemptId` 는 "이 횟수를 누가 올렸나" 의 표식이다 — 되돌릴 때 **자기 몫만** 되돌리기 위해 쓴다.
+ */
+export function recordRegenCall({ entry, now, packetHash = null, attemptId = null }) {
   const prev = entry && typeof entry === 'object' ? entry : {}
+  const ids = Array.isArray(prev.regenAttemptIds) ? prev.regenAttemptIds : []
   return {
     ...prev,
     attempts: Number.isFinite(prev.attempts) ? prev.attempts : 0,
     regenCalls: (Number.isFinite(prev.regenCalls) ? prev.regenCalls : 0) + 1,
     lastRegenAt: now,
     lastPacketHash: packetHash,
+    ...(attemptId ? { regenAttemptIds: [...ids, attemptId].slice(-MAX_REGEN_CALLS * 4) } : {}),
   }
+}
+
+/** 전송 경계가 재생성 예산 소진으로 멈췄다는 사유 코드 — 정본은 여기 하나다 */
+export const REGEN_EXHAUSTED_REASON = 'REGEN_EXHAUSTED'
+
+/**
+ * 🔴 **send 직전의 원자적 예약 — 전송 권한과 재생성 횟수의 유일한 정본** (2026-09-28 · Codex P0).
+ *
+ *    앞판은 재생성 부모가 runner **전에** 따로 regenCalls 를 올렸다. 두 부모가 사전 판정을 동시에
+ *    통과하면 **둘 다 올렸고**, 진 쪽이 들고 있던 옛 `budget.used` 로 **이긴 쪽의 횟수까지 되돌렸다.**
+ *    그래서 횟수는 이제 **자식이 send 직전 예약을 적는 바로 그 임계구역**에서만 오른다.
+ *
+ *    하나의 `updateQuarantine` 안에서, 최신 장부 기준으로 **순서대로**:
+ *      ① 같은 지문 DELIVERY_UNCERTAIN HOLD  → 아무것도 바꾸지 않고 held
+ *      ② (재생성이면) 최신 regenBudget 소진   → 아무것도 바꾸지 않고 exhausted
+ *      ③ delivery 예약 생성 (reservationId)
+ *      ④ (재생성이면) regenCalls 증가 (attemptId)
+ *    일반 회수(`regen` 없음)는 ②④ 를 건너뛴다 — regenCalls 를 건드리지 않는다.
+ *
+ * 🔴 예약을 얻은 프로세스가 send 전후에 급사하면 예약과 횟수가 **그대로 남는다** (보수적 — 재전송을 막는다).
+ *    예약을 얻지 못한 프로세스는 이 함수에서 아무것도 쓰지 않았으므로 어디서 죽어도 횟수를 쓰지 않는다.
+ *
+ * @returns {{ok:true}|{ok:false, held?:object, exhausted?:object, code?:string, why:string}}
+ */
+export function reserveDelivery({
+  slug, messageFingerprint, reservationId, regen = null, now = Date.now(),
+  runId = null, date = null, path = QUARANTINE_PATH,
+}) {
+  let out = null
+  const u = updateQuarantine((cur) => {
+    const held = deliveryHoldsFetch(cur[slug], messageFingerprint)
+    if (held) { out = { ok: false, held, why: held.why }; return cur }
+    if (regen) {
+      const b = regenBudget({ entry: cur[slug] })
+      if (b.exhausted) {
+        out = { ok: false, exhausted: b,
+          why: `🔴 재생성 ${b.used}회를 이미 썼다 (상한 ${MAX_REGEN_CALLS}) — 보내지 않는다` }
+        return cur
+      }
+    }
+    let entry = recordDelivery(cur[slug], {
+      sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',
+      reason: 'sending', stage: 'send', now, runId, date, reservationId,
+    })
+    if (regen) entry = recordRegenCall({ entry, now, packetHash: regen.packetHash ?? null, attemptId: regen.attemptId ?? null })
+    out = { ok: true }
+    return { ...cur, [slug]: entry }
+  }, path)
+  // 🔴 잠금 시간 초과·장부 손상·판정 불가 — 전부 전송 금지
+  if (!u?.ok) return { ok: false, code: u?.code ?? 'QUARANTINE_UNREADABLE', why: u?.why ?? '알 수 없음' }
+  return out
+}
+
+/** 🔴 **내 예약일 때만** 전송 기록을 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다 */
+export function releaseDeliveryReservation({ slug, reservationId, path = QUARANTINE_PATH }) {
+  return updateQuarantine((cur) => (cur[slug]?.delivery?.reservationId === reservationId
+    ? { ...cur, [slug]: clearDelivery(cur[slug]) ?? undefined } : cur), path)
+}
+
+/**
+ * 🔴 **자기 몫의 재생성 횟수만 되돌린다** (compare-and-set).
+ *    앞판은 부모가 시작할 때 읽어 둔 `budget.used` 로 덮었다 — 그 사이 다른 프로세스가 올린 횟수가 지워졌다.
+ *    이제는 최신 장부에 **내 attemptId 가 있을 때만** 1 을 빼고 그 표식을 지운다. 없으면 아무것도 안 한다.
+ */
+export function revertRegenAttempt({ slug, attemptId, extra = {}, path = QUARANTINE_PATH }) {
+  let reverted = false
+  const u = updateQuarantine((cur) => {
+    const e = cur[slug]
+    const ids = Array.isArray(e?.regenAttemptIds) ? e.regenAttemptIds : []
+    const mine = attemptId && ids.includes(attemptId)
+    if (!mine && !Object.keys(extra).length) return cur
+    reverted = Boolean(mine)
+    return {
+      ...cur,
+      [slug]: {
+        ...(e ?? {}),
+        ...extra,
+        ...(mine ? {
+          regenCalls: Math.max(0, (Number.isFinite(e.regenCalls) ? e.regenCalls : 0) - 1),
+          regenAttemptIds: ids.filter((x) => x !== attemptId),
+        } : {}),
+      },
+    }
+  }, path)
+  return { ok: Boolean(u?.ok), reverted, why: u?.why }
 }
 
 /**

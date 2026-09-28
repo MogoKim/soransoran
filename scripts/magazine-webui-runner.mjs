@@ -58,11 +58,13 @@ import { ensureAutomationProfile, MARKER_FILE } from './lib/chatgpt-automation-p
 import { readRunTargets, materialState, fetchTargets } from './lib/magazine-run-targets.mjs'
 import {
   readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
-  recordDelivery, clearDelivery, QUARANTINE_PATH, DELIVERY_HOLD_REASON,
+  recordDelivery, QUARANTINE_PATH, DELIVERY_HOLD_REASON,
+  reserveDelivery, releaseDeliveryReservation, regenBudget, REGEN_EXHAUSTED_REASON,
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
 import { manuscriptPromptText, plannedMessageFor, deliveryGate } from './lib/magazine-delivery-gate.mjs'
+import { packetHashOf } from './lib/magazine-regen.mjs'
 
 /** 🔴 정본은 `lib/magazine-delivery-gate.mjs` 다 — 기존 호출부·시험을 위해 그대로 내보낸다 */
 export { manuscriptPromptText, plannedMessageFor, deliveryGate }
@@ -417,6 +419,16 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     if (!quiet) console.log(`     ⏸ HOLD — ${gate.hold.why}`)
     return heldResult(slug, gate, 'gate')
   }
+  /**
+   * 🔴 재생성인데 예산이 이미 소진됐으면 브라우저를 깨우지 않는다. (정본 판정은 아래 예약 임계구역이다 —
+   *    이것은 그 전에 불필요한 probe 를 피하는 앞단 확인일 뿐이다)
+   */
+  const regen = packet ? { attemptId: packet.attemptId ?? null, packetHash: packetHashOf(packet) } : null
+  if (regen && regenBudget({ entry: gate.entry }).exhausted) {
+    return { slug, status: 'failed', reason: REGEN_EXHAUSTED_REASON, stage: 'gate', sent: false,
+      messageFingerprint: gate.messageFingerprint,
+      errorDetail: `재생성 ${regenBudget({ entry: gate.entry }).used}회를 이미 썼다 (한 글자도 보내지 않았다)` }
+  }
 
   if (accessFn) {
     const p = await accessFn()
@@ -439,12 +451,13 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
    *    다시 부르고, 걸리면 장부를 바꾸지 않고 **누르지 않는다.**
    */
   let lateHold = null
+  let regenExhausted = null
   /**
    * 🔴 **send 권한의 유일한 정본은 이 예약 기록이다** (2026-09-28 · Codex P0).
-   *    `updateQuarantine` 이 프로세스 간 잠금 안에서 판정과 기록을 한 번에 하므로,
-   *    같은 slug·같은 지문을 두 프로세스가 동시에 들고 와도 **먼저 적은 한쪽만** 권한을 얻는다.
-   *    다른 쪽은 그 기록을 보고 HOLD 로 끝난다 (send 0). 예약 ID 는 "내 예약" 을 가려
-   *    성공 뒤 지울 때 남의 예약을 지우지 않게 한다.
+   *    `reserveDelivery` 가 프로세스 간 잠금 안에서 HOLD → (재생성이면) 최신 예산 → 예약 →
+   *    (재생성이면) regenCalls 증가를 **한 번에** 한다. 같은 slug·같은 지문을 두 프로세스가 동시에
+   *    들고 와도 **먼저 적은 한쪽만** 권한과 횟수를 얻는다. 다른 쪽은 HOLD 로 끝난다 (send 0 · 횟수 0).
+   *    예약 ID 는 "내 예약" 을 가려 성공 뒤 지울 때 남의 예약을 지우지 않게 한다.
    */
   const reservationId = randomUUID()
   let reserved = false
@@ -454,22 +467,12 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
       return { ok: false, why: '보낼 글자가 판정한 글자와 다르다' }
     }
     try {
-      const u = updateQuarantine((cur) => {
-        lateHold = deliveryHoldsFetch(cur[slug], messageFingerprint)
-        if (lateHold) return cur
-        return {
-          ...cur,
-          [slug]: recordDelivery(cur[slug], {
-            sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',
-            reason: 'sending', stage: 'send', now: Date.now(),
-            runId: runIdHint, date: dateHint, reservationId,
-          }),
-        }
-      }, quarantinePath)
-      // 🔴 장부를 못 읽었으면 `ok:false` 로 돌아온다 — 예외만 보면 이 경우를 "적었다" 로 읽는다
-      // 🔴 잠금 시간 초과·장부 손상·잠금 판정 불가도 여기로 온다 — 전부 전송 금지
-      if (!u?.ok) return { ok: false, why: `장부 선기록 실패${u?.code ? ` [${u.code}]` : ''}: ${u?.why ?? '알 수 없음'}` }
-      if (lateHold) return { ok: false, why: lateHold.why }
+      const u = reserveDelivery({ slug, messageFingerprint, reservationId, regen,
+        now: Date.now(), runId: runIdHint, date: dateHint, path: quarantinePath })
+      // 🔴 잠금 시간 초과·장부 손상·잠금 판정 불가도 `ok:false` 로 온다 — 전부 전송 금지
+      if (u.held) { lateHold = u.held; return { ok: false, why: u.why } }
+      if (u.exhausted) { regenExhausted = u.exhausted; return { ok: false, why: u.why } }
+      if (!u.ok) return { ok: false, why: `장부 선기록 실패${u.code ? ` [${u.code}]` : ''}: ${u.why}` }
       reserved = true
       return { ok: true }
     } catch (e) {
@@ -489,6 +492,12 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     ...browserDeps,
   })
   if (lateHold) return heldResult(slug, { ...gate, hold: lateHold }, 'send')
+  if (regenExhausted) {
+    // 🔴 그 사이 다른 재생성이 마지막 횟수를 가져갔다 — 보내지 않았고, 장부도 바꾸지 않았다
+    return { slug, status: 'failed', reason: REGEN_EXHAUSTED_REASON, stage: 'send', sent: false,
+      messageFingerprint: gate.messageFingerprint,
+      errorDetail: `재생성 ${regenExhausted.used}회를 이미 썼다 (한 글자도 보내지 않았다)` }
+  }
 
   /**
    * 🔴 **선기록을 함부로 지우지 않는다.**
@@ -504,8 +513,7 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
     try {
       if (r.ok) {
         // 🔴 **내 예약일 때만** 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다
-        updateQuarantine((cur) => (cur[slug]?.delivery?.reservationId === reservationId
-          ? { ...cur, [slug]: clearDelivery(cur[slug]) ?? undefined } : cur), quarantinePath)
+        releaseDeliveryReservation({ slug, reservationId, path: quarantinePath })
       } else if (!r.preRecorded && !reserved) {
         const kind = classifyFailure({
           code: r.reason, stage: r.stage,
