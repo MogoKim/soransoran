@@ -207,6 +207,10 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   CONTENT 로 추정하지 않고 `FETCH_RESULT_MISSING`(전송 모름 · 재전송 0)으로 멈춘다.
 >   (2026-09-28: stdout HOLD 문장이 CONTENT 로 분류돼 4건이 attempts +1 · 7일 격리 — 장부 대조 뒤 증가분만 되돌렸다.
 >   감사 기록: `incident-2026-09-28-supply-zero/ledger-repair-*/`.)
+> - 🔴 **같은 메시지 지문 HOLD 는 처리 자리를 쓰지 않는다** (2026-09-29 01:00: HOLD 8건이 시도 상한 9 중 8을 먹어 등록 0).
+>   직접 회수는 부모가 `deliveryGate` 로 먼저 보고 HOLD 면 runner 0 · 전송 0, 재생성 HOLD(`REGEN_DELIVERY_HOLD`)도 같다.
+>   HOLD 후보는 시도·등록 상한을 소비하지 않고 장부도 쓰지 않는다 — 후보 목록은 한 번만 훑는다(유한).
+>   brief·재생성 지시가 바뀌어 지문이 달라지면 새 작업이다. HOLD 여부를 판정할 수 없으면(장부 못 읽음) 회차 전체를 멈춘다.
 > - 🔴 **자동 병합의 CI 관찰 한도는 20분이다** — 필수 검사 실측 13분 남짓보다 길다. 명시적 실패는 즉시 멈추고,
 >   누락·진행 중은 20분까지 본 뒤 `CI_OBSERVE_TIMEOUT`. PR head SHA 의 검사만 센다.
 > - 🔴 **재생성 패킷은 `regen-packet/3` · `slug.<attemptId>.json`** — attemptId 는 필수 UUID 이고 파일

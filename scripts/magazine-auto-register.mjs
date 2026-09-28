@@ -46,6 +46,7 @@ import { readFetchResults, fetchResultFor, removeFetchResults, todayKst, readRun
 import { classifyFailure } from './lib/magazine-failure-kind.mjs'
 import { describeFetchFailure } from './magazine-webui-runner.mjs'
 import { fingerprintOf } from './lib/magazine-quarantine.mjs'
+import { deliveryGate } from './lib/magazine-delivery-gate.mjs'
 import { heroFilePath } from './lib/magazine-hero.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -267,12 +268,21 @@ export function drive(slug, opts, deps = {}) {
    *    그 행을 보고 **안 보낸 글로 판단한다.** 세 값(true/false/null)을 그대로 올린다.
    */
   let lastSent
+  /**
+   * 🔴 **같은 메시지 지문 HOLD 는 처리 자리를 쓰지 않는다** (2026-09-29 · 01:00 실측).
+   *    HOLD 8건이 시도 상한 9 중 8을 먹었고 등록·PR 0 으로 끝났다. HOLD 는 이 후보가
+   *    **할 수 있는 일이 없다**는 뜻이지 시도한 것이 아니다 — `held` 로 표시해 ready 가 세지 않게 한다.
+   *    `failClosed` 는 HOLD 여부를 판정할 수 없다(장부를 못 읽음)는 뜻이다 — ready 가 회차 전체를 멈춘다.
+   */
+  let held = false
+  let failClosed = false
   const stop = (stage, code, message) => {
     blockedBy.push({ code, message })
     add(stage, 'blocked', message)
     rollback()
     return { slug, verdict: 'BLOCKED', steps, blockedBy, write, dryRun: !write,
-      ...(lastSent !== undefined ? { sent: lastSent } : {}) }
+      ...(lastSent !== undefined ? { sent: lastSent } : {}),
+      ...(held ? { held: true } : {}), ...(failClosed ? { failClosed: true } : {}) }
   }
 
   // ── ① gate — 등급·큐·brief ────────────────────────────────
@@ -312,6 +322,22 @@ export function drive(slug, opts, deps = {}) {
      *    이제 `--result-json` 의 행(`reason`·`sent`·`stage`)으로 분류한다. 파일이 없거나 깨졌으면
      *    **보냈는지 모른다** — CONTENT 로 추정하지 않고 전송불명으로 멈춘다(재전송 0).
      */
+    /**
+     * 🔴 **보낼 수 없는 글이면 runner 를 띄우지 않는다** (앞단 확인 · 2026-09-29).
+     *    판정은 전송 경계와 **같은 함수**(`deliveryGate`)다 — 같은 brief → 같은 지문일 때만 HOLD 다.
+     *    brief 가 바뀌어 지문이 달라지면 새 작업으로 연다. 정본 판정은 여전히 자식의 send 직전 예약이다.
+     */
+    const g0 = deliveryGate({ slug, ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}), ...(quarantinePath ? { quarantinePath } : {}) })
+    if (!g0.ok) {
+      failClosed = true
+      lastSent = null
+      return stop('draft', 'QUARANTINE_UNREADABLE', `[INFRA] 장부를 읽지 못해 HOLD 여부를 모른다 — 보내지 않는다 (runner 0): ${g0.why}`)
+    }
+    if (g0.hold) {
+      held = true
+      lastSent = g0.hold.delivery?.sent ?? null
+      return stop('draft', 'DELIVERY_UNCERTAIN_HOLD', `[DELIVERY_UNCERTAIN] ${g0.hold.why} (runner 0 · 전송 0건)`)
+    }
     const resultPath = join(deps.fetchResultDir ?? PACKET_DIR, `fetch-result-${slug}-${process.pid}-${Date.now()}.json`)
     const r = runStep(WEBUI, ['--fetch', slug, '--result-json', resultPath])
     const structured = readFetchResults(resultPath)
@@ -329,6 +355,8 @@ export function drive(slug, opts, deps = {}) {
         sent: row.sent,
       }).kind
       lastSent = row.sent
+      // 🔴 앞단 확인과 자식 사이에 다른 회차가 예약했으면 자식이 HOLD 로 멈춘다 — 같은 HOLD 다
+      if (row.reason === 'DELIVERY_UNCERTAIN_HOLD') held = true
       const tag = kind !== 'CONTENT' ? `[${kind}] ` : ''
       return stop('draft', 'FETCH_FAILED', `${tag}회수 실패 — ${describeFetchFailure(row)}`)
     }
@@ -445,6 +473,8 @@ export function drive(slug, opts, deps = {}) {
        *    멀쩡한 원고가 긴 격리에 들어간다 — 2026-09-28 에 실제로 그랬다.
        */
       if (!rr.ok) {
+        if (rr.code === 'REGEN_DELIVERY_HOLD') held = true
+        if (rr.code === 'LEDGER_UNREADABLE') failClosed = true
         const kindTag = rr.kind && rr.kind !== 'CONTENT' ? `[${rr.kind}] ` : ''
         return stop('qa', 'QA_FAIL', `${kindTag}magazine QA FAIL — ${rr.code}: ${rr.why}`)
       }
