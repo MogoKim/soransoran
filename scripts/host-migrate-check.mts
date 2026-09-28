@@ -326,10 +326,12 @@ check('🔴 거부했으면 대상에 아무것도 만들지 않는다', !exists
 const cutover = keep(cli('export', `--out=${join(sandbox, 'cut')}`, '--cutover'))
 check('🔴 가짜 홈에서는 cutover 묶음을 만들지 않는다', cutover.code !== 0 && !existsSync(join(sandbox, 'cut', BUNDLE_MANIFEST)))
 
-// 🔴 변조 — 한 바이트
-appendFileSync(join(out, 'state/llm-ledger/2026-09-28.jsonl'), 'x')
+// 🔴 변조 — 같은 길이로 바꾼다(크기만 보는 검사는 여기서 뚫린다)
+const ledgerFile = join(out, 'state/llm-ledger/2026-09-28.jsonl')
+writeFileSync(ledgerFile, readFileSync(ledgerFile, 'utf-8').replace('0.01', '9.99'))
 const tampered = keep(cli('verify', `--bundle=${out}`))
-check('🔴 파일 변조 → verify 실패(HASH)', tampered.code !== 0 && tampered.out.includes('HASH'))
+check('🔴 같은 길이 변조 → verify 실패(HASH)', tampered.code !== 0 && tampered.out.includes('HASH'))
+appendFileSync(ledgerFile, 'x')
 chmodSync(join(out, 'state/env.local'), 0o644)
 check('🔴 비밀 권한 풀림 → verify 실패(PERM)', keep(cli('verify', `--bundle=${out}`)).out.includes('PERM'))
 writeFileSync(join(out, 'state/llm-ledger/extra.txt'), 'x')
