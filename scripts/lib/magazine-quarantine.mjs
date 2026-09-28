@@ -419,18 +419,22 @@ export function revertRegenAttempt({ slug, attemptId, extra = {}, path = QUARANT
   const u = updateQuarantine((cur) => {
     const e = cur[slug]
     const ids = Array.isArray(e?.regenAttemptIds) ? e.regenAttemptIds : []
-    const mine = attemptId && ids.includes(attemptId)
-    if (!mine && !Object.keys(extra).length) return cur
-    reverted = Boolean(mine)
+    /**
+     * 🔴 **내 attemptId 가 최신 장부에 있을 때만** 바꾼다 — 횟수도, 부가 필드(kind·sent·lastRegenAt)도.
+     *    앞판은 attemptId 가 사라졌어도 `extra` 가 있으면 부가 필드를 덮어썼다. 그러면 새 시도가
+     *    성공한 뒤 늦게 도착한 옛 인프라 실패가 최신 상태를 "INFRA · 안 보냄" 으로 되돌렸다.
+     *    일치하지 않으면 **한 글자도 바꾸지 않는다** (받은 객체를 그대로 돌려줘 저장 자체를 생략한다).
+     */
+    const mine = Boolean(attemptId) && ids.includes(attemptId)
+    if (!mine) return cur
+    reverted = true
     return {
       ...cur,
       [slug]: {
         ...(e ?? {}),
         ...extra,
-        ...(mine ? {
-          regenCalls: Math.max(0, (Number.isFinite(e.regenCalls) ? e.regenCalls : 0) - 1),
-          regenAttemptIds: ids.filter((x) => x !== attemptId),
-        } : {}),
+        regenCalls: Math.max(0, (Number.isFinite(e.regenCalls) ? e.regenCalls : 0) - 1),
+        regenAttemptIds: ids.filter((x) => x !== attemptId),
       },
     }
   }, path)
@@ -457,8 +461,11 @@ export function updateQuarantine(mutate, path = QUARANTINE_PATH) {
   const locked = withQuarantineLock(path, () => {
     const read = readQuarantine(path)
     if (!read.ok) return { ok: false, code: 'QUARANTINE_UNREADABLE', why: read.why }
-    const next = mutate({ ...read.store })
+    const given = { ...read.store }
+    const next = mutate(given)
     if (!next || typeof next !== 'object') return { ok: false, why: '🔴 갱신 함수가 장부를 돌려주지 않았다' }
+    // 🔴 받은 것을 그대로 돌려주면 "바꾸지 않는다" 는 뜻이다 — 파일을 한 바이트도 다시 쓰지 않는다
+    if (next === given) return { ok: true, store: next, unchanged: true }
     saveQuarantine(next, path)
     return { ok: true, store: next }
   })
@@ -519,8 +526,8 @@ function releaseIfMine(lock, token) {
   } catch { /* 이미 없거나 읽을 수 없다 — 건드리지 않는다 */ }
 }
 
-function createLock(lock) {
-  const owner = { token: randomUUID(), pid: process.pid, host: hostname(), at: new Date().toISOString() }
+function createLock(lock, extra = {}) {
+  const owner = { token: randomUUID(), pid: process.pid, host: hostname(), at: new Date().toISOString(), ...extra }
   const fd = openSync(lock, 'wx', 0o600)
   try { writeSync(fd, JSON.stringify(owner)); fsyncSync(fd) }
   finally { closeSync(fd) }
@@ -594,4 +601,68 @@ export function clearEntry(store, slug) {
   const next = { ...store }
   delete next[slug]
   return next
+}
+
+// ─────────────────────────────────────────────────────────
+// slug 별 재생성 lease — 🔴 같은 slug 의 재생성 수명주기 전체를 하나로 직렬화한다
+// ─────────────────────────────────────────────────────────
+
+/**
+ * 🔴 **왜 필요한가** (2026-09-28 · Codex P0).
+ *    `deliveryHoldsFetch` 는 **같은 지문**만 막는다. 같은 slug 에 지문이 다른 재생성 두 건이
+ *    동시에 돌면 둘 다 보내고, 둘 다 **같은 draft.md** 를 썼다 — 나중에 쓴 쪽이 이긴다.
+ *
+ *    그래서 재생성은 **probe 전에** slug 별 lease 를 잡고, 응답 수신·검증·draft 저장이 끝날 때까지
+ *    쥔다. 전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다 — lease 는 slug 하나만 막는다.
+ *    규약은 장부 잠금과 같다: `openSync wx` · token·pid·host 기록 · 살아 있는 주인은 빼앗지 않음 ·
+ *    죽은 주인은 `.reclaim` 안에서 token 재확인 후에만 거둠 · 해제는 내 token 일 때만.
+ */
+export const REGEN_IN_PROGRESS_REASON = 'REGEN_IN_PROGRESS'
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,120}$/
+
+export const regenLeaseDir = (path = QUARANTINE_PATH) => join(dirname(path), 'magazine-regen-leases')
+export function regenLeasePath(slug, path = QUARANTINE_PATH) {
+  if (!SLUG_RE.test(String(slug ?? ''))) throw new TypeError(`lease 를 만들 수 없는 slug 다: ${slug}`)
+  return join(regenLeaseDir(path), `${slug}.lease`)
+}
+
+/**
+ * @returns {{ok:true, token:string, release:()=>void}
+ *          |{ok:false, code:'REGEN_IN_PROGRESS'|'REGEN_LEASE_ERROR', why:string, owner?:object}}
+ */
+export function acquireRegenLease({ slug, attemptId = null, path = QUARANTINE_PATH }) {
+  let lease
+  try {
+    lease = regenLeasePath(slug, path)
+    mkdirSync(regenLeaseDir(path), { recursive: true, mode: 0o700 })
+  } catch (e) {
+    return { ok: false, code: 'REGEN_LEASE_ERROR', why: `lease 를 준비하지 못했다: ${e?.message ?? e}` }
+  }
+  for (let tries = 0; tries < 2; tries += 1) {
+    try {
+      const owner = createLock(lease, { slug, attemptId })
+      return { ok: true, token: owner.token, lease, release: () => releaseIfMine(lease, owner.token) }
+    } catch (e) {
+      if (e?.code !== 'EEXIST') {
+        return { ok: false, code: 'REGEN_LEASE_ERROR', why: `lease 를 만들지 못했다: ${e?.message ?? e}` }
+      }
+      const seen = inspectQuarantineLock(lease)
+      // 🔴 죽은 주인만, token 을 다시 확인한 뒤에만 거둔다 — 그 뒤 한 번 더 잡아 본다
+      if (seen.state === 'DEAD' && reclaimDeadLock(lease, seen.owner.token)) continue
+      return {
+        ok: false, code: REGEN_IN_PROGRESS_REASON, owner: seen.owner ?? null,
+        why: `같은 slug 의 재생성이 진행 중이다 (${seen.state}: ${seen.why}) — 기다리지 않고 멈춘다`,
+      }
+    }
+  }
+  return { ok: false, code: REGEN_IN_PROGRESS_REASON, why: '죽은 lease 를 거둔 뒤에도 잡지 못했다 — 다른 재생성이 먼저 잡았다' }
+}
+
+/** 일반 회수가 "지금 이 slug 를 재생성 중인가" 를 본다 — 🔴 판정 불가는 진행 중으로 본다 */
+export function regenLeaseActive({ slug, path = QUARANTINE_PATH }) {
+  let lease
+  try { lease = regenLeasePath(slug, path) } catch { return { active: true, why: 'slug 판정 불가' } }
+  if (!existsSync(lease)) return { active: false }
+  const seen = inspectQuarantineLock(lease)
+  return { active: seen.state !== 'DEAD', why: seen.why, owner: seen.owner ?? null }
 }

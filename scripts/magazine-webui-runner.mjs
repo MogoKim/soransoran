@@ -42,8 +42,11 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+
+/** RFC 4122 형태의 UUID (버전·변형 자리까지 본다) */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 import { ROOT, DRAFTS_DIR, loadQueue } from './lib/magazine-load.mjs'
 import { validateManuscript, describeReasons } from './lib/magazine-manuscript-guard.mjs'
 import {
@@ -60,6 +63,7 @@ import {
   readQuarantine, updateQuarantine, deliveryFingerprintOf, deliveryHoldsFetch,
   recordDelivery, QUARANTINE_PATH, DELIVERY_HOLD_REASON,
   reserveDelivery, releaseDeliveryReservation, regenBudget, REGEN_EXHAUSTED_REASON,
+  acquireRegenLease, regenLeaseActive, REGEN_IN_PROGRESS_REASON,
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
@@ -253,7 +257,7 @@ export async function login({
  * 🔴 brief 가 없으면 만들지 않는다 — 지시서는 세션이 쓴다(§13.1).
  */
 /** 🔴 패킷 계약 — 이 판만 받는다 */
-export const REGEN_PACKET_SCHEMA = 'regen-packet/2'
+export const REGEN_PACKET_SCHEMA = 'regen-packet/3'
 
 /**
  * 🔴 `--regen-packet` **인자 자체**를 검사한다.
@@ -317,6 +321,21 @@ export function readRegenPacket(packetPath, slug) {
     return { ok: false, code: 'REGEN_PACKET_SLUG_MISMATCH',
       why: `🔴 패킷의 slug 가 다르다 (${String(packet.slug)} ≠ ${slug}) — 남의 지적을 이 글에 보내지 않는다` }
   }
+  /**
+   * 🔴 **attemptId 는 필수 UUID 다** (regen-packet/3 · 2026-09-28 · Codex P1).
+   *    이 값이 lease 소유권·regenCalls 의 자기 몫·패킷 파일 이름을 잇는다. 없거나 틀리면
+   *    "누구의 시도인가" 를 가릴 수 없으므로 **아무것도 시작하지 않는다.**
+   *    파일 이름(`<slug>.<attemptId>.json`)과 본문이 다르면 남의 패킷을 집은 것이다.
+   */
+  if (typeof packet.attemptId !== 'string' || !UUID_RE.test(packet.attemptId)) {
+    return { ok: false, code: 'REGEN_PACKET_ATTEMPT_ID',
+      why: `패킷의 attemptId 가 UUID 가 아니다 (${JSON.stringify(packet.attemptId ?? null)})` }
+  }
+  const expectedName = `${packet.slug}.${packet.attemptId}.json`
+  if (basename(packetPath) !== expectedName) {
+    return { ok: false, code: 'REGEN_PACKET_ATTEMPT_ID',
+      why: `패킷 파일 이름과 본문 attemptId 가 다르다 (${basename(packetPath)} ≠ ${expectedName})` }
+  }
   return { ok: true, packet }
 }
 
@@ -351,7 +370,42 @@ function heldResult(slug, gate, stage) {
   }
 }
 
-async function fetchSlug(slug, { quiet = false, force = false, regenPacket = null,
+/**
+ * 🔴 **같은 slug 의 재생성은 수명주기 전체를 하나만** (2026-09-28 · Codex P0).
+ *
+ *    지문이 다른 재생성 두 건이 같은 slug 에서 동시에 돌면 둘 다 보내고 둘 다 같은 draft.md 를 썼다.
+ *    그래서 재생성은 **probe 전에** slug lease 를 잡고, 응답 수신·검증·draft 저장이 끝날 때까지 쥔다.
+ *    못 잡으면 `REGEN_IN_PROGRESS` 로 멈춘다 — probe·Chrome·send·draft write·regenCalls 전부 0.
+ *    전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다 (예약·기록 순간에만 짧게 잡는다).
+ *
+ *    일반 회수는 lease 를 잡지 않되, **그 slug 가 재생성 중이면** 같은 이유로 멈춘다.
+ */
+async function fetchSlug(slug, opts = {}) {
+  const quarantinePath = opts.quarantinePath ?? QUARANTINE_PATH
+  const leaseHeld = (code, why, attemptId = null) => ({
+    slug, status: code === REGEN_IN_PROGRESS_REASON ? 'held' : 'failed', reason: code, stage: 'lease',
+    sent: false, attemptId, errorDetail: `${why} (브라우저를 열지 않았고 한 글자도 보내지 않았다)`,
+  })
+  if (!opts.regenPacket) {
+    const act = regenLeaseActive({ slug, path: quarantinePath })
+    if (act.active) return leaseHeld(REGEN_IN_PROGRESS_REASON, `이 slug 를 재생성 중이다 (${act.why})`)
+    return fetchSlugUnderLease(slug, opts)
+  }
+  // 🔴 패킷이 성하지 않으면 안쪽이 같은 사유로 **아무것도 시작하지 않고** 끝낸다 — lease 도 필요 없다
+  const pr = readRegenPacket(opts.regenPacket, slug)
+  if (!pr.ok) return fetchSlugUnderLease(slug, opts)
+  const attemptId = pr.packet.attemptId
+  const lease = acquireRegenLease({ slug, attemptId, path: quarantinePath })
+  if (!lease.ok) return leaseHeld(lease.code, lease.why, attemptId)
+  try {
+    // 🔴 이 시도의 표식을 결과에 싣는다 — 부모는 **자기 패킷을 읽은 자식인지** 대조한다
+    return { ...(await fetchSlugUnderLease(slug, opts)), attemptId }
+  } finally {
+    lease.release()
+  }
+}
+
+async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPacket = null,
   quarantinePath = QUARANTINE_PATH, runIdHint = null, dateHint = null,
   /**
    * 🔴 **시험이 실제 `fetchSlug` 를 태우기 위한 자리.** 여기가 없으면 시험은

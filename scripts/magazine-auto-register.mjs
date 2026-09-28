@@ -161,7 +161,7 @@ export function webuiRegenRunner({ slug, packetPath }, { runFn = run, resultDir 
    *    0으로 끝나도 상위는 "재생성 성공" 으로 읽었고, 바뀌지 않은 옛 원고로 QA 를 돌렸다.
    *    **거짓 성공은 실패보다 나쁘다** — 실패는 다시 보지만 거짓 성공은 그냥 지나간다.
    */
-  if (r.code === 0 && row?.status === 'ok') return { ok: true, sent: true, resultSource: 'file' }
+  if (r.code === 0 && row?.status === 'ok') return { ok: true, sent: true, resultSource: 'file', attemptId: row.attemptId ?? null }
 
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
   const why = /login_required/i.test(out) ? 'ChatGPT login_required' : '재생성 회수 실패'
@@ -178,7 +178,7 @@ export function webuiRegenRunner({ slug, packetPath }, { runFn = run, resultDir 
         ok: false, sent: row.sent, resultSource: 'file',
         reason: row.reason ?? 'REGEN_RESULT_NOT_OK', stage: row.stage,
         errorName: row.errorName, errorDetail: row.errorDetail,
-        messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null,
+        messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null, attemptId: row.attemptId ?? null,
         why: `${why} — ${describeFetchFailure(row)}`,
       }
     }
@@ -200,7 +200,7 @@ export function webuiRegenRunner({ slug, packetPath }, { runFn = run, resultDir 
       reason: row.reason, stage: row.stage,
       errorName: row.errorName, errorDetail: row.errorDetail,
       // 🔴 HOLD 면 어느 글자 때문인지 · 앞선 전송이 무엇이었는지를 같이 올린다
-      messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null,
+      messageFingerprint: row.messageFingerprint ?? null, prior: row.prior ?? null, attemptId: row.attemptId ?? null,
       why: `${why} — ${describeFetchFailure(row)}`,
     }
   }

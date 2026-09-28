@@ -182,8 +182,14 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   인프라·전송불명 결과만 **자기 attemptId 몫**을 되돌린다. 예약을 얻고 급사한 시도는 예약·횟수를
 >   보수적으로 남긴다(재전송 금지). 예약을 못 얻은 시도는 어디서 죽어도 횟수를 쓰지 않는다.
 >   부모의 `deliveryGate` 확인은 불필요한 Chrome 을 피하는 앞단 확인일 뿐이다.
-> - 🔴 **재생성 패킷은 `slug.<attemptId>.json`** — 시도마다 자기 파일만 쓰고, 자기 파일만 읽히고,
->   자기 파일만 지운다 (앞판은 `slug.json` 하나를 공유해 남의 지시를 읽고 남의 패킷을 지웠다).
+>   자기 몫 되돌리기는 **최신 장부에 내 attemptId 가 있을 때만** 하고, 없으면 장부를 한 바이트도 안 쓴다.
+> - 🔴 **같은 slug 의 재생성은 수명주기 전체가 하나다** — 지문이 달라도. 재생성 자식은 probe 전에
+>   slug lease(`magazine-regen-leases/<slug>.lease` · wx · token·pid·host·attemptId)를 잡고 응답·검증·
+>   draft 저장까지 쥔다. 못 잡으면 `REGEN_IN_PROGRESS`(probe·send·draft·regenCalls 0). 다른 slug 는 동시에 돈다.
+>   전역 장부 잠금은 네트워크 대기 동안 쥐지 않는다. 살아 있는 주인은 빼앗지 않고, 죽은 주인은
+>   `.reclaim` 안에서 token 재확인 뒤에만 거둔다. 일반 회수도 그 slug 가 재생성 중이면 멈춘다.
+> - 🔴 **재생성 패킷은 `regen-packet/3` · `slug.<attemptId>.json`** — attemptId 는 필수 UUID 이고 파일
+>   이름과 본문이 같아야 한다. 시도마다 자기 파일만 쓰고, 자기 파일만 읽히고, 자기 파일만 지운다.
 > - 🔴 **CLI 시험의 브라우저·spawn 주입은 `SORAN_MAGAZINE_TEST_MODE=1` 에서만** 열린다
 >   (`magazine-test-harness.mjs`). 운영 모드에서 주입값이 보이면 exit 2 로 멈추고,
 >   시험 모드에서 빠진 자리는 거부 stub 이 막아 실제 Chrome 으로 떨어지지 않는다.

@@ -19,7 +19,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, updateQuarantine,
-  regenBudget, DELIVERY_HOLD_REASON, REGEN_EXHAUSTED_REASON, revertRegenAttempt,
+  regenBudget, DELIVERY_HOLD_REASON, REGEN_EXHAUSTED_REASON, REGEN_IN_PROGRESS_REASON, revertRegenAttempt,
 } from './magazine-quarantine.mjs'
 import { deliveryGate } from './magazine-delivery-gate.mjs'
 import { DRAFTS_DIR } from './magazine-load.mjs'
@@ -53,7 +53,7 @@ export function buildFailurePacket({ slug, profile, failures, attempt, attemptId
     code: f.code, label: f.label ?? f.message ?? '', sentence: String(f.sentence ?? '').slice(0, 160),
   }))
   return {
-    schemaVersion: 'regen-packet/2',
+    schemaVersion: 'regen-packet/3',
     slug,
     // 🔴 이 시도의 표식 — 패킷 파일 이름과 자식이 올린 regenCalls 를 잇는다 (지시문에는 들어가지 않는다)
     attemptId,
@@ -203,6 +203,25 @@ export function attemptRegeneration({
       regenCalls: usedNow(),
     }
   }
+  /**
+   * 🔴 **같은 slug 의 다른 재생성이 진행 중이다** — 자식은 lease 를 못 잡아 probe·send·draft·횟수 전부 0.
+   *    부모도 아무것도 바꾸지 않는다. 승자가 끝난 뒤 다음 회차가 (지문이 바뀌었으면) 다시 시도한다.
+   */
+  if (r?.reason === REGEN_IN_PROGRESS_REASON) {
+    return { ok: false, code: 'REGEN_IN_PROGRESS', kind: 'DELIVERY_UNCERTAIN', held: true, sent: false,
+      attemptId, childAttemptId: r.attemptId ?? null, packetHash: hash,
+      why: `같은 slug 의 재생성이 진행 중이다 — 기다리지 않고 멈춘다 (전송 0건): ${r?.why ?? ''}`,
+      regenCalls: usedNow() }
+  }
+  /**
+   * 🔴 **자식이 다른 시도의 패킷을 읽었다** — 이 결과를 이 시도의 것으로 믿지 않는다.
+   *    어느 몫도 되돌리지 않는다 (누구의 횟수인지 모르므로 보수적으로 둔다).
+   */
+  if (r?.attemptId && r.attemptId !== attemptId) {
+    return { ok: false, code: 'REGEN_ATTEMPT_MISMATCH', held: true, sent: sentOf(r), attemptId,
+      childAttemptId: r.attemptId, packetHash: hash,
+      why: `자식이 다른 시도의 패킷을 읽었다 (${r.attemptId} ≠ ${attemptId})`, regenCalls: usedNow() }
+  }
   if (r?.reason === REGEN_EXHAUSTED_REASON) {
     const used = usedNow()
     return { ok: false, code: 'REGEN_EXHAUSTED',
@@ -261,7 +280,7 @@ export function attemptRegeneration({
    *    남는 것은 장부의 `lastPacketHash` 하나다.
    */
   return { ok: true, code: 'REGENERATED', why: `실패 패킷 ${packet.failures.length}건 전달 후 원고 회수`,
-    regenCalls: usedNow(), packetHash: hash }
+    regenCalls: usedNow(), packetHash: hash, attemptId, childAttemptId: r.attemptId ?? null }
 }
 
 /** 등록에 성공했다 — 재생성 횟수를 지운다 */

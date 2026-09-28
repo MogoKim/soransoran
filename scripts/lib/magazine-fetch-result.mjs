@@ -61,6 +61,8 @@ export function normalizeFetchResult(r = {}) {
      *    HOLD 행의 `sent` 는 **이번 실행**의 값(false)이고, 앞선 모름은 `prior.sent` 다.
      */
     messageFingerprint: r.messageFingerprint ?? null,
+    // 🔴 재생성 시도 표식 — 부모가 "자기 패킷을 읽은 자식" 인지 대조한다
+    attemptId: r.attemptId ?? null,
     prior: r.prior
       ? {
         sent: normalizeSent(r.prior.sent), kind: r.prior.kind ?? null, reason: r.prior.reason ?? null,
