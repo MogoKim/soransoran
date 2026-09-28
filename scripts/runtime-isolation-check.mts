@@ -40,6 +40,7 @@ import { programArguments, rollbackDirOf, sameArgs } from './lib/launchd-install
 import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
 /** 🔴 감사 러너 label · 렌더 입력 형식의 정본 */
 import { AUDIT_RUNNER_LABEL } from './lib/auto-ready-audit-template'
+import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
 /** 🔴 배포기가 잠시 멈출 job 목록의 정본 — 배포기와 **같은 상수** */
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeEnv } from './lib/runtime-env.mjs'
@@ -1631,9 +1632,14 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         && !/'com\.soransoran\.original-post-runner'/.test(src)
         && !/'com\.soransoran\.auto-ready-audit'/.test(src)
     })())
-    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행 러너 + 감사 러너**',
-      DEPLOY_QUIESCE_JOBS.length === 2 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
-      && DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL))
+    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행 러너 + 감사 러너 + 무인 댓글 루프**',
+      DEPLOY_QUIESCE_JOBS.length === 3 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
+      && DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL) && DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL))
+    check('🔴 [Q] 🔴 **무인 댓글 루프도 공급·퇴역·스위치 목록 밖이다** — 설치는 선택이다',
+      !RUNTIME_JOBS.includes(COMMENT_RUNNER_LABEL) && !RETIRED_JOBS.includes(COMMENT_RUNNER_LABEL)
+      && !Object.keys(JOB_ENV_REQUIREMENTS).includes(COMMENT_RUNNER_LABEL))
+    check('🔴 [Q] 무인 댓글 루프 label 을 배포기에 다시 적지 않는다',
+      !/'com\.soransoran\.persona-comment-runner'/.test(readFileSync('scripts/runtime-deploy.mts', 'utf-8')))
     check('🔴 [Q] 🔴 **감사 러너도 공급·퇴역·스위치 목록 밖이다**',
       !RUNTIME_JOBS.includes(AUDIT_RUNNER_LABEL) && !RETIRED_JOBS.includes(AUDIT_RUNNER_LABEL)
       && !Object.keys(JOB_ENV_REQUIREMENTS).includes(AUDIT_RUNNER_LABEL))
@@ -1671,6 +1677,13 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
       check('🔴 [QA] 🔴 **미설치 → unload·load·render·write·retire 0**', noAuditTouch(w))
       check('🔴 [QA] 발행 러너는 여전히 내렸다 되올린다(같은 목록)',
         r.steps.includes(`quiesce-unload:${PUBLISH_RUNNER_LABEL}`) && w.state.get(PUBLISH_RUNNER_LABEL) === 'loaded')
+      /** 🔴 (2026-09-28) 무인 댓글 루프도 **배포기가 쓰는 같은 목록**으로 내렸다 되올린다 — 설치본은 건드리지 않는다 */
+      check('🔴 [QA] 무인 댓글 루프도 checkout 전에 내리고 뒤에 같은 설치본으로 되올린다',
+        r.steps.includes(`quiesce-unload:${COMMENT_RUNNER_LABEL}`)
+        && idx(w, `unload:${COMMENT_RUNNER_LABEL}`) !== -1 && idx(w, `unload:${COMMENT_RUNNER_LABEL}`) < idx(w, 'checkout:target')
+        && w.state.get(COMMENT_RUNNER_LABEL) === 'loaded'
+        && w.plists.get(COMMENT_RUNNER_LABEL) === OLD_PLIST(COMMENT_RUNNER_LABEL)
+        && countOf(w, `render:${COMMENT_RUNNER_LABEL}`) === 0 && countOf(w, `write-plist:${COMMENT_RUNNER_LABEL}`) === 0)
     }
 
     // ── ② 설치·loaded — checkout 전에 내리고, 성공 뒤 **같은 설치본으로** 되올린다 ──
@@ -1888,9 +1901,10 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
   {
     const src = readFileSync('scripts/runtime-isolation-check.mts', 'utf-8')
     const real = src.slice(src.indexOf('② 이 기계의 실제 상태'))
-    check('🔴 [QI] 실제 관측 구간이 judgeOptionalRuntimeJob 으로 감사 러너를 판정한다',
-      /judgeOptionalRuntimeJob\(/.test(real) && /AUDIT_RUNNER_LABEL/.test(real)
-      && /check\(`🔴 \$\{AUDIT_RUNNER_LABEL\}/.test(real))
+    check('🔴 [QI] 실제 관측 구간이 judgeOptionalRuntimeJob 으로 감사 러너 · 무인 댓글 루프를 판정한다',
+      /judgeOptionalRuntimeJob\(/.test(real) && /label: AUDIT_RUNNER_LABEL/.test(real)
+      && /label: COMMENT_RUNNER_LABEL/.test(real)
+      && /check\(`🔴 \$\{opt\.label\}/.test(real))
   }
 
 
@@ -2357,8 +2371,16 @@ if (!existsSync(RUNTIME_ROOT)) {
    *    🔴 node 경로(npx · PATH 앞 bin)만 설치본에서 읽는다 — 검사를 돌린 node 버전이 설치 node 와 달라도
    *       거짓 실패가 나지 않게. 스크립트 · 인자 · WD · 예약 시각 · 로그 · PATH 구성은 전부 템플릿과 바이트로 같아야 한다.
    */
-  {
-    const label = AUDIT_RUNNER_LABEL
+  /**
+   * 🔴 (2026-09-28 · Track B) 무인 댓글 루프 `com.soransoran.persona-comment-runner` 도 같은 규칙이다 —
+   *    설치는 선택이고, 설치됐으면 **그 runtime 트리의 템플릿**으로 render 한 원문과 바이트로 같아야 한다.
+   */
+  const OPTIONAL_RUNNERS: readonly { label: string; module: string; render: string }[] = [
+    { label: AUDIT_RUNNER_LABEL, module: 'auto-ready-audit-template.ts', render: 'renderAuditRunnerPlist' },
+    { label: COMMENT_RUNNER_LABEL, module: 'persona-comment-runner-template.ts', render: 'renderCommentRunnerPlist' },
+  ]
+  for (const opt of OPTIONAL_RUNNERS) {
+    const label = opt.label
     const expectedPlistPath = join(AGENT_DIR, `${label}.plist`)
     const installedXml = ((): string | null => {
       try { return existsSync(expectedPlistPath) ? readFileSync(expectedPlistPath, 'utf-8') : null } catch { return null }
@@ -2380,8 +2402,8 @@ if (!existsSync(RUNTIME_ROOT)) {
     const npxPath = installedArgs[0] ?? null
     const expectedXml = installedXml === null || npxPath === null ? null : await (async (): Promise<string | null> => {
       try {
-        const mod: unknown = await import(pathToFileURL(join(RUNTIME_ROOT, 'scripts', 'lib', 'auto-ready-audit-template.ts')).href)
-        const fn = (mod as { renderAuditRunnerPlist?: unknown }).renderAuditRunnerPlist
+        const mod: unknown = await import(pathToFileURL(join(RUNTIME_ROOT, 'scripts', 'lib', opt.module)).href)
+        const fn = (mod as Record<string, unknown>)[opt.render]
         if (typeof fn !== 'function') return null
         const out: unknown = fn({
           runtimeRoot: RUNTIME_ROOT, npxPath, nodeBinDir: dirname(npxPath),
@@ -2405,7 +2427,7 @@ if (!existsSync(RUNTIME_ROOT)) {
     if (state === 'unknown' && !REQUIRE_RUNTIME) {
       console.log(`   ⚪ ${label}: launchctl 관측 불가 — --require-runtime 에서만 막는다`)
     } else {
-      check(`🔴 ${AUDIT_RUNNER_LABEL} (설치 선택) — 미설치면 통과 · 설치됐으면 경로·인자·원문·loaded·SHA 가 runtime 과 같다`, v.ok)
+      check(`🔴 ${opt.label} (설치 선택) — 미설치면 통과 · 설치됐으면 경로·인자·원문·loaded·SHA 가 runtime 과 같다`, v.ok)
     }
     for (const p of v.problems) console.log(`      ${p}`)
     for (const n of v.notes) console.log(`   ${v.installed ? '🟢' : '⚪'} ${n}`)

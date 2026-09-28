@@ -2930,11 +2930,19 @@ console.log('㉘ runner schedule 템플릿 — 만들되 올리지 않는다')
 {
   const plist = renderCommentRunnerPlist({
     runtimeRoot: '/Users/x/Documents/soransoran-runtime',
-    npxPath: '/usr/local/bin/npx', logDir: '/Users/x/Library/Logs/soransoran',
+    npxPath: '/usr/local/bin/npx', logDir: '/Users/x/Library/Logs/soransoran', nodeBinDir: '/usr/local/bin',
   })
+  /**
+   * 🔴 **예약 대상은 무인 루프다** (2026-09-28 · Track B). 옛 runner 는 사람 승인분만 내는 수동 CLI 로 남는다.
+   *    label 은 그대로다 — 관제(`persona:comment-health` · D100 준비도)가 이 label 을 본다.
+   */
   check('🔴 runner 가 runtime worktree 를 가리킨다',
     plist.includes('<key>WorkingDirectory</key><string>/Users/x/Documents/soransoran-runtime</string>')
-    && plist.includes('/Users/x/Documents/soransoran-runtime/scripts/persona-comment-runner.mts'))
+    && plist.includes('/Users/x/Documents/soransoran-runtime/scripts/persona-comment-loop.mts'))
+  check('🔴 예약 실행은 --live 로 부른다(단계가 bootstrap-auto 가 아니면 그래도 write 0)',
+    plist.includes('<string>--live</string>'))
+  check('🔴 launchd 에 PATH 를 준다 — nvm node 가 없으면 npx 가 뜨기도 전에 죽는다',
+    plist.includes('<key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>'))
   check('🔴 개발 작업트리를 가리키지 않는다', !plist.includes('soransoran-m0'))
   /** 🔴 RunAtLoad 가 true 면 등록하는 순간 돈다 */
   check('🔴 RunAtLoad 가 false 다 — 올리는 순간 돌지 않는다', plist.includes('<key>RunAtLoad</key><false/>'))
@@ -3148,7 +3156,7 @@ console.log('㉝ runner 와 모델 정본')
   /** 🔴 템플릿이 없는 파일을 가리키면 등록하는 순간 조용히 실패한다 */
   check('🔴 runner 대상 스크립트가 실제로 있다', existsSync(COMMENT_RUNNER_SCRIPT))
   check('🔴 템플릿이 그 파일을 가리킨다',
-    renderCommentRunnerPlist({ runtimeRoot: '/rt', npxPath: '/npx', logDir: '/log' })
+    renderCommentRunnerPlist({ runtimeRoot: '/rt', npxPath: '/npx', logDir: '/log', nodeBinDir: '/' })
       .includes(`/rt/${COMMENT_RUNNER_SCRIPT}`))
 
   /**

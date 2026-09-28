@@ -12,8 +12,11 @@
  *
  *    · 발행 러너 `com.soransoran.original-post-runner` (2026-09-20)
  *    · 자동 READY 감사 러너 `com.soransoran.auto-ready-audit` (2026-09-28) — 설치는 선택이다
+ *    · 무인 댓글 루프 `com.soransoran.persona-comment-runner` (2026-09-28 · Track B) — 설치는 선택이다.
+ *      회차가 checkout 중에 뜨면 반쯤 바뀐 트리로 발행 트랜잭션을 연다 — 감사 러너와 같은 이유다.
  */
 import { AUDIT_RUNNER_LABEL } from './auto-ready-audit-template'
 import { PUBLISH_RUNNER_LABEL } from './original-post-runner-template'
+import { COMMENT_RUNNER_LABEL } from './persona-comment-runner-template'
 
-export const DEPLOY_QUIESCE_JOBS: readonly string[] = [PUBLISH_RUNNER_LABEL, AUDIT_RUNNER_LABEL]
+export const DEPLOY_QUIESCE_JOBS: readonly string[] = [PUBLISH_RUNNER_LABEL, AUDIT_RUNNER_LABEL, COMMENT_RUNNER_LABEL]
