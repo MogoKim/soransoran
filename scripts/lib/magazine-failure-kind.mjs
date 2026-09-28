@@ -74,6 +74,13 @@ const INFRA_CODES = new Set([
   'composer_short',
   'composer_dirty',
   'send_button_missing',
+  // 🔴 전송 전 기준선을 못 읽었다 — 보내지 않았다
+  'response_baseline_unreadable',
+  // 🔴 원고 탓이 아니다 — 같은 slug 작업 진행 중 · 장부·잠금 문제 · 선기록 실패(보내지 않았다)
+  'MANUSCRIPT_IN_PROGRESS',
+  'QUARANTINE_UNREADABLE',
+  'QUARANTINE_LOCK_TIMEOUT',
+  'predelivery_record_failed',
   /**
    * 🔴 **응답을 못 받은 것은 원고 탓이 아니다.** `sent=true` 면 위에서 이미
    *    DELIVERY_UNCERTAIN 으로 갈린다. 여기 남는 것은 `sent=false`·모름 아닌 경우인데,
@@ -120,7 +127,8 @@ export function classifyFailure({ code = null, message = '', stage = null, sent 
   }
 
   // 보냈는데 응답을 못 받았다 — 가장 먼저 가른다. 다시 보내면 안 되기 때문이다.
-  if (sent && /response_timeout/.test(text)) {
+  // 🔴 응답을 식별·판독하지 못한 것도 같다 — 보냈으니 다시 보내면 안 된다 (2026-09-28 응답 회수 재설계)
+  if (sent && /response_timeout|response_ambiguous|response_unreadable/.test(text)) {
     return { kind: 'DELIVERY_UNCERTAIN', why: '보냈지만 응답을 확인하지 못했다 — 다시 보내지 않는다' }
   }
   if (/DELIVERY_UNCERTAIN/.test(text)) {

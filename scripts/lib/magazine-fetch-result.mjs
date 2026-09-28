@@ -63,6 +63,8 @@ export function normalizeFetchResult(r = {}) {
     messageFingerprint: r.messageFingerprint ?? null,
     // 🔴 재생성 시도 표식 — 부모가 "자기 패킷을 읽은 자식" 인지 대조한다
     attemptId: r.attemptId ?? null,
+    // 🔴 보낸 대화의 주소 — 전송불명 응답을 나중에 읽기 전용으로 회수할 근거
+    conversationUrl: r.conversationUrl ?? null,
     prior: r.prior
       ? {
         sent: normalizeSent(r.prior.sent), kind: r.prior.kind ?? null, reason: r.prior.reason ?? null,

@@ -601,7 +601,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     }
   }
 
-  if (r.ok) return { slug, status: 'ok', sent: r.sent, length: r.length, messageFingerprint: r.messageFingerprint ?? null }
+  if (r.ok) return { slug, status: 'ok', sent: r.sent, length: r.length, messageFingerprint: r.messageFingerprint ?? null, conversationUrl: r.conversationUrl ?? null }
   return {
     slug,
     status: 'failed',
@@ -615,6 +615,7 @@ async function fetchSlugUnderLease(slug, { quiet = false, force = false, regenPa
     stage: r.stage ?? null,
     errorName: r.errorName ?? null,
     errorDetail: r.errorDetail ?? null,
+    conversationUrl: r.conversationUrl ?? null,
   }
 }
 /** 저장된 원고를 기계 검사만 한다. 내용을 출력하지 않는다 */
@@ -1039,7 +1040,7 @@ async function main() {
     return await fetchOne(slug, {
       force: argv.includes('--force'), regenPacket: rp.path, resultPath: rj.path,
       ...(T.probe ? { probeFn: T.probe } : {}),
-      ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab } } : {}),
+      ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab, ...(T.fetchTiming ?? {}) } } : {}),
       ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),
     })
   }
@@ -1062,7 +1063,7 @@ async function main() {
       date, dryRun: argv.includes('--dry-run'), limit: limitArg,
       resultPath: rj.path ?? fetchResultPath(date),
       ...(T.probe ? { probeFn: T.probe } : {}),
-      ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab } } : {}),
+      ...(T.connect || T.ensureTab ? { browserDeps: { connect: T.connect, ensureTab: T.ensureTab, ...(T.fetchTiming ?? {}) } } : {}),
       ...(T.quarantinePath ? { quarantinePath: T.quarantinePath } : {}),
     })
     // 전역 실패만 종료 코드 1 — 개별 실패는 나머지가 성공했을 수 있다

@@ -299,15 +299,38 @@ export function drive(slug, opts, deps = {}) {
   if (write) snapshot = trackedSnapshot([p.articleTs, heroFilePath(slug), p.draftMd, ARTICLES_TS, QUEUE_TS])
 
   // ── ② draft.md 회수 ───────────────────────────────────────
-  if (progress(slug).hasDraftMd) {
+  // 🔴 원고 존재 판정도 주입점이다 — 시험이 "원고 없음" 후보로 실제 회수 경로를 태우기 위한 자리 (운영은 실제 판정)
+  if ((deps.progress ?? progress)(slug).hasDraftMd) {
     add('draft', 'skip', 'draft.md 가 이미 있다 — 덮어쓰지 않는다')
   } else if (!write) {
     add('draft', 'skip', 'dry-run — 회수하지 않는다 (draft.md 없음)')
   } else {
-    const r = runStep(WEBUI, ['--fetch', slug])
-    if (r.code !== 0) {
-      const why = /login_required/i.test(r.stdout + r.stderr) ? 'ChatGPT login_required' : '회수 실패'
-      return stop('draft', 'FETCH_FAILED', `${why} — ${meaningfulLine(r.stderr || r.stdout)}`)
+    /**
+     * 🔴 **사람용 출력을 파싱하지 않는다 — 자식이 적은 구조화 결과가 정본이다** (2026-09-28 운영 실측).
+     *    앞판은 stdout 한 줄("⏸ HOLD — 이미 보낸 글이다")을 사유로 넘겼다. 그 문장에 전송불명 표식이 없어
+     *    분류기가 CONTENT 로 추정했고, 원고 잘못이 아닌 4건이 attempts +1 · 7일 격리에 걸렸다.
+     *    이제 `--result-json` 의 행(`reason`·`sent`·`stage`)으로 분류한다. 파일이 없거나 깨졌으면
+     *    **보냈는지 모른다** — CONTENT 로 추정하지 않고 전송불명으로 멈춘다(재전송 0).
+     */
+    const resultPath = join(deps.fetchResultDir ?? PACKET_DIR, `fetch-result-${slug}-${process.pid}-${Date.now()}.json`)
+    const r = runStep(WEBUI, ['--fetch', slug, '--result-json', resultPath])
+    const structured = readFetchResults(resultPath)
+    const row = structured.ok ? fetchResultFor(structured.body, slug) : null
+    removeFetchResults(resultPath)
+    if (!(r.code === 0 && row?.status === 'ok')) {
+      if (!row) {
+        lastSent = null
+        return stop('draft', 'FETCH_RESULT_MISSING',
+          `[DELIVERY_UNCERTAIN] 회수 결과를 읽지 못했다 (${structured.why ?? '행 없음'}) — 보냈는지 모른다 · 다시 보내지 않는다`)
+      }
+      const kind = classifyFailure({
+        code: row.reason, stage: row.stage,
+        message: [row.errorName, row.errorDetail].filter(Boolean).join(' · '),
+        sent: row.sent,
+      }).kind
+      lastSent = row.sent
+      const tag = kind !== 'CONTENT' ? `[${kind}] ` : ''
+      return stop('draft', 'FETCH_FAILED', `${tag}회수 실패 — ${describeFetchFailure(row)}`)
     }
     add('draft', 'ok', 'draft.md 회수')
   }

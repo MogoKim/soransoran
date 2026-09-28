@@ -29,8 +29,14 @@ export const TEST_FIXTURE_ENV = 'SORAN_MAGAZINE_TEST_FIXTURE'
 /** fixture 가 채울 수 있는 자리 — 이 밖의 이름은 받지 않는다 */
 export const INJECTABLE = Object.freeze([
   'browserAvailable', 'cdpAvailable', 'profileInUse', 'spawn', 'verifyProfileFn',
-  'probe', 'connect', 'ensureTab', 'quarantinePath',
+  'probe', 'connect', 'ensureTab', 'quarantinePath', 'fetchTiming',
 ])
+
+/**
+ * 🔴 시험 모드의 응답 관찰 타이밍 기본값 — 가짜 브라우저가 "응답 없음" 일 때 5분을 기다리지 않게 한다.
+ *    운영에는 들어가지 않는다 (운영 모드면 주입 자체를 거부한다).
+ */
+const TEST_FETCH_TIMING = Object.freeze({ pollMs: 5, stablePolls: 2, timeoutMs: 300 })
 
 const refused = (name) => () => {
   throw new Error(`TEST_MODE_NOT_INJECTED — 시험 모드에서 ${name} 를 주입하지 않았다 (실제 브라우저를 쓰지 않는다)`)
@@ -42,7 +48,7 @@ const refused = (name) => () => {
  *    그럴듯한 운영 결과가 나와서 fixture 를 빠뜨린 시험이 초록으로 보인다.
  */
 const REFUSE = Object.freeze(Object.fromEntries(
-  INJECTABLE.filter((k) => k !== 'quarantinePath').map((k) => [k, refused(k)]),
+  INJECTABLE.filter((k) => k !== 'quarantinePath' && k !== 'fetchTiming').map((k) => [k, refused(k)]),
 ))
 
 /**
@@ -80,5 +86,5 @@ export async function loadTestHarness(env = process.env) {
     return { ok: false, code: 'TEST_FIXTURE_UNKNOWN_KEY', why: `fixture 에 모르는 자리가 있다: ${unknown.join(', ')}` }
   }
   const picked = Object.fromEntries(INJECTABLE.filter((k) => fx[k] !== undefined).map((k) => [k, fx[k]]))
-  return { ok: true, test: true, deps: { ...REFUSE, ...picked } }
+  return { ok: true, test: true, deps: { ...REFUSE, ...picked, fetchTiming: { ...TEST_FETCH_TIMING, ...(picked.fetchTiming ?? {}) } } }
 }

@@ -43,7 +43,13 @@ export const SITE = 'https://soransoran.com'
 // ─────────────────────────────────────────────────────────
 // 제한 시간 — 🔴 전부 유한하다. 무한 대기 없음
 // ─────────────────────────────────────────────────────────
-export const CI_OBSERVE_MS = 12 * 60 * 1000
+/**
+ * 🔴 **필수 CI 보다 길어야 한다** (2026-09-28 운영 실측).
+ *    12분이었는데 필수 검사 `Micro Seed 3축 게이트` 가 실제로 13분 남짓 걸렸다 — #603 은 모든 관문을 통과하고도
+ *    `CI_OBSERVE_TIMEOUT` 으로 병합 0 이 됐다. 상한 20분 · 명시적 실패는 즉시 중단 · 무한 대기 없음.
+ *    검사는 언제나 **PR head SHA 의** check-run 으로만 본다 — 다른 SHA 의 성공을 이 PR 의 성공으로 세지 않는다.
+ */
+export const CI_OBSERVE_MS = 20 * 60 * 1000
 export const CI_POLL_MS = 30 * 1000
 export const DEPLOY_OBSERVE_MS = 10 * 60 * 1000
 export const DEPLOY_POLL_MS = 20 * 1000

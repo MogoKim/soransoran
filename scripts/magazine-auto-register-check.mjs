@@ -1699,6 +1699,52 @@ expect(
 expect('🔴 제한 시간에서 끊는다 — 무한 대기 없음', timeoutRun.ci.waitedMs >= AM.CI_OBSERVE_MS, true)
 expect('🔴 merge 하지 않는다', timeoutDeps.calls.some((c) => c.startsWith('merge:')), false)
 
+/**
+ * 🔴 **2026-09-28 운영 실측 — 필수 CI 가 관찰 한도보다 길었다.**
+ *    한도 12분 · 필수 검사 `Micro Seed 3축 게이트` 실측 13분 남짓 → #603 이 모든 관문을 통과하고도 병합 0.
+ *    가짜 시계로 실제 `runAutoMerge` 를 돌린다 (한도 20분).
+ */
+expect('🔴 CI 관찰 한도는 필수 CI(실측 13분)보다 길고 20분을 넘지 않는다',
+  AM.CI_OBSERVE_MS > 13 * 60 * 1000 && AM.CI_OBSERVE_MS <= 20 * 60 * 1000, true)
+{
+  const PENDING = [{ name: 'Micro Seed 3축 게이트', status: 'in_progress', conclusion: null }]
+  const at = (ms) => (deps) => deps.now() - NOW8 >= ms
+  const clocked = (fn) => {
+    const d = mergeDeps()
+    const orig = d.getChecks
+    void orig
+    d.getChecks = (sha) => fn(d, sha)
+    return d
+  }
+  // 13분 뒤 성공 → 병합 진행
+  const d13 = clocked((d) => (at(13 * 60 * 1000)(d)
+    ? { ok: true, ciState: 'success', checks: [...FAST_CHECK, ...CHECKS8] }
+    : { ok: true, ciState: 'pending', checks: [...FAST_CHECK, ...PENDING] }))
+  const r13 = await AM.runAutoMerge({ apply: true, deps: d13 })
+  expect('🔴 13분 뒤 필수 CI 성공 → SETTLED · 자동 병합 진행', `${r13.ci.outcome}·${r13.merged}`, 'SETTLED·true')
+  expect('  13분 넘게 기다렸다', r13.ci.waitedMs >= 13 * 60 * 1000, true)
+  // 5분에 명시적 실패 → 즉시 중단
+  const d5 = clocked((d) => (at(5 * 60 * 1000)(d)
+    ? { ok: true, ciState: 'failure', checks: [...FAST_CHECK, { name: 'Micro Seed 3축 게이트', status: 'completed', conclusion: 'failure' }] }
+    : { ok: true, ciState: 'pending', checks: [...FAST_CHECK, ...PENDING] }))
+  const r5 = await AM.runAutoMerge({ apply: true, deps: d5 })
+  expect('🔴 명시적 CI 실패 → 즉시 FAILED (20분을 기다리지 않는다)', `${r5.ci.outcome}·${r5.ci.waitedMs < 6 * 60 * 1000}`, 'FAILED·true')
+  expect('  실패면 병합하지 않는다', d5.calls.some((c) => c.startsWith('merge:')), false)
+  // 20분 넘게 진행 중 → TIMEOUT
+  const d20 = clocked(() => ({ ok: true, ciState: 'pending', checks: [...FAST_CHECK, ...PENDING] }))
+  const r20 = await AM.runAutoMerge({ apply: true, deps: d20 })
+  expect('🔴 20분까지 진행 중이면 CI_OBSERVE_TIMEOUT (무한 대기 없음)',
+    `${r20.ci.outcome}·${r20.ci.waitedMs >= 20 * 60 * 1000 && r20.ci.waitedMs < 21 * 60 * 1000}·${codes8(r20).includes('CI_OBSERVE_TIMEOUT')}`, 'TIMEOUT·true·true')
+  // 다른 SHA 의 성공은 이 PR 의 성공이 아니다
+  const seenShas = new Set()
+  const dSha = clocked((_d, sha) => { seenShas.add(sha); return sha === HEAD
+    ? { ok: true, ciState: 'pending', checks: [...FAST_CHECK, ...PENDING] }
+    : { ok: true, ciState: 'success', checks: [...FAST_CHECK, ...CHECKS8] } })
+  const rSha = await AM.runAutoMerge({ apply: true, deps: dSha })
+  expect('🔴 다른 SHA 의 성공 체크를 이 PR 성공으로 세지 않는다 (PR head SHA 로만 조회)',
+    `${rSha.ci.outcome}·${[...seenShas].every((x) => x === HEAD)}·${dSha.calls.some((c) => c.startsWith('merge:'))}`, 'TIMEOUT·true·false')
+}
+
 // ── 검사가 끝내 안 붙는다 → 빈 목록을 통과시키지 않는다 ────
 const neverDeps = mergeDeps({ getChecks: () => ({ ok: true, ciState: 'pending', checks: [] }) })
 const never = await AM.runAutoMerge({ apply: true, deps: neverDeps })

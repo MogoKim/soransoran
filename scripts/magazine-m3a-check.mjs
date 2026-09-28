@@ -41,6 +41,49 @@ const check = (label, ok, detail = '') => {
   else { fail++; fails.push(label); console.log(`  FAIL ${label}${detail ? ` — ${detail}` : ''}`) }
 }
 
+
+/**
+ * 🔴 **가짜 page 를 새 응답 계약으로 옮긴다** (2026-09-28 · 응답 회수 재설계).
+ *    새 판 `fetchManuscript` 는 `page.evaluate(readConversationDom)` 으로 대화 스냅숏을 본다.
+ *    기존 가짜들은 "`waitForFunction` 이 통과하면 응답이 왔고 `evaluate()` 가 그 원문" 이라는 옛 뜻을 담고 있다.
+ *    이 어댑터는 **그 뜻을 그대로** 새 계약으로 번역한다 — send 를 누르기 전에는 assistant 응답 0,
+ *    누른 뒤에는 원래 `waitForFunction` 이 통과하면 새 응답 1(코드블록 = 옛 `evaluate()`), 던지면 0.
+ *    실제 DOM 판독(`readConversationDom`)은 ㊶ 에서 실측 골격으로 따로 시험한다.
+ *    🔴 자급식이다 — CLI 자식 fixture 에도 `toString()` 으로 그대로 들어간다.
+ */
+function adaptPage(pg) {
+  if (!pg || pg.__adapted) return pg
+  pg.__adapted = true
+  const origLocator = pg.locator ? pg.locator.bind(pg) : null
+  const origEval = pg.evaluate ? pg.evaluate.bind(pg) : null
+  let sent = false
+  let state = 'pending'
+  let text = null
+  if (origLocator) {
+    pg.locator = (sel) => {
+      const loc = origLocator(sel)
+      if (!/send-button|보내기|Send/.test(String(sel ?? ''))) return loc
+      const wrap = (l) => ({ ...l, async click(...a) { const r = await l.click(...a); sent = true; return r } })
+      const one = () => wrap(loc.first ? loc.first() : loc)
+      return { ...wrap(loc), first: one, async all() { return [one()] } }
+    }
+  }
+  pg.evaluate = async (fn, ...args) => {
+    if (!fn || fn.name !== 'readConversationDom') return origEval ? origEval(fn, ...args) : null
+    if (!sent) return { readOk: true, stop: false, units: [] }
+    if (state !== 'ready') {
+      try { if (pg.waitForFunction) await pg.waitForFunction(); state = 'ready'; text = origEval ? await origEval() : '' }
+      catch { state = 'none' }
+    }
+    return state === 'ready'
+      ? { readOk: true, stop: false, units: [{ id: 'fake-assistant-1', role: 'assistant', source: 'new', codeBlocks: [String(text ?? '')], markdown: '', hasActions: true }] }
+      : { readOk: true, stop: false, units: [] }
+  }
+  return pg
+}
+/** 시험용 짧은 응답 관찰 타이밍 — 전체 한도는 시험 안에서만 짧다 */
+const FAST_FETCH = { pollMs: 5, stablePolls: 2, timeoutMs: 300 }
+
 console.log('\nM3-A 행동 검증 — 🔴 실제 drive() orchestration\n')
 
 // ─────────────────────────────────────────────────────────
@@ -1613,7 +1656,7 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
           return pg
         }
         world.browser = {
-          contexts: () => [{ pages: () => [existing], newPage: async () => newPage() }],
+          contexts: () => [{ pages: () => [existing], newPage: async () => adaptPage(newPage()) }],
           async close() { world.browserCloses += 1 },
         }
         return world
@@ -1626,7 +1669,7 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
       for (const at of ['composer', 'compose', 'send', 'await-response']) {
         const throwAt = at === 'compose' ? 'readback-truncated' : at
         const w = makeWorld(throwAt)
-        const r = await SESSION2.fetchManuscript({
+        const r = await SESSION2.fetchManuscript({ ...FAST_FETCH,
           briefPath, outPath, promptText: '시험', requiredMarkers: ['문장 하나'],
           timeoutMs: 200, connectTimeoutMs: 200,
           ensureTab: async () => ({ ok: true }),
@@ -1669,7 +1712,7 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
       /** 🔴 readback 이 다른 이유로 깨지는 경우도 **보내지 않는다** */
       for (const [mut, want] of [['readback-empty', 'composer_empty'], ['readback-dirty', 'composer_dirty']]) {
         const w = makeWorld(mut)
-        const r = await SESSION2.fetchManuscript({
+        const r = await SESSION2.fetchManuscript({ ...FAST_FETCH,
           briefPath, outPath, promptText: '시험', requiredMarkers: ['문장 하나'],
           timeoutMs: 200, connectTimeoutMs: 200,
           ensureTab: async () => ({ ok: true }),
@@ -1683,7 +1726,7 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
       /** 🔴 **brief 본문이 실제로 메시지에 들어갔는가** — 넣은 척이 아니라 글자를 본다 */
       {
         const w = makeWorld(null)
-        await SESSION2.fetchManuscript({
+        await SESSION2.fetchManuscript({ ...FAST_FETCH,
           briefPath, outPath, promptText: '시험', requiredMarkers: ['문장 하나'],
           timeoutMs: 200, connectTimeoutMs: 200,
           ensureTab: async () => ({ ok: true }),
@@ -1698,7 +1741,7 @@ console.log('\n⑭ 2026-09-27 운영 실패 반례')
 
       /** 🔴 정상 경로도 자기 탭을 닫는다 — 실패 경로만 닫으면 성공할 때마다 샌다 */
       const wOk = makeWorld(null)
-      await SESSION2.fetchManuscript({
+      await SESSION2.fetchManuscript({ ...FAST_FETCH,
         briefPath, outPath, promptText: '시험', requiredMarkers: [],
         timeoutMs: 200, connectTimeoutMs: 200,
         ensureTab: async () => ({ ok: true }),
@@ -2185,7 +2228,7 @@ console.log('\n⑰ 긴 brief 를 본문으로 보낸다 — 첨부 없음')
         return pg
       }
       world.browser = {
-        contexts: () => [{ pages: () => [], newPage: async () => newPage() }],
+        contexts: () => [{ pages: () => [], newPage: async () => adaptPage(newPage()) }],
         async close() {},
       }
       return world
@@ -2196,7 +2239,7 @@ console.log('\n⑰ 긴 brief 를 본문으로 보낸다 — 첨부 없음')
       fs.writeFileSync(briefPath, makeBrief(bytes))
       const real = fs.statSync(briefPath).size
       const w = makeWorld()
-      const r = await SESSION3.fetchManuscript({
+      const r = await SESSION3.fetchManuscript({ ...FAST_FETCH,
         briefPath, outPath: path.join(T, `out-${bytes}.md`),
         promptText: '시험', requiredMarkers: [marker],
         timeoutMs: 200, connectTimeoutMs: 200,
@@ -2827,7 +2870,7 @@ console.log('\n㉕ ensureChrome 이 신원 정본이다 — 모든 경로가 여
   fs.rmSync(T25, { recursive: true, force: true })
 }
 
-const KILL_CHILD_SRC = "/**\n * \ud83d\udd34 **\uc804\uc1a1 \uc9c1\ud6c4 \ud504\ub85c\uc138\uc2a4\uac00 \uc8fd\ub294 \uc0c1\ud669\uc744 \uc2e4\uc81c\ub85c \ub9cc\ub4e0\ub2e4.**\n *    \uc2e4\uc81c `fetchManuscript` \ub97c \uac00\uc9dc \ube0c\ub77c\uc6b0\uc800\ub85c \ub3cc\ub9ac\ub418, send \ubc84\ud2bc\uc744 \ub204\ub974\ub294 \uc21c\uac04\n *    `SIGKILL` \ub85c \uc790\uae30 \uc790\uc2e0\uc744 \uc8fd\uc778\ub2e4. \uc815\ub9ac \ucf54\ub4dc\ub3c4, \ubc18\ud658\ub3c4 \uc5c6\ub2e4 \u2014 \uc9c4\uc9dc \uae09\uc0ac\ub2e4.\n */\nimport { writeFileSync, mkdirSync } from 'node:fs'\nimport { join } from 'node:path'\nimport { fetchManuscript } from './scripts/lib/chatgpt-session.mjs'\nimport { updateQuarantine, recordDelivery } from './scripts/lib/magazine-quarantine.mjs'\n/**\n * \ud83d\udd34 **\ud504\ub86c\ud504\ud2b8\ub294 production \uac83\uc744 \uc4f4\ub2e4.** \uc9c0\ubb38\uc740 \"\ubcf4\ub0bc \uae00\uc790\" \ub85c \ub9cc\ub4e0\ub2e4 \u2014\n *    \uc2dc\ud5d8\uc774 \ub2e4\ub978 \ubb38\uc7a5\uc744 \uc4f0\uba74 \uc9c0\ubb38\uc774 \ub2ec\ub77c\uc838, \ub9c9\uc544\uc57c \ud560 \uac83\uc744 \ubabb \ub9c9\uace0\ub3c4 \ucd08\ub85d\uc774 \ub72c\ub2e4.\n */\nimport { manuscriptPromptText } from './scripts/magazine-webui-runner.mjs'\n\n// \ud83d\udd34 `node -e` \ub294 argv \uc5d0 \uc2a4\ud06c\ub9bd\ud2b8 \uacbd\ub85c\ub97c \ub123\uc9c0 \uc54a\ub294\ub2e4 \u2014 \ub4a4\uc5d0\uc11c \uc13c\ub2e4\nconst [briefPath, outPath, ledger, slug, message] = process.argv.slice(-5)\nvoid message\n\nconst makePage = () => {\n  let typed = ''\n  const composer = {\n    async click() {},\n    async innerText() { return typed },\n  }\n  const sendBtn = {\n    async click() {\n      // \ud83d\udd34 \uc5ec\uae30\uac00 \uc804\uc1a1\uc774\ub2e4. \ub204\ub974\ub294 \uc21c\uac04 \uae09\uc0ac\ud55c\ub2e4.\n      process.kill(process.pid, 'SIGKILL')\n      await new Promise(() => {})\n    },\n  }\n  return {\n    async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},\n    async waitForFunction() {},\n    async evaluate() { return '---\\n\ubcf8\ubb38\\n[CTA]' },\n    async evaluateHandle() { return { asElement: () => ({ async setInputFiles() {} }) } },\n    locator(sel) {\n      const isSend = /send-button|\ubcf4\ub0b4\uae30|Send/.test(String(sel ?? ''))\n      const l = isSend ? sendBtn : composer\n      return { first: () => l, async all() { return [l] }, ...l }\n    },\n    keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },\n  }\n}\nconst page = makePage()\nconst browser = {\n  contexts: () => [{ pages: () => [], newPage: async () => page }],\n  async close() {},\n}\n\nmkdirSync(join(outPath, '..'), { recursive: true })\nvoid writeFileSync\n\nconst r = await fetchManuscript({\n  briefPath, outPath, promptText: manuscriptPromptText(null), requiredMarkers: [],\n  timeoutMs: 500, connectTimeoutMs: 500,\n  ensureTab: async () => ({ ok: true }),\n  connect: async () => browser,\n  onBeforeSend: async ({ messageFingerprint }) => {\n    updateQuarantine((cur) => ({\n      ...cur,\n      [slug]: recordDelivery(cur[slug], {\n        sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',\n        reason: 'sending', stage: 'send', now: Date.now(), date: '2026-09-28',\n      }),\n    }), ledger)\n    return { ok: true }\n  },\n})\n// \ud83d\udd34 \uc5ec\uae30 \ub3c4\ub2ec\ud558\uba74 \uae09\uc0ac\uac00 \uc77c\uc5b4\ub098\uc9c0 \uc54a\uc740 \uac83\uc774\ub2e4 \u2014 \uadf8\uac83\ub3c4 \uc0ac\uc2e4\ub300\ub85c \uc54c\ub9b0\ub2e4\nconsole.log(`NOT_KILLED ${JSON.stringify(r)}`)\n"
+const KILL_CHILD_SRC = "/**\n * \ud83d\udd34 **\uc804\uc1a1 \uc9c1\ud6c4 \ud504\ub85c\uc138\uc2a4\uac00 \uc8fd\ub294 \uc0c1\ud669\uc744 \uc2e4\uc81c\ub85c \ub9cc\ub4e0\ub2e4.**\n *    \uc2e4\uc81c `fetchManuscript` \ub97c \uac00\uc9dc \ube0c\ub77c\uc6b0\uc800\ub85c \ub3cc\ub9ac\ub418, send \ubc84\ud2bc\uc744 \ub204\ub974\ub294 \uc21c\uac04\n *    `SIGKILL` \ub85c \uc790\uae30 \uc790\uc2e0\uc744 \uc8fd\uc778\ub2e4. \uc815\ub9ac \ucf54\ub4dc\ub3c4, \ubc18\ud658\ub3c4 \uc5c6\ub2e4 \u2014 \uc9c4\uc9dc \uae09\uc0ac\ub2e4.\n */\nimport { writeFileSync, mkdirSync } from 'node:fs'\nimport { join } from 'node:path'\nimport { fetchManuscript } from './scripts/lib/chatgpt-session.mjs'\nimport { updateQuarantine, recordDelivery } from './scripts/lib/magazine-quarantine.mjs'\n/**\n * \ud83d\udd34 **\ud504\ub86c\ud504\ud2b8\ub294 production \uac83\uc744 \uc4f4\ub2e4.** \uc9c0\ubb38\uc740 \"\ubcf4\ub0bc \uae00\uc790\" \ub85c \ub9cc\ub4e0\ub2e4 \u2014\n *    \uc2dc\ud5d8\uc774 \ub2e4\ub978 \ubb38\uc7a5\uc744 \uc4f0\uba74 \uc9c0\ubb38\uc774 \ub2ec\ub77c\uc838, \ub9c9\uc544\uc57c \ud560 \uac83\uc744 \ubabb \ub9c9\uace0\ub3c4 \ucd08\ub85d\uc774 \ub72c\ub2e4.\n */\nimport { manuscriptPromptText } from './scripts/magazine-webui-runner.mjs'\n\n// \ud83d\udd34 `node -e` \ub294 argv \uc5d0 \uc2a4\ud06c\ub9bd\ud2b8 \uacbd\ub85c\ub97c \ub123\uc9c0 \uc54a\ub294\ub2e4 \u2014 \ub4a4\uc5d0\uc11c \uc13c\ub2e4\nconst [briefPath, outPath, ledger, slug, message] = process.argv.slice(-5)\nvoid message\n\nconst makePage = () => {\n  let typed = ''\n  const composer = {\n    async click() {},\n    async innerText() { return typed },\n  }\n  const sendBtn = {\n    async click() {\n      // \ud83d\udd34 \uc5ec\uae30\uac00 \uc804\uc1a1\uc774\ub2e4. \ub204\ub974\ub294 \uc21c\uac04 \uae09\uc0ac\ud55c\ub2e4.\n      process.kill(process.pid, 'SIGKILL')\n      await new Promise(() => {})\n    },\n  }\n  return {\n    async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},\n    async waitForFunction() {},\n    async evaluate() { return { readOk: true, stop: false, units: [] } },\n    async evaluateHandle() { return { asElement: () => ({ async setInputFiles() {} }) } },\n    locator(sel) {\n      const isSend = /send-button|\ubcf4\ub0b4\uae30|Send/.test(String(sel ?? ''))\n      const l = isSend ? sendBtn : composer\n      return { first: () => l, async all() { return [l] }, ...l }\n    },\n    keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },\n  }\n}\nconst page = makePage()\nconst browser = {\n  contexts: () => [{ pages: () => [], newPage: async () => page }],\n  async close() {},\n}\n\nmkdirSync(join(outPath, '..'), { recursive: true })\nvoid writeFileSync\n\nconst r = await fetchManuscript({\n  briefPath, outPath, promptText: manuscriptPromptText(null), requiredMarkers: [],\n  timeoutMs: 500, connectTimeoutMs: 500,\n  ensureTab: async () => ({ ok: true }),\n  connect: async () => browser,\n  onBeforeSend: async ({ messageFingerprint }) => {\n    updateQuarantine((cur) => ({\n      ...cur,\n      [slug]: recordDelivery(cur[slug], {\n        sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',\n        reason: 'sending', stage: 'send', now: Date.now(), date: '2026-09-28',\n      }),\n    }), ledger)\n    return { ok: true }\n  },\n})\n// \ud83d\udd34 \uc5ec\uae30 \ub3c4\ub2ec\ud558\uba74 \uae09\uc0ac\uac00 \uc77c\uc5b4\ub098\uc9c0 \uc54a\uc740 \uac83\uc774\ub2e4 \u2014 \uadf8\uac83\ub3c4 \uc0ac\uc2e4\ub300\ub85c \uc54c\ub9b0\ub2e4\nconsole.log(`NOT_KILLED ${JSON.stringify(r)}`)\n"
 
 console.log('\n㉖ 전송 직전에 먼저 적는다 — 급사해도 다시 보내지 않는다')
 {
@@ -2934,13 +2977,13 @@ console.log('\n㉗ 선기록에 실패하면 한 글자도 보내지 않는다')
         },
         keyboard: { async insertText(t) { w.typed += String(t ?? '') }, async press() {} },
       }
-      w.browser = { contexts: () => [{ pages: () => [], newPage: async () => page }], async close() {} }
+      w.browser = { contexts: () => [{ pages: () => [], newPage: async () => adaptPage(page) }], async close() {} }
       return w
     }
 
     /** ① 선기록이 실패하면 누르지 않는다 */
     const w1 = makeWorld()
-    const r1 = await SESS27.fetchManuscript({
+    const r1 = await SESS27.fetchManuscript({ ...FAST_FETCH,
       briefPath, outPath: path.join(T, 'out.md'), promptText: '시험', requiredMarkers: ['문장 하나'],
       timeoutMs: 300, connectTimeoutMs: 300,
       ensureTab: async () => ({ ok: true }), connect: async () => w1.browser,
@@ -2956,7 +2999,7 @@ console.log('\n㉗ 선기록에 실패하면 한 글자도 보내지 않는다')
     /** ② 🔴 선기록은 **누르기 전**에 불린다 — 순서를 증명한다 */
     const w2 = makeWorld()
     const order = []
-    await SESS27.fetchManuscript({
+    await SESS27.fetchManuscript({ ...FAST_FETCH,
       briefPath, outPath: path.join(T, 'out2.md'), promptText: '시험', requiredMarkers: ['문장 하나'],
       timeoutMs: 300, connectTimeoutMs: 300,
       ensureTab: async () => ({ ok: true }),
@@ -2995,7 +3038,7 @@ console.log('\n㉗ 선기록에 실패하면 한 글자도 보내지 않는다')
         return p
       },
     }]
-    const r3 = await SESS27.fetchManuscript({
+    const r3 = await SESS27.fetchManuscript({ ...FAST_FETCH,
       briefPath, outPath: path.join(T, 'out3.md'), promptText: '시험', requiredMarkers: ['문장 하나'],
       timeoutMs: 300, connectTimeoutMs: 300,
       ensureTab: async () => ({ ok: true }), connect: async () => b3,
@@ -3110,10 +3153,10 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
       }
       return page
     }
-    const browserDeps = {
+    const browserDeps = { ...FAST_FETCH,
       ensureTab: async () => ({ ok: true }),
       connect: async () => ({
-        contexts: () => [{ pages: () => [], newPage: async () => makePage() }],
+        contexts: () => [{ pages: () => [], newPage: async () => adaptPage(makePage()) }],
         async close() {},
       }),
     }
@@ -3155,12 +3198,12 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
     await WEBUI9.fetchBatch({
       date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: LEDGER3,
       resultPath: path.join(T, 'r5.json'), probeFn: async () => ({ status: 'ok' }),
-      browserDeps: {
+      browserDeps: { ...FAST_FETCH,
         ensureTab: async () => ({ ok: true }),
         connect: async () => ({
           contexts: () => [{
             pages: () => [],
-            newPage: async () => {
+            newPage: async () => adaptPage(await (async () => {
               const p = makePage()
               const loc = p.locator.bind(p)
               p.locator = (sel) => {
@@ -3170,7 +3213,7 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
                   async click() { clicks3 += 1; throw new Error('click: element is not visible') } }) }
               }
               return p
-            },
+            })()),
           }],
           async close() {},
         }),
@@ -3196,12 +3239,12 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
     const before = await WEBUI9.fetchBatch({
       date: DATE, dryRun: false, limit: 0, draftsDir: D, quarantinePath: LEDGER2,
       resultPath: path.join(T, 'r3.json'), probeFn: async () => ({ status: 'ok' }),
-      browserDeps: {
+      browserDeps: { ...FAST_FETCH,
         ensureTab: async () => ({ ok: true }),
         connect: async () => ({
           contexts: () => [{
             pages: () => [],
-            newPage: async () => {
+            newPage: async () => adaptPage(await (async () => {
               const p = makePage()
               // composer 를 못 찾아 보내기 전에 끝난다
               p.waitForSelector = async () => { throw new Error('page.waitForSelector: Timeout 60000ms exceeded.') }
@@ -3212,7 +3255,7 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
                 return { ...l, first: () => ({ ...l.first(), async click() { sends2 += 1 } }) }
               }
               return p
-            },
+            })()),
           }],
           async close() {},
         }),
@@ -3239,6 +3282,7 @@ console.log('\n㉙ 실제 fetchBatch — 보낸 뒤 실패해도 기록을 덮�
  */
 const writeFixture = (file, body) => { fs.writeFileSync(file, body); return file }
 const fixtureHead = (log) => `import fs from 'node:fs'
+${adaptPage.toString()}
 const LOG = ${JSON.stringify(log)}
 const rec = (ev, extra = {}) => fs.appendFileSync(LOG, JSON.stringify({ ev, pid: process.pid, ...extra }) + '\\n')
 export const spawn = (cmd, args) => { rec('spawn', { cmd, args }); return { unref() {} } }
@@ -3421,7 +3465,7 @@ export const probe = async () => { rec('probe'); return { status: 'ok' } }
 export const ensureTab = async () => { rec('ensureTab'); return { ok: true } }
 export const connect = async () => {
   rec('connect')
-  return { contexts: () => [{ pages: () => [], newPage: async () => makePage() }], async close() {} }
+  return { contexts: () => [{ pages: () => [], newPage: async () => adaptPage(makePage()) }], async close() {} }
 }
 function makePage() {
   let typed = ''
@@ -3540,10 +3584,10 @@ console.log('\n㉜ 전송 직전 재판정 — 다른 프로세스가 먼저 보
     fs.writeFileSync(path.join(D, '_runs', DATE, 'run.json'),
       JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'lh-a' }] }))
 
-    const deps = (onTyped, world) => ({
+    const deps = (onTyped, world) => ({ ...FAST_FETCH,
       ensureTab: async () => ({ ok: true }),
       connect: async () => ({
-        contexts: () => [{ pages: () => [], newPage: async () => {
+        contexts: () => [{ pages: () => [], newPage: async () => adaptPage(await (async () => {
           let typed = ''
           return {
             async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
@@ -3555,7 +3599,7 @@ console.log('\n㉜ 전송 직전 재판정 — 다른 프로세스가 먼저 보
             },
             keyboard: { async insertText(t) { typed += String(t ?? ''); onTyped(typed) }, async press() {} },
           }
-        } }],
+        })()) }],
         async close() {},
       }),
     })
@@ -3619,10 +3663,12 @@ console.log('\n㉝ 동시 2프로세스 — 같은 slug·같은 지문은 정확
       fs.mkdirSync(BAR)
       const FX = writeFixture(path.join(T, `${name}-fx.mjs`), `${fixtureHead(LOG)}
 export const quarantinePath = ${JSON.stringify(L)}
+// 🔴 이 무대의 승자는 release 파일을 최대 60초 기다린다 — 응답 관찰 한도가 그보다 길어야 한다
+export const fetchTiming = { pollMs: 5, stablePolls: 2, timeoutMs: 90000 }
 export const probe = async () => { rec('probe'); return { status: 'ok' } }
 export const ensureTab = async () => ({ ok: true })
 export const connect = async () => ({
-  contexts: () => [{ pages: () => [], newPage: async () => {
+  contexts: () => [{ pages: () => [], newPage: async () => adaptPage(await (async () => {
     let typed = ''
     return {
       async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
@@ -3635,7 +3681,7 @@ export const connect = async () => ({
       },
       keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
     }
-  } }],
+  })()) }],
   async close() {},
 })
 `)
@@ -3807,7 +3853,7 @@ export const quarantinePath = ${JSON.stringify(L)}
 export const probe = async () => { rec('probe'); return { status: 'ok' } }
 export const ensureTab = async () => ({ ok: true })
 export const connect = async () => ({
-  contexts: () => [{ pages: () => [], newPage: async () => {
+  contexts: () => [{ pages: () => [], newPage: async () => adaptPage(await (async () => {
     let typed = ''
     return {
       async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
@@ -3820,7 +3866,7 @@ export const connect = async () => ({
       },
       keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
     }
-  } }],
+  })()) }],
   async close() {},
 })
 `)
@@ -3927,10 +3973,10 @@ console.log('\n㉟ 예약은 주인만 지우고 · 실패한 쪽은 남의 예�
       JSON.stringify({ status: 'COMPLETED', selected: [], reusable: [{ slug: 'rs-a' }] }))
     const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
     check('  ㉟ 합성 원고가 실제 관문을 통과한다 (전제)', MG35.validateManuscript(GOOD).ok, JSON.stringify(MG35.validateManuscript(GOOD).reasons ?? []))
-    const deps = ({ onTyped = () => {}, onAwait = () => {}, ok }, world) => ({
+    const deps = ({ onTyped = () => {}, onAwait = () => {}, ok }, world) => ({ ...FAST_FETCH,
       ensureTab: async () => ({ ok: true }),
       connect: async () => ({
-        contexts: () => [{ pages: () => [], newPage: async () => {
+        contexts: () => [{ pages: () => [], newPage: async () => adaptPage(await (async () => {
           let typed = ''
           return {
             async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
@@ -3943,7 +3989,7 @@ console.log('\n㉟ 예약은 주인만 지우고 · 실패한 쪽은 남의 예�
             },
             keyboard: { async insertText(t) { typed += String(t ?? ''); onTyped(typed) }, async press() {} },
           }
-        } }],
+        })()) }],
         async close() {},
       }),
     })
@@ -4026,6 +4072,8 @@ async function regenStage(T, name, { slug = 'rr-a', slugs = [slug], ledgerSeed =
   const GOOD = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
   const FX = writeFixture(path.join(T, `${name}-fx.mjs`), `${fixtureHead(LOG)}
 export const quarantinePath = ${JSON.stringify(L)}
+// 🔴 이 무대의 승자는 release 파일을 최대 60초 기다린다 — 응답 관찰 한도가 그보다 길어야 한다
+export const fetchTiming = { pollMs: 5, stablePolls: 2, timeoutMs: 90000 }
 export const probe = async () => {
   rec('probe')
   ${probeHook}
@@ -4036,7 +4084,7 @@ export const probe = async () => {
 }
 export const ensureTab = async () => ({ ok: true })
 export const connect = async () => ({
-  contexts: () => [{ pages: () => [], newPage: async () => {
+  contexts: () => [{ pages: () => [], newPage: async () => adaptPage(await (async () => {
     let typed = ''
     return {
       async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
@@ -4059,7 +4107,7 @@ export const connect = async () => ({
       },
       keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
     }
-  } }],
+  })()) }],
   async close() {},
 })
 `)
@@ -4667,10 +4715,10 @@ console.log('\n㊵ 같은 날 옛 빈 계획 — 인식 가능한 것만 보존 
 
   // A → 실제 fetchBatch: 안전하게 처리 가능한 slug 만 보낸다 (menopause 1건) · 기존 전송·원고 재전송 0
   const sendsA = []
-  const fakeBrowser = {
+  const fakeBrowser = { ...FAST_FETCH,
     ensureTab: async () => ({ ok: true }),
     connect: async () => ({
-      contexts: () => [{ pages: () => [], newPage: async () => {
+      contexts: () => [{ pages: () => [], newPage: async () => adaptPage(await (async () => {
         let typed = ''
         return {
           async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
@@ -4682,7 +4730,7 @@ console.log('\n㊵ 같은 날 옛 빈 계획 — 인식 가능한 것만 보존 
           },
           keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
         }
-      } }],
+      })()) }],
       async close() {},
     }),
   }
@@ -4837,6 +4885,260 @@ syncBuiltinESMExports()
     `A ${oA} · B ${oB} · 보존 ${pF2.length}`)
 
   for (const s of [A, B, C, C2, D0, E, F, F2]) fs.rmSync(s.T, { recursive: true, force: true })
+}
+
+console.log('\n㊶ 응답 회수 — 새로 생긴 assistant 응답 하나 · 끝남 · 안정 (실측 DOM 골격)')
+{
+  /**
+   * 🔴 **2026-09-28 실측.** ChatGPT 가 코드블록을 `<pre>` 없이(`[data-markdown-copy="code-block"]` 안의 `code`)
+   *    렌더하고 `data-message-author-role` 도 없앴다. 옛 판정은 원고가 다 왔는데도 영원히 못 알아봤다.
+   *    아래 트리는 그날 자동화 Chrome 에서 **읽기 전용으로 떠 온 골격**(태그·속성)을 그대로 옮긴 것이다.
+   *    `readConversationDom` 은 `children`·`parentElement`·`tagName`·`getAttribute`·`textContent` 만 쓴다 —
+   *    이 작은 트리가 같은 API 를 준다. 판독 함수는 production 그대로다.
+   */
+  const RESP = await import('./lib/chatgpt-response.mjs')
+  const SESS41 = await import('./lib/chatgpt-session.mjs')
+  const MG41 = await import('./lib/magazine-manuscript-guard.mjs')
+  const el = (tag, attrs = {}, ...kids) => {
+    const node = {
+      tagName: tag.toUpperCase(), _attrs: attrs, _kids: [], parentElement: null,
+      getAttribute(n) { return Object.prototype.hasOwnProperty.call(this._attrs, n) ? String(this._attrs[n]) : null },
+      get children() { return this._kids.filter((k) => typeof k !== 'string') },
+      get textContent() { return this._kids.map((k) => (typeof k === 'string' ? k : k.textContent)).join('') },
+    }
+    for (const k of kids.flat()) {
+      if (k === null || k === undefined || k === false) continue
+      node._kids.push(k)
+      if (typeof k !== 'string') k.parentElement = node
+    }
+    return node
+  }
+  const docOf = (...turns) => ({ body: el('body', {}, el('main', {}, ...turns)) })
+  const MS = `---\ntitle: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body\n---\n\n## 첫 문단\n${'갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40)}\n\n[CTA] 이야기 나눠요\n`
+  check('  ㊶ 시험 원고가 실제 관문을 통과한다 (전제)', MG41.validateManuscript(MS).ok, JSON.stringify(MG41.validateManuscript(MS).reasons ?? []))
+
+  /** 새 DOM 한 턴 (실측 골격): 사용자 단위 + assistant 단위 + 턴 액션 버튼 */
+  const userUnit = (uid) => el('div', { class: 'group/user-message flex flex-col items-end gap-2', 'data-chatgpt-search-unit-key': 'fallback-turn-0:0:user', 'data-chatgpt-search-message-ids': uid },
+    el('div', { 'data-user-message-bubble': 'true' }, el('div', { class: 'whitespace-pre-wrap' }, '아래 BRIEF 시작/끝 사이의 지시를 따라…', el('code', {}, '[CTA] href | 문구')), el('button', { 'aria-label': '메시지 복사' })))
+  const codeBlockContent = (text) => el('div', { 'data-selected-text-overlay-target': '_r_17_', 'data-markdown-text-style': 'assistant-message', class: 'MarkdownRoot-rZKhxa' },
+    el('div', { 'data-markdown-copy': 'code-block', class: 'relative w-full' },
+      el('div', { 'data-markdown-copy': 'exclude', class: 'flex items-center' }, el('div', {}, 'Markdown'), el('span', {}, el('button', { 'aria-label': '복사' }))),
+      el('div', {}, el('code', { class: 'whitespace-pre! block' }, text))))
+  const renderedContent = () => el('div', { 'data-markdown-text-style': 'assistant-message', class: 'MarkdownRoot-rZKhxa' },
+    el('hr', {}),
+    el('h2', {}, 'title: 시험 원고\ndescription: 갱년기 몸의 변화를 우리 또래와 함께 살펴보는 시험 원고입니다\ncluster: menopause-body'),
+    el('h2', {}, '첫 문단'),
+    el('p', {}, '갱년기 몸의 변화를 천천히 살펴보고 우리 또래의 이야기를 나눕니다. '.repeat(40).trim()),
+    el('p', {}, '[CTA] 이야기 나눠요'))
+  const asstUnit = (aid, content, n = 2) => el('div', { 'data-content-search-unit-key': `fallback-turn-0:${n}:assistant`, 'data-chatgpt-search-unit-key': `fallback-turn-0:${n}:assistant`, 'data-chatgpt-search-message-ids': `${aid} ${aid}` },
+    el('h4', { class: 'sr-only m-0 select-none', 'data-conversation-role': 'assistant' }, 'ChatGPT 답변:'),
+    el('div', { class: 'group flex min-w-0 flex-col', 'data-chatgpt-selection-conversation-id': 'conv-1', 'data-chatgpt-selection-message-id': aid }, content))
+  const actions = () => el('div', {}, el('span', {}, el('button', { 'aria-label': '복사' })), el('button', { 'aria-label': '응답 다시 생성' }))
+  const turn = (key, ...kids) => el('div', { 'data-turn-key': key }, el('div', { class: 'flex flex-col gap-1.5', 'data-content-search-turn-key': 'fallback-turn-0' }, ...kids))
+  const stopBtn = () => el('div', {}, el('button', { 'aria-label': '스트리밍 중지', 'data-testid': 'stop-button' }))
+
+  // ── 판독: 새 DOM 코드블록 ──
+  const sNew = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a1', codeBlockContent(MS)), actions())))
+  const aNew = sNew.units.find((u) => u.role === 'assistant')
+  check('🔴 ㊶ 새 DOM — pre 없이 렌더된 코드블록의 원문을 그대로 읽는다 · 완료 액션 인식',
+    aNew?.id === 'a1' && aNew.codeBlocks.length === 1 && aNew.codeBlocks[0] === MS && aNew.hasActions === true,
+    JSON.stringify({ id: aNew?.id, blocks: aNew?.codeBlocks.length, actions: aNew?.hasActions }))
+  const exNew = RESP.extractManuscript(aNew)
+  check('  ㊶ 새 DOM — "ChatGPT 답변:" · "Markdown" 머리표가 원고에 섞이지 않는다', exNew.ok && exNew.text === MS && exNew.via === 'code-block', exNew.via)
+
+  // ── 판독: 옛 DOM ──
+  const oldDoc = docOf(el('div', { 'data-message-author-role': 'assistant', 'data-message-id': 'o1' }, el('div', { class: 'markdown prose' }, el('pre', {}, el('code', {}, MS)))))
+  const aOld = RESP.readConversationDom(oldDoc).units.find((u) => u.role === 'assistant')
+  check('🔴 ㊶ 옛 DOM (data-message-author-role · pre code) 도 읽는다', aOld?.id === 'o1' && RESP.extractManuscript(aOld).text === MS, aOld?.id)
+
+  // ── 판독: 코드블록 없음 (렌더된 마크다운) ──
+  const aMd = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a2', renderedContent()), actions()))).units.find((u) => u.role === 'assistant')
+  const exMd = RESP.extractManuscript(aMd)
+  check('🔴 ㊶ 코드블록 없는 응답 — 렌더된 마크다운을 원문으로 되돌린다 (frontmatter 복원)',
+    exMd.ok && exMd.via === 'markdown' && exMd.text.startsWith('---\ntitle: 시험 원고\ndescription:') && /\n---\n\n## 첫 문단\n/.test(exMd.text) && exMd.text.includes('[CTA] 이야기 나눠요'),
+    JSON.stringify(String(exMd.text ?? exMd.why).slice(0, 90)))
+  // 🔴 원문을 못 꺼냈으면 관문에 빈 문자열을 넣어 FAIL 로 남긴다 — 예외로 이후 시험을 끊지 않는다
+  check('🔴 ㊶ 되돌린 원문이 실제 원고 관문을 통과한다 (frontmatter·H2·CTA)', exMd.ok && MG41.validateManuscript(exMd.text).ok,
+    JSON.stringify(MG41.validateManuscript(exMd.text ?? '').reasons ?? []))
+
+  // ── 관찰기: 부분 생성 → 끝 → 안정 ──
+  const empty = RESP.readConversationDom(docOf(turn('u0', userUnit('u0'))))
+  const w1 = RESP.createResponseWatch(empty, { stablePolls: 2 })
+  const partial = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a3', codeBlockContent(MS.slice(0, 400)))), stopBtn()))
+  const o1 = w1.observe(partial)
+  const full = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a3', codeBlockContent(MS)), actions())))
+  const o2 = w1.observe(full)
+  const o3 = w1.observe(full)
+  check('🔴 ㊶ 부분 생성(중지 버튼) 중에는 끝나지 않는다 · 끝난 뒤에도 연속 동일 관찰 전에는 끝나지 않는다',
+    !o1.done && o1.phase === 'generating' && !o2.done && o3.done && o3.text === MS,
+    JSON.stringify([o1.phase, o2.phase, o3.done]))
+  const w1b = RESP.createResponseWatch(empty, { stablePolls: 2 })
+  const noActions = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a3', codeBlockContent(MS)))))
+  w1b.observe(noActions)
+  check('  ㊶ 새 DOM 에서 완료 액션이 아직 없으면 끝난 것으로 보지 않는다', !w1b.observe(noActions).done, '끝났다고 봤다')
+  // 🔴 중지 버튼만이 가르는 반례 — 원문이 같고 완료 액션도 보이는데 생성 중 표시가 남아 있다
+  const w1c = RESP.createResponseWatch(empty, { stablePolls: 2 })
+  const stillStreaming = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('a3', codeBlockContent(MS)), actions()), stopBtn()))
+  const s1c = [w1c.observe(stillStreaming), w1c.observe(stillStreaming), w1c.observe(stillStreaming)]
+  const oldUser = () => el('div', { 'data-message-author-role': 'user', 'data-message-id': 'ou0' }, '질문')
+  const w1d = RESP.createResponseWatch(RESP.readConversationDom(docOf(oldUser())), { stablePolls: 2 })
+  const oldStreaming = RESP.readConversationDom(docOf(oldUser(),
+    el('div', { 'data-message-author-role': 'assistant', 'data-message-id': 'o2' }, el('div', { class: 'markdown prose' }, el('pre', {}, el('code', {}, MS)))), stopBtn()))
+  const s1d = [w1d.observe(oldStreaming), w1d.observe(oldStreaming), w1d.observe(oldStreaming)]
+  check('🔴 ㊶ 생성 중 표시(중지 버튼)가 남아 있으면 원문이 같고 완료 액션이 보여도 끝나지 않는다 (새 DOM · 옛 DOM)',
+    s1c.every((o) => !o.done && o.phase === 'generating') && s1d.every((o) => !o.done),
+    JSON.stringify([s1c.map((o) => o.done), s1d.map((o) => o.done)]))
+
+  // ── 관찰기: 기존 응답 오인 ──
+  const withOld = RESP.readConversationDom(docOf(turn('u0', userUnit('u0'), asstUnit('a0', codeBlockContent(MS)), actions())))
+  const w2 = RESP.createResponseWatch(withOld, { stablePolls: 2 })
+  const r2a = w2.observe(withOld)
+  const r2b = w2.observe(withOld)
+  check('🔴 ㊶ 기준선에 있던 (완성된) 응답을 새 응답으로 읽지 않는다', !r2a.done && !r2b.done && r2b.phase === 'waiting', r2b.phase)
+  const withNew = RESP.readConversationDom(docOf(
+    turn('u0', userUnit('u0'), asstUnit('a0', codeBlockContent('---\n옛 원고\n'), 2), actions()),
+    turn('u1', userUnit('u1'), asstUnit('a1', codeBlockContent(MS), 4), actions())))
+  w2.observe(withNew)
+  const r2c = w2.observe(withNew)
+  check('🔴 ㊶ 새로 생긴 응답만 고른다 (이전 응답 무시)', r2c.done && r2c.text === MS && r2c.messageId === 'a1', r2c.messageId)
+
+  // ── 관찰기: 판정 불가 ──
+  const two = RESP.readConversationDom(docOf(turn('u1', userUnit('u1'), asstUnit('x1', codeBlockContent(MS), 2), asstUnit('x2', codeBlockContent(MS), 3), actions())))
+  const r3 = RESP.createResponseWatch(empty, { stablePolls: 2 }).observe(two)
+  const noId = { readOk: true, stop: false, units: [{ id: null, role: 'assistant', source: 'old', codeBlocks: [MS], markdown: '', hasActions: false }] }
+  const r4 = RESP.createResponseWatch(empty, { stablePolls: 2 }).observe(noId)
+  const r5 = RESP.createResponseWatch(withOld, { stablePolls: 2 }).observe(full)
+  check('🔴 ㊶ 새 응답 2개 · 식별자 없음 · 기준선 응답 소실 → 판정 불가(저장 0)',
+    r3.abort && r3.code === 'response_ambiguous' && r4.abort && r5.abort,
+    JSON.stringify([r3.code, r4.code, r5.code]))
+
+  // ── 통합: 실제 fetchManuscript 가 실제 readConversationDom 을 가짜 DOM 위에서 돌린다 ──
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-capture-'))
+  try {
+    const briefPath = path.join(T, 'brief.md')
+    fs.writeFileSync(briefPath, '# brief\n\n본문 지시\n')
+    const pageWith = (frames) => {
+      let typed = ''
+      let sent = false
+      let i = 0
+      const w = { sends: 0 }
+      const page = {
+        async close() {}, async goto() {}, async waitForSelector() {}, async waitForTimeout() {},
+        url: () => 'https://chatgpt.com/c/conv-1?x=1',
+        async evaluate(fn) {
+          if (!sent) return fn(docOf(frames.before ?? turn('u0', userUnit('u0'))))
+          const f = frames.after[Math.min(i, frames.after.length - 1)]; i += 1
+          return fn(f)
+        },
+        locator(sel) {
+          const isSend = /send-button|보내기|Send/.test(String(sel ?? ''))
+          const l = { async click() { if (isSend) { sent = true; w.sends += 1 } }, async innerText() { return typed } }
+          return { first: () => l, ...l }
+        },
+        keyboard: { async insertText(t) { typed += String(t ?? '') }, async press() {} },
+      }
+      w.deps = { ensureTab: async () => ({ ok: true }), connect: async () => ({ contexts: () => [{ pages: () => [], newPage: async () => page }], async close() {} }) }
+      return w
+    }
+    const baseDoc = turn('u0', userUnit('u0'))
+    const mdFrames = {
+      before: baseDoc,
+      after: [
+        docOf(turn('u1', userUnit('u1'), asstUnit('m1', el('div', { 'data-markdown-text-style': 'assistant-message' }, el('hr', {}))), stopBtn())),
+        docOf(turn('u1', userUnit('u1'), asstUnit('m1', renderedContent()), actions())),
+      ],
+    }
+    const W1 = pageWith(mdFrames)
+    const out1 = path.join(T, 'out1.md')
+    const f1 = await SESS41.fetchManuscript({ briefPath, outPath: out1, promptText: '시험', validate: MG41.validateManuscript,
+      pollMs: 1, stablePolls: 2, timeoutMs: 2000, ...W1.deps })
+    check('🔴 ㊶ [통합] 코드블록 없는 일반 마크다운 응답을 회수해 저장한다 (via markdown · 관문 통과)',
+      f1.ok && f1.via === 'markdown' && fs.existsSync(out1) && fs.readFileSync(out1, 'utf8').startsWith('---\ntitle: 시험 원고') && W1.sends === 1,
+      `${f1.reason ?? 'ok'} · via ${f1.via} · send ${W1.sends}`)
+    check('  ㊶ [통합] 대화 주소를 남긴다 (쿼리 제거)', f1.conversationUrl === 'https://chatgpt.com/c/conv-1', String(f1.conversationUrl))
+
+    const W2 = pageWith({ before: baseDoc, after: [docOf(turn('u1', userUnit('u1'), asstUnit('m2', codeBlockContent(MS.slice(0, 300)))), stopBtn())] })
+    const out2 = path.join(T, 'out2.md')
+    const f2 = await SESS41.fetchManuscript({ briefPath, outPath: out2, promptText: '시험', validate: MG41.validateManuscript,
+      pollMs: 1, stablePolls: 2, timeoutMs: 60, ...W2.deps })
+    check('🔴 ㊶ [통합] 부분 생성에서 끝나면 저장 0 · response_timeout · sent=true (전송불명 HOLD)',
+      !f2.ok && f2.reason === 'response_timeout' && f2.sent === true && !fs.existsSync(out2), `${f2.reason} · sent ${f2.sent}`)
+
+    const W3 = pageWith({ before: turn('u0', userUnit('u0'), asstUnit('p0', codeBlockContent(MS)), actions()),
+      after: [docOf(turn('u0', userUnit('u0'), asstUnit('p0', codeBlockContent(MS)), actions()))] })
+    const out3 = path.join(T, 'out3.md')
+    const f3 = await SESS41.fetchManuscript({ briefPath, outPath: out3, promptText: '시험', validate: MG41.validateManuscript,
+      pollMs: 1, stablePolls: 2, timeoutMs: 60, ...W3.deps })
+    check('🔴 ㊶ [통합] 이전 대화의 완성된 응답을 이번 원고로 저장하지 않는다', !f3.ok && !fs.existsSync(out3), `${f3.reason}`)
+
+    const W4 = pageWith({ before: baseDoc, after: [docOf(turn('u1', userUnit('u1'), asstUnit('q1', codeBlockContent(MS), 2), asstUnit('q2', codeBlockContent(MS), 3), actions()))] })
+    const f4 = await SESS41.fetchManuscript({ briefPath, outPath: path.join(T, 'out4.md'), promptText: '시험',
+      pollMs: 1, stablePolls: 2, timeoutMs: 2000, ...W4.deps })
+    const FK41 = await import('./lib/magazine-failure-kind.mjs')
+    check('🔴 ㊶ [통합] 새 응답을 가릴 수 없으면 저장 0 · 전송불명으로 분류된다',
+      !f4.ok && f4.reason === 'response_ambiguous' && f4.sent === true
+        && FK41.classifyFailure({ code: f4.reason, stage: f4.stage, sent: f4.sent }).kind === 'DELIVERY_UNCERTAIN',
+      `${f4.reason}`)
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
+}
+
+console.log('\n㊷ 등록 경로의 회수 결과 — 구조화 결과가 정본 · HOLD·전송불명은 attempts 0')
+{
+  /**
+   * 🔴 **2026-09-28 실측.** drive 가 회수 자식의 **사람용 출력**("⏸ HOLD — 이미 보낸 글이다")을 사유로 넘겼고,
+   *    분류기가 CONTENT 로 추정해 원고 잘못이 아닌 4건이 attempts +1 · 7일 격리에 걸렸다.
+   *    실제 drive → 실제 ready 로 돌리고, 자식 자리는 **자식이 실제로 쓰는 결과 파일**을 적는다.
+   */
+  const READY42 = await import('./magazine-auto-register-ready.mjs')
+  const FR42 = await import('./lib/magazine-fetch-result.mjs')
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'm3a-fetch-class-'))
+  try {
+    const run = (name, childRow, { code = 1, noFile = false, broken = false } = {}) => {
+      const L = path.join(T, `${name}.json`)
+      saveQuarantine({ [SLUG]: { attempts: 2, regenCalls: 0 } }, L)
+      const deps = makeDeps({ qaFailsUntil: 0, ledgerPath: L, packetDir: path.join(T, `${name}-p`), calls: [] })
+      deps.progress = () => ({ hasBrief: true, hasReview: true, hasDraftMd: false, hasArticleTs: false })
+      deps.fetchResultDir = T
+      const baseRun = deps.run
+      deps.run = (file, args, opts) => {
+        if (path.basename(String(file)) === 'magazine-webui-runner.mjs' && args.includes('--result-json')) {
+          const rj = args[args.indexOf('--result-json') + 1]
+          if (broken) fs.writeFileSync(rj, '{ 깨진')
+          else if (!noFile) FR42.writeFetchResults(rj, { mode: 'fetch-one', results: [{ slug: SLUG, ...childRow }], sentTotal: childRow.sent === true ? 1 : 0 })
+          return { code, stdout: '⏸ HOLD — 이미 보낸 글이다', stderr: '', json: null }
+        }
+        return baseRun(file, args, opts)
+      }
+      const report = { blocked: [], done: [] }
+      const r = READY42.processCandidates({ write: true, wantPr: false, limit: 1, report, quarantinePath: L,
+        scanFn: () => ({ source: 'fixture', pool: 1, eligible: [{ slug: SLUG, item: FIXTURE_QUEUE[0], progress: { hasBrief: true, hasReview: true, hasDraftMd: false } }], skipped: [], quarantined: [] }),
+        driveFn: (sl, o) => drive(sl, o, deps) })
+      const res = r.results[0] ?? {}
+      const e = readQuarantine(L).store[SLUG] ?? {}
+      return { res, e, msg: (res.blockedBy ?? []).map((b) => `${b.code}: ${b.message}`).join(' | ') }
+    }
+    const held = run('held', { status: 'held', reason: 'DELIVERY_UNCERTAIN_HOLD', stage: 'gate', sent: false, errorDetail: '이미 보낸 글이다' })
+    check('🔴 ㊷ HOLD 결과 → [DELIVERY_UNCERTAIN] · attempts 증가 0 · 7일 CONTENT 격리 0',
+      /\[DELIVERY_UNCERTAIN\]/.test(held.msg) && held.e.attempts === 2 && held.e.kind === 'DELIVERY_UNCERTAIN',
+      `attempts ${held.e.attempts} · kind ${held.e.kind} · ${held.msg.slice(0, 80)}`)
+    const tout = run('timeout', { status: 'failed', reason: 'response_timeout', stage: 'await-response', sent: true })
+    check('🔴 ㊷ 보낸 뒤 응답 timeout → DELIVERY_UNCERTAIN · attempts 증가 0 · sent 보존',
+      tout.e.attempts === 2 && tout.e.kind === 'DELIVERY_UNCERTAIN' && tout.e.sent === true, `attempts ${tout.e.attempts} · kind ${tout.e.kind} · sent ${tout.e.sent}`)
+    const miss = run('missing', {}, { code: 0, noFile: true })
+    check('🔴 ㊷ 결과 파일 누락 → CONTENT 로 추정하지 않는다 (전송불명 · sent 모름 · attempts 0)',
+      /FETCH_RESULT_MISSING/.test(miss.msg) && miss.e.attempts === 2 && miss.e.kind === 'DELIVERY_UNCERTAIN' && miss.e.sent === null,
+      `attempts ${miss.e.attempts} · kind ${miss.e.kind} · sent ${miss.e.sent}`)
+    const brk = run('broken', {}, { broken: true })
+    check('🔴 ㊷ 결과 파일 손상 → 같은 fail-closed', brk.e.attempts === 2 && brk.e.kind === 'DELIVERY_UNCERTAIN', `attempts ${brk.e.attempts} · kind ${brk.e.kind}`)
+    const content = run('content', { status: 'failed', reason: 'invalid_manuscript', stage: 'await-response', sent: true })
+    void content
+    const cont2 = run('content2', { status: 'failed', reason: 'markers_missing', stage: 'await-response', sent: false })
+    check('  ㊷ [대조군] 전송 안 된 진짜 내용 실패는 CONTENT 로 센다 (죽은 분류가 아니다)',
+      cont2.e.attempts === 3 && cont2.e.kind === 'CONTENT', `attempts ${cont2.e.attempts} · kind ${cont2.e.kind}`)
+    const okRun = run('ok', { status: 'ok', sent: true }, { code: 0 })
+    check('  ㊷ 성공 결과는 회수로 친다 (결과 파일 행 · status ok)', !/FETCH_/.test(okRun.msg) && (okRun.res.steps ?? []).some((s) => s.stage === 'draft' && s.status === 'ok'),
+      (okRun.res.steps ?? []).map((s) => `${s.stage}:${s.status}`).join(' '))
+  } finally { fs.rmSync(T, { recursive: true, force: true }) }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '🔴'} ${pass} PASS · ${fail} FAIL`)
