@@ -52,6 +52,8 @@ const run = (cmd: string, args: readonly string[], cwd = runtimeRoot): { ok: boo
   }
 }
 const real = (path: string): string | null => { try { return realpathSync(path) } catch { return null } }
+const samePlist = (installed: string | null, expected: string): boolean =>
+  installed !== null && installed.trimEnd() === expected.trimEnd()
 const plistPath = (label: string): string => join(agentDir, `${label}.plist`)
 const loaded = (label: string): boolean => run('launchctl', ['print', `${domain}/${label}`], home).ok
 const running = (label: string): boolean => {
@@ -124,14 +126,14 @@ const expectedSupply = render(supplyTemplate, {
   npx: npxPath, node: process.execPath, repo: runtimeRoot, nodebin: dirname(process.execPath), logdir: logDir,
 })
 const installedSupply = readInstalled(agentDir, supplyLabel)
-if (installedSupply !== expectedSupply) problems.push('공급 job이 stage consumer 배선이 아니다 — 이 runtime으로 deploy 먼저')
+if (!samePlist(installedSupply, expectedSupply)) problems.push('공급 job이 stage consumer 배선이 아니다 — 이 runtime으로 deploy 먼저')
 
 for (const label of desired.keys()) {
   if (running(label)) problems.push(`${label}이 실행 중이다 — 회차 종료 뒤 다시 실행`)
 }
 
 console.log(`   runtime ${head.ok ? head.out.slice(0, 7) : '읽기 실패'} · publish ${publishMode}`)
-console.log(`   supply consumer ${installedSupply === expectedSupply ? '✅' : '🔴'}`)
+console.log(`   supply consumer ${samePlist(installedSupply, expectedSupply) ? '✅' : '🔴'}`)
 for (const [label, xml] of desired) {
   const current = readInstalled(agentDir, label)
   console.log(`   ${label.padEnd(42)} ${current === null ? '신규' : current === xml ? '최신' : '교체'}`)

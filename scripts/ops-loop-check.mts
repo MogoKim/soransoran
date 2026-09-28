@@ -320,8 +320,10 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
 
   const installer = readFileSync('scripts/ops-loop-install.mts', 'utf-8')
   check('🔴 공식 설치기는 runtime/pin·공급 consumer·실행 중 job을 모두 확인한다',
-    /runtime HEAD와 pin/.test(installer) && /installedSupply !== expectedSupply/.test(installer)
+    /runtime HEAD와 pin/.test(installer) && /samePlist\(installedSupply, expectedSupply\)/.test(installer)
     && /running\(label\)/.test(installer))
+  check('🔴 runtime deploy가 제거한 plist 끝 개행만으로 consumer를 거절하지 않는다',
+    /installed\.trimEnd\(\) === expected\.trimEnd\(\)/.test(installer))
   check('🔴 공식 설치기는 설치 전 snapshot을 남기고 검증 실패면 자동 rollback한다',
     /manifest\.json/.test(installer) && /설치 검증 실패/.test(installer) && /restore\(backupDir\)/.test(installer))
   const stageSwitch = readFileSync('scripts/stage-controller-switch.mts', 'utf-8')
