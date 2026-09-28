@@ -5,6 +5,7 @@
  *    `d100:readiness` · `ops:status` · `stage:controller` 가 **같은 관측**을 쓴다 —
  *    화면마다 따로 읽으면 한쪽은 healthUnknown, 한쪽은 ready 인 날이 다시 온다.
  */
+import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -15,7 +16,6 @@ import {
   type LaunchdRunInfo,
 } from '../../src/lib/job-health'
 import { RUN_FILE_RE } from '../../src/lib/supply-process'
-import { printJob } from './launchd-observe.mjs'
 
 /** 🔴 공급 회차 기록이 사는 곳 — runtime 의 `.microseed-data` 가 가리키는 정본 디렉터리 */
 export const SUPPLY_DATA_DIR = join(
@@ -66,6 +66,27 @@ export type JobObservation = {
   run: LaunchdRunInfo
   /** launchd 기록만으로 본 실패 여부 */
   launchdFailing: boolean | null
+}
+
+/**
+ * 🔴 **`launchctl print gui/<uid>/<label>` 한 번 — read-only.** 결과를 그대로 돌려준다.
+ *    판정은 정본 `judgeJobState` · `parseLaunchdRunInfo` 가 한다. 명령을 못 돌렸으면 `exitCode: null`.
+ *    (`launchd-observe` 는 관제용 `list` 하나만 부르도록 잠겨 있어 여기 둔다)
+ */
+export function printJob(label: string): { exitCode: number | null; stdout: string; stderr: string } {
+  const uid = process.getuid?.() ?? 0
+  try {
+    const stdout = execFileSync('launchctl', ['print', `gui/${uid}/${label}`], {
+      encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return { exitCode: 0, stdout, stderr: '' }
+  } catch (e) {
+    const err = e as { status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer }
+    return {
+      exitCode: typeof err.status === 'number' ? err.status : null,
+      stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? ''),
+    }
+  }
 }
 
 export type ObserveIo = {

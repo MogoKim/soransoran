@@ -29,8 +29,7 @@ import { kstDateString } from '../src/lib/release-canary'
 import { CONTROLLER_ENV } from '../src/lib/stage-decision-store'
 import { readStageDecision } from '../src/lib/stage-decision-repo'
 import { KEEP_AWAKE_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
-import { observeJob, readProcessRuns, type JobObservation } from './lib/runner-health.mjs'
-import { printJob } from './lib/launchd-observe.mjs'
+import { observeJob, printJob, readProcessRuns, type JobObservation } from './lib/runner-health.mjs'
 import { LOG_DIR, fillDbConnection, readCostSignals, readEnvKeys, tailFile } from './lib/ops-signals.mjs'
 
 const JSON_OUT = process.argv.slice(2).includes('--json')
