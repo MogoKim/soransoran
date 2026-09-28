@@ -8,9 +8,11 @@
  *   를 **둘 다** 돌리고, 하나라도 결함이면 결함 yes 로 기록한다(`recordCombinedAudit`).
  *   yes 가 기록되면 다음 도장·발행이 각자의 트랜잭션 안에서 닫힌다.
  *
- * 🔴 fail-closed — 근거·카드를 못 읽었거나 모델이 실패·오답 모양이면 그 감사는 yes 다(대기로 두지 않는다).
- * 🔴 유료 의미 감사는 **기본 OFF**(`SORAN_AUTO_READY_SEMANTIC_PAID`). 꺼져 있으면 측정 불가 → yes 다.
- *    켜도 공급 장부 예산 env 가 없으면 요청 전에 막힌다.
+ * 🔴 결함 yes 는 **실제 결함**(의미 감사가 본 콘텐츠 결함 · 규칙 감사 결함 · 무결성)에만 확정한다.
+ *    측정하지 못한 감사(유료 OFF · 예산 · 시간 초과 · HTTP · 파싱 · 정산 …)는 **재시도 가능 실패**로 남고
+ *    (defect null) 그동안 자동 도장·발행이 닫힌다. 다음 회차가 성공하면 같은 행을 확정한다.
+ * 🔴 유료 의미 감사는 **기본 OFF**(`SORAN_AUTO_READY_SEMANTIC_PAID`) · 감사 전용 예산 env 가 없으면 요청 0.
+ * 🔴 한 행이 실패해도 나머지 행을 계속 본다. 재시도 가능 실패·행 오류가 있으면 **exit 2** 와 원인 코드를 남긴다.
  * 🔴 판정 전 감사가 0 이면 **제공사를 만들지도 부르지도 않고** 끝난다.
  * 🔴 전용 잠금 — 같은 맥에서 두 회차가 겹치면 뒤 회차는 물러난다(exit 0). 잠금이 없어도 결과는
  *    감사마다 정확히 하나다 — 저장 경계가 `defect IS NULL` 일 때만 쓴다.
@@ -85,6 +87,15 @@ async function main(): Promise<number> {
     if (r.kind === 'off') { console.log('스위치가 꺼져 있다'); return 0 }
     console.log(`   AUDIT_ROUND pending=${r.pending} semanticCalls=${r.semanticCalls} · ${[...r.tally].map(([k, v]) => `${k} ${v}`).join(' · ') || '기록 0'}`)
     if (choice.session !== null) console.log(choice.session.describe())
+    /**
+     * 🔴 **재시도 가능 실패·행 오류는 성공 종료로 보이지 않게 한다** — launchd 로그와 종료 코드로 사람이 본다.
+     *    결함으로 적지 않았고, 그동안 자동 회차는 닫혀 있다.
+     */
+    if (r.retryable.length > 0 || r.rowErrors.length > 0) {
+      const codes = [...new Set([...r.retryable, ...r.rowErrors].map((x) => x.code))]
+      console.error(`🔴 AUDIT_RETRYABLE codes=${codes.join(',')} · 재시도 가능 실패 ${r.retryable.length}건 · 행 오류 ${r.rowErrors.length}건`)
+      return 2
+    }
     return 0
   } finally {
     await prisma.$disconnect()

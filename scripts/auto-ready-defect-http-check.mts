@@ -183,7 +183,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **자동 감사의 no → alreadyJudged · yes 그대로**',
       await recordCombinedAudit(prisma, { queueId: A.queueId, combined: lateNo, auditor: 'model:semantic-audit:late', now: f.now }) === 'alreadyJudged' && (await auditOf(A.queueId))?.defect === 'yes')
     check('🔴 repo 옛 경계의 no → stickyYes · yes 그대로',
-      await recordAuditResult(prisma, { queueId: A.queueId, verdict: lateNo.verdict, auditor: 'rule-auditor', now: f.now }) === 'stickyYes' && (await auditOf(A.queueId))?.defect === 'yes')
+      await recordAuditResult(prisma, { queueId: A.queueId, verdict: lateNo.kind === 'final' ? lateNo.verdict : lateNo.rule, auditor: 'rule-auditor', now: f.now }) === 'stickyYes' && (await auditOf(A.queueId))?.defect === 'yes')
     const again = await report({ postId: A.postId, reasons: ['다시'] }, adminCookie)
     check('같은 글 재신고 → alreadyDefect · 기록 그대로', again.payload?.result?.result === 'alreadyDefect' && ((await auditOf(A.queueId))?.note ?? '').includes('카드는 비혼'))
     const up = await report({ postId: C.postId, reasons: ['원문에 없는 금액'] }, adminCookie)

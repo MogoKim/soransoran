@@ -105,8 +105,9 @@ export const AUDIT_LOCK_TTL_MS = 2 * 3600_000
 export const AUDIT_RUNNER_INSTALL_STEPS: readonly string[] = [
   '① 이 PR 은 등록하지 않는다 — 아래는 별도 승인 뒤의 순서다',
   '② runtime 을 배포하고 SHA 를 확인한다 — npm run runtime:isolation-check -- --require-runtime',
-  '③ 의미 감사 유료 설정을 정한다 — SORAN_AUTO_READY_SEMANTIC_PAID=on · 예산 env 셋 · ANTHROPIC_API_KEY (정본 env)',
-  '      🔴 유료를 켜지 않으면 모든 감사가 측정 불가 → 결함 yes 로 기록되고 자동 회차가 닫힌다',
+  '③ 의미 감사 유료 설정을 정한다 — SORAN_AUTO_READY_SEMANTIC_PAID=on · 감사 전용 예산 env 셋'
+  + '(SORAN_AUDIT_LLM_DAILY_BUDGET_USD · SORAN_AUDIT_LLM_RUN_REQUEST_CAP · SORAN_AUDIT_LLM_RESERVE_HEADROOM) · ANTHROPIC_API_KEY (정본 env)',
+  '      🔴 유료를 켜지 않으면 모든 감사가 재시도 가능 실패로 남고(결함 아님) 그동안 자동 회차가 닫힌다 · 러너는 exit 2',
   `④ plist 를 ~/Library/LaunchAgents/${AUDIT_RUNNER_LABEL}.plist 로 쓴다`,
   '⑤ plutil -lint 로 문법을 확인한다',
   '⑥ launchctl load 로 올리고 launchctl print 로 실제 경로가 runtime 인지 대조한다',

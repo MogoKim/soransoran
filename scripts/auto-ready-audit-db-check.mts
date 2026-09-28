@@ -23,17 +23,22 @@ import { PrismaClient } from '@prisma/client'
 import { AUDIT_CONTRACT_VERSION, AUTO_DECIDER, digestOf, readStamp, type AuditVerdict } from '../src/lib/auto-ready-v2'
 import { authoritativeGate, confirmedDefectCount, recordAuditResult, selectAudits } from '../src/lib/auto-ready-repo'
 import {
-  AUDIT_OVERDUE_MS, auditAwareGate, recordCombinedAudit, runCombinedAuditRound, stampRoundAuditAware,
+  AUDIT_OVERDUE_MS, RETRYABLE_NOTE_PREFIX, auditAwareGate, readRetryableFailure, recordCombinedAudit, runCombinedAuditRound,
+  stampRoundAuditAware,
 } from '../src/lib/auto-ready-audit-store'
 import {
   SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_PROMPT_VERSION, bindingDigestOf,
-  combineAuditVerdicts, judgeSemantic, semanticBindingOf, type SemanticAuditProvider, type SemanticVerdict,
+  combineAuditVerdicts, judgeSemantic, semanticBindingOf, AUDIT_BUDGET_ENV,
+  type CombinedAudit, type SemanticAuditProvider, type SemanticVerdict,
 } from '../src/lib/auto-ready-semantic-audit'
 import { publishOriginalPostTx } from '../src/lib/original-post-publish-tx'
 import { ruleAuditJudge } from './lib/auto-ready-rule-judge.mjs'
 import { makeAuditContextLoader } from './lib/auto-ready-audit-context.mjs'
 import { AUDIT_LOCK_FILE, auditLockDir } from './lib/auto-ready-audit-template'
 import { BUDGET_ENV } from './lib/supply-llm-call.mjs'
+import { auditLedgerDir } from './lib/auto-ready-semantic-provider.mjs'
+import { LEDGER_DIR_NAME, ledgerPathOf } from './lib/llm-ledger-store.mjs'
+import { ledgerDateOf } from '../src/lib/llm-ledger'
 import {
   requireIsolatedDb, wipeAuditFixtures, newFixture, seedEvidence, autoPublished, selectForAudit, machineRow,
   type AutoPost, type Fixture,
@@ -59,7 +64,7 @@ type RunOut = { code: number; out: string; paid: number; count: number; bodies: 
  * 🔴 **운영 러너를 그대로 띄운다.** 임시 HOME · 임시 cwd · 가짜 키 · 가짜 네트워크.
  *    `paid: false` 면 유료 스위치를 주지 않는다(운영 기본값).
  */
-function runRunner(home: string, o: { paid?: boolean; budget?: boolean; env?: Record<string, string>; enabled?: boolean } = {}): Promise<RunOut> {
+function runRunner(home: string, o: { paid?: boolean; budget?: boolean; supplyBudget?: boolean; auditDaily?: string; env?: Record<string, string>; enabled?: boolean } = {}): Promise<RunOut> {
   const log = join(home, `fake-${Date.now()}-${Math.random().toString(16).slice(2)}.log`)
   const bodyLog = `${log}.bodies`
   const cwd = join(home, 'cwd')
@@ -71,7 +76,9 @@ function runRunner(home: string, o: { paid?: boolean; budget?: boolean; env?: Re
     NODE_OPTIONS: `--import=${HOOK}`, FAKE_PROVIDER_LOG: log, FAKE_PROVIDER_BODY_LOG: bodyLog,
     ANTHROPIC_API_KEY: 'fixture-fake-key',
     ...(o.paid === false ? {} : { SORAN_AUTO_READY_SEMANTIC_PAID: 'on' }),
-    ...(o.budget === false ? {} : { [BUDGET_ENV.dailyUsd]: '5', [BUDGET_ENV.runRequestCap]: '200', [BUDGET_ENV.headroomMultiplier]: '1.5' }),
+    // 🔴 감사 전용 예산 — 공급 env(`SORAN_LLM_*`)는 기본으로 주지 않는다(감사는 그것을 읽지 않는다)
+    ...(o.budget === false ? {} : { [AUDIT_BUDGET_ENV.dailyUsd]: o.auditDaily ?? '5', [AUDIT_BUDGET_ENV.runRequestCap]: '200', [AUDIT_BUDGET_ENV.headroomMultiplier]: '1.5' }),
+    ...(o.supplyBudget === true ? { [BUDGET_ENV.dailyUsd]: '5', [BUDGET_ENV.runRequestCap]: '200', [BUDGET_ENV.headroomMultiplier]: '1.5' } : {}),
     ...(o.env ?? {}),
   }
   return new Promise((resolve) => {
@@ -114,7 +121,7 @@ async function main(): Promise<void> {
       zero.code === 0 && zero.paid === 0 && zero.count === 0 && zero.out.includes('판정 전 0건'), `${zero.code} · paid ${zero.paid} · count ${zero.count} · ${zero.out.slice(0, 200)}`)
     check('🔴 OFF 이면 회차 함수도 표를 읽지 않는다', (await runCombinedAuditRound(prisma, {
       env: {}, now: f.now, auditor: 'model:semantic-audit:t', ruleJudge: ruleAuditJudge,
-      loadContext: async () => ({ ok: false, code: 'X', reason: 'x' }), provider: { model: SEMANTIC_AUDIT_MODEL, complete: async () => ({ ok: false, code: 'X', reason: 'x' }) },
+      loadContext: async () => ({ ok: false, code: 'X', reason: 'x', integrity: false }), provider: { model: SEMANTIC_AUDIT_MODEL, complete: async () => ({ ok: false, code: 'X', reason: 'x' }) },
     })).kind === 'off')
   }
 
@@ -157,6 +164,43 @@ async function main(): Promise<void> {
     check('🔴 **다시 열린 뒤 이전에 막혔던 도장 행이 발행된다**', p3.kind === 'published', JSON.stringify(p3))
   }
 
+  console.log('\n②-b 🔴 🔴 재시도 가능 감사 실패 — 결함이 아니지만 있는 동안 도장·발행이 즉시 닫힌다')
+  {
+    const w6 = await machineRow(f, 'W06')
+    const t0 = await stampRoundAuditAware(prisma, { env: ON, now: f.now })
+    check('기준선 — 실패 전 도장 회차가 찍는다', (t0.get('stamped') ?? 0) >= 1
+      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: w6.id } })).decidedBy === AUTO_DECIDER, [...t0].map(([k, v]) => `${k} ${v}`).join(' '))
+    const r = await autoPublished(f, { personaCode: 'P05', title: '재시도 글', body: '재시도 이야기예요. 다들 어떠세요?', sourceTitle: '재시도', sourceBody: '재시도 이야기' })
+    await selectForAudit(f, r)
+    // 🔴 선정은 방금이다 — 시한(6시간)과 무관하게 **즉시** 닫혀야 한다
+    const off = await runRunner(home, { paid: false })
+    const row = await audit(r.queueId)
+    check('🔴 🔴 **유료 OFF → defect null · 재시도 가능 실패 PAID_OFF · exit 2**',
+      off.code === 2 && row.defect === null && readRetryableFailure(row.note)?.code === 'PAID_OFF' && readRetryableFailure(row.note)?.attempts === 1, `${off.code} · ${row.note}`)
+    check('🔴 🔴 **확정 결함이 아니다 — 정본 열림 판정(repo)은 열림 · 확정 결함 0**', (await authoritativeGate(prisma, ON)).open && await confirmedDefectCount(prisma) === 0)
+    const ga = await auditAwareGate(prisma, ON, f.now)
+    check('🔴 🔴 **재시도 가능 실패 1건 → 열림 판정 즉시 닫힘(시한과 별개)**', !ga.open && ga.reasons.some((x) => x.includes('재시도 가능 감사 실패 1건')) && !ga.reasons.some((x) => x.includes('시간을 넘긴')), ga.reasons.join(' · '))
+    const w7 = await machineRow(f, 'W07')
+    const t1 = await stampRoundAuditAware(prisma, { env: ON, now: f.now })
+    check('🔴 🔴 **재시도 가능 실패 → 도장 회차 closed · 도장 0**', (t1.get('stamped') ?? 0) === 0
+      && (await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: w7.id } })).decidedBy === 'machine:auto-draft-v5', [...t1].map(([k, v]) => `${k} ${v}`).join(' '))
+    const before = await postCount()
+    const p = await pubTx(w6.id)
+    check('🔴 🔴 **재시도 가능 실패 → 이미 찍힌 도장 행도 발행 트랜잭션이 막는다 · Post 0**',
+      p.kind === 'blocked' && p.code === 'AUTO_READY_RECHECK' && p.detail.includes('재시도 가능 감사 실패') && (await postCount()) === before, JSON.stringify(p))
+    const budget = await runRunner(home, { budget: false })
+    check('🔴 다시 실패(감사 예산 없음) → 시도 2 · 코드 갱신 · 여전히 결함 아님', budget.code === 2 && (await audit(r.queueId)).defect === null
+      && readRetryableFailure((await audit(r.queueId)).note)?.attempts === 2 && readRetryableFailure((await audit(r.queueId)).note)?.code === 'AUDIT_BUDGET_UNSET')
+    const ok = await runRunner(home)
+    const done = await audit(r.queueId)
+    check('🔴 🔴 **다음 회차 성공 → 같은 행을 no 로 확정 · 실패 표식 없음 · exit 0**', ok.code === 0 && done.defect === 'no' && readRetryableFailure(done.note) === null, `${ok.code} · ${done.note}`)
+    check('🔴 🔴 **확정 뒤 다시 열린다 · 막혔던 도장 행이 발행된다**', (await auditAwareGate(prisma, ON, f.now)).open && (await pubTx(w6.id)).kind === 'published')
+    const again = await recordCombinedAudit(prisma, { queueId: r.queueId, combined: { kind: 'retryable', rule: (await ruleAuditJudge({ queueId: r.queueId, postId: r.postId, title: r.title, body: r.body, stamp: readStamp((await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: r.queueId } })).editDiff) })), semantic: { outcome: 'retryable', defect: null, code: 'PAID_OFF', reasons: [], binding: null, contractVersion: SEMANTIC_AUDIT_CONTRACT_VERSION, model: SEMANTIC_AUDIT_MODEL, promptVersion: SEMANTIC_AUDIT_PROMPT_VERSION }, code: 'PAID_OFF', reason: 'x' }, auditor: 'model:semantic-audit:late', now: f.now })
+    const kept = await audit(r.queueId)
+    check('🔴 🔴 **확정된 행에 뒤늦은 실패가 와도 덮지 않는다 — 확정은 정확히 한 번 · 기록(note) 그대로**',
+      again === 'alreadyJudged' && kept.defect === 'no' && kept.note === done.note, `${again} · ${kept.note}`)
+  }
+
   console.log('\n③ 🔴 🔴 실제 러너 — 규칙 + 의미 감사 · 원문 근거와 카드에 묶인 판정 · fail-closed')
   const posts: Record<string, AutoPost> = {}
   {
@@ -175,7 +219,7 @@ async function main(): Promise<void> {
     const pendingBefore = await prisma.autoReadyAudit.count({ where: { defect: null } })
     const run = await runRunner(home)
     const r = roundOf(run.out)
-    check('러너 exit 0 · 판정 전 전부 기록', run.code === 0 && (await prisma.autoReadyAudit.count({ where: { defect: null } })) === 0, `${run.code} · ${run.out.slice(-400)}`)
+    check('러너 exit 0(재시도 가능 실패 0) · 판정 전 전부 기록', run.code === 0 && (await prisma.autoReadyAudit.count({ where: { defect: null } })) === 0, `${run.code} · ${run.out.slice(-400)}`)
     check('🔴 🔴 **의미 감사 유료 요청 = 문맥이 선 감사 수 (장부 경유 · 사전 계산 1:1)**',
       run.paid === pendingBefore - 4 && run.count === run.paid && r.semanticCalls === pendingBefore - 4, `paid ${run.paid} · count ${run.count} · pending ${pendingBefore} · ${JSON.stringify(r)}`)
     const ledgerDir = join(home, 'Library', 'Application Support', 'soransoran')
@@ -200,7 +244,7 @@ async function main(): Promise<void> {
     check('🔴 🔴 **원문 근거에 없는 사실(금액) → yes**', fact.defect === 'yes' && (fact.note ?? '').includes('근거 없는 사실'), fact.note ?? '')
     for (const k of ['noArtifact', 'otherPersona', 'noCard', 'noEvidence'] as const) {
       const a = await audit(posts[k]!.queueId)
-      check(`🔴 🔴 **[${k}] 문맥 결속 실패 → no 가 아니라 yes(측정 불가)**`, a.defect === 'yes' && (a.note ?? '').includes('측정 불가'), `${a.defect} · ${a.note}`)
+      check(`🔴 🔴 **[${k}] 문맥 결속 깨짐(데이터 없음·다른 Persona) → 무결성 yes · no 아님 · 재시도 대기 아님**`, a.defect === 'yes' && (a.note ?? '').includes('무결성 결함'), `${a.defect} · ${a.note}`)
     }
   }
 
@@ -226,13 +270,15 @@ async function main(): Promise<void> {
   console.log('\n⑤ 🔴 🔴 yes 는 끈적하다 · 결과는 감사마다 하나')
   const scripted = (text: string): SemanticAuditProvider => ({ model: SEMANTIC_AUDIT_MODEL, complete: async () => ({ ok: true, text }) })
   const CLEAN = JSON.stringify({ unsupportedFacts: [], lifeContradictions: [], sourceDistortions: [], defect: 'no' })
-  const combinedFor = async (a: AutoPost, provider = scripted(CLEAN)) => {
+  type Final = Extract<CombinedAudit, { kind: 'final' }>
+  const finalOf = (c: CombinedAudit): Final => { if (c.kind !== 'final') throw new Error(`확정이 아니다: ${c.code}`); return c }
+  const combinedFor = async (a: AutoPost, provider = scripted(CLEAN)): Promise<Final> => {
     const post = await prisma.post.findUniqueOrThrow({ where: { id: a.postId } })
     const q = await prisma.originalPostApprovalQueue.findUniqueOrThrow({ where: { id: a.queueId } })
     const rule = await ruleAuditJudge({ queueId: a.queueId, postId: a.postId, title: post.title, body: post.content, stamp: readStamp(q.editDiff) })
     // 🔴 로더는 회차마다 새로 만든다(운영 러너도 회차마다 만든다) — 색인을 한 번 읽어 둔다
     const fresh = makeAuditContextLoader(prisma, { artifactDir: f.artifactDir })
-    return combineAuditVerdicts(rule, await judgeSemantic(await fresh({ queueId: a.queueId, postId: a.postId }), provider))
+    return finalOf(combineAuditVerdicts(rule, await judgeSemantic(await fresh({ queueId: a.queueId, postId: a.postId }), provider)))
   }
   {
     const life = posts.life!
@@ -303,16 +349,26 @@ async function main(): Promise<void> {
     check('잠금을 치우면 다음 회차가 판정한다 · 잠금이 남지 않는다', after.code === 0 && (await audit(five.queueId)).defect === 'no' && !existsSync(join(auditLockDir(home), AUDIT_LOCK_FILE)), after.out.slice(-200))
   }
 
-  console.log('\n⑦ 🔴 🔴 모델 오류는 결코 no 가 아니다 — 실제 러너 · 모드별')
+  /** 🔴 artifact 정본을 다른 임시 HOME 으로 복사 — 러너마다 자기 잠금·장부를 갖게 한다 */
+  const syncArtifacts = (h: string): string => {
+    const art = join(h, 'Library', 'Application Support', 'soransoran', 'microseed-data')
+    mkdirSync(art, { recursive: true })
+    for (const n of readdirSync(f.artifactDir)) writeFileSync(join(art, n), readFileSync(join(f.artifactDir, n)))
+    return h
+  }
+  const homeWithArtifacts = (tag: string, copy = true): string => (copy ? syncArtifacts(newHome(tag)) : newHome(tag))
+
+  console.log('\n⑦ 🔴 🔴 측정 실패는 결함이 아니다 — 실제 러너 · 모드별 · 재시도 가능 실패(defect null) · exit 2')
   {
-    const cases: { tag: string; opt: Parameters<typeof runRunner>[1]; expectPaid: boolean }[] = [
-      { tag: '유료 OFF(기본값)', opt: { paid: false }, expectPaid: false },
-      { tag: '예산 env 없음 — 장부가 요청 전에 막음', opt: { budget: false }, expectPaid: false },
-      { tag: 'HTTP 500', opt: { env: { FAKE_SEMANTIC_MODE: 'http-500' } }, expectPaid: true },
-      { tag: '시간 초과', opt: { env: { FAKE_PROVIDER_MODE: 'timeout' } }, expectPaid: true },
-      { tag: 'JSON 아님', opt: { env: { FAKE_SEMANTIC_MODE: 'garbage' } }, expectPaid: true },
-      { tag: '발견이 있는데 defect=no (자기모순)', opt: { env: { FAKE_SEMANTIC_MODE: 'contradict' } }, expectPaid: true },
-      { tag: '사용량 없음 — 정산 불가', opt: { env: { FAKE_PROVIDER_MODE: 'no-usage' } }, expectPaid: true },
+    const cases: { tag: string; code: string; opt: Parameters<typeof runRunner>[1]; expectPaid: boolean; copy?: boolean }[] = [
+      { tag: '유료 OFF(기본값)', code: 'PAID_OFF', opt: { paid: false }, expectPaid: false },
+      { tag: '감사 예산 env 없음 (공급 예산은 있음)', code: 'AUDIT_BUDGET_UNSET', opt: { budget: false, supplyBudget: true }, expectPaid: false },
+      { tag: 'HTTP 500', code: 'HTTP_500', opt: { env: { FAKE_SEMANTIC_MODE: 'http-500' } }, expectPaid: true },
+      { tag: '시간 초과', code: 'TIMEOUT', opt: { env: { FAKE_PROVIDER_MODE: 'timeout' } }, expectPaid: true },
+      { tag: 'JSON 아님', code: 'PARSE_FAILED', opt: { env: { FAKE_SEMANTIC_MODE: 'garbage' } }, expectPaid: true },
+      { tag: '발견이 있는데 defect=no (자기모순)', code: 'PARSE_FAILED', opt: { env: { FAKE_SEMANTIC_MODE: 'contradict' } }, expectPaid: true },
+      { tag: '사용량 없음 — 정산 불가', code: 'USAGE_UNKNOWN', opt: { env: { FAKE_PROVIDER_MODE: 'no-usage' } }, expectPaid: true },
+      { tag: 'artifact 정본 디렉터리 없음(환경)', code: 'ARTIFACT_INDEX_UNREADABLE', opt: {}, expectPaid: false, copy: false },
     ]
     let i = 0
     for (const c of cases) {
@@ -322,16 +378,65 @@ async function main(): Promise<void> {
       const body = contradict ? '남편이 오늘 설거지를 했어요. 다들 어떠세요?' : `오류 시험 ${i} 이야기예요. 다들 어떠세요?`
       const a = await autoPublished(f, { personaCode: contradict ? 'P20' : 'P03', title: `오류 시험 ${i}`, body, sourceTitle: '오류', sourceBody: '오류 시험 이야기' })
       await selectForAudit(f, a)
-      const h = newHome(`err-${i}`)
-      const art = join(h, 'Library', 'Application Support', 'soransoran', 'microseed-data')
-      mkdirSync(art, { recursive: true })
-      for (const n of readdirSync(f.artifactDir)) writeFileSync(join(art, n), readFileSync(join(f.artifactDir, n)))
-      const run = await runRunner(h, c.opt)
+      const run = await runRunner(homeWithArtifacts(`err-${i}`, c.copy !== false), c.opt)
       const saved = await audit(a.queueId)
-      check(`🔴 🔴 **[${c.tag}] → yes(측정 불가) · no 아님**`, run.code === 0 && saved.defect === 'yes' && (saved.note ?? '').includes('측정 불가'),
-        `${run.code} · ${saved.defect} · ${saved.note} · ${run.out.slice(-200)}`)
+      const fr = readRetryableFailure(saved.note)
+      check(`🔴 🔴 **[${c.tag}] → defect null · 재시도 가능 실패 ${c.code} · 시도 1 · 결함 아님(yes 도 no 도 아님)**`,
+        saved.defect === null && fr !== null && fr.code.includes(c.code) && fr.attempts === 1 && saved.judgedAt === null,
+        `${saved.defect} · ${saved.note}`)
+      check(`🔴 🔴 **[${c.tag}] → exit 2 · 원인 코드를 남긴다**`, run.code === 2 && new RegExp(`AUDIT_RETRYABLE codes=[^\\n]*${c.code}`).test(run.out), `${run.code} · ${run.out.slice(-300)}`)
       check(`[${c.tag}] 유료 요청 ${c.expectPaid ? '있음(나갔고 실패)' : '0'}`, c.expectPaid ? run.paid >= 1 : run.paid === 0, `paid ${run.paid}`)
+      // 🔴 다음 회차가 성공하면 같은 행을 확정하고 실패 표식을 지운다(자기모순 글은 실제 결함 → yes)
+      await runRunner(homeWithArtifacts(`err-ok-${i}`))
+      const done = await audit(a.queueId)
+      check(`🔴 🔴 **[${c.tag}] 다음 회차 성공 → 같은 행 확정(${contradict ? 'yes' : 'no'}) · 실패 표식 없음**`,
+        done.defect === (contradict ? 'yes' : 'no') && readRetryableFailure(done.note) === null && !(done.note ?? '').startsWith(RETRYABLE_NOTE_PREFIX), `${done.defect} · ${done.note}`)
     }
+    // 🔴 한 행이 실패해도 나머지 행은 계속 — 표식이 실린 글만 500
+    const okRow = await autoPublished(f, { personaCode: 'P03', title: '계속 처리 글', body: '계속 처리되는 글이에요. 다들 어떠세요?', sourceTitle: '계속', sourceBody: '계속 이야기' })
+    const badRow = await autoPublished(f, { personaCode: 'P05', title: '실패하는 글', body: '실패표식 이 글만 실패해요. 다들 어떠세요?', sourceTitle: '실패', sourceBody: '실패 이야기' })
+    await selectForAudit(f, badRow); await selectForAudit(f, okRow)
+    const mixed = await runRunner(homeWithArtifacts('mixed'), { env: { FAKE_SEMANTIC_FAIL_MARK: '실패표식' } })
+    check('🔴 🔴 **한 행 실패(HTTP 500) · 나머지 행 계속 확정 · exit 2**',
+      mixed.code === 2 && (await audit(okRow.queueId)).defect === 'no' && (await audit(badRow.queueId)).defect === null
+      && readRetryableFailure((await audit(badRow.queueId)).note)?.code === 'HTTP_500', mixed.out.slice(-300))
+    const again = await runRunner(homeWithArtifacts('mixed2'), { env: { FAKE_SEMANTIC_FAIL_MARK: '실패표식' } })
+    check('🔴 같은 행이 또 실패하면 시도 횟수가 오른다(2) · 결함 아님', again.code === 2 && readRetryableFailure((await audit(badRow.queueId)).note)?.attempts === 2 && (await audit(badRow.queueId)).defect === null)
+    await runRunner(homeWithArtifacts('mixed3'))
+  }
+
+  console.log('\n⑦-b 🔴 🔴 감사 예산은 공급 예산과 분리된다 — 서로의 지출이 서로를 줄이지 않는다')
+  {
+    const h = homeWithArtifacts('budget')
+    const supplyDir = join(h, 'Library', 'Application Support', 'soransoran', LEDGER_DIR_NAME)
+    const auditDir = auditLedgerDir(h)
+    const today = ledgerDateOf(new Date())
+    // 🔴 오늘 공급 장부에 하루 예산을 훌쩍 넘는 지출이 이미 있다 — 감사 예산($1)은 그것을 세지 않아야 한다
+    mkdirSync(supplyDir, { recursive: true })
+    const template = readdirSync(join(home, 'Library', 'Application Support', 'soransoran', 'auto-ready-audit-ledger')).find((x) => x.endsWith('.jsonl'))
+    const sample = JSON.parse(readFileSync(join(home, 'Library', 'Application Support', 'soransoran', 'auto-ready-audit-ledger', template!), 'utf-8').split('\n').find((l) => l.includes('"status":"settled"') && l.includes('semanticAudit'))!) as Record<string, unknown>
+    const supplyLine = JSON.stringify({ ...sample, runId: 'supply-run', stage: 'draftGen', attemptId: 'supply-a', settledUsd: 100, reservedUsd: 100, startedAt: new Date().toISOString(), endedAt: new Date().toISOString() })
+    writeFileSync(ledgerPathOf(supplyDir, today), `${supplyLine}\n`)
+    const supplyBefore = readFileSync(ledgerPathOf(supplyDir, today), 'utf-8')
+    const a = await autoPublished(f, { personaCode: 'P07', title: '예산 분리 글', body: '예산 분리 이야기예요. 다들 어떠세요?', sourceTitle: '예산', sourceBody: '예산 이야기' })
+    await selectForAudit(f, a)
+    const r1 = await runRunner(syncArtifacts(h), { auditDaily: '1', supplyBudget: true })
+    check('🔴 🔴 **공급 장부가 $100 을 썼어도 감사($1 예산)는 요청하고 확정한다**', r1.code === 0 && r1.paid === 1 && (await audit(a.queueId)).defect === 'no', `${r1.code} · paid ${r1.paid} · ${r1.out.slice(-200)}`)
+    check('🔴 🔴 **감사 지출은 공급 장부에 적히지 않는다 — 공급 장부 그대로(감사 줄 0)**',
+      readFileSync(ledgerPathOf(supplyDir, today), 'utf-8') === supplyBefore && !supplyBefore.includes('semanticAudit'))
+    check('🔴 감사 지출은 감사 전용 장부에 적힌다', existsSync(ledgerPathOf(auditDir, today)) && readFileSync(ledgerPathOf(auditDir, today), 'utf-8').includes('"stage":"semanticAudit"'))
+    // 🔴 감사 예산을 다 썼다 — 감사는 요청 전에 막히고(재시도 가능 실패) 공급 장부는 그대로다
+    const auditLine = JSON.stringify({ ...sample, runId: 'audit-old', attemptId: 'audit-old-a', settledUsd: 1, reservedUsd: 1, startedAt: new Date().toISOString(), endedAt: new Date().toISOString() })
+    writeFileSync(ledgerPathOf(auditDir, today), `${readFileSync(ledgerPathOf(auditDir, today), 'utf-8')}${auditLine}\n`)
+    const b = await autoPublished(f, { personaCode: 'P08', title: '예산 소진 글', body: '예산 소진 이야기예요. 다들 어떠세요?', sourceTitle: '소진', sourceBody: '소진 이야기' })
+    await selectForAudit(f, b)
+    const r2 = await runRunner(syncArtifacts(h), { auditDaily: '1', supplyBudget: true })
+    const fb = readRetryableFailure((await audit(b.queueId)).note)
+    check('🔴 🔴 **감사 예산 소진 → 유료 0 · 재시도 가능 실패(장부 차단) · 결함 아님 · exit 2**',
+      r2.code === 2 && r2.paid === 0 && (await audit(b.queueId)).defect === null && fb !== null && fb.code.startsWith('LEDGER_BLOCKED'), `${r2.code} · paid ${r2.paid} · ${fb?.code}`)
+    check('🔴 🔴 **감사가 막혀도 공급 장부 여력은 그대로 — 공급 장부 파일이 바뀌지 않았다**', readFileSync(ledgerPathOf(supplyDir, today), 'utf-8') === supplyBefore)
+    await runRunner(syncArtifacts(h), { auditDaily: '5' })
+    check('감사 예산을 올리면 다음 회차가 확정한다', (await audit(b.queueId)).defect === 'no')
   }
 
   console.log('\n⑧ 🔴 🔴 결과의 묶음이 이 글·이 도장이 아니면 → 무결성 yes')
@@ -344,10 +449,10 @@ async function main(): Promise<void> {
     const other = await mk('P02', 'other')
     const cOther = await combinedFor(other)
     const cBase = await combinedFor(base)
-    check('기준선 — 두 글 모두 측정된 의미 감사(no)와 묶음이 있다', cBase.semantic.measured && cOther.semantic.measured
+    check('기준선 — 두 글 모두 측정된 의미 감사(no)와 묶음이 있다', cBase.semantic.outcome === 'measured' && cOther.semantic.outcome === 'measured'
       && cBase.semantic.binding !== null && cOther.semantic.binding !== null && cBase.verdict.defect === 'no', JSON.stringify(cBase.semantic.reasons))
     const withSem = (s: Partial<SemanticVerdict>) => ({ ...cBase, semantic: { ...cBase.semantic, ...s } })
-    const tries: { tag: string; combined: typeof cBase }[] = [
+    const tries: { tag: string; combined: CombinedAudit }[] = [
       { tag: '다른 글에 묶인 의미 감사', combined: { ...cBase, semantic: cOther.semantic } },
       { tag: '묶음 digest 조작', combined: withSem({ binding: { ...cBase.semantic.binding!, digest: digestOf('조작') } }) },
       { tag: '다른 Persona 로 묶음 · digest 는 다시 계산', combined: withSem({ binding: (() => { const b = { ...cBase.semantic.binding!, personaCode: 'P09' }; return { ...b, digest: bindingDigestOf(b) } })() }) },
@@ -355,9 +460,11 @@ async function main(): Promise<void> {
       { tag: '도장 digest 가 지금 도장과 다르다', combined: withSem({ binding: (() => { const b = { ...cBase.semantic.binding!, stampDigest: digestOf('옛 도장') }; return { ...b, digest: bindingDigestOf(b) } })() }) },
       { tag: '규칙 감사가 다른 글을 판정(judged hash)', combined: { ...cBase, verdict: { ...cBase.verdict, judgedBodyHash: digestOf('다른 글') } } },
       { tag: '의미 감사 없이 no (binding 없음)', combined: withSem({ binding: null }) },
-      { tag: '측정 안 된 의미 감사로 no', combined: withSem({ measured: false }) },
+      { tag: '측정 안 된 의미 감사로 no', combined: withSem({ outcome: 'retryable', defect: null, code: 'PAID_OFF' }) },
+      { tag: '재시도 가능 실패인데 의미 감사는 측정됨(위장)', combined: { kind: 'retryable', rule: cBase.verdict, semantic: cBase.semantic, code: 'PAID_OFF', reason: 'x' } },
+      { tag: '다른 글에 묶인 재시도 가능 실패', combined: { kind: 'retryable', rule: cBase.verdict, semantic: { ...cOther.semantic, outcome: 'retryable', defect: null, code: 'HTTP_500' }, code: 'HTTP_500', reason: 'x' } },
       { tag: '옛 의미 감사 계약 판', combined: withSem({ contractVersion: 'auto-ready-semantic-audit-v0' }) },
-      { tag: '의미 yes 인데 최종 no', combined: { verdict: { ...cBase.verdict, defect: 'no' }, semantic: { ...cBase.semantic, defect: 'yes' } } },
+      { tag: '의미 yes 인데 최종 no', combined: { kind: 'final', verdict: { ...cBase.verdict, defect: 'no' }, semantic: { ...cBase.semantic, defect: 'yes' } } },
     ]
     for (const t of tries) {
       await prisma.autoReadyAudit.update({ where: { queueId: base.queueId }, data: { defect: null, judgedAt: null, auditor: null, note: null, auditContractVersion: null, auditModel: null, auditPromptVersion: null } })

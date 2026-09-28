@@ -36,7 +36,7 @@ import { boundedReleaseStage } from './scale-runtime'
 import { judgeCatchUp, kstMinuteOfDay, PUBLISH_WINDOW_END_MINUTE } from './publish-slot-catchup'
 import { AUTO_DECIDER } from './auto-ready-v2'
 import { recheckAutoReadyInTx } from './auto-ready-repo'
-import { overdueBlockInTx } from './auto-ready-audit-store'
+import { auditBlockInTx } from './auto-ready-audit-store'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   buildOriginalPostData, assertOriginalPostData, judgePublish, kstDayStart,
@@ -214,11 +214,12 @@ async function publishAttempt(
         })
         if (!recheck.ok) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: recheck.reason }
         /**
-         * 🔴 **판정 대기 시한** (2026-09-27) — 감사 러너가 멈춰 판정 없이 시한을 넘긴 감사가 있으면
-         *    같은 트랜잭션 안에서 막는다. 감사가 끝나면 다시 열린다(끈적하지 않다).
+         * 🔴 **감사가 따라오지 못하면 닫는다** (2026-09-27 · 2026-09-28) — 같은 트랜잭션 안에서 센다.
+         *    · 재시도 가능 감사 실패가 하나라도 있다(즉시) · 판정 없이 시한을 넘긴 감사가 있다
+         *    감사가 성공하면 다시 열린다(끈적하지 않다 — 결함 yes 와 다르다).
          */
-        const overdue = await overdueBlockInTx(tx, input.autoReadyEnv ?? {}, txNow)
-        if (overdue !== null) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: overdue }
+        const auditBlock = await auditBlockInTx(tx, input.autoReadyEnv ?? {}, txNow)
+        if (auditBlock !== null) return { kind: 'blocked', code: 'AUTO_READY_RECHECK', detail: auditBlock }
       }
 
       /**

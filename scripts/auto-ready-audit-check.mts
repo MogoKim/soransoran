@@ -15,15 +15,18 @@ import { INTEGRITY_MODEL, INTEGRITY_PROMPT_VERSION } from '../src/lib/auto-ready
 import {
   SEMANTIC_AUDIT_CONTRACT_VERSION, SEMANTIC_AUDIT_MODEL, SEMANTIC_AUDIT_PROMPT_VERSION, SEMANTIC_AUDITOR, SEMANTIC_PAID_ENV,
   SEMANTIC_AUDIT_MAX_OUTPUT_TOKENS, semanticPaidEnabled, parseSemanticAuditResponse, judgeSemantic, semanticBindingOf,
-  buildSemanticAuditRequest, combineAuditVerdicts, type SemanticAuditContext, type SemanticAuditProvider, type SemanticVerdict,
+  buildSemanticAuditRequest, combineAuditVerdicts, semanticNoteHead, AUDIT_BUDGET_ENV,
+  type CombinedAudit, type SemanticAuditContext, type SemanticAuditProvider, type SemanticVerdict,
 } from '../src/lib/auto-ready-semantic-audit'
-import { AUDIT_OVERDUE_HOURS, automatedAuditorOk, adminReasonsOf } from '../src/lib/auto-ready-audit-store'
+import {
+  AUDIT_OVERDUE_HOURS, RETRYABLE_NOTE_PREFIX, automatedAuditorOk, adminReasonsOf, readRetryableFailure, retryableNoteOf,
+} from '../src/lib/auto-ready-audit-store'
 import { REVIEWER_KINDS, isHumanReviewer } from '../src/lib/review-provenance'
 import { priceOf, reserveOf } from '../src/lib/llm-pricing'
 import { LEDGER_STAGES, PAID_STAGES } from '../src/lib/llm-ledger'
 import { parsePoolDoc } from '../src/lib/persona-pool-card'
 import { ruleAuditJudge, RULE_JUDGE_MODEL, RULE_JUDGE_PROMPT_VERSION } from './lib/auto-ready-rule-judge.mjs'
-import { offSemanticProvider, semanticProviderFromEnv } from './lib/auto-ready-semantic-provider.mjs'
+import { auditLedgerDir, auditLimitsFromEnv, offSemanticProvider, semanticProviderFromEnv } from './lib/auto-ready-semantic-provider.mjs'
 import {
   AUDIT_INTERVAL_MINUTES, AUDIT_RUNNER_ARGS, AUDIT_RUNNER_LABEL, AUDIT_RUNNER_SCRIPT, auditRunnerSlots, renderAuditRunnerPlist, verifyAuditSlots,
 } from './lib/auto-ready-audit-template'
@@ -69,7 +72,19 @@ console.log('\n② 🔴 유료 호출 — 기본 OFF')
   check('🔴 🔴 **스위치가 없으면 OFF**', !semanticPaidEnabled({}) && !semanticPaidEnabled({ [SEMANTIC_PAID_ENV]: 'true' }) && semanticPaidEnabled({ [SEMANTIC_PAID_ENV]: 'on' }))
   check('🔴 🔴 **env 기본값으로 고르면 부르지 않는 제공사다**', semanticProviderFromEnv({}, 'r').provider === offSemanticProvider && semanticProviderFromEnv({}, 'r').session === null)
   const on = semanticProviderFromEnv({ [SEMANTIC_PAID_ENV]: 'on' }, 'r')
-  check('ON 이면 장부 세션이 붙은 유료 제공사 · 예산 env 가 비면 그 이름을 적는다', on.session !== null && on.provider !== offSemanticProvider && on.describe.includes('SORAN_LLM_DAILY_BUDGET_USD'))
+  check('🔴 🔴 **ON 이어도 감사 예산 env 가 없으면 요청하지 않는 제공사 · 세션 없음 · 빈 이름을 적는다**',
+    on.session === null && on.describe.includes(AUDIT_BUDGET_ENV.dailyUsd) && (await on.provider.complete({ systemPrompt: '', userPayload: '', maxOutputTokens: 1, timeoutMs: 1 })).ok === false)
+  const supplyOnly = semanticProviderFromEnv({ [SEMANTIC_PAID_ENV]: 'on', SORAN_LLM_DAILY_BUDGET_USD: '5', SORAN_LLM_RUN_REQUEST_CAP: '100', SORAN_LLM_RESERVE_HEADROOM: '1.5' }, 'r')
+  check('🔴 🔴 **공급 예산 env 는 감사 예산이 되지 않는다 — 공급 값만 있으면 여전히 요청 0**', supplyOnly.session === null)
+  const full = semanticProviderFromEnv({ [SEMANTIC_PAID_ENV]: 'on', [AUDIT_BUDGET_ENV.dailyUsd]: '1', [AUDIT_BUDGET_ENV.runRequestCap]: '50', [AUDIT_BUDGET_ENV.headroomMultiplier]: '1.5' }, 'r', '/h')
+  check('🔴 🔴 **감사 예산이 서면 감사 전용 장부 디렉터리의 세션 — 공급 장부와 다른 곳**',
+    full.session !== null && full.session.dir === auditLedgerDir('/h') && full.session.dir !== join('/h', 'Library', 'Application Support', 'soransoran', 'llm-ledger')
+    && full.session.limits.dailyUsd === 1 && full.session.limits.runRequestCap === 50)
+  check('🔴 감사 예산 해석은 공급과 같은 규칙 — 0 · 음수 · 소수 요청 수는 없음',
+    auditLimitsFromEnv({ [AUDIT_BUDGET_ENV.dailyUsd]: '0', [AUDIT_BUDGET_ENV.runRequestCap]: '2.5', [AUDIT_BUDGET_ENV.headroomMultiplier]: '-1' }).dailyUsd === null
+    && auditLimitsFromEnv({ [AUDIT_BUDGET_ENV.runRequestCap]: '2.5' }).runRequestCap === null)
+  const wf0 = readdirSync('.github/workflows').map((x) => readFileSync(`.github/workflows/${x}`, 'utf-8')).join('\n')
+  check('🔴 감사 예산 env 는 어떤 워크플로우에도 설정돼 있지 않다', Object.values(AUDIT_BUDGET_ENV).every((n) => !wf0.includes(n)))
   const wf = ['.github/workflows/visibility-guard.yml', ...readdirSync('.github/workflows').filter((x) => x !== 'visibility-guard.yml').map((x) => `.github/workflows/${x}`)]
   check('🔴 🔴 **유료 스위치는 어떤 워크플로우·템플릿에도 설정돼 있지 않다**',
     wf.every((p) => !readFileSync(p, 'utf-8').includes(SEMANTIC_PAID_ENV))
@@ -89,25 +104,29 @@ console.log('\n③ 🔴 🔴 응답 읽기 — 모양이 어긋나면 못 읽은
   ] as const) check(`🔴 [${tag}] → 못 읽음`, !parseSemanticAuditResponse(raw).ok)
 }
 
-console.log('\n④ 🔴 🔴 의미 감사 판정 — 어떤 실패도 no 가 아니다')
+console.log('\n④ 🔴 🔴 의미 감사 판정 — 측정 못 한 것은 재시도 가능 실패 · 결속 깨짐은 무결성 · no 는 측정된 것만')
 {
   const ok = async (p: SemanticAuditProvider): Promise<SemanticVerdict> => judgeSemantic({ ok: true, ctx: CTX }, p)
   const clean = await ok(scripted(CLEAN))
-  check('기준선 — 측정된 no · 묶음 있음', clean.defect === 'no' && clean.measured && clean.binding !== null)
-  const cases: [string, Promise<SemanticVerdict>][] = [
-    ['문맥 없음(artifact 결속 실패)', judgeSemantic({ ok: false, code: 'ARTIFACT_MISSING', reason: 'x' }, scripted(CLEAN))],
-    ['제공사 실패', ok({ model: SEMANTIC_AUDIT_MODEL, complete: async () => ({ ok: false, code: 'HTTP_500', reason: 'x' }) })],
-    ['제공사 예외', ok({ model: SEMANTIC_AUDIT_MODEL, complete: async () => { throw new Error('boom') } })],
-    ['응답 못 읽음', ok(scripted('{broken'))],
-    ['계약과 다른 모델', ok(scripted(CLEAN, 'gemini-3.7-flash'))],
-    ['유료 OFF 제공사', ok(offSemanticProvider)],
+  check('기준선 — 측정된 no · 묶음 있음', clean.defect === 'no' && clean.outcome === 'measured' && clean.binding !== null)
+  const retry: [string, string, Promise<SemanticVerdict>][] = [
+    ['제공사 실패(HTTP)', 'HTTP_500', ok({ model: SEMANTIC_AUDIT_MODEL, complete: async () => ({ ok: false, code: 'HTTP_500', reason: 'x' }) })],
+    ['제공사 예외', 'PROVIDER_EXCEPTION', ok({ model: SEMANTIC_AUDIT_MODEL, complete: async () => { throw new Error('boom') } })],
+    ['응답 못 읽음', 'PARSE_FAILED', ok(scripted('{broken'))],
+    ['자기모순 응답', 'PARSE_FAILED', ok(scripted(FOUND.replace('"defect":"yes"', '"defect":"no"')))],
+    ['계약과 다른 모델', 'MODEL_MISMATCH', ok(scripted(CLEAN, 'gemini-3.7-flash'))],
+    ['유료 OFF 제공사', 'PAID_OFF', ok(offSemanticProvider)],
+    ['감사 예산 없음', 'AUDIT_BUDGET_UNSET', ok(semanticProviderFromEnv({ [SEMANTIC_PAID_ENV]: 'on' }, 'r').provider)],
+    ['정본 파일 못 읽음(문맥 · 환경)', 'ARTIFACT_INDEX_UNREADABLE', judgeSemantic({ ok: false, code: 'ARTIFACT_INDEX_UNREADABLE', reason: 'x', integrity: false }, scripted(CLEAN))],
   ]
-  for (const [tag, p] of cases) {
+  for (const [tag, code, p] of retry) {
     const v = await p
-    check(`🔴 🔴 **[${tag}] → yes · measured=false**`, v.defect === 'yes' && !v.measured && v.reasons.some((r) => r.includes('측정 불가')), JSON.stringify(v.reasons))
+    check(`🔴 🔴 **[${tag}] → 재시도 가능 실패 · defect null · 코드 ${code} (yes 도 no 도 아니다)**`, v.outcome === 'retryable' && v.defect === null && v.code === code, `${v.outcome} · ${v.defect} · ${v.code}`)
   }
+  const integ = await judgeSemantic({ ok: false, code: 'ARTIFACT_MISSING', reason: 'x', integrity: true }, scripted(CLEAN))
+  check('🔴 🔴 **[문맥 결속 깨짐(artifact 없음)] → 무결성 yes**', integ.outcome === 'integrity' && integ.defect === 'yes' && integ.code === 'ARTIFACT_MISSING')
   const found = await ok(scripted(FOUND))
-  check('발견 → yes · measured=true · 사유에 근거 없는 사실', found.defect === 'yes' && found.measured && found.reasons.some((r) => r.includes('근거 없는 사실')))
+  check('🔴 🔴 **실제 발견 → 측정된 yes(콘텐츠 결함) · 사유에 근거 없는 사실**', found.defect === 'yes' && found.outcome === 'measured' && found.reasons.some((r) => r.includes('근거 없는 사실')))
 }
 
 console.log('\n⑤ 🔴 🔴 묶음 — 글 · 도장 · artifact 원문 근거 · Persona 카드 · 요청에 실린다')
@@ -134,18 +153,28 @@ console.log('\n⑤ 🔴 🔴 묶음 — 글 · 도장 · artifact 원문 근거 
   check('🔴 지시문·요청에 금지 표현이 없다', !/시니어|어르신|노인|실버/.test(req.systemPrompt + req.userPayload))
 }
 
-console.log('\n⑥ 🔴 🔴 합치기 — 규칙 · 의미 중 하나라도 yes 면 yes')
+console.log('\n⑥ 🔴 🔴 합치기 — 규칙 · 의미 중 하나라도 yes 면 yes · 측정 못 했으면 재시도 가능 실패')
 {
   const rule = await ruleAuditJudge({ queueId: 'q', postId: 'post-1', title: CTX.post.title, body: CTX.post.body, stamp: CTX.stamp })
   const ruleYes: AuditVerdict = { ...rule, defect: 'yes', reasons: ['규칙'] }
   const semNo = await judgeSemantic({ ok: true, ctx: CTX }, scripted(CLEAN))
   const semYes = await judgeSemantic({ ok: true, ctx: CTX }, scripted(FOUND))
-  check('규칙 no · 의미 no → no', combineAuditVerdicts(rule, semNo).verdict.defect === 'no')
-  check('🔴 규칙 yes · 의미 no → yes', combineAuditVerdicts(ruleYes, semNo).verdict.defect === 'yes')
-  check('🔴 🔴 **규칙 no · 의미 yes → yes**', combineAuditVerdicts(rule, semYes).verdict.defect === 'yes')
-  const c = combineAuditVerdicts(rule, semNo).verdict
+  const semRetry = await judgeSemantic({ ok: true, ctx: CTX }, offSemanticProvider)
+  const semInteg = await judgeSemantic({ ok: false, code: 'NO_PERSONA_CARD', reason: 'x', integrity: true }, scripted(CLEAN))
+  const final = (c: CombinedAudit): 'yes' | 'no' | 'retryable' => (c.kind === 'final' ? c.verdict.defect : 'retryable')
+  check('규칙 no · 의미 no → no', final(combineAuditVerdicts(rule, semNo)) === 'no')
+  check('🔴 규칙 yes · 의미 no → yes', final(combineAuditVerdicts(ruleYes, semNo)) === 'yes')
+  check('🔴 🔴 **규칙 no · 의미 yes → yes**', final(combineAuditVerdicts(rule, semYes)) === 'yes')
+  check('🔴 🔴 **규칙 no · 의미 측정 못 함 → 재시도 가능 실패(확정 아님)**', final(combineAuditVerdicts(rule, semRetry)) === 'retryable')
+  check('🔴 규칙 yes · 의미 측정 못 함 → yes (규칙이 본 결함은 결함이다)', final(combineAuditVerdicts(ruleYes, semRetry)) === 'yes')
+  check('🔴 🔴 **규칙 no · 의미 무결성 → yes**', final(combineAuditVerdicts(rule, semInteg)) === 'yes')
+  const c = combineAuditVerdicts(rule, semNo)
   check('🔴 기록 칸에 두 감사의 모델·프롬프트가 함께 남는다 · 감사 계약 판은 repo 그대로',
-    c.model === `${RULE_JUDGE_MODEL}+${SEMANTIC_AUDIT_MODEL}` && c.promptVersion === `${RULE_JUDGE_PROMPT_VERSION}+${SEMANTIC_AUDIT_PROMPT_VERSION}` && c.contractVersion === AUDIT_CONTRACT_VERSION)
+    c.kind === 'final' && c.verdict.model === `${RULE_JUDGE_MODEL}+${SEMANTIC_AUDIT_MODEL}` && c.verdict.promptVersion === `${RULE_JUDGE_PROMPT_VERSION}+${SEMANTIC_AUDIT_PROMPT_VERSION}` && c.verdict.contractVersion === AUDIT_CONTRACT_VERSION)
+  const n1 = retryableNoteOf({ code: 'PAID_OFF', at: '2026-09-28T00:00:00.000Z', attempts: 3, reason: 'x'.repeat(5000) })
+  const r1 = readRetryableFailure(n1)
+  check('🔴 재시도 가능 실패 note — 코드·시각·시도 횟수가 읽히고 2000자 안이다', r1 !== null && r1.code === 'PAID_OFF' && r1.attempts === 3 && n1.length <= 2000 && n1.startsWith(RETRYABLE_NOTE_PREFIX))
+  check('🔴 결과 note 는 실패 note 로 읽히지 않는다', readRetryableFailure(semanticNoteHead(semNo)) === null && readRetryableFailure(null) === null)
 }
 
 console.log('\n⑦ 🔴 운영자 신고 근거 — 비면 받지 않는다')
@@ -193,12 +222,15 @@ console.log('\n⑨ 🔴 🔴 배선 — 러너 · 발행 러너 · 발행 트랜
   check('🔴 🔴 **요청에서 꺼내는 칸은 postId · reasons 둘뿐 — 신고자·시각을 요청이 정하지 못한다**',
     fields.length > 0 && fields.every((x) => x === 'postId' || x === 'reasons') && /actor: \{ userId \}/.test(action) && /now: new Date\(\)/.test(action), fields.join(','))
   const tx = codeOnly('src/lib/original-post-publish-tx.ts')
-  check('🔴 🔴 **발행 트랜잭션이 자동 행 재검증 뒤 같은 트랜잭션에서 판정 대기 시한을 본다**',
-    /if \(!recheck\.ok\) return[^\n]*\n\s*const overdue = await overdueBlockInTx\(tx, input\.autoReadyEnv \?\? \{\}, txNow\)\s*\n\s*if \(overdue !== null\) return \{ kind: 'blocked', code: 'AUTO_READY_RECHECK'/.test(tx))
+  const store = codeOnly('src/lib/auto-ready-audit-store.ts')
+  check('🔴 🔴 **발행 트랜잭션이 자동 행 재검증 뒤 같은 트랜잭션에서 감사 막힘(재시도 가능 실패 · 시한)을 본다**',
+    /if \(!recheck\.ok\) return[^\n]*\n[\s\S]{0,400}?const auditBlock = await auditBlockInTx\(tx, input\.autoReadyEnv \?\? \{\}, txNow\)\s*\n\s*if \(auditBlock !== null\) return \{ kind: 'blocked', code: 'AUTO_READY_RECHECK'/.test(tx))
+  check('🔴 🔴 **감사 막힘 = 재시도 가능 실패(즉시) + 시한 초과 — 둘 다 센다**',
+    /const r = await retryableFailureCount\(db\)\s*\n\s*if \(r > 0\) reasons\.push/.test(store) && /const o = await overdueAuditCount\(db, now\)\s*\n\s*if \(o > 0\) reasons\.push/.test(store))
+  check('🔴 🔴 **러너는 재시도 가능 실패·행 오류가 있으면 non-zero 로 끝낸다**', /if \(r\.retryable\.length > 0 \|\| r\.rowErrors\.length > 0\) \{[\s\S]{0,300}return 2/.test(runner))
   const pub = codeOnly('scripts/original-post-auto-publish.mts')
   check('🔴 🔴 **발행 러너 — 열림은 auditAwareGate · 도장은 stampRoundAuditAware (맨 stampRound 없음)**',
     /const autoOpen = await auditAwareGate\(prisma, process\.env, RUN_AT\)/.test(pub) && /await stampRoundAuditAware\(prisma, \{ env: process\.env, now: RUN_AT \}\)/.test(pub) && !/\bstampRound\(/.test(pub))
-  const store = codeOnly('src/lib/auto-ready-audit-store.ts')
   check('🔴 🔴 **자동 감사 쓰기는 판정 전일 때만 — 첫 기록이 이긴다**',
     /updateMany\(\{\s*where: \{ queueId: i\.queueId, defect: null \},/.test(store) && /where: \{ queueId, defect: null \},/.test(store))
   check('🔴 🔴 **운영자 신고만 no 를 yes 로 올린다**', /where: \{ queueId: queue\.id, OR: \[\{ defect: null \}, \{ defect: 'no' \}\] \}, data: judged/.test(store))

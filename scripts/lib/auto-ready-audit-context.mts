@@ -6,7 +6,8 @@
  *   글쓴이는 큐에 배정된 Persona 이고, 그 Persona 의 User 가 **실제 Post 작성자**여야 한다.
  *   카드는 Pool 카드 정본 문서에서 읽는다(`parsePoolDoc`) — DB 의 identity 가 아니다.
  *
- * 🔴 하나라도 어긋나면 문맥을 만들지 않는다 → 의미 감사는 측정 불가(yes)다. 추정 매칭을 하지 않는다.
+ * 🔴 하나라도 어긋나면 문맥을 만들지 않는다 → 무결성 yes. 정본 파일을 못 읽은 것만 재시도 가능 실패다.
+ *    추정 매칭을 하지 않는다.
  * 🔴 원문 근거를 DB 로 복사하지 않는다 — 로컬 정본에서 읽어 요청에만 싣는다.
  */
 import { readFileSync } from 'node:fs'
@@ -26,6 +27,9 @@ export const AUDIT_POOL_DOC = fileURLToPath(new URL('../../docs/operations/2026-
 
 const rec = (v: unknown): Record<string, unknown> =>
   (v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+
+/** 🔴 환경(정본 파일 읽기) 실패 코드 — 이것만 재시도 가능이다. 나머지 문맥 실패는 무결성이다 */
+export const ENV_READ_CODES: readonly string[] = ['ARTIFACT_INDEX_UNREADABLE', 'PERSONA_CANON_UNREADABLE']
 
 export function makeAuditContextLoader(prisma: PrismaClient, opts: { artifactDir?: string; poolDocPath?: string } = {}): AuditContextLoader {
   let index: ArtifactIndex | null = null
@@ -48,7 +52,12 @@ export function makeAuditContextLoader(prisma: PrismaClient, opts: { artifactDir
     }
     return cards
   }
-  const fail = (code: string, reason: string): SemanticContextResult => ({ ok: false, code, reason })
+  /**
+   * 🔴 **데이터가 없거나 결속이 깨졌다 → 무결성**(`integrity: true`). **정본 파일을 못 읽었다 → 재시도 가능**
+   *    (`ENV_READ_CODES` — 디렉터리·문서 읽기 실패는 글의 결함이 아니다. 고쳐지면 다음 회차가 판정한다).
+   */
+  const fail = (code: string, reason: string): SemanticContextResult =>
+    ({ ok: false, code, reason, integrity: !ENV_READ_CODES.includes(code) })
 
   return async ({ queueId, postId }): Promise<SemanticContextResult> => {
     const q = await prisma.originalPostApprovalQueue.findUnique({

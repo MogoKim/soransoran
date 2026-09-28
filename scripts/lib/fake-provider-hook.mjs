@@ -231,6 +231,7 @@ const BODY_LOG = process.env.FAKE_PROVIDER_BODY_LOG ?? ''
  *      (원문 근거가 요청에 안 실리면 게시글의 금액을 원문과 대조할 수 없어 전부 근거 없음이 된다)
  *
  *    FAKE_SEMANTIC_MODE — judge(기본) · garbage(JSON 아님) · contradict(발견이 있는데 defect=no) · http-500
+ *    FAKE_SEMANTIC_FAIL_MARK — 게시글에 이 문자열이 실린 요청만 HTTP 500
  */
 const SEMANTIC_MARK = 'SORAN_AUTO_READY_SEMANTIC_AUDIT'
 const SEMANTIC_MODE = process.env.FAKE_SEMANTIC_MODE ?? 'judge'
@@ -289,6 +290,9 @@ globalThis.fetch = async (url, init) => {
   }
 
   if (isSemantic && SEMANTIC_MODE === 'http-500') return json({ error: 'fixture' }, 500)
+  // 🔴 한 글만 실패시킨다 — 게시글에 이 표식이 **실제로 실려 나간** 요청만 500 이다(한 행 실패 · 나머지 계속)
+  const FAIL_MARK = process.env.FAKE_SEMANTIC_FAIL_MARK ?? ''
+  if (isSemantic && FAIL_MARK !== '' && String(init?.body ?? '').includes(FAIL_MARK)) return json({ error: 'fixture' }, 500)
   if (MODE === 'timeout') {
     // 🔴 실제로 기다리지 않는다 — provider 가 abort 를 보는 것과 같은 예외를 던진다
     const e = new Error('fixture timeout')

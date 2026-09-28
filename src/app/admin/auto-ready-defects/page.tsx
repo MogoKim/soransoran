@@ -23,7 +23,7 @@ export const dynamic = 'force-dynamic'
 
 const auditLabel = (r: ReportableRow): string =>
   r.audit === null ? '감사 대상 아님'
-    : r.audit.defect === null ? '감사 대기'
+    : r.audit.defect === null ? (r.audit.retryable === null ? '감사 대기' : `감사 실패 — 재시도 대기 (${r.audit.retryable})`)
       : r.audit.defect === 'yes' ? `결함 있음 (${r.audit.auditor ?? '?'})` : `결함 없음 (${r.audit.auditor ?? '?'})`
 
 export default async function AutoReadyDefectsPage() {
