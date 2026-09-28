@@ -16,7 +16,7 @@
  * 일반 게시판 한 페이지의 글 수.
  *
  * 🔴 이름에 `BOARD` 가 들어가는 것이 규칙의 일부다.
- *    `/best`(20) · `/my/*`(10) 은 각자의 이유로 다른 값을 쓴다.
+ *    `/best`(BEST_PAGE_SIZE) · `/my/*`(10) 은 각자의 역할로 따로 정한다.
  *    `LIST_PAGE_SIZE` 처럼 넓은 이름을 두면 언젠가 그중 하나가
  *    "목록이니까" 하고 끌어다 쓰고, 그때부터 값 하나가 여러 화면을 흔든다.
  *
@@ -36,6 +36,26 @@ export const BOARD_PAGE_SIZE = 12
  *    두 값은 이 파일 안에 나란히 있고, 화면 파일로는 흩어지지 않는다.
  */
 export const MAGAZINE_PAGE_SIZE = 12
+
+/**
+ * /best 한 쪽의 글 수. 1쪽은 현재 베스트, 2쪽부터는 과거 베스트 기록이다.
+ *
+ * 🔴 게시판·매거진과 값이 같지만 별칭으로 두지 않는다 — 위 MAGAZINE_PAGE_SIZE 와 같은 이유다.
+ * 🔴 1쪽 크기는 현재 베스트 12개(best-ranking.ts BEST_CURRENT_SIZE)와 같아야 한다.
+ *    `npm run check:best` 가 둘이 같은지 본다.
+ */
+export const BEST_PAGE_SIZE = 12
+
+/**
+ * /best 의 마지막 쪽. 1쪽(현재 베스트)은 언제나 있고, 과거 기록이 있을 때만 2쪽부터 생긴다.
+ *
+ * 🔴 `lastPageOf` 를 쓰지 않는다 — 그쪽은 글 0건이어도 1을 돌려주므로 1 을 더하면
+ *    기록이 없는데 빈 2쪽이 생긴다.
+ */
+export function bestLastPage(archiveTotal: number): number {
+  const total = Number.isFinite(archiveTotal) && archiveTotal > 0 ? Math.floor(archiveTotal) : 0
+  return 1 + Math.ceil(total / BEST_PAGE_SIZE)
+}
 
 /**
  * 게시판 목록 정렬.

@@ -7,6 +7,7 @@ import { getBoardBySlug } from '@/lib/board-registry'
 import { requireOnboarded } from '@/lib/onboarding-guard'
 import { POST_NOT_FOUND } from '@/lib/post-policy'
 import { COMMENT_NOT_FOUND } from '@/lib/comment-policy'
+import { recomputePostRanking } from '@/lib/best-ranking-db'
 
 /**
  * 작성자 본인 삭제
@@ -97,15 +98,20 @@ export async function deleteComment(
 
   const comment = await prisma.comment.findUnique({
     where: { id: commentId },
-    select: { id: true, authorId: true, isDeleted: true },
+    select: { id: true, authorId: true, isDeleted: true, postId: true },
   })
   if (!comment || comment.isDeleted) return { error: COMMENT_NOT_FOUND }
 
   if (comment.authorId !== userId) return { error: '본인이 쓴 댓글만 지울 수 있습니다.' }
 
-  await prisma.comment.update({
-    where: { id: commentId },
-    data: { isDeleted: true },
+  // /best 순위 키는 같은 트랜잭션에서 내린다.
+  await prisma.$transaction(async (tx) => {
+    await tx.comment.update({
+      where: { id: commentId },
+      data: { isDeleted: true },
+      select: { id: true },
+    })
+    await recomputePostRanking(tx, comment.postId)
   })
 
   const board = getBoardBySlug(boardSlug)
