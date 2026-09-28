@@ -41,6 +41,7 @@ import { PUBLISH_RUNNER_LABEL } from './lib/original-post-runner-template'
 /** 🔴 감사 러너 label · 렌더 입력 형식의 정본 */
 import { AUDIT_RUNNER_LABEL } from './lib/auto-ready-audit-template'
 import { COMMENT_RUNNER_LABEL } from './lib/persona-comment-runner-template'
+import { RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './lib/ops-loop-templates'
 /** 🔴 배포기가 잠시 멈출 job 목록의 정본 — 배포기와 **같은 상수** */
 import { DEPLOY_QUIESCE_JOBS } from './lib/runtime-quiesce-jobs'
 import { readRuntimeEnv } from './lib/runtime-env.mjs'
@@ -1632,9 +1633,11 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
         && !/'com\.soransoran\.original-post-runner'/.test(src)
         && !/'com\.soransoran\.auto-ready-audit'/.test(src)
     })())
-    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행 러너 + 감사 러너 + 무인 댓글 루프**',
-      DEPLOY_QUIESCE_JOBS.length === 3 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
-      && DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL) && DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL))
+    check('🔴 [Q] 🔴 **잠시 멈출 job 정본 = 발행·감사·댓글·복구·단계 controller**',
+      DEPLOY_QUIESCE_JOBS.length === 5 && DEPLOY_QUIESCE_JOBS.includes(PUBLISH_RUNNER_LABEL)
+      && DEPLOY_QUIESCE_JOBS.includes(AUDIT_RUNNER_LABEL) && DEPLOY_QUIESCE_JOBS.includes(COMMENT_RUNNER_LABEL)
+      && DEPLOY_QUIESCE_JOBS.includes(RUNNER_RECOVER_LABEL)
+      && DEPLOY_QUIESCE_JOBS.includes(STAGE_CONTROLLER_LABEL))
     check('🔴 [Q] 🔴 **무인 댓글 루프도 공급·퇴역·스위치 목록 밖이다** — 설치는 선택이다',
       !RUNTIME_JOBS.includes(COMMENT_RUNNER_LABEL) && !RETIRED_JOBS.includes(COMMENT_RUNNER_LABEL)
       && !Object.keys(JOB_ENV_REQUIREMENTS).includes(COMMENT_RUNNER_LABEL))
@@ -1901,9 +1904,11 @@ console.log('\n🔴 배포 행동 fixture (가짜 명령 · 실제 launchctl 0)'
   {
     const src = readFileSync('scripts/runtime-isolation-check.mts', 'utf-8')
     const real = src.slice(src.indexOf('② 이 기계의 실제 상태'))
-    check('🔴 [QI] 실제 관측 구간이 judgeOptionalRuntimeJob 으로 감사 러너 · 무인 댓글 루프를 판정한다',
+    check('🔴 [QI] 실제 관측 구간이 선택 설치 runtime 러너 네 개를 판정한다',
       /judgeOptionalRuntimeJob\(/.test(real) && /label: AUDIT_RUNNER_LABEL/.test(real)
       && /label: COMMENT_RUNNER_LABEL/.test(real)
+      && /label: RUNNER_RECOVER_LABEL/.test(real)
+      && /label: STAGE_CONTROLLER_LABEL/.test(real)
       && /check\(`🔴 \$\{opt\.label\}/.test(real))
   }
 
@@ -2378,6 +2383,8 @@ if (!existsSync(RUNTIME_ROOT)) {
   const OPTIONAL_RUNNERS: readonly { label: string; module: string; render: string }[] = [
     { label: AUDIT_RUNNER_LABEL, module: 'auto-ready-audit-template.ts', render: 'renderAuditRunnerPlist' },
     { label: COMMENT_RUNNER_LABEL, module: 'persona-comment-runner-template.ts', render: 'renderCommentRunnerPlist' },
+    { label: RUNNER_RECOVER_LABEL, module: 'ops-loop-templates.ts', render: 'renderRunnerRecoverPlist' },
+    { label: STAGE_CONTROLLER_LABEL, module: 'ops-loop-templates.ts', render: 'renderStageControllerPlist' },
   ]
   for (const opt of OPTIONAL_RUNNERS) {
     const label = opt.label

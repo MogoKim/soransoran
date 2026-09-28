@@ -31,6 +31,8 @@ import {
 } from './lib/ops-loop-templates'
 import { PUBLISH_WINDOW_START_MINUTE } from '../src/lib/publish-slot-catchup'
 import { RUNTIME_JOBS } from '../src/lib/runtime-isolation'
+import { programArguments } from './lib/launchd-install.mjs'
+import { renderPublishHeartbeatPlist, STAGE_CONSUMER_SCRIPT } from './lib/original-post-runner-template'
 
 let pass = 0
 let fail = 0
@@ -300,6 +302,31 @@ console.log('\n⑤ 템플릿 — keep-awake · controller · 복구')
   check('복구 job 은 StartInterval 로 돈다', /<key>StartInterval<\/key><integer>\d+<\/integer>/.test(rr))
   check('🔴 복구 대상에 수집 job 이 없다(외부 요청 간격은 영구 안전장치)',
     RECOVERABLE_LABELS.every((l) => !/collect/.test(l)) && RUNTIME_JOBS.filter((l) => /collect/.test(l)).every((l) => !RECOVERABLE_LABELS.includes(l)))
+
+  const publishArgs = programArguments(renderPublishHeartbeatPlist(input))
+  check('🔴 발행 job 이 stage consumer를 거쳐 기존 heartbeat 인자를 보존한다',
+    publishArgs.join(' ') === [
+      '/n/npx', 'tsx', `/r/${STAGE_CONSUMER_SCRIPT}`, '--by=publish', '--',
+      '/n/npx', 'tsx', '/r/scripts/original-post-auto-publish.mts',
+      '--apply', '--limit=1', '--trigger=local', '--heartbeat',
+    ].join(' '))
+  const supplyTemplate = readFileSync('docs/operations/launchd/com.soransoran.supply-process.plist.template', 'utf-8')
+  const supplyArgs = programArguments(supplyTemplate)
+  check('🔴 공급 job 이 stage consumer를 거쳐 기존 --live 인자를 보존한다',
+    supplyArgs.join(' ') === [
+      '__NPX__', 'tsx', '__REPO__/scripts/stage-consume-exec.mts', '--by=supply', '--',
+      '__NPX__', 'tsx', '__REPO__/scripts/supply-process.mts', '--live',
+    ].join(' '))
+
+  const installer = readFileSync('scripts/ops-loop-install.mts', 'utf-8')
+  check('🔴 공식 설치기는 runtime/pin·공급 consumer·실행 중 job을 모두 확인한다',
+    /runtime HEAD와 pin/.test(installer) && /installedSupply !== expectedSupply/.test(installer)
+    && /running\(label\)/.test(installer))
+  check('🔴 공식 설치기는 설치 전 snapshot을 남기고 검증 실패면 자동 rollback한다',
+    /manifest\.json/.test(installer) && /설치 검증 실패/.test(installer) && /restore\(backupDir\)/.test(installer))
+  const stageSwitch = readFileSync('scripts/stage-controller-switch.mts', 'utf-8')
+  check('🔴 단계 스위치는 다른 env 키가 바뀌면 원본으로 되돌린다',
+    /othersSame/.test(stageSwitch) && /copyFileSync\(backup, envPath\)/.test(stageSwitch))
 }
 
 // ─────────────────────────────────────────────────────────

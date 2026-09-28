@@ -514,7 +514,9 @@ if (got) {
 `
   const runChild = (dir: string, script: string, env: Record<string, string>): Promise<number> =>
     new Promise((res) => {
-      const c = spawn('npx', ['tsx', script], {
+      // 부모가 이미 tsx로 실행 중이다. 같은 Node/loader를 물려야 두 자식이 동시에
+      // `npx` 초기화를 하다가 한쪽이 준비 표식 전에 죽는 CI 경쟁이 없다.
+      const c = spawn(process.execPath, [...process.execArgv, script], {
         cwd: dir, env: { ...process.env, ...env }, stdio: ['ignore', 'ignore', 'pipe'],
       })
       c.on('close', (code) => res(code ?? -1))

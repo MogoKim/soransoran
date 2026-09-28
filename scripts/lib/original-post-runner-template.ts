@@ -97,6 +97,7 @@ export const CANONICAL_STAGE_KEYS: readonly string[] = [CAPACITY_ENV, RELEASE_EN
 
 /** 🔴 러너는 runtime worktree 에서 돈다. 개발 작업트리를 가리키면 격리가 깨진다 */
 export const PUBLISH_RUNNER_SCRIPT = 'scripts/original-post-auto-publish.mts'
+export const STAGE_CONSUMER_SCRIPT = 'scripts/stage-consume-exec.mts'
 
 /**
  * 🔴 **launchd 가 넘기는 인자.**
@@ -149,6 +150,11 @@ export type RunnerPlistInput = {
  */
 function renderRunnerPlistWith(input: RunnerPlistInput, runArgs: readonly string[], wakes: readonly Slot[]): string {
   const args = [
+    `        <string>${input.npxPath}</string>`,
+    '        <string>tsx</string>',
+    `        <string>${input.runtimeRoot}/${STAGE_CONSUMER_SCRIPT}</string>`,
+    '        <string>--by=publish</string>',
+    '        <string>--</string>',
     `        <string>${input.npxPath}</string>`,
     '        <string>tsx</string>',
     `        <string>${input.runtimeRoot}/${PUBLISH_RUNNER_SCRIPT}</string>`,

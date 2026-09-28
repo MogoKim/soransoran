@@ -18,5 +18,12 @@
 import { AUDIT_RUNNER_LABEL } from './auto-ready-audit-template'
 import { PUBLISH_RUNNER_LABEL } from './original-post-runner-template'
 import { COMMENT_RUNNER_LABEL } from './persona-comment-runner-template'
+import { RUNNER_RECOVER_LABEL, STAGE_CONTROLLER_LABEL } from './ops-loop-templates'
 
-export const DEPLOY_QUIESCE_JOBS: readonly string[] = [PUBLISH_RUNNER_LABEL, AUDIT_RUNNER_LABEL, COMMENT_RUNNER_LABEL]
+export const DEPLOY_QUIESCE_JOBS: readonly string[] = [
+  PUBLISH_RUNNER_LABEL,
+  AUDIT_RUNNER_LABEL,
+  COMMENT_RUNNER_LABEL,
+  RUNNER_RECOVER_LABEL,
+  STAGE_CONTROLLER_LABEL,
+]

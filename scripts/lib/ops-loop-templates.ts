@@ -145,13 +145,11 @@ export const RECOVERABLE_LABELS: readonly string[] = [
   STAGE_CONTROLLER_LABEL,
 ]
 
-/** 🔴 설치 절차 — 이 PR 은 아무것도 설치하지 않는다. 사람이 이 순서로 한다 */
+/** 설치 절차 — 공식 설치기 한 명령으로 적용하고 같은 설치기로 되돌린다. */
 export const OPS_LOOP_INSTALL_STEPS: readonly string[] = [
   '① runtime 을 이 PR 이 들어간 main SHA 로 배포한다 (npm run runtime:deploy — 기존 절차)',
-  '② 렌더: npx tsx scripts/ops-loop-render.mts --out=<임시 디렉터리> (파일 셋을 만든다 · 등록 0)',
-  '③ keep-awake: cp <임시>/com.soransoran.keep-awake.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.soransoran.keep-awake.plist',
-  '④ 확인: pmset -g assertions | grep caffeinate',
-  '⑤ runner-recover: 같은 방법으로 bootstrap — 첫 회는 `npm run ops:recover` (dry-run) 로 무엇을 할지 먼저 본다',
-  '⑥ stage-controller: bootstrap 만 한다. 실제 저장은 정본 env 에 STAGE_CONTROLLER_ENABLED=on 을 사람이 넣은 뒤부터다',
-  '⑦ consumer: 발행·공급 러너가 결정을 읽게 하려면 두 러너의 ProgramArguments 앞에 `npx tsx scripts/stage-consume-exec.mts --` 를 붙인다 (flag OFF 면 그대로 통과 · legacy)',
+  '② 계획: npm run ops:loop-install',
+  '③ 적용: npm run ops:loop-install -- --apply',
+  '④ 단계 ON: npm run stage:switch -- --on --apply 뒤 npm run stage:controller -- --apply',
+  '⑤ 되돌리기: npm run stage:switch -- --off --apply 뒤 npm run ops:loop-install -- --rollback=<백업 경로>',
 ]

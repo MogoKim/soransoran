@@ -124,7 +124,8 @@ const EXPECTED: Record<string, {
    */
   'com.soransoran.supply-process.plist.template': {
     label: 'com.soransoran.supply-process',
-    args: ['__NPX__', 'tsx', '__REPO__/scripts/supply-process.mts', '--live'],
+    args: ['__NPX__', 'tsx', '__REPO__/scripts/stage-consume-exec.mts', '--by=supply', '--',
+      '__NPX__', 'tsx', '__REPO__/scripts/supply-process.mts', '--live'],
     slots: [...SUPPLY_PROCESS_SLOTS],
     out: '__LOGDIR__/supply-process.log',
     err: '__LOGDIR__/supply-process-error.log',
