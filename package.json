@@ -194,6 +194,8 @@
     "ops:loop-check": "tsx scripts/ops-loop-check.mts",
     "ops:loop-db-check": "tsx scripts/ops-loop-db-check.mts",
     "ops:loop-install": "tsx scripts/ops-loop-install.mts",
+    "host:migrate": "tsx scripts/host-migrate.mts",
+    "host:migrate-check": "tsx scripts/host-migrate-check.mts",
     "check:m3a": "node scripts/magazine-m3a-check.mjs",
     "auto-ready:probe": "tsx scripts/auto-ready-v2-probe.mts",
     "auto-ready:check": "tsx scripts/auto-ready-check.mts",
