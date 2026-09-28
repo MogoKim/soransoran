@@ -27,6 +27,7 @@ export const AUTO_GATE_VERDICT = 'PASS'
 // 🔴 profile 판정의 단일 지점 — 적재기(§4-AN)와 같은 함수를 쓴다
 import { AUTO_DECIDER, readStamp, stampValidFor } from './auto-ready-v2'
 import { LEGACY_DECISION_MARK } from './review-provenance'
+import { isCurrentQualityContract } from './quality-contract'
 import { titleKey } from './draft-originality'
 import { CONTENT_CORE_MODEL_LABEL } from './content-core/pipeline'
 import { queueProfileOf } from './micro-seed-supply-autofill'
@@ -179,6 +180,8 @@ export type RejectCode =
   | 'AUTO_READY_CLOSED'
   /** 🔴 자동 도장 뒤에 제목·본문·판정 계약이 바뀌었다 */
   | 'AUTO_READY_STALE'
+  /** 🔴 자동 도장 행인데 지금 품질 계약으로 만든 글이 아니다(옛 판 · 다른 digest · 표식 없음) */
+  | 'QUALITY_CONTRACT_MISMATCH'
 
 export const REJECT_LABEL: Record<RejectCode, string> = {
   STATUS: 'APPROVED · EDITED 가 아니다',
@@ -199,6 +202,9 @@ export const REJECT_LABEL: Record<RejectCode, string> = {
   EMPTY: '제목이나 본문이 비었다',
   AUTO_READY_CLOSED: '🔴 자동 도장 행인데 자동 READY 가 닫혀 있다 — 스위치·증거·결함을 본다',
   AUTO_READY_STALE: '🔴 자동 도장 뒤에 제목·본문·판정 계약이 바뀌었다 — 그 도장은 무효다',
+  QUALITY_CONTRACT_MISMATCH:
+    '🔴 자동 도장 행인데 지금 품질 계약(판 · digest)으로 만든 글이 아니다 — 자동으로 나가지 않는다.'
+    + ' 글은 큐에 그대로 남는다(삭제 · 재도장 · 계약 고쳐 쓰기 없음)',
 }
 
 export type Reject = { id: string; code: RejectCode }
@@ -342,6 +348,16 @@ export function selectAutoTargets(
        *    `auto-ready:v1` 로 들어온다. 닫혀 있거나 도장이 지금 글과 다르면 거절한다.
        */
       if ((r.decidedBy ?? '').trim() !== AUTO_DECIDER) { push(r.id, 'HUMAN_REVIEW_REQUIRED'); continue }
+      /**
+       * 🔴 **자동 도장 행도 지금 품질 계약일 때만 자동 경로다** (2026-09-28).
+       *    도장(`stampValidFor`)은 **판정 계약**(`JUDGE_CONTRACT_DIGEST`)만 본다 — 품질 계약이 올라가도
+       *    옛 도장은 유효하게 읽혀 여기를 지나갔고, 발행 트랜잭션 재검증(`recheckAutoReadyInTx`)에서야 막혔다.
+       *    그 사이 이 행은 발행 줄 선두에 서고 Persona WIP(`autoReadyClosed`)를 점유했다.
+       *    🔴 **영구 사유가 일시 사유(닫힘)보다 먼저다** — 닫혀 있어도 이 행은 다시 열려도 못 나간다.
+       *    🔴 판정은 정본 `isCurrentQualityContract`(지금 코드 상수와 다시 견준다) 하나다. 행은 고치지 않는다.
+       *    🔴 사람이 검토한 행(`founder`)은 이 블록에 들어오지 않는다 — 그 뜻은 그대로다.
+       */
+      if (!isCurrentQualityContract(r.gateResults)) { push(r.id, 'QUALITY_CONTRACT_MISMATCH'); continue }
       if (opts.autoReadyOpen !== true) { push(r.id, 'AUTO_READY_CLOSED'); continue }
       if (!stampValidFor(readStamp(r.editDiff), r.title, r.body).ok) { push(r.id, 'AUTO_READY_STALE'); continue }
 
