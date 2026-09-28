@@ -154,6 +154,17 @@ export function isDiscoveryEligible(p: PostVisibilityInput): boolean {
   return p.discoveryEligible ?? !p.isMicroSeed
 }
 
+/**
+ * C-4 — 승격·순위 계산(write-path)에 들어가면 안 되는 글인가.
+ *
+ * 🔴 status 를 보지 않는다. 숨긴 글은 되살아날 수 있어 순위 입력을 계속 맞춰 둔다.
+ *    여기서 막는 것은 생성 때 고정되는 축(Micro Seed · 첫 인사 · 승격 차단)뿐이다.
+ */
+export function isPromotionWriteBlocked(p: PostVisibilityInput): boolean {
+  if (p.indexPromotionBlocked) return true
+  return !(p.discoveryEligible ?? !p.isMicroSeed)
+}
+
 /** 홈 최신글 · best · trending · related · search 등 추천 표면 조회용 where 조각. */
 export const DISCOVERY_ELIGIBLE_WHERE = {
   status: 'PUBLISHED',

@@ -33,6 +33,7 @@ import {
   judgeOperatorWriter,
   type OperatorBoard,
 } from './operator-writer'
+import { recordBestEntries } from './best-ranking-db'
 
 /** 🔴 판정 쿼리가 여럿이라 기본 5초로는 부하가 있을 때 판정 도중 잘린다 */
 export const TX_MAX_WAIT_MS = 10_000
@@ -332,6 +333,8 @@ export async function deleteOperatorPostTx(
         data: { status: 'HIDDEN' },
         select: { id: true },
       })
+      // /best — 이 글이 빠지면 13위가 올라온다. 그 순간을 같은 트랜잭션에서 기록한다.
+      await recordBestEntries(tx)
       await tx.operatorWriteLog.create({
         data: {
           operatorWriterId: own.operatorWriterId,

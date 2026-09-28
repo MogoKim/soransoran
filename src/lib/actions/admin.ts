@@ -14,6 +14,7 @@ import {
 import { checkContent } from '@/lib/content-guard'
 import { sanitizePostHtml, isHtmlContent } from '@/lib/post-html'
 import { firstImageUrl } from '@/lib/post-media'
+import { recordBestEntries, refreshBestRanking } from '@/lib/best-ranking-db'
 
 /**
  * 어드민 1차 MVP — 운영 write 경로. 🔴 이 파일이 유일한 지점이다.
@@ -119,9 +120,14 @@ export async function setPostHidden(postId: string, hidden: boolean): Promise<Ad
   // DELETED 는 이 화면이 만드는 상태가 아니다. 되돌리는 것도 여기서 하지 않는다.
   if (post.status === 'DELETED') return { error: '삭제 상태인 글은 여기서 바꾸지 않습니다.' }
 
-  await prisma.post.update({
-    where: { id: postId },
-    data: { status: hidden ? 'HIDDEN' : 'PUBLISHED' },
+  // 숨기면 13위가 올라오고, 되살리면 이 글이 다시 들어온다 — 같은 트랜잭션에서 기록한다.
+  await prisma.$transaction(async (tx) => {
+    await tx.post.update({
+      where: { id: postId },
+      data: { status: hidden ? 'HIDDEN' : 'PUBLISHED' },
+      select: { id: true },
+    })
+    await recordBestEntries(tx)
   })
 
   revalidatePath(`/admin/content/${postId}`)
@@ -147,7 +153,11 @@ export async function setCommentHidden(
   })
   if (!comment) return { error: '댓글을 찾지 못했습니다.' }
 
-  await prisma.comment.update({ where: { id: commentId }, data: { isDeleted: hidden } })
+  // 숨김·복구 모두 실반응 수가 바뀐다. /best 순위를 같은 트랜잭션에서 다시 계산한다.
+  await prisma.$transaction(async (tx) => {
+    await tx.comment.update({ where: { id: commentId }, data: { isDeleted: hidden }, select: { id: true } })
+    await refreshBestRanking(tx, comment.postId)
+  })
 
   revalidatePath(`/admin/content/${comment.postId}`)
   revalidatePath('/admin/reports')

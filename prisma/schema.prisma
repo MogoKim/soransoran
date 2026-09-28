@@ -334,10 +334,24 @@ model Post {
 
   viewCount Int      @default(0)
   /// 공감 수. Like row 를 세지 않고 담아 둔다 — 목록으로 옮길 때 행마다 세는 일을 피한다.
-  /// 쓰는 곳은 togglePostLike 한 곳뿐이다. 정렬·인기·베스트에는 아직 쓰지 않는다.
+  /// 쓰는 곳은 togglePostLike 한 곳뿐이다. 화면 표시용 숫자다 —
+  /// 🔴 베스트 순위는 이 값을 쓰지 않는다. 자기 공감이 섞여 있기 때문이다 (best-ranking.ts).
   likeCount Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  /// /best 순위 키 — "유효 시각"(초, epoch). 클수록 위다.
+  ///
+  /// = 작성 시각 + 실반응 기여. 식과 계수는 src/lib/best-ranking.ts 한 곳에 있다.
+  /// 🔴 조회수·likeCount 는 입력이 아니다(정본 C-4). 실반응은 Like·Comment 행을 걸러 센다.
+  /// 🔴 시간이 흐른다고 다시 쓰지 않는다. 오래된 글은 새 글의 더 늦은 키에 밀려 내려간다.
+  /// 🔴 기본값은 삽입 시각이다 — 어느 발행 경로도 이 칼럼을 몰라도 최신성으로 경쟁한다.
+  ///    계수를 여기 적지 않는다. 계수가 바뀌면 재계산 스크립트를 돌릴 뿐 schema 는 그대로다.
+  bestRankScore      Float @default(dbgenerated("(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP))::double precision"))
+  /// /best 실반응 가중치 — 자기 반응·Persona·운영·차단 회원을 뺀 값. 0 이면 과거 베스트에 기록되지 않는다.
+  /// 🔴 0030 이 DB 에 적용되기 전에 이 schema 로 만든 client 가 돌면 post.create 가 깨진다(실측).
+  ///    순서는 prisma/migrations/0030_best_ranking/APPLY.md 가 강제한다.
+  bestReactionWeight Int   @default(0)
 
   comments              Comment[]
   likes                 Like[]
@@ -345,8 +359,13 @@ model Post {
   reports               Report[]
   /// 홈 노출 예외(고정·숨김). 🔴 Restrict — 예외가 걸린 글은 지워지지 않는다
   homeExposureOverrides HomeExposureOverride[]
+  /// 과거 베스트 기록 역관계 — 칼럼 없음
+  bestSelection         BestSelection?
 
   @@index([boardType, status, createdAt])
+  // /best 현재 12개 — DISCOVERY_ELIGIBLE_WHERE 의 세 축이 등호 접두, 그 뒤가 정렬 키다.
+  // 전체 글 수와 무관하게 앞에서 12행만 읽는다.
+  @@index([status, isMicroSeed, indexPromotionBlocked, bestRankScore(sort: Desc), id(sort: Desc)])
   @@index([authorId])
   @@index([personaId])
   // 운영 직접 작성 내역 화면 — 이 작성자가 쓴 글을 최신순으로
@@ -1590,6 +1609,30 @@ model PersonaGlobalSwitch {
   changedBy String?
   changedAt DateTime @updatedAt
   createdAt DateTime @default(now())
+}
+
+/// 과거 베스트 — 전역 현재 12개에 **실반응이 있는 상태로** 처음 들어온 글의 기록.
+///
+/// 🔴 글당 한 행이다(postId 가 PK). 재진입·동시 진입에도 행이 늘지 않는다.
+/// 🔴 공감 취소·댓글 삭제로 지우지 않는다. "그때 베스트였다" 는 사실은 바뀌지 않는다.
+///    글이 숨김·삭제·차단이면 읽을 때 뺀다(DISCOVERY_ELIGIBLE_WHERE) — 복구되면 원래 자리로 돌아온다.
+/// 🔴 Cascade — 글 행이 실제로 지워지는 경로는 운영에 없다. 테스트 정리가 막히지 않게 한다.
+model BestSelection {
+  postId         String   @id
+  post           Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  /// 현재 12개에 처음 든 순간. 추정하지 않는다 — 기록하는 순간의 시각이다.
+  firstEnteredAt DateTime @default(now())
+  /// 그 순간의 bestRankScore
+  scoreAtEntry   Float
+  /// 기록 뒤 관측한 가장 높은 순위(1~12). 순위가 다시 계산되는 순간에만 갱신된다.
+  peakRank       Int
+  /// 기록을 만든 정책 판(best-ranking.ts BEST_POLICY_VERSION)
+  policyVersion  String
+  /// 'event'(반응·노출 변경 순간) | 'backfill'(도입 시점 일괄 — 그 시각을 기록 시각으로 쓴다)
+  recordedBy     String
+
+  // 2쪽부터 — 최근 최초 진입순. postId 가 동점을 가른다(cursor 전환 가능한 안정 키).
+  @@index([firstEnteredAt(sort: Desc), postId(sort: Desc)])
 }
 
 /// 홈 노출 예외를 적용할 자리. 지금은 홈 인기글 하나뿐이다.

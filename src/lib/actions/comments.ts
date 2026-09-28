@@ -16,6 +16,7 @@ import {
   COMMENT_NOT_FOUND,
 } from '@/lib/comment-policy'
 import { POST_NOT_FOUND } from '@/lib/post-policy'
+import { refreshBestRanking } from '@/lib/best-ranking-db'
 
 /** 댓글: 사용자당 5분에 10건 */
 const COMMENT_LIMIT = 10
@@ -73,8 +74,13 @@ export async function createComment(
   const target = await resolveReplyTarget(String(formData.get('parentId') ?? ''), postId)
   if (!target.ok) return { error: target.error }
 
-  await prisma.comment.create({
-    data: { postId, authorId: userId, content, source: 'USER', parentId: target.parentId },
+  // /best 순위·기록을 댓글과 같은 트랜잭션에 둔다 — 댓글만 남고 순위가 빠지는 일이 없다.
+  await prisma.$transaction(async (tx) => {
+    await tx.comment.create({
+      data: { postId, authorId: userId, content, source: 'USER', parentId: target.parentId },
+      select: { id: true },
+    })
+    await refreshBestRanking(tx, postId)
   })
 
   const board = getBoardBySlug(boardSlug)

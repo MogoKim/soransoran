@@ -15,6 +15,7 @@ import {
   COMMENT_TOO_LONG,
 } from '@/lib/comment-policy'
 import { POST_NOT_FOUND } from '@/lib/post-policy'
+import { refreshBestRanking } from '@/lib/best-ranking-db'
 import {
   GUEST_NICKNAME_MIN,
   GUEST_NICKNAME_MAX,
@@ -132,17 +133,22 @@ export async function createGuestComment(
 
   const guestPasswordHash = await bcrypt.hash(password, 10)
 
-  await prisma.comment.create({
-    data: {
-      postId,
-      authorId: null,
-      content,
-      source: 'USER',
-      commentOrigin: 'GUEST',
-      guestNickname: nickname,
-      guestPasswordHash,
-      parentId: target.parentId,
-    },
+  // /best 순위·기록을 댓글과 같은 트랜잭션에 둔다. 봇 검증·IP 제한·비밀번호 해시는 모두 이 앞에서 끝났다.
+  await prisma.$transaction(async (tx) => {
+    await tx.comment.create({
+      data: {
+        postId,
+        authorId: null,
+        content,
+        source: 'USER',
+        commentOrigin: 'GUEST',
+        guestNickname: nickname,
+        guestPasswordHash,
+        parentId: target.parentId,
+      },
+      select: { id: true },
+    })
+    await refreshBestRanking(tx, postId)
   })
 
   revalidateBoardPost(boardSlug, postId)
@@ -260,7 +266,11 @@ export async function deleteGuestComment(
   if (!verified.ok) return { error: verified.error }
 
   // 🔴 지우지 않는다. 소란소란의 댓글 삭제는 언제나 isDeleted=true 다.
-  await prisma.comment.update({ where: { id: commentId }, data: { isDeleted: true } })
+  //    /best 순위는 같은 트랜잭션에서 내린다. 이미 남은 과거 기록은 지우지 않는다.
+  await prisma.$transaction(async (tx) => {
+    await tx.comment.update({ where: { id: commentId }, data: { isDeleted: true }, select: { id: true } })
+    await refreshBestRanking(tx, verified.comment.postId)
+  })
 
   revalidateBoardPost(boardSlug, verified.comment.postId)
   return { ok: true }
