@@ -55,6 +55,25 @@ export type PoolCard = {
   voiceLength: string | null
   /** variation ①②③… 개수 */
   variationCount: number
+  /**
+   * 🔴 **집안 구성** (2026-09-28 quality-v2) — 카드 글자에서 읽는다. 못 읽으면 `null` 이다.
+   *    초안 게이트가 "자녀가 집에 있는가" · "돌보는 부모와 한집인가" 를 판정할 때만 쓴다.
+   *    🔴 생성 계약(`LIFE_CONTRACT_FIELDS`)에 넣지 않는다 — 프롬프트에 실리지 않는 값이라
+   *       넣으면 옛 artifact 캐시만 이유 없이 전부 바뀐다.
+   */
+  household: CardHousehold
+}
+
+/**
+ * 🔴 **카드가 말하는 집안 구성.** 모르는 것은 `null` 이다 — 기본값을 지어내지 않는다.
+ *    · `childrenLiving`  자녀 괄호의 `동거` · `분가` — 둘 다 있거나 일부만 동거면 `일부`
+ *    · `careSide`        상시 돌봄 대상 쪽 — 카드 제목의 `시어머니·시부모` 는 `시댁`, `친정·부모` 는 `친정`
+ *    · `careCohabit`     그 부모와 한집인가 — `모시는` 은 한집, `곁에` · `오가며` · `혼자 살며` 는 따로
+ */
+export type CardHousehold = {
+  childrenLiving: '동거' | '분가' | '일부' | null
+  careSide: '시댁' | '친정' | null
+  careCohabit: boolean | null
 }
 
 /** 🔴 카드의 자녀 표기 → 매칭이 아는 밴드. 여기가 유일한 대응표다 */
@@ -122,6 +141,31 @@ export function readChildren(text: string): { count: number; bands: ChildAgeBand
   }
   for (const h of hits.sort((x, y) => x.at - y.at)) if (!bands.includes(h.band)) bands.push(h.band)
   return { count, bands }
+}
+
+/**
+ * 🔴 집안 구성을 카드 글자에서 읽는다 (2026-09-28). 판정은 하지 않는다 — 읽기만 한다.
+ *    `자녀 2(대학생·중고생, 동거)` → 동거 · `자녀 3(성인 2 분가 · 고등 1 동거)` → 일부 ·
+ *    `자녀 2(성인, 1 동거)` → 일부(수가 모자란다) · 괄호에 둘 다 없으면 `null`.
+ */
+export function readHousehold(title: string, idLine: string): CardHousehold {
+  const kids = /자녀\s*(\d+)\s*\(([^)]*)\)/.exec(idLine)
+  let childrenLiving: CardHousehold['childrenLiving'] = null
+  if (kids !== null) {
+    const count = Number(kids[1])
+    const inner = kids[2] ?? ''
+    const together = /동거/.test(inner)
+    const apart = /분가/.test(inner)
+    const partial = /(\d+)\s*동거/.exec(inner)
+    if (together && apart) childrenLiving = '일부'
+    else if (together) childrenLiving = partial !== null && Number(partial[1]) < count ? '일부' : '동거'
+    else if (apart) childrenLiving = '분가'
+  }
+  const careSide: CardHousehold['careSide'] = /시어머니|시아버지|시부모|시댁/.test(title) ? '시댁'
+    : /친정|부모/.test(title) ? '친정' : null
+  const careCohabit = /모시는|모시고|한집/.test(title) ? true
+    : /곁에|오가며|혼자\s*살며|혼자\s*사는/.test(title) ? false : null
+  return { childrenLiving, careSide, careCohabit }
 }
 
 /** `기혼(원만)` → `{ status: '기혼', relationship: '원만' }` */
@@ -241,6 +285,7 @@ export function parseCard(code: string, title: string, body: string): { card: Po
       menopauseStatus: menopause!, parentCare: care!,
       personality, noGoTopics, noGoExpressions, forbiddenReactionRoles,
       voiceTokens, voiceLength, variationCount,
+      household: readHousehold(title, idLine!),
     },
     problems: [],
   }

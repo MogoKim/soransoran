@@ -54,6 +54,7 @@ export const P12 = card({
   menopauseStatus: '후', parentCare: '상시', personality: ['차분함', '잘 들음'],
   noGoTopics: ['병명', '약'], noGoExpressions: [],
   voiceTokens: ['중간 길이', '"~더라고요"', '존댓말', '이모티콘 없음'], voiceLength: '중간 길이',
+  household: { childrenLiving: '분가', careSide: '친정', careCohabit: false },
 })
 export const P02 = card({
   code: 'P02', title: '아이 하나, 남편과 소원', ageBand: '40대 후반', birthDate: '1979-06-20',
@@ -62,6 +63,7 @@ export const P02 = card({
   menopauseStatus: '전', parentCare: '없음', personality: ['조심스러움', '관찰형'],
   noGoTopics: ['남편 흉보기에 동조', '이혼 권유'], noGoExpressions: [],
   voiceTokens: ['중간 길이', '말끝 흐림("~같아요" "~더라고요")', '존댓말 강함'], voiceLength: '중간 길이',
+  household: { childrenLiving: '동거', careSide: null, careCohabit: null },
 })
 export const P01 = card({
   code: 'P01', title: '아이 키우며 파트타임', ageBand: '40대 후반', birthDate: '1977-11-04',
@@ -70,6 +72,7 @@ export const P01 = card({
   menopauseStatus: '전', parentCare: '간헐', personality: ['부지런함', '현실적'],
   noGoTopics: ['남의 형편 비교'], noGoExpressions: [],
   voiceTokens: ['짧은 문장', '"~해요" 기본', '이모티콘 거의 없음'], voiceLength: '짧은 문장',
+  household: { childrenLiving: '동거', careSide: null, careCohabit: null },
 })
 export const P14 = card({
   code: 'P14', title: '자녀 결혼시키고 한숨 돌린', ageBand: '50대 후반', birthDate: '1967-11-14',
@@ -78,6 +81,7 @@ export const P14 = card({
   menopauseStatus: '후', parentCare: '없음', personality: ['여유로움', '유머'],
   noGoTopics: ['형편 언급', '자랑'], noGoExpressions: [],
   voiceTokens: ['중간 길이', '"ㅎㅎ"', '이모티콘 가끔', '존댓말 부드러움'], voiceLength: '중간 길이',
+  household: { childrenLiving: '분가', careSide: null, careCohabit: null },
 })
 export const P13 = card({
   code: 'P13', title: '성인 자녀 둘, 남편과 부딪히며', ageBand: '50대 후반', birthDate: '1969-07-02',
@@ -86,6 +90,7 @@ export const P13 = card({
   menopauseStatus: '후', parentCare: '없음', personality: ['할 말 하는 편', '정 많음'],
   noGoTopics: ['남편 험담 동조', '이혼 권유'], noGoExpressions: [],
   voiceTokens: ['길게(아주 길지는 않은 편)', '느낌표', '"진짜" 자주'], voiceLength: '길게',
+  household: { childrenLiving: '일부', careSide: null, careCohabit: null },
 })
 export const P19 = card({
   code: 'P19', title: '셋 키워 다 보내고', ageBand: '60대 초반', birthDate: '1965-11-18',
@@ -94,6 +99,7 @@ export const P19 = card({
   menopauseStatus: '후', parentCare: '간헐', personality: ['무던함', '성실'],
   noGoTopics: ['병명', '약 언급'], noGoExpressions: ['"우리 때는"'],
   voiceTokens: ['짧음', '툭툭', '"~네요"', '이모티콘 없음'], voiceLength: '짧음',
+  household: { childrenLiving: '분가', careSide: null, careCohabit: null },
 })
 
 const planOf = (o: Record<string, unknown>): Record<string, unknown> => ({

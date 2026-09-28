@@ -133,6 +133,7 @@ console.log('\n③ 조합 탐색 규칙 (synthetic)')
       personality: ['무던함'],
       noGoTopics: [], noGoExpressions: [], forbiddenReactionRoles: ['advice'],
       voiceTokens: ['중간 길이'], voiceLength: '중간 길이', variationCount: 6,
+      household: { childrenLiving: null, careSide: null, careCohabit: null },
       ...over,
     })
 

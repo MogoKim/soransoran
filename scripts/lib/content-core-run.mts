@@ -117,6 +117,12 @@ export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> &
   birthDate?: string
   samples: readonly string[]
   bundleDigest: string
+  /**
+   * 🔴 **집안 구성** (2026-09-28 quality-v2) — 초안 게이트만 읽는다(돌봄·한집 · 자녀 동거).
+   *    프롬프트에 실리지 않으므로 생성 계약(`personaPoolIdentity`)에 넣지 않는다.
+   *    없으면 게이트가 그 축을 모호로 보고 사람 검토로 보낸다.
+   */
+  household?: PoolCard['household']
 }
 
 /**
@@ -179,6 +185,7 @@ export function personaInputOf(
     voiceTokens: card.voiceTokens,
     samples: ref.samples,
     bundleDigest: ref.bundleDigest,
+    household: card.household,
   }
 }
 

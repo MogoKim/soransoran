@@ -1318,6 +1318,8 @@ async function main(): Promise<void> {
       ruleVersion: DRAFT_RULE_VERSION,
       provenance: DRAFT_PROVENANCE,
       reviewedAt: nowIso,
+      // 🔴 채택 판정(`pickV2`)이 캐시·새 생성 모두에서 다시 낸 값 — 없으면 적재기가 경고로 읽는다
+      lifeReview: a.pick.lifeReview ?? null,
     })),
   }), null, 2)}\n`, 'utf-8')
   writeFileSync(artPath, `${JSON.stringify(artifacts, null, 2)}\n`, 'utf-8')

@@ -1,36 +1,38 @@
 {
-  "version": "quality-v1",
-  "digest": "ef015df61306aaabffedfbff66105023e86217ea09b31eb339fb763973618139",
+  "version": "quality-v2",
+  "digest": "4bcb1f7d4cfd0aacdec8f9eaeee42528540eaa41454f7251bd3594a589d48f86",
   "files": {
-    "src/lib/quality-contract.ts": "3686d5d4ca312b33dcceefdf28dbf6f7950f69010bc90a24e656681203b1b8c2",
-    "src/lib/semantic-summary-codes.ts": "450e9730b8c07e2761e687b3b2e80e4a044308a9b30d151cafb817e407c34b81",
-    "src/lib/content-core/draft-life-gates.ts": "468a9065eeb6d5d0f6f18c7ed6db4c6e452d08de02cd11b8595d09d873639601",
+    "src/lib/quality-contract.ts": "4ff83fc4b8dba2c962025c3a97384d347539115c3d21ddf9476a4bb1400d1c7f",
+    "src/lib/semantic-summary-codes.ts": "089e8c962c917485b210ecc3f67fa3ea69cf91db82f2c70b6ef7d525ae650bbf",
+    "src/lib/content-core/draft-life-gates.ts": "cdad5b08e02c4eeb97e2e0027bd8bdb2ad90694a863a83e050df4139e9070390",
     "src/lib/content-core/review.ts": "11a697ae36727467ea6e89af4523acf83b725f47cdf568c36bcff3e8de6fb339",
     "src/lib/content-core/pipeline.ts": "a20b40cdb7ca8e2030b3e25ab10d53739435e1f946b7fa10da79beed4a2a90b3",
     "src/lib/content-core/evidence.ts": "399fb19ea5cd4817210b3ecb04ad5c2dd0477ba7052c628b48eae043085c3eae",
     "src/lib/content-core/load-bearing.ts": "71f2c1bcb77faa5f560a23f320691a26af4533f5fa5b1722d2a070f8da02471e",
-    "src/lib/micro-seed-auto-draft.ts": "7bc13f6a496fd3d02f168eb7d61bcbce53588ef652f475b6ca137e294ec67242",
+    "src/lib/micro-seed-auto-draft.ts": "7c153c3126c97dd9efe2ad3ab22c06ae451fce1fd715d7e375236328f2efeac2",
     "src/lib/auto-ready-v2.ts": "5853c144bec97bbff67417569d01f6aa3907ceef1271d31d6ef3cf5915e6e678",
     "src/lib/draft-originality.ts": "9242a0d004b58641595ed11648c7b85be4c14f19b5d3d6582d4982701a182fa6",
     "src/lib/persona-self-age.ts": "1949bdf3bfc6d4be5e2a82c7ec770ef8a9a3b699b371718918b0842a99652001",
-    "src/lib/original-post-persona-match.ts": "64660186c4381a6b7953f7e1948851e92233534d65dba870c1b62cf503d157e1",
-    "scripts/lib/content-core-run.mts": "8bccb1e0394ecd5e74afb6970571f98ac9eed3efd1119a6aa43eca21da77713a",
+    "src/lib/original-post-persona-match.ts": "c4fd83b706912022c221b8e0db09fec90f911028782e29a701f97ef544aa6751",
+    "scripts/lib/content-core-run.mts": "60d3106fa9787463d5b79a71056a0f98f0dc273c6cd11f46dbcf215a3cdc1edc",
     "scripts/lib/content-core-prompts.mts": "b3d2a4a22966d822d114d1162f57b0606c92aec0db1d40e7ae59d5b174112751",
     "src/lib/auto-ready-quality-cohort.ts": "5c6619101a1e1f0dac42bc9c1d38a14879d403b0779e0fb6bb203905797686ab",
     "src/lib/auto-ready-repo.ts": "9a4c4d9dc240dca05a407aba97c373ca46e85839c4ef73d577615bdd1af1f9a5",
     "src/lib/auto-ready-evidence.ts": "44876509f73df30bc067263cf3040203a44aafd93863b611a96ed2beee1f1503",
-    "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a"
+    "src/lib/review-provenance.ts": "0d7e0eba9152a441caa33512195ef848140c0fa8bdb517d8c396fd9c7a9e916a",
+    "src/lib/persona-pool-card.ts": "6d862082ea62e43ef064ab1133500fe53cab2586bfdc388ee942709fc4835c8d"
   },
   "acknowledgement": {
-    "kind": "behaviorUnchanged",
-    "reason": "P1 지문 대상 확장(cohort·repo·evidence·review-provenance) · 의미 요약 파서를 의존 없는 semantic-summary-codes 로 이동(판정 동일) · Q1~Q7 마스터 확정 주석",
+    "kind": "bump",
+    "reason": "판 quality-v1 → quality-v2",
     "changedFiles": [
       "src/lib/quality-contract.ts",
       "src/lib/semantic-summary-codes.ts",
-      "src/lib/auto-ready-quality-cohort.ts",
-      "src/lib/auto-ready-repo.ts",
-      "src/lib/auto-ready-evidence.ts",
-      "src/lib/review-provenance.ts"
+      "src/lib/content-core/draft-life-gates.ts",
+      "src/lib/micro-seed-auto-draft.ts",
+      "src/lib/original-post-persona-match.ts",
+      "scripts/lib/content-core-run.mts",
+      "src/lib/persona-pool-card.ts"
     ]
   }
 }

@@ -34,17 +34,21 @@ import {
 import { REVIEW_VERSION, DETERMINISTIC_CODES } from './content-core/review'
 import { ARTIFACT_VERSION } from './content-core/artifact'
 import { SPEAKER_PLAN_VERSION } from './content-core/speaker'
-import { DRAFT_GATE_CODES, DRAFT_GATE_VERSION } from './content-core/draft-life-gates'
+import { DRAFT_GATE_CODES, DRAFT_GATE_VERSION, DRAFT_LIFE_REVIEW_CODES } from './content-core/draft-life-gates'
 import { DRAFT_RULE_VERSION } from './micro-seed-auto-draft'
 import { SOURCE_TITLE_CHECK_VERSION } from './draft-originality'
-import { SEMANTIC_HOLD_CODES } from './semantic-summary-codes'
+import { SEMANTIC_HOLD_CODES, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } from './semantic-summary-codes'
 import { JUDGE_CONTRACT_DIGEST } from './auto-ready-v2'
 
 /**
  * 🔴 **품질 계약 판** — 게이트·검수의 판정이 바뀌면 올린다.
  *    `quality-v1` = 초안 게이트 3종(사진 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제)을 포함한 첫 계약.
+ *    `quality-v2` (2026-09-28) = 생활 일관성 게이트 4종(혼인 · 돌봄·한집 · 자녀 삶의 단계 · 정신건강·질병) —
+ *      확정 모순은 적재 전 AUTO_HOLD, 모호하면 `DRAFT_LIFE_REVIEW:<코드>` 경고로 사람 검토.
+ *      v1 cohort 30건 중 중대 결함 4건이 게이트를 전부 지나갔다. v1 행은 digest 가 달라 legacy 가 된다
+ *      — 🔴 v1 행을 고치거나 지우지 않는다.
  */
-export const QUALITY_CONTRACT_VERSION = 'quality-v1'
+export const QUALITY_CONTRACT_VERSION = 'quality-v2'
 
 /** 🔴 `gateResults` 안의 칸 이름 */
 export const QUALITY_CONTRACT_KEY = 'qualityContract'
@@ -70,6 +74,9 @@ export function qualityContractComponents(): Record<string, unknown> {
     draftRuleVersion: DRAFT_RULE_VERSION,
     draftGateVersion: DRAFT_GATE_VERSION,
     draftGateCodes: DRAFT_GATE_CODES,
+    // 🔴 (v2) 모호 → 사람 검토로 보내는 축과 그 경고 이름 — 바뀌면 자동 READY 표본의 적격이 바뀐다
+    draftLifeReviewCodes: DRAFT_LIFE_REVIEW_CODES,
+    draftLifeReviewHold: { prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD },
     sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
     semanticHoldCodes: SEMANTIC_HOLD_CODES,
     judgeContractDigest: JUDGE_CONTRACT_DIGEST,

@@ -43,6 +43,8 @@ export const FINGERPRINT_FILES = [
   'src/lib/auto-ready-repo.ts',
   'src/lib/auto-ready-evidence.ts',
   'src/lib/review-provenance.ts',
+  // 🔴 (quality-v2) 초안 게이트가 읽는 카드 집안 구성(`household`)의 파서 — 바뀌면 게이트 판정이 바뀐다
+  'src/lib/persona-pool-card.ts',
 ] as const
 
 /**
@@ -61,6 +63,9 @@ export const JUDGE_DEFINITIONS: Readonly<Record<string, string>> = {
   isHumanReviewer: 'src/lib/review-provenance.ts',
   semanticSummaryOf: 'src/lib/semantic-summary-codes.ts',
   semanticHoldsOf: 'src/lib/semantic-summary-codes.ts',
+  // 🔴 (quality-v2) 생활 일관성 — 모호 경고 파서 · 게이트 정본
+  lifeReviewHoldsOf: 'src/lib/semantic-summary-codes.ts',
+  judgeDraftLife: 'src/lib/content-core/draft-life-gates.ts',
   eligibilityOf: 'src/lib/auto-ready-v2.ts',
   isCurrentQualityContract: 'src/lib/quality-contract.ts',
 }

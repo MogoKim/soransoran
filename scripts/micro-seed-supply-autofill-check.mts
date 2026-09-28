@@ -554,6 +554,8 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
     sourceDecision: 'AUTO_ADOPT', sourceInput: 'auto-judge',
     candidateType: 'seedOriginality', originality: CLEAN, leakedTokens: '',
     voiceProvenance: { personaCode: 'P01', comments: 5, bundleDigest: 'bd1', sourceDigest: 'sd1' },
+    // 🔴 (quality-v2) 생성기 봉투가 싣는 칸 — 채택 판정이 모호함 없음(빈 배열)으로 낸 후보다
+    lifeReview: [],
   })
   const eAj = { ruleVersion: 'auto-judge-v3', promptVersion: 'semantic-shadow-v2b',
     model: 'claude-haiku-4.5', inputHash: 'abc123', provenance: 'machine-shadow' }
@@ -638,6 +640,19 @@ console.log('\n⑳ 🔴 🔴 **의미 검수 경고가 적재까지 온다 — �
   const cg = (cleanPl?.gateResults ?? {}) as Record<string, unknown>
   check('🔴 🔴 **④ 깨끗한 후보는 `holds` 가 비어 있다**',
     Array.isArray(cg.holds) && (cg.holds as unknown[]).length === 0)
+
+  // ④-b (quality-v2) 생활 일관성 판정을 싣지 않은 후보는 경고다 — 모호함 없음으로 읽지 않는다
+  const noLife = { ...eC }
+  delete noLife.lifeReview
+  const nlPl = buildQueuePayload({ envelope: eEnv, candidate: noLife, autoJudge: eAj, review: cleanRev, now: NOW })
+  const nlg = (nlPl?.gateResults ?? {}) as Record<string, unknown>
+  check('🔴 🔴 **④-b lifeReview 칸이 없으면 `DRAFT_LIFE_REVIEW:unread` 경고 (통과 아님)**',
+    Array.isArray(nlg.holds) && (nlg.holds as string[]).includes('DRAFT_LIFE_REVIEW:unread'))
+  const amPl = buildQueuePayload({ envelope: eEnv, candidate: { ...eC, lifeReview: ['maritalStatusConflict'] }, autoJudge: eAj, review: cleanRev, now: NOW })
+  const amg = (amPl?.gateResults ?? {}) as Record<string, unknown>
+  check('🔴 🔴 **④-c 모호 축이 실린 후보는 `DRAFT_LIFE_REVIEW:<코드>` 경고 · blocks 는 비어 있다**',
+    Array.isArray(amg.holds) && (amg.holds as string[]).includes('DRAFT_LIFE_REVIEW:maritalStatusConflict')
+    && Array.isArray(amg.blocks) && (amg.blocks as unknown[]).length === 0)
 
   // ⑤ 판정 기록이 없으면 경고다 — 재지 못한 것을 "이상 없음" 으로 읽지 않는다
   const nonePl = buildQueuePayload({ envelope: eEnv, candidate: eC, autoJudge: eAj, now: NOW })

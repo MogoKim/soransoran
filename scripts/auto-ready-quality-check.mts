@@ -57,7 +57,7 @@ const D = qualityContractDigest()
 const INDEPENDENT = createHash('sha256').update(stableJson(qualityContractComponents()), 'utf8').digest('hex')
 check('digest 는 sha256 hex 64', /^[0-9a-f]{64}$/.test(D))
 check('🔴 🔴 **#9 env 에 가짜 digest·판을 넣어도 digest 는 코드 상수 그대로 (독립 재계산과 같다)**',
-  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v1', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
+  D === INDEPENDENT && D !== FORGED && QUALITY_CONTRACT_VERSION === 'quality-v2', `${D.slice(0, 12)} vs ${INDEPENDENT.slice(0, 12)}`)
 const comps = qualityContractComponents()
 check('🔴 digest 구성 — 게이트·검수·판정 판이 들어 있다',
   ['version', 'pipelineVersion', 'promptVersion', 'reviewVersion', 'draftRuleVersion', 'draftGateVersion', 'draftGateCodes', 'judgeContractDigest', 'semanticHoldCodes']
@@ -88,7 +88,7 @@ check('fixture 후보는 기계 profile 을 통째로 만족한다', measured.le
 const p1 = af.buildQueuePayload({ envelope: mEnv, candidate: mc as never, autoJudge: { ...aj, qualityContract: FORGED } as never, review: { qualityContract: FORGED }, now: '2026-09-27T00:00:00Z' })
 const stored = readQualityContract(p1?.gateResults)
 check('🔴 🔴 **적재가 남기는 값은 코드 상수다 — 후보·autoJudge·review·env 에 실린 값이 아니다**',
-  stored !== null && stored.digest === INDEPENDENT && stored.version === 'quality-v1', JSON.stringify(stored))
+  stored !== null && stored.digest === INDEPENDENT && stored.version === 'quality-v2', JSON.stringify(stored))
 check('🔴 저장된 표식은 판정 때 지금 계약이다', isCurrentQualityContract(p1?.gateResults))
 const forgedEnv = af.buildQueuePayload({ envelope: { ...mEnv, qualityContractDigest: FORGED }, candidate: mc as never, autoJudge: aj, now: 'x' })
 check('🔴 🔴 **#9 봉투 digest 가 다르면(호출자 주입) payload 없음**', forgedEnv === null)
@@ -281,7 +281,7 @@ console.log('\nD. 🔴 CI 지문 가드')
   const changed = { ...now, files: { ...files, 'src/lib/content-core/draft-life-gates.ts': digestOf('바뀐 게이트') } }
   check('🔴 🔴 **게이트 소스가 바뀌었는데 기록 그대로 → 실패**', judgeFingerprint(rec, changed).length > 0)
   check('🔴 🔴 **digest 구성이 바뀌었는데 판·기록 그대로 → 실패**', judgeFingerprint(rec, { ...now, digest: digestOf('다른 구성') }).length > 0)
-  check('🔴 판만 올리고 기록 갱신 안 함 → 실패', judgeFingerprint(rec, { ...now, version: 'quality-v2' }).length > 0)
+  check('🔴 판만 올리고 기록 갱신 안 함 → 실패', judgeFingerprint(rec, { ...now, version: `${QUALITY_CONTRACT_VERSION}-next` }).length > 0)
   check('🔴 기록 없음 → 실패', judgeFingerprint(null, now).length > 0)
   check('🔴 지문 대상에 게이트·검수·판정 파일이 있다',
     ['src/lib/content-core/draft-life-gates.ts', 'src/lib/content-core/review.ts', 'src/lib/auto-ready-v2.ts', 'scripts/lib/content-core-run.mts', 'src/lib/quality-contract.ts']

@@ -21,7 +21,7 @@ import { DRAFT_REASON_LABEL } from '../src/lib/micro-seed-auto-draft'
 import { readPostRequirements, readSelfClaims } from '../src/lib/original-post-persona-match'
 import type { PoolCard } from '../src/lib/persona-pool-card'
 import {
-  FIXTURES as OPS_FIXTURES, REVIEW_FIXTURES, P01, P02, P12, P13, P14, P19, runFixturePath, type GateFixture,
+  FIXTURES as OPS_FIXTURES, REVIEW_FIXTURES, P01, P02, P12, P13, P14, P19, runFixturePath, FIXTURE_NOW, type GateFixture,
 } from './lib/draft-gate-fixtures.mjs'
 
 /** 🔴 운영 실측 6 + 마스터 재검토 반례 6 — 셋 다(게이트 · 러너 경로 · 캐시) 같은 목록을 돈다 */
@@ -280,6 +280,169 @@ console.log('\n⑧ fixture 카드 = 정본 카드')
       && real.childrenCount === c.childrenCount && sameSet(real.childrenAgeBands, c.childrenAgeBands)
       && real.workStatus === c.workStatus && real.ageBand === c.ageBand,
       real === undefined ? '정본에 없음' : `${real.childrenAgeBands.join('·')} · ${real.workStatus}`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// ⑨ quality-v2 — 생활 일관성 게이트 넷 (2026-09-28 · v1 cohort 중대 결함 4건)
+// ─────────────────────────────────────────────────────────
+{
+  const { judgeDraftLife, DRAFT_LIFE_REVIEW_CODES, DRAFT_GATE_VERSION } =
+    await import('../src/lib/content-core/draft-life-gates')
+  const { LIFE_FIXTURES, LIFE_PHRASES, realCard } = await import('./lib/life-gate-fixtures.mjs')
+  const { candidateEnvelope, CANDIDATE_REQUIRED_KEYS } = await import('./lib/candidate-envelope.mjs')
+  const { buildQueuePayload } = await import('../src/lib/micro-seed-supply-autofill')
+  const { warningsOfGate } = await import('../src/lib/auto-ready-v2')
+  const { lifeReviewHoldsOf, DRAFT_LIFE_REVIEW_HOLD, DRAFT_LIFE_REVIEW_UNREAD } = await import('../src/lib/semantic-summary-codes')
+  const { qualityContractComponents, QUALITY_CONTRACT_VERSION } = await import('../src/lib/quality-contract')
+  const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
+  const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
+  const { copiesSourceTitle, SOURCE_TITLE_CHECK_VERSION } = await import('../src/lib/draft-originality')
+  const LIFE = DRAFT_LIFE_REVIEW_CODES as readonly string[]
+
+  console.log('\n⑨-a quality-v2 게이트 정본 — 운영 회귀 4 · 대조 8 · 사람 검토 2')
+  for (const fx of LIFE_FIXTURES) {
+    const p = fx.plan as { selfBasis?: string | null; speakerWarrants?: { fact: string; evidenceText: string }[] }
+    const r = judgeDraftLife({
+      title: fx.draft.title, body: fx.draft.body, card: fx.card,
+      plan: { selfBasis: p.selfBasis ?? null, warrants: (p.speakerWarrants ?? []).map((w) => ({ fact: w.fact, evidenceText: w.evidenceText })) },
+    })
+    const hard = r.failures.map((f) => f.code as string)
+    const rev = r.reviews.map((f) => f.code as string)
+    check(`${fx.expect.length > 0 ? '🔴 🔴 **' : ''}${fx.label}${fx.expect.length > 0 ? '**' : ''} — 확정 ${fx.expect.join('·') || '없음'} · 검토 ${fx.expectReview.join('·') || '없음'}`,
+      sameSet(hard, fx.expect) && sameSet(rev, fx.expectReview), `확정 ${hard.join(',')} · 검토 ${rev.join(',')}`)
+  }
+
+  console.log('\n⑨-b 새 생성 경로 — runContentCore → pickV2 (확정은 유료 검수 전 AUTO_HOLD · 모호는 채택 + lifeReview)')
+  const fresh = new Map<string, Awaited<ReturnType<typeof runFixturePath>>>()
+  for (const fx of LIFE_FIXTURES) {
+    const r = await runFixturePath(fx)
+    fresh.set(fx.queueId, r)
+    const det = r.art.review.deterministic.failures.map((f) => f.code as string)
+    const askedReview = r.asks.some((a) => a.stage === 'semanticReview')
+    if (fx.expect.length > 0) {
+      check(`🔴 🔴 **${fx.label} — artifact 에 ${fx.expect[0]} · 유료 검수 0 · pick AUTO_HOLD**`,
+        fx.expect.every((c) => det.includes(c)) && !askedReview && r.art.review.machineOutcome === 'hold'
+        && r.pick?.decision === 'AUTO_HOLD' && r.pick.reason === fx.expect[0],
+        `${det.join(',')} · ${r.pick?.decision} · ${r.pick?.reason} · 검수 ${String(askedReview)}`)
+    } else {
+      check(`${fx.label} — AUTO_ADOPT · lifeReview [${fx.expectReview.join(',')}]`,
+        r.pick?.decision === 'AUTO_ADOPT' && askedReview && sameSet(r.pick.lifeReview ?? ['(없음)'], fx.expectReview)
+        && Array.isArray(r.pick.lifeReview),
+        `${r.pick?.decision} · ${r.pick?.reason} · ${JSON.stringify(r.pick?.lifeReview)}`)
+    }
+  }
+
+  console.log('\n⑨-c 캐시 채택 경로 — adopt 로 저장된 옛 artifact 도 채택 자리에서 다시 판정')
+  for (const fx of LIFE_FIXTURES) {
+    const r = await runFixturePath(fx, { cachedAdopt: true })
+    if (fx.expect.length > 0) {
+      check(`🔴 🔴 **${fx.label} — 캐시 adopt 여도 AUTO_HOLD · ${fx.expect[0]}**`,
+        r.pick?.decision === 'AUTO_HOLD' && r.pick.reason === fx.expect[0], `${r.pick?.decision} · ${r.pick?.reason}`)
+    } else {
+      check(`${fx.label} — 캐시 adopt → AUTO_ADOPT · lifeReview [${fx.expectReview.join(',')}]`,
+        r.pick?.decision === 'AUTO_ADOPT' && Array.isArray(r.pick.lifeReview) && sameSet(r.pick.lifeReview, fx.expectReview),
+        `${r.pick?.decision} · ${JSON.stringify(r.pick?.lifeReview)}`)
+    }
+  }
+
+  console.log('\n⑨-d 문장 대조표 — 결함마다 반례 · 남의 일 · 묻는 글 · 지난 일 · 가정 · 카드가 뒷받침')
+  for (const [code, t, b, want] of LIFE_PHRASES) {
+    const r = judgeDraftLife({ title: t, body: b, plan: null, card: realCard(code) })
+    const hard = r.failures.map((f) => f.code as string).filter((c) => LIFE.includes(c))
+    const rev = r.reviews.map((f) => f.code as string)
+    const got = hard.length > 0 ? `hold:${hard.join('+')}` : rev.length > 0 ? `review:${rev.join('+')}` : 'pass'
+    check(`${want === 'pass' ? '🟢' : want.startsWith('hold') ? '🔴' : '🟡'} ${code} "${b.slice(0, 26)}" → ${want}`, got === want, got)
+  }
+  // 🔴 계획이 원문 근거로 허가한 1인칭 증상은 통과한다 — 원문 근거는 검증된 근거 문장으로만 들어온다
+  {
+    const withWarrant = judgeDraftLife({ title: '요즘', body: '공황장애 때문에 요즘 정신과 다니고 있어요.', card: realCard('P19'),
+      plan: { selfBasis: 'lifeFacts', warrants: [{ fact: 'menopause', evidenceText: '공황장애가 와서' }] } })
+    const without = judgeDraftLife({ title: '요즘', body: '공황장애 때문에 요즘 정신과 다니고 있어요.', card: realCard('P19'),
+      plan: { selfBasis: 'noLifeFactNeeded', warrants: [] } })
+    check('🟢 계획 근거 문장에 같은 증상이 있으면(lifeFacts) 통과', withWarrant.failures.length === 0 && withWarrant.reviews.length === 0,
+      JSON.stringify(withWarrant))
+    check('🔴 같은 글 · 계획 근거 없음(noLifeFactNeeded) → unsupportedHealthClaim',
+      without.failures.some((f) => f.code === 'unsupportedHealthClaim'))
+  }
+  // 🔴 카드 집안 구성이 없으면 모르는 것이다 — 통과시키지 않고 사람 검토
+  {
+    const { household: _h, ...noHousehold } = realCard('P05')
+    const r = judgeDraftLife({ title: '시댁', body: '시어머니께 한동안 연락도 못 드렸어요.', plan: null, card: noHousehold })
+    check('🟡 카드 집안 구성 미상 + 상시 돌봄 + 연락 끊김 → 사람 검토(통과 아님)',
+      r.failures.length === 0 && r.reviews.some((x) => x.code === 'careHouseholdConflict'), JSON.stringify(r))
+  }
+
+  console.log('\n⑨-e 배선 — 봉투 · 적재 경고 · 자동 READY 제외')
+  {
+    const code = readFileSync('scripts/micro-seed-auto-draft.mts', 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    check('🔴 🔴 **러너가 채택 판정의 lifeReview 를 봉투에 싣는다**', /lifeReview:\s*a\.pick\.lifeReview\s*\?\?\s*null/.test(code))
+    check('🔴 봉투 필수 칸에 lifeReview 가 있다', (CANDIDATE_REQUIRED_KEYS as readonly string[]).includes('lifeReview'))
+    const nowIso = FIXTURE_NOW.toISOString()
+    const pickFx = (id: string) => LIFE_FIXTURES.find((f) => f.queueId === id)!
+    const make = (fxId: string, lifeReview: readonly string[] | null) => {
+      const fx = pickFx(fxId)
+      const r = fresh.get(fxId)!
+      const env = candidateEnvelope({
+        generatedAt: nowIso, ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, stageModels: STAGE_MODEL,
+        items: [{
+          artifact: r.art, sourceArticleId: fx.source.id,
+          meta: { site: 'navercafe:fixture', sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: '' },
+          draft: { title: r.cand!.title, body: r.cand!.body, safetyVerdict: r.cand!.safetyVerdict, originality: r.cand!.originality, generatedAt: r.cand!.generatedAt },
+          sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title), sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
+          autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
+          ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso, lifeReview,
+        }],
+      }) as Record<string, unknown>
+      const c = (env.candidates as Record<string, unknown>[])[0]!
+      const sr = c.semanticReview as Record<string, unknown>
+      const pl = buildQueuePayload({
+        envelope: env, candidate: c,
+        autoJudge: c.autoJudge as Record<string, string>,
+        review: { semantic: sr, deterministic: { pass: sr.deterministicPass === true }, semanticCompletion: { complete: sr.complete === true } },
+        now: nowIso,
+      })
+      const holds = ((pl?.gateResults as Record<string, unknown> | undefined)?.holds ?? []) as string[]
+      return { pl, holds, warnings: pl === null ? ['(payload 없음)'] : warningsOfGate(pl.gateResults) }
+    }
+    const rv = fresh.get('review-v2-6-strained-card')!
+    const amb = make('review-v2-6-strained-card', rv.pick!.lifeReview ?? null)
+    check('🟡 🟡 **모호(P06 이혼 얘기) → 적재 holds 에 DRAFT_LIFE_REVIEW:maritalStatusConflict · 자동 READY 경고**',
+      amb.holds.includes(`${DRAFT_LIFE_REVIEW_HOLD}:maritalStatusConflict`) && amb.warnings.length > 0, JSON.stringify(amb.holds))
+    const ok = make('control-v2-6-divorced-card', fresh.get('control-v2-6-divorced-card')!.pick!.lifeReview ?? null)
+    check('🟢 대조(P03 이혼 카드) → DRAFT_LIFE_REVIEW 경고 없음', !ok.holds.some((h) => h.startsWith(DRAFT_LIFE_REVIEW_HOLD)), JSON.stringify(ok.holds))
+    const unread = make('control-v2-6-divorced-card', null)
+    check('🔴 🔴 **lifeReview 가 없는 후보(판정 안 함) → DRAFT_LIFE_REVIEW:unread 경고 (통과 아님)**',
+      unread.holds.includes(DRAFT_LIFE_REVIEW_UNREAD) && unread.warnings.length > 0, JSON.stringify(unread.holds))
+    check('🔴 모양이 어긋난 lifeReview → unread', sameSet(lifeReviewHoldsOf([1, 'x']), [DRAFT_LIFE_REVIEW_UNREAD])
+      && sameSet(lifeReviewHoldsOf('maritalStatusConflict'), [DRAFT_LIFE_REVIEW_UNREAD]) && lifeReviewHoldsOf([]).length === 0)
+  }
+
+  console.log('\n⑨-f 품질 계약 — 판이 올랐고 새 축이 digest 에 들어갔다')
+  {
+    const comp = qualityContractComponents()
+    check(`품질 계약 판 = quality-v2 (지금 ${QUALITY_CONTRACT_VERSION})`, QUALITY_CONTRACT_VERSION === 'quality-v2')
+    check(`초안 게이트 판 = draft-gates-v2 (지금 ${DRAFT_GATE_VERSION})`, DRAFT_GATE_VERSION === 'draft-gates-v2')
+    check('digest 구성에 생활 일관성 코드 넷 · 경고 이름이 있다',
+      JSON.stringify(comp.draftLifeReviewCodes) === JSON.stringify(DRAFT_LIFE_REVIEW_CODES)
+      && JSON.stringify(comp.draftLifeReviewHold) === JSON.stringify({ prefix: DRAFT_LIFE_REVIEW_HOLD, unread: DRAFT_LIFE_REVIEW_UNREAD })
+      && LIFE.every((c) => (comp.draftGateCodes as readonly string[]).includes(c)))
+  }
+
+  console.log('\n⑨-g fixture 카드 = 정본 카드 (집안 구성 포함)')
+  {
+    const { parsePoolDoc } = await import('../src/lib/persona-pool-card')
+    const doc = parsePoolDoc(readFileSync('docs/operations/2026-08-30-persona-pool-design.md', 'utf-8')).cards
+    for (const c of [P01, P02, P12, P13, P14, P19]) {
+      const real = doc.find((d) => d.code === c.code)
+      check(`${c.code} 집안 구성이 정본과 같다`, real !== undefined && JSON.stringify(real.household) === JSON.stringify(c.household),
+        `${JSON.stringify(real?.household)} vs ${JSON.stringify(c.household)}`)
+    }
+    const p05 = doc.find((d) => d.code === 'P05')
+    check('P05 정본 — 시댁 쪽 · 한집 · 자녀 동거 · 기혼(원만) · 간병 상시',
+      p05 !== undefined && p05.household.careSide === '시댁' && p05.household.careCohabit === true
+      && p05.household.childrenLiving === '동거' && p05.spouseRelationship === '원만' && p05.parentCare === '상시')
   }
 }
 

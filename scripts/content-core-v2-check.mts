@@ -155,6 +155,7 @@ const CARD = (o: Partial<PoolCard> & { code: string }): PoolCard => ({
   voiceTokens: o.voiceTokens ?? ['짧은 문장', '~해요 기본'],
   voiceLength: o.voiceLength ?? '짧게',
   variationCount: o.variationCount ?? 3,
+  household: o.household ?? { childrenLiving: null, careSide: null, careCohabit: null },
 })
 const DEFAULT_SAMPLES = ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요']
 const P = (o: Partial<PoolCard> & { code: string }
