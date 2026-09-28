@@ -28,8 +28,8 @@ import { judgeCrisisSignal } from './micro-seed-safety-signals'
 import type { PersonaForMatch } from './original-post-persona-match'
 /** 🔴 초안 게이트 정본 — 채택 판정이 규칙을 다시 쓰지 않는다 (2026-09-26) */
 import {
-  judgeDraftGates, DRAFT_GATE_LABEL,
-  type DraftGateCard, type DraftGateCode, type DraftGatePlan,
+  judgeDraftLife, DRAFT_GATE_LABEL,
+  type DraftGateCard, type DraftGateCode, type DraftGatePlan, type DraftLifeReviewCode, type DraftGateContext,
 } from './content-core/draft-life-gates'
 
 export const AUTO_DRAFT_DECISIONS = ['AUTO_ADOPT', 'AUTO_HOLD', 'AUTO_DROP'] as const
@@ -360,6 +360,11 @@ export type PickV2Input = {
   draftGate?: {
     plan: DraftGatePlan | null
     card: DraftGateCard | null
+    /**
+     * 🔴 **원천과 회차 시각** (2026-09-28 quality-v3) — 새 생성의 deterministic 과 **같은 값**이다.
+     *    시점 · 출처 · 자료 · 잘린 원문 축이 이것으로 판정한다. 캐시 artifact 도 여기서 다시 본다.
+     */
+    context: DraftGateContext
   }
 }
 
@@ -387,10 +392,18 @@ export function pickV2(input: PickV2Input, now: string): Pick {
    *    🔴 걸린 사유를 **전부** `rejected` 에 남긴다. 대표 사유는 게이트 정본 순서의 첫째다.
    *    🔴 `AUTO_DROP` 이 아니다 — 다른 Persona·자리면 쓸 수 있는 원천이다.
    */
+  /**
+   * 🔴 **모호한 생활 일관성**(2026-09-28 quality-v2) — 막지는 않고 채택 결과에 싣는다.
+   *    캐시에서 꺼낸 옛 artifact 도 여기서 **다시 판정**한다 — artifact 에 적힌 값을 믿지 않는다.
+   */
+  let lifeReview: DraftLifeReviewCode[] | undefined
   if (input.draftGate !== undefined) {
-    const gate = judgeDraftGates({
+    const life = judgeDraftLife({
       title: d.title, body: d.body, plan: input.draftGate.plan, card: input.draftGate.card,
+      context: input.draftGate.context,
     })
+    const gate = life.failures
+    lifeReview = life.reviews.map((r) => r.code)
     if (gate.length > 0) {
       return {
         ...base, decision: 'AUTO_HOLD', draftNo: null, reason: gate[0]!.code,
@@ -432,7 +445,10 @@ export function pickV2(input: PickV2Input, now: string): Pick {
     if (age.hold) return held('lifeHistoryConflict')
   }
   if (input.sourceTitleCopied) return held('copiedFromSource')
-  return { ...base, decision: 'AUTO_ADOPT', draftNo: d.draftNo, reason: 'ok', rejected: [] }
+  return {
+    ...base, decision: 'AUTO_ADOPT', draftNo: d.draftNo, reason: 'ok', rejected: [],
+    ...(lifeReview === undefined ? {} : { lifeReview }),
+  }
 }
 
 export type PickInput = {
@@ -460,6 +476,12 @@ export type Pick = {
   ruleVersion: string
   provenance: string
   decidedAt: string
+  /**
+   * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2) — `pickV2` 가 초안 게이트
+   *    입력을 받았을 때만 값이 있다(빈 배열 = 모호함 없음). 후보 봉투가 그대로 나르고 적재기가
+   *    `gateResults.holds` 에 싣는다. `undefined` 는 "판정하지 않았다" 이다 — 적재기가 경고로 읽는다.
+   */
+  lifeReview?: DraftLifeReviewCode[]
 }
 
 /**

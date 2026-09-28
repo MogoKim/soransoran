@@ -155,6 +155,7 @@ const CARD = (o: Partial<PoolCard> & { code: string }): PoolCard => ({
   voiceTokens: o.voiceTokens ?? ['짧은 문장', '~해요 기본'],
   voiceLength: o.voiceLength ?? '짧게',
   variationCount: o.variationCount ?? 3,
+  household: o.household ?? { childrenLiving: null, careSide: null, careCohabit: null },
 })
 const DEFAULT_SAMPLES = ['그러게요 저도 비슷하게 느꼈어요', '맞아요 저도 같은 생각이에요']
 const P = (o: Partial<PoolCard> & { code: string }
@@ -184,6 +185,8 @@ const run = (o: {
     // 🔴 fixture 도 회차마다 새 불투명 id 를 준다 — 원문에서 유도하지 않는다
     artifactId: randomUUID().replace(/-/g, ''),
     sourceArticleId: o.id, title: o.title, maskedBody: o.body,
+    // 🔴 (quality-v3) 회차와 같은 날 올라온 커뮤니티 글 · 사진 수 미상 — 이 검사의 원문은 시점·출처 축을 부르지 않는다
+    sourceMeta: { site: 'navercafe:fixture', postedAt: NOW, capturedAt: NOW, imageCount: null },
     personas: o.personas ?? ALL,
     /**
      * 🔴 **넘긴 목록이 곧 전체다** — 따로 주지 않는 한.

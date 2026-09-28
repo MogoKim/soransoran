@@ -19,7 +19,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import {
-  cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+  cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -49,7 +49,11 @@ const { PrismaClient } = await import('@prisma/client')
 const fxMod = await import('./lib/draft-gate-fixtures.mjs')
 const { runFixturePath, FIXTURE_NOW } = fxMod
 /** 🔴 운영 실측 6 + 마스터 재검토 반례 6(남의 집안 3 · 맨 남편 · 돼서 지금 · 되면 미래) */
+const lifeMod = await import('./lib/life-gate-fixtures.mjs')
+/** 🔴 (quality-v2) 생활 일관성 — 운영 회귀 4 · 대조 8 · 사람 검토 2 */
+const LIFE = lifeMod.LIFE_FIXTURES
 const FIXTURES = [...fxMod.FIXTURES, ...fxMod.REVIEW_FIXTURES]
+const { DRAFT_LIFE_REVIEW_HOLD } = await import('../src/lib/semantic-summary-codes')
 const { candidateEnvelope } = await import('./lib/candidate-envelope.mjs')
 const { STAGE_MODEL } = await import('./lib/content-core-run.mjs')
 const { DRAFT_RULE_VERSION, DRAFT_PROVENANCE } = await import('../src/lib/micro-seed-auto-draft')
@@ -108,6 +112,8 @@ async function main(): Promise<void> {
       sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
       autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
       ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
+      // 🔴 러너와 같다 — 채택 판정이 낸 모호 축
+      lifeReview: r.pick!.lifeReview ?? null,
     })),
   }), null, 2))
 
@@ -123,7 +129,7 @@ async function main(): Promise<void> {
 
   console.log('\n③ 격리 DB 의 큐 — 반례 0 · 대조만')
   const rows = await prisma.originalPostApprovalQueue.findMany({
-    select: { draftTitle: true, status: true, decidedBy: true },
+    select: { draftTitle: true, status: true, decidedBy: true, gateResults: true },
   })
   const titles = rows.map((x) => x.draftTitle)
   for (const fx of FIXTURES) {
@@ -137,6 +143,85 @@ async function main(): Promise<void> {
   }
   check(`큐 행 수 = 대조군 수 (${FIXTURES.filter((f) => f.expect.length === 0).length})`, rows.length === FIXTURES.filter((f) => f.expect.length === 0).length, `${rows.length}행`)
   check('🔴 공급은 발행하지 않는다 — Post 0', (await prisma.post.count()) === 0)
+
+  /**
+   * 🔴 **(quality-v2) 생활 일관성 — 같은 실제 적재기 경로를 한 번 더 돈다** (2026-09-28).
+   *    운영 회귀 4건은 큐 행 0 · 대조 8건은 깨끗한 행 · 모호 2건은 `DRAFT_LIFE_REVIEW:<코드>` 경고가
+   *    붙은 행이 되어야 한다(자동 READY 제외 · 사람 검토). 새 생성 경로와 **캐시 채택 경로** 둘 다 싣는다.
+   *    적재 상한이 있어 앞 회차 행을 격리 DB 에서 비우고(Prisma deleteMany) 새 파일 하나로 돈다.
+   */
+  for (const cachedAdopt of [false, true]) {
+    const tag = cachedAdopt ? '캐시 채택' : '새 생성'
+    console.log(`\n④ (quality-v2) 생활 일관성 · ${tag} 경로 → 실제 적재기 — 회귀 0행 · 모호 행에 사람 검토 경고`)
+    await prisma.originalPostApprovalQueue.deleteMany({})
+    const lifeAdopted: { fx: (typeof LIFE)[number]; r: Awaited<ReturnType<typeof runFixturePath>> }[] = []
+    for (const fx0 of LIFE) {
+      // 🔴 두 번째 회차는 원천 id 만 달리한다 — 앞 회차가 만든 원천 행과 겹치지 않게(초안·계획·카드는 같다)
+      const fx = cachedAdopt ? { ...fx0, source: { ...fx0.source, id: `${fx0.source.id}-cache` } } : fx0
+      const r = await runFixturePath(fx, { cachedAdopt })
+      if (fx.expect.length > 0) {
+        check(`🔴 ${tag} · ${fx.label} — pick AUTO_HOLD · ${fx.expect[0]}`,
+          r.pick?.decision === 'AUTO_HOLD' && r.pick.reason === fx.expect[0], `${r.pick?.decision} · ${r.pick?.reason}`)
+      }
+      if (r.pick?.decision === 'AUTO_ADOPT') lifeAdopted.push({ fx, r })
+    }
+    for (const f of readdirSync(DATA).filter((x) => x.endsWith('.candidates.json'))) rmSync(join(DATA, f))
+    writeFileSync(join(DATA, `auto-draft-20260928-life${cachedAdopt ? 'c' : 'f'}.candidates.json`), JSON.stringify(candidateEnvelope({
+      generatedAt: nowIso, ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, stageModels: STAGE_MODEL,
+      items: lifeAdopted.map(({ fx, r }) => ({
+        artifact: r.art, sourceArticleId: fx.source.id,
+        meta: { site: 'navercafe:fixture', sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: '' },
+        draft: {
+          title: r.cand!.title, body: r.cand!.body, safetyVerdict: r.cand!.safetyVerdict,
+          originality: r.cand!.originality, generatedAt: r.cand!.generatedAt,
+        },
+        sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title),
+        sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
+        autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-v2-${fx.source.id}`, provenance: 'machine-shadow' },
+        ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
+        lifeReview: r.pick!.lifeReview ?? null,
+      })),
+    }), null, 2))
+    const res2 = spawnSync(process.execPath, [join(T, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+      join(T, 'scripts', 'micro-seed-supply-autofill.mts'), '--apply', `--up-to=${LIFE.length}`], {
+      cwd: T, encoding: 'utf-8', env: { ...process.env, HOME: H, DATABASE_URL: URL, DIRECT_URL: URL },
+    })
+    const out2 = `${res2.stdout ?? ''}${res2.stderr ?? ''}`
+    check(`${tag} · 적재기가 정상 종료한다 (exit 0)`, res2.status === 0, `exit ${String(res2.status)} · ${out2.split('\n').filter((l) => /중단|Error|❌/.test(l)).slice(0, 4).join(' | ')}`)
+    const rows2 = await prisma.originalPostApprovalQueue.findMany({ select: { draftTitle: true, status: true, gateResults: true } })
+    const holdsOf = (title: string): string[] | null => {
+      const row = rows2.find((x) => x.draftTitle === title)
+      if (row === undefined) return null
+      const g = row.gateResults
+      const h = g !== null && typeof g === 'object' && !Array.isArray(g) ? (g as Record<string, unknown>).holds : null
+      return Array.isArray(h) ? h.map(String) : []
+    }
+    for (const fx of LIFE) {
+      const holds = holdsOf(fx.draft.title)
+      if (fx.expect.length > 0) {
+        check(`🔴 🔴 **${tag} · ${fx.label} — 큐 행이 되지 않는다**`, holds === null, holds === null ? '' : '큐에 들어갔다')
+        continue
+      }
+      const life = (holds ?? []).filter((h) => h.startsWith(DRAFT_LIFE_REVIEW_HOLD)).sort()
+      const want = fx.expectReview.map((c) => `${DRAFT_LIFE_REVIEW_HOLD}:${c}`).sort()
+      check(`${fx.expectReview.length > 0 ? '🟡 🟡 **' : '🟢 '}${tag} · ${fx.label} — 큐 행 · holds ${want.join(',') || '생활 경고 없음'}${fx.expectReview.length > 0 ? '**' : ''}`,
+        holds !== null && life.join('|') === want.join('|'), holds === null ? '큐에 없다' : JSON.stringify(life))
+    }
+    check(`${tag} · 큐 행 수 = 채택 수 (${lifeAdopted.length})`, rows2.length === lifeAdopted.length, `${rows2.length}행`)
+    /**
+     * 🔴 (quality-v3) **같은 원천 큐 중복 0** — 같은 파일로 적재기를 한 번 더 돌려도 행이 늘지 않고,
+     *    원천(raw content)마다 큐 행은 하나다. 게이트가 바뀌어도 적재의 멱등은 그대로여야 한다.
+     */
+    const res3 = spawnSync(process.execPath, [join(T, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+      join(T, 'scripts', 'micro-seed-supply-autofill.mts'), '--apply', `--up-to=${LIFE.length}`], {
+      cwd: T, encoding: 'utf-8', env: { ...process.env, HOME: H, DATABASE_URL: URL, DIRECT_URL: URL },
+    })
+    const rows3 = await prisma.originalPostApprovalQueue.findMany({ select: { sourceRawContentId: true } })
+    check(`🔴 ${tag} · 다시 적재해도 큐 행이 늘지 않고 원천마다 한 행 (중복 0)`,
+      res3.status === 0 && rows3.length === rows2.length && new Set(rows3.map((x) => x.sourceRawContentId)).size === rows3.length,
+      `exit ${String(res3.status)} · ${rows3.length}행 · 원천 ${new Set(rows3.map((x) => x.sourceRawContentId)).size}`)
+  }
+  await prisma.originalPostApprovalQueue.deleteMany({})
 
   /**
    * 🔴 **적재 재시도 · 이월** (2026-09-27) — 같은 실제 적재기 경로다. 새 npm 명령 · 새 step 없이 여기서 함께 돈다.

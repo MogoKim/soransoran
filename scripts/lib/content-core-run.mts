@@ -42,7 +42,7 @@ import {
   selfForbiddenBy, priorFailureLines, type PriorPlanFailure,
 } from '../../src/lib/content-core/replan-input'
 /** 🔴 초안 게이트 — 자료 의존 · 1인칭 허가 없는 생활사 · 카드의 지금 삶과 시제 (2026-09-26) */
-import { judgeDraftGates } from '../../src/lib/content-core/draft-life-gates'
+import { judgeDraftGates, type DraftGateSource } from '../../src/lib/content-core/draft-life-gates'
 
 /** 🔴 KST 날짜 한 줄 — 주입된 시각에서만 만든다 */
 function kstDateKey(at: Date): string {
@@ -117,6 +117,12 @@ export type PersonaInput = PersonaLifeContract & Pick<PoolCard, 'voiceTokens'> &
   birthDate?: string
   samples: readonly string[]
   bundleDigest: string
+  /**
+   * 🔴 **집안 구성** (2026-09-28 quality-v2) — 초안 게이트만 읽는다(돌봄·한집 · 자녀 동거).
+   *    프롬프트에 실리지 않으므로 생성 계약(`personaPoolIdentity`)에 넣지 않는다.
+   *    없으면 게이트가 그 축을 모호로 보고 사람 검토로 보낸다.
+   */
+  household?: PoolCard['household']
 }
 
 /**
@@ -179,6 +185,7 @@ export function personaInputOf(
     voiceTokens: card.voiceTokens,
     samples: ref.samples,
     bundleDigest: ref.bundleDigest,
+    household: card.household,
   }
 }
 
@@ -192,6 +199,12 @@ export type RunInput = {
   /** 🔴 이미 마스킹된 값이다 */
   title: string
   maskedBody: string
+  /**
+   * 🔴 **원천 사실** (2026-09-28 quality-v3) — 초안 게이트의 시점 · 출처 · 자료 축이 읽는다.
+   *    프롬프트에 싣지 않는다(생성 계약 · 캐시 key 불변). 캐시 채택(`pickV2`)이 **같은 값**을 받는다.
+   *    🔴 필수다 — 빠뜨린 호출부가 조용히 판정을 건너뛰지 않게 한다. 모르는 값은 `null`/빈 문자열이다.
+   */
+  sourceMeta: Omit<DraftGateSource, 'title' | 'body'>
   /** 🔴 순서는 여기서 정하지 않는다 — 러너가 원문 지문으로 세운다 */
   personas: readonly PersonaInput[]
   /**
@@ -661,6 +674,11 @@ export async function runContentCore(input: RunInput): Promise<HumanReviewArtifa
    */
   for (const g of judgeDraftGates({
     title: draft.title, body: draft.body, plan, card: persona,
+    // 🔴 (quality-v3) 모델에 준 그 원문과 회차 시각 — 캐시 채택 자리(`pickV2`)와 같은 값이다
+    context: {
+      at: input.now,
+      source: { title: input.title, body: input.maskedBody, ...input.sourceMeta },
+    },
   })) failures.push(g)
   const det: DeterministicResult = { pass: failures.length === 0, failures }
   if (!det.pass) {

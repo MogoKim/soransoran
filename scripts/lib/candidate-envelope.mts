@@ -50,6 +50,11 @@ export type CandidateInput = {
   ruleVersion: string
   provenance: string
   reviewedAt: string
+  /**
+   * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2) — `pickV2` 가 낸 값 그대로다.
+   *    `null` 은 "판정하지 않았다" — 적재기가 `DRAFT_LIFE_REVIEW:unread` 경고로 읽는다(통과 아님).
+   */
+  lifeReview: readonly string[] | null
 }
 
 /**
@@ -91,6 +96,8 @@ export function candidateEnvelopeItem(a: CandidateInput): Record<string, unknown
      *    적재까지 오지 못한다(P07 실측). 문장이 아니라 **수와 완전성**이다.
      */
     semanticReview: semanticSummaryOf(a.artifact.review),
+    // 🔴 채택 자리에서 **다시 판정한** 값이다 — artifact(캐시일 수 있다)에 적힌 값이 아니다
+    lifeReview: a.lifeReview === null ? null : [...a.lifeReview],
     leakedTokens: '',
     reviewedAt: a.reviewedAt,
     writtenAt: a.draft.generatedAt,
@@ -146,7 +153,7 @@ export const CANDIDATE_REQUIRED_KEYS = [
   'candidateType', 'artifactId', 'sourceArticleId', 'sourceSite',
   'sourceTitleChecked', 'sourceTitleCopied', 'sourceTitleCheckVersion',
   'sourceInput', 'sourceDecision', 'draftFrom', 'title', 'body',
-  'safetyVerdict', 'originality', 'voiceProvenance', 'semanticReview',
+  'safetyVerdict', 'originality', 'voiceProvenance', 'semanticReview', 'lifeReview',
   'leakedTokens', 'reviewedAt', 'writtenAt',
   'sourcePostedAt', 'sourceListedAt', 'sourceCapturedAt',
   'provenanceNote', 'autoJudge',

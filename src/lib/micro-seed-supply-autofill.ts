@@ -26,7 +26,7 @@ import {
   CONTENT_CORE_MODEL_LABEL, CONTENT_CORE_PIPELINE_VERSION, CONTENT_CORE_PROMPT_VERSION,
   stageModelsMismatch,
 } from './content-core/pipeline'
-import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, type SemanticSummary } from './semantic-summary-codes'
+import { SEMANTIC_SUMMARY_KEY, SEMANTIC_HOLD_CODES, semanticSummaryOf, semanticHoldsOf, lifeReviewHoldsOf, type SemanticSummary } from './semantic-summary-codes'
 /** 🔴 품질 계약 — 적재기가 저장하는 값은 이 파일의 코드 상수다(후보 파일 값이 아니다) */
 import { qualityContractDigest, currentQualityContract, QUALITY_CONTRACT_KEY } from './quality-contract'
 
@@ -300,6 +300,11 @@ export function stockBandOf(
 export type Candidate = {
   /** 🔴 사람 검토가 artifact 한 장을 정확히 찾는 불투명 열쇠 */
   artifactId?: string
+  /**
+   * 🔴 **생활 일관성 게이트가 모호하다고 본 축**(2026-09-28 quality-v2) — 코드 배열. 모양은
+   *    `lifeReviewHoldsOf` 가 본다: 없거나 어긋나면 `DRAFT_LIFE_REVIEW:unread` 경고다.
+   */
+  lifeReview?: unknown
   candidateType?: string
   sourceArticleId?: string
   sourceSite?: string
@@ -692,7 +697,14 @@ export function buildQueuePayload(input: {
          *    🔴 `blocks` 는 그대로 비운다 — 이 경고는 후보 생성을 막지 않는다.
          *       사람 검토는 계속되고, **자동 READY 에서만 빠진다.**
          */
-        holds: semanticHoldsOf(semanticSummaryOf(input.review)),
+        holds: [
+          ...semanticHoldsOf(semanticSummaryOf(input.review)),
+          /**
+           * 🔴 **생활 일관성 게이트가 모호하다고 본 축** (2026-09-28 quality-v2). 채택은 됐지만
+           *    사람이 봐야 한다 — 자동 READY 에서만 빠진다. 칸이 없으면 `unread` 경고다(통과 아님).
+           */
+          ...lifeReviewHoldsOf(c.lifeReview),
+        ],
         blocks: [],
         [SEMANTIC_SUMMARY_KEY]: semanticSummaryOf(input.review),
         /**

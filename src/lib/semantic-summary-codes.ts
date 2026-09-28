@@ -83,3 +83,24 @@ export function semanticHoldsOf(sum: SemanticSummary | null): string[] {
   }
   return out
 }
+
+/**
+ * 🔴 **생활 일관성 게이트의 사람 검토 경고** (2026-09-28 quality-v2).
+ *
+ *    초안 게이트(`content-core/draft-life-gates.ts`)가 **모호하다**고 본 축 — 혼인 · 돌봄·한집 ·
+ *    자녀 삶의 단계 · 정신건강·질병 — 은 채택은 되지만 자동 READY 에서 빠져야 한다.
+ *    후보 봉투가 `lifeReview`(코드 배열)로 나르고, 적재기가 `gateResults.holds` 에
+ *    `DRAFT_LIFE_REVIEW:<코드>` 로 싣는다. `SEMANTIC_` 접두가 아니라 요약 대조와 섞이지 않는다.
+ *
+ *    🔴 **칸이 없거나 모양이 다르면 그것도 경고다** — 판정을 싣지 않은 후보를 "모호함 없음" 으로
+ *       읽지 않는다(`DRAFT_LIFE_REVIEW:unread`). 이 파일은 아무것도 import 하지 않는다 —
+ *       코드 이름의 정본은 게이트 파일이고, 여기서는 **모양**만 본다.
+ */
+export const DRAFT_LIFE_REVIEW_HOLD = 'DRAFT_LIFE_REVIEW'
+export const DRAFT_LIFE_REVIEW_UNREAD = `${DRAFT_LIFE_REVIEW_HOLD}:unread`
+
+export function lifeReviewHoldsOf(v: unknown): string[] {
+  if (!Array.isArray(v)) return [DRAFT_LIFE_REVIEW_UNREAD]
+  if (!v.every((x) => typeof x === 'string' && /^[A-Za-z]+$/.test(x))) return [DRAFT_LIFE_REVIEW_UNREAD]
+  return [...new Set(v as string[])].sort().map((c) => `${DRAFT_LIFE_REVIEW_HOLD}:${c}`)
+}

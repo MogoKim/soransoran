@@ -91,6 +91,7 @@ export async function runFillRetryDbScenarios(check: Check, prisma: PrismaClient
       sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
       autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-${fx.source.id}`, provenance: 'machine-shadow' },
       ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
+      lifeReview: r.pick!.lifeReview ?? null,
     })),
   }) as Record<string, unknown>
 
