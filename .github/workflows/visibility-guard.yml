@@ -905,6 +905,9 @@ jobs:
           npm run publish:heartbeat-db-check
           # 🔴 공급 capacity · 발행 release · 재고 분류 일치(공급 9 · 발행 0 반례) — 같은 격리 DB 를 스스로 비우고 쓴다
           npm run supply:stock-parity-db-check
+          # 🔴 옛 품질 계약 기계 초안은 지금 계약의 Persona WIP 가 아니다 — 46건 반례 · 큐에 남음 · 자동 발행 0 ·
+          #    사람 검토 옛 행 유지 · 행 전체 스냅샷 변경 0 · 실제 buildSpeakerLoad. 같은 격리 DB 를 스스로 비우고 쓴다
+          npm run supply:wip-contract-db-check
           # 🔴 부모 → 자식 실제 경로 — 회차 시각 하나(KST 자정·생일 경계) · 여력 0 → provider 0 → personaCapacityDeferred
           #    임시 cwd · 임시 HOME · 합성 말투 자산 · 가짜 키 — 운영 장부·자산 0
           npm run supply:draft-deferral-e2e-db-check

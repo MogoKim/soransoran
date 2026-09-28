@@ -115,6 +115,11 @@ const { horizonStart } = await import('../src/lib/scale-profile')
 const { kstDateString } = await import('../src/lib/release-canary')
 const { PROVIDER_KEY_ENV } = await import('./lib/voice-m3-provider.mjs')
 const { MACHINE_PROMPT_VERSION, MACHINE_MODEL, MACHINE_SITE_PREFIX, MACHINE_PROFILE } = await import('../src/lib/micro-seed-supply-autofill')
+/**
+ * 🔴 검토 대기 기계 초안은 적재기가 남기는 **지금 품질 계약** 표식을 가진다(`buildQueuePayload`) —
+ *    그래야 화자 WIP 다. 옛 계약 행은 WIP 가 아니다(2026-09-28 · `supply:wip-contract-db-check`).
+ */
+const { currentQualityContract, QUALITY_CONTRACT_KEY } = await import('../src/lib/quality-contract')
 
 async function main(): Promise<void> {
   console.log('\n══ 부모 → 자식 실제 경로 · 회차 시각 하나 · Persona 여력 대기 (격리 DB · 임시 디렉터리) ══')
@@ -165,7 +170,7 @@ async function main(): Promise<void> {
         gateResults: { holds: [], blocks: [], autoDraft: {
           provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
           draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: code, bundleDigest: `bd-${code}`, comments: 3 },
-        } } as never,
+        }, [QUALITY_CONTRACT_KEY]: currentQualityContract() } as never,
         decidedBy: 'machine:auto-draft-v5', dedupKey: `dd-${seq}`,
       },
     })
@@ -325,7 +330,7 @@ async function worksetAxisRunner(
       gateResults: { holds: [], blocks: [], autoDraft: {
         provenance: MACHINE_PROFILE.envelopeProvenance, sourceDecision: MACHINE_PROFILE.sourceDecision,
         draftRuleVersion: MACHINE_PROFILE.envelopeRuleVersion, voice: { personaCode: codes[0] ?? 'P01', bundleDigest: 'bd-wsx', comments: 3 },
-      } } as never,
+      }, [QUALITY_CONTRACT_KEY]: currentQualityContract() } as never,
       decidedBy: 'machine:auto-draft-v5', dedupKey: 'wsx-dd-1',
     },
   })

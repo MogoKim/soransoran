@@ -42,6 +42,7 @@ import {
 } from '../../src/lib/persona-for-match'
 import type { PersonaForMatch, BatchAssignment } from '../../src/lib/original-post-persona-match'
 import { AUTO_DECIDER } from '../../src/lib/auto-ready-v2'
+import { isCurrentQualityContract } from '../../src/lib/quality-contract'
 import type { QueueCandidate } from '../../src/lib/supply-candidates'
 
 export type LoadedStock = {
@@ -521,12 +522,23 @@ export function planPublishBatch(input: {
  *    그 화자에게는 새 글이 영영 배정되지 않는다(앞판이 그랬다).
  *
  * 🔴 **칸은 겹치지 않고 빠지지 않는다** — 합이 `queueTotal` 이다. 검사가 그것을 단정한다.
+ *
+ * 🔴 **옛 품질 계약의 기계 초안은 지금 계약의 WIP 가 아니다** (2026-09-28 · `qualityContractMismatch`).
+ *    앞판은 `HUMAN_REVIEW_REQUIRED` 전부를 `humanReviewPending`(WIP)으로 셌다. 그런데 그중
+ *    **지금 품질 계약이 아닌 행**(다른 판 · 다른 digest · 표식 없는 legacy)은 자동 도장(`stampRowInTx`)도
+ *    자동 발행 재검증(`recheckAutoReadyInTx`)도 영영 받지 못한다 — 정본 `isCurrentQualityContract` 가 막는다.
+ *    그 행이 화자 WIP 를 들고 있으면 계약을 올린 순간 새 계약은 남은 몇 자리로만 만든다(실측 WIP 46 / 54).
+ *    · 큐에 그대로 둔다(삭제 0) · 계약 표식을 고쳐 쓰지 않는다 · 자동 발행 0 · 사람 검토로는 여전히 나간다
+ *    · 🔴 사람이 검토한 행(`founder` → selector 대상)은 이 칸에 오지 않는다 — 기존 뜻 그대로다
+ *    · 🔴 지금 계약의 검토 대기는 그대로 `humanReviewPending`(WIP)이다
+ *    판정은 새로 적지 않는다 — selector 가 낸 코드와 정본 `isCurrentQualityContract` 를 나누기만 한다.
  */
 export type StockBucket =
   | 'publishableNow' | 'haltedByBrokenRecovery'
   | 'humanReviewPending' | 'autoReadyClosed' | 'autoReadyStale'
   | 'assignmentDeferred'
   | 'ttlExpired' | 'freshnessHeld' | 'recoveryBroken' | 'assignmentException'
+  | 'qualityContractMismatch'
   | 'profileMismatch' | 'gateBlocked'
 
 /**
@@ -549,18 +561,31 @@ export const STOCK_BUCKET_META: Record<StockBucket, { wip: boolean; owner: Recov
   freshnessHeld: { wip: false, owner: 'human', label: '신선도 보류 — 시각 미상 · 복구 글 상함' },
   recoveryBroken: { wip: false, owner: 'human', label: '깨진 복구 — 기존 배정이 쓸 수 없는 Persona' },
   assignmentException: { wip: false, owner: 'human', label: '배정 예외 — 말투 · 생활사 · 비활성 (시간이 풀지 않는다)' },
+  qualityContractMismatch: {
+    wip: false, owner: 'human',
+    label: '옛 품질 계약 기계 초안 — 자동 READY · 자동 발행 영구 제외 (큐에 남는다 · 사람 검토로만 나간다)',
+  },
   profileMismatch: { wip: false, owner: 'none', label: 'profile 불일치 (legacy · 영영 나가지 않는다)' },
   gateBlocked: { wip: false, owner: 'human', label: 'gate · 안전 · 제목 복제 · 빈 글' },
 }
 
 export const STOCK_BUCKETS: readonly StockBucket[] = Object.keys(STOCK_BUCKET_META) as StockBucket[]
 
-/** 🔴 정본 거절 코드 → 칸. `switch` 라서 코드가 늘면 컴파일이 깨진다 */
-function bucketOfReject(code: RejectCode): StockBucket {
+/**
+ * 🔴 정본 거절 코드 → 칸. `switch` 라서 코드가 늘면 컴파일이 깨진다.
+ * 🔴 `gateResults` 는 **그 행에 저장된 값**이다(`loaded.allRows`). 고치지 않고 읽기만 한다.
+ */
+function bucketOfReject(code: RejectCode, gateResults: unknown): StockBucket {
   switch (code) {
     case 'PROFILE': case 'PROMPT_VERSION': case 'MODEL': case 'SITE':
       return 'profileMismatch'
-    case 'HUMAN_REVIEW_REQUIRED': return 'humanReviewPending'
+    /**
+     * 🔴 사람이 검토하지 않은 기계 초안 — **지금 품질 계약일 때만** WIP 인 검토 대기다.
+     *    옛 계약(다른 판 · 다른 digest · 표식 없음)은 자동 경로가 영영 없다 → WIP 아님.
+     */
+    case 'HUMAN_REVIEW_REQUIRED':
+      return isCurrentQualityContract(gateResults) ? 'humanReviewPending' : 'qualityContractMismatch'
+    case 'QUALITY_CONTRACT_MISMATCH': return 'qualityContractMismatch'
     // 🔴 한 칸에 합치지 않는다 — 푸는 주체가 다르다
     case 'AUTO_READY_CLOSED': return 'autoReadyClosed'
     case 'AUTO_READY_STALE': return 'autoReadyStale'
@@ -624,7 +649,9 @@ export type StockClassification = {
 export function classifyStock(input: { loaded: LoadedStock; plan: PublishPlan }): StockClassification {
   const { loaded, plan } = input
   const ids = Object.fromEntries(STOCK_BUCKETS.map((b) => [b, [] as string[]])) as Record<StockBucket, string[]>
-  for (const r of loaded.rejected) ids[bucketOfReject(r.code)].push(r.id)
+  /** 🔴 거절 행의 저장된 gateResults — `rejected` 는 `allRows` 에서 나온다(같은 조립) */
+  const gateOf = new Map(loaded.allRows.map((r) => [r.id, r.gateResults]))
+  for (const r of loaded.rejected) ids[bucketOfReject(r.code, gateOf.get(r.id))].push(r.id)
 
   const deferredPinned = new Set(plan.autoDeferred.map((x) => x.id))
   const exceptionPinned = new Set(plan.autoExceptions.map((x) => x.id))
