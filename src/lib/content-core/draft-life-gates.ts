@@ -64,6 +64,8 @@ export const DRAFT_GATE_CODES = [
   'mediaDependentDraft',
   /** 🔴 (v3) 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다 */
   'truncatedSourceCompletion',
+  /** 🔴 (v4) 받아칠 거리가 없는 하소연 — 계획이 대화 촉발 하나뿐인 vent 인데 묻는 말도 없다 */
+  'thinVentDraft',
   /** 🔴 1인칭 허가(selfBasis) 없이 자기 생활사를 주장한다 */
   'unwarrantedSelfClaim',
 ] as const
@@ -80,7 +82,7 @@ export type DraftGateCode = (typeof DRAFT_GATE_CODES)[number]
  * 🔴 `draft-gates-v3.1` (2026-09-28) — 같은 날 시간 의존 문장도 사람 검토. 운영 v3 행이 0 이라 품질 계약 판 이름
  *    (`quality-v3`)은 그대로 두고 이 값으로 digest 를 바꾼다(`check:quality-contract -- --revise`).
  */
-export const DRAFT_GATE_VERSION = 'draft-gates-v3.1'
+export const DRAFT_GATE_VERSION = 'draft-gates-v4'
 
 /**
  * 🔴 **생활 일관성 게이트 넷** (2026-09-28 quality-v2) — 확정 모순은 `AUTO_HOLD`(적재 전),
@@ -105,6 +107,8 @@ export const DRAFT_LIFE_REVIEW_CODES = [
   'staleTimeClaim', 'externalCommunityClaim', 'mediaDependentDraft', 'truncatedSourceCompletion',
   /** 🔴 (v3) 계획이 `noLifeFactNeeded` 인데 자기 가족사를 명시해 말한다 — `selfBasis=null` 은 여전히 확정(AUTO_HOLD)이다 */
   'unwarrantedSelfClaim',
+  /** 🔴 (v4) 소프트 품질 — 확정하지 않는다(사람 검토로만) */
+  'thinVentDraft',
 ] as const satisfies readonly DraftGateCode[]
 export type DraftLifeReviewCode = (typeof DRAFT_LIFE_REVIEW_CODES)[number]
 export type DraftLifeReview = { code: DraftLifeReviewCode; detail: string }
@@ -120,6 +124,7 @@ export const DRAFT_GATE_LABEL: Readonly<Record<DraftGateCode, string>> = {
   staleTimeClaim: '🔴 원문이 올라온 날에만 맞는 명절·실시간 현장 표현을 게시 시점의 지금처럼 말한다',
   externalCommunityClaim: '🔴 다른 커뮤니티에서 본 회원·글의 움직임을 이 곳에서 본 것처럼 말한다',
   truncatedSourceCompletion: '🔴 끝이 잘린 원문 뒤에 원문에 없는 결말을 지어 붙였다',
+  thinVentDraft: '🟡 받아칠 거리가 없는 짧은 하소연 — 공감·경험·답을 부르는 자리가 없다',
 }
 
 export type DraftGateFailure = { code: DraftGateCode; detail: string }
@@ -129,6 +134,12 @@ export type DraftGatePlan = {
   selfBasis: string | null
   /** 🔴 `evidenceText` 는 코드가 원문에서 확인한 근거 문장이다(`verifySelfWarrants`) — 원문 근거는 이것뿐이다 */
   warrants: readonly { fact: string; evidenceText?: string }[]
+  /**
+   * 🔴 (v4) 계획이 정한 마무리와 글의 역할 — 소프트 품질(`thinVentDraft`)만 읽는다. 없으면 판정하지 않는다.
+   *    정본 `SpeakerPlan` · artifact `plan` 둘 다 이 칸을 가진다.
+   */
+  closingIntent?: string | null
+  contentRoles?: readonly string[]
 }
 
 /**
@@ -137,7 +148,7 @@ export type DraftGatePlan = {
  *    그 축에서 무엇이 걸렸을 때 통과시키지 않고 **사람 검토**로 보낸다(모르는 것 = 모호).
  */
 export type DraftGateCard = Pick<PoolCard, 'childrenCount' | 'childrenAgeBands' | 'maritalStatus'>
-  & Partial<Pick<PoolCard, 'spouseRelationship' | 'parentCare' | 'menopauseStatus' | 'noGoTopics' | 'household'>>
+  & Partial<Pick<PoolCard, 'spouseRelationship' | 'parentCare' | 'menopauseStatus' | 'noGoTopics' | 'household' | 'ageBand'>>
 
 /**
  * 🔴 자기 주장 축 → 계획이 허가할 수 있는 자격 축(`ClaimFact`).
@@ -240,7 +251,10 @@ export function judgeDraftLife(input: DraftGateInput): { failures: DraftGateFail
   const failures = judgeCoreGates(input)
   const life = input.card === null ? { hard: [], review: [] } : judgeLifeConsistency(input.title, input.body, input.plan, input.card)
   const ctx = judgeSourceContext(input.title, input.body, input.context)
-  const basis = judgeNoLifeFactClaims(input.title, input.body, input.plan)
+  const basis = [
+    ...judgeNoLifeFactClaims(input.title, input.body, input.plan),
+    ...judgeThinVent(input.title, input.body, input.plan),
+  ]
   const all = [...failures, ...life.hard, ...ctx.hard]
   const rank = (c: DraftGateCode): number => DRAFT_GATE_CODES.indexOf(c)
   const hardCodes = new Set(all.map((f) => f.code))
@@ -495,6 +509,25 @@ function judgeMarital(frames: readonly ClauseFrame[], card: DraftGateCard): Life
   return out
 }
 
+/**
+ * 🔴 (v4 · 창업자 gold #5) **결혼 전 연애 단계를 자기 일로** — `연상연하 커플인데요 … 남친의 누나 … 나중에 결혼하면`.
+ *    50·60대 화자나 기혼 카드가 말하면 우리 또래 화자로 읽히지 않는다. 재혼·연애는 있을 수 있어 **사람 검토**다.
+ *    🔴 남의 일(`딸이 남친을 데려왔어요`) · 전언 · 묻는 문장은 걸리지 않는다(정본 1인칭 판정).
+ */
+const DATING_SELF_RE =
+  /연상연하|남친|남자\s*친구|여친|예비\s*(?:신랑|신부|시댁|시어머니)|연애\s*중|소개팅|썸\s*(?:타|남)|사귀는\s*중|나중에\s*결혼하면|결혼\s*(?:예정|날짜를?\s*잡)/
+function judgeDatingStage(frames: readonly ClauseFrame[], card: DraftGateCard): LifeHit[] {
+  const older = /^(?:50|60|70)대/.test((card.ageBand ?? '').trim())
+  if (!older && card.maritalStatus.trim() !== '기혼') return []
+  const out: LifeHit[] = []
+  frames.forEach((f, i) => {
+    const hit = firstAt(f.clause, DATING_SELF_RE)
+    if (hit === null || !firstPersonNow(frames, i, hit.at, ['남친', '남자친구', '여친', '신랑', '신부'])) return
+    out.push({ code: 'maritalStatusConflict', level: 'review', detail: `카드 ${card.ageBand ?? ''} ${card.maritalStatus} · 결혼 전 연애 단계를 자기 일로 · "${f.clause}"` })
+  })
+  return out
+}
+
 // ── 2. 돌봄·한집 살림 vs 1인칭 연락 끊김·따로 삶 ──
 const NO_CONTACT_RE =
   /(?:연락|전화|안부)(?:도|를|을)?\s*(?:안|못)\s*(?:드리|드렸|드려|하|했|해)|(?:못|안)\s*(?:뵌|뵈|찾아뵈|찾아뵙)|찾아뵙지\s*(?:못|않)|발길(?:을)?\s*끊/
@@ -600,7 +633,24 @@ const CHILD_APART_RE = /빈손으로\s*(?:왔|오)|내려왔|올라왔|다녀갔
 /** 🔴 식구가 **모처럼** 모인다 — 누가 모였는지 절이 말하지 않으면 모호하다 */
 const GATHER_RE = /(?:모처럼|오랜만에)\s*(?:다\s*)?(?:같이\s*|함께\s*)?(?:다\s*)?(?:모이|모여|얼굴\s*보)/
 
-function judgeChildren(title: string, body: string, frames: readonly ClauseFrame[], card: DraftGateCard): LifeHit[] {
+/** 🔴 (v4) 카드 자녀 나이대의 최소 나이 — 나이대 정본(`CHILD_AGE_BANDS`)의 아래 끝이다 */
+const BAND_MIN_AGE: Readonly<Partial<Record<ChildAgeBand, number>>> = {
+  '영유아': 0, '초등': 7, '중고등': 13, '대학·취준': 19, '성인': 20,
+}
+const SELF_PLURAL_KIDS_RE = /(?:우리|저희|울)\s*(?:아이들|애들|자식들|아이들이|애들이)/
+/** 🔴 지금의 결혼 햇수 — `결혼 5년 만에 이혼했어요` 는 끝난 결혼의 길이라 세지 않는다 */
+const MARRIAGE_YEARS_RE = /결혼\s*(?:한\s*지\s*)?(\d{1,2})\s*년(?!\s*만에)(?:차|째)?/
+/** 🔴 학령기 학습 — 부모가 시키거나 봐 주는 쪽의 말만. `과외 선생님이에요`(자녀의 일)는 걸리지 않는다 */
+const STUDENT_ACT_RE =
+  /과외(?:를|도)?\s*(?:붙|시키|시켜|받|시작)|학원(?:에|을)?\s*(?:보내|보냈|다니|끊|등록)|숙제|채점|성적표|수행\s*평가|학부모\s*상담|등하교/
+const BIRTH_ANCHOR_RE = /(?:아이|아기|애기|딸|아들|첫째|둘째|막내)(?:가|를|이|는)?\s*(?:태어나|낳|출산)|출산\s*(?:하고|후|뒤)/
+const ELAPSED_YEARS_RE = /(\d{1,2})\s*년(?:째|이나|\s*(?:이\s*)?(?:지났|됐|되었|흘렀|넘었))/
+/** 🔴 자녀 · 배우자는 이 축의 상대다 — 남으로 세지 않는다 */
+const CHILD_WORDS: readonly string[] = ['아이', '아기', '애기', '딸', '아들', '첫째', '둘째', '막내', '남편', '신랑', '선생님']
+
+function judgeChildren(
+  title: string, body: string, frames: readonly ClauseFrame[], card: DraftGateCard, plan: DraftGatePlan | null,
+): LifeHit[] {
   if (card.childrenCount <= 0) return []
   const out: LifeHit[] = []
   const bands = card.childrenAgeBands
@@ -638,6 +688,55 @@ function judgeChildren(title: string, body: string, frames: readonly ClauseFrame
       else if (living === null) push('review', '자녀 동거 여부 미상', c)
     }
   }
+  // ── (quality-v4 · 2026-09-28 창업자 gold #4 · #10 · #28) 카드의 자녀 수 · 나이와 초안의 숫자·행동 ──
+  /**
+   * 🔴 **이 글이 글쓴이 자기 자녀 이야기인가** — 정본 자녀 절(`readSelfChildClauses`) 또는 계획이 원문 근거로
+   *    **자녀를 허가**했다(`lifeFacts` · `children`/`childAgeBand` 근거). 조사 없는 `좋아 죽겠다는 딸` 은 정본 절이
+   *    세지 않지만 계획은 이미 "내 딸" 로 썼다(창업자 gold #28).
+   */
+  const ownChildPost = kids.length > 0 || (plan?.selfBasis === 'lifeFacts'
+    && plan.warrants.some((w) => w.fact === 'children' || w.fact === 'childAgeBand'))
+  const minAges = bands.map((b) => BAND_MIN_AGE[b]).filter((n): n is number => n !== undefined)
+  const youngest = minAges.length === 0 ? null : Math.min(...minAges)
+  const oldest = minAges.length === 0 ? null : Math.max(...minAges)
+  frames.forEach((f, i) => {
+    const c = f.clause
+    // ⑦ 자녀 한 명 카드인데 명시적 `우리 아이들` — 수가 다르다(생략 1인칭 `애들` 은 세지 않는다)
+    // 🔴 명시적 1인칭(`우리 아이들`)은 세상 이야기 틀(`세대` · `다들`)보다 세다 — 정본 임자 규칙과 같다
+    if (card.childrenCount === 1 && SELF_PLURAL_KIDS_RE.test(c) && !REPORTED_RE.test(c)) {
+      push('hard', '카드는 자녀 1명인데 "우리 아이들"', c)
+    }
+    // ⑧ 결혼 햇수 — 가장 큰 아이가 결혼보다 먼저 태어났다
+    const my = MARRIAGE_YEARS_RE.exec(c)
+    if (my !== null && oldest !== null && firstPersonNow(frames, i, my.index, SPOUSE_WORDS)) {
+      const years = Number(my[1])
+      if (oldest > years + 1) {
+        push(card.maritalStatus.trim() === '기혼' ? 'hard' : 'review', `결혼 ${years}년인데 카드 자녀는 ${oldest}세 이상`, c)
+      }
+    }
+    // ⑩ 성인 자녀만 있는 카드에서 학령기 학습 활동(과외를 붙였다 · 채점 · 숙제)
+    const st = STUDENT_ACT_RE.exec(c)
+    if (st !== null && ownChildPost && youngest !== null && youngest >= BAND_MIN_AGE['대학·취준']!
+      && firstPersonNow(frames, i, st.index, CHILD_WORDS)) {
+      push(has('대학·취준') ? 'review' : 'hard', '카드 자녀는 성인인데 학령기 학습(과외 · 채점 · 숙제)', c)
+    }
+  })
+  // ⑨ 출생을 기준으로 지난 햇수 — `아이 태어나고 … 벌써 5년` 이면 그 아이는 다섯 살 안팎이다
+  if (youngest !== null) {
+    const sentences = [...new Set(frames.map((f) => f.sentence))].map((n) => frames.filter((f) => f.sentence === n))
+    sentences.forEach((fs, si) => {
+      const anchorAt = fs.findIndex((f) => BIRTH_ANCHOR_RE.test(f.clause))
+      if (anchorAt < 0) return
+      const idx = frames.indexOf(fs[anchorAt]!)
+      if (!firstPersonNow(frames, idx, BIRTH_ANCHOR_RE.exec(fs[anchorAt]!.clause)!.index, CHILD_WORDS)) return
+      const scope = [...fs, ...(sentences[si + 1] ?? [])].map((f) => f.clause).join(' ')
+      const e = ELAPSED_YEARS_RE.exec(scope)
+      if (e === null) return
+      const n = Number(e[1])
+      if (youngest > n + 3) push('hard', `출생 뒤 ${n}년 — 카드 가장 어린 자녀는 ${youngest}세 이상`, fs.map((f) => f.clause).join(' '))
+      else if (youngest > n) push('review', `출생 뒤 ${n}년 — 카드 자녀 나이대와 어긋날 수 있다`, fs.map((f) => f.clause).join(' '))
+    })
+  }
   // ⑥ 식구가 모처럼 모인다 — 자녀 이야기인 글에서만, 누가 모였는지 모호하다 → 사람
   if (kids.length > 0 && living !== '분가' && living !== '일부') {
     frames.forEach((f, i) => {
@@ -657,8 +756,9 @@ export function judgeLifeConsistency(
   const all = `${title}\n${body}`
   const hits: LifeHit[] = [
     ...judgeMarital(frames, card),
+    ...judgeDatingStage(frames, card),
     ...judgeCare(frames, all, card),
-    ...judgeChildren(title, body, frames, card),
+    ...judgeChildren(title, body, frames, card, plan),
     ...judgeHealth(frames, plan, card),
   ]
   const fold = (level: 'hard' | 'review'): DraftLifeReview[] => {
@@ -718,16 +818,52 @@ function readSelfFamilyLikeTopic(title: string, body: string): string[] {
  */
 const SELF_OWNER_WORD_RE = /(?<![가-힣])(?:우리|저희|울|제|내)\s?[가-힣]/
 const FAMILY_AXES: ReadonlySet<SelfClaimAxis> = new Set<SelfClaimAxis>(['spouse', 'children', 'parents', 'parentCare'])
+/**
+ * 🔴 (v4 · 창업자 gold #16) **1인칭 금융 행동** — `보험 싹 리모델링해서 바꿨거든요`. 계획이 생활사를 허가하지 않았는데
+ *    자기 돈·계약 사정을 사실로 둔다. 소재(보험 영업 연락)는 좋다 — 막지 않고 사람 검토(질문형 최소 수정)로 보낸다.
+ *    🔴 묻는 문장 · 전언 · 남의 일은 걸리지 않는다.
+ */
+const FINANCE_SELF_RE =
+  /(?:보험|대출|적금|예금|주식|연금|펀드|청약|카드론)[^.!?\n]{0,15}?(?:가입했|가입해서|리모델링|해지했|해지해서|갈아탔|바꿨|바꾸었|넣었|들었|샀|팔았)/
+function judgeFinanceSelf(title: string, body: string, plan: DraftGatePlan | null): string[] {
+  if (plan === null || (plan.selfBasis !== null && plan.selfBasis !== 'noLifeFactNeeded')) return []
+  const frames = readClauseFrames(title, body, OWNER_OPTS)
+  const out: string[] = []
+  frames.forEach((f, i) => {
+    const hit = firstAt(f.clause, FINANCE_SELF_RE)
+    if (hit !== null && firstPersonNow(frames, i, hit.at, [])) out.push(f.clause)
+  })
+  return out
+}
+
+/**
+ * 🔴 (v4 · 창업자 gold #1 · 소프트 품질) **받아칠 거리가 없는 하소연.** 계획 스스로 마무리를 `vent` 로,
+ *    역할을 대화 촉발(`conversationSpark`) **하나만** 골랐고(공감 경험 · 쓸 만한 답 · 발견 없음) 묻는 말도 없다.
+ *    🔴 확정하지 않는다 — 사람 검토다. 공감 역할이 있는 하소연(`experienceResonance`)이나 묻는 글은 걸리지 않는다.
+ *    🔴 계획에 이 칸이 없으면 판정하지 않는다(소프트 신호라 모름을 결함으로 세지 않는다).
+ */
+function judgeThinVent(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
+  const roles = plan?.contentRoles
+  if (plan === null || plan.closingIntent !== 'vent' || roles === undefined || roles.length === 0) return []
+  if (!roles.every((r) => r === 'conversationSpark')) return []
+  const asks = `${title}\n${body}`.split(/(?<=[.!?？。])\s+|\n+/).some((x) => /[?？]/.test(x) || QUESTION_END_RE.test(x.trim()))
+  if (asks) return []
+  return [{ code: 'thinVentDraft', detail: `계획 vent · 역할 ${roles.join('·')} · 묻는 말 없음` }]
+}
+
 function judgeNoLifeFactClaims(title: string, body: string, plan: DraftGatePlan | null): DraftLifeReview[] {
-  if (plan === null || plan.selfBasis !== 'noLifeFactNeeded') return []
+  const fin = judgeFinanceSelf(title, body, plan)
+  const finReview: DraftLifeReview[] = fin.length === 0 ? []
+    : [{ code: 'unwarrantedSelfClaim', detail: `계획 ${plan?.selfBasis ?? 'null'} · 1인칭 금융 행동 — ${fin.slice(0, 2).join(' / ')}` }]
+  if (plan === null || plan.selfBasis !== 'noLifeFactNeeded') return finReview
   const clauses = [
     ...readSelfClaims(title, body, OWNER_OPTS)
       .filter((c) => FAMILY_AXES.has(c.axis) && c.owner === 'explicit' && SELF_OWNER_WORD_RE.test(c.clause))
       .map((c) => c.clause),
     ...readSelfFamilyLikeTopic(title, body),
   ]
-  if (clauses.length === 0) return []
-  return [{ code: 'unwarrantedSelfClaim', detail: `계획 noLifeFactNeeded · 자기 가족사 — ${[...new Set(clauses)].slice(0, 3).join(' / ')}` }]
+  if (clauses.length === 0) return finReview
+  return [...finReview, { code: 'unwarrantedSelfClaim', detail: `계획 noLifeFactNeeded · 자기 가족사 — ${[...new Set(clauses)].slice(0, 3).join(' / ')}` }]
 }
 
 type SourceDay = 'same' | 'before' | 'unknown'
@@ -761,6 +897,11 @@ const NOW_RE = /지금|방금|이제\s*막|실시간|현재/
  */
 const IN_PROGRESS_RE =
   /(?:는|가는|오는|하는)\s*길(?:이에요|입니다|이네요|인데|이야|이다)|(?:는|하는|보는|가는|먹는)\s*중(?:이|입니다|이에요|인데|이네요)?/
+/** 🔴 (v4) **다가오는 명절** — 앞으로 올 이번 명절을 가리키는 말 */
+const UPCOMING_HOLIDAY_RE =
+  /(?:이번|올해|다가오는|오는|앞둔)\s*(?:명절|추석|한가위|설|연휴)|(?:명절|추석|한가위|설)\s*(?:선물|앞두|코앞|며칠\s*안)|인사\s*(?:오는|가는)\s*(?:명절|추석|설)|첫\s*(?:명절|추석|설)/
+/** 🔴 (v4) 습관 — `명절 때마다` · `해마다` 는 특정한 이번 명절이 아니다 */
+const HABITUAL_RE = /마다|매년|매번|해마다|항상/
 /** 🔴 **날짜에 묶인 말** — 명절·현장과 함께일 때만 본다 */
 const DAY_RE = /오늘|어제|내일|엊그제|그저께|모레/
 /** 🔴 명절이 **아직 오지 않은** 자리의 말 — 인사 · 계획 */
@@ -780,7 +921,11 @@ type TimeHit = { strong: boolean; clause: string }
 function readTimeClaims(frames: readonly ClauseFrame[]): TimeHit[] {
   const retro = (c: string): boolean => RETRO_RE.test(c) || PAST_CUE_RE.test(c) || PAST_FRAME_RE.test(c)
   // 🔴 이 글에서 명절이 **아직 끝나지 않은 것**으로 말해지는가 — 모든 명절 언급이 회고면 아니다
-  const holidayLive = frames.some((f) => HOLIDAY_RE.test(f.clause) && !retro(f.clause))
+  /**
+   * 🔴 (v4) **습관으로 말한 명절**(`명절 때마다` · `해마다`)은 지금의 명절이 아니다 — 살아 있는 명절에서 뺀다.
+   */
+  const habitual = (c: string): boolean => HABITUAL_RE.test(c)
+  const holidayLive = frames.some((f) => HOLIDAY_RE.test(f.clause) && !retro(f.clause) && !habitual(f.clause))
   const sentenceOf = (f: ClauseFrame): string => frames.filter((x) => x.sentence === f.sentence).map((x) => x.clause).join(' ')
   const out: TimeHit[] = []
   for (const f of frames) {
@@ -795,10 +940,19 @@ function readTimeClaims(frames: readonly ClauseFrame[]): TimeHit[] {
       continue
     }
     // ② 날짜 말(`오늘` …)이 명절·현장에 붙었다 — 회고여도 그 날짜가 원문의 날이다
-    if (DAY_RE.test(c) && (holiday || live)) { out.push({ strong: false, clause: c }); continue }
+    // 🔴 (v4) 같은 글에 살아 있는 명절이 있으면 날짜 말도 그 명절의 날이다(창업자 gold #15 `오늘 할 일`)
+    if (DAY_RE.test(c) && (holiday || live || holidayLive)) { out.push({ strong: false, clause: c }); continue }
     // ③ 아직 오지 않은 명절 — 인사 · 계획
     if (HOLIDAY_GREETING_RE.test(c) && HOLIDAY_RE.test(sentenceOf(f))) { out.push({ strong: false, clause: c }); continue }
-    if (holidayLive && PLAN_AHEAD_RE.test(c) && !retro(c)) out.push({ strong: false, clause: c })
+    if (holidayLive && PLAN_AHEAD_RE.test(c) && !retro(c)) { out.push({ strong: false, clause: c }); continue }
+    /**
+     * ④ (v4) **다가오는 명절을 글쓴이 자기 일로** — `이번 추석에` · `추석 선물` · `처음 인사 오는 명절이라`(창업자 gold #22).
+     *    명절 낱말만으로는 걸지 않는다 — `명절 음식 중에서도` · `어떤 친구가 추석 선물로 … 하더라고요`(남의 일)는 통과다.
+     */
+    const up = firstAt(c, UPCOMING_HOLIDAY_RE)
+    if (up !== null && !retro(c) && !habitual(c) && firstPersonNow(frames, frames.indexOf(f), up.at, [])) {
+      out.push({ strong: false, clause: c })
+    }
   }
   return out
 }

@@ -224,6 +224,70 @@ async function main(): Promise<void> {
   await prisma.originalPostApprovalQueue.deleteMany({})
 
   /**
+   * 🔴 **(quality-v4) 창업자 gold 30건 → 실제 적재기** — 새 생성 · 캐시 채택 두 경로.
+   *    통과 22건은 경고 없는 큐 행(자동 READY 후보) · 중대 결함 3건은 큐 행 0 · 수정·폐기 5건은 큐 행이 없거나
+   *    사람 검토 경고가 붙은 행이다(자동 READY 0). 같은 원천 중복 0.
+   */
+  {
+    const { GOLD_FIXTURES } = await import('./lib/founder-gold-fixtures.mjs')
+    const { goldWant } = await import('../src/lib/founder-gold')
+    for (const cachedAdopt of [false, true]) {
+      const tag = cachedAdopt ? '캐시 채택' : '새 생성'
+      console.log(`\n⑤ (quality-v4) 창업자 gold 30 · ${tag} 경로 → 실제 적재기`)
+      await prisma.originalPostApprovalQueue.deleteMany({})
+      const adopted: { fx: (typeof GOLD_FIXTURES)[number]['fx']; r: Awaited<ReturnType<typeof runFixturePath>> }[] = []
+      for (const { fx: fx0 } of GOLD_FIXTURES) {
+        const fx = { ...fx0, source: { ...fx0.source, id: `${fx0.source.id}-${cachedAdopt ? 'c' : 'f'}` } }
+        const r = await runFixturePath(fx, { cachedAdopt })
+        if (r.pick?.decision === 'AUTO_ADOPT') adopted.push({ fx, r })
+      }
+      for (const f of readdirSync(DATA).filter((x) => x.endsWith('.candidates.json'))) rmSync(join(DATA, f))
+      writeFileSync(join(DATA, `auto-draft-20260928-gold${cachedAdopt ? 'c' : 'f'}.candidates.json`), JSON.stringify(candidateEnvelope({
+        generatedAt: nowIso, ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, stageModels: STAGE_MODEL,
+        items: adopted.map(({ fx, r }) => ({
+          artifact: r.art, sourceArticleId: fx.source.id,
+          meta: { site: 'navercafe:fixture', sourcePostedAt: '', sourceListedAt: '', sourceCapturedAt: '' },
+          draft: {
+            title: r.cand!.title, body: r.cand!.body, safetyVerdict: r.cand!.safetyVerdict,
+            originality: r.cand!.originality, generatedAt: r.cand!.generatedAt,
+          },
+          sourceTitleCopied: copiesSourceTitle(fx.source.title, r.art.draft!.title),
+          sourceTitleCheckVersion: SOURCE_TITLE_CHECK_VERSION,
+          autoJudge: { ruleVersion: 'fixture', promptVersion: 'fixture', model: 'fixture', inputHash: `h-gold-${fx.source.id}`, provenance: 'machine-shadow' },
+          ruleVersion: DRAFT_RULE_VERSION, provenance: DRAFT_PROVENANCE, reviewedAt: nowIso,
+          lifeReview: r.pick!.lifeReview ?? null,
+        })),
+      }), null, 2))
+      const res = spawnSync(process.execPath, [join(T, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+        join(T, 'scripts', 'micro-seed-supply-autofill.mts'), '--apply', `--up-to=${GOLD_FIXTURES.length}`], {
+        cwd: T, encoding: 'utf-8', env: { ...process.env, HOME: H, DATABASE_URL: URL, DIRECT_URL: URL },
+      })
+      check(`${tag} · gold 적재기 정상 종료`, res.status === 0, `exit ${String(res.status)}`)
+      const rows = await prisma.originalPostApprovalQueue.findMany({ select: { draftTitle: true, gateResults: true, sourceRawContentId: true } })
+      const holdsOf = (title: string): string[] | null => {
+        const row = rows.find((x) => x.draftTitle === title)
+        if (row === undefined) return null
+        const g = row.gateResults as Record<string, unknown> | null
+        return Array.isArray(g?.holds) ? (g!.holds as unknown[]).map(String) : []
+      }
+      const counts = { pass: 0, hold: 0, notAuto: 0 }
+      for (const { row, fx } of GOLD_FIXTURES) {
+        const want = goldWant(row)
+        const h = holdsOf(fx.draft.title)
+        const ok = want === 'pass' ? h !== null && h.length === 0
+          : want === 'hold' ? h === null
+            : h === null || h.some((x) => x.startsWith(DRAFT_LIFE_REVIEW_HOLD))
+        if (ok) counts[want] += 1
+        check(`${tag} · gold #${row.n} ${want} → ${h === null ? '큐 행 없음' : `holds ${JSON.stringify(h)}`}`, ok)
+      }
+      check(`🔴 🔴 **${tag} · gold 적재 결과 — 통과 22 경고 없음 · 결함 3 큐 0 · 수정·폐기 5 자동 READY 0**`,
+        counts.pass === 22 && counts.hold === 3 && counts.notAuto === 5, JSON.stringify(counts))
+      check(`${tag} · 같은 원천 큐 중복 0`, new Set(rows.map((x) => x.sourceRawContentId)).size === rows.length)
+    }
+    await prisma.originalPostApprovalQueue.deleteMany({})
+  }
+
+  /**
    * 🔴 **적재 재시도 · 이월** (2026-09-27) — 같은 실제 적재기 경로다. 새 npm 명령 · 새 step 없이 여기서 함께 돈다.
    *    DB 끊김 → 재시도 → 정확히 한 번 · 다시 돌려도 중복 0 · 이월 상한 · 옛 계약 파일 0행.
    *    같은 격리 DB 를 스스로 비우고 쓴다(Prisma deleteMany).

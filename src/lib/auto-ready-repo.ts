@@ -24,8 +24,10 @@ import {
 } from './auto-ready-v2'
 import { cohortSampleOf } from './auto-ready-evidence'
 import { profileOf } from './original-post-auto-publish'
-import { qualityCohortOf, type QualityCohortVerdict } from './auto-ready-quality-cohort'
-import { isCurrentQualityContract, qualityContractDigest, QUALITY_CONTRACT_KEY } from './quality-contract'
+import { qualityCohortOf, applyFounderGoldBasis, type QualityCohortVerdict } from './auto-ready-quality-cohort'
+import { isCurrentQualityContract, qualityContractDigest, QUALITY_CONTRACT_KEY, QUALITY_EVIDENCE_BASIS } from './quality-contract'
+/** 🔴 (quality-v4) 창업자 gold 재생 — 열림 근거 */
+import { replayFounderGold, describeFounderGold } from './founder-gold'
 import { MACHINE_PROMPT_VERSION } from './micro-seed-supply-autofill'
 
 type Tx = Prisma.TransactionClient
@@ -111,7 +113,7 @@ export async function evidenceFromDb(db: Db): Promise<QualityCohortVerdict> {
       rawContent: { select: { sourceSite: true, sourceCapturedAt: true } },
     },
   })
-  return qualityCohortOf(rows.map((r) => ({
+  const cohort = qualityCohortOf(rows.map((r) => ({
     id: r.id, createdAt: r.createdAt, decidedBy: r.decidedBy, editDiff: r.editDiff,
     status: r.status, draftTitle: r.draftTitle, draftBody: r.draftBody,
     editedTitle: r.editedTitle, editedBody: r.editedBody, declineReason: r.declineReason,
@@ -120,6 +122,13 @@ export async function evidenceFromDb(db: Db): Promise<QualityCohortVerdict> {
       promptVersion: r.promptVersion, model: r.model, sourceSite: r.rawContent.sourceSite, gateResults: r.gateResults,
     } as never) === 'machine',
   })))
+  /**
+   * 🔴 (quality-v4) 열림 근거가 창업자 gold 인 판이면 그것을 적용한다 — 판정은 순수 `applyFounderGoldBasis` 하나다.
+   *    재생은 코드 상수(고정 gold · 지금 게이트)만 쓰므로 트랜잭션 안에서 불러도 스냅샷과 무관하다.
+   */
+  if (QUALITY_EVIDENCE_BASIS !== 'founderGold') return cohort
+  const g = replayFounderGold()
+  return applyFounderGoldBasis(cohort, { pass: g.pass, reasons: g.reasons, summary: describeFounderGold(g) })
 }
 
 /**

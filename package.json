@@ -197,6 +197,8 @@
     "auto-ready:evidence-ui-check": "tsx scripts/auto-ready-evidence-ui-check.mts",
     "check:quality-contract": "tsx scripts/quality-contract-check.mts",
     "auto-ready:quality-check": "tsx scripts/auto-ready-quality-check.mts",
+    "check:founder-gold": "tsx scripts/founder-gold-check.mts",
+    "auto-ready:switch": "tsx scripts/auto-ready-switch.mts",
     "auto-ready:quality-db-check": "tsx scripts/auto-ready-quality-db-check.mts",
     "auto-ready:audit": "tsx scripts/auto-ready-audit.mts",
     "auto-ready:audit-check": "tsx scripts/auto-ready-audit-check.mts",

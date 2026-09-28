@@ -860,6 +860,7 @@ jobs:
           #    legacy 제외 · 판 섞기 불가 · 선행 미검토 닫힘 · 창 안팎 결함 · env/호출자 digest 무시. 새 step 이 아니다
           npm run check:quality-contract
           npm run auto-ready:quality-check
+          npm run check:founder-gold
           # 🔴 독립 감사 루프(2026-09-27) — 의미 감사 fail-closed · 묶음(글·도장·원문 근거·카드) · 판 분리 ·
           #    유료 기본 OFF · 감사 러너 launchd 템플릿(렌더만) · 배선. 새 step 이 아니다(무조건 step 상한 불변)
           npm run auto-ready:audit-check
