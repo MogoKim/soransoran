@@ -168,8 +168,16 @@ M-AUTO는 **공급 엔진**, M-GRAPH는 **편집·검색·성장 설계**다.
 >   brief 가 바뀌어 지문이 달라질 때만 다시 보낸다.
 >   판정은 **모든 전송이 지나는 `fetchSlug`(`deliveryGate`) 하나**다 — 일괄 회수와
 >   재생성(`--fetch --force --regen-packet`)이 같은 메시지 생성기·지문·조건을 쓴다.
->   HOLD 면 probe·Chrome 기동·send 가 0이고, send 직전 장부 쓰기 안에서 한 번 더 판정한다.
->   (앞판은 일괄 회수만 장부를 봤다 — 재생성이 응답 대기에서 끊긴 뒤 재실행되면 다시 보냈다.)
+>   HOLD 면 probe·Chrome 기동·send 가 0이다. (앞판은 일괄 회수만 장부를 봤다 — 재생성이
+>   응답 대기에서 끊긴 뒤 재실행되면 다시 보냈다.)
+> - 🔴 **send 권한의 유일한 정본은 send 직전의 원자적 예약 기록이다.** 장부의 읽기·판정·쓰기
+>   전체가 프로세스 간 잠금(`magazine-quarantine.json.lock` · `openSync wx` · owner 토큰 ·
+>   10초 bounded wait) 안에서 돈다. 같은 slug·지문을 두 프로세스가 동시에 들고 와도 먼저 예약한
+>   한쪽만 보내고 다른 쪽은 `DELIVERY_UNCERTAIN_HOLD`(send 0). 잠금 시간 초과·장부 손상·잠금
+>   판정 불가는 **전송 금지**다. 살아 있는 잠금은 빼앗지 않고, 주인 pid 가 확실히 없는 잠금만
+>   `.reclaim` 잠금 안에서 재확인 후 거둔다. 풀 때·예약을 지울 때는 **내 토큰·내 예약 ID** 일 때만.
+> - 🔴 **재생성은 packet·횟수·runner 전에 같은 `deliveryGate` 로 HOLD 를 본다.** HOLD 면 장부에
+>   한 글자도 쓰지 않는다 — 급사해도 regenCalls 가 남지 않는다.
 > - 🔴 **CLI 시험의 브라우저·spawn 주입은 `SORAN_MAGAZINE_TEST_MODE=1` 에서만** 열린다
 >   (`magazine-test-harness.mjs`). 운영 모드에서 주입값이 보이면 exit 2 로 멈추고,
 >   시험 모드에서 빠진 자리는 거부 stub 이 막아 실제 Chrome 으로 떨어지지 않는다.

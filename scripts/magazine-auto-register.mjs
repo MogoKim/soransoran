@@ -385,7 +385,8 @@ export function drive(slug, opts, deps = {}) {
     const rr = regen({ slug, profile: laneProfile, failures, runner: regenRunner,
       previousFingerprint: fp(), fingerprintOf: fp,
       ...(quarantinePath ? { quarantinePath } : {}),
-      ...(packetDir ? { packetDir } : {}) })
+      ...(packetDir ? { packetDir } : {}),
+      ...(deps.draftsDir ? { draftsDir: deps.draftsDir } : {}) })
     regenCalls = rr.regenCalls ?? regenCalls
     /**
      * 🔴 **HOLD 는 이번 실행이 안 보낸 것일 뿐, 그 글의 전송 사실이 아니다.**

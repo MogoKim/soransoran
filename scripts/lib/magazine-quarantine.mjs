@@ -25,9 +25,12 @@
  * 🔴 **저장소 밖에 쓴다.** runtime 작업 트리는 깨끗해야 한다(write preflight).
  *    격리 기록이 추적 파일이면 매 회차 `DIRTY_TREE` 로 레인이 멈춘다.
  */
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync,
+  writeFileSync, writeSync,
+} from 'node:fs'
+import { homedir, hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /** 🔴 저장소 밖이다. runtime 을 더럽히지 않는다 */
@@ -122,7 +125,7 @@ export function deliveryFingerprintOf(message) {
  *
  * @param {object|null} entry 기존 행 (건드리지 않는다)
  */
-export function recordDelivery(entry, { sent, messageFingerprint, kind = null, reason = null, stage = null, now, runId = null, date = null }) {
+export function recordDelivery(entry, { sent, messageFingerprint, kind = null, reason = null, stage = null, now, runId = null, date = null, reservationId = null }) {
   return {
     ...(entry ?? {}),
     delivery: {
@@ -135,6 +138,8 @@ export function recordDelivery(entry, { sent, messageFingerprint, kind = null, r
       // 🔴 출처 기록용이다. **판정에 쓰지 않는다.**
       runId: runId ?? null,
       date: date ?? null,
+      // 🔴 send 권한을 얻은 프로세스의 예약 ID — 성공 뒤 **내 예약만** 지우기 위한 표식
+      reservationId: reservationId ?? null,
     },
   }
 }
@@ -352,12 +357,146 @@ export function recordRegenCall({ entry, now, packetHash = null }) {
  *    그래서 **매 변경마다 최신 장부를 다시 읽는다.** 들고 있던 사본을 쓰지 않는다.
  */
 export function updateQuarantine(mutate, path = QUARANTINE_PATH) {
-  const read = readQuarantine(path)
-  if (!read.ok) return { ok: false, why: read.why }
-  const next = mutate({ ...read.store })
-  if (!next || typeof next !== 'object') return { ok: false, why: '🔴 갱신 함수가 장부를 돌려주지 않았다' }
-  saveQuarantine(next, path)
-  return { ok: true, store: next }
+  /**
+   * 🔴 **읽기·판정·쓰기 전체가 하나의 프로세스 간 임계구역이다** (2026-09-28 · Codex P0).
+   *    앞판은 read → mutate → save 였을 뿐 잠금이 없었다. 두 프로세스가 같은 slug·같은 지문을
+   *    동시에 처리하면 **둘 다 "HOLD 없음" 을 읽고 둘 다 send 권한을 얻었다.**
+   *    tmp → rename 은 파일이 반쪽이 되는 것만 막을 뿐 이 경합은 막지 못한다.
+   *    다른 slug 끼리도 마찬가지다 — 나중에 쓴 쪽이 먼저 쓴 쪽의 행을 지웠다 (lost update).
+   */
+  const locked = withQuarantineLock(path, () => {
+    const read = readQuarantine(path)
+    if (!read.ok) return { ok: false, code: 'QUARANTINE_UNREADABLE', why: read.why }
+    const next = mutate({ ...read.store })
+    if (!next || typeof next !== 'object') return { ok: false, why: '🔴 갱신 함수가 장부를 돌려주지 않았다' }
+    saveQuarantine(next, path)
+    return { ok: true, store: next }
+  })
+  if (!locked.ok) return { ok: false, code: locked.code, why: locked.why }
+  return locked.value
+}
+
+// ─────────────────────────────────────────────────────────
+// 잠금 — 🔴 `llm-ledger-store.mts` 의 `withLedgerLock` 과 같은 규약이다.
+//    (그 파일은 TS 라 Node 20 의 .mjs 가 직접 부르지 못한다 — 규약을 그대로 옮긴다)
+//    ① `openSync(…, 'wx')` 로 만든 쪽만 쥔다  ② 잠금 파일에 owner 토큰을 적는다
+//    ③ 정해진 시간만 기다리고, 못 잡으면 **던지지 않고 실패를 돌려준다** (fail-closed)
+//    ④ 풀 때는 **내 토큰일 때만** 지운다  ⑤ 살아 있는 잠금은 오래됐어도 빼앗지 않는다
+// ─────────────────────────────────────────────────────────
+
+export const QUARANTINE_LOCK_WAIT_MS = 10_000
+const LOCK_POLL_MS = 20
+
+export const quarantineLockPath = (path = QUARANTINE_PATH) => `${path}.lock`
+
+/** 🔴 동기 대기 — 임계구역을 async 로 쪼개면 그 사이에 다른 프로세스가 끼어든다 */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * 잠금 파일의 주인이 **확실히 죽었는가.**
+ *
+ * 🔴 확실할 때만 `DEAD` 다. 내용을 못 읽거나(막 만들어져 아직 비었거나 깨졌거나),
+ *    다른 호스트이거나, `kill(pid, 0)` 이 ESRCH 가 아니면 전부 `LIVE`/`UNKNOWN` —
+ *    **빼앗지 않는다.** PID 가 재사용됐으면 살아 있는 것으로 보이므로 틀려도 안전한 쪽이다.
+ *
+ * @returns {{state:'LIVE'|'DEAD'|'UNKNOWN', owner:object|null, why:string}}
+ */
+export function inspectQuarantineLock(lock) {
+  let owner
+  try { owner = JSON.parse(readFileSync(lock, 'utf8')) }
+  catch (e) {
+    if (e?.code === 'ENOENT') return { state: 'UNKNOWN', owner: null, why: '잠금이 방금 풀렸다' }
+    return { state: 'UNKNOWN', owner: null, why: `잠금 내용을 읽지 못했다: ${e?.message ?? e}` }
+  }
+  if (!owner || typeof owner.token !== 'string' || !Number.isInteger(owner.pid) || owner.pid <= 0) {
+    return { state: 'UNKNOWN', owner, why: '잠금 내용이 규약과 다르다' }
+  }
+  if (owner.host !== hostname()) return { state: 'UNKNOWN', owner, why: `다른 호스트의 잠금이다 (${owner.host})` }
+  try { process.kill(owner.pid, 0); return { state: 'LIVE', owner, why: `pid ${owner.pid} 가 살아 있다` } }
+  catch (e) {
+    if (e?.code === 'ESRCH') return { state: 'DEAD', owner, why: `pid ${owner.pid} 가 없다` }
+    return { state: 'LIVE', owner, why: `pid ${owner.pid} 확인 불가(${e?.code}) — 살아 있는 것으로 본다` }
+  }
+}
+
+/** 내 토큰일 때만 지운다 — 🔴 남이 쥔 잠금은 절대 지우지 않는다 */
+function releaseIfMine(lock, token) {
+  try {
+    const cur = JSON.parse(readFileSync(lock, 'utf8'))
+    if (cur?.token === token) unlinkSync(lock)
+  } catch { /* 이미 없거나 읽을 수 없다 — 건드리지 않는다 */ }
+}
+
+function createLock(lock) {
+  const owner = { token: randomUUID(), pid: process.pid, host: hostname(), at: new Date().toISOString() }
+  const fd = openSync(lock, 'wx', 0o600)
+  try { writeSync(fd, JSON.stringify(owner)); fsyncSync(fd) }
+  finally { closeSync(fd) }
+  return owner
+}
+
+/**
+ * 🔴 **죽은 주인의 잠금만 거둔다 — 그것도 거두는 사람을 한 명으로 줄인 뒤에.**
+ *    둘이 동시에 "죽었다" 고 보고 각자 지우면, 먼저 지우고 새로 잡은 쪽의 **살아 있는**
+ *    잠금을 늦은 쪽이 지운다. 그래서 거두기 자체를 `.reclaim` 잠금(wx) 안에서 하고,
+ *    그 안에서 **같은 토큰·여전히 죽음**을 다시 확인한 뒤에만 지운다.
+ *    `.reclaim` 이 남아 있으면(거두던 쪽이 급사) 기다리다 시간 초과로 끝난다 — 전송 금지.
+ */
+function reclaimDeadLock(lock, seenToken) {
+  const rlock = `${lock}.reclaim`
+  let mine
+  try { mine = createLock(rlock) } catch { return false }
+  try {
+    const again = inspectQuarantineLock(lock)
+    if (again.state !== 'DEAD' || again.owner?.token !== seenToken) return false
+    unlinkSync(lock)
+    return true
+  } catch { return false }
+  finally { releaseIfMine(rlock, mine.token) }
+}
+
+/**
+ * 잠금을 잡고 `fn` 을 돌린다. **`fn` 은 동기여야 한다.**
+ *
+ * @returns {{ok:true, value:any}|{ok:false, code:string, why:string}}
+ *   🔴 실패는 던지지 않고 돌려준다. 호출부가 `ok:false` 를 "적었다" 로 읽으면 안 된다.
+ *   `fn` 이 던지면 잠금을 푼 뒤 그대로 던진다.
+ */
+export function withQuarantineLock(path, fn, { waitMs = QUARANTINE_LOCK_WAIT_MS } = {}) {
+  const lock = quarantineLockPath(path)
+  try { mkdirSync(dirname(path), { recursive: true }) }
+  catch (e) { return { ok: false, code: 'QUARANTINE_LOCK_ERROR', why: `장부 폴더를 만들지 못했다: ${e.message}` } }
+  const until = Date.now() + waitMs
+  let owner = null
+  let last = null
+  for (;;) {
+    try { owner = createLock(lock); break }
+    catch (e) {
+      if (e?.code !== 'EEXIST') {
+        // 🔴 권한·디스크 같은 오류는 기다려도 풀리지 않는다 — 판정 불가, 전송 금지
+        return { ok: false, code: 'QUARANTINE_LOCK_ERROR', why: `장부 잠금을 만들지 못했다: ${e?.message ?? e}` }
+      }
+      last = inspectQuarantineLock(lock)
+      if (last.state === 'DEAD' && reclaimDeadLock(lock, last.owner.token)) continue
+      if (Date.now() > until) {
+        let age = null
+        try { age = Math.round((Date.now() - statSync(lock).mtimeMs) / 1000) } catch { /* 방금 풀렸다 */ }
+        return {
+          ok: false, code: 'QUARANTINE_LOCK_TIMEOUT',
+          why: `장부 잠금을 ${waitMs}ms 안에 잡지 못했다 (${last?.state}: ${last?.why}${age !== null ? ` · ${age}초째` : ''})`
+            + ' — 🔴 살아 있는 잠금은 지우지 않는다. 전송하지 않는다.',
+        }
+      }
+      sleepSync(LOCK_POLL_MS)
+    }
+  }
+  try {
+    return { ok: true, value: fn() }
+  } finally {
+    releaseIfMine(lock, owner.token)
+  }
 }
 
 /** 격리에서 완전히 지운다 — 등록에 성공한 후보 */

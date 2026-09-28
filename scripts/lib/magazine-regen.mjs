@@ -17,9 +17,11 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, saveQuarantine,
+  MAX_REGEN_CALLS, QUARANTINE_PATH, readQuarantine, updateQuarantine,
   recordRegenCall, regenBudget, DELIVERY_HOLD_REASON,
 } from './magazine-quarantine.mjs'
+import { deliveryGate } from './magazine-delivery-gate.mjs'
+import { DRAFTS_DIR } from './magazine-load.mjs'
 import { classifyFailure, consumesAttempt, sentOf } from './magazine-failure-kind.mjs'
 
 
@@ -107,6 +109,8 @@ export function removePacket(path) {
 export function attemptRegeneration({
   slug, profile, failures, runner, quarantinePath = QUARANTINE_PATH, now = Date.now(),
   previousFingerprint = null, fingerprintOf: fpOf = null, packetDir = PACKET_DIR,
+  /** 🔴 전송 경계와 **같은 brief** 로 지문을 만들기 위한 폴더. 운영은 저장소 폴더 그대로다 */
+  draftsDir = DRAFTS_DIR,
 }) {
   const read = readQuarantine(quarantinePath)
   if (!read.ok) {
@@ -123,6 +127,31 @@ export function attemptRegeneration({
 
   const packet = buildFailurePacket({ slug, profile, failures, attempt: budget.used + 1 })
   const hash = packetHashOf(packet)
+
+  /**
+   * 🔴 **이미 보낸 재생성 요청이면 아무것도 시작하지 않는다** (2026-09-28 · Codex P1).
+   *
+   *    앞판은 packet 을 쓰고 regenCalls 를 올린 **뒤에** runner 를 불렀고, runner 가 HOLD 를
+   *    돌려주면 그제야 되돌렸다. 그 사이 프로세스가 죽으면 **전송 0건인데 regenCalls=1** 이 남았다.
+   *
+   *    판정은 전송 경계와 **같은 함수**(`deliveryGate` — 같은 메시지 생성기·지문·HOLD 조건)다.
+   *    위 `packet` 은 메모리의 값일 뿐이다 — 파일은 이 판정을 통과한 뒤에만 쓴다.
+   *    HOLD 면 packet 파일 0 · runner 0 · Chrome/probe/send 0 · regenCalls 0 · attempts 0 이고,
+   *    **장부에 한 글자도 쓰지 않는다** — 앞선 전송 기록(sent=null 등)을 그대로 둔다.
+   */
+  const gate = deliveryGate({ slug, draftsDir, packet, quarantinePath })
+  if (!gate.ok) {
+    return { ok: false, code: 'LEDGER_UNREADABLE', why: gate.why, regenCalls: budget.used }
+  }
+  if (gate.hold) {
+    return {
+      ok: false, code: 'REGEN_DELIVERY_HOLD', kind: 'DELIVERY_UNCERTAIN', held: true,
+      sent: false, priorSent: gate.hold.delivery?.sent ?? null,
+      messageFingerprint: gate.messageFingerprint,
+      why: `이미 보낸 재생성 요청이다 — 다시 보내지 않는다 (전송 0건 · runner 0): ${gate.hold.why}`,
+      regenCalls: budget.used,
+    }
+  }
   /**
    * 🔴 **무한 반복을 막는 것은 「같은 실패 코드」가 아니라 「안 바뀐 원고」다.**
    *
@@ -134,10 +163,17 @@ export function attemptRegeneration({
    *    정말로 무의미한 경우는 **원고가 한 글자도 안 바뀐 때**이고, 그건
    *    호출부가 `draftFingerprint` 로 알려 준다 (아래 `previousFingerprint`).
    */
+  // 🔴 호출 **전에** 센다. 도중에 죽어도 횟수가 남는다. (잠금 안에서 최신 행을 다시 읽어 올린다)
+  let bumped = null
+  const up = updateQuarantine((cur) => {
+    bumped = recordRegenCall({ entry: cur[slug], now, packetHash: hash })
+    return { ...cur, [slug]: bumped }
+  }, quarantinePath)
+  if (!up.ok) {
+    // 🔴 횟수를 못 적었으면 부르지 않는다 — 기억할 수 없는 재생성은 하지 않는다
+    return { ok: false, code: 'LEDGER_UNREADABLE', why: up.why, regenCalls: budget.used }
+  }
   const packetPath = writePacket(packet, packetPathFor(slug, packetDir))
-  // 🔴 호출 **전에** 센다. 도중에 죽어도 횟수가 남는다.
-  const bumped = recordRegenCall({ entry, now, packetHash: hash })
-  saveQuarantine({ ...read.store, [slug]: bumped }, quarantinePath)
 
   /**
    * 🔴 **runner 가 돌아온 뒤에만** 지운다 — 읽기 전에 지우면 전달 자체가 깨진다.
@@ -159,14 +195,11 @@ export function attemptRegeneration({
    *    "보냈다(true)" 를 "안 보냈다(false)" 로 덮어쓰면 다음 판단이 흐려진다.
    */
   if (r?.reason === DELIVERY_HOLD_REASON) {
-    const back = readQuarantine(quarantinePath)
-    if (back.ok) {
-      const cur = back.store[slug] ?? {}
-      saveQuarantine({
-        ...back.store,
-        [slug]: { ...cur, regenCalls: budget.used, lastRegenAt: entry?.lastRegenAt, lastPacketHash: entry?.lastPacketHash },
-      }, quarantinePath)
-    }
+    // 🔴 위 사전 판정 뒤에 다른 프로세스가 먼저 예약한 경우(경합)만 여기로 온다
+    updateQuarantine((cur) => ({
+      ...cur,
+      [slug]: { ...(cur[slug] ?? {}), regenCalls: budget.used, lastRegenAt: entry?.lastRegenAt, lastPacketHash: entry?.lastPacketHash },
+    }), quarantinePath)
     return {
       ok: false, code: 'REGEN_DELIVERY_HOLD', kind: 'DELIVERY_UNCERTAIN', held: true,
       // 🔴 `sent` 는 이번 실행(0건) · `priorSent` 는 앞선 전송의 사실(대개 모름=null)
@@ -201,14 +234,10 @@ export function attemptRegeneration({
     }).kind
     if (!consumesAttempt(kind)) {
       // 올려 둔 횟수를 되돌린다 — 최신 장부를 다시 읽어 덮어쓰기를 피한다
-      const back = readQuarantine(quarantinePath)
-      if (back.ok) {
-        const cur = back.store[slug] ?? {}
-        saveQuarantine({
-          ...back.store,
-          [slug]: { ...cur, kind, sent: sentOf(r), regenCalls: budget.used, lastRegenAt: now },
-        }, quarantinePath)
-      }
+      updateQuarantine((cur) => ({
+        ...cur,
+        [slug]: { ...(cur[slug] ?? {}), kind, sent: sentOf(r), regenCalls: budget.used, lastRegenAt: now },
+      }), quarantinePath)
       return {
         ok: false,
         code: kind === 'DELIVERY_UNCERTAIN' ? 'REGEN_DELIVERY_UNCERTAIN' : 'REGEN_INFRA_FAILED',
@@ -228,7 +257,8 @@ export function attemptRegeneration({
   if (previousFingerprint && typeof fpOf === 'function') {
     const after = fpOf()
     if (after && after === previousFingerprint) {
-      saveQuarantine({ ...read.store, [slug]: { ...bumped, regenCalls: MAX_REGEN_CALLS } }, quarantinePath)
+      // 🔴 들고 있던 사본으로 덮지 않는다 — 자식이 방금 적은 전송 기록이 사라진다
+      updateQuarantine((cur) => ({ ...cur, [slug]: { ...(cur[slug] ?? {}), regenCalls: MAX_REGEN_CALLS } }), quarantinePath)
       return { ok: false, code: 'REGEN_NO_CHANGE',
         why: '🔴 재생성했는데 원고가 그대로다 — 다시 보내도 같다. 이 글만 HOLD', regenCalls: MAX_REGEN_CALLS }
     }
@@ -245,10 +275,10 @@ export function attemptRegeneration({
 
 /** 등록에 성공했다 — 재생성 횟수를 지운다 */
 export function clearRegen(slug, quarantinePath = QUARANTINE_PATH) {
-  const read = readQuarantine(quarantinePath)
-  if (!read.ok) return { ok: false, why: read.why }
-  const next = { ...read.store }
-  if (next[slug]) { const { regenCalls, lastPacketHash, lastRegenAt, ...rest } = next[slug]; next[slug] = rest }
-  saveQuarantine(next, quarantinePath)
-  return { ok: true }
+  const u = updateQuarantine((cur) => {
+    const next = { ...cur }
+    if (next[slug]) { const { regenCalls, lastPacketHash, lastRegenAt, ...rest } = next[slug]; next[slug] = rest }
+    return next
+  }, quarantinePath)
+  return u.ok ? { ok: true } : { ok: false, why: u.why }
 }

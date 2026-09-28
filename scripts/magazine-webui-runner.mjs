@@ -43,6 +43,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { ROOT, DRAFTS_DIR, loadQueue } from './lib/magazine-load.mjs'
 import { validateManuscript, describeReasons } from './lib/magazine-manuscript-guard.mjs'
 import {
@@ -61,6 +62,10 @@ import {
 } from './lib/magazine-quarantine.mjs'
 import { writeFetchResults, fetchResultPath, todayKst, readRunFetchState } from './lib/magazine-fetch-result.mjs'
 import { loadTestHarness } from './lib/magazine-test-harness.mjs'
+import { manuscriptPromptText, plannedMessageFor, deliveryGate } from './lib/magazine-delivery-gate.mjs'
+
+/** 🔴 정본은 `lib/magazine-delivery-gate.mjs` 다 — 기존 호출부·시험을 위해 그대로 내보낸다 */
+export { manuscriptPromptText, plannedMessageFor, deliveryGate }
 
 const RUNS_DIR = join(DRAFTS_DIR, '_runs')
 
@@ -332,69 +337,6 @@ export function describeFetchFailure(r) {
   return `${where}${r?.reason ?? 'unknown'}${detail ? ` — ${detail}` : ''}${extra} · 전송 ${r?.sent ? '1건' : '0건'}`
 }
 
-/**
- * 🔴 **프롬프트 조립을 한 자리에 둔다** (2026-09-28 · P0-1).
- *    "보낼 글자" 의 지문으로 중복 전송을 막으려면, **대상을 고를 때 계산한 글자**와
- *    **실제로 보내는 글자**가 한 글자도 다르면 안 된다. 두 곳에서 따로 만들면
- *    언젠가 갈라지고, 갈라진 날 지문이 달라져 **막아야 할 것을 못 막는다.**
- */
-export function manuscriptPromptText(packet = null) {
-  return [
-    // 🔴 brief 는 파일이 아니라 이 메시지 아래에 그대로 들어간다 (첨부 경로 폐지 · 2026-09-28)
-    '아래 BRIEF 시작/끝 사이의 지시를 그대로 따라 최종 원고를 작성하세요.',
-    '설명·인사·요약·후기를 붙이지 말고 원고 전체만 출력합니다.',
-    '출력은 마크다운 코드블록 안에 마크다운 원본 표기 그대로 넣어 주세요.',
-    'frontmatter 의 --- 부터 CTA 줄까지 전부 포함합니다.',
-    // 🔴 관문이 막는 것을 프롬프트에서도 한 번 말한다. 막는 것보다 안 나오게 하는 편이 싸다.
-    '웹 검색 인용 표기나 각주 마커를 본문에 남기지 마세요.',
-    // 🔴 재생성이면 무엇이 걸렸는지 그대로 붙인다
-    ...(packet ? ['', '--- 이전 원고가 자동 검사에 걸렸습니다 ---', packet.instruction] : []),
-  ].join(' ')
-}
-
-/**
- * 이 slug 에 **보내게 될 메시지** — 아직 보내지 않는다.
- * 대상 선택이 지문을 계산하려면 이것이 필요하다. brief 가 없으면 `null`.
- */
-export function plannedMessageFor(slug, draftsDir = DRAFTS_DIR, packet = null) {
-  const briefPath = join(draftsDir, slug, 'brief.md')
-  if (!existsSync(briefPath)) return null
-  return buildManuscriptMessage({ promptText: manuscriptPromptText(packet), briefText: readFileSync(briefPath, 'utf8') })
-}
-
-/**
- * 🔴 **보내도 되는가 — 판정은 여기 하나다** (2026-09-28 · 재생성 HOLD).
- *
- *    앞판은 이 판정이 `fetchBatch` 안에만 있었다. `--fetch --force --regen-packet`
- *    (`fetchOne`) 은 장부를 보지 않고 곧장 보냈다 — 같은 재생성 요청이 응답 대기에서
- *    끊긴 뒤 다시 실행되면 **같은 글자를 두 번째로 보냈다.**
- *
- *    그래서 판정을 호출부가 아니라 **모든 전송이 지나는 `fetchSlug`** 로 옮기고,
- *    `fetchBatch` 의 계획표도 이 함수를 그대로 부른다. 조건을 다시 쓰지 않는다.
- *
- *    ① 보낼 메시지는 `plannedMessageFor` 하나가 만든다 — 일반·재생성 같은 생성기
- *    ② 지문은 `deliveryFingerprintOf` 하나가 만든다
- *    ③ HOLD 조건은 `deliveryHoldsFetch` 하나가 정한다 (slug + 지문 + DELIVERY_UNCERTAIN)
- *    날짜·runId·다른 후보·재시작은 판정에 들어가지 않는다. brief 나 재생성 지시가
- *    바뀌어 **보낼 글자가 달라질 때만** 다시 열린다.
- *
- * 🔴 장부를 못 읽으면 **보내지 않는다** — 모름은 "보낸 적 없음" 이 아니다.
- *
- * @returns {{ok:true, message:string|null, messageFingerprint:string|null, hold:object|null}
- *          |{ok:false, code:string, why:string, message:string|null, messageFingerprint:string|null}}
- */
-export function deliveryGate({ slug, draftsDir = DRAFTS_DIR, packet = null, quarantinePath = QUARANTINE_PATH }) {
-  const message = plannedMessageFor(slug, draftsDir, packet)
-  const messageFingerprint = deliveryFingerprintOf(message)
-  // 🔴 `false` 는 "장부를 쓰지 않는 호출" 이다 — 막을 근거도 없다
-  if (quarantinePath === false) return { ok: true, message, messageFingerprint, hold: null }
-  const ledger = readQuarantine(quarantinePath)
-  if (!ledger.ok) {
-    return { ok: false, code: 'QUARANTINE_UNREADABLE', why: ledger.why, message, messageFingerprint }
-  }
-  return { ok: true, message, messageFingerprint, hold: deliveryHoldsFetch(ledger.store[slug], messageFingerprint) }
-}
-
 /** HOLD 로 멈춘 한 건의 결과 — 🔴 이전 전송 사실을 그대로 싣는다. 새로 지어내지 않는다 */
 function heldResult(slug, gate, stage) {
   return {
@@ -497,12 +439,20 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
    *    다시 부르고, 걸리면 장부를 바꾸지 않고 **누르지 않는다.**
    */
   let lateHold = null
+  /**
+   * 🔴 **send 권한의 유일한 정본은 이 예약 기록이다** (2026-09-28 · Codex P0).
+   *    `updateQuarantine` 이 프로세스 간 잠금 안에서 판정과 기록을 한 번에 하므로,
+   *    같은 slug·같은 지문을 두 프로세스가 동시에 들고 와도 **먼저 적은 한쪽만** 권한을 얻는다.
+   *    다른 쪽은 그 기록을 보고 HOLD 로 끝난다 (send 0). 예약 ID 는 "내 예약" 을 가려
+   *    성공 뒤 지울 때 남의 예약을 지우지 않게 한다.
+   */
+  const reservationId = randomUUID()
+  let reserved = false
   const recordBeforeSend = async ({ messageFingerprint }) => {
     // 🔴 보내려는 글자가 판정한 글자와 다르면 판정이 무효다 — 누르지 않는다
     if (messageFingerprint !== gate.messageFingerprint) {
       return { ok: false, why: '보낼 글자가 판정한 글자와 다르다' }
     }
-    if (quarantinePath === false) return { ok: true }
     try {
       const u = updateQuarantine((cur) => {
         lateHold = deliveryHoldsFetch(cur[slug], messageFingerprint)
@@ -512,13 +462,15 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
           [slug]: recordDelivery(cur[slug], {
             sent: null, messageFingerprint, kind: 'DELIVERY_UNCERTAIN',
             reason: 'sending', stage: 'send', now: Date.now(),
-            runId: runIdHint, date: dateHint,
+            runId: runIdHint, date: dateHint, reservationId,
           }),
         }
       }, quarantinePath)
       // 🔴 장부를 못 읽었으면 `ok:false` 로 돌아온다 — 예외만 보면 이 경우를 "적었다" 로 읽는다
-      if (!u?.ok) return { ok: false, why: `장부 선기록 실패: ${u?.why ?? '알 수 없음'}` }
+      // 🔴 잠금 시간 초과·장부 손상·잠금 판정 불가도 여기로 온다 — 전부 전송 금지
+      if (!u?.ok) return { ok: false, why: `장부 선기록 실패${u?.code ? ` [${u.code}]` : ''}: ${u?.why ?? '알 수 없음'}` }
       if (lateHold) return { ok: false, why: lateHold.why }
+      reserved = true
       return { ok: true }
     } catch (e) {
       return { ok: false, why: `장부 선기록 실패: ${e.message}` }
@@ -548,17 +500,24 @@ async function fetchSlug(slug, { quiet = false, force = false, regenPacket = nul
    *    ② 선기록 뒤 실패  → 그대로 둔다 (DELIVERY_UNCERTAIN 유지)
    *    ③ 선기록 전 실패  → 그 실패의 성격대로 적는다 (보내지 않은 것이 확실하다)
    */
-  if (quarantinePath !== false) {
+  {
     try {
       if (r.ok) {
-        updateQuarantine((cur) => ({ ...cur, [slug]: clearDelivery(cur[slug]) ?? undefined }), quarantinePath)
-      } else if (!r.preRecorded) {
+        // 🔴 **내 예약일 때만** 지운다 — 그 사이 다른 프로세스가 적은 예약을 지우면 HOLD 가 풀린다
+        updateQuarantine((cur) => (cur[slug]?.delivery?.reservationId === reservationId
+          ? { ...cur, [slug]: clearDelivery(cur[slug]) ?? undefined } : cur), quarantinePath)
+      } else if (!r.preRecorded && !reserved) {
         const kind = classifyFailure({
           code: r.reason, stage: r.stage,
           message: [r.errorName, r.errorDetail].filter(Boolean).join(' · '),
           sent: r.sent,
         }).kind
-        updateQuarantine((cur) => ({
+        /**
+         * 🔴 **남의 예약을 덮지 않는다.** 선기록에 실패한 이유가 잠금 시간 초과라면
+         *    그 사이 다른 프로세스가 같은 글자를 예약·전송했을 수 있다. 여기서 INFRA 로 덮으면
+         *    그 HOLD 가 풀려 다음 회차가 다시 보낸다.
+         */
+        updateQuarantine((cur) => (deliveryHoldsFetch(cur[slug], r.messageFingerprint ?? null) ? cur : {
           ...cur,
           [slug]: recordDelivery(cur[slug], {
             sent: r.sent, messageFingerprint: r.messageFingerprint ?? null, kind,
